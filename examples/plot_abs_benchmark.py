@@ -13,7 +13,7 @@ of a ``float32`` array across a range of input sizes:
 * **numpy** - :func:`numpy.abs`, used as a reference baseline.
 
 The three back-ends compute the same result; the goal here is to see how their
-timings evolve as the array grows from a few hundred to several million
+timings evolve as the array grows from a few hundred to a hundred million
 elements.
 """
 
@@ -90,7 +90,7 @@ def measure(func, repeat):
 # For every size the same input is fed to the three back-ends. The results are
 # checked against :func:`numpy.abs` to make sure every implementation agrees.
 
-sizes = [10**k for k in range(2, 8)]
+sizes = [10**k for k in range(2, 9)]
 rng = np.random.default_rng(0)
 
 rows = []
