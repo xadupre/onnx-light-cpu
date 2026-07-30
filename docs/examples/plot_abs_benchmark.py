@@ -161,12 +161,15 @@ ort_times = np.array([r[3] for r in rows])
 # ----------------
 #
 # The left panel shows the raw execution time versus the array size on a
-# log-log scale. The right panel shows the throughput (elements processed per
-# second), which highlights the fixed per-call overhead at small sizes.
+# log-log scale. The right panel shows the speed-up relative to
+# **onnxruntime** (the baseline): for each back-end the onnxruntime time is
+# divided by the back-end time, so values above ``1`` are faster than
+# onnxruntime and values below ``1`` are slower. The onnxruntime curve is a
+# flat line at ``1`` by construction.
 
 import matplotlib.pyplot as plt
 
-fig, (ax_time, ax_tput) = plt.subplots(1, 2, figsize=(11, 4.5))
+fig, (ax_time, ax_speedup) = plt.subplots(1, 2, figsize=(11, 4.5))
 
 ax_time.plot(sizes, numpy_times * 1e6, "o--", label="numpy", color="#9b7ec8")
 ax_time.plot(
@@ -184,21 +187,22 @@ ax_time.set_ylabel("time (microseconds)")
 ax_time.set_title(f"Abs execution time (SIMD: {simd_name})")
 ax_time.legend()
 
-ax_tput.plot(sizes, sizes / numpy_times, "o--", label="numpy", color="#9b7ec8")
-ax_tput.plot(
+ax_speedup.plot(sizes, ort_times / numpy_times, "o--", label="numpy", color="#9b7ec8")
+ax_speedup.plot(
     sizes,
-    sizes / cpu_times,
+    ort_times / cpu_times,
     "o-",
     label=light_label,
     color="#4a9eff",
 )
-ax_tput.plot(sizes, sizes / ort_times, "o-", label="onnxruntime", color="#f4a259")
-ax_tput.set_xscale("log")
-ax_tput.set_yscale("log")
-ax_tput.set_xlabel("array size (elements)")
-ax_tput.set_ylabel("throughput (elements / second)")
-ax_tput.set_title("Abs throughput")
-ax_tput.legend()
+ax_speedup.plot(sizes, ort_times / ort_times, "o-", label="onnxruntime", color="#f4a259")
+ax_speedup.axhline(1.0, color="grey", linewidth=0.8, linestyle=":")
+ax_speedup.set_xscale("log")
+ax_speedup.set_yscale("log")
+ax_speedup.set_xlabel("array size (elements)")
+ax_speedup.set_ylabel("speed-up vs onnxruntime")
+ax_speedup.set_title("Abs speed-up (onnxruntime = 1)")
+ax_speedup.legend()
 
 fig.tight_layout()
 plt.show()
