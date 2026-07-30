@@ -1,0 +1,5 @@
+@PACKAGE_INIT@
+
+include("${CMAKE_CURRENT_LIST_DIR}/onnx_light_cpuTargets.cmake")
+
+check_required_components(onnx_light_cpu)

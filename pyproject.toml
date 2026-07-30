@@ -1,0 +1,42 @@
+[build-system]
+requires = ["scikit-build-core>=0.3.3", "nanobind>=1.3.2"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "onnx-light-cpu"
+version = "0.1.0"
+description = "Highly optimized CPU kernels (Abs) for onnx-light with AVX/AVX2/AVX-512 dispatch"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=2.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7",
+    "pytest-cov",
+]
+
+[tool.scikit-build]
+wheel.packages = ["onnx_light_cpu"]
+build-dir = "build/{wheel_tag}"
+
+[tool.pytest.ini_options]
+testpaths = ["unittests"]
+
+[tool.ruff]
+exclude = [".eggs", ".git", "build", "dist"]
+line-length = 98
+
+[tool.ruff.lint]
+select = [
+    "B", "C4", "E", "F", "G", "ISC", "LOG", "PIE", "PYI", "RUF",
+    "SIM", "SLOT", "T10", "UP", "W", "YTT",
+]
+
+[tool.ruff.lint.extend-per-file-ignores]
+"**" = ["RUF012", "RUF100", "SIM102", "SIM108", "UP006", "UP007", "UP035"]
+"unittests/**" = ["B023", "B904", "E731"]
