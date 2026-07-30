@@ -4,8 +4,8 @@
 
 """Run the documentation examples as unit tests.
 
-Every ``examples/plot_*.py`` gallery script is executed in a subprocess so a
-failure (e.g. a broken import or a mismatched result) surfaces as a failing
+Every ``docs/examples/plot_*.py`` gallery script is executed in a subprocess so
+a failure (e.g. a broken import or a mismatched result) surfaces as a failing
 test. Examples that need optional dependencies which are not installed are
 skipped instead of failing.
 """
@@ -19,7 +19,7 @@ from pathlib import Path
 import pytest
 
 _ROOT = Path(__file__).resolve().parents[2]
-_EXAMPLES_DIR = _ROOT / "examples"
+_EXAMPLES_DIR = _ROOT / "docs" / "examples"
 
 # Optional third-party modules each example needs on top of ``onnx-light-cpu``
 # and ``numpy``. When any of them is missing the example is skipped. Examples

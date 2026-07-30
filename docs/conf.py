@@ -20,7 +20,7 @@ templates_path = ["_templates"]
 exclude_patterns = ["_build"]
 
 sphinx_gallery_conf = {
-    "examples_dirs": "../examples",
+    "examples_dirs": "examples",
     "gallery_dirs": "auto_examples",
     "filename_pattern": r"/plot_",
 }

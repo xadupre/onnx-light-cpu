@@ -38,7 +38,7 @@ jobs:
           echo "CMAKE_BUILD_PARALLEL_LEVEL=${CMAKE_BUILD_PARALLEL_LEVEL}"
 
       # Build the CPU kernel extension and install the documentation
-      # dependencies. Sphinx-Gallery executes examples/plot_abs_simd.py at
+      # dependencies. Sphinx-Gallery executes docs/examples/plot_abs_simd.py at
       # build time, which calls the compiled extension directly.
       - name: Build and install package with docs extras
         env:
