@@ -26,9 +26,10 @@ from kernel_scan import (
     find_registered_kernels,
     group_by_operator,
     iter_source_files,
+    operator_function,
 )
 
-_HEADERS = ("Operator", "Data types", "Functions")
+_HEADERS = ("Operator", "Data types", "Function")
 
 
 def _row(cells: Sequence[str]) -> nodes.row:
@@ -55,8 +56,8 @@ def _build_table(kernels: List[Kernel]) -> nodes.table:
     tbody = nodes.tbody()
     for operator, entries in group_by_operator(kernels).items():
         dtypes = ", ".join(dtype for dtype, _ in entries)
-        functions = ", ".join(function for _, function in entries)
-        tbody += _row((operator, dtypes, functions))
+        function = operator_function(operator)
+        tbody += _row((operator, dtypes, function))
     tgroup += tbody
     return table
 

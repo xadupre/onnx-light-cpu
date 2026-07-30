@@ -14,12 +14,6 @@ Implements ONNX operators with SIMD-accelerated kernels that dispatch at runtime
 to the best available instruction set (AVX-512, AVX2, AVX, SSE2, or scalar
 fallback).
 
-## Supported operators
-
-| Operator | Data types | SIMD paths |
-|----------|-----------|------------|
-| **Abs** | float32, float64, int32, int64 | AVX-512, AVX2, AVX, SSE2, scalar |
-
 ## Build from source
 
 ### Prerequisites

@@ -9,7 +9,7 @@ _EXT_DIR = Path(__file__).resolve().parents[2] / "docs" / "_ext"
 if str(_EXT_DIR) not in sys.path:
     sys.path.insert(0, str(_EXT_DIR))
 
-from kernel_scan import group_by_operator  # noqa: E402
+from kernel_scan import group_by_operator, operator_function  # noqa: E402
 
 
 class TestGroupByOperator:
@@ -40,3 +40,11 @@ class TestGroupByOperator:
         assert list(grouped) == ["Abs", "Neg"]
         assert grouped["Abs"] == [("float32", "AbsFloat32"), ("int32", "AbsInt32")]
         assert grouped["Neg"] == [("float32", "NegFloat32")]
+
+
+class TestOperatorFunction:
+    def test_single_function_per_operator(self):
+        # Each operator exposes a single numpy-like function (e.g. Abs -> abs),
+        # not one function per data type.
+        assert operator_function("Abs") == "abs"
+        assert operator_function("Neg") == "neg"
