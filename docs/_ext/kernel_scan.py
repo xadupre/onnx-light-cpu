@@ -16,6 +16,7 @@ available CPU kernels without any manual bookkeeping.
 from __future__ import annotations
 
 import re
+from collections import OrderedDict
 from pathlib import Path
 from typing import List, Tuple
 
@@ -77,3 +78,16 @@ def find_registered_kernels(root: Path, globs: Tuple[str, ...] = DEFAULT_GLOBS) 
                 kernels.append(kernel)
     kernels.sort()
     return kernels
+
+
+def group_by_operator(kernels: List[Kernel]) -> OrderedDict[str, List[Tuple[str, str]]]:
+    """Group kernels by operator, collecting the supported data types.
+
+    Returns a mapping ``operator -> [(data type, function), ...]`` so each
+    operator can be rendered on a single row with all of its supported data
+    types listed together instead of one row per data type.
+    """
+    grouped: OrderedDict[str, List[Tuple[str, str]]] = OrderedDict()
+    for operator, dtype, function in kernels:
+        grouped.setdefault(operator, []).append((dtype, function))
+    return grouped
