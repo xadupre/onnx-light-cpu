@@ -1,0 +1,54 @@
+name: docs
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  docs:
+    name: build docs
+    runs-on: ubuntu-latest
+    # The package is compiled from source, so the job needs more time than a
+    # plain Sphinx build; sccache keeps repeat runs near-instant.
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@v0.0.10
+
+      - name: Set parallel build level
+        shell: bash
+        run: |
+          CMAKE_BUILD_PARALLEL_LEVEL=$(python -c 'import os; print(os.cpu_count() or 1)')
+          echo "CMAKE_BUILD_PARALLEL_LEVEL=${CMAKE_BUILD_PARALLEL_LEVEL}" >> "$GITHUB_ENV"
+          echo "CMAKE_BUILD_PARALLEL_LEVEL=${CMAKE_BUILD_PARALLEL_LEVEL}"
+
+      # Build the CPU kernel extension and install the documentation
+      # dependencies. Sphinx-Gallery executes examples/plot_abs_simd.py at
+      # build time, which calls the compiled extension directly.
+      - name: Build and install package with docs extras
+        env:
+          SCCACHE_GHA_ENABLED: "true"
+        run: pip install -C build-dir=build -C cmake.build-type=Release -C cmake.define.CMAKE_C_COMPILER_LAUNCHER=sccache -C cmake.define.CMAKE_CXX_COMPILER_LAUNCHER=sccache -e .[docs] -v
+
+      - name: pip freeze
+        run: pip freeze
+
+      # sphinx-build exits non-zero when Sphinx-Gallery fails to execute an
+      # example, so this step fails if the documentation stops running.
+      - name: Build documentation
+        run: sphinx-build -b html docs dist/html

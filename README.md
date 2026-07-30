@@ -116,6 +116,17 @@ pip install -e .[dev]
 pytest unittests/python/
 ```
 
+## Documentation
+
+The documentation is built with [Sphinx](https://www.sphinx-doc.org/) and
+includes an auto-generated table of the available kernels plus a runnable
+example gallery:
+
+```bash
+pip install -e .[docs]
+sphinx-build -b html docs dist/html
+```
+
 ## Architecture
 
 The kernel uses runtime CPU feature detection (CPUID on x86) to select the

@@ -19,12 +19,22 @@ pytest = ">=7"
 pytest-cov = "*"
 ruff = "*"
 
+[feature.docs.dependencies]
+pydata-sphinx-theme = "*"
+sphinx = ">=7"
+sphinx-copybutton = "*"
+sphinx-gallery = "*"
+myst-parser = "*"
+matplotlib = "*"
+
 [tasks]
 install = "pip install --no-build-isolation -e .[dev]"
 test = { cmd = "pytest --durations=10 unittests", depends-on = ["install"] }
 test-python = { cmd = "pytest --durations=10 unittests/python", depends-on = ["install"] }
 lint = "ruff check . && ruff format --check ."
+build-doc = { cmd = "sphinx-build -b html docs dist/html", depends-on = ["install"] }
 
 [environments]
 default = { solve-group = "default" }
 dev = { features = ["dev"], solve-group = "default" }
+docs = { features = ["docs"], solve-group = "default" }
