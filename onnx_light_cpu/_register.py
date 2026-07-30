@@ -18,7 +18,7 @@ from typing import Any, Callable
 
 import numpy as np
 
-from .onnx_py._cpukernels import abs as _abs
+from .onnx_py._cpukernels import abs as _abs  # pyrefly: ignore[missing-import]
 
 # NumPy dtypes handled by the optimized ``abs`` kernel. Any other dtype (e.g.
 # int8, int16, float16) falls back to :func:`numpy.abs` so the registration is
