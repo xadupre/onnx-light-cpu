@@ -48,3 +48,28 @@ Python API
 .. py:function:: has_cpu_kernels() -> bool
 
    Returns ``True`` when the CPU kernel extension is available.
+
+Registering kernels with onnx-light
+-----------------------------------
+
+.. py:module:: onnx_light_cpu
+
+.. py:function:: register_kernels(sess, domain="")
+
+   Registers the onnx-light-cpu kernels on an ``onnx-light``
+   ``ReferenceEvaluator`` (any object exposing a compatible
+   ``register_custom_kernel(domain, op_type, fn)`` method). After this call,
+   every ``Abs`` node evaluated by ``sess`` dispatches to the
+   SIMD-accelerated onnx-light-cpu kernel instead of the built-in one, so any
+   ONNX model using ``Abs`` benefits from the optimized kernel. Returns
+   ``sess`` so calls can be chained.
+
+   .. code-block:: python
+
+      import numpy as np
+      from onnx_light.onnx.reference import ReferenceEvaluator
+      from onnx_light_cpu import register_kernels
+
+      sess = ReferenceEvaluator(model)
+      register_kernels(sess)
+      (y,) = sess.run(None, {"x": np.array([-1.0, 2.0], dtype=np.float32)})

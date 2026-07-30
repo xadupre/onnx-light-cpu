@@ -7,9 +7,11 @@ of a ``float32`` array across a range of input sizes:
 
 * **onnxruntime** - running a single-node ``Abs`` ONNX model.
 * **onnx-light + onnx-light-cpu** - the SIMD-accelerated ``Abs`` kernel that
-  ``onnx-light`` dispatches to. ``onnx-light`` picks the fastest kernel
-  registered for the operator, and ``onnx-light-cpu`` provides exactly this
-  kernel (``abs``) with runtime AVX-512/AVX2/AVX/SSE2 dispatch.
+  ``onnx-light`` dispatches to. The *same* ONNX model used by onnxruntime is
+  evaluated by an ``onnx-light`` :class:`ReferenceEvaluator` on which the
+  ``onnx-light-cpu`` ``Abs`` kernel has been registered
+  (:func:`onnx_light_cpu.register_kernels`); the kernel provides runtime
+  AVX-512/AVX2/AVX/SSE2 dispatch.
 * **numpy** - :func:`numpy.abs`, used as a reference baseline.
 
 The three back-ends compute the same result; the goal here is to see how their
@@ -21,8 +23,8 @@ elements.
 # Setup
 # -----
 #
-# Import the compiled ``onnx-light-cpu`` kernel and report which SIMD level the
-# current CPU provides. The mapping is ``0=None``, ``1=SSE2``, ``2=AVX``,
+# Import the ``onnx-light-cpu`` registration helper and report which SIMD level
+# the current CPU provides. The mapping is ``0=None``, ``1=SSE2``, ``2=AVX``,
 # ``3=AVX2`` and ``4=AVX512``.
 
 import time
@@ -31,9 +33,10 @@ import numpy as np
 import onnx
 import onnxruntime
 from onnx import TensorProto, helper
+from onnx_light.onnx.reference import ReferenceEvaluator
 
+from onnx_light_cpu import register_kernels
 from onnx_light_cpu.onnx_py._cpukernels import (
-    abs,
     detect_simd_level,
     has_cpu_kernels,
 )
@@ -46,11 +49,12 @@ simd_name = _SIMD_NAMES.get(level, level)
 print(f"CPU kernels available, SIMD level: {level} ({simd_name})")
 
 # %%
-# Build the ONNX model for onnxruntime
-# ------------------------------------
+# Build the shared ONNX model
+# ---------------------------
 #
 # A single ``Abs`` node operating on a 1-D ``float32`` tensor of dynamic length
-# is enough to benchmark the runtime.
+# is enough to benchmark the runtimes. The exact same model is fed to
+# onnxruntime and to onnx-light so the comparison is apples-to-apples.
 
 graph = helper.make_graph(
     [helper.make_node("Abs", ["X"], ["Y"])],
@@ -64,6 +68,17 @@ onnx.checker.check_model(model)
 session = onnxruntime.InferenceSession(
     model.SerializeToString(), providers=["CPUExecutionProvider"]
 )
+
+# %%
+# Build the onnx-light evaluator
+# ------------------------------
+#
+# ``onnx-light`` evaluates the same model with its C++ runtime. Registering the
+# onnx-light-cpu kernels overrides the built-in ``Abs`` so every ``Abs`` node in
+# the model dispatches to the SIMD-accelerated kernel.
+
+light_session = ReferenceEvaluator(model)
+register_kernels(light_session)
 
 # %%
 # Timing helper
@@ -102,8 +117,8 @@ for size in sizes:
 
     numpy_time = measure(lambda inp=inp: np.abs(inp), repeat)
 
-    cpu_time = measure(lambda inp=inp: abs(inp), repeat)
-    assert np.array_equal(abs(inp), expected), size
+    cpu_time = measure(lambda inp=inp: light_session.run(None, {"X": inp}), repeat)
+    assert np.array_equal(light_session.run(None, {"X": inp})[0], expected), size
 
     ort_time = measure(lambda inp=inp: session.run(None, {"X": inp}), repeat)
     assert np.array_equal(session.run(None, {"X": inp})[0], expected), size

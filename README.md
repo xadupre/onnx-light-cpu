@@ -99,6 +99,23 @@ out = abs(inp)
 print(out)  # [1. 2. 3. 4.]
 ```
 
+### Running an ONNX model with onnx-light
+
+`register_kernels` plugs the SIMD-accelerated kernels into an
+[onnx-light](https://github.com/xadupre/onnx-light) `ReferenceEvaluator` so any
+ONNX model using `Abs` runs the optimized kernel:
+
+```python
+import numpy as np
+from onnx_light.onnx.reference import ReferenceEvaluator
+
+from onnx_light_cpu import register_kernels
+
+sess = ReferenceEvaluator(model)  # any model containing an Abs node
+register_kernels(sess)
+(y,) = sess.run(None, {"x": np.array([-1.0, 2.0, -3.0], dtype=np.float32)})
+```
+
 ## Testing
 
 ### C++ tests
