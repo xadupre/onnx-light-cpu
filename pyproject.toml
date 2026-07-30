@@ -20,12 +20,14 @@ dev = [
     "pytest-cov",
 ]
 docs = [
+    "matplotlib",
+    "myst-parser",
+    "onnx",
+    "onnxruntime",
     "pydata-sphinx-theme",
     "sphinx>=7",
     "sphinx-copybutton",
     "sphinx-gallery",
-    "myst-parser",
-    "matplotlib",
 ]
 
 [tool.scikit-build]
