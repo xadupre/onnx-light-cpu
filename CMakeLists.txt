@@ -16,6 +16,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 option(ONNX_LIGHT_CPU_BUILD_TESTS "Build C++ unit tests." OFF)
 option(ONNX_LIGHT_CPU_BUILD_PYTHON "Build Python extension." ON)
 option(ONNX_LIGHT_CPU_INSTALL "Install the C++ library and headers." ON)
+option(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT
+       "Build the onnx-light kernel registration library (requires onnx-light)." OFF)
 option(ONNX_LIGHT_CPU_ENABLE_COVERAGE
        "Instrument the C++ targets for code coverage (GCC/Clang only)." OFF)
 option(ONNX_HARDENING
@@ -103,6 +105,35 @@ if(ONNX_LIGHT_CPU_ENABLE_COVERAGE)
 endif()
 
 # ---------------------------------------------------------------------------
+# onnx-light kernel registration library: lib_onnx_light_cpu_kernels
+# ---------------------------------------------------------------------------
+# Wraps the SIMD kernels in onnx-light ``KernelBase`` subclasses and registers
+# them into onnx-light's shared ``KernelDispatchTable`` so any ONNX model using
+# ``Abs`` runs the accelerated kernel. Requires the onnx-light C++ package and
+# is therefore opt-in via ONNX_LIGHT_CPU_WITH_ONNX_LIGHT.
+if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
+  find_package(onnx_light CONFIG REQUIRED)
+
+  add_library(lib_onnx_light_cpu_kernels ${_cpu_lib_type}
+      "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/onnx_light/abs_kernel.cc")
+  target_include_directories(lib_onnx_light_cpu_kernels PUBLIC
+      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+      $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+  )
+  set_property(TARGET lib_onnx_light_cpu_kernels
+      PROPERTY POSITION_INDEPENDENT_CODE ON)
+  target_compile_features(lib_onnx_light_cpu_kernels PUBLIC cxx_std_20)
+  target_link_libraries(lib_onnx_light_cpu_kernels PUBLIC
+      lib_onnx_light_cpu
+      onnx_light::lib_onnx_core)
+
+  if(ONNX_LIGHT_CPU_ENABLE_COVERAGE)
+    target_compile_options(lib_onnx_light_cpu_kernels PUBLIC --coverage -O0 -g)
+    target_link_options(lib_onnx_light_cpu_kernels PUBLIC --coverage)
+  endif()
+endif()
+
+# ---------------------------------------------------------------------------
 # Python extension: _cpukernels
 # ---------------------------------------------------------------------------
 if(ONNX_LIGHT_CPU_BUILD_PYTHON)
@@ -163,6 +194,18 @@ if(ONNX_LIGHT_CPU_INSTALL)
       "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/cpu_kernels.h"
       DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/onnx_light_cpu")
 
+  if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
+    install(TARGETS lib_onnx_light_cpu_kernels
+        EXPORT onnx_light_cpuTargets
+        ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+
+    install(FILES
+        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/onnx_light/abs_kernel.h"
+        DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/onnx_light_cpu/onnx_light")
+  endif()
+
   include(CMakePackageConfigHelpers)
   write_basic_package_version_file(
       "${CMAKE_CURRENT_BINARY_DIR}/onnx_light_cpuConfigVersion.cmake"
@@ -213,6 +256,22 @@ if(ONNX_LIGHT_CPU_BUILD_TESTS)
 
   include(GoogleTest)
   gtest_discover_tests(test_abs_kernel)
+
+  # onnx-light kernel-class test: only built when the onnx-light integration
+  # is enabled (it links the registration library against onnx-light).
+  if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
+    add_executable(test_onnx_light_abs_kernel
+        "${CMAKE_CURRENT_SOURCE_DIR}/unittests/cc/test_onnx_light_abs_kernel.cc")
+    target_link_libraries(test_onnx_light_abs_kernel PRIVATE
+        lib_onnx_light_cpu_kernels
+        GTest::gtest_main)
+    target_include_directories(test_onnx_light_abs_kernel PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}")
+    if(ONNX_LIGHT_CPU_SIMD_FLAGS)
+      target_compile_options(test_onnx_light_abs_kernel PRIVATE ${_simd_flags})
+    endif()
+    gtest_discover_tests(test_onnx_light_abs_kernel)
+  endif()
 endif()
 
 # ---------------------------------------------------------------------------
@@ -220,11 +279,17 @@ endif()
 # ONNX_HARDENING=ON. When the option is OFF the helper is a no-op.
 # ---------------------------------------------------------------------------
 set(_onnx_light_cpu_hardening_targets lib_onnx_light_cpu)
+if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
+  list(APPEND _onnx_light_cpu_hardening_targets lib_onnx_light_cpu_kernels)
+endif()
 if(ONNX_LIGHT_CPU_BUILD_PYTHON)
   list(APPEND _onnx_light_cpu_hardening_targets _cpukernels)
 endif()
 if(ONNX_LIGHT_CPU_BUILD_TESTS)
   list(APPEND _onnx_light_cpu_hardening_targets test_abs_kernel)
+  if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
+    list(APPEND _onnx_light_cpu_hardening_targets test_onnx_light_abs_kernel)
+  endif()
 endif()
 foreach(_t IN LISTS _onnx_light_cpu_hardening_targets)
   if(TARGET ${_t})

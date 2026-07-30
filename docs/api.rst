@@ -28,6 +28,33 @@ kernel dispatches at runtime to the best available SIMD path.
 
    } // namespace onnx_light_cpu
 
+onnx-light kernel class
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+When onnx-light-cpu is built with ``-DONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON`` (which
+requires the `onnx-light <https://github.com/xadupre/onnx-light>`_ C++ package),
+an additional library ``lib_onnx_light_cpu_kernels`` is produced. It declares
+``onnx_light_cpu/onnx_light/abs_kernel.h``:
+
+.. code-block:: cpp
+
+   namespace onnx_light_cpu {
+
+   // Derives from onnx_light::core::runtime::KernelBase and delegates to the
+   // SIMD Abs* routines above.
+   class AbsKernel : public onnx_light::core::runtime::KernelBase { ... };
+
+   // Registers AbsKernel into onnx-light's shared KernelDispatchTable for the
+   // default ONNX domain / CPU device, overriding the built-in Abs.
+   void RegisterKernels();
+
+   } // namespace onnx_light_cpu
+
+``AbsKernel`` is a full ``KernelBase`` subclass, so once ``RegisterKernels()``
+has run every ``Abs`` node executed by onnx-light's runtime (and therefore any
+model run through ``ReferenceEvaluator``) resolves to the SIMD-accelerated
+kernel.
+
 Python API
 ----------
 
@@ -48,3 +75,28 @@ Python API
 .. py:function:: has_cpu_kernels() -> bool
 
    Returns ``True`` when the CPU kernel extension is available.
+
+Registering kernels with onnx-light
+-----------------------------------
+
+.. py:module:: onnx_light_cpu
+
+.. py:function:: register_kernels(sess, domain="")
+
+   Registers the onnx-light-cpu kernels on an ``onnx-light``
+   ``ReferenceEvaluator`` (any object exposing a compatible
+   ``register_custom_kernel(domain, op_type, fn)`` method). After this call,
+   every ``Abs`` node evaluated by ``sess`` dispatches to the
+   SIMD-accelerated onnx-light-cpu kernel instead of the built-in one, so any
+   ONNX model using ``Abs`` benefits from the optimized kernel. Returns
+   ``sess`` so calls can be chained.
+
+   .. code-block:: python
+
+      import numpy as np
+      from onnx_light.onnx.reference import ReferenceEvaluator
+      from onnx_light_cpu import register_kernels
+
+      sess = ReferenceEvaluator(model)
+      register_kernels(sess)
+      (y,) = sess.run(None, {"x": np.array([-1.0, 2.0], dtype=np.float32)})
