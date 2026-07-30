@@ -18,6 +18,11 @@ option(ONNX_LIGHT_CPU_BUILD_PYTHON "Build Python extension." ON)
 option(ONNX_LIGHT_CPU_INSTALL "Install the C++ library and headers." ON)
 option(ONNX_LIGHT_CPU_ENABLE_COVERAGE
        "Instrument the C++ targets for code coverage (GCC/Clang only)." OFF)
+option(ONNX_HARDENING
+    "Enable OpenSSF Compiler Hardening Guide flags for C/C++ targets. \
+See cmake/Hardening.cmake and \
+https://best.openssf.org/Compiler-Hardening-Guides/Compiler-Options-Hardening-Guide-for-C-and-C++.html"
+    OFF)
 
 if(ONNX_LIGHT_CPU_ENABLE_COVERAGE AND
    NOT CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
@@ -33,6 +38,15 @@ if(MSVC)
 endif()
 
 include(GNUInstallDirs)
+
+# Optional OpenSSF compiler hardening flags.
+if(ONNX_HARDENING)
+  list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+  include(Hardening)
+else()
+  function(onnx_light_apply_hardening target)
+  endfunction()
+endif()
 
 # ---------------------------------------------------------------------------
 # SIMD / AVX compile flags
@@ -200,3 +214,20 @@ if(ONNX_LIGHT_CPU_BUILD_TESTS)
   include(GoogleTest)
   gtest_discover_tests(test_abs_kernel)
 endif()
+
+# ---------------------------------------------------------------------------
+# Apply OpenSSF compiler hardening flags to this project's targets when
+# ONNX_HARDENING=ON. When the option is OFF the helper is a no-op.
+# ---------------------------------------------------------------------------
+set(_onnx_light_cpu_hardening_targets lib_onnx_light_cpu)
+if(ONNX_LIGHT_CPU_BUILD_PYTHON)
+  list(APPEND _onnx_light_cpu_hardening_targets _cpukernels)
+endif()
+if(ONNX_LIGHT_CPU_BUILD_TESTS)
+  list(APPEND _onnx_light_cpu_hardening_targets test_abs_kernel)
+endif()
+foreach(_t IN LISTS _onnx_light_cpu_hardening_targets)
+  if(TARGET ${_t})
+    onnx_light_apply_hardening(${_t})
+  endif()
+endforeach()
