@@ -91,3 +91,13 @@ def group_by_operator(kernels: List[Kernel]) -> OrderedDict[str, List[Tuple[str,
     for operator, dtype, function in kernels:
         grouped.setdefault(operator, []).append((dtype, function))
     return grouped
+
+
+def operator_function(operator: str) -> str:
+    """Return the single public function exposed for ``operator``.
+
+    Each operator is exposed through a single numpy-like Python function that
+    dispatches on the array data type (for example ``Abs`` -> ``abs``), so the
+    documentation lists one function per operator rather than one per data type.
+    """
+    return operator.lower()

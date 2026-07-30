@@ -14,12 +14,6 @@ Implements ONNX operators with SIMD-accelerated kernels that dispatch at runtime
 to the best available instruction set (AVX-512, AVX2, AVX, SSE2, or scalar
 fallback).
 
-## Supported operators
-
-| Operator | Data types | SIMD paths |
-|----------|-----------|------------|
-| **Abs** | float32, float64, int32, int64 | AVX-512, AVX2, AVX, SSE2, scalar |
-
 ## Build from source
 
 ### Prerequisites
@@ -125,7 +119,10 @@ pytest unittests/python/
 
 ## Documentation
 
-The documentation is built with [Sphinx](https://www.sphinx-doc.org/) and
+The full documentation is published at
+[xadupre.github.io/docs/onnx-light-cpu](https://xadupre.github.io/docs/onnx-light-cpu/).
+
+It is built with [Sphinx](https://www.sphinx-doc.org/) and
 includes an auto-generated table of the available kernels plus a runnable
 example gallery:
 
