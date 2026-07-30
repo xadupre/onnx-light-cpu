@@ -1,0 +1,29 @@
+name: Typing
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  typing:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Install typing tools
+        run: pip install numpy mypy==2.1.0 pyrefly==1.1.1
+      - name: Run mypy
+        run: mypy onnx_light_cpu
+      - name: Run pyrefly
+        run: pyrefly check

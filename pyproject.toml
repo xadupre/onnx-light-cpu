@@ -27,6 +27,12 @@ build-dir = "build/{wheel_tag}"
 [tool.pytest.ini_options]
 testpaths = ["unittests"]
 
+[tool.mypy]
+ignore_missing_imports = true
+
+[tool.pyrefly]
+project-includes = ["onnx_light_cpu/**/*.py"]
+
 [tool.ruff]
 exclude = [".eggs", ".git", "build", "dist"]
 line-length = 98
