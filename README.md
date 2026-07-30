@@ -92,16 +92,16 @@ target_link_libraries(my_app PRIVATE onnx_light_cpu::lib_onnx_light_cpu)
 
 ```python
 import numpy as np
-from onnx_light_cpu.onnx_py._cpukernels import abs_float32, detect_simd_level
+from onnx_light_cpu.onnx_py._cpukernels import abs, detect_simd_level
 
 # Check what SIMD level is available
 level = detect_simd_level()  # 0=None, 1=SSE2, 2=AVX, 3=AVX2, 4=AVX512
 print(f"SIMD level: {level}")
 
-# Compute abs
+# Compute abs. A single ``abs`` function dispatches on the array dtype
+# (float32, float64, int32, int64) and returns a new array, like numpy.abs.
 inp = np.array([-1.0, 2.0, -3.0, 4.0], dtype=np.float32)
-out = np.zeros_like(inp)
-abs_float32(inp, out)
+out = abs(inp)
 print(out)  # [1. 2. 3. 4.]
 ```
 

@@ -24,10 +24,7 @@ plots the input/output of the ``float32`` kernel to illustrate the operation.
 import numpy as np
 
 from onnx_light_cpu.onnx_py._cpukernels import (
-    abs_float32,
-    abs_float64,
-    abs_int32,
-    abs_int64,
+    abs,
     detect_simd_level,
     has_cpu_kernels,
 )
@@ -42,27 +39,21 @@ print(f"CPU kernels available, SIMD level: {level} ({_SIMD_NAMES.get(level, leve
 # Run every supported data type
 # -----------------------------
 #
-# Each entry pairs a kernel with the NumPy dtype it operates on. The kernels
-# write into a pre-allocated output array of the same length as the input.
+# A single ``abs`` entry point dispatches on the array dtype (just like
+# :func:`numpy.abs`) and returns a new array of the same dtype.
 
-cases = [
-    ("float32", np.float32, abs_float32),
-    ("float64", np.float64, abs_float64),
-    ("int32", np.int32, abs_int32),
-    ("int64", np.int64, abs_int64),
-]
+dtypes = [np.float32, np.float64, np.int32, np.int64]
 
 rng = np.random.default_rng(0)
 
-for name, dtype, kernel in cases:
+for dtype in dtypes:
     if np.issubdtype(dtype, np.floating):
         inp = rng.uniform(-100.0, 100.0, size=1000).astype(dtype)
     else:
         inp = rng.integers(-100, 100, size=1000).astype(dtype)
-    out = np.empty_like(inp)
-    kernel(inp, out)
-    assert np.array_equal(out, np.abs(inp)), name
-    print(f"{name:<8} {inp.size} elements -> matches numpy.abs")
+    out = abs(inp)
+    assert np.array_equal(out, np.abs(inp)), dtype
+    print(f"{np.dtype(dtype).name:<8} {inp.size} elements -> matches numpy.abs")
 
 # %%
 # Visualize the float32 kernel
@@ -74,12 +65,11 @@ for name, dtype, kernel in cases:
 import matplotlib.pyplot as plt
 
 x = np.linspace(-5.0, 5.0, 201).astype(np.float32)
-y = np.empty_like(x)
-abs_float32(x, y)
+y = abs(x)
 
 fig, ax = plt.subplots(figsize=(6, 4))
 ax.plot(x, x, label="input", linestyle="--", color="#9b7ec8")
-ax.plot(x, y, label="abs_float32(input)", color="#4a9eff")
+ax.plot(x, y, label="abs(input)", color="#4a9eff")
 ax.axhline(0.0, color="black", linewidth=0.8)
 ax.axvline(0.0, color="black", linewidth=0.8)
 ax.set_title(f"onnx-light-cpu Abs (SIMD level: {_SIMD_NAMES.get(level, level)})")
