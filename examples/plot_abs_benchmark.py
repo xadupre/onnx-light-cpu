@@ -9,7 +9,7 @@ of a ``float32`` array across a range of input sizes:
 * **onnx-light + onnx-light-cpu** - the SIMD-accelerated ``Abs`` kernel that
   ``onnx-light`` dispatches to. ``onnx-light`` picks the fastest kernel
   registered for the operator, and ``onnx-light-cpu`` provides exactly this
-  kernel (``abs_float32``) with runtime AVX-512/AVX2/AVX/SSE2 dispatch.
+  kernel (``abs``) with runtime AVX-512/AVX2/AVX/SSE2 dispatch.
 * **numpy** - :func:`numpy.abs`, used as a reference baseline.
 
 The three back-ends compute the same result; the goal here is to see how their
@@ -33,7 +33,7 @@ import onnxruntime
 from onnx import TensorProto, helper
 
 from onnx_light_cpu.onnx_py._cpukernels import (
-    abs_float32,
+    abs,
     detect_simd_level,
     has_cpu_kernels,
 )
@@ -96,16 +96,14 @@ rng = np.random.default_rng(0)
 rows = []
 for size in sizes:
     inp = rng.uniform(-100.0, 100.0, size=size).astype(np.float32)
-    out = np.empty_like(inp)
     expected = np.abs(inp)
 
     repeat = max(3, min(200, 2_000_000 // size))
 
-    numpy_time = measure(lambda inp=inp, out=out: np.abs(inp, out=out), repeat)
-    assert np.array_equal(out, expected), size
+    numpy_time = measure(lambda inp=inp: np.abs(inp), repeat)
 
-    cpu_time = measure(lambda inp=inp, out=out: abs_float32(inp, out), repeat)
-    assert np.array_equal(out, expected), size
+    cpu_time = measure(lambda inp=inp: abs(inp), repeat)
+    assert np.array_equal(abs(inp), expected), size
 
     ort_time = measure(lambda inp=inp: session.run(None, {"X": inp}), repeat)
     assert np.array_equal(session.run(None, {"X": inp})[0], expected), size
