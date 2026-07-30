@@ -5,7 +5,8 @@
 
 Provides the ``registered-kernels`` directive which scans **this repository's**
 C++ kernel declarations (see :mod:`kernel_scan`) and emits a table with one row
-per available kernel. Only kernels provided by this repository
+per operator, listing all supported data types together in a single column.
+Only kernels provided by this repository
 (``onnx-light-cpu``) are listed; the kernels shipped by onnx-light itself are
 not scanned. Because the table is generated at build time, it always reflects
 the kernels this repository actually provides.
@@ -19,9 +20,15 @@ from typing import List, Sequence
 from docutils import nodes
 from docutils.parsers.rst import Directive, directives
 
-from kernel_scan import DEFAULT_GLOBS, Kernel, find_registered_kernels, iter_source_files
+from kernel_scan import (
+    DEFAULT_GLOBS,
+    Kernel,
+    find_registered_kernels,
+    group_by_operator,
+    iter_source_files,
+)
 
-_HEADERS = ("Operator", "Data type", "Function")
+_HEADERS = ("Operator", "Data types", "Functions")
 
 
 def _row(cells: Sequence[str]) -> nodes.row:
@@ -46,8 +53,10 @@ def _build_table(kernels: List[Kernel]) -> nodes.table:
     tgroup += thead
 
     tbody = nodes.tbody()
-    for operator, dtype, function in kernels:
-        tbody += _row((operator, dtype, function))
+    for operator, entries in group_by_operator(kernels).items():
+        dtypes = ", ".join(dtype for dtype, _ in entries)
+        functions = ", ".join(function for _, function in entries)
+        tbody += _row((operator, dtypes, functions))
     tgroup += tbody
     return table
 

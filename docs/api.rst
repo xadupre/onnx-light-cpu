@@ -38,23 +38,12 @@ Python API
    Returns the detected SIMD level: ``0=None``, ``1=SSE2``, ``2=AVX``,
    ``3=AVX2``, ``4=AVX512``.
 
-.. py:function:: abs_float32(input, output)
+.. py:function:: abs(input)
 
-   Computes the elementwise absolute value of a 1-D ``float32`` array using the
-   optimized SIMD dispatch. ``input`` and ``output`` must be contiguous CPU
-   arrays of the same length.
-
-.. py:function:: abs_float64(input, output)
-
-   Same as :func:`abs_float32` for ``float64`` arrays.
-
-.. py:function:: abs_int32(input, output)
-
-   Same as :func:`abs_float32` for ``int32`` arrays.
-
-.. py:function:: abs_int64(input, output)
-
-   Same as :func:`abs_float32` for ``int64`` arrays.
+   Computes the elementwise absolute value of a 1-D array using the optimized
+   SIMD dispatch. ``input`` must be a contiguous CPU array with dtype
+   ``float32``, ``float64``, ``int32`` or ``int64``; the function dispatches on
+   the dtype and returns a new array of the same dtype, like :func:`numpy.abs`.
 
 .. py:function:: has_cpu_kernels() -> bool
 
