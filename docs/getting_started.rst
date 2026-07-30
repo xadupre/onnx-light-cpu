@@ -48,13 +48,12 @@ Quick Start (Python)
 .. code-block:: python
 
    import numpy as np
-   from onnx_light_cpu.onnx_py._cpukernels import abs_float32, detect_simd_level
+   from onnx_light_cpu.onnx_py._cpukernels import abs, detect_simd_level
 
    # Check what SIMD level is available:
    # 0=None, 1=SSE2, 2=AVX, 3=AVX2, 4=AVX512
    print("SIMD level:", detect_simd_level())
 
    inp = np.array([-1.0, 2.0, -3.0, 4.0], dtype=np.float32)
-   out = np.zeros_like(inp)
-   abs_float32(inp, out)
+   out = abs(inp)  # dispatches on dtype, returns a new array like numpy.abs
    print(out)  # [1. 2. 3. 4.]
