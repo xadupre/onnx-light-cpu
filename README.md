@@ -119,7 +119,10 @@ pytest unittests/python/
 
 ## Documentation
 
-The documentation is built with [Sphinx](https://www.sphinx-doc.org/) and
+The full documentation is published at
+[xadupre.github.io/docs/onnx-light-cpu](https://xadupre.github.io/docs/onnx-light-cpu/).
+
+It is built with [Sphinx](https://www.sphinx-doc.org/) and
 includes an auto-generated table of the available kernels plus a runnable
 example gallery:
 
