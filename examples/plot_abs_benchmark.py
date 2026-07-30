@@ -25,21 +25,26 @@ elements.
 #
 # Import the ``onnx-light-cpu`` registration helper and report which SIMD level
 # the current CPU provides. The mapping is ``0=None``, ``1=SSE2``, ``2=AVX``,
-# ``3=AVX2`` and ``4=AVX512``.
+# ``3=AVX2`` and ``4=AVX512``. ``onnx-light`` is not published on PyPI, so when
+# it is not importable the example falls back to calling the compiled kernel
+# directly; this keeps the documentation build working everywhere.
 
+import importlib.util
 import time
 
 import numpy as np
 import onnx
 import onnxruntime
 from onnx import TensorProto, helper
-from onnx_light.onnx.reference import ReferenceEvaluator
 
 from onnx_light_cpu import register_kernels
 from onnx_light_cpu.onnx_py._cpukernels import (
+    abs as cpu_abs,
     detect_simd_level,
     has_cpu_kernels,
 )
+
+_HAS_ONNX_LIGHT = importlib.util.find_spec("onnx_light") is not None
 
 _SIMD_NAMES = {0: "scalar", 1: "SSE2", 2: "AVX", 3: "AVX2", 4: "AVX-512"}
 
@@ -75,10 +80,26 @@ session = onnxruntime.InferenceSession(
 #
 # ``onnx-light`` evaluates the same model with its C++ runtime. Registering the
 # onnx-light-cpu kernels overrides the built-in ``Abs`` so every ``Abs`` node in
-# the model dispatches to the SIMD-accelerated kernel.
+# the model dispatches to the SIMD-accelerated kernel. When ``onnx-light`` is
+# not installed the same kernel is invoked directly through the compiled
+# extension so the benchmark still runs.
 
-light_session = ReferenceEvaluator(model)
-register_kernels(light_session)
+if _HAS_ONNX_LIGHT:
+    from onnx_light.onnx.reference import ReferenceEvaluator
+
+    light_session = ReferenceEvaluator(model)
+    register_kernels(light_session)
+
+    def run_light(inp):
+        return light_session.run(None, {"X": inp})[0]
+
+    light_label = "onnx-light + onnx-light-cpu"
+else:
+
+    def run_light(inp):
+        return cpu_abs(inp)
+
+    light_label = "onnx-light-cpu"
 
 # %%
 # Timing helper
@@ -117,8 +138,8 @@ for size in sizes:
 
     numpy_time = measure(lambda inp=inp: np.abs(inp), repeat)
 
-    cpu_time = measure(lambda inp=inp: light_session.run(None, {"X": inp}), repeat)
-    assert np.array_equal(light_session.run(None, {"X": inp})[0], expected), size
+    cpu_time = measure(lambda inp=inp: run_light(inp), repeat)
+    assert np.array_equal(run_light(inp), expected), size
 
     ort_time = measure(lambda inp=inp: session.run(None, {"X": inp}), repeat)
     assert np.array_equal(session.run(None, {"X": inp})[0], expected), size
@@ -152,7 +173,7 @@ ax_time.plot(
     sizes,
     cpu_times * 1e6,
     "o-",
-    label="onnx-light + onnx-light-cpu",
+    label=light_label,
     color="#4a9eff",
 )
 ax_time.plot(sizes, ort_times * 1e6, "o-", label="onnxruntime", color="#f4a259")
@@ -168,7 +189,7 @@ ax_tput.plot(
     sizes,
     sizes / cpu_times,
     "o-",
-    label="onnx-light + onnx-light-cpu",
+    label=light_label,
     color="#4a9eff",
 )
 ax_tput.plot(sizes, sizes / ort_times, "o-", label="onnxruntime", color="#f4a259")
