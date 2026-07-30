@@ -9,7 +9,7 @@ _EXT_DIR = Path(__file__).resolve().parents[2] / "docs" / "_ext"
 if str(_EXT_DIR) not in sys.path:
     sys.path.insert(0, str(_EXT_DIR))
 
-from onnx_kernels import _group_by_operator  # noqa: E402
+from kernel_scan import group_by_operator  # noqa: E402
 
 
 class TestGroupByOperator:
@@ -20,7 +20,7 @@ class TestGroupByOperator:
             ("Abs", "int32", "AbsInt32"),
             ("Abs", "int64", "AbsInt64"),
         ]
-        grouped = _group_by_operator(kernels)
+        grouped = group_by_operator(kernels)
         # A single operator must not be multiplied into several rows.
         assert list(grouped) == ["Abs"]
         assert grouped["Abs"] == [
@@ -36,7 +36,7 @@ class TestGroupByOperator:
             ("Neg", "float32", "NegFloat32"),
             ("Abs", "int32", "AbsInt32"),
         ]
-        grouped = _group_by_operator(kernels)
+        grouped = group_by_operator(kernels)
         assert list(grouped) == ["Abs", "Neg"]
         assert grouped["Abs"] == [("float32", "AbsFloat32"), ("int32", "AbsInt32")]
         assert grouped["Neg"] == [("float32", "NegFloat32")]
