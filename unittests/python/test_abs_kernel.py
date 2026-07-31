@@ -61,6 +61,60 @@ class TestAbsFloat64:
         np.testing.assert_allclose(out, np.abs(inp))
 
 
+class TestAbsFloat16:
+    def test_basic(self):
+        inp = np.array([-1.0, 0.0, 3.0, -7.5], dtype=np.float16)
+        out = abs(inp)
+        assert out.dtype == np.float16
+        np.testing.assert_array_equal(out, np.abs(inp))
+
+    def test_empty(self):
+        inp = np.array([], dtype=np.float16)
+        out = abs(inp)
+        assert out.dtype == np.float16
+        assert out.shape == (0,)
+
+    @pytest.mark.parametrize("size", [1, 7, 8, 9, 15, 16, 17, 31, 32, 33, 1000])
+    def test_various_sizes(self, size):
+        inp = np.linspace(-100, 100, size, dtype=np.float16)
+        out = abs(inp)
+        np.testing.assert_array_equal(out, np.abs(inp))
+
+    def test_negative_zero(self):
+        inp = np.array([-0.0], dtype=np.float16)
+        out = abs(inp)
+        assert out[0] == 0.0
+        assert not np.signbit(out[0])
+
+    def test_special_values(self):
+        inp = np.array([np.inf, -np.inf, np.nan, -65504.0], dtype=np.float16)
+        out = abs(inp)
+        assert out[0] == np.inf
+        assert out[1] == np.inf
+        assert np.isnan(out[2])
+        assert out[3] == 65504.0
+
+
+class TestAbsInt8:
+    def test_basic(self):
+        inp = np.array([-1, 0, 3, -7, 100, 127], dtype=np.int8)
+        out = abs(inp)
+        assert out.dtype == np.int8
+        np.testing.assert_array_equal(out, np.abs(inp))
+
+    def test_int8_min_wraps(self):
+        # |-128| overflows int8 and wraps to -128, matching numpy.abs.
+        inp = np.array([-128], dtype=np.int8)
+        out = abs(inp)
+        assert out[0] == -128
+
+    @pytest.mark.parametrize("size", [1, 7, 8, 9, 15, 16, 17, 31, 32, 33, 100, 256])
+    def test_various_sizes(self, size):
+        inp = np.arange(-size // 2, size // 2, dtype=np.int8)
+        out = abs(inp)
+        np.testing.assert_array_equal(out, np.abs(inp))
+
+
 class TestAbsInt32:
     def test_basic(self):
         inp = np.array([-1, 0, 3, -7, 100], dtype=np.int32)

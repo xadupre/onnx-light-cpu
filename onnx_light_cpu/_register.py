@@ -21,12 +21,14 @@ import numpy as np
 from .onnx_py._cpukernels import abs as _abs  # pyrefly: ignore[missing-import]
 
 # NumPy dtypes handled by the optimized ``abs`` kernel. Any other dtype (e.g.
-# int8, int16, float16) falls back to :func:`numpy.abs` so the registration is
-# safe to install for models using any numeric ``Abs`` input type.
+# int16, bfloat16) falls back to :func:`numpy.abs` so the registration is safe
+# to install for models using any numeric ``Abs`` input type.
 _ABS_DTYPES = frozenset(
     {
+        np.dtype(np.float16),
         np.dtype(np.float32),
         np.dtype(np.float64),
+        np.dtype(np.int8),
         np.dtype(np.int32),
         np.dtype(np.int64),
     }

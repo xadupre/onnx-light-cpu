@@ -65,9 +65,7 @@ void AbsKernel::operator()(const Tensor &x, Tensor &output) const {
   case DataType::FLOAT16: {
     const std::uint16_t *px = reinterpret_cast<const std::uint16_t *>(x.bytes());
     std::uint16_t *py = reinterpret_cast<std::uint16_t *>(output.mutable_bytes());
-    for (std::int64_t i = 0; i < n; ++i) {
-      py[i] = rt_ns::FloatToFloat16Bits(std::fabs(rt_ns::Float16BitsToFloat(px[i])));
-    }
+    AbsFloat16(px, py, count);
     return;
   }
   case DataType::BFLOAT16: {
@@ -78,15 +76,9 @@ void AbsKernel::operator()(const Tensor &x, Tensor &output) const {
     }
     return;
   }
-  case DataType::INT8: {
-    const std::int8_t *px = x.AsInt8();
-    std::int8_t *py = output.AsInt8();
-    for (std::int64_t i = 0; i < n; ++i) {
-      const std::int32_t v = static_cast<std::int32_t>(px[i]);
-      py[i] = static_cast<std::int8_t>(v < 0 ? -v : v);
-    }
+  case DataType::INT8:
+    AbsInt8(x.AsInt8(), output.AsInt8(), count);
     return;
-  }
   case DataType::INT16: {
     const std::int16_t *px = x.AsInt16();
     std::int16_t *py = output.AsInt16();

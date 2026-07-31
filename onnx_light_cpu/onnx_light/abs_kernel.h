@@ -22,8 +22,8 @@ namespace onnx_light_cpu {
 /// once per node and calls :cpp:func:`Run` on every execution. The
 /// computation is delegated to the SIMD ``Abs*`` routines declared in
 /// ``onnx_light_cpu/cpu_kernels.h`` (runtime AVX-512/AVX2/AVX/SSE2 dispatch)
-/// for ``float32``/``float64``/``int32``/``int64``; the remaining element
-/// types supported by ONNX ``Abs`` (``float16``, ``bfloat16``, ``int8`` and
+/// for ``float32``/``float64``/``float16``/``int8``/``int32``/``int64``; the
+/// remaining element types supported by ONNX ``Abs`` (``bfloat16`` and
 /// ``int16``) fall back to a scalar implementation so the kernel is a full
 /// drop-in replacement for the built-in one.
 class AbsKernel : public ONNX_LIGHT_NAMESPACE::core::runtime::KernelBase {

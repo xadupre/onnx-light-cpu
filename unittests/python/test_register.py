@@ -44,7 +44,9 @@ class TestRegisterKernels:
 
 
 class TestAbsKernel:
-    @pytest.mark.parametrize("dtype", [np.float32, np.float64, np.int32, np.int64])
+    @pytest.mark.parametrize(
+        "dtype", [np.float16, np.float32, np.float64, np.int8, np.int32, np.int64]
+    )
     def test_supported_dtypes(self, dtype):
         inp = np.array([-1, 0, 3, -7], dtype=dtype)
         out = _abs_kernel(None, inp)

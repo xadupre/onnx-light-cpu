@@ -29,6 +29,16 @@ void AbsFloat32(const float *input, float *output, std::size_t count);
 /// Dispatches to the best available SIMD path at runtime.
 void AbsFloat64(const double *input, double *output, std::size_t count);
 
+/// Computes elementwise absolute value: out[i] = |input[i]| for float16.
+/// The input and output are the raw IEEE 754 half-precision bit patterns
+/// (as ``uint16_t``); the absolute value simply clears the sign bit.
+/// Dispatches to the best available SIMD path at runtime.
+void AbsFloat16(const uint16_t *input, uint16_t *output, std::size_t count);
+
+/// Computes elementwise absolute value: out[i] = |input[i]| for int8.
+/// Dispatches to the best available SIMD path at runtime.
+void AbsInt8(const int8_t *input, int8_t *output, std::size_t count);
+
 /// Computes elementwise absolute value: out[i] = |input[i]| for int32.
 /// Dispatches to the best available SIMD path at runtime.
 void AbsInt32(const int32_t *input, int32_t *output, std::size_t count);

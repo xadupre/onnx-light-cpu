@@ -93,7 +93,8 @@ level = detect_simd_level()  # 0=None, 1=SSE2, 2=AVX, 3=AVX2, 4=AVX512
 print(f"SIMD level: {level}")
 
 # Compute abs. A single ``abs`` function dispatches on the array dtype
-# (float32, float64, int32, int64) and returns a new array, like numpy.abs.
+# (float16, float32, float64, int8, int32, int64) and returns a new array,
+# like numpy.abs.
 inp = np.array([-1.0, 2.0, -3.0, 4.0], dtype=np.float32)
 out = abs(inp)
 print(out)  # [1. 2. 3. 4.]
