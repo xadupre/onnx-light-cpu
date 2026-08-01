@@ -9,6 +9,7 @@
 #include "onnx_core/runtime/cast_helper.h"
 #include "onnx_core/runtime/kernel_dispatch_table.h"
 #include "onnx_core/runtime/node_helpers.h"
+#include "onnx_core/runtime/parallel_for.h"
 #include "onnx_core/symbolic/sym_tensor.h"
 
 #include <cmath>
@@ -53,26 +54,39 @@ void ComputeUnary(const Tensor &x, Tensor &output, const char *kernel_name, Floa
                                 ": output buffer size mismatch.");
   }
   const std::int64_t n = x.element_count();
-  const std::size_t count = static_cast<std::size_t>(n);
   switch (static_cast<DataType>(x.data_type)) {
-  case DataType::FLOAT:
-    f32(x.AsFloat(), output.AsFloat(), count);
+  case DataType::FLOAT: {
+    const float *px = x.AsFloat();
+    float *py = output.AsFloat();
+    rt_ns::ParallelFor(n, [px, py, f32](std::int64_t begin, std::int64_t end) {
+      f32(px + begin, py + begin, static_cast<std::size_t>(end - begin));
+    });
     return;
-  case DataType::DOUBLE:
-    f64(x.AsDouble(), output.AsDouble(), count);
+  }
+  case DataType::DOUBLE: {
+    const double *px = x.AsDouble();
+    double *py = output.AsDouble();
+    rt_ns::ParallelFor(n, [px, py, f64](std::int64_t begin, std::int64_t end) {
+      f64(px + begin, py + begin, static_cast<std::size_t>(end - begin));
+    });
     return;
+  }
   case DataType::FLOAT16: {
     const std::uint16_t *px = reinterpret_cast<const std::uint16_t *>(x.bytes());
     std::uint16_t *py = reinterpret_cast<std::uint16_t *>(output.mutable_bytes());
-    f16(px, py, count);
+    rt_ns::ParallelFor(n, [px, py, f16](std::int64_t begin, std::int64_t end) {
+      f16(px + begin, py + begin, static_cast<std::size_t>(end - begin));
+    });
     return;
   }
   case DataType::BFLOAT16: {
     const std::uint16_t *px = reinterpret_cast<const std::uint16_t *>(x.bytes());
     std::uint16_t *py = reinterpret_cast<std::uint16_t *>(output.mutable_bytes());
-    for (std::int64_t i = 0; i < n; ++i) {
-      py[i] = rt_ns::FloatToBfloat16Bits(scalar(rt_ns::Bfloat16BitsToFloat(px[i])));
-    }
+    rt_ns::ParallelFor(n, [px, py, scalar](std::int64_t begin, std::int64_t end) {
+      for (std::int64_t i = begin; i < end; ++i) {
+        py[i] = rt_ns::FloatToBfloat16Bits(scalar(rt_ns::Bfloat16BitsToFloat(px[i])));
+      }
+    });
     return;
   }
   default:

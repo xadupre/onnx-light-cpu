@@ -160,6 +160,13 @@ onnx_light_cpu::RegisterLogKernel();   // any Log node now uses the SIMD kernel
 onnx_light_cpu::RegisterNotKernel();   // any Not node now uses the SIMD kernel
 ```
 
+When running through onnx-light, these kernels combine SIMD with
+multithreading: each kernel splits its work across onnx-light's shared
+`ParallelFor` thread pool. The pool sizes itself to the number of hardware
+threads, and its grain-size threshold keeps small tensors on a single thread
+(SIMD only), so large arrays are parallelized while small ones avoid
+thread-dispatch overhead.
+
 ## Testing
 
 ### C++ tests

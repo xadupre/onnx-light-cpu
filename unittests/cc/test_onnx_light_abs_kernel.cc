@@ -55,4 +55,24 @@ TEST(OnnxLightAbsKernel, Int64) {
   }
 }
 
+// Exercises the ParallelFor path: the array is large enough (above
+// ``kParallelForGrainSize``) that ``AbsKernel`` splits it across the shared
+// thread pool. The result must stay bit-exact regardless of how many threads
+// process it.
+TEST(OnnxLightAbsKernel, Float32LargeParallel) {
+  onnx_light_cpu::AbsKernel kernel(MakeCtx());
+  const int64_t n = 200003; // > 32768 grain size, and not a multiple of it
+  std::vector<float> values(static_cast<std::size_t>(n));
+  for (int64_t i = 0; i < n; ++i) {
+    values[static_cast<std::size_t>(i)] = static_cast<float>((i % 2 == 0 ? -1 : 1) * (i % 97));
+  }
+  const rt_ns::Tensor x = rt_ns::Tensor::FromFloat("x", {n}, values);
+  const rt_ns::Tensor y = kernel(x);
+  ASSERT_EQ(y.element_count(), n);
+  const float *py = y.AsFloat();
+  for (std::size_t i = 0; i < values.size(); ++i) {
+    EXPECT_FLOAT_EQ(py[i], std::fabs(values[i]));
+  }
+}
+
 } // namespace

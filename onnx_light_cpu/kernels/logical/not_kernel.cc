@@ -8,6 +8,7 @@
 
 #include "onnx_core/runtime/kernel_dispatch_table.h"
 #include "onnx_core/runtime/node_helpers.h"
+#include "onnx_core/runtime/parallel_for.h"
 #include "onnx_core/symbolic/sym_tensor.h"
 
 #include <cstddef>
@@ -49,8 +50,12 @@ void NotKernel::operator()(const Tensor &x, Tensor &output) const {
     throw std::invalid_argument("onnx_light_cpu::NotKernel: unsupported data type " +
                                 std::to_string(x.data_type) + ", only BOOL is supported.");
   }
-  const std::size_t count = static_cast<std::size_t>(x.element_count());
-  NotBool(x.AsBool(), output.AsBool(), count);
+  const std::int64_t n = x.element_count();
+  const std::uint8_t *px = x.AsBool();
+  std::uint8_t *py = output.AsBool();
+  rt_ns::ParallelFor(n, [px, py](std::int64_t begin, std::int64_t end) {
+    NotBool(px + begin, py + begin, static_cast<std::size_t>(end - begin));
+  });
 }
 
 void NotKernel::Run(RuntimeContext &rt) {

@@ -9,6 +9,7 @@
 #include "onnx_core/runtime/cast_helper.h"
 #include "onnx_core/runtime/kernel_dispatch_table.h"
 #include "onnx_core/runtime/node_helpers.h"
+#include "onnx_core/runtime/parallel_for.h"
 #include "onnx_core/symbolic/sym_tensor.h"
 
 #include <cmath>
@@ -29,6 +30,21 @@ using rt_ns::NodeKernelFn;
 using rt_ns::RuntimeContext;
 using rt_ns::Tensor;
 
+namespace {
+
+// Runs the elementwise SIMD kernel ``Fn`` over ``[0, n)`` through onnx-light's
+// ``ParallelFor``: large tensors are split across the shared thread pool (one
+// disjoint sub-range per thread, so the result stays bit-exact) while tensors
+// below ``kParallelForGrainSize`` run inline on the calling thread.
+template <typename T, void (*Fn)(const T *, T *, std::size_t)>
+void RunParallel(const T *input, T *output, std::int64_t n) {
+  rt_ns::ParallelFor(n, [input, output](std::int64_t begin, std::int64_t end) {
+    Fn(input + begin, output + begin, static_cast<std::size_t>(end - begin));
+  });
+}
+
+} // namespace
+
 rt_ns::Tensor AbsKernel::operator()(const Tensor &x, RuntimeContext *rt) const {
   const std::size_t y_n_bytes = static_cast<std::size_t>(x.element_count()) * x.element_size();
   Tensor y = rt_ns::MakeOutputTensor(x.data_type, x.shape, y_n_bytes,
@@ -48,44 +64,47 @@ void AbsKernel::operator()(const Tensor &x, Tensor &output) const {
     throw std::invalid_argument("onnx_light_cpu::AbsKernel: output buffer size mismatch.");
   }
   const std::int64_t n = x.element_count();
-  const std::size_t count = static_cast<std::size_t>(n);
   switch (static_cast<DataType>(x.data_type)) {
   case DataType::FLOAT:
-    AbsFloat32(x.AsFloat(), output.AsFloat(), count);
+    RunParallel<float, AbsFloat32>(x.AsFloat(), output.AsFloat(), n);
     return;
   case DataType::DOUBLE:
-    AbsFloat64(x.AsDouble(), output.AsDouble(), count);
+    RunParallel<double, AbsFloat64>(x.AsDouble(), output.AsDouble(), n);
     return;
   case DataType::INT32:
-    AbsInt32(x.AsInt32(), output.AsInt32(), count);
+    RunParallel<std::int32_t, AbsInt32>(x.AsInt32(), output.AsInt32(), n);
     return;
   case DataType::INT64:
-    AbsInt64(x.AsInt64(), output.AsInt64(), count);
+    RunParallel<std::int64_t, AbsInt64>(x.AsInt64(), output.AsInt64(), n);
     return;
   case DataType::FLOAT16: {
     const std::uint16_t *px = reinterpret_cast<const std::uint16_t *>(x.bytes());
     std::uint16_t *py = reinterpret_cast<std::uint16_t *>(output.mutable_bytes());
-    AbsFloat16(px, py, count);
+    RunParallel<std::uint16_t, AbsFloat16>(px, py, n);
     return;
   }
   case DataType::BFLOAT16: {
     const std::uint16_t *px = reinterpret_cast<const std::uint16_t *>(x.bytes());
     std::uint16_t *py = reinterpret_cast<std::uint16_t *>(output.mutable_bytes());
-    for (std::int64_t i = 0; i < n; ++i) {
-      py[i] = rt_ns::FloatToBfloat16Bits(std::fabs(rt_ns::Bfloat16BitsToFloat(px[i])));
-    }
+    rt_ns::ParallelFor(n, [px, py](std::int64_t begin, std::int64_t end) {
+      for (std::int64_t i = begin; i < end; ++i) {
+        py[i] = rt_ns::FloatToBfloat16Bits(std::fabs(rt_ns::Bfloat16BitsToFloat(px[i])));
+      }
+    });
     return;
   }
   case DataType::INT8:
-    AbsInt8(x.AsInt8(), output.AsInt8(), count);
+    RunParallel<std::int8_t, AbsInt8>(x.AsInt8(), output.AsInt8(), n);
     return;
   case DataType::INT16: {
     const std::int16_t *px = x.AsInt16();
     std::int16_t *py = output.AsInt16();
-    for (std::int64_t i = 0; i < n; ++i) {
-      const std::int32_t v = static_cast<std::int32_t>(px[i]);
-      py[i] = static_cast<std::int16_t>(v < 0 ? -v : v);
-    }
+    rt_ns::ParallelFor(n, [px, py](std::int64_t begin, std::int64_t end) {
+      for (std::int64_t i = begin; i < end; ++i) {
+        const std::int32_t v = static_cast<std::int32_t>(px[i]);
+        py[i] = static_cast<std::int16_t>(v < 0 ? -v : v);
+      }
+    });
     return;
   }
   default:
