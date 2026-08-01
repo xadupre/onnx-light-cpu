@@ -9,7 +9,7 @@
 
 // The math kernels dispatch on the runtime SIMD level shared across all kernel
 // families; pull in the neutral ``SimdLevel`` enum and ``DetectSimdLevel``.
-#include "onnx_light_cpu/kernels/simd_level.h"
+#include "onnx_light_cpu/impl/simd_level.h"
 
 namespace onnx_light_cpu {
 

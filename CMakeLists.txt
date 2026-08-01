@@ -197,8 +197,8 @@ if(ONNX_LIGHT_CPU_INSTALL)
       RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 
   install(FILES
-      "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/kernels/simd_level.h"
-      DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/onnx_light_cpu/kernels")
+      "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/simd_level.h"
+      DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/onnx_light_cpu/impl")
 
   install(FILES
       "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/kernels/math/math_kernels.h"
