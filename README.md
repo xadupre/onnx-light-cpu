@@ -66,7 +66,7 @@ cmake --build build
 ## C++ usage
 
 ```cpp
-#include <onnx_light_cpu/cpu_kernels.h>
+#include <onnx_light_cpu/kernels/math/math_kernels.h>
 
 int main() {
     float input[] = {-1.0f, 2.0f, -3.0f, 4.0f};
@@ -150,9 +150,9 @@ them into onnx-light's shared kernel dispatch table so every
 `Abs`/`Exp`/`Log`/`Not` node runs the SIMD kernel:
 
 ```cpp
-#include <onnx_light_cpu/onnx_light/abs_kernel.h>
-#include <onnx_light_cpu/onnx_light/exp_log_kernel.h>
-#include <onnx_light_cpu/onnx_light/not_kernel.h>
+#include <onnx_light_cpu/kernels/math/abs_kernel.h>
+#include <onnx_light_cpu/kernels/math/exp_log_kernel.h>
+#include <onnx_light_cpu/kernels/logical/not_kernel.h>
 
 onnx_light_cpu::RegisterKernels();     // any Abs node now uses the SIMD kernel
 onnx_light_cpu::RegisterExpKernel();   // any Exp node now uses the SIMD kernel

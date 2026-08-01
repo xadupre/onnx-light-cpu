@@ -2,7 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "onnx_light_cpu/cpu_kernels.h"
+#include "onnx_light_cpu/kernels/math/math_kernels.h"
+#include "onnx_light_cpu/onnx_py/_cpupy_kernels.h"
 
 #include <nanobind/nanobind.h>
 #include <nanobind/ndarray.h>
@@ -52,24 +53,11 @@ nb::object AbsFloat16Typed(const AbsInput &input) {
   return Float16Typed<onnx_light_cpu::AbsFloat16>(input);
 }
 
-// ``bool`` arrays are stored as one byte per element, so the raw byte patterns
-// are processed by the ``NotBool`` kernel and the result is exposed as a NumPy
-// ``bool`` array that owns its data.
-template <void (*Kernel)(const std::uint8_t *, std::uint8_t *, std::size_t)>
-nb::object BoolTyped(const AbsInput &input) {
-  const std::size_t count = static_cast<std::size_t>(input.shape(0));
-  auto *output = new std::uint8_t[count == 0 ? 1 : count];
-  Kernel(reinterpret_cast<const std::uint8_t *>(input.data()), output, count);
-  nb::capsule owner(output, [](void *p) noexcept { delete[] reinterpret_cast<std::uint8_t *>(p); });
-  return nb::cast(nb::ndarray<nb::numpy, bool, nb::ndim<1>>(output, {count}, owner));
-}
-
 } // namespace
 
-NB_MODULE(_cpukernels, m) {
-  m.doc() = "Python bindings for onnx-light-cpu: "
-            "highly optimized CPU kernels (Abs, Exp, Log, Not) with AVX/AVX2/AVX-512 dispatch.";
+namespace onnx_light_cpu {
 
+void RegisterMathKernels(nb::module_ &m) {
   m.def(
       "detect_simd_level",
       []() -> int { return static_cast<int>(onnx_light_cpu::DetectSimdLevel()); },
@@ -149,19 +137,16 @@ NB_MODULE(_cpukernels, m) {
       "float64) and returns a new array, like numpy.log.");
 
   m.def(
-      "logical_not",
-      [](const AbsInput &input) -> nb::object {
-        const nb::dlpack::dtype dt = input.dtype();
-        if (dt == nb::dtype<bool>()) {
-          return BoolTyped<onnx_light_cpu::NotBool>(input);
-        }
-        throw std::invalid_argument("logical_not: unsupported dtype; expected bool");
-      },
-      nb::arg("input"),
-      "Computes the elementwise logical negation of a 1-D bool array using "
-      "optimized SIMD and returns a new bool array, like numpy.logical_not.");
-
-  m.def(
       "has_cpu_kernels", []() -> bool { return true; },
       "Returns True when the CPU kernel extension is available.");
+}
+
+} // namespace onnx_light_cpu
+
+NB_MODULE(_cpukernels, m) {
+  m.doc() = "Python bindings for onnx-light-cpu: "
+            "highly optimized CPU kernels (Abs, Exp, Log, Not) with AVX/AVX2/AVX-512 dispatch.";
+
+  onnx_light_cpu::RegisterMathKernels(m);
+  onnx_light_cpu::RegisterLogicalKernels(m);
 }

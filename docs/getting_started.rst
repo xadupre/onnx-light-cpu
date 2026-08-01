@@ -33,7 +33,7 @@ available SIMD path is selected automatically at runtime:
 
 .. code-block:: cpp
 
-   #include <onnx_light_cpu/cpu_kernels.h>
+   #include <onnx_light_cpu/kernels/math/math_kernels.h>
 
    int main() {
        float input[] = {-1.0f, 2.0f, -3.0f, 4.0f};

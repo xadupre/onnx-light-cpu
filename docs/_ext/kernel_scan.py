@@ -3,8 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """Scan the C++ sources for the kernels provided by this repository.
 
-The public kernels are declared in ``onnx_light_cpu/cpu_kernels.h`` as free
-functions of the form::
+The public kernels are declared in ``onnx_light_cpu/kernels/math/math_kernels.h``
+and ``onnx_light_cpu/kernels/logical/logical_kernels.h`` as free functions of the
+form::
 
     void AbsFloat32(const float *input, float *output, std::size_t count);
 
@@ -45,7 +46,10 @@ _DTYPE_NAMES = {
 }
 
 # Source globs (relative to the repository root) that declare kernels.
-DEFAULT_GLOBS: Tuple[str, ...] = ("onnx_light_cpu/cpu_kernels.h",)
+DEFAULT_GLOBS: Tuple[str, ...] = (
+    "onnx_light_cpu/kernels/math/math_kernels.h",
+    "onnx_light_cpu/kernels/logical/logical_kernels.h",
+)
 
 Kernel = Tuple[str, str, str]
 

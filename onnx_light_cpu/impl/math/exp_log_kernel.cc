@@ -14,7 +14,7 @@
 // float32, evaluates the scalar standard-library function and rounds the
 // result back to float16.
 
-#include "onnx_light_cpu/cpu_kernels.h"
+#include "onnx_light_cpu/kernels/math/math_kernels.h"
 
 #include <cmath>
 #include <cstdint>

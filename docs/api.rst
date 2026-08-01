@@ -4,8 +4,9 @@ API Reference
 C++ API
 -------
 
-The public C++ API is declared in ``onnx_light_cpu/cpu_kernels.h``. Every
-kernel dispatches at runtime to the best available SIMD path.
+The public C++ API is declared in ``onnx_light_cpu/kernels/math/math_kernels.h``
+and ``onnx_light_cpu/kernels/logical/logical_kernels.h``. Every kernel dispatches
+at runtime to the best available SIMD path.
 
 .. code-block:: cpp
 
@@ -34,9 +35,9 @@ onnx-light kernel class
 When onnx-light-cpu is built with ``-DONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON`` (which
 requires the `onnx-light <https://github.com/xadupre/onnx-light>`_ C++ package),
 an additional library ``lib_onnx_light_cpu_kernels`` is produced. It declares
-``onnx_light_cpu/onnx_light/abs_kernel.h``,
-``onnx_light_cpu/onnx_light/exp_log_kernel.h`` and
-``onnx_light_cpu/onnx_light/not_kernel.h``:
+``onnx_light_cpu/kernels/math/abs_kernel.h``,
+``onnx_light_cpu/kernels/math/exp_log_kernel.h`` and
+``onnx_light_cpu/kernels/logical/not_kernel.h``:
 
 .. code-block:: cpp
 
