@@ -34,8 +34,9 @@ onnx-light kernel class
 When onnx-light-cpu is built with ``-DONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON`` (which
 requires the `onnx-light <https://github.com/xadupre/onnx-light>`_ C++ package),
 an additional library ``lib_onnx_light_cpu_kernels`` is produced. It declares
-``onnx_light_cpu/onnx_light/abs_kernel.h`` and
-``onnx_light_cpu/onnx_light/exp_log_kernel.h``:
+``onnx_light_cpu/onnx_light/abs_kernel.h``,
+``onnx_light_cpu/onnx_light/exp_log_kernel.h`` and
+``onnx_light_cpu/onnx_light/not_kernel.h``:
 
 .. code-block:: cpp
 
@@ -49,19 +50,23 @@ an additional library ``lib_onnx_light_cpu_kernels`` is produced. It declares
    class ExpKernel : public onnx_light::core::runtime::KernelBase { ... };
    class LogKernel : public onnx_light::core::runtime::KernelBase { ... };
 
+   // Not equivalent delegating to the SIMD NotBool routine.
+   class NotKernel : public onnx_light::core::runtime::KernelBase { ... };
+
    // Registers the kernels into onnx-light's shared KernelDispatchTable for the
    // default ONNX domain / CPU device, overriding the built-in operators.
    void RegisterKernels();     // Abs
    void RegisterExpKernel();   // Exp
    void RegisterLogKernel();   // Log
+   void RegisterNotKernel();   // Not
 
    } // namespace onnx_light_cpu
 
-``AbsKernel``, ``ExpKernel`` and ``LogKernel`` are full ``KernelBase``
-subclasses, so once the matching ``Register*`` function has run every
-``Abs``/``Exp``/``Log`` node executed by onnx-light's runtime (and therefore any
-model run through ``ReferenceEvaluator``) resolves to the SIMD-accelerated
-kernel.
+``AbsKernel``, ``ExpKernel``, ``LogKernel`` and ``NotKernel`` are full
+``KernelBase`` subclasses, so once the matching ``Register*`` function has run
+every ``Abs``/``Exp``/``Log``/``Not`` node executed by onnx-light's runtime (and
+therefore any model run through ``ReferenceEvaluator``) resolves to the
+SIMD-accelerated kernel.
 
 Python API
 ----------
@@ -80,6 +85,12 @@ Python API
    ``float32``, ``float64``, ``int32`` or ``int64``; the function dispatches on
    the dtype and returns a new array of the same dtype, like :func:`numpy.abs`.
 
+.. py:function:: logical_not(input)
+
+   Computes the elementwise logical negation of a 1-D ``bool`` array using the
+   optimized SIMD dispatch and returns a new ``bool`` array, like
+   :func:`numpy.logical_not`.
+
 .. py:function:: has_cpu_kernels() -> bool
 
    Returns ``True`` when the CPU kernel extension is available.
@@ -94,10 +105,10 @@ Registering kernels with onnx-light
    Registers the onnx-light-cpu kernels on an ``onnx-light``
    ``ReferenceEvaluator`` (any object exposing a compatible
    ``register_custom_kernel(domain, op_type, fn)`` method). After this call,
-   every ``Abs`` node evaluated by ``sess`` dispatches to the
-   SIMD-accelerated onnx-light-cpu kernel instead of the built-in one, so any
-   ONNX model using ``Abs`` benefits from the optimized kernel. Returns
-   ``sess`` so calls can be chained.
+   every ``Abs``, ``Exp``, ``Log`` and ``Not`` node evaluated by ``sess``
+   dispatches to the SIMD-accelerated onnx-light-cpu kernel instead of the
+   built-in one, so any ONNX model using those operators benefits from the
+   optimized kernel. Returns ``sess`` so calls can be chained.
 
    .. code-block:: python
 

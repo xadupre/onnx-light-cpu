@@ -112,11 +112,21 @@ print(exp(x))  # [1.       2.7182817 7.389056 ]
 print(log(exp(x)))  # [0. 1. 2.]
 ```
 
+The ``logical_not`` function implements the ONNX ``Not`` operator on ``bool``
+arrays, like ``numpy.logical_not``:
+
+```python
+from onnx_light_cpu.onnx_py._cpukernels import logical_not
+
+b = np.array([True, False, True], dtype=np.bool_)
+print(logical_not(b))  # [False  True False]
+```
+
 ### Running an ONNX model with onnx-light
 
 `register_kernels` plugs the SIMD-accelerated kernels into an
 [onnx-light](https://github.com/xadupre/onnx-light) `ReferenceEvaluator` so any
-ONNX model using `Abs`, `Exp` or `Log` runs the optimized kernel:
+ONNX model using `Abs`, `Exp`, `Log` or `Not` runs the optimized kernel:
 
 ```python
 import numpy as np
@@ -132,18 +142,22 @@ register_kernels(sess)
 For a native C++ integration, build with `-DONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON`
 (requires the [onnx-light](https://github.com/xadupre/onnx-light) C++ package).
 This builds `lib_onnx_light_cpu_kernels`, which exposes `onnx_light_cpu::AbsKernel`,
-`onnx_light_cpu::ExpKernel` and `onnx_light_cpu::LogKernel` classes deriving from
+`onnx_light_cpu::ExpKernel`, `onnx_light_cpu::LogKernel` and
+`onnx_light_cpu::NotKernel` classes deriving from
 onnx-light's `KernelBase`. Calling `onnx_light_cpu::RegisterKernels()`,
-`RegisterExpKernel()` and `RegisterLogKernel()` installs them into onnx-light's
-shared kernel dispatch table so every `Abs`/`Exp`/`Log` node runs the SIMD kernel:
+`RegisterExpKernel()`, `RegisterLogKernel()` and `RegisterNotKernel()` installs
+them into onnx-light's shared kernel dispatch table so every
+`Abs`/`Exp`/`Log`/`Not` node runs the SIMD kernel:
 
 ```cpp
 #include <onnx_light_cpu/onnx_light/abs_kernel.h>
 #include <onnx_light_cpu/onnx_light/exp_log_kernel.h>
+#include <onnx_light_cpu/onnx_light/not_kernel.h>
 
 onnx_light_cpu::RegisterKernels();     // any Abs node now uses the SIMD kernel
 onnx_light_cpu::RegisterExpKernel();   // any Exp node now uses the SIMD kernel
 onnx_light_cpu::RegisterLogKernel();   // any Log node now uses the SIMD kernel
+onnx_light_cpu::RegisterNotKernel();   // any Not node now uses the SIMD kernel
 ```
 
 ## Testing

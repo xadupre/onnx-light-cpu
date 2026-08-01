@@ -81,4 +81,12 @@ void LogFloat64(const double *input, double *output, std::size_t count);
 /// rounded back to float16.
 void LogFloat16(const uint16_t *input, uint16_t *output, std::size_t count);
 
+/// Computes the elementwise logical negation: out[i] = (input[i] == 0) for
+/// ``bool``. ONNX ``bool`` tensors are stored as one byte per element, so the
+/// input and output are the raw byte patterns (as ``uint8_t``): every zero byte
+/// maps to ``1`` and every non-zero byte maps to ``0``, matching
+/// ``numpy.logical_not``. Dispatches to the best available SIMD path at
+/// runtime.
+void NotBool(const uint8_t *input, uint8_t *output, std::size_t count);
+
 } // namespace onnx_light_cpu

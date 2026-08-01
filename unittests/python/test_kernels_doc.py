@@ -48,3 +48,7 @@ class TestOperatorFunction:
         # not one function per data type.
         assert operator_function("Abs") == "abs"
         assert operator_function("Neg") == "neg"
+
+    def test_not_maps_to_logical_not(self):
+        # ``not`` is a Python keyword, so ``Not`` is exposed as ``logical_not``.
+        assert operator_function("Not") == "logical_not"
