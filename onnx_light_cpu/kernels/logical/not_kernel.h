@@ -21,7 +21,7 @@ namespace onnx_light_cpu {
 /// runtime exactly like a built-in kernel: the dispatch table constructs it
 /// once per node and calls :cpp:func:`Run` on every execution. The computation
 /// is delegated to the SIMD ``NotBool`` routine declared in
-/// ``onnx_light_cpu/kernels/logical/logical_kernels.h`` (runtime AVX-512/AVX2/SSE2 dispatch). ONNX
+/// ``onnx_light_cpu/impl/logical/logical_kernels.h`` (runtime AVX-512/AVX2/SSE2 dispatch). ONNX
 /// ``Not`` only accepts ``bool`` inputs, so the kernel is a full drop-in
 /// replacement for the built-in one.
 class NotKernel : public ONNX_LIGHT_NAMESPACE::core::runtime::KernelBase {

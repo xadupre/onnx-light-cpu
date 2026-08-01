@@ -4,7 +4,7 @@
 
 #include "onnx_light_cpu/kernels/math/abs_kernel.h"
 
-#include "onnx_light_cpu/kernels/math/math_kernels.h"
+#include "onnx_light_cpu/impl/math/math_kernels.h"
 
 #include "onnx_core/runtime/cast_helper.h"
 #include "onnx_core/runtime/kernel_dispatch_table.h"

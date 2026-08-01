@@ -201,12 +201,12 @@ if(ONNX_LIGHT_CPU_INSTALL)
       DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/onnx_light_cpu/impl")
 
   install(FILES
-      "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/kernels/math/math_kernels.h"
-      DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/onnx_light_cpu/kernels/math")
+      "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/math_kernels.h"
+      DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/onnx_light_cpu/impl/math")
 
   install(FILES
-      "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/kernels/logical/logical_kernels.h"
-      DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/onnx_light_cpu/kernels/logical")
+      "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/logical/logical_kernels.h"
+      DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/onnx_light_cpu/impl/logical")
 
   if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
     install(TARGETS lib_onnx_light_cpu_kernels

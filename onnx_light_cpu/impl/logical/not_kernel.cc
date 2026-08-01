@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "onnx_light_cpu/kernels/logical/logical_kernels.h"
+#include "onnx_light_cpu/impl/logical/logical_kernels.h"
 
 #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
 #define ONNX_LIGHT_CPU_X86 1

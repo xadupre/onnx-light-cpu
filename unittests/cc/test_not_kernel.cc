@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "onnx_light_cpu/kernels/logical/logical_kernels.h"
+#include "onnx_light_cpu/impl/logical/logical_kernels.h"
 
 #include <gtest/gtest.h>
 

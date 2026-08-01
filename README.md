@@ -66,7 +66,7 @@ cmake --build build
 ## C++ usage
 
 ```cpp
-#include <onnx_light_cpu/kernels/math/math_kernels.h>
+#include <onnx_light_cpu/impl/math/math_kernels.h>
 
 int main() {
     float input[] = {-1.0f, 2.0f, -3.0f, 4.0f};

@@ -4,7 +4,7 @@
 
 #include "onnx_light_cpu/kernels/logical/not_kernel.h"
 
-#include "onnx_light_cpu/kernels/logical/logical_kernels.h"
+#include "onnx_light_cpu/impl/logical/logical_kernels.h"
 
 #include "onnx_core/runtime/kernel_dispatch_table.h"
 #include "onnx_core/runtime/node_helpers.h"
