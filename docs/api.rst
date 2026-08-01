@@ -34,7 +34,8 @@ onnx-light kernel class
 When onnx-light-cpu is built with ``-DONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON`` (which
 requires the `onnx-light <https://github.com/xadupre/onnx-light>`_ C++ package),
 an additional library ``lib_onnx_light_cpu_kernels`` is produced. It declares
-``onnx_light_cpu/onnx_light/abs_kernel.h``:
+``onnx_light_cpu/onnx_light/abs_kernel.h`` and
+``onnx_light_cpu/onnx_light/exp_log_kernel.h``:
 
 .. code-block:: cpp
 
@@ -44,14 +45,21 @@ an additional library ``lib_onnx_light_cpu_kernels`` is produced. It declares
    // SIMD Abs* routines above.
    class AbsKernel : public onnx_light::core::runtime::KernelBase { ... };
 
-   // Registers AbsKernel into onnx-light's shared KernelDispatchTable for the
-   // default ONNX domain / CPU device, overriding the built-in Abs.
-   void RegisterKernels();
+   // Exp/Log equivalents delegating to the SIMD Exp*/Log* routines.
+   class ExpKernel : public onnx_light::core::runtime::KernelBase { ... };
+   class LogKernel : public onnx_light::core::runtime::KernelBase { ... };
+
+   // Registers the kernels into onnx-light's shared KernelDispatchTable for the
+   // default ONNX domain / CPU device, overriding the built-in operators.
+   void RegisterKernels();     // Abs
+   void RegisterExpKernel();   // Exp
+   void RegisterLogKernel();   // Log
 
    } // namespace onnx_light_cpu
 
-``AbsKernel`` is a full ``KernelBase`` subclass, so once ``RegisterKernels()``
-has run every ``Abs`` node executed by onnx-light's runtime (and therefore any
+``AbsKernel``, ``ExpKernel`` and ``LogKernel`` are full ``KernelBase``
+subclasses, so once the matching ``Register*`` function has run every
+``Abs``/``Exp``/``Log`` node executed by onnx-light's runtime (and therefore any
 model run through ``ReferenceEvaluator``) resolves to the SIMD-accelerated
 kernel.
 
