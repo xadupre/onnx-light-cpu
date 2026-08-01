@@ -69,13 +69,15 @@ endif()
 # Sources
 # ---------------------------------------------------------------------------
 set(CPU_KERNEL_SOURCES
-    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/kernels/cpu/abs_kernel.cc"
-    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/kernels/cpu/exp_log_kernel.cc"
-    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/kernels/cpu/not_kernel.cc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/simd_level.cc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/abs_kernel.cc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/exp_log_kernel.cc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/logical/not_kernel.cc"
 )
 
 set(PY_KERNELS_SOURCES
-    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/onnx_py/_cpupy_kernels.cc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/onnx_py/_cpupy_math_kernels.cc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/onnx_py/_cpupy_logical_kernels.cc"
 )
 
 # ---------------------------------------------------------------------------
@@ -117,9 +119,9 @@ if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
   find_package(onnx_light CONFIG REQUIRED)
 
   add_library(lib_onnx_light_cpu_kernels ${_cpu_lib_type}
-      "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/onnx_light/abs_kernel.cc"
-      "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/onnx_light/exp_log_kernel.cc"
-      "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/onnx_light/not_kernel.cc")
+      "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/kernels/math/abs_kernel.cc"
+      "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/kernels/math/exp_log_kernel.cc"
+      "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/kernels/logical/not_kernel.cc")
   target_include_directories(lib_onnx_light_cpu_kernels PUBLIC
       $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
       $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
@@ -195,8 +197,16 @@ if(ONNX_LIGHT_CPU_INSTALL)
       RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 
   install(FILES
-      "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/cpu_kernels.h"
-      DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/onnx_light_cpu")
+      "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/simd_level.h"
+      DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/onnx_light_cpu/impl")
+
+  install(FILES
+      "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/math_kernels.h"
+      DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/onnx_light_cpu/impl/math")
+
+  install(FILES
+      "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/logical/logical_kernels.h"
+      DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/onnx_light_cpu/impl/logical")
 
   if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
     install(TARGETS lib_onnx_light_cpu_kernels
@@ -206,10 +216,13 @@ if(ONNX_LIGHT_CPU_INSTALL)
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 
     install(FILES
-        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/onnx_light/abs_kernel.h"
-        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/onnx_light/exp_log_kernel.h"
-        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/onnx_light/not_kernel.h"
-        DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/onnx_light_cpu/onnx_light")
+        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/kernels/math/abs_kernel.h"
+        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/kernels/math/exp_log_kernel.h"
+        DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/onnx_light_cpu/kernels/math")
+
+    install(FILES
+        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/kernels/logical/not_kernel.h"
+        DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/onnx_light_cpu/kernels/logical")
   endif()
 
   include(CMakePackageConfigHelpers)

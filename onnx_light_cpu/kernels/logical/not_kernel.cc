@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "onnx_light_cpu/onnx_light/not_kernel.h"
+#include "onnx_light_cpu/kernels/logical/not_kernel.h"
 
-#include "onnx_light_cpu/cpu_kernels.h"
+#include "onnx_light_cpu/impl/logical/logical_kernels.h"
 
 #include "onnx_core/runtime/kernel_dispatch_table.h"
 #include "onnx_core/runtime/node_helpers.h"

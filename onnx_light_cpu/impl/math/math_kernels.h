@@ -7,19 +7,11 @@
 #include <cstddef>
 #include <cstdint>
 
+// The math kernels dispatch on the runtime SIMD level shared across all kernel
+// families; pull in the neutral ``SimdLevel`` enum and ``DetectSimdLevel``.
+#include "onnx_light_cpu/impl/simd_level.h"
+
 namespace onnx_light_cpu {
-
-/// Supported SIMD instruction sets for CPU kernel dispatch.
-enum class SimdLevel : int {
-  kNone = 0,   ///< Scalar fallback (no SIMD).
-  kSSE2 = 1,   ///< SSE2 (128-bit).
-  kAVX = 2,    ///< AVX (256-bit).
-  kAVX2 = 3,   ///< AVX2 (256-bit with FMA, integer ops).
-  kAVX512 = 4, ///< AVX-512F (512-bit).
-};
-
-/// Detects the highest SIMD level supported by the current CPU at runtime.
-SimdLevel DetectSimdLevel();
 
 /// Computes elementwise absolute value: out[i] = |input[i]| for float32.
 /// Dispatches to the best available SIMD path at runtime.
@@ -80,13 +72,5 @@ void LogFloat64(const double *input, double *output, std::size_t count);
 /// ``uint16_t``); each value is widened to float32, its logarithm computed and
 /// rounded back to float16.
 void LogFloat16(const uint16_t *input, uint16_t *output, std::size_t count);
-
-/// Computes the elementwise logical negation: out[i] = (input[i] == 0) for
-/// ``bool``. ONNX ``bool`` tensors are stored as one byte per element, so the
-/// input and output are the raw byte patterns (as ``uint8_t``): every zero byte
-/// maps to ``1`` and every non-zero byte maps to ``0``, matching
-/// ``numpy.logical_not``. Dispatches to the best available SIMD path at
-/// runtime.
-void NotBool(const uint8_t *input, uint8_t *output, std::size_t count);
 
 } // namespace onnx_light_cpu

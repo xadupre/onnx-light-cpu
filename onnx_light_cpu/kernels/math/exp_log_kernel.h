@@ -21,7 +21,7 @@ namespace onnx_light_cpu {
 /// runtime exactly like a built-in kernel: the dispatch table constructs it
 /// once per node and calls :cpp:func:`Run` on every execution. The computation
 /// is delegated to the SIMD ``ExpFloat*`` routines declared in
-/// ``onnx_light_cpu/cpu_kernels.h`` (runtime AVX2/SSE2 dispatch) for
+/// ``onnx_light_cpu/impl/math/math_kernels.h`` (runtime AVX2/SSE2 dispatch) for
 /// ``float32``/``float64``/``float16``; ``bfloat16`` falls back to a scalar
 /// implementation so the kernel is a full drop-in replacement for the built-in
 /// one.

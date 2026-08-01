@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "onnx_light_cpu/onnx_light/not_kernel.h"
+#include "onnx_light_cpu/kernels/logical/not_kernel.h"
 
 #include "onnx_core/runtime/kernel_context.h"
 #include "onnx_core/runtime/simple_tensor.h"

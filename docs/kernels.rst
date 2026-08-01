@@ -4,9 +4,10 @@ Available Kernels
 The table below lists the kernels **provided by this repository**
 (``onnx-light-cpu``). It does not include the kernels that come with onnx-light
 itself. The list is generated automatically at documentation build time by
-scanning this repository's public C++ header
-(``onnx_light_cpu/cpu_kernels.h``), so it always reflects the kernels this
-repository actually provides.
+scanning this repository's public C++ headers
+(``onnx_light_cpu/impl/math/math_kernels.h`` and
+``onnx_light_cpu/impl/logical/logical_kernels.h``), so it always reflects the
+kernels this repository actually provides.
 
 .. registered-kernels::
 
