@@ -291,6 +291,194 @@ void AbsFloat64(const double *input, double *output, std::size_t count) {
 }
 
 // ---------------------------------------------------------------------------
+// AbsFloat16 implementations
+// ---------------------------------------------------------------------------
+//
+// The elementwise absolute value of an IEEE 754 half-precision value is a pure
+// bit operation on its 16-bit representation: clearing the sign bit (bit 15).
+// This works for every category (normal, subnormal, zero, infinity, NaN) and
+// avoids any float16<->float32 conversion, so no F16C support is required.
+
+namespace {
+
+constexpr std::uint16_t kFloat16AbsMask = 0x7FFF;
+
+void AbsFloat16_Scalar(const uint16_t *input, uint16_t *output, std::size_t count) {
+  for (std::size_t i = 0; i < count; ++i) {
+    output[i] = static_cast<uint16_t>(input[i] & kFloat16AbsMask);
+  }
+}
+
+#if ONNX_LIGHT_CPU_X86
+
+void AbsFloat16_SSE2(const uint16_t *input, uint16_t *output, std::size_t count) {
+  const __m128i mask = _mm_set1_epi16(static_cast<short>(kFloat16AbsMask));
+  std::size_t i = 0;
+  const std::size_t stride = 8;
+  const std::size_t aligned_count = count - (count % stride);
+  for (; i < aligned_count; i += stride) {
+    __m128i v = _mm_loadu_si128(reinterpret_cast<const __m128i *>(input + i));
+    v = _mm_and_si128(v, mask);
+    _mm_storeu_si128(reinterpret_cast<__m128i *>(output + i), v);
+  }
+  for (; i < count; ++i) {
+    output[i] = static_cast<uint16_t>(input[i] & kFloat16AbsMask);
+  }
+}
+
+void AbsFloat16_AVX2(const uint16_t *input, uint16_t *output, std::size_t count) {
+  const __m256i mask = _mm256_set1_epi16(static_cast<short>(kFloat16AbsMask));
+  std::size_t i = 0;
+  const std::size_t stride = 16;
+  const std::size_t aligned_count = count - (count % stride);
+  for (; i < aligned_count; i += stride) {
+    __m256i v = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(input + i));
+    v = _mm256_and_si256(v, mask);
+    _mm256_storeu_si256(reinterpret_cast<__m256i *>(output + i), v);
+  }
+  for (; i < count; ++i) {
+    output[i] = static_cast<uint16_t>(input[i] & kFloat16AbsMask);
+  }
+}
+
+#ifdef __AVX512F__
+void AbsFloat16_AVX512(const uint16_t *input, uint16_t *output, std::size_t count) {
+  const __m512i mask = _mm512_set1_epi16(static_cast<short>(kFloat16AbsMask));
+  std::size_t i = 0;
+  const std::size_t stride = 32;
+  const std::size_t aligned_count = count - (count % stride);
+  for (; i < aligned_count; i += stride) {
+    __m512i v = _mm512_loadu_si512(reinterpret_cast<const __m512i *>(input + i));
+    v = _mm512_and_si512(v, mask);
+    _mm512_storeu_si512(reinterpret_cast<__m512i *>(output + i), v);
+  }
+  for (; i < count; ++i) {
+    output[i] = static_cast<uint16_t>(input[i] & kFloat16AbsMask);
+  }
+}
+#endif // __AVX512F__
+
+#endif // ONNX_LIGHT_CPU_X86
+
+} // namespace
+
+void AbsFloat16(const uint16_t *input, uint16_t *output, std::size_t count) {
+  if (count == 0)
+    return;
+#if ONNX_LIGHT_CPU_X86
+  static const SimdLevel level = DetectSimdLevel();
+#ifdef __AVX512F__
+  if (level >= SimdLevel::kAVX512) {
+    AbsFloat16_AVX512(input, output, count);
+    return;
+  }
+#endif
+  if (level >= SimdLevel::kAVX2) {
+    AbsFloat16_AVX2(input, output, count);
+    return;
+  }
+  if (level >= SimdLevel::kSSE2) {
+    AbsFloat16_SSE2(input, output, count);
+    return;
+  }
+#endif
+  AbsFloat16_Scalar(input, output, count);
+}
+
+// ---------------------------------------------------------------------------
+// AbsInt8 implementations
+// ---------------------------------------------------------------------------
+
+namespace {
+
+void AbsInt8_Scalar(const int8_t *input, int8_t *output, std::size_t count) {
+  for (std::size_t i = 0; i < count; ++i) {
+    const int v = static_cast<int>(input[i]);
+    output[i] = static_cast<int8_t>(v < 0 ? -v : v);
+  }
+}
+
+#if ONNX_LIGHT_CPU_X86
+
+void AbsInt8_SSE2(const int8_t *input, int8_t *output, std::size_t count) {
+  // SSSE3 pabsb is not guaranteed at SSE2; emulate with (x XOR mask) - mask
+  // where mask = (x < 0) ? 0xFF : 0x00 via a signed byte compare.
+  const __m128i zero = _mm_setzero_si128();
+  std::size_t i = 0;
+  const std::size_t stride = 16;
+  const std::size_t aligned_count = count - (count % stride);
+  for (; i < aligned_count; i += stride) {
+    __m128i v = _mm_loadu_si128(reinterpret_cast<const __m128i *>(input + i));
+    __m128i mask = _mm_cmpgt_epi8(zero, v);
+    v = _mm_sub_epi8(_mm_xor_si128(v, mask), mask);
+    _mm_storeu_si128(reinterpret_cast<__m128i *>(output + i), v);
+  }
+  for (; i < count; ++i) {
+    const int v = static_cast<int>(input[i]);
+    output[i] = static_cast<int8_t>(v < 0 ? -v : v);
+  }
+}
+
+void AbsInt8_AVX2(const int8_t *input, int8_t *output, std::size_t count) {
+  std::size_t i = 0;
+  const std::size_t stride = 32;
+  const std::size_t aligned_count = count - (count % stride);
+  for (; i < aligned_count; i += stride) {
+    __m256i v = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(input + i));
+    v = _mm256_abs_epi8(v);
+    _mm256_storeu_si256(reinterpret_cast<__m256i *>(output + i), v);
+  }
+  for (; i < count; ++i) {
+    const int v = static_cast<int>(input[i]);
+    output[i] = static_cast<int8_t>(v < 0 ? -v : v);
+  }
+}
+
+#ifdef __AVX512BW__
+void AbsInt8_AVX512(const int8_t *input, int8_t *output, std::size_t count) {
+  std::size_t i = 0;
+  const std::size_t stride = 64;
+  const std::size_t aligned_count = count - (count % stride);
+  for (; i < aligned_count; i += stride) {
+    __m512i v = _mm512_loadu_si512(reinterpret_cast<const __m512i *>(input + i));
+    v = _mm512_abs_epi8(v);
+    _mm512_storeu_si512(reinterpret_cast<__m512i *>(output + i), v);
+  }
+  for (; i < count; ++i) {
+    const int v = static_cast<int>(input[i]);
+    output[i] = static_cast<int8_t>(v < 0 ? -v : v);
+  }
+}
+#endif // __AVX512BW__
+
+#endif // ONNX_LIGHT_CPU_X86
+
+} // namespace
+
+void AbsInt8(const int8_t *input, int8_t *output, std::size_t count) {
+  if (count == 0)
+    return;
+#if ONNX_LIGHT_CPU_X86
+  static const SimdLevel level = DetectSimdLevel();
+#ifdef __AVX512BW__
+  if (level >= SimdLevel::kAVX512) {
+    AbsInt8_AVX512(input, output, count);
+    return;
+  }
+#endif
+  if (level >= SimdLevel::kAVX2) {
+    AbsInt8_AVX2(input, output, count);
+    return;
+  }
+  if (level >= SimdLevel::kSSE2) {
+    AbsInt8_SSE2(input, output, count);
+    return;
+  }
+#endif
+  AbsInt8_Scalar(input, output, count);
+}
+
+// ---------------------------------------------------------------------------
 // AbsInt32 implementations
 // ---------------------------------------------------------------------------
 

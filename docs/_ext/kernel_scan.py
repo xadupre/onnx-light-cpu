@@ -24,12 +24,13 @@ from typing import List, Tuple
 # operator (leading CamelCase part) and the trailing data-type suffix.
 _KERNEL_RE = re.compile(
     r"void\s+(?P<op>[A-Z][A-Za-z]*?)"
-    r"(?P<dtype>Float32|Float64|Int8|Int16|Int32|Int64|Uint8|Uint16|Uint32|Uint64)"
+    r"(?P<dtype>Float16|Float32|Float64|Int8|Int16|Int32|Int64|Uint8|Uint16|Uint32|Uint64)"
     r"\s*\(",
 )
 
 # Human-readable ONNX data-type names keyed by the C++ function suffix.
 _DTYPE_NAMES = {
+    "Float16": "float16",
     "Float32": "float32",
     "Float64": "float64",
     "Int8": "int8",

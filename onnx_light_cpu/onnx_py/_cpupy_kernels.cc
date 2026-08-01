@@ -32,6 +32,20 @@ nb::object AbsTyped(const AbsInput &input) {
   return nb::cast(nb::ndarray<nb::numpy, T, nb::ndim<1>>(output, {count}, owner));
 }
 
+// float16 has no portable C++ scalar type, so it is handled specially: the raw
+// 16-bit bit patterns are processed by ``AbsFloat16`` and the result is exposed
+// as a NumPy ``float16`` array (dtype code Float, 16 bits) that owns its data.
+nb::object AbsFloat16Typed(const AbsInput &input) {
+  const std::size_t count = static_cast<std::size_t>(input.shape(0));
+  auto *output = new std::uint16_t[count == 0 ? 1 : count];
+  onnx_light_cpu::AbsFloat16(reinterpret_cast<const std::uint16_t *>(input.data()), output, count);
+  nb::capsule owner(output,
+                    [](void *p) noexcept { delete[] reinterpret_cast<std::uint16_t *>(p); });
+  const nb::dlpack::dtype f16{static_cast<uint8_t>(nb::dlpack::dtype_code::Float), 16, 1};
+  const std::size_t shape[1] = {count};
+  return nb::cast(nb::ndarray<nb::numpy>(output, 1, shape, owner, nullptr, f16));
+}
+
 } // namespace
 
 NB_MODULE(_cpukernels, m) {
@@ -53,6 +67,13 @@ NB_MODULE(_cpukernels, m) {
         if (dt == nb::dtype<double>()) {
           return AbsTyped<double, onnx_light_cpu::AbsFloat64>(input);
         }
+        const nb::dlpack::dtype f16{static_cast<uint8_t>(nb::dlpack::dtype_code::Float), 16, 1};
+        if (dt == f16) {
+          return AbsFloat16Typed(input);
+        }
+        if (dt == nb::dtype<int8_t>()) {
+          return AbsTyped<int8_t, onnx_light_cpu::AbsInt8>(input);
+        }
         if (dt == nb::dtype<int32_t>()) {
           return AbsTyped<int32_t, onnx_light_cpu::AbsInt32>(input);
         }
@@ -60,12 +81,12 @@ NB_MODULE(_cpukernels, m) {
           return AbsTyped<int64_t, onnx_light_cpu::AbsInt64>(input);
         }
         throw std::invalid_argument(
-            "abs: unsupported dtype; expected float32, float64, int32 or int64");
+            "abs: unsupported dtype; expected float16, float32, float64, int8, int32 or int64");
       },
       nb::arg("input"),
       "Computes the elementwise absolute value of a 1-D array using optimized "
-      "SIMD. Dispatches on the array dtype (float32, float64, int32, int64) and "
-      "returns a new array, like numpy.abs.");
+      "SIMD. Dispatches on the array dtype (float16, float32, float64, int8, "
+      "int32, int64) and returns a new array, like numpy.abs.");
 
   m.def(
       "has_cpu_kernels", []() -> bool { return true; },
