@@ -87,7 +87,7 @@ def measure(func, repeat):
 # correctness is verified alongside the timing.
 
 thread_counts = sorted({1, 2, 4, max_threads})
-sizes = [10**k for k in range(4, 11)]
+sizes = [10**k for k in range(4, 10)]
 rng = np.random.default_rng(0)
 
 cases = [("Abs (memory bound)", cpu_abs), ("Exp (compute bound)", cpu_exp)]
