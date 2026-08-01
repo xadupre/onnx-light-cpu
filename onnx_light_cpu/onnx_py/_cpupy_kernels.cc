@@ -33,12 +33,14 @@ nb::object AbsTyped(const AbsInput &input) {
 }
 
 // float16 has no portable C++ scalar type, so it is handled specially: the raw
-// 16-bit bit patterns are processed by ``AbsFloat16`` and the result is exposed
-// as a NumPy ``float16`` array (dtype code Float, 16 bits) that owns its data.
-nb::object AbsFloat16Typed(const AbsInput &input) {
+// 16-bit bit patterns are processed by the matching ``*Float16`` kernel and the
+// result is exposed as a NumPy ``float16`` array (dtype code Float, 16 bits)
+// that owns its data.
+template <void (*Kernel)(const std::uint16_t *, std::uint16_t *, std::size_t)>
+nb::object Float16Typed(const AbsInput &input) {
   const std::size_t count = static_cast<std::size_t>(input.shape(0));
   auto *output = new std::uint16_t[count == 0 ? 1 : count];
-  onnx_light_cpu::AbsFloat16(reinterpret_cast<const std::uint16_t *>(input.data()), output, count);
+  Kernel(reinterpret_cast<const std::uint16_t *>(input.data()), output, count);
   nb::capsule owner(output,
                     [](void *p) noexcept { delete[] reinterpret_cast<std::uint16_t *>(p); });
   const nb::dlpack::dtype f16{static_cast<uint8_t>(nb::dlpack::dtype_code::Float), 16, 1};
@@ -46,11 +48,15 @@ nb::object AbsFloat16Typed(const AbsInput &input) {
   return nb::cast(nb::ndarray<nb::numpy>(output, 1, shape, owner, nullptr, f16));
 }
 
+nb::object AbsFloat16Typed(const AbsInput &input) {
+  return Float16Typed<onnx_light_cpu::AbsFloat16>(input);
+}
+
 } // namespace
 
 NB_MODULE(_cpukernels, m) {
   m.doc() = "Python bindings for onnx-light-cpu: "
-            "highly optimized CPU kernels (Abs) with AVX/AVX2/AVX-512 dispatch.";
+            "highly optimized CPU kernels (Abs, Exp, Log) with AVX/AVX2/AVX-512 dispatch.";
 
   m.def(
       "detect_simd_level",
@@ -87,6 +93,48 @@ NB_MODULE(_cpukernels, m) {
       "Computes the elementwise absolute value of a 1-D array using optimized "
       "SIMD. Dispatches on the array dtype (float16, float32, float64, int8, "
       "int32, int64) and returns a new array, like numpy.abs.");
+
+  m.def(
+      "exp",
+      [](const AbsInput &input) -> nb::object {
+        const nb::dlpack::dtype dt = input.dtype();
+        if (dt == nb::dtype<float>()) {
+          return AbsTyped<float, onnx_light_cpu::ExpFloat32>(input);
+        }
+        if (dt == nb::dtype<double>()) {
+          return AbsTyped<double, onnx_light_cpu::ExpFloat64>(input);
+        }
+        const nb::dlpack::dtype f16{static_cast<uint8_t>(nb::dlpack::dtype_code::Float), 16, 1};
+        if (dt == f16) {
+          return Float16Typed<onnx_light_cpu::ExpFloat16>(input);
+        }
+        throw std::invalid_argument("exp: unsupported dtype; expected float16, float32 or float64");
+      },
+      nb::arg("input"),
+      "Computes the elementwise natural exponential of a 1-D array using "
+      "optimized SIMD. Dispatches on the array dtype (float16, float32, "
+      "float64) and returns a new array, like numpy.exp.");
+
+  m.def(
+      "log",
+      [](const AbsInput &input) -> nb::object {
+        const nb::dlpack::dtype dt = input.dtype();
+        if (dt == nb::dtype<float>()) {
+          return AbsTyped<float, onnx_light_cpu::LogFloat32>(input);
+        }
+        if (dt == nb::dtype<double>()) {
+          return AbsTyped<double, onnx_light_cpu::LogFloat64>(input);
+        }
+        const nb::dlpack::dtype f16{static_cast<uint8_t>(nb::dlpack::dtype_code::Float), 16, 1};
+        if (dt == f16) {
+          return Float16Typed<onnx_light_cpu::LogFloat16>(input);
+        }
+        throw std::invalid_argument("log: unsupported dtype; expected float16, float32 or float64");
+      },
+      nb::arg("input"),
+      "Computes the elementwise natural logarithm of a 1-D array using "
+      "optimized SIMD. Dispatches on the array dtype (float16, float32, "
+      "float64) and returns a new array, like numpy.log.");
 
   m.def(
       "has_cpu_kernels", []() -> bool { return true; },
