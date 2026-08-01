@@ -5,8 +5,10 @@ C++ API
 -------
 
 The public C++ API is declared in ``onnx_light_cpu/kernels/math/math_kernels.h``
-and ``onnx_light_cpu/kernels/logical/logical_kernels.h``. Every kernel dispatches
-at runtime to the best available SIMD path.
+and ``onnx_light_cpu/kernels/logical/logical_kernels.h``. The shared SIMD
+dispatch primitives (``SimdLevel`` and ``DetectSimdLevel``) live in the neutral
+``onnx_light_cpu/kernels/simd_level.h`` header, which both kernel families
+include. Every kernel dispatches at runtime to the best available SIMD path.
 
 .. code-block:: cpp
 

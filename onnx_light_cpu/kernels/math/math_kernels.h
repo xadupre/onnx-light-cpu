@@ -7,19 +7,11 @@
 #include <cstddef>
 #include <cstdint>
 
+// The math kernels dispatch on the runtime SIMD level shared across all kernel
+// families; pull in the neutral ``SimdLevel`` enum and ``DetectSimdLevel``.
+#include "onnx_light_cpu/kernels/simd_level.h"
+
 namespace onnx_light_cpu {
-
-/// Supported SIMD instruction sets for CPU kernel dispatch.
-enum class SimdLevel : int {
-  kNone = 0,   ///< Scalar fallback (no SIMD).
-  kSSE2 = 1,   ///< SSE2 (128-bit).
-  kAVX = 2,    ///< AVX (256-bit).
-  kAVX2 = 3,   ///< AVX2 (256-bit with FMA, integer ops).
-  kAVX512 = 4, ///< AVX-512F (512-bit).
-};
-
-/// Detects the highest SIMD level supported by the current CPU at runtime.
-SimdLevel DetectSimdLevel();
 
 /// Computes elementwise absolute value: out[i] = |input[i]| for float32.
 /// Dispatches to the best available SIMD path at runtime.

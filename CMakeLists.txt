@@ -69,6 +69,7 @@ endif()
 # Sources
 # ---------------------------------------------------------------------------
 set(CPU_KERNEL_SOURCES
+    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/simd_level.cc"
     "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/abs_kernel.cc"
     "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/exp_log_kernel.cc"
     "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/logical/not_kernel.cc"
@@ -194,6 +195,10 @@ if(ONNX_LIGHT_CPU_INSTALL)
       ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
       LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
       RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+
+  install(FILES
+      "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/kernels/simd_level.h"
+      DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/onnx_light_cpu/kernels")
 
   install(FILES
       "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/kernels/math/math_kernels.h"

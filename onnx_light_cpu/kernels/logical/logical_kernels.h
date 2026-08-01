@@ -7,10 +7,10 @@
 #include <cstddef>
 #include <cstdint>
 
-// ``NotBool`` dispatches on the runtime SIMD level detected by
-// ``DetectSimdLevel`` (declared alongside the math kernels), so pull in the
-// shared ``SimdLevel`` enum and detection entry point.
-#include "onnx_light_cpu/kernels/math/math_kernels.h"
+// ``NotBool`` dispatches on the runtime SIMD level shared across all kernel
+// families, so pull in the neutral ``SimdLevel`` enum and ``DetectSimdLevel``
+// detection entry point rather than the math kernel declarations.
+#include "onnx_light_cpu/kernels/simd_level.h"
 
 namespace onnx_light_cpu {
 
