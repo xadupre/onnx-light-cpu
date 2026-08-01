@@ -31,6 +31,18 @@ TEST(OnnxLightAbsKernel, Float32) {
   }
 }
 
+TEST(OnnxLightAbsKernel, Float64) {
+  onnx_light_cpu::AbsKernel kernel(MakeCtx());
+  const std::vector<double> values = {-1.0, 0.0, 3.0, -7.5, 0.001};
+  const rt_ns::Tensor x = rt_ns::Tensor::FromDouble("x", {5}, values);
+  const rt_ns::Tensor y = kernel(x);
+  ASSERT_EQ(y.element_count(), 5);
+  const double *py = y.AsDouble();
+  for (std::size_t i = 0; i < values.size(); ++i) {
+    EXPECT_DOUBLE_EQ(py[i], std::fabs(values[i]));
+  }
+}
+
 TEST(OnnxLightAbsKernel, Int64) {
   onnx_light_cpu::AbsKernel kernel(MakeCtx());
   const std::vector<int64_t> values = {-1, 0, 3, -7, 100};
