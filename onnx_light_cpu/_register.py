@@ -7,7 +7,7 @@
 ``onnx-light`` evaluates every node against its C++ ``KernelDispatchTable`` but
 exposes a :meth:`register_custom_kernel` hook that overrides a built-in kernel
 with a Python callable invoked as ``fn(node, *numpy_inputs)``. This module wires
-the SIMD-accelerated ``Abs``, ``Exp`` and ``Log`` kernels provided by
+the SIMD-accelerated ``Abs``, ``Exp``, ``Log`` and ``Not`` kernels provided by
 ``onnx-light-cpu`` into that hook so that *any* ONNX model containing those
 nodes runs the optimized kernels instead of the built-in ones.
 """
@@ -21,6 +21,7 @@ import numpy as np
 from .onnx_py._cpukernels import abs as _abs  # pyrefly: ignore[missing-import]
 from .onnx_py._cpukernels import exp as _exp  # pyrefly: ignore[missing-import]
 from .onnx_py._cpukernels import log as _log  # pyrefly: ignore[missing-import]
+from .onnx_py._cpukernels import logical_not as _logical_not  # pyrefly: ignore[missing-import]
 
 # NumPy dtypes handled by the optimized ``abs`` kernel. Any other dtype (e.g.
 # int16, bfloat16) falls back to :func:`numpy.abs` so the registration is safe
@@ -86,6 +87,20 @@ def _log_kernel(node: Any, x: np.ndarray) -> np.ndarray:
     return np.log(arr)
 
 
+def _not_kernel(node: Any, x: np.ndarray) -> np.ndarray:
+    """Elementwise logical negation for a ``Not`` node using the SIMD kernel.
+
+    The compiled ``logical_not`` entry point operates on a contiguous 1-D
+    ``bool`` array, so the input is flattened, processed, and reshaped back to
+    its original shape. Non-``bool`` dtypes fall back to
+    :func:`numpy.logical_not`.
+    """
+    arr = np.ascontiguousarray(x)
+    if arr.dtype == np.bool_:
+        return _logical_not(arr.reshape(-1)).reshape(arr.shape)
+    return np.logical_not(arr)
+
+
 def register_kernels(sess: Any, domain: str = "") -> Any:
     """Registers the onnx-light-cpu kernels on an onnx-light evaluator.
 
@@ -94,10 +109,11 @@ def register_kernels(sess: Any, domain: str = "") -> Any:
     sess:
         An ``onnx_light.onnx.reference.ReferenceEvaluator`` (or any object
         exposing a compatible ``register_custom_kernel(domain, op_type, fn)``
-        method). After this call every ``Abs``, ``Exp`` and ``Log`` node
-        dispatched by ``sess`` runs the SIMD-accelerated onnx-light-cpu kernel.
+        method). After this call every ``Abs``, ``Exp``, ``Log`` and ``Not``
+        node dispatched by ``sess`` runs the SIMD-accelerated onnx-light-cpu
+        kernel.
     domain:
-        Operator domain of the ``Abs``/``Exp``/``Log`` operators. Defaults to
+        Operator domain of the ``Abs``/``Exp``/``Log``/``Not`` operators. Defaults to
         the standard ONNX domain (the empty string, treated as ``ai.onnx``).
 
     Returns
@@ -120,4 +136,5 @@ def register_kernels(sess: Any, domain: str = "") -> Any:
     register(domain, "Abs", _abs_kernel)
     register(domain, "Exp", _exp_kernel)
     register(domain, "Log", _log_kernel)
+    register(domain, "Not", _not_kernel)
     return sess

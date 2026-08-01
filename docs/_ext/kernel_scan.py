@@ -24,7 +24,7 @@ from typing import List, Tuple
 # operator (leading CamelCase part) and the trailing data-type suffix.
 _KERNEL_RE = re.compile(
     r"void\s+(?P<op>[A-Z][A-Za-z]*?)"
-    r"(?P<dtype>Float16|Float32|Float64|Int8|Int16|Int32|Int64|Uint8|Uint16|Uint32|Uint64)"
+    r"(?P<dtype>Float16|Float32|Float64|Int8|Int16|Int32|Int64|Uint8|Uint16|Uint32|Uint64|Bool)"
     r"\s*\(",
 )
 
@@ -41,6 +41,7 @@ _DTYPE_NAMES = {
     "Uint16": "uint16",
     "Uint32": "uint32",
     "Uint64": "uint64",
+    "Bool": "bool",
 }
 
 # Source globs (relative to the repository root) that declare kernels.
@@ -100,5 +101,7 @@ def operator_function(operator: str) -> str:
     Each operator is exposed through a single numpy-like Python function that
     dispatches on the array data type (for example ``Abs`` -> ``abs``), so the
     documentation lists one function per operator rather than one per data type.
+    The ``Not`` operator maps to ``logical_not`` because ``not`` is a Python
+    keyword.
     """
-    return operator.lower()
+    return {"Not": "logical_not"}.get(operator, operator.lower())

@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 from onnx_light_cpu import register_kernels
-from onnx_light_cpu._register import _abs_kernel, _exp_kernel, _log_kernel
+from onnx_light_cpu._register import _abs_kernel, _exp_kernel, _log_kernel, _not_kernel
 
 
 class FakeEvaluator:
@@ -36,12 +36,18 @@ class TestRegisterKernels:
         assert ("", "Exp") in sess.kernels
         assert ("", "Log") in sess.kernels
 
+    def test_registers_not_on_default_domain(self):
+        sess = FakeEvaluator()
+        register_kernels(sess)
+        assert ("", "Not") in sess.kernels
+
     def test_custom_domain(self):
         sess = FakeEvaluator()
         register_kernels(sess, domain="ai.onnx")
         assert ("ai.onnx", "Abs") in sess.kernels
         assert ("ai.onnx", "Exp") in sess.kernels
         assert ("ai.onnx", "Log") in sess.kernels
+        assert ("ai.onnx", "Not") in sess.kernels
 
     def test_registered_kernel_computes_abs(self):
         sess = FakeEvaluator()
@@ -112,3 +118,34 @@ class TestLogKernel:
         inp = np.array([1, 2, 3], dtype=np.int32)
         out = _log_kernel(None, inp)
         np.testing.assert_allclose(out, np.log(inp))
+
+
+class TestNotKernel:
+    def test_supported_dtype(self):
+        inp = np.array([True, False, True, False], dtype=np.bool_)
+        out = _not_kernel(None, inp)
+        assert out.dtype == np.bool_
+        np.testing.assert_array_equal(out, np.logical_not(inp))
+
+    def test_multidimensional_input(self):
+        inp = np.array([[True, False], [False, True]], dtype=np.bool_)
+        out = _not_kernel(None, inp)
+        assert out.shape == inp.shape
+        np.testing.assert_array_equal(out, np.logical_not(inp))
+
+    def test_non_contiguous_input(self):
+        base = np.array([[True, False], [False, True]], dtype=np.bool_)
+        view = base.T  # non-contiguous
+        out = _not_kernel(None, view)
+        assert out.shape == view.shape
+        np.testing.assert_array_equal(out, np.logical_not(view))
+
+    def test_empty_input(self):
+        inp = np.array([], dtype=np.bool_)
+        out = _not_kernel(None, inp)
+        assert out.shape == (0,)
+
+    def test_unsupported_dtype_falls_back_to_numpy(self):
+        inp = np.array([0, 1, 2], dtype=np.int32)
+        out = _not_kernel(None, inp)
+        np.testing.assert_array_equal(out, np.logical_not(inp))
