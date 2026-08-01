@@ -70,6 +70,7 @@ endif()
 # ---------------------------------------------------------------------------
 set(CPU_KERNEL_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/kernels/cpu/abs_kernel.cc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/kernels/cpu/exp_log_kernel.cc"
 )
 
 set(PY_KERNELS_SOURCES
@@ -115,7 +116,8 @@ if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
   find_package(onnx_light CONFIG REQUIRED)
 
   add_library(lib_onnx_light_cpu_kernels ${_cpu_lib_type}
-      "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/onnx_light/abs_kernel.cc")
+      "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/onnx_light/abs_kernel.cc"
+      "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/onnx_light/exp_log_kernel.cc")
   target_include_directories(lib_onnx_light_cpu_kernels PUBLIC
       $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
       $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
@@ -203,6 +205,7 @@ if(ONNX_LIGHT_CPU_INSTALL)
 
     install(FILES
         "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/onnx_light/abs_kernel.h"
+        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/onnx_light/exp_log_kernel.h"
         DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/onnx_light_cpu/onnx_light")
   endif()
 
@@ -257,6 +260,18 @@ if(ONNX_LIGHT_CPU_BUILD_TESTS)
   include(GoogleTest)
   gtest_discover_tests(test_abs_kernel)
 
+  add_executable(test_exp_log_kernel
+      "${CMAKE_CURRENT_SOURCE_DIR}/unittests/cc/test_exp_log_kernel.cc")
+  target_link_libraries(test_exp_log_kernel PRIVATE
+      lib_onnx_light_cpu
+      GTest::gtest_main)
+  target_include_directories(test_exp_log_kernel PRIVATE
+      "${CMAKE_CURRENT_SOURCE_DIR}")
+  if(ONNX_LIGHT_CPU_SIMD_FLAGS)
+    target_compile_options(test_exp_log_kernel PRIVATE ${_simd_flags})
+  endif()
+  gtest_discover_tests(test_exp_log_kernel)
+
   # onnx-light kernel-class test: only built when the onnx-light integration
   # is enabled (it links the registration library against onnx-light).
   if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
@@ -271,6 +286,18 @@ if(ONNX_LIGHT_CPU_BUILD_TESTS)
       target_compile_options(test_onnx_light_abs_kernel PRIVATE ${_simd_flags})
     endif()
     gtest_discover_tests(test_onnx_light_abs_kernel)
+
+    add_executable(test_onnx_light_exp_log_kernel
+        "${CMAKE_CURRENT_SOURCE_DIR}/unittests/cc/test_onnx_light_exp_log_kernel.cc")
+    target_link_libraries(test_onnx_light_exp_log_kernel PRIVATE
+        lib_onnx_light_cpu_kernels
+        GTest::gtest_main)
+    target_include_directories(test_onnx_light_exp_log_kernel PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}")
+    if(ONNX_LIGHT_CPU_SIMD_FLAGS)
+      target_compile_options(test_onnx_light_exp_log_kernel PRIVATE ${_simd_flags})
+    endif()
+    gtest_discover_tests(test_onnx_light_exp_log_kernel)
   endif()
 endif()
 
@@ -287,8 +314,10 @@ if(ONNX_LIGHT_CPU_BUILD_PYTHON)
 endif()
 if(ONNX_LIGHT_CPU_BUILD_TESTS)
   list(APPEND _onnx_light_cpu_hardening_targets test_abs_kernel)
+  list(APPEND _onnx_light_cpu_hardening_targets test_exp_log_kernel)
   if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
     list(APPEND _onnx_light_cpu_hardening_targets test_onnx_light_abs_kernel)
+    list(APPEND _onnx_light_cpu_hardening_targets test_onnx_light_exp_log_kernel)
   endif()
 endif()
 foreach(_t IN LISTS _onnx_light_cpu_hardening_targets)

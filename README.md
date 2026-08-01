@@ -101,11 +101,22 @@ out = abs(inp)
 print(out)  # [1. 2. 3. 4.]
 ```
 
+The ``exp`` and ``log`` functions work the same way and dispatch on the array
+dtype (float16, float32, float64):
+
+```python
+from onnx_light_cpu.onnx_py._cpukernels import exp, log
+
+x = np.array([0.0, 1.0, 2.0], dtype=np.float32)
+print(exp(x))  # [1.       2.7182817 7.389056 ]
+print(log(exp(x)))  # [0. 1. 2.]
+```
+
 ### Running an ONNX model with onnx-light
 
 `register_kernels` plugs the SIMD-accelerated kernels into an
 [onnx-light](https://github.com/xadupre/onnx-light) `ReferenceEvaluator` so any
-ONNX model using `Abs` runs the optimized kernel:
+ONNX model using `Abs`, `Exp` or `Log` runs the optimized kernel:
 
 ```python
 import numpy as np
@@ -120,15 +131,19 @@ register_kernels(sess)
 
 For a native C++ integration, build with `-DONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON`
 (requires the [onnx-light](https://github.com/xadupre/onnx-light) C++ package).
-This builds `lib_onnx_light_cpu_kernels`, which exposes an `onnx_light_cpu::AbsKernel`
-class deriving from onnx-light's `KernelBase`. Calling
-`onnx_light_cpu::RegisterKernels()` installs it into onnx-light's shared kernel
-dispatch table so every `Abs` node runs the SIMD kernel:
+This builds `lib_onnx_light_cpu_kernels`, which exposes `onnx_light_cpu::AbsKernel`,
+`onnx_light_cpu::ExpKernel` and `onnx_light_cpu::LogKernel` classes deriving from
+onnx-light's `KernelBase`. Calling `onnx_light_cpu::RegisterKernels()`,
+`RegisterExpKernel()` and `RegisterLogKernel()` installs them into onnx-light's
+shared kernel dispatch table so every `Abs`/`Exp`/`Log` node runs the SIMD kernel:
 
 ```cpp
 #include <onnx_light_cpu/onnx_light/abs_kernel.h>
+#include <onnx_light_cpu/onnx_light/exp_log_kernel.h>
 
-onnx_light_cpu::RegisterKernels();  // any Abs node now uses the SIMD kernel
+onnx_light_cpu::RegisterKernels();     // any Abs node now uses the SIMD kernel
+onnx_light_cpu::RegisterExpKernel();   // any Exp node now uses the SIMD kernel
+onnx_light_cpu::RegisterLogKernel();   // any Log node now uses the SIMD kernel
 ```
 
 ## Testing

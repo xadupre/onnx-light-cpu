@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 from onnx_light_cpu import register_kernels
-from onnx_light_cpu._register import _abs_kernel
+from onnx_light_cpu._register import _abs_kernel, _exp_kernel, _log_kernel
 
 
 class FakeEvaluator:
@@ -30,10 +30,18 @@ class TestRegisterKernels:
         assert result is sess
         assert ("", "Abs") in sess.kernels
 
+    def test_registers_exp_and_log_on_default_domain(self):
+        sess = FakeEvaluator()
+        register_kernels(sess)
+        assert ("", "Exp") in sess.kernels
+        assert ("", "Log") in sess.kernels
+
     def test_custom_domain(self):
         sess = FakeEvaluator()
         register_kernels(sess, domain="ai.onnx")
         assert ("ai.onnx", "Abs") in sess.kernels
+        assert ("ai.onnx", "Exp") in sess.kernels
+        assert ("ai.onnx", "Log") in sess.kernels
 
     def test_registered_kernel_computes_abs(self):
         sess = FakeEvaluator()
@@ -76,3 +84,31 @@ class TestAbsKernel:
         out = _abs_kernel(None, inp)
         assert out.dtype == np.int16
         np.testing.assert_array_equal(out, np.abs(inp))
+
+
+class TestExpKernel:
+    @pytest.mark.parametrize("dtype", [np.float16, np.float32, np.float64])
+    def test_supported_dtypes(self, dtype):
+        inp = np.array([-1.0, 0.0, 1.0, 2.0], dtype=dtype)
+        out = _exp_kernel(None, inp)
+        assert out.dtype == inp.dtype
+        np.testing.assert_allclose(out, np.exp(inp), rtol=1e-2, atol=1e-3)
+
+    def test_unsupported_dtype_falls_back_to_numpy(self):
+        inp = np.array([1, 2, 3], dtype=np.int32)
+        out = _exp_kernel(None, inp)
+        np.testing.assert_allclose(out, np.exp(inp))
+
+
+class TestLogKernel:
+    @pytest.mark.parametrize("dtype", [np.float16, np.float32, np.float64])
+    def test_supported_dtypes(self, dtype):
+        inp = np.array([0.5, 1.0, 2.0, 10.0], dtype=dtype)
+        out = _log_kernel(None, inp)
+        assert out.dtype == inp.dtype
+        np.testing.assert_allclose(out, np.log(inp), rtol=1e-2, atol=1e-3)
+
+    def test_unsupported_dtype_falls_back_to_numpy(self):
+        inp = np.array([1, 2, 3], dtype=np.int32)
+        out = _log_kernel(None, inp)
+        np.testing.assert_allclose(out, np.log(inp))

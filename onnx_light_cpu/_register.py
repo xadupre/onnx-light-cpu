@@ -7,9 +7,9 @@
 ``onnx-light`` evaluates every node against its C++ ``KernelDispatchTable`` but
 exposes a :meth:`register_custom_kernel` hook that overrides a built-in kernel
 with a Python callable invoked as ``fn(node, *numpy_inputs)``. This module wires
-the SIMD-accelerated ``Abs`` kernel provided by ``onnx-light-cpu`` into that
-hook so that *any* ONNX model containing an ``Abs`` node runs the optimized
-kernel instead of the built-in one.
+the SIMD-accelerated ``Abs``, ``Exp`` and ``Log`` kernels provided by
+``onnx-light-cpu`` into that hook so that *any* ONNX model containing those
+nodes runs the optimized kernels instead of the built-in ones.
 """
 
 from __future__ import annotations
@@ -19,6 +19,8 @@ from typing import Any, Callable
 import numpy as np
 
 from .onnx_py._cpukernels import abs as _abs  # pyrefly: ignore[missing-import]
+from .onnx_py._cpukernels import exp as _exp  # pyrefly: ignore[missing-import]
+from .onnx_py._cpukernels import log as _log  # pyrefly: ignore[missing-import]
 
 # NumPy dtypes handled by the optimized ``abs`` kernel. Any other dtype (e.g.
 # int16, bfloat16) falls back to :func:`numpy.abs` so the registration is safe
@@ -31,6 +33,16 @@ _ABS_DTYPES = frozenset(
         np.dtype(np.int8),
         np.dtype(np.int32),
         np.dtype(np.int64),
+    }
+)
+
+# NumPy dtypes handled by the optimized ``exp``/``log`` kernels. Any other dtype
+# (e.g. bfloat16) falls back to the corresponding NumPy function.
+_FLOAT_DTYPES = frozenset(
+    {
+        np.dtype(np.float16),
+        np.dtype(np.float32),
+        np.dtype(np.float64),
     }
 )
 
@@ -48,6 +60,32 @@ def _abs_kernel(node: Any, x: np.ndarray) -> np.ndarray:
     return np.abs(arr)
 
 
+def _exp_kernel(node: Any, x: np.ndarray) -> np.ndarray:
+    """Elementwise natural exponential for an ``Exp`` node using the SIMD kernel.
+
+    The compiled ``exp`` entry point operates on a contiguous 1-D array, so the
+    input is flattened, processed, and reshaped back to its original shape.
+    Unsupported dtypes fall back to :func:`numpy.exp`.
+    """
+    arr = np.ascontiguousarray(x)
+    if arr.dtype in _FLOAT_DTYPES:
+        return _exp(arr.reshape(-1)).reshape(arr.shape)
+    return np.exp(arr)
+
+
+def _log_kernel(node: Any, x: np.ndarray) -> np.ndarray:
+    """Elementwise natural logarithm for a ``Log`` node using the SIMD kernel.
+
+    The compiled ``log`` entry point operates on a contiguous 1-D array, so the
+    input is flattened, processed, and reshaped back to its original shape.
+    Unsupported dtypes fall back to :func:`numpy.log`.
+    """
+    arr = np.ascontiguousarray(x)
+    if arr.dtype in _FLOAT_DTYPES:
+        return _log(arr.reshape(-1)).reshape(arr.shape)
+    return np.log(arr)
+
+
 def register_kernels(sess: Any, domain: str = "") -> Any:
     """Registers the onnx-light-cpu kernels on an onnx-light evaluator.
 
@@ -56,11 +94,11 @@ def register_kernels(sess: Any, domain: str = "") -> Any:
     sess:
         An ``onnx_light.onnx.reference.ReferenceEvaluator`` (or any object
         exposing a compatible ``register_custom_kernel(domain, op_type, fn)``
-        method). After this call every ``Abs`` node dispatched by ``sess`` runs
-        the SIMD-accelerated onnx-light-cpu kernel.
+        method). After this call every ``Abs``, ``Exp`` and ``Log`` node
+        dispatched by ``sess`` runs the SIMD-accelerated onnx-light-cpu kernel.
     domain:
-        Operator domain of the ``Abs`` operator. Defaults to the standard ONNX
-        domain (the empty string, treated as ``ai.onnx``).
+        Operator domain of the ``Abs``/``Exp``/``Log`` operators. Defaults to
+        the standard ONNX domain (the empty string, treated as ``ai.onnx``).
 
     Returns
     -------
@@ -80,4 +118,6 @@ def register_kernels(sess: Any, domain: str = "") -> Any:
     """
     register: Callable[[str, str, Any], Any] = sess.register_custom_kernel
     register(domain, "Abs", _abs_kernel)
+    register(domain, "Exp", _exp_kernel)
+    register(domain, "Log", _log_kernel)
     return sess
