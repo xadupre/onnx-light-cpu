@@ -28,7 +28,14 @@ template <typename T, void (*Kernel)(const T *, T *, std::size_t)>
 nb::object AbsTyped(const AbsInput &input) {
   const std::size_t count = static_cast<std::size_t>(input.shape(0));
   T *output = new T[count == 0 ? 1 : count];
-  Kernel(reinterpret_cast<const T *>(input.data()), output, count);
+  const T *data = reinterpret_cast<const T *>(input.data());
+  {
+    // The kernel only touches the raw C buffers, so the GIL can be released for
+    // the duration of the compute. This lets several Python threads run the
+    // kernel on disjoint chunks of an array concurrently.
+    nb::gil_scoped_release release;
+    Kernel(data, output, count);
+  }
   nb::capsule owner(output, [](void *p) noexcept { delete[] reinterpret_cast<T *>(p); });
   return nb::cast(nb::ndarray<nb::numpy, T, nb::ndim<1>>(output, {count}, owner));
 }
@@ -41,7 +48,11 @@ template <void (*Kernel)(const std::uint16_t *, std::uint16_t *, std::size_t)>
 nb::object Float16Typed(const AbsInput &input) {
   const std::size_t count = static_cast<std::size_t>(input.shape(0));
   auto *output = new std::uint16_t[count == 0 ? 1 : count];
-  Kernel(reinterpret_cast<const std::uint16_t *>(input.data()), output, count);
+  const std::uint16_t *data = reinterpret_cast<const std::uint16_t *>(input.data());
+  {
+    nb::gil_scoped_release release;
+    Kernel(data, output, count);
+  }
   nb::capsule owner(output,
                     [](void *p) noexcept { delete[] reinterpret_cast<std::uint16_t *>(p); });
   const nb::dlpack::dtype f16{static_cast<uint8_t>(nb::dlpack::dtype_code::Float), 16, 1};

@@ -29,7 +29,13 @@ template <void (*Kernel)(const std::uint8_t *, std::uint8_t *, std::size_t)>
 nb::object BoolTyped(const LogicalInput &input) {
   const std::size_t count = static_cast<std::size_t>(input.shape(0));
   auto *output = new std::uint8_t[count == 0 ? 1 : count];
-  Kernel(reinterpret_cast<const std::uint8_t *>(input.data()), output, count);
+  const std::uint8_t *data = reinterpret_cast<const std::uint8_t *>(input.data());
+  {
+    // The kernel only touches the raw C buffers, so the GIL can be released for
+    // the duration of the compute, letting Python threads run concurrently.
+    nb::gil_scoped_release release;
+    Kernel(data, output, count);
+  }
   nb::capsule owner(output, [](void *p) noexcept { delete[] reinterpret_cast<std::uint8_t *>(p); });
   return nb::cast(nb::ndarray<nb::numpy, bool, nb::ndim<1>>(output, {count}, owner));
 }
