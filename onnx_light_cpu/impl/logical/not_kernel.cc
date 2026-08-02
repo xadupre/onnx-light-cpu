@@ -4,6 +4,10 @@
 
 #include "onnx_light_cpu/impl/logical/logical_kernels.h"
 
+#include "onnx_light_cpu/impl/parallel_for.h"
+
+#include <cstdint>
+
 #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
 #define ONNX_LIGHT_CPU_X86 1
 #include <immintrin.h>
@@ -12,6 +16,11 @@
 #endif
 
 namespace onnx_light_cpu {
+
+// Relative per-element cost passed to ParallelFor for the Not kernel. Not is a
+// single byte comparison per element and is therefore memory-bandwidth bound,
+// like Abs, so a trivial cost of 1 keeps its parallel threshold high.
+inline constexpr double kNotCostPerElement = 1.0;
 
 // ---------------------------------------------------------------------------
 // NotBool implementations
@@ -91,9 +100,8 @@ void NotBool_AVX512(const uint8_t *input, uint8_t *output, std::size_t count) {
 
 } // namespace
 
-void NotBool(const uint8_t *input, uint8_t *output, std::size_t count) {
-  if (count == 0)
-    return;
+namespace {
+void NotBool_Dispatch(const uint8_t *input, uint8_t *output, std::size_t count) {
 #if ONNX_LIGHT_CPU_X86
   static const SimdLevel level = DetectSimdLevel();
 #ifdef __AVX512BW__
@@ -112,6 +120,17 @@ void NotBool(const uint8_t *input, uint8_t *output, std::size_t count) {
   }
 #endif
   NotBool_Scalar(input, output, count);
+}
+} // namespace
+
+void NotBool(const uint8_t *input, uint8_t *output, std::size_t count) {
+  if (count == 0)
+    return;
+  ParallelFor(
+      static_cast<std::int64_t>(count), kNotCostPerElement, ParallelForSimdLanes<std::uint8_t>(),
+      [input, output](std::int64_t begin, std::int64_t end) {
+        NotBool_Dispatch(input + begin, output + begin, static_cast<std::size_t>(end - begin));
+      });
 }
 
 } // namespace onnx_light_cpu

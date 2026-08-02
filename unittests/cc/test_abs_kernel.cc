@@ -251,4 +251,30 @@ TEST(AbsInt64, LargeArray) {
   }
 }
 
+TEST(AbsParallel, LargeArrayMatchesScalar) {
+  // Sizes above kParallelForGrainSize (32768) exercise the multi-block parallel
+  // path added by ParallelFor; the result must match the serial reference
+  // exactly for the sign-clearing Abs kernels.
+  const std::size_t size = 300000;
+  std::vector<float> in(size);
+  std::vector<float> out(size, -1.0f);
+  for (std::size_t i = 0; i < size; ++i) {
+    in[i] = static_cast<float>(static_cast<long long>(i) - static_cast<long long>(size / 2)) * 0.5f;
+  }
+  onnx_light_cpu::AbsFloat32(in.data(), out.data(), size);
+  for (std::size_t i = 0; i < size; ++i) {
+    EXPECT_FLOAT_EQ(out[i], std::fabs(in[i])) << "at index " << i;
+  }
+
+  std::vector<std::int32_t> in32(size);
+  std::vector<std::int32_t> out32(size, -1);
+  for (std::size_t i = 0; i < size; ++i) {
+    in32[i] = static_cast<std::int32_t>(i) - static_cast<std::int32_t>(size / 2);
+  }
+  onnx_light_cpu::AbsInt32(in32.data(), out32.data(), size);
+  for (std::size_t i = 0; i < size; ++i) {
+    EXPECT_EQ(out32[i], in32[i] < 0 ? -in32[i] : in32[i]) << "at index " << i;
+  }
+}
+
 } // namespace

@@ -16,6 +16,8 @@
 
 #include "onnx_light_cpu/impl/math/math_kernels.h"
 
+#include "onnx_light_cpu/impl/parallel_for.h"
+
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -29,6 +31,18 @@
 #endif
 
 namespace onnx_light_cpu {
+
+// Relative per-element cost passed to ParallelFor for the Exp/Log kernels. These
+// evaluate a minimax polynomial (float32/float64) per element and are therefore
+// compute bound, so they benefit from threading on much smaller arrays than the
+// memory-bound Abs/Not kernels. A cost well above 1 lowers the parallel
+// threshold (~kParallelForGrainSize / cost elements) accordingly.
+inline constexpr double kExpLogCostPerElement = 20.0;
+
+// The float16 paths run the scalar std::exp/std::log per element (plus two
+// float16<->float32 conversions) with no SIMD, so they are the heaviest and use
+// an even higher cost to parallelize sooner.
+inline constexpr double kExpLogHalfCostPerElement = 40.0;
 
 namespace {
 
@@ -676,9 +690,8 @@ void LogFloat64_AVX2(const double *input, double *output, std::size_t count) {
 // Public dispatchers.
 // ---------------------------------------------------------------------------
 
-void ExpFloat32(const float *input, float *output, std::size_t count) {
-  if (count == 0)
-    return;
+namespace {
+void ExpFloat32_Dispatch(const float *input, float *output, std::size_t count) {
 #if ONNX_LIGHT_CPU_X86
   static const SimdLevel level = DetectSimdLevel();
   if (level >= SimdLevel::kAVX2) {
@@ -692,10 +705,20 @@ void ExpFloat32(const float *input, float *output, std::size_t count) {
 #endif
   ExpFloat32_Scalar(input, output, count);
 }
+} // namespace
 
-void LogFloat32(const float *input, float *output, std::size_t count) {
+void ExpFloat32(const float *input, float *output, std::size_t count) {
   if (count == 0)
     return;
+  ParallelFor(static_cast<std::int64_t>(count), kExpLogCostPerElement,
+              ParallelForSimdLanes<float>(), [input, output](std::int64_t begin, std::int64_t end) {
+                ExpFloat32_Dispatch(input + begin, output + begin,
+                                    static_cast<std::size_t>(end - begin));
+              });
+}
+
+namespace {
+void LogFloat32_Dispatch(const float *input, float *output, std::size_t count) {
 #if ONNX_LIGHT_CPU_X86
   static const SimdLevel level = DetectSimdLevel();
   if (level >= SimdLevel::kAVX2) {
@@ -709,10 +732,20 @@ void LogFloat32(const float *input, float *output, std::size_t count) {
 #endif
   LogFloat32_Scalar(input, output, count);
 }
+} // namespace
 
-void ExpFloat64(const double *input, double *output, std::size_t count) {
+void LogFloat32(const float *input, float *output, std::size_t count) {
   if (count == 0)
     return;
+  ParallelFor(static_cast<std::int64_t>(count), kExpLogCostPerElement,
+              ParallelForSimdLanes<float>(), [input, output](std::int64_t begin, std::int64_t end) {
+                LogFloat32_Dispatch(input + begin, output + begin,
+                                    static_cast<std::size_t>(end - begin));
+              });
+}
+
+namespace {
+void ExpFloat64_Dispatch(const double *input, double *output, std::size_t count) {
 #if ONNX_LIGHT_CPU_X86
   static const SimdLevel level = DetectSimdLevel();
   if (level >= SimdLevel::kAVX2) {
@@ -726,10 +759,20 @@ void ExpFloat64(const double *input, double *output, std::size_t count) {
 #endif
   ExpFloat64_Scalar(input, output, count);
 }
+} // namespace
 
-void LogFloat64(const double *input, double *output, std::size_t count) {
+void ExpFloat64(const double *input, double *output, std::size_t count) {
   if (count == 0)
     return;
+  ParallelFor(
+      static_cast<std::int64_t>(count), kExpLogCostPerElement, ParallelForSimdLanes<double>(),
+      [input, output](std::int64_t begin, std::int64_t end) {
+        ExpFloat64_Dispatch(input + begin, output + begin, static_cast<std::size_t>(end - begin));
+      });
+}
+
+namespace {
+void LogFloat64_Dispatch(const double *input, double *output, std::size_t count) {
 #if ONNX_LIGHT_CPU_X86
   static const SimdLevel level = DetectSimdLevel();
   if (level >= SimdLevel::kAVX2) {
@@ -743,17 +786,38 @@ void LogFloat64(const double *input, double *output, std::size_t count) {
 #endif
   LogFloat64_Scalar(input, output, count);
 }
+} // namespace
+
+void LogFloat64(const double *input, double *output, std::size_t count) {
+  if (count == 0)
+    return;
+  ParallelFor(
+      static_cast<std::int64_t>(count), kExpLogCostPerElement, ParallelForSimdLanes<double>(),
+      [input, output](std::int64_t begin, std::int64_t end) {
+        LogFloat64_Dispatch(input + begin, output + begin, static_cast<std::size_t>(end - begin));
+      });
+}
 
 void ExpFloat16(const uint16_t *input, uint16_t *output, std::size_t count) {
-  for (std::size_t i = 0; i < count; ++i) {
-    output[i] = FloatToHalfBits(std::exp(HalfBitsToFloat(input[i])));
-  }
+  if (count == 0)
+    return;
+  ParallelFor(static_cast<std::int64_t>(count), kExpLogHalfCostPerElement,
+              [input, output](std::int64_t begin, std::int64_t end) {
+                for (std::int64_t i = begin; i < end; ++i) {
+                  output[i] = FloatToHalfBits(std::exp(HalfBitsToFloat(input[i])));
+                }
+              });
 }
 
 void LogFloat16(const uint16_t *input, uint16_t *output, std::size_t count) {
-  for (std::size_t i = 0; i < count; ++i) {
-    output[i] = FloatToHalfBits(std::log(HalfBitsToFloat(input[i])));
-  }
+  if (count == 0)
+    return;
+  ParallelFor(static_cast<std::int64_t>(count), kExpLogHalfCostPerElement,
+              [input, output](std::int64_t begin, std::int64_t end) {
+                for (std::int64_t i = begin; i < end; ++i) {
+                  output[i] = FloatToHalfBits(std::log(HalfBitsToFloat(input[i])));
+                }
+              });
 }
 
 } // namespace onnx_light_cpu

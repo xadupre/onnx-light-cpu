@@ -4,7 +4,10 @@
 
 #include "onnx_light_cpu/impl/math/math_kernels.h"
 
+#include "onnx_light_cpu/impl/parallel_for.h"
+
 #include <cmath>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 
@@ -21,6 +24,13 @@
 #endif
 
 namespace onnx_light_cpu {
+
+// Relative per-element cost passed to ParallelFor for the Abs kernels. Abs does
+// almost no arithmetic per element (a single bit/sign operation) and is
+// therefore memory-bandwidth bound, so it only benefits from threading on large
+// arrays. A trivial cost of 1 keeps the parallel threshold high
+// (kParallelForGrainSize elements), matching that behaviour.
+inline constexpr double kAbsCostPerElement = 1.0;
 
 // ---------------------------------------------------------------------------
 // AbsFloat32 implementations
@@ -90,9 +100,8 @@ void AbsFloat32_AVX512(const float *input, float *output, std::size_t count) {
 
 } // namespace
 
-void AbsFloat32(const float *input, float *output, std::size_t count) {
-  if (count == 0)
-    return;
+namespace {
+void AbsFloat32_Dispatch(const float *input, float *output, std::size_t count) {
 #if ONNX_LIGHT_CPU_X86
   static const SimdLevel level = DetectSimdLevel();
 #ifdef __AVX512F__
@@ -111,6 +120,17 @@ void AbsFloat32(const float *input, float *output, std::size_t count) {
   }
 #endif
   AbsFloat32_Scalar(input, output, count);
+}
+} // namespace
+
+void AbsFloat32(const float *input, float *output, std::size_t count) {
+  if (count == 0)
+    return;
+  ParallelFor(static_cast<std::int64_t>(count), kAbsCostPerElement, ParallelForSimdLanes<float>(),
+              [input, output](std::int64_t begin, std::int64_t end) {
+                AbsFloat32_Dispatch(input + begin, output + begin,
+                                    static_cast<std::size_t>(end - begin));
+              });
 }
 
 // ---------------------------------------------------------------------------
@@ -179,9 +199,8 @@ void AbsFloat64_AVX512(const double *input, double *output, std::size_t count) {
 
 } // namespace
 
-void AbsFloat64(const double *input, double *output, std::size_t count) {
-  if (count == 0)
-    return;
+namespace {
+void AbsFloat64_Dispatch(const double *input, double *output, std::size_t count) {
 #if ONNX_LIGHT_CPU_X86
   static const SimdLevel level = DetectSimdLevel();
 #ifdef __AVX512F__
@@ -200,6 +219,17 @@ void AbsFloat64(const double *input, double *output, std::size_t count) {
   }
 #endif
   AbsFloat64_Scalar(input, output, count);
+}
+} // namespace
+
+void AbsFloat64(const double *input, double *output, std::size_t count) {
+  if (count == 0)
+    return;
+  ParallelFor(static_cast<std::int64_t>(count), kAbsCostPerElement, ParallelForSimdLanes<double>(),
+              [input, output](std::int64_t begin, std::int64_t end) {
+                AbsFloat64_Dispatch(input + begin, output + begin,
+                                    static_cast<std::size_t>(end - begin));
+              });
 }
 
 // ---------------------------------------------------------------------------
@@ -274,9 +304,8 @@ void AbsFloat16_AVX512(const uint16_t *input, uint16_t *output, std::size_t coun
 
 } // namespace
 
-void AbsFloat16(const uint16_t *input, uint16_t *output, std::size_t count) {
-  if (count == 0)
-    return;
+namespace {
+void AbsFloat16_Dispatch(const uint16_t *input, uint16_t *output, std::size_t count) {
 #if ONNX_LIGHT_CPU_X86
   static const SimdLevel level = DetectSimdLevel();
 #ifdef __AVX512F__
@@ -295,6 +324,17 @@ void AbsFloat16(const uint16_t *input, uint16_t *output, std::size_t count) {
   }
 #endif
   AbsFloat16_Scalar(input, output, count);
+}
+} // namespace
+
+void AbsFloat16(const uint16_t *input, uint16_t *output, std::size_t count) {
+  if (count == 0)
+    return;
+  ParallelFor(
+      static_cast<std::int64_t>(count), kAbsCostPerElement, ParallelForSimdLanes<std::uint16_t>(),
+      [input, output](std::int64_t begin, std::int64_t end) {
+        AbsFloat16_Dispatch(input + begin, output + begin, static_cast<std::size_t>(end - begin));
+      });
 }
 
 // ---------------------------------------------------------------------------
@@ -367,9 +407,8 @@ void AbsInt8_AVX512(const int8_t *input, int8_t *output, std::size_t count) {
 
 } // namespace
 
-void AbsInt8(const int8_t *input, int8_t *output, std::size_t count) {
-  if (count == 0)
-    return;
+namespace {
+void AbsInt8_Dispatch(const int8_t *input, int8_t *output, std::size_t count) {
 #if ONNX_LIGHT_CPU_X86
   static const SimdLevel level = DetectSimdLevel();
 #ifdef __AVX512BW__
@@ -388,6 +427,17 @@ void AbsInt8(const int8_t *input, int8_t *output, std::size_t count) {
   }
 #endif
   AbsInt8_Scalar(input, output, count);
+}
+} // namespace
+
+void AbsInt8(const int8_t *input, int8_t *output, std::size_t count) {
+  if (count == 0)
+    return;
+  ParallelFor(
+      static_cast<std::int64_t>(count), kAbsCostPerElement, ParallelForSimdLanes<std::int8_t>(),
+      [input, output](std::int64_t begin, std::int64_t end) {
+        AbsInt8_Dispatch(input + begin, output + begin, static_cast<std::size_t>(end - begin));
+      });
 }
 
 // ---------------------------------------------------------------------------
@@ -454,9 +504,8 @@ void AbsInt32_AVX512(const int32_t *input, int32_t *output, std::size_t count) {
 
 } // namespace
 
-void AbsInt32(const int32_t *input, int32_t *output, std::size_t count) {
-  if (count == 0)
-    return;
+namespace {
+void AbsInt32_Dispatch(const int32_t *input, int32_t *output, std::size_t count) {
 #if ONNX_LIGHT_CPU_X86
   static const SimdLevel level = DetectSimdLevel();
 #ifdef __AVX512F__
@@ -475,6 +524,17 @@ void AbsInt32(const int32_t *input, int32_t *output, std::size_t count) {
   }
 #endif
   AbsInt32_Scalar(input, output, count);
+}
+} // namespace
+
+void AbsInt32(const int32_t *input, int32_t *output, std::size_t count) {
+  if (count == 0)
+    return;
+  ParallelFor(
+      static_cast<std::int64_t>(count), kAbsCostPerElement, ParallelForSimdLanes<std::int32_t>(),
+      [input, output](std::int64_t begin, std::int64_t end) {
+        AbsInt32_Dispatch(input + begin, output + begin, static_cast<std::size_t>(end - begin));
+      });
 }
 
 // ---------------------------------------------------------------------------
@@ -548,9 +608,8 @@ void AbsInt64_AVX512(const int64_t *input, int64_t *output, std::size_t count) {
 
 } // namespace
 
-void AbsInt64(const int64_t *input, int64_t *output, std::size_t count) {
-  if (count == 0)
-    return;
+namespace {
+void AbsInt64_Dispatch(const int64_t *input, int64_t *output, std::size_t count) {
 #if ONNX_LIGHT_CPU_X86
   static const SimdLevel level = DetectSimdLevel();
 #ifdef __AVX512F__
@@ -569,6 +628,17 @@ void AbsInt64(const int64_t *input, int64_t *output, std::size_t count) {
   }
 #endif
   AbsInt64_Scalar(input, output, count);
+}
+} // namespace
+
+void AbsInt64(const int64_t *input, int64_t *output, std::size_t count) {
+  if (count == 0)
+    return;
+  ParallelFor(
+      static_cast<std::int64_t>(count), kAbsCostPerElement, ParallelForSimdLanes<std::int64_t>(),
+      [input, output](std::int64_t begin, std::int64_t end) {
+        AbsInt64_Dispatch(input + begin, output + begin, static_cast<std::size_t>(end - begin));
+      });
 }
 
 } // namespace onnx_light_cpu
