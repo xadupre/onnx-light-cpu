@@ -41,6 +41,11 @@ endif()
 
 include(GNUInstallDirs)
 
+# Threads: required by the header-only ParallelFor helper (std::thread).
+set(CMAKE_THREAD_PREFER_PTHREAD TRUE)
+set(THREADS_PREFER_PTHREAD_FLAG TRUE)
+find_package(Threads REQUIRED)
+
 # Optional OpenSSF compiler hardening flags.
 if(ONNX_HARDENING)
   list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
@@ -201,6 +206,10 @@ if(ONNX_LIGHT_CPU_INSTALL)
       DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/onnx_light_cpu/impl")
 
   install(FILES
+      "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/parallel_for.h"
+      DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/onnx_light_cpu/impl")
+
+  install(FILES
       "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/math_kernels.h"
       DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/onnx_light_cpu/impl/math")
 
@@ -300,6 +309,19 @@ if(ONNX_LIGHT_CPU_BUILD_TESTS)
   endif()
   gtest_discover_tests(test_not_kernel)
 
+  add_executable(test_parallel_for
+      "${CMAKE_CURRENT_SOURCE_DIR}/unittests/cc/test_parallel_for.cc")
+  target_link_libraries(test_parallel_for PRIVATE
+      lib_onnx_light_cpu
+      GTest::gtest_main
+      Threads::Threads)
+  target_include_directories(test_parallel_for PRIVATE
+      "${CMAKE_CURRENT_SOURCE_DIR}")
+  if(ONNX_LIGHT_CPU_SIMD_FLAGS)
+    target_compile_options(test_parallel_for PRIVATE ${_simd_flags})
+  endif()
+  gtest_discover_tests(test_parallel_for)
+
   # onnx-light kernel-class test: only built when the onnx-light integration
   # is enabled (it links the registration library against onnx-light).
   if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
@@ -356,6 +378,7 @@ if(ONNX_LIGHT_CPU_BUILD_TESTS)
   list(APPEND _onnx_light_cpu_hardening_targets test_abs_kernel)
   list(APPEND _onnx_light_cpu_hardening_targets test_exp_log_kernel)
   list(APPEND _onnx_light_cpu_hardening_targets test_not_kernel)
+  list(APPEND _onnx_light_cpu_hardening_targets test_parallel_for)
   if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
     list(APPEND _onnx_light_cpu_hardening_targets test_onnx_light_abs_kernel)
     list(APPEND _onnx_light_cpu_hardening_targets test_onnx_light_exp_log_kernel)

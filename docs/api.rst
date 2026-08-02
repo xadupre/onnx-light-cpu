@@ -31,6 +31,40 @@ include. Every kernel dispatches at runtime to the best available SIMD path.
 
    } // namespace onnx_light_cpu
 
+Parallel iteration helper
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``onnx_light_cpu/impl/parallel_for.h`` provides a header-only, cost-aware
+``ParallelFor`` built on a persistent thread pool (workers are created once and
+reused). Before dispatching any worker threads it consults a small cost model,
+``ParallelForBlockCount``, that combines the processor (hardware thread count)
+with an estimate of the loop cost (iteration count times ``cost_per_element``).
+Ranges that are too small — or whose per-element work is too cheap — run inline
+on the calling thread, because waking worker threads would cost more than the
+work saved. Every block is disjoint and covers the range exactly once, so
+element-wise results are independent of the thread count (bit-exact).
+
+.. code-block:: cpp
+
+   namespace onnx_light_cpu {
+
+   // Number of threads ParallelFor may use (>= 1, includes the caller).
+   std::int64_t ParallelForThreadCount() noexcept;
+
+   // Cost model: number of blocks to split [0, total) into given a relative
+   // per-iteration cost. Returns 1 to mean "run inline, do not parallelize".
+   std::int64_t ParallelForBlockCount(std::int64_t total,
+                                      double cost_per_element = 1.0) noexcept;
+
+   // Runs fn(begin, end) over disjoint sub-ranges covering [0, total). The
+   // cost_per_element overload lets heavier kernels parallelize smaller ranges.
+   template <typename Fn> void ParallelFor(std::int64_t total, Fn fn);
+   template <typename Fn>
+   void ParallelFor(std::int64_t total, double cost_per_element, Fn fn);
+
+   } // namespace onnx_light_cpu
+
+
 onnx-light kernel class
 ~~~~~~~~~~~~~~~~~~~~~~~~
 
