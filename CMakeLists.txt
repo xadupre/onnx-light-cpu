@@ -102,6 +102,10 @@ target_include_directories(lib_onnx_light_cpu PUBLIC
 set_property(TARGET lib_onnx_light_cpu PROPERTY POSITION_INDEPENDENT_CODE ON)
 target_compile_features(lib_onnx_light_cpu PUBLIC cxx_std_20)
 
+# The kernels dispatch large ranges through the header-only ParallelFor helper,
+# which uses std::thread; link the platform threading library.
+target_link_libraries(lib_onnx_light_cpu PUBLIC Threads::Threads)
+
 # Apply SIMD flags to the kernel library.
 if(ONNX_LIGHT_CPU_SIMD_FLAGS)
   separate_arguments(_simd_flags NATIVE_COMMAND "${ONNX_LIGHT_CPU_SIMD_FLAGS}")

@@ -64,6 +64,13 @@ element-wise results are independent of the thread count (bit-exact).
 
    } // namespace onnx_light_cpu
 
+Every public kernel (``Abs*``, ``Exp*``/``Log*`` and ``NotBool``) already routes
+its work through ``ParallelFor``. The memory-bandwidth-bound ``Abs``/``Not``
+kernels pass ``cost_per_element = 1`` (so they only parallelize on large arrays),
+while the compute-bound ``Exp``/``Log`` kernels pass a higher cost so the same
+sized ranges parallelize sooner. Because every block is disjoint the results are
+unchanged relative to the single-threaded kernels.
+
 
 onnx-light kernel class
 ~~~~~~~~~~~~~~~~~~~~~~~~

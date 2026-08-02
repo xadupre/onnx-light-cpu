@@ -61,4 +61,19 @@ TEST(NotBool, LargeArray) {
   }
 }
 
+TEST(NotBool, ParallelLargeArrayMatchesScalar) {
+  // Above kParallelForGrainSize (32768) so NotBool runs through the multi-block
+  // parallel path; the canonical 0/1 result must match the serial reference.
+  const std::size_t size = 100000;
+  std::vector<std::uint8_t> in(size);
+  std::vector<std::uint8_t> out(size, 42);
+  for (std::size_t i = 0; i < size; ++i) {
+    in[i] = static_cast<std::uint8_t>(i % 3); // mix of 0, 1, 2
+  }
+  onnx_light_cpu::NotBool(in.data(), out.data(), size);
+  for (std::size_t i = 0; i < size; ++i) {
+    EXPECT_EQ(out[i], static_cast<std::uint8_t>(in[i] == 0 ? 1 : 0)) << "at index " << i;
+  }
+}
+
 } // namespace

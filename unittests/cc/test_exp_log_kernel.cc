@@ -251,4 +251,32 @@ TEST(LogFloat16, MatchesReference) {
   }
 }
 
+TEST(ExpLogParallel, LargeArrayMatchesStd) {
+  // Large enough to cross the ParallelFor cost threshold for the compute-bound
+  // Exp/Log kernels and split across blocks; results must match std within the
+  // same tolerance used by the single-block tests.
+  const std::size_t size = 200000;
+  std::vector<float> in(size);
+  std::vector<float> out(size, -1.0f);
+  for (std::size_t i = 0; i < size; ++i) {
+    in[i] = -8.0f + 16.0f * (static_cast<float>(i) / static_cast<float>(size));
+  }
+
+  onnx_light_cpu::ExpFloat32(in.data(), out.data(), size);
+  for (std::size_t i = 0; i < size; ++i) {
+    const float ref = std::exp(in[i]);
+    EXPECT_NEAR(out[i], ref, std::fabs(ref) * 1e-5f + 1e-7f) << "exp at index " << i;
+  }
+
+  std::vector<float> pos(size);
+  for (std::size_t i = 0; i < size; ++i) {
+    pos[i] = 1e-3f + 10.0f * (static_cast<float>(i) / static_cast<float>(size));
+  }
+  onnx_light_cpu::LogFloat32(pos.data(), out.data(), size);
+  for (std::size_t i = 0; i < size; ++i) {
+    const float ref = std::log(pos[i]);
+    EXPECT_NEAR(out[i], ref, std::fabs(ref) * 1e-5f + 1e-6f) << "log at index " << i;
+  }
+}
+
 } // namespace
