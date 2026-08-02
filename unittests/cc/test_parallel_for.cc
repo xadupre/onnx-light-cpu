@@ -6,9 +6,12 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <mutex>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -16,6 +19,7 @@ namespace {
 using onnx_light_cpu::kParallelForGrainSize;
 using onnx_light_cpu::ParallelFor;
 using onnx_light_cpu::ParallelForBlockCount;
+using onnx_light_cpu::ParallelForSimdLanes;
 using onnx_light_cpu::ParallelForThreadCount;
 
 // ---------------------------------------------------------------------------
@@ -136,6 +140,71 @@ TEST(ParallelFor, NestedCallStaysCorrect) {
   // every inner iteration was counted a whole number of times.
   EXPECT_EQ(sum.load(std::memory_order_relaxed) % inner, 0);
   EXPECT_GT(sum.load(std::memory_order_relaxed), 0);
+}
+
+// ---------------------------------------------------------------------------
+// ParallelFor: SIMD-aligned block boundaries
+// ---------------------------------------------------------------------------
+
+TEST(ParallelForSimdLanes, MatchesWidestRegisterForType) {
+  // 64-byte (AVX-512) register: lane count is 64 / sizeof(T), at least 1.
+  EXPECT_EQ(ParallelForSimdLanes<float>(), 16);
+  EXPECT_EQ(ParallelForSimdLanes<double>(), 8);
+  EXPECT_EQ(ParallelForSimdLanes<std::uint16_t>(), 32);
+  EXPECT_EQ(ParallelForSimdLanes<std::int8_t>(), 64);
+  EXPECT_EQ(ParallelForSimdLanes<std::int32_t>(), 16);
+  EXPECT_EQ(ParallelForSimdLanes<std::int64_t>(), 8);
+}
+
+TEST(ParallelFor, BlocksAreMultiplesOfSimdWidth) {
+  const int64_t multiple = 16;
+  // Costs high enough to force the parallel path even on modest core counts,
+  // and totals that are deliberately not multiples of the SIMD width.
+  for (int64_t total : {kParallelForGrainSize * 8 + 5, kParallelForGrainSize * 37 + 3,
+                        kParallelForGrainSize * 3 + 1}) {
+    std::mutex mu;
+    std::vector<std::pair<int64_t, int64_t>> ranges;
+    ParallelFor(total, /*cost_per_element=*/64.0, multiple, [&](int64_t begin, int64_t end) {
+      std::lock_guard<std::mutex> lock(mu);
+      ranges.emplace_back(begin, end);
+    });
+    std::sort(ranges.begin(), ranges.end());
+    ASSERT_FALSE(ranges.empty());
+    int64_t expected_begin = 0;
+    for (std::size_t k = 0; k < ranges.size(); ++k) {
+      const auto [begin, end] = ranges[k];
+      // Contiguous, disjoint coverage of [0, total).
+      EXPECT_EQ(begin, expected_begin) << "total=" << total;
+      EXPECT_LT(begin, end);
+      // Every block begins on a SIMD-vector boundary.
+      EXPECT_EQ(begin % multiple, 0) << "total=" << total;
+      // Every block ends on a SIMD-vector boundary, except the final one which
+      // may stop early at total.
+      if (k + 1 < ranges.size()) {
+        EXPECT_EQ(end % multiple, 0) << "total=" << total;
+      }
+      expected_begin = end;
+    }
+    EXPECT_EQ(expected_begin, total) << "total=" << total;
+  }
+}
+
+TEST(ParallelFor, SimdAlignedCoversRangeExactlyOnce) {
+  const int64_t multiple = 16;
+  const int64_t total = kParallelForGrainSize * 8 + 5;
+  std::vector<std::atomic<int>> hits(static_cast<std::size_t>(total));
+  for (auto &h : hits) {
+    h.store(0, std::memory_order_relaxed);
+  }
+  ParallelFor(total, /*cost_per_element=*/64.0, multiple, [&](int64_t begin, int64_t end) {
+    for (int64_t i = begin; i < end; ++i) {
+      hits[static_cast<std::size_t>(i)].fetch_add(1, std::memory_order_relaxed);
+    }
+  });
+  for (int64_t i = 0; i < total; ++i) {
+    EXPECT_EQ(hits[static_cast<std::size_t>(i)].load(std::memory_order_relaxed), 1)
+        << "at index " << i;
+  }
 }
 
 } // namespace

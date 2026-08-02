@@ -40,6 +40,16 @@ namespace onnx_light_cpu {
 /// runtimes (32768 trivial iterations).
 inline constexpr int64_t kParallelForGrainSize = 1 << 15; // 32768 work units
 
+/// Width, in bytes, of the widest SIMD register the kernels may use.
+///
+/// The element-wise kernels vectorise their inner loop, processing several
+/// values per instruction (e.g. AVX handles 8 ``float`` at a time, AVX-512
+/// handles 16). The widest register targeted is AVX-512 at 64 bytes. Sizing a
+/// :cpp:func:`ParallelFor` block to a multiple of the corresponding lane count
+/// keeps every block a whole number of SIMD vectors, so the vectorised loop
+/// never falls back to a scalar remainder in the middle of the range.
+inline constexpr int64_t kParallelForSimdWidthBytes = 64;
+
 /// Returns the number of participating threads :cpp:func:`ParallelFor` may use.
 ///
 /// Resolves to ``std::thread::hardware_concurrency()``, falling back to ``1``
@@ -48,6 +58,18 @@ inline constexpr int64_t kParallelForGrainSize = 1 << 15; // 32768 work units
 inline int64_t ParallelForThreadCount() noexcept {
   const unsigned int cores = std::thread::hardware_concurrency();
   return cores == 0 ? 1 : static_cast<int64_t>(cores);
+}
+
+/// Number of ``T`` elements the widest SIMD register processes at once.
+///
+/// Used as the ``block_multiple`` argument of :cpp:func:`ParallelFor` so block
+/// boundaries land on SIMD-vector boundaries for element type ``T`` (e.g. 16 for
+/// ``float``, 8 for ``double``, 32 for a 2-byte half, 64 for ``int8_t``). The
+/// result is always ``>= 1``.
+template <typename T> inline constexpr int64_t ParallelForSimdLanes() noexcept {
+  static_assert(sizeof(T) > 0, "element type must be a complete type");
+  constexpr int64_t lanes = kParallelForSimdWidthBytes / static_cast<int64_t>(sizeof(T));
+  return lanes > 0 ? lanes : 1;
 }
 
 /**
@@ -293,24 +315,47 @@ inline ThreadPool &GlobalThreadPool() {
  * touch data disjoint per block (typically writing ``output[begin, end)`` from
  * ``input[begin, end)``). It must not throw.
  *
+ * ``block_multiple`` sizes each block to a whole number of SIMD vectors so a
+ * vectorised kernel processes full registers per block instead of a scalar
+ * remainder at every block boundary.
+ *
  * @param total            Number of iterations. Values ``<= 0`` are a no-op.
  * @param cost_per_element Relative cost of a single iteration in work units
  *                         (see :cpp:func:`ParallelForBlockCount`).
+ * @param block_multiple   Round every block size up to a multiple of this many
+ *                         iterations (except the final block, which stops at
+ *                         ``total``). Pass the SIMD lane count for the kernel's
+ *                         element type (see :cpp:func:`ParallelForSimdLanes`) so
+ *                         each block is a whole number of SIMD vectors. Values
+ *                         ``<= 1`` disable alignment.
  * @param fn               Callable invoked as ``fn(int64_t begin, int64_t end)``
  *                         for each block, covering the sub-range
  *                         ``[begin, end)``.
  */
-template <typename Fn> void ParallelFor(int64_t total, double cost_per_element, Fn fn) {
+template <typename Fn>
+void ParallelFor(int64_t total, double cost_per_element, int64_t block_multiple, Fn fn) {
   if (total <= 0) {
     return;
   }
-  const int64_t num_blocks = ParallelForBlockCount(total, cost_per_element);
+  int64_t num_blocks = ParallelForBlockCount(total, cost_per_element);
   if (num_blocks <= 1) {
     fn(static_cast<int64_t>(0), total);
     return;
   }
 
-  const int64_t block = (total + num_blocks - 1) / num_blocks;
+  if (block_multiple < 1) {
+    block_multiple = 1;
+  }
+  // Base block size, rounded up so every block boundary (except the final one)
+  // lands on a multiple of block_multiple. This keeps each block a whole number
+  // of SIMD vectors, so the vectorised inner loop of a kernel never has to
+  // process a scalar remainder in the middle of the range.
+  int64_t block = (total + num_blocks - 1) / num_blocks;
+  block = ((block + block_multiple - 1) / block_multiple) * block_multiple;
+  // Rounding the block size up can leave later blocks empty; recompute the block
+  // count so we never wake a worker that would receive an empty range.
+  num_blocks = (total + block - 1) / block;
+
   GlobalThreadPool().Run(num_blocks, [&fn, block, total](int64_t b) {
     const int64_t begin = b * block;
     if (begin >= total) {
@@ -321,12 +366,23 @@ template <typename Fn> void ParallelFor(int64_t total, double cost_per_element, 
   });
 }
 
-/// Convenience overload assuming trivial per-element cost (``1`` work unit).
+/// Convenience overload without SIMD-vector block alignment (``block_multiple``
+/// of ``1``).
+///
+/// @param total            Number of iterations. Values ``<= 0`` are a no-op.
+/// @param cost_per_element Relative cost of a single iteration in work units.
+/// @param fn               Callable invoked as ``fn(int64_t begin, int64_t end)``.
+template <typename Fn> void ParallelFor(int64_t total, double cost_per_element, Fn fn) {
+  ParallelFor(total, cost_per_element, int64_t{1}, std::move(fn));
+}
+
+/// Convenience overload assuming trivial per-element cost (``1`` work unit) and
+/// no SIMD-vector block alignment.
 ///
 /// @param total Number of iterations. Values ``<= 0`` are a no-op.
 /// @param fn    Callable invoked as ``fn(int64_t begin, int64_t end)``.
 template <typename Fn> void ParallelFor(int64_t total, Fn fn) {
-  ParallelFor(total, 1.0, std::move(fn));
+  ParallelFor(total, 1.0, int64_t{1}, std::move(fn));
 }
 
 } // namespace onnx_light_cpu

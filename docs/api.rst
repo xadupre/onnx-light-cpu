@@ -44,6 +44,15 @@ on the calling thread, because waking worker threads would cost more than the
 work saved. Every block is disjoint and covers the range exactly once, so
 element-wise results are independent of the thread count (bit-exact).
 
+When a kernel vectorises its inner loop it processes several values per SIMD
+instruction (e.g. AVX handles 8 ``float`` at a time, AVX-512 handles 16).
+``ParallelFor`` therefore accepts a ``block_multiple`` argument and rounds every
+block size up to a multiple of it, so each block is a whole number of SIMD
+vectors and the vectorised loop never processes a scalar remainder in the middle
+of the range. ``ParallelForSimdLanes<T>()`` returns the lane count for element
+type ``T`` at the widest supported register (AVX-512, 64 bytes): 16 for
+``float``, 8 for ``double``, 32 for a 2-byte half, 64 for ``std::int8_t``.
+
 .. code-block:: cpp
 
    namespace onnx_light_cpu {
@@ -51,16 +60,23 @@ element-wise results are independent of the thread count (bit-exact).
    // Number of threads ParallelFor may use (>= 1, includes the caller).
    std::int64_t ParallelForThreadCount() noexcept;
 
+   // Number of T elements the widest SIMD register processes at once (>= 1).
+   template <typename T> constexpr std::int64_t ParallelForSimdLanes() noexcept;
+
    // Cost model: number of blocks to split [0, total) into given a relative
    // per-iteration cost. Returns 1 to mean "run inline, do not parallelize".
    std::int64_t ParallelForBlockCount(std::int64_t total,
                                       double cost_per_element = 1.0) noexcept;
 
    // Runs fn(begin, end) over disjoint sub-ranges covering [0, total). The
-   // cost_per_element overload lets heavier kernels parallelize smaller ranges.
+   // cost_per_element overload lets heavier kernels parallelize smaller ranges;
+   // block_multiple keeps each block a whole number of SIMD vectors.
    template <typename Fn> void ParallelFor(std::int64_t total, Fn fn);
    template <typename Fn>
    void ParallelFor(std::int64_t total, double cost_per_element, Fn fn);
+   template <typename Fn>
+   void ParallelFor(std::int64_t total, double cost_per_element,
+                    std::int64_t block_multiple, Fn fn);
 
    } // namespace onnx_light_cpu
 
@@ -68,7 +84,9 @@ Every public kernel (``Abs*``, ``Exp*``/``Log*`` and ``NotBool``) already routes
 its work through ``ParallelFor``. The memory-bandwidth-bound ``Abs``/``Not``
 kernels pass ``cost_per_element = 1`` (so they only parallelize on large arrays),
 while the compute-bound ``Exp``/``Log`` kernels pass a higher cost so the same
-sized ranges parallelize sooner. Because every block is disjoint the results are
+sized ranges parallelize sooner. Each kernel also passes
+``ParallelForSimdLanes<T>()`` as ``block_multiple`` so the parallel blocks align
+with its SIMD vectors. Because every block is disjoint the results are
 unchanged relative to the single-threaded kernels.
 
 

@@ -711,7 +711,7 @@ void ExpFloat32(const float *input, float *output, std::size_t count) {
   if (count == 0)
     return;
   ParallelFor(static_cast<std::int64_t>(count), kExpLogCostPerElement,
-              [input, output](std::int64_t begin, std::int64_t end) {
+              ParallelForSimdLanes<float>(), [input, output](std::int64_t begin, std::int64_t end) {
                 ExpFloat32_Dispatch(input + begin, output + begin,
                                     static_cast<std::size_t>(end - begin));
               });
@@ -738,7 +738,7 @@ void LogFloat32(const float *input, float *output, std::size_t count) {
   if (count == 0)
     return;
   ParallelFor(static_cast<std::int64_t>(count), kExpLogCostPerElement,
-              [input, output](std::int64_t begin, std::int64_t end) {
+              ParallelForSimdLanes<float>(), [input, output](std::int64_t begin, std::int64_t end) {
                 LogFloat32_Dispatch(input + begin, output + begin,
                                     static_cast<std::size_t>(end - begin));
               });
@@ -764,11 +764,11 @@ void ExpFloat64_Dispatch(const double *input, double *output, std::size_t count)
 void ExpFloat64(const double *input, double *output, std::size_t count) {
   if (count == 0)
     return;
-  ParallelFor(static_cast<std::int64_t>(count), kExpLogCostPerElement,
-              [input, output](std::int64_t begin, std::int64_t end) {
-                ExpFloat64_Dispatch(input + begin, output + begin,
-                                    static_cast<std::size_t>(end - begin));
-              });
+  ParallelFor(
+      static_cast<std::int64_t>(count), kExpLogCostPerElement, ParallelForSimdLanes<double>(),
+      [input, output](std::int64_t begin, std::int64_t end) {
+        ExpFloat64_Dispatch(input + begin, output + begin, static_cast<std::size_t>(end - begin));
+      });
 }
 
 namespace {
@@ -791,11 +791,11 @@ void LogFloat64_Dispatch(const double *input, double *output, std::size_t count)
 void LogFloat64(const double *input, double *output, std::size_t count) {
   if (count == 0)
     return;
-  ParallelFor(static_cast<std::int64_t>(count), kExpLogCostPerElement,
-              [input, output](std::int64_t begin, std::int64_t end) {
-                LogFloat64_Dispatch(input + begin, output + begin,
-                                    static_cast<std::size_t>(end - begin));
-              });
+  ParallelFor(
+      static_cast<std::int64_t>(count), kExpLogCostPerElement, ParallelForSimdLanes<double>(),
+      [input, output](std::int64_t begin, std::int64_t end) {
+        LogFloat64_Dispatch(input + begin, output + begin, static_cast<std::size_t>(end - begin));
+      });
 }
 
 void ExpFloat16(const uint16_t *input, uint16_t *output, std::size_t count) {

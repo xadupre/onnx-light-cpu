@@ -126,11 +126,11 @@ void NotBool_Dispatch(const uint8_t *input, uint8_t *output, std::size_t count) 
 void NotBool(const uint8_t *input, uint8_t *output, std::size_t count) {
   if (count == 0)
     return;
-  ParallelFor(static_cast<std::int64_t>(count), kNotCostPerElement,
-              [input, output](std::int64_t begin, std::int64_t end) {
-                NotBool_Dispatch(input + begin, output + begin,
-                                 static_cast<std::size_t>(end - begin));
-              });
+  ParallelFor(
+      static_cast<std::int64_t>(count), kNotCostPerElement, ParallelForSimdLanes<std::uint8_t>(),
+      [input, output](std::int64_t begin, std::int64_t end) {
+        NotBool_Dispatch(input + begin, output + begin, static_cast<std::size_t>(end - begin));
+      });
 }
 
 } // namespace onnx_light_cpu
