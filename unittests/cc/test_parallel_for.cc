@@ -70,7 +70,7 @@ TEST(ParallelForBlockCount, NonPositiveCostTreatedAsOne) {
 }
 
 // ---------------------------------------------------------------------------
-// ParallelFor: correctness (coverage + disjointness, thread-count independent)
+// ParallelFor: correctness (coverage + disjointedness, thread-count independent)
 // ---------------------------------------------------------------------------
 
 TEST(ParallelFor, EmptyRangeIsNoOp) {
