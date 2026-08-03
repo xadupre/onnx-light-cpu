@@ -64,6 +64,47 @@ nb::object AbsFloat16Typed(const AbsInput &input) {
   return Float16Typed<onnx_light_cpu::AbsFloat16>(input);
 }
 
+// Untyped 2-D, C-contiguous, CPU input matrix used by the ``gemm`` binding.
+using GemmMatrix = nb::ndarray<nb::ndim<2>, nb::c_contig, nb::device::cpu>;
+
+// Runs the matching Gemm kernel and returns a freshly allocated ``M x N`` NumPy
+// matrix that owns its data. ``c`` may be ``nullptr`` (no bias term).
+template <typename T, void (*Kernel)(bool, bool, std::size_t, std::size_t, std::size_t, T,
+                                     const T *, const T *, T, const T *, T *)>
+nb::object GemmTyped(const GemmMatrix &a, const GemmMatrix &b, const GemmMatrix *c, double alpha,
+                     double beta, bool trans_a, bool trans_b) {
+  const std::size_t a0 = static_cast<std::size_t>(a.shape(0));
+  const std::size_t a1 = static_cast<std::size_t>(a.shape(1));
+  const std::size_t b0 = static_cast<std::size_t>(b.shape(0));
+  const std::size_t b1 = static_cast<std::size_t>(b.shape(1));
+
+  const std::size_t M = trans_a ? a1 : a0;
+  const std::size_t K = trans_a ? a0 : a1;
+  const std::size_t Kb = trans_b ? b1 : b0;
+  const std::size_t N = trans_b ? b0 : b1;
+  if (K != Kb) {
+    throw std::invalid_argument("gemm: inner dimensions of A and B do not match");
+  }
+
+  const T *cptr = nullptr;
+  if (c != nullptr) {
+    if (static_cast<std::size_t>(c->shape(0)) != M || static_cast<std::size_t>(c->shape(1)) != N) {
+      throw std::invalid_argument("gemm: C must have shape (M, N)");
+    }
+    cptr = reinterpret_cast<const T *>(c->data());
+  }
+
+  const std::size_t total = M * N;
+  T *output = new T[total == 0 ? 1 : total];
+  {
+    nb::gil_scoped_release release;
+    Kernel(trans_a, trans_b, M, N, K, static_cast<T>(alpha), reinterpret_cast<const T *>(a.data()),
+           reinterpret_cast<const T *>(b.data()), static_cast<T>(beta), cptr, output);
+  }
+  nb::capsule owner(output, [](void *p) noexcept { delete[] reinterpret_cast<T *>(p); });
+  return nb::cast(nb::ndarray<nb::numpy, T, nb::ndim<2>>(output, {M, N}, owner));
+}
+
 } // namespace
 
 namespace onnx_light_cpu {
@@ -148,6 +189,42 @@ void RegisterMathKernels(nb::module_ &m) {
       "float64) and returns a new array, like numpy.log.");
 
   m.def(
+      "gemm",
+      [](const GemmMatrix &a, const GemmMatrix &b, nb::object c, double alpha, double beta,
+         bool trans_a, bool trans_b) -> nb::object {
+        const nb::dlpack::dtype dt = a.dtype();
+        if (b.dtype() != dt) {
+          throw std::invalid_argument("gemm: A and B must have the same dtype");
+        }
+        GemmMatrix cmat;
+        const GemmMatrix *cptr = nullptr;
+        if (!c.is_none()) {
+          cmat = nb::cast<GemmMatrix>(c);
+          if (cmat.dtype() != dt) {
+            throw std::invalid_argument("gemm: C must have the same dtype as A and B");
+          }
+          cptr = &cmat;
+        }
+        if (dt == nb::dtype<float>()) {
+          return GemmTyped<float, onnx_light_cpu::GemmFloat32>(a, b, cptr, alpha, beta, trans_a,
+                                                               trans_b);
+        }
+        if (dt == nb::dtype<double>()) {
+          return GemmTyped<double, onnx_light_cpu::GemmFloat64>(a, b, cptr, alpha, beta, trans_a,
+                                                                trans_b);
+        }
+        throw std::invalid_argument("gemm: unsupported dtype; expected float32 or float64");
+      },
+      nb::arg("a"), nb::arg("b"), nb::arg("c") = nb::none(), nb::arg("alpha") = 1.0,
+      nb::arg("beta") = 1.0, nb::arg("trans_a") = false, nb::arg("trans_b") = false,
+      "Computes the ONNX Gemm general matrix multiplication "
+      "``Y = alpha * op(A) @ op(B) + beta * C`` for 2-D float32 or float64 "
+      "matrices using an AVX-accelerated kernel. ``op(A)`` transposes ``A`` when "
+      "``trans_a`` is True and ``op(B)`` transposes ``B`` when ``trans_b`` is "
+      "True. ``c`` is an optional bias matrix of shape (M, N); pass None "
+      "(or ``beta=0``) to skip it. Returns a new (M, N) array.");
+
+  m.def(
       "has_cpu_kernels", []() -> bool { return true; },
       "Returns True when the CPU kernel extension is available.");
 }
@@ -156,7 +233,8 @@ void RegisterMathKernels(nb::module_ &m) {
 
 NB_MODULE(_cpukernels, m) {
   m.doc() = "Python bindings for onnx-light-cpu: "
-            "highly optimized CPU kernels (Abs, Exp, Log, Not) with AVX/AVX2/AVX-512 dispatch.";
+            "highly optimized CPU kernels (Abs, Exp, Log, Gemm, Not) with "
+            "AVX/AVX2/AVX-512 dispatch.";
 
   onnx_light_cpu::RegisterMathKernels(m);
   onnx_light_cpu::RegisterLogicalKernels(m);
