@@ -63,8 +63,7 @@ TEST(GemmFloat32, MatmulMatchesReference) {
   const std::size_t M = 5, N = 7, K = 3;
   const auto A = RandomVector(M * K, 1);
   const auto B = RandomVector(K * N, 2);
-  const auto expected =
-      ReferenceGemm<float>(false, false, M, N, K, 1.0f, A, B, 0.0f, nullptr);
+  const auto expected = ReferenceGemm<float>(false, false, M, N, K, 1.0f, A, B, 0.0f, nullptr);
 
   std::vector<float> Y(M * N, -123.0f);
   onnx_light_cpu::GemmFloat32(false, false, M, N, K, 1.0f, A.data(), B.data(), 0.0f, nullptr,
@@ -117,8 +116,7 @@ TEST(GemmFloat32, BetaZeroIgnoresBias) {
   const auto B = RandomVector(K * N, 7);
   // C is deliberately garbage; beta == 0 must ignore it entirely.
   std::vector<float> C(M * N, std::numeric_limits<float>::quiet_NaN());
-  const auto expected =
-      ReferenceGemm<float>(false, false, M, N, K, 1.0f, A, B, 0.0f, nullptr);
+  const auto expected = ReferenceGemm<float>(false, false, M, N, K, 1.0f, A, B, 0.0f, nullptr);
   std::vector<float> Y(M * N, 0.0f);
   onnx_light_cpu::GemmFloat32(false, false, M, N, K, 1.0f, A.data(), B.data(), 0.0f, C.data(),
                               Y.data());
@@ -131,8 +129,7 @@ TEST(GemmFloat32, LargeMatrixParallel) {
   const std::size_t M = 128, N = 96, K = 64;
   const auto A = RandomVector(M * K, 11);
   const auto B = RandomVector(K * N, 12);
-  const auto expected =
-      ReferenceGemm<float>(false, false, M, N, K, 1.0f, A, B, 0.0f, nullptr);
+  const auto expected = ReferenceGemm<float>(false, false, M, N, K, 1.0f, A, B, 0.0f, nullptr);
   std::vector<float> Y(M * N, 0.0f);
   onnx_light_cpu::GemmFloat32(false, false, M, N, K, 1.0f, A.data(), B.data(), 0.0f, nullptr,
                               Y.data());

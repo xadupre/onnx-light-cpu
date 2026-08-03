@@ -219,9 +219,8 @@ void GemmImpl(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::siz
         std::memset(Yrow, 0, N * sizeof(T));
       }
       for (std::size_t k = 0; k < K; ++k) {
-        const T a =
-            alpha * (trans_a ? A[k * M + static_cast<std::size_t>(m)]
-                             : A[static_cast<std::size_t>(m) * K + k]);
+        const T a = alpha * (trans_a ? A[k * M + static_cast<std::size_t>(m)]
+                                     : A[static_cast<std::size_t>(m) * K + k]);
         axpy(a, Bmat + k * N, Yrow, N);
       }
     }
@@ -230,8 +229,9 @@ void GemmImpl(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::siz
 
 } // namespace
 
-void GemmFloat32(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::size_t K, float alpha,
-                 const float *A, const float *B, float beta, const float *C, float *Y) {
+void GemmFloat32(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::size_t K,
+                 float alpha, const float *A, const float *B, float beta, const float *C,
+                 float *Y) {
   GemmImpl<float>(trans_a, trans_b, M, N, K, alpha, A, B, beta, C, Y, SelectAxpyF32());
 }
 

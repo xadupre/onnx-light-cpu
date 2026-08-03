@@ -122,6 +122,21 @@ b = np.array([True, False, True], dtype=np.bool_)
 print(logical_not(b))  # [False  True False]
 ```
 
+The ``gemm`` function implements the ONNX ``Gemm`` operator, computing
+``Y = alpha * op(A) @ op(B) + beta * C`` for ``float32``/``float64`` matrices
+with an AVX-accelerated kernel. ``op(A)`` transposes ``A`` when ``trans_a`` is
+set, ``op(B)`` transposes ``B`` when ``trans_b`` is set, and the bias ``c`` is
+optional:
+
+```python
+import numpy as np
+from onnx_light_cpu.onnx_py._cpukernels import gemm
+
+a = np.random.default_rng(0).standard_normal((4, 3)).astype(np.float32)
+b = np.random.default_rng(1).standard_normal((3, 5)).astype(np.float32)
+print(gemm(a, b, beta=0.0))  # ~ a @ b
+```
+
 ### Running an ONNX model with onnx-light
 
 `register_kernels` plugs the SIMD-accelerated kernels into an
