@@ -70,9 +70,13 @@ graph = helper.make_graph(
 model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 18)])
 onnx.checker.check_model(model)
 
-session = onnxruntime.InferenceSession(
-    model.SerializeToString(), providers=["CPUExecutionProvider"]
-)
+# Serialize once (outside the timed region) so the setup timing below measures
+# only the session construction and not the protobuf serialization.
+model_bytes = model.SerializeToString()
+
+_ort_setup_start = time.perf_counter()
+session = onnxruntime.InferenceSession(model_bytes, providers=["CPUExecutionProvider"])
+ort_setup_time = time.perf_counter() - _ort_setup_start
 
 # %%
 # Build the onnx-light evaluator
@@ -87,19 +91,49 @@ session = onnxruntime.InferenceSession(
 if _HAS_ONNX_LIGHT:
     from onnx_light.onnx.reference import ReferenceEvaluator
 
+    _light_setup_start = time.perf_counter()
     light_session = ReferenceEvaluator(model)
     register_kernels(light_session)
+    light_setup_time = time.perf_counter() - _light_setup_start
 
     def run_light(inp):
         return light_session.run(None, {"X": inp})[0]
 
     light_label = "onnx-light + onnx-light-cpu"
 else:
+    light_setup_time = None
 
     def run_light(inp):
         return cpu_abs(inp)
 
     light_label = "onnx-light-cpu"
+
+# %%
+# Setup cost: why the evaluator is as slow to build as onnxruntime
+# ----------------------------------------------------------------
+#
+# Constructing an ``onnx-light`` :class:`ReferenceEvaluator` now costs about as
+# much as constructing an :class:`onnxruntime.InferenceSession`. This is expected
+# and is a *one-time* cost paid before any :meth:`run`:
+#
+# * ``onnxruntime`` parses the model and builds an optimized execution plan at
+#   construction time.
+# * ``onnx-light`` deliberately front-loads the same kind of work into
+#   ``ReferenceEvaluator.__init__``: it eagerly builds the opset ``KernelContext``
+#   and the persistent ``RuntimeContext`` once (instead of rebuilding them on
+#   every ``run`` call), and :func:`onnx_light_cpu.register_kernels` installs the
+#   custom kernels. Earlier onnx-light versions did this lazily, so construction
+#   looked instantaneous but the first ``run`` absorbed the cost.
+#
+# The payoff is that the amortized per-call ``run`` time (measured below) stays
+# low, because the expensive analysis happens exactly once at setup rather than
+# on every invocation.
+
+print(f"setup: onnxruntime InferenceSession = {ort_setup_time * 1e3:.2f} ms")
+if light_setup_time is not None:
+    print(f"setup: onnx-light ReferenceEvaluator = {light_setup_time * 1e3:.2f} ms")
+else:
+    print("setup: onnx-light not installed, skipping ReferenceEvaluator setup timing")
 
 # %%
 # Timing helper
