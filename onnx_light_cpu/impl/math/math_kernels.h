@@ -73,4 +73,26 @@ void LogFloat64(const double *input, double *output, std::size_t count);
 /// rounded back to float16.
 void LogFloat16(const uint16_t *input, uint16_t *output, std::size_t count);
 
+/// Computes the ONNX ``Gemm`` general matrix multiplication for float32:
+///
+///     Y = alpha * op(A) @ op(B) + beta * C
+///
+/// where ``op(A)`` is an ``M x K`` matrix (``A`` transposed when ``trans_a`` is
+/// true) and ``op(B)`` is a ``K x N`` matrix (``B`` transposed when ``trans_b``
+/// is true). All matrices are C-contiguous (row-major). ``C`` is an optional
+/// ``M x N`` bias matrix; pass ``nullptr`` (or ``beta == 0``) to skip the bias
+/// term. ``Y`` is the ``M x N`` output and must not alias any input.
+///
+/// The hot loop is a vectorized ``a * B_row + Y_row`` update with runtime
+/// AVX-512/AVX/SSE2 dispatch and a scalar fallback; the work is split across
+/// rows of ``Y`` using the shared ``ParallelFor`` thread pool.
+void GemmFloat32(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::size_t K,
+                 float alpha, const float *A, const float *B, float beta, const float *C, float *Y);
+
+/// Computes the ONNX ``Gemm`` general matrix multiplication for float64.
+/// Same semantics as :cpp:func:`GemmFloat32` with ``double`` operands.
+void GemmFloat64(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::size_t K,
+                 double alpha, const double *A, const double *B, double beta, const double *C,
+                 double *Y);
+
 } // namespace onnx_light_cpu
