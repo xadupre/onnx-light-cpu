@@ -17,11 +17,20 @@
 // negligible next to the ``O(M*N*K)`` multiplication. ``A`` is only read one
 // scalar at a time, so ``trans_a`` is handled by index arithmetic without any
 // copy.
+//
+// For cache efficiency the output ``Y`` is walked as a grid of ``MB x NB`` tiles
+// instead of one full row at a time. For every column panel of width ``NB`` the
+// packed ``B`` panel (``K x NB``) is reused across all rows of an ``MB`` row
+// block, so it stays resident in cache rather than being streamed once per
+// output row. The tiling only changes the iteration order, not the order in
+// which each output element accumulates over ``k``, so the result stays
+// bit-exact.
 
 #include "onnx_light_cpu/impl/math/math_kernels.h"
 
 #include "onnx_light_cpu/impl/parallel_for.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstring>
 #include <vector>
@@ -176,6 +185,15 @@ AxpyF64Fn SelectAxpyF64() {
   return &AxpyF64_Scalar;
 }
 
+// Cache-blocking tile sizes, in elements. The output ``Y`` is processed as a
+// grid of ``kGemmTileM x kGemmTileN`` tiles so that, within a column panel, the
+// packed ``B`` panel is reused across the rows of a tile while it is still hot
+// in cache. The values are a pragmatic default: a column panel of a few hundred
+// elements keeps the reused ``B`` rows small, and a modest row block bounds the
+// live ``Y`` tile.
+constexpr std::size_t kGemmTileN = 256;
+constexpr std::size_t kGemmTileM = 64;
+
 // Generic GEMM driver shared by the float32 and float64 entry points.
 template <typename T, typename AxpyFn>
 void GemmImpl(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::size_t K, T alpha,
@@ -208,20 +226,30 @@ void GemmImpl(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::siz
   const double cost = static_cast<double>(N) * static_cast<double>(K == 0 ? 1 : K);
 
   ParallelFor(static_cast<std::int64_t>(M), cost, [&](std::int64_t begin, std::int64_t end) {
-    for (std::int64_t m = begin; m < end; ++m) {
-      T *Yrow = Y + static_cast<std::size_t>(m) * N;
-      if (has_bias) {
-        const T *Crow = C + static_cast<std::size_t>(m) * N;
-        for (std::size_t n = 0; n < N; ++n) {
-          Yrow[n] = beta * Crow[n];
+    const std::size_t row_begin = static_cast<std::size_t>(begin);
+    const std::size_t row_end = static_cast<std::size_t>(end);
+    // Walk the [row_begin, row_end) x N output slice as a grid of tiles. For a
+    // fixed column panel the packed B panel (K x nb) is reused across every row
+    // of the row block, keeping it in cache.
+    for (std::size_t n0 = 0; n0 < N; n0 += kGemmTileN) {
+      const std::size_t nb = std::min(kGemmTileN, N - n0);
+      for (std::size_t m0 = row_begin; m0 < row_end; m0 += kGemmTileM) {
+        const std::size_t m_end = std::min(m0 + kGemmTileM, row_end);
+        for (std::size_t m = m0; m < m_end; ++m) {
+          T *Yrow = Y + m * N + n0;
+          if (has_bias) {
+            const T *Crow = C + m * N + n0;
+            for (std::size_t n = 0; n < nb; ++n) {
+              Yrow[n] = beta * Crow[n];
+            }
+          } else {
+            std::memset(Yrow, 0, nb * sizeof(T));
+          }
+          for (std::size_t k = 0; k < K; ++k) {
+            const T a = alpha * (trans_a ? A[k * M + m] : A[m * K + k]);
+            axpy(a, Bmat + k * N + n0, Yrow, nb);
+          }
         }
-      } else {
-        std::memset(Yrow, 0, N * sizeof(T));
-      }
-      for (std::size_t k = 0; k < K; ++k) {
-        const T a = alpha * (trans_a ? A[k * M + static_cast<std::size_t>(m)]
-                                     : A[static_cast<std::size_t>(m) * K + k]);
-        axpy(a, Bmat + k * N, Yrow, N);
       }
     }
   });

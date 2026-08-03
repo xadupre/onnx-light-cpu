@@ -73,17 +73,16 @@ endif()
 # ---------------------------------------------------------------------------
 # Sources
 # ---------------------------------------------------------------------------
-set(CPU_KERNEL_SOURCES
-    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/simd_level.cc"
-    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/abs_kernel.cc"
-    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/exp_log_kernel.cc"
-    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/gemm_kernel.cc"
-    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/logical/not_kernel.cc"
+# Discover the kernel and binding sources with globbing so new files are picked
+# up without editing this list. CONFIGURE_DEPENDS re-runs the glob when the set
+# of matching files changes.
+file(GLOB CPU_KERNEL_SOURCES CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/*.cc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/*/*.cc"
 )
 
-set(PY_KERNELS_SOURCES
-    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/onnx_py/_cpupy_math_kernels.cc"
-    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/onnx_py/_cpupy_logical_kernels.cc"
+file(GLOB PY_KERNELS_SOURCES CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/onnx_py/*.cc"
 )
 
 # ---------------------------------------------------------------------------
@@ -128,10 +127,11 @@ endif()
 if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
   find_package(onnx_light CONFIG REQUIRED)
 
+  file(GLOB CPU_KERNEL_REGISTRATION_SOURCES CONFIGURE_DEPENDS
+      "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/kernels/*/*.cc")
+
   add_library(lib_onnx_light_cpu_kernels ${_cpu_lib_type}
-      "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/kernels/math/abs_kernel.cc"
-      "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/kernels/math/exp_log_kernel.cc"
-      "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/kernels/logical/not_kernel.cc")
+      ${CPU_KERNEL_REGISTRATION_SOURCES})
   target_include_directories(lib_onnx_light_cpu_kernels PUBLIC
       $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
       $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
@@ -274,115 +274,44 @@ if(ONNX_LIGHT_CPU_BUILD_TESTS)
   set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
   FetchContent_MakeAvailable(googletest)
 
-  add_executable(test_abs_kernel
-      "${CMAKE_CURRENT_SOURCE_DIR}/unittests/cc/test_abs_kernel.cc")
-  target_link_libraries(test_abs_kernel PRIVATE
-      lib_onnx_light_cpu
-      GTest::gtest_main)
-  target_include_directories(test_abs_kernel PRIVATE
-      "${CMAKE_CURRENT_SOURCE_DIR}")
-
-  # Apply SIMD flags to the test target too so it can use intrinsics if needed.
-  if(ONNX_LIGHT_CPU_SIMD_FLAGS)
-    target_compile_options(test_abs_kernel PRIVATE ${_simd_flags})
-  endif()
-
   include(GoogleTest)
-  gtest_discover_tests(test_abs_kernel)
 
-  add_executable(test_exp_log_kernel
-      "${CMAKE_CURRENT_SOURCE_DIR}/unittests/cc/test_exp_log_kernel.cc")
-  target_link_libraries(test_exp_log_kernel PRIVATE
-      lib_onnx_light_cpu
-      GTest::gtest_main)
-  target_include_directories(test_exp_log_kernel PRIVATE
-      "${CMAKE_CURRENT_SOURCE_DIR}")
-  if(ONNX_LIGHT_CPU_SIMD_FLAGS)
-    target_compile_options(test_exp_log_kernel PRIVATE ${_simd_flags})
-  endif()
-  gtest_discover_tests(test_exp_log_kernel)
-
-  add_executable(test_gemm_kernel
-      "${CMAKE_CURRENT_SOURCE_DIR}/unittests/cc/test_gemm_kernel.cc")
-  target_link_libraries(test_gemm_kernel PRIVATE
-      lib_onnx_light_cpu
-      GTest::gtest_main)
-  target_include_directories(test_gemm_kernel PRIVATE
-      "${CMAKE_CURRENT_SOURCE_DIR}")
-  if(ONNX_LIGHT_CPU_SIMD_FLAGS)
-    target_compile_options(test_gemm_kernel PRIVATE ${_simd_flags})
-  endif()
-  gtest_discover_tests(test_gemm_kernel)
-
-  add_executable(test_not_kernel
-      "${CMAKE_CURRENT_SOURCE_DIR}/unittests/cc/test_not_kernel.cc")
-  target_link_libraries(test_not_kernel PRIVATE
-      lib_onnx_light_cpu
-      GTest::gtest_main)
-  target_include_directories(test_not_kernel PRIVATE
-      "${CMAKE_CURRENT_SOURCE_DIR}")
-  if(ONNX_LIGHT_CPU_SIMD_FLAGS)
-    target_compile_options(test_not_kernel PRIVATE ${_simd_flags})
-  endif()
-  gtest_discover_tests(test_not_kernel)
-
-  add_executable(test_parallel_for
-      "${CMAKE_CURRENT_SOURCE_DIR}/unittests/cc/test_parallel_for.cc")
-  target_link_libraries(test_parallel_for PRIVATE
-      lib_onnx_light_cpu
-      GTest::gtest_main
-      Threads::Threads)
-  target_include_directories(test_parallel_for PRIVATE
-      "${CMAKE_CURRENT_SOURCE_DIR}")
-  if(ONNX_LIGHT_CPU_SIMD_FLAGS)
-    target_compile_options(test_parallel_for PRIVATE ${_simd_flags})
-  endif()
-  gtest_discover_tests(test_parallel_for)
-
-  # onnx-light kernel-class test: only built when the onnx-light integration
-  # is enabled (it links the registration library against onnx-light).
-  if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
-    add_executable(test_onnx_light_abs_kernel
-        "${CMAKE_CURRENT_SOURCE_DIR}/unittests/cc/test_onnx_light_abs_kernel.cc")
-    target_link_libraries(test_onnx_light_abs_kernel PRIVATE
-        lib_onnx_light_cpu_kernels
-        GTest::gtest_main)
-    target_include_directories(test_onnx_light_abs_kernel PRIVATE
-        "${CMAKE_CURRENT_SOURCE_DIR}")
+  # Declare a GTest executable from a single source file, linking it against the
+  # requested kernel library. Used by the globbing loop below so new test files
+  # are picked up without editing this list.
+  function(onnx_light_cpu_add_test _src _link_lib)
+    get_filename_component(_name "${_src}" NAME_WE)
+    add_executable(${_name} "${_src}")
+    target_link_libraries(${_name} PRIVATE ${_link_lib} GTest::gtest_main)
+    target_include_directories(${_name} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+    # Apply SIMD flags to the test target too so it can use intrinsics if needed.
     if(ONNX_LIGHT_CPU_SIMD_FLAGS)
-      target_compile_options(test_onnx_light_abs_kernel PRIVATE ${_simd_flags})
+      target_compile_options(${_name} PRIVATE ${_simd_flags})
     endif()
-    gtest_discover_tests(test_onnx_light_abs_kernel)
+    gtest_discover_tests(${_name})
+    onnx_light_apply_hardening(${_name})
+  endfunction()
 
-    add_executable(test_onnx_light_exp_log_kernel
-        "${CMAKE_CURRENT_SOURCE_DIR}/unittests/cc/test_onnx_light_exp_log_kernel.cc")
-    target_link_libraries(test_onnx_light_exp_log_kernel PRIVATE
-        lib_onnx_light_cpu_kernels
-        GTest::gtest_main)
-    target_include_directories(test_onnx_light_exp_log_kernel PRIVATE
-        "${CMAKE_CURRENT_SOURCE_DIR}")
-    if(ONNX_LIGHT_CPU_SIMD_FLAGS)
-      target_compile_options(test_onnx_light_exp_log_kernel PRIVATE ${_simd_flags})
+  file(GLOB _test_sources CONFIGURE_DEPENDS
+      "${CMAKE_CURRENT_SOURCE_DIR}/unittests/cc/test_*.cc")
+  foreach(_test_src IN LISTS _test_sources)
+    get_filename_component(_test_name "${_test_src}" NAME_WE)
+    if(_test_name MATCHES "^test_onnx_light_")
+      # onnx-light kernel-class tests link the registration library against
+      # onnx-light and are only built when the integration is enabled.
+      if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
+        onnx_light_cpu_add_test("${_test_src}" lib_onnx_light_cpu_kernels)
+      endif()
+    else()
+      onnx_light_cpu_add_test("${_test_src}" lib_onnx_light_cpu)
     endif()
-    gtest_discover_tests(test_onnx_light_exp_log_kernel)
-
-    add_executable(test_onnx_light_not_kernel
-        "${CMAKE_CURRENT_SOURCE_DIR}/unittests/cc/test_onnx_light_not_kernel.cc")
-    target_link_libraries(test_onnx_light_not_kernel PRIVATE
-        lib_onnx_light_cpu_kernels
-        GTest::gtest_main)
-    target_include_directories(test_onnx_light_not_kernel PRIVATE
-        "${CMAKE_CURRENT_SOURCE_DIR}")
-    if(ONNX_LIGHT_CPU_SIMD_FLAGS)
-      target_compile_options(test_onnx_light_not_kernel PRIVATE ${_simd_flags})
-    endif()
-    gtest_discover_tests(test_onnx_light_not_kernel)
-  endif()
+  endforeach()
 endif()
 
 # ---------------------------------------------------------------------------
-# Apply OpenSSF compiler hardening flags to this project's targets when
-# ONNX_HARDENING=ON. When the option is OFF the helper is a no-op.
+# Apply OpenSSF compiler hardening flags to the non-test targets when
+# ONNX_HARDENING=ON. When the option is OFF the helper is a no-op. Test targets
+# are hardened as they are declared in onnx_light_cpu_add_test above.
 # ---------------------------------------------------------------------------
 set(_onnx_light_cpu_hardening_targets lib_onnx_light_cpu)
 if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
@@ -390,18 +319,6 @@ if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
 endif()
 if(ONNX_LIGHT_CPU_BUILD_PYTHON)
   list(APPEND _onnx_light_cpu_hardening_targets _cpukernels)
-endif()
-if(ONNX_LIGHT_CPU_BUILD_TESTS)
-  list(APPEND _onnx_light_cpu_hardening_targets test_abs_kernel)
-  list(APPEND _onnx_light_cpu_hardening_targets test_exp_log_kernel)
-  list(APPEND _onnx_light_cpu_hardening_targets test_gemm_kernel)
-  list(APPEND _onnx_light_cpu_hardening_targets test_not_kernel)
-  list(APPEND _onnx_light_cpu_hardening_targets test_parallel_for)
-  if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
-    list(APPEND _onnx_light_cpu_hardening_targets test_onnx_light_abs_kernel)
-    list(APPEND _onnx_light_cpu_hardening_targets test_onnx_light_exp_log_kernel)
-    list(APPEND _onnx_light_cpu_hardening_targets test_onnx_light_not_kernel)
-  endif()
 endif()
 foreach(_t IN LISTS _onnx_light_cpu_hardening_targets)
   if(TARGET ${_t})
