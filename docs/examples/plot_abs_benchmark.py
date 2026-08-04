@@ -25,26 +25,23 @@ elements.
 #
 # Import the ``onnx-light-cpu`` registration helper and report which SIMD level
 # the current CPU provides. The mapping is ``0=None``, ``1=SSE2``, ``2=AVX``,
-# ``3=AVX2`` and ``4=AVX512``. ``onnx-light`` is not published on PyPI, so when
-# it is not importable the example falls back to calling the compiled kernel
-# directly; this keeps the documentation build working everywhere.
+# ``3=AVX2`` and ``4=AVX512``.
 
-import importlib.util
 import time
 
 import numpy as np
-import onnx
 import onnxruntime
-from onnx import TensorProto, helper
+
+# ``onnx-light`` ships ``onnx_light.onnx`` as a drop-in replacement for the
+# ``onnx`` package; use it to build the model so the example depends on
+# onnx-light rather than onnx.
+from onnx_light.onnx import TensorProto, checker, helper
 
 from onnx_light_cpu import register_kernels
 from onnx_light_cpu.onnx_py._cpukernels import (
-    abs as cpu_abs,
     detect_simd_level,
     has_cpu_kernels,
 )
-
-_HAS_ONNX_LIGHT = importlib.util.find_spec("onnx_light") is not None
 
 _SIMD_NAMES = {0: "scalar", 1: "SSE2", 2: "AVX", 3: "AVX2", 4: "AVX-512"}
 
@@ -68,7 +65,7 @@ graph = helper.make_graph(
     [helper.make_tensor_value_info("Y", TensorProto.FLOAT, ["N"])],
 )
 model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 18)])
-onnx.checker.check_model(model)
+checker.check_model(model)
 
 # Serialize once (outside the timed region) so the setup timing below measures
 # only the session construction and not the protobuf serialization.
@@ -84,29 +81,21 @@ ort_setup_time = time.perf_counter() - _ort_setup_start
 #
 # ``onnx-light`` evaluates the same model with its C++ runtime. Registering the
 # onnx-light-cpu kernels overrides the built-in ``Abs`` so every ``Abs`` node in
-# the model dispatches to the SIMD-accelerated kernel. When ``onnx-light`` is
-# not installed the same kernel is invoked directly through the compiled
-# extension so the benchmark still runs.
+# the model dispatches to the SIMD-accelerated kernel.
 
-if _HAS_ONNX_LIGHT:
-    from onnx_light.onnx.reference import ReferenceEvaluator
+from onnx_light.onnx.reference import ReferenceEvaluator
 
-    _light_setup_start = time.perf_counter()
-    light_session = ReferenceEvaluator(model)
-    register_kernels(light_session)
-    light_setup_time = time.perf_counter() - _light_setup_start
+_light_setup_start = time.perf_counter()
+light_session = ReferenceEvaluator(model)
+register_kernels(light_session)
+light_setup_time = time.perf_counter() - _light_setup_start
 
-    def run_light(inp):
-        return light_session.run(None, {"X": inp})[0]
 
-    light_label = "onnx-light + onnx-light-cpu"
-else:
-    light_setup_time = None
+def run_light(inp):
+    return light_session.run(None, {"X": inp})[0]
 
-    def run_light(inp):
-        return cpu_abs(inp)
 
-    light_label = "onnx-light-cpu"
+light_label = "onnx-light + onnx-light-cpu"
 
 # %%
 # Setup cost: why the evaluator is as slow to build as onnxruntime
@@ -130,10 +119,7 @@ else:
 # on every invocation.
 
 print(f"setup: onnxruntime InferenceSession = {ort_setup_time * 1e3:.2f} ms")
-if light_setup_time is not None:
-    print(f"setup: onnx-light ReferenceEvaluator = {light_setup_time * 1e3:.2f} ms")
-else:
-    print("setup: onnx-light not installed, skipping ReferenceEvaluator setup timing")
+print(f"setup: onnx-light ReferenceEvaluator = {light_setup_time * 1e3:.2f} ms")
 
 # %%
 # Timing helper

@@ -48,19 +48,17 @@ _FLOAT_DTYPES = frozenset(
 )
 
 
-def _as_kernel_input(x: np.ndarray) -> np.ndarray:
-    """Returns a writable, C-contiguous view of ``x`` for the compiled kernels.
+def _writeable_1d(arr: np.ndarray) -> np.ndarray:
+    """Returns a writeable, C-contiguous 1-D view of ``arr``.
 
-    The nanobind ``ndarray`` arguments accepted by the compiled kernels require a
-    writable, C-contiguous array. ``onnx-light`` passes read-only inputs to
-    custom kernels, and :func:`numpy.ascontiguousarray` preserves the read-only
-    flag when the input is already contiguous, so a copy is forced whenever the
-    array is not writable.
+    The compiled kernels bind to a mutable ``nb::ndarray`` and reject read-only
+    buffers. ``onnx-light`` hands over zero-copy DLPack views that are read-only,
+    so the data is copied when it is not already a writeable contiguous buffer.
     """
-    arr = np.ascontiguousarray(x)
-    if not arr.flags.writeable:
-        arr = arr.copy()
-    return arr
+    flat = np.ascontiguousarray(arr).reshape(-1)
+    if not flat.flags.writeable:
+        flat = flat.copy()
+    return flat
 
 
 def _abs_kernel(node: Any, x: np.ndarray) -> np.ndarray:
@@ -70,9 +68,9 @@ def _abs_kernel(node: Any, x: np.ndarray) -> np.ndarray:
     input is flattened, processed, and reshaped back to its original shape.
     Unsupported dtypes fall back to :func:`numpy.abs`.
     """
-    arr = _as_kernel_input(x)
+    arr = np.ascontiguousarray(x)
     if arr.dtype in _ABS_DTYPES:
-        return _abs(arr.reshape(-1)).reshape(arr.shape)
+        return _abs(_writeable_1d(arr)).reshape(arr.shape)
     return np.abs(arr)
 
 
@@ -83,9 +81,9 @@ def _exp_kernel(node: Any, x: np.ndarray) -> np.ndarray:
     input is flattened, processed, and reshaped back to its original shape.
     Unsupported dtypes fall back to :func:`numpy.exp`.
     """
-    arr = _as_kernel_input(x)
+    arr = np.ascontiguousarray(x)
     if arr.dtype in _FLOAT_DTYPES:
-        return _exp(arr.reshape(-1)).reshape(arr.shape)
+        return _exp(_writeable_1d(arr)).reshape(arr.shape)
     return np.exp(arr)
 
 
@@ -96,9 +94,9 @@ def _log_kernel(node: Any, x: np.ndarray) -> np.ndarray:
     input is flattened, processed, and reshaped back to its original shape.
     Unsupported dtypes fall back to :func:`numpy.log`.
     """
-    arr = _as_kernel_input(x)
+    arr = np.ascontiguousarray(x)
     if arr.dtype in _FLOAT_DTYPES:
-        return _log(arr.reshape(-1)).reshape(arr.shape)
+        return _log(_writeable_1d(arr)).reshape(arr.shape)
     return np.log(arr)
 
 
@@ -110,9 +108,9 @@ def _not_kernel(node: Any, x: np.ndarray) -> np.ndarray:
     its original shape. Non-``bool`` dtypes fall back to
     :func:`numpy.logical_not`.
     """
-    arr = _as_kernel_input(x)
+    arr = np.ascontiguousarray(x)
     if arr.dtype == np.bool_:
-        return _logical_not(arr.reshape(-1)).reshape(arr.shape)
+        return _logical_not(_writeable_1d(arr)).reshape(arr.shape)
     return np.logical_not(arr)
 
 
