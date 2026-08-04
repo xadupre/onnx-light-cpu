@@ -138,6 +138,24 @@ TEST(GemmFloat32, LargeMatrixParallel) {
   }
 }
 
+// Dimensions larger than the internal cache tiles (kGemmTileN=256, kGemmTileM=64)
+// so the output is split across several column panels and row blocks. This is a
+// regression test for a bug where the micro-kernels ignored the column-panel
+// offset ``n0`` when writing ``Y``, corrupting every panel past the first.
+TEST(GemmFloat32, MultiPanelExceedsTiles) {
+  const std::size_t M = 130, N = 300, K = 40;
+  const auto A = RandomVector(M * K, 21);
+  const auto B = RandomVector(K * N, 22);
+  const auto C = RandomVector(M * N, 23);
+  const auto expected = ReferenceGemm<float>(false, false, M, N, K, 0.75f, A, B, 1.5f, &C);
+  std::vector<float> Y(M * N, 0.0f);
+  onnx_light_cpu::GemmFloat32(false, false, M, N, K, 0.75f, A.data(), B.data(), 1.5f, C.data(),
+                              Y.data());
+  for (std::size_t i = 0; i < M * N; ++i) {
+    EXPECT_NEAR(Y[i], expected[i], 1e-2f) << "i=" << i;
+  }
+}
+
 TEST(GemmFloat32, EmptyKGivesBiasOnly) {
   const std::size_t M = 3, N = 4, K = 0;
   const auto C = RandomVector(M * N, 8);

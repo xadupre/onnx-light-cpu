@@ -74,7 +74,7 @@ void GemmMicroKernel_Scalar(std::size_t mr, std::size_t nb, std::size_t K, T alp
                             T *Yrow_base, std::size_t Ystride, std::size_t n0, bool has_bias,
                             AAt a_at) {
   for (std::size_t r = 0; r < mr; ++r) {
-    T *Yrow = Yrow_base + r * Ystride;
+    T *Yrow = Yrow_base + r * Ystride + n0;
     // Initialize with the scaled bias (or zero) then accumulate alpha * A * B.
     // This path only runs for the scalar fallback and the (small) SIMD column
     // tail, so it avoids any temporary allocation.
@@ -156,7 +156,7 @@ void GemmMicroKernel_AVX_F32(std::size_t mr, std::size_t nb, std::size_t K, floa
     const __m256 vbeta = _mm256_set1_ps(beta);
     for (std::size_t r = 0; r < mr; ++r) {
       __m256 res = _mm256_mul_ps(valpha, acc[r]);
-      float *Yrow = Yrow_base + r * Ystride + n;
+      float *Yrow = Yrow_base + r * Ystride + n0 + n;
       if (has_bias) {
         const __m256 vc = _mm256_loadu_ps(Crow_base + r * Cstride + n0 + n);
         res = _mm256_add_ps(res, _mm256_mul_ps(vbeta, vc));
@@ -166,7 +166,7 @@ void GemmMicroKernel_AVX_F32(std::size_t mr, std::size_t nb, std::size_t K, floa
   }
   if (n < nb) {
     GemmMicroKernel_Scalar<float>(mr, nb - n, K, alpha, beta, Bmat, N, Crow_base, Cstride,
-                                  Yrow_base + n, Ystride, n0 + n, has_bias, a_at);
+                                  Yrow_base, Ystride, n0 + n, has_bias, a_at);
   }
 }
 
@@ -193,7 +193,7 @@ void GemmMicroKernel_SSE2_F32(std::size_t mr, std::size_t nb, std::size_t K, flo
     const __m128 vbeta = _mm_set1_ps(beta);
     for (std::size_t r = 0; r < mr; ++r) {
       __m128 res = _mm_mul_ps(valpha, acc[r]);
-      float *Yrow = Yrow_base + r * Ystride + n;
+      float *Yrow = Yrow_base + r * Ystride + n0 + n;
       if (has_bias) {
         const __m128 vc = _mm_loadu_ps(Crow_base + r * Cstride + n0 + n);
         res = _mm_add_ps(res, _mm_mul_ps(vbeta, vc));
@@ -203,7 +203,7 @@ void GemmMicroKernel_SSE2_F32(std::size_t mr, std::size_t nb, std::size_t K, flo
   }
   if (n < nb) {
     GemmMicroKernel_Scalar<float>(mr, nb - n, K, alpha, beta, Bmat, N, Crow_base, Cstride,
-                                  Yrow_base + n, Ystride, n0 + n, has_bias, a_at);
+                                  Yrow_base, Ystride, n0 + n, has_bias, a_at);
   }
 }
 
@@ -230,7 +230,7 @@ void GemmMicroKernel_AVX_F64(std::size_t mr, std::size_t nb, std::size_t K, doub
     const __m256d vbeta = _mm256_set1_pd(beta);
     for (std::size_t r = 0; r < mr; ++r) {
       __m256d res = _mm256_mul_pd(valpha, acc[r]);
-      double *Yrow = Yrow_base + r * Ystride + n;
+      double *Yrow = Yrow_base + r * Ystride + n0 + n;
       if (has_bias) {
         const __m256d vc = _mm256_loadu_pd(Crow_base + r * Cstride + n0 + n);
         res = _mm256_add_pd(res, _mm256_mul_pd(vbeta, vc));
@@ -240,7 +240,7 @@ void GemmMicroKernel_AVX_F64(std::size_t mr, std::size_t nb, std::size_t K, doub
   }
   if (n < nb) {
     GemmMicroKernel_Scalar<double>(mr, nb - n, K, alpha, beta, Bmat, N, Crow_base, Cstride,
-                                   Yrow_base + n, Ystride, n0 + n, has_bias, a_at);
+                                   Yrow_base, Ystride, n0 + n, has_bias, a_at);
   }
 }
 
@@ -267,7 +267,7 @@ void GemmMicroKernel_SSE2_F64(std::size_t mr, std::size_t nb, std::size_t K, dou
     const __m128d vbeta = _mm_set1_pd(beta);
     for (std::size_t r = 0; r < mr; ++r) {
       __m128d res = _mm_mul_pd(valpha, acc[r]);
-      double *Yrow = Yrow_base + r * Ystride + n;
+      double *Yrow = Yrow_base + r * Ystride + n0 + n;
       if (has_bias) {
         const __m128d vc = _mm_loadu_pd(Crow_base + r * Cstride + n0 + n);
         res = _mm_add_pd(res, _mm_mul_pd(vbeta, vc));
@@ -277,7 +277,7 @@ void GemmMicroKernel_SSE2_F64(std::size_t mr, std::size_t nb, std::size_t K, dou
   }
   if (n < nb) {
     GemmMicroKernel_Scalar<double>(mr, nb - n, K, alpha, beta, Bmat, N, Crow_base, Cstride,
-                                   Yrow_base + n, Ystride, n0 + n, has_bias, a_at);
+                                   Yrow_base, Ystride, n0 + n, has_bias, a_at);
   }
 }
 
