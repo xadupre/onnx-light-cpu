@@ -51,7 +51,7 @@ TEST(OnnxLightGemmKernel, Float32Matmul) {
   const rt_ns::Tensor A = rt_ns::Tensor::FromFloat("A", {2, 4}, a);
   const rt_ns::Tensor B = rt_ns::Tensor::FromFloat("B", {4, 3}, b);
   const auto expected = ReferenceGemm(false, false, M, N, K, 1.0f, a, b, 0.0f, nullptr);
-  const rt_ns::Tensor y = kernel(A, B, nullptr, 1.0f, 1.0f, false, false);
+  const rt_ns::Tensor y = kernel(A, B, 1.0f, false, false);
   ASSERT_EQ(y.element_count(), static_cast<int64_t>(M * N));
   const float *py = y.AsFloat();
   for (std::size_t i = 0; i < M * N; ++i) {
@@ -70,7 +70,7 @@ TEST(OnnxLightGemmKernel, Float32AlphaBetaBias) {
   const rt_ns::Tensor C = rt_ns::Tensor::FromFloat("C", {2, 2}, c);
   const float alpha = 0.5f, beta = 2.0f;
   const auto expected = ReferenceGemm(false, false, M, N, K, alpha, a, b, beta, &c);
-  const rt_ns::Tensor y = kernel(A, B, &C, alpha, beta, false, false);
+  const rt_ns::Tensor y = kernel(A, B, C, alpha, beta, false, false);
   ASSERT_EQ(y.element_count(), static_cast<int64_t>(M * N));
   const float *py = y.AsFloat();
   for (std::size_t i = 0; i < M * N; ++i) {
@@ -90,7 +90,7 @@ TEST(OnnxLightGemmKernel, Float32BiasBroadcastVector) {
   const rt_ns::Tensor B = rt_ns::Tensor::FromFloat("B", {2, 2}, b);
   const rt_ns::Tensor C = rt_ns::Tensor::FromFloat("C", {2}, c);
   const auto expected = ReferenceGemm(false, false, M, N, K, 1.0f, a, b, 1.0f, &c_full);
-  const rt_ns::Tensor y = kernel(A, B, &C, 1.0f, 1.0f, false, false);
+  const rt_ns::Tensor y = kernel(A, B, C, 1.0f, 1.0f, false, false);
   const float *py = y.AsFloat();
   for (std::size_t i = 0; i < M * N; ++i) {
     EXPECT_FLOAT_EQ(py[i], expected[i]) << "i=" << i;
@@ -106,7 +106,7 @@ TEST(OnnxLightGemmKernel, Float32TransposeVariants) {
   const rt_ns::Tensor A = rt_ns::Tensor::FromFloat("A", {3, 2}, a_t);
   const rt_ns::Tensor B = rt_ns::Tensor::FromFloat("B", {2, 3}, b_t);
   const auto expected = ReferenceGemm(true, true, M, N, K, 1.0f, a_t, b_t, 0.0f, nullptr);
-  const rt_ns::Tensor y = kernel(A, B, nullptr, 1.0f, 1.0f, true, true);
+  const rt_ns::Tensor y = kernel(A, B, 1.0f, true, true);
   const float *py = y.AsFloat();
   for (std::size_t i = 0; i < M * N; ++i) {
     EXPECT_FLOAT_EQ(py[i], expected[i]) << "i=" << i;
@@ -119,7 +119,7 @@ TEST(OnnxLightGemmKernel, Float64Matmul) {
   const std::vector<double> b = {5, 6, 7, 8};
   const rt_ns::Tensor A = rt_ns::Tensor::FromDouble("A", {2, 2}, a);
   const rt_ns::Tensor B = rt_ns::Tensor::FromDouble("B", {2, 2}, b);
-  const rt_ns::Tensor y = kernel(A, B, nullptr, 1.0f, 1.0f, false, false);
+  const rt_ns::Tensor y = kernel(A, B, 1.0f, false, false);
   ASSERT_EQ(y.element_count(), 4);
   const double *py = y.AsDouble();
   // [[1,2],[3,4]] @ [[5,6],[7,8]] = [[19,22],[43,50]]

@@ -15,6 +15,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace onnx_light_cpu {
@@ -74,10 +75,10 @@ std::vector<T> BroadcastBias(const Tensor &c, const T *c_data, std::size_t M, st
   return out;
 }
 
-} // namespace
-
-Tensor GemmKernel::operator()(const Tensor &a, const Tensor &b, const Tensor *c, float alpha,
-                              float beta, bool trans_a, bool trans_b, RuntimeContext *rt) const {
+// Shared implementation for both public ``operator()`` overloads. ``c`` is null
+// for the no-bias overload; otherwise it points at the bias tensor.
+Tensor GemmCompute(const Tensor &a, const Tensor &b, const Tensor *c, float alpha, float beta,
+                   bool trans_a, bool trans_b, RuntimeContext *rt) {
   if (a.data_type != b.data_type) {
     throw std::invalid_argument("onnx_light_cpu::GemmKernel: A and B must share the same dtype.");
   }
@@ -137,6 +138,18 @@ Tensor GemmKernel::operator()(const Tensor &a, const Tensor &b, const Tensor *c,
   }
 }
 
+} // namespace
+
+Tensor GemmKernel::operator()(const Tensor &a, const Tensor &b, const Tensor &c, float alpha,
+                              float beta, bool trans_a, bool trans_b, RuntimeContext *rt) const {
+  return GemmCompute(a, b, &c, alpha, beta, trans_a, trans_b, rt);
+}
+
+Tensor GemmKernel::operator()(const Tensor &a, const Tensor &b, float alpha, bool trans_a,
+                              bool trans_b, RuntimeContext *rt) const {
+  return GemmCompute(a, b, nullptr, alpha, 0.0f, trans_a, trans_b, rt);
+}
+
 void GemmKernel::Run(RuntimeContext &rt) {
   const NodeProto &node = *node_;
   rt_ns::RequireOutputCount(node, 1);
@@ -147,7 +160,9 @@ void GemmKernel::Run(RuntimeContext &rt) {
   const float beta = rt_ns::GetAttributeFloatOrDefault(node, "beta", 1.0f);
   const bool trans_a = rt_ns::GetAttributeIntOrDefault(node, "transA", 0) != 0;
   const bool trans_b = rt_ns::GetAttributeIntOrDefault(node, "transB", 0) != 0;
-  rt_ns::SetOutput(node, 0, (*this)(a, b, c, alpha, beta, trans_a, trans_b, &rt), rt);
+  Tensor y = c != nullptr ? (*this)(a, b, *c, alpha, beta, trans_a, trans_b, &rt)
+                          : (*this)(a, b, alpha, trans_a, trans_b, &rt);
+  rt_ns::SetOutput(node, 0, std::move(y), rt);
 }
 
 void RegisterGemmKernel() {
