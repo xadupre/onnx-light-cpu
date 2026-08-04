@@ -83,7 +83,9 @@ void LogFloat16(const uint16_t *input, uint16_t *output, std::size_t count);
 /// ``M x N`` bias matrix; pass ``nullptr`` (or ``beta == 0``) to skip the bias
 /// term. ``Y`` is the ``M x N`` output and must not alias any input.
 ///
-/// The hot loop is a vectorized ``a * B_row + Y_row`` update with runtime
+/// The hot loop is a register-blocked micro-kernel that keeps a tile of output
+/// rows by one SIMD vector of columns in registers while it accumulates the
+/// whole ``k`` reduction (reusing each ``B`` row across the tile), with runtime
 /// AVX-512/AVX/SSE2 dispatch and a scalar fallback; the work is split across
 /// rows of ``Y`` using the shared ``ParallelFor`` thread pool.
 void GemmFloat32(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::size_t K,
