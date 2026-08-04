@@ -6,7 +6,6 @@ import sys
 sys.path.insert(0, os.path.abspath("_ext"))
 
 project = "onnx-light-cpu"
-copyright = "2025, xadupre"
 author = "xadupre"
 
 extensions = [
@@ -18,6 +17,7 @@ extensions = [
 
 templates_path = ["_templates"]
 exclude_patterns = ["_build"]
+html_last_updated_fmt = "%b %d, %Y"
 
 sphinx_gallery_conf = {
     "examples_dirs": "examples",
@@ -30,6 +30,8 @@ html_static_path = ["_static"]
 html_logo = "_static/logo.svg"
 html_favicon = "_static/logo.svg"
 html_theme_options = {
+    "footer_start": ["last-updated"],
+    "footer_end": [],
     "icon_links": [
         {
             "name": "GitHub",
