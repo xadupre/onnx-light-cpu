@@ -24,18 +24,26 @@ timings evolve as the matrices grow.
 # CPU provides. The mapping is ``0=None``, ``1=SSE2``, ``2=AVX``, ``3=AVX2`` and
 # ``4=AVX512``.
 
+import importlib.util
 import time
 
 import numpy as np
-import onnx
 import onnxruntime
-from onnx import TensorProto, helper
 
 from onnx_light_cpu.onnx_py._cpukernels import (
     detect_simd_level,
     gemm,
     has_cpu_kernels,
 )
+
+# ``onnx-light`` ships ``onnx_light.onnx`` as a drop-in replacement for the
+# ``onnx`` package. Use it to build the model so the example depends on
+# onnx-light rather than onnx; fall back to ``onnx`` when onnx-light is not
+# installed (for example during the documentation build).
+if importlib.util.find_spec("onnx_light") is not None:
+    from onnx_light.onnx import TensorProto, checker, helper
+else:
+    from onnx import TensorProto, checker, helper
 
 _SIMD_NAMES = {0: "scalar", 1: "SSE2", 2: "AVX", 3: "AVX2", 4: "AVX-512"}
 
@@ -62,7 +70,7 @@ graph = helper.make_graph(
     [helper.make_tensor_value_info("Y", TensorProto.FLOAT, ["M", "N"])],
 )
 model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 18)])
-onnx.checker.check_model(model)
+checker.check_model(model)
 
 session = onnxruntime.InferenceSession(
     model.SerializeToString(), providers=["CPUExecutionProvider"]
