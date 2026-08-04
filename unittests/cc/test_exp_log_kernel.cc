@@ -125,6 +125,12 @@ TEST(ExpFloat32, SpecialValues) {
 // LogFloat32
 // ---------------------------------------------------------------------------
 
+TEST(LogFloat32, EmptyInput) {
+  float dummy = 1.0f;
+  onnx_light_cpu::LogFloat32(&dummy, &dummy, 0);
+  SUCCEED();
+}
+
 TEST(LogFloat32, MatchesStdOverRange) {
   for (std::size_t size : {1, 3, 4, 5, 7, 8, 9, 15, 16, 17, 31, 32, 33, 1000, 1023, 1024, 1025}) {
     std::vector<float> in(size);
@@ -157,6 +163,13 @@ TEST(LogFloat32, SpecialValues) {
 // ---------------------------------------------------------------------------
 // ExpFloat64 / LogFloat64
 // ---------------------------------------------------------------------------
+
+TEST(ExpFloat64, EmptyInput) {
+  double dummy = 1.0;
+  onnx_light_cpu::ExpFloat64(&dummy, &dummy, 0);
+  onnx_light_cpu::LogFloat64(&dummy, &dummy, 0);
+  SUCCEED();
+}
 
 TEST(ExpFloat64, MatchesStdOverRange) {
   for (std::size_t size : {1, 2, 3, 4, 5, 7, 8, 9, 100, 255, 256, 257}) {
@@ -222,6 +235,13 @@ TEST(LogFloat64, SpecialValues) {
 // ---------------------------------------------------------------------------
 // ExpFloat16 / LogFloat16
 // ---------------------------------------------------------------------------
+
+TEST(ExpFloat16, EmptyInput) {
+  std::uint16_t dummy = 0;
+  onnx_light_cpu::ExpFloat16(&dummy, &dummy, 0);
+  onnx_light_cpu::LogFloat16(&dummy, &dummy, 0);
+  SUCCEED();
+}
 
 TEST(ExpFloat16, MatchesReference) {
   std::vector<float> values = {-4.0f, -1.5f, -0.5f, 0.0f, 0.5f, 1.0f, 2.0f, 3.0f, 4.0f, 6.0f};
