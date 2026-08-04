@@ -12,31 +12,18 @@ C++ ``KernelDispatchTable``. These tests therefore build a single-node ONNX
 model per operator and run it through onnx-light's ``ReferenceEvaluator`` to
 check that each kernel produces the expected result.
 
-They require onnx-light and the ``_cpuregister`` extension (only built with
-``ONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON``); when either is missing the whole module
-is skipped, mirroring how the documentation-example tests skip on missing
-optional dependencies.
+onnx-light and the ``_cpuregister`` extension (built with
+``ONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON``) are assumed to be available.
 """
 
 from __future__ import annotations
 
-import importlib.util
-
 import numpy as np
 import pytest
+from onnx_light.onnx import TensorProto, helper
+from onnx_light.onnx.reference import ReferenceEvaluator
 
-if importlib.util.find_spec("onnx_light") is None:
-    pytest.skip("onnx-light is not installed", allow_module_level=True)
-if importlib.util.find_spec("onnx_light_cpu.onnx_py._cpuregister") is None:
-    pytest.skip(
-        "the _cpuregister extension is not built (ONNX_LIGHT_CPU_WITH_ONNX_LIGHT=OFF)",
-        allow_module_level=True,
-    )
-
-from onnx_light.onnx import TensorProto, helper  # noqa: E402
-from onnx_light.onnx.reference import ReferenceEvaluator  # noqa: E402
-
-from onnx_light_cpu import register_kernels  # noqa: E402
+from onnx_light_cpu import register_kernels
 
 
 def _run(node, inputs, output_types):
