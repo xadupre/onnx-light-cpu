@@ -94,7 +94,8 @@ Tensor GemmKernel::operator()(const Tensor &a, const Tensor &b, const Tensor *c,
   const std::size_t K_b = trans_b ? b_cols : b_rows;
   const std::size_t N = trans_b ? b_rows : b_cols;
   if (K != K_b) {
-    throw std::invalid_argument("onnx_light_cpu::GemmKernel: inner dimensions of A and B mismatch.");
+    throw std::invalid_argument(
+        "onnx_light_cpu::GemmKernel: inner dimensions of A and B mismatch.");
   }
 
   const Shape out_shape{static_cast<std::int64_t>(M), static_cast<std::int64_t>(N)};

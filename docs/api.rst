@@ -115,11 +115,15 @@ an additional library ``lib_onnx_light_cpu_kernels`` is produced. It declares
    // Not equivalent delegating to the SIMD NotBool routine.
    class NotKernel : public onnx_light::core::runtime::KernelBase { ... };
 
+   // Gemm equivalent delegating to the register-blocked SIMD Gemm* routines.
+   class GemmKernel : public onnx_light::core::runtime::KernelBase { ... };
+
    // Registers the kernels into onnx-light's shared KernelDispatchTable for the
    // default ONNX domain / CPU device, overriding the built-in operators.
    void RegisterAbsKernel();   // Abs
    void RegisterExpKernel();   // Exp
    void RegisterLogKernel();   // Log
+   void RegisterGemmKernel();  // Gemm
    void RegisterNotKernel();   // Not
 
    // Convenience wrapper registering all of the kernels above in one call.
@@ -127,10 +131,10 @@ an additional library ``lib_onnx_light_cpu_kernels`` is produced. It declares
 
    } // namespace onnx_light_cpu
 
-``AbsKernel``, ``ExpKernel``, ``LogKernel`` and ``NotKernel`` are full
-``KernelBase`` subclasses, so once the matching ``Register*`` function (or
-``RegisterAllKernels``) has run every ``Abs``/``Exp``/``Log``/``Not`` node
-executed by onnx-light's runtime (and therefore any model run through
+``AbsKernel``, ``ExpKernel``, ``LogKernel``, ``GemmKernel`` and ``NotKernel`` are
+full ``KernelBase`` subclasses, so once the matching ``Register*`` function (or
+``RegisterAllKernels``) has run every ``Abs``/``Exp``/``Log``/``Gemm``/``Not``
+node executed by onnx-light's runtime (and therefore any model run through
 ``ReferenceEvaluator``) resolves to the SIMD-accelerated kernel.
 
 Python API
@@ -164,9 +168,10 @@ Python API
 
 .. py:function:: register_all_kernels() -> None
 
-   Registers every onnx-light-cpu kernel class (``Abs``, ``Exp``, ``Log`` and
-   ``Not``) into onnx-light's C++ ``KernelDispatchTable`` for the CPU device,
-   replacing the corresponding built-in entries for the default ONNX domain.
+   Registers every onnx-light-cpu kernel class (``Abs``, ``Exp``, ``Log``,
+   ``Gemm`` and ``Not``) into onnx-light's C++ ``KernelDispatchTable`` for the
+   CPU device, replacing the corresponding built-in entries for the default
+   ONNX domain.
    This is the Python binding for the C++ :cpp:func:`RegisterAllKernels`
    function and is only available in builds compiled with the onnx-light
    integration enabled (``ONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON``).
