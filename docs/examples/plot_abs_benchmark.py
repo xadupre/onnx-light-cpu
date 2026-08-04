@@ -102,6 +102,7 @@ else:
 def run_light(inp):
     return light_session.run(None, {"X": inp})[0]
 
+
 # %%
 # Setup cost: why the evaluator is as slow to build as onnxruntime
 # ----------------------------------------------------------------

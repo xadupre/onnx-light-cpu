@@ -87,6 +87,7 @@ else:
 def run_light(a, b):
     return light_session.run(None, {"A": a, "B": b})[0]
 
+
 # %%
 # Timing helper
 # -------------

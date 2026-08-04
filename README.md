@@ -85,63 +85,25 @@ target_link_libraries(my_app PRIVATE onnx_light_cpu::lib_onnx_light_cpu)
 
 ## Python usage
 
-```python
-import numpy as np
-from onnx_light_cpu.onnx_py._cpukernels import abs, detect_simd_level
+The Python extension exposes only the SIMD-detection helpers; the kernels
+themselves are reached through onnx-light's runtime after registration (see
+below), not as standalone numpy-like functions.
 
-# Check what SIMD level is available
+```python
+from onnx_light_cpu.onnx_py._cpukernels import detect_simd_level, has_cpu_kernels
+
+# Check that the CPU kernel extension is available and which SIMD level it uses
+assert has_cpu_kernels()
 level = detect_simd_level()  # 0=None, 1=SSE2, 2=AVX, 3=AVX2, 4=AVX512
 print(f"SIMD level: {level}")
-
-# Compute abs. A single ``abs`` function dispatches on the array dtype
-# (float16, float32, float64, int8, int32, int64) and returns a new array,
-# like numpy.abs.
-inp = np.array([-1.0, 2.0, -3.0, 4.0], dtype=np.float32)
-out = abs(inp)
-print(out)  # [1. 2. 3. 4.]
-```
-
-The ``exp`` and ``log`` functions work the same way and dispatch on the array
-dtype (float16, float32, float64):
-
-```python
-from onnx_light_cpu.onnx_py._cpukernels import exp, log
-
-x = np.array([0.0, 1.0, 2.0], dtype=np.float32)
-print(exp(x))  # [1.       2.7182817 7.389056 ]
-print(log(exp(x)))  # [0. 1. 2.]
-```
-
-The ``logical_not`` function implements the ONNX ``Not`` operator on ``bool``
-arrays, like ``numpy.logical_not``:
-
-```python
-from onnx_light_cpu.onnx_py._cpukernels import logical_not
-
-b = np.array([True, False, True], dtype=np.bool_)
-print(logical_not(b))  # [False  True False]
-```
-
-The ``gemm`` function implements the ONNX ``Gemm`` operator, computing
-``Y = alpha * op(A) @ op(B) + beta * C`` for ``float32``/``float64`` matrices
-with an AVX-accelerated kernel. ``op(A)`` transposes ``A`` when ``trans_a`` is
-set, ``op(B)`` transposes ``B`` when ``trans_b`` is set, and the bias ``c`` is
-optional:
-
-```python
-import numpy as np
-from onnx_light_cpu.onnx_py._cpukernels import gemm
-
-a = np.random.default_rng(0).standard_normal((4, 3)).astype(np.float32)
-b = np.random.default_rng(1).standard_normal((3, 5)).astype(np.float32)
-print(gemm(a, b, beta=0.0))  # ~ a @ b
 ```
 
 ### Running an ONNX model with onnx-light
 
-`register_kernels` plugs the SIMD-accelerated kernels into an
-[onnx-light](https://github.com/xadupre/onnx-light) `ReferenceEvaluator` so any
-ONNX model using `Abs`, `Exp`, `Log` or `Not` runs the optimized kernel:
+`register_kernels` installs the SIMD-accelerated kernels into
+[onnx-light](https://github.com/xadupre/onnx-light)'s shared C++ kernel
+dispatch table so any ONNX model using `Abs`, `Exp`, `Log`, `Gemm` or `Not`
+runs the optimized kernel when evaluated through a `ReferenceEvaluator`:
 
 ```python
 import numpy as np
@@ -149,10 +111,14 @@ from onnx_light.onnx.reference import ReferenceEvaluator
 
 from onnx_light_cpu import register_kernels
 
+register_kernels()  # installs the kernels into onnx-light's dispatch table
 sess = ReferenceEvaluator(model)  # any model containing an Abs node
-register_kernels(sess)
 (y,) = sess.run(None, {"x": np.array([-1.0, 2.0, -3.0], dtype=np.float32)})
 ```
+
+`register_kernels` is only available in builds compiled with the onnx-light
+integration (`-DONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON`); it wraps the compiled
+`onnx_light_cpu.onnx_py._cpuregister.register_all_kernels()` binding.
 
 For a native C++ integration, build with `-DONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON`
 (requires the [onnx-light](https://github.com/xadupre/onnx-light) C++ package).
