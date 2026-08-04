@@ -91,6 +91,14 @@ class TestAbsKernel:
         assert out.dtype == np.int16
         np.testing.assert_array_equal(out, np.abs(inp))
 
+    def test_read_only_input(self):
+        inp = np.array([[-1.0, 2.0], [-3.0, 4.0]], dtype=np.float32)
+        inp.setflags(write=False)
+        out = _abs_kernel(None, inp)
+        assert out.shape == inp.shape
+        np.testing.assert_array_equal(out, np.abs(inp))
+        assert inp[0, 0] == -1.0
+
 
 class TestExpKernel:
     @pytest.mark.parametrize("dtype", [np.float16, np.float32, np.float64])
@@ -105,6 +113,12 @@ class TestExpKernel:
         out = _exp_kernel(None, inp)
         np.testing.assert_allclose(out, np.exp(inp))
 
+    def test_read_only_input(self):
+        inp = np.array([0.0, 1.0, 2.0], dtype=np.float32)
+        inp.setflags(write=False)
+        out = _exp_kernel(None, inp)
+        np.testing.assert_allclose(out, np.exp(inp), rtol=1e-2, atol=1e-3)
+
 
 class TestLogKernel:
     @pytest.mark.parametrize("dtype", [np.float16, np.float32, np.float64])
@@ -118,6 +132,12 @@ class TestLogKernel:
         inp = np.array([1, 2, 3], dtype=np.int32)
         out = _log_kernel(None, inp)
         np.testing.assert_allclose(out, np.log(inp))
+
+    def test_read_only_input(self):
+        inp = np.array([0.5, 1.0, 2.0], dtype=np.float32)
+        inp.setflags(write=False)
+        out = _log_kernel(None, inp)
+        np.testing.assert_allclose(out, np.log(inp), rtol=1e-2, atol=1e-3)
 
 
 class TestNotKernel:
@@ -149,3 +169,10 @@ class TestNotKernel:
         inp = np.array([0, 1, 2], dtype=np.int32)
         out = _not_kernel(None, inp)
         np.testing.assert_array_equal(out, np.logical_not(inp))
+
+    def test_read_only_input(self):
+        inp = np.array([True, False, True], dtype=np.bool_)
+        inp.setflags(write=False)
+        out = _not_kernel(None, inp)
+        np.testing.assert_array_equal(out, np.logical_not(inp))
+        assert inp[0]
