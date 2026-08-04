@@ -13,13 +13,18 @@ model per operator and run it through onnx-light's ``ReferenceEvaluator`` to
 check that each kernel produces the expected result.
 
 onnx-light and the ``_cpuregister`` extension (built with
-``ONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON``) are assumed to be available.
+``ONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON``) are required; when either is missing the
+whole module is skipped via :func:`pytest.importorskip`.
 """
 
 from __future__ import annotations
 
 import numpy as np
 import pytest
+
+pytest.importorskip("onnx_light")
+pytest.importorskip("onnx_light_cpu.onnx_py._cpuregister")
+
 from onnx_light.onnx import TensorProto, helper
 from onnx_light.onnx.reference import ReferenceEvaluator
 

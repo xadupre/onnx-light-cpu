@@ -69,8 +69,15 @@ session = onnxruntime.InferenceSession(
 )
 
 light_label = "onnx-light + onnx-light-cpu"
-register_kernels()
-light_session = ReferenceEvaluator(model)
+# ``register_kernels()`` needs the ``_cpuregister`` extension, which is only
+# built with ``ONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON``. When it is missing (as in
+# the documentation build) the onnx-light-cpu curve is simply omitted; the
+# import above stays unconditional.
+try:
+    register_kernels()
+    light_session = ReferenceEvaluator(model)
+except ImportError:
+    light_session = None
 
 
 def run_light(a, b):
@@ -116,8 +123,11 @@ for size in sizes:
 
     numpy_time = measure(lambda a=a, b=b: a @ b, repeat)
 
-    cpu_time = measure(lambda a=a, b=b: run_light(a, b), repeat)
-    np.testing.assert_allclose(run_light(a, b), expected, rtol=1e-2, atol=1e-2)
+    if light_session is not None:
+        cpu_time = measure(lambda a=a, b=b: run_light(a, b), repeat)
+        np.testing.assert_allclose(run_light(a, b), expected, rtol=1e-2, atol=1e-2)
+    else:
+        cpu_time = float("nan")
 
     ort_time = measure(lambda a=a, b=b: session.run(None, {"A": a, "B": b}), repeat)
     np.testing.assert_allclose(
@@ -151,7 +161,8 @@ import matplotlib.pyplot as plt
 fig, (ax_time, ax_speedup) = plt.subplots(1, 2, figsize=(11, 4.5))
 
 ax_time.plot(sizes, numpy_times * 1e6, "o--", label="numpy", color="#9b7ec8")
-ax_time.plot(sizes, cpu_times * 1e6, "o-", label=light_label, color="#4a9eff")
+if light_session is not None:
+    ax_time.plot(sizes, cpu_times * 1e6, "o-", label=light_label, color="#4a9eff")
 ax_time.plot(sizes, ort_times * 1e6, "o-", label="onnxruntime", color="#f4a259")
 ax_time.set_xscale("log")
 ax_time.set_yscale("log")
@@ -162,7 +173,8 @@ ax_time.tick_params(axis="x", labelrotation=45)
 ax_time.legend()
 
 ax_speedup.plot(sizes, ort_times / numpy_times, "o--", label="numpy", color="#9b7ec8")
-ax_speedup.plot(sizes, ort_times / cpu_times, "o-", label=light_label, color="#4a9eff")
+if light_session is not None:
+    ax_speedup.plot(sizes, ort_times / cpu_times, "o-", label=light_label, color="#4a9eff")
 ax_speedup.plot(sizes, ort_times / ort_times, "o-", label="onnxruntime", color="#f4a259")
 ax_speedup.axhline(1.0, color="grey", linewidth=0.8, linestyle=":")
 ax_speedup.set_xscale("log")
