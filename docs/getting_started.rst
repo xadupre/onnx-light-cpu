@@ -47,13 +47,14 @@ Quick Start (Python)
 
 .. code-block:: python
 
-   import numpy as np
-   from onnx_light_cpu.onnx_py._cpukernels import abs, detect_simd_level
+   from onnx_light_cpu import register_kernels
+   from onnx_light_cpu.onnx_py._cpukernels import detect_simd_level, has_cpu_kernels
 
    # Check what SIMD level is available:
    # 0=None, 1=SSE2, 2=AVX, 3=AVX2, 4=AVX512
+   print("CPU kernels available:", has_cpu_kernels())
    print("SIMD level:", detect_simd_level())
 
-   inp = np.array([-1.0, 2.0, -3.0, 4.0], dtype=np.float32)
-   out = abs(inp)  # dispatches on dtype, returns a new array like numpy.abs
-   print(out)  # [1. 2. 3. 4.]
+   # When onnx-light is installed, register the optimized kernels globally so
+   # ReferenceEvaluator uses them for supported ONNX operators.
+   register_kernels()

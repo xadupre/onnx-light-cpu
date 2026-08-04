@@ -85,7 +85,8 @@ file(GLOB PY_KERNELS_SOURCES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/onnx_py/*.cc"
 )
 # The kernel-registration binding (_cpuregister) links onnx-light and is built
-# as a separate module below; keep it out of the numpy-style _cpukernels module.
+# as a separate module below; keep it out of the _cpukernels module, which only
+# exposes the SIMD detection helpers.
 list(REMOVE_ITEM PY_KERNELS_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/onnx_py/_cpuregister.cc")
 

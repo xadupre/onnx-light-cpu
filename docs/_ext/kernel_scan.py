@@ -9,7 +9,7 @@ form::
 
     void AbsFloat32(const float *input, float *output, std::size_t count);
 
-This module extracts ``(operator, data type, function)`` triples from those
+This module extracts ``(operator, data type, C++ function)`` triples from those
 declarations so the documentation can present an always up-to-date table of the
 available CPU kernels without any manual bookkeeping.
 """
@@ -97,15 +97,3 @@ def group_by_operator(kernels: List[Kernel]) -> OrderedDict[str, List[Tuple[str,
     for operator, dtype, function in kernels:
         grouped.setdefault(operator, []).append((dtype, function))
     return grouped
-
-
-def operator_function(operator: str) -> str:
-    """Return the single public function exposed for ``operator``.
-
-    Each operator is exposed through a single numpy-like Python function that
-    dispatches on the array data type (for example ``Abs`` -> ``abs``), so the
-    documentation lists one function per operator rather than one per data type.
-    The ``Not`` operator maps to ``logical_not`` because ``not`` is a Python
-    keyword.
-    """
-    return {"Not": "logical_not"}.get(operator, operator.lower())

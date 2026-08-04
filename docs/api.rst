@@ -147,22 +147,14 @@ Python API
    Returns the detected SIMD level: ``0=None``, ``1=SSE2``, ``2=AVX``,
    ``3=AVX2``, ``4=AVX512``.
 
-.. py:function:: abs(input)
-
-   Computes the elementwise absolute value of a 1-D array using the optimized
-   SIMD dispatch. ``input`` must be a contiguous CPU array with dtype
-   ``float32``, ``float64``, ``int32`` or ``int64``; the function dispatches on
-   the dtype and returns a new array of the same dtype, like :func:`numpy.abs`.
-
-.. py:function:: logical_not(input)
-
-   Computes the elementwise logical negation of a 1-D ``bool`` array using the
-   optimized SIMD dispatch and returns a new ``bool`` array, like
-   :func:`numpy.logical_not`.
-
 .. py:function:: has_cpu_kernels() -> bool
 
    Returns ``True`` when the CPU kernel extension is available.
+
+The compiled kernels themselves (``Abs``, ``Exp``, ``Log``, ``Gemm``, ``Not``)
+are not exposed as numpy-like Python functions; they are reachable through
+onnx-light's runtime after registration (see :func:`register_all_kernels` and
+:func:`onnx_light_cpu.register_kernels`).
 
 .. py:module:: onnx_light_cpu.onnx_py._cpuregister
 
@@ -182,15 +174,16 @@ Registering kernels with onnx-light
 
 .. py:module:: onnx_light_cpu
 
-.. py:function:: register_kernels(sess, domain="")
+.. py:function:: register_kernels(sess=None)
 
-   Registers the onnx-light-cpu kernels on an ``onnx-light``
-   ``ReferenceEvaluator`` (any object exposing a compatible
-   ``register_custom_kernel(domain, op_type, fn)`` method). After this call,
-   every ``Abs``, ``Exp``, ``Log`` and ``Not`` node evaluated by ``sess``
-   dispatches to the SIMD-accelerated onnx-light-cpu kernel instead of the
-   built-in one, so any ONNX model using those operators benefits from the
-   optimized kernel. Returns ``sess`` so calls can be chained.
+   Registers the onnx-light-cpu kernels into onnx-light's shared C++
+   ``KernelDispatchTable`` for the CPU device by calling
+   :func:`register_all_kernels`. After this call, every ``Abs``, ``Exp``,
+   ``Log``, ``Gemm`` and ``Not`` node executed by onnx-light's runtime (and
+   therefore any model run through ``ReferenceEvaluator``) dispatches to the
+   SIMD-accelerated onnx-light-cpu kernel instead of the built-in one. The
+   registration is global, so ``sess`` is optional and only returned unchanged
+   so calls can be chained.
 
    .. code-block:: python
 
@@ -198,6 +191,6 @@ Registering kernels with onnx-light
       from onnx_light.onnx.reference import ReferenceEvaluator
       from onnx_light_cpu import register_kernels
 
+      register_kernels()
       sess = ReferenceEvaluator(model)
-      register_kernels(sess)
       (y,) = sess.run(None, {"x": np.array([-1.0, 2.0], dtype=np.float32)})

@@ -27,8 +27,8 @@ _EXAMPLES_DIR = _ROOT / "docs" / "examples"
 # script imports it).
 _REQUIREMENTS = {
     "plot_abs_simd.py": ("matplotlib",),
-    "plot_abs_benchmark.py": ("matplotlib", "onnx", "onnxruntime"),
-    "plot_gemm_benchmark.py": ("matplotlib", "onnx", "onnxruntime"),
+    "plot_abs_benchmark.py": ("matplotlib", "onnx", "onnxruntime", "onnx_light"),
+    "plot_gemm_benchmark.py": ("matplotlib", "onnx", "onnxruntime", "onnx_light"),
 }
 
 

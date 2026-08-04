@@ -2,27 +2,27 @@
 Benchmark Gemm: numpy vs onnxruntime vs onnx-light-cpu
 ======================================================
 
-This example compares three ways of computing a ``float32`` general matrix
+This example compares up to three ways of computing a ``float32`` general matrix
 multiplication ``Y = A @ B`` for square matrices of increasing size:
 
 * **numpy** - :func:`numpy.matmul` (``A @ B``), which dispatches to the platform
   BLAS and is used here as the reference baseline.
 * **onnxruntime** - running a single-node ``Gemm`` ONNX model.
-* **onnx-light-cpu** - the AVX-accelerated ``gemm`` kernel exposed by the
-  compiled extension (:func:`onnx_light_cpu.onnx_py._cpukernels.gemm`), which
-  provides runtime AVX-512/AVX2/AVX/SSE2 dispatch.
+* **onnx-light + onnx-light-cpu** - the SIMD-accelerated ``Gemm`` kernel that
+  ``onnx-light`` dispatches to after :func:`onnx_light_cpu.register_kernels`
+  installs the optimized kernel implementation.
 
-All three back-ends compute the same result; the goal is to see how their
-timings evolve as the matrices grow.
+The available back-ends compute the same result; the goal is to see how their
+timings evolve as the matrices grow. The onnx-light-cpu curve is skipped when
+the package was built without the onnx-light C++ integration.
 """
 
 # %%
 # Setup
 # -----
 #
-# Import the compiled ``gemm`` kernel and report which SIMD level the current
-# CPU provides. The mapping is ``0=None``, ``1=SSE2``, ``2=AVX``, ``3=AVX2`` and
-# ``4=AVX512``.
+# Report which SIMD level the current CPU provides. The mapping is ``0=None``,
+# ``1=SSE2``, ``2=AVX``, ``3=AVX2`` and ``4=AVX512``.
 
 import time
 
@@ -34,11 +34,7 @@ import onnxruntime
 # onnx-light rather than onnx.
 from onnx_light.onnx import TensorProto, checker, helper
 
-from onnx_light_cpu.onnx_py._cpukernels import (
-    detect_simd_level,
-    gemm,
-    has_cpu_kernels,
-)
+from onnx_light_cpu.onnx_py._cpukernels import detect_simd_level, has_cpu_kernels
 
 _SIMD_NAMES = {0: "scalar", 1: "SSE2", 2: "AVX", 3: "AVX2", 4: "AVX-512"}
 
@@ -52,7 +48,7 @@ print(f"CPU kernels available, SIMD level: {level} ({simd_name})")
 # ---------------------------
 #
 # A single ``Gemm`` node multiplying two 2-D ``float32`` tensors of dynamic
-# shape is enough to benchmark onnxruntime. The bias input ``C`` is omitted so
+# shape is enough to benchmark both runtimes. The bias input ``C`` is omitted so
 # the node computes ``A @ B``.
 
 graph = helper.make_graph(
@@ -70,6 +66,26 @@ checker.check_model(model)
 session = onnxruntime.InferenceSession(
     model.SerializeToString(), providers=["CPUExecutionProvider"]
 )
+
+light_label = "onnx-light + onnx-light-cpu"
+light_session = None
+
+try:
+    from onnx_light.onnx.reference import ReferenceEvaluator
+    from onnx_light_cpu import register_kernels
+
+    register_kernels()
+except (ImportError, ModuleNotFoundError) as exc:
+    print(
+        "Skipping onnx-light-cpu comparison: accelerated kernel registration is "
+        f"unavailable ({exc}). Build with ONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON to enable it."
+    )
+else:
+    light_session = ReferenceEvaluator(model)
+
+
+def run_light(a, b):
+    return light_session.run(None, {"A": a, "B": b})[0]
 
 # %%
 # Timing helper
@@ -110,8 +126,10 @@ for size in sizes:
 
     numpy_time = measure(lambda a=a, b=b: a @ b, repeat)
 
-    cpu_time = measure(lambda a=a, b=b: gemm(a, b, beta=0.0), repeat)
-    np.testing.assert_allclose(gemm(a, b, beta=0.0), expected, rtol=1e-2, atol=1e-2)
+    cpu_time = None
+    if light_session is not None:
+        cpu_time = measure(lambda a=a, b=b: run_light(a, b), repeat)
+        np.testing.assert_allclose(run_light(a, b), expected, rtol=1e-2, atol=1e-2)
 
     ort_time = measure(lambda a=a, b=b: session.run(None, {"A": a, "B": b}), repeat)
     np.testing.assert_allclose(
@@ -119,16 +137,18 @@ for size in sizes:
     )
 
     rows.append((size, numpy_time, cpu_time, ort_time))
+    cpu_text = "skipped" if cpu_time is None else f"{cpu_time * 1e6:10.2f} us"
     print(
         f"size={size:>4}x{size:<4} | numpy={numpy_time * 1e6:10.2f} us | "
-        f"onnx-light-cpu={cpu_time * 1e6:10.2f} us | "
+        f"onnx-light-cpu={cpu_text} | "
         f"onnxruntime={ort_time * 1e6:10.2f} us"
     )
 
 sizes = np.array([r[0] for r in rows])
 numpy_times = np.array([r[1] for r in rows])
-cpu_times = np.array([r[2] for r in rows])
+cpu_times = np.array([r[2] for r in rows if r[2] is not None])
 ort_times = np.array([r[3] for r in rows])
+has_light_results = len(cpu_times) == len(sizes)
 
 # %%
 # Plot the timings
@@ -145,7 +165,8 @@ import matplotlib.pyplot as plt
 fig, (ax_time, ax_speedup) = plt.subplots(1, 2, figsize=(11, 4.5))
 
 ax_time.plot(sizes, numpy_times * 1e6, "o--", label="numpy", color="#9b7ec8")
-ax_time.plot(sizes, cpu_times * 1e6, "o-", label="onnx-light-cpu", color="#4a9eff")
+if has_light_results:
+    ax_time.plot(sizes, cpu_times * 1e6, "o-", label=light_label, color="#4a9eff")
 ax_time.plot(sizes, ort_times * 1e6, "o-", label="onnxruntime", color="#f4a259")
 ax_time.set_xscale("log")
 ax_time.set_yscale("log")
@@ -156,7 +177,8 @@ ax_time.tick_params(axis="x", labelrotation=45)
 ax_time.legend()
 
 ax_speedup.plot(sizes, ort_times / numpy_times, "o--", label="numpy", color="#9b7ec8")
-ax_speedup.plot(sizes, ort_times / cpu_times, "o-", label="onnx-light-cpu", color="#4a9eff")
+if has_light_results:
+    ax_speedup.plot(sizes, ort_times / cpu_times, "o-", label=light_label, color="#4a9eff")
 ax_speedup.plot(sizes, ort_times / ort_times, "o-", label="onnxruntime", color="#f4a259")
 ax_speedup.axhline(1.0, color="grey", linewidth=0.8, linestyle=":")
 ax_speedup.set_xscale("log")
