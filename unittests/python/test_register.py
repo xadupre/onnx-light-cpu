@@ -215,3 +215,15 @@ class TestGemmKernel:
         b = np.array([[5, 6], [7, 8]], dtype=np.int64)
         out = _gemm_kernel(_gemm_node(beta=0.0), a, b)
         np.testing.assert_array_equal(out, a @ b)
+
+    def test_read_only_inputs(self):
+        # onnx-light hands over read-only DLPack views; the compiled kernel
+        # rejects read-only buffers, so the inputs must be copied.
+        rng = np.random.default_rng(5)
+        a = rng.standard_normal((4, 3)).astype(np.float32)
+        b = rng.standard_normal((3, 5)).astype(np.float32)
+        c = rng.standard_normal((4, 5)).astype(np.float32)
+        for arr in (a, b, c):
+            arr.flags.writeable = False
+        out = _gemm_kernel(_gemm_node(alpha=2.0, beta=0.5), a, b, c)
+        np.testing.assert_allclose(out, 2.0 * (a @ b) + 0.5 * c, rtol=1e-4, atol=1e-4)

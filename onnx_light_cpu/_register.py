@@ -142,6 +142,20 @@ def _gemm_attr(node: Any, name: str, default: float) -> float:
     return default
 
 
+def _writeable_2d(arr: np.ndarray) -> np.ndarray:
+    """Returns a writeable, C-contiguous 2-D array from ``arr``.
+
+    The compiled ``gemm`` kernel binds to a mutable 2-D ``nb::ndarray`` and
+    rejects read-only buffers. ``onnx-light`` hands over zero-copy DLPack views
+    that are read-only, so the data is copied when it is not already a writeable
+    contiguous buffer.
+    """
+    mat = np.ascontiguousarray(arr)
+    if not mat.flags.writeable:
+        mat = mat.copy()
+    return mat
+
+
 def _gemm_kernel(
     node: Any, a: np.ndarray, b: np.ndarray, c: np.ndarray | None = None
 ) -> np.ndarray:
@@ -161,9 +175,15 @@ def _gemm_kernel(
     arr_a = np.ascontiguousarray(a)
     arr_b = np.ascontiguousarray(b)
     if arr_a.dtype in _GEMM_DTYPES and arr_b.dtype == arr_a.dtype:
-        arr_c = None if c is None else np.ascontiguousarray(c)
+        arr_c = None if c is None else _writeable_2d(c)
         return _gemm(
-            arr_a, arr_b, arr_c, alpha=alpha, beta=beta, trans_a=trans_a, trans_b=trans_b
+            _writeable_2d(arr_a),
+            _writeable_2d(arr_b),
+            arr_c,
+            alpha=alpha,
+            beta=beta,
+            trans_a=trans_a,
+            trans_b=trans_b,
         )
 
     op_a = arr_a.T if trans_a else arr_a
