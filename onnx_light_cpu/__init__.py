@@ -6,8 +6,8 @@ Exp and Log (float16, float32, float64), and Not (bool).
 Uses AVX/AVX2/AVX-512 when available, with SSE2 and scalar fallbacks.
 
 The :func:`register_kernels` helper plugs these kernels into an ``onnx-light``
-``ReferenceEvaluator`` so any ONNX model using ``Abs``, ``Exp``, ``Log`` or
-``Not`` runs the optimized kernel.
+``ReferenceEvaluator`` so any ONNX model using ``Abs``, ``Exp``, ``Log``,
+``Not`` or ``Gemm`` runs the optimized kernel.
 """
 
 from ._register import register_kernels
