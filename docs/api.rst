@@ -182,9 +182,9 @@ Registering kernels with onnx-light
    Registers the onnx-light-cpu kernels on an ``onnx-light``
    ``ReferenceEvaluator`` (any object exposing a compatible
    ``register_custom_kernel(domain, op_type, fn)`` method). After this call,
-   every ``Abs``, ``Exp``, ``Log`` and ``Not`` node evaluated by ``sess``
-   dispatches to the SIMD-accelerated onnx-light-cpu kernel instead of the
-   built-in one, so any ONNX model using those operators benefits from the
+   every ``Abs``, ``Exp``, ``Log``, ``Not`` and ``Gemm`` node evaluated by
+   ``sess`` dispatches to the SIMD-accelerated onnx-light-cpu kernel instead of
+   the built-in one, so any ONNX model using those operators benefits from the
    optimized kernel. Returns ``sess`` so calls can be chained.
 
    .. code-block:: python

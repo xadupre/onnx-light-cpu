@@ -6,7 +6,13 @@ import numpy as np
 import pytest
 
 from onnx_light_cpu import register_kernels
-from onnx_light_cpu._register import _abs_kernel, _exp_kernel, _log_kernel, _not_kernel
+from onnx_light_cpu._register import (
+    _abs_kernel,
+    _exp_kernel,
+    _gemm_kernel,
+    _log_kernel,
+    _not_kernel,
+)
 
 
 class FakeEvaluator:
@@ -41,6 +47,11 @@ class TestRegisterKernels:
         register_kernels(sess)
         assert ("", "Not") in sess.kernels
 
+    def test_registers_gemm_on_default_domain(self):
+        sess = FakeEvaluator()
+        register_kernels(sess)
+        assert ("", "Gemm") in sess.kernels
+
     def test_custom_domain(self):
         sess = FakeEvaluator()
         register_kernels(sess, domain="ai.onnx")
@@ -48,6 +59,7 @@ class TestRegisterKernels:
         assert ("ai.onnx", "Exp") in sess.kernels
         assert ("ai.onnx", "Log") in sess.kernels
         assert ("ai.onnx", "Not") in sess.kernels
+        assert ("ai.onnx", "Gemm") in sess.kernels
 
     def test_registered_kernel_computes_abs(self):
         sess = FakeEvaluator()
@@ -176,3 +188,73 @@ class TestNotKernel:
         out = _not_kernel(None, inp)
         np.testing.assert_array_equal(out, np.logical_not(inp))
         assert inp[0]
+
+
+class _FakeAttribute:
+    """Minimal stand-in for onnx's ``AttributeProto`` scalar attributes."""
+
+    # AttributeProto.AttributeType codes: FLOAT=1, INT=2.
+    def __init__(self, name, *, f=None, i=None):
+        self.name = name
+        if f is not None:
+            self.type = 1
+            self.f = f
+            self.i = 0
+        else:
+            self.type = 2
+            self.i = i
+            self.f = 0.0
+
+
+class _FakeNode:
+    """Minimal stand-in for onnx's ``NodeProto`` carrying Gemm attributes."""
+
+    def __init__(self, **attrs):
+        attributes = []
+        for name, value in attrs.items():
+            if isinstance(value, float):
+                attributes.append(_FakeAttribute(name, f=value))
+            else:
+                attributes.append(_FakeAttribute(name, i=int(value)))
+        self.attribute = attributes
+
+
+class TestGemmKernel:
+    @pytest.mark.parametrize("dtype", [np.float32, np.float64])
+    def test_supported_dtypes(self, dtype):
+        rng = np.random.default_rng(0)
+        a = rng.standard_normal((3, 4)).astype(dtype)
+        b = rng.standard_normal((4, 5)).astype(dtype)
+        out = _gemm_kernel(_FakeNode(), a, b)
+        assert out.dtype == dtype
+        np.testing.assert_allclose(out, a @ b, rtol=1e-4, atol=1e-4)
+
+    def test_alpha_beta_and_bias(self):
+        rng = np.random.default_rng(1)
+        a = rng.standard_normal((2, 3)).astype(np.float32)
+        b = rng.standard_normal((3, 4)).astype(np.float32)
+        c = rng.standard_normal((2, 4)).astype(np.float32)
+        node = _FakeNode(alpha=2.0, beta=0.5)
+        out = _gemm_kernel(node, a, b, c)
+        np.testing.assert_allclose(out, 2.0 * (a @ b) + 0.5 * c, rtol=1e-4, atol=1e-4)
+
+    def test_transpose_a_and_b(self):
+        rng = np.random.default_rng(2)
+        a = rng.standard_normal((3, 2)).astype(np.float32)  # op(A) is 2x3
+        b = rng.standard_normal((4, 3)).astype(np.float32)  # op(B) is 3x4
+        node = _FakeNode(transA=1, transB=1)
+        out = _gemm_kernel(node, a, b)
+        np.testing.assert_allclose(out, a.T @ b.T, rtol=1e-4, atol=1e-4)
+
+    def test_unsupported_dtype_falls_back_to_numpy(self):
+        a = np.arange(6, dtype=np.int64).reshape(2, 3)
+        b = np.arange(12, dtype=np.int64).reshape(3, 4)
+        node = _FakeNode(alpha=2.0)
+        out = _gemm_kernel(node, a, b)
+        np.testing.assert_array_equal(out, 2.0 * (a @ b))
+
+    def test_mixed_dtype_falls_back_to_numpy(self):
+        a = np.ones((2, 3), dtype=np.float32)
+        b = np.ones((3, 2), dtype=np.float64)
+        out = _gemm_kernel(_FakeNode(), a, b)
+        np.testing.assert_allclose(out, a @ b)

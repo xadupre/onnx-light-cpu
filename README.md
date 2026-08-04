@@ -141,7 +141,7 @@ print(gemm(a, b, beta=0.0))  # ~ a @ b
 
 `register_kernels` plugs the SIMD-accelerated kernels into an
 [onnx-light](https://github.com/xadupre/onnx-light) `ReferenceEvaluator` so any
-ONNX model using `Abs`, `Exp`, `Log` or `Not` runs the optimized kernel:
+ONNX model using `Abs`, `Exp`, `Log`, `Not` or `Gemm` runs the optimized kernel:
 
 ```python
 import numpy as np
