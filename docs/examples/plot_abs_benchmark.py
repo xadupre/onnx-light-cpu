@@ -2,7 +2,7 @@
 Benchmark Abs: onnxruntime vs onnx-light + onnx-light-cpu
 =========================================================
 
-This example compares three ways of computing the elementwise absolute value
+This example compares up to three ways of computing the elementwise absolute value
 of a ``float32`` array across a range of input sizes:
 
 * **onnxruntime** - running a single-node ``Abs`` ONNX model.
@@ -14,7 +14,7 @@ of a ``float32`` array across a range of input sizes:
   AVX-512/AVX2/AVX/SSE2 dispatch.
 * **numpy** - :func:`numpy.abs`, used as a reference baseline.
 
-The three back-ends compute the same result; the goal here is to see how their
+The back-ends compute the same result; the goal here is to see how their
 timings evolve as the array grows from a few hundred to a hundred million
 elements.
 """
@@ -23,9 +23,8 @@ elements.
 # Setup
 # -----
 #
-# Import the ``onnx-light-cpu`` registration helper and report which SIMD level
-# the current CPU provides. The mapping is ``0=None``, ``1=SSE2``, ``2=AVX``,
-# ``3=AVX2`` and ``4=AVX512``.
+# Report which SIMD level the current CPU provides. The mapping is ``0=None``,
+# ``1=SSE2``, ``2=AVX``, ``3=AVX2`` and ``4=AVX512``.
 
 import time
 
@@ -36,12 +35,10 @@ import onnxruntime
 # ``onnx`` package; use it to build the model so the example depends on
 # onnx-light rather than onnx.
 from onnx_light.onnx import TensorProto, checker, helper
+from onnx_light.onnx.reference import ReferenceEvaluator
 
 from onnx_light_cpu import register_kernels
-from onnx_light_cpu.onnx_py._cpukernels import (
-    detect_simd_level,
-    has_cpu_kernels,
-)
+from onnx_light_cpu.onnx_py._cpukernels import detect_simd_level, has_cpu_kernels
 
 _SIMD_NAMES = {0: "scalar", 1: "SSE2", 2: "AVX", 3: "AVX2", 4: "AVX-512"}
 
@@ -83,19 +80,23 @@ ort_setup_time = time.perf_counter() - _ort_setup_start
 # onnx-light-cpu kernels overrides the built-in ``Abs`` so every ``Abs`` node in
 # the model dispatches to the SIMD-accelerated kernel.
 
-from onnx_light.onnx.reference import ReferenceEvaluator
-
 _light_setup_start = time.perf_counter()
-light_session = ReferenceEvaluator(model)
-register_kernels(light_session)
+light_label = "onnx-light + onnx-light-cpu"
+# ``register_kernels()`` needs the ``_cpuregister`` extension, which is only
+# built with ``ONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON``. When it is missing (as in
+# the documentation build) the onnx-light-cpu curve is simply omitted; the
+# import above stays unconditional.
+try:
+    register_kernels()
+    light_session = ReferenceEvaluator(model)
+except ImportError:
+    light_session = None
 light_setup_time = time.perf_counter() - _light_setup_start
 
 
 def run_light(inp):
     return light_session.run(None, {"X": inp})[0]
 
-
-light_label = "onnx-light + onnx-light-cpu"
 
 # %%
 # Setup cost: why the evaluator is as slow to build as onnxruntime
@@ -158,8 +159,11 @@ for size in sizes:
 
     numpy_time = measure(lambda inp=inp: np.abs(inp), repeat)
 
-    cpu_time = measure(lambda inp=inp: run_light(inp), repeat)
-    assert np.array_equal(run_light(inp), expected), size
+    if light_session is not None:
+        cpu_time = measure(lambda inp=inp: run_light(inp), repeat)
+        assert np.array_equal(run_light(inp), expected), size
+    else:
+        cpu_time = float("nan")
 
     ort_time = measure(lambda inp=inp: session.run(None, {"X": inp}), repeat)
     assert np.array_equal(session.run(None, {"X": inp})[0], expected), size
@@ -192,13 +196,14 @@ import matplotlib.pyplot as plt
 fig, (ax_time, ax_speedup) = plt.subplots(1, 2, figsize=(11, 4.5))
 
 ax_time.plot(sizes, numpy_times * 1e6, "o--", label="numpy", color="#9b7ec8")
-ax_time.plot(
-    sizes,
-    cpu_times * 1e6,
-    "o-",
-    label=light_label,
-    color="#4a9eff",
-)
+if light_session is not None:
+    ax_time.plot(
+        sizes,
+        cpu_times * 1e6,
+        "o-",
+        label=light_label,
+        color="#4a9eff",
+    )
 ax_time.plot(sizes, ort_times * 1e6, "o-", label="onnxruntime", color="#f4a259")
 ax_time.set_xscale("log")
 ax_time.set_yscale("log")
@@ -208,13 +213,14 @@ ax_time.set_title(f"Abs execution time (SIMD: {simd_name})")
 ax_time.legend()
 
 ax_speedup.plot(sizes, ort_times / numpy_times, "o--", label="numpy", color="#9b7ec8")
-ax_speedup.plot(
-    sizes,
-    ort_times / cpu_times,
-    "o-",
-    label=light_label,
-    color="#4a9eff",
-)
+if light_session is not None:
+    ax_speedup.plot(
+        sizes,
+        ort_times / cpu_times,
+        "o-",
+        label=light_label,
+        color="#4a9eff",
+    )
 ax_speedup.plot(sizes, ort_times / ort_times, "o-", label="onnxruntime", color="#f4a259")
 ax_speedup.axhline(1.0, color="grey", linewidth=0.8, linestyle=":")
 ax_speedup.set_xscale("log")

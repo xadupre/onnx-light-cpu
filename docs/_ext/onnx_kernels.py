@@ -5,7 +5,7 @@
 
 Provides the ``registered-kernels`` directive which scans **this repository's**
 C++ kernel declarations (see :mod:`kernel_scan`) and emits a table with one row
-per operator, listing all supported data types together in a single column.
+per operator, listing all supported data types and C++ kernel names together.
 Only kernels provided by this repository
 (``onnx-light-cpu``) are listed; the kernels shipped by onnx-light itself are
 not scanned. Because the table is generated at build time, it always reflects
@@ -26,10 +26,9 @@ from kernel_scan import (
     find_registered_kernels,
     group_by_operator,
     iter_source_files,
-    operator_function,
 )
 
-_HEADERS = ("Operator", "Data types", "Function")
+_HEADERS = ("Operator", "Data types", "C++ kernels")
 
 
 def _row(cells: Sequence[str]) -> nodes.row:
@@ -56,8 +55,8 @@ def _build_table(kernels: List[Kernel]) -> nodes.table:
     tbody = nodes.tbody()
     for operator, entries in group_by_operator(kernels).items():
         dtypes = ", ".join(dtype for dtype, _ in entries)
-        function = operator_function(operator)
-        tbody += _row((operator, dtypes, function))
+        functions = ", ".join(function for _, function in entries)
+        tbody += _row((operator, dtypes, functions))
     tgroup += tbody
     return table
 

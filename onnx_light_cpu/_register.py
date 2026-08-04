@@ -2,132 +2,54 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Register onnx-light-cpu kernels on an onnx-light ``ReferenceEvaluator``.
+"""Register onnx-light-cpu kernels into onnx-light's C++ dispatch table.
 
-``onnx-light`` evaluates every node against its C++ ``KernelDispatchTable`` but
-exposes a :meth:`register_custom_kernel` hook that overrides a built-in kernel
-with a Python callable invoked as ``fn(node, *numpy_inputs)``. This module wires
-the SIMD-accelerated ``Abs``, ``Exp``, ``Log`` and ``Not`` kernels provided by
-``onnx-light-cpu`` into that hook so that *any* ONNX model containing those
-nodes runs the optimized kernels instead of the built-in ones.
+``onnx-light`` evaluates every node against its C++ ``KernelDispatchTable``.
+``onnx-light-cpu`` ships the SIMD-accelerated ``Abs``, ``Exp``, ``Log``,
+``Gemm`` and ``Not`` kernels as full C++ ``KernelBase`` subclasses and exposes a
+single ``register_all_kernels`` binding that installs those classes into that
+shared table for the CPU device. This module wraps that binding so that *any*
+ONNX model containing those nodes runs the optimized kernels instead of the
+built-in ones.
 """
 
 from __future__ import annotations
 
-from typing import Any, Callable
-
-import numpy as np
-
-from .onnx_py._cpukernels import abs as _abs  # pyrefly: ignore[missing-import]
-from .onnx_py._cpukernels import exp as _exp  # pyrefly: ignore[missing-import]
-from .onnx_py._cpukernels import log as _log  # pyrefly: ignore[missing-import]
-from .onnx_py._cpukernels import logical_not as _logical_not  # pyrefly: ignore[missing-import]
-
-# NumPy dtypes handled by the optimized ``abs`` kernel. Any other dtype (e.g.
-# int16, bfloat16) falls back to :func:`numpy.abs` so the registration is safe
-# to install for models using any numeric ``Abs`` input type.
-_ABS_DTYPES = frozenset(
-    {
-        np.dtype(np.float16),
-        np.dtype(np.float32),
-        np.dtype(np.float64),
-        np.dtype(np.int8),
-        np.dtype(np.int32),
-        np.dtype(np.int64),
-    }
-)
-
-# NumPy dtypes handled by the optimized ``exp``/``log`` kernels. Any other dtype
-# (e.g. bfloat16) falls back to the corresponding NumPy function.
-_FLOAT_DTYPES = frozenset(
-    {
-        np.dtype(np.float16),
-        np.dtype(np.float32),
-        np.dtype(np.float64),
-    }
-)
+from typing import Any
 
 
-def _writeable_1d(arr: np.ndarray) -> np.ndarray:
-    """Returns a writeable, C-contiguous 1-D view of ``arr``.
+def _register_all_kernels() -> None:
+    """Imports and calls the compiled ``register_all_kernels`` binding.
 
-    The compiled kernels bind to a mutable ``nb::ndarray`` and reject read-only
-    buffers. ``onnx-light`` hands over zero-copy DLPack views that are read-only,
-    so the data is copied when it is not already a writeable contiguous buffer.
+    The binding lives in the ``_cpuregister`` extension, which links onnx-light
+    and is only built with the onnx-light integration enabled
+    (``ONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON``). It is imported lazily so that
+    ``import onnx_light_cpu`` keeps working in builds without that extension.
     """
-    flat = np.ascontiguousarray(arr).reshape(-1)
-    if not flat.flags.writeable:
-        flat = flat.copy()
-    return flat
+    from .onnx_py._cpuregister import (  # pyrefly: ignore[missing-import]
+        register_all_kernels,
+    )
+
+    register_all_kernels()
 
 
-def _abs_kernel(node: Any, x: np.ndarray) -> np.ndarray:
-    """Elementwise absolute value for an ``Abs`` node using the SIMD kernel.
+def register_kernels(sess: Any = None) -> Any:
+    """Registers the onnx-light-cpu kernels into onnx-light's dispatch table.
 
-    The compiled ``abs`` entry point operates on a contiguous 1-D array, so the
-    input is flattened, processed, and reshaped back to its original shape.
-    Unsupported dtypes fall back to :func:`numpy.abs`.
-    """
-    arr = np.ascontiguousarray(x)
-    if arr.dtype in _ABS_DTYPES:
-        return _abs(_writeable_1d(arr)).reshape(arr.shape)
-    return np.abs(arr)
-
-
-def _exp_kernel(node: Any, x: np.ndarray) -> np.ndarray:
-    """Elementwise natural exponential for an ``Exp`` node using the SIMD kernel.
-
-    The compiled ``exp`` entry point operates on a contiguous 1-D array, so the
-    input is flattened, processed, and reshaped back to its original shape.
-    Unsupported dtypes fall back to :func:`numpy.exp`.
-    """
-    arr = np.ascontiguousarray(x)
-    if arr.dtype in _FLOAT_DTYPES:
-        return _exp(_writeable_1d(arr)).reshape(arr.shape)
-    return np.exp(arr)
-
-
-def _log_kernel(node: Any, x: np.ndarray) -> np.ndarray:
-    """Elementwise natural logarithm for a ``Log`` node using the SIMD kernel.
-
-    The compiled ``log`` entry point operates on a contiguous 1-D array, so the
-    input is flattened, processed, and reshaped back to its original shape.
-    Unsupported dtypes fall back to :func:`numpy.log`.
-    """
-    arr = np.ascontiguousarray(x)
-    if arr.dtype in _FLOAT_DTYPES:
-        return _log(_writeable_1d(arr)).reshape(arr.shape)
-    return np.log(arr)
-
-
-def _not_kernel(node: Any, x: np.ndarray) -> np.ndarray:
-    """Elementwise logical negation for a ``Not`` node using the SIMD kernel.
-
-    The compiled ``logical_not`` entry point operates on a contiguous 1-D
-    ``bool`` array, so the input is flattened, processed, and reshaped back to
-    its original shape. Non-``bool`` dtypes fall back to
-    :func:`numpy.logical_not`.
-    """
-    arr = np.ascontiguousarray(x)
-    if arr.dtype == np.bool_:
-        return _logical_not(_writeable_1d(arr)).reshape(arr.shape)
-    return np.logical_not(arr)
-
-
-def register_kernels(sess: Any, domain: str = "") -> Any:
-    """Registers the onnx-light-cpu kernels on an onnx-light evaluator.
+    This installs the SIMD-accelerated ``Abs``, ``Exp``, ``Log``, ``Gemm`` and
+    ``Not`` kernel classes into onnx-light's shared C++ ``KernelDispatchTable``
+    for the CPU device, replacing the corresponding built-in entries for the
+    default ONNX domain. After this call every such node executed by
+    onnx-light's runtime (and therefore any model run through
+    ``ReferenceEvaluator``) resolves to the onnx-light-cpu kernel.
 
     Parameters
     ----------
     sess:
-        An ``onnx_light.onnx.reference.ReferenceEvaluator`` (or any object
-        exposing a compatible ``register_custom_kernel(domain, op_type, fn)``
-        method). After this call every ``Abs``, ``Exp``, ``Log`` and ``Not``
-        node dispatched by ``sess`` runs the SIMD-accelerated onnx-light-cpu
-        kernel.
-    domain:
-        Operator domain of the ``Abs``/``Exp``/``Log``/``Not`` operators. Defaults to
-        the standard ONNX domain (the empty string, treated as ``ai.onnx``).
+        Optional ``onnx_light.onnx.reference.ReferenceEvaluator`` (or any
+        object). The registration is global to onnx-light's dispatch table, so
+        this argument is only used as a convenience return value. When provided
+        it is returned unchanged so calls can be chained.
 
     Returns
     -------
@@ -141,13 +63,9 @@ def register_kernels(sess: Any, domain: str = "") -> Any:
         from onnx_light.onnx.reference import ReferenceEvaluator
         from onnx_light_cpu import register_kernels
 
+        register_kernels()
         sess = ReferenceEvaluator(model)
-        register_kernels(sess)
         (y,) = sess.run(None, {"x": np.array([-1.0, 2.0], dtype=np.float32)})
     """
-    register: Callable[[str, str, Any], Any] = sess.register_custom_kernel
-    register(domain, "Abs", _abs_kernel)
-    register(domain, "Exp", _exp_kernel)
-    register(domain, "Log", _log_kernel)
-    register(domain, "Not", _not_kernel)
+    _register_all_kernels()
     return sess
