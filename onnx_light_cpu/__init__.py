@@ -12,6 +12,6 @@ The :func:`register_kernels` helper plugs these kernels into an ``onnx-light``
 
 from ._register import register_kernels
 
-__version__ = "0.1.0"
+__version__ = "0.1.11"
 
 __all__ = ["register_kernels"]
