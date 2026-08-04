@@ -159,21 +159,20 @@ For a native C++ integration, build with `-DONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON`
 This builds `lib_onnx_light_cpu_kernels`, which exposes `onnx_light_cpu::AbsKernel`,
 `onnx_light_cpu::ExpKernel`, `onnx_light_cpu::LogKernel` and
 `onnx_light_cpu::NotKernel` classes deriving from
-onnx-light's `KernelBase`. Calling `onnx_light_cpu::RegisterKernels()`,
-`RegisterExpKernel()`, `RegisterLogKernel()` and `RegisterNotKernel()` installs
-them into onnx-light's shared kernel dispatch table so every
+onnx-light's `KernelBase`. Calling `onnx_light_cpu::RegisterAllKernels()`
+installs all of them into onnx-light's shared kernel dispatch table (or call the
+per-operator `RegisterAbsKernel()`, `RegisterExpKernel()`, `RegisterLogKernel()`
+and `RegisterNotKernel()` functions individually) so every
 `Abs`/`Exp`/`Log`/`Not` node runs the SIMD kernel:
 
 ```cpp
-#include <onnx_light_cpu/kernels/math/abs_kernel.h>
-#include <onnx_light_cpu/kernels/math/exp_log_kernel.h>
-#include <onnx_light_cpu/kernels/logical/not_kernel.h>
+#include <onnx_light_cpu/kernels/register_kernels.h>
 
-onnx_light_cpu::RegisterKernels();     // any Abs node now uses the SIMD kernel
-onnx_light_cpu::RegisterExpKernel();   // any Exp node now uses the SIMD kernel
-onnx_light_cpu::RegisterLogKernel();   // any Log node now uses the SIMD kernel
-onnx_light_cpu::RegisterNotKernel();   // any Not node now uses the SIMD kernel
+onnx_light_cpu::RegisterAllKernels();  // Abs/Exp/Log/Not now use the SIMD kernels
 ```
+
+The same registration is exposed to Python (in builds compiled with the
+onnx-light integration) as `onnx_light_cpu.onnx_py._cpuregister.register_all_kernels()`.
 
 When running through onnx-light, these kernels combine SIMD with
 multithreading: each kernel splits its work across onnx-light's shared
