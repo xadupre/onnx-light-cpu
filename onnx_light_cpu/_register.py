@@ -48,6 +48,21 @@ _FLOAT_DTYPES = frozenset(
 )
 
 
+def _as_kernel_input(x: np.ndarray) -> np.ndarray:
+    """Returns a writable, C-contiguous view of ``x`` for the compiled kernels.
+
+    The nanobind ``ndarray`` arguments accepted by the compiled kernels require a
+    writable, C-contiguous array. ``onnx-light`` passes read-only inputs to
+    custom kernels, and :func:`numpy.ascontiguousarray` preserves the read-only
+    flag when the input is already contiguous, so a copy is forced whenever the
+    array is not writable.
+    """
+    arr = np.ascontiguousarray(x)
+    if not arr.flags.writeable:
+        arr = arr.copy()
+    return arr
+
+
 def _abs_kernel(node: Any, x: np.ndarray) -> np.ndarray:
     """Elementwise absolute value for an ``Abs`` node using the SIMD kernel.
 
@@ -55,7 +70,7 @@ def _abs_kernel(node: Any, x: np.ndarray) -> np.ndarray:
     input is flattened, processed, and reshaped back to its original shape.
     Unsupported dtypes fall back to :func:`numpy.abs`.
     """
-    arr = np.ascontiguousarray(x)
+    arr = _as_kernel_input(x)
     if arr.dtype in _ABS_DTYPES:
         return _abs(arr.reshape(-1)).reshape(arr.shape)
     return np.abs(arr)
@@ -68,7 +83,7 @@ def _exp_kernel(node: Any, x: np.ndarray) -> np.ndarray:
     input is flattened, processed, and reshaped back to its original shape.
     Unsupported dtypes fall back to :func:`numpy.exp`.
     """
-    arr = np.ascontiguousarray(x)
+    arr = _as_kernel_input(x)
     if arr.dtype in _FLOAT_DTYPES:
         return _exp(arr.reshape(-1)).reshape(arr.shape)
     return np.exp(arr)
@@ -81,7 +96,7 @@ def _log_kernel(node: Any, x: np.ndarray) -> np.ndarray:
     input is flattened, processed, and reshaped back to its original shape.
     Unsupported dtypes fall back to :func:`numpy.log`.
     """
-    arr = np.ascontiguousarray(x)
+    arr = _as_kernel_input(x)
     if arr.dtype in _FLOAT_DTYPES:
         return _log(arr.reshape(-1)).reshape(arr.shape)
     return np.log(arr)
@@ -95,7 +110,7 @@ def _not_kernel(node: Any, x: np.ndarray) -> np.ndarray:
     its original shape. Non-``bool`` dtypes fall back to
     :func:`numpy.logical_not`.
     """
-    arr = np.ascontiguousarray(x)
+    arr = _as_kernel_input(x)
     if arr.dtype == np.bool_:
         return _logical_not(arr.reshape(-1)).reshape(arr.shape)
     return np.logical_not(arr)
