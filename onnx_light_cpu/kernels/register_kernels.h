@@ -11,9 +11,10 @@ namespace onnx_light_cpu {
 ///
 /// This is a convenience wrapper that calls each per-operator registration
 /// function (:cpp:func:`RegisterAbsKernel`, :cpp:func:`RegisterExpKernel`,
-/// :cpp:func:`RegisterLogKernel` and :cpp:func:`RegisterNotKernel`), so a
-/// single call installs the SIMD-accelerated ``Abs``, ``Exp``, ``Log`` and
-/// ``Not`` kernels. After this call every such node dispatched by onnx-light's
+/// :cpp:func:`RegisterLogKernel`, :cpp:func:`RegisterGemmKernel` and
+/// :cpp:func:`RegisterNotKernel`), so a single call installs the
+/// SIMD-accelerated ``Abs``, ``Exp``, ``Log``, ``Gemm`` and ``Not`` kernels.
+/// After this call every such node dispatched by onnx-light's
 /// runtime (``RunNode`` / ``RuntimeSession``, and therefore any model executed
 /// through ``ReferenceEvaluator``) resolves to the onnx-light-cpu kernel,
 /// replacing the corresponding built-in entries for the default ONNX domain.
