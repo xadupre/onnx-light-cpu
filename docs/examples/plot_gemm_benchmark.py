@@ -36,13 +36,12 @@ import onnxruntime
 from onnx_light.onnx import TensorProto, checker, helper
 
 from onnx_light_cpu import register_kernels
+from onnx_light.onnx.reference import ReferenceEvaluator
 from onnx_light_cpu.onnx_py._cpukernels import (
     detect_simd_level,
     gemm as cpu_gemm,
     has_cpu_kernels,
 )
-
-_HAS_ONNX_LIGHT = importlib.util.find_spec("onnx_light") is not None
 
 _SIMD_NAMES = {0: "scalar", 1: "SSE2", 2: "AVX", 3: "AVX2", 4: "AVX-512"}
 
@@ -80,24 +79,15 @@ session = onnxruntime.InferenceSession(
     model.SerializeToString(), providers=["CPUExecutionProvider"]
 )
 
-if _HAS_ONNX_LIGHT:
-    from onnx_light.onnx.reference import ReferenceEvaluator
+# ``ReferenceEvaluator`` runs the ONNX model node by node; ``register_kernels``
+# overrides the built-in ``Gemm`` with the onnx-light-cpu SIMD kernel.
+cpu_session = ReferenceEvaluator(model)
+register_kernels(cpu_session)
 
-    # ``ReferenceEvaluator`` runs the ONNX model node by node; ``register_kernels``
-    # overrides the built-in ``Gemm`` with the onnx-light-cpu SIMD kernel.
-    cpu_session = ReferenceEvaluator(model)
-    register_kernels(cpu_session)
+def run_cpu(a, b):
+    return cpu_session.run(None, {"A": a, "B": b})[0]
 
-    def run_cpu(a, b):
-        return cpu_session.run(None, {"A": a, "B": b})[0]
-
-    cpu_label = "onnx-light + onnx-light-cpu"
-else:
-
-    def run_cpu(a, b):
-        return cpu_gemm(a, b, beta=0.0)
-
-    cpu_label = "onnx-light-cpu"
+cpu_label = "onnx-light + onnx-light-cpu"
 
 # %%
 # Timing helper
