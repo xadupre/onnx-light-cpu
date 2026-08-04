@@ -84,6 +84,10 @@ file(GLOB CPU_KERNEL_SOURCES CONFIGURE_DEPENDS
 file(GLOB PY_KERNELS_SOURCES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/onnx_py/*.cc"
 )
+# The kernel-registration binding (_cpuregister) links onnx-light and is built
+# as a separate module below; keep it out of the numpy-style _cpukernels module.
+list(REMOVE_ITEM PY_KERNELS_SOURCES
+    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/onnx_py/_cpuregister.cc")
 
 # ---------------------------------------------------------------------------
 # C++ library: lib_onnx_light_cpu
@@ -128,6 +132,7 @@ if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
   find_package(onnx_light CONFIG REQUIRED)
 
   file(GLOB CPU_KERNEL_REGISTRATION_SOURCES CONFIGURE_DEPENDS
+      "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/kernels/*.cc"
       "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/kernels/*/*.cc")
 
   add_library(lib_onnx_light_cpu_kernels ${_cpu_lib_type}
@@ -194,6 +199,30 @@ if(ONNX_LIGHT_CPU_BUILD_PYTHON)
         LIBRARY DESTINATION onnx_light_cpu/onnx_py
         RUNTIME DESTINATION onnx_light_cpu/onnx_py)
   endif()
+
+  # -------------------------------------------------------------------------
+  # Kernel-registration Python extension: _cpuregister
+  # -------------------------------------------------------------------------
+  # Exposes ``register_all_kernels()``, which installs the onnx-light ``Abs``,
+  # ``Exp``, ``Log`` and ``Not`` kernel classes into onnx-light's shared
+  # ``KernelDispatchTable``. It links the onnx-light kernel-registration
+  # library and is therefore only built when the integration is enabled.
+  if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
+    nanobind_add_module(_cpuregister STABLE_ABI
+        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/onnx_py/_cpuregister.cc")
+    target_include_directories(_cpuregister PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}")
+    target_link_libraries(_cpuregister PRIVATE lib_onnx_light_cpu_kernels)
+
+    set_target_properties(_cpuregister PROPERTIES
+        INSTALL_RPATH "$ORIGIN"
+        BUILD_RPATH "$ORIGIN"
+    )
+
+    install(TARGETS _cpuregister
+        LIBRARY DESTINATION onnx_light_cpu/onnx_py
+        RUNTIME DESTINATION onnx_light_cpu/onnx_py)
+  endif()
 endif()
 
 # ---------------------------------------------------------------------------
@@ -228,6 +257,10 @@ if(ONNX_LIGHT_CPU_INSTALL)
         ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
         LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+
+    install(FILES
+        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/kernels/register_kernels.h"
+        DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/onnx_light_cpu/kernels")
 
     install(FILES
         "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/kernels/math/abs_kernel.h"
@@ -319,6 +352,9 @@ if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
 endif()
 if(ONNX_LIGHT_CPU_BUILD_PYTHON)
   list(APPEND _onnx_light_cpu_hardening_targets _cpukernels)
+  if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
+    list(APPEND _onnx_light_cpu_hardening_targets _cpuregister)
+  endif()
 endif()
 foreach(_t IN LISTS _onnx_light_cpu_hardening_targets)
   if(TARGET ${_t})

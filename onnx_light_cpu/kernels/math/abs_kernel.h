@@ -46,7 +46,7 @@ public:
                   ONNX_LIGHT_NAMESPACE::core::runtime::Tensor &output) const;
 };
 
-/// Registers the onnx-light-cpu kernels into onnx-light's shared
+/// Registers the onnx-light-cpu ``Abs`` kernel into onnx-light's shared
 /// ``KernelDispatchTable`` for the CPU device.
 ///
 /// After this call, every ``Abs`` node dispatched by onnx-light's runtime
@@ -54,6 +54,6 @@ public:
 /// ``ReferenceEvaluator``) resolves to :cpp:class:`AbsKernel`, so any ONNX
 /// model using ``Abs`` runs the SIMD-accelerated kernel. Registering under the
 /// default ONNX domain replaces the built-in ``Abs`` entry.
-void RegisterKernels();
+void RegisterAbsKernel();
 
 } // namespace onnx_light_cpu

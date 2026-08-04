@@ -122,7 +122,7 @@ void AbsKernel::Run(RuntimeContext &rt) {
   rt_ns::SetOutput(node, 0, (*this)(x, &rt), rt);
 }
 
-void RegisterKernels() {
+void RegisterAbsKernel() {
   NodeKernelFn factory = [](const NodeProto &node,
                             RuntimeContext &rt) -> std::unique_ptr<rt_ns::KernelBase> {
     auto kernel = std::make_unique<AbsKernel>(rt.kernel_ctx());

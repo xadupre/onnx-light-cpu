@@ -117,18 +117,21 @@ an additional library ``lib_onnx_light_cpu_kernels`` is produced. It declares
 
    // Registers the kernels into onnx-light's shared KernelDispatchTable for the
    // default ONNX domain / CPU device, overriding the built-in operators.
-   void RegisterKernels();     // Abs
+   void RegisterAbsKernel();   // Abs
    void RegisterExpKernel();   // Exp
    void RegisterLogKernel();   // Log
    void RegisterNotKernel();   // Not
 
+   // Convenience wrapper registering all of the kernels above in one call.
+   void RegisterAllKernels();
+
    } // namespace onnx_light_cpu
 
 ``AbsKernel``, ``ExpKernel``, ``LogKernel`` and ``NotKernel`` are full
-``KernelBase`` subclasses, so once the matching ``Register*`` function has run
-every ``Abs``/``Exp``/``Log``/``Not`` node executed by onnx-light's runtime (and
-therefore any model run through ``ReferenceEvaluator``) resolves to the
-SIMD-accelerated kernel.
+``KernelBase`` subclasses, so once the matching ``Register*`` function (or
+``RegisterAllKernels``) has run every ``Abs``/``Exp``/``Log``/``Not`` node
+executed by onnx-light's runtime (and therefore any model run through
+``ReferenceEvaluator``) resolves to the SIMD-accelerated kernel.
 
 Python API
 ----------
@@ -156,6 +159,18 @@ Python API
 .. py:function:: has_cpu_kernels() -> bool
 
    Returns ``True`` when the CPU kernel extension is available.
+
+.. py:module:: onnx_light_cpu.onnx_py._cpuregister
+
+.. py:function:: register_all_kernels() -> None
+
+   Registers every onnx-light-cpu kernel class (``Abs``, ``Exp``, ``Log`` and
+   ``Not``) into onnx-light's C++ ``KernelDispatchTable`` for the CPU device,
+   replacing the corresponding built-in entries for the default ONNX domain.
+   This is the Python binding for the C++ :cpp:func:`RegisterAllKernels`
+   function and is only available in builds compiled with the onnx-light
+   integration enabled (``ONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON``).
+
 
 Registering kernels with onnx-light
 -----------------------------------
