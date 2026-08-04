@@ -163,11 +163,38 @@ class TestNotKernel:
         np.testing.assert_array_equal(out, np.logical_not(inp))
 
 
-def _gemm_node(**attrs):
-    """Builds a minimal ``Gemm`` NodeProto carrying the given attributes."""
-    from onnx import helper
+class _FakeAttribute:
+    """Minimal stand-in for an ONNX ``AttributeProto``.
 
-    return helper.make_node("Gemm", ["A", "B"], ["Y"], **attrs)
+    ``_gemm_attr`` only reads ``name``, ``type`` and either ``f`` or ``i``, so
+    the fake mirrors those fields (and the ``INT`` type constant) to avoid a
+    hard dependency on ``onnx`` in the unit tests.
+    """
+
+    INT = 2  # AttributeProto.INT
+
+    def __init__(self, name, value):
+        self.name = name
+        if isinstance(value, int) and not isinstance(value, bool):
+            self.type = self.INT
+            self.i = value
+            self.f = 0.0
+        else:
+            self.type = 1  # AttributeProto.FLOAT
+            self.f = float(value)
+            self.i = 0
+
+
+class _FakeNode:
+    """Minimal stand-in for an ONNX ``NodeProto`` carrying attributes."""
+
+    def __init__(self, **attrs):
+        self.attribute = [_FakeAttribute(name, value) for name, value in attrs.items()]
+
+
+def _gemm_node(**attrs):
+    """Builds a minimal ``Gemm`` node stand-in carrying the given attributes."""
+    return _FakeNode(**attrs)
 
 
 class TestGemmKernel:
