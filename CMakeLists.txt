@@ -265,6 +265,7 @@ if(ONNX_LIGHT_CPU_INSTALL)
     install(FILES
         "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/kernels/math/abs_kernel.h"
         "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/kernels/math/exp_log_kernel.h"
+        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/kernels/math/gemm_kernel.h"
         DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/onnx_light_cpu/kernels/math")
 
     install(FILES
