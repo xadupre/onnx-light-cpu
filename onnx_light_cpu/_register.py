@@ -48,6 +48,19 @@ _FLOAT_DTYPES = frozenset(
 )
 
 
+def _writeable_1d(arr: np.ndarray) -> np.ndarray:
+    """Returns a writeable, C-contiguous 1-D view of ``arr``.
+
+    The compiled kernels bind to a mutable ``nb::ndarray`` and reject read-only
+    buffers. ``onnx-light`` hands over zero-copy DLPack views that are read-only,
+    so the data is copied when it is not already a writeable contiguous buffer.
+    """
+    flat = np.ascontiguousarray(arr).reshape(-1)
+    if not flat.flags.writeable:
+        flat = flat.copy()
+    return flat
+
+
 def _abs_kernel(node: Any, x: np.ndarray) -> np.ndarray:
     """Elementwise absolute value for an ``Abs`` node using the SIMD kernel.
 
@@ -57,7 +70,7 @@ def _abs_kernel(node: Any, x: np.ndarray) -> np.ndarray:
     """
     arr = np.ascontiguousarray(x)
     if arr.dtype in _ABS_DTYPES:
-        return _abs(arr.reshape(-1)).reshape(arr.shape)
+        return _abs(_writeable_1d(arr)).reshape(arr.shape)
     return np.abs(arr)
 
 
@@ -70,7 +83,7 @@ def _exp_kernel(node: Any, x: np.ndarray) -> np.ndarray:
     """
     arr = np.ascontiguousarray(x)
     if arr.dtype in _FLOAT_DTYPES:
-        return _exp(arr.reshape(-1)).reshape(arr.shape)
+        return _exp(_writeable_1d(arr)).reshape(arr.shape)
     return np.exp(arr)
 
 
@@ -83,7 +96,7 @@ def _log_kernel(node: Any, x: np.ndarray) -> np.ndarray:
     """
     arr = np.ascontiguousarray(x)
     if arr.dtype in _FLOAT_DTYPES:
-        return _log(arr.reshape(-1)).reshape(arr.shape)
+        return _log(_writeable_1d(arr)).reshape(arr.shape)
     return np.log(arr)
 
 
@@ -97,7 +110,7 @@ def _not_kernel(node: Any, x: np.ndarray) -> np.ndarray:
     """
     arr = np.ascontiguousarray(x)
     if arr.dtype == np.bool_:
-        return _logical_not(arr.reshape(-1)).reshape(arr.shape)
+        return _logical_not(_writeable_1d(arr)).reshape(arr.shape)
     return np.logical_not(arr)
 
 

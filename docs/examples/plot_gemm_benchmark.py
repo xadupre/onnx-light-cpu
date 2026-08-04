@@ -27,9 +27,12 @@ timings evolve as the matrices grow.
 import time
 
 import numpy as np
-import onnx
 import onnxruntime
-from onnx import TensorProto, helper
+
+# ``onnx-light`` ships ``onnx_light.onnx`` as a drop-in replacement for the
+# ``onnx`` package; use it to build the model so the example depends on
+# onnx-light rather than onnx.
+from onnx_light.onnx import TensorProto, checker, helper
 
 from onnx_light_cpu.onnx_py._cpukernels import (
     detect_simd_level,
@@ -62,7 +65,7 @@ graph = helper.make_graph(
     [helper.make_tensor_value_info("Y", TensorProto.FLOAT, ["M", "N"])],
 )
 model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 18)])
-onnx.checker.check_model(model)
+checker.check_model(model)
 
 session = onnxruntime.InferenceSession(
     model.SerializeToString(), providers=["CPUExecutionProvider"]
