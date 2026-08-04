@@ -6,7 +6,13 @@ import numpy as np
 import pytest
 
 from onnx_light_cpu import register_kernels
-from onnx_light_cpu._register import _abs_kernel, _exp_kernel, _log_kernel, _not_kernel
+from onnx_light_cpu._register import (
+    _abs_kernel,
+    _exp_kernel,
+    _gemm_kernel,
+    _log_kernel,
+    _not_kernel,
+)
 
 
 class FakeEvaluator:
@@ -41,6 +47,11 @@ class TestRegisterKernels:
         register_kernels(sess)
         assert ("", "Not") in sess.kernels
 
+    def test_registers_gemm_on_default_domain(self):
+        sess = FakeEvaluator()
+        register_kernels(sess)
+        assert ("", "Gemm") in sess.kernels
+
     def test_custom_domain(self):
         sess = FakeEvaluator()
         register_kernels(sess, domain="ai.onnx")
@@ -48,6 +59,7 @@ class TestRegisterKernels:
         assert ("ai.onnx", "Exp") in sess.kernels
         assert ("ai.onnx", "Log") in sess.kernels
         assert ("ai.onnx", "Not") in sess.kernels
+        assert ("ai.onnx", "Gemm") in sess.kernels
 
     def test_registered_kernel_computes_abs(self):
         sess = FakeEvaluator()
@@ -149,3 +161,57 @@ class TestNotKernel:
         inp = np.array([0, 1, 2], dtype=np.int32)
         out = _not_kernel(None, inp)
         np.testing.assert_array_equal(out, np.logical_not(inp))
+
+
+def _gemm_node(**attrs):
+    """Builds a minimal ``Gemm`` NodeProto carrying the given attributes."""
+    from onnx import helper
+
+    return helper.make_node("Gemm", ["A", "B"], ["Y"], **attrs)
+
+
+class TestGemmKernel:
+    @pytest.mark.parametrize("dtype", [np.float32, np.float64])
+    def test_basic_matmul(self, dtype):
+        rng = np.random.default_rng(0)
+        a = rng.standard_normal((5, 3)).astype(dtype)
+        b = rng.standard_normal((3, 7)).astype(dtype)
+        out = _gemm_kernel(_gemm_node(beta=0.0), a, b)
+        assert out.dtype == dtype
+        np.testing.assert_allclose(out, a @ b, rtol=1e-4, atol=1e-4)
+
+    def test_alpha_beta_bias(self):
+        rng = np.random.default_rng(1)
+        a = rng.standard_normal((4, 6)).astype(np.float32)
+        b = rng.standard_normal((6, 8)).astype(np.float32)
+        c = rng.standard_normal((4, 8)).astype(np.float32)
+        out = _gemm_kernel(_gemm_node(alpha=0.5, beta=2.0), a, b, c)
+        np.testing.assert_allclose(out, 0.5 * (a @ b) + 2.0 * c, rtol=1e-4, atol=1e-4)
+
+    @pytest.mark.parametrize("trans_a", [0, 1])
+    @pytest.mark.parametrize("trans_b", [0, 1])
+    def test_transpose_variants(self, trans_a, trans_b):
+        rng = np.random.default_rng(2)
+        m, k, n = 6, 4, 5
+        a = rng.standard_normal((k, m) if trans_a else (m, k)).astype(np.float32)
+        b = rng.standard_normal((n, k) if trans_b else (k, n)).astype(np.float32)
+        node = _gemm_node(transA=trans_a, transB=trans_b, beta=0.0)
+        out = _gemm_kernel(node, a, b)
+        op_a = a.T if trans_a else a
+        op_b = b.T if trans_b else b
+        np.testing.assert_allclose(out, op_a @ op_b, rtol=1e-4, atol=1e-4)
+
+    def test_default_attributes(self):
+        rng = np.random.default_rng(3)
+        a = rng.standard_normal((3, 3)).astype(np.float32)
+        b = rng.standard_normal((3, 3)).astype(np.float32)
+        c = rng.standard_normal((3, 3)).astype(np.float32)
+        # Defaults: alpha=1, beta=1, transA=transB=0.
+        out = _gemm_kernel(_gemm_node(), a, b, c)
+        np.testing.assert_allclose(out, a @ b + c, rtol=1e-4, atol=1e-4)
+
+    def test_unsupported_dtype_falls_back_to_numpy(self):
+        a = np.array([[1, 2], [3, 4]], dtype=np.int64)
+        b = np.array([[5, 6], [7, 8]], dtype=np.int64)
+        out = _gemm_kernel(_gemm_node(beta=0.0), a, b)
+        np.testing.assert_array_equal(out, a @ b)

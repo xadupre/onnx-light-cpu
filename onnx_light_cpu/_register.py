@@ -7,7 +7,7 @@
 ``onnx-light`` evaluates every node against its C++ ``KernelDispatchTable`` but
 exposes a :meth:`register_custom_kernel` hook that overrides a built-in kernel
 with a Python callable invoked as ``fn(node, *numpy_inputs)``. This module wires
-the SIMD-accelerated ``Abs``, ``Exp``, ``Log`` and ``Not`` kernels provided by
+the SIMD-accelerated ``Abs``, ``Exp``, ``Log``, ``Not`` and ``Gemm`` kernels provided by
 ``onnx-light-cpu`` into that hook so that *any* ONNX model containing those
 nodes runs the optimized kernels instead of the built-in ones.
 """
@@ -20,6 +20,7 @@ import numpy as np
 
 from .onnx_py._cpukernels import abs as _abs  # pyrefly: ignore[missing-import]
 from .onnx_py._cpukernels import exp as _exp  # pyrefly: ignore[missing-import]
+from .onnx_py._cpukernels import gemm as _gemm  # pyrefly: ignore[missing-import]
 from .onnx_py._cpukernels import log as _log  # pyrefly: ignore[missing-import]
 from .onnx_py._cpukernels import logical_not as _logical_not  # pyrefly: ignore[missing-import]
 
@@ -101,6 +102,65 @@ def _not_kernel(node: Any, x: np.ndarray) -> np.ndarray:
     return np.logical_not(arr)
 
 
+# NumPy dtypes handled by the optimized ``gemm`` kernel. Any other dtype falls
+# back to a pure NumPy implementation of the ONNX ``Gemm`` semantics.
+_GEMM_DTYPES = frozenset(
+    {
+        np.dtype(np.float32),
+        np.dtype(np.float64),
+    }
+)
+
+
+def _gemm_attr(node: Any, name: str, default: float) -> float:
+    """Reads a scalar attribute from an ONNX ``Gemm`` ``node``.
+
+    ``node`` is the ONNX ``NodeProto`` forwarded by
+    ``register_custom_kernel``. Its ``attribute`` field lists ``AttributeProto``
+    entries; ``alpha``/``beta`` are floats (``AttributeProto.f``) and
+    ``transA``/``transB`` are integers (``AttributeProto.i``). Missing attributes
+    return ``default``.
+    """
+    for attr in getattr(node, "attribute", ()):  # pragma: no branch
+        if attr.name == name:
+            if attr.type == attr.INT:
+                return float(attr.i)
+            return float(attr.f)
+    return default
+
+
+def _gemm_kernel(
+    node: Any, a: np.ndarray, b: np.ndarray, c: np.ndarray | None = None
+) -> np.ndarray:
+    """General matrix multiplication for a ``Gemm`` node using the SIMD kernel.
+
+    Computes ``Y = alpha * op(A) @ op(B) + beta * C`` where ``op(A)`` transposes
+    ``A`` when ``transA`` is set and ``op(B)`` transposes ``B`` when ``transB``
+    is set, matching the ONNX ``Gemm`` specification. The ``alpha``, ``beta``,
+    ``transA`` and ``transB`` attributes are read from ``node``. Unsupported
+    dtypes fall back to a NumPy implementation.
+    """
+    alpha = _gemm_attr(node, "alpha", 1.0)
+    beta = _gemm_attr(node, "beta", 1.0)
+    trans_a = bool(_gemm_attr(node, "transA", 0.0))
+    trans_b = bool(_gemm_attr(node, "transB", 0.0))
+
+    arr_a = np.ascontiguousarray(a)
+    arr_b = np.ascontiguousarray(b)
+    if arr_a.dtype in _GEMM_DTYPES and arr_b.dtype == arr_a.dtype:
+        arr_c = None if c is None else np.ascontiguousarray(c)
+        return _gemm(
+            arr_a, arr_b, arr_c, alpha=alpha, beta=beta, trans_a=trans_a, trans_b=trans_b
+        )
+
+    op_a = arr_a.T if trans_a else arr_a
+    op_b = arr_b.T if trans_b else arr_b
+    y = alpha * (op_a @ op_b)
+    if c is not None and beta != 0.0:
+        y = y + beta * np.asarray(c)
+    return y
+
+
 def register_kernels(sess: Any, domain: str = "") -> Any:
     """Registers the onnx-light-cpu kernels on an onnx-light evaluator.
 
@@ -109,11 +169,11 @@ def register_kernels(sess: Any, domain: str = "") -> Any:
     sess:
         An ``onnx_light.onnx.reference.ReferenceEvaluator`` (or any object
         exposing a compatible ``register_custom_kernel(domain, op_type, fn)``
-        method). After this call every ``Abs``, ``Exp``, ``Log`` and ``Not``
+        method). After this call every ``Abs``, ``Exp``, ``Log``, ``Not`` and ``Gemm``
         node dispatched by ``sess`` runs the SIMD-accelerated onnx-light-cpu
         kernel.
     domain:
-        Operator domain of the ``Abs``/``Exp``/``Log``/``Not`` operators. Defaults to
+        Operator domain of the ``Abs``/``Exp``/``Log``/``Not``/``Gemm`` operators. Defaults to
         the standard ONNX domain (the empty string, treated as ``ai.onnx``).
 
     Returns
@@ -137,4 +197,5 @@ def register_kernels(sess: Any, domain: str = "") -> Any:
     register(domain, "Exp", _exp_kernel)
     register(domain, "Log", _log_kernel)
     register(domain, "Not", _not_kernel)
+    register(domain, "Gemm", _gemm_kernel)
     return sess
