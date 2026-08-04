@@ -23,6 +23,7 @@ docs = [
     "matplotlib",
     "myst-parser",
     "onnx",
+    "onnx-light @ git+https://github.com/xadupre/onnx-light.git",
     "onnxruntime",
     "pydata-sphinx-theme",
     "sphinx>=7",
