@@ -45,6 +45,11 @@ jobs:
           SCCACHE_GHA_ENABLED: "true"
         run: pip install -C build-dir=build -C cmake.build-type=Release -C cmake.define.CMAKE_C_COMPILER_LAUNCHER=sccache -C cmake.define.CMAKE_CXX_COMPILER_LAUNCHER=sccache -e .[docs] -v
 
+      # onnx-light is not published on PyPI, the wheel is fetched from the
+      # GitHub release matching the Python version used by this job (3.13).
+      - name: Install onnx-light
+        run: pip install https://github.com/xadupre/onnx-light/releases/download/0.1.11/onnx_light-0.1.11-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
+
       - name: pip freeze
         run: pip freeze
 
