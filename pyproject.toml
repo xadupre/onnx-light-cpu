@@ -4,7 +4,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "onnx-light-cpu"
-version = "0.1.11"
+version = "0.1.12"
 description = "Highly optimized CPU kernels (Abs) for onnx-light with AVX/AVX2/AVX-512 dispatch"
 readme = "README.md"
 license = "Apache-2.0"

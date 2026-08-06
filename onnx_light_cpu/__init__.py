@@ -13,6 +13,6 @@ or ``Not`` runs the optimized kernel when evaluated through a
 
 from ._register import register_kernels
 
-__version__ = "0.1.11"
+__version__ = "0.1.12"
 
 __all__ = ["register_kernels"]

@@ -51,6 +51,12 @@ jobs:
           cmake --install /tmp/onnx-light/build --config Release
           pip install /tmp/onnx-light
           echo "CMAKE_PREFIX_PATH=/tmp/onnx-light/install${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}" >> "$GITHUB_ENV"
+          # The C++ tests link onnx-light's shared libraries and are executed at
+          # build time by gtest_discover_tests, so the install lib dir must be on
+          # LD_LIBRARY_PATH or discovery fails with "cannot open shared object
+          # file: liblib_onnx_proto.so".
+          onnx_light_libdir=$(dirname "$(find /tmp/onnx-light/install -name 'liblib_onnx_proto.so' | head -1)")
+          echo "LD_LIBRARY_PATH=${onnx_light_libdir}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
 
       # Build the CPU kernel extension and install the documentation and test
       # dependencies. ONNX_LIGHT_CPU_BUILD_TESTS=ON builds the C++ unit tests so
