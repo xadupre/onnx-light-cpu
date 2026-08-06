@@ -40,8 +40,21 @@ pixi run test-python
 
 ### setup.py with C++ tests
 
+Build the extension and run the C++ unit tests with `ctest`:
+
 ```bash
 python setup.py build_ext --inplace --cpp-tests
+```
+
+### setup.py with the onnx-light integration
+
+Build the onnx-light kernel-registration integration against a locally built,
+importable onnx-light (see [onnx-light](https://github.com/xadupre/onnx-light)).
+onnx-light must be built and importable (`import onnx_light`); the build locates
+its `onnx_lightConfig.cmake` automatically:
+
+```bash
+python setup.py build_ext --inplace --onnx-light
 ```
 
 ### Pure CMake (C++ only)

@@ -35,6 +35,46 @@ def _default_parallel_jobs():
     return os.cpu_count() or 1
 
 
+def _ctest_command(build_temp):
+    """Returns the ctest command that runs the C++ unit tests."""
+    return [
+        "ctest",
+        "--test-dir",
+        str(build_temp),
+        "--output-on-failure",
+        "--build-config",
+        "Release",
+    ]
+
+
+def _onnx_light_cmake_dir():
+    """Returns the CMake config directory of a locally built onnx-light.
+
+    onnx-light must be importable (``import onnx_light``) and already built so
+    that its ``onnx_lightConfig.cmake`` is available for ``find_package``. The
+    file is located by importing onnx-light and searching the tree that holds
+    the package for ``onnx_lightConfig.cmake``.
+    """
+    import onnx_light
+
+    package_dir = Path(onnx_light.__file__).resolve().parent
+    search_root = package_dir.parent
+    matches = sorted(search_root.glob("**/onnx_lightConfig.cmake"))
+    if not matches:
+        raise FileNotFoundError(
+            f"Could not find 'onnx_lightConfig.cmake' under {search_root}. Build "
+            "onnx-light locally (for example 'pip install --no-build-isolation "
+            "-e .' in the onnx-light checkout) before using --onnx-light."
+        )
+    return matches[0].parent
+
+
+def _add_onnx_light_defines(cmake_args):
+    """Enables the onnx-light integration against a locally built onnx-light."""
+    cmake_args = _set_cmake_define(cmake_args, "ONNX_LIGHT_CPU_WITH_ONNX_LIGHT", "ON")
+    return _set_cmake_define(cmake_args, "onnx_light_DIR", str(_onnx_light_cmake_dir()))
+
+
 try:
     from setuptools import Command, Distribution, setup
 except ModuleNotFoundError:
@@ -52,6 +92,7 @@ except ModuleNotFoundError:
 
         inplace = False
         cpp_tests = False
+        onnx_light = False
         dry_run = False
         build_temp = "build/temp"
         build_lib = "build/lib"
@@ -64,6 +105,8 @@ except ModuleNotFoundError:
                 inplace = True
             elif arg == "--cpp-tests":
                 cpp_tests = True
+            elif arg == "--onnx-light":
+                onnx_light = True
             elif arg in {"--dry-run", "-n"}:
                 dry_run = True
             elif arg.startswith("--build-temp="):
@@ -109,6 +152,11 @@ except ModuleNotFoundError:
         cmake_args = _set_cmake_default_define(cmake_args, "CMAKE_BUILD_TYPE", "Release")
         if cpp_tests:
             cmake_args = _set_cmake_define(cmake_args, "ONNX_LIGHT_CPU_BUILD_TESTS", "ON")
+        if onnx_light:
+            if dry_run:
+                cmake_args = _set_cmake_define(cmake_args, "ONNX_LIGHT_CPU_WITH_ONNX_LIGHT", "ON")
+            else:
+                cmake_args = _add_onnx_light_defines(cmake_args)
         _spawn(
             [
                 "cmake",
@@ -129,6 +177,8 @@ except ModuleNotFoundError:
             ["cmake", "--install", str(build_temp_path), "--prefix", str(install_prefix)],
             dry_run,
         )
+        if cpp_tests:
+            _spawn(_ctest_command(build_temp_path), dry_run)
         return True
 
     if _run_build_ext_without_packaging(sys.argv[1:]):
@@ -152,10 +202,16 @@ class BuildExt(Command):
         ("inplace", "i", "build extension in the source tree"),
         ("build-temp=", "t", "temporary build directory"),
         ("build-lib=", "b", "build directory for platform-specific files"),
-        ("cpp-tests", None, "enable the C++ unit tests"),
+        ("cpp-tests", None, "build and run the C++ unit tests"),
+        (
+            "onnx-light",
+            None,
+            "build the onnx-light kernel-registration integration against a "
+            "locally built, importable onnx-light",
+        ),
         ("parallel=", "j", "number of parallel build jobs"),
     ]
-    boolean_options = ["inplace", "cpp-tests"]
+    boolean_options = ["inplace", "cpp-tests", "onnx-light"]
 
     def initialize_options(self):
         """Initializes default values for command options."""
@@ -163,6 +219,7 @@ class BuildExt(Command):
         self.build_temp = None
         self.build_lib = None
         self.cpp_tests = False
+        self.onnx_light = False
         self.parallel = _default_parallel_jobs()
 
     def finalize_options(self):
@@ -184,6 +241,8 @@ class BuildExt(Command):
         cmake_args = _set_cmake_default_define(cmake_args, "CMAKE_BUILD_TYPE", "Release")
         if self.cpp_tests:
             cmake_args = _set_cmake_define(cmake_args, "ONNX_LIGHT_CPU_BUILD_TESTS", "ON")
+        if self.onnx_light:
+            cmake_args = _add_onnx_light_defines(cmake_args)
 
         self.spawn(
             [
@@ -201,6 +260,8 @@ class BuildExt(Command):
             build_cmd += ["--parallel", str(self.parallel)]
         self.spawn(build_cmd)
         self.spawn(["cmake", "--install", str(build_temp), "--prefix", str(install_prefix)])
+        if self.cpp_tests:
+            self.spawn(_ctest_command(build_temp))
 
 
 setup(
