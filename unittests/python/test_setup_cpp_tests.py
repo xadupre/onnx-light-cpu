@@ -2,11 +2,13 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for the ``--cpp-tests`` option of ``setup.py``.
+"""Tests for the ``build_ext`` options of ``setup.py``.
 
-The option builds the C++ unit tests and then runs them with ``ctest``. These
-tests exercise the dry-run wiring (which prints the commands without executing
-them) so they run quickly without compiling the extension.
+``--cpp-tests`` builds the C++ unit tests and then runs them with ``ctest``.
+``--onnx-light`` enables the onnx-light kernel-registration integration against
+a locally built, importable onnx-light. These tests exercise the dry-run wiring
+(which prints the commands without executing them) so they run quickly without
+compiling the extension or requiring onnx-light to be installed.
 """
 
 import subprocess
@@ -38,3 +40,13 @@ class TestSetupCppTests:
         output = _dry_run()
         assert "ONNX_LIGHT_CPU_BUILD_TESTS=ON" not in output
         assert "ctest" not in output
+
+
+class TestSetupOnnxLight:
+    def test_onnx_light_flag_enables_integration(self):
+        output = _dry_run("--onnx-light")
+        assert "ONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON" in output
+
+    def test_without_flag_skips_integration(self):
+        output = _dry_run()
+        assert "ONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON" not in output
