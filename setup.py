@@ -174,7 +174,13 @@ except ModuleNotFoundError:
             build_cmd += ["--parallel", str(parallel)]
         _spawn(build_cmd, dry_run)
         _spawn(
-            ["cmake", "--install", str(build_temp_path), "--prefix", str(install_prefix)],
+            [
+                "cmake",
+                "--install",
+                str(build_temp_path),
+                "--prefix",
+                str(install_prefix),
+            ],
             dry_run,
         )
         if cpp_tests:

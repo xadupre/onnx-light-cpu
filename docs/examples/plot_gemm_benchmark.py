@@ -73,11 +73,8 @@ light_label = "onnx-light + onnx-light-cpu"
 # built with ``ONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON``. When it is missing (as in
 # the documentation build) the onnx-light-cpu curve is simply omitted; the
 # import above stays unconditional.
-try:
-    register_kernels()
-    light_session = ReferenceEvaluator(model)
-except ImportError:
-    light_session = None
+register_kernels()
+light_session = ReferenceEvaluator(model)
 
 
 def run_light(a, b):
