@@ -57,6 +57,17 @@ its `onnx_lightConfig.cmake` automatically:
 python setup.py build_ext --inplace --onnx-light
 ```
 
+When onnx-light was installed from a local checkout (for example
+`pip install --no-build-isolation -e .` in the onnx-light source tree) but its
+`onnx_lightConfig.cmake` is not available, build the integration directly from
+those sources instead. `--onnx-light-source` auto-discovers the onnx-light
+source tree from the importable onnx-light and compiles it with
+`add_subdirectory`:
+
+```bash
+python setup.py build_ext --inplace --onnx-light-source
+```
+
 ### Pure CMake (C++ only)
 
 ```bash

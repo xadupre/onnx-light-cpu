@@ -29,6 +29,12 @@ option(ONNX_LIGHT_CPU_BUILD_PYTHON "Build Python extension." ON)
 option(ONNX_LIGHT_CPU_INSTALL "Install the C++ library and headers." ON)
 option(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT
        "Build the onnx-light kernel registration library (requires onnx-light)." OFF)
+set(ONNX_LIGHT_CPU_ONNX_LIGHT_SOURCE_DIR "" CACHE PATH
+    "Path to a local onnx-light source tree. When set (and \
+ONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON), onnx-light is built from these sources with \
+add_subdirectory instead of being located with find_package(onnx_light). Use \
+this when the same sources were used to build the installed onnx-light Python \
+package but its onnx_lightConfig.cmake is not available.")
 option(ONNX_LIGHT_CPU_ENABLE_COVERAGE
        "Instrument the C++ targets for code coverage (GCC/Clang only)." OFF)
 option(ONNX_HARDENING
@@ -141,7 +147,29 @@ endif()
 # ``Abs`` runs the accelerated kernel. Requires the onnx-light C++ package and
 # is therefore opt-in via ONNX_LIGHT_CPU_WITH_ONNX_LIGHT.
 if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
-  find_package(onnx_light CONFIG REQUIRED)
+  if(ONNX_LIGHT_CPU_ONNX_LIGHT_SOURCE_DIR)
+    # Build onnx-light from a local source tree instead of locating a
+    # previously installed onnx-light with find_package. This assumes the same
+    # sources were used to build the onnx-light Python package that is used at
+    # runtime. Only the C++ library is needed here, so disable onnx-light's own
+    # Python extensions, tests, benchmarks and install rules. These are set as
+    # plain (non-cache) variables so onnx-light's option() calls honour them
+    # (policy CMP0077).
+    set(ONNX_LIGHT_BUILD_PYTHON OFF)
+    set(ONNX_LIGHT_BUILD_TESTS OFF)
+    set(ONNX_LIGHT_BUILD_BENCHMARKS OFF)
+    set(ONNX_LIGHT_INSTALL OFF)
+    add_subdirectory("${ONNX_LIGHT_CPU_ONNX_LIGHT_SOURCE_DIR}"
+        "${CMAKE_CURRENT_BINARY_DIR}/_onnx_light_src" EXCLUDE_FROM_ALL)
+    # find_package(onnx_light) exposes the namespaced onnx_light::lib_onnx_core
+    # target; provide the same alias for the in-tree target so the code below is
+    # identical for both build modes.
+    if(NOT TARGET onnx_light::lib_onnx_core)
+      add_library(onnx_light::lib_onnx_core ALIAS lib_onnx_core)
+    endif()
+  else()
+    find_package(onnx_light CONFIG REQUIRED)
+  endif()
 
   file(GLOB CPU_KERNEL_REGISTRATION_SOURCES CONFIGURE_DEPENDS
       "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/kernels/*.cc"
