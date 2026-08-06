@@ -11,6 +11,17 @@ endif()
 
 project(onnx_light_cpu VERSION 0.1.11 LANGUAGES CXX)
 
+# CMake 4.1 introduced CMP0178, which stops silently discarding empty test
+# launcher / crosscompiling-emulator arguments. With the NEW behaviour,
+# gtest_discover_tests passes an empty executor (``-- ""``) to its discovery
+# script, so the discovery run tries to execute ``""`` before the test binary.
+# On Windows this fails and yields an empty JSON test list, breaking the build
+# during POST_BUILD test discovery. Keep the OLD behaviour so empty executor
+# arguments are dropped and discovery runs the test binary directly.
+if(POLICY CMP0178)
+  cmake_policy(SET CMP0178 OLD)
+endif()
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 option(ONNX_LIGHT_CPU_BUILD_TESTS "Build C++ unit tests." OFF)
