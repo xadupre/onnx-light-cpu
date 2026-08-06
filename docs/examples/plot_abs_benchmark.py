@@ -231,4 +231,5 @@ ax_speedup.set_title("Abs speed-up (onnxruntime = 1)")
 ax_speedup.legend()
 
 fig.tight_layout()
+fig.savefig("plot_abs_benchmark.png")
 plt.show()

@@ -186,4 +186,5 @@ ax_speedup.tick_params(axis="x", labelrotation=45)
 ax_speedup.legend()
 
 fig.tight_layout()
+fig.savefig("plot_gemm_benchmark.png")
 plt.show()
