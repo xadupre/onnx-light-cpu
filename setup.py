@@ -35,6 +35,18 @@ def _default_parallel_jobs():
     return os.cpu_count() or 1
 
 
+def _ctest_command(build_temp):
+    """Returns the ctest command that runs the C++ unit tests."""
+    return [
+        "ctest",
+        "--test-dir",
+        str(build_temp),
+        "--output-on-failure",
+        "--build-config",
+        "Release",
+    ]
+
+
 try:
     from setuptools import Command, Distribution, setup
 except ModuleNotFoundError:
@@ -129,6 +141,8 @@ except ModuleNotFoundError:
             ["cmake", "--install", str(build_temp_path), "--prefix", str(install_prefix)],
             dry_run,
         )
+        if cpp_tests:
+            _spawn(_ctest_command(build_temp_path), dry_run)
         return True
 
     if _run_build_ext_without_packaging(sys.argv[1:]):
@@ -152,7 +166,7 @@ class BuildExt(Command):
         ("inplace", "i", "build extension in the source tree"),
         ("build-temp=", "t", "temporary build directory"),
         ("build-lib=", "b", "build directory for platform-specific files"),
-        ("cpp-tests", None, "enable the C++ unit tests"),
+        ("cpp-tests", None, "build and run the C++ unit tests"),
         ("parallel=", "j", "number of parallel build jobs"),
     ]
     boolean_options = ["inplace", "cpp-tests"]
@@ -201,6 +215,8 @@ class BuildExt(Command):
             build_cmd += ["--parallel", str(self.parallel)]
         self.spawn(build_cmd)
         self.spawn(["cmake", "--install", str(build_temp), "--prefix", str(install_prefix)])
+        if self.cpp_tests:
+            self.spawn(_ctest_command(build_temp))
 
 
 setup(

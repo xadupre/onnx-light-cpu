@@ -40,6 +40,8 @@ pixi run test-python
 
 ### setup.py with C++ tests
 
+Build the extension and run the C++ unit tests with `ctest`:
+
 ```bash
 python setup.py build_ext --inplace --cpp-tests
 ```
