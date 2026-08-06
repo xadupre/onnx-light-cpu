@@ -25,9 +25,6 @@ sphinx_gallery_conf = {
     "filename_pattern": r"/plot_",
 }
 
-if os.environ.get("ONNX_LIGHT_CPU_SKIP_ONNX_LIGHT_EXAMPLES") == "1":
-    sphinx_gallery_conf["ignore_pattern"] = r"plot_(abs|gemm)_benchmark\.py"
-
 html_theme = "pydata_sphinx_theme"
 html_static_path = ["_static"]
 html_logo = "_static/logo.svg"
