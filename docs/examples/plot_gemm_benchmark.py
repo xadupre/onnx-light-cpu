@@ -171,12 +171,8 @@ ax_time.legend()
 
 ax_speedup.plot(sizes, ort_times / numpy_times, "o--", label="numpy", color="#9b7ec8")
 if light_session is not None:
-    ax_speedup.plot(
-        sizes, ort_times / cpu_times, "o-", label=light_label, color="#4a9eff"
-    )
-ax_speedup.plot(
-    sizes, ort_times / ort_times, "o-", label="onnxruntime", color="#f4a259"
-)
+    ax_speedup.plot(sizes, ort_times / cpu_times, "o-", label=light_label, color="#4a9eff")
+ax_speedup.plot(sizes, ort_times / ort_times, "o-", label="onnxruntime", color="#f4a259")
 ax_speedup.axhline(1.0, color="grey", linewidth=0.8, linestyle=":")
 ax_speedup.set_xscale("log")
 ax_speedup.set_yscale("log")

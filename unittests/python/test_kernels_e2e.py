@@ -43,8 +43,7 @@ def _run(node, inputs, output_types):
         for name, arr in inputs.items()
     ]
     graph_outputs = [
-        helper.make_tensor_value_info(name, tp, None)
-        for name, tp in output_types.items()
+        helper.make_tensor_value_info(name, tp, None) for name, tp in output_types.items()
     ]
     graph = helper.make_graph([node], "test", graph_inputs, graph_outputs)
     model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 18)])

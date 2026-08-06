@@ -218,9 +218,7 @@ if light_session is not None:
         label=light_label,
         color="#4a9eff",
     )
-ax_speedup.plot(
-    sizes, ort_times / ort_times, "o-", label="onnxruntime", color="#f4a259"
-)
+ax_speedup.plot(sizes, ort_times / ort_times, "o-", label="onnxruntime", color="#f4a259")
 ax_speedup.axhline(1.0, color="grey", linewidth=0.8, linestyle=":")
 ax_speedup.set_xscale("log")
 ax_speedup.set_yscale("log")

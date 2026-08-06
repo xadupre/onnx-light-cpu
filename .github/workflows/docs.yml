@@ -37,18 +37,18 @@ jobs:
           echo "CMAKE_BUILD_PARALLEL_LEVEL=${CMAKE_BUILD_PARALLEL_LEVEL}" >> "$GITHUB_ENV"
           echo "CMAKE_BUILD_PARALLEL_LEVEL=${CMAKE_BUILD_PARALLEL_LEVEL}"
 
+      # onnx-light is not published on PyPI, the wheel is fetched from the
+      # GitHub release matching the Python version used by this job (3.13).
+      - name: Install onnx-light
+        run: pip install https://github.com/xadupre/onnx-light/releases/download/0.1.11/onnx_light-0.1.11-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
+
       # Build the CPU kernel extension and install the documentation
       # dependencies. Sphinx-Gallery executes docs/examples/plot_abs_simd.py at
       # build time, which calls the compiled extension directly.
       - name: Build and install package with docs extras
         env:
           SCCACHE_GHA_ENABLED: "true"
-        run: pip install -C build-dir=build -C cmake.build-type=Release -C cmake.define.CMAKE_C_COMPILER_LAUNCHER=sccache -C cmake.define.CMAKE_CXX_COMPILER_LAUNCHER=sccache -e .[docs] -v
-
-      # onnx-light is not published on PyPI, the wheel is fetched from the
-      # GitHub release matching the Python version used by this job (3.13).
-      - name: Install onnx-light
-        run: pip install https://github.com/xadupre/onnx-light/releases/download/0.1.11/onnx_light-0.1.11-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
+        run: pip install -C build-dir=build -C cmake.build-type=Release -C cmake.define.ONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON -C cmake.define.CMAKE_C_COMPILER_LAUNCHER=sccache -C cmake.define.CMAKE_CXX_COMPILER_LAUNCHER=sccache -e .[docs] -v
 
       - name: pip freeze
         run: pip freeze

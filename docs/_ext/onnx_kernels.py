@@ -70,11 +70,7 @@ class RegisteredKernelsDirective(Directive):
     def run(self) -> List[nodes.Node]:
         env = self.state.document.settings.env
         root = Path(env.srcdir).parent
-        globs = (
-            tuple(self.options["glob"].split())
-            if "glob" in self.options
-            else DEFAULT_GLOBS
-        )
+        globs = tuple(self.options["glob"].split()) if "glob" in self.options else DEFAULT_GLOBS
 
         # Rebuild the page whenever a scanned source file changes.
         for path in iter_source_files(root, globs):
