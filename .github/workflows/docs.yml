@@ -41,6 +41,10 @@ jobs:
         env:
           SCCACHE_GHA_ENABLED: "true"
         run: |
+          # onnx-light's CMake calls find_package(nanobind) via "python -m
+          # nanobind --cmake_dir", so nanobind (and scikit-build-core) must be
+          # importable before configuring it.
+          pip install nanobind scikit-build-core
           git clone --depth 1 https://github.com/xadupre/onnx-light.git /tmp/onnx-light
           cmake -S /tmp/onnx-light -B /tmp/onnx-light/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/tmp/onnx-light/install -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
           cmake --build /tmp/onnx-light/build --config Release --parallel
