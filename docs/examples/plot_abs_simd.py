@@ -55,4 +55,5 @@ ax_abs.set_ylabel("output")
 ax_abs.legend()
 
 fig.tight_layout()
+fig.savefig("plot_abs_simd.png")
 plt.show()
