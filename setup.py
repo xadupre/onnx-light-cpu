@@ -109,6 +109,9 @@ except ModuleNotFoundError:
         cmake_args = _set_cmake_default_define(
             cmake_args, "CMAKE_BUILD_TYPE", "Release"
         )
+        cmake_args = _set_cmake_default_define(
+            cmake_args, "ONNX_LIGHT_CPU_WITH_ONNX_LIGHT", "ON"
+        )
         if cpp_tests:
             cmake_args = _set_cmake_define(
                 cmake_args, "ONNX_LIGHT_CPU_BUILD_TESTS", "ON"
@@ -193,6 +196,9 @@ class BuildExt(Command):
         cmake_args = _cmake_args_from_env()
         cmake_args = _set_cmake_default_define(
             cmake_args, "CMAKE_BUILD_TYPE", "Release"
+        )
+        cmake_args = _set_cmake_default_define(
+            cmake_args, "ONNX_LIGHT_CPU_WITH_ONNX_LIGHT", "ON"
         )
         if self.cpp_tests:
             cmake_args = _set_cmake_define(
