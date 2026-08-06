@@ -106,9 +106,13 @@ except ModuleNotFoundError:
         print("running build_ext")
         install_prefix = root if inplace else Path(build_lib).resolve()
         cmake_args = _cmake_args_from_env()
-        cmake_args = _set_cmake_default_define(cmake_args, "CMAKE_BUILD_TYPE", "Release")
+        cmake_args = _set_cmake_default_define(
+            cmake_args, "CMAKE_BUILD_TYPE", "Release"
+        )
         if cpp_tests:
-            cmake_args = _set_cmake_define(cmake_args, "ONNX_LIGHT_CPU_BUILD_TESTS", "ON")
+            cmake_args = _set_cmake_define(
+                cmake_args, "ONNX_LIGHT_CPU_BUILD_TESTS", "ON"
+            )
         _spawn(
             [
                 "cmake",
@@ -126,7 +130,13 @@ except ModuleNotFoundError:
             build_cmd += ["--parallel", str(parallel)]
         _spawn(build_cmd, dry_run)
         _spawn(
-            ["cmake", "--install", str(build_temp_path), "--prefix", str(install_prefix)],
+            [
+                "cmake",
+                "--install",
+                str(build_temp_path),
+                "--prefix",
+                str(install_prefix),
+            ],
             dry_run,
         )
         return True
@@ -181,9 +191,13 @@ class BuildExt(Command):
 
         install_prefix = root if self.inplace else Path(self.build_lib).resolve()
         cmake_args = _cmake_args_from_env()
-        cmake_args = _set_cmake_default_define(cmake_args, "CMAKE_BUILD_TYPE", "Release")
+        cmake_args = _set_cmake_default_define(
+            cmake_args, "CMAKE_BUILD_TYPE", "Release"
+        )
         if self.cpp_tests:
-            cmake_args = _set_cmake_define(cmake_args, "ONNX_LIGHT_CPU_BUILD_TESTS", "ON")
+            cmake_args = _set_cmake_define(
+                cmake_args, "ONNX_LIGHT_CPU_BUILD_TESTS", "ON"
+            )
 
         self.spawn(
             [
@@ -200,7 +214,9 @@ class BuildExt(Command):
         if self.parallel is not None:
             build_cmd += ["--parallel", str(self.parallel)]
         self.spawn(build_cmd)
-        self.spawn(["cmake", "--install", str(build_temp), "--prefix", str(install_prefix)])
+        self.spawn(
+            ["cmake", "--install", str(build_temp), "--prefix", str(install_prefix)]
+        )
 
 
 setup(

@@ -86,11 +86,8 @@ light_label = "onnx-light + onnx-light-cpu"
 # built with ``ONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON``. When it is missing (as in
 # the documentation build) the onnx-light-cpu curve is simply omitted; the
 # import above stays unconditional.
-try:
-    register_kernels()
-    light_session = ReferenceEvaluator(model)
-except ImportError:
-    light_session = None
+register_kernels()
+light_session = ReferenceEvaluator(model)
 light_setup_time = time.perf_counter() - _light_setup_start
 
 
@@ -221,7 +218,9 @@ if light_session is not None:
         label=light_label,
         color="#4a9eff",
     )
-ax_speedup.plot(sizes, ort_times / ort_times, "o-", label="onnxruntime", color="#f4a259")
+ax_speedup.plot(
+    sizes, ort_times / ort_times, "o-", label="onnxruntime", color="#f4a259"
+)
 ax_speedup.axhline(1.0, color="grey", linewidth=0.8, linestyle=":")
 ax_speedup.set_xscale("log")
 ax_speedup.set_yscale("log")
