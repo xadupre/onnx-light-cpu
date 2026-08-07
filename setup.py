@@ -186,25 +186,17 @@ except ModuleNotFoundError:
         print("running build_ext")
         install_prefix = root if inplace else Path(build_lib).resolve()
         cmake_args = _cmake_args_from_env()
-        cmake_args = _set_cmake_default_define(
-            cmake_args, "CMAKE_BUILD_TYPE", "Release"
-        )
+        cmake_args = _set_cmake_default_define(cmake_args, "CMAKE_BUILD_TYPE", "Release")
         if cpp_tests:
-            cmake_args = _set_cmake_define(
-                cmake_args, "ONNX_LIGHT_CPU_BUILD_TESTS", "ON"
-            )
+            cmake_args = _set_cmake_define(cmake_args, "ONNX_LIGHT_CPU_BUILD_TESTS", "ON")
         if onnx_light:
             if dry_run:
-                cmake_args = _set_cmake_define(
-                    cmake_args, "ONNX_LIGHT_CPU_WITH_ONNX_LIGHT", "ON"
-                )
+                cmake_args = _set_cmake_define(cmake_args, "ONNX_LIGHT_CPU_WITH_ONNX_LIGHT", "ON")
             else:
                 cmake_args = _add_onnx_light_defines(cmake_args)
         if onnx_light_source:
             if dry_run:
-                cmake_args = _set_cmake_define(
-                    cmake_args, "ONNX_LIGHT_CPU_WITH_ONNX_LIGHT", "ON"
-                )
+                cmake_args = _set_cmake_define(cmake_args, "ONNX_LIGHT_CPU_WITH_ONNX_LIGHT", "ON")
             else:
                 cmake_args = _add_onnx_light_source_defines(cmake_args)
         _spawn(
@@ -329,13 +321,9 @@ class BuildExt(Command):
 
         install_prefix = root if self.inplace else Path(self.build_lib).resolve()
         cmake_args = _cmake_args_from_env()
-        cmake_args = _set_cmake_default_define(
-            cmake_args, "CMAKE_BUILD_TYPE", "Release"
-        )
+        cmake_args = _set_cmake_default_define(cmake_args, "CMAKE_BUILD_TYPE", "Release")
         if self.cpp_tests:
-            cmake_args = _set_cmake_define(
-                cmake_args, "ONNX_LIGHT_CPU_BUILD_TESTS", "ON"
-            )
+            cmake_args = _set_cmake_define(cmake_args, "ONNX_LIGHT_CPU_BUILD_TESTS", "ON")
         if self.onnx_light:
             cmake_args = _add_onnx_light_defines(cmake_args)
         if self.onnx_light_source:
@@ -356,9 +344,7 @@ class BuildExt(Command):
         if self.parallel is not None:
             build_cmd += ["--parallel", str(self.parallel)]
         self._spawn(build_cmd)
-        self._spawn(
-            ["cmake", "--install", str(build_temp), "--prefix", str(install_prefix)]
-        )
+        self._spawn(["cmake", "--install", str(build_temp), "--prefix", str(install_prefix)])
         if self.cpp_tests:
             self._spawn(_ctest_command(build_temp))
 

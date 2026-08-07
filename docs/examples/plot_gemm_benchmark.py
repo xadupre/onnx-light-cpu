@@ -142,9 +142,7 @@ for size in alone_sizes:
 
     alone_times[size] = measure(run_alone, repeat)
     np.testing.assert_allclose(run_alone(), expected, rtol=1e-2, atol=1e-2)
-    print(
-        f"size={size:>4}x{size:<4} | onnx-light (built-in)={alone_times[size] * 1e6:10.2f} us"
-    )
+    print(f"size={size:>4}x{size:<4} | onnx-light (built-in)={alone_times[size] * 1e6:10.2f} us")
 
 light_label = "onnx-light + onnx-light-cpu"
 alone_label = "onnx-light (built-in)"
@@ -222,9 +220,7 @@ import matplotlib.pyplot as plt
 fig, (ax_time, ax_speedup) = plt.subplots(1, 2, figsize=(11, 4.5))
 
 ax_time.plot(sizes, numpy_times * 1e6, "o--", label="numpy", color="#9b7ec8")
-ax_time.plot(
-    alone_grid, alone_grid_times * 1e6, "o--", label=alone_label, color="#5cb85c"
-)
+ax_time.plot(alone_grid, alone_grid_times * 1e6, "o--", label=alone_label, color="#5cb85c")
 if light_session is not None:
     ax_time.plot(sizes, cpu_times * 1e6, "o-", label=light_label, color="#4a9eff")
 ax_time.plot(sizes, ort_times * 1e6, "o-", label="onnxruntime", color="#f4a259")
@@ -248,12 +244,8 @@ ax_speedup.plot(
     color="#5cb85c",
 )
 if light_session is not None:
-    ax_speedup.plot(
-        sizes, ort_times / cpu_times, "o-", label=light_label, color="#4a9eff"
-    )
-ax_speedup.plot(
-    sizes, ort_times / ort_times, "o-", label="onnxruntime", color="#f4a259"
-)
+    ax_speedup.plot(sizes, ort_times / cpu_times, "o-", label=light_label, color="#4a9eff")
+ax_speedup.plot(sizes, ort_times / ort_times, "o-", label="onnxruntime", color="#f4a259")
 ax_speedup.axhline(1.0, color="grey", linewidth=0.8, linestyle=":")
 ax_speedup.set_xscale("log")
 ax_speedup.set_yscale("log")

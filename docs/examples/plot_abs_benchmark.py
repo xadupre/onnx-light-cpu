@@ -285,9 +285,7 @@ ax_speedup.plot(
     label=alone_label,
     color="#5cb85c",
 )
-ax_speedup.plot(
-    sizes, ort_times / ort_times, "o-", label="onnxruntime", color="#f4a259"
-)
+ax_speedup.plot(sizes, ort_times / ort_times, "o-", label="onnxruntime", color="#f4a259")
 ax_speedup.axhline(1.0, color="grey", linewidth=0.8, linestyle=":")
 ax_speedup.set_xscale("log")
 ax_speedup.set_yscale("log")

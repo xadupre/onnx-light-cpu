@@ -194,9 +194,7 @@ for shape_label, M, N, K in SHAPES:
     expected = a32 @ b32
     repeat = max(3, min(50, 200_000_000 // (M * N * K + 1)))
 
-    print(
-        f"\nshape={shape_label.splitlines()[0]:<24} M={M} N={N} K={K} repeat={repeat}"
-    )
+    print(f"\nshape={shape_label.splitlines()[0]:<24} M={M} N={N} K={K} repeat={repeat}")
     for label, (_, np_dtype) in DTYPES.items():
         a = a32.astype(np_dtype)
         b = b32.astype(np_dtype)
@@ -209,9 +207,7 @@ for shape_label, M, N, K in SHAPES:
         results[label].append(elapsed)
 
         tol = 1e-3 if label == "float32" else (5e-2 if label == "float16" else 5e-1)
-        np.testing.assert_allclose(
-            run().astype(np.float32), expected, rtol=tol, atol=tol
-        )
+        np.testing.assert_allclose(run().astype(np.float32), expected, rtol=tol, atol=tol)
         print(f"  {label:<9} | {elapsed * 1e6:10.2f} us")
 
 # %%
@@ -253,11 +249,7 @@ alone_x = np.array(
     [x[i] for i, shape_label in enumerate(shape_labels) if shape_label in alone_results]
 )
 alone_times = np.array(
-    [
-        alone_results[shape_label]
-        for shape_label in shape_labels
-        if shape_label in alone_results
-    ]
+    [alone_results[shape_label] for shape_label in shape_labels if shape_label in alone_results]
 )
 ax_time.bar(
     alone_x + 1.5 * width,
@@ -277,9 +269,7 @@ float32_times = np.array(results["float32"])
 for label in ("float16", "bfloat16"):
     overhead = np.array(results[label]) / float32_times
     ax_overhead.plot(shape_labels, overhead, "o-", label=label, color=colors[label])
-ax_overhead.axhline(
-    1.0, color="grey", linewidth=0.8, linestyle=":", label="float32 baseline"
-)
+ax_overhead.axhline(1.0, color="grey", linewidth=0.8, linestyle=":", label="float32 baseline")
 ax_overhead.set_ylabel("time relative to float32")
 ax_overhead.set_title("float16 / bfloat16 widen/round-trip overhead")
 ax_overhead.tick_params(axis="x", labelrotation=0, labelsize=8)
