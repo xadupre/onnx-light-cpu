@@ -69,10 +69,42 @@ def _onnx_light_cmake_dir():
     return matches[0].parent
 
 
+def _onnx_light_source_dir():
+    """Returns the source directory of a locally built onnx-light.
+
+    onnx-light must be importable (``import onnx_light``) and built from a local
+    checkout so that its ``CMakeLists.txt`` is available next to the package. The
+    directory is located by importing onnx-light and taking the parent of the
+    package directory, which is the onnx-light source root. This assumes the same
+    sources were used to build the installed onnx-light Python package.
+    """
+    import onnx_light
+
+    package_dir = Path(onnx_light.__file__).resolve().parent
+    source_root = package_dir.parent
+    cmake_lists = source_root / "CMakeLists.txt"
+    if not cmake_lists.is_file():
+        raise FileNotFoundError(
+            f"Could not find onnx-light's 'CMakeLists.txt' in {source_root}. Install "
+            "onnx-light from a local checkout (for example 'pip install "
+            "--no-build-isolation -e .' in the onnx-light source tree) before using "
+            "--onnx-light-source."
+        )
+    return source_root
+
+
 def _add_onnx_light_defines(cmake_args):
     """Enables the onnx-light integration against a locally built onnx-light."""
     cmake_args = _set_cmake_define(cmake_args, "ONNX_LIGHT_CPU_WITH_ONNX_LIGHT", "ON")
     return _set_cmake_define(cmake_args, "onnx_light_DIR", str(_onnx_light_cmake_dir()))
+
+
+def _add_onnx_light_source_defines(cmake_args):
+    """Builds the onnx-light integration from a local onnx-light source tree."""
+    cmake_args = _set_cmake_define(cmake_args, "ONNX_LIGHT_CPU_WITH_ONNX_LIGHT", "ON")
+    return _set_cmake_define(
+        cmake_args, "ONNX_LIGHT_CPU_ONNX_LIGHT_SOURCE_DIR", str(_onnx_light_source_dir())
+    )
 
 
 try:
@@ -93,6 +125,7 @@ except ModuleNotFoundError:
         inplace = False
         cpp_tests = False
         onnx_light = False
+        onnx_light_source = False
         dry_run = False
         build_temp = "build/temp"
         build_lib = "build/lib"
@@ -107,6 +140,8 @@ except ModuleNotFoundError:
                 cpp_tests = True
             elif arg == "--onnx-light":
                 onnx_light = True
+            elif arg == "--onnx-light-source":
+                onnx_light_source = True
             elif arg in {"--dry-run", "-n"}:
                 dry_run = True
             elif arg.startswith("--build-temp="):
@@ -157,6 +192,11 @@ except ModuleNotFoundError:
                 cmake_args = _set_cmake_define(cmake_args, "ONNX_LIGHT_CPU_WITH_ONNX_LIGHT", "ON")
             else:
                 cmake_args = _add_onnx_light_defines(cmake_args)
+        if onnx_light_source:
+            if dry_run:
+                cmake_args = _set_cmake_define(cmake_args, "ONNX_LIGHT_CPU_WITH_ONNX_LIGHT", "ON")
+            else:
+                cmake_args = _add_onnx_light_source_defines(cmake_args)
         _spawn(
             [
                 "cmake",
@@ -215,9 +255,16 @@ class BuildExt(Command):
             "build the onnx-light kernel-registration integration against a "
             "locally built, importable onnx-light",
         ),
+        (
+            "onnx-light-source",
+            None,
+            "build the onnx-light kernel-registration integration from a local "
+            "onnx-light source tree (auto-discovered from the importable "
+            "onnx-light) instead of find_package(onnx_light)",
+        ),
         ("parallel=", "j", "number of parallel build jobs"),
     ]
-    boolean_options = ["inplace", "cpp-tests", "onnx-light"]
+    boolean_options = ["inplace", "cpp-tests", "onnx-light", "onnx-light-source"]
 
     def initialize_options(self):
         """Initializes default values for command options."""
@@ -226,6 +273,7 @@ class BuildExt(Command):
         self.build_lib = None
         self.cpp_tests = False
         self.onnx_light = False
+        self.onnx_light_source = False
         self.parallel = _default_parallel_jobs()
 
     def finalize_options(self):
@@ -249,6 +297,8 @@ class BuildExt(Command):
             cmake_args = _set_cmake_define(cmake_args, "ONNX_LIGHT_CPU_BUILD_TESTS", "ON")
         if self.onnx_light:
             cmake_args = _add_onnx_light_defines(cmake_args)
+        if self.onnx_light_source:
+            cmake_args = _add_onnx_light_source_defines(cmake_args)
 
         self.spawn(
             [

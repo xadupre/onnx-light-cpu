@@ -6,6 +6,7 @@ onnx-light-cpu
 
    getting_started
    kernels
+   gemm_kernel_design
    auto_examples/index
    api
 
