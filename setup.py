@@ -69,10 +69,42 @@ def _onnx_light_cmake_dir():
     return matches[0].parent
 
 
+def _onnx_light_source_dir():
+    """Returns the source directory of a locally built onnx-light.
+
+    onnx-light must be importable (``import onnx_light``) and built from a local
+    checkout so that its ``CMakeLists.txt`` is available next to the package. The
+    directory is located by importing onnx-light and taking the parent of the
+    package directory, which is the onnx-light source root. This assumes the same
+    sources were used to build the installed onnx-light Python package.
+    """
+    import onnx_light
+
+    package_dir = Path(onnx_light.__file__).resolve().parent
+    source_root = package_dir.parent
+    cmake_lists = source_root / "CMakeLists.txt"
+    if not cmake_lists.is_file():
+        raise FileNotFoundError(
+            f"Could not find onnx-light's 'CMakeLists.txt' in {source_root}. Install "
+            "onnx-light from a local checkout (for example 'pip install "
+            "--no-build-isolation -e .' in the onnx-light source tree) before using "
+            "--onnx-light-source."
+        )
+    return source_root
+
+
 def _add_onnx_light_defines(cmake_args):
     """Enables the onnx-light integration against a locally built onnx-light."""
     cmake_args = _set_cmake_define(cmake_args, "ONNX_LIGHT_CPU_WITH_ONNX_LIGHT", "ON")
     return _set_cmake_define(cmake_args, "onnx_light_DIR", str(_onnx_light_cmake_dir()))
+
+
+def _add_onnx_light_source_defines(cmake_args):
+    """Builds the onnx-light integration from a local onnx-light source tree."""
+    cmake_args = _set_cmake_define(cmake_args, "ONNX_LIGHT_CPU_WITH_ONNX_LIGHT", "ON")
+    return _set_cmake_define(
+        cmake_args, "ONNX_LIGHT_CPU_ONNX_LIGHT_SOURCE_DIR", str(_onnx_light_source_dir())
+    )
 
 
 try:
@@ -93,6 +125,7 @@ except ModuleNotFoundError:
         inplace = False
         cpp_tests = False
         onnx_light = False
+        onnx_light_source = False
         dry_run = False
         build_temp = "build/temp"
         build_lib = "build/lib"
@@ -107,6 +140,8 @@ except ModuleNotFoundError:
                 cpp_tests = True
             elif arg == "--onnx-light":
                 onnx_light = True
+            elif arg == "--onnx-light-source":
+                onnx_light_source = True
             elif arg in {"--dry-run", "-n"}:
                 dry_run = True
             elif arg.startswith("--build-temp="):
@@ -157,6 +192,11 @@ except ModuleNotFoundError:
                 cmake_args = _set_cmake_define(cmake_args, "ONNX_LIGHT_CPU_WITH_ONNX_LIGHT", "ON")
             else:
                 cmake_args = _add_onnx_light_defines(cmake_args)
+        if onnx_light_source:
+            if dry_run:
+                cmake_args = _set_cmake_define(cmake_args, "ONNX_LIGHT_CPU_WITH_ONNX_LIGHT", "ON")
+            else:
+                cmake_args = _add_onnx_light_source_defines(cmake_args)
         _spawn(
             [
                 "cmake",
@@ -215,9 +255,21 @@ class BuildExt(Command):
             "build the onnx-light kernel-registration integration against a "
             "locally built, importable onnx-light",
         ),
+        (
+            "onnx-light-source",
+            None,
+            "build the onnx-light kernel-registration integration from a local "
+            "onnx-light source tree (auto-discovered from the importable "
+            "onnx-light) instead of find_package(onnx_light)",
+        ),
         ("parallel=", "j", "number of parallel build jobs"),
+        (
+            "dry-run",
+            "n",
+            "print the cmake/ctest commands without executing them",
+        ),
     ]
-    boolean_options = ["inplace", "cpp-tests", "onnx-light"]
+    boolean_options = ["inplace", "cpp-tests", "onnx-light", "onnx-light-source", "dry-run"]
 
     def initialize_options(self):
         """Initializes default values for command options."""
@@ -226,7 +278,13 @@ class BuildExt(Command):
         self.build_lib = None
         self.cpp_tests = False
         self.onnx_light = False
+        self.onnx_light_source = False
         self.parallel = _default_parallel_jobs()
+        # Newer setuptools/distutils no longer expose a global --dry-run
+        # option (nor does Command.spawn() honor one), so --dry-run/-n is
+        # declared as a plain option of this command instead and handled
+        # explicitly in run() via _spawn_or_print().
+        self.dry_run = False
 
     def finalize_options(self):
         """Finalizes build directory paths for unspecified options."""
@@ -235,6 +293,17 @@ class BuildExt(Command):
             self.build_temp = os.path.join(build_base, "temp")
         if self.build_lib is None:
             self.build_lib = os.path.join(build_base, "lib")
+
+    def _spawn(self, cmd):
+        """Prints a command and executes it unless --dry-run was requested.
+
+        Command.spawn() delegates to distutils' own dry-run handling, which
+        newer setuptools/distutils versions no longer wire up to a global
+        --dry-run flag, so --dry-run is handled directly here instead.
+        """
+        print(" ".join(shlex.quote(str(part)) for part in cmd))
+        if not self.dry_run:
+            subprocess.run(cmd, check=True)
 
     def run(self):
         """Runs CMake configure, build, and install commands."""
@@ -249,8 +318,10 @@ class BuildExt(Command):
             cmake_args = _set_cmake_define(cmake_args, "ONNX_LIGHT_CPU_BUILD_TESTS", "ON")
         if self.onnx_light:
             cmake_args = _add_onnx_light_defines(cmake_args)
+        if self.onnx_light_source:
+            cmake_args = _add_onnx_light_source_defines(cmake_args)
 
-        self.spawn(
+        self._spawn(
             [
                 "cmake",
                 "-S",
@@ -264,10 +335,10 @@ class BuildExt(Command):
         build_cmd = ["cmake", "--build", str(build_temp), "--config", "Release"]
         if self.parallel is not None:
             build_cmd += ["--parallel", str(self.parallel)]
-        self.spawn(build_cmd)
-        self.spawn(["cmake", "--install", str(build_temp), "--prefix", str(install_prefix)])
+        self._spawn(build_cmd)
+        self._spawn(["cmake", "--install", str(build_temp), "--prefix", str(install_prefix)])
         if self.cpp_tests:
-            self.spawn(_ctest_command(build_temp))
+            self._spawn(_ctest_command(build_temp))
 
 
 setup(

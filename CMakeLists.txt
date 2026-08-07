@@ -29,8 +29,30 @@ option(ONNX_LIGHT_CPU_BUILD_PYTHON "Build Python extension." ON)
 option(ONNX_LIGHT_CPU_INSTALL "Install the C++ library and headers." ON)
 option(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT
        "Build the onnx-light kernel registration library (requires onnx-light)." OFF)
+set(ONNX_LIGHT_CPU_ONNX_LIGHT_SOURCE_DIR "" CACHE PATH
+    "Path to a local onnx-light source tree. When set (and \
+ONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON), onnx-light is built from these sources with \
+add_subdirectory instead of being located with find_package(onnx_light). Use \
+this when the same sources were used to build the installed onnx-light Python \
+package but its onnx_lightConfig.cmake is not available.")
 option(ONNX_LIGHT_CPU_ENABLE_COVERAGE
        "Instrument the C++ targets for code coverage (GCC/Clang only)." OFF)
+
+# When onnx-light is built from a local source tree (add_subdirectory with
+# ONNX_LIGHT_INSTALL=OFF), its targets are never added to any export set, so
+# lib_onnx_light_cpu_kernels cannot be installed as part of onnx_light_cpuTargets
+# (its PUBLIC link dependency onnx_light::lib_onnx_core would need to be
+# exported too). Disable the C++ install step in that mode; it is normally
+# only used for local/dev builds (e.g. --cpp-tests) anyway.
+if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT AND ONNX_LIGHT_CPU_ONNX_LIGHT_SOURCE_DIR
+   AND ONNX_LIGHT_CPU_INSTALL)
+  message(STATUS
+      "onnx-light-cpu: disabling ONNX_LIGHT_CPU_INSTALL because "
+      "ONNX_LIGHT_CPU_ONNX_LIGHT_SOURCE_DIR is set (onnx-light built from "
+      "source is not part of an installable export set).")
+  set(ONNX_LIGHT_CPU_INSTALL OFF CACHE BOOL
+      "Install the C++ library and headers." FORCE)
+endif()
 option(ONNX_HARDENING
     "Enable OpenSSF Compiler Hardening Guide flags for C/C++ targets. \
 See cmake/Hardening.cmake and \
@@ -81,6 +103,21 @@ else()
       "SIMD compiler flags for kernel sources (e.g. /arch:AVX2, /arch:AVX512).")
 endif()
 
+# gemm_kernel_avx512.cc carries a dedicated AVX-512 Gemm micro-kernel that is
+# compiled with an extra -mavx512f *on top of* the flags above (see the
+# per-file COMPILE_OPTIONS override below), regardless of
+# ONNX_LIGHT_CPU_SIMD_FLAGS. This lets a single binary built with the default
+# -mavx2 still carry an AVX-512 kernel that DetectSimdLevel() picks at runtime
+# on machines that support it. Only enabled when the compiler actually accepts
+# the flag, so this stays a no-op (falls back to the AVX2 kernel) on
+# toolchains/targets that don't support it (e.g. non-x86 cross-compilation).
+include(CheckCXXCompilerFlag)
+if(NOT MSVC)
+  check_cxx_compiler_flag("-mavx512f" ONNX_LIGHT_CPU_HAVE_AVX512F_FLAG)
+else()
+  check_cxx_compiler_flag("/arch:AVX512" ONNX_LIGHT_CPU_HAVE_AVX512F_FLAG)
+endif()
+
 # ---------------------------------------------------------------------------
 # Sources
 # ---------------------------------------------------------------------------
@@ -91,6 +128,14 @@ file(GLOB CPU_KERNEL_SOURCES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/*.cc"
     "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/*/*.cc"
 )
+
+set(_gemm_avx512_source
+    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/gemm_kernel_avx512.cc")
+if(NOT ONNX_LIGHT_CPU_HAVE_AVX512F_FLAG)
+  # Without -mavx512f the <immintrin.h> AVX-512 intrinsics this file uses
+  # aren't declared/usable; exclude it entirely rather than fail to compile.
+  list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_gemm_avx512_source}")
+endif()
 
 file(GLOB PY_KERNELS_SOURCES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/onnx_py/*.cc"
@@ -128,6 +173,20 @@ if(ONNX_LIGHT_CPU_SIMD_FLAGS)
   target_compile_options(lib_onnx_light_cpu PRIVATE ${_simd_flags})
 endif()
 
+if(ONNX_LIGHT_CPU_HAVE_AVX512F_FLAG)
+  if(NOT MSVC)
+    set_source_files_properties("${_gemm_avx512_source}" PROPERTIES
+        COMPILE_OPTIONS "-mavx512f")
+  else()
+    set_source_files_properties("${_gemm_avx512_source}" PROPERTIES
+        COMPILE_OPTIONS "/arch:AVX512")
+  endif()
+  # Told gemm_kernel.cc (compiled at the baseline ONNX_LIGHT_CPU_SIMD_FLAGS)
+  # that GemmMicroKernel_AVX512_F32/F64 are available to dispatch to.
+  target_compile_definitions(lib_onnx_light_cpu PRIVATE ONNX_LIGHT_CPU_HAVE_AVX512=1)
+endif()
+
+
 if(ONNX_LIGHT_CPU_ENABLE_COVERAGE)
   target_compile_options(lib_onnx_light_cpu PUBLIC --coverage -O0 -g)
   target_link_options(lib_onnx_light_cpu PUBLIC --coverage)
@@ -141,7 +200,29 @@ endif()
 # ``Abs`` runs the accelerated kernel. Requires the onnx-light C++ package and
 # is therefore opt-in via ONNX_LIGHT_CPU_WITH_ONNX_LIGHT.
 if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
-  find_package(onnx_light CONFIG REQUIRED)
+  if(ONNX_LIGHT_CPU_ONNX_LIGHT_SOURCE_DIR)
+    # Build onnx-light from a local source tree instead of locating a
+    # previously installed onnx-light with find_package. This assumes the same
+    # sources were used to build the onnx-light Python package that is used at
+    # runtime. Only the C++ library is needed here, so disable onnx-light's own
+    # Python extensions, tests, benchmarks and install rules. These are set as
+    # plain (non-cache) variables so onnx-light's option() calls honour them
+    # (policy CMP0077).
+    set(ONNX_LIGHT_BUILD_PYTHON OFF)
+    set(ONNX_LIGHT_BUILD_TESTS OFF)
+    set(ONNX_LIGHT_BUILD_BENCHMARKS OFF)
+    set(ONNX_LIGHT_INSTALL OFF)
+    add_subdirectory("${ONNX_LIGHT_CPU_ONNX_LIGHT_SOURCE_DIR}"
+        "${CMAKE_CURRENT_BINARY_DIR}/_onnx_light_src" EXCLUDE_FROM_ALL)
+    # find_package(onnx_light) exposes the namespaced onnx_light::lib_onnx_core
+    # target; provide the same alias for the in-tree target so the code below is
+    # identical for both build modes.
+    if(NOT TARGET onnx_light::lib_onnx_core)
+      add_library(onnx_light::lib_onnx_core ALIAS lib_onnx_core)
+    endif()
+  else()
+    find_package(onnx_light CONFIG REQUIRED)
+  endif()
 
   file(GLOB CPU_KERNEL_REGISTRATION_SOURCES CONFIGURE_DEPENDS
       "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/kernels/*.cc"
