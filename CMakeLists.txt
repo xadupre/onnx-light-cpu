@@ -315,21 +315,6 @@ if(ONNX_LIGHT_CPU_BUILD_PYTHON)
     install(TARGETS _cpuregister
         LIBRARY DESTINATION onnx_light_cpu/onnx_py
         RUNTIME DESTINATION onnx_light_cpu/onnx_py)
-
-    # _cpuregister is built with INSTALL_RPATH "$ORIGIN" and therefore looks
-    # for lib_onnx_light_cpu_kernels.so next to itself in onnx_light_cpu/onnx_py
-    # at runtime. That is independent of ONNX_LIGHT_CPU_INSTALL (the C++
-    # library/headers install step, which is disabled entirely when onnx-light
-    # is built from a local source tree -- see the comment near the top of
-    # this file), so install the shared library into onnx_py unconditionally
-    # here rather than only inside the ONNX_LIGHT_CPU_INSTALL block below.
-    # Without this, register_kernels() fails with an ImportError at runtime
-    # whenever ONNX_LIGHT_CPU_INSTALL is off.
-    if(_cpu_lib_type STREQUAL "SHARED")
-      install(TARGETS lib_onnx_light_cpu_kernels
-          LIBRARY DESTINATION onnx_light_cpu/onnx_py
-          RUNTIME DESTINATION onnx_light_cpu/onnx_py)
-    endif()
   endif()
 endif()
 

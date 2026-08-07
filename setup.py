@@ -263,8 +263,13 @@ class BuildExt(Command):
             "onnx-light) instead of find_package(onnx_light)",
         ),
         ("parallel=", "j", "number of parallel build jobs"),
+        (
+            "dry-run",
+            "n",
+            "print the cmake/ctest commands without executing them",
+        ),
     ]
-    boolean_options = ["inplace", "cpp-tests", "onnx-light", "onnx-light-source"]
+    boolean_options = ["inplace", "cpp-tests", "onnx-light", "onnx-light-source", "dry-run"]
 
     def initialize_options(self):
         """Initializes default values for command options."""
@@ -275,6 +280,11 @@ class BuildExt(Command):
         self.onnx_light = False
         self.onnx_light_source = False
         self.parallel = _default_parallel_jobs()
+        # Newer setuptools/distutils no longer expose a global --dry-run
+        # option (nor does Command.spawn() honor one), so --dry-run/-n is
+        # declared as a plain option of this command instead and handled
+        # explicitly in run() via _spawn_or_print().
+        self.dry_run = False
 
     def finalize_options(self):
         """Finalizes build directory paths for unspecified options."""
@@ -283,6 +293,17 @@ class BuildExt(Command):
             self.build_temp = os.path.join(build_base, "temp")
         if self.build_lib is None:
             self.build_lib = os.path.join(build_base, "lib")
+
+    def _spawn(self, cmd):
+        """Prints a command and executes it unless --dry-run was requested.
+
+        Command.spawn() delegates to distutils' own dry-run handling, which
+        newer setuptools/distutils versions no longer wire up to a global
+        --dry-run flag, so --dry-run is handled directly here instead.
+        """
+        print(" ".join(shlex.quote(str(part)) for part in cmd))
+        if not self.dry_run:
+            subprocess.run(cmd, check=True)
 
     def run(self):
         """Runs CMake configure, build, and install commands."""
@@ -300,7 +321,7 @@ class BuildExt(Command):
         if self.onnx_light_source:
             cmake_args = _add_onnx_light_source_defines(cmake_args)
 
-        self.spawn(
+        self._spawn(
             [
                 "cmake",
                 "-S",
@@ -314,10 +335,10 @@ class BuildExt(Command):
         build_cmd = ["cmake", "--build", str(build_temp), "--config", "Release"]
         if self.parallel is not None:
             build_cmd += ["--parallel", str(self.parallel)]
-        self.spawn(build_cmd)
-        self.spawn(["cmake", "--install", str(build_temp), "--prefix", str(install_prefix)])
+        self._spawn(build_cmd)
+        self._spawn(["cmake", "--install", str(build_temp), "--prefix", str(install_prefix)])
         if self.cpp_tests:
-            self.spawn(_ctest_command(build_temp))
+            self._spawn(_ctest_command(build_temp))
 
 
 setup(
