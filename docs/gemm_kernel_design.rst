@@ -238,34 +238,33 @@ gains.
        microarchitecture to tune for.
      - Combinatorial growth of kernel variants to maintain and test; detection
        logic (CPUID family/model parsing) is itself a source of bugs.
-   * - float16 / bfloat16 Gemm
-     - **Substantial, multi-stage effort**, more than any other row in this
-       table. Unlike ``Abs``/``Exp``/``Log`` (which already support
-       ``float16``/``bfloat16`` today -- see
-       ``onnx_light_cpu/impl/math/exp_log_kernel.cc`` -- but only via a
-       *scalar* per-element widen-to-float32/compute/round-trip path, with no
-       SIMD at all for those types), ``Gemm`` currently has **zero**
-       ``float16``/``bfloat16`` support of any kind (no entry point, no
-       scalar fallback, no packing). Two layers of work, each independently
-       shippable:
-
-       1. *Scalar/correctness layer* (moderate effort): a ``GemmFloat16``/
-          ``GemmBfloat16`` entry point plus scalar
-          widen-compute-round-trip micro-kernel, mirroring the existing
-          ``Exp``/``Log`` approach -- correct, but no faster than today's
-          scalar fallback.
-       2. *SIMD acceleration layer* (large effort, the bulk of the work): real
-          half-precision vector micro-kernels (AVX2 ``F16C``/``VCVTPH2PS`` for
-          convert-then-FMA-in-float32, or native ``AVX-512FP16``/``BF16``
-          instructions where present) integrated into the existing
-          packing/blocking/dispatch machinery (``PackARowBlock``/
-          ``PackBPanel``, ``GemmKernelKind`` dispatch, per-file compile flags
-          analogous to the AVX-512 ``.cc`` split).
+   * - Native SIMD float16 / bfloat16 Gemm
+     - **Large effort**, the remaining half of the work started in this pass.
+       ``Gemm`` now has a **scalar/correctness layer** for
+       ``float16``/``bfloat16``: ``GemmKernel`` widens ``A``/``B``/the bias
+       ``C`` to ``float32`` (via ``onnx-light``'s ``Float16BitsToFloat`` /
+       ``Bfloat16BitsToFloat``), calls the existing SIMD-accelerated
+       ``GemmFloat32`` for the reduction, and rounds ``Y`` back down (see
+       ``onnx_light_cpu/kernels/math/gemm_kernel.cc``) -- mirroring the
+       approach ``Abs``/``Exp``/``Log`` already use for these types (see
+       ``onnx_light_cpu/impl/math/exp_log_kernel.cc``). This is correct and
+       reuses the full float32 SIMD path for the matmul itself, but the
+       widen/round-trip is pure per-element overhead with no vectorization of
+       its own (see ``plot_gemm_dtype_benchmark.py`` in the example gallery
+       for measured overhead across representative shapes). What remains is
+       the **SIMD acceleration layer**: real half-precision vector
+       micro-kernels (AVX2 ``F16C``/``VCVTPH2PS`` for convert-then-FMA-in-
+       float32, or native ``AVX-512FP16``/``BF16`` instructions where present)
+       integrated into the existing packing/blocking/dispatch machinery
+       (``PackARowBlock``/``PackBPanel``, ``GemmKernelKind`` dispatch,
+       per-file compile flags analogous to the AVX-512 ``.cc`` split), which
+       would also fold the widen/round-trip into the vectorized loop instead
+       of a separate full-buffer pass.
      - Potentially large throughput gain (up to 2x the lanes per vector versus
-       float32, more with native BF16/FP16 dot-product instructions) for
-       models that use half precision on hardware that supports it, but ``0``
-       for the existing float32/float64 workloads this repository's callers
-       use today.
+       float32, more with native BF16/FP16 dot-product instructions, plus
+       removing the separate widen/round-trip pass) for models that use half
+       precision on hardware that supports it, but ``0`` for the existing
+       float32/float64 workloads this repository's callers use today.
      - Mixed-precision accumulation correctness (accumulate in float32 to
        avoid catastrophic cancellation, only round to half precision on
        output -- gets the summation-order subtleties already seen with
@@ -274,8 +273,9 @@ gains.
        and runtime (more branches in ``SelectGemmKernelKind``); a
        significantly larger test matrix (2 more element types x every
        existing Gemm test: transpose variants, bias/alpha/beta, K-chunking,
-       multi-panel, etc.); out of scope unless a caller actually needs half
-       precision.
+       multi-panel, etc.); out of scope unless a caller actually needs
+       SIMD-accelerated half precision beyond the widen/round-trip path
+       already shipped.
    * - ARM NEON / SVE micro-kernels
      - Port the AVX2-style NR=2 micro-kernel design to ``float32x4_t`` /
        ``float64x2_t`` NEON intrinsics (128-bit, all ARM64), and optionally to
