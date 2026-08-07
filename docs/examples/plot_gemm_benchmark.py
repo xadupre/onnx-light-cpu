@@ -107,11 +107,11 @@ def measure(func, repeat):
 # results are checked against :func:`numpy.matmul` so every implementation
 # agrees.
 
-sizes = [16, 32, 64, 128, 256, 512]
+size_grid = [16, 32, 64, 128, 256, 512]
 rng = np.random.default_rng(0)
 
 rows = []
-for size in sizes:
+for size in size_grid:
     a = rng.standard_normal((size, size)).astype(np.float32)
     b = rng.standard_normal((size, size)).astype(np.float32)
     expected = a @ b

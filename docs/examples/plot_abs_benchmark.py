@@ -144,11 +144,11 @@ def measure(func, repeat):
 # For every size the same input is fed to the three back-ends. The results are
 # checked against :func:`numpy.abs` to make sure every implementation agrees.
 
-sizes = [10**k for k in range(2, 9)]
+size_grid = [10**k for k in range(2, 9)]
 rng = np.random.default_rng(0)
 
 rows = []
-for size in sizes:
+for size in size_grid:
     inp = rng.uniform(-100.0, 100.0, size=size).astype(np.float32)
     expected = np.abs(inp)
 
