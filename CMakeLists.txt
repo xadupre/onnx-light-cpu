@@ -37,6 +37,22 @@ this when the same sources were used to build the installed onnx-light Python \
 package but its onnx_lightConfig.cmake is not available.")
 option(ONNX_LIGHT_CPU_ENABLE_COVERAGE
        "Instrument the C++ targets for code coverage (GCC/Clang only)." OFF)
+
+# When onnx-light is built from a local source tree (add_subdirectory with
+# ONNX_LIGHT_INSTALL=OFF), its targets are never added to any export set, so
+# lib_onnx_light_cpu_kernels cannot be installed as part of onnx_light_cpuTargets
+# (its PUBLIC link dependency onnx_light::lib_onnx_core would need to be
+# exported too). Disable the C++ install step in that mode; it is normally
+# only used for local/dev builds (e.g. --cpp-tests) anyway.
+if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT AND ONNX_LIGHT_CPU_ONNX_LIGHT_SOURCE_DIR
+   AND ONNX_LIGHT_CPU_INSTALL)
+  message(STATUS
+      "onnx-light-cpu: disabling ONNX_LIGHT_CPU_INSTALL because "
+      "ONNX_LIGHT_CPU_ONNX_LIGHT_SOURCE_DIR is set (onnx-light built from "
+      "source is not part of an installable export set).")
+  set(ONNX_LIGHT_CPU_INSTALL OFF CACHE BOOL
+      "Install the C++ library and headers." FORCE)
+endif()
 option(ONNX_HARDENING
     "Enable OpenSSF Compiler Hardening Guide flags for C/C++ targets. \
 See cmake/Hardening.cmake and \
