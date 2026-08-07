@@ -2,7 +2,7 @@
 Benchmark Abs: onnxruntime vs onnx-light + onnx-light-cpu
 =========================================================
 
-This example compares up to three ways of computing the elementwise absolute value
+This example compares up to four ways of computing the elementwise absolute value
 of a ``float32`` array across a range of input sizes:
 
 * **onnxruntime** - running a single-node ``Abs`` ONNX model.
@@ -12,6 +12,12 @@ of a ``float32`` array across a range of input sizes:
   ``onnx-light-cpu`` ``Abs`` kernel has been registered
   (:func:`onnx_light_cpu.register_kernels`); the kernel provides runtime
   AVX-512/AVX2/AVX/SSE2 dispatch.
+* **onnx-light (built-in)** - ``onnx-light``'s own un-accelerated (pure
+  reference) ``Abs`` kernel, as a baseline for what ``onnx-light-cpu`` buys on
+  top of it. It is only measured for the smaller sizes in the grid: this
+  baseline is not meaningfully more expensive than the accelerated kernel at
+  the very largest sizes (both become bandwidth-bound), so it is dropped for
+  the last two sizes to keep the comparison focused on where it matters.
 * **numpy** - :func:`numpy.abs`, used as a reference baseline.
 
 The back-ends compute the same result; the goal here is to see how their
@@ -55,14 +61,20 @@ print(f"CPU kernels available, SIMD level: {level} ({simd_name})")
 # is enough to benchmark the runtimes. The exact same model is fed to
 # onnxruntime and to onnx-light so the comparison is apples-to-apples.
 
-graph = helper.make_graph(
-    [helper.make_node("Abs", ["X"], ["Y"])],
-    "abs_bench",
-    [helper.make_tensor_value_info("X", TensorProto.FLOAT, ["N"])],
-    [helper.make_tensor_value_info("Y", TensorProto.FLOAT, ["N"])],
-)
-model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 18)])
-checker.check_model(model)
+
+def make_abs_model():
+    graph = helper.make_graph(
+        [helper.make_node("Abs", ["X"], ["Y"])],
+        "abs_bench",
+        [helper.make_tensor_value_info("X", TensorProto.FLOAT, ["N"])],
+        [helper.make_tensor_value_info("Y", TensorProto.FLOAT, ["N"])],
+    )
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 18)])
+    checker.check_model(model)
+    return model
+
+
+model = make_abs_model()
 
 # Serialize once (outside the timed region) so the setup timing below measures
 # only the session construction and not the protobuf serialization.
@@ -71,6 +83,42 @@ model_bytes = model.SerializeToString()
 _ort_setup_start = time.perf_counter()
 session = onnxruntime.InferenceSession(model_bytes, providers=["CPUExecutionProvider"])
 ort_setup_time = time.perf_counter() - _ort_setup_start
+
+# %%
+# Sizes benchmarked
+# -----------------
+
+size_grid = [10**k for k in range(2, 9)]
+# The built-in baseline is dropped for the two largest sizes (see module
+# docstring): keep it where the accelerated kernel's advantage is visible.
+alone_sizes = size_grid[:-2]
+
+# %%
+# Time the built-in (un-accelerated) onnx-light Abs kernel
+# ----------------------------------------------------------
+#
+# ``onnx_light_cpu.register_kernels()`` permanently overrides the process-wide
+# ``Abs`` kernel entry, and a session only resolves/caches which kernel it
+# uses on its *first* run. So this baseline uses its own model/session, run
+# once per size here, **before** ``register_kernels()`` is called below;
+# ``light_session`` (built after registration) instead resolves to the
+# SIMD-accelerated kernel.
+
+alone_model = make_abs_model()
+alone_session = ReferenceEvaluator(alone_model)
+alone_label = "onnx-light (built-in)"
+alone_rng = np.random.default_rng(0)
+alone_times_by_size = {}
+for size in alone_sizes:
+    inp = alone_rng.uniform(-100.0, 100.0, size=size).astype(np.float32)
+    repeat = max(3, min(200, 2_000_000 // size))
+    best = float("inf")
+    for _ in range(repeat):
+        start = time.perf_counter()
+        alone_session.run(None, {"X": inp})
+        best = min(best, time.perf_counter() - start)
+    alone_times_by_size[size] = best
+    print(f"size={size:>9} | {alone_label}={best * 1e6:10.2f} us")
 
 # %%
 # Build the onnx-light evaluator
@@ -144,7 +192,6 @@ def measure(func, repeat):
 # For every size the same input is fed to the three back-ends. The results are
 # checked against :func:`numpy.abs` to make sure every implementation agrees.
 
-size_grid = [10**k for k in range(2, 9)]
 rng = np.random.default_rng(0)
 
 rows = []
@@ -177,6 +224,9 @@ numpy_times = np.array([r[1] for r in rows])
 cpu_times = np.array([r[2] for r in rows])
 ort_times = np.array([r[3] for r in rows])
 
+alone_grid = np.array(alone_sizes)
+alone_times = np.array([alone_times_by_size[size] for size in alone_sizes])
+
 # %%
 # Plot the timings
 # ----------------
@@ -201,6 +251,13 @@ if light_session is not None:
         label=light_label,
         color="#4a9eff",
     )
+ax_time.plot(
+    alone_grid,
+    alone_times * 1e6,
+    "o--",
+    label=alone_label,
+    color="#5cb85c",
+)
 ax_time.plot(sizes, ort_times * 1e6, "o-", label="onnxruntime", color="#f4a259")
 ax_time.set_xscale("log")
 ax_time.set_yscale("log")
@@ -208,6 +265,9 @@ ax_time.set_xlabel("array size (elements)")
 ax_time.set_ylabel("time (microseconds)")
 ax_time.set_title(f"Abs execution time (SIMD: {simd_name})")
 ax_time.legend()
+
+ort_times_by_size = dict(zip(sizes.tolist(), ort_times.tolist(), strict=True))
+alone_ort_times = np.array([ort_times_by_size[size] for size in alone_sizes])
 
 ax_speedup.plot(sizes, ort_times / numpy_times, "o--", label="numpy", color="#9b7ec8")
 if light_session is not None:
@@ -218,7 +278,16 @@ if light_session is not None:
         label=light_label,
         color="#4a9eff",
     )
-ax_speedup.plot(sizes, ort_times / ort_times, "o-", label="onnxruntime", color="#f4a259")
+ax_speedup.plot(
+    alone_grid,
+    alone_ort_times / alone_times,
+    "o--",
+    label=alone_label,
+    color="#5cb85c",
+)
+ax_speedup.plot(
+    sizes, ort_times / ort_times, "o-", label="onnxruntime", color="#f4a259"
+)
 ax_speedup.axhline(1.0, color="grey", linewidth=0.8, linestyle=":")
 ax_speedup.set_xscale("log")
 ax_speedup.set_yscale("log")

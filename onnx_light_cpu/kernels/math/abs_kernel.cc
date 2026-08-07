@@ -32,15 +32,16 @@ using rt_ns::Tensor;
 
 namespace {
 
-// Runs the elementwise SIMD kernel ``Fn`` over ``[0, n)`` through onnx-light's
-// ``ParallelFor``: large tensors are split across the shared thread pool (one
-// disjoint sub-range per thread, so the result stays bit-exact) while tensors
-// below ``kParallelForGrainSize`` run inline on the calling thread.
+// Runs the elementwise SIMD kernel ``Fn`` over ``[0, n)``. ``Fn`` (defined in
+// ``onnx_light_cpu/impl/math/math_kernels.h``) already parallelizes internally
+// via onnx-light-cpu's own thread pool (see ``onnx_light_cpu/impl/parallel_for.h``),
+// so it is called directly on the whole range here; wrapping it in another
+// ``ParallelFor`` (onnx-light's core thread pool) would nest two independent,
+// non-cooperating thread pools and oversubscribe the CPU instead of speeding
+// things up.
 template <typename T, void (*Fn)(const T *, T *, std::size_t)>
 void RunParallel(const T *input, T *output, std::int64_t n) {
-  rt_ns::ParallelFor(n, [input, output](std::int64_t begin, std::int64_t end) {
-    Fn(input + begin, output + begin, static_cast<std::size_t>(end - begin));
-  });
+  Fn(input, output, static_cast<std::size_t>(n));
 }
 
 } // namespace

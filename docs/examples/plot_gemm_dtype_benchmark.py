@@ -29,6 +29,22 @@ back down (see ``onnx_light_cpu/kernels/math/gemm_kernel.cc``). The extra
 widen/round-trip is therefore pure overhead on top of the ``float32`` compute,
 and this example shows how that overhead shrinks (relatively) as the shape
 gets more compute-heavy.
+
+A fourth curve, ``onnx-light (built-in)``, shows ``onnx-light``'s own
+un-accelerated (pure Python/reference) ``Gemm`` kernel for ``float32``, as a
+baseline. It only supports ``float32`` (the reference kernel has no
+``float16``/``bfloat16`` Gemm implementation) and is only measured for the
+**single-tile** and **K-chunked** shapes: it is dramatically slower on the
+**multi-panel** and **skinny-M/wide-N** shapes, to the point that including it
+there would dwarf every other curve and defeat the purpose of the comparison.
+
+Why measure it before ``register_kernels()``: ``onnx_light_cpu.register_kernels()``
+permanently overrides the process-wide ``Gemm`` kernel entry for the default
+domain, and a session only resolves/caches which kernel it uses on its
+*first* run. So the built-in baseline is measured with its own model/session,
+run once to prime it, **before** ``register_kernels()`` is called; every other
+session used below is created and first run *after* registration, so it picks
+up the SIMD-accelerated kernel instead.
 """
 
 # %%
@@ -58,8 +74,6 @@ assert has_cpu_kernels()
 level = detect_simd_level()
 simd_name = _SIMD_NAMES.get(level, level)
 print(f"CPU kernels available, SIMD level: {level} ({simd_name})")
-
-register_kernels()
 
 # %%
 # Element types under test
@@ -91,7 +105,22 @@ def make_session(tensor_proto_dtype):
     return ReferenceEvaluator(model)
 
 
-sessions = {label: make_session(tp) for label, (tp, _) in DTYPES.items()}
+# %%
+# Timing helper
+# -------------
+#
+# Each candidate is called ``repeat`` times and the best (minimum) wall-clock
+# time is kept to reduce the impact of scheduling noise.
+
+
+def measure(func, repeat):
+    best = float("inf")
+    for _ in range(repeat):
+        start = time.perf_counter()
+        func()
+        best = min(best, time.perf_counter() - start)
+    return best
+
 
 # %%
 # Shapes chosen to activate each Gemm code path
@@ -108,21 +137,43 @@ SHAPES = [
     ("skinny-M/wide-N\n(4x4096x128)", 4, 4096, 128),
 ]
 
+# Only the two "light" shapes get an ``onnx-light (built-in)`` baseline; the
+# reference kernel is far too slow on the multi-panel / skinny-M-wide-N shapes
+# for a fair comparison.
+ALONE_SHAPE_LABELS = {SHAPES[0][0], SHAPES[1][0]}
+
 # %%
-# Timing helper
-# -------------
+# Prime the built-in baseline before registering the accelerated kernels
+# ------------------------------------------------------------------------
 #
-# Each candidate is called ``repeat`` times and the best (minimum) wall-clock
-# time is kept to reduce the impact of scheduling noise.
+# ``register_kernels()`` permanently replaces the process-wide ``Gemm``
+# kernel; a session only picks up whichever kernel is registered at the time
+# of its *first* ``run()`` call. So a dedicated ``float32`` session is built
+# and run here, once per included shape, before ``register_kernels()`` runs.
 
+alone_rng = np.random.default_rng(0)
+alone_session = make_session(TensorProto.FLOAT)
+alone_results = {}
+for shape_label, M, N, K in SHAPES:
+    if shape_label not in ALONE_SHAPE_LABELS:
+        continue
+    a = alone_rng.standard_normal((M, K)).astype(np.float32)
+    b = alone_rng.standard_normal((K, N)).astype(np.float32)
+    repeat = max(3, min(50, 200_000_000 // (M * N * K + 1)))
 
-def measure(func, repeat):
-    best = float("inf")
-    for _ in range(repeat):
-        start = time.perf_counter()
-        func()
-        best = min(best, time.perf_counter() - start)
-    return best
+    def run(session=alone_session, a=a, b=b):
+        return session.run(None, {"A": a, "B": b})[0]
+
+    elapsed = measure(run, repeat)
+    alone_results[shape_label] = elapsed
+    print(
+        f"onnx-light (built-in) | shape={shape_label.splitlines()[0]:<24} "
+        f"| {elapsed * 1e6:10.2f} us"
+    )
+
+register_kernels()
+
+sessions = {label: make_session(tp) for label, (tp, _) in DTYPES.items()}
 
 
 # %%
@@ -143,7 +194,9 @@ for shape_label, M, N, K in SHAPES:
     expected = a32 @ b32
     repeat = max(3, min(50, 200_000_000 // (M * N * K + 1)))
 
-    print(f"\nshape={shape_label.splitlines()[0]:<24} M={M} N={N} K={K} repeat={repeat}")
+    print(
+        f"\nshape={shape_label.splitlines()[0]:<24} M={M} N={N} K={K} repeat={repeat}"
+    )
     for label, (_, np_dtype) in DTYPES.items():
         a = a32.astype(np_dtype)
         b = b32.astype(np_dtype)
@@ -156,7 +209,9 @@ for shape_label, M, N, K in SHAPES:
         results[label].append(elapsed)
 
         tol = 1e-3 if label == "float32" else (5e-2 if label == "float16" else 5e-1)
-        np.testing.assert_allclose(run().astype(np.float32), expected, rtol=tol, atol=tol)
+        np.testing.assert_allclose(
+            run().astype(np.float32), expected, rtol=tol, atol=tol
+        )
         print(f"  {label:<9} | {elapsed * 1e6:10.2f} us")
 
 # %%
@@ -172,15 +227,45 @@ import matplotlib.pyplot as plt
 
 shape_labels = [s[0] for s in SHAPES]
 x = np.arange(len(SHAPES))
-width = 0.25
-colors = {"float32": "#4a9eff", "float16": "#f4a259", "bfloat16": "#9b7ec8"}
+width = 0.2
+colors = {
+    "float32": "#4a9eff",
+    "float16": "#f4a259",
+    "bfloat16": "#9b7ec8",
+    "onnx-light (built-in)": "#5cb85c",
+}
 
 fig, (ax_time, ax_overhead) = plt.subplots(1, 2, figsize=(12, 4.8))
 
 for i, (label, times) in enumerate(results.items()):
     ax_time.bar(
-        x + (i - 1) * width, np.array(times) * 1e6, width, label=label, color=colors[label]
+        x + (i - 1.5) * width,
+        np.array(times) * 1e6,
+        width,
+        label=label,
+        color=colors[label],
     )
+
+# ``onnx-light (built-in)`` is only measured for the shapes in
+# ``ALONE_SHAPE_LABELS``; only draw bars where it was actually measured.
+alone_label = "onnx-light (built-in)"
+alone_x = np.array(
+    [x[i] for i, shape_label in enumerate(shape_labels) if shape_label in alone_results]
+)
+alone_times = np.array(
+    [
+        alone_results[shape_label]
+        for shape_label in shape_labels
+        if shape_label in alone_results
+    ]
+)
+ax_time.bar(
+    alone_x + 1.5 * width,
+    alone_times * 1e6,
+    width,
+    label=alone_label,
+    color=colors[alone_label],
+)
 ax_time.set_yscale("log")
 ax_time.set_xticks(x)
 ax_time.set_xticklabels(shape_labels, fontsize=8)
@@ -192,7 +277,9 @@ float32_times = np.array(results["float32"])
 for label in ("float16", "bfloat16"):
     overhead = np.array(results[label]) / float32_times
     ax_overhead.plot(shape_labels, overhead, "o-", label=label, color=colors[label])
-ax_overhead.axhline(1.0, color="grey", linewidth=0.8, linestyle=":", label="float32 baseline")
+ax_overhead.axhline(
+    1.0, color="grey", linewidth=0.8, linestyle=":", label="float32 baseline"
+)
 ax_overhead.set_ylabel("time relative to float32")
 ax_overhead.set_title("float16 / bfloat16 widen/round-trip overhead")
 ax_overhead.tick_params(axis="x", labelrotation=0, labelsize=8)

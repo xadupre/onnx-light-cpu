@@ -73,7 +73,9 @@ def iter_source_files(root: Path, globs: Tuple[str, ...] = DEFAULT_GLOBS) -> Lis
     return sorted(set(files))
 
 
-def find_registered_kernels(root: Path, globs: Tuple[str, ...] = DEFAULT_GLOBS) -> List[Kernel]:
+def find_registered_kernels(
+    root: Path, globs: Tuple[str, ...] = DEFAULT_GLOBS
+) -> List[Kernel]:
     """Return the sorted, de-duplicated kernels declared under ``root``."""
     kernels: List[Kernel] = []
     seen = set()
