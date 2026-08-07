@@ -24,7 +24,14 @@ _CMAKELISTS = _ROOT / "CMakeLists.txt"
 
 def _dry_run(*extra_args):
     result = subprocess.run(
-        [sys.executable, str(_SETUP_PY), "build_ext", "--inplace", *extra_args, "--dry-run"],
+        [
+            sys.executable,
+            str(_SETUP_PY),
+            "build_ext",
+            "--inplace",
+            *extra_args,
+            "--dry-run",
+        ],
         cwd=str(_ROOT),
         capture_output=True,
         text=True,

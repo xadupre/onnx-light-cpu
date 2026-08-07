@@ -103,7 +103,9 @@ def _add_onnx_light_source_defines(cmake_args):
     """Builds the onnx-light integration from a local onnx-light source tree."""
     cmake_args = _set_cmake_define(cmake_args, "ONNX_LIGHT_CPU_WITH_ONNX_LIGHT", "ON")
     return _set_cmake_define(
-        cmake_args, "ONNX_LIGHT_CPU_ONNX_LIGHT_SOURCE_DIR", str(_onnx_light_source_dir())
+        cmake_args,
+        "ONNX_LIGHT_CPU_ONNX_LIGHT_SOURCE_DIR",
+        str(_onnx_light_source_dir()),
     )
 
 
@@ -269,7 +271,13 @@ class BuildExt(Command):
             "print the cmake/ctest commands without executing them",
         ),
     ]
-    boolean_options = ["inplace", "cpp-tests", "onnx-light", "onnx-light-source", "dry-run"]
+    boolean_options = [
+        "inplace",
+        "cpp-tests",
+        "onnx-light",
+        "onnx-light-source",
+        "dry-run",
+    ]
 
     def initialize_options(self):
         """Initializes default values for command options."""

@@ -58,25 +58,23 @@ void ComputeUnary(const Tensor &x, Tensor &output, const char *kernel_name, Floa
   case DataType::FLOAT: {
     const float *px = x.AsFloat();
     float *py = output.AsFloat();
-    rt_ns::ParallelFor(n, [px, py, f32](std::int64_t begin, std::int64_t end) {
-      f32(px + begin, py + begin, static_cast<std::size_t>(end - begin));
-    });
+    // ``f32`` (``ExpFloat32``/``LogFloat32``) already parallelizes internally
+    // via onnx-light-cpu's own thread pool; wrapping it in another
+    // ``rt_ns::ParallelFor`` here would nest two independent thread pools and
+    // oversubscribe the CPU instead of speeding things up.
+    f32(px, py, static_cast<std::size_t>(n));
     return;
   }
   case DataType::DOUBLE: {
     const double *px = x.AsDouble();
     double *py = output.AsDouble();
-    rt_ns::ParallelFor(n, [px, py, f64](std::int64_t begin, std::int64_t end) {
-      f64(px + begin, py + begin, static_cast<std::size_t>(end - begin));
-    });
+    f64(px, py, static_cast<std::size_t>(n));
     return;
   }
   case DataType::FLOAT16: {
     const std::uint16_t *px = reinterpret_cast<const std::uint16_t *>(x.bytes());
     std::uint16_t *py = reinterpret_cast<std::uint16_t *>(output.mutable_bytes());
-    rt_ns::ParallelFor(n, [px, py, f16](std::int64_t begin, std::int64_t end) {
-      f16(px + begin, py + begin, static_cast<std::size_t>(end - begin));
-    });
+    f16(px, py, static_cast<std::size_t>(n));
     return;
   }
   case DataType::BFLOAT16: {

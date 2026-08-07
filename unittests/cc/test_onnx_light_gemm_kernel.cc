@@ -4,12 +4,14 @@
 
 #include "onnx_light_cpu/kernels/math/gemm_kernel.h"
 
+#include "onnx_core/runtime/cast_helper.h"
 #include "onnx_core/runtime/kernel_context.h"
 #include "onnx_core/runtime/simple_tensor.h"
 
 #include <gtest/gtest.h>
 
 #include <cstddef>
+#include <cstdint>
 #include <vector>
 
 namespace {
@@ -110,6 +112,73 @@ TEST(OnnxLightGemmKernel, Float32TransposeVariants) {
   const float *py = y.AsFloat();
   for (std::size_t i = 0; i < M * N; ++i) {
     EXPECT_FLOAT_EQ(py[i], expected[i]) << "i=" << i;
+  }
+}
+
+// FLOAT16 support: A, B and the bias C are rounded to fp16 before the call
+// (as they would be when decoded from a FLOAT16 tensor), so the reduction
+// happening in float32 internally reproduces the reference bit-exactly once
+// rounded back to fp16.
+TEST(OnnxLightGemmKernel, Float16AlphaBetaBias) {
+  onnx_light_cpu::GemmKernel kernel(MakeCtx());
+  const std::size_t M = 2, N = 2, K = 3;
+  const std::vector<float> a = {1, 2, 3, 4, 5, 6};
+  const std::vector<float> b = {1, 2, 3, 4, 5, 6};
+  const std::vector<float> c = {10, 20, 30, 40};
+  const float alpha = 0.5f, beta = 2.0f;
+
+  const rt_ns::Tensor A = rt_ns::MakeFloat16Tensor("A", {2, 3}, a);
+  const rt_ns::Tensor B = rt_ns::MakeFloat16Tensor("B", {3, 2}, b);
+  const rt_ns::Tensor C = rt_ns::MakeFloat16Tensor("C", {2, 2}, c);
+  const rt_ns::Tensor y = kernel(A, B, C, alpha, beta, false, false);
+  ASSERT_EQ(y.element_count(), static_cast<int64_t>(M * N));
+  ASSERT_EQ(y.data_type, static_cast<int32_t>(rt_ns::DataType::FLOAT16));
+
+  const auto expected = ReferenceGemm(false, false, M, N, K, alpha, a, b, beta, &c);
+  const auto *py = reinterpret_cast<const std::uint16_t *>(y.bytes());
+  for (std::size_t i = 0; i < M * N; ++i) {
+    EXPECT_NEAR(rt_ns::Float16BitsToFloat(py[i]), expected[i], 5e-2f) << "i=" << i;
+  }
+}
+
+// BFLOAT16 support, mirroring the FLOAT16 test above.
+TEST(OnnxLightGemmKernel, Bfloat16AlphaBetaBias) {
+  onnx_light_cpu::GemmKernel kernel(MakeCtx());
+  const std::size_t M = 2, N = 2, K = 3;
+  const std::vector<float> a = {1, 2, 3, 4, 5, 6};
+  const std::vector<float> b = {1, 2, 3, 4, 5, 6};
+  const std::vector<float> c = {10, 20, 30, 40};
+  const float alpha = 0.5f, beta = 2.0f;
+
+  const rt_ns::Tensor A = rt_ns::MakeBfloat16Tensor("A", {2, 3}, a);
+  const rt_ns::Tensor B = rt_ns::MakeBfloat16Tensor("B", {3, 2}, b);
+  const rt_ns::Tensor C = rt_ns::MakeBfloat16Tensor("C", {2, 2}, c);
+  const rt_ns::Tensor y = kernel(A, B, C, alpha, beta, false, false);
+  ASSERT_EQ(y.element_count(), static_cast<int64_t>(M * N));
+  ASSERT_EQ(y.data_type, static_cast<int32_t>(rt_ns::DataType::BFLOAT16));
+
+  const auto expected = ReferenceGemm(false, false, M, N, K, alpha, a, b, beta, &c);
+  const auto *py = reinterpret_cast<const std::uint16_t *>(y.bytes());
+  for (std::size_t i = 0; i < M * N; ++i) {
+    EXPECT_NEAR(rt_ns::Bfloat16BitsToFloat(py[i]), expected[i], 5e-1f) << "i=" << i;
+  }
+}
+
+// FLOAT16 without a bias, exercising the no-bias operator() overload.
+TEST(OnnxLightGemmKernel, Float16NoBias) {
+  onnx_light_cpu::GemmKernel kernel(MakeCtx());
+  const std::size_t M = 2, N = 3, K = 4;
+  const std::vector<float> a = {1, 2, 3, 4, 5, 6, 7, 8};
+  const std::vector<float> b = {1, 0, 2, 0, 1, 0, 2, 0, 1, 0, 2, 0};
+  const rt_ns::Tensor A = rt_ns::MakeFloat16Tensor("A", {2, 4}, a);
+  const rt_ns::Tensor B = rt_ns::MakeFloat16Tensor("B", {4, 3}, b);
+  const rt_ns::Tensor y = kernel(A, B, 1.0f, false, false);
+  ASSERT_EQ(y.data_type, static_cast<int32_t>(rt_ns::DataType::FLOAT16));
+
+  const auto expected = ReferenceGemm(false, false, M, N, K, 1.0f, a, b, 0.0f, nullptr);
+  const auto *py = reinterpret_cast<const std::uint16_t *>(y.bytes());
+  for (std::size_t i = 0; i < M * N; ++i) {
+    EXPECT_NEAR(rt_ns::Float16BitsToFloat(py[i]), expected[i], 5e-2f) << "i=" << i;
   }
 }
 

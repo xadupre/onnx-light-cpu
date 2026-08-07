@@ -53,9 +53,11 @@ void NotKernel::operator()(const Tensor &x, Tensor &output) const {
   const std::int64_t n = x.element_count();
   const std::uint8_t *px = x.AsBool();
   std::uint8_t *py = output.AsBool();
-  rt_ns::ParallelFor(n, [px, py](std::int64_t begin, std::int64_t end) {
-    NotBool(px + begin, py + begin, static_cast<std::size_t>(end - begin));
-  });
+  // ``NotBool`` already parallelizes internally via onnx-light-cpu's own
+  // thread pool; wrapping it in another ``rt_ns::ParallelFor`` here would nest
+  // two independent thread pools and oversubscribe the CPU instead of
+  // speeding things up.
+  NotBool(px, py, static_cast<std::size_t>(n));
 }
 
 void NotKernel::Run(RuntimeContext &rt) {
