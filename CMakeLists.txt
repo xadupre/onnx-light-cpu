@@ -273,7 +273,8 @@ if(ONNX_LIGHT_CPU_BUILD_PYTHON)
   list(APPEND CMAKE_PREFIX_PATH "${NB_DIR}")
   find_package(nanobind CONFIG REQUIRED)
 
-  if(TARGET lib_onnx_light_cpu_kernels AND _cpu_lib_type STREQUAL "SHARED")
+  if(TARGET lib_onnx_light_cpu_kernels AND _cpu_lib_type STREQUAL "SHARED"
+      AND TARGET onnx_light::lib_onnx_core AND NOT ONNX_LIGHT_CPU_ONNX_LIGHT_SOURCE_DIR)
     # lib_onnx_light_cpu_kernels links onnx-light's lib_onnx_core (and
     # transitively lib_onnx_proto), which live in the installed onnx-light
     # Python package's own onnx_py directory -- a different directory tree
@@ -282,26 +283,20 @@ if(ONNX_LIGHT_CPU_BUILD_PYTHON)
     # to a .so's own directory, so it cannot reach across packages; without
     # an explicit RPATH entry pointing at onnx-light's onnx_py directory,
     # importing _cpuregister fails at runtime with "liblib_onnx_core.so:
-    # cannot open shared object file". Resolve that directory via the same
-    # Python interpreter used to build/import the extensions. This is a
-    # best-effort lookup (e.g. it is a no-op when onnx-light was built from
-    # source and is not yet importable), so failures are silently ignored.
-    execute_process(
-        COMMAND "${Python_EXECUTABLE}" -c
-            "import onnx_light, os; print(os.path.join(os.path.dirname(onnx_light.__file__), 'onnx_py'))"
-        OUTPUT_VARIABLE ONNX_LIGHT_CPU_ONNX_LIGHT_PY_LIBDIR
-        OUTPUT_STRIP_TRAILING_WHITESPACE
-        ERROR_QUIET
-        RESULT_VARIABLE _onnx_light_py_libdir_result)
-    if(NOT (_onnx_light_py_libdir_result EQUAL 0 AND EXISTS "${ONNX_LIGHT_CPU_ONNX_LIGHT_PY_LIBDIR}"))
-      unset(ONNX_LIGHT_CPU_ONNX_LIGHT_PY_LIBDIR)
-    endif()
-    if(ONNX_LIGHT_CPU_ONNX_LIGHT_PY_LIBDIR)
-      set_target_properties(lib_onnx_light_cpu_kernels PROPERTIES
-          INSTALL_RPATH "$ORIGIN;${ONNX_LIGHT_CPU_ONNX_LIGHT_PY_LIBDIR}"
-          BUILD_RPATH "$ORIGIN;${ONNX_LIGHT_CPU_ONNX_LIGHT_PY_LIBDIR}"
-      )
-    endif()
+    # cannot open shared object file". Resolve that directory from the
+    # onnx_light::lib_onnx_core IMPORTED target's own location via a
+    # generator expression, resolved at build time so it does not depend on
+    # onnx-light being importable from Python at CMake configure time (pip's
+    # isolated build environment for this package does not have onnx-light
+    # installed). Only relevant for find_package(onnx_light); when onnx-light
+    # is built from a local source tree (ONNX_LIGHT_CPU_ONNX_LIGHT_SOURCE_DIR)
+    # its libraries are not installed anywhere separate from this build, so
+    # plain $ORIGIN is sufficient there.
+    set(ONNX_LIGHT_CPU_ONNX_LIGHT_PY_LIBDIR "$<TARGET_FILE_DIR:onnx_light::lib_onnx_core>")
+    set_target_properties(lib_onnx_light_cpu_kernels PROPERTIES
+        INSTALL_RPATH "$ORIGIN;${ONNX_LIGHT_CPU_ONNX_LIGHT_PY_LIBDIR}"
+        BUILD_RPATH "$ORIGIN;${ONNX_LIGHT_CPU_ONNX_LIGHT_PY_LIBDIR}"
+    )
   endif()
 
   nanobind_add_module(_cpukernels STABLE_ABI ${PY_KERNELS_SOURCES})
