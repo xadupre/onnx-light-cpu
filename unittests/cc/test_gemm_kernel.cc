@@ -156,6 +156,42 @@ TEST(GemmFloat32, MultiPanelExceedsTiles) {
   }
 }
 
+// K larger than the internal K-blocking chunk (kGemmTileK=256) so the k
+// reduction is split across several chunks that must be accumulated together
+// (GemmAccumMode::kAccumulate) instead of each overwriting Y. Also exercises
+// transpose_a/transpose_b together with a k-chunk boundary that does not align
+// with kMR-sized row groups.
+TEST(GemmFloat32, LargeKSpansMultipleChunks) {
+  const std::size_t M = 5, N = 7, K = 600;
+  const auto A = RandomVector(M * K, 41);
+  const auto B = RandomVector(K * N, 42);
+  const auto C = RandomVector(M * N, 43);
+  const float alpha = 1.25f, beta = 0.5f;
+  const auto expected = ReferenceGemm<float>(false, false, M, N, K, alpha, A, B, beta, &C);
+  std::vector<float> Y(M * N, 0.0f);
+  onnx_light_cpu::GemmFloat32(false, false, M, N, K, alpha, A.data(), B.data(), beta, C.data(),
+                              Y.data());
+  for (std::size_t i = 0; i < M * N; ++i) {
+    EXPECT_NEAR(Y[i], expected[i], 2e-2f) << "i=" << i;
+  }
+}
+
+// M much smaller than N: with the flattened (row block, column panel) task
+// list this shape still spans multiple column panels, exercising the case
+// that motivated splitting the parallel work across N and not only M.
+TEST(GemmFloat32, SkinnyMWideNMultipleColumnPanels) {
+  const std::size_t M = 2, N = 1000, K = 33;
+  const auto A = RandomVector(M * K, 44);
+  const auto B = RandomVector(K * N, 45);
+  const auto expected = ReferenceGemm<float>(false, false, M, N, K, 1.0f, A, B, 0.0f, nullptr);
+  std::vector<float> Y(M * N, 0.0f);
+  onnx_light_cpu::GemmFloat32(false, false, M, N, K, 1.0f, A.data(), B.data(), 0.0f, nullptr,
+                              Y.data());
+  for (std::size_t i = 0; i < M * N; ++i) {
+    EXPECT_NEAR(Y[i], expected[i], 1e-2f) << "i=" << i;
+  }
+}
+
 TEST(GemmFloat32, EmptyKGivesBiasOnly) {
   const std::size_t M = 3, N = 4, K = 0;
   const auto C = RandomVector(M * N, 8);
@@ -230,6 +266,23 @@ TEST(GemmFloat64, TransposeVariants) {
             << "trans_a=" << trans_a << " trans_b=" << trans_b << " i=" << i;
       }
     }
+  }
+}
+
+// Same K-blocking regression as GemmFloat32.LargeKSpansMultipleChunks, for the
+// float64 micro-kernels (AVX/SSE2 4/2-wide accumulate paths).
+TEST(GemmFloat64, LargeKSpansMultipleChunks) {
+  const std::size_t M = 5, N = 7, K = 600;
+  const auto A = RandomVectorD(M * K, 70);
+  const auto B = RandomVectorD(K * N, 71);
+  const auto C = RandomVectorD(M * N, 72);
+  const double alpha = 1.25, beta = 0.5;
+  const auto expected = ReferenceGemm<double>(false, false, M, N, K, alpha, A, B, beta, &C);
+  std::vector<double> Y(M * N, 0.0);
+  onnx_light_cpu::GemmFloat64(false, false, M, N, K, alpha, A.data(), B.data(), beta, C.data(),
+                              Y.data());
+  for (std::size_t i = 0; i < M * N; ++i) {
+    EXPECT_NEAR(Y[i], expected[i], 1e-9) << "i=" << i;
   }
 }
 
