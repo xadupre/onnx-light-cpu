@@ -61,7 +61,11 @@ class TestSetupCppTests:
         # CMake package files instead of installing only the onnx-light-cpu
         # package. See https://github.com/xadupre/onnx-light-cpu/issues/87.
         contents = _CMAKELISTS.read_text(encoding="utf-8")
-        assert "INSTALL_GTEST OFF" in contents
+        set_index = contents.find("set(INSTALL_GTEST OFF")
+        make_available_index = contents.find("FetchContent_MakeAvailable(googletest)")
+        assert set_index != -1
+        assert make_available_index != -1
+        assert set_index < make_available_index
 
 
 class TestSetupOnnxLight:
