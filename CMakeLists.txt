@@ -234,6 +234,15 @@ if(ONNX_LIGHT_CPU_BUILD_PYTHON)
     install(TARGETS _cpuregister
         LIBRARY DESTINATION onnx_light_cpu/onnx_py
         RUNTIME DESTINATION onnx_light_cpu/onnx_py)
+
+    # _cpuregister links lib_onnx_light_cpu_kernels, so the shared library must
+    # ship next to it (its RPATH is $ORIGIN) or importing _cpuregister fails
+    # with "liblib_onnx_light_cpu_kernels.so: cannot open shared object file".
+    if(_cpu_lib_type STREQUAL "SHARED")
+      install(TARGETS lib_onnx_light_cpu_kernels
+          LIBRARY DESTINATION onnx_light_cpu/onnx_py
+          RUNTIME DESTINATION onnx_light_cpu/onnx_py)
+    endif()
   endif()
 endif()
 
