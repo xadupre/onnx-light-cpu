@@ -452,6 +452,13 @@ if(ONNX_LIGHT_CPU_BUILD_TESTS)
     DOWNLOAD_EXTRACT_TIMESTAMP ON
   )
   set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+  # Do not add GoogleTest's own install rules to this project. Otherwise a
+  # `cmake --install` into the inplace prefix (e.g. `setup.py build_ext
+  # --inplace --cpp-tests`) would drop libgtest.a/libgmock.a, the gtest/gmock
+  # headers, their pkg-config files and CMake package config into the source
+  # tree next to the onnx_light_cpu Python package, instead of installing only
+  # this project's artifacts.
+  set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
   FetchContent_MakeAvailable(googletest)
 
   include(GoogleTest)

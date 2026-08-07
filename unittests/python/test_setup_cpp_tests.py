@@ -19,6 +19,7 @@ from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[2]
 _SETUP_PY = _ROOT / "setup.py"
+_CMAKELISTS = _ROOT / "CMakeLists.txt"
 
 
 def _dry_run(*extra_args):
@@ -42,6 +43,25 @@ class TestSetupCppTests:
         output = _dry_run()
         assert "ONNX_LIGHT_CPU_BUILD_TESTS=ON" not in output
         assert "ctest" not in output
+
+    def test_install_runs_before_ctest(self):
+        # ``cmake --install`` must run before ``ctest`` so that the Python
+        # package is installed inplace even when the C++ tests fail.
+        output = _dry_run("--cpp-tests")
+        install_index = output.find("cmake --install")
+        ctest_index = output.find("ctest")
+        assert install_index != -1
+        assert ctest_index != -1
+        assert install_index < ctest_index
+
+    def test_gtest_install_is_disabled(self):
+        # Building the C++ tests must not add GoogleTest's own install rules,
+        # otherwise ``cmake --install`` into the inplace prefix would pollute
+        # the source tree with libgtest/libgmock, their headers, pkg-config and
+        # CMake package files instead of installing only the onnx-light-cpu
+        # package. See https://github.com/xadupre/onnx-light-cpu/issues/87.
+        contents = _CMAKELISTS.read_text(encoding="utf-8")
+        assert "INSTALL_GTEST OFF" in contents
 
 
 class TestSetupOnnxLight:
