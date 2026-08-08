@@ -144,6 +144,15 @@ sess = ReferenceEvaluator(model)  # any model containing an Abs node
 integration (`-DONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON`); it wraps the compiled
 `onnx_light_cpu.onnx_py._cpuregister.register_all_kernels()` binding.
 
+> **Registration seems ignored?** The kernels only take effect when
+> `onnx-light-cpu` links the *same* `lib_onnx_core` that the running
+> `onnx_light` package uses. Building the integration from an onnx-light source
+> tree (`--onnx-light-source`) while a *separately installed* onnx-light Python
+> package runs the model creates two independent dispatch tables, so the
+> registration populates one the evaluator never reads. Build with
+> `--onnx-light` (`find_package`) so both share the installed shared library.
+> See the "Registering kernels" documentation page for details.
+
 For a native C++ integration, build with `-DONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON`
 (requires the [onnx-light](https://github.com/xadupre/onnx-light) C++ package).
 This builds `lib_onnx_light_cpu_kernels`, which exposes `onnx_light_cpu::AbsKernel`,
