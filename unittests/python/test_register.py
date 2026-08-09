@@ -13,8 +13,6 @@ tests patch it to exercise the wrapper without requiring that build.
 
 from unittest import mock
 
-import pytest
-
 import onnx_light_cpu._register as reg
 from onnx_light_cpu import register_kernels
 
@@ -35,15 +33,3 @@ class TestRegisterKernels:
     def test_returns_none_without_sess(self):
         with mock.patch.object(reg, "_register_all_kernels"):
             assert register_kernels() is None
-
-    def test_skips_when_extension_missing(self):
-        # Builds without the onnx-light integration (e.g. the documentation
-        # gallery built from a plain ``pip install .``) have no ``_cpuregister``
-        # extension; ``register_kernels`` must warn and skip rather than raise so
-        # gallery examples can call it unconditionally.
-        with (
-            mock.patch.dict("sys.modules", {"onnx_light_cpu.onnx_py._cpuregister": None}),
-            pytest.warns(RuntimeWarning, match="_cpuregister"),
-        ):
-            result = register_kernels()
-        assert result is None

@@ -15,7 +15,6 @@ built-in ones.
 
 from __future__ import annotations
 
-import warnings
 from typing import Any
 
 
@@ -26,26 +25,10 @@ def _register_all_kernels() -> None:
     and is only built with the onnx-light integration enabled
     (``ONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON``). It is imported lazily so that
     ``import onnx_light_cpu`` keeps working in builds without that extension.
-
-    When that extension is absent (for example when the documentation gallery is
-    built from a plain ``pip install .`` without the onnx-light integration) the
-    registration is skipped with a warning instead of raising, so callers such
-    as the gallery examples can invoke ``register_kernels()`` unconditionally.
     """
-    try:
-        from .onnx_py._cpuregister import (  # pyrefly: ignore[missing-import]
-            register_all_kernels,
-        )
-    except ImportError:
-        warnings.warn(
-            "onnx-light-cpu was built without the onnx-light integration "
-            "extension (_cpuregister); kernel registration is skipped. Rebuild "
-            "with -DONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON to enable the accelerated "
-            "kernels.",
-            RuntimeWarning,
-            stacklevel=3,
-        )
-        return
+    from .onnx_py._cpuregister import (  # pyrefly: ignore[missing-import]
+        register_all_kernels,
+    )
 
     register_all_kernels()
 
