@@ -5,6 +5,7 @@
 #include "onnx_light_cpu/kernels/math/gemm_kernel.h"
 
 #include "onnx_light_cpu/impl/math/math_kernels.h"
+#include "onnx_light_cpu/kernels/kernel_usage.h"
 
 #include "onnx_core/runtime/cast_helper.h"
 #include "onnx_core/runtime/kernel_dispatch_table.h"
@@ -224,6 +225,7 @@ Tensor GemmKernel::operator()(const Tensor &a, const Tensor &b, float alpha, boo
 }
 
 void GemmKernel::Run(RuntimeContext &rt) {
+  RecordKernelUsage(kName);
   const NodeProto &node = *node_;
   rt_ns::RequireOutputCount(node, 1);
   const Tensor &a = rt_ns::GetInput(node, 0, rt.tensors());

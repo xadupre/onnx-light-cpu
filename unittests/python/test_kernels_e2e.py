@@ -28,7 +28,12 @@ pytest.importorskip("onnx_light_cpu.onnx_py._cpuregister")
 from onnx_light.onnx import TensorProto, helper
 from onnx_light.onnx.reference import ReferenceEvaluator
 
-from onnx_light_cpu import register_kernels
+from onnx_light_cpu import (
+    clear_used_kernel_names,
+    register_kernels,
+    registered_kernel_names,
+    used_kernel_names,
+)
 
 
 def _run(node, inputs, output_types):
@@ -96,3 +101,88 @@ class TestKernelsEndToEnd:
         node = helper.make_node("Not", ["X"], ["Y"])
         (y,) = _run(node, {"X": x}, {"Y": TensorProto.BOOL})
         np.testing.assert_array_equal(y, np.logical_not(x))
+
+
+class TestUsedKernelNames:
+    """Checks the kernels a model actually dispatches to are the onnx-light-cpu
+    ones, identified by the library-qualified name each kernel records when it
+    runs (rather than onnx-light's identically-behaving built-in kernels)."""
+
+    def test_registered_kernel_names(self):
+        names = registered_kernel_names()
+        assert names == {
+            "Abs": "onnx_light_cpu::Abs",
+            "Exp": "onnx_light_cpu::Exp",
+            "Log": "onnx_light_cpu::Log",
+            "Gemm": "onnx_light_cpu::Gemm",
+            "Not": "onnx_light_cpu::Not",
+        }
+
+    @pytest.mark.parametrize(
+        ("op_type", "inputs", "output_type", "expected_name"),
+        [
+            (
+                "Abs",
+                {"X": np.array([-1.0, 2.0], dtype=np.float32)},
+                TensorProto.FLOAT,
+                "onnx_light_cpu::Abs",
+            ),
+            (
+                "Exp",
+                {"X": np.array([0.0, 1.0], dtype=np.float32)},
+                TensorProto.FLOAT,
+                "onnx_light_cpu::Exp",
+            ),
+            (
+                "Log",
+                {"X": np.array([1.0, 2.0], dtype=np.float32)},
+                TensorProto.FLOAT,
+                "onnx_light_cpu::Log",
+            ),
+            (
+                "Not",
+                {"X": np.array([True, False], dtype=np.bool_)},
+                TensorProto.BOOL,
+                "onnx_light_cpu::Not",
+            ),
+        ],
+    )
+    def test_single_op_uses_accelerated_kernel(self, op_type, inputs, output_type, expected_name):
+        register_kernels()
+        clear_used_kernel_names()
+        node = helper.make_node(op_type, list(inputs), ["Y"])
+        _run(node, inputs, {"Y": output_type})
+        assert used_kernel_names() == [expected_name]
+
+    def test_gemm_uses_accelerated_kernel(self):
+        register_kernels()
+        clear_used_kernel_names()
+        a = np.arange(6, dtype=np.float32).reshape(2, 3)
+        b = np.arange(12, dtype=np.float32).reshape(3, 4)
+        node = helper.make_node("Gemm", ["A", "B"], ["Y"])
+        _run(node, {"A": a, "B": b}, {"Y": TensorProto.FLOAT})
+        assert used_kernel_names() == ["onnx_light_cpu::Gemm"]
+
+    def test_multiple_nodes_record_every_kernel(self):
+        register_kernels()
+        clear_used_kernel_names()
+        x = np.array([-1.0, 2.0, -3.0], dtype=np.float32)
+        nodes = [
+            helper.make_node("Abs", ["X"], ["A"]),
+            helper.make_node("Exp", ["A"], ["E"]),
+            helper.make_node("Log", ["E"], ["Y"]),
+        ]
+        graph = helper.make_graph(
+            nodes,
+            "chain",
+            [helper.make_tensor_value_info("X", TensorProto.FLOAT, [3])],
+            [helper.make_tensor_value_info("Y", TensorProto.FLOAT, None)],
+        )
+        model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 18)])
+        sess = ReferenceEvaluator(model)
+        sess.run(None, {"X": x})
+        assert used_kernel_names() == [
+            "onnx_light_cpu::Abs",
+            "onnx_light_cpu::Exp",
+            "onnx_light_cpu::Log",
+        ]

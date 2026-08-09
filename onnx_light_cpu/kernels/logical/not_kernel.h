@@ -28,6 +28,11 @@ class NotKernel : public ONNX_LIGHT_NAMESPACE::core::runtime::KernelBase {
 public:
   using ONNX_LIGHT_NAMESPACE::core::runtime::KernelBase::KernelBase;
 
+  /// Library-qualified name identifying this kernel, recorded through
+  /// :cpp:func:`RecordKernelUsage` on every :cpp:func:`Run` so callers can
+  /// tell the onnx-light-cpu kernel apart from onnx-light's built-in ``Not``.
+  static constexpr const char *kName = "onnx_light_cpu::Not";
+
   /// Reads the node's single input, computes the elementwise logical negation
   /// and stores the single output back into ``rt``.
   void Run(ONNX_LIGHT_NAMESPACE::core::runtime::RuntimeContext &rt) override;

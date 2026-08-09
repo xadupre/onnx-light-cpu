@@ -57,6 +57,40 @@ kernels are registered: ``onnx-light``'s bulk built-in registration never
 replaces an entry that is already present, and an explicit registration always
 replaces the built-in one.
 
+Checking which kernels are used
+-------------------------------
+
+Because the onnx-light-cpu kernels are drop-in replacements, a model produces
+the same numbers whether it runs them or ``onnx-light``'s built-in kernels. To
+tell them apart, every onnx-light-cpu kernel carries a unique,
+library-qualified **name** (``"onnx_light_cpu::Abs"``, ``"onnx_light_cpu::Exp"``,
+``"onnx_light_cpu::Log"``, ``"onnx_light_cpu::Gemm"``, ``"onnx_light_cpu::Not"``)
+that it records every time it runs. The names can be inspected from Python:
+
+.. code-block:: python
+
+    from onnx_light_cpu import (
+        clear_used_kernel_names,
+        register_kernels,
+        registered_kernel_names,
+        used_kernel_names,
+    )
+
+    register_kernels()
+    registered_kernel_names()  # {'Abs': 'onnx_light_cpu::Abs', 'Exp': ...}
+
+    clear_used_kernel_names()
+    sess.run(None, feeds)      # run a model containing e.g. an Abs node
+    used_kernel_names()        # ['onnx_light_cpu::Abs', ...] in run order
+
+If ``used_kernel_names()`` is empty after a run whose operators onnx-light-cpu
+overrides, the registration did not take effect — see
+:ref:`l-registration-ignored` below. The same names are available in C++ as the
+static ``AbsKernel::kName`` (etc.) members and through
+``onnx_light_cpu::RegisteredKernelNames()`` /
+``onnx_light_cpu::UsedKernelNames()`` in
+``onnx_light_cpu/kernels/kernel_usage.h``.
+
 Add a new kernel
 ----------------
 
@@ -67,7 +101,12 @@ table with ``RegisterKernelFn``. The shipped kernels are the template to copy;
 The three steps are:
 
 #. Derive from ``KernelBase`` and override ``Run(RuntimeContext &)`` to read the
-   node's inputs and write its outputs (see ``AbsKernel::Run``).
+   node's inputs and write its outputs (see ``AbsKernel::Run``). Give the class a
+   unique ``static constexpr const char *kName`` (for example
+   ``"onnx_light_cpu::MyOp"``) and call ``RecordKernelUsage(kName)`` at the top
+   of ``Run`` so the kernel can be recognised in ``UsedKernelNames()``; add its
+   ``{op_type, kName}`` pair to ``RegisteredKernelNames()`` in
+   ``onnx_light_cpu/kernels/kernel_usage.cc``.
 #. Wrap the class in a ``NodeKernelFn`` factory that constructs the kernel and
    calls ``set_node``.
 #. Call ``RegisterKernelFn(domain, op_type, symbolic::Device::kCPU, factory)``.

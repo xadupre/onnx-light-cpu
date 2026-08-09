@@ -5,6 +5,7 @@
 #include "onnx_light_cpu/kernels/math/exp_log_kernel.h"
 
 #include "onnx_light_cpu/impl/math/math_kernels.h"
+#include "onnx_light_cpu/kernels/kernel_usage.h"
 
 #include "onnx_core/runtime/cast_helper.h"
 #include "onnx_core/runtime/kernel_dispatch_table.h"
@@ -116,6 +117,7 @@ void ExpKernel::operator()(const Tensor &x, Tensor &output) const {
 }
 
 void ExpKernel::Run(RuntimeContext &rt) {
+  RecordKernelUsage(kName);
   const NodeProto &node = *node_;
   rt_ns::RequireInputCount(node, 1);
   rt_ns::RequireOutputCount(node, 1);
@@ -134,6 +136,7 @@ void LogKernel::operator()(const Tensor &x, Tensor &output) const {
 }
 
 void LogKernel::Run(RuntimeContext &rt) {
+  RecordKernelUsage(kName);
   const NodeProto &node = *node_;
   rt_ns::RequireInputCount(node, 1);
   rt_ns::RequireOutputCount(node, 1);
