@@ -54,7 +54,11 @@ import onnxruntime
 from onnx_light.onnx import TensorProto, checker, helper
 from onnx_light.onnx.reference import ReferenceEvaluator
 
-from onnx_light_cpu import register_kernels
+from onnx_light_cpu import (
+    clear_used_kernel_names,
+    register_kernels,
+    used_kernel_names,
+)
 from onnx_light_cpu.onnx_py._cpukernels import detect_simd_level, has_cpu_kernels
 
 _SIMD_NAMES = {0: "scalar", 1: "SSE2", 2: "AVX", 3: "AVX2", 4: "AVX-512"}
@@ -156,6 +160,15 @@ light_session = ReferenceEvaluator(model)
 
 def run_light(a, b):
     return light_session.run(None, {"A": a, "B": b})[0]
+
+
+# Confirm the model dispatches to the onnx-light-cpu ``Gemm`` kernel (identified
+# by the library-qualified name it records when it runs) rather than
+# onnx-light's built-in kernel.
+_probe = np.zeros((2, 2), dtype=np.float32)
+clear_used_kernel_names()
+run_light(_probe, _probe)
+assert used_kernel_names() == ["onnx_light_cpu::Gemm"], used_kernel_names()
 
 
 # %%

@@ -1,5 +1,5 @@
-Available Kernels
-=================
+Kernels
+=======
 
 The table below lists the kernels **provided by this repository**
 (``onnx-light-cpu``). It does not include the kernels that come with onnx-light

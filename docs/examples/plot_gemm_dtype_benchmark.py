@@ -65,7 +65,11 @@ import numpy as np
 from onnx_light.onnx import TensorProto, checker, helper
 from onnx_light.onnx.reference import ReferenceEvaluator
 
-from onnx_light_cpu import register_kernels
+from onnx_light_cpu import (
+    clear_used_kernel_names,
+    register_kernels,
+    used_kernel_names,
+)
 from onnx_light_cpu.onnx_py._cpukernels import detect_simd_level, has_cpu_kernels
 
 _SIMD_NAMES = {0: "scalar", 1: "SSE2", 2: "AVX", 3: "AVX2", 4: "AVX-512"}
@@ -174,6 +178,14 @@ for shape_label, M, N, K in SHAPES:
 register_kernels()
 
 sessions = {label: make_session(tp) for label, (tp, _) in DTYPES.items()}
+
+# Confirm the sessions dispatch to the onnx-light-cpu ``Gemm`` kernel
+# (identified by the library-qualified name it records when it runs) rather
+# than onnx-light's built-in kernel.
+_probe = np.zeros((2, 2), dtype=np.float32)
+clear_used_kernel_names()
+sessions["float32"].run(None, {"A": _probe, "B": _probe})
+assert used_kernel_names() == ["onnx_light_cpu::Gemm"], used_kernel_names()
 
 
 # %%
