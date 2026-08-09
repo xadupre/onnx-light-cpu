@@ -5,6 +5,7 @@
 #pragma once
 
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -17,7 +18,7 @@ namespace onnx_light_cpu {
 /// callers can observe which kernels a model actually dispatched to. The log
 /// is a process-wide singleton guarded by a mutex, so recording is safe to
 /// call from multiple threads; it is intended for tests and diagnostics.
-void RecordKernelUsage(const std::string &name);
+void RecordKernelUsage(std::string_view name);
 
 /// Returns the library-qualified names of the kernels recorded by
 /// :cpp:func:`RecordKernelUsage` since the last

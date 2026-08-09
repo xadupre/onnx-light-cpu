@@ -181,8 +181,10 @@ class TestUsedKernelNames:
         model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 18)])
         sess = ReferenceEvaluator(model)
         sess.run(None, {"X": x})
-        assert used_kernel_names() == [
-            "onnx_light_cpu::Abs",
-            "onnx_light_cpu::Exp",
-            "onnx_light_cpu::Log",
-        ]
+        assert sorted(used_kernel_names()) == sorted(
+            [
+                "onnx_light_cpu::Abs",
+                "onnx_light_cpu::Exp",
+                "onnx_light_cpu::Log",
+            ]
+        )

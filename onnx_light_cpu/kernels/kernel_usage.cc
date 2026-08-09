@@ -30,9 +30,9 @@ std::mutex &UsageMutex() {
 
 } // namespace
 
-void RecordKernelUsage(const std::string &name) {
+void RecordKernelUsage(std::string_view name) {
   std::lock_guard<std::mutex> guard(UsageMutex());
-  UsageLog().push_back(name);
+  UsageLog().emplace_back(name);
 }
 
 std::vector<std::string> UsedKernelNames() {
