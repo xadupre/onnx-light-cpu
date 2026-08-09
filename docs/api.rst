@@ -168,6 +168,22 @@ onnx-light's runtime after registration (see :func:`register_all_kernels` and
    function and is only available in builds compiled with the onnx-light
    integration enabled (``ONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON``).
 
+.. py:function:: registered_kernel_names() -> list[tuple[str, str]]
+
+   Returns the ``(op_type, kernel name)`` pairs of every onnx-light-cpu kernel,
+   for example ``("Abs", "onnx_light_cpu::Abs")``. The kernel name is the
+   library-qualified name each kernel records when it runs, so callers can check
+   that the accelerated kernels are the ones actually used.
+
+.. py:function:: used_kernel_names() -> list[str]
+
+   Returns the library-qualified names of the onnx-light-cpu kernels that ran
+   since the last :func:`clear_used_kernel_names` call, in invocation order.
+
+.. py:function:: clear_used_kernel_names() -> None
+
+   Clears the record of onnx-light-cpu kernels that have run.
+
 
 Registering kernels with onnx-light
 -----------------------------------
@@ -194,3 +210,27 @@ Registering kernels with onnx-light
       register_kernels()
       sess = ReferenceEvaluator(model)
       (y,) = sess.run(None, {"x": np.array([-1.0, 2.0], dtype=np.float32)})
+
+.. py:function:: registered_kernel_names()
+
+   Returns a ``{op_type: kernel name}`` dictionary mapping each ONNX ``op_type``
+   onnx-light-cpu overrides to the library-qualified name of the accelerated
+   kernel installed for it (for example ``{"Abs": "onnx_light_cpu::Abs"}``). Use
+   it to confirm the accelerated kernels — rather than onnx-light's built-in
+   ones — are registered. Wraps
+   :func:`onnx_light_cpu.onnx_py._cpuregister.registered_kernel_names`.
+
+.. py:function:: used_kernel_names()
+
+   Returns, in invocation order, the library-qualified names of the
+   onnx-light-cpu kernels that have run since the last
+   :func:`clear_used_kernel_names` call. After running a model through a
+   ``ReferenceEvaluator`` this reports which accelerated kernels the runtime
+   actually dispatched to. Wraps
+   :func:`onnx_light_cpu.onnx_py._cpuregister.used_kernel_names`.
+
+.. py:function:: clear_used_kernel_names()
+
+   Clears the record of onnx-light-cpu kernels that have run, so a subsequent
+   :func:`used_kernel_names` call only reports the kernels used after this call.
+   Wraps :func:`onnx_light_cpu.onnx_py._cpuregister.clear_used_kernel_names`.
