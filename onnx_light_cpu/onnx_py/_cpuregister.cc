@@ -3,7 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <nanobind/nanobind.h>
+#include <nanobind/stl/pair.h>
+#include <nanobind/stl/string.h>
+#include <nanobind/stl/vector.h>
 
+#include "onnx_light_cpu/kernels/kernel_usage.h"
 #include "onnx_light_cpu/kernels/register_kernels.h"
 
 namespace nb = nanobind;
@@ -18,4 +22,20 @@ NB_MODULE(_cpuregister, m) {
       "Registers every onnx-light-cpu kernel class (Abs, Exp, Log, Gemm, Not) into "
       "onnx-light's shared KernelDispatchTable for the CPU device, replacing "
       "the corresponding built-in entries for the default ONNX domain.");
+
+  m.def(
+      "registered_kernel_names", []() { return onnx_light_cpu::RegisteredKernelNames(); },
+      "Returns the (op_type, kernel name) pairs of every onnx-light-cpu kernel, "
+      "e.g. ('Abs', 'onnx_light_cpu::Abs'). The kernel name is the "
+      "library-qualified name each kernel records when it runs, so callers can "
+      "check the accelerated kernels are the ones actually used.");
+
+  m.def(
+      "used_kernel_names", []() { return onnx_light_cpu::UsedKernelNames(); },
+      "Returns the library-qualified names of the onnx-light-cpu kernels that "
+      "ran since the last clear_used_kernel_names() call, in invocation order.");
+
+  m.def(
+      "clear_used_kernel_names", []() { onnx_light_cpu::ClearUsedKernelNames(); },
+      "Clears the record of onnx-light-cpu kernels that have run.");
 }

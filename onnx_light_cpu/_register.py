@@ -69,3 +69,44 @@ def register_kernels(sess: Any = None) -> Any:
     """
     _register_all_kernels()
     return sess
+
+
+def registered_kernel_names() -> dict[str, str]:
+    """Returns ``{op_type: kernel name}`` for every onnx-light-cpu kernel.
+
+    The kernel name is the library-qualified name (for example
+    ``"onnx_light_cpu::Abs"``) that each kernel records when it runs. This maps
+    each ONNX ``op_type`` onnx-light-cpu overrides to the name of the
+    accelerated kernel installed for it, so callers can check the accelerated
+    kernels — rather than onnx-light's built-in ones — are the kernels used.
+    """
+    from .onnx_py._cpuregister import (  # pyrefly: ignore[missing-import]
+        registered_kernel_names as _registered_kernel_names,
+    )
+
+    return dict(_registered_kernel_names())
+
+
+def used_kernel_names() -> list[str]:
+    """Returns the onnx-light-cpu kernels that ran since the last clear.
+
+    Every onnx-light-cpu kernel records its library-qualified name when it
+    executes, so after running a model through onnx-light's ``ReferenceEvaluator``
+    this returns, in invocation order, the names of the accelerated kernels the
+    runtime actually dispatched to. Use :func:`clear_used_kernel_names` to reset
+    the record before a run.
+    """
+    from .onnx_py._cpuregister import (  # pyrefly: ignore[missing-import]
+        used_kernel_names as _used_kernel_names,
+    )
+
+    return list(_used_kernel_names())
+
+
+def clear_used_kernel_names() -> None:
+    """Clears the record of onnx-light-cpu kernels that have run."""
+    from .onnx_py._cpuregister import (  # pyrefly: ignore[missing-import]
+        clear_used_kernel_names as _clear_used_kernel_names,
+    )
+
+    _clear_used_kernel_names()

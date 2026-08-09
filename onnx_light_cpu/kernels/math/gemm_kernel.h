@@ -37,6 +37,11 @@ class GemmKernel : public ONNX_LIGHT_NAMESPACE::core::runtime::KernelBase {
 public:
   using ONNX_LIGHT_NAMESPACE::core::runtime::KernelBase::KernelBase;
 
+  /// Library-qualified name identifying this kernel, recorded through
+  /// :cpp:func:`RecordKernelUsage` on every :cpp:func:`Run` so callers can
+  /// tell the onnx-light-cpu kernel apart from onnx-light's built-in ``Gemm``.
+  static constexpr const char *kName = "onnx_light_cpu::Gemm";
+
   /// Reads the node's ``A``, ``B`` and optional ``C`` inputs together with the
   /// ``alpha``, ``beta``, ``transA`` and ``transB`` attributes, computes the
   /// general matrix multiplication and stores the single output back into

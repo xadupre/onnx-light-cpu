@@ -29,6 +29,11 @@ class ExpKernel : public ONNX_LIGHT_NAMESPACE::core::runtime::KernelBase {
 public:
   using ONNX_LIGHT_NAMESPACE::core::runtime::KernelBase::KernelBase;
 
+  /// Library-qualified name identifying this kernel, recorded through
+  /// :cpp:func:`RecordKernelUsage` on every :cpp:func:`Run` so callers can
+  /// tell the onnx-light-cpu kernel apart from onnx-light's built-in ``Exp``.
+  static constexpr const char *kName = "onnx_light_cpu::Exp";
+
   /// Reads the node's single input, computes the elementwise exponential and
   /// stores the single output back into ``rt``.
   void Run(ONNX_LIGHT_NAMESPACE::core::runtime::RuntimeContext &rt) override;
@@ -53,6 +58,11 @@ public:
 class LogKernel : public ONNX_LIGHT_NAMESPACE::core::runtime::KernelBase {
 public:
   using ONNX_LIGHT_NAMESPACE::core::runtime::KernelBase::KernelBase;
+
+  /// Library-qualified name identifying this kernel, recorded through
+  /// :cpp:func:`RecordKernelUsage` on every :cpp:func:`Run` so callers can
+  /// tell the onnx-light-cpu kernel apart from onnx-light's built-in ``Log``.
+  static constexpr const char *kName = "onnx_light_cpu::Log";
 
   /// Reads the node's single input, computes the elementwise natural logarithm
   /// and stores the single output back into ``rt``.

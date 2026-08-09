@@ -11,8 +11,18 @@ or ``Not`` runs the optimized kernel when evaluated through a
 ``ReferenceEvaluator``.
 """
 
-from ._register import register_kernels
+from ._register import (
+    clear_used_kernel_names,
+    register_kernels,
+    registered_kernel_names,
+    used_kernel_names,
+)
 
-__version__ = "0.1.13"
+__version__ = "0.1.15"
 
-__all__ = ["register_kernels"]
+__all__ = [
+    "clear_used_kernel_names",
+    "register_kernels",
+    "registered_kernel_names",
+    "used_kernel_names",
+]
