@@ -211,7 +211,7 @@ Registering kernels with onnx-light
       sess = ReferenceEvaluator(model)
       (y,) = sess.run(None, {"x": np.array([-1.0, 2.0], dtype=np.float32)})
 
-.. py:function:: registered_kernel_names()
+.. py:function:: registered_kernel_names() -> dict[str, str]
 
    Returns a ``{op_type: kernel name}`` dictionary mapping each ONNX ``op_type``
    onnx-light-cpu overrides to the library-qualified name of the accelerated
@@ -220,7 +220,7 @@ Registering kernels with onnx-light
    ones — are registered. Wraps
    :func:`onnx_light_cpu.onnx_py._cpuregister.registered_kernel_names`.
 
-.. py:function:: used_kernel_names()
+.. py:function:: used_kernel_names() -> list[str]
 
    Returns, in invocation order, the library-qualified names of the
    onnx-light-cpu kernels that have run since the last
@@ -229,7 +229,7 @@ Registering kernels with onnx-light
    actually dispatched to. Wraps
    :func:`onnx_light_cpu.onnx_py._cpuregister.used_kernel_names`.
 
-.. py:function:: clear_used_kernel_names()
+.. py:function:: clear_used_kernel_names() -> None
 
    Clears the record of onnx-light-cpu kernels that have run, so a subsequent
    :func:`used_kernel_names` call only reports the kernels used after this call.
