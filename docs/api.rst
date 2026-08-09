@@ -1,5 +1,5 @@
-API Reference
-=============
+API
+===
 
 C++ API
 -------

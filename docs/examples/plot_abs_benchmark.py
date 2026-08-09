@@ -43,7 +43,11 @@ import onnxruntime
 from onnx_light.onnx import TensorProto, checker, helper
 from onnx_light.onnx.reference import ReferenceEvaluator
 
-from onnx_light_cpu import register_kernels
+from onnx_light_cpu import (
+    clear_used_kernel_names,
+    register_kernels,
+    used_kernel_names,
+)
 from onnx_light_cpu.onnx_py._cpukernels import detect_simd_level, has_cpu_kernels
 
 _SIMD_NAMES = {0: "scalar", 1: "SSE2", 2: "AVX", 3: "AVX2", 4: "AVX-512"}
@@ -137,6 +141,13 @@ light_label = "onnx-light + onnx-light-cpu"
 register_kernels()
 light_session = ReferenceEvaluator(model)
 light_setup_time = time.perf_counter() - _light_setup_start
+
+# Confirm the model dispatches to the onnx-light-cpu ``Abs`` kernel (identified
+# by the library-qualified name it records when it runs) rather than
+# onnx-light's built-in kernel.
+clear_used_kernel_names()
+light_session.run(None, {"X": np.zeros(1, dtype=np.float32)})
+assert used_kernel_names() == ["onnx_light_cpu::Abs"], used_kernel_names()
 
 
 def run_light(inp):

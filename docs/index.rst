@@ -6,10 +6,15 @@ onnx-light-cpu
 
    getting_started
    kernels
-   registering_kernels
-   gemm_kernel_design
    auto_examples/index
    api
+
+.. toctree::
+   :maxdepth: 2
+   :caption: Design
+
+   registering_kernels
+   gemm_kernel_design
 
 .. include:: ../README.md
    :parser: myst_parser.sphinx_
