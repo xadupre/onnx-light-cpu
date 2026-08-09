@@ -43,7 +43,7 @@ def _register_all_kernels() -> None:
             "with -DONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON to enable the accelerated "
             "kernels.",
             RuntimeWarning,
-            stacklevel=2,
+            stacklevel=3,
         )
         return
 
