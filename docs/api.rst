@@ -52,7 +52,7 @@ include. Every kernel dispatches at runtime to the best available SIMD path.
 
    } // namespace onnx_light_cpu
 
-The neutral ``onnx_light_cpu/impl/logical/logical_kernels.h`` header declares the
+The ``onnx_light_cpu/impl/logical/logical_kernels.h`` header declares the
 logical family, currently the elementwise logical negation used by the ``Not``
 operator (ONNX ``bool`` tensors are stored one byte per element, so the buffers
 are the raw ``uint8_t`` byte patterns):
