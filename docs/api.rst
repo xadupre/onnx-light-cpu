@@ -24,10 +24,44 @@ include. Every kernel dispatches at runtime to the best available SIMD path.
 
    SimdLevel DetectSimdLevel();
 
+   // Elementwise absolute value (float16 uses the raw uint16_t bit pattern).
    void AbsFloat32(const float *input, float *output, std::size_t count);
    void AbsFloat64(const double *input, double *output, std::size_t count);
+   void AbsFloat16(const std::uint16_t *input, std::uint16_t *output, std::size_t count);
+   void AbsInt8(const std::int8_t *input, std::int8_t *output, std::size_t count);
    void AbsInt32(const std::int32_t *input, std::int32_t *output, std::size_t count);
    void AbsInt64(const std::int64_t *input, std::int64_t *output, std::size_t count);
+
+   // Elementwise natural exponential (float16 uses the raw uint16_t bit pattern).
+   void ExpFloat32(const float *input, float *output, std::size_t count);
+   void ExpFloat64(const double *input, double *output, std::size_t count);
+   void ExpFloat16(const std::uint16_t *input, std::uint16_t *output, std::size_t count);
+
+   // Elementwise natural logarithm (float16 uses the raw uint16_t bit pattern).
+   void LogFloat32(const float *input, float *output, std::size_t count);
+   void LogFloat64(const double *input, double *output, std::size_t count);
+   void LogFloat16(const std::uint16_t *input, std::uint16_t *output, std::size_t count);
+
+   // General matrix multiplication Y = alpha * op(A) @ op(B) + beta * C.
+   void GemmFloat32(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::size_t K,
+                    float alpha, const float *A, const float *B, float beta, const float *C,
+                    float *Y);
+   void GemmFloat64(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::size_t K,
+                    double alpha, const double *A, const double *B, double beta, const double *C,
+                    double *Y);
+
+   } // namespace onnx_light_cpu
+
+The neutral ``onnx_light_cpu/impl/logical/logical_kernels.h`` header declares the
+logical family, currently the elementwise logical negation used by the ``Not``
+operator (ONNX ``bool`` tensors are stored one byte per element, so the buffers
+are the raw ``uint8_t`` byte patterns):
+
+.. code-block:: cpp
+
+   namespace onnx_light_cpu {
+
+   void NotBool(const std::uint8_t *input, std::uint8_t *output, std::size_t count);
 
    } // namespace onnx_light_cpu
 
