@@ -18,7 +18,7 @@ from ._register import (
     used_kernel_names,
 )
 
-__version__ = "0.1.15"
+__version__ = "0.1.16"
 
 __all__ = [
     "clear_used_kernel_names",
