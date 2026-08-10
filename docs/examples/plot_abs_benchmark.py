@@ -14,10 +14,7 @@ of a ``float32`` array across a range of input sizes:
   AVX-512/AVX2/AVX/SSE2 dispatch.
 * **onnx-light (built-in)** - ``onnx-light``'s own un-accelerated (pure
   reference) ``Abs`` kernel, as a baseline for what ``onnx-light-cpu`` buys on
-  top of it. It is only measured for the smaller sizes in the grid: this
-  baseline is not meaningfully more expensive than the accelerated kernel at
-  the very largest sizes (both become bandwidth-bound), so it is dropped for
-  the last two sizes to keep the comparison focused on where it matters.
+  top of it. It is measured across the complete size grid.
 * **numpy** - :func:`numpy.abs`, used as a reference baseline.
 
 The back-ends compute the same result; the goal here is to see how their
@@ -93,36 +90,49 @@ ort_setup_time = time.perf_counter() - _ort_setup_start
 # -----------------
 
 size_grid = [10**k for k in range(2, 9)]
-# The built-in baseline is dropped for the two largest sizes (see module
-# docstring): keep it where the accelerated kernel's advantage is visible.
-alone_sizes = size_grid[:-2]
+
+
+def measure(func, repeat, warmup=3):
+    for _ in range(warmup):
+        func()
+    timings = []
+    for _ in range(repeat):
+        start = time.perf_counter()
+        func()
+        timings.append(time.perf_counter() - start)
+    return float(np.median(timings))
+
+
+def measure_pair(first, second, repeat, warmup=3):
+    for _ in range(warmup):
+        first()
+        second()
+    timings = ([], [])
+    funcs = (first, second)
+    for iteration in range(repeat):
+        order = (0, 1) if iteration % 2 == 0 else (1, 0)
+        for index in order:
+            start = time.perf_counter()
+            funcs[index]()
+            timings[index].append(time.perf_counter() - start)
+    return tuple(float(np.median(values)) for values in timings)
+
 
 # %%
-# Time the built-in (un-accelerated) onnx-light Abs kernel
-# ----------------------------------------------------------
+# Prepare the built-in (un-accelerated) onnx-light Abs kernel
+# -------------------------------------------------------------
 #
 # ``onnx_light_cpu.register_kernels()`` permanently overrides the process-wide
 # ``Abs`` kernel entry, and a session only resolves/caches which kernel it
-# uses on its *first* run. So this baseline uses its own model/session, run
-# once per size here, **before** ``register_kernels()`` is called below;
-# ``light_session`` (built after registration) instead resolves to the
-# SIMD-accelerated kernel.
+# uses on its *first* run. This baseline therefore uses its own model/session
+# and runs once **before** ``register_kernels()`` is called below. Its cached
+# built-in kernel can then be timed alongside the accelerated session, on the
+# same inputs and with alternating measurement order.
 
 alone_model = make_abs_model()
 alone_session = ReferenceEvaluator(alone_model)
 alone_label = "onnx-light (built-in)"
-alone_rng = np.random.default_rng(0)
-alone_times_by_size = {}
-for size in alone_sizes:
-    inp = alone_rng.uniform(-100.0, 100.0, size=size).astype(np.float32)
-    repeat = max(3, min(200, 2_000_000 // size))
-    best = float("inf")
-    for _ in range(repeat):
-        start = time.perf_counter()
-        alone_session.run(None, {"X": inp})
-        best = min(best, time.perf_counter() - start)
-    alone_times_by_size[size] = best
-    print(f"size={size:>9} | {alone_label}={best * 1e6:10.2f} us")
+alone_session.run(None, {"X": np.zeros(1, dtype=np.float32)})
 
 # %%
 # Build the onnx-light evaluator
@@ -179,29 +189,16 @@ print(f"setup: onnxruntime InferenceSession = {ort_setup_time * 1e3:.2f} ms")
 print(f"setup: onnx-light ReferenceEvaluator = {light_setup_time * 1e3:.2f} ms")
 
 # %%
-# Timing helper
-# -------------
-#
-# Each candidate is called ``repeat`` times and the best (minimum) wall-clock
-# time is kept to reduce the impact of scheduling noise. The number of repeats
-# shrinks as the arrays grow so the whole benchmark stays fast.
-
-
-def measure(func, repeat):
-    best = float("inf")
-    for _ in range(repeat):
-        start = time.perf_counter()
-        func()
-        best = min(best, time.perf_counter() - start)
-    return best
-
-
 # %%
 # Run the benchmark
 # -----------------
 #
-# For every size the same input is fed to the three back-ends. The results are
-# checked against :func:`numpy.abs` to make sure every implementation agrees.
+# For every size the same input is fed to the four back-ends. Each measurement
+# starts with three untimed warm-up calls, then retains the median of the timed
+# repetitions. The two onnx-light variants are measured as a pair, alternating
+# which one runs first to reduce cache and scheduling bias. At least seven timed
+# repetitions are used, including for the largest arrays. The results are checked
+# against :func:`numpy.abs` to make sure every implementation agrees.
 
 rng = np.random.default_rng(0)
 
@@ -210,48 +207,57 @@ for size in size_grid:
     inp = rng.uniform(-100.0, 100.0, size=size).astype(np.float32)
     expected = np.abs(inp)
 
-    repeat = max(3, min(200, 2_000_000 // size))
+    repeat = max(7, min(200, 2_000_000 // size))
 
     numpy_time = measure(lambda inp=inp: np.abs(inp), repeat)
 
     if light_session is not None:
-        cpu_time = measure(lambda inp=inp: run_light(inp), repeat)
+        alone_time, cpu_time = measure_pair(
+            lambda inp=inp: alone_session.run(None, {"X": inp}),
+            lambda inp=inp: run_light(inp),
+            repeat,
+        )
+        assert np.array_equal(alone_session.run(None, {"X": inp})[0], expected), size
         assert np.array_equal(run_light(inp), expected), size
     else:
+        alone_time = measure(lambda inp=inp: alone_session.run(None, {"X": inp}), repeat)
         cpu_time = float("nan")
 
     ort_time = measure(lambda inp=inp: session.run(None, {"X": inp}), repeat)
     assert np.array_equal(session.run(None, {"X": inp})[0], expected), size
 
-    rows.append((size, numpy_time, cpu_time, ort_time))
+    cpu_speedup = alone_time / cpu_time
+    rows.append((size, numpy_time, alone_time, cpu_time, ort_time))
     print(
         f"size={size:>9} | numpy={numpy_time * 1e6:10.2f} us | "
+        f"onnx-light={alone_time * 1e6:10.2f} us | "
         f"onnx-light-cpu={cpu_time * 1e6:10.2f} us | "
+        f"cpu speed-up={cpu_speedup:5.2f}x | "
         f"onnxruntime={ort_time * 1e6:10.2f} us"
     )
 
 sizes = np.array([r[0] for r in rows])
 numpy_times = np.array([r[1] for r in rows])
-cpu_times = np.array([r[2] for r in rows])
-ort_times = np.array([r[3] for r in rows])
-
-alone_grid = np.array(alone_sizes)
-alone_times = np.array([alone_times_by_size[size] for size in alone_sizes])
+alone_times = np.array([r[2] for r in rows])
+cpu_times = np.array([r[3] for r in rows])
+ort_times = np.array([r[4] for r in rows])
 
 # %%
 # Plot the timings
 # ----------------
 #
 # The left panel shows the raw execution time versus the array size on a
-# log-log scale. The right panel shows the speed-up relative to
+# log-log scale. The middle panel shows the speed-up relative to
 # **onnxruntime** (the baseline): for each back-end the onnxruntime time is
 # divided by the back-end time, so values above ``1`` are faster than
 # onnxruntime and values below ``1`` are slower. The onnxruntime curve is a
-# flat line at ``1`` by construction.
+# flat line at ``1`` by construction. The right panel isolates the comparison
+# of interest: ``onnx-light built-in time / onnx-light-cpu time``. Values above
+# ``1`` therefore show directly how much the CPU kernel is faster.
 
 import matplotlib.pyplot as plt
 
-fig, (ax_time, ax_speedup) = plt.subplots(1, 2, figsize=(11, 4.5))
+fig, (ax_time, ax_speedup, ax_cpu_gain) = plt.subplots(1, 3, figsize=(16, 4.5))
 
 ax_time.plot(sizes, numpy_times * 1e6, "o--", label="numpy", color="#9b7ec8")
 if light_session is not None:
@@ -263,7 +269,7 @@ if light_session is not None:
         color="#4a9eff",
     )
 ax_time.plot(
-    alone_grid,
+    sizes,
     alone_times * 1e6,
     "o--",
     label=alone_label,
@@ -277,9 +283,6 @@ ax_time.set_ylabel("time (microseconds)")
 ax_time.set_title(f"Abs execution time (SIMD: {simd_name})")
 ax_time.legend()
 
-ort_times_by_size = dict(zip(sizes.tolist(), ort_times.tolist(), strict=True))
-alone_ort_times = np.array([ort_times_by_size[size] for size in alone_sizes])
-
 ax_speedup.plot(sizes, ort_times / numpy_times, "o--", label="numpy", color="#9b7ec8")
 if light_session is not None:
     ax_speedup.plot(
@@ -290,8 +293,8 @@ if light_session is not None:
         color="#4a9eff",
     )
 ax_speedup.plot(
-    alone_grid,
-    alone_ort_times / alone_times,
+    sizes,
+    ort_times / alone_times,
     "o--",
     label=alone_label,
     color="#5cb85c",
@@ -304,6 +307,24 @@ ax_speedup.set_xlabel("array size (elements)")
 ax_speedup.set_ylabel("speed-up vs onnxruntime")
 ax_speedup.set_title("Abs speed-up (onnxruntime = 1)")
 ax_speedup.legend()
+
+if light_session is not None:
+    cpu_gain = alone_times / cpu_times
+    ax_cpu_gain.plot(sizes, cpu_gain, "o-", color="#4a9eff")
+    for size, gain in zip(sizes, cpu_gain, strict=True):
+        ax_cpu_gain.annotate(
+            f"{gain:.2f}x",
+            (size, gain),
+            xytext=(0, 7),
+            textcoords="offset points",
+            ha="center",
+            fontsize=8,
+        )
+ax_cpu_gain.axhline(1.0, color="grey", linewidth=0.8, linestyle=":")
+ax_cpu_gain.set_xscale("log")
+ax_cpu_gain.set_xlabel("array size (elements)")
+ax_cpu_gain.set_ylabel("speed-up vs onnx-light built-in")
+ax_cpu_gain.set_title("onnx-light-cpu gain (built-in = 1)")
 
 fig.tight_layout()
 fig.savefig("plot_abs_benchmark.png")

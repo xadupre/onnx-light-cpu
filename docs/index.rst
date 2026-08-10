@@ -16,5 +16,13 @@ onnx-light-cpu
    registering_kernels
    gemm_kernel_design
 
+.. toctree::
+   :maxdepth: 2
+   :caption: Next steps
+
+   next_steps/gemm_matmul
+   next_steps/conv
+   next_steps/binary_elementwise
+
 .. include:: ../README.md
    :parser: myst_parser.sphinx_

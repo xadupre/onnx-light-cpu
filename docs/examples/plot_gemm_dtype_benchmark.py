@@ -30,7 +30,11 @@ widen/round-trip is therefore pure overhead on top of the ``float32`` compute,
 and this example shows how that overhead shrinks (relatively) as the shape
 gets more compute-heavy.
 
-A fourth curve, ``onnx-light (built-in)``, shows ``onnx-light``'s own
+``onnxruntime`` is measured on the same models and inputs for ``float32`` and
+``float16``. Its CPU execution provider does not implement ``Gemm`` for
+``bfloat16``, so no onnxruntime ``bfloat16`` result is shown.
+
+An additional baseline, ``onnx-light (built-in)``, shows ``onnx-light``'s own
 un-accelerated (pure Python/reference) ``Gemm`` kernel for ``float32``, as a
 baseline. It only supports ``float32`` (the reference kernel has no
 ``float16``/``bfloat16`` Gemm implementation) and is only measured for the
@@ -58,6 +62,7 @@ import time
 
 import ml_dtypes
 import numpy as np
+import onnxruntime
 
 # ``onnx-light`` ships ``onnx_light.onnx`` as a drop-in replacement for the
 # ``onnx`` package; use it to build the models so the example depends on
@@ -93,7 +98,7 @@ DTYPES = {
 }
 
 
-def make_session(tensor_proto_dtype):
+def make_model(tensor_proto_dtype):
     """Builds a single-node ``Gemm`` model (``Y = A @ B``) for one dtype."""
     graph = helper.make_graph(
         [helper.make_node("Gemm", ["A", "B"], ["Y"], alpha=1.0, beta=1.0)],
@@ -106,7 +111,11 @@ def make_session(tensor_proto_dtype):
     )
     model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 18)])
     checker.check_model(model)
-    return ReferenceEvaluator(model)
+    return model
+
+
+def make_session(tensor_proto_dtype):
+    return ReferenceEvaluator(make_model(tensor_proto_dtype))
 
 
 # %%
@@ -178,6 +187,13 @@ for shape_label, M, N, K in SHAPES:
 register_kernels()
 
 sessions = {label: make_session(tp) for label, (tp, _) in DTYPES.items()}
+ort_sessions = {
+    label: onnxruntime.InferenceSession(
+        make_model(DTYPES[label][0]).SerializeToString(),
+        providers=["CPUExecutionProvider"],
+    )
+    for label in ("float32", "float16")
+}
 
 # Confirm the sessions dispatch to the onnx-light-cpu ``Gemm`` kernel
 # (identified by the library-qualified name it records when it runs) rather
@@ -199,6 +215,7 @@ assert used_kernel_names() == ["onnx_light_cpu::Gemm"], used_kernel_names()
 
 rng = np.random.default_rng(0)
 results = {label: [] for label in DTYPES}
+ort_results = {label: [] for label in ort_sessions}
 
 for shape_label, M, N, K in SHAPES:
     a32 = rng.standard_normal((M, K)).astype(np.float32)
@@ -220,22 +237,35 @@ for shape_label, M, N, K in SHAPES:
 
         tol = 1e-3 if label == "float32" else (5e-2 if label == "float16" else 5e-1)
         np.testing.assert_allclose(run().astype(np.float32), expected, rtol=tol, atol=tol)
-        print(f"  {label:<9} | {elapsed * 1e6:10.2f} us")
+
+        if label in ort_sessions:
+            ort_session = ort_sessions[label]
+
+            def run_ort(session=ort_session, a=a, b=b):
+                return session.run(None, {"A": a, "B": b})[0]
+
+            ort_elapsed = measure(run_ort, repeat)
+            ort_results[label].append(ort_elapsed)
+            np.testing.assert_allclose(run_ort().astype(np.float32), expected, rtol=tol, atol=tol)
+            ort_text = f"{ort_elapsed * 1e6:10.2f} us"
+        else:
+            ort_text = "not supported"
+        print(f"  {label:<9} | onnx-light-cpu={elapsed * 1e6:10.2f} us | onnxruntime={ort_text}")
 
 # %%
 # Plot the timings
 # ----------------
 #
-# The left panel shows the raw execution time per shape/dtype on a log scale.
-# The right panel shows the float16/bfloat16 overhead relative to float32 for
-# the same shape (values above 1 mean slower than float32, as expected since
-# they go through the extra widen/round-trip with no dedicated micro-kernel).
+# The left panel shows the raw execution time per shape/dtype on a log scale;
+# solid bars are onnx-light-cpu and hatched bars are onnxruntime. The right
+# panel shows the float16/bfloat16 overhead relative to float32 for the same
+# backend and shape (values above 1 mean slower than float32).
 
 import matplotlib.pyplot as plt
 
 shape_labels = [s[0] for s in SHAPES]
 x = np.arange(len(SHAPES))
-width = 0.2
+width = 0.13
 colors = {
     "float32": "#4a9eff",
     "float16": "#f4a259",
@@ -245,13 +275,21 @@ colors = {
 
 fig, (ax_time, ax_overhead) = plt.subplots(1, 2, figsize=(12, 4.8))
 
-for i, (label, times) in enumerate(results.items()):
+series = [
+    ("onnx-light-cpu float32", results["float32"], colors["float32"], None),
+    ("onnxruntime float32", ort_results["float32"], colors["float32"], "//"),
+    ("onnx-light-cpu float16", results["float16"], colors["float16"], None),
+    ("onnxruntime float16", ort_results["float16"], colors["float16"], "//"),
+    ("onnx-light-cpu bfloat16", results["bfloat16"], colors["bfloat16"], None),
+]
+for i, (label, times, color, hatch) in enumerate(series):
     ax_time.bar(
-        x + (i - 1.5) * width,
+        x + (i - 2.5) * width,
         np.array(times) * 1e6,
         width,
         label=label,
-        color=colors[label],
+        color=color,
+        hatch=hatch,
     )
 
 # ``onnx-light (built-in)`` is only measured for the shapes in
@@ -264,7 +302,7 @@ alone_times = np.array(
     [alone_results[shape_label] for shape_label in shape_labels if shape_label in alone_results]
 )
 ax_time.bar(
-    alone_x + 1.5 * width,
+    alone_x + 2.5 * width,
     alone_times * 1e6,
     width,
     label=alone_label,
@@ -280,7 +318,21 @@ ax_time.legend()
 float32_times = np.array(results["float32"])
 for label in ("float16", "bfloat16"):
     overhead = np.array(results[label]) / float32_times
-    ax_overhead.plot(shape_labels, overhead, "o-", label=label, color=colors[label])
+    ax_overhead.plot(
+        shape_labels,
+        overhead,
+        "o-",
+        label=f"onnx-light-cpu {label}",
+        color=colors[label],
+    )
+ort_overhead = np.array(ort_results["float16"]) / np.array(ort_results["float32"])
+ax_overhead.plot(
+    shape_labels,
+    ort_overhead,
+    "o--",
+    label="onnxruntime float16",
+    color=colors["float16"],
+)
 ax_overhead.axhline(1.0, color="grey", linewidth=0.8, linestyle=":", label="float32 baseline")
 ax_overhead.set_ylabel("time relative to float32")
 ax_overhead.set_title("float16 / bfloat16 widen/round-trip overhead")

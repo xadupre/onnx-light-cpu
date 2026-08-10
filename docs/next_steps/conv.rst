@@ -1,0 +1,405 @@
+Conv Performance Roadmap
+========================
+
+Objective
+---------
+
+The objective is to implement ONNX ``Conv`` kernels that reach within 10% of
+ONNX Runtime on the priority convolution corpus, then exceed it on workloads
+where a model-aware execution plan can specialize layouts, transformed
+weights, epilogues, and neighboring operators.
+
+Conv should reuse the ``GemmPlan`` infrastructure described in
+:doc:`gemm_matmul`, including ISA dispatch, packing primitives, micro-kernels,
+low-precision conversion, and scheduling. It must not lower every convolution
+to a materialized ``im2col`` matrix: data replication and extra memory traffic
+make that approach unsuitable for an optimized inference runtime.
+
+Scope
+-----
+
+The first implementation targets ONNX ``Conv`` with:
+
+* 1D, 2D, and 3D spatial dimensions;
+* arbitrary stride, dilation, explicit pads, and ``auto_pad``;
+* optional bias;
+* regular, grouped, and depthwise convolution;
+* static and dynamic input shapes;
+* ``float32``, ``float64``, ``float16``, and ``bfloat16``;
+* quantized INT8/UINT8 through the appropriate ONNX quantized operator
+  contract.
+
+``ConvTranspose`` should reuse the same descriptors and micro-kernels but is a
+later phase because its output-indexing, overlap accumulation, and padding
+semantics require a distinct adapter and algorithm.
+
+Internal descriptor and plan
+----------------------------
+
+The ONNX adapter should normalize an operator into a ``ConvDescriptor``:
+
+.. code-block:: text
+
+   N, G
+   input_channels_per_group, output_channels_per_group
+   input_spatial[], output_spatial[], kernel_spatial[]
+   strides[], dilations[], pads_begin[], pads_end[]
+   input/output/weight strides and element type
+
+A ``ConvPlan`` should be created once the descriptor, constant weights, CPU,
+and thread limit are known. It stores:
+
+* the selected algorithm;
+* data and packed-weight layouts;
+* spatial/output-channel/input-channel block sizes;
+* typed compute and epilogue function pointers;
+* transformed constant weights;
+* task decomposition and useful thread count;
+* a dynamic-shape guard and fallback plan when dimensions are not static.
+
+The hot path executes this plan directly. Avoiding repeated selection is useful
+but is not the main optimization; performance comes from choosing the right
+calculation algorithm and data reuse pattern.
+
+Algorithm portfolio
+-------------------
+
+No single convolution algorithm is optimal for every shape.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 24 36 40
+
+   * - Case
+     - Algorithm
+     - Reason
+   * - 1x1, stride 1
+     - Strided batched GEMM
+     - No spatial lowering is needed; flatten N and spatial positions into M.
+   * - General dense Conv
+     - Implicit GEMM
+     - Generate each receptive-field panel while packing, without storing a
+       full ``im2col`` tensor.
+   * - Small fixed kernels
+     - Direct blocked convolution
+     - Reuse input rows/tiles directly and avoid packing overhead.
+   * - Depthwise
+     - Dedicated channel-vectorized direct kernel
+     - GEMM has no useful channel reduction when each group contains one
+       channel.
+   * - Small groups
+     - Grouped direct or grouped GEMM
+     - Schedule several groups together so tiny independent GEMMs do not each
+       pay a separate dispatch/synchronization cost.
+   * - 3x3, stride 1
+     - Direct kernel or Winograd F(2x2, 3x3)/F(4x4, 3x3)
+     - Winograd reduces multiplications when transform cost, precision, and
+       tile count justify it.
+   * - Very large spatial kernels
+     - Implicit GEMM initially; FFT as an optional later path
+     - FFT only wins beyond a hardware- and shape-dependent crossover.
+   * - INT8/UINT8
+     - Implicit GEMM or direct VNNI/AMX/dot-product kernel
+     - Fold zero-point correction into packing and requantization into the
+       epilogue.
+
+Implicit-GEMM algorithm
+-----------------------
+
+The general path maps convolution onto the blocked GEMM engine without
+materializing ``im2col``. For each output-spatial/output-channel tile:
+
+1. Select an output-position block and a reduction block over
+   ``input_channel x kernel_spatial``.
+2. Pack the corresponding receptive-field values directly from the input,
+   applying stride, dilation, and padding while packing.
+3. Reuse one packed weight panel across all output-position blocks in the
+   selected output-channel panel.
+4. Invoke the same MR x NR micro-kernel used by GEMM.
+5. Accumulate reduction blocks in registers or the destination tile.
+6. Apply bias and the selected epilogue on the final reduction block.
+
+The loop nest should make weight reuse explicit:
+
+.. code-block:: text
+
+   for g in groups:
+     for oc in range(0, output_channels_per_group, OC):
+       Wc = packed_weights[g, oc:oc+OC]
+       for n_spatial in output_position_blocks:
+         for reduction in IC_x_kernel_blocks:
+           Xc = pack_receptive_fields(input, n_spatial, reduction)
+           microkernel(Xc, Wc[reduction], output[n_spatial, oc])
+
+The exact order may switch output positions and output channels depending on
+whether activation or weight reuse is more valuable. That choice belongs in
+``ConvPlan`` and must be driven by cache size and measured shape families.
+
+Direct and depthwise algorithms
+-------------------------------
+
+The direct path should hold a small output tile in vector accumulators while
+walking kernel rows and input-channel blocks. It is preferable when the kernel
+is small, the output tile is compact, and implicit packing would not be reused
+enough.
+
+Depthwise convolution needs a separate layout and kernel:
+
+* vectorize across channels for NCHWc/NHWC-like blocked data, or across output
+  width when the external layout must remain NCHW;
+* keep several neighboring output pixels live to reuse each loaded input row;
+* specialize common 3x3 and 5x5 kernels, stride 1/2, and symmetric padding;
+* use a generic scalar/vector tail for uncommon dilation and border cases;
+* schedule batch, channel blocks, and output rows rather than one channel at a
+  time.
+
+Winograd
+--------
+
+Winograd should be added only after direct and implicit-GEMM baselines are
+stable. For 3x3 stride-1 convolution:
+
+* transform constant weights once in ``ConvPlan``;
+* transform input tiles, multiply transformed channels, then inverse-transform
+  output tiles;
+* support F(2x2, 3x3) first; consider F(4x4, 3x3) only where larger tiles
+  outperform their higher transform cost and numerical error;
+* accumulate in FP32 for FP16/BF16 inputs;
+* use direct convolution for borders and very small feature maps.
+
+Winograd reduces the multiplication count but increases additions, transform
+traffic, workspace, and numerical error. Algorithm selection must use measured
+crossovers, not a fixed ``kernel == 3x3`` rule.
+
+Layouts and graph integration
+-----------------------------
+
+ONNX normally exposes channel-first tensors, but the best internal layout may
+be blocked by vector width. Layout conversion can erase the kernel gain if it
+is performed around every Conv node.
+
+The execution plan should therefore:
+
+* propagate a blocked channel layout through compatible Conv, normalization,
+  activation, pooling, and residual operators;
+* convert only at graph boundaries or before an incompatible consumer;
+* encode layout in the runtime tensor metadata rather than infer it from shape;
+* pretransform constant weights directly into the chosen blocked format;
+* keep one canonical fallback for dynamic or unsupported layout combinations.
+
+Types
+-----
+
+.. list-table::
+   :header-rows: 1
+   :widths: 18 30 52
+
+   * - Type
+     - Accumulation
+     - Implementation
+   * - ``float32``
+     - ``float32``
+     - AVX2+FMA, AVX-512F, NEON/SVE micro-kernels.
+   * - ``float64``
+     - ``float64``
+     - Reuse FP64 GEMM/direct kernels; lower priority for inference.
+   * - ``float16``
+     - ``float32``
+     - Convert while packing with F16C/NEON, or use native AVX-512FP16.
+   * - ``bfloat16``
+     - ``float32``
+     - AVX-512BF16/AMX-BF16/ARM BF16, with panel-conversion fallback.
+   * - INT8/UINT8
+     - INT32
+     - VNNI/AMX/ARM dot product, fused zero-point correction and requantization.
+   * - INT4/UINT4 weights
+     - INT32 or FP32
+     - Decode during weight-panel consumption; initially limited to a
+       documented weight-only quantization contract.
+
+Parallel scheduling
+-------------------
+
+Choose task dimensions from the algorithm and shape:
+
+* regular Conv: batch x group x output-channel panel x output-position block;
+* depthwise: batch x channel block x output-row block;
+* grouped Conv: combine groups into the task space before splitting one small
+  group internally;
+* Winograd: batch x output-channel block x transformed tile block;
+* use reduction splitting only when outer dimensions cannot occupy the cores,
+  because partial-output reduction adds traffic and synchronization.
+
+Hybrid CPUs need a useful-thread model based on tile count and work per tile.
+Do not wake every logical CPU for small feature maps.
+
+Benchmark contract
+------------------
+
+Compare with ONNX Runtime using identical models, inputs, threads, affinity,
+and type tolerances. Warm up, alternate candidate order, and report median plus
+dispersion.
+
+The corpus should include:
+
+* ResNet 1x1 and 3x3 convolutions;
+* MobileNet depthwise and pointwise convolutions;
+* grouped convolution from ResNeXt-like models;
+* U-Net large-spatial and stride-2 layers;
+* Conv1D audio/sequence shapes;
+* representative Conv3D shapes;
+* batch sizes 1 and greater than 1;
+* odd spatial dimensions, asymmetric pads, dilation, and channel tails;
+* FP32, FP16, BF16, and quantized variants where ONNX Runtime supports them.
+
+Report total latency, kernel-only latency, throughput, scaling, packed-weight
+size, and algorithm selected for every case.
+
+Implementation order
+--------------------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 8 28 42 22
+
+   * - Step
+     - Deliverable
+     - Exit criterion
+     - Dependency
+   * - 0
+     - Conv benchmark and differential-test corpus.
+     - Stable ONNX Runtime baselines and correctness fixtures for every
+       algorithm family.
+     - None.
+   * - 1
+     - ``ConvDescriptor``/``ConvPlan`` and portable reference path.
+     - Complete pads/stride/dilation/group/bias correctness.
+     - Gemm planning interfaces.
+   * - 2
+     - 1x1 Conv through StridedBatchedGemm.
+     - Within 1.10x of the optimized MatMul engine on equivalent shapes.
+     - Batched GEMM.
+   * - 3
+     - General implicit-GEMM FP32 path.
+     - No materialized ``im2col``; regular Conv corpus reaches at least 0.8x
+       ONNX Runtime.
+     - Blocked GEMM engine.
+   * - 4
+     - Direct and depthwise FP32 kernels.
+     - MobileNet/depthwise and small-kernel corpus reaches 0.9x ONNX Runtime.
+     - Shared SIMD/scheduler primitives.
+   * - 5
+     - Grouped scheduling and Winograd.
+     - Priority 3x3/grouped corpus reaches 0.9-1.0x ONNX Runtime with measured
+       algorithm crossovers.
+     - Steps 3-4.
+   * - 6
+     - FP16/BF16 and INT8/UINT8 paths.
+     - Low-precision corpus reaches 0.9x ONNX Runtime where comparable support
+       exists.
+     - Low-precision GEMM micro-kernels.
+   * - 7
+     - Layout propagation and fused epilogues.
+     - At least one representative model subgraph exceeds ONNX Runtime by a
+       repeatable 10%.
+     - Steps 2-6 and graph layout metadata.
+   * - 8
+     - ConvTranspose and optional FFT/weight-sparse paths.
+     - Separate correctness and performance targets are met for enabled paths.
+     - Stable Conv engine.
+
+How to exceed ONNX Runtime
+--------------------------
+
+The estimates are relative to a tuned ONNX Runtime run with identical threads
+and layouts. They are targets to measure, not guarantees, and they overlap.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 20 22 36 22
+
+   * - Optimization
+     - Expected gain
+     - Conditions
+     - Estimated effort
+   * - Persistently transformed weights
+     - **0-5% execution gain** normally; **1.2-5x faster preparation** if the
+       transformed representation is serialized or shared.
+     - ONNX Runtime already transforms many constant weights. Execution gains
+       require a more specialized format or avoiding a transform it repeats.
+     - 3-5 days.
+   * - Shape-specific implicit-GEMM
+     - **3-15%** normally; **10-25%** for stable channel/spatial tails.
+     - Specialize output-position blocks, channel panels, receptive-field
+       packing, and thread decomposition. Dispatch removal alone is below 1%.
+     - 5-10 days per bounded shape family.
+   * - Direct/depthwise specialization
+     - **1.1-1.5x** for common small/depthwise kernels; up to **2x** if the
+       ONNX Runtime path falls back to generic lowering.
+     - Requires common 3x3/5x5 stride/pad cases and enough channel/spatial work
+       to vectorize efficiently.
+     - 7-15 days.
+   * - Winograd
+     - **0-15%** against an optimized ONNX Runtime Winograd path; **1.2-2x**
+       against direct/implicit 3x3 convolution.
+     - Only 3x3 stride-1 shapes above the measured tile-count crossover and
+       within the accepted numerical tolerance.
+     - 10-20 days.
+   * - Layout propagation
+     - **5-30%** over a Conv-heavy subgraph; near **0%** for an isolated Conv
+       already using its preferred external layout.
+     - Several adjacent operators must consume the blocked layout so conversion
+       is amortized across the subgraph.
+     - 10-20 days plus runtime tensor-layout support.
+   * - Fused epilogues/subgraphs
+     - **5-25%** for Conv+bias+activation; **1.2-1.6x** when residual,
+       normalization, quantization, or layout work is also eliminated.
+     - The fusion must not already be performed by ONNX Runtime and must retain
+       exact graph semantics.
+     - 5-15 days per fusion family.
+   * - Structured sparse weights
+     - **1.3-2x** near 70-80% sparsity; **2-4x** near 90% structured sparsity.
+     - Realistic throughput is commonly 30-70% of the ``1 / density`` arithmetic
+       bound after metadata and load-balance costs.
+     - 10-20 days per sparse format.
+   * - Autotuning
+     - **3-15%** normally; up to **20-30%** on unusual shapes or heterogeneous
+       CPUs.
+     - Tune a bounded algorithm/block candidate set during preparation and
+       cache by CPU, descriptor, layout, type, and thread count.
+     - 5-10 days plus benchmark infrastructure.
+
+A realistic progression is generic parity, then a 5-15% advantage from
+shape/layout specialization, 1.2-1.6x on fused subgraphs, and gains above 2x
+only where sparsity or an ONNX Runtime fallback creates enough headroom.
+
+Acceptance criteria
+-------------------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 24 76
+
+   * - Area
+     - Exit criterion
+   * - Correctness
+     - Differential tests pass for dimensions, pads, auto-pad, strides,
+       dilations, groups, bias, empty outputs, tails, layouts, and every type.
+   * - FP32 parity
+     - Median end-to-end latency is no worse than 1.10x ONNX Runtime across the
+       priority regular, pointwise, grouped, and depthwise corpus.
+   * - Low-precision parity
+     - FP16, BF16, and INT8 meet the same target on hardware with comparable
+       ONNX Runtime support.
+   * - Algorithm selection
+     - Every optimized algorithm has a measured crossover and a correctness
+       fallback; no shape regresses catastrophically because of a fixed rule.
+   * - Scaling
+     - Throughput improves through the useful physical-core count without
+       regressing batch-1 or small-spatial latency.
+   * - Exceeding ONNX Runtime
+     - At least one representative Conv-heavy model subgraph demonstrates a
+       repeatable 1.10x gain with identical semantics and thread count.
+
+Performance gates require dedicated pinned machines. Shared CI should enforce
+correctness and detect only large regressions.

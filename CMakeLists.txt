@@ -30,16 +30,20 @@ option(ONNX_LIGHT_CPU_INSTALL "Install the C++ library and headers." ON)
 option(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT
        "Build the onnx-light kernel registration library (requires onnx-light)." OFF)
 set(ONNX_LIGHT_CPU_ONNX_LIGHT_SOURCE_DIR "" CACHE PATH
-    "Path to a local onnx-light source tree. When set (and \
-ONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON), onnx-light is built from these sources with \
-add_subdirectory instead of being located with find_package(onnx_light). Use \
-this when the same sources were used to build the installed onnx-light Python \
-package but its onnx_lightConfig.cmake is not available.")
+    "Path to a local onnx-light source tree whose headers match the already-built \
+Python runtime.")
+set(ONNX_LIGHT_CPU_ONNX_LIGHT_LIBRARY "" CACHE FILEPATH
+    "Exact onnx-light core shared library loaded by the Python runtime.")
+set(ONNX_LIGHT_CPU_ONNX_LIGHT_PROTO_LIBRARY "" CACHE FILEPATH
+    "Exact onnx-light proto shared library loaded by the Python runtime.")
+set(ONNX_LIGHT_CPU_ONNX_LIGHT_IMPLIB "" CACHE FILEPATH
+    "Windows import library for ONNX_LIGHT_CPU_ONNX_LIGHT_LIBRARY.")
+set(ONNX_LIGHT_CPU_ONNX_LIGHT_PROTO_IMPLIB "" CACHE FILEPATH
+    "Windows import library for ONNX_LIGHT_CPU_ONNX_LIGHT_PROTO_LIBRARY.")
 option(ONNX_LIGHT_CPU_ENABLE_COVERAGE
        "Instrument the C++ targets for code coverage (GCC/Clang only)." OFF)
 
-# When onnx-light is built from a local source tree (add_subdirectory with
-# ONNX_LIGHT_INSTALL=OFF), its targets are never added to any export set, so
+# A local onnx-light runtime target is not part of an export set, so
 # lib_onnx_light_cpu_kernels cannot be installed as part of onnx_light_cpuTargets
 # (its PUBLIC link dependency onnx_light::lib_onnx_core would need to be
 # exported too). Disable the C++ install step in that mode; it is normally
@@ -201,24 +205,28 @@ endif()
 # is therefore opt-in via ONNX_LIGHT_CPU_WITH_ONNX_LIGHT.
 if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
   if(ONNX_LIGHT_CPU_ONNX_LIGHT_SOURCE_DIR)
-    # Build onnx-light from a local source tree instead of locating a
-    # previously installed onnx-light with find_package. This assumes the same
-    # sources were used to build the onnx-light Python package that is used at
-    # runtime. Only the C++ library is needed here, so disable onnx-light's own
-    # Python extensions, tests, benchmarks and install rules. These are set as
-    # plain (non-cache) variables so onnx-light's option() calls honour them
-    # (policy CMP0077).
-    set(ONNX_LIGHT_BUILD_PYTHON OFF)
-    set(ONNX_LIGHT_BUILD_TESTS OFF)
-    set(ONNX_LIGHT_BUILD_BENCHMARKS OFF)
-    set(ONNX_LIGHT_INSTALL OFF)
-    add_subdirectory("${ONNX_LIGHT_CPU_ONNX_LIGHT_SOURCE_DIR}"
-        "${CMAKE_CURRENT_BINARY_DIR}/_onnx_light_src" EXCLUDE_FROM_ALL)
-    # find_package(onnx_light) exposes the namespaced onnx_light::lib_onnx_core
-    # target; provide the same alias for the in-tree target so the code below is
-    # identical for both build modes.
-    if(NOT TARGET onnx_light::lib_onnx_core)
-      add_library(onnx_light::lib_onnx_core ALIAS lib_onnx_core)
+    if(NOT ONNX_LIGHT_CPU_ONNX_LIGHT_LIBRARY OR
+       NOT ONNX_LIGHT_CPU_ONNX_LIGHT_PROTO_LIBRARY)
+      message(FATAL_ERROR
+          "ONNX_LIGHT_CPU_ONNX_LIGHT_LIBRARY and "
+          "ONNX_LIGHT_CPU_ONNX_LIGHT_PROTO_LIBRARY are required with "
+          "ONNX_LIGHT_CPU_ONNX_LIGHT_SOURCE_DIR. They must name the exact "
+          "shared libraries loaded by onnx-light's Python runtime.")
+    endif()
+    add_library(onnx_light::lib_onnx_proto UNKNOWN IMPORTED GLOBAL)
+    set_target_properties(onnx_light::lib_onnx_proto PROPERTIES
+        IMPORTED_LOCATION "${ONNX_LIGHT_CPU_ONNX_LIGHT_PROTO_LIBRARY}")
+    add_library(onnx_light::lib_onnx_core UNKNOWN IMPORTED GLOBAL)
+    set_target_properties(onnx_light::lib_onnx_core PROPERTIES
+        IMPORTED_LOCATION "${ONNX_LIGHT_CPU_ONNX_LIGHT_LIBRARY}"
+        INTERFACE_INCLUDE_DIRECTORIES
+            "${ONNX_LIGHT_CPU_ONNX_LIGHT_SOURCE_DIR}/onnx_light;${ONNX_LIGHT_CPU_ONNX_LIGHT_SOURCE_DIR}/onnx_light/onnx_helpers/include;${ONNX_LIGHT_CPU_ONNX_LIGHT_SOURCE_DIR}/onnx_light/onnx_proto"
+        INTERFACE_LINK_LIBRARIES onnx_light::lib_onnx_proto)
+    if(ONNX_LIGHT_CPU_ONNX_LIGHT_IMPLIB)
+      set_property(TARGET onnx_light::lib_onnx_core PROPERTY
+          IMPORTED_IMPLIB "${ONNX_LIGHT_CPU_ONNX_LIGHT_IMPLIB}")
+      set_property(TARGET onnx_light::lib_onnx_proto PROPERTY
+          IMPORTED_IMPLIB "${ONNX_LIGHT_CPU_ONNX_LIGHT_PROTO_IMPLIB}")
     endif()
   else()
     find_package(onnx_light CONFIG REQUIRED)
@@ -240,6 +248,13 @@ if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
   target_link_libraries(lib_onnx_light_cpu_kernels PUBLIC
       lib_onnx_light_cpu
       onnx_light::lib_onnx_core)
+  if(UNIX AND NOT APPLE AND ONNX_LIGHT_CPU_ONNX_LIGHT_SOURCE_DIR)
+    # Keep lib_onnx_proto as a direct dependency. The local Python runtime
+    # libraries have no transitive RUNPATH, so relying on lib_onnx_core alone
+    # would leave its proto dependency undiscoverable outside Python.
+    target_link_options(lib_onnx_light_cpu_kernels PRIVATE
+        "LINKER:--no-as-needed")
+  endif()
 
   if(ONNX_LIGHT_CPU_ENABLE_COVERAGE)
     target_compile_options(lib_onnx_light_cpu_kernels PUBLIC --coverage -O0 -g)
@@ -274,24 +289,21 @@ if(ONNX_LIGHT_CPU_BUILD_PYTHON)
   find_package(nanobind CONFIG REQUIRED)
 
   if(TARGET lib_onnx_light_cpu_kernels AND _cpu_lib_type STREQUAL "SHARED"
-      AND TARGET onnx_light::lib_onnx_core AND NOT ONNX_LIGHT_CPU_ONNX_LIGHT_SOURCE_DIR)
+      AND TARGET onnx_light::lib_onnx_core)
     # lib_onnx_light_cpu_kernels links onnx-light's lib_onnx_core (and
     # transitively lib_onnx_proto), which live in the installed onnx-light
     # Python package's own onnx_py directory -- a different directory tree
     # than this package's onnx_light_cpu/onnx_py. $ORIGIN (used on
     # _cpuregister/_cpukernels below) only resolves NEEDED entries relative
     # to a .so's own directory, so it cannot reach across packages; without
-    # an explicit RPATH entry pointing at onnx-light's onnx_py directory,
+    # an explicit RPATH entry pointing at onnx-light's library directory,
     # importing _cpuregister fails at runtime with "liblib_onnx_core.so:
     # cannot open shared object file". Resolve that directory from the
     # onnx_light::lib_onnx_core IMPORTED target's own location via a
     # generator expression, resolved at build time so it does not depend on
     # onnx-light being importable from Python at CMake configure time (pip's
     # isolated build environment for this package does not have onnx-light
-    # installed). Only relevant for find_package(onnx_light); when onnx-light
-    # is built from a local source tree (ONNX_LIGHT_CPU_ONNX_LIGHT_SOURCE_DIR)
-    # its libraries are not installed anywhere separate from this build, so
-    # plain $ORIGIN is sufficient there.
+    # installed).
     set(ONNX_LIGHT_CPU_ONNX_LIGHT_PY_LIBDIR "$<TARGET_FILE_DIR:onnx_light::lib_onnx_core>")
     set_target_properties(lib_onnx_light_cpu_kernels PROPERTIES
         INSTALL_RPATH "$ORIGIN;${ONNX_LIGHT_CPU_ONNX_LIGHT_PY_LIBDIR}"
@@ -471,6 +483,11 @@ if(ONNX_LIGHT_CPU_BUILD_TESTS)
     add_executable(${_name} "${_src}")
     target_link_libraries(${_name} PRIVATE ${_link_lib} GTest::gtest_main)
     target_include_directories(${_name} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+    if(_link_lib STREQUAL "lib_onnx_light_cpu_kernels" AND
+       ONNX_LIGHT_CPU_ONNX_LIGHT_PY_LIBDIR)
+      set_target_properties(${_name} PROPERTIES
+          BUILD_RPATH "${ONNX_LIGHT_CPU_ONNX_LIGHT_PY_LIBDIR}")
+    endif()
     # Apply SIMD flags to the test target too so it can use intrinsics if needed.
     if(ONNX_LIGHT_CPU_SIMD_FLAGS)
       target_compile_options(${_name} PRIVATE ${_simd_flags})
