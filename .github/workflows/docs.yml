@@ -48,7 +48,7 @@ jobs:
           # nanobind --cmake_dir", so nanobind (and scikit-build-core) must be
           # importable before configuring it.
           pip install nanobind scikit-build-core
-          git clone --depth 1 --branch 0.1.15 https://github.com/xadupre/onnx-light.git /tmp/onnx-light
+          git clone --depth 1 --branch 0.1.16 https://github.com/xadupre/onnx-light.git /tmp/onnx-light
           cmake -S /tmp/onnx-light -B /tmp/onnx-light/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/tmp/onnx-light/install -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
           cmake --build /tmp/onnx-light/build --config Release --parallel
           cmake --install /tmp/onnx-light/build --config Release
