@@ -6,64 +6,69 @@ C++ API
 
 The public C++ API is declared in ``onnx_light_cpu/impl/math/math_kernels.h``
 and ``onnx_light_cpu/impl/logical/logical_kernels.h``. The shared SIMD
-dispatch primitives (``SimdLevel`` and ``DetectSimdLevel``) live in the neutral
+dispatch primitives (``SimdLevel`` and ``DetectSimdLevel``) live in the
 ``onnx_light_cpu/impl/simd_level.h`` header, which both kernel families
 include. Every kernel dispatches at runtime to the best available SIMD path.
 
-.. code-block:: cpp
+The signatures below are extracted from the header comments by Doxygen (see
+``docs/Doxyfile``) and rendered through the Breathe extension, so they always
+reflect the current state of the project.
 
-   namespace onnx_light_cpu {
+.. doxygenenum:: onnx_light_cpu::SimdLevel
+   :project: onnx_light_cpu
 
-   enum class SimdLevel : int {
-     kNone = 0,   // Scalar fallback (no SIMD).
-     kSSE2 = 1,   // SSE2 (128-bit).
-     kAVX = 2,    // AVX (256-bit).
-     kAVX2 = 3,   // AVX2 (256-bit with FMA, integer ops).
-     kAVX512 = 4, // AVX-512F (512-bit).
-   };
+.. doxygenfunction:: onnx_light_cpu::DetectSimdLevel
+   :project: onnx_light_cpu
 
-   SimdLevel DetectSimdLevel();
+.. doxygenfunction:: onnx_light_cpu::AbsFloat32
+   :project: onnx_light_cpu
 
-   // Elementwise absolute value (float16 uses the raw uint16_t bit pattern).
-   void AbsFloat32(const float *input, float *output, std::size_t count);
-   void AbsFloat64(const double *input, double *output, std::size_t count);
-   void AbsFloat16(const std::uint16_t *input, std::uint16_t *output, std::size_t count);
-   void AbsInt8(const std::int8_t *input, std::int8_t *output, std::size_t count);
-   void AbsInt32(const std::int32_t *input, std::int32_t *output, std::size_t count);
-   void AbsInt64(const std::int64_t *input, std::int64_t *output, std::size_t count);
+.. doxygenfunction:: onnx_light_cpu::AbsFloat64
+   :project: onnx_light_cpu
 
-   // Elementwise natural exponential (float16 uses the raw uint16_t bit pattern).
-   void ExpFloat32(const float *input, float *output, std::size_t count);
-   void ExpFloat64(const double *input, double *output, std::size_t count);
-   void ExpFloat16(const std::uint16_t *input, std::uint16_t *output, std::size_t count);
+.. doxygenfunction:: onnx_light_cpu::AbsFloat16
+   :project: onnx_light_cpu
 
-   // Elementwise natural logarithm (float16 uses the raw uint16_t bit pattern).
-   void LogFloat32(const float *input, float *output, std::size_t count);
-   void LogFloat64(const double *input, double *output, std::size_t count);
-   void LogFloat16(const std::uint16_t *input, std::uint16_t *output, std::size_t count);
+.. doxygenfunction:: onnx_light_cpu::AbsInt8
+   :project: onnx_light_cpu
 
-   // General matrix multiplication Y = alpha * op(A) @ op(B) + beta * C.
-   void GemmFloat32(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::size_t K,
-                    float alpha, const float *A, const float *B, float beta, const float *C,
-                    float *Y);
-   void GemmFloat64(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::size_t K,
-                    double alpha, const double *A, const double *B, double beta, const double *C,
-                    double *Y);
+.. doxygenfunction:: onnx_light_cpu::AbsInt32
+   :project: onnx_light_cpu
 
-   } // namespace onnx_light_cpu
+.. doxygenfunction:: onnx_light_cpu::AbsInt64
+   :project: onnx_light_cpu
+
+.. doxygenfunction:: onnx_light_cpu::ExpFloat32
+   :project: onnx_light_cpu
+
+.. doxygenfunction:: onnx_light_cpu::ExpFloat64
+   :project: onnx_light_cpu
+
+.. doxygenfunction:: onnx_light_cpu::ExpFloat16
+   :project: onnx_light_cpu
+
+.. doxygenfunction:: onnx_light_cpu::LogFloat32
+   :project: onnx_light_cpu
+
+.. doxygenfunction:: onnx_light_cpu::LogFloat64
+   :project: onnx_light_cpu
+
+.. doxygenfunction:: onnx_light_cpu::LogFloat16
+   :project: onnx_light_cpu
+
+.. doxygenfunction:: onnx_light_cpu::GemmFloat32
+   :project: onnx_light_cpu
+
+.. doxygenfunction:: onnx_light_cpu::GemmFloat64
+   :project: onnx_light_cpu
 
 The ``onnx_light_cpu/impl/logical/logical_kernels.h`` header declares the
 logical family, currently the elementwise logical negation used by the ``Not``
 operator (ONNX ``bool`` tensors are stored one byte per element, so the buffers
 are the raw ``uint8_t`` byte patterns):
 
-.. code-block:: cpp
-
-   namespace onnx_light_cpu {
-
-   void NotBool(const std::uint8_t *input, std::uint8_t *output, std::size_t count);
-
-   } // namespace onnx_light_cpu
+.. doxygenfunction:: onnx_light_cpu::NotBool
+   :project: onnx_light_cpu
 
 Parallel iteration helper
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -87,32 +92,23 @@ of the range. ``ParallelForSimdLanes<T>()`` returns the lane count for element
 type ``T`` at the widest supported register (AVX-512, 64 bytes): 16 for
 ``float``, 8 for ``double``, 32 for a 2-byte half, 64 for ``std::int8_t``.
 
-.. code-block:: cpp
+.. doxygenfunction:: onnx_light_cpu::ParallelForThreadCount
+   :project: onnx_light_cpu
 
-   namespace onnx_light_cpu {
+.. doxygenfunction:: onnx_light_cpu::ParallelForSimdLanes
+   :project: onnx_light_cpu
 
-   // Number of threads ParallelFor may use (>= 1, includes the caller).
-   std::int64_t ParallelForThreadCount() noexcept;
+.. doxygenfunction:: onnx_light_cpu::ParallelForBlockCount
+   :project: onnx_light_cpu
 
-   // Number of T elements the widest SIMD register processes at once (>= 1).
-   template <typename T> constexpr std::int64_t ParallelForSimdLanes() noexcept;
+.. doxygenfunction:: onnx_light_cpu::ParallelFor(int64_t total, Fn fn)
+   :project: onnx_light_cpu
 
-   // Cost model: number of blocks to split [0, total) into given a relative
-   // per-iteration cost. Returns 1 to mean "run inline, do not parallelize".
-   std::int64_t ParallelForBlockCount(std::int64_t total,
-                                      double cost_per_element = 1.0) noexcept;
+.. doxygenfunction:: onnx_light_cpu::ParallelFor(int64_t total, double cost_per_element, Fn fn)
+   :project: onnx_light_cpu
 
-   // Runs fn(begin, end) over disjoint sub-ranges covering [0, total). The
-   // cost_per_element overload lets heavier kernels parallelize smaller ranges;
-   // block_multiple keeps each block a whole number of SIMD vectors.
-   template <typename Fn> void ParallelFor(std::int64_t total, Fn fn);
-   template <typename Fn>
-   void ParallelFor(std::int64_t total, double cost_per_element, Fn fn);
-   template <typename Fn>
-   void ParallelFor(std::int64_t total, double cost_per_element,
-                    std::int64_t block_multiple, Fn fn);
-
-   } // namespace onnx_light_cpu
+.. doxygenfunction:: onnx_light_cpu::ParallelFor(int64_t total, double cost_per_element, int64_t block_multiple, Fn fn)
+   :project: onnx_light_cpu
 
 Every public kernel (``Abs*``, ``Exp*``/``Log*`` and ``NotBool``) already routes
 its work through ``ParallelFor``. The memory-bandwidth-bound ``Abs``/``Not``
@@ -130,40 +126,47 @@ onnx-light kernel class
 When onnx-light-cpu is built with ``-DONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON`` (which
 requires the `onnx-light <https://github.com/xadupre/onnx-light>`_ C++ package),
 an additional library ``lib_onnx_light_cpu_kernels`` is produced. It declares
-``onnx_light_cpu/kernels/math/abs_kernel.h``,
-``onnx_light_cpu/kernels/math/exp_log_kernel.h`` and
-``onnx_light_cpu/kernels/logical/not_kernel.h``:
+the ``KernelBase`` subclasses (``AbsKernel``, ``ExpKernel``, ``LogKernel``,
+``GemmKernel`` and ``NotKernel``) and their per-operator ``Register*`` functions,
+plus the ``RegisterAllKernels`` convenience wrapper:
 
-.. code-block:: cpp
+.. doxygenclass:: onnx_light_cpu::AbsKernel
+   :project: onnx_light_cpu
+   :members:
 
-   namespace onnx_light_cpu {
+.. doxygenclass:: onnx_light_cpu::ExpKernel
+   :project: onnx_light_cpu
+   :members:
 
-   // Derives from onnx_light::core::runtime::KernelBase and delegates to the
-   // SIMD Abs* routines above.
-   class AbsKernel : public onnx_light::core::runtime::KernelBase { ... };
+.. doxygenclass:: onnx_light_cpu::LogKernel
+   :project: onnx_light_cpu
+   :members:
 
-   // Exp/Log equivalents delegating to the SIMD Exp*/Log* routines.
-   class ExpKernel : public onnx_light::core::runtime::KernelBase { ... };
-   class LogKernel : public onnx_light::core::runtime::KernelBase { ... };
+.. doxygenclass:: onnx_light_cpu::GemmKernel
+   :project: onnx_light_cpu
+   :members:
 
-   // Not equivalent delegating to the SIMD NotBool routine.
-   class NotKernel : public onnx_light::core::runtime::KernelBase { ... };
+.. doxygenclass:: onnx_light_cpu::NotKernel
+   :project: onnx_light_cpu
+   :members:
 
-   // Gemm equivalent delegating to the register-blocked SIMD Gemm* routines.
-   class GemmKernel : public onnx_light::core::runtime::KernelBase { ... };
+.. doxygenfunction:: onnx_light_cpu::RegisterAbsKernel
+   :project: onnx_light_cpu
 
-   // Registers the kernels into onnx-light's shared KernelDispatchTable for the
-   // default ONNX domain / CPU device, overriding the built-in operators.
-   void RegisterAbsKernel();   // Abs
-   void RegisterExpKernel();   // Exp
-   void RegisterLogKernel();   // Log
-   void RegisterGemmKernel();  // Gemm
-   void RegisterNotKernel();   // Not
+.. doxygenfunction:: onnx_light_cpu::RegisterExpKernel
+   :project: onnx_light_cpu
 
-   // Convenience wrapper registering all of the kernels above in one call.
-   void RegisterAllKernels();
+.. doxygenfunction:: onnx_light_cpu::RegisterLogKernel
+   :project: onnx_light_cpu
 
-   } // namespace onnx_light_cpu
+.. doxygenfunction:: onnx_light_cpu::RegisterGemmKernel
+   :project: onnx_light_cpu
+
+.. doxygenfunction:: onnx_light_cpu::RegisterNotKernel
+   :project: onnx_light_cpu
+
+.. doxygenfunction:: onnx_light_cpu::RegisterAllKernels
+   :project: onnx_light_cpu
 
 ``AbsKernel``, ``ExpKernel``, ``LogKernel``, ``GemmKernel`` and ``NotKernel`` are
 full ``KernelBase`` subclasses, so once the matching ``Register*`` function (or

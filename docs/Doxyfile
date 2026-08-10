@@ -1,0 +1,27 @@
+# Doxygen configuration for onnx-light-cpu.
+#
+# Doxygen parses the ``///`` comments in the public C++ headers and emits an XML
+# description that the Breathe Sphinx extension turns into the C++ API reference
+# (see ``docs/api.rst`` and ``docs/conf.py``). Only XML is produced; the HTML is
+# rendered by Sphinx. Paths are relative to the ``docs`` directory, from which
+# ``conf.py`` invokes ``doxygen``.
+
+PROJECT_NAME           = "onnx-light-cpu"
+OUTPUT_DIRECTORY       = _doxygen
+GENERATE_HTML          = NO
+GENERATE_LATEX         = NO
+GENERATE_XML           = YES
+XML_OUTPUT             = xml
+
+# Only the public C++ headers make up the documented API surface.
+INPUT                  = ../onnx_light_cpu/impl ../onnx_light_cpu/kernels
+FILE_PATTERNS          = *.h
+RECURSIVE              = YES
+
+# Document declarations even when they have no explicit \brief and keep the
+# behaviour deterministic/quiet so the Sphinx build log stays readable.
+EXTRACT_ALL            = YES
+JAVADOC_AUTOBRIEF      = YES
+QUIET                  = YES
+WARN_IF_UNDOCUMENTED   = NO
+WARNINGS               = NO

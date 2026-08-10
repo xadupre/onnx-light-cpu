@@ -20,6 +20,7 @@ dev = [
     "pytest-cov",
 ]
 docs = [
+    "breathe",
     "matplotlib",
     "myst-parser",
     # "onnx-light",
