@@ -19,9 +19,10 @@ FILE_PATTERNS          = *.h
 RECURSIVE              = YES
 
 # Document declarations even when they have no explicit \brief and keep the
-# behaviour deterministic/quiet so the Sphinx build log stays readable.
+# progress output quiet, but leave real Doxygen warnings (malformed comments,
+# broken references) enabled so the Sphinx build log surfaces them.
 EXTRACT_ALL            = YES
 JAVADOC_AUTOBRIEF      = YES
 QUIET                  = YES
 WARN_IF_UNDOCUMENTED   = NO
-WARNINGS               = NO
+WARNINGS               = YES
