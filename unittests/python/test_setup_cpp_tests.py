@@ -7,10 +7,9 @@
 ``--cpp-tests`` builds the C++ unit tests and then runs them with ``ctest``.
 ``--onnx-light`` enables the onnx-light kernel-registration integration against
 a locally built, importable onnx-light. ``--onnx-light-source`` enables the same
-integration but builds onnx-light from a local source tree (auto-discovered from
-the importable onnx-light) instead of ``find_package``. These tests exercise the
-dry-run wiring (which prints the commands without executing them) so they run
-quickly without compiling the extension or requiring onnx-light to be installed.
+integration against the already-built runtime loaded by an importable local
+onnx-light instead of compiling a second copy. These tests exercise the dry-run
+wiring (which prints the commands without executing them).
 """
 
 import subprocess
@@ -83,6 +82,8 @@ class TestSetupOnnxLight:
     def test_onnx_light_source_flag_enables_integration(self):
         output = _dry_run("--onnx-light-source")
         assert "ONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON" in output
+        assert "ONNX_LIGHT_CPU_ONNX_LIGHT_LIBRARY=" in output
+        assert "ONNX_LIGHT_CPU_ONNX_LIGHT_PROTO_LIBRARY=" in output
 
     def test_without_flag_skips_integration(self):
         output = _dry_run()

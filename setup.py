@@ -69,28 +69,24 @@ def _onnx_light_cmake_dir():
     return matches[0].parent
 
 
-def _onnx_light_source_dir():
-    """Returns the source directory of a locally built onnx-light.
+def _onnx_light_source_build_info():
+    """Returns paths for the C++ runtime loaded by a local onnx-light.
 
-    onnx-light must be importable (``import onnx_light``) and built from a local
-    checkout so that its ``CMakeLists.txt`` is available next to the package. The
-    directory is located by importing onnx-light and taking the parent of the
-    package directory, which is the onnx-light source root. This assumes the same
-    sources were used to build the installed onnx-light Python package.
+    The shared library must be the exact copy loaded by onnx-light's Python
+    extensions. Linking another copy would create a separate global kernel
+    dispatch table, so registrations made by onnx-light-cpu would be invisible
+    to ``ReferenceEvaluator``.
     """
-    import onnx_light
+    from onnx_light import get_cpp_build_info
 
-    package_dir = Path(onnx_light.__file__).resolve().parent
-    source_root = package_dir.parent
-    cmake_lists = source_root / "CMakeLists.txt"
-    if not cmake_lists.is_file():
+    info = get_cpp_build_info()
+    include_dir = Path(info["include_dir"])
+    if not (include_dir / "onnx_core" / "runtime" / "kernel_dispatch_table.h").is_file():
         raise FileNotFoundError(
-            f"Could not find onnx-light's 'CMakeLists.txt' in {source_root}. Install "
-            "onnx-light from a local checkout (for example 'pip install "
-            "--no-build-isolation -e .' in the onnx-light source tree) before using "
-            "--onnx-light-source."
+            f"Could not find the onnx-light C++ headers under {include_dir}. Build "
+            "onnx-light from a local checkout before using --onnx-light-source."
         )
-    return source_root
+    return info
 
 
 def _add_onnx_light_defines(cmake_args):
@@ -100,13 +96,34 @@ def _add_onnx_light_defines(cmake_args):
 
 
 def _add_onnx_light_source_defines(cmake_args):
-    """Builds the onnx-light integration from a local onnx-light source tree."""
+    """Links the integration to the C++ runtime loaded by local onnx-light."""
+    info = _onnx_light_source_build_info()
     cmake_args = _set_cmake_define(cmake_args, "ONNX_LIGHT_CPU_WITH_ONNX_LIGHT", "ON")
-    return _set_cmake_define(
+    cmake_args = _set_cmake_define(
         cmake_args,
         "ONNX_LIGHT_CPU_ONNX_LIGHT_SOURCE_DIR",
-        str(_onnx_light_source_dir()),
+        str(Path(info["include_dir"]).parent),
     )
+    cmake_args = _set_cmake_define(
+        cmake_args, "ONNX_LIGHT_CPU_ONNX_LIGHT_LIBRARY", info["core_library"]
+    )
+    cmake_args = _set_cmake_define(
+        cmake_args,
+        "ONNX_LIGHT_CPU_ONNX_LIGHT_PROTO_LIBRARY",
+        info["proto_library"],
+    )
+    if "core_import_library" in info:
+        cmake_args = _set_cmake_define(
+            cmake_args,
+            "ONNX_LIGHT_CPU_ONNX_LIGHT_IMPLIB",
+            info["core_import_library"],
+        )
+        cmake_args = _set_cmake_define(
+            cmake_args,
+            "ONNX_LIGHT_CPU_ONNX_LIGHT_PROTO_IMPLIB",
+            info["proto_import_library"],
+        )
+    return cmake_args
 
 
 try:
@@ -254,15 +271,18 @@ class BuildExt(Command):
         (
             "onnx-light",
             None,
-            "build the onnx-light kernel-registration integration against a "
-            "locally built, importable onnx-light",
+            (
+                "build the onnx-light kernel-registration integration against a "
+                "locally built, importable onnx-light"
+            ),
         ),
         (
             "onnx-light-source",
             None,
-            "build the onnx-light kernel-registration integration from a local "
-            "onnx-light source tree (auto-discovered from the importable "
-            "onnx-light) instead of find_package(onnx_light)",
+            (
+                "build the kernel-registration integration against the already-built "
+                "C++ runtime loaded by a local, importable onnx-light"
+            ),
         ),
         ("parallel=", "j", "number of parallel build jobs"),
         (

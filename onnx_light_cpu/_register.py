@@ -26,6 +26,11 @@ def _register_all_kernels() -> None:
     (``ONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON``). It is imported lazily so that
     ``import onnx_light_cpu`` keeps working in builds without that extension.
     """
+    # Load onnx-light's Python runtime first. Besides initializing its built-in
+    # kernels, this loads lib_onnx_proto next to lib_onnx_core before the
+    # registration extension links to that exact runtime.
+    from onnx_light.onnx.reference import ReferenceEvaluator as _ReferenceEvaluator  # noqa: F401
+
     from .onnx_py._cpuregister import (  # pyrefly: ignore[missing-import]
         register_all_kernels,
     )
