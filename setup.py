@@ -95,9 +95,9 @@ def _add_onnx_light_defines(cmake_args):
     return _set_cmake_define(cmake_args, "onnx_light_DIR", str(_onnx_light_cmake_dir()))
 
 
-def _add_onnx_light_source_defines(cmake_args):
+def _add_onnx_light_source_defines(cmake_args, build_info=None):
     """Links the integration to the C++ runtime loaded by local onnx-light."""
-    info = _onnx_light_source_build_info()
+    info = _onnx_light_source_build_info() if build_info is None else build_info
     cmake_args = _set_cmake_define(cmake_args, "ONNX_LIGHT_CPU_WITH_ONNX_LIGHT", "ON")
     cmake_args = _set_cmake_define(
         cmake_args,
@@ -213,7 +213,14 @@ except ModuleNotFoundError:
                 cmake_args = _add_onnx_light_defines(cmake_args)
         if onnx_light_source:
             if dry_run:
-                cmake_args = _set_cmake_define(cmake_args, "ONNX_LIGHT_CPU_WITH_ONNX_LIGHT", "ON")
+                cmake_args = _add_onnx_light_source_defines(
+                    cmake_args,
+                    {
+                        "include_dir": "/onnx-light/include",
+                        "core_library": "/onnx-light/lib/lib_onnx_core",
+                        "proto_library": "/onnx-light/lib/lib_onnx_proto",
+                    },
+                )
             else:
                 cmake_args = _add_onnx_light_source_defines(cmake_args)
         _spawn(

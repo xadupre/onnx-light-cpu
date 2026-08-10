@@ -15,6 +15,7 @@ built-in ones.
 
 from __future__ import annotations
 
+from importlib import import_module
 from typing import Any
 
 
@@ -29,7 +30,7 @@ def _register_all_kernels() -> None:
     # Load onnx-light's Python runtime first. Besides initializing its built-in
     # kernels, this loads lib_onnx_proto next to lib_onnx_core before the
     # registration extension links to that exact runtime.
-    from onnx_light.onnx.reference import ReferenceEvaluator as _ReferenceEvaluator  # noqa: F401
+    import_module("onnx_light.onnx.reference")
 
     from .onnx_py._cpuregister import (  # pyrefly: ignore[missing-import]
         register_all_kernels,
