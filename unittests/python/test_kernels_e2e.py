@@ -113,6 +113,9 @@ def _assert_close(actual, expected, rtol, atol):
 
 
 class TestBackendCases:
+    def setup_method(self):
+        register_kernels()
+
     def test_registered_kernel_names(self):
         assert registered_kernel_names() == {
             "Abs": "onnx_light_cpu::Abs",
@@ -138,11 +141,10 @@ class TestBackendCases:
         op_type = _single_node_op_type(tc)
         expected_kernel = _TARGET_KERNELS[op_type]
 
-        register_kernels()
         sess = ReferenceEvaluator(tc.model)
         input_names = [vi.name for vi in tc.model.graph.input]
-        rtol = tc.rtol if tc.rtol and tc.rtol > 0 else 1e-5
-        atol = tc.atol if tc.atol and tc.atol > 0 else 1e-6
+        rtol = tc.rtol if tc.rtol is not None else 1e-5
+        atol = tc.atol if tc.atol is not None else 1e-6
 
         for ds in tc.data_sets:
             assert len(ds.inputs) == len(input_names)
