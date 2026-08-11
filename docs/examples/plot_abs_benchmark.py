@@ -288,6 +288,7 @@ ax_time.set_yscale("log")
 ax_time.set_xlabel("array size (elements)")
 ax_time.set_ylabel("time (microseconds)")
 ax_time.set_title(f"Abs execution time (SIMD: {simd_name})")
+ax_time.tick_params(axis="x", labelrotation=45)
 ax_time.legend()
 
 ax_speedup.plot(sizes, ort_times / numpy_times, "o--", label="numpy", color="#9b7ec8")
@@ -313,6 +314,7 @@ ax_speedup.set_yscale("log")
 ax_speedup.set_xlabel("array size (elements)")
 ax_speedup.set_ylabel("speed-up vs onnxruntime")
 ax_speedup.set_title("Abs speed-up (onnxruntime = 1)")
+ax_speedup.tick_params(axis="x", labelrotation=45)
 ax_speedup.legend()
 
 if light_session is not None:
@@ -332,6 +334,7 @@ ax_cpu_gain.set_xscale("log")
 ax_cpu_gain.set_xlabel("array size (elements)")
 ax_cpu_gain.set_ylabel("speed-up vs onnx-light built-in")
 ax_cpu_gain.set_title("onnx-light-cpu gain (built-in = 1)")
+ax_cpu_gain.tick_params(axis="x", labelrotation=45)
 
 fig.tight_layout()
 fig.savefig("plot_abs_benchmark.png")

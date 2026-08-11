@@ -318,7 +318,7 @@ ax_time.bar(
 )
 ax_time.set_yscale("log")
 ax_time.set_xticks(x)
-ax_time.set_xticklabels(shape_labels, fontsize=8)
+ax_time.set_xticklabels(shape_labels, fontsize=8, rotation=45, ha="right")
 ax_time.set_ylabel("time (microseconds)")
 ax_time.set_title(f"Gemm execution time by code path (SIMD: {simd_name})")
 ax_time.legend()
@@ -344,7 +344,7 @@ ax_overhead.plot(
 ax_overhead.axhline(1.0, color="grey", linewidth=0.8, linestyle=":", label="float32 baseline")
 ax_overhead.set_ylabel("time relative to float32")
 ax_overhead.set_title("float16 / bfloat16 widen/round-trip overhead")
-ax_overhead.tick_params(axis="x", labelrotation=0, labelsize=8)
+ax_overhead.tick_params(axis="x", labelrotation=45, labelsize=8)
 ax_overhead.legend()
 
 fig.tight_layout()
