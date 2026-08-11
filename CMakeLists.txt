@@ -288,6 +288,38 @@ if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
     target_compile_options(lib_onnx_light_cpu_kernels PUBLIC --coverage -O0 -g)
     target_link_options(lib_onnx_light_cpu_kernels PUBLIC --coverage)
   endif()
+
+  # -------------------------------------------------------------------------
+  # onnx-light-cpu backend-test library: lib_onnx_light_cpu_backend_test
+  # -------------------------------------------------------------------------
+  # Mirrors onnx-light's own ``lib_onnx_backend_test`` pattern: the C++ backend
+  # test lives in its own library that takes a dependency on the kernels. It
+  # drives the onnx-light-cpu kernels through onnx-light's C++-registered backend
+  # test cases (``CollectTestCases``) and reports mismatches. Requires
+  # onnx-light's ``lib_onnx_backend_test`` registry, so it is only built when
+  # that imported target is available (always via find_package; best-effort in
+  # the --onnx-light-source path).
+  if(TARGET onnx_light::lib_onnx_backend_test)
+    add_library(lib_onnx_light_cpu_backend_test ${_cpu_lib_type}
+        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/kernel_backend_test.cc")
+    target_include_directories(lib_onnx_light_cpu_backend_test PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+        $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+    )
+    set_property(TARGET lib_onnx_light_cpu_backend_test
+        PROPERTY POSITION_INDEPENDENT_CODE ON)
+    target_compile_features(lib_onnx_light_cpu_backend_test PUBLIC cxx_std_20)
+    target_link_libraries(lib_onnx_light_cpu_backend_test PUBLIC
+        lib_onnx_light_cpu_kernels
+        onnx_light::lib_onnx_backend_test)
+    if(ONNX_LIGHT_CPU_SIMD_FLAGS)
+      target_compile_options(lib_onnx_light_cpu_backend_test PRIVATE ${_simd_flags})
+    endif()
+    if(ONNX_LIGHT_CPU_ENABLE_COVERAGE)
+      target_compile_options(lib_onnx_light_cpu_backend_test PUBLIC --coverage -O0 -g)
+      target_link_options(lib_onnx_light_cpu_backend_test PUBLIC --coverage)
+    endif()
+  endif()
 endif()
 
 # ---------------------------------------------------------------------------
@@ -534,12 +566,13 @@ if(ONNX_LIGHT_CPU_BUILD_TESTS)
       if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
         if(_test_name STREQUAL "test_onnx_light_backend_kernels")
           # Drives the kernels from onnx-light's C++-registered backend test
-          # cases (CollectTestCases), which live in lib_onnx_backend_test.
-          # Built only when that library is available (always via
-          # find_package; best-effort in the --onnx-light-source path).
-          if(TARGET onnx_light::lib_onnx_backend_test)
+          # cases (CollectTestCases) through the dedicated backend-test library
+          # (lib_onnx_light_cpu_backend_test), which takes a dependency on the
+          # kernels. Built only when that library is available (it requires
+          # onnx-light's lib_onnx_backend_test registry).
+          if(TARGET lib_onnx_light_cpu_backend_test)
             onnx_light_cpu_add_test("${_test_src}"
-                "lib_onnx_light_cpu_kernels;onnx_light::lib_onnx_backend_test")
+                "lib_onnx_light_cpu_kernels;lib_onnx_light_cpu_backend_test")
           endif()
         else()
           onnx_light_cpu_add_test("${_test_src}" lib_onnx_light_cpu_kernels)
