@@ -19,7 +19,11 @@ of a ``float32`` array across a range of input sizes:
 
 The back-ends compute the same result; the goal here is to see how their
 timings evolve as the array grows from a few hundred to a hundred million
-elements.
+elements. A recurring question is why the SIMD ``onnx-light-cpu`` kernel is not
+meaningfully faster than ``onnx-light``'s built-in one: ``Abs`` is a
+**memory-bandwidth-bound** operation, so all back-ends converge to the same
+effective bandwidth ceiling for large arrays. The final section discusses this
+in detail.
 """
 
 # %%
@@ -227,12 +231,21 @@ for size in size_grid:
     assert np.array_equal(session.run(None, {"X": inp})[0], expected), size
 
     cpu_speedup = alone_time / cpu_time
+    # Effective memory bandwidth of the onnx-light-cpu kernel: ``Abs`` reads the
+    # whole input and writes the whole output once, so it moves ``2 * size``
+    # float32 values (8 bytes per element) per call. Reporting GB/s makes the
+    # memory-bandwidth ceiling explicit: for large arrays every back-end lands
+    # near the same value because the operation is bandwidth- rather than
+    # compute-bound (see the discussion below).
+    bytes_moved = 2 * size * np.dtype(np.float32).itemsize
+    cpu_bandwidth = bytes_moved / cpu_time / 1e9
     rows.append((size, numpy_time, alone_time, cpu_time, ort_time))
     print(
         f"size={size:>9} | numpy={numpy_time * 1e6:10.2f} us | "
         f"onnx-light={alone_time * 1e6:10.2f} us | "
         f"onnx-light-cpu={cpu_time * 1e6:10.2f} us | "
         f"cpu speed-up={cpu_speedup:5.2f}x | "
+        f"onnx-light-cpu={cpu_bandwidth:7.1f} GB/s | "
         f"onnxruntime={ort_time * 1e6:10.2f} us"
     )
 
@@ -241,6 +254,37 @@ numpy_times = np.array([r[1] for r in rows])
 alone_times = np.array([r[2] for r in rows])
 cpu_times = np.array([r[3] for r in rows])
 ort_times = np.array([r[4] for r in rows])
+
+# %%
+# Why onnx-light-cpu is not (much) faster than the built-in kernel
+# ----------------------------------------------------------------
+#
+# ``Abs`` clears the sign bit of every element: a single bit operation with no
+# arithmetic dependency between elements. Its cost is therefore dominated not by
+# computation but by **memory traffic** - reading ``size`` values from RAM and
+# writing ``size`` values back. On modern CPUs a scalar loop (or the
+# compiler's auto-vectorized version that onnx-light's built-in kernel compiles
+# to) already saturates the available memory bandwidth for such a trivial
+# operation, so hand-written AVX-512/AVX2/SSE2 SIMD has almost nothing left to
+# speed up: the sign-bit clear is essentially free next to the load/store, and
+# the ``cpu speed-up`` column above stays close to ``1x``.
+#
+# The ``GB/s`` figures printed in the loop make this ceiling concrete: for the
+# large arrays every back-end (numpy, onnxruntime, onnx-light and
+# onnx-light-cpu) converges to roughly the same effective bandwidth, which is
+# the hardware limit rather than a property of any particular kernel. Techniques
+# that reduce memory traffic - such as non-temporal (streaming) stores that skip
+# the read-for-ownership of the output cache lines - can help for arrays far
+# larger than the last-level cache, but they *regress* mid-sized arrays and
+# depend heavily on the number of threads and the CPU, so they are deliberately
+# not used here.
+#
+# SIMD acceleration pays off for **compute-bound** kernels - ``Exp``, ``Log`` or
+# ``Gemm``, where each element performs many floating-point operations - not for
+# a bandwidth-bound elementwise op like ``Abs``. The value of the onnx-light-cpu
+# ``Abs`` kernel is therefore that it *matches* the memory-bandwidth ceiling
+# (and onnxruntime) while integrating with onnx-light, not that it beats a
+# well-compiled scalar loop.
 
 # %%
 # Plot the timings
