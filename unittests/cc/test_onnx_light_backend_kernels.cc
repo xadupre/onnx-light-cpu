@@ -38,6 +38,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <string>
 #include <utility>
 #include <vector>
@@ -144,8 +145,7 @@ void CompareTensor(const std::string &case_name, const Tensor &actual, const Ten
   default:
     // Integer and bool outputs are compared byte-for-byte.
     if (actual.size_bytes() != expected.size_bytes() ||
-        std::vector<std::uint8_t>(actual.bytes(), actual.bytes() + actual.size_bytes()) !=
-            std::vector<std::uint8_t>(expected.bytes(), expected.bytes() + expected.size_bytes())) {
+        std::memcmp(actual.bytes(), expected.bytes(), actual.size_bytes()) != 0) {
       failures.push_back(case_name + ": integer/bool output does not match reference");
     }
   }
