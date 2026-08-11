@@ -80,12 +80,10 @@ def _tolerances(dtype):
     """Relative/absolute tolerances suited to the precision of ``dtype``."""
     npd = np.dtype(dtype)
     if npd == np.dtype(ml_dtypes.bfloat16):
-        return {"rtol": 5e-1, "atol": 5e-1}
+        return {"rtol": 1e-2, "atol": 1e-2}
     if npd == np.dtype(np.float16):
-        return {"rtol": 5e-2, "atol": 5e-2}
-    if npd == np.dtype(np.float32):
-        return {"rtol": 1e-5, "atol": 0.0}
-    return {"rtol": 1e-6, "atol": 0.0}
+        return {"rtol": 5e-3, "atol": 5e-3}
+    return {"rtol": 1e-5, "atol": 0.0}
 
 
 def _run(node, inputs, output_types):
@@ -123,7 +121,7 @@ class TestKernelsEndToEnd:
         (y,) = _run(node, {"X": x}, {"Y": _np_to_tp(dtype)})
         np.testing.assert_allclose(
             y.astype(np.float64),
-            np.exp(x.astype(np.float64)),
+            np.exp(x).astype(np.float64),
             **_tolerances(dtype),
         )
 
@@ -134,7 +132,7 @@ class TestKernelsEndToEnd:
         (y,) = _run(node, {"X": x}, {"Y": _np_to_tp(dtype)})
         np.testing.assert_allclose(
             y.astype(np.float64),
-            np.log(x.astype(np.float64)),
+            np.log(x).astype(np.float64),
             **_tolerances(dtype),
         )
 
