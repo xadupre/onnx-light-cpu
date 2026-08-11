@@ -35,6 +35,17 @@ using rt_ns::Tensor;
 
 namespace {
 
+constexpr std::int64_t kHalfConversionParallelGrainSize = 32 * rt_ns::kParallelForGrainSize;
+
+template <typename Fn> void ParallelForHalfConversion(std::size_t count, Fn fn) {
+  const auto total = static_cast<std::int64_t>(count);
+  if (total < kHalfConversionParallelGrainSize) {
+    fn(0, total);
+    return;
+  }
+  rt_ns::ParallelFor(total, fn);
+}
+
 // Returns the two matrix dimensions of a 2-D ``Gemm`` operand, throwing when
 // the tensor is not rank 2.
 void Require2D(const Tensor &t, const char *name, std::size_t &rows, std::size_t &cols) {
@@ -87,36 +98,34 @@ std::vector<float> WidenHalfLike(const Tensor &t, bool is_bfloat16) {
   const std::size_t n = static_cast<std::size_t>(t.element_count());
   std::vector<float> out(n);
   float *dst = out.data();
-  rt_ns::ParallelFor(static_cast<std::int64_t>(n),
-                     [bits, dst, is_bfloat16](std::int64_t begin, std::int64_t end) {
-                       if (is_bfloat16) {
-                         for (std::int64_t i = begin; i < end; ++i) {
-                           dst[i] = rt_ns::Bfloat16BitsToFloat(bits[i]);
-                         }
-                       } else {
-                         for (std::int64_t i = begin; i < end; ++i) {
-                           dst[i] = rt_ns::Float16BitsToFloat(bits[i]);
-                         }
-                       }
-                     });
+  ParallelForHalfConversion(n, [bits, dst, is_bfloat16](std::int64_t begin, std::int64_t end) {
+    if (is_bfloat16) {
+      for (std::int64_t i = begin; i < end; ++i) {
+        dst[i] = rt_ns::Bfloat16BitsToFloat(bits[i]);
+      }
+    } else {
+      for (std::int64_t i = begin; i < end; ++i) {
+        dst[i] = rt_ns::Float16BitsToFloat(bits[i]);
+      }
+    }
+  });
   return out;
 }
 
 // Inverse of :cpp:func:`WidenHalfLike`: rounds a ``float32`` buffer back to
 // FLOAT16 or BFLOAT16 raw 16-bit elements written into ``dst``.
 void NarrowToHalfLike(const float *src, std::uint16_t *dst, std::size_t n, bool is_bfloat16) {
-  rt_ns::ParallelFor(static_cast<std::int64_t>(n),
-                     [src, dst, is_bfloat16](std::int64_t begin, std::int64_t end) {
-                       if (is_bfloat16) {
-                         for (std::int64_t i = begin; i < end; ++i) {
-                           dst[i] = rt_ns::FloatToBfloat16Bits(src[i]);
-                         }
-                       } else {
-                         for (std::int64_t i = begin; i < end; ++i) {
-                           dst[i] = rt_ns::FloatToFloat16Bits(src[i]);
-                         }
-                       }
-                     });
+  ParallelForHalfConversion(n, [src, dst, is_bfloat16](std::int64_t begin, std::int64_t end) {
+    if (is_bfloat16) {
+      for (std::int64_t i = begin; i < end; ++i) {
+        dst[i] = rt_ns::FloatToBfloat16Bits(src[i]);
+      }
+    } else {
+      for (std::int64_t i = begin; i < end; ++i) {
+        dst[i] = rt_ns::FloatToFloat16Bits(src[i]);
+      }
+    }
+  });
 }
 
 // Shared implementation for both public ``operator()`` overloads. ``c`` is null

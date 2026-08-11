@@ -38,4 +38,8 @@ NB_MODULE(_cpuregister, m) {
   m.def(
       "clear_used_kernel_names", []() { onnx_light_cpu::ClearUsedKernelNames(); },
       "Clears the record of onnx-light-cpu kernels that have run.");
+
+  m.def("set_kernel_usage_recording", &onnx_light_cpu::SetKernelUsageRecording, nb::arg("enabled"),
+        "Enables or disables per-invocation kernel usage recording. Disabling it "
+        "removes diagnostic logging overhead from performance measurements.");
 }

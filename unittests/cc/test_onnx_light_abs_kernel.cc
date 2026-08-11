@@ -61,7 +61,7 @@ TEST(OnnxLightAbsKernel, Int64) {
 // process it.
 TEST(OnnxLightAbsKernel, Float32LargeParallel) {
   onnx_light_cpu::AbsKernel kernel(MakeCtx());
-  const int64_t n = 200003; // > 32768 grain size, and not a multiple of it
+  const int64_t n = 2000003; // Above Abs's discounted parallel grain.
   std::vector<float> values(static_cast<std::size_t>(n));
   for (int64_t i = 0; i < n; ++i) {
     values[static_cast<std::size_t>(i)] = static_cast<float>((i % 2 == 0 ? -1 : 1) * (i % 97));
