@@ -27,7 +27,7 @@ print(f"CPU kernels available, SIMD level: {level} ({simd_name})")
 
 # %%
 # Illustrate Abs with NumPy
-# ------------------------
+# -------------------------
 #
 # The numpy curve below is only an illustration of the ``Abs`` operation. It
 # does not call any removed Python kernel binding.
