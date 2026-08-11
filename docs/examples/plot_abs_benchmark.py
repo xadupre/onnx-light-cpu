@@ -293,13 +293,24 @@ ax_time.legend()
 
 ax_speedup.plot(sizes, ort_times / numpy_times, "o--", label="numpy", color="#9b7ec8")
 if light_session is not None:
+    cpu_speedup = ort_times / cpu_times
     ax_speedup.plot(
         sizes,
-        ort_times / cpu_times,
+        cpu_speedup,
         "o-",
         label=light_label,
         color="#4a9eff",
     )
+    for size, speedup in zip(sizes, cpu_speedup, strict=True):
+        ax_speedup.annotate(
+            f"{speedup:.2f}x",
+            (size, speedup),
+            xytext=(0, 7),
+            textcoords="offset points",
+            ha="center",
+            fontsize=8,
+            color="#4a9eff",
+        )
 ax_speedup.plot(
     sizes,
     ort_times / alone_times,
