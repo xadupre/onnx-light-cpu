@@ -39,6 +39,18 @@ From Python:
 integration (``-DONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON``); it wraps the compiled
 ``onnx_light_cpu.onnx_py._cpuregister.register_all_kernels()`` binding.
 
+``register_kernels()`` installs the kernels **process-wide**: it populates
+onnx-light's shared dispatch table, so every ``ReferenceEvaluator`` created in
+the process afterwards uses them. To override an operator for a single session
+only — without touching the shared table — use onnx-light's per-session
+:py:meth:`~onnx_light.onnx.reference.ReferenceEvaluator.register_custom_kernel`
+hook instead:
+
+.. code-block:: python
+
+    sess = ReferenceEvaluator(model)
+    sess.register_custom_kernel("", "Abs", my_abs)  # this session only
+
 From C++:
 
 .. code-block:: cpp
