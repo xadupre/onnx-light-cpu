@@ -28,6 +28,12 @@ std::vector<std::string> UsedKernelNames();
 /// Clears the kernel-usage log populated by :cpp:func:`RecordKernelUsage`.
 void ClearUsedKernelNames();
 
+/// Enables or disables per-invocation kernel usage recording.
+///
+/// Disabling recording removes the mutex and log-allocation overhead from
+/// performance measurements while leaving kernel dispatch unchanged.
+void SetKernelUsageRecording(bool enabled) noexcept;
+
 /// Returns the ``{op_type, library-qualified kernel name}`` pairs for every
 /// kernel onnx-light-cpu registers, so callers can check the accelerated
 /// kernels (rather than the built-in ones) are the ones being used.

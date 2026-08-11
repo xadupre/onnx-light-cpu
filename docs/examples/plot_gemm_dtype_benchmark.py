@@ -35,7 +35,7 @@ gets more compute-heavy.
 ``bfloat16``, so no onnxruntime ``bfloat16`` result is shown.
 
 An additional baseline, ``onnx-light (built-in)``, shows ``onnx-light``'s own
-un-accelerated (pure Python/reference) ``Gemm`` kernel for ``float32``, as a
+un-accelerated C++ reference ``Gemm`` kernel for ``float32``, as a
 baseline. It only supports ``float32`` (the reference kernel has no
 ``float16``/``bfloat16`` Gemm implementation) and is only measured for the
 **single-tile** and **K-chunked** shapes: it is dramatically slower on the
@@ -76,6 +76,7 @@ from onnx_light_cpu import (
     used_kernel_names,
 )
 from onnx_light_cpu.onnx_py._cpukernels import detect_simd_level, has_cpu_kernels
+from onnx_light_cpu.onnx_py._cpuregister import set_kernel_usage_recording
 
 _SIMD_NAMES = {0: "scalar", 1: "SSE2", 2: "AVX", 3: "AVX2", 4: "AVX-512"}
 
@@ -122,17 +123,19 @@ def make_session(tensor_proto_dtype):
 # Timing helper
 # -------------
 #
-# Each candidate is called ``repeat`` times and the best (minimum) wall-clock
-# time is kept to reduce the impact of scheduling noise.
+# Each candidate gets three untimed warm-up calls, then is called ``repeat``
+# times (at least seven) and the median wall-clock time is retained.
 
 
-def measure(func, repeat):
-    best = float("inf")
+def measure(func, repeat, warmup=3):
+    for _ in range(warmup):
+        func()
+    timings = []
     for _ in range(repeat):
         start = time.perf_counter()
         func()
-        best = min(best, time.perf_counter() - start)
-    return best
+        timings.append(time.perf_counter() - start)
+    return float(np.median(timings))
 
 
 # %%
@@ -172,7 +175,7 @@ for shape_label, M, N, K in SHAPES:
         continue
     a = alone_rng.standard_normal((M, K)).astype(np.float32)
     b = alone_rng.standard_normal((K, N)).astype(np.float32)
-    repeat = max(3, min(50, 200_000_000 // (M * N * K + 1)))
+    repeat = max(7, min(50, 200_000_000 // (M * N * K + 1)))
 
     def run(session=alone_session, a=a, b=b):
         return session.run(None, {"A": a, "B": b})[0]
@@ -202,6 +205,9 @@ _probe = np.zeros((2, 2), dtype=np.float32)
 clear_used_kernel_names()
 sessions["float32"].run(None, {"A": _probe, "B": _probe})
 assert used_kernel_names() == ["onnx_light_cpu::Gemm"], used_kernel_names()
+# The usage log is diagnostic instrumentation and takes a mutex on every
+# invocation. Disable it after checking dispatch so it does not enter timings.
+set_kernel_usage_recording(False)
 
 
 # %%
@@ -221,7 +227,7 @@ for shape_label, M, N, K in SHAPES:
     a32 = rng.standard_normal((M, K)).astype(np.float32)
     b32 = rng.standard_normal((K, N)).astype(np.float32)
     expected = a32 @ b32
-    repeat = max(3, min(50, 200_000_000 // (M * N * K + 1)))
+    repeat = max(7, min(50, 200_000_000 // (M * N * K + 1)))
 
     print(f"\nshape={shape_label.splitlines()[0]:<24} M={M} N={N} K={K} repeat={repeat}")
     for label, (_, np_dtype) in DTYPES.items():
@@ -251,6 +257,8 @@ for shape_label, M, N, K in SHAPES:
         else:
             ort_text = "not supported"
         print(f"  {label:<9} | onnx-light-cpu={elapsed * 1e6:10.2f} us | onnxruntime={ort_text}")
+
+set_kernel_usage_recording(True)
 
 # %%
 # Plot the timings

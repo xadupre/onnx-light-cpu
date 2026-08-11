@@ -252,10 +252,9 @@ TEST(AbsInt64, LargeArray) {
 }
 
 TEST(AbsParallel, LargeArrayMatchesScalar) {
-  // Sizes above kParallelForGrainSize (32768) exercise the multi-block parallel
-  // path added by ParallelFor; the result must match the serial reference
-  // exactly for the sign-clearing Abs kernels.
-  const std::size_t size = 300000;
+  // Abs discounts each SIMD element to 1/32 of a generic work unit, so a size
+  // above 32 grains exercises the multi-block path.
+  const std::size_t size = 2000000;
   std::vector<float> in(size);
   std::vector<float> out(size, -1.0f);
   for (std::size_t i = 0; i < size; ++i) {

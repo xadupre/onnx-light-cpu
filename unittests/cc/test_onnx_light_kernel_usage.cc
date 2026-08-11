@@ -52,4 +52,15 @@ TEST(OnnxLightKernelUsage, RecordAndClear) {
   EXPECT_TRUE(onnx_light_cpu::UsedKernelNames().empty());
 }
 
+TEST(OnnxLightKernelUsage, RecordingCanBeDisabled) {
+  onnx_light_cpu::ClearUsedKernelNames();
+  onnx_light_cpu::SetKernelUsageRecording(false);
+  onnx_light_cpu::RecordKernelUsage(onnx_light_cpu::AbsKernel::kName);
+  EXPECT_TRUE(onnx_light_cpu::UsedKernelNames().empty());
+
+  onnx_light_cpu::SetKernelUsageRecording(true);
+  onnx_light_cpu::RecordKernelUsage(onnx_light_cpu::AbsKernel::kName);
+  EXPECT_EQ(onnx_light_cpu::UsedKernelNames(), std::vector<std::string>({"onnx_light_cpu::Abs"}));
+}
+
 } // namespace

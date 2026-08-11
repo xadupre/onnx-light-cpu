@@ -9,6 +9,7 @@
 #include "onnx_light_cpu/kernels/math/exp_log_kernel.h"
 #include "onnx_light_cpu/kernels/math/gemm_kernel.h"
 
+#include <atomic>
 #include <mutex>
 
 namespace onnx_light_cpu {
@@ -28,9 +29,17 @@ std::mutex &UsageMutex() {
   return mutex;
 }
 
+std::atomic<bool> &UsageRecordingEnabled() {
+  static std::atomic<bool> enabled{true};
+  return enabled;
+}
+
 } // namespace
 
 void RecordKernelUsage(std::string_view name) {
+  if (!UsageRecordingEnabled().load(std::memory_order_relaxed)) {
+    return;
+  }
   std::lock_guard<std::mutex> guard(UsageMutex());
   UsageLog().emplace_back(name);
 }
@@ -43,6 +52,10 @@ std::vector<std::string> UsedKernelNames() {
 void ClearUsedKernelNames() {
   std::lock_guard<std::mutex> guard(UsageMutex());
   UsageLog().clear();
+}
+
+void SetKernelUsageRecording(bool enabled) noexcept {
+  UsageRecordingEnabled().store(enabled, std::memory_order_relaxed);
 }
 
 const std::vector<std::pair<std::string, std::string>> &RegisteredKernelNames() {

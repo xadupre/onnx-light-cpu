@@ -60,6 +60,7 @@ from onnx_light_cpu import (
     used_kernel_names,
 )
 from onnx_light_cpu.onnx_py._cpukernels import detect_simd_level, has_cpu_kernels
+from onnx_light_cpu.onnx_py._cpuregister import set_kernel_usage_recording
 
 _SIMD_NAMES = {0: "scalar", 1: "SSE2", 2: "AVX", 3: "AVX2", 4: "AVX-512"}
 
@@ -104,18 +105,20 @@ session = onnxruntime.InferenceSession(
 # Timing helper
 # ---------------------------------------------------------------------------
 #
-# Each candidate is called ``repeat`` times and the best (minimum) wall-clock
-# time is kept to reduce the impact of scheduling noise. The number of repeats
-# shrinks as the matrices grow so the whole benchmark stays fast.
+# Each candidate gets three untimed warm-up calls, then is called ``repeat``
+# times and the median wall-clock time is retained. The number of repeats
+# shrinks as the matrices grow but never below seven.
 
 
-def measure(func, repeat):
-    best = float("inf")
+def measure(func, repeat, warmup=3):
+    for _ in range(warmup):
+        func()
+    timings = []
     for _ in range(repeat):
         start = time.perf_counter()
         func()
-        best = min(best, time.perf_counter() - start)
-    return best
+        timings.append(time.perf_counter() - start)
+    return float(np.median(timings))
 
 
 # %%
@@ -139,7 +142,7 @@ for size in alone_sizes:
     a = rng.standard_normal((size, size)).astype(np.float32)
     b = rng.standard_normal((size, size)).astype(np.float32)
     expected = a @ b
-    repeat = max(3, min(100, 20_000_000 // (size * size * size)))
+    repeat = max(7, min(100, 20_000_000 // (size * size * size)))
 
     def run_alone(a=a, b=b):
         return alone_session.run(None, {"A": a, "B": b})[0]
@@ -169,6 +172,9 @@ _probe = np.zeros((2, 2), dtype=np.float32)
 clear_used_kernel_names()
 run_light(_probe, _probe)
 assert used_kernel_names() == ["onnx_light_cpu::Gemm"], used_kernel_names()
+# The usage log is diagnostic instrumentation and takes a mutex on every
+# invocation. Disable it after checking dispatch so it does not enter timings.
+set_kernel_usage_recording(False)
 
 
 # %%
@@ -187,7 +193,7 @@ for size in size_grid:
     b = rng.standard_normal((size, size)).astype(np.float32)
     expected = a @ b
 
-    repeat = max(3, min(100, 20_000_000 // (size * size * size)))
+    repeat = max(7, min(100, 20_000_000 // (size * size * size)))
 
     numpy_time = measure(lambda a=a, b=b: a @ b, repeat)
 
@@ -208,6 +214,8 @@ for size in size_grid:
         f"onnx-light-cpu={cpu_time * 1e6:10.2f} us | "
         f"onnxruntime={ort_time * 1e6:10.2f} us"
     )
+
+set_kernel_usage_recording(True)
 
 sizes = np.array([r[0] for r in rows])
 numpy_times = np.array([r[1] for r in rows])

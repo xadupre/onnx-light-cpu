@@ -46,6 +46,7 @@ from onnx_light_cpu import (
     used_kernel_names,
 )
 from onnx_light_cpu.onnx_py._cpukernels import detect_simd_level, has_cpu_kernels
+from onnx_light_cpu.onnx_py._cpuregister import set_kernel_usage_recording
 
 _SIMD_NAMES = {0: "scalar", 1: "SSE2", 2: "AVX", 3: "AVX2", 4: "AVX-512"}
 
@@ -142,13 +143,16 @@ alone_session.run(None, {"X": np.zeros(1, dtype=np.float32)})
 # onnx-light-cpu kernels overrides the built-in ``Abs`` so every ``Abs`` node in
 # the model dispatches to the SIMD-accelerated kernel.
 
-_light_setup_start = time.perf_counter()
 light_label = "onnx-light + onnx-light-cpu"
 # ``register_kernels()`` needs the ``_cpuregister`` extension, which is only
 # built with ``ONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON``. When it is missing (as in
 # the documentation build) the onnx-light-cpu curve is simply omitted; the
 # import above stays unconditional.
+_registration_start = time.perf_counter()
 register_kernels()
+registration_time = time.perf_counter() - _registration_start
+
+_light_setup_start = time.perf_counter()
 light_session = ReferenceEvaluator(model)
 light_setup_time = time.perf_counter() - _light_setup_start
 
@@ -158,6 +162,10 @@ light_setup_time = time.perf_counter() - _light_setup_start
 clear_used_kernel_names()
 light_session.run(None, {"X": np.zeros(1, dtype=np.float32)})
 assert used_kernel_names() == ["onnx_light_cpu::Abs"], used_kernel_names()
+# Usage recording is diagnostic instrumentation, not part of inference. It
+# takes a mutex and appends to a process-wide log on every invocation, so leave
+# it out of the timed region after confirming the expected kernel was selected.
+set_kernel_usage_recording(False)
 
 
 def run_light(inp):
@@ -165,28 +173,25 @@ def run_light(inp):
 
 
 # %%
-# Setup cost: why the evaluator is as slow to build as onnxruntime
-# ----------------------------------------------------------------
+# Setup cost: ReferenceEvaluator stays lightweight
+# -------------------------------------------------
 #
-# Constructing an ``onnx-light`` :class:`ReferenceEvaluator` now costs about as
-# much as constructing an :class:`onnxruntime.InferenceSession`. This is expected
-# and is a *one-time* cost paid before any :meth:`run`:
+# Constructing an ``onnx-light`` :class:`ReferenceEvaluator` is much faster than
+# constructing an :class:`onnxruntime.InferenceSession`:
 #
 # * ``onnxruntime`` parses the model and builds an optimized execution plan at
 #   construction time.
-# * ``onnx-light`` deliberately front-loads the same kind of work into
-#   ``ReferenceEvaluator.__init__``: it eagerly builds the opset ``KernelContext``
-#   and the persistent ``RuntimeContext`` once (instead of rebuilding them on
-#   every ``run`` call), and :func:`onnx_light_cpu.register_kernels` installs the
-#   custom kernels. Earlier onnx-light versions did this lazily, so construction
-#   looked instantaneous but the first ``run`` absorbed the cost.
+# * ``onnx-light`` only creates lightweight persistent contexts in
+#   ``ReferenceEvaluator.__init__``. Execution-plan construction and kernel
+#   resolution remain lazy and are cached by the first :meth:`run`.
 #
-# The payoff is that the amortized per-call ``run`` time (measured below) stays
-# low, because the expensive analysis happens exactly once at setup rather than
-# on every invocation.
+# Kernel registration is process-wide and independent of evaluator construction,
+# so it is timed separately rather than incorrectly attributing its first-import
+# cost to ``ReferenceEvaluator``.
 
 print(f"setup: onnxruntime InferenceSession = {ort_setup_time * 1e3:.2f} ms")
 print(f"setup: onnx-light ReferenceEvaluator = {light_setup_time * 1e3:.2f} ms")
+print(f"setup: onnx-light-cpu kernel registration = {registration_time * 1e3:.2f} ms")
 
 # %%
 # %%
@@ -235,6 +240,8 @@ for size in size_grid:
         f"cpu speed-up={cpu_speedup:5.2f}x | "
         f"onnxruntime={ort_time * 1e6:10.2f} us"
     )
+
+set_kernel_usage_recording(True)
 
 sizes = np.array([r[0] for r in rows])
 numpy_times = np.array([r[1] for r in rows])

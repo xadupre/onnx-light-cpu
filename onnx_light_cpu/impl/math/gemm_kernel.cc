@@ -515,6 +515,14 @@ constexpr std::size_t kGemmTileN = 256;
 constexpr std::size_t kGemmTileM = 64;
 constexpr std::size_t kGemmTileK = 256;
 
+// ParallelFor's grain is calibrated for full element-wise loop iterations.
+// A GEMM multiply-add is only one instruction inside a heavily vectorized,
+// register-blocked inner loop, so counting every scalar FMA as a full work unit
+// wakes workers far too early (for example as soon as M crosses one 64-row
+// tile). This divisor keeps sub-million-FMA tiles inline while preserving
+// parallelism for genuinely compute-heavy panels.
+constexpr double kGemmFmasPerParallelWorkUnit = 256.0;
+
 // Runtime-selected micro-kernel flavor for a given element type.
 enum class GemmKernelKind { kScalar, kSSE2, kAVX, kAVX512 };
 
@@ -699,11 +707,12 @@ void GemmImpl(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::siz
     }
   }
 
-  // Average per-task cost, in multiply-add work units, used by ParallelFor's
-  // grain-size heuristic to decide how many threads are worth waking.
+  // Average per-task cost converted from scalar multiply-adds to ParallelFor's
+  // coarser work units, used to decide how many threads are worth waking.
   const double total_work =
       static_cast<double>(M) * static_cast<double>(N) * static_cast<double>(K == 0 ? 1 : K);
-  const double cost_per_task = total_work / static_cast<double>(tasks.size());
+  const double cost_per_task =
+      total_work / (static_cast<double>(tasks.size()) * kGemmFmasPerParallelWorkUnit);
 
   ParallelFor(static_cast<std::int64_t>(tasks.size()), cost_per_task,
               [&](std::int64_t begin, std::int64_t end) {
