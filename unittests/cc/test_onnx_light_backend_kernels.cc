@@ -16,8 +16,8 @@
 //   3. drives each registered case through onnx-light's regular runtime API
 //      (``CollectTestCases`` + ``RuntimeContext`` / ``SubgraphSession``),
 //      checking the model output — produced by the onnx-light-cpu kernel the
-//      runtime dispatched to — matches the reference output shipped with the
-//      case (using the case's ``rtol``/``atol``).
+//      runtime dispatched to — matches, byte for byte, the reference output
+//      shipped with the case (see ``CompareTensor``).
 //
 // The runtime resolves each node by ``(domain, op_type)`` to whatever kernel is
 // registered, so registering the onnx-light-cpu kernels means these cases
@@ -28,7 +28,6 @@
 #include "onnx_light_cpu/kernels/register_kernels.h"
 
 #include "onnx_core/backend_test/test_case.h"
-#include "onnx_core/runtime/cast_helper.h"
 #include "onnx_core/runtime/kernel_context.h"
 #include "onnx_core/runtime/run_nodes.h"
 #include "onnx_core/runtime/runtime_context.h"
@@ -36,7 +35,6 @@
 
 #include <gtest/gtest.h>
 
-#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <string>
@@ -49,7 +47,6 @@ using namespace ONNX_LIGHT_NAMESPACE;
 using core::backend_test::CollectTestCases;
 using core::backend_test::DataSet;
 using core::backend_test::TestCase;
-using core::runtime::DataType;
 using core::runtime::DefaultOpset;
 using core::runtime::KernelContext;
 using core::runtime::RegisterModelFunctions;
@@ -64,20 +61,18 @@ using core::runtime::Tensors;
 // therefore sufficient to drive every registered case.
 constexpr int64_t kRuntimeDefaultOpsetVersion = 18;
 
-// Appends a mismatch description for a single element.
-void ReportMismatch(std::vector<std::string> &failures, const std::string &case_name, int64_t index,
-                    double actual, double expected, double tol) {
-  failures.push_back(case_name + ": element " + std::to_string(index) +
-                     " actual=" + std::to_string(actual) + " expected=" + std::to_string(expected) +
-                     " tol=" + std::to_string(tol));
-}
-
 // Compares a runtime output tensor against the reference output of a backend
-// test case. Integer/bool outputs must match exactly; floating-point outputs
-// (including the 16-bit formats decoded from their bit patterns) use the case's
-// ``rtol``/``atol`` with numpy's ``|a - e| <= atol + rtol * |e|`` rule.
+// test case for bit-exact equality, mirroring onnx-light's own backend
+// run-model test (``ExpectTensorBitEqual`` in ``test_backend_run_model.cc``).
+//
+// A bit-exact byte comparison — rather than an ``rtol``/``atol`` tolerance — is
+// the correct check here because every ``test_cpu_*`` case's expected output is
+// produced by the same onnx-light-cpu kernel the runtime dispatches to (see
+// ``kernel_backend_test.cc``). The runtime therefore has to reproduce those
+// exact bytes, so the comparison stays dtype-agnostic and needs no per-type
+// (float / float16 / bfloat16) decoding.
 void CompareTensor(const std::string &case_name, const Tensor &actual, const Tensor &expected,
-                   double rtol, double atol, std::vector<std::string> &failures) {
+                   std::vector<std::string> &failures) {
   if (actual.data_type != expected.data_type) {
     failures.push_back(case_name + ": output data type " + std::to_string(actual.data_type) +
                        " != expected " + std::to_string(expected.data_type));
@@ -87,67 +82,9 @@ void CompareTensor(const std::string &case_name, const Tensor &actual, const Ten
     failures.push_back(case_name + ": output shape mismatch");
     return;
   }
-  const int64_t n = expected.element_count();
-  if (actual.element_count() != n) {
-    failures.push_back(case_name + ": output element count mismatch");
-    return;
-  }
-
-  switch (static_cast<DataType>(expected.data_type)) {
-  case DataType::FLOAT: {
-    const float *a = actual.AsFloat();
-    const float *e = expected.AsFloat();
-    for (int64_t i = 0; i < n; ++i) {
-      const double tol = atol + rtol * std::fabs(static_cast<double>(e[i]));
-      if (!(std::fabs(static_cast<double>(a[i]) - static_cast<double>(e[i])) <= tol)) {
-        ReportMismatch(failures, case_name, i, a[i], e[i], tol);
-      }
-    }
-    return;
-  }
-  case DataType::DOUBLE: {
-    const double *a = actual.AsDouble();
-    const double *e = expected.AsDouble();
-    for (int64_t i = 0; i < n; ++i) {
-      const double tol = atol + rtol * std::fabs(e[i]);
-      if (!(std::fabs(a[i] - e[i]) <= tol)) {
-        ReportMismatch(failures, case_name, i, a[i], e[i], tol);
-      }
-    }
-    return;
-  }
-  case DataType::FLOAT16: {
-    const auto *a = reinterpret_cast<const std::uint16_t *>(actual.bytes());
-    const auto *e = reinterpret_cast<const std::uint16_t *>(expected.bytes());
-    for (int64_t i = 0; i < n; ++i) {
-      const double av = core::runtime::Float16BitsToFloat(a[i]);
-      const double ev = core::runtime::Float16BitsToFloat(e[i]);
-      const double tol = atol + rtol * std::fabs(ev);
-      if (!(std::fabs(av - ev) <= tol)) {
-        ReportMismatch(failures, case_name, i, av, ev, tol);
-      }
-    }
-    return;
-  }
-  case DataType::BFLOAT16: {
-    const auto *a = reinterpret_cast<const std::uint16_t *>(actual.bytes());
-    const auto *e = reinterpret_cast<const std::uint16_t *>(expected.bytes());
-    for (int64_t i = 0; i < n; ++i) {
-      const double av = core::runtime::Bfloat16BitsToFloat(a[i]);
-      const double ev = core::runtime::Bfloat16BitsToFloat(e[i]);
-      const double tol = atol + rtol * std::fabs(ev);
-      if (!(std::fabs(av - ev) <= tol)) {
-        ReportMismatch(failures, case_name, i, av, ev, tol);
-      }
-    }
-    return;
-  }
-  default:
-    // Integer and bool outputs are compared byte-for-byte.
-    if (actual.size_bytes() != expected.size_bytes() ||
-        std::memcmp(actual.bytes(), expected.bytes(), actual.size_bytes()) != 0) {
-      failures.push_back(case_name + ": integer/bool output does not match reference");
-    }
+  if (actual.size_bytes() != expected.size_bytes() ||
+      std::memcmp(actual.bytes(), expected.bytes(), actual.size_bytes()) != 0) {
+    failures.push_back(case_name + ": output does not match reference");
   }
 }
 
@@ -175,7 +112,7 @@ void RunCaseThroughRuntime(const TestCase &tc, std::vector<std::string> &failure
       continue;
     }
     for (size_t i = 0; i < ds.outputs.size(); ++i) {
-      CompareTensor(tc.name, outputs[i], ds.outputs[i], tc.rtol, tc.atol, failures);
+      CompareTensor(tc.name, outputs[i], ds.outputs[i], failures);
     }
   }
 }
