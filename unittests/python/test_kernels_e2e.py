@@ -4,27 +4,31 @@
 
 """Backend-test driven end-to-end tests for the onnx-light-cpu kernels.
 
-onnx-light ships its ONNX backend test cases as a C++-registered registry
-(``onnx_light/onnx_extensions/backend_test/cases/``) exposed to Python through
-:func:`onnx_light.onnx.backend.collect_test_cases`. Each entry is a
-``TestCase`` holding a ``ModelProto`` plus one or more reference input/output
-``DataSet`` computed by onnx-light itself.
+onnx-light exposes a global ONNX backend test case registry through
+:func:`onnx_light.onnx.backend.collect_test_cases`. onnx-light-cpu ships its own
+backend test cases -- named ``test_cpu_*`` and covering every element type each
+accelerated kernel implements -- in a dedicated C++ *registration* library
+(``lib_onnx_light_cpu_backend_test``). Those cases are installed into that same
+shared registry by :func:`onnx_light_cpu.register_backend_test_cases`.
 
-These tests take the ``Abs``, ``Exp``, ``Log`` and ``Gemm`` backend test cases
-(covering every element-type combination onnx-light registers for those ops),
-run each single-node model through onnx-light's ``ReferenceEvaluator`` after
-:func:`onnx_light_cpu.register_kernels` has installed the SIMD-accelerated
-kernels, and check that:
+These tests follow the same steps as the C++ unit test, using onnx-light's
+regular Python API:
 
-* the accelerated onnx-light-cpu kernel is the one actually dispatched to
-  (via :func:`onnx_light_cpu.used_kernel_names`), and
-* its outputs match the reference outputs shipped with the backend test case
-  (using each case's ``rtol``/``atol``).
+* register the onnx-light-cpu backend test cases
+  (:func:`onnx_light_cpu.register_backend_test_cases`),
+* register the accelerated kernels (:func:`onnx_light_cpu.register_kernels`), and
+* for every collected ``test_cpu_*`` case, run its single-node model through
+  onnx-light's ``ReferenceEvaluator`` and check that
+    - the accelerated onnx-light-cpu kernel is the one actually dispatched to
+      (via :func:`onnx_light_cpu.used_kernel_names`), and
+    - its outputs match the reference outputs shipped with the case (using the
+      case's ``rtol``/``atol``).
 
-onnx-light, its backend-test extension, the ``_cpuregister`` extension (built
-with ``ONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON``) and ``ml_dtypes`` (for the
-``bfloat16`` numpy dtype) are required; when any is missing the whole module is
-skipped via :func:`pytest.importorskip`.
+onnx-light, its backend-test extension (exposed via the ``_cpuregister``
+extension's ``register_backend_test_cases`` binding, built with
+``ONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON`` and onnx-light's ``lib_onnx_backend_test``
+available) and ``ml_dtypes`` (for the ``bfloat16`` numpy dtype) are required;
+when any is missing the whole module is skipped.
 """
 
 from __future__ import annotations
@@ -44,19 +48,29 @@ from onnx_light.onnx.reference import ReferenceEvaluator
 
 from onnx_light_cpu import (
     clear_used_kernel_names,
+    has_backend_test_cases,
+    register_backend_test_cases,
     register_kernels,
     registered_kernel_names,
     used_kernel_names,
 )
 
-# Operators whose onnx-light-cpu kernel we want to validate against every
-# backend test case onnx-light registers for them, mapped to the
-# library-qualified name each kernel records when it runs.
+if not has_backend_test_cases():
+    pytest.skip(
+        "onnx-light-cpu was built without onnx-light's backend test registry "
+        "(register_backend_test_cases binding unavailable).",
+        allow_module_level=True,
+    )
+
+# Operators whose onnx-light-cpu kernel we validate against every ``test_cpu_*``
+# backend test case, mapped to the library-qualified name each kernel records
+# when it runs.
 _TARGET_KERNELS = {
     "Abs": "onnx_light_cpu::Abs",
     "Exp": "onnx_light_cpu::Exp",
     "Log": "onnx_light_cpu::Log",
     "Gemm": "onnx_light_cpu::Gemm",
+    "Not": "onnx_light_cpu::Not",
 }
 
 # ``TensorProto`` element type -> numpy dtype used to decode a backend test
@@ -90,17 +104,22 @@ def _single_node_op_type(tc):
     return nodes[0].op_type
 
 
-def _collect_cases():
-    """Collects the single-node backend test cases for every target op."""
+def _collect_cpu_cases():
+    """Registers and collects the onnx-light-cpu ``test_cpu_*`` backend cases."""
+    register_backend_test_cases()
     cases = []
     for op_type in _TARGET_KERNELS:
         for tc in collect_test_cases(op_type):
-            if _single_node_op_type(tc) == op_type and tc.data_sets:
+            if (
+                tc.name.startswith("test_cpu_")
+                and _single_node_op_type(tc) == op_type
+                and tc.data_sets
+            ):
                 cases.append(tc)
     return cases
 
 
-_CASES = _collect_cases()
+_CASES = _collect_cpu_cases()
 
 
 def _assert_close(actual, expected, rtol, atol):
@@ -131,12 +150,13 @@ class TestBackendCases:
         for tc in _CASES:
             counts[_single_node_op_type(tc)] += 1
         for op_type, count in counts.items():
-            assert count > 0, f"no single-node backend test cases collected for {op_type}"
+            assert count > 0, f"no onnx-light-cpu backend test cases collected for {op_type}"
 
     @pytest.mark.parametrize("tc", _CASES, ids=lambda tc: tc.name)
     def test_backend_case(self, tc):
-        """Runs one backend test case through the accelerated kernels and
-        checks the outputs match the reference and the accelerated kernel ran.
+        """Runs one onnx-light-cpu backend test case through the accelerated
+        kernels and checks the outputs match the reference and the accelerated
+        kernel ran.
         """
         op_type = _single_node_op_type(tc)
         expected_kernel = _TARGET_KERNELS[op_type]

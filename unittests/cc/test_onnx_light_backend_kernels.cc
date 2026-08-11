@@ -2,25 +2,206 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Thin gtest wrapper that drives the onnx-light-cpu backend test library
-// (``lib_onnx_light_cpu_backend_test``). The backend test itself lives in that
-// library, which takes a dependency on the onnx-light-cpu kernels and mirrors
-// onnx-light's own ``lib_onnx_backend_test`` pattern. Each function collects
-// onnx-light's C++-registered backend test cases (``CollectTestCases``) for an
-// operator, runs them through the corresponding SIMD-accelerated kernel and
-// returns any mismatches, which this test surfaces as gtest failures.
+// C++ unit test for the onnx-light-cpu kernels driven through onnx-light's
+// regular backend-test API.
+//
+// The onnx-light-cpu backend test *cases* live in a dedicated library
+// (``lib_onnx_light_cpu_backend_test``) which merely *registers* them into
+// onnx-light's shared backend test case registry. This unit test:
+//
+//   1. registers those new backend test cases
+//      (``RegisterCpuKernelBackendTestCases``),
+//   2. registers the accelerated kernels
+//      (``onnx_light_cpu::RegisterAllKernels``), and
+//   3. drives each registered case through onnx-light's regular runtime API
+//      (``CollectTestCases`` + ``RuntimeContext`` / ``SubgraphSession``),
+//      checking the model output — produced by the onnx-light-cpu kernel the
+//      runtime dispatched to — matches the reference output shipped with the
+//      case (using the case's ``rtol``/``atol``).
+//
+// The runtime resolves each node by ``(domain, op_type)`` to whatever kernel is
+// registered, so registering the onnx-light-cpu kernels means these cases
+// exercise the accelerated kernels end to end, exactly like a model run through
+// onnx-light itself.
 
 #include "onnx_light_cpu/backend_test/kernel_backend_test.h"
+#include "onnx_light_cpu/kernels/register_kernels.h"
+
+#include "onnx_core/backend_test/test_case.h"
+#include "onnx_core/runtime/cast_helper.h"
+#include "onnx_core/runtime/kernel_context.h"
+#include "onnx_core/runtime/run_nodes.h"
+#include "onnx_core/runtime/runtime_context.h"
+#include "onnx_core/runtime/simple_tensor.h"
 
 #include <gtest/gtest.h>
 
+#include <cmath>
+#include <cstdint>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
 
-// Turns the failure descriptions returned by a backend test runner into a
-// single gtest failure message.
+using namespace ONNX_LIGHT_NAMESPACE;
+using core::backend_test::CollectTestCases;
+using core::backend_test::DataSet;
+using core::backend_test::TestCase;
+using core::runtime::DataType;
+using core::runtime::DefaultOpset;
+using core::runtime::KernelContext;
+using core::runtime::RegisterModelFunctions;
+using core::runtime::RuntimeContext;
+using core::runtime::SubgraphSession;
+using core::runtime::Tensor;
+using core::runtime::Tensors;
+
+// onnx-light resolves kernels by (domain, op_type) only — never by opset
+// version — so the concrete default opset used to build the runtime context
+// does not affect which kernel a node dispatches to. A fixed recent version is
+// therefore sufficient to drive every registered case.
+constexpr int64_t kRuntimeDefaultOpsetVersion = 18;
+
+// Appends a mismatch description for a single element.
+void ReportMismatch(std::vector<std::string> &failures, const std::string &case_name, int64_t index,
+                    double actual, double expected, double tol) {
+  failures.push_back(case_name + ": element " + std::to_string(index) +
+                     " actual=" + std::to_string(actual) + " expected=" + std::to_string(expected) +
+                     " tol=" + std::to_string(tol));
+}
+
+// Compares a runtime output tensor against the reference output of a backend
+// test case. Integer/bool outputs must match exactly; floating-point outputs
+// (including the 16-bit formats decoded from their bit patterns) use the case's
+// ``rtol``/``atol`` with numpy's ``|a - e| <= atol + rtol * |e|`` rule.
+void CompareTensor(const std::string &case_name, const Tensor &actual, const Tensor &expected,
+                   double rtol, double atol, std::vector<std::string> &failures) {
+  if (actual.data_type != expected.data_type) {
+    failures.push_back(case_name + ": output data type " + std::to_string(actual.data_type) +
+                       " != expected " + std::to_string(expected.data_type));
+    return;
+  }
+  if (actual.shape != expected.shape) {
+    failures.push_back(case_name + ": output shape mismatch");
+    return;
+  }
+  const int64_t n = expected.element_count();
+  if (actual.element_count() != n) {
+    failures.push_back(case_name + ": output element count mismatch");
+    return;
+  }
+
+  switch (static_cast<DataType>(expected.data_type)) {
+  case DataType::FLOAT: {
+    const float *a = actual.AsFloat();
+    const float *e = expected.AsFloat();
+    for (int64_t i = 0; i < n; ++i) {
+      const double tol = atol + rtol * std::fabs(static_cast<double>(e[i]));
+      if (!(std::fabs(static_cast<double>(a[i]) - static_cast<double>(e[i])) <= tol)) {
+        ReportMismatch(failures, case_name, i, a[i], e[i], tol);
+      }
+    }
+    return;
+  }
+  case DataType::DOUBLE: {
+    const double *a = actual.AsDouble();
+    const double *e = expected.AsDouble();
+    for (int64_t i = 0; i < n; ++i) {
+      const double tol = atol + rtol * std::fabs(e[i]);
+      if (!(std::fabs(a[i] - e[i]) <= tol)) {
+        ReportMismatch(failures, case_name, i, a[i], e[i], tol);
+      }
+    }
+    return;
+  }
+  case DataType::FLOAT16: {
+    const auto *a = reinterpret_cast<const std::uint16_t *>(actual.bytes());
+    const auto *e = reinterpret_cast<const std::uint16_t *>(expected.bytes());
+    for (int64_t i = 0; i < n; ++i) {
+      const double av = core::runtime::Float16BitsToFloat(a[i]);
+      const double ev = core::runtime::Float16BitsToFloat(e[i]);
+      const double tol = atol + rtol * std::fabs(ev);
+      if (!(std::fabs(av - ev) <= tol)) {
+        ReportMismatch(failures, case_name, i, av, ev, tol);
+      }
+    }
+    return;
+  }
+  case DataType::BFLOAT16: {
+    const auto *a = reinterpret_cast<const std::uint16_t *>(actual.bytes());
+    const auto *e = reinterpret_cast<const std::uint16_t *>(expected.bytes());
+    for (int64_t i = 0; i < n; ++i) {
+      const double av = core::runtime::Bfloat16BitsToFloat(a[i]);
+      const double ev = core::runtime::Bfloat16BitsToFloat(e[i]);
+      const double tol = atol + rtol * std::fabs(ev);
+      if (!(std::fabs(av - ev) <= tol)) {
+        ReportMismatch(failures, case_name, i, av, ev, tol);
+      }
+    }
+    return;
+  }
+  default:
+    // Integer and bool outputs are compared byte-for-byte.
+    if (actual.size_bytes() != expected.size_bytes() ||
+        std::vector<std::uint8_t>(actual.bytes(), actual.bytes() + actual.size_bytes()) !=
+            std::vector<std::uint8_t>(expected.bytes(), expected.bytes() + expected.size_bytes())) {
+      failures.push_back(case_name + ": integer/bool output does not match reference");
+    }
+  }
+}
+
+// Runs a single-node backend test case model through onnx-light's runtime and
+// compares the produced output with the reference output. The runtime resolves
+// the node to the registered onnx-light-cpu kernel.
+void RunCaseThroughRuntime(const TestCase &tc, std::vector<std::string> &failures) {
+  const ModelProto &model = tc.model();
+  const GraphProto &graph = model.ref_graph();
+  for (const DataSet &ds : tc.data_sets()) {
+    RuntimeContext rt(KernelContext(DefaultOpset(kRuntimeDefaultOpsetVersion)));
+    RegisterModelFunctions(model, rt);
+
+    std::vector<std::pair<std::string, Tensor>> bindings;
+    bindings.reserve(ds.inputs.size());
+    for (const Tensor &t : ds.inputs) {
+      bindings.emplace_back(t.name, t);
+    }
+
+    SubgraphSession session(rt, graph);
+    const Tensors outputs = session.Run(std::move(bindings), rt);
+
+    if (outputs.size() != ds.outputs.size()) {
+      failures.push_back(tc.name + ": output count mismatch");
+      continue;
+    }
+    for (size_t i = 0; i < ds.outputs.size(); ++i) {
+      CompareTensor(tc.name, outputs[i], ds.outputs[i], tc.rtol, tc.atol, failures);
+    }
+  }
+}
+
+// Registers the onnx-light-cpu backend test cases and kernels, then runs every
+// ``test_cpu_*`` case for ``op_type`` through the runtime, collecting failures.
+std::vector<std::string> RunCpuBackendCases(const std::string &op_type) {
+  onnx_light_cpu::backend_test::RegisterCpuKernelBackendTestCases();
+  onnx_light_cpu::RegisterAllKernels();
+
+  std::vector<std::string> failures;
+  std::vector<TestCase> cases = CollectTestCases(op_type);
+  size_t cpu_cases = 0;
+  for (const TestCase &tc : cases) {
+    if (tc.name.rfind("test_cpu_", 0) != 0) {
+      continue;
+    }
+    ++cpu_cases;
+    RunCaseThroughRuntime(tc, failures);
+  }
+  if (cpu_cases == 0) {
+    failures.push_back("no onnx-light-cpu backend test cases registered for " + op_type);
+  }
+  return failures;
+}
+
 std::string Describe(const std::vector<std::string> &failures) {
   std::string message;
   for (const std::string &failure : failures) {
@@ -30,28 +211,28 @@ std::string Describe(const std::vector<std::string> &failures) {
   return message;
 }
 
-TEST(OnnxLightBackendKernels, AbsRunsOnBackendTestCases) {
-  const std::vector<std::string> failures = onnx_light_cpu::backend_test::RunAbsBackendCases();
+TEST(OnnxLightBackendKernels, AbsRunsThroughRuntime) {
+  const std::vector<std::string> failures = RunCpuBackendCases("Abs");
   EXPECT_TRUE(failures.empty()) << Describe(failures);
 }
 
-TEST(OnnxLightBackendKernels, ExpRunsOnBackendTestCases) {
-  const std::vector<std::string> failures = onnx_light_cpu::backend_test::RunExpBackendCases();
+TEST(OnnxLightBackendKernels, ExpRunsThroughRuntime) {
+  const std::vector<std::string> failures = RunCpuBackendCases("Exp");
   EXPECT_TRUE(failures.empty()) << Describe(failures);
 }
 
-TEST(OnnxLightBackendKernels, LogRunsOnBackendTestCases) {
-  const std::vector<std::string> failures = onnx_light_cpu::backend_test::RunLogBackendCases();
+TEST(OnnxLightBackendKernels, LogRunsThroughRuntime) {
+  const std::vector<std::string> failures = RunCpuBackendCases("Log");
   EXPECT_TRUE(failures.empty()) << Describe(failures);
 }
 
-TEST(OnnxLightBackendKernels, NotRunsOnBackendTestCases) {
-  const std::vector<std::string> failures = onnx_light_cpu::backend_test::RunNotBackendCases();
+TEST(OnnxLightBackendKernels, NotRunsThroughRuntime) {
+  const std::vector<std::string> failures = RunCpuBackendCases("Not");
   EXPECT_TRUE(failures.empty()) << Describe(failures);
 }
 
-TEST(OnnxLightBackendKernels, GemmRunsOnBackendTestCases) {
-  const std::vector<std::string> failures = onnx_light_cpu::backend_test::RunGemmBackendCases();
+TEST(OnnxLightBackendKernels, GemmRunsThroughRuntime) {
+  const std::vector<std::string> failures = RunCpuBackendCases("Gemm");
   EXPECT_TRUE(failures.empty()) << Describe(failures);
 }
 

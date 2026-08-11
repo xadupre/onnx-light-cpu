@@ -292,13 +292,18 @@ if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
   # -------------------------------------------------------------------------
   # onnx-light-cpu backend-test library: lib_onnx_light_cpu_backend_test
   # -------------------------------------------------------------------------
-  # Mirrors onnx-light's own ``lib_onnx_backend_test`` pattern: the C++ backend
-  # test lives in its own library that takes a dependency on the kernels. It
-  # drives the onnx-light-cpu kernels through onnx-light's C++-registered backend
-  # test cases (``CollectTestCases``) and reports mismatches. Requires
-  # onnx-light's ``lib_onnx_backend_test`` registry, so it is only built when
-  # that imported target is available (always via find_package; best-effort in
-  # the --onnx-light-source path).
+  # Mirrors onnx-light's own ``lib_onnx_backend_test`` pattern: the backend test
+  # cases live in their own library that takes a dependency on the kernels. It
+  # does not run or check anything itself -- it merely *registers* the
+  # onnx-light-cpu backend test cases (the ``test_cpu_*`` cases covering every
+  # dtype each kernel implements) into onnx-light's shared backend test case
+  # registry, so onnx-light's regular ``CollectTestCases`` (C++) and
+  # ``collect_test_cases`` (Python) APIs return them. The unit tests register
+  # these cases, register the kernels, and drive them through onnx-light's
+  # regular runtime / ``ReferenceEvaluator`` API. Requires onnx-light's
+  # ``lib_onnx_backend_test`` registry, so it is only built when that imported
+  # target is available (always via find_package; best-effort in the
+  # --onnx-light-source path).
   if(TARGET onnx_light::lib_onnx_backend_test)
     add_library(lib_onnx_light_cpu_backend_test ${_cpu_lib_type}
         "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/kernel_backend_test.cc")
@@ -369,6 +374,18 @@ if(ONNX_LIGHT_CPU_BUILD_PYTHON)
         INSTALL_RPATH "$ORIGIN;${ONNX_LIGHT_CPU_ONNX_LIGHT_PY_LIBDIR}"
         BUILD_RPATH "$ORIGIN;${ONNX_LIGHT_CPU_ONNX_LIGHT_PY_LIBDIR}"
     )
+
+    # The backend-test registration library, when linked into _cpuregister, is
+    # installed next to it and loaded as one of its runtime dependencies. Like
+    # lib_onnx_light_cpu_kernels above it directly NEEDs onnx-light's
+    # lib_onnx_core/lib_onnx_proto (and lib_onnx_backend_test), so it needs the
+    # same extra RPATH entry pointing at onnx-light's Python library directory.
+    if(TARGET lib_onnx_light_cpu_backend_test)
+      set_target_properties(lib_onnx_light_cpu_backend_test PROPERTIES
+          INSTALL_RPATH "$ORIGIN;${ONNX_LIGHT_CPU_ONNX_LIGHT_PY_LIBDIR}"
+          BUILD_RPATH "$ORIGIN;${ONNX_LIGHT_CPU_ONNX_LIGHT_PY_LIBDIR}"
+      )
+    endif()
   endif()
 
   nanobind_add_module(_cpukernels STABLE_ABI ${PY_KERNELS_SOURCES})
@@ -405,6 +422,16 @@ if(ONNX_LIGHT_CPU_BUILD_PYTHON)
         "${CMAKE_CURRENT_SOURCE_DIR}")
     target_link_libraries(_cpuregister PRIVATE lib_onnx_light_cpu_kernels)
 
+    # When onnx-light's backend test registry is available, link the
+    # onnx-light-cpu backend-test *registration* library so ``_cpuregister``
+    # can expose ``register_backend_test_cases()`` -- which registers the
+    # ``test_cpu_*`` cases into that shared registry so Python's
+    # ``collect_test_cases`` returns them alongside onnx-light's own cases.
+    if(TARGET lib_onnx_light_cpu_backend_test)
+      target_link_libraries(_cpuregister PRIVATE lib_onnx_light_cpu_backend_test)
+      target_compile_definitions(_cpuregister PRIVATE ONNX_LIGHT_CPU_HAS_BACKEND_TEST)
+    endif()
+
     # _cpuregister also directly NEEDs onnx-light's lib_onnx_core/lib_onnx_proto
     # (transitively, via lib_onnx_light_cpu_kernels' PUBLIC link), so it needs
     # the same extra RPATH entry as lib_onnx_light_cpu_kernels above -- see the
@@ -439,6 +466,15 @@ if(ONNX_LIGHT_CPU_BUILD_PYTHON)
       install(TARGETS lib_onnx_light_cpu_kernels
           LIBRARY DESTINATION onnx_light_cpu/onnx_py
           RUNTIME DESTINATION onnx_light_cpu/onnx_py)
+
+      # When linked into _cpuregister, the backend-test registration library is
+      # a runtime dependency too, so it must sit next to _cpuregister (found via
+      # its "$ORIGIN" RPATH) just like lib_onnx_light_cpu_kernels above.
+      if(TARGET lib_onnx_light_cpu_backend_test)
+        install(TARGETS lib_onnx_light_cpu_backend_test
+            LIBRARY DESTINATION onnx_light_cpu/onnx_py
+            RUNTIME DESTINATION onnx_light_cpu/onnx_py)
+      endif()
     endif()
   endif()
 endif()
@@ -565,11 +601,12 @@ if(ONNX_LIGHT_CPU_BUILD_TESTS)
       # onnx-light and are only built when the integration is enabled.
       if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
         if(_test_name STREQUAL "test_onnx_light_backend_kernels")
-          # Drives the kernels from onnx-light's C++-registered backend test
-          # cases (CollectTestCases) through the dedicated backend-test library
-          # (lib_onnx_light_cpu_backend_test), which takes a dependency on the
-          # kernels. Built only when that library is available (it requires
-          # onnx-light's lib_onnx_backend_test registry).
+          # Registers the onnx-light-cpu backend test cases (via the dedicated
+          # registration library lib_onnx_light_cpu_backend_test, which depends
+          # on the kernels) and the kernels, then drives the collected
+          # ``test_cpu_*`` cases through onnx-light's regular runtime API. Built
+          # only when that library is available (it requires onnx-light's
+          # lib_onnx_backend_test registry).
           if(TARGET lib_onnx_light_cpu_backend_test)
             onnx_light_cpu_add_test("${_test_src}"
                 "lib_onnx_light_cpu_kernels;lib_onnx_light_cpu_backend_test")
