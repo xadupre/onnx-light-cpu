@@ -265,11 +265,21 @@ ax_speedup.plot(
     color="#5cb85c",
 )
 if light_session is not None:
-    ax_speedup.plot(sizes, ort_times / cpu_times, "o-", label=light_label, color="#4a9eff")
+    cpu_speedup = ort_times / cpu_times
+    ax_speedup.plot(sizes, cpu_speedup, "o-", label=light_label, color="#4a9eff")
+    for size, speedup in zip(sizes, cpu_speedup, strict=True):
+        ax_speedup.annotate(
+            f"{speedup:.2f}x",
+            (size, speedup),
+            xytext=(0, 7),
+            textcoords="offset points",
+            ha="center",
+            fontsize=8,
+            color="#4a9eff",
+        )
 ax_speedup.plot(sizes, ort_times / ort_times, "o-", label="onnxruntime", color="#f4a259")
 ax_speedup.axhline(1.0, color="grey", linewidth=0.8, linestyle=":")
 ax_speedup.set_xscale("log")
-ax_speedup.set_yscale("log")
 ax_speedup.set_xlabel("matrix size N (N x N)")
 ax_speedup.set_ylabel("speed-up vs onnxruntime")
 ax_speedup.set_title("Gemm speed-up (onnxruntime = 1)")
