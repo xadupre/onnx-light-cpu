@@ -14,7 +14,7 @@ streaming attention.
 
 The current implementation is a correctness-first, register-blocked kernel.
 It already has AVX2/AVX-512 paths, K blocking, A/B packing, and two-dimensional
-task parallelism; see :doc:`the current design <../gemm_kernel_design>`.
+task parallelism; see :doc:`the current design <../design/gemm_kernel_design>`.
 Benchmarks nevertheless show that MLAS can remain an order of magnitude faster
 on multi-panel and skinny-M shapes. This is a kernel and scheduling gap, not a
 plotting artifact.
