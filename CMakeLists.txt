@@ -228,6 +228,34 @@ if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
       set_property(TARGET onnx_light::lib_onnx_proto PROPERTY
           IMPORTED_IMPLIB "${ONNX_LIGHT_CPU_ONNX_LIGHT_PROTO_IMPLIB}")
     endif()
+    # The backend-test registry (lib_onnx_backend_test) and its kernel
+    # dependency (lib_onnx_kernels) live in the same directory as the core
+    # runtime library loaded by onnx-light's Python runtime. They are not
+    # reported by get_cpp_build_info(), so locate them next to the core library
+    # and expose them as imported targets when present. This lets the
+    # backend-test-driven C++ test link against CollectTestCases(); editable
+    # builds whose onnx-light predates these libraries simply skip that test.
+    get_filename_component(_onnx_light_libdir
+        "${ONNX_LIGHT_CPU_ONNX_LIGHT_LIBRARY}" DIRECTORY)
+    file(GLOB _onnx_light_kernels_lib
+        "${_onnx_light_libdir}/liblib_onnx_kernels.*"
+        "${_onnx_light_libdir}/lib_onnx_kernels.*")
+    file(GLOB _onnx_light_backend_test_lib
+        "${_onnx_light_libdir}/liblib_onnx_backend_test.*"
+        "${_onnx_light_libdir}/lib_onnx_backend_test.*")
+    if(_onnx_light_kernels_lib AND _onnx_light_backend_test_lib)
+      list(GET _onnx_light_kernels_lib 0 _onnx_light_kernels_lib)
+      list(GET _onnx_light_backend_test_lib 0 _onnx_light_backend_test_lib)
+      add_library(onnx_light::lib_onnx_kernels UNKNOWN IMPORTED GLOBAL)
+      set_target_properties(onnx_light::lib_onnx_kernels PROPERTIES
+          IMPORTED_LOCATION "${_onnx_light_kernels_lib}"
+          INTERFACE_LINK_LIBRARIES onnx_light::lib_onnx_core)
+      add_library(onnx_light::lib_onnx_backend_test UNKNOWN IMPORTED GLOBAL)
+      set_target_properties(onnx_light::lib_onnx_backend_test PROPERTIES
+          IMPORTED_LOCATION "${_onnx_light_backend_test_lib}"
+          INTERFACE_LINK_LIBRARIES
+              "onnx_light::lib_onnx_proto;onnx_light::lib_onnx_kernels")
+    endif()
   else()
     find_package(onnx_light CONFIG REQUIRED)
   endif()
@@ -483,7 +511,7 @@ if(ONNX_LIGHT_CPU_BUILD_TESTS)
     add_executable(${_name} "${_src}")
     target_link_libraries(${_name} PRIVATE ${_link_lib} GTest::gtest_main)
     target_include_directories(${_name} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
-    if(_link_lib STREQUAL "lib_onnx_light_cpu_kernels" AND
+    if("lib_onnx_light_cpu_kernels" IN_LIST _link_lib AND
        ONNX_LIGHT_CPU_ONNX_LIGHT_PY_LIBDIR)
       set_target_properties(${_name} PROPERTIES
           BUILD_RPATH "${ONNX_LIGHT_CPU_ONNX_LIGHT_PY_LIBDIR}")
@@ -504,7 +532,18 @@ if(ONNX_LIGHT_CPU_BUILD_TESTS)
       # onnx-light kernel-class tests link the registration library against
       # onnx-light and are only built when the integration is enabled.
       if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
-        onnx_light_cpu_add_test("${_test_src}" lib_onnx_light_cpu_kernels)
+        if(_test_name STREQUAL "test_onnx_light_backend_kernels")
+          # Drives the kernels from onnx-light's C++-registered backend test
+          # cases (CollectTestCases), which live in lib_onnx_backend_test.
+          # Built only when that library is available (always via
+          # find_package; best-effort in the --onnx-light-source path).
+          if(TARGET onnx_light::lib_onnx_backend_test)
+            onnx_light_cpu_add_test("${_test_src}"
+                "lib_onnx_light_cpu_kernels;onnx_light::lib_onnx_backend_test")
+          endif()
+        else()
+          onnx_light_cpu_add_test("${_test_src}" lib_onnx_light_cpu_kernels)
+        endif()
       endif()
     else()
       onnx_light_cpu_add_test("${_test_src}" lib_onnx_light_cpu)
