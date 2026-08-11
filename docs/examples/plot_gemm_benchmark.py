@@ -269,7 +269,6 @@ if light_session is not None:
 ax_speedup.plot(sizes, ort_times / ort_times, "o-", label="onnxruntime", color="#f4a259")
 ax_speedup.axhline(1.0, color="grey", linewidth=0.8, linestyle=":")
 ax_speedup.set_xscale("log")
-ax_speedup.set_yscale("log")
 ax_speedup.set_xlabel("matrix size N (N x N)")
 ax_speedup.set_ylabel("speed-up vs onnxruntime")
 ax_speedup.set_title("Gemm speed-up (onnxruntime = 1)")
