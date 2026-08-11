@@ -225,9 +225,7 @@ for size in size_grid:
         assert np.array_equal(alone_session.run(None, {"X": inp})[0], expected), size
         assert np.array_equal(run_light(inp), expected), size
     else:
-        alone_time = measure(
-            lambda inp=inp: alone_session.run(None, {"X": inp}), repeat
-        )
+        alone_time = measure(lambda inp=inp: alone_session.run(None, {"X": inp}), repeat)
         cpu_time = float("nan")
 
     ort_time = measure(lambda inp=inp: session.run(None, {"X": inp}), repeat)
@@ -308,9 +306,7 @@ ax_speedup.plot(
     label=alone_label,
     color="#5cb85c",
 )
-ax_speedup.plot(
-    sizes, ort_times / ort_times, "o-", label="onnxruntime", color="#f4a259"
-)
+ax_speedup.plot(sizes, ort_times / ort_times, "o-", label="onnxruntime", color="#f4a259")
 ax_speedup.axhline(1.0, color="grey", linewidth=0.8, linestyle=":")
 ax_speedup.set_xscale("log")
 ax_speedup.set_yscale("log")

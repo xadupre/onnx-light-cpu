@@ -229,9 +229,7 @@ for shape_label, M, N, K in SHAPES:
     expected = a32 @ b32
     repeat = max(7, min(50, 200_000_000 // (M * N * K + 1)))
 
-    print(
-        f"\nshape={shape_label.splitlines()[0]:<24} M={M} N={N} K={K} repeat={repeat}"
-    )
+    print(f"\nshape={shape_label.splitlines()[0]:<24} M={M} N={N} K={K} repeat={repeat}")
     for label, (_, np_dtype) in DTYPES.items():
         a = a32.astype(np_dtype)
         b = b32.astype(np_dtype)
@@ -244,9 +242,7 @@ for shape_label, M, N, K in SHAPES:
         results[label].append(elapsed)
 
         tol = 1e-3 if label == "float32" else (5e-2 if label == "float16" else 5e-1)
-        np.testing.assert_allclose(
-            run().astype(np.float32), expected, rtol=tol, atol=tol
-        )
+        np.testing.assert_allclose(run().astype(np.float32), expected, rtol=tol, atol=tol)
 
         if label in ort_sessions:
             ort_session = ort_sessions[label]
@@ -256,15 +252,11 @@ for shape_label, M, N, K in SHAPES:
 
             ort_elapsed = measure(run_ort, repeat)
             ort_results[label].append(ort_elapsed)
-            np.testing.assert_allclose(
-                run_ort().astype(np.float32), expected, rtol=tol, atol=tol
-            )
+            np.testing.assert_allclose(run_ort().astype(np.float32), expected, rtol=tol, atol=tol)
             ort_text = f"{ort_elapsed * 1e6:10.2f} us"
         else:
             ort_text = "not supported"
-        print(
-            f"  {label:<9} | onnx-light-cpu={elapsed * 1e6:10.2f} us | onnxruntime={ort_text}"
-        )
+        print(f"  {label:<9} | onnx-light-cpu={elapsed * 1e6:10.2f} us | onnxruntime={ort_text}")
 
 set_kernel_usage_recording(True)
 
@@ -315,11 +307,7 @@ alone_x = np.array(
     [x[i] for i, shape_label in enumerate(shape_labels) if shape_label in alone_results]
 )
 alone_times = np.array(
-    [
-        alone_results[shape_label]
-        for shape_label in shape_labels
-        if shape_label in alone_results
-    ]
+    [alone_results[shape_label] for shape_label in shape_labels if shape_label in alone_results]
 )
 ax_time.bar(
     alone_x + 2.5 * width,
@@ -353,9 +341,7 @@ ax_overhead.plot(
     label="onnxruntime float16",
     color=colors["float16"],
 )
-ax_overhead.axhline(
-    1.0, color="grey", linewidth=0.8, linestyle=":", label="float32 baseline"
-)
+ax_overhead.axhline(1.0, color="grey", linewidth=0.8, linestyle=":", label="float32 baseline")
 ax_overhead.set_ylabel("time relative to float32")
 ax_overhead.set_title("float16 / bfloat16 widen/round-trip overhead")
 ax_overhead.tick_params(axis="x", labelrotation=0, labelsize=8)
