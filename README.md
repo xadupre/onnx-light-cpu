@@ -144,6 +144,11 @@ sess = ReferenceEvaluator(model)  # any model containing an Abs node
 integration (`-DONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON`); it wraps the compiled
 `onnx_light_cpu.onnx_py._cpuregister.register_all_kernels()` binding.
 
+`register_kernels()` registers the kernels *process-wide*, so every
+`ReferenceEvaluator` created afterwards uses them. To override an operator for a
+single session only, use onnx-light's per-session
+`sess.register_custom_kernel("", "Abs", my_abs)` hook instead.
+
 > **Registration seems ignored?** The kernels only take effect when
 > `onnx-light-cpu` links the *same* `lib_onnx_core` that the running
 > `onnx_light` package uses. Building the integration from an onnx-light source

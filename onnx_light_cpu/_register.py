@@ -49,6 +49,11 @@ def register_kernels(sess: Any = None) -> Any:
     onnx-light's runtime (and therefore any model run through
     ``ReferenceEvaluator``) resolves to the onnx-light-cpu kernel.
 
+    The registration is process-wide: it affects every ``ReferenceEvaluator``
+    created afterwards, not just one session. To override an operator for a
+    single session only, use onnx-light's per-session
+    ``ReferenceEvaluator.register_custom_kernel`` hook instead.
+
     Parameters
     ----------
     sess:
