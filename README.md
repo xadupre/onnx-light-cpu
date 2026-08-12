@@ -77,6 +77,14 @@ cmake --build build
 ctest --test-dir build
 ```
 
+The shared kernel thread pool uses at most six threads by default. This avoids
+oversubscribing memory-bound element-wise kernels on SMT and hybrid CPUs. Tune
+the limit for a target machine at build time:
+
+```bash
+cmake -S . -B build -DONNX_LIGHT_CPU_MAX_THREADS=4
+```
+
 ### AVX-512 support
 
 To enable AVX-512 codepaths (compiled and usable on AVX-512 CPUs):

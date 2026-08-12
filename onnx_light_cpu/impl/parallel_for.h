@@ -50,14 +50,34 @@ inline constexpr int64_t kParallelForGrainSize = 1 << 15; // 32768 work units
 /// never falls back to a scalar remainder in the middle of the range.
 inline constexpr int64_t kParallelForSimdWidthBytes = 64;
 
+#ifndef ONNX_LIGHT_CPU_MAX_THREADS
+#define ONNX_LIGHT_CPU_MAX_THREADS 6
+#endif
+
+static_assert(ONNX_LIGHT_CPU_MAX_THREADS > 0,
+              "ONNX_LIGHT_CPU_MAX_THREADS must be a positive integer");
+
+/// Maximum number of threads allowed to participate in a parallel region.
+///
+/// Element-wise kernels are frequently memory-bandwidth bound, so using every
+/// logical CPU is counterproductive on SMT and hybrid processors. Builds can
+/// override the conservative default through the CMake
+/// ``ONNX_LIGHT_CPU_MAX_THREADS`` setting.
+inline constexpr int64_t kParallelForMaxThreads = ONNX_LIGHT_CPU_MAX_THREADS;
+
 /// Returns the number of participating threads :cpp:func:`ParallelFor` may use.
 ///
-/// Resolves to ``std::thread::hardware_concurrency()``, falling back to ``1``
-/// when the hardware count is not available. The result is always ``>= 1`` and
-/// counts the calling thread, which always participates in the work.
+/// Resolves ``std::thread::hardware_concurrency()`` once, caps it at
+/// :cpp:var:`kParallelForMaxThreads`, and falls back to ``1`` when the hardware
+/// count is not available. The result is always ``>= 1`` and counts the calling
+/// thread, which always participates in the work.
 inline int64_t ParallelForThreadCount() noexcept {
-  const unsigned int cores = std::thread::hardware_concurrency();
-  return cores == 0 ? 1 : static_cast<int64_t>(cores);
+  static const int64_t thread_count = []() {
+    const unsigned int cores = std::thread::hardware_concurrency();
+    const int64_t available = cores == 0 ? int64_t{1} : static_cast<int64_t>(cores);
+    return std::min(available, kParallelForMaxThreads);
+  }();
+  return thread_count;
 }
 
 /// Number of ``T`` elements the widest SIMD register processes at once.

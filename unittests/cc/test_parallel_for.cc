@@ -17,6 +17,7 @@
 namespace {
 
 using onnx_light_cpu::kParallelForGrainSize;
+using onnx_light_cpu::kParallelForMaxThreads;
 using onnx_light_cpu::ParallelFor;
 using onnx_light_cpu::ParallelForBlockCount;
 using onnx_light_cpu::ParallelForSimdLanes;
@@ -25,6 +26,13 @@ using onnx_light_cpu::ParallelForThreadCount;
 // ---------------------------------------------------------------------------
 // Cost model: ParallelForBlockCount
 // ---------------------------------------------------------------------------
+
+TEST(ParallelForThreadCount, IsStableAndCapped) {
+  const int64_t first = ParallelForThreadCount();
+  EXPECT_EQ(ParallelForThreadCount(), first);
+  EXPECT_GE(first, 1);
+  EXPECT_LE(first, kParallelForMaxThreads);
+}
 
 TEST(ParallelForBlockCount, NonPositiveTotalIsZero) {
   EXPECT_EQ(ParallelForBlockCount(0), 0);
