@@ -54,7 +54,7 @@ jobs:
           # as onnx_core/runtime/tensor_compare.h that are not yet in a tag.
           git clone --depth 1 https://github.com/xadupre/onnx-light.git /tmp/onnx-light
           cmake -S /tmp/onnx-light -B /tmp/onnx-light/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/tmp/onnx-light/install -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
-          cmake --build /tmp/onnx-light/build --config Release --parallel
+          cmake --build /tmp/onnx-light/build --config Release --parallel --verbose
           cmake --install /tmp/onnx-light/build --config Release
           pip install /tmp/onnx-light
           echo "CMAKE_PREFIX_PATH=/tmp/onnx-light/install${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}" >> "$GITHUB_ENV"
@@ -73,7 +73,7 @@ jobs:
       - name: Build and install package with docs extras
         env:
           SCCACHE_GHA_ENABLED: "true"
-        run: pip install -C build-dir=build -C cmake.build-type=Release -C cmake.define.ONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON -C cmake.define.ONNX_LIGHT_CPU_BUILD_TESTS=ON -C cmake.define.CMAKE_C_COMPILER_LAUNCHER=sccache -C cmake.define.CMAKE_CXX_COMPILER_LAUNCHER=sccache -e .[docs,dev] -v
+        run: pip install -C build-dir=build -C cmake.build-type=Release -C cmake.verbose=true -C cmake.define.ONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON -C cmake.define.ONNX_LIGHT_CPU_BUILD_TESTS=ON -C cmake.define.CMAKE_C_COMPILER_LAUNCHER=sccache -C cmake.define.CMAKE_CXX_COMPILER_LAUNCHER=sccache -e .[docs,dev] -v
 
       - name: pip freeze
         run: pip freeze
