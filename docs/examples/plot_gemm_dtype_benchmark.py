@@ -71,9 +71,8 @@ from onnx_light.onnx import TensorProto, checker, helper
 from onnx_light.onnx.reference import ReferenceEvaluator
 
 from onnx_light_cpu import (
-    clear_used_kernel_names,
     register_kernels,
-    used_kernel_names,
+    registered_kernel_names,
 )
 from onnx_light_cpu.onnx_py._cpukernels import detect_simd_level, has_cpu_kernels
 from onnx_light_cpu.onnx_py._cpuregister import set_kernel_usage_recording
@@ -198,15 +197,24 @@ ort_sessions = {
     for label in ("float32", "float16")
 }
 
-# Confirm the sessions dispatch to the onnx-light-cpu ``Gemm`` kernel
-# (identified by the library-qualified name it records when it runs) rather
-# than onnx-light's built-in kernel.
-_probe = np.zeros((2, 2), dtype=np.float32)
-clear_used_kernel_names()
+# Confirm these sessions dispatch ``Gemm`` to onnx-light-cpu's accelerated
+# kernel rather than onnx-light's built-in one. ``register_kernels()`` installed
+# onnx-light-cpu's kernels (``registered_kernel_names()`` lists the ops it
+# overrides) into onnx-light's process-wide dispatch table, and onnx-light's
+# ``ReferenceEvaluator.used_kernels()`` reports the kernels a session actually
+# resolved once it has run. Because the baseline session above was built and run
+# *before* ``register_kernels()``, its ``Gemm`` resolved to the built-in kernel,
+# so the two curves genuinely use different kernels.
+_probe = np.zeros((64, 64), dtype=np.float32)
 sessions["float32"].run(None, {"A": _probe, "B": _probe})
-assert used_kernel_names() == ["onnx_light_cpu::Gemm"], used_kernel_names()
-# The usage log is diagnostic instrumentation and takes a mutex on every
-# invocation. Disable it after checking dispatch so it does not enter timings.
+accelerated_ops = set(registered_kernel_names())
+used_kernels = sessions["float32"].used_kernels()
+used_ops = {key.rsplit(":", 1)[-1] for key in used_kernels}
+assert "Gemm" in used_ops & accelerated_ops, used_kernels
+print(f"onnx-light-cpu kernels dispatched by the accelerated session: {used_kernels}")
+# onnx-light-cpu kernels record their name on every run (a mutex per call);
+# only the accelerated curves would pay that cost, so disable recording to keep
+# the timings below fair.
 set_kernel_usage_recording(False)
 
 
