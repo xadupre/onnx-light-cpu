@@ -107,6 +107,18 @@ else()
       "SIMD compiler flags for kernel sources (e.g. /arch:AVX2, /arch:AVX512).")
 endif()
 
+# Element-wise kernels such as Abs are commonly memory-bandwidth bound. Using
+# every logical CPU on hybrid/SMT systems increases wake-up and memory
+# contention without increasing throughput, so keep a conservative default
+# while allowing builds to tune the shared pool for their target machine.
+set(ONNX_LIGHT_CPU_MAX_THREADS "6" CACHE STRING
+    "Maximum number of threads participating in the shared kernel thread pool.")
+if(NOT ONNX_LIGHT_CPU_MAX_THREADS MATCHES "^[1-9][0-9]*$")
+  message(FATAL_ERROR
+      "ONNX_LIGHT_CPU_MAX_THREADS must be a positive integer, got "
+      "'${ONNX_LIGHT_CPU_MAX_THREADS}'.")
+endif()
+
 # gemm_kernel_avx512.cc carries a dedicated AVX-512 Gemm micro-kernel that is
 # compiled with an extra -mavx512f *on top of* the flags above (see the
 # per-file COMPILE_OPTIONS override below), regardless of
@@ -166,6 +178,8 @@ target_include_directories(lib_onnx_light_cpu PUBLIC
 )
 set_property(TARGET lib_onnx_light_cpu PROPERTY POSITION_INDEPENDENT_CODE ON)
 target_compile_features(lib_onnx_light_cpu PUBLIC cxx_std_20)
+target_compile_definitions(lib_onnx_light_cpu PUBLIC
+    ONNX_LIGHT_CPU_MAX_THREADS=${ONNX_LIGHT_CPU_MAX_THREADS})
 
 # The kernels dispatch large ranges through the header-only ParallelFor helper,
 # which uses std::thread; link the platform threading library.
