@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "onnx_light_cpu/backend_test/gemm_backend_test.h"
+#include "onnx_light_cpu/backend_test/cases/math/include_math_cases.h"
 
 #include "onnx_light_cpu/kernels/math/gemm_kernel.h"
 

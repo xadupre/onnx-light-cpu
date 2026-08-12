@@ -25,7 +25,7 @@
 // exercise the accelerated kernels end to end, exactly like a model run through
 // onnx-light itself.
 
-#include "onnx_light_cpu/backend_test/kernel_backend_test.h"
+#include "onnx_light_cpu/backend_test/collect_test_cases.h"
 #include "onnx_light_cpu/kernels/register_kernels.h"
 
 #include "onnx_core/backend_test/test_case.h"

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "onnx_light_cpu/backend_test/log_backend_test.h"
+#include "onnx_light_cpu/backend_test/cases/math/include_math_cases.h"
 
 #include "onnx_light_cpu/kernels/math/exp_log_kernel.h"
 
@@ -34,10 +34,10 @@ using rt_ns::KernelContext;
 using rt_ns::OpsetId;
 using rt_ns::Tensor;
 
-// Builds a single-input / single-output unary ``Log`` NodeProto.
-NodeProto MakeLogNode() {
+// Builds a single-input / single-output unary ``Exp`` NodeProto.
+NodeProto MakeExpNode() {
   NodeProto node;
-  node.set_op_type("Log");
+  node.set_op_type("Exp");
   node.add_input("x");
   node.add_output("y");
   return node;
@@ -56,37 +56,33 @@ Tensor MakeBfloat16Tensor(const std::vector<int64_t> &shape, const std::vector<f
 
 } // namespace
 
-// Log — covers float32, float64, float16, bfloat16.
-void RegisterCpuLogCases(std::vector<TestCase> &registry, TestMode mode) {
+// Exp — covers float32, float64, float16, bfloat16.
+void RegisterCpuExpCases(std::vector<TestCase> &registry, TestMode mode) {
   const OpsetId opset = DefaultOpset(13);
-  const onnx_light_cpu::LogKernel log_kernel{KernelContext{opset}};
+  const onnx_light_cpu::ExpKernel exp_kernel{KernelContext{opset}};
   const std::vector<int64_t> shape = {2, 3};
-  const std::vector<float> f = {0.5f, 1.0f, 1.5f, 2.0f, 3.0f, 4.0f};
+  const std::vector<float> f = {-2.0f, -1.0f, 0.0f, 0.5f, 1.0f, 2.0f};
 
   if (mode == TestMode::BENCHMARK) {
-    // Timing-only case: the benchmark helper draws normally-distributed inputs
-    // (matching onnx-light's own ``Log`` benchmark), so some values are negative
-    // and map to NaN. That is fine for a *timing* case, which is not compared
-    // for numeric correctness.
-    ExpectBenchmarkUnaryFloat("Log", log_kernel, "test_cpu_log_benchmark", opset, registry);
+    ExpectBenchmarkUnaryFloat("Exp", exp_kernel, "test_cpu_exp_benchmark", opset, registry);
     return;
   }
 
-  Expect(registry, MakeLogNode(), "test_cpu_log_float32", {opset}, [=]() -> IoData {
+  Expect(registry, MakeExpNode(), "test_cpu_exp_float32", {opset}, [=]() -> IoData {
     Tensor x = Tensor::FromFloat("", shape, f);
-    return IoData{{x}, {log_kernel(x)}};
+    return IoData{{x}, {exp_kernel(x)}};
   });
-  Expect(registry, MakeLogNode(), "test_cpu_log_float64", {opset}, [=]() -> IoData {
-    Tensor x = Tensor::FromDouble("", shape, {0.5, 1.0, 1.5, 2.0, 3.0, 4.0});
-    return IoData{{x}, {log_kernel(x)}};
+  Expect(registry, MakeExpNode(), "test_cpu_exp_float64", {opset}, [=]() -> IoData {
+    Tensor x = Tensor::FromDouble("", shape, {-2.0, -1.0, 0.0, 0.5, 1.0, 2.0});
+    return IoData{{x}, {exp_kernel(x)}};
   });
-  Expect(registry, MakeLogNode(), "test_cpu_log_float16", {opset}, [=]() -> IoData {
+  Expect(registry, MakeExpNode(), "test_cpu_exp_float16", {opset}, [=]() -> IoData {
     Tensor x = rt_ns::MakeFloat16Tensor("", shape, f);
-    return IoData{{x}, {log_kernel(x)}};
+    return IoData{{x}, {exp_kernel(x)}};
   });
-  Expect(registry, MakeLogNode(), "test_cpu_log_bfloat16", {opset}, [=]() -> IoData {
+  Expect(registry, MakeExpNode(), "test_cpu_exp_bfloat16", {opset}, [=]() -> IoData {
     Tensor x = MakeBfloat16Tensor(shape, f);
-    return IoData{{x}, {log_kernel(x)}};
+    return IoData{{x}, {exp_kernel(x)}};
   });
 }
 
