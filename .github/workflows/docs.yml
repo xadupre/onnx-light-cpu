@@ -46,8 +46,9 @@ jobs:
         run: |
           # onnx-light's CMake calls find_package(nanobind) via "python -m
           # nanobind --cmake_dir", so nanobind (and scikit-build-core) must be
-          # importable before configuring it.
-          pip install nanobind scikit-build-core
+          # importable before configuring it. Recent onnx-light sources also
+          # query numpy.get_include() at configure time, so numpy is required too.
+          pip install nanobind scikit-build-core numpy
           # Clone the latest onnx-light sources (default branch) rather than a
           # tagged release: the C++ backend test depends on recent additions such
           # as onnx_core/runtime/tensor_compare.h that are not yet in a tag.
