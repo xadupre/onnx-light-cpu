@@ -2,19 +2,33 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""End-to-end Python tests for every implemented onnx-light-cpu kernel.
+"""Backend-test driven end-to-end tests for the onnx-light-cpu kernels.
 
-The Python surface no longer exposes numpy-like kernel functions; the
-SIMD-accelerated ``Abs``, ``Exp``, ``Log``, ``Gemm`` and ``Not`` kernels are
-only reachable through onnx-light's runtime after
-:func:`onnx_light_cpu.register_kernels` installs them into onnx-light's shared
-C++ ``KernelDispatchTable``. These tests therefore build a single-node ONNX
-model per operator and run it through onnx-light's ``ReferenceEvaluator`` to
-check that each kernel produces the expected result.
+onnx-light exposes a global ONNX backend test case registry through
+:func:`onnx_light.onnx.backend.collect_test_cases`. onnx-light-cpu ships its own
+backend test cases -- named ``test_cpu_*`` and covering every element type each
+accelerated kernel implements -- in a dedicated C++ *registration* library
+(``lib_onnx_light_cpu_backend_test``). Those cases are installed into that same
+shared registry by :func:`onnx_light_cpu.register_backend_test_cases`.
 
-onnx-light and the ``_cpuregister`` extension (built with
-``ONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON``) are required; when either is missing the
-whole module is skipped via :func:`pytest.importorskip`.
+These tests follow the same steps as the C++ unit test, using onnx-light's
+regular Python API:
+
+* register the onnx-light-cpu backend test cases
+  (:func:`onnx_light_cpu.register_backend_test_cases`),
+* register the accelerated kernels (:func:`onnx_light_cpu.register_kernels`), and
+* for every collected ``test_cpu_*`` case, run its single-node model through
+  onnx-light's ``ReferenceEvaluator`` and check that
+    - the accelerated onnx-light-cpu kernel is the one actually dispatched to
+      (via :func:`onnx_light_cpu.used_kernel_names`), and
+    - its outputs match the reference outputs shipped with the case (using the
+      case's ``rtol``/``atol``).
+
+onnx-light, its backend-test extension (exposed via the ``_cpuregister``
+extension's ``register_backend_test_cases`` binding, built with
+``ONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON`` and onnx-light's ``lib_onnx_backend_test``
+available) and ``ml_dtypes`` (for the ``bfloat16`` numpy dtype) are required;
+when any is missing the whole module is skipped.
 """
 
 from __future__ import annotations
@@ -24,93 +38,105 @@ import pytest
 
 pytest.importorskip("onnx_light")
 pytest.importorskip("onnx_light_cpu.onnx_py._cpuregister")
+pytest.importorskip("ml_dtypes")
+pytest.importorskip("onnx_light.onnx.backend")
 
-from onnx_light.onnx import TensorProto, helper
+import ml_dtypes
+from onnx_light.onnx import TensorProto
+from onnx_light.onnx.backend import collect_test_cases
 from onnx_light.onnx.reference import ReferenceEvaluator
 
 from onnx_light_cpu import (
     clear_used_kernel_names,
+    has_backend_test_cases,
+    register_backend_test_cases,
     register_kernels,
     registered_kernel_names,
     used_kernel_names,
 )
 
+if not has_backend_test_cases():
+    pytest.skip(
+        "onnx-light-cpu was built without onnx-light's backend test registry "
+        "(register_backend_test_cases binding unavailable).",
+        allow_module_level=True,
+    )
 
-def _run(node, inputs, output_types):
-    """Builds a single-node model, registers the kernels and runs it.
+# Operators whose onnx-light-cpu kernel we validate against every ``test_cpu_*``
+# backend test case, mapped to the library-qualified name each kernel records
+# when it runs.
+_TARGET_KERNELS = {
+    "Abs": "onnx_light_cpu::Abs",
+    "Exp": "onnx_light_cpu::Exp",
+    "Log": "onnx_light_cpu::Log",
+    "Gemm": "onnx_light_cpu::Gemm",
+    "Not": "onnx_light_cpu::Not",
+}
 
-    ``inputs`` maps input names to numpy arrays; ``output_types`` maps output
-    names to their ``TensorProto`` element types.
-    """
-    register_kernels()
-    graph_inputs = [
-        helper.make_tensor_value_info(name, _np_to_tp(arr.dtype), list(arr.shape))
-        for name, arr in inputs.items()
-    ]
-    graph_outputs = [
-        helper.make_tensor_value_info(name, tp, None) for name, tp in output_types.items()
-    ]
-    graph = helper.make_graph([node], "test", graph_inputs, graph_outputs)
-    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 18)])
-    sess = ReferenceEvaluator(model)
-    return sess.run(None, inputs)
-
-
-def _np_to_tp(dtype):
-    mapping = {
-        np.dtype(np.float32): TensorProto.FLOAT,
-        np.dtype(np.float64): TensorProto.DOUBLE,
-        np.dtype(np.int64): TensorProto.INT64,
-        np.dtype(np.bool_): TensorProto.BOOL,
-    }
-    return mapping[np.dtype(dtype)]
-
-
-class TestKernelsEndToEnd:
-    @pytest.mark.parametrize("dtype", [np.float32, np.float64, np.int64])
-    def test_abs(self, dtype):
-        x = np.array([-3, -1, 0, 2, 5], dtype=dtype)
-        node = helper.make_node("Abs", ["X"], ["Y"])
-        (y,) = _run(node, {"X": x}, {"Y": _np_to_tp(dtype)})
-        np.testing.assert_array_equal(y, np.abs(x))
-
-    @pytest.mark.parametrize("dtype", [np.float32, np.float64])
-    def test_exp(self, dtype):
-        x = np.array([-2.0, -0.5, 0.0, 1.0, 3.0], dtype=dtype)
-        node = helper.make_node("Exp", ["X"], ["Y"])
-        (y,) = _run(node, {"X": x}, {"Y": _np_to_tp(dtype)})
-        np.testing.assert_allclose(y, np.exp(x), rtol=1e-5)
-
-    @pytest.mark.parametrize("dtype", [np.float32, np.float64])
-    def test_log(self, dtype):
-        x = np.array([0.1, 0.5, 1.0, 2.0, 10.0], dtype=dtype)
-        node = helper.make_node("Log", ["X"], ["Y"])
-        (y,) = _run(node, {"X": x}, {"Y": _np_to_tp(dtype)})
-        np.testing.assert_allclose(y, np.log(x), rtol=1e-5)
-
-    @pytest.mark.parametrize("dtype", [np.float32, np.float64])
-    def test_gemm(self, dtype):
-        a = np.arange(6, dtype=dtype).reshape(2, 3)
-        b = np.arange(12, dtype=dtype).reshape(3, 4)
-        node = helper.make_node("Gemm", ["A", "B"], ["Y"])
-        (y,) = _run(node, {"A": a, "B": b}, {"Y": _np_to_tp(dtype)})
-        np.testing.assert_allclose(y, a @ b, rtol=1e-5)
-
-    def test_not(self):
-        x = np.array([True, False, True, False], dtype=np.bool_)
-        node = helper.make_node("Not", ["X"], ["Y"])
-        (y,) = _run(node, {"X": x}, {"Y": TensorProto.BOOL})
-        np.testing.assert_array_equal(y, np.logical_not(x))
+# ``TensorProto`` element type -> numpy dtype used to decode a backend test
+# case ``Tensor``'s raw little-endian row-major buffer.
+_TP_TO_NP = {
+    int(TensorProto.FLOAT): np.float32,
+    int(TensorProto.DOUBLE): np.float64,
+    int(TensorProto.INT8): np.int8,
+    int(TensorProto.INT16): np.int16,
+    int(TensorProto.INT32): np.int32,
+    int(TensorProto.INT64): np.int64,
+    int(TensorProto.UINT8): np.uint8,
+    int(TensorProto.BOOL): np.bool_,
+    int(TensorProto.FLOAT16): np.float16,
+    int(TensorProto.BFLOAT16): ml_dtypes.bfloat16,
+}
 
 
-class TestUsedKernelNames:
-    """Checks the kernels a model actually dispatches to are the onnx-light-cpu
-    ones, identified by the library-qualified name each kernel records when it
-    runs (rather than onnx-light's identically-behaving built-in kernels)."""
+def _to_numpy(tensor):
+    """Decodes a backend test case ``Tensor`` into a numpy array."""
+    dtype = _TP_TO_NP[int(tensor.data_type)]
+    shape = tuple(int(d) for d in tensor.shape)
+    return np.frombuffer(tensor.raw_data(), dtype=dtype).reshape(shape)
+
+
+def _single_node_op_type(tc):
+    """Returns the op_type when ``tc``'s graph is a single node, else ``None``."""
+    nodes = list(tc.model.graph.node)
+    if len(nodes) != 1:
+        return None
+    return nodes[0].op_type
+
+
+def _collect_cpu_cases():
+    """Registers and collects the onnx-light-cpu ``test_cpu_*`` backend cases."""
+    register_backend_test_cases()
+    cases = []
+    for op_type in _TARGET_KERNELS:
+        for tc in collect_test_cases(op_type):
+            if (
+                tc.name.startswith("test_cpu_")
+                and _single_node_op_type(tc) == op_type
+                and tc.data_sets
+            ):
+                cases.append(tc)
+    return cases
+
+
+_CASES = _collect_cpu_cases()
+
+
+def _assert_close(actual, expected, rtol, atol):
+    if expected.dtype == np.bool_ or np.issubdtype(expected.dtype, np.integer):
+        np.testing.assert_array_equal(actual, expected)
+    else:
+        np.testing.assert_allclose(
+            actual.astype(np.float64), expected.astype(np.float64), rtol=rtol, atol=atol
+        )
+
+
+class TestBackendCases:
+    def setup_method(self):
+        register_kernels()
 
     def test_registered_kernel_names(self):
-        names = registered_kernel_names()
-        assert names == {
+        assert registered_kernel_names() == {
             "Abs": "onnx_light_cpu::Abs",
             "Exp": "onnx_light_cpu::Exp",
             "Log": "onnx_light_cpu::Log",
@@ -118,73 +144,36 @@ class TestUsedKernelNames:
             "Not": "onnx_light_cpu::Not",
         }
 
-    @pytest.mark.parametrize(
-        ("op_type", "inputs", "output_type", "expected_name"),
-        [
-            (
-                "Abs",
-                {"X": np.array([-1.0, 2.0], dtype=np.float32)},
-                TensorProto.FLOAT,
-                "onnx_light_cpu::Abs",
-            ),
-            (
-                "Exp",
-                {"X": np.array([0.0, 1.0], dtype=np.float32)},
-                TensorProto.FLOAT,
-                "onnx_light_cpu::Exp",
-            ),
-            (
-                "Log",
-                {"X": np.array([1.0, 2.0], dtype=np.float32)},
-                TensorProto.FLOAT,
-                "onnx_light_cpu::Log",
-            ),
-            (
-                "Not",
-                {"X": np.array([True, False], dtype=np.bool_)},
-                TensorProto.BOOL,
-                "onnx_light_cpu::Not",
-            ),
-        ],
-    )
-    def test_single_op_uses_accelerated_kernel(self, op_type, inputs, output_type, expected_name):
-        register_kernels()
-        clear_used_kernel_names()
-        node = helper.make_node(op_type, list(inputs), ["Y"])
-        _run(node, inputs, {"Y": output_type})
-        assert used_kernel_names() == [expected_name]
+    def test_every_target_op_has_backend_cases(self):
+        """Guards against the parametrized test silently collecting nothing."""
+        counts = dict.fromkeys(_TARGET_KERNELS, 0)
+        for tc in _CASES:
+            counts[_single_node_op_type(tc)] += 1
+        for op_type, count in counts.items():
+            assert count > 0, f"no onnx-light-cpu backend test cases collected for {op_type}"
 
-    def test_gemm_uses_accelerated_kernel(self):
-        register_kernels()
-        clear_used_kernel_names()
-        a = np.arange(6, dtype=np.float32).reshape(2, 3)
-        b = np.arange(12, dtype=np.float32).reshape(3, 4)
-        node = helper.make_node("Gemm", ["A", "B"], ["Y"])
-        _run(node, {"A": a, "B": b}, {"Y": TensorProto.FLOAT})
-        assert used_kernel_names() == ["onnx_light_cpu::Gemm"]
+    @pytest.mark.parametrize("tc", _CASES, ids=lambda tc: tc.name)
+    def test_backend_case(self, tc):
+        """Runs one onnx-light-cpu backend test case through the accelerated
+        kernels and checks the outputs match the reference and the accelerated
+        kernel ran.
+        """
+        op_type = _single_node_op_type(tc)
+        expected_kernel = _TARGET_KERNELS[op_type]
 
-    def test_multiple_nodes_record_every_kernel(self):
-        register_kernels()
-        clear_used_kernel_names()
-        x = np.array([-1.0, 2.0, -3.0], dtype=np.float32)
-        nodes = [
-            helper.make_node("Abs", ["X"], ["A"]),
-            helper.make_node("Exp", ["A"], ["E"]),
-            helper.make_node("Log", ["E"], ["Y"]),
-        ]
-        graph = helper.make_graph(
-            nodes,
-            "chain",
-            [helper.make_tensor_value_info("X", TensorProto.FLOAT, [3])],
-            [helper.make_tensor_value_info("Y", TensorProto.FLOAT, None)],
-        )
-        model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 18)])
-        sess = ReferenceEvaluator(model)
-        sess.run(None, {"X": x})
-        assert sorted(used_kernel_names()) == sorted(
-            [
-                "onnx_light_cpu::Abs",
-                "onnx_light_cpu::Exp",
-                "onnx_light_cpu::Log",
-            ]
-        )
+        sess = ReferenceEvaluator(tc.model)
+        input_names = [vi.name for vi in tc.model.graph.input]
+        rtol = tc.rtol if tc.rtol is not None else 1e-5
+        atol = tc.atol if tc.atol is not None else 1e-6
+
+        for ds in tc.data_sets:
+            assert len(ds.inputs) == len(input_names)
+            feeds = {name: _to_numpy(t) for name, t in zip(input_names, ds.inputs, strict=True)}
+
+            clear_used_kernel_names()
+            got = sess.run(None, feeds)
+            assert expected_kernel in used_kernel_names()
+
+            assert len(got) == len(ds.outputs)
+            for actual, expected in zip(got, ds.outputs, strict=True):
+                _assert_close(actual, _to_numpy(expected), rtol, atol)

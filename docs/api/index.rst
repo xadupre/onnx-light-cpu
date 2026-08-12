@@ -271,3 +271,19 @@ Registering kernels with onnx-light
    Clears the record of onnx-light-cpu kernels that have run, so a subsequent
    :func:`used_kernel_names` call only reports the kernels used after this call.
    Wraps :func:`onnx_light_cpu.onnx_py._cpuregister.clear_used_kernel_names`.
+
+.. py:function:: register_backend_test_cases() -> None
+
+   Registers the onnx-light-cpu ``test_cpu_*`` backend test cases into
+   onnx-light's shared C++ backend test registry, so they are returned by
+   :func:`onnx_light.onnx.backend.collect_test_cases` alongside onnx-light's own
+   cases and can be driven through the regular ``ReferenceEvaluator`` API. The
+   registration is process-wide and idempotent, and only usable when
+   :func:`has_backend_test_cases` reports ``True``.
+
+.. py:function:: has_backend_test_cases() -> bool
+
+   Returns whether the ``register_backend_test_cases`` binding is available. It
+   is only built when the ``_cpuregister`` extension links onnx-light's backend
+   test registry (``lib_onnx_backend_test``). When ``False``,
+   :func:`register_backend_test_cases` is not usable.

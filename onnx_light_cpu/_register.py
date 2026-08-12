@@ -121,3 +121,44 @@ def clear_used_kernel_names() -> None:
     )
 
     _clear_used_kernel_names()
+
+
+def register_backend_test_cases() -> None:
+    """Registers the onnx-light-cpu backend test cases into onnx-light's registry.
+
+    onnx-light ships its ONNX backend test cases as a C++-registered registry
+    exposed to Python through
+    :func:`onnx_light.onnx.backend.collect_test_cases`. onnx-light-cpu adds its
+    own ``test_cpu_*`` cases (covering every element type each accelerated kernel
+    implements) into that same shared registry. After this call those cases are
+    returned by :func:`onnx_light.onnx.backend.collect_test_cases` alongside
+    onnx-light's own, so they can be driven through onnx-light's regular
+    ``ReferenceEvaluator`` API exactly like a built-in operator category.
+
+    The registration is process-wide and idempotent. It relies on the
+    ``register_backend_test_cases`` binding, which is only present when the
+    ``_cpuregister`` extension was built with onnx-light's backend test registry
+    available; :data:`onnx_light_cpu.has_backend_test_cases` reports whether it
+    is.
+    """
+    import_module("onnx_light.onnx.reference")
+
+    from .onnx_py._cpuregister import (  # pyrefly: ignore[missing-import]
+        register_backend_test_cases as _register_backend_test_cases,
+    )
+
+    _register_backend_test_cases()
+
+
+def has_backend_test_cases() -> bool:
+    """Returns whether the ``register_backend_test_cases`` binding is available.
+
+    It is only built when the ``_cpuregister`` extension links onnx-light's
+    backend test registry (``lib_onnx_backend_test``). When ``False``,
+    :func:`register_backend_test_cases` is not usable.
+    """
+    from .onnx_py._cpuregister import (  # pyrefly: ignore[missing-import]
+        has_backend_test_cases as _has_backend_test_cases,
+    )
+
+    return bool(_has_backend_test_cases)
