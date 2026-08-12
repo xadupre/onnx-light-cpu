@@ -176,12 +176,10 @@ def run_light(a, b):
 _probe = rng.standard_normal((size_grid[0], size_grid[0])).astype(np.float32)
 run_light(_probe, _probe)
 accelerated_ops = set(registered_kernel_names())
-used_ops = {key.rsplit(":", 1)[-1] for key in light_session.used_kernels()}
-assert "Gemm" in used_ops & accelerated_ops, light_session.used_kernels()
-print(
-    "onnx-light-cpu kernels dispatched by the accelerated session: "
-    f"{light_session.used_kernels()}"
-)
+used_kernels = light_session.used_kernels()
+used_ops = {key.rsplit(":", 1)[-1] for key in used_kernels}
+assert "Gemm" in used_ops & accelerated_ops, used_kernels
+print(f"onnx-light-cpu kernels dispatched by the accelerated session: {used_kernels}")
 # onnx-light-cpu kernels record their name on every run (a mutex per call);
 # only the accelerated curve would pay that cost, so disable recording to keep
 # the timings below fair.

@@ -208,12 +208,10 @@ ort_sessions = {
 _probe = np.zeros((64, 64), dtype=np.float32)
 sessions["float32"].run(None, {"A": _probe, "B": _probe})
 accelerated_ops = set(registered_kernel_names())
-used_ops = {key.rsplit(":", 1)[-1] for key in sessions["float32"].used_kernels()}
-assert "Gemm" in used_ops & accelerated_ops, sessions["float32"].used_kernels()
-print(
-    "onnx-light-cpu kernels dispatched by the accelerated session: "
-    f"{sessions['float32'].used_kernels()}"
-)
+used_kernels = sessions["float32"].used_kernels()
+used_ops = {key.rsplit(":", 1)[-1] for key in used_kernels}
+assert "Gemm" in used_ops & accelerated_ops, used_kernels
+print(f"onnx-light-cpu kernels dispatched by the accelerated session: {used_kernels}")
 # onnx-light-cpu kernels record their name on every run (a mutex per call);
 # only the accelerated curves would pay that cost, so disable recording to keep
 # the timings below fair.
