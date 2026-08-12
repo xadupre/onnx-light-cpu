@@ -17,6 +17,10 @@ namespace onnx_light_cpu {
 /// Dispatches to the best available SIMD path at runtime.
 void AbsFloat32(const float *input, float *output, std::size_t count);
 
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
+void AbsFloat32_AVX512(const float *input, float *output, std::size_t count);
+#endif
+
 /// Computes elementwise absolute value: out[i] = |input[i]| for float64.
 /// Dispatches to the best available SIMD path at runtime.
 void AbsFloat64(const double *input, double *output, std::size_t count);
