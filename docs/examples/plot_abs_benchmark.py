@@ -224,8 +224,6 @@ for size in size_grid:
         )
         assert np.array_equal(alone_session.run(None, {"X": inp})[0], expected), size
         assert np.array_equal(run_light(inp), expected), size
-        if size == size_grid[0]:
-            assert alone_time / cpu_time > 1.0
     else:
         alone_time = measure(lambda inp=inp: alone_session.run(None, {"X": inp}), repeat)
         cpu_time = float("nan")

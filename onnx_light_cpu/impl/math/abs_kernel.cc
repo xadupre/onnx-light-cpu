@@ -31,8 +31,6 @@ namespace onnx_light_cpu {
 // than staying inline. One thirty-second of a work unit postpones parallelism
 // until roughly one million elements.
 inline constexpr double kAbsCostPerElement = 1.0 / 32.0;
-inline constexpr std::size_t kAbsParallelThreshold =
-    static_cast<std::size_t>(kParallelForGrainSize) * 32;
 
 // ---------------------------------------------------------------------------
 // AbsFloat32 implementations
@@ -128,11 +126,6 @@ void AbsFloat32_Dispatch(const float *input, float *output, std::size_t count) {
 void AbsFloat32(const float *input, float *output, std::size_t count) {
   if (count == 0)
     return;
-  if (count < kAbsParallelThreshold) {
-    // ParallelFor would keep this range inline; avoid its cost-model overhead.
-    AbsFloat32_Dispatch(input, output, count);
-    return;
-  }
   ParallelFor(static_cast<std::int64_t>(count), kAbsCostPerElement, ParallelForSimdLanes<float>(),
               [input, output](std::int64_t begin, std::int64_t end) {
                 AbsFloat32_Dispatch(input + begin, output + begin,
