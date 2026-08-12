@@ -16,8 +16,9 @@
 //   3. drives each registered case through onnx-light's regular runtime API
 //      (``CollectTestCases`` + ``RuntimeContext`` / ``SubgraphSession``),
 //      checking the model output — produced by the onnx-light-cpu kernel the
-//      runtime dispatched to — matches, byte for byte, the reference output
-//      shipped with the case (see ``CompareTensor``).
+//      runtime dispatched to — matches the reference output shipped with the
+//      case, via onnx-light's public ``CompareTensors`` helper (see
+//      ``CompareTensor``).
 //
 // The runtime resolves each node by ``(domain, op_type)`` to whatever kernel is
 // registered, so registering the onnx-light-cpu kernels means these cases
@@ -32,11 +33,11 @@
 #include "onnx_core/runtime/run_nodes.h"
 #include "onnx_core/runtime/runtime_context.h"
 #include "onnx_core/runtime/simple_tensor.h"
+#include "onnx_core/runtime/tensor_compare.h"
 
 #include <gtest/gtest.h>
 
 #include <cstdint>
-#include <cstring>
 #include <string>
 #include <utility>
 #include <vector>
@@ -47,12 +48,14 @@ using namespace ONNX_LIGHT_NAMESPACE;
 using core::backend_test::CollectTestCases;
 using core::backend_test::DataSet;
 using core::backend_test::TestCase;
+using core::runtime::CompareTensors;
 using core::runtime::DefaultOpset;
 using core::runtime::KernelContext;
 using core::runtime::RegisterModelFunctions;
 using core::runtime::RuntimeContext;
 using core::runtime::SubgraphSession;
 using core::runtime::Tensor;
+using core::runtime::TensorComparison;
 using core::runtime::Tensors;
 
 // onnx-light resolves kernels by (domain, op_type) only — never by opset
@@ -62,29 +65,13 @@ using core::runtime::Tensors;
 constexpr int64_t kRuntimeDefaultOpsetVersion = 18;
 
 // Compares a runtime output tensor against the reference output of a backend
-// test case for bit-exact equality, mirroring onnx-light's own backend
-// run-model test (``ExpectTensorBitEqual`` in ``test_backend_run_model.cc``).
-//
-// A bit-exact byte comparison — rather than an ``rtol``/``atol`` tolerance — is
-// the correct check here because every ``test_cpu_*`` case's expected output is
-// produced by the same onnx-light-cpu kernel the runtime dispatches to (see
-// ``kernel_backend_test.cc``). The runtime therefore has to reproduce those
-// exact bytes, so the comparison stays dtype-agnostic and needs no per-type
-// (float / float16 / bfloat16) decoding.
+// test case using onnx-light's public ``CompareTensors`` helper
+// (``onnx_core/runtime/tensor_compare.h``) with the case's ``rtol``/``atol``.
 void CompareTensor(const std::string &case_name, const Tensor &actual, const Tensor &expected,
-                   std::vector<std::string> &failures) {
-  if (actual.data_type != expected.data_type) {
-    failures.push_back(case_name + ": output data type " + std::to_string(actual.data_type) +
-                       " != expected " + std::to_string(expected.data_type));
-    return;
-  }
-  if (actual.shape != expected.shape) {
-    failures.push_back(case_name + ": output shape mismatch");
-    return;
-  }
-  if (actual.size_bytes() != expected.size_bytes() ||
-      std::memcmp(actual.bytes(), expected.bytes(), actual.size_bytes()) != 0) {
-    failures.push_back(case_name + ": output does not match reference");
+                   double rtol, double atol, std::vector<std::string> &failures) {
+  const TensorComparison result = CompareTensors(actual, expected, rtol, atol);
+  if (!result.close) {
+    failures.push_back(case_name + ": " + result.message);
   }
 }
 
@@ -112,7 +99,7 @@ void RunCaseThroughRuntime(const TestCase &tc, std::vector<std::string> &failure
       continue;
     }
     for (size_t i = 0; i < ds.outputs.size(); ++i) {
-      CompareTensor(tc.name, outputs[i], ds.outputs[i], failures);
+      CompareTensor(tc.name, outputs[i], ds.outputs[i], tc.rtol, tc.atol, failures);
     }
   }
 }
