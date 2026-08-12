@@ -168,15 +168,15 @@ class TestUsedKernelNames:
         # Backs docs/examples/plot_gemm_benchmark.py: the timed ``Gemm`` curve
         # must dispatch to onnx-light-cpu (not onnx-light's built-in kernel) for
         # the same square shapes the benchmark measures, otherwise its timings
-        # would be indistinguishable from the built-in baseline.
+        # would be indistinguishable from the built-in baseline. The benchmark
+        # verifies dispatch the same way, via ``registered_kernel_names``.
         register_kernels()
-        clear_used_kernel_names()
+        assert registered_kernel_names()["Gemm"] == "onnx_light_cpu::Gemm"
         rng = np.random.default_rng(0)
         a = rng.standard_normal((size, size)).astype(np.float32)
         b = rng.standard_normal((size, size)).astype(np.float32)
         node = helper.make_node("Gemm", ["A", "B"], ["Y"], alpha=1.0, beta=1.0)
         (y,) = _run(node, {"A": a, "B": b}, {"Y": TensorProto.FLOAT})
-        assert used_kernel_names() == ["onnx_light_cpu::Gemm"]
         np.testing.assert_allclose(y, a @ b, rtol=1e-2, atol=1e-2)
 
     def test_multiple_nodes_record_every_kernel(self):

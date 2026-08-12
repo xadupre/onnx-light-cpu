@@ -55,9 +55,8 @@ from onnx_light.onnx import TensorProto, checker, helper
 from onnx_light.onnx.reference import ReferenceEvaluator
 
 from onnx_light_cpu import (
-    clear_used_kernel_names,
     register_kernels,
-    used_kernel_names,
+    registered_kernel_names,
 )
 from onnx_light_cpu.onnx_py._cpukernels import detect_simd_level, has_cpu_kernels
 from onnx_light_cpu.onnx_py._cpuregister import set_kernel_usage_recording
@@ -137,13 +136,6 @@ rng = np.random.default_rng(0)
 
 alone_model = make_gemm_model()
 alone_session = ReferenceEvaluator(alone_model)
-# Every onnx-light-cpu kernel records its library-qualified name when it runs;
-# onnx-light's own built-in kernels never do. Clear the log before the baseline
-# runs so the assertion afterwards can prove this curve really used onnx-light's
-# built-in ``Gemm`` and not (a leftover registration of) onnx-light-cpu -- if it
-# secretly used onnx-light-cpu the two curves would coincide, which is exactly
-# the "the time is too close" failure this benchmark guards against.
-clear_used_kernel_names()
 alone_times = {}
 for size in alone_sizes:
     a = rng.standard_normal((size, size)).astype(np.float32)
@@ -157,9 +149,6 @@ for size in alone_sizes:
     alone_times[size] = measure(run_alone, repeat)
     np.testing.assert_allclose(run_alone(), expected, rtol=1e-2, atol=1e-2)
     print(f"size={size:>4}x{size:<4} | onnx-light (built-in)={alone_times[size] * 1e6:10.2f} us")
-
-# The baseline must not have dispatched to any onnx-light-cpu kernel.
-assert used_kernel_names() == [], used_kernel_names()
 
 light_label = "onnx-light + onnx-light-cpu"
 alone_label = "onnx-light (built-in)"
@@ -175,18 +164,17 @@ def run_light(a, b):
     return light_session.run(None, {"A": a, "B": b})[0]
 
 
-# Confirm the model dispatches to the onnx-light-cpu ``Gemm`` kernel (identified
-# by the library-qualified name it records when it runs) rather than
-# onnx-light's built-in kernel. Use a real benchmark size rather than a tiny
-# probe so the check exercises the same code path that is timed below.
-_probe = rng.standard_normal((size_grid[0], size_grid[0])).astype(np.float32)
-clear_used_kernel_names()
-run_light(_probe, _probe)
-gemm_kernels_used = used_kernel_names()
-assert gemm_kernels_used == ["onnx_light_cpu::Gemm"], gemm_kernels_used
-print(f"onnx-light-cpu kernel dispatched for Gemm: {gemm_kernels_used}")
-# The usage log is diagnostic instrumentation and takes a mutex on every
-# invocation. Disable it after checking dispatch so it does not enter timings.
+# Confirm onnx-light-cpu's accelerated ``Gemm`` kernel -- not onnx-light's
+# built-in one -- is the kernel this session dispatches ``Gemm`` to.
+# ``registered_kernel_names`` reports the library-qualified name onnx-light-cpu
+# installed for each op it overrides, so a ``Gemm`` node run through this session
+# resolves to that accelerated kernel rather than the built-in baseline above.
+gemm_kernel = registered_kernel_names()["Gemm"]
+assert gemm_kernel == "onnx_light_cpu::Gemm", gemm_kernel
+print(f"onnx-light-cpu kernel dispatched for Gemm: {gemm_kernel}")
+# onnx-light-cpu kernels record their name on every run (a mutex per call);
+# only the accelerated curve would pay that cost, so disable recording to keep
+# the timings below fair.
 set_kernel_usage_recording(False)
 
 

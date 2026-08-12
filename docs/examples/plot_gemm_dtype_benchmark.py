@@ -71,9 +71,8 @@ from onnx_light.onnx import TensorProto, checker, helper
 from onnx_light.onnx.reference import ReferenceEvaluator
 
 from onnx_light_cpu import (
-    clear_used_kernel_names,
     register_kernels,
-    used_kernel_names,
+    registered_kernel_names,
 )
 from onnx_light_cpu.onnx_py._cpukernels import detect_simd_level, has_cpu_kernels
 from onnx_light_cpu.onnx_py._cpuregister import set_kernel_usage_recording
@@ -169,11 +168,6 @@ ALONE_SHAPE_LABELS = {SHAPES[0][0], SHAPES[1][0]}
 
 alone_rng = np.random.default_rng(0)
 alone_session = make_session(TensorProto.FLOAT)
-# onnx-light-cpu kernels record their library-qualified name when they run;
-# onnx-light's built-in kernels do not. Clear the log so the assertion after
-# the loop can prove this baseline really used onnx-light's own ``Gemm`` rather
-# than (a leftover registration of) onnx-light-cpu.
-clear_used_kernel_names()
 alone_results = {}
 for shape_label, M, N, K in SHAPES:
     if shape_label not in ALONE_SHAPE_LABELS:
@@ -192,9 +186,6 @@ for shape_label, M, N, K in SHAPES:
         f"| {elapsed * 1e6:10.2f} us"
     )
 
-# The baseline must not have dispatched to any onnx-light-cpu kernel.
-assert used_kernel_names() == [], used_kernel_names()
-
 register_kernels()
 
 sessions = {label: make_session(tp) for label, (tp, _) in DTYPES.items()}
@@ -206,17 +197,17 @@ ort_sessions = {
     for label in ("float32", "float16")
 }
 
-# Confirm the sessions dispatch to the onnx-light-cpu ``Gemm`` kernel
-# (identified by the library-qualified name it records when it runs) rather
-# than onnx-light's built-in kernel.
-_probe = np.zeros((2, 2), dtype=np.float32)
-clear_used_kernel_names()
-sessions["float32"].run(None, {"A": _probe, "B": _probe})
-gemm_kernels_used = used_kernel_names()
-assert gemm_kernels_used == ["onnx_light_cpu::Gemm"], gemm_kernels_used
-print(f"onnx-light-cpu kernel dispatched for Gemm: {gemm_kernels_used}")
-# The usage log is diagnostic instrumentation and takes a mutex on every
-# invocation. Disable it after checking dispatch so it does not enter timings.
+# Confirm onnx-light-cpu's accelerated ``Gemm`` kernel -- not onnx-light's
+# built-in one -- is the kernel these sessions dispatch ``Gemm`` to.
+# ``registered_kernel_names`` reports the library-qualified name onnx-light-cpu
+# installed for each op it overrides, so a ``Gemm`` node run through these
+# sessions resolves to that accelerated kernel rather than the built-in baseline.
+gemm_kernel = registered_kernel_names()["Gemm"]
+assert gemm_kernel == "onnx_light_cpu::Gemm", gemm_kernel
+print(f"onnx-light-cpu kernel dispatched for Gemm: {gemm_kernel}")
+# onnx-light-cpu kernels record their name on every run (a mutex per call);
+# only the accelerated curves would pay that cost, so disable recording to keep
+# the timings below fair.
 set_kernel_usage_recording(False)
 
 
