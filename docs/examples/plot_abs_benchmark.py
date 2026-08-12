@@ -260,7 +260,9 @@ ort_times = np.array([r[4] for r in rows])
 # onnxruntime and values below ``1`` are slower. The onnxruntime curve is a
 # flat line at ``1`` by construction. The right panel isolates the comparison
 # of interest: ``onnx-light built-in time / onnx-light-cpu time``. Values above
-# ``1`` therefore show directly how much the CPU kernel is faster.
+# ``1`` therefore show directly how much the CPU kernel is faster. Both speed-up
+# panels use a logarithmic y-axis so that a given ratio and its reciprocal are
+# equidistant from the ``1`` baseline.
 
 import matplotlib.pyplot as plt
 
@@ -321,6 +323,7 @@ ax_speedup.plot(
 ax_speedup.plot(sizes, ort_times / ort_times, "o-", label="onnxruntime", color="#f4a259")
 ax_speedup.axhline(1.0, color="grey", linewidth=0.8, linestyle=":")
 ax_speedup.set_xscale("log")
+ax_speedup.set_yscale("log")
 ax_speedup.set_xlabel("array size (elements)")
 ax_speedup.set_ylabel("speed-up vs onnxruntime")
 ax_speedup.set_title("Abs speed-up (onnxruntime = 1)")
@@ -341,6 +344,7 @@ if light_session is not None:
         )
 ax_cpu_gain.axhline(1.0, color="grey", linewidth=0.8, linestyle=":")
 ax_cpu_gain.set_xscale("log")
+ax_cpu_gain.set_yscale("log")
 ax_cpu_gain.set_xlabel("array size (elements)")
 ax_cpu_gain.set_ylabel("speed-up vs onnx-light built-in")
 ax_cpu_gain.set_title("onnx-light-cpu gain (built-in = 1)")

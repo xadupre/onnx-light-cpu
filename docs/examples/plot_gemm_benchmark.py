@@ -232,7 +232,9 @@ alone_grid_times = np.array([alone_times[size] for size in alone_sizes])
 # log-log scale. The right panel shows the speed-up relative to
 # **onnxruntime** (the baseline): for each back-end the onnxruntime time is
 # divided by the back-end time, so values above ``1`` are faster than
-# onnxruntime and values below ``1`` are slower. The built-in onnx-light curve
+# onnxruntime and values below ``1`` are slower. The speed-up is drawn on a
+# logarithmic y-axis so that a given ratio and its reciprocal are equidistant
+# from the ``1`` baseline. The built-in onnx-light curve
 # only has points for the sizes it was measured on (see "Why the built-in
 # curve stops early" above).
 
@@ -280,6 +282,7 @@ if light_session is not None:
 ax_speedup.plot(sizes, ort_times / ort_times, "o-", label="onnxruntime", color="#f4a259")
 ax_speedup.axhline(1.0, color="grey", linewidth=0.8, linestyle=":")
 ax_speedup.set_xscale("log")
+ax_speedup.set_yscale("log")
 ax_speedup.set_xlabel("matrix size N (N x N)")
 ax_speedup.set_ylabel("speed-up vs onnxruntime")
 ax_speedup.set_title("Gemm speed-up (onnxruntime = 1)")
