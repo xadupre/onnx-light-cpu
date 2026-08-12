@@ -10,6 +10,10 @@
 #include "onnx_light_cpu/kernels/kernel_usage.h"
 #include "onnx_light_cpu/kernels/register_kernels.h"
 
+#ifdef ONNX_LIGHT_CPU_HAS_BACKEND_TEST
+#include "onnx_light_cpu/backend_test/kernel_backend_test.h"
+#endif
+
 namespace nb = nanobind;
 
 NB_MODULE(_cpuregister, m) {
@@ -42,4 +46,19 @@ NB_MODULE(_cpuregister, m) {
   m.def("set_kernel_usage_recording", &onnx_light_cpu::SetKernelUsageRecording, nb::arg("enabled"),
         "Enables or disables per-invocation kernel usage recording. Disabling it "
         "removes diagnostic logging overhead from performance measurements.");
+
+#ifdef ONNX_LIGHT_CPU_HAS_BACKEND_TEST
+  m.def(
+      "register_backend_test_cases",
+      []() { onnx_light_cpu::backend_test::RegisterCpuKernelBackendTestCases(); },
+      "Registers the onnx-light-cpu backend test cases (named ``test_cpu_*``, "
+      "covering every dtype each kernel implements) into onnx-light's shared "
+      "backend test case registry. After this call they are returned by "
+      "onnx_light.onnx.backend.collect_test_cases alongside onnx-light's own "
+      "cases. Registration is process-wide and idempotent.");
+
+  m.attr("has_backend_test_cases") = true;
+#else
+  m.attr("has_backend_test_cases") = false;
+#endif
 }

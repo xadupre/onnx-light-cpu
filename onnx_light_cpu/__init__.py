@@ -13,6 +13,8 @@ or ``Not`` runs the optimized kernel when evaluated through a
 
 from ._register import (
     clear_used_kernel_names,
+    has_backend_test_cases,
+    register_backend_test_cases,
     register_kernels,
     registered_kernel_names,
     used_kernel_names,
@@ -22,6 +24,8 @@ __version__ = "0.1.16"
 
 __all__ = [
     "clear_used_kernel_names",
+    "has_backend_test_cases",
+    "register_backend_test_cases",
     "register_kernels",
     "registered_kernel_names",
     "used_kernel_names",
