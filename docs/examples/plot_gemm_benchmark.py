@@ -137,6 +137,13 @@ rng = np.random.default_rng(0)
 
 alone_model = make_gemm_model()
 alone_session = ReferenceEvaluator(alone_model)
+# Every onnx-light-cpu kernel records its library-qualified name when it runs;
+# onnx-light's own built-in kernels never do. Clear the log before the baseline
+# runs so the assertion afterwards can prove this curve really used onnx-light's
+# built-in ``Gemm`` and not (a leftover registration of) onnx-light-cpu -- if it
+# secretly used onnx-light-cpu the two curves would coincide, which is exactly
+# the "the time is too close" failure this benchmark guards against.
+clear_used_kernel_names()
 alone_times = {}
 for size in alone_sizes:
     a = rng.standard_normal((size, size)).astype(np.float32)
@@ -150,6 +157,9 @@ for size in alone_sizes:
     alone_times[size] = measure(run_alone, repeat)
     np.testing.assert_allclose(run_alone(), expected, rtol=1e-2, atol=1e-2)
     print(f"size={size:>4}x{size:<4} | onnx-light (built-in)={alone_times[size] * 1e6:10.2f} us")
+
+# The baseline must not have dispatched to any onnx-light-cpu kernel.
+assert used_kernel_names() == [], used_kernel_names()
 
 light_label = "onnx-light + onnx-light-cpu"
 alone_label = "onnx-light (built-in)"
@@ -167,11 +177,13 @@ def run_light(a, b):
 
 # Confirm the model dispatches to the onnx-light-cpu ``Gemm`` kernel (identified
 # by the library-qualified name it records when it runs) rather than
-# onnx-light's built-in kernel.
-_probe = np.zeros((2, 2), dtype=np.float32)
+# onnx-light's built-in kernel. Use a real benchmark size rather than a tiny
+# probe so the check exercises the same code path that is timed below.
+_probe = rng.standard_normal((size_grid[0], size_grid[0])).astype(np.float32)
 clear_used_kernel_names()
 run_light(_probe, _probe)
 assert used_kernel_names() == ["onnx_light_cpu::Gemm"], used_kernel_names()
+print(f"onnx-light-cpu kernel dispatched for Gemm: {used_kernel_names()}")
 # The usage log is diagnostic instrumentation and takes a mutex on every
 # invocation. Disable it after checking dispatch so it does not enter timings.
 set_kernel_usage_recording(False)

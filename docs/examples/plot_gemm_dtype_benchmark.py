@@ -169,6 +169,11 @@ ALONE_SHAPE_LABELS = {SHAPES[0][0], SHAPES[1][0]}
 
 alone_rng = np.random.default_rng(0)
 alone_session = make_session(TensorProto.FLOAT)
+# onnx-light-cpu kernels record their library-qualified name when they run;
+# onnx-light's built-in kernels do not. Clear the log so the assertion after
+# the loop can prove this baseline really used onnx-light's own ``Gemm`` rather
+# than (a leftover registration of) onnx-light-cpu.
+clear_used_kernel_names()
 alone_results = {}
 for shape_label, M, N, K in SHAPES:
     if shape_label not in ALONE_SHAPE_LABELS:
@@ -186,6 +191,9 @@ for shape_label, M, N, K in SHAPES:
         f"onnx-light (built-in) | shape={shape_label.splitlines()[0]:<24} "
         f"| {elapsed * 1e6:10.2f} us"
     )
+
+# The baseline must not have dispatched to any onnx-light-cpu kernel.
+assert used_kernel_names() == [], used_kernel_names()
 
 register_kernels()
 
@@ -205,6 +213,7 @@ _probe = np.zeros((2, 2), dtype=np.float32)
 clear_used_kernel_names()
 sessions["float32"].run(None, {"A": _probe, "B": _probe})
 assert used_kernel_names() == ["onnx_light_cpu::Gemm"], used_kernel_names()
+print(f"onnx-light-cpu kernel dispatched for Gemm: {used_kernel_names()}")
 # The usage log is diagnostic instrumentation and takes a mutex on every
 # invocation. Disable it after checking dispatch so it does not enter timings.
 set_kernel_usage_recording(False)
