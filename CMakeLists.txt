@@ -306,7 +306,12 @@ if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
   # --onnx-light-source path).
   if(TARGET onnx_light::lib_onnx_backend_test)
     add_library(lib_onnx_light_cpu_backend_test ${_cpu_lib_type}
-        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/kernel_backend_test.cc")
+        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/kernel_backend_test.cc"
+        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/abs_backend_test.cc"
+        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/exp_backend_test.cc"
+        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/log_backend_test.cc"
+        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/gemm_backend_test.cc"
+        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/not_backend_test.cc")
     target_include_directories(lib_onnx_light_cpu_backend_test PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>

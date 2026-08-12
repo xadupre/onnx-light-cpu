@@ -19,11 +19,19 @@
 // takes a dependency on the onnx-light-cpu kernels and *registers* backend test
 // cases for the accelerated ``Abs``/``Exp``/``Log``/``Gemm``/``Not`` kernels
 // (covering every element type each kernel implements) into that shared
-// onnx-light registry. It does **not** run or check anything itself: the cases
-// are executed and validated by the unit tests, which register them, register
-// the kernels and then drive them through onnx-light's regular API
-// (``CollectTestCases`` + the runtime in C++, ``collect_test_cases`` +
-// ``ReferenceEvaluator`` in Python).
+// onnx-light registry. Following onnx-light's per-operator layout, the actual
+// cases live in one header + one ``.cc`` per kernel
+// (``abs_backend_test.{h,cc}``, ``exp_backend_test.{h,cc}``,
+// ``log_backend_test.{h,cc}``, ``gemm_backend_test.{h,cc}``,
+// ``not_backend_test.{h,cc}``); each registers both correctness
+// (``TestMode::TEST``) and benchmark (``TestMode::BENCHMARK``) cases. This
+// translation unit is only the *collector* that dispatches by op_type to those
+// helpers (mirroring onnx-light's ``collect_<category>_cases.cc``).
+//
+// It does **not** run or check anything itself: the cases are executed and
+// validated by the unit tests, which register them, register the kernels and
+// then drive them through onnx-light's regular API (``CollectTestCases`` + the
+// runtime in C++, ``collect_test_cases`` + ``ReferenceEvaluator`` in Python).
 
 #include "onnx_core/backend_test/test_case.h"
 

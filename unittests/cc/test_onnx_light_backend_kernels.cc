@@ -77,8 +77,11 @@ void CompareTensor(const std::string &case_name, const Tensor &actual, const Ten
 
 // Runs a single-node backend test case model through onnx-light's runtime and
 // compares the produced output with the reference output. The runtime resolves
-// the node to the registered onnx-light-cpu kernel.
-void RunCaseThroughRuntime(const TestCase &tc, std::vector<std::string> &failures) {
+// the node to the registered onnx-light-cpu kernel. When ``compare`` is false
+// (benchmark cases) only the output count is checked -- benchmark inputs are
+// randomly drawn (e.g. negative values for ``Log`` produce NaN), so they are
+// executed for timing coverage rather than numeric comparison.
+void RunCaseThroughRuntime(const TestCase &tc, bool compare, std::vector<std::string> &failures) {
   const ModelProto &model = tc.model();
   const GraphProto &graph = model.ref_graph();
   for (const DataSet &ds : tc.data_sets()) {
@@ -98,6 +101,9 @@ void RunCaseThroughRuntime(const TestCase &tc, std::vector<std::string> &failure
       failures.push_back(tc.name + ": output count mismatch");
       continue;
     }
+    if (!compare) {
+      continue;
+    }
     for (size_t i = 0; i < ds.outputs.size(); ++i) {
       CompareTensor(tc.name, outputs[i], ds.outputs[i], tc.rtol, tc.atol, failures);
     }
@@ -105,20 +111,24 @@ void RunCaseThroughRuntime(const TestCase &tc, std::vector<std::string> &failure
 }
 
 // Registers the onnx-light-cpu backend test cases and kernels, then runs every
-// ``test_cpu_*`` case for ``op_type`` through the runtime, collecting failures.
-std::vector<std::string> RunCpuBackendCases(const std::string &op_type) {
+// ``test_cpu_*`` case for ``op_type`` (in the given ``mode``) through the
+// runtime, collecting failures. Correctness (``TEST``) cases have their outputs
+// compared; benchmark (``BENCHMARK``) cases are only executed.
+std::vector<std::string> RunCpuBackendCases(const std::string &op_type,
+                                            core::backend_test::TestMode mode) {
   onnx_light_cpu::backend_test::RegisterCpuKernelBackendTestCases();
   onnx_light_cpu::RegisterAllKernels();
 
+  const bool compare = mode == core::backend_test::TestMode::TEST;
   std::vector<std::string> failures;
-  std::vector<TestCase> cases = CollectTestCases(op_type);
+  std::vector<TestCase> cases = CollectTestCases(op_type, /*include_big=*/false, mode);
   size_t cpu_cases = 0;
   for (const TestCase &tc : cases) {
     if (tc.name.rfind("test_cpu_", 0) != 0) {
       continue;
     }
     ++cpu_cases;
-    RunCaseThroughRuntime(tc, failures);
+    RunCaseThroughRuntime(tc, compare, failures);
   }
   if (cpu_cases == 0) {
     failures.push_back("no onnx-light-cpu backend test cases registered for " + op_type);
@@ -136,27 +146,66 @@ std::string Describe(const std::vector<std::string> &failures) {
 }
 
 TEST(OnnxLightBackendKernels, AbsRunsThroughRuntime) {
-  const std::vector<std::string> failures = RunCpuBackendCases("Abs");
+  const std::vector<std::string> failures =
+      RunCpuBackendCases("Abs", core::backend_test::TestMode::TEST);
   EXPECT_TRUE(failures.empty()) << Describe(failures);
 }
 
 TEST(OnnxLightBackendKernels, ExpRunsThroughRuntime) {
-  const std::vector<std::string> failures = RunCpuBackendCases("Exp");
+  const std::vector<std::string> failures =
+      RunCpuBackendCases("Exp", core::backend_test::TestMode::TEST);
   EXPECT_TRUE(failures.empty()) << Describe(failures);
 }
 
 TEST(OnnxLightBackendKernels, LogRunsThroughRuntime) {
-  const std::vector<std::string> failures = RunCpuBackendCases("Log");
+  const std::vector<std::string> failures =
+      RunCpuBackendCases("Log", core::backend_test::TestMode::TEST);
   EXPECT_TRUE(failures.empty()) << Describe(failures);
 }
 
 TEST(OnnxLightBackendKernels, NotRunsThroughRuntime) {
-  const std::vector<std::string> failures = RunCpuBackendCases("Not");
+  const std::vector<std::string> failures =
+      RunCpuBackendCases("Not", core::backend_test::TestMode::TEST);
   EXPECT_TRUE(failures.empty()) << Describe(failures);
 }
 
 TEST(OnnxLightBackendKernels, GemmRunsThroughRuntime) {
-  const std::vector<std::string> failures = RunCpuBackendCases("Gemm");
+  const std::vector<std::string> failures =
+      RunCpuBackendCases("Gemm", core::backend_test::TestMode::TEST);
+  EXPECT_TRUE(failures.empty()) << Describe(failures);
+}
+
+// Benchmark-mode cases: registered per kernel alongside the correctness cases.
+// The unit test exercises them (executes the large model through the runtime)
+// to keep the benchmark registration covered; timings are collected by a
+// dedicated benchmark harness, so only successful execution is asserted here.
+TEST(OnnxLightBackendKernels, AbsBenchmarkRunsThroughRuntime) {
+  const std::vector<std::string> failures =
+      RunCpuBackendCases("Abs", core::backend_test::TestMode::BENCHMARK);
+  EXPECT_TRUE(failures.empty()) << Describe(failures);
+}
+
+TEST(OnnxLightBackendKernels, ExpBenchmarkRunsThroughRuntime) {
+  const std::vector<std::string> failures =
+      RunCpuBackendCases("Exp", core::backend_test::TestMode::BENCHMARK);
+  EXPECT_TRUE(failures.empty()) << Describe(failures);
+}
+
+TEST(OnnxLightBackendKernels, LogBenchmarkRunsThroughRuntime) {
+  const std::vector<std::string> failures =
+      RunCpuBackendCases("Log", core::backend_test::TestMode::BENCHMARK);
+  EXPECT_TRUE(failures.empty()) << Describe(failures);
+}
+
+TEST(OnnxLightBackendKernels, NotBenchmarkRunsThroughRuntime) {
+  const std::vector<std::string> failures =
+      RunCpuBackendCases("Not", core::backend_test::TestMode::BENCHMARK);
+  EXPECT_TRUE(failures.empty()) << Describe(failures);
+}
+
+TEST(OnnxLightBackendKernels, GemmBenchmarkRunsThroughRuntime) {
+  const std::vector<std::string> failures =
+      RunCpuBackendCases("Gemm", core::backend_test::TestMode::BENCHMARK);
   EXPECT_TRUE(failures.empty()) << Describe(failures);
 }
 
