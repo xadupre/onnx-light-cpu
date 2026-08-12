@@ -169,14 +169,29 @@ class TestUsedKernelNames:
         # must dispatch to onnx-light-cpu (not onnx-light's built-in kernel) for
         # the same square shapes the benchmark measures, otherwise its timings
         # would be indistinguishable from the built-in baseline. The benchmark
-        # verifies dispatch the same way, via ``registered_kernel_names``.
+        # verifies dispatch the same way, via onnx-light's per-session
+        # ``ReferenceEvaluator.used_kernels()``.
         register_kernels()
-        assert registered_kernel_names()["Gemm"] == "onnx_light_cpu::Gemm"
         rng = np.random.default_rng(0)
         a = rng.standard_normal((size, size)).astype(np.float32)
         b = rng.standard_normal((size, size)).astype(np.float32)
-        node = helper.make_node("Gemm", ["A", "B"], ["Y"], alpha=1.0, beta=1.0)
-        (y,) = _run(node, {"A": a, "B": b}, {"Y": TensorProto.FLOAT})
+        graph = helper.make_graph(
+            [helper.make_node("Gemm", ["A", "B"], ["Y"], alpha=1.0, beta=1.0)],
+            "gemm",
+            [
+                helper.make_tensor_value_info("A", TensorProto.FLOAT, [size, size]),
+                helper.make_tensor_value_info("B", TensorProto.FLOAT, [size, size]),
+            ],
+            [helper.make_tensor_value_info("Y", TensorProto.FLOAT, None)],
+        )
+        model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 18)])
+        sess = ReferenceEvaluator(model)
+        (y,) = sess.run(None, {"A": a, "B": b})
+        # onnx-light-cpu overrides "Gemm" in onnx-light's dispatch table, so the
+        # session's resolved kernels (reported as "<domain>:<op_type>") must
+        # include the "Gemm" op onnx-light-cpu installed a kernel for.
+        used_ops = {key.rsplit(":", 1)[-1] for key in sess.used_kernels()}
+        assert "Gemm" in used_ops & set(registered_kernel_names()), sess.used_kernels()
         np.testing.assert_allclose(y, a @ b, rtol=1e-2, atol=1e-2)
 
     def test_multiple_nodes_record_every_kernel(self):

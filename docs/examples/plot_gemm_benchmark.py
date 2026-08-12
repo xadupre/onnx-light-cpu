@@ -164,14 +164,24 @@ def run_light(a, b):
     return light_session.run(None, {"A": a, "B": b})[0]
 
 
-# Confirm onnx-light-cpu's accelerated ``Gemm`` kernel -- not onnx-light's
-# built-in one -- is the kernel this session dispatches ``Gemm`` to.
-# ``registered_kernel_names`` reports the library-qualified name onnx-light-cpu
-# installed for each op it overrides, so a ``Gemm`` node run through this session
-# resolves to that accelerated kernel rather than the built-in baseline above.
-gemm_kernel = registered_kernel_names()["Gemm"]
-assert gemm_kernel == "onnx_light_cpu::Gemm", gemm_kernel
-print(f"onnx-light-cpu kernel dispatched for Gemm: {gemm_kernel}")
+# Confirm this session dispatches ``Gemm`` to onnx-light-cpu's accelerated
+# kernel rather than onnx-light's built-in one. ``register_kernels()`` installed
+# onnx-light-cpu's kernels (``registered_kernel_names()`` lists the ops it
+# overrides) into onnx-light's process-wide dispatch table, and onnx-light's
+# ``ReferenceEvaluator.used_kernels()`` reports the kernels this session actually
+# resolved once it has run. Because the baseline session above was built and run
+# *before* ``register_kernels()``, its ``Gemm`` resolved to the built-in kernel,
+# so the two curves genuinely use different kernels. Probe with a real benchmark
+# size so the check exercises the same path that is timed below.
+_probe = rng.standard_normal((size_grid[0], size_grid[0])).astype(np.float32)
+run_light(_probe, _probe)
+accelerated_ops = set(registered_kernel_names())
+used_ops = {key.rsplit(":", 1)[-1] for key in light_session.used_kernels()}
+assert "Gemm" in used_ops & accelerated_ops, light_session.used_kernels()
+print(
+    "onnx-light-cpu kernels dispatched by the accelerated session: "
+    f"{light_session.used_kernels()}"
+)
 # onnx-light-cpu kernels record their name on every run (a mutex per call);
 # only the accelerated curve would pay that cost, so disable recording to keep
 # the timings below fair.

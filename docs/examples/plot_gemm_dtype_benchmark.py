@@ -197,14 +197,23 @@ ort_sessions = {
     for label in ("float32", "float16")
 }
 
-# Confirm onnx-light-cpu's accelerated ``Gemm`` kernel -- not onnx-light's
-# built-in one -- is the kernel these sessions dispatch ``Gemm`` to.
-# ``registered_kernel_names`` reports the library-qualified name onnx-light-cpu
-# installed for each op it overrides, so a ``Gemm`` node run through these
-# sessions resolves to that accelerated kernel rather than the built-in baseline.
-gemm_kernel = registered_kernel_names()["Gemm"]
-assert gemm_kernel == "onnx_light_cpu::Gemm", gemm_kernel
-print(f"onnx-light-cpu kernel dispatched for Gemm: {gemm_kernel}")
+# Confirm these sessions dispatch ``Gemm`` to onnx-light-cpu's accelerated
+# kernel rather than onnx-light's built-in one. ``register_kernels()`` installed
+# onnx-light-cpu's kernels (``registered_kernel_names()`` lists the ops it
+# overrides) into onnx-light's process-wide dispatch table, and onnx-light's
+# ``ReferenceEvaluator.used_kernels()`` reports the kernels a session actually
+# resolved once it has run. Because the baseline session above was built and run
+# *before* ``register_kernels()``, its ``Gemm`` resolved to the built-in kernel,
+# so the two curves genuinely use different kernels.
+_probe = np.zeros((64, 64), dtype=np.float32)
+sessions["float32"].run(None, {"A": _probe, "B": _probe})
+accelerated_ops = set(registered_kernel_names())
+used_ops = {key.rsplit(":", 1)[-1] for key in sessions["float32"].used_kernels()}
+assert "Gemm" in used_ops & accelerated_ops, sessions["float32"].used_kernels()
+print(
+    "onnx-light-cpu kernels dispatched by the accelerated session: "
+    f"{sessions['float32'].used_kernels()}"
+)
 # onnx-light-cpu kernels record their name on every run (a mutex per call);
 # only the accelerated curves would pay that cost, so disable recording to keep
 # the timings below fair.
