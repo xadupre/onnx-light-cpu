@@ -11,7 +11,7 @@
 #include "onnx_light_cpu/kernels/register_kernels.h"
 
 #ifdef ONNX_LIGHT_CPU_HAS_BACKEND_TEST
-#include "onnx_light_cpu/backend_test/kernel_backend_test.h"
+#include "onnx_light_cpu/backend_test/collect_test_cases.h"
 #endif
 
 namespace nb = nanobind;
