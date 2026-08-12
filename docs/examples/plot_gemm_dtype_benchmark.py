@@ -212,8 +212,9 @@ ort_sessions = {
 _probe = np.zeros((2, 2), dtype=np.float32)
 clear_used_kernel_names()
 sessions["float32"].run(None, {"A": _probe, "B": _probe})
-assert used_kernel_names() == ["onnx_light_cpu::Gemm"], used_kernel_names()
-print(f"onnx-light-cpu kernel dispatched for Gemm: {used_kernel_names()}")
+gemm_kernels_used = used_kernel_names()
+assert gemm_kernels_used == ["onnx_light_cpu::Gemm"], gemm_kernels_used
+print(f"onnx-light-cpu kernel dispatched for Gemm: {gemm_kernels_used}")
 # The usage log is diagnostic instrumentation and takes a mutex on every
 # invocation. Disable it after checking dispatch so it does not enter timings.
 set_kernel_usage_recording(False)
