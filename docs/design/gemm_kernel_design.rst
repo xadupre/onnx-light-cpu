@@ -90,12 +90,15 @@ lifetime is independent of the caller. ``MatMulPlan`` implements ONNX rank-1
 promotion, batched matrix multiplication, multidirectional batch broadcasting,
 transpose-aware matrix dimensions, empty dimensions, and plan-owned constant B
 tensors. ``StridedBatchedGemm`` and ``GroupedGemm`` expose uniform and
-heterogeneous batches respectively.
+heterogeneous batches respectively. Plans derive ``MC``, ``NC``, and ``KC``
+from deterministic CPUID cache descriptors on x86, align them to register
+tiles, and retain conservative defaults when cache discovery is unavailable.
+The selected values are passed to the five-loop engine rather than being
+descriptive metadata.
 
-The current plan delegates arithmetic to the existing ``GemmFloat32`` or
-``GemmFloat64`` implementation. Algorithm-specific plans and persistent packed
-panels are introduced by later roadmap steps; defining these interfaces first
-keeps that work independent from ONNX operator adapters.
+The plan selects the general five-loop engine or a direct, skinny-M, skinny-N,
+or split-K path once from the prepared shape. Persistent packed constant panels
+are introduced by a later roadmap step.
 
 Platform support (x86_64)
 -------------------------
@@ -186,6 +189,10 @@ Implemented optimizations (for reference)
      - Status
    * - K-blocking (``kGemmTileK``)
      - Implemented -- bounds the packed ``B`` panel to an L2-resident size.
+   * - Hierarchical L1/L2/L3 cache blocking
+     - Implemented -- deterministic x86 CPUID cache descriptors select aligned
+       ``MC``, ``NC``, and ``KC`` values stored in each plan; conservative
+       defaults cover unavailable cache discovery.
    * - 2D M x N task parallelism
      - Implemented -- flattened task list, fixes the ``M == 1`` starvation case.
    * - A-panel packing (``PackARowBlock``)
@@ -227,17 +234,6 @@ gains.
        compiler to spill to the stack and erase the gain (or regress). Needs a
        remainder loop for ``K`` not a multiple of the unroll factor. Lower risk
        on AVX-512 (32 ZMM registers).
-   * - Hierarchical L1/L2/L3 cache blocking
-     - Detect real cache sizes (e.g. via CPUID leaves) and size ``mc``/``kc``/``nc``
-       accordingly instead of the fixed ``kGemmTileM/N/K`` constants; add an
-       ``nc`` blocking level above ``kGemmTileN`` (OpenBLAS/BLIS style).
-     - Moderate, especially for very large ``K``/``N`` shapes that currently
-       only get one level of blocking; likely small to negligible for shapes
-       that already fit today's fixed tile sizes.
-     - Portability of the CPUID cache-size probe across vendors
-       (Intel/AMD leaf differences); more tuning constants to validate;
-       higher implementation/testing cost for an uncertain payoff on
-       already-well-sized default tiles.
    * - Hand-written assembly micro-kernels
      - Replace the C++/intrinsics micro-kernels with hand-scheduled assembly
        (wider tiles, e.g. 8x8 or 24x8, explicit instruction interleaving),
