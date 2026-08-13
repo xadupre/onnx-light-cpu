@@ -3,7 +3,7 @@ Persistent KV Cache and Decode Performance Roadmap
 
 :Date: 2026-08
 
-**in progress**
+**discussion**
 
 Objective
 ---------
