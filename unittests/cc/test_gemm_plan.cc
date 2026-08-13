@@ -38,12 +38,47 @@ TEST(GemmPlan, ExecutesExistingKernelAndExposesSelection) {
   plan.Execute(a.data(), b.data(), c.data(), y.data());
 
   ExpectValues(y, std::array<float, 4>{13, 16, 26.5f, 34});
-  EXPECT_EQ(plan.algorithm(), GemmAlgorithm::kGeneral);
+  EXPECT_EQ(plan.algorithm(), GemmAlgorithm::kDirect);
   EXPECT_EQ(plan.blocking().mc, 64u);
   EXPECT_EQ(plan.blocking().nc, 256u);
   EXPECT_EQ(plan.blocking().kc, 256u);
   EXPECT_GT(plan.blocking().nr, 0u);
   EXPECT_GE(plan.useful_threads(), 1u);
+}
+
+TEST(GemmPlan, SelectsShapeSpecificAlgorithms) {
+  const GemmPlan<float> general(GemmPlanOptions<float>{false, false, 128, 128, 128});
+  const GemmPlan<float> skinny_m(GemmPlanOptions<float>{false, false, 1, 1024, 1024});
+  const GemmPlan<float> skinny_n(GemmPlanOptions<float>{false, false, 128, 1, 1024});
+  const GemmPlan<float> split_k(GemmPlanOptions<float>{false, false, 2, 2, 4096});
+
+  EXPECT_EQ(general.algorithm(), GemmAlgorithm::kGeneral);
+  EXPECT_EQ(skinny_m.algorithm(), GemmAlgorithm::kSkinnyM);
+  EXPECT_EQ(skinny_n.algorithm(), GemmAlgorithm::kSkinnyN);
+  EXPECT_EQ(split_k.algorithm(), GemmAlgorithm::kSplitK);
+}
+
+TEST(GemmPlan, ExecutesEveryPreparedAlgorithm) {
+  const auto check = [](std::size_t m, std::size_t n, std::size_t k,
+                        GemmAlgorithm expected_algorithm) {
+    const GemmPlan<float> plan(GemmPlanOptions<float>{false, false, m, n, k});
+    const std::vector<float> a(m * k, 1.0f);
+    const std::vector<float> b(k * n, 1.0f);
+    std::vector<float> y(m * n);
+
+    plan.Execute(a.data(), b.data(), nullptr, y.data());
+
+    EXPECT_EQ(plan.algorithm(), expected_algorithm);
+    for (float value : y) {
+      EXPECT_FLOAT_EQ(value, static_cast<float>(k));
+    }
+  };
+
+  check(2, 3, 16, GemmAlgorithm::kDirect);
+  check(2, 257, 64, GemmAlgorithm::kSkinnyM);
+  check(16, 1, 64, GemmAlgorithm::kSkinnyN);
+  check(32, 32, 64, GemmAlgorithm::kGeneral);
+  check(2, 2, 4096, GemmAlgorithm::kSplitK);
 }
 
 TEST(GemmPlan, OwnsConstantB) {
