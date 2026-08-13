@@ -70,19 +70,22 @@ template <typename T> std::size_t VectorLanes() {
 
 template <typename T, GemmAlgorithm Algorithm>
 void ExecuteFloatKernel(bool trans_a, bool trans_b, std::size_t m, std::size_t n, std::size_t k,
-                        T alpha, const T *a, const T *b, T beta, const T *c, T *y) {
+                        T alpha, const T *a, const T *b, T beta, const T *c, T *y,
+                        const GemmBlocking *blocking) {
   if constexpr (std::is_same_v<T, float>) {
-    detail::GemmFloat32Planned<Algorithm>(trans_a, trans_b, m, n, k, alpha, a, b, beta, c, y);
+    detail::GemmFloat32Planned<Algorithm>(trans_a, trans_b, m, n, k, alpha, a, b, beta, c, y,
+                                          blocking);
   } else {
     static_assert(std::is_same_v<T, double>);
-    detail::GemmFloat64Planned<Algorithm>(trans_a, trans_b, m, n, k, alpha, a, b, beta, c, y);
+    detail::GemmFloat64Planned<Algorithm>(trans_a, trans_b, m, n, k, alpha, a, b, beta, c, y,
+                                          blocking);
   }
 }
 
 template <typename T>
 auto SelectKernel(GemmAlgorithm algorithm) -> void (*)(bool, bool, std::size_t, std::size_t,
                                                        std::size_t, T, const T *, const T *, T,
-                                                       const T *, T *) {
+                                                       const T *, T *, const GemmBlocking *) {
   switch (algorithm) {
   case GemmAlgorithm::kDirect:
     return &ExecuteFloatKernel<T, GemmAlgorithm::kDirect>;
@@ -228,7 +231,7 @@ GemmPlan<T>::GemmPlan(const GemmPlanOptions<T> &options)
       k_(options.k), alpha_(options.alpha), beta_(options.beta),
       algorithm_(detail::SelectGemmAlgorithm(options.trans_a, options.trans_b, options.m, options.n,
                                              options.k, VectorLanes<T>())),
-      blocking_{kGemmTileM, kGemmTileN, kGemmTileK, kGemmMR, 2 * VectorLanes<T>()},
+      blocking_(detail::SelectGemmBlocking(sizeof(T), VectorLanes<T>())),
       useful_threads_(UsefulThreads(options.m, options.n)),
       has_constant_b_(!options.constant_b.empty()),
       constant_b_(options.constant_b.begin(), options.constant_b.end()),
@@ -255,7 +258,7 @@ template <typename T> void GemmPlan<T>::Execute(const T *a, const T *b, const T 
   if (k_ != 0 && resolved_b == nullptr) {
     throw std::invalid_argument("onnx_light_cpu::GemmPlan: B must not be null when K is nonzero.");
   }
-  kernel_(trans_a_, trans_b_, m_, n_, k_, alpha_, a, resolved_b, beta_, c, y);
+  kernel_(trans_a_, trans_b_, m_, n_, k_, alpha_, a, resolved_b, beta_, c, y, &blocking_);
 }
 
 template <typename T> void GemmPlan<T>::Execute(const T *a, const T *c, T *y) const {

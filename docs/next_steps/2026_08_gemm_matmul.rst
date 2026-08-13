@@ -215,7 +215,9 @@ core algorithm without conversion overhead.
    its row blocks.
 3. Add direct, GEMV, skinny-M, skinny-N, and small-K algorithms.
 4. Derive MC/NC/KC from measured L1/L2/L3 capacity and associativity, with
-   conservative defaults when cache discovery is unavailable.
+   conservative defaults when cache discovery is unavailable. This is
+   implemented for x86 deterministic CPUID cache descriptors; other platforms
+   currently use the conservative defaults.
 5. Build the immutable execution plan once and benchmark each algorithm both
    single-threaded and multi-threaded.
 

@@ -19,15 +19,6 @@ struct MatMulDimensions;
 
 } // namespace detail
 
-/// Cache and register blocking selected for a matrix multiplication plan.
-struct GemmBlocking {
-  std::size_t mc = 0;
-  std::size_t nc = 0;
-  std::size_t kc = 0;
-  std::size_t mr = 0;
-  std::size_t nr = 0;
-};
-
 /// Immutable inputs used to prepare a typed :cpp:class:`GemmPlan`.
 template <typename T> struct GemmPlanOptions {
   bool trans_a = false;
@@ -73,7 +64,7 @@ public:
 
 private:
   using KernelFn = void (*)(bool, bool, std::size_t, std::size_t, std::size_t, T, const T *,
-                            const T *, T, const T *, T *);
+                            const T *, T, const T *, T *, const GemmBlocking *);
 
   bool trans_a_;
   bool trans_b_;

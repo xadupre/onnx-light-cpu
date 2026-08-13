@@ -48,10 +48,12 @@ TEST(GemmPlan, ExecutesExistingKernelAndExposesSelection) {
 
   ExpectValues(y, std::array<float, 4>{13, 16, 26.5f, 34});
   EXPECT_EQ(plan.algorithm(), GemmAlgorithm::kDirect);
-  EXPECT_EQ(plan.blocking().mc, 64u);
-  EXPECT_EQ(plan.blocking().nc, 256u);
-  EXPECT_EQ(plan.blocking().kc, 256u);
-  EXPECT_GT(plan.blocking().nr, 0u);
+  EXPECT_GE(plan.blocking().mc, plan.blocking().mr);
+  EXPECT_GE(plan.blocking().nc, plan.blocking().nr);
+  EXPECT_GE(plan.blocking().kc, 64u);
+  EXPECT_EQ(plan.blocking().mc % plan.blocking().mr, 0u);
+  EXPECT_EQ(plan.blocking().nc % plan.blocking().nr, 0u);
+  EXPECT_EQ(plan.blocking().kc % 16, 0u);
   EXPECT_GE(plan.useful_threads(), 1u);
 }
 

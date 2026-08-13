@@ -11,6 +11,15 @@
 
 namespace onnx_light_cpu {
 
+/// Cache and register blocking selected for a matrix multiplication plan.
+struct GemmBlocking {
+  std::size_t mc = 0;
+  std::size_t nc = 0;
+  std::size_t kc = 0;
+  std::size_t mr = 0;
+  std::size_t nr = 0;
+};
+
 /// Computational path selected for a matrix multiplication plan.
 enum class GemmAlgorithm {
   kGeneral,
@@ -25,15 +34,17 @@ namespace detail {
 GemmAlgorithm SelectGemmAlgorithm(bool trans_a, bool trans_b, std::size_t m, std::size_t n,
                                   std::size_t k, std::size_t vector_lanes);
 
+GemmBlocking SelectGemmBlocking(std::size_t element_size, std::size_t vector_lanes);
+
 template <GemmAlgorithm Algorithm>
 void GemmFloat32Planned(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::size_t K,
                         float alpha, const float *A, const float *B, float beta, const float *C,
-                        float *Y);
+                        float *Y, const GemmBlocking *blocking = nullptr);
 
 template <GemmAlgorithm Algorithm>
 void GemmFloat64Planned(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::size_t K,
                         double alpha, const double *A, const double *B, double beta,
-                        const double *C, double *Y);
+                        const double *C, double *Y, const GemmBlocking *blocking = nullptr);
 
 } // namespace detail
 
