@@ -4,21 +4,14 @@
 
 #pragma once
 
+#include "onnx_light_cpu/impl/math/gemm_common.h"
+
 #include <cstddef>
 #include <span>
 #include <type_traits>
 #include <vector>
 
 namespace onnx_light_cpu {
-
-/// Computational path selected for a matrix multiplication plan.
-enum class GemmAlgorithm {
-  kGeneral,
-  kDirect,
-  kSkinnyM,
-  kSkinnyN,
-  kSplitK,
-};
 
 /// Cache and register blocking selected for a matrix multiplication plan.
 struct GemmBlocking {
@@ -49,9 +42,7 @@ template <typename T> struct GemmPlanOptions {
 /// Prepared rank-2 general matrix multiplication.
 ///
 /// The plan owns constant B when supplied, records the selected blocking and
-/// typed execution entry point, and can be reused for multiple A/C tensors.
-/// Step 1 deliberately delegates arithmetic to the existing Gemm kernel; later
-/// roadmap steps can replace the selected function without changing callers.
+/// typed algorithm entry point, and can be reused for multiple A/C tensors.
 template <typename T> class GemmPlan {
 public:
   static_assert(std::is_same_v<T, float> || std::is_same_v<T, double>,

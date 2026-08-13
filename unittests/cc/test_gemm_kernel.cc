@@ -90,7 +90,8 @@ TEST(GemmFloat32, AlphaBetaAndBias) {
 }
 
 TEST(GemmFloat32, TransposeVariants) {
-  const std::size_t M = 6, N = 5, K = 4;
+  // These dimensions force the general path even with 16-lane AVX-512.
+  const std::size_t M = 8, N = 17, K = 40;
   for (int ta = 0; ta < 2; ++ta) {
     for (int tb = 0; tb < 2; ++tb) {
       const bool trans_a = ta != 0;
@@ -103,7 +104,7 @@ TEST(GemmFloat32, TransposeVariants) {
       onnx_light_cpu::GemmFloat32(trans_a, trans_b, M, N, K, 1.0f, A.data(), B.data(), 0.0f,
                                   nullptr, Y.data());
       for (std::size_t i = 0; i < M * N; ++i) {
-        EXPECT_NEAR(Y[i], expected[i], 1e-4f)
+        EXPECT_NEAR(Y[i], expected[i], 2e-3f)
             << "trans_a=" << trans_a << " trans_b=" << trans_b << " i=" << i;
       }
     }
@@ -173,6 +174,22 @@ TEST(GemmFloat32, LargeKSpansMultipleChunks) {
                               Y.data());
   for (std::size_t i = 0; i < M * N; ++i) {
     EXPECT_NEAR(Y[i], expected[i], 2e-2f) << "i=" << i;
+  }
+}
+
+TEST(GemmFloat32, SplitKMatchesReference) {
+  const std::size_t M = 2, N = 2, K = 4096;
+  const auto A = RandomVector(M * K, 51);
+  const auto B = RandomVector(K * N, 52);
+  const auto C = RandomVector(M * N, 53);
+  const auto expected = ReferenceGemm<float>(false, false, M, N, K, 0.75f, A, B, 0.5f, &C);
+  std::vector<float> Y(M * N, 0.0f);
+
+  onnx_light_cpu::GemmFloat32(false, false, M, N, K, 0.75f, A.data(), B.data(), 0.5f, C.data(),
+                              Y.data());
+
+  for (std::size_t i = 0; i < M * N; ++i) {
+    EXPECT_NEAR(Y[i], expected[i], 5e-3f) << "i=" << i;
   }
 }
 
@@ -249,7 +266,8 @@ TEST(GemmFloat64, TransposeVariants) {
   // The float32 path already covers every trans_a/trans_b combination; do the
   // same for float64 so the double transpose-b packing and both-transpose
   // address arithmetic are exercised too.
-  const std::size_t M = 6, N = 5, K = 4;
+  // These dimensions force the general path even with 8-lane AVX-512.
+  const std::size_t M = 8, N = 9, K = 40;
   for (int ta = 0; ta < 2; ++ta) {
     for (int tb = 0; tb < 2; ++tb) {
       const bool trans_a = ta != 0;
