@@ -43,11 +43,11 @@
 
 #include "onnx_light_cpu/impl/math/math_kernels.h"
 
-#include "onnx_light_cpu/impl/math/gemm_common.h"
+#include "onnx_light_cpu/impl/math/gemm/gemm_common.h"
 #include "onnx_light_cpu/impl/parallel_for.h"
 
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512
-#include "onnx_light_cpu/impl/math/avx512/gemm_kernel_avx512.h"
+#include "onnx_light_cpu/impl/math/gemm/avx512/gemm_kernel_avx512.h"
 #endif
 
 #include <algorithm>
@@ -721,7 +721,7 @@ void GemmSkinnyM(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::
   ParallelFor(static_cast<std::int64_t>(panel_count), cost,
               [&](std::int64_t begin, std::int64_t end) {
                 std::vector<T> bpack(kGemmTileK * kGemmTileN);
-                std::vector<T> apack(kGemmMR * kGemmTileK);
+                std::vector<T> apack(M * kGemmTileK);
                 for (std::int64_t panel = begin; panel < end; ++panel) {
                   const std::size_t n0 = static_cast<std::size_t>(panel) * kGemmTileN;
                   const std::size_t nb = std::min(kGemmTileN, N - n0);
@@ -848,9 +848,17 @@ void GemmImpl(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::siz
   }
 
   if constexpr (Algorithm == GemmAlgorithm::kDirect) {
-    GemmDirect(M, N, K, alpha, A, B, beta, C, Y, kind, tile);
+    if (trans_a || trans_b || K > 32) {
+      GemmFiveLoop(trans_a, trans_b, M, N, K, alpha, A, B, beta, C, Y, kind, tile);
+    } else {
+      GemmDirect(M, N, K, alpha, A, B, beta, C, Y, kind, tile);
+    }
   } else if constexpr (Algorithm == GemmAlgorithm::kSkinnyM) {
-    GemmSkinnyM(trans_a, trans_b, M, N, K, alpha, A, B, beta, C, Y, kind, tile);
+    if (M > kGemmMR) {
+      GemmFiveLoop(trans_a, trans_b, M, N, K, alpha, A, B, beta, C, Y, kind, tile);
+    } else {
+      GemmSkinnyM(trans_a, trans_b, M, N, K, alpha, A, B, beta, C, Y, kind, tile);
+    }
   } else if constexpr (Algorithm == GemmAlgorithm::kSkinnyN) {
     GemmSkinnyN(trans_a, trans_b, M, N, K, alpha, A, B, beta, C, Y);
   } else if constexpr (Algorithm == GemmAlgorithm::kSplitK) {

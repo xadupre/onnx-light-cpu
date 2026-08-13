@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "onnx_light_cpu/impl/math/gemm_plan.h"
+#include "onnx_light_cpu/impl/math/gemm/gemm_plan.h"
 
-#include "onnx_light_cpu/impl/math/gemm_common.h"
+#include "onnx_light_cpu/impl/math/gemm/gemm_common.h"
 #include "onnx_light_cpu/impl/math/math_kernels.h"
 #include "onnx_light_cpu/impl/parallel_for.h"
 #include "onnx_light_cpu/impl/simd_level.h"
@@ -95,7 +95,7 @@ namespace detail {
 
 GemmAlgorithm SelectGemmAlgorithm(bool trans_a, bool trans_b, std::size_t m, std::size_t n,
                                   std::size_t k, std::size_t vector_lanes) {
-  if (k >= 4096 && m != 0 && n <= 64 / m) {
+  if (k >= 4096 && m != 0 && m <= 64 && n <= 64 / m) {
     return GemmAlgorithm::kSplitK;
   }
   if (!trans_a && !trans_b && k <= 32) {

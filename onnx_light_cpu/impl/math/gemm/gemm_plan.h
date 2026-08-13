@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "onnx_light_cpu/impl/math/gemm_common.h"
+#include "onnx_light_cpu/impl/math/gemm/gemm_common.h"
 
 #include <cstddef>
 #include <span>
@@ -39,7 +39,7 @@ template <typename T> struct GemmPlanOptions {
   std::span<const T> constant_b;
 };
 
-/// Prepared rank-2 general matrix multiplication.
+/// Reusable prepared rank-2 general matrix multiplication.
 ///
 /// The plan owns constant B when supplied, records the selected blocking and
 /// typed algorithm entry point, and can be reused for multiple A/C tensors.

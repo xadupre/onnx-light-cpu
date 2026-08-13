@@ -4,7 +4,7 @@ Gemm Kernel Design
 This page documents the internal design of the ``Gemm`` (general matrix
 multiplication) CPU kernel implemented in
 ``onnx_light_cpu/impl/math/gemm_kernel.cc`` and
-``onnx_light_cpu/impl/math/avx512/gemm_kernel_avx512.cc``: how it picks a
+``onnx_light_cpu/impl/math/gemm/avx512/gemm_kernel_avx512.cc``: how it picks a
 micro-kernel at runtime, and which further optimizations were considered but
 not (yet) implemented, with their expected gain and risk.
 
@@ -82,7 +82,7 @@ the full rationale):
 Prepared execution interfaces
 -----------------------------
 
-``onnx_light_cpu/impl/math/gemm_plan.h`` defines reusable typed plans for
+``onnx_light_cpu/impl/math/gemm/gemm_plan.h`` defines reusable typed plans for
 ``float32`` and ``float64``. ``GemmPlan`` records dimensions, transpose and
 scaling attributes, current cache/register blocking, useful parallelism, and
 the typed kernel entry point. It can also own a constant B matrix so its
