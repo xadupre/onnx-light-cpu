@@ -219,7 +219,9 @@ core algorithm without conversion overhead.
    implemented for x86 deterministic CPUID cache descriptors; other platforms
    currently use the conservative defaults.
 5. Build the immutable execution plan once and benchmark each algorithm both
-   single-threaded and multi-threaded.
+   single-threaded and multi-threaded. The benchmark corpus includes a
+   shape-forced case for every algorithm and supports process-level thread
+   selection through ``ONNX_LIGHT_CPU_NUM_THREADS``.
 
 Phase 2: saturate the floating-point units
 ------------------------------------------

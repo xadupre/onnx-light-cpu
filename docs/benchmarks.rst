@@ -17,6 +17,22 @@ cases live in
 ``onnx_light_cpu/backend_test/cases/math/cases_gemm.cc``; the Attention cases
 live in ``onnx-light``'s C++ backend-test registry.
 
+The Gemm corpus contains shape-forced cases for every prepared algorithm:
+``direct`` (small K), ``skinny_m``, ``skinny_n``, ``split_k`` (large K with a
+small output), and square/transformer shapes (general five-loop). Run the
+recorder in separate processes to compare one thread with the configured pool
+while keeping the same binary and inputs:
+
+.. code-block:: bash
+
+   ONNX_LIGHT_CPU_NUM_THREADS=1 <benchmark-command>
+   ONNX_LIGHT_CPU_NUM_THREADS=6 <benchmark-command>
+
+The requested count cannot exceed the build-time
+``ONNX_LIGHT_CPU_MAX_THREADS`` limit. Because the environment setting is read
+once when the shared pool is initialized, changing it inside a running process
+has no effect.
+
 .. toctree::
     :maxdepth: 1
 

@@ -85,6 +85,17 @@ the limit for a target machine at build time:
 cmake -S . -B build -DONNX_LIGHT_CPU_MAX_THREADS=4
 ```
 
+The resulting binary can use fewer threads without rebuilding. The process
+environment limit is read once, before the shared worker pool is created:
+
+```bash
+ONNX_LIGHT_CPU_NUM_THREADS=1 <benchmark-command>
+ONNX_LIGHT_CPU_NUM_THREADS=4 <benchmark-command>
+```
+
+Invalid values are ignored, and the requested count is capped by
+`ONNX_LIGHT_CPU_MAX_THREADS` and the available hardware threads.
+
 ### AVX-512 support
 
 To enable AVX-512 codepaths (compiled and usable on AVX-512 CPUs):

@@ -130,6 +130,8 @@ void RegisterCpuGemmCases(std::vector<TestCase> &registry, TestMode mode) {
   const onnx_light_cpu::GemmKernel gemm_kernel{KernelContext{opset}};
 
   if (mode == TestMode::BENCHMARK) {
+    RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_direct_benchmark", 32, 128,
+                          16);
     RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_tiny_dynamic_benchmark", 1,
                           64, 64);
     RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_tiny_constant_b_benchmark",
@@ -143,6 +145,8 @@ void RegisterCpuGemmCases(std::vector<TestCase> &registry, TestMode mode) {
     RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_skinny_n_benchmark", 1024, 1,
                           1024);
     RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_large_k_benchmark", 32, 32,
+                          4096);
+    RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_split_k_benchmark", 2, 2,
                           4096);
     RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_trans_a_benchmark", 128, 128,
                           128, true);
