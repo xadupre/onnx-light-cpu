@@ -571,58 +571,74 @@ Implementation order and dependencies
 
 .. list-table::
    :header-rows: 1
-   :widths: 8 28 42 22
+   :widths: 7 25 36 17 15
 
    * - Step
      - Deliverable
      - Exit criterion
      - Dependency
+     - Pull requests
    * - 0
      - Reproducible MLAS and Attention cases in ``onnx-light``'s C++
        ``TestMode::BENCHMARK`` framework.
      - Stable medians and dispersion for the agreed shape/type corpus on pinned
        hardware.
      - None.
+     - `onnx-light-cpu #134
+       <https://github.com/xadupre/onnx-light-cpu/pull/134>`_,
+       `onnx-light #4412
+       <https://github.com/xadupre/onnx-light/pull/4412>`_
    * - 1
      - ``GemmPlan``, ``MatMulPlan``, ``StridedBatchedGemm``, and
-       ``GroupedGemm`` interfaces.
+       ``GroupedGemm`` interfaces in
+       ``onnx_light_cpu/impl/math/gemm_plan.h``.
      - Existing Gemm results remain correct with no material performance
        regression.
      - Step 0.
+     - `onnx-light-cpu #135
+       <https://github.com/xadupre/onnx-light-cpu/pull/135>`_
    * - 2
      - Complete MatMul shape/broadcast adapter.
      - Differential tests pass for rank-1, batched, broadcast, transpose, and
        empty-dimension cases.
      - Step 1.
+     - TBD.
    * - 3
      - Five-loop FP32/FP64 engine and shape-specific algorithms.
      - Generic dense path reaches at least 0.8x MLAS before assembly-level
        tuning.
      - Step 1.
+     - TBD.
    * - 4
      - FMA/AVX2/AVX-512/ARM micro-kernels and tuned scheduler.
      - Priority FP32/FP64 corpus reaches 0.9-1.0x MLAS.
      - Step 3.
+     - TBD.
    * - 5
      - Native/panel-converted FP16, BF16, and integer paths.
      - Low-precision corpus reaches 0.9x MLAS where MLAS supports the type.
      - Steps 3-4.
+     - TBD.
    * - 6
      - ``AttentionPlan`` and materialized correctness implementation.
      - MHA/GQA/MQA, mask, causal, and KV-cache differential tests pass.
      - Steps 1-2.
+     - TBD.
    * - 7
      - Online-softmax prefill Attention.
      - No full score/probability tensor; long-context prefill is within 1.1x of
        ONNX Runtime with bounded temporary memory.
      - Steps 4 and 6.
+     - TBD.
    * - 8
      - Single-token decode and blocked/paged KV cache.
      - Decode is within 1.1x of ONNX Runtime over the target context range and
        scales with measured cache bandwidth.
      - Steps 6-7.
+     - TBD.
    * - 9
      - Attention specialization, fusion, and KV quantization.
      - At least one representative model workload exceeds ONNX Runtime by a
        repeatable 10% without changing model outputs beyond agreed tolerances.
      - Steps 5, 7, and 8.
+     - TBD.

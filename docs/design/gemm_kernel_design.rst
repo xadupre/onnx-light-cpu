@@ -79,6 +79,22 @@ the full rationale):
    "skinny" shapes (e.g. ``M == 1``, a single-example matvec) still get
    parallelism instead of running on a single thread.
 
+Prepared execution interfaces
+-----------------------------
+
+``onnx_light_cpu/impl/math/gemm_plan.h`` defines reusable typed plans for
+``float32`` and ``float64``. ``GemmPlan`` records dimensions, transpose and
+scaling attributes, current cache/register blocking, useful parallelism, and
+the typed kernel entry point. It can also own a constant B matrix so its
+lifetime is independent of the caller. ``MatMulPlan`` provides the rank-2
+foundation for the broadcast adapter, while ``StridedBatchedGemm`` and
+``GroupedGemm`` expose uniform and heterogeneous batches respectively.
+
+The current plan delegates arithmetic to the existing ``GemmFloat32`` or
+``GemmFloat64`` implementation. Algorithm-specific plans and persistent packed
+panels are introduced by later roadmap steps; defining these interfaces first
+keeps that work independent from ONNX operator adapters.
+
 Platform support (x86_64)
 -------------------------
 
