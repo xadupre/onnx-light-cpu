@@ -81,6 +81,22 @@ TEST(GemmPlan, ExecutesEveryPreparedAlgorithm) {
   check(2, 2, 4096, GemmAlgorithm::kSplitK);
 }
 
+TEST(GemmPlan, PlannedAlgorithmsFallbackOutsideSelectionContract) {
+  const std::array<float, 6> transposed_a = {1, 4, 2, 5, 3, 6};
+  const std::array<float, 6> b = {1, 2, 3, 4, 5, 6};
+  std::array<float, 4> direct_y = {};
+  onnx_light_cpu::detail::GemmFloat32Planned<GemmAlgorithm::kDirect>(
+      true, false, 2, 2, 3, 1.0f, transposed_a.data(), b.data(), 0.0f, nullptr, direct_y.data());
+  ExpectValues({direct_y.begin(), direct_y.end()}, std::array<float, 4>{22, 28, 49, 64});
+
+  const std::vector<float> a(5 * 3, 1.0f);
+  const std::vector<float> skinny_b(3 * 2, 1.0f);
+  std::vector<float> skinny_y(5 * 2);
+  onnx_light_cpu::detail::GemmFloat32Planned<GemmAlgorithm::kSkinnyM>(
+      false, false, 5, 2, 3, 1.0f, a.data(), skinny_b.data(), 0.0f, nullptr, skinny_y.data());
+  ExpectValues(skinny_y, std::array<float, 10>{3, 3, 3, 3, 3, 3, 3, 3, 3, 3});
+}
+
 TEST(GemmPlan, OwnsConstantB) {
   std::vector<float> b = {1, 2, 3, 4, 5, 6};
   const GemmPlan<float> plan(GemmPlanOptions<float>{false, false, 2, 2, 3, 1.0f, 0.0f, b});
