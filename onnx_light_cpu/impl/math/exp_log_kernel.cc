@@ -694,6 +694,12 @@ namespace {
 void ExpFloat32_Dispatch(const float *input, float *output, std::size_t count) {
 #if ONNX_LIGHT_CPU_X86
   static const SimdLevel level = DetectSimdLevel();
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
+  if (level >= SimdLevel::kAVX512) {
+    ExpFloat32_AVX512(input, output, count);
+    return;
+  }
+#endif
   if (level >= SimdLevel::kAVX2) {
     ExpFloat32_AVX2(input, output, count);
     return;
@@ -721,6 +727,12 @@ namespace {
 void LogFloat32_Dispatch(const float *input, float *output, std::size_t count) {
 #if ONNX_LIGHT_CPU_X86
   static const SimdLevel level = DetectSimdLevel();
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
+  if (level >= SimdLevel::kAVX512) {
+    LogFloat32_AVX512(input, output, count);
+    return;
+  }
+#endif
   if (level >= SimdLevel::kAVX2) {
     LogFloat32_AVX2(input, output, count);
     return;
@@ -748,6 +760,12 @@ namespace {
 void ExpFloat64_Dispatch(const double *input, double *output, std::size_t count) {
 #if ONNX_LIGHT_CPU_X86
   static const SimdLevel level = DetectSimdLevel();
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
+  if (level >= SimdLevel::kAVX512) {
+    ExpFloat64_AVX512(input, output, count);
+    return;
+  }
+#endif
   if (level >= SimdLevel::kAVX2) {
     ExpFloat64_AVX2(input, output, count);
     return;
@@ -775,6 +793,12 @@ namespace {
 void LogFloat64_Dispatch(const double *input, double *output, std::size_t count) {
 #if ONNX_LIGHT_CPU_X86
   static const SimdLevel level = DetectSimdLevel();
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
+  if (level >= SimdLevel::kAVX512) {
+    LogFloat64_AVX512(input, output, count);
+    return;
+  }
+#endif
   if (level >= SimdLevel::kAVX2) {
     LogFloat64_AVX2(input, output, count);
     return;

@@ -47,7 +47,7 @@
 #include "onnx_light_cpu/impl/parallel_for.h"
 
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512
-#include "onnx_light_cpu/impl/math/gemm_kernel_avx512.h"
+#include "onnx_light_cpu/impl/math/avx512/gemm_kernel_avx512.h"
 #endif
 
 #include <algorithm>

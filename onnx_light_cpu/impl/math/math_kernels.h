@@ -50,9 +50,17 @@ void AbsInt64(const int64_t *input, int64_t *output, std::size_t count);
 /// match ``std::exp``.
 void ExpFloat32(const float *input, float *output, std::size_t count);
 
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
+void ExpFloat32_AVX512(const float *input, float *output, std::size_t count);
+#endif
+
 /// Computes elementwise natural exponential: out[i] = exp(input[i]) for float64.
 /// Dispatches to the best available SIMD path at runtime.
 void ExpFloat64(const double *input, double *output, std::size_t count);
+
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
+void ExpFloat64_AVX512(const double *input, double *output, std::size_t count);
+#endif
 
 /// Computes elementwise natural exponential: out[i] = exp(input[i]) for float16.
 /// The input and output are the raw IEEE 754 half-precision bit patterns (as
@@ -67,9 +75,17 @@ void ExpFloat16(const uint16_t *input, uint16_t *output, std::size_t count);
 /// NaN) match ``std::log``.
 void LogFloat32(const float *input, float *output, std::size_t count);
 
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
+void LogFloat32_AVX512(const float *input, float *output, std::size_t count);
+#endif
+
 /// Computes elementwise natural logarithm: out[i] = log(input[i]) for float64.
 /// Dispatches to the best available SIMD path at runtime.
 void LogFloat64(const double *input, double *output, std::size_t count);
+
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
+void LogFloat64_AVX512(const double *input, double *output, std::size_t count);
+#endif
 
 /// Computes elementwise natural logarithm: out[i] = log(input[i]) for float16.
 /// The input and output are the raw IEEE 754 half-precision bit patterns (as

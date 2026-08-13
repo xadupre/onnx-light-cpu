@@ -77,25 +77,6 @@ void NotBool_AVX2(const uint8_t *input, uint8_t *output, std::size_t count) {
   }
 }
 
-#ifdef __AVX512BW__
-void NotBool_AVX512(const uint8_t *input, uint8_t *output, std::size_t count) {
-  const __m512i zero = _mm512_setzero_si512();
-  std::size_t i = 0;
-  const std::size_t stride = 64;
-  const std::size_t aligned_count = count - (count % stride);
-  for (; i < aligned_count; i += stride) {
-    __m512i v = _mm512_loadu_si512(reinterpret_cast<const __m512i *>(input + i));
-    // Bitmask with a set bit for every byte equal to zero; expand to 1/0 bytes.
-    __mmask64 m = _mm512_cmpeq_epi8_mask(v, zero);
-    v = _mm512_maskz_set1_epi8(m, 1);
-    _mm512_storeu_si512(reinterpret_cast<__m512i *>(output + i), v);
-  }
-  for (; i < count; ++i) {
-    output[i] = static_cast<uint8_t>(input[i] == 0 ? 1 : 0);
-  }
-}
-#endif // __AVX512BW__
-
 #endif // ONNX_LIGHT_CPU_X86
 
 } // namespace
@@ -104,8 +85,9 @@ namespace {
 void NotBool_Dispatch(const uint8_t *input, uint8_t *output, std::size_t count) {
 #if ONNX_LIGHT_CPU_X86
   static const SimdLevel level = DetectSimdLevel();
-#ifdef __AVX512BW__
-  if (level >= SimdLevel::kAVX512) {
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512BW
+  static const bool has_avx512bw = CpuSupportsAvx512BW();
+  if (level >= SimdLevel::kAVX512 && has_avx512bw) {
     NotBool_AVX512(input, output, count);
     return;
   }

@@ -4,7 +4,7 @@ Gemm Kernel Design
 This page documents the internal design of the ``Gemm`` (general matrix
 multiplication) CPU kernel implemented in
 ``onnx_light_cpu/impl/math/gemm_kernel.cc`` and
-``onnx_light_cpu/impl/math/gemm_kernel_avx512.cc``: how it picks a
+``onnx_light_cpu/impl/math/avx512/gemm_kernel_avx512.cc``: how it picks a
 micro-kernel at runtime, and which further optimizations were considered but
 not (yet) implemented, with their expected gain and risk.
 

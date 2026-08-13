@@ -19,7 +19,7 @@
 // broadcast A element is reused across twice the column width, amortizing the
 // broadcast/loop overhead over more FMAs.
 
-#include "onnx_light_cpu/impl/math/gemm_kernel_avx512.h"
+#include "onnx_light_cpu/impl/math/avx512/gemm_kernel_avx512.h"
 
 #include <immintrin.h>
 
