@@ -236,18 +236,19 @@ for size in size_grid:
             for attempt in range(_SMALL_SIZE_SPEEDUP_ATTEMPTS):
                 if alone_time / cpu_time > 1.0:
                     break
-                if attempt == _SMALL_SIZE_SPEEDUP_ATTEMPTS - 1:
-                    raise AssertionError(
-                        "onnx-light-cpu Abs kernel was not faster than the built-in "
-                        f"kernel at size={size} after {_SMALL_SIZE_SPEEDUP_ATTEMPTS} attempts: "
-                        f"onnx-light={alone_time * 1e6:.2f} us, "
-                        f"onnx-light-cpu={cpu_time * 1e6:.2f} us."
+                if attempt < _SMALL_SIZE_SPEEDUP_ATTEMPTS - 1:
+                    alone_time, cpu_time, ort_time = measure_together(
+                        lambda inp=inp: alone_session.run(None, {"X": inp}),
+                        lambda inp=inp: run_light(inp),
+                        lambda inp=inp: session.run(None, {"X": inp}),
+                        repeat=repeat,
                     )
-                alone_time, cpu_time, ort_time = measure_together(
-                    lambda inp=inp: alone_session.run(None, {"X": inp}),
-                    lambda inp=inp: run_light(inp),
-                    lambda inp=inp: session.run(None, {"X": inp}),
-                    repeat=repeat,
+            else:
+                raise AssertionError(
+                    "onnx-light-cpu (SIMD) Abs kernel was not faster than the onnx-light "
+                    f"built-in kernel at size={size} after {_SMALL_SIZE_SPEEDUP_ATTEMPTS} "
+                    f"attempts: onnx-light={alone_time * 1e6:.2f} us, "
+                    f"onnx-light-cpu={cpu_time * 1e6:.2f} us."
                 )
     else:
         alone_time, ort_time = measure_together(
