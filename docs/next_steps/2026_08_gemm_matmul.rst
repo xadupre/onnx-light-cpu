@@ -316,8 +316,9 @@ The first implementation should be a simple materialized correctness path:
 This path is not the final performance target. It provides differential tests
 against ONNX Runtime and a fallback for uncommon combinations while validating
 all shape, mask, head-mapping, precision, and tensor ``past``/``present``
-semantics. In Part I, appending past and present may allocate and copy; this
-cost must be reported separately and must not shape the internal cache API.
+semantics. In this roadmap, appending past and present may allocate and copy;
+this compatibility cost must be reported separately. Optimized persistent
+state is deferred to the dedicated cache roadmap.
 
 The Attention adapter should lower MHA, GQA, and MQA to one internal descriptor.
 For GQA/MQA, several query heads reference the same K/V head through a zero-copy
@@ -447,30 +448,6 @@ to verify, not guarantees.
        and disappears for tiny sequences. Peak score memory drops by roughly
        ``(Lq * Lkv) / (Br * Bc)`` per head.
      - 10-20 days after the GEMM primitives and correctness path exist.
-   * - Decode-specific KV layout
-     - **5-30%** for ordinary MHA/GQA decode; **1.2-1.8x** when it avoids
-       cache transposes, gathers, or duplicated GQA reads.
-     - Decode reads approximately ``2 * Lkv * Dkv`` K/V elements per KV head
-       and token. The upper bound is the ratio between the old and new bytes
-       transferred; compute optimization cannot exceed the memory-bandwidth
-       ceiling.
-     - 7-15 days for contiguous cache, additional work for paged cache.
-   * - Quantized KV cache
-     - **1.2-1.8x decode throughput** at long context if decode is
-       bandwidth-bound; approximately **2x less cache traffic** for FP16 to
-       INT8 and **4x less** for FP16 to INT4.
-     - Actual speed-up is below the compression ratio because scales must be
-       loaded and values decoded. Requires model-quality validation and an
-       ONNX/runtime contract for the quantized cache representation.
-     - 10-20 days per quantized format.
-   * - Fused projection and Attention
-     - **5-20%** end-to-end for prefill or decode blocks; potentially
-       **1.2-1.5x** for small-token decode.
-     - Fuse Q/K/V projection layout conversion, rotary embedding, cache append,
-       Attention, and output projection boundaries only where the graph proves
-       equivalent semantics. Gains come from removing intermediate layout
-       passes and launches, not from reducing the main dense FLOP count.
-     - 10-20 days per supported fusion pattern.
 
 These gains are not additive. Shape specialization and autotuning often choose
 the same improvement, while prepacking is a prerequisite for the specialized
@@ -495,9 +472,6 @@ fallback and must not create a second competing thread pool.
 
 Acceptance criteria
 -------------------
-
-Part I exit criteria
-~~~~~~~~~~~~~~~~~~~~
 
 .. list-table::
    :header-rows: 1
@@ -536,38 +510,6 @@ Part I exit criteria
      - Constant-weight or fused workloads demonstrate at least a repeatable
        1.10x improvement on dedicated benchmark machines.
 
-Part II exit criteria
-~~~~~~~~~~~~~~~~~~~~~
-
-.. list-table::
-   :header-rows: 1
-   :widths: 24 76
-
-   * - Area
-     - Exit criterion
-   * - ONNX compatibility
-     - Standard tensor ``past``/``present`` models produce the same observable
-       outputs with and without the internal cache rewrite.
-   * - Cache lifetime
-     - Reset, reuse, subgraph capture, session destruction, request isolation,
-       beam fork/reorder, and speculative truncate have deterministic ownership
-       and sanitizer-covered tests.
-   * - Append complexity
-     - Appending new tokens never copies or transposes the complete existing
-       cache; measured copied bytes are proportional to appended tokens.
-   * - Paged execution
-     - Attention consumes contiguous and paged blocks directly without a
-       full-cache gather, including GQA/MQA and sliding-window cases.
-   * - Decode parity
-     - Median single-token decode latency is no worse than 1.10x ONNX Runtime
-       across the target context range with equivalent cache type and threads.
-   * - Memory
-     - Committed bytes, live bytes, fragmentation, page-table overhead, and
-       quantization metadata are observable and stay within defined limits.
-   * - Quantization
-     - INT8/INT4 cache modes meet agreed model-quality tolerances and improve
-       long-context bandwidth or are disabled for that workload.
-
 Performance gates should run on dedicated, pinned hardware and store the raw
 samples and environment metadata. Shared CI machines can enforce correctness
 and detect catastrophic slowdowns, but they should not decide a 5-10%
@@ -575,9 +517,6 @@ performance regression.
 
 Implementation order and dependencies
 -------------------------------------
-
-Part I -- catch up with ONNX Runtime
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. list-table::
    :header-rows: 1
@@ -640,52 +579,4 @@ Part I -- catch up with ONNX Runtime
      - No full score/probability tensor; long-context prefill is within 1.1x of
        ONNX Runtime with bounded temporary memory.
      - P4 and P6.
-     - TBD.
-
-Part II -- persistent caches
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. list-table::
-   :header-rows: 1
-   :widths: 8 24 36 17 15
-
-   * - Step
-     - Deliverable
-     - Exit criterion
-     - Dependency
-     - Pull requests
-   * - C0
-     - Backend-neutral ``KVCache`` value, ``CacheMap``, persistent allocator,
-       lifetime actions, reset semantics, events, and C++/Python bindings in
-       ``onnx-light``.
-     - Cache values survive invocation cleanup, are explicitly reset, and pass
-       ownership, subgraph, release-plan, and request-isolation tests.
-     - P6.
-     - TBD.
-   * - C1
-     - Tensor import/export adapters, safe graph rewrite, contiguous CPU cache,
-       and cache append/view operations.
-     - Standard ONNX outputs remain identical; append copies only new tokens;
-       rewrite falls back whenever cache state is externally observable.
-     - C0 and P6.
-     - TBD.
-   * - C2
-     - Cache-aware streaming single-token decode.
-     - Decode is within 1.1x of ONNX Runtime over the target context range and
-       no complete score, present tensor, or cache gather is materialized.
-     - C1 and P7.
-     - TBD.
-   * - C3
-     - Paged storage, sliding-window eviction, beam fork/reorder, copy-on-write,
-       and speculative checkpoint/truncate.
-     - Generation operations avoid full-cache copies and paged decode matches
-       contiguous-cache results.
-     - C2.
-     - TBD.
-   * - C4
-     - INT8/INT4 cold-page quantization and proven-safe projection/rotary/cache
-       fusion.
-     - At least one representative long-context workload exceeds ONNX Runtime
-       by a repeatable 10% within agreed model-quality tolerances.
-     - P5 and C3.
      - TBD.
