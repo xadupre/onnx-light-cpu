@@ -86,9 +86,11 @@ Prepared execution interfaces
 ``float32`` and ``float64``. ``GemmPlan`` records dimensions, transpose and
 scaling attributes, current cache/register blocking, useful parallelism, and
 the typed kernel entry point. It can also own a constant B matrix so its
-lifetime is independent of the caller. ``MatMulPlan`` provides the rank-2
-foundation for the broadcast adapter, while ``StridedBatchedGemm`` and
-``GroupedGemm`` expose uniform and heterogeneous batches respectively.
+lifetime is independent of the caller. ``MatMulPlan`` implements ONNX rank-1
+promotion, batched matrix multiplication, multidirectional batch broadcasting,
+transpose-aware matrix dimensions, empty dimensions, and plan-owned constant B
+tensors. ``StridedBatchedGemm`` and ``GroupedGemm`` expose uniform and
+heterogeneous batches respectively.
 
 The current plan delegates arithmetic to the existing ``GemmFloat32`` or
 ``GemmFloat64`` implementation. Algorithm-specific plans and persistent packed

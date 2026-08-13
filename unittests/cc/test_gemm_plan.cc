@@ -28,6 +28,15 @@ void ExpectValues(const std::vector<float> &actual, std::span<const float> expec
   }
 }
 
+template <std::size_t Size>
+void ExpectShape(std::span<const std::size_t> actual,
+                 const std::array<std::size_t, Size> &expected) {
+  ASSERT_EQ(actual.size(), expected.size());
+  for (std::size_t index = 0; index < Size; ++index) {
+    EXPECT_EQ(actual[index], expected[index]) << "axis=" << index;
+  }
+}
+
 TEST(GemmPlan, ExecutesExistingKernelAndExposesSelection) {
   const GemmPlan<float> plan(GemmPlanOptions<float>{false, false, 2, 2, 3, 0.5f, 2.0f, {}});
   const std::vector<float> a = {1, 2, 3, 4, 5, 6};
@@ -122,6 +131,127 @@ TEST(MatMulPlan, ExecutesRankTwoFoundation) {
   EXPECT_DOUBLE_EQ(y[1], 22);
   EXPECT_DOUBLE_EQ(y[2], 43);
   EXPECT_DOUBLE_EQ(y[3], 50);
+}
+
+TEST(MatMulPlan, PromotesRankOneInputs) {
+  const std::array<std::size_t, 1> vector_shape = {3};
+  const MatMulPlan<float> dot_plan(vector_shape, vector_shape);
+  const std::array<float, 3> a = {1, 2, 3};
+  const std::array<float, 3> b = {4, 5, 6};
+  float dot = 0;
+
+  dot_plan.Execute(a.data(), b.data(), &dot);
+
+  EXPECT_TRUE(dot_plan.output_shape().empty());
+  EXPECT_FLOAT_EQ(dot, 32);
+
+  const std::array<std::size_t, 2> matrix_shape = {3, 2};
+  const MatMulPlan<float> vector_matrix_plan(vector_shape, matrix_shape);
+  const std::array<float, 6> matrix = {1, 2, 3, 4, 5, 6};
+  std::array<float, 2> vector_matrix = {};
+  vector_matrix_plan.Execute(a.data(), matrix.data(), vector_matrix.data());
+  ExpectShape(vector_matrix_plan.output_shape(), std::array<std::size_t, 1>{2});
+  EXPECT_FLOAT_EQ(vector_matrix[0], 22);
+  EXPECT_FLOAT_EQ(vector_matrix[1], 28);
+
+  const std::array<std::size_t, 2> left_shape = {2, 3};
+  const MatMulPlan<float> matrix_vector_plan(left_shape, vector_shape);
+  std::array<float, 2> matrix_vector = {};
+  matrix_vector_plan.Execute(matrix.data(), b.data(), matrix_vector.data());
+  ExpectShape(matrix_vector_plan.output_shape(), std::array<std::size_t, 1>{2});
+  EXPECT_FLOAT_EQ(matrix_vector[0], 32);
+  EXPECT_FLOAT_EQ(matrix_vector[1], 77);
+}
+
+TEST(MatMulPlan, BroadcastsBatchesFromEitherInput) {
+  const std::array<std::size_t, 4> a_shape = {2, 1, 2, 2};
+  const std::array<std::size_t, 4> b_shape = {1, 3, 2, 1};
+  const MatMulPlan<float> plan(a_shape, b_shape);
+  const std::array<float, 8> a = {1, 2, 3, 4, 5, 6, 7, 8};
+  const std::array<float, 6> b = {1, 1, 2, 1, 1, 3};
+  std::array<float, 12> y = {};
+
+  plan.Execute(a.data(), b.data(), y.data());
+
+  EXPECT_EQ(plan.batch_count(), 6u);
+  ExpectShape(plan.output_shape(), std::array<std::size_t, 4>{2, 3, 2, 1});
+  ExpectValues({y.begin(), y.end()},
+               std::array<float, 12>{3, 7, 4, 10, 7, 15, 11, 15, 16, 22, 23, 31});
+}
+
+TEST(MatMulPlan, AppliesMatrixTransposeBeforeBatchMultiplication) {
+  const std::array<std::size_t, 3> a_shape = {2, 3, 2};
+  const std::array<std::size_t, 2> b_shape = {4, 3};
+  const MatMulPlan<double> plan(a_shape, b_shape, true, true);
+  const std::array<double, 12> a = {1, 4, 2, 5, 3, 6, 1, 0, 0, 1, 1, 1};
+  const std::array<double, 12> b = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12};
+  std::array<double, 16> y = {};
+
+  plan.Execute(a.data(), b.data(), y.data());
+
+  ExpectShape(plan.output_shape(), std::array<std::size_t, 3>{2, 2, 4});
+  const std::array<double, 16> expected = {14, 32, 50, 68, 32, 77, 122, 167,
+                                           4,  10, 16, 22, 5,  11, 17,  23};
+  for (std::size_t index = 0; index < y.size(); ++index) {
+    EXPECT_DOUBLE_EQ(y[index], expected[index]);
+  }
+}
+
+TEST(MatMulPlan, OwnsBroadcastConstantB) {
+  const std::array<std::size_t, 3> a_shape = {2, 1, 2};
+  const std::array<std::size_t, 3> b_shape = {2, 2, 1};
+  std::vector<float> b = {2, 3, 4, 5};
+  const MatMulPlan<float> plan(a_shape, b_shape, false, false, b);
+  b.assign(b.size(), 0);
+  const std::array<float, 4> a = {1, 2, 3, 4};
+  std::array<float, 2> y = {};
+
+  plan.Execute(a.data(), y.data());
+
+  EXPECT_TRUE(plan.has_constant_b());
+  ExpectValues({y.begin(), y.end()}, std::array<float, 2>{8, 32});
+}
+
+TEST(MatMulPlan, HandlesEmptyBatchMatrixAndReductionDimensions) {
+  const std::array<std::size_t, 3> empty_batch_a = {0, 2, 3};
+  const std::array<std::size_t, 3> empty_batch_b = {1, 3, 4};
+  const MatMulPlan<float> empty_batch(empty_batch_a, empty_batch_b);
+  ExpectShape(empty_batch.output_shape(), std::array<std::size_t, 3>{0, 2, 4});
+  EXPECT_NO_THROW(empty_batch.Execute(nullptr, nullptr, nullptr));
+
+  const std::array<std::size_t, 2> empty_rows_a = {0, 3};
+  const std::array<std::size_t, 2> regular_b = {3, 2};
+  const MatMulPlan<float> empty_rows(empty_rows_a, regular_b);
+  EXPECT_NO_THROW(empty_rows.Execute(nullptr, nullptr, nullptr));
+
+  const std::array<std::size_t, 2> regular_a = {2, 3};
+  const std::array<std::size_t, 2> empty_columns_b = {3, 0};
+  const MatMulPlan<float> empty_columns(regular_a, empty_columns_b);
+  EXPECT_NO_THROW(empty_columns.Execute(nullptr, nullptr));
+
+  const std::array<std::size_t, 2> empty_k_a = {2, 0};
+  const std::array<std::size_t, 2> empty_k_b = {0, 3};
+  const MatMulPlan<float> empty_k(empty_k_a, empty_k_b);
+  std::array<float, 6> y = {1, 1, 1, 1, 1, 1};
+  empty_k.Execute(nullptr, nullptr, y.data());
+  ExpectValues({y.begin(), y.end()}, std::array<float, 6>{0, 0, 0, 0, 0, 0});
+}
+
+TEST(MatMulPlan, RejectsInvalidShapes) {
+  const std::array<std::size_t, 1> scalar_shape = {0};
+  const std::array<std::size_t, 2> matrix_shape = {2, 3};
+  EXPECT_THROW((MatMulPlan<float>({}, matrix_shape)), std::invalid_argument);
+  EXPECT_THROW((MatMulPlan<float>(matrix_shape, std::array<std::size_t, 2>{4, 2})),
+               std::invalid_argument);
+  EXPECT_THROW(
+      (MatMulPlan<float>(std::array<std::size_t, 3>{2, 2, 3}, std::array<std::size_t, 3>{3, 3, 2})),
+      std::invalid_argument);
+  EXPECT_THROW((MatMulPlan<float>(scalar_shape, scalar_shape, true)), std::invalid_argument);
+
+  const std::array<float, 1> wrong_constant = {1};
+  EXPECT_THROW((MatMulPlan<float>(matrix_shape, std::array<std::size_t, 2>{3, 2}, false, false,
+                                  wrong_constant)),
+               std::invalid_argument);
 }
 
 TEST(StridedBatchedGemm, ExecutesEveryBatchWithElementStrides) {

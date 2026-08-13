@@ -13,6 +13,12 @@
 
 namespace onnx_light_cpu {
 
+namespace detail {
+
+struct MatMulDimensions;
+
+} // namespace detail
+
 /// Cache and register blocking selected for a matrix multiplication plan.
 struct GemmBlocking {
   std::size_t mc = 0;
@@ -84,24 +90,40 @@ private:
   KernelFn kernel_;
 };
 
-/// Prepared rank-2 MatMul foundation.
-///
-/// Rank promotion and batch broadcasting are intentionally deferred to the
-/// complete shape adapter in roadmap step 2.
+/// Prepared ONNX MatMul shape and broadcast adapter.
 template <typename T> class MatMulPlan {
 public:
   static_assert(std::is_same_v<T, float> || std::is_same_v<T, double>,
                 "MatMulPlan supports float and double.");
 
+  MatMulPlan(std::span<const std::size_t> a_shape, std::span<const std::size_t> b_shape,
+             bool trans_a = false, bool trans_b = false, std::span<const T> constant_b = {});
   MatMulPlan(std::size_t m, std::size_t n, std::size_t k, bool trans_a = false,
              bool trans_b = false, std::span<const T> constant_b = {});
 
   void Execute(const T *a, const T *b, T *y) const;
   void Execute(const T *a, T *y) const;
 
+  std::span<const std::size_t> output_shape() const noexcept { return output_shape_; }
+  std::span<const std::size_t> batch_shape() const noexcept { return batch_shape_; }
+  std::size_t batch_count() const noexcept { return batch_count_; }
+  bool has_constant_b() const noexcept { return has_constant_b_; }
   const GemmPlan<T> &gemm_plan() const noexcept { return gemm_plan_; }
 
 private:
+  MatMulPlan(detail::MatMulDimensions dimensions, bool trans_a, bool trans_b,
+             std::span<const T> constant_b);
+
+  std::size_t BatchOffset(std::size_t batch, std::span<const std::size_t> strides) const;
+
+  std::vector<std::size_t> output_shape_;
+  std::vector<std::size_t> batch_shape_;
+  std::vector<std::size_t> a_batch_strides_;
+  std::vector<std::size_t> b_batch_strides_;
+  std::size_t batch_count_;
+  std::size_t output_matrix_elements_;
+  bool has_constant_b_;
+  std::vector<T> constant_b_;
   GemmPlan<T> gemm_plan_;
 };
 
