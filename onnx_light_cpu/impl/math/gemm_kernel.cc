@@ -511,10 +511,6 @@ void GemmMicroKernel_SSE2_F64(std::size_t mr, std::size_t nb, std::size_t K, dou
 // cache eviction. Chunking ``K`` bounds every panel to
 // ``kGemmTileK x kGemmTileN`` elements, which comfortably fits in L2 for both
 // float32 and float64.
-constexpr std::size_t kGemmTileN = 256;
-constexpr std::size_t kGemmTileM = 64;
-constexpr std::size_t kGemmTileK = 256;
-
 // ParallelFor's grain is calibrated for full element-wise loop iterations.
 // A GEMM multiply-add is only one instruction inside a heavily vectorized,
 // register-blocked inner loop, so counting every scalar FMA as a full work unit

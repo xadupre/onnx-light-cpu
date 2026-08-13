@@ -551,6 +551,7 @@ if(ONNX_LIGHT_CPU_INSTALL)
       DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/onnx_light_cpu/impl")
 
   install(FILES
+      "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/gemm_plan.h"
       "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/math_kernels.h"
       DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/onnx_light_cpu/impl/math")
 

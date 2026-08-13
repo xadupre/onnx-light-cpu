@@ -585,7 +585,8 @@ Implementation order and dependencies
      - None.
    * - 1
      - ``GemmPlan``, ``MatMulPlan``, ``StridedBatchedGemm``, and
-       ``GroupedGemm`` interfaces.
+       ``GroupedGemm`` interfaces in
+       ``onnx_light_cpu/impl/math/gemm_plan.h``.
      - Existing Gemm results remain correct with no material performance
        regression.
      - Step 0.

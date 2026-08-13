@@ -35,6 +35,11 @@ enum class GemmAccumMode {
 // size every kernel flavor agrees on.
 constexpr std::size_t kGemmMR = 4;
 
+// Current cache-blocking dimensions shared by the driver and prepared plans.
+constexpr std::size_t kGemmTileM = 64;
+constexpr std::size_t kGemmTileN = 256;
+constexpr std::size_t kGemmTileK = 256;
+
 // Scalar micro-kernels: also the tail handler for every vectorized flavor
 // (AVX-512, AVX, SSE2) and the fallback for non-x86 builds. Defined (with
 // external linkage) in gemm_kernel.cc so gemm_kernel_avx512.cc can reuse them
