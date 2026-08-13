@@ -22,4 +22,8 @@ namespace onnx_light_cpu {
 /// runtime.
 void NotBool(const uint8_t *input, uint8_t *output, std::size_t count);
 
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512BW
+void NotBool_AVX512(const uint8_t *input, uint8_t *output, std::size_t count);
+#endif
+
 } // namespace onnx_light_cpu

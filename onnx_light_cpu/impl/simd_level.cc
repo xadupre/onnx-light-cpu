@@ -100,9 +100,17 @@ SimdLevel DetectSimdLevel() {
   return SimdLevel::kNone;
 }
 
+bool CpuSupportsAvx512BW() {
+  const auto info7 = Cpuid(7);
+  const bool has_avx512bw = (info7.ebx & (1u << 30)) != 0;
+  return has_avx512bw && OsSupportsAvx512();
+}
+
 #else // Non-x86
 
 SimdLevel DetectSimdLevel() { return SimdLevel::kNone; }
+
+bool CpuSupportsAvx512BW() { return false; }
 
 #endif // ONNX_LIGHT_CPU_X86
 

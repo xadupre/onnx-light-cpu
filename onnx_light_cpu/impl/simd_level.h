@@ -22,4 +22,8 @@ enum class SimdLevel : int {
 /// Detects the highest SIMD level supported by the current CPU at runtime.
 SimdLevel DetectSimdLevel();
 
+/// Returns whether AVX-512BW byte/word instructions are available and enabled
+/// by the operating system. AVX-512F alone is not sufficient for byte kernels.
+bool CpuSupportsAvx512BW();
+
 } // namespace onnx_light_cpu

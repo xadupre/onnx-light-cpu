@@ -119,19 +119,20 @@ if(NOT ONNX_LIGHT_CPU_MAX_THREADS MATCHES "^[1-9][0-9]*$")
       "'${ONNX_LIGHT_CPU_MAX_THREADS}'.")
 endif()
 
-# gemm_kernel_avx512.cc carries a dedicated AVX-512 Gemm micro-kernel that is
-# compiled with an extra -mavx512f *on top of* the flags above (see the
-# per-file COMPILE_OPTIONS override below), regardless of
-# ONNX_LIGHT_CPU_SIMD_FLAGS. This lets a single binary built with the default
-# -mavx2 still carry an AVX-512 kernel that DetectSimdLevel() picks at runtime
-# on machines that support it. Only enabled when the compiler actually accepts
-# the flag, so this stays a no-op (falls back to the AVX2 kernel) on
-# toolchains/targets that don't support it (e.g. non-x86 cross-compilation).
+# The dedicated AVX-512 translation units are compiled with feature-specific
+# flags on top of ONNX_LIGHT_CPU_SIMD_FLAGS. This lets a binary built with the
+# default -mavx2 still carry wider kernels selected by DetectSimdLevel() at
+# runtime. Exp, Log, Abs and Gemm only need AVX-512F; Not additionally needs
+# AVX-512BW for byte comparisons. Unsupported sources are excluded below.
 include(CheckCXXCompilerFlag)
 if(NOT MSVC)
   check_cxx_compiler_flag("-mavx512f" ONNX_LIGHT_CPU_HAVE_AVX512F_FLAG)
+  check_cxx_compiler_flag("-mavx512f -mavx512bw"
+      ONNX_LIGHT_CPU_HAVE_AVX512BW_FLAG)
 else()
   check_cxx_compiler_flag("/arch:AVX512" ONNX_LIGHT_CPU_HAVE_AVX512F_FLAG)
+  set(ONNX_LIGHT_CPU_HAVE_AVX512BW_FLAG
+      ${ONNX_LIGHT_CPU_HAVE_AVX512F_FLAG})
 endif()
 
 # ---------------------------------------------------------------------------
@@ -143,17 +144,25 @@ endif()
 file(GLOB CPU_KERNEL_SOURCES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/*.cc"
     "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/*/*.cc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/*/*/*.cc"
 )
 
 set(_gemm_avx512_source
-    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/gemm_kernel_avx512.cc")
+    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/avx512/gemm_kernel_avx512.cc")
 set(_abs_avx512_source
-    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/abs_kernel_avx512.cc")
+    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/avx512/abs_kernel_avx512.cc")
+set(_exp_log_avx512_source
+    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/avx512/exp_log_kernel_avx512.cc")
+set(_not_avx512_source
+    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/logical/avx512/not_kernel_avx512.cc")
 if(NOT ONNX_LIGHT_CPU_HAVE_AVX512F_FLAG)
-  # Without -mavx512f the <immintrin.h> AVX-512 intrinsics this file uses
-  # aren't declared/usable; exclude it entirely rather than fail to compile.
+  # Exclude AVX-512F translation units rather than fail on unsupported targets.
   list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_gemm_avx512_source}")
   list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_abs_avx512_source}")
+  list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_exp_log_avx512_source}")
+endif()
+if(NOT ONNX_LIGHT_CPU_HAVE_AVX512BW_FLAG)
+  list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_not_avx512_source}")
 endif()
 
 file(GLOB PY_KERNELS_SOURCES CONFIGURE_DEPENDS
@@ -200,15 +209,31 @@ if(ONNX_LIGHT_CPU_HAVE_AVX512F_FLAG)
         COMPILE_OPTIONS "-mavx512f")
     set_source_files_properties("${_abs_avx512_source}" PROPERTIES
         COMPILE_OPTIONS "-mavx512f")
+    set_source_files_properties("${_exp_log_avx512_source}" PROPERTIES
+        COMPILE_OPTIONS "-mavx512f")
   else()
     set_source_files_properties("${_gemm_avx512_source}" PROPERTIES
         COMPILE_OPTIONS "/arch:AVX512")
     set_source_files_properties("${_abs_avx512_source}" PROPERTIES
         COMPILE_OPTIONS "/arch:AVX512")
+    set_source_files_properties("${_exp_log_avx512_source}" PROPERTIES
+        COMPILE_OPTIONS "/arch:AVX512")
   endif()
   # Told gemm_kernel.cc (compiled at the baseline ONNX_LIGHT_CPU_SIMD_FLAGS)
   # that GemmMicroKernel_AVX512_F32/F64 are available to dispatch to.
   target_compile_definitions(lib_onnx_light_cpu PRIVATE ONNX_LIGHT_CPU_HAVE_AVX512=1)
+endif()
+
+if(ONNX_LIGHT_CPU_HAVE_AVX512BW_FLAG)
+  if(NOT MSVC)
+    set_source_files_properties("${_not_avx512_source}" PROPERTIES
+        COMPILE_OPTIONS "-mavx512f;-mavx512bw")
+  else()
+    set_source_files_properties("${_not_avx512_source}" PROPERTIES
+        COMPILE_OPTIONS "/arch:AVX512")
+  endif()
+  target_compile_definitions(lib_onnx_light_cpu PRIVATE
+      ONNX_LIGHT_CPU_HAVE_AVX512BW=1)
 endif()
 
 
