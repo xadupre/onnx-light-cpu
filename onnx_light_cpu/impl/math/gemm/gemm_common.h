@@ -2,12 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Types and declarations shared between gemm_kernel.cc (compiled with the
-// project's baseline ONNX_LIGHT_CPU_SIMD_FLAGS, AVX2 by default) and
-// gemm_kernel_avx512.cc (compiled with an additional -mavx512f, see
-// CMakeLists.txt), so a single binary can carry an AVX-512 Gemm micro-kernel
-// alongside the AVX2/SSE2/scalar ones and pick whichever matches
-// DetectSimdLevel() at runtime.
+// Types and declarations shared between gemm_kernel.cc and the ISA-specific
+// GEMM micro-kernels.
 
 #pragma once
 

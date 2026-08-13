@@ -46,7 +46,7 @@ template <typename T> struct GemmPlanOptions {
   std::span<const T> constant_b;
 };
 
-/// Prepared rank-2 general matrix multiplication.
+/// Reusable prepared rank-2 general matrix multiplication.
 ///
 /// The plan owns constant B when supplied, records the selected blocking and
 /// typed execution entry point, and can be reused for multiple A/C tensors.

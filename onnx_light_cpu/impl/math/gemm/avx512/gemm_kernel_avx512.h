@@ -11,7 +11,7 @@
 
 #pragma once
 
-#include "onnx_light_cpu/impl/math/gemm_common.h"
+#include "onnx_light_cpu/impl/math/gemm/gemm_common.h"
 
 #include <cstddef>
 

@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "onnx_light_cpu/impl/math/gemm_plan.h"
+#include "onnx_light_cpu/impl/math/gemm/gemm_plan.h"
 
-#include "onnx_light_cpu/impl/math/gemm_common.h"
+#include "onnx_light_cpu/impl/math/gemm/gemm_common.h"
 #include "onnx_light_cpu/impl/math/math_kernels.h"
 #include "onnx_light_cpu/impl/parallel_for.h"
 #include "onnx_light_cpu/impl/simd_level.h"

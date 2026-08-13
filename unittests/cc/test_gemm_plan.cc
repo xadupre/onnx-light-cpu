@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "onnx_light_cpu/impl/math/gemm_plan.h"
+#include "onnx_light_cpu/impl/math/gemm/gemm_plan.h"
 
 #include <gtest/gtest.h>
 

@@ -9,12 +9,9 @@ Objective
 ---------
 
 The objective is to bring ``onnx-light-cpu`` within 10% of ONNX Runtime/MLAS
-for the important ``Gemm``, ``MatMul``, and ``Attention`` workloads, for every
-supported data type, without sacrificing ONNX correctness. Once parity is
-reached, the runtime can outperform ONNX Runtime on workloads where it has
-information that a generic operator kernel cannot exploit: constant weights,
-known shapes, reusable packed panels, fused epilogues, KV-cache layout, and
-streaming attention.
+for the important ``Gemm``, ``MatMul``, and tensor-based ``Attention``
+workloads, for every supported data type, without sacrificing ONNX correctness.
+This is a catch-up effort with standard ONNX tensors and semantics.
 
 The current implementation is a correctness-first, register-blocked kernel.
 It already has AVX2/AVX-512 paths, K blocking, A/B packing, and two-dimensional
@@ -22,6 +19,12 @@ task parallelism; see :doc:`the current design <../design/gemm_kernel_design>`.
 Benchmarks nevertheless show that MLAS can remain an order of magnitude faster
 on multi-panel and skinny-M shapes. This is a kernel and scheduling gap, not a
 plotting artifact.
+
+Related roadmap
+---------------
+
+Persistent state, decode, paged storage, and cache quantization are covered by
+the separate :doc:`Persistent KV Cache and Decode roadmap <2026_08_kv_cache>`.
 
 Scope and type matrix
 ---------------------
@@ -294,8 +297,9 @@ is built once from the model, static dimensions, CPU, and runtime options. It
 records:
 
 * batch size, query-head and KV-head counts, head dimensions, and GQA ratio;
-* input/output layouts and strides, including the selected KV-cache layout;
-* scale, causal mode, mask kind, and whether past/present KV is enabled;
+* input/output layouts and strides;
+* scale, causal mode, mask kind, and whether standard tensor ``past``/``present``
+  inputs are enabled;
 * prefill, short-query, or single-token decode algorithm;
 * query-row and KV-column block sizes;
 * dot-product/packing functions, accumulation type, and useful thread count.
@@ -311,7 +315,9 @@ The first implementation should be a simple materialized correctness path:
 
 This path is not the final performance target. It provides differential tests
 against ONNX Runtime and a fallback for uncommon combinations while validating
-all shape, mask, head-mapping, precision, and KV-cache semantics.
+all shape, mask, head-mapping, precision, and tensor ``past``/``present``
+semantics. In Part I, appending past and present may allocate and copy; this
+cost must be reported separately and must not shape the internal cache API.
 
 The Attention adapter should lower MHA, GQA, and MQA to one internal descriptor.
 For GQA/MQA, several query heads reference the same K/V head through a zero-copy
@@ -359,40 +365,6 @@ The CPU implementation needs:
   mask only the one intersecting diagonal block;
 * direct handling of sliding-window or sparse masks by skipping absent KV
   blocks rather than filling them with negative infinity.
-
-Phase 7: decode, KV cache, and low precision
---------------------------------------------
-
-Single-token decode is a different algorithmic regime. With ``Lq == 1``, it is
-primarily a KV-cache bandwidth problem, not a GEMM problem. Use a dedicated
-streaming kernel:
-
-1. compute query/K dot products for one KV block;
-2. update online-softmax state;
-3. immediately accumulate the corresponding V block;
-4. continue without storing the score vector.
-
-KV-cache requirements:
-
-* append present K/V without transposing or copying the complete past cache;
-* store K in a layout friendly to dot products and V in a layout friendly to
-  weighted accumulation, or maintain a justified shared blocked layout;
-* map GQA/MQA query heads onto shared KV blocks without duplicate cache reads
-  when query heads can be processed together;
-* support paged/non-contiguous cache blocks through a block table without
-  gathering the whole sequence first;
-* optionally quantize old KV blocks to INT8/INT4 with per-head or per-block
-  scales, decoding inside the streaming kernel.
-
-For FP16/BF16, convert Q/K/V vectors inside the block load/packing step and
-keep score, softmax, and output accumulation in FP32. Native AVX-512BF16,
-AVX-512FP16, AMX, or ARM dot-product variants can replace conversion paths
-when available.
-
-Parallelism should be selected in this order: batch, KV head/query-head group,
-query block, then KV block. Splitting one query row across KV workers requires
-a numerically correct merge of ``(m, l, o)`` states and should only be used
-when the outer dimensions cannot occupy the cores.
 
 How to exceed ONNX Runtime
 --------------------------
@@ -524,6 +496,9 @@ fallback and must not create a second competing thread pool.
 Acceptance criteria
 -------------------
 
+Part I exit criteria
+~~~~~~~~~~~~~~~~~~~~
+
 .. list-table::
    :header-rows: 1
    :widths: 24 76
@@ -544,15 +519,15 @@ Acceptance criteria
      - Throughput improves through the physical-core count without severe
        regressions on tiny or skinny shapes.
    * - Attention correctness
-     - Differential tests cover prefill and decode, MHA/GQA/MQA, all mask
-       forms, causal boundaries, past/present KV, empty sequences, and every
-       supported type.
+     - Differential tests cover stateless Attention and tensor-based
+       past/present compatibility, MHA/GQA/MQA, all mask forms, causal
+       boundaries, empty sequences, and every supported type.
    * - Attention memory
      - The optimized path never materializes the complete score or probability
        tensor; temporary memory is bounded by worker count and Br x Bc blocks.
    * - Attention parity
-     - Median prefill and decode latency is no worse than 1.10x ONNX Runtime on
-       the priority model/context corpus with the same threads and cache type.
+     - Median prefill latency is no worse than 1.10x ONNX Runtime on the
+       priority model/context corpus with the same thread count.
    * - Data movement
      - Every dynamic A panel and constant B panel is packed no more often than
        required by the selected loop nest; low-precision paths avoid
@@ -560,6 +535,38 @@ Acceptance criteria
    * - Exceeding MLAS
      - Constant-weight or fused workloads demonstrate at least a repeatable
        1.10x improvement on dedicated benchmark machines.
+
+Part II exit criteria
+~~~~~~~~~~~~~~~~~~~~~
+
+.. list-table::
+   :header-rows: 1
+   :widths: 24 76
+
+   * - Area
+     - Exit criterion
+   * - ONNX compatibility
+     - Standard tensor ``past``/``present`` models produce the same observable
+       outputs with and without the internal cache rewrite.
+   * - Cache lifetime
+     - Reset, reuse, subgraph capture, session destruction, request isolation,
+       beam fork/reorder, and speculative truncate have deterministic ownership
+       and sanitizer-covered tests.
+   * - Append complexity
+     - Appending new tokens never copies or transposes the complete existing
+       cache; measured copied bytes are proportional to appended tokens.
+   * - Paged execution
+     - Attention consumes contiguous and paged blocks directly without a
+       full-cache gather, including GQA/MQA and sliding-window cases.
+   * - Decode parity
+     - Median single-token decode latency is no worse than 1.10x ONNX Runtime
+       across the target context range with equivalent cache type and threads.
+   * - Memory
+     - Committed bytes, live bytes, fragmentation, page-table overhead, and
+       quantization metadata are observable and stay within defined limits.
+   * - Quantization
+     - INT8/INT4 cache modes meet agreed model-quality tolerances and improve
+       long-context bandwidth or are disabled for that workload.
 
 Performance gates should run on dedicated, pinned hardware and store the raw
 samples and environment metadata. Shared CI machines can enforce correctness
@@ -569,16 +576,19 @@ performance regression.
 Implementation order and dependencies
 -------------------------------------
 
+Part I -- catch up with ONNX Runtime
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
 .. list-table::
    :header-rows: 1
-   :widths: 7 25 36 17 15
+   :widths: 8 24 36 17 15
 
    * - Step
      - Deliverable
      - Exit criterion
      - Dependency
      - Pull requests
-   * - 0
+   * - P0
      - Reproducible MLAS and Attention cases in ``onnx-light``'s C++
        ``TestMode::BENCHMARK`` framework.
      - Stable medians and dispersion for the agreed shape/type corpus on pinned
@@ -588,57 +598,94 @@ Implementation order and dependencies
        <https://github.com/xadupre/onnx-light-cpu/pull/134>`_,
        `onnx-light #4412
        <https://github.com/xadupre/onnx-light/pull/4412>`_
-   * - 1
+   * - P1
      - ``GemmPlan``, ``MatMulPlan``, ``StridedBatchedGemm``, and
        ``GroupedGemm`` interfaces in
-       ``onnx_light_cpu/impl/math/gemm_plan.h``.
+       ``onnx_light_cpu/impl/math/gemm/gemm_plan.h``.
      - Existing Gemm results remain correct with no material performance
        regression.
-     - Step 0.
+     - P0.
      - `onnx-light-cpu #135
        <https://github.com/xadupre/onnx-light-cpu/pull/135>`_
-   * - 2
+   * - P2
      - Complete MatMul shape/broadcast adapter.
      - Differential tests pass for rank-1, batched, broadcast, transpose, and
        empty-dimension cases.
-     - Step 1.
+     - P1.
      - TBD.
-   * - 3
+   * - P3
      - Five-loop FP32/FP64 engine and shape-specific algorithms.
      - Generic dense path reaches at least 0.8x MLAS before assembly-level
        tuning.
-     - Step 1.
+     - P1.
      - TBD.
-   * - 4
+   * - P4
      - FMA/AVX2/AVX-512/ARM micro-kernels and tuned scheduler.
      - Priority FP32/FP64 corpus reaches 0.9-1.0x MLAS.
-     - Step 3.
+     - P3.
      - TBD.
-   * - 5
+   * - P5
      - Native/panel-converted FP16, BF16, and integer paths.
      - Low-precision corpus reaches 0.9x MLAS where MLAS supports the type.
-     - Steps 3-4.
+     - P3-P4.
      - TBD.
-   * - 6
-     - ``AttentionPlan`` and materialized correctness implementation.
-     - MHA/GQA/MQA, mask, causal, and KV-cache differential tests pass.
-     - Steps 1-2.
+   * - P6
+     - ``AttentionPlan`` and materialized tensor correctness implementation.
+     - MHA/GQA/MQA, masks, causal behavior, and tensor past/present
+       differential tests pass.
+     - P1-P2.
      - TBD.
-   * - 7
+   * - P7
      - Online-softmax prefill Attention.
      - No full score/probability tensor; long-context prefill is within 1.1x of
        ONNX Runtime with bounded temporary memory.
-     - Steps 4 and 6.
+     - P4 and P6.
      - TBD.
-   * - 8
-     - Single-token decode and blocked/paged KV cache.
+
+Part II -- persistent caches
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. list-table::
+   :header-rows: 1
+   :widths: 8 24 36 17 15
+
+   * - Step
+     - Deliverable
+     - Exit criterion
+     - Dependency
+     - Pull requests
+   * - C0
+     - Backend-neutral ``KVCache`` value, ``CacheMap``, persistent allocator,
+       lifetime actions, reset semantics, events, and C++/Python bindings in
+       ``onnx-light``.
+     - Cache values survive invocation cleanup, are explicitly reset, and pass
+       ownership, subgraph, release-plan, and request-isolation tests.
+     - P6.
+     - TBD.
+   * - C1
+     - Tensor import/export adapters, safe graph rewrite, contiguous CPU cache,
+       and cache append/view operations.
+     - Standard ONNX outputs remain identical; append copies only new tokens;
+       rewrite falls back whenever cache state is externally observable.
+     - C0 and P6.
+     - TBD.
+   * - C2
+     - Cache-aware streaming single-token decode.
      - Decode is within 1.1x of ONNX Runtime over the target context range and
-       scales with measured cache bandwidth.
-     - Steps 6-7.
+       no complete score, present tensor, or cache gather is materialized.
+     - C1 and P7.
      - TBD.
-   * - 9
-     - Attention specialization, fusion, and KV quantization.
-     - At least one representative model workload exceeds ONNX Runtime by a
-       repeatable 10% without changing model outputs beyond agreed tolerances.
-     - Steps 5, 7, and 8.
+   * - C3
+     - Paged storage, sliding-window eviction, beam fork/reorder, copy-on-write,
+       and speculative checkpoint/truncate.
+     - Generation operations avoid full-cache copies and paged decode matches
+       contiguous-cache results.
+     - C2.
+     - TBD.
+   * - C4
+     - INT8/INT4 cold-page quantization and proven-safe projection/rotary/cache
+       fusion.
+     - At least one representative long-context workload exceeds ONNX Runtime
+       by a repeatable 10% within agreed model-quality tolerances.
+     - P5 and C3.
      - TBD.

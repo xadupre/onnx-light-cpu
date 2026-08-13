@@ -145,10 +145,11 @@ file(GLOB CPU_KERNEL_SOURCES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/*.cc"
     "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/*/*.cc"
     "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/*/*/*.cc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/*/*/*/*.cc"
 )
 
 set(_gemm_avx512_source
-    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/avx512/gemm_kernel_avx512.cc")
+    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/gemm/avx512/gemm_kernel_avx512.cc")
 set(_abs_avx512_source
     "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/avx512/abs_kernel_avx512.cc")
 set(_exp_log_avx512_source
@@ -551,9 +552,12 @@ if(ONNX_LIGHT_CPU_INSTALL)
       DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/onnx_light_cpu/impl")
 
   install(FILES
-      "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/gemm_plan.h"
       "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/math_kernels.h"
       DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/onnx_light_cpu/impl/math")
+
+  install(FILES
+      "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/gemm/gemm_plan.h"
+      DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/onnx_light_cpu/impl/math/gemm")
 
   install(FILES
       "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/logical/logical_kernels.h"
