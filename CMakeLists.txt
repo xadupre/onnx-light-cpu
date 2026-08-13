@@ -147,10 +147,13 @@ file(GLOB CPU_KERNEL_SOURCES CONFIGURE_DEPENDS
 
 set(_gemm_avx512_source
     "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/gemm_kernel_avx512.cc")
+set(_abs_avx512_source
+    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/abs_kernel_avx512.cc")
 if(NOT ONNX_LIGHT_CPU_HAVE_AVX512F_FLAG)
   # Without -mavx512f the <immintrin.h> AVX-512 intrinsics this file uses
   # aren't declared/usable; exclude it entirely rather than fail to compile.
   list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_gemm_avx512_source}")
+  list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_abs_avx512_source}")
 endif()
 
 file(GLOB PY_KERNELS_SOURCES CONFIGURE_DEPENDS
@@ -195,8 +198,12 @@ if(ONNX_LIGHT_CPU_HAVE_AVX512F_FLAG)
   if(NOT MSVC)
     set_source_files_properties("${_gemm_avx512_source}" PROPERTIES
         COMPILE_OPTIONS "-mavx512f")
+    set_source_files_properties("${_abs_avx512_source}" PROPERTIES
+        COMPILE_OPTIONS "-mavx512f")
   else()
     set_source_files_properties("${_gemm_avx512_source}" PROPERTIES
+        COMPILE_OPTIONS "/arch:AVX512")
+    set_source_files_properties("${_abs_avx512_source}" PROPERTIES
         COMPILE_OPTIONS "/arch:AVX512")
   endif()
   # Told gemm_kernel.cc (compiled at the baseline ONNX_LIGHT_CPU_SIMD_FLAGS)
