@@ -272,10 +272,8 @@ set_kernel_usage_recording(True)
 # Plot the timings
 # ----------------
 #
-# The left panel shows the raw execution time per shape/dtype on a log scale;
-# solid bars are onnx-light-cpu and hatched bars are onnxruntime. The right
-# panel shows the float16/bfloat16 overhead relative to float32 for the same
-# backend and shape (values above 1 mean slower than float32).
+# The panel shows the raw execution time per shape/dtype on a log scale;
+# solid bars are onnx-light-cpu and hatched bars are onnxruntime.
 
 import matplotlib.pyplot as plt
 
@@ -289,7 +287,7 @@ colors = {
     "onnx-light (built-in)": "#5cb85c",
 }
 
-fig, (ax_time, ax_overhead) = plt.subplots(1, 2, figsize=(12, 4.8))
+fig, ax_time = plt.subplots(1, 1, figsize=(8, 4.8))
 
 series = [
     ("onnx-light-cpu float32", results["float32"], colors["float32"], None),
@@ -330,30 +328,6 @@ ax_time.set_xticklabels(shape_labels, fontsize=8, rotation=45, ha="right")
 ax_time.set_ylabel("time (microseconds)")
 ax_time.set_title(f"Gemm execution time by code path (SIMD: {simd_name})")
 ax_time.legend()
-
-float32_times = np.array(results["float32"])
-for label in ("float16", "bfloat16"):
-    overhead = np.array(results[label]) / float32_times
-    ax_overhead.plot(
-        shape_labels,
-        overhead,
-        "o-",
-        label=f"onnx-light-cpu {label}",
-        color=colors[label],
-    )
-ort_overhead = np.array(ort_results["float16"]) / np.array(ort_results["float32"])
-ax_overhead.plot(
-    shape_labels,
-    ort_overhead,
-    "o--",
-    label="onnxruntime float16",
-    color=colors["float16"],
-)
-ax_overhead.axhline(1.0, color="grey", linewidth=0.8, linestyle=":", label="float32 baseline")
-ax_overhead.set_ylabel("time relative to float32")
-ax_overhead.set_title("float16 / bfloat16 widen/round-trip overhead")
-ax_overhead.tick_params(axis="x", labelrotation=45, labelsize=8)
-ax_overhead.legend()
 
 fig.tight_layout()
 fig.savefig("plot_gemm_dtype_benchmark.png")

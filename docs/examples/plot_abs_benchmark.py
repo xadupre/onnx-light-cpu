@@ -254,19 +254,17 @@ ort_times = np.array([r[4] for r in rows])
 # ----------------
 #
 # The left panel shows the raw execution time versus the array size on a
-# log-log scale. The middle panel shows the speed-up relative to
+# log-log scale. The right panel shows the speed-up relative to
 # **onnxruntime** (the baseline): for each back-end the onnxruntime time is
 # divided by the back-end time, so values above ``1`` are faster than
 # onnxruntime and values below ``1`` are slower. The onnxruntime curve is a
-# flat line at ``1`` by construction. The right panel isolates the comparison
-# of interest: ``onnx-light built-in time / onnx-light-cpu time``. Values above
-# ``1`` therefore show directly how much the CPU kernel is faster. Both speed-up
-# panels use a logarithmic y-axis so that a given ratio and its reciprocal are
-# equidistant from the ``1`` baseline.
+# flat line at ``1`` by construction. The speed-up panel uses a logarithmic
+# y-axis so that a given ratio and its reciprocal are equidistant from the
+# ``1`` baseline.
 
 import matplotlib.pyplot as plt
 
-fig, (ax_time, ax_speedup, ax_cpu_gain) = plt.subplots(1, 3, figsize=(16, 4.5))
+fig, (ax_time, ax_speedup) = plt.subplots(1, 2, figsize=(12, 4.5))
 
 ax_time.plot(sizes, numpy_times * 1e6, "o--", label="numpy", color="#9b7ec8")
 if light_session is not None:
@@ -329,26 +327,6 @@ ax_speedup.set_ylabel("speed-up vs onnxruntime")
 ax_speedup.set_title("Abs speed-up (onnxruntime = 1)")
 ax_speedup.tick_params(axis="x", labelrotation=45)
 ax_speedup.legend()
-
-if light_session is not None:
-    cpu_gain = alone_times / cpu_times
-    ax_cpu_gain.plot(sizes, cpu_gain, "o-", color="#4a9eff")
-    for size, gain in zip(sizes, cpu_gain, strict=True):
-        ax_cpu_gain.annotate(
-            f"{gain:.2f}x",
-            (size, gain),
-            xytext=(0, 7),
-            textcoords="offset points",
-            ha="center",
-            fontsize=8,
-        )
-ax_cpu_gain.axhline(1.0, color="grey", linewidth=0.8, linestyle=":")
-ax_cpu_gain.set_xscale("log")
-ax_cpu_gain.set_yscale("log")
-ax_cpu_gain.set_xlabel("array size (elements)")
-ax_cpu_gain.set_ylabel("speed-up vs onnx-light built-in")
-ax_cpu_gain.set_title("onnx-light-cpu gain (built-in = 1)")
-ax_cpu_gain.tick_params(axis="x", labelrotation=45)
 
 fig.tight_layout()
 fig.savefig("plot_abs_benchmark.png")
