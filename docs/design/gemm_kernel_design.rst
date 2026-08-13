@@ -250,7 +250,7 @@ gains.
        ``onnx_light_cpu/impl/math/exp_log_kernel.cc``). This is correct and
        reuses the full float32 SIMD path for the matmul itself, but the
        widen/round-trip is pure per-element overhead with no vectorization of
-       its own (see ``plot_gemm_dtype_benchmark.py`` in the example gallery
+       its own (see ``plot_gemm_dtype_benchmark.py`` in the benchmark gallery
        for measured overhead across representative shapes). What remains is
        the **SIMD acceleration layer**: real half-precision vector
        micro-kernels (AVX2 ``F16C``/``VCVTPH2PS`` for convert-then-FMA-in-
