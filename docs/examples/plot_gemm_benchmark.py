@@ -120,15 +120,28 @@ def measure(func, repeat, warmup=3):
     return float(np.median(timings))
 
 
+def measure_together(*funcs, repeat, warmup=3):
+    timings = tuple([] for _ in funcs)
+    for iteration in range(warmup):
+        for index in range(len(funcs)):
+            funcs[(iteration + index) % len(funcs)]()
+    for iteration in range(repeat):
+        for offset in range(len(funcs)):
+            index = (iteration + offset) % len(funcs)
+            start = time.perf_counter()
+            funcs[index]()
+            timings[index].append(time.perf_counter() - start)
+    return tuple(float(np.median(values)) for values in timings)
+
+
 # %%
-# Built-in onnx-light curve (measured *before* registering onnx-light-cpu)
-# ---------------------------------------------------------------------------
+# Prime the built-in onnx-light kernel before registering onnx-light-cpu
+# ----------------------------------------------------------------------
 #
-# A dedicated model/session, run and timed here while onnx-light-cpu's
-# accelerated ``Gemm`` kernel has not been installed yet, so it resolves to
-# onnx-light's own built-in reference kernel. Skipped for the last two sizes
-# in ``size_grid`` (256 and 512) since the built-in kernel's cost grows much
-# faster than the other back-ends.
+# A dedicated model/session is run once while onnx-light-cpu's accelerated
+# ``Gemm`` kernel has not been installed yet, so it resolves and caches
+# onnx-light's own built-in reference kernel. It is timed below alongside the
+# other runtimes for all but the last two sizes.
 
 size_grid = [16, 32, 64, 128, 256, 512]
 alone_sizes = size_grid[:-2]
@@ -136,19 +149,14 @@ rng = np.random.default_rng(0)
 
 alone_model = make_gemm_model()
 alone_session = ReferenceEvaluator(alone_model)
+alone_session.run(
+    None,
+    {
+        "A": np.zeros((1, 1), dtype=np.float32),
+        "B": np.zeros((1, 1), dtype=np.float32),
+    },
+)
 alone_times = {}
-for size in alone_sizes:
-    a = rng.standard_normal((size, size)).astype(np.float32)
-    b = rng.standard_normal((size, size)).astype(np.float32)
-    expected = a @ b
-    repeat = max(7, min(100, 20_000_000 // (size * size * size)))
-
-    def run_alone(a=a, b=b):
-        return alone_session.run(None, {"A": a, "B": b})[0]
-
-    alone_times[size] = measure(run_alone, repeat)
-    np.testing.assert_allclose(run_alone(), expected, rtol=1e-2, atol=1e-2)
-    print(f"size={size:>4}x{size:<4} | onnx-light (built-in)={alone_times[size] * 1e6:10.2f} us")
 
 light_label = "onnx-light + onnx-light-cpu"
 alone_label = "onnx-light (built-in)"
@@ -191,8 +199,9 @@ set_kernel_usage_recording(False)
 # -------------------------------
 #
 # For every size the same square inputs are fed to numpy, onnx-light-cpu and
-# onnxruntime. The results are checked against :func:`numpy.matmul` so every
-# implementation agrees.
+# onnxruntime. Runtimes whose timings form speed-up ratios are measured together,
+# rotating their order to reduce cache and scheduling bias. The results are
+# checked against :func:`numpy.matmul` so every implementation agrees.
 
 rng = np.random.default_rng(0)
 
@@ -206,20 +215,37 @@ for size in size_grid:
 
     numpy_time = measure(lambda a=a, b=b: a @ b, repeat)
 
-    if light_session is not None:
-        cpu_time = measure(lambda a=a, b=b: run_light(a, b), repeat)
-        np.testing.assert_allclose(run_light(a, b), expected, rtol=1e-2, atol=1e-2)
+    if size in alone_sizes:
+        alone_time, cpu_time, ort_time = measure_together(
+            lambda a=a, b=b: alone_session.run(None, {"A": a, "B": b}),
+            lambda a=a, b=b: run_light(a, b),
+            lambda a=a, b=b: session.run(None, {"A": a, "B": b}),
+            repeat=repeat,
+        )
+        alone_times[size] = alone_time
+        np.testing.assert_allclose(
+            alone_session.run(None, {"A": a, "B": b})[0],
+            expected,
+            rtol=1e-2,
+            atol=1e-2,
+        )
     else:
-        cpu_time = float("nan")
+        cpu_time, ort_time = measure_together(
+            lambda a=a, b=b: run_light(a, b),
+            lambda a=a, b=b: session.run(None, {"A": a, "B": b}),
+            repeat=repeat,
+        )
 
-    ort_time = measure(lambda a=a, b=b: session.run(None, {"A": a, "B": b}), repeat)
+    np.testing.assert_allclose(run_light(a, b), expected, rtol=1e-2, atol=1e-2)
     np.testing.assert_allclose(
         session.run(None, {"A": a, "B": b})[0], expected, rtol=1e-2, atol=1e-2
     )
 
     rows.append((size, numpy_time, cpu_time, ort_time))
+    alone_text = f"{alone_times[size] * 1e6:10.2f} us" if size in alone_times else "not measured"
     print(
         f"size={size:>4}x{size:<4} | numpy={numpy_time * 1e6:10.2f} us | "
+        f"onnx-light={alone_text} | "
         f"onnx-light-cpu={cpu_time * 1e6:10.2f} us | "
         f"onnxruntime={ort_time * 1e6:10.2f} us"
     )
