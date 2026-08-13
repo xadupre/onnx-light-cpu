@@ -522,14 +522,21 @@ performance regression.
 Implementation order and dependencies
 -------------------------------------
 
+This roadmap and its dependency ordering were consolidated in
+`onnx-light-cpu #137
+<https://github.com/xadupre/onnx-light-cpu/pull/137>`_. The status below
+distinguishes implemented code from performance exit criteria that still
+require measurements on dedicated hardware.
+
 .. list-table::
    :header-rows: 1
-   :widths: 8 24 36 17 15
+   :widths: 7 21 30 14 13 15
 
    * - Step
      - Deliverable
      - Exit criterion
      - Dependency
+     - Status
      - Pull requests
    * - P0
      - Reproducible MLAS and Attention cases in ``onnx-light``'s C++
@@ -537,6 +544,7 @@ Implementation order and dependencies
      - Stable medians and dispersion for the agreed shape/type corpus on pinned
        hardware.
      - None.
+     - Corpus implemented; dedicated-hardware measurements pending.
      - `onnx-light-cpu #134
        <https://github.com/xadupre/onnx-light-cpu/pull/134>`_,
        `onnx-light #4412
@@ -548,6 +556,7 @@ Implementation order and dependencies
      - Existing Gemm results remain correct with no material performance
        regression.
      - P0.
+     - Implemented.
      - `onnx-light-cpu #135
        <https://github.com/xadupre/onnx-light-cpu/pull/135>`_
    * - P2
@@ -555,32 +564,46 @@ Implementation order and dependencies
      - Differential tests pass for rank-1, batched, broadcast, transpose, and
        empty-dimension cases.
      - P1.
-     - TBD.
+     - Implemented.
+     - `onnx-light-cpu #138
+       <https://github.com/xadupre/onnx-light-cpu/pull/138>`_
    * - P3
      - Five-loop FP32/FP64 engine and shape-specific algorithms.
      - Generic dense path reaches at least 0.8x MLAS before assembly-level
        tuning.
      - P1.
-     - TBD.
+     - Engine, algorithms, cache-derived blocking, and benchmark corpus
+       implemented; benchmark/thread-control PR open and 0.8x MLAS gate
+       pending.
+     - `onnx-light-cpu #136
+       <https://github.com/xadupre/onnx-light-cpu/pull/136>`_,
+       `onnx-light-cpu #139
+       <https://github.com/xadupre/onnx-light-cpu/pull/139>`_,
+       `onnx-light-cpu #140 (open)
+       <https://github.com/xadupre/onnx-light-cpu/pull/140>`_
    * - P4
      - FMA/AVX2/AVX-512/ARM micro-kernels and tuned scheduler.
      - Priority FP32/FP64 corpus reaches 0.9-1.0x MLAS.
      - P3.
+     - Planned.
      - TBD.
    * - P5
      - Native/panel-converted FP16, BF16, and integer paths.
      - Low-precision corpus reaches 0.9x MLAS where MLAS supports the type.
      - P3-P4.
+     - Planned.
      - TBD.
    * - P6
      - ``AttentionPlan`` and materialized tensor correctness implementation.
      - MHA/GQA/MQA, masks, causal behavior, and tensor past/present
        differential tests pass.
      - P1-P2.
+     - Planned.
      - TBD.
    * - P7
      - Online-softmax prefill Attention.
      - No full score/probability tensor; long-context prefill is within 1.1x of
        ONNX Runtime with bounded temporary memory.
      - P4 and P6.
+     - Planned.
      - TBD.
