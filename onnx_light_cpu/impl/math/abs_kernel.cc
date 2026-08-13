@@ -31,6 +31,8 @@ namespace onnx_light_cpu {
 // than staying inline. One thirty-second of a work unit postpones parallelism
 // until roughly one million elements.
 inline constexpr double kAbsCostPerElement = 1.0 / 32.0;
+inline constexpr std::size_t kAbsParallelThreshold =
+    static_cast<std::size_t>(kParallelForGrainSize) * 32;
 
 // ---------------------------------------------------------------------------
 // AbsFloat32 implementations
@@ -79,23 +81,6 @@ void AbsFloat32_AVX(const float *input, float *output, std::size_t count) {
   }
 }
 
-#ifdef __AVX512F__
-void AbsFloat32_AVX512(const float *input, float *output, std::size_t count) {
-  const __m512 sign_mask = _mm512_castsi512_ps(_mm512_set1_epi32(0x7FFFFFFF));
-  std::size_t i = 0;
-  const std::size_t stride = 16;
-  const std::size_t aligned_count = count - (count % stride);
-  for (; i < aligned_count; i += stride) {
-    __m512 v = _mm512_loadu_ps(input + i);
-    v = _mm512_and_ps(v, sign_mask);
-    _mm512_storeu_ps(output + i, v);
-  }
-  for (; i < count; ++i) {
-    output[i] = std::fabs(input[i]);
-  }
-}
-#endif // __AVX512F__
-
 #endif // ONNX_LIGHT_CPU_X86
 
 } // namespace
@@ -104,7 +89,7 @@ namespace {
 void AbsFloat32_Dispatch(const float *input, float *output, std::size_t count) {
 #if ONNX_LIGHT_CPU_X86
   static const SimdLevel level = DetectSimdLevel();
-#ifdef __AVX512F__
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
   if (level >= SimdLevel::kAVX512) {
     AbsFloat32_AVX512(input, output, count);
     return;
@@ -126,6 +111,11 @@ void AbsFloat32_Dispatch(const float *input, float *output, std::size_t count) {
 void AbsFloat32(const float *input, float *output, std::size_t count) {
   if (count == 0)
     return;
+  if (count < kAbsParallelThreshold) {
+    // ParallelFor would keep this range inline; avoid its cost-model overhead.
+    AbsFloat32_Dispatch(input, output, count);
+    return;
+  }
   ParallelFor(static_cast<std::int64_t>(count), kAbsCostPerElement, ParallelForSimdLanes<float>(),
               [input, output](std::int64_t begin, std::int64_t end) {
                 AbsFloat32_Dispatch(input + begin, output + begin,

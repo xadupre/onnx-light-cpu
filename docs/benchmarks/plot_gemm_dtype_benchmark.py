@@ -137,6 +137,20 @@ def measure(func, repeat, warmup=3):
     return float(np.median(timings))
 
 
+def measure_together(*funcs, repeat, warmup=3):
+    timings = tuple([] for _ in funcs)
+    for iteration in range(warmup):
+        for index in range(len(funcs)):
+            funcs[(iteration + index) % len(funcs)]()
+    for iteration in range(repeat):
+        for offset in range(len(funcs)):
+            index = (iteration + offset) % len(funcs)
+            start = time.perf_counter()
+            funcs[index]()
+            timings[index].append(time.perf_counter() - start)
+    return tuple(float(np.median(values)) for values in timings)
+
+
 # %%
 # Shapes chosen to activate each Gemm code path
 # -----------------------------------------------
@@ -223,9 +237,11 @@ set_kernel_usage_recording(False)
 # -----------------
 #
 # For every shape and dtype, random ``float32`` inputs are rounded to the
-# target dtype and fed through the matching session. Results are checked
-# against ``float32`` numpy matmul (with a wider tolerance for the lower
-# precision dtypes) so every combination agrees on the answer.
+# target dtype and fed through the matching session. The dtype variants for each
+# backend are measured together, rotating their order so the overhead ratios are
+# not skewed by cache or scheduling changes. Results are checked against
+# ``float32`` numpy matmul (with a wider tolerance for the lower precision
+# dtypes) so every combination agrees on the answer.
 
 rng = np.random.default_rng(0)
 results = {label: [] for label in DTYPES}
@@ -238,29 +254,57 @@ for shape_label, M, N, K in SHAPES:
     repeat = max(7, min(50, 200_000_000 // (M * N * K + 1)))
 
     print(f"\nshape={shape_label.splitlines()[0]:<24} M={M} N={N} K={K} repeat={repeat}")
-    for label, (_, np_dtype) in DTYPES.items():
-        a = a32.astype(np_dtype)
-        b = b32.astype(np_dtype)
-        session = sessions[label]
+    inputs = {
+        label: (a32.astype(np_dtype), b32.astype(np_dtype))
+        for label, (_, np_dtype) in DTYPES.items()
+    }
+    runs = tuple(
+        (
+            lambda session=sessions[label], a=inputs[label][0], b=inputs[label][1]: session.run(
+                None, {"A": a, "B": b}
+            )[0]
+        )
+        for label in DTYPES
+    )
+    elapsed_by_label = dict(
+        zip(
+            DTYPES,
+            measure_together(*runs, repeat=repeat),
+            strict=True,
+        )
+    )
+    ort_runs = tuple(
+        (
+            lambda session=ort_sessions[label], a=inputs[label][0], b=inputs[label][1]: (
+                session.run(None, {"A": a, "B": b})[0]
+            )
+        )
+        for label in ort_sessions
+    )
+    ort_elapsed_by_label = dict(
+        zip(
+            ort_sessions,
+            measure_together(*ort_runs, repeat=repeat),
+            strict=True,
+        )
+    )
 
-        def run(session=session, a=a, b=b):
-            return session.run(None, {"A": a, "B": b})[0]
-
-        elapsed = measure(run, repeat)
+    for label in DTYPES:
+        a, b = inputs[label]
+        elapsed = elapsed_by_label[label]
         results[label].append(elapsed)
 
         tol = 1e-3 if label == "float32" else (5e-2 if label == "float16" else 5e-1)
-        np.testing.assert_allclose(run().astype(np.float32), expected, rtol=tol, atol=tol)
+        output = sessions[label].run(None, {"A": a, "B": b})[0]
+        np.testing.assert_allclose(output.astype(np.float32), expected, rtol=tol, atol=tol)
 
         if label in ort_sessions:
-            ort_session = ort_sessions[label]
-
-            def run_ort(session=ort_session, a=a, b=b):
-                return session.run(None, {"A": a, "B": b})[0]
-
-            ort_elapsed = measure(run_ort, repeat)
+            ort_elapsed = ort_elapsed_by_label[label]
             ort_results[label].append(ort_elapsed)
-            np.testing.assert_allclose(run_ort().astype(np.float32), expected, rtol=tol, atol=tol)
+            ort_output = ort_sessions[label].run(None, {"A": a, "B": b})[0]
+            np.testing.assert_allclose(
+                ort_output.astype(np.float32), expected, rtol=tol, atol=tol
+            )
             ort_text = f"{ort_elapsed * 1e6:10.2f} us"
         else:
             ort_text = "not supported"

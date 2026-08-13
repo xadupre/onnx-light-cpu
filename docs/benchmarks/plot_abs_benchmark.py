@@ -104,15 +104,14 @@ def measure(func, repeat, warmup=3):
     return float(np.median(timings))
 
 
-def measure_pair(first, second, repeat, warmup=3):
-    for _ in range(warmup):
-        first()
-        second()
-    timings = ([], [])
-    funcs = (first, second)
+def measure_together(*funcs, repeat, warmup=3):
+    timings = tuple([] for _ in funcs)
+    for iteration in range(warmup):
+        for index in range(len(funcs)):
+            funcs[(iteration + index) % len(funcs)]()
     for iteration in range(repeat):
-        order = (0, 1) if iteration % 2 == 0 else (1, 0)
-        for index in order:
+        for offset in range(len(funcs)):
+            index = (iteration + offset) % len(funcs)
             start = time.perf_counter()
             funcs[index]()
             timings[index].append(time.perf_counter() - start)
@@ -199,10 +198,12 @@ print(f"setup: onnx-light-cpu kernel registration = {registration_time * 1e3:.2f
 #
 # For every size the same input is fed to the four back-ends. Each measurement
 # starts with three untimed warm-up calls, then retains the median of the timed
-# repetitions. The two onnx-light variants are measured as a pair, alternating
-# which one runs first to reduce cache and scheduling bias. At least seven timed
-# repetitions are used, including for the largest arrays. The results are checked
-# against :func:`numpy.abs` to make sure every implementation agrees.
+# repetitions. The two onnx-light variants and onnxruntime are measured together,
+# rotating which one runs first to reduce cache and scheduling bias. This is
+# especially important for the smallest size, whose few-microsecond timings would
+# otherwise produce unstable speed-up ratios. At least seven timed repetitions are
+# used, including for the largest arrays. The results are checked against
+# :func:`numpy.abs` to make sure every implementation agrees.
 
 rng = np.random.default_rng(0)
 
@@ -216,18 +217,24 @@ for size in size_grid:
     numpy_time = measure(lambda inp=inp: np.abs(inp), repeat)
 
     if light_session is not None:
-        alone_time, cpu_time = measure_pair(
+        alone_time, cpu_time, ort_time = measure_together(
             lambda inp=inp: alone_session.run(None, {"X": inp}),
             lambda inp=inp: run_light(inp),
-            repeat,
+            lambda inp=inp: session.run(None, {"X": inp}),
+            repeat=repeat,
         )
         assert np.array_equal(alone_session.run(None, {"X": inp})[0], expected), size
         assert np.array_equal(run_light(inp), expected), size
+        if size == size_grid[0]:
+            assert alone_time / cpu_time > 1.0
     else:
-        alone_time = measure(lambda inp=inp: alone_session.run(None, {"X": inp}), repeat)
+        alone_time, ort_time = measure_together(
+            lambda inp=inp: alone_session.run(None, {"X": inp}),
+            lambda inp=inp: session.run(None, {"X": inp}),
+            repeat=repeat,
+        )
         cpu_time = float("nan")
 
-    ort_time = measure(lambda inp=inp: session.run(None, {"X": inp}), repeat)
     assert np.array_equal(session.run(None, {"X": inp})[0], expected), size
 
     cpu_speedup = alone_time / cpu_time
