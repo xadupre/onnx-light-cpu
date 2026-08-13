@@ -11,6 +11,32 @@
 
 namespace onnx_light_cpu {
 
+/// Computational path selected for a matrix multiplication plan.
+enum class GemmAlgorithm {
+  kGeneral,
+  kDirect,
+  kSkinnyM,
+  kSkinnyN,
+  kSplitK,
+};
+
+namespace detail {
+
+GemmAlgorithm SelectGemmAlgorithm(bool trans_a, bool trans_b, std::size_t m, std::size_t n,
+                                  std::size_t k, std::size_t vector_lanes);
+
+template <GemmAlgorithm Algorithm>
+void GemmFloat32Planned(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::size_t K,
+                        float alpha, const float *A, const float *B, float beta, const float *C,
+                        float *Y);
+
+template <GemmAlgorithm Algorithm>
+void GemmFloat64Planned(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::size_t K,
+                        double alpha, const double *A, const double *B, double beta,
+                        const double *C, double *Y);
+
+} // namespace detail
+
 // How a micro-kernel call should combine its ``alpha * acc`` result with the
 // existing contents of ``Y``. K is processed in fixed-size chunks (see the
 // comment above ``kGemmTileK`` in gemm_kernel.cc) so a single (row block,
@@ -41,7 +67,7 @@ constexpr std::size_t kGemmTileK = 256;
 // external linkage) in gemm_kernel.cc so gemm_kernel_avx512.cc can reuse them
 // for its own column tail instead of duplicating the mode-driven combine
 // logic. ``Apack`` is a packed, contiguous ``mr x K`` row-major panel (see
-// ``PackARowBlock``): ``Apack[r * K + k]`` is ``A(m + r, k0 + k)``.
+// ``PackAPanel``): ``Apack[r * K + k]`` is ``A(m + r, k0 + k)``.
 void GemmMicroKernel_Scalar_F32(std::size_t mr, std::size_t nb, std::size_t K, float alpha,
                                 float beta, const float *Bmat, std::size_t N,
                                 const float *Crow_base, std::size_t Cstride, float *Yrow_base,

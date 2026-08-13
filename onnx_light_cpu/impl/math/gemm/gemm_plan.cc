@@ -42,15 +42,34 @@ template <typename T> std::size_t VectorLanes() {
   }
 }
 
-template <typename T>
+template <typename T, GemmAlgorithm Algorithm>
 void ExecuteFloatKernel(bool trans_a, bool trans_b, std::size_t m, std::size_t n, std::size_t k,
                         T alpha, const T *a, const T *b, T beta, const T *c, T *y) {
   if constexpr (std::is_same_v<T, float>) {
-    GemmFloat32(trans_a, trans_b, m, n, k, alpha, a, b, beta, c, y);
+    detail::GemmFloat32Planned<Algorithm>(trans_a, trans_b, m, n, k, alpha, a, b, beta, c, y);
   } else {
     static_assert(std::is_same_v<T, double>);
-    GemmFloat64(trans_a, trans_b, m, n, k, alpha, a, b, beta, c, y);
+    detail::GemmFloat64Planned<Algorithm>(trans_a, trans_b, m, n, k, alpha, a, b, beta, c, y);
   }
+}
+
+template <typename T>
+auto SelectKernel(GemmAlgorithm algorithm) -> void (*)(bool, bool, std::size_t, std::size_t,
+                                                       std::size_t, T, const T *, const T *, T,
+                                                       const T *, T *) {
+  switch (algorithm) {
+  case GemmAlgorithm::kDirect:
+    return &ExecuteFloatKernel<T, GemmAlgorithm::kDirect>;
+  case GemmAlgorithm::kSkinnyM:
+    return &ExecuteFloatKernel<T, GemmAlgorithm::kSkinnyM>;
+  case GemmAlgorithm::kSkinnyN:
+    return &ExecuteFloatKernel<T, GemmAlgorithm::kSkinnyN>;
+  case GemmAlgorithm::kSplitK:
+    return &ExecuteFloatKernel<T, GemmAlgorithm::kSplitK>;
+  case GemmAlgorithm::kGeneral:
+    return &ExecuteFloatKernel<T, GemmAlgorithm::kGeneral>;
+  }
+  throw std::logic_error("onnx_light_cpu::GemmPlan: unsupported Gemm algorithm.");
 }
 
 std::size_t CeilDiv(std::size_t value, std::size_t divisor) {
@@ -72,16 +91,38 @@ std::size_t UsefulThreads(std::size_t m, std::size_t n) {
 
 } // namespace
 
+namespace detail {
+
+GemmAlgorithm SelectGemmAlgorithm(bool trans_a, bool trans_b, std::size_t m, std::size_t n,
+                                  std::size_t k, std::size_t vector_lanes) {
+  if (k >= 4096 && m != 0 && n <= 64 / m) {
+    return GemmAlgorithm::kSplitK;
+  }
+  if (!trans_a && !trans_b && k <= 32) {
+    return GemmAlgorithm::kDirect;
+  }
+  if (m <= kGemmMR) {
+    return GemmAlgorithm::kSkinnyM;
+  }
+  if (n <= vector_lanes) {
+    return GemmAlgorithm::kSkinnyN;
+  }
+  return GemmAlgorithm::kGeneral;
+}
+
+} // namespace detail
+
 template <typename T>
 GemmPlan<T>::GemmPlan(const GemmPlanOptions<T> &options)
     : trans_a_(options.trans_a), trans_b_(options.trans_b), m_(options.m), n_(options.n),
       k_(options.k), alpha_(options.alpha), beta_(options.beta),
-      algorithm_(GemmAlgorithm::kGeneral),
+      algorithm_(detail::SelectGemmAlgorithm(options.trans_a, options.trans_b, options.m, options.n,
+                                             options.k, VectorLanes<T>())),
       blocking_{kGemmTileM, kGemmTileN, kGemmTileK, kGemmMR, 2 * VectorLanes<T>()},
       useful_threads_(UsefulThreads(options.m, options.n)),
       has_constant_b_(!options.constant_b.empty()),
       constant_b_(options.constant_b.begin(), options.constant_b.end()),
-      kernel_(&ExecuteFloatKernel<T>) {
+      kernel_(SelectKernel<T>(algorithm_)) {
   CheckedProduct(m_, k_, "A");
   const std::size_t b_count = CheckedProduct(k_, n_, "B");
   CheckedProduct(m_, n_, "Y");

@@ -517,7 +517,7 @@ void GemmMicroKernel_SSE2_F64(std::size_t mr, std::size_t nb, std::size_t K, dou
 // wakes workers far too early (for example as soon as M crosses one 64-row
 // tile). This divisor keeps sub-million-FMA tiles inline while preserving
 // parallelism for genuinely compute-heavy panels.
-constexpr double kGemmFmasPerParallelWorkUnit = 256.0;
+constexpr double kGemmFmasPerParallelWorkUnit = 64.0;
 
 // Runtime-selected micro-kernel flavor for a given element type.
 enum class GemmKernelKind { kScalar, kSSE2, kAVX, kAVX512 };
@@ -538,6 +538,20 @@ template <typename T> GemmKernelKind SelectGemmKernelKind() {
   }
 #endif
   return GemmKernelKind::kScalar;
+}
+
+template <typename T> std::size_t GemmVectorLanes(GemmKernelKind kind) {
+  switch (kind) {
+  case GemmKernelKind::kAVX512:
+    return 64 / sizeof(T);
+  case GemmKernelKind::kAVX:
+    return 32 / sizeof(T);
+  case GemmKernelKind::kSSE2:
+    return 16 / sizeof(T);
+  case GemmKernelKind::kScalar:
+    return 1;
+  }
+  return 1;
 }
 
 // Dispatches the register-blocked micro-kernel matching ``kind`` for float32.
@@ -600,171 +614,261 @@ void GemmTileF64(GemmKernelKind kind, std::size_t mr, std::size_t nb, std::size_
                              Ystride, n0, mode, Apack);
 }
 
-// Packs a ``kc x nb`` row-major panel of ``Bmat`` (already resolved to a
-// contiguous K x N row-major matrix, see ``GemmImpl``) into a small contiguous
-// buffer reused across every row block of ``A`` within a (row-block panel,
-// k-chunk): without this, each row block's inner loop would touch an
-// ``nb``-wide slice embedded in a stride-``N`` matrix that can span many
-// megabytes end to end, so once a task straddles more than one ``kGemmMR``
-// row block (i.e. whenever a row block spans more than ``kGemmTileM`` rows)
-// repeated re-reads of the same logical columns are not guaranteed to still
-// be cache-resident. Packing the panel once per (task, k-chunk) bounds the
-// footprint every following row block reuses to
-// ``kGemmTileK * kGemmTileN`` elements, comfortably L2-resident, mirroring
-// the ``A``-packing rationale above.
 template <typename T>
-void PackBPanel(const T *Bmat, std::size_t N, std::size_t k0, std::size_t kc, std::size_t n0,
-                std::size_t nb, T *Bpack) {
+void PackBPanel(bool trans_b, const T *B, std::size_t K, std::size_t N, std::size_t k0,
+                std::size_t kc, std::size_t n0, std::size_t nb, T *Bpack) {
+  if (!trans_b) {
+    for (std::size_t k = 0; k < kc; ++k) {
+      const T *src = B + (k0 + k) * N + n0;
+      std::copy(src, src + nb, Bpack + k * nb);
+    }
+    return;
+  }
   for (std::size_t k = 0; k < kc; ++k) {
-    const T *src = Bmat + (k0 + k) * N + n0;
-    std::copy(src, src + nb, Bpack + k * nb);
+    for (std::size_t n = 0; n < nb; ++n) {
+      Bpack[k * nb + n] = B[(n0 + n) * K + k0 + k];
+    }
   }
 }
 
-// Packs a ``mr x kc`` row-major panel of ``A`` (or ``A^T`` when ``trans_a``)
-// into a contiguous buffer: ``Apack[r * kc + k] == A(m + r, k0 + k)``. This
-// replaces a per-(row, k, column-vector) indexed/strided lookup with a single
-// linear read per micro-kernel call: without packing, every one of the (up
-// to ``kGemmTileN / vector_width``) column-vector iterations that share the
-// same ``(row, k)`` element would repeat the ``trans_a`` branch and, when
-// ``trans_a`` is set, a strided (stride ``M``) load. When ``!trans_a``, ``A``
-// is already contiguous along ``k`` so the pack is a plain memcpy-equivalent.
 template <typename T>
-void PackARowBlock(bool trans_a, const T *A, std::size_t M, std::size_t K, std::size_t m,
-                   std::size_t mr, std::size_t k0, std::size_t kc, T *Apack) {
-  for (std::size_t r = 0; r < mr; ++r) {
-    const std::size_t row = m + r;
-    T *dst = Apack + r * kc;
+void PackAPanel(bool trans_a, const T *A, std::size_t M, std::size_t K, std::size_t m0,
+                std::size_t mc, std::size_t k0, std::size_t kc, T *Apack) {
+  for (std::size_t m = 0; m < mc; ++m) {
+    T *dst = Apack + m * kc;
     if (trans_a) {
-      // A is stored as K x M; A(row, k0 + k) == A_storage[(k0 + k) * M + row].
       for (std::size_t k = 0; k < kc; ++k) {
-        dst[k] = A[(k0 + k) * M + row];
+        dst[k] = A[(k0 + k) * M + m0 + m];
       }
     } else {
-      const T *src = A + row * K + k0;
+      const T *src = A + (m0 + m) * K + k0;
       std::copy(src, src + kc, dst);
     }
   }
 }
 
-// One (row block, column panel) output tile, part of the flattened work list
-// below.
-struct GemmTask {
-  std::size_t m0;
-  std::size_t m_end;
-  std::size_t n0;
-  std::size_t nb;
-};
+template <typename T>
+void InitializeOutput(std::size_t M, std::size_t N, T beta, const T *C, T *Y) {
+  const bool has_bias = C != nullptr && beta != T(0);
+  ParallelFor(static_cast<std::int64_t>(M), static_cast<double>(N),
+              [=](std::int64_t begin, std::int64_t end) {
+                for (std::int64_t m = begin; m < end; ++m) {
+                  T *y = Y + static_cast<std::size_t>(m) * N;
+                  if (has_bias) {
+                    const T *c = C + static_cast<std::size_t>(m) * N;
+                    for (std::size_t n = 0; n < N; ++n) {
+                      y[n] = beta * c[n];
+                    }
+                  } else {
+                    std::fill(y, y + N, T(0));
+                  }
+                }
+              });
+}
 
-// Generic GEMM driver shared by the float32 and float64 entry points. ``tile``
-// dispatches to the register-blocked micro-kernel of the selected SIMD level.
 template <typename T, typename TileFn>
+void GemmDirect(std::size_t M, std::size_t N, std::size_t K, T alpha, const T *A, const T *B,
+                T beta, const T *C, T *Y, GemmKernelKind kind, TileFn tile) {
+  const bool has_bias = C != nullptr && beta != T(0);
+  const std::size_t row_blocks = (M + kGemmMR - 1) / kGemmMR;
+  const std::size_t column_panels = (N + kGemmTileN - 1) / kGemmTileN;
+  const std::size_t task_count = row_blocks * column_panels;
+  const double cost = static_cast<double>(K) * kGemmMR * kGemmTileN / kGemmFmasPerParallelWorkUnit;
+  ParallelFor(
+      static_cast<std::int64_t>(task_count), cost, [&](std::int64_t begin, std::int64_t end) {
+        for (std::int64_t task = begin; task < end; ++task) {
+          const std::size_t index = static_cast<std::size_t>(task);
+          const std::size_t panel = index / row_blocks;
+          const std::size_t block = index % row_blocks;
+          const std::size_t m = block * kGemmMR;
+          const std::size_t n0 = panel * kGemmTileN;
+          const std::size_t mr = std::min(kGemmMR, M - m);
+          const std::size_t nb = std::min(kGemmTileN, N - n0);
+          tile(kind, mr, nb, K, alpha, beta, B, N, has_bias ? C + m * N : nullptr, N, Y + m * N, N,
+               n0, has_bias ? GemmAccumMode::kInitBias : GemmAccumMode::kInitZero, A + m * K);
+        }
+      });
+}
+
+template <typename T>
+void GemmSkinnyN(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::size_t K, T alpha,
+                 const T *A, const T *B, T beta, const T *C, T *Y) {
+  const bool has_bias = C != nullptr && beta != T(0);
+  const double cost = static_cast<double>(N) * K / kGemmFmasPerParallelWorkUnit;
+  ParallelFor(static_cast<std::int64_t>(M), cost, [&](std::int64_t begin, std::int64_t end) {
+    for (std::int64_t row = begin; row < end; ++row) {
+      const std::size_t m = static_cast<std::size_t>(row);
+      for (std::size_t n = 0; n < N; ++n) {
+        T acc = T(0);
+        for (std::size_t k = 0; k < K; ++k) {
+          const T a = trans_a ? A[k * M + m] : A[m * K + k];
+          const T b = trans_b ? B[n * K + k] : B[k * N + n];
+          acc += a * b;
+        }
+        Y[m * N + n] = alpha * acc + (has_bias ? beta * C[m * N + n] : T(0));
+      }
+    }
+  });
+}
+
+template <typename T, typename TileFn>
+void GemmSkinnyM(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::size_t K, T alpha,
+                 const T *A, const T *B, T beta, const T *C, T *Y, GemmKernelKind kind,
+                 TileFn tile) {
+  const bool has_bias = C != nullptr && beta != T(0);
+  const std::size_t panel_count = (N + kGemmTileN - 1) / kGemmTileN;
+  const double cost = static_cast<double>(M) * kGemmTileN * K / kGemmFmasPerParallelWorkUnit;
+  ParallelFor(static_cast<std::int64_t>(panel_count), cost,
+              [&](std::int64_t begin, std::int64_t end) {
+                std::vector<T> bpack(kGemmTileK * kGemmTileN);
+                std::vector<T> apack(kGemmMR * kGemmTileK);
+                for (std::int64_t panel = begin; panel < end; ++panel) {
+                  const std::size_t n0 = static_cast<std::size_t>(panel) * kGemmTileN;
+                  const std::size_t nb = std::min(kGemmTileN, N - n0);
+                  for (std::size_t k0 = 0; k0 < K; k0 += kGemmTileK) {
+                    const std::size_t kc = std::min(kGemmTileK, K - k0);
+                    PackBPanel(trans_b, B, K, N, k0, kc, n0, nb, bpack.data());
+                    PackAPanel(trans_a, A, M, K, 0, M, k0, kc, apack.data());
+                    const GemmAccumMode mode =
+                        k0 == 0 ? (has_bias ? GemmAccumMode::kInitBias : GemmAccumMode::kInitZero)
+                                : GemmAccumMode::kAccumulate;
+                    tile(kind, M, nb, kc, alpha, beta, bpack.data(), nb,
+                         has_bias ? C + n0 : nullptr, N, Y + n0, N, 0, mode, apack.data());
+                  }
+                }
+              });
+}
+
+template <typename T>
+void GemmSplitK(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::size_t K, T alpha,
+                const T *A, const T *B, T beta, const T *C, T *Y) {
+  const std::size_t part_count = std::min<std::size_t>(
+      static_cast<std::size_t>(ParallelForThreadCount()), (K + kGemmTileK - 1) / kGemmTileK);
+  std::vector<T> partials(part_count * M * N, T(0));
+  const double cost = static_cast<double>(M) * N * K /
+                      (static_cast<double>(part_count) * kGemmFmasPerParallelWorkUnit);
+  ParallelFor(static_cast<std::int64_t>(part_count), cost,
+              [&](std::int64_t begin, std::int64_t end) {
+                for (std::int64_t part = begin; part < end; ++part) {
+                  const std::size_t p = static_cast<std::size_t>(part);
+                  const std::size_t k_begin = K * p / part_count;
+                  const std::size_t k_end = K * (p + 1) / part_count;
+                  T *partial = partials.data() + p * M * N;
+                  for (std::size_t m = 0; m < M; ++m) {
+                    for (std::size_t n = 0; n < N; ++n) {
+                      T acc = T(0);
+                      for (std::size_t k = k_begin; k < k_end; ++k) {
+                        const T a = trans_a ? A[k * M + m] : A[m * K + k];
+                        const T b = trans_b ? B[n * K + k] : B[k * N + n];
+                        acc += a * b;
+                      }
+                      partial[m * N + n] = acc;
+                    }
+                  }
+                }
+              });
+  const bool has_bias = C != nullptr && beta != T(0);
+  for (std::size_t index = 0; index < M * N; ++index) {
+    T sum = T(0);
+    for (std::size_t part = 0; part < part_count; ++part) {
+      sum += partials[part * M * N + index];
+    }
+    Y[index] = alpha * sum + (has_bias ? beta * C[index] : T(0));
+  }
+}
+
+template <typename T, typename TileFn>
+void GemmFiveLoop(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::size_t K, T alpha,
+                  const T *A, const T *B, T beta, const T *C, T *Y, GemmKernelKind kind,
+                  TileFn tile) {
+  const bool has_bias = C != nullptr && beta != T(0);
+  const std::size_t column_panels = (N + kGemmTileN - 1) / kGemmTileN;
+  const std::size_t row_panels = (M + kGemmTileM - 1) / kGemmTileM;
+  const bool parallel_columns = column_panels >= static_cast<std::size_t>(ParallelForThreadCount());
+
+  auto compute_rows = [&](std::size_t n0, std::size_t nb, std::size_t k0, std::size_t kc,
+                          const T *bpack, std::size_t row_begin, std::size_t row_end) {
+    std::vector<T> apack(kGemmTileM * kc);
+    for (std::size_t row_panel = row_begin; row_panel < row_end; ++row_panel) {
+      const std::size_t m0 = row_panel * kGemmTileM;
+      const std::size_t mc = std::min(kGemmTileM, M - m0);
+      PackAPanel(trans_a, A, M, K, m0, mc, k0, kc, apack.data());
+      for (std::size_t ir = 0; ir < mc; ir += kGemmMR) {
+        const std::size_t mr = std::min(kGemmMR, mc - ir);
+        const GemmAccumMode mode =
+            k0 == 0 ? (has_bias ? GemmAccumMode::kInitBias : GemmAccumMode::kInitZero)
+                    : GemmAccumMode::kAccumulate;
+        tile(kind, mr, nb, kc, alpha, beta, bpack, nb, has_bias ? C + (m0 + ir) * N + n0 : nullptr,
+             N, Y + (m0 + ir) * N + n0, N, 0, mode, apack.data() + ir * kc);
+      }
+    }
+  };
+
+  auto compute_columns = [&](std::int64_t begin, std::int64_t end) {
+    std::vector<T> bpack(kGemmTileK * kGemmTileN);
+    for (std::int64_t panel = begin; panel < end; ++panel) {
+      const std::size_t n0 = static_cast<std::size_t>(panel) * kGemmTileN;
+      const std::size_t nb = std::min(kGemmTileN, N - n0);
+      for (std::size_t k0 = 0; k0 < K; k0 += kGemmTileK) {
+        const std::size_t kc = std::min(kGemmTileK, K - k0);
+        PackBPanel(trans_b, B, K, N, k0, kc, n0, nb, bpack.data());
+        if (parallel_columns) {
+          compute_rows(n0, nb, k0, kc, bpack.data(), 0, row_panels);
+        } else {
+          const double cost =
+              static_cast<double>(kGemmTileM) * nb * kc / kGemmFmasPerParallelWorkUnit;
+          ParallelFor(static_cast<std::int64_t>(row_panels), cost,
+                      [&](std::int64_t row_begin, std::int64_t row_end) {
+                        compute_rows(n0, nb, k0, kc, bpack.data(),
+                                     static_cast<std::size_t>(row_begin),
+                                     static_cast<std::size_t>(row_end));
+                      });
+        }
+      }
+    }
+  };
+
+  if (parallel_columns) {
+    const double cost = static_cast<double>(M) * kGemmTileN * K / kGemmFmasPerParallelWorkUnit;
+    ParallelFor(static_cast<std::int64_t>(column_panels), cost, compute_columns);
+  } else {
+    compute_columns(0, static_cast<std::int64_t>(column_panels));
+  }
+}
+
+template <GemmAlgorithm Algorithm, typename T, typename TileFn>
 void GemmImpl(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::size_t K, T alpha,
               const T *A, const T *B, T beta, const T *C, T *Y, GemmKernelKind kind, TileFn tile) {
   if (M == 0 || N == 0) {
     return;
   }
-
-  // Ensure B is available as a contiguous K x N (row-major) matrix so the inner
-  // micro-kernel reads a contiguous row. When B is not transposed it already is.
-  const T *Bmat = B;
-  std::vector<T> packed;
-  if (trans_b && K != 0) {
-    // B is stored as N x K; transpose into K x N.
-    packed.resize(K * N);
-    for (std::size_t n = 0; n < N; ++n) {
-      const T *src = B + n * K;
-      for (std::size_t k = 0; k < K; ++k) {
-        packed[k * N + n] = src[k];
-      }
-    }
-    Bmat = packed.data();
+  if (K == 0) {
+    InitializeOutput(M, N, beta, C, Y);
+    return;
   }
 
-  const bool has_bias = C != nullptr && beta != T(0);
-
-  // Flatten the output grid into a list of (row block, column panel) tasks
-  // instead of only splitting the M dimension. A pure M-split leaves no
-  // parallelism at all for the common "skinny" shapes seen in inference
-  // (e.g. M == 1 for a single-example matvec, or a small batch): with only a
-  // handful of rows, every one of those rows would run on a single thread no
-  // matter how wide N is or how many cores are available. Flattening M and N
-  // row/column blocks into one task list lets those column panels be
-  // distributed across threads too.
-  std::vector<GemmTask> tasks;
-  const std::size_t num_row_blocks = (M + kGemmTileM - 1) / kGemmTileM;
-  const std::size_t num_col_panels = (N + kGemmTileN - 1) / kGemmTileN;
-  tasks.reserve(num_row_blocks * num_col_panels);
-  for (std::size_t n0 = 0; n0 < N; n0 += kGemmTileN) {
-    const std::size_t nb = std::min(kGemmTileN, N - n0);
-    for (std::size_t m0 = 0; m0 < M; m0 += kGemmTileM) {
-      const std::size_t m_end = std::min(m0 + kGemmTileM, M);
-      tasks.push_back(GemmTask{m0, m_end, n0, nb});
-    }
+  if constexpr (Algorithm == GemmAlgorithm::kDirect) {
+    GemmDirect(M, N, K, alpha, A, B, beta, C, Y, kind, tile);
+  } else if constexpr (Algorithm == GemmAlgorithm::kSkinnyM) {
+    GemmSkinnyM(trans_a, trans_b, M, N, K, alpha, A, B, beta, C, Y, kind, tile);
+  } else if constexpr (Algorithm == GemmAlgorithm::kSkinnyN) {
+    GemmSkinnyN(trans_a, trans_b, M, N, K, alpha, A, B, beta, C, Y);
+  } else if constexpr (Algorithm == GemmAlgorithm::kSplitK) {
+    GemmSplitK(trans_a, trans_b, M, N, K, alpha, A, B, beta, C, Y);
+  } else {
+    static_assert(Algorithm == GemmAlgorithm::kGeneral);
+    GemmFiveLoop(trans_a, trans_b, M, N, K, alpha, A, B, beta, C, Y, kind, tile);
   }
-
-  // Average per-task cost converted from scalar multiply-adds to ParallelFor's
-  // coarser work units, used to decide how many threads are worth waking.
-  const double total_work =
-      static_cast<double>(M) * static_cast<double>(N) * static_cast<double>(K == 0 ? 1 : K);
-  const double cost_per_task =
-      total_work / (static_cast<double>(tasks.size()) * kGemmFmasPerParallelWorkUnit);
-
-  ParallelFor(static_cast<std::int64_t>(tasks.size()), cost_per_task,
-              [&](std::int64_t begin, std::int64_t end) {
-                // Bpack holds one packed kGemmTileK x kGemmTileN panel of B, reused
-                // across every A row block of a task for a given k-chunk (see
-                // PackBPanel). Sized for the worst case and stack-allocated once per
-                // ParallelFor block (not per task/k-chunk/row-block) since its
-                // contents are fully overwritten before each use.
-                alignas(64) T Bpack[kGemmTileK * kGemmTileN];
-                for (std::int64_t t = begin; t < end; ++t) {
-                  const GemmTask &task = tasks[static_cast<std::size_t>(t)];
-                  // Block K into kGemmTileK-sized chunks so the B panel a chunk reads
-                  // (kGemmTileK x nb elements) stays cache-resident; see the comment
-                  // above kGemmTileK. Each chunk after the first adds its scaled partial
-                  // result into Y instead of overwriting it (GemmAccumMode). The k-chunk
-                  // loop is outermost (rather than nested inside the row-block loop) so
-                  // the packed B panel below is computed once per (task, k-chunk) and
-                  // reused across every row block of A in the task, instead of being
-                  // implicitly re-read from Bmat by each row block.
-                  std::size_t k0 = 0;
-                  bool first_chunk = true;
-                  do {
-                    const std::size_t kc = std::min(kGemmTileK, K - k0);
-                    const GemmAccumMode mode = first_chunk ? (has_bias ? GemmAccumMode::kInitBias
-                                                                       : GemmAccumMode::kInitZero)
-                                                           : GemmAccumMode::kAccumulate;
-                    PackBPanel<T>(Bmat, N, k0, kc, task.n0, task.nb, Bpack);
-                    for (std::size_t m = task.m0; m < task.m_end; m += kGemmMR) {
-                      const std::size_t mr = std::min(kGemmMR, task.m_end - m);
-                      // Bpack is already sliced to [task.n0, task.n0 + task.nb), so
-                      // Yrow_base/Crow_base must be pre-offset by task.n0 too and the
-                      // tile() call below passes n0 == 0.
-                      T *Yrow_base = Y + m * N + task.n0;
-                      const T *Crow_base = has_bias ? C + m * N + task.n0 : nullptr;
-                      // Pack A(m : m + mr, k0 : k0 + kc) into a small contiguous buffer
-                      // once, then reuse it for every column-vector step below instead of
-                      // recomputing the trans_a-aware index (and, for trans_a, a strided
-                      // load) on each one. kGemmMR * kGemmTileK elements is a few KiB,
-                      // trivially stack-allocated and L1-resident.
-                      alignas(64) T Apack[kGemmMR * kGemmTileK];
-                      PackARowBlock<T>(trans_a, A, M, K, m, mr, k0, kc, Apack);
-                      tile(kind, mr, task.nb, kc, alpha, beta, Bpack, task.nb, Crow_base, N,
-                           Yrow_base, N, 0, mode, Apack);
-                    }
-                    k0 += kc;
-                    first_chunk = false;
-                  } while (k0 < K);
-                }
-              });
 }
 
 } // namespace
 
-void GemmFloat32(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::size_t K,
-                 float alpha, const float *A, const float *B, float beta, const float *C,
-                 float *Y) {
+namespace detail {
+
+template <GemmAlgorithm Algorithm>
+void GemmFloat32Planned(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::size_t K,
+                        float alpha, const float *A, const float *B, float beta, const float *C,
+                        float *Y) {
   const auto tile = [](GemmKernelKind kind, std::size_t mr, std::size_t nb, std::size_t K,
                        float alpha, float beta, const float *Bmat, std::size_t N,
                        const float *Crow_base, std::size_t Cstride, float *Yrow_base,
@@ -773,13 +877,14 @@ void GemmFloat32(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::
     GemmTileF32(kind, mr, nb, K, alpha, beta, Bmat, N, Crow_base, Cstride, Yrow_base, Ystride, n0,
                 mode, Apack);
   };
-  GemmImpl<float>(trans_a, trans_b, M, N, K, alpha, A, B, beta, C, Y, SelectGemmKernelKind<float>(),
-                  tile);
+  GemmImpl<Algorithm, float>(trans_a, trans_b, M, N, K, alpha, A, B, beta, C, Y,
+                             SelectGemmKernelKind<float>(), tile);
 }
 
-void GemmFloat64(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::size_t K,
-                 double alpha, const double *A, const double *B, double beta, const double *C,
-                 double *Y) {
+template <GemmAlgorithm Algorithm>
+void GemmFloat64Planned(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::size_t K,
+                        double alpha, const double *A, const double *B, double beta,
+                        const double *C, double *Y) {
   const auto tile = [](GemmKernelKind kind, std::size_t mr, std::size_t nb, std::size_t K,
                        double alpha, double beta, const double *Bmat, std::size_t N,
                        const double *Crow_base, std::size_t Cstride, double *Yrow_base,
@@ -788,8 +893,74 @@ void GemmFloat64(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::
     GemmTileF64(kind, mr, nb, K, alpha, beta, Bmat, N, Crow_base, Cstride, Yrow_base, Ystride, n0,
                 mode, Apack);
   };
-  GemmImpl<double>(trans_a, trans_b, M, N, K, alpha, A, B, beta, C, Y,
-                   SelectGemmKernelKind<double>(), tile);
+  GemmImpl<Algorithm, double>(trans_a, trans_b, M, N, K, alpha, A, B, beta, C, Y,
+                              SelectGemmKernelKind<double>(), tile);
+}
+
+#define INSTANTIATE_PLANNED_GEMM(Algorithm)                                                        \
+  template void GemmFloat32Planned<Algorithm>(bool, bool, std::size_t, std::size_t, std::size_t,   \
+                                              float, const float *, const float *, float,          \
+                                              const float *, float *);                             \
+  template void GemmFloat64Planned<Algorithm>(bool, bool, std::size_t, std::size_t, std::size_t,   \
+                                              double, const double *, const double *, double,      \
+                                              const double *, double *)
+
+INSTANTIATE_PLANNED_GEMM(GemmAlgorithm::kGeneral);
+INSTANTIATE_PLANNED_GEMM(GemmAlgorithm::kDirect);
+INSTANTIATE_PLANNED_GEMM(GemmAlgorithm::kSkinnyM);
+INSTANTIATE_PLANNED_GEMM(GemmAlgorithm::kSkinnyN);
+INSTANTIATE_PLANNED_GEMM(GemmAlgorithm::kSplitK);
+
+#undef INSTANTIATE_PLANNED_GEMM
+
+} // namespace detail
+
+void GemmFloat32(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::size_t K,
+                 float alpha, const float *A, const float *B, float beta, const float *C,
+                 float *Y) {
+  const GemmAlgorithm algorithm = detail::SelectGemmAlgorithm(
+      trans_a, trans_b, M, N, K, GemmVectorLanes<float>(SelectGemmKernelKind<float>()));
+  switch (algorithm) {
+  case GemmAlgorithm::kDirect:
+    return detail::GemmFloat32Planned<GemmAlgorithm::kDirect>(trans_a, trans_b, M, N, K, alpha, A,
+                                                              B, beta, C, Y);
+  case GemmAlgorithm::kSkinnyM:
+    return detail::GemmFloat32Planned<GemmAlgorithm::kSkinnyM>(trans_a, trans_b, M, N, K, alpha, A,
+                                                               B, beta, C, Y);
+  case GemmAlgorithm::kSkinnyN:
+    return detail::GemmFloat32Planned<GemmAlgorithm::kSkinnyN>(trans_a, trans_b, M, N, K, alpha, A,
+                                                               B, beta, C, Y);
+  case GemmAlgorithm::kSplitK:
+    return detail::GemmFloat32Planned<GemmAlgorithm::kSplitK>(trans_a, trans_b, M, N, K, alpha, A,
+                                                              B, beta, C, Y);
+  case GemmAlgorithm::kGeneral:
+    return detail::GemmFloat32Planned<GemmAlgorithm::kGeneral>(trans_a, trans_b, M, N, K, alpha, A,
+                                                               B, beta, C, Y);
+  }
+}
+
+void GemmFloat64(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::size_t K,
+                 double alpha, const double *A, const double *B, double beta, const double *C,
+                 double *Y) {
+  const GemmAlgorithm algorithm = detail::SelectGemmAlgorithm(
+      trans_a, trans_b, M, N, K, GemmVectorLanes<double>(SelectGemmKernelKind<double>()));
+  switch (algorithm) {
+  case GemmAlgorithm::kDirect:
+    return detail::GemmFloat64Planned<GemmAlgorithm::kDirect>(trans_a, trans_b, M, N, K, alpha, A,
+                                                              B, beta, C, Y);
+  case GemmAlgorithm::kSkinnyM:
+    return detail::GemmFloat64Planned<GemmAlgorithm::kSkinnyM>(trans_a, trans_b, M, N, K, alpha, A,
+                                                               B, beta, C, Y);
+  case GemmAlgorithm::kSkinnyN:
+    return detail::GemmFloat64Planned<GemmAlgorithm::kSkinnyN>(trans_a, trans_b, M, N, K, alpha, A,
+                                                               B, beta, C, Y);
+  case GemmAlgorithm::kSplitK:
+    return detail::GemmFloat64Planned<GemmAlgorithm::kSplitK>(trans_a, trans_b, M, N, K, alpha, A,
+                                                              B, beta, C, Y);
+  case GemmAlgorithm::kGeneral:
+    return detail::GemmFloat64Planned<GemmAlgorithm::kGeneral>(trans_a, trans_b, M, N, K, alpha, A,
+                                                               B, beta, C, Y);
+  }
 }
 
 } // namespace onnx_light_cpu
