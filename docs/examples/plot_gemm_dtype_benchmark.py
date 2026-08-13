@@ -137,6 +137,20 @@ def measure(func, repeat, warmup=3):
     return float(np.median(timings))
 
 
+def measure_together(*funcs, repeat, warmup=3):
+    timings = tuple([] for _ in funcs)
+    for iteration in range(warmup):
+        for index in range(len(funcs)):
+            funcs[(iteration + index) % len(funcs)]()
+    for iteration in range(repeat):
+        for offset in range(len(funcs)):
+            index = (iteration + offset) % len(funcs)
+            start = time.perf_counter()
+            funcs[index]()
+            timings[index].append(time.perf_counter() - start)
+    return tuple(float(np.median(values)) for values in timings)
+
+
 # %%
 # Shapes chosen to activate each Gemm code path
 # -----------------------------------------------
@@ -223,9 +237,11 @@ set_kernel_usage_recording(False)
 # -----------------
 #
 # For every shape and dtype, random ``float32`` inputs are rounded to the
-# target dtype and fed through the matching session. Results are checked
-# against ``float32`` numpy matmul (with a wider tolerance for the lower
-# precision dtypes) so every combination agrees on the answer.
+# target dtype and fed through the matching session. The dtype variants for each
+# backend are measured together, rotating their order so the overhead ratios are
+# not skewed by cache or scheduling changes. Results are checked against
+# ``float32`` numpy matmul (with a wider tolerance for the lower precision
+# dtypes) so every combination agrees on the answer.
 
 rng = np.random.default_rng(0)
 results = {label: [] for label in DTYPES}
@@ -238,29 +254,57 @@ for shape_label, M, N, K in SHAPES:
     repeat = max(7, min(50, 200_000_000 // (M * N * K + 1)))
 
     print(f"\nshape={shape_label.splitlines()[0]:<24} M={M} N={N} K={K} repeat={repeat}")
-    for label, (_, np_dtype) in DTYPES.items():
-        a = a32.astype(np_dtype)
-        b = b32.astype(np_dtype)
-        session = sessions[label]
+    inputs = {
+        label: (a32.astype(np_dtype), b32.astype(np_dtype))
+        for label, (_, np_dtype) in DTYPES.items()
+    }
+    runs = tuple(
+        (
+            lambda session=sessions[label], a=inputs[label][0], b=inputs[label][1]: session.run(
+                None, {"A": a, "B": b}
+            )[0]
+        )
+        for label in DTYPES
+    )
+    elapsed_by_label = dict(
+        zip(
+            DTYPES,
+            measure_together(*runs, repeat=repeat),
+            strict=True,
+        )
+    )
+    ort_runs = tuple(
+        (
+            lambda session=ort_sessions[label], a=inputs[label][0], b=inputs[label][1]: (
+                session.run(None, {"A": a, "B": b})[0]
+            )
+        )
+        for label in ort_sessions
+    )
+    ort_elapsed_by_label = dict(
+        zip(
+            ort_sessions,
+            measure_together(*ort_runs, repeat=repeat),
+            strict=True,
+        )
+    )
 
-        def run(session=session, a=a, b=b):
-            return session.run(None, {"A": a, "B": b})[0]
-
-        elapsed = measure(run, repeat)
+    for label in DTYPES:
+        a, b = inputs[label]
+        elapsed = elapsed_by_label[label]
         results[label].append(elapsed)
 
         tol = 1e-3 if label == "float32" else (5e-2 if label == "float16" else 5e-1)
-        np.testing.assert_allclose(run().astype(np.float32), expected, rtol=tol, atol=tol)
+        output = sessions[label].run(None, {"A": a, "B": b})[0]
+        np.testing.assert_allclose(output.astype(np.float32), expected, rtol=tol, atol=tol)
 
         if label in ort_sessions:
-            ort_session = ort_sessions[label]
-
-            def run_ort(session=ort_session, a=a, b=b):
-                return session.run(None, {"A": a, "B": b})[0]
-
-            ort_elapsed = measure(run_ort, repeat)
+            ort_elapsed = ort_elapsed_by_label[label]
             ort_results[label].append(ort_elapsed)
-            np.testing.assert_allclose(run_ort().astype(np.float32), expected, rtol=tol, atol=tol)
+            ort_output = ort_sessions[label].run(None, {"A": a, "B": b})[0]
+            np.testing.assert_allclose(
+                ort_output.astype(np.float32), expected, rtol=tol, atol=tol
+            )
             ort_text = f"{ort_elapsed * 1e6:10.2f} us"
         else:
             ort_text = "not supported"
@@ -272,10 +316,8 @@ set_kernel_usage_recording(True)
 # Plot the timings
 # ----------------
 #
-# The left panel shows the raw execution time per shape/dtype on a log scale;
-# solid bars are onnx-light-cpu and hatched bars are onnxruntime. The right
-# panel shows the float16/bfloat16 overhead relative to float32 for the same
-# backend and shape (values above 1 mean slower than float32).
+# The panel shows the raw execution time per shape/dtype on a log scale;
+# solid bars are onnx-light-cpu and hatched bars are onnxruntime.
 
 import matplotlib.pyplot as plt
 
@@ -289,7 +331,7 @@ colors = {
     "onnx-light (built-in)": "#5cb85c",
 }
 
-fig, (ax_time, ax_overhead) = plt.subplots(1, 2, figsize=(12, 4.8))
+fig, ax_time = plt.subplots(1, 1, figsize=(8, 4.8))
 
 series = [
     ("onnx-light-cpu float32", results["float32"], colors["float32"], None),
@@ -330,30 +372,6 @@ ax_time.set_xticklabels(shape_labels, fontsize=8, rotation=45, ha="right")
 ax_time.set_ylabel("time (microseconds)")
 ax_time.set_title(f"Gemm execution time by code path (SIMD: {simd_name})")
 ax_time.legend()
-
-float32_times = np.array(results["float32"])
-for label in ("float16", "bfloat16"):
-    overhead = np.array(results[label]) / float32_times
-    ax_overhead.plot(
-        shape_labels,
-        overhead,
-        "o-",
-        label=f"onnx-light-cpu {label}",
-        color=colors[label],
-    )
-ort_overhead = np.array(ort_results["float16"]) / np.array(ort_results["float32"])
-ax_overhead.plot(
-    shape_labels,
-    ort_overhead,
-    "o--",
-    label="onnxruntime float16",
-    color=colors["float16"],
-)
-ax_overhead.axhline(1.0, color="grey", linewidth=0.8, linestyle=":", label="float32 baseline")
-ax_overhead.set_ylabel("time relative to float32")
-ax_overhead.set_title("float16 / bfloat16 widen/round-trip overhead")
-ax_overhead.tick_params(axis="x", labelrotation=45, labelsize=8)
-ax_overhead.legend()
 
 fig.tight_layout()
 fig.savefig("plot_gemm_dtype_benchmark.png")
