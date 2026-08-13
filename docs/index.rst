@@ -14,8 +14,9 @@ The kernels can be used directly from C++ or installed into onnx-light's shared
 C++ kernel dispatch table so any ONNX model using a supported operator runs the
 optimized kernel when evaluated through a ``ReferenceEvaluator``. See
 :doc:`getting_started` to install the package and run your first model, the
-:doc:`kernels` page for the list of operators provided by this repository, and
-the :doc:`examples` gallery for runnable examples.
+:doc:`kernels` page for the list of operators provided by this repository, the
+:doc:`examples` gallery for runnable examples, and the :doc:`benchmarks` gallery
+for performance comparisons against other back-ends.
 
 .. toctree::
    :maxdepth: 1
@@ -26,4 +27,5 @@ the :doc:`examples` gallery for runnable examples.
    design/index
    api/index
    examples
+   benchmarks
    next_steps/index

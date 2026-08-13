@@ -193,7 +193,6 @@ print(f"setup: onnx-light ReferenceEvaluator = {light_setup_time * 1e3:.2f} ms")
 print(f"setup: onnx-light-cpu kernel registration = {registration_time * 1e3:.2f} ms")
 
 # %%
-# %%
 # Run the benchmark
 # -----------------
 #
