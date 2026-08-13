@@ -8,7 +8,13 @@ optimize next.
 
 .. toctree::
     :maxdepth: 1
+    :caption: In progress
 
-    gemm_matmul
-    conv
-    binary_elementwise
+    2026_08_gemm_matmul
+
+.. toctree::
+    :maxdepth: 1
+    :caption: Discussion
+
+    2026_08_conv
+    2026_08_binary_elementwise

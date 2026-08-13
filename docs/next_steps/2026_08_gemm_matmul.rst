@@ -1,6 +1,10 @@
 Gemm, MatMul, and Attention Performance Roadmap
 ================================================
 
+:Date: 2026-08
+
+**in progress**
+
 Objective
 ---------
 
@@ -390,66 +394,6 @@ query block, then KV block. Splitting one query row across KV workers requires
 a numerically correct merge of ``(m, l, o)`` states and should only be used
 when the outer dimensions cannot occupy the cores.
 
-Implementation order and dependencies
--------------------------------------
-
-.. list-table::
-   :header-rows: 1
-   :widths: 8 28 42 22
-
-   * - Step
-     - Deliverable
-     - Exit criterion
-     - Dependency
-   * - 0
-     - Reproducible MLAS and Attention benchmarks.
-     - Stable medians and dispersion for the agreed shape/type corpus on pinned
-       hardware.
-     - None.
-   * - 1
-     - ``GemmPlan``, ``MatMulPlan``, ``StridedBatchedGemm``, and
-       ``GroupedGemm`` interfaces.
-     - Existing Gemm results remain correct with no material performance
-       regression.
-     - Step 0.
-   * - 2
-     - Complete MatMul shape/broadcast adapter.
-     - Differential tests pass for rank-1, batched, broadcast, transpose, and
-       empty-dimension cases.
-     - Step 1.
-   * - 3
-     - Five-loop FP32/FP64 engine and shape-specific algorithms.
-     - Generic dense path reaches at least 0.8x MLAS before assembly-level
-       tuning.
-     - Step 1.
-   * - 4
-     - FMA/AVX2/AVX-512/ARM micro-kernels and tuned scheduler.
-     - Priority FP32/FP64 corpus reaches 0.9-1.0x MLAS.
-     - Step 3.
-   * - 5
-     - Native/panel-converted FP16, BF16, and integer paths.
-     - Low-precision corpus reaches 0.9x MLAS where MLAS supports the type.
-     - Steps 3-4.
-   * - 6
-     - ``AttentionPlan`` and materialized correctness implementation.
-     - MHA/GQA/MQA, mask, causal, and KV-cache differential tests pass.
-     - Steps 1-2.
-   * - 7
-     - Online-softmax prefill Attention.
-     - No full score/probability tensor; long-context prefill is within 1.1x of
-       ONNX Runtime with bounded temporary memory.
-     - Steps 4 and 6.
-   * - 8
-     - Single-token decode and blocked/paged KV cache.
-     - Decode is within 1.1x of ONNX Runtime over the target context range and
-       scales with measured cache bandwidth.
-     - Steps 6-7.
-   * - 9
-     - Attention specialization, fusion, and KV quantization.
-     - At least one representative model workload exceeds ONNX Runtime by a
-       repeatable 10% without changing model outputs beyond agreed tolerances.
-     - Steps 5, 7, and 8.
-
 How to exceed ONNX Runtime
 --------------------------
 
@@ -621,3 +565,64 @@ Performance gates should run on dedicated, pinned hardware and store the raw
 samples and environment metadata. Shared CI machines can enforce correctness
 and detect catastrophic slowdowns, but they should not decide a 5-10%
 performance regression.
+
+Implementation order and dependencies
+-------------------------------------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 8 28 42 22
+
+   * - Step
+     - Deliverable
+     - Exit criterion
+     - Dependency
+   * - 0
+     - Reproducible MLAS and Attention cases in ``onnx-light``'s C++
+       ``TestMode::BENCHMARK`` framework.
+     - Stable medians and dispersion for the agreed shape/type corpus on pinned
+       hardware.
+     - None.
+   * - 1
+     - ``GemmPlan``, ``MatMulPlan``, ``StridedBatchedGemm``, and
+       ``GroupedGemm`` interfaces.
+     - Existing Gemm results remain correct with no material performance
+       regression.
+     - Step 0.
+   * - 2
+     - Complete MatMul shape/broadcast adapter.
+     - Differential tests pass for rank-1, batched, broadcast, transpose, and
+       empty-dimension cases.
+     - Step 1.
+   * - 3
+     - Five-loop FP32/FP64 engine and shape-specific algorithms.
+     - Generic dense path reaches at least 0.8x MLAS before assembly-level
+       tuning.
+     - Step 1.
+   * - 4
+     - FMA/AVX2/AVX-512/ARM micro-kernels and tuned scheduler.
+     - Priority FP32/FP64 corpus reaches 0.9-1.0x MLAS.
+     - Step 3.
+   * - 5
+     - Native/panel-converted FP16, BF16, and integer paths.
+     - Low-precision corpus reaches 0.9x MLAS where MLAS supports the type.
+     - Steps 3-4.
+   * - 6
+     - ``AttentionPlan`` and materialized correctness implementation.
+     - MHA/GQA/MQA, mask, causal, and KV-cache differential tests pass.
+     - Steps 1-2.
+   * - 7
+     - Online-softmax prefill Attention.
+     - No full score/probability tensor; long-context prefill is within 1.1x of
+       ONNX Runtime with bounded temporary memory.
+     - Steps 4 and 6.
+   * - 8
+     - Single-token decode and blocked/paged KV cache.
+     - Decode is within 1.1x of ONNX Runtime over the target context range and
+       scales with measured cache bandwidth.
+     - Steps 6-7.
+   * - 9
+     - Attention specialization, fusion, and KV quantization.
+     - At least one representative model workload exceeds ONNX Runtime by a
+       repeatable 10% without changing model outputs beyond agreed tolerances.
+     - Steps 5, 7, and 8.

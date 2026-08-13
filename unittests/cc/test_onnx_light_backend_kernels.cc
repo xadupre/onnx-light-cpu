@@ -209,4 +209,40 @@ TEST(OnnxLightBackendKernels, GemmBenchmarkRunsThroughRuntime) {
   EXPECT_TRUE(failures.empty()) << Describe(failures);
 }
 
+TEST(OnnxLightBackendKernels, GemmBenchmarkCorpusIsLazyAndCoversPriorityShapes) {
+  onnx_light_cpu::backend_test::RegisterCpuKernelBackendTestCases();
+  std::vector<TestCase> cases =
+      CollectTestCases("Gemm", /*include_big=*/false, core::backend_test::TestMode::BENCHMARK);
+
+  size_t cpu_cases = 0;
+  bool has_constant_b = false;
+  bool has_skinny_m = false;
+  bool has_skinny_n = false;
+  bool has_large_k = false;
+  bool has_transpose = false;
+  for (const TestCase &test_case : cases) {
+    if (test_case.name.rfind("test_cpu_gemm_", 0) != 0) {
+      continue;
+    }
+    ++cpu_cases;
+    EXPECT_TRUE(test_case.is_lazy());
+    EXPECT_FALSE(test_case.materialized());
+    EXPECT_TRUE(test_case.name.ends_with("_benchmark"));
+    if (test_case.name.find("constant_b") != std::string::npos) {
+      has_constant_b = true;
+      EXPECT_EQ(test_case.declared_input_element_counts.size(), 1u);
+    }
+    has_skinny_m |= test_case.name.find("skinny_m") != std::string::npos;
+    has_skinny_n |= test_case.name.find("skinny_n") != std::string::npos;
+    has_large_k |= test_case.name.find("large_k") != std::string::npos;
+    has_transpose |= test_case.name.find("trans_") != std::string::npos;
+  }
+  EXPECT_EQ(cpu_cases, 10u);
+  EXPECT_TRUE(has_constant_b);
+  EXPECT_TRUE(has_skinny_m);
+  EXPECT_TRUE(has_skinny_n);
+  EXPECT_TRUE(has_large_k);
+  EXPECT_TRUE(has_transpose);
+}
+
 } // namespace

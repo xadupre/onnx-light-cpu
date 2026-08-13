@@ -1,6 +1,10 @@
 Binary Elementwise and Broadcasting Performance Roadmap
 =======================================================
 
+:Date: 2026-08
+
+**discussion**
+
 Objective
 ---------
 

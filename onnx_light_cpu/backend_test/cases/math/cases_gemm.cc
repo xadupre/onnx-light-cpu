@@ -23,11 +23,14 @@ namespace {
 namespace bt_ns = ONNX_LIGHT_NAMESPACE::core::backend_test;
 namespace rt_ns = ONNX_LIGHT_NAMESPACE::core::runtime;
 
+using bt_ns::BuildSingleNodeCase;
+using bt_ns::BuiltCase;
 using bt_ns::Expect;
 using bt_ns::IoData;
 using bt_ns::TestCase;
 using bt_ns::TestMode;
 using ONNX_LIGHT_NAMESPACE::NodeProto;
+using ONNX_LIGHT_NAMESPACE::TensorProto;
 using rt_ns::DataType;
 using rt_ns::DefaultOpset;
 using rt_ns::KernelContext;
@@ -43,6 +46,68 @@ NodeProto MakeGemmNode() {
   node.add_input("B");
   node.add_output("Y");
   return node;
+}
+
+void AddIntAttribute(NodeProto &node, const char *name, int64_t value) {
+  auto *attribute = node.add_attribute();
+  attribute->set_name(name);
+  attribute->set_type(ONNX_LIGHT_NAMESPACE::AttributeProto::AttributeType::INT);
+  attribute->set_i(value);
+}
+
+void RegisterGemmBenchmark(std::vector<TestCase> &registry,
+                           const onnx_light_cpu::GemmKernel &kernel, const OpsetId &opset,
+                           const std::string &name, int64_t m, int64_t n, int64_t k,
+                           bool trans_a = false, bool trans_b = false, bool constant_b = false) {
+  NodeProto node = MakeGemmNode();
+  if (trans_a) {
+    AddIntAttribute(node, "transA", 1);
+  }
+  if (trans_b) {
+    AddIntAttribute(node, "transB", 1);
+  }
+  const std::vector<int64_t> a_shape =
+      trans_a ? std::vector<int64_t>{k, m} : std::vector<int64_t>{m, k};
+  const std::vector<int64_t> b_shape =
+      trans_b ? std::vector<int64_t>{n, k} : std::vector<int64_t>{k, n};
+  const int64_t a_count = m * k;
+  const int64_t b_count = k * n;
+  const int64_t y_count = m * n;
+
+  if (!constant_b) {
+    Expect(registry, std::move(node), name, {opset}, {a_count, b_count}, {y_count},
+           [kernel, a_shape, b_shape, trans_a, trans_b, a_count, b_count]() -> IoData {
+             Tensor a = Tensor::FromFloat("", a_shape, Randn<float>(a_shape, 433 + a_count));
+             Tensor b = Tensor::FromFloat("", b_shape, Randn<float>(b_shape, 434 + b_count));
+             Tensor y = kernel(a, b, 1.0f, trans_a, trans_b);
+             return IoData{{std::move(a), std::move(b)}, {std::move(y)}};
+           });
+    return;
+  }
+
+  TestCase test_case(name);
+  test_case.declared_input_element_counts = {a_count};
+  test_case.declared_output_element_counts = {y_count};
+  test_case.build = [kernel, node = std::move(node), name, opset, a_shape, b_shape, trans_a,
+                     trans_b, a_count, b_count]() mutable -> BuiltCase {
+    Tensor a = Tensor::FromFloat("", a_shape, Randn<float>(a_shape, 433 + a_count));
+    Tensor b = Tensor::FromFloat("", b_shape, Randn<float>(b_shape, 434 + b_count));
+    Tensor y = kernel(a, b, 1.0f, trans_a, trans_b);
+    BuiltCase built = BuildSingleNodeCase(node, {std::move(a), std::move(b)}, {std::move(y)}, name,
+                                          {opset}, "onnx-light-cpu-backend-test");
+
+    Tensor &b_input = built.data_sets[0].inputs[1];
+    TensorProto *initializer = built.model.mutable_graph()->add_initializer();
+    initializer->set_name("B");
+    initializer->set_data_type(static_cast<TensorProto::DataType>(b_input.data_type));
+    for (int64_t dimension : b_input.shape) {
+      initializer->add_dims(dimension);
+    }
+    initializer->set_raw_data(b_input.bytes(), b_input.size_bytes());
+    built.data_sets[0].inputs.erase(built.data_sets[0].inputs.begin() + 1);
+    return built;
+  };
+  registry.emplace_back(std::move(test_case));
 }
 
 // Encodes ``values`` as a BFLOAT16 ``Tensor`` (raw 16-bit bit patterns),
@@ -65,15 +130,27 @@ void RegisterCpuGemmCases(std::vector<TestCase> &registry, TestMode mode) {
   const onnx_light_cpu::GemmKernel gemm_kernel{KernelContext{opset}};
 
   if (mode == TestMode::BENCHMARK) {
-    const std::vector<int64_t> shape = {512, 512};
-    const int64_t count = 512 * 512;
-    Expect(registry, MakeGemmNode(), "test_cpu_gemm_benchmark", {opset}, {count, count}, {count},
-           [gemm_kernel, shape]() -> IoData {
-             Tensor a = Tensor::FromFloat("", shape, Randn<float>(shape, 433));
-             Tensor b = Tensor::FromFloat("", shape, Randn<float>(shape, 434));
-             Tensor y = gemm_kernel(a, b, 1.0f, false, false);
-             return IoData{{std::move(a), std::move(b)}, {std::move(y)}};
-           });
+    RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_tiny_dynamic_benchmark", 1,
+                          64, 64);
+    RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_tiny_constant_b_benchmark",
+                          1, 64, 64, false, false, true);
+    RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_square_128_benchmark", 128,
+                          128, 128);
+    RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_square_512_benchmark", 512,
+                          512, 512);
+    RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_skinny_m_benchmark", 1, 1024,
+                          1024);
+    RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_skinny_n_benchmark", 1024, 1,
+                          1024);
+    RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_large_k_benchmark", 32, 32,
+                          4096);
+    RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_trans_a_benchmark", 128, 128,
+                          128, true);
+    RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_trans_b_benchmark", 128, 128,
+                          128, false, true);
+    RegisterGemmBenchmark(registry, gemm_kernel, opset,
+                          "test_cpu_gemm_transformer_projection_benchmark", 128, 3072, 768, false,
+                          false, true);
     return;
   }
 
