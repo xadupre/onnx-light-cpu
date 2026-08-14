@@ -698,23 +698,23 @@ require measurements on dedicated hardware.
        performance with no priority shape below 0.9x where the type is
        supported.
      - P3-P4.
-     - Planned.
-     - TBD.
+     - Twelve-PR sequence fixed below; all pending.
+     - P5-PR01 through P5-PR12 below.
    * - P6
      - ``AttentionPlan`` and materialized tensor correctness implementation.
      - MHA/GQA/MQA, masks, causal behavior, and tensor past/present
        differential tests pass.
      - P1-P2.
-     - Planned.
-     - TBD.
+     - Seven-PR sequence fixed below; all pending.
+     - P6-PR01 through P6-PR07 below.
    * - P7
      - Online-softmax prefill Attention.
      - No full score/probability tensor; median performance is at least 1.0x
        ONNX Runtime with no priority case below 0.9x and bounded temporary
        memory.
      - P4 and P6.
-     - Planned.
-     - TBD.
+     - Ten-PR sequence fixed below; all pending.
+     - P7-PR01 through P7-PR10 below.
 
 Remaining P4 pull-request sequence
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -823,3 +823,233 @@ link and resulting status.
        This PR remains open while any result fails.
      - P4-PR01 through P4-PR12
      - Pending
+
+Remaining P5 pull-request sequence
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+P5 contains twelve pull requests. Persistent B prepacking remains excluded;
+panel conversion performed during each invocation is part of the low-precision
+kernel itself.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 10 29 39 12 10
+
+   * - PR
+     - Exact scope
+     - Merge criterion
+     - Depends on
+     - Status
+   * - P5-PR01
+     - Low-precision packing and dispatch framework.
+     - Typed panel formats, accumulation types, conversion functions, output
+       epilogues, and compile/runtime ISA gates are represented in immutable
+       plans without full-tensor conversion.
+     - P4-PR13
+     - Pending
+   * - P5-PR02
+     - AVX2/F16C FP16 convert-and-FMA.
+     - FP16 A/B values convert to FP32 while packing, accumulate through AVX2
+       FMA, and narrow only the final output for every GEMM/MatMul shape case.
+     - P5-PR01
+     - Pending
+   * - P5-PR03
+     - AVX-512FP16 kernels.
+     - Compile/runtime-gated AVX-512FP16 profiles pass FP16 correctness and
+       outperform the F16C fallback on their priority hardware.
+     - P5-PR02
+     - Pending
+   * - P5-PR04
+     - AVX-512BF16 kernels.
+     - BF16 dot-product kernels accumulate according to the ONNX numerical
+       contract and fall back to panel conversion when AVX-512BF16 is absent.
+     - P5-PR01
+     - Pending
+   * - P5-PR05
+     - AMX FP16/BF16 kernels.
+     - CPUID and OS tile-state checks safely enable AMX, configure tiles per
+       worker, amortize setup cost, and retain AVX-512 fallbacks.
+     - P5-PR03, P5-PR04
+     - Pending
+   * - P5-PR06
+     - ARM FP16/BF16 kernels.
+     - NEON and available SVE/SVE2 low-precision kernels pass the complete
+       correctness corpus with FP32 accumulation and portable fallback.
+     - P5-PR01, P4-PR12
+     - Pending
+   * - P5-PR07
+     - x86 INT8/UINT8 kernels.
+     - AVX-VNNI, AVX-512VNNI, and AMX-INT8 paths fuse zero-point correction,
+       INT32 accumulation, and requantization with schema-defined overflow.
+     - P5-PR01
+     - Pending
+   * - P5-PR08
+     - ARM INT8/UINT8 kernels.
+     - NEON dot-product and SVE2 paths implement the same quantization contract
+       and retain a widening integer fallback.
+     - P5-PR01, P4-PR12
+     - Pending
+   * - P5-PR09
+     - INT32/INT64 exact kernels.
+     - MatMul integer schemas use vectorized multiply/add where profitable and
+       preserve exact schema-defined arithmetic in every fallback and tail.
+     - P5-PR01
+     - Pending
+   * - P5-PR10
+     - Float8 packing and kernels.
+     - Each supported Float8 encoding has explicit decode/packing, accumulation,
+       output conversion, dispatch, and differential tests.
+     - P5-PR01
+     - Pending
+   * - P5-PR11
+     - Packed INT4/UINT4 kernels.
+     - Packed nibble layouts unpack during packing or feed supported dot/tile
+       instructions directly, with INT32 accumulation and exact tail handling.
+     - P5-PR07, P5-PR08
+     - Pending
+   * - P5-PR12
+     - Final low-precision parity gate.
+     - Every supported low-precision type reaches at least 1.0x ONNX Runtime
+       median performance with no priority case below 0.9x; this PR remains
+       open while any supported target fails.
+     - P5-PR01 through P5-PR11
+     - Pending
+
+Remaining P6 pull-request sequence
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+P6 contains seven pull requests and ends with a complete materialized
+Attention correctness implementation.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 10 29 39 12 10
+
+   * - PR
+     - Exact scope
+     - Merge criterion
+     - Depends on
+     - Status
+   * - P6-PR01
+     - ``AttentionPlan`` contract and shape lowering.
+     - Immutable plans validate layouts, head geometry, GQA ratio, scale,
+       algorithm kind, block sizes, types, and useful thread count.
+     - P5-PR12
+     - Pending
+   * - P6-PR02
+     - Materialized FP32 MHA path.
+     - ``Q @ K^T``, scale, softmax, and ``P @ V`` produce ONNX Runtime-equivalent
+       outputs for the basic no-mask MHA cases.
+     - P6-PR01
+     - Pending
+   * - P6-PR03
+     - Mask and causal semantics.
+     - Boolean, additive, padding, causal, and combined masks cover boundary,
+       empty-sequence, and fully masked rows with differential tests.
+     - P6-PR02
+     - Pending
+   * - P6-PR04
+     - GQA and MQA lowering.
+     - Query heads map to shared K/V heads through zero-copy strides; K and V
+       are never physically repeated.
+     - P6-PR02
+     - Pending
+   * - P6-PR05
+     - Tensor past/present compatibility.
+     - Standard ONNX past/present inputs and outputs pass prefill, append, and
+       empty-cache differential tests for MHA/GQA/MQA.
+     - P6-PR03, P6-PR04
+     - Pending
+   * - P6-PR06
+     - Attention types and scheduler.
+     - FP32, FP16, and BF16 materialized paths use the shared scheduler across
+       batch/head/query work and pass all supported layout/type combinations.
+     - P6-PR05
+     - Pending
+   * - P6-PR07
+     - Materialized Attention correctness gate.
+     - The full Attention differential corpus passes against ONNX Runtime and
+       the implementation is registered as the fallback for combinations not
+       handled by streaming Attention.
+     - P6-PR01 through P6-PR06
+     - Pending
+
+Remaining P7 pull-request sequence
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+P7 contains ten pull requests and closes the complete roadmap.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 10 29 39 12 10
+
+   * - PR
+     - Exact scope
+     - Merge criterion
+     - Depends on
+     - Status
+   * - P7-PR01
+     - Scalar online-softmax recurrence.
+     - Blockwise running maximum, denominator, correction, and output
+       accumulator match the materialized path without storing full scores.
+     - P6-PR07
+     - Pending
+   * - P7-PR02
+     - Q x K score micro-kernels.
+     - SIMD score kernels fuse scale, mask application, causal bounds, and row
+       maximum for FP32 on x86 and ARM.
+     - P7-PR01, P4-PR13
+     - Pending
+   * - P7-PR03
+     - Vector exponential and row reductions.
+     - Exponential, maximum, and sum reductions meet the numerical tolerance
+       for ordinary, extreme, and fully masked score rows.
+     - P7-PR02
+     - Pending
+   * - P7-PR04
+     - Probability x V update micro-kernels.
+     - Probability blocks update query output accumulators directly with no
+       probability tensor and match the materialized reference.
+     - P7-PR01, P7-PR03
+     - Pending
+   * - P7-PR05
+     - Cache-aware Br/Bc blocking.
+     - Plans choose query/KV blocks from head dimension and cache capacity;
+       temporary memory is bounded by workers x Br x Bc.
+     - P7-PR04
+     - Pending
+   * - P7-PR06
+     - Causal, window, and sparse tile skipping.
+     - Wholly masked tiles are not computed, diagonal tiles are masked in place,
+       and sliding-window/sparse masks skip absent KV blocks.
+     - P7-PR05
+     - Pending
+   * - P7-PR07
+     - Prefill parallel scheduler.
+     - Batch, head, query-block, and KV work occupy useful threads without
+       nested pools or materialized score/probability tensors.
+     - P7-PR05, P4-PR10
+     - Pending
+   * - P7-PR08
+     - Short-query and single-token decode.
+     - Query lengths 1 and 2-16 select dedicated algorithms and meet the
+       bounded-memory contract for MHA/GQA/MQA with past/present tensors.
+     - P7-PR06, P7-PR07
+     - Pending
+   * - P7-PR09
+     - Low-precision streaming Attention.
+     - FP16/BF16 score and V-update kernels reuse P5 conversion/native paths,
+       accumulate safely, and match the materialized low-precision fallback.
+     - P7-PR08, P5-PR12
+     - Pending
+   * - P7-PR10
+     - Final Attention and roadmap parity gate.
+     - Every priority prefill/decode platform/type case uses bounded temporary
+       memory, reaches at least 1.0x ONNX Runtime median performance, and has no
+       priority case below 0.9x. This PR remains open while any target fails.
+     - P7-PR01 through P7-PR09
+     - Pending
+
+The complete roadmap therefore contains **42 remaining pull requests** after
+``#149``: 13 for P4, 12 for P5, 7 for P6, and 10 for P7. P7-PR10 is the final
+roadmap PR.
