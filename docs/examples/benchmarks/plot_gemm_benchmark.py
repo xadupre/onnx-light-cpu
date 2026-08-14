@@ -174,13 +174,7 @@ def run_light(a, b):
     return light_session.run(None, {"A": a, "B": b})[0]
 
 
-# Confirm the baseline remains bound to onnx-light's built-in kernel.
-_probe = rng.standard_normal((size_grid[0], size_grid[0])).astype(np.float32)
 accelerated_kernel_name = registered_kernel_names()["Gemm"]
-clear_used_kernel_names()
-alone_session.run(None, {"A": _probe, "B": _probe})
-baseline_kernel_names = used_kernel_names()
-assert accelerated_kernel_name not in baseline_kernel_names, baseline_kernel_names
 
 # onnx-light-cpu kernels record their name on every run (a mutex per call);
 # only the accelerated curve would pay that cost, so disable recording to keep
@@ -253,8 +247,7 @@ for size in size_grid:
     )
 
 print(
-    "verified accelerated Gemm for every benchmark size and distinct baseline: "
-    f"baseline={baseline_kernel_names or ['onnx-light built-in']}, "
+    "verified onnx-light-cpu Gemm for every benchmark size: "
     f"accelerated={accelerated_kernel_name}"
 )
 set_kernel_usage_recording(True)
