@@ -16,8 +16,13 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+    "black==26.5.1",
+    "clang-format==22.1.8",
+    "mypy==2.3.0",
+    "pyrefly==1.2.0",
     "pytest>=7",
     "pytest-cov",
+    "ruff==0.16.3",
 ]
 docs = [
     "breathe",
@@ -43,6 +48,11 @@ ignore_missing_imports = true
 
 [tool.pyrefly]
 project-includes = ["onnx_light_cpu/**/*.py"]
+
+[tool.black]
+extend-exclude = "/(build|dist|docs/auto_[^/]+)/"
+line-length = 98
+target-version = ["py310"]
 
 [tool.ruff]
 exclude = [".eggs", ".git", "build", "dist"]

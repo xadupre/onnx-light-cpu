@@ -23,10 +23,16 @@ find . \( -name "*.cc" -o -name "*.h" -o -name "*.hpp" \) \
   | xargs clang-format --dry-run --Werror
 ```
 
-## Python formatting (ruff)
+## Python formatting (Ruff and Black)
 
-Python code is checked with `ruff` (see the `Style` workflow):
+Python code is checked with Ruff and Black (see the `Style` workflow):
 
 ```bash
-ruff check . && ruff format .
+ruff check . && ruff format . && black .
+```
+
+Or check without modifying files:
+
+```bash
+ruff check . && ruff format --check . && black --check .
 ```
