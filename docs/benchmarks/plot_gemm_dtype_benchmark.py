@@ -317,7 +317,9 @@ set_kernel_usage_recording(True)
 # ----------------
 #
 # The panel shows the raw execution time per shape/dtype on a log scale;
-# solid bars are onnx-light-cpu and hatched bars are onnxruntime.
+# solid bars are onnx-light-cpu and hatched bars are onnxruntime. The small
+# labels above the onnx-light-cpu bars show their speed-up relative to
+# onnxruntime for the same shape and dtype.
 
 import matplotlib.pyplot as plt
 
@@ -340,8 +342,9 @@ series = [
     ("onnxruntime float16", ort_results["float16"], colors["float16"], "//"),
     ("onnx-light-cpu bfloat16", results["bfloat16"], colors["bfloat16"], None),
 ]
+bar_containers = {}
 for i, (label, times, color, hatch) in enumerate(series):
-    ax_time.bar(
+    bar_containers[label] = ax_time.bar(
         x + (i - 2.5) * width,
         np.array(times) * 1e6,
         width,
@@ -349,6 +352,19 @@ for i, (label, times, color, hatch) in enumerate(series):
         color=color,
         hatch=hatch,
     )
+
+for dtype in ("float32", "float16"):
+    speedups = np.array(ort_results[dtype]) / np.array(results[dtype])
+    for bar, speedup in zip(bar_containers[f"onnx-light-cpu {dtype}"], speedups, strict=True):
+        ax_time.annotate(
+            f"{speedup:.2f}x",
+            (bar.get_x() + bar.get_width() / 2, bar.get_height()),
+            xytext=(0, 3),
+            textcoords="offset points",
+            ha="center",
+            va="bottom",
+            fontsize=6,
+        )
 
 # ``onnx-light (built-in)`` is only measured for the shapes in
 # ``ALONE_SHAPE_LABELS``; only draw bars where it was actually measured.
