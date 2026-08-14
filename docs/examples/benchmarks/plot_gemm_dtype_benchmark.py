@@ -3,7 +3,7 @@ Benchmark Gemm: float32 vs float16 vs bfloat16 across kernel code paths
 ========================================================================
 
 ``onnx-light-cpu``'s ``Gemm`` kernel picks between several internal code paths
-depending on the shape of ``A``/``B`` (see :doc:`../design/gemm_kernel_design` for the
+depending on the shape of ``A``/``B`` (see :doc:`../../design/gemm_kernel_design` for the
 full decision tree):
 
 * a **single-tile** path when ``M``, ``N`` and ``K`` all fit in one
@@ -71,8 +71,10 @@ from onnx_light.onnx import TensorProto, checker, helper
 from onnx_light.onnx.reference import ReferenceEvaluator
 
 from onnx_light_cpu import (
+    clear_used_kernel_names,
     register_kernels,
     registered_kernel_names,
+    used_kernel_names,
 )
 from onnx_light_cpu.onnx_py._cpukernels import detect_simd_level, has_cpu_kernels
 from onnx_light_cpu.onnx_py._cpuregister import set_kernel_usage_recording
@@ -211,24 +213,11 @@ ort_sessions = {
     for label in ("float32", "float16")
 }
 
-# Confirm these sessions dispatch ``Gemm`` to onnx-light-cpu's accelerated
-# kernel rather than onnx-light's built-in one. ``register_kernels()`` installed
-# onnx-light-cpu's kernels (``registered_kernel_names()`` lists the ops it
-# overrides) into onnx-light's process-wide dispatch table, and onnx-light's
-# ``ReferenceEvaluator.used_kernels()`` reports the kernels a session actually
-# resolved once it has run. Because the baseline session above was built and run
-# *before* ``register_kernels()``, its ``Gemm`` resolved to the built-in kernel,
-# so the two curves genuinely use different kernels.
-_probe = np.zeros((64, 64), dtype=np.float32)
-sessions["float32"].run(None, {"A": _probe, "B": _probe})
-accelerated_ops = set(registered_kernel_names())
-used_kernels = sessions["float32"].used_kernels()
-used_ops = {key.rsplit(":", 1)[-1] for key in used_kernels}
-assert "Gemm" in used_ops & accelerated_ops, used_kernels
-print(f"onnx-light-cpu kernels dispatched by the accelerated session: {used_kernels}")
+accelerated_kernel_name = registered_kernel_names()["Gemm"]
 # onnx-light-cpu kernels record their name on every run (a mutex per call);
 # only the accelerated curves would pay that cost, so disable recording to keep
-# the timings below fair.
+# the timings fair. Recording is briefly re-enabled below to verify the exact
+# implementation used for every benchmark shape and dtype.
 set_kernel_usage_recording(False)
 
 
@@ -266,6 +255,14 @@ for shape_label, M, N, K in SHAPES:
         )
         for label in DTYPES
     )
+    for label, run in zip(DTYPES, runs, strict=True):
+        set_kernel_usage_recording(True)
+        clear_used_kernel_names()
+        run()
+        kernel_names = used_kernel_names()
+        assert accelerated_kernel_name in kernel_names, (label, shape_label, kernel_names)
+        set_kernel_usage_recording(False)
+
     elapsed_by_label = dict(
         zip(
             DTYPES,
@@ -310,6 +307,7 @@ for shape_label, M, N, K in SHAPES:
             ort_text = "not supported"
         print(f"  {label:<9} | onnx-light-cpu={elapsed * 1e6:10.2f} us | onnxruntime={ort_text}")
 
+print(f"verified {accelerated_kernel_name} for every benchmark shape and dtype")
 set_kernel_usage_recording(True)
 
 # %%
@@ -317,7 +315,9 @@ set_kernel_usage_recording(True)
 # ----------------
 #
 # The panel shows the raw execution time per shape/dtype on a log scale;
-# solid bars are onnx-light-cpu and hatched bars are onnxruntime.
+# solid bars are onnx-light-cpu and hatched bars are onnxruntime. The small
+# labels above the onnx-light-cpu bars show their speed-up relative to
+# onnxruntime for the same shape and dtype.
 
 import matplotlib.pyplot as plt
 
@@ -340,8 +340,9 @@ series = [
     ("onnxruntime float16", ort_results["float16"], colors["float16"], "//"),
     ("onnx-light-cpu bfloat16", results["bfloat16"], colors["bfloat16"], None),
 ]
+bar_containers = {}
 for i, (label, times, color, hatch) in enumerate(series):
-    ax_time.bar(
+    bar_containers[label] = ax_time.bar(
         x + (i - 2.5) * width,
         np.array(times) * 1e6,
         width,
@@ -349,6 +350,19 @@ for i, (label, times, color, hatch) in enumerate(series):
         color=color,
         hatch=hatch,
     )
+
+for dtype in ("float32", "float16"):
+    speedups = np.array(ort_results[dtype]) / np.array(results[dtype])
+    for bar, speedup in zip(bar_containers[f"onnx-light-cpu {dtype}"], speedups, strict=True):
+        ax_time.annotate(
+            f"{speedup:.2f}x",
+            (bar.get_x() + bar.get_width() / 2, bar.get_height()),
+            xytext=(0, 3),
+            textcoords="offset points",
+            ha="center",
+            va="bottom",
+            fontsize=6,
+        )
 
 # ``onnx-light (built-in)`` is only measured for the shapes in
 # ``ALONE_SHAPE_LABELS``; only draw bars where it was actually measured.

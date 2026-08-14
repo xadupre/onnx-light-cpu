@@ -180,7 +180,7 @@ class TestBackendCases:
 
     @pytest.mark.parametrize("size", [16, 64, 128])
     def test_gemm_uses_accelerated_kernel_benchmark_sizes(self, size):
-        # Backs docs/examples/plot_gemm_benchmark.py: the timed ``Gemm`` curve
+        # Backs docs/examples/benchmarks/plot_gemm_benchmark.py: the timed ``Gemm`` curve
         # must dispatch to onnx-light-cpu (not onnx-light's built-in kernel) for
         # the same square shapes the benchmark measures, otherwise its timings
         # would be indistinguishable from the built-in baseline. The benchmark

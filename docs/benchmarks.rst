@@ -36,4 +36,4 @@ has no effect.
 .. toctree::
     :maxdepth: 1
 
-    auto_benchmarks/index
+    auto_examples/benchmarks/index

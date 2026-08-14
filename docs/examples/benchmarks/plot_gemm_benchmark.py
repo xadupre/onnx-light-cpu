@@ -33,7 +33,7 @@ separate model/session for the built-in curve and run it *before*
 example does. Since the built-in kernel is a plain reference implementation
 with no SIMD or blocking/packing, its cost grows much faster than the other
 three back-ends; to keep the benchmark's runtime reasonable it is only
-measured for the smaller sizes in ``size_grid`` (all but the last two).
+measured up to 128 while the accelerated back-ends continue to 2048.
 """
 
 # %%
@@ -55,8 +55,10 @@ from onnx_light.onnx import TensorProto, checker, helper
 from onnx_light.onnx.reference import ReferenceEvaluator
 
 from onnx_light_cpu import (
+    clear_used_kernel_names,
     register_kernels,
     registered_kernel_names,
+    used_kernel_names,
 )
 from onnx_light_cpu.onnx_py._cpukernels import detect_simd_level, has_cpu_kernels
 from onnx_light_cpu.onnx_py._cpuregister import set_kernel_usage_recording
@@ -141,10 +143,10 @@ def measure_together(*funcs, repeat, warmup=3):
 # A dedicated model/session is run once while onnx-light-cpu's accelerated
 # ``Gemm`` kernel has not been installed yet, so it resolves and caches
 # onnx-light's own built-in reference kernel. It is timed below alongside the
-# other runtimes for all but the last two sizes.
+# other runtimes up to size 128.
 
-size_grid = [16, 32, 64, 128, 256, 512]
-alone_sizes = size_grid[:-2]
+size_grid = [16, 32, 64, 128, 256, 512, 1024, 2048]
+alone_sizes = [16, 32, 64, 128]
 rng = np.random.default_rng(0)
 
 alone_model = make_gemm_model()
@@ -172,25 +174,12 @@ def run_light(a, b):
     return light_session.run(None, {"A": a, "B": b})[0]
 
 
-# Confirm this session dispatches ``Gemm`` to onnx-light-cpu's accelerated
-# kernel rather than onnx-light's built-in one. ``register_kernels()`` installed
-# onnx-light-cpu's kernels (``registered_kernel_names()`` lists the ops it
-# overrides) into onnx-light's process-wide dispatch table, and onnx-light's
-# ``ReferenceEvaluator.used_kernels()`` reports the kernels this session actually
-# resolved once it has run. Because the baseline session above was built and run
-# *before* ``register_kernels()``, its ``Gemm`` resolved to the built-in kernel,
-# so the two curves genuinely use different kernels. Probe with a real benchmark
-# size so the check exercises the same path that is timed below.
-_probe = rng.standard_normal((size_grid[0], size_grid[0])).astype(np.float32)
-run_light(_probe, _probe)
-accelerated_ops = set(registered_kernel_names())
-used_kernels = light_session.used_kernels()
-used_ops = {key.rsplit(":", 1)[-1] for key in used_kernels}
-assert "Gemm" in used_ops & accelerated_ops, used_kernels
-print(f"onnx-light-cpu kernels dispatched by the accelerated session: {used_kernels}")
+accelerated_kernel_name = registered_kernel_names()["Gemm"]
+
 # onnx-light-cpu kernels record their name on every run (a mutex per call);
 # only the accelerated curve would pay that cost, so disable recording to keep
-# the timings below fair.
+# the timings fair. Recording is briefly re-enabled below to verify the exact
+# implementation used for every benchmark size.
 set_kernel_usage_recording(False)
 
 
@@ -210,6 +199,13 @@ for size in size_grid:
     a = rng.standard_normal((size, size)).astype(np.float32)
     b = rng.standard_normal((size, size)).astype(np.float32)
     expected = a @ b
+
+    set_kernel_usage_recording(True)
+    clear_used_kernel_names()
+    run_light(a, b)
+    accelerated_kernel_names = used_kernel_names()
+    assert accelerated_kernel_name in accelerated_kernel_names, accelerated_kernel_names
+    set_kernel_usage_recording(False)
 
     repeat = max(7, min(100, 20_000_000 // (size * size * size)))
 
@@ -250,6 +246,10 @@ for size in size_grid:
         f"onnxruntime={ort_time * 1e6:10.2f} us"
     )
 
+print(
+    "verified onnx-light-cpu Gemm for every benchmark size: "
+    f"accelerated={accelerated_kernel_name}"
+)
 set_kernel_usage_recording(True)
 
 sizes = np.array([r[0] for r in rows])
@@ -278,16 +278,36 @@ import matplotlib.pyplot as plt
 fig, (ax_time, ax_speedup) = plt.subplots(1, 2, figsize=(11, 4.5))
 
 ax_time.plot(sizes, numpy_times * 1e6, "o--", label="numpy", color="#9b7ec8")
-ax_time.plot(alone_grid, alone_grid_times * 1e6, "o--", label=alone_label, color="#5cb85c")
+ax_time.plot(
+    alone_grid,
+    alone_grid_times * 1e6,
+    "o--",
+    label=alone_label,
+    color="#5cb85c",
+    linewidth=3.5,
+    markersize=9,
+    markerfacecolor="none",
+    markeredgewidth=2,
+    zorder=2,
+)
 if light_session is not None:
-    ax_time.plot(sizes, cpu_times * 1e6, "o-", label=light_label, color="#4a9eff")
+    ax_time.plot(
+        sizes,
+        cpu_times * 1e6,
+        "o-",
+        label=light_label,
+        color="#4a9eff",
+        linewidth=1.5,
+        markersize=4,
+        zorder=3,
+    )
 ax_time.plot(sizes, ort_times * 1e6, "o-", label="onnxruntime", color="#f4a259")
 ax_time.set_xscale("log")
 ax_time.set_yscale("log")
 ax_time.set_xlabel("matrix size N (N x N)")
 ax_time.set_ylabel("time (microseconds)")
 ax_time.set_title(f"Gemm execution time (SIMD: {simd_name})")
-ax_time.tick_params(axis="x", labelrotation=45)
+ax_time.tick_params(axis="x", labelrotation=20)
 ax_time.legend()
 
 ort_times_by_size = dict(zip(sizes.tolist(), ort_times.tolist(), strict=True))
@@ -300,10 +320,24 @@ ax_speedup.plot(
     "o--",
     label=alone_label,
     color="#5cb85c",
+    linewidth=3.5,
+    markersize=9,
+    markerfacecolor="none",
+    markeredgewidth=2,
+    zorder=2,
 )
 if light_session is not None:
     cpu_speedup = ort_times / cpu_times
-    ax_speedup.plot(sizes, cpu_speedup, "o-", label=light_label, color="#4a9eff")
+    ax_speedup.plot(
+        sizes,
+        cpu_speedup,
+        "o-",
+        label=light_label,
+        color="#4a9eff",
+        linewidth=1.5,
+        markersize=4,
+        zorder=3,
+    )
     for size, speedup in zip(sizes, cpu_speedup, strict=True):
         ax_speedup.annotate(
             f"{speedup:.2f}x",
@@ -321,7 +355,7 @@ ax_speedup.set_yscale("log")
 ax_speedup.set_xlabel("matrix size N (N x N)")
 ax_speedup.set_ylabel("speed-up vs onnxruntime")
 ax_speedup.set_title("Gemm speed-up (onnxruntime = 1)")
-ax_speedup.tick_params(axis="x", labelrotation=45)
+ax_speedup.tick_params(axis="x", labelrotation=20)
 ax_speedup.legend()
 
 fig.tight_layout()

@@ -54,9 +54,8 @@ cover/
 docs/_build/
 docs/_doxygen/
 docs/auto_examples/
-docs/auto_benchmarks/
 docs/sg_execution_times.rst
-docs/examples/*.png
+docs/examples/**/*.png
 
 # mypy
 .mypy_cache/
