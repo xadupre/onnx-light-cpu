@@ -108,9 +108,10 @@ std::size_t BoundedAligned(std::size_t value, std::size_t minimum, std::size_t m
 
 } // namespace
 
-GemmBlocking SelectGemmBlocking(std::size_t element_size, std::size_t vector_lanes) {
+GemmBlocking SelectGemmBlocking(std::size_t element_size, std::size_t vector_lanes,
+                                std::size_t register_rows) {
   const CacheSizes caches = DetectCacheSizes();
-  const std::size_t mr = kGemmMR;
+  const std::size_t mr = register_rows;
   const std::size_t nr = std::max<std::size_t>(2, 2 * vector_lanes);
 
   // Keep one A micro-panel and one B micro-panel within roughly 75% of L1.

@@ -218,8 +218,12 @@ Implemented optimizations (for reference)
      - Implemented -- compile-time FP32/FP64 MR=1, 2, 3, and 4 variants cover
        both NR=1 and NR=2, selected from the actual row-block size.
    * - AVX-512 MR variants
-     - Implemented -- compile-time FP32/FP64 MR=1, 2, 3, and 4 variants cover
-       both NR=1 and NR=2, selected from the actual row-block size.
+     - Implemented -- compile-time FP32/FP64 MR=1 through 6 variants cover
+       both NR=1 and NR=2.
+   * - ISA-specific register blocking
+     - Implemented -- AVX2/SSE use MR=4 while AVX-512 uses MR=6; the selected
+       value drives algorithm selection, MC alignment, row packing, and the
+       direct/five-loop engines.
 
 Remaining optimizations (not implemented)
 --------------------------------------------
@@ -312,5 +316,6 @@ gains.
        is a different programming model from NEON's fixed 128-bit registers,
        so it is effectively a second port rather than a small extension.
 
-The next x86 tuning step is to select the maximum MR/NR variant by detected
-microarchitecture instead of using MR=4 and NR=2 vectors for every x86 CPU.
+The next x86 tuning step is to benchmark per-model MR/NR profiles within each
+ISA (for example Zen versus Skylake/Ice Lake) before adding family/model
+dispatch.

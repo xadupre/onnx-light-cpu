@@ -69,6 +69,20 @@ TEST(GemmPlan, SelectsShapeSpecificAlgorithms) {
   EXPECT_EQ(split_k.algorithm(), GemmAlgorithm::kSplitK);
 }
 
+TEST(GemmPlan, BlockingUsesIsaSpecificRegisterRows) {
+  const auto avx2 = onnx_light_cpu::detail::SelectGemmBlocking(sizeof(float), 8, 4);
+  const auto avx512 = onnx_light_cpu::detail::SelectGemmBlocking(sizeof(float), 16, 6);
+
+  EXPECT_EQ(avx2.mr, 4u);
+  EXPECT_EQ(avx512.mr, 6u);
+  EXPECT_EQ(avx2.mc % avx2.mr, 0u);
+  EXPECT_EQ(avx512.mc % avx512.mr, 0u);
+  EXPECT_EQ(onnx_light_cpu::detail::SelectGemmAlgorithm(false, false, 5, 257, 64, 16, 4),
+            GemmAlgorithm::kGeneral);
+  EXPECT_EQ(onnx_light_cpu::detail::SelectGemmAlgorithm(false, false, 5, 257, 64, 16, 6),
+            GemmAlgorithm::kSkinnyM);
+}
+
 TEST(GemmPlan, ExecutesEveryPreparedAlgorithm) {
   const auto check = [](std::size_t m, std::size_t n, std::size_t k,
                         GemmAlgorithm expected_algorithm) {

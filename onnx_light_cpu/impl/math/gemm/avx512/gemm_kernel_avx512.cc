@@ -13,11 +13,11 @@
 //
 // Mirrors the AVX (256-bit) micro-kernels in gemm_kernel.cc one register
 // width up: a 512-bit vector holds 16 floats / 8 doubles, and every
-// micro-kernel call still processes ``kGemmMR`` (4) rows at once, register
-// blocked over the whole (chunked) K reduction. Like the AVX/SSE2 kernels, the
-// main loop processes two vectors of columns per step (``NR = 2``) so each
-// broadcast A element is reused across twice the column width, amortizing the
-// broadcast/loop overhead over more FMAs.
+// micro-kernel call processes up to ``kGemmAVX512MR`` (6) rows at once,
+// register blocked over the whole (chunked) K reduction. Like the AVX/SSE2
+// kernels, the main loop processes two vectors of columns per step (``NR = 2``)
+// so each broadcast A element is reused across twice the column width,
+// amortizing the broadcast/loop overhead over more FMAs.
 
 #include "onnx_light_cpu/impl/math/gemm/avx512/gemm_kernel_avx512.h"
 
@@ -45,7 +45,7 @@ void GemmMicroKernel_AVX512_F32Impl(std::size_t nb, std::size_t K, float alpha, 
                                     const float *Bmat, std::size_t N, const float *Crow_base,
                                     std::size_t Cstride, float *Yrow_base, std::size_t Ystride,
                                     std::size_t n0, GemmAccumMode mode, const float *Apack) {
-  static_assert(MR >= 1 && MR <= kGemmMR);
+  static_assert(MR >= 1 && MR <= kGemmAVX512MR);
   const __m512 valpha = _mm512_set1_ps(alpha);
   const __m512 vbeta = _mm512_set1_ps(beta);
   std::size_t n = 0;
@@ -144,7 +144,7 @@ void GemmMicroKernel_AVX512_F64Impl(std::size_t nb, std::size_t K, double alpha,
                                     const double *Bmat, std::size_t N, const double *Crow_base,
                                     std::size_t Cstride, double *Yrow_base, std::size_t Ystride,
                                     std::size_t n0, GemmAccumMode mode, const double *Apack) {
-  static_assert(MR >= 1 && MR <= kGemmMR);
+  static_assert(MR >= 1 && MR <= kGemmAVX512MR);
   const __m512d valpha = _mm512_set1_pd(alpha);
   const __m512d vbeta = _mm512_set1_pd(beta);
   std::size_t n = 0;
@@ -256,6 +256,12 @@ void GemmMicroKernel_AVX512_F32(std::size_t mr, std::size_t nb, std::size_t K, f
   case 4:
     return GemmMicroKernel_AVX512_F32Impl<4>(nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
                                              Yrow_base, Ystride, n0, mode, Apack);
+  case 5:
+    return GemmMicroKernel_AVX512_F32Impl<5>(nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
+                                             Yrow_base, Ystride, n0, mode, Apack);
+  case 6:
+    return GemmMicroKernel_AVX512_F32Impl<6>(nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
+                                             Yrow_base, Ystride, n0, mode, Apack);
   default:
     return GemmMicroKernel_Scalar_F32(mr, nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
                                       Yrow_base, Ystride, n0, mode, Apack);
@@ -279,6 +285,12 @@ void GemmMicroKernel_AVX512_F64(std::size_t mr, std::size_t nb, std::size_t K, d
                                              Yrow_base, Ystride, n0, mode, Apack);
   case 4:
     return GemmMicroKernel_AVX512_F64Impl<4>(nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
+                                             Yrow_base, Ystride, n0, mode, Apack);
+  case 5:
+    return GemmMicroKernel_AVX512_F64Impl<5>(nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
+                                             Yrow_base, Ystride, n0, mode, Apack);
+  case 6:
+    return GemmMicroKernel_AVX512_F64Impl<6>(nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
                                              Yrow_base, Ystride, n0, mode, Apack);
   default:
     return GemmMicroKernel_Scalar_F64(mr, nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
