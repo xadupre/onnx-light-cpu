@@ -14,8 +14,10 @@ workloads, for every supported data type, without sacrificing ONNX correctness.
 This is a catch-up effort with standard ONNX tensors and semantics.
 
 The current implementation is a correctness-first, register-blocked kernel.
-It already has AVX2/AVX-512 paths, K blocking, A/B packing, and two-dimensional
-task parallelism; see :doc:`the current design <../design/gemm_kernel_design>`.
+It already has AVX2/AVX-512 paths, K blocking, A/B packing, and parallel
+execution along one selected matrix axis. The general five-loop path does not
+yet schedule the complete M x N task grid; see
+:doc:`the current design <../design/gemm_kernel_design>`.
 Benchmarks nevertheless show that MLAS can remain an order of magnitude faster
 on multi-panel and skinny-M shapes. This is a kernel and scheduling gap, not a
 plotting artifact.
@@ -151,10 +153,11 @@ This order is important:
 * transposition is resolved while packing, so the arithmetic loop sees only
   contiguous canonical panels.
 
-The current task decomposition associates packing with individual output
-tiles. In particular, the same logical B panel can be packed independently by
-several row tasks. The replacement must make packed-panel ownership explicit
-and schedule compute tasks that reference shared immutable panels.
+The current five-loop engine packs one B panel for a column/K block and shares
+it across its row panels. It then parallelizes either column panels or row
+panels, not their Cartesian product. Its task granularity is therefore tied to
+MC/NC: a large cache-derived NC can leave only one column task, while a large
+MC can leave only a few row tasks.
 
 One algorithm is not optimal for every shape. The plan must choose among
 distinct computational algorithms:
@@ -256,15 +259,82 @@ Phase 2: saturate the floating-point units
 Parallel execution
 ~~~~~~~~~~~~~~~~~~
 
-* Replace the fixed static split with a scheduler that chooses M, N, K, or
-  batch parallelism from the shape.
-* Avoid waking more threads than available tiles or useful memory bandwidth.
-* Prefer physical P-cores for latency-sensitive small/medium GEMMs on hybrid
-  CPUs; use E-cores only when the workload is large enough to benefit.
-* Keep workers spinning briefly between repeated inference calls before
-  parking, with a configurable policy to avoid wasting CPU in idle processes.
-* Prevent oversubscription when the caller or another backend already owns a
-  thread pool.
+P4 has the following fixed execution ledger. This list is the complete P4
+scope; an optimization not listed here must not silently become a new P4 exit
+requirement.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 9 25 18 48
+
+   * - ID
+     - Deliverable
+     - State
+     - Exact remaining work
+   * - P4.1
+     - x86 SIMD micro-kernels
+     - Implemented
+     - None. SSE2, AVX, AVX2+FMA, and AVX-512 FP32/FP64 dispatch exists.
+   * - P4.2
+     - K-loop throughput
+     - Implemented
+     - None. AVX2+FMA and AVX-512 use four-way K unrolling with remainder
+       handling.
+   * - P4.3
+     - ISA register blocking
+     - Implemented
+     - None. AVX2/SSE use MR=4 and AVX-512 uses MR=6, with tail variants.
+   * - P4.4
+     - Arithmetic epilogues
+     - Partial
+     - Unit ``alpha``/``beta`` and no-bias paths are implemented. Consume
+       scalar, row, and column bias directly in the micro-kernel instead of
+       materializing an M x N bias buffer.
+   * - P4.5
+     - Task-aware cache blocking
+     - Partial
+     - Cache-derived MC/NC/KC exists. Constrain MC/NC jointly with the scheduler
+       so a large cache does not reduce an otherwise parallel GEMM to one or
+       two tasks.
+   * - P4.6
+     - Shape scheduler
+     - Partial
+     - The persistent pool and M-or-N split exist. Schedule the general M x N
+       task grid, use ``GemmPlan::useful_threads()``, parallelize batches of
+       small products, and use split-K only when M/N/batch tasks cannot occupy
+       the selected threads. Replace the current scalar split-K computation
+       with the packed SIMD path.
+   * - P4.7
+     - Bounded x86 kernel tuning
+     - Pending
+     - Benchmark a fixed candidate set of MR/NR profiles for AVX2 and AVX-512.
+       Add family/model dispatch only when different profiles win materially;
+       this item ends after that one comparison and is not an open-ended
+       assembly rewrite.
+   * - P4.8
+     - ARM SIMD track
+     - Pending
+     - Add NEON FP32/FP64 kernels. This is required for ARM parity but does not
+       block the x86 performance gate.
+   * - P4.9
+     - Performance exit gate
+     - Pending
+     - The priority x86 FP32/FP64 corpus reaches 0.9-1.0x MLAS after P4.4-P4.7.
+
+The remaining x86 work is executed strictly in this order:
+
+1. P4.5-P4.6: implement the full M x N scheduler and task-aware MC/NC.
+2. P4.6: add batch scheduling and a packed SIMD split-K fallback.
+3. P4.4: consume broadcast bias without an expanded temporary.
+4. P4.7: run the bounded MR/NR profile comparison and retain only measured
+   winners.
+5. P4.9: run the performance gate and close P4 for x86.
+
+Persistent B prepacking, hand-written assembly, fused activation/residual
+epilogues, worker spin policies, P/E-core affinity, and integration with an
+external caller-owned thread pool are explicitly outside the P4 exit criteria.
+They may be separate later optimizations, but they cannot be added to the list
+above as prerequisites for closing P4.
 
 Phase 3: native low-precision kernels
 --------------------------------------
@@ -595,10 +665,9 @@ require measurements on dedicated hardware.
      - FMA/AVX2/AVX-512/ARM micro-kernels and tuned scheduler.
      - Priority FP32/FP64 corpus reaches 0.9-1.0x MLAS.
      - P3.
-     - AVX2+FMA and AVX-512 micro-kernels implemented, including four-way K
-       unrolling, ISA-selected MR=4/6 variants, and unit-scale/no-bias epilogue
-       fast paths; broadcast-bias epilogues, ARM kernels, per-model MR/NR
-       tuning, scheduler tuning, and the performance gate remain.
+     - P4.1-P4.3 implemented; P4.4-P4.6 partial; P4.7-P4.9 pending. The fixed
+       scope and exact remaining order are defined in the P4 execution ledger
+       above.
      - `onnx-light-cpu #133
        <https://github.com/xadupre/onnx-light-cpu/pull/133>`_,
        `onnx-light-cpu #141
