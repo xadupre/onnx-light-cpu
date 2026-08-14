@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <limits>
 
 #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
 #define ONNX_LIGHT_CPU_X86 1
@@ -100,6 +101,20 @@ std::size_t AlignDown(std::size_t value, std::size_t alignment) {
   return value / alignment * alignment;
 }
 
+std::size_t AlignUp(std::size_t value, std::size_t alignment) {
+  const std::size_t remainder = value % alignment;
+  if (remainder == 0) {
+    return value;
+  }
+  const std::size_t increment = alignment - remainder;
+  return value > std::numeric_limits<std::size_t>::max() - increment ? AlignDown(value, alignment)
+                                                                     : value + increment;
+}
+
+std::size_t CeilDiv(std::size_t value, std::size_t divisor) {
+  return value / divisor + static_cast<std::size_t>(value % divisor != 0);
+}
+
 std::size_t BoundedAligned(std::size_t value, std::size_t minimum, std::size_t maximum,
                            std::size_t alignment) {
   value = std::clamp(value, minimum, maximum);
@@ -129,6 +144,38 @@ GemmBlocking SelectGemmBlocking(std::size_t element_size, std::size_t vector_lan
     nc = BoundedAligned(nc_capacity, nr, 1024, nr);
   }
   return GemmBlocking{mc, nc, kc, mr, nr};
+}
+
+GemmBlocking ConstrainGemmBlockingForTasks(GemmBlocking blocking, std::size_t m, std::size_t n,
+                                           std::size_t thread_count) {
+  if (m == 0 || n == 0 || thread_count <= 1) {
+    return blocking;
+  }
+
+  const std::size_t max_row_tasks = CeilDiv(m, blocking.mr);
+  const std::size_t max_column_tasks = CeilDiv(n, blocking.nr);
+  const std::size_t max_tasks = max_row_tasks > thread_count / max_column_tasks
+                                    ? thread_count
+                                    : max_row_tasks * max_column_tasks;
+  const std::size_t target_tasks = std::min(thread_count, max_tasks);
+
+  std::size_t row_tasks = CeilDiv(m, blocking.mc);
+  std::size_t column_tasks = CeilDiv(n, blocking.nc);
+  if (row_tasks * column_tasks >= target_tasks) {
+    return blocking;
+  }
+
+  const std::size_t desired_row_tasks =
+      std::min(max_row_tasks, CeilDiv(target_tasks, column_tasks));
+  blocking.mc = std::max(blocking.mr, AlignUp(CeilDiv(m, desired_row_tasks), blocking.mr));
+  row_tasks = CeilDiv(m, blocking.mc);
+
+  if (row_tasks * column_tasks < target_tasks) {
+    const std::size_t desired_column_tasks =
+        std::min(max_column_tasks, CeilDiv(target_tasks, row_tasks));
+    blocking.nc = std::max(blocking.nr, AlignUp(CeilDiv(n, desired_column_tasks), blocking.nr));
+  }
+  return blocking;
 }
 
 } // namespace onnx_light_cpu::detail

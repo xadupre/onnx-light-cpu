@@ -114,17 +114,31 @@ std::size_t CeilDiv(std::size_t value, std::size_t divisor) {
   return value / divisor + static_cast<std::size_t>(value % divisor != 0);
 }
 
-std::size_t UsefulThreads(std::size_t m, std::size_t n) {
-  const std::size_t row_tasks = CeilDiv(m, kGemmTileM);
-  const std::size_t column_tasks = CeilDiv(n, kGemmTileN);
-  const std::size_t max_threads = static_cast<std::size_t>(ParallelForThreadCount());
+std::size_t UsefulThreads(std::size_t m, std::size_t n, std::size_t k,
+                          const GemmBlocking &blocking) {
+  const std::size_t row_tasks = CeilDiv(m, blocking.mc);
+  const std::size_t column_tasks = CeilDiv(n, blocking.nc);
   if (row_tasks == 0 || column_tasks == 0) {
     return 1;
   }
-  if (column_tasks > max_threads / row_tasks) {
-    return max_threads;
-  }
-  return std::max<std::size_t>(1, std::min(max_threads, row_tasks * column_tasks));
+  const std::size_t task_count = CheckedProduct(row_tasks, column_tasks, "scheduler task");
+  const std::int64_t parallel_tasks =
+      task_count > static_cast<std::size_t>(std::numeric_limits<std::int64_t>::max())
+          ? std::numeric_limits<std::int64_t>::max()
+          : static_cast<std::int64_t>(task_count);
+  const double cost = static_cast<double>(std::min(m, blocking.mc)) * std::min(n, blocking.nc) *
+                      std::min(k, blocking.kc) / kGemmFmasPerParallelWorkUnit;
+  return static_cast<std::size_t>(ParallelForBlockCount(parallel_tasks, cost));
+}
+
+template <typename T> double GemmWork(const GemmPlan<T> &plan) {
+  return static_cast<double>(plan.m()) * plan.n() * plan.k() / kGemmFmasPerParallelWorkUnit;
+}
+
+template <typename T> bool PreferBatchParallelism(std::span<const GroupedGemmProblem<T>> problems) {
+  return std::all_of(problems.begin(), problems.end(), [](const GroupedGemmProblem<T> &problem) {
+    return problem.plan->useful_threads() == 1;
+  });
 }
 
 detail::MatMulDimensions PrepareMatMulDimensions(std::span<const std::size_t> a_shape,
@@ -241,8 +255,10 @@ GemmPlan<T>::GemmPlan(const GemmPlanOptions<T> &options)
       k_(options.k), alpha_(options.alpha), beta_(options.beta),
       algorithm_(detail::SelectGemmAlgorithm(options.trans_a, options.trans_b, options.m, options.n,
                                              options.k, VectorLanes<T>(), RegisterRows())),
-      blocking_(detail::SelectGemmBlocking(sizeof(T), VectorLanes<T>(), RegisterRows())),
-      useful_threads_(UsefulThreads(options.m, options.n)),
+      blocking_(detail::ConstrainGemmBlockingForTasks(
+          detail::SelectGemmBlocking(sizeof(T), VectorLanes<T>(), RegisterRows()), options.m,
+          options.n, static_cast<std::size_t>(ParallelForThreadCount()))),
+      useful_threads_(UsefulThreads(options.m, options.n, options.k, blocking_)),
       has_constant_b_(!options.constant_b.empty()),
       constant_b_(options.constant_b.begin(), options.constant_b.end()),
       kernel_(SelectKernel<T>(algorithm_)) {
@@ -337,11 +353,19 @@ template <typename T> void MatMulPlan<T>::Execute(const T *a, const T *b, T *y) 
         "onnx_light_cpu::MatMulPlan: B must not be null when K is nonzero.");
   }
 
-  for (std::size_t batch = 0; batch < batch_count_; ++batch) {
-    const T *batch_a = a == nullptr ? nullptr : a + BatchOffset(batch, a_batch_strides_);
-    const T *batch_b =
-        resolved_b == nullptr ? nullptr : resolved_b + BatchOffset(batch, b_batch_strides_);
-    gemm_plan_.Execute(batch_a, batch_b, nullptr, y + batch * output_matrix_elements_);
+  const auto execute = [&](std::int64_t begin, std::int64_t end) {
+    for (std::int64_t offset = begin; offset < end; ++offset) {
+      const std::size_t batch = static_cast<std::size_t>(offset);
+      const T *batch_a = a == nullptr ? nullptr : a + BatchOffset(batch, a_batch_strides_);
+      const T *batch_b =
+          resolved_b == nullptr ? nullptr : resolved_b + BatchOffset(batch, b_batch_strides_);
+      gemm_plan_.Execute(batch_a, batch_b, nullptr, y + batch * output_matrix_elements_);
+    }
+  };
+  if (gemm_plan_.useful_threads() == 1) {
+    ParallelFor(static_cast<std::int64_t>(batch_count_), GemmWork(gemm_plan_), execute);
+  } else {
+    execute(0, static_cast<std::int64_t>(batch_count_));
   }
 }
 
@@ -365,10 +389,17 @@ void StridedBatchedGemm(const GemmPlan<T> &plan, std::size_t batch_count, const 
     throw std::invalid_argument(
         "onnx_light_cpu::StridedBatchedGemm: B must not be null for a dynamic-B plan.");
   }
-  for (std::size_t batch = 0; batch < batch_count; ++batch) {
-    const auto offset = static_cast<std::ptrdiff_t>(batch);
-    plan.Execute(a + offset * stride_a, plan.has_constant_b() ? nullptr : b + offset * stride_b,
-                 c == nullptr ? nullptr : c + offset * stride_c, y + offset * stride_y);
+  const auto execute = [&](std::int64_t begin, std::int64_t end) {
+    for (std::int64_t batch = begin; batch < end; ++batch) {
+      const auto offset = static_cast<std::ptrdiff_t>(batch);
+      plan.Execute(a + offset * stride_a, plan.has_constant_b() ? nullptr : b + offset * stride_b,
+                   c == nullptr ? nullptr : c + offset * stride_c, y + offset * stride_y);
+    }
+  };
+  if (plan.useful_threads() == 1) {
+    ParallelFor(static_cast<std::int64_t>(batch_count), GemmWork(plan), execute);
+  } else {
+    execute(0, static_cast<std::int64_t>(batch_count));
   }
 }
 
@@ -378,7 +409,37 @@ template <typename T> void GroupedGemm(std::span<const GroupedGemmProblem<T>> pr
       throw std::invalid_argument(
           "onnx_light_cpu::GroupedGemm: every problem must reference a plan.");
     }
-    problem.plan->Execute(problem.a, problem.b, problem.c, problem.y);
+    if (problem.plan->m() != 0 && problem.plan->n() != 0) {
+      if (problem.y == nullptr) {
+        throw std::invalid_argument(
+            "onnx_light_cpu::GroupedGemm: Y must not be null for a nonempty problem.");
+      }
+      if (problem.plan->k() != 0 && problem.a == nullptr) {
+        throw std::invalid_argument(
+            "onnx_light_cpu::GroupedGemm: A must not be null when K is nonzero.");
+      }
+      if (problem.plan->k() != 0 && !problem.plan->has_constant_b() && problem.b == nullptr) {
+        throw std::invalid_argument(
+            "onnx_light_cpu::GroupedGemm: B must not be null for a dynamic-B plan.");
+      }
+    }
+  }
+
+  const auto execute = [&](std::int64_t begin, std::int64_t end) {
+    for (std::int64_t index = begin; index < end; ++index) {
+      const GroupedGemmProblem<T> &problem = problems[static_cast<std::size_t>(index)];
+      problem.plan->Execute(problem.a, problem.b, problem.c, problem.y);
+    }
+  };
+  if (PreferBatchParallelism(problems)) {
+    double average_cost = 0;
+    for (const GroupedGemmProblem<T> &problem : problems) {
+      average_cost += GemmWork(*problem.plan);
+    }
+    average_cost = problems.empty() ? 1.0 : average_cost / static_cast<double>(problems.size());
+    ParallelFor(static_cast<std::int64_t>(problems.size()), average_cost, execute);
+  } else {
+    execute(0, static_cast<std::int64_t>(problems.size()));
   }
 }
 

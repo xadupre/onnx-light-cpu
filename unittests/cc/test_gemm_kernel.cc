@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "onnx_light_cpu/impl/math/gemm/gemm_common.h"
 #include "onnx_light_cpu/impl/math/math_kernels.h"
 
 #include <gtest/gtest.h>
@@ -190,6 +191,23 @@ TEST(GemmFloat32, MultiPanelExceedsTiles) {
   }
 }
 
+TEST(GemmFloat32, PlannedGridCoversRowAndColumnPanels) {
+  const std::size_t M = 70, N = 100, K = 130;
+  const auto A = RandomVector(M * K, 31);
+  const auto B = RandomVector(K * N, 32);
+  const auto C = RandomVector(M * N, 33);
+  const auto expected = ReferenceGemm<float>(false, true, M, N, K, 0.75f, A, B, 1.25f, &C);
+  std::vector<float> Y(M * N);
+  const onnx_light_cpu::GemmBlocking blocking{32, 48, 64, 4, 16};
+
+  onnx_light_cpu::detail::GemmFloat32Planned<onnx_light_cpu::GemmAlgorithm::kGeneral>(
+      false, true, M, N, K, 0.75f, A.data(), B.data(), 1.25f, C.data(), Y.data(), &blocking);
+
+  for (std::size_t i = 0; i < M * N; ++i) {
+    EXPECT_NEAR(Y[i], expected[i], 2e-2f) << "i=" << i;
+  }
+}
+
 // K larger than the internal K-blocking chunk (kGemmTileK=256) so the k
 // reduction is split across several chunks that must be accumulated together
 // (GemmAccumMode::kAccumulate) instead of each overwriting Y. Also exercises
@@ -223,6 +241,21 @@ TEST(GemmFloat32, SplitKMatchesReference) {
 
   for (std::size_t i = 0; i < M * N; ++i) {
     EXPECT_NEAR(Y[i], expected[i], 5e-3f) << "i=" << i;
+  }
+}
+
+TEST(GemmFloat32, SplitKSupportsTransposedInputs) {
+  const std::size_t M = 2, N = 2, K = 4096;
+  const auto A = RandomVector(K * M, 54);
+  const auto B = RandomVector(N * K, 55);
+  const auto expected = ReferenceGemm<float>(true, true, M, N, K, 1.0f, A, B, 0.0f, nullptr);
+  std::vector<float> Y(M * N);
+
+  onnx_light_cpu::GemmFloat32(true, true, M, N, K, 1.0f, A.data(), B.data(), 0.0f, nullptr,
+                              Y.data());
+
+  for (std::size_t i = 0; i < M * N; ++i) {
+    EXPECT_NEAR(Y[i], expected[i], 1e-2f) << "i=" << i;
   }
 }
 
@@ -349,6 +382,22 @@ TEST(GemmFloat64, LargeKSpansMultipleChunks) {
   std::vector<double> Y(M * N, 0.0);
   onnx_light_cpu::GemmFloat64(false, false, M, N, K, alpha, A.data(), B.data(), beta, C.data(),
                               Y.data());
+  for (std::size_t i = 0; i < M * N; ++i) {
+    EXPECT_NEAR(Y[i], expected[i], 1e-9) << "i=" << i;
+  }
+}
+
+TEST(GemmFloat64, SplitKSupportsTransposedBAndBias) {
+  const std::size_t M = 2, N = 2, K = 4096;
+  const auto A = RandomVectorD(M * K, 73);
+  const auto B = RandomVectorD(N * K, 74);
+  const auto C = RandomVectorD(M * N, 75);
+  const auto expected = ReferenceGemm<double>(false, true, M, N, K, 0.5, A, B, 2.0, &C);
+  std::vector<double> Y(M * N);
+
+  onnx_light_cpu::GemmFloat64(false, true, M, N, K, 0.5, A.data(), B.data(), 2.0, C.data(),
+                              Y.data());
+
   for (std::size_t i = 0; i < M * N; ++i) {
     EXPECT_NEAR(Y[i], expected[i], 1e-9) << "i=" << i;
   }
