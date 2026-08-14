@@ -83,6 +83,28 @@ TEST(GemmPlan, BlockingUsesIsaSpecificRegisterRows) {
             GemmAlgorithm::kSkinnyM);
 }
 
+TEST(GemmPlan, SelectsConservativeMicroarchitectureRegisterRows) {
+  using onnx_light_cpu::GemmMicroarchitecture;
+  using onnx_light_cpu::SimdLevel;
+  using onnx_light_cpu::detail::SelectGemmRegisterRowsForMicroarchitecture;
+
+  EXPECT_EQ(SelectGemmRegisterRowsForMicroarchitecture(SimdLevel::kAVX2, true,
+                                                       GemmMicroarchitecture::kGeneric),
+            4u);
+  EXPECT_EQ(SelectGemmRegisterRowsForMicroarchitecture(SimdLevel::kAVX2, true,
+                                                       GemmMicroarchitecture::kIntelCore),
+            5u);
+  EXPECT_EQ(SelectGemmRegisterRowsForMicroarchitecture(SimdLevel::kAVX2, true,
+                                                       GemmMicroarchitecture::kAmdZen),
+            4u);
+  EXPECT_EQ(SelectGemmRegisterRowsForMicroarchitecture(SimdLevel::kAVX512, true,
+                                                       GemmMicroarchitecture::kIntelCore),
+            6u);
+  EXPECT_EQ(SelectGemmRegisterRowsForMicroarchitecture(SimdLevel::kAVX2, false,
+                                                       GemmMicroarchitecture::kIntelCore),
+            4u);
+}
+
 TEST(GemmPlan, BlockingExposesTaskGridForPrioritySizes) {
   const onnx_light_cpu::GemmBlocking initial{256, 1024, 448, 4, 16};
   for (const std::size_t size : {256u, 512u, 1024u}) {

@@ -53,6 +53,33 @@ CpuidResult Cpuid(unsigned int leaf, unsigned int subleaf = 0) {
   return result;
 }
 
+GemmMicroarchitecture DetectMicroarchitecture() {
+  const CpuidResult vendor_leaf = Cpuid(0);
+  const bool intel = vendor_leaf.ebx == 0x756e6547u && vendor_leaf.edx == 0x49656e69u &&
+                     vendor_leaf.ecx == 0x6c65746eu;
+  const bool amd = vendor_leaf.ebx == 0x68747541u && vendor_leaf.edx == 0x69746e65u &&
+                   vendor_leaf.ecx == 0x444d4163u;
+  const CpuidResult version = Cpuid(1);
+  const unsigned int base_family = (version.eax >> 8) & 0xfu;
+  const unsigned int base_model = (version.eax >> 4) & 0xfu;
+  const unsigned int extended_family = (version.eax >> 20) & 0xffu;
+  const unsigned int extended_model = (version.eax >> 16) & 0xfu;
+  const unsigned int family = base_family == 0xfu ? base_family + extended_family : base_family;
+  const unsigned int model = base_model | (extended_model << 4);
+  const bool modern_intel_core =
+      model == 0x4eu || model == 0x55u || model == 0x5eu || model == 0x66u || model == 0x6au ||
+      model == 0x6cu || model == 0x7du || model == 0x7eu || model == 0x8cu || model == 0x8du ||
+      model == 0x8eu || model == 0x8fu || model == 0x97u || model == 0x9au || model == 0x9eu ||
+      model == 0xa7u || model == 0xb7u || model == 0xbau || model == 0xbfu;
+  if (intel && family == 6 && modern_intel_core) {
+    return GemmMicroarchitecture::kIntelCore;
+  }
+  if (amd && family >= 0x17u) {
+    return GemmMicroarchitecture::kAmdZen;
+  }
+  return GemmMicroarchitecture::kGeneric;
+}
+
 bool ReadDeterministicCaches(unsigned int leaf, CacheSizes &sizes) {
   bool found = false;
   for (unsigned int index = 0;; ++index) {
@@ -176,6 +203,30 @@ GemmBlocking ConstrainGemmBlockingForTasks(GemmBlocking blocking, std::size_t m,
     blocking.nc = std::max(blocking.nr, AlignUp(CeilDiv(n, desired_column_tasks), blocking.nr));
   }
   return blocking;
+}
+
+GemmMicroarchitecture DetectGemmMicroarchitecture() {
+#if ONNX_LIGHT_CPU_X86
+  static const GemmMicroarchitecture microarchitecture = DetectMicroarchitecture();
+  return microarchitecture;
+#else
+  return GemmMicroarchitecture::kGeneric;
+#endif
+}
+
+std::size_t SelectGemmRegisterRowsForMicroarchitecture(SimdLevel level, bool has_fma,
+                                                       GemmMicroarchitecture microarchitecture) {
+  if (level >= SimdLevel::kAVX512) {
+    return 6;
+  }
+  if (level >= SimdLevel::kAVX2 && has_fma) {
+    return microarchitecture == GemmMicroarchitecture::kIntelCore ? kGemmIntelAVX2MR : kGemmMR;
+  }
+  return kGemmMR;
+}
+
+std::size_t SelectGemmRegisterRows(SimdLevel level, bool has_fma) {
+  return SelectGemmRegisterRowsForMicroarchitecture(level, has_fma, DetectGemmMicroarchitecture());
 }
 
 } // namespace onnx_light_cpu::detail

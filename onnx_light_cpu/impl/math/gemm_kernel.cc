@@ -58,6 +58,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <new>
 #include <stdexcept>
 #include <vector>
 
@@ -71,6 +72,41 @@
 namespace onnx_light_cpu {
 
 namespace {
+
+template <typename T, std::size_t Alignment> struct AlignedAllocator {
+  using value_type = T;
+
+  AlignedAllocator() = default;
+  template <typename U> constexpr AlignedAllocator(const AlignedAllocator<U, Alignment> &) {}
+
+  [[nodiscard]] T *allocate(std::size_t count) {
+    return static_cast<T *>(::operator new(count * sizeof(T), std::align_val_t{Alignment}));
+  }
+
+  void deallocate(T *pointer, std::size_t) noexcept {
+    ::operator delete(pointer, std::align_val_t{Alignment});
+  }
+
+  template <typename U> struct rebind {
+    using other = AlignedAllocator<U, Alignment>;
+  };
+};
+
+template <typename T, typename U, std::size_t Alignment>
+bool operator==(const AlignedAllocator<T, Alignment> &, const AlignedAllocator<U, Alignment> &) {
+  return true;
+}
+
+template <typename T, typename U, std::size_t Alignment>
+bool operator!=(const AlignedAllocator<T, Alignment> &, const AlignedAllocator<U, Alignment> &) {
+  return false;
+}
+
+template <typename T> using AlignedVector = std::vector<T, AlignedAllocator<T, 64>>;
+
+std::size_t AlignUp(std::size_t value, std::size_t alignment) {
+  return (value + alignment - 1) / alignment * alignment;
+}
 
 // ---------------------------------------------------------------------------
 // Register-blocked GEMM micro-kernels.
@@ -578,7 +614,13 @@ template <typename T> std::size_t GemmVectorLanes(GemmKernelKind kind) {
 }
 
 std::size_t GemmRegisterRows(GemmKernelKind kind) {
-  return kind == GemmKernelKind::kAVX512 ? kGemmAVX512MR : kGemmMR;
+  if (kind == GemmKernelKind::kAVX512) {
+    return detail::SelectGemmRegisterRows(SimdLevel::kAVX512, true);
+  }
+  if (kind == GemmKernelKind::kAVX2FMA) {
+    return detail::SelectGemmRegisterRows(SimdLevel::kAVX2, true);
+  }
+  return kGemmMR;
 }
 
 // Dispatches the register-blocked micro-kernel matching ``kind`` for float32.
@@ -657,17 +699,18 @@ void GemmTileF64(GemmKernelKind kind, std::size_t mr, std::size_t nb, std::size_
 
 template <typename T>
 void PackBPanel(bool trans_b, const T *B, std::size_t K, std::size_t N, std::size_t k0,
-                std::size_t kc, std::size_t n0, std::size_t nb, T *Bpack) {
+                std::size_t kc, std::size_t n0, std::size_t nb, std::size_t packed_stride,
+                T *Bpack) {
   if (!trans_b) {
     for (std::size_t k = 0; k < kc; ++k) {
       const T *src = B + (k0 + k) * N + n0;
-      std::copy(src, src + nb, Bpack + k * nb);
+      std::copy(src, src + nb, Bpack + k * packed_stride);
     }
     return;
   }
   for (std::size_t k = 0; k < kc; ++k) {
     for (std::size_t n = 0; n < nb; ++n) {
-      Bpack[k * nb + n] = B[(n0 + n) * K + k0 + k];
+      Bpack[k * packed_stride + n] = B[(n0 + n) * K + k0 + k];
     }
   }
 }
@@ -763,19 +806,20 @@ void GemmSkinnyM(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::
   const double cost = static_cast<double>(M) * blocking.nc * K / kGemmFmasPerParallelWorkUnit;
   ParallelFor(static_cast<std::int64_t>(panel_count), cost,
               [&](std::int64_t begin, std::int64_t end) {
-                std::vector<T> bpack(blocking.kc * blocking.nc);
-                std::vector<T> apack(M * blocking.kc);
+                AlignedVector<T> bpack(blocking.kc * blocking.nc);
+                AlignedVector<T> apack(M * blocking.kc);
                 for (std::int64_t panel = begin; panel < end; ++panel) {
                   const std::size_t n0 = static_cast<std::size_t>(panel) * blocking.nc;
                   const std::size_t nb = std::min(blocking.nc, N - n0);
                   for (std::size_t k0 = 0; k0 < K; k0 += blocking.kc) {
                     const std::size_t kc = std::min(blocking.kc, K - k0);
-                    PackBPanel(trans_b, B, K, N, k0, kc, n0, nb, bpack.data());
+                    const std::size_t packed_stride = AlignUp(nb, GemmVectorLanes<T>(kind));
+                    PackBPanel(trans_b, B, K, N, k0, kc, n0, nb, packed_stride, bpack.data());
                     PackAPanel(trans_a, A, M, K, 0, M, k0, kc, apack.data());
                     const GemmAccumMode mode =
                         k0 == 0 ? (has_bias ? GemmAccumMode::kInitBias : GemmAccumMode::kInitZero)
                                 : GemmAccumMode::kAccumulate;
-                    tile(kind, M, nb, kc, alpha, beta, bpack.data(), nb,
+                    tile(kind, M, nb, kc, alpha, beta, bpack.data(), packed_stride,
                          has_bias ? C + n0 : nullptr, N, Y + n0, N, 0, mode, apack.data());
                   }
                 }
@@ -793,7 +837,7 @@ void GemmFiveLoopRange(bool trans_a, bool trans_b, std::size_t M, std::size_t N,
   const std::size_t thread_count = static_cast<std::size_t>(ParallelForThreadCount());
   const std::size_t panels_per_wave = std::min(
       column_panels, std::max<std::size_t>(1, (thread_count + row_panels - 1) / row_panels));
-  std::vector<T> bpack(panels_per_wave * blocking.kc * blocking.nc);
+  AlignedVector<T> bpack(panels_per_wave * blocking.kc * blocking.nc);
 
   for (std::size_t k0 = k_begin; k0 < k_end; k0 += blocking.kc) {
     const std::size_t kc = std::min(blocking.kc, k_end - k0);
@@ -805,7 +849,8 @@ void GemmFiveLoopRange(bool trans_a, bool trans_b, std::size_t M, std::size_t N,
       for (std::size_t panel = 0; panel < wave_panels; ++panel) {
         const std::size_t n0 = (first_panel + panel) * blocking.nc;
         const std::size_t nb = std::min(blocking.nc, N - n0);
-        PackBPanel(trans_b, B, K, N, k0, kc, n0, nb,
+        const std::size_t packed_stride = AlignUp(nb, GemmVectorLanes<T>(kind));
+        PackBPanel(trans_b, B, K, N, k0, kc, n0, nb, packed_stride,
                    bpack.data() + panel * blocking.kc * blocking.nc);
       }
 
@@ -816,7 +861,7 @@ void GemmFiveLoopRange(bool trans_a, bool trans_b, std::size_t M, std::size_t N,
                           kGemmFmasPerParallelWorkUnit;
       ParallelFor(static_cast<std::int64_t>(task_count), cost,
                   [&](std::int64_t begin, std::int64_t end) {
-                    std::vector<T> apack(blocking.mc * kc);
+                    AlignedVector<T> apack(blocking.mc * kc);
                     std::size_t packed_row_panel = row_panels;
                     for (std::int64_t task = begin; task < end; ++task) {
                       const std::size_t row_panel = static_cast<std::size_t>(task) / wave_panels;
@@ -825,6 +870,7 @@ void GemmFiveLoopRange(bool trans_a, bool trans_b, std::size_t M, std::size_t N,
                       const std::size_t n0 = (first_panel + wave_panel) * blocking.nc;
                       const std::size_t mc = std::min(blocking.mc, M - m0);
                       const std::size_t nb = std::min(blocking.nc, N - n0);
+                      const std::size_t packed_stride = AlignUp(nb, GemmVectorLanes<T>(kind));
                       if (packed_row_panel != row_panel) {
                         PackAPanel(trans_a, A, M, K, m0, mc, k0, kc, apack.data());
                         packed_row_panel = row_panel;
@@ -832,7 +878,7 @@ void GemmFiveLoopRange(bool trans_a, bool trans_b, std::size_t M, std::size_t N,
                       const T *panel_b = bpack.data() + wave_panel * blocking.kc * blocking.nc;
                       for (std::size_t ir = 0; ir < mc; ir += blocking.mr) {
                         const std::size_t mr = std::min(blocking.mr, mc - ir);
-                        tile(kind, mr, nb, kc, alpha, beta, panel_b, nb,
+                        tile(kind, mr, nb, kc, alpha, beta, panel_b, packed_stride,
                              has_bias ? C + (m0 + ir) * N + n0 : nullptr, N, Y + (m0 + ir) * N + n0,
                              N, 0, mode, apack.data() + ir * kc);
                       }
@@ -865,7 +911,7 @@ void GemmSplitK(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::s
     return;
   }
 
-  std::vector<T> partials(part_count * M * N);
+  AlignedVector<T> partials(part_count * M * N);
   const double cost = static_cast<double>(M) * N * K /
                       (static_cast<double>(part_count) * kGemmFmasPerParallelWorkUnit);
   ParallelFor(static_cast<std::int64_t>(part_count), cost,

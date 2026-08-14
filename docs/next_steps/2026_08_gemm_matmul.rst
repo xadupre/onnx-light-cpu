@@ -21,7 +21,7 @@ batch scheduling, packed SIMD split-K, and typed broadcast/fused epilogues; see
 :doc:`the current design <../design/gemm_kernel_design>`. Roadmap PR01 closed
 the scheduler under-utilization identified on multi-panel shapes, and Roadmap
 PR02 removed expanded bias temporaries. The remaining roadmap work covers
-complete x86 and thread-runtime tuning, ARM kernels, low-precision kernels,
+thread-runtime tuning, ARM kernels, low-precision kernels,
 Attention, and the final ONNX Runtime parity gates.
 
 Related roadmap
@@ -728,7 +728,7 @@ current status.
        CPUID family/model dispatch selects the winners; remaining gaps receive
        assembly kernels, with no priority-shape regression.
      - PR02
-     - Pending
+     - Implemented; pull-request link pending.
    * - Roadmap PR04
      - Complete thread runtime.
      - The scheduler detects physical cores, SMT siblings, P-cores, and E-cores
