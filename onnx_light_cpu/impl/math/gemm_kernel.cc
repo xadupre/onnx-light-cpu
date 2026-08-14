@@ -1251,6 +1251,16 @@ void GemmWithEpilogue(bool trans_a, bool trans_b, std::size_t M, std::size_t N, 
                       T alpha, const T *A, const T *B, const GemmEpilogue<T> &epilogue, T *Y,
                       GemmFn gemm) {
   ValidateEpilogue(M, N, epilogue);
+  const bool no_epilogue = (epilogue.bias == nullptr || epilogue.beta == T(0) ||
+                            epilogue.bias_layout == GemmBroadcast::kNone) &&
+                           (epilogue.residual == nullptr || epilogue.residual_scale == T(0) ||
+                            epilogue.residual_layout == GemmBroadcast::kNone) &&
+                           epilogue.activation == GemmActivation::kNone &&
+                           epilogue.output_conversion == GemmOutputConversion::kNone;
+  if (no_epilogue) {
+    gemm(trans_a, trans_b, M, N, K, alpha, A, B, T(0), nullptr, Y);
+    return;
+  }
   const bool matrix_bias_only = epilogue.bias != nullptr && epilogue.beta != T(0) &&
                                 epilogue.bias_layout == GemmBroadcast::kMatrix &&
                                 epilogue.residual == nullptr &&

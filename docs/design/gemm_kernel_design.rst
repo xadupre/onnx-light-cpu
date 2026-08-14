@@ -406,6 +406,17 @@ gains.
      - Small on CPUs without AVX/FMA; zero on the priority AVX2/AVX-512 fleet.
      - Additional complexity in a fallback path, with limited performance
        relevance and a remainder loop required for non-multiple K values.
+   * - Compile-time ``GemmAccumMode`` specialization
+     - Dispatch once per micro-kernel call to ``kInitZero``, ``kInitBias``, or
+       ``kAccumulate`` template variants so ``if constexpr`` removes the
+       mode tests from each output-vector finalization. The current tests are
+       outside the K/FMA loop and the mode is stable for the whole call, so
+       branch prediction makes this optional rather than a correctness or
+       parity prerequisite.
+     - Small for large K; potentially measurable for tiny and small-K direct
+       kernels where output finalization is a larger fraction of total work.
+     - Multiplies x86, NEON, and SVE kernel variants and code size. Keep only
+       if a pinned small-K benchmark demonstrates a repeatable gain.
    * - Hand-written assembly micro-kernels
      - Replace selected intrinsic kernels only if a pinned parity benchmark
        demonstrates a persistent arithmetic-kernel gap after thread-runtime
