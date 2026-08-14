@@ -17,7 +17,13 @@ pip = "*"
 [feature.dev.dependencies]
 pytest = ">=7"
 pytest-cov = "*"
-ruff = "*"
+
+[feature.dev.pypi-dependencies]
+black = "==26.5.1"
+clang-format = "==22.1.8"
+mypy = "==2.3.0"
+pyrefly = "==1.2.0"
+ruff = "==0.16.3"
 
 [feature.docs.dependencies]
 pydata-sphinx-theme = "*"
@@ -31,7 +37,7 @@ matplotlib = "*"
 install = "pip install --no-build-isolation -e .[dev]"
 test = { cmd = "pytest --durations=10 unittests", depends-on = ["install"] }
 test-python = { cmd = "pytest --durations=10 unittests/python", depends-on = ["install"] }
-lint = "ruff check . && ruff format --check ."
+lint = "ruff check . && ruff format --check . && black --check ."
 build-doc = { cmd = "sphinx-build -b html docs dist/html", depends-on = ["install"] }
 
 [environments]
