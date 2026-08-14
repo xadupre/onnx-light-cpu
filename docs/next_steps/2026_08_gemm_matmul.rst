@@ -21,8 +21,7 @@ batch scheduling, packed SIMD split-K, and typed broadcast/fused epilogues; see
 :doc:`the current design <../design/gemm_kernel_design>`. Roadmap PR01 closed
 the scheduler under-utilization identified on multi-panel shapes, and Roadmap
 PR02 removed expanded bias temporaries. The remaining roadmap work covers
-thread-runtime tuning, ARM kernels, low-precision kernels,
-Attention, and the final ONNX Runtime parity gates.
+low-precision kernels, Attention, and the final ONNX Runtime parity gates.
 
 Related roadmap
 ---------------
@@ -256,7 +255,11 @@ Phase 2: saturate the floating-point units
   and no-bias cases now avoid redundant vector/scalar multiplication and bias
   reads in every x86 micro-kernel and scalar tail; scalar and row/column
   broadcast bias interfaces remain.
-* Add ARM64 NEON kernels, followed by SVE/SVE2 where relevant.
+* ARM64 NEON FP32/FP64 kernels are implemented with six-row, two-vector
+  register tiles and scalar sub-vector tails. SVE/SVE2 use four-row,
+  two-scalable-vector tiles and predicated tails; runtime vector lengths below
+  256 bits deliberately retain NEON. Linux HWCAP detection and separate SVE
+  compilation keep unsupported processors on the safe fallback.
 
 Parallel execution
 ~~~~~~~~~~~~~~~~~~
@@ -268,10 +271,12 @@ Roadmap PR01 is implemented by `onnx-light-cpu #155
 `onnx-light-cpu #157
 <https://github.com/xadupre/onnx-light-cpu/pull/157>`_, and Roadmap PR04 by
 `onnx-light-cpu #158
-<https://github.com/xadupre/onnx-light-cpu/pull/158>`_. The two remaining P4
-steps and their merge criteria are Roadmap PR05 through PR06 in the final
-table. Persistent B prepacking is the **only** excluded optimization; no other
-performance work may be deferred while the parity gate remains unmet.
+<https://github.com/xadupre/onnx-light-cpu/pull/158>`_, and Roadmap PR05 by
+`onnx-light-cpu #159
+<https://github.com/xadupre/onnx-light-cpu/pull/159>`_. The remaining P4 step
+and its merge criteria are Roadmap PR06 in the final table. Persistent B
+prepacking is the **only** excluded optimization; no other performance work
+may be deferred while the parity gate remains unmet.
 
 The scheduler decomposes ``Y = A @ B`` into a Cartesian grid of row and column
 panels:
@@ -642,8 +647,8 @@ require measurements on dedicated hardware.
      - Priority FP32/FP64 corpus reaches at least 1.0x ONNX Runtime median
        performance with no priority shape below 0.9x.
      - P3.
-     - Scheduler PR01, epilogue PR02, x86 tuning PR03, and thread runtime PR04
-       are implemented; the two remaining PRs are Roadmap PR05 through PR06
+     - Scheduler PR01, epilogue PR02, x86 tuning PR03, thread runtime PR04, and
+       ARM kernels PR05 are implemented; the remaining PR is Roadmap PR06
        below.
      - `onnx-light-cpu #133
        <https://github.com/xadupre/onnx-light-cpu/pull/133>`_,
@@ -754,7 +759,8 @@ current status.
        Runtime vector-length-aware SVE/SVE2 profiles pass the ARM correctness
        and performance corpus with NEON fallback.
      - PR02
-     - Pending
+     - `Implemented in #159
+       <https://github.com/xadupre/onnx-light-cpu/pull/159>`_
    * - Roadmap PR06
      - FP32/FP64 parity gate.
      - Raw results cover every priority platform/type corpus; median speed-up

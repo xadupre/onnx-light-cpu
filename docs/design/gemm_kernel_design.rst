@@ -196,8 +196,11 @@ or split-K path once from the prepared shape. It may own constant B in its
 original representation; persistent B prepacking is explicitly excluded from
 the roadmap.
 
-Platform support (x86_64)
--------------------------
+Platform support
+----------------
+
+x86_64
+~~~~~~
 
 Every vectorized micro-kernel (AVX-512/AVX/SSE2) is x86-specific: it is
 written directly against ``<immintrin.h>`` intrinsics and gated behind
@@ -205,8 +208,7 @@ written directly against ``<immintrin.h>`` intrinsics and gated behind
 defined(_M_IX86)`` (``ONNX_LIGHT_CPU_X86``). ``DetectSimdLevel()``
 (``onnx_light_cpu/impl/simd_level.cc``) is likewise x86-only: it uses CPUID
 and XGETBV. On any x86_64 platform (Intel or AMD, Linux, Windows, or macOS)
-this gate evaluates true and the kernel gets full SIMD acceleration; see
-"Non-x86 platforms" below for what happens where it does not.
+this gate evaluates true and the kernel gets full SIMD acceleration.
 
 .. list-table::
    :header-rows: 1
@@ -243,16 +245,28 @@ this gate evaluates true and the kernel gets full SIMD acceleration; see
        rare on Intel Macs (Apple never shipped an AVX-512-capable Mac), so in
        practice most Intel Macs run the ``kAVX``/``kAVX2`` path.
 
-Non-x86 platforms (ARM / Apple Silicon)
-----------------------------------------
+ARM64 / Apple Silicon
+~~~~~~~~~~~~~~~~~~~~~
 
-There is currently **no NEON, SVE, or other non-x86 SIMD implementation**.
-This does not make the kernel fail on non-x86 platforms --
-``GemmMicroKernel_ScalarImpl`` is a portable, architecture-agnostic C++
-fallback that ``SelectGemmKernelKind<T>()`` returns whenever
-``ONNX_LIGHT_CPU_X86 == 0`` -- but it does mean those platforms get **no SIMD
-acceleration at all**, only the scalar path, so Gemm calls are correct but
-much slower there than on x86.
+ARM64 has dedicated FP32 and FP64 micro-kernels. The fixed-width NEON kernel
+uses six output rows by two 128-bit vectors (``float32x4_t`` or
+``float64x2_t``), reuses each loaded B vector across the six rows, and uses the
+portable scalar kernel only for its final sub-vector tail. The SVE kernel uses
+four rows by two scalable vectors and predicated loads/stores for every tail,
+so its lane count follows ``svcntw()``/``svcntd()`` rather than a build-time
+width.
+
+``DetectArmSimdLevel()`` reads Linux ``AT_HWCAP``/``AT_HWCAP2`` for Advanced
+SIMD, SVE, and SVE2. On other AArch64 systems, including Apple Silicon, NEON is
+part of the architecture baseline. SVE and SVE2 share the same floating-point
+kernel because SVE2 does not replace the SVE FP FMA instructions used here.
+The SVE translation unit is compiled separately with ``-march=armv8-a+sve``;
+the baseline library never executes it unless runtime detection succeeds.
+
+SVE vector length is part of the runtime profile. Widths of 256 bits and above
+select the predicated SVE kernel. A 128-bit SVE implementation retains the
+six-row NEON kernel, which has the same lane width and more B reuse. If a
+toolchain cannot compile SVE, the same binary keeps its NEON fallback.
 
 .. list-table::
    :header-rows: 1
@@ -262,17 +276,17 @@ much slower there than on x86.
      - Status
      - Notes
    * - macOS, Apple Silicon (M1/M2/M3/M4, ARM64/AArch64)
-     - Compiles and runs correctly, **no SIMD acceleration**
-     - ``ONNX_LIGHT_CPU_X86`` evaluates to ``0``, so ``SelectGemmKernelKind<T>()``
-       always returns ``GemmKernelKind::kScalar``: Gemm calls are correct but
-       run through the un-vectorized scalar micro-kernel only. Adding NEON
-       (and, if targeted, SVE/SVE2) micro-kernels -- see
-       "Remaining optimizations" below -- would close this gap; this was
-       flagged but not implemented in this pass.
-   * - Other ARM64/AArch64 (e.g. Linux on ARM servers, Android)
-     - Compiles and runs correctly, **no SIMD acceleration**
-     - Same reasoning as Apple Silicon above: falls back to the scalar
-       micro-kernel.
+     - NEON FP32/FP64
+     - Uses the architecture-baseline NEON kernel; current Apple processors do
+       not expose SVE.
+   * - Linux ARM64/AArch64 (including Grace and Neoverse)
+     - NEON plus runtime SVE/SVE2 dispatch
+     - Linux HWCAP gates SVE instructions. Runtime vector lengths below 256
+       bits and builds without SVE support fall back to NEON.
+   * - Other architectures
+     - Portable scalar fallback
+     - ``GemmMicroKernel_ScalarImpl`` remains available when neither an x86 nor
+       ARM64 vector profile is usable.
 
 Implemented optimizations (for reference)
 ------------------------------------------
@@ -310,7 +324,15 @@ Implemented optimizations (for reference)
      - Implemented -- each bounded-wave panel is packed once per K chunk and
        reused across every A row panel.
    * - NR=2 wide micro-kernel tiles
-     - Implemented -- AVX2/SSE2/AVX-512, all element types.
+     - Implemented -- AVX2/SSE2/AVX-512, NEON, and SVE, all FP32/FP64
+       element types.
+   * - ARM64 NEON micro-kernels
+     - Implemented -- FP32/FP64 MR=1 through 6 variants use two 128-bit
+       vectors, FMA, scalar sub-vector tails, and the shared packed panels.
+   * - ARM64 SVE/SVE2 micro-kernels
+     - Implemented -- FP32/FP64 MR=1 through 4 variants use two scalable
+       vectors and predicated tails. Linux HWCAP and runtime vector length
+       select SVE at 256 bits or wider, with a NEON fallback otherwise.
    * - AVX-512 micro-kernel
      - Implemented -- separate TU, compile+runtime gated (see tree above).
    * - Software prefetch (``B`` rows, T0 hint)
@@ -431,19 +453,6 @@ gains.
        multi-panel, etc.); out of scope unless a caller actually needs
        SIMD-accelerated half precision beyond the widen/round-trip path
        already shipped.
-   * - ARM NEON / SVE micro-kernels
-     - Port the AVX2-style NR=2 micro-kernel design to ``float32x4_t`` /
-       ``float64x2_t`` NEON intrinsics (128-bit, all ARM64), and optionally to
-       SVE/SVE2 (variable-width vectors) where available server-side, with a
-       ``DetectSimdLevel()``-equivalent ARM feature probe (``getauxval(AT_HWCAP)``
-       or ``/proc/cpuinfo``) instead of CPUID.
-     - Large on ARM64 targets (macOS Apple Silicon, ARM Linux servers), which
-       currently get **no** SIMD acceleration at all (scalar fallback only,
-       see "Platform support" above); ``0`` on x86 targets.
-     - New translation unit(s), new feature-detection code path, and a full
-       new test/benchmark matrix on ARM hardware; SVE's variable vector width
-       is a different programming model from NEON's fixed 128-bit registers,
-       so it is effectively a second port rather than a small extension.
 
 The next x86 tuning step is to extend measured profiles beyond the currently
 available modern Intel Core AVX2 measurements as benchmark hosts become

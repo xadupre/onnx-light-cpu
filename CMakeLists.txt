@@ -95,6 +95,8 @@ endif()
 # ---------------------------------------------------------------------------
 # SIMD / AVX compile flags
 # ---------------------------------------------------------------------------
+include(CheckCXXCompilerFlag)
+include(CheckCXXSourceCompiles)
 # The AVX intrinsics live behind __x86_64__/_M_X64 guards, so the AVX compile
 # flags only make sense on x86/x86-64 targets. On other architectures (for
 # example Apple Silicon arm64) the kernels fall back to scalar code and passing
@@ -103,6 +105,11 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64|i[3-6]86|x86|X86)$")
   set(ONNX_LIGHT_CPU_X86 TRUE)
 else()
   set(ONNX_LIGHT_CPU_X86 FALSE)
+endif()
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64|ARM64)$")
+  set(ONNX_LIGHT_CPU_ARM64 TRUE)
+else()
+  set(ONNX_LIGHT_CPU_ARM64 FALSE)
 endif()
 
 # On x86 platforms, enable AVX2 by default for the kernel sources so the
@@ -118,6 +125,36 @@ elseif(NOT MSVC)
 else()
   set(ONNX_LIGHT_CPU_SIMD_FLAGS "/arch:AVX2" CACHE STRING
       "SIMD compiler flags for kernel sources (e.g. /arch:AVX2, /arch:AVX512).")
+endif()
+
+if(ONNX_LIGHT_CPU_ARM64)
+  if(MSVC)
+    set(_arm_neon_header "arm64_neon.h")
+  else()
+    set(_arm_neon_header "arm_neon.h")
+  endif()
+  check_cxx_source_compiles(
+      "#include <${_arm_neon_header}>
+       int main() {
+         float32x4_t value = vdupq_n_f32(1.0f);
+         value = vfmaq_n_f32(value, value, 2.0f);
+         return static_cast<int>(vgetq_lane_f32(value, 0));
+       }"
+      ONNX_LIGHT_CPU_HAVE_NEON_INTRINSICS)
+else()
+  set(ONNX_LIGHT_CPU_HAVE_NEON_INTRINSICS FALSE)
+endif()
+
+if(ONNX_LIGHT_CPU_ARM64 AND NOT MSVC)
+  set(_saved_required_flags "${CMAKE_REQUIRED_FLAGS}")
+  set(CMAKE_REQUIRED_FLAGS "${CMAKE_REQUIRED_FLAGS} -march=armv8-a+sve")
+  check_cxx_source_compiles(
+      "#include <arm_sve.h>
+       int main() { return static_cast<int>(svcntb() == 0); }"
+      ONNX_LIGHT_CPU_HAVE_SVE_INTRINSICS)
+  set(CMAKE_REQUIRED_FLAGS "${_saved_required_flags}")
+else()
+  set(ONNX_LIGHT_CPU_HAVE_SVE_INTRINSICS FALSE)
 endif()
 
 # Element-wise kernels such as Abs are commonly memory-bandwidth bound. Using
@@ -137,7 +174,6 @@ endif()
 # default -mavx2 still carry wider kernels selected by DetectSimdLevel() at
 # runtime. Exp, Log, Abs and Gemm only need AVX-512F; Not additionally needs
 # AVX-512BW for byte comparisons. Unsupported sources are excluded below.
-include(CheckCXXCompilerFlag)
 if(NOT ONNX_LIGHT_CPU_X86)
   # Non-x86 targets (e.g. arm64) have no AVX support; keep the SIMD sources
   # excluded and let the scalar fallbacks handle every operator.
@@ -173,6 +209,10 @@ set(_gemm_avx512_source
     "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/gemm/avx512/gemm_kernel_avx512.cc")
 set(_gemm_avx2_fma_source
     "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/gemm/avx2/gemm_kernel_avx2_fma.cc")
+set(_gemm_neon_source
+    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/gemm/arm/gemm_kernel_neon.cc")
+set(_gemm_sve_source
+    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/gemm/arm/gemm_kernel_sve.cc")
 set(_abs_avx512_source
     "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/avx512/abs_kernel_avx512.cc")
 set(_exp_log_avx512_source
@@ -190,6 +230,12 @@ if(NOT ONNX_LIGHT_CPU_HAVE_AVX2_FMA_FLAG)
 endif()
 if(NOT ONNX_LIGHT_CPU_HAVE_AVX512BW_FLAG)
   list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_not_avx512_source}")
+endif()
+if(NOT ONNX_LIGHT_CPU_HAVE_NEON_INTRINSICS)
+  list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_gemm_neon_source}")
+endif()
+if(NOT ONNX_LIGHT_CPU_HAVE_SVE_INTRINSICS)
+  list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_gemm_sve_source}")
 endif()
 
 file(GLOB PY_KERNELS_SOURCES CONFIGURE_DEPENDS
@@ -259,8 +305,21 @@ if(ONNX_LIGHT_CPU_HAVE_AVX2_FMA_FLAG)
     set_source_files_properties("${_gemm_avx2_fma_source}" PROPERTIES
         COMPILE_OPTIONS "/arch:AVX2")
   endif()
+
   target_compile_definitions(lib_onnx_light_cpu PRIVATE
       ONNX_LIGHT_CPU_HAVE_AVX2_FMA=1)
+endif()
+
+if(ONNX_LIGHT_CPU_HAVE_NEON_INTRINSICS)
+  target_compile_definitions(lib_onnx_light_cpu PRIVATE
+      ONNX_LIGHT_CPU_HAVE_NEON=1)
+endif()
+
+if(ONNX_LIGHT_CPU_HAVE_SVE_INTRINSICS)
+  set_source_files_properties("${_gemm_sve_source}" PROPERTIES
+      COMPILE_OPTIONS "-march=armv8-a+sve")
+  target_compile_definitions(lib_onnx_light_cpu PRIVATE
+      ONNX_LIGHT_CPU_HAVE_SVE=1)
 endif()
 
 if(ONNX_LIGHT_CPU_HAVE_AVX512BW_FLAG)

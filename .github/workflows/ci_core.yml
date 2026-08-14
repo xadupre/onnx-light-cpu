@@ -76,3 +76,63 @@ jobs:
           name: python-${{ matrix.os }}-py${{ matrix.python-version }}
           token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: false
+
+  arm_gemm_native:
+    name: ARM64 GEMM (NEON)
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DONNX_LIGHT_CPU_BUILD_TESTS=ON -DONNX_LIGHT_CPU_BUILD_PYTHON=OFF -DONNX_LIGHT_CPU_INSTALL=OFF
+
+      - name: Build GEMM tests
+        run: cmake --build build --parallel --target test_gemm_kernel test_gemm_plan
+
+      - name: Run GEMM tests
+        run: ctest --test-dir build --output-on-failure -R "Gemm|MatMul"
+
+  arm_gemm_sve:
+    name: ARM64 GEMM (SVE emulation)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install cross compiler and emulator
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq g++-aarch64-linux-gnu qemu-user
+
+      - name: Configure
+        run: |
+          cmake -S . -B build-sve \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_SYSTEM_NAME=Linux \
+            -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
+            -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc \
+            -DCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++ \
+            -DONNX_LIGHT_CPU_BUILD_TESTS=ON \
+            -DONNX_LIGHT_CPU_BUILD_PYTHON=OFF \
+            -DONNX_LIGHT_CPU_INSTALL=OFF
+
+      - name: Build GEMM tests
+        run: cmake --build build-sve --parallel --target test_gemm_kernel test_gemm_plan
+
+      - name: Run GEMM tests with 512-bit SVE
+        run: |
+          qemu-aarch64 -cpu max,sve=on,sve-max-vq=4 -L /usr/aarch64-linux-gnu build-sve/test_gemm_kernel --gtest_brief=1
+          qemu-aarch64 -cpu max,sve=on,sve-max-vq=4 -L /usr/aarch64-linux-gnu build-sve/test_gemm_plan --gtest_brief=1
+
+      - name: Run 128-bit SVE fallback
+        run: |
+          qemu-aarch64 -cpu max,sve=on,sve-max-vq=1 -L /usr/aarch64-linux-gnu build-sve/test_gemm_kernel --gtest_brief=1
+          qemu-aarch64 -cpu max,sve=on,sve-max-vq=1 -L /usr/aarch64-linux-gnu build-sve/test_gemm_plan --gtest_brief=1
+
+      - name: Run non-power-of-two 384-bit SVE
+        run: |
+          qemu-aarch64 -cpu max,sve=on,sve-max-vq=3 -L /usr/aarch64-linux-gnu build-sve/test_gemm_kernel --gtest_brief=1
+          qemu-aarch64 -cpu max,sve=on,sve-max-vq=3 -L /usr/aarch64-linux-gnu build-sve/test_gemm_plan --gtest_brief=1
