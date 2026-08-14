@@ -90,11 +90,13 @@ lifetime is independent of the caller. ``MatMulPlan`` implements ONNX rank-1
 promotion, batched matrix multiplication, multidirectional batch broadcasting,
 transpose-aware matrix dimensions, empty dimensions, and plan-owned constant B
 tensors. ``StridedBatchedGemm`` and ``GroupedGemm`` expose uniform and
-heterogeneous batches respectively. Plans derive ``MC``, ``NC``, and ``KC``
-from deterministic CPUID cache descriptors on x86, align them to register
-tiles, and retain conservative defaults when cache discovery is unavailable.
-The selected values are passed to the five-loop engine rather than being
-descriptive metadata.
+heterogeneous batches respectively. Small independent products are scheduled
+across the persistent pool; products with useful internal M/N parallelism keep
+the batch loop serial to avoid nested pools. Plans derive ``MC``, ``NC``, and
+``KC`` from deterministic CPUID cache descriptors on x86, align them to
+register tiles, then reduce ``MC``/``NC`` when necessary to expose enough work
+for the available threads. The selected values and ``useful_threads`` estimate
+drive execution rather than being descriptive metadata.
 
 The plan selects the general five-loop engine or a direct, skinny-M, skinny-N,
 or split-K path once from the prepared shape. It may own constant B in its
@@ -195,13 +197,25 @@ Implemented optimizations (for reference)
        ``MC``, ``NC``, and ``KC`` values stored in each plan; conservative
        defaults cover unavailable cache discovery.
    * - M/N task parallelism
-     - Partial -- the direct path flattens M x N tasks; the general five-loop
-       path selects one axis. The full task-aware scheduler is P4.5-P4.6 in the
-       roadmap.
+     - Implemented -- the general five-loop path schedules the row-panel x
+       column-panel grid in bounded column waves. Each B panel is packed once
+       per K chunk, while task-aware MC/NC constraints expose enough row and
+       column work without an unbounded packed workspace.
+   * - Batch scheduling
+     - Implemented -- ``MatMulPlan``, ``StridedBatchedGemm``, and
+       ``GroupedGemm`` parallelize collections of small products after
+       validating every input. A product with useful internal parallelism runs
+       its batches serially.
+   * - Split-K
+     - Implemented -- used for long-K products whose M/N grid is insufficient.
+       Partitions use the same packed SIMD micro-kernels as the general path,
+       then a parallel tolerance-preserving reduction. Active batch regions
+       take priority over nested split-K.
    * - A-panel packing (``PackARowBlock``)
      - Implemented -- resolves ``trans_a`` once per (row block, k-chunk).
    * - B-panel packing (``PackBPanel``)
-     - Implemented -- reused across every A row block of a task/k-chunk.
+     - Implemented -- each bounded-wave panel is packed once per K chunk and
+       reused across every A row panel.
    * - NR=2 wide micro-kernel tiles
      - Implemented -- AVX2/SSE2/AVX-512, all element types.
    * - AVX-512 micro-kernel

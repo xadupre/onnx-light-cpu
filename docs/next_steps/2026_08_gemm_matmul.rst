@@ -261,10 +261,11 @@ Phase 2: saturate the floating-point units
 Parallel execution
 ~~~~~~~~~~~~~~~~~~
 
-The remaining P4 execution order and merge criteria are defined exclusively by
-Roadmap PR01 through PR06 in the final table. Persistent B prepacking is the
-**only** excluded optimization; no other performance work may be deferred while
-the parity gate remains unmet.
+Roadmap PR01 is implemented by `onnx-light-cpu #155
+<https://github.com/xadupre/onnx-light-cpu/pull/155>`_. The five remaining P4
+steps and their merge criteria are Roadmap PR02 through PR06 in the final
+table. Persistent B prepacking is the **only** excluded optimization; no other
+performance work may be deferred while the parity gate remains unmet.
 
 Phase 3: native low-precision kernels
 --------------------------------------
@@ -587,8 +588,8 @@ require measurements on dedicated hardware.
      - Priority FP32/FP64 corpus reaches at least 1.0x ONNX Runtime median
        performance with no priority shape below 0.9x.
      - P3.
-     - Existing SIMD work is linked at right; the six remaining PRs are
-       Roadmap PR01 through PR06 below.
+     - Scheduler PR01 is implemented; the five remaining PRs are Roadmap PR02
+       through PR06 below.
      - `onnx-light-cpu #133
        <https://github.com/xadupre/onnx-light-cpu/pull/133>`_,
        `onnx-light-cpu #141
@@ -604,7 +605,9 @@ require measurements on dedicated hardware.
        `onnx-light-cpu #147
        <https://github.com/xadupre/onnx-light-cpu/pull/147>`_,
        `onnx-light-cpu #149
-       <https://github.com/xadupre/onnx-light-cpu/pull/149>`_
+       <https://github.com/xadupre/onnx-light-cpu/pull/149>`_,
+       `onnx-light-cpu #155
+       <https://github.com/xadupre/onnx-light-cpu/pull/155>`_
    * - P5
      - Native/panel-converted FP16, BF16, and integer paths.
      - Low-precision corpus reaches at least 1.0x ONNX Runtime median
@@ -632,9 +635,10 @@ require measurements on dedicated hardware.
 Remaining pull-request sequence
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-The following table is the single source of truth for the **15 remaining pull
-requests** after ``#149``. Each row contains its complete implementation scope
-and merge criterion.
+The following table is the single source of truth for the **15-PR sequence**
+after ``#149``. Completed rows remain visible so scope is not lost; each row
+contains its complete implementation scope, merge criterion, dependency, and
+current status.
 
 .. list-table::
    :header-rows: 1
@@ -654,7 +658,8 @@ and merge criterion.
        used only when M/N/batch work is insufficient and uses packed SIMD
        kernels with a tolerance-preserving reduction.
      - ``#149``
-     - Pending
+     - `Implemented in #155
+       <https://github.com/xadupre/onnx-light-cpu/pull/155>`_
    * - Roadmap PR02
      - Broadcast and fused epilogues.
      - None, scalar, row, column, and full-matrix C layouts are consumed
