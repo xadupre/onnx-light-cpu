@@ -17,12 +17,12 @@ with standard ONNX tensors and semantics.
 
 The current implementation is a correctness-first, register-blocked kernel
 with AVX2/AVX-512 paths, K blocking, A/B packing, a task-aware M x N scheduler,
-batch scheduling, and packed SIMD split-K; see
+batch scheduling, packed SIMD split-K, and typed broadcast/fused epilogues; see
 :doc:`the current design <../design/gemm_kernel_design>`. Roadmap PR01 closed
-the scheduler under-utilization identified on multi-panel shapes. The
-remaining roadmap work covers epilogues, complete x86 and thread-runtime
-tuning, ARM kernels, low-precision kernels, Attention, and the final ONNX
-Runtime parity gates.
+the scheduler under-utilization identified on multi-panel shapes, and Roadmap
+PR02 removed expanded bias temporaries. The remaining roadmap work covers
+complete x86 and thread-runtime tuning, ARM kernels, low-precision kernels,
+Attention, and the final ONNX Runtime parity gates.
 
 Related roadmap
 ---------------
@@ -262,8 +262,10 @@ Parallel execution
 ~~~~~~~~~~~~~~~~~~
 
 Roadmap PR01 is implemented by `onnx-light-cpu #155
-<https://github.com/xadupre/onnx-light-cpu/pull/155>`_. The five remaining P4
-steps and their merge criteria are Roadmap PR02 through PR06 in the final
+<https://github.com/xadupre/onnx-light-cpu/pull/155>`_ and Roadmap PR02 by
+`onnx-light-cpu #156
+<https://github.com/xadupre/onnx-light-cpu/pull/156>`_. The four remaining P4
+steps and their merge criteria are Roadmap PR03 through PR06 in the final
 table. Persistent B prepacking is the **only** excluded optimization; no other
 performance work may be deferred while the parity gate remains unmet.
 
@@ -636,8 +638,8 @@ require measurements on dedicated hardware.
      - Priority FP32/FP64 corpus reaches at least 1.0x ONNX Runtime median
        performance with no priority shape below 0.9x.
      - P3.
-     - Scheduler PR01 is implemented; the five remaining PRs are Roadmap PR02
-       through PR06 below.
+     - Scheduler PR01 and epilogue PR02 are implemented; the four remaining
+       PRs are Roadmap PR03 through PR06 below.
      - `onnx-light-cpu #133
        <https://github.com/xadupre/onnx-light-cpu/pull/133>`_,
        `onnx-light-cpu #141
@@ -655,7 +657,9 @@ require measurements on dedicated hardware.
        `onnx-light-cpu #149
        <https://github.com/xadupre/onnx-light-cpu/pull/149>`_,
        `onnx-light-cpu #155
-       <https://github.com/xadupre/onnx-light-cpu/pull/155>`_
+       <https://github.com/xadupre/onnx-light-cpu/pull/155>`_,
+       `onnx-light-cpu #156
+       <https://github.com/xadupre/onnx-light-cpu/pull/156>`_
    * - P5
      - Native/panel-converted FP16, BF16, and integer paths.
      - Low-precision corpus reaches at least 1.0x ONNX Runtime median
@@ -715,7 +719,8 @@ current status.
        disappears. Priority bias, residual, activation, and output-conversion
        combinations use typed epilogues without intermediate tensors.
      - PR01
-     - Pending
+     - `Implemented in #156
+       <https://github.com/xadupre/onnx-light-cpu/pull/156>`_
    * - Roadmap PR03
      - Complete x86 kernel tuning.
      - AVX2 and AVX-512 candidate MR/NR profiles, aligned panels/loads,
