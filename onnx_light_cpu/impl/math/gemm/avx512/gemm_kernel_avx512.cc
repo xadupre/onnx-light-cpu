@@ -270,6 +270,12 @@ void GemmMicroKernel_AVX512_F32(std::size_t mr, std::size_t nb, std::size_t K, f
   case 6:
     return GemmMicroKernel_AVX512_F32Impl<6>(nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
                                              Yrow_base, Ystride, n0, mode, Apack);
+  case 7:
+    return GemmMicroKernel_AVX512_F32Impl<7>(nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
+                                             Yrow_base, Ystride, n0, mode, Apack);
+  case 8:
+    return GemmMicroKernel_AVX512_F32Impl<8>(nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
+                                             Yrow_base, Ystride, n0, mode, Apack);
   default:
     return GemmMicroKernel_Scalar_F32(mr, nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
                                       Yrow_base, Ystride, n0, mode, Apack);
@@ -299,6 +305,12 @@ void GemmMicroKernel_AVX512_F64(std::size_t mr, std::size_t nb, std::size_t K, d
                                              Yrow_base, Ystride, n0, mode, Apack);
   case 6:
     return GemmMicroKernel_AVX512_F64Impl<6>(nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
+                                             Yrow_base, Ystride, n0, mode, Apack);
+  case 7:
+    return GemmMicroKernel_AVX512_F64Impl<7>(nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
+                                             Yrow_base, Ystride, n0, mode, Apack);
+  case 8:
+    return GemmMicroKernel_AVX512_F64Impl<8>(nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
                                              Yrow_base, Ystride, n0, mode, Apack);
   default:
     return GemmMicroKernel_Scalar_F64(mr, nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,

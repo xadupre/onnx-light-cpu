@@ -21,7 +21,7 @@ batch scheduling, packed SIMD split-K, and typed broadcast/fused epilogues; see
 :doc:`the current design <../design/gemm_kernel_design>`. Roadmap PR01 closed
 the scheduler under-utilization identified on multi-panel shapes, and Roadmap
 PR02 removed expanded bias temporaries. The remaining roadmap work covers
-complete x86 and thread-runtime tuning, ARM kernels, low-precision kernels,
+thread-runtime tuning, ARM kernels, low-precision kernels,
 Attention, and the final ONNX Runtime parity gates.
 
 Related roadmap
@@ -264,8 +264,10 @@ Parallel execution
 Roadmap PR01 is implemented by `onnx-light-cpu #155
 <https://github.com/xadupre/onnx-light-cpu/pull/155>`_ and Roadmap PR02 by
 `onnx-light-cpu #156
-<https://github.com/xadupre/onnx-light-cpu/pull/156>`_. The four remaining P4
-steps and their merge criteria are Roadmap PR03 through PR06 in the final
+<https://github.com/xadupre/onnx-light-cpu/pull/156>`_, and Roadmap PR03 by
+`onnx-light-cpu #157
+<https://github.com/xadupre/onnx-light-cpu/pull/157>`_. The three remaining P4
+steps and their merge criteria are Roadmap PR04 through PR06 in the final
 table. Persistent B prepacking is the **only** excluded optimization; no other
 performance work may be deferred while the parity gate remains unmet.
 
@@ -638,8 +640,8 @@ require measurements on dedicated hardware.
      - Priority FP32/FP64 corpus reaches at least 1.0x ONNX Runtime median
        performance with no priority shape below 0.9x.
      - P3.
-     - Scheduler PR01 and epilogue PR02 are implemented; the four remaining
-       PRs are Roadmap PR03 through PR06 below.
+     - Scheduler PR01, epilogue PR02, and x86 tuning PR03 are implemented; the
+       three remaining PRs are Roadmap PR04 through PR06 below.
      - `onnx-light-cpu #133
        <https://github.com/xadupre/onnx-light-cpu/pull/133>`_,
        `onnx-light-cpu #141
@@ -659,7 +661,9 @@ require measurements on dedicated hardware.
        `onnx-light-cpu #155
        <https://github.com/xadupre/onnx-light-cpu/pull/155>`_,
        `onnx-light-cpu #156
-       <https://github.com/xadupre/onnx-light-cpu/pull/156>`_
+       <https://github.com/xadupre/onnx-light-cpu/pull/156>`_,
+       `onnx-light-cpu #157
+       <https://github.com/xadupre/onnx-light-cpu/pull/157>`_
    * - P5
      - Native/panel-converted FP16, BF16, and integer paths.
      - Low-precision corpus reaches at least 1.0x ONNX Runtime median
@@ -728,7 +732,8 @@ current status.
        CPUID family/model dispatch selects the winners; remaining gaps receive
        assembly kernels, with no priority-shape regression.
      - PR02
-     - Pending
+     - `Implemented in #157
+       <https://github.com/xadupre/onnx-light-cpu/pull/157>`_
    * - Roadmap PR04
      - Complete thread runtime.
      - The scheduler detects physical cores, SMT siblings, P-cores, and E-cores

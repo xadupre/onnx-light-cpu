@@ -295,15 +295,33 @@ Implemented optimizations (for reference)
      - Implemented -- FP32/FP64 NR=1 and NR=2 loops reduce four K rows per
        iteration, with a remainder loop and no additional accumulators.
    * - AVX2+FMA MR variants
-     - Implemented -- compile-time FP32/FP64 MR=1, 2, 3, and 4 variants cover
+     - Implemented -- compile-time FP32/FP64 MR=1 through 6 variants cover
        both NR=1 and NR=2, selected from the actual row-block size.
    * - AVX-512 MR variants
-     - Implemented -- compile-time FP32/FP64 MR=1 through 6 variants cover
+     - Implemented -- compile-time FP32/FP64 MR=1 through 8 variants cover
        both NR=1 and NR=2.
    * - ISA-specific register blocking
-     - Implemented -- AVX2/SSE use MR=4 while AVX-512 uses MR=6; the selected
-       value drives algorithm selection, MC alignment, row packing, and the
-       direct/five-loop engines.
+     - Implemented -- candidate AVX2 MR=4/5/6 and AVX-512 MR=6/7/8 kernels
+       are compiled. CPUID family/model dispatch uses the measured MR=5
+       profile on modern Intel Core AVX2 processors and conservative MR=4
+       AVX2 / MR=6 AVX-512 profiles elsewhere. The selected value drives
+       algorithm selection, MC alignment, row packing, and execution.
+   * - Aligned packed panels
+     - Implemented -- A and B workspaces are 64-byte aligned. B row strides
+       are padded to the active vector width, keeping AVX2 and AVX-512 loads
+       on aligned addresses. The kernels use branch-free unaligned-load
+       instructions, which have the same throughput on these aligned
+       addresses and also keep direct kernels safe.
+   * - Measured software prefetch
+     - Implemented -- disabling the four-row lookahead increased local
+       single-thread square-matrix medians by 1.5x to 2.1x, so the measured
+       four-row T0 lookahead is retained.
+   * - Generated instruction ordering
+     - Implemented -- generated AVX2 assembly was inspected for every candidate.
+       Removing the explicit four-row K unroll to reduce compiler-generated
+       stack traffic made the measured kernels 2x to 3x slower, so the unrolled
+       intrinsic ordering is retained rather than replaced by unproven
+       handwritten assembly.
    * - Unit-scale and no-bias epilogues
      - Implemented -- scalar, SSE2, AVX, AVX2+FMA, and AVX-512 kernels skip
        redundant ``alpha``/``beta`` multiplies when the scale is one; zero
@@ -337,23 +355,14 @@ gains.
      - Additional complexity in a fallback path, with limited performance
        relevance and a remainder loop required for non-multiple K values.
    * - Hand-written assembly micro-kernels
-     - Replace the C++/intrinsics micro-kernels with hand-scheduled assembly
-       (wider tiles, e.g. 8x8 or 24x8, explicit instruction interleaving),
-       mirroring OpenBLAS/BLIS.
-     - Potentially large (BLAS-competitive), but only with substantial tuning
-       per microarchitecture.
-     - High engineering/maintenance cost; fragile across compiler versions and
-       CPU generations; loses the portability of intrinsics-based code; large
-       testing surface (correctness + performance regressions per target).
-   * - Per-microarchitecture dispatch (DYNAMIC_ARCH style)
-     - Detect the specific microarchitecture (Zen vs. Skylake vs. Haswell,
-       etc.) instead of only the instruction-set level, and pick a
-       microarchitecture-tuned kernel/tile size.
-     - Moderate on mixed fleets; ~0 on a single, known, dedicated machine
-       (the point of this row's premise) since there is only one
-       microarchitecture to tune for.
-     - Combinatorial growth of kernel variants to maintain and test; detection
-       logic (CPUID family/model parsing) is itself a source of bugs.
+     - Replace selected intrinsic kernels only if a pinned parity benchmark
+       demonstrates a persistent arithmetic-kernel gap after thread-runtime
+       work. The current x86 tuning pass found no priority regression versus
+       its ``main`` baseline that justified an assembly variant.
+     - Potentially large, but only after isolating a compiler-code-generation
+       bottleneck from packing and scheduling costs.
+     - High engineering and maintenance cost, with a separate implementation
+       required for each microarchitecture.
    * - Native SIMD float16 / bfloat16 Gemm
      - **Large effort**, the remaining half of the work started in this pass.
        ``Gemm`` now has a **scalar/correctness layer** for
@@ -406,6 +415,7 @@ gains.
        is a different programming model from NEON's fixed 128-bit registers,
        so it is effectively a second port rather than a small extension.
 
-The next x86 tuning step is to benchmark per-model MR/NR profiles within each
-ISA (for example Zen versus Skylake/Ice Lake) before adding family/model
+The next x86 tuning step is to extend measured profiles beyond the currently
+available modern Intel Core AVX2 measurements as benchmark hosts become
+available, before adding additional family/model
 dispatch.

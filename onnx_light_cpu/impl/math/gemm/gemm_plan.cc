@@ -69,9 +69,15 @@ template <typename T> std::size_t VectorLanes() {
 }
 
 std::size_t RegisterRows() {
+  const SimdLevel level = DetectSimdLevel();
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512
-  if (DetectSimdLevel() >= SimdLevel::kAVX512) {
-    return kGemmAVX512MR;
+  if (level >= SimdLevel::kAVX512) {
+    return detail::SelectGemmRegisterRows(SimdLevel::kAVX512, true);
+  }
+#endif
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
+  if (level >= SimdLevel::kAVX2 && CpuSupportsFma()) {
+    return detail::SelectGemmRegisterRows(SimdLevel::kAVX2, true);
   }
 #endif
   return kGemmMR;

@@ -23,7 +23,7 @@ void GemmMicroKernel_AVX2FMA_F32Impl(std::size_t nb, std::size_t K, float alpha,
                                      const float *Bmat, std::size_t N, const float *Crow_base,
                                      std::size_t Cstride, float *Yrow_base, std::size_t Ystride,
                                      std::size_t n0, GemmAccumMode mode, const float *Apack) {
-  static_assert(MR >= 1 && MR <= kGemmMR);
+  static_assert(MR >= 1 && MR <= kGemmAVX2MR);
   const __m256 valpha = _mm256_set1_ps(alpha);
   const __m256 vbeta = _mm256_set1_ps(beta);
   const bool alpha_is_one = alpha == 1.0f;
@@ -122,7 +122,7 @@ void GemmMicroKernel_AVX2FMA_F64Impl(std::size_t nb, std::size_t K, double alpha
                                      const double *Bmat, std::size_t N, const double *Crow_base,
                                      std::size_t Cstride, double *Yrow_base, std::size_t Ystride,
                                      std::size_t n0, GemmAccumMode mode, const double *Apack) {
-  static_assert(MR >= 1 && MR <= kGemmMR);
+  static_assert(MR >= 1 && MR <= kGemmAVX2MR);
   const __m256d valpha = _mm256_set1_pd(alpha);
   const __m256d vbeta = _mm256_set1_pd(beta);
   const bool alpha_is_one = alpha == 1.0;
@@ -234,6 +234,12 @@ void GemmMicroKernel_AVX2FMA_F32(std::size_t mr, std::size_t nb, std::size_t K, 
   case 4:
     return GemmMicroKernel_AVX2FMA_F32Impl<4>(nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
                                               Yrow_base, Ystride, n0, mode, Apack);
+  case 5:
+    return GemmMicroKernel_AVX2FMA_F32Impl<5>(nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
+                                              Yrow_base, Ystride, n0, mode, Apack);
+  case 6:
+    return GemmMicroKernel_AVX2FMA_F32Impl<6>(nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
+                                              Yrow_base, Ystride, n0, mode, Apack);
   default:
     return GemmMicroKernel_Scalar_F32(mr, nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
                                       Yrow_base, Ystride, n0, mode, Apack);
@@ -257,6 +263,12 @@ void GemmMicroKernel_AVX2FMA_F64(std::size_t mr, std::size_t nb, std::size_t K, 
                                               Yrow_base, Ystride, n0, mode, Apack);
   case 4:
     return GemmMicroKernel_AVX2FMA_F64Impl<4>(nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
+                                              Yrow_base, Ystride, n0, mode, Apack);
+  case 5:
+    return GemmMicroKernel_AVX2FMA_F64Impl<5>(nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
+                                              Yrow_base, Ystride, n0, mode, Apack);
+  case 6:
+    return GemmMicroKernel_AVX2FMA_F64Impl<6>(nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
                                               Yrow_base, Ystride, n0, mode, Apack);
   default:
     return GemmMicroKernel_Scalar_F64(mr, nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
