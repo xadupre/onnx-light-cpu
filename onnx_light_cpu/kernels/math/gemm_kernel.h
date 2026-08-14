@@ -31,8 +31,9 @@ namespace onnx_light_cpu {
 /// to ``float32``, computed through the same SIMD ``GemmFloat32`` routine, and
 /// rounded back down for the output (the reduction happens in ``float32``
 /// precision, matching common fp16/bf16 GEMM backend conventions). The
-/// optional bias ``C`` is unidirectionally broadcast to the ``M x N`` output
-/// shape, matching the ONNX ``Gemm`` specification.
+/// optional bias ``C`` is consumed directly as a scalar, row, column, or
+/// matrix view without materializing an expanded ``M x N`` tensor. FP16/BF16
+/// narrowing is combined with the bias epilogue.
 class GemmKernel : public ONNX_LIGHT_NAMESPACE::core::runtime::KernelBase {
 public:
   using ONNX_LIGHT_NAMESPACE::core::runtime::KernelBase::KernelBase;

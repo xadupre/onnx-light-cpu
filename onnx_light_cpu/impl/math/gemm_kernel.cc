@@ -44,6 +44,7 @@
 #include "onnx_light_cpu/impl/math/math_kernels.h"
 
 #include "onnx_light_cpu/impl/math/gemm/gemm_common.h"
+#include "onnx_light_cpu/impl/math/half_conversion.h"
 #include "onnx_light_cpu/impl/parallel_for.h"
 
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
@@ -56,6 +57,8 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
+#include <stdexcept>
 #include <vector>
 
 #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
@@ -1039,6 +1042,153 @@ void GemmFloat64(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::
     return detail::GemmFloat64Planned<GemmAlgorithm::kGeneral>(trans_a, trans_b, M, N, K, alpha, A,
                                                                B, beta, C, Y);
   }
+}
+
+namespace {
+
+template <typename T>
+void ValidateEpilogue(std::size_t M, std::size_t N, const GemmEpilogue<T> &epilogue) {
+  const auto validate_layout = [](GemmBroadcast layout) {
+    switch (layout) {
+    case GemmBroadcast::kNone:
+    case GemmBroadcast::kScalar:
+    case GemmBroadcast::kRow:
+    case GemmBroadcast::kColumn:
+    case GemmBroadcast::kMatrix:
+      return;
+    }
+    throw std::invalid_argument("Unsupported GEMM broadcast layout.");
+  };
+  validate_layout(epilogue.bias_layout);
+  validate_layout(epilogue.residual_layout);
+  switch (epilogue.activation) {
+  case GemmActivation::kNone:
+  case GemmActivation::kRelu:
+    break;
+  default:
+    throw std::invalid_argument("Unsupported GEMM activation.");
+  }
+  switch (epilogue.output_conversion) {
+  case GemmOutputConversion::kNone:
+  case GemmOutputConversion::kFloat16:
+  case GemmOutputConversion::kBFloat16:
+    break;
+  default:
+    throw std::invalid_argument("Unsupported GEMM output conversion.");
+  }
+  if (M == 0 || N == 0) {
+    return;
+  }
+  if (epilogue.beta != T(0) && epilogue.bias_layout != GemmBroadcast::kNone &&
+      epilogue.bias == nullptr) {
+    throw std::invalid_argument("GEMM epilogue bias must not be null.");
+  }
+  if (epilogue.residual_scale != T(0) && epilogue.residual_layout != GemmBroadcast::kNone &&
+      epilogue.residual == nullptr) {
+    throw std::invalid_argument("GEMM epilogue residual must not be null.");
+  }
+  if (epilogue.output_conversion != GemmOutputConversion::kNone &&
+      epilogue.converted_output == nullptr) {
+    throw std::invalid_argument("GEMM epilogue converted output must not be null.");
+  }
+}
+
+template <typename T>
+T BroadcastValue(const T *values, GemmBroadcast layout, std::size_t m, std::size_t n,
+                 std::size_t N) {
+  switch (layout) {
+  case GemmBroadcast::kScalar:
+    return values[0];
+  case GemmBroadcast::kRow:
+    return values[n];
+  case GemmBroadcast::kColumn:
+    return values[m];
+  case GemmBroadcast::kMatrix:
+    return values[m * N + n];
+  case GemmBroadcast::kNone:
+    return T(0);
+  }
+  return T(0);
+}
+
+template <typename T> std::uint16_t ConvertOutput(T value, GemmOutputConversion conversion) {
+  const float narrowed = static_cast<float>(value);
+  return conversion == GemmOutputConversion::kFloat16 ? detail::FloatToFloat16Bits(narrowed)
+                                                      : detail::FloatToBFloat16Bits(narrowed);
+}
+
+template <typename T>
+void ApplyEpilogue(std::size_t M, std::size_t N, const GemmEpilogue<T> &epilogue, T *Y) {
+  const bool has_bias = epilogue.bias != nullptr && epilogue.beta != T(0) &&
+                        epilogue.bias_layout != GemmBroadcast::kNone;
+  const bool has_residual = epilogue.residual != nullptr && epilogue.residual_scale != T(0) &&
+                            epilogue.residual_layout != GemmBroadcast::kNone;
+  const bool has_activation = epilogue.activation != GemmActivation::kNone;
+  const bool converts_output = epilogue.output_conversion != GemmOutputConversion::kNone;
+  if (!has_bias && !has_residual && !has_activation && !converts_output) {
+    return;
+  }
+
+  const double cost = static_cast<double>(N) *
+                      (1.0 + static_cast<double>(has_bias) + static_cast<double>(has_residual) +
+                       static_cast<double>(has_activation) + static_cast<double>(converts_output));
+  ParallelFor(static_cast<std::int64_t>(M), cost, [&](std::int64_t begin, std::int64_t end) {
+    for (std::int64_t row = begin; row < end; ++row) {
+      const std::size_t m = static_cast<std::size_t>(row);
+      for (std::size_t n = 0; n < N; ++n) {
+        const std::size_t index = m * N + n;
+        T value = Y[index];
+        if (has_bias) {
+          value += epilogue.beta * BroadcastValue(epilogue.bias, epilogue.bias_layout, m, n, N);
+        }
+        if (has_residual) {
+          value += epilogue.residual_scale *
+                   BroadcastValue(epilogue.residual, epilogue.residual_layout, m, n, N);
+        }
+        if (epilogue.activation == GemmActivation::kRelu && value < T(0)) {
+          value = T(0);
+        }
+        if (converts_output) {
+          epilogue.converted_output[index] = ConvertOutput(value, epilogue.output_conversion);
+        } else {
+          Y[index] = value;
+        }
+      }
+    }
+  });
+}
+
+template <typename T, typename GemmFn>
+void GemmWithEpilogue(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::size_t K,
+                      T alpha, const T *A, const T *B, const GemmEpilogue<T> &epilogue, T *Y,
+                      GemmFn gemm) {
+  ValidateEpilogue(M, N, epilogue);
+  const bool matrix_bias_only = epilogue.bias != nullptr && epilogue.beta != T(0) &&
+                                epilogue.bias_layout == GemmBroadcast::kMatrix &&
+                                epilogue.residual == nullptr &&
+                                epilogue.activation == GemmActivation::kNone &&
+                                epilogue.output_conversion == GemmOutputConversion::kNone;
+  if (matrix_bias_only) {
+    gemm(trans_a, trans_b, M, N, K, alpha, A, B, epilogue.beta, epilogue.bias, Y);
+    return;
+  }
+
+  gemm(trans_a, trans_b, M, N, K, alpha, A, B, T(0), nullptr, Y);
+  ApplyEpilogue(M, N, epilogue, Y);
+}
+
+} // namespace
+
+void GemmFloat32WithEpilogue(bool trans_a, bool trans_b, std::size_t M, std::size_t N,
+                             std::size_t K, float alpha, const float *A, const float *B,
+                             const GemmEpilogue<float> &epilogue, float *Y) {
+  GemmWithEpilogue(trans_a, trans_b, M, N, K, alpha, A, B, epilogue, Y, GemmFloat32);
+}
+
+void GemmFloat64WithEpilogue(bool trans_a, bool trans_b, std::size_t M, std::size_t N,
+                             std::size_t K, double alpha, const double *A, const double *B,
+                             const GemmEpilogue<double> &epilogue, double *Y) {
+  GemmWithEpilogue(trans_a, trans_b, M, N, K, alpha, A, B, epilogue, Y, GemmFloat64);
 }
 
 } // namespace onnx_light_cpu

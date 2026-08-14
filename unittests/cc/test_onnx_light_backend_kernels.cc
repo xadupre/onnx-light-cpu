@@ -222,6 +222,10 @@ TEST(OnnxLightBackendKernels, GemmBenchmarkCorpusIsLazyAndCoversPriorityShapes) 
   bool has_large_k = false;
   bool has_split_k = false;
   bool has_transpose = false;
+  bool has_scalar_bias = false;
+  bool has_row_bias = false;
+  bool has_column_bias = false;
+  bool has_matrix_bias = false;
   for (const TestCase &test_case : cases) {
     if (test_case.name.rfind("test_cpu_gemm_", 0) != 0) {
       continue;
@@ -240,8 +244,12 @@ TEST(OnnxLightBackendKernels, GemmBenchmarkCorpusIsLazyAndCoversPriorityShapes) 
     has_large_k |= test_case.name.find("large_k") != std::string::npos;
     has_split_k |= test_case.name.find("split_k") != std::string::npos;
     has_transpose |= test_case.name.find("trans_") != std::string::npos;
+    has_scalar_bias |= test_case.name.find("scalar_bias") != std::string::npos;
+    has_row_bias |= test_case.name.find("row_bias") != std::string::npos;
+    has_column_bias |= test_case.name.find("column_bias") != std::string::npos;
+    has_matrix_bias |= test_case.name.find("matrix_bias") != std::string::npos;
   }
-  EXPECT_EQ(cpu_cases, 12u);
+  EXPECT_EQ(cpu_cases, 16u);
   EXPECT_TRUE(has_constant_b);
   EXPECT_TRUE(has_direct);
   EXPECT_TRUE(has_skinny_m);
@@ -249,6 +257,10 @@ TEST(OnnxLightBackendKernels, GemmBenchmarkCorpusIsLazyAndCoversPriorityShapes) 
   EXPECT_TRUE(has_large_k);
   EXPECT_TRUE(has_split_k);
   EXPECT_TRUE(has_transpose);
+  EXPECT_TRUE(has_scalar_bias);
+  EXPECT_TRUE(has_row_bias);
+  EXPECT_TRUE(has_column_bias);
+  EXPECT_TRUE(has_matrix_bias);
 }
 
 } // namespace

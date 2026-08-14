@@ -99,6 +99,44 @@ TEST(OnnxLightGemmKernel, Float32BiasBroadcastVector) {
   }
 }
 
+TEST(OnnxLightGemmKernel, Float32BiasBroadcastScalar) {
+  onnx_light_cpu::GemmKernel kernel(MakeCtx());
+  const std::vector<float> a = {1, 2, 3, 4};
+  const std::vector<float> b = {1, 0, 0, 1};
+  const std::vector<float> c = {5};
+  const std::vector<float> c_full(4, 5);
+  const rt_ns::Tensor A = rt_ns::Tensor::FromFloat("A", {2, 2}, a);
+  const rt_ns::Tensor B = rt_ns::Tensor::FromFloat("B", {2, 2}, b);
+  const rt_ns::Tensor C = rt_ns::Tensor::FromFloat("C", {}, c);
+  const auto expected = ReferenceGemm(false, false, 2, 2, 2, 1.0f, a, b, 2.0f, &c_full);
+
+  const rt_ns::Tensor y = kernel(A, B, C, 1.0f, 2.0f, false, false);
+
+  const float *py = y.AsFloat();
+  for (std::size_t i = 0; i < expected.size(); ++i) {
+    EXPECT_FLOAT_EQ(py[i], expected[i]) << "i=" << i;
+  }
+}
+
+TEST(OnnxLightGemmKernel, Float32BiasBroadcastColumn) {
+  onnx_light_cpu::GemmKernel kernel(MakeCtx());
+  const std::vector<float> a = {1, 2, 3, 4};
+  const std::vector<float> b = {1, 0, 0, 1};
+  const std::vector<float> c = {5, 7};
+  const std::vector<float> c_full = {5, 5, 7, 7};
+  const rt_ns::Tensor A = rt_ns::Tensor::FromFloat("A", {2, 2}, a);
+  const rt_ns::Tensor B = rt_ns::Tensor::FromFloat("B", {2, 2}, b);
+  const rt_ns::Tensor C = rt_ns::Tensor::FromFloat("C", {2, 1}, c);
+  const auto expected = ReferenceGemm(false, false, 2, 2, 2, 0.5f, a, b, 3.0f, &c_full);
+
+  const rt_ns::Tensor y = kernel(A, B, C, 0.5f, 3.0f, false, false);
+
+  const float *py = y.AsFloat();
+  for (std::size_t i = 0; i < expected.size(); ++i) {
+    EXPECT_FLOAT_EQ(py[i], expected[i]) << "i=" << i;
+  }
+}
+
 TEST(OnnxLightGemmKernel, Float32TransposeVariants) {
   onnx_light_cpu::GemmKernel kernel(MakeCtx());
   const std::size_t M = 2, N = 2, K = 3;
@@ -137,6 +175,25 @@ TEST(OnnxLightGemmKernel, Float16AlphaBetaBias) {
   const auto expected = ReferenceGemm(false, false, M, N, K, alpha, a, b, beta, &c);
   const auto *py = reinterpret_cast<const std::uint16_t *>(y.bytes());
   for (std::size_t i = 0; i < M * N; ++i) {
+    EXPECT_NEAR(rt_ns::Float16BitsToFloat(py[i]), expected[i], 5e-2f) << "i=" << i;
+  }
+}
+
+TEST(OnnxLightGemmKernel, Float16BroadcastRowBias) {
+  onnx_light_cpu::GemmKernel kernel(MakeCtx());
+  const std::vector<float> a = {1, 2, 3, 4};
+  const std::vector<float> b = {1, 0, 0, 1};
+  const std::vector<float> c = {5, 7};
+  const std::vector<float> c_full = {5, 7, 5, 7};
+  const rt_ns::Tensor A = rt_ns::MakeFloat16Tensor("A", {2, 2}, a);
+  const rt_ns::Tensor B = rt_ns::MakeFloat16Tensor("B", {2, 2}, b);
+  const rt_ns::Tensor C = rt_ns::MakeFloat16Tensor("C", {2}, c);
+  const auto expected = ReferenceGemm(false, false, 2, 2, 2, 1.0f, a, b, 2.0f, &c_full);
+
+  const rt_ns::Tensor y = kernel(A, B, C, 1.0f, 2.0f, false, false);
+
+  const auto *py = reinterpret_cast<const std::uint16_t *>(y.bytes());
+  for (std::size_t i = 0; i < expected.size(); ++i) {
     EXPECT_NEAR(rt_ns::Float16BitsToFloat(py[i]), expected[i], 5e-2f) << "i=" << i;
   }
 }
