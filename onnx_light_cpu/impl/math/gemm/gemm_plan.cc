@@ -92,9 +92,9 @@ void ExecuteFloatKernel(bool trans_a, bool trans_b, std::size_t m, std::size_t n
 }
 
 template <typename T>
-auto SelectKernel(GemmAlgorithm algorithm)
-    -> void (*)(bool, bool, std::size_t, std::size_t, std::size_t, T, const T *, const T *, T,
-                const T *, T *, const GemmBlocking *) {
+auto SelectKernel(GemmAlgorithm algorithm) -> void (*)(bool, bool, std::size_t, std::size_t,
+                                                       std::size_t, T, const T *, const T *, T,
+                                                       const T *, T *, const GemmBlocking *) {
   switch (algorithm) {
   case GemmAlgorithm::kDirect:
     return &ExecuteFloatKernel<T, GemmAlgorithm::kDirect>;
