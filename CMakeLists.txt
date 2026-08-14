@@ -95,11 +95,24 @@ endif()
 # ---------------------------------------------------------------------------
 # SIMD / AVX compile flags
 # ---------------------------------------------------------------------------
+# The AVX intrinsics live behind __x86_64__/_M_X64 guards, so the AVX compile
+# flags only make sense on x86/x86-64 targets. On other architectures (for
+# example Apple Silicon arm64) the kernels fall back to scalar code and passing
+# flags such as -mavx2 would break the build, so detect the target CPU family.
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64|i[3-6]86|x86|X86)$")
+  set(ONNX_LIGHT_CPU_X86 TRUE)
+else()
+  set(ONNX_LIGHT_CPU_X86 FALSE)
+endif()
+
 # On x86 platforms, enable AVX2 by default for the kernel sources so the
 # compiler can emit AVX/AVX2 intrinsics. The runtime dispatch still falls
 # back to SSE2/scalar on older CPUs. AVX-512 codepaths are guarded by
 # __AVX512F__ and only compiled when the user explicitly passes -mavx512f.
-if(NOT MSVC)
+if(NOT ONNX_LIGHT_CPU_X86)
+  set(ONNX_LIGHT_CPU_SIMD_FLAGS "" CACHE STRING
+      "SIMD compiler flags for kernel sources (e.g. -mavx2, -mavx512f).")
+elseif(NOT MSVC)
   set(ONNX_LIGHT_CPU_SIMD_FLAGS "-mavx2" CACHE STRING
       "SIMD compiler flags for kernel sources (e.g. -mavx2, -mavx512f).")
 else()
@@ -125,7 +138,13 @@ endif()
 # runtime. Exp, Log, Abs and Gemm only need AVX-512F; Not additionally needs
 # AVX-512BW for byte comparisons. Unsupported sources are excluded below.
 include(CheckCXXCompilerFlag)
-if(NOT MSVC)
+if(NOT ONNX_LIGHT_CPU_X86)
+  # Non-x86 targets (e.g. arm64) have no AVX support; keep the SIMD sources
+  # excluded and let the scalar fallbacks handle every operator.
+  set(ONNX_LIGHT_CPU_HAVE_AVX2_FMA_FLAG FALSE)
+  set(ONNX_LIGHT_CPU_HAVE_AVX512F_FLAG FALSE)
+  set(ONNX_LIGHT_CPU_HAVE_AVX512BW_FLAG FALSE)
+elseif(NOT MSVC)
   check_cxx_compiler_flag("-mavx2 -mfma" ONNX_LIGHT_CPU_HAVE_AVX2_FMA_FLAG)
   check_cxx_compiler_flag("-mavx512f" ONNX_LIGHT_CPU_HAVE_AVX512F_FLAG)
   check_cxx_compiler_flag("-mavx512f -mavx512bw"
