@@ -278,6 +278,30 @@ and its merge criteria are Roadmap PR06 in the final table. Persistent B
 prepacking is the **only** excluded optimization; no other performance work
 may be deferred while the parity gate remains unmet.
 
+PR06 does not restart P4 or invalidate PR01 through PR05: their correctness,
+dispatch, scheduling, and architecture tests remain required foundations. It
+is the first end-to-end gate against ONNX Runtime, and it shows that the
+combined implementation still has substantial performance gaps. Resume PR06
+in this order:
+
+#. Measure the raw micro-kernel, the C++ GEMM driver, the ONNX kernel adapter,
+   and ``ReferenceEvaluator`` separately, using the same Release build, pinned
+   cores, thread count, and shape. This locates overhead before changing kernel
+   code.
+#. Correct algorithm selection for the worst structural cases: do not select
+   split-K for a tiny ``M x N`` output when partitioning and reduction dominate,
+   and replace the scalar skinny-N K reduction with a vectorized path.
+#. Measure packing and epilogue costs for small, transposed, and broadcast-bias
+   cases. Preserve the no-epilogue fast path and fuse or specialize only costs
+   demonstrated by these measurements.
+#. Compare AVX2 MR=4 and MR=5 with the exact Release compiler and complete
+   priority corpus. Inspect the generated hot loop for actual spills before
+   changing the Intel profile selected by PR03.
+#. Extend the gate to the shared MatMul and batched paths, then rerun the full
+   corpus on a dedicated, frequency-stabilized machine. Publish raw results
+   only when both dtype medians reach ``1.0x`` and every priority case reaches
+   ``0.9x``.
+
 The scheduler decomposes ``Y = A @ B`` into a Cartesian grid of row and column
 panels:
 
