@@ -8,10 +8,12 @@ Gemm, MatMul, and Attention Performance Roadmap
 Objective
 ---------
 
-The objective is to bring ``onnx-light-cpu`` within 10% of ONNX Runtime/MLAS
-for the important ``Gemm``, ``MatMul``, and tensor-based ``Attention``
+The objective is performance parity with the ONNX Runtime CPU execution
+provider for the important ``Gemm``, ``MatMul``, and tensor-based ``Attention``
 workloads, for every supported data type, without sacrificing ONNX correctness.
-This is a catch-up effort with standard ONNX tensors and semantics.
+For GEMM, parity means a corpus median speed-up of at least ``1.0x`` versus
+ONNX Runtime and no priority shape below ``0.9x``. This is a catch-up effort
+with standard ONNX tensors and semantics.
 
 The current implementation is a correctness-first, register-blocked kernel.
 It already has AVX2/AVX-512 paths, K blocking, A/B packing, and parallel
@@ -183,8 +185,8 @@ distinct computational algorithms:
      - Batch outer loop for small independent products; merge batch with M/N
        task dimensions when one product cannot occupy all cores.
    * - Constant B
-     - Persistently packed B panels in the exact format consumed by the chosen
-       micro-kernel.
+     - Plan-owned B in its original tensor representation. Persistent
+       prepacking is the sole optimization excluded from this roadmap.
    * - Extremely large K with small M/N
      - Split K only when M/N/batch parallelism is insufficient, then combine
        partial accumulators in a controlled reduction.
@@ -200,7 +202,7 @@ limits are known. It should contain:
 * MC/NC/KC and MR/NR;
 * typed function pointers for packing, micro-kernel, and epilogue;
 * the parallel decomposition and useful thread count;
-* persistent packed constant panels when B is an initializer.
+* plan-owned constant B storage when B is an initializer.
 
 The execution path then invokes the plan directly. This removes repeated
 selection, but its main benefit is enabling the correct algorithm and data
@@ -259,9 +261,8 @@ Phase 2: saturate the floating-point units
 Parallel execution
 ~~~~~~~~~~~~~~~~~~
 
-P4 has the following fixed execution ledger. This list is the complete P4
-scope; an optimization not listed here must not silently become a new P4 exit
-requirement.
+P4 has the following fixed execution ledger. Every item is mandatory for P4
+completion except persistent B prepacking, which is explicitly excluded.
 
 .. list-table::
    :header-rows: 1
@@ -305,36 +306,51 @@ requirement.
        the selected threads. Replace the current scalar split-K computation
        with the packed SIMD path.
    * - P4.7
-     - Bounded x86 kernel tuning
+     - x86 kernel tuning
      - Pending
-     - Benchmark a fixed candidate set of MR/NR profiles for AVX2 and AVX-512.
-       Add family/model dispatch only when different profiles win materially;
-       this item ends after that one comparison and is not an open-ended
-       assembly rewrite.
+     - Tune MR/NR, instruction ordering, aligned packed-panel access, and
+       prefetch for the supported x86 microarchitectures. Add family/model
+       dispatch and hand-written assembly kernels wherever intrinsics do not
+       reach the parity target.
    * - P4.8
-     - ARM SIMD track
+     - Thread runtime
      - Pending
-     - Add NEON FP32/FP64 kernels. This is required for ARM parity but does not
-       block the x86 performance gate.
+     - Add hybrid P/E-core topology and affinity policy, bounded worker
+       spin-before-park behavior, and cooperation with an external caller-owned
+       pool to prevent oversubscription.
    * - P4.9
-     - Performance exit gate
+     - Fused epilogues
      - Pending
-     - The priority x86 FP32/FP64 corpus reaches 0.9-1.0x MLAS after P4.4-P4.7.
+     - Fuse bias, residual, activation, and output conversion combinations
+       needed by the priority models, without materializing intermediate
+       tensors.
+   * - P4.10
+     - ARM SIMD kernels
+     - Pending
+     - Add NEON FP32/FP64 kernels, followed by SVE/SVE2 profiles where the
+       target hardware supports them.
+   * - P4.11
+     - Performance parity gate
+     - Pending
+     - Reach at least ``1.0x`` ONNX Runtime median performance with no priority
+       shape below ``0.9x`` for each supported platform and FP32/FP64 type.
 
 The remaining x86 work is executed strictly in this order:
 
 1. P4.5-P4.6: implement the full M x N scheduler and task-aware MC/NC.
 2. P4.6: add batch scheduling and a packed SIMD split-K fallback.
-3. P4.4: consume broadcast bias without an expanded temporary.
-4. P4.7: run the bounded MR/NR profile comparison and retain only measured
-   winners.
-5. P4.9: run the performance gate and close P4 for x86.
+3. P4.4 and P4.9: consume broadcast bias directly and implement fused model
+   epilogues.
+4. P4.7: tune x86 kernels, including microarchitecture dispatch and assembly
+   where required.
+5. P4.8: complete topology-aware thread scheduling and external-pool
+   cooperation.
+6. P4.10: complete ARM SIMD kernels.
+7. P4.11: run the parity gate; continue tuning the failed ledger item until
+   every platform/type target passes.
 
-Persistent B prepacking, hand-written assembly, fused activation/residual
-epilogues, worker spin policies, P/E-core affinity, and integration with an
-external caller-owned thread pool are explicitly outside the P4 exit criteria.
-They may be separate later optimizations, but they cannot be added to the list
-above as prerequisites for closing P4.
+Persistent B prepacking is the **only** excluded optimization. No other
+performance work may be deferred while the parity gate remains unmet.
 
 Phase 3: native low-precision kernels
 --------------------------------------
@@ -469,15 +485,6 @@ to verify, not guarantees.
      - Expected gain over MLAS
      - Conditions and quantitative bound
      - Estimated effort
-   * - Persistent prepacking
-     - **0-5% execution gain** in the usual case; **1.2-5x faster session
-       preparation** if packed data is serialized or shared.
-     - MLAS already prepacks many constant weights, so merely caching B is a
-       parity requirement, not a likely execution-time advantage. A gain
-       requires sharing one packed representation across sessions, removing a
-       repack MLAS still performs, or using a more shape-specific format.
-       Packed-weight storage is typically **1.0-1.5x** the original weight size.
-     - 3-5 engineering days.
    * - Full shape specialization
      - **2-10%** normally; **10-20%** on stable skinny or tail-heavy shapes.
      - Instantiate loop order, MC/NC/KC, MR/NR, packing format, micro-kernel,
@@ -535,11 +542,11 @@ to verify, not guarantees.
      - 10-20 days after the GEMM primitives and correctness path exist.
 
 These gains are not additive. Shape specialization and autotuning often choose
-the same improvement, while prepacking is a prerequisite for the specialized
-constant-weight path. A credible target sequence is:
+the same improvement. A credible target sequence is:
 
-1. reach **0.9-1.0x MLAS** with the generic blocked algorithm;
-2. reach **1.05-1.15x MLAS** through shape specialization and tuning;
+1. reach at least **1.0x ONNX Runtime** median performance with the generic
+   blocked algorithm and tuned scheduler;
+2. reach **1.05-1.15x ONNX Runtime** through shape specialization and tuning;
 3. target **1.2-1.8x** on fused or tiny-batch workloads;
 4. reserve gains above **2x** for workloads with exploitable sparsity,
    low-rank structure, very large collections of tiny matrices, or an
@@ -551,9 +558,9 @@ External libraries
 OpenBLAS, BLIS, oneDNN, and vendor BLAS libraries are useful as performance
 oracles and optional large-matrix fallbacks. They do not remove the need for
 internal kernels: small inference shapes, FP16/BF16/quantized types, constant
-weight prepacking, and fused epilogues are precisely where a model-aware
-runtime can win. Any optional dependency must have a deterministic internal
-fallback and must not create a second competing thread pool.
+weights, and fused epilogues are precisely where a model-aware runtime can win.
+Any optional dependency must have a deterministic internal fallback and must
+not create a second competing thread pool.
 
 Acceptance criteria
 -------------------
@@ -568,8 +575,8 @@ Acceptance criteria
      - ONNX backend and differential tests pass for every type, shape,
        transpose, broadcast, alpha/beta, bias, empty-dimension, and tail case.
    * - FP32/FP64 parity
-     - Median end-to-end time is no worse than 1.10x MLAS on the priority shape
-       corpus; every larger regression is documented with a kernel breakdown.
+     - Median speed-up is at least 1.0x versus ONNX Runtime on the priority
+       shape corpus, with no priority shape below 0.9x.
    * - Low precision parity
      - FP16, BF16, and INT8 meet the same target on hardware with native
        support; fallback paths remain correct and avoid full-matrix conversion
@@ -585,8 +592,8 @@ Acceptance criteria
      - The optimized path never materializes the complete score or probability
        tensor; temporary memory is bounded by worker count and Br x Bc blocks.
    * - Attention parity
-     - Median prefill latency is no worse than 1.10x ONNX Runtime on the
-       priority model/context corpus with the same thread count.
+     - Median speed-up is at least 1.0x versus ONNX Runtime on the priority
+       model/context corpus, with no priority case below 0.9x.
    * - Data movement
      - Every dynamic A panel and constant B panel is packed no more often than
        required by the selected loop nest; low-precision paths avoid
@@ -663,9 +670,10 @@ require measurements on dedicated hardware.
        <https://github.com/xadupre/onnx-light-cpu/pull/140>`_
    * - P4
      - FMA/AVX2/AVX-512/ARM micro-kernels and tuned scheduler.
-     - Priority FP32/FP64 corpus reaches 0.9-1.0x MLAS.
+     - Priority FP32/FP64 corpus reaches at least 1.0x ONNX Runtime median
+       performance with no priority shape below 0.9x.
      - P3.
-     - P4.1-P4.3 implemented; P4.4-P4.6 partial; P4.7-P4.9 pending. The fixed
+     - P4.1-P4.3 implemented; P4.4-P4.6 partial; P4.7-P4.11 pending. The fixed
        scope and exact remaining order are defined in the P4 execution ledger
        above.
      - `onnx-light-cpu #133
@@ -686,7 +694,9 @@ require measurements on dedicated hardware.
        <https://github.com/xadupre/onnx-light-cpu/pull/149>`_
    * - P5
      - Native/panel-converted FP16, BF16, and integer paths.
-     - Low-precision corpus reaches 0.9x MLAS where MLAS supports the type.
+     - Low-precision corpus reaches at least 1.0x ONNX Runtime median
+       performance with no priority shape below 0.9x where the type is
+       supported.
      - P3-P4.
      - Planned.
      - TBD.
@@ -699,8 +709,9 @@ require measurements on dedicated hardware.
      - TBD.
    * - P7
      - Online-softmax prefill Attention.
-     - No full score/probability tensor; long-context prefill is within 1.1x of
-       ONNX Runtime with bounded temporary memory.
+     - No full score/probability tensor; median performance is at least 1.0x
+       ONNX Runtime with no priority case below 0.9x and bounded temporary
+       memory.
      - P4 and P6.
      - Planned.
      - TBD.

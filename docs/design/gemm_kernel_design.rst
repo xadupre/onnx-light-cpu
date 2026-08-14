@@ -97,8 +97,9 @@ The selected values are passed to the five-loop engine rather than being
 descriptive metadata.
 
 The plan selects the general five-loop engine or a direct, skinny-M, skinny-N,
-or split-K path once from the prepared shape. Persistent packed constant panels
-are introduced by a later roadmap step.
+or split-K path once from the prepared shape. It may own constant B in its
+original representation; persistent B prepacking is explicitly excluded from
+the roadmap.
 
 Platform support (x86_64)
 -------------------------
