@@ -40,19 +40,20 @@ template <typename T> inline void PrefetchT0(const T *ptr) {
 
 } // namespace
 
-void GemmMicroKernel_AVX512_F32(std::size_t mr, std::size_t nb, std::size_t K, float alpha,
-                                float beta, const float *Bmat, std::size_t N,
-                                const float *Crow_base, std::size_t Cstride, float *Yrow_base,
-                                std::size_t Ystride, std::size_t n0, GemmAccumMode mode,
-                                const float *Apack) {
+template <std::size_t MR>
+void GemmMicroKernel_AVX512_F32Impl(std::size_t nb, std::size_t K, float alpha, float beta,
+                                    const float *Bmat, std::size_t N, const float *Crow_base,
+                                    std::size_t Cstride, float *Yrow_base, std::size_t Ystride,
+                                    std::size_t n0, GemmAccumMode mode, const float *Apack) {
+  static_assert(MR >= 1 && MR <= kGemmMR);
   const __m512 valpha = _mm512_set1_ps(alpha);
   const __m512 vbeta = _mm512_set1_ps(beta);
   std::size_t n = 0;
   // NR == 2: 32 lanes (two 512-bit vectors) per step.
   for (; n + 32 <= nb; n += 32) {
-    __m512 acc0[kGemmMR];
-    __m512 acc1[kGemmMR];
-    for (std::size_t r = 0; r < mr; ++r) {
+    __m512 acc0[MR];
+    __m512 acc1[MR];
+    for (std::size_t r = 0; r < MR; ++r) {
       acc0[r] = _mm512_setzero_ps();
       acc1[r] = _mm512_setzero_ps();
     }
@@ -63,7 +64,7 @@ void GemmMicroKernel_AVX512_F32(std::size_t mr, std::size_t nb, std::size_t K, f
       if (k + kGemmPrefetchDistanceK < K) {
         PrefetchT0(Brow + kGemmPrefetchDistanceK * N);
       }
-      for (std::size_t r = 0; r < mr; ++r) {
+      for (std::size_t r = 0; r < MR; ++r) {
         const __m512 va = _mm512_set1_ps(Apack[r * K + k]);
         acc0[r] = MulAdd(va, vb0, acc0[r]);
         acc1[r] = MulAdd(va, vb1, acc1[r]);
@@ -79,7 +80,7 @@ void GemmMicroKernel_AVX512_F32(std::size_t mr, std::size_t nb, std::size_t K, f
     for (; k < K; ++k) {
       accumulate_k(k);
     }
-    for (std::size_t r = 0; r < mr; ++r) {
+    for (std::size_t r = 0; r < MR; ++r) {
       float *Yrow = Yrow_base + r * Ystride + n0 + n;
       __m512 res0 = _mm512_mul_ps(valpha, acc0[r]);
       __m512 res1 = _mm512_mul_ps(valpha, acc1[r]);
@@ -97,13 +98,13 @@ void GemmMicroKernel_AVX512_F32(std::size_t mr, std::size_t nb, std::size_t K, f
   }
   // NR == 1 remainder: a single 16-lane vector.
   for (; n + 16 <= nb; n += 16) {
-    __m512 acc[kGemmMR];
-    for (std::size_t r = 0; r < mr; ++r) {
+    __m512 acc[MR];
+    for (std::size_t r = 0; r < MR; ++r) {
       acc[r] = _mm512_setzero_ps();
     }
     const auto accumulate_k = [&](std::size_t k) {
       const __m512 vb = _mm512_loadu_ps(Bmat + k * N + n0 + n);
-      for (std::size_t r = 0; r < mr; ++r) {
+      for (std::size_t r = 0; r < MR; ++r) {
         const __m512 va = _mm512_set1_ps(Apack[r * K + k]);
         acc[r] = MulAdd(va, vb, acc[r]);
       }
@@ -118,7 +119,7 @@ void GemmMicroKernel_AVX512_F32(std::size_t mr, std::size_t nb, std::size_t K, f
     for (; k < K; ++k) {
       accumulate_k(k);
     }
-    for (std::size_t r = 0; r < mr; ++r) {
+    for (std::size_t r = 0; r < MR; ++r) {
       float *Yrow = Yrow_base + r * Ystride + n0 + n;
       __m512 res = _mm512_mul_ps(valpha, acc[r]);
       if (mode == GemmAccumMode::kInitBias) {
@@ -133,24 +134,25 @@ void GemmMicroKernel_AVX512_F32(std::size_t mr, std::size_t nb, std::size_t K, f
   // Scalar tail (< 16 lanes): reuse the shared scalar micro-kernel from
   // gemm_kernel.cc instead of duplicating the mode-driven combine logic.
   if (n < nb) {
-    GemmMicroKernel_Scalar_F32(mr, nb - n, K, alpha, beta, Bmat, N, Crow_base, Cstride, Yrow_base,
+    GemmMicroKernel_Scalar_F32(MR, nb - n, K, alpha, beta, Bmat, N, Crow_base, Cstride, Yrow_base,
                                Ystride, n0 + n, mode, Apack);
   }
 }
 
-void GemmMicroKernel_AVX512_F64(std::size_t mr, std::size_t nb, std::size_t K, double alpha,
-                                double beta, const double *Bmat, std::size_t N,
-                                const double *Crow_base, std::size_t Cstride, double *Yrow_base,
-                                std::size_t Ystride, std::size_t n0, GemmAccumMode mode,
-                                const double *Apack) {
+template <std::size_t MR>
+void GemmMicroKernel_AVX512_F64Impl(std::size_t nb, std::size_t K, double alpha, double beta,
+                                    const double *Bmat, std::size_t N, const double *Crow_base,
+                                    std::size_t Cstride, double *Yrow_base, std::size_t Ystride,
+                                    std::size_t n0, GemmAccumMode mode, const double *Apack) {
+  static_assert(MR >= 1 && MR <= kGemmMR);
   const __m512d valpha = _mm512_set1_pd(alpha);
   const __m512d vbeta = _mm512_set1_pd(beta);
   std::size_t n = 0;
   // NR == 2: 16 lanes (two 512-bit vectors) per step.
   for (; n + 16 <= nb; n += 16) {
-    __m512d acc0[kGemmMR];
-    __m512d acc1[kGemmMR];
-    for (std::size_t r = 0; r < mr; ++r) {
+    __m512d acc0[MR];
+    __m512d acc1[MR];
+    for (std::size_t r = 0; r < MR; ++r) {
       acc0[r] = _mm512_setzero_pd();
       acc1[r] = _mm512_setzero_pd();
     }
@@ -161,7 +163,7 @@ void GemmMicroKernel_AVX512_F64(std::size_t mr, std::size_t nb, std::size_t K, d
       if (k + kGemmPrefetchDistanceK < K) {
         PrefetchT0(Brow + kGemmPrefetchDistanceK * N);
       }
-      for (std::size_t r = 0; r < mr; ++r) {
+      for (std::size_t r = 0; r < MR; ++r) {
         const __m512d va = _mm512_set1_pd(Apack[r * K + k]);
         acc0[r] = MulAdd(va, vb0, acc0[r]);
         acc1[r] = MulAdd(va, vb1, acc1[r]);
@@ -177,7 +179,7 @@ void GemmMicroKernel_AVX512_F64(std::size_t mr, std::size_t nb, std::size_t K, d
     for (; k < K; ++k) {
       accumulate_k(k);
     }
-    for (std::size_t r = 0; r < mr; ++r) {
+    for (std::size_t r = 0; r < MR; ++r) {
       double *Yrow = Yrow_base + r * Ystride + n0 + n;
       __m512d res0 = _mm512_mul_pd(valpha, acc0[r]);
       __m512d res1 = _mm512_mul_pd(valpha, acc1[r]);
@@ -195,13 +197,13 @@ void GemmMicroKernel_AVX512_F64(std::size_t mr, std::size_t nb, std::size_t K, d
   }
   // NR == 1 remainder: a single 8-lane vector.
   for (; n + 8 <= nb; n += 8) {
-    __m512d acc[kGemmMR];
-    for (std::size_t r = 0; r < mr; ++r) {
+    __m512d acc[MR];
+    for (std::size_t r = 0; r < MR; ++r) {
       acc[r] = _mm512_setzero_pd();
     }
     const auto accumulate_k = [&](std::size_t k) {
       const __m512d vb = _mm512_loadu_pd(Bmat + k * N + n0 + n);
-      for (std::size_t r = 0; r < mr; ++r) {
+      for (std::size_t r = 0; r < MR; ++r) {
         const __m512d va = _mm512_set1_pd(Apack[r * K + k]);
         acc[r] = MulAdd(va, vb, acc[r]);
       }
@@ -216,7 +218,7 @@ void GemmMicroKernel_AVX512_F64(std::size_t mr, std::size_t nb, std::size_t K, d
     for (; k < K; ++k) {
       accumulate_k(k);
     }
-    for (std::size_t r = 0; r < mr; ++r) {
+    for (std::size_t r = 0; r < MR; ++r) {
       double *Yrow = Yrow_base + r * Ystride + n0 + n;
       __m512d res = _mm512_mul_pd(valpha, acc[r]);
       if (mode == GemmAccumMode::kInitBias) {
@@ -231,8 +233,56 @@ void GemmMicroKernel_AVX512_F64(std::size_t mr, std::size_t nb, std::size_t K, d
   // Scalar tail (< 8 lanes): reuse the shared scalar micro-kernel from
   // gemm_kernel.cc instead of duplicating the mode-driven combine logic.
   if (n < nb) {
-    GemmMicroKernel_Scalar_F64(mr, nb - n, K, alpha, beta, Bmat, N, Crow_base, Cstride, Yrow_base,
+    GemmMicroKernel_Scalar_F64(MR, nb - n, K, alpha, beta, Bmat, N, Crow_base, Cstride, Yrow_base,
                                Ystride, n0 + n, mode, Apack);
+  }
+}
+
+void GemmMicroKernel_AVX512_F32(std::size_t mr, std::size_t nb, std::size_t K, float alpha,
+                                float beta, const float *Bmat, std::size_t N,
+                                const float *Crow_base, std::size_t Cstride, float *Yrow_base,
+                                std::size_t Ystride, std::size_t n0, GemmAccumMode mode,
+                                const float *Apack) {
+  switch (mr) {
+  case 1:
+    return GemmMicroKernel_AVX512_F32Impl<1>(nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
+                                             Yrow_base, Ystride, n0, mode, Apack);
+  case 2:
+    return GemmMicroKernel_AVX512_F32Impl<2>(nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
+                                             Yrow_base, Ystride, n0, mode, Apack);
+  case 3:
+    return GemmMicroKernel_AVX512_F32Impl<3>(nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
+                                             Yrow_base, Ystride, n0, mode, Apack);
+  case 4:
+    return GemmMicroKernel_AVX512_F32Impl<4>(nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
+                                             Yrow_base, Ystride, n0, mode, Apack);
+  default:
+    return GemmMicroKernel_Scalar_F32(mr, nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
+                                      Yrow_base, Ystride, n0, mode, Apack);
+  }
+}
+
+void GemmMicroKernel_AVX512_F64(std::size_t mr, std::size_t nb, std::size_t K, double alpha,
+                                double beta, const double *Bmat, std::size_t N,
+                                const double *Crow_base, std::size_t Cstride, double *Yrow_base,
+                                std::size_t Ystride, std::size_t n0, GemmAccumMode mode,
+                                const double *Apack) {
+  switch (mr) {
+  case 1:
+    return GemmMicroKernel_AVX512_F64Impl<1>(nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
+                                             Yrow_base, Ystride, n0, mode, Apack);
+  case 2:
+    return GemmMicroKernel_AVX512_F64Impl<2>(nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
+                                             Yrow_base, Ystride, n0, mode, Apack);
+  case 3:
+    return GemmMicroKernel_AVX512_F64Impl<3>(nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
+                                             Yrow_base, Ystride, n0, mode, Apack);
+  case 4:
+    return GemmMicroKernel_AVX512_F64Impl<4>(nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
+                                             Yrow_base, Ystride, n0, mode, Apack);
+  default:
+    return GemmMicroKernel_Scalar_F64(mr, nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
+                                      Yrow_base, Ystride, n0, mode, Apack);
   }
 }
 
