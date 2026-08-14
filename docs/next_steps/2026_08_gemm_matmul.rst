@@ -235,6 +235,9 @@ Phase 2: saturate the floating-point units
   variants. Zen, Skylake, Ice Lake, and hybrid Intel CPUs can require different
   MR/NR and cache blocks even when they expose the same ISA.
 * Generate several MR x NR micro-kernels instead of fixing ``MR == 4``.
+  AVX2+FMA now emits compile-time ``MR=1..4`` variants for both NR=1 and NR=2,
+  selected from the actual row-block size; microarchitecture-specific maximum
+  MR/NR selection remains.
 * Unroll K enough to maintain independent FMA chains without spilling
   accumulators. The AVX2+FMA and AVX-512 FP32/FP64 kernels now reduce four K
   rows per loop iteration and use a scalar-count remainder loop without adding
@@ -588,8 +591,9 @@ require measurements on dedicated hardware.
      - Priority FP32/FP64 corpus reaches 0.9-1.0x MLAS.
      - P3.
      - AVX2+FMA and AVX-512 micro-kernels implemented, including four-way K
-       unrolling; ARM kernels, scheduler tuning, and the performance gate
-       remain.
+       unrolling and AVX2 compile-time MR=1..4 variants; ARM kernels,
+       microarchitecture-specific MR/NR selection, scheduler tuning, and the
+       performance gate remain.
      - `onnx-light-cpu #133
        <https://github.com/xadupre/onnx-light-cpu/pull/133>`_,
        `onnx-light-cpu #141

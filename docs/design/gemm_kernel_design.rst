@@ -214,6 +214,9 @@ Implemented optimizations (for reference)
    * - AVX2+FMA K-loop unrolling
      - Implemented -- FP32/FP64 NR=1 and NR=2 loops reduce four K rows per
        iteration, with a remainder loop and no additional accumulators.
+   * - AVX2+FMA MR variants
+     - Implemented -- compile-time FP32/FP64 MR=1, 2, 3, and 4 variants cover
+       both NR=1 and NR=2, selected from the actual row-block size.
 
 Remaining optimizations (not implemented)
 --------------------------------------------
@@ -306,5 +309,5 @@ gains.
        is a different programming model from NEON's fixed 128-bit registers,
        so it is effectively a second port rather than a small extension.
 
-The next x86 tuning step is to generate and benchmark several MR x NR variants
-instead of fixing ``MR == 4`` for every microarchitecture.
+The next x86 tuning step is to select the maximum MR/NR variant by detected
+microarchitecture instead of using MR=4 and NR=2 vectors for every x86 CPU.
