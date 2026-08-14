@@ -142,6 +142,36 @@ split-K is disabled: the product executes its M x N grid directly, avoiding
 serial split-K partitions, temporary partial buffers, and a redundant
 reduction.
 
+Thread runtime and affinity
+---------------------------
+
+The persistent pool discovers the processors available to the process rather
+than treating ``std::thread::hardware_concurrency()`` as a physical-core
+count. Linux discovery combines ``sched_getaffinity`` with sysfs package,
+core, sibling, ``core_type``, and capacity data. Windows discovery uses
+``GetLogicalProcessorInformationEx`` processor-core records, processor groups,
+SMT flags, and efficiency classes.
+
+The default participant count uses one logical thread per physical core,
+bounded by ``ONNX_LIGHT_CPU_MAX_THREADS``. Hybrid machines order P-cores before
+unknown cores and E-cores; SMT siblings are appended only when an explicit
+``ONNX_LIGHT_CPU_NUM_THREADS`` value requires them. Worker threads receive the
+corresponding Linux CPU affinity or Windows processor-group affinity once at
+startup. The caller remains unpinned so embedding applications retain control
+of their main thread.
+
+After a task, workers spin for a bounded number of CPU-relax iterations before
+parking on the condition variable. ``ONNX_LIGHT_CPU_SPIN_COUNT`` configures
+this budget, including ``0`` for immediate parking. A local pinned sweep of
+``0``, ``500``, ``2000``, and ``10000`` retained ``2000`` as the default:
+longer spinning regressed small and medium GEMM while immediate parking added
+wakeup latency.
+
+Applications that already own a pool construct
+``ParallelForExternalRegion`` inside each caller worker before invoking a
+kernel. Nested ``ParallelFor`` calls then execute inline on that worker, so the
+global pool is not awakened and cannot oversubscribe the caller's pool.
+
 Prepared execution interfaces
 -----------------------------
 
