@@ -11,6 +11,7 @@ optimize next.
     :caption: In progress
 
     2026_08_gemm_matmul
+    2026_08_gemm_slowness_analysis
 
 .. toctree::
     :maxdepth: 1
