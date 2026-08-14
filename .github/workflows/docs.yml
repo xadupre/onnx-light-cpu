@@ -68,7 +68,7 @@ jobs:
       # Build the CPU kernel extension and install the documentation and test
       # dependencies. ONNX_LIGHT_CPU_BUILD_TESTS=ON builds the C++ unit tests so
       # ctest can run them below. Sphinx-Gallery executes
-      # docs/examples/plot_abs_simd.py at build time, which calls the compiled
+      # docs/examples/kernels/plot_abs_simd.py at build time, which calls the compiled
       # extension directly.
       - name: Build and install package with docs extras
         env:

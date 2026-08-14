@@ -58,4 +58,3 @@ select = [
 "**" = ["RUF012", "RUF100", "SIM102", "SIM108", "UP006", "UP007", "UP035"]
 "unittests/**" = ["B023", "B904", "E731"]
 "docs/examples/**" = ["E402"]
-"docs/benchmarks/**" = ["E402"]

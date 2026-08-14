@@ -1,7 +1,7 @@
 .. _examples-gallery:
 
-Examples
-========
+Examples gallery
+================
 
-A gallery of runnable examples showing how to use the SIMD-accelerated CPU
-kernels provided by ``onnx-light-cpu`` from Python.
+Runnable examples and benchmarks for the SIMD-accelerated CPU kernels provided
+by ``onnx-light-cpu``.

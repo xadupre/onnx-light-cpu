@@ -4,7 +4,7 @@
 
 """Run the documentation examples as unit tests.
 
-Every ``docs/examples/plot_*.py`` gallery script is executed in a subprocess so
+Every ``docs/examples/**/plot_*.py`` gallery script is executed in a subprocess so
 a failure (e.g. a broken import or a mismatched result) surfaces as a failing
 test. Examples that need optional dependencies which are not installed are
 skipped instead of failing.
@@ -34,7 +34,7 @@ _REQUIREMENTS = {
 
 
 def _example_files():
-    return sorted(_EXAMPLES_DIR.glob("plot_*.py"))
+    return sorted(_EXAMPLES_DIR.rglob("plot_*.py"))
 
 
 def _missing_modules(names):
