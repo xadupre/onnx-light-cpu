@@ -261,96 +261,10 @@ Phase 2: saturate the floating-point units
 Parallel execution
 ~~~~~~~~~~~~~~~~~~
 
-P4 has the following fixed execution ledger. Every item is mandatory for P4
-completion except persistent B prepacking, which is explicitly excluded.
-
-.. list-table::
-   :header-rows: 1
-   :widths: 9 25 18 48
-
-   * - ID
-     - Deliverable
-     - State
-     - Exact remaining work
-   * - P4.1
-     - x86 SIMD micro-kernels
-     - Implemented
-     - None. SSE2, AVX, AVX2+FMA, and AVX-512 FP32/FP64 dispatch exists.
-   * - P4.2
-     - K-loop throughput
-     - Implemented
-     - None. AVX2+FMA and AVX-512 use four-way K unrolling with remainder
-       handling.
-   * - P4.3
-     - ISA register blocking
-     - Implemented
-     - None. AVX2/SSE use MR=4 and AVX-512 uses MR=6, with tail variants.
-   * - P4.4
-     - Arithmetic epilogues
-     - Partial
-     - Unit ``alpha``/``beta`` and no-bias paths are implemented. Consume
-       scalar, row, and column bias directly in the micro-kernel instead of
-       materializing an M x N bias buffer.
-   * - P4.5
-     - Task-aware cache blocking
-     - Partial
-     - Cache-derived MC/NC/KC exists. Constrain MC/NC jointly with the scheduler
-       so a large cache does not reduce an otherwise parallel GEMM to one or
-       two tasks.
-   * - P4.6
-     - Shape scheduler
-     - Partial
-     - The persistent pool and M-or-N split exist. Schedule the general M x N
-       task grid, use ``GemmPlan::useful_threads()``, parallelize batches of
-       small products, and use split-K only when M/N/batch tasks cannot occupy
-       the selected threads. Replace the current scalar split-K computation
-       with the packed SIMD path.
-   * - P4.7
-     - x86 kernel tuning
-     - Pending
-     - Tune MR/NR, instruction ordering, aligned packed-panel access, and
-       prefetch for the supported x86 microarchitectures. Add family/model
-       dispatch and hand-written assembly kernels wherever intrinsics do not
-       reach the parity target.
-   * - P4.8
-     - Thread runtime
-     - Pending
-     - Add hybrid P/E-core topology and affinity policy, bounded worker
-       spin-before-park behavior, and cooperation with an external caller-owned
-       pool to prevent oversubscription.
-   * - P4.9
-     - Fused epilogues
-     - Pending
-     - Fuse bias, residual, activation, and output conversion combinations
-       needed by the priority models, without materializing intermediate
-       tensors.
-   * - P4.10
-     - ARM SIMD kernels
-     - Pending
-     - Add NEON FP32/FP64 kernels, followed by SVE/SVE2 profiles where the
-       target hardware supports them.
-   * - P4.11
-     - Performance parity gate
-     - Pending
-     - Reach at least ``1.0x`` ONNX Runtime median performance with no priority
-       shape below ``0.9x`` for each supported platform and FP32/FP64 type.
-
-The remaining x86 work is executed strictly in this order:
-
-1. P4.5-P4.6: implement the full M x N scheduler and task-aware MC/NC.
-2. P4.6: add batch scheduling and a packed SIMD split-K fallback.
-3. P4.4 and P4.9: consume broadcast bias directly and implement fused model
-   epilogues.
-4. P4.7: tune x86 kernels, including microarchitecture dispatch and assembly
-   where required.
-5. P4.8: complete topology-aware thread scheduling and external-pool
-   cooperation.
-6. P4.10: complete ARM SIMD kernels.
-7. P4.11: run the parity gate; continue tuning the failed ledger item until
-   every platform/type target passes.
-
-Persistent B prepacking is the **only** excluded optimization. No other
-performance work may be deferred while the parity gate remains unmet.
+The remaining P4 execution order and merge criteria are defined exclusively by
+Roadmap PR01 through PR06 in the final table. Persistent B prepacking is the
+**only** excluded optimization; no other performance work may be deferred while
+the parity gate remains unmet.
 
 Phase 3: native low-precision kernels
 --------------------------------------
@@ -673,8 +587,8 @@ require measurements on dedicated hardware.
      - Priority FP32/FP64 corpus reaches at least 1.0x ONNX Runtime median
        performance with no priority shape below 0.9x.
      - P3.
-     - P4.1-P4.3 implemented; P4.4-P4.6 partial; P4.7-P4.11 pending. The fixed
-       work items are grouped into Roadmap PR01 through PR06 below.
+     - Existing SIMD work is linked at right; the six remaining PRs are
+       Roadmap PR01 through PR06 below.
      - `onnx-light-cpu #133
        <https://github.com/xadupre/onnx-light-cpu/pull/133>`_,
        `onnx-light-cpu #141
@@ -697,14 +611,14 @@ require measurements on dedicated hardware.
        performance with no priority shape below 0.9x where the type is
        supported.
      - P3-P4.
-     - Twelve work items grouped into four PRs below; all pending.
+     - Four-PR sequence fixed below; all pending.
      - Roadmap PR07 through PR10 below.
    * - P6
      - ``AttentionPlan`` and materialized tensor correctness implementation.
      - MHA/GQA/MQA, masks, causal behavior, and tensor past/present
        differential tests pass.
      - P1-P2.
-     - Seven work items grouped into two PRs below; all pending.
+     - Two-PR sequence fixed below; all pending.
      - Roadmap PR11 through PR12 below.
    * - P7
      - Online-softmax prefill Attention.
@@ -712,347 +626,15 @@ require measurements on dedicated hardware.
        ONNX Runtime with no priority case below 0.9x and bounded temporary
        memory.
      - P4 and P6.
-     - Ten work items grouped into three PRs below; all pending.
+     - Three-PR sequence fixed below; all pending.
      - Roadmap PR13 through PR15 below.
 
-Remaining P4 execution checklist
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Remaining pull-request sequence
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Thirteen implementation items remain after ``#149`` to close P4. These are
-merge criteria grouped into six coherent roadmap PRs at the end of this
-section, not thirteen separate GitHub pull requests. Their scope and order are
-fixed; no new prerequisite is added without an explicit roadmap revision.
-
-.. list-table::
-   :header-rows: 1
-   :widths: 10 29 39 12 10
-
-   * - Work item
-     - Exact scope
-     - Merge criterion
-     - Depends on
-     - Status
-   * - P4-PR01
-     - Full M x N scheduler and task-aware blocking.
-     - The five-loop engine schedules the row-panel x column-panel grid, packs
-       each B panel once, consumes ``useful_threads()``, and constrains MC/NC
-       so priority shapes expose enough independent tasks.
-     - ``#149``
-     - Pending
-   * - P4-PR02
-     - Batch scheduler for ``MatMulPlan``, ``StridedBatchedGemm``, and
-       ``GroupedGemm``.
-     - Small independent products run across the shared scheduler without
-       nested pools; one product retains its internal M x N decomposition when
-       that is more efficient.
-     - P4-PR01
-     - Pending
-   * - P4-PR03
-     - Packed SIMD split-K.
-     - Split-K is selected only when M/N/batch tasks are insufficient; each
-       partition uses the packed SIMD micro-kernel and the reduction preserves
-       the documented FP32/FP64 tolerances.
-     - P4-PR01, P4-PR02
-     - Pending
-   * - P4-PR04
-     - Direct broadcast-bias epilogues.
-     - None, scalar, row, column, and full-matrix C layouts are consumed
-       directly by scalar and SIMD kernels for all alpha/beta cases; the
-       M x N expanded bias temporary is removed.
-     - P4-PR01
-     - Pending
-   * - P4-PR05
-     - Fused model epilogues.
-     - Priority bias, residual, activation, and output-conversion combinations
-       execute through typed epilogue functions without intermediate tensors,
-       with differential correctness tests.
-     - P4-PR04
-     - Pending
-   * - P4-PR06
-     - AVX2/FMA profile tuning.
-     - Candidate MR/NR profiles, aligned panel buffers/loads, instruction
-       ordering, and measured prefetch choices are benchmarked; the winning
-       profile is selected without regressing any priority AVX2 shape.
-     - P4-PR05
-     - Pending
-   * - P4-PR07
-     - AVX-512 profile tuning.
-     - Candidate MR/NR profiles, aligned panel buffers/loads, instruction
-       ordering, and measured prefetch choices are benchmarked; the winning
-       profile is selected without regressing any priority AVX-512 shape.
-     - P4-PR05
-     - Pending
-   * - P4-PR08
-     - x86 microarchitecture dispatch and assembly completion.
-     - CPUID family/model dispatch selects the measured AVX2/AVX-512 profile;
-       remaining parity gaps receive hand-written assembly kernels and all
-       priority x86 families pass their single-thread kernel targets.
-     - P4-PR06, P4-PR07
-     - Pending
-   * - P4-PR09
-     - Hybrid CPU topology and affinity.
-     - The scheduler distinguishes physical cores, SMT siblings, P-cores, and
-       E-cores and applies a tested size-dependent placement policy on
-       supported Linux and Windows targets.
-     - P4-PR01
-     - Pending
-   * - P4-PR10
-     - Worker lifecycle and external-pool cooperation.
-     - Configurable bounded spin-before-park is implemented; a caller-owned
-       pool can be used without creating nested workers or oversubscribing the
-       process.
-     - P4-PR09
-     - Pending
-   * - P4-PR11
-     - ARM64 NEON FP32/FP64 kernels.
-     - NEON packing, micro-kernels, dispatch, tails, and all GEMM/MatMul
-       correctness cases pass on ARM64.
-     - P4-PR05
-     - Pending
-   * - P4-PR12
-     - ARM SVE/SVE2 profiles.
-     - Runtime vector-length-aware SVE/SVE2 kernels and feature dispatch pass
-       the priority ARM correctness and performance corpus, with NEON fallback.
-     - P4-PR11
-     - Pending
-   * - P4-PR13
-     - Final ONNX Runtime parity gate.
-     - Raw results are published for every priority platform/type corpus; the
-       median speed-up is at least 1.0x and no priority case is below 0.9x.
-       This PR remains open while any result fails.
-     - P4-PR01 through P4-PR12
-     - Pending
-
-Remaining P5 execution checklist
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-P5 contains twelve implementation items grouped into four roadmap PRs.
-Persistent B prepacking remains excluded; panel conversion performed during
-each invocation is part of the low-precision kernel itself.
-
-.. list-table::
-   :header-rows: 1
-   :widths: 10 29 39 12 10
-
-   * - Work item
-     - Exact scope
-     - Merge criterion
-     - Depends on
-     - Status
-   * - P5-PR01
-     - Low-precision packing and dispatch framework.
-     - Typed panel formats, accumulation types, conversion functions, output
-       epilogues, and compile/runtime ISA gates are represented in immutable
-       plans without full-tensor conversion.
-     - P4-PR13
-     - Pending
-   * - P5-PR02
-     - AVX2/F16C FP16 convert-and-FMA.
-     - FP16 A/B values convert to FP32 while packing, accumulate through AVX2
-       FMA, and narrow only the final output for every GEMM/MatMul shape case.
-     - P5-PR01
-     - Pending
-   * - P5-PR03
-     - AVX-512FP16 kernels.
-     - Compile/runtime-gated AVX-512FP16 profiles pass FP16 correctness and
-       outperform the F16C fallback on their priority hardware.
-     - P5-PR02
-     - Pending
-   * - P5-PR04
-     - AVX-512BF16 kernels.
-     - BF16 dot-product kernels accumulate according to the ONNX numerical
-       contract and fall back to panel conversion when AVX-512BF16 is absent.
-     - P5-PR01
-     - Pending
-   * - P5-PR05
-     - AMX FP16/BF16 kernels.
-     - CPUID and OS tile-state checks safely enable AMX, configure tiles per
-       worker, amortize setup cost, and retain AVX-512 fallbacks.
-     - P5-PR03, P5-PR04
-     - Pending
-   * - P5-PR06
-     - ARM FP16/BF16 kernels.
-     - NEON and available SVE/SVE2 low-precision kernels pass the complete
-       correctness corpus with FP32 accumulation and portable fallback.
-     - P5-PR01, P4-PR12
-     - Pending
-   * - P5-PR07
-     - x86 INT8/UINT8 kernels.
-     - AVX-VNNI, AVX-512VNNI, and AMX-INT8 paths fuse zero-point correction,
-       INT32 accumulation, and requantization with schema-defined overflow.
-     - P5-PR01
-     - Pending
-   * - P5-PR08
-     - ARM INT8/UINT8 kernels.
-     - NEON dot-product and SVE2 paths implement the same quantization contract
-       and retain a widening integer fallback.
-     - P5-PR01, P4-PR12
-     - Pending
-   * - P5-PR09
-     - INT32/INT64 exact kernels.
-     - MatMul integer schemas use vectorized multiply/add where profitable and
-       preserve exact schema-defined arithmetic in every fallback and tail.
-     - P5-PR01
-     - Pending
-   * - P5-PR10
-     - Float8 packing and kernels.
-     - Each supported Float8 encoding has explicit decode/packing, accumulation,
-       output conversion, dispatch, and differential tests.
-     - P5-PR01
-     - Pending
-   * - P5-PR11
-     - Packed INT4/UINT4 kernels.
-     - Packed nibble layouts unpack during packing or feed supported dot/tile
-       instructions directly, with INT32 accumulation and exact tail handling.
-     - P5-PR07, P5-PR08
-     - Pending
-   * - P5-PR12
-     - Final low-precision parity gate.
-     - Every supported low-precision type reaches at least 1.0x ONNX Runtime
-       median performance with no priority case below 0.9x; this PR remains
-       open while any supported target fails.
-     - P5-PR01 through P5-PR11
-     - Pending
-
-Remaining P6 execution checklist
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-P6 contains seven implementation items grouped into two roadmap PRs and ends
-with a complete materialized Attention correctness implementation.
-
-.. list-table::
-   :header-rows: 1
-   :widths: 10 29 39 12 10
-
-   * - Work item
-     - Exact scope
-     - Merge criterion
-     - Depends on
-     - Status
-   * - P6-PR01
-     - ``AttentionPlan`` contract and shape lowering.
-     - Immutable plans validate layouts, head geometry, GQA ratio, scale,
-       algorithm kind, block sizes, types, and useful thread count.
-     - P5-PR12
-     - Pending
-   * - P6-PR02
-     - Materialized FP32 MHA path.
-     - ``Q @ K^T``, scale, softmax, and ``P @ V`` produce ONNX Runtime-equivalent
-       outputs for the basic no-mask MHA cases.
-     - P6-PR01
-     - Pending
-   * - P6-PR03
-     - Mask and causal semantics.
-     - Boolean, additive, padding, causal, and combined masks cover boundary,
-       empty-sequence, and fully masked rows with differential tests.
-     - P6-PR02
-     - Pending
-   * - P6-PR04
-     - GQA and MQA lowering.
-     - Query heads map to shared K/V heads through zero-copy strides; K and V
-       are never physically repeated.
-     - P6-PR02
-     - Pending
-   * - P6-PR05
-     - Tensor past/present compatibility.
-     - Standard ONNX past/present inputs and outputs pass prefill, append, and
-       empty-cache differential tests for MHA/GQA/MQA.
-     - P6-PR03, P6-PR04
-     - Pending
-   * - P6-PR06
-     - Attention types and scheduler.
-     - FP32, FP16, and BF16 materialized paths use the shared scheduler across
-       batch/head/query work and pass all supported layout/type combinations.
-     - P6-PR05
-     - Pending
-   * - P6-PR07
-     - Materialized Attention correctness gate.
-     - The full Attention differential corpus passes against ONNX Runtime and
-       the implementation is registered as the fallback for combinations not
-       handled by streaming Attention.
-     - P6-PR01 through P6-PR06
-     - Pending
-
-Remaining P7 execution checklist
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-P7 contains ten implementation items grouped into three roadmap PRs and closes
-the complete roadmap.
-
-.. list-table::
-   :header-rows: 1
-   :widths: 10 29 39 12 10
-
-   * - Work item
-     - Exact scope
-     - Merge criterion
-     - Depends on
-     - Status
-   * - P7-PR01
-     - Scalar online-softmax recurrence.
-     - Blockwise running maximum, denominator, correction, and output
-       accumulator match the materialized path without storing full scores.
-     - P6-PR07
-     - Pending
-   * - P7-PR02
-     - Q x K score micro-kernels.
-     - SIMD score kernels fuse scale, mask application, causal bounds, and row
-       maximum for FP32 on x86 and ARM.
-     - P7-PR01, P4-PR13
-     - Pending
-   * - P7-PR03
-     - Vector exponential and row reductions.
-     - Exponential, maximum, and sum reductions meet the numerical tolerance
-       for ordinary, extreme, and fully masked score rows.
-     - P7-PR02
-     - Pending
-   * - P7-PR04
-     - Probability x V update micro-kernels.
-     - Probability blocks update query output accumulators directly with no
-       probability tensor and match the materialized reference.
-     - P7-PR01, P7-PR03
-     - Pending
-   * - P7-PR05
-     - Cache-aware Br/Bc blocking.
-     - Plans choose query/KV blocks from head dimension and cache capacity;
-       temporary memory is bounded by workers x Br x Bc.
-     - P7-PR04
-     - Pending
-   * - P7-PR06
-     - Causal, window, and sparse tile skipping.
-     - Wholly masked tiles are not computed, diagonal tiles are masked in place,
-       and sliding-window/sparse masks skip absent KV blocks.
-     - P7-PR05
-     - Pending
-   * - P7-PR07
-     - Prefill parallel scheduler.
-     - Batch, head, query-block, and KV work occupy useful threads without
-       nested pools or materialized score/probability tensors.
-     - P7-PR05, P4-PR10
-     - Pending
-   * - P7-PR08
-     - Short-query and single-token decode.
-     - Query lengths 1 and 2-16 select dedicated algorithms and meet the
-       bounded-memory contract for MHA/GQA/MQA with past/present tensors.
-     - P7-PR06, P7-PR07
-     - Pending
-   * - P7-PR09
-     - Low-precision streaming Attention.
-     - FP16/BF16 score and V-update kernels reuse P5 conversion/native paths,
-       accumulate safely, and match the materialized low-precision fallback.
-     - P7-PR08, P5-PR12
-     - Pending
-   * - P7-PR10
-     - Final Attention and roadmap parity gate.
-     - Every priority prefill/decode platform/type case uses bounded temporary
-       memory, reaches at least 1.0x ONNX Runtime median performance, and has no
-       priority case below 0.9x. This PR remains open while any target fails.
-     - P7-PR01 through P7-PR09
-     - Pending
-
-The 42 work items above are grouped into the following **15 remaining pull
-requests** after ``#149``. Each PR keeps its constituent work items as an
-internal merge checklist.
+The following table is the single source of truth for the **15 remaining pull
+requests** after ``#149``. Each row contains its complete implementation scope
+and merge criterion.
 
 .. list-table::
    :header-rows: 1
@@ -1060,87 +642,126 @@ internal merge checklist.
 
    * - PR
      - Scope
-     - Included work items
+     - Merge criterion
      - Depends on
      - Status
    * - Roadmap PR01
      - Scheduler, blocking, batch, and split-K.
-     - P4-PR01 through P4-PR03.
+     - The five-loop engine schedules the full row-panel x column-panel grid,
+       packs each B panel once, consumes ``useful_threads()``, and constrains
+       MC/NC to expose enough tasks. ``MatMulPlan``, ``StridedBatchedGemm``, and
+       ``GroupedGemm`` schedule small products without nested pools. Split-K is
+       used only when M/N/batch work is insufficient and uses packed SIMD
+       kernels with a tolerance-preserving reduction.
      - ``#149``
      - Pending
    * - Roadmap PR02
      - Broadcast and fused epilogues.
-     - P4-PR04 and P4-PR05.
+     - None, scalar, row, column, and full-matrix C layouts are consumed
+       directly for every alpha/beta case; the expanded M x N bias temporary
+       disappears. Priority bias, residual, activation, and output-conversion
+       combinations use typed epilogues without intermediate tensors.
      - PR01
      - Pending
    * - Roadmap PR03
      - Complete x86 kernel tuning.
-     - P4-PR06 through P4-PR08, including AVX2, AVX-512, microarchitecture
-       dispatch, and assembly required for parity.
+     - AVX2 and AVX-512 candidate MR/NR profiles, aligned panels/loads,
+       instruction ordering, and measured prefetch choices are benchmarked.
+       CPUID family/model dispatch selects the winners; remaining gaps receive
+       assembly kernels, with no priority-shape regression.
      - PR02
      - Pending
    * - Roadmap PR04
      - Complete thread runtime.
-     - P4-PR09 and P4-PR10: hybrid topology, affinity, spin/park, and external
-       pool cooperation.
+     - The scheduler detects physical cores, SMT siblings, P-cores, and E-cores
+       and applies tested Linux/Windows affinity. Bounded spin-before-park is
+       configurable, and caller-owned pools run without nested workers or
+       oversubscription.
      - PR01
      - Pending
    * - Roadmap PR05
      - ARM FP32/FP64 kernels.
-     - P4-PR11 and P4-PR12: NEON and SVE/SVE2.
+     - NEON packing, kernels, tails, and dispatch pass all GEMM/MatMul cases.
+       Runtime vector-length-aware SVE/SVE2 profiles pass the ARM correctness
+       and performance corpus with NEON fallback.
      - PR02
      - Pending
    * - Roadmap PR06
      - FP32/FP64 parity gate.
-     - P4-PR13; remains open until all P4 parity targets pass.
+     - Raw results cover every priority platform/type corpus; median speed-up
+       is at least 1.0x ONNX Runtime and no priority case is below 0.9x. The PR
+       remains open while any target fails.
      - PR01 through PR05
      - Pending
    * - Roadmap PR07
      - x86 FP16/BF16 kernel family.
-     - P5-PR01 through P5-PR05: framework, F16C, AVX-512FP16/BF16, and AMX.
+     - Immutable plans describe typed panels, FP32 accumulation, conversion
+       epilogues, and ISA gates without full-tensor conversion. F16C converts
+       while packing; AVX-512FP16/BF16 use native kernels; CPUID and OS tile
+       state safely gate AMX with AVX-512 fallbacks.
      - PR06
      - Pending
    * - Roadmap PR08
      - ARM FP16/BF16 kernel family.
-     - P5-PR06, reusing the ARM dispatch and scheduler from PR05.
+     - NEON and available SVE/SVE2 kernels convert or compute natively during
+       packing, accumulate in FP32, narrow only final output, and pass the
+       complete low-precision GEMM/MatMul corpus.
      - PR05, PR07
      - Pending
    * - Roadmap PR09
      - Integer, Float8, and packed 4-bit kernels.
-     - P5-PR07 through P5-PR11 across x86 and ARM.
+     - x86 VNNI/AMX and ARM dot-product paths fuse zero-point correction,
+       INT32 accumulation, requantization, and schema overflow. INT32/INT64
+       retain exact fallback arithmetic. Float8 formats have explicit
+       decode/packing, and packed INT4/UINT4 unpack or feed native dot/tile
+       instructions with exact tails.
      - PR07, PR08
      - Pending
    * - Roadmap PR10
      - Low-precision parity gate.
-     - P5-PR12; remains open until every supported low-precision target passes.
+     - Every supported low-precision type reaches at least 1.0x ONNX Runtime
+       median performance with no priority case below 0.9x where ONNX Runtime
+       supports the type; all other targets publish correctness and throughput.
+       The PR remains open while any target fails.
      - PR07 through PR09
      - Pending
    * - Roadmap PR11
      - Materialized Attention implementation.
-     - P6-PR01 through P6-PR06: plan, MHA, masks, GQA/MQA, past/present, types,
-       and scheduling.
+     - ``AttentionPlan`` validates layouts, head geometry, scale, masks, types,
+       blocks, and threads. The materialized QK-softmax-PV path supports
+       boolean/additive/padding/causal masks, zero-copy GQA/MQA head mapping,
+       tensor past/present, FP32/FP16/BF16, and batch/head/query scheduling.
      - PR10
      - Pending
    * - Roadmap PR12
      - Materialized Attention correctness gate.
-     - P6-PR07 and registration as the complete fallback path.
+     - The complete MHA/GQA/MQA, mask, causal, past/present, layout, empty
+       sequence, and type corpus matches ONNX Runtime; the path is registered
+       as fallback for combinations not handled by streaming Attention.
      - PR11
      - Pending
    * - Roadmap PR13
      - Online Attention compute engine.
-     - P7-PR01 through P7-PR06: recurrence, SIMD score/exp/V kernels, blocking,
-       and tile skipping.
+     - The online recurrence matches the materialized path. SIMD Q x K kernels
+       fuse scale, masks, causal bounds, and row maximum; vector exponential
+       and reductions are accurate; probability x V updates output directly.
+       Cache-aware Br/Bc bounds memory, while causal, window, and sparse masks
+       skip absent tiles.
      - PR12
      - Pending
    * - Roadmap PR14
      - Streaming Attention scheduling and types.
-     - P7-PR07 through P7-PR09: prefill, short-query/decode, and FP16/BF16.
+     - Batch/head/query-block prefill scheduling occupies useful threads
+       without nested pools. Query lengths 1 and 2-16 use dedicated decode
+       algorithms for MHA/GQA/MQA with past/present. FP16/BF16 score and
+       V-update kernels match the materialized fallback.
      - PR10, PR13
      - Pending
    * - Roadmap PR15
      - Final roadmap parity and memory gate.
-     - P7-PR10; remains open until all Attention performance and bounded-memory
-       targets pass.
+     - Every priority prefill/decode platform/type case has bounded temporary
+       memory, reaches at least 1.0x ONNX Runtime median performance, and has no
+       priority case below 0.9x. The PR remains open while any target fails.
      - PR14
      - Pending
 
