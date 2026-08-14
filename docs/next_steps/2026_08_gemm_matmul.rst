@@ -741,7 +741,7 @@ current status.
        configurable, and caller-owned pools run without nested workers or
        oversubscription.
      - PR01
-     - Pending
+     - Implemented; pull-request link pending.
    * - Roadmap PR05
      - ARM FP32/FP64 kernels.
      - NEON packing, kernels, tails, and dispatch pass all GEMM/MatMul cases.

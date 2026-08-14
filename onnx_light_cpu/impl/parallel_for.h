@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "onnx_light_cpu/impl/thread_topology.h"
+
 #include <algorithm>
 #include <atomic>
 #include <charconv>
@@ -17,6 +19,10 @@
 #include <type_traits>
 #include <utility>
 #include <vector>
+
+#if defined(_MSC_VER) && (defined(_M_X64) || defined(_M_IX86))
+#include <intrin.h>
+#endif
 
 /**
  * @file parallel_for.h
@@ -70,39 +76,97 @@ inline constexpr int64_t kParallelForMaxThreads = ONNX_LIGHT_CPU_MAX_THREADS;
 
 namespace detail {
 
-inline int64_t ResolveParallelForThreadCount(int64_t available, const char *configured) noexcept {
-  available = std::clamp<int64_t>(available, 1, kParallelForMaxThreads);
+inline int64_t ResolveParallelForThreadCount(int64_t logical_threads, int64_t physical_cores,
+                                             const char *configured) noexcept {
+  logical_threads = std::clamp<int64_t>(logical_threads, 1, kParallelForMaxThreads);
+  physical_cores = std::clamp<int64_t>(physical_cores, 1, logical_threads);
   if (configured == nullptr || *configured == '\0') {
-    return available;
+    return physical_cores;
   }
   const std::string_view text(configured);
   int64_t requested = 0;
   const auto result = std::from_chars(text.data(), text.data() + text.size(), requested);
   if (result.ec != std::errc{} || result.ptr != text.data() + text.size() || requested <= 0) {
-    return available;
+    return physical_cores;
   }
-  return std::min(available, requested);
+  return std::min(logical_threads, requested);
+}
+
+inline int64_t ResolveParallelForThreadCount(int64_t available, const char *configured) noexcept {
+  return ResolveParallelForThreadCount(available, available, configured);
+}
+
+inline int64_t ResolveParallelForSpinCount(const char *configured) noexcept {
+  constexpr int64_t default_spin_count = 2000;
+  constexpr int64_t maximum_spin_count = 1000000;
+  if (configured == nullptr || *configured == '\0') {
+    return default_spin_count;
+  }
+  const std::string_view text(configured);
+  int64_t requested = 0;
+  const auto result = std::from_chars(text.data(), text.data() + text.size(), requested);
+  if (result.ec != std::errc{} || result.ptr != text.data() + text.size() || requested < 0) {
+    return default_spin_count;
+  }
+  return std::min(requested, maximum_spin_count);
+}
+
+inline void ParallelForCpuRelax() noexcept {
+#if defined(_MSC_VER) && (defined(_M_X64) || defined(_M_IX86))
+  _mm_pause();
+#elif defined(__x86_64__) || defined(__i386__)
+  __builtin_ia32_pause();
+#elif defined(__aarch64__) || defined(__arm__)
+  __asm__ volatile("yield");
+#else
+  std::atomic_signal_fence(std::memory_order_seq_cst);
+#endif
+}
+
+inline int &ParallelRegionDepth() noexcept {
+  thread_local int depth = 0;
+  return depth;
 }
 
 } // namespace detail
 
 /// Returns the number of participating threads :cpp:func:`ParallelFor` may use.
 ///
-/// Resolves ``std::thread::hardware_concurrency()`` once, caps it at
-/// :cpp:var:`kParallelForMaxThreads`, applies the optional
-/// ``ONNX_LIGHT_CPU_NUM_THREADS`` process environment limit, and falls back to
-/// ``1`` when the hardware count is not available. The result is always
-/// ``>= 1`` and counts the calling thread, which always participates in the
-/// work. The environment is read once, before the process-wide pool is built.
-inline int64_t ParallelForThreadCount() noexcept {
+/// Uses one available logical thread per detected physical core by default,
+/// caps it at :cpp:var:`kParallelForMaxThreads`, and applies the optional
+/// ``ONNX_LIGHT_CPU_NUM_THREADS`` process environment limit. An explicit limit
+/// may consume SMT siblings after physical cores. The result is always ``>= 1``
+/// and counts the calling thread, which always participates in the work.
+inline int64_t ParallelForThreadCount() {
   static const int64_t thread_count = []() {
-    const unsigned int cores = std::thread::hardware_concurrency();
-    const int64_t available = cores == 0 ? int64_t{1} : static_cast<int64_t>(cores);
-    return detail::ResolveParallelForThreadCount(available,
-                                                 std::getenv("ONNX_LIGHT_CPU_NUM_THREADS"));
+    const CpuTopology &topology = GetCpuTopology();
+    return detail::ResolveParallelForThreadCount(
+        static_cast<int64_t>(topology.logical_thread_count),
+        static_cast<int64_t>(topology.physical_core_count),
+        std::getenv("ONNX_LIGHT_CPU_NUM_THREADS"));
   }();
   return thread_count;
 }
+
+inline int64_t ParallelForSpinCount() noexcept {
+  static const int64_t spin_count =
+      detail::ResolveParallelForSpinCount(std::getenv("ONNX_LIGHT_CPU_SPIN_COUNT"));
+  return spin_count;
+}
+
+/// Marks work dispatched by a caller-owned thread pool.
+///
+/// Construct this guard inside each caller worker before invoking a kernel.
+/// Any nested :cpp:func:`ParallelFor` then runs inline on that worker instead
+/// of waking the process-wide pool, avoiding nested workers and
+/// oversubscription.
+class ParallelForExternalRegion {
+public:
+  ParallelForExternalRegion() noexcept { ++detail::ParallelRegionDepth(); }
+  ParallelForExternalRegion(const ParallelForExternalRegion &) = delete;
+  ParallelForExternalRegion &operator=(const ParallelForExternalRegion &) = delete;
+  ~ParallelForExternalRegion() { --detail::ParallelRegionDepth(); }
+};
 
 /// Number of ``T`` elements the widest SIMD register processes at once.
 ///
@@ -135,7 +199,7 @@ template <typename T> inline constexpr int64_t ParallelForSimdLanes() noexcept {
  * @return The number of contiguous blocks to split ``[0, total)`` into. A
  *         return value of ``1`` means "run inline, do not parallelize".
  */
-inline int64_t ParallelForBlockCount(int64_t total, double cost_per_element = 1.0) noexcept {
+inline int64_t ParallelForBlockCount(int64_t total, double cost_per_element = 1.0) {
   if (total <= 0) {
     return 0;
   }
@@ -167,9 +231,9 @@ inline int64_t ParallelForBlockCount(int64_t total, double cost_per_element = 1.
  * A persistent pool of worker threads that stay alive between parallel regions.
  *
  * Unlike spawning fresh ``std::thread`` objects per call, the workers are
- * created once and parked on a condition variable, so dispatching a region only
- * costs a notify plus a wait instead of thread creation/teardown. This keeps the
- * per-call overhead low for kernels invoked many times.
+ * created once and use a configurable, bounded spin before parking on a
+ * condition variable, so dispatching nearby regions often avoids a scheduler
+ * wakeup without busy-waiting indefinitely.
  *
  * The pool exposes a single primitive, :cpp:func:`Run`, that executes a set of
  * indexed blocks with a static assignment: block ``0`` runs on the calling
@@ -188,14 +252,19 @@ public:
   /// Type-erased block callable: ``fn(context, block_index)``.
   using TaskFn = void (*)(void *, int64_t);
 
-  /// Creates a pool with ``num_workers`` parked worker threads.
+  /// Creates a pool with ``num_workers`` persistent worker threads.
   ///
   /// @param num_workers Number of worker threads to spawn. Values ``<= 0``
   ///                    create a pool with no workers, in which case
   ///                    :cpp:func:`Run` executes every block on the caller.
-  explicit ThreadPool(int64_t num_workers) {
+  /// @param affinities  Optional processor targets, one per worker.
+  explicit ThreadPool(int64_t num_workers, std::vector<CpuAffinity> affinities = {})
+      : affinities_(std::move(affinities)) {
     if (num_workers < 0) {
       num_workers = 0;
+    }
+    if (affinities_.size() > static_cast<std::size_t>(num_workers)) {
+      affinities_.resize(static_cast<std::size_t>(num_workers));
     }
     workers_.reserve(static_cast<size_t>(num_workers));
     for (int64_t i = 0; i < num_workers; ++i) {
@@ -209,8 +278,8 @@ public:
   ~ThreadPool() {
     {
       std::lock_guard<std::mutex> lock(mu_);
-      stop_ = true;
-      ++generation_;
+      stop_.store(true, std::memory_order_release);
+      generation_.fetch_add(1, std::memory_order_release);
     }
     cv_work_.notify_all();
     for (std::thread &worker : workers_) {
@@ -224,7 +293,7 @@ public:
   int64_t worker_count() const noexcept { return static_cast<int64_t>(workers_.size()); }
 
   /// Returns true while the calling thread executes a pool region.
-  static bool IsInParallelRegion() noexcept { return InPool(); }
+  static bool IsInParallelRegion() noexcept { return detail::ParallelRegionDepth() != 0; }
 
   /**
    * Runs ``fn(block)`` for every ``block`` in ``[0, num_blocks)``, then blocks
@@ -243,7 +312,7 @@ public:
     if (num_blocks <= 0) {
       return;
     }
-    if (workers_.empty() || num_blocks == 1 || InPool()) {
+    if (workers_.empty() || num_blocks == 1 || IsInParallelRegion()) {
       // No workers, a single block, or a nested call from within a running
       // block: run inline serially to stay correct and deadlock-free.
       for (int64_t b = 0; b < num_blocks; ++b) {
@@ -265,34 +334,43 @@ public:
       task_fn_ = invoker;
       num_blocks_ = num_blocks;
       remaining_.store(num_blocks - 1, std::memory_order_relaxed);
-      ++generation_;
+      generation_.fetch_add(1, std::memory_order_release);
     }
     cv_work_.notify_all();
 
     // The calling thread runs block 0. Mark it in-pool so a nested ParallelFor
     // launched from fn falls back to the serial path.
-    bool &in_pool = InPoolFlag();
-    const bool was_in_pool = in_pool;
-    in_pool = true;
+    int &depth = detail::ParallelRegionDepth();
+    ++depth;
     fn(static_cast<int64_t>(0));
-    in_pool = was_in_pool;
+    --depth;
 
+    for (int64_t spin = 0; spin < ParallelForSpinCount(); ++spin) {
+      if (remaining_.load(std::memory_order_acquire) == 0) {
+        return;
+      }
+      detail::ParallelForCpuRelax();
+    }
     std::unique_lock<std::mutex> lock(mu_);
     cv_done_.wait(lock, [this]() { return remaining_.load(std::memory_order_acquire) == 0; });
   }
 
 private:
-  static bool &InPoolFlag() noexcept {
-    thread_local bool in_pool = false;
-    return in_pool;
-  }
-  static bool InPool() noexcept { return InPoolFlag(); }
-
   void WorkerLoop(int64_t worker_index) {
-    InPoolFlag() = true;
+    if (static_cast<std::size_t>(worker_index) < affinities_.size()) {
+      SetCurrentThreadAffinity(affinities_[static_cast<std::size_t>(worker_index)]);
+    }
+    detail::ParallelRegionDepth() = 1;
     const int64_t my_block = worker_index + 1;
     uint64_t last_generation = 0;
     for (;;) {
+      for (int64_t spin = 0; spin < ParallelForSpinCount(); ++spin) {
+        if (stop_.load(std::memory_order_acquire) ||
+            generation_.load(std::memory_order_acquire) != last_generation) {
+          break;
+        }
+        detail::ParallelForCpuRelax();
+      }
       void *ctx = nullptr;
       TaskFn fn = nullptr;
       int64_t num_blocks = 0;
@@ -300,12 +378,14 @@ private:
         // Snapshot the whole region under the lock so each wake processes
         // exactly one generation and never mixes fields across regions.
         std::unique_lock<std::mutex> lock(mu_);
-        cv_work_.wait(
-            lock, [this, last_generation]() { return stop_ || generation_ != last_generation; });
-        if (stop_) {
+        cv_work_.wait(lock, [this, last_generation]() {
+          return stop_.load(std::memory_order_acquire) ||
+                 generation_.load(std::memory_order_acquire) != last_generation;
+        });
+        if (stop_.load(std::memory_order_acquire)) {
           return;
         }
-        last_generation = generation_;
+        last_generation = generation_.load(std::memory_order_acquire);
         ctx = task_ctx_;
         fn = task_fn_;
         num_blocks = num_blocks_;
@@ -314,7 +394,6 @@ private:
         fn(ctx, my_block);
         if (remaining_.fetch_sub(1, std::memory_order_acq_rel) == 1) {
           // Last worker block of the region finished: wake the waiting caller.
-          std::lock_guard<std::mutex> lock(mu_);
           cv_done_.notify_one();
         }
       }
@@ -322,6 +401,7 @@ private:
   }
 
   std::vector<std::thread> workers_;
+  std::vector<CpuAffinity> affinities_;
   std::mutex mu_;
   std::mutex region_mu_;
   std::condition_variable cv_work_;
@@ -330,8 +410,8 @@ private:
   TaskFn task_fn_ = nullptr;
   int64_t num_blocks_ = 0;
   std::atomic<int64_t> remaining_{0};
-  uint64_t generation_ = 0;
-  bool stop_ = false;
+  std::atomic<uint64_t> generation_{0};
+  std::atomic<bool> stop_{false};
 };
 
 /// Returns the process-wide :cpp:class:`ThreadPool` used by :cpp:func:`ParallelFor`.
@@ -341,7 +421,42 @@ private:
 /// for the remainder of the process. Threads are therefore created once and
 /// reused across every ``ParallelFor`` call.
 inline ThreadPool &GlobalThreadPool() {
-  static ThreadPool pool(ParallelForThreadCount() - 1);
+  static const std::vector<CpuAffinity> worker_affinities = []() {
+    const CpuTopology &topology = GetCpuTopology();
+    std::vector<CpuAffinity> affinities =
+        SelectCpuAffinities(topology, static_cast<std::size_t>(ParallelForThreadCount()));
+    CpuAffinity current;
+    if (GetCurrentThreadAffinity(current)) {
+      const auto current_thread = std::find_if(
+          topology.threads.begin(), topology.threads.end(), [current](const CpuThread &thread) {
+            return thread.affinity.group == current.group && thread.affinity.index == current.index;
+          });
+      if (current_thread != topology.threads.end()) {
+        const auto same_core =
+            std::find_if(affinities.begin(), affinities.end(),
+                         [&topology, current_thread](const CpuAffinity &affinity) {
+                           const auto thread =
+                               std::find_if(topology.threads.begin(), topology.threads.end(),
+                                            [affinity](const CpuThread &candidate) {
+                                              return candidate.affinity.group == affinity.group &&
+                                                     candidate.affinity.index == affinity.index;
+                                            });
+                           return thread != topology.threads.end() &&
+                                  thread->core_index == current_thread->core_index;
+                         });
+        if (same_core != affinities.end()) {
+          affinities.erase(same_core);
+        }
+      }
+    }
+    const std::size_t worker_count =
+        static_cast<std::size_t>(std::max<int64_t>(0, ParallelForThreadCount() - 1));
+    if (affinities.size() > worker_count) {
+      affinities.resize(worker_count);
+    }
+    return affinities;
+  }();
+  static ThreadPool pool(ParallelForThreadCount() - 1, worker_affinities);
   return pool;
 }
 

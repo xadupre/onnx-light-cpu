@@ -7,21 +7,36 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <mutex>
+#include <set>
+#include <thread>
 #include <utility>
 #include <vector>
 
 namespace {
 
+using onnx_light_cpu::CpuAffinity;
+using onnx_light_cpu::CpuCoreKind;
+using onnx_light_cpu::CpuThread;
+using onnx_light_cpu::CpuTopology;
+using onnx_light_cpu::GetCpuTopology;
+using onnx_light_cpu::GetCurrentThreadAffinity;
 using onnx_light_cpu::kParallelForGrainSize;
 using onnx_light_cpu::kParallelForMaxThreads;
 using onnx_light_cpu::ParallelFor;
 using onnx_light_cpu::ParallelForBlockCount;
+using onnx_light_cpu::ParallelForExternalRegion;
 using onnx_light_cpu::ParallelForSimdLanes;
+using onnx_light_cpu::ParallelForSpinCount;
 using onnx_light_cpu::ParallelForThreadCount;
+using onnx_light_cpu::SelectCpuAffinities;
+using onnx_light_cpu::ThreadPool;
+using onnx_light_cpu::detail::ResolveParallelForSpinCount;
 using onnx_light_cpu::detail::ResolveParallelForThreadCount;
 
 // ---------------------------------------------------------------------------
@@ -30,7 +45,12 @@ using onnx_light_cpu::detail::ResolveParallelForThreadCount;
 
 TEST(ParallelForThreadCount, IsStableAndCapped) {
   const int64_t first = ParallelForThreadCount();
+  const CpuTopology &topology = GetCpuTopology();
   EXPECT_EQ(ParallelForThreadCount(), first);
+  EXPECT_EQ(first,
+            ResolveParallelForThreadCount(static_cast<int64_t>(topology.logical_thread_count),
+                                          static_cast<int64_t>(topology.physical_core_count),
+                                          std::getenv("ONNX_LIGHT_CPU_NUM_THREADS")));
   EXPECT_GE(first, 1);
   EXPECT_LE(first, kParallelForMaxThreads);
 }
@@ -45,6 +65,90 @@ TEST(ParallelForThreadCount, ResolvesRuntimeLimit) {
   EXPECT_EQ(ResolveParallelForThreadCount(8, "0"), default_count);
   EXPECT_EQ(ResolveParallelForThreadCount(8, "-1"), default_count);
   EXPECT_EQ(ResolveParallelForThreadCount(8, "invalid"), default_count);
+}
+
+TEST(ParallelForThreadCount, DefaultsToPhysicalCoresAndAllowsExplicitSmt) {
+  EXPECT_EQ(ResolveParallelForThreadCount(16, 8, nullptr),
+            std::min<int64_t>(8, kParallelForMaxThreads));
+  EXPECT_EQ(ResolveParallelForThreadCount(16, 8, ""), std::min<int64_t>(8, kParallelForMaxThreads));
+  EXPECT_EQ(ResolveParallelForThreadCount(16, 8, "12"),
+            std::min<int64_t>(12, kParallelForMaxThreads));
+  EXPECT_EQ(ResolveParallelForThreadCount(4, 2, "12"),
+            std::min<int64_t>(4, kParallelForMaxThreads));
+}
+
+TEST(ParallelForSpinCount, ResolvesBoundedConfiguration) {
+  EXPECT_EQ(ResolveParallelForSpinCount(nullptr), 2000);
+  EXPECT_EQ(ResolveParallelForSpinCount(""), 2000);
+  EXPECT_EQ(ResolveParallelForSpinCount("0"), 0);
+  EXPECT_EQ(ResolveParallelForSpinCount("4096"), 4096);
+  EXPECT_EQ(ResolveParallelForSpinCount("2000000"), 1000000);
+  EXPECT_EQ(ResolveParallelForSpinCount("-1"), 2000);
+  EXPECT_EQ(ResolveParallelForSpinCount("invalid"), 2000);
+  EXPECT_GE(ParallelForSpinCount(), 0);
+  EXPECT_LE(ParallelForSpinCount(), 1000000);
+}
+
+TEST(CpuTopology, DetectsUsableProcessorCounts) {
+  const CpuTopology &topology = GetCpuTopology();
+  EXPECT_GE(topology.logical_thread_count, 1u);
+  EXPECT_GE(topology.physical_core_count, 1u);
+  EXPECT_LE(topology.physical_core_count, topology.logical_thread_count);
+  EXPECT_EQ(topology.logical_thread_count, topology.threads.size());
+  EXPECT_LE(topology.performance_core_count + topology.efficiency_core_count,
+            topology.physical_core_count);
+}
+
+TEST(CpuTopology, SelectsPhysicalPerformanceCoresBeforeEfficiencyAndSmt) {
+  CpuTopology topology;
+  topology.logical_thread_count = 5;
+  topology.physical_core_count = 3;
+  topology.performance_core_count = 1;
+  topology.efficiency_core_count = 1;
+  topology.threads = {
+      CpuThread{{0, 4}, 2, CpuCoreKind::kEfficiency, true},
+      CpuThread{{0, 1}, 0, CpuCoreKind::kPerformance, false},
+      CpuThread{{0, 3}, 1, CpuCoreKind::kUnknown, false},
+      CpuThread{{0, 0}, 0, CpuCoreKind::kPerformance, true},
+      CpuThread{{0, 2}, 1, CpuCoreKind::kUnknown, true},
+  };
+
+  const std::vector<CpuAffinity> affinities = SelectCpuAffinities(topology, 5);
+
+  ASSERT_EQ(affinities.size(), 5u);
+  EXPECT_EQ(affinities[0].index, 0u);
+  EXPECT_EQ(affinities[1].index, 2u);
+  EXPECT_EQ(affinities[2].index, 4u);
+  EXPECT_EQ(affinities[3].index, 1u);
+  EXPECT_EQ(affinities[4].index, 3u);
+}
+
+TEST(ThreadPool, PinsWorkersToSelectedProcessors) {
+#if defined(__linux__) || defined(_WIN32)
+  std::vector<CpuAffinity> affinities = SelectCpuAffinities(GetCpuTopology(), 2);
+  if (affinities.size() < 2) {
+    GTEST_SKIP() << "Affinity test requires at least two available processors.";
+  }
+  affinities.erase(affinities.begin());
+  ThreadPool pool(1, affinities);
+  std::array<CpuAffinity, 1> observed = {};
+  std::array<bool, 1> detected = {};
+
+  pool.Run(2, [&](int64_t block) {
+    if (block > 0) {
+      detected[static_cast<std::size_t>(block - 1)] =
+          GetCurrentThreadAffinity(observed[static_cast<std::size_t>(block - 1)]);
+    }
+  });
+
+  for (std::size_t index = 0; index < affinities.size(); ++index) {
+    ASSERT_TRUE(detected[index]);
+    EXPECT_EQ(observed[index].group, affinities[index].group);
+    EXPECT_EQ(observed[index].index, affinities[index].index);
+  }
+#else
+  GTEST_SKIP() << "Thread affinity is only applied on Linux and Windows.";
+#endif
 }
 
 TEST(ParallelForBlockCount, NonPositiveTotalIsZero) {
@@ -161,6 +265,19 @@ TEST(ParallelFor, NestedCallStaysCorrect) {
   // every inner iteration was counted a whole number of times.
   EXPECT_EQ(sum.load(std::memory_order_relaxed) % inner, 0);
   EXPECT_GT(sum.load(std::memory_order_relaxed), 0);
+}
+
+TEST(ParallelFor, ExternalRegionDoesNotWakeNestedWorkers) {
+  std::set<std::thread::id> threads;
+  std::mutex mutex;
+  {
+    ParallelForExternalRegion external_region;
+    ParallelFor(kParallelForGrainSize * 8, /*cost_per_element=*/64.0, [&](int64_t, int64_t) {
+      std::lock_guard<std::mutex> lock(mutex);
+      threads.insert(std::this_thread::get_id());
+    });
+  }
+  EXPECT_EQ(threads.size(), 1u);
 }
 
 // ---------------------------------------------------------------------------

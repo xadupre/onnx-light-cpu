@@ -73,7 +73,7 @@ are the raw ``uint8_t`` byte patterns):
 Parallel iteration helper
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-``onnx_light_cpu/impl/parallel_for.h`` provides a header-only, cost-aware
+``onnx_light_cpu/impl/parallel_for.h`` provides a cost-aware
 ``ParallelFor`` built on a persistent thread pool (workers are created once and
 reused). Before dispatching any worker threads it consults a small cost model,
 ``ParallelForBlockCount``, that combines the processor (hardware thread count)
@@ -92,7 +92,22 @@ of the range. ``ParallelForSimdLanes<T>()`` returns the lane count for element
 type ``T`` at the widest supported register (AVX-512, 64 bytes): 16 for
 ``float``, 8 for ``double``, 32 for a 2-byte half, 64 for ``std::int8_t``.
 
+The pool discovers physical cores, SMT siblings, and hybrid performance versus
+efficiency cores. It uses one thread per physical core by default, pins workers
+on Linux and Windows, and only consumes SMT siblings when explicitly requested.
+``ONNX_LIGHT_CPU_SPIN_COUNT`` controls the bounded spin-before-park budget
+(``2000`` by default, ``0`` to park immediately). Code running kernels from an
+application-owned pool should construct ``ParallelForExternalRegion`` inside
+each caller worker; nested kernel parallelism then stays inline and cannot
+oversubscribe the caller's pool.
+
 .. doxygenfunction:: onnx_light_cpu::ParallelForThreadCount
+   :project: onnx_light_cpu
+
+.. doxygenfunction:: onnx_light_cpu::ParallelForSpinCount
+   :project: onnx_light_cpu
+
+.. doxygenclass:: onnx_light_cpu::ParallelForExternalRegion
    :project: onnx_light_cpu
 
 .. doxygenfunction:: onnx_light_cpu::ParallelForSimdLanes

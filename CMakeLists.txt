@@ -220,8 +220,8 @@ target_compile_features(lib_onnx_light_cpu PUBLIC cxx_std_20)
 target_compile_definitions(lib_onnx_light_cpu PUBLIC
     ONNX_LIGHT_CPU_MAX_THREADS=${ONNX_LIGHT_CPU_MAX_THREADS})
 
-# The kernels dispatch large ranges through the header-only ParallelFor helper,
-# which uses std::thread; link the platform threading library.
+# The kernels dispatch large ranges through the ParallelFor helper, which uses
+# std::thread; link the platform threading library.
 target_link_libraries(lib_onnx_light_cpu PUBLIC Threads::Threads)
 
 # Apply SIMD flags to the kernel library.
@@ -587,6 +587,7 @@ if(ONNX_LIGHT_CPU_INSTALL)
 
   install(FILES
       "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/parallel_for.h"
+      "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/thread_topology.h"
       DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/onnx_light_cpu/impl")
 
   install(FILES
