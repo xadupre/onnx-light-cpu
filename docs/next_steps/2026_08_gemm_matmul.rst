@@ -715,3 +715,111 @@ require measurements on dedicated hardware.
      - P4 and P6.
      - Planned.
      - TBD.
+
+Remaining P4 pull-request sequence
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Exactly thirteen pull requests remain after ``#149`` to close P4. Their scope
+and order are fixed below. A row is not split and no new prerequisite is added
+without an explicit roadmap revision. Every PR updates this table with its
+link and resulting status.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 10 29 39 12 10
+
+   * - PR
+     - Exact scope
+     - Merge criterion
+     - Depends on
+     - Status
+   * - P4-PR01
+     - Full M x N scheduler and task-aware blocking.
+     - The five-loop engine schedules the row-panel x column-panel grid, packs
+       each B panel once, consumes ``useful_threads()``, and constrains MC/NC
+       so priority shapes expose enough independent tasks.
+     - ``#149``
+     - Pending
+   * - P4-PR02
+     - Batch scheduler for ``MatMulPlan``, ``StridedBatchedGemm``, and
+       ``GroupedGemm``.
+     - Small independent products run across the shared scheduler without
+       nested pools; one product retains its internal M x N decomposition when
+       that is more efficient.
+     - P4-PR01
+     - Pending
+   * - P4-PR03
+     - Packed SIMD split-K.
+     - Split-K is selected only when M/N/batch tasks are insufficient; each
+       partition uses the packed SIMD micro-kernel and the reduction preserves
+       the documented FP32/FP64 tolerances.
+     - P4-PR01, P4-PR02
+     - Pending
+   * - P4-PR04
+     - Direct broadcast-bias epilogues.
+     - None, scalar, row, column, and full-matrix C layouts are consumed
+       directly by scalar and SIMD kernels for all alpha/beta cases; the
+       M x N expanded bias temporary is removed.
+     - P4-PR01
+     - Pending
+   * - P4-PR05
+     - Fused model epilogues.
+     - Priority bias, residual, activation, and output-conversion combinations
+       execute through typed epilogue functions without intermediate tensors,
+       with differential correctness tests.
+     - P4-PR04
+     - Pending
+   * - P4-PR06
+     - AVX2/FMA profile tuning.
+     - Candidate MR/NR profiles, aligned panel buffers/loads, instruction
+       ordering, and measured prefetch choices are benchmarked; the winning
+       profile is selected without regressing any priority AVX2 shape.
+     - P4-PR05
+     - Pending
+   * - P4-PR07
+     - AVX-512 profile tuning.
+     - Candidate MR/NR profiles, aligned panel buffers/loads, instruction
+       ordering, and measured prefetch choices are benchmarked; the winning
+       profile is selected without regressing any priority AVX-512 shape.
+     - P4-PR05
+     - Pending
+   * - P4-PR08
+     - x86 microarchitecture dispatch and assembly completion.
+     - CPUID family/model dispatch selects the measured AVX2/AVX-512 profile;
+       remaining parity gaps receive hand-written assembly kernels and all
+       priority x86 families pass their single-thread kernel targets.
+     - P4-PR06, P4-PR07
+     - Pending
+   * - P4-PR09
+     - Hybrid CPU topology and affinity.
+     - The scheduler distinguishes physical cores, SMT siblings, P-cores, and
+       E-cores and applies a tested size-dependent placement policy on
+       supported Linux and Windows targets.
+     - P4-PR01
+     - Pending
+   * - P4-PR10
+     - Worker lifecycle and external-pool cooperation.
+     - Configurable bounded spin-before-park is implemented; a caller-owned
+       pool can be used without creating nested workers or oversubscribing the
+       process.
+     - P4-PR09
+     - Pending
+   * - P4-PR11
+     - ARM64 NEON FP32/FP64 kernels.
+     - NEON packing, micro-kernels, dispatch, tails, and all GEMM/MatMul
+       correctness cases pass on ARM64.
+     - P4-PR05
+     - Pending
+   * - P4-PR12
+     - ARM SVE/SVE2 profiles.
+     - Runtime vector-length-aware SVE/SVE2 kernels and feature dispatch pass
+       the priority ARM correctness and performance corpus, with NEON fallback.
+     - P4-PR11
+     - Pending
+   * - P4-PR13
+     - Final ONNX Runtime parity gate.
+     - Raw results are published for every priority platform/type corpus; the
+       median speed-up is at least 1.0x and no priority case is below 0.9x.
+       This PR remains open while any result fails.
+     - P4-PR01 through P4-PR12
+     - Pending
