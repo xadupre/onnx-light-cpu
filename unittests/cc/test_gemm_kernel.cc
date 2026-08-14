@@ -111,6 +111,23 @@ TEST(GemmFloat32, TransposeVariants) {
   }
 }
 
+TEST(GemmFloat32, SpecializedRowVariantsMatchReference) {
+  const std::size_t N = 19, K = 40;
+  for (std::size_t M = 1; M <= 4; ++M) {
+    const auto A = RandomVector(M * K, static_cast<unsigned>(80 + M));
+    const auto B = RandomVector(K * N, static_cast<unsigned>(90 + M));
+    const auto expected = ReferenceGemm<float>(false, false, M, N, K, 1.0f, A, B, 0.0f, nullptr);
+    std::vector<float> Y(M * N, 0.0f);
+
+    onnx_light_cpu::GemmFloat32(false, false, M, N, K, 1.0f, A.data(), B.data(), 0.0f, nullptr,
+                                Y.data());
+
+    for (std::size_t i = 0; i < M * N; ++i) {
+      EXPECT_NEAR(Y[i], expected[i], 2e-3f) << "M=" << M << " i=" << i;
+    }
+  }
+}
+
 TEST(GemmFloat32, BetaZeroIgnoresBias) {
   const std::size_t M = 3, N = 3, K = 3;
   const auto A = RandomVector(M * K, 6);
@@ -283,6 +300,23 @@ TEST(GemmFloat64, TransposeVariants) {
         EXPECT_NEAR(Y[i], expected[i], 1e-9)
             << "trans_a=" << trans_a << " trans_b=" << trans_b << " i=" << i;
       }
+    }
+  }
+}
+
+TEST(GemmFloat64, SpecializedRowVariantsMatchReference) {
+  const std::size_t N = 11, K = 40;
+  for (std::size_t M = 1; M <= 4; ++M) {
+    const auto A = RandomVectorD(M * K, static_cast<unsigned>(100 + M));
+    const auto B = RandomVectorD(K * N, static_cast<unsigned>(110 + M));
+    const auto expected = ReferenceGemm<double>(false, false, M, N, K, 1.0, A, B, 0.0, nullptr);
+    std::vector<double> Y(M * N, 0.0);
+
+    onnx_light_cpu::GemmFloat64(false, false, M, N, K, 1.0, A.data(), B.data(), 0.0, nullptr,
+                                Y.data());
+
+    for (std::size_t i = 0; i < M * N; ++i) {
+      EXPECT_NEAR(Y[i], expected[i], 1e-9) << "M=" << M << " i=" << i;
     }
   }
 }
