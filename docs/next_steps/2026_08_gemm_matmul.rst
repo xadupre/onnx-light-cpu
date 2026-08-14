@@ -588,7 +588,9 @@ require measurements on dedicated hardware.
      - AVX2+FMA and AVX-512 micro-kernels implemented; ARM kernels, scheduler
        tuning, and the performance gate remain.
      - `onnx-light-cpu #133
-       <https://github.com/xadupre/onnx-light-cpu/pull/133>`_
+       <https://github.com/xadupre/onnx-light-cpu/pull/133>`_,
+       `onnx-light-cpu #141
+       <https://github.com/xadupre/onnx-light-cpu/pull/141>`_
    * - P5
      - Native/panel-converted FP16, BF16, and integer paths.
      - Low-precision corpus reaches 0.9x MLAS where MLAS supports the type.
