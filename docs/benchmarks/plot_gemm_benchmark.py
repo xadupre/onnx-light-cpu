@@ -174,10 +174,7 @@ def run_light(a, b):
     return light_session.run(None, {"A": a, "B": b})[0]
 
 
-# Confirm the baseline remains bound to onnx-light's built-in kernel while the
-# new session dispatches to onnx-light-cpu. ``ReferenceEvaluator.used_kernels``
-# only reports the operator identifier, so use onnx-light-cpu's C++ usage log
-# to verify the exact library-qualified implementation name.
+# Confirm the baseline remains bound to onnx-light's built-in kernel.
 _probe = rng.standard_normal((size_grid[0], size_grid[0])).astype(np.float32)
 accelerated_kernel_name = registered_kernel_names()["Gemm"]
 clear_used_kernel_names()
@@ -185,18 +182,10 @@ alone_session.run(None, {"A": _probe, "B": _probe})
 baseline_kernel_names = used_kernel_names()
 assert accelerated_kernel_name not in baseline_kernel_names, baseline_kernel_names
 
-clear_used_kernel_names()
-run_light(_probe, _probe)
-accelerated_kernel_names = used_kernel_names()
-assert accelerated_kernel_name in accelerated_kernel_names, accelerated_kernel_names
-print(
-    "verified distinct Gemm implementations: "
-    f"baseline={baseline_kernel_names or ['onnx-light built-in']}, "
-    f"accelerated={accelerated_kernel_names}"
-)
 # onnx-light-cpu kernels record their name on every run (a mutex per call);
 # only the accelerated curve would pay that cost, so disable recording to keep
-# the timings below fair.
+# the timings fair. Recording is briefly re-enabled below to verify the exact
+# implementation used for every benchmark size.
 set_kernel_usage_recording(False)
 
 
@@ -216,6 +205,13 @@ for size in size_grid:
     a = rng.standard_normal((size, size)).astype(np.float32)
     b = rng.standard_normal((size, size)).astype(np.float32)
     expected = a @ b
+
+    set_kernel_usage_recording(True)
+    clear_used_kernel_names()
+    run_light(a, b)
+    accelerated_kernel_names = used_kernel_names()
+    assert accelerated_kernel_name in accelerated_kernel_names, accelerated_kernel_names
+    set_kernel_usage_recording(False)
 
     repeat = max(7, min(100, 20_000_000 // (size * size * size)))
 
@@ -256,6 +252,11 @@ for size in size_grid:
         f"onnxruntime={ort_time * 1e6:10.2f} us"
     )
 
+print(
+    "verified distinct Gemm implementations for every benchmark size: "
+    f"baseline={baseline_kernel_names or ['onnx-light built-in']}, "
+    f"accelerated={accelerated_kernel_name}"
+)
 set_kernel_usage_recording(True)
 
 sizes = np.array([r[0] for r in rows])

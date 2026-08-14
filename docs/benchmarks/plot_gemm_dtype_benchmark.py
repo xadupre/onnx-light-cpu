@@ -71,8 +71,10 @@ from onnx_light.onnx import TensorProto, checker, helper
 from onnx_light.onnx.reference import ReferenceEvaluator
 
 from onnx_light_cpu import (
+    clear_used_kernel_names,
     register_kernels,
     registered_kernel_names,
+    used_kernel_names,
 )
 from onnx_light_cpu.onnx_py._cpukernels import detect_simd_level, has_cpu_kernels
 from onnx_light_cpu.onnx_py._cpuregister import set_kernel_usage_recording
@@ -211,24 +213,11 @@ ort_sessions = {
     for label in ("float32", "float16")
 }
 
-# Confirm these sessions dispatch ``Gemm`` to onnx-light-cpu's accelerated
-# kernel rather than onnx-light's built-in one. ``register_kernels()`` installed
-# onnx-light-cpu's kernels (``registered_kernel_names()`` lists the ops it
-# overrides) into onnx-light's process-wide dispatch table, and onnx-light's
-# ``ReferenceEvaluator.used_kernels()`` reports the kernels a session actually
-# resolved once it has run. Because the baseline session above was built and run
-# *before* ``register_kernels()``, its ``Gemm`` resolved to the built-in kernel,
-# so the two curves genuinely use different kernels.
-_probe = np.zeros((64, 64), dtype=np.float32)
-sessions["float32"].run(None, {"A": _probe, "B": _probe})
-accelerated_ops = set(registered_kernel_names())
-used_kernels = sessions["float32"].used_kernels()
-used_ops = {key.rsplit(":", 1)[-1] for key in used_kernels}
-assert "Gemm" in used_ops & accelerated_ops, used_kernels
-print(f"onnx-light-cpu kernels dispatched by the accelerated session: {used_kernels}")
+accelerated_kernel_name = registered_kernel_names()["Gemm"]
 # onnx-light-cpu kernels record their name on every run (a mutex per call);
 # only the accelerated curves would pay that cost, so disable recording to keep
-# the timings below fair.
+# the timings fair. Recording is briefly re-enabled below to verify the exact
+# implementation used for every benchmark shape and dtype.
 set_kernel_usage_recording(False)
 
 
@@ -266,6 +255,14 @@ for shape_label, M, N, K in SHAPES:
         )
         for label in DTYPES
     )
+    for label, run in zip(DTYPES, runs, strict=True):
+        set_kernel_usage_recording(True)
+        clear_used_kernel_names()
+        run()
+        kernel_names = used_kernel_names()
+        assert accelerated_kernel_name in kernel_names, (label, shape_label, kernel_names)
+        set_kernel_usage_recording(False)
+
     elapsed_by_label = dict(
         zip(
             DTYPES,
@@ -310,6 +307,7 @@ for shape_label, M, N, K in SHAPES:
             ort_text = "not supported"
         print(f"  {label:<9} | onnx-light-cpu={elapsed * 1e6:10.2f} us | onnxruntime={ort_text}")
 
+print(f"verified {accelerated_kernel_name} for every benchmark shape and dtype")
 set_kernel_usage_recording(True)
 
 # %%
