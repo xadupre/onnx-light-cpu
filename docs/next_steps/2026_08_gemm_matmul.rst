@@ -236,7 +236,9 @@ Phase 2: saturate the floating-point units
   MR/NR and cache blocks even when they expose the same ISA.
 * Generate several MR x NR micro-kernels instead of fixing ``MR == 4``.
 * Unroll K enough to maintain independent FMA chains without spilling
-  accumulators.
+  accumulators. The AVX-512 FP32/FP64 kernels now reduce four K rows per loop
+  iteration and use a scalar-count remainder loop without adding accumulator
+  registers.
 * Use aligned panel loads and software prefetch only where hardware-counter
   measurements show reduced stalls.
 * Specialize the arithmetic epilogue for ``alpha == 1``, ``beta == 0``, scalar
@@ -585,12 +587,15 @@ require measurements on dedicated hardware.
      - FMA/AVX2/AVX-512/ARM micro-kernels and tuned scheduler.
      - Priority FP32/FP64 corpus reaches 0.9-1.0x MLAS.
      - P3.
-     - AVX2+FMA and AVX-512 micro-kernels implemented; ARM kernels, scheduler
-       tuning, and the performance gate remain.
+     - AVX2+FMA and AVX-512 micro-kernels implemented, including four-way
+       AVX-512 K unrolling; ARM kernels, scheduler tuning, and the performance
+       gate remain.
      - `onnx-light-cpu #133
        <https://github.com/xadupre/onnx-light-cpu/pull/133>`_,
        `onnx-light-cpu #141
-       <https://github.com/xadupre/onnx-light-cpu/pull/141>`_
+       <https://github.com/xadupre/onnx-light-cpu/pull/141>`_,
+       `onnx-light-cpu #142
+       <https://github.com/xadupre/onnx-light-cpu/pull/142>`_
    * - P5
      - Native/panel-converted FP16, BF16, and integer paths.
      - Low-precision corpus reaches 0.9x MLAS where MLAS supports the type.

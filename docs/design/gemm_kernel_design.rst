@@ -208,6 +208,9 @@ Implemented optimizations (for reference)
    * - Dedicated AVX2+FMA micro-kernels
      - Implemented -- FP32/FP64 kernels are compiled with ``-mavx2 -mfma`` in
        a separate translation unit and selected only when CPUID reports FMA.
+   * - AVX-512 K-loop unrolling
+     - Implemented -- FP32/FP64 NR=1 and NR=2 loops reduce four K rows per
+       iteration, with a remainder loop and no additional accumulators.
 
 Remaining optimizations (not implemented)
 --------------------------------------------
@@ -224,19 +227,19 @@ gains.
      - Description
      - Likely gain
      - Risk
-   * - Explicit k-loop unrolling
-     - Manually unroll the inner ``k`` reduction (e.g. by 4) in the NR=2
-       AVX2/SSE2/AVX-512 kernels to expose more independent FMA chains to the
-       out-of-order scheduler, on top of what ``-O2``/``-O3`` may already do.
-     - Small, ~5-10% on AVX2; a bit more on AVX-512 (more registers headroom).
-       Real bottleneck is more likely memory bandwidth/loop overhead than FMA
-       latency, which caps the upside.
+   * - Explicit AVX2/SSE2 k-loop unrolling
+     - Manually unroll the inner ``k`` reduction in the NR=2 AVX2/SSE2 kernels
+       to expose more independent FMA chains to the out-of-order scheduler.
+       AVX-512 is already unrolled by four.
+     - Small, ~5-10% on AVX2 if the compiler avoids spills. The delivered
+       AVX-512 variant still requires dedicated-hardware measurement.
      - **Register spilling**: AVX2 has only 16 YMM registers; the kernel
        already holds 8 live accumulators (``acc0``/``acc1`` x ``kGemmMR``).
        Unrolling by 4 without care can need 32+ live registers, forcing the
        compiler to spill to the stack and erase the gain (or regress). Needs a
-       remainder loop for ``K`` not a multiple of the unroll factor. Lower risk
-       on AVX-512 (32 ZMM registers).
+       remainder loop for ``K`` not a multiple of the unroll factor. The
+       AVX-512 implementation has 32 ZMM registers and does not add accumulator
+       arrays.
    * - Hand-written assembly micro-kernels
      - Replace the C++/intrinsics micro-kernels with hand-scheduled assembly
        (wider tiles, e.g. 8x8 or 24x8, explicit instruction interleaving),
@@ -307,7 +310,5 @@ gains.
        is a different programming model from NEON's fixed 128-bit registers,
        so it is effectively a second port rather than a small extension.
 
-The most favorable next step, if any, is likely explicit k-loop unrolling on
-the AVX-512 kernel specifically (more registers, less spilling risk) -- but
-given the modest expected gain versus the completed optimizations above, it
-was not implemented in this pass.
+The next x86 tuning step is to use benchmark and hardware-counter measurements
+to decide whether AVX2 K-loop unrolling offsets its higher register-spill risk.
