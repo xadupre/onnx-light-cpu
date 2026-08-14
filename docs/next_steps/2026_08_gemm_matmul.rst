@@ -266,8 +266,10 @@ Roadmap PR01 is implemented by `onnx-light-cpu #155
 `onnx-light-cpu #156
 <https://github.com/xadupre/onnx-light-cpu/pull/156>`_, and Roadmap PR03 by
 `onnx-light-cpu #157
-<https://github.com/xadupre/onnx-light-cpu/pull/157>`_. The three remaining P4
-steps and their merge criteria are Roadmap PR04 through PR06 in the final
+<https://github.com/xadupre/onnx-light-cpu/pull/157>`_, and Roadmap PR04 by
+`onnx-light-cpu #158
+<https://github.com/xadupre/onnx-light-cpu/pull/158>`_. The two remaining P4
+steps and their merge criteria are Roadmap PR05 through PR06 in the final
 table. Persistent B prepacking is the **only** excluded optimization; no other
 performance work may be deferred while the parity gate remains unmet.
 
@@ -640,8 +642,9 @@ require measurements on dedicated hardware.
      - Priority FP32/FP64 corpus reaches at least 1.0x ONNX Runtime median
        performance with no priority shape below 0.9x.
      - P3.
-     - Scheduler PR01, epilogue PR02, and x86 tuning PR03 are implemented; the
-       three remaining PRs are Roadmap PR04 through PR06 below.
+     - Scheduler PR01, epilogue PR02, x86 tuning PR03, and thread runtime PR04
+       are implemented; the two remaining PRs are Roadmap PR05 through PR06
+       below.
      - `onnx-light-cpu #133
        <https://github.com/xadupre/onnx-light-cpu/pull/133>`_,
        `onnx-light-cpu #141
@@ -663,7 +666,9 @@ require measurements on dedicated hardware.
        `onnx-light-cpu #156
        <https://github.com/xadupre/onnx-light-cpu/pull/156>`_,
        `onnx-light-cpu #157
-       <https://github.com/xadupre/onnx-light-cpu/pull/157>`_
+       <https://github.com/xadupre/onnx-light-cpu/pull/157>`_,
+       `onnx-light-cpu #158
+       <https://github.com/xadupre/onnx-light-cpu/pull/158>`_
    * - P5
      - Native/panel-converted FP16, BF16, and integer paths.
      - Low-precision corpus reaches at least 1.0x ONNX Runtime median
@@ -741,7 +746,8 @@ current status.
        configurable, and caller-owned pools run without nested workers or
        oversubscription.
      - PR01
-     - Implemented; pull-request link pending.
+     - `Implemented in #158
+       <https://github.com/xadupre/onnx-light-cpu/pull/158>`_
    * - Roadmap PR05
      - ARM FP32/FP64 kernels.
      - NEON packing, kernels, tails, and dispatch pass all GEMM/MatMul cases.
