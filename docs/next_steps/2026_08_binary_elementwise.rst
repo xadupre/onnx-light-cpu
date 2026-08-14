@@ -8,12 +8,12 @@ Binary Elementwise and Broadcasting Performance Roadmap
 Objective
 ---------
 
-The objective is to implement a common CPU engine for binary elementwise
-operators with full ONNX multidirectional broadcasting. Isolated kernels
-should reach within 10% of ONNX Runtime on the priority corpus. The engine
-should then exceed ONNX Runtime where a prepared broadcast plan, a
-shape-specific loop, or fusion across several elementwise operators removes
-indexing and memory traffic.
+The objective is to implement a common CPU engine for every ONNX binary
+elementwise operator with full multidirectional broadcasting. The priority
+corpus must reach at least ``1.0x`` ONNX Runtime median performance, with no
+priority case below ``0.9x``. The engine should exceed ONNX Runtime where a
+prepared broadcast plan, a shape-specific loop, or fusion across several
+elementwise operators removes indexing and memory traffic.
 
 The correctness implementation in ``onnx-light`` already centralizes broadcast
 validation in ``BroadcastInfo`` and provides equal-shape, scalar, and generic
@@ -25,15 +25,26 @@ repeated inference.
 Scope
 -----
 
-The first CPU implementation should cover:
+This roadmap covers every operator whose output elements independently combine
+the corresponding broadcasted elements of two inputs:
 
-* arithmetic: ``Add``, ``Sub``, ``Mul`` and ``Div``;
+* arithmetic: ``Add``, ``Sub``, ``Mul``, ``Div``, ``Mod`` and ``Pow``;
 * comparisons: ``Equal``, ``Greater``, ``GreaterOrEqual``, ``Less`` and
   ``LessOrEqual``;
-* logical operators: ``And``, ``Or`` and ``Xor``;
-* integer bitwise operators and shifts;
-* ``Min``, ``Max``, ``Mod``, ``Pow``, ``PRelu`` and other operators that can
-  use the same iteration engine with a specialized scalar or vector function.
+* logical: ``And``, ``Or`` and ``Xor``;
+* integer bits: ``BitwiseAnd``, ``BitwiseOr``, ``BitwiseXor`` and ``BitShift``;
+* parameterized/specialized: ``PRelu``, ``CastLike`` and ``SwiGLU``;
+* binary instances of variadic elementwise ``Sum``, ``Mean``, ``Min`` and
+  ``Max``.
+
+Schemas with two required inputs but cross-element or metadata behavior do not
+use this engine. This explicitly excludes matrix multiplication, gather and
+indexing, reshape/expand/tile, normalization, cumulative operations,
+grid/geometry operators, sequence access, top-k, string concatenation, and
+other operators where one output element is not a scalar function of two
+broadcasted input elements. ``CastLike`` is retained as a specialized adapter:
+its second input supplies a type rather than element values, and its compute
+loop reuses unary cast kernels.
 
 The common engine owns shape normalization, loop selection, iteration,
 parallel scheduling, and ISA dispatch. Each ONNX adapter retains its own type
@@ -280,56 +291,72 @@ family, selected ISA, and thread count. For broadcasting, a bandwidth metric
 must count reused input values according to actual loads rather than output
 elements alone.
 
-Implementation order
---------------------
+Remaining pull-request sequence
+-------------------------------
 
 .. list-table::
    :header-rows: 1
-   :widths: 8 30 42 20
+   :widths: 9 27 44 12 8
 
-   * - Step
-     - Deliverable
-     - Exit criterion
-     - Dependency
-   * - 0
-     - Differential and performance corpus.
-     - Every broadcast family, type, tail, empty shape, and operand order is
-       represented against ONNX Runtime.
-     - None.
-   * - 1
-     - ``BinaryBroadcastPlan`` and coalesced scalar fallback.
-     - Full correctness with no O(rank) offset calculation per output element.
-     - Runtime shape metadata.
-   * - 2
-     - FP32/FP64 contiguous and scalar SIMD kernels.
-     - ``Add``, ``Sub``, ``Mul`` and ``Div`` reach within 1.10x ONNX Runtime on
-       equal-shape and scalar cases.
-     - Step 1.
-   * - 3
-     - Repeated-block and general broadcast SIMD loops.
-     - NCHW/NHWC per-channel and alternating-singleton cases reach within
-       1.10x ONNX Runtime.
-     - Steps 1-2.
-   * - 4
-     - Integer, comparison, logical, bitwise, FP16 and BF16 kernels.
-     - Priority type/operator corpus reaches parity without changing numerical
-       semantics.
-     - Vector conversion and ISA dispatch.
-   * - 5
-     - Cost-aware parallel scheduler.
-     - Large kernels scale until measured memory-bandwidth saturation without
-       regressing small tensors.
-     - Runtime thread pool.
-   * - 6
-     - ``Mod``, ``Pow``, ``Min``, ``Max``, ``PRelu`` and mixed-type adapters.
-     - All applicable binary operators use the common plan or a documented
-       specialized path.
-     - Steps 1-5.
-   * - 7
-     - Fused ``ElementwisePlan``.
-     - At least two representative model expressions exceed ONNX Runtime by a
-       repeatable 20%.
-     - Graph fusion and lifetime analysis.
+   * - PR
+     - Scope
+     - Merge criterion
+     - Depends on
+     - Status
+   * - Binary PR01
+     - Corpus, plan, dimension coalescing, and scalar fallback.
+     - Every in-scope operator/type/opset and broadcast family has differential
+       cases. ``BinaryBroadcastPlan`` validates and coalesces shapes, selects a
+       loop, and advances general offsets per inner block rather than per
+       element.
+     - None
+     - Pending
+   * - Binary PR02
+     - FP32/FP64 arithmetic SIMD.
+     - ``Add``, ``Sub``, ``Mul``, and ``Div`` provide contiguous, left/right
+       scalar, SSE2/AVX2/AVX-512, NEON, and SVE/SVE2 kernels with exact operand
+       order, special values, and tails.
+     - PR01
+     - Pending
+   * - Binary PR03
+     - Broadcast loop families and scheduler.
+     - Repeated block, inner-vector, outer, and general strided patterns use
+       vector inner loops. Cost-aware scheduling scales expensive operations,
+       caps bandwidth-bound operations, and does not regress small tensors.
+     - PR02
+     - Pending
+   * - Binary PR04
+     - Comparison, logical, bitwise, shift, and integer arithmetic.
+     - Comparisons emit byte ``BOOL``; logical and bitwise kernels cover every
+       supported width; integer arithmetic, division, modulo, shifts, overflow,
+       NaN, and signed-zero semantics match ONNX across scalar and SIMD paths.
+     - PR03
+     - Pending
+   * - Binary PR05
+     - Specialized and low-precision operators.
+     - ``Pow``, ``Mod``, binary ``Sum``/``Mean``/``Min``/``Max``, ``PRelu``,
+       ``CastLike``, and ``SwiGLU`` use the common plan or a documented
+       specialized loop. FP16/BF16/Float8 paths use native arithmetic or vector
+       conversion without full-tensor conversion.
+     - PR03, PR04; Unary PR05
+     - Pending
+   * - Binary PR06
+     - Shared ``ElementwisePlan`` fusion.
+     - Bounded unary/binary expressions retain intermediates in registers,
+       preserve broadcasting, types, evaluation order, aliasing, and graph
+       lifetimes, and show at least 1.20x ONNX Runtime on two representative
+       model expressions.
+     - PR05; Unary PR01 through PR05
+     - Pending
+   * - Binary PR07
+     - Final correctness and parity gate.
+     - Every in-scope operator/type/broadcast case passes differential tests;
+       median priority performance is at least 1.0x ONNX Runtime with no
+       priority case below 0.9x. This PR remains open while any target fails.
+     - PR01 through PR06
+     - Pending
+
+Binary PR07 is the final binary roadmap PR.
 
 Expected gains
 --------------
@@ -404,8 +431,8 @@ Acceptance criteria
        ``BinaryBroadcastPlan`` and its traversal without duplicating broadcast
        loops.
    * - Performance parity
-     - Median latency is no worse than 1.10x ONNX Runtime across the priority
-       isolated-kernel corpus.
+     - Median priority performance is at least 1.0x ONNX Runtime, with no
+       priority isolated-kernel case below 0.9x.
    * - Robustness
      - Every plan is shape-guarded and has a portable correctness fallback.
    * - Scaling
