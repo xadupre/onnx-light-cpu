@@ -6,10 +6,13 @@
 
 #include <algorithm>
 #include <atomic>
+#include <charconv>
 #include <condition_variable>
 #include <cstdint>
+#include <cstdlib>
 #include <memory>
 #include <mutex>
+#include <string_view>
 #include <thread>
 #include <type_traits>
 #include <utility>
@@ -65,17 +68,38 @@ static_assert(ONNX_LIGHT_CPU_MAX_THREADS > 0,
 /// ``ONNX_LIGHT_CPU_MAX_THREADS`` setting.
 inline constexpr int64_t kParallelForMaxThreads = ONNX_LIGHT_CPU_MAX_THREADS;
 
+namespace detail {
+
+inline int64_t ResolveParallelForThreadCount(int64_t available, const char *configured) noexcept {
+  available = std::clamp<int64_t>(available, 1, kParallelForMaxThreads);
+  if (configured == nullptr || *configured == '\0') {
+    return available;
+  }
+  const std::string_view text(configured);
+  int64_t requested = 0;
+  const auto result = std::from_chars(text.data(), text.data() + text.size(), requested);
+  if (result.ec != std::errc{} || result.ptr != text.data() + text.size() || requested <= 0) {
+    return available;
+  }
+  return std::min(available, requested);
+}
+
+} // namespace detail
+
 /// Returns the number of participating threads :cpp:func:`ParallelFor` may use.
 ///
 /// Resolves ``std::thread::hardware_concurrency()`` once, caps it at
-/// :cpp:var:`kParallelForMaxThreads`, and falls back to ``1`` when the hardware
-/// count is not available. The result is always ``>= 1`` and counts the calling
-/// thread, which always participates in the work.
+/// :cpp:var:`kParallelForMaxThreads`, applies the optional
+/// ``ONNX_LIGHT_CPU_NUM_THREADS`` process environment limit, and falls back to
+/// ``1`` when the hardware count is not available. The result is always
+/// ``>= 1`` and counts the calling thread, which always participates in the
+/// work. The environment is read once, before the process-wide pool is built.
 inline int64_t ParallelForThreadCount() noexcept {
   static const int64_t thread_count = []() {
     const unsigned int cores = std::thread::hardware_concurrency();
     const int64_t available = cores == 0 ? int64_t{1} : static_cast<int64_t>(cores);
-    return std::min(available, kParallelForMaxThreads);
+    return detail::ResolveParallelForThreadCount(available,
+                                                 std::getenv("ONNX_LIGHT_CPU_NUM_THREADS"));
   }();
   return thread_count;
 }

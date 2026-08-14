@@ -22,6 +22,7 @@ using onnx_light_cpu::ParallelFor;
 using onnx_light_cpu::ParallelForBlockCount;
 using onnx_light_cpu::ParallelForSimdLanes;
 using onnx_light_cpu::ParallelForThreadCount;
+using onnx_light_cpu::detail::ResolveParallelForThreadCount;
 
 // ---------------------------------------------------------------------------
 // Cost model: ParallelForBlockCount
@@ -32,6 +33,18 @@ TEST(ParallelForThreadCount, IsStableAndCapped) {
   EXPECT_EQ(ParallelForThreadCount(), first);
   EXPECT_GE(first, 1);
   EXPECT_LE(first, kParallelForMaxThreads);
+}
+
+TEST(ParallelForThreadCount, ResolvesRuntimeLimit) {
+  const int64_t default_count = std::min<int64_t>(8, kParallelForMaxThreads);
+  EXPECT_EQ(ResolveParallelForThreadCount(8, nullptr), default_count);
+  EXPECT_EQ(ResolveParallelForThreadCount(8, ""), default_count);
+  EXPECT_EQ(ResolveParallelForThreadCount(8, "1"), 1);
+  EXPECT_EQ(ResolveParallelForThreadCount(8, "2"), 2);
+  EXPECT_EQ(ResolveParallelForThreadCount(2, "8"), 2);
+  EXPECT_EQ(ResolveParallelForThreadCount(8, "0"), default_count);
+  EXPECT_EQ(ResolveParallelForThreadCount(8, "-1"), default_count);
+  EXPECT_EQ(ResolveParallelForThreadCount(8, "invalid"), default_count);
 }
 
 TEST(ParallelForBlockCount, NonPositiveTotalIsZero) {

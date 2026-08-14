@@ -216,9 +216,11 @@ TEST(OnnxLightBackendKernels, GemmBenchmarkCorpusIsLazyAndCoversPriorityShapes) 
 
   size_t cpu_cases = 0;
   bool has_constant_b = false;
+  bool has_direct = false;
   bool has_skinny_m = false;
   bool has_skinny_n = false;
   bool has_large_k = false;
+  bool has_split_k = false;
   bool has_transpose = false;
   for (const TestCase &test_case : cases) {
     if (test_case.name.rfind("test_cpu_gemm_", 0) != 0) {
@@ -232,16 +234,20 @@ TEST(OnnxLightBackendKernels, GemmBenchmarkCorpusIsLazyAndCoversPriorityShapes) 
       has_constant_b = true;
       EXPECT_EQ(test_case.declared_input_element_counts.size(), 1u);
     }
+    has_direct |= test_case.name.find("_direct_") != std::string::npos;
     has_skinny_m |= test_case.name.find("skinny_m") != std::string::npos;
     has_skinny_n |= test_case.name.find("skinny_n") != std::string::npos;
     has_large_k |= test_case.name.find("large_k") != std::string::npos;
+    has_split_k |= test_case.name.find("split_k") != std::string::npos;
     has_transpose |= test_case.name.find("trans_") != std::string::npos;
   }
-  EXPECT_EQ(cpu_cases, 10u);
+  EXPECT_EQ(cpu_cases, 12u);
   EXPECT_TRUE(has_constant_b);
+  EXPECT_TRUE(has_direct);
   EXPECT_TRUE(has_skinny_m);
   EXPECT_TRUE(has_skinny_n);
   EXPECT_TRUE(has_large_k);
+  EXPECT_TRUE(has_split_k);
   EXPECT_TRUE(has_transpose);
 }
 
