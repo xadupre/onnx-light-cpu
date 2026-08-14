@@ -767,12 +767,14 @@ current status.
        is at least 1.0x ONNX Runtime and no priority case is below 0.9x. The PR
        remains open while any target fails.
      - PR01 through PR05
-     - In progress. The reproducible ``tools/benchmark_gemm_parity.py`` runner
-       records raw alternating samples, dispersion, CPU affinity, SIMD level,
-       and the effective thread count. An initial six-core diagnostic run on
-       an i7-13800H under WSL reaches 0.317x FP32 and 0.347x FP64 median, with
-       0.064x and 0.036x minima, so the gate remains open. These diagnostic
-       numbers are not the final dedicated-machine evidence.
+     - `In progress in #160
+       <https://github.com/xadupre/onnx-light-cpu/pull/160>`_. The reproducible
+       ``tools/benchmark_gemm_parity.py`` runner records raw alternating
+       samples, dispersion, CPU affinity, SIMD level, and the effective thread
+       count. An initial six-core diagnostic run on an i7-13800H under WSL
+       reaches 0.317x FP32 and 0.347x FP64 median, with 0.064x and 0.036x
+       minima, so the gate remains open. These diagnostic numbers are not the
+       final dedicated-machine evidence.
    * - Roadmap PR07
      - x86 FP16/BF16 kernel family.
      - Immutable plans describe typed panels, FP32 accumulation, conversion
