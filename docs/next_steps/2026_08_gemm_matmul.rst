@@ -674,8 +674,7 @@ require measurements on dedicated hardware.
        performance with no priority shape below 0.9x.
      - P3.
      - P4.1-P4.3 implemented; P4.4-P4.6 partial; P4.7-P4.11 pending. The fixed
-       scope and exact remaining order are defined in the P4 execution ledger
-       above.
+       work items are grouped into Roadmap PR01 through PR06 below.
      - `onnx-light-cpu #133
        <https://github.com/xadupre/onnx-light-cpu/pull/133>`_,
        `onnx-light-cpu #141
@@ -698,37 +697,37 @@ require measurements on dedicated hardware.
        performance with no priority shape below 0.9x where the type is
        supported.
      - P3-P4.
-     - Twelve-PR sequence fixed below; all pending.
-     - P5-PR01 through P5-PR12 below.
+     - Twelve work items grouped into four PRs below; all pending.
+     - Roadmap PR07 through PR10 below.
    * - P6
      - ``AttentionPlan`` and materialized tensor correctness implementation.
      - MHA/GQA/MQA, masks, causal behavior, and tensor past/present
        differential tests pass.
      - P1-P2.
-     - Seven-PR sequence fixed below; all pending.
-     - P6-PR01 through P6-PR07 below.
+     - Seven work items grouped into two PRs below; all pending.
+     - Roadmap PR11 through PR12 below.
    * - P7
      - Online-softmax prefill Attention.
      - No full score/probability tensor; median performance is at least 1.0x
        ONNX Runtime with no priority case below 0.9x and bounded temporary
        memory.
      - P4 and P6.
-     - Ten-PR sequence fixed below; all pending.
-     - P7-PR01 through P7-PR10 below.
+     - Ten work items grouped into three PRs below; all pending.
+     - Roadmap PR13 through PR15 below.
 
-Remaining P4 pull-request sequence
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Remaining P4 execution checklist
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Exactly thirteen pull requests remain after ``#149`` to close P4. Their scope
-and order are fixed below. A row is not split and no new prerequisite is added
-without an explicit roadmap revision. Every PR updates this table with its
-link and resulting status.
+Thirteen implementation items remain after ``#149`` to close P4. These are
+merge criteria grouped into six coherent roadmap PRs at the end of this
+section, not thirteen separate GitHub pull requests. Their scope and order are
+fixed; no new prerequisite is added without an explicit roadmap revision.
 
 .. list-table::
    :header-rows: 1
    :widths: 10 29 39 12 10
 
-   * - PR
+   * - Work item
      - Exact scope
      - Merge criterion
      - Depends on
@@ -824,18 +823,18 @@ link and resulting status.
      - P4-PR01 through P4-PR12
      - Pending
 
-Remaining P5 pull-request sequence
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Remaining P5 execution checklist
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-P5 contains twelve pull requests. Persistent B prepacking remains excluded;
-panel conversion performed during each invocation is part of the low-precision
-kernel itself.
+P5 contains twelve implementation items grouped into four roadmap PRs.
+Persistent B prepacking remains excluded; panel conversion performed during
+each invocation is part of the low-precision kernel itself.
 
 .. list-table::
    :header-rows: 1
    :widths: 10 29 39 12 10
 
-   * - PR
+   * - Work item
      - Exact scope
      - Merge criterion
      - Depends on
@@ -915,17 +914,17 @@ kernel itself.
      - P5-PR01 through P5-PR11
      - Pending
 
-Remaining P6 pull-request sequence
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Remaining P6 execution checklist
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-P6 contains seven pull requests and ends with a complete materialized
-Attention correctness implementation.
+P6 contains seven implementation items grouped into two roadmap PRs and ends
+with a complete materialized Attention correctness implementation.
 
 .. list-table::
    :header-rows: 1
    :widths: 10 29 39 12 10
 
-   * - PR
+   * - Work item
      - Exact scope
      - Merge criterion
      - Depends on
@@ -974,16 +973,17 @@ Attention correctness implementation.
      - P6-PR01 through P6-PR06
      - Pending
 
-Remaining P7 pull-request sequence
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Remaining P7 execution checklist
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-P7 contains ten pull requests and closes the complete roadmap.
+P7 contains ten implementation items grouped into three roadmap PRs and closes
+the complete roadmap.
 
 .. list-table::
    :header-rows: 1
    :widths: 10 29 39 12 10
 
-   * - PR
+   * - Work item
      - Exact scope
      - Merge criterion
      - Depends on
@@ -1050,6 +1050,98 @@ P7 contains ten pull requests and closes the complete roadmap.
      - P7-PR01 through P7-PR09
      - Pending
 
-The complete roadmap therefore contains **42 remaining pull requests** after
-``#149``: 13 for P4, 12 for P5, 7 for P6, and 10 for P7. P7-PR10 is the final
-roadmap PR.
+The 42 work items above are grouped into the following **15 remaining pull
+requests** after ``#149``. Each PR keeps its constituent work items as an
+internal merge checklist.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 9 29 42 12 8
+
+   * - PR
+     - Scope
+     - Included work items
+     - Depends on
+     - Status
+   * - Roadmap PR01
+     - Scheduler, blocking, batch, and split-K.
+     - P4-PR01 through P4-PR03.
+     - ``#149``
+     - Pending
+   * - Roadmap PR02
+     - Broadcast and fused epilogues.
+     - P4-PR04 and P4-PR05.
+     - PR01
+     - Pending
+   * - Roadmap PR03
+     - Complete x86 kernel tuning.
+     - P4-PR06 through P4-PR08, including AVX2, AVX-512, microarchitecture
+       dispatch, and assembly required for parity.
+     - PR02
+     - Pending
+   * - Roadmap PR04
+     - Complete thread runtime.
+     - P4-PR09 and P4-PR10: hybrid topology, affinity, spin/park, and external
+       pool cooperation.
+     - PR01
+     - Pending
+   * - Roadmap PR05
+     - ARM FP32/FP64 kernels.
+     - P4-PR11 and P4-PR12: NEON and SVE/SVE2.
+     - PR02
+     - Pending
+   * - Roadmap PR06
+     - FP32/FP64 parity gate.
+     - P4-PR13; remains open until all P4 parity targets pass.
+     - PR01 through PR05
+     - Pending
+   * - Roadmap PR07
+     - x86 FP16/BF16 kernel family.
+     - P5-PR01 through P5-PR05: framework, F16C, AVX-512FP16/BF16, and AMX.
+     - PR06
+     - Pending
+   * - Roadmap PR08
+     - ARM FP16/BF16 kernel family.
+     - P5-PR06, reusing the ARM dispatch and scheduler from PR05.
+     - PR05, PR07
+     - Pending
+   * - Roadmap PR09
+     - Integer, Float8, and packed 4-bit kernels.
+     - P5-PR07 through P5-PR11 across x86 and ARM.
+     - PR07, PR08
+     - Pending
+   * - Roadmap PR10
+     - Low-precision parity gate.
+     - P5-PR12; remains open until every supported low-precision target passes.
+     - PR07 through PR09
+     - Pending
+   * - Roadmap PR11
+     - Materialized Attention implementation.
+     - P6-PR01 through P6-PR06: plan, MHA, masks, GQA/MQA, past/present, types,
+       and scheduling.
+     - PR10
+     - Pending
+   * - Roadmap PR12
+     - Materialized Attention correctness gate.
+     - P6-PR07 and registration as the complete fallback path.
+     - PR11
+     - Pending
+   * - Roadmap PR13
+     - Online Attention compute engine.
+     - P7-PR01 through P7-PR06: recurrence, SIMD score/exp/V kernels, blocking,
+       and tile skipping.
+     - PR12
+     - Pending
+   * - Roadmap PR14
+     - Streaming Attention scheduling and types.
+     - P7-PR07 through P7-PR09: prefill, short-query/decode, and FP16/BF16.
+     - PR10, PR13
+     - Pending
+   * - Roadmap PR15
+     - Final roadmap parity and memory gate.
+     - P7-PR10; remains open until all Attention performance and bounded-memory
+       targets pass.
+     - PR14
+     - Pending
+
+Roadmap PR15 is the final roadmap PR.
