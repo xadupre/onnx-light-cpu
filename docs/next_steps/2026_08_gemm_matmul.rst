@@ -247,7 +247,10 @@ Phase 2: saturate the floating-point units
 * Use aligned panel loads and software prefetch only where hardware-counter
   measurements show reduced stalls.
 * Specialize the arithmetic epilogue for ``alpha == 1``, ``beta == 0``, scalar
-  bias, row/column bias, and no bias.
+  bias, row/column bias, and no bias. Unit ``alpha``/``beta``, zero ``beta``,
+  and no-bias cases now avoid redundant vector/scalar multiplication and bias
+  reads in every x86 micro-kernel and scalar tail; scalar and row/column
+  broadcast bias interfaces remain.
 * Add ARM64 NEON kernels, followed by SVE/SVE2 where relevant.
 
 Parallel execution
@@ -593,7 +596,8 @@ require measurements on dedicated hardware.
      - Priority FP32/FP64 corpus reaches 0.9-1.0x MLAS.
      - P3.
      - AVX2+FMA and AVX-512 micro-kernels implemented, including four-way K
-       unrolling and ISA-selected MR=4/6 variants; ARM kernels, per-model MR/NR
+       unrolling, ISA-selected MR=4/6 variants, and unit-scale/no-bias epilogue
+       fast paths; broadcast-bias epilogues, ARM kernels, per-model MR/NR
        tuning, scheduler tuning, and the performance gate remain.
      - `onnx-light-cpu #133
        <https://github.com/xadupre/onnx-light-cpu/pull/133>`_,

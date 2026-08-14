@@ -89,6 +89,22 @@ TEST(GemmFloat32, AlphaBetaAndBias) {
   }
 }
 
+TEST(GemmFloat32, UnitScalesWithBiasAcrossChunks) {
+  const std::size_t M = 7, N = 19, K = 300;
+  const auto A = RandomVector(M * K, 91);
+  const auto B = RandomVector(K * N, 92);
+  const auto C = RandomVector(M * N, 93);
+  const auto expected = ReferenceGemm<float>(false, false, M, N, K, 1.0f, A, B, 1.0f, &C);
+  std::vector<float> Y(M * N, 0.0f);
+
+  onnx_light_cpu::GemmFloat32(false, false, M, N, K, 1.0f, A.data(), B.data(), 1.0f, C.data(),
+                              Y.data());
+
+  for (std::size_t i = 0; i < M * N; ++i) {
+    EXPECT_NEAR(Y[i], expected[i], 1e-2f) << "i=" << i;
+  }
+}
+
 TEST(GemmFloat32, TransposeVariants) {
   // These dimensions force the general path even with 16-lane AVX-512.
   const std::size_t M = 8, N = 17, K = 40;

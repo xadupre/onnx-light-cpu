@@ -224,6 +224,10 @@ Implemented optimizations (for reference)
      - Implemented -- AVX2/SSE use MR=4 while AVX-512 uses MR=6; the selected
        value drives algorithm selection, MC alignment, row packing, and the
        direct/five-loop engines.
+   * - Unit-scale and no-bias epilogues
+     - Implemented -- scalar, SSE2, AVX, AVX2+FMA, and AVX-512 kernels skip
+       redundant ``alpha``/``beta`` multiplies when the scale is one; zero
+       ``beta`` and absent bias avoid reading ``C``.
 
 Remaining optimizations (not implemented)
 --------------------------------------------
