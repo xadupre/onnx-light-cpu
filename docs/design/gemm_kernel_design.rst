@@ -211,6 +211,9 @@ Implemented optimizations (for reference)
    * - AVX-512 K-loop unrolling
      - Implemented -- FP32/FP64 NR=1 and NR=2 loops reduce four K rows per
        iteration, with a remainder loop and no additional accumulators.
+   * - AVX2+FMA K-loop unrolling
+     - Implemented -- FP32/FP64 NR=1 and NR=2 loops reduce four K rows per
+       iteration, with a remainder loop and no additional accumulators.
 
 Remaining optimizations (not implemented)
 --------------------------------------------
@@ -227,19 +230,12 @@ gains.
      - Description
      - Likely gain
      - Risk
-   * - Explicit AVX2/SSE2 k-loop unrolling
-     - Manually unroll the inner ``k`` reduction in the NR=2 AVX2/SSE2 kernels
-       to expose more independent FMA chains to the out-of-order scheduler.
-       AVX-512 is already unrolled by four.
-     - Small, ~5-10% on AVX2 if the compiler avoids spills. The delivered
-       AVX-512 variant still requires dedicated-hardware measurement.
-     - **Register spilling**: AVX2 has only 16 YMM registers; the kernel
-       already holds 8 live accumulators (``acc0``/``acc1`` x ``kGemmMR``).
-       Unrolling by 4 without care can need 32+ live registers, forcing the
-       compiler to spill to the stack and erase the gain (or regress). Needs a
-       remainder loop for ``K`` not a multiple of the unroll factor. The
-       AVX-512 implementation has 32 ZMM registers and does not add accumulator
-       arrays.
+   * - Explicit SSE2 k-loop unrolling
+     - Manually unroll the inner ``k`` reduction in the NR=2 SSE2 kernels.
+       AVX2+FMA and AVX-512 are already unrolled by four.
+     - Small on CPUs without AVX/FMA; zero on the priority AVX2/AVX-512 fleet.
+     - Additional complexity in a fallback path, with limited performance
+       relevance and a remainder loop required for non-multiple K values.
    * - Hand-written assembly micro-kernels
      - Replace the C++/intrinsics micro-kernels with hand-scheduled assembly
        (wider tiles, e.g. 8x8 or 24x8, explicit instruction interleaving),
@@ -310,5 +306,5 @@ gains.
        is a different programming model from NEON's fixed 128-bit registers,
        so it is effectively a second port rather than a small extension.
 
-The next x86 tuning step is to use benchmark and hardware-counter measurements
-to decide whether AVX2 K-loop unrolling offsets its higher register-spill risk.
+The next x86 tuning step is to generate and benchmark several MR x NR variants
+instead of fixing ``MR == 4`` for every microarchitecture.
