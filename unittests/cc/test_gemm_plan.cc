@@ -83,6 +83,22 @@ TEST(GemmPlan, BlockingUsesIsaSpecificRegisterRows) {
             GemmAlgorithm::kSkinnyM);
 }
 
+TEST(GemmPlan, BlockingExposesTaskGridForPrioritySizes) {
+  const onnx_light_cpu::GemmBlocking initial{256, 1024, 448, 4, 16};
+  for (const std::size_t size : {256u, 512u, 1024u}) {
+    const auto blocking =
+        onnx_light_cpu::detail::ConstrainGemmBlockingForTasks(initial, size, size, 6);
+    const std::size_t row_tasks = (size + blocking.mc - 1) / blocking.mc;
+    const std::size_t column_tasks = (size + blocking.nc - 1) / blocking.nc;
+
+    EXPECT_GE(row_tasks * column_tasks, 6u) << "size=" << size;
+    EXPECT_EQ(blocking.mc % blocking.mr, 0u);
+    EXPECT_EQ(blocking.nc % blocking.nr, 0u);
+    EXPECT_LE(blocking.mc, initial.mc);
+    EXPECT_LE(blocking.nc, initial.nc);
+  }
+}
+
 TEST(GemmPlan, ExecutesEveryPreparedAlgorithm) {
   const auto check = [](std::size_t m, std::size_t n, std::size_t k,
                         GemmAlgorithm expected_algorithm) {
@@ -195,6 +211,26 @@ TEST(MatMulPlan, BroadcastsBatchesFromEitherInput) {
                std::array<float, 12>{3, 7, 4, 10, 7, 15, 11, 15, 16, 22, 23, 31});
 }
 
+TEST(MatMulPlan, BatchSchedulingTakesPriorityOverSplitK) {
+  constexpr std::size_t batch_count = 128;
+  constexpr std::size_t m = 2;
+  constexpr std::size_t n = 2;
+  constexpr std::size_t k = 4096;
+  const std::array<std::size_t, 3> a_shape = {batch_count, m, k};
+  const std::array<std::size_t, 2> b_shape = {k, n};
+  const MatMulPlan<float> plan(a_shape, b_shape);
+  std::vector<float> a(batch_count * m * k, 1.0f);
+  std::vector<float> b(k * n, 1.0f);
+  std::vector<float> y(batch_count * m * n);
+
+  plan.Execute(a.data(), b.data(), y.data());
+
+  EXPECT_EQ(plan.gemm_plan().algorithm(), GemmAlgorithm::kSplitK);
+  for (float value : y) {
+    EXPECT_FLOAT_EQ(value, static_cast<float>(k));
+  }
+}
+
 TEST(MatMulPlan, AppliesMatrixTransposeBeforeBatchMultiplication) {
   const std::array<std::size_t, 3> a_shape = {2, 3, 2};
   const std::array<std::size_t, 2> b_shape = {4, 3};
@@ -302,6 +338,20 @@ TEST(GroupedGemm, ExecutesHeterogeneousPlans) {
   EXPECT_FLOAT_EQ(y1[1], 16);
   EXPECT_FLOAT_EQ(y2[0], 17);
   EXPECT_FLOAT_EQ(y2[1], 39);
+}
+
+TEST(GroupedGemm, ValidatesAllProblemsBeforeExecution) {
+  const GemmPlan<float> plan(GemmPlanOptions<float>{false, false, 1, 1, 1});
+  const float a = 2.0f;
+  const float b = 3.0f;
+  float y = -1.0f;
+  const std::array<GroupedGemmProblem<float>, 2> problems = {
+      GroupedGemmProblem<float>{&plan, &a, &b, nullptr, &y},
+      GroupedGemmProblem<float>{nullptr, &a, &b, nullptr, &y},
+  };
+
+  EXPECT_THROW(GroupedGemm<float>(problems), std::invalid_argument);
+  EXPECT_FLOAT_EQ(y, -1.0f);
 }
 
 TEST(GemmPlan, RejectsInvalidConstantAndMissingDynamicB) {

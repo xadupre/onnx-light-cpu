@@ -533,14 +533,6 @@ void GemmMicroKernel_SSE2_F64(std::size_t mr, std::size_t nb, std::size_t K, dou
 // cache eviction. Chunking ``K`` bounds every panel to
 // ``kGemmTileK x kGemmTileN`` elements, which comfortably fits in L2 for both
 // float32 and float64.
-// ParallelFor's grain is calibrated for full element-wise loop iterations.
-// A GEMM multiply-add is only one instruction inside a heavily vectorized,
-// register-blocked inner loop, so counting every scalar FMA as a full work unit
-// wakes workers far too early (for example as soon as M crosses one 64-row
-// tile). This divisor keeps sub-million-FMA tiles inline while preserving
-// parallelism for genuinely compute-heavy panels.
-constexpr double kGemmFmasPerParallelWorkUnit = 64.0;
-
 // Runtime-selected micro-kernel flavor for a given element type.
 enum class GemmKernelKind { kScalar, kSSE2, kAVX, kAVX2FMA, kAVX512 };
 
@@ -787,12 +779,90 @@ void GemmSkinnyM(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::
               });
 }
 
-template <typename T>
+template <typename T, typename TileFn>
+void GemmFiveLoopRange(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::size_t K,
+                       std::size_t k_begin, std::size_t k_end, T alpha, const T *A, const T *B,
+                       T beta, const T *C, T *Y, GemmKernelKind kind, TileFn tile,
+                       const GemmBlocking &blocking) {
+  const bool has_bias = C != nullptr && beta != T(0);
+  const std::size_t column_panels = (N + blocking.nc - 1) / blocking.nc;
+  const std::size_t row_panels = (M + blocking.mc - 1) / blocking.mc;
+  const std::size_t thread_count = static_cast<std::size_t>(ParallelForThreadCount());
+  const std::size_t panels_per_wave = std::min(
+      column_panels, std::max<std::size_t>(1, (thread_count + row_panels - 1) / row_panels));
+  std::vector<T> bpack(panels_per_wave * blocking.kc * blocking.nc);
+
+  for (std::size_t k0 = k_begin; k0 < k_end; k0 += blocking.kc) {
+    const std::size_t kc = std::min(blocking.kc, k_end - k0);
+    const GemmAccumMode mode =
+        k0 == k_begin ? (has_bias ? GemmAccumMode::kInitBias : GemmAccumMode::kInitZero)
+                      : GemmAccumMode::kAccumulate;
+    for (std::size_t first_panel = 0; first_panel < column_panels; first_panel += panels_per_wave) {
+      const std::size_t wave_panels = std::min(panels_per_wave, column_panels - first_panel);
+      for (std::size_t panel = 0; panel < wave_panels; ++panel) {
+        const std::size_t n0 = (first_panel + panel) * blocking.nc;
+        const std::size_t nb = std::min(blocking.nc, N - n0);
+        PackBPanel(trans_b, B, K, N, k0, kc, n0, nb,
+                   bpack.data() + panel * blocking.kc * blocking.nc);
+      }
+
+      const std::size_t task_count = row_panels * wave_panels;
+      const std::size_t first_n = first_panel * blocking.nc;
+      const std::size_t task_columns = std::min(blocking.nc, N - first_n);
+      const double cost = static_cast<double>(std::min(blocking.mc, M)) * task_columns * kc /
+                          kGemmFmasPerParallelWorkUnit;
+      ParallelFor(static_cast<std::int64_t>(task_count), cost,
+                  [&](std::int64_t begin, std::int64_t end) {
+                    std::vector<T> apack(blocking.mc * kc);
+                    std::size_t packed_row_panel = row_panels;
+                    for (std::int64_t task = begin; task < end; ++task) {
+                      const std::size_t row_panel = static_cast<std::size_t>(task) / wave_panels;
+                      const std::size_t wave_panel = static_cast<std::size_t>(task) % wave_panels;
+                      const std::size_t m0 = row_panel * blocking.mc;
+                      const std::size_t n0 = (first_panel + wave_panel) * blocking.nc;
+                      const std::size_t mc = std::min(blocking.mc, M - m0);
+                      const std::size_t nb = std::min(blocking.nc, N - n0);
+                      if (packed_row_panel != row_panel) {
+                        PackAPanel(trans_a, A, M, K, m0, mc, k0, kc, apack.data());
+                        packed_row_panel = row_panel;
+                      }
+                      const T *panel_b = bpack.data() + wave_panel * blocking.kc * blocking.nc;
+                      for (std::size_t ir = 0; ir < mc; ir += blocking.mr) {
+                        const std::size_t mr = std::min(blocking.mr, mc - ir);
+                        tile(kind, mr, nb, kc, alpha, beta, panel_b, nb,
+                             has_bias ? C + (m0 + ir) * N + n0 : nullptr, N, Y + (m0 + ir) * N + n0,
+                             N, 0, mode, apack.data() + ir * kc);
+                      }
+                    }
+                  });
+    }
+  }
+}
+
+template <typename T, typename TileFn>
+void GemmFiveLoop(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::size_t K, T alpha,
+                  const T *A, const T *B, T beta, const T *C, T *Y, GemmKernelKind kind,
+                  TileFn tile, const GemmBlocking &blocking) {
+  GemmFiveLoopRange(trans_a, trans_b, M, N, K, 0, K, alpha, A, B, beta, C, Y, kind, tile, blocking);
+}
+
+template <typename T, typename TileFn>
 void GemmSplitK(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::size_t K, T alpha,
-                const T *A, const T *B, T beta, const T *C, T *Y, const GemmBlocking &blocking) {
+                const T *A, const T *B, T beta, const T *C, T *Y, GemmKernelKind kind, TileFn tile,
+                const GemmBlocking &blocking) {
+  if (ParallelForInParallelRegion()) {
+    GemmFiveLoop(trans_a, trans_b, M, N, K, alpha, A, B, beta, C, Y, kind, tile, blocking);
+    return;
+  }
+
   const std::size_t part_count = std::min<std::size_t>(
       static_cast<std::size_t>(ParallelForThreadCount()), (K + blocking.kc - 1) / blocking.kc);
-  std::vector<T> partials(part_count * M * N, T(0));
+  if (part_count <= 1) {
+    GemmFiveLoop(trans_a, trans_b, M, N, K, alpha, A, B, beta, C, Y, kind, tile, blocking);
+    return;
+  }
+
+  std::vector<T> partials(part_count * M * N);
   const double cost = static_cast<double>(M) * N * K /
                       (static_cast<double>(part_count) * kGemmFmasPerParallelWorkUnit);
   ParallelFor(static_cast<std::int64_t>(part_count), cost,
@@ -801,87 +871,24 @@ void GemmSplitK(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::s
                   const std::size_t p = static_cast<std::size_t>(part);
                   const std::size_t k_begin = K * p / part_count;
                   const std::size_t k_end = K * (p + 1) / part_count;
-                  T *partial = partials.data() + p * M * N;
-                  for (std::size_t m = 0; m < M; ++m) {
-                    for (std::size_t n = 0; n < N; ++n) {
-                      T acc = T(0);
-                      for (std::size_t k = k_begin; k < k_end; ++k) {
-                        const T a = trans_a ? A[k * M + m] : A[m * K + k];
-                        const T b = trans_b ? B[n * K + k] : B[k * N + n];
-                        acc += a * b;
-                      }
-                      partial[m * N + n] = acc;
-                    }
-                  }
+                  GemmFiveLoopRange(trans_a, trans_b, M, N, K, k_begin, k_end, T(1), A, B, T(0),
+                                    static_cast<const T *>(nullptr), partials.data() + p * M * N,
+                                    kind, tile, blocking);
                 }
               });
+
   const bool has_bias = C != nullptr && beta != T(0);
-  for (std::size_t index = 0; index < M * N; ++index) {
-    T sum = T(0);
-    for (std::size_t part = 0; part < part_count; ++part) {
-      sum += partials[part * M * N + index];
-    }
-    Y[index] = alpha * sum + (has_bias ? beta * C[index] : T(0));
-  }
-}
-
-template <typename T, typename TileFn>
-void GemmFiveLoop(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::size_t K, T alpha,
-                  const T *A, const T *B, T beta, const T *C, T *Y, GemmKernelKind kind,
-                  TileFn tile, const GemmBlocking &blocking) {
-  const bool has_bias = C != nullptr && beta != T(0);
-  const std::size_t column_panels = (N + blocking.nc - 1) / blocking.nc;
-  const std::size_t row_panels = (M + blocking.mc - 1) / blocking.mc;
-  const bool parallel_columns = column_panels >= static_cast<std::size_t>(ParallelForThreadCount());
-
-  auto compute_rows = [&](std::size_t n0, std::size_t nb, std::size_t k0, std::size_t kc,
-                          const T *bpack, std::size_t row_begin, std::size_t row_end) {
-    std::vector<T> apack(blocking.mc * kc);
-    for (std::size_t row_panel = row_begin; row_panel < row_end; ++row_panel) {
-      const std::size_t m0 = row_panel * blocking.mc;
-      const std::size_t mc = std::min(blocking.mc, M - m0);
-      PackAPanel(trans_a, A, M, K, m0, mc, k0, kc, apack.data());
-      for (std::size_t ir = 0; ir < mc; ir += blocking.mr) {
-        const std::size_t mr = std::min(blocking.mr, mc - ir);
-        const GemmAccumMode mode =
-            k0 == 0 ? (has_bias ? GemmAccumMode::kInitBias : GemmAccumMode::kInitZero)
-                    : GemmAccumMode::kAccumulate;
-        tile(kind, mr, nb, kc, alpha, beta, bpack, nb, has_bias ? C + (m0 + ir) * N + n0 : nullptr,
-             N, Y + (m0 + ir) * N + n0, N, 0, mode, apack.data() + ir * kc);
-      }
-    }
-  };
-
-  auto compute_columns = [&](std::int64_t begin, std::int64_t end) {
-    std::vector<T> bpack(blocking.kc * blocking.nc);
-    for (std::int64_t panel = begin; panel < end; ++panel) {
-      const std::size_t n0 = static_cast<std::size_t>(panel) * blocking.nc;
-      const std::size_t nb = std::min(blocking.nc, N - n0);
-      for (std::size_t k0 = 0; k0 < K; k0 += blocking.kc) {
-        const std::size_t kc = std::min(blocking.kc, K - k0);
-        PackBPanel(trans_b, B, K, N, k0, kc, n0, nb, bpack.data());
-        if (parallel_columns) {
-          compute_rows(n0, nb, k0, kc, bpack.data(), 0, row_panels);
-        } else {
-          const double cost =
-              static_cast<double>(blocking.mc) * nb * kc / kGemmFmasPerParallelWorkUnit;
-          ParallelFor(static_cast<std::int64_t>(row_panels), cost,
-                      [&](std::int64_t row_begin, std::int64_t row_end) {
-                        compute_rows(n0, nb, k0, kc, bpack.data(),
-                                     static_cast<std::size_t>(row_begin),
-                                     static_cast<std::size_t>(row_end));
-                      });
-        }
-      }
-    }
-  };
-
-  if (parallel_columns) {
-    const double cost = static_cast<double>(M) * blocking.nc * K / kGemmFmasPerParallelWorkUnit;
-    ParallelFor(static_cast<std::int64_t>(column_panels), cost, compute_columns);
-  } else {
-    compute_columns(0, static_cast<std::int64_t>(column_panels));
-  }
+  ParallelFor(static_cast<std::int64_t>(M * N), static_cast<double>(part_count),
+              [&](std::int64_t begin, std::int64_t end) {
+                for (std::int64_t offset = begin; offset < end; ++offset) {
+                  const std::size_t index = static_cast<std::size_t>(offset);
+                  T sum = T(0);
+                  for (std::size_t part = 0; part < part_count; ++part) {
+                    sum += partials[part * M * N + index];
+                  }
+                  Y[index] = alpha * sum + (has_bias ? beta * C[index] : T(0));
+                }
+              });
 }
 
 template <GemmAlgorithm Algorithm, typename T, typename TileFn>
@@ -911,7 +918,7 @@ void GemmImpl(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::siz
   } else if constexpr (Algorithm == GemmAlgorithm::kSkinnyN) {
     GemmSkinnyN(trans_a, trans_b, M, N, K, alpha, A, B, beta, C, Y);
   } else if constexpr (Algorithm == GemmAlgorithm::kSplitK) {
-    GemmSplitK(trans_a, trans_b, M, N, K, alpha, A, B, beta, C, Y, blocking);
+    GemmSplitK(trans_a, trans_b, M, N, K, alpha, A, B, beta, C, Y, kind, tile, blocking);
   } else {
     static_assert(Algorithm == GemmAlgorithm::kGeneral);
     GemmFiveLoop(trans_a, trans_b, M, N, K, alpha, A, B, beta, C, Y, kind, tile, blocking);
@@ -937,7 +944,9 @@ void GemmFloat32Planned(bool trans_a, bool trans_b, std::size_t M, std::size_t N
   static const GemmKernelKind default_kind = SelectGemmKernelKind<float>();
   static const GemmBlocking default_blocking = SelectGemmBlocking(
       sizeof(float), GemmVectorLanes<float>(default_kind), GemmRegisterRows(default_kind));
-  const GemmBlocking &selected = blocking == nullptr ? default_blocking : *blocking;
+  const GemmBlocking selected =
+      ConstrainGemmBlockingForTasks(blocking == nullptr ? default_blocking : *blocking, M, N,
+                                    static_cast<std::size_t>(ParallelForThreadCount()));
   GemmImpl<Algorithm, float>(trans_a, trans_b, M, N, K, alpha, A, B, beta, C, Y,
                              SelectGemmKernelKind<float>(), tile, selected);
 }
@@ -957,7 +966,9 @@ void GemmFloat64Planned(bool trans_a, bool trans_b, std::size_t M, std::size_t N
   static const GemmKernelKind default_kind = SelectGemmKernelKind<double>();
   static const GemmBlocking default_blocking = SelectGemmBlocking(
       sizeof(double), GemmVectorLanes<double>(default_kind), GemmRegisterRows(default_kind));
-  const GemmBlocking &selected = blocking == nullptr ? default_blocking : *blocking;
+  const GemmBlocking selected =
+      ConstrainGemmBlockingForTasks(blocking == nullptr ? default_blocking : *blocking, M, N,
+                                    static_cast<std::size_t>(ParallelForThreadCount()));
   GemmImpl<Algorithm, double>(trans_a, trans_b, M, N, K, alpha, A, B, beta, C, Y,
                               SelectGemmKernelKind<double>(), tile, selected);
 }

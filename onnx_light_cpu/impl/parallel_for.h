@@ -223,6 +223,9 @@ public:
   /// Returns the number of worker threads (the calling thread is not counted).
   int64_t worker_count() const noexcept { return static_cast<int64_t>(workers_.size()); }
 
+  /// Returns true while the calling thread executes a pool region.
+  static bool IsInParallelRegion() noexcept { return InPool(); }
+
   /**
    * Runs ``fn(block)`` for every ``block`` in ``[0, num_blocks)``, then blocks
    * until all blocks finish.
@@ -341,6 +344,8 @@ inline ThreadPool &GlobalThreadPool() {
   static ThreadPool pool(ParallelForThreadCount() - 1);
   return pool;
 }
+
+inline bool ParallelForInParallelRegion() noexcept { return ThreadPool::IsInParallelRegion(); }
 
 /**
  * Splits the half-open range ``[0, total)`` into contiguous blocks and invokes

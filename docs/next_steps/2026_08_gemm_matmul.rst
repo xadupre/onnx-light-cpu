@@ -15,14 +15,14 @@ For GEMM, parity means a corpus median speed-up of at least ``1.0x`` versus
 ONNX Runtime and no priority shape below ``0.9x``. This is a catch-up effort
 with standard ONNX tensors and semantics.
 
-The current implementation is a correctness-first, register-blocked kernel.
-It already has AVX2/AVX-512 paths, K blocking, A/B packing, and parallel
-execution along one selected matrix axis. The general five-loop path does not
-yet schedule the complete M x N task grid; see
-:doc:`the current design <../design/gemm_kernel_design>`.
-Benchmarks nevertheless show that MLAS can remain an order of magnitude faster
-on multi-panel and skinny-M shapes. This is a kernel and scheduling gap, not a
-plotting artifact.
+The current implementation is a correctness-first, register-blocked kernel
+with AVX2/AVX-512 paths, K blocking, A/B packing, a task-aware M x N scheduler,
+batch scheduling, and packed SIMD split-K; see
+:doc:`the current design <../design/gemm_kernel_design>`. Roadmap PR01 closed
+the scheduler under-utilization identified on multi-panel shapes. The
+remaining roadmap work covers epilogues, complete x86 and thread-runtime
+tuning, ARM kernels, low-precision kernels, Attention, and the final ONNX
+Runtime parity gates.
 
 Related roadmap
 ---------------
@@ -261,10 +261,59 @@ Phase 2: saturate the floating-point units
 Parallel execution
 ~~~~~~~~~~~~~~~~~~
 
-The remaining P4 execution order and merge criteria are defined exclusively by
-Roadmap PR01 through PR06 in the final table. Persistent B prepacking is the
-**only** excluded optimization; no other performance work may be deferred while
-the parity gate remains unmet.
+Roadmap PR01 is implemented by `onnx-light-cpu #155
+<https://github.com/xadupre/onnx-light-cpu/pull/155>`_. The five remaining P4
+steps and their merge criteria are Roadmap PR02 through PR06 in the final
+table. Persistent B prepacking is the **only** excluded optimization; no other
+performance work may be deferred while the parity gate remains unmet.
+
+The scheduler decomposes ``Y = A @ B`` into a Cartesian grid of row and column
+panels:
+
+.. code-block:: text
+
+                 B (K x N)
+            +--------+--------+--------+
+            | B0     | B1     | B2     |  NC-wide column panels
+            +--------+--------+--------+
+
+    A (M x K)                 Y (M x N)
+    +--------+            +------+------+------+
+    | A0     |----------->| T00  | T01  | T02  |
+    +--------+            +------+------+------+
+    | A1     |----------->| T10  | T11  | T12  |
+    +--------+            +------+------+------+
+    | A2     |----------->| T20  | T21  | T22  |
+    +--------+            +------+------+------+
+      MC-high                 independent output zones
+      row panels
+
+Task ``T(i,j)`` multiplies row panel ``Ai`` by column panel ``Bj`` and writes
+only the corresponding, disjoint zone of ``Y``. Column panels are processed in
+bounded waves large enough to occupy the available threads. For example, with
+six threads, three row panels, and three column panels:
+
+.. code-block:: text
+
+   wave 1: B0, B1 -> T00 T10 T20 T01 T11 T21
+   wave 2: B2     -> T02 T12 T22
+
+For each K chunk, every B panel in the active wave is packed once and shared by
+all its row-panel tasks. The tasks accumulate into their zones of ``Y`` before
+the scheduler advances to the next K chunk. If the complete M x N task grid
+still cannot occupy the pool, split-K partitions the reduction dimension:
+
+.. code-block:: text
+
+   K = [K0 | K1 | K2]
+         |    |    |
+         v    v    v
+        P0   P1   P2  ->  Y = alpha * (P0 + P1 + P2) + beta * C
+
+Each partial ``Pi`` uses the same packed SIMD micro-kernels. Independent
+batches take priority over split-K: when a GEMM already runs inside a parallel
+batch region, it executes its M x N grid directly instead of creating nested
+K partitions.
 
 Phase 3: native low-precision kernels
 --------------------------------------
@@ -587,8 +636,8 @@ require measurements on dedicated hardware.
      - Priority FP32/FP64 corpus reaches at least 1.0x ONNX Runtime median
        performance with no priority shape below 0.9x.
      - P3.
-     - Existing SIMD work is linked at right; the six remaining PRs are
-       Roadmap PR01 through PR06 below.
+     - Scheduler PR01 is implemented; the five remaining PRs are Roadmap PR02
+       through PR06 below.
      - `onnx-light-cpu #133
        <https://github.com/xadupre/onnx-light-cpu/pull/133>`_,
        `onnx-light-cpu #141
@@ -604,7 +653,9 @@ require measurements on dedicated hardware.
        `onnx-light-cpu #147
        <https://github.com/xadupre/onnx-light-cpu/pull/147>`_,
        `onnx-light-cpu #149
-       <https://github.com/xadupre/onnx-light-cpu/pull/149>`_
+       <https://github.com/xadupre/onnx-light-cpu/pull/149>`_,
+       `onnx-light-cpu #155
+       <https://github.com/xadupre/onnx-light-cpu/pull/155>`_
    * - P5
      - Native/panel-converted FP16, BF16, and integer paths.
      - Low-precision corpus reaches at least 1.0x ONNX Runtime median
@@ -632,9 +683,10 @@ require measurements on dedicated hardware.
 Remaining pull-request sequence
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-The following table is the single source of truth for the **15 remaining pull
-requests** after ``#149``. Each row contains its complete implementation scope
-and merge criterion.
+The following table is the single source of truth for the **15-PR sequence**
+after ``#149``. Completed rows remain visible so scope is not lost; each row
+contains its complete implementation scope, merge criterion, dependency, and
+current status.
 
 .. list-table::
    :header-rows: 1
@@ -654,7 +706,8 @@ and merge criterion.
        used only when M/N/batch work is insufficient and uses packed SIMD
        kernels with a tolerance-preserving reduction.
      - ``#149``
-     - Pending
+     - `Implemented in #155
+       <https://github.com/xadupre/onnx-light-cpu/pull/155>`_
    * - Roadmap PR02
      - Broadcast and fused epilogues.
      - None, scalar, row, column, and full-matrix C layouts are consumed

@@ -38,6 +38,9 @@ GemmAlgorithm SelectGemmAlgorithm(bool trans_a, bool trans_b, std::size_t m, std
 GemmBlocking SelectGemmBlocking(std::size_t element_size, std::size_t vector_lanes,
                                 std::size_t register_rows);
 
+GemmBlocking ConstrainGemmBlockingForTasks(GemmBlocking blocking, std::size_t m, std::size_t n,
+                                           std::size_t thread_count);
+
 template <GemmAlgorithm Algorithm>
 void GemmFloat32Planned(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::size_t K,
                         float alpha, const float *A, const float *B, float beta, const float *C,
@@ -73,6 +76,9 @@ constexpr std::size_t kGemmAVX512MR = 6;
 constexpr std::size_t kGemmTileM = 64;
 constexpr std::size_t kGemmTileN = 256;
 constexpr std::size_t kGemmTileK = 256;
+// A scalar FMA is a fraction of one element-wise work unit once the inner loop
+// is vectorized and register-blocked.
+constexpr double kGemmFmasPerParallelWorkUnit = 64.0;
 
 // Scalar micro-kernels: also the tail handler for every vectorized flavor
 // (AVX-512, AVX, SSE2) and the fallback for non-x86 builds. Defined (with
