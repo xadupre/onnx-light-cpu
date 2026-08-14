@@ -593,7 +593,9 @@ require measurements on dedicated hardware.
      - `onnx-light-cpu #133
        <https://github.com/xadupre/onnx-light-cpu/pull/133>`_,
        `onnx-light-cpu #141
-       <https://github.com/xadupre/onnx-light-cpu/pull/141>`_
+       <https://github.com/xadupre/onnx-light-cpu/pull/141>`_,
+       `onnx-light-cpu #142
+       <https://github.com/xadupre/onnx-light-cpu/pull/142>`_
    * - P5
      - Native/panel-converted FP16, BF16, and integer paths.
      - Low-precision corpus reaches 0.9x MLAS where MLAS supports the type.
