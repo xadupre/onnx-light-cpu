@@ -98,6 +98,8 @@ void GemmMicroKernel_ScalarImpl(std::size_t mr, std::size_t nb, std::size_t K, T
                                 const T *Bmat, std::size_t N, const T *Crow_base,
                                 std::size_t Cstride, T *Yrow_base, std::size_t Ystride,
                                 std::size_t n0, GemmAccumMode mode, const T *Apack) {
+  const bool alpha_is_one = alpha == T(1);
+  const bool beta_is_one = beta == T(1);
   for (std::size_t r = 0; r < mr; ++r) {
     T *Yrow = Yrow_base + r * Ystride + n0;
     // Initialize with the scaled bias (or zero) for the first chunk; a later
@@ -107,7 +109,7 @@ void GemmMicroKernel_ScalarImpl(std::size_t mr, std::size_t nb, std::size_t K, T
     if (mode == GemmAccumMode::kInitBias) {
       const T *Crow = Crow_base + r * Cstride + n0;
       for (std::size_t n = 0; n < nb; ++n) {
-        Yrow[n] = beta * Crow[n];
+        Yrow[n] = beta_is_one ? Crow[n] : beta * Crow[n];
       }
     } else if (mode == GemmAccumMode::kInitZero) {
       for (std::size_t n = 0; n < nb; ++n) {
@@ -116,7 +118,7 @@ void GemmMicroKernel_ScalarImpl(std::size_t mr, std::size_t nb, std::size_t K, T
     }
     const T *Apack_r = Apack + r * K;
     for (std::size_t k = 0; k < K; ++k) {
-      const T a = alpha * Apack_r[k];
+      const T a = alpha_is_one ? Apack_r[k] : alpha * Apack_r[k];
       const T *Brow = Bmat + k * N + n0;
       for (std::size_t n = 0; n < nb; ++n) {
         Yrow[n] += a * Brow[n];
@@ -209,6 +211,8 @@ void GemmMicroKernel_AVX_F32(std::size_t mr, std::size_t nb, std::size_t K, floa
                              std::size_t n0, GemmAccumMode mode, const float *Apack) {
   const __m256 valpha = _mm256_set1_ps(alpha);
   const __m256 vbeta = _mm256_set1_ps(beta);
+  const bool alpha_is_one = alpha == 1.0f;
+  const bool beta_is_one = beta == 1.0f;
   std::size_t n = 0;
   for (; n + 16 <= nb; n += 16) {
     __m256 acc0[kGemmMR];
@@ -232,12 +236,14 @@ void GemmMicroKernel_AVX_F32(std::size_t mr, std::size_t nb, std::size_t K, floa
     }
     for (std::size_t r = 0; r < mr; ++r) {
       float *Yrow = Yrow_base + r * Ystride + n0 + n;
-      __m256 res0 = _mm256_mul_ps(valpha, acc0[r]);
-      __m256 res1 = _mm256_mul_ps(valpha, acc1[r]);
+      __m256 res0 = alpha_is_one ? acc0[r] : _mm256_mul_ps(valpha, acc0[r]);
+      __m256 res1 = alpha_is_one ? acc1[r] : _mm256_mul_ps(valpha, acc1[r]);
       if (mode == GemmAccumMode::kInitBias) {
         const float *Crow = Crow_base + r * Cstride + n0 + n;
-        res0 = _mm256_add_ps(res0, _mm256_mul_ps(vbeta, _mm256_loadu_ps(Crow)));
-        res1 = _mm256_add_ps(res1, _mm256_mul_ps(vbeta, _mm256_loadu_ps(Crow + 8)));
+        const __m256 vc0 = _mm256_loadu_ps(Crow);
+        const __m256 vc1 = _mm256_loadu_ps(Crow + 8);
+        res0 = _mm256_add_ps(res0, beta_is_one ? vc0 : _mm256_mul_ps(vbeta, vc0));
+        res1 = _mm256_add_ps(res1, beta_is_one ? vc1 : _mm256_mul_ps(vbeta, vc1));
       } else if (mode == GemmAccumMode::kAccumulate) {
         res0 = _mm256_add_ps(res0, _mm256_loadu_ps(Yrow));
         res1 = _mm256_add_ps(res1, _mm256_loadu_ps(Yrow + 8));
@@ -260,10 +266,10 @@ void GemmMicroKernel_AVX_F32(std::size_t mr, std::size_t nb, std::size_t K, floa
     }
     for (std::size_t r = 0; r < mr; ++r) {
       float *Yrow = Yrow_base + r * Ystride + n0 + n;
-      __m256 res = _mm256_mul_ps(valpha, acc[r]);
+      __m256 res = alpha_is_one ? acc[r] : _mm256_mul_ps(valpha, acc[r]);
       if (mode == GemmAccumMode::kInitBias) {
         const __m256 vc = _mm256_loadu_ps(Crow_base + r * Cstride + n0 + n);
-        res = _mm256_add_ps(res, _mm256_mul_ps(vbeta, vc));
+        res = _mm256_add_ps(res, beta_is_one ? vc : _mm256_mul_ps(vbeta, vc));
       } else if (mode == GemmAccumMode::kAccumulate) {
         res = _mm256_add_ps(res, _mm256_loadu_ps(Yrow));
       }
@@ -284,6 +290,8 @@ void GemmMicroKernel_SSE2_F32(std::size_t mr, std::size_t nb, std::size_t K, flo
                               std::size_t n0, GemmAccumMode mode, const float *Apack) {
   const __m128 valpha = _mm_set1_ps(alpha);
   const __m128 vbeta = _mm_set1_ps(beta);
+  const bool alpha_is_one = alpha == 1.0f;
+  const bool beta_is_one = beta == 1.0f;
   std::size_t n = 0;
   for (; n + 8 <= nb; n += 8) {
     __m128 acc0[kGemmMR];
@@ -304,12 +312,14 @@ void GemmMicroKernel_SSE2_F32(std::size_t mr, std::size_t nb, std::size_t K, flo
     }
     for (std::size_t r = 0; r < mr; ++r) {
       float *Yrow = Yrow_base + r * Ystride + n0 + n;
-      __m128 res0 = _mm_mul_ps(valpha, acc0[r]);
-      __m128 res1 = _mm_mul_ps(valpha, acc1[r]);
+      __m128 res0 = alpha_is_one ? acc0[r] : _mm_mul_ps(valpha, acc0[r]);
+      __m128 res1 = alpha_is_one ? acc1[r] : _mm_mul_ps(valpha, acc1[r]);
       if (mode == GemmAccumMode::kInitBias) {
         const float *Crow = Crow_base + r * Cstride + n0 + n;
-        res0 = _mm_add_ps(res0, _mm_mul_ps(vbeta, _mm_loadu_ps(Crow)));
-        res1 = _mm_add_ps(res1, _mm_mul_ps(vbeta, _mm_loadu_ps(Crow + 4)));
+        const __m128 vc0 = _mm_loadu_ps(Crow);
+        const __m128 vc1 = _mm_loadu_ps(Crow + 4);
+        res0 = _mm_add_ps(res0, beta_is_one ? vc0 : _mm_mul_ps(vbeta, vc0));
+        res1 = _mm_add_ps(res1, beta_is_one ? vc1 : _mm_mul_ps(vbeta, vc1));
       } else if (mode == GemmAccumMode::kAccumulate) {
         res0 = _mm_add_ps(res0, _mm_loadu_ps(Yrow));
         res1 = _mm_add_ps(res1, _mm_loadu_ps(Yrow + 4));
@@ -332,10 +342,10 @@ void GemmMicroKernel_SSE2_F32(std::size_t mr, std::size_t nb, std::size_t K, flo
     }
     for (std::size_t r = 0; r < mr; ++r) {
       float *Yrow = Yrow_base + r * Ystride + n0 + n;
-      __m128 res = _mm_mul_ps(valpha, acc[r]);
+      __m128 res = alpha_is_one ? acc[r] : _mm_mul_ps(valpha, acc[r]);
       if (mode == GemmAccumMode::kInitBias) {
         const __m128 vc = _mm_loadu_ps(Crow_base + r * Cstride + n0 + n);
-        res = _mm_add_ps(res, _mm_mul_ps(vbeta, vc));
+        res = _mm_add_ps(res, beta_is_one ? vc : _mm_mul_ps(vbeta, vc));
       } else if (mode == GemmAccumMode::kAccumulate) {
         res = _mm_add_ps(res, _mm_loadu_ps(Yrow));
       }
@@ -357,6 +367,8 @@ void GemmMicroKernel_AVX_F64(std::size_t mr, std::size_t nb, std::size_t K, doub
                              const double *Apack) {
   const __m256d valpha = _mm256_set1_pd(alpha);
   const __m256d vbeta = _mm256_set1_pd(beta);
+  const bool alpha_is_one = alpha == 1.0;
+  const bool beta_is_one = beta == 1.0;
   std::size_t n = 0;
   for (; n + 8 <= nb; n += 8) {
     __m256d acc0[kGemmMR];
@@ -380,12 +392,14 @@ void GemmMicroKernel_AVX_F64(std::size_t mr, std::size_t nb, std::size_t K, doub
     }
     for (std::size_t r = 0; r < mr; ++r) {
       double *Yrow = Yrow_base + r * Ystride + n0 + n;
-      __m256d res0 = _mm256_mul_pd(valpha, acc0[r]);
-      __m256d res1 = _mm256_mul_pd(valpha, acc1[r]);
+      __m256d res0 = alpha_is_one ? acc0[r] : _mm256_mul_pd(valpha, acc0[r]);
+      __m256d res1 = alpha_is_one ? acc1[r] : _mm256_mul_pd(valpha, acc1[r]);
       if (mode == GemmAccumMode::kInitBias) {
         const double *Crow = Crow_base + r * Cstride + n0 + n;
-        res0 = _mm256_add_pd(res0, _mm256_mul_pd(vbeta, _mm256_loadu_pd(Crow)));
-        res1 = _mm256_add_pd(res1, _mm256_mul_pd(vbeta, _mm256_loadu_pd(Crow + 4)));
+        const __m256d vc0 = _mm256_loadu_pd(Crow);
+        const __m256d vc1 = _mm256_loadu_pd(Crow + 4);
+        res0 = _mm256_add_pd(res0, beta_is_one ? vc0 : _mm256_mul_pd(vbeta, vc0));
+        res1 = _mm256_add_pd(res1, beta_is_one ? vc1 : _mm256_mul_pd(vbeta, vc1));
       } else if (mode == GemmAccumMode::kAccumulate) {
         res0 = _mm256_add_pd(res0, _mm256_loadu_pd(Yrow));
         res1 = _mm256_add_pd(res1, _mm256_loadu_pd(Yrow + 4));
@@ -408,10 +422,10 @@ void GemmMicroKernel_AVX_F64(std::size_t mr, std::size_t nb, std::size_t K, doub
     }
     for (std::size_t r = 0; r < mr; ++r) {
       double *Yrow = Yrow_base + r * Ystride + n0 + n;
-      __m256d res = _mm256_mul_pd(valpha, acc[r]);
+      __m256d res = alpha_is_one ? acc[r] : _mm256_mul_pd(valpha, acc[r]);
       if (mode == GemmAccumMode::kInitBias) {
         const __m256d vc = _mm256_loadu_pd(Crow_base + r * Cstride + n0 + n);
-        res = _mm256_add_pd(res, _mm256_mul_pd(vbeta, vc));
+        res = _mm256_add_pd(res, beta_is_one ? vc : _mm256_mul_pd(vbeta, vc));
       } else if (mode == GemmAccumMode::kAccumulate) {
         res = _mm256_add_pd(res, _mm256_loadu_pd(Yrow));
       }
@@ -433,6 +447,8 @@ void GemmMicroKernel_SSE2_F64(std::size_t mr, std::size_t nb, std::size_t K, dou
                               const double *Apack) {
   const __m128d valpha = _mm_set1_pd(alpha);
   const __m128d vbeta = _mm_set1_pd(beta);
+  const bool alpha_is_one = alpha == 1.0;
+  const bool beta_is_one = beta == 1.0;
   std::size_t n = 0;
   for (; n + 4 <= nb; n += 4) {
     __m128d acc0[kGemmMR];
@@ -453,12 +469,14 @@ void GemmMicroKernel_SSE2_F64(std::size_t mr, std::size_t nb, std::size_t K, dou
     }
     for (std::size_t r = 0; r < mr; ++r) {
       double *Yrow = Yrow_base + r * Ystride + n0 + n;
-      __m128d res0 = _mm_mul_pd(valpha, acc0[r]);
-      __m128d res1 = _mm_mul_pd(valpha, acc1[r]);
+      __m128d res0 = alpha_is_one ? acc0[r] : _mm_mul_pd(valpha, acc0[r]);
+      __m128d res1 = alpha_is_one ? acc1[r] : _mm_mul_pd(valpha, acc1[r]);
       if (mode == GemmAccumMode::kInitBias) {
         const double *Crow = Crow_base + r * Cstride + n0 + n;
-        res0 = _mm_add_pd(res0, _mm_mul_pd(vbeta, _mm_loadu_pd(Crow)));
-        res1 = _mm_add_pd(res1, _mm_mul_pd(vbeta, _mm_loadu_pd(Crow + 2)));
+        const __m128d vc0 = _mm_loadu_pd(Crow);
+        const __m128d vc1 = _mm_loadu_pd(Crow + 2);
+        res0 = _mm_add_pd(res0, beta_is_one ? vc0 : _mm_mul_pd(vbeta, vc0));
+        res1 = _mm_add_pd(res1, beta_is_one ? vc1 : _mm_mul_pd(vbeta, vc1));
       } else if (mode == GemmAccumMode::kAccumulate) {
         res0 = _mm_add_pd(res0, _mm_loadu_pd(Yrow));
         res1 = _mm_add_pd(res1, _mm_loadu_pd(Yrow + 2));
@@ -481,10 +499,10 @@ void GemmMicroKernel_SSE2_F64(std::size_t mr, std::size_t nb, std::size_t K, dou
     }
     for (std::size_t r = 0; r < mr; ++r) {
       double *Yrow = Yrow_base + r * Ystride + n0 + n;
-      __m128d res = _mm_mul_pd(valpha, acc[r]);
+      __m128d res = alpha_is_one ? acc[r] : _mm_mul_pd(valpha, acc[r]);
       if (mode == GemmAccumMode::kInitBias) {
         const __m128d vc = _mm_loadu_pd(Crow_base + r * Cstride + n0 + n);
-        res = _mm_add_pd(res, _mm_mul_pd(vbeta, vc));
+        res = _mm_add_pd(res, beta_is_one ? vc : _mm_mul_pd(vbeta, vc));
       } else if (mode == GemmAccumMode::kAccumulate) {
         res = _mm_add_pd(res, _mm_loadu_pd(Yrow));
       }

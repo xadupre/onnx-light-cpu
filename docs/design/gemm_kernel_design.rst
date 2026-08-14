@@ -74,10 +74,10 @@ the full rationale):
    ``PackARowBlock`` and ``PackBPanel`` -- so the hot inner loop only ever
    touches L1/L2-resident, unit-stride memory regardless of ``trans_a`` /
    ``trans_b`` or the caller's strides.
-2. The output grid is flattened into ``(row block, column panel)`` tasks and
-   spread across ``ParallelFor`` on **both** the ``M`` and ``N`` axes, so
-   "skinny" shapes (e.g. ``M == 1``, a single-example matvec) still get
-   parallelism instead of running on a single thread.
+2. The direct path flattens ``(row block, column panel)`` tasks. The general
+   five-loop path instead chooses column panels when there are enough of them,
+   otherwise row panels. It does not yet combine both axes, so large
+   cache-derived MC/NC values can expose fewer tasks than available threads.
 
 Prepared execution interfaces
 -----------------------------
@@ -97,8 +97,9 @@ The selected values are passed to the five-loop engine rather than being
 descriptive metadata.
 
 The plan selects the general five-loop engine or a direct, skinny-M, skinny-N,
-or split-K path once from the prepared shape. Persistent packed constant panels
-are introduced by a later roadmap step.
+or split-K path once from the prepared shape. It may own constant B in its
+original representation; persistent B prepacking is explicitly excluded from
+the roadmap.
 
 Platform support (x86_64)
 -------------------------
@@ -193,8 +194,10 @@ Implemented optimizations (for reference)
      - Implemented -- deterministic x86 CPUID cache descriptors select aligned
        ``MC``, ``NC``, and ``KC`` values stored in each plan; conservative
        defaults cover unavailable cache discovery.
-   * - 2D M x N task parallelism
-     - Implemented -- flattened task list, fixes the ``M == 1`` starvation case.
+   * - M/N task parallelism
+     - Partial -- the direct path flattens M x N tasks; the general five-loop
+       path selects one axis. The full task-aware scheduler is P4.5-P4.6 in the
+       roadmap.
    * - A-panel packing (``PackARowBlock``)
      - Implemented -- resolves ``trans_a`` once per (row block, k-chunk).
    * - B-panel packing (``PackBPanel``)
@@ -224,6 +227,10 @@ Implemented optimizations (for reference)
      - Implemented -- AVX2/SSE use MR=4 while AVX-512 uses MR=6; the selected
        value drives algorithm selection, MC alignment, row packing, and the
        direct/five-loop engines.
+   * - Unit-scale and no-bias epilogues
+     - Implemented -- scalar, SSE2, AVX, AVX2+FMA, and AVX-512 kernels skip
+       redundant ``alpha``/``beta`` multiplies when the scale is one; zero
+       ``beta`` and absent bias avoid reading ``C``.
 
 Remaining optimizations (not implemented)
 --------------------------------------------

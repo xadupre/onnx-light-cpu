@@ -8,14 +8,18 @@ Gemm, MatMul, and Attention Performance Roadmap
 Objective
 ---------
 
-The objective is to bring ``onnx-light-cpu`` within 10% of ONNX Runtime/MLAS
-for the important ``Gemm``, ``MatMul``, and tensor-based ``Attention``
+The objective is performance parity with the ONNX Runtime CPU execution
+provider for the important ``Gemm``, ``MatMul``, and tensor-based ``Attention``
 workloads, for every supported data type, without sacrificing ONNX correctness.
-This is a catch-up effort with standard ONNX tensors and semantics.
+For GEMM, parity means a corpus median speed-up of at least ``1.0x`` versus
+ONNX Runtime and no priority shape below ``0.9x``. This is a catch-up effort
+with standard ONNX tensors and semantics.
 
 The current implementation is a correctness-first, register-blocked kernel.
-It already has AVX2/AVX-512 paths, K blocking, A/B packing, and two-dimensional
-task parallelism; see :doc:`the current design <../design/gemm_kernel_design>`.
+It already has AVX2/AVX-512 paths, K blocking, A/B packing, and parallel
+execution along one selected matrix axis. The general five-loop path does not
+yet schedule the complete M x N task grid; see
+:doc:`the current design <../design/gemm_kernel_design>`.
 Benchmarks nevertheless show that MLAS can remain an order of magnitude faster
 on multi-panel and skinny-M shapes. This is a kernel and scheduling gap, not a
 plotting artifact.
@@ -151,10 +155,11 @@ This order is important:
 * transposition is resolved while packing, so the arithmetic loop sees only
   contiguous canonical panels.
 
-The current task decomposition associates packing with individual output
-tiles. In particular, the same logical B panel can be packed independently by
-several row tasks. The replacement must make packed-panel ownership explicit
-and schedule compute tasks that reference shared immutable panels.
+The current five-loop engine packs one B panel for a column/K block and shares
+it across its row panels. It then parallelizes either column panels or row
+panels, not their Cartesian product. Its task granularity is therefore tied to
+MC/NC: a large cache-derived NC can leave only one column task, while a large
+MC can leave only a few row tasks.
 
 One algorithm is not optimal for every shape. The plan must choose among
 distinct computational algorithms:
@@ -180,8 +185,8 @@ distinct computational algorithms:
      - Batch outer loop for small independent products; merge batch with M/N
        task dimensions when one product cannot occupy all cores.
    * - Constant B
-     - Persistently packed B panels in the exact format consumed by the chosen
-       micro-kernel.
+     - Plan-owned B in its original tensor representation. Persistent
+       prepacking is the sole optimization excluded from this roadmap.
    * - Extremely large K with small M/N
      - Split K only when M/N/batch parallelism is insufficient, then combine
        partial accumulators in a controlled reduction.
@@ -197,7 +202,7 @@ limits are known. It should contain:
 * MC/NC/KC and MR/NR;
 * typed function pointers for packing, micro-kernel, and epilogue;
 * the parallel decomposition and useful thread count;
-* persistent packed constant panels when B is an initializer.
+* plan-owned constant B storage when B is an initializer.
 
 The execution path then invokes the plan directly. This removes repeated
 selection, but its main benefit is enabling the correct algorithm and data
@@ -247,21 +252,19 @@ Phase 2: saturate the floating-point units
 * Use aligned panel loads and software prefetch only where hardware-counter
   measurements show reduced stalls.
 * Specialize the arithmetic epilogue for ``alpha == 1``, ``beta == 0``, scalar
-  bias, row/column bias, and no bias.
+  bias, row/column bias, and no bias. Unit ``alpha``/``beta``, zero ``beta``,
+  and no-bias cases now avoid redundant vector/scalar multiplication and bias
+  reads in every x86 micro-kernel and scalar tail; scalar and row/column
+  broadcast bias interfaces remain.
 * Add ARM64 NEON kernels, followed by SVE/SVE2 where relevant.
 
 Parallel execution
 ~~~~~~~~~~~~~~~~~~
 
-* Replace the fixed static split with a scheduler that chooses M, N, K, or
-  batch parallelism from the shape.
-* Avoid waking more threads than available tiles or useful memory bandwidth.
-* Prefer physical P-cores for latency-sensitive small/medium GEMMs on hybrid
-  CPUs; use E-cores only when the workload is large enough to benefit.
-* Keep workers spinning briefly between repeated inference calls before
-  parking, with a configurable policy to avoid wasting CPU in idle processes.
-* Prevent oversubscription when the caller or another backend already owns a
-  thread pool.
+The remaining P4 execution order and merge criteria are defined exclusively by
+Roadmap PR01 through PR06 in the final table. Persistent B prepacking is the
+**only** excluded optimization; no other performance work may be deferred while
+the parity gate remains unmet.
 
 Phase 3: native low-precision kernels
 --------------------------------------
@@ -396,15 +399,6 @@ to verify, not guarantees.
      - Expected gain over MLAS
      - Conditions and quantitative bound
      - Estimated effort
-   * - Persistent prepacking
-     - **0-5% execution gain** in the usual case; **1.2-5x faster session
-       preparation** if packed data is serialized or shared.
-     - MLAS already prepacks many constant weights, so merely caching B is a
-       parity requirement, not a likely execution-time advantage. A gain
-       requires sharing one packed representation across sessions, removing a
-       repack MLAS still performs, or using a more shape-specific format.
-       Packed-weight storage is typically **1.0-1.5x** the original weight size.
-     - 3-5 engineering days.
    * - Full shape specialization
      - **2-10%** normally; **10-20%** on stable skinny or tail-heavy shapes.
      - Instantiate loop order, MC/NC/KC, MR/NR, packing format, micro-kernel,
@@ -462,11 +456,11 @@ to verify, not guarantees.
      - 10-20 days after the GEMM primitives and correctness path exist.
 
 These gains are not additive. Shape specialization and autotuning often choose
-the same improvement, while prepacking is a prerequisite for the specialized
-constant-weight path. A credible target sequence is:
+the same improvement. A credible target sequence is:
 
-1. reach **0.9-1.0x MLAS** with the generic blocked algorithm;
-2. reach **1.05-1.15x MLAS** through shape specialization and tuning;
+1. reach at least **1.0x ONNX Runtime** median performance with the generic
+   blocked algorithm and tuned scheduler;
+2. reach **1.05-1.15x ONNX Runtime** through shape specialization and tuning;
 3. target **1.2-1.8x** on fused or tiny-batch workloads;
 4. reserve gains above **2x** for workloads with exploitable sparsity,
    low-rank structure, very large collections of tiny matrices, or an
@@ -478,9 +472,9 @@ External libraries
 OpenBLAS, BLIS, oneDNN, and vendor BLAS libraries are useful as performance
 oracles and optional large-matrix fallbacks. They do not remove the need for
 internal kernels: small inference shapes, FP16/BF16/quantized types, constant
-weight prepacking, and fused epilogues are precisely where a model-aware
-runtime can win. Any optional dependency must have a deterministic internal
-fallback and must not create a second competing thread pool.
+weights, and fused epilogues are precisely where a model-aware runtime can win.
+Any optional dependency must have a deterministic internal fallback and must
+not create a second competing thread pool.
 
 Acceptance criteria
 -------------------
@@ -495,8 +489,8 @@ Acceptance criteria
      - ONNX backend and differential tests pass for every type, shape,
        transpose, broadcast, alpha/beta, bias, empty-dimension, and tail case.
    * - FP32/FP64 parity
-     - Median end-to-end time is no worse than 1.10x MLAS on the priority shape
-       corpus; every larger regression is documented with a kernel breakdown.
+     - Median speed-up is at least 1.0x versus ONNX Runtime on the priority
+       shape corpus, with no priority shape below 0.9x.
    * - Low precision parity
      - FP16, BF16, and INT8 meet the same target on hardware with native
        support; fallback paths remain correct and avoid full-matrix conversion
@@ -512,8 +506,8 @@ Acceptance criteria
      - The optimized path never materializes the complete score or probability
        tensor; temporary memory is bounded by worker count and Br x Bc blocks.
    * - Attention parity
-     - Median prefill latency is no worse than 1.10x ONNX Runtime on the
-       priority model/context corpus with the same thread count.
+     - Median speed-up is at least 1.0x versus ONNX Runtime on the priority
+       model/context corpus, with no priority case below 0.9x.
    * - Data movement
      - Every dynamic A panel and constant B panel is packed no more often than
        required by the selected loop nest; low-precision paths avoid
@@ -590,11 +584,11 @@ require measurements on dedicated hardware.
        <https://github.com/xadupre/onnx-light-cpu/pull/140>`_
    * - P4
      - FMA/AVX2/AVX-512/ARM micro-kernels and tuned scheduler.
-     - Priority FP32/FP64 corpus reaches 0.9-1.0x MLAS.
+     - Priority FP32/FP64 corpus reaches at least 1.0x ONNX Runtime median
+       performance with no priority shape below 0.9x.
      - P3.
-     - AVX2+FMA and AVX-512 micro-kernels implemented, including four-way K
-       unrolling and ISA-selected MR=4/6 variants; ARM kernels, per-model MR/NR
-       tuning, scheduler tuning, and the performance gate remain.
+     - Existing SIMD work is linked at right; the six remaining PRs are
+       Roadmap PR01 through PR06 below.
      - `onnx-light-cpu #133
        <https://github.com/xadupre/onnx-light-cpu/pull/133>`_,
        `onnx-light-cpu #141
@@ -608,24 +602,167 @@ require measurements on dedicated hardware.
        `onnx-light-cpu #146
        <https://github.com/xadupre/onnx-light-cpu/pull/146>`_,
        `onnx-light-cpu #147
-       <https://github.com/xadupre/onnx-light-cpu/pull/147>`_
+       <https://github.com/xadupre/onnx-light-cpu/pull/147>`_,
+       `onnx-light-cpu #149
+       <https://github.com/xadupre/onnx-light-cpu/pull/149>`_
    * - P5
      - Native/panel-converted FP16, BF16, and integer paths.
-     - Low-precision corpus reaches 0.9x MLAS where MLAS supports the type.
+     - Low-precision corpus reaches at least 1.0x ONNX Runtime median
+       performance with no priority shape below 0.9x where the type is
+       supported.
      - P3-P4.
-     - Planned.
-     - TBD.
+     - Four-PR sequence fixed below; all pending.
+     - Roadmap PR07 through PR10 below.
    * - P6
      - ``AttentionPlan`` and materialized tensor correctness implementation.
      - MHA/GQA/MQA, masks, causal behavior, and tensor past/present
        differential tests pass.
      - P1-P2.
-     - Planned.
-     - TBD.
+     - Two-PR sequence fixed below; all pending.
+     - Roadmap PR11 through PR12 below.
    * - P7
      - Online-softmax prefill Attention.
-     - No full score/probability tensor; long-context prefill is within 1.1x of
-       ONNX Runtime with bounded temporary memory.
+     - No full score/probability tensor; median performance is at least 1.0x
+       ONNX Runtime with no priority case below 0.9x and bounded temporary
+       memory.
      - P4 and P6.
-     - Planned.
-     - TBD.
+     - Three-PR sequence fixed below; all pending.
+     - Roadmap PR13 through PR15 below.
+
+Remaining pull-request sequence
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The following table is the single source of truth for the **15 remaining pull
+requests** after ``#149``. Each row contains its complete implementation scope
+and merge criterion.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 9 29 42 12 8
+
+   * - PR
+     - Scope
+     - Merge criterion
+     - Depends on
+     - Status
+   * - Roadmap PR01
+     - Scheduler, blocking, batch, and split-K.
+     - The five-loop engine schedules the full row-panel x column-panel grid,
+       packs each B panel once, consumes ``useful_threads()``, and constrains
+       MC/NC to expose enough tasks. ``MatMulPlan``, ``StridedBatchedGemm``, and
+       ``GroupedGemm`` schedule small products without nested pools. Split-K is
+       used only when M/N/batch work is insufficient and uses packed SIMD
+       kernels with a tolerance-preserving reduction.
+     - ``#149``
+     - Pending
+   * - Roadmap PR02
+     - Broadcast and fused epilogues.
+     - None, scalar, row, column, and full-matrix C layouts are consumed
+       directly for every alpha/beta case; the expanded M x N bias temporary
+       disappears. Priority bias, residual, activation, and output-conversion
+       combinations use typed epilogues without intermediate tensors.
+     - PR01
+     - Pending
+   * - Roadmap PR03
+     - Complete x86 kernel tuning.
+     - AVX2 and AVX-512 candidate MR/NR profiles, aligned panels/loads,
+       instruction ordering, and measured prefetch choices are benchmarked.
+       CPUID family/model dispatch selects the winners; remaining gaps receive
+       assembly kernels, with no priority-shape regression.
+     - PR02
+     - Pending
+   * - Roadmap PR04
+     - Complete thread runtime.
+     - The scheduler detects physical cores, SMT siblings, P-cores, and E-cores
+       and applies tested Linux/Windows affinity. Bounded spin-before-park is
+       configurable, and caller-owned pools run without nested workers or
+       oversubscription.
+     - PR01
+     - Pending
+   * - Roadmap PR05
+     - ARM FP32/FP64 kernels.
+     - NEON packing, kernels, tails, and dispatch pass all GEMM/MatMul cases.
+       Runtime vector-length-aware SVE/SVE2 profiles pass the ARM correctness
+       and performance corpus with NEON fallback.
+     - PR02
+     - Pending
+   * - Roadmap PR06
+     - FP32/FP64 parity gate.
+     - Raw results cover every priority platform/type corpus; median speed-up
+       is at least 1.0x ONNX Runtime and no priority case is below 0.9x. The PR
+       remains open while any target fails.
+     - PR01 through PR05
+     - Pending
+   * - Roadmap PR07
+     - x86 FP16/BF16 kernel family.
+     - Immutable plans describe typed panels, FP32 accumulation, conversion
+       epilogues, and ISA gates without full-tensor conversion. F16C converts
+       while packing; AVX-512FP16/BF16 use native kernels; CPUID and OS tile
+       state safely gate AMX with AVX-512 fallbacks.
+     - PR06
+     - Pending
+   * - Roadmap PR08
+     - ARM FP16/BF16 kernel family.
+     - NEON and available SVE/SVE2 kernels convert or compute natively during
+       packing, accumulate in FP32, narrow only final output, and pass the
+       complete low-precision GEMM/MatMul corpus.
+     - PR05, PR07
+     - Pending
+   * - Roadmap PR09
+     - Integer, Float8, and packed 4-bit kernels.
+     - x86 VNNI/AMX and ARM dot-product paths fuse zero-point correction,
+       INT32 accumulation, requantization, and schema overflow. INT32/INT64
+       retain exact fallback arithmetic. Float8 formats have explicit
+       decode/packing, and packed INT4/UINT4 unpack or feed native dot/tile
+       instructions with exact tails.
+     - PR07, PR08
+     - Pending
+   * - Roadmap PR10
+     - Low-precision parity gate.
+     - Every supported low-precision type reaches at least 1.0x ONNX Runtime
+       median performance with no priority case below 0.9x where ONNX Runtime
+       supports the type; all other targets publish correctness and throughput.
+       The PR remains open while any target fails.
+     - PR07 through PR09
+     - Pending
+   * - Roadmap PR11
+     - Materialized Attention implementation.
+     - ``AttentionPlan`` validates layouts, head geometry, scale, masks, types,
+       blocks, and threads. The materialized QK-softmax-PV path supports
+       boolean/additive/padding/causal masks, zero-copy GQA/MQA head mapping,
+       tensor past/present, FP32/FP16/BF16, and batch/head/query scheduling.
+     - PR10
+     - Pending
+   * - Roadmap PR12
+     - Materialized Attention correctness gate.
+     - The complete MHA/GQA/MQA, mask, causal, past/present, layout, empty
+       sequence, and type corpus matches ONNX Runtime; the path is registered
+       as fallback for combinations not handled by streaming Attention.
+     - PR11
+     - Pending
+   * - Roadmap PR13
+     - Online Attention compute engine.
+     - The online recurrence matches the materialized path. SIMD Q x K kernels
+       fuse scale, masks, causal bounds, and row maximum; vector exponential
+       and reductions are accurate; probability x V updates output directly.
+       Cache-aware Br/Bc bounds memory, while causal, window, and sparse masks
+       skip absent tiles.
+     - PR12
+     - Pending
+   * - Roadmap PR14
+     - Streaming Attention scheduling and types.
+     - Batch/head/query-block prefill scheduling occupies useful threads
+       without nested pools. Query lengths 1 and 2-16 use dedicated decode
+       algorithms for MHA/GQA/MQA with past/present. FP16/BF16 score and
+       V-update kernels match the materialized fallback.
+     - PR10, PR13
+     - Pending
+   * - Roadmap PR15
+     - Final roadmap parity and memory gate.
+     - Every priority prefill/decode platform/type case has bounded temporary
+       memory, reaches at least 1.0x ONNX Runtime median performance, and has no
+       priority case below 0.9x. The PR remains open while any target fails.
+     - PR14
+     - Pending
+
+Roadmap PR15 is the final roadmap PR.
