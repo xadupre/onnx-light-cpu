@@ -217,6 +217,9 @@ Implemented optimizations (for reference)
    * - AVX2+FMA MR variants
      - Implemented -- compile-time FP32/FP64 MR=1, 2, 3, and 4 variants cover
        both NR=1 and NR=2, selected from the actual row-block size.
+   * - AVX-512 MR variants
+     - Implemented -- compile-time FP32/FP64 MR=1, 2, 3, and 4 variants cover
+       both NR=1 and NR=2, selected from the actual row-block size.
 
 Remaining optimizations (not implemented)
 --------------------------------------------
