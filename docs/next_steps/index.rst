@@ -17,5 +17,6 @@ optimize next.
     :caption: Discussion
 
     2026_08_conv
+    2026_08_unary_elementwise
     2026_08_binary_elementwise
     2026_08_kv_cache
