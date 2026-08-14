@@ -308,8 +308,10 @@ Implemented optimizations (for reference)
        algorithm selection, MC alignment, row packing, and execution.
    * - Aligned packed panels
      - Implemented -- A and B workspaces are 64-byte aligned. B row strides
-       are padded to the active vector width, allowing aligned AVX2 and
-       AVX-512 loads while direct kernels retain safe unaligned loads.
+       are padded to the active vector width, keeping AVX2 and AVX-512 loads
+       on aligned addresses. The kernels use branch-free unaligned-load
+       instructions, which have the same throughput on these aligned
+       addresses and also keep direct kernels safe.
    * - Measured software prefetch
      - Implemented -- disabling the four-row lookahead increased local
        single-thread square-matrix medians by 1.5x to 2.1x, so the measured

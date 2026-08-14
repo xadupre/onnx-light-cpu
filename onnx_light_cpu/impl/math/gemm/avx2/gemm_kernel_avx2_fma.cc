@@ -6,8 +6,6 @@
 
 #include <immintrin.h>
 
-#include <cstdint>
-
 namespace onnx_light_cpu {
 
 namespace {
@@ -16,14 +14,6 @@ constexpr int kGemmPrefetchDistanceK = 4;
 
 template <typename T> inline void PrefetchT0(const T *ptr) {
   _mm_prefetch(reinterpret_cast<const char *>(ptr), _MM_HINT_T0);
-}
-
-inline __m256 Load(const float *ptr, bool aligned) {
-  return aligned ? _mm256_load_ps(ptr) : _mm256_loadu_ps(ptr);
-}
-
-inline __m256d Load(const double *ptr, bool aligned) {
-  return aligned ? _mm256_load_pd(ptr) : _mm256_loadu_pd(ptr);
 }
 
 } // namespace
@@ -38,8 +28,6 @@ void GemmMicroKernel_AVX2FMA_F32Impl(std::size_t nb, std::size_t K, float alpha,
   const __m256 vbeta = _mm256_set1_ps(beta);
   const bool alpha_is_one = alpha == 1.0f;
   const bool beta_is_one = beta == 1.0f;
-  const bool aligned_b =
-      (reinterpret_cast<std::uintptr_t>(Bmat + n0) | (N * sizeof(float))) % 32 == 0;
   std::size_t n = 0;
   for (; n + 16 <= nb; n += 16) {
     __m256 acc0[MR];
@@ -50,8 +38,8 @@ void GemmMicroKernel_AVX2FMA_F32Impl(std::size_t nb, std::size_t K, float alpha,
     }
     const auto accumulate_k = [&](std::size_t k) {
       const float *Brow = Bmat + k * N + n0 + n;
-      const __m256 vb0 = Load(Brow, aligned_b);
-      const __m256 vb1 = Load(Brow + 8, aligned_b);
+      const __m256 vb0 = _mm256_loadu_ps(Brow);
+      const __m256 vb1 = _mm256_loadu_ps(Brow + 8);
       if (k + kGemmPrefetchDistanceK < K) {
         PrefetchT0(Brow + kGemmPrefetchDistanceK * N);
       }
@@ -95,7 +83,7 @@ void GemmMicroKernel_AVX2FMA_F32Impl(std::size_t nb, std::size_t K, float alpha,
       acc[r] = _mm256_setzero_ps();
     }
     const auto accumulate_k = [&](std::size_t k) {
-      const __m256 vb = Load(Bmat + k * N + n0 + n, aligned_b);
+      const __m256 vb = _mm256_loadu_ps(Bmat + k * N + n0 + n);
       for (std::size_t r = 0; r < MR; ++r) {
         const __m256 va = _mm256_set1_ps(Apack[r * K + k]);
         acc[r] = _mm256_fmadd_ps(va, vb, acc[r]);
@@ -139,8 +127,6 @@ void GemmMicroKernel_AVX2FMA_F64Impl(std::size_t nb, std::size_t K, double alpha
   const __m256d vbeta = _mm256_set1_pd(beta);
   const bool alpha_is_one = alpha == 1.0;
   const bool beta_is_one = beta == 1.0;
-  const bool aligned_b =
-      (reinterpret_cast<std::uintptr_t>(Bmat + n0) | (N * sizeof(double))) % 32 == 0;
   std::size_t n = 0;
   for (; n + 8 <= nb; n += 8) {
     __m256d acc0[MR];
@@ -151,8 +137,8 @@ void GemmMicroKernel_AVX2FMA_F64Impl(std::size_t nb, std::size_t K, double alpha
     }
     const auto accumulate_k = [&](std::size_t k) {
       const double *Brow = Bmat + k * N + n0 + n;
-      const __m256d vb0 = Load(Brow, aligned_b);
-      const __m256d vb1 = Load(Brow + 4, aligned_b);
+      const __m256d vb0 = _mm256_loadu_pd(Brow);
+      const __m256d vb1 = _mm256_loadu_pd(Brow + 4);
       if (k + kGemmPrefetchDistanceK < K) {
         PrefetchT0(Brow + kGemmPrefetchDistanceK * N);
       }
@@ -196,7 +182,7 @@ void GemmMicroKernel_AVX2FMA_F64Impl(std::size_t nb, std::size_t K, double alpha
       acc[r] = _mm256_setzero_pd();
     }
     const auto accumulate_k = [&](std::size_t k) {
-      const __m256d vb = Load(Bmat + k * N + n0 + n, aligned_b);
+      const __m256d vb = _mm256_loadu_pd(Bmat + k * N + n0 + n);
       for (std::size_t r = 0; r < MR; ++r) {
         const __m256d va = _mm256_set1_pd(Apack[r * K + k]);
         acc[r] = _mm256_fmadd_pd(va, vb, acc[r]);
