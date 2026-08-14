@@ -68,6 +68,15 @@ template <typename T> std::size_t VectorLanes() {
   }
 }
 
+std::size_t RegisterRows() {
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
+  if (DetectSimdLevel() >= SimdLevel::kAVX512) {
+    return kGemmAVX512MR;
+  }
+#endif
+  return kGemmMR;
+}
+
 template <typename T, GemmAlgorithm Algorithm>
 void ExecuteFloatKernel(bool trans_a, bool trans_b, std::size_t m, std::size_t n, std::size_t k,
                         T alpha, const T *a, const T *b, T beta, const T *c, T *y,
@@ -83,9 +92,9 @@ void ExecuteFloatKernel(bool trans_a, bool trans_b, std::size_t m, std::size_t n
 }
 
 template <typename T>
-auto SelectKernel(GemmAlgorithm algorithm) -> void (*)(bool, bool, std::size_t, std::size_t,
-                                                       std::size_t, T, const T *, const T *, T,
-                                                       const T *, T *, const GemmBlocking *) {
+auto SelectKernel(GemmAlgorithm algorithm)
+    -> void (*)(bool, bool, std::size_t, std::size_t, std::size_t, T, const T *, const T *, T,
+                const T *, T *, const GemmBlocking *) {
   switch (algorithm) {
   case GemmAlgorithm::kDirect:
     return &ExecuteFloatKernel<T, GemmAlgorithm::kDirect>;
@@ -207,14 +216,15 @@ detail::MatMulDimensions PrepareRankTwoMatMulDimensions(std::size_t m, std::size
 namespace detail {
 
 GemmAlgorithm SelectGemmAlgorithm(bool trans_a, bool trans_b, std::size_t m, std::size_t n,
-                                  std::size_t k, std::size_t vector_lanes) {
+                                  std::size_t k, std::size_t vector_lanes,
+                                  std::size_t register_rows) {
   if (k >= 4096 && m != 0 && m <= 64 && n <= 64 / m) {
     return GemmAlgorithm::kSplitK;
   }
   if (!trans_a && !trans_b && k <= 32) {
     return GemmAlgorithm::kDirect;
   }
-  if (m <= kGemmMR) {
+  if (m <= register_rows) {
     return GemmAlgorithm::kSkinnyM;
   }
   if (n <= vector_lanes) {
@@ -230,8 +240,8 @@ GemmPlan<T>::GemmPlan(const GemmPlanOptions<T> &options)
     : trans_a_(options.trans_a), trans_b_(options.trans_b), m_(options.m), n_(options.n),
       k_(options.k), alpha_(options.alpha), beta_(options.beta),
       algorithm_(detail::SelectGemmAlgorithm(options.trans_a, options.trans_b, options.m, options.n,
-                                             options.k, VectorLanes<T>())),
-      blocking_(detail::SelectGemmBlocking(sizeof(T), VectorLanes<T>())),
+                                             options.k, VectorLanes<T>(), RegisterRows())),
+      blocking_(detail::SelectGemmBlocking(sizeof(T), VectorLanes<T>(), RegisterRows())),
       useful_threads_(UsefulThreads(options.m, options.n)),
       has_constant_b_(!options.constant_b.empty()),
       constant_b_(options.constant_b.begin(), options.constant_b.end()),

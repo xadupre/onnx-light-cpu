@@ -32,9 +32,11 @@ enum class GemmAlgorithm {
 namespace detail {
 
 GemmAlgorithm SelectGemmAlgorithm(bool trans_a, bool trans_b, std::size_t m, std::size_t n,
-                                  std::size_t k, std::size_t vector_lanes);
+                                  std::size_t k, std::size_t vector_lanes,
+                                  std::size_t register_rows);
 
-GemmBlocking SelectGemmBlocking(std::size_t element_size, std::size_t vector_lanes);
+GemmBlocking SelectGemmBlocking(std::size_t element_size, std::size_t vector_lanes,
+                                std::size_t register_rows);
 
 template <GemmAlgorithm Algorithm>
 void GemmFloat32Planned(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::size_t K,
@@ -62,11 +64,10 @@ enum class GemmAccumMode {
   kAccumulate, ///< Later chunk: ``Y += alpha * acc``.
 };
 
-// Register-blocking factor on M: the number of output rows every micro-kernel
-// flavor (scalar, SSE2, AVX, AVX-512) processes together. Shared so the packed
-// ``A`` row-panel built in gemm_kernel.cc (``kGemmMR x kc`` elements) has a
-// size every kernel flavor agrees on.
+// Register-blocking factors on M. Baseline/AVX2 kernels use four rows; AVX-512
+// can keep six NR=2 rows resident because it has twice as many vector registers.
 constexpr std::size_t kGemmMR = 4;
+constexpr std::size_t kGemmAVX512MR = 6;
 
 // Current cache-blocking dimensions shared by the driver and prepared plans.
 constexpr std::size_t kGemmTileM = 64;
