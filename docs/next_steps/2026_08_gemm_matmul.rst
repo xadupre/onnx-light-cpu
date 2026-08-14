@@ -267,6 +267,54 @@ steps and their merge criteria are Roadmap PR02 through PR06 in the final
 table. Persistent B prepacking is the **only** excluded optimization; no other
 performance work may be deferred while the parity gate remains unmet.
 
+The scheduler decomposes ``Y = A @ B`` into a Cartesian grid of row and column
+panels:
+
+.. code-block:: text
+
+                 B (K x N)
+            +--------+--------+--------+
+            | B0     | B1     | B2     |  NC-wide column panels
+            +--------+--------+--------+
+
+    A (M x K)                 Y (M x N)
+    +--------+            +------+------+------+
+    | A0     |----------->| T00  | T01  | T02  |
+    +--------+            +------+------+------+
+    | A1     |----------->| T10  | T11  | T12  |
+    +--------+            +------+------+------+
+    | A2     |----------->| T20  | T21  | T22  |
+    +--------+            +------+------+------+
+      MC-high                 independent output zones
+      row panels
+
+Task ``T(i,j)`` multiplies row panel ``Ai`` by column panel ``Bj`` and writes
+only the corresponding, disjoint zone of ``Y``. Column panels are processed in
+bounded waves large enough to occupy the available threads. For example, with
+six threads, three row panels, and three column panels:
+
+.. code-block:: text
+
+   wave 1: B0, B1 -> T00 T10 T20 T01 T11 T21
+   wave 2: B2     -> T02 T12 T22
+
+For each K chunk, every B panel in the active wave is packed once and shared by
+all its row-panel tasks. The tasks accumulate into their zones of ``Y`` before
+the scheduler advances to the next K chunk. If the complete M x N task grid
+still cannot occupy the pool, split-K partitions the reduction dimension:
+
+.. code-block:: text
+
+   K = [K0 | K1 | K2]
+         |    |    |
+         v    v    v
+        P0   P1   P2  ->  Y = alpha * (P0 + P1 + P2) + beta * C
+
+Each partial ``Pi`` uses the same packed SIMD micro-kernels. Independent
+batches take priority over split-K: when a GEMM already runs inside a parallel
+batch region, it executes its M x N grid directly instead of creating nested
+K partitions.
+
 Phase 3: native low-precision kernels
 --------------------------------------
 
