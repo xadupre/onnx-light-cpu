@@ -253,7 +253,7 @@ for size in size_grid:
     )
 
 print(
-    "verified distinct Gemm implementations for every benchmark size: "
+    "verified accelerated Gemm for every benchmark size and distinct baseline: "
     f"baseline={baseline_kernel_names or ['onnx-light built-in']}, "
     f"accelerated={accelerated_kernel_name}"
 )
