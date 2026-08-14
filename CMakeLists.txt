@@ -665,7 +665,15 @@ if(ONNX_LIGHT_CPU_BUILD_TESTS)
     if(ONNX_LIGHT_CPU_SIMD_FLAGS)
       target_compile_options(${_name} PRIVATE ${_simd_flags})
     endif()
-    gtest_discover_tests(${_name})
+    # Discover the test cases when ctest runs instead of at build time. The
+    # POST_BUILD discovery run executes the freshly linked binary, which is
+    # flaky on macOS (a just-written, ad-hoc signed executable is sometimes
+    # killed by the kernel), and a failed discovery run aborts the whole build.
+    if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.18)
+      gtest_discover_tests(${_name} DISCOVERY_MODE PRE_TEST)
+    else()
+      gtest_discover_tests(${_name})
+    endif()
     onnx_light_apply_hardening(${_name})
   endfunction()
 
