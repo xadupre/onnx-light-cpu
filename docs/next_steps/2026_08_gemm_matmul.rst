@@ -228,8 +228,9 @@ Phase 2: saturate the floating-point units
 
 * Compile FMA micro-kernels in dedicated translation units and use them only
   after checking both AVX/AVX2 and FMA. The current default ``-mavx2`` build
-  does not define ``__FMA__``, so its hot loop emits separate multiply and add
-  instructions.
+  does not define ``__FMA__``. Dedicated FP32/FP64 AVX2+FMA micro-kernels are
+  now compiled with ``-mavx2 -mfma`` and selected only when CPUID reports FMA;
+  the baseline AVX path remains available on CPUs without FMA.
 * Keep distinct SSE2, AVX2+FMA, AVX-512F, and microarchitecture-specific
   variants. Zen, Skylake, Ice Lake, and hybrid Intel CPUs can require different
   MR/NR and cache blocks even when they expose the same ISA.
@@ -573,20 +574,23 @@ require measurements on dedicated hardware.
        tuning.
      - P1.
      - Engine, algorithms, cache-derived blocking, and benchmark corpus
-       implemented; benchmark/thread-control PR open and 0.8x MLAS gate
-       pending.
+       implemented; 0.8x MLAS gate pending.
      - `onnx-light-cpu #136
        <https://github.com/xadupre/onnx-light-cpu/pull/136>`_,
        `onnx-light-cpu #139
        <https://github.com/xadupre/onnx-light-cpu/pull/139>`_,
-       `onnx-light-cpu #140 (open)
+       `onnx-light-cpu #140
        <https://github.com/xadupre/onnx-light-cpu/pull/140>`_
    * - P4
      - FMA/AVX2/AVX-512/ARM micro-kernels and tuned scheduler.
      - Priority FP32/FP64 corpus reaches 0.9-1.0x MLAS.
      - P3.
-     - Planned.
-     - TBD.
+     - AVX2+FMA and AVX-512 micro-kernels implemented; ARM kernels, scheduler
+       tuning, and the performance gate remain.
+     - `onnx-light-cpu #133
+       <https://github.com/xadupre/onnx-light-cpu/pull/133>`_,
+       `onnx-light-cpu #141
+       <https://github.com/xadupre/onnx-light-cpu/pull/141>`_
    * - P5
      - Native/panel-converted FP16, BF16, and integer paths.
      - Low-precision corpus reaches 0.9x MLAS where MLAS supports the type.

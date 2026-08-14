@@ -46,6 +46,10 @@
 #include "onnx_light_cpu/impl/math/gemm/gemm_common.h"
 #include "onnx_light_cpu/impl/parallel_for.h"
 
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
+#include "onnx_light_cpu/impl/math/gemm/avx2/gemm_kernel_avx2_fma.h"
+#endif
+
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512
 #include "onnx_light_cpu/impl/math/gemm/avx512/gemm_kernel_avx512.h"
 #endif
@@ -520,7 +524,7 @@ void GemmMicroKernel_SSE2_F64(std::size_t mr, std::size_t nb, std::size_t K, dou
 constexpr double kGemmFmasPerParallelWorkUnit = 64.0;
 
 // Runtime-selected micro-kernel flavor for a given element type.
-enum class GemmKernelKind { kScalar, kSSE2, kAVX, kAVX512 };
+enum class GemmKernelKind { kScalar, kSSE2, kAVX, kAVX2FMA, kAVX512 };
 
 template <typename T> GemmKernelKind SelectGemmKernelKind() {
 #if ONNX_LIGHT_CPU_X86
@@ -528,6 +532,11 @@ template <typename T> GemmKernelKind SelectGemmKernelKind() {
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512
   if (level >= SimdLevel::kAVX512) {
     return GemmKernelKind::kAVX512;
+  }
+#endif
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
+  if (level >= SimdLevel::kAVX2 && CpuSupportsFma()) {
+    return GemmKernelKind::kAVX2FMA;
   }
 #endif
   if (level >= SimdLevel::kAVX) {
@@ -544,6 +553,7 @@ template <typename T> std::size_t GemmVectorLanes(GemmKernelKind kind) {
   switch (kind) {
   case GemmKernelKind::kAVX512:
     return 64 / sizeof(T);
+  case GemmKernelKind::kAVX2FMA:
   case GemmKernelKind::kAVX:
     return 32 / sizeof(T);
   case GemmKernelKind::kSSE2:
@@ -564,6 +574,13 @@ void GemmTileF32(GemmKernelKind kind, std::size_t mr, std::size_t nb, std::size_
   if (kind == GemmKernelKind::kAVX512) {
     GemmMicroKernel_AVX512_F32(mr, nb, K, alpha, beta, Bmat, N, Crow_base, Cstride, Yrow_base,
                                Ystride, n0, mode, Apack);
+    return;
+  }
+#endif
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
+  if (kind == GemmKernelKind::kAVX2FMA) {
+    GemmMicroKernel_AVX2FMA_F32(mr, nb, K, alpha, beta, Bmat, N, Crow_base, Cstride, Yrow_base,
+                                Ystride, n0, mode, Apack);
     return;
   }
 #endif
@@ -594,6 +611,13 @@ void GemmTileF64(GemmKernelKind kind, std::size_t mr, std::size_t nb, std::size_
   if (kind == GemmKernelKind::kAVX512) {
     GemmMicroKernel_AVX512_F64(mr, nb, K, alpha, beta, Bmat, N, Crow_base, Cstride, Yrow_base,
                                Ystride, n0, mode, Apack);
+    return;
+  }
+#endif
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
+  if (kind == GemmKernelKind::kAVX2FMA) {
+    GemmMicroKernel_AVX2FMA_F64(mr, nb, K, alpha, beta, Bmat, N, Crow_base, Cstride, Yrow_base,
+                                Ystride, n0, mode, Apack);
     return;
   }
 #endif
