@@ -24,6 +24,12 @@ TEST(SimdDetection, DetectsAtLeastScalar) {
   EXPECT_GE(static_cast<int>(level), 0);
 }
 
+TEST(SimdDetection, FmaRequiresAvx2OrAvx) {
+  if (onnx_light_cpu::CpuSupportsFma()) {
+    EXPECT_GE(onnx_light_cpu::DetectSimdLevel(), onnx_light_cpu::SimdLevel::kAVX);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // AbsFloat32
 // ---------------------------------------------------------------------------

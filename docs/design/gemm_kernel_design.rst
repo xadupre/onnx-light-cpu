@@ -205,6 +205,9 @@ Implemented optimizations (for reference)
      - Implemented -- separate TU, compile+runtime gated (see tree above).
    * - Software prefetch (``B`` rows, T0 hint)
      - Implemented -- AVX2/AVX-512 NR=2 loops, ``kGemmPrefetchDistanceK = 4``.
+   * - Dedicated AVX2+FMA micro-kernels
+     - Implemented -- FP32/FP64 kernels are compiled with ``-mavx2 -mfma`` in
+       a separate translation unit and selected only when CPUID reports FMA.
 
 Remaining optimizations (not implemented)
 --------------------------------------------

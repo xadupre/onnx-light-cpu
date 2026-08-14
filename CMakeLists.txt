@@ -126,10 +126,12 @@ endif()
 # AVX-512BW for byte comparisons. Unsupported sources are excluded below.
 include(CheckCXXCompilerFlag)
 if(NOT MSVC)
+  check_cxx_compiler_flag("-mavx2 -mfma" ONNX_LIGHT_CPU_HAVE_AVX2_FMA_FLAG)
   check_cxx_compiler_flag("-mavx512f" ONNX_LIGHT_CPU_HAVE_AVX512F_FLAG)
   check_cxx_compiler_flag("-mavx512f -mavx512bw"
       ONNX_LIGHT_CPU_HAVE_AVX512BW_FLAG)
 else()
+  check_cxx_compiler_flag("/arch:AVX2" ONNX_LIGHT_CPU_HAVE_AVX2_FMA_FLAG)
   check_cxx_compiler_flag("/arch:AVX512" ONNX_LIGHT_CPU_HAVE_AVX512F_FLAG)
   set(ONNX_LIGHT_CPU_HAVE_AVX512BW_FLAG
       ${ONNX_LIGHT_CPU_HAVE_AVX512F_FLAG})
@@ -150,6 +152,8 @@ file(GLOB CPU_KERNEL_SOURCES CONFIGURE_DEPENDS
 
 set(_gemm_avx512_source
     "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/gemm/avx512/gemm_kernel_avx512.cc")
+set(_gemm_avx2_fma_source
+    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/gemm/avx2/gemm_kernel_avx2_fma.cc")
 set(_abs_avx512_source
     "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/avx512/abs_kernel_avx512.cc")
 set(_exp_log_avx512_source
@@ -161,6 +165,9 @@ if(NOT ONNX_LIGHT_CPU_HAVE_AVX512F_FLAG)
   list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_gemm_avx512_source}")
   list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_abs_avx512_source}")
   list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_exp_log_avx512_source}")
+endif()
+if(NOT ONNX_LIGHT_CPU_HAVE_AVX2_FMA_FLAG)
+  list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_gemm_avx2_fma_source}")
 endif()
 if(NOT ONNX_LIGHT_CPU_HAVE_AVX512BW_FLAG)
   list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_not_avx512_source}")
@@ -223,6 +230,18 @@ if(ONNX_LIGHT_CPU_HAVE_AVX512F_FLAG)
   # Told gemm_kernel.cc (compiled at the baseline ONNX_LIGHT_CPU_SIMD_FLAGS)
   # that GemmMicroKernel_AVX512_F32/F64 are available to dispatch to.
   target_compile_definitions(lib_onnx_light_cpu PRIVATE ONNX_LIGHT_CPU_HAVE_AVX512=1)
+endif()
+
+if(ONNX_LIGHT_CPU_HAVE_AVX2_FMA_FLAG)
+  if(NOT MSVC)
+    set_source_files_properties("${_gemm_avx2_fma_source}" PROPERTIES
+        COMPILE_OPTIONS "-mavx2;-mfma")
+  else()
+    set_source_files_properties("${_gemm_avx2_fma_source}" PROPERTIES
+        COMPILE_OPTIONS "/arch:AVX2")
+  endif()
+  target_compile_definitions(lib_onnx_light_cpu PRIVATE
+      ONNX_LIGHT_CPU_HAVE_AVX2_FMA=1)
 endif()
 
 if(ONNX_LIGHT_CPU_HAVE_AVX512BW_FLAG)
