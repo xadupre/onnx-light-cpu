@@ -15,14 +15,14 @@ For GEMM, parity means a corpus median speed-up of at least ``1.0x`` versus
 ONNX Runtime and no priority shape below ``0.9x``. This is a catch-up effort
 with standard ONNX tensors and semantics.
 
-The current implementation is a correctness-first, register-blocked kernel.
-It already has AVX2/AVX-512 paths, K blocking, A/B packing, and parallel
-execution along one selected matrix axis. The general five-loop path does not
-yet schedule the complete M x N task grid; see
-:doc:`the current design <../design/gemm_kernel_design>`.
-Benchmarks nevertheless show that MLAS can remain an order of magnitude faster
-on multi-panel and skinny-M shapes. This is a kernel and scheduling gap, not a
-plotting artifact.
+The current implementation is a correctness-first, register-blocked kernel
+with AVX2/AVX-512 paths, K blocking, A/B packing, a task-aware M x N scheduler,
+batch scheduling, and packed SIMD split-K; see
+:doc:`the current design <../design/gemm_kernel_design>`. Roadmap PR01 closed
+the scheduler under-utilization identified on multi-panel shapes. The
+remaining roadmap work covers epilogues, complete x86 and thread-runtime
+tuning, ARM kernels, low-precision kernels, Attention, and the final ONNX
+Runtime parity gates.
 
 Related roadmap
 ---------------

@@ -6,7 +6,10 @@ multiplication) CPU kernel implemented in
 ``onnx_light_cpu/impl/math/gemm_kernel.cc`` and
 ``onnx_light_cpu/impl/math/gemm/avx512/gemm_kernel_avx512.cc``: how it picks a
 micro-kernel at runtime, and which further optimizations were considered but
-not (yet) implemented, with their expected gain and risk.
+not (yet) implemented, with their expected gain and risk. Delivery order,
+performance gates, and remaining work are tracked in the
+:doc:`Gemm, MatMul, and Attention roadmap
+<../next_steps/2026_08_gemm_matmul>`.
 
 Kernel selection decision tree
 -------------------------------
@@ -71,13 +74,73 @@ the full rationale):
 
 1. ``K`` is split into ``kGemmTileK``-sized chunks, and ``A`` and ``B`` are
    each packed into small contiguous buffers per (task, k-chunk) --
-   ``PackARowBlock`` and ``PackBPanel`` -- so the hot inner loop only ever
+   ``PackAPanel`` and ``PackBPanel`` -- so the hot inner loop only ever
    touches L1/L2-resident, unit-stride memory regardless of ``trans_a`` /
    ``trans_b`` or the caller's strides.
-2. The direct path flattens ``(row block, column panel)`` tasks. The general
-   five-loop path instead chooses column panels when there are enough of them,
-   otherwise row panels. It does not yet combine both axes, so large
-   cache-derived MC/NC values can expose fewer tasks than available threads.
+2. The general path schedules the Cartesian product of row and column panels.
+   Column panels are grouped into bounded waves, so every active B panel is
+   packed once and shared without allocating an unbounded ``K x N`` workspace.
+
+Task scheduler decomposition
+----------------------------
+
+The five-loop scheduler maps panels of ``A`` and ``B`` to disjoint rectangular
+zones of ``Y``:
+
+.. code-block:: text
+
+                 B (K x N)
+            +--------+--------+--------+
+            | B0     | B1     | B2     |  NC-wide column panels
+            +--------+--------+--------+
+
+    A (M x K)                 Y (M x N)
+    +--------+            +------+------+------+
+    | A0     |----------->| T00  | T01  | T02  |
+    +--------+            +------+------+------+
+    | A1     |----------->| T10  | T11  | T12  |
+    +--------+            +------+------+------+
+    | A2     |----------->| T20  | T21  | T22  |
+    +--------+            +------+------+------+
+      MC-high                 independent output zones
+      row panels
+
+``T(i,j)`` computes ``Ai @ Bj`` and writes only output zone ``Y(i,j)``.
+Consequently, tasks in the grid need no output locks. With six threads and
+three row panels, two column panels form a full wave:
+
+.. code-block:: text
+
+   wave 1: B0, B1 -> T00 T10 T20 T01 T11 T21
+   wave 2: B2     -> T02 T12 T22
+
+For every K chunk, ``B0`` and ``B1`` are each packed once before the first
+wave. Their packed buffers remain read-only while the six tasks reuse them.
+Each task packs the required A row panel and accumulates into its own zone of
+``Y``. Shape-aware constraints reduce cache-derived ``MC`` and ``NC`` only
+when the original values would expose fewer useful tasks than available
+threads.
+
+The scheduler chooses the outermost useful dimension in this order:
+
+1. independent small batch items;
+2. the M x N panel grid of one GEMM;
+3. split-K when neither batch nor M/N provides enough tasks.
+
+Split-K divides the reduction dimension into independent packed SIMD products
+and combines their partial outputs:
+
+.. code-block:: text
+
+   K = [K0 | K1 | K2]
+         |    |    |
+         v    v    v
+        P0   P1   P2  ->  Y = alpha * (P0 + P1 + P2) + beta * C
+
+When a product is already running inside a parallel batch region, nested
+split-K is disabled: the product executes its M x N grid directly, avoiding
+serial split-K partitions, temporary partial buffers, and a redundant
+reduction.
 
 Prepared execution interfaces
 -----------------------------
