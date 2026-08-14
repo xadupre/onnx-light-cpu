@@ -33,7 +33,7 @@ void GemmMicroKernel_AVX2FMA_F32(std::size_t mr, std::size_t nb, std::size_t K, 
       acc0[r] = _mm256_setzero_ps();
       acc1[r] = _mm256_setzero_ps();
     }
-    for (std::size_t k = 0; k < K; ++k) {
+    const auto accumulate_k = [&](std::size_t k) {
       const float *Brow = Bmat + k * N + n0 + n;
       const __m256 vb0 = _mm256_loadu_ps(Brow);
       const __m256 vb1 = _mm256_loadu_ps(Brow + 8);
@@ -45,6 +45,16 @@ void GemmMicroKernel_AVX2FMA_F32(std::size_t mr, std::size_t nb, std::size_t K, 
         acc0[r] = _mm256_fmadd_ps(va, vb0, acc0[r]);
         acc1[r] = _mm256_fmadd_ps(va, vb1, acc1[r]);
       }
+    };
+    std::size_t k = 0;
+    for (; k + 4 <= K; k += 4) {
+      accumulate_k(k);
+      accumulate_k(k + 1);
+      accumulate_k(k + 2);
+      accumulate_k(k + 3);
+    }
+    for (; k < K; ++k) {
+      accumulate_k(k);
     }
     for (std::size_t r = 0; r < mr; ++r) {
       float *Yrow = Yrow_base + r * Ystride + n0 + n;
@@ -67,12 +77,22 @@ void GemmMicroKernel_AVX2FMA_F32(std::size_t mr, std::size_t nb, std::size_t K, 
     for (std::size_t r = 0; r < mr; ++r) {
       acc[r] = _mm256_setzero_ps();
     }
-    for (std::size_t k = 0; k < K; ++k) {
+    const auto accumulate_k = [&](std::size_t k) {
       const __m256 vb = _mm256_loadu_ps(Bmat + k * N + n0 + n);
       for (std::size_t r = 0; r < mr; ++r) {
         const __m256 va = _mm256_set1_ps(Apack[r * K + k]);
         acc[r] = _mm256_fmadd_ps(va, vb, acc[r]);
       }
+    };
+    std::size_t k = 0;
+    for (; k + 4 <= K; k += 4) {
+      accumulate_k(k);
+      accumulate_k(k + 1);
+      accumulate_k(k + 2);
+      accumulate_k(k + 3);
+    }
+    for (; k < K; ++k) {
+      accumulate_k(k);
     }
     for (std::size_t r = 0; r < mr; ++r) {
       float *Yrow = Yrow_base + r * Ystride + n0 + n;
@@ -107,7 +127,7 @@ void GemmMicroKernel_AVX2FMA_F64(std::size_t mr, std::size_t nb, std::size_t K, 
       acc0[r] = _mm256_setzero_pd();
       acc1[r] = _mm256_setzero_pd();
     }
-    for (std::size_t k = 0; k < K; ++k) {
+    const auto accumulate_k = [&](std::size_t k) {
       const double *Brow = Bmat + k * N + n0 + n;
       const __m256d vb0 = _mm256_loadu_pd(Brow);
       const __m256d vb1 = _mm256_loadu_pd(Brow + 4);
@@ -119,6 +139,16 @@ void GemmMicroKernel_AVX2FMA_F64(std::size_t mr, std::size_t nb, std::size_t K, 
         acc0[r] = _mm256_fmadd_pd(va, vb0, acc0[r]);
         acc1[r] = _mm256_fmadd_pd(va, vb1, acc1[r]);
       }
+    };
+    std::size_t k = 0;
+    for (; k + 4 <= K; k += 4) {
+      accumulate_k(k);
+      accumulate_k(k + 1);
+      accumulate_k(k + 2);
+      accumulate_k(k + 3);
+    }
+    for (; k < K; ++k) {
+      accumulate_k(k);
     }
     for (std::size_t r = 0; r < mr; ++r) {
       double *Yrow = Yrow_base + r * Ystride + n0 + n;
@@ -141,12 +171,22 @@ void GemmMicroKernel_AVX2FMA_F64(std::size_t mr, std::size_t nb, std::size_t K, 
     for (std::size_t r = 0; r < mr; ++r) {
       acc[r] = _mm256_setzero_pd();
     }
-    for (std::size_t k = 0; k < K; ++k) {
+    const auto accumulate_k = [&](std::size_t k) {
       const __m256d vb = _mm256_loadu_pd(Bmat + k * N + n0 + n);
       for (std::size_t r = 0; r < mr; ++r) {
         const __m256d va = _mm256_set1_pd(Apack[r * K + k]);
         acc[r] = _mm256_fmadd_pd(va, vb, acc[r]);
       }
+    };
+    std::size_t k = 0;
+    for (; k + 4 <= K; k += 4) {
+      accumulate_k(k);
+      accumulate_k(k + 1);
+      accumulate_k(k + 2);
+      accumulate_k(k + 3);
+    }
+    for (; k < K; ++k) {
+      accumulate_k(k);
     }
     for (std::size_t r = 0; r < mr; ++r) {
       double *Yrow = Yrow_base + r * Ystride + n0 + n;
