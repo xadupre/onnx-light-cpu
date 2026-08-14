@@ -38,6 +38,14 @@ using rt_ns::OpsetId;
 using rt_ns::Randn;
 using rt_ns::Tensor;
 
+enum class BiasShape {
+  kNone,
+  kScalar,
+  kRow,
+  kColumn,
+  kMatrix,
+};
+
 // Builds a plain (no-attribute) two-input ``Gemm`` NodeProto: Y = A @ B.
 NodeProto MakeGemmNode() {
   NodeProto node;
@@ -58,7 +66,8 @@ void AddIntAttribute(NodeProto &node, const char *name, int64_t value) {
 void RegisterGemmBenchmark(std::vector<TestCase> &registry,
                            const onnx_light_cpu::GemmKernel &kernel, const OpsetId &opset,
                            const std::string &name, int64_t m, int64_t n, int64_t k,
-                           bool trans_a = false, bool trans_b = false, bool constant_b = false) {
+                           bool trans_a = false, bool trans_b = false, bool constant_b = false,
+                           BiasShape bias_shape = BiasShape::kNone) {
   NodeProto node = MakeGemmNode();
   if (trans_a) {
     AddIntAttribute(node, "transA", 1);
@@ -73,6 +82,40 @@ void RegisterGemmBenchmark(std::vector<TestCase> &registry,
   const int64_t a_count = m * k;
   const int64_t b_count = k * n;
   const int64_t y_count = m * n;
+
+  if (bias_shape != BiasShape::kNone) {
+    node.add_input("C");
+    std::vector<int64_t> c_shape;
+    switch (bias_shape) {
+    case BiasShape::kScalar:
+      break;
+    case BiasShape::kRow:
+      c_shape = {1, n};
+      break;
+    case BiasShape::kColumn:
+      c_shape = {m, 1};
+      break;
+    case BiasShape::kMatrix:
+      c_shape = {m, n};
+      break;
+    case BiasShape::kNone:
+      break;
+    }
+    const int64_t c_count =
+        bias_shape == BiasShape::kMatrix
+            ? m * n
+            : (bias_shape == BiasShape::kRow ? n : (bias_shape == BiasShape::kColumn ? m : 1));
+    Expect(registry, std::move(node), name, {opset}, {a_count, b_count, c_count}, {y_count},
+           [kernel, a_shape, b_shape, c_shape, trans_a, trans_b, a_count, b_count,
+            c_count]() -> IoData {
+             Tensor a = Tensor::FromFloat("", a_shape, Randn<float>(a_shape, 433 + a_count));
+             Tensor b = Tensor::FromFloat("", b_shape, Randn<float>(b_shape, 434 + b_count));
+             Tensor c = Tensor::FromFloat("", c_shape, Randn<float>(c_shape, 435 + c_count));
+             Tensor y = kernel(a, b, c, 1.0f, 1.0f, trans_a, trans_b);
+             return IoData{{std::move(a), std::move(b), std::move(c)}, {std::move(y)}};
+           });
+    return;
+  }
 
   if (!constant_b) {
     Expect(registry, std::move(node), name, {opset}, {a_count, b_count}, {y_count},
@@ -140,6 +183,14 @@ void RegisterCpuGemmCases(std::vector<TestCase> &registry, TestMode mode) {
                           128, 128);
     RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_square_512_benchmark", 512,
                           512, 512);
+    RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_scalar_bias_256_benchmark",
+                          256, 256, 256, false, false, false, BiasShape::kScalar);
+    RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_row_bias_256_benchmark", 256,
+                          256, 256, false, false, false, BiasShape::kRow);
+    RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_column_bias_256_benchmark",
+                          256, 256, 256, false, false, false, BiasShape::kColumn);
+    RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_matrix_bias_256_benchmark",
+                          256, 256, 256, false, false, false, BiasShape::kMatrix);
     RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_skinny_m_benchmark", 1, 1024,
                           1024);
     RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_skinny_n_benchmark", 1024, 1,

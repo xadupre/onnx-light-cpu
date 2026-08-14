@@ -16,11 +16,11 @@
 
 #include "onnx_light_cpu/impl/math/math_kernels.h"
 
+#include "onnx_light_cpu/impl/math/half_conversion.h"
 #include "onnx_light_cpu/impl/parallel_for.h"
 
 #include <cmath>
 #include <cstdint>
-#include <cstring>
 #include <limits>
 
 #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
@@ -45,84 +45,6 @@ inline constexpr double kExpLogCostPerElement = 20.0;
 inline constexpr double kExpLogHalfCostPerElement = 40.0;
 
 namespace {
-
-// ---------------------------------------------------------------------------
-// float16 <-> float32 conversion (round to nearest, ties to even)
-// ---------------------------------------------------------------------------
-
-float HalfBitsToFloat(std::uint16_t h) {
-  const std::uint32_t sign = static_cast<std::uint32_t>(h & 0x8000u) << 16;
-  std::uint32_t exp = (h >> 10) & 0x1fu;
-  std::uint32_t mant = h & 0x3ffu;
-  std::uint32_t f;
-  if (exp == 0) {
-    if (mant == 0) {
-      f = sign; // +/-0
-    } else {
-      // Subnormal half: normalize into a float32 normal.
-      exp = 127u - 15u + 1u;
-      while ((mant & 0x400u) == 0) {
-        mant <<= 1;
-        --exp;
-      }
-      mant &= 0x3ffu;
-      f = sign | (exp << 23) | (mant << 13);
-    }
-  } else if (exp == 0x1f) {
-    f = sign | 0x7f800000u | (mant << 13); // Inf / NaN
-  } else {
-    f = sign | ((exp - 15u + 127u) << 23) | (mant << 13);
-  }
-  float out;
-  std::memcpy(&out, &f, sizeof(out));
-  return out;
-}
-
-std::uint16_t FloatToHalfBits(float value) {
-  std::uint32_t x;
-  std::memcpy(&x, &value, sizeof(x));
-  const std::uint16_t sign = static_cast<std::uint16_t>((x >> 16) & 0x8000u);
-  const std::uint32_t biased = (x >> 23) & 0xffu;
-  const std::uint32_t mant = x & 0x7fffffu;
-
-  if (biased == 0xff) {
-    // Inf or NaN. Preserve NaN-ness (non-zero mantissa) with a quiet NaN.
-    return static_cast<std::uint16_t>(sign | (mant ? 0x7e00u : 0x7c00u));
-  }
-
-  const std::int32_t exp = static_cast<std::int32_t>(biased) - 127 + 15;
-  if (exp >= 0x1f) {
-    return static_cast<std::uint16_t>(sign | 0x7c00u); // overflow -> Inf
-  }
-  if (exp <= 0) {
-    if (exp < -10) {
-      return sign; // too small -> signed zero
-    }
-    // Subnormal half.
-    std::uint32_t m = mant | 0x800000u; // restore implicit leading 1
-    const int shift = 14 - exp;
-    std::uint32_t half_mant = m >> shift;
-    const std::uint32_t rem = m & ((1u << shift) - 1u);
-    const std::uint32_t halfway = 1u << (shift - 1);
-    if (rem > halfway || (rem == halfway && (half_mant & 1u))) {
-      ++half_mant;
-    }
-    return static_cast<std::uint16_t>(sign | half_mant);
-  }
-  // Normal half.
-  std::uint16_t half_mant = static_cast<std::uint16_t>(mant >> 13);
-  const std::uint32_t rem = mant & 0x1fffu;
-  std::uint16_t h =
-      static_cast<std::uint16_t>(sign | (static_cast<std::uint32_t>(exp) << 10) | half_mant);
-  if (rem > 0x1000u || (rem == 0x1000u && (half_mant & 1u))) {
-    ++h; // round up; carry propagates into the exponent field as required
-  }
-  return h;
-}
-
-// ---------------------------------------------------------------------------
-// Scalar implementations (also the non-x86 fallback).
-// ---------------------------------------------------------------------------
 
 void ExpFloat32_Scalar(const float *input, float *output, std::size_t count) {
   for (std::size_t i = 0; i < count; ++i) {
@@ -828,7 +750,8 @@ void ExpFloat16(const uint16_t *input, uint16_t *output, std::size_t count) {
   ParallelFor(static_cast<std::int64_t>(count), kExpLogHalfCostPerElement,
               [input, output](std::int64_t begin, std::int64_t end) {
                 for (std::int64_t i = begin; i < end; ++i) {
-                  output[i] = FloatToHalfBits(std::exp(HalfBitsToFloat(input[i])));
+                  output[i] =
+                      detail::FloatToFloat16Bits(std::exp(detail::Float16BitsToFloat(input[i])));
                 }
               });
 }
@@ -839,7 +762,8 @@ void LogFloat16(const uint16_t *input, uint16_t *output, std::size_t count) {
   ParallelFor(static_cast<std::int64_t>(count), kExpLogHalfCostPerElement,
               [input, output](std::int64_t begin, std::int64_t end) {
                 for (std::int64_t i = begin; i < end; ++i) {
-                  output[i] = FloatToHalfBits(std::log(HalfBitsToFloat(input[i])));
+                  output[i] =
+                      detail::FloatToFloat16Bits(std::log(detail::Float16BitsToFloat(input[i])));
                 }
               });
 }

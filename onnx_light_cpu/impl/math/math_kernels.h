@@ -13,6 +13,47 @@
 
 namespace onnx_light_cpu {
 
+/// Logical layout of a tensor broadcast over an ``M x N`` GEMM output.
+enum class GemmBroadcast {
+  kNone,
+  kScalar,
+  kRow,
+  kColumn,
+  kMatrix,
+};
+
+/// Activation fused into a GEMM epilogue.
+enum class GemmActivation {
+  kNone,
+  kRelu,
+};
+
+/// Optional narrowing performed by a GEMM epilogue.
+enum class GemmOutputConversion {
+  kNone,
+  kFloat16,
+  kBFloat16,
+};
+
+/// Typed operations applied after the matrix-product accumulation.
+///
+/// A row tensor contains ``N`` values and broadcasts over M. A column tensor
+/// contains ``M`` values and broadcasts over N. Matrix tensors contain
+/// ``M * N`` row-major values. When output conversion is enabled, ``Y`` remains
+/// the accumulation workspace and the final values are written to
+/// ``converted_output``.
+template <typename T> struct GemmEpilogue {
+  const T *bias = nullptr;
+  GemmBroadcast bias_layout = GemmBroadcast::kNone;
+  T beta = T(0);
+  const T *residual = nullptr;
+  GemmBroadcast residual_layout = GemmBroadcast::kNone;
+  T residual_scale = T(1);
+  GemmActivation activation = GemmActivation::kNone;
+  GemmOutputConversion output_conversion = GemmOutputConversion::kNone;
+  std::uint16_t *converted_output = nullptr;
+};
+
 /// Computes elementwise absolute value: out[i] = |input[i]| for float32.
 /// Dispatches to the best available SIMD path at runtime.
 void AbsFloat32(const float *input, float *output, std::size_t count);
@@ -111,10 +152,23 @@ void LogFloat16(const uint16_t *input, uint16_t *output, std::size_t count);
 void GemmFloat32(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::size_t K,
                  float alpha, const float *A, const float *B, float beta, const float *C, float *Y);
 
+/// Computes float32 GEMM and applies broadcast bias, residual, and activation
+/// through one typed epilogue. Full-matrix bias without other post-operations
+/// stays fused in the SIMD micro-kernel. FP16/BF16 conversion writes through
+/// ``epilogue.converted_output``.
+void GemmFloat32WithEpilogue(bool trans_a, bool trans_b, std::size_t M, std::size_t N,
+                             std::size_t K, float alpha, const float *A, const float *B,
+                             const GemmEpilogue<float> &epilogue, float *Y);
+
 /// Computes the ONNX ``Gemm`` general matrix multiplication for float64.
 /// Same semantics as :cpp:func:`GemmFloat32` with ``double`` operands.
 void GemmFloat64(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::size_t K,
                  double alpha, const double *A, const double *B, double beta, const double *C,
                  double *Y);
+
+/// Float64 counterpart of :cpp:func:`GemmFloat32WithEpilogue`.
+void GemmFloat64WithEpilogue(bool trans_a, bool trans_b, std::size_t M, std::size_t N,
+                             std::size_t K, double alpha, const double *A, const double *B,
+                             const GemmEpilogue<double> &epilogue, double *Y);
 
 } // namespace onnx_light_cpu

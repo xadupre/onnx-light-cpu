@@ -308,6 +308,12 @@ Implemented optimizations (for reference)
      - Implemented -- scalar, SSE2, AVX, AVX2+FMA, and AVX-512 kernels skip
        redundant ``alpha``/``beta`` multiplies when the scale is one; zero
        ``beta`` and absent bias avoid reading ``C``.
+   * - Typed broadcast and fused epilogues
+     - Implemented -- scalar, row, column, and matrix bias layouts are consumed
+       without an expanded M x N temporary. The typed epilogue can combine
+       bias, broadcast residual, ReLU, and FP16/BF16 narrowing in one output
+       pass; the matrix-bias-only case remains fused directly in the SIMD
+       micro-kernel.
 
 Remaining optimizations (not implemented)
 --------------------------------------------

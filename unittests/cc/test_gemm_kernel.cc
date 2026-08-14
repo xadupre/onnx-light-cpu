@@ -90,6 +90,72 @@ TEST(GemmFloat32, AlphaBetaAndBias) {
   }
 }
 
+TEST(GemmFloat32, TypedEpilogueCombinesBroadcastResidualAndRelu) {
+  const std::size_t M = 2, N = 3, K = 2;
+  const std::vector<float> A = {1, -2, -3, 4};
+  const std::vector<float> B = {1, 2, 3, 4, 5, 6};
+  const std::vector<float> bias = {1, 2, 3};
+  const std::vector<float> residual = {-1, 2};
+  std::vector<float> Y(M * N);
+  onnx_light_cpu::GemmEpilogue<float> epilogue;
+  epilogue.bias = bias.data();
+  epilogue.bias_layout = onnx_light_cpu::GemmBroadcast::kRow;
+  epilogue.beta = 2.0f;
+  epilogue.residual = residual.data();
+  epilogue.residual_layout = onnx_light_cpu::GemmBroadcast::kColumn;
+  epilogue.residual_scale = 3.0f;
+  epilogue.activation = onnx_light_cpu::GemmActivation::kRelu;
+
+  onnx_light_cpu::GemmFloat32WithEpilogue(false, false, M, N, K, 1.0f, A.data(), B.data(), epilogue,
+                                          Y.data());
+
+  const std::vector<float> expected = {0, 0, 0, 21, 24, 27};
+  EXPECT_EQ(Y, expected);
+}
+
+TEST(GemmFloat32, TypedEpilogueCombinesPostOpsAndFloat16Conversion) {
+  const std::size_t M = 2, N = 3, K = 2;
+  const std::vector<float> A = {1, -2, -3, 4};
+  const std::vector<float> B = {1, 2, 3, 4, 5, 6};
+  const std::vector<float> bias = {1, 2, 3};
+  const std::vector<float> residual = {-1, 2};
+  std::vector<float> workspace(M * N);
+  std::vector<std::uint16_t> output(M * N);
+  onnx_light_cpu::GemmEpilogue<float> epilogue;
+  epilogue.bias = bias.data();
+  epilogue.bias_layout = onnx_light_cpu::GemmBroadcast::kRow;
+  epilogue.beta = 2.0f;
+  epilogue.residual = residual.data();
+  epilogue.residual_layout = onnx_light_cpu::GemmBroadcast::kColumn;
+  epilogue.residual_scale = 3.0f;
+  epilogue.activation = onnx_light_cpu::GemmActivation::kRelu;
+  epilogue.output_conversion = onnx_light_cpu::GemmOutputConversion::kFloat16;
+  epilogue.converted_output = output.data();
+
+  onnx_light_cpu::GemmFloat32WithEpilogue(false, false, M, N, K, 1.0f, A.data(), B.data(), epilogue,
+                                          workspace.data());
+
+  const std::vector<std::uint16_t> expected = {0x0000, 0x0000, 0x0000, 0x4d40, 0x4e00, 0x4ec0};
+  EXPECT_EQ(output, expected);
+}
+
+TEST(GemmFloat64, TypedEpilogueSupportsScalarBias) {
+  const std::vector<double> A = {1, 2, 3, 4};
+  const std::vector<double> B = {1, 0, 0, 1};
+  const double bias = 2.5;
+  std::vector<double> Y(4);
+  onnx_light_cpu::GemmEpilogue<double> epilogue;
+  epilogue.bias = &bias;
+  epilogue.bias_layout = onnx_light_cpu::GemmBroadcast::kScalar;
+  epilogue.beta = 2.0;
+
+  onnx_light_cpu::GemmFloat64WithEpilogue(false, false, 2, 2, 2, 1.0, A.data(), B.data(), epilogue,
+                                          Y.data());
+
+  const std::vector<double> expected = {6, 7, 8, 9};
+  EXPECT_EQ(Y, expected);
+}
+
 TEST(GemmFloat32, UnitScalesWithBiasAcrossChunks) {
   const std::size_t M = 7, N = 19, K = 300;
   const auto A = RandomVector(M * K, 91);

@@ -57,12 +57,8 @@ void Require2D(const Tensor &t, const char *name, std::size_t &rows, std::size_t
   cols = static_cast<std::size_t>(t.shape[1]);
 }
 
-// Materializes the optional bias ``C`` into a contiguous ``M x N`` row-major
-// buffer, applying the ONNX unidirectional broadcasting rules (``C`` may be a
-// scalar, a vector, or any 2-D shape broadcastable to ``M x N``). Returns an
-// empty vector when there is no bias.
-template <typename T>
-std::vector<T> BroadcastBias(const Tensor &c, const T *c_data, std::size_t M, std::size_t N) {
+// Resolves ONNX unidirectional broadcasting without materializing C.
+GemmBroadcast ResolveBiasLayout(const Tensor &c, std::size_t M, std::size_t N) {
   const std::size_t rank = c.shape.size();
   std::size_t c_rows = 1;
   std::size_t c_cols = 1;
@@ -78,15 +74,16 @@ std::vector<T> BroadcastBias(const Tensor &c, const T *c_data, std::size_t M, st
     throw std::invalid_argument(
         "onnx_light_cpu::GemmKernel: bias C is not broadcastable to the output shape.");
   }
-  std::vector<T> out(M * N);
-  for (std::size_t m = 0; m < M; ++m) {
-    const std::size_t cm = c_rows == 1 ? 0 : m;
-    for (std::size_t n = 0; n < N; ++n) {
-      const std::size_t cn = c_cols == 1 ? 0 : n;
-      out[m * N + n] = c_data[cm * c_cols + cn];
-    }
+  if (c_rows == 1 && c_cols == 1) {
+    return GemmBroadcast::kScalar;
   }
-  return out;
+  if (c_rows == 1) {
+    return GemmBroadcast::kRow;
+  }
+  if (c_cols == 1) {
+    return GemmBroadcast::kColumn;
+  }
+  return GemmBroadcast::kMatrix;
 }
 
 // Widens a FLOAT16 (``is_bfloat16 == false``) or BFLOAT16 (``is_bfloat16 ==
@@ -110,22 +107,6 @@ std::vector<float> WidenHalfLike(const Tensor &t, bool is_bfloat16) {
     }
   });
   return out;
-}
-
-// Inverse of :cpp:func:`WidenHalfLike`: rounds a ``float32`` buffer back to
-// FLOAT16 or BFLOAT16 raw 16-bit elements written into ``dst``.
-void NarrowToHalfLike(const float *src, std::uint16_t *dst, std::size_t n, bool is_bfloat16) {
-  ParallelForHalfConversion(n, [src, dst, is_bfloat16](std::int64_t begin, std::int64_t end) {
-    if (is_bfloat16) {
-      for (std::int64_t i = begin; i < end; ++i) {
-        dst[i] = rt_ns::FloatToBfloat16Bits(src[i]);
-      }
-    } else {
-      for (std::int64_t i = begin; i < end; ++i) {
-        dst[i] = rt_ns::FloatToFloat16Bits(src[i]);
-      }
-    }
-  });
 }
 
 // Shared implementation for both public ``operator()`` overloads. ``c`` is null
@@ -157,31 +138,31 @@ Tensor GemmCompute(const Tensor &a, const Tensor &b, const Tensor *c, float alph
 
   switch (static_cast<DataType>(a.data_type)) {
   case DataType::FLOAT: {
-    std::vector<float> bias;
-    const float *c_ptr = nullptr;
+    GemmEpilogue<float> epilogue;
     if (has_bias) {
-      bias = BroadcastBias<float>(*c, c->AsFloat(), M, N);
-      c_ptr = bias.data();
+      epilogue.bias = c->AsFloat();
+      epilogue.bias_layout = ResolveBiasLayout(*c, M, N);
+      epilogue.beta = beta;
     }
     const std::size_t n_bytes = M * N * sizeof(float);
     Tensor y = rt_ns::MakeOutputTensor(a.data_type, out_shape, n_bytes,
                                        rt != nullptr ? rt->allocator() : nullptr);
-    GemmFloat32(trans_a, trans_b, M, N, K, alpha, a.AsFloat(), b.AsFloat(), beta, c_ptr,
-                y.AsFloat());
+    GemmFloat32WithEpilogue(trans_a, trans_b, M, N, K, alpha, a.AsFloat(), b.AsFloat(), epilogue,
+                            y.AsFloat());
     return y;
   }
   case DataType::DOUBLE: {
-    std::vector<double> bias;
-    const double *c_ptr = nullptr;
+    GemmEpilogue<double> epilogue;
     if (has_bias) {
-      bias = BroadcastBias<double>(*c, c->AsDouble(), M, N);
-      c_ptr = bias.data();
+      epilogue.bias = c->AsDouble();
+      epilogue.bias_layout = ResolveBiasLayout(*c, M, N);
+      epilogue.beta = static_cast<double>(beta);
     }
     const std::size_t n_bytes = M * N * sizeof(double);
     Tensor y = rt_ns::MakeOutputTensor(a.data_type, out_shape, n_bytes,
                                        rt != nullptr ? rt->allocator() : nullptr);
-    GemmFloat64(trans_a, trans_b, M, N, K, static_cast<double>(alpha), a.AsDouble(), b.AsDouble(),
-                static_cast<double>(beta), c_ptr, y.AsDouble());
+    GemmFloat64WithEpilogue(trans_a, trans_b, M, N, K, static_cast<double>(alpha), a.AsDouble(),
+                            b.AsDouble(), epilogue, y.AsDouble());
     return y;
   }
   case DataType::FLOAT16:
@@ -195,23 +176,23 @@ Tensor GemmCompute(const Tensor &a, const Tensor &b, const Tensor *c, float alph
     const std::vector<float> b_f32 = WidenHalfLike(b, is_bfloat16);
 
     std::vector<float> c_f32;
-    std::vector<float> bias;
-    const float *c_ptr = nullptr;
+    GemmEpilogue<float> epilogue;
     if (has_bias) {
       c_f32 = WidenHalfLike(*c, is_bfloat16);
-      bias = BroadcastBias<float>(*c, c_f32.data(), M, N);
-      c_ptr = bias.data();
+      epilogue.bias = c_f32.data();
+      epilogue.bias_layout = ResolveBiasLayout(*c, M, N);
+      epilogue.beta = beta;
     }
-
-    std::vector<float> y_f32(M * N);
-    GemmFloat32(trans_a, trans_b, M, N, K, alpha, a_f32.data(), b_f32.data(), beta, c_ptr,
-                y_f32.data());
 
     const std::size_t n_bytes = M * N * sizeof(std::uint16_t);
     Tensor y = rt_ns::MakeOutputTensor(a.data_type, out_shape, n_bytes,
                                        rt != nullptr ? rt->allocator() : nullptr);
-    NarrowToHalfLike(y_f32.data(), reinterpret_cast<std::uint16_t *>(y.mutable_bytes()), M * N,
-                     is_bfloat16);
+    epilogue.output_conversion =
+        is_bfloat16 ? GemmOutputConversion::kBFloat16 : GemmOutputConversion::kFloat16;
+    epilogue.converted_output = reinterpret_cast<std::uint16_t *>(y.mutable_bytes());
+    std::vector<float> y_f32(M * N);
+    GemmFloat32WithEpilogue(trans_a, trans_b, M, N, K, alpha, a_f32.data(), b_f32.data(), epilogue,
+                            y_f32.data());
     return y;
   }
   default:
