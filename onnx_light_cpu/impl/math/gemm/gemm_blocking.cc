@@ -164,7 +164,10 @@ GemmBlocking SelectGemmBlocking(std::size_t element_size, std::size_t vector_lan
   const std::size_t mc_capacity = (caches.l2 / 2) / (element_size * kc);
   const std::size_t mc = BoundedAligned(mc_capacity, mr, 256, mr);
 
-  std::size_t nc = kGemmTileN;
+  // Packing rounds each B row to the active vector width. Keep NC aligned to
+  // NR even without an L3-derived profile so scalable, non-power-of-two SVE
+  // widths cannot make the packed row stride exceed its allocated panel.
+  std::size_t nc = std::max(nr, AlignDown(kGemmTileN, nr));
   if (caches.l3 != 0) {
     // Bound a shared B panel to half of L3 and avoid oversized packing tasks.
     const std::size_t nc_capacity = (caches.l3 / 2) / (element_size * kc);

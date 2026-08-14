@@ -43,6 +43,7 @@
 
 #include "onnx_light_cpu/impl/math/math_kernels.h"
 
+#include "onnx_light_cpu/impl/math/gemm/arm/gemm_kernel_arm.h"
 #include "onnx_light_cpu/impl/math/gemm/gemm_common.h"
 #include "onnx_light_cpu/impl/math/half_conversion.h"
 #include "onnx_light_cpu/impl/parallel_for.h"
@@ -573,7 +574,7 @@ void GemmMicroKernel_SSE2_F64(std::size_t mr, std::size_t nb, std::size_t K, dou
 // ``kGemmTileK x kGemmTileN`` elements, which comfortably fits in L2 for both
 // float32 and float64.
 // Runtime-selected micro-kernel flavor for a given element type.
-enum class GemmKernelKind { kScalar, kSSE2, kAVX, kAVX2FMA, kAVX512 };
+enum class GemmKernelKind { kScalar, kSSE2, kAVX, kAVX2FMA, kAVX512, kNeon, kSve };
 
 template <typename T> GemmKernelKind SelectGemmKernelKind() {
 #if ONNX_LIGHT_CPU_X86
@@ -595,6 +596,17 @@ template <typename T> GemmKernelKind SelectGemmKernelKind() {
     return GemmKernelKind::kSSE2;
   }
 #endif
+#ifdef ONNX_LIGHT_CPU_HAVE_NEON
+  static const ArmGemmProfile arm_profile = DetectArmGemmProfile();
+#ifdef ONNX_LIGHT_CPU_HAVE_SVE
+  if (arm_profile.kind == ArmGemmKernelKind::kSve) {
+    return GemmKernelKind::kSve;
+  }
+#endif
+  if (arm_profile.kind == ArmGemmKernelKind::kNeon) {
+    return GemmKernelKind::kNeon;
+  }
+#endif
   return GemmKernelKind::kScalar;
 }
 
@@ -606,7 +618,10 @@ template <typename T> std::size_t GemmVectorLanes(GemmKernelKind kind) {
   case GemmKernelKind::kAVX:
     return 32 / sizeof(T);
   case GemmKernelKind::kSSE2:
+  case GemmKernelKind::kNeon:
     return 16 / sizeof(T);
+  case GemmKernelKind::kSve:
+    return DetectArmGemmProfile().vector_bytes / sizeof(T);
   case GemmKernelKind::kScalar:
     return 1;
   }
@@ -619,6 +634,9 @@ std::size_t GemmRegisterRows(GemmKernelKind kind) {
   }
   if (kind == GemmKernelKind::kAVX2FMA) {
     return detail::SelectGemmRegisterRows(SimdLevel::kAVX2, true);
+  }
+  if (kind == GemmKernelKind::kNeon || kind == GemmKernelKind::kSve) {
+    return DetectArmGemmProfile().register_rows;
   }
   return kGemmMR;
 }
@@ -653,8 +671,20 @@ void GemmTileF32(GemmKernelKind kind, std::size_t mr, std::size_t nb, std::size_
                              Ystride, n0, mode, Apack);
     return;
   }
-#else
-  (void)kind;
+#endif
+#ifdef ONNX_LIGHT_CPU_HAVE_SVE
+  if (kind == GemmKernelKind::kSve) {
+    GemmMicroKernel_SVE_F32(mr, nb, K, alpha, beta, Bmat, N, Crow_base, Cstride, Yrow_base, Ystride,
+                            n0, mode, Apack);
+    return;
+  }
+#endif
+#ifdef ONNX_LIGHT_CPU_HAVE_NEON
+  if (kind == GemmKernelKind::kNeon) {
+    GemmMicroKernel_NEON_F32(mr, nb, K, alpha, beta, Bmat, N, Crow_base, Cstride, Yrow_base,
+                             Ystride, n0, mode, Apack);
+    return;
+  }
 #endif
   GemmMicroKernel_Scalar_F32(mr, nb, K, alpha, beta, Bmat, N, Crow_base, Cstride, Yrow_base,
                              Ystride, n0, mode, Apack);
@@ -690,8 +720,20 @@ void GemmTileF64(GemmKernelKind kind, std::size_t mr, std::size_t nb, std::size_
                              Ystride, n0, mode, Apack);
     return;
   }
-#else
-  (void)kind;
+#endif
+#ifdef ONNX_LIGHT_CPU_HAVE_SVE
+  if (kind == GemmKernelKind::kSve) {
+    GemmMicroKernel_SVE_F64(mr, nb, K, alpha, beta, Bmat, N, Crow_base, Cstride, Yrow_base, Ystride,
+                            n0, mode, Apack);
+    return;
+  }
+#endif
+#ifdef ONNX_LIGHT_CPU_HAVE_NEON
+  if (kind == GemmKernelKind::kNeon) {
+    GemmMicroKernel_NEON_F64(mr, nb, K, alpha, beta, Bmat, N, Crow_base, Cstride, Yrow_base,
+                             Ystride, n0, mode, Apack);
+    return;
+  }
 #endif
   GemmMicroKernel_Scalar_F64(mr, nb, K, alpha, beta, Bmat, N, Crow_base, Cstride, Yrow_base,
                              Ystride, n0, mode, Apack);

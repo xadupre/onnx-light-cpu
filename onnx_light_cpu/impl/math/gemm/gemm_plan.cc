@@ -4,6 +4,7 @@
 
 #include "onnx_light_cpu/impl/math/gemm/gemm_plan.h"
 
+#include "onnx_light_cpu/impl/math/gemm/arm/gemm_kernel_arm.h"
 #include "onnx_light_cpu/impl/math/gemm/gemm_common.h"
 #include "onnx_light_cpu/impl/math/math_kernels.h"
 #include "onnx_light_cpu/impl/parallel_for.h"
@@ -54,6 +55,12 @@ std::size_t ElementCount(std::span<const std::size_t> shape, const char *name) {
 }
 
 template <typename T> std::size_t VectorLanes() {
+#ifdef ONNX_LIGHT_CPU_HAVE_NEON
+  const ArmGemmProfile arm_profile = DetectArmGemmProfile();
+  if (arm_profile.kind != ArmGemmKernelKind::kScalar) {
+    return arm_profile.vector_bytes / sizeof(T);
+  }
+#endif
   switch (DetectSimdLevel()) {
   case SimdLevel::kAVX512:
     return 64 / sizeof(T);
@@ -69,6 +76,12 @@ template <typename T> std::size_t VectorLanes() {
 }
 
 std::size_t RegisterRows() {
+#ifdef ONNX_LIGHT_CPU_HAVE_NEON
+  const ArmGemmProfile arm_profile = DetectArmGemmProfile();
+  if (arm_profile.kind != ArmGemmKernelKind::kScalar) {
+    return arm_profile.register_rows;
+  }
+#endif
   const SimdLevel level = DetectSimdLevel();
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512
   if (level >= SimdLevel::kAVX512) {

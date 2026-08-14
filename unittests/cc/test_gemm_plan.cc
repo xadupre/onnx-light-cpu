@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "onnx_light_cpu/impl/math/gemm/arm/gemm_kernel_arm.h"
 #include "onnx_light_cpu/impl/math/gemm/gemm_plan.h"
 
 #include <gtest/gtest.h>
@@ -72,15 +73,41 @@ TEST(GemmPlan, SelectsShapeSpecificAlgorithms) {
 TEST(GemmPlan, BlockingUsesIsaSpecificRegisterRows) {
   const auto avx2 = onnx_light_cpu::detail::SelectGemmBlocking(sizeof(float), 8, 4);
   const auto avx512 = onnx_light_cpu::detail::SelectGemmBlocking(sizeof(float), 16, 6);
+  const auto sve384 = onnx_light_cpu::detail::SelectGemmBlocking(sizeof(float), 12, 4);
 
   EXPECT_EQ(avx2.mr, 4u);
   EXPECT_EQ(avx512.mr, 6u);
   EXPECT_EQ(avx2.mc % avx2.mr, 0u);
   EXPECT_EQ(avx512.mc % avx512.mr, 0u);
+  EXPECT_EQ(sve384.nc % sve384.nr, 0u);
   EXPECT_EQ(onnx_light_cpu::detail::SelectGemmAlgorithm(false, false, 5, 257, 64, 16, 4),
             GemmAlgorithm::kGeneral);
   EXPECT_EQ(onnx_light_cpu::detail::SelectGemmAlgorithm(false, false, 5, 257, 64, 16, 6),
             GemmAlgorithm::kSkinnyM);
+}
+
+TEST(GemmPlan, SelectsRuntimeVectorLengthAwareArmProfile) {
+  using onnx_light_cpu::ArmGemmKernelKind;
+  using onnx_light_cpu::ArmSimdLevel;
+  using onnx_light_cpu::SelectArmGemmProfile;
+
+  const auto scalar = SelectArmGemmProfile(ArmSimdLevel::kNone, 0, true);
+  const auto neon = SelectArmGemmProfile(ArmSimdLevel::kNeon, 0, true);
+  const auto sve128 = SelectArmGemmProfile(ArmSimdLevel::kSve, 16, true);
+  const auto sve256 = SelectArmGemmProfile(ArmSimdLevel::kSve, 32, true);
+  const auto sve2 = SelectArmGemmProfile(ArmSimdLevel::kSve2, 64, true);
+  const auto no_sve_kernel = SelectArmGemmProfile(ArmSimdLevel::kSve2, 64, false);
+
+  EXPECT_EQ(scalar.kind, ArmGemmKernelKind::kScalar);
+  EXPECT_EQ(neon.kind, ArmGemmKernelKind::kNeon);
+  EXPECT_EQ(neon.vector_bytes, 16u);
+  EXPECT_EQ(neon.register_rows, onnx_light_cpu::kGemmNeonMR);
+  EXPECT_EQ(sve128.kind, ArmGemmKernelKind::kNeon);
+  EXPECT_EQ(sve256.kind, ArmGemmKernelKind::kSve);
+  EXPECT_EQ(sve256.vector_bytes, 32u);
+  EXPECT_EQ(sve256.register_rows, onnx_light_cpu::kGemmSveMR);
+  EXPECT_EQ(sve2.kind, ArmGemmKernelKind::kSve);
+  EXPECT_EQ(no_sve_kernel.kind, ArmGemmKernelKind::kNeon);
 }
 
 TEST(GemmPlan, SelectsConservativeMicroarchitectureRegisterRows) {

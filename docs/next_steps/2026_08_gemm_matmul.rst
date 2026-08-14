@@ -21,8 +21,7 @@ batch scheduling, packed SIMD split-K, and typed broadcast/fused epilogues; see
 :doc:`the current design <../design/gemm_kernel_design>`. Roadmap PR01 closed
 the scheduler under-utilization identified on multi-panel shapes, and Roadmap
 PR02 removed expanded bias temporaries. The remaining roadmap work covers
-thread-runtime tuning, ARM kernels, low-precision kernels,
-Attention, and the final ONNX Runtime parity gates.
+low-precision kernels, Attention, and the final ONNX Runtime parity gates.
 
 Related roadmap
 ---------------
@@ -256,7 +255,11 @@ Phase 2: saturate the floating-point units
   and no-bias cases now avoid redundant vector/scalar multiplication and bias
   reads in every x86 micro-kernel and scalar tail; scalar and row/column
   broadcast bias interfaces remain.
-* Add ARM64 NEON kernels, followed by SVE/SVE2 where relevant.
+* ARM64 NEON FP32/FP64 kernels are implemented with six-row, two-vector
+  register tiles and scalar sub-vector tails. SVE/SVE2 use four-row,
+  two-scalable-vector tiles and predicated tails; runtime vector lengths below
+  256 bits deliberately retain NEON. Linux HWCAP detection and separate SVE
+  compilation keep unsupported processors on the safe fallback.
 
 Parallel execution
 ~~~~~~~~~~~~~~~~~~
