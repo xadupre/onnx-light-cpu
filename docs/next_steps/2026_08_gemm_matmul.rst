@@ -125,6 +125,15 @@ must both be retained.
 * For attention, report time to first token, per-token decode latency,
   tokens/second, peak temporary memory, and effective KV-cache bandwidth.
 
+Two committed instruments implement this contract. ``tools/benchmark_gemm_parity.py``
+is the end-to-end FP32/FP64 parity runner (PR06.0): it alternates the registered
+operator against ONNX Runtime and reports the speed-up gate. ``tools/gemm_throughput.cc``
+is the isolated ``GemmPlan`` throughput driver, built with
+``-DONNX_LIGHT_CPU_BUILD_BENCHMARKS=ON``; it reports GFLOP/s per priority shape
+for the blocked multiplication alone, without ONNX Runtime or onnx-light, so a
+kernel-level regression is visible independently of the operator dispatch and
+reference-evaluator overhead that the parity runner also measures.
+
 Target computation algorithm
 ----------------------------
 
@@ -681,8 +690,10 @@ require measurements on dedicated hardware.
      - Scheduler PR01, epilogue PR02, x86 tuning PR03, thread runtime PR04,
        ARM kernels PR05, parity runner PR06.0, diagnosis PR06.1, vectorized
        skinny-N selection PR06.2, the dedicated GEMV/skinny-M kernel PR06.3,
-       and immutable operator plans PR06.4 are implemented or in review;
-       measured fixes PR06.5 and final gate PR06.6 remain.
+       immutable operator plans PR06.4, and the measured Zen/Intel register
+       tiles PR06.5 are implemented; the final gate PR06.6 is in progress with
+       isolated-driver measurements pending dedicated-machine ONNX Runtime
+       evidence.
      - `onnx-light-cpu #133
        <https://github.com/xadupre/onnx-light-cpu/pull/133>`_,
        `onnx-light-cpu #141
@@ -899,7 +910,20 @@ dependency, and current status.
        1.0x ONNX Runtime and no priority case is below 0.9x. The PR remains
        open while any target fails.
      - PR06.2 through PR06.5
-     - Pending
+     - In progress. The new isolated ``tools/gemm_throughput.cc`` driver adds
+       kernel-level evidence between merges: on a shared CI runner (Intel Xeon
+       Platinum 8370C, Ice Lake-SP, AVX-512, ``intel-core`` profile, six
+       register rows, four vCPU) the single-thread square-matrix throughput is
+       104 GFLOP/s FP32 and 48 GFLOP/s FP64 at 512³, and stays at 99-100
+       GFLOP/s FP32 through 1024³ and 2048³, confirming that PR06.5 removed the
+       FP32 large-matrix regression on Intel AVX-512. The single-thread FP64
+       path still drops from 48 to ~32 GFLOP/s (~33%) at 1024³ and 2048³ while
+       the multi-thread FP64 path recovers (48 to 58 GFLOP/s), and ``skinny_n``
+       remains the weakest priority shape at ~4.2 GFLOP/s. These are diagnostic
+       shared-runner numbers, not the dedicated-machine ONNX Runtime evidence
+       the gate requires, so the FP64 large-matrix single-thread blocking and
+       the skinny-N kernel are the next measured priorities before the gate can
+       close.
    * - Roadmap PR07
      - x86 FP16/BF16 kernel family.
      - Immutable plans describe typed panels, FP32 accumulation, conversion

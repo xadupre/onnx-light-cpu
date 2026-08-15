@@ -25,6 +25,8 @@ endif()
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 option(ONNX_LIGHT_CPU_BUILD_TESTS "Build C++ unit tests." OFF)
+option(ONNX_LIGHT_CPU_BUILD_BENCHMARKS
+       "Build the isolated C++ throughput benchmarks (not run by ctest)." OFF)
 option(ONNX_LIGHT_CPU_BUILD_PYTHON "Build Python extension." ON)
 option(ONNX_LIGHT_CPU_INSTALL "Install the C++ library and headers." ON)
 option(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT
@@ -701,6 +703,19 @@ if(ONNX_LIGHT_CPU_INSTALL)
       "${CMAKE_CURRENT_BINARY_DIR}/onnx_light_cpuConfig.cmake"
       "${CMAKE_CURRENT_BINARY_DIR}/onnx_light_cpuConfigVersion.cmake"
       DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/onnx_light_cpu")
+endif()
+
+# ---------------------------------------------------------------------------
+# Isolated C++ throughput benchmarks (opt-in, not run by ctest)
+# ---------------------------------------------------------------------------
+if(ONNX_LIGHT_CPU_BUILD_BENCHMARKS)
+  add_executable(gemm_throughput
+      "${CMAKE_CURRENT_SOURCE_DIR}/tools/gemm_throughput.cc")
+  target_link_libraries(gemm_throughput PRIVATE lib_onnx_light_cpu)
+  if(ONNX_LIGHT_CPU_SIMD_FLAGS)
+    target_compile_options(gemm_throughput PRIVATE ${_simd_flags})
+  endif()
+  onnx_light_apply_hardening(gemm_throughput)
 endif()
 
 # ---------------------------------------------------------------------------
