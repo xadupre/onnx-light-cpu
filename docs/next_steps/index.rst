@@ -19,4 +19,5 @@ optimize next.
     2026_08_conv
     2026_08_unary_elementwise
     2026_08_binary_elementwise
+    2026_08_elementwise_kernel_tuning
     2026_08_kv_cache
