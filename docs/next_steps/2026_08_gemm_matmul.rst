@@ -679,9 +679,9 @@ require measurements on dedicated hardware.
      - P3.
      - Scheduler PR01, epilogue PR02, x86 tuning PR03, thread runtime PR04,
        ARM kernels PR05, parity runner PR06.0, diagnosis PR06.1, vectorized
-       skinny-N selection PR06.2, and the dedicated GEMV/skinny-M kernel
-       PR06.3 are implemented or in review; measured fixes PR06.4 through
-       PR06.5 and final gate PR06.6 remain.
+       skinny-N selection PR06.2, the dedicated GEMV/skinny-M kernel PR06.3,
+       and immutable operator plans PR06.4 are implemented or in review;
+       measured fixes PR06.5 and final gate PR06.6 remain.
      - `onnx-light-cpu #133
        <https://github.com/xadupre/onnx-light-cpu/pull/133>`_,
        `onnx-light-cpu #141
@@ -713,7 +713,9 @@ require measurements on dedicated hardware.
        `onnx-light-cpu #162
        <https://github.com/xadupre/onnx-light-cpu/pull/162>`_,
        `onnx-light-cpu #167
-       <https://github.com/xadupre/onnx-light-cpu/pull/167>`_
+       <https://github.com/xadupre/onnx-light-cpu/pull/167>`_,
+       `onnx-light-cpu #176
+       <https://github.com/xadupre/onnx-light-cpu/pull/176>`_
    * - P5
      - Native/panel-converted FP16, BF16, and integer paths.
      - Low-precision corpus reaches at least 1.0x ONNX Runtime median
@@ -860,7 +862,16 @@ dependency, and current status.
        retrieve a correctly keyed plan, and dynamic B retains the ordinary
        per-call packing path.
      - PR06.3
-     - Pending
+     - `Implemented in #176
+       <https://github.com/xadupre/onnx-light-cpu/pull/176>`_. The registered
+       ``Gemm`` kernel now caches a keyed immutable ``GemmPlan`` per node for
+       FP32/FP64 and executes it through a new epilogue-aware
+       ``GemmPlan::Execute`` overload, so the algorithm, blocking, and thread
+       count are prepared once and only rebuilt when the dtype, shape, or
+       attributes change. Dynamic B keeps the ordinary per-call packing path.
+       FP16/BF16 stay on the widening path pending the P5 low-precision
+       kernels. ``MatMul`` has no registered operator yet, so its plan wiring
+       arrives with that kernel.
    * - Roadmap PR06.5
      - Sustain large-matrix throughput on Zen and generic x86.
      - Measured MR/NR candidates and shape-constrained MC/NC/KC choices keep

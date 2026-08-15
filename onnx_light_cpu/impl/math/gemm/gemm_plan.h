@@ -5,6 +5,7 @@
 #pragma once
 
 #include "onnx_light_cpu/impl/math/gemm/gemm_common.h"
+#include "onnx_light_cpu/impl/math/math_kernels.h"
 
 #include <cstddef>
 #include <span>
@@ -49,6 +50,15 @@ public:
 
   void Execute(const T *a, const T *b, const T *c, T *y) const;
   void Execute(const T *a, const T *c, T *y) const;
+
+  /// Executes the prepared product and applies ``epilogue`` (broadcast bias,
+  /// residual, activation, and optional FP16/BF16 narrowing) in place, reusing
+  /// the plan's cached algorithm, blocking, and thread count. ``b`` supplies the
+  /// dynamic right-hand matrix; a constant-B plan ignores it.
+  void Execute(const T *a, const T *b, const GemmEpilogue<T> &epilogue, T *y) const;
+
+  /// Constant-B overload of the epilogue-aware :cpp:func:`Execute`.
+  void Execute(const T *a, const GemmEpilogue<T> &epilogue, T *y) const;
 
   bool trans_a() const noexcept { return trans_a_; }
   bool trans_b() const noexcept { return trans_b_; }

@@ -1197,7 +1197,62 @@ void GemmFloat64(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::
 namespace {
 
 template <typename T>
-void ValidateEpilogue(std::size_t M, std::size_t N, const GemmEpilogue<T> &epilogue) {
+T BroadcastValue(const T *values, GemmBroadcast layout, std::size_t m, std::size_t n,
+                 std::size_t N) {
+  switch (layout) {
+  case GemmBroadcast::kScalar:
+    return values[0];
+  case GemmBroadcast::kRow:
+    return values[n];
+  case GemmBroadcast::kColumn:
+    return values[m];
+  case GemmBroadcast::kMatrix:
+    return values[m * N + n];
+  case GemmBroadcast::kNone:
+    return T(0);
+  }
+  return T(0);
+}
+
+template <typename T> std::uint16_t ConvertOutput(T value, GemmOutputConversion conversion) {
+  const float narrowed = static_cast<float>(value);
+  return conversion == GemmOutputConversion::kFloat16 ? detail::FloatToFloat16Bits(narrowed)
+                                                      : detail::FloatToBFloat16Bits(narrowed);
+}
+
+template <typename T, typename GemmFn>
+void GemmWithEpilogue(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::size_t K,
+                      T alpha, const T *A, const T *B, const GemmEpilogue<T> &epilogue, T *Y,
+                      GemmFn gemm) {
+  ValidateGemmEpilogue(M, N, epilogue);
+  const bool no_epilogue = (epilogue.bias == nullptr || epilogue.beta == T(0) ||
+                            epilogue.bias_layout == GemmBroadcast::kNone) &&
+                           (epilogue.residual == nullptr || epilogue.residual_scale == T(0) ||
+                            epilogue.residual_layout == GemmBroadcast::kNone) &&
+                           epilogue.activation == GemmActivation::kNone &&
+                           epilogue.output_conversion == GemmOutputConversion::kNone;
+  if (no_epilogue) {
+    gemm(trans_a, trans_b, M, N, K, alpha, A, B, T(0), nullptr, Y);
+    return;
+  }
+  const bool matrix_bias_only = epilogue.bias != nullptr && epilogue.beta != T(0) &&
+                                epilogue.bias_layout == GemmBroadcast::kMatrix &&
+                                epilogue.residual == nullptr &&
+                                epilogue.activation == GemmActivation::kNone &&
+                                epilogue.output_conversion == GemmOutputConversion::kNone;
+  if (matrix_bias_only) {
+    gemm(trans_a, trans_b, M, N, K, alpha, A, B, epilogue.beta, epilogue.bias, Y);
+    return;
+  }
+
+  gemm(trans_a, trans_b, M, N, K, alpha, A, B, T(0), nullptr, Y);
+  ApplyGemmEpilogue(M, N, epilogue, Y);
+}
+
+} // namespace
+
+template <typename T>
+void ValidateGemmEpilogue(std::size_t M, std::size_t N, const GemmEpilogue<T> &epilogue) {
   const auto validate_layout = [](GemmBroadcast layout) {
     switch (layout) {
     case GemmBroadcast::kNone:
@@ -1244,31 +1299,7 @@ void ValidateEpilogue(std::size_t M, std::size_t N, const GemmEpilogue<T> &epilo
 }
 
 template <typename T>
-T BroadcastValue(const T *values, GemmBroadcast layout, std::size_t m, std::size_t n,
-                 std::size_t N) {
-  switch (layout) {
-  case GemmBroadcast::kScalar:
-    return values[0];
-  case GemmBroadcast::kRow:
-    return values[n];
-  case GemmBroadcast::kColumn:
-    return values[m];
-  case GemmBroadcast::kMatrix:
-    return values[m * N + n];
-  case GemmBroadcast::kNone:
-    return T(0);
-  }
-  return T(0);
-}
-
-template <typename T> std::uint16_t ConvertOutput(T value, GemmOutputConversion conversion) {
-  const float narrowed = static_cast<float>(value);
-  return conversion == GemmOutputConversion::kFloat16 ? detail::FloatToFloat16Bits(narrowed)
-                                                      : detail::FloatToBFloat16Bits(narrowed);
-}
-
-template <typename T>
-void ApplyEpilogue(std::size_t M, std::size_t N, const GemmEpilogue<T> &epilogue, T *Y) {
+void ApplyGemmEpilogue(std::size_t M, std::size_t N, const GemmEpilogue<T> &epilogue, T *Y) {
   const bool has_bias = epilogue.bias != nullptr && epilogue.beta != T(0) &&
                         epilogue.bias_layout != GemmBroadcast::kNone;
   const bool has_residual = epilogue.residual != nullptr && epilogue.residual_scale != T(0) &&
@@ -1308,36 +1339,12 @@ void ApplyEpilogue(std::size_t M, std::size_t N, const GemmEpilogue<T> &epilogue
   });
 }
 
-template <typename T, typename GemmFn>
-void GemmWithEpilogue(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::size_t K,
-                      T alpha, const T *A, const T *B, const GemmEpilogue<T> &epilogue, T *Y,
-                      GemmFn gemm) {
-  ValidateEpilogue(M, N, epilogue);
-  const bool no_epilogue = (epilogue.bias == nullptr || epilogue.beta == T(0) ||
-                            epilogue.bias_layout == GemmBroadcast::kNone) &&
-                           (epilogue.residual == nullptr || epilogue.residual_scale == T(0) ||
-                            epilogue.residual_layout == GemmBroadcast::kNone) &&
-                           epilogue.activation == GemmActivation::kNone &&
-                           epilogue.output_conversion == GemmOutputConversion::kNone;
-  if (no_epilogue) {
-    gemm(trans_a, trans_b, M, N, K, alpha, A, B, T(0), nullptr, Y);
-    return;
-  }
-  const bool matrix_bias_only = epilogue.bias != nullptr && epilogue.beta != T(0) &&
-                                epilogue.bias_layout == GemmBroadcast::kMatrix &&
-                                epilogue.residual == nullptr &&
-                                epilogue.activation == GemmActivation::kNone &&
-                                epilogue.output_conversion == GemmOutputConversion::kNone;
-  if (matrix_bias_only) {
-    gemm(trans_a, trans_b, M, N, K, alpha, A, B, epilogue.beta, epilogue.bias, Y);
-    return;
-  }
-
-  gemm(trans_a, trans_b, M, N, K, alpha, A, B, T(0), nullptr, Y);
-  ApplyEpilogue(M, N, epilogue, Y);
-}
-
-} // namespace
+template void ValidateGemmEpilogue<float>(std::size_t, std::size_t, const GemmEpilogue<float> &);
+template void ValidateGemmEpilogue<double>(std::size_t, std::size_t, const GemmEpilogue<double> &);
+template void ApplyGemmEpilogue<float>(std::size_t, std::size_t, const GemmEpilogue<float> &,
+                                       float *);
+template void ApplyGemmEpilogue<double>(std::size_t, std::size_t, const GemmEpilogue<double> &,
+                                        double *);
 
 void GemmFloat32WithEpilogue(bool trans_a, bool trans_b, std::size_t M, std::size_t N,
                              std::size_t K, float alpha, const float *A, const float *B,
