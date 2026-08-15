@@ -223,7 +223,19 @@ std::size_t SelectGemmRegisterRowsForMicroarchitecture(SimdLevel level, bool has
     return 6;
   }
   if (level >= SimdLevel::kAVX2 && has_fma) {
-    return microarchitecture == GemmMicroarchitecture::kIntelCore ? kGemmIntelAVX2MR : kGemmMR;
+    // AMD Zen's two FMA pipelines need a wider register tile than the
+    // conservative default to keep enough independent accumulator chains in
+    // flight; modern Intel Core parts prefer a five-row tile. Unknown
+    // (generic) x86 parts keep the safe four-row default.
+    switch (microarchitecture) {
+    case GemmMicroarchitecture::kIntelCore:
+      return kGemmIntelAVX2MR;
+    case GemmMicroarchitecture::kAmdZen:
+      return kGemmZenAVX2MR;
+    case GemmMicroarchitecture::kGeneric:
+      break;
+    }
+    return kGemmMR;
   }
   return kGemmMR;
 }

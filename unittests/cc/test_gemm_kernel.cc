@@ -274,6 +274,26 @@ TEST(GemmFloat32, PlannedGridCoversRowAndColumnPanels) {
   }
 }
 
+// Forces the six-row register tile that the AMD Zen AVX2+FMA profile selects
+// (Roadmap PR06.5) so the mr == 6 micro-kernel path is exercised for
+// correctness, including a row tail (M not a multiple of six) and a column tail.
+TEST(GemmFloat32, PlannedSixRowRegisterTileMatchesReference) {
+  const std::size_t M = 41, N = 53, K = 130;
+  const auto A = RandomVector(M * K, 61);
+  const auto B = RandomVector(K * N, 62);
+  const auto C = RandomVector(M * N, 63);
+  const auto expected = ReferenceGemm<float>(false, false, M, N, K, 0.75f, A, B, 1.25f, &C);
+  std::vector<float> Y(M * N);
+  const onnx_light_cpu::GemmBlocking blocking{24, 48, 64, 6, 16};
+
+  onnx_light_cpu::detail::GemmFloat32Planned<onnx_light_cpu::GemmAlgorithm::kGeneral>(
+      false, false, M, N, K, 0.75f, A.data(), B.data(), 1.25f, C.data(), Y.data(), &blocking);
+
+  for (std::size_t i = 0; i < M * N; ++i) {
+    EXPECT_NEAR(Y[i], expected[i], 2e-2f) << "i=" << i;
+  }
+}
+
 // K larger than the internal K-blocking chunk (kGemmTileK=256) so the k
 // reduction is split across several chunks that must be accumulated together
 // (GemmAccumMode::kAccumulate) instead of each overwriting Y. Also exercises
@@ -448,6 +468,23 @@ TEST(GemmFloat64, LargeKSpansMultipleChunks) {
   std::vector<double> Y(M * N, 0.0);
   onnx_light_cpu::GemmFloat64(false, false, M, N, K, alpha, A.data(), B.data(), beta, C.data(),
                               Y.data());
+  for (std::size_t i = 0; i < M * N; ++i) {
+    EXPECT_NEAR(Y[i], expected[i], 1e-9) << "i=" << i;
+  }
+}
+
+TEST(GemmFloat64, PlannedSixRowRegisterTileMatchesReference) {
+  const std::size_t M = 41, N = 53, K = 130;
+  const auto A = RandomVectorD(M * K, 76);
+  const auto B = RandomVectorD(K * N, 77);
+  const auto C = RandomVectorD(M * N, 78);
+  const auto expected = ReferenceGemm<double>(false, false, M, N, K, 0.75, A, B, 1.25, &C);
+  std::vector<double> Y(M * N);
+  const onnx_light_cpu::GemmBlocking blocking{24, 48, 64, 6, 8};
+
+  onnx_light_cpu::detail::GemmFloat64Planned<onnx_light_cpu::GemmAlgorithm::kGeneral>(
+      false, false, M, N, K, 0.75, A.data(), B.data(), 1.25, C.data(), Y.data(), &blocking);
+
   for (std::size_t i = 0; i < M * N; ++i) {
     EXPECT_NEAR(Y[i], expected[i], 1e-9) << "i=" << i;
   }
