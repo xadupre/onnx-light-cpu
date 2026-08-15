@@ -166,16 +166,16 @@ int main() {
   std::printf("SIMD level: %s  FMA: %s  microarchitecture: %s  register rows: %zu\n",
               SimdName(level), has_fma ? "yes" : "no", MicroarchitectureName(microarchitecture),
               register_rows);
-  std::printf("%-18s %6s %6s %6s %8s %14s %14s\n", "case", "M", "N", "K", "threads", "fp32 GFLOP/s",
-              "fp64 GFLOP/s");
+  std::printf("%-18s %6s %6s %6s %8s %14s %8s %14s\n", "case", "M", "N", "K", "fp32 thr",
+              "fp32 GFLOP/s", "fp64 thr", "fp64 GFLOP/s");
 
   for (const GemmCase &c : kCases) {
     std::size_t fp32_threads = 0;
     std::size_t fp64_threads = 0;
     const double fp32 = MeasureGflops<float>(c, &fp32_threads);
     const double fp64 = MeasureGflops<double>(c, &fp64_threads);
-    std::printf("%-18s %6zu %6zu %6zu %8zu %14.2f %14.2f\n", c.name, c.m, c.n, c.k, fp32_threads,
-                fp32, fp64);
+    std::printf("%-18s %6zu %6zu %6zu %8zu %14.2f %8zu %14.2f\n", c.name, c.m, c.n, c.k,
+                fp32_threads, fp32, fp64_threads, fp64);
   }
   return 0;
 }
