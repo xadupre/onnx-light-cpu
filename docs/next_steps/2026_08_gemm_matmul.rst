@@ -892,7 +892,7 @@ dependency, and current status.
        blocking is both microarchitecture- and shape-aware. Dedicated-hardware
        speed-up measurements for the 1024³/2048³ priority cases are still
        pending.
-    * - Roadmap PR06.6
+   * - Roadmap PR06.6
      - Final FP32/FP64 parity gate.
      - Raw dedicated-machine results cover Gemm, shared MatMul, batched paths,
        every priority platform, and both types; median speed-up is at least
