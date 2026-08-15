@@ -4,6 +4,7 @@
 
 #include "onnx_light_cpu/kernels/math/gemm_kernel.h"
 
+#include "onnx_light_cpu/impl/math/gemm/gemm_plan.h"
 #include "onnx_light_cpu/impl/math/math_kernels.h"
 #include "onnx_light_cpu/kernels/kernel_usage.h"
 
@@ -16,8 +17,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -32,6 +35,60 @@ using rt_ns::NodeKernelFn;
 using rt_ns::RuntimeContext;
 using rt_ns::Shape;
 using rt_ns::Tensor;
+
+// Immutable-plan cache backing the FP32/FP64 operator path (Roadmap PR06.4).
+// The plan encodes the selected algorithm, blocking, thread count, and (unused
+// here) constant-B packing derived from the dtype/shape/attributes; it is only
+// rebuilt when the key changes so those selections are not re-derived per run.
+struct GemmKernel::GemmPlanCache {
+  bool has_key = false;
+  int data_type = 0;
+  bool trans_a = false;
+  bool trans_b = false;
+  std::size_t m = 0;
+  std::size_t n = 0;
+  std::size_t k = 0;
+  std::unique_ptr<GemmPlan<float>> plan_f32;
+  std::unique_ptr<GemmPlan<double>> plan_f64;
+
+  template <typename T>
+  const GemmPlan<T> &GetOrBuild(int dt, bool ta, bool tb, std::size_t rows, std::size_t cols,
+                                std::size_t depth, T scale) {
+    std::unique_ptr<GemmPlan<T>> &slot = Slot<T>();
+    // Compare ``alpha`` against the cached plan's own ``T`` value so the
+    // change-detection stays in the input precision instead of widening to
+    // ``double`` (which could mask or fabricate differences for ``float``).
+    const bool match = has_key && data_type == dt && trans_a == ta && trans_b == tb && m == rows &&
+                       n == cols && k == depth && slot != nullptr && slot->alpha() == scale;
+    if (!match) {
+      slot = std::make_unique<GemmPlan<T>>(
+          GemmPlanOptions<T>{ta, tb, rows, cols, depth, scale, T(0), {}});
+      has_key = true;
+      data_type = dt;
+      trans_a = ta;
+      trans_b = tb;
+      m = rows;
+      n = cols;
+      k = depth;
+    }
+    return *slot;
+  }
+
+private:
+  template <typename T> std::unique_ptr<GemmPlan<T>> &Slot() {
+    if constexpr (std::is_same_v<T, float>) {
+      return plan_f32;
+    } else {
+      static_assert(std::is_same_v<T, double>);
+      return plan_f64;
+    }
+  }
+};
+
+GemmKernel::GemmKernel(const rt_ns::KernelContext &ctx)
+    : rt_ns::KernelBase(ctx), plan_cache_(std::make_unique<GemmPlanCache>()) {}
+
+GemmKernel::~GemmKernel() = default;
 
 namespace {
 
@@ -109,10 +166,16 @@ std::vector<float> WidenHalfLike(const Tensor &t, bool is_bfloat16) {
   return out;
 }
 
-// Shared implementation for both public ``operator()`` overloads. ``c`` is null
-// for the no-bias overload; otherwise it points at the bias tensor.
-Tensor GemmCompute(const Tensor &a, const Tensor &b, const Tensor *c, float alpha, float beta,
-                   bool trans_a, bool trans_b, RuntimeContext *rt) {
+} // namespace
+
+// Shared implementation for the ``Run`` and both ``operator()`` overloads.
+// ``c`` is null for the no-bias overload; otherwise it points at the bias
+// tensor. When ``cache`` is non-null the FP32/FP64 paths reuse or rebuild a
+// keyed immutable :cpp:class:`GemmPlan` instead of re-deriving the algorithm,
+// blocking, and thread count on every run (Roadmap PR06.4).
+Tensor GemmKernel::Compute(const Tensor &a, const Tensor &b, const Tensor *c, float alpha,
+                           float beta, bool trans_a, bool trans_b, RuntimeContext *rt,
+                           GemmPlanCache *cache) {
   if (a.data_type != b.data_type) {
     throw std::invalid_argument("onnx_light_cpu::GemmKernel: A and B must share the same dtype.");
   }
@@ -138,6 +201,14 @@ Tensor GemmCompute(const Tensor &a, const Tensor &b, const Tensor *c, float alph
 
   switch (static_cast<DataType>(a.data_type)) {
   case DataType::FLOAT: {
+    std::optional<GemmPlan<float>> transient;
+    const GemmPlan<float> *plan = nullptr;
+    if (cache != nullptr) {
+      plan = &cache->GetOrBuild<float>(a.data_type, trans_a, trans_b, M, N, K, alpha);
+    } else {
+      transient.emplace(GemmPlanOptions<float>{trans_a, trans_b, M, N, K, alpha, 0.0f, {}});
+      plan = &*transient;
+    }
     GemmEpilogue<float> epilogue;
     if (has_bias) {
       epilogue.bias = c->AsFloat();
@@ -147,11 +218,20 @@ Tensor GemmCompute(const Tensor &a, const Tensor &b, const Tensor *c, float alph
     const std::size_t n_bytes = M * N * sizeof(float);
     Tensor y = rt_ns::MakeOutputTensor(a.data_type, out_shape, n_bytes,
                                        rt != nullptr ? rt->allocator() : nullptr);
-    GemmFloat32WithEpilogue(trans_a, trans_b, M, N, K, alpha, a.AsFloat(), b.AsFloat(), epilogue,
-                            y.AsFloat());
+    plan->Execute(a.AsFloat(), b.AsFloat(), epilogue, y.AsFloat());
     return y;
   }
   case DataType::DOUBLE: {
+    std::optional<GemmPlan<double>> transient;
+    const GemmPlan<double> *plan = nullptr;
+    if (cache != nullptr) {
+      plan = &cache->GetOrBuild<double>(a.data_type, trans_a, trans_b, M, N, K,
+                                        static_cast<double>(alpha));
+    } else {
+      transient.emplace(
+          GemmPlanOptions<double>{trans_a, trans_b, M, N, K, static_cast<double>(alpha), 0.0, {}});
+      plan = &*transient;
+    }
     GemmEpilogue<double> epilogue;
     if (has_bias) {
       epilogue.bias = c->AsDouble();
@@ -161,8 +241,7 @@ Tensor GemmCompute(const Tensor &a, const Tensor &b, const Tensor *c, float alph
     const std::size_t n_bytes = M * N * sizeof(double);
     Tensor y = rt_ns::MakeOutputTensor(a.data_type, out_shape, n_bytes,
                                        rt != nullptr ? rt->allocator() : nullptr);
-    GemmFloat64WithEpilogue(trans_a, trans_b, M, N, K, static_cast<double>(alpha), a.AsDouble(),
-                            b.AsDouble(), epilogue, y.AsDouble());
+    plan->Execute(a.AsDouble(), b.AsDouble(), epilogue, y.AsDouble());
     return y;
   }
   case DataType::FLOAT16:
@@ -202,16 +281,14 @@ Tensor GemmCompute(const Tensor &a, const Tensor &b, const Tensor *c, float alph
   }
 }
 
-} // namespace
-
 Tensor GemmKernel::operator()(const Tensor &a, const Tensor &b, const Tensor &c, float alpha,
                               float beta, bool trans_a, bool trans_b, RuntimeContext *rt) const {
-  return GemmCompute(a, b, &c, alpha, beta, trans_a, trans_b, rt);
+  return Compute(a, b, &c, alpha, beta, trans_a, trans_b, rt, nullptr);
 }
 
 Tensor GemmKernel::operator()(const Tensor &a, const Tensor &b, float alpha, bool trans_a,
                               bool trans_b, RuntimeContext *rt) const {
-  return GemmCompute(a, b, nullptr, alpha, 0.0f, trans_a, trans_b, rt);
+  return Compute(a, b, nullptr, alpha, 0.0f, trans_a, trans_b, rt, nullptr);
 }
 
 void GemmKernel::Run(RuntimeContext &rt) {
@@ -225,8 +302,7 @@ void GemmKernel::Run(RuntimeContext &rt) {
   const float beta = rt_ns::GetAttributeFloatOrDefault(node, "beta", 1.0f);
   const bool trans_a = rt_ns::GetAttributeIntOrDefault(node, "transA", 0) != 0;
   const bool trans_b = rt_ns::GetAttributeIntOrDefault(node, "transB", 0) != 0;
-  Tensor y = c != nullptr ? (*this)(a, b, *c, alpha, beta, trans_a, trans_b, &rt)
-                          : (*this)(a, b, alpha, trans_a, trans_b, &rt);
+  Tensor y = Compute(a, b, c, alpha, beta, trans_a, trans_b, &rt, plan_cache_.get());
   rt_ns::SetOutput(node, 0, std::move(y), rt);
 }
 

@@ -347,6 +347,66 @@ TEST(GemmPlan, OwnsConstantB) {
   EXPECT_TRUE(plan.has_constant_b());
 }
 
+TEST(GemmPlan, ExecutesRowBroadcastBiasEpilogue) {
+  // alpha applies to the product, the epilogue adds beta * bias broadcast over
+  // rows and clamps negatives to zero with a fused ReLU.
+  const GemmPlan<float> plan(GemmPlanOptions<float>{false, false, 2, 2, 2, 0.5f, 0.0f, {}});
+  const std::vector<float> a = {1, 2, 3, 4};
+  const std::vector<float> b = {1, 0, 0, 1};
+  const std::vector<float> bias = {-10, 1}; // length N, broadcast over the 2 rows
+  std::vector<float> y(4);
+
+  onnx_light_cpu::GemmEpilogue<float> epilogue;
+  epilogue.bias = bias.data();
+  epilogue.bias_layout = onnx_light_cpu::GemmBroadcast::kRow;
+  epilogue.beta = 2.0f;
+  epilogue.activation = onnx_light_cpu::GemmActivation::kRelu;
+
+  plan.Execute(a.data(), b.data(), epilogue, y.data());
+
+  // 0.5*[[1,2],[3,4]] + 2*[[-10,1],[-10,1]] = [[-19.5,3],[-18.5,4]] -> ReLU
+  ExpectValues(y, std::array<float, 4>{0, 3, 0, 4});
+}
+
+TEST(GemmPlan, ExecutesMatrixBiasEpilogueMatchesFullMatrixExecute) {
+  // The full-matrix bias epilogue must match the fused (a, b, c, y) overload.
+  const std::vector<float> a = {1, 2, 3, 4, 5, 6};
+  const std::vector<float> b = {1, 2, 3, 4, 5, 6};
+  const std::vector<float> c = {1, 1, 1, 1};
+
+  const GemmPlan<float> fused(GemmPlanOptions<float>{false, false, 2, 2, 3, 0.5f, 2.0f, {}});
+  std::vector<float> expected(4);
+  fused.Execute(a.data(), b.data(), c.data(), expected.data());
+
+  const GemmPlan<float> plan(GemmPlanOptions<float>{false, false, 2, 2, 3, 0.5f, 0.0f, {}});
+  onnx_light_cpu::GemmEpilogue<float> epilogue;
+  epilogue.bias = c.data();
+  epilogue.bias_layout = onnx_light_cpu::GemmBroadcast::kMatrix;
+  epilogue.beta = 2.0f;
+  std::vector<float> y(4);
+  plan.Execute(a.data(), b.data(), epilogue, y.data());
+
+  ExpectValues(y, std::span<const float>(expected));
+}
+
+TEST(GemmPlan, ExecutesConstantBEpilogue) {
+  std::vector<float> b = {1, 2, 3, 4, 5, 6};
+  const GemmPlan<float> plan(GemmPlanOptions<float>{false, false, 2, 2, 3, 1.0f, 0.0f, b});
+  b.assign(b.size(), 0.0f);
+  const std::vector<float> a = {1, 2, 3, 4, 5, 6};
+  const std::vector<float> bias = {5};
+  std::vector<float> y(4);
+
+  onnx_light_cpu::GemmEpilogue<float> epilogue;
+  epilogue.bias = bias.data();
+  epilogue.bias_layout = onnx_light_cpu::GemmBroadcast::kScalar;
+  epilogue.beta = 1.0f;
+
+  plan.Execute(a.data(), epilogue, y.data());
+
+  ExpectValues(y, std::array<float, 4>{27, 33, 54, 69});
+}
+
 TEST(MatMulPlan, ExecutesRankTwoFoundation) {
   const MatMulPlan<double> plan(2, 2, 2);
   const std::array<double, 4> a = {1, 2, 3, 4};

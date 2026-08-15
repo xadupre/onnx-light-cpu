@@ -171,4 +171,19 @@ void GemmFloat64WithEpilogue(bool trans_a, bool trans_b, std::size_t M, std::siz
                              std::size_t K, double alpha, const double *A, const double *B,
                              const GemmEpilogue<double> &epilogue, double *Y);
 
+/// Validates that an :cpp:class:`GemmEpilogue` is internally consistent for an
+/// ``M x N`` output, throwing ``std::invalid_argument`` otherwise. Exposed so a
+/// prepared :cpp:class:`GemmPlan` can apply the same epilogue as the ONNX
+/// operator kernel without re-deriving the plan on every run.
+template <typename T>
+void ValidateGemmEpilogue(std::size_t M, std::size_t N, const GemmEpilogue<T> &epilogue);
+
+/// Applies the broadcast bias, residual, activation, and optional output
+/// narrowing described by ``epilogue`` to the ``M x N`` accumulation buffer
+/// ``Y`` in place. The matrix product must already be stored in ``Y``. Exposed
+/// alongside :cpp:func:`ValidateGemmEpilogue` for the prepared-plan operator
+/// path.
+template <typename T>
+void ApplyGemmEpilogue(std::size_t M, std::size_t N, const GemmEpilogue<T> &epilogue, T *Y);
+
 } // namespace onnx_light_cpu

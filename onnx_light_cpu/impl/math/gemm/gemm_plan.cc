@@ -329,6 +329,57 @@ template <typename T> void GemmPlan<T>::Execute(const T *a, const T *c, T *y) co
 }
 
 template <typename T>
+void GemmPlan<T>::Execute(const T *a, const T *b, const GemmEpilogue<T> &epilogue, T *y) const {
+  if (m_ == 0 || n_ == 0) {
+    return;
+  }
+  ValidateGemmEpilogue(m_, n_, epilogue);
+  if (y == nullptr) {
+    throw std::invalid_argument("onnx_light_cpu::GemmPlan: Y must not be null.");
+  }
+  if (k_ != 0 && a == nullptr) {
+    throw std::invalid_argument("onnx_light_cpu::GemmPlan: A must not be null when K is nonzero.");
+  }
+  const T *resolved_b = has_constant_b_ ? constant_b_.data() : b;
+  if (k_ != 0 && resolved_b == nullptr) {
+    throw std::invalid_argument("onnx_light_cpu::GemmPlan: B must not be null when K is nonzero.");
+  }
+
+  // Mirror GemmWithEpilogue's dispatch, but drive it through the plan's cached
+  // algorithm/blocking kernel instead of re-deriving the selection every run.
+  const bool has_bias = epilogue.bias != nullptr && epilogue.beta != T(0) &&
+                        epilogue.bias_layout != GemmBroadcast::kNone;
+  const bool has_residual = epilogue.residual != nullptr && epilogue.residual_scale != T(0) &&
+                            epilogue.residual_layout != GemmBroadcast::kNone;
+  const bool has_activation = epilogue.activation != GemmActivation::kNone;
+  const bool converts_output = epilogue.output_conversion != GemmOutputConversion::kNone;
+
+  if (!has_bias && !has_residual && !has_activation && !converts_output) {
+    kernel_(trans_a_, trans_b_, m_, n_, k_, alpha_, a, resolved_b, T(0), nullptr, y, &blocking_);
+    return;
+  }
+  const bool matrix_bias_only = has_bias && epilogue.bias_layout == GemmBroadcast::kMatrix &&
+                                !has_residual && !has_activation && !converts_output;
+  if (matrix_bias_only) {
+    kernel_(trans_a_, trans_b_, m_, n_, k_, alpha_, a, resolved_b, epilogue.beta, epilogue.bias, y,
+            &blocking_);
+    return;
+  }
+
+  kernel_(trans_a_, trans_b_, m_, n_, k_, alpha_, a, resolved_b, T(0), nullptr, y, &blocking_);
+  ApplyGemmEpilogue(m_, n_, epilogue, y);
+}
+
+template <typename T>
+void GemmPlan<T>::Execute(const T *a, const GemmEpilogue<T> &epilogue, T *y) const {
+  if (!has_constant_b_) {
+    throw std::logic_error(
+        "onnx_light_cpu::GemmPlan: Execute without B requires a constant-B plan.");
+  }
+  Execute(a, nullptr, epilogue, y);
+}
+
+template <typename T>
 MatMulPlan<T>::MatMulPlan(std::span<const std::size_t> a_shape,
                           std::span<const std::size_t> b_shape, bool trans_a, bool trans_b,
                           std::span<const T> constant_b)
