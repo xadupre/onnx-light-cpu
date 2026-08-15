@@ -818,22 +818,62 @@ void GemmDirect(std::size_t M, std::size_t N, std::size_t K, T alpha, const T *A
       });
 }
 
+// Dot product of two ``K``-length sequences read with independent strides,
+// accumulated through several partial sums so the compiler can vectorize the
+// unit-stride case and extract instruction-level parallelism otherwise. The
+// tail (``K`` not a multiple of the unroll factor) is summed exactly.
+template <typename T>
+T SkinnyDotProduct(const T *a, std::size_t a_stride, const T *b, std::size_t b_stride,
+                   std::size_t K) {
+  constexpr std::size_t kUnroll = 4;
+  T acc0 = T(0);
+  T acc1 = T(0);
+  T acc2 = T(0);
+  T acc3 = T(0);
+  std::size_t k = 0;
+  if (a_stride == 1 && b_stride == 1) {
+    for (; k + kUnroll <= K; k += kUnroll) {
+      acc0 += a[k + 0] * b[k + 0];
+      acc1 += a[k + 1] * b[k + 1];
+      acc2 += a[k + 2] * b[k + 2];
+      acc3 += a[k + 3] * b[k + 3];
+    }
+  } else {
+    for (; k + kUnroll <= K; k += kUnroll) {
+      acc0 += a[(k + 0) * a_stride] * b[(k + 0) * b_stride];
+      acc1 += a[(k + 1) * a_stride] * b[(k + 1) * b_stride];
+      acc2 += a[(k + 2) * a_stride] * b[(k + 2) * b_stride];
+      acc3 += a[(k + 3) * a_stride] * b[(k + 3) * b_stride];
+    }
+  }
+  T acc = (acc0 + acc1) + (acc2 + acc3);
+  for (; k < K; ++k) {
+    acc += a[k * a_stride] * b[k * b_stride];
+  }
+  return acc;
+}
+
 template <typename T>
 void GemmSkinnyN(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::size_t K, T alpha,
                  const T *A, const T *B, T beta, const T *C, T *Y) {
   const bool has_bias = C != nullptr && beta != T(0);
+  // ``A(m, k)`` and ``B(k, n)`` reduce to unit-stride reads for the common
+  // inference layouts (non-transposed A and transposed weights, or ``N == 1``),
+  // which lets ``SkinnyDotProduct`` vectorize over K instead of walking each
+  // reduction with a serial dependency chain.
+  const std::size_t a_stride = trans_a ? M : 1;
+  const std::size_t b_stride = trans_b ? 1 : N;
   const double cost = static_cast<double>(N) * K / kGemmFmasPerParallelWorkUnit;
   ParallelFor(static_cast<std::int64_t>(M), cost, [&](std::int64_t begin, std::int64_t end) {
     for (std::int64_t row = begin; row < end; ++row) {
       const std::size_t m = static_cast<std::size_t>(row);
+      const T *a_row = trans_a ? A + m : A + m * K;
+      T *y_row = Y + m * N;
+      const T *c_row = has_bias ? C + m * N : nullptr;
       for (std::size_t n = 0; n < N; ++n) {
-        T acc = T(0);
-        for (std::size_t k = 0; k < K; ++k) {
-          const T a = trans_a ? A[k * M + m] : A[m * K + k];
-          const T b = trans_b ? B[n * K + k] : B[k * N + n];
-          acc += a * b;
-        }
-        Y[m * N + n] = alpha * acc + (has_bias ? beta * C[m * N + n] : T(0));
+        const T *b_col = trans_b ? B + n * K : B + n;
+        const T acc = SkinnyDotProduct(a_row, a_stride, b_col, b_stride, K);
+        y_row[n] = alpha * acc + (has_bias ? beta * c_row[n] : T(0));
       }
     }
   });

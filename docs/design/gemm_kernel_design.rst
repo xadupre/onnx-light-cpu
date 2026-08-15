@@ -194,7 +194,12 @@ drive execution rather than being descriptive metadata.
 The plan selects the general five-loop engine or a direct, skinny-M, skinny-N,
 or split-K path once from the prepared shape. It may own constant B in its
 original representation; persistent B prepacking is explicitly excluded from
-the roadmap.
+the roadmap. The skinny-N path reduces each output element through several
+partial accumulators over a unit-stride ``K`` body with an exact scalar tail,
+so single-column and small-N shapes vectorize the reduction instead of walking
+it with a serial dependency chain. A single output column (``N == 1``) is kept
+on this path rather than split-K, whose partition and partial-reduction
+overhead would dominate the tiny output.
 
 Platform support
 ----------------
