@@ -110,7 +110,7 @@ TEST(GemmPlan, SelectsRuntimeVectorLengthAwareArmProfile) {
   EXPECT_EQ(no_sve_kernel.kind, ArmGemmKernelKind::kNeon);
 }
 
-TEST(GemmPlan, SelectsConservativeMicroarchitectureRegisterRows) {
+TEST(GemmPlan, SelectsMicroarchitectureRegisterRows) {
   using onnx_light_cpu::GemmMicroarchitecture;
   using onnx_light_cpu::SimdLevel;
   using onnx_light_cpu::detail::SelectGemmRegisterRowsForMicroarchitecture;
@@ -123,12 +123,18 @@ TEST(GemmPlan, SelectsConservativeMicroarchitectureRegisterRows) {
             5u);
   EXPECT_EQ(SelectGemmRegisterRowsForMicroarchitecture(SimdLevel::kAVX2, true,
                                                        GemmMicroarchitecture::kAmdZen),
-            4u);
+            6u);
   EXPECT_EQ(SelectGemmRegisterRowsForMicroarchitecture(SimdLevel::kAVX512, true,
                                                        GemmMicroarchitecture::kIntelCore),
             6u);
+  EXPECT_EQ(SelectGemmRegisterRowsForMicroarchitecture(SimdLevel::kAVX512, true,
+                                                       GemmMicroarchitecture::kAmdZen),
+            6u);
   EXPECT_EQ(SelectGemmRegisterRowsForMicroarchitecture(SimdLevel::kAVX2, false,
                                                        GemmMicroarchitecture::kIntelCore),
+            4u);
+  EXPECT_EQ(SelectGemmRegisterRowsForMicroarchitecture(SimdLevel::kAVX2, false,
+                                                       GemmMicroarchitecture::kAmdZen),
             4u);
 }
 

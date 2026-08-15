@@ -88,6 +88,7 @@ constexpr std::size_t kGemmMR = 4;
 constexpr std::size_t kGemmAVX2MR = 6;
 constexpr std::size_t kGemmAVX512MR = 8;
 constexpr std::size_t kGemmIntelAVX2MR = 5;
+constexpr std::size_t kGemmZenAVX2MR = 6;
 constexpr std::size_t kGemmNeonMR = 6;
 constexpr std::size_t kGemmSveMR = 4;
 

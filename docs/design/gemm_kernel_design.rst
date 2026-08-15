@@ -366,9 +366,11 @@ Implemented optimizations (for reference)
    * - ISA-specific register blocking
      - Implemented -- candidate AVX2 MR=4/5/6 and AVX-512 MR=6/7/8 kernels
        are compiled. CPUID family/model dispatch uses the measured MR=5
-       profile on modern Intel Core AVX2 processors and conservative MR=4
-       AVX2 / MR=6 AVX-512 profiles elsewhere. The selected value drives
-       algorithm selection, MC alignment, row packing, and execution.
+       profile on modern Intel Core AVX2 processors, the measured MR=6 profile
+       on AMD Zen AVX2 processors (whose two FMA pipelines need the wider
+       six-row tile), and the conservative MR=4 AVX2 / MR=6 AVX-512 profiles
+       elsewhere. The selected value drives algorithm selection, MC alignment,
+       row packing, and execution.
    * - Aligned packed panels
      - Implemented -- A and B workspaces are 64-byte aligned. B row strides
        are padded to the active vector width, keeping AVX2 and AVX-512 loads

@@ -245,9 +245,10 @@ Phase 2: saturate the floating-point units
   variants. Zen, Skylake, Ice Lake, and hybrid Intel CPUs can require different
   MR/NR and cache blocks even when they expose the same ISA.
 * Generate several MR x NR micro-kernels instead of fixing ``MR == 4``.
-  AVX2+FMA emits compile-time ``MR=1..4`` variants and AVX-512 emits
-  ``MR=1..6``, both for NR=1 and NR=2. The detected ISA selects MR=4 for
-  AVX2/SSE and MR=6 for AVX-512, and the choice is propagated through cache
+  AVX2+FMA emits compile-time ``MR=1..6`` variants and AVX-512 emits
+  ``MR=1..8``, both for NR=1 and NR=2. The detected microarchitecture selects
+  MR=4 for generic AVX2/SSE, MR=5 for modern Intel Core AVX2, MR=6 for AMD Zen
+  AVX2, and MR=6 for AVX-512, and the choice is propagated through cache
   blocking, packing, algorithm selection, and execution. Per-model tuning
   within an ISA remains.
 * Unroll K enough to maintain independent FMA chains without spilling
@@ -879,8 +880,19 @@ dependency, and current status.
        2048³ priority cases no longer regress from 512³, and the complete
        corpus shows no priority-shape regression.
      - PR06.4
-     - Pending
-   * - Roadmap PR06.6
+     - `Implemented in #180
+       <https://github.com/xadupre/onnx-light-cpu/pull/180>`_. AMD Zen AVX2+FMA
+       now selects the measured six-row register tile
+       (``SelectGemmRegisterRowsForMicroarchitecture`` returns
+       ``kGemmZenAVX2MR``) so Zen's two FMA pipelines keep enough independent
+       FP32/FP64 accumulator chains in flight; modern Intel Core keeps the
+       five-row tile and generic x86 keeps the conservative four-row tile. The
+       tuned register rows propagate through MC alignment, row packing,
+       algorithm selection, and the parallel task grid, so the large-matrix
+       blocking is both microarchitecture- and shape-aware. Dedicated-hardware
+       speed-up measurements for the 1024³/2048³ priority cases are still
+       pending.
+    * - Roadmap PR06.6
      - Final FP32/FP64 parity gate.
      - Raw dedicated-machine results cover Gemm, shared MatMul, batched paths,
        every priority platform, and both types; median speed-up is at least
