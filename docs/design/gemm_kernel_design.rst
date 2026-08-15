@@ -199,7 +199,13 @@ partial accumulators over a unit-stride ``K`` body with an exact scalar tail,
 so single-column and small-N shapes vectorize the reduction instead of walking
 it with a serial dependency chain. A single output column (``N == 1``) is kept
 on this path rather than split-K, whose partition and partial-reduction
-overhead would dominate the tiny output.
+overhead would dominate the tiny output. The skinny-M path is the dual GEMV
+kernel for the few-row shapes (``M == 1`` matvec or a short batch): it streams
+each ``B`` row once per ``k``, reuses it across the output rows with a
+broadcast axpy over the output columns, and keeps one column panel's
+accumulators in a small ``M x nb`` buffer. The axpy is unit-stride for
+non-transposed ``B``, so it vectorizes over ``N`` -- the useful dimension when
+``M`` is tiny -- while work is parallelized over ``N`` column panels.
 
 Platform support
 ----------------

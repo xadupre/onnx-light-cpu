@@ -678,9 +678,10 @@ require measurements on dedicated hardware.
        performance with no priority shape below 0.9x.
      - P3.
      - Scheduler PR01, epilogue PR02, x86 tuning PR03, thread runtime PR04,
-       ARM kernels PR05, parity runner PR06.0, diagnosis PR06.1, and
-       vectorized skinny-N selection PR06.2 are implemented or in review;
-       measured fixes PR06.3 through PR06.5 and final gate PR06.6 remain.
+       ARM kernels PR05, parity runner PR06.0, diagnosis PR06.1, vectorized
+       skinny-N selection PR06.2, and the dedicated GEMV/skinny-M kernel
+       PR06.3 are implemented or in review; measured fixes PR06.4 through
+       PR06.5 and final gate PR06.6 remain.
      - `onnx-light-cpu #133
        <https://github.com/xadupre/onnx-light-cpu/pull/133>`_,
        `onnx-light-cpu #141
@@ -842,7 +843,14 @@ dependency, and current status.
        output columns, vectorize the useful dimension, and improve every
        priority GEMV case without regressing general GEMM.
      - PR06.2
-     - Pending
+     - `Implemented in #170
+       <https://github.com/xadupre/onnx-light-cpu/pull/170>`_. ``GemmSkinnyM``
+       now streams each B row once per K, reuses it across the few output
+       rows through a broadcast axpy that vectorizes over N for non-transposed
+       B, and applies the alpha/beta epilogue from a small per-panel
+       accumulator instead of packing an almost-empty A panel through the
+       five-loop tile kernel. Dedicated-hardware speed-up measurements are
+       still pending.
    * - Roadmap PR06.4
      - Use immutable plans on operator paths.
      - Registered ONNX ``Gemm`` and ``MatMul`` construct guarded

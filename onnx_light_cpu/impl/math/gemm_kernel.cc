@@ -879,30 +879,52 @@ void GemmSkinnyN(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::
   });
 }
 
-template <typename T, typename TileFn>
+// Dedicated GEMV / skinny-M kernel. When ``M`` is small (a single example or a
+// short batch), the multiplication is bound by streaming ``B`` rather than by
+// register-blocked FMAs, so the register-tiled five-loop engine wastes work
+// packing a nearly empty ``A`` panel. This kernel instead streams each ``B``
+// row ``B(k, n0:n0+nb)`` once per ``k`` and reuses it across the few output
+// rows: for every ``k`` it broadcasts the scalar ``A(m, k)`` into an axpy over
+// the output columns. That axpy is unit-stride for the common
+// non-transposed-``B`` layout, so the compiler vectorizes over ``N`` -- the
+// useful dimension when ``M`` is tiny. Accumulators for one column panel stay
+// in a small ``M x nb`` buffer, and the ``alpha``/``beta`` epilogue is applied
+// once per output element. Work is parallelized over ``N`` column panels.
+template <typename T>
 void GemmSkinnyM(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::size_t K, T alpha,
-                 const T *A, const T *B, T beta, const T *C, T *Y, GemmKernelKind kind, TileFn tile,
-                 const GemmBlocking &blocking) {
+                 const T *A, const T *B, T beta, const T *C, T *Y, const GemmBlocking &blocking) {
   const bool has_bias = C != nullptr && beta != T(0);
-  const std::size_t panel_count = (N + blocking.nc - 1) / blocking.nc;
-  const double cost = static_cast<double>(M) * blocking.nc * K / kGemmFmasPerParallelWorkUnit;
+  // ``B(k, n)`` reduces to unit-stride column reads for the common inference
+  // layout (non-transposed weights), which lets the axpy vectorize over N.
+  const std::size_t b_col_stride = trans_b ? K : 1;
+  const std::size_t b_row_stride = trans_b ? 1 : N;
+  const std::size_t nc = blocking.nc;
+  const std::size_t panel_count = (N + nc - 1) / nc;
+  const double cost = static_cast<double>(M) * nc * K / kGemmFmasPerParallelWorkUnit;
   ParallelFor(static_cast<std::int64_t>(panel_count), cost,
               [&](std::int64_t begin, std::int64_t end) {
-                AlignedVector<T> bpack(blocking.kc * blocking.nc);
-                AlignedVector<T> apack(M * blocking.kc);
+                AlignedVector<T> acc(M * nc);
                 for (std::int64_t panel = begin; panel < end; ++panel) {
-                  const std::size_t n0 = static_cast<std::size_t>(panel) * blocking.nc;
-                  const std::size_t nb = std::min(blocking.nc, N - n0);
-                  for (std::size_t k0 = 0; k0 < K; k0 += blocking.kc) {
-                    const std::size_t kc = std::min(blocking.kc, K - k0);
-                    const std::size_t packed_stride = AlignUp(nb, GemmVectorLanes<T>(kind));
-                    PackBPanel(trans_b, B, K, N, k0, kc, n0, nb, packed_stride, bpack.data());
-                    PackAPanel(trans_a, A, M, K, 0, M, k0, kc, apack.data());
-                    const GemmAccumMode mode =
-                        k0 == 0 ? (has_bias ? GemmAccumMode::kInitBias : GemmAccumMode::kInitZero)
-                                : GemmAccumMode::kAccumulate;
-                    tile(kind, M, nb, kc, alpha, beta, bpack.data(), packed_stride,
-                         has_bias ? C + n0 : nullptr, N, Y + n0, N, 0, mode, apack.data());
+                  const std::size_t n0 = static_cast<std::size_t>(panel) * nc;
+                  const std::size_t nb = std::min(nc, N - n0);
+                  std::fill(acc.data(), acc.data() + M * nb, T(0));
+                  for (std::size_t k = 0; k < K; ++k) {
+                    const T *b_row = B + k * b_row_stride + n0 * b_col_stride;
+                    for (std::size_t m = 0; m < M; ++m) {
+                      const T a_val = trans_a ? A[k * M + m] : A[m * K + k];
+                      T *acc_row = acc.data() + m * nb;
+                      for (std::size_t j = 0; j < nb; ++j) {
+                        acc_row[j] += a_val * b_row[j * b_col_stride];
+                      }
+                    }
+                  }
+                  for (std::size_t m = 0; m < M; ++m) {
+                    const T *acc_row = acc.data() + m * nb;
+                    T *y_row = Y + m * N + n0;
+                    const T *c_row = has_bias ? C + m * N + n0 : nullptr;
+                    for (std::size_t j = 0; j < nb; ++j) {
+                      y_row[j] = alpha * acc_row[j] + (has_bias ? beta * c_row[j] : T(0));
+                    }
                   }
                 }
               });
@@ -1044,7 +1066,7 @@ void GemmImpl(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::siz
     if (M > blocking.mr) {
       GemmFiveLoop(trans_a, trans_b, M, N, K, alpha, A, B, beta, C, Y, kind, tile, blocking);
     } else {
-      GemmSkinnyM(trans_a, trans_b, M, N, K, alpha, A, B, beta, C, Y, kind, tile, blocking);
+      GemmSkinnyM(trans_a, trans_b, M, N, K, alpha, A, B, beta, C, Y, blocking);
     }
   } else if constexpr (Algorithm == GemmAlgorithm::kSkinnyN) {
     GemmSkinnyN(trans_a, trans_b, M, N, K, alpha, A, B, beta, C, Y);
