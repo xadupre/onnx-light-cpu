@@ -192,7 +192,8 @@ TEST(GemmPlan, AvoidsSplitKForSingleColumnOutputs) {
 
 TEST(GemmPlan, VectorizedSkinnyNMatchesReference) {
   const auto reference = [](bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::size_t K,
-                            const std::vector<float> &a, const std::vector<float> &b) {
+                            float alpha, float beta, const std::vector<float> &a,
+                            const std::vector<float> &b, const std::vector<float> &c) {
     std::vector<float> y(M * N, 0.0f);
     for (std::size_t m = 0; m < M; ++m) {
       for (std::size_t n = 0; n < N; ++n) {
@@ -202,25 +203,33 @@ TEST(GemmPlan, VectorizedSkinnyNMatchesReference) {
           const float bv = trans_b ? b[n * K + k] : b[k * N + n];
           acc += av * bv;
         }
-        y[m * N + n] = acc;
+        y[m * N + n] = alpha * acc + (c.empty() ? 0.0f : beta * c[m * N + n]);
       }
     }
     return y;
   };
 
-  const auto check = [&](bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::size_t K) {
+  const auto check = [&](bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::size_t K,
+                         float alpha, float beta) {
     std::vector<float> a(M * K);
     std::vector<float> b(K * N);
+    std::vector<float> c(M * N);
     for (std::size_t i = 0; i < a.size(); ++i) {
       a[i] = 0.5f + 0.25f * static_cast<float>(i % 7);
     }
     for (std::size_t i = 0; i < b.size(); ++i) {
       b[i] = -1.0f + 0.5f * static_cast<float>(i % 5);
     }
+    for (std::size_t i = 0; i < c.size(); ++i) {
+      c[i] = 2.0f - 0.5f * static_cast<float>(i % 3);
+    }
+    const bool has_bias = beta != 0.0f;
     std::vector<float> y(M * N, 0.0f);
     onnx_light_cpu::detail::GemmFloat32Planned<GemmAlgorithm::kSkinnyN>(
-        trans_a, trans_b, M, N, K, 1.0f, a.data(), b.data(), 0.0f, nullptr, y.data());
-    const std::vector<float> expected = reference(trans_a, trans_b, M, N, K, a, b);
+        trans_a, trans_b, M, N, K, alpha, a.data(), b.data(), beta, has_bias ? c.data() : nullptr,
+        y.data());
+    const std::vector<float> expected = reference(trans_a, trans_b, M, N, K, alpha, beta, a, b,
+                                                  has_bias ? c : std::vector<float>{});
     ASSERT_EQ(y.size(), expected.size());
     for (std::size_t i = 0; i < y.size(); ++i) {
       EXPECT_NEAR(y[i], expected[i], 1e-3f) << "index=" << i;
@@ -228,12 +237,18 @@ TEST(GemmPlan, VectorizedSkinnyNMatchesReference) {
   };
 
   // K = 7 exercises the exact scalar tail after the 4-wide unrolled body; the
-  // larger K = 64 keeps every stride combination on the vectorized body.
+  // larger K = 64 keeps every stride combination on the vectorized body. Each
+  // shape is run without bias (alpha == 1, beta == 0) and with a scaled bias
+  // matrix (alpha != 1, beta != 0) to cover the epilogue.
   for (const std::size_t k : {std::size_t{7}, std::size_t{64}}) {
-    check(false, false, 5, 1, k);
-    check(false, true, 5, 3, k);
-    check(true, false, 5, 3, k);
-    check(true, true, 5, 3, k);
+    check(false, false, 5, 1, k, 1.0f, 0.0f);
+    check(false, true, 5, 3, k, 1.0f, 0.0f);
+    check(true, false, 5, 3, k, 1.0f, 0.0f);
+    check(true, true, 5, 3, k, 1.0f, 0.0f);
+    check(false, false, 5, 1, k, 0.5f, 2.0f);
+    check(false, true, 5, 3, k, 0.5f, 2.0f);
+    check(true, false, 5, 3, k, 0.5f, 2.0f);
+    check(true, true, 5, 3, k, 0.5f, 2.0f);
   }
 }
 
