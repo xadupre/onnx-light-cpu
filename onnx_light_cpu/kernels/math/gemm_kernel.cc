@@ -48,7 +48,6 @@ struct GemmKernel::GemmPlanCache {
   std::size_t m = 0;
   std::size_t n = 0;
   std::size_t k = 0;
-  double alpha = 0.0;
   std::unique_ptr<GemmPlan<float>> plan_f32;
   std::unique_ptr<GemmPlan<double>> plan_f64;
 
@@ -56,9 +55,11 @@ struct GemmKernel::GemmPlanCache {
   const GemmPlan<T> &GetOrBuild(int dt, bool ta, bool tb, std::size_t rows, std::size_t cols,
                                 std::size_t depth, T scale) {
     std::unique_ptr<GemmPlan<T>> &slot = Slot<T>();
+    // Compare ``alpha`` against the cached plan's own ``T`` value so the
+    // change-detection stays in the input precision instead of widening to
+    // ``double`` (which could mask or fabricate differences for ``float``).
     const bool match = has_key && data_type == dt && trans_a == ta && trans_b == tb && m == rows &&
-                       n == cols && k == depth && alpha == static_cast<double>(scale) &&
-                       slot != nullptr;
+                       n == cols && k == depth && slot != nullptr && slot->alpha() == scale;
     if (!match) {
       slot = std::make_unique<GemmPlan<T>>(
           GemmPlanOptions<T>{ta, tb, rows, cols, depth, scale, T(0), {}});
@@ -69,7 +70,6 @@ struct GemmKernel::GemmPlanCache {
       m = rows;
       n = cols;
       k = depth;
-      alpha = static_cast<double>(scale);
     }
     return *slot;
   }
@@ -84,6 +84,9 @@ private:
     }
   }
 };
+
+GemmKernel::GemmKernel(const rt_ns::KernelContext &ctx)
+    : rt_ns::KernelBase(ctx), plan_cache_(std::make_unique<GemmPlanCache>()) {}
 
 GemmKernel::~GemmKernel() = default;
 
@@ -299,9 +302,6 @@ void GemmKernel::Run(RuntimeContext &rt) {
   const float beta = rt_ns::GetAttributeFloatOrDefault(node, "beta", 1.0f);
   const bool trans_a = rt_ns::GetAttributeIntOrDefault(node, "transA", 0) != 0;
   const bool trans_b = rt_ns::GetAttributeIntOrDefault(node, "transB", 0) != 0;
-  if (plan_cache_ == nullptr) {
-    plan_cache_ = std::make_unique<GemmPlanCache>();
-  }
   Tensor y = Compute(a, b, c, alpha, beta, trans_a, trans_b, &rt, plan_cache_.get());
   rt_ns::SetOutput(node, 0, std::move(y), rt);
 }

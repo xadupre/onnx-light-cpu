@@ -39,7 +39,9 @@ namespace onnx_light_cpu {
 /// narrowing is combined with the bias epilogue.
 class GemmKernel : public ONNX_LIGHT_NAMESPACE::core::runtime::KernelBase {
 public:
-  using ONNX_LIGHT_NAMESPACE::core::runtime::KernelBase::KernelBase;
+  /// Constructs the kernel and eagerly allocates the immutable-plan cache so no
+  /// per-run lazy initialization (and its data race) is needed.
+  explicit GemmKernel(const ONNX_LIGHT_NAMESPACE::core::runtime::KernelContext &ctx);
 
   GemmKernel(const GemmKernel &) = delete;
   GemmKernel &operator=(const GemmKernel &) = delete;
