@@ -79,17 +79,35 @@ jobs:
 
       - name: Generate coverage report
         run: |
-          gcovr --root . \
+          mkdir -p coverage-html
+          # Restrict gcovr's search to the build tree so the ``.gcno``/``.gcda``
+          # data is always discovered regardless of the working directory.
+          gcovr --root . build \
             --filter 'onnx_light_cpu/' \
             --gcov-ignore-parse-errors \
             --xml-pretty --output coverage.xml \
+            --html-details coverage-html/index.html \
             --print-summary
+
+      - name: Fail on empty coverage report
+        shell: bash
+        run: |
+          # gcovr succeeds but emits an empty report when no coverage data is
+          # found; guard against silently uploading a meaningless report.
+          valid=$(grep -o 'lines-valid="[0-9]*"' coverage.xml | head -1 | grep -o '[0-9]*')
+          echo "Measured lines: ${valid:-0}"
+          if [ -z "${valid}" ] || [ "${valid}" -eq 0 ]; then
+            echo "::error::Coverage report contains no measured lines." >&2
+            exit 1
+          fi
 
       - name: Upload coverage artifact
         uses: actions/upload-artifact@v4
         with:
           name: cpp-coverage
-          path: coverage.xml
+          path: |
+            coverage.xml
+            coverage-html
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
