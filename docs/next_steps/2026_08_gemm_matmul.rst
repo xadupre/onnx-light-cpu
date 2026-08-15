@@ -20,8 +20,13 @@ with AVX2/AVX-512 paths, K blocking, A/B packing, a task-aware M x N scheduler,
 batch scheduling, packed SIMD split-K, and typed broadcast/fused epilogues; see
 :doc:`the current design <../design/gemm_kernel_design>`. Roadmap PR01 closed
 the scheduler under-utilization identified on multi-panel shapes, and Roadmap
-PR02 removed expanded bias temporaries. The remaining roadmap work covers
-low-precision kernels, Attention, and the final ONNX Runtime parity gates.
+PR02 removed expanded bias temporaries. The FP32 investigation in
+`onnx-light-cpu #162
+<https://github.com/xadupre/onnx-light-cpu/pull/162>`_ shows that scalar
+skinny-N, weak GEMV/skinny-M, an operator path that bypasses ``GemmPlan``, and
+untuned Zen/generic-x86 blocking still prevent parity. The remaining roadmap
+work first closes those measured FP32/FP64 gaps, then covers low-precision
+kernels, Attention, and the final ONNX Runtime parity gates.
 
 Related roadmap
 ---------------
@@ -184,8 +189,9 @@ distinct computational algorithms:
      - Batch outer loop for small independent products; merge batch with M/N
        task dimensions when one product cannot occupy all cores.
    * - Constant B
-     - Plan-owned B in its original tensor representation. Persistent
-       prepacking is the sole optimization excluded from this roadmap.
+     - Plan-owned B prepacked once when shape and layout are stable, with the
+       original tensor representation retained only when required by a
+       guarded fallback.
    * - Extremely large K with small M/N
      - Split K only when M/N/batch parallelism is insufficient, then combine
        partial accumulators in a controlled reduction.
@@ -273,34 +279,34 @@ Roadmap PR01 is implemented by `onnx-light-cpu #155
 `onnx-light-cpu #158
 <https://github.com/xadupre/onnx-light-cpu/pull/158>`_, and Roadmap PR05 by
 `onnx-light-cpu #159
-<https://github.com/xadupre/onnx-light-cpu/pull/159>`_. The remaining P4 step
-and its merge criteria are Roadmap PR06 in the final table. Persistent B
-prepacking is the **only** excluded optimization; no other performance work
-may be deferred while the parity gate remains unmet.
+<https://github.com/xadupre/onnx-light-cpu/pull/159>`_. Roadmap PR06.0
+implemented the parity runner in `onnx-light-cpu #160
+<https://github.com/xadupre/onnx-light-cpu/pull/160>`_, but its measured gate
+does not pass. Roadmap PR06.1 diagnoses the gap in `onnx-light-cpu #162
+<https://github.com/xadupre/onnx-light-cpu/pull/162>`_. The remaining P4 work
+and merge criteria are Roadmap PR06.2 through PR06.6 in the final table.
+Constant-B prepacking is now included in PR06.4 because #162 identifies its
+absence from the operator hot path as part of the measured gap. No performance
+work demonstrated necessary by the parity corpus may be deferred while the
+gate remains unmet.
 
 PR06 does not restart P4 or invalidate PR01 through PR05: their correctness,
-dispatch, scheduling, and architecture tests remain required foundations. It
-is the first end-to-end gate against ONNX Runtime, and it shows that the
-combined implementation still has substantial performance gaps. Resume PR06
-in this order:
+dispatch, scheduling, and architecture tests remain required foundations.
+The measured fixes proceed in this order:
 
-#. Measure the raw micro-kernel, the C++ GEMM driver, the ONNX kernel adapter,
-   and ``ReferenceEvaluator`` separately, using the same Release build, pinned
-   cores, thread count, and shape. This locates overhead before changing kernel
-   code.
-#. Correct algorithm selection for the worst structural cases: do not select
-   split-K for a tiny ``M x N`` output when partitioning and reduction dominate,
-   and replace the scalar skinny-N K reduction with a vectorized path.
-#. Measure packing and epilogue costs for small, transposed, and broadcast-bias
-   cases. Preserve the no-epilogue fast path and fuse or specialize only costs
-   demonstrated by these measurements.
-#. Compare AVX2 MR=4 and MR=5 with the exact Release compiler and complete
-   priority corpus. Inspect the generated hot loop for actual spills before
-   changing the Intel profile selected by PR03.
-#. Extend the gate to the shared MatMul and batched paths, then rerun the full
-   corpus on a dedicated, frequency-stabilized machine. Publish raw results
-   only when both dtype medians reach ``1.0x`` and every priority case reaches
-   ``0.9x``.
+#. Vectorize the skinny-N K reduction, including ``N == 1``, and keep split-K
+   disabled when its partition and reduction costs dominate the tiny output.
+#. Add a dedicated GEMV/skinny-M path that streams each B row once and reuses
+   it across output columns.
+#. Route ONNX ``Gemm`` and ``MatMul`` through immutable ``GemmPlan`` and
+   ``MatMulPlan`` instances so shape selection and plan-owned constant-B state
+   are prepared once, including persistent packed-B panels for initializer
+   weights.
+#. Tune Zen and generic-x86 MR/NR and cache blocking against the complete
+   corpus so 1024³ and larger shapes sustain, rather than lose, throughput.
+#. Rerun the complete FP32/FP64 Gemm, MatMul, and batched corpus on dedicated,
+   frequency-stabilized machines. Publish raw results only when both dtype
+   medians reach ``1.0x`` and every priority case reaches ``0.9x``.
 
 The scheduler decomposes ``Y = A @ B`` into a Cartesian grid of row and column
 panels:
@@ -671,9 +677,10 @@ require measurements on dedicated hardware.
      - Priority FP32/FP64 corpus reaches at least 1.0x ONNX Runtime median
        performance with no priority shape below 0.9x.
      - P3.
-     - Scheduler PR01, epilogue PR02, x86 tuning PR03, thread runtime PR04, and
-       ARM kernels PR05 are implemented; the remaining PR is Roadmap PR06
-       below.
+     - Scheduler PR01, epilogue PR02, x86 tuning PR03, thread runtime PR04,
+       ARM kernels PR05, parity runner PR06.0, and diagnosis PR06.1 are
+       implemented or in review; measured fixes PR06.2 through PR06.5 and
+       final gate PR06.6 remain.
      - `onnx-light-cpu #133
        <https://github.com/xadupre/onnx-light-cpu/pull/133>`_,
        `onnx-light-cpu #141
@@ -697,7 +704,13 @@ require measurements on dedicated hardware.
        `onnx-light-cpu #157
        <https://github.com/xadupre/onnx-light-cpu/pull/157>`_,
        `onnx-light-cpu #158
-       <https://github.com/xadupre/onnx-light-cpu/pull/158>`_
+       <https://github.com/xadupre/onnx-light-cpu/pull/158>`_,
+       `onnx-light-cpu #159
+       <https://github.com/xadupre/onnx-light-cpu/pull/159>`_,
+       `onnx-light-cpu #160
+       <https://github.com/xadupre/onnx-light-cpu/pull/160>`_,
+       `onnx-light-cpu #162
+       <https://github.com/xadupre/onnx-light-cpu/pull/162>`_
    * - P5
      - Native/panel-converted FP16, BF16, and integer paths.
      - Low-precision corpus reaches at least 1.0x ONNX Runtime median
@@ -725,10 +738,11 @@ require measurements on dedicated hardware.
 Remaining pull-request sequence
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-The following table is the single source of truth for the **15-PR sequence**
-after ``#149``. Completed rows remain visible so scope is not lost; each row
-contains its complete implementation scope, merge criterion, dependency, and
-current status.
+The following table is the single source of truth for the sequence after
+``#149``. PR06 is split into independently reviewable measured steps without
+renumbering PR07 through PR15. Completed rows remain visible so scope is not
+lost; each row contains its complete implementation scope, merge criterion,
+dependency, and current status.
 
 .. list-table::
    :header-rows: 1
@@ -785,27 +799,75 @@ current status.
      - PR02
      - `Implemented in #159
        <https://github.com/xadupre/onnx-light-cpu/pull/159>`_
-   * - Roadmap PR06
-     - FP32/FP64 parity gate.
-     - Raw results cover every priority platform/type corpus; median speed-up
-       is at least 1.0x ONNX Runtime and no priority case is below 0.9x. The PR
-       remains open while any target fails.
+   * - Roadmap PR06.0
+     - FP32/FP64 parity runner.
+     - The reproducible runner records raw alternating samples, dispersion,
+       CPU affinity, SIMD level, and effective thread count for every priority
+       Gemm shape.
      - PR01 through PR05
-     - `In progress in #160
-       <https://github.com/xadupre/onnx-light-cpu/pull/160>`_. The reproducible
-       ``tools/benchmark_gemm_parity.py`` runner records raw alternating
-       samples, dispersion, CPU affinity, SIMD level, and the effective thread
-       count. An initial six-core diagnostic run on an i7-13800H under WSL
-       reaches 0.317x FP32 and 0.347x FP64 median, with 0.064x and 0.036x
-       minima, so the gate remains open. These diagnostic numbers are not the
-       final dedicated-machine evidence.
+     - `Implemented in #160
+       <https://github.com/xadupre/onnx-light-cpu/pull/160>`_. An initial
+       six-core diagnostic run on an i7-13800H under WSL reaches 0.317x FP32
+       and 0.347x FP64 median, with 0.064x and 0.036x minima. These diagnostic
+       numbers are not final dedicated-machine evidence.
+   * - Roadmap PR06.1
+     - Isolate and explain the FP32 performance gaps.
+     - Isolated C++ driver measurements plus traced operator and plan paths
+       identify the responsible algorithm, blocking, planning, and conversion
+       costs before kernel changes are proposed.
+     - PR06.0
+     - `In progress in #162
+       <https://github.com/xadupre/onnx-light-cpu/pull/162>`_. The analysis
+       identifies scalar skinny-N, weak GEMV/skinny-M, unused operator plans,
+       and Zen/generic-x86 blocking as the next measured priorities.
+   * - Roadmap PR06.2
+     - Vectorized skinny-N and tiny-output selection.
+     - ``N == 1`` and small-N reductions vectorize over K with exact tails.
+       The selector avoids split-K when partition and reduction overhead
+       dominates, and every skinny-N priority case improves without regressing
+       general GEMM.
+     - PR06.1
+     - Pending
+   * - Roadmap PR06.3
+     - Dedicated GEMV/skinny-M kernel.
+     - ``M == 1`` and small-M cases stream each B row once, reuse it across
+       output columns, vectorize the useful dimension, and improve every
+       priority GEMV case without regressing general GEMM.
+     - PR06.2
+     - Pending
+   * - Roadmap PR06.4
+     - Use immutable plans on operator paths.
+     - Registered ONNX ``Gemm`` and ``MatMul`` construct guarded
+       ``GemmPlan``/``MatMulPlan`` instances during preparation and execute
+       them directly. Algorithm, blocking, threads, and packed constant-B
+       panels are no longer re-derived on every run; dynamic shapes rebuild or
+       retrieve a correctly keyed plan, and dynamic B retains the ordinary
+       per-call packing path.
+     - PR06.3
+     - Pending
+   * - Roadmap PR06.5
+     - Sustain large-matrix throughput on Zen and generic x86.
+     - Measured MR/NR candidates and shape-constrained MC/NC/KC choices keep
+       enough independent FMA chains and parallel panels active. The 1024³ and
+       2048³ priority cases no longer regress from 512³, and the complete
+       corpus shows no priority-shape regression.
+     - PR06.4
+     - Pending
+   * - Roadmap PR06.6
+     - Final FP32/FP64 parity gate.
+     - Raw dedicated-machine results cover Gemm, shared MatMul, batched paths,
+       every priority platform, and both types; median speed-up is at least
+       1.0x ONNX Runtime and no priority case is below 0.9x. The PR remains
+       open while any target fails.
+     - PR06.2 through PR06.5
+     - Pending
    * - Roadmap PR07
      - x86 FP16/BF16 kernel family.
      - Immutable plans describe typed panels, FP32 accumulation, conversion
        epilogues, and ISA gates without full-tensor conversion. F16C converts
        while packing; AVX-512FP16/BF16 use native kernels; CPUID and OS tile
        state safely gate AMX with AVX-512 fallbacks.
-     - PR06
+     - PR06.6
      - Pending
    * - Roadmap PR08
      - ARM FP16/BF16 kernel family.
