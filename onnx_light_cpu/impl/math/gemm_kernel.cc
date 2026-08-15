@@ -827,12 +827,12 @@ T SkinnyDotProduct(const T *a, std::size_t a_stride, const T *b, std::size_t b_s
                    std::size_t K) {
   std::size_t k = 0;
   if (a_stride == 1 && b_stride == 1) {
-    // Carry enough independent partial sums for the SLP vectorizer to fill two
-    // full-width AVX accumulators (sixteen float / four double lanes each half),
-    // rather than a single 128-bit pack. On AVX2 this lifts the unit-stride
-    // reduction -- the ``N == 1`` skinny-N and common inference layouts -- from a
-    // four-lane SSE dot product to full-width vectors, which is the dominant cost
-    // of the memory-streaming GEMV shapes.
+    // Carry enough independent partial sums for the SLP vectorizer to fill
+    // several full-width AVX accumulators (two 8-wide float or four 4-wide
+    // double vectors) instead of a single 128-bit pack. On AVX2 this lifts the
+    // unit-stride reduction -- the ``N == 1`` skinny-N and common inference
+    // layouts -- from a four-lane SSE dot product to full-width vectors, which
+    // is the dominant cost of the memory-streaming GEMV shapes.
     constexpr std::size_t kLanes = 16;
     T acc[kLanes] = {};
     for (; k + kLanes <= K; k += kLanes) {
