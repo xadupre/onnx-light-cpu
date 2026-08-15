@@ -97,7 +97,7 @@ jobs:
           valid=$(grep -o 'lines-valid="[0-9]*"' coverage.xml | head -1 | grep -o '[0-9]*')
           echo "Measured lines: ${valid:-0}"
           if [ -z "${valid}" ] || [ "${valid}" -eq 0 ]; then
-            echo "::error::Coverage report contains no measured lines." >&2
+            echo "::error::Coverage report contains no measured lines."
             exit 1
           fi
 
