@@ -921,20 +921,24 @@ dependency, and current status.
        GFLOP/s FP32 through 1024³ and 2048³, confirming that PR06.5 removed the
        FP32 large-matrix regression on Intel AVX-512. The single-thread FP64
        path still drops from 48 to ~32 GFLOP/s (~33%) at 1024³ and 2048³ while
-       the multi-thread FP64 path recovers (48 to 58 GFLOP/s), and ``skinny_n``
-       remains the weakest priority shape at ~4.2 GFLOP/s. Against the plan's
-       predictions this is a partial match: FP32 meets the PR06.5 objective that
-       1024³ and larger shapes sustain rather than lose throughput, the weak
-       ``skinny_n`` is expected because the skinny-N vectorization and dedicated
-       GEMV path (measured-fix steps 1-2) are not implemented yet, but the FP64
-       single-thread large-matrix drop is *not* predicted by the plan and
-       contradicts the PR06.5 sustain objective, so it is a genuine gap. The
-       plan makes no absolute-GFLOP/s prediction: every quantitative target is a
-       ratio versus ONNX Runtime, which this isolated driver cannot measure.
-       These are diagnostic shared-runner numbers, not the dedicated-machine
-       ONNX Runtime evidence the gate requires, so the FP64 large-matrix
-       single-thread blocking and the skinny-N kernel are the next measured
-       priorities before the gate can close.
+       the multi-thread FP64 path recovers (48 to 58 GFLOP/s). The remaining
+       skinny-N weakness is now fixed: the ``GemmSkinnyN`` unit-stride dot
+       product carried only four partial sums, which the SLP vectorizer packed
+       into a single 128-bit SSE accumulator instead of full-width AVX, so the
+       ``skinny_n`` (M=1024, N=1, K=1024) column-vector shape stalled at a
+       scalar-class rate. Carrying sixteen independent partial sums lets the
+       vectorizer fill two full-width AVX accumulators; on a shared AMD EPYC
+       7763 (Zen 3, AVX2, ``amd-zen`` profile, six register rows, four vCPU)
+       runner ``skinny_n`` rises from 3.3 to 22 GFLOP/s FP32 (about 6.7x) and
+       8.7 to 12.4 GFLOP/s FP64, with no regression on the square, skinny-M,
+       large-K, transpose, or transformer-projection priority shapes. Against
+       the plan's predictions this matches the measured-fix step that vectorizes
+       the skinny-N K reduction, including ``N == 1``. The plan makes no
+       absolute-GFLOP/s prediction: every quantitative target is a ratio versus
+       ONNX Runtime, which this isolated driver cannot measure. These are
+       diagnostic shared-runner numbers, not the dedicated-machine ONNX Runtime
+       evidence the gate requires, so the FP64 large-matrix single-thread
+       blocking is the next measured priority before the gate can close.
    * - Roadmap PR07
      - x86 FP16/BF16 kernel family.
      - Immutable plans describe typed panels, FP32 accumulation, conversion
