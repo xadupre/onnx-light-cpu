@@ -251,16 +251,30 @@ namespace detail {
 GemmAlgorithm SelectGemmAlgorithm(bool trans_a, bool trans_b, std::size_t m, std::size_t n,
                                   std::size_t k, std::size_t vector_lanes,
                                   std::size_t register_rows) {
-  if (k >= 4096 && m != 0 && m <= 64 && n <= 64 / m) {
+  // Split-K trades a partial-buffer allocation and a partial reduction for
+  // parallelism over the reduction dimension. It only pays off for a tiny
+  // output that lacks M and N parallelism. A single output column (``n == 1``)
+  // instead streams fastest as a vectorized K reduction parallelized over its
+  // M rows, so its partitioning and reduction overhead never dominates the
+  // useful work: keep it on the skinny-N path.
+  if (k >= 4096 && m != 0 && m <= 64 && n >= 2 && n <= 64 / m) {
     return GemmAlgorithm::kSplitK;
   }
   if (!trans_a && !trans_b && k <= 32) {
     return GemmAlgorithm::kDirect;
   }
-  if (m <= register_rows) {
+  const bool skinny_m = m <= register_rows;
+  const bool skinny_n = n != 0 && n <= vector_lanes;
+  if (skinny_m && skinny_n) {
+    // Few output columns reduce fastest by vectorizing over K (skinny-N); few
+    // output rows reduce fastest by vectorizing over N (skinny-M). On a tie,
+    // prefer the K-vectorized reduction, which also covers ``m == n == 1``.
+    return n <= m ? GemmAlgorithm::kSkinnyN : GemmAlgorithm::kSkinnyM;
+  }
+  if (skinny_m) {
     return GemmAlgorithm::kSkinnyM;
   }
-  if (n <= vector_lanes) {
+  if (skinny_n) {
     return GemmAlgorithm::kSkinnyN;
   }
   return GemmAlgorithm::kGeneral;

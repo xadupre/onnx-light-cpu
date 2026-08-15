@@ -678,9 +678,9 @@ require measurements on dedicated hardware.
        performance with no priority shape below 0.9x.
      - P3.
      - Scheduler PR01, epilogue PR02, x86 tuning PR03, thread runtime PR04,
-       ARM kernels PR05, parity runner PR06.0, and diagnosis PR06.1 are
-       implemented or in review; measured fixes PR06.2 through PR06.5 and
-       final gate PR06.6 remain.
+       ARM kernels PR05, parity runner PR06.0, diagnosis PR06.1, and
+       vectorized skinny-N selection PR06.2 are implemented or in review;
+       measured fixes PR06.3 through PR06.5 and final gate PR06.6 remain.
      - `onnx-light-cpu #133
        <https://github.com/xadupre/onnx-light-cpu/pull/133>`_,
        `onnx-light-cpu #141
@@ -710,7 +710,9 @@ require measurements on dedicated hardware.
        `onnx-light-cpu #160
        <https://github.com/xadupre/onnx-light-cpu/pull/160>`_,
        `onnx-light-cpu #162
-       <https://github.com/xadupre/onnx-light-cpu/pull/162>`_
+       <https://github.com/xadupre/onnx-light-cpu/pull/162>`_,
+       `onnx-light-cpu #167
+       <https://github.com/xadupre/onnx-light-cpu/pull/167>`_
    * - P5
      - Native/panel-converted FP16, BF16, and integer paths.
      - Low-precision corpus reaches at least 1.0x ONNX Runtime median
@@ -827,7 +829,13 @@ dependency, and current status.
        dominates, and every skinny-N priority case improves without regressing
        general GEMM.
      - PR06.1
-     - Pending
+     - `Implemented in #167
+       <https://github.com/xadupre/onnx-light-cpu/pull/167>`_. ``GemmSkinnyN``
+       now reduces each output through several partial accumulators over a
+       unit-stride K body with an exact scalar tail, and
+       ``SelectGemmAlgorithm`` keeps single-column outputs on the skinny-N
+       path instead of split-K. Dedicated-hardware speed-up measurements are
+       still pending.
    * - Roadmap PR06.3
      - Dedicated GEMV/skinny-M kernel.
      - ``M == 1`` and small-M cases stream each B row once, reuse it across
