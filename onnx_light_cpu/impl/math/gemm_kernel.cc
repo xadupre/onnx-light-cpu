@@ -911,10 +911,10 @@ void GemmSkinnyM(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::
                   for (std::size_t k = 0; k < K; ++k) {
                     const T *b_row = B + k * b_row_stride + n0 * b_col_stride;
                     for (std::size_t m = 0; m < M; ++m) {
-                      const T a = trans_a ? A[k * M + m] : A[m * K + k];
+                      const T a_val = trans_a ? A[k * M + m] : A[m * K + k];
                       T *acc_row = acc.data() + m * nb;
                       for (std::size_t j = 0; j < nb; ++j) {
-                        acc_row[j] += a * b_row[j * b_col_stride];
+                        acc_row[j] += a_val * b_row[j * b_col_stride];
                       }
                     }
                   }
