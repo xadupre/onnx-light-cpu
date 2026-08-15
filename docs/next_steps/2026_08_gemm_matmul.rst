@@ -922,11 +922,19 @@ dependency, and current status.
        FP32 large-matrix regression on Intel AVX-512. The single-thread FP64
        path still drops from 48 to ~32 GFLOP/s (~33%) at 1024³ and 2048³ while
        the multi-thread FP64 path recovers (48 to 58 GFLOP/s), and ``skinny_n``
-       remains the weakest priority shape at ~4.2 GFLOP/s. These are diagnostic
-       shared-runner numbers, not the dedicated-machine ONNX Runtime evidence
-       the gate requires, so the FP64 large-matrix single-thread blocking and
-       the skinny-N kernel are the next measured priorities before the gate can
-       close.
+       remains the weakest priority shape at ~4.2 GFLOP/s. Against the plan's
+       predictions this is a partial match: FP32 meets the PR06.5 objective that
+       1024³ and larger shapes sustain rather than lose throughput, the weak
+       ``skinny_n`` is expected because the skinny-N vectorization and dedicated
+       GEMV path (measured-fix steps 1-2) are not implemented yet, but the FP64
+       single-thread large-matrix drop is *not* predicted by the plan and
+       contradicts the PR06.5 sustain objective, so it is a genuine gap. The
+       plan makes no absolute-GFLOP/s prediction: every quantitative target is a
+       ratio versus ONNX Runtime, which this isolated driver cannot measure.
+       These are diagnostic shared-runner numbers, not the dedicated-machine
+       ONNX Runtime evidence the gate requires, so the FP64 large-matrix
+       single-thread blocking and the skinny-N kernel are the next measured
+       priorities before the gate can close.
    * - Roadmap PR07
      - x86 FP16/BF16 kernel family.
      - Immutable plans describe typed panels, FP32 accumulation, conversion
