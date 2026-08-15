@@ -13,6 +13,7 @@
 #include "onnx_core/runtime/simple_tensor.h"
 
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -64,10 +65,10 @@ void AddIntAttribute(NodeProto &node, const char *name, int64_t value) {
 }
 
 void RegisterGemmBenchmark(std::vector<TestCase> &registry,
-                           const onnx_light_cpu::GemmKernel &kernel, const OpsetId &opset,
-                           const std::string &name, int64_t m, int64_t n, int64_t k,
-                           bool trans_a = false, bool trans_b = false, bool constant_b = false,
-                           BiasShape bias_shape = BiasShape::kNone) {
+                           const std::shared_ptr<onnx_light_cpu::GemmKernel> &kernel,
+                           const OpsetId &opset, const std::string &name, int64_t m, int64_t n,
+                           int64_t k, bool trans_a = false, bool trans_b = false,
+                           bool constant_b = false, BiasShape bias_shape = BiasShape::kNone) {
   NodeProto node = MakeGemmNode();
   if (trans_a) {
     AddIntAttribute(node, "transA", 1);
@@ -111,7 +112,7 @@ void RegisterGemmBenchmark(std::vector<TestCase> &registry,
              Tensor a = Tensor::FromFloat("", a_shape, Randn<float>(a_shape, 433 + a_count));
              Tensor b = Tensor::FromFloat("", b_shape, Randn<float>(b_shape, 434 + b_count));
              Tensor c = Tensor::FromFloat("", c_shape, Randn<float>(c_shape, 435 + c_count));
-             Tensor y = kernel(a, b, c, 1.0f, 1.0f, trans_a, trans_b);
+             Tensor y = (*kernel)(a, b, c, 1.0f, 1.0f, trans_a, trans_b);
              return IoData{{std::move(a), std::move(b), std::move(c)}, {std::move(y)}};
            });
     return;
@@ -122,7 +123,7 @@ void RegisterGemmBenchmark(std::vector<TestCase> &registry,
            [kernel, a_shape, b_shape, trans_a, trans_b, a_count, b_count]() -> IoData {
              Tensor a = Tensor::FromFloat("", a_shape, Randn<float>(a_shape, 433 + a_count));
              Tensor b = Tensor::FromFloat("", b_shape, Randn<float>(b_shape, 434 + b_count));
-             Tensor y = kernel(a, b, 1.0f, trans_a, trans_b);
+             Tensor y = (*kernel)(a, b, 1.0f, trans_a, trans_b);
              return IoData{{std::move(a), std::move(b)}, {std::move(y)}};
            });
     return;
@@ -135,7 +136,7 @@ void RegisterGemmBenchmark(std::vector<TestCase> &registry,
                      trans_b, a_count, b_count]() mutable -> BuiltCase {
     Tensor a = Tensor::FromFloat("", a_shape, Randn<float>(a_shape, 433 + a_count));
     Tensor b = Tensor::FromFloat("", b_shape, Randn<float>(b_shape, 434 + b_count));
-    Tensor y = kernel(a, b, 1.0f, trans_a, trans_b);
+    Tensor y = (*kernel)(a, b, 1.0f, trans_a, trans_b);
     BuiltCase built = BuildSingleNodeCase(node, {std::move(a), std::move(b)}, {std::move(y)}, name,
                                           {opset}, "onnx-light-cpu-backend-test");
 
@@ -170,7 +171,7 @@ Tensor MakeBfloat16Tensor(const std::vector<int64_t> &shape, const std::vector<f
 // bfloat16 (every element type ``GemmKernel`` implements).
 void RegisterCpuGemmCases(std::vector<TestCase> &registry, TestMode mode) {
   const OpsetId opset = DefaultOpset(13);
-  const onnx_light_cpu::GemmKernel gemm_kernel{KernelContext{opset}};
+  const auto gemm_kernel = std::make_shared<onnx_light_cpu::GemmKernel>(KernelContext{opset});
 
   if (mode == TestMode::BENCHMARK) {
     RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_direct_benchmark", 32, 128,
@@ -218,23 +219,23 @@ void RegisterCpuGemmCases(std::vector<TestCase> &registry, TestMode mode) {
   Expect(registry, MakeGemmNode(), "test_cpu_gemm_float32", {opset}, [=]() -> IoData {
     Tensor ta = Tensor::FromFloat("", a_shape, a);
     Tensor tb = Tensor::FromFloat("", b_shape, b);
-    return IoData{{ta, tb}, {gemm_kernel(ta, tb, 1.0f, false, false)}};
+    return IoData{{ta, tb}, {(*gemm_kernel)(ta, tb, 1.0f, false, false)}};
   });
   Expect(registry, MakeGemmNode(), "test_cpu_gemm_float64", {opset}, [=]() -> IoData {
     Tensor ta = Tensor::FromDouble("", a_shape, {0.0, 1.0, 2.0, 3.0, 4.0, 5.0});
     Tensor tb = Tensor::FromDouble("", b_shape,
                                    {0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0});
-    return IoData{{ta, tb}, {gemm_kernel(ta, tb, 1.0f, false, false)}};
+    return IoData{{ta, tb}, {(*gemm_kernel)(ta, tb, 1.0f, false, false)}};
   });
   Expect(registry, MakeGemmNode(), "test_cpu_gemm_float16", {opset}, [=]() -> IoData {
     Tensor ta = rt_ns::MakeFloat16Tensor("", a_shape, a);
     Tensor tb = rt_ns::MakeFloat16Tensor("", b_shape, b);
-    return IoData{{ta, tb}, {gemm_kernel(ta, tb, 1.0f, false, false)}};
+    return IoData{{ta, tb}, {(*gemm_kernel)(ta, tb, 1.0f, false, false)}};
   });
   Expect(registry, MakeGemmNode(), "test_cpu_gemm_bfloat16", {opset}, [=]() -> IoData {
     Tensor ta = MakeBfloat16Tensor(a_shape, a);
     Tensor tb = MakeBfloat16Tensor(b_shape, b);
-    return IoData{{ta, tb}, {gemm_kernel(ta, tb, 1.0f, false, false)}};
+    return IoData{{ta, tb}, {(*gemm_kernel)(ta, tb, 1.0f, false, false)}};
   });
 }
 
