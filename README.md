@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/_static/logo.svg" alt="onnx-light-cpu logo" width="116" height="80">
+</p>
+
 # onnx-light-cpu
 
 [![ci-core](https://github.com/xadupre/onnx-light-cpu/actions/workflows/ci_core.yml/badge.svg)](https://github.com/xadupre/onnx-light-cpu/actions/workflows/ci_core.yml)

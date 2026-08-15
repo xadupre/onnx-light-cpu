@@ -4,29 +4,31 @@
 
   <!-- CPU package pins -->
   <g fill="#4a9eff">
-    <rect x="40" y="16" width="4" height="6" rx="1"/>
-    <rect x="50" y="16" width="4" height="6" rx="1"/>
-    <rect x="60" y="16" width="4" height="6" rx="1"/>
-    <rect x="70" y="16" width="4" height="6" rx="1"/>
-    <rect x="40" y="58" width="4" height="6" rx="1"/>
-    <rect x="50" y="58" width="4" height="6" rx="1"/>
-    <rect x="60" y="58" width="4" height="6" rx="1"/>
-    <rect x="70" y="58" width="4" height="6" rx="1"/>
-    <rect x="22" y="34" width="6" height="4" rx="1"/>
-    <rect x="22" y="44" width="6" height="4" rx="1"/>
-    <rect x="86" y="34" width="6" height="4" rx="1"/>
-    <rect x="86" y="44" width="6" height="4" rx="1"/>
+    <rect x="30" y="2" width="5" height="8" rx="1"/>
+    <rect x="44" y="2" width="5" height="8" rx="1"/>
+    <rect x="58" y="2" width="5" height="8" rx="1"/>
+    <rect x="72" y="2" width="5" height="8" rx="1"/>
+    <rect x="86" y="2" width="5" height="8" rx="1"/>
+    <rect x="30" y="70" width="5" height="8" rx="1"/>
+    <rect x="44" y="70" width="5" height="8" rx="1"/>
+    <rect x="58" y="70" width="5" height="8" rx="1"/>
+    <rect x="72" y="70" width="5" height="8" rx="1"/>
+    <rect x="86" y="70" width="5" height="8" rx="1"/>
+    <rect x="8" y="26" width="8" height="5" rx="1"/>
+    <rect x="8" y="49" width="8" height="5" rx="1"/>
+    <rect x="100" y="26" width="8" height="5" rx="1"/>
+    <rect x="100" y="49" width="8" height="5" rx="1"/>
   </g>
 
   <!-- CPU package -->
-  <rect x="30" y="22" width="54" height="38" rx="5" ry="5" fill="#9b7ec8"/>
-  <rect x="35" y="27" width="44" height="28" rx="3" ry="3" fill="#f2edf7"/>
+  <rect x="18" y="10" width="80" height="60" rx="6" ry="6" fill="#9b7ec8"/>
+  <rect x="24" y="16" width="68" height="48" rx="4" ry="4" fill="#f2edf7"/>
 
   <!-- Die core with parallel SIMD lanes -->
-  <rect x="42" y="33" width="30" height="16" rx="2" ry="2" fill="#7b5ea7"/>
+  <rect x="34" y="26" width="48" height="28" rx="3" ry="3" fill="#7b5ea7"/>
   <g fill="#f5a623">
-    <rect x="45" y="36" width="24" height="2.4" rx="1"/>
-    <rect x="45" y="40" width="24" height="2.4" rx="1"/>
-    <rect x="45" y="44" width="24" height="2.4" rx="1"/>
+    <rect x="38" y="31" width="40" height="4" rx="1"/>
+    <rect x="38" y="38" width="40" height="4" rx="1"/>
+    <rect x="38" y="45" width="40" height="4" rx="1"/>
   </g>
 </svg>
