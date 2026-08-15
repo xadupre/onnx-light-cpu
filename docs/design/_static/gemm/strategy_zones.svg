@@ -1,0 +1,52 @@
+<svg viewBox="0 0 900 620" xmlns="http://www.w3.org/2000/svg" font-family="Helvetica, Arial, sans-serif" role="img" aria-labelledby="gemm-strategy-zones-title">
+<title id="gemm-strategy-zones-title">SelectGemmAlgorithm strategy zones</title>
+<defs><marker id="axis-arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L0,6 L9,3 z" fill="#1a1a1a"/></marker></defs>
+<rect x="0" y="0" width="900" height="620" fill="white"/>
+<text x="450.0" y="26" text-anchor="middle" font-size="16" font-weight="bold" fill="#1a1a1a">SelectGemmAlgorithm strategy zones (hover a zone for details)</text>
+<text x="450.0" y="46" text-anchor="middle" font-size="12" font-style="italic" fill="#666666">M x N output plane, split at m == register_rows and n == vector_lanes; Direct and Split-K are extra conditions layered on top</text>
+<g id="zone-both-skinny-n"><title>skinny_m &amp;&amp; skinny_n, tie-break n &lt;= m: few output rows AND few output columns. Vectorizing the K reduction (skinny-N) wins when columns are the scarcer dimension (n &lt;= m), including the m == n == 1 corner.</title><polygon points="140,90 340,90 140,230" fill="#e2f0d9" stroke="#548235" stroke-width="1.5"/></g>
+<g id="zone-both-skinny-m"><title>skinny_m &amp;&amp; skinny_n, tie-break n &gt; m: few output rows AND few output columns, but with more columns than rows, so vectorizing over N (skinny-M, the dual GEMV kernel) wins.</title><polygon points="340,90 340,230 140,230" fill="#fde9d9" stroke="#e07b1f" stroke-width="1.5"/></g>
+<text x="164" y="114" font-size="11" fill="#1a1a1a">n&lt;=m</text>
+<text x="164" y="128" font-size="11" fill="#1a1a1a">Skinny-N</text>
+<text x="270" y="200" font-size="11" fill="#1a1a1a">n&gt;m</text>
+<text x="270" y="214" font-size="11" fill="#1a1a1a">Skinny-M</text>
+<g class="zone" id="zone-skinny-m">
+<title>skinny_m only: few output rows, many output columns. The dual GEMV kernel streams each B row once per k, broadcasts it across the output rows, and vectorizes the axpy over N.</title>
+<rect x="340" y="90" width="360" height="140" fill="#fde9d9" stroke="#e07b1f" stroke-width="1.5"/>
+<text x="520.0" y="156.33333333333334" text-anchor="middle" font-size="13" fill="#1a1a1a">Skinny-M</text>
+<text x="520.0" y="172.33333333333334" text-anchor="middle" font-size="13" fill="#1a1a1a">(m &lt;= register_rows, n &gt; vector_lanes)</text>
+</g>
+<g class="zone" id="zone-skinny-n">
+<title>skinny_n only: few output columns, many output rows. Each output element is reduced through several partial accumulators over a unit-stride K body with an exact scalar tail.</title>
+<rect x="140" y="230" width="200" height="280" fill="#e2f0d9" stroke="#548235" stroke-width="1.5"/>
+<text x="240.0" y="366.3333333333333" text-anchor="middle" font-size="13" fill="#1a1a1a">Skinny-N</text>
+<text x="240.0" y="382.3333333333333" text-anchor="middle" font-size="13" fill="#1a1a1a">(n &lt;= vector_lanes, m &gt; register_rows)</text>
+</g>
+<g class="zone" id="zone-general">
+<title>General five-loop path: neither m nor n is skinny. Row/column panels of A and B are packed and scheduled across independent output zones in bounded column waves.</title>
+<rect x="340" y="230" width="360" height="280" fill="#dbe7f6" stroke="#4472c4" stroke-width="1.5"/>
+<text x="520.0" y="366.3333333333333" text-anchor="middle" font-size="13" fill="#1a1a1a">General (five-loop)</text>
+<text x="520.0" y="382.3333333333333" text-anchor="middle" font-size="13" fill="#1a1a1a">m &gt; register_rows, n &gt; vector_lanes</text>
+</g>
+<g class="zone" id="zone-direct">
+<title>Direct path (checked first, before the skinny split): !trans_a &amp;&amp; !trans_b &amp;&amp; k &lt;= 32. Small-K products with natural (non-transposed) layouts skip cache blocking and packing entirely.</title>
+<rect x="364" y="254" width="190" height="60" fill="#fff2cc" stroke="#bf9000" stroke-width="1.5" stroke-dasharray="6,4"/>
+<text x="459.0" y="280.6666666666667" text-anchor="middle" font-size="11" fill="#1a1a1a">Direct</text>
+<text x="459.0" y="294.6666666666667" text-anchor="middle" font-size="11" fill="#1a1a1a">!trans_a &amp;&amp; !trans_b &amp;&amp; k&lt;=32</text>
+</g>
+<g class="zone" id="zone-split-k">
+<title>Split-K overlay: k &gt;= 4096 &amp;&amp; m != 0 &amp;&amp; m &lt;= 64 &amp;&amp; n &gt;= 2 &amp;&amp; n &lt;= 64 / m. Tiny outputs with a very long K and not enough M/N parallelism instead partition K into independent packed products, combined by a parallel tolerance-preserving reduction.</title>
+<rect x="364" y="330" width="230" height="60" fill="#f4d9e8" stroke="#b03a7a" stroke-width="1.5" stroke-dasharray="6,4"/>
+<text x="479.0" y="356.6666666666667" text-anchor="middle" font-size="11" fill="#1a1a1a">Split-K</text>
+<text x="479.0" y="370.6666666666667" text-anchor="middle" font-size="11" fill="#1a1a1a">k&gt;=4096 &amp;&amp; m&lt;=64 &amp;&amp; n&lt;=64/m</text>
+</g>
+<line x1="140" y1="510" x2="140" y2="90" stroke="#1a1a1a" stroke-width="1.5" marker-end="url(#axis-arrow)"/>
+<line x1="140" y1="510" x2="700" y2="510" stroke="#1a1a1a" stroke-width="1.5" marker-end="url(#axis-arrow)"/>
+<text x="106" y="98" font-size="12" fill="#1a1a1a">M (rows)</text>
+<text x="680" y="532" font-size="12" fill="#1a1a1a">N (cols)</text>
+<text x="132" y="234" text-anchor="end" font-size="11" fill="#666666">register_rows</text>
+<text x="340" y="546" text-anchor="middle" font-size="11" fill="#666666">vector_lanes</text>
+<line x1="340" y1="90" x2="340" y2="510" stroke="#666666" stroke-width="1" stroke-dasharray="3,3"/>
+<line x1="140" y1="230" x2="700" y2="230" stroke="#666666" stroke-width="1" stroke-dasharray="3,3"/>
+<text x="20" y="604" font-size="11" fill="#666666">Legend: green = Skinny-N, orange = Skinny-M, blue = General, dashed yellow = Direct overlay, dashed pink = Split-K overlay.</text>
+</svg>

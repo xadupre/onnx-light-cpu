@@ -54,6 +54,12 @@ probe)::
        │
        └─ otherwise → GemmKernelKind::kScalar
 
+The same decision tree as an interactive SVG (hover a box for the rationale
+behind each branch):
+
+.. raw:: html
+   :file: _static/gemm/kernel_tree.svg
+
 Two independent axes are worth calling out:
 
 * **Compile-time gate** (``ONNX_LIGHT_CPU_HAVE_AVX512``): decided once, at
@@ -206,6 +212,19 @@ broadcast axpy over the output columns, and keeps one column panel's
 accumulators in a small ``M x nb`` buffer. The axpy is unit-stride for
 non-transposed ``B``, so it vectorizes over ``N`` -- the useful dimension when
 ``M`` is tiny -- while work is parallelized over ``N`` column panels.
+
+``detail::SelectGemmAlgorithm()`` (``gemm_plan.cc``) picks one of these five
+strategies from ``m``, ``n``, ``k``, ``trans_a``/``trans_b``, and the
+target's ``vector_lanes``/``register_rows``. Split-K is checked first (it only
+applies to a narrow, tiny-output/long-``K`` corner); the direct path follows
+for small ``k`` with natural (non-transposed) layouts; everything else is
+decided by comparing ``m`` to ``register_rows`` and ``n`` to ``vector_lanes``.
+The interactive SVG below maps these thresholds onto the ``M`` x ``N`` output
+plane, with the ``K``/transpose-gated Direct and Split-K overlays called out
+separately (hover a zone for the exact condition):
+
+.. raw:: html
+   :file: _static/gemm/strategy_zones.svg
 
 Platform support
 ----------------
