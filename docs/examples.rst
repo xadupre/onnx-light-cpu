@@ -7,4 +7,4 @@ kernels provided by ``onnx-light-cpu`` from Python.
 .. toctree::
     :maxdepth: 1
 
-    auto_examples/index
+    auto_examples/kernels/index
