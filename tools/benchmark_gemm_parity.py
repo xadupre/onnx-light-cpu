@@ -78,6 +78,51 @@ def summarize(results: Sequence[dict[str, Any]]) -> dict[str, Any]:
     return {"passed": passed, "thresholds": {"median": 1.0, "minimum": 0.9}, "by_dtype": by_dtype}
 
 
+def _gflops(operations: int, seconds: float) -> float:
+    if seconds <= 0.0:
+        return 0.0
+    return operations / seconds / 1e9
+
+
+def render_comparison_table(results: Sequence[dict[str, Any]]) -> str:
+    """Render a simple side-by-side onnx-light-cpu vs ONNX Runtime table."""
+    header = (
+        "dtype",
+        "case",
+        "M",
+        "N",
+        "K",
+        "onnx-light-cpu (GFLOP/s)",
+        "onnxruntime (GFLOP/s)",
+        "speedup",
+    )
+    rows: list[tuple[str, ...]] = [header]
+    for result in results:
+        operations = 2 * int(result["m"]) * int(result["n"]) * int(result["k"])
+        rows.append(
+            (
+                str(result["dtype"]),
+                str(result["name"]),
+                str(result["m"]),
+                str(result["n"]),
+                str(result["k"]),
+                f"{_gflops(operations, float(result['cpu_median_seconds'])):.2f}",
+                f"{_gflops(operations, float(result['ort_median_seconds'])):.2f}",
+                f"{float(result['speedup']):.3f}x",
+            )
+        )
+
+    widths = [max(len(row[column]) for row in rows) for column in range(len(header))]
+    lines = []
+    for index, row in enumerate(rows):
+        cells = " | ".join(cell.ljust(widths[column]) for column, cell in enumerate(row))
+        lines.append(f"| {cells} |")
+        if index == 0:
+            separators = " | ".join("-" * widths[column] for column in range(len(header)))
+            lines.append(f"| {separators} |")
+    return "\n".join(lines)
+
+
 def measure_alternating(
     functions: Sequence[Callable[[], Any]], repeat: int, warmup: int
 ) -> tuple[list[float], ...]:
@@ -354,8 +399,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     report = run(args)
     args.output.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    table = render_comparison_table(report["results"])
+    table_path = args.output.with_suffix(".md")
+    table_path.write_text(table + "\n", encoding="utf-8")
+    print(table)
     print(json.dumps(report["summary"], indent=2))
     print(f"raw results: {args.output}")
+    print(f"comparison table: {table_path}")
     return int(args.enforce and not report["summary"]["passed"])
 
 

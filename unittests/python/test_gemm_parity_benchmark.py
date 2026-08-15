@@ -1,4 +1,9 @@
-from tools.benchmark_gemm_parity import GemmCase, repeat_count, summarize
+from tools.benchmark_gemm_parity import (
+    GemmCase,
+    render_comparison_table,
+    repeat_count,
+    summarize,
+)
 
 
 def test_repeat_count_is_bounded():
@@ -30,3 +35,29 @@ def test_summary_rejects_a_slow_priority_case():
     )
 
     assert not report["passed"]
+
+
+def test_comparison_table_reports_both_engines_side_by_side():
+    table = render_comparison_table(
+        [
+            {
+                "name": "square_1024",
+                "dtype": "float32",
+                "m": 1024,
+                "n": 1024,
+                "k": 1024,
+                "cpu_median_seconds": 2 * 1024**3 / 1e9 / 100.0,
+                "ort_median_seconds": 2 * 1024**3 / 1e9 / 200.0,
+                "speedup": 0.5,
+            }
+        ]
+    )
+
+    lines = table.splitlines()
+    assert "onnx-light-cpu (GFLOP/s)" in lines[0]
+    assert "onnxruntime (GFLOP/s)" in lines[0]
+    data = lines[2]
+    assert "square_1024" in data
+    assert "100.00" in data
+    assert "200.00" in data
+    assert "0.500x" in data

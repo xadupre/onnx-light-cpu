@@ -127,8 +127,11 @@ must both be retained.
 
 Two committed instruments implement this contract. ``tools/benchmark_gemm_parity.py``
 is the end-to-end FP32/FP64 parity runner (PR06.0): it alternates the registered
-operator against ONNX Runtime and reports the speed-up gate. ``tools/gemm_throughput.cc``
-is the isolated ``GemmPlan`` throughput driver, built with
+operator against ONNX Runtime and prints a simple side-by-side comparison table
+(``onnx-light-cpu`` GFLOP/s, ONNX Runtime GFLOP/s, and the speed-up ratio per
+priority shape), writing the same table next to the raw JSON results so the two
+engines can be compared directly. ``tools/gemm_throughput.cc`` is the isolated
+``GemmPlan`` throughput driver, built with
 ``-DONNX_LIGHT_CPU_BUILD_BENCHMARKS=ON``; it reports GFLOP/s per priority shape
 for the blocked multiplication alone, without ONNX Runtime or onnx-light, so a
 kernel-level regression is visible independently of the operator dispatch and
