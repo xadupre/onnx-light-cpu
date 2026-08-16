@@ -30,4 +30,8 @@ bool CpuSupportsAvx512BW();
 /// the operating system.
 bool CpuSupportsFma();
 
+/// Returns whether F16C half-precision conversion instructions are available
+/// and AVX state is enabled by the operating system.
+bool CpuSupportsF16C();
+
 } // namespace onnx_light_cpu

@@ -112,6 +112,12 @@ bool CpuSupportsFma() {
   return has_fma && OsSupportsAvx();
 }
 
+bool CpuSupportsF16C() {
+  const auto info1 = Cpuid(1);
+  const bool has_f16c = (info1.ecx & (1u << 29)) != 0;
+  return has_f16c && OsSupportsAvx();
+}
+
 #else // Non-x86
 
 SimdLevel DetectSimdLevel() { return SimdLevel::kNone; }
@@ -119,6 +125,8 @@ SimdLevel DetectSimdLevel() { return SimdLevel::kNone; }
 bool CpuSupportsAvx512BW() { return false; }
 
 bool CpuSupportsFma() { return false; }
+
+bool CpuSupportsF16C() { return false; }
 
 #endif // ONNX_LIGHT_CPU_X86
 

@@ -742,7 +742,7 @@ require measurements on dedicated hardware.
        performance with no priority shape below 0.9x where the type is
        supported.
      - P3-P4.
-     - PR07.0 is implemented and PR07.1 is in progress in #199. The remaining
+     - PR07.0 and PR07.1 are implemented. The remaining
        work is split by execution path, ISA, and type below; hardware-specific
        lanes may proceed in parallel after their shared semantic dependency.
      - Roadmap PR07.0 through PR10.5 below.
@@ -989,7 +989,7 @@ fallbacks are ordered. Completed rows remain visible so scope is not lost.
        with exact tails and runtime ISA fallback. No native dot-product kernel
        or unrelated execution path is included.
      - PR07.0
-     - `In progress in #199
+     - `Implemented in #199
        <https://github.com/xadupre/onnx-light-cpu/pull/199>`_
    * - Roadmap PR07.2
      - Remove remaining low-precision full-tensor widening.
