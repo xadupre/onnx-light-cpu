@@ -51,8 +51,8 @@ GemmBlocking ConstrainGemmBlockingForTasks(GemmBlocking blocking, std::size_t m,
 
 /// Width of the column micro-panel the tile loops walk inside one packed B
 /// panel. The returned value is a multiple of ``blocking.nr`` that keeps the
-/// ``kc x column_block`` slice of B small enough to stay L1-resident while the
-/// row tiles of the packed A panel consume it.
+/// contiguous ``kc x column_block`` slice of B small enough to be reused from
+/// cache by every row tile of the packed A panel.
 std::size_t SelectGemmColumnBlock(const GemmBlocking &blocking, std::size_t element_size);
 
 GemmMicroarchitecture DetectGemmMicroarchitecture();

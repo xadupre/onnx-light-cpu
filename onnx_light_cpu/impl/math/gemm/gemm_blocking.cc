@@ -219,9 +219,13 @@ std::size_t SelectGemmColumnBlock(const GemmBlocking &blocking, std::size_t elem
   const std::size_t kc = std::max<std::size_t>(1, blocking.kc);
   // Measured width of the contiguous column micro-panel the tile loops walk:
   // a few cache lines per k row keep the packed B slice cheap to prefetch and
-  // small enough to be reused from L2 by every row tile of the packed A panel.
+  // small enough to be reused from cache by every row tile of the packed A
+  // panel.
   std::size_t block = std::max(nr, AlignDown(kGemmColumnPanelBytes / bytes, nr));
-  // Never let the kc x block slice crowd the packed A panel out of L2.
+  // Never let the kc x block slice crowd the packed A panel out of L2:
+  // SelectGemmBlocking already reserves half of L2 for that panel, so the B
+  // micro-panel gets a quarter and the rest absorbs the output tile and the
+  // competing working data.
   const std::size_t l2_capacity = (CachedCacheSizes().l2 / 4) / (bytes * kc);
   block = std::max(nr, std::min(block, AlignDown(l2_capacity, nr)));
   return blocking.nc == 0 ? block : std::min(block, blocking.nc);

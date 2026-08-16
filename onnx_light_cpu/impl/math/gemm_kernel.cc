@@ -740,10 +740,12 @@ void GemmTileF64(GemmKernelKind kind, std::size_t mr, std::size_t nb, std::size_
 }
 
 // Packs one ``kc x nb`` block of ``B`` as a sequence of contiguous
-// ``kc x column_block`` column micro-panels. Micro-panel ``j`` starts at
-// ``Bpack + j * column_block * kc`` and stores ``k`` rows of ``jb`` contiguous
-// elements, so the micro-kernel walks it sequentially and the whole slice stays
-// L1-resident while the row tiles reuse it. Keeping one wide ``nb``-strided
+// ``kc x column_block`` column micro-panels. Micro-panels are laid out at the
+// nominal ``column_block`` pitch, so micro-panel starting at column ``j`` is at
+// ``Bpack + j * kc`` even when the (last) micro-panel is narrower; the tile
+// loops must locate it the same way. Each micro-panel stores ``k`` rows of
+// ``jb`` contiguous elements, so the micro-kernel walks it sequentially and the whole slice stays
+// cache-resident while the row tiles reuse it. Keeping one wide ``nb``-strided
 // panel instead would make every ``k`` step jump by the panel width, which both
 // defeats the hardware prefetcher and maps the rows of a micro-panel onto very
 // few L1 sets once that width is a large power of two.
@@ -970,11 +972,11 @@ void GemmFiveLoopRange(bool trans_a, bool trans_b, std::size_t M, std::size_t N,
   const std::size_t panels_per_wave = std::min(
       column_panels, std::max<std::size_t>(1, (thread_count + row_panels - 1) / row_panels));
   // Column micro-panels are the outer tile loop and row tiles the inner one, so
-  // the contiguous ``kc x column_block`` micro-panel of B stays L1-resident
-  // while every row tile of the L2-resident packed A panel consumes it. The
-  // opposite order streams the whole ``kc x nc`` B panel -- which is sized for
-  // L3 -- once per row tile, and that traffic caps large-matrix throughput well
-  // below the micro-kernel rate.
+  // the contiguous ``kc x column_block`` micro-panel of B is reused from cache
+  // by every row tile of the L2-resident packed A panel. The opposite order
+  // streams the whole ``kc x nc`` B panel -- which is sized for L3 -- once per
+  // row tile, and that traffic caps large-matrix throughput well below the
+  // micro-kernel rate.
   const std::size_t column_block = detail::SelectGemmColumnBlock(blocking, sizeof(T));
   const std::size_t panel_capacity = blocking.kc * AlignUp(blocking.nc, column_block);
   AlignedVector<T> bpack(panels_per_wave * panel_capacity);
