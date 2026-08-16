@@ -296,8 +296,9 @@ Roadmap PR01 is implemented by `onnx-light-cpu #155
 implemented the parity runner in `onnx-light-cpu #160
 <https://github.com/xadupre/onnx-light-cpu/pull/160>`_, but its measured gate
 does not pass. Roadmap PR06.1 diagnoses the gap in `onnx-light-cpu #162
-<https://github.com/xadupre/onnx-light-cpu/pull/162>`_. The remaining P4 work
-and merge criteria are Roadmap PR06.2 through PR06.6 in the final table.
+<https://github.com/xadupre/onnx-light-cpu/pull/162>`_. The remaining P4
+implementation work is Roadmap PR06.2 through PR06.6 in the final table; the
+blocking dedicated-machine parity gate is deliberately last as PR10.5.
 Constant-B prepacking is now included in PR06.4 because #162 identifies its
 absence from the operator hot path as part of the measured gap. No performance
 work demonstrated necessary by the parity corpus may be deferred while the
@@ -380,9 +381,8 @@ extra full-matrix memory passes.
   accumulate with FMA. Narrow only the final output. *(First step landed:
   ``GemmHalfWithEpilogue`` converts each FP16/BF16 element to float32 during
   the general algorithm's packing copy instead of widening the whole tensors,
-  accumulates in float32, and narrows only in the epilogue. The conversion is
-  still scalar; the F16C ``cvtph2ps`` vectorization of the contiguous packing
-  copy is the next sub-step.)*
+  accumulates in float32, and narrows only in the epilogue. Vectorized F16C and
+  AVX2 conversion for contiguous panels is isolated in Roadmap PR07.1.)*
 * For AVX-512BF16 and AVX-512FP16, add native dot-product/multiply-accumulate
   kernels with FP32 accumulation where required by the ONNX numerical contract.
 * Add AMX tile kernels behind OS-enabled tile-state detection. AMX must remain
@@ -699,9 +699,9 @@ require measurements on dedicated hardware.
        ARM kernels PR05, parity runner PR06.0, diagnosis PR06.1, vectorized
        skinny-N selection PR06.2, the dedicated GEMV/skinny-M kernel PR06.3,
        immutable operator plans PR06.4, and the measured Zen/Intel register
-       tiles PR06.5 are implemented; the final gate PR06.6 is in progress with
-       isolated-driver measurements pending dedicated-machine ONNX Runtime
-       evidence.
+       tiles PR06.5 and shared-runner diagnostics PR06.6 are implemented. The
+       blocking dedicated-machine ONNX Runtime gate is deferred to PR10.5,
+       after every GEMM implementation and type-specific gate.
      - `onnx-light-cpu #133
        <https://github.com/xadupre/onnx-light-cpu/pull/133>`_,
        `onnx-light-cpu #141
@@ -742,10 +742,10 @@ require measurements on dedicated hardware.
        performance with no priority shape below 0.9x where the type is
        supported.
      - P3-P4.
-     - Roadmap PR07 is in progress (native FP16/BF16 convert-while-packing for
-       the general algorithm, no full-tensor widening); PR08 through PR10
-       below remain pending.
-     - Roadmap PR07 through PR10 below.
+     - PR07.0 is implemented and PR07.1 is in progress in #199. The remaining
+       work is split by execution path, ISA, and type below; hardware-specific
+       lanes may proceed in parallel after their shared semantic dependency.
+     - Roadmap PR07.0 through PR10.5 below.
    * - P6
      - ``AttentionPlan`` and materialized tensor correctness implementation.
      - MHA/GQA/MQA, masks, causal behavior, and tensor past/present
@@ -766,10 +766,10 @@ Remaining pull-request sequence
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 The following table is the single source of truth for the sequence after
-``#149``. PR06 is split into independently reviewable measured steps without
-renumbering PR07 through PR15. Completed rows remain visible so scope is not
-lost; each row contains its complete implementation scope, merge criterion,
-dependency, and current status.
+``#149``. Large phases use decimal sub-PRs so that each change has one type or
+ISA, one measurable merge criterion, and no unrelated performance gate.
+Hardware-specific lanes may run in parallel; only their shared semantics and
+fallbacks are ordered. Completed rows remain visible so scope is not lost.
 
 .. list-table::
    :header-rows: 1
@@ -914,13 +914,11 @@ dependency, and current status.
        speed-up measurements for the 1024³/2048³ priority cases are still
        pending.
    * - Roadmap PR06.6
-     - Final FP32/FP64 parity gate.
-     - Raw dedicated-machine results cover Gemm, shared MatMul, batched paths,
-       every priority platform, and both types; median speed-up is at least
-       1.0x ONNX Runtime and no priority case is below 0.9x. The PR remains
-       open while any target fails.
+     - Shared-runner FP32/FP64 diagnostics.
+     - Isolated measurements identify and verify fixes for skinny-N and
+       large-matrix regressions without claiming ONNX Runtime parity.
      - PR06.2 through PR06.5
-     - In progress. The new isolated ``tools/gemm_throughput.cc`` driver adds
+     - Implemented. The new isolated ``tools/gemm_throughput.cc`` driver adds
        kernel-level evidence between merges: on a shared CI runner (Intel Xeon
        Platinum 8370C, Ice Lake-SP, AVX-512, ``intel-core`` profile, six
        register rows, four vCPU) the single-thread square-matrix throughput is
@@ -976,65 +974,144 @@ dependency, and current status.
        multi-thread square shapes reach 225 GFLOP/s FP32 and 108 FP64 at 1024³
        and 284 and 130 at 2048³, ``transformer_proj`` holds 135-175 GFLOP/s
        FP32 and 62-87 FP64, and no priority shape regresses. With both the Zen
-       and Intel AVX-512 large-matrix regressions now measured as fixed, the
-       dedicated-machine ONNX Runtime comparison is the only remaining step
-       before the gate can close.
-   * - Roadmap PR07
-     - x86 FP16/BF16 kernel family.
-     - Immutable plans describe typed panels, FP32 accumulation, conversion
-       epilogues, and ISA gates without full-tensor conversion. F16C converts
-       while packing; AVX-512FP16/BF16 use native kernels; CPUID and OS tile
-       state safely gate AMX with AVX-512 fallbacks.
-     - PR06.6
-     - In progress. The first step replaces the FP16/BF16 operator path --
-       which widened the whole A and B tensors into float32 scratch buffers
-       before calling ``GemmFloat32`` -- with a native ``GemmHalfWithEpilogue``
-       entry point. For the general blocked algorithm it converts each FP16 or
-       BF16 element to float32 *while packing* it into the micro-kernel panels,
-       so the reduction still accumulates in float32 and the epilogue narrows
-       only the final output, but no expanded ``M x K``/``K x N`` tensor is
-       materialized. The conversion reuses the tuned float32 micro-kernel,
-       blocking, and thread grid by generalizing ``PackAPanel``/``PackBPanel``
-       and the five-loop on the input element type; the float32/float64 paths
-       are byte-for-byte unchanged. Skinny, GEMV, and split-K shapes read A and
-       B directly rather than through packing, so they keep their existing
-       behavior (a one-time widen into the dedicated float32 algorithm), which
-       leaves the ``skinny_m_gemv``, ``skinny_n``, and ``large_k`` priority
-       shapes non-regressed. ``tools/gemm_throughput.cc`` gains isolated FP16
-       and BF16 columns; on a shared AMD EPYC 7763 (Zen 3, AVX2+F16C,
-       ``amd-zen`` profile, six register rows) single-thread runner the native
-       path sustains about 63 GFLOP/s FP16 and 82 GFLOP/s BF16 at 1024³ and
-       71/84 at 2048³, matching or exceeding the widen path while removing its
-       two full-tensor scratch passes. New ``GemmHalf`` C++ tests validate FP16
-       and BF16 against the widen-then-float32 reference across square,
-       rectangular, transposed, empty-K, and bias configurations. The
-       remaining sub-steps -- vectorized F16C ``cvtph2ps`` conversion in the
-       contiguous packing copy, native AVX-512FP16/BF16 dot-product kernels,
-       and OS-tile-gated AMX -- and the dedicated-machine ONNX Runtime
-       comparison are still pending.
-   * - Roadmap PR08
-     - ARM FP16/BF16 kernel family.
-     - NEON and available SVE/SVE2 kernels convert or compute natively during
-       packing, accumulate in FP32, narrow only final output, and pass the
-       complete low-precision GEMM/MatMul corpus.
-     - PR05, PR07
+       and Intel AVX-512 large-matrix regressions now measured as fixed. The
+       dedicated-machine ONNX Runtime comparison is tracked by PR10.5.
+   * - Roadmap PR07.0
+     - Panel-converted FP16/BF16 general path.
+     - The five-loop engine converts FP16/BF16 while packing, accumulates in
+       FP32, and narrows in the epilogue without full A/B tensor widening.
+     - PR06.5
+     - `Implemented in #194
+       <https://github.com/xadupre/onnx-light-cpu/pull/194>`_
+   * - Roadmap PR07.1
+     - Vectorized contiguous x86 conversion.
+     - Contiguous FP16 panels use F16C and contiguous BF16 panels use AVX2,
+       with exact tails and runtime ISA fallback. No native dot-product kernel
+       or unrelated execution path is included.
+     - PR07.0
+     - `In progress in #199
+       <https://github.com/xadupre/onnx-light-cpu/pull/199>`_
+   * - Roadmap PR07.2
+     - Remove remaining low-precision full-tensor widening.
+     - Skinny-M, skinny-N, direct, small-K, and split-K execute from typed
+       inputs and FP32 accumulators. Immutable plans cover FP16/BF16, and tests
+       prove that no priority algorithm allocates expanded A or B tensors.
+     - PR07.0
      - Pending
-   * - Roadmap PR09
-     - Integer, Float8, and packed 4-bit kernels.
-     - x86 VNNI/AMX and ARM dot-product paths fuse zero-point correction,
-       INT32 accumulation, requantization, and schema overflow. INT32/INT64
-       retain exact fallback arithmetic. Float8 formats have explicit
-       decode/packing, and packed INT4/UINT4 unpack or feed native dot/tile
-       instructions with exact tails.
-     - PR07, PR08
+   * - Roadmap PR07.3
+     - Native AVX-512FP16 kernel.
+     - One FP16 micro-kernel family, its CPUID dispatch, tails, and differential
+       tests land without BF16 or AMX changes.
+     - PR07.2
      - Pending
-   * - Roadmap PR10
-     - Low-precision parity gate.
-     - Every supported low-precision type reaches at least 1.0x ONNX Runtime
-       median performance with no priority case below 0.9x where ONNX Runtime
-       supports the type; all other targets publish correctness and throughput.
-       The PR remains open while any target fails.
-     - PR07 through PR09
+   * - Roadmap PR07.4
+     - Native AVX-512BF16 kernel.
+     - One BF16 dot-product kernel family, its CPUID dispatch, tails, and
+       differential tests land with the existing converted-panel fallback.
+     - PR07.2
+     - Pending
+   * - Roadmap PR07.5
+     - AMX tile-state lifecycle.
+     - OS-enabled tile-state detection, per-worker tile configuration, and
+       safe fallback pass focused lifecycle tests. No GEMM kernel is included.
+     - PR07.2
+     - Pending
+   * - Roadmap PR07.6
+     - AMX-BF16 kernel.
+     - The AMX-BF16 kernel reuses PR07.5, passes differential tests on native
+       hardware, and falls back to AVX-512BF16. No INT8 work is included.
+     - PR07.4, PR07.5
+     - Pending
+   * - Roadmap PR08.1
+     - ARM FP16/BF16 panel conversion.
+     - NEON vectorizes conversion while packing with exact tails and scalar
+       fallback; native arithmetic and SVE are excluded.
+     - PR07.2, PR05
+     - Pending
+   * - Roadmap PR08.2
+     - Native ARM FP16/BF16 arithmetic.
+     - NEON FP16 and available BF16 dot-product kernels pass the complete
+       differential corpus while retaining PR08.1 as fallback.
+     - PR08.1
+     - Pending
+   * - Roadmap PR08.3
+     - SVE/SVE2 FP16/BF16 kernels.
+     - Runtime-vector-length-aware kernels and predicated tails pass under
+       native hardware or QEMU, with NEON selected for short vector lengths.
+     - PR08.2
+     - Pending
+   * - Roadmap PR09.1
+     - Portable integer semantics.
+     - INT8/UINT8/INT32/INT64 implement schema-defined zero points, overflow,
+       accumulation, and requantization with exact scalar differential tests.
+       No ISA-specific code is included.
+     - PR07.2
+     - Pending
+   * - Roadmap PR09.2
+     - x86 VNNI INT8 kernel.
+     - Signed and unsigned VNNI paths have exact tails, runtime dispatch, and
+       differential tests over the PR09.1 fallback. ARM and AMX are excluded.
+     - PR09.1
+     - Pending
+   * - Roadmap PR09.3
+     - ARM dot-product INT8 kernel.
+     - Signed and unsigned NEON dot-product paths have exact tails, runtime
+       dispatch, and differential tests over the PR09.1 fallback.
+     - PR09.1
+     - Pending
+   * - Roadmap PR09.4
+     - AMX-INT8 kernel.
+     - The PR07.5 tile-state lifecycle is reused for signed and unsigned INT8,
+       with exact tails and VNNI fallback.
+     - PR07.5, PR09.2
+     - Pending
+   * - Roadmap PR09.5
+     - Float8 packing formats.
+     - Each supported Float8 format has an explicit vectorized decode/packing
+       path, exact tail handling, and differential tests. Integer and INT4
+       kernels are unchanged.
+     - PR07.2
+     - Pending
+   * - Roadmap PR09.6
+     - Packed INT4/UINT4 formats.
+     - Nibbles unpack into typed panels or a native dot-product path with exact
+       odd-length tails and differential tests. Float8 is unchanged.
+     - PR09.1
+     - Pending
+   * - Roadmap PR10.1
+     - FP16/BF16 correctness gate.
+     - The complete FP16/BF16 corpus passes on x86, ARM, and every fallback.
+       This PR contains tests and fixes only, not performance tuning.
+     - PR07.2 through PR08.3
+     - Pending
+   * - Roadmap PR10.2
+     - Integer and compact-format correctness gate.
+     - The complete integer, Float8, and packed-4-bit corpus passes on every
+       available ISA and fallback. This PR contains tests and fixes only.
+     - PR09.1 through PR09.6
+     - Pending
+   * - Roadmap PR10.3
+     - FP16/BF16 performance gate.
+     - Dedicated-machine x86 and ARM results reach at least 1.0x ONNX Runtime
+       median with no priority case below 0.9x where the type is supported.
+       The PR contains measurement-driven tuning only.
+     - PR10.1
+     - Pending
+   * - Roadmap PR10.4
+     - Integer and compact-format performance gate.
+     - Dedicated-machine results are published per type and ISA. Types
+       supported by ONNX Runtime reach at least 1.0x median with no priority
+       case below 0.9x; unsupported types publish correctness and throughput.
+     - PR10.2
+     - Pending
+   * - Roadmap PR10.5
+     - Final blocking GEMM parity gate.
+     - Raw dedicated-machine results cover Gemm, shared MatMul, batched paths,
+       every priority platform, and every supported type. FP32, FP64, and each
+       type supported by ONNX Runtime reach at least 1.0x median performance
+       with no priority case below 0.9x. The PR remains open while any target
+       fails, and Attention work does not begin until it closes.
+     - PR10.3, PR10.4
      - Pending
    * - Roadmap PR11
      - Materialized Attention implementation.
@@ -1042,7 +1119,7 @@ dependency, and current status.
        blocks, and threads. The materialized QK-softmax-PV path supports
        boolean/additive/padding/causal masks, zero-copy GQA/MQA head mapping,
        tensor past/present, FP32/FP16/BF16, and batch/head/query scheduling.
-     - PR10
+     - PR10.5
      - Pending
    * - Roadmap PR12
      - Materialized Attention correctness gate.
@@ -1066,7 +1143,7 @@ dependency, and current status.
        without nested pools. Query lengths 1 and 2-16 use dedicated decode
        algorithms for MHA/GQA/MQA with past/present. FP16/BF16 score and
        V-update kernels match the materialized fallback.
-     - PR10, PR13
+     - PR10.3, PR13
      - Pending
    * - Roadmap PR15
      - Final roadmap parity and memory gate.
