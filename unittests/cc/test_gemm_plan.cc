@@ -8,6 +8,9 @@
 #include <gtest/gtest.h>
 
 #include <array>
+#include <cmath>
+#include <cstdint>
+#include <cstring>
 #include <span>
 #include <stdexcept>
 #include <vector>
@@ -15,12 +18,29 @@
 namespace {
 
 using onnx_light_cpu::GemmAlgorithm;
+using onnx_light_cpu::GemmHalfPlan;
+using onnx_light_cpu::GemmHalfPlanOptions;
 using onnx_light_cpu::GemmPlan;
 using onnx_light_cpu::GemmPlanOptions;
 using onnx_light_cpu::GroupedGemm;
 using onnx_light_cpu::GroupedGemmProblem;
 using onnx_light_cpu::MatMulPlan;
 using onnx_light_cpu::StridedBatchedGemm;
+
+// Encodes an integer-valued float as bfloat16, which is exact because the low 16
+// mantissa bits are zero for these small operands.
+std::uint16_t EncodeBFloat16(float value) {
+  std::uint32_t bits;
+  std::memcpy(&bits, &value, sizeof(bits));
+  return static_cast<std::uint16_t>(bits >> 16);
+}
+
+float DecodeBFloat16(std::uint16_t bits) {
+  const std::uint32_t widened = static_cast<std::uint32_t>(bits) << 16;
+  float value;
+  std::memcpy(&value, &widened, sizeof(value));
+  return value;
+}
 
 void ExpectValues(const std::vector<float> &actual, std::span<const float> expected) {
   ASSERT_EQ(actual.size(), expected.size());
@@ -649,6 +669,44 @@ TEST(GemmPlan, RejectsInvalidConstantAndMissingDynamicB) {
   float y = 0.0f;
   EXPECT_THROW(dynamic_plan.Execute(&a, nullptr, nullptr, &y), std::invalid_argument);
   EXPECT_THROW(dynamic_plan.Execute(&a, nullptr, &y), std::logic_error);
+}
+
+TEST(GemmHalfPlan, ExecutesBFloat16AndExposesSelection) {
+  const GemmHalfPlanOptions options{true, false, false, 2, 2, 3, 0.5f};
+  const GemmHalfPlan plan(options);
+
+  const std::vector<float> a_f = {1, 2, 3, 4, 5, 6};
+  const std::vector<float> b_f = {1, 2, 3, 4, 5, 6};
+  std::vector<std::uint16_t> a(a_f.size());
+  std::vector<std::uint16_t> b(b_f.size());
+  for (std::size_t i = 0; i < a_f.size(); ++i) {
+    a[i] = EncodeBFloat16(a_f[i]);
+  }
+  for (std::size_t i = 0; i < b_f.size(); ++i) {
+    b[i] = EncodeBFloat16(b_f[i]);
+  }
+
+  std::vector<std::uint16_t> converted(4, 0);
+  std::vector<float> y(4, 0.0f);
+  onnx_light_cpu::GemmEpilogue<float> epilogue;
+  epilogue.output_conversion = onnx_light_cpu::GemmOutputConversion::kBFloat16;
+  epilogue.converted_output = converted.data();
+
+  plan.Execute(a.data(), b.data(), epilogue, y.data());
+
+  // 0.5 * ([1 2 3;4 5 6] @ [1 2;3 4;5 6]) = 0.5 * [22 28;49 64].
+  const std::array<float, 4> expected = {11, 14, 24.5f, 32};
+  for (std::size_t i = 0; i < expected.size(); ++i) {
+    EXPECT_NEAR(DecodeBFloat16(converted[i]), expected[i], 0.25f) << "index=" << i;
+  }
+
+  EXPECT_TRUE(plan.is_bfloat16());
+  EXPECT_EQ(plan.m(), 2u);
+  EXPECT_EQ(plan.n(), 2u);
+  EXPECT_EQ(plan.k(), 3u);
+  EXPECT_FLOAT_EQ(plan.alpha(), 0.5f);
+  EXPECT_GE(plan.blocking().kc, 64u);
+  EXPECT_GE(plan.useful_threads(), 1u);
 }
 
 } // namespace

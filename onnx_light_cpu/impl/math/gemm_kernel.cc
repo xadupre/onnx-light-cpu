@@ -61,6 +61,7 @@
 #include <cstdint>
 #include <new>
 #include <stdexcept>
+#include <type_traits>
 #include <vector>
 
 #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
@@ -899,8 +900,14 @@ void GemmDirect(std::size_t M, std::size_t N, std::size_t K, T alpha, const T *A
 // accumulated through several partial sums so the compiler can vectorize the
 // unit-stride case and extract instruction-level parallelism otherwise. The
 // tail (``K`` not a multiple of the unroll factor) is summed exactly.
-template <typename T>
-T SkinnyDotProduct(const T *a, std::size_t a_stride, const T *b, std::size_t b_stride,
+//
+// ``SrcT`` is the element type of the input sequences; it equals the
+// accumulator type ``T`` for the native FP32/FP64 paths and is a ``HalfSource``
+// for the FP16/BF16 path, which converts each element to ``T`` on access so no
+// full-tensor widening buffer is allocated. Accumulation always happens in the
+// wider ``T`` (float or double).
+template <typename T, typename SrcT = T>
+T SkinnyDotProduct(const SrcT *a, std::size_t a_stride, const SrcT *b, std::size_t b_stride,
                    std::size_t K) {
   std::size_t k = 0;
   if (a_stride == 1 && b_stride == 1) {
@@ -946,9 +953,9 @@ T SkinnyDotProduct(const T *a, std::size_t a_stride, const T *b, std::size_t b_s
   return acc;
 }
 
-template <typename T>
+template <typename T, typename SrcT = T>
 void GemmSkinnyN(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::size_t K, T alpha,
-                 const T *A, const T *B, T beta, const T *C, T *Y) {
+                 const SrcT *A, const SrcT *B, T beta, const T *C, T *Y) {
   const bool has_bias = C != nullptr && beta != T(0);
   // ``A(m, k)`` and ``B(k, n)`` reduce to unit-stride reads for the common
   // inference layouts (non-transposed A and transposed weights, or ``N == 1``),
@@ -960,12 +967,12 @@ void GemmSkinnyN(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::
   ParallelFor(static_cast<std::int64_t>(M), cost, [&](std::int64_t begin, std::int64_t end) {
     for (std::int64_t row = begin; row < end; ++row) {
       const std::size_t m = static_cast<std::size_t>(row);
-      const T *a_row = trans_a ? A + m : A + m * K;
+      const SrcT *a_row = trans_a ? A + m : A + m * K;
       T *y_row = Y + m * N;
       const T *c_row = has_bias ? C + m * N : nullptr;
       for (std::size_t n = 0; n < N; ++n) {
-        const T *b_col = trans_b ? B + n * K : B + n;
-        const T acc = SkinnyDotProduct(a_row, a_stride, b_col, b_stride, K);
+        const SrcT *b_col = trans_b ? B + n * K : B + n;
+        const T acc = SkinnyDotProduct<T>(a_row, a_stride, b_col, b_stride, K);
         y_row[n] = alpha * acc + (has_bias ? beta * c_row[n] : T(0));
       }
     }
@@ -983,9 +990,10 @@ void GemmSkinnyN(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::
 // useful dimension when ``M`` is tiny. Accumulators for one column panel stay
 // in a small ``M x nb`` buffer, and the ``alpha``/``beta`` epilogue is applied
 // once per output element. Work is parallelized over ``N`` column panels.
-template <typename T>
+template <typename T, typename SrcT = T>
 void GemmSkinnyM(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::size_t K, T alpha,
-                 const T *A, const T *B, T beta, const T *C, T *Y, const GemmBlocking &blocking) {
+                 const SrcT *A, const SrcT *B, T beta, const T *C, T *Y,
+                 const GemmBlocking &blocking) {
   const bool has_bias = C != nullptr && beta != T(0);
   // ``B(k, n)`` reduces to unit-stride column reads for the common inference
   // layout (non-transposed weights), which lets the axpy vectorize over N.
@@ -1002,7 +1010,7 @@ void GemmSkinnyM(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::
                   const std::size_t nb = std::min(nc, N - n0);
                   std::fill(acc.data(), acc.data() + M * nb, T(0));
                   for (std::size_t k = 0; k < K; ++k) {
-                    const T *b_row = B + k * b_row_stride + n0 * b_col_stride;
+                    const SrcT *b_row = B + k * b_row_stride + n0 * b_col_stride;
                     for (std::size_t m = 0; m < M; ++m) {
                       const T a_val = trans_a ? A[k * M + m] : A[m * K + k];
                       T *acc_row = acc.data() + m * nb;
@@ -1102,10 +1110,10 @@ void GemmFiveLoop(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std:
   GemmFiveLoopRange(trans_a, trans_b, M, N, K, 0, K, alpha, A, B, beta, C, Y, kind, tile, blocking);
 }
 
-template <typename T, typename TileFn>
+template <typename T, typename TileFn, typename SrcT = T>
 void GemmSplitK(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::size_t K, T alpha,
-                const T *A, const T *B, T beta, const T *C, T *Y, GemmKernelKind kind, TileFn tile,
-                const GemmBlocking &blocking) {
+                const SrcT *A, const SrcT *B, T beta, const T *C, T *Y, GemmKernelKind kind,
+                TileFn tile, const GemmBlocking &blocking) {
   if (ParallelForInParallelRegion()) {
     GemmFiveLoop(trans_a, trans_b, M, N, K, alpha, A, B, beta, C, Y, kind, tile, blocking);
     return;
@@ -1147,10 +1155,10 @@ void GemmSplitK(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::s
               });
 }
 
-template <GemmAlgorithm Algorithm, typename T, typename TileFn>
+template <GemmAlgorithm Algorithm, typename T, typename TileFn, typename SrcT = T>
 void GemmImpl(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::size_t K, T alpha,
-              const T *A, const T *B, T beta, const T *C, T *Y, GemmKernelKind kind, TileFn tile,
-              const GemmBlocking &blocking) {
+              const SrcT *A, const SrcT *B, T beta, const T *C, T *Y, GemmKernelKind kind,
+              TileFn tile, const GemmBlocking &blocking) {
   if (M == 0 || N == 0) {
     return;
   }
@@ -1160,7 +1168,14 @@ void GemmImpl(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::siz
   }
 
   if constexpr (Algorithm == GemmAlgorithm::kDirect) {
-    if (trans_a || trans_b || K > 32) {
+    // The direct small-K path hands raw A/B pointers to the SIMD micro-kernel,
+    // which only consumes packed ``T`` panels. For FP16/BF16 inputs (``SrcT !=
+    // T``) that conversion happens while packing, so route them through the
+    // five-loop engine, which materializes ``T`` panels from the typed source
+    // without a full-tensor widening buffer.
+    if constexpr (!std::is_same_v<SrcT, T>) {
+      GemmFiveLoop(trans_a, trans_b, M, N, K, alpha, A, B, beta, C, Y, kind, tile, blocking);
+    } else if (trans_a || trans_b || K > 32) {
       GemmFiveLoop(trans_a, trans_b, M, N, K, alpha, A, B, beta, C, Y, kind, tile, blocking);
     } else {
       GemmDirect(M, N, K, alpha, A, B, beta, C, Y, kind, tile, blocking);
@@ -1169,12 +1184,13 @@ void GemmImpl(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::siz
     if (M > blocking.mr) {
       GemmFiveLoop(trans_a, trans_b, M, N, K, alpha, A, B, beta, C, Y, kind, tile, blocking);
     } else {
-      GemmSkinnyM(trans_a, trans_b, M, N, K, alpha, A, B, beta, C, Y, blocking);
+      GemmSkinnyM<T, SrcT>(trans_a, trans_b, M, N, K, alpha, A, B, beta, C, Y, blocking);
     }
   } else if constexpr (Algorithm == GemmAlgorithm::kSkinnyN) {
-    GemmSkinnyN(trans_a, trans_b, M, N, K, alpha, A, B, beta, C, Y);
+    GemmSkinnyN<T, SrcT>(trans_a, trans_b, M, N, K, alpha, A, B, beta, C, Y);
   } else if constexpr (Algorithm == GemmAlgorithm::kSplitK) {
-    GemmSplitK(trans_a, trans_b, M, N, K, alpha, A, B, beta, C, Y, kind, tile, blocking);
+    GemmSplitK<T, TileFn, SrcT>(trans_a, trans_b, M, N, K, alpha, A, B, beta, C, Y, kind, tile,
+                                blocking);
   } else {
     static_assert(Algorithm == GemmAlgorithm::kGeneral);
     GemmFiveLoop(trans_a, trans_b, M, N, K, alpha, A, B, beta, C, Y, kind, tile, blocking);
@@ -1229,56 +1245,19 @@ void GemmFloat64Planned(bool trans_a, bool trans_b, std::size_t M, std::size_t N
                               SelectGemmKernelKind<double>(), tile, selected);
 }
 
-// Widens a FLOAT16/BFLOAT16 buffer of ``count`` raw 16-bit patterns into a
-// fresh float32 buffer, spreading the per-element decode across the shared
-// thread pool. Used only for the shapes handled below by the tuned skinny/
-// GEMV/split-K float32 algorithms, which read A and B directly instead of
-// through the packing step.
-inline void WidenHalfBuffer(const std::uint16_t *src, bool is_bfloat16, std::size_t count,
-                            float *dst) {
-  ParallelFor(static_cast<std::int64_t>(count), 1.0, [=](std::int64_t begin, std::int64_t end) {
-    if (is_bfloat16) {
-      for (std::int64_t i = begin; i < end; ++i) {
-        dst[i] = detail::Bfloat16BitsToFloat(src[i]);
-      }
-    } else {
-      for (std::int64_t i = begin; i < end; ++i) {
-        dst[i] = detail::Float16BitsToFloat(src[i]);
-      }
-    }
-  });
-}
-
-// FP16/BF16 GEMM accumulated in float32. For the general blocked algorithm the
-// operands are converted to float32 while they are packed into the micro-kernel
-// panels (no full-tensor widening), which is the common large-matrix path.
-// Skinny, GEMV, and split-K shapes use dedicated float32 algorithms that read A
-// and B directly rather than through packing, so they keep their existing
-// behavior by widening the two operands once before dispatch. ``A`` and ``B``
-// are raw 16-bit patterns; the raw ``M x N`` float32 product is written to
-// ``Y`` for the caller's narrowing epilogue.
-void GemmHalfToFloat(bool is_bfloat16, bool trans_a, bool trans_b, std::size_t M, std::size_t N,
+// FP16/BF16 GEMM accumulated in float32, executed through the typed source
+// path for one prepared algorithm. ``A`` and ``B`` are raw 16-bit patterns
+// viewed as ``HalfSource`` and converted to float32 element by element while
+// the operands are packed (general/direct/skinny-M) or reduced (skinny-N), so
+// no full-tensor widening buffer is allocated for any shape. Split-K reuses the
+// same converting five-loop range per partition. The reduction accumulates in
+// float32 and the raw ``M x N`` product is written to ``Y`` for the caller's
+// narrowing epilogue. ``blocking`` overrides the cached plan blocking when
+// non-null; otherwise the default blocking is derived here.
+template <GemmAlgorithm Algorithm>
+void GemmHalfPlanned(bool is_bfloat16, bool trans_a, bool trans_b, std::size_t M, std::size_t N,
                      std::size_t K, float alpha, const std::uint16_t *A, const std::uint16_t *B,
-                     float *Y) {
-  if (M == 0 || N == 0) {
-    return;
-  }
-  if (K == 0) {
-    InitializeOutput(M, N, 0.0f, static_cast<const float *>(nullptr), Y);
-    return;
-  }
-  const GemmKernelKind kind = SelectGemmKernelKind<float>();
-  const GemmAlgorithm algorithm = SelectGemmAlgorithm(
-      trans_a, trans_b, M, N, K, GemmVectorLanes<float>(kind), GemmRegisterRows(kind));
-  if (algorithm != GemmAlgorithm::kGeneral) {
-    std::vector<float> a_f32(M * K);
-    std::vector<float> b_f32(K * N);
-    WidenHalfBuffer(A, is_bfloat16, M * K, a_f32.data());
-    WidenHalfBuffer(B, is_bfloat16, K * N, b_f32.data());
-    GemmFloat32(trans_a, trans_b, M, N, K, alpha, a_f32.data(), b_f32.data(), 0.0f, nullptr, Y);
-    return;
-  }
-
+                     float *Y, const GemmBlocking *blocking) {
   const auto tile = [](GemmKernelKind kind, std::size_t mr, std::size_t nb, std::size_t k,
                        float alpha, float beta, const float *Bmat, std::size_t N,
                        const float *Crow_base, std::size_t Cstride, float *Yrow_base,
@@ -1287,20 +1266,53 @@ void GemmHalfToFloat(bool is_bfloat16, bool trans_a, bool trans_b, std::size_t M
     GemmTileF32(kind, mr, nb, k, alpha, beta, Bmat, N, Crow_base, Cstride, Yrow_base, Ystride, n0,
                 mode, Apack);
   };
-  const GemmBlocking default_blocking =
-      SelectGemmBlocking(sizeof(float), GemmVectorLanes<float>(kind), GemmRegisterRows(kind));
-  const GemmBlocking selected = ConstrainGemmBlockingForTasks(
-      default_blocking, M, N, static_cast<std::size_t>(ParallelForThreadCount()));
+  static const GemmKernelKind default_kind = SelectGemmKernelKind<float>();
+  static const GemmBlocking default_blocking = SelectGemmBlocking(
+      sizeof(float), GemmVectorLanes<float>(default_kind), GemmRegisterRows(default_kind));
+  const GemmBlocking selected =
+      ConstrainGemmBlockingForTasks(blocking == nullptr ? default_blocking : *blocking, M, N,
+                                    static_cast<std::size_t>(ParallelForThreadCount()));
   if (is_bfloat16) {
     const auto *a = reinterpret_cast<const BFloat16Source *>(A);
     const auto *b = reinterpret_cast<const BFloat16Source *>(B);
-    GemmFiveLoop<float>(trans_a, trans_b, M, N, K, alpha, a, b, 0.0f,
-                        static_cast<const float *>(nullptr), Y, kind, tile, selected);
+    GemmImpl<Algorithm, float, decltype(tile), BFloat16Source>(
+        trans_a, trans_b, M, N, K, alpha, a, b, 0.0f, static_cast<const float *>(nullptr), Y,
+        default_kind, tile, selected);
   } else {
     const auto *a = reinterpret_cast<const Float16Source *>(A);
     const auto *b = reinterpret_cast<const Float16Source *>(B);
-    GemmFiveLoop<float>(trans_a, trans_b, M, N, K, alpha, a, b, 0.0f,
-                        static_cast<const float *>(nullptr), Y, kind, tile, selected);
+    GemmImpl<Algorithm, float, decltype(tile), Float16Source>(
+        trans_a, trans_b, M, N, K, alpha, a, b, 0.0f, static_cast<const float *>(nullptr), Y,
+        default_kind, tile, selected);
+  }
+}
+
+// Runtime-dispatched FP16/BF16 GEMM used by the non-plan entry point. It
+// selects the algorithm the same way the FP32 path does and forwards to the
+// typed :cpp:func:`GemmHalfPlanned` so every algorithm reads the half operands
+// directly, without a full-tensor widening buffer.
+void GemmHalfToFloat(bool is_bfloat16, bool trans_a, bool trans_b, std::size_t M, std::size_t N,
+                     std::size_t K, float alpha, const std::uint16_t *A, const std::uint16_t *B,
+                     float *Y) {
+  const GemmKernelKind kind = SelectGemmKernelKind<float>();
+  const GemmAlgorithm algorithm = SelectGemmAlgorithm(
+      trans_a, trans_b, M, N, K, GemmVectorLanes<float>(kind), GemmRegisterRows(kind));
+  switch (algorithm) {
+  case GemmAlgorithm::kDirect:
+    return GemmHalfPlanned<GemmAlgorithm::kDirect>(is_bfloat16, trans_a, trans_b, M, N, K, alpha, A,
+                                                   B, Y, nullptr);
+  case GemmAlgorithm::kSkinnyM:
+    return GemmHalfPlanned<GemmAlgorithm::kSkinnyM>(is_bfloat16, trans_a, trans_b, M, N, K, alpha,
+                                                    A, B, Y, nullptr);
+  case GemmAlgorithm::kSkinnyN:
+    return GemmHalfPlanned<GemmAlgorithm::kSkinnyN>(is_bfloat16, trans_a, trans_b, M, N, K, alpha,
+                                                    A, B, Y, nullptr);
+  case GemmAlgorithm::kSplitK:
+    return GemmHalfPlanned<GemmAlgorithm::kSplitK>(is_bfloat16, trans_a, trans_b, M, N, K, alpha, A,
+                                                   B, Y, nullptr);
+  case GemmAlgorithm::kGeneral:
+    return GemmHalfPlanned<GemmAlgorithm::kGeneral>(is_bfloat16, trans_a, trans_b, M, N, K, alpha,
+                                                    A, B, Y, nullptr);
   }
 }
 
@@ -1310,7 +1322,10 @@ void GemmHalfToFloat(bool is_bfloat16, bool trans_a, bool trans_b, std::size_t M
                                               const float *, float *, const GemmBlocking *);       \
   template void GemmFloat64Planned<Algorithm>(bool, bool, std::size_t, std::size_t, std::size_t,   \
                                               double, const double *, const double *, double,      \
-                                              const double *, double *, const GemmBlocking *)
+                                              const double *, double *, const GemmBlocking *);     \
+  template void GemmHalfPlanned<Algorithm>(bool, bool, bool, std::size_t, std::size_t,             \
+                                           std::size_t, float, const std::uint16_t *,              \
+                                           const std::uint16_t *, float *, const GemmBlocking *)
 
 INSTANTIATE_PLANNED_GEMM(GemmAlgorithm::kGeneral);
 INSTANTIATE_PLANNED_GEMM(GemmAlgorithm::kDirect);

@@ -8,6 +8,7 @@
 #include "onnx_light_cpu/impl/math/math_kernels.h"
 
 #include <cstddef>
+#include <cstdint>
 #include <span>
 #include <type_traits>
 #include <vector>
@@ -88,6 +89,64 @@ private:
   std::size_t useful_threads_;
   bool has_constant_b_;
   std::vector<T> constant_b_;
+  KernelFn kernel_;
+};
+
+/// Immutable inputs used to prepare a :cpp:class:`GemmHalfPlan`.
+struct GemmHalfPlanOptions {
+  bool is_bfloat16 = false;
+  bool trans_a = false;
+  bool trans_b = false;
+  std::size_t m = 0;
+  std::size_t n = 0;
+  std::size_t k = 0;
+  float alpha = 1.0f;
+};
+
+/// Reusable prepared rank-2 FP16/BF16 general matrix multiplication.
+///
+/// FP16/BF16 have no native micro-kernel: the operands are converted to
+/// float32 while packing or reducing and the reduction accumulates in float32
+/// (no full-tensor widening). The plan records the selected algorithm,
+/// blocking, and thread count derived from the float32 kernel selection once,
+/// so they are not re-derived on every run. B is always dynamic.
+class GemmHalfPlan {
+public:
+  explicit GemmHalfPlan(const GemmHalfPlanOptions &options);
+
+  /// Executes ``alpha * op(A) @ op(B)`` into the float32 workspace ``y`` and
+  /// applies ``epilogue`` (broadcast bias, residual, activation, and the
+  /// FP16/BF16 output narrowing) in place, reusing the plan's cached algorithm,
+  /// blocking, and thread count. ``a`` and ``b`` are raw 16-bit patterns.
+  void Execute(const std::uint16_t *a, const std::uint16_t *b, const GemmEpilogue<float> &epilogue,
+               float *y) const;
+
+  bool is_bfloat16() const noexcept { return is_bfloat16_; }
+  bool trans_a() const noexcept { return trans_a_; }
+  bool trans_b() const noexcept { return trans_b_; }
+  std::size_t m() const noexcept { return m_; }
+  std::size_t n() const noexcept { return n_; }
+  std::size_t k() const noexcept { return k_; }
+  float alpha() const noexcept { return alpha_; }
+  GemmAlgorithm algorithm() const noexcept { return algorithm_; }
+  const GemmBlocking &blocking() const noexcept { return blocking_; }
+  std::size_t useful_threads() const noexcept { return useful_threads_; }
+
+private:
+  using KernelFn = void (*)(bool, bool, bool, std::size_t, std::size_t, std::size_t, float,
+                            const std::uint16_t *, const std::uint16_t *, float *,
+                            const GemmBlocking *);
+
+  bool is_bfloat16_;
+  bool trans_a_;
+  bool trans_b_;
+  std::size_t m_;
+  std::size_t n_;
+  std::size_t k_;
+  float alpha_;
+  GemmAlgorithm algorithm_;
+  GemmBlocking blocking_;
+  std::size_t useful_threads_;
   KernelFn kernel_;
 };
 
