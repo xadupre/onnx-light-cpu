@@ -294,6 +294,27 @@ TEST(GemmFloat32, PlannedSixRowRegisterTileMatchesReference) {
   }
 }
 
+// The tile loops walk one packed column micro-panel at a time, so a column
+// panel wider than that micro-panel is split into several contiguous slices
+// with a narrower trailing one. This covers those slices together with a
+// trailing column panel, a row tail, several k chunks, and a transposed B.
+TEST(GemmFloat32, PlannedColumnMicroPanelsCoverPartialSlices) {
+  const std::size_t M = 41, N = 100, K = 70;
+  const auto A = RandomVector(M * K, 71);
+  const auto B = RandomVector(K * N, 72);
+  const auto C = RandomVector(M * N, 73);
+  const auto expected = ReferenceGemm<float>(false, true, M, N, K, 0.75f, A, B, 1.25f, &C);
+  std::vector<float> Y(M * N);
+  const onnx_light_cpu::GemmBlocking blocking{24, 96, 32, 6, 16};
+
+  onnx_light_cpu::detail::GemmFloat32Planned<onnx_light_cpu::GemmAlgorithm::kGeneral>(
+      false, true, M, N, K, 0.75f, A.data(), B.data(), 1.25f, C.data(), Y.data(), &blocking);
+
+  for (std::size_t i = 0; i < M * N; ++i) {
+    EXPECT_NEAR(Y[i], expected[i], 2e-2f) << "i=" << i;
+  }
+}
+
 // K larger than the internal K-blocking chunk (kGemmTileK=256) so the k
 // reduction is split across several chunks that must be accumulated together
 // (GemmAccumMode::kAccumulate) instead of each overwriting Y. Also exercises

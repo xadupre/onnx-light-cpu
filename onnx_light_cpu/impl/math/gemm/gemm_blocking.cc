@@ -124,6 +124,11 @@ CacheSizes DetectCacheSizes() {
   return sizes;
 }
 
+const CacheSizes &CachedCacheSizes() {
+  static const CacheSizes sizes = DetectCacheSizes();
+  return sizes;
+}
+
 std::size_t AlignDown(std::size_t value, std::size_t alignment) {
   return value / alignment * alignment;
 }
@@ -152,7 +157,7 @@ std::size_t BoundedAligned(std::size_t value, std::size_t minimum, std::size_t m
 
 GemmBlocking SelectGemmBlocking(std::size_t element_size, std::size_t vector_lanes,
                                 std::size_t register_rows) {
-  const CacheSizes caches = DetectCacheSizes();
+  const CacheSizes caches = CachedCacheSizes();
   const std::size_t mr = register_rows;
   const std::size_t nr = std::max<std::size_t>(2, 2 * vector_lanes);
 
@@ -206,6 +211,24 @@ GemmBlocking ConstrainGemmBlockingForTasks(GemmBlocking blocking, std::size_t m,
     blocking.nc = std::max(blocking.nr, AlignUp(CeilDiv(n, desired_column_tasks), blocking.nr));
   }
   return blocking;
+}
+
+std::size_t SelectGemmColumnBlock(const GemmBlocking &blocking, std::size_t element_size) {
+  const std::size_t bytes = std::max<std::size_t>(1, element_size);
+  const std::size_t nr = std::max<std::size_t>(1, blocking.nr);
+  const std::size_t kc = std::max<std::size_t>(1, blocking.kc);
+  // Measured width of the contiguous column micro-panel the tile loops walk:
+  // a few cache lines per k row keep the packed B slice cheap to prefetch and
+  // small enough to be reused from cache by every row tile of the packed A
+  // panel.
+  std::size_t block = std::max(nr, AlignDown(kGemmColumnPanelBytes / bytes, nr));
+  // Never let the kc x block slice crowd the packed A panel out of L2:
+  // SelectGemmBlocking already reserves half of L2 for that panel, so the B
+  // micro-panel gets a quarter and the rest absorbs the output tile and the
+  // competing working data.
+  const std::size_t l2_capacity = (CachedCacheSizes().l2 / 4) / (bytes * kc);
+  block = std::max(nr, std::min(block, AlignDown(l2_capacity, nr)));
+  return blocking.nc == 0 ? block : std::min(block, blocking.nc);
 }
 
 GemmMicroarchitecture DetectGemmMicroarchitecture() {

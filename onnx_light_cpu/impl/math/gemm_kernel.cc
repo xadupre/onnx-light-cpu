@@ -228,12 +228,12 @@ inline __m128d MulAdd(__m128d a, __m128d b, __m128d acc) {
 }
 
 // Number of ``k`` iterations ahead of the current one to prefetch B rows for.
-// The packed B panel (``Bpack``, see ``PackBPanel``) can be up to
-// ``kGemmTileK * kGemmTileN`` elements -- a few hundred KiB, larger than L1 --
-// so streaming through it row by row benefits from hinting the prefetcher a
-// handful of iterations ahead to hide L2 latency behind the FMA chain below. A
-// is not prefetched: ``Apack`` is only a few KiB (``kGemmMR * kGemmTileK``)
-// and stays L1-resident for the whole k loop.
+// The tile loops walk one contiguous ``kc x column_block`` micro-panel of the
+// packed B panel at a time (see ``PackBPanel``), which is still tens of KiB --
+// larger than L1 -- so streaming through it row by row benefits from hinting
+// the prefetcher a handful of iterations ahead to hide L2 latency behind the
+// FMA chain below. A is not prefetched: ``Apack`` is only a few KiB
+// (``kGemmMR * kGemmTileK``) and stays L1-resident for the whole k loop.
 constexpr int kGemmPrefetchDistanceK = 4;
 
 // Issues a T0 (all cache levels) software prefetch hint for ``ptr``. A no-op
@@ -739,20 +739,34 @@ void GemmTileF64(GemmKernelKind kind, std::size_t mr, std::size_t nb, std::size_
                              Ystride, n0, mode, Apack);
 }
 
+// Packs one ``kc x nb`` block of ``B`` as a sequence of contiguous
+// ``kc x column_block`` column micro-panels. Micro-panels are laid out at the
+// nominal ``column_block`` pitch, so micro-panel starting at column ``j`` is at
+// ``Bpack + j * kc`` even when the (last) micro-panel is narrower; the tile
+// loops must locate it the same way. Each micro-panel stores ``k`` rows of
+// ``jb`` contiguous elements, so the micro-kernel walks it sequentially and the whole slice stays
+// cache-resident while the row tiles reuse it. Keeping one wide ``nb``-strided
+// panel instead would make every ``k`` step jump by the panel width, which both
+// defeats the hardware prefetcher and maps the rows of a micro-panel onto very
+// few L1 sets once that width is a large power of two.
 template <typename T>
 void PackBPanel(bool trans_b, const T *B, std::size_t K, std::size_t N, std::size_t k0,
-                std::size_t kc, std::size_t n0, std::size_t nb, std::size_t packed_stride,
+                std::size_t kc, std::size_t n0, std::size_t nb, std::size_t column_block,
                 T *Bpack) {
-  if (!trans_b) {
-    for (std::size_t k = 0; k < kc; ++k) {
-      const T *src = B + (k0 + k) * N + n0;
-      std::copy(src, src + nb, Bpack + k * packed_stride);
+  for (std::size_t j = 0; j < nb; j += column_block) {
+    const std::size_t jb = std::min(column_block, nb - j);
+    T *dst = Bpack + j * kc;
+    if (!trans_b) {
+      for (std::size_t k = 0; k < kc; ++k) {
+        const T *src = B + (k0 + k) * N + n0 + j;
+        std::copy(src, src + jb, dst + k * jb);
+      }
+      continue;
     }
-    return;
-  }
-  for (std::size_t k = 0; k < kc; ++k) {
-    for (std::size_t n = 0; n < nb; ++n) {
-      Bpack[k * packed_stride + n] = B[(n0 + n) * K + k0 + k];
+    for (std::size_t k = 0; k < kc; ++k) {
+      for (std::size_t n = 0; n < jb; ++n) {
+        dst[k * jb + n] = B[(n0 + j + n) * K + k0 + k];
+      }
     }
   }
 }
@@ -957,7 +971,15 @@ void GemmFiveLoopRange(bool trans_a, bool trans_b, std::size_t M, std::size_t N,
   const std::size_t thread_count = static_cast<std::size_t>(ParallelForThreadCount());
   const std::size_t panels_per_wave = std::min(
       column_panels, std::max<std::size_t>(1, (thread_count + row_panels - 1) / row_panels));
-  AlignedVector<T> bpack(panels_per_wave * blocking.kc * blocking.nc);
+  // Column micro-panels are the outer tile loop and row tiles the inner one, so
+  // the contiguous ``kc x column_block`` micro-panel of B is reused from cache
+  // by every row tile of the L2-resident packed A panel. The opposite order
+  // streams the whole ``kc x nc`` B panel -- which is sized for L3 -- once per
+  // row tile, and that traffic caps large-matrix throughput well below the
+  // micro-kernel rate.
+  const std::size_t column_block = detail::SelectGemmColumnBlock(blocking, sizeof(T));
+  const std::size_t panel_capacity = blocking.kc * AlignUp(blocking.nc, column_block);
+  AlignedVector<T> bpack(panels_per_wave * panel_capacity);
 
   for (std::size_t k0 = k_begin; k0 < k_end; k0 += blocking.kc) {
     const std::size_t kc = std::min(blocking.kc, k_end - k0);
@@ -969,9 +991,8 @@ void GemmFiveLoopRange(bool trans_a, bool trans_b, std::size_t M, std::size_t N,
       for (std::size_t panel = 0; panel < wave_panels; ++panel) {
         const std::size_t n0 = (first_panel + panel) * blocking.nc;
         const std::size_t nb = std::min(blocking.nc, N - n0);
-        const std::size_t packed_stride = AlignUp(nb, GemmVectorLanes<T>(kind));
-        PackBPanel(trans_b, B, K, N, k0, kc, n0, nb, packed_stride,
-                   bpack.data() + panel * blocking.kc * blocking.nc);
+        PackBPanel(trans_b, B, K, N, k0, kc, n0, nb, column_block,
+                   bpack.data() + panel * panel_capacity);
       }
 
       const std::size_t task_count = row_panels * wave_panels;
@@ -990,17 +1011,20 @@ void GemmFiveLoopRange(bool trans_a, bool trans_b, std::size_t M, std::size_t N,
                       const std::size_t n0 = (first_panel + wave_panel) * blocking.nc;
                       const std::size_t mc = std::min(blocking.mc, M - m0);
                       const std::size_t nb = std::min(blocking.nc, N - n0);
-                      const std::size_t packed_stride = AlignUp(nb, GemmVectorLanes<T>(kind));
                       if (packed_row_panel != row_panel) {
                         PackAPanel(trans_a, A, M, K, m0, mc, k0, kc, apack.data());
                         packed_row_panel = row_panel;
                       }
-                      const T *panel_b = bpack.data() + wave_panel * blocking.kc * blocking.nc;
-                      for (std::size_t ir = 0; ir < mc; ir += blocking.mr) {
-                        const std::size_t mr = std::min(blocking.mr, mc - ir);
-                        tile(kind, mr, nb, kc, alpha, beta, panel_b, packed_stride,
-                             has_bias ? C + (m0 + ir) * N + n0 : nullptr, N, Y + (m0 + ir) * N + n0,
-                             N, 0, mode, apack.data() + ir * kc);
+                      const T *panel_b = bpack.data() + wave_panel * panel_capacity;
+                      for (std::size_t jr = 0; jr < nb; jr += column_block) {
+                        const std::size_t jb = std::min(column_block, nb - jr);
+                        const T *micro_b = panel_b + jr * kc;
+                        for (std::size_t ir = 0; ir < mc; ir += blocking.mr) {
+                          const std::size_t mr = std::min(blocking.mr, mc - ir);
+                          tile(kind, mr, jb, kc, alpha, beta, micro_b, jb,
+                               has_bias ? C + (m0 + ir) * N + n0 + jr : nullptr, N,
+                               Y + (m0 + ir) * N + n0 + jr, N, 0, mode, apack.data() + ir * kc);
+                        }
                       }
                     }
                   });
