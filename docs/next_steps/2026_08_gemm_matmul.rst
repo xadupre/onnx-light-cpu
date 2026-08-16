@@ -743,7 +743,8 @@ require measurements on dedicated hardware.
        supported.
      - P3-P4.
      - Roadmap PR07 is in progress (native FP16/BF16 convert-while-packing for
-       the general algorithm, no full-tensor widening); PR08 through PR10
+       the general algorithm, now with vectorized F16C/AVX2 conversion in the
+       contiguous packing copy, no full-tensor widening); PR08 through PR10
        below remain pending.
      - Roadmap PR07 through PR10 below.
    * - P6
@@ -1007,11 +1008,20 @@ dependency, and current status.
        71/84 at 2048³, matching or exceeding the widen path while removing its
        two full-tensor scratch passes. New ``GemmHalf`` C++ tests validate FP16
        and BF16 against the widen-then-float32 reference across square,
-       rectangular, transposed, empty-K, and bias configurations. The
-       remaining sub-steps -- vectorized F16C ``cvtph2ps`` conversion in the
-       contiguous packing copy, native AVX-512FP16/BF16 dot-product kernels,
-       and OS-tile-gated AMX -- and the dedicated-machine ONNX Runtime
-       comparison are still pending.
+       rectangular, transposed, empty-K, and bias configurations. The second
+       step, now implemented, vectorizes the *contiguous* packing copy: FP16
+       runs use the F16C ``vcvtph2ps`` instruction (``_mm256_cvtph_ps``) and
+       BF16 runs use an AVX2 zero-extend-and-shift, both eight elements at a
+       time with an exact scalar tail, so ``PackAPanel``/``PackBPanel`` widen
+       while packing without the per-element scalar bit decode on the hot path.
+       A new ``CpuSupportsF16C()`` CPUID gate selects the F16C path at runtime;
+       when neither F16C (FP16) nor AVX2 (BF16) is present, and for the strided
+       transposed gathers, the packing loops fall back to the identical scalar
+       decode, so the widen-reference ``GemmHalf`` tests -- extended with
+       non-eight-multiple tail shapes -- still match bit-for-bit. The remaining
+       sub-steps -- native AVX-512FP16/BF16 dot-product kernels and
+       OS-tile-gated AMX -- and the dedicated-machine ONNX Runtime comparison
+       are still pending.
    * - Roadmap PR08
      - ARM FP16/BF16 kernel family.
      - NEON and available SVE/SVE2 kernels convert or compute natively during
