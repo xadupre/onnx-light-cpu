@@ -780,7 +780,10 @@ inline void PackConvertContiguous(const SrcT *src, T *dst, std::size_t n) {
 
 inline void PackConvertContiguous(const Float16Source *src, float *dst, std::size_t n) {
 #ifdef ONNX_LIGHT_CPU_HAVE_F16C
-  static const bool use_f16c = DetectSimdLevel() >= SimdLevel::kAVX2 && CpuSupportsF16C();
+  // ``_mm256_cvtph_ps`` needs F16C and OS-enabled AVX state (both checked by
+  // ``CpuSupportsF16C``); it does not require AVX2, which is an independent ISA
+  // extension.
+  static const bool use_f16c = CpuSupportsF16C();
   if (use_f16c) {
     GemmConvertFloat16ToFloat32_F16C(reinterpret_cast<const std::uint16_t *>(src), dst, n);
     return;
