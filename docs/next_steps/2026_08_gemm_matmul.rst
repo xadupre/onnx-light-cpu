@@ -379,7 +379,7 @@ extra full-matrix memory passes.
 
 * For AVX2/F16C, load FP16 panels, convert vectors to FP32 while packing, and
   accumulate with FMA. Narrow only the final output. *(Landed: every FP16/BF16
-  execution path -- the general algorithm plus the skinny-M, skinny-N, direct,
+  execution path -- the general algorithm plus the skinny-M, skinny-N, direct
   small-K, and split-K paths -- converts each element to float32 during packing
   or reduction, accumulates in float32, and narrows only in the epilogue with no
   full-tensor widening. ``GemmHalfPlan`` caches the selected algorithm and
