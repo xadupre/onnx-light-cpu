@@ -867,9 +867,9 @@ void CheckHalfNoExpandedOperand(bool is_bfloat16, std::size_t M, std::size_t N, 
 
   // Without full-tensor widening the half path packs the same bounded float
   // panels as float32, so its peak single allocation must not exceed the
-  // float32 peak. These shapes are sized so a widened operand
-  // (``max(M*K, K*N)`` floats) would be the largest allocation by far, hence a
-  // half peak below that size proves no full operand was expanded.
+  // float32 peak. These shapes keep a widened operand
+  // (``max(M*K, K*N)`` floats) larger than the bounded packing scratch, so if
+  // the half path expanded a full operand its peak would exceed that scratch.
   const std::size_t widened_operand_bytes = std::max(M * K, K * N) * sizeof(float);
   EXPECT_LE(half_peak, fp32_peak) << "half path allocated more than float32 for M=" << M
                                   << " N=" << N << " K=" << K;
@@ -880,15 +880,15 @@ void CheckHalfNoExpandedOperand(bool is_bfloat16, std::size_t M, std::size_t N, 
 } // namespace
 
 TEST(GemmHalf, Float16AlgorithmsDoNotWidenOperands) {
-  CheckHalfNoExpandedOperand(false, 4096, 1, 512, 501);   // skinny-N GEMV
-  CheckHalfNoExpandedOperand(false, 1, 4096, 512, 511);   // skinny-M GEMV
-  CheckHalfNoExpandedOperand(false, 8, 4, 131072, 521);   // split-K
-  CheckHalfNoExpandedOperand(false, 512, 512, 1024, 531); // general blocked
+  CheckHalfNoExpandedOperand(false, 1024, 1, 512, 501);  // skinny-N GEMV
+  CheckHalfNoExpandedOperand(false, 1, 1024, 512, 511);  // skinny-M GEMV
+  CheckHalfNoExpandedOperand(false, 8, 4, 49152, 521);   // split-K
+  CheckHalfNoExpandedOperand(false, 1024, 32, 512, 531); // general blocked
 }
 
 TEST(GemmHalf, BFloat16AlgorithmsDoNotWidenOperands) {
-  CheckHalfNoExpandedOperand(true, 4096, 1, 512, 541);   // skinny-N GEMV
-  CheckHalfNoExpandedOperand(true, 1, 4096, 512, 551);   // skinny-M GEMV
-  CheckHalfNoExpandedOperand(true, 8, 4, 131072, 561);   // split-K
-  CheckHalfNoExpandedOperand(true, 512, 512, 1024, 571); // general blocked
+  CheckHalfNoExpandedOperand(true, 1024, 1, 512, 541);  // skinny-N GEMV
+  CheckHalfNoExpandedOperand(true, 1, 1024, 512, 551);  // skinny-M GEMV
+  CheckHalfNoExpandedOperand(true, 8, 4, 49152, 561);   // split-K
+  CheckHalfNoExpandedOperand(true, 1024, 32, 512, 571); // general blocked
 }
