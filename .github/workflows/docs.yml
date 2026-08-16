@@ -16,7 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     # The package is compiled from source, so the job needs more time than a
     # plain Sphinx build; sccache keeps repeat runs near-instant.
-    timeout-minutes: 30
+    timeout-minutes: 40
     permissions:
       contents: read
     steps:
@@ -56,7 +56,7 @@ jobs:
           cmake -S /tmp/onnx-light -B /tmp/onnx-light/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/tmp/onnx-light/install -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
           cmake --build /tmp/onnx-light/build --config Release --parallel --verbose
           cmake --install /tmp/onnx-light/build --config Release
-          pip install /tmp/onnx-light
+          pip install -C build.verbose=true /tmp/onnx-light -v
           echo "CMAKE_PREFIX_PATH=/tmp/onnx-light/install${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}" >> "$GITHUB_ENV"
           # The C++ tests link onnx-light's shared libraries and are executed at
           # build time by gtest_discover_tests, so the install lib dir must be on
