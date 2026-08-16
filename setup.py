@@ -81,7 +81,9 @@ def _onnx_light_source_build_info():
 
     info = get_cpp_build_info()
     include_dir = Path(info["include_dir"])
-    if not (include_dir / "onnx_core" / "runtime" / "kernel_dispatch_table.h").is_file():
+    if not (
+        include_dir / "onnx_core" / "runtime" / "kernels" / "kernel_dispatch_table.h"
+    ).is_file():
         raise FileNotFoundError(
             f"Could not find the onnx-light C++ headers under {include_dir}. Build "
             "onnx-light from a local checkout before using --onnx-light-source."
