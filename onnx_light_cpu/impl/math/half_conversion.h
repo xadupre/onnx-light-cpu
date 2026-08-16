@@ -36,6 +36,13 @@ inline float Float16BitsToFloat(std::uint16_t value) {
   return result;
 }
 
+inline float Bfloat16BitsToFloat(std::uint16_t value) {
+  const std::uint32_t bits = static_cast<std::uint32_t>(value) << 16;
+  float result;
+  std::memcpy(&result, &bits, sizeof(result));
+  return result;
+}
+
 inline std::uint16_t FloatToFloat16Bits(float value) {
   std::uint32_t bits;
   std::memcpy(&bits, &value, sizeof(bits));

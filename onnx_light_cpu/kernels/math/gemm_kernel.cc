@@ -246,13 +246,14 @@ Tensor GemmKernel::Compute(const Tensor &a, const Tensor &b, const Tensor *c, fl
   }
   case DataType::FLOAT16:
   case DataType::BFLOAT16: {
-    // No native half-precision micro-kernel: widen A/B/C to float32, run the
-    // SIMD-accelerated GemmFloat32 and round the result back down. This keeps
-    // the reduction in float32 precision, matching the common "compute in
+    // No native half-precision micro-kernel: convert A and B to float32 while
+    // packing them into the micro-kernel panels (no full-tensor widening),
+    // accumulate the reduction in float32 and round the result back down. This
+    // keeps the reduction in float32 precision, matching the common "compute in
     // fp32, store in fp16" convention used by most fp16/bf16 GEMM backends.
     const bool is_bfloat16 = static_cast<DataType>(a.data_type) == DataType::BFLOAT16;
-    const std::vector<float> a_f32 = WidenHalfLike(a, is_bfloat16);
-    const std::vector<float> b_f32 = WidenHalfLike(b, is_bfloat16);
+    const auto *a_bits = reinterpret_cast<const std::uint16_t *>(a.bytes());
+    const auto *b_bits = reinterpret_cast<const std::uint16_t *>(b.bytes());
 
     std::vector<float> c_f32;
     GemmEpilogue<float> epilogue;
@@ -270,8 +271,8 @@ Tensor GemmKernel::Compute(const Tensor &a, const Tensor &b, const Tensor *c, fl
         is_bfloat16 ? GemmOutputConversion::kBFloat16 : GemmOutputConversion::kFloat16;
     epilogue.converted_output = reinterpret_cast<std::uint16_t *>(y.mutable_bytes());
     std::vector<float> y_f32(M * N);
-    GemmFloat32WithEpilogue(trans_a, trans_b, M, N, K, alpha, a_f32.data(), b_f32.data(), epilogue,
-                            y_f32.data());
+    GemmHalfWithEpilogue(is_bfloat16, trans_a, trans_b, M, N, K, alpha, a_bits, b_bits, epilogue,
+                         y_f32.data());
     return y;
   }
   default:
