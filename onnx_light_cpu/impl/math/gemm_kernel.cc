@@ -764,6 +764,46 @@ template <bool Bfloat> struct HalfSource {
 using Float16Source = HalfSource<false>;
 using BFloat16Source = HalfSource<true>;
 
+// Widens a contiguous run of ``n`` source elements into the packed float panel.
+// The generic template is a scalar per-element convert (a plain copy for the
+// native FP32/FP64 paths). The FP16/BF16 overloads use the vectorized AVX2 F16C
+// / shift conversion when the running CPU supports it -- which produces exactly
+// the same float bits as the scalar decode -- and otherwise fall back to the
+// scalar bit decode. Only the contiguous packing copies use this; the strided
+// (transposed) gathers keep the per-element decode.
+template <typename T, typename SrcT>
+inline void PackConvertContiguous(const SrcT *src, T *dst, std::size_t n) {
+  for (std::size_t i = 0; i < n; ++i) {
+    dst[i] = static_cast<T>(src[i]);
+  }
+}
+
+inline void PackConvertContiguous(const Float16Source *src, float *dst, std::size_t n) {
+#ifdef ONNX_LIGHT_CPU_HAVE_F16C
+  static const bool use_f16c = DetectSimdLevel() >= SimdLevel::kAVX2 && CpuSupportsF16C();
+  if (use_f16c) {
+    GemmConvertFloat16ToFloat32_F16C(reinterpret_cast<const std::uint16_t *>(src), dst, n);
+    return;
+  }
+#endif
+  for (std::size_t i = 0; i < n; ++i) {
+    dst[i] = static_cast<float>(src[i]);
+  }
+}
+
+inline void PackConvertContiguous(const BFloat16Source *src, float *dst, std::size_t n) {
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
+  static const bool use_avx2 = DetectSimdLevel() >= SimdLevel::kAVX2;
+  if (use_avx2) {
+    GemmConvertBFloat16ToFloat32_AVX2(reinterpret_cast<const std::uint16_t *>(src), dst, n);
+    return;
+  }
+#endif
+  for (std::size_t i = 0; i < n; ++i) {
+    dst[i] = static_cast<float>(src[i]);
+  }
+}
+
 // ``SrcT`` is the element type of the input matrices; it equals the packed type
 // ``T`` for the native FP32/FP64 paths (a plain copy) and is a ``HalfSource``
 // for the FP16/BF16 path, which converts to ``T`` element by element while
@@ -779,9 +819,7 @@ void PackBPanel(bool trans_b, const SrcT *B, std::size_t K, std::size_t N, std::
       for (std::size_t k = 0; k < kc; ++k) {
         const SrcT *src = B + (k0 + k) * N + n0 + j;
         T *out = dst + k * jb;
-        for (std::size_t n = 0; n < jb; ++n) {
-          out[n] = static_cast<T>(src[n]);
-        }
+        PackConvertContiguous(src, out, jb);
       }
       continue;
     }
@@ -804,9 +842,7 @@ void PackAPanel(bool trans_a, const SrcT *A, std::size_t M, std::size_t K, std::
       }
     } else {
       const SrcT *src = A + (m0 + m) * K + k0;
-      for (std::size_t k = 0; k < kc; ++k) {
-        dst[k] = static_cast<T>(src[k]);
-      }
+      PackConvertContiguous(src, dst, kc);
     }
   }
 }

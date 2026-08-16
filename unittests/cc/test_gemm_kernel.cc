@@ -648,6 +648,14 @@ TEST(GemmHalf, Float16MatchesWidenReference) {
   CheckGemmHalf(false, false, false, 17, 33, 40, true, 121);
 }
 
+TEST(GemmHalf, Float16VectorizedPackingTails) {
+  // Contiguous N and K runs that are not multiples of the eight-lane F16C
+  // conversion width, so the packing path exercises both the vectorized bulk
+  // and the scalar tail on the general blocked algorithm.
+  CheckGemmHalf(false, false, false, 19, 37, 45, false, 141);
+  CheckGemmHalf(false, false, false, 33, 70, 66, true, 151);
+}
+
 TEST(GemmHalf, Float16TransposeVariants) {
   for (bool trans_a : {false, true}) {
     for (bool trans_b : {false, true}) {
@@ -660,6 +668,12 @@ TEST(GemmHalf, BFloat16MatchesWidenReference) {
   CheckGemmHalf(true, false, false, 5, 7, 3, false, 201);
   CheckGemmHalf(true, false, false, 4, 6, 8, true, 211);
   CheckGemmHalf(true, true, true, 6, 5, 7, true, 221);
+}
+
+TEST(GemmHalf, BFloat16VectorizedPackingTails) {
+  // Same tail coverage as the FP16 case for the AVX2 BF16 packing conversion.
+  CheckGemmHalf(true, false, false, 19, 37, 45, false, 241);
+  CheckGemmHalf(true, false, false, 33, 70, 66, true, 251);
 }
 
 TEST(GemmHalf, EmptyKGivesBiasOnly) {

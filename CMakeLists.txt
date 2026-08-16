@@ -180,15 +180,19 @@ if(NOT ONNX_LIGHT_CPU_X86)
   # Non-x86 targets (e.g. arm64) have no AVX support; keep the SIMD sources
   # excluded and let the scalar fallbacks handle every operator.
   set(ONNX_LIGHT_CPU_HAVE_AVX2_FMA_FLAG FALSE)
+  set(ONNX_LIGHT_CPU_HAVE_F16C_FLAG FALSE)
   set(ONNX_LIGHT_CPU_HAVE_AVX512F_FLAG FALSE)
   set(ONNX_LIGHT_CPU_HAVE_AVX512BW_FLAG FALSE)
 elseif(NOT MSVC)
   check_cxx_compiler_flag("-mavx2 -mfma" ONNX_LIGHT_CPU_HAVE_AVX2_FMA_FLAG)
+  check_cxx_compiler_flag("-mavx2 -mfma -mf16c" ONNX_LIGHT_CPU_HAVE_F16C_FLAG)
   check_cxx_compiler_flag("-mavx512f" ONNX_LIGHT_CPU_HAVE_AVX512F_FLAG)
   check_cxx_compiler_flag("-mavx512f -mavx512bw"
       ONNX_LIGHT_CPU_HAVE_AVX512BW_FLAG)
 else()
   check_cxx_compiler_flag("/arch:AVX2" ONNX_LIGHT_CPU_HAVE_AVX2_FMA_FLAG)
+  # /arch:AVX2 already enables the F16C intrinsics on MSVC.
+  set(ONNX_LIGHT_CPU_HAVE_F16C_FLAG ${ONNX_LIGHT_CPU_HAVE_AVX2_FMA_FLAG})
   check_cxx_compiler_flag("/arch:AVX512" ONNX_LIGHT_CPU_HAVE_AVX512F_FLAG)
   set(ONNX_LIGHT_CPU_HAVE_AVX512BW_FLAG
       ${ONNX_LIGHT_CPU_HAVE_AVX512F_FLAG})
@@ -301,8 +305,15 @@ endif()
 
 if(ONNX_LIGHT_CPU_HAVE_AVX2_FMA_FLAG)
   if(NOT MSVC)
-    set_source_files_properties("${_gemm_avx2_fma_source}" PROPERTIES
-        COMPILE_OPTIONS "-mavx2;-mfma")
+    # Add -mf16c when supported so the packing loops can use the F16C
+    # ``vcvtph2ps`` conversion; the AVX2/FMA micro-kernels only require -mavx2.
+    if(ONNX_LIGHT_CPU_HAVE_F16C_FLAG)
+      set_source_files_properties("${_gemm_avx2_fma_source}" PROPERTIES
+          COMPILE_OPTIONS "-mavx2;-mfma;-mf16c")
+    else()
+      set_source_files_properties("${_gemm_avx2_fma_source}" PROPERTIES
+          COMPILE_OPTIONS "-mavx2;-mfma")
+    endif()
   else()
     set_source_files_properties("${_gemm_avx2_fma_source}" PROPERTIES
         COMPILE_OPTIONS "/arch:AVX2")
@@ -310,6 +321,10 @@ if(ONNX_LIGHT_CPU_HAVE_AVX2_FMA_FLAG)
 
   target_compile_definitions(lib_onnx_light_cpu PRIVATE
       ONNX_LIGHT_CPU_HAVE_AVX2_FMA=1)
+  if(ONNX_LIGHT_CPU_HAVE_F16C_FLAG)
+    target_compile_definitions(lib_onnx_light_cpu PRIVATE
+        ONNX_LIGHT_CPU_HAVE_F16C=1)
+  endif()
 endif()
 
 if(ONNX_LIGHT_CPU_HAVE_NEON_INTRINSICS)

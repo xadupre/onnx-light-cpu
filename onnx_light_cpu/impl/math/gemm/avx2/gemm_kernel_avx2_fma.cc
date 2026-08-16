@@ -4,6 +4,8 @@
 
 #include "onnx_light_cpu/impl/math/gemm/avx2/gemm_kernel_avx2_fma.h"
 
+#include "onnx_light_cpu/impl/math/half_conversion.h"
+
 #include <immintrin.h>
 
 namespace onnx_light_cpu {
@@ -275,5 +277,31 @@ void GemmMicroKernel_AVX2FMA_F64(std::size_t mr, std::size_t nb, std::size_t K, 
                                       Yrow_base, Ystride, n0, mode, Apack);
   }
 }
+
+void GemmConvertBFloat16ToFloat32_AVX2(const std::uint16_t *src, float *dst, std::size_t n) {
+  std::size_t i = 0;
+  for (; i + 8 <= n; i += 8) {
+    const __m128i halves = _mm_loadu_si128(reinterpret_cast<const __m128i *>(src + i));
+    // BF16 -> FP32 is a zero-extend to 32 bits followed by a 16-bit left shift.
+    const __m256i widened = _mm256_slli_epi32(_mm256_cvtepu16_epi32(halves), 16);
+    _mm256_storeu_ps(dst + i, _mm256_castsi256_ps(widened));
+  }
+  for (; i < n; ++i) {
+    dst[i] = detail::Bfloat16BitsToFloat(src[i]);
+  }
+}
+
+#ifdef ONNX_LIGHT_CPU_HAVE_F16C
+void GemmConvertFloat16ToFloat32_F16C(const std::uint16_t *src, float *dst, std::size_t n) {
+  std::size_t i = 0;
+  for (; i + 8 <= n; i += 8) {
+    const __m128i halves = _mm_loadu_si128(reinterpret_cast<const __m128i *>(src + i));
+    _mm256_storeu_ps(dst + i, _mm256_cvtph_ps(halves));
+  }
+  for (; i < n; ++i) {
+    dst[i] = detail::Float16BitsToFloat(src[i]);
+  }
+}
+#endif
 
 } // namespace onnx_light_cpu
