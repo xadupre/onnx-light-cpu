@@ -24,8 +24,15 @@ probe)::
     SelectGemmKernelKind<T>()
     │
     ├─ Is this a non-x86 build (ONNX_LIGHT_CPU_X86 == 0)?
-    │  └─ yes → GemmKernelKind::kScalar
-    │           (portable C++ fallback; also the tail handler on x86)
+    │  └─ yes → ARM (or portable) path:
+    │           ├─ NEON compiled in (ONNX_LIGHT_CPU_HAVE_NEON) and, once probed
+    │           │  by DetectArmGemmProfile():
+    │           │  ├─ profile == kSve  (ONNX_LIGHT_CPU_HAVE_SVE, scalable
+    │           │  │                    vectors) → GemmKernelKind::kSve
+    │           │  └─ profile == kNeon (128-bit Advanced SIMD)
+    │           │                       → GemmKernelKind::kNeon
+    │           └─ otherwise → GemmKernelKind::kScalar
+    │                          (portable C++ fallback; also the tail handler on x86)
     │
     └─ x86 build: read the *runtime* SIMD level once (DetectSimdLevel(), cached)
        │
@@ -41,10 +48,18 @@ probe)::
        │  │
        │  └─ no, or runtime level < kAVX512 → fall through
        │
+       ├─ Was gemm_kernel_avx2_fma.cc compiled in
+       │  (ONNX_LIGHT_CPU_HAVE_AVX2_FMA) AND runtime level >= SimdLevel::kAVX2
+       │  AND CpuSupportsFma()?
+       │  └─ yes → GemmKernelKind::kAVX2FMA
+       │           (fused multiply-add AVX2 kernel: 256-bit vectors with a
+       │            single rounding per multiply-add, faster and more accurate
+       │            than the plain-AVX path below)
+       │
        ├─ runtime level >= SimdLevel::kAVX
        │  └─ GemmKernelKind::kAVX
-       │     (256-bit vectors, NR=2: 16 float / 8 double lanes per step;
-       │      always compiled in at the baseline ONNX_LIGHT_CPU_SIMD_FLAGS,
+       │     (256-bit vectors without FMA, NR=2: 16 float / 8 double lanes per
+       │      step; always compiled in at the baseline ONNX_LIGHT_CPU_SIMD_FLAGS,
        │      default -mavx2, so it is present in every build)
        │
        ├─ runtime level >= SimdLevel::kSSE2
