@@ -825,26 +825,42 @@ void GemmDirect(std::size_t M, std::size_t N, std::size_t K, T alpha, const T *A
 template <typename T>
 T SkinnyDotProduct(const T *a, std::size_t a_stride, const T *b, std::size_t b_stride,
                    std::size_t K) {
+  std::size_t k = 0;
+  if (a_stride == 1 && b_stride == 1) {
+    // Carry enough independent partial sums for the SLP vectorizer to fill
+    // several full-width AVX accumulators (two 8-wide float or four 4-wide
+    // double vectors) instead of a single 128-bit pack. On AVX2 this lifts the
+    // unit-stride reduction -- the ``N == 1`` skinny-N and common inference
+    // layouts -- from a four-lane SSE dot product to full-width vectors, which
+    // is the dominant cost of the memory-streaming GEMV shapes.
+    constexpr std::size_t kLanes = 16;
+    T acc[kLanes] = {};
+    for (; k + kLanes <= K; k += kLanes) {
+      for (std::size_t lane = 0; lane < kLanes; ++lane) {
+        acc[lane] += a[k + lane] * b[k + lane];
+      }
+    }
+    T sum = T(0);
+    for (std::size_t lane = 0; lane < kLanes; ++lane) {
+      sum += acc[lane];
+    }
+    for (; k < K; ++k) {
+      sum += a[k] * b[k];
+    }
+    return sum;
+  }
+  // Strided reads cannot vectorize; keep four accumulators for instruction-level
+  // parallelism without spilling.
   constexpr std::size_t kUnroll = 4;
   T acc0 = T(0);
   T acc1 = T(0);
   T acc2 = T(0);
   T acc3 = T(0);
-  std::size_t k = 0;
-  if (a_stride == 1 && b_stride == 1) {
-    for (; k + kUnroll <= K; k += kUnroll) {
-      acc0 += a[k + 0] * b[k + 0];
-      acc1 += a[k + 1] * b[k + 1];
-      acc2 += a[k + 2] * b[k + 2];
-      acc3 += a[k + 3] * b[k + 3];
-    }
-  } else {
-    for (; k + kUnroll <= K; k += kUnroll) {
-      acc0 += a[(k + 0) * a_stride] * b[(k + 0) * b_stride];
-      acc1 += a[(k + 1) * a_stride] * b[(k + 1) * b_stride];
-      acc2 += a[(k + 2) * a_stride] * b[(k + 2) * b_stride];
-      acc3 += a[(k + 3) * a_stride] * b[(k + 3) * b_stride];
-    }
+  for (; k + kUnroll <= K; k += kUnroll) {
+    acc0 += a[(k + 0) * a_stride] * b[(k + 0) * b_stride];
+    acc1 += a[(k + 1) * a_stride] * b[(k + 1) * b_stride];
+    acc2 += a[(k + 2) * a_stride] * b[(k + 2) * b_stride];
+    acc3 += a[(k + 3) * a_stride] * b[(k + 3) * b_stride];
   }
   T acc = (acc0 + acc1) + (acc2 + acc3);
   for (; k < K; ++k) {

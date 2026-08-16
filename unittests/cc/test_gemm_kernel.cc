@@ -361,6 +361,29 @@ TEST(GemmFloat32, SkinnyMWideNMultipleColumnPanels) {
   }
 }
 
+// A single output column (N == 1) with many rows and a long reduction hits the
+// skinny-N path, whose unit-stride dot product carries sixteen partial sums for
+// full-width AVX. K == 1000 is not a multiple of that unroll, so the scalar tail
+// must finish the reduction exactly for every transpose layout and with bias.
+TEST(GemmFloat32, SkinnyNColumnVectorLongKTail) {
+  const std::size_t M = 200, N = 1, K = 1000;
+  for (const bool trans_a : {false, true}) {
+    for (const bool trans_b : {false, true}) {
+      const auto A = RandomVector(M * K, 61);
+      const auto B = RandomVector(K * N, 62);
+      const auto C = RandomVector(M * N, 63);
+      const auto expected = ReferenceGemm<float>(trans_a, trans_b, M, N, K, 0.75f, A, B, 1.5f, &C);
+      std::vector<float> Y(M * N, 0.0f);
+      onnx_light_cpu::GemmFloat32(trans_a, trans_b, M, N, K, 0.75f, A.data(), B.data(), 1.5f,
+                                  C.data(), Y.data());
+      for (std::size_t i = 0; i < M * N; ++i) {
+        EXPECT_NEAR(Y[i], expected[i], 1e-2f)
+            << "trans_a=" << trans_a << " trans_b=" << trans_b << " i=" << i;
+      }
+    }
+  }
+}
+
 TEST(GemmFloat32, EmptyKGivesBiasOnly) {
   const std::size_t M = 3, N = 4, K = 0;
   const auto C = RandomVector(M * N, 8);
