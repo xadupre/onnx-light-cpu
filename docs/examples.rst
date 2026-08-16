@@ -8,3 +8,4 @@ kernels provided by ``onnx-light-cpu`` from Python.
     :maxdepth: 1
 
     auto_examples/kernels/index
+    auto_examples/benchmarks/index
