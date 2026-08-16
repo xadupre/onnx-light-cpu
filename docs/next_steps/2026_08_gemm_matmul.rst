@@ -959,10 +959,19 @@ dependency, and current status.
        and 47.1 to 82.7). Throughput now sustains from 512³ to 2048³ instead of
        decaying, and no priority shape regresses: ``skinny_m_gemv``,
        ``skinny_n``, ``large_k``, ``trans_a_128``, and ``trans_b_128`` are equal
-       or better. Re-measuring the Intel Ice Lake-SP AVX-512 runner, where the
-       same ordering caused the 48 to ~32 GFLOP/s FP64 drop, is the next
-       measured step, after which the dedicated-machine ONNX Runtime comparison
-       is what remains before the gate can close.
+       or better. Re-measuring an Intel AVX-512 runner (Xeon 6900-series,
+       AVX-512, generic profile, six register rows, four vCPU) confirms the
+       column micro-panel layout removed the FP64 large-matrix drop there too:
+       the single-thread FP64 square shapes now sustain about 73-84 GFLOP/s
+       across 512³ (73-82), 1024³ (77-85), and 2048³ (73-81) instead of falling
+       from 48 to ~32 GFLOP/s, and the single-thread FP32 square shapes sustain
+       about 155-181 GFLOP/s over the same range rather than decaying; the
+       multi-thread square shapes reach 225 GFLOP/s FP32 and 108 FP64 at 1024³
+       and 284 and 130 at 2048³, ``transformer_proj`` holds 135-175 GFLOP/s
+       FP32 and 62-87 FP64, and no priority shape regresses. With both the Zen
+       and Intel AVX-512 large-matrix regressions now measured as fixed, the
+       dedicated-machine ONNX Runtime comparison is the only remaining step
+       before the gate can close.
    * - Roadmap PR07
      - x86 FP16/BF16 kernel family.
      - Immutable plans describe typed panels, FP32 accumulation, conversion
