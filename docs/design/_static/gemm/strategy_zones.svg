@@ -1,8 +1,8 @@
-<svg viewBox="0 0 900 620" xmlns="http://www.w3.org/2000/svg" font-family="Helvetica, Arial, sans-serif" role="img" aria-labelledby="gemm-strategy-zones-title">
+<svg viewBox="0 0 720 900" xmlns="http://www.w3.org/2000/svg" font-family="Helvetica, Arial, sans-serif" role="img" aria-labelledby="gemm-strategy-zones-title">
 <title id="gemm-strategy-zones-title">SelectGemmAlgorithm strategy zones</title>
 <defs><marker id="axis-arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L0,6 L9,3 z" fill="#1a1a1a"/></marker></defs>
-<text x="450.0" y="26" text-anchor="middle" font-size="16" font-weight="bold" fill="#1a1a1a">SelectGemmAlgorithm strategy zones (hover a zone for details)</text>
-<text x="450.0" y="46" text-anchor="middle" font-size="12" font-style="italic" fill="#666666">M x N output plane, split at m == register_rows and n == vector_lanes; Direct and Split-K are extra conditions layered on top</text>
+<text x="360.0" y="26" text-anchor="middle" font-size="16" font-weight="bold" fill="#1a1a1a">SelectGemmAlgorithm strategy zones (hover a zone for details)</text>
+<text x="360.0" y="46" text-anchor="middle" font-size="12" font-style="italic" fill="#666666">M x N output plane, split at m == register_rows and n == vector_lanes; Direct and Split-K are extra conditions layered on top</text>
 <g id="zone-both-skinny-n"><title>skinny_m &amp;&amp; skinny_n, tie-break n &lt;= m: few output rows AND few output columns. Vectorizing the K reduction (skinny-N) wins when columns are the scarcer dimension (n &lt;= m), including the m == n == 1 corner.</title><polygon points="140,90 340,90 140,230" fill="#e2f0d9" stroke="#548235" stroke-width="1.5"/></g>
 <g id="zone-both-skinny-m"><title>skinny_m &amp;&amp; skinny_n, tie-break n &gt; m: few output rows AND few output columns, but with more columns than rows, so vectorizing over N (skinny-M, the dual GEMV kernel) wins.</title><polygon points="340,90 340,230 140,230" fill="#fde9d9" stroke="#e07b1f" stroke-width="1.5"/></g>
 <text x="164" y="114" font-size="11" fill="#1a1a1a">n&lt;=m</text>
@@ -47,32 +47,32 @@
 <text x="340" y="546" text-anchor="middle" font-size="11" fill="#666666">vector_lanes</text>
 <line x1="340" y1="90" x2="340" y2="510" stroke="#666666" stroke-width="1" stroke-dasharray="3,3"/>
 <line x1="140" y1="230" x2="700" y2="230" stroke="#666666" stroke-width="1" stroke-dasharray="3,3"/>
-<text x="20" y="604" font-size="11" fill="#666666">Legend: green = Skinny-N, orange = Skinny-M, blue = General, dashed yellow = Direct overlay, dashed pink = Split-K overlay.</text>
+<text x="20" y="574" font-size="11" fill="#666666">Legend: green = Skinny-N, orange = Skinny-M, blue = General, dashed yellow = Direct overlay, dashed pink = Split-K overlay.</text>
 <g id="eval-order">
-<rect x="712" y="108" width="180" height="186" rx="6" ry="6" fill="#f7f7f7" stroke="#999999" stroke-width="1"/>
-<text x="722" y="128" font-size="12" font-weight="bold" fill="#1a1a1a">Evaluation order</text>
-<text x="722" y="142" font-size="10" font-style="italic" fill="#666666">(first match wins)</text>
-<text x="722" y="164" font-size="11" fill="#1a1a1a">1. Split-K (k&gt;=4096, tiny M/N)</text>
-<text x="722" y="184" font-size="11" fill="#1a1a1a">2. Direct (!trans_a &amp;&amp; !trans_b</text>
-<text x="734" y="198" font-size="11" fill="#1a1a1a">&amp;&amp; k&lt;=32)</text>
-<text x="722" y="218" font-size="11" fill="#1a1a1a">3. Skinny-N / Skinny-M when</text>
-<text x="734" y="232" font-size="11" fill="#1a1a1a">both skinny (tie: n&lt;=m)</text>
-<text x="722" y="252" font-size="11" fill="#1a1a1a">4. Skinny-M (m&lt;=register_rows)</text>
-<text x="722" y="272" font-size="11" fill="#1a1a1a">5. Skinny-N (n&lt;=vector_lanes)</text>
-<text x="722" y="288" font-size="11" fill="#1a1a1a">6. General (five-loop)</text>
+<rect x="20" y="600" width="330" height="280" rx="6" ry="6" fill="#f7f7f7" stroke="#999999" stroke-width="1"/>
+<text x="30" y="626" font-size="12" font-weight="bold" fill="#1a1a1a">Evaluation order</text>
+<text x="30" y="642" font-size="10" font-style="italic" fill="#666666">(first match wins)</text>
+<text x="30" y="670" font-size="11" fill="#1a1a1a">1. Split-K (k&gt;=4096, tiny M/N)</text>
+<text x="30" y="694" font-size="11" fill="#1a1a1a">2. Direct (!trans_a &amp;&amp; !trans_b</text>
+<text x="42" y="710" font-size="11" fill="#1a1a1a">&amp;&amp; k&lt;=32)</text>
+<text x="30" y="734" font-size="11" fill="#1a1a1a">3. Skinny-N / Skinny-M when</text>
+<text x="42" y="750" font-size="11" fill="#1a1a1a">both skinny (tie: n&lt;=m)</text>
+<text x="30" y="774" font-size="11" fill="#1a1a1a">4. Skinny-M (m&lt;=register_rows)</text>
+<text x="30" y="798" font-size="11" fill="#1a1a1a">5. Skinny-N (n&lt;=vector_lanes)</text>
+<text x="30" y="822" font-size="11" fill="#1a1a1a">6. General (five-loop)</text>
 </g>
 <g id="skinny-note">
-<rect x="712" y="312" width="180" height="196" rx="6" ry="6" fill="#f7f7f7" stroke="#999999" stroke-width="1"/>
-<text x="722" y="332" font-size="12" font-weight="bold" fill="#1a1a1a">What is &#8220;skinny&#8221;?</text>
-<text x="722" y="352" font-size="10.5" fill="#1a1a1a">A skinny output has one side</text>
-<text x="722" y="366" font-size="10.5" fill="#1a1a1a">smaller than the SIMD tile, so</text>
-<text x="722" y="380" font-size="10.5" fill="#1a1a1a">the normal 2D micro-kernel</text>
-<text x="722" y="394" font-size="10.5" fill="#1a1a1a">would waste most of its lanes.</text>
-<text x="722" y="416" font-size="10.5" fill="#1a1a1a">skinny-M: few rows</text>
-<text x="734" y="430" font-size="10.5" fill="#666666">m &lt;= register_rows (e.g. M==1)</text>
-<text x="722" y="450" font-size="10.5" fill="#1a1a1a">skinny-N: few columns</text>
-<text x="734" y="464" font-size="10.5" fill="#666666">n &lt;= vector_lanes (e.g. N==1)</text>
-<text x="722" y="486" font-size="10.5" fill="#1a1a1a">Each vectorizes the large</text>
-<text x="722" y="500" font-size="10.5" fill="#1a1a1a">dimension / K instead.</text>
+<rect x="370" y="600" width="330" height="280" rx="6" ry="6" fill="#f7f7f7" stroke="#999999" stroke-width="1"/>
+<text x="380" y="626" font-size="12" font-weight="bold" fill="#1a1a1a">What is &#8220;skinny&#8221;?</text>
+<text x="380" y="648" font-size="10.5" fill="#1a1a1a">A skinny output has one side</text>
+<text x="380" y="662" font-size="10.5" fill="#1a1a1a">smaller than the SIMD tile, so</text>
+<text x="380" y="676" font-size="10.5" fill="#1a1a1a">the normal 2D micro-kernel</text>
+<text x="380" y="690" font-size="10.5" fill="#1a1a1a">would waste most of its lanes.</text>
+<text x="380" y="714" font-size="10.5" fill="#1a1a1a">skinny-M: few rows</text>
+<text x="392" y="728" font-size="10.5" fill="#666666">m &lt;= register_rows (e.g. M==1)</text>
+<text x="380" y="752" font-size="10.5" fill="#1a1a1a">skinny-N: few columns</text>
+<text x="392" y="766" font-size="10.5" fill="#666666">n &lt;= vector_lanes (e.g. N==1)</text>
+<text x="380" y="790" font-size="10.5" fill="#1a1a1a">Each vectorizes the large</text>
+<text x="380" y="804" font-size="10.5" fill="#1a1a1a">dimension / K instead.</text>
 </g>
 </svg>
