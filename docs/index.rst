@@ -27,5 +27,4 @@ for performance comparisons against other back-ends.
    design/index
    api/index
    examples
-   benchmarks
    next_steps/index
