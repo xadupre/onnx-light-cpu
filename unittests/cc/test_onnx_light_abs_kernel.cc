@@ -4,8 +4,8 @@
 
 #include "onnx_light_cpu/kernels/math/abs_kernel.h"
 
-#include "onnx_core/runtime/kernel_context.h"
-#include "onnx_core/runtime/simple_tensor.h"
+#include "onnx_core/runtime/kernels/kernel_context.h"
+#include "onnx_core/runtime/memory/simple_tensor.h"
 
 #include <gtest/gtest.h>
 

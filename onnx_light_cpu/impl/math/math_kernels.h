@@ -171,6 +171,17 @@ void GemmFloat64WithEpilogue(bool trans_a, bool trans_b, std::size_t M, std::siz
                              std::size_t K, double alpha, const double *A, const double *B,
                              const GemmEpilogue<double> &epilogue, double *Y);
 
+/// Computes an FP16 or BF16 GEMM and applies the epilogue. ``A`` and ``B`` are
+/// the raw 16-bit input patterns; ``is_bfloat16`` selects BF16 (``true``) or
+/// FP16 (``false``). Both operands are converted to ``float32`` while they are
+/// packed into the micro-kernel panels -- there is no separate full-tensor
+/// widening pass -- and the reduction accumulates in ``float32``. ``Y`` is the
+/// ``M x N`` float32 accumulation workspace; the epilogue narrows the result
+/// back to FP16/BF16 through ``epilogue.converted_output``.
+void GemmHalfWithEpilogue(bool is_bfloat16, bool trans_a, bool trans_b, std::size_t M,
+                          std::size_t N, std::size_t K, float alpha, const std::uint16_t *A,
+                          const std::uint16_t *B, const GemmEpilogue<float> &epilogue, float *Y);
+
 /// Validates that an :cpp:class:`GemmEpilogue` is internally consistent for an
 /// ``M x N`` output, throwing ``std::invalid_argument`` otherwise. Exposed so a
 /// prepared :cpp:class:`GemmPlan` can apply the same epilogue as the ONNX

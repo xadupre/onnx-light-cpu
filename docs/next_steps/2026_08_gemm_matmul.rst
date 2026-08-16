@@ -377,7 +377,12 @@ The existing FP16/BF16 path widens complete tensors to ``float32``, calls
 extra full-matrix memory passes.
 
 * For AVX2/F16C, load FP16 panels, convert vectors to FP32 while packing, and
-  accumulate with FMA. Narrow only the final output.
+  accumulate with FMA. Narrow only the final output. *(First step landed:
+  ``GemmHalfWithEpilogue`` converts each FP16/BF16 element to float32 during
+  the general algorithm's packing copy instead of widening the whole tensors,
+  accumulates in float32, and narrows only in the epilogue. The conversion is
+  still scalar; the F16C ``cvtph2ps`` vectorization of the contiguous packing
+  copy is the next sub-step.)*
 * For AVX-512BF16 and AVX-512FP16, add native dot-product/multiply-accumulate
   kernels with FP32 accumulation where required by the ONNX numerical contract.
 * Add AMX tile kernels behind OS-enabled tile-state detection. AMX must remain
@@ -737,7 +742,9 @@ require measurements on dedicated hardware.
        performance with no priority shape below 0.9x where the type is
        supported.
      - P3-P4.
-     - Four-PR sequence fixed below; all pending.
+     - Roadmap PR07 is in progress (native FP16/BF16 convert-while-packing for
+       the general algorithm, no full-tensor widening); PR08 through PR10
+       below remain pending.
      - Roadmap PR07 through PR10 below.
    * - P6
      - ``AttentionPlan`` and materialized tensor correctness implementation.
@@ -979,7 +986,32 @@ dependency, and current status.
        while packing; AVX-512FP16/BF16 use native kernels; CPUID and OS tile
        state safely gate AMX with AVX-512 fallbacks.
      - PR06.6
-     - Pending
+     - In progress. The first step replaces the FP16/BF16 operator path --
+       which widened the whole A and B tensors into float32 scratch buffers
+       before calling ``GemmFloat32`` -- with a native ``GemmHalfWithEpilogue``
+       entry point. For the general blocked algorithm it converts each FP16 or
+       BF16 element to float32 *while packing* it into the micro-kernel panels,
+       so the reduction still accumulates in float32 and the epilogue narrows
+       only the final output, but no expanded ``M x K``/``K x N`` tensor is
+       materialized. The conversion reuses the tuned float32 micro-kernel,
+       blocking, and thread grid by generalizing ``PackAPanel``/``PackBPanel``
+       and the five-loop on the input element type; the float32/float64 paths
+       are byte-for-byte unchanged. Skinny, GEMV, and split-K shapes read A and
+       B directly rather than through packing, so they keep their existing
+       behavior (a one-time widen into the dedicated float32 algorithm), which
+       leaves the ``skinny_m_gemv``, ``skinny_n``, and ``large_k`` priority
+       shapes non-regressed. ``tools/gemm_throughput.cc`` gains isolated FP16
+       and BF16 columns; on a shared AMD EPYC 7763 (Zen 3, AVX2+F16C,
+       ``amd-zen`` profile, six register rows) single-thread runner the native
+       path sustains about 63 GFLOP/s FP16 and 82 GFLOP/s BF16 at 1024³ and
+       71/84 at 2048³, matching or exceeding the widen path while removing its
+       two full-tensor scratch passes. New ``GemmHalf`` C++ tests validate FP16
+       and BF16 against the widen-then-float32 reference across square,
+       rectangular, transposed, empty-K, and bias configurations. The
+       remaining sub-steps -- vectorized F16C ``cvtph2ps`` conversion in the
+       contiguous packing copy, native AVX-512FP16/BF16 dot-product kernels,
+       and OS-tile-gated AMX -- and the dedicated-machine ONNX Runtime
+       comparison are still pending.
    * - Roadmap PR08
      - ARM FP16/BF16 kernel family.
      - NEON and available SVE/SVE2 kernels convert or compute natively during

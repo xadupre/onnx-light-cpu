@@ -3,11 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "onnx_light_cpu/impl/math/gemm/gemm_common.h"
+#include "onnx_light_cpu/impl/math/half_conversion.h"
 #include "onnx_light_cpu/impl/math/math_kernels.h"
 
 #include <gtest/gtest.h>
 
+#include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <limits>
 #include <random>
 #include <vector>
@@ -563,5 +566,122 @@ TEST(GemmFloat64, NoBiasColumnTail) {
                               Y.data());
   for (std::size_t i = 0; i < M * N; ++i) {
     EXPECT_NEAR(Y[i], expected[i], 1e-9) << "i=" << i;
+  }
+}
+
+namespace {
+
+// Round-trips a float32 vector through the half format under test so the
+// reference computation observes the same rounded inputs the kernel does.
+std::vector<std::uint16_t> NarrowHalf(const std::vector<float> &values, bool is_bfloat16) {
+  std::vector<std::uint16_t> bits(values.size());
+  for (std::size_t i = 0; i < values.size(); ++i) {
+    bits[i] = is_bfloat16 ? onnx_light_cpu::detail::FloatToBFloat16Bits(values[i])
+                          : onnx_light_cpu::detail::FloatToFloat16Bits(values[i]);
+  }
+  return bits;
+}
+
+std::vector<float> WidenHalf(const std::vector<std::uint16_t> &bits, bool is_bfloat16) {
+  std::vector<float> values(bits.size());
+  for (std::size_t i = 0; i < bits.size(); ++i) {
+    values[i] = is_bfloat16 ? onnx_light_cpu::detail::Bfloat16BitsToFloat(bits[i])
+                            : onnx_light_cpu::detail::Float16BitsToFloat(bits[i]);
+  }
+  return values;
+}
+
+// Compares the native convert-while-packing half GEMM against the equivalent
+// widen-then-float32 reference for one shape/transpose/bias configuration.
+void CheckGemmHalf(bool is_bfloat16, bool trans_a, bool trans_b, std::size_t M, std::size_t N,
+                   std::size_t K, bool with_bias, unsigned seed) {
+  const auto a_f = RandomVector(M * K, seed);
+  const auto b_f = RandomVector(K * N, seed + 1);
+  const auto a_bits = NarrowHalf(a_f, is_bfloat16);
+  const auto b_bits = NarrowHalf(b_f, is_bfloat16);
+  // The reference multiplies the exact values the kernel sees after rounding.
+  const auto a_round = WidenHalf(a_bits, is_bfloat16);
+  const auto b_round = WidenHalf(b_bits, is_bfloat16);
+
+  const float alpha = 0.75f;
+  const float beta = with_bias ? 1.5f : 0.0f;
+  std::vector<float> bias_round;
+  std::vector<std::uint16_t> bias_bits;
+  const std::vector<float> *bias_ptr = nullptr;
+  onnx_light_cpu::GemmEpilogue<float> epilogue;
+  if (with_bias) {
+    const auto bias_f = RandomVector(M * N, seed + 2);
+    bias_bits = NarrowHalf(bias_f, is_bfloat16);
+    bias_round = WidenHalf(bias_bits, is_bfloat16);
+    bias_ptr = &bias_round;
+    epilogue.bias = bias_round.data();
+    epilogue.bias_layout = onnx_light_cpu::GemmBroadcast::kMatrix;
+    epilogue.beta = beta;
+  }
+
+  const auto expected =
+      ReferenceGemm<float>(trans_a, trans_b, M, N, K, alpha, a_round, b_round, beta, bias_ptr);
+
+  std::vector<std::uint16_t> out_bits(M * N, 0);
+  std::vector<float> workspace(M * N, -1.0f);
+  epilogue.output_conversion = is_bfloat16 ? onnx_light_cpu::GemmOutputConversion::kBFloat16
+                                           : onnx_light_cpu::GemmOutputConversion::kFloat16;
+  epilogue.converted_output = out_bits.data();
+  onnx_light_cpu::GemmHalfWithEpilogue(is_bfloat16, trans_a, trans_b, M, N, K, alpha, a_bits.data(),
+                                       b_bits.data(), epilogue, workspace.data());
+
+  const auto out = WidenHalf(out_bits, is_bfloat16);
+  // BF16 keeps only 8 mantissa bits, so allow a looser tolerance than FP16.
+  const float rtol = is_bfloat16 ? 6e-2f : 8e-3f;
+  for (std::size_t i = 0; i < M * N; ++i) {
+    const float tol = rtol * std::max(1.0f, std::abs(expected[i]));
+    EXPECT_NEAR(out[i], expected[i], tol) << "i=" << i;
+  }
+}
+
+} // namespace
+
+TEST(GemmHalf, Float16MatchesWidenReference) {
+  CheckGemmHalf(false, false, false, 5, 7, 3, false, 101);
+  CheckGemmHalf(false, false, false, 4, 6, 8, true, 111);
+  // K spanning several blocking chunks and a wide N with column tails.
+  CheckGemmHalf(false, false, false, 17, 33, 40, true, 121);
+}
+
+TEST(GemmHalf, Float16TransposeVariants) {
+  for (bool trans_a : {false, true}) {
+    for (bool trans_b : {false, true}) {
+      CheckGemmHalf(false, trans_a, trans_b, 6, 5, 7, true, 131);
+    }
+  }
+}
+
+TEST(GemmHalf, BFloat16MatchesWidenReference) {
+  CheckGemmHalf(true, false, false, 5, 7, 3, false, 201);
+  CheckGemmHalf(true, false, false, 4, 6, 8, true, 211);
+  CheckGemmHalf(true, true, true, 6, 5, 7, true, 221);
+}
+
+TEST(GemmHalf, EmptyKGivesBiasOnly) {
+  const std::size_t M = 3, N = 4, K = 0;
+  const auto bias_f = RandomVector(M * N, 301);
+  const auto bias_bits = NarrowHalf(bias_f, false);
+  const auto bias_round = WidenHalf(bias_bits, false);
+
+  std::vector<std::uint16_t> out_bits(M * N, 0);
+  std::vector<float> workspace(M * N, -1.0f);
+  onnx_light_cpu::GemmEpilogue<float> epilogue;
+  epilogue.bias = bias_round.data();
+  epilogue.bias_layout = onnx_light_cpu::GemmBroadcast::kMatrix;
+  epilogue.beta = 2.0f;
+  epilogue.output_conversion = onnx_light_cpu::GemmOutputConversion::kFloat16;
+  epilogue.converted_output = out_bits.data();
+  onnx_light_cpu::GemmHalfWithEpilogue(false, false, false, M, N, K, 1.0f, nullptr, nullptr,
+                                       epilogue, workspace.data());
+
+  const auto out = WidenHalf(out_bits, false);
+  for (std::size_t i = 0; i < M * N; ++i) {
+    EXPECT_NEAR(out[i], 2.0f * bias_round[i], 8e-3f * std::max(1.0f, std::abs(bias_round[i])))
+        << "i=" << i;
   }
 }

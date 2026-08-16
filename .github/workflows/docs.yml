@@ -51,7 +51,7 @@ jobs:
           pip install nanobind scikit-build-core numpy
           # Clone the latest onnx-light sources (default branch) rather than a
           # tagged release: the C++ backend test depends on recent additions such
-          # as onnx_core/runtime/tensor_compare.h that are not yet in a tag.
+          # as onnx_core/runtime/kernels/tensor_compare.h that are not yet in a tag.
           git clone --depth 1 https://github.com/xadupre/onnx-light.git /tmp/onnx-light
           cmake -S /tmp/onnx-light -B /tmp/onnx-light/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/tmp/onnx-light/install -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
           cmake --build /tmp/onnx-light/build --config Release --parallel --verbose

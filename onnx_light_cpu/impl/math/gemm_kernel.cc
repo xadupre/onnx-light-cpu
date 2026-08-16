@@ -749,8 +749,27 @@ void GemmTileF64(GemmKernelKind kind, std::size_t mr, std::size_t nb, std::size_
 // panel instead would make every ``k`` step jump by the panel width, which both
 // defeats the hardware prefetcher and maps the rows of a micro-panel onto very
 // few L1 sets once that width is a large power of two.
-template <typename T>
-void PackBPanel(bool trans_b, const T *B, std::size_t K, std::size_t N, std::size_t k0,
+// Reads a FLOAT16 (``Bfloat == false``) or BFLOAT16 (``Bfloat == true``)
+// element stored as a raw 16-bit pattern and converts it to ``float`` on
+// access, so the packing loops materialize FP32 micro-panels directly from
+// half-precision inputs without a separate full-tensor widening pass. Its size
+// and alignment match ``std::uint16_t`` so a ``const std::uint16_t *`` input
+// buffer can be viewed as ``const HalfSource *``.
+template <bool Bfloat> struct HalfSource {
+  std::uint16_t bits;
+  operator float() const {
+    return Bfloat ? detail::Bfloat16BitsToFloat(bits) : detail::Float16BitsToFloat(bits);
+  }
+};
+using Float16Source = HalfSource<false>;
+using BFloat16Source = HalfSource<true>;
+
+// ``SrcT`` is the element type of the input matrices; it equals the packed type
+// ``T`` for the native FP32/FP64 paths (a plain copy) and is a ``HalfSource``
+// for the FP16/BF16 path, which converts to ``T`` element by element while
+// packing. The packed panels themselves are always ``T`` (float or double).
+template <typename T, typename SrcT = T>
+void PackBPanel(bool trans_b, const SrcT *B, std::size_t K, std::size_t N, std::size_t k0,
                 std::size_t kc, std::size_t n0, std::size_t nb, std::size_t column_block,
                 T *Bpack) {
   for (std::size_t j = 0; j < nb; j += column_block) {
@@ -758,31 +777,36 @@ void PackBPanel(bool trans_b, const T *B, std::size_t K, std::size_t N, std::siz
     T *dst = Bpack + j * kc;
     if (!trans_b) {
       for (std::size_t k = 0; k < kc; ++k) {
-        const T *src = B + (k0 + k) * N + n0 + j;
-        std::copy(src, src + jb, dst + k * jb);
+        const SrcT *src = B + (k0 + k) * N + n0 + j;
+        T *out = dst + k * jb;
+        for (std::size_t n = 0; n < jb; ++n) {
+          out[n] = static_cast<T>(src[n]);
+        }
       }
       continue;
     }
     for (std::size_t k = 0; k < kc; ++k) {
       for (std::size_t n = 0; n < jb; ++n) {
-        dst[k * jb + n] = B[(n0 + j + n) * K + k0 + k];
+        dst[k * jb + n] = static_cast<T>(B[(n0 + j + n) * K + k0 + k]);
       }
     }
   }
 }
 
-template <typename T>
-void PackAPanel(bool trans_a, const T *A, std::size_t M, std::size_t K, std::size_t m0,
+template <typename T, typename SrcT = T>
+void PackAPanel(bool trans_a, const SrcT *A, std::size_t M, std::size_t K, std::size_t m0,
                 std::size_t mc, std::size_t k0, std::size_t kc, T *Apack) {
   for (std::size_t m = 0; m < mc; ++m) {
     T *dst = Apack + m * kc;
     if (trans_a) {
       for (std::size_t k = 0; k < kc; ++k) {
-        dst[k] = A[(k0 + k) * M + m0 + m];
+        dst[k] = static_cast<T>(A[(k0 + k) * M + m0 + m]);
       }
     } else {
-      const T *src = A + (m0 + m) * K + k0;
-      std::copy(src, src + kc, dst);
+      const SrcT *src = A + (m0 + m) * K + k0;
+      for (std::size_t k = 0; k < kc; ++k) {
+        dst[k] = static_cast<T>(src[k]);
+      }
     }
   }
 }
@@ -960,10 +984,10 @@ void GemmSkinnyM(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::
               });
 }
 
-template <typename T, typename TileFn>
+template <typename T, typename TileFn, typename SrcT = T>
 void GemmFiveLoopRange(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::size_t K,
-                       std::size_t k_begin, std::size_t k_end, T alpha, const T *A, const T *B,
-                       T beta, const T *C, T *Y, GemmKernelKind kind, TileFn tile,
+                       std::size_t k_begin, std::size_t k_end, T alpha, const SrcT *A,
+                       const SrcT *B, T beta, const T *C, T *Y, GemmKernelKind kind, TileFn tile,
                        const GemmBlocking &blocking) {
   const bool has_bias = C != nullptr && beta != T(0);
   const std::size_t column_panels = (N + blocking.nc - 1) / blocking.nc;
@@ -1032,9 +1056,9 @@ void GemmFiveLoopRange(bool trans_a, bool trans_b, std::size_t M, std::size_t N,
   }
 }
 
-template <typename T, typename TileFn>
+template <typename T, typename TileFn, typename SrcT = T>
 void GemmFiveLoop(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::size_t K, T alpha,
-                  const T *A, const T *B, T beta, const T *C, T *Y, GemmKernelKind kind,
+                  const SrcT *A, const SrcT *B, T beta, const T *C, T *Y, GemmKernelKind kind,
                   TileFn tile, const GemmBlocking &blocking) {
   GemmFiveLoopRange(trans_a, trans_b, M, N, K, 0, K, alpha, A, B, beta, C, Y, kind, tile, blocking);
 }
@@ -1164,6 +1188,81 @@ void GemmFloat64Planned(bool trans_a, bool trans_b, std::size_t M, std::size_t N
                                     static_cast<std::size_t>(ParallelForThreadCount()));
   GemmImpl<Algorithm, double>(trans_a, trans_b, M, N, K, alpha, A, B, beta, C, Y,
                               SelectGemmKernelKind<double>(), tile, selected);
+}
+
+// Widens a FLOAT16/BFLOAT16 buffer of ``count`` raw 16-bit patterns into a
+// fresh float32 buffer, spreading the per-element decode across the shared
+// thread pool. Used only for the shapes handled below by the tuned skinny/
+// GEMV/split-K float32 algorithms, which read A and B directly instead of
+// through the packing step.
+inline void WidenHalfBuffer(const std::uint16_t *src, bool is_bfloat16, std::size_t count,
+                            float *dst) {
+  ParallelFor(static_cast<std::int64_t>(count), 1.0, [=](std::int64_t begin, std::int64_t end) {
+    if (is_bfloat16) {
+      for (std::int64_t i = begin; i < end; ++i) {
+        dst[i] = detail::Bfloat16BitsToFloat(src[i]);
+      }
+    } else {
+      for (std::int64_t i = begin; i < end; ++i) {
+        dst[i] = detail::Float16BitsToFloat(src[i]);
+      }
+    }
+  });
+}
+
+// FP16/BF16 GEMM accumulated in float32. For the general blocked algorithm the
+// operands are converted to float32 while they are packed into the micro-kernel
+// panels (no full-tensor widening), which is the common large-matrix path.
+// Skinny, GEMV, and split-K shapes use dedicated float32 algorithms that read A
+// and B directly rather than through packing, so they keep their existing
+// behavior by widening the two operands once before dispatch. ``A`` and ``B``
+// are raw 16-bit patterns; the raw ``M x N`` float32 product is written to
+// ``Y`` for the caller's narrowing epilogue.
+void GemmHalfToFloat(bool is_bfloat16, bool trans_a, bool trans_b, std::size_t M, std::size_t N,
+                     std::size_t K, float alpha, const std::uint16_t *A, const std::uint16_t *B,
+                     float *Y) {
+  if (M == 0 || N == 0) {
+    return;
+  }
+  if (K == 0) {
+    InitializeOutput(M, N, 0.0f, static_cast<const float *>(nullptr), Y);
+    return;
+  }
+  const GemmKernelKind kind = SelectGemmKernelKind<float>();
+  const GemmAlgorithm algorithm = SelectGemmAlgorithm(
+      trans_a, trans_b, M, N, K, GemmVectorLanes<float>(kind), GemmRegisterRows(kind));
+  if (algorithm != GemmAlgorithm::kGeneral) {
+    std::vector<float> a_f32(M * K);
+    std::vector<float> b_f32(K * N);
+    WidenHalfBuffer(A, is_bfloat16, M * K, a_f32.data());
+    WidenHalfBuffer(B, is_bfloat16, K * N, b_f32.data());
+    GemmFloat32(trans_a, trans_b, M, N, K, alpha, a_f32.data(), b_f32.data(), 0.0f, nullptr, Y);
+    return;
+  }
+
+  const auto tile = [](GemmKernelKind kind, std::size_t mr, std::size_t nb, std::size_t k,
+                       float alpha, float beta, const float *Bmat, std::size_t N,
+                       const float *Crow_base, std::size_t Cstride, float *Yrow_base,
+                       std::size_t Ystride, std::size_t n0, GemmAccumMode mode,
+                       const float *Apack) {
+    GemmTileF32(kind, mr, nb, k, alpha, beta, Bmat, N, Crow_base, Cstride, Yrow_base, Ystride, n0,
+                mode, Apack);
+  };
+  const GemmBlocking default_blocking =
+      SelectGemmBlocking(sizeof(float), GemmVectorLanes<float>(kind), GemmRegisterRows(kind));
+  const GemmBlocking selected = ConstrainGemmBlockingForTasks(
+      default_blocking, M, N, static_cast<std::size_t>(ParallelForThreadCount()));
+  if (is_bfloat16) {
+    const auto *a = reinterpret_cast<const BFloat16Source *>(A);
+    const auto *b = reinterpret_cast<const BFloat16Source *>(B);
+    GemmFiveLoop<float>(trans_a, trans_b, M, N, K, alpha, a, b, 0.0f,
+                        static_cast<const float *>(nullptr), Y, kind, tile, selected);
+  } else {
+    const auto *a = reinterpret_cast<const Float16Source *>(A);
+    const auto *b = reinterpret_cast<const Float16Source *>(B);
+    GemmFiveLoop<float>(trans_a, trans_b, M, N, K, alpha, a, b, 0.0f,
+                        static_cast<const float *>(nullptr), Y, kind, tile, selected);
+  }
 }
 
 #define INSTANTIATE_PLANNED_GEMM(Algorithm)                                                        \
@@ -1396,6 +1495,14 @@ void GemmFloat64WithEpilogue(bool trans_a, bool trans_b, std::size_t M, std::siz
                              std::size_t K, double alpha, const double *A, const double *B,
                              const GemmEpilogue<double> &epilogue, double *Y) {
   GemmWithEpilogue(trans_a, trans_b, M, N, K, alpha, A, B, epilogue, Y, GemmFloat64);
+}
+
+void GemmHalfWithEpilogue(bool is_bfloat16, bool trans_a, bool trans_b, std::size_t M,
+                          std::size_t N, std::size_t K, float alpha, const std::uint16_t *A,
+                          const std::uint16_t *B, const GemmEpilogue<float> &epilogue, float *Y) {
+  ValidateGemmEpilogue(M, N, epilogue);
+  detail::GemmHalfToFloat(is_bfloat16, trans_a, trans_b, M, N, K, alpha, A, B, Y);
+  ApplyGemmEpilogue(M, N, epilogue, Y);
 }
 
 } // namespace onnx_light_cpu

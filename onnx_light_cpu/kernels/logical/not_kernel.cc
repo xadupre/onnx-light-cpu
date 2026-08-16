@@ -7,9 +7,9 @@
 #include "onnx_light_cpu/impl/logical/logical_kernels.h"
 #include "onnx_light_cpu/kernels/kernel_usage.h"
 
-#include "onnx_core/runtime/kernel_dispatch_table.h"
-#include "onnx_core/runtime/node_helpers.h"
-#include "onnx_core/runtime/parallel_for.h"
+#include "onnx_core/runtime/kernels/kernel_dispatch_table.h"
+#include "onnx_core/runtime/kernels/node_helpers.h"
+#include "onnx_core/runtime/kernels/parallel_for.h"
 #include "onnx_core/symbolic/sym_tensor.h"
 
 #include <cstddef>

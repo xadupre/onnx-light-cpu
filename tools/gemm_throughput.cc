@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Isolated FP32/FP64 GEMM throughput driver.
+// Isolated FP32/FP64/FP16/BF16 GEMM throughput driver.
 //
 // This tool measures the throughput of the prepared :cpp:class:`GemmPlan`
 // engine in isolation, without ONNX Runtime or onnx-light. It answers the
@@ -18,6 +18,8 @@
 
 #include "onnx_light_cpu/impl/math/gemm/gemm_common.h"
 #include "onnx_light_cpu/impl/math/gemm/gemm_plan.h"
+#include "onnx_light_cpu/impl/math/half_conversion.h"
+#include "onnx_light_cpu/impl/math/math_kernels.h"
 #include "onnx_light_cpu/impl/simd_level.h"
 
 #include <algorithm>
@@ -124,6 +126,59 @@ template <typename T> double MeasureGflops(const GemmCase &c, std::size_t *usefu
   return operations / median / 1e9;
 }
 
+// Isolated throughput of the FP16/BF16 convert-while-packing path
+// (:cpp:func:`GemmHalfWithEpilogue`). Inputs are raw half-precision bit
+// patterns derived from random float32 values; the reduction accumulates in
+// float32 and the epilogue narrows the result back to the half format, so the
+// figure includes the per-element input conversion done during packing.
+template <bool Bfloat16> double MeasureHalfGflops(const GemmCase &c) {
+  std::mt19937 rng(0x5eed5eedu);
+  std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
+  const auto narrow = [](float value) {
+    return Bfloat16 ? onnx_light_cpu::detail::FloatToBFloat16Bits(value)
+                    : onnx_light_cpu::detail::FloatToFloat16Bits(value);
+  };
+  std::vector<std::uint16_t> a(c.m * c.k);
+  std::vector<std::uint16_t> b(c.k * c.n);
+  std::vector<std::uint16_t> out(c.m * c.n);
+  std::vector<float> workspace(c.m * c.n);
+  for (std::uint16_t &value : a) {
+    value = narrow(dist(rng));
+  }
+  for (std::uint16_t &value : b) {
+    value = narrow(dist(rng));
+  }
+
+  onnx_light_cpu::GemmEpilogue<float> epilogue;
+  epilogue.output_conversion = Bfloat16 ? onnx_light_cpu::GemmOutputConversion::kBFloat16
+                                        : onnx_light_cpu::GemmOutputConversion::kFloat16;
+  epilogue.converted_output = out.data();
+
+  const auto run = [&]() {
+    onnx_light_cpu::GemmHalfWithEpilogue(Bfloat16, c.trans_a, c.trans_b, c.m, c.n, c.k, 1.0f,
+                                         a.data(), b.data(), epilogue, workspace.data());
+  };
+
+  for (int warmup = 0; warmup < 3; ++warmup) {
+    run();
+  }
+
+  const std::size_t repeat = RepeatCount(c);
+  std::vector<double> seconds;
+  seconds.reserve(repeat);
+  for (std::size_t iteration = 0; iteration < repeat; ++iteration) {
+    const auto start = std::chrono::steady_clock::now();
+    run();
+    const auto stop = std::chrono::steady_clock::now();
+    seconds.push_back(std::chrono::duration<double>(stop - start).count());
+  }
+  std::sort(seconds.begin(), seconds.end());
+  const double median = seconds[seconds.size() / 2];
+  const double operations =
+      2.0 * static_cast<double>(c.m) * static_cast<double>(c.n) * static_cast<double>(c.k);
+  return operations / median / 1e9;
+}
+
 const char *SimdName(onnx_light_cpu::SimdLevel level) {
   switch (level) {
   case onnx_light_cpu::SimdLevel::kNone:
@@ -166,16 +221,18 @@ int main() {
   std::printf("SIMD level: %s  FMA: %s  microarchitecture: %s  register rows: %zu\n",
               SimdName(level), has_fma ? "yes" : "no", MicroarchitectureName(microarchitecture),
               register_rows);
-  std::printf("%-18s %6s %6s %6s %8s %14s %8s %14s\n", "case", "M", "N", "K", "fp32 thr",
-              "fp32 GFLOP/s", "fp64 thr", "fp64 GFLOP/s");
+  std::printf("%-18s %6s %6s %6s %8s %14s %8s %14s %14s %14s\n", "case", "M", "N", "K", "fp32 thr",
+              "fp32 GFLOP/s", "fp64 thr", "fp64 GFLOP/s", "fp16 GFLOP/s", "bf16 GFLOP/s");
 
   for (const GemmCase &c : kCases) {
     std::size_t fp32_threads = 0;
     std::size_t fp64_threads = 0;
     const double fp32 = MeasureGflops<float>(c, &fp32_threads);
     const double fp64 = MeasureGflops<double>(c, &fp64_threads);
-    std::printf("%-18s %6zu %6zu %6zu %8zu %14.2f %8zu %14.2f\n", c.name, c.m, c.n, c.k,
-                fp32_threads, fp32, fp64_threads, fp64);
+    const double fp16 = MeasureHalfGflops<false>(c);
+    const double bf16 = MeasureHalfGflops<true>(c);
+    std::printf("%-18s %6zu %6zu %6zu %8zu %14.2f %8zu %14.2f %14.2f %14.2f\n", c.name, c.m, c.n,
+                c.k, fp32_threads, fp32, fp64_threads, fp64, fp16, bf16);
   }
   return 0;
 }
