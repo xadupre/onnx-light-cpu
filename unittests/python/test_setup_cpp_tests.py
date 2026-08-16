@@ -82,6 +82,7 @@ class TestSetupOnnxLight:
     def test_onnx_light_source_flag_enables_integration(self):
         output = _dry_run("--onnx-light-source")
         assert "ONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON" in output
+        assert "ONNX_LIGHT_CPU_ONNX_LIGHT_SOURCE_DIR=" in output
         assert "ONNX_LIGHT_CPU_ONNX_LIGHT_LIBRARY=" in output
         assert "ONNX_LIGHT_CPU_ONNX_LIGHT_PROTO_LIBRARY=" in output
 
