@@ -61,4 +61,18 @@
 <text x="722" y="272" font-size="11" fill="#1a1a1a">5. Skinny-N (n&lt;=vector_lanes)</text>
 <text x="722" y="288" font-size="11" fill="#1a1a1a">6. General (five-loop)</text>
 </g>
+<g id="skinny-note">
+<rect x="712" y="312" width="180" height="196" rx="6" ry="6" fill="#f7f7f7" stroke="#999999" stroke-width="1"/>
+<text x="722" y="332" font-size="12" font-weight="bold" fill="#1a1a1a">What is &#8220;skinny&#8221;?</text>
+<text x="722" y="352" font-size="10.5" fill="#1a1a1a">A skinny output has one side</text>
+<text x="722" y="366" font-size="10.5" fill="#1a1a1a">smaller than the SIMD tile, so</text>
+<text x="722" y="380" font-size="10.5" fill="#1a1a1a">the normal 2D micro-kernel</text>
+<text x="722" y="394" font-size="10.5" fill="#1a1a1a">would waste most of its lanes.</text>
+<text x="722" y="416" font-size="10.5" fill="#1a1a1a">skinny-M: few rows</text>
+<text x="734" y="430" font-size="10.5" fill="#666666">m &lt;= register_rows (e.g. M==1)</text>
+<text x="722" y="450" font-size="10.5" fill="#1a1a1a">skinny-N: few columns</text>
+<text x="734" y="464" font-size="10.5" fill="#666666">n &lt;= vector_lanes (e.g. N==1)</text>
+<text x="722" y="486" font-size="10.5" fill="#1a1a1a">Each vectorizes the large</text>
+<text x="722" y="500" font-size="10.5" fill="#1a1a1a">dimension / K instead.</text>
+</g>
 </svg>

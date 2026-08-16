@@ -75,6 +75,16 @@ behind each branch):
 .. raw:: html
    :file: _static/gemm/kernel_tree.svg
 
+The green leaves are the ``GemmKernelKind`` values, annotated with their SIMD
+width and rough relative gain; ``Scalar`` is the portable C++ kernel that
+multiplies one element at a time (no SIMD), used both as the correctness
+fallback and as the sub-vector tail of every vector kernel. This tree only
+picks the *micro-kernel*: every kind then runs through the same
+cache-blocking and A/B packing (below), and the *algorithm* (Direct,
+skinny-M, skinny-N, Split-K, or the general five-loop path) is selected
+separately from the shape -- see :ref:`the strategy-zones figure
+<gemm-strategy-zones>` further down.
+
 Two independent axes are worth calling out:
 
 * **Compile-time gate** (``ONNX_LIGHT_CPU_HAVE_AVX512``): decided once, at
@@ -212,6 +222,13 @@ register tiles, then reduce ``MC``/``NC`` when necessary to expose enough work
 for the available threads. The selected values and ``useful_threads`` estimate
 drive execution rather than being descriptive metadata.
 
+A shape is *skinny* when one output dimension is smaller than the SIMD tile,
+so the ordinary 2D micro-kernel would leave most of its vector lanes idle:
+**skinny-M** means few rows (``m <= register_rows``, e.g. an ``M == 1`` matvec)
+and **skinny-N** means few columns (``n <= vector_lanes``, e.g. a single output
+column). In those cases the kernel vectorizes the large dimension (or the
+``K`` reduction) instead of the tiny one.
+
 The plan selects the general five-loop engine or a direct, skinny-M, skinny-N,
 or split-K path once from the prepared shape. It may own constant B in its
 original representation; persistent B prepacking is explicitly excluded from
@@ -237,6 +254,8 @@ decided by comparing ``m`` to ``register_rows`` and ``n`` to ``vector_lanes``.
 The interactive SVG below maps these thresholds onto the ``M`` x ``N`` output
 plane, with the ``K``/transpose-gated Direct and Split-K overlays called out
 separately (hover a zone for the exact condition):
+
+.. _gemm-strategy-zones:
 
 .. raw:: html
    :file: _static/gemm/strategy_zones.svg
