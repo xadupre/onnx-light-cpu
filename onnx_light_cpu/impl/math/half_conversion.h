@@ -4,8 +4,8 @@
 
 #pragma once
 
+#include <bit>
 #include <cstdint>
-#include <cstring>
 
 namespace onnx_light_cpu::detail {
 
@@ -31,21 +31,16 @@ inline float Float16BitsToFloat(std::uint16_t value) {
   } else {
     bits = sign | ((exponent - 15u + 127u) << 23) | (mantissa << 13);
   }
-  float result;
-  std::memcpy(&result, &bits, sizeof(result));
-  return result;
+  return std::bit_cast<float>(bits);
 }
 
 inline float Bfloat16BitsToFloat(std::uint16_t value) {
   const std::uint32_t bits = static_cast<std::uint32_t>(value) << 16;
-  float result;
-  std::memcpy(&result, &bits, sizeof(result));
-  return result;
+  return std::bit_cast<float>(bits);
 }
 
 inline std::uint16_t FloatToFloat16Bits(float value) {
-  std::uint32_t bits;
-  std::memcpy(&bits, &value, sizeof(bits));
+  const std::uint32_t bits = std::bit_cast<std::uint32_t>(value);
   const std::uint16_t sign = static_cast<std::uint16_t>((bits >> 16) & 0x8000u);
   const std::uint32_t biased = (bits >> 23) & 0xffu;
   const std::uint32_t mantissa = bits & 0x7fffffu;
@@ -83,8 +78,7 @@ inline std::uint16_t FloatToFloat16Bits(float value) {
 }
 
 inline std::uint16_t FloatToBFloat16Bits(float value) {
-  std::uint32_t bits;
-  std::memcpy(&bits, &value, sizeof(bits));
+  const std::uint32_t bits = std::bit_cast<std::uint32_t>(value);
   if ((bits & 0x7fffffffu) > 0x7f800000u) {
     return static_cast<std::uint16_t>((bits >> 16) | 0x0040u);
   }
