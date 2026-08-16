@@ -29,11 +29,11 @@
 #include "onnx_light_cpu/kernels/register_kernels.h"
 
 #include "onnx_core/backend_test/test_case.h"
-#include "onnx_core/runtime/kernel_context.h"
-#include "onnx_core/runtime/run_nodes.h"
+#include "onnx_core/runtime/kernels/kernel_context.h"
+#include "onnx_core/runtime/kernels/run_nodes.h"
+#include "onnx_core/runtime/kernels/tensor_compare.h"
+#include "onnx_core/runtime/memory/simple_tensor.h"
 #include "onnx_core/runtime/runtime_context.h"
-#include "onnx_core/runtime/simple_tensor.h"
-#include "onnx_core/runtime/tensor_compare.h"
 
 #include <gtest/gtest.h>
 
@@ -66,7 +66,7 @@ constexpr int64_t kRuntimeDefaultOpsetVersion = 18;
 
 // Compares a runtime output tensor against the reference output of a backend
 // test case using onnx-light's public ``CompareTensors`` helper
-// (``onnx_core/runtime/tensor_compare.h``) with the case's ``rtol``/``atol``.
+// (``onnx_core/runtime/kernels/tensor_compare.h``) with the case's ``rtol``/``atol``.
 void CompareTensor(const std::string &case_name, const Tensor &actual, const Tensor &expected,
                    double rtol, double atol, std::vector<std::string> &failures) {
   const TensorComparison result = CompareTensors(actual, expected, rtol, atol);
