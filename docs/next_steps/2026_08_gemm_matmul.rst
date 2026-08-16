@@ -937,8 +937,32 @@ dependency, and current status.
        absolute-GFLOP/s prediction: every quantitative target is a ratio versus
        ONNX Runtime, which this isolated driver cannot measure. These are
        diagnostic shared-runner numbers, not the dedicated-machine ONNX Runtime
-       evidence the gate requires, so the FP64 large-matrix single-thread
-       blocking is the next measured priority before the gate can close.
+       evidence the gate requires.
+       The large-matrix weakness that followed is now fixed as well: the five
+       loops packed one ``KC x NC`` B panel but walked it with the row tiles
+       outside and the columns inside, so every row tile re-streamed the whole
+       L3-sized panel, and each ``k`` step of the micro-kernel jumped by the
+       panel width -- a large power of two for the priority shapes, which maps a
+       micro-panel onto very few L1 sets and defeats the hardware prefetcher.
+       ``PackBPanel`` now stores the panel as contiguous ``KC x column_block``
+       column micro-panels (``SelectGemmColumnBlock``, four cache lines per
+       ``k`` row) and the tile loops iterate ``jr`` outside and ``ir`` inside, as
+       the five-loop decomposition above prescribes, so the micro-kernel reads B
+       sequentially and each micro-panel is reused from L2 by every row tile of
+       the packed A panel. On the shared AMD EPYC 7763 runner the single-thread
+       square shapes rise from 74.9 to 85.1 GFLOP/s FP32 and 25.5 to 44.4 FP64 at
+       512³, from 49.2 to 86.0 and 25.5 to 44.9 at 1024³, and from 48.3 to 85.9
+       and 24.8 to 44.7 at 2048³ (about 1.8x for both types), with
+       ``transformer_proj`` rising from 45.6 to 81.1 GFLOP/s FP32 and 23.4 to
+       40.8 FP64; the two-thread runs improve in the same proportion (1024³ from
+       69.5 to 120.5 GFLOP/s FP32 and 42.8 to 72.2 FP64, 2048³ from 83.1 to 144.9
+       and 47.1 to 82.7). Throughput now sustains from 512³ to 2048³ instead of
+       decaying, and no priority shape regresses: ``skinny_m_gemv``,
+       ``skinny_n``, ``large_k``, ``trans_a_128``, and ``trans_b_128`` are equal
+       or better. Re-measuring the Intel Ice Lake-SP AVX-512 runner, where the
+       same ordering caused the 48 to ~32 GFLOP/s FP64 drop, is the next
+       measured step, after which the dedicated-machine ONNX Runtime comparison
+       is what remains before the gate can close.
    * - Roadmap PR07
      - x86 FP16/BF16 kernel family.
      - Immutable plans describe typed panels, FP32 accumulation, conversion

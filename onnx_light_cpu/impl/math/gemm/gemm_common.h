@@ -49,6 +49,12 @@ GemmBlocking SelectGemmBlocking(std::size_t element_size, std::size_t vector_lan
 GemmBlocking ConstrainGemmBlockingForTasks(GemmBlocking blocking, std::size_t m, std::size_t n,
                                            std::size_t thread_count);
 
+/// Width of the column micro-panel the tile loops walk inside one packed B
+/// panel. The returned value is a multiple of ``blocking.nr`` that keeps the
+/// ``kc x column_block`` slice of B small enough to stay L1-resident while the
+/// row tiles of the packed A panel consume it.
+std::size_t SelectGemmColumnBlock(const GemmBlocking &blocking, std::size_t element_size);
+
 GemmMicroarchitecture DetectGemmMicroarchitecture();
 
 std::size_t SelectGemmRegisterRowsForMicroarchitecture(SimdLevel level, bool has_fma,
@@ -96,6 +102,11 @@ constexpr std::size_t kGemmSveMR = 4;
 constexpr std::size_t kGemmTileM = 64;
 constexpr std::size_t kGemmTileN = 256;
 constexpr std::size_t kGemmTileK = 256;
+// Width, in bytes, of one contiguous column micro-panel of the packed B panel.
+// The tile loops walk the packed panel one micro-panel at a time; four cache
+// lines per k row measured best on AVX2 and keep the slice small enough to be
+// reused from L2 by every row tile while the packed A panel also stays there.
+constexpr std::size_t kGemmColumnPanelBytes = 256;
 // A scalar FMA is a fraction of one element-wise work unit once the inner loop
 // is vectorized and register-blocked.
 constexpr double kGemmFmasPerParallelWorkUnit = 64.0;

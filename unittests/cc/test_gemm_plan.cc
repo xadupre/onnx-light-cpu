@@ -138,6 +138,28 @@ TEST(GemmPlan, SelectsMicroarchitectureRegisterRows) {
             4u);
 }
 
+TEST(GemmPlan, ColumnBlockSlicesPackedPanels) {
+  using onnx_light_cpu::detail::SelectGemmColumnBlock;
+  const onnx_light_cpu::GemmBlocking avx2_f32{240, 1024, 272, 6, 16};
+  const onnx_light_cpu::GemmBlocking avx2_f64{240, 1024, 208, 6, 8};
+  const onnx_light_cpu::GemmBlocking narrow{240, 8, 272, 6, 16};
+
+  const std::size_t f32_block = SelectGemmColumnBlock(avx2_f32, sizeof(float));
+  const std::size_t f64_block = SelectGemmColumnBlock(avx2_f64, sizeof(double));
+
+  EXPECT_EQ(f32_block % avx2_f32.nr, 0u);
+  EXPECT_EQ(f64_block % avx2_f64.nr, 0u);
+  EXPECT_GE(f32_block, avx2_f32.nr);
+  EXPECT_GE(f64_block, avx2_f64.nr);
+  EXPECT_LE(f32_block, avx2_f32.nc);
+  EXPECT_LE(f64_block, avx2_f64.nc);
+  // A float64 element is twice as wide, so the same byte budget covers half as
+  // many columns.
+  EXPECT_LE(f64_block, f32_block);
+  // A column panel narrower than the micro-panel is never split further.
+  EXPECT_EQ(SelectGemmColumnBlock(narrow, sizeof(float)), narrow.nc);
+}
+
 TEST(GemmPlan, BlockingExposesTaskGridForPrioritySizes) {
   const onnx_light_cpu::GemmBlocking initial{256, 1024, 448, 4, 16};
   for (const std::size_t size : {256u, 512u, 1024u}) {
