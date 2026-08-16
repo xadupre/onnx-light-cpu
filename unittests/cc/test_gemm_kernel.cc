@@ -19,6 +19,10 @@
 #include <random>
 #include <vector>
 
+#if defined(_MSC_VER)
+#include <malloc.h>
+#endif
+
 // Heap-allocation tracker used by the FP16/BF16 "no expanded operand" tests
 // below. While ``g_alloc_recording`` is set, every global allocation updates
 // ``g_alloc_peak`` with the largest single request seen (including worker-thread
@@ -37,6 +41,24 @@ void RecordAllocation(std::size_t bytes) {
   while (bytes > previous &&
          !g_alloc_peak.compare_exchange_weak(previous, bytes, std::memory_order_relaxed)) {
   }
+}
+
+// Portable aligned allocation helpers: MSVC does not provide std::aligned_alloc,
+// so fall back to _aligned_malloc / _aligned_free on that toolchain.
+void *AlignedAlloc(std::size_t alignment, std::size_t size) {
+#if defined(_MSC_VER)
+  return _aligned_malloc(size, alignment);
+#else
+  return std::aligned_alloc(alignment, size);
+#endif
+}
+
+void AlignedFree(void *pointer) noexcept {
+#if defined(_MSC_VER)
+  _aligned_free(pointer);
+#else
+  std::free(pointer);
+#endif
 }
 } // namespace
 
@@ -60,7 +82,7 @@ void *operator new(std::size_t bytes, std::align_val_t alignment) {
   RecordAllocation(bytes);
   const std::size_t align = static_cast<std::size_t>(alignment);
   const std::size_t size = (bytes + align - 1) / align * align;
-  void *pointer = std::aligned_alloc(align, size != 0 ? size : align);
+  void *pointer = AlignedAlloc(align, size != 0 ? size : align);
   if (pointer == nullptr) {
     throw std::bad_alloc();
   }
@@ -71,11 +93,13 @@ void *operator new[](std::size_t bytes, std::align_val_t alignment) {
   return ::operator new(bytes, alignment);
 }
 
-void operator delete(void *pointer, std::align_val_t) noexcept { std::free(pointer); }
-void operator delete[](void *pointer, std::align_val_t) noexcept { std::free(pointer); }
-void operator delete(void *pointer, std::size_t, std::align_val_t) noexcept { std::free(pointer); }
+void operator delete(void *pointer, std::align_val_t) noexcept { AlignedFree(pointer); }
+void operator delete[](void *pointer, std::align_val_t) noexcept { AlignedFree(pointer); }
+void operator delete(void *pointer, std::size_t, std::align_val_t) noexcept {
+  AlignedFree(pointer);
+}
 void operator delete[](void *pointer, std::size_t, std::align_val_t) noexcept {
-  std::free(pointer);
+  AlignedFree(pointer);
 }
 
 namespace {
