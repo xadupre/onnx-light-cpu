@@ -778,7 +778,10 @@ void PackBPanel(bool trans_b, const SrcT *B, std::size_t K, std::size_t N, std::
     if (!trans_b) {
       for (std::size_t k = 0; k < kc; ++k) {
         const SrcT *src = B + (k0 + k) * N + n0 + j;
-        std::copy(src, src + jb, dst + k * jb);
+        T *out = dst + k * jb;
+        for (std::size_t n = 0; n < jb; ++n) {
+          out[n] = static_cast<T>(src[n]);
+        }
       }
       continue;
     }
@@ -801,7 +804,9 @@ void PackAPanel(bool trans_a, const SrcT *A, std::size_t M, std::size_t K, std::
       }
     } else {
       const SrcT *src = A + (m0 + m) * K + k0;
-      std::copy(src, src + kc, dst);
+      for (std::size_t k = 0; k < kc; ++k) {
+        dst[k] = static_cast<T>(src[k]);
+      }
     }
   }
 }
