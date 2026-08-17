@@ -1493,6 +1493,21 @@ void GemmHalfPlanned(bool is_bfloat16, bool trans_a, bool trans_b, std::size_t M
       }
     }
 #endif
+#ifdef ONNX_LIGHT_CPU_HAVE_SVE
+    // Roadmap PR08.3: on a machine whose runtime ARM profile selects SVE (a
+    // vector length of at least 256 bits; shorter vectors keep the better
+    // unrolled NEON kernel below), run the native SVE BFLOAT16 kernel. Like the
+    // NEON path both operands stay BFLOAT16 and ``B`` is widened on the fly with
+    // float32 accumulation; it only requires a non-transposed ``B``.
+    if constexpr (Algorithm == GemmAlgorithm::kGeneral) {
+      static const ArmGemmProfile arm_profile = DetectArmGemmProfile();
+      if (!trans_b && arm_profile.kind == ArmGemmKernelKind::kSve) {
+        const std::size_t mr = std::min<std::size_t>(selected.mr, kGemmSveMR);
+        GemmBf16NativeGeneral(trans_a, M, N, K, alpha, A, B, Y, &GemmMicroKernel_SVE_BF16, mr);
+        return;
+      }
+    }
+#endif
 #ifdef ONNX_LIGHT_CPU_HAVE_NEON
     // Roadmap PR08.2: native NEON BFLOAT16 arithmetic keeps both operands in
     // BFLOAT16 to the register file and widens ``B`` on the fly (baseline NEON
@@ -1525,6 +1540,22 @@ void GemmHalfPlanned(bool is_bfloat16, bool trans_a, bool trans_b, std::size_t M
       if (use_avx512fp16 && !trans_b) {
         const std::size_t mr = std::min<std::size_t>(selected.mr, kGemmAVX512MR);
         GemmFp16NativeGeneral(trans_a, M, N, K, alpha, A, B, Y, &GemmMicroKernel_AVX512FP16, mr);
+        return;
+      }
+    }
+#endif
+#ifdef ONNX_LIGHT_CPU_HAVE_SVE
+    // Roadmap PR08.3: on a machine whose runtime ARM profile selects SVE (a
+    // vector length of at least 256 bits; shorter vectors keep the NEON kernel
+    // below), run the native SVE FLOAT16 kernel. Half precision is baseline SVE,
+    // so unlike NEON it needs no separate FP16 feature gate; both operands stay
+    // FLOAT16 and ``B`` is widened on the fly with float32 accumulation, and it
+    // only requires a non-transposed ``B``.
+    if constexpr (Algorithm == GemmAlgorithm::kGeneral) {
+      static const ArmGemmProfile arm_profile = DetectArmGemmProfile();
+      if (!trans_b && arm_profile.kind == ArmGemmKernelKind::kSve) {
+        const std::size_t mr = std::min<std::size_t>(selected.mr, kGemmSveMR);
+        GemmFp16NativeGeneral(trans_a, M, N, K, alpha, A, B, Y, &GemmMicroKernel_SVE_FP16, mr);
         return;
       }
     }

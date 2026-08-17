@@ -97,6 +97,36 @@ void GemmMicroKernel_SVE_F64(std::size_t mr, std::size_t nb, std::size_t K, doub
                              const double *Crow_base, std::size_t Cstride, double *Yrow_base,
                              std::size_t Ystride, std::size_t n0, GemmAccumMode mode,
                              const double *Apack);
+
+// Native BFLOAT16 member of the GEMM micro-kernel family (Roadmap PR08.3). It
+// matches ``GemmBf16MicroKernel``: ``Bmat`` and ``Apack`` stay BFLOAT16 to the
+// register file and each ``B`` row is widened on the fly with an SVE
+// zero-extending halfword load (``svld1uh_u32``) plus a 16-bit shift while the
+// dot products accumulate in float32, so no full-tensor widening buffer is
+// needed. The runtime vector length drives the lane count and predicated tails
+// cover the column remainder; unsupported row counts fall back to
+// ``GemmMicroKernel_ScalarBf16``. Only requires baseline SVE, so it is always
+// available in this translation unit.
+void GemmMicroKernel_SVE_BF16(std::size_t mr, std::size_t nb, std::size_t K, float alpha,
+                              float beta, const std::uint16_t *Bmat, std::size_t N,
+                              const float *Crow_base, std::size_t Cstride, float *Yrow_base,
+                              std::size_t Ystride, std::size_t n0, GemmAccumMode mode,
+                              const std::uint16_t *Apack);
+
+// Native FLOAT16 member of the GEMM micro-kernel family (Roadmap PR08.3). It
+// matches ``GemmFp16MicroKernel``: ``Bmat`` and ``Apack`` stay FLOAT16 to the
+// register file and each ``B`` row is widened on the fly with the SVE
+// ``FCVT`` (``svcvt_f32_f16``) instruction while the dot products accumulate in
+// float32, so no full-tensor widening buffer is needed. The runtime vector
+// length drives the lane count and predicated tails cover the column remainder;
+// unsupported row counts fall back to ``GemmMicroKernel_ScalarFp16``.
+// Half-precision floating point is part of baseline SVE, so it is always
+// available in this translation unit (no separate FP16 feature gate).
+void GemmMicroKernel_SVE_FP16(std::size_t mr, std::size_t nb, std::size_t K, float alpha,
+                              float beta, const std::uint16_t *Bmat, std::size_t N,
+                              const float *Crow_base, std::size_t Cstride, float *Yrow_base,
+                              std::size_t Ystride, std::size_t n0, GemmAccumMode mode,
+                              const std::uint16_t *Apack);
 #endif
 
 } // namespace onnx_light_cpu

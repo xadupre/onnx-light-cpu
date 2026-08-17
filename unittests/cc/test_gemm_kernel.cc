@@ -929,6 +929,25 @@ TEST(GemmHalf, BFloat16NeonNativeGeneralColumnTails) {
   CheckGemmHalf(true, true, false, 17, 19, 33, true, 691);   // trans_a, N tail, odd K
 }
 
+// Roadmap PR08.3: general FLOAT16/BFLOAT16 shapes whose N spans several native
+// SVE column vectors and leaves a predicated column tail, with M covering
+// several register-row blocks and even/odd K. On an SVE build whose runtime
+// vector length selects the SVE profile (at least 256 bits) these exercise the
+// native SVE half kernels (the two-vector body and the ``svwhilelt`` predicated
+// tail); shorter vectors keep the NEON kernel and every other target keeps the
+// converting float32 fallback. All must match the widen-then-float32 reference.
+TEST(GemmHalf, Float16SveNativeGeneralColumnTails) {
+  CheckGemmHalf(false, false, false, 20, 48, 40, false, 741); // N spans several vectors, no tail
+  CheckGemmHalf(false, false, false, 20, 37, 41, true, 751);  // predicated N tail, odd K
+  CheckGemmHalf(false, true, false, 17, 19, 33, true, 761);   // trans_a, predicated N tail, odd K
+}
+
+TEST(GemmHalf, BFloat16SveNativeGeneralColumnTails) {
+  CheckGemmHalf(true, false, false, 20, 48, 40, false, 771); // N spans several vectors, even K
+  CheckGemmHalf(true, false, false, 20, 37, 41, true, 781);  // predicated N tail, odd K
+  CheckGemmHalf(true, true, false, 17, 19, 33, true, 791);   // trans_a, predicated N tail, odd K
+}
+
 TEST(GemmBf16Native, AmxBf16KernelMatchesReferenceWhenSupported) {
   if (!onnx_light_cpu::CpuSupportsAmxBf16() || !onnx_light_cpu::AmxTileStateAvailable()) {
     GTEST_SKIP() << "CPU does not support AMX-BF16 tile state";

@@ -421,8 +421,15 @@ extra full-matrix memory passes.
   file, widen each ``B`` vector on the fly (zero-extend/shift for BFLOAT16,
   ``FCVTL`` for FLOAT16) and accumulate in float32, and are dispatched from
   ``GemmHalfPlanned<kGeneral>`` for non-transposed ``B`` ahead of the converting
-  float32 path, which stays the fallback. The SVE/SVE2 kernels are Roadmap
-  PR08.3.)*
+  float32 path, which stays the fallback. Roadmap PR08.3 then adds the native SVE
+  arithmetic kernels (``GemmMicroKernel_SVE_BF16`` / ``GemmMicroKernel_SVE_FP16``):
+  they reuse the same drivers, keep the operands half-precision to the register
+  file, widen each ``B`` vector on the fly (``svld1uh_u32`` zero-extend/shift for
+  BFLOAT16, the SVE ``FCVT`` ``svcvt_f32_f16`` for FLOAT16), accumulate in
+  float32, drive the lane count from the runtime vector length and cover the
+  column remainder with an ``svwhilelt`` predicated tail, and are dispatched ahead
+  of NEON when the runtime profile selects SVE (a vector length of at least 256
+  bits); shorter vectors keep the better-unrolled NEON kernel.)*
 * For INT8, fuse zero-point correction and requantization into packing and the
   epilogue. Accumulate in INT32 and define overflow behavior through the ONNX
   operator contract.
@@ -776,8 +783,8 @@ require measurements on dedicated hardware.
        performance with no priority shape below 0.9x where the type is
        supported.
      - P3-P4.
-     - PR07.0, PR07.1, PR07.2, PR07.3, PR07.4, PR07.5, PR07.6, PR08.1, and
-       PR08.2 are implemented. The remaining work is split by execution path,
+     - PR07.0, PR07.1, PR07.2, PR07.3, PR07.4, PR07.5, PR07.6, PR08.1, PR08.2,
+       and PR08.3 are implemented. The remaining work is split by execution path,
        ISA, and type below; hardware-specific lanes may proceed in parallel
        after their shared semantic dependency.
      - Roadmap PR07.0 through PR10.5 below.
@@ -1202,7 +1209,36 @@ fallbacks are ordered. Completed rows remain visible so scope is not lost.
      - Runtime-vector-length-aware kernels and predicated tails pass under
        native hardware or QEMU, with NEON selected for short vector lengths.
      - PR08.2
-     - Pending
+     - Implemented. The SVE translation unit (``gemm/arm/gemm_kernel_sve``) adds
+       ``GemmMicroKernel_SVE_BF16`` and ``GemmMicroKernel_SVE_FP16`` -- new
+       members of the BFLOAT16 / FLOAT16 micro-kernel families that share the
+       ``GemmBf16MicroKernel`` / ``GemmFp16MicroKernel`` signatures, so the
+       PR07.4 / PR07.3 ``GemmBf16NativeGeneral`` / ``GemmFp16NativeGeneral``
+       drivers, half-precision ``A`` packing (including ``trans_a``), and the
+       ``GemmMicroKernel_ScalarBf16`` / ``ScalarFp16`` row fallback are reused.
+       Like the PR08.2 NEON kernels both operands stay half-precision to the
+       register file: each ``B`` row is widened on the fly (BFLOAT16 with a
+       zero-extending halfword load ``svld1uh_u32`` plus a 16-bit shift, FLOAT16
+       with the same load reinterpreted so the SVE ``FCVT`` ``svcvt_f32_f16``
+       reads the pattern from the low 16 bits of each word), the dot products
+       accumulate in float32, and ``alpha`` is applied in the epilogue. The
+       runtime vector length (``svcntw``) drives the lane count, the leading loop
+       consumes two vectors per column step, and the ``svwhilelt`` predicated
+       tail covers the column remainder without reading inactive columns, so the
+       result is identical to the widen-then-float32 reference. Half precision is
+       part of baseline SVE, so unlike the NEON FLOAT16 kernel the SVE FLOAT16
+       kernel needs no separate FP16 feature gate. ``GemmHalfPlanned<kGeneral>``
+       dispatches here for a non-transposed ``B`` when ``DetectArmGemmProfile``
+       selects SVE (a vector length of at least 256 bits) ahead of the NEON path;
+       a 128-bit vector length keeps the better-unrolled six-row NEON kernel, a
+       transposed ``B`` keeps the converting float32 path, and a build without SVE
+       is unaffected. New ``GemmHalf.Float16SveNativeGeneralColumnTails`` and
+       ``GemmHalf.BFloat16SveNativeGeneralColumnTails`` differential shapes (an
+       ``N`` spanning several SVE vectors, the ``svwhilelt`` predicated column
+       tail, even/odd ``K``, and a transposed ``A``) run through the SVE path
+       under the cross-compiled aarch64 QEMU CI at 512-bit and 384-bit vector
+       lengths (and the NEON fallback at 128 bits) and match the reference. The
+       dedicated-machine ONNX Runtime comparison is tracked by PR10.5.
    * - Roadmap PR09.1
      - Portable integer semantics.
      - INT8/UINT8/INT32/INT64 implement schema-defined zero points, overflow,
