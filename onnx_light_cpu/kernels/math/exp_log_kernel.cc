@@ -97,8 +97,8 @@ void ComputeUnary(const Tensor &x, Tensor &output, const char *kernel_name, Floa
 
 Tensor MakeLike(const Tensor &x, RuntimeContext *rt) {
   const std::size_t y_n_bytes = static_cast<std::size_t>(x.element_count()) * x.element_size();
-  return rt_ns::MakeOutputTensor(x.data_type, x.shape, y_n_bytes,
-                                 rt != nullptr ? rt->allocator() : nullptr);
+  return rt != nullptr ? rt->MakeOutputTensor(0, x.data_type, x.shape, y_n_bytes)
+                       : rt_ns::MakeOutputTensor(x.data_type, x.shape, y_n_bytes, nullptr);
 }
 
 float ScalarExp(float v) { return std::exp(v); }

@@ -49,8 +49,8 @@ void RunParallel(const T *input, T *output, std::int64_t n) {
 
 rt_ns::Tensor AbsKernel::operator()(const Tensor &x, RuntimeContext *rt) const {
   const std::size_t y_n_bytes = static_cast<std::size_t>(x.element_count()) * x.element_size();
-  Tensor y = rt_ns::MakeOutputTensor(x.data_type, x.shape, y_n_bytes,
-                                     rt != nullptr ? rt->allocator() : nullptr);
+  Tensor y = rt != nullptr ? rt->MakeOutputTensor(0, x.data_type, x.shape, y_n_bytes)
+                           : rt_ns::MakeOutputTensor(x.data_type, x.shape, y_n_bytes, nullptr);
   (*this)(x, y);
   return y;
 }

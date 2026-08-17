@@ -27,19 +27,13 @@ regular Python API:
 onnx-light, its backend-test extension (exposed via the ``_cpuregister``
 extension's ``register_backend_test_cases`` binding, built with
 ``ONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON`` and onnx-light's ``lib_onnx_backend_test``
-available) and ``ml_dtypes`` (for the ``bfloat16`` numpy dtype) are required;
-when any is missing the whole module is skipped.
+available) and ``ml_dtypes`` (for the ``bfloat16`` numpy dtype) are required.
 """
 
 from __future__ import annotations
 
 import numpy as np
 import pytest
-
-pytest.importorskip("onnx_light")
-pytest.importorskip("onnx_light_cpu.onnx_py._cpuregister")
-pytest.importorskip("ml_dtypes")
-pytest.importorskip("onnx_light.onnx.backend")
 
 import ml_dtypes
 from onnx_light.onnx import TensorProto, helper
@@ -55,12 +49,10 @@ from onnx_light_cpu import (
     used_kernel_names,
 )
 
-if not has_backend_test_cases():
-    pytest.skip(
-        "onnx-light-cpu was built without onnx-light's backend test registry "
-        "(register_backend_test_cases binding unavailable).",
-        allow_module_level=True,
-    )
+assert has_backend_test_cases(), (
+    "onnx-light-cpu must be built with onnx-light's backend test registry "
+    "(register_backend_test_cases binding unavailable)."
+)
 
 # Operators whose onnx-light-cpu kernel we validate against every ``test_cpu_*``
 # backend test case, mapped to the library-qualified name each kernel records
