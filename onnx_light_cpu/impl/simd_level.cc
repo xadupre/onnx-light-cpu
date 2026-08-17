@@ -78,6 +78,26 @@ bool OsSupportsAvx512() {
   return (xcr0 & 0xE6) == 0xE6;
 }
 
+// Check if the OS has enabled AMX tile state (XTILECFG bit 17 and XTILEDATA
+// bit 18 of XCR0). AMX does not require AVX-512 state, so this is independent
+// of ``OsSupportsAvx512``.
+bool OsSupportsAmxTileState() {
+  // OSXSAVE bit in CPUID.01H:ECX[27] gates XGETBV.
+  auto info1 = Cpuid(1);
+  if (!(info1.ecx & (1u << 27)))
+    return false;
+  unsigned long long xcr0;
+#if defined(_MSC_VER)
+  xcr0 = _xgetbv(0);
+#else
+  unsigned int lo, hi;
+  __asm__ __volatile__("xgetbv" : "=a"(lo), "=d"(hi) : "c"(0));
+  xcr0 = (static_cast<unsigned long long>(hi) << 32) | lo;
+#endif
+  // XTILECFG (bit 17) and XTILEDATA (bit 18).
+  return (xcr0 & 0x60000) == 0x60000;
+}
+
 } // namespace
 
 SimdLevel DetectSimdLevel() {
@@ -136,6 +156,31 @@ bool CpuSupportsAvx512Bf16() {
   return has_avx512bf16 && OsSupportsAvx512();
 }
 
+bool CpuSupportsAmxTile() {
+  // AMX-TILE is reported by CPUID.(EAX=7,ECX=0):EDX[24]. Tile registers live in
+  // the AMX XSAVE components, so the OS must also enable tile state (checked by
+  // ``OsSupportsAmxTileState``).
+  const auto info7 = Cpuid(7);
+  const bool has_amx_tile = (info7.edx & (1u << 24)) != 0;
+  return has_amx_tile && OsSupportsAmxTileState();
+}
+
+bool CpuSupportsAmxBf16() {
+  // AMX-BF16 is reported by CPUID.(EAX=7,ECX=0):EDX[22]. It relies on the same
+  // OS-enabled tile state as ``AMX-TILE``.
+  const auto info7 = Cpuid(7);
+  const bool has_amx_bf16 = (info7.edx & (1u << 22)) != 0;
+  return has_amx_bf16 && CpuSupportsAmxTile();
+}
+
+bool CpuSupportsAmxInt8() {
+  // AMX-INT8 is reported by CPUID.(EAX=7,ECX=0):EDX[25]. It relies on the same
+  // OS-enabled tile state as ``AMX-TILE``.
+  const auto info7 = Cpuid(7);
+  const bool has_amx_int8 = (info7.edx & (1u << 25)) != 0;
+  return has_amx_int8 && CpuSupportsAmxTile();
+}
+
 #else // Non-x86
 
 SimdLevel DetectSimdLevel() { return SimdLevel::kNone; }
@@ -149,6 +194,12 @@ bool CpuSupportsF16C() { return false; }
 bool CpuSupportsAvx512Fp16() { return false; }
 
 bool CpuSupportsAvx512Bf16() { return false; }
+
+bool CpuSupportsAmxTile() { return false; }
+
+bool CpuSupportsAmxBf16() { return false; }
+
+bool CpuSupportsAmxInt8() { return false; }
 
 #endif // ONNX_LIGHT_CPU_X86
 

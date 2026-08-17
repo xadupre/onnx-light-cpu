@@ -44,4 +44,21 @@ bool CpuSupportsAvx512Fp16();
 /// operating system.
 bool CpuSupportsAvx512Bf16();
 
+/// Returns whether the AMX tile architecture (``AMX-TILE``) is present and the
+/// operating system has enabled AMX tile state (the ``XTILECFG`` and
+/// ``XTILEDATA`` components of ``XCR0``). On Linux the tile-data component is
+/// only enabled after a successful ``ARCH_REQ_XCOMP_PERM`` request; use the AMX
+/// tile-state lifecycle helper ``AmxTileStateAvailable`` (which performs that
+/// request once) rather than calling this directly when deciding to dispatch an
+/// AMX kernel.
+bool CpuSupportsAmxTile();
+
+/// Returns whether the AMX-BF16 tile multiply instructions are available and
+/// AMX tile state is OS-enabled (see :cpp:func:`CpuSupportsAmxTile`).
+bool CpuSupportsAmxBf16();
+
+/// Returns whether the AMX-INT8 tile multiply instructions are available and
+/// AMX tile state is OS-enabled (see :cpp:func:`CpuSupportsAmxTile`).
+bool CpuSupportsAmxInt8();
+
 } // namespace onnx_light_cpu
