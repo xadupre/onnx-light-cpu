@@ -124,6 +124,10 @@ jobs:
           # importable onnx-light, so those libraries must be on LD_LIBRARY_PATH
           # for the C++ tests (run by ctest below) to start.
           onnx_light_libdir=$(dirname "$(find /tmp/onnx-light/install -name 'liblib_onnx_proto.so' | head -1)")
+          if [ ! -d "${onnx_light_libdir}" ]; then
+            echo "Could not locate liblib_onnx_proto.so under /tmp/onnx-light/install" >&2
+            exit 1
+          fi
           echo "LD_LIBRARY_PATH=${onnx_light_libdir}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
 
       - name: Build extension and run C++ tests via setup.py
