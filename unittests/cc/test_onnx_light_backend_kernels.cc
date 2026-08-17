@@ -226,6 +226,9 @@ TEST(OnnxLightBackendKernels, GemmBenchmarkCorpusIsLazyAndCoversPriorityShapes) 
   bool has_row_bias = false;
   bool has_column_bias = false;
   bool has_matrix_bias = false;
+  bool has_float32 = false;
+  bool has_float16 = false;
+  bool has_bfloat16 = false;
   for (const TestCase &test_case : cases) {
     if (test_case.name.rfind("test_cpu_gemm_", 0) != 0) {
       continue;
@@ -248,8 +251,12 @@ TEST(OnnxLightBackendKernels, GemmBenchmarkCorpusIsLazyAndCoversPriorityShapes) 
     has_row_bias |= test_case.name.find("row_bias") != std::string::npos;
     has_column_bias |= test_case.name.find("column_bias") != std::string::npos;
     has_matrix_bias |= test_case.name.find("matrix_bias") != std::string::npos;
+    has_float32 |= test_case.name.find("_float32_") != std::string::npos;
+    has_float16 |= test_case.name.find("_float16_") != std::string::npos;
+    has_bfloat16 |= test_case.name.find("_bfloat16_") != std::string::npos;
   }
-  EXPECT_EQ(cpu_cases, 16u);
+  // 16 prepared shapes, each registered for float32, float16 and bfloat16.
+  EXPECT_EQ(cpu_cases, 48u);
   EXPECT_TRUE(has_constant_b);
   EXPECT_TRUE(has_direct);
   EXPECT_TRUE(has_skinny_m);
@@ -261,6 +268,9 @@ TEST(OnnxLightBackendKernels, GemmBenchmarkCorpusIsLazyAndCoversPriorityShapes) 
   EXPECT_TRUE(has_row_bias);
   EXPECT_TRUE(has_column_bias);
   EXPECT_TRUE(has_matrix_bias);
+  EXPECT_TRUE(has_float32);
+  EXPECT_TRUE(has_float16);
+  EXPECT_TRUE(has_bfloat16);
 }
 
 } // namespace

@@ -64,11 +64,54 @@ void AddIntAttribute(NodeProto &node, const char *name, int64_t value) {
   attribute->set_i(value);
 }
 
+// Encodes ``values`` as a BFLOAT16 ``Tensor`` (raw 16-bit bit patterns),
+// mirroring how onnx-light's own backend test cases build bfloat16 inputs.
+Tensor MakeBfloat16Tensor(const std::vector<int64_t> &shape, const std::vector<float> &values) {
+  std::vector<std::uint8_t> raw(values.size() * sizeof(std::uint16_t));
+  auto *dst = reinterpret_cast<std::uint16_t *>(raw.data());
+  for (std::size_t i = 0; i < values.size(); ++i) {
+    dst[i] = rt_ns::FloatToBfloat16Bits(values[i]);
+  }
+  return Tensor("", static_cast<std::int32_t>(DataType::BFLOAT16), shape, std::move(raw));
+}
+
+// Builds a ``Tensor`` of the requested element type from ``float`` values so
+// each benchmark shape can be exercised for float32, float16 and bfloat16.
+Tensor MakeGemmTensor(DataType dtype, const std::vector<int64_t> &shape,
+                      const std::vector<float> &values) {
+  switch (dtype) {
+  case DataType::FLOAT:
+    return Tensor::FromFloat("", shape, values);
+  case DataType::FLOAT16:
+    return rt_ns::MakeFloat16Tensor("", shape, values);
+  case DataType::BFLOAT16:
+    return MakeBfloat16Tensor(shape, values);
+  default:
+    return Tensor::FromFloat("", shape, values);
+  }
+}
+
+// Short element-type tag inserted into benchmark case names.
+const char *GemmDtypeSuffix(DataType dtype) {
+  switch (dtype) {
+  case DataType::FLOAT:
+    return "float32";
+  case DataType::FLOAT16:
+    return "float16";
+  case DataType::BFLOAT16:
+    return "bfloat16";
+  default:
+    return "float32";
+  }
+}
+
 void RegisterGemmBenchmark(std::vector<TestCase> &registry,
                            const std::shared_ptr<onnx_light_cpu::GemmKernel> &kernel,
-                           const OpsetId &opset, const std::string &name, int64_t m, int64_t n,
-                           int64_t k, bool trans_a = false, bool trans_b = false,
-                           bool constant_b = false, BiasShape bias_shape = BiasShape::kNone) {
+                           const OpsetId &opset, const std::string &base_name, DataType dtype,
+                           int64_t m, int64_t n, int64_t k, bool trans_a = false,
+                           bool trans_b = false, bool constant_b = false,
+                           BiasShape bias_shape = BiasShape::kNone) {
+  const std::string name = base_name + "_" + GemmDtypeSuffix(dtype) + "_benchmark";
   NodeProto node = MakeGemmNode();
   if (trans_a) {
     AddIntAttribute(node, "transA", 1);
@@ -107,11 +150,11 @@ void RegisterGemmBenchmark(std::vector<TestCase> &registry,
             ? m * n
             : (bias_shape == BiasShape::kRow ? n : (bias_shape == BiasShape::kColumn ? m : 1));
     Expect(registry, std::move(node), name, {opset}, {a_count, b_count, c_count}, {y_count},
-           [kernel, a_shape, b_shape, c_shape, trans_a, trans_b, a_count, b_count,
+           [kernel, dtype, a_shape, b_shape, c_shape, trans_a, trans_b, a_count, b_count,
             c_count]() -> IoData {
-             Tensor a = Tensor::FromFloat("", a_shape, Randn<float>(a_shape, 433 + a_count));
-             Tensor b = Tensor::FromFloat("", b_shape, Randn<float>(b_shape, 434 + b_count));
-             Tensor c = Tensor::FromFloat("", c_shape, Randn<float>(c_shape, 435 + c_count));
+             Tensor a = MakeGemmTensor(dtype, a_shape, Randn<float>(a_shape, 433 + a_count));
+             Tensor b = MakeGemmTensor(dtype, b_shape, Randn<float>(b_shape, 434 + b_count));
+             Tensor c = MakeGemmTensor(dtype, c_shape, Randn<float>(c_shape, 435 + c_count));
              Tensor y = (*kernel)(a, b, c, 1.0f, 1.0f, trans_a, trans_b);
              return IoData{{std::move(a), std::move(b), std::move(c)}, {std::move(y)}};
            });
@@ -120,9 +163,9 @@ void RegisterGemmBenchmark(std::vector<TestCase> &registry,
 
   if (!constant_b) {
     Expect(registry, std::move(node), name, {opset}, {a_count, b_count}, {y_count},
-           [kernel, a_shape, b_shape, trans_a, trans_b, a_count, b_count]() -> IoData {
-             Tensor a = Tensor::FromFloat("", a_shape, Randn<float>(a_shape, 433 + a_count));
-             Tensor b = Tensor::FromFloat("", b_shape, Randn<float>(b_shape, 434 + b_count));
+           [kernel, dtype, a_shape, b_shape, trans_a, trans_b, a_count, b_count]() -> IoData {
+             Tensor a = MakeGemmTensor(dtype, a_shape, Randn<float>(a_shape, 433 + a_count));
+             Tensor b = MakeGemmTensor(dtype, b_shape, Randn<float>(b_shape, 434 + b_count));
              Tensor y = (*kernel)(a, b, 1.0f, trans_a, trans_b);
              return IoData{{std::move(a), std::move(b)}, {std::move(y)}};
            });
@@ -132,10 +175,10 @@ void RegisterGemmBenchmark(std::vector<TestCase> &registry,
   TestCase test_case(name);
   test_case.declared_input_element_counts = {a_count};
   test_case.declared_output_element_counts = {y_count};
-  test_case.build = [kernel, node = std::move(node), name, opset, a_shape, b_shape, trans_a,
+  test_case.build = [kernel, dtype, node = std::move(node), name, opset, a_shape, b_shape, trans_a,
                      trans_b, a_count, b_count]() mutable -> BuiltCase {
-    Tensor a = Tensor::FromFloat("", a_shape, Randn<float>(a_shape, 433 + a_count));
-    Tensor b = Tensor::FromFloat("", b_shape, Randn<float>(b_shape, 434 + b_count));
+    Tensor a = MakeGemmTensor(dtype, a_shape, Randn<float>(a_shape, 433 + a_count));
+    Tensor b = MakeGemmTensor(dtype, b_shape, Randn<float>(b_shape, 434 + b_count));
     Tensor y = (*kernel)(a, b, 1.0f, trans_a, trans_b);
     BuiltCase built = BuildSingleNodeCase(node, {std::move(a), std::move(b)}, {std::move(y)}, name,
                                           {opset}, "onnx-light-cpu-backend-test");
@@ -154,17 +197,6 @@ void RegisterGemmBenchmark(std::vector<TestCase> &registry,
   registry.emplace_back(std::move(test_case));
 }
 
-// Encodes ``values`` as a BFLOAT16 ``Tensor`` (raw 16-bit bit patterns),
-// mirroring how onnx-light's own backend test cases build bfloat16 inputs.
-Tensor MakeBfloat16Tensor(const std::vector<int64_t> &shape, const std::vector<float> &values) {
-  std::vector<std::uint8_t> raw(values.size() * sizeof(std::uint16_t));
-  auto *dst = reinterpret_cast<std::uint16_t *>(raw.data());
-  for (std::size_t i = 0; i < values.size(); ++i) {
-    dst[i] = rt_ns::FloatToBfloat16Bits(values[i]);
-  }
-  return Tensor("", static_cast<std::int32_t>(DataType::BFLOAT16), shape, std::move(raw));
-}
-
 } // namespace
 
 // Gemm — Y = A @ B (default attributes), covering float32, float64, float16,
@@ -174,39 +206,43 @@ void RegisterCpuGemmCases(std::vector<TestCase> &registry, TestMode mode) {
   const auto gemm_kernel = std::make_shared<onnx_light_cpu::GemmKernel>(KernelContext{opset});
 
   if (mode == TestMode::BENCHMARK) {
-    RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_direct_benchmark", 32, 128,
-                          16);
-    RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_tiny_dynamic_benchmark", 1,
-                          64, 64);
-    RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_tiny_constant_b_benchmark",
-                          1, 64, 64, false, false, true);
-    RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_square_128_benchmark", 128,
-                          128, 128);
-    RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_square_512_benchmark", 512,
-                          512, 512);
-    RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_scalar_bias_256_benchmark",
-                          256, 256, 256, false, false, false, BiasShape::kScalar);
-    RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_row_bias_256_benchmark", 256,
-                          256, 256, false, false, false, BiasShape::kRow);
-    RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_column_bias_256_benchmark",
-                          256, 256, 256, false, false, false, BiasShape::kColumn);
-    RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_matrix_bias_256_benchmark",
-                          256, 256, 256, false, false, false, BiasShape::kMatrix);
-    RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_skinny_m_benchmark", 1, 1024,
-                          1024);
-    RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_skinny_n_benchmark", 1024, 1,
-                          1024);
-    RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_large_k_benchmark", 32, 32,
-                          4096);
-    RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_split_k_benchmark", 2, 2,
-                          4096);
-    RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_trans_a_benchmark", 128, 128,
-                          128, true);
-    RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_trans_b_benchmark", 128, 128,
-                          128, false, true);
-    RegisterGemmBenchmark(registry, gemm_kernel, opset,
-                          "test_cpu_gemm_transformer_projection_benchmark", 128, 3072, 768, false,
-                          false, true);
+    // Every prepared code path is exercised for each element type the
+    // ``GemmKernel`` implements (float32, float16, bfloat16) so the benchmark
+    // corpus measures the fp16/bf16 widen/round-trip overhead too.
+    for (const DataType dtype : {DataType::FLOAT, DataType::FLOAT16, DataType::BFLOAT16}) {
+      RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_direct", dtype, 32, 128,
+                            16);
+      RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_tiny_dynamic", dtype, 1,
+                            64, 64);
+      RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_tiny_constant_b", dtype, 1,
+                            64, 64, false, false, true);
+      RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_square_128", dtype, 128,
+                            128, 128);
+      RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_square_512", dtype, 512,
+                            512, 512);
+      RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_scalar_bias_256", dtype,
+                            256, 256, 256, false, false, false, BiasShape::kScalar);
+      RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_row_bias_256", dtype, 256,
+                            256, 256, false, false, false, BiasShape::kRow);
+      RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_column_bias_256", dtype,
+                            256, 256, 256, false, false, false, BiasShape::kColumn);
+      RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_matrix_bias_256", dtype,
+                            256, 256, 256, false, false, false, BiasShape::kMatrix);
+      RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_skinny_m", dtype, 1, 1024,
+                            1024);
+      RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_skinny_n", dtype, 1024, 1,
+                            1024);
+      RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_large_k", dtype, 32, 32,
+                            4096);
+      RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_split_k", dtype, 2, 2,
+                            4096);
+      RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_trans_a", dtype, 128, 128,
+                            128, true);
+      RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_trans_b", dtype, 128, 128,
+                            128, false, true);
+      RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_transformer_projection",
+                            dtype, 128, 3072, 768, false, false, true);
+    }
     return;
   }
 
