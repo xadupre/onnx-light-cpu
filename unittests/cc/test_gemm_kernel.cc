@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "onnx_light_cpu/impl/math/gemm/amx/gemm_amx_tile.h"
 #include "onnx_light_cpu/impl/math/gemm/gemm_common.h"
 #include "onnx_light_cpu/impl/math/half_conversion.h"
 #include "onnx_light_cpu/impl/math/math_kernels.h"
@@ -886,6 +887,19 @@ TEST(GemmBf16Native, Avx512Bf16KernelMatchesReferenceWhenSupported) {
   CheckGemmHalf(true, false, false, 20, 48, 40, false, 601); // N == 3 * 16, even K
   CheckGemmHalf(true, false, false, 20, 35, 41, true, 611);  // N tail, odd K
   CheckGemmHalf(true, true, false, 17, 19, 33, true, 621);   // trans_a, N tail, odd K
+}
+
+TEST(GemmBf16Native, AmxBf16KernelMatchesReferenceWhenSupported) {
+  if (!onnx_light_cpu::CpuSupportsAmxBf16() || !onnx_light_cpu::AmxTileStateAvailable()) {
+    GTEST_SKIP() << "CPU does not support AMX-BF16 tile state";
+  }
+  // On capable hardware the public BFLOAT16 GEMM path dispatches these general
+  // shapes to the native AMX-BF16 tile kernel; assert it matches the reference
+  // for a full 16x16 tile, the row/column/K tails that must be zero-padded into
+  // the fixed tiles, and a transposed A.
+  CheckGemmHalf(true, false, false, 32, 32, 32, false, 701); // exact tiles, even K
+  CheckGemmHalf(true, false, false, 20, 35, 41, true, 711);  // row/col/K tails
+  CheckGemmHalf(true, true, false, 17, 19, 33, true, 721);   // trans_a, tails, odd K
 }
 
 TEST(GemmHalf, EmptyKGivesBiasOnly) {

@@ -109,6 +109,9 @@ constexpr std::size_t kGemmIntelAVX2MR = 5;
 constexpr std::size_t kGemmZenAVX2MR = 6;
 constexpr std::size_t kGemmNeonMR = 6;
 constexpr std::size_t kGemmSveMR = 4;
+// AMX tiles are at most 16 rows tall, so the AMX-BF16 kernel register-blocks a
+// full 16-row output tile (Roadmap PR07.6).
+constexpr std::size_t kGemmAmxBf16MR = 16;
 
 // Current cache-blocking dimensions shared by the driver and prepared plans.
 constexpr std::size_t kGemmTileM = 64;

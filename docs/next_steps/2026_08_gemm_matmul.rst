@@ -404,7 +404,12 @@ extra full-matrix memory passes.
   ``AmxTileStateAvailable``, the validating ``AmxTileConfig`` builder, and the
   per-worker ``AmxTileScope`` (``LDTILECFG``/``TILERELEASE``) with a safe
   no-op fallback -- with no GEMM kernel yet; the AMX-BF16 kernel is PR07.6 and
-  AMX-INT8 is PR09.4.)*
+  AMX-INT8 is PR09.4. Roadmap PR07.6 then adds the native AMX-BF16 GEMM kernel:
+  a ``tdpbf16ps`` (``_tile_dpbf16ps``) tile micro-kernel that reuses the PR07.5
+  lifecycle, keeps both operands in BFLOAT16 with a VNNI-packed ``B`` tile, and
+  is dispatched ahead of AVX-512BF16 for non-transposed ``B`` when
+  ``CpuSupportsAmxBf16()`` and ``AmxTileStateAvailable()`` both report the ISA;
+  it falls back to AVX-512BF16 or the converting float32 path otherwise.)*
 * Implement equivalent ARM FP16/BF16 and dot-product paths.
 * For INT8, fuse zero-point correction and requantization into packing and the
   epilogue. Accumulate in INT32 and define overflow behavior through the ONNX
@@ -759,10 +764,10 @@ require measurements on dedicated hardware.
        performance with no priority shape below 0.9x where the type is
        supported.
      - P3-P4.
-     - PR07.0, PR07.1, PR07.2, PR07.3, PR07.4, and PR07.5 are implemented. The
-       remaining work is split by execution path, ISA, and type below;
-       hardware-specific lanes may proceed in parallel after their shared
-       semantic dependency.
+     - PR07.0, PR07.1, PR07.2, PR07.3, PR07.4, PR07.5, and PR07.6 are
+       implemented. The remaining work is split by execution path, ISA, and
+       type below; hardware-specific lanes may proceed in parallel after their
+       shared semantic dependency.
      - Roadmap PR07.0 through PR10.5 below.
    * - P6
      - ``AttentionPlan`` and materialized tensor correctness implementation.
@@ -1102,7 +1107,27 @@ fallbacks are ordered. Completed rows remain visible so scope is not lost.
      - The AMX-BF16 kernel reuses PR07.5, passes differential tests on native
        hardware, and falls back to AVX-512BF16. No INT8 work is included.
      - PR07.4, PR07.5
-     - Pending
+     - Implemented. A dedicated ``gemm/amx/gemm_amx_bf16`` translation unit
+       compiled with ``-mamx-tile -mamx-bf16`` (guarded by
+       ``ONNX_LIGHT_CPU_HAVE_AMX_BF16``) adds ``GemmMicroKernel_AMXBF16``, a
+       native member of the BFLOAT16 micro-kernel family sharing the
+       ``GemmBf16MicroKernel`` signature so the PR07.4
+       ``GemmBf16NativeGeneral`` driver, BFLOAT16 ``A`` packing (including
+       ``trans_a``), and column-tail handling are reused. The kernel configures
+       three AMX tiles through the PR07.5 lifecycle (``AmxTileConfig`` /
+       ``AmxTileScope``) and reduces ``K`` with the ``tdpbf16ps``
+       (``_tile_dpbf16ps``) dot-product: an ``mr x 32`` BFLOAT16 ``A`` tile times
+       a 16-pair by 16-column VNNI-packed BFLOAT16 ``B`` tile accumulating a
+       16x16 float32 ``C`` tile, with every partial ``mr``/``K``/column block
+       zero-padded into the fixed 16x16 tiles so a single tile configuration
+       handles all shapes. ``GemmHalfPlanned<kGeneral>`` dispatches here ahead of
+       AVX-512BF16 for non-transposed ``B`` when ``CpuSupportsAmxBf16()`` and
+       ``AmxTileStateAvailable()`` both report the ISA, and the kernel degrades
+       to the shared scalar BFLOAT16 member when tile state is unavailable. New
+       ``GemmBf16Native.AmxBf16KernelMatchesReferenceWhenSupported`` differential
+       tests cover the full 16x16 tile, the zero-padded row/column/K tails, and a
+       transposed ``A`` on capable hardware. The dedicated-machine ONNX Runtime
+       comparison is tracked by PR10.5.
    * - Roadmap PR08.1
      - ARM FP16/BF16 panel conversion.
      - NEON vectorizes conversion while packing with exact tails and scalar

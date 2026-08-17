@@ -64,6 +64,11 @@
 #include "onnx_light_cpu/impl/math/gemm/avx512bf16/gemm_kernel_avx512bf16.h"
 #endif
 
+#ifdef ONNX_LIGHT_CPU_HAVE_AMX_BF16
+#include "onnx_light_cpu/impl/math/gemm/amx/gemm_amx_bf16.h"
+#include "onnx_light_cpu/impl/math/gemm/amx/gemm_amx_tile.h"
+#endif
+
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
@@ -1445,6 +1450,21 @@ void GemmHalfPlanned(bool is_bfloat16, bool trans_a, bool trans_b, std::size_t M
   if (is_bfloat16) {
     const auto *a = reinterpret_cast<const BFloat16Source *>(A);
     const auto *b = reinterpret_cast<const BFloat16Source *>(B);
+#ifdef ONNX_LIGHT_CPU_HAVE_AMX_BF16
+    // Roadmap PR07.6: prefer the native AMX-BF16 tile kernel when the CPU
+    // supports AMX-BF16 and the OS has enabled tile state. Like the AVX-512BF16
+    // path it keeps both operands in BFLOAT16 and requires a non-transposed
+    // ``B``; it falls back to the AVX-512BF16 kernel (below) or the converting
+    // path for every other shape or ISA.
+    if constexpr (Algorithm == GemmAlgorithm::kGeneral) {
+      static const bool use_amx_bf16 = CpuSupportsAmxBf16() && AmxTileStateAvailable();
+      if (use_amx_bf16 && !trans_b) {
+        GemmBf16NativeGeneral(trans_a, M, N, K, alpha, A, B, Y, &GemmMicroKernel_AMXBF16,
+                              kGemmAmxBf16MR);
+        return;
+      }
+    }
+#endif
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512BF16
     // Roadmap PR07.4: when the CPU natively supports AVX-512BF16, run the
     // general BFLOAT16 algorithm through the native ``vdpbf16ps`` micro-kernel,
