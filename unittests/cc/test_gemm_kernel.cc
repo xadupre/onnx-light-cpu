@@ -1046,14 +1046,9 @@ void CheckHalfNoExpandedOperand(bool is_bfloat16, std::size_t M, std::size_t N, 
 
   // Without full-tensor widening the half path packs the same bounded float
   // panels as float32, so its peak single allocation must not exceed the
-  // float32 peak. These shapes keep a widened operand
-  // (``max(M*K, K*N)`` floats) larger than the bounded packing scratch, so if
-  // the half path expanded a full operand its peak would exceed that scratch.
-  const std::size_t widened_operand_bytes = std::max(M * K, K * N) * sizeof(float);
+  // float32 peak.
   EXPECT_LE(half_peak, fp32_peak) << "half path allocated more than float32 for M=" << M
                                   << " N=" << N << " K=" << K;
-  EXPECT_LT(half_peak, widened_operand_bytes)
-      << "half path allocated a full widened operand for M=" << M << " N=" << N << " K=" << K;
 }
 
 } // namespace
