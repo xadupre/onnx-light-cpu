@@ -111,7 +111,7 @@ def make_model(tensor_proto_dtype):
         ],
         [helper.make_tensor_value_info("Y", tensor_proto_dtype, ["M", "N"])],
     )
-    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 18)])
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 18)], ir_version=13)
     checker.check_model(model)
     return model
 

@@ -232,7 +232,7 @@ def _build_case(case: GemmCase, dtype_name: str, rng: Any) -> tuple[bytes, dict[
         [helper.make_tensor_value_info("Y", tensor_type, (case.m, case.n))],
         initializer=initializers,
     )
-    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 18)])
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 18)], ir_version=13)
     checker.check_model(model)
     return model.SerializeToString(), feeds
 
