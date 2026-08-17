@@ -33,7 +33,8 @@ separate model/session for the built-in curve and run it *before*
 example does. Since the built-in kernel is a plain reference implementation
 with no SIMD or blocking/packing, its cost grows much faster than the other
 three back-ends; to keep the benchmark's runtime reasonable it is only
-measured up to 512 while the accelerated back-ends continue to 4096.
+measured on the three smallest sizes while the accelerated back-ends continue
+to 4096.
 """
 
 # %%
@@ -143,10 +144,10 @@ def measure_together(*funcs, repeat, warmup=3):
 # A dedicated model/session is run once while onnx-light-cpu's accelerated
 # ``Gemm`` kernel has not been installed yet, so it resolves and caches
 # onnx-light's own built-in reference kernel. It is timed below alongside the
-# other runtimes up to size 512.
+# other runtimes on the three smallest sizes.
 
 size_grid = [16, 32, 64, 128, 256, 512, 1024, 2048, 4096]
-alone_sizes = [16, 32, 64, 128, 256, 512]
+alone_sizes = [16, 32, 64]
 rng = np.random.default_rng(0)
 
 alone_model = make_gemm_model()
