@@ -16,7 +16,10 @@
 #include <immintrin.h>
 #endif
 
-#if defined(__linux__)
+// ``arch_prctl`` (used to request the AMX tile-data XSAVE permission) is an
+// x86-only syscall, so the permission path is limited to x86 Linux builds.
+#if defined(__linux__) && (defined(__x86_64__) || defined(__i386__))
+#define ONNX_LIGHT_CPU_AMX_REQUEST_PERM 1
 #include <sys/syscall.h>
 #include <unistd.h>
 #endif
@@ -25,7 +28,7 @@ namespace onnx_light_cpu {
 
 namespace {
 
-#if defined(__linux__)
+#if defined(ONNX_LIGHT_CPU_AMX_REQUEST_PERM)
 // arch_prctl request codes and XSAVE feature indices for AMX tile data. These
 // are stable ABI constants but may be missing from older <asm/prctl.h>, so they
 // are defined locally to avoid a hard header dependency.
@@ -61,7 +64,7 @@ bool AmxTileConfigSetTile(AmxTileConfig &config, std::size_t index, std::size_t 
 
 bool AmxTileStateAvailable() {
   static const bool available = [] {
-#if defined(__linux__)
+#if defined(ONNX_LIGHT_CPU_AMX_REQUEST_PERM)
     // The XTILEDATA component is disabled by default on Linux and must be
     // requested once per process before ``CpuSupportsAmxTile`` can observe it
     // in XCR0. The request is a no-op on CPUs without AMX.
