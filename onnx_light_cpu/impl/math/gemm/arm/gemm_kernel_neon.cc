@@ -258,6 +258,142 @@ void GemmConvertBFloat16ToFloat32_NEON(const std::uint16_t *src, float *dst, std
   }
 }
 
+namespace {
+
+// Widens four contiguous BFLOAT16 patterns to a float32 vector with the
+// baseline NEON zero-extend / 16-bit shift used by ``GemmConvertBFloat16To...``.
+inline float32x4_t WidenBf16x4_NEON(const std::uint16_t *src) {
+  const uint16x4_t halves = vld1_u16(src);
+  return vreinterpretq_f32_u32(vshlq_n_u32(vmovl_u16(halves), 16));
+}
+
+// Native BFLOAT16 micro-kernel body (Roadmap PR08.2), register-blocked over
+// ``MR`` rows. ``Bmat`` and ``Apack`` stay BFLOAT16 to the register file and the
+// eight-/four-column ``B`` rows are widened on the fly while the dot products
+// accumulate in float32; ``alpha`` is applied in the epilogue and the column
+// remainder (< 4) reuses the scalar BFLOAT16 member so the result is identical
+// to the widen-then-float32 reference.
+template <std::size_t MR>
+void GemmMicroKernel_NEON_BF16Impl(std::size_t nb, std::size_t K, float alpha, float beta,
+                                   const std::uint16_t *Bmat, std::size_t N, const float *Crow_base,
+                                   std::size_t Cstride, float *Yrow_base, std::size_t Ystride,
+                                   std::size_t n0, GemmAccumMode mode, const std::uint16_t *Apack) {
+  static_assert(MR >= 1 && MR <= kGemmNeonMR);
+  const float32x4_t valpha = vdupq_n_f32(alpha);
+  const float32x4_t vbeta = vdupq_n_f32(beta);
+  const bool alpha_is_one = alpha == 1.0f;
+  const bool beta_is_one = beta == 1.0f;
+  std::size_t n = 0;
+  for (; n + 8 <= nb; n += 8) {
+    float32x4_t acc0[MR];
+    float32x4_t acc1[MR];
+    for (std::size_t r = 0; r < MR; ++r) {
+      acc0[r] = vdupq_n_f32(0.0f);
+      acc1[r] = vdupq_n_f32(0.0f);
+    }
+    const auto accumulate_k = [&](std::size_t k) {
+      const std::uint16_t *Brow = Bmat + k * N + n0 + n;
+      const float32x4_t vb0 = WidenBf16x4_NEON(Brow);
+      const float32x4_t vb1 = WidenBf16x4_NEON(Brow + 4);
+      if (k + kPrefetchDistanceK < K) {
+        Prefetch(Brow + kPrefetchDistanceK * N);
+      }
+      for (std::size_t r = 0; r < MR; ++r) {
+        const float a = detail::Bfloat16BitsToFloat(Apack[r * K + k]);
+        acc0[r] = vfmaq_n_f32(acc0[r], vb0, a);
+        acc1[r] = vfmaq_n_f32(acc1[r], vb1, a);
+      }
+    };
+    std::size_t k = 0;
+    for (; k + 4 <= K; k += 4) {
+      accumulate_k(k);
+      accumulate_k(k + 1);
+      accumulate_k(k + 2);
+      accumulate_k(k + 3);
+    }
+    for (; k < K; ++k) {
+      accumulate_k(k);
+    }
+    for (std::size_t r = 0; r < MR; ++r) {
+      float *Yrow = Yrow_base + r * Ystride + n0 + n;
+      float32x4_t res0 = alpha_is_one ? acc0[r] : vmulq_f32(valpha, acc0[r]);
+      float32x4_t res1 = alpha_is_one ? acc1[r] : vmulq_f32(valpha, acc1[r]);
+      if (mode == GemmAccumMode::kInitBias) {
+        const float *Crow = Crow_base + r * Cstride + n0 + n;
+        const float32x4_t vc0 = vld1q_f32(Crow);
+        const float32x4_t vc1 = vld1q_f32(Crow + 4);
+        res0 = vaddq_f32(res0, beta_is_one ? vc0 : vmulq_f32(vbeta, vc0));
+        res1 = vaddq_f32(res1, beta_is_one ? vc1 : vmulq_f32(vbeta, vc1));
+      } else if (mode == GemmAccumMode::kAccumulate) {
+        res0 = vaddq_f32(res0, vld1q_f32(Yrow));
+        res1 = vaddq_f32(res1, vld1q_f32(Yrow + 4));
+      }
+      vst1q_f32(Yrow, res0);
+      vst1q_f32(Yrow + 4, res1);
+    }
+  }
+  for (; n + 4 <= nb; n += 4) {
+    float32x4_t acc[MR];
+    for (std::size_t r = 0; r < MR; ++r) {
+      acc[r] = vdupq_n_f32(0.0f);
+    }
+    for (std::size_t k = 0; k < K; ++k) {
+      const float32x4_t vb = WidenBf16x4_NEON(Bmat + k * N + n0 + n);
+      for (std::size_t r = 0; r < MR; ++r) {
+        acc[r] = vfmaq_n_f32(acc[r], vb, detail::Bfloat16BitsToFloat(Apack[r * K + k]));
+      }
+    }
+    for (std::size_t r = 0; r < MR; ++r) {
+      float *Yrow = Yrow_base + r * Ystride + n0 + n;
+      float32x4_t res = alpha_is_one ? acc[r] : vmulq_f32(valpha, acc[r]);
+      if (mode == GemmAccumMode::kInitBias) {
+        const float32x4_t vc = vld1q_f32(Crow_base + r * Cstride + n0 + n);
+        res = vaddq_f32(res, beta_is_one ? vc : vmulq_f32(vbeta, vc));
+      } else if (mode == GemmAccumMode::kAccumulate) {
+        res = vaddq_f32(res, vld1q_f32(Yrow));
+      }
+      vst1q_f32(Yrow, res);
+    }
+  }
+  if (n < nb) {
+    GemmMicroKernel_ScalarBf16(MR, nb - n, K, alpha, beta, Bmat, N, Crow_base, Cstride, Yrow_base,
+                               Ystride, n0 + n, mode, Apack);
+  }
+}
+
+} // namespace
+
+void GemmMicroKernel_NEON_BF16(std::size_t mr, std::size_t nb, std::size_t K, float alpha,
+                               float beta, const std::uint16_t *Bmat, std::size_t N,
+                               const float *Crow_base, std::size_t Cstride, float *Yrow_base,
+                               std::size_t Ystride, std::size_t n0, GemmAccumMode mode,
+                               const std::uint16_t *Apack) {
+  switch (mr) {
+  case 1:
+    return GemmMicroKernel_NEON_BF16Impl<1>(nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
+                                            Yrow_base, Ystride, n0, mode, Apack);
+  case 2:
+    return GemmMicroKernel_NEON_BF16Impl<2>(nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
+                                            Yrow_base, Ystride, n0, mode, Apack);
+  case 3:
+    return GemmMicroKernel_NEON_BF16Impl<3>(nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
+                                            Yrow_base, Ystride, n0, mode, Apack);
+  case 4:
+    return GemmMicroKernel_NEON_BF16Impl<4>(nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
+                                            Yrow_base, Ystride, n0, mode, Apack);
+  case 5:
+    return GemmMicroKernel_NEON_BF16Impl<5>(nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
+                                            Yrow_base, Ystride, n0, mode, Apack);
+  case 6:
+    return GemmMicroKernel_NEON_BF16Impl<6>(nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
+                                            Yrow_base, Ystride, n0, mode, Apack);
+  default:
+    break;
+  }
+  GemmMicroKernel_ScalarBf16(mr, nb, K, alpha, beta, Bmat, N, Crow_base, Cstride, Yrow_base,
+                             Ystride, n0, mode, Apack);
+}
+
 #ifdef ONNX_LIGHT_CPU_HAVE_NEON_FP16
 void GemmConvertFloat16ToFloat32_NEON(const std::uint16_t *src, float *dst, std::size_t n) {
   std::size_t i = 0;
@@ -269,6 +405,141 @@ void GemmConvertFloat16ToFloat32_NEON(const std::uint16_t *src, float *dst, std:
   for (; i < n; ++i) {
     dst[i] = detail::Float16BitsToFloat(src[i]);
   }
+}
+
+namespace {
+
+// Widens four contiguous FLOAT16 patterns to a float32 vector with the NEON
+// ``vcvt_f32_f16`` (``FCVTL``) instruction, matching the scalar bit decode.
+inline float32x4_t WidenFp16x4_NEON(const std::uint16_t *src) {
+  return vcvt_f32_f16(vld1_f16(reinterpret_cast<const float16_t *>(src)));
+}
+
+// Native FLOAT16 micro-kernel body (Roadmap PR08.2), register-blocked over
+// ``MR`` rows. It mirrors ``GemmMicroKernel_NEON_BF16Impl`` but widens the
+// ``B`` rows with ``vcvt_f32_f16`` (``FCVTL``); ``Bmat`` and ``Apack`` stay
+// FLOAT16 to the register file, the dot products accumulate in float32, and the
+// column remainder (< 4) reuses the scalar FLOAT16 member.
+template <std::size_t MR>
+void GemmMicroKernel_NEON_FP16Impl(std::size_t nb, std::size_t K, float alpha, float beta,
+                                   const std::uint16_t *Bmat, std::size_t N, const float *Crow_base,
+                                   std::size_t Cstride, float *Yrow_base, std::size_t Ystride,
+                                   std::size_t n0, GemmAccumMode mode, const std::uint16_t *Apack) {
+  static_assert(MR >= 1 && MR <= kGemmNeonMR);
+  const float32x4_t valpha = vdupq_n_f32(alpha);
+  const float32x4_t vbeta = vdupq_n_f32(beta);
+  const bool alpha_is_one = alpha == 1.0f;
+  const bool beta_is_one = beta == 1.0f;
+  std::size_t n = 0;
+  for (; n + 8 <= nb; n += 8) {
+    float32x4_t acc0[MR];
+    float32x4_t acc1[MR];
+    for (std::size_t r = 0; r < MR; ++r) {
+      acc0[r] = vdupq_n_f32(0.0f);
+      acc1[r] = vdupq_n_f32(0.0f);
+    }
+    const auto accumulate_k = [&](std::size_t k) {
+      const std::uint16_t *Brow = Bmat + k * N + n0 + n;
+      const float16x8_t halves = vld1q_f16(reinterpret_cast<const float16_t *>(Brow));
+      const float32x4_t vb0 = vcvt_f32_f16(vget_low_f16(halves));
+      const float32x4_t vb1 = vcvt_f32_f16(vget_high_f16(halves));
+      if (k + kPrefetchDistanceK < K) {
+        Prefetch(Brow + kPrefetchDistanceK * N);
+      }
+      for (std::size_t r = 0; r < MR; ++r) {
+        const float a = detail::Float16BitsToFloat(Apack[r * K + k]);
+        acc0[r] = vfmaq_n_f32(acc0[r], vb0, a);
+        acc1[r] = vfmaq_n_f32(acc1[r], vb1, a);
+      }
+    };
+    std::size_t k = 0;
+    for (; k + 4 <= K; k += 4) {
+      accumulate_k(k);
+      accumulate_k(k + 1);
+      accumulate_k(k + 2);
+      accumulate_k(k + 3);
+    }
+    for (; k < K; ++k) {
+      accumulate_k(k);
+    }
+    for (std::size_t r = 0; r < MR; ++r) {
+      float *Yrow = Yrow_base + r * Ystride + n0 + n;
+      float32x4_t res0 = alpha_is_one ? acc0[r] : vmulq_f32(valpha, acc0[r]);
+      float32x4_t res1 = alpha_is_one ? acc1[r] : vmulq_f32(valpha, acc1[r]);
+      if (mode == GemmAccumMode::kInitBias) {
+        const float *Crow = Crow_base + r * Cstride + n0 + n;
+        const float32x4_t vc0 = vld1q_f32(Crow);
+        const float32x4_t vc1 = vld1q_f32(Crow + 4);
+        res0 = vaddq_f32(res0, beta_is_one ? vc0 : vmulq_f32(vbeta, vc0));
+        res1 = vaddq_f32(res1, beta_is_one ? vc1 : vmulq_f32(vbeta, vc1));
+      } else if (mode == GemmAccumMode::kAccumulate) {
+        res0 = vaddq_f32(res0, vld1q_f32(Yrow));
+        res1 = vaddq_f32(res1, vld1q_f32(Yrow + 4));
+      }
+      vst1q_f32(Yrow, res0);
+      vst1q_f32(Yrow + 4, res1);
+    }
+  }
+  for (; n + 4 <= nb; n += 4) {
+    float32x4_t acc[MR];
+    for (std::size_t r = 0; r < MR; ++r) {
+      acc[r] = vdupq_n_f32(0.0f);
+    }
+    for (std::size_t k = 0; k < K; ++k) {
+      const float32x4_t vb = WidenFp16x4_NEON(Bmat + k * N + n0 + n);
+      for (std::size_t r = 0; r < MR; ++r) {
+        acc[r] = vfmaq_n_f32(acc[r], vb, detail::Float16BitsToFloat(Apack[r * K + k]));
+      }
+    }
+    for (std::size_t r = 0; r < MR; ++r) {
+      float *Yrow = Yrow_base + r * Ystride + n0 + n;
+      float32x4_t res = alpha_is_one ? acc[r] : vmulq_f32(valpha, acc[r]);
+      if (mode == GemmAccumMode::kInitBias) {
+        const float32x4_t vc = vld1q_f32(Crow_base + r * Cstride + n0 + n);
+        res = vaddq_f32(res, beta_is_one ? vc : vmulq_f32(vbeta, vc));
+      } else if (mode == GemmAccumMode::kAccumulate) {
+        res = vaddq_f32(res, vld1q_f32(Yrow));
+      }
+      vst1q_f32(Yrow, res);
+    }
+  }
+  if (n < nb) {
+    GemmMicroKernel_ScalarFp16(MR, nb - n, K, alpha, beta, Bmat, N, Crow_base, Cstride, Yrow_base,
+                               Ystride, n0 + n, mode, Apack);
+  }
+}
+
+} // namespace
+
+void GemmMicroKernel_NEON_FP16(std::size_t mr, std::size_t nb, std::size_t K, float alpha,
+                               float beta, const std::uint16_t *Bmat, std::size_t N,
+                               const float *Crow_base, std::size_t Cstride, float *Yrow_base,
+                               std::size_t Ystride, std::size_t n0, GemmAccumMode mode,
+                               const std::uint16_t *Apack) {
+  switch (mr) {
+  case 1:
+    return GemmMicroKernel_NEON_FP16Impl<1>(nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
+                                            Yrow_base, Ystride, n0, mode, Apack);
+  case 2:
+    return GemmMicroKernel_NEON_FP16Impl<2>(nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
+                                            Yrow_base, Ystride, n0, mode, Apack);
+  case 3:
+    return GemmMicroKernel_NEON_FP16Impl<3>(nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
+                                            Yrow_base, Ystride, n0, mode, Apack);
+  case 4:
+    return GemmMicroKernel_NEON_FP16Impl<4>(nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
+                                            Yrow_base, Ystride, n0, mode, Apack);
+  case 5:
+    return GemmMicroKernel_NEON_FP16Impl<5>(nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
+                                            Yrow_base, Ystride, n0, mode, Apack);
+  case 6:
+    return GemmMicroKernel_NEON_FP16Impl<6>(nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
+                                            Yrow_base, Ystride, n0, mode, Apack);
+  default:
+    break;
+  }
+  GemmMicroKernel_ScalarFp16(mr, nb, K, alpha, beta, Bmat, N, Crow_base, Cstride, Yrow_base,
+                             Ystride, n0, mode, Apack);
 }
 #endif
 

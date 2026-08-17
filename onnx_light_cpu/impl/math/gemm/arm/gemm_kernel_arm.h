@@ -47,6 +47,19 @@ void GemmMicroKernel_NEON_F64(std::size_t mr, std::size_t nb, std::size_t K, dou
 // this translation unit.
 void GemmConvertBFloat16ToFloat32_NEON(const std::uint16_t *src, float *dst, std::size_t n);
 
+// Native BFLOAT16 member of the GEMM micro-kernel family (Roadmap PR08.2). It
+// matches ``GemmBf16MicroKernel``: ``Bmat`` and ``Apack`` stay BFLOAT16 to the
+// register file and each eight-column ``B`` row is widened on the fly with the
+// baseline NEON zero-extend / 16-bit shift while the dot products accumulate in
+// float32, so no full-tensor widening buffer is needed. The scalar column tail
+// reuses ``GemmMicroKernel_ScalarBf16``. Only requires baseline NEON, so it is
+// always available in this translation unit.
+void GemmMicroKernel_NEON_BF16(std::size_t mr, std::size_t nb, std::size_t K, float alpha,
+                               float beta, const std::uint16_t *Bmat, std::size_t N,
+                               const float *Crow_base, std::size_t Cstride, float *Yrow_base,
+                               std::size_t Ystride, std::size_t n0, GemmAccumMode mode,
+                               const std::uint16_t *Apack);
+
 #ifdef ONNX_LIGHT_CPU_HAVE_NEON_FP16
 // Converts ``n`` contiguous FLOAT16 patterns to float32 with the NEON
 // ``vcvt_f32_f16`` (``FCVTL``) instruction, eight at a time, with an exact
@@ -54,6 +67,20 @@ void GemmConvertBFloat16ToFloat32_NEON(const std::uint16_t *src, float *dst, std
 // FP16 vector load/convert intrinsics, so it is only declared/defined when the
 // translation unit is compiled with support for them.
 void GemmConvertFloat16ToFloat32_NEON(const std::uint16_t *src, float *dst, std::size_t n);
+
+// Native FLOAT16 member of the GEMM micro-kernel family (Roadmap PR08.2). It
+// matches ``GemmFp16MicroKernel``: ``Bmat`` and ``Apack`` stay FLOAT16 to the
+// register file and each eight-column ``B`` row is widened on the fly with the
+// NEON ``vcvt_f32_f16`` (``FCVTL``) instruction while the dot products
+// accumulate in float32, so no full-tensor widening buffer is needed. The
+// scalar column tail reuses ``GemmMicroKernel_ScalarFp16``. Requires the FP16
+// vector load/convert intrinsics, so it is only declared/defined when the
+// translation unit is compiled with support for them.
+void GemmMicroKernel_NEON_FP16(std::size_t mr, std::size_t nb, std::size_t K, float alpha,
+                               float beta, const std::uint16_t *Bmat, std::size_t N,
+                               const float *Crow_base, std::size_t Cstride, float *Yrow_base,
+                               std::size_t Ystride, std::size_t n0, GemmAccumMode mode,
+                               const std::uint16_t *Apack);
 #endif
 #endif
 
