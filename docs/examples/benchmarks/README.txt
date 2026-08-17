@@ -18,9 +18,11 @@ live in ``onnx-light``'s C++ backend-test registry.
 
 The Gemm corpus contains shape-forced cases for every prepared algorithm:
 ``direct`` (small K), ``skinny_m``, ``skinny_n``, ``split_k`` (large K with a
-small output), and square/transformer shapes (general five-loop). Run the
-recorder in separate processes to compare one thread with the configured pool
-while keeping the same binary and inputs:
+small output), and square/transformer shapes (general five-loop). Every shape
+is registered for each element type the ``GemmKernel`` implements -- ``float32``,
+``float16`` and ``bfloat16`` -- so the corpus also measures the fp16/bf16
+widen/round-trip overhead. Run the recorder in separate processes to compare one
+thread with the configured pool while keeping the same binary and inputs:
 
 .. code-block:: bash
 
