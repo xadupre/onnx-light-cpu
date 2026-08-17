@@ -80,6 +80,8 @@ Tensor MakeBfloat16Tensor(const std::vector<int64_t> &shape, const std::vector<f
 Tensor MakeGemmTensor(DataType dtype, const std::vector<int64_t> &shape,
                       const std::vector<float> &values) {
   switch (dtype) {
+  case DataType::FLOAT:
+    return Tensor::FromFloat("", shape, values);
   case DataType::FLOAT16:
     return rt_ns::MakeFloat16Tensor("", shape, values);
   case DataType::BFLOAT16:
@@ -92,6 +94,8 @@ Tensor MakeGemmTensor(DataType dtype, const std::vector<int64_t> &shape,
 // Short element-type tag inserted into benchmark case names.
 const char *GemmDtypeSuffix(DataType dtype) {
   switch (dtype) {
+  case DataType::FLOAT:
+    return "float32";
   case DataType::FLOAT16:
     return "float16";
   case DataType::BFLOAT16:
