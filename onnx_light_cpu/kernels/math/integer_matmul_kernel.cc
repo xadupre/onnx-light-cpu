@@ -4,6 +4,7 @@
 
 #include "onnx_light_cpu/kernels/math/integer_matmul_kernel.h"
 
+#include "onnx_light_cpu/impl/math/gemm/vnni/integer_gemm_vnni.h"
 #include "onnx_light_cpu/kernels/kernel_usage.h"
 
 #include "onnx_core/runtime/kernels/cast_helper.h"
@@ -160,8 +161,7 @@ std::vector<int32_t> ReadZeroPoints(const Tensor *tensor, int32_t expected_type,
   return values;
 }
 
-template <typename Fn>
-void ForEachOutput(const Tensor &a, const Tensor &b, const MatMulLayout &layout, Fn fn) {
+template <typename Fn> void ForEachBatch(const MatMulLayout &layout, Fn fn) {
   const Shape a_prefix(std::vector<int64_t>(layout.a_shape.begin(), layout.a_shape.end() - 2));
   const Shape b_prefix(std::vector<int64_t>(layout.b_shape.begin(), layout.b_shape.end() - 2));
   const std::size_t batch_rank = layout.output_prefix.size();
@@ -184,6 +184,21 @@ void ForEachOutput(const Tensor &a, const Tensor &b, const MatMulLayout &layout,
       output_base += coordinate * layout.output_strides[dimension];
     }
 
+    fn(a_base, b_base, output_base);
+
+    for (std::size_t dimension = batch_rank; dimension-- > 0;) {
+      if (++batch_index[dimension] < layout.output_prefix[dimension]) {
+        break;
+      }
+      batch_index[dimension] = 0;
+    }
+  }
+}
+
+template <typename Fn>
+void ForEachOutput(const Tensor &a, const Tensor &b, const MatMulLayout &layout, Fn fn) {
+  const std::size_t batch_rank = layout.output_prefix.size();
+  ForEachBatch(layout, [&](int64_t a_base, int64_t b_base, int64_t output_base) {
     for (int64_t row = 0; row < layout.m; ++row) {
       for (int64_t column = 0; column < layout.n; ++column) {
         int64_t output_index = output_base;
@@ -198,14 +213,7 @@ void ForEachOutput(const Tensor &a, const Tensor &b, const MatMulLayout &layout,
         fn(a_base, b_base, row, column, output_index);
       }
     }
-
-    for (std::size_t dimension = batch_rank; dimension-- > 0;) {
-      if (++batch_index[dimension] < layout.output_prefix[dimension]) {
-        break;
-      }
-      batch_index[dimension] = 0;
-    }
-  }
+  });
 }
 
 int64_t ReadScalarInteger(const Tensor &tensor, const char *name) {
@@ -255,6 +263,24 @@ Tensor MatMulIntegerKernel::operator()(const Tensor &a, const Tensor &b, const T
       rt_ns::MakeOutputTensor(static_cast<int32_t>(DataType::INT32), layout.output_shape,
                               output_bytes, rt != nullptr ? rt->allocator() : nullptr);
   int32_t *values = output.AsInt32();
+
+  // Roadmap PR09.2: the plain matrix product (both operands rank >= 2, so their
+  // inner two dimensions are contiguous) is routed through the x86 VNNI INT8
+  // kernel, which dispatches to the native vpdpbusd path when the CPU supports
+  // AVX-512 VNNI and otherwise to the portable scalar sibling. Vector and
+  // rank-1 promotions keep the PR09.1 scalar fallback below.
+  if (a.shape.size() >= 2 && b.shape.size() >= 2) {
+    const auto *a_bytes = reinterpret_cast<const std::uint8_t *>(a.bytes());
+    const auto *b_bytes = reinterpret_cast<const std::uint8_t *>(b.bytes());
+    const bool a_signed = a.data_type == static_cast<int32_t>(DataType::INT8);
+    const bool b_signed = b.data_type == static_cast<int32_t>(DataType::INT8);
+    ForEachBatch(layout, [&](int64_t a_base, int64_t b_base, int64_t output_base) {
+      IntegerMatMul2D(a_bytes + a_base, a_signed, b_bytes + b_base, b_signed, values + output_base,
+                      layout.m, layout.n, layout.k, a_zp.data(), static_cast<int64_t>(a_zp.size()),
+                      b_zp.data(), static_cast<int64_t>(b_zp.size()));
+    });
+    return output;
+  }
 
   ForEachOutput(
       a, b, layout,

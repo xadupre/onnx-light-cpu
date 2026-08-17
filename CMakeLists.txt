@@ -203,6 +203,7 @@ if(NOT ONNX_LIGHT_CPU_X86)
   set(ONNX_LIGHT_CPU_HAVE_AVX512BW_FLAG FALSE)
   set(ONNX_LIGHT_CPU_HAVE_AVX512FP16_FLAG FALSE)
   set(ONNX_LIGHT_CPU_HAVE_AVX512BF16_FLAG FALSE)
+  set(ONNX_LIGHT_CPU_HAVE_AVX512VNNI_FLAG FALSE)
   set(ONNX_LIGHT_CPU_HAVE_AMX_TILE_FLAG FALSE)
   set(ONNX_LIGHT_CPU_HAVE_AMX_BF16_FLAG FALSE)
 elseif(NOT MSVC)
@@ -214,6 +215,10 @@ elseif(NOT MSVC)
   check_cxx_compiler_flag("-mavx512fp16" ONNX_LIGHT_CPU_HAVE_AVX512FP16_FLAG)
   check_cxx_compiler_flag("-mavx512f -mavx512bw -mavx512bf16"
       ONNX_LIGHT_CPU_HAVE_AVX512BF16_FLAG)
+  # The native INT8 VNNI dot-product needs -mavx512vnni for the vpdpbusd
+  # intrinsic; it is only compiled when the compiler accepts the flag.
+  check_cxx_compiler_flag("-mavx512f -mavx512vnni"
+      ONNX_LIGHT_CPU_HAVE_AVX512VNNI_FLAG)
   # The AMX tile-state lifecycle (LDTILECFG/TILERELEASE) needs -mamx-tile for the
   # tile intrinsics; the module keeps a safe fallback when the flag is absent.
   check_cxx_compiler_flag("-mamx-tile" ONNX_LIGHT_CPU_HAVE_AMX_TILE_FLAG)
@@ -235,6 +240,10 @@ else()
   # intrinsics used by the native BFLOAT16 kernel; keep it out of the build and
   # rely on the converting float32 fallback path.
   set(ONNX_LIGHT_CPU_HAVE_AVX512BF16_FLAG FALSE)
+  # MSVC has no -mavx512vnni equivalent for the _mm512_dpbusd_epi32 intrinsic
+  # used by the native INT8 VNNI dot-product; keep it out of the build and rely
+  # on the portable scalar fallback path.
+  set(ONNX_LIGHT_CPU_HAVE_AVX512VNNI_FLAG FALSE)
   # MSVC has no -mamx-tile equivalent for the tile intrinsics used by the AMX
   # tile-state lifecycle; keep the native path out of the build and rely on the
   # safe fallback.
@@ -264,6 +273,8 @@ set(_gemm_avx512fp16_source
     "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/gemm/avx512fp16/gemm_kernel_avx512fp16.cc")
 set(_gemm_avx512bf16_source
     "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/gemm/avx512bf16/gemm_kernel_avx512bf16.cc")
+set(_gemm_avx512vnni_source
+    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/gemm/vnni/integer_gemm_avx512vnni.cc")
 set(_gemm_amx_source
     "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/gemm/amx/gemm_amx_tile.cc")
 set(_gemm_amx_bf16_source
@@ -301,6 +312,11 @@ if(NOT ONNX_LIGHT_CPU_HAVE_AVX512BF16_FLAG)
   # Exclude the native AVX-512BF16 GEMM kernel when the compiler cannot target
   # the ISA; the BFLOAT16 path keeps its converting float32 fallback.
   list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_gemm_avx512bf16_source}")
+endif()
+if(NOT ONNX_LIGHT_CPU_HAVE_AVX512VNNI_FLAG)
+  # Exclude the native AVX-512 VNNI INT8 dot-product when the compiler cannot
+  # target the ISA; the integer matmul keeps its portable scalar fallback.
+  list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_gemm_avx512vnni_source}")
 endif()
 if(NOT ONNX_LIGHT_CPU_HAVE_AMX_BF16_FLAG)
   # Exclude the native AMX-BF16 GEMM kernel when the compiler cannot target the
@@ -392,6 +408,17 @@ if(ONNX_LIGHT_CPU_HAVE_AVX512BF16_FLAG)
       COMPILE_OPTIONS "-mavx512f;-mavx512bw;-mavx512bf16")
   target_compile_definitions(lib_onnx_light_cpu PRIVATE
       ONNX_LIGHT_CPU_HAVE_AVX512BF16=1)
+endif()
+
+if(ONNX_LIGHT_CPU_HAVE_AVX512VNNI_FLAG)
+  # The native INT8 VNNI dot-product needs -mavx512vnni for the vpdpbusd
+  # (_mm512_dpbusd_epi32) intrinsic and -mavx512f for the ZMM load / reduce; the
+  # rest of the library keeps the baseline flags and only dispatches here once
+  # CpuSupportsAvx512Vnni() reports the ISA.
+  set_source_files_properties("${_gemm_avx512vnni_source}" PROPERTIES
+      COMPILE_OPTIONS "-mavx512f;-mavx512vnni")
+  target_compile_definitions(lib_onnx_light_cpu PRIVATE
+      ONNX_LIGHT_CPU_HAVE_AVX512VNNI=1)
 endif()
 
 if(ONNX_LIGHT_CPU_HAVE_AMX_TILE_FLAG)
