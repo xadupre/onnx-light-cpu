@@ -77,6 +77,61 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: false
 
+  setup_onnx_light_source:
+    name: setup.py --cpp-tests --onnx-light-source
+    runs-on: ubuntu-latest
+    # onnx-light is compiled from source before onnx-light-cpu, so this job
+    # needs more time than a plain build; sccache keeps repeat runs fast.
+    timeout-minutes: 40
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@v0.0.10
+
+      - name: Set parallel build level
+        shell: bash
+        run: |
+          CMAKE_BUILD_PARALLEL_LEVEL=$(python -c 'import os; print(os.cpu_count() or 1)')
+          echo "CMAKE_BUILD_PARALLEL_LEVEL=${CMAKE_BUILD_PARALLEL_LEVEL}" >> "$GITHUB_ENV"
+          echo "CMAKE_BUILD_PARALLEL_LEVEL=${CMAKE_BUILD_PARALLEL_LEVEL}"
+
+      - name: Build and install onnx-light from source
+        env:
+          SCCACHE_GHA_ENABLED: "true"
+        run: |
+          # onnx-light's CMake calls find_package(nanobind) via "python -m
+          # nanobind --cmake_dir", so nanobind (and scikit-build-core) must be
+          # importable before configuring it. Recent onnx-light sources also
+          # query numpy.get_include() at configure time, so numpy is required too.
+          pip install nanobind scikit-build-core numpy
+          # Clone the latest onnx-light sources (default branch) rather than a
+          # tagged release: the C++ backend test depends on recent additions such
+          # as onnx_core/runtime/kernels/tensor_compare.h that are not yet in a tag.
+          git clone --depth 1 https://github.com/xadupre/onnx-light.git /tmp/onnx-light
+          cmake -S /tmp/onnx-light -B /tmp/onnx-light/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/tmp/onnx-light/install -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+          cmake --build /tmp/onnx-light/build --config Release --parallel --verbose
+          cmake --install /tmp/onnx-light/build --config Release
+          pip install -C build.verbose=true /tmp/onnx-light -v
+          # --onnx-light-source links the exact shared libraries loaded by the
+          # importable onnx-light, so those libraries must be on LD_LIBRARY_PATH
+          # for the C++ tests (run by ctest below) to start.
+          onnx_light_libdir=$(dirname "$(find /tmp/onnx-light/install -name 'liblib_onnx_proto.so' | head -1)")
+          echo "LD_LIBRARY_PATH=${onnx_light_libdir}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
+
+      - name: Build extension and run C++ tests via setup.py
+        env:
+          SCCACHE_GHA_ENABLED: "true"
+          CMAKE_ARGS: "-DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache"
+        run: python setup.py build_ext --inplace --cpp-tests --onnx-light-source
+
   arm_gemm_native:
     name: ARM64 GEMM (NEON)
     runs-on: ubuntu-24.04-arm
