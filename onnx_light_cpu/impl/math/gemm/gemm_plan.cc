@@ -129,6 +129,24 @@ auto SelectKernel(GemmAlgorithm algorithm)
   throw std::logic_error("onnx_light_cpu::GemmPlan: unsupported Gemm algorithm.");
 }
 
+auto SelectHalfKernel(GemmAlgorithm algorithm)
+    -> void (*)(bool, bool, bool, std::size_t, std::size_t, std::size_t, float,
+                const std::uint16_t *, const std::uint16_t *, float *, const GemmBlocking *) {
+  switch (algorithm) {
+  case GemmAlgorithm::kDirect:
+    return &detail::GemmHalfPlanned<GemmAlgorithm::kDirect>;
+  case GemmAlgorithm::kSkinnyM:
+    return &detail::GemmHalfPlanned<GemmAlgorithm::kSkinnyM>;
+  case GemmAlgorithm::kSkinnyN:
+    return &detail::GemmHalfPlanned<GemmAlgorithm::kSkinnyN>;
+  case GemmAlgorithm::kSplitK:
+    return &detail::GemmHalfPlanned<GemmAlgorithm::kSplitK>;
+  case GemmAlgorithm::kGeneral:
+    return &detail::GemmHalfPlanned<GemmAlgorithm::kGeneral>;
+  }
+  throw std::logic_error("onnx_light_cpu::GemmHalfPlan: unsupported Gemm algorithm.");
+}
+
 std::size_t CeilDiv(std::size_t value, std::size_t divisor) {
   return value / divisor + static_cast<std::size_t>(value % divisor != 0);
 }
@@ -377,6 +395,47 @@ void GemmPlan<T>::Execute(const T *a, const GemmEpilogue<T> &epilogue, T *y) con
         "onnx_light_cpu::GemmPlan: Execute without B requires a constant-B plan.");
   }
   Execute(a, nullptr, epilogue, y);
+}
+
+GemmHalfPlan::GemmHalfPlan(const GemmHalfPlanOptions &options)
+    : is_bfloat16_(options.is_bfloat16), trans_a_(options.trans_a), trans_b_(options.trans_b),
+      m_(options.m), n_(options.n), k_(options.k), alpha_(options.alpha),
+      // FP16/BF16 accumulate in float32, so the algorithm, blocking, and thread
+      // count are derived from the float32 kernel selection (sizeof(float)).
+      algorithm_(detail::SelectGemmAlgorithm(options.trans_a, options.trans_b, options.m, options.n,
+                                             options.k, VectorLanes<float>(), RegisterRows())),
+      blocking_(detail::ConstrainGemmBlockingForTasks(
+          detail::SelectGemmBlocking(sizeof(float), VectorLanes<float>(), RegisterRows()),
+          options.m, options.n, static_cast<std::size_t>(ParallelForThreadCount()))),
+      useful_threads_(UsefulThreads(options.m, options.n, options.k, blocking_)),
+      kernel_(SelectHalfKernel(algorithm_)) {
+  CheckedProduct(m_, k_, "A");
+  CheckedProduct(k_, n_, "B");
+  CheckedProduct(m_, n_, "Y");
+}
+
+void GemmHalfPlan::Execute(const std::uint16_t *a, const std::uint16_t *b,
+                           const GemmEpilogue<float> &epilogue, float *y) const {
+  if (m_ == 0 || n_ == 0) {
+    return;
+  }
+  ValidateGemmEpilogue(m_, n_, epilogue);
+  if (y == nullptr) {
+    throw std::invalid_argument("onnx_light_cpu::GemmHalfPlan: Y must not be null.");
+  }
+  if (k_ != 0 && a == nullptr) {
+    throw std::invalid_argument(
+        "onnx_light_cpu::GemmHalfPlan: A must not be null when K is nonzero.");
+  }
+  if (k_ != 0 && b == nullptr) {
+    throw std::invalid_argument(
+        "onnx_light_cpu::GemmHalfPlan: B must not be null when K is nonzero.");
+  }
+  // FP16/BF16 has no fused bias micro-kernel: the plan's kernel writes the raw
+  // ``alpha * op(A) @ op(B)`` float32 product, then the epilogue adds the
+  // broadcast bias/residual, applies the activation, and narrows the output.
+  kernel_(is_bfloat16_, trans_a_, trans_b_, m_, n_, k_, alpha_, a, b, y, &blocking_);
+  ApplyGemmEpilogue(m_, n_, epilogue, y);
 }
 
 template <typename T>

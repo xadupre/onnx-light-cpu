@@ -378,11 +378,13 @@ The existing FP16/BF16 path widens complete tensors to ``float32``, calls
 extra full-matrix memory passes.
 
 * For AVX2/F16C, load FP16 panels, convert vectors to FP32 while packing, and
-  accumulate with FMA. Narrow only the final output. *(First step landed:
-  ``GemmHalfWithEpilogue`` converts each FP16/BF16 element to float32 during
-  the general algorithm's packing copy instead of widening the whole tensors,
-  accumulates in float32, and narrows only in the epilogue. Vectorized F16C and
-  AVX2 conversion for contiguous panels is isolated in Roadmap PR07.1.)*
+  accumulate with FMA. Narrow only the final output. *(Landed: every FP16/BF16
+  execution path -- the general algorithm plus the skinny-M, skinny-N, direct
+  small-K, and split-K paths -- converts each element to float32 during packing
+  or reduction, accumulates in float32, and narrows only in the epilogue with no
+  full-tensor widening. ``GemmHalfPlan`` caches the selected algorithm and
+  blocking. Vectorized F16C and AVX2 conversion for contiguous panels is isolated
+  in Roadmap PR07.1; removing the remaining widening paths is Roadmap PR07.2.)*
 * For AVX-512BF16 and AVX-512FP16, add native dot-product/multiply-accumulate
   kernels with FP32 accumulation where required by the ONNX numerical contract.
 * Add AMX tile kernels behind OS-enabled tile-state detection. AMX must remain
@@ -742,7 +744,7 @@ require measurements on dedicated hardware.
        performance with no priority shape below 0.9x where the type is
        supported.
      - P3-P4.
-     - PR07.0 and PR07.1 are implemented. The remaining
+     - PR07.0, PR07.1, and PR07.2 are implemented. The remaining
        work is split by execution path, ISA, and type below; hardware-specific
        lanes may proceed in parallel after their shared semantic dependency.
      - Roadmap PR07.0 through PR10.5 below.
@@ -891,9 +893,9 @@ fallbacks are ordered. Completed rows remain visible so scope is not lost.
        ``GemmPlan::Execute`` overload, so the algorithm, blocking, and thread
        count are prepared once and only rebuilt when the dtype, shape, or
        attributes change. Dynamic B keeps the ordinary per-call packing path.
-       FP16/BF16 stay on the widening path pending the P5 low-precision
-       kernels. ``MatMul`` has no registered operator yet, so its plan wiring
-       arrives with that kernel.
+       FP16/BF16 now cache a keyed immutable ``GemmHalfPlan`` and execute from
+       typed inputs with FP32 accumulation (Roadmap PR07.2). ``MatMul`` has no
+       registered operator yet, so its plan wiring arrives with that kernel.
    * - Roadmap PR06.5
      - Sustain large-matrix throughput on Zen and generic x86.
      - Measured MR/NR candidates and shape-constrained MC/NC/KC choices keep
@@ -997,7 +999,8 @@ fallbacks are ordered. Completed rows remain visible so scope is not lost.
        inputs and FP32 accumulators. Immutable plans cover FP16/BF16, and tests
        prove that no priority algorithm allocates expanded A or B tensors.
      - PR07.0
-     - Pending
+     - `Implemented in #203
+       <https://github.com/xadupre/onnx-light-cpu/pull/203>`_
    * - Roadmap PR07.3
      - Native AVX-512FP16 kernel.
      - One FP16 micro-kernel family, its CPUID dispatch, tails, and differential

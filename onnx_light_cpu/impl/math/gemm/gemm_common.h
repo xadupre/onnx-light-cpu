@@ -10,6 +10,7 @@
 #include "onnx_light_cpu/impl/simd_level.h"
 
 #include <cstddef>
+#include <cstdint>
 
 namespace onnx_light_cpu {
 
@@ -71,6 +72,17 @@ template <GemmAlgorithm Algorithm>
 void GemmFloat64Planned(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::size_t K,
                         double alpha, const double *A, const double *B, double beta,
                         const double *C, double *Y, const GemmBlocking *blocking = nullptr);
+
+/// FP16/BF16 GEMM executed through the typed source path for one prepared
+/// algorithm. ``A`` and ``B`` are raw 16-bit ``FLOAT16`` (``is_bfloat16 ==
+/// false``) or ``BFLOAT16`` (``is_bfloat16 == true``) patterns converted to
+/// float32 while packing or reducing, so no full-tensor widening buffer is
+/// allocated. The float32 ``M x N`` product is written to ``Y`` for the
+/// caller's narrowing epilogue.
+template <GemmAlgorithm Algorithm>
+void GemmHalfPlanned(bool is_bfloat16, bool trans_a, bool trans_b, std::size_t M, std::size_t N,
+                     std::size_t K, float alpha, const std::uint16_t *A, const std::uint16_t *B,
+                     float *Y, const GemmBlocking *blocking = nullptr);
 
 } // namespace detail
 

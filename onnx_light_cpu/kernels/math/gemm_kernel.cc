@@ -36,10 +36,12 @@ using rt_ns::RuntimeContext;
 using rt_ns::Shape;
 using rt_ns::Tensor;
 
-// Immutable-plan cache backing the FP32/FP64 operator path (Roadmap PR06.4).
-// The plan encodes the selected algorithm, blocking, thread count, and (unused
-// here) constant-B packing derived from the dtype/shape/attributes; it is only
-// rebuilt when the key changes so those selections are not re-derived per run.
+// Immutable-plan cache backing the FP32/FP64/FP16/BF16 operator path (Roadmap
+// PR06.4 and PR07.2). The plan encodes the selected algorithm, blocking, thread
+// count, and (unused here) constant-B packing derived from the dtype/shape/
+// attributes; it is only rebuilt when the key changes so those selections are
+// not re-derived per run. FP16/BF16 share the same key but use a dedicated
+// float32-accumulating :cpp:class:`GemmHalfPlan`.
 struct GemmKernel::GemmPlanCache {
   bool has_key = false;
   int data_type = 0;
@@ -50,6 +52,7 @@ struct GemmKernel::GemmPlanCache {
   std::size_t k = 0;
   std::unique_ptr<GemmPlan<float>> plan_f32;
   std::unique_ptr<GemmPlan<double>> plan_f64;
+  std::unique_ptr<GemmHalfPlan> plan_half;
 
   template <typename T>
   const GemmPlan<T> &GetOrBuild(int dt, bool ta, bool tb, std::size_t rows, std::size_t cols,
@@ -72,6 +75,27 @@ struct GemmKernel::GemmPlanCache {
       k = depth;
     }
     return *slot;
+  }
+
+  // FP16/BF16 counterpart of :cpp:func:`GetOrBuild`. ``is_bfloat16`` selects the
+  // decode; ``dt`` (FLOAT16 vs BFLOAT16) keeps the key distinct across types.
+  const GemmHalfPlan &GetOrBuildHalf(bool is_bfloat16, int dt, bool ta, bool tb, std::size_t rows,
+                                     std::size_t cols, std::size_t depth, float scale) {
+    const bool match = has_key && data_type == dt && trans_a == ta && trans_b == tb && m == rows &&
+                       n == cols && k == depth && plan_half != nullptr &&
+                       plan_half->alpha() == scale;
+    if (!match) {
+      plan_half = std::make_unique<GemmHalfPlan>(
+          GemmHalfPlanOptions{is_bfloat16, ta, tb, rows, cols, depth, scale});
+      has_key = true;
+      data_type = dt;
+      trans_a = ta;
+      trans_b = tb;
+      m = rows;
+      n = cols;
+      k = depth;
+    }
+    return *plan_half;
   }
 
 private:
@@ -250,10 +274,21 @@ Tensor GemmKernel::Compute(const Tensor &a, const Tensor &b, const Tensor *c, fl
     // packing them into the micro-kernel panels (no full-tensor widening),
     // accumulate the reduction in float32 and round the result back down. This
     // keeps the reduction in float32 precision, matching the common "compute in
-    // fp32, store in fp16" convention used by most fp16/bf16 GEMM backends.
+    // fp32, store in fp16" convention used by most fp16/bf16 GEMM backends. The
+    // immutable plan caches the algorithm, blocking, and thread count so they
+    // are not re-derived per run (Roadmap PR07.2).
     const bool is_bfloat16 = static_cast<DataType>(a.data_type) == DataType::BFLOAT16;
     const auto *a_bits = reinterpret_cast<const std::uint16_t *>(a.bytes());
     const auto *b_bits = reinterpret_cast<const std::uint16_t *>(b.bytes());
+
+    std::optional<GemmHalfPlan> transient;
+    const GemmHalfPlan *plan = nullptr;
+    if (cache != nullptr) {
+      plan = &cache->GetOrBuildHalf(is_bfloat16, a.data_type, trans_a, trans_b, M, N, K, alpha);
+    } else {
+      transient.emplace(GemmHalfPlanOptions{is_bfloat16, trans_a, trans_b, M, N, K, alpha});
+      plan = &*transient;
+    }
 
     std::vector<float> c_f32;
     GemmEpilogue<float> epilogue;
@@ -271,8 +306,7 @@ Tensor GemmKernel::Compute(const Tensor &a, const Tensor &b, const Tensor *c, fl
         is_bfloat16 ? GemmOutputConversion::kBFloat16 : GemmOutputConversion::kFloat16;
     epilogue.converted_output = reinterpret_cast<std::uint16_t *>(y.mutable_bytes());
     std::vector<float> y_f32(M * N);
-    GemmHalfWithEpilogue(is_bfloat16, trans_a, trans_b, M, N, K, alpha, a_bits, b_bits, epilogue,
-                         y_f32.data());
+    plan->Execute(a_bits, b_bits, epilogue, y_f32.data());
     return y;
   }
   default:

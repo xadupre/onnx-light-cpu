@@ -8,12 +8,99 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <limits>
+#include <new>
 #include <random>
 #include <vector>
+
+#if defined(_MSC_VER)
+#include <malloc.h>
+#endif
+
+// Heap-allocation tracker used by the FP16/BF16 "no expanded operand" tests
+// below. While ``g_alloc_recording`` is set, every global allocation updates
+// ``g_alloc_peak`` with the largest single request seen (including worker-thread
+// allocations), so a test can assert the half-precision path never allocates a
+// buffer larger than the equivalent float32 path -- i.e. it never widens a full
+// ``M*K`` or ``K*N`` operand (Roadmap PR07.2).
+namespace {
+std::atomic<bool> g_alloc_recording{false};
+std::atomic<std::size_t> g_alloc_peak{0};
+
+void RecordAllocation(std::size_t bytes) {
+  if (!g_alloc_recording.load(std::memory_order_relaxed)) {
+    return;
+  }
+  std::size_t previous = g_alloc_peak.load(std::memory_order_relaxed);
+  while (bytes > previous &&
+         !g_alloc_peak.compare_exchange_weak(previous, bytes, std::memory_order_relaxed)) {
+  }
+}
+
+// Portable aligned allocation helpers: MSVC does not provide std::aligned_alloc,
+// so fall back to _aligned_malloc / _aligned_free on that toolchain.
+void *AlignedAlloc(std::size_t alignment, std::size_t size) {
+#if defined(_MSC_VER)
+  return _aligned_malloc(size, alignment);
+#else
+  return std::aligned_alloc(alignment, size);
+#endif
+}
+
+void AlignedFree(void *pointer) noexcept {
+#if defined(_MSC_VER)
+  _aligned_free(pointer);
+#else
+  std::free(pointer);
+#endif
+}
+} // namespace
+
+void *operator new(std::size_t bytes) {
+  RecordAllocation(bytes);
+  void *pointer = std::malloc(bytes != 0 ? bytes : 1);
+  if (pointer == nullptr) {
+    throw std::bad_alloc();
+  }
+  return pointer;
+}
+
+void *operator new[](std::size_t bytes) { return ::operator new(bytes); }
+
+void operator delete(void *pointer) noexcept { std::free(pointer); }
+void operator delete[](void *pointer) noexcept { std::free(pointer); }
+void operator delete(void *pointer, std::size_t) noexcept { std::free(pointer); }
+void operator delete[](void *pointer, std::size_t) noexcept { std::free(pointer); }
+
+void *operator new(std::size_t bytes, std::align_val_t alignment) {
+  RecordAllocation(bytes);
+  const std::size_t align = static_cast<std::size_t>(alignment);
+  const std::size_t size = (bytes + align - 1) / align * align;
+  void *pointer = AlignedAlloc(align, size != 0 ? size : align);
+  if (pointer == nullptr) {
+    throw std::bad_alloc();
+  }
+  return pointer;
+}
+
+void *operator new[](std::size_t bytes, std::align_val_t alignment) {
+  return ::operator new(bytes, alignment);
+}
+
+void operator delete(void *pointer, std::align_val_t) noexcept { AlignedFree(pointer); }
+void operator delete[](void *pointer, std::align_val_t) noexcept { AlignedFree(pointer); }
+void operator delete(void *pointer, std::size_t, std::align_val_t) noexcept {
+  AlignedFree(pointer);
+}
+void operator delete[](void *pointer, std::size_t, std::align_val_t) noexcept {
+  AlignedFree(pointer);
+}
 
 namespace {
 
@@ -698,4 +785,110 @@ TEST(GemmHalf, EmptyKGivesBiasOnly) {
     EXPECT_NEAR(out[i], 2.0f * bias_round[i], 8e-3f * std::max(1.0f, std::abs(bias_round[i])))
         << "i=" << i;
   }
+}
+
+TEST(GemmHalf, Float16GemvSkinnyNMatchesReference) {
+  // N == 1 selects the skinny-N (K-vectorized GEMV) algorithm, which now reads
+  // the half operands directly instead of widening the full A and B tensors.
+  CheckGemmHalf(false, false, false, 200, 1, 300, false, 301);
+  CheckGemmHalf(false, false, true, 200, 1, 300, false, 311);
+  CheckGemmHalf(false, true, false, 64, 1, 128, true, 321);
+}
+
+TEST(GemmHalf, Float16GemvSkinnyMMatchesReference) {
+  // M == 1 selects the skinny-M (N-vectorized GEMV) algorithm.
+  CheckGemmHalf(false, false, false, 1, 200, 300, false, 331);
+  CheckGemmHalf(false, false, true, 1, 200, 300, false, 341);
+  CheckGemmHalf(false, true, false, 1, 64, 128, true, 351);
+}
+
+TEST(GemmHalf, Float16SplitKMatchesReference) {
+  // A tiny output with a very deep K selects the split-K algorithm.
+  CheckGemmHalf(false, false, false, 8, 4, 4096, false, 361);
+  CheckGemmHalf(false, false, false, 4, 4, 5000, true, 371);
+}
+
+TEST(GemmHalf, Float16DirectSmallKMatchesReference) {
+  // K <= 32 with no transpose selects the direct small-K path.
+  CheckGemmHalf(false, false, false, 40, 48, 16, false, 381);
+  CheckGemmHalf(false, false, false, 40, 48, 31, true, 391);
+}
+
+TEST(GemmHalf, BFloat16AlgorithmVariantsMatchReference) {
+  CheckGemmHalf(true, false, false, 200, 1, 300, false, 401); // skinny-N
+  CheckGemmHalf(true, false, false, 1, 200, 300, false, 411); // skinny-M
+  CheckGemmHalf(true, false, false, 8, 4, 4096, false, 421);  // split-K
+  CheckGemmHalf(true, false, false, 40, 48, 16, true, 431);   // direct small-K
+}
+
+namespace {
+
+// Runs ``fn`` once (warm-up, so the shared thread pool's one-time allocations do
+// not skew the measurement), then again while recording heap allocations, and
+// returns the largest single allocation observed during the recorded run.
+template <typename Fn> std::size_t PeakAllocationBytes(Fn fn) {
+  fn();
+  g_alloc_peak.store(0, std::memory_order_relaxed);
+  g_alloc_recording.store(true, std::memory_order_relaxed);
+  fn();
+  g_alloc_recording.store(false, std::memory_order_relaxed);
+  return g_alloc_peak.load(std::memory_order_relaxed);
+}
+
+// Confirms the FP16/BF16 path for a shape that shares its algorithm with float32
+// never allocates a larger buffer than the float32 path. Since the only removed
+// step is the full-tensor widening, an equal peak proves the half path packs the
+// same bounded panels and no longer expands a full ``M*K`` or ``K*N`` operand.
+void CheckHalfNoExpandedOperand(bool is_bfloat16, std::size_t M, std::size_t N, std::size_t K,
+                                unsigned seed) {
+  const auto a_f = RandomVector(M * K, seed);
+  const auto b_f = RandomVector(K * N, seed + 1);
+  const auto a_bits = NarrowHalf(a_f, is_bfloat16);
+  const auto b_bits = NarrowHalf(b_f, is_bfloat16);
+  const auto a_round = WidenHalf(a_bits, is_bfloat16);
+  const auto b_round = WidenHalf(b_bits, is_bfloat16);
+
+  std::vector<float> y_fp32(M * N, 0.0f);
+  const std::size_t fp32_peak = PeakAllocationBytes([&] {
+    onnx_light_cpu::GemmFloat32(false, false, M, N, K, 1.0f, a_round.data(), b_round.data(), 0.0f,
+                                nullptr, y_fp32.data());
+  });
+
+  std::vector<float> y_half(M * N, 0.0f);
+  std::vector<std::uint16_t> out_bits(M * N, 0);
+  onnx_light_cpu::GemmEpilogue<float> epilogue;
+  epilogue.output_conversion = is_bfloat16 ? onnx_light_cpu::GemmOutputConversion::kBFloat16
+                                           : onnx_light_cpu::GemmOutputConversion::kFloat16;
+  epilogue.converted_output = out_bits.data();
+  const std::size_t half_peak = PeakAllocationBytes([&] {
+    onnx_light_cpu::GemmHalfWithEpilogue(is_bfloat16, false, false, M, N, K, 1.0f, a_bits.data(),
+                                         b_bits.data(), epilogue, y_half.data());
+  });
+
+  // Without full-tensor widening the half path packs the same bounded float
+  // panels as float32, so its peak single allocation must not exceed the
+  // float32 peak. These shapes keep a widened operand
+  // (``max(M*K, K*N)`` floats) larger than the bounded packing scratch, so if
+  // the half path expanded a full operand its peak would exceed that scratch.
+  const std::size_t widened_operand_bytes = std::max(M * K, K * N) * sizeof(float);
+  EXPECT_LE(half_peak, fp32_peak) << "half path allocated more than float32 for M=" << M
+                                  << " N=" << N << " K=" << K;
+  EXPECT_LT(half_peak, widened_operand_bytes)
+      << "half path allocated a full widened operand for M=" << M << " N=" << N << " K=" << K;
+}
+
+} // namespace
+
+TEST(GemmHalf, Float16AlgorithmsDoNotWidenOperands) {
+  CheckHalfNoExpandedOperand(false, 1024, 1, 512, 501);  // skinny-N GEMV
+  CheckHalfNoExpandedOperand(false, 1, 1024, 512, 511);  // skinny-M GEMV
+  CheckHalfNoExpandedOperand(false, 8, 4, 49152, 521);   // split-K
+  CheckHalfNoExpandedOperand(false, 1024, 32, 512, 531); // general blocked
+}
+
+TEST(GemmHalf, BFloat16AlgorithmsDoNotWidenOperands) {
+  CheckHalfNoExpandedOperand(true, 1024, 1, 512, 541);  // skinny-N GEMV
+  CheckHalfNoExpandedOperand(true, 1, 1024, 512, 551);  // skinny-M GEMV
+  CheckHalfNoExpandedOperand(true, 8, 4, 49152, 561);   // split-K
+  CheckHalfNoExpandedOperand(true, 1024, 32, 512, 571); // general blocked
 }
