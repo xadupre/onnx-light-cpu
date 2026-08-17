@@ -8,6 +8,7 @@
 #include "onnx_light_cpu/kernels/math/abs_kernel.h"
 #include "onnx_light_cpu/kernels/math/exp_log_kernel.h"
 #include "onnx_light_cpu/kernels/math/gemm_kernel.h"
+#include "onnx_light_cpu/kernels/math/integer_matmul_kernel.h"
 
 #include <gtest/gtest.h>
 
@@ -24,6 +25,8 @@ TEST(OnnxLightKernelUsage, KernelNamesAreLibraryQualified) {
   EXPECT_STREQ(onnx_light_cpu::ExpKernel::kName, "onnx_light_cpu::Exp");
   EXPECT_STREQ(onnx_light_cpu::LogKernel::kName, "onnx_light_cpu::Log");
   EXPECT_STREQ(onnx_light_cpu::GemmKernel::kName, "onnx_light_cpu::Gemm");
+  EXPECT_STREQ(onnx_light_cpu::MatMulIntegerKernel::kName, "onnx_light_cpu::MatMulInteger");
+  EXPECT_STREQ(onnx_light_cpu::QLinearMatMulKernel::kName, "onnx_light_cpu::QLinearMatMul");
   EXPECT_STREQ(onnx_light_cpu::NotKernel::kName, "onnx_light_cpu::Not");
 }
 
@@ -31,8 +34,12 @@ TEST(OnnxLightKernelUsage, KernelNamesAreLibraryQualified) {
 // library-qualified name of the accelerated kernel installed for it.
 TEST(OnnxLightKernelUsage, RegisteredKernelNames) {
   const std::vector<std::pair<std::string, std::string>> expected = {
-      {"Abs", "onnx_light_cpu::Abs"}, {"Exp", "onnx_light_cpu::Exp"},
-      {"Log", "onnx_light_cpu::Log"}, {"Gemm", "onnx_light_cpu::Gemm"},
+      {"Abs", "onnx_light_cpu::Abs"},
+      {"Exp", "onnx_light_cpu::Exp"},
+      {"Log", "onnx_light_cpu::Log"},
+      {"Gemm", "onnx_light_cpu::Gemm"},
+      {"MatMulInteger", "onnx_light_cpu::MatMulInteger"},
+      {"QLinearMatMul", "onnx_light_cpu::QLinearMatMul"},
       {"Not", "onnx_light_cpu::Not"},
   };
   EXPECT_EQ(onnx_light_cpu::RegisteredKernelNames(), expected);

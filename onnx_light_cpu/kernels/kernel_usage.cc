@@ -8,6 +8,7 @@
 #include "onnx_light_cpu/kernels/math/abs_kernel.h"
 #include "onnx_light_cpu/kernels/math/exp_log_kernel.h"
 #include "onnx_light_cpu/kernels/math/gemm_kernel.h"
+#include "onnx_light_cpu/kernels/math/integer_matmul_kernel.h"
 
 #include <atomic>
 #include <mutex>
@@ -60,8 +61,13 @@ void SetKernelUsageRecording(bool enabled) noexcept {
 
 const std::vector<std::pair<std::string, std::string>> &RegisteredKernelNames() {
   static const std::vector<std::pair<std::string, std::string>> names = {
-      {"Abs", AbsKernel::kName},   {"Exp", ExpKernel::kName}, {"Log", LogKernel::kName},
-      {"Gemm", GemmKernel::kName}, {"Not", NotKernel::kName},
+      {"Abs", AbsKernel::kName},
+      {"Exp", ExpKernel::kName},
+      {"Log", LogKernel::kName},
+      {"Gemm", GemmKernel::kName},
+      {"MatMulInteger", MatMulIntegerKernel::kName},
+      {"QLinearMatMul", QLinearMatMulKernel::kName},
+      {"Not", NotKernel::kName},
   };
   return names;
 }
