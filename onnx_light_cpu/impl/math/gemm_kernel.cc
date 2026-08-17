@@ -60,6 +60,10 @@
 #include "onnx_light_cpu/impl/math/gemm/avx512fp16/gemm_kernel_avx512fp16.h"
 #endif
 
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512BF16
+#include "onnx_light_cpu/impl/math/gemm/avx512bf16/gemm_kernel_avx512bf16.h"
+#endif
+
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
@@ -228,6 +232,43 @@ void GemmMicroKernel_ScalarFp16(std::size_t mr, std::size_t nb, std::size_t K, f
       const std::uint16_t *Brow = Bmat + k * N + n0;
       for (std::size_t n = 0; n < nb; ++n) {
         Yrow[n] += a * detail::Float16BitsToFloat(Brow[n]);
+      }
+    }
+  }
+}
+
+// Portable scalar member of the native BFLOAT16 micro-kernel family (Roadmap
+// PR07.4): also the column-tail handler for the AVX-512BF16 kernel. Both
+// operands are raw BFLOAT16 patterns converted to float32 on access, so the
+// float32 accumulation matches the widen-then-float32 reference. Unlike the
+// float32 scalar kernel, ``Bmat`` and ``Apack`` are ``std::uint16_t`` BFLOAT16
+// panels while the ``C``/``Y`` epilogue stays in float32.
+void GemmMicroKernel_ScalarBf16(std::size_t mr, std::size_t nb, std::size_t K, float alpha,
+                                float beta, const std::uint16_t *Bmat, std::size_t N,
+                                const float *Crow_base, std::size_t Cstride, float *Yrow_base,
+                                std::size_t Ystride, std::size_t n0, GemmAccumMode mode,
+                                const std::uint16_t *Apack) {
+  const bool alpha_is_one = alpha == 1.0f;
+  const bool beta_is_one = beta == 1.0f;
+  for (std::size_t r = 0; r < mr; ++r) {
+    float *Yrow = Yrow_base + r * Ystride + n0;
+    if (mode == GemmAccumMode::kInitBias) {
+      const float *Crow = Crow_base + r * Cstride + n0;
+      for (std::size_t n = 0; n < nb; ++n) {
+        Yrow[n] = beta_is_one ? Crow[n] : beta * Crow[n];
+      }
+    } else if (mode == GemmAccumMode::kInitZero) {
+      for (std::size_t n = 0; n < nb; ++n) {
+        Yrow[n] = 0.0f;
+      }
+    }
+    const std::uint16_t *Apack_r = Apack + r * K;
+    for (std::size_t k = 0; k < K; ++k) {
+      const float a_raw = detail::Bfloat16BitsToFloat(Apack_r[k]);
+      const float a = alpha_is_one ? a_raw : alpha * a_raw;
+      const std::uint16_t *Brow = Bmat + k * N + n0;
+      for (std::size_t n = 0; n < nb; ++n) {
+        Yrow[n] += a * detail::Bfloat16BitsToFloat(Brow[n]);
       }
     }
   }
@@ -1330,6 +1371,50 @@ void GemmFp16NativeGeneral(bool trans_a, std::size_t M, std::size_t N, std::size
               });
 }
 
+// Native BFLOAT16 general GEMM driver (Roadmap PR07.4). See the declaration in
+// gemm_common.h: it mirrors :cpp:func:`GemmFp16NativeGeneral` for BFLOAT16,
+// packing each ``mr``-row block of ``A`` into a BFLOAT16 panel (resolving
+// ``trans_a``) and streaming the non-transposed BFLOAT16 ``B`` matrix through
+// ``kernel`` with float32 accumulation, writing ``alpha * (A @ B)`` to the
+// float32 ``Y`` with no bias. The kernel is injected so the same driver,
+// packing, and column-tail logic can be tested with the portable scalar member
+// and dispatched to the AVX-512BF16 member in production.
+void GemmBf16NativeGeneral(bool trans_a, std::size_t M, std::size_t N, std::size_t K, float alpha,
+                           const std::uint16_t *A, const std::uint16_t *B, float *Y,
+                           GemmBf16MicroKernel kernel, std::size_t mr) {
+  if (M == 0 || N == 0) {
+    return;
+  }
+  if (K == 0) {
+    InitializeOutput(M, N, 0.0f, static_cast<const float *>(nullptr), Y);
+    return;
+  }
+  const std::size_t mr_block = std::max<std::size_t>(1, mr);
+  const std::size_t row_blocks = (M + mr_block - 1) / mr_block;
+  const double cost = static_cast<double>(K) * mr_block * N / kGemmFmasPerParallelWorkUnit;
+  ParallelFor(static_cast<std::int64_t>(row_blocks), cost,
+              [&](std::int64_t begin, std::int64_t end) {
+                AlignedVector<std::uint16_t> apack(mr_block * K);
+                for (std::int64_t task = begin; task < end; ++task) {
+                  const std::size_t m0 = static_cast<std::size_t>(task) * mr_block;
+                  const std::size_t rows = std::min(mr_block, M - m0);
+                  for (std::size_t r = 0; r < rows; ++r) {
+                    std::uint16_t *dst = apack.data() + r * K;
+                    if (trans_a) {
+                      // ``A`` is ``K x M`` row-major: ``A(k, m)`` is ``A[k * M + m]``.
+                      for (std::size_t k = 0; k < K; ++k) {
+                        dst[k] = A[k * M + (m0 + r)];
+                      }
+                    } else {
+                      std::memcpy(dst, A + (m0 + r) * K, K * sizeof(std::uint16_t));
+                    }
+                  }
+                  kernel(rows, N, K, alpha, 0.0f, B, N, nullptr, 0, Y + m0 * N, N, 0,
+                         GemmAccumMode::kInitZero, apack.data());
+                }
+              });
+}
+
 // FP16/BF16 GEMM accumulated in float32, executed through the typed source
 // path for one prepared algorithm. ``A`` and ``B`` are raw 16-bit patterns
 // viewed as ``HalfSource`` and converted to float32 element by element while
@@ -1360,6 +1445,22 @@ void GemmHalfPlanned(bool is_bfloat16, bool trans_a, bool trans_b, std::size_t M
   if (is_bfloat16) {
     const auto *a = reinterpret_cast<const BFloat16Source *>(A);
     const auto *b = reinterpret_cast<const BFloat16Source *>(B);
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512BF16
+    // Roadmap PR07.4: when the CPU natively supports AVX-512BF16, run the
+    // general BFLOAT16 algorithm through the native ``vdpbf16ps`` micro-kernel,
+    // which keeps both operands in BFLOAT16 (halving the ``B`` traffic) instead
+    // of widening while packing. It requires a non-transposed ``B`` so the
+    // kernel can read it with a plain row stride; every other shape keeps the
+    // converting path.
+    if constexpr (Algorithm == GemmAlgorithm::kGeneral) {
+      static const bool use_avx512bf16 = CpuSupportsAvx512Bf16();
+      if (use_avx512bf16 && !trans_b) {
+        const std::size_t mr = std::min<std::size_t>(selected.mr, kGemmAVX512MR);
+        GemmBf16NativeGeneral(trans_a, M, N, K, alpha, A, B, Y, &GemmMicroKernel_AVX512BF16, mr);
+        return;
+      }
+    }
+#endif
     GemmImpl<Algorithm, float, decltype(tile), BFloat16Source>(
         trans_a, trans_b, M, N, K, alpha, a, b, 0.0f, static_cast<const float *>(nullptr), Y,
         default_kind, tile, selected);
