@@ -847,6 +847,18 @@ TEST(GemmFp16Native, Avx512Fp16KernelMatchesReferenceWhenSupported) {
   CheckGemmHalf(false, true, false, 17, 19, 33, true, 421);
 }
 
+// Roadmap PR08.2: general FLOAT16 shapes whose N spans several eight-lane native
+// NEON column vectors and leaves the four-lane and scalar column tails, with M
+// covering several register-row blocks. On an ARM build these exercise the
+// native NEON FLOAT16 kernel (the eight-, four-, and scalar column paths);
+// elsewhere they keep the converting float32 fallback. Both must match the
+// widen-then-float32 reference.
+TEST(GemmHalf, Float16NeonNativeGeneralColumnTails) {
+  CheckGemmHalf(false, false, false, 20, 48, 40, false, 471); // N == 6 * 8, no tail
+  CheckGemmHalf(false, false, false, 20, 37, 40, true, 481);  // N == 4 * 8 + 5 tail
+  CheckGemmHalf(false, true, false, 17, 19, 33, true, 491);   // trans_a, N == 2 * 8 + 3 tail
+}
+
 namespace {
 
 // Runs the native BFLOAT16 general driver (Roadmap PR07.4) with an injected
@@ -903,6 +915,18 @@ TEST(GemmBf16Native, Avx512Bf16KernelMatchesReferenceWhenSupported) {
   CheckGemmHalf(true, false, false, 20, 48, 40, false, 601); // N == 3 * 16, even K
   CheckGemmHalf(true, false, false, 20, 35, 41, true, 611);  // N tail, odd K
   CheckGemmHalf(true, true, false, 17, 19, 33, true, 621);   // trans_a, N tail, odd K
+}
+
+// Roadmap PR08.2: general BFLOAT16 shapes whose N spans several eight-lane
+// native NEON column vectors and leaves the four-lane and scalar column tails,
+// with M covering several register-row blocks and even/odd K. On an ARM build
+// these exercise the native NEON BFLOAT16 kernel (the eight-, four-, and scalar
+// column paths); elsewhere they keep the converting float32 fallback. Both must
+// match the widen-then-float32 reference.
+TEST(GemmHalf, BFloat16NeonNativeGeneralColumnTails) {
+  CheckGemmHalf(true, false, false, 20, 48, 40, false, 671); // N == 6 * 8, even K
+  CheckGemmHalf(true, false, false, 20, 37, 41, true, 681);  // N == 4 * 8 + 5 tail, odd K
+  CheckGemmHalf(true, true, false, 17, 19, 33, true, 691);   // trans_a, N tail, odd K
 }
 
 TEST(GemmBf16Native, AmxBf16KernelMatchesReferenceWhenSupported) {

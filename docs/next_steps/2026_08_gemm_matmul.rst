@@ -415,8 +415,14 @@ extra full-matrix memory passes.
   with NEON -- a ``vmovl_u16`` zero-extend plus 16-bit shift for BFLOAT16 and the
   ``vcvt_f32_f16`` (``FCVTL``) instruction for FLOAT16, both with an exact scalar
   tail matching the bit decode and a scalar fallback when the FP16 intrinsics are
-  unavailable. Native NEON arithmetic is Roadmap PR08.2 and the SVE/SVE2 kernels
-  are Roadmap PR08.3.)*
+  unavailable. Roadmap PR08.2 then adds the native NEON arithmetic kernels
+  (``GemmMicroKernel_NEON_BF16`` always, ``GemmMicroKernel_NEON_FP16`` when the
+  FP16 intrinsics compile): both keep the operands half-precision to the register
+  file, widen each ``B`` vector on the fly (zero-extend/shift for BFLOAT16,
+  ``FCVTL`` for FLOAT16) and accumulate in float32, and are dispatched from
+  ``GemmHalfPlanned<kGeneral>`` for non-transposed ``B`` ahead of the converting
+  float32 path, which stays the fallback. The SVE/SVE2 kernels are Roadmap
+  PR08.3.)*
 * For INT8, fuse zero-point correction and requantization into packing and the
   epilogue. Accumulate in INT32 and define overflow behavior through the ONNX
   operator contract.
@@ -770,10 +776,10 @@ require measurements on dedicated hardware.
        performance with no priority shape below 0.9x where the type is
        supported.
      - P3-P4.
-     - PR07.0, PR07.1, PR07.2, PR07.3, PR07.4, PR07.5, PR07.6, and PR08.1 are
-       implemented. The remaining work is split by execution path, ISA, and
-       type below; hardware-specific lanes may proceed in parallel after their
-       shared semantic dependency.
+     - PR07.0, PR07.1, PR07.2, PR07.3, PR07.4, PR07.5, PR07.6, PR08.1, and
+       PR08.2 are implemented. The remaining work is split by execution path,
+       ISA, and type below; hardware-specific lanes may proceed in parallel
+       after their shared semantic dependency.
      - Roadmap PR07.0 through PR10.5 below.
    * - P6
      - ``AttentionPlan`` and materialized tensor correctness implementation.
@@ -1163,7 +1169,34 @@ fallbacks are ordered. Completed rows remain visible so scope is not lost.
      - NEON FP16 and available BF16 dot-product kernels pass the complete
        differential corpus while retaining PR08.1 as fallback.
      - PR08.1
-     - Pending
+     - Implemented. The NEON translation unit (``gemm/arm/gemm_kernel_neon``)
+       adds ``GemmMicroKernel_NEON_BF16`` (always, baseline NEON) and, when the
+       FP16 vector load/convert intrinsics compile
+       (``ONNX_LIGHT_CPU_HAVE_NEON_FP16``), ``GemmMicroKernel_NEON_FP16`` -- new
+       members of the BFLOAT16 / FLOAT16 micro-kernel families that share the
+       ``GemmBf16MicroKernel`` / ``GemmFp16MicroKernel`` signatures so the PR07.4
+       / PR07.3 ``GemmBf16NativeGeneral`` / ``GemmFp16NativeGeneral`` drivers,
+       half-precision ``A`` packing (including ``trans_a``), and column-tail
+       handling are reused. Unlike the PR08.1 convert-while-packing path, both
+       operands stay half-precision to the register file: each eight-column
+       ``B`` row is widened on the fly (BFLOAT16 with the baseline NEON
+       zero-extend / 16-bit shift, FLOAT16 with the ``vcvt_f32_f16`` /
+       ``FCVTL`` instruction) into ``float32x4`` vectors register-blocked over
+       up to ``kGemmNeonMR`` rows, the dot products accumulate in float32, and
+       ``alpha`` is applied in the epilogue; the eight-, four-, and scalar
+       (``GemmMicroKernel_ScalarBf16`` / ``ScalarFp16``) column paths keep the
+       result identical to the widen-then-float32 reference.
+       ``GemmHalfPlanned<kGeneral>`` dispatches here for non-transposed ``B``
+       (BFLOAT16 always on NEON, FLOAT16 only when the FP16 intrinsics are
+       present) ahead of the converting float32 path; every other shape, a
+       transposed ``B``, or a toolchain without the FP16 intrinsics keeps the
+       PR08.1 fallback. New ``GemmHalf.Float16NeonNativeGeneralColumnTails`` and
+       ``GemmHalf.BFloat16NeonNativeGeneralColumnTails`` differential shapes
+       (exact eight-lane ``N``, the four-lane and scalar column tails, even/odd
+       ``K``, and a transposed ``A``) run through the NEON path under the native
+       ARM64 and cross-compiled aarch64 QEMU CI and match the reference. No SVE
+       conversion (PR08.3) is added. The dedicated-machine ONNX Runtime
+       comparison is tracked by PR10.5.
    * - Roadmap PR08.3
      - SVE/SVE2 FP16/BF16 kernels.
      - Runtime-vector-length-aware kernels and predicated tails pass under

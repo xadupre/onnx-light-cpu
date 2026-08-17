@@ -1493,6 +1493,21 @@ void GemmHalfPlanned(bool is_bfloat16, bool trans_a, bool trans_b, std::size_t M
       }
     }
 #endif
+#ifdef ONNX_LIGHT_CPU_HAVE_NEON
+    // Roadmap PR08.2: native NEON BFLOAT16 arithmetic keeps both operands in
+    // BFLOAT16 to the register file and widens ``B`` on the fly (baseline NEON
+    // zero-extend / 16-bit shift) with float32 accumulation, instead of widening
+    // while packing. NEON is baseline on this build, so it only requires a
+    // non-transposed ``B`` for the plain row stride; every other shape keeps the
+    // converting path.
+    if constexpr (Algorithm == GemmAlgorithm::kGeneral) {
+      if (!trans_b) {
+        const std::size_t mr = std::min<std::size_t>(selected.mr, kGemmNeonMR);
+        GemmBf16NativeGeneral(trans_a, M, N, K, alpha, A, B, Y, &GemmMicroKernel_NEON_BF16, mr);
+        return;
+      }
+    }
+#endif
     GemmImpl<Algorithm, float, decltype(tile), BFloat16Source>(
         trans_a, trans_b, M, N, K, alpha, a, b, 0.0f, static_cast<const float *>(nullptr), Y,
         default_kind, tile, selected);
@@ -1510,6 +1525,21 @@ void GemmHalfPlanned(bool is_bfloat16, bool trans_a, bool trans_b, std::size_t M
       if (use_avx512fp16 && !trans_b) {
         const std::size_t mr = std::min<std::size_t>(selected.mr, kGemmAVX512MR);
         GemmFp16NativeGeneral(trans_a, M, N, K, alpha, A, B, Y, &GemmMicroKernel_AVX512FP16, mr);
+        return;
+      }
+    }
+#endif
+#ifdef ONNX_LIGHT_CPU_HAVE_NEON_FP16
+    // Roadmap PR08.2: native NEON FLOAT16 arithmetic keeps both operands in
+    // FLOAT16 to the register file and widens ``B`` on the fly with the NEON
+    // ``vcvt_f32_f16`` (``FCVTL``) instruction with float32 accumulation,
+    // instead of widening while packing. It requires the FP16 vector intrinsics
+    // and a non-transposed ``B``; every other shape or toolchain keeps the
+    // converting path.
+    if constexpr (Algorithm == GemmAlgorithm::kGeneral) {
+      if (!trans_b) {
+        const std::size_t mr = std::min<std::size_t>(selected.mr, kGemmNeonMR);
+        GemmFp16NativeGeneral(trans_a, M, N, K, alpha, A, B, Y, &GemmMicroKernel_NEON_FP16, mr);
         return;
       }
     }
