@@ -1176,7 +1176,16 @@ fallbacks are ordered. Completed rows remain visible so scope is not lost.
        accumulation, and requantization with exact scalar differential tests.
        No ISA-specific code is included.
      - PR07.2
-     - Pending
+     - Implemented. ``MatMulInteger`` accepts mixed INT8/UINT8 operands,
+       optional scalar or per-row/per-column zero points, ONNX MatMul batch
+       broadcasting and rank-1 promotion, and defines INT32 accumulation as
+       modulo-2^32 arithmetic without signed-overflow undefined behaviour.
+       ``QLinearMatMul`` accumulates in INT64, applies scalar FLOAT/FLOAT16
+       scales, round-to-nearest-even requantization, output zero points, and
+       exact INT8/UINT8 saturation. Both portable kernels are registered with
+       onnx-light and covered by scalar differential, broadcast, overflow,
+       validation, rounding, and saturation tests; no ISA-specific code is
+       included.
    * - Roadmap PR09.2
      - x86 VNNI INT8 kernel.
      - Signed and unsigned VNNI paths have exact tails, runtime dispatch, and
