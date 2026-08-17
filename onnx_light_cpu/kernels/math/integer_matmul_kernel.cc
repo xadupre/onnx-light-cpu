@@ -4,6 +4,7 @@
 
 #include "onnx_light_cpu/kernels/math/integer_matmul_kernel.h"
 
+#include "onnx_light_cpu/impl/math/math_kernels.h"
 #include "onnx_light_cpu/kernels/kernel_usage.h"
 
 #include "onnx_core/runtime/kernels/cast_helper.h"
@@ -255,6 +256,19 @@ Tensor MatMulIntegerKernel::operator()(const Tensor &a, const Tensor &b, const T
       rt_ns::MakeOutputTensor(static_cast<int32_t>(DataType::INT32), layout.output_shape,
                               output_bytes, rt != nullptr ? rt->allocator() : nullptr);
   int32_t *values = output.AsInt32();
+
+  // Fast path: a plain contiguous 2D ``M x K`` @ ``K x N`` product (no batch or
+  // vector promotion) dispatches to the shared integer GEMM, which uses the
+  // native NEON dot-product kernel when available and the portable scalar
+  // reduction otherwise. Both reproduce the ForEachOutput accumulation below.
+  if (a.shape.size() == 2 && b.shape.size() == 2 && layout.batch_count == 1) {
+    MatMulIntegerInt8(reinterpret_cast<const std::uint8_t *>(a.bytes()),
+                      a.data_type == static_cast<int32_t>(DataType::INT8),
+                      reinterpret_cast<const std::uint8_t *>(b.bytes()),
+                      b.data_type == static_cast<int32_t>(DataType::INT8), values, layout.m,
+                      layout.n, layout.k, a_zp.data(), a_zp.size(), b_zp.data(), b_zp.size());
+    return output;
+  }
 
   ForEachOutput(
       a, b, layout,

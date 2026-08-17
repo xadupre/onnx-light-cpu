@@ -70,6 +70,7 @@
 #endif
 
 #include <algorithm>
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -1851,6 +1852,53 @@ void GemmHalfWithEpilogue(bool is_bfloat16, bool trans_a, bool trans_b, std::siz
   ValidateGemmEpilogue(M, N, epilogue);
   detail::GemmHalfToFloat(is_bfloat16, trans_a, trans_b, M, N, K, alpha, A, B, Y);
   ApplyGemmEpilogue(M, N, epilogue, Y);
+}
+
+namespace {
+
+// Portable scalar reference for the contiguous 2D ``MatMulInteger`` reduction.
+// Matches the native NEON dot-product kernel term for term: the accumulator
+// wraps modulo 2^32 (unsigned) exactly like the operator's scalar fallback.
+void MatMulIntegerInt8Scalar(const std::uint8_t *a, bool a_signed, const std::uint8_t *b,
+                             bool b_signed, std::int32_t *c, std::size_t m, std::size_t n,
+                             std::size_t k, const std::int32_t *a_zero_points,
+                             std::size_t a_zero_point_count, const std::int32_t *b_zero_points,
+                             std::size_t b_zero_point_count) {
+  const auto read = [](const std::uint8_t *base, std::size_t index,
+                       bool is_signed) -> std::int32_t {
+    return is_signed ? static_cast<std::int32_t>(static_cast<std::int8_t>(base[index]))
+                     : static_cast<std::int32_t>(base[index]);
+  };
+  for (std::size_t row = 0; row < m; ++row) {
+    const std::int32_t az = a_zero_point_count == 1 ? a_zero_points[0] : a_zero_points[row];
+    for (std::size_t col = 0; col < n; ++col) {
+      const std::int32_t bz = b_zero_point_count == 1 ? b_zero_points[0] : b_zero_points[col];
+      std::uint32_t accumulator = 0;
+      for (std::size_t depth = 0; depth < k; ++depth) {
+        const std::int32_t av = read(a, row * k + depth, a_signed) - az;
+        const std::int32_t bv = read(b, depth * n + col, b_signed) - bz;
+        accumulator += static_cast<std::uint32_t>(av * bv);
+      }
+      c[row * n + col] = std::bit_cast<std::int32_t>(accumulator);
+    }
+  }
+}
+
+} // namespace
+
+void MatMulIntegerInt8(const std::uint8_t *a, bool a_signed, const std::uint8_t *b, bool b_signed,
+                       std::int32_t *c, std::size_t m, std::size_t n, std::size_t k,
+                       const std::int32_t *a_zero_points, std::size_t a_zero_point_count,
+                       const std::int32_t *b_zero_points, std::size_t b_zero_point_count) {
+#ifdef ONNX_LIGHT_CPU_HAVE_NEON_DOTPROD
+  if (CpuSupportsNeonDotProd()) {
+    GemmMatMulIntegerNeonDotProd(a, a_signed, b, b_signed, c, m, n, k, a_zero_points,
+                                 a_zero_point_count, b_zero_points, b_zero_point_count);
+    return;
+  }
+#endif
+  MatMulIntegerInt8Scalar(a, a_signed, b, b_signed, c, m, n, k, a_zero_points, a_zero_point_count,
+                          b_zero_points, b_zero_point_count);
 }
 
 } // namespace onnx_light_cpu
