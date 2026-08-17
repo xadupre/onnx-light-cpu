@@ -44,6 +44,11 @@ bool CpuSupportsAvx512Fp16();
 /// operating system.
 bool CpuSupportsAvx512Bf16();
 
+/// Returns whether the AVX-512VNNI instruction set (native ``vpdpbusd`` INT8
+/// dot-product) is available and AVX-512 state is enabled by the operating
+/// system.
+bool CpuSupportsAvx512Vnni();
+
 /// Returns whether the AMX tile architecture (``AMX-TILE``) is present and the
 /// operating system has enabled AMX tile state (the ``XTILECFG`` and
 /// ``XTILEDATA`` components of ``XCR0``). On Linux the tile-data component is

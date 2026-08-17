@@ -1224,7 +1224,27 @@ fallbacks are ordered. Completed rows remain visible so scope is not lost.
      - Signed and unsigned VNNI paths have exact tails, runtime dispatch, and
        differential tests over the PR09.1 fallback. ARM and AMX are excluded.
      - PR09.1
-     - Pending
+     - Implemented. ``MatMulInteger`` routes the plain matrix product (both
+       operands rank >= 2) through ``IntegerMatMul2D``
+       (``impl/math/gemm/vnni/integer_gemm_vnni.cc``), which packs ``A`` into a
+       UINT8 panel and ``B`` into a transposed INT8 panel, applying the
+       ``vpdpbusd`` signedness offsets (``+128`` for a signed ``A``, ``-128``
+       for an unsigned ``B``). The raw ``uint8 x int8`` dot-product is then
+       corrected with the true row/column sums so both INT8 and UINT8 operands,
+       scalar or per-row/per-column zero points, and INT32 modulo-2^32
+       accumulation are reconstructed exactly. The native
+       ``IntegerDotU8S8Avx512Vnni`` (``integer_gemm_avx512vnni.cc``, compiled
+       with ``-mavx512f -mavx512vnni``) reduces four ``uint8 x int8`` products
+       per lane with ``_mm512_dpbusd_epi32`` and finishes non-multiples of the
+       64-byte vector through the same scalar tail; it is dispatched ahead of
+       the portable ``IntegerDotU8S8Scalar`` sibling only when
+       ``CpuSupportsAvx512Vnni()`` reports the ISA at runtime, so a single
+       binary keeps working on CPUs without VNNI. Vector / rank-1 promotions and
+       ``QLinearMatMul`` keep the PR09.1 scalar fallback. New
+       ``IntegerVnniKernel`` differential tests exercise both dot-product paths
+       against a naive reference across signedness, scalar and per-axis zero
+       points, K tails, and the modulo-2^32 wrap. ARM and AMX are excluded
+       (PR09.3 and PR09.4).
    * - Roadmap PR09.3
      - ARM dot-product INT8 kernel.
      - Signed and unsigned NEON dot-product paths have exact tails, runtime
