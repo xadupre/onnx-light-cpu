@@ -4,6 +4,8 @@
 
 #include "onnx_light_cpu/impl/math/gemm/arm/gemm_kernel_arm.h"
 
+#include "onnx_light_cpu/impl/math/half_conversion.h"
+
 #if defined(_MSC_VER)
 #include <arm64_neon.h>
 #else
@@ -240,5 +242,34 @@ void GemmMicroKernel_NEON_F64(std::size_t mr, std::size_t nb, std::size_t K, dou
 }
 
 #undef DISPATCH_NEON_MR
+
+void GemmConvertBFloat16ToFloat32_NEON(const std::uint16_t *src, float *dst, std::size_t n) {
+  std::size_t i = 0;
+  for (; i + 8 <= n; i += 8) {
+    const uint16x8_t halves = vld1q_u16(src + i);
+    // BF16 -> FP32 is a zero-extend to 32 bits followed by a 16-bit left shift.
+    const uint32x4_t lo = vshlq_n_u32(vmovl_u16(vget_low_u16(halves)), 16);
+    const uint32x4_t hi = vshlq_n_u32(vmovl_u16(vget_high_u16(halves)), 16);
+    vst1q_f32(dst + i, vreinterpretq_f32_u32(lo));
+    vst1q_f32(dst + i + 4, vreinterpretq_f32_u32(hi));
+  }
+  for (; i < n; ++i) {
+    dst[i] = detail::Bfloat16BitsToFloat(src[i]);
+  }
+}
+
+#ifdef ONNX_LIGHT_CPU_HAVE_NEON_FP16
+void GemmConvertFloat16ToFloat32_NEON(const std::uint16_t *src, float *dst, std::size_t n) {
+  std::size_t i = 0;
+  for (; i + 8 <= n; i += 8) {
+    const float16x8_t halves = vld1q_f16(reinterpret_cast<const float16_t *>(src + i));
+    vst1q_f32(dst + i, vcvt_f32_f16(vget_low_f16(halves)));
+    vst1q_f32(dst + i + 4, vcvt_f32_f16(vget_high_f16(halves)));
+  }
+  for (; i < n; ++i) {
+    dst[i] = detail::Float16BitsToFloat(src[i]);
+  }
+}
+#endif
 
 } // namespace onnx_light_cpu
