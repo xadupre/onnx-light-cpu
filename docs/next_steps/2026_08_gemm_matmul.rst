@@ -410,7 +410,13 @@ extra full-matrix memory passes.
   is dispatched ahead of AVX-512BF16 for non-transposed ``B`` when
   ``CpuSupportsAmxBf16()`` and ``AmxTileStateAvailable()`` both report the ISA;
   it falls back to AVX-512BF16 or the converting float32 path otherwise.)*
-* Implement equivalent ARM FP16/BF16 and dot-product paths.
+* Implement equivalent ARM FP16/BF16 and dot-product paths. *(First landed:
+  Roadmap PR08.1 vectorizes the FP16/BF16 convert-while-packing panels on ARM
+  with NEON -- a ``vmovl_u16`` zero-extend plus 16-bit shift for BFLOAT16 and the
+  ``vcvt_f32_f16`` (``FCVTL``) instruction for FLOAT16, both with an exact scalar
+  tail matching the bit decode and a scalar fallback when the FP16 intrinsics are
+  unavailable. Native NEON arithmetic is Roadmap PR08.2 and the SVE/SVE2 kernels
+  are Roadmap PR08.3.)*
 * For INT8, fuse zero-point correction and requantization into packing and the
   epilogue. Accumulate in INT32 and define overflow behavior through the ONNX
   operator contract.
@@ -764,7 +770,7 @@ require measurements on dedicated hardware.
        performance with no priority shape below 0.9x where the type is
        supported.
      - P3-P4.
-     - PR07.0, PR07.1, PR07.2, PR07.3, PR07.4, PR07.5, and PR07.6 are
+     - PR07.0, PR07.1, PR07.2, PR07.3, PR07.4, PR07.5, PR07.6, and PR08.1 are
        implemented. The remaining work is split by execution path, ISA, and
        type below; hardware-specific lanes may proceed in parallel after their
        shared semantic dependency.
@@ -1133,7 +1139,25 @@ fallbacks are ordered. Completed rows remain visible so scope is not lost.
      - NEON vectorizes conversion while packing with exact tails and scalar
        fallback; native arithmetic and SVE are excluded.
      - PR07.2, PR05
-     - Pending
+     - Implemented. The NEON translation unit
+       (``gemm/arm/gemm_kernel_neon``) adds ``GemmConvertBFloat16ToFloat32_NEON``
+       -- a baseline zero-extend (``vmovl_u16``) and 16-bit left shift
+       (``vshlq_n_u32``) -- and, when the ``vld1q_f16`` / ``vcvt_f32_f16``
+       (``FCVTL``) intrinsics compile (probed as
+       ``ONNX_LIGHT_CPU_HAVE_NEON_FP16``), ``GemmConvertFloat16ToFloat32_NEON``.
+       Both widen eight contiguous half-precision patterns per iteration with an
+       exact scalar tail that reuses ``Bfloat16BitsToFloat`` /
+       ``Float16BitsToFloat`` so the vectorized result is bit-identical to the
+       scalar decode. ``PackConvertContiguous`` dispatches to them on ARM the way
+       it already dispatches to AVX2/F16C on x86, so the FP16/BF16
+       convert-while-packing paths from Roadmap PR07.1-07.2 vectorize on ARM
+       without a full-tensor widening pass; BF16 always uses NEON and FP16 falls
+       back to the scalar bit decode when the FP16 intrinsics are unavailable.
+       No native ARM FP16/BF16 arithmetic (PR08.2) or SVE conversion (PR08.3) is
+       added. The existing FP16/BF16 differential tests plus a new
+       ``GemmHalf.HalfVectorizedPackingTailRemainders`` case (every 1..7 element
+       tail across the eight-lane width) run through the NEON path under the
+       cross-compiled aarch64 QEMU CI and match the widen-then-float32 reference.
    * - Roadmap PR08.2
      - Native ARM FP16/BF16 arithmetic.
      - NEON FP16 and available BF16 dot-product kernels pass the complete
