@@ -8,6 +8,7 @@
 #include "onnx_light_cpu/impl/math/gemm/gemm_common.h"
 
 #include <cstddef>
+#include <cstdint>
 
 namespace onnx_light_cpu {
 
@@ -38,6 +39,22 @@ void GemmMicroKernel_NEON_F64(std::size_t mr, std::size_t nb, std::size_t K, dou
                               const double *Crow_base, std::size_t Cstride, double *Yrow_base,
                               std::size_t Ystride, std::size_t n0, GemmAccumMode mode,
                               const double *Apack);
+
+// Converts ``n`` contiguous BFLOAT16 patterns to float32, eight at a time
+// through a NEON zero-extend and 16-bit left shift, with an exact scalar tail.
+// Used by the GEMM packing loops to widen while packing without a full-tensor
+// conversion pass. Only requires baseline NEON, so it is always available in
+// this translation unit.
+void GemmConvertBFloat16ToFloat32_NEON(const std::uint16_t *src, float *dst, std::size_t n);
+
+#ifdef ONNX_LIGHT_CPU_HAVE_NEON_FP16
+// Converts ``n`` contiguous FLOAT16 patterns to float32 with the NEON
+// ``vcvt_f32_f16`` (``FCVTL``) instruction, eight at a time, with an exact
+// scalar tail. Widens while packing in the GEMM packing loops. Requires the
+// FP16 vector load/convert intrinsics, so it is only declared/defined when the
+// translation unit is compiled with support for them.
+void GemmConvertFloat16ToFloat32_NEON(const std::uint16_t *src, float *dst, std::size_t n);
+#endif
 #endif
 
 #ifdef ONNX_LIGHT_CPU_HAVE_SVE

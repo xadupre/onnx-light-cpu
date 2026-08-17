@@ -147,6 +147,24 @@ else()
   set(ONNX_LIGHT_CPU_HAVE_NEON_INTRINSICS FALSE)
 endif()
 
+# The FP16 -> FP32 packing conversion uses the NEON ``vcvt_f32_f16`` (``FCVTL``)
+# instruction, which needs the FP16 vector load/convert intrinsics. These are
+# baseline on AArch64 but require a working ``float16_t`` storage type; probe for
+# them so the FLOAT16 packing path stays scalar when they are unavailable.
+if(ONNX_LIGHT_CPU_HAVE_NEON_INTRINSICS)
+  check_cxx_source_compiles(
+      "#include <${_arm_neon_header}>
+       int main() {
+         const float16_t values[8] = {};
+         float16x8_t half = vld1q_f16(values);
+         float32x4_t wide = vcvt_f32_f16(vget_low_f16(half));
+         return static_cast<int>(vgetq_lane_f32(wide, 0));
+       }"
+      ONNX_LIGHT_CPU_HAVE_NEON_FP16_INTRINSICS)
+else()
+  set(ONNX_LIGHT_CPU_HAVE_NEON_FP16_INTRINSICS FALSE)
+endif()
+
 if(ONNX_LIGHT_CPU_ARM64 AND NOT MSVC)
   set(_saved_required_flags "${CMAKE_REQUIRED_FLAGS}")
   set(CMAKE_REQUIRED_FLAGS "${CMAKE_REQUIRED_FLAGS} -march=armv8-a+sve")
@@ -424,6 +442,10 @@ endif()
 if(ONNX_LIGHT_CPU_HAVE_NEON_INTRINSICS)
   target_compile_definitions(lib_onnx_light_cpu PRIVATE
       ONNX_LIGHT_CPU_HAVE_NEON=1)
+  if(ONNX_LIGHT_CPU_HAVE_NEON_FP16_INTRINSICS)
+    target_compile_definitions(lib_onnx_light_cpu PRIVATE
+        ONNX_LIGHT_CPU_HAVE_NEON_FP16=1)
+  endif()
 endif()
 
 if(ONNX_LIGHT_CPU_HAVE_SVE_INTRINSICS)

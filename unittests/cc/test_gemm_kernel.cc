@@ -764,6 +764,22 @@ TEST(GemmHalf, BFloat16VectorizedPackingTails) {
   CheckGemmHalf(true, false, false, 33, 70, 66, true, 251);
 }
 
+// Roadmap PR08.1: contiguous FP16/BF16 packing runs whose length crosses the
+// eight-lane vectorized conversion width and leaves every possible 1..7 element
+// scalar tail. Non-transposed ``A``/``B`` keep the packing contiguous so the
+// vectorized ``PackConvertContiguous`` path (AVX2/F16C on x86, NEON ``FCVTL`` /
+// shift on ARM) and its scalar tail both run. Every configuration must match the
+// widen-then-float32 reference bit-for-bit within the half tolerance.
+TEST(GemmHalf, HalfVectorizedPackingTailRemainders) {
+  for (std::size_t tail = 1; tail <= 7; ++tail) {
+    const std::size_t N = 8 + tail;  // contiguous B run of 8 + tail per row
+    const std::size_t K = 16 + tail; // contiguous A run of 8 + tail per row
+    const unsigned seed = static_cast<unsigned>(300 + tail);
+    CheckGemmHalf(false, false, false, 3, N, K, tail % 2 == 0, seed);
+    CheckGemmHalf(true, false, false, 3, N, K, tail % 2 == 0, seed + 50);
+  }
+}
+
 // Roadmap PR07.3: general FLOAT16 shapes whose N spans several 16-lane native
 // AVX-512FP16 column vectors and leaves a scalar tail, with M covering several
 // register-row blocks. On an AVX-512FP16 CPU these exercise the native kernel
@@ -1019,15 +1035,15 @@ void CheckHalfNoExpandedOperand(bool is_bfloat16, std::size_t M, std::size_t N, 
 } // namespace
 
 TEST(GemmHalf, Float16AlgorithmsDoNotWidenOperands) {
-  CheckHalfNoExpandedOperand(false, 1024, 1, 512, 501);  // skinny-N GEMV
-  CheckHalfNoExpandedOperand(false, 1, 1024, 512, 511);  // skinny-M GEMV
-  CheckHalfNoExpandedOperand(false, 8, 4, 131072, 521);  // split-K
-  CheckHalfNoExpandedOperand(false, 1024, 32, 512, 531); // general blocked
+  CheckHalfNoExpandedOperand(false, 512, 1, 256, 501); // skinny-N GEMV
+  CheckHalfNoExpandedOperand(false, 1, 512, 256, 511); // skinny-M GEMV
+  CheckHalfNoExpandedOperand(false, 8, 2, 49152, 521); // split-K
+  CheckHalfNoExpandedOperand(false, 8, 768, 512, 531); // general blocked
 }
 
 TEST(GemmHalf, BFloat16AlgorithmsDoNotWidenOperands) {
-  CheckHalfNoExpandedOperand(true, 1024, 1, 512, 541);  // skinny-N GEMV
-  CheckHalfNoExpandedOperand(true, 1, 1024, 512, 551);  // skinny-M GEMV
-  CheckHalfNoExpandedOperand(true, 8, 4, 131072, 561);  // split-K
-  CheckHalfNoExpandedOperand(true, 1024, 32, 512, 571); // general blocked
+  CheckHalfNoExpandedOperand(true, 512, 1, 256, 541); // skinny-N GEMV
+  CheckHalfNoExpandedOperand(true, 1, 512, 256, 551); // skinny-M GEMV
+  CheckHalfNoExpandedOperand(true, 8, 2, 49152, 561); // split-K
+  CheckHalfNoExpandedOperand(true, 8, 768, 512, 571); // general blocked
 }

@@ -856,10 +856,11 @@ using BFloat16Source = HalfSource<true>;
 // Widens a contiguous run of ``n`` source elements into the packed float panel.
 // The generic template is a scalar per-element convert (a plain copy for the
 // native FP32/FP64 paths). The FP16/BF16 overloads use the vectorized AVX2 F16C
-// / shift conversion when the running CPU supports it -- which produces exactly
-// the same float bits as the scalar decode -- and otherwise fall back to the
-// scalar bit decode. Only the contiguous packing copies use this; the strided
-// (transposed) gathers keep the per-element decode.
+// / shift conversion (or the NEON ``FCVTL`` / shift conversion on ARM) when the
+// running CPU supports it -- which produces exactly the same float bits as the
+// scalar decode -- and otherwise fall back to the scalar bit decode. Only the
+// contiguous packing copies use this; the strided (transposed) gathers keep the
+// per-element decode.
 template <typename T, typename SrcT>
 inline void PackConvertContiguous(const SrcT *src, T *dst, std::size_t n) {
   for (std::size_t i = 0; i < n; ++i) {
@@ -878,6 +879,12 @@ inline void PackConvertContiguous(const Float16Source *src, float *dst, std::siz
     return;
   }
 #endif
+#ifdef ONNX_LIGHT_CPU_HAVE_NEON_FP16
+  // The NEON ``vcvt_f32_f16`` (``FCVTL``) conversion is baseline on the AArch64
+  // targets that compile this translation unit, so no runtime gate is needed.
+  GemmConvertFloat16ToFloat32_NEON(reinterpret_cast<const std::uint16_t *>(src), dst, n);
+  return;
+#endif
   for (std::size_t i = 0; i < n; ++i) {
     dst[i] = static_cast<float>(src[i]);
   }
@@ -890,6 +897,11 @@ inline void PackConvertContiguous(const BFloat16Source *src, float *dst, std::si
     GemmConvertBFloat16ToFloat32_AVX2(reinterpret_cast<const std::uint16_t *>(src), dst, n);
     return;
   }
+#endif
+#ifdef ONNX_LIGHT_CPU_HAVE_NEON
+  // BF16 -> FP32 widening is baseline NEON (zero-extend then 16-bit shift).
+  GemmConvertBFloat16ToFloat32_NEON(reinterpret_cast<const std::uint16_t *>(src), dst, n);
+  return;
 #endif
   for (std::size_t i = 0; i < n; ++i) {
     dst[i] = static_cast<float>(src[i]);
