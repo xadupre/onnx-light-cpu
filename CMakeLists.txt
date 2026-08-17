@@ -183,12 +183,14 @@ if(NOT ONNX_LIGHT_CPU_X86)
   set(ONNX_LIGHT_CPU_HAVE_F16C_FLAG FALSE)
   set(ONNX_LIGHT_CPU_HAVE_AVX512F_FLAG FALSE)
   set(ONNX_LIGHT_CPU_HAVE_AVX512BW_FLAG FALSE)
+  set(ONNX_LIGHT_CPU_HAVE_AVX512FP16_FLAG FALSE)
 elseif(NOT MSVC)
   check_cxx_compiler_flag("-mavx2 -mfma" ONNX_LIGHT_CPU_HAVE_AVX2_FMA_FLAG)
   check_cxx_compiler_flag("-mavx2 -mfma -mf16c" ONNX_LIGHT_CPU_HAVE_F16C_FLAG)
   check_cxx_compiler_flag("-mavx512f" ONNX_LIGHT_CPU_HAVE_AVX512F_FLAG)
   check_cxx_compiler_flag("-mavx512f -mavx512bw"
       ONNX_LIGHT_CPU_HAVE_AVX512BW_FLAG)
+  check_cxx_compiler_flag("-mavx512fp16" ONNX_LIGHT_CPU_HAVE_AVX512FP16_FLAG)
 else()
   check_cxx_compiler_flag("/arch:AVX2" ONNX_LIGHT_CPU_HAVE_AVX2_FMA_FLAG)
   # /arch:AVX2 already enables the F16C intrinsics on MSVC.
@@ -196,6 +198,10 @@ else()
   check_cxx_compiler_flag("/arch:AVX512" ONNX_LIGHT_CPU_HAVE_AVX512F_FLAG)
   set(ONNX_LIGHT_CPU_HAVE_AVX512BW_FLAG
       ${ONNX_LIGHT_CPU_HAVE_AVX512F_FLAG})
+  # MSVC has no native AVX-512FP16 (_Float16 / __m512h) support; keep the
+  # native FLOAT16 kernel out of the build there and rely on the converting
+  # float32 fallback path.
+  set(ONNX_LIGHT_CPU_HAVE_AVX512FP16_FLAG FALSE)
 endif()
 
 # ---------------------------------------------------------------------------
@@ -213,6 +219,8 @@ file(GLOB CPU_KERNEL_SOURCES CONFIGURE_DEPENDS
 
 set(_gemm_avx512_source
     "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/gemm/avx512/gemm_kernel_avx512.cc")
+set(_gemm_avx512fp16_source
+    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/gemm/avx512fp16/gemm_kernel_avx512fp16.cc")
 set(_gemm_avx2_fma_source
     "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/gemm/avx2/gemm_kernel_avx2_fma.cc")
 set(_gemm_neon_source
@@ -236,6 +244,11 @@ if(NOT ONNX_LIGHT_CPU_HAVE_AVX2_FMA_FLAG)
 endif()
 if(NOT ONNX_LIGHT_CPU_HAVE_AVX512BW_FLAG)
   list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_not_avx512_source}")
+endif()
+if(NOT ONNX_LIGHT_CPU_HAVE_AVX512FP16_FLAG)
+  # Exclude the native AVX-512FP16 GEMM kernel when the compiler cannot target
+  # the ISA; the FLOAT16 path keeps its converting float32 fallback.
+  list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_gemm_avx512fp16_source}")
 endif()
 if(NOT ONNX_LIGHT_CPU_HAVE_NEON_INTRINSICS)
   list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_gemm_neon_source}")
@@ -301,6 +314,16 @@ if(ONNX_LIGHT_CPU_HAVE_AVX512F_FLAG)
   # Told gemm_kernel.cc (compiled at the baseline ONNX_LIGHT_CPU_SIMD_FLAGS)
   # that GemmMicroKernel_AVX512_F32/F64 are available to dispatch to.
   target_compile_definitions(lib_onnx_light_cpu PRIVATE ONNX_LIGHT_CPU_HAVE_AVX512=1)
+endif()
+
+if(ONNX_LIGHT_CPU_HAVE_AVX512FP16_FLAG)
+  # The native FLOAT16 GEMM kernel needs -mavx512fp16 for the _Float16 type and
+  # the vcvtph2psx conversion; the rest of the library keeps the baseline flags
+  # and only dispatches here once CpuSupportsAvx512Fp16() reports the ISA.
+  set_source_files_properties("${_gemm_avx512fp16_source}" PROPERTIES
+      COMPILE_OPTIONS "-mavx512fp16")
+  target_compile_definitions(lib_onnx_light_cpu PRIVATE
+      ONNX_LIGHT_CPU_HAVE_AVX512FP16=1)
 endif()
 
 if(ONNX_LIGHT_CPU_HAVE_AVX2_FMA_FLAG)
