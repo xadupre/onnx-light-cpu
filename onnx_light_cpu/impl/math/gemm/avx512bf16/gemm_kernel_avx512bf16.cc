@@ -53,9 +53,9 @@ inline __m512bh MakeBPair(__m256i b0, __m256i b1) {
 // ``vdpbf16ps`` multiplies the same ``A`` pair against every column's ``B``
 // pair.
 inline __m512bh BroadcastAPair(std::uint16_t a0, std::uint16_t a1) {
-  const std::int32_t packed = static_cast<std::int32_t>(static_cast<std::uint32_t>(a0) |
-                                                        (static_cast<std::uint32_t>(a1) << 16));
-  return reinterpret_cast<__m512bh>(_mm512_set1_epi32(packed));
+  const std::uint32_t packed =
+      static_cast<std::uint32_t>(a0) | (static_cast<std::uint32_t>(a1) << 16);
+  return reinterpret_cast<__m512bh>(_mm512_set1_epi32(static_cast<int>(packed)));
 }
 
 } // namespace
