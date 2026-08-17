@@ -1021,13 +1021,13 @@ void CheckHalfNoExpandedOperand(bool is_bfloat16, std::size_t M, std::size_t N, 
 TEST(GemmHalf, Float16AlgorithmsDoNotWidenOperands) {
   CheckHalfNoExpandedOperand(false, 1024, 1, 512, 501);  // skinny-N GEMV
   CheckHalfNoExpandedOperand(false, 1, 1024, 512, 511);  // skinny-M GEMV
-  CheckHalfNoExpandedOperand(false, 8, 4, 49152, 521);   // split-K
+  CheckHalfNoExpandedOperand(false, 8, 4, 131072, 521);  // split-K
   CheckHalfNoExpandedOperand(false, 1024, 32, 512, 531); // general blocked
 }
 
 TEST(GemmHalf, BFloat16AlgorithmsDoNotWidenOperands) {
   CheckHalfNoExpandedOperand(true, 1024, 1, 512, 541);  // skinny-N GEMV
   CheckHalfNoExpandedOperand(true, 1, 1024, 512, 551);  // skinny-M GEMV
-  CheckHalfNoExpandedOperand(true, 8, 4, 49152, 561);   // split-K
+  CheckHalfNoExpandedOperand(true, 8, 4, 131072, 561);  // split-K
   CheckHalfNoExpandedOperand(true, 1024, 32, 512, 571); // general blocked
 }
