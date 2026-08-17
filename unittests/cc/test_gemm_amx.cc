@@ -87,10 +87,13 @@ TEST(GemmAmxTile, SetTileRejectsOutOfRangeRequests) {
 }
 
 // Detection must be self-consistent and never claim a narrower AMX subset
-// without the shared AMX-TILE state.
+// without the shared AMX-TILE state. AmxTileStateAvailable() is queried first so
+// its one-time OS permission request runs before CpuSupportsAmxTile() observes
+// XCR0 on an AMX-capable Linux host.
 TEST(GemmAmxTile, DetectionIsConsistent) {
+  const bool available = AmxTileStateAvailable();
   const bool tile = CpuSupportsAmxTile();
-  EXPECT_EQ(AmxTileStateAvailable(), tile);
+  EXPECT_EQ(available, tile);
   if (CpuSupportsAmxBf16())
     EXPECT_TRUE(tile);
   if (CpuSupportsAmxInt8())
@@ -105,18 +108,21 @@ TEST(GemmAmxTile, AvailabilityIsIdempotent) {
 }
 
 // The per-worker RAII scope must be safe on every CPU: when AMX tile state is
-// unavailable it configures nothing and reports it, and the destructor is safe
-// to run regardless. When AMX is available the tiles load and release without
-// faulting.
+// unavailable (or the intrinsics were not compiled in) it configures nothing
+// and reports it, and the destructor is safe to run regardless. Whenever it
+// does configure the tiles, AMX tile state must be available -- the invariant
+// that holds no matter whether the binary was built with ``-mamx-tile``.
 TEST(GemmAmxTile, TileScopeSafeFallbackAndConfiguration) {
   AmxTileConfig config;
   ASSERT_TRUE(AmxTileConfigSetTile(config, 0, kAmxMaxRows, kAmxMaxColBytes));
   AmxTileScope scope(config);
-  EXPECT_EQ(scope.configured(), AmxTileStateAvailable());
+  if (scope.configured())
+    EXPECT_TRUE(AmxTileStateAvailable());
 }
 
 // Tile configuration is thread-local hardware state, so each worker owns its
-// scope. Exercising the scope from a separate thread must behave identically.
+// scope. Exercising the scope from a separate thread must behave identically:
+// configuring the tiles only when AMX tile state is available.
 TEST(GemmAmxTile, TileScopeIsPerWorker) {
   bool configured = false;
   bool available = false;
@@ -128,7 +134,8 @@ TEST(GemmAmxTile, TileScopeIsPerWorker) {
     available = AmxTileStateAvailable();
   });
   worker.join();
-  EXPECT_EQ(configured, available);
+  if (configured)
+    EXPECT_TRUE(available);
 }
 
 } // namespace

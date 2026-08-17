@@ -166,19 +166,21 @@ bool CpuSupportsAmxTile() {
 }
 
 bool CpuSupportsAmxBf16() {
-  // AMX-BF16 is reported by CPUID.(EAX=7,ECX=0):EDX[22]. It relies on the same
-  // OS-enabled tile state as ``AMX-TILE``.
+  // AMX-BF16 (EDX[22]) relies on the same OS-enabled tile state as AMX-TILE
+  // (EDX[24]). Both bits and the OS check are read from a single CPUID leaf.
   const auto info7 = Cpuid(7);
   const bool has_amx_bf16 = (info7.edx & (1u << 22)) != 0;
-  return has_amx_bf16 && CpuSupportsAmxTile();
+  const bool has_amx_tile = (info7.edx & (1u << 24)) != 0;
+  return has_amx_bf16 && has_amx_tile && OsSupportsAmxTileState();
 }
 
 bool CpuSupportsAmxInt8() {
-  // AMX-INT8 is reported by CPUID.(EAX=7,ECX=0):EDX[25]. It relies on the same
-  // OS-enabled tile state as ``AMX-TILE``.
+  // AMX-INT8 (EDX[25]) relies on the same OS-enabled tile state as AMX-TILE
+  // (EDX[24]). Both bits and the OS check are read from a single CPUID leaf.
   const auto info7 = Cpuid(7);
   const bool has_amx_int8 = (info7.edx & (1u << 25)) != 0;
-  return has_amx_int8 && CpuSupportsAmxTile();
+  const bool has_amx_tile = (info7.edx & (1u << 24)) != 0;
+  return has_amx_int8 && has_amx_tile && OsSupportsAmxTileState();
 }
 
 #else // Non-x86
