@@ -199,7 +199,7 @@ class TestBackendCases:
             ],
             [helper.make_tensor_value_info("Y", TensorProto.FLOAT, None)],
         )
-        model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 18)])
+        model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 18)], ir_version=13)
         sess = ReferenceEvaluator(model)
         (y,) = sess.run(None, {"A": a, "B": b})
         # onnx-light-cpu overrides "Gemm" in onnx-light's dispatch table, so the
