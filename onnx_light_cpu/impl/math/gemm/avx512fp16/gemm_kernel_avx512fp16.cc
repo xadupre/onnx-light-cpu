@@ -20,6 +20,7 @@
 
 #include "onnx_light_cpu/impl/math/gemm/avx512fp16/gemm_kernel_avx512fp16.h"
 
+#include <cassert>
 #include <cstring>
 
 #include <immintrin.h>
@@ -52,6 +53,9 @@ void GemmMicroKernel_AVX512FP16(std::size_t mr, std::size_t nb, std::size_t K, f
                                 const float *Crow_base, std::size_t Cstride, float *Yrow_base,
                                 std::size_t Ystride, std::size_t n0, GemmAccumMode mode,
                                 const std::uint16_t *Apack) {
+  // ``acc`` is register-blocked over at most ``kGemmAVX512MR`` rows; callers
+  // must cap ``mr`` to that bound (the dispatch path uses std::min).
+  assert(mr <= kGemmAVX512MR && "mr exceeds kGemmAVX512MR register-row budget");
   const __m512 valpha = _mm512_set1_ps(alpha);
   const __m512 vbeta = _mm512_set1_ps(beta);
   const bool alpha_is_one = alpha == 1.0f;
