@@ -34,4 +34,9 @@ bool CpuSupportsFma();
 /// and AVX state is enabled by the operating system.
 bool CpuSupportsF16C();
 
+/// Returns whether the AVX-512FP16 instruction set (native half-precision
+/// arithmetic and conversion) is available and AVX-512 state is enabled by the
+/// operating system.
+bool CpuSupportsAvx512Fp16();
+
 } // namespace onnx_light_cpu

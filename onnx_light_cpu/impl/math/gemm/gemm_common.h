@@ -141,4 +141,42 @@ void GemmMicroKernel_Scalar_F64(std::size_t mr, std::size_t nb, std::size_t K, d
                                 std::size_t Ystride, std::size_t n0, GemmAccumMode mode,
                                 const double *Apack);
 
+// Signature shared by every member of the native FLOAT16 GEMM micro-kernel
+// family (Roadmap PR07.3). Unlike the FP32 micro-kernels, both operands stay in
+// FLOAT16: ``Apack`` is a packed contiguous ``mr x K`` row-major panel of raw
+// FLOAT16 patterns (``Apack[r * K + k]`` is ``A(m + r, k0 + k)``) and ``Bmat``
+// is the FLOAT16 ``B`` matrix read with row stride ``N``. Each element is
+// converted to float on the fly and the dot products accumulate in float32, so
+// the float32 result matches the widen-then-float32 reference; the epilogue
+// combines ``alpha * acc`` with ``Y`` according to ``mode`` and writes float32.
+using GemmFp16MicroKernel = void (*)(std::size_t mr, std::size_t nb, std::size_t K, float alpha,
+                                     float beta, const std::uint16_t *Bmat, std::size_t N,
+                                     const float *Crow_base, std::size_t Cstride, float *Yrow_base,
+                                     std::size_t Ystride, std::size_t n0, GemmAccumMode mode,
+                                     const std::uint16_t *Apack);
+
+// Portable scalar member of the FLOAT16 micro-kernel family. It is the tail
+// handler for the vectorized AVX-512FP16 kernel and the reference the
+// differential tests run everywhere (no AVX-512FP16 hardware required).
+void GemmMicroKernel_ScalarFp16(std::size_t mr, std::size_t nb, std::size_t K, float alpha,
+                                float beta, const std::uint16_t *Bmat, std::size_t N,
+                                const float *Crow_base, std::size_t Cstride, float *Yrow_base,
+                                std::size_t Ystride, std::size_t n0, GemmAccumMode mode,
+                                const std::uint16_t *Apack);
+
+namespace detail {
+
+// Native FLOAT16 general GEMM driver (Roadmap PR07.3). It packs each ``mr``-row
+// block of ``A`` into a FLOAT16 panel (resolving ``trans_a``) and streams the
+// non-transposed FLOAT16 ``B`` matrix through ``kernel`` with float32
+// accumulation, writing ``alpha * (A @ B)`` to the float32 ``Y`` (no bias). The
+// micro-kernel is injected so the same driver, packing, and column-tail logic
+// can be exercised in tests with the portable scalar member and dispatched to
+// the AVX-512FP16 member in production.
+void GemmFp16NativeGeneral(bool trans_a, std::size_t M, std::size_t N, std::size_t K, float alpha,
+                           const std::uint16_t *A, const std::uint16_t *B, float *Y,
+                           GemmFp16MicroKernel kernel, std::size_t mr);
+
+} // namespace detail
+
 } // namespace onnx_light_cpu

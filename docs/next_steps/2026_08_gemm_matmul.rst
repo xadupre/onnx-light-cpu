@@ -387,6 +387,11 @@ extra full-matrix memory passes.
   in Roadmap PR07.1; removing the remaining widening paths is Roadmap PR07.2.)*
 * For AVX-512BF16 and AVX-512FP16, add native dot-product/multiply-accumulate
   kernels with FP32 accumulation where required by the ONNX numerical contract.
+  *(First landed: Roadmap PR07.3 adds a native AVX-512FP16 general kernel that
+  keeps both operands in FLOAT16 to the register file, widens each 16-lane
+  ``B`` vector with ``vcvtph2psx``, and accumulates in float32. It is dispatched
+  by ``CpuSupportsAvx512Fp16()`` for non-transposed ``B`` and otherwise keeps
+  the converting float32 path. AVX-512BF16 remains Roadmap PR07.4.)*
 * Add AMX tile kernels behind OS-enabled tile-state detection. AMX must remain
   optional because enabling the ISA and configuring tiles have non-trivial
   per-thread costs.
@@ -744,7 +749,7 @@ require measurements on dedicated hardware.
        performance with no priority shape below 0.9x where the type is
        supported.
      - P3-P4.
-     - PR07.0, PR07.1, and PR07.2 are implemented. The remaining
+     - PR07.0, PR07.1, PR07.2, and PR07.3 are implemented. The remaining
        work is split by execution path, ISA, and type below; hardware-specific
        lanes may proceed in parallel after their shared semantic dependency.
      - Roadmap PR07.0 through PR10.5 below.
@@ -1006,7 +1011,26 @@ fallbacks are ordered. Completed rows remain visible so scope is not lost.
      - One FP16 micro-kernel family, its CPUID dispatch, tails, and differential
        tests land without BF16 or AMX changes.
      - PR07.2
-     - Pending
+     - Implemented. A new ``CpuSupportsAvx512Fp16()`` CPUID gate
+       (leaf 7 ``EDX[23]`` plus OS AVX-512 state) selects the native path at
+       runtime. The ``gemm/avx512fp16`` translation unit is compiled with
+       ``-mavx512fp16`` and carries ``GemmMicroKernel_AVX512FP16``, which keeps
+       both operands in FLOAT16 -- a packed FLOAT16 ``A`` panel and the
+       non-transposed FLOAT16 ``B`` matrix -- widens each 16-lane ``B`` vector
+       with ``vcvtph2psx`` (``_mm512_cvtxph_ps``), broadcasts each FLOAT16 ``A``
+       element, and accumulates in float32, so the result matches the
+       widen-then-float32 reference. Column counts that are not a multiple of
+       sixteen finish through the shared scalar member
+       ``GemmMicroKernel_ScalarFp16`` (also the portable, always-built family
+       member). ``GemmHalfPlanned`` dispatches the general FLOAT16 algorithm to
+       the native ``GemmFp16NativeGeneral`` driver when the CPU reports
+       AVX-512FP16 and ``B`` is not transposed, halving the ``B`` traffic; every
+       other shape and ISA keeps the converting float32 path from PR07.0-07.2.
+       New ``GemmFp16Native`` C++ tests run the driver with the scalar member
+       everywhere (square, column-tail, ``trans_a``, empty-K, non-unit alpha)
+       and repeat the general FLOAT16 differential shapes through the public
+       path on AVX-512FP16 hardware. BF16 and AMX are untouched. The
+       dedicated-machine ONNX Runtime comparison is tracked by PR10.5.
    * - Roadmap PR07.4
      - Native AVX-512BF16 kernel.
      - One BF16 dot-product kernel family, its CPUID dispatch, tails, and

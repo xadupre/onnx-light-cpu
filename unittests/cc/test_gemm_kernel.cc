@@ -763,6 +763,73 @@ TEST(GemmHalf, BFloat16VectorizedPackingTails) {
   CheckGemmHalf(true, false, false, 33, 70, 66, true, 251);
 }
 
+// Roadmap PR07.3: general FLOAT16 shapes whose N spans several 16-lane native
+// AVX-512FP16 column vectors and leaves a scalar tail, with M covering several
+// register-row blocks. On an AVX-512FP16 CPU these exercise the native kernel
+// (both the vector body and the scalar column tail); elsewhere they keep the
+// converting float32 fallback. Both must match the widen-then-float32 reference.
+TEST(GemmHalf, Float16NativeGeneralColumnTails) {
+  CheckGemmHalf(false, false, false, 20, 48, 40, false, 161); // N == 3 * 16, no tail
+  CheckGemmHalf(false, false, false, 20, 35, 40, true, 171);  // N == 2 * 16 + 3 tail
+  CheckGemmHalf(false, true, false, 17, 19, 33, true, 181);   // trans_a, N == 16 + 3 tail
+}
+
+namespace {
+
+// Runs the native FLOAT16 general driver (Roadmap PR07.3) with an injected
+// micro-kernel and compares ``alpha * op(A) @ B`` against the equivalent
+// widen-then-float32 reference. The driver, FLOAT16 A packing (including
+// ``trans_a``), and the kernel's 16-lane body plus scalar column tail are all
+// exercised here; the portable scalar member runs everywhere while the
+// AVX-512FP16 member only runs on capable hardware.
+void CheckGemmFp16NativeDriver(bool trans_a, std::size_t M, std::size_t N, std::size_t K,
+                               float alpha, unsigned seed,
+                               onnx_light_cpu::GemmFp16MicroKernel kernel) {
+  const auto a_f = RandomVector(trans_a ? K * M : M * K, seed);
+  const auto b_f = RandomVector(K * N, seed + 1);
+  const auto a_bits = NarrowHalf(a_f, false);
+  const auto b_bits = NarrowHalf(b_f, false);
+  const auto a_round = WidenHalf(a_bits, false);
+  const auto b_round = WidenHalf(b_bits, false);
+  const auto expected =
+      ReferenceGemm<float>(trans_a, false, M, N, K, alpha, a_round, b_round, 0.0f, nullptr);
+
+  std::vector<float> Y(M * N, -1.0f);
+  onnx_light_cpu::detail::GemmFp16NativeGeneral(trans_a, M, N, K, alpha, a_bits.data(),
+                                                b_bits.data(), Y.data(), kernel, 6);
+
+  for (std::size_t i = 0; i < M * N; ++i) {
+    const float tol = 1e-3f * std::max(1.0f, std::abs(expected[i]));
+    EXPECT_NEAR(Y[i], expected[i], tol) << "i=" << i;
+  }
+}
+
+} // namespace
+
+TEST(GemmFp16Native, ScalarKernelMatchesReference) {
+  // Portable scalar member: several row blocks (M > 6), exact-16 and tail N, an
+  // empty K, ``trans_a``, and a non-unit alpha.
+  CheckGemmFp16NativeDriver(false, 13, 16, 20, 1.0f, 301,
+                            &onnx_light_cpu::GemmMicroKernel_ScalarFp16);
+  CheckGemmFp16NativeDriver(false, 20, 35, 40, 0.75f, 311,
+                            &onnx_light_cpu::GemmMicroKernel_ScalarFp16);
+  CheckGemmFp16NativeDriver(true, 9, 19, 33, 0.5f, 321,
+                            &onnx_light_cpu::GemmMicroKernel_ScalarFp16);
+  CheckGemmFp16NativeDriver(false, 7, 5, 0, 1.0f, 331, &onnx_light_cpu::GemmMicroKernel_ScalarFp16);
+}
+
+TEST(GemmFp16Native, Avx512Fp16KernelMatchesReferenceWhenSupported) {
+  if (!onnx_light_cpu::CpuSupportsAvx512Fp16()) {
+    GTEST_SKIP() << "CPU does not support AVX-512FP16";
+  }
+  // On capable hardware the public FLOAT16 GEMM path dispatches these general
+  // shapes to the native AVX-512FP16 kernel; assert it matches the reference for
+  // the 16-lane body, the scalar column tail, and a transposed A.
+  CheckGemmHalf(false, false, false, 20, 48, 40, false, 401);
+  CheckGemmHalf(false, false, false, 20, 35, 40, true, 411);
+  CheckGemmHalf(false, true, false, 17, 19, 33, true, 421);
+}
+
 TEST(GemmHalf, EmptyKGivesBiasOnly) {
   const std::size_t M = 3, N = 4, K = 0;
   const auto bias_f = RandomVector(M * N, 301);

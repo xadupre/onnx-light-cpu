@@ -118,6 +118,15 @@ bool CpuSupportsF16C() {
   return has_f16c && OsSupportsAvx();
 }
 
+bool CpuSupportsAvx512Fp16() {
+  // AVX512_FP16 is reported by CPUID.(EAX=7,ECX=0):EDX[23]. Native FP16
+  // instructions load their operands into ZMM registers, so the OS must also
+  // save AVX-512 state (checked by ``OsSupportsAvx512``).
+  const auto info7 = Cpuid(7);
+  const bool has_avx512fp16 = (info7.edx & (1u << 23)) != 0;
+  return has_avx512fp16 && OsSupportsAvx512();
+}
+
 #else // Non-x86
 
 SimdLevel DetectSimdLevel() { return SimdLevel::kNone; }
@@ -127,6 +136,8 @@ bool CpuSupportsAvx512BW() { return false; }
 bool CpuSupportsFma() { return false; }
 
 bool CpuSupportsF16C() { return false; }
+
+bool CpuSupportsAvx512Fp16() { return false; }
 
 #endif // ONNX_LIGHT_CPU_X86
 
