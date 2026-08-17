@@ -185,6 +185,7 @@ if(NOT ONNX_LIGHT_CPU_X86)
   set(ONNX_LIGHT_CPU_HAVE_AVX512BW_FLAG FALSE)
   set(ONNX_LIGHT_CPU_HAVE_AVX512FP16_FLAG FALSE)
   set(ONNX_LIGHT_CPU_HAVE_AVX512BF16_FLAG FALSE)
+  set(ONNX_LIGHT_CPU_HAVE_AMX_TILE_FLAG FALSE)
 elseif(NOT MSVC)
   check_cxx_compiler_flag("-mavx2 -mfma" ONNX_LIGHT_CPU_HAVE_AVX2_FMA_FLAG)
   check_cxx_compiler_flag("-mavx2 -mfma -mf16c" ONNX_LIGHT_CPU_HAVE_F16C_FLAG)
@@ -194,6 +195,9 @@ elseif(NOT MSVC)
   check_cxx_compiler_flag("-mavx512fp16" ONNX_LIGHT_CPU_HAVE_AVX512FP16_FLAG)
   check_cxx_compiler_flag("-mavx512f -mavx512bw -mavx512bf16"
       ONNX_LIGHT_CPU_HAVE_AVX512BF16_FLAG)
+  # The AMX tile-state lifecycle (LDTILECFG/TILERELEASE) needs -mamx-tile for the
+  # tile intrinsics; the module keeps a safe fallback when the flag is absent.
+  check_cxx_compiler_flag("-mamx-tile" ONNX_LIGHT_CPU_HAVE_AMX_TILE_FLAG)
 else()
   check_cxx_compiler_flag("/arch:AVX2" ONNX_LIGHT_CPU_HAVE_AVX2_FMA_FLAG)
   # /arch:AVX2 already enables the F16C intrinsics on MSVC.
@@ -209,6 +213,10 @@ else()
   # intrinsics used by the native BFLOAT16 kernel; keep it out of the build and
   # rely on the converting float32 fallback path.
   set(ONNX_LIGHT_CPU_HAVE_AVX512BF16_FLAG FALSE)
+  # MSVC has no -mamx-tile equivalent for the tile intrinsics used by the AMX
+  # tile-state lifecycle; keep the native path out of the build and rely on the
+  # safe fallback.
+  set(ONNX_LIGHT_CPU_HAVE_AMX_TILE_FLAG FALSE)
 endif()
 
 # ---------------------------------------------------------------------------
@@ -230,6 +238,8 @@ set(_gemm_avx512fp16_source
     "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/gemm/avx512fp16/gemm_kernel_avx512fp16.cc")
 set(_gemm_avx512bf16_source
     "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/gemm/avx512bf16/gemm_kernel_avx512bf16.cc")
+set(_gemm_amx_source
+    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/gemm/amx/gemm_amx_tile.cc")
 set(_gemm_avx2_fma_source
     "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/gemm/avx2/gemm_kernel_avx2_fma.cc")
 set(_gemm_neon_source
@@ -349,6 +359,16 @@ if(ONNX_LIGHT_CPU_HAVE_AVX512BF16_FLAG)
       COMPILE_OPTIONS "-mavx512f;-mavx512bw;-mavx512bf16")
   target_compile_definitions(lib_onnx_light_cpu PRIVATE
       ONNX_LIGHT_CPU_HAVE_AVX512BF16=1)
+endif()
+
+if(ONNX_LIGHT_CPU_HAVE_AMX_TILE_FLAG)
+  # The AMX tile-state lifecycle needs -mamx-tile for the LDTILECFG/TILERELEASE
+  # tile intrinsics; the rest of the library keeps the baseline flags and the
+  # module only touches the tiles once AmxTileStateAvailable() reports the ISA.
+  set_source_files_properties("${_gemm_amx_source}" PROPERTIES
+      COMPILE_OPTIONS "-mamx-tile")
+  target_compile_definitions(lib_onnx_light_cpu PRIVATE
+      ONNX_LIGHT_CPU_HAVE_AMX_TILE=1)
 endif()
 
 if(ONNX_LIGHT_CPU_HAVE_AVX2_FMA_FLAG)

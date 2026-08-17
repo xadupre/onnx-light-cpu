@@ -93,7 +93,7 @@ jobs:
         run: cmake --build build --parallel --target test_gemm_kernel test_gemm_plan
 
       - name: Run GEMM tests
-        run: ctest --test-dir build --output-on-failure -R "Gemm|MatMul"
+        run: ctest --test-dir build --output-on-failure -R "Gemm|MatMul" --timeout 240
 
   arm_gemm_sve:
     name: ARM64 GEMM (SVE emulation)

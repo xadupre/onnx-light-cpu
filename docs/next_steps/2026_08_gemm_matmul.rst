@@ -398,7 +398,13 @@ extra full-matrix memory passes.
   converting float32 path.)*
 * Add AMX tile kernels behind OS-enabled tile-state detection. AMX must remain
   optional because enabling the ISA and configuring tiles have non-trivial
-  per-thread costs.
+  per-thread costs. *(First landed: Roadmap PR07.5 adds the AMX tile-state
+  lifecycle -- ``CpuSupportsAmxTile``/``AmxBf16``/``AmxInt8`` detection, the
+  one-time Linux ``XTILEDATA`` permission request behind
+  ``AmxTileStateAvailable``, the validating ``AmxTileConfig`` builder, and the
+  per-worker ``AmxTileScope`` (``LDTILECFG``/``TILERELEASE``) with a safe
+  no-op fallback -- with no GEMM kernel yet; the AMX-BF16 kernel is PR07.6 and
+  AMX-INT8 is PR09.4.)*
 * Implement equivalent ARM FP16/BF16 and dot-product paths.
 * For INT8, fuse zero-point correction and requantization into packing and the
   epilogue. Accumulate in INT32 and define overflow behavior through the ONNX
@@ -753,7 +759,7 @@ require measurements on dedicated hardware.
        performance with no priority shape below 0.9x where the type is
        supported.
      - P3-P4.
-     - PR07.0, PR07.1, PR07.2, PR07.3, and PR07.4 are implemented. The
+     - PR07.0, PR07.1, PR07.2, PR07.3, PR07.4, and PR07.5 are implemented. The
        remaining work is split by execution path, ISA, and type below;
        hardware-specific lanes may proceed in parallel after their shared
        semantic dependency.
@@ -1069,7 +1075,28 @@ fallbacks are ordered. Completed rows remain visible so scope is not lost.
      - OS-enabled tile-state detection, per-worker tile configuration, and
        safe fallback pass focused lifecycle tests. No GEMM kernel is included.
      - PR07.2
-     - Pending
+     - Implemented. New ``CpuSupportsAmxTile()``, ``CpuSupportsAmxBf16()``, and
+       ``CpuSupportsAmxInt8()`` CPUID gates (leaf 7 subleaf 0 ``EDX`` bits 24,
+       22, and 25) check the AMX feature bits and, via a new
+       ``OsSupportsAmxTileState()`` helper, that the OS has enabled the
+       ``XTILECFG`` and ``XTILEDATA`` components in ``XCR0`` (bits 17 and 18).
+       A dedicated ``gemm/amx`` translation unit compiled with ``-mamx-tile``
+       owns the lifecycle: ``AmxTileStateAvailable()`` requests the
+       ``XTILEDATA`` permission once per process on Linux
+       (``ARCH_REQ_XCOMP_PERM`` through ``arch_prctl``, harmless when AMX is
+       absent), then caches whether tile state is usable. The hardware-defined
+       64-byte ``AmxTileConfig`` (``TILECFG``) is populated with the validating
+       ``AmxTileConfigSetTile`` builder, and the per-worker RAII
+       ``AmxTileScope`` runs ``LDTILECFG`` on construction and ``TILERELEASE``
+       on destruction, degrading to a no-op that reports ``configured() ==
+       false`` whenever AMX tile state is unavailable. No AMX GEMM kernel is
+       added: the AMX-BF16 kernel is PR07.6 and AMX-INT8 is PR09.4. New
+       ``GemmAmxTile`` C++ lifecycle tests cover the ``TILECFG`` layout, the
+       builder's range validation, detection consistency, availability
+       idempotency, and the safe fallback of the scope (including from a worker
+       thread); when the toolchain lacks ``-mamx-tile`` the module keeps the
+       fallback and still links. The dedicated-machine ONNX Runtime comparison
+       is tracked by PR10.5.
    * - Roadmap PR07.6
      - AMX-BF16 kernel.
      - The AMX-BF16 kernel reuses PR07.5, passes differential tests on native
