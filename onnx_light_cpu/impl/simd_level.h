@@ -39,4 +39,9 @@ bool CpuSupportsF16C();
 /// operating system.
 bool CpuSupportsAvx512Fp16();
 
+/// Returns whether the AVX-512BF16 instruction set (native ``vdpbf16ps``
+/// bfloat16 dot-product) is available and AVX-512 state is enabled by the
+/// operating system.
+bool CpuSupportsAvx512Bf16();
+
 } // namespace onnx_light_cpu

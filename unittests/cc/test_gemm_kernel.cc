@@ -830,6 +830,64 @@ TEST(GemmFp16Native, Avx512Fp16KernelMatchesReferenceWhenSupported) {
   CheckGemmHalf(false, true, false, 17, 19, 33, true, 421);
 }
 
+namespace {
+
+// Runs the native BFLOAT16 general driver (Roadmap PR07.4) with an injected
+// micro-kernel and compares ``alpha * op(A) @ B`` against the equivalent
+// widen-then-float32 reference. The driver, BFLOAT16 A packing (including
+// ``trans_a``), and the kernel's paired 16-lane ``vdpbf16ps`` body -- including
+// the odd-K leftover and the scalar column tail -- are all exercised here; the
+// portable scalar member runs everywhere while the AVX-512BF16 member only runs
+// on capable hardware.
+void CheckGemmBf16NativeDriver(bool trans_a, std::size_t M, std::size_t N, std::size_t K,
+                               float alpha, unsigned seed,
+                               onnx_light_cpu::GemmBf16MicroKernel kernel) {
+  const auto a_f = RandomVector(trans_a ? K * M : M * K, seed);
+  const auto b_f = RandomVector(K * N, seed + 1);
+  const auto a_bits = NarrowHalf(a_f, true);
+  const auto b_bits = NarrowHalf(b_f, true);
+  const auto a_round = WidenHalf(a_bits, true);
+  const auto b_round = WidenHalf(b_bits, true);
+  const auto expected =
+      ReferenceGemm<float>(trans_a, false, M, N, K, alpha, a_round, b_round, 0.0f, nullptr);
+
+  std::vector<float> Y(M * N, -1.0f);
+  onnx_light_cpu::detail::GemmBf16NativeGeneral(trans_a, M, N, K, alpha, a_bits.data(),
+                                                b_bits.data(), Y.data(), kernel, 6);
+
+  for (std::size_t i = 0; i < M * N; ++i) {
+    const float tol = 8e-3f * std::max(1.0f, std::abs(expected[i]));
+    EXPECT_NEAR(Y[i], expected[i], tol) << "i=" << i;
+  }
+}
+
+} // namespace
+
+TEST(GemmBf16Native, ScalarKernelMatchesReference) {
+  // Portable scalar member: several row blocks (M > 6), exact-16 and tail N,
+  // even and odd K, an empty K, ``trans_a``, and a non-unit alpha.
+  CheckGemmBf16NativeDriver(false, 13, 16, 20, 1.0f, 501,
+                            &onnx_light_cpu::GemmMicroKernel_ScalarBf16);
+  CheckGemmBf16NativeDriver(false, 20, 35, 41, 0.75f, 511,
+                            &onnx_light_cpu::GemmMicroKernel_ScalarBf16);
+  CheckGemmBf16NativeDriver(true, 9, 19, 33, 0.5f, 521,
+                            &onnx_light_cpu::GemmMicroKernel_ScalarBf16);
+  CheckGemmBf16NativeDriver(false, 7, 5, 0, 1.0f, 531, &onnx_light_cpu::GemmMicroKernel_ScalarBf16);
+}
+
+TEST(GemmBf16Native, Avx512Bf16KernelMatchesReferenceWhenSupported) {
+  if (!onnx_light_cpu::CpuSupportsAvx512Bf16()) {
+    GTEST_SKIP() << "CPU does not support AVX-512BF16";
+  }
+  // On capable hardware the public BFLOAT16 GEMM path dispatches these general
+  // shapes to the native AVX-512BF16 kernel; assert it matches the reference for
+  // the 16-lane paired body, the odd-K leftover, the scalar column tail, and a
+  // transposed A.
+  CheckGemmHalf(true, false, false, 20, 48, 40, false, 601); // N == 3 * 16, even K
+  CheckGemmHalf(true, false, false, 20, 35, 41, true, 611);  // N tail, odd K
+  CheckGemmHalf(true, true, false, 17, 19, 33, true, 621);   // trans_a, N tail, odd K
+}
+
 TEST(GemmHalf, EmptyKGivesBiasOnly) {
   const std::size_t M = 3, N = 4, K = 0;
   const auto bias_f = RandomVector(M * N, 301);

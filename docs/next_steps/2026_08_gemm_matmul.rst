@@ -391,7 +391,11 @@ extra full-matrix memory passes.
   keeps both operands in FLOAT16 to the register file, widens each 16-lane
   ``B`` vector with ``vcvtph2psx``, and accumulates in float32. It is dispatched
   by ``CpuSupportsAvx512Fp16()`` for non-transposed ``B`` and otherwise keeps
-  the converting float32 path. AVX-512BF16 remains Roadmap PR07.4.)*
+  the converting float32 path. Roadmap PR07.4 adds the sibling native
+  AVX-512BF16 general kernel that reduces pairs of ``k`` iterations with the
+  ``vdpbf16ps`` dot-product, accumulating in float32; it is dispatched by
+  ``CpuSupportsAvx512Bf16()`` for non-transposed ``B`` and otherwise keeps the
+  converting float32 path.)*
 * Add AMX tile kernels behind OS-enabled tile-state detection. AMX must remain
   optional because enabling the ISA and configuring tiles have non-trivial
   per-thread costs.
@@ -749,9 +753,10 @@ require measurements on dedicated hardware.
        performance with no priority shape below 0.9x where the type is
        supported.
      - P3-P4.
-     - PR07.0, PR07.1, PR07.2, and PR07.3 are implemented. The remaining
-       work is split by execution path, ISA, and type below; hardware-specific
-       lanes may proceed in parallel after their shared semantic dependency.
+     - PR07.0, PR07.1, PR07.2, PR07.3, and PR07.4 are implemented. The
+       remaining work is split by execution path, ISA, and type below;
+       hardware-specific lanes may proceed in parallel after their shared
+       semantic dependency.
      - Roadmap PR07.0 through PR10.5 below.
    * - P6
      - ``AttentionPlan`` and materialized tensor correctness implementation.
@@ -1036,7 +1041,29 @@ fallbacks are ordered. Completed rows remain visible so scope is not lost.
      - One BF16 dot-product kernel family, its CPUID dispatch, tails, and
        differential tests land with the existing converted-panel fallback.
      - PR07.2
-     - Pending
+     - Implemented. A new ``CpuSupportsAvx512Bf16()`` CPUID gate
+       (leaf 7 subleaf 1 ``EAX[5]`` plus OS AVX-512 state) selects the native
+       path at runtime. The ``gemm/avx512bf16`` translation unit is compiled
+       with ``-mavx512bf16`` and carries ``GemmMicroKernel_AVX512BF16``, which
+       keeps both operands in BFLOAT16 -- a packed BFLOAT16 ``A`` panel and the
+       non-transposed BFLOAT16 ``B`` matrix -- and reduces two ``k`` iterations
+       at a time with the ``vdpbf16ps`` (``_mm512_dpbf16_ps``) dot-product,
+       accumulating in float32, so the result matches the widen-then-float32
+       reference while halving the ``B`` traffic. Each 16-lane pair vector is
+       assembled by zero-extending two consecutive BFLOAT16 ``B`` rows and
+       broadcasting the matching BFLOAT16 ``A`` pair; an odd ``K`` finishes with
+       one pair whose second element is zeroed, and column counts that are not a
+       multiple of sixteen finish through the shared scalar member
+       ``GemmMicroKernel_ScalarBf16`` (also the portable, always-built family
+       member). ``GemmHalfPlanned`` dispatches the general BFLOAT16 algorithm to
+       the native ``GemmBf16NativeGeneral`` driver when the CPU reports
+       AVX-512BF16 and ``B`` is not transposed; every other shape and ISA keeps
+       the converting float32 path from PR07.0-07.2. New ``GemmBf16Native`` C++
+       tests run the driver with the scalar member everywhere (square,
+       column-tail, even/odd ``K``, ``trans_a``, empty-K, non-unit alpha) and
+       repeat the general BFLOAT16 differential shapes through the public path on
+       AVX-512BF16 hardware. FP16, AMX, and INT8 are untouched. The
+       dedicated-machine ONNX Runtime comparison is tracked by PR10.5.
    * - Roadmap PR07.5
      - AMX tile-state lifecycle.
      - OS-enabled tile-state detection, per-worker tile configuration, and
