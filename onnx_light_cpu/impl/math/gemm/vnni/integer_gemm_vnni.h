@@ -2,18 +2,21 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// x86 VNNI INT8 matrix multiplication (Roadmap PR09.2). ``IntegerMatMul2D``
-// computes a single ``MatMulInteger`` matrix product exactly, dispatching to a
-// native AVX-512 VNNI (``vpdpbusd``) path when the running CPU reports the ISA
-// (``CpuSupportsAvx512Vnni``) and otherwise to a portable scalar sibling that
-// produces identical results. Both paths share the same packing and zero-point
-// correction, so they are differentially testable over the portable PR09.1
-// fallback.
+// Shared INT8 matrix multiplication driver for ``MatMulInteger`` (Roadmap PR09.2
+// / PR09.3). ``IntegerMatMul2D`` computes a single ``MatMulInteger`` matrix
+// product exactly, dispatching to the native ARM NEON dot-product kernel when
+// the running CPU reports it (``CpuSupportsNeonDotProd``, Roadmap PR09.3), then
+// to a native x86 AVX-512 VNNI (``vpdpbusd``) path when the CPU reports that ISA
+// (``CpuSupportsAvx512Vnni``, Roadmap PR09.2), and otherwise to a portable
+// scalar sibling that produces identical results. All paths share the same
+// packing and zero-point correction, so they are differentially testable over
+// the portable PR09.1 fallback.
 //
 // The native dot-product ``IntegerDotU8S8Avx512Vnni`` is only usable when
 // ``ONNX_LIGHT_CPU_HAVE_AVX512VNNI`` is defined: integer_gemm_avx512vnni.cc
 // (the file that implements it) is only compiled into lib_onnx_light_cpu when
-// CMake confirms the compiler accepts -mavx512vnni -- see CMakeLists.txt.
+// CMake confirms the compiler accepts -mavx512vnni -- see CMakeLists.txt. The
+// NEON path is likewise gated on ``ONNX_LIGHT_CPU_HAVE_NEON_DOTPROD``.
 
 #pragma once
 
@@ -28,8 +31,9 @@ namespace onnx_light_cpu {
 // INT8 (``true``) or UINT8 (``false``). ``a_zero_point`` holds either a single
 // value (``a_zero_point_count == 1``) applied to every row or one value per row
 // (``a_zero_point_count == rows``); ``b_zero_point`` is scalar or per-column in
-// the same way. Dispatches to the native AVX-512 VNNI kernel when available and
-// otherwise to the portable scalar path, producing identical results.
+// the same way. Dispatches to the native ARM NEON dot-product kernel or the
+// native x86 AVX-512 VNNI kernel when available and otherwise to the portable
+// scalar path, producing identical results.
 void IntegerMatMul2D(const std::uint8_t *a, bool a_signed, const std::uint8_t *b, bool b_signed,
                      std::int32_t *c, std::int64_t rows, std::int64_t cols, std::int64_t depth,
                      const std::int32_t *a_zero_point, std::int64_t a_zero_point_count,

@@ -424,7 +424,18 @@ extra full-matrix memory passes.
   bits); shorter vectors keep the better-unrolled NEON kernel.)*
 * For INT8, fuse zero-point correction and requantization into packing and the
   epilogue. Accumulate in INT32 and define overflow behavior through the ONNX
-  operator contract.
+  operator contract. *(First landed: Roadmap PR09.2 adds the x86 VNNI INT8 kernel
+  (native ``vpdpbusd`` path with a portable scalar sibling) behind the shared
+  ``IntegerMatMul2D`` driver for the contiguous rank >= 2 ``MatMulInteger`` case.
+  Roadmap PR09.3 then adds the native ARM NEON dot-product INT8 kernel
+  ``GemmMatMulIntegerNeonDotProd``, dispatched from that same ``IntegerMatMul2D``
+  entry point. A single unsigned ``UDOT`` reduction serves every signedness
+  combination by folding a signed operand's ``+128`` bias into its effective zero
+  point and recovering the raw products with per-row / per-column byte-sum
+  corrections, so the INT32 accumulation matches the portable scalar fallback bit
+  for bit modulo 2^32; it is gated on the ``+dotprod`` build flag and the runtime
+  ``CpuSupportsNeonDotProd`` capability, keeping the scalar reduction as the
+  fallback.)*
 * Treat Float8 and packed 4-bit types as separate packing formats, not as
   branches in the FP32 inner loop.
 
@@ -1166,7 +1177,27 @@ fallbacks are ordered. Completed rows remain visible so scope is not lost.
      - Signed and unsigned NEON dot-product paths have exact tails, runtime
        dispatch, and differential tests over the PR09.1 fallback.
      - PR09.1
-     - Pending
+     - Implemented. The contiguous rank >= 2 ``MatMulInteger`` product is routed
+       through the shared ``IntegerMatMul2D`` driver
+       (``impl/math/gemm/vnni/integer_gemm_vnni.cc``), which dispatches to the
+       native NEON dot-product kernel ``GemmMatMulIntegerNeonDotProd``
+       (``gemm/arm/gemm_kernel_neon_dotprod.cc``, built with
+       ``-march=armv8.2-a+dotprod``) when the build and CPU (runtime
+       ``CpuSupportsNeonDotProd``, ``HWCAP_ASIMDDP``) support it, ahead of the
+       x86 VNNI path (PR09.2) and otherwise the shared portable scalar reduction.
+       A single unsigned ``UDOT`` path
+       serves every signedness combination: a signed operand maps into the
+       unsigned byte domain by flipping its sign bit with the ``+128`` bias
+       folded into that operand's effective zero point, and the raw products are
+       recovered with per-row / per-column byte-sum corrections, so the result
+       -- including scalar and per-axis zero points -- reproduces the scalar
+       accumulator bit for bit modulo 2^32. ``A`` stays contiguous along ``K``
+       while ``B`` is packed once into a column-major ``N x K`` buffer, the
+       16-byte ``UDOT`` body carries an exact scalar ``K`` tail, and new
+       ``IntegerMatMul2D`` differential shapes in ``test_gemm_kernel`` (every
+       signedness combination, scalar and per-axis zero points, and aligned and
+       tail ``K``) run through the shared dispatch under the cross-compiled
+       aarch64 QEMU CI and match the reference. AMX is excluded (PR09.4).
    * - Roadmap PR09.4
      - AMX-INT8 kernel.
      - The PR07.5 tile-state lifecycle is reused for signed and unsigned INT8,

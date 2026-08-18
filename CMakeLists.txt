@@ -177,6 +177,26 @@ else()
   set(ONNX_LIGHT_CPU_HAVE_SVE_INTRINSICS FALSE)
 endif()
 
+# The INT8 MatMulInteger fast path uses the NEON dot-product (``UDOT``, ARMv8.2-A
+# ``+dotprod``) instruction. Probe for the intrinsics so the integer path keeps
+# its portable scalar reduction on toolchains or targets without them.
+if(ONNX_LIGHT_CPU_HAVE_NEON_INTRINSICS AND NOT MSVC)
+  set(_saved_required_flags "${CMAKE_REQUIRED_FLAGS}")
+  set(CMAKE_REQUIRED_FLAGS "${CMAKE_REQUIRED_FLAGS} -march=armv8.2-a+dotprod")
+  check_cxx_source_compiles(
+      "#include <${_arm_neon_header}>
+       int main() {
+         uint32x4_t acc = vdupq_n_u32(0);
+         uint8x16_t bytes = vdupq_n_u8(1);
+         acc = vdotq_u32(acc, bytes, bytes);
+         return static_cast<int>(vgetq_lane_u32(acc, 0));
+       }"
+      ONNX_LIGHT_CPU_HAVE_NEON_DOTPROD_INTRINSICS)
+  set(CMAKE_REQUIRED_FLAGS "${_saved_required_flags}")
+else()
+  set(ONNX_LIGHT_CPU_HAVE_NEON_DOTPROD_INTRINSICS FALSE)
+endif()
+
 # By default the runtime uses one logical processor per detected physical core;
 # the per-kernel cost model may use fewer participants. A build-time ceiling is
 # still available for constrained targets, but zero must not impose an
@@ -285,6 +305,8 @@ set(_gemm_neon_source
     "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/gemm/arm/gemm_kernel_neon.cc")
 set(_gemm_sve_source
     "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/gemm/arm/gemm_kernel_sve.cc")
+set(_gemm_neon_dotprod_source
+    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/gemm/arm/gemm_kernel_neon_dotprod.cc")
 set(_abs_avx512_source
     "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/avx512/abs_kernel_avx512.cc")
 set(_exp_log_avx512_source
@@ -328,6 +350,9 @@ if(NOT ONNX_LIGHT_CPU_HAVE_NEON_INTRINSICS)
 endif()
 if(NOT ONNX_LIGHT_CPU_HAVE_SVE_INTRINSICS)
   list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_gemm_sve_source}")
+endif()
+if(NOT ONNX_LIGHT_CPU_HAVE_NEON_DOTPROD_INTRINSICS)
+  list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_gemm_neon_dotprod_source}")
 endif()
 
 file(GLOB PY_KERNELS_SOURCES CONFIGURE_DEPENDS
@@ -480,6 +505,13 @@ if(ONNX_LIGHT_CPU_HAVE_SVE_INTRINSICS)
       COMPILE_OPTIONS "-march=armv8-a+sve")
   target_compile_definitions(lib_onnx_light_cpu PRIVATE
       ONNX_LIGHT_CPU_HAVE_SVE=1)
+endif()
+
+if(ONNX_LIGHT_CPU_HAVE_NEON_DOTPROD_INTRINSICS)
+  set_source_files_properties("${_gemm_neon_dotprod_source}" PROPERTIES
+      COMPILE_OPTIONS "-march=armv8.2-a+dotprod")
+  target_compile_definitions(lib_onnx_light_cpu PRIVATE
+      ONNX_LIGHT_CPU_HAVE_NEON_DOTPROD=1)
 endif()
 
 if(ONNX_LIGHT_CPU_HAVE_AVX512BW_FLAG)
