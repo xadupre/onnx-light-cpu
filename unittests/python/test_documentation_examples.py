@@ -52,6 +52,9 @@ def test_documentation_example(example):
     # Use a non-interactive backend so ``plt.show()`` does not block or need a
     # display.
     env["MPLBACKEND"] = "Agg"
+    # Shrink the benchmark examples (fewer/smaller sizes) so they run quickly as
+    # unit tests while still exercising every code path.
+    env["UNITTEST_GOING"] = "1"
 
     proc = subprocess.run(
         [sys.executable, "-u", str(example)],
