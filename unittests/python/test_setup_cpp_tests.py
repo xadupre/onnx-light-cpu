@@ -74,6 +74,29 @@ class TestSetupCppTests:
         assert set_index < make_available_index
 
 
+class TestSetupReleaseByDefault:
+    def test_configures_release_build_type(self):
+        # ``build_ext`` must default to a Release build, never Debug.
+        output = _dry_run()
+        assert "CMAKE_BUILD_TYPE=Release" in output
+        assert "CMAKE_BUILD_TYPE=Debug" not in output
+
+    def test_builds_release_config(self):
+        # Multi-config generators ignore CMAKE_BUILD_TYPE, so the build step
+        # must select the Release configuration explicitly.
+        output = _dry_run()
+        assert "cmake --build" in output
+        build_line = next(line for line in output.splitlines() if "cmake --build" in line)
+        assert "--config Release" in build_line
+
+    def test_installs_release_config(self):
+        # Multi-config generators default ``cmake --install`` to Debug unless a
+        # configuration is given explicitly.
+        output = _dry_run()
+        install_line = next(line for line in output.splitlines() if "cmake --install" in line)
+        assert "--config Release" in install_line
+
+
 class TestSetupOnnxLight:
     def test_onnx_light_flag_enables_integration(self):
         output = _dry_run("--onnx-light")
