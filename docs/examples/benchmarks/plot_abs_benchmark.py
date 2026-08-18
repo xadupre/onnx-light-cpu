@@ -96,7 +96,7 @@ ort_setup_time = time.perf_counter() - _ort_setup_start
 # Sizes benchmarked
 # -----------------
 
-size_grid = [10**k for k in range(2, 4 if unit_test_going else 9)]
+size_grid = [100, 1000] if unit_test_going else [10**k for k in range(2, 9)]
 
 
 def measure(func, repeat, warmup=3):
