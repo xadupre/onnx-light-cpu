@@ -259,9 +259,11 @@ Tensor MatMulIntegerKernel::operator()(const Tensor &a, const Tensor &b, const T
       ReadZeroPoints(b_zero_point, b.data_type, layout.n, "b_zero_point");
   const std::size_t output_bytes =
       static_cast<std::size_t>(ElementCount(layout.output_shape)) * sizeof(int32_t);
-  Tensor output =
-      rt_ns::MakeOutputTensor(static_cast<int32_t>(DataType::INT32), layout.output_shape,
-                              output_bytes, rt != nullptr ? rt->allocator() : nullptr);
+  Tensor output = rt != nullptr
+                      ? rt->MakeOutputTensor(0, static_cast<int32_t>(DataType::INT32),
+                                             layout.output_shape, output_bytes)
+                      : rt_ns::MakeOutputTensor(static_cast<int32_t>(DataType::INT32),
+                                                layout.output_shape, output_bytes, nullptr);
   int32_t *values = output.AsInt32();
 
   // Roadmap PR09.2 / PR09.3: the plain matrix product (both operands rank >= 2,
@@ -346,8 +348,11 @@ Tensor QLinearMatMulKernel::operator()(const Tensor &a, const Tensor &a_scale,
 
   const MatMulLayout layout = ResolveLayout(a, b);
   const std::size_t output_bytes = static_cast<std::size_t>(ElementCount(layout.output_shape));
-  Tensor output = rt_ns::MakeOutputTensor(y_zero_point.data_type, layout.output_shape, output_bytes,
-                                          rt != nullptr ? rt->allocator() : nullptr);
+  Tensor output =
+      rt != nullptr
+          ? rt->MakeOutputTensor(0, y_zero_point.data_type, layout.output_shape, output_bytes)
+          : rt_ns::MakeOutputTensor(y_zero_point.data_type, layout.output_shape, output_bytes,
+                                    nullptr);
   const float combined_scale = as * bs / ys;
 
   ForEachOutput(
