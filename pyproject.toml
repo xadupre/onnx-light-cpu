@@ -18,8 +18,8 @@ dependencies = [
 dev = [
     "black==26.5.1",
     "clang-format==22.1.8",
-    "ml_dtypes==0.6.0",
     "mypy==2.3.0",
+    "onnx-light==0.1.17",
     "pyrefly==1.2.0",
     "pytest>=7",
     "pytest-cov",
