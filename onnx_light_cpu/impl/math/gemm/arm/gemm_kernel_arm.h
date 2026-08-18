@@ -129,4 +129,28 @@ void GemmMicroKernel_SVE_FP16(std::size_t mr, std::size_t nb, std::size_t K, flo
                               const std::uint16_t *Apack);
 #endif
 
+#ifdef ONNX_LIGHT_CPU_HAVE_NEON_DOTPROD
+// Native INT8/UINT8 dot-product member of the GEMM kernel family (Roadmap
+// PR09.3). Computes the contiguous row-major 2D ``MatMulInteger``
+//   ``C[m,n] = sum_k (A[m,k] - a_zero_point[m]) * (B[k,n] - b_zero_point[n])``
+// for dense ``M x K`` (``a``) and ``K x N`` (``b``) operands, writing the
+// row-major ``M x N`` INT32 result to ``c``. ``a_signed`` / ``b_signed`` select
+// the INT8 (``true``) or UINT8 (``false``) element type of each operand, which
+// lets a single unsigned ``UDOT`` path serve every signedness combination: the
+// signed operands are folded into the unsigned domain (a 128 offset absorbed
+// into the zero point) and the raw products are recovered with row/column sum
+// corrections. Zero points are raw integer values; each array holds either one
+// shared value (``count == 1``) or one value per ``A`` row / ``B`` column. The
+// accumulation matches the portable scalar fallback exactly, wrapping modulo
+// 2^32 per the ONNX INT32 accumulation semantics, and the ``K`` remainder that
+// does not fill a 16-byte ``UDOT`` uses an exact scalar tail. Requires the NEON
+// dot-product intrinsics, so it is only declared/defined when the translation
+// unit is compiled with support for them.
+void GemmMatMulIntegerNeonDotProd(const std::uint8_t *a, bool a_signed, const std::uint8_t *b,
+                                  bool b_signed, std::int32_t *c, std::size_t m, std::size_t n,
+                                  std::size_t k, const std::int32_t *a_zero_points,
+                                  std::size_t a_zero_point_count, const std::int32_t *b_zero_points,
+                                  std::size_t b_zero_point_count);
+#endif
+
 } // namespace onnx_light_cpu
