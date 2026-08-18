@@ -27,7 +27,13 @@
 
 #include "onnx_light_cpu/impl/simd_level.h"
 
+#ifdef ONNX_LIGHT_CPU_HAVE_NEON_DOTPROD
+#include "onnx_light_cpu/impl/arm_simd_level.h"
+#include "onnx_light_cpu/impl/math/gemm/arm/gemm_kernel_arm.h"
+#endif
+
 #include <bit>
+#include <cstddef>
 #include <cstdint>
 #include <vector>
 
@@ -118,6 +124,18 @@ void IntegerMatMul2D(const std::uint8_t *a, bool a_signed, const std::uint8_t *b
                      std::int32_t *c, std::int64_t rows, std::int64_t cols, std::int64_t depth,
                      const std::int32_t *a_zero_point, std::int64_t a_zero_point_count,
                      const std::int32_t *b_zero_point, std::int64_t b_zero_point_count) {
+#ifdef ONNX_LIGHT_CPU_HAVE_NEON_DOTPROD
+  // Roadmap PR09.3: prefer the native ARM NEON dot-product kernel when the CPU
+  // supports it. It reproduces the same modulo-2^32 accumulation as the scalar
+  // and VNNI paths below.
+  if (CpuSupportsNeonDotProd()) {
+    GemmMatMulIntegerNeonDotProd(a, a_signed, b, b_signed, c, static_cast<std::size_t>(rows),
+                                 static_cast<std::size_t>(cols), static_cast<std::size_t>(depth),
+                                 a_zero_point, static_cast<std::size_t>(a_zero_point_count),
+                                 b_zero_point, static_cast<std::size_t>(b_zero_point_count));
+    return;
+  }
+#endif
   detail::IntegerVnniDotFn dot = &detail::IntegerDotU8S8Scalar;
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512VNNI
   if (CpuSupportsAvx512Vnni()) {

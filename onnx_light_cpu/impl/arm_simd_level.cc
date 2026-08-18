@@ -23,6 +23,9 @@
 #ifndef HWCAP2_SVE2
 #define HWCAP2_SVE2 (1UL << 1)
 #endif
+#ifndef HWCAP_ASIMDDP
+#define HWCAP_ASIMDDP (1UL << 20)
+#endif
 #endif
 #endif
 
@@ -44,6 +47,20 @@ ArmSimdLevel DetectArmSimdLevel() {
 #endif
 #else
   return ArmSimdLevel::kNone;
+#endif
+}
+
+bool CpuSupportsNeonDotProd() {
+#if defined(__aarch64__) || defined(_M_ARM64)
+#if defined(__linux__)
+  return (getauxval(AT_HWCAP) & HWCAP_ASIMDDP) != 0;
+#else
+  // Non-Linux AArch64 platforms do not expose the dot-product capability bit
+  // through a portable interface here; keep the conservative scalar fallback.
+  return false;
+#endif
+#else
+  return false;
 #endif
 }
 
