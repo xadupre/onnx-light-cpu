@@ -27,8 +27,8 @@ regular Python API:
 onnx-light, its backend-test extension (exposed via the ``_cpuregister``
 extension's ``register_backend_test_cases`` binding, built with
 ``ONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON`` and onnx-light's ``lib_onnx_backend_test``
-available) and ``ml_dtypes`` (for the ``bfloat16`` numpy dtype) are required;
-when any is missing the whole module is skipped.
+available) are required. The selected backend cases use dtypes supported by
+NumPy; ``BFLOAT16`` cases are excluded.
 """
 
 from __future__ import annotations
@@ -36,12 +36,6 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-pytest.importorskip("onnx_light")
-pytest.importorskip("onnx_light_cpu.onnx_py._cpuregister")
-pytest.importorskip("ml_dtypes")
-pytest.importorskip("onnx_light.onnx.backend")
-
-import ml_dtypes
 from onnx_light.onnx import TensorProto, helper
 from onnx_light.onnx.backend import collect_test_cases
 from onnx_light.onnx.reference import ReferenceEvaluator
@@ -55,12 +49,10 @@ from onnx_light_cpu import (
     used_kernel_names,
 )
 
-if not has_backend_test_cases():
-    pytest.skip(
-        "onnx-light-cpu was built without onnx-light's backend test registry "
-        "(register_backend_test_cases binding unavailable).",
-        allow_module_level=True,
-    )
+assert has_backend_test_cases(), (
+    "onnx-light-cpu must be built with onnx-light's backend test registry "
+    "(register_backend_test_cases binding unavailable)."
+)
 
 # Operators whose onnx-light-cpu kernel we validate against every ``test_cpu_*``
 # backend test case, mapped to the library-qualified name each kernel records
@@ -85,7 +77,6 @@ _TP_TO_NP = {
     int(TensorProto.UINT8): np.uint8,
     int(TensorProto.BOOL): np.bool_,
     int(TensorProto.FLOAT16): np.float16,
-    int(TensorProto.BFLOAT16): ml_dtypes.bfloat16,
 }
 
 
@@ -104,6 +95,14 @@ def _single_node_op_type(tc):
     return nodes[0].op_type
 
 
+def _uses_supported_dtypes(tc):
+    return all(
+        int(tensor.data_type) in _TP_TO_NP
+        for data_set in tc.data_sets
+        for tensor in (*data_set.inputs, *data_set.outputs)
+    )
+
+
 def _collect_cpu_cases():
     """Registers and collects the onnx-light-cpu ``test_cpu_*`` backend cases."""
     register_backend_test_cases()
@@ -114,6 +113,7 @@ def _collect_cpu_cases():
                 tc.name.startswith("test_cpu_")
                 and _single_node_op_type(tc) == op_type
                 and tc.data_sets
+                and _uses_supported_dtypes(tc)
             ):
                 cases.append(tc)
     return cases

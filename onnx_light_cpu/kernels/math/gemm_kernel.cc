@@ -240,8 +240,8 @@ Tensor GemmKernel::Compute(const Tensor &a, const Tensor &b, const Tensor *c, fl
       epilogue.beta = beta;
     }
     const std::size_t n_bytes = M * N * sizeof(float);
-    Tensor y = rt_ns::MakeOutputTensor(a.data_type, out_shape, n_bytes,
-                                       rt != nullptr ? rt->allocator() : nullptr);
+    Tensor y = rt != nullptr ? rt->MakeOutputTensor(0, a.data_type, out_shape, n_bytes)
+                             : rt_ns::MakeOutputTensor(a.data_type, out_shape, n_bytes, nullptr);
     plan->Execute(a.AsFloat(), b.AsFloat(), epilogue, y.AsFloat());
     return y;
   }
@@ -263,8 +263,8 @@ Tensor GemmKernel::Compute(const Tensor &a, const Tensor &b, const Tensor *c, fl
       epilogue.beta = static_cast<double>(beta);
     }
     const std::size_t n_bytes = M * N * sizeof(double);
-    Tensor y = rt_ns::MakeOutputTensor(a.data_type, out_shape, n_bytes,
-                                       rt != nullptr ? rt->allocator() : nullptr);
+    Tensor y = rt != nullptr ? rt->MakeOutputTensor(0, a.data_type, out_shape, n_bytes)
+                             : rt_ns::MakeOutputTensor(a.data_type, out_shape, n_bytes, nullptr);
     plan->Execute(a.AsDouble(), b.AsDouble(), epilogue, y.AsDouble());
     return y;
   }
@@ -300,8 +300,8 @@ Tensor GemmKernel::Compute(const Tensor &a, const Tensor &b, const Tensor *c, fl
     }
 
     const std::size_t n_bytes = M * N * sizeof(std::uint16_t);
-    Tensor y = rt_ns::MakeOutputTensor(a.data_type, out_shape, n_bytes,
-                                       rt != nullptr ? rt->allocator() : nullptr);
+    Tensor y = rt != nullptr ? rt->MakeOutputTensor(0, a.data_type, out_shape, n_bytes)
+                             : rt_ns::MakeOutputTensor(a.data_type, out_shape, n_bytes, nullptr);
     epilogue.output_conversion =
         is_bfloat16 ? GemmOutputConversion::kBFloat16 : GemmOutputConversion::kFloat16;
     epilogue.converted_output = reinterpret_cast<std::uint16_t *>(y.mutable_bytes());

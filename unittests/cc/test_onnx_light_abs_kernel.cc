@@ -4,8 +4,10 @@
 
 #include "onnx_light_cpu/kernels/math/abs_kernel.h"
 
+#include "onnx_core/compute/raw_buffer_allocator.h"
 #include "onnx_core/runtime/kernels/kernel_context.h"
 #include "onnx_core/runtime/memory/simple_tensor.h"
+#include "onnx_core/runtime/runtime_context.h"
 
 #include <gtest/gtest.h>
 
@@ -52,6 +54,33 @@ TEST(OnnxLightAbsKernel, Int64) {
   const int64_t *py = y.AsInt64();
   for (std::size_t i = 0; i < values.size(); ++i) {
     EXPECT_EQ(py[i], values[i] < 0 ? -values[i] : values[i]);
+  }
+}
+
+TEST(OnnxLightAbsKernel, OutputUsesSlotAllocator) {
+  onnx_light_cpu::AbsKernel kernel(MakeCtx());
+  const rt_ns::Tensor x = rt_ns::Tensor::FromFloat("x", {2}, {-1.0f, 3.0f});
+  rt_ns::ExecutionArena execution_arena(1);
+  auto io_arena = rt_ns::IOArena::Create(1);
+  rt_ns::RuntimeContextOptions options;
+  options.allocator = &execution_arena;
+  options.io_allocator = io_arena.get();
+  rt_ns::RuntimeContext rt(options);
+  rt.set_output_slot_io_roles({true});
+
+  {
+    const rt_ns::Tensor y = kernel(x, &rt);
+    EXPECT_EQ(y.allocation_owner(), io_arena.get());
+    EXPECT_EQ(execution_arena.allocated_count(), 0);
+    EXPECT_EQ(io_arena->allocated_count(), 1);
+  }
+
+  rt.set_output_slot_io_roles({false});
+  {
+    const rt_ns::Tensor y = kernel(x, &rt);
+    EXPECT_EQ(y.allocation_owner(), &execution_arena);
+    EXPECT_EQ(execution_arena.allocated_count(), 1);
+    EXPECT_EQ(io_arena->allocated_count(), 0);
   }
 }
 
