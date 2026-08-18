@@ -229,7 +229,7 @@ for shape_label, M, N, K in SHAPES:
         results[label].append(elapsed)
         print(f"  {label:<9} | onnx-light-cpu={elapsed * 1e6:10.2f} us")
 
-for shape_label, M, N, K, a32, b32, _, repeat in benchmark_inputs:
+for shape_label, _M, _N, _K, a32, b32, _, repeat in benchmark_inputs:
     if shape_label not in ALONE_SHAPE_LABELS:
         continue
     elapsed = measure(
