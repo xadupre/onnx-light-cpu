@@ -42,13 +42,12 @@ baseline. It only supports ``float32`` (the reference kernel has no
 **multi-panel** and **skinny-M/wide-N** shapes, to the point that including it
 there would dwarf every other curve and defeat the purpose of the comparison.
 
-Why measure it before ``register_kernels()``: ``onnx_light_cpu.register_kernels()``
+Why resolve it before ``register_kernels()``: ``onnx_light_cpu.register_kernels()``
 permanently overrides the process-wide ``Gemm`` kernel entry for the default
 domain, and a session only resolves/caches which kernel it uses on its
-*first* run. So the built-in baseline is measured with its own model/session,
-run once to prime it, **before** ``register_kernels()`` is called; every other
-session used below is created and first run *after* registration, so it picks
-up the SIMD-accelerated kernel instead.
+*first* run. The built-in session is therefore primed before registration but
+measured later, after the accelerated phase. Every accelerated session is
+created and first run after registration.
 """
 
 # %%
@@ -139,20 +138,6 @@ def measure(func, repeat, warmup=3):
     return float(np.median(timings))
 
 
-def measure_together(*funcs, repeat, warmup=3):
-    timings = tuple([] for _ in funcs)
-    for iteration in range(warmup):
-        for index in range(len(funcs)):
-            funcs[(iteration + index) % len(funcs)]()
-    for iteration in range(repeat):
-        for offset in range(len(funcs)):
-            index = (iteration + offset) % len(funcs)
-            start = time.perf_counter()
-            funcs[index]()
-            timings[index].append(time.perf_counter() - start)
-    return tuple(float(np.median(values)) for values in timings)
-
-
 # %%
 # Shapes chosen to activate each Gemm code path
 # -----------------------------------------------
@@ -179,39 +164,22 @@ ALONE_SHAPE_LABELS = {SHAPES[0][0], SHAPES[1][0]}
 #
 # ``register_kernels()`` permanently replaces the process-wide ``Gemm``
 # kernel; a session only picks up whichever kernel is registered at the time
-# of its *first* ``run()`` call. So a dedicated ``float32`` session is built
-# and run here, once per included shape, before ``register_kernels()`` runs.
+# of its *first* ``run()`` call. A dedicated ``float32`` session is therefore
+# built and primed with a tiny input before ``register_kernels()`` runs.
 
-alone_rng = np.random.default_rng(0)
 alone_session = make_session(TensorProto.FLOAT)
 alone_results = {}
-for shape_label, M, N, K in SHAPES:
-    if shape_label not in ALONE_SHAPE_LABELS:
-        continue
-    a = alone_rng.standard_normal((M, K)).astype(np.float32)
-    b = alone_rng.standard_normal((K, N)).astype(np.float32)
-    repeat = max(7, min(50, 200_000_000 // (M * N * K + 1)))
-
-    def run(session=alone_session, a=a, b=b):
-        return session.run(None, {"A": a, "B": b})[0]
-
-    elapsed = measure(run, repeat)
-    alone_results[shape_label] = elapsed
-    print(
-        f"onnx-light (built-in) | shape={shape_label.splitlines()[0]:<24} "
-        f"| {elapsed * 1e6:10.2f} us"
-    )
+alone_session.run(
+    None,
+    {
+        "A": np.zeros((1, 1), dtype=np.float32),
+        "B": np.zeros((1, 1), dtype=np.float32),
+    },
+)
 
 register_kernels()
 
 sessions = {label: make_session(tp) for label, (tp, _) in DTYPES.items()}
-ort_sessions = {
-    label: onnxruntime.InferenceSession(
-        make_model(DTYPES[label][0]).SerializeToString(),
-        providers=["CPUExecutionProvider"],
-    )
-    for label in ("float32", "float16")
-}
 
 accelerated_kernel_name = registered_kernel_names()["Gemm"]
 # onnx-light-cpu kernels record their name on every run (a mutex per call);
@@ -225,21 +193,18 @@ set_kernel_usage_recording(False)
 # Run the benchmark
 # -----------------
 #
-# For every shape and dtype, random ``float32`` inputs are rounded to the
-# target dtype and fed through the matching session. The dtype variants for each
-# backend are measured together, rotating their order so the overhead ratios are
-# not skewed by cache or scheduling changes. Results are checked against
-# ``float32`` numpy matmul (with a wider tolerance for the lower precision
-# dtypes) so every combination agrees on the answer.
+# For every shape and dtype, random ``float32`` inputs are rounded to the target
+# dtype and fed through the matching session. All accelerated measurements
+# finish before the built-in kernel is timed and before ONNX Runtime sessions
+# are constructed. Results are validated after every timed phase has finished.
 
 rng = np.random.default_rng(0)
 results = {label: [] for label in DTYPES}
-ort_results = {label: [] for label in ort_sessions}
+benchmark_inputs = []
 
 for shape_label, M, N, K in SHAPES:
     a32 = rng.standard_normal((M, K)).astype(np.float32)
     b32 = rng.standard_normal((K, N)).astype(np.float32)
-    expected = a32 @ b32
     repeat = max(7, min(50, 200_000_000 // (M * N * K + 1)))
 
     print(f"\nshape={shape_label.splitlines()[0]:<24} M={M} N={N} K={K} repeat={repeat}")
@@ -247,57 +212,73 @@ for shape_label, M, N, K in SHAPES:
         label: (a32.astype(np_dtype), b32.astype(np_dtype))
         for label, (_, np_dtype) in DTYPES.items()
     }
-    runs = tuple(
-        (
-            lambda session=sessions[label], a=inputs[label][0], b=inputs[label][1]: session.run(
-                None, {"A": a, "B": b}
-            )[0]
-        )
-        for label in DTYPES
-    )
-    for label, run in zip(DTYPES, runs, strict=True):
+    benchmark_inputs.append((shape_label, M, N, K, a32, b32, inputs, repeat))
+    for label in DTYPES:
+        a, b = inputs[label]
+
+        def run(session=sessions[label], a=a, b=b):
+            return session.run(None, {"A": a, "B": b})[0]
+
         set_kernel_usage_recording(True)
         clear_used_kernel_names()
         run()
         kernel_names = used_kernel_names()
         assert accelerated_kernel_name in kernel_names, (label, shape_label, kernel_names)
         set_kernel_usage_recording(False)
+        elapsed = measure(run, repeat)
+        results[label].append(elapsed)
+        print(f"  {label:<9} | onnx-light-cpu={elapsed * 1e6:10.2f} us")
 
-    elapsed_by_label = dict(
-        zip(
-            DTYPES,
-            measure_together(*runs, repeat=repeat),
-            strict=True,
-        )
+for shape_label, M, N, K, a32, b32, _, repeat in benchmark_inputs:
+    if shape_label not in ALONE_SHAPE_LABELS:
+        continue
+    elapsed = measure(
+        lambda a=a32, b=b32: alone_session.run(None, {"A": a, "B": b})[0],
+        repeat,
     )
-    ort_runs = tuple(
-        (
-            lambda session=ort_sessions[label], a=inputs[label][0], b=inputs[label][1]: (
-                session.run(None, {"A": a, "B": b})[0]
-            )
-        )
-        for label in ort_sessions
-    )
-    ort_elapsed_by_label = dict(
-        zip(
-            ort_sessions,
-            measure_together(*ort_runs, repeat=repeat),
-            strict=True,
-        )
+    alone_results[shape_label] = elapsed
+    print(
+        f"onnx-light (built-in) | shape={shape_label.splitlines()[0]:<24} "
+        f"| {elapsed * 1e6:10.2f} us"
     )
 
+ort_sessions = {
+    label: onnxruntime.InferenceSession(
+        make_model(DTYPES[label][0]).SerializeToString(),
+        providers=["CPUExecutionProvider"],
+    )
+    for label in ("float32", "float16")
+}
+ort_results = {label: [] for label in ort_sessions}
+for shape_label, _, _, _, _, _, inputs, repeat in benchmark_inputs:
+    for label, session in ort_sessions.items():
+        a, b = inputs[label]
+        elapsed = measure(
+            lambda session=session, a=a, b=b: session.run(None, {"A": a, "B": b})[0],
+            repeat,
+        )
+        ort_results[label].append(elapsed)
+        print(
+            f"  {shape_label.splitlines()[0]:<24} {label:<9} | "
+            f"onnxruntime={elapsed * 1e6:10.2f} us"
+        )
+
+for shape_label, _, _, _, a32, b32, inputs, _ in benchmark_inputs:
+    expected = a32 @ b32
+    if shape_label in ALONE_SHAPE_LABELS:
+        np.testing.assert_allclose(
+            alone_session.run(None, {"A": a32, "B": b32})[0],
+            expected,
+            rtol=1e-3,
+            atol=1e-3,
+        )
     for label in DTYPES:
         a, b = inputs[label]
-        elapsed = elapsed_by_label[label]
-        results[label].append(elapsed)
-
         tol = 1e-3 if label == "float32" else (5e-2 if label == "float16" else 5e-1)
         output = sessions[label].run(None, {"A": a, "B": b})[0]
         np.testing.assert_allclose(output.astype(np.float32), expected, rtol=tol, atol=tol)
 
         if label in ort_sessions:
-            ort_elapsed = ort_elapsed_by_label[label]
-            ort_results[label].append(ort_elapsed)
             ort_output = ort_sessions[label].run(None, {"A": a, "B": b})[0]
             # onnxruntime's ``float16`` Gemm accumulates in ``float16``, whereas
             # onnx-light-cpu widens to ``float32`` (see the module docstring), so
@@ -307,10 +288,6 @@ for shape_label, M, N, K in SHAPES:
             np.testing.assert_allclose(
                 ort_output.astype(np.float32), expected, rtol=ort_tol, atol=ort_tol
             )
-            ort_text = f"{ort_elapsed * 1e6:10.2f} us"
-        else:
-            ort_text = "not supported"
-        print(f"  {label:<9} | onnx-light-cpu={elapsed * 1e6:10.2f} us | onnxruntime={ort_text}")
 
 print(f"verified {accelerated_kernel_name} for every benchmark shape and dtype")
 set_kernel_usage_recording(True)
