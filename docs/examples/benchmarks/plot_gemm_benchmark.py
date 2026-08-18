@@ -135,8 +135,9 @@ def measure(func, repeat, warmup=3):
 # onnx-light's own built-in reference kernel. It is timed below alongside the
 # other runtimes on the three smallest sizes.
 
-size_grid = [16, 32, 64] if unit_test_going else [16, 32, 64, 128, 256, 512, 1024, 2048, 4096]
-alone_sizes = [16, 32, 64]
+full_size_grid = [16, 32, 64, 128, 256, 512, 1024, 2048, 4096]
+size_grid = full_size_grid[:3] if unit_test_going else full_size_grid
+alone_sizes = full_size_grid[:3]
 rng = np.random.default_rng(0)
 
 alone_model = make_gemm_model()
