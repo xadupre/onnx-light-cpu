@@ -246,6 +246,8 @@ except ModuleNotFoundError:
                 "cmake",
                 "--install",
                 str(build_temp_path),
+                "--config",
+                "Release",
                 "--prefix",
                 str(install_prefix),
             ],
@@ -373,7 +375,17 @@ class BuildExt(Command):
         if self.parallel is not None:
             build_cmd += ["--parallel", str(self.parallel)]
         self._spawn(build_cmd)
-        self._spawn(["cmake", "--install", str(build_temp), "--prefix", str(install_prefix)])
+        self._spawn(
+            [
+                "cmake",
+                "--install",
+                str(build_temp),
+                "--config",
+                "Release",
+                "--prefix",
+                str(install_prefix),
+            ]
+        )
         if self.cpp_tests:
             self._spawn(_ctest_command(build_temp))
 

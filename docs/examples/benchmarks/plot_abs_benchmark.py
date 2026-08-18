@@ -30,10 +30,15 @@ elements.
 # ``1=SSE2``, ``2=AVX``, ``3=AVX2`` and ``4=AVX512``.
 
 import gc
+import os
 import time
 
 import numpy as np
 import onnxruntime
+
+# ``UNITTEST_GOING=1`` shrinks the benchmark (fewer/smaller sizes) so the example
+# runs quickly as a unit test while still exercising every code path.
+unit_test_going = os.environ.get("UNITTEST_GOING", "0") in ("1", "true", "True")
 
 # ``onnx-light`` ships ``onnx_light.onnx`` as a drop-in replacement for the
 # ``onnx`` package; use it to build the model so the example depends on
@@ -93,7 +98,7 @@ print(f"onnx-light-cpu thread count: {parallel_for_thread_count()}")
 # Sizes benchmarked
 # -----------------
 
-size_grid = [10**k for k in range(2, 9)]
+size_grid = [100, 1000] if unit_test_going else [10**k for k in range(2, 9)]
 
 
 def measure(func, repeat, warmup=3, number=1):

@@ -44,10 +44,15 @@ to 4096.
 # Report which SIMD level the current CPU provides. The mapping is ``0=None``,
 # ``1=SSE2``, ``2=AVX``, ``3=AVX2`` and ``4=AVX512``.
 
+import os
 import time
 
 import numpy as np
 import onnxruntime
+
+# ``UNITTEST_GOING=1`` shrinks the benchmark (fewer/smaller sizes) so the example
+# runs quickly as a unit test while still exercising every code path.
+unit_test_going = os.environ.get("UNITTEST_GOING", "0") in ("1", "true", "True")
 
 # ``onnx-light`` ships ``onnx_light.onnx`` as a drop-in replacement for the
 # ``onnx`` package; use it to build the model so the example depends on
@@ -130,7 +135,7 @@ def measure(func, repeat, warmup=3):
 # onnx-light's own built-in reference kernel. It is timed below alongside the
 # other runtimes on the three smallest sizes.
 
-size_grid = [16, 32, 64, 128, 256, 512, 1024, 2048, 4096]
+size_grid = [16, 32, 64] if unit_test_going else [16, 32, 64, 128, 256, 512, 1024, 2048, 4096]
 alone_sizes = [16, 32, 64]
 rng = np.random.default_rng(0)
 
