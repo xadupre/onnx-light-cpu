@@ -266,11 +266,12 @@ Tensor MatMulIntegerKernel::operator()(const Tensor &a, const Tensor &b, const T
                                                 layout.output_shape, output_bytes, nullptr);
   int32_t *values = output.AsInt32();
 
-  // Roadmap PR09.2: the plain matrix product (both operands rank >= 2, so their
-  // inner two dimensions are contiguous) is routed through the x86 VNNI INT8
-  // kernel, which dispatches to the native vpdpbusd path when the CPU supports
-  // AVX-512 VNNI and otherwise to the portable scalar sibling. Vector and
-  // rank-1 promotions keep the PR09.1 scalar fallback below.
+  // Roadmap PR09.2 / PR09.3: the plain matrix product (both operands rank >= 2,
+  // so their inner two dimensions are contiguous) is routed through the shared
+  // integer GEMM, which dispatches to the native x86 VNNI ``vpdpbusd`` path or
+  // the ARM NEON dot-product kernel when the CPU supports them and otherwise to
+  // the portable scalar sibling. Vector and rank-1 promotions keep the PR09.1
+  // scalar fallback below.
   if (a.shape.size() >= 2 && b.shape.size() >= 2) {
     const auto *a_bytes = reinterpret_cast<const std::uint8_t *>(a.bytes());
     const auto *b_bytes = reinterpret_cast<const std::uint8_t *>(b.bytes());
