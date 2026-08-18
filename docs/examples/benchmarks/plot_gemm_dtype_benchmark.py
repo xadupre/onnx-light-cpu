@@ -299,8 +299,13 @@ for shape_label, M, N, K in SHAPES:
             ort_elapsed = ort_elapsed_by_label[label]
             ort_results[label].append(ort_elapsed)
             ort_output = ort_sessions[label].run(None, {"A": a, "B": b})[0]
+            # onnxruntime's ``float16`` Gemm accumulates in ``float16``, whereas
+            # onnx-light-cpu widens to ``float32`` (see the module docstring), so
+            # onnxruntime's rounding error grows with the reduction length ``K``
+            # and needs a wider tolerance than the onnx-light-cpu comparison.
+            ort_tol = 5e-1 if label == "float16" else tol
             np.testing.assert_allclose(
-                ort_output.astype(np.float32), expected, rtol=tol, atol=tol
+                ort_output.astype(np.float32), expected, rtol=ort_tol, atol=ort_tol
             )
             ort_text = f"{ort_elapsed * 1e6:10.2f} us"
         else:

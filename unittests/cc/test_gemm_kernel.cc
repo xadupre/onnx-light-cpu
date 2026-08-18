@@ -4,6 +4,7 @@
 
 #include "onnx_light_cpu/impl/math/gemm/amx/gemm_amx_tile.h"
 #include "onnx_light_cpu/impl/math/gemm/gemm_common.h"
+#include "onnx_light_cpu/impl/math/gemm/vnni/integer_gemm_vnni.h"
 #include "onnx_light_cpu/impl/math/half_conversion.h"
 #include "onnx_light_cpu/impl/math/math_kernels.h"
 
@@ -1084,4 +1085,99 @@ TEST(GemmHalf, BFloat16AlgorithmsDoNotWidenOperands) {
   CheckHalfNoExpandedOperand(true, 1, 512, 256, 551); // skinny-M GEMV
   CheckHalfNoExpandedOperand(true, 8, 2, 49152, 561); // split-K
   CheckHalfNoExpandedOperand(true, 8, 768, 512, 571); // general blocked
+}
+
+namespace {
+
+// Independent scalar reference for the contiguous 2D ``MatMulInteger`` used by
+// the INT8 dot-product differential tests. It reproduces the ONNX INT32
+// accumulation (wrapping modulo 2^32) directly from raw bytes so the shared
+// ``IntegerMatMul2D`` dispatch -- the native ARM NEON ``UDOT`` kernel on capable
+// AArch64, the native x86 AVX-512 VNNI kernel on capable x86, the portable
+// scalar reduction elsewhere -- is checked against it.
+std::vector<std::int32_t> ReferenceMatMulInteger(const std::vector<std::uint8_t> &a, bool a_signed,
+                                                 const std::vector<std::uint8_t> &b, bool b_signed,
+                                                 std::size_t m, std::size_t n, std::size_t k,
+                                                 const std::vector<std::int32_t> &a_zero_points,
+                                                 const std::vector<std::int32_t> &b_zero_points) {
+  const auto read = [](const std::vector<std::uint8_t> &data, std::size_t index,
+                       bool is_signed) -> std::int32_t {
+    return is_signed ? static_cast<std::int32_t>(static_cast<std::int8_t>(data[index]))
+                     : static_cast<std::int32_t>(data[index]);
+  };
+  std::vector<std::int32_t> out(m * n, 0);
+  for (std::size_t row = 0; row < m; ++row) {
+    const std::int32_t az = a_zero_points.size() == 1 ? a_zero_points[0] : a_zero_points[row];
+    for (std::size_t col = 0; col < n; ++col) {
+      const std::int32_t bz = b_zero_points.size() == 1 ? b_zero_points[0] : b_zero_points[col];
+      std::uint32_t accumulator = 0;
+      for (std::size_t depth = 0; depth < k; ++depth) {
+        const std::int32_t av = read(a, row * k + depth, a_signed) - az;
+        const std::int32_t bv = read(b, depth * n + col, b_signed) - bz;
+        accumulator += static_cast<std::uint32_t>(av * bv);
+      }
+      out[row * n + col] = static_cast<std::int32_t>(accumulator);
+    }
+  }
+  return out;
+}
+
+std::vector<std::uint8_t> RandomBytes(std::size_t count, unsigned seed) {
+  std::mt19937 engine(seed);
+  std::uniform_int_distribution<int> dist(0, 255);
+  std::vector<std::uint8_t> data(count);
+  for (auto &value : data) {
+    value = static_cast<std::uint8_t>(dist(engine));
+  }
+  return data;
+}
+
+std::vector<std::int32_t> RandomZeroPoints(std::size_t count, bool is_signed, unsigned seed) {
+  std::mt19937 engine(seed);
+  std::uniform_int_distribution<int> dist(is_signed ? -128 : 0, is_signed ? 127 : 255);
+  std::vector<std::int32_t> data(count);
+  for (auto &value : data) {
+    value = dist(engine);
+  }
+  return data;
+}
+
+// Runs the shared dispatch over random operands and compares against the
+// independent scalar reference. ``per_axis`` selects per-row (A) / per-column
+// (B) zero points instead of a single shared value; a K that is not a multiple
+// of 16 exercises the ``UDOT`` scalar tail.
+void CheckIntegerMatMul2D(bool a_signed, bool b_signed, std::size_t m, std::size_t n, std::size_t k,
+                          bool per_axis, unsigned seed) {
+  const auto a = RandomBytes(m * k, seed);
+  const auto b = RandomBytes(k * n, seed + 1);
+  const auto a_zp = RandomZeroPoints(per_axis ? m : 1, a_signed, seed + 2);
+  const auto b_zp = RandomZeroPoints(per_axis ? n : 1, b_signed, seed + 3);
+
+  const auto expected = ReferenceMatMulInteger(a, a_signed, b, b_signed, m, n, k, a_zp, b_zp);
+
+  std::vector<std::int32_t> actual(m * n, -1);
+  onnx_light_cpu::IntegerMatMul2D(
+      a.data(), a_signed, b.data(), b_signed, actual.data(), static_cast<std::int64_t>(m),
+      static_cast<std::int64_t>(n), static_cast<std::int64_t>(k), a_zp.data(),
+      static_cast<std::int64_t>(a_zp.size()), b_zp.data(), static_cast<std::int64_t>(b_zp.size()));
+  ASSERT_EQ(actual, expected);
+}
+
+} // namespace
+
+// Roadmap PR09.2 / PR09.3: the contiguous 2D MatMulInteger dispatch must match
+// the scalar reference for every signedness combination, scalar and per-axis
+// zero points, and a K that leaves a UDOT scalar tail. On capable AArch64 these
+// exercise the native NEON dot-product kernel, on capable x86 the AVX-512 VNNI
+// kernel; every other target exercises the portable scalar reduction the kernel
+// shares.
+TEST(IntegerMatMul2D, MatchesScalarReferenceAcrossSignednessAndZeroPoints) {
+  CheckIntegerMatMul2D(false, false, 5, 7, 64, false, 4001); // uint8 x uint8, aligned K
+  CheckIntegerMatMul2D(true, true, 5, 7, 64, false, 4011);   // int8 x int8, aligned K
+  CheckIntegerMatMul2D(false, true, 6, 9, 50, false, 4021);  // uint8 x int8, K tail
+  CheckIntegerMatMul2D(true, false, 9, 6, 50, false, 4031);  // int8 x uint8, K tail
+  CheckIntegerMatMul2D(false, false, 8, 8, 37, true, 4041);  // per-axis zero points, K tail
+  CheckIntegerMatMul2D(true, true, 8, 8, 37, true, 4051);    // per-axis zero points, K tail
+  CheckIntegerMatMul2D(false, true, 7, 5, 3, true, 4061);    // K below one UDOT vector
+  CheckIntegerMatMul2D(true, false, 1, 1, 128, false, 4071); // single output, wide K
 }
