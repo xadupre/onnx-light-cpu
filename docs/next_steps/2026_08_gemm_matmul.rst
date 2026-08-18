@@ -1,5 +1,5 @@
-Gemm, MatMul, and Attention Performance Roadmap
-================================================
+Gemm and MatMul Performance Roadmap
+===================================
 
 :Date: 2026-08
 
@@ -9,8 +9,8 @@ Objective
 ---------
 
 The objective is performance parity with the ONNX Runtime CPU execution
-provider for the important ``Gemm``, ``MatMul``, and tensor-based ``Attention``
-workloads, for every supported data type, without sacrificing ONNX correctness.
+provider for the important ``Gemm`` and ``MatMul`` workloads, for every
+supported data type, without sacrificing ONNX correctness.
 For GEMM, parity means a corpus median speed-up of at least ``1.0x`` versus
 ONNX Runtime and no priority shape below ``0.9x``. This is a catch-up effort
 with standard ONNX tensors and semantics.
@@ -26,29 +26,26 @@ PR02 removed expanded bias temporaries. The FP32 investigation in
 skinny-N, weak GEMV/skinny-M, an operator path that bypasses ``GemmPlan``, and
 untuned Zen/generic-x86 blocking still prevent parity. The remaining roadmap
 work first closes those measured FP32/FP64 gaps, then covers low-precision
-kernels, Attention, and the final ONNX Runtime parity gates.
+kernels and the final ONNX Runtime parity gates.
 
 Related roadmap
 ---------------
 
 Persistent state, decode, paged storage, and cache quantization are covered by
 the separate :doc:`Persistent KV Cache and Decode roadmap <2026_08_kv_cache>`.
+Tensor Attention and its streaming implementation are covered by the separate
+:doc:`Attention Performance Roadmap <2026_08_attention>`.
 
 Scope and type matrix
 ---------------------
 
 ``Gemm`` and ``MatMul`` should share one matrix-multiplication engine.
-``Attention`` should reuse its packing, dot-product micro-kernels, type
-conversion, and scheduler, but it must not be implemented as two ordinary
-materialized MatMul calls. The operator adapters retain distinct ONNX semantics:
+The operator adapters retain distinct ONNX semantics:
 
 * ``Gemm`` handles rank-2 inputs, ``alpha``, ``beta``, optional broadcast bias,
   and ``transA``/``transB``.
 * ``MatMul`` handles vectors, matrices, arbitrary leading batch dimensions,
   NumPy-style batch broadcasting, and output-rank squeezing.
-* ``Attention`` handles Q/K/V head geometry, scaling, masks, causal behavior,
-  grouped-query or multi-query head mapping, softmax, and optional past/present
-  KV state according to its selected ONNX opset.
 
 The implementation must follow the type constraints of the selected ONNX
 opset. Integer and quantized multiplication may be exposed through ``MatMul``,
@@ -115,15 +112,10 @@ must both be retained.
 * Cover tiny matrices, square matrices, skinny M, skinny N, large K, batched
   MatMul, broadcast batches, every transpose combination, and transformer
   projection shapes.
-* Cover attention prefill and decode separately: query lengths 1, 2-16, and
-  long prefill; KV lengths from 1 to the target context limit; MHA, GQA, and
-  MQA; causal, padding, additive, and boolean masks.
 * Separate dynamic-B from constant-B cases. Constant weights must be packed
   once, not once per invocation.
 * Compare single-thread throughput and scaling at 2, 4, physical-core, and
   logical-core thread counts. Hybrid P/E-core machines need their own results.
-* For attention, report time to first token, per-token decode latency,
-  tokens/second, peak temporary memory, and effective KV-cache bandwidth.
 
 Two committed instruments implement this contract. ``tools/benchmark_gemm_parity.py``
 is the end-to-end FP32/FP64 parity runner (PR06.0): it alternates the registered
@@ -432,15 +424,18 @@ extra full-matrix memory passes.
   bits); shorter vectors keep the better-unrolled NEON kernel.)*
 * For INT8, fuse zero-point correction and requantization into packing and the
   epilogue. Accumulate in INT32 and define overflow behavior through the ONNX
-  operator contract. *(First landed: Roadmap PR09.3 adds the native ARM NEON
-  dot-product INT8 kernel ``GemmMatMulIntegerNeonDotProd`` for the contiguous 2D
-  ``MatMulInteger`` fast path. A single unsigned ``UDOT`` reduction serves every
-  signedness combination by folding a signed operand's ``+128`` bias into its
-  effective zero point and recovering the raw products with per-row / per-column
-  byte-sum corrections, so the INT32 accumulation matches the portable scalar
-  fallback bit for bit modulo 2^32; it is gated on the ``+dotprod`` build flag
-  and the runtime ``CpuSupportsNeonDotProd`` capability, keeping the scalar
-  reduction as the fallback.)*
+  operator contract. *(First landed: Roadmap PR09.2 adds the x86 VNNI INT8 kernel
+  (native ``vpdpbusd`` path with a portable scalar sibling) behind the shared
+  ``IntegerMatMul2D`` driver for the contiguous rank >= 2 ``MatMulInteger`` case.
+  Roadmap PR09.3 then adds the native ARM NEON dot-product INT8 kernel
+  ``GemmMatMulIntegerNeonDotProd``, dispatched from that same ``IntegerMatMul2D``
+  entry point. A single unsigned ``UDOT`` reduction serves every signedness
+  combination by folding a signed operand's ``+128`` bias into its effective zero
+  point and recovering the raw products with per-row / per-column byte-sum
+  corrections, so the INT32 accumulation matches the portable scalar fallback bit
+  for bit modulo 2^32; it is gated on the ``+dotprod`` build flag and the runtime
+  ``CpuSupportsNeonDotProd`` capability, keeping the scalar reduction as the
+  fallback.)*
 * Treat Float8 and packed 4-bit types as separate packing formats, not as
   branches in the FP32 inner loop.
 
@@ -460,84 +455,6 @@ GEMM calls without materializing broadcast copies:
 The adapter and engine require tests for empty dimensions, scalar-like vectors,
 non-contiguous batch strides, asymmetric broadcasting, transposed packed
 weights, and every supported type.
-
-Phase 5: Attention plan and correctness path
---------------------------------------------
-
-Start with a clear internal contract before optimizing. An ``AttentionPlan``
-is built once from the model, static dimensions, CPU, and runtime options. It
-records:
-
-* batch size, query-head and KV-head counts, head dimensions, and GQA ratio;
-* input/output layouts and strides;
-* scale, causal mode, mask kind, and whether standard tensor ``past``/``present``
-  inputs are enabled;
-* prefill, short-query, or single-token decode algorithm;
-* query-row and KV-column block sizes;
-* dot-product/packing functions, accumulation type, and useful thread count.
-
-The first implementation should be a simple materialized correctness path:
-
-.. code-block:: text
-
-   S = scale * Q @ transpose(K)
-   S = apply_mask_and_causality(S)
-   P = softmax(S)
-   O = P @ V
-
-This path is not the final performance target. It provides differential tests
-against ONNX Runtime and a fallback for uncommon combinations while validating
-all shape, mask, head-mapping, precision, and tensor ``past``/``present``
-semantics. In this roadmap, appending past and present may allocate and copy;
-this compatibility cost must be reported separately. Optimized persistent
-state is deferred to the dedicated cache roadmap.
-
-The Attention adapter should lower MHA, GQA, and MQA to one internal descriptor.
-For GQA/MQA, several query heads reference the same K/V head through a zero-copy
-head mapping; K and V must not be physically repeated.
-
-Phase 6: streaming/online Attention
------------------------------------
-
-The optimized prefill algorithm should fuse ``Q @ K^T``, masking, softmax, and
-``P @ V`` by blocks. It must not materialize the full
-``[batch, heads, query_length, kv_length]`` score or probability tensors.
-
-For a query block, process KV blocks from left to right while maintaining, per
-query row, the running maximum ``m``, softmax denominator ``l``, and unnormalized
-output accumulator ``o``. For a score block ``S``:
-
-.. code-block:: text
-
-   m_new = max(m, row_max(S))
-   correction = exp(m - m_new)
-   p = exp(S - m_new)
-   l = correction * l + row_sum(p)
-   o = correction * o + p @ V_block
-   m = m_new
-
-   output = o / l
-
-This is the online-softmax recurrence used by FlashAttention-style algorithms.
-It changes the computation from two materialized GEMMs plus softmax into a
-blocked streaming algorithm. Arithmetic remains
-``O(B * Hq * Lq * Lkv * D)``, but temporary score memory falls from
-``O(B * Hq * Lq * Lkv)`` to ``O(Br * Bc)`` per worker, and each probability
-block is consumed while hot.
-
-The CPU implementation needs:
-
-* a ``Q x K`` score micro-kernel whose epilogue applies scale, mask, causal
-  bounds, and row maximum;
-* a vectorized exponential and row reduction with FP32 accumulation;
-* a ``probability x V`` update micro-kernel that accumulates directly into the
-  query-block output;
-* block sizes ``Br`` and ``Bc`` chosen jointly with head dimension and cache
-  capacity;
-* causal tile skipping: do not compute blocks wholly above the diagonal, and
-  mask only the one intersecting diagonal block;
-* direct handling of sliding-window or sparse masks by skipping absent KV
-  blocks rather than filling them with negative infinity.
 
 How to exceed ONNX Runtime
 --------------------------
@@ -603,14 +520,6 @@ to verify, not guarantees.
        tuning to roughly **1-50 ms per unique shape** or load a persistent
        tuning cache; never tune in the inference path.
      - 5-10 days plus dedicated benchmark infrastructure.
-   * - Streaming Attention
-     - **0-20%** when ONNX Runtime already selects an optimized fused path;
-       **1.2-2x** when it materializes scores or probabilities.
-     - The arithmetic count is similar, so the gain comes from avoiding
-       ``O(B * Hq * Lq * Lkv)`` temporary traffic. It grows with context length
-       and disappears for tiny sequences. Peak score memory drops by roughly
-       ``(Lq * Lkv) / (Br * Bc)`` per head.
-     - 10-20 days after the GEMM primitives and correctness path exist.
 
 These gains are not additive. Shape specialization and autotuning often choose
 the same improvement. A credible target sequence is:
@@ -620,8 +529,7 @@ the same improvement. A credible target sequence is:
 2. reach **1.05-1.15x ONNX Runtime** through shape specialization and tuning;
 3. target **1.2-1.8x** on fused or tiny-batch workloads;
 4. reserve gains above **2x** for workloads with exploitable sparsity,
-   low-rank structure, very large collections of tiny matrices, or an
-   unfused/materialized Attention baseline.
+   low-rank structure, or very large collections of tiny matrices.
 
 External libraries
 ------------------
@@ -655,16 +563,6 @@ Acceptance criteria
    * - Scaling
      - Throughput improves through the physical-core count without severe
        regressions on tiny or skinny shapes.
-   * - Attention correctness
-     - Differential tests cover stateless Attention and tensor-based
-       past/present compatibility, MHA/GQA/MQA, all mask forms, causal
-       boundaries, empty sequences, and every supported type.
-   * - Attention memory
-     - The optimized path never materializes the complete score or probability
-       tensor; temporary memory is bounded by worker count and Br x Bc blocks.
-   * - Attention parity
-     - Median speed-up is at least 1.0x versus ONNX Runtime on the priority
-       model/context corpus, with no priority case below 0.9x.
    * - Data movement
      - Every dynamic A panel and constant B panel is packed no more often than
        required by the selected loop nest; low-precision paths avoid
@@ -698,8 +596,8 @@ require measurements on dedicated hardware.
      - Status
      - Pull requests
    * - P0
-     - Reproducible MLAS and Attention cases in ``onnx-light``'s C++
-       ``TestMode::BENCHMARK`` framework.
+     - Reproducible MLAS cases in ``onnx-light``'s C++ ``TestMode::BENCHMARK``
+       framework.
      - Stable medians and dispersion for the agreed shape/type corpus on pinned
        hardware.
      - None.
@@ -796,21 +694,6 @@ require measurements on dedicated hardware.
        ISA, and type below; hardware-specific lanes may proceed in parallel
        after their shared semantic dependency.
      - Roadmap PR07.0 through PR10.5 below.
-   * - P6
-     - ``AttentionPlan`` and materialized tensor correctness implementation.
-     - MHA/GQA/MQA, masks, causal behavior, and tensor past/present
-       differential tests pass.
-     - P1-P2.
-     - Two-PR sequence fixed below; all pending.
-     - Roadmap PR11 through PR12 below.
-   * - P7
-     - Online-softmax prefill Attention.
-     - No full score/probability tensor; median performance is at least 1.0x
-       ONNX Runtime with no priority case below 0.9x and bounded temporary
-       memory.
-     - P4 and P6.
-     - Three-PR sequence fixed below; all pending.
-     - Roadmap PR13 through PR15 below.
 
 Remaining pull-request sequence
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1268,18 +1151,41 @@ fallbacks are ordered. Completed rows remain visible so scope is not lost.
      - Signed and unsigned VNNI paths have exact tails, runtime dispatch, and
        differential tests over the PR09.1 fallback. ARM and AMX are excluded.
      - PR09.1
-     - Pending
+     - Implemented. ``MatMulInteger`` routes the plain matrix product (both
+       operands rank >= 2) through ``IntegerMatMul2D``
+       (``impl/math/gemm/vnni/integer_gemm_vnni.cc``), which packs ``A`` into a
+       UINT8 panel and ``B`` into a transposed INT8 panel, applying the
+       ``vpdpbusd`` signedness offsets (``+128`` for a signed ``A``, ``-128``
+       for an unsigned ``B``). The raw ``uint8 x int8`` dot-product is then
+       corrected with the true row/column sums so both INT8 and UINT8 operands,
+       scalar or per-row/per-column zero points, and INT32 modulo-2^32
+       accumulation are reconstructed exactly. The native
+       ``IntegerDotU8S8Avx512Vnni`` (``integer_gemm_avx512vnni.cc``, compiled
+       with ``-mavx512f -mavx512vnni``) reduces four ``uint8 x int8`` products
+       per lane with ``_mm512_dpbusd_epi32`` and finishes non-multiples of the
+       64-byte vector through the same scalar tail; it is dispatched ahead of
+       the portable ``IntegerDotU8S8Scalar`` sibling only when
+       ``CpuSupportsAvx512Vnni()`` reports the ISA at runtime, so a single
+       binary keeps working on CPUs without VNNI. Vector / rank-1 promotions and
+       ``QLinearMatMul`` keep the PR09.1 scalar fallback. New
+       ``IntegerVnniKernel`` differential tests exercise both dot-product paths
+       against a naive reference across signedness, scalar and per-axis zero
+       points, K tails, and the modulo-2^32 wrap. ARM and AMX are excluded
+       (PR09.3 and PR09.4).
    * - Roadmap PR09.3
      - ARM dot-product INT8 kernel.
      - Signed and unsigned NEON dot-product paths have exact tails, runtime
        dispatch, and differential tests over the PR09.1 fallback.
      - PR09.1
-     - Implemented. The contiguous 2D ``MatMulInteger`` fast path dispatches to
-       the native NEON dot-product kernel ``GemmMatMulIntegerNeonDotProd``
+     - Implemented. The contiguous rank >= 2 ``MatMulInteger`` product is routed
+       through the shared ``IntegerMatMul2D`` driver
+       (``impl/math/gemm/vnni/integer_gemm_vnni.cc``), which dispatches to the
+       native NEON dot-product kernel ``GemmMatMulIntegerNeonDotProd``
        (``gemm/arm/gemm_kernel_neon_dotprod.cc``, built with
        ``-march=armv8.2-a+dotprod``) when the build and CPU (runtime
-       ``CpuSupportsNeonDotProd``, ``HWCAP_ASIMDDP``) support it, and otherwise
-       to the shared portable scalar reduction. A single unsigned ``UDOT`` path
+       ``CpuSupportsNeonDotProd``, ``HWCAP_ASIMDDP``) support it, ahead of the
+       x86 VNNI path (PR09.2) and otherwise the shared portable scalar reduction.
+       A single unsigned ``UDOT`` path
        serves every signedness combination: a signed operand maps into the
        unsigned byte domain by flipping its sign bit with the ``+128`` bias
        folded into that operand's effective zero point, and the raw products are
@@ -1291,8 +1197,7 @@ fallbacks are ordered. Completed rows remain visible so scope is not lost.
        ``MatMulIntegerInt8`` differential shapes in ``test_gemm_kernel`` (every
        signedness combination, scalar and per-axis zero points, and aligned and
        tail ``K``) run through the dispatch under the cross-compiled aarch64
-       QEMU CI and match the reference. AMX and the x86 VNNI path are excluded
-       (PR09.4 and PR09.2).
+       QEMU CI and match the reference. AMX is excluded (PR09.4).
    * - Roadmap PR09.4
      - AMX-INT8 kernel.
      - The PR07.5 tile-state lifecycle is reused for signed and unsigned INT8,
@@ -1344,47 +1249,9 @@ fallbacks are ordered. Completed rows remain visible so scope is not lost.
        every priority platform, and every supported type. FP32, FP64, and each
        type supported by ONNX Runtime reach at least 1.0x median performance
        with no priority case below 0.9x. The PR remains open while any target
-       fails, and Attention work does not begin until it closes.
+       fails. The separate :doc:`Attention roadmap <2026_08_attention>` starts
+       after this gate closes.
      - PR10.3, PR10.4
      - Pending
-   * - Roadmap PR11
-     - Materialized Attention implementation.
-     - ``AttentionPlan`` validates layouts, head geometry, scale, masks, types,
-       blocks, and threads. The materialized QK-softmax-PV path supports
-       boolean/additive/padding/causal masks, zero-copy GQA/MQA head mapping,
-       tensor past/present, FP32/FP16/BF16, and batch/head/query scheduling.
-     - PR10.5
-     - Pending
-   * - Roadmap PR12
-     - Materialized Attention correctness gate.
-     - The complete MHA/GQA/MQA, mask, causal, past/present, layout, empty
-       sequence, and type corpus matches ONNX Runtime; the path is registered
-       as fallback for combinations not handled by streaming Attention.
-     - PR11
-     - Pending
-   * - Roadmap PR13
-     - Online Attention compute engine.
-     - The online recurrence matches the materialized path. SIMD Q x K kernels
-       fuse scale, masks, causal bounds, and row maximum; vector exponential
-       and reductions are accurate; probability x V updates output directly.
-       Cache-aware Br/Bc bounds memory, while causal, window, and sparse masks
-       skip absent tiles.
-     - PR12
-     - Pending
-   * - Roadmap PR14
-     - Streaming Attention scheduling and types.
-     - Batch/head/query-block prefill scheduling occupies useful threads
-       without nested pools. Query lengths 1 and 2-16 use dedicated decode
-       algorithms for MHA/GQA/MQA with past/present. FP16/BF16 score and
-       V-update kernels match the materialized fallback.
-     - PR10.3, PR13
-     - Pending
-   * - Roadmap PR15
-     - Final roadmap parity and memory gate.
-     - Every priority prefill/decode platform/type case has bounded temporary
-       memory, reaches at least 1.0x ONNX Runtime median performance, and has no
-       priority case below 0.9x. The PR remains open while any target fails.
-     - PR14
-     - Pending
 
-Roadmap PR15 is the final roadmap PR.
+Roadmap PR10.5 is the final Gemm and MatMul roadmap PR.

@@ -156,6 +156,15 @@ bool CpuSupportsAvx512Bf16() {
   return has_avx512bf16 && OsSupportsAvx512();
 }
 
+bool CpuSupportsAvx512Vnni() {
+  // AVX512_VNNI is reported by CPUID.(EAX=7,ECX=0):ECX[11]. The native
+  // ``vpdpbusd`` dot-product reads its operands from ZMM registers, so the OS
+  // must also save AVX-512 state (checked by ``OsSupportsAvx512``).
+  const auto info7 = Cpuid(7);
+  const bool has_avx512vnni = (info7.ecx & (1u << 11)) != 0;
+  return has_avx512vnni && OsSupportsAvx512();
+}
+
 bool CpuSupportsAmxTile() {
   // AMX-TILE is reported by CPUID.(EAX=7,ECX=0):EDX[24]. Tile registers live in
   // the AMX XSAVE components, so the OS must also enable tile state (checked by
@@ -196,6 +205,8 @@ bool CpuSupportsF16C() { return false; }
 bool CpuSupportsAvx512Fp16() { return false; }
 
 bool CpuSupportsAvx512Bf16() { return false; }
+
+bool CpuSupportsAvx512Vnni() { return false; }
 
 bool CpuSupportsAmxTile() { return false; }
 
