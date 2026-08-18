@@ -58,11 +58,16 @@ up the SIMD-accelerated kernel instead.
 # Report which SIMD level the current CPU provides. The mapping is ``0=None``,
 # ``1=SSE2``, ``2=AVX``, ``3=AVX2`` and ``4=AVX512``.
 
+import os
 import time
 
 import ml_dtypes
 import numpy as np
 import onnxruntime
+
+# ``UNITTEST_GOING=1`` shrinks the benchmark (fewer/smaller shapes) so the
+# example runs quickly as a unit test while still exercising every code path.
+unit_test_going = os.environ.get("UNITTEST_GOING", "0") in ("1", "true", "True")
 
 # ``onnx-light`` ships ``onnx_light.onnx`` as a drop-in replacement for the
 # ``onnx`` package; use it to build the models so the example depends on
@@ -161,12 +166,21 @@ def measure_together(*funcs, repeat, warmup=3):
 # ``onnx_light_cpu/impl/math/gemm_kernel.cc``); every shape below is picked to
 # sit clearly on one side of those thresholds.
 
-SHAPES = [
-    ("single-tile\n(64x64x64)", 64, 64, 64),
-    ("K-chunked\n(32x32x2048)", 32, 32, 2048),
-    ("multi-panel\n(512x512x128)", 512, 512, 128),
-    ("skinny-M/wide-N\n(4x4096x128)", 4, 4096, 128),
-]
+SHAPES = (
+    [
+        ("single-tile\n(64x64x64)", 64, 64, 64),
+        ("K-chunked\n(32x32x512)", 32, 32, 512),
+        ("multi-panel\n(128x128x128)", 128, 128, 128),
+        ("skinny-M/wide-N\n(4x1024x128)", 4, 1024, 128),
+    ]
+    if unit_test_going
+    else [
+        ("single-tile\n(64x64x64)", 64, 64, 64),
+        ("K-chunked\n(32x32x2048)", 32, 32, 2048),
+        ("multi-panel\n(512x512x128)", 512, 512, 128),
+        ("skinny-M/wide-N\n(4x4096x128)", 4, 4096, 128),
+    ]
+)
 
 # Only the two "light" shapes get an ``onnx-light (built-in)`` baseline; the
 # reference kernel is far too slow on the multi-panel / skinny-M-wide-N shapes
