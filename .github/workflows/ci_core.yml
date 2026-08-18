@@ -134,7 +134,7 @@ jobs:
         run: python setup.py build_ext --inplace --cpp-tests --onnx-light-source
 
       - name: Run onnx-light integration tests
-        run: pytest unittests/python/test_kernels_e2e.py
+        run: PYTHONPATH="$PWD" pytest unittests
 
   arm_gemm_native:
     name: ARM64 GEMM (NEON)

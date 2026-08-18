@@ -27,7 +27,8 @@ regular Python API:
 onnx-light, its backend-test extension (exposed via the ``_cpuregister``
 extension's ``register_backend_test_cases`` binding, built with
 ``ONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON`` and onnx-light's ``lib_onnx_backend_test``
-available) are required. The selected backend cases use ``float32`` tensors.
+available) are required. The selected backend cases use dtypes supported by
+NumPy; ``BFLOAT16`` cases are excluded.
 """
 
 from __future__ import annotations
@@ -68,6 +69,14 @@ _TARGET_KERNELS = {
 # case ``Tensor``'s raw little-endian row-major buffer.
 _TP_TO_NP = {
     int(TensorProto.FLOAT): np.float32,
+    int(TensorProto.DOUBLE): np.float64,
+    int(TensorProto.INT8): np.int8,
+    int(TensorProto.INT16): np.int16,
+    int(TensorProto.INT32): np.int32,
+    int(TensorProto.INT64): np.int64,
+    int(TensorProto.UINT8): np.uint8,
+    int(TensorProto.BOOL): np.bool_,
+    int(TensorProto.FLOAT16): np.float16,
 }
 
 
@@ -86,9 +95,9 @@ def _single_node_op_type(tc):
     return nodes[0].op_type
 
 
-def _uses_only_float32(tc):
+def _uses_supported_dtypes(tc):
     return all(
-        int(tensor.data_type) == int(TensorProto.FLOAT)
+        int(tensor.data_type) in _TP_TO_NP
         for data_set in tc.data_sets
         for tensor in (*data_set.inputs, *data_set.outputs)
     )
@@ -104,7 +113,7 @@ def _collect_cpu_cases():
                 tc.name.startswith("test_cpu_")
                 and _single_node_op_type(tc) == op_type
                 and tc.data_sets
-                and _uses_only_float32(tc)
+                and _uses_supported_dtypes(tc)
             ):
                 cases.append(tc)
     return cases
