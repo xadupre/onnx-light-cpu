@@ -197,20 +197,4 @@ void ValidateGemmEpilogue(std::size_t M, std::size_t N, const GemmEpilogue<T> &e
 template <typename T>
 void ApplyGemmEpilogue(std::size_t M, std::size_t N, const GemmEpilogue<T> &epilogue, T *Y);
 
-/// Computes the contiguous row-major 2D ``MatMulInteger`` result
-///   ``C[m,n] = sum_k (A[m,k] - a_zero_point[m]) * (B[k,n] - b_zero_point[n])``
-/// for dense ``M x K`` (``a``) and ``K x N`` (``b``) INT8/UINT8 operands,
-/// writing the row-major ``M x N`` INT32 result to ``c``. ``a_signed`` /
-/// ``b_signed`` select the INT8 (``true``) or UINT8 (``false``) element type of
-/// each raw byte operand. Each zero-point array holds either one shared value
-/// (``count == 1``) or one value per ``A`` row / ``B`` column; the raw values
-/// follow their operand's signedness. The accumulation wraps modulo 2^32 per
-/// the ONNX INT32 accumulation semantics. Dispatches to the native NEON
-/// dot-product kernel when the build and CPU support it and falls back to an
-/// equivalent portable scalar reduction otherwise.
-void MatMulIntegerInt8(const std::uint8_t *a, bool a_signed, const std::uint8_t *b, bool b_signed,
-                       std::int32_t *c, std::size_t m, std::size_t n, std::size_t k,
-                       const std::int32_t *a_zero_points, std::size_t a_zero_point_count,
-                       const std::int32_t *b_zero_points, std::size_t b_zero_point_count);
-
 } // namespace onnx_light_cpu

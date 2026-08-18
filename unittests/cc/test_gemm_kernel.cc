@@ -4,6 +4,7 @@
 
 #include "onnx_light_cpu/impl/math/gemm/amx/gemm_amx_tile.h"
 #include "onnx_light_cpu/impl/math/gemm/gemm_common.h"
+#include "onnx_light_cpu/impl/math/gemm/vnni/integer_gemm_vnni.h"
 #include "onnx_light_cpu/impl/math/half_conversion.h"
 #include "onnx_light_cpu/impl/math/math_kernels.h"
 
@@ -1091,8 +1092,9 @@ namespace {
 // Independent scalar reference for the contiguous 2D ``MatMulInteger`` used by
 // the INT8 dot-product differential tests. It reproduces the ONNX INT32
 // accumulation (wrapping modulo 2^32) directly from raw bytes so the shared
-// ``MatMulIntegerInt8`` dispatch -- the native NEON ``UDOT`` kernel on capable
-// AArch64, the portable scalar reduction elsewhere -- is checked against it.
+// ``IntegerMatMul2D`` dispatch -- the native ARM NEON ``UDOT`` kernel on capable
+// AArch64, the native x86 AVX-512 VNNI kernel on capable x86, the portable
+// scalar reduction elsewhere -- is checked against it.
 std::vector<std::int32_t> ReferenceMatMulInteger(const std::vector<std::uint8_t> &a, bool a_signed,
                                                  const std::vector<std::uint8_t> &b, bool b_signed,
                                                  std::size_t m, std::size_t n, std::size_t k,
@@ -1144,8 +1146,8 @@ std::vector<std::int32_t> RandomZeroPoints(std::size_t count, bool is_signed, un
 // independent scalar reference. ``per_axis`` selects per-row (A) / per-column
 // (B) zero points instead of a single shared value; a K that is not a multiple
 // of 16 exercises the ``UDOT`` scalar tail.
-void CheckMatMulIntegerInt8(bool a_signed, bool b_signed, std::size_t m, std::size_t n,
-                            std::size_t k, bool per_axis, unsigned seed) {
+void CheckIntegerMatMul2D(bool a_signed, bool b_signed, std::size_t m, std::size_t n, std::size_t k,
+                          bool per_axis, unsigned seed) {
   const auto a = RandomBytes(m * k, seed);
   const auto b = RandomBytes(k * n, seed + 1);
   const auto a_zp = RandomZeroPoints(per_axis ? m : 1, a_signed, seed + 2);
@@ -1154,25 +1156,28 @@ void CheckMatMulIntegerInt8(bool a_signed, bool b_signed, std::size_t m, std::si
   const auto expected = ReferenceMatMulInteger(a, a_signed, b, b_signed, m, n, k, a_zp, b_zp);
 
   std::vector<std::int32_t> actual(m * n, -1);
-  onnx_light_cpu::MatMulIntegerInt8(a.data(), a_signed, b.data(), b_signed, actual.data(), m, n, k,
-                                    a_zp.data(), a_zp.size(), b_zp.data(), b_zp.size());
+  onnx_light_cpu::IntegerMatMul2D(
+      a.data(), a_signed, b.data(), b_signed, actual.data(), static_cast<std::int64_t>(m),
+      static_cast<std::int64_t>(n), static_cast<std::int64_t>(k), a_zp.data(),
+      static_cast<std::int64_t>(a_zp.size()), b_zp.data(), static_cast<std::int64_t>(b_zp.size()));
   ASSERT_EQ(actual, expected);
 }
 
 } // namespace
 
-// Roadmap PR09.3: the contiguous 2D MatMulInteger dispatch must match the scalar
-// reference for every signedness combination, scalar and per-axis zero points,
-// and a K that leaves a UDOT scalar tail. On capable AArch64 these exercise the
-// native NEON dot-product kernel; every other target exercises the portable
-// scalar reduction the kernel shares.
-TEST(MatMulIntegerInt8, MatchesScalarReferenceAcrossSignednessAndZeroPoints) {
-  CheckMatMulIntegerInt8(false, false, 5, 7, 64, false, 4001); // uint8 x uint8, aligned K
-  CheckMatMulIntegerInt8(true, true, 5, 7, 64, false, 4011);   // int8 x int8, aligned K
-  CheckMatMulIntegerInt8(false, true, 6, 9, 50, false, 4021);  // uint8 x int8, K tail
-  CheckMatMulIntegerInt8(true, false, 9, 6, 50, false, 4031);  // int8 x uint8, K tail
-  CheckMatMulIntegerInt8(false, false, 8, 8, 37, true, 4041);  // per-axis zero points, K tail
-  CheckMatMulIntegerInt8(true, true, 8, 8, 37, true, 4051);    // per-axis zero points, K tail
-  CheckMatMulIntegerInt8(false, true, 7, 5, 3, true, 4061);    // K below one UDOT vector
-  CheckMatMulIntegerInt8(true, false, 1, 1, 128, false, 4071); // single output, wide K
+// Roadmap PR09.2 / PR09.3: the contiguous 2D MatMulInteger dispatch must match
+// the scalar reference for every signedness combination, scalar and per-axis
+// zero points, and a K that leaves a UDOT scalar tail. On capable AArch64 these
+// exercise the native NEON dot-product kernel, on capable x86 the AVX-512 VNNI
+// kernel; every other target exercises the portable scalar reduction the kernel
+// shares.
+TEST(IntegerMatMul2D, MatchesScalarReferenceAcrossSignednessAndZeroPoints) {
+  CheckIntegerMatMul2D(false, false, 5, 7, 64, false, 4001); // uint8 x uint8, aligned K
+  CheckIntegerMatMul2D(true, true, 5, 7, 64, false, 4011);   // int8 x int8, aligned K
+  CheckIntegerMatMul2D(false, true, 6, 9, 50, false, 4021);  // uint8 x int8, K tail
+  CheckIntegerMatMul2D(true, false, 9, 6, 50, false, 4031);  // int8 x uint8, K tail
+  CheckIntegerMatMul2D(false, false, 8, 8, 37, true, 4041);  // per-axis zero points, K tail
+  CheckIntegerMatMul2D(true, true, 8, 8, 37, true, 4051);    // per-axis zero points, K tail
+  CheckIntegerMatMul2D(false, true, 7, 5, 3, true, 4061);    // K below one UDOT vector
+  CheckIntegerMatMul2D(true, false, 1, 1, 128, false, 4071); // single output, wide K
 }

@@ -1194,10 +1194,10 @@ fallbacks are ordered. Completed rows remain visible so scope is not lost.
        accumulator bit for bit modulo 2^32. ``A`` stays contiguous along ``K``
        while ``B`` is packed once into a column-major ``N x K`` buffer, the
        16-byte ``UDOT`` body carries an exact scalar ``K`` tail, and new
-       ``MatMulIntegerInt8`` differential shapes in ``test_gemm_kernel`` (every
+       ``IntegerMatMul2D`` differential shapes in ``test_gemm_kernel`` (every
        signedness combination, scalar and per-axis zero points, and aligned and
-       tail ``K``) run through the dispatch under the cross-compiled aarch64
-       QEMU CI and match the reference. AMX is excluded (PR09.4).
+       tail ``K``) run through the shared dispatch under the cross-compiled
+       aarch64 QEMU CI and match the reference. AMX is excluded (PR09.4).
    * - Roadmap PR09.4
      - AMX-INT8 kernel.
      - The PR07.5 tile-state lifecycle is reused for signed and unsigned INT8,
