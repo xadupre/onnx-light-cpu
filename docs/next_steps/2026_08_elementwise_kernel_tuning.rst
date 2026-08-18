@@ -42,6 +42,11 @@ defaults, validation, and calibration owned by ``library="onnx_light_cpu"``.
 Required execution contract
 ---------------------------
 
+The shared pool, affinity, and spin API is tracked by the
+:doc:`Runtime Execution Controls Roadmap <2026_08_runtime_execution_controls>`.
+Its session-owned executor work must land before the tuning profiles below can
+truthfully describe registered-kernel execution.
+
 The first integration must make the tuning execution descriptor truthful.
 Today onnx-light resolves profiles with the session's effective thread count,
 while the accelerated kernels call a separate onnx-light-cpu pool capped by
@@ -189,4 +194,3 @@ Remaining pull-request sequence
      - Pending
 
 Tuning PR06 is the final roadmap PR.
-
