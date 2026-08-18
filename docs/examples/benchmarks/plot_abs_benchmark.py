@@ -29,6 +29,7 @@ elements.
 # Report which SIMD level the current CPU provides. The mapping is ``0=None``,
 # ``1=SSE2``, ``2=AVX``, ``3=AVX2`` and ``4=AVX512``.
 
+import gc
 import time
 import warnings
 
@@ -46,7 +47,11 @@ from onnx_light_cpu import (
     register_kernels,
     used_kernel_names,
 )
-from onnx_light_cpu.onnx_py._cpukernels import detect_simd_level, has_cpu_kernels
+from onnx_light_cpu.onnx_py._cpukernels import (
+    detect_simd_level,
+    has_cpu_kernels,
+    parallel_for_thread_count,
+)
 from onnx_light_cpu.onnx_py._cpuregister import set_kernel_usage_recording
 
 _SIMD_NAMES = {0: "scalar", 1: "SSE2", 2: "AVX", 3: "AVX2", 4: "AVX-512"}
@@ -86,6 +91,7 @@ model_bytes = model.SerializeToString()
 _ort_setup_start = time.perf_counter()
 session = onnxruntime.InferenceSession(model_bytes, providers=["CPUExecutionProvider"])
 ort_setup_time = time.perf_counter() - _ort_setup_start
+print(f"onnx-light-cpu thread count: {parallel_for_thread_count()}")
 
 # %%
 # Sizes benchmarked
@@ -162,6 +168,34 @@ light_setup_time = time.perf_counter() - _light_setup_start
 clear_used_kernel_names()
 light_session.run(None, {"X": np.zeros(1, dtype=np.float32)})
 assert used_kernel_names() == ["onnx_light_cpu::Abs"], used_kernel_names()
+
+# Verify the two lifetime domains directly. The NumPy input must remain a
+# zero-copy borrowed tensor and consume no ExecutionArena slot, while the
+# declared output is leased from the IOArena. Once the NumPy output is
+# destroyed, a second run of the same shape must reuse the exact same retained
+# output storage.
+execution_arena = light_session._ctx.execution_allocator
+io_arena = light_session._ctx.io_allocator
+assert execution_arena is not io_arena
+arena_probe = np.zeros(4096, dtype=np.float32)
+probe_output = light_session.run(None, {"X": arena_probe})[0]
+probe_address = probe_output.__array_interface__["data"][0]
+assert io_arena.leased_count == 1
+assert execution_arena.allocated_count == 0
+assert execution_arena.total_allocated_size == 0
+del probe_output
+gc.collect()
+assert io_arena.leased_count == 0
+assert io_arena.retained_size >= arena_probe.nbytes
+probe_output = light_session.run(None, {"X": arena_probe})[0]
+assert probe_output.__array_interface__["data"][0] == probe_address
+del probe_output
+gc.collect()
+print(
+    "verified onnx-light arenas: distinct ExecutionArena/IOArena, "
+    f"IO buffer reused at 0x{probe_address:x}; NumPy input is zero-copy"
+)
+
 # Usage recording is diagnostic instrumentation, not part of inference. It
 # takes a mutex and appends to a process-wide log on every invocation, so leave
 # it out of the timed region after confirming the expected kernel was selected.
@@ -221,6 +255,12 @@ for size in size_grid:
     inp = rng.uniform(-100.0, 100.0, size=size).astype(np.float32)
     expected = np.abs(inp)
 
+    set_kernel_usage_recording(True)
+    clear_used_kernel_names()
+    run_light(inp)
+    assert used_kernel_names() == ["onnx_light_cpu::Abs"], (size, used_kernel_names())
+    set_kernel_usage_recording(False)
+
     repeat = max(7, min(200, 2_000_000 // size))
 
     numpy_time = measure(lambda inp=inp: np.abs(inp), repeat)
@@ -275,6 +315,7 @@ for size in size_grid:
     )
 
 set_kernel_usage_recording(True)
+print("verified onnx-light-cpu Abs dispatch for every benchmark size")
 
 sizes = np.array([r[0] for r in rows])
 numpy_times = np.array([r[1] for r in rows])

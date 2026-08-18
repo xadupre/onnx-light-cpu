@@ -177,15 +177,15 @@ else()
   set(ONNX_LIGHT_CPU_HAVE_SVE_INTRINSICS FALSE)
 endif()
 
-# Element-wise kernels such as Abs are commonly memory-bandwidth bound. Using
-# every logical CPU on hybrid/SMT systems increases wake-up and memory
-# contention without increasing throughput, so keep a conservative default
-# while allowing builds to tune the shared pool for their target machine.
-set(ONNX_LIGHT_CPU_MAX_THREADS "6" CACHE STRING
-    "Maximum number of threads participating in the shared kernel thread pool.")
-if(NOT ONNX_LIGHT_CPU_MAX_THREADS MATCHES "^[1-9][0-9]*$")
+# By default the runtime uses one logical processor per detected physical core;
+# the per-kernel cost model may use fewer participants. A build-time ceiling is
+# still available for constrained targets, but zero must not impose an
+# arbitrary machine-independent cap.
+set(ONNX_LIGHT_CPU_MAX_THREADS "0" CACHE STRING
+    "Maximum shared-pool thread count; 0 uses the detected hardware limit.")
+if(NOT ONNX_LIGHT_CPU_MAX_THREADS MATCHES "^(0|[1-9][0-9]*)$")
   message(FATAL_ERROR
-      "ONNX_LIGHT_CPU_MAX_THREADS must be a positive integer, got "
+      "ONNX_LIGHT_CPU_MAX_THREADS must be a non-negative integer, got "
       "'${ONNX_LIGHT_CPU_MAX_THREADS}'.")
 endif()
 

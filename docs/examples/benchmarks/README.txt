@@ -27,12 +27,12 @@ thread with the configured pool while keeping the same binary and inputs:
 .. code-block:: bash
 
    ONNX_LIGHT_CPU_NUM_THREADS=1 <benchmark-command>
-   ONNX_LIGHT_CPU_NUM_THREADS=6 <benchmark-command>
+   ONNX_LIGHT_CPU_NUM_THREADS=<count> <benchmark-command>
 
-The requested count cannot exceed the build-time
-``ONNX_LIGHT_CPU_MAX_THREADS`` limit. With no request, the pool uses physical
-cores before SMT siblings and prioritizes P-cores on hybrid processors. Worker
-affinity is applied on Linux and Windows. ``ONNX_LIGHT_CPU_SPIN_COUNT`` selects
-the bounded spin-before-park budget; use ``0`` to measure immediate parking.
+The requested count cannot exceed the available hardware or a positive
+build-time ``ONNX_LIGHT_CPU_MAX_THREADS`` limit. With no request, the pool uses
+physical cores before SMT siblings and prioritizes P-cores on hybrid processors.
+Worker affinity is applied on Linux and Windows. ``ONNX_LIGHT_CPU_SPIN_COUNT``
+selects the bounded spin-before-park budget; use ``0`` to measure immediate parking.
 Both environment settings are read once when the shared pool is initialized,
 so changing them inside a running process has no effect.
