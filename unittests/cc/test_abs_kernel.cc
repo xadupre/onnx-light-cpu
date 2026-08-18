@@ -258,8 +258,8 @@ TEST(AbsInt64, LargeArray) {
 }
 
 TEST(AbsParallel, LargeArrayMatchesScalar) {
-  // Abs discounts each SIMD element to 1/32 of a generic work unit, so a size
-  // above 32 grains exercises the multi-block path.
+  // Abs discounts each SIMD element to 1/2 of a generic work unit, so a size
+  // above two grains exercises the multi-block path.
   const std::size_t size = 2000000;
   std::vector<float> in(size);
   std::vector<float> out(size, -1.0f);
