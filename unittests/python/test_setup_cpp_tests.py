@@ -85,15 +85,18 @@ class TestSetupReleaseByDefault:
         # Multi-config generators ignore CMAKE_BUILD_TYPE, so the build step
         # must select the Release configuration explicitly.
         output = _dry_run()
-        assert "cmake --build" in output
-        build_line = next(line for line in output.splitlines() if "cmake --build" in line)
+        build_line = next((line for line in output.splitlines() if "cmake --build" in line), None)
+        assert build_line is not None
         assert "--config Release" in build_line
 
     def test_installs_release_config(self):
         # Multi-config generators default ``cmake --install`` to Debug unless a
         # configuration is given explicitly.
         output = _dry_run()
-        install_line = next(line for line in output.splitlines() if "cmake --install" in line)
+        install_line = next(
+            (line for line in output.splitlines() if "cmake --install" in line), None
+        )
+        assert install_line is not None
         assert "--config Release" in install_line
 
 
