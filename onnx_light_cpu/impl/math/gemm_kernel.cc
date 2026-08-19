@@ -44,6 +44,7 @@
 #include "onnx_light_cpu/impl/math/math_kernels.h"
 
 #include "onnx_light_cpu/impl/math/gemm/arm/gemm_kernel_arm.h"
+#include "onnx_light_cpu/impl/math/gemm/float8/float8_conversion.h"
 #include "onnx_light_cpu/impl/math/gemm/gemm_common.h"
 #include "onnx_light_cpu/impl/math/half_conversion.h"
 #include "onnx_light_cpu/impl/parallel_for.h"
@@ -854,6 +855,27 @@ template <bool Bfloat> struct HalfSource {
 using Float16Source = HalfSource<false>;
 using BFloat16Source = HalfSource<true>;
 
+// Reads a Float8 element stored as a raw one-byte pattern and decodes it to
+// ``float`` on access (Roadmap PR09.5), so the packing loops materialize FP32
+// micro-panels directly from Float8 inputs without a separate full-tensor
+// conversion pass. ``Format`` selects the ONNX Float8 storage format. Its size
+// and alignment match ``std::uint8_t`` so a ``const std::uint8_t *`` input
+// buffer can be viewed as ``const Float8Source<Format> *``. The strided
+// (transposed) gathers use this per-element decode while the contiguous packing
+// copies use the exact 256-entry table gather in ``PackConvertContiguous``.
+template <detail::Float8Format Format> struct Float8Source {
+  std::uint8_t bits;
+  operator float() const { return detail::Float8BitsToFloat(Format, bits); }
+};
+
+// The exact 256-entry decode table for ``Format``, built once on first use from
+// the scalar decoder so the vectorized packing gather is bit-for-bit identical
+// to the per-element decode.
+template <detail::Float8Format Format> inline const float *Float8DecodeTable() {
+  static const std::array<float, 256> table = detail::BuildFloat8DecodeTable(Format);
+  return table.data();
+}
+
 // Widens a contiguous run of ``n`` source elements into the packed float panel.
 // The generic template is a scalar per-element convert (a plain copy for the
 // native FP32/FP64 paths). The FP16/BF16 overloads use the vectorized AVX2 F16C
@@ -906,6 +928,27 @@ inline void PackConvertContiguous(const BFloat16Source *src, float *dst, std::si
 #endif
   for (std::size_t i = 0; i < n; ++i) {
     dst[i] = static_cast<float>(src[i]);
+  }
+}
+
+// Decodes a contiguous run of ``n`` Float8 source elements into the packed
+// float panel (Roadmap PR09.5). It gathers from the exact per-format decode
+// table -- through the AVX2 ``vgatherdps`` helper when the running CPU supports
+// AVX2, otherwise a scalar table lookup -- so the contiguous packing copies
+// decode while packing with the same float bits as the per-element
+// ``operator float`` used by the strided gathers.
+template <detail::Float8Format Format>
+inline void PackConvertContiguous(const Float8Source<Format> *src, float *dst, std::size_t n) {
+  const float *table = Float8DecodeTable<Format>();
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
+  static const bool use_avx2 = DetectSimdLevel() >= SimdLevel::kAVX2;
+  if (use_avx2) {
+    GemmDecodeFloat8ToFloat32_AVX2(table, reinterpret_cast<const std::uint8_t *>(src), dst, n);
+    return;
+  }
+#endif
+  for (std::size_t i = 0; i < n; ++i) {
+    dst[i] = table[reinterpret_cast<const std::uint8_t *>(src)[i]];
   }
 }
 
@@ -1611,6 +1654,88 @@ void GemmHalfToFloat(bool is_bfloat16, bool trans_a, bool trans_b, std::size_t M
   }
 }
 
+// Float8 GEMM accumulated in float32 for one prepared algorithm (Roadmap
+// PR09.5). ``A`` and ``B`` are raw one-byte Float8 patterns of ``format``
+// (both operands share the format) viewed as ``Float8Source<Format>`` and
+// decoded to float32 while the operands are packed (general/direct/skinny-M) or
+// reduced (skinny-N), so no full-tensor conversion buffer is allocated for any
+// shape. The float32 ``M x N`` product is written to ``Y`` for the caller's
+// narrowing epilogue. Each format is handled as a separate packing format, not
+// a branch in the FP32 inner loop.
+template <GemmAlgorithm Algorithm, detail::Float8Format Format>
+void GemmFloat8PlannedTyped(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::size_t K,
+                            float alpha, const std::uint8_t *A, const std::uint8_t *B, float *Y,
+                            const GemmBlocking *blocking) {
+  const auto tile = [](GemmKernelKind kind, std::size_t mr, std::size_t nb, std::size_t k,
+                       float alpha, float beta, const float *Bmat, std::size_t N,
+                       const float *Crow_base, std::size_t Cstride, float *Yrow_base,
+                       std::size_t Ystride, std::size_t n0, GemmAccumMode mode,
+                       const float *Apack) {
+    GemmTileF32(kind, mr, nb, k, alpha, beta, Bmat, N, Crow_base, Cstride, Yrow_base, Ystride, n0,
+                mode, Apack);
+  };
+  static const GemmKernelKind default_kind = SelectGemmKernelKind<float>();
+  static const GemmBlocking default_blocking = SelectGemmBlocking(
+      sizeof(float), GemmVectorLanes<float>(default_kind), GemmRegisterRows(default_kind));
+  const GemmBlocking selected =
+      ConstrainGemmBlockingForTasks(blocking == nullptr ? default_blocking : *blocking, M, N,
+                                    static_cast<std::size_t>(ParallelForThreadCount()));
+  const auto *a = reinterpret_cast<const Float8Source<Format> *>(A);
+  const auto *b = reinterpret_cast<const Float8Source<Format> *>(B);
+  GemmImpl<Algorithm, float, decltype(tile), Float8Source<Format>>(
+      trans_a, trans_b, M, N, K, alpha, a, b, 0.0f, static_cast<const float *>(nullptr), Y,
+      default_kind, tile, selected);
+}
+
+template <GemmAlgorithm Algorithm>
+void GemmFloat8Planned(Float8Format format, bool trans_a, bool trans_b, std::size_t M,
+                       std::size_t N, std::size_t K, float alpha, const std::uint8_t *A,
+                       const std::uint8_t *B, float *Y, const GemmBlocking *blocking) {
+  switch (format) {
+  case Float8Format::kE4M3FN:
+    return GemmFloat8PlannedTyped<Algorithm, Float8Format::kE4M3FN>(trans_a, trans_b, M, N, K,
+                                                                    alpha, A, B, Y, blocking);
+  case Float8Format::kE4M3FNUZ:
+    return GemmFloat8PlannedTyped<Algorithm, Float8Format::kE4M3FNUZ>(trans_a, trans_b, M, N, K,
+                                                                      alpha, A, B, Y, blocking);
+  case Float8Format::kE5M2:
+    return GemmFloat8PlannedTyped<Algorithm, Float8Format::kE5M2>(trans_a, trans_b, M, N, K, alpha,
+                                                                  A, B, Y, blocking);
+  case Float8Format::kE5M2FNUZ:
+    return GemmFloat8PlannedTyped<Algorithm, Float8Format::kE5M2FNUZ>(trans_a, trans_b, M, N, K,
+                                                                      alpha, A, B, Y, blocking);
+  }
+}
+
+// Runtime-dispatched Float8 GEMM used by the non-plan entry point (Roadmap
+// PR09.5). It selects the algorithm the same way the FP32 path does and
+// forwards to the typed :cpp:func:`GemmFloat8Planned` so every algorithm
+// decodes the Float8 operands directly while packing.
+void GemmFloat8ToFloat(Float8Format format, bool trans_a, bool trans_b, std::size_t M,
+                       std::size_t N, std::size_t K, float alpha, const std::uint8_t *A,
+                       const std::uint8_t *B, float *Y) {
+  const GemmKernelKind kind = SelectGemmKernelKind<float>();
+  const GemmAlgorithm algorithm = SelectGemmAlgorithm(
+      trans_a, trans_b, M, N, K, GemmVectorLanes<float>(kind), GemmRegisterRows(kind));
+  switch (algorithm) {
+  case GemmAlgorithm::kDirect:
+    return GemmFloat8Planned<GemmAlgorithm::kDirect>(format, trans_a, trans_b, M, N, K, alpha, A, B,
+                                                     Y, nullptr);
+  case GemmAlgorithm::kSkinnyM:
+    return GemmFloat8Planned<GemmAlgorithm::kSkinnyM>(format, trans_a, trans_b, M, N, K, alpha, A,
+                                                      B, Y, nullptr);
+  case GemmAlgorithm::kSkinnyN:
+    return GemmFloat8Planned<GemmAlgorithm::kSkinnyN>(format, trans_a, trans_b, M, N, K, alpha, A,
+                                                      B, Y, nullptr);
+  case GemmAlgorithm::kSplitK:
+    return GemmFloat8Planned<GemmAlgorithm::kSplitK>(format, trans_a, trans_b, M, N, K, alpha, A, B,
+                                                     Y, nullptr);
+  case GemmAlgorithm::kGeneral:
+    return GemmFloat8Planned<GemmAlgorithm::kGeneral>(format, trans_a, trans_b, M, N, K, alpha, A,
+                                                      B, Y, nullptr);
+  }
+}
+
 #define INSTANTIATE_PLANNED_GEMM(Algorithm)                                                        \
   template void GemmFloat32Planned<Algorithm>(bool, bool, std::size_t, std::size_t, std::size_t,   \
                                               float, const float *, const float *, float,          \
@@ -1851,6 +1976,31 @@ void GemmHalfWithEpilogue(bool is_bfloat16, bool trans_a, bool trans_b, std::siz
                           const std::uint16_t *B, const GemmEpilogue<float> &epilogue, float *Y) {
   ValidateGemmEpilogue(M, N, epilogue);
   detail::GemmHalfToFloat(is_bfloat16, trans_a, trans_b, M, N, K, alpha, A, B, Y);
+  ApplyGemmEpilogue(M, N, epilogue, Y);
+}
+
+void GemmFloat8WithEpilogue(GemmFloat8Format format, bool trans_a, bool trans_b, std::size_t M,
+                            std::size_t N, std::size_t K, float alpha, const std::uint8_t *A,
+                            const std::uint8_t *B, const GemmEpilogue<float> &epilogue, float *Y) {
+  ValidateGemmEpilogue(M, N, epilogue);
+  detail::Float8Format internal_format;
+  switch (format) {
+  case GemmFloat8Format::kE4M3FN:
+    internal_format = detail::Float8Format::kE4M3FN;
+    break;
+  case GemmFloat8Format::kE4M3FNUZ:
+    internal_format = detail::Float8Format::kE4M3FNUZ;
+    break;
+  case GemmFloat8Format::kE5M2:
+    internal_format = detail::Float8Format::kE5M2;
+    break;
+  case GemmFloat8Format::kE5M2FNUZ:
+    internal_format = detail::Float8Format::kE5M2FNUZ;
+    break;
+  default:
+    throw std::invalid_argument("Unsupported Float8 GEMM format.");
+  }
+  detail::GemmFloat8ToFloat(internal_format, trans_a, trans_b, M, N, K, alpha, A, B, Y);
   ApplyGemmEpilogue(M, N, epilogue, Y);
 }
 

@@ -115,7 +115,8 @@ void RunCaseThroughRuntime(const TestCase &tc, bool compare, std::vector<std::st
 // runtime, collecting failures. Correctness (``TEST``) cases have their outputs
 // compared; benchmark (``BENCHMARK``) cases are only executed.
 std::vector<std::string> RunCpuBackendCases(const std::string &op_type,
-                                            core::backend_test::TestMode mode) {
+                                            core::backend_test::TestMode mode,
+                                            const std::string &case_name = {}) {
   onnx_light_cpu::backend_test::RegisterCpuKernelBackendTestCases();
   onnx_light_cpu::RegisterAllKernels();
 
@@ -124,7 +125,7 @@ std::vector<std::string> RunCpuBackendCases(const std::string &op_type,
   std::vector<TestCase> cases = CollectTestCases(op_type, /*include_big=*/false, mode);
   size_t cpu_cases = 0;
   for (const TestCase &tc : cases) {
-    if (tc.name.rfind("test_cpu_", 0) != 0) {
+    if (tc.name.rfind("test_cpu_", 0) != 0 || (!case_name.empty() && tc.name != case_name)) {
       continue;
     }
     ++cpu_cases;
@@ -204,8 +205,12 @@ TEST(OnnxLightBackendKernels, NotBenchmarkRunsThroughRuntime) {
 }
 
 TEST(OnnxLightBackendKernels, GemmBenchmarkRunsThroughRuntime) {
-  const std::vector<std::string> failures =
-      RunCpuBackendCases("Gemm", core::backend_test::TestMode::BENCHMARK);
+  // Execute one bounded representative case through the real multithreaded
+  // runtime. The metadata test below validates the complete 48-case benchmark
+  // corpus without materializing and executing every large timing workload as
+  // part of the unit-test suite.
+  const std::vector<std::string> failures = RunCpuBackendCases(
+      "Gemm", core::backend_test::TestMode::BENCHMARK, "test_cpu_gemm_direct_float32_benchmark");
   EXPECT_TRUE(failures.empty()) << Describe(failures);
 }
 

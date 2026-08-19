@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "onnx_light_cpu/impl/math/gemm/amx/gemm_amx_tile.h"
+#include "onnx_light_cpu/impl/math/gemm/float8/float8_conversion.h"
 #include "onnx_light_cpu/impl/math/gemm/gemm_common.h"
 #include "onnx_light_cpu/impl/math/gemm/vnni/integer_gemm_vnni.h"
 #include "onnx_light_cpu/impl/math/half_conversion.h"
@@ -12,6 +13,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <bit>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -1211,4 +1213,250 @@ TEST(IntegerMatMul2D, MatchesScalarReferenceAcrossSignednessAndZeroPoints) {
   CheckIntegerMatMul2D(false, true, 7, 5, 3, true, 4061);    // K below one UDOT vector
   CheckIntegerMatMul2D(true, false, 1, 1, 128, false, 4071); // single output, wide K
   CheckIntegerMatMul2D(false, true, 17, 19, 67, true, 4081); // AMX row/column/K tails
+}
+
+namespace {
+
+using onnx_light_cpu::GemmFloat8Format;
+using onnx_light_cpu::detail::Float8BitsToFloat;
+using onnx_light_cpu::detail::Float8Format;
+
+Float8Format ToDetailFormat(GemmFloat8Format format) { return static_cast<Float8Format>(format); }
+
+float ReferenceFloat8Bits(Float8Format format, std::uint8_t value) {
+  const unsigned sign = value >> 7;
+  unsigned exponent_bits;
+  unsigned mantissa_bits;
+  int bias;
+  bool fnuz;
+  bool ieee;
+  switch (format) {
+  case Float8Format::kE4M3FN:
+    exponent_bits = 4;
+    mantissa_bits = 3;
+    bias = 7;
+    fnuz = false;
+    ieee = false;
+    break;
+  case Float8Format::kE4M3FNUZ:
+    exponent_bits = 4;
+    mantissa_bits = 3;
+    bias = 8;
+    fnuz = true;
+    ieee = false;
+    break;
+  case Float8Format::kE5M2:
+    exponent_bits = 5;
+    mantissa_bits = 2;
+    bias = 15;
+    fnuz = false;
+    ieee = true;
+    break;
+  case Float8Format::kE5M2FNUZ:
+    exponent_bits = 5;
+    mantissa_bits = 2;
+    bias = 16;
+    fnuz = true;
+    ieee = false;
+    break;
+  }
+
+  const unsigned exponent = (value >> mantissa_bits) & ((1u << exponent_bits) - 1u);
+  const unsigned mantissa = value & ((1u << mantissa_bits) - 1u);
+  const std::uint32_t float_sign = sign << 31;
+  if (fnuz && exponent == 0u && mantissa == 0u && sign != 0u) {
+    return std::bit_cast<float>(0xffc00000u);
+  }
+  if (!fnuz && !ieee && exponent == (1u << exponent_bits) - 1u &&
+      mantissa == (1u << mantissa_bits) - 1u) {
+    return std::bit_cast<float>(float_sign | 0x7fc00000u);
+  }
+  if (ieee && exponent == (1u << exponent_bits) - 1u) {
+    return mantissa == 0u ? std::bit_cast<float>(float_sign | 0x7f800000u)
+                          : std::bit_cast<float>(float_sign | 0x7fc00000u);
+  }
+
+  const float magnitude =
+      exponent == 0u
+          ? std::ldexp(static_cast<float>(mantissa), 1 - bias - static_cast<int>(mantissa_bits))
+          : std::ldexp(static_cast<float>((1u << mantissa_bits) + mantissa),
+                       static_cast<int>(exponent) - bias - static_cast<int>(mantissa_bits));
+  return sign == 0u ? magnitude : -magnitude;
+}
+
+// Generates finite Float8 inputs for GEMM by cycling through every byte
+// encoding. Non-finite encodings are replaced with zero; their exact decoding
+// and propagation are covered separately.
+std::vector<std::uint8_t> SequentialFiniteFloat8Bytes(std::size_t size, unsigned seed,
+                                                      GemmFloat8Format format) {
+  const Float8Format fmt = ToDetailFormat(format);
+  std::vector<std::uint8_t> bytes(size);
+  for (std::size_t i = 0; i < size; ++i) {
+    auto candidate = static_cast<std::uint8_t>((i + seed) & 0xFF);
+    if (!std::isfinite(Float8BitsToFloat(fmt, candidate))) {
+      candidate = 0;
+    }
+    bytes[i] = candidate;
+  }
+  return bytes;
+}
+
+std::vector<float> DecodeFloat8Vector(const std::vector<std::uint8_t> &bytes,
+                                      GemmFloat8Format format) {
+  const Float8Format fmt = ToDetailFormat(format);
+  std::vector<float> out(bytes.size());
+  for (std::size_t i = 0; i < bytes.size(); ++i) {
+    out[i] = Float8BitsToFloat(fmt, bytes[i]);
+  }
+  return out;
+}
+
+// Runs the Float8 GEMM path (Roadmap PR09.5) for ``format`` and compares
+// ``alpha * op(A) @ op(B)`` against the reference computed on the exact decoded
+// float32 values. Exercises the per-format decode-while-packing path (including
+// the vectorized table gather on the contiguous copies and the per-element
+// decode on the transposed gathers), the column and K tails, and the algorithm
+// the driver selects for the shape.
+void CheckGemmFloat8(GemmFloat8Format format, bool trans_a, bool trans_b, std::size_t M,
+                     std::size_t N, std::size_t K, float alpha, unsigned seed) {
+  const auto a_bytes = SequentialFiniteFloat8Bytes(trans_a ? K * M : M * K, seed, format);
+  const auto b_bytes = SequentialFiniteFloat8Bytes(trans_b ? N * K : K * N, seed + 1, format);
+  const auto a_f = DecodeFloat8Vector(a_bytes, format);
+  const auto b_f = DecodeFloat8Vector(b_bytes, format);
+  // Reference in double so the comparison is against the exact math, and an
+  // accumulation-magnitude scale (sum of absolute products) so the tolerance
+  // absorbs the float rounding a reordered reduction (e.g. split-K) incurs when
+  // the sequential byte sweep decodes large-magnitude Float8 values that cancel.
+  std::vector<double> a_d(a_f.begin(), a_f.end());
+  std::vector<double> b_d(b_f.begin(), b_f.end());
+  const auto expected =
+      ReferenceGemm<double>(trans_a, trans_b, M, N, K, alpha, a_d, b_d, 0.0, nullptr);
+
+  std::vector<double> scale(M * N, 0.0);
+  for (std::size_t m = 0; m < M; ++m) {
+    for (std::size_t n = 0; n < N; ++n) {
+      double s = 0.0;
+      for (std::size_t k = 0; k < K; ++k) {
+        const double a = trans_a ? a_d[k * M + m] : a_d[m * K + k];
+        const double b = trans_b ? b_d[n * K + k] : b_d[k * N + n];
+        s += std::abs(a * b);
+      }
+      scale[m * N + n] = std::abs(static_cast<double>(alpha)) * s;
+    }
+  }
+
+  std::vector<float> workspace(M * N, -1.0f);
+  onnx_light_cpu::GemmEpilogue<float> epilogue;
+  onnx_light_cpu::GemmFloat8WithEpilogue(format, trans_a, trans_b, M, N, K, alpha, a_bytes.data(),
+                                         b_bytes.data(), epilogue, workspace.data());
+
+  for (std::size_t i = 0; i < M * N; ++i) {
+    const double operations = static_cast<double>(K + 2);
+    const double epsilon = static_cast<double>(std::numeric_limits<float>::epsilon());
+    const double gamma = operations * epsilon / (1.0 - operations * epsilon);
+    const double tol = std::max(1e-6, 4.0 * gamma * scale[i]);
+    EXPECT_NEAR(static_cast<double>(workspace[i]), expected[i], tol) << "i=" << i;
+  }
+}
+
+} // namespace
+
+// Roadmap PR09.5: each Float8 format decodes bit for bit like the reference
+// ml_dtypes / ONNX conversion, including zero, the smallest subnormal, a normal
+// value, the format maximum, a negative value, and the format-specific NaN.
+TEST(GemmFloat8, DecodeMatchesReference) {
+  EXPECT_EQ(Float8BitsToFloat(Float8Format::kE4M3FN, 0x00), 0.0f);
+  EXPECT_EQ(Float8BitsToFloat(Float8Format::kE4M3FN, 0x01), 0.001953125f);
+  EXPECT_EQ(Float8BitsToFloat(Float8Format::kE4M3FN, 0x38), 1.0f);
+  EXPECT_EQ(Float8BitsToFloat(Float8Format::kE4M3FN, 0x7e), 448.0f);
+  EXPECT_EQ(Float8BitsToFloat(Float8Format::kE4M3FN, 0xc0), -2.0f);
+  EXPECT_TRUE(std::isnan(Float8BitsToFloat(Float8Format::kE4M3FN, 0x7f)));
+  EXPECT_TRUE(std::isnan(Float8BitsToFloat(Float8Format::kE4M3FN, 0xff)));
+
+  EXPECT_EQ(Float8BitsToFloat(Float8Format::kE4M3FNUZ, 0x01), 0.0009765625f);
+  EXPECT_EQ(Float8BitsToFloat(Float8Format::kE4M3FNUZ, 0x40), 1.0f);
+  EXPECT_EQ(Float8BitsToFloat(Float8Format::kE4M3FNUZ, 0x7e), 224.0f);
+  EXPECT_TRUE(std::isnan(Float8BitsToFloat(Float8Format::kE4M3FNUZ, 0x80)));
+
+  EXPECT_EQ(Float8BitsToFloat(Float8Format::kE5M2, 0x01), 1.52587890625e-05f);
+  EXPECT_EQ(Float8BitsToFloat(Float8Format::kE5M2, 0x40), 2.0f);
+  EXPECT_EQ(Float8BitsToFloat(Float8Format::kE5M2, 0x78), 32768.0f);
+  EXPECT_TRUE(std::isinf(Float8BitsToFloat(Float8Format::kE5M2, 0x7c)));
+  EXPECT_TRUE(std::isnan(Float8BitsToFloat(Float8Format::kE5M2, 0x7e)));
+
+  EXPECT_EQ(Float8BitsToFloat(Float8Format::kE5M2FNUZ, 0x40), 1.0f);
+  EXPECT_EQ(Float8BitsToFloat(Float8Format::kE5M2FNUZ, 0x78), 16384.0f);
+  EXPECT_TRUE(std::isnan(Float8BitsToFloat(Float8Format::kE5M2FNUZ, 0x80)));
+}
+
+TEST(GemmFloat8, DecodeAllBytePatternsMatchesReference) {
+  for (Float8Format format : {Float8Format::kE4M3FN, Float8Format::kE4M3FNUZ, Float8Format::kE5M2,
+                              Float8Format::kE5M2FNUZ}) {
+    for (unsigned value = 0; value < 256; ++value) {
+      const float actual = Float8BitsToFloat(format, static_cast<std::uint8_t>(value));
+      const float expected = ReferenceFloat8Bits(format, static_cast<std::uint8_t>(value));
+      EXPECT_EQ(std::bit_cast<std::uint32_t>(actual), std::bit_cast<std::uint32_t>(expected))
+          << "format=" << static_cast<int>(format) << ", value=" << value;
+    }
+  }
+}
+
+TEST(GemmFloat8, NonFiniteInputsPropagate) {
+  onnx_light_cpu::GemmEpilogue<float> epilogue;
+  float output = 0.0f;
+  const std::uint8_t one_e4m3fn = 0x38;
+  const std::uint8_t nan_e4m3fn = 0x7f;
+  onnx_light_cpu::GemmFloat8WithEpilogue(GemmFloat8Format::kE4M3FN, false, false, 1, 1, 1, 1.0f,
+                                         &nan_e4m3fn, &one_e4m3fn, epilogue, &output);
+  EXPECT_TRUE(std::isnan(output));
+
+  const std::uint8_t one_e5m2 = 0x3c;
+  const std::uint8_t infinity_e5m2 = 0x7c;
+  onnx_light_cpu::GemmFloat8WithEpilogue(GemmFloat8Format::kE5M2, false, false, 1, 1, 1, 1.0f,
+                                         &infinity_e5m2, &one_e5m2, epilogue, &output);
+  EXPECT_TRUE(std::isinf(output));
+  EXPECT_GT(output, 0.0f);
+}
+
+TEST(GemmFloat8, RejectsUnknownFormat) {
+  onnx_light_cpu::GemmEpilogue<float> epilogue;
+  const std::uint8_t value = 0;
+  float output = 0.0f;
+  EXPECT_THROW(onnx_light_cpu::GemmFloat8WithEpilogue(static_cast<GemmFloat8Format>(99), false,
+                                                      false, 1, 1, 1, 1.0f, &value, &value,
+                                                      epilogue, &output),
+               std::invalid_argument);
+}
+
+// Roadmap PR09.5: the Float8 GEMM path matches the reference computed on the
+// decoded float32 values for every supported format, with a wide N that leaves
+// the vectorized packing gather a scalar tail and a K spanning several blocking
+// chunks.
+TEST(GemmFloat8, GeneralMatchesDecodedReference) {
+  CheckGemmFloat8(GemmFloat8Format::kE4M3FN, false, false, 17, 37, 45, 1.0f, 5001);
+  CheckGemmFloat8(GemmFloat8Format::kE4M3FNUZ, false, false, 19, 33, 40, 0.75f, 5011);
+  CheckGemmFloat8(GemmFloat8Format::kE5M2, false, false, 20, 48, 40, 1.0f, 5021);
+  CheckGemmFloat8(GemmFloat8Format::kE5M2FNUZ, false, false, 33, 70, 66, 0.5f, 5031);
+}
+
+// Roadmap PR09.5: the transposed variants exercise the per-element decode used
+// by the strided (``trans_a`` / ``trans_b``) gathers instead of the contiguous
+// table gather, and must match the same reference.
+TEST(GemmFloat8, TransposeVariantsMatchDecodedReference) {
+  for (bool trans_a : {false, true}) {
+    for (bool trans_b : {false, true}) {
+      CheckGemmFloat8(GemmFloat8Format::kE4M3FN, trans_a, trans_b, 6, 5, 7, 1.0f, 5101);
+    }
+  }
+}
+
+// Roadmap PR09.5: the driver selects the skinny-N (``N == 1`` GEMV), skinny-M
+// (``M == 1``), and split-K (small M/N, wide K) algorithms for these shapes;
+// each must decode the Float8 operands and match the reference.
+TEST(GemmFloat8, AlgorithmVariantsMatchDecodedReference) {
+  CheckGemmFloat8(GemmFloat8Format::kE4M3FN, false, false, 12, 1, 40, 1.0f, 5201);   // skinny-N
+  CheckGemmFloat8(GemmFloat8Format::kE5M2, false, false, 1, 12, 40, 0.75f, 5211);    // skinny-M
+  CheckGemmFloat8(GemmFloat8Format::kE4M3FNUZ, false, false, 2, 2, 512, 1.0f, 5221); // split-K
+  CheckGemmFloat8(GemmFloat8Format::kE5M2FNUZ, false, false, 3, 3, 4, 1.0f, 5231); // direct small K
+  CheckGemmFloat8(GemmFloat8Format::kE4M3FN, false, false, 5, 7, 0, 1.0f, 5241);   // empty K
 }

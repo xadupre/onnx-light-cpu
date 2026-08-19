@@ -437,7 +437,13 @@ extra full-matrix memory passes.
   ``CpuSupportsNeonDotProd`` capability, keeping the scalar reduction as the
   fallback.)*
 * Treat Float8 and packed 4-bit types as separate packing formats, not as
-  branches in the FP32 inner loop.
+  branches in the FP32 inner loop. *(First landed: Roadmap PR09.5 adds the four
+  ONNX Float8 formats (``E4M3FN``, ``E4M3FNUZ``, ``E5M2``, ``E5M2FNUZ``) as
+  separate packing formats: exact per-format decoders decode each one-byte
+  pattern to float32 while packing -- the contiguous copies gather from an exact
+  256-entry per-format table through an AVX2 ``vgatherdps`` helper with a scalar
+  tail and fallback -- reusing the tuned FP32 algorithms with float32
+  accumulation. Packed 4-bit types are Roadmap PR09.6.)*
 
 Phase 4: complete MatMul
 ------------------------
@@ -1222,7 +1228,26 @@ fallbacks are ordered. Completed rows remain visible so scope is not lost.
        path, exact tail handling, and differential tests. Integer and INT4
        kernels are unchanged.
      - PR07.2
-     - Pending
+     - Implemented. Each of the four ONNX Float8 formats (``E4M3FN``,
+       ``E4M3FNUZ``, ``E5M2``, ``E5M2FNUZ``) is handled as a separate packing
+       format rather than a branch in the FP32 inner loop: new
+       ``impl/math/gemm/float8/float8_conversion.h`` provides exact per-format
+       scalar decoders (validated bit for bit against the ``ml_dtypes`` / ONNX
+       reference for all 256 byte patterns, including the format-specific NaN
+       encodings) and builds an exact 256-entry decode table. A ``Float8Source``
+       view decodes each one-byte pattern to float32 while the operands are
+       packed (general/direct/skinny-M) or reduced (skinny-N), so no full-tensor
+       conversion buffer is allocated; the contiguous packing copies gather from
+       the per-format decode table through the AVX2 ``vgatherdps`` helper
+       ``GemmDecodeFloat8ToFloat32_AVX2`` (exact scalar tail, scalar fallback off
+       x86) while the transposed strided gathers keep the per-element decode.
+       The reduction accumulates in float32, reusing every tuned FP32 algorithm
+       through ``GemmFloat8Planned`` / ``GemmFloat8ToFloat`` and the new public
+       ``GemmFloat8WithEpilogue`` entry point. New ``GemmFloat8`` differential
+       tests in ``test_gemm_kernel`` cover the decode tables, all four formats,
+       transpose combinations, column and K tails, and the skinny-N / skinny-M /
+       split-K / direct / empty-K algorithm variants against a reference computed
+       on the decoded float32 values. Integer and INT4 kernels are unchanged.
    * - Roadmap PR09.6
      - Packed INT4/UINT4 formats.
      - Nibbles unpack into typed panels or a native dot-product path with exact
