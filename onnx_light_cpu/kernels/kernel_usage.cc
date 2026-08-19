@@ -4,12 +4,6 @@
 
 #include "onnx_light_cpu/kernels/kernel_usage.h"
 
-#include "onnx_light_cpu/kernels/logical/not_kernel.h"
-#include "onnx_light_cpu/kernels/math/abs_kernel.h"
-#include "onnx_light_cpu/kernels/math/exp_log_kernel.h"
-#include "onnx_light_cpu/kernels/math/gemm_kernel.h"
-#include "onnx_light_cpu/kernels/math/integer_matmul_kernel.h"
-
 #include <atomic>
 #include <mutex>
 
@@ -57,19 +51,6 @@ void ClearUsedKernelNames() {
 
 void SetKernelUsageRecording(bool enabled) noexcept {
   UsageRecordingEnabled().store(enabled, std::memory_order_relaxed);
-}
-
-const std::vector<std::pair<std::string, std::string>> &RegisteredKernelNames() {
-  static const std::vector<std::pair<std::string, std::string>> names = {
-      {"Abs", AbsKernel::kName},
-      {"Exp", ExpKernel::kName},
-      {"Log", LogKernel::kName},
-      {"Gemm", GemmKernel::kName},
-      {"MatMulInteger", MatMulIntegerKernel::kName},
-      {"QLinearMatMul", QLinearMatMulKernel::kName},
-      {"Not", NotKernel::kName},
-  };
-  return names;
 }
 
 } // namespace onnx_light_cpu

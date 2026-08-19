@@ -110,9 +110,7 @@ The three steps are:
    node's inputs and write its outputs (see ``AbsKernel::Run``). Give the class a
    unique ``static constexpr const char *kName`` (for example
    ``"onnx_light_cpu::MyOp"``) and call ``RecordKernelUsage(kName)`` at the top
-   of ``Run`` so the kernel can be recognised in ``UsedKernelNames()``; add its
-   ``{op_type, kName}`` pair to ``RegisteredKernelNames()`` in
-   ``onnx_light_cpu/kernels/kernel_usage.cc``.
+   of ``Run`` so the kernel can be recognised in ``UsedKernelNames()``.
 #. Wrap the class in a ``NodeKernelFn`` factory that constructs the kernel and
    calls ``set_node``.
 #. Call ``RegisterKernelFn(domain, op_type, symbolic::Device::kCPU, factory)``.
@@ -134,9 +132,12 @@ The three steps are:
           "", "MyOp", onnx_light::core::symbolic::Device::kCPU, std::move(factory));
     }
 
-Then add ``RegisterMyKernel()`` to ``RegisterAllKernels`` in
-``onnx_light_cpu/kernels/register_kernels.cc`` so it is installed together with
-the other kernels.
+Then declare ``RegisterMyKernel()`` in the kernel's header. It is installed
+together with the other kernels automatically: ``RegisterAllKernels()`` and the
+``RegisteredKernelNames()`` ``{op_type, kName}`` table are generated from the
+kernel sources at build time (by
+``onnx_light_cpu/kernels/generate_kernel_registration.py``), so no
+hand-maintained list needs editing.
 
 For a kernel that only needs to run from Python — for example a quick,
 model-specific override written in NumPy — use ``onnx-light``'s per-evaluator

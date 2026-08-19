@@ -620,8 +620,35 @@ if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
       "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/kernels/*.cc"
       "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/kernels/*/*.cc")
 
+  # The two aggregator lists -- RegisterAllKernels() and RegisteredKernelNames()
+  # -- are generated from the kernel sources so that adding a kernel never
+  # requires editing a hand-maintained list. The generator only derives the
+  # lists from the per-operator RegisterKernelFn registrations and kName members
+  # already in the sources; onnx-light's RegisterKernelFn remains the sole
+  # registration system.
+  file(GLOB CPU_KERNEL_REGISTRATION_HEADERS CONFIGURE_DEPENDS
+      "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/kernels/*.h"
+      "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/kernels/*/*.h")
+  find_package(Python3 REQUIRED COMPONENTS Interpreter)
+  set(_cpu_kernel_registration_generator
+      "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/kernels/generate_kernel_registration.py")
+  set(_cpu_kernel_registration_generated
+      "${CMAKE_CURRENT_BINARY_DIR}/generated/register_kernels_generated.cc")
+  add_custom_command(
+      OUTPUT "${_cpu_kernel_registration_generated}"
+      COMMAND "${Python3_EXECUTABLE}" "${_cpu_kernel_registration_generator}"
+          --kernels-dir "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/kernels"
+          --repo-root "${CMAKE_CURRENT_SOURCE_DIR}"
+          --output "${_cpu_kernel_registration_generated}"
+      DEPENDS "${_cpu_kernel_registration_generator}"
+          ${CPU_KERNEL_REGISTRATION_SOURCES}
+          ${CPU_KERNEL_REGISTRATION_HEADERS}
+      COMMENT "Generating onnx-light-cpu kernel registration list"
+      VERBATIM)
+
   add_library(lib_onnx_light_cpu_kernels ${_cpu_lib_type}
-      ${CPU_KERNEL_REGISTRATION_SOURCES})
+      ${CPU_KERNEL_REGISTRATION_SOURCES}
+      "${_cpu_kernel_registration_generated}")
   target_include_directories(lib_onnx_light_cpu_kernels PUBLIC
       $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
       $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
