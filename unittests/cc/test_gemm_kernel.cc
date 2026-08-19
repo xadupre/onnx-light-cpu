@@ -1169,8 +1169,8 @@ void CheckIntegerMatMul2D(bool a_signed, bool b_signed, std::size_t m, std::size
 // the scalar reference for every signedness combination, scalar and per-axis
 // zero points, and a K that leaves a UDOT scalar tail. On capable AArch64 these
 // exercise the native NEON dot-product kernel, on capable x86 the AVX-512 VNNI
-// kernel; every other target exercises the portable scalar reduction the kernel
-// shares.
+// kernel; capable AMX-INT8 x86 runs the 16x16 AMX tiles first; every other
+// target exercises the portable scalar reduction the kernel shares.
 TEST(IntegerMatMul2D, MatchesScalarReferenceAcrossSignednessAndZeroPoints) {
   CheckIntegerMatMul2D(false, false, 5, 7, 64, false, 4001); // uint8 x uint8, aligned K
   CheckIntegerMatMul2D(true, true, 5, 7, 64, false, 4011);   // int8 x int8, aligned K
@@ -1180,4 +1180,5 @@ TEST(IntegerMatMul2D, MatchesScalarReferenceAcrossSignednessAndZeroPoints) {
   CheckIntegerMatMul2D(true, true, 8, 8, 37, true, 4051);    // per-axis zero points, K tail
   CheckIntegerMatMul2D(false, true, 7, 5, 3, true, 4061);    // K below one UDOT vector
   CheckIntegerMatMul2D(true, false, 1, 1, 128, false, 4071); // single output, wide K
+  CheckIntegerMatMul2D(false, true, 17, 19, 67, true, 4081); // AMX row/column/K tails
 }

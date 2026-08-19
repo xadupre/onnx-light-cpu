@@ -1203,7 +1203,19 @@ fallbacks are ordered. Completed rows remain visible so scope is not lost.
      - The PR07.5 tile-state lifecycle is reused for signed and unsigned INT8,
        with exact tails and VNNI fallback.
      - PR07.5, PR09.2
-     - Pending
+     - Implemented. The ``gemm/amx/gemm_amx_int8`` translation unit is compiled
+       with ``-mamx-tile -mamx-int8`` and dispatches ahead of AVX-512 VNNI when
+       ``CpuSupportsAmxInt8()`` and ``AmxTileStateAvailable()`` confirm the ISA
+       and OS tile state. It maps signed operands into the unsigned domain,
+       packs a 16x64-byte ``A`` tile and a four-byte VNNI-packed 16x16 ``B``
+       tile, and uses ``tdpbuud`` to accumulate INT32 output tiles. Per-row and
+       per-column byte sums and zero-point corrections preserve the exact
+       modulo-2^32 ``MatMulInteger`` result for every signedness combination;
+       partial row, column, and ``K`` tiles are zero-padded. If tile
+       configuration is unavailable, the shared scalar path is used, and CPUs
+       without AMX keep the PR09.2 VNNI then scalar dispatch. The
+       ``IntegerMatMul2D`` differential corpus includes a 17x19x67 per-axis
+       case to exercise all AMX tile tails.
    * - Roadmap PR09.5
      - Float8 packing formats.
      - Each supported Float8 format has an explicit vectorized decode/packing
