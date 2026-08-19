@@ -56,6 +56,17 @@ std::int32_t IntegerDotU8S8Scalar(const std::uint8_t *ua, const std::int8_t *sb,
   return std::bit_cast<std::int32_t>(accumulator);
 }
 
+namespace {
+
+std::int64_t ReadPacked4Bit(const std::uint8_t *data, std::int64_t index, bool is_signed) {
+  const std::uint8_t packed = data[static_cast<std::size_t>(index) >> 1];
+  const unsigned shift = static_cast<unsigned>(index & 1) * 4u;
+  const std::int64_t nibble = (packed >> shift) & 0x0fu;
+  return is_signed && nibble >= 8 ? nibble - 16 : nibble;
+}
+
+} // namespace
+
 void IntegerMatMul2DWithDot(IntegerVnniDotFn dot, const std::uint8_t *a, bool a_signed,
                             const std::uint8_t *b, bool b_signed, std::int32_t *c,
                             std::int64_t rows, std::int64_t cols, std::int64_t depth,
@@ -115,6 +126,58 @@ void IntegerMatMul2DWithDot(IntegerVnniDotFn dot, const std::uint8_t *a, bool a_
   }
 }
 
+void IntegerMatMul4Bit2DWithDot(IntegerVnniDotFn dot, const std::uint8_t *a, bool a_signed,
+                                const std::uint8_t *b, bool b_signed, std::int32_t *c,
+                                std::int64_t rows, std::int64_t cols, std::int64_t depth,
+                                const std::int32_t *a_zero_point, std::int64_t a_zero_point_count,
+                                const std::int32_t *b_zero_point, std::int64_t b_zero_point_count) {
+  const std::int64_t oa = a_signed ? 8 : 0;
+  const std::int64_t ob = b_signed ? 0 : 8;
+
+  std::vector<std::uint8_t> a_panel(static_cast<std::size_t>(rows * depth));
+  std::vector<std::int64_t> a_row_sum(static_cast<std::size_t>(rows), 0);
+  for (std::int64_t row = 0; row < rows; ++row) {
+    std::int64_t row_sum = 0;
+    std::uint8_t *packed = a_panel.data() + row * depth;
+    for (std::int64_t inner = 0; inner < depth; ++inner) {
+      const std::int64_t value = ReadPacked4Bit(a, row * depth + inner, a_signed);
+      row_sum += value;
+      packed[inner] = static_cast<std::uint8_t>(value + oa);
+    }
+    a_row_sum[static_cast<std::size_t>(row)] = row_sum;
+  }
+
+  std::vector<std::int8_t> b_panel(static_cast<std::size_t>(cols * depth));
+  std::vector<std::int64_t> b_col_sum(static_cast<std::size_t>(cols), 0);
+  for (std::int64_t column = 0; column < cols; ++column) {
+    std::int64_t column_sum = 0;
+    std::int8_t *packed = b_panel.data() + column * depth;
+    for (std::int64_t inner = 0; inner < depth; ++inner) {
+      const std::int64_t value = ReadPacked4Bit(b, inner * cols + column, b_signed);
+      column_sum += value;
+      packed[inner] = static_cast<std::int8_t>(value - ob);
+    }
+    b_col_sum[static_cast<std::size_t>(column)] = column_sum;
+  }
+
+  for (std::int64_t row = 0; row < rows; ++row) {
+    const std::int64_t az =
+        a_zero_point_count == 1 ? a_zero_point[0] : a_zero_point[static_cast<std::size_t>(row)];
+    const std::int64_t sa = a_row_sum[static_cast<std::size_t>(row)];
+    const std::uint8_t *a_values = a_panel.data() + row * depth;
+    for (std::int64_t column = 0; column < cols; ++column) {
+      const std::int64_t bz = b_zero_point_count == 1
+                                  ? b_zero_point[0]
+                                  : b_zero_point[static_cast<std::size_t>(column)];
+      const std::int64_t sb = b_col_sum[static_cast<std::size_t>(column)];
+      const std::int64_t product = dot(a_values, b_panel.data() + column * depth, depth);
+      const std::int64_t corrected =
+          product + sa * (ob - bz) + sb * (-oa - az) + depth * (oa * ob + az * bz);
+      c[row * cols + column] = std::bit_cast<std::int32_t>(static_cast<std::uint32_t>(corrected));
+    }
+  }
+}
+
 } // namespace detail
 
 bool IntegerMatMul2DUsesVnni() {
@@ -158,6 +221,26 @@ void IntegerMatMul2D(const std::uint8_t *a, bool a_signed, const std::uint8_t *b
 #endif
   detail::IntegerMatMul2DWithDot(dot, a, a_signed, b, b_signed, c, rows, cols, depth, a_zero_point,
                                  a_zero_point_count, b_zero_point, b_zero_point_count);
+}
+
+void IntegerMatMul4Bit2D(const std::uint8_t *a, bool a_signed, const std::uint8_t *b, bool b_signed,
+                         std::int32_t *c, std::int64_t rows, std::int64_t cols, std::int64_t depth,
+                         const std::int32_t *a_zero_point, std::int64_t a_zero_point_count,
+                         const std::int32_t *b_zero_point, std::int64_t b_zero_point_count) {
+  detail::IntegerVnniDotFn dot = &detail::IntegerDotU8S8Scalar;
+#ifdef ONNX_LIGHT_CPU_HAVE_NEON_DOTPROD
+  if (CpuSupportsNeonDotProd()) {
+    dot = &detail::IntegerDot4BitU8S8NeonDotProd;
+  }
+#endif
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512VNNI
+  if (CpuSupportsAvx512Vnni()) {
+    dot = &detail::IntegerDotU8S8Avx512Vnni;
+  }
+#endif
+  detail::IntegerMatMul4Bit2DWithDot(dot, a, a_signed, b, b_signed, c, rows, cols, depth,
+                                     a_zero_point, a_zero_point_count, b_zero_point,
+                                     b_zero_point_count);
 }
 
 } // namespace onnx_light_cpu

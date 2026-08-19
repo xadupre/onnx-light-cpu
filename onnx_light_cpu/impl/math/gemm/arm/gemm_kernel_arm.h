@@ -130,6 +130,16 @@ void GemmMicroKernel_SVE_FP16(std::size_t mr, std::size_t nb, std::size_t K, flo
 #endif
 
 #ifdef ONNX_LIGHT_CPU_HAVE_NEON_DOTPROD
+namespace detail {
+
+// Signed NEON dot product used after packed INT4/UINT4 values have been
+// expanded into the shared UINT8 x INT8 panels. Values in the UINT8 panel are
+// at most 15, so reinterpreting them as signed bytes is exact.
+std::int32_t IntegerDot4BitU8S8NeonDotProd(const std::uint8_t *a, const std::int8_t *b,
+                                           std::int64_t depth);
+
+} // namespace detail
+
 // Native INT8/UINT8 dot-product member of the GEMM kernel family (Roadmap
 // PR09.3). Computes the contiguous row-major 2D ``MatMulInteger``
 //   ``C[m,n] = sum_k (A[m,k] - a_zero_point[m]) * (B[k,n] - b_zero_point[n])``
