@@ -252,20 +252,15 @@ Pull-request sequence
      - Calibration uses the actual executor; cache identity is truthful; per-
        kernel maximum threads cannot exceed the session policy.
      - PR03, PR04
-     - Pending
+     - Completed (`Pool PR06
+       <https://github.com/xadupre/onnx-light/pull/4594>`_)
    * - Runtime PR07
-     - Both: benchmark and compatibility gate.
+     - Both: private-scheduler removal and compatibility gate.
      - The complete policy matrix passes correctness tests; default latency and
-       throughput do not regress; published benchmark artifacts contain all
-       required execution metadata.
+       throughput do not regress; ``onnx-light-cpu`` owns no worker pool and
+       registered kernels use only the session executor.
      - PR05, PR06
      - In review (`Pool PR07
        <https://github.com/xadupre/onnx-light-cpu/pull/271>`_)
-   * - Runtime PR08
-     - ``onnx-light-cpu``: remove the private scheduler.
-     - ``parallel_for.h`` and its worker pool are absent; standalone kernels are
-       serial and registered kernels use only the session ``CpuExecutor``.
-     - PR04, PR07
-     - In progress
 
-Runtime PR08 is the final roadmap PR.
+Runtime PR07 is the final roadmap PR.
