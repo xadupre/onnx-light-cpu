@@ -34,9 +34,12 @@ _EXPECTED_IR_VERSION = 13
 
 
 def _make_model_calls(tree):
-    # Match ``helper.make_model(...)`` (attribute access) only. The benchmark
-    # scripts build models through ``onnx.helper.make_model``; a bare
-    # ``make_model(...)`` name is a local wrapper that delegates to it.
+    # Match attribute calls ending in ``.make_model`` (i.e. ``helper.make_model``
+    # / ``onnx.helper.make_model``). Bare ``make_model(...)`` name calls are the
+    # gallery scripts' own local wrappers; they are skipped on purpose because
+    # the ``helper.make_model`` call *inside* such a wrapper is itself an
+    # attribute call that this walk still reaches and checks, so no coverage is
+    # lost. Every real ONNX-model construction therefore gets asserted.
     for node in ast.walk(tree):
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
             if node.func.attr == "make_model":
