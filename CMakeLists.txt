@@ -226,6 +226,7 @@ if(NOT ONNX_LIGHT_CPU_X86)
   set(ONNX_LIGHT_CPU_HAVE_AVX512VNNI_FLAG FALSE)
   set(ONNX_LIGHT_CPU_HAVE_AMX_TILE_FLAG FALSE)
   set(ONNX_LIGHT_CPU_HAVE_AMX_BF16_FLAG FALSE)
+  set(ONNX_LIGHT_CPU_HAVE_AMX_INT8_FLAG FALSE)
 elseif(NOT MSVC)
   check_cxx_compiler_flag("-mavx2 -mfma" ONNX_LIGHT_CPU_HAVE_AVX2_FMA_FLAG)
   check_cxx_compiler_flag("-mavx2 -mfma -mf16c" ONNX_LIGHT_CPU_HAVE_F16C_FLAG)
@@ -245,6 +246,7 @@ elseif(NOT MSVC)
   # The native AMX-BF16 GEMM kernel additionally needs -mamx-bf16 for the
   # tdpbf16ps tile dot-product; it is only compiled when both flags are present.
   check_cxx_compiler_flag("-mamx-tile -mamx-bf16" ONNX_LIGHT_CPU_HAVE_AMX_BF16_FLAG)
+  check_cxx_compiler_flag("-mamx-tile -mamx-int8" ONNX_LIGHT_CPU_HAVE_AMX_INT8_FLAG)
 else()
   check_cxx_compiler_flag("/arch:AVX2" ONNX_LIGHT_CPU_HAVE_AVX2_FMA_FLAG)
   # /arch:AVX2 already enables the F16C intrinsics on MSVC.
@@ -272,6 +274,7 @@ else()
   # native AMX-BF16 kernel; keep it out of the build and rely on the AVX-512BF16
   # or converting float32 fallback path.
   set(ONNX_LIGHT_CPU_HAVE_AMX_BF16_FLAG FALSE)
+  set(ONNX_LIGHT_CPU_HAVE_AMX_INT8_FLAG FALSE)
 endif()
 
 # ---------------------------------------------------------------------------
@@ -299,6 +302,8 @@ set(_gemm_amx_source
     "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/gemm/amx/gemm_amx_tile.cc")
 set(_gemm_amx_bf16_source
     "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/gemm/amx/gemm_amx_bf16.cc")
+set(_gemm_amx_int8_source
+    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/gemm/amx/gemm_amx_int8.cc")
 set(_gemm_avx2_fma_source
     "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/gemm/avx2/gemm_kernel_avx2_fma.cc")
 set(_gemm_neon_source
@@ -344,6 +349,11 @@ if(NOT ONNX_LIGHT_CPU_HAVE_AMX_BF16_FLAG)
   # Exclude the native AMX-BF16 GEMM kernel when the compiler cannot target the
   # ISA; the BFLOAT16 path keeps its AVX-512BF16 / converting float32 fallback.
   list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_gemm_amx_bf16_source}")
+endif()
+if(NOT ONNX_LIGHT_CPU_HAVE_AMX_INT8_FLAG)
+  # Exclude the native AMX-INT8 GEMM kernel when the compiler cannot target the
+  # ISA; the integer matmul keeps its AVX-512 VNNI / scalar fallback.
+  list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_gemm_amx_int8_source}")
 endif()
 if(NOT ONNX_LIGHT_CPU_HAVE_NEON_INTRINSICS)
   list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_gemm_neon_source}")
@@ -465,6 +475,16 @@ if(ONNX_LIGHT_CPU_HAVE_AMX_BF16_FLAG)
       COMPILE_OPTIONS "-mamx-tile;-mamx-bf16")
   target_compile_definitions(lib_onnx_light_cpu PRIVATE
       ONNX_LIGHT_CPU_HAVE_AMX_BF16=1)
+endif()
+
+if(ONNX_LIGHT_CPU_HAVE_AMX_INT8_FLAG)
+  # The native AMX-INT8 GEMM kernel needs -mamx-tile for the tile load/store and
+  # -mamx-int8 for the tdpbuud dot-product; dispatch additionally checks the ISA
+  # and OS-enabled tile state at runtime.
+  set_source_files_properties("${_gemm_amx_int8_source}" PROPERTIES
+      COMPILE_OPTIONS "-mamx-tile;-mamx-int8")
+  target_compile_definitions(lib_onnx_light_cpu PRIVATE
+      ONNX_LIGHT_CPU_HAVE_AMX_INT8=1)
 endif()
 
 if(ONNX_LIGHT_CPU_HAVE_AVX2_FMA_FLAG)
