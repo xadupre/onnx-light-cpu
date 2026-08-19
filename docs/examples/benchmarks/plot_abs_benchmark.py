@@ -145,6 +145,10 @@ registration_time = time.perf_counter() - _registration_start
 _light_setup_start = time.perf_counter()
 light_session = ReferenceEvaluator(model)
 light_setup_time = time.perf_counter() - _light_setup_start
+print(
+    "onnx-light session thread count: "
+    f"{light_session.cpu_execution_resolution.effective_threads}"
+)
 
 # Confirm the model dispatches to the onnx-light-cpu ``Abs`` kernel (identified
 # by the library-qualified name it records when it runs) rather than
