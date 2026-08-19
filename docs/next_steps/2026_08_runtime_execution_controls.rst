@@ -265,7 +265,7 @@ Pull-request sequence
      - Registered kernels use the session executor and never create or wake the
        private CPU pool; standalone entry points retain equivalent defaults.
      - PR02
-     - In review (`Pool PR05
+     - Completed (`Pool PR05
        <https://github.com/xadupre/onnx-light-cpu/pull/270>`_)
    * - Runtime PR05
      - ``onnx-light-cpu``: standalone policy and environment compatibility.
