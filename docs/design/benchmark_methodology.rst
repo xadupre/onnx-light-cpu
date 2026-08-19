@@ -153,7 +153,7 @@ The requirements above come from concrete failures. Watch for these:
 
 * Small-size timing checks are flaky on shared CI runners: the smallest shapes
   are dominated by scheduler and timer noise, so a SIMD kernel does not reliably
-  beat the built-in one at tiny sizes. Retry a few times instead of asserting a
+  beat the built-in one at tiny sizes. Retry a few times rather than failing on a
   single observation.
 * NumPy/BLAS invoked before the accelerated phase left a spinning worker pool
   that penalized the next backend measured on the same cores.
