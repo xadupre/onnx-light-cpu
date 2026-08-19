@@ -1234,7 +1234,11 @@ fallbacks are ordered. Completed rows remain visible so scope is not lost.
      - The complete FP16/BF16 corpus passes on x86, ARM, and every fallback.
        This PR contains tests and fixes only, not performance tuning.
      - PR07.2 through PR08.3
-     - Pending
+     - Implemented. ``test_gemm_kernel`` now includes a shared
+       ``GemmHalf.HalfCorrectnessGateCorpus`` that runs the same FLOAT16 and
+       BFLOAT16 matrix set across native and fallback paths (transpose
+       combinations, non-trivial tails, and empty-``K`` bias handling), while
+       retaining the PR08.2/PR08.3 ARM-native differential tests for NEON/SVE.
    * - Roadmap PR10.2
      - Integer and compact-format correctness gate.
      - The complete integer, Float8, and packed-4-bit corpus passes on every
