@@ -226,15 +226,14 @@ jobs:
           cmake --install /tmp/onnx-light/build --config Release
           pip install -C build.verbose=true /tmp/onnx-light -v
           echo "CMAKE_PREFIX_PATH=/tmp/onnx-light/install${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}" >> "$GITHUB_ENV"
-          # The C++ tests link onnx-light's shared libraries, so the install lib
-          # dir must be on DYLD_LIBRARY_PATH in case the dylibs were built with
-          # an @rpath install name.
-          onnx_light_libdir=$(dirname "$(find /tmp/onnx-light/install -name 'liblib_onnx_proto.dylib' | head -1)")
-          if [ ! -d "${onnx_light_libdir}" ]; then
-            echo "Could not locate liblib_onnx_proto.dylib under /tmp/onnx-light/install" >&2
-            exit 1
+          # The C++ tests link onnx-light's libraries. When they are shared,
+          # record their directory so it can be added to the test binaries'
+          # RPATH below (macOS ignores DYLD_LIBRARY_PATH for SIP-protected
+          # processes, so an explicit RPATH is the reliable option).
+          onnx_light_lib=$(find /tmp/onnx-light/install -name 'liblib_onnx_proto.dylib' | head -1)
+          if [ -n "${onnx_light_lib}" ]; then
+            echo "ONNX_LIGHT_LIBDIR=$(dirname "${onnx_light_lib}")" >> "$GITHUB_ENV"
           fi
-          echo "DYLD_LIBRARY_PATH=${onnx_light_libdir}${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}" >> "$GITHUB_ENV"
 
       # ONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON builds the kernel registration library
       # and the onnx-light integration tests against the onnx-light installed
@@ -242,7 +241,7 @@ jobs:
       - name: Build and install package
         env:
           SCCACHE_GHA_ENABLED: "true"
-        run: pip install -C build-dir=build -C cmake.build-type=Release -C build.verbose=true -C cmake.define.ONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON -C cmake.define.ONNX_LIGHT_CPU_BUILD_TESTS=ON -C cmake.define.CMAKE_C_COMPILER_LAUNCHER=sccache -C cmake.define.CMAKE_CXX_COMPILER_LAUNCHER=sccache -e .[dev] -v
+        run: pip install -C build-dir=build -C cmake.build-type=Release -C build.verbose=true -C cmake.define.ONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON -C cmake.define.ONNX_LIGHT_CPU_BUILD_TESTS=ON -C "cmake.define.CMAKE_BUILD_RPATH=${ONNX_LIGHT_LIBDIR}" -C cmake.define.CMAKE_C_COMPILER_LAUNCHER=sccache -C cmake.define.CMAKE_CXX_COMPILER_LAUNCHER=sccache -e .[dev] -v
 
       - name: pip freeze
         run: pip freeze
