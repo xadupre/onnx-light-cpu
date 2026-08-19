@@ -121,7 +121,7 @@ The plan records:
 * a batch-size-dependent execution policy containing strategy crossovers,
   row/tree chunks, batch sizes, and participant caps;
 * preallocated workspace requirements and alignment;
-* an exact model signature and tuning ABI.
+* an exact model signature.
 
 Node layout
 ~~~~~~~~~~~
@@ -311,15 +311,16 @@ Measured scheduling selection
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Calibration times the remaining legal candidates using deterministic inputs
-that exercise representative paths. Version 1 stores a bounded, ordered
-execution policy rather than one global strategy. Each region has an inclusive
-maximum row count, a strategy, a batch size, row/tree chunks, and a participant
-cap; the final region has no maximum.
+that exercise representative paths. It stores a bounded, ordered execution
+policy rather than one global strategy. Each region has an inclusive maximum
+row count, a strategy, a batch size, row/tree chunks, and a participant cap;
+the final region has no maximum.
 
 ``execution.regions``
     One to four strictly ordered row-count regions selecting
-    ``row_parallel``, ``tree_parallel``, or ``tree_major_batch``. Version 1
-    excludes ``interleaved_rows`` until the parity baseline is complete.
+    ``row_parallel``, ``tree_parallel``, or ``tree_major_batch``. The initial
+    implementation excludes ``interleaved_rows`` until the parity baseline is
+    complete.
 
 ``execution.regions[].maximum_rows``
     Inclusive upper batch-size boundary. The final region is unbounded.
@@ -348,10 +349,10 @@ cap; the final region has no maximum.
 ``traversal.prefetch_distance``
     Optional node-prefetch distance; zero disables prefetch.
 
-The tuning ABI is versioned. Parameters are strongly typed, range-checked,
-region boundaries are strictly increasing, every strategy-specific field is
-validated, workspace limits are checked per region, and the complete policy is
-captured immutably by the prepared plan.
+Parameters are strongly typed and range-checked. Region boundaries are
+strictly increasing, every strategy-specific field is validated, workspace
+limits are checked per region, and the complete policy is captured immutably
+by the prepared plan.
 
 Tuning key
 ~~~~~~~~~~
@@ -369,7 +370,6 @@ An exact profile key contains:
     processor        = normalized CPU and feature descriptor
     threads          = effective session thread count
     model_signature  = canonical structural digest
-    tuning_abi       = 1
 
 The canonical digest covers tree topology, feature ids, modes, missing flags,
 target ids, value types, and the structural buckets used by scheduling. Raw
