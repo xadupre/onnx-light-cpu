@@ -39,6 +39,43 @@
 
 namespace onnx_light_cpu {
 
+/// Type-erased block callable used by an injected executor.
+using ParallelForBlockFn = void (*)(void *, int64_t);
+
+/**
+ * Non-owning adapter for a caller-owned parallel executor.
+ *
+ * Registered kernels install the onnx-light session executor through this
+ * view. Standalone callers leave it unset and retain the private CPU pool.
+ */
+struct ParallelForExecutorView {
+  /// Opaque state passed to :cpp:var:`run_blocks`.
+  void *context = nullptr;
+  /// Effective participants, including the caller.
+  int64_t effective_threads = 1;
+  /// Runs block indices in ``[0, num_blocks)`` synchronously.
+  void (*run_blocks)(void *context, int64_t num_blocks, void *task_context,
+                     ParallelForBlockFn task) = nullptr;
+};
+
+/// Returns the executor view installed on the calling thread, if any.
+const ParallelForExecutorView *CurrentParallelForExecutor() noexcept;
+
+/** Installs a non-owning executor view for the lifetime of the scope. */
+class ParallelForExecutorScope {
+public:
+  explicit ParallelForExecutorScope(const ParallelForExecutorView *executor) noexcept;
+  ParallelForExecutorScope(const ParallelForExecutorScope &) = delete;
+  ParallelForExecutorScope &operator=(const ParallelForExecutorScope &) = delete;
+  ~ParallelForExecutorScope();
+
+private:
+  const ParallelForExecutorView *previous_;
+};
+
+/// Returns how many times the standalone private pool has been constructed.
+uint64_t StandaloneThreadPoolCreationCount() noexcept;
+
 /// Approximate amount of per-element work, in abstract "work units", below
 /// which running a block on its own thread is slower than running it inline.
 ///
@@ -77,6 +114,8 @@ inline constexpr int64_t kParallelForMaxThreads = ONNX_LIGHT_CPU_MAX_THREADS == 
                                                       : ONNX_LIGHT_CPU_MAX_THREADS;
 
 namespace detail {
+
+void RecordStandaloneThreadPoolCreation() noexcept;
 
 inline int64_t ResolveParallelForThreadCount(int64_t logical_threads, int64_t physical_cores,
                                              const char *configured) noexcept {
@@ -140,6 +179,9 @@ inline int &ParallelRegionDepth() noexcept {
 /// may consume SMT siblings after physical cores. The result is always ``>= 1``
 /// and counts the calling thread, which always participates in the work.
 inline int64_t ParallelForThreadCount() {
+  if (const ParallelForExecutorView *executor = CurrentParallelForExecutor(); executor != nullptr) {
+    return std::max<int64_t>(executor->effective_threads, 1);
+  }
   static const int64_t thread_count = []() {
     const CpuTopology &topology = GetCpuTopology();
     return detail::ResolveParallelForThreadCount(
@@ -424,6 +466,7 @@ private:
 /// reused across every ``ParallelFor`` call.
 inline ThreadPool &GlobalThreadPool() {
   static const std::vector<CpuAffinity> worker_affinities = []() {
+    detail::RecordStandaloneThreadPoolCreation();
     const CpuTopology &topology = GetCpuTopology();
     std::vector<CpuAffinity> affinities =
         SelectCpuAffinities(topology, static_cast<std::size_t>(ParallelForThreadCount()));
@@ -522,14 +565,23 @@ void ParallelFor(int64_t total, double cost_per_element, int64_t block_multiple,
   // count so we never wake a worker that would receive an empty range.
   num_blocks = (total + block - 1) / block;
 
-  GlobalThreadPool().Run(num_blocks, [&fn, block, total](int64_t b) {
+  auto run_block = [&fn, block, total](int64_t b) {
     const int64_t begin = b * block;
     if (begin >= total) {
       return;
     }
     const int64_t end = std::min(begin + block, total);
     fn(begin, end);
-  });
+  };
+  if (const ParallelForExecutorView *executor = CurrentParallelForExecutor(); executor != nullptr) {
+    using Callable = decltype(run_block);
+    executor->run_blocks(executor->context, num_blocks, static_cast<void *>(&run_block),
+                         [](void *context, int64_t block_index) {
+                           (*static_cast<Callable *>(context))(block_index);
+                         });
+    return;
+  }
+  GlobalThreadPool().Run(num_blocks, run_block);
 }
 
 /// Convenience overload without SIMD-vector block alignment (``block_multiple``

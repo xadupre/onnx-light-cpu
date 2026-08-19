@@ -30,11 +30,15 @@ using onnx_light_cpu::kParallelForGrainSize;
 using onnx_light_cpu::kParallelForMaxThreads;
 using onnx_light_cpu::ParallelFor;
 using onnx_light_cpu::ParallelForBlockCount;
+using onnx_light_cpu::ParallelForBlockFn;
+using onnx_light_cpu::ParallelForExecutorScope;
+using onnx_light_cpu::ParallelForExecutorView;
 using onnx_light_cpu::ParallelForExternalRegion;
 using onnx_light_cpu::ParallelForSimdLanes;
 using onnx_light_cpu::ParallelForSpinCount;
 using onnx_light_cpu::ParallelForThreadCount;
 using onnx_light_cpu::SelectCpuAffinities;
+using onnx_light_cpu::StandaloneThreadPoolCreationCount;
 using onnx_light_cpu::ThreadPool;
 using onnx_light_cpu::detail::ResolveParallelForSpinCount;
 using onnx_light_cpu::detail::ResolveParallelForThreadCount;
@@ -197,6 +201,48 @@ TEST(ParallelForBlockCount, NonPositiveCostTreatedAsOne) {
 // ---------------------------------------------------------------------------
 // ParallelFor: correctness (coverage + disjointedness, thread-count independent)
 // ---------------------------------------------------------------------------
+
+struct InjectedExecutorObservation {
+  int64_t dispatches = 0;
+  int64_t maximum_blocks = 0;
+};
+
+void RunInjectedBlocks(void *context, int64_t num_blocks, void *task_context,
+                       ParallelForBlockFn task) {
+  auto &observation = *static_cast<InjectedExecutorObservation *>(context);
+  ++observation.dispatches;
+  observation.maximum_blocks = std::max(observation.maximum_blocks, num_blocks);
+  for (int64_t block = 0; block < num_blocks; ++block) {
+    task(task_context, block);
+  }
+}
+
+TEST(ParallelFor, InjectedExecutorControlsParticipantsAndNestedDispatch) {
+  InjectedExecutorObservation observation;
+  ParallelForExecutorView executor{&observation, 3, &RunInjectedBlocks};
+  const uint64_t private_pools_before = StandaloneThreadPoolCreationCount();
+  {
+    ParallelForExecutorScope scope(&executor);
+    EXPECT_EQ(ParallelForThreadCount(), 3);
+    ParallelFor(kParallelForGrainSize * 8, [&](int64_t begin, int64_t) {
+      if (begin == 0) {
+        ParallelFor(kParallelForGrainSize * 8, [](int64_t, int64_t) {});
+      }
+    });
+  }
+
+  EXPECT_EQ(observation.dispatches, 2);
+  EXPECT_LE(observation.maximum_blocks, 3);
+  EXPECT_EQ(StandaloneThreadPoolCreationCount(), private_pools_before);
+}
+
+TEST(ParallelFor, StandaloneExecutionLazilyConstructsPrivatePool) {
+  const uint64_t private_pools_before = StandaloneThreadPoolCreationCount();
+
+  ParallelFor(kParallelForGrainSize * 8, [](int64_t, int64_t) {});
+
+  EXPECT_EQ(StandaloneThreadPoolCreationCount(), private_pools_before + 1);
+}
 
 TEST(ParallelFor, EmptyRangeIsNoOp) {
   int calls = 0;

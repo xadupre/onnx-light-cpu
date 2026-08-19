@@ -246,26 +246,26 @@ Pull-request sequence
      - C++ request/resolved types validate threads, spin, affinity, and CPU sets;
        topology fallbacks and diagnostics are deterministic and fully tested.
      - None
-     - Pending
+     - Completed
    * - Runtime PR02
      - ``onnx-light``: policy-owned executor.
      - Sessions with different policies execute concurrently without sharing an
        incompatible pool; nesting is serial and lifecycle/thread-sanitizer tests
        pass.
      - PR01
-     - Pending
+     - Completed
    * - Runtime PR03
      - ``onnx-light``: Python and inspection API.
      - ``ReferenceEvaluator`` accepts typed execution options and exposes the
        immutable resolved policy and optional zero-overhead-disabled counters.
      - PR02
-     - Pending
+     - Completed
    * - Runtime PR04
      - ``onnx-light-cpu``: executor adapter.
      - Registered kernels use the session executor and never create or wake the
        private CPU pool; standalone entry points retain equivalent defaults.
      - PR02
-     - Pending
+     - In progress (Pool PR05)
    * - Runtime PR05
      - ``onnx-light-cpu``: standalone policy and environment compatibility.
      - Existing environment variables map to one inspectable policy, precedence

@@ -6,6 +6,7 @@
 
 #include "onnx_light_cpu/impl/logical/logical_kernels.h"
 #include "onnx_light_cpu/kernels/kernel_usage.h"
+#include "onnx_light_cpu/kernels/session_executor_adapter.h"
 
 #include "onnx_core/runtime/kernels/kernel_dispatch_table.h"
 #include "onnx_core/runtime/kernels/node_helpers.h"
@@ -73,9 +74,7 @@ void NotKernel::Run(RuntimeContext &rt) {
 void RegisterNotKernel() {
   NodeKernelFn factory = [](const NodeProto &node,
                             RuntimeContext &rt) -> std::unique_ptr<rt_ns::KernelBase> {
-    auto kernel = std::make_unique<NotKernel>(rt.kernel_ctx());
-    kernel->set_node(node);
-    return kernel;
+    return MakeSessionKernel<NotKernel>(node, rt);
   };
   // Empty domain -> normalised to the default ONNX domain, overriding the
   // built-in Not entry with the SIMD-accelerated kernel for the CPU device.
