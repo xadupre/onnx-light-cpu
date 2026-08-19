@@ -39,6 +39,12 @@ using rt_ns::OpsetId;
 using rt_ns::Randn;
 using rt_ns::Tensor;
 
+// IR version frozen on the manually-built benchmark model below. Backend models
+// are consumed by third-party runtimes, so pin the IR at the latest broadly
+// supported version rather than inheriting a development default. Kept in sync
+// with onnx-light's ``BuildSingleNodeCase`` default.
+constexpr int64_t kBackendTestIrVersion = 13;
+
 enum class BiasShape {
   kNone,
   kScalar,
@@ -182,6 +188,9 @@ void RegisterGemmBenchmark(std::vector<TestCase> &registry,
     Tensor y = (*kernel)(a, b, 1.0f, trans_a, trans_b);
     BuiltCase built = BuildSingleNodeCase(node, {std::move(a), std::move(b)}, {std::move(y)}, name,
                                           {opset}, "onnx-light-cpu-backend-test");
+    // Freeze the IR version on the manually-built benchmark model so it does
+    // not depend on onnx-light's build default.
+    built.model.set_ir_version(kBackendTestIrVersion);
 
     Tensor &b_input = built.data_sets[0].inputs[1];
     TensorProto *initializer = built.model.mutable_graph()->add_initializer();
