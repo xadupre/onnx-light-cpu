@@ -1223,21 +1223,22 @@ using onnx_light_cpu::detail::Float8Format;
 Float8Format ToDetailFormat(GemmFloat8Format format) { return static_cast<Float8Format>(format); }
 
 // Generates ``size`` Float8 bytes whose decoded value is finite for ``format``.
-// Non-finite patterns (infinities and the format-specific NaNs) are mapped to
-// zero so the reference GEMM below never has to reason about NaN/Inf
-// propagation, letting the differential comparison assert exact finite values.
-std::vector<std::uint8_t> RandomFloat8Bytes(std::size_t size, unsigned seed,
-                                            GemmFloat8Format format) {
+// Rather than sampling, this deterministically cycles through all 256 possible
+// byte patterns (offset by ``seed`` so the A and B operands differ), so every
+// representable Float8 value is exercised. Non-finite patterns (infinities and
+// the format-specific NaNs) are mapped to zero so the reference GEMM below never
+// has to reason about NaN/Inf propagation, letting the differential comparison
+// assert exact finite values.
+std::vector<std::uint8_t> SequentialFloat8Bytes(std::size_t size, unsigned seed,
+                                                GemmFloat8Format format) {
   const Float8Format fmt = ToDetailFormat(format);
-  std::mt19937 gen(seed);
-  std::uniform_int_distribution<int> dist(0, 255);
   std::vector<std::uint8_t> bytes(size);
-  for (auto &b : bytes) {
-    auto candidate = static_cast<std::uint8_t>(dist(gen));
+  for (std::size_t i = 0; i < size; ++i) {
+    auto candidate = static_cast<std::uint8_t>((i + seed) & 0xFF);
     if (!std::isfinite(Float8BitsToFloat(fmt, candidate))) {
       candidate = 0;
     }
-    b = candidate;
+    bytes[i] = candidate;
   }
   return bytes;
 }
@@ -1260,12 +1261,31 @@ std::vector<float> DecodeFloat8Vector(const std::vector<std::uint8_t> &bytes,
 // the driver selects for the shape.
 void CheckGemmFloat8(GemmFloat8Format format, bool trans_a, bool trans_b, std::size_t M,
                      std::size_t N, std::size_t K, float alpha, unsigned seed) {
-  const auto a_bytes = RandomFloat8Bytes(trans_a ? K * M : M * K, seed, format);
-  const auto b_bytes = RandomFloat8Bytes(trans_b ? N * K : K * N, seed + 1, format);
+  const auto a_bytes = SequentialFloat8Bytes(trans_a ? K * M : M * K, seed, format);
+  const auto b_bytes = SequentialFloat8Bytes(trans_b ? N * K : K * N, seed + 1, format);
   const auto a_f = DecodeFloat8Vector(a_bytes, format);
   const auto b_f = DecodeFloat8Vector(b_bytes, format);
+  // Reference in double so the comparison is against the exact math, and an
+  // accumulation-magnitude scale (sum of absolute products) so the tolerance
+  // absorbs the float rounding a reordered reduction (e.g. split-K) incurs when
+  // the sequential byte sweep decodes large-magnitude Float8 values that cancel.
+  std::vector<double> a_d(a_f.begin(), a_f.end());
+  std::vector<double> b_d(b_f.begin(), b_f.end());
   const auto expected =
-      ReferenceGemm<float>(trans_a, trans_b, M, N, K, alpha, a_f, b_f, 0.0f, nullptr);
+      ReferenceGemm<double>(trans_a, trans_b, M, N, K, alpha, a_d, b_d, 0.0, nullptr);
+
+  std::vector<double> scale(M * N, 0.0);
+  for (std::size_t m = 0; m < M; ++m) {
+    for (std::size_t n = 0; n < N; ++n) {
+      double s = 0.0;
+      for (std::size_t k = 0; k < K; ++k) {
+        const double a = trans_a ? a_d[k * M + m] : a_d[m * K + k];
+        const double b = trans_b ? b_d[n * K + k] : b_d[k * N + n];
+        s += std::abs(a * b);
+      }
+      scale[m * N + n] = std::abs(static_cast<double>(alpha)) * s;
+    }
+  }
 
   std::vector<float> workspace(M * N, -1.0f);
   onnx_light_cpu::GemmEpilogue<float> epilogue;
@@ -1273,8 +1293,8 @@ void CheckGemmFloat8(GemmFloat8Format format, bool trans_a, bool trans_b, std::s
                                          b_bytes.data(), epilogue, workspace.data());
 
   for (std::size_t i = 0; i < M * N; ++i) {
-    const float tol = 1e-3f * std::max(1.0f, std::abs(expected[i]));
-    EXPECT_NEAR(workspace[i], expected[i], tol) << "i=" << i;
+    const double tol = 1e-3 * std::max(1.0, scale[i]);
+    EXPECT_NEAR(static_cast<double>(workspace[i]), expected[i], tol) << "i=" << i;
   }
 }
 
