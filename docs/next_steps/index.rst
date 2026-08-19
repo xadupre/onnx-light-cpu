@@ -12,6 +12,7 @@ optimize next.
 
     2026_08_gemm_matmul
     2026_08_attention
+    2026_08_exp_log_parity
 
 .. toctree::
     :maxdepth: 1
