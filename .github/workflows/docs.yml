@@ -16,7 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     # The package is compiled from source, so the job needs more time than a
     # plain Sphinx build; sccache keeps repeat runs near-instant.
-    timeout-minutes: 40
+    timeout-minutes: 60
     permissions:
       contents: read
     steps:
