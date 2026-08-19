@@ -183,13 +183,13 @@ core, sibling, ``core_type``, and capacity data. Windows discovery uses
 ``GetLogicalProcessorInformationEx`` processor-core records, processor groups,
 SMT flags, and efficiency classes.
 
-The default participant count uses one logical thread per physical core,
-bounded by ``ONNX_LIGHT_CPU_MAX_THREADS``. Hybrid machines order P-cores before
-unknown cores and E-cores; SMT siblings are appended only when an explicit
-``ONNX_LIGHT_CPU_NUM_THREADS`` value requires them. Worker threads receive the
-corresponding Linux CPU affinity or Windows processor-group affinity once at
-startup. The caller remains unpinned so embedding applications retain control
-of their main thread.
+The default participant count uses one logical thread per physical core. A
+positive ``ONNX_LIGHT_CPU_MAX_THREADS`` build option may impose a ceiling.
+Hybrid machines order P-cores before unknown cores and E-cores; SMT siblings
+are appended only when an explicit ``ONNX_LIGHT_CPU_NUM_THREADS`` value requires
+them. Worker threads receive the corresponding Linux CPU affinity or Windows
+processor-group affinity once at startup. The caller remains unpinned so
+embedding applications retain control of their main thread.
 
 After a task, workers spin for a bounded number of CPU-relax iterations before
 parking on the condition variable. ``ONNX_LIGHT_CPU_SPIN_COUNT`` configures

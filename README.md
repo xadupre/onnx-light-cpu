@@ -81,9 +81,9 @@ cmake --build build
 ctest --test-dir build
 ```
 
-The shared kernel thread pool uses at most six threads by default. This avoids
-oversubscribing memory-bound element-wise kernels on SMT and hybrid CPUs. Tune
-the limit for a target machine at build time:
+The shared kernel thread pool uses one participant per detected physical core
+by default. Per-kernel cost models may use fewer participants for smaller or
+memory-bound workloads. Constrained builds can impose a ceiling:
 
 ```bash
 cmake -S . -B build -DONNX_LIGHT_CPU_MAX_THREADS=4
@@ -98,7 +98,8 @@ ONNX_LIGHT_CPU_NUM_THREADS=4 <benchmark-command>
 ```
 
 Invalid values are ignored, and the requested count is capped by
-`ONNX_LIGHT_CPU_MAX_THREADS` and the available hardware threads.
+the available hardware threads and by `ONNX_LIGHT_CPU_MAX_THREADS` when that
+build-time option is positive.
 
 ### AVX-512 support
 

@@ -28,11 +28,11 @@ namespace onnx_light_cpu {
 // Relative per-element cost passed to ParallelFor for the Abs kernels. The SIMD
 // loop clears many sign bits per instruction and is memory-bandwidth bound, so
 // waking workers at the generic 32768-element grain is substantially slower
-// than staying inline. One thirty-second of a work unit postpones parallelism
-// until roughly one million elements.
-inline constexpr double kAbsCostPerElement = 1.0 / 32.0;
+// than staying inline. One half of a work unit keeps small arrays serial
+// while allowing million-element tensors to use the persistent pool.
+inline constexpr double kAbsCostPerElement = 1.0 / 2.0;
 inline constexpr std::size_t kAbsParallelThreshold =
-    static_cast<std::size_t>(kParallelForGrainSize) * 32;
+    static_cast<std::size_t>(kParallelForGrainSize) * 2;
 
 // ---------------------------------------------------------------------------
 // AbsFloat32 implementations

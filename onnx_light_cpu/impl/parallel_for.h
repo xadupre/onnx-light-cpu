@@ -12,6 +12,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <cstdlib>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <string_view>
@@ -60,19 +61,20 @@ inline constexpr int64_t kParallelForGrainSize = 1 << 15; // 32768 work units
 inline constexpr int64_t kParallelForSimdWidthBytes = 64;
 
 #ifndef ONNX_LIGHT_CPU_MAX_THREADS
-#define ONNX_LIGHT_CPU_MAX_THREADS 6
+#define ONNX_LIGHT_CPU_MAX_THREADS 0
 #endif
 
-static_assert(ONNX_LIGHT_CPU_MAX_THREADS > 0,
-              "ONNX_LIGHT_CPU_MAX_THREADS must be a positive integer");
+static_assert(ONNX_LIGHT_CPU_MAX_THREADS >= 0,
+              "ONNX_LIGHT_CPU_MAX_THREADS must be a non-negative integer");
 
 /// Maximum number of threads allowed to participate in a parallel region.
 ///
-/// Element-wise kernels are frequently memory-bandwidth bound, so using every
-/// logical CPU is counterproductive on SMT and hybrid processors. Builds can
-/// override the conservative default through the CMake
+/// A value of zero leaves the limit to runtime topology detection. Positive
+/// values impose the build-time ceiling requested through the CMake
 /// ``ONNX_LIGHT_CPU_MAX_THREADS`` setting.
-inline constexpr int64_t kParallelForMaxThreads = ONNX_LIGHT_CPU_MAX_THREADS;
+inline constexpr int64_t kParallelForMaxThreads = ONNX_LIGHT_CPU_MAX_THREADS == 0
+                                                      ? std::numeric_limits<int64_t>::max()
+                                                      : ONNX_LIGHT_CPU_MAX_THREADS;
 
 namespace detail {
 

@@ -104,9 +104,7 @@ def make_gemm_model():
 
 
 model = make_gemm_model()
-session = onnxruntime.InferenceSession(
-    model.SerializeToString(), providers=["CPUExecutionProvider"]
-)
+model_bytes = model.SerializeToString()
 
 # ---------------------------------------------------------------------------
 # Timing helper
@@ -128,20 +126,6 @@ def measure(func, repeat, warmup=3):
     return float(np.median(timings))
 
 
-def measure_together(*funcs, repeat, warmup=3):
-    timings = tuple([] for _ in funcs)
-    for iteration in range(warmup):
-        for index in range(len(funcs)):
-            funcs[(iteration + index) % len(funcs)]()
-    for iteration in range(repeat):
-        for offset in range(len(funcs)):
-            index = (iteration + offset) % len(funcs)
-            start = time.perf_counter()
-            funcs[index]()
-            timings[index].append(time.perf_counter() - start)
-    return tuple(float(np.median(values)) for values in timings)
-
-
 # %%
 # Prime the built-in onnx-light kernel before registering onnx-light-cpu
 # ----------------------------------------------------------------------
@@ -151,8 +135,9 @@ def measure_together(*funcs, repeat, warmup=3):
 # onnx-light's own built-in reference kernel. It is timed below alongside the
 # other runtimes on the three smallest sizes.
 
-size_grid = [16, 32, 64] if unit_test_going else [16, 32, 64, 128, 256, 512, 1024, 2048, 4096]
-alone_sizes = [16, 32, 64]
+full_size_grid = [16, 32, 64, 128, 256, 512, 1024, 2048, 4096]
+size_grid = full_size_grid[:3] if unit_test_going else full_size_grid
+alone_sizes = full_size_grid[:3]
 rng = np.random.default_rng(0)
 
 alone_model = make_gemm_model()
@@ -193,57 +178,66 @@ set_kernel_usage_recording(False)
 # Run the rest of the benchmark
 # -------------------------------
 #
-# For every size the same square inputs are fed to numpy, onnx-light-cpu and
-# onnxruntime. Runtimes whose timings form speed-up ratios are measured together,
-# rotating their order to reduce cache and scheduling bias. The results are
-# checked against :func:`numpy.matmul` so every implementation agrees.
+# Each backend runs in its own phase. In particular, the accelerated kernel is
+# measured before NumPy initializes a BLAS pool and before the ONNX Runtime
+# session exists. Inputs are regenerated from the same seed in every phase.
 
-rng = np.random.default_rng(0)
+rows_by_size = {size: [size, None, None, None] for size in size_grid}
 
-rows = []
-for size in size_grid:
-    a = rng.standard_normal((size, size)).astype(np.float32)
-    b = rng.standard_normal((size, size)).astype(np.float32)
-    expected = a @ b
 
+def inputs():
+    rng = np.random.default_rng(0)
+    for size in size_grid:
+        yield (
+            size,
+            rng.standard_normal((size, size)).astype(np.float32),
+            rng.standard_normal((size, size)).astype(np.float32),
+        )
+
+
+for size, a, b in inputs():
     set_kernel_usage_recording(True)
     clear_used_kernel_names()
     run_light(a, b)
     accelerated_kernel_names = used_kernel_names()
     assert accelerated_kernel_name in accelerated_kernel_names, accelerated_kernel_names
     set_kernel_usage_recording(False)
-
     repeat = max(7, min(100, 20_000_000 // (size * size * size)))
+    rows_by_size[size][2] = measure(lambda a=a, b=b: run_light(a, b), repeat)
 
-    numpy_time = measure(lambda a=a, b=b: a @ b, repeat)
+for size, a, b in inputs():
+    if size not in alone_sizes:
+        continue
+    repeat = max(7, min(100, 20_000_000 // (size * size * size)))
+    alone_times[size] = measure(
+        lambda a=a, b=b: alone_session.run(None, {"A": a, "B": b}), repeat
+    )
 
+for size, a, b in inputs():
+    repeat = max(7, min(100, 20_000_000 // (size * size * size)))
+    rows_by_size[size][1] = measure(lambda a=a, b=b: a @ b, repeat)
+
+session = onnxruntime.InferenceSession(model_bytes, providers=["CPUExecutionProvider"])
+for size, a, b in inputs():
+    repeat = max(7, min(100, 20_000_000 // (size * size * size)))
+    rows_by_size[size][3] = measure(lambda a=a, b=b: session.run(None, {"A": a, "B": b}), repeat)
+
+for size, a, b in inputs():
+    expected = a @ b
+    np.testing.assert_allclose(run_light(a, b), expected, rtol=1e-2, atol=1e-2)
+    np.testing.assert_allclose(
+        session.run(None, {"A": a, "B": b})[0], expected, rtol=1e-2, atol=1e-2
+    )
     if size in alone_sizes:
-        alone_time, cpu_time, ort_time = measure_together(
-            lambda a=a, b=b: alone_session.run(None, {"A": a, "B": b}),
-            lambda a=a, b=b: run_light(a, b),
-            lambda a=a, b=b: session.run(None, {"A": a, "B": b}),
-            repeat=repeat,
-        )
-        alone_times[size] = alone_time
         np.testing.assert_allclose(
             alone_session.run(None, {"A": a, "B": b})[0],
             expected,
             rtol=1e-2,
             atol=1e-2,
         )
-    else:
-        cpu_time, ort_time = measure_together(
-            lambda a=a, b=b: run_light(a, b),
-            lambda a=a, b=b: session.run(None, {"A": a, "B": b}),
-            repeat=repeat,
-        )
 
-    np.testing.assert_allclose(run_light(a, b), expected, rtol=1e-2, atol=1e-2)
-    np.testing.assert_allclose(
-        session.run(None, {"A": a, "B": b})[0], expected, rtol=1e-2, atol=1e-2
-    )
-
-    rows.append((size, numpy_time, cpu_time, ort_time))
+rows = [tuple(rows_by_size[size]) for size in size_grid]
+for size, numpy_time, cpu_time, ort_time in rows:
     alone_text = f"{alone_times[size] * 1e6:10.2f} us" if size in alone_times else "not measured"
     print(
         f"size={size:>4}x{size:<4} | numpy={numpy_time * 1e6:10.2f} us | "
