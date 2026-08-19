@@ -58,7 +58,7 @@ namespace {
 // ``ONNX_LIGHT_CPU_NUM_THREADS`` in its own process. Default this correctness
 // binary to a single parallel-for thread before any test constructs the pool,
 // without overriding an explicit caller-provided value.
-const int kPinSingleParallelForThread = []() {
+[[maybe_unused]] const int kPinSingleParallelForThread = []() {
 #ifdef _WIN32
   if (std::getenv("ONNX_LIGHT_CPU_NUM_THREADS") == nullptr) {
     _putenv_s("ONNX_LIGHT_CPU_NUM_THREADS", "1");
