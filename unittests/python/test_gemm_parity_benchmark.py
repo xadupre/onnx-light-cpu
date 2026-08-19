@@ -1,5 +1,7 @@
 from tools.benchmark_gemm_parity import (
+    PARITY_DTYPES,
     GemmCase,
+    _build_case,
     render_comparison_table,
     repeat_count,
     summarize,
@@ -61,3 +63,14 @@ def test_comparison_table_reports_both_engines_side_by_side():
     assert "100.00" in data
     assert "200.00" in data
     assert "0.500x" in data
+
+
+def test_float16_is_a_parity_dtype():
+    import numpy as np
+
+    model, feeds = _build_case(GemmCase("float16", 2, 3, 4), "float16", np.random.default_rng(0))
+
+    assert "float16" in PARITY_DTYPES
+    assert model
+    assert feeds["A"].dtype == np.float16
+    assert feeds["B"].dtype == np.float16

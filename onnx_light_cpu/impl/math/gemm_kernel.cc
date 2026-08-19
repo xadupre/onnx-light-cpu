@@ -1503,6 +1503,34 @@ void GemmHalfPlanned(bool is_bfloat16, bool trans_a, bool trans_b, std::size_t M
   const GemmBlocking selected =
       ConstrainGemmBlockingForTasks(blocking == nullptr ? default_blocking : *blocking, M, N,
                                     static_cast<std::size_t>(ParallelForThreadCount()));
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
+  static const bool use_avx2 = DetectSimdLevel() >= SimdLevel::kAVX2 && CpuSupportsFma();
+  if (use_avx2) {
+    if constexpr (Algorithm == GemmAlgorithm::kSkinnyM || Algorithm == GemmAlgorithm::kSplitK) {
+      if (!is_bfloat16 && !trans_b && M <= kGemmAVX2MR) {
+#ifdef ONNX_LIGHT_CPU_HAVE_F16C
+        // For tiny split-K outputs, thread-pool and partial-reduction overhead
+        // dominates the arithmetic. Use the same register-resident kernel as
+        // skinny-M instead of creating packed float32 partials.
+        if (CpuSupportsF16C()) {
+          GemmFloat16SkinnyM_F16C(trans_a, M, N, K, alpha, A, B, Y);
+          return;
+        }
+#endif
+      }
+    }
+    if constexpr (Algorithm == GemmAlgorithm::kSkinnyN) {
+      if (!is_bfloat16 && !trans_a && N == 1) {
+#ifdef ONNX_LIGHT_CPU_HAVE_F16C
+        if (CpuSupportsF16C()) {
+          GemmFloat16SkinnyN_F16C(M, K, alpha, A, B, Y);
+          return;
+        }
+#endif
+      }
+    }
+  }
+#endif
   if (is_bfloat16) {
     const auto *a = reinterpret_cast<const BFloat16Source *>(A);
     const auto *b = reinterpret_cast<const BFloat16Source *>(B);
@@ -1615,6 +1643,21 @@ void GemmHalfPlanned(bool is_bfloat16, bool trans_a, bool trans_b, std::size_t M
       if (!trans_b) {
         const std::size_t mr = std::min<std::size_t>(selected.mr, kGemmNeonMR);
         GemmFp16NativeGeneral(trans_a, M, N, K, alpha, A, B, Y, &GemmMicroKernel_NEON_FP16, mr);
+        return;
+      }
+    }
+#endif
+#if defined(ONNX_LIGHT_CPU_HAVE_AVX2_FMA) && defined(ONNX_LIGHT_CPU_HAVE_F16C)
+    // Avoid the native kernel for general GEMM: repeatedly widening the same
+    // B values for every row tile loses to the shared float32 packed panel once
+    // M grows. Small-K direct GEMM does not amortize packing and benefits from
+    // widening directly in registers.
+    if constexpr (Algorithm == GemmAlgorithm::kDirect) {
+      static const bool use_avx2_f16c =
+          DetectSimdLevel() >= SimdLevel::kAVX2 && CpuSupportsFma() && CpuSupportsF16C();
+      if (use_avx2_f16c && !trans_b) {
+        const std::size_t mr = std::min<std::size_t>(selected.mr, kGemmAVX2MR);
+        GemmFp16NativeGeneral(trans_a, M, N, K, alpha, A, B, Y, &GemmMicroKernel_AVX2F16C, mr);
         return;
       }
     }

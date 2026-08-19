@@ -45,6 +45,22 @@ void GemmDecodeFloat8ToFloat32_AVX2(const float *table, const std::uint8_t *src,
 // while packing in the GEMM packing loops. Requires the F16C ISA extension, so
 // it is only declared/defined when the translation unit is compiled with it.
 void GemmConvertFloat16ToFloat32_F16C(const std::uint16_t *src, float *dst, std::size_t n);
+
+// Native AVX2/F16C FLOAT16 micro-kernel with float32 accumulation. B and the
+// packed A rows remain FLOAT16 until they enter the register file.
+void GemmMicroKernel_AVX2F16C(std::size_t mr, std::size_t nb, std::size_t K, float alpha,
+                              float beta, const std::uint16_t *Bmat, std::size_t N,
+                              const float *Crow_base, std::size_t Cstride, float *Yrow_base,
+                              std::size_t Ystride, std::size_t n0, GemmAccumMode mode,
+                              const std::uint16_t *Apack);
+
+// Dedicated FLOAT16 skinny kernels. Eight values are widened with one F16C
+// conversion before AVX2 FMA accumulation. The low-row-count path requires a
+// non-transposed B; the single-column path requires a non-transposed A.
+void GemmFloat16SkinnyM_F16C(bool trans_a, std::size_t M, std::size_t N, std::size_t K, float alpha,
+                             const std::uint16_t *A, const std::uint16_t *B, float *Y);
+void GemmFloat16SkinnyN_F16C(std::size_t M, std::size_t K, float alpha, const std::uint16_t *A,
+                             const std::uint16_t *B, float *Y);
 #endif
 
 } // namespace onnx_light_cpu

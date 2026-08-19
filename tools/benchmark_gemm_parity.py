@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Measure the FP32/FP64 Gemm parity gate against ONNX Runtime."""
+"""Measure the FP32/FP64/FP16 Gemm parity gate against ONNX Runtime."""
 
 from __future__ import annotations
 
@@ -54,6 +54,8 @@ PRIORITY_CASES = (
     GemmCase("trans_ab", 128, 128, 128, trans_a=True, trans_b=True),
     GemmCase("transformer_projection", 128, 3072, 768, constant_b=True),
 )
+
+PARITY_DTYPES = ("float32", "float64", "float16")
 
 
 def repeat_count(case: GemmCase, minimum: int, maximum: int) -> int:
@@ -194,8 +196,16 @@ def _build_case(case: GemmCase, dtype_name: str, rng: Any) -> tuple[bytes, dict[
     import numpy as np
     from onnx_light.onnx import TensorProto, checker, helper, numpy_helper
 
-    dtype = np.float32 if dtype_name == "float32" else np.float64
-    tensor_type = TensorProto.FLOAT if dtype_name == "float32" else TensorProto.DOUBLE
+    dtype = {
+        "float32": np.float32,
+        "float64": np.float64,
+        "float16": np.float16,
+    }[dtype_name]
+    tensor_type = {
+        "float32": TensorProto.FLOAT,
+        "float64": TensorProto.DOUBLE,
+        "float16": TensorProto.FLOAT16,
+    }[dtype_name]
     a_shape = (case.k, case.m) if case.trans_a else (case.m, case.k)
     b_shape = (case.n, case.k) if case.trans_b else (case.k, case.n)
     a = rng.standard_normal(a_shape).astype(dtype)
@@ -300,7 +310,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     session_options.execution_mode = onnxruntime.ExecutionMode.ORT_SEQUENTIAL
 
     results: list[dict[str, Any]] = []
-    dtype_names = ("float32", "float64") if args.dtype == "all" else (args.dtype,)
+    dtype_names = PARITY_DTYPES if args.dtype == "all" else (args.dtype,)
     selected_cases = (
         PRIORITY_CASES
         if not args.case
@@ -327,7 +337,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
             cpu_output = cpu_run()
             ort_output = ort_run()
-            tolerance = 2e-2 if dtype_name == "float32" else 1e-9
+            tolerance = {
+                "float16": 2e-2,
+                "float32": 2e-2,
+                "float64": 1e-9,
+            }[dtype_name]
             np.testing.assert_allclose(cpu_output, ort_output, rtol=tolerance, atol=tolerance)
 
             repeat = repeat_count(case, args.minimum_repeats, args.maximum_repeats)
@@ -374,7 +388,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--cpus", default="", help="Linux CPU affinity, for example 0-3 or 0,2,4."
     )
     parser.add_argument("--warmup", type=int, default=3)
-    parser.add_argument("--dtype", choices=("all", "float32", "float64"), default="all")
+    parser.add_argument("--dtype", choices=("all", *PARITY_DTYPES), default="all")
     parser.add_argument(
         "--case",
         action="append",

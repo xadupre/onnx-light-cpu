@@ -1295,7 +1295,11 @@ fallbacks are ordered. Completed rows remain visible so scope is not lost.
        median with no priority case below 0.9x where the type is supported.
        The PR contains measurement-driven tuning only.
      - PR10.1
-     - Pending
+     - In progress. The parity runner now covers FLOAT16. On a pinned AVX2/FMA/
+       F16C i7-13800H thread, the first tuning pass raises the 18-case median
+       from 0.341x to 0.479x ONNX Runtime and the minimum from 0.138x to 0.237x.
+       Skinny-M, skinny-N, and the tiny split-K case reach 1.566x, 2.159x, and
+       2.174x respectively. The complete gate remains open.
    * - Roadmap PR10.4
      - Integer and compact-format performance gate.
      - Dedicated-machine results are published per type and ISA. Types
@@ -1315,3 +1319,47 @@ fallbacks are ordered. Completed rows remain visible so scope is not lost.
      - Pending
 
 Roadmap PR10.5 is the final Gemm and MatMul roadmap PR.
+
+Roadmap PR10.3 tuning record
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The first PR10.3 pass adds alternating FLOAT16 measurements to
+``benchmark_gemm_parity.py`` and tunes the AVX2/F16C path without allocating
+expanded FP32 operands. Contiguous A/B packing now widens eight values per
+``vcvtph2ps`` instruction. Dedicated skinny-M and skinny-N kernels reuse each
+widened operand across vector FMAs. Small-K direct GEMM widens B in registers,
+while larger general GEMM deliberately retains shared FP32 B panels: measuring
+the native kernel on all general shapes showed that reconverting B for every
+row tile regressed ``square_1024`` and transformer projection. Tiny ``2 x 2``
+split-K instead bypasses thread-pool partials and uses a two-column,
+K-vectorized kernel; this changes its pinned one-thread result from 0.148x to
+2.174x and its ten-thread result from 0.056x to 2.215x.
+
+The published numbers above are diagnostic WSL measurements, not the
+dedicated-machine evidence required to close PR10.3. ONNX Runtime 1.28.0 does
+not implement CPU BFLOAT16 Gemm on this host, so BFLOAT16 remains an isolated
+throughput measurement rather than a parity ratio. ARM results are also still
+required.
+
+The remaining PR10.3 tuning order is:
+
+#. Remove the small/direct and operator-plan fixed cost. The current direct
+   minimum is 0.237x even after the F16C micro-kernel, so trace plan creation,
+   dispatch, packing allocation, and output handling separately before changing
+   arithmetic.
+#. Reuse compact B panels across row tasks. For medium and large non-transposed
+   GEMM, benchmark a cache-sized FP16 packed-B layout whose conversion happens
+   inside the micro-kernel, but only dispatch it when B reuse beats the current
+   once-per-panel FP32 widening.
+#. Vectorize transposed packing. Add blocked FP16 transpose/convert kernels for
+   A and B, then tune square and rectangular block sizes against ``trans_a``,
+   ``trans_b``, and ``trans_ab`` independently.
+#. Fix physical-core scaling. A ten-thread diagnostic corpus reaches only
+   0.309x median after the tiny split-K correction, with high variance and a
+   0.040x minimum; partition packed B panels across reusable physical-core
+   tasks and eliminate per-invocation pool and allocation costs before
+   retuning MC/NC/KC.
+#. Run dedicated x86 and ARM sweeps. Publish one-thread and physical-core raw
+   samples, dispersion, FP16 parity, and isolated BF16 throughput per ISA. Keep
+   PR10.3 open until every supported platform reaches the stated 1.0x median
+   and 0.9x minimum gates.
