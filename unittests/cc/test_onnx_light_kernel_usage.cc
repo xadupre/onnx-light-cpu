@@ -31,16 +31,18 @@ TEST(OnnxLightKernelUsage, KernelNamesAreLibraryQualified) {
 }
 
 // ``RegisteredKernelNames`` maps every overridden ONNX op_type to the
-// library-qualified name of the accelerated kernel installed for it.
+// library-qualified name of the accelerated kernel installed for it. The
+// entries come from the self-registration registry (kernel_registry.h) and are
+// sorted by op_type, so compare against the sorted expectation.
 TEST(OnnxLightKernelUsage, RegisteredKernelNames) {
   const std::vector<std::pair<std::string, std::string>> expected = {
       {"Abs", "onnx_light_cpu::Abs"},
       {"Exp", "onnx_light_cpu::Exp"},
-      {"Log", "onnx_light_cpu::Log"},
       {"Gemm", "onnx_light_cpu::Gemm"},
+      {"Log", "onnx_light_cpu::Log"},
       {"MatMulInteger", "onnx_light_cpu::MatMulInteger"},
-      {"QLinearMatMul", "onnx_light_cpu::QLinearMatMul"},
       {"Not", "onnx_light_cpu::Not"},
+      {"QLinearMatMul", "onnx_light_cpu::QLinearMatMul"},
   };
   EXPECT_EQ(onnx_light_cpu::RegisteredKernelNames(), expected);
 }

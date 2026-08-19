@@ -383,6 +383,36 @@ else()
   set(_cpu_lib_type STATIC)
 endif()
 
+# Force the linker to keep every object of ``lib_onnx_light_cpu_kernels`` when
+# it is a static archive. Each kernel translation unit self-registers through a
+# namespace-scope static initialiser (ONNX_LIGHT_CPU_REGISTER_KERNEL); with a
+# static archive the linker would otherwise drop the objects that no other
+# symbol references, so ``RegisterAllKernels`` / ``RegisteredKernelNames`` would
+# see an empty registry. Shared libraries always link all of their own objects,
+# so this is a no-op there.
+function(onnx_light_cpu_link_kernels_whole _target _scope)
+  if(NOT TARGET lib_onnx_light_cpu_kernels)
+    return()
+  endif()
+  get_target_property(_kernels_type lib_onnx_light_cpu_kernels TYPE)
+  if(NOT _kernels_type STREQUAL "STATIC_LIBRARY")
+    return()
+  endif()
+  if(MSVC)
+    target_link_options(${_target} ${_scope}
+        "/WHOLEARCHIVE:$<TARGET_FILE:lib_onnx_light_cpu_kernels>")
+  elseif(APPLE)
+    target_link_options(${_target} ${_scope}
+        "LINKER:-force_load,$<TARGET_FILE:lib_onnx_light_cpu_kernels>")
+  else()
+    target_link_options(${_target} ${_scope}
+        "LINKER:--whole-archive"
+        "$<TARGET_FILE:lib_onnx_light_cpu_kernels>"
+        "LINKER:--no-whole-archive")
+  endif()
+  add_dependencies(${_target} lib_onnx_light_cpu_kernels)
+endfunction()
+
 add_library(lib_onnx_light_cpu ${_cpu_lib_type} ${CPU_KERNEL_SOURCES})
 target_include_directories(lib_onnx_light_cpu PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
@@ -784,6 +814,7 @@ if(ONNX_LIGHT_CPU_BUILD_PYTHON)
     target_include_directories(_cpuregister PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}")
     target_link_libraries(_cpuregister PRIVATE lib_onnx_light_cpu_kernels)
+    onnx_light_cpu_link_kernels_whole(_cpuregister PRIVATE)
 
     # When onnx-light's backend test registry is available, link the
     # onnx-light-cpu backend-test *registration* library so ``_cpuregister``
@@ -959,6 +990,9 @@ if(ONNX_LIGHT_CPU_BUILD_TESTS)
     get_filename_component(_name "${_src}" NAME_WE)
     add_executable(${_name} "${_src}")
     target_link_libraries(${_name} PRIVATE ${_link_lib} GTest::gtest_main)
+    if("lib_onnx_light_cpu_kernels" IN_LIST _link_lib)
+      onnx_light_cpu_link_kernels_whole(${_name} PRIVATE)
+    endif()
     target_include_directories(${_name} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
     if("lib_onnx_light_cpu_kernels" IN_LIST _link_lib AND
        ONNX_LIGHT_CPU_ONNX_LIGHT_PY_LIBDIR)

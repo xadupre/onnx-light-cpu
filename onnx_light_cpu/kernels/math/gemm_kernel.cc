@@ -6,6 +6,7 @@
 
 #include "onnx_light_cpu/impl/math/gemm/gemm_plan.h"
 #include "onnx_light_cpu/impl/math/math_kernels.h"
+#include "onnx_light_cpu/kernels/kernel_registry.h"
 #include "onnx_light_cpu/kernels/kernel_usage.h"
 
 #include "onnx_core/runtime/kernels/cast_helper.h"
@@ -352,5 +353,7 @@ void RegisterGemmKernel() {
   // built-in Gemm entry with the SIMD-accelerated kernel for the CPU device.
   rt_ns::RegisterKernelFn("", "Gemm", sym_ns::Device::kCPU, std::move(factory));
 }
+
+ONNX_LIGHT_CPU_REGISTER_KERNEL("Gemm", GemmKernel::kName, RegisterGemmKernel)
 
 } // namespace onnx_light_cpu

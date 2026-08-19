@@ -5,6 +5,7 @@
 #include "onnx_light_cpu/kernels/math/exp_log_kernel.h"
 
 #include "onnx_light_cpu/impl/math/math_kernels.h"
+#include "onnx_light_cpu/kernels/kernel_registry.h"
 #include "onnx_light_cpu/kernels/kernel_usage.h"
 
 #include "onnx_core/runtime/kernels/cast_helper.h"
@@ -167,5 +168,8 @@ void RegisterLogKernel() {
   // built-in Log entry with the SIMD-accelerated kernel for the CPU device.
   rt_ns::RegisterKernelFn("", "Log", sym_ns::Device::kCPU, std::move(factory));
 }
+
+ONNX_LIGHT_CPU_REGISTER_KERNEL("Exp", ExpKernel::kName, RegisterExpKernel)
+ONNX_LIGHT_CPU_REGISTER_KERNEL("Log", LogKernel::kName, RegisterLogKernel)
 
 } // namespace onnx_light_cpu

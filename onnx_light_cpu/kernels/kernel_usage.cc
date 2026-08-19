@@ -4,11 +4,7 @@
 
 #include "onnx_light_cpu/kernels/kernel_usage.h"
 
-#include "onnx_light_cpu/kernels/logical/not_kernel.h"
-#include "onnx_light_cpu/kernels/math/abs_kernel.h"
-#include "onnx_light_cpu/kernels/math/exp_log_kernel.h"
-#include "onnx_light_cpu/kernels/math/gemm_kernel.h"
-#include "onnx_light_cpu/kernels/math/integer_matmul_kernel.h"
+#include "onnx_light_cpu/kernels/kernel_registry.h"
 
 #include <atomic>
 #include <mutex>
@@ -60,15 +56,16 @@ void SetKernelUsageRecording(bool enabled) noexcept {
 }
 
 const std::vector<std::pair<std::string, std::string>> &RegisteredKernelNames() {
-  static const std::vector<std::pair<std::string, std::string>> names = {
-      {"Abs", AbsKernel::kName},
-      {"Exp", ExpKernel::kName},
-      {"Log", LogKernel::kName},
-      {"Gemm", GemmKernel::kName},
-      {"MatMulInteger", MatMulIntegerKernel::kName},
-      {"QLinearMatMul", QLinearMatMulKernel::kName},
-      {"Not", NotKernel::kName},
-  };
+  // Built once from the self-registration registry (see kernel_registry.h) so
+  // adding a kernel needs no edit here: the registry already lists every
+  // {op_type, kName} pair, sorted by op_type for a stable order.
+  static const std::vector<std::pair<std::string, std::string>> names = [] {
+    std::vector<std::pair<std::string, std::string>> pairs;
+    for (const KernelRegistration &registration : KernelRegistrations()) {
+      pairs.emplace_back(registration.op_type, registration.kernel_name);
+    }
+    return pairs;
+  }();
   return names;
 }
 

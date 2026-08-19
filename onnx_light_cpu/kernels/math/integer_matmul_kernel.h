@@ -52,6 +52,17 @@ public:
              ONNX_LIGHT_NAMESPACE::core::runtime::RuntimeContext *rt = nullptr) const;
 };
 
+/// Registers the onnx-light-cpu ``MatMulInteger`` kernel into onnx-light's
+/// shared ``KernelDispatchTable`` for the CPU device.
+void RegisterMatMulIntegerKernel();
+
+/// Registers the onnx-light-cpu ``QLinearMatMul`` kernel into onnx-light's
+/// shared ``KernelDispatchTable`` for the CPU device.
+void RegisterQLinearMatMulKernel();
+
+/// Registers both integer matrix-multiplication kernels (``MatMulInteger`` and
+/// ``QLinearMatMul``) into onnx-light's shared ``KernelDispatchTable`` for the
+/// CPU device.
 void RegisterIntegerMatMulKernels();
 
 } // namespace onnx_light_cpu
