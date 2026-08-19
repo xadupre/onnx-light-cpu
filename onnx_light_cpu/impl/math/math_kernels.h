@@ -182,6 +182,27 @@ void GemmHalfWithEpilogue(bool is_bfloat16, bool trans_a, bool trans_b, std::siz
                           std::size_t N, std::size_t K, float alpha, const std::uint16_t *A,
                           const std::uint16_t *B, const GemmEpilogue<float> &epilogue, float *Y);
 
+/// The four ONNX Float8 storage formats accepted by
+/// :cpp:func:`GemmFloat8WithEpilogue`. The enumerator order matches the internal
+/// ``detail::Float8Format`` so the public value maps directly onto it.
+enum class GemmFloat8Format {
+  kE4M3FN,   ///< 1-4-3, bias 7, finite, NaN at 0x7f / 0xff.
+  kE4M3FNUZ, ///< 1-4-3, bias 8, finite, single zero, NaN at 0x80.
+  kE5M2,     ///< 1-5-2, bias 15, IEEE-like with infinities and NaNs.
+  kE5M2FNUZ, ///< 1-5-2, bias 16, finite, single zero, NaN at 0x80.
+};
+
+/// Computes a Float8 GEMM and applies the epilogue (Roadmap PR09.5). ``A`` and
+/// ``B`` are raw one-byte Float8 patterns of ``format`` (both operands share the
+/// format). Each element is decoded to ``float32`` while it is packed into the
+/// micro-kernel panels -- there is no separate full-tensor conversion pass, and
+/// each format is handled as a separate packing format rather than a branch in
+/// the FP32 inner loop -- and the reduction accumulates in ``float32``. ``Y`` is
+/// the ``M x N`` float32 accumulation workspace on which the epilogue is applied.
+void GemmFloat8WithEpilogue(GemmFloat8Format format, bool trans_a, bool trans_b, std::size_t M,
+                            std::size_t N, std::size_t K, float alpha, const std::uint8_t *A,
+                            const std::uint8_t *B, const GemmEpilogue<float> &epilogue, float *Y);
+
 /// Validates that an :cpp:class:`GemmEpilogue` is internally consistent for an
 /// ``M x N`` output, throwing ``std::invalid_argument`` otherwise. Exposed so a
 /// prepared :cpp:class:`GemmPlan` can apply the same epilogue as the ONNX

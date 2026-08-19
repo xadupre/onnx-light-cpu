@@ -291,6 +291,21 @@ void GemmConvertBFloat16ToFloat32_AVX2(const std::uint16_t *src, float *dst, std
   }
 }
 
+void GemmDecodeFloat8ToFloat32_AVX2(const float *table, const std::uint8_t *src, float *dst,
+                                    std::size_t n) {
+  std::size_t i = 0;
+  for (; i + 8 <= n; i += 8) {
+    // Load eight Float8 bytes, zero-extend the indices to 32 bits, and gather
+    // the exact decoded float32 values from the per-format table.
+    const __m128i bytes = _mm_loadl_epi64(reinterpret_cast<const __m128i *>(src + i));
+    const __m256i indices = _mm256_cvtepu8_epi32(bytes);
+    _mm256_storeu_ps(dst + i, _mm256_i32gather_ps(table, indices, 4));
+  }
+  for (; i < n; ++i) {
+    dst[i] = table[src[i]];
+  }
+}
+
 #ifdef ONNX_LIGHT_CPU_HAVE_F16C
 void GemmConvertFloat16ToFloat32_F16C(const std::uint16_t *src, float *dst, std::size_t n) {
   std::size_t i = 0;
