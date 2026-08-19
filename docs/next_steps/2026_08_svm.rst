@@ -1,0 +1,479 @@
+SVM Classification and Regression Roadmap
+==========================================
+
+:Date: 2026-08
+
+**discussion**
+
+Objective
+---------
+
+The objective is a prepared CPU implementation of ``SVMClassifier`` and
+``SVMRegressor`` with performance parity against the ONNX Runtime CPU
+execution provider. ``onnx-light-cpu`` currently registers neither operator,
+so this roadmap covers correctness, runtime integration, and optimization.
+
+Both operators still use their original version-1 schema. They have not been
+revised by later ``ai.onnx.ml`` operator sets and remain the latest SVM
+schemas when a model imports ``ai.onnx.ml`` opset 5. The implementation
+therefore registers version 1 of these two operators only; there is no SVM
+version 2 through 5 and no historical dispatch to maintain.
+
+For the priority float32 corpus, parity means median end-to-end performance of
+at least ``1.0x`` ONNX Runtime, no priority case below ``0.9x``, and no tuned
+single-row latency regression greater than 10%. Preparation, first execution,
+and steady-state inference are reported separately.
+
+Latest-schema scope
+-------------------
+
+``SVMClassifier`` version 1
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Inputs are rank-1 ``[F]`` or rank-2 ``[N, F]`` tensors of float32, float64,
+int32, or int64. The operator returns one string or int64 label per row and a
+float32 score tensor. It supports:
+
+* ``LINEAR``, ``POLY``, ``RBF``, and ``SIGMOID`` kernels;
+* linear classification when ``vectors_per_class`` has no support vectors;
+* binary and multiclass support-vector classification;
+* one-versus-one votes and raw decision scores;
+* optional pairwise probability calibration through ``prob_a`` and
+  ``prob_b``;
+* integer or string class labels;
+* ``NONE``, ``SOFTMAX``, ``LOGISTIC``, ``SOFTMAX_ZERO``, and ``PROBIT`` post
+  transforms.
+
+The prepared plan preserves the legacy output contract exactly. In
+particular, tests must fix the binary score expansion, multiclass raw-score
+shape, vote tie rule, positive-only coefficient rule, label order, and the
+probability-coupling result rather than infer them from a modern classifier
+API.
+
+``SVMRegressor`` version 1
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Inputs have the same schema types and ranks. The output is float32 with shape
+``[N, 1]``. ``n_supports == 0`` selects a linear coefficient vector;
+``n_supports > 0`` selects support-vector evaluation with any of the four
+kernels. ``one_class`` converts the score to ``1`` or ``-1``.
+
+The current ONNX Runtime CPU kernel registers the regressor only for float32,
+although the ONNX schema accepts float64, int32, and int64. Float32 is
+therefore the direct performance-parity target. Other schema types require
+correctness against the ONNX reference and exported models, but are not used
+to claim direct ONNX Runtime parity.
+
+The schema exposes ``post_transform`` for the regressor. Current ONNX Runtime
+source constructs this setting but does not apply it in ``Compute``. The
+correct behavior must be resolved with the ONNX reference tests before
+implementation; parity benchmarks use ``NONE`` until that semantic difference
+is settled and documented.
+
+Correctness contract
+--------------------
+
+Construction validates every invariant before execution:
+
+* exactly one non-empty class-label attribute is present for classification;
+* kernel names and post transforms are recognized;
+* ``kernel_params`` is absent or contains gamma, coefficient zero, and degree;
+* feature, class, support-vector, coefficient, ``rho``, and probability-array
+  dimensions agree without integer overflow;
+* each ``vectors_per_class`` entry is non-negative and their sum matches the
+  support-vector matrix;
+* a support-vector classifier has ``(classes - 1) * supports`` coefficients
+  and ``classes * (classes - 1) / 2`` pairwise biases;
+* ``prob_a`` and ``prob_b`` are both absent or both complete;
+* a linear classifier has one coefficient row per class;
+* a support-vector regressor has at least ``n_supports`` coefficients and a
+  divisible support-vector array;
+* runtime input rank and feature count match the prepared plan.
+
+Differential tests cover all kernels, ranks, schema input types, integer and
+string labels, binary and multiclass outputs, probability and raw-score modes,
+every post transform, positive and signed coefficients, one-class regression,
+empty batches, invalid attributes, and overflow-sized metadata.
+
+Numeric cases include positive and negative zero, NaNs, infinities, subnormal
+values, very large norms, nearly identical vectors, cancellation in the RBF
+distance identity, integer-to-float conversion boundaries, polynomial degrees
+2, 3, non-integer, and large values, and saturated sigmoid inputs. Candidate
+paths must match the scalar reference within an explicit score tolerance and
+must produce identical labels and one-class signs.
+
+Prepared SVM plan
+-----------------
+
+Each node constructs one immutable classifier or regressor plan. Attribute
+strings are converted to enums, dimensions and offsets are checked once, and
+constant arrays are copied or packed into stable storage. Repeated inference
+does no attribute parsing, metadata allocation, string dispatch, or plan
+lookup inside compute loops.
+
+The common plan records:
+
+* mode, kernel, gamma, coefficient zero, degree, and post transform;
+* feature, support-vector, class, and pairwise-classifier counts;
+* coefficient, support-vector, bias, probability, and label storage;
+* per-class support ranges and prepared pairwise reduction descriptors;
+* packed constant matrices and their GEMM plans;
+* support-vector squared norms for legal RBF candidates;
+* input conversion, kernel, reduction, probability, and output functions;
+* workspace size and a batch-size-dependent execution policy.
+
+Input conversion
+~~~~~~~~~~~~~~~~
+
+Attributes and scores are float32 in both schemas. The classifier initially
+matches ONNX Runtime by converting float64, int32, and int64 input batches to
+float32 once, then using the same compute path. Conversion is fused into a
+packed input tile when that avoids a full-size temporary. Float32 inputs are
+never copied solely for type normalization.
+
+The regressor implements the same conversion only after float32 parity. This
+extends schema coverage beyond ONNX Runtime's current CPU registration and
+must not be reported as ONNX Runtime parity for those additional types.
+
+Linear path
+~~~~~~~~~~~
+
+Linear classification computes:
+
+.. code-block:: text
+
+    scores[N, C] = X[N, F] * coefficients[C, F]^T + rho[0]
+
+Linear regression uses the same operation with one output column. Both paths
+reuse the existing packed GEMM implementation and immutable ``GemmPlan``.
+Constant coefficients are packed during node preparation where reuse repays
+the storage cost. A direct SIMD dot-product path remains a candidate for
+``N == 1`` or very small ``C`` where GEMM setup dominates.
+
+Support-vector kernel matrix
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The ``LINEAR`` support-vector kernel is the matrix product
+``X * support_vectors^T`` without a transform. For ``POLY`` and ``SIGMOID``,
+the portable baseline follows ONNX Runtime:
+
+.. code-block:: text
+
+    dots = X * support_vectors^T
+    poly = pow(gamma * dots + coef0, degree)
+    sigmoid = tanh(gamma * dots + coef0)
+
+Degrees 2 and 3 use multiplication specializations; all other valid degrees
+use the math kernel. The affine transform and polynomial or tanh epilogue are
+fused by tile when measurement shows that avoiding a full extra pass wins.
+
+RBF starts with a direct, numerically stable implementation matching:
+
+.. code-block:: text
+
+    exp(-gamma * sum_f((x[f] - support[f])^2))
+
+It is vectorized across features and/or support vectors and parallelized
+without changing the reduction order beyond the accepted tolerance. A second
+candidate uses:
+
+.. code-block:: text
+
+    squared_distance = norm(x)^2 + norm(support)^2 - 2 * dot(x, support)
+
+with precomputed support norms and GEMM. This can be substantially faster for
+large matrices but can lose precision for large, nearly equal vectors. It is
+selected only when correctness tests, cancellation guards, and end-to-end
+timings pass; negative round-off is not silently clamped without a documented
+error bound.
+
+SVC reduction and classification
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The ONNX Runtime-compatible baseline materializes ``kernel[N, S]`` and uses
+prepared contiguous support ranges to compute each one-versus-one decision.
+The plan removes class-offset arithmetic from the inner loop and specializes:
+
+* binary versus multiclass classification;
+* raw scores versus calibrated probabilities;
+* integer versus string labels;
+* positive-only versus signed coefficients;
+* fixed support counts where generated loops are demonstrably smaller.
+
+SIMD dot products replace the scalar coefficient reductions. For larger
+problems, calibration compares three bounded strategies:
+
+``materialized_rows``
+    Build the full kernel matrix, then reduce rows independently. This favors
+    reuse and large batches but requires ``N * S`` floats.
+
+``tiled_rows``
+    Evaluate a row/support tile, update pairwise scores, and release the tile.
+    This bounds workspace while retaining vector and cache reuse.
+
+``packed_pair_gemm``
+    Pack the pairwise coefficients as a dense matrix and multiply the kernel
+    matrix by it when its zero entries and storage overhead are outweighed by
+    GEMM efficiency. It is rejected for sparse or very large class layouts.
+
+Votes and pairwise scores are row-private. Probability mode applies the
+pairwise sigmoid followed by multiclass probability coupling. Binary
+probability has a direct specialization. Multiclass iteration has an explicit
+convergence limit and reproduces the reference fallback and tie behavior.
+
+Workspace and scheduling
+------------------------
+
+No strategy may allocate from inside a feature, support, class-pair, or
+probability loop. Runtime-visible workspace contains only the input conversion
+tile, kernel tile, pair scores, votes, and probability matrix required by the
+selected policy.
+
+The policy reduces tile sizes or participant count before exceeding a
+configured byte limit. It never assumes that the complete ``N * S`` kernel
+matrix or ``N * C * C`` probability matrix fits in memory. Empty batches
+return correctly shaped outputs without launching workers.
+
+Parallel work is selected from:
+
+``row_parallel``
+    Each participant owns complete rows, including kernel evaluation,
+    reduction, and finalization. This avoids synchronization and is the
+    portable nonlinear default once rows are sufficiently expensive.
+
+``gemm_then_rows``
+    The shared GEMM computes a kernel or linear score matrix, followed by a
+    separately parallel row epilogue. GEMM and epilogue pools are never
+    nested.
+
+``support_tiles``
+    Tasks evaluate bounded support-vector tiles and accumulate into private
+    pair-score buffers, followed by a deterministic merge. This is legal only
+    when its extra reduction and memory cost are measured.
+
+``serial``
+    A direct SIMD path avoids dispatch overhead for small ``N``, ``F``, ``S``,
+    or ``C``.
+
+ONNX Runtime comparison
+-----------------------
+
+The initial implementation deliberately preserves the parts of ONNX Runtime
+that are already strong:
+
+* LINEAR, POLY, and SIGMOID use its optimized GEMM backend;
+* support-vector regression uses a kernel matrix followed by GEMM with the
+  support coefficients;
+* classifier inputs other than float32 are converted once to float32;
+* pairwise SVC layout, voting, probability coupling, score transforms, and
+  label selection define the compatibility baseline.
+
+The measured alternatives target current limitations in the ONNX Runtime CPU
+source:
+
+* RBF uses scalar nested loops over rows, supports, and features;
+* one-versus-one coefficient reduction is scalar;
+* kernel, vote, classifier-score, and probability buffers are reconstructed
+  on each classifier invocation;
+* finalization switches to row parallelism only above a fixed 512-row
+  threshold;
+* scheduling does not account jointly for features, supports, classes, kernel
+  type, probability mode, or workspace;
+* there is no fused tiled path to avoid a full kernel matrix.
+
+These observations are baselines, not assumptions that every alternative
+wins. The ONNX Runtime-compatible path remains the fallback until a candidate
+passes correctness, memory, and repeated timing gates.
+
+Benchmark corpus
+----------------
+
+Generated models and converted scikit-learn models cover ``LinearSVC``,
+``SVC``, ``NuSVC``, ``SVR``, ``NuSVR``, and ``OneClassSVM`` with:
+
+* all four kernels and polynomial degrees 2, 3, 4, and non-integer cases;
+* batch sizes 1, 2, 8, 32, 128, 512, 1,024, and 16,384;
+* 4 to 4,096 features and 1 to 8,192 support vectors;
+* 2, 3, 10, and 100 classes with balanced and skewed supports per class;
+* raw scores, probability calibration, and every post transform;
+* float32, float64, int32, and int64 inputs;
+* consecutive, non-consecutive, negative, and string labels;
+* low-norm, high-norm, sparse-like, and nearly coincident vectors.
+
+Float32 is the common performance-parity corpus. Classifier float64/int32/int64
+cases compare directly with ONNX Runtime, including conversion cost.
+Regressor cases of those types are correctness and internal-performance
+measurements until ONNX Runtime provides an equivalent CPU registration.
+
+Every result records preparation time, first-run and steady-state latency,
+rows per second, effective feature operations, kernel and reduction time,
+conversion time, workspace bytes, selected policy, raw samples, and
+dispersion. Comparisons use identical models, inputs, affinity, and effective
+thread counts. The dashboard must show classifier and regressor separately
+and must not aggregate direct linear models and support-vector kernels into
+one score.
+
+Tuning
+------
+
+Static selection
+~~~~~~~~~~~~~~~~
+
+Preparation removes illegal or dominated choices without timing:
+
+* linear models never allocate support-vector workspace;
+* probability buffers are absent when calibration attributes are absent;
+* binary models use binary reduction and probability paths;
+* degrees 2 and 3 use specialized polynomial epilogues;
+* support norms are prepared only for the RBF GEMM candidate;
+* packed pairwise GEMM is rejected when its matrix exceeds the memory budget;
+* string-label handling is isolated from numeric score computation.
+
+Measured policy
+~~~~~~~~~~~~~~~
+
+One strategy cannot serve every runtime row count. The prepared plan stores a
+small ordered table of row-count regions. Each region selects:
+
+``execution.regions[].strategy``
+    ``serial``, ``row_parallel``, ``gemm_then_rows``, or ``support_tiles``.
+
+``execution.regions[].row_tile``
+    Number of rows retained in one kernel and reduction tile.
+
+``execution.regions[].support_tile``
+    Number of support vectors evaluated before reducing or advancing.
+
+``execution.regions[].maximum_threads``
+    Participant cap for this region.
+
+``execution.regions[].row_chunk``
+    Rows assigned to one row-parallel task.
+
+``execution.regions[].rbf_algorithm``
+    ``direct_simd`` or guarded ``norm_gemm``.
+
+``execution.regions[].svc_reduction``
+    ``materialized_rows``, ``tiled_rows``, or ``packed_pair_gemm``.
+
+``execution.regions[].epilogue_parallel_rows``
+    Minimum rows for a separate score/probability finalization pass.
+
+Every field is typed and range-checked against the model dimensions,
+workspace budget, and selected strategy. Dynamic ``N`` is evaluated against
+the regions at runtime; it is not frozen into one model-wide strategy.
+
+Calibration key and search
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The selection key contains CPU features, effective threads, input type,
+kernel, probability mode, and an exact model digest covering dimensions,
+support distribution, parameters, support vectors, and coefficients. Portable
+defaults use bounded ``F``, ``S``, and ``C`` buckets; runtime rows are encoded
+by the ordered decision regions.
+
+Calibration proceeds hierarchically:
+
+#. establish the ONNX Runtime-compatible serial/GEMM baseline;
+#. compare direct SIMD with GEMM for small linear shapes;
+#. compare direct RBF with the guarded norm/GEMM formulation;
+#. sweep row and support tiles under the workspace budget;
+#. compare materialized, tiled, and legal packed-pair reductions;
+#. locate row-count crossovers by exponential search and refinement;
+#. tune participant caps and chunks inside each region;
+#. revalidate winners on adversarial numeric and label cases.
+
+Candidates run in alternating order with warmups, medians, dispersion checks,
+and a minimum repeatable winning margin. An incorrect candidate is rejected
+with its reason and can never be installed as a fallback.
+
+The first implementation ships conservative portable regions in the prepared
+plan. Optional calibration may reuse the repository's common tuning
+infrastructure when it exists, but this roadmap does not introduce an
+SVM-specific persistent file format or speculative format versioning.
+
+Runtime integration
+-------------------
+
+Both kernels register under ``ai.onnx.ml`` with schema version 1 and use the
+session-owned executor. ``RegisterAllKernels`` and kernel-usage reporting are
+updated together. Pools are not nested, and standalone entry points use the
+same prepared-plan and workspace rules as graph execution.
+
+The implementation reuses the existing GEMM, Exp, and future vector Tanh/Pow
+paths rather than embedding divergent approximations. Missing shared kernels
+land with their own typed correctness tests before SVM depends on them.
+
+Remaining pull-request sequence
+-------------------------------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 10 24 44 12 10
+
+   * - PR
+     - Scope
+     - Merge criterion
+     - Depends on
+     - Status
+   * - SVM PR01
+     - Latest-schema corpus and scalar reference.
+     - Version-1 classifier and regressor generators cover all kernels, schema
+       types, modes, transforms, labels, probabilities, invalid metadata, and
+       ONNX Runtime differential cases. No nonexistent SVM v2-v5 kernel is
+       registered.
+     - None
+     - Pending
+   * - SVM PR02
+     - Parser, registration, and immutable plans.
+     - Both operators validate and prepare all constants once, register in the
+       ML domain, report kernel usage, and execute reference-correct float32
+       paths without inner-loop allocation or string dispatch.
+     - PR01
+     - Pending
+   * - SVM PR03
+     - Linear and GEMM support-vector baseline.
+     - LINEAR, POLY, and SIGMOID reuse packed GEMM; type conversion and
+       polynomial specializations pass the corpus and retain ONNX
+       Runtime-compatible semantics.
+     - PR02
+     - Pending
+   * - SVM PR04
+     - RBF kernels and support-vector regression.
+     - Direct SIMD RBF and guarded norm/GEMM candidates pass cancellation and
+       range tests. Tiled nonlinear regression respects the workspace cap and
+       improves or retains each priority RBF case.
+     - PR03; Exp/Log parity work
+     - Pending
+   * - SVM PR05
+     - SVC reduction and probability.
+     - Binary/multiclass reductions, votes, raw scores, calibrated
+       probabilities, transforms, ties, and both label types match the
+       reference. SIMD and tiled candidates use bounded workspace.
+     - PR03, PR04
+     - Pending
+   * - SVM PR06
+     - Dynamic scheduling and tuning.
+     - Ordered row-count regions select validated tiles, reductions, thread
+       caps, and epilogue thresholds without nested pools or runtime plan
+       lookup. Calibration retains raw evidence and rejected reasons.
+     - PR04, PR05; Runtime Controls PR02
+     - Pending
+   * - SVM PR07
+     - Full schema types and advanced fusion.
+     - Classifier conversion paths and regressor float64/int32/int64 schema
+       coverage pass correctness. Fused conversion, kernel, or reduction paths
+       land only where repeated end-to-end measurements win.
+     - PR06
+     - Pending
+   * - SVM PR08
+     - Final parity gate.
+     - Float32 median performance is at least ``1.0x`` ONNX Runtime, no
+       priority case is below ``0.9x``, tuned single-row latency stays within
+       10%, all schema types pass their stated correctness target, and
+       preparation/workspace budgets pass.
+     - PR01 through PR07
+     - Pending
+
+SVM PR08 remains open until classification, regression, and one-class
+inference all satisfy the final gate.
