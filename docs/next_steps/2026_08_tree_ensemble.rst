@@ -36,6 +36,12 @@ The preferred schema consumes a rank-2 tensor ``[N, F]`` and returns
 ``[N, n_targets]``. Its input, split, membership, leaf-weight, and output types
 are ``float16``, ``float32``, or ``float64`` with matching types.
 
+The first parity milestone covers float32 and float64 because those are the
+types registered by ONNX Runtime's current version-5 CPU kernel. Float16
+correctness is required from the first complete implementation, but its
+optimized path is a later extension and is not used to claim an
+apples-to-apples ONNX Runtime parity result.
+
 The engine must implement:
 
 * branch modes ``LEQ``, ``LT``, ``GTE``, ``GT``, ``EQ``, ``NEQ``, and
@@ -100,8 +106,9 @@ Prepared tree plan
 
 Each node constructs an immutable ``TreeEnsemblePlan`` during session
 preparation. Repeated execution performs no attribute parsing, tree
-validation, allocation, string lookup, tuning-cache lookup, or lock
-acquisition.
+validation, metadata allocation, string lookup, tuning-cache lookup, or lock
+acquisition. Output and bounded workspace allocation remain runtime-visible,
+but traversal loops perform no allocation.
 
 The plan records:
 
@@ -111,21 +118,29 @@ The plan records:
 * aggregate and post-transform functions selected as typed function pointers;
 * branch-mode and missing-value distributions;
 * the prepared node, leaf, and membership layouts;
-* the selected execution strategy, row/tree chunks, batch size, and maximum
-  participants;
+* a batch-size-dependent execution policy containing strategy crossovers,
+  row/tree chunks, batch sizes, and participant caps;
 * preallocated workspace requirements and alignment;
 * an exact model signature and tuning ABI.
 
 Node layout
 ~~~~~~~~~~~
 
-The baseline uses pointer-free indices and owns all storage in the plan.
-Candidate layouts include:
+The first implementation includes ONNX Runtime's compact traversal layout as
+the reference candidate rather than assuming pointer-free indices are faster.
+Every layout owns stable storage in the plan. Candidates include:
 
-``compact_aos``
-    One compact node record containing a 32-bit feature id, 32-bit child or
-    leaf indices, split value, mode, and missing-direction flag. This favors
-    one-row pointer chasing.
+``ort_compact_aos_pointer``
+    One compact record stores the feature id, split or unique leaf weight, a
+    tagged mode/missing byte, and either a direct pointer to the true child or
+    leaf-weight metadata. Nodes are reordered so the false child is the next
+    record. This mirrors ONNX Runtime's scalar-friendly layout and is the
+    initial parity baseline.
+
+``compact_aos_index``
+    One compact record replaces child pointers with 32-bit indices. It reduces
+    record size and permits relocation but is selected only when measured
+    traversal wins offset the address calculation.
 
 ``split_soa``
     Separate aligned arrays for feature ids, splits, children, modes, and
@@ -134,8 +149,11 @@ Candidate layouts include:
 
 ``preorder_hot``
     Trees are reordered into depth-first layout, with ``nodes_hitrates`` used
-    only as a layout hint. The likely branch becomes fall-through where this
-    improves locality; true/false semantics remain explicit.
+    only as an optional layout hint. The likely branch becomes fall-through
+    where this improves locality; true/false semantics remain explicit. Since
+    ONNX Runtime deliberately ignores hit rates during inference, this layout
+    cannot become a portable default without tests against shifted input
+    distributions and a demonstrated end-to-end win.
 
 The initial portable default is selected from measured evidence, not from the
 smallest node size alone. Layout conversion happens once. Large indices retain
@@ -152,6 +170,9 @@ Membership nodes select one immutable representation during preparation:
 * bounded integer bitset when the value range is compact;
 * immutable hash set for large irregular sets.
 
+The first baseline mirrors ONNX Runtime's split between a compact integer
+bitmask for small sets and a prepared category-set structure for large sets.
+Additional representations enter calibration only after this baseline passes.
 The representation threshold is tunable, but the values and floating-point
 equality semantics are not. NaN remains the set delimiter and is never a
 member value.
@@ -160,7 +181,17 @@ Execution strategies
 --------------------
 
 No single traversal order is optimal for every combination of rows, trees,
-depth, and targets. The plan chooses among bounded strategies:
+depth, and targets. The plan therefore stores an ordered decision table
+evaluated from the runtime batch size ``N``. It does not capture one strategy
+for every dynamic shape.
+
+The initial portable policy reproduces ONNX Runtime's current scheduling
+structure and constants as a benchmark baseline: tree parallelism begins near
+80 trees, tree-major batches contain 128 rows, and the small-row crossover is
+50 rows. These values are not the final defaults; tuning must prove each
+replacement.
+
+The policy chooses among bounded strategies:
 
 ``row_parallel``
     Each task owns a contiguous range of input rows and evaluates all trees.
@@ -179,7 +210,27 @@ depth, and targets. The plan chooses among bounded strategies:
 ``interleaved_rows``
     Several rows traverse one tree together. It may use SIMD comparisons and
     gathers when paths remain coherent, but must fall back cheaply as lanes
-    diverge. This is a candidate, not the portable default.
+    diverge. This is an extension after float32/float64 parity, not a portable
+    default or an input to the first scheduling calibration.
+
+Static traversal specialization
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Model preparation emits separate typed traversal functions for the cases
+already exploited by ONNX Runtime:
+
+* one homogeneous comparison mode versus mixed node modes, so a homogeneous
+  forest has no per-node mode switch;
+* no missing-value routing versus explicit NaN routing, so ordinary forests
+  do not test NaN at every node;
+* one target versus multiple targets, with a scalar accumulator for the
+  single-target path;
+* binary classification versus multiclass classification;
+* all-positive classifier weights versus general signed weights.
+
+The hot loop selects one specialization when the plan is constructed. These
+specializations are part of the parity baseline and precede SoA, prefetch, or
+SIMD traversal experiments.
 
 The plan detects degenerate one-node trees, stumps, and symmetric/oblivious
 trees. Specialized branchless evaluators are permitted when detection proves
@@ -219,6 +270,10 @@ families:
 * dense numeric, missing-value-heavy, and membership-heavy inputs;
 * float16, float32, float64, plus deprecated-adapter int32/int64 inputs.
 
+Float32 and float64 form the performance-parity corpus. Float16 and deprecated
+integer adapters form correctness and internal-regression corpora until an
+equivalent ONNX Runtime version-5 kernel exists for a direct comparison.
+
 Every case records preparation time, first-run latency, steady-state latency,
 rows per second, traversed nodes per second, branch misses, cache misses,
 workspace bytes, strategy, layout, tuning parameters, raw samples, and
@@ -243,6 +298,8 @@ Model preparation derives facts that do not need timing:
 
 * whether compact 32-bit indices are safe;
 * whether a tree is a stump, symmetric, or general;
+* whether mode, missing-value, target-count, and binary-classifier
+  specializations apply;
 * membership representation candidates;
 * whether dense or sparse target accumulation is legal;
 * workspace bounds for each strategy.
@@ -254,28 +311,32 @@ Measured scheduling selection
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Calibration times the remaining legal candidates using deterministic inputs
-that exercise representative paths. Version 1 of the tuning schema contains:
+that exercise representative paths. Version 1 stores a bounded, ordered
+execution policy rather than one global strategy. Each region has an inclusive
+maximum row count, a strategy, a batch size, row/tree chunks, and a participant
+cap; the final region has no maximum.
 
-``execution.strategy``
-    ``row_parallel``, ``tree_parallel``, ``tree_major_batch``, or
-    ``interleaved_rows`` when supported by the model.
+``execution.regions``
+    One to four strictly ordered row-count regions selecting
+    ``row_parallel``, ``tree_parallel``, or ``tree_major_batch``. Version 1
+    excludes ``interleaved_rows`` until the parity baseline is complete.
 
-``execution.batch_rows``
-    Number of rows retained in a tree-major or interleaved batch.
+``execution.regions[].maximum_rows``
+    Inclusive upper batch-size boundary. The final region is unbounded.
 
-``parallel.minimum_rows``
-    Batch threshold below which worker dispatch is disabled.
+``execution.regions[].strategy``
+    Strategy selected for runtime batch sizes in the region.
 
-``parallel.minimum_trees``
-    Forest-size threshold below which tree-parallel execution is disabled.
+``execution.regions[].batch_rows``
+    Number of active rows retained by tree-major execution.
 
-``parallel.maximum_threads``
-    Maximum useful participants for the model profile.
+``execution.regions[].maximum_threads``
+    Maximum useful participants in the region.
 
-``parallel.row_chunk``
+``execution.regions[].row_chunk``
     Contiguous rows assigned per row-parallel task.
 
-``parallel.tree_chunk``
+``execution.regions[].tree_chunk``
     Contiguous trees assigned per tree-parallel task.
 
 ``membership.linear_limit``
@@ -288,8 +349,9 @@ that exercise representative paths. Version 1 of the tuning schema contains:
     Optional node-prefetch distance; zero disables prefetch.
 
 The tuning ABI is versioned. Parameters are strongly typed, range-checked,
-cross-validated against workspace limits, and captured immutably by the
-prepared plan.
+region boundaries are strictly increasing, every strategy-specific field is
+validated, workspace limits are checked per region, and the complete policy is
+captured immutably by the prepared plan.
 
 Tuning key
 ~~~~~~~~~~
@@ -315,10 +377,11 @@ split and leaf values may be excluded only if two models are guaranteed to
 share all legal execution choices; otherwise they remain in the digest.
 
 A portable default profile is indexed by structural buckets: tree-count
-range, depth range, row-count range, target-count range, branch-mode mix, and
-membership density. Exact profiles override portable defaults. A profile for
-one forest must never silently apply to an incompatible topology or workspace
-requirement.
+range, depth range, target-count range, branch-mode mix, and membership
+density. Runtime row count is intentionally absent from the profile key
+because ``execution.regions`` encodes all calibrated row-count crossovers.
+Exact profiles override portable defaults. A profile for one forest must
+never silently apply to an incompatible topology or workspace requirement.
 
 Calibration inputs and correctness
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -342,14 +405,17 @@ Search procedure
 
 Calibration uses a hierarchical search to avoid a combinatorial sweep:
 
-#. benchmark legal serial layouts and membership representations;
-#. compare traversal strategies at representative ``(rows, trees, targets)``
-   points;
+#. benchmark the ONNX Runtime-style AoS/pointer baseline against legal serial
+   layouts and membership representations;
+#. verify homogeneous-mode, no-missing, one-target, and classifier
+   specializations independently;
+#. compare traversal strategies at representative row-count points and derive
+   an ordered decision table rather than one global winner;
 #. sweep ``batch_rows`` over bounded powers of two that fit the cache and
    workspace budget;
-#. locate row/tree parallel crossovers by exponential search followed by
+#. locate decision-region boundaries by exponential search followed by
    refinement;
-#. sweep participant caps, then row/tree chunk sizes;
+#. sweep participant caps, then row/tree chunk sizes within each region;
 #. test prefetch only after the winning layout and strategy are fixed;
 #. revalidate the winner on all calibration batches and edge inputs.
 
@@ -415,24 +481,27 @@ Remaining pull-request sequence
      - PR01
      - Pending
    * - Trees PR03
-     - Compact layouts and serial evaluators.
-     - AoS/SoA candidates, prepared membership structures, typed aggregation,
-       and post transforms pass the scalar corpus. The portable default
-       improves or retains single-thread latency against ONNX Runtime.
+     - ONNX Runtime-compatible serial baseline.
+     - The compact AoS/pointer layout, false-child fall-through, homogeneous
+       mode, no-missing, one/multi-target, and classifier specializations pass
+       the scalar corpus. Prepared membership, aggregation, and transforms
+       improve or retain single-thread latency against ONNX Runtime.
      - PR02
      - Pending
    * - Trees PR04
-     - Parallel traversal strategies.
-     - Row-parallel, tree-parallel, and tree-major batching use bounded
-       workspace and the session executor. Every corpus shape has a safe
-       default with no oversubscription or nondeterministic label result.
+     - ONNX Runtime-compatible scheduling baseline.
+     - Row-parallel, tree-parallel, and 128-row tree-major batching reproduce
+       the reference scheduling structure and its 80-tree/50-row crossovers
+       through one dynamic decision table. Bounded workspace and the session
+       executor introduce no oversubscription or nondeterministic label result.
      - PR03; Runtime Controls PR02
      - Pending
    * - Trees PR05
-     - Tuning schema and structural signatures.
-     - Exact keys, portable buckets, typed validation, immutable configuration,
-       model digests, workspace checks, and cache lifecycle tests cover every
-       strategy and parameter without hot-path registry access.
+     - Dynamic tuning policy and structural signatures.
+     - Exact keys, portable buckets, typed ordered regions, model digests,
+       per-region workspace validation, and cache lifecycle tests cover all
+       row-count crossovers without placing dynamic ``N`` in the profile key
+       or accessing the registry in the hot path.
      - PR03, PR04
      - Pending
    * - Trees PR06
@@ -444,17 +513,20 @@ Remaining pull-request sequence
      - PR05
      - Pending
    * - Trees PR07
-     - Specialized traversal.
-     - Stump, symmetric-tree, interleaved-row, sparse-target, and prefetch
-       candidates land only where measured wins satisfy correctness and memory
-       gates. General trees retain the portable evaluator.
+     - Advanced layouts, traversal, and float16.
+     - Index AoS, SoA, hit-rate layout, stump, symmetric-tree,
+       interleaved-row, sparse-target, prefetch, and optimized float16
+       candidates land only where measured wins satisfy correctness,
+       distribution-shift, and memory gates. General trees retain the
+       ONNX Runtime-style portable evaluator.
      - PR05, PR06
      - Pending
    * - Trees PR08
      - Final parity gate.
-     - Median end-to-end performance is at least ``1.0x`` ONNX Runtime, no
-       priority case is below ``0.9x``, single-row tuned latency does not
-       regress by more than 10%, and preparation/workspace budgets pass.
+     - Float32/float64 median end-to-end performance is at least ``1.0x`` ONNX
+       Runtime, no priority case is below ``0.9x``, single-row tuned latency
+       does not regress by more than 10%, all v5 types pass correctness, and
+       preparation/workspace budgets pass.
      - PR01 through PR07
      - Pending
 
