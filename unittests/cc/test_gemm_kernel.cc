@@ -765,6 +765,36 @@ TEST(GemmHalf, BFloat16VectorizedPackingTails) {
   CheckGemmHalf(true, false, false, 33, 70, 66, true, 251);
 }
 
+// Roadmap PR10.1 correctness gate: run the same mixed corpus for FLOAT16 and
+// BFLOAT16 so native kernels and fallback paths (transpose combinations,
+// non-trivial tails, and empty-K bias handling) are validated together.
+TEST(GemmHalf, HalfCorrectnessGateCorpus) {
+  struct Case {
+    bool trans_a;
+    bool trans_b;
+    std::size_t M;
+    std::size_t N;
+    std::size_t K;
+    bool with_bias;
+    unsigned seed;
+  };
+  const Case cases[] = {
+      {false, false, 20, 37, 41, true, 271}, // general blocked path with tails
+      {true, false, 17, 19, 33, true, 281},  // transposed A with native/fallback B
+      {false, true, 11, 13, 29, false, 291}, // transposed B fallback path
+      {true, true, 9, 15, 23, true, 301},    // both operands transposed
+      {false, false, 3, 9, 5, false, 311},   // short rows with vector/scalar tails
+      {false, false, 6, 8, 0, true, 321},    // empty-K keeps scaled bias only
+  };
+
+  for (const Case &test_case : cases) {
+    CheckGemmHalf(false, test_case.trans_a, test_case.trans_b, test_case.M, test_case.N,
+                  test_case.K, test_case.with_bias, test_case.seed);
+    CheckGemmHalf(true, test_case.trans_a, test_case.trans_b, test_case.M, test_case.N, test_case.K,
+                  test_case.with_bias, test_case.seed + 1000);
+  }
+}
+
 // Roadmap PR08.1: contiguous FP16/BF16 packing runs whose length crosses the
 // eight-lane vectorized conversion width and leaves every possible 1..7 element
 // scalar tail. Non-transposed ``A``/``B`` keep the packing contiguous so the
