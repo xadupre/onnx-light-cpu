@@ -49,6 +49,8 @@ def test_documentation_example(example):
         pytest.skip(f"missing modules: {', '.join(missing)}")
 
     env = dict(os.environ)
+    python_path = env.get("PYTHONPATH")
+    env["PYTHONPATH"] = str(_ROOT) if not python_path else str(_ROOT) + os.pathsep + python_path
     # Use a non-interactive backend so ``plt.show()`` does not block or need a
     # display.
     env["MPLBACKEND"] = "Agg"

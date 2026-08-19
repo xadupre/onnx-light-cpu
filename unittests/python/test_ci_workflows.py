@@ -30,4 +30,5 @@ def test_onnx_light_main_integration_runs_on_every_supported_os():
     assert 'os: ["ubuntu-latest", "windows-latest", "macos-latest"]' in source_job
     assert "git clone --depth 1 --branch main" in source_job
     assert "--cpp-tests --onnx-light-source" in source_job
+    assert "-DCMAKE_DISABLE_FIND_PACKAGE_OpenSSL=ON" in source_job
     assert "0.1.19" not in source_job

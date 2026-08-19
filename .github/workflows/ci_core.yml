@@ -46,35 +46,11 @@ jobs:
         with:
           arch: x64
 
-      # onnx-light ships prebuilt wheels for linux/x86_64/py3.13 only (see the
-      # ``dev`` extra in pyproject.toml), so Linux is the only matrix entry where
-      # the onnx-light integration can be built. Build the extension against the
-      # installed onnx-light runtime and run the full test suite so this job runs
-      # the same C++ and Python tests as the docs and onnx-light-source jobs
-      # (issue #240). macOS and Windows have no onnx-light wheel, so they build
-      # the CPU-only kernels and skip the onnx-light integration tests below.
-      - name: Build and install package (Linux)
-        if: runner.os == 'Linux'
-        env:
-          SCCACHE_GHA_ENABLED: "true"
-          CMAKE_ARGS: "-DONNX_LIGHT_CPU_BUILD_TESTS=ON -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache"
-        run: |
-          # .[dev] installs onnx-light and the test tools; nanobind and
-          # scikit-build-core are build-time requirements of the setup.py
-          # invocation below (it drives CMake directly, without pip's build
-          # isolation).
-          pip install .[dev] nanobind scikit-build-core -v
-          # get_cpp_build_info() reports the directory of the shared libraries
-          # loaded by onnx-light's Python runtime; they must be on
-          # LD_LIBRARY_PATH for the C++ tests (which link them) to start.
-          onnx_light_libdir=$(python -c "from onnx_light import get_cpp_build_info as info; print(info()['library_dir'])")
-          echo "LD_LIBRARY_PATH=${onnx_light_libdir}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
-          # Link the integration to the exact runtime loaded by onnx-light so the
-          # accelerated kernels register into the same global dispatch table.
-          python setup.py build_ext --inplace --onnx-light-source
-
-      - name: Build and install package (macOS)
-        if: runner.os == 'macOS'
+      # This matrix validates the standalone CPU kernels. The separate
+      # setup_onnx_light_source job owns integration with onnx-light/main on
+      # every OS, avoiding a second integration path through a released wheel.
+      - name: Build and install package (Unix)
+        if: runner.os != 'Windows'
         env:
           SCCACHE_GHA_ENABLED: "true"
         run: pip install -C build-dir=build -C cmake.build-type=Release -C cmake.define.ONNX_LIGHT_CPU_BUILD_TESTS=ON -C cmake.define.CMAKE_C_COMPILER_LAUNCHER=sccache -C cmake.define.CMAKE_CXX_COMPILER_LAUNCHER=sccache -e .[dev] -v
@@ -89,27 +65,10 @@ jobs:
       - name: pip freeze
         run: pip freeze
 
-      # The Linux build above compiles the tests (onnx-light integration
-      # included) into build/temp via setup.py; the other platforms use the pip
-      # build-dir (build).
-      - name: Run C++ unit tests (Linux)
-        if: runner.os == 'Linux'
-        run: ctest --test-dir build/temp --output-on-failure -C Release --timeout 240
-
       - name: Run C++ unit tests
-        if: runner.os != 'Linux'
         run: ctest --test-dir build --output-on-failure -C Release --timeout 240
 
-      # On Linux onnx-light is available, so run the full suite (including the
-      # onnx-light-driven test_kernels_e2e.py). PYTHONPATH points pytest at the
-      # in-place build from setup.py above. The other platforms have no
-      # onnx-light and must skip the integration tests.
-      - name: Run Python tests (Linux)
-        if: runner.os == 'Linux'
-        run: PYTHONPATH="$PWD" pytest --durations=10 --cov=onnx_light_cpu --cov-report=xml --cov-report=term-missing unittests
-
       - name: Run Python tests
-        if: runner.os != 'Linux'
         run: pytest --durations=10 --cov=onnx_light_cpu --cov-report=xml --cov-report=term-missing unittests --ignore=unittests/python/test_kernels_e2e.py
 
       - name: Upload coverage to Codecov
@@ -165,12 +124,16 @@ jobs:
       - name: Build and install onnx-light from source
         env:
           SCCACHE_GHA_ENABLED: "true"
-          CMAKE_ARGS: "-DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache"
         shell: bash
         run: |
           pip install nanobind scikit-build-core numpy pytest
           onnx_light_source="${RUNNER_TEMP}/onnx-light"
           git clone --depth 1 --branch main https://github.com/xadupre/onnx-light.git "${onnx_light_source}"
+          CMAKE_ARGS="-DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache"
+          if [[ "${RUNNER_OS}" == "Windows" ]]; then
+            CMAKE_ARGS="${CMAKE_ARGS} -DCMAKE_DISABLE_FIND_PACKAGE_OpenSSL=ON"
+          fi
+          export CMAKE_ARGS
           pip install -C build.verbose=true "${onnx_light_source}" -v
           python - <<'PY'
           import os
