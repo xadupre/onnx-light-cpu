@@ -1293,7 +1293,7 @@ void CheckGemmFloat8(GemmFloat8Format format, bool trans_a, bool trans_b, std::s
                                          b_bytes.data(), epilogue, workspace.data());
 
   for (std::size_t i = 0; i < M * N; ++i) {
-    const double tol = 1e-3 * std::max(1.0, scale[i]);
+    const double tol = std::max(1e-6, 1e-3 * scale[i]);
     EXPECT_NEAR(static_cast<double>(workspace[i]), expected[i], tol) << "i=" << i;
   }
 }
