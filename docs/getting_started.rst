@@ -58,12 +58,3 @@ Quick Start (Python)
    # When onnx-light is installed, register the optimized kernels globally so
    # ReferenceEvaluator uses them for supported ONNX operators.
    register_kernels()
-
-Supported operators
--------------------
-
-Registering the kernels installs SIMD-accelerated implementations of ``Abs``,
-``Exp``, ``Log``, ``Gemm``, ``MatMulInteger``, ``QLinearMatMul`` and ``Not``
-into onnx-light's shared C++ dispatch table. See the :doc:`kernels` page for the
-full, automatically generated list of kernels and element data types provided by
-this repository.
