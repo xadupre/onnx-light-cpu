@@ -27,6 +27,7 @@ constexpr std::size_t kTileRows = 16;
 constexpr std::size_t kTileCols = 16;
 constexpr std::size_t kTileK = 64;
 constexpr int kTileStride = 64;
+constexpr int kInt32TileStride = kTileCols * sizeof(std::uint32_t);
 
 } // namespace
 
@@ -57,17 +58,6 @@ void GemmMatMulIntegerAmxInt8(const std::uint8_t *a, bool a_signed, const std::u
   std::vector<std::uint32_t> a_sum(m, 0);
   std::vector<std::uint32_t> b_sum(n, 0);
 
-  for (std::size_t row = 0; row < m; ++row) {
-    for (std::size_t depth = 0; depth < k; ++depth) {
-      a_sum[row] += static_cast<std::uint8_t>(a[row * k + depth] ^ a_flip);
-    }
-  }
-  for (std::size_t col = 0; col < n; ++col) {
-    for (std::size_t depth = 0; depth < k; ++depth) {
-      b_sum[col] += static_cast<std::uint8_t>(b[depth * n + col] ^ b_flip);
-    }
-  }
-
   alignas(64) std::uint8_t a_tile[kTileRows * kTileK];
   alignas(64) std::uint8_t b_tile[kTileRows * kTileK];
   alignas(64) std::uint32_t c_tile[kTileRows * kTileCols];
@@ -84,16 +74,24 @@ void GemmMatMulIntegerAmxInt8(const std::uint8_t *a, bool a_signed, const std::u
         std::memset(b_tile, 0, sizeof(b_tile));
         for (std::size_t row = 0; row < rows; ++row) {
           for (std::size_t depth = 0; depth < depth_count; ++depth) {
-            a_tile[row * kTileK + depth] =
+            const std::uint8_t value =
                 static_cast<std::uint8_t>(a[(row0 + row) * k + depth0 + depth] ^ a_flip);
+            a_tile[row * kTileK + depth] = value;
+            if (col0 == 0) {
+              a_sum[row0 + row] += value;
+            }
           }
         }
         for (std::size_t depth = 0; depth < depth_count; ++depth) {
           const std::size_t packed_row = depth / 4;
           const std::size_t packed_offset = depth % 4;
           for (std::size_t col = 0; col < cols; ++col) {
-            b_tile[packed_row * kTileK + col * 4 + packed_offset] =
+            const std::uint8_t value =
                 static_cast<std::uint8_t>(b[(depth0 + depth) * n + col0 + col] ^ b_flip);
+            b_tile[packed_row * kTileK + col * 4 + packed_offset] = value;
+            if (row0 == 0) {
+              b_sum[col0 + col] += value;
+            }
           }
         }
         _tile_loadd(ONNX_LIGHT_CPU_AMX_INT8_TILE_A, a_tile, kTileStride);
@@ -101,7 +99,7 @@ void GemmMatMulIntegerAmxInt8(const std::uint8_t *a, bool a_signed, const std::u
         _tile_dpbuud(ONNX_LIGHT_CPU_AMX_INT8_TILE_C, ONNX_LIGHT_CPU_AMX_INT8_TILE_A,
                      ONNX_LIGHT_CPU_AMX_INT8_TILE_B);
       }
-      _tile_stored(ONNX_LIGHT_CPU_AMX_INT8_TILE_C, c_tile, kTileStride);
+      _tile_stored(ONNX_LIGHT_CPU_AMX_INT8_TILE_C, c_tile, kInt32TileStride);
       for (std::size_t row = 0; row < rows; ++row) {
         const std::uint32_t azu = static_cast<std::uint32_t>(
             (a_zero_point_count == 1 ? a_zero_points[0] : a_zero_points[row0 + row]) + a_bias);
