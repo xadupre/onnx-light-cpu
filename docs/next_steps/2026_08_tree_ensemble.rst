@@ -434,11 +434,11 @@ execution performs no registry or cache access. Existing sessions retain
 their captured profile generation when a later calibration updates the
 persistent cache.
 
-Cache writes are atomic and include library version, tuning ABI, processor,
-thread count, model signature, parameters, objective, samples, dispersion,
-and correctness result. Users can inspect the selected profile, force the
-portable default, override validated parameters, or disable calibration
-without disabling the optimized kernel.
+Cache writes are atomic and include the library version, processor, thread
+count, model signature, parameters, objective, samples, dispersion, and
+correctness result. Users can inspect the selected profile, force the portable
+default, override validated parameters, or disable calibration without
+disabling the optimized kernel.
 
 Runtime integration
 -------------------
