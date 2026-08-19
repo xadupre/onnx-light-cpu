@@ -39,6 +39,26 @@
 
 namespace onnx_light_cpu {
 
+namespace detail {
+
+std::int32_t IntegerDot4BitU8S8NeonDotProd(const std::uint8_t *a, const std::int8_t *b,
+                                           std::int64_t depth) {
+  int32x4_t accumulator = vdupq_n_s32(0);
+  std::int64_t index = 0;
+  for (; index + 16 <= depth; index += 16) {
+    const int8x16_t va = vreinterpretq_s8_u8(vld1q_u8(a + index));
+    accumulator = vdotq_s32(accumulator, va, vld1q_s8(b + index));
+  }
+  std::uint32_t sum = static_cast<std::uint32_t>(vaddvq_s32(accumulator));
+  for (; index < depth; ++index) {
+    sum += static_cast<std::uint32_t>(static_cast<std::int32_t>(a[index]) *
+                                      static_cast<std::int32_t>(b[index]));
+  }
+  return std::bit_cast<std::int32_t>(sum);
+}
+
+} // namespace detail
+
 namespace {
 
 // Unsigned byte dot product ``sum_k a[k]*b[k]`` accumulated modulo 2^32. The

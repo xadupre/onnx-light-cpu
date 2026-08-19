@@ -39,6 +39,21 @@ void IntegerMatMul2D(const std::uint8_t *a, bool a_signed, const std::uint8_t *b
                      const std::int32_t *a_zero_point, std::int64_t a_zero_point_count,
                      const std::int32_t *b_zero_point, std::int64_t b_zero_point_count);
 
+// Computes the same matrix product from packed INT4/UINT4 operands. Logical
+// elements use the ONNX row-major packing order: the even-indexed element is in
+// the low nibble and the odd-indexed element is in the high nibble, with no
+// padding between matrix rows. When a matrix has an odd number of elements the
+// unused high nibble of its final byte is ignored. Signed nibbles use two's
+// complement in the range [-8, 7]; unsigned nibbles use [0, 15].
+//
+// Packing expands directly into the UINT8 x INT8 panels consumed by the scalar,
+// AVX-512 VNNI, or ARM NEON dot-product implementation. It never materializes
+// separate unpacked source matrices.
+void IntegerMatMul4Bit2D(const std::uint8_t *a, bool a_signed, const std::uint8_t *b, bool b_signed,
+                         std::int32_t *c, std::int64_t rows, std::int64_t cols, std::int64_t depth,
+                         const std::int32_t *a_zero_point, std::int64_t a_zero_point_count,
+                         const std::int32_t *b_zero_point, std::int64_t b_zero_point_count);
+
 // Returns whether ``IntegerMatMul2D`` dispatches to the native AVX-512 VNNI
 // path on this CPU. ``false`` when the ISA is unavailable at runtime or the
 // library was built without VNNI support. Exposed for differential tests.
@@ -72,6 +87,13 @@ void IntegerMatMul2DWithDot(IntegerVnniDotFn dot, const std::uint8_t *a, bool a_
                             std::int64_t rows, std::int64_t cols, std::int64_t depth,
                             const std::int32_t *a_zero_point, std::int64_t a_zero_point_count,
                             const std::int32_t *b_zero_point, std::int64_t b_zero_point_count);
+
+// Scalar/native-testable implementation behind ``IntegerMatMul4Bit2D``.
+void IntegerMatMul4Bit2DWithDot(IntegerVnniDotFn dot, const std::uint8_t *a, bool a_signed,
+                                const std::uint8_t *b, bool b_signed, std::int32_t *c,
+                                std::int64_t rows, std::int64_t cols, std::int64_t depth,
+                                const std::int32_t *a_zero_point, std::int64_t a_zero_point_count,
+                                const std::int32_t *b_zero_point, std::int64_t b_zero_point_count);
 
 } // namespace detail
 

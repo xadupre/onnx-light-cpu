@@ -1253,7 +1253,16 @@ fallbacks are ordered. Completed rows remain visible so scope is not lost.
      - Nibbles unpack into typed panels or a native dot-product path with exact
        odd-length tails and differential tests. Float8 is unchanged.
      - PR09.1
-     - Pending
+     - Implemented. ``IntegerMatMul4Bit2D`` consumes ONNX low-nibble-first
+       row-major packed operands without materializing unpacked source
+       matrices. INT4 two's-complement and UINT4 values are expanded directly
+       into the shared UINT8 x INT8 panels with zero-point corrections and
+       modulo-2^32 INT32 accumulation. The panels dispatch through AVX-512 VNNI
+       or ARM NEON dot product when available and otherwise use the exact scalar
+       sibling; AMX remains an INT8-only path. Differential tests cover all four
+       operand signedness combinations, scalar and per-axis zero points,
+       aligned and odd logical dimensions (including rows that cross nibble
+       boundaries), and ignored final high nibbles. Float8 is unchanged.
    * - Roadmap PR10.1
      - FP16/BF16 correctness gate.
      - The complete FP16/BF16 corpus passes on x86, ARM, and every fallback.
