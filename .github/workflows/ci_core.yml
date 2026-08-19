@@ -46,13 +46,10 @@ jobs:
         with:
           arch: x64
 
-      # onnx-light ships prebuilt wheels for linux/x86_64/py3.13 only (see the
-      # ``dev`` extra in pyproject.toml), so Linux is the only matrix entry where
-      # the onnx-light integration can be built. Build the extension against the
-      # installed onnx-light runtime and run the full test suite so this job runs
-      # the same C++ and Python tests as the docs and onnx-light-source jobs
-      # (issue #240). macOS and Windows have no onnx-light wheel, so they build
-      # the CPU-only kernels and skip the onnx-light integration tests below.
+      # The dev extra installs the platform-specific onnx-light wheel on every
+      # matrix entry. Linux additionally builds the extension against that
+      # runtime and runs the full integration suite; macOS and Windows retain
+      # their CPU-only extension build.
       - name: Build and install package (Linux)
         if: runner.os == 'Linux'
         env:
@@ -100,10 +97,9 @@ jobs:
         if: runner.os != 'Linux'
         run: ctest --test-dir build --output-on-failure -C Release --timeout 240
 
-      # On Linux onnx-light is available, so run the full suite (including the
-      # onnx-light-driven test_kernels_e2e.py). PYTHONPATH points pytest at the
-      # in-place build from setup.py above. The other platforms have no
-      # onnx-light and must skip the integration tests.
+      # Linux runs the full onnx-light integration suite. macOS and Windows
+      # have the runtime wheel for model-construction tests, but their CPU-only
+      # extension build still skips test_kernels_e2e.py.
       - name: Run Python tests (Linux)
         if: runner.os == 'Linux'
         run: PYTHONPATH="$PWD" pytest --durations=10 --cov=onnx_light_cpu --cov-report=xml --cov-report=term-missing unittests
