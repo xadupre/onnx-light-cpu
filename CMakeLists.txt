@@ -960,6 +960,20 @@ if(ONNX_LIGHT_CPU_BUILD_TESTS)
     add_executable(${_name} "${_src}")
     target_link_libraries(${_name} PRIVATE ${_link_lib} GTest::gtest_main)
     target_include_directories(${_name} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+    if(_name STREQUAL "test_integer_gemm_vnni")
+      # This differential binary names and calls the optional native integer
+      # kernels directly. The library keeps availability definitions private,
+      # so mirror only the definitions whose translation units were built.
+      if(ONNX_LIGHT_CPU_HAVE_AVX512VNNI_FLAG)
+        target_compile_definitions(${_name} PRIVATE ONNX_LIGHT_CPU_HAVE_AVX512VNNI=1)
+      endif()
+      if(ONNX_LIGHT_CPU_HAVE_AMX_INT8_FLAG)
+        target_compile_definitions(${_name} PRIVATE ONNX_LIGHT_CPU_HAVE_AMX_INT8=1)
+      endif()
+      if(ONNX_LIGHT_CPU_HAVE_NEON_DOTPROD_INTRINSICS)
+        target_compile_definitions(${_name} PRIVATE ONNX_LIGHT_CPU_HAVE_NEON_DOTPROD=1)
+      endif()
+    endif()
     if("lib_onnx_light_cpu_kernels" IN_LIST _link_lib AND
        ONNX_LIGHT_CPU_ONNX_LIGHT_PY_LIBDIR)
       set_target_properties(${_name} PROPERTIES

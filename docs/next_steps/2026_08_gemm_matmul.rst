@@ -1278,7 +1278,17 @@ fallbacks are ordered. Completed rows remain visible so scope is not lost.
      - The complete integer, Float8, and packed-4-bit corpus passes on every
        available ISA and fallback. This PR contains tests and fixes only.
      - PR09.1 through PR09.6
-     - Pending
+     - Implemented. ``GemmFloat8.Float8CorrectnessGateCorpus`` runs every Float8
+       format through the same transpose, tail, general, direct, skinny-M,
+       skinny-N, split-K, and empty-K cases on each CI architecture. The
+       integer differential target now compiles the native-path checks that
+       match the kernels present in the library and compares byte GEMM through
+       the dispatcher, scalar, AVX-512 VNNI, ARM NEON dot-product, and AMX-INT8
+       paths when available. Its packed INT4/UINT4 corpus checks the dispatcher,
+       scalar, VNNI, and NEON paths across every signedness pairing, zero-point
+       layout, nibble boundary, vector tail, empty-K, and modulo-INT32 case.
+       Native ARM and emulated ARM CI build and run this target explicitly.
+       This gate adds no performance tuning.
    * - Roadmap PR10.3
      - FP16/BF16 performance gate.
      - Dedicated-machine x86 and ARM results reach at least 1.0x ONNX Runtime

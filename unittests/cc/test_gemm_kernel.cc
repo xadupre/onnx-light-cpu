@@ -1428,35 +1428,31 @@ TEST(GemmFloat8, RejectsUnknownFormat) {
                std::invalid_argument);
 }
 
-// Roadmap PR09.5: the Float8 GEMM path matches the reference computed on the
-// decoded float32 values for every supported format, with a wide N that leaves
-// the vectorized packing gather a scalar tail and a K spanning several blocking
-// chunks.
-TEST(GemmFloat8, GeneralMatchesDecodedReference) {
+// Roadmap PR10.2 correctness gate: every Float8 format runs the same transpose,
+// tail, and algorithm corpus on each CI architecture. This exercises scalar and
+// native packing/GEMM paths without allowing one format to cover gaps for the
+// other three.
+TEST(GemmFloat8, Float8CorrectnessGateCorpus) {
+  const std::array<GemmFloat8Format, 4> formats = {
+      GemmFloat8Format::kE4M3FN, GemmFloat8Format::kE4M3FNUZ, GemmFloat8Format::kE5M2,
+      GemmFloat8Format::kE5M2FNUZ};
   CheckGemmFloat8(GemmFloat8Format::kE4M3FN, false, false, 17, 37, 45, 1.0f, 5001);
   CheckGemmFloat8(GemmFloat8Format::kE4M3FNUZ, false, false, 19, 33, 40, 0.75f, 5011);
   CheckGemmFloat8(GemmFloat8Format::kE5M2, false, false, 20, 48, 40, 1.0f, 5021);
   CheckGemmFloat8(GemmFloat8Format::kE5M2FNUZ, false, false, 33, 70, 66, 0.5f, 5031);
-}
 
-// Roadmap PR09.5: the transposed variants exercise the per-element decode used
-// by the strided (``trans_a`` / ``trans_b``) gathers instead of the contiguous
-// table gather, and must match the same reference.
-TEST(GemmFloat8, TransposeVariantsMatchDecodedReference) {
-  for (bool trans_a : {false, true}) {
-    for (bool trans_b : {false, true}) {
-      CheckGemmFloat8(GemmFloat8Format::kE4M3FN, trans_a, trans_b, 6, 5, 7, 1.0f, 5101);
+  unsigned seed = 5001;
+  for (GemmFloat8Format format : formats) {
+    CheckGemmFloat8(format, false, false, 17, 37, 45, 0.75f, seed++); // general, N/K tails
+    for (bool trans_a : {false, true}) {
+      for (bool trans_b : {false, true}) {
+        CheckGemmFloat8(format, trans_a, trans_b, 6, 5, 7, 1.0f, seed++);
+      }
     }
+    CheckGemmFloat8(format, false, false, 12, 1, 40, 1.0f, seed++);  // skinny-N
+    CheckGemmFloat8(format, false, false, 1, 12, 40, 0.75f, seed++); // skinny-M
+    CheckGemmFloat8(format, false, false, 2, 2, 512, 1.0f, seed++);  // split-K
+    CheckGemmFloat8(format, false, false, 3, 3, 4, 1.0f, seed++);    // direct
+    CheckGemmFloat8(format, false, false, 5, 7, 0, 1.0f, seed++);    // empty K
   }
-}
-
-// Roadmap PR09.5: the driver selects the skinny-N (``N == 1`` GEMV), skinny-M
-// (``M == 1``), and split-K (small M/N, wide K) algorithms for these shapes;
-// each must decode the Float8 operands and match the reference.
-TEST(GemmFloat8, AlgorithmVariantsMatchDecodedReference) {
-  CheckGemmFloat8(GemmFloat8Format::kE4M3FN, false, false, 12, 1, 40, 1.0f, 5201);   // skinny-N
-  CheckGemmFloat8(GemmFloat8Format::kE5M2, false, false, 1, 12, 40, 0.75f, 5211);    // skinny-M
-  CheckGemmFloat8(GemmFloat8Format::kE4M3FNUZ, false, false, 2, 2, 512, 1.0f, 5221); // split-K
-  CheckGemmFloat8(GemmFloat8Format::kE5M2FNUZ, false, false, 3, 3, 4, 1.0f, 5231); // direct small K
-  CheckGemmFloat8(GemmFloat8Format::kE4M3FN, false, false, 5, 7, 0, 1.0f, 5241);   // empty K
 }
