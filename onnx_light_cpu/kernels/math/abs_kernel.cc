@@ -5,7 +5,6 @@
 #include "onnx_light_cpu/kernels/math/abs_kernel.h"
 
 #include "onnx_light_cpu/impl/math/math_kernels.h"
-#include "onnx_light_cpu/kernels/kernel_registry.h"
 #include "onnx_light_cpu/kernels/kernel_usage.h"
 
 #include "onnx_core/runtime/kernels/cast_helper.h"
@@ -137,7 +136,5 @@ void RegisterAbsKernel() {
   // built-in Abs entry with the SIMD-accelerated kernel for the CPU device.
   rt_ns::RegisterKernelFn("", "Abs", sym_ns::Device::kCPU, std::move(factory));
 }
-
-ONNX_LIGHT_CPU_REGISTER_KERNEL("Abs", AbsKernel::kName, RegisterAbsKernel)
 
 } // namespace onnx_light_cpu

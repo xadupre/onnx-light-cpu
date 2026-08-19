@@ -5,7 +5,6 @@
 #include "onnx_light_cpu/kernels/logical/not_kernel.h"
 
 #include "onnx_light_cpu/impl/logical/logical_kernels.h"
-#include "onnx_light_cpu/kernels/kernel_registry.h"
 #include "onnx_light_cpu/kernels/kernel_usage.h"
 
 #include "onnx_core/runtime/kernels/kernel_dispatch_table.h"
@@ -82,7 +81,5 @@ void RegisterNotKernel() {
   // built-in Not entry with the SIMD-accelerated kernel for the CPU device.
   rt_ns::RegisterKernelFn("", "Not", sym_ns::Device::kCPU, std::move(factory));
 }
-
-ONNX_LIGHT_CPU_REGISTER_KERNEL("Not", NotKernel::kName, RegisterNotKernel)
 
 } // namespace onnx_light_cpu

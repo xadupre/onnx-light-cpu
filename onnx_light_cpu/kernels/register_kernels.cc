@@ -4,17 +4,21 @@
 
 #include "onnx_light_cpu/kernels/register_kernels.h"
 
-#include "onnx_light_cpu/kernels/kernel_registry.h"
+#include "onnx_light_cpu/kernels/logical/not_kernel.h"
+#include "onnx_light_cpu/kernels/math/abs_kernel.h"
+#include "onnx_light_cpu/kernels/math/exp_log_kernel.h"
+#include "onnx_light_cpu/kernels/math/gemm_kernel.h"
+#include "onnx_light_cpu/kernels/math/integer_matmul_kernel.h"
 
 namespace onnx_light_cpu {
 
 void RegisterAllKernels() {
-  // Every kernel self-registers its installer through
-  // ONNX_LIGHT_CPU_REGISTER_KERNEL, so this simply drives the registry instead
-  // of maintaining a hand-written list of RegisterXKernel() calls.
-  for (const KernelRegistration &registration : KernelRegistrations()) {
-    registration.install();
-  }
+  RegisterAbsKernel();
+  RegisterExpKernel();
+  RegisterLogKernel();
+  RegisterGemmKernel();
+  RegisterIntegerMatMulKernels();
+  RegisterNotKernel();
 }
 
 } // namespace onnx_light_cpu
