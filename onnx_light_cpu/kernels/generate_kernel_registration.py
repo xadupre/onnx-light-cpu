@@ -48,11 +48,23 @@ _MAKE_UNIQUE_RE = re.compile(r"make_unique<\s*([A-Za-z_]\w*)\s*>")
 # ``RegisterKernelFn("domain", "OpType", ...)`` call: captures the op_type.
 _REGISTER_FN_RE = re.compile(r"RegisterKernelFn\(\s*\"[^\"]*\"\s*,\s*\"([^\"]+)\"")
 
-# ``class KernelClass : ...`` declaration in a header.
-_CLASS_RE = re.compile(r"\bclass\s+([A-Za-z_]\w*)\b")
+# ``class KernelClass : ...`` / ``class KernelClass final {`` definition in a
+# header. Requires the class name to be followed by class-definition syntax
+# (``:`` base list, ``{`` body, or ``final``) so the word "class" appearing in
+# prose/comments is not mistaken for a declaration.
+_CLASS_RE = re.compile(r"\bclass\s+([A-Za-z_]\w*)\b\s*(?=[:{]|\bfinal\b)")
 
 # ``static constexpr const char *kName = "...";`` inside a kernel class.
 _KNAME_RE = re.compile(r"\bkName\s*=\s*\"([^\"]+)\"")
+
+# Comment stripping so keywords used in prose (e.g. ``// this class Foo ...``)
+# never feed the class/kName regexes above.
+_LINE_COMMENT_RE = re.compile(r"//[^\n]*")
+_BLOCK_COMMENT_RE = re.compile(r"/\*.*?\*/", re.DOTALL)
+
+
+def _strip_comments(line: str) -> str:
+    return _LINE_COMMENT_RE.sub("", _BLOCK_COMMENT_RE.sub("", line))
 
 
 class GeneratorError(RuntimeError):
@@ -84,10 +96,11 @@ def collect_class_names(headers: list[pathlib.Path]) -> dict[str, str]:
         text = header.read_text(encoding="utf-8")
         current_class: str | None = None
         for line in text.splitlines():
-            class_match = _CLASS_RE.search(line)
+            code = _strip_comments(line)
+            class_match = _CLASS_RE.search(code)
             if class_match:
                 current_class = class_match.group(1)
-            name_match = _KNAME_RE.search(line)
+            name_match = _KNAME_RE.search(code)
             if name_match:
                 if current_class is None:
                     raise GeneratorError(f"{header}: found a kName without an enclosing class")
@@ -117,7 +130,7 @@ def collect_installers(
     for source in sources:
         text = source.read_text(encoding="utf-8")
         for def_match in _INSTALLER_DEF_RE.finditer(text):
-            body = _split_top_level_body(text, def_match.end() - 1)
+            body = _strip_comments(_split_top_level_body(text, def_match.end() - 1))
             ops: list[tuple[str, str]] = []
             pending_class: str | None = None
             # Walk tokens in order so each RegisterKernelFn is paired with the
