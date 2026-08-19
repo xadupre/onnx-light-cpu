@@ -80,7 +80,7 @@ endif()
 
 include(GNUInstallDirs)
 
-# Threads: required by the header-only ParallelFor helper (std::thread).
+# Thread topology detection uses std::thread::hardware_concurrency().
 set(CMAKE_THREAD_PREFER_PTHREAD TRUE)
 set(THREADS_PREFER_PTHREAD_FLAG TRUE)
 find_package(Threads REQUIRED)
@@ -195,18 +195,6 @@ if(ONNX_LIGHT_CPU_HAVE_NEON_INTRINSICS AND NOT MSVC)
   set(CMAKE_REQUIRED_FLAGS "${_saved_required_flags}")
 else()
   set(ONNX_LIGHT_CPU_HAVE_NEON_DOTPROD_INTRINSICS FALSE)
-endif()
-
-# By default the runtime uses one logical processor per detected physical core;
-# the per-kernel cost model may use fewer participants. A build-time ceiling is
-# still available for constrained targets, but zero must not impose an
-# arbitrary machine-independent cap.
-set(ONNX_LIGHT_CPU_MAX_THREADS "0" CACHE STRING
-    "Maximum shared-pool thread count; 0 uses the detected hardware limit.")
-if(NOT ONNX_LIGHT_CPU_MAX_THREADS MATCHES "^(0|[1-9][0-9]*)$")
-  message(FATAL_ERROR
-      "ONNX_LIGHT_CPU_MAX_THREADS must be a non-negative integer, got "
-      "'${ONNX_LIGHT_CPU_MAX_THREADS}'.")
 endif()
 
 # The dedicated AVX-512 translation units are compiled with feature-specific
@@ -390,11 +378,9 @@ target_include_directories(lib_onnx_light_cpu PUBLIC
 )
 set_property(TARGET lib_onnx_light_cpu PROPERTY POSITION_INDEPENDENT_CODE ON)
 target_compile_features(lib_onnx_light_cpu PUBLIC cxx_std_20)
-target_compile_definitions(lib_onnx_light_cpu PUBLIC
-    ONNX_LIGHT_CPU_MAX_THREADS=${ONNX_LIGHT_CPU_MAX_THREADS})
 
-# The kernels dispatch large ranges through the ParallelFor helper, which uses
-# std::thread; link the platform threading library.
+# Thread topology detection and public affinity helpers use the platform
+# threading library, but kernel scheduling is owned by onnx-light.
 target_link_libraries(lib_onnx_light_cpu PUBLIC Threads::Threads)
 
 # Apply SIMD flags to the kernel library.
@@ -857,7 +843,7 @@ if(ONNX_LIGHT_CPU_INSTALL)
       DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/onnx_light_cpu/impl")
 
   install(FILES
-      "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/parallel_for.h"
+      "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/execution.h"
       "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/thread_topology.h"
       DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/onnx_light_cpu/impl")
 

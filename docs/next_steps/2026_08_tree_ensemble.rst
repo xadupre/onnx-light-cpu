@@ -445,8 +445,8 @@ Runtime integration
 
 Registered kernels use the session-owned executor and effective thread count
 from the :doc:`Runtime Execution Controls Roadmap
-<2026_08_runtime_execution_controls>`. Standalone C++ entry points may use the
-onnx-light-cpu pool, but pools are never nested.
+<2026_08_runtime_execution_controls>`. Standalone C++ entry points are serial,
+so they cannot introduce a competing pool.
 
 The runtime API must support a plan-selected participant cap and preallocated
 per-participant workspace. Hybrid processors require topology-aware worker

@@ -234,8 +234,8 @@ core algorithm without conversion overhead.
    currently use the conservative defaults.
 5. Build the immutable execution plan once and benchmark each algorithm both
    single-threaded and multi-threaded. The benchmark corpus includes a
-   shape-forced case for every algorithm and supports process-level thread
-   selection through ``ONNX_LIGHT_CPU_NUM_THREADS``.
+   shape-forced case for every algorithm and selects participants through the
+   ``onnx-light`` session execution policy.
 
 Phase 2: saturate the floating-point units
 ------------------------------------------

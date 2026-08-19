@@ -60,10 +60,8 @@ void ComputeUnary(const Tensor &x, Tensor &output, const char *kernel_name, Floa
   case DataType::FLOAT: {
     const float *px = x.AsFloat();
     float *py = output.AsFloat();
-    // ``f32`` (``ExpFloat32``/``LogFloat32``) already parallelizes internally
-    // via onnx-light-cpu's own thread pool; wrapping it in another
-    // ``rt_ns::ParallelFor`` here would nest two independent thread pools and
-    // oversubscribe the CPU instead of speeding things up.
+    // The session adapter lets the SIMD implementation split this range
+    // through the runtime executor without another scheduler.
     f32(px, py, static_cast<std::size_t>(n));
     return;
   }

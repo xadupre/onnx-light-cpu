@@ -4,7 +4,7 @@
 
 #include "onnx_light_cpu/impl/math/math_kernels.h"
 
-#include "onnx_light_cpu/impl/parallel_for.h"
+#include "onnx_light_cpu/impl/execution.h"
 
 #include <cmath>
 #include <cstdint>
@@ -25,14 +25,14 @@
 
 namespace onnx_light_cpu {
 
-// Relative per-element cost passed to ParallelFor for the Abs kernels. The SIMD
+// Relative per-element cost passed to ExecuteRanges for the Abs kernels. The SIMD
 // loop clears many sign bits per instruction and is memory-bandwidth bound, so
-// waking workers at the generic 32768-element grain is substantially slower
-// than staying inline. One half of a work unit keeps small arrays serial
-// while allowing million-element tensors to use the persistent pool.
+// dispatching workers at the generic 32768-element grain is substantially
+// slower than staying inline. One half of a work unit keeps small arrays serial
+// while allowing million-element session tensors to use the runtime executor.
 inline constexpr double kAbsCostPerElement = 1.0 / 2.0;
 inline constexpr std::size_t kAbsParallelThreshold =
-    static_cast<std::size_t>(kParallelForGrainSize) * 2;
+    static_cast<std::size_t>(kExecutionGrainSize) * 2;
 
 // ---------------------------------------------------------------------------
 // AbsFloat32 implementations
@@ -112,15 +112,15 @@ void AbsFloat32(const float *input, float *output, std::size_t count) {
   if (count == 0)
     return;
   if (count < kAbsParallelThreshold) {
-    // ParallelFor would keep this range inline; avoid its cost-model overhead.
+    // ExecuteRanges would keep this range inline; avoid its cost-model overhead.
     AbsFloat32_Dispatch(input, output, count);
     return;
   }
-  ParallelFor(static_cast<std::int64_t>(count), kAbsCostPerElement, ParallelForSimdLanes<float>(),
-              [input, output](std::int64_t begin, std::int64_t end) {
-                AbsFloat32_Dispatch(input + begin, output + begin,
-                                    static_cast<std::size_t>(end - begin));
-              });
+  ExecuteRanges(static_cast<std::int64_t>(count), kAbsCostPerElement, ExecutionSimdLanes<float>(),
+                [input, output](std::int64_t begin, std::int64_t end) {
+                  AbsFloat32_Dispatch(input + begin, output + begin,
+                                      static_cast<std::size_t>(end - begin));
+                });
 }
 
 // ---------------------------------------------------------------------------
@@ -215,11 +215,11 @@ void AbsFloat64_Dispatch(const double *input, double *output, std::size_t count)
 void AbsFloat64(const double *input, double *output, std::size_t count) {
   if (count == 0)
     return;
-  ParallelFor(static_cast<std::int64_t>(count), kAbsCostPerElement, ParallelForSimdLanes<double>(),
-              [input, output](std::int64_t begin, std::int64_t end) {
-                AbsFloat64_Dispatch(input + begin, output + begin,
-                                    static_cast<std::size_t>(end - begin));
-              });
+  ExecuteRanges(static_cast<std::int64_t>(count), kAbsCostPerElement, ExecutionSimdLanes<double>(),
+                [input, output](std::int64_t begin, std::int64_t end) {
+                  AbsFloat64_Dispatch(input + begin, output + begin,
+                                      static_cast<std::size_t>(end - begin));
+                });
 }
 
 // ---------------------------------------------------------------------------
@@ -320,8 +320,8 @@ void AbsFloat16_Dispatch(const uint16_t *input, uint16_t *output, std::size_t co
 void AbsFloat16(const uint16_t *input, uint16_t *output, std::size_t count) {
   if (count == 0)
     return;
-  ParallelFor(
-      static_cast<std::int64_t>(count), kAbsCostPerElement, ParallelForSimdLanes<std::uint16_t>(),
+  ExecuteRanges(
+      static_cast<std::int64_t>(count), kAbsCostPerElement, ExecutionSimdLanes<std::uint16_t>(),
       [input, output](std::int64_t begin, std::int64_t end) {
         AbsFloat16_Dispatch(input + begin, output + begin, static_cast<std::size_t>(end - begin));
       });
@@ -423,8 +423,8 @@ void AbsInt8_Dispatch(const int8_t *input, int8_t *output, std::size_t count) {
 void AbsInt8(const int8_t *input, int8_t *output, std::size_t count) {
   if (count == 0)
     return;
-  ParallelFor(
-      static_cast<std::int64_t>(count), kAbsCostPerElement, ParallelForSimdLanes<std::int8_t>(),
+  ExecuteRanges(
+      static_cast<std::int64_t>(count), kAbsCostPerElement, ExecutionSimdLanes<std::int8_t>(),
       [input, output](std::int64_t begin, std::int64_t end) {
         AbsInt8_Dispatch(input + begin, output + begin, static_cast<std::size_t>(end - begin));
       });
@@ -520,8 +520,8 @@ void AbsInt32_Dispatch(const int32_t *input, int32_t *output, std::size_t count)
 void AbsInt32(const int32_t *input, int32_t *output, std::size_t count) {
   if (count == 0)
     return;
-  ParallelFor(
-      static_cast<std::int64_t>(count), kAbsCostPerElement, ParallelForSimdLanes<std::int32_t>(),
+  ExecuteRanges(
+      static_cast<std::int64_t>(count), kAbsCostPerElement, ExecutionSimdLanes<std::int32_t>(),
       [input, output](std::int64_t begin, std::int64_t end) {
         AbsInt32_Dispatch(input + begin, output + begin, static_cast<std::size_t>(end - begin));
       });
@@ -624,8 +624,8 @@ void AbsInt64_Dispatch(const int64_t *input, int64_t *output, std::size_t count)
 void AbsInt64(const int64_t *input, int64_t *output, std::size_t count) {
   if (count == 0)
     return;
-  ParallelFor(
-      static_cast<std::int64_t>(count), kAbsCostPerElement, ParallelForSimdLanes<std::int64_t>(),
+  ExecuteRanges(
+      static_cast<std::int64_t>(count), kAbsCostPerElement, ExecutionSimdLanes<std::int64_t>(),
       [input, output](std::int64_t begin, std::int64_t end) {
         AbsInt64_Dispatch(input + begin, output + begin, static_cast<std::size_t>(end - begin));
       });

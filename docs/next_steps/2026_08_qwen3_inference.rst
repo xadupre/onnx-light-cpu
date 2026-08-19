@@ -357,7 +357,7 @@ Phase Q5: scheduling and fusion
 Execute Runtime PR01, PR02, and PR04 from the
 :doc:`Runtime Execution Controls roadmap
 <2026_08_runtime_execution_controls>` before final tuning. Registered Qwen
-kernels must share the session executor and must not nest a private pool.
+kernels share the session executor; standalone entry points are serial.
 
 Tune distinct policies for:
 

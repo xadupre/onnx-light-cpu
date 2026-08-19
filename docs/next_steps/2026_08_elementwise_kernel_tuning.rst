@@ -42,21 +42,11 @@ defaults, validation, and calibration owned by ``library="onnx_light_cpu"``.
 Required execution contract
 ---------------------------
 
-The shared pool, affinity, and spin API is tracked by the
+The session executor, affinity, and spin API is tracked by the
 :doc:`Runtime Execution Controls Roadmap <2026_08_runtime_execution_controls>`.
-Its session-owned executor work must land before the tuning profiles below can
-truthfully describe registered-kernel execution.
-
-The first integration must make the tuning execution descriptor truthful.
-Today onnx-light resolves profiles with the session's effective thread count,
-while the accelerated kernels call a separate onnx-light-cpu pool capped by
-``ONNX_LIGHT_CPU_MAX_THREADS``. A profile calibrated under one count could
-therefore execute with another count.
-
-The registered adapters should execute serial SIMD range functions through the
-session-owned onnx-light pool. Standalone C++ entry points may retain the
-onnx-light-cpu pool for callers outside a runtime session. The two pools must
-never be nested.
+Registered adapters execute SIMD ranges through the session-owned executor, so
+the tuning descriptor and actual participant count are identical. Standalone
+C++ entry points are serial and own no competing scheduler.
 
 The session parallel API must support a kernel-selected maximum participant
 count. This is necessary for memory-bound ``Abs`` and ``Not``: their best worker
@@ -149,8 +139,7 @@ Remaining pull-request sequence
      - onnx-light exposes the session pool and effective thread count to
        kernels, supports a maximum participant count, and proves that
        ``RuntimeParameters::num_threads`` controls the workers actually used.
-       onnx-light-cpu adapters execute serial SIMD ranges without nesting their
-       private pool.
+       onnx-light-cpu adapters execute SIMD ranges without another scheduler.
      - None
      - Pending
    * - Tuning PR02

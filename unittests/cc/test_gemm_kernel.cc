@@ -1054,9 +1054,8 @@ TEST(GemmHalf, BFloat16AlgorithmVariantsMatchReference) {
 
 namespace {
 
-// Runs ``fn`` once (warm-up, so the shared thread pool's one-time allocations do
-// not skew the measurement), then again while recording heap allocations, and
-// returns the largest single allocation observed during the recorded run.
+// Runs ``fn`` once to warm up one-time allocations, then again while recording
+// heap allocations, and returns the largest single allocation observed.
 template <typename Fn> std::size_t PeakAllocationBytes(Fn fn) {
   fn();
   g_alloc_peak.store(0, std::memory_order_relaxed);

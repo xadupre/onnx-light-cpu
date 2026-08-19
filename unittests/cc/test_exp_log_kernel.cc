@@ -272,9 +272,9 @@ TEST(LogFloat16, MatchesReference) {
 }
 
 TEST(ExpLogParallel, LargeArrayMatchesStd) {
-  // Large enough to cross the ParallelFor cost threshold for the compute-bound
-  // Exp/Log kernels and split across blocks; results must match std within the
-  // same tolerance used by the single-block tests.
+  // Large enough to cross the session dispatch threshold for the compute-bound
+  // Exp/Log kernels; results must match std within the same tolerance used by
+  // the smaller tests.
   const std::size_t size = 200000;
   std::vector<float> in(size);
   std::vector<float> out(size, -1.0f);

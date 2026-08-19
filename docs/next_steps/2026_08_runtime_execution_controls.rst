@@ -30,27 +30,14 @@ This roadmap supplies the execution infrastructure required by
 land before that roadmap's tuning schemas and calibration callbacks depend on
 session-owned parallel execution.
 
-Current limitations
--------------------
+Resolved ownership
+------------------
 
-``onnx-light-cpu`` currently creates a process-wide pool on first parallel use.
-Its participant count and spin budget are read once from
-``ONNX_LIGHT_CPU_NUM_THREADS`` and ``ONNX_LIGHT_CPU_SPIN_COUNT``. Worker
-affinities are selected automatically from detected topology. A build-time
-``ONNX_LIGHT_CPU_MAX_THREADS`` ceiling can further constrain the result.
-
-These controls are useful for standalone C++, but they have important limits:
-
-* environment variables are strings, process-wide, and order-dependent;
-* changing them after first use has no effect;
-* callers cannot inspect the complete resolved affinity assignment;
-* one process cannot create sessions with different policies;
-* build-time and runtime limits can disagree with tuning profiles;
-* a registered kernel can use the private CPU pool while ``onnx-light`` reports
-  its session thread count, making the execution descriptor untruthful;
-* ``onnx-light`` exposes ``RuntimeParameters::num_threads`` but not spin,
-  affinity, idle policy, or kernel participant limits;
-* two persistent pools can coexist and interfere or nest.
+``onnx-light-cpu`` no longer owns a process-wide pool. Registered kernels
+receive the exact ``CpuExecutor`` leased by their ``onnx-light`` session, and
+standalone entry points execute synchronously on the calling thread. The CPU
+library therefore has no independent thread count, spin budget, affinity
+assignment, or scheduler lifecycle that can disagree with runtime diagnostics.
 
 Public policy model in onnx-light
 ---------------------------------
@@ -151,26 +138,13 @@ waits, and worker-active time without adding overhead when disabled. These
 counters are essential to distinguish arithmetic cost from scheduler wakeup
 latency.
 
-Environment compatibility
--------------------------
+Standalone compatibility
+------------------------
 
-Keep ``ONNX_LIGHT_CPU_NUM_THREADS`` and ``ONNX_LIGHT_CPU_SPIN_COUNT`` for
-standalone applications, with the following precedence:
-
-#. explicit typed API;
-#. session policy supplied by ``onnx-light``;
-#. validated environment variables;
-#. topology-derived defaults.
-
-Environment variables must be parsed once into a documented standalone policy,
-not read independently by unrelated helpers. Invalid values produce a
-diagnostic and use the default. Deprecate behavioral dependence on a fixed
-build-time thread ceiling; retain only a documented safety ceiling if one is
-required for static storage or platform support.
-
-The ``onnx-light`` API should not inherit ``ONNX_LIGHT_CPU_*`` implicitly.
-Cross-library environment coupling would make a session's behavior depend on
-whether accelerated kernels happened to be loaded.
+The former ``ONNX_LIGHT_CPU_NUM_THREADS``, ``ONNX_LIGHT_CPU_SPIN_COUNT``, and
+``ONNX_LIGHT_CPU_MAX_THREADS`` controls are removed with the private scheduler.
+Standalone callers that need parallelism partition their inputs with their own
+executor; registered kernels use the typed ``onnx-light`` session policy.
 
 Python and C++ APIs
 -------------------
@@ -262,18 +236,17 @@ Pull-request sequence
      - Completed
    * - Runtime PR04
      - ``onnx-light-cpu``: executor adapter.
-     - Registered kernels use the session executor and never create or wake the
-       private CPU pool; standalone entry points retain equivalent defaults.
+     - Registered kernels use the session executor; standalone entry points
+       remain serial.
      - PR02
      - Completed (`Pool PR05
        <https://github.com/xadupre/onnx-light-cpu/pull/270>`_)
    * - Runtime PR05
      - ``onnx-light-cpu``: standalone policy and environment compatibility.
-     - Existing environment variables map to one inspectable policy, precedence
-       is tested, affinity failures are explicit, and the build ceiling is
-       removed or reduced to a safety-only role.
+     - Superseded by Runtime PR08: standalone execution is serial and the
+       private scheduler controls are removed.
      - PR01
-     - Pending
+     - Superseded
    * - Runtime PR06
      - Both: tuning identity and kernel participant limits.
      - Calibration uses the actual executor; cache identity is truthful; per-
@@ -286,6 +259,13 @@ Pull-request sequence
        throughput do not regress; published benchmark artifacts contain all
        required execution metadata.
      - PR05, PR06
-     - Pending
+     - In review (`Pool PR07
+       <https://github.com/xadupre/onnx-light-cpu/pull/271>`_)
+   * - Runtime PR08
+     - ``onnx-light-cpu``: remove the private scheduler.
+     - ``parallel_for.h`` and its worker pool are absent; standalone kernels are
+       serial and registered kernels use only the session ``CpuExecutor``.
+     - PR04, PR07
+     - In progress
 
-Runtime PR07 is the final roadmap PR.
+Runtime PR08 is the final roadmap PR.

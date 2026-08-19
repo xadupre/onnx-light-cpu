@@ -70,69 +70,19 @@ are the raw ``uint8_t`` byte patterns):
 .. doxygenfunction:: onnx_light_cpu::NotBool
    :project: onnx_light_cpu
 
-Parallel iteration helper
-~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Execution ownership
+~~~~~~~~~~~~~~~~~~~
 
-``onnx_light_cpu/impl/parallel_for.h`` provides a cost-aware
-``ParallelFor`` built on a persistent thread pool (workers are created once and
-reused). Before dispatching any worker threads it consults a small cost model,
-``ParallelForBlockCount``, that combines the processor (hardware thread count)
-with an estimate of the loop cost (iteration count times ``cost_per_element``).
-Ranges that are too small — or whose per-element work is too cheap — run inline
-on the calling thread, because waking worker threads would cost more than the
-work saved. Every block is disjoint and covers the range exactly once, so
-element-wise results are independent of the thread count (bit-exact).
+``onnx-light-cpu`` owns SIMD computation, not thread scheduling. Direct C++
+kernel calls execute synchronously on the calling thread and do not create
+workers. When the kernels are registered with ``onnx-light``, the registration
+adapter injects the session ``CpuExecutor``. Large ranges are then split into
+disjoint SIMD-aligned blocks and dispatched by that executor.
 
-When a kernel vectorises its inner loop it processes several values per SIMD
-instruction (e.g. AVX handles 8 ``float`` at a time, AVX-512 handles 16).
-``ParallelFor`` therefore accepts a ``block_multiple`` argument and rounds every
-block size up to a multiple of it, so each block is a whole number of SIMD
-vectors and the vectorised loop never processes a scalar remainder in the middle
-of the range. ``ParallelForSimdLanes<T>()`` returns the lane count for element
-type ``T`` at the widest supported register (AVX-512, 64 bytes): 16 for
-``float``, 8 for ``double``, 32 for a 2-byte half, 64 for ``std::int8_t``.
-
-The pool discovers physical cores, SMT siblings, and hybrid performance versus
-efficiency cores. It uses one thread per physical core by default, pins workers
-on Linux and Windows, and only consumes SMT siblings when explicitly requested.
-``ONNX_LIGHT_CPU_SPIN_COUNT`` controls the bounded spin-before-park budget
-(``2000`` by default, ``0`` to park immediately). Code running kernels from an
-application-owned pool should construct ``ParallelForExternalRegion`` inside
-each caller worker; nested kernel parallelism then stays inline and cannot
-oversubscribe the caller's pool.
-
-.. doxygenfunction:: onnx_light_cpu::ParallelForThreadCount
-   :project: onnx_light_cpu
-
-.. doxygenfunction:: onnx_light_cpu::ParallelForSpinCount
-   :project: onnx_light_cpu
-
-.. doxygenclass:: onnx_light_cpu::ParallelForExternalRegion
-   :project: onnx_light_cpu
-
-.. doxygenfunction:: onnx_light_cpu::ParallelForSimdLanes
-   :project: onnx_light_cpu
-
-.. doxygenfunction:: onnx_light_cpu::ParallelForBlockCount
-   :project: onnx_light_cpu
-
-.. doxygenfunction:: onnx_light_cpu::ParallelFor(int64_t total, Fn fn)
-   :project: onnx_light_cpu
-
-.. doxygenfunction:: onnx_light_cpu::ParallelFor(int64_t total, double cost_per_element, Fn fn)
-   :project: onnx_light_cpu
-
-.. doxygenfunction:: onnx_light_cpu::ParallelFor(int64_t total, double cost_per_element, int64_t block_multiple, Fn fn)
-   :project: onnx_light_cpu
-
-Every public kernel (``Abs*``, ``Exp*``/``Log*`` and ``NotBool``) already routes
-its work through ``ParallelFor``. The memory-bandwidth-bound ``Abs``/``Not``
-kernels pass ``cost_per_element = 1`` (so they only parallelize on large arrays),
-while the compute-bound ``Exp``/``Log`` kernels pass a higher cost so the same
-sized ranges parallelize sooner. Each kernel also passes
-``ParallelForSimdLanes<T>()`` as ``block_multiple`` so the parallel blocks align
-with its SIMD vectors. Because every block is disjoint the results are
-unchanged relative to the single-threaded kernels.
+Consequently, participant count, affinity, spin policy, nesting, lifecycle, and
+diagnostics all come from the ``onnx-light`` session policy. There are no
+``ONNX_LIGHT_CPU_NUM_THREADS`` or ``ONNX_LIGHT_CPU_SPIN_COUNT`` settings and no
+second pool that can oversubscribe the runtime.
 
 
 onnx-light kernel class

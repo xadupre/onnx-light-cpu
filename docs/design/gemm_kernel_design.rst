@@ -176,32 +176,11 @@ reduction.
 Thread runtime and affinity
 ---------------------------
 
-The persistent pool discovers the processors available to the process rather
-than treating ``std::thread::hardware_concurrency()`` as a physical-core
-count. Linux discovery combines ``sched_getaffinity`` with sysfs package,
-core, sibling, ``core_type``, and capacity data. Windows discovery uses
-``GetLogicalProcessorInformationEx`` processor-core records, processor groups,
-SMT flags, and efficiency classes.
-
-The default participant count uses one logical thread per physical core. A
-positive ``ONNX_LIGHT_CPU_MAX_THREADS`` build option may impose a ceiling.
-Hybrid machines order P-cores before unknown cores and E-cores; SMT siblings
-are appended only when an explicit ``ONNX_LIGHT_CPU_NUM_THREADS`` value requires
-them. Worker threads receive the corresponding Linux CPU affinity or Windows
-processor-group affinity once at startup. The caller remains unpinned so
-embedding applications retain control of their main thread.
-
-After a task, workers spin for a bounded number of CPU-relax iterations before
-parking on the condition variable. ``ONNX_LIGHT_CPU_SPIN_COUNT`` configures
-this budget, including ``0`` for immediate parking. A local pinned sweep of
-``0``, ``500``, ``2000``, and ``10000`` retained ``2000`` as the default:
-longer spinning regressed small and medium GEMM while immediate parking added
-wakeup latency.
-
-Applications that already own a pool construct
-``ParallelForExternalRegion`` inside each caller worker before invoking a
-kernel. Nested ``ParallelFor`` calls then execute inline on that worker, so the
-global pool is not awakened and cannot oversubscribe the caller's pool.
+``onnx-light-cpu`` does not own worker threads. Registered GEMM kernels receive
+the session ``CpuExecutor`` from ``onnx-light``; that executor owns processor
+discovery, affinity, spin/park behavior, nesting, and diagnostics. Standalone
+GEMM calls execute on the calling thread, allowing embedding applications to
+partition work with their existing scheduler without hidden workers.
 
 Prepared execution interfaces
 -----------------------------
@@ -214,9 +193,9 @@ lifetime is independent of the caller. ``MatMulPlan`` implements ONNX rank-1
 promotion, batched matrix multiplication, multidirectional batch broadcasting,
 transpose-aware matrix dimensions, empty dimensions, and plan-owned constant B
 tensors. ``StridedBatchedGemm`` and ``GroupedGemm`` expose uniform and
-heterogeneous batches respectively. Small independent products are scheduled
-across the persistent pool; products with useful internal M/N parallelism keep
-the batch loop serial to avoid nested pools. Plans derive ``MC``, ``NC``, and
+heterogeneous batches respectively. Small independent products can be
+scheduled across the injected session executor; products with useful internal
+M/N parallelism keep the batch loop serial. Plans derive ``MC``, ``NC``, and
 ``KC`` from deterministic CPUID cache descriptors on x86, align them to
 register tiles, then reduce ``MC``/``NC`` when necessary to expose enough work
 for the available threads. The selected values and ``useful_threads`` estimate

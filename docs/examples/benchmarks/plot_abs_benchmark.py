@@ -54,7 +54,6 @@ from onnx_light_cpu import (
 from onnx_light_cpu.onnx_py._cpukernels import (
     detect_simd_level,
     has_cpu_kernels,
-    parallel_for_thread_count,
 )
 from onnx_light_cpu.onnx_py._cpuregister import set_kernel_usage_recording
 
@@ -91,8 +90,6 @@ model = make_abs_model()
 # Serialize once (outside the timed region) so the setup timing below measures
 # only the session construction and not the protobuf serialization.
 model_bytes = model.SerializeToString()
-
-print(f"onnx-light-cpu thread count: {parallel_for_thread_count()}")
 
 # %%
 # Sizes benchmarked

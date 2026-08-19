@@ -21,18 +21,8 @@ The Gemm corpus contains shape-forced cases for every prepared algorithm:
 small output), and square/transformer shapes (general five-loop). Every shape
 is registered for each element type the ``GemmKernel`` implements -- ``float32``,
 ``float16`` and ``bfloat16`` -- so the corpus also measures the fp16/bf16
-widen/round-trip overhead. Run the recorder in separate processes to compare one
-thread with the configured pool while keeping the same binary and inputs:
-
-.. code-block:: bash
-
-   ONNX_LIGHT_CPU_NUM_THREADS=1 <benchmark-command>
-   ONNX_LIGHT_CPU_NUM_THREADS=<count> <benchmark-command>
-
-The requested count cannot exceed the available hardware or a positive
-build-time ``ONNX_LIGHT_CPU_MAX_THREADS`` limit. With no request, the pool uses
-physical cores before SMT siblings and prioritizes P-cores on hybrid processors.
-Worker affinity is applied on Linux and Windows. ``ONNX_LIGHT_CPU_SPIN_COUNT``
-selects the bounded spin-before-park budget; use ``0`` to measure immediate parking.
-Both environment settings are read once when the shared pool is initialized,
-so changing them inside a running process has no effect.
+widen/round-trip overhead. Standalone recorders run on their calling thread.
+Integration benchmarks compare participant counts through the ``onnx-light``
+session ``cpu_execution`` policy, which owns thread count, affinity, and spin
+behavior. ``onnx-light-cpu`` does not create workers or read thread-control
+environment variables.
