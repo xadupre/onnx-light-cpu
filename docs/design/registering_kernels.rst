@@ -16,8 +16,7 @@ and how to avoid that.
 Register the shipped kernels
 ----------------------------
 
-The shipped ``Abs``, ``Exp``, ``Log``, ``Gemm`` and ``Not`` kernels are
-installed with a single call.
+The shipped kernels are installed with a single call.
 
 From Python:
 
@@ -57,11 +56,7 @@ From C++:
 
     #include <onnx_light_cpu/kernels/register_kernels.h>
 
-    onnx_light_cpu::RegisterAllKernels();  // Abs/Exp/Log/Gemm/Not now use the SIMD kernels
-
-Or register a single operator with the per-operator functions
-(``RegisterAbsKernel()``, ``RegisterExpKernel()``, ``RegisterLogKernel()``,
-``RegisterGemmKernel()``, ``RegisterNotKernel()``).
+    onnx_light_cpu::RegisterAllKernels();  // the shipped kernels now use the SIMD implementations
 
 The registration overrides the built-in entry for the default ONNX domain, and
 it wins **regardless of the order** in which the built-in and the onnx-light-cpu
@@ -75,9 +70,8 @@ Checking which kernels are used
 Because the onnx-light-cpu kernels are drop-in replacements, a model produces
 the same numbers whether it runs them or ``onnx-light``'s built-in kernels. To
 tell them apart, every onnx-light-cpu kernel carries a unique,
-library-qualified **name** (``"onnx_light_cpu::Abs"``, ``"onnx_light_cpu::Exp"``,
-``"onnx_light_cpu::Log"``, ``"onnx_light_cpu::Gemm"``, ``"onnx_light_cpu::Not"``)
-that it records every time it runs. The names can be inspected from Python:
+library-qualified **name** (for example ``"onnx_light_cpu::Abs"``) that it
+records every time it runs. The names can be inspected from Python:
 
 .. code-block:: python
 
