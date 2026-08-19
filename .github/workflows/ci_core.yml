@@ -180,6 +180,79 @@ jobs:
       - name: Run onnx-light integration tests
         run: PYTHONPATH="$PWD" pytest unittests
 
+  macos_onnx_light_main:
+    name: macOS + onnx-light main
+    runs-on: macos-latest
+    # onnx-light is compiled from source before onnx-light-cpu, so this job
+    # needs more time than a plain build; sccache keeps repeat runs fast.
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@v0.0.10
+
+      - name: Set parallel build level
+        shell: bash
+        run: |
+          CMAKE_BUILD_PARALLEL_LEVEL=$(python -c 'import os; print(os.cpu_count() or 1)')
+          echo "CMAKE_BUILD_PARALLEL_LEVEL=${CMAKE_BUILD_PARALLEL_LEVEL}" >> "$GITHUB_ENV"
+          echo "CMAKE_BUILD_PARALLEL_LEVEL=${CMAKE_BUILD_PARALLEL_LEVEL}"
+
+      - name: Build and install onnx-light from source
+        env:
+          SCCACHE_GHA_ENABLED: "true"
+        run: |
+          # onnx-light's CMake calls find_package(nanobind) via "python -m
+          # nanobind --cmake_dir", so nanobind (and scikit-build-core) must be
+          # importable before configuring it. Recent onnx-light sources also
+          # query numpy.get_include() at configure time, so numpy is required too.
+          pip install nanobind scikit-build-core numpy
+          # No onnx-light wheel is published for macOS, so the only way to test
+          # the integration there is to build the latest sources (default
+          # branch, i.e. main) from scratch -- which is also what this job
+          # checks: that onnx-light-cpu still builds against onnx-light main on
+          # macOS (issue #268).
+          git clone --depth 1 https://github.com/xadupre/onnx-light.git /tmp/onnx-light
+          cmake -S /tmp/onnx-light -B /tmp/onnx-light/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/tmp/onnx-light/install -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+          cmake --build /tmp/onnx-light/build --config Release --parallel --verbose
+          cmake --install /tmp/onnx-light/build --config Release
+          pip install -C build.verbose=true /tmp/onnx-light -v
+          echo "CMAKE_PREFIX_PATH=/tmp/onnx-light/install${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}" >> "$GITHUB_ENV"
+          # The C++ tests link onnx-light's shared libraries, so the install lib
+          # dir must be on DYLD_LIBRARY_PATH in case the dylibs were built with
+          # an @rpath install name.
+          onnx_light_libdir=$(dirname "$(find /tmp/onnx-light/install -name 'liblib_onnx_proto.dylib' | head -1)")
+          if [ ! -d "${onnx_light_libdir}" ]; then
+            echo "Could not locate liblib_onnx_proto.dylib under /tmp/onnx-light/install" >&2
+            exit 1
+          fi
+          echo "DYLD_LIBRARY_PATH=${onnx_light_libdir}${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}" >> "$GITHUB_ENV"
+
+      # ONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON builds the kernel registration library
+      # and the onnx-light integration tests against the onnx-light installed
+      # above (found through CMAKE_PREFIX_PATH).
+      - name: Build and install package
+        env:
+          SCCACHE_GHA_ENABLED: "true"
+        run: pip install -C build-dir=build -C cmake.build-type=Release -C build.verbose=true -C cmake.define.ONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON -C cmake.define.ONNX_LIGHT_CPU_BUILD_TESTS=ON -C cmake.define.CMAKE_C_COMPILER_LAUNCHER=sccache -C cmake.define.CMAKE_CXX_COMPILER_LAUNCHER=sccache -e .[dev] -v
+
+      - name: pip freeze
+        run: pip freeze
+
+      - name: Run C++ unit tests
+        run: ctest --test-dir build --output-on-failure -C Release --timeout 240
+
+      - name: Run Python tests
+        run: pytest --durations=10 unittests
+
   arm_gemm_native:
     name: ARM64 GEMM (NEON)
     runs-on: ubuntu-24.04-arm
