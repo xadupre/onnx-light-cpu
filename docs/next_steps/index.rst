@@ -22,5 +22,6 @@ optimize next.
     2026_08_unary_elementwise
     2026_08_binary_elementwise
     2026_08_elementwise_kernel_tuning
+    2026_08_tree_ensemble
     2026_08_runtime_execution_controls
     2026_08_kv_cache
