@@ -2,12 +2,18 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Differential tests for the x86 VNNI INT8 matrix multiplication (Roadmap
-// PR09.2). Every case checks the public dispatcher, the portable scalar path,
-// and -- when the CPU exposes AVX-512 VNNI -- the native vpdpbusd path against
-// an independent naive reference that mirrors the portable PR09.1 fallback.
+// Differential correctness gate for byte and packed-4 integer matrix
+// multiplication (Roadmap PR10.2). Every case checks the public dispatcher and
+// portable scalar path, then directly checks each native implementation
+// available on the running CPU against an independent reference.
 
 #include "onnx_light_cpu/impl/math/gemm/vnni/integer_gemm_vnni.h"
+
+#ifdef ONNX_LIGHT_CPU_HAVE_AMX_INT8
+#include "onnx_light_cpu/impl/math/gemm/amx/gemm_amx_int8.h"
+#include "onnx_light_cpu/impl/math/gemm/amx/gemm_amx_tile.h"
+#include "onnx_light_cpu/impl/simd_level.h"
+#endif
 
 #ifdef ONNX_LIGHT_CPU_HAVE_NEON_DOTPROD
 #include "onnx_light_cpu/impl/arm_simd_level.h"
@@ -78,6 +84,28 @@ void CheckAllPaths(const std::vector<std::uint8_t> &a, bool a_signed,
         &onnx_light_cpu::detail::IntegerDotU8S8Avx512Vnni, a.data(), a_signed, b.data(), b_signed,
         native.data(), rows, cols, depth, azp.data(), static_cast<std::int64_t>(azp.size()),
         bzp.data(), static_cast<std::int64_t>(bzp.size()));
+    EXPECT_EQ(native, expected);
+  }
+#endif
+
+#ifdef ONNX_LIGHT_CPU_HAVE_NEON_DOTPROD
+  if (onnx_light_cpu::CpuSupportsNeonDotProd()) {
+    std::vector<std::int32_t> native(expected.size(), 0);
+    onnx_light_cpu::GemmMatMulIntegerNeonDotProd(
+        a.data(), a_signed, b.data(), b_signed, native.data(), static_cast<std::size_t>(rows),
+        static_cast<std::size_t>(cols), static_cast<std::size_t>(depth), azp.data(), azp.size(),
+        bzp.data(), bzp.size());
+    EXPECT_EQ(native, expected);
+  }
+#endif
+
+#ifdef ONNX_LIGHT_CPU_HAVE_AMX_INT8
+  if (onnx_light_cpu::AmxTileStateAvailable() && onnx_light_cpu::CpuSupportsAmxInt8()) {
+    std::vector<std::int32_t> native(expected.size(), 0);
+    onnx_light_cpu::GemmMatMulIntegerAmxInt8(
+        a.data(), a_signed, b.data(), b_signed, native.data(), static_cast<std::size_t>(rows),
+        static_cast<std::size_t>(cols), static_cast<std::size_t>(depth), azp.data(), azp.size(),
+        bzp.data(), bzp.size());
     EXPECT_EQ(native, expected);
   }
 #endif
@@ -239,6 +267,14 @@ TEST(IntegerVnniKernel, AccumulationWrapsModuloInt32) {
 
   const std::uint32_t wrapped = static_cast<std::uint32_t>(65025ULL * depth);
   EXPECT_EQ(std::bit_cast<std::uint32_t>(out[0]), wrapped);
+}
+
+TEST(IntegerVnniKernel, HandlesZeroDepth) {
+  const std::vector<std::int32_t> zero = {0};
+  std::int32_t output = 1;
+  onnx_light_cpu::IntegerMatMul2D(nullptr, true, nullptr, true, &output, 1, 1, 0, zero.data(), 1,
+                                  zero.data(), 1);
+  EXPECT_EQ(output, 0);
 }
 
 TEST(IntegerPacked4Bit, MatchesReferenceAcrossFormatsAndOddTails) {
