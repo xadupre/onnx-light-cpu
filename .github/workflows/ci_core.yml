@@ -126,7 +126,7 @@ jobs:
           SCCACHE_GHA_ENABLED: "true"
         shell: bash
         run: |
-          pip install nanobind scikit-build-core numpy pytest
+          pip install nanobind scikit-build-core setuptools numpy pytest
           onnx_light_source="${RUNNER_TEMP}/onnx-light"
           git clone --depth 1 --branch main https://github.com/xadupre/onnx-light.git "${onnx_light_source}"
           CMAKE_ARGS="-DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache"

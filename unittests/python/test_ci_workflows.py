@@ -21,6 +21,8 @@ def test_documentation_does_not_replace_onnx_light_main():
     assert "git clone --depth 1 --branch main" in _DOCS_WORKFLOW
     assert ".[docs,dev]" not in _DOCS_WORKFLOW
     assert "--onnx-light-source" in _DOCS_WORKFLOW
+    assert "--cpp-tests" not in _DOCS_WORKFLOW
+    assert "python -m pytest" not in _DOCS_WORKFLOW
 
 
 def test_onnx_light_main_integration_runs_on_every_supported_os():
@@ -29,6 +31,7 @@ def test_onnx_light_main_integration_runs_on_every_supported_os():
     )[0]
     assert 'os: ["ubuntu-latest", "windows-latest", "macos-latest"]' in source_job
     assert "git clone --depth 1 --branch main" in source_job
+    assert "scikit-build-core setuptools" in source_job
     assert "--cpp-tests --onnx-light-source" in source_job
     assert "-DCMAKE_DISABLE_FIND_PACKAGE_OpenSSL=ON" in source_job
     assert "0.1.19" not in source_job

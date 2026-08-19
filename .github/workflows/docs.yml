@@ -55,25 +55,19 @@ jobs:
           onnx_light_libdir=$(python -c "from onnx_light import get_cpp_build_info as info; print(info()['library_dir'])")
           echo "LD_LIBRARY_PATH=${onnx_light_libdir}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
 
-      - name: Install documentation and test dependencies
+      - name: Install documentation dependencies
         run: |
           pip install \
             breathe matplotlib myst-parser onnxruntime pydata-sphinx-theme \
-            "sphinx>=7" sphinx-copybutton sphinx-gallery pytest pytest-cov
+            "sphinx>=7" sphinx-copybutton sphinx-gallery
 
       # Link to the exact onnx-light runtime installed above. Installing the
       # ``dev`` extra here would replace it with the released Linux-only wheel.
-      - name: Build package and run C++ tests
+      - name: Build package
         env:
           SCCACHE_GHA_ENABLED: "true"
           CMAKE_ARGS: "-DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache"
-        run: python setup.py build_ext --inplace --cpp-tests --onnx-light-source
-
-      - name: pip freeze
-        run: pip freeze
-
-      - name: Run Python tests
-        run: python -m pytest --durations=10 unittests
+        run: python setup.py build_ext --inplace --onnx-light-source
 
       # sphinx-build exits non-zero when Sphinx-Gallery fails to execute an
       # example, so this step fails if the documentation stops running.
