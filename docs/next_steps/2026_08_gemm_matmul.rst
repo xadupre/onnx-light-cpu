@@ -1295,11 +1295,13 @@ fallbacks are ordered. Completed rows remain visible so scope is not lost.
        median with no priority case below 0.9x where the type is supported.
        The PR contains measurement-driven tuning only.
      - PR10.1
-     - In progress. The parity runner now covers FLOAT16. On a pinned AVX2/FMA/
-       F16C i7-13800H thread, the first tuning pass raises the 18-case median
-       from 0.341x to 0.479x ONNX Runtime and the minimum from 0.138x to 0.237x.
-       Skinny-M, skinny-N, and the tiny split-K case reach 1.566x, 2.159x, and
-       2.174x respectively. The complete gate remains open.
+     - `In progress in #267
+       <https://github.com/xadupre/onnx-light-cpu/pull/267>`_. The parity runner
+       now covers FLOAT16. On a pinned AVX2/FMA/F16C i7-13800H thread, the first
+       tuning pass raises the 18-case median from 0.341x to 0.479x ONNX Runtime
+       and the minimum from 0.138x to 0.237x. Skinny-M, skinny-N, and the tiny
+       split-K case reach 1.566x, 2.159x, and 2.174x respectively. The complete
+       gate remains open.
    * - Roadmap PR10.4
      - Integer and compact-format performance gate.
      - Dedicated-machine results are published per type and ISA. Types
