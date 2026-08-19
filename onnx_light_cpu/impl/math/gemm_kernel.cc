@@ -951,6 +951,7 @@ inline void PackConvertContiguous(const Float8Source<Format> *src, float *dst, s
     dst[i] = table[reinterpret_cast<const std::uint8_t *>(src)[i]];
   }
 }
+
 // ``SrcT`` is the element type of the input matrices; it equals the packed type
 // ``T`` for the native FP32/FP64 paths (a plain copy) and is a ``HalfSource``
 // for the FP16/BF16 path, which converts to ``T`` element by element while

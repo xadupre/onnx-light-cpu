@@ -75,7 +75,8 @@ inline float DecodeFinite(std::uint8_t value, unsigned exponent_bits, unsigned b
     return BitsToFloat(float_sign | (float_exp << 23) | (m << (23u - mantissa_bits)));
   }
 
-  const std::uint32_t float_exp = exponent - bias + 127u;
+  const std::uint32_t float_exp = static_cast<std::uint32_t>(static_cast<std::int32_t>(exponent) -
+                                                             static_cast<std::int32_t>(bias) + 127);
   return BitsToFloat(float_sign | (float_exp << 23) | (mantissa << (23u - mantissa_bits)));
 }
 
