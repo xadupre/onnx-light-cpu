@@ -34,12 +34,21 @@ int AddKernelRegistration(const char *op_type, const char *kernel_name, KernelIn
 }
 
 const std::vector<KernelRegistration> &KernelRegistrations() {
-  std::lock_guard<std::mutex> guard(RegistryMutex());
-  std::sort(Registry().begin(), Registry().end(),
-            [](const KernelRegistration &a, const KernelRegistration &b) {
-              return a.op_type < b.op_type;
-            });
-  return Registry();
+  // Registrations only happen during static initialisation (through
+  // ONNX_LIGHT_CPU_REGISTER_KERNEL), so snapshot the registry into an immutable
+  // sorted copy exactly once, on the first call. Returning a reference to that
+  // stable static avoids both re-sorting on every call and handing back a
+  // reference to the still-mutable registry.
+  static const std::vector<KernelRegistration> sorted = [] {
+    std::lock_guard<std::mutex> guard(RegistryMutex());
+    std::vector<KernelRegistration> copy = Registry();
+    std::sort(copy.begin(), copy.end(),
+              [](const KernelRegistration &a, const KernelRegistration &b) {
+                return a.op_type < b.op_type;
+              });
+    return copy;
+  }();
+  return sorted;
 }
 
 } // namespace onnx_light_cpu
