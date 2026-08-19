@@ -356,9 +356,22 @@ class BuildExt(Command):
         if self.cpp_tests:
             cmake_args = _set_cmake_define(cmake_args, "ONNX_LIGHT_CPU_BUILD_TESTS", "ON")
         if self.onnx_light:
-            cmake_args = _add_onnx_light_defines(cmake_args)
+            if self.dry_run:
+                cmake_args = _set_cmake_define(cmake_args, "ONNX_LIGHT_CPU_WITH_ONNX_LIGHT", "ON")
+            else:
+                cmake_args = _add_onnx_light_defines(cmake_args)
         if self.onnx_light_source:
-            cmake_args = _add_onnx_light_source_defines(cmake_args)
+            if self.dry_run:
+                cmake_args = _add_onnx_light_source_defines(
+                    cmake_args,
+                    {
+                        "include_dir": "/onnx-light/include",
+                        "core_library": "/onnx-light/lib/lib_onnx_core",
+                        "proto_library": "/onnx-light/lib/lib_onnx_proto",
+                    },
+                )
+            else:
+                cmake_args = _add_onnx_light_source_defines(cmake_args)
 
         self._spawn(
             [
