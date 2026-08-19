@@ -1983,8 +1983,24 @@ void GemmFloat8WithEpilogue(GemmFloat8Format format, bool trans_a, bool trans_b,
                             std::size_t N, std::size_t K, float alpha, const std::uint8_t *A,
                             const std::uint8_t *B, const GemmEpilogue<float> &epilogue, float *Y) {
   ValidateGemmEpilogue(M, N, epilogue);
-  detail::GemmFloat8ToFloat(static_cast<detail::Float8Format>(format), trans_a, trans_b, M, N, K,
-                            alpha, A, B, Y);
+  detail::Float8Format internal_format;
+  switch (format) {
+  case GemmFloat8Format::kE4M3FN:
+    internal_format = detail::Float8Format::kE4M3FN;
+    break;
+  case GemmFloat8Format::kE4M3FNUZ:
+    internal_format = detail::Float8Format::kE4M3FNUZ;
+    break;
+  case GemmFloat8Format::kE5M2:
+    internal_format = detail::Float8Format::kE5M2;
+    break;
+  case GemmFloat8Format::kE5M2FNUZ:
+    internal_format = detail::Float8Format::kE5M2FNUZ;
+    break;
+  default:
+    throw std::invalid_argument("Unsupported Float8 GEMM format.");
+  }
+  detail::GemmFloat8ToFloat(internal_format, trans_a, trans_b, M, N, K, alpha, A, B, Y);
   ApplyGemmEpilogue(M, N, epilogue, Y);
 }
 

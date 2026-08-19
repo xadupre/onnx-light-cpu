@@ -183,8 +183,7 @@ void GemmHalfWithEpilogue(bool is_bfloat16, bool trans_a, bool trans_b, std::siz
                           const std::uint16_t *B, const GemmEpilogue<float> &epilogue, float *Y);
 
 /// The four ONNX Float8 storage formats accepted by
-/// :cpp:func:`GemmFloat8WithEpilogue`. The enumerator order matches the internal
-/// ``detail::Float8Format`` so the public value maps directly onto it.
+/// :cpp:func:`GemmFloat8WithEpilogue`.
 enum class GemmFloat8Format {
   kE4M3FN,   ///< 1-4-3, bias 7, finite, NaN at 0x7f / 0xff.
   kE4M3FNUZ, ///< 1-4-3, bias 8, finite, single zero, NaN at 0x80.

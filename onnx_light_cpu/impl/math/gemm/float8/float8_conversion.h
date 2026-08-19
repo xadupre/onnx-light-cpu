@@ -50,7 +50,7 @@ inline float DecodeFinite(std::uint8_t value, unsigned exponent_bits, unsigned b
   if (nan_is_sign_only) {
     // FNUZ: 0x80 (sign only) is the sole NaN; every other pattern is finite.
     if (exponent == 0u && mantissa == 0u) {
-      return sign ? BitsToFloat(0x7fc00000u) : 0.0f;
+      return sign ? BitsToFloat(0xffc00000u) : 0.0f;
     }
   } else {
     // E4M3FN: exponent and mantissa all ones encodes NaN (0x7f / 0xff).
@@ -99,7 +99,8 @@ inline float Float8E5M2BitsToFloat(std::uint8_t value) {
   const std::uint32_t mantissa = static_cast<std::uint32_t>(value) & 0x3u;
   const std::uint32_t float_sign = sign << 31;
   if (exponent == 0x1fu) {
-    return float8_internal::BitsToFloat(float_sign | 0x7f800000u | (mantissa << 21));
+    return mantissa == 0u ? float8_internal::BitsToFloat(float_sign | 0x7f800000u)
+                          : float8_internal::BitsToFloat(float_sign | 0x7fc00000u);
   }
   if (exponent == 0u) {
     if (mantissa == 0u) {
