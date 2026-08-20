@@ -206,15 +206,15 @@ template <typename Fn> void ForEachBatch(const MatMulLayout &layout, Fn fn) {
       batch_index[dimension] = 0;
     }
   }
+}
 
-  std::vector<BatchWorkItem> BuildBatchWorkItems(const MatMulLayout &layout) {
-    std::vector<BatchWorkItem> items;
-    items.reserve(static_cast<std::size_t>(layout.batch_count));
-    ForEachBatch(layout, [&](int64_t a_base, int64_t b_base, int64_t output_base) {
-      items.push_back({a_base, b_base, output_base});
-    });
-    return items;
-  }
+std::vector<BatchWorkItem> BuildBatchWorkItems(const MatMulLayout &layout) {
+  std::vector<BatchWorkItem> items;
+  items.reserve(static_cast<std::size_t>(layout.batch_count));
+  ForEachBatch(layout, [&](int64_t a_base, int64_t b_base, int64_t output_base) {
+    items.push_back({a_base, b_base, output_base});
+  });
+  return items;
 }
 
 template <typename Fn>
