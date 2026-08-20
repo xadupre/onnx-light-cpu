@@ -240,7 +240,11 @@ def _bias_shape(case: GemmCase) -> tuple[int, ...]:
 def _matmul_operand_shape(
     batch_shape: tuple[int, ...], matrix_shape: tuple[int, ...], vector: bool, k: int
 ) -> tuple[int, ...]:
-    return (*batch_shape, k) if vector else batch_shape + matrix_shape
+    if vector:
+        if batch_shape:
+            raise ValueError("MatMul vector operands cannot have batch dimensions.")
+        return (k,)
+    return batch_shape + matrix_shape
 
 
 def _build_case(case: GemmCase, dtype_name: str, rng: Any) -> tuple[bytes, dict[str, Any]]:
