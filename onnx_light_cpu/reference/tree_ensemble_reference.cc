@@ -601,15 +601,34 @@ void WritePolicy(std::ostream &stream, const TreeEnsembleTuningPolicy &policy) {
   }
 }
 
+class TemporaryFile {
+public:
+  explicit TemporaryFile(std::filesystem::path path) : path_(std::move(path)) {}
+
+  ~TemporaryFile() {
+    if (!released_) {
+      std::error_code ignored;
+      std::filesystem::remove(path_, ignored);
+    }
+  }
+
+  const std::filesystem::path &path() const noexcept { return path_; }
+  void Release() noexcept { released_ = true; }
+
+private:
+  std::filesystem::path path_;
+  bool released_{false};
+};
+
 void PersistCalibrationEvidence(const TreeEnsembleCalibrationReport &report,
                                 const std::string &path) {
   static std::atomic<std::uint64_t> sequence{0};
   const std::filesystem::path destination(path);
-  std::filesystem::path temporary(path + ".tmp." + std::to_string(sequence.fetch_add(1)));
+  TemporaryFile temporary(path + ".tmp." + std::to_string(sequence.fetch_add(1)));
   if (!destination.parent_path().empty()) {
     std::filesystem::create_directories(destination.parent_path());
   }
-  std::ofstream stream(temporary, std::ios::binary | std::ios::trunc);
+  std::ofstream stream(temporary.path(), std::ios::binary | std::ios::trunc);
   if (!stream) {
     throw std::runtime_error("unable to open temporary evidence file");
   }
@@ -634,7 +653,8 @@ void PersistCalibrationEvidence(const TreeEnsembleCalibrationReport &report,
     throw std::runtime_error("unable to write calibration evidence");
   }
   stream.close();
-  std::filesystem::rename(temporary, destination);
+  std::filesystem::rename(temporary.path(), destination);
+  temporary.Release();
 }
 
 } // namespace
