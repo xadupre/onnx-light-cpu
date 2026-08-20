@@ -551,7 +551,8 @@ Remaining pull-request sequence
        row-count crossovers without placing dynamic ``N`` in the profile key
        or accessing the registry in the hot path.
      - PR03, PR04
-     - Implemented in this pull request.
+     - `Implemented in #313
+       <https://github.com/xadupre/onnx-light-cpu/pull/313>`_
    * - Trees PR06
      - Calibration and inspection APIs.
      - Hierarchical search rejects incorrect candidates, respects time and
@@ -559,7 +560,7 @@ Remaining pull-request sequence
        retains every priority profile. Selection and overrides are inspectable
        through the existing tuning APIs.
      - PR05
-     - Pending
+     - Implemented in this pull request.
    * - Trees PR07
      - Advanced layouts, traversal, and float16.
      - Index AoS, SoA, hit-rate layout, stump, symmetric-tree,
