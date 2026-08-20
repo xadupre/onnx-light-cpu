@@ -153,9 +153,9 @@ TEST(ExpFloat32, TailsUnalignedAndClassification) {
   }
 }
 
-// These tests intentionally remain disabled until PR02 fixes the known SIMD
-// subnormal range-reduction bugs. They are retained as the numerical gate.
-TEST(DISABLED_ExpFloat32, VectorSubnormalRange) {
+// PR02 numerical gate: full float32 vectors of subnormal-producing inputs
+// must classify the same as std::exp across every SIMD width and lane.
+TEST(ExpFloat32, VectorSubnormalRange) {
   const std::vector<float> values = {-90.0f, -95.0f, -100.0f, -103.0f};
   std::vector<float> output(values.size());
   onnx_light_cpu::ExpFloat32(values.data(), output.data(), values.size());
@@ -220,7 +220,10 @@ TEST(LogFloat32, TailsUnalignedAndClassification) {
   }
 }
 
-TEST(DISABLED_LogFloat32, PositiveSubnormalCorpus) {
+// PR02 numerical gate: distinct positive subnormals must normalize to
+// distinct, correctly rounded logarithms instead of collapsing to the value
+// at the smallest normal float.
+TEST(LogFloat32, PositiveSubnormalCorpus) {
   const std::vector<float> values = {std::numeric_limits<float>::denorm_min(),
                                      2.0f * std::numeric_limits<float>::denorm_min(),
                                      0x1.fffffep-127f};

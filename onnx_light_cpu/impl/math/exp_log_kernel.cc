@@ -77,7 +77,25 @@ void LogFloat64_Scalar(const double *input, double *output, std::size_t count) {
 // ---------------------------------------------------------------------------
 
 constexpr float kExpHi32 = 88.3762626647949f;
-constexpr float kExpLo32 = -88.3762626647949f;
+// True float32 underflow boundary: below this bound exp(x) rounds to zero
+// (half of the smallest subnormal, i.e. -150 * ln(2)). The previous bound of
+// -88.376 flushed every valid subnormal result (down to -103.972...) to
+// zero. Range reduction below this bound uses a split power-of-two
+// reconstruction (see ExpPs/ExpPs256) so subnormal results round correctly.
+// Because x is clamped to this bound before the reduced exponent n is
+// computed, n never drops below -150 (roughly kExpLo32 * kLog2ef); n1 = n>>1
+// and n2 = n - n1 therefore never exceed a magnitude of 75, keeping both
+// halves of the split power of two (biased by 0x7f) safely within the
+// normal exponent range [1, 254].
+constexpr float kExpLo32 = -103.97208f;
+
+// Smallest positive normal float32 (bit pattern 0x00800000). Log inputs below
+// this are subnormal and must be normalized (not clamped) so distinct
+// subnormals still yield distinct, correct results.
+constexpr float kSmallestNormal32 = 1.17549435e-38f;
+// 2^23: scales a subnormal into the normal range without rounding error; the
+// extracted exponent is then corrected by subtracting 23.
+constexpr float kSubnormalScale32 = 8388608.0f;
 constexpr float kLog2ef = 1.44269504088896341f;
 constexpr float kExpC1_32 = 0.693359375f;
 constexpr float kExpC2_32 = -2.12194440e-4f;
@@ -174,10 +192,17 @@ __m128 ExpPs(__m128 x) {
   y = _mm_add_ps(_mm_mul_ps(y, z), xc);
   y = _mm_add_ps(y, one);
 
+  // Reconstruct 2^n as two normal-range factors so that n as low as -149
+  // (the smallest float32 subnormal exponent) still produces a correctly
+  // rounded subnormal result instead of an invalid bit pattern from a single
+  // biased-exponent shift.
   emm0 = _mm_cvttps_epi32(fx);
-  emm0 = _mm_add_epi32(emm0, _mm_set1_epi32(0x7f));
-  emm0 = _mm_slli_epi32(emm0, 23);
-  y = _mm_mul_ps(y, _mm_castsi128_ps(emm0));
+  const __m128i n1 = _mm_srai_epi32(emm0, 1);
+  const __m128i n2 = _mm_sub_epi32(emm0, n1);
+  const __m128i pow1 = _mm_slli_epi32(_mm_add_epi32(n1, _mm_set1_epi32(0x7f)), 23);
+  const __m128i pow2 = _mm_slli_epi32(_mm_add_epi32(n2, _mm_set1_epi32(0x7f)), 23);
+  y = _mm_mul_ps(y, _mm_castsi128_ps(pow1));
+  y = _mm_mul_ps(y, _mm_castsi128_ps(pow2));
 
   y = Select(under, _mm_setzero_ps(), y);
   y = Select(over, _mm_set1_ps(std::numeric_limits<float>::infinity()), y);
@@ -195,12 +220,21 @@ __m128 LogPs(__m128 x) {
   const __m128 is_zero = _mm_cmpeq_ps(x, zero);
   const __m128 is_inf = _mm_cmpeq_ps(x, pos_inf);
 
-  __m128 xw = _mm_max_ps(x, _mm_castsi128_ps(_mm_set1_epi32(0x00800000)));
+  // Normalize positive subnormals instead of clamping them to the smallest
+  // normal float: multiplying by 2^23 is exact (no rounding) and moves the
+  // value into the normal range, so every subnormal keeps its distinct
+  // mantissa. The extracted exponent is corrected below by subtracting 23
+  // for the lanes that were normalized.
+  const __m128 smallest_normal = _mm_castsi128_ps(_mm_set1_epi32(0x00800000));
+  const __m128 is_subnormal = _mm_and_ps(_mm_cmpgt_ps(x, zero), _mm_cmplt_ps(x, smallest_normal));
+  const __m128 scaled = _mm_mul_ps(x, _mm_set1_ps(kSubnormalScale32));
+  __m128 xw = Select(is_subnormal, scaled, x);
   __m128i emm0 = _mm_srli_epi32(_mm_castps_si128(xw), 23);
   xw = _mm_and_ps(xw, _mm_castsi128_ps(_mm_set1_epi32(static_cast<int>(~0x7f800000u))));
   xw = _mm_or_ps(xw, _mm_set1_ps(0.5f));
   emm0 = _mm_sub_epi32(emm0, _mm_set1_epi32(0x7f));
   __m128 e = _mm_add_ps(_mm_cvtepi32_ps(emm0), one);
+  e = _mm_sub_ps(e, _mm_and_ps(is_subnormal, _mm_set1_ps(23.0f)));
 
   const __m128 mask = _mm_cmplt_ps(xw, _mm_set1_ps(kSqrtHf));
   const __m128 tmp = _mm_and_ps(xw, mask);
@@ -408,10 +442,16 @@ __m256 ExpPs256(__m256 x) {
   y = _mm256_add_ps(_mm256_mul_ps(y, z), xc);
   y = _mm256_add_ps(y, one);
 
+  // See ExpPs: reconstruct 2^n as two normal-range factors so subnormal
+  // exponents down to -149 round correctly instead of producing an invalid
+  // bit pattern.
   emm0 = _mm256_cvttps_epi32(fx);
-  emm0 = _mm256_add_epi32(emm0, _mm256_set1_epi32(0x7f));
-  emm0 = _mm256_slli_epi32(emm0, 23);
-  y = _mm256_mul_ps(y, _mm256_castsi256_ps(emm0));
+  const __m256i n1 = _mm256_srai_epi32(emm0, 1);
+  const __m256i n2 = _mm256_sub_epi32(emm0, n1);
+  const __m256i pow1 = _mm256_slli_epi32(_mm256_add_epi32(n1, _mm256_set1_epi32(0x7f)), 23);
+  const __m256i pow2 = _mm256_slli_epi32(_mm256_add_epi32(n2, _mm256_set1_epi32(0x7f)), 23);
+  y = _mm256_mul_ps(y, _mm256_castsi256_ps(pow1));
+  y = _mm256_mul_ps(y, _mm256_castsi256_ps(pow2));
 
   y = Select(under, _mm256_setzero_ps(), y);
   y = Select(over, _mm256_set1_ps(std::numeric_limits<float>::infinity()), y);
@@ -429,12 +469,19 @@ __m256 LogPs256(__m256 x) {
   const __m256 is_zero = _mm256_cmp_ps(x, zero, _CMP_EQ_OQ);
   const __m256 is_inf = _mm256_cmp_ps(x, pos_inf, _CMP_EQ_OQ);
 
-  __m256 xw = _mm256_max_ps(x, _mm256_castsi256_ps(_mm256_set1_epi32(0x00800000)));
+  // See LogPs: normalize positive subnormals instead of clamping so distinct
+  // subnormals still yield distinct, correct results.
+  const __m256 smallest_normal = _mm256_castsi256_ps(_mm256_set1_epi32(0x00800000));
+  const __m256 is_subnormal = _mm256_and_ps(_mm256_cmp_ps(x, zero, _CMP_GT_OQ),
+                                            _mm256_cmp_ps(x, smallest_normal, _CMP_LT_OQ));
+  const __m256 scaled = _mm256_mul_ps(x, _mm256_set1_ps(kSubnormalScale32));
+  __m256 xw = Select(is_subnormal, scaled, x);
   __m256i emm0 = _mm256_srli_epi32(_mm256_castps_si256(xw), 23);
   xw = _mm256_and_ps(xw, _mm256_castsi256_ps(_mm256_set1_epi32(static_cast<int>(~0x7f800000u))));
   xw = _mm256_or_ps(xw, _mm256_set1_ps(0.5f));
   emm0 = _mm256_sub_epi32(emm0, _mm256_set1_epi32(0x7f));
   __m256 e = _mm256_add_ps(_mm256_cvtepi32_ps(emm0), one);
+  e = _mm256_sub_ps(e, _mm256_and_ps(is_subnormal, _mm256_set1_ps(23.0f)));
 
   const __m256 mask = _mm256_cmp_ps(xw, _mm256_set1_ps(kSqrtHf), _CMP_LT_OQ);
   const __m256 tmp = _mm256_and_ps(xw, mask);
