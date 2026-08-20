@@ -6,6 +6,7 @@
 
 #include "onnx_light_cpu/backend_test/cases/logical/include_logical_cases.h"
 #include "onnx_light_cpu/backend_test/cases/math/include_math_cases.h"
+#include "onnx_light_cpu/backend_test/cases/traditionalml/include_traditionalml_cases.h"
 
 #include "onnx_core/backend_test/test_case_registry.h"
 
@@ -27,6 +28,7 @@ void CollectCpuKernelTestCases(std::vector<TestCase> &registry, const std::strin
                                TestMode mode) {
   CollectCpuMathTestCases(registry, op_type, mode);
   CollectCpuLogicalTestCases(registry, op_type, mode);
+  CollectCpuTraditionalMlTestCases(registry, op_type, mode);
 }
 
 void RegisterCpuKernelBackendTestCases() {

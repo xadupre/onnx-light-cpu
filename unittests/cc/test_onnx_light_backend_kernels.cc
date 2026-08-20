@@ -146,6 +146,28 @@ std::string Describe(const std::vector<std::string> &failures) {
   return message;
 }
 
+size_t CountCpuCasesAtMlOpset5(const std::string &op_type) {
+  onnx_light_cpu::backend_test::RegisterCpuKernelBackendTestCases();
+  const std::vector<TestCase> cases =
+      CollectTestCases(op_type, /*include_big=*/false, core::backend_test::TestMode::TEST);
+  size_t count = 0;
+  for (const TestCase &test_case : cases) {
+    if (test_case.name.rfind("test_cpu_", 0) != 0) {
+      continue;
+    }
+    ++count;
+    bool found_ml = false;
+    for (const OperatorSetIdProto &opset : test_case.model().opset_import()) {
+      if (opset.domain() == "ai.onnx.ml") {
+        EXPECT_EQ(opset.version(), 5) << test_case.name;
+        found_ml = true;
+      }
+    }
+    EXPECT_TRUE(found_ml) << test_case.name;
+  }
+  return count;
+}
+
 TEST(OnnxLightBackendKernels, AbsRunsThroughRuntime) {
   const std::vector<std::string> failures =
       RunCpuBackendCases("Abs", core::backend_test::TestMode::TEST);
@@ -174,6 +196,12 @@ TEST(OnnxLightBackendKernels, GemmRunsThroughRuntime) {
   const std::vector<std::string> failures =
       RunCpuBackendCases("Gemm", core::backend_test::TestMode::TEST);
   EXPECT_TRUE(failures.empty()) << Describe(failures);
+}
+
+TEST(OnnxLightBackendKernels, TreeEnsembleCorpusRegistersOnlyMlOpset5) {
+  EXPECT_GE(CountCpuCasesAtMlOpset5("TreeEnsemble"), 36U);
+  EXPECT_EQ(CountCpuCasesAtMlOpset5("TreeEnsembleRegressor"), 4U);
+  EXPECT_EQ(CountCpuCasesAtMlOpset5("TreeEnsembleClassifier"), 2U);
 }
 
 // Benchmark-mode cases: registered per kernel alongside the correctness cases.
