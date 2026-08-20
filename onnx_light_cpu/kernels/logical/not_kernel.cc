@@ -6,7 +6,6 @@
 
 #include "onnx_light_cpu/impl/logical/logical_kernels.h"
 #include "onnx_light_cpu/kernels/kernel_usage.h"
-#include "onnx_light_cpu/kernels/session_executor_adapter.h"
 
 #include "onnx_core/runtime/kernels/kernel_dispatch_table.h"
 #include "onnx_core/runtime/kernels/node_helpers.h"
@@ -55,8 +54,9 @@ void NotKernel::operator()(const Tensor &x, Tensor &output) const {
   const std::int64_t n = x.element_count();
   const std::uint8_t *px = x.AsBool();
   std::uint8_t *py = output.AsBool();
-  // The session adapter lets ``NotBool`` split this range through the runtime
-  // executor without an onnx-light-cpu scheduler.
+  // When onnx-light has installed a session ``CpuExecutor`` on the calling
+  // thread, ``NotBool`` can split this range through it without an
+  // onnx-light-cpu scheduler.
   NotBool(px, py, static_cast<std::size_t>(n));
 }
 
@@ -72,7 +72,9 @@ void NotKernel::Run(RuntimeContext &rt) {
 void RegisterNotKernel() {
   NodeKernelFn factory = [](const NodeProto &node,
                             RuntimeContext &rt) -> std::unique_ptr<rt_ns::KernelBase> {
-    return MakeSessionKernel<NotKernel>(node, rt);
+    auto kernel = std::make_unique<NotKernel>(rt.kernel_ctx());
+    kernel->set_node(node);
+    return kernel;
   };
   // Empty domain -> normalised to the default ONNX domain, overriding the
   // built-in Not entry with the SIMD-accelerated kernel for the CPU device.
