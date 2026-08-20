@@ -1310,12 +1310,13 @@ fallbacks are ordered. Completed rows remain visible so scope is not lost.
        supported by ONNX Runtime reach at least 1.0x median with no priority
        case below 0.9x; unsupported types publish correctness and throughput.
      - PR10.2
-     - In progress. The first tuning pass adds the integer parity and compact
-       throughput instruments plus an exact AVX2 UINT8 x INT8 dot product used
-       by both byte and packed-4-bit GEMM. On the diagnostic AVX2 host, isolated
-       square-512 throughput rises from 20.66 to 58.54 GOPS for INT8 and from
-       18.64 to 49.97 GOPS for INT4. The full dedicated-machine gate remains
-       open.
+     - In progress. The `first tuning pass in #274
+       <https://github.com/xadupre/onnx-light-cpu/pull/274>`_ adds the integer
+       parity and compact throughput instruments plus an exact AVX2 UINT8 x
+       INT8 dot product used by both byte and packed-4-bit GEMM. On the
+       diagnostic AVX2 host, isolated square-512 throughput rises from 20.66 to
+       58.54 GOPS for INT8 and from 18.64 to 49.97 GOPS for INT4. The full
+       dedicated-machine gate remains open.
    * - Roadmap PR10.5
      - Final blocking GEMM parity gate.
      - Raw dedicated-machine results cover Gemm, shared MatMul, batched paths,
@@ -1389,11 +1390,13 @@ The remaining PR10.3 tuning order is:
 Roadmap PR10.4 tuning record
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-The first PR10.4 pass establishes two reproducible instruments. The Python
-runner alternates registered UINT8 x INT8 ``MatMulInteger`` against ONNX
-Runtime, verifies exact INT32 output, and stores every timing sample plus CPU,
-ISA, affinity, and thread metadata. The isolated C++ driver reports INT8,
-packed INT4, E4M3, and E5M2 throughput across the priority shape families.
+The `first PR10.4 pass in #274
+<https://github.com/xadupre/onnx-light-cpu/pull/274>`_ establishes two
+reproducible instruments. The Python runner alternates registered UINT8 x INT8
+``MatMulInteger`` against ONNX Runtime, verifies exact INT32 output, and stores
+every timing sample plus CPU, ISA, affinity, and thread metadata. The isolated
+C++ driver reports INT8, packed INT4, E4M3, and E5M2 throughput across the
+priority shape families.
 
 The initial AVX2 measurement exposed a scalar fallback below AVX-512 VNNI:
 isolated INT8 reached only 20.66 GOPS for square-512, 14.39 GOPS for large-K,
