@@ -669,6 +669,12 @@ void ExpFloat32_Dispatch(const float *input, float *output, std::size_t count) {
     return;
   }
 #endif
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
+  if (level >= SimdLevel::kAVX2 && CpuSupportsFma()) {
+    ExpFloat32_AVX2_FMA(input, output, count);
+    return;
+  }
+#endif
   if (level >= SimdLevel::kAVX2) {
     ExpFloat32_AVX2(input, output, count);
     return;

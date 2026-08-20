@@ -164,6 +164,29 @@ TEST(ExpFloat32, VectorSubnormalRange) {
   }
 }
 
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
+TEST(ExpFloat32, Avx2FmaMatchesStd) {
+  const std::vector<float> values = {-103.0f, -100.0f, -90.0f, -1.0f, 0.0f,
+                                     1.0f,    20.0f,   88.0f,  90.0f, 100.0f};
+  std::vector<float> input(2 * values.size() + 1);
+  std::copy(values.begin(), values.end(), input.begin() + 1);
+  std::copy(values.begin(), values.end(), input.begin() + values.size() + 1);
+  std::vector<float> output(input.size(), -1.0f);
+  onnx_light_cpu::ExpFloat32_AVX2_FMA(input.data() + 1, output.data() + 1, values.size());
+  onnx_light_cpu::ExpFloat32_AVX2_FMA(input.data() + values.size() + 1,
+                                      output.data() + values.size() + 1, values.size());
+  for (std::size_t i = 0; i < values.size(); ++i) {
+    const float reference = std::exp(values[i]);
+    EXPECT_EQ(Classify(output[i + 1]), Classify(reference)) << "at index " << i;
+    if (std::isfinite(reference)) {
+      EXPECT_NEAR(output[i + 1], reference, std::fabs(reference) * 2e-5f + 1e-7f)
+          << "at index " << i;
+    }
+    EXPECT_FLOAT_EQ(output[i + values.size() + 1], output[i + 1]);
+  }
+}
+#endif
+
 // ---------------------------------------------------------------------------
 // LogFloat32
 // ---------------------------------------------------------------------------

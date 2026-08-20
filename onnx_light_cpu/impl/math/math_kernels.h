@@ -95,6 +95,10 @@ void ExpFloat32(const float *input, float *output, std::size_t count);
 void ExpFloat32_AVX512(const float *input, float *output, std::size_t count);
 #endif
 
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
+void ExpFloat32_AVX2_FMA(const float *input, float *output, std::size_t count);
+#endif
+
 /// Computes elementwise natural exponential: out[i] = exp(input[i]) for float64.
 /// Dispatches to the best available SIMD path at runtime.
 void ExpFloat64(const double *input, double *output, std::size_t count);

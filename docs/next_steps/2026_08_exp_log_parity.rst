@@ -3,7 +3,7 @@ Exp and Log ONNX Runtime Parity Roadmap
 
 :Date: 2026-08
 
-**in progress** (ExpLog PR02 full-domain SIMD subnormal semantics corrected)
+**in progress** (ExpLog PR03 AVX2+FMA float32 ``Exp`` kernel)
 
 Objective
 ---------
@@ -264,7 +264,7 @@ Remaining pull-request sequence
        single-thread throughput improves by at least ``2x`` on the reference
        AVX2 machine, with no correctness or small-tensor regression.
      - PR02
-     - Pending
+     - In progress
    * - ExpLog PR04
      - AVX2+FMA ``Log`` and AVX-512 alignment.
      - FMA and unrolling improve or retain every priority ``Log`` case;

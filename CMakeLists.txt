@@ -311,6 +311,8 @@ set(_abs_avx512_source
     "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/avx512/abs_kernel_avx512.cc")
 set(_exp_log_avx512_source
     "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/avx512/exp_log_kernel_avx512.cc")
+set(_exp_log_avx2_fma_source
+    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/avx2/exp_log_kernel_avx2_fma.cc")
 set(_not_avx512_source
     "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/logical/avx512/not_kernel_avx512.cc")
 if(NOT ONNX_LIGHT_CPU_HAVE_AVX512F_FLAG)
@@ -322,6 +324,7 @@ endif()
 if(NOT ONNX_LIGHT_CPU_HAVE_AVX2_FMA_FLAG)
   list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_gemm_avx2_fma_source}")
   list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_gemm_avx2_integer_source}")
+  list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_exp_log_avx2_fma_source}")
 endif()
 if(NOT ONNX_LIGHT_CPU_HAVE_AVX512BW_FLAG)
   list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_not_avx512_source}")
@@ -440,6 +443,16 @@ if(ONNX_LIGHT_CPU_HAVE_AVX512BF16_FLAG)
 endif()
 
 if(ONNX_LIGHT_CPU_HAVE_AVX2_FMA_FLAG)
+  if(NOT MSVC)
+    set_source_files_properties("${_exp_log_avx2_fma_source}"
+        PROPERTIES COMPILE_OPTIONS "-mavx2;-mfma")
+  else()
+    set_source_files_properties("${_exp_log_avx2_fma_source}"
+        PROPERTIES COMPILE_OPTIONS "/arch:AVX2")
+  endif()
+  target_compile_definitions(lib_onnx_light_cpu PRIVATE
+      ONNX_LIGHT_CPU_HAVE_AVX2_FMA=1)
+
   if(NOT MSVC)
     set_source_files_properties("${_gemm_avx2_integer_source}" PROPERTIES
         COMPILE_OPTIONS "-mavx2")
@@ -1033,6 +1046,9 @@ if(ONNX_LIGHT_CPU_BUILD_TESTS)
       if(ONNX_LIGHT_CPU_HAVE_F16C_FLAG)
         target_compile_definitions(${_name} PRIVATE ONNX_LIGHT_CPU_HAVE_F16C=1)
       endif()
+    endif()
+    if(_name STREQUAL "test_exp_log_kernel" AND ONNX_LIGHT_CPU_HAVE_AVX2_FMA_FLAG)
+      target_compile_definitions(${_name} PRIVATE ONNX_LIGHT_CPU_HAVE_AVX2_FMA=1)
     endif()
     if("lib_onnx_light_cpu_kernels" IN_LIST _link_lib AND
        ONNX_LIGHT_CPU_ONNX_LIGHT_PY_LIBDIR)
