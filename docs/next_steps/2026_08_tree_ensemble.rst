@@ -551,7 +551,7 @@ Remaining pull-request sequence
        row-count crossovers without placing dynamic ``N`` in the profile key
        or accessing the registry in the hot path.
      - PR03, PR04
-     - Pending
+     - Implemented in this pull request.
    * - Trees PR06
      - Calibration and inspection APIs.
      - Hierarchical search rejects incorrect candidates, respects time and

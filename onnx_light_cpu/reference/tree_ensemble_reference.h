@@ -6,6 +6,8 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <mutex>
+#include <optional>
 #include <string>
 #include <variant>
 #include <vector>
@@ -49,6 +51,94 @@ enum class TreeEnsembleExecutionStrategy {
   kTreeMajorBatch,
 };
 
+enum class TreeEnsembleNodeLayout {
+  kOrtCompactAosPointer,
+  kCompactAosIndex,
+  kSplitSoa,
+};
+
+enum class TreeEnsembleCountBucket : std::uint8_t {
+  kOne,
+  kTwoToFour,
+  kFiveToSixteen,
+  kSeventeenToEighty,
+  kEightyOneToTwoHundredFiftySix,
+  kMoreThanTwoHundredFiftySix,
+};
+
+enum class TreeEnsembleDepthBucket : std::uint8_t {
+  kStump,
+  kTwoToFour,
+  kFiveToEight,
+  kNineToSixteen,
+  kMoreThanSixteen,
+};
+
+enum class TreeEnsembleBranchMix : std::uint8_t {
+  kHomogeneous,
+  kMixed,
+};
+
+enum class TreeEnsembleMembershipDensity : std::uint8_t {
+  kNone,
+  kSparse,
+  kDense,
+};
+
+struct TreeEnsembleStructuralBuckets {
+  TreeEnsembleCountBucket tree_count = TreeEnsembleCountBucket::kOne;
+  TreeEnsembleDepthBucket depth = TreeEnsembleDepthBucket::kStump;
+  TreeEnsembleCountBucket target_count = TreeEnsembleCountBucket::kOne;
+  TreeEnsembleBranchMix branch_mode_mix = TreeEnsembleBranchMix::kHomogeneous;
+  TreeEnsembleMembershipDensity membership_density = TreeEnsembleMembershipDensity::kNone;
+
+  bool operator==(const TreeEnsembleStructuralBuckets &) const = default;
+};
+
+struct TreeEnsembleModelKey {
+  std::string library = "onnx_light_cpu";
+  std::string kernel = "TreeEnsemble";
+  std::string domain = "ai.onnx.ml";
+  std::int64_t opset = 5;
+  std::string implementation = "prepared_tree_ensemble";
+  TreeValueType input_type = TreeValueType::kFloat32;
+  TreeValueType accumulator_type = TreeValueType::kFloat64;
+  std::string processor = "portable";
+  std::size_t threads = 1;
+  std::string model_digest;
+
+  bool operator==(const TreeEnsembleModelKey &) const = default;
+};
+
+struct TreeEnsembleExecutionRegion {
+  std::optional<std::size_t> maximum_rows;
+  TreeEnsembleExecutionStrategy strategy = TreeEnsembleExecutionStrategy::kTreeMajorBatch;
+  std::size_t batch_rows = 1;
+  std::size_t maximum_threads = 1;
+  std::size_t row_chunk = 1;
+  std::size_t tree_chunk = 1;
+  std::size_t workspace_bytes = 0;
+};
+
+struct TreeEnsembleTuningPolicy {
+  TreeEnsembleNodeLayout layout = TreeEnsembleNodeLayout::kOrtCompactAosPointer;
+  std::vector<TreeEnsembleExecutionRegion> regions;
+  std::size_t membership_linear_limit = 8;
+  std::size_t membership_bitset_range_limit = 256;
+  std::size_t traversal_prefetch_distance = 0;
+};
+
+enum class TreeEnsembleProfileSource : std::uint8_t {
+  kSafeFallback,
+  kPortable,
+  kExact,
+};
+
+struct TreeEnsembleTuningContext {
+  std::string processor = "portable";
+  std::size_t threads = 0;
+};
+
 struct TreeEnsembleExecutionDecision {
   TreeEnsembleExecutionStrategy strategy = TreeEnsembleExecutionStrategy::kTreeMajorBatch;
   std::size_t batch_rows = 0;
@@ -56,6 +146,32 @@ struct TreeEnsembleExecutionDecision {
   std::size_t row_chunk = 1;
   std::size_t tree_chunk = 1;
   std::size_t workspace_bytes = 0;
+};
+
+/// Thread-safe profile store. Plans resolve it once during construction and
+/// capture the selected policy and generation.
+class TreeEnsembleTuningRegistry {
+public:
+  void PutExact(TreeEnsembleModelKey key, TreeEnsembleTuningPolicy policy);
+  void PutPortable(TreeEnsembleStructuralBuckets buckets, TreeEnsembleTuningPolicy policy);
+
+  std::uint64_t generation() const noexcept;
+
+private:
+  friend class TreeEnsemblePlan;
+  struct ExactEntry {
+    TreeEnsembleModelKey key;
+    TreeEnsembleTuningPolicy policy;
+  };
+  struct PortableEntry {
+    TreeEnsembleStructuralBuckets buckets;
+    TreeEnsembleTuningPolicy policy;
+  };
+
+  mutable std::mutex mutex_;
+  std::vector<ExactEntry> exact_;
+  std::vector<PortableEntry> portable_;
+  std::uint64_t generation_ = 0;
 };
 
 struct TreeEnsembleRegressorAttributes;
@@ -184,6 +300,8 @@ struct TreeEnsembleLeaf {
 class TreeEnsemblePlan {
 public:
   explicit TreeEnsemblePlan(TreeEnsembleAttributes attributes);
+  TreeEnsemblePlan(TreeEnsembleAttributes attributes, TreeEnsembleTuningContext context,
+                   const TreeEnsembleTuningRegistry *registry);
   explicit TreeEnsemblePlan(const TreeEnsembleRegressorAttributes &attributes);
   explicit TreeEnsemblePlan(const TreeEnsembleClassifierAttributes &attributes);
 
@@ -208,11 +326,19 @@ public:
   std::size_t max_depth() const noexcept { return max_depth_; }
   std::size_t average_depth() const noexcept { return average_depth_; }
   const std::string &model_signature() const noexcept { return model_signature_; }
+  const TreeEnsembleModelKey &model_key() const noexcept { return model_key_; }
+  const TreeEnsembleStructuralBuckets &structural_buckets() const noexcept {
+    return structural_buckets_;
+  }
+  const TreeEnsembleTuningPolicy &tuning_policy() const noexcept { return tuning_policy_; }
+  TreeEnsembleProfileSource profile_source() const noexcept { return profile_source_; }
+  std::uint64_t profile_generation() const noexcept { return profile_generation_; }
   std::size_t workspace_bytes() const noexcept { return workspace_bytes_; }
   bool uses_64bit_indices() const noexcept { return uses_64_bit_indices_; }
 
 private:
-  static std::string MakeModelSignature(const TreeEnsembleAttributes &attributes);
+  static std::string MakeModelSignature(const TreeEnsembleAttributes &attributes,
+                                        const TreeEnsembleStructuralBuckets &buckets);
 
   TreeEnsembleAttributes attributes_;
   std::vector<std::int64_t> tree_roots_;
@@ -223,8 +349,14 @@ private:
   std::size_t max_depth_ = 0;
   std::size_t average_depth_ = 0;
   std::string model_signature_;
+  TreeEnsembleModelKey model_key_;
+  TreeEnsembleStructuralBuckets structural_buckets_;
+  TreeEnsembleTuningPolicy tuning_policy_;
+  TreeEnsembleProfileSource profile_source_ = TreeEnsembleProfileSource::kSafeFallback;
+  std::uint64_t profile_generation_ = 0;
   std::size_t workspace_bytes_ = 0;
   bool uses_64_bit_indices_ = false;
+  bool uses_dynamic_safe_policy_ = false;
 };
 
 /// Version-5 deprecated schema adapters backed by the same scalar semantics.

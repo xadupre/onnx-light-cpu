@@ -7,16 +7,18 @@
 #include "onnx_light_cpu/impl/execution.h"
 
 #include <algorithm>
-#include <array>
 #include <bit>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
+#include <iomanip>
 #include <limits>
 #include <numbers>
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -27,27 +29,7 @@ namespace {
 constexpr std::size_t kTreeParallelThreshold = 80;
 constexpr std::size_t kTreeMajorBatchRows = 128;
 constexpr std::size_t kRowParallelThreshold = 50;
-
-enum class SchedulingCondition {
-  kSerial,
-  kSingleRowLargeForest,
-  kSmallBatch,
-  kEnoughTreesForWorkers,
-  kDefault,
-};
-
-struct SchedulingRule {
-  SchedulingCondition condition;
-  TreeEnsembleExecutionStrategy strategy;
-};
-
-constexpr std::array<SchedulingRule, 5> kSchedulingRules{{
-    {SchedulingCondition::kSerial, TreeEnsembleExecutionStrategy::kTreeMajorBatch},
-    {SchedulingCondition::kSingleRowLargeForest, TreeEnsembleExecutionStrategy::kTreeParallel},
-    {SchedulingCondition::kSmallBatch, TreeEnsembleExecutionStrategy::kTreeMajorBatch},
-    {SchedulingCondition::kEnoughTreesForWorkers, TreeEnsembleExecutionStrategy::kTreeParallel},
-    {SchedulingCondition::kDefault, TreeEnsembleExecutionStrategy::kRowParallel},
-}};
+constexpr std::size_t kMaximumExecutionRegions = 4;
 
 std::size_t SaturatingMultiply(std::size_t left, std::size_t right) noexcept {
   if (left != 0 && right > std::numeric_limits<std::size_t>::max() / left) {
@@ -56,8 +38,134 @@ std::size_t SaturatingMultiply(std::size_t left, std::size_t right) noexcept {
   return left * right;
 }
 
+std::size_t RegionWorkspaceBytes(const TreeEnsembleExecutionRegion &region,
+                                 std::size_t targets) noexcept {
+  return SaturatingMultiply(
+      SaturatingMultiply(SaturatingMultiply(region.maximum_threads, region.batch_rows), targets),
+      sizeof(double) + sizeof(std::size_t));
+}
+
 [[noreturn]] void Invalid(const std::string &message) {
   throw std::invalid_argument("TreeEnsemble reference: " + message);
+}
+
+void ValidatePolicyShape(const TreeEnsembleTuningPolicy &policy) {
+  if (policy.regions.empty() || policy.regions.size() > kMaximumExecutionRegions) {
+    Invalid("execution policy must contain one to four regions");
+  }
+  std::size_t previous = 0;
+  for (std::size_t index = 0; index < policy.regions.size(); ++index) {
+    const TreeEnsembleExecutionRegion &region = policy.regions[index];
+    const bool final = index + 1 == policy.regions.size();
+    if (final != !region.maximum_rows.has_value()) {
+      Invalid("only the final execution region must be unbounded");
+    }
+    if (region.maximum_rows.has_value()) {
+      if (*region.maximum_rows == 0 || (index != 0 && *region.maximum_rows <= previous)) {
+        Invalid("execution region boundaries must be strictly increasing");
+      }
+      previous = *region.maximum_rows;
+    }
+    if (region.batch_rows == 0 || region.maximum_threads == 0 || region.row_chunk == 0 ||
+        region.tree_chunk == 0 || region.workspace_bytes == 0) {
+      Invalid("execution region parameters and workspace must be positive");
+    }
+  }
+}
+
+TreeEnsembleCountBucket CountBucket(std::size_t count) noexcept {
+  if (count <= 1) {
+    return TreeEnsembleCountBucket::kOne;
+  }
+  if (count <= 4) {
+    return TreeEnsembleCountBucket::kTwoToFour;
+  }
+  if (count <= 16) {
+    return TreeEnsembleCountBucket::kFiveToSixteen;
+  }
+  if (count <= 80) {
+    return TreeEnsembleCountBucket::kSeventeenToEighty;
+  }
+  if (count <= 256) {
+    return TreeEnsembleCountBucket::kEightyOneToTwoHundredFiftySix;
+  }
+  return TreeEnsembleCountBucket::kMoreThanTwoHundredFiftySix;
+}
+
+TreeEnsembleDepthBucket DepthBucket(std::size_t depth) noexcept {
+  if (depth <= 1) {
+    return TreeEnsembleDepthBucket::kStump;
+  }
+  if (depth <= 4) {
+    return TreeEnsembleDepthBucket::kTwoToFour;
+  }
+  if (depth <= 8) {
+    return TreeEnsembleDepthBucket::kFiveToEight;
+  }
+  if (depth <= 16) {
+    return TreeEnsembleDepthBucket::kNineToSixteen;
+  }
+  return TreeEnsembleDepthBucket::kMoreThanSixteen;
+}
+
+TreeEnsembleExecutionRegion MakeRegion(std::optional<std::size_t> maximum_rows,
+                                       TreeEnsembleExecutionStrategy strategy,
+                                       std::size_t batch_rows, std::size_t maximum_threads,
+                                       std::size_t trees, std::size_t targets) {
+  TreeEnsembleExecutionRegion region;
+  region.maximum_rows = maximum_rows;
+  region.strategy = strategy;
+  region.batch_rows = batch_rows;
+  region.maximum_threads = maximum_threads;
+  region.row_chunk = 1;
+  region.tree_chunk = std::max<std::size_t>(1, (trees + maximum_threads - 1) / maximum_threads);
+  region.workspace_bytes = RegionWorkspaceBytes(region, targets);
+  return region;
+}
+
+TreeEnsembleTuningPolicy MakeSafePolicy(std::size_t trees, std::size_t targets,
+                                        std::size_t threads) {
+  TreeEnsembleTuningPolicy policy;
+  if (threads == 1) {
+    policy.regions.push_back(MakeRegion(std::nullopt,
+                                        TreeEnsembleExecutionStrategy::kTreeMajorBatch,
+                                        kTreeMajorBatchRows, 1, trees, targets));
+    return policy;
+  }
+  if (trees > kTreeParallelThreshold) {
+    policy.regions.push_back(MakeRegion(1, TreeEnsembleExecutionStrategy::kTreeParallel,
+                                        kTreeMajorBatchRows, threads, trees, targets));
+    policy.regions.push_back(MakeRegion(kRowParallelThreshold,
+                                        TreeEnsembleExecutionStrategy::kTreeMajorBatch,
+                                        kTreeMajorBatchRows, 1, trees, targets));
+    policy.regions.push_back(MakeRegion(std::nullopt, TreeEnsembleExecutionStrategy::kTreeParallel,
+                                        kTreeMajorBatchRows, threads, trees, targets));
+    return policy;
+  }
+  policy.regions.push_back(MakeRegion(kRowParallelThreshold,
+                                      TreeEnsembleExecutionStrategy::kTreeMajorBatch,
+                                      kTreeMajorBatchRows, 1, trees, targets));
+  const bool use_tree_parallel = trees > threads || (targets > 1 && trees == threads);
+  policy.regions.push_back(
+      MakeRegion(std::nullopt,
+                 use_tree_parallel ? TreeEnsembleExecutionStrategy::kTreeParallel
+                                   : TreeEnsembleExecutionStrategy::kRowParallel,
+                 use_tree_parallel ? kTreeMajorBatchRows : 1, threads, trees, targets));
+  return policy;
+}
+
+bool PolicyCompatible(const TreeEnsembleTuningPolicy &policy, std::size_t targets,
+                      std::size_t threads) noexcept {
+  if (policy.layout != TreeEnsembleNodeLayout::kOrtCompactAosPointer) {
+    return false;
+  }
+  for (const TreeEnsembleExecutionRegion &region : policy.regions) {
+    if (region.maximum_threads > threads ||
+        RegionWorkspaceBytes(region, targets) > region.workspace_bytes) {
+      return false;
+    }
+  }
+  return true;
 }
 
 std::uint16_t FloatToHalfBits(float value) {
@@ -447,36 +555,107 @@ void ValidateWeights(const LegacyTreeAttributes &tree, const LegacyPrepared &pre
 
 } // namespace
 
-std::string TreeEnsemblePlan::MakeModelSignature(const TreeEnsembleAttributes &attributes) {
+void TreeEnsembleTuningRegistry::PutExact(TreeEnsembleModelKey key,
+                                          TreeEnsembleTuningPolicy policy) {
+  ValidatePolicyShape(policy);
+  if (key.library != "onnx_light_cpu" || key.kernel != "TreeEnsemble" ||
+      key.domain != "ai.onnx.ml" || key.opset != 5 ||
+      key.implementation != "prepared_tree_ensemble" || key.processor.empty() || key.threads == 0 ||
+      key.model_digest.empty()) {
+    Invalid("exact profile key is incomplete or incompatible");
+  }
+  std::lock_guard<std::mutex> lock(mutex_);
+  const auto found = std::find_if(exact_.begin(), exact_.end(),
+                                  [&](const ExactEntry &entry) { return entry.key == key; });
+  if (found == exact_.end()) {
+    exact_.push_back({std::move(key), std::move(policy)});
+  } else {
+    found->policy = std::move(policy);
+  }
+  ++generation_;
+}
+
+void TreeEnsembleTuningRegistry::PutPortable(TreeEnsembleStructuralBuckets buckets,
+                                             TreeEnsembleTuningPolicy policy) {
+  ValidatePolicyShape(policy);
+  std::lock_guard<std::mutex> lock(mutex_);
+  const auto found =
+      std::find_if(portable_.begin(), portable_.end(),
+                   [&](const PortableEntry &entry) { return entry.buckets == buckets; });
+  if (found == portable_.end()) {
+    portable_.push_back({buckets, std::move(policy)});
+  } else {
+    found->policy = std::move(policy);
+  }
+  ++generation_;
+}
+
+std::uint64_t TreeEnsembleTuningRegistry::generation() const noexcept {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return generation_;
+}
+
+std::string TreeEnsemblePlan::MakeModelSignature(const TreeEnsembleAttributes &attributes,
+                                                 const TreeEnsembleStructuralBuckets &buckets) {
+  std::uint64_t hash = UINT64_C(14695981039346656037);
+  const auto append_u64 = [&](std::uint64_t value) {
+    for (int shift = 0; shift < 64; shift += 8) {
+      hash ^= static_cast<std::uint8_t>(value >> shift);
+      hash *= UINT64_C(1099511628211);
+    }
+  };
+  const auto append_scalar = [&](const auto &value) {
+    using T = std::remove_cvref_t<decltype(value)>;
+    if constexpr (std::is_enum_v<T>) {
+      append_u64(static_cast<std::uint64_t>(value));
+    } else if constexpr (std::is_floating_point_v<T>) {
+      append_u64(std::bit_cast<std::uint64_t>(static_cast<double>(value)));
+    } else {
+      append_u64(static_cast<std::uint64_t>(value));
+    }
+  };
+  const auto append_vector = [&](const auto &values) {
+    append_u64(values.size());
+    for (const auto &value : values) {
+      append_scalar(value);
+    }
+  };
+
+  append_scalar(attributes.n_features);
+  append_scalar(attributes.n_targets);
+  append_scalar(attributes.value_type);
+  append_scalar(attributes.aggregate);
+  append_scalar(attributes.post_transform);
+  append_vector(attributes.tree_roots);
+  append_vector(attributes.nodes_featureids);
+  append_vector(attributes.nodes_modes);
+  append_vector(attributes.nodes_truenodeids);
+  append_vector(attributes.nodes_falsenodeids);
+  append_vector(attributes.nodes_trueleafs);
+  append_vector(attributes.nodes_falseleafs);
+  append_vector(attributes.nodes_missing_value_tracks_true);
+  append_vector(attributes.membership_values);
+  append_vector(attributes.leaf_targetids);
+  append_scalar(attributes.base_values.size());
+  append_scalar(buckets.tree_count);
+  append_scalar(buckets.depth);
+  append_scalar(buckets.target_count);
+  append_scalar(buckets.branch_mode_mix);
+  append_scalar(buckets.membership_density);
+
   std::ostringstream stream;
-  stream << "tree_ensemble_v5|features=" << attributes.n_features
-         << "|targets=" << attributes.n_targets
-         << "|value=" << static_cast<int>(attributes.value_type)
-         << "|aggregate=" << static_cast<int>(attributes.aggregate)
-         << "|transform=" << static_cast<int>(attributes.post_transform)
-         << "|roots=" << attributes.tree_roots.size()
-         << "|nodes=" << attributes.nodes_featureids.size()
-         << "|leaves=" << attributes.leaf_targetids.size()
-         << "|base_values=" << attributes.base_values.size()
-         << "|membership=" << attributes.membership_values.size();
-  for (std::size_t index = 0; index < attributes.nodes_featureids.size(); ++index) {
-    const std::int64_t missing = attributes.nodes_missing_value_tracks_true.empty()
-                                     ? 0
-                                     : attributes.nodes_missing_value_tracks_true[index];
-    stream << "|n" << index << ":" << attributes.nodes_featureids[index] << ":"
-           << static_cast<int>(attributes.nodes_modes[index]) << ":"
-           << attributes.nodes_truenodeids[index] << ":" << attributes.nodes_falsenodeids[index]
-           << ":" << attributes.nodes_trueleafs[index] << ":" << attributes.nodes_falseleafs[index]
-           << ":" << missing;
-  }
-  for (std::size_t index = 0; index < attributes.leaf_targetids.size(); ++index) {
-    stream << "|l" << index << ":" << attributes.leaf_targetids[index] << ":"
-           << attributes.leaf_weights[index];
-  }
+  stream << "tree_ensemble_v5:" << std::hex << std::setfill('0') << std::setw(16) << hash;
   return stream.str();
 }
 
 TreeEnsemblePlan::TreeEnsemblePlan(TreeEnsembleAttributes attributes)
+    : TreeEnsemblePlan(std::move(attributes), {}, nullptr) {
+  uses_dynamic_safe_policy_ = true;
+}
+
+TreeEnsemblePlan::TreeEnsemblePlan(TreeEnsembleAttributes attributes,
+                                   TreeEnsembleTuningContext context,
+                                   const TreeEnsembleTuningRegistry *registry)
     : attributes_(std::move(attributes)) {
   TreeEnsembleReference reference(attributes_);
   (void)reference;
@@ -527,7 +706,6 @@ TreeEnsemblePlan::TreeEnsemblePlan(TreeEnsembleAttributes attributes)
     leaves_[index].target_id = attributes_.leaf_targetids[index];
     leaves_[index].weight = RoundValue(attributes_.leaf_weights[index], attributes_.value_type);
   }
-  model_signature_ = MakeModelSignature(attributes_);
   const auto depth = [&](auto &&self, std::size_t node) -> std::size_t {
     if (attributes_.nodes_trueleafs[node] != 0 && attributes_.nodes_falseleafs[node] != 0) {
       return 1U;
@@ -569,10 +747,71 @@ TreeEnsemblePlan::TreeEnsemblePlan(TreeEnsembleAttributes attributes)
                 static_cast<std::uint64_t>(attributes_.tree_roots.size())});
   uses_64_bit_indices_ =
       maximum_index > static_cast<std::uint64_t>(std::numeric_limits<std::uint32_t>::max());
-  workspace_bytes_ = std::max<std::size_t>(
-      1U, SaturatingMultiply(SaturatingMultiply(kTreeMajorBatchRows,
-                                                static_cast<std::size_t>(attributes_.n_targets)),
-                             sizeof(double) + sizeof(std::size_t)));
+
+  structural_buckets_.tree_count = CountBucket(tree_roots_.size());
+  structural_buckets_.depth = DepthBucket(max_depth_);
+  structural_buckets_.target_count = CountBucket(static_cast<std::size_t>(attributes_.n_targets));
+  structural_buckets_.branch_mode_mix =
+      std::adjacent_find(attributes_.nodes_modes.begin(), attributes_.nodes_modes.end(),
+                         std::not_equal_to<>()) == attributes_.nodes_modes.end()
+          ? TreeEnsembleBranchMix::kHomogeneous
+          : TreeEnsembleBranchMix::kMixed;
+  const std::size_t membership_nodes = static_cast<std::size_t>(std::count(
+      attributes_.nodes_modes.begin(), attributes_.nodes_modes.end(), TreeBranchMode::kMember));
+  if (membership_nodes == 0) {
+    structural_buckets_.membership_density = TreeEnsembleMembershipDensity::kNone;
+  } else {
+    const std::size_t values = attributes_.membership_values.size() > membership_nodes
+                                   ? attributes_.membership_values.size() - membership_nodes
+                                   : 0;
+    structural_buckets_.membership_density = values <= membership_nodes * 8
+                                                 ? TreeEnsembleMembershipDensity::kSparse
+                                                 : TreeEnsembleMembershipDensity::kDense;
+  }
+
+  model_signature_ = MakeModelSignature(attributes_, structural_buckets_);
+  context.threads =
+      context.threads == 0 ? static_cast<std::size_t>(ExecutionThreadCount()) : context.threads;
+  context.threads = std::max<std::size_t>(context.threads, 1);
+  model_key_.input_type = attributes_.value_type;
+  model_key_.processor = std::move(context.processor);
+  model_key_.threads = context.threads;
+  model_key_.model_digest = model_signature_;
+  tuning_policy_ = MakeSafePolicy(tree_roots_.size(),
+                                  static_cast<std::size_t>(attributes_.n_targets), context.threads);
+
+  if (registry != nullptr) {
+    std::lock_guard<std::mutex> lock(registry->mutex_);
+    profile_generation_ = registry->generation_;
+    const auto exact = std::find_if(registry->exact_.begin(), registry->exact_.end(),
+                                    [&](const TreeEnsembleTuningRegistry::ExactEntry &entry) {
+                                      return entry.key == model_key_;
+                                    });
+    if (exact != registry->exact_.end()) {
+      if (PolicyCompatible(exact->policy, static_cast<std::size_t>(attributes_.n_targets),
+                           context.threads)) {
+        tuning_policy_ = exact->policy;
+        profile_source_ = TreeEnsembleProfileSource::kExact;
+      }
+    } else {
+      const auto portable =
+          std::find_if(registry->portable_.begin(), registry->portable_.end(),
+                       [&](const TreeEnsembleTuningRegistry::PortableEntry &entry) {
+                         return entry.buckets == structural_buckets_;
+                       });
+      if (portable != registry->portable_.end() &&
+          PolicyCompatible(portable->policy, static_cast<std::size_t>(attributes_.n_targets),
+                           context.threads)) {
+        tuning_policy_ = portable->policy;
+        profile_source_ = TreeEnsembleProfileSource::kPortable;
+      }
+    }
+  }
+  ValidatePolicyShape(tuning_policy_);
+  workspace_bytes_ = 1;
+  for (const TreeEnsembleExecutionRegion &region : tuning_policy_.regions) {
+    workspace_bytes_ = std::max(workspace_bytes_, region.workspace_bytes);
+  }
 }
 
 TreeEnsemblePlan::TreeEnsemblePlan(const TreeEnsembleRegressorAttributes &attributes)
@@ -588,53 +827,74 @@ TreeEnsemblePlan::SelectExecution(std::size_t rows, std::size_t effective_thread
     effective_threads = static_cast<std::size_t>(ExecutionThreadCount());
   }
   effective_threads = std::max<std::size_t>(effective_threads, 1);
-
-  TreeEnsembleExecutionStrategy strategy = TreeEnsembleExecutionStrategy::kTreeMajorBatch;
-  for (const SchedulingRule &rule : kSchedulingRules) {
-    bool matches = false;
-    switch (rule.condition) {
-    case SchedulingCondition::kSerial:
-      matches = effective_threads == 1;
-      break;
-    case SchedulingCondition::kSingleRowLargeForest:
-      matches = rows == 1 && trees > kTreeParallelThreshold;
-      break;
-    case SchedulingCondition::kSmallBatch:
-      matches = rows <= kRowParallelThreshold;
-      break;
-    case SchedulingCondition::kEnoughTreesForWorkers:
-      matches =
-          trees > effective_threads || (attributes_.n_targets > 1 && trees == effective_threads);
-      break;
-    case SchedulingCondition::kDefault:
-      matches = true;
-      break;
+  if (rows == 0) {
+    return {};
+  }
+  if (uses_dynamic_safe_policy_) {
+    TreeEnsembleExecutionDecision fallback;
+    if (effective_threads == 1) {
+      fallback.strategy = TreeEnsembleExecutionStrategy::kTreeMajorBatch;
+    } else if (rows == 1 && trees > kTreeParallelThreshold) {
+      fallback.strategy = TreeEnsembleExecutionStrategy::kTreeParallel;
+    } else if (rows <= kRowParallelThreshold) {
+      fallback.strategy = TreeEnsembleExecutionStrategy::kTreeMajorBatch;
+    } else if (trees > effective_threads ||
+               (attributes_.n_targets > 1 && trees == effective_threads)) {
+      fallback.strategy = TreeEnsembleExecutionStrategy::kTreeParallel;
+    } else {
+      fallback.strategy = TreeEnsembleExecutionStrategy::kRowParallel;
     }
-    if (matches) {
-      strategy = rule.strategy;
+    if (fallback.strategy == TreeEnsembleExecutionStrategy::kTreeParallel) {
+      fallback.participants = std::min(effective_threads, trees);
+      fallback.batch_rows = std::min(rows, kTreeMajorBatchRows);
+    } else if (fallback.strategy == TreeEnsembleExecutionStrategy::kRowParallel) {
+      fallback.participants = std::min(effective_threads, rows);
+      fallback.batch_rows = 1;
+    } else {
+      fallback.batch_rows = std::min(rows, kTreeMajorBatchRows);
+    }
+    fallback.row_chunk = (rows + fallback.participants - 1) / fallback.participants;
+    fallback.tree_chunk = (trees + fallback.participants - 1) / fallback.participants;
+    fallback.workspace_bytes = SaturatingMultiply(
+        SaturatingMultiply(SaturatingMultiply(fallback.participants, fallback.batch_rows),
+                           static_cast<std::size_t>(attributes_.n_targets)),
+        sizeof(double) + sizeof(std::size_t));
+    return fallback;
+  }
+  if (effective_threads == 1) {
+    TreeEnsembleExecutionDecision serial;
+    serial.strategy = TreeEnsembleExecutionStrategy::kTreeMajorBatch;
+    serial.batch_rows = std::min(rows, kTreeMajorBatchRows);
+    serial.tree_chunk = std::max<std::size_t>(trees, 1);
+    serial.workspace_bytes = SaturatingMultiply(
+        SaturatingMultiply(serial.batch_rows, static_cast<std::size_t>(attributes_.n_targets)),
+        sizeof(double) + sizeof(std::size_t));
+    return serial;
+  }
+
+  const TreeEnsembleExecutionRegion *selected = &tuning_policy_.regions.back();
+  for (const TreeEnsembleExecutionRegion &region : tuning_policy_.regions) {
+    if (!region.maximum_rows.has_value() || rows <= *region.maximum_rows) {
+      selected = &region;
       break;
     }
   }
 
   TreeEnsembleExecutionDecision decision;
-  decision.strategy = strategy;
-  if (rows == 0) {
-    decision.batch_rows = 0;
-    decision.workspace_bytes = 0;
-    return decision;
-  }
-  if (strategy == TreeEnsembleExecutionStrategy::kTreeParallel) {
-    decision.participants = std::min(effective_threads, trees);
-    decision.batch_rows = std::min(rows, kTreeMajorBatchRows);
-  } else if (strategy == TreeEnsembleExecutionStrategy::kRowParallel) {
-    decision.participants = std::min(effective_threads, rows);
-    decision.batch_rows = 1;
+  decision.strategy = selected->strategy;
+  decision.row_chunk = selected->row_chunk;
+  decision.tree_chunk = selected->tree_chunk;
+  const std::size_t participant_cap = std::min(effective_threads, selected->maximum_threads);
+  if (selected->strategy == TreeEnsembleExecutionStrategy::kTreeParallel) {
+    decision.participants = std::min(participant_cap, trees);
+    decision.batch_rows = std::min(rows, selected->batch_rows);
+  } else if (selected->strategy == TreeEnsembleExecutionStrategy::kRowParallel) {
+    decision.participants = std::min(participant_cap, rows);
+    decision.batch_rows = std::min(rows, selected->batch_rows);
   } else {
     decision.participants = 1;
-    decision.batch_rows = std::min(rows, kTreeMajorBatchRows);
+    decision.batch_rows = std::min(rows, selected->batch_rows);
   }
-  decision.row_chunk = (rows + decision.participants - 1) / decision.participants;
-  decision.tree_chunk = (trees + decision.participants - 1) / decision.participants;
   decision.workspace_bytes = SaturatingMultiply(
       SaturatingMultiply(SaturatingMultiply(decision.participants, decision.batch_rows),
                          static_cast<std::size_t>(attributes_.n_targets)),
