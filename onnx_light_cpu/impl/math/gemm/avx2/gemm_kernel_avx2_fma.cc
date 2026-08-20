@@ -4,8 +4,8 @@
 
 #include "onnx_light_cpu/impl/math/gemm/avx2/gemm_kernel_avx2_fma.h"
 
+#include "onnx_light_cpu/impl/execution.h"
 #include "onnx_light_cpu/impl/math/half_conversion.h"
-#include "onnx_light_cpu/impl/parallel_for.h"
 
 #include <algorithm>
 #include <immintrin.h>
@@ -57,7 +57,7 @@ void GemmHalfSkinnyM(bool trans_a, std::size_t M, std::size_t N, std::size_t K, 
   constexpr std::size_t kColumns = 16;
   const std::size_t panels = (N + kColumns - 1) / kColumns;
   const double cost = static_cast<double>(M) * kColumns * K / 32768.0;
-  ParallelFor(static_cast<std::int64_t>(panels), cost, [&](std::int64_t begin, std::int64_t end) {
+  ExecuteRanges(static_cast<std::int64_t>(panels), cost, [&](std::int64_t begin, std::int64_t end) {
     for (std::int64_t panel = begin; panel < end; ++panel) {
       const std::size_t n0 = static_cast<std::size_t>(panel) * kColumns;
       const std::size_t columns = std::min(kColumns, N - n0);
@@ -158,7 +158,7 @@ template <bool Bfloat16>
 void GemmHalfSkinnyN(std::size_t M, std::size_t K, float alpha, const std::uint16_t *A,
                      const std::uint16_t *B, float *Y) {
   const double cost = static_cast<double>(K) / 32768.0;
-  ParallelFor(static_cast<std::int64_t>(M), cost, [&](std::int64_t begin, std::int64_t end) {
+  ExecuteRanges(static_cast<std::int64_t>(M), cost, [&](std::int64_t begin, std::int64_t end) {
     for (std::int64_t row = begin; row < end; ++row) {
       const std::uint16_t *a = A + static_cast<std::size_t>(row) * K;
       __m256 accumulator = _mm256_setzero_ps();
