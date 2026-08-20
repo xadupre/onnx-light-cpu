@@ -2,6 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#if defined(_WIN32)
+#define NOMINMAX
+#endif
+
 #include "onnx_light_cpu/reference/tree_ensemble_reference.h"
 
 #include "onnx_light_cpu/impl/execution.h"
@@ -29,7 +33,6 @@
 #include <vector>
 
 #if defined(_WIN32)
-#define NOMINMAX
 #include <windows.h>
 #endif
 
