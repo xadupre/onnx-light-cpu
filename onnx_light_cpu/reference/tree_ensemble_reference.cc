@@ -22,10 +22,16 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <system_error>
 #include <type_traits>
 #include <unordered_map>
 #include <utility>
 #include <vector>
+
+#if defined(_WIN32)
+#define NOMINMAX
+#include <windows.h>
+#endif
 
 namespace onnx_light_cpu::reference {
 namespace {
@@ -620,6 +626,20 @@ private:
   bool released_{false};
 };
 
+void ReplaceFileAtomically(const std::filesystem::path &source,
+                           const std::filesystem::path &destination) {
+#if defined(_WIN32)
+  if (!MoveFileExW(source.c_str(), destination.c_str(),
+                   MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+    throw std::filesystem::filesystem_error(
+        "unable to replace calibration evidence", source, destination,
+        std::error_code(static_cast<int>(GetLastError()), std::system_category()));
+  }
+#else
+  std::filesystem::rename(source, destination);
+#endif
+}
+
 void PersistCalibrationEvidence(const TreeEnsembleCalibrationReport &report,
                                 const std::string &path) {
   static std::atomic<std::uint64_t> sequence{0};
@@ -653,7 +673,7 @@ void PersistCalibrationEvidence(const TreeEnsembleCalibrationReport &report,
     throw std::runtime_error("unable to write calibration evidence");
   }
   stream.close();
-  std::filesystem::rename(temporary.path(), destination);
+  ReplaceFileAtomically(temporary.path(), destination);
   temporary.Release();
 }
 
