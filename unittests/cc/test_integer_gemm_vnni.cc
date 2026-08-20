@@ -319,6 +319,25 @@ TEST(IntegerVnniKernel, Avx2DotAvoidsPairwiseSaturation) {
               onnx_light_cpu::detail::IntegerDotU8S8Scalar(a.data(), b.data(), depth));
   }
 }
+
+TEST(IntegerVnniKernel, Avx2BlockedKernelHandlesOutputAndDepthTails) {
+  if (onnx_light_cpu::DetectSimdLevel() < onnx_light_cpu::SimdLevel::kAVX2) {
+    GTEST_SKIP() << "AVX2 is not available on this CPU";
+  }
+  constexpr std::int64_t rows = 3;
+  constexpr std::int64_t cols = 5;
+  for (const std::int64_t depth : {32, 65}) {
+    std::vector<std::uint8_t> a(static_cast<std::size_t>(rows * depth));
+    std::vector<std::uint8_t> b(static_cast<std::size_t>(depth * cols));
+    for (std::size_t index = 0; index < a.size(); ++index) {
+      a[index] = index % 2 == 0 ? std::uint8_t{255} : std::uint8_t{128};
+    }
+    for (std::size_t index = 0; index < b.size(); ++index) {
+      b[index] = index % 2 == 0 ? std::uint8_t{127} : std::uint8_t{128};
+    }
+    CheckAllPaths(a, false, b, true, rows, cols, depth, {0}, {0});
+  }
+}
 #endif
 
 TEST(IntegerPacked4Bit, MatchesReferenceAcrossFormatsAndOddTails) {

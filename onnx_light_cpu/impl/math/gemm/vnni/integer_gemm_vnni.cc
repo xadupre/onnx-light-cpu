@@ -108,6 +108,13 @@ void IntegerMatMul2DWithDot(IntegerVnniDotFn dot, const std::uint8_t *a, bool a_
     b_col_sum[static_cast<std::size_t>(j)] = col_sum;
   }
 
+  bool has_products = false;
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_INTEGER
+  if (dot == &IntegerDotU8S8Avx2 && rows >= 2 && cols >= 2 && depth >= 32) {
+    IntegerMatMulU8S8Avx2(a_panel.data(), b_panel.data(), c, rows, cols, depth);
+    has_products = true;
+  }
+#endif
   for (std::int64_t i = 0; i < rows; ++i) {
     const std::int64_t az =
         a_zero_point_count == 1 ? a_zero_point[0] : a_zero_point[static_cast<std::size_t>(i)];
@@ -117,7 +124,8 @@ void IntegerMatMul2DWithDot(IntegerVnniDotFn dot, const std::uint8_t *a, bool a_
       const std::int64_t bz =
           b_zero_point_count == 1 ? b_zero_point[0] : b_zero_point[static_cast<std::size_t>(j)];
       const std::int64_t sb_sum = b_col_sum[static_cast<std::size_t>(j)];
-      const std::int64_t vp = dot(a_row, b_panel.data() + j * depth, depth);
+      const std::int64_t vp =
+          has_products ? c[i * cols + j] : dot(a_row, b_panel.data() + j * depth, depth);
       const std::int64_t s =
           vp + sa * (ob - bz) + sb_sum * (-oa - az) + depth * (oa * ob + az * bz);
       c[i * cols + j] = std::bit_cast<std::int32_t>(static_cast<std::uint32_t>(s));
