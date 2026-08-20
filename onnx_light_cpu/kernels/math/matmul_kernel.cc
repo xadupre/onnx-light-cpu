@@ -145,7 +145,7 @@ void MatMulKernel::Run(RuntimeContext &rt) {
 void RegisterMatMulKernel() {
   rt_ns::NodeKernelFn matmul = [](const NodeProto &node,
                                   RuntimeContext &rt) -> std::unique_ptr<rt_ns::KernelBase> {
-    return MakeSessionKernel<MatMulKernel>(node, rt);
+    return rt_ns::MakeSessionKernel<MatMulKernel, SessionExecutorAdapter>(node, rt);
   };
   rt_ns::RegisterKernelFn("", "MatMul", sym_ns::Device::kCPU, std::move(matmul));
 }
