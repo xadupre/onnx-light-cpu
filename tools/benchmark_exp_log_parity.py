@@ -68,9 +68,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     [helper.make_tensor_value_info("Y", TensorProto.FLOAT, [size])],
                 ),
                 opset_imports=[helper.make_opsetid("", 18)],
-                ir_version=13,
+                ir_version=13,  # Freeze the model for the onnx-light runtime.
             )
             feeds = {"X": values}
+            # Session construction and output allocation are intentionally
+            # outside the timed call; dispatch and execution remain measured.
             cpu = ReferenceEvaluator(
                 model.SerializeToString(), cpu_execution={"num_threads": requested}
             )

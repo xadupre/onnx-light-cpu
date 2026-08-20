@@ -41,6 +41,7 @@ const char *IsaName(onnx_light_cpu::SimdLevel level) {
 }
 
 std::string CpuModel() {
+  // Linux topology files are used when available; other platforms report unknown.
   std::ifstream cpuinfo("/proc/cpuinfo");
   std::string line;
   while (std::getline(cpuinfo, line)) {
@@ -90,7 +91,10 @@ std::vector<double> Measure(Function function, std::size_t count, std::size_t sa
 
 std::pair<double, double> Summary(std::vector<double> values) {
   std::sort(values.begin(), values.end());
-  return {values[values.size() / 2], values[(values.size() * 3) / 4] - values[values.size() / 4]};
+  const std::size_t middle = values.size() / 2;
+  const double median =
+      values.size() % 2 == 0 ? (values[middle - 1] + values[middle]) / 2.0 : values[middle];
+  return {median, values[(values.size() * 3) / 4] - values[values.size() / 4]};
 }
 
 } // namespace
@@ -102,7 +106,7 @@ int main(int argc, char **argv) {
     std::fprintf(stderr, "sample count must be positive\n");
     return 2;
   }
-  std::printf("timestamp=steady  cpu_model=%s  logical_cpus=%u  physical_threads=%u\n",
+  std::printf("timestamp=steady  cpu_model=%s  logical_cpus=%u  physical_cores=%u\n",
               CpuModel().c_str(), std::thread::hardware_concurrency(),
               static_cast<unsigned>(PhysicalCores()));
   std::printf("compiler=%s  cxx=%ld  isa=%s  samples=%zu  configured_threads=1,2,4,physical\n",
