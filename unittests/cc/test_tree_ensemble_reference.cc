@@ -54,12 +54,12 @@ TreeEnsembleAttributes Stump() {
   return attributes;
 }
 
-TreeEnsembleAttributes StumpForest(std::size_t trees) {
+TreeEnsembleAttributes StumpForest(std::size_t trees, std::size_t targets = 2) {
   TreeEnsembleAttributes attributes;
   attributes.n_features = 1;
-  attributes.n_targets = 2;
+  attributes.n_targets = static_cast<std::int64_t>(targets);
   attributes.value_type = TreeValueType::kFloat32;
-  attributes.base_values = {0.5, -0.5};
+  attributes.base_values.resize(targets, 0.5);
   for (std::size_t tree = 0; tree < trees; ++tree) {
     const std::int64_t node = static_cast<std::int64_t>(tree);
     const std::int64_t leaf = static_cast<std::int64_t>(2 * tree);
@@ -71,8 +71,8 @@ TreeEnsembleAttributes StumpForest(std::size_t trees) {
     attributes.nodes_falsenodeids.push_back(leaf + 1);
     attributes.nodes_trueleafs.push_back(1);
     attributes.nodes_falseleafs.push_back(1);
-    attributes.leaf_targetids.push_back(static_cast<std::int64_t>(tree % 2));
-    attributes.leaf_targetids.push_back(static_cast<std::int64_t>(tree % 2));
+    attributes.leaf_targetids.push_back(static_cast<std::int64_t>(tree % targets));
+    attributes.leaf_targetids.push_back(static_cast<std::int64_t>(tree % targets));
     attributes.leaf_weights.push_back(0.25);
     attributes.leaf_weights.push_back(-0.25);
   }
@@ -199,6 +199,13 @@ TEST(TreeEnsembleReference, SchedulingDecisionMatchesOrtCrossovers) {
   EXPECT_EQ(few_trees.SelectExecution(1000, 1).strategy,
             TreeEnsembleExecutionStrategy::kTreeMajorBatch);
   EXPECT_EQ(few_trees.SelectExecution(1000, 1).batch_rows, 128U);
+
+  const TreeEnsemblePlan four_single_target_trees(StumpForest(4, 1));
+  const TreeEnsemblePlan four_multi_target_trees(StumpForest(4, 2));
+  EXPECT_EQ(four_single_target_trees.SelectExecution(51, 4).strategy,
+            TreeEnsembleExecutionStrategy::kRowParallel);
+  EXPECT_EQ(four_multi_target_trees.SelectExecution(51, 4).strategy,
+            TreeEnsembleExecutionStrategy::kTreeParallel);
 }
 
 TEST(TreeEnsembleReference, SchedulingWorkspaceIsBoundedByActiveBatch) {

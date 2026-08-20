@@ -603,7 +603,8 @@ TreeEnsemblePlan::SelectExecution(std::size_t rows, std::size_t effective_thread
       matches = rows <= kRowParallelThreshold;
       break;
     case SchedulingCondition::kEnoughTreesForWorkers:
-      matches = trees >= effective_threads;
+      matches =
+          trees > effective_threads || (attributes_.n_targets > 1 && trees == effective_threads);
       break;
     case SchedulingCondition::kDefault:
       matches = true;

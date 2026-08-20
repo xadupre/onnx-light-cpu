@@ -988,6 +988,11 @@ if(ONNX_LIGHT_CPU_BUILD_BENCHMARKS)
     target_compile_options(exp_log_throughput PRIVATE ${_simd_flags})
   endif()
   onnx_light_apply_hardening(exp_log_throughput)
+
+  add_executable(tree_ensemble_throughput
+      "${CMAKE_CURRENT_SOURCE_DIR}/tools/tree_ensemble_throughput.cc")
+  target_link_libraries(tree_ensemble_throughput PRIVATE lib_onnx_light_cpu)
+  onnx_light_apply_hardening(tree_ensemble_throughput)
 endif()
 
 # ---------------------------------------------------------------------------
