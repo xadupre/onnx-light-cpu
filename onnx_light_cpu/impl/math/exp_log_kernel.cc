@@ -702,9 +702,18 @@ namespace {
 void LogFloat32_Dispatch(const float *input, float *output, std::size_t count) {
 #if ONNX_LIGHT_CPU_X86
   static const SimdLevel level = DetectSimdLevel();
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
+  static const bool use_avx2_fma = level >= SimdLevel::kAVX2 && CpuSupportsFma();
+#endif
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512
   if (level >= SimdLevel::kAVX512) {
     LogFloat32_AVX512(input, output, count);
+    return;
+  }
+#endif
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
+  if (use_avx2_fma) {
+    LogFloat32_AVX2_FMA(input, output, count);
     return;
   }
 #endif

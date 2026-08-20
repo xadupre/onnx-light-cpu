@@ -137,6 +137,63 @@ FloatClass Classify(float value) {
   return std::fpclassify(value) == FP_SUBNORMAL ? FloatClass::kSubnormal : FloatClass::kNormal;
 }
 
+std::uint32_t OrderedFloatBits(float value) {
+  std::uint32_t bits;
+  std::memcpy(&bits, &value, sizeof(bits));
+  return (bits & 0x80000000u) != 0 ? ~bits : bits | 0x80000000u;
+}
+
+using Float32Kernel = void (*)(const float *, float *, std::size_t);
+
+void CheckLogFloat32Differential(Float32Kernel kernel) {
+  const float infinity = std::numeric_limits<float>::infinity();
+  std::vector<float> input = {
+      0.0f,
+      -0.0f,
+      -1.0f,
+      infinity,
+      -infinity,
+      std::numeric_limits<float>::quiet_NaN(),
+      std::numeric_limits<float>::denorm_min(),
+      2.0f * std::numeric_limits<float>::denorm_min(),
+      std::numeric_limits<float>::min(),
+      std::nextafter(std::numeric_limits<float>::min(), 0.0f),
+      std::nextafter(1.0f, 0.0f),
+      1.0f,
+      std::nextafter(1.0f, 2.0f),
+      std::numeric_limits<float>::max(),
+  };
+  std::uint32_t state = 0x12345678u;
+  for (std::size_t i = 0; i < 4093; ++i) {
+    state = state * 1664525u + 1013904223u;
+    std::uint32_t bits = state % 0x7f800000u;
+    if (bits == 0) {
+      bits = 1;
+    }
+    float value;
+    std::memcpy(&value, &bits, sizeof(value));
+    input.push_back(value);
+  }
+
+  std::vector<float> storage(input.size() + 1);
+  std::copy(input.begin(), input.end(), storage.begin() + 1);
+  std::vector<float> output(input.size() + 1);
+  kernel(storage.data() + 1, output.data() + 1, input.size());
+  for (std::size_t i = 0; i < input.size(); ++i) {
+    const float reference = std::log(input[i]);
+    const float actual = output[i + 1];
+    EXPECT_EQ(Classify(actual), Classify(reference)) << "at index " << i << " x=" << input[i];
+    if (std::isfinite(reference)) {
+      const std::uint32_t actual_bits = OrderedFloatBits(actual);
+      const std::uint32_t reference_bits = OrderedFloatBits(reference);
+      const std::uint32_t ulps = actual_bits > reference_bits ? actual_bits - reference_bits
+                                                              : reference_bits - actual_bits;
+      EXPECT_LE(ulps, 2u) << "at index " << i << " x=" << input[i] << " actual=" << actual
+                          << " reference=" << reference;
+    }
+  }
+}
+
 TEST(ExpFloat32, TailsUnalignedAndClassification) {
   const std::vector<float> values = {-80.0f, -20.0f, -0.0f, 0.0f, 20.0f, 88.0f, 90.0f, 100.0f};
   std::vector<float> storage(values.size() + 2, 0.0f);
@@ -260,6 +317,27 @@ TEST(LogFloat32, PositiveSubnormalCorpus) {
     EXPECT_NEAR(output[i], std::log(values[i]), 2e-5f * std::fabs(std::log(values[i])) + 1e-6f);
   }
 }
+
+TEST(LogFloat32, DifferentialCorpus) { CheckLogFloat32Differential(&onnx_light_cpu::LogFloat32); }
+
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
+TEST(LogFloat32, Avx2FmaDifferentialCorpus) {
+  if (onnx_light_cpu::DetectSimdLevel() < onnx_light_cpu::SimdLevel::kAVX2 ||
+      !onnx_light_cpu::CpuSupportsFma()) {
+    GTEST_SKIP() << "AVX2+FMA is unavailable";
+  }
+  CheckLogFloat32Differential(&onnx_light_cpu::LogFloat32_AVX2_FMA);
+}
+#endif
+
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
+TEST(LogFloat32, Avx512DifferentialCorpus) {
+  if (onnx_light_cpu::DetectSimdLevel() < onnx_light_cpu::SimdLevel::kAVX512) {
+    GTEST_SKIP() << "AVX-512 is unavailable";
+  }
+  CheckLogFloat32Differential(&onnx_light_cpu::LogFloat32_AVX512);
+}
+#endif
 
 // ---------------------------------------------------------------------------
 // ExpFloat64 / LogFloat64

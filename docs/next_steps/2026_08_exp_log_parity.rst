@@ -3,7 +3,7 @@ Exp and Log ONNX Runtime Parity Roadmap
 
 :Date: 2026-08
 
-**in progress** (ExpLog PR03 AVX2+FMA float32 ``Exp`` kernel)
+**complete** (ExpLog PR04 AVX2+FMA ``Log`` and AVX-512 alignment)
 
 Objective
 ---------
@@ -206,6 +206,11 @@ AVX-512 receives the same numerical reconstruction and polynomial after the
 AVX2 design is proven. SSE2 retains a portable non-FMA implementation with the
 same edge semantics.
 
+ExpLog PR04 aligned the AVX-512 float32 implementation with the proven
+AVX2+FMA range reduction, polynomial evaluation, and split exponent
+reconstruction. Both feature-specific loops process two independent vectors
+per iteration while retaining their scalar or masked tails.
+
 Log
 ~~~
 
@@ -219,6 +224,17 @@ The first ``Log`` change should preserve the current approximation while:
 Horner and Estrin evaluation are benchmark candidates only after the
 correctness corpus passes. A shorter or different polynomial is accepted only
 when it meets the documented ULP bound across the complete input domain.
+
+ExpLog PR04 keeps the existing polynomial and evaluates its Horner chain with
+FMA in the feature-specific AVX2 unit and AVX-512 implementation. Both use
+two-vector unrolling and preserve exact positive-subnormal normalization. The
+shared differential corpus checks special values, normal/subnormal boundaries,
+unaligned buffers, tails, and deterministic positive float32 bit patterns
+against ``std::log`` with a two-ULP bound.
+
+On the reference AVX2 runner, two nine-sample isolated comparisons in reversed
+candidate order retained the 100-element case (``0.94x`` to ``1.14x``) and
+improved every larger priority size (``1.09x`` to ``1.29x``).
 
 Scheduling
 ~~~~~~~~~~
@@ -264,14 +280,14 @@ Remaining pull-request sequence
        single-thread throughput improves by at least ``2x`` on the reference
        AVX2 machine, with no correctness or small-tensor regression.
      - PR02
-     - In progress
+     - Complete
    * - ExpLog PR04
      - AVX2+FMA ``Log`` and AVX-512 alignment.
      - FMA and unrolling improve or retain every priority ``Log`` case;
        AVX-512 uses the corrected shared numerical design; all ISA fallbacks
        pass the same differential corpus.
      - PR02, PR03
-     - Pending
+     - Complete
    * - ExpLog PR05
      - Operator-specific scheduling.
      - Independent thresholds and participant caps improve or retain every
