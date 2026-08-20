@@ -148,7 +148,7 @@ void LogFloat16(const uint16_t *input, uint16_t *output, std::size_t count);
 /// rows by one SIMD vector of columns in registers while it accumulates the
 /// whole ``k`` reduction (reusing each ``B`` row across the tile), with runtime
 /// AVX-512/AVX/SSE2 dispatch and a scalar fallback; the work is split across
-/// rows of ``Y`` using the shared ``ParallelFor`` thread pool.
+/// rows of ``Y`` using the executor supplied by the embedding runtime.
 void GemmFloat32(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::size_t K,
                  float alpha, const float *A, const float *B, float beta, const float *C, float *Y);
 

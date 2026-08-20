@@ -81,25 +81,10 @@ cmake --build build
 ctest --test-dir build
 ```
 
-The shared kernel thread pool uses one participant per detected physical core
-by default. Per-kernel cost models may use fewer participants for smaller or
-memory-bound workloads. Constrained builds can impose a ceiling:
-
-```bash
-cmake -S . -B build -DONNX_LIGHT_CPU_MAX_THREADS=4
-```
-
-The resulting binary can use fewer threads without rebuilding. The process
-environment limit is read once, before the shared worker pool is created:
-
-```bash
-ONNX_LIGHT_CPU_NUM_THREADS=1 <benchmark-command>
-ONNX_LIGHT_CPU_NUM_THREADS=4 <benchmark-command>
-```
-
-Invalid values are ignored, and the requested count is capped by
-the available hardware threads and by `ONNX_LIGHT_CPU_MAX_THREADS` when that
-build-time option is positive.
+`onnx-light-cpu` does not own a thread pool. Direct standalone kernel calls run
+on the calling thread. Kernels registered with `onnx-light` split work through
+the session `CpuExecutor`, so thread count, affinity, spin policy, nesting, and
+inspection all come from the session execution policy.
 
 ### AVX-512 support
 

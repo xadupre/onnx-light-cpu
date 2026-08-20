@@ -43,46 +43,31 @@ jobs:
       - name: Build and install onnx-light from source
         env:
           SCCACHE_GHA_ENABLED: "true"
+          CMAKE_ARGS: "-DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache"
         run: |
-          # onnx-light's CMake calls find_package(nanobind) via "python -m
-          # nanobind --cmake_dir", so nanobind (and scikit-build-core) must be
-          # importable before configuring it. Recent onnx-light sources also
-          # query numpy.get_include() at configure time, so numpy is required too.
+          # Build the current main branch once and install that exact wheel.
+          # onnx-light-cpu subsequently discovers the loaded runtime through
+          # get_cpp_build_info(), avoiding a second CMake-installed copy with a
+          # different dispatch registry.
           pip install nanobind scikit-build-core numpy
-          # Clone the latest onnx-light sources (default branch) rather than a
-          # tagged release: the C++ backend test depends on recent additions such
-          # as onnx_core/runtime/kernels/tensor_compare.h that are not yet in a tag.
-          git clone --depth 1 https://github.com/xadupre/onnx-light.git /tmp/onnx-light
-          cmake -S /tmp/onnx-light -B /tmp/onnx-light/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/tmp/onnx-light/install -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
-          cmake --build /tmp/onnx-light/build --config Release --parallel --verbose
-          cmake --install /tmp/onnx-light/build --config Release
+          git clone --depth 1 --branch main https://github.com/xadupre/onnx-light.git /tmp/onnx-light
           pip install -C build.verbose=true /tmp/onnx-light -v
-          echo "CMAKE_PREFIX_PATH=/tmp/onnx-light/install${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}" >> "$GITHUB_ENV"
-          # The C++ tests link onnx-light's shared libraries and are executed at
-          # build time by gtest_discover_tests, so the install lib dir must be on
-          # LD_LIBRARY_PATH or discovery fails with "cannot open shared object
-          # file: liblib_onnx_proto.so".
-          onnx_light_libdir=$(dirname "$(find /tmp/onnx-light/install -name 'liblib_onnx_proto.so' | head -1)")
+          onnx_light_libdir=$(python -c "from onnx_light import get_cpp_build_info as info; print(info()['library_dir'])")
           echo "LD_LIBRARY_PATH=${onnx_light_libdir}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
 
-      # Build the CPU kernel extension and install the documentation and test
-      # dependencies. ONNX_LIGHT_CPU_BUILD_TESTS=ON builds the C++ unit tests so
-      # ctest can run them below. Sphinx-Gallery executes
-      # docs/examples/kernels/plot_abs_simd.py at build time, which calls the compiled
-      # extension directly.
-      - name: Build and install package with docs extras
+      - name: Install documentation dependencies
+        run: |
+          pip install \
+            breathe matplotlib myst-parser onnxruntime pydata-sphinx-theme \
+            "sphinx>=7" sphinx-copybutton sphinx-gallery
+
+      # Link to the exact onnx-light runtime installed above. Installing the
+      # ``dev`` extra here would replace it with the released Linux-only wheel.
+      - name: Build package
         env:
           SCCACHE_GHA_ENABLED: "true"
-        run: pip install -C build-dir=build -C cmake.build-type=Release -C build.verbose=true -C cmake.define.ONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON -C cmake.define.ONNX_LIGHT_CPU_BUILD_TESTS=ON -C cmake.define.CMAKE_C_COMPILER_LAUNCHER=sccache -C cmake.define.CMAKE_CXX_COMPILER_LAUNCHER=sccache -e .[docs,dev] -v
-
-      - name: pip freeze
-        run: pip freeze
-
-      - name: Run C++ unit tests
-        run: ctest --test-dir build --output-on-failure -C Release --timeout 240
-
-      - name: Run Python tests
-        run: pytest --durations=10 unittests
+          CMAKE_ARGS: "-DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache"
+        run: python setup.py build_ext --inplace --onnx-light-source
 
       # sphinx-build exits non-zero when Sphinx-Gallery fails to execute an
       # example, so this step fails if the documentation stops running.

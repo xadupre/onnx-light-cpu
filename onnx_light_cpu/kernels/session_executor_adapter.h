@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "onnx_light_cpu/impl/parallel_for.h"
+#include "onnx_light_cpu/impl/execution.h"
 
 #include "onnx_core/runtime/runtime_context.h"
 #include "onnx_core/runtime/tuning/cpu_executor.h"
@@ -19,7 +19,7 @@ namespace rt_ns = ONNX_LIGHT_NAMESPACE::core::runtime;
 using NodeProto = ONNX_LIGHT_NAMESPACE::NodeProto;
 
 /**
- * Installs an onnx-light session executor for onnx-light-cpu ParallelFor calls.
+ * Installs an onnx-light session executor for onnx-light-cpu ExecuteRanges calls.
  */
 class SessionExecutorAdapter {
 public:
@@ -36,20 +36,20 @@ public:
 
 private:
   struct Dispatch {
-    const ParallelForExecutorView *view;
+    const ExecutionExecutorView *view;
     void *task_context;
-    ParallelForBlockFn task;
+    ExecutionBlockFn task;
   };
 
   static void RunBlocks(void *context, int64_t num_blocks, void *task_context,
-                        ParallelForBlockFn task) {
+                        ExecutionBlockFn task) {
     auto &self = *static_cast<SessionExecutorAdapter *>(context);
     Dispatch dispatch{&self.view_, task_context, task};
     self.executor_->ParallelFor(
         num_blocks, 1, &dispatch,
         [](void *dispatch_context, int64_t begin, int64_t end) {
           auto &current = *static_cast<Dispatch *>(dispatch_context);
-          ParallelForExecutorScope executor_scope(current.view);
+          ExecutionExecutorScope executor_scope(current.view);
           for (int64_t block = begin; block < end; ++block) {
             current.task(current.task_context, block);
           }
@@ -58,13 +58,13 @@ private:
   }
 
   rt_ns::CpuExecutor *executor_;
-  ParallelForExecutorView view_;
-  ParallelForExecutorScope scope_;
+  ExecutionExecutorView view_;
+  ExecutionExecutorScope scope_;
 };
 
 /**
  * Wraps a registered kernel so its internal parallel regions use the session
- * executor while direct standalone instances retain the CPU library pool.
+ * executor while direct standalone instances remain serial.
  */
 template <typename Kernel> class SessionKernel final : public Kernel {
 public:

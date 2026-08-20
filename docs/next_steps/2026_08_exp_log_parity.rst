@@ -208,9 +208,9 @@ thresholds are chosen from isolated measurements, not inferred from polynomial
 degree. Each block must contain enough vectors to amortize dispatch, and the
 participant count must stop increasing after throughput saturates.
 
-Registered runtime execution must ultimately use the session-owned executor
-described by the runtime-controls roadmap. Until then, the private pool must
-respect ``ONNX_LIGHT_CPU_NUM_THREADS`` and avoid nested parallel regions.
+Registered runtime execution uses the session-owned executor described by the
+runtime-controls roadmap. Standalone calls remain serial and cannot introduce
+nested workers.
 
 Remaining pull-request sequence
 -------------------------------

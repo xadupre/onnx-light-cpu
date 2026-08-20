@@ -13,8 +13,8 @@
 //
 // It is intentionally not a correctness gate and is not run by ctest. Build it
 // with ``-DONNX_LIGHT_CPU_BUILD_BENCHMARKS=ON`` and run the resulting
-// ``gemm_throughput`` executable. The thread count honours the same
-// ``ONNX_LIGHT_CPU_NUM_THREADS`` environment variable as the kernels.
+// ``gemm_throughput`` executable. This standalone benchmark runs on its calling
+// thread; session-level parallel throughput is measured through onnx-light.
 
 #include "onnx_light_cpu/impl/math/gemm/gemm_common.h"
 #include "onnx_light_cpu/impl/math/gemm/gemm_plan.h"

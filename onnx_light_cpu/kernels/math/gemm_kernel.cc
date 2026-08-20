@@ -170,7 +170,7 @@ GemmBroadcast ResolveBiasLayout(const Tensor &c, std::size_t M, std::size_t N) {
 
 // Widens a FLOAT16 (``is_bfloat16 == false``) or BFLOAT16 (``is_bfloat16 ==
 // true``) tensor's raw 16-bit elements into a fresh ``float32`` buffer,
-// running the per-element bit decode across the shared thread pool for large
+// running the per-element bit decode through the session executor for large
 // tensors.
 std::vector<float> WidenHalfLike(const Tensor &t, bool is_bfloat16) {
   const std::uint16_t *bits = reinterpret_cast<const std::uint16_t *>(t.bytes());

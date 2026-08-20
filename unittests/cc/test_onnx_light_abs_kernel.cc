@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "onnx_light_cpu/impl/parallel_for.h"
 #include "onnx_light_cpu/kernels/math/abs_kernel.h"
 #include "onnx_light_cpu/kernels/register_kernels.h"
 
@@ -88,10 +87,8 @@ TEST(OnnxLightAbsKernel, OutputUsesSlotAllocator) {
   }
 }
 
-// Exercises the ParallelFor path: the array is large enough (above
-// ``kParallelForGrainSize``) that ``AbsKernel`` splits it across the shared
-// thread pool. The result must stay bit-exact regardless of how many threads
-// process it.
+// Exercises a large direct kernel call, which remains serial unless a
+// registered session installs its executor.
 TEST(OnnxLightAbsKernel, Float32LargeParallel) {
   onnx_light_cpu::AbsKernel kernel(MakeCtx());
   const int64_t n = 2000003; // Above Abs's discounted parallel grain.
@@ -135,13 +132,10 @@ TEST(OnnxLightAbsKernel, RegisteredKernelUsesSessionExecutorWithoutPrivatePool) 
   std::vector<float> values(static_cast<std::size_t>(n), -3.0f);
   runtime.Set("x", rt_ns::Tensor::FromFloat("x", {n}, values));
   std::unique_ptr<rt_ns::KernelBase> kernel = factory->second(node, runtime);
-  const uint64_t private_pools_before = onnx_light_cpu::StandaloneThreadPoolCreationCount();
-
   kernel->Run(runtime);
 
   EXPECT_EQ(runtime.Get("y").element_count(), n);
   EXPECT_GE(executor->counters().dispatches, 1u);
-  EXPECT_EQ(onnx_light_cpu::StandaloneThreadPoolCreationCount(), private_pools_before);
 }
 
 } // namespace

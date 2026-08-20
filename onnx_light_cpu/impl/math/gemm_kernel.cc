@@ -30,7 +30,7 @@
 // kGemmTileN`` tiles instead of one full row at a time, and ``K`` is further
 // split into ``kGemmTileK``-sized chunks (see the comment above
 // ``kGemmTileK``). The (row block, column panel) grid is flattened into a
-// single task list so :cpp:func:`ParallelFor` can spread work across threads
+// single task list so :cpp:func:`ExecuteRanges` can spread work across threads
 // on both the ``M`` and ``N`` axes: a pure M-only split leaves no parallelism
 // for the "skinny" shapes common in inference (e.g. ``M == 1`` for a single
 // example / matvec), no matter how wide ``N`` is or how many cores are
@@ -43,11 +43,11 @@
 
 #include "onnx_light_cpu/impl/math/math_kernels.h"
 
+#include "onnx_light_cpu/impl/execution.h"
 #include "onnx_light_cpu/impl/math/gemm/arm/gemm_kernel_arm.h"
 #include "onnx_light_cpu/impl/math/gemm/float8/float8_conversion.h"
 #include "onnx_light_cpu/impl/math/gemm/gemm_common.h"
 #include "onnx_light_cpu/impl/math/half_conversion.h"
-#include "onnx_light_cpu/impl/parallel_for.h"
 
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
 #include "onnx_light_cpu/impl/math/gemm/avx2/gemm_kernel_avx2_fma.h"
@@ -998,20 +998,20 @@ void PackAPanel(bool trans_a, const SrcT *A, std::size_t M, std::size_t K, std::
 template <typename T>
 void InitializeOutput(std::size_t M, std::size_t N, T beta, const T *C, T *Y) {
   const bool has_bias = C != nullptr && beta != T(0);
-  ParallelFor(static_cast<std::int64_t>(M), static_cast<double>(N),
-              [=](std::int64_t begin, std::int64_t end) {
-                for (std::int64_t m = begin; m < end; ++m) {
-                  T *y = Y + static_cast<std::size_t>(m) * N;
-                  if (has_bias) {
-                    const T *c = C + static_cast<std::size_t>(m) * N;
-                    for (std::size_t n = 0; n < N; ++n) {
-                      y[n] = beta * c[n];
+  ExecuteRanges(static_cast<std::int64_t>(M), static_cast<double>(N),
+                [=](std::int64_t begin, std::int64_t end) {
+                  for (std::int64_t m = begin; m < end; ++m) {
+                    T *y = Y + static_cast<std::size_t>(m) * N;
+                    if (has_bias) {
+                      const T *c = C + static_cast<std::size_t>(m) * N;
+                      for (std::size_t n = 0; n < N; ++n) {
+                        y[n] = beta * c[n];
+                      }
+                    } else {
+                      std::fill(y, y + N, T(0));
                     }
-                  } else {
-                    std::fill(y, y + N, T(0));
                   }
-                }
-              });
+                });
 }
 
 template <typename T, typename TileFn>
@@ -1024,7 +1024,7 @@ void GemmDirect(std::size_t M, std::size_t N, std::size_t K, T alpha, const T *A
   const std::size_t task_count = row_blocks * column_panels;
   const double cost =
       static_cast<double>(K) * blocking.mr * blocking.nc / kGemmFmasPerParallelWorkUnit;
-  ParallelFor(
+  ExecuteRanges(
       static_cast<std::int64_t>(task_count), cost, [&](std::int64_t begin, std::int64_t end) {
         for (std::int64_t task = begin; task < end; ++task) {
           const std::size_t index = static_cast<std::size_t>(task);
@@ -1108,7 +1108,7 @@ void GemmSkinnyN(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::
   const std::size_t a_stride = trans_a ? M : 1;
   const std::size_t b_stride = trans_b ? 1 : N;
   const double cost = static_cast<double>(N) * K / kGemmFmasPerParallelWorkUnit;
-  ParallelFor(static_cast<std::int64_t>(M), cost, [&](std::int64_t begin, std::int64_t end) {
+  ExecuteRanges(static_cast<std::int64_t>(M), cost, [&](std::int64_t begin, std::int64_t end) {
     for (std::int64_t row = begin; row < end; ++row) {
       const std::size_t m = static_cast<std::size_t>(row);
       const SrcT *a_row = trans_a ? A + m : A + m * K;
@@ -1146,33 +1146,33 @@ void GemmSkinnyM(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::
   const std::size_t nc = blocking.nc;
   const std::size_t panel_count = (N + nc - 1) / nc;
   const double cost = static_cast<double>(M) * nc * K / kGemmFmasPerParallelWorkUnit;
-  ParallelFor(static_cast<std::int64_t>(panel_count), cost,
-              [&](std::int64_t begin, std::int64_t end) {
-                AlignedVector<T> acc(M * nc);
-                for (std::int64_t panel = begin; panel < end; ++panel) {
-                  const std::size_t n0 = static_cast<std::size_t>(panel) * nc;
-                  const std::size_t nb = std::min(nc, N - n0);
-                  std::fill(acc.data(), acc.data() + M * nb, T(0));
-                  for (std::size_t k = 0; k < K; ++k) {
-                    const SrcT *b_row = B + k * b_row_stride + n0 * b_col_stride;
+  ExecuteRanges(static_cast<std::int64_t>(panel_count), cost,
+                [&](std::int64_t begin, std::int64_t end) {
+                  AlignedVector<T> acc(M * nc);
+                  for (std::int64_t panel = begin; panel < end; ++panel) {
+                    const std::size_t n0 = static_cast<std::size_t>(panel) * nc;
+                    const std::size_t nb = std::min(nc, N - n0);
+                    std::fill(acc.data(), acc.data() + M * nb, T(0));
+                    for (std::size_t k = 0; k < K; ++k) {
+                      const SrcT *b_row = B + k * b_row_stride + n0 * b_col_stride;
+                      for (std::size_t m = 0; m < M; ++m) {
+                        const T a_val = trans_a ? A[k * M + m] : A[m * K + k];
+                        T *acc_row = acc.data() + m * nb;
+                        for (std::size_t j = 0; j < nb; ++j) {
+                          acc_row[j] += a_val * b_row[j * b_col_stride];
+                        }
+                      }
+                    }
                     for (std::size_t m = 0; m < M; ++m) {
-                      const T a_val = trans_a ? A[k * M + m] : A[m * K + k];
-                      T *acc_row = acc.data() + m * nb;
+                      const T *acc_row = acc.data() + m * nb;
+                      T *y_row = Y + m * N + n0;
+                      const T *c_row = has_bias ? C + m * N + n0 : nullptr;
                       for (std::size_t j = 0; j < nb; ++j) {
-                        acc_row[j] += a_val * b_row[j * b_col_stride];
+                        y_row[j] = alpha * acc_row[j] + (has_bias ? beta * c_row[j] : T(0));
                       }
                     }
                   }
-                  for (std::size_t m = 0; m < M; ++m) {
-                    const T *acc_row = acc.data() + m * nb;
-                    T *y_row = Y + m * N + n0;
-                    const T *c_row = has_bias ? C + m * N + n0 : nullptr;
-                    for (std::size_t j = 0; j < nb; ++j) {
-                      y_row[j] = alpha * acc_row[j] + (has_bias ? beta * c_row[j] : T(0));
-                    }
-                  }
-                }
-              });
+                });
 }
 
 template <typename T, typename TileFn, typename SrcT = T>
@@ -1183,7 +1183,7 @@ void GemmFiveLoopRange(bool trans_a, bool trans_b, std::size_t M, std::size_t N,
   const bool has_bias = C != nullptr && beta != T(0);
   const std::size_t column_panels = (N + blocking.nc - 1) / blocking.nc;
   const std::size_t row_panels = (M + blocking.mc - 1) / blocking.mc;
-  const std::size_t thread_count = static_cast<std::size_t>(ParallelForThreadCount());
+  const std::size_t thread_count = static_cast<std::size_t>(ExecutionThreadCount());
   const std::size_t panels_per_wave = std::min(
       column_panels, std::max<std::size_t>(1, (thread_count + row_panels - 1) / row_panels));
   // Column micro-panels are the outer tile loop and row tiles the inner one, so
@@ -1215,34 +1215,34 @@ void GemmFiveLoopRange(bool trans_a, bool trans_b, std::size_t M, std::size_t N,
       const std::size_t task_columns = std::min(blocking.nc, N - first_n);
       const double cost = static_cast<double>(std::min(blocking.mc, M)) * task_columns * kc /
                           kGemmFmasPerParallelWorkUnit;
-      ParallelFor(static_cast<std::int64_t>(task_count), cost,
-                  [&](std::int64_t begin, std::int64_t end) {
-                    AlignedVector<T> apack(blocking.mc * kc);
-                    std::size_t packed_row_panel = row_panels;
-                    for (std::int64_t task = begin; task < end; ++task) {
-                      const std::size_t row_panel = static_cast<std::size_t>(task) / wave_panels;
-                      const std::size_t wave_panel = static_cast<std::size_t>(task) % wave_panels;
-                      const std::size_t m0 = row_panel * blocking.mc;
-                      const std::size_t n0 = (first_panel + wave_panel) * blocking.nc;
-                      const std::size_t mc = std::min(blocking.mc, M - m0);
-                      const std::size_t nb = std::min(blocking.nc, N - n0);
-                      if (packed_row_panel != row_panel) {
-                        PackAPanel(trans_a, A, M, K, m0, mc, k0, kc, apack.data());
-                        packed_row_panel = row_panel;
-                      }
-                      const T *panel_b = bpack.data() + wave_panel * panel_capacity;
-                      for (std::size_t jr = 0; jr < nb; jr += column_block) {
-                        const std::size_t jb = std::min(column_block, nb - jr);
-                        const T *micro_b = panel_b + jr * kc;
-                        for (std::size_t ir = 0; ir < mc; ir += blocking.mr) {
-                          const std::size_t mr = std::min(blocking.mr, mc - ir);
-                          tile(kind, mr, jb, kc, alpha, beta, micro_b, jb,
-                               has_bias ? C + (m0 + ir) * N + n0 + jr : nullptr, N,
-                               Y + (m0 + ir) * N + n0 + jr, N, 0, mode, apack.data() + ir * kc);
+      ExecuteRanges(static_cast<std::int64_t>(task_count), cost,
+                    [&](std::int64_t begin, std::int64_t end) {
+                      AlignedVector<T> apack(blocking.mc * kc);
+                      std::size_t packed_row_panel = row_panels;
+                      for (std::int64_t task = begin; task < end; ++task) {
+                        const std::size_t row_panel = static_cast<std::size_t>(task) / wave_panels;
+                        const std::size_t wave_panel = static_cast<std::size_t>(task) % wave_panels;
+                        const std::size_t m0 = row_panel * blocking.mc;
+                        const std::size_t n0 = (first_panel + wave_panel) * blocking.nc;
+                        const std::size_t mc = std::min(blocking.mc, M - m0);
+                        const std::size_t nb = std::min(blocking.nc, N - n0);
+                        if (packed_row_panel != row_panel) {
+                          PackAPanel(trans_a, A, M, K, m0, mc, k0, kc, apack.data());
+                          packed_row_panel = row_panel;
+                        }
+                        const T *panel_b = bpack.data() + wave_panel * panel_capacity;
+                        for (std::size_t jr = 0; jr < nb; jr += column_block) {
+                          const std::size_t jb = std::min(column_block, nb - jr);
+                          const T *micro_b = panel_b + jr * kc;
+                          for (std::size_t ir = 0; ir < mc; ir += blocking.mr) {
+                            const std::size_t mr = std::min(blocking.mr, mc - ir);
+                            tile(kind, mr, jb, kc, alpha, beta, micro_b, jb,
+                                 has_bias ? C + (m0 + ir) * N + n0 + jr : nullptr, N,
+                                 Y + (m0 + ir) * N + n0 + jr, N, 0, mode, apack.data() + ir * kc);
+                          }
                         }
                       }
-                    }
-                  });
+                    });
     }
   }
 }
@@ -1258,13 +1258,13 @@ template <typename T, typename TileFn, typename SrcT = T>
 void GemmSplitK(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::size_t K, T alpha,
                 const SrcT *A, const SrcT *B, T beta, const T *C, T *Y, GemmKernelKind kind,
                 TileFn tile, const GemmBlocking &blocking) {
-  if (ParallelForInParallelRegion()) {
+  if (ExecutionInParallelRegion()) {
     GemmFiveLoop(trans_a, trans_b, M, N, K, alpha, A, B, beta, C, Y, kind, tile, blocking);
     return;
   }
 
   const std::size_t part_count = std::min<std::size_t>(
-      static_cast<std::size_t>(ParallelForThreadCount()), (K + blocking.kc - 1) / blocking.kc);
+      static_cast<std::size_t>(ExecutionThreadCount()), (K + blocking.kc - 1) / blocking.kc);
   if (part_count <= 1) {
     GemmFiveLoop(trans_a, trans_b, M, N, K, alpha, A, B, beta, C, Y, kind, tile, blocking);
     return;
@@ -1273,30 +1273,30 @@ void GemmSplitK(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::s
   AlignedVector<T> partials(part_count * M * N);
   const double cost = static_cast<double>(M) * N * K /
                       (static_cast<double>(part_count) * kGemmFmasPerParallelWorkUnit);
-  ParallelFor(static_cast<std::int64_t>(part_count), cost,
-              [&](std::int64_t begin, std::int64_t end) {
-                for (std::int64_t part = begin; part < end; ++part) {
-                  const std::size_t p = static_cast<std::size_t>(part);
-                  const std::size_t k_begin = K * p / part_count;
-                  const std::size_t k_end = K * (p + 1) / part_count;
-                  GemmFiveLoopRange(trans_a, trans_b, M, N, K, k_begin, k_end, T(1), A, B, T(0),
-                                    static_cast<const T *>(nullptr), partials.data() + p * M * N,
-                                    kind, tile, blocking);
-                }
-              });
+  ExecuteRanges(static_cast<std::int64_t>(part_count), cost,
+                [&](std::int64_t begin, std::int64_t end) {
+                  for (std::int64_t part = begin; part < end; ++part) {
+                    const std::size_t p = static_cast<std::size_t>(part);
+                    const std::size_t k_begin = K * p / part_count;
+                    const std::size_t k_end = K * (p + 1) / part_count;
+                    GemmFiveLoopRange(trans_a, trans_b, M, N, K, k_begin, k_end, T(1), A, B, T(0),
+                                      static_cast<const T *>(nullptr), partials.data() + p * M * N,
+                                      kind, tile, blocking);
+                  }
+                });
 
   const bool has_bias = C != nullptr && beta != T(0);
-  ParallelFor(static_cast<std::int64_t>(M * N), static_cast<double>(part_count),
-              [&](std::int64_t begin, std::int64_t end) {
-                for (std::int64_t offset = begin; offset < end; ++offset) {
-                  const std::size_t index = static_cast<std::size_t>(offset);
-                  T sum = T(0);
-                  for (std::size_t part = 0; part < part_count; ++part) {
-                    sum += partials[part * M * N + index];
+  ExecuteRanges(static_cast<std::int64_t>(M * N), static_cast<double>(part_count),
+                [&](std::int64_t begin, std::int64_t end) {
+                  for (std::int64_t offset = begin; offset < end; ++offset) {
+                    const std::size_t index = static_cast<std::size_t>(offset);
+                    T sum = T(0);
+                    for (std::size_t part = 0; part < part_count; ++part) {
+                      sum += partials[part * M * N + index];
+                    }
+                    Y[index] = alpha * sum + (has_bias ? beta * C[index] : T(0));
                   }
-                  Y[index] = alpha * sum + (has_bias ? beta * C[index] : T(0));
-                }
-              });
+                });
 }
 
 template <GemmAlgorithm Algorithm, typename T, typename TileFn, typename SrcT = T>
@@ -1362,7 +1362,7 @@ void GemmFloat32Planned(bool trans_a, bool trans_b, std::size_t M, std::size_t N
       sizeof(float), GemmVectorLanes<float>(default_kind), GemmRegisterRows(default_kind));
   const GemmBlocking selected =
       ConstrainGemmBlockingForTasks(blocking == nullptr ? default_blocking : *blocking, M, N,
-                                    static_cast<std::size_t>(ParallelForThreadCount()));
+                                    static_cast<std::size_t>(ExecutionThreadCount()));
   GemmImpl<Algorithm, float>(trans_a, trans_b, M, N, K, alpha, A, B, beta, C, Y,
                              SelectGemmKernelKind<float>(), tile, selected);
 }
@@ -1384,7 +1384,7 @@ void GemmFloat64Planned(bool trans_a, bool trans_b, std::size_t M, std::size_t N
       sizeof(double), GemmVectorLanes<double>(default_kind), GemmRegisterRows(default_kind));
   const GemmBlocking selected =
       ConstrainGemmBlockingForTasks(blocking == nullptr ? default_blocking : *blocking, M, N,
-                                    static_cast<std::size_t>(ParallelForThreadCount()));
+                                    static_cast<std::size_t>(ExecutionThreadCount()));
   GemmImpl<Algorithm, double>(trans_a, trans_b, M, N, K, alpha, A, B, beta, C, Y,
                               SelectGemmKernelKind<double>(), tile, selected);
 }
@@ -1409,27 +1409,27 @@ void GemmFp16NativeGeneral(bool trans_a, std::size_t M, std::size_t N, std::size
   const std::size_t mr_block = std::max<std::size_t>(1, mr);
   const std::size_t row_blocks = (M + mr_block - 1) / mr_block;
   const double cost = static_cast<double>(K) * mr_block * N / kGemmFmasPerParallelWorkUnit;
-  ParallelFor(static_cast<std::int64_t>(row_blocks), cost,
-              [&](std::int64_t begin, std::int64_t end) {
-                AlignedVector<std::uint16_t> apack(mr_block * K);
-                for (std::int64_t task = begin; task < end; ++task) {
-                  const std::size_t m0 = static_cast<std::size_t>(task) * mr_block;
-                  const std::size_t rows = std::min(mr_block, M - m0);
-                  for (std::size_t r = 0; r < rows; ++r) {
-                    std::uint16_t *dst = apack.data() + r * K;
-                    if (trans_a) {
-                      // ``A`` is ``K x M`` row-major: ``A(k, m)`` is ``A[k * M + m]``.
-                      for (std::size_t k = 0; k < K; ++k) {
-                        dst[k] = A[k * M + (m0 + r)];
+  ExecuteRanges(static_cast<std::int64_t>(row_blocks), cost,
+                [&](std::int64_t begin, std::int64_t end) {
+                  AlignedVector<std::uint16_t> apack(mr_block * K);
+                  for (std::int64_t task = begin; task < end; ++task) {
+                    const std::size_t m0 = static_cast<std::size_t>(task) * mr_block;
+                    const std::size_t rows = std::min(mr_block, M - m0);
+                    for (std::size_t r = 0; r < rows; ++r) {
+                      std::uint16_t *dst = apack.data() + r * K;
+                      if (trans_a) {
+                        // ``A`` is ``K x M`` row-major: ``A(k, m)`` is ``A[k * M + m]``.
+                        for (std::size_t k = 0; k < K; ++k) {
+                          dst[k] = A[k * M + (m0 + r)];
+                        }
+                      } else {
+                        std::memcpy(dst, A + (m0 + r) * K, K * sizeof(std::uint16_t));
                       }
-                    } else {
-                      std::memcpy(dst, A + (m0 + r) * K, K * sizeof(std::uint16_t));
                     }
+                    kernel(rows, N, K, alpha, 0.0f, B, N, nullptr, 0, Y + m0 * N, N, 0,
+                           GemmAccumMode::kInitZero, apack.data());
                   }
-                  kernel(rows, N, K, alpha, 0.0f, B, N, nullptr, 0, Y + m0 * N, N, 0,
-                         GemmAccumMode::kInitZero, apack.data());
-                }
-              });
+                });
 }
 
 // Native BFLOAT16 general GEMM driver (Roadmap PR07.4). See the declaration in
@@ -1453,27 +1453,27 @@ void GemmBf16NativeGeneral(bool trans_a, std::size_t M, std::size_t N, std::size
   const std::size_t mr_block = std::max<std::size_t>(1, mr);
   const std::size_t row_blocks = (M + mr_block - 1) / mr_block;
   const double cost = static_cast<double>(K) * mr_block * N / kGemmFmasPerParallelWorkUnit;
-  ParallelFor(static_cast<std::int64_t>(row_blocks), cost,
-              [&](std::int64_t begin, std::int64_t end) {
-                AlignedVector<std::uint16_t> apack(mr_block * K);
-                for (std::int64_t task = begin; task < end; ++task) {
-                  const std::size_t m0 = static_cast<std::size_t>(task) * mr_block;
-                  const std::size_t rows = std::min(mr_block, M - m0);
-                  for (std::size_t r = 0; r < rows; ++r) {
-                    std::uint16_t *dst = apack.data() + r * K;
-                    if (trans_a) {
-                      // ``A`` is ``K x M`` row-major: ``A(k, m)`` is ``A[k * M + m]``.
-                      for (std::size_t k = 0; k < K; ++k) {
-                        dst[k] = A[k * M + (m0 + r)];
+  ExecuteRanges(static_cast<std::int64_t>(row_blocks), cost,
+                [&](std::int64_t begin, std::int64_t end) {
+                  AlignedVector<std::uint16_t> apack(mr_block * K);
+                  for (std::int64_t task = begin; task < end; ++task) {
+                    const std::size_t m0 = static_cast<std::size_t>(task) * mr_block;
+                    const std::size_t rows = std::min(mr_block, M - m0);
+                    for (std::size_t r = 0; r < rows; ++r) {
+                      std::uint16_t *dst = apack.data() + r * K;
+                      if (trans_a) {
+                        // ``A`` is ``K x M`` row-major: ``A(k, m)`` is ``A[k * M + m]``.
+                        for (std::size_t k = 0; k < K; ++k) {
+                          dst[k] = A[k * M + (m0 + r)];
+                        }
+                      } else {
+                        std::memcpy(dst, A + (m0 + r) * K, K * sizeof(std::uint16_t));
                       }
-                    } else {
-                      std::memcpy(dst, A + (m0 + r) * K, K * sizeof(std::uint16_t));
                     }
+                    kernel(rows, N, K, alpha, 0.0f, B, N, nullptr, 0, Y + m0 * N, N, 0,
+                           GemmAccumMode::kInitZero, apack.data());
                   }
-                  kernel(rows, N, K, alpha, 0.0f, B, N, nullptr, 0, Y + m0 * N, N, 0,
-                         GemmAccumMode::kInitZero, apack.data());
-                }
-              });
+                });
 }
 
 // FP16/BF16 GEMM accumulated in float32, executed through the typed source
@@ -1502,7 +1502,7 @@ void GemmHalfPlanned(bool is_bfloat16, bool trans_a, bool trans_b, std::size_t M
       sizeof(float), GemmVectorLanes<float>(default_kind), GemmRegisterRows(default_kind));
   const GemmBlocking selected =
       ConstrainGemmBlockingForTasks(blocking == nullptr ? default_blocking : *blocking, M, N,
-                                    static_cast<std::size_t>(ParallelForThreadCount()));
+                                    static_cast<std::size_t>(ExecutionThreadCount()));
   if (is_bfloat16) {
     const auto *a = reinterpret_cast<const BFloat16Source *>(A);
     const auto *b = reinterpret_cast<const BFloat16Source *>(B);
@@ -1679,7 +1679,7 @@ void GemmFloat8PlannedTyped(bool trans_a, bool trans_b, std::size_t M, std::size
       sizeof(float), GemmVectorLanes<float>(default_kind), GemmRegisterRows(default_kind));
   const GemmBlocking selected =
       ConstrainGemmBlockingForTasks(blocking == nullptr ? default_blocking : *blocking, M, N,
-                                    static_cast<std::size_t>(ParallelForThreadCount()));
+                                    static_cast<std::size_t>(ExecutionThreadCount()));
   const auto *a = reinterpret_cast<const Float8Source<Format> *>(A);
   const auto *b = reinterpret_cast<const Float8Source<Format> *>(B);
   GemmImpl<Algorithm, float, decltype(tile), Float8Source<Format>>(
@@ -1926,7 +1926,7 @@ void ApplyGemmEpilogue(std::size_t M, std::size_t N, const GemmEpilogue<T> &epil
   const double cost = static_cast<double>(N) *
                       (1.0 + static_cast<double>(has_bias) + static_cast<double>(has_residual) +
                        static_cast<double>(has_activation) + static_cast<double>(converts_output));
-  ParallelFor(static_cast<std::int64_t>(M), cost, [&](std::int64_t begin, std::int64_t end) {
+  ExecuteRanges(static_cast<std::int64_t>(M), cost, [&](std::int64_t begin, std::int64_t end) {
     for (std::int64_t row = begin; row < end; ++row) {
       const std::size_t m = static_cast<std::size_t>(row);
       for (std::size_t n = 0; n < N; ++n) {
