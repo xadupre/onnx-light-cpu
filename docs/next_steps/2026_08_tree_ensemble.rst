@@ -472,7 +472,8 @@ Remaining pull-request sequence
        types, invalid structures, and classification composition. No older
        opset is registered.
      - None
-     - Pending
+     - `Implemented in #301
+       <https://github.com/xadupre/onnx-light-cpu/pull/301>`_
    * - Trees PR02
      - Canonical parser and immutable plan.
      - All three v5 schemas lower into one validated representation. Repeated
