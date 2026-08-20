@@ -641,18 +641,32 @@ TreeEnsembleTuningPolicy ComposeCandidatePolicy(const TreeEnsembleTuningPolicy &
   case TreeEnsembleCalibrationStage::kBatch:
     for (std::size_t index = 0; index < composed.regions.size() && index < candidate.regions.size();
          ++index) {
+      const std::size_t old_scale = SaturatingMultiply(composed.regions[index].maximum_threads,
+                                                       composed.regions[index].batch_rows);
+      const std::size_t bytes_per_participant_row =
+          composed.regions[index].workspace_bytes / old_scale +
+          (composed.regions[index].workspace_bytes % old_scale != 0 ? 1U : 0U);
       composed.regions[index].maximum_rows = candidate.regions[index].maximum_rows;
       composed.regions[index].batch_rows = candidate.regions[index].batch_rows;
-      composed.regions[index].workspace_bytes = candidate.regions[index].workspace_bytes;
+      composed.regions[index].workspace_bytes = SaturatingMultiply(
+          bytes_per_participant_row, SaturatingMultiply(composed.regions[index].maximum_threads,
+                                                        composed.regions[index].batch_rows));
     }
     break;
   case TreeEnsembleCalibrationStage::kChunk:
     for (std::size_t index = 0; index < composed.regions.size() && index < candidate.regions.size();
          ++index) {
+      const std::size_t old_scale = SaturatingMultiply(composed.regions[index].maximum_threads,
+                                                       composed.regions[index].batch_rows);
+      const std::size_t bytes_per_participant_row =
+          composed.regions[index].workspace_bytes / old_scale +
+          (composed.regions[index].workspace_bytes % old_scale != 0 ? 1U : 0U);
       composed.regions[index].maximum_threads = candidate.regions[index].maximum_threads;
       composed.regions[index].row_chunk = candidate.regions[index].row_chunk;
       composed.regions[index].tree_chunk = candidate.regions[index].tree_chunk;
-      composed.regions[index].workspace_bytes = candidate.regions[index].workspace_bytes;
+      composed.regions[index].workspace_bytes = SaturatingMultiply(
+          bytes_per_participant_row, SaturatingMultiply(composed.regions[index].maximum_threads,
+                                                        composed.regions[index].batch_rows));
     }
     break;
   case TreeEnsembleCalibrationStage::kWorkspace:

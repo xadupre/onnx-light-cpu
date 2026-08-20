@@ -595,25 +595,30 @@ TEST(TreeEnsembleReference, AdvancedLayoutsAndInterleavingRetainPortableResults)
 }
 
 TEST(TreeEnsembleReference, CalibrationComposesStagesAndEnforcesAdvancedGates) {
-  const TreeEnsembleTuningContext context{"advanced-calibration-cpu", 1};
+  const TreeEnsembleTuningContext context{"advanced-calibration-cpu", 4};
   const TreeEnsemblePlan key_plan(Stump(), context, nullptr);
-  const TreeEnsembleTuningPolicy fallback = key_plan.tuning_policy();
+  const TreeEnsembleTuningPolicy fallback =
+      OneRegionPolicy(TreeEnsembleExecutionStrategy::kTreeMajorBatch, 1, 1, 128);
   TreeEnsembleTuningPolicy index = fallback;
   index.layout = TreeEnsembleNodeLayout::kCompactAosIndex;
   TreeEnsembleTuningPolicy stump = fallback;
   stump.traversal = TreeEnsembleTraversal::kStump;
+  TreeEnsembleTuningPolicy scheduling = fallback;
+  scheduling.regions[0].maximum_threads = 4;
+  scheduling.regions[0].workspace_bytes *= 4;
   TreeEnsembleTuningPolicy batch = fallback;
   batch.regions[0].batch_rows = 256;
   batch.regions[0].workspace_bytes *= 2;
   TreeEnsembleCalibrationOptions options;
   options.repetitions = 1;
   options.required_wins = 1;
-  options.memory_budget_bytes = 8192;
+  options.memory_budget_bytes = 32768;
   TreeEnsembleTuningRegistry registry;
   const auto composed = registry.CalibrateExact(
       key_plan.model_key(), fallback,
       {{"index", TreeEnsembleCalibrationStage::kLayout, index},
        {"stump", TreeEnsembleCalibrationStage::kTraversal, stump},
+       {"scheduling", TreeEnsembleCalibrationStage::kScheduling, scheduling},
        {"batch", TreeEnsembleCalibrationStage::kBatch, batch}},
       options, [](const TreeEnsembleTuningPolicy &policy, std::size_t, std::size_t) {
         double sample = 100.0;
@@ -622,13 +627,17 @@ TEST(TreeEnsembleReference, CalibrationComposesStagesAndEnforcesAdvancedGates) {
         }
         if (policy.regions[0].batch_rows == 256) {
           sample = 50.0;
+        } else if (policy.regions[0].maximum_threads == 4) {
+          sample = 55.0;
         }
         return TreeEnsembleCalibrationMeasurement{true, {sample}, 1, {}};
       });
   EXPECT_EQ(composed.selected_policy.layout, TreeEnsembleNodeLayout::kCompactAosIndex);
   EXPECT_EQ(composed.selected_policy.traversal, TreeEnsembleTraversal::kStump);
+  EXPECT_EQ(composed.selected_policy.regions[0].maximum_threads, 4U);
   EXPECT_EQ(composed.selected_policy.regions[0].batch_rows, 256U);
-  EXPECT_EQ(composed.selected_policy.regions[0].workspace_bytes, batch.regions[0].workspace_bytes);
+  EXPECT_EQ(composed.selected_policy.regions[0].workspace_bytes,
+            4U * 256U * (sizeof(double) + sizeof(std::size_t)));
   EXPECT_EQ(TreeEnsemblePlan(Stump(), context, &registry).profile_source(),
             TreeEnsembleProfileSource::kExact);
 
@@ -654,7 +663,7 @@ TEST(TreeEnsembleReference, CalibrationComposesStagesAndEnforcesAdvancedGates) {
       options, [](const TreeEnsembleTuningPolicy &policy, std::size_t, std::size_t) {
         TreeEnsembleCalibrationMeasurement result{true, {80.0}, 1, {}};
         if (policy.layout == TreeEnsembleNodeLayout::kSplitSoa) {
-          result.peak_memory_bytes = 16384;
+          result.peak_memory_bytes = 65536;
         }
         return result;
       });
