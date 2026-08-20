@@ -2,11 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Portable driver and scalar sibling for the x86 VNNI INT8 matrix
-// multiplication (Roadmap PR09.2). This translation unit is compiled at the
-// project's baseline SIMD flags; the native ``vpdpbusd`` dot-product lives in
-// integer_gemm_avx512vnni.cc (compiled with -mavx512vnni) and is only linked in
-// and dispatched to when the CPU reports AVX-512 VNNI at runtime.
+// Portable driver and scalar sibling for integer matrix multiplication. This
+// translation unit is compiled at the project's baseline SIMD flags; optional
+// AVX2, AVX-512 VNNI, AMX, and NEON kernels live in ISA-specific translation
+// units and are only dispatched to when the running CPU supports them.
 //
 // Exactness relies on decomposing the zero-point-shifted accumulation into a
 // raw byte dot-product plus row/column sum corrections. With
@@ -214,6 +213,11 @@ void IntegerMatMul2D(const std::uint8_t *a, bool a_signed, const std::uint8_t *b
   }
 #endif
   detail::IntegerVnniDotFn dot = &detail::IntegerDotU8S8Scalar;
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_INTEGER
+  if (DetectSimdLevel() >= SimdLevel::kAVX2) {
+    dot = &detail::IntegerDotU8S8Avx2;
+  }
+#endif
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512VNNI
   if (CpuSupportsAvx512Vnni()) {
     dot = &detail::IntegerDotU8S8Avx512Vnni;
@@ -228,6 +232,11 @@ void IntegerMatMul4Bit2D(const std::uint8_t *a, bool a_signed, const std::uint8_
                          const std::int32_t *a_zero_point, std::int64_t a_zero_point_count,
                          const std::int32_t *b_zero_point, std::int64_t b_zero_point_count) {
   detail::IntegerVnniDotFn dot = &detail::IntegerDotU8S8Scalar;
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_INTEGER
+  if (DetectSimdLevel() >= SimdLevel::kAVX2) {
+    dot = &detail::IntegerDotU8S8Avx2;
+  }
+#endif
 #ifdef ONNX_LIGHT_CPU_HAVE_NEON_DOTPROD
   if (CpuSupportsNeonDotProd()) {
     dot = &detail::IntegerDot4BitU8S8NeonDotProd;

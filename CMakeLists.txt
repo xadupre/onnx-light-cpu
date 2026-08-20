@@ -290,6 +290,8 @@ set(_gemm_avx512bf16_source
     "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/gemm/avx512bf16/gemm_kernel_avx512bf16.cc")
 set(_gemm_avx512vnni_source
     "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/gemm/vnni/integer_gemm_avx512vnni.cc")
+set(_gemm_avx2_integer_source
+    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/gemm/vnni/integer_gemm_avx2.cc")
 set(_gemm_amx_source
     "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/gemm/amx/gemm_amx_tile.cc")
 set(_gemm_amx_bf16_source
@@ -318,6 +320,7 @@ if(NOT ONNX_LIGHT_CPU_HAVE_AVX512F_FLAG)
 endif()
 if(NOT ONNX_LIGHT_CPU_HAVE_AVX2_FMA_FLAG)
   list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_gemm_avx2_fma_source}")
+  list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_gemm_avx2_integer_source}")
 endif()
 if(NOT ONNX_LIGHT_CPU_HAVE_AVX512BW_FLAG)
   list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_not_avx512_source}")
@@ -334,7 +337,7 @@ if(NOT ONNX_LIGHT_CPU_HAVE_AVX512BF16_FLAG)
 endif()
 if(NOT ONNX_LIGHT_CPU_HAVE_AVX512VNNI_FLAG)
   # Exclude the native AVX-512 VNNI INT8 dot-product when the compiler cannot
-  # target the ISA; the integer matmul keeps its portable scalar fallback.
+  # target the ISA; the integer matmul keeps its AVX2/scalar fallbacks.
   list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_gemm_avx512vnni_source}")
 endif()
 if(NOT ONNX_LIGHT_CPU_HAVE_AMX_BF16_FLAG)
@@ -344,7 +347,7 @@ if(NOT ONNX_LIGHT_CPU_HAVE_AMX_BF16_FLAG)
 endif()
 if(NOT ONNX_LIGHT_CPU_HAVE_AMX_INT8_FLAG)
   # Exclude the native AMX-INT8 GEMM kernel when the compiler cannot target the
-  # ISA; the integer matmul keeps its AVX-512 VNNI / scalar fallback.
+  # ISA; the integer matmul keeps its AVX-512 VNNI / AVX2 / scalar fallbacks.
   list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_gemm_amx_int8_source}")
 endif()
 if(NOT ONNX_LIGHT_CPU_HAVE_NEON_INTRINSICS)
@@ -433,6 +436,18 @@ if(ONNX_LIGHT_CPU_HAVE_AVX512BF16_FLAG)
       COMPILE_OPTIONS "-mavx512f;-mavx512bw;-mavx512bf16")
   target_compile_definitions(lib_onnx_light_cpu PRIVATE
       ONNX_LIGHT_CPU_HAVE_AVX512BF16=1)
+endif()
+
+if(ONNX_LIGHT_CPU_HAVE_AVX2_FMA_FLAG)
+  if(NOT MSVC)
+    set_source_files_properties("${_gemm_avx2_integer_source}" PROPERTIES
+        COMPILE_OPTIONS "-mavx2")
+  else()
+    set_source_files_properties("${_gemm_avx2_integer_source}" PROPERTIES
+        COMPILE_OPTIONS "/arch:AVX2")
+  endif()
+  target_compile_definitions(lib_onnx_light_cpu PRIVATE
+      ONNX_LIGHT_CPU_HAVE_AVX2_INTEGER=1)
 endif()
 
 if(ONNX_LIGHT_CPU_HAVE_AVX512VNNI_FLAG)
@@ -941,6 +956,14 @@ if(ONNX_LIGHT_CPU_BUILD_BENCHMARKS)
     target_compile_options(gemm_throughput PRIVATE ${_simd_flags})
   endif()
   onnx_light_apply_hardening(gemm_throughput)
+
+  add_executable(compact_gemm_throughput
+      "${CMAKE_CURRENT_SOURCE_DIR}/tools/compact_gemm_throughput.cc")
+  target_link_libraries(compact_gemm_throughput PRIVATE lib_onnx_light_cpu)
+  if(ONNX_LIGHT_CPU_SIMD_FLAGS)
+    target_compile_options(compact_gemm_throughput PRIVATE ${_simd_flags})
+  endif()
+  onnx_light_apply_hardening(compact_gemm_throughput)
 endif()
 
 # ---------------------------------------------------------------------------
@@ -979,6 +1002,9 @@ if(ONNX_LIGHT_CPU_BUILD_TESTS)
       # This differential binary names and calls the optional native integer
       # kernels directly. The library keeps availability definitions private,
       # so mirror only the definitions whose translation units were built.
+      if(ONNX_LIGHT_CPU_HAVE_AVX2_FMA_FLAG)
+        target_compile_definitions(${_name} PRIVATE ONNX_LIGHT_CPU_HAVE_AVX2_INTEGER=1)
+      endif()
       if(ONNX_LIGHT_CPU_HAVE_AVX512VNNI_FLAG)
         target_compile_definitions(${_name} PRIVATE ONNX_LIGHT_CPU_HAVE_AVX512VNNI=1)
       endif()
