@@ -53,6 +53,19 @@ def _physical_threads() -> int:
     return len(cores) or max(1, os.cpu_count() or 1)
 
 
+def _parse_cpu_list(value: str) -> set[int]:
+    cpus: set[int] = set()
+    for item in value.split(","):
+        if "-" in item:
+            begin, end = (int(part) for part in item.split("-", 1))
+            cpus.update(range(begin, end + 1))
+        elif item:
+            cpus.add(int(item))
+    if not cpus:
+        raise ValueError("CPU affinity list must not be empty.")
+    return cpus
+
+
 def _cpu_model() -> str:
     cpuinfo = Path("/proc/cpuinfo")
     if cpuinfo.exists():
@@ -102,6 +115,11 @@ def summarize(results: Sequence[dict[str, Any]]) -> dict[str, Any]:
 
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
+    selected_cpus = _parse_cpu_list(args.cpus) if args.cpus else None
+    if selected_cpus is not None:
+        if not hasattr(os, "sched_setaffinity"):
+            raise RuntimeError("--cpus is only supported on platforms with sched_setaffinity().")
+        os.sched_setaffinity(0, selected_cpus)
     import numpy as np
     import onnxruntime
     from onnx_light.onnx import TensorProto, helper
@@ -112,6 +130,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     requested = _physical_threads() if args.threads == "physical" else int(args.threads)
     rows: list[dict[str, Any]] = []
     actual_threads = None
+    affinity_policy = None
     for operator in ("Exp", "Log"):
         for size in args.sizes:
             values = np.linspace(-8, 8, size, dtype=np.float32)
@@ -131,15 +150,17 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             # Session construction and output allocation are intentionally
             # outside the timed call; dispatch and execution remain measured.
             cpu = ReferenceEvaluator(
-                model.SerializeToString(),
-                cpu_execution={"num_threads": requested, "affinity_policy": "none"},
+                model.SerializeToString(), cpu_execution={"num_threads": requested}
             )
-            session_threads = cpu.cpu_execution_resolution.effective_threads
+            resolution = cpu.cpu_execution_resolution
+            session_threads = resolution.effective_threads
+            session_affinity = resolution.request.affinity_policy.name.lower()
             if actual_threads is None:
                 actual_threads = session_threads
-            elif actual_threads != session_threads:
+                affinity_policy = session_affinity
+            elif actual_threads != session_threads or affinity_policy != session_affinity:
                 raise RuntimeError(
-                    "onnx-light resolved inconsistent participant counts across sessions."
+                    "onnx-light resolved inconsistent CPU policies across sessions."
                 )
             options = onnxruntime.SessionOptions()
             options.intra_op_num_threads = requested
@@ -193,7 +214,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             ),
             "requested_threads": requested,
             "actual_threads": actual_threads,
-            "affinity_policy": "none",
+            "affinity_policy": affinity_policy,
             "configured_thread_counts": THREAD_COUNTS,
             "compiler_flags": os.environ.get("CXXFLAGS", ""),
             "compiler": _command_output(
@@ -213,6 +234,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--threads", choices=THREAD_COUNTS, default="1")
+    parser.add_argument(
+        "--cpus", default="", help="Linux CPU affinity, for example 0-3 or 0,2,4."
+    )
     parser.add_argument("--size", dest="sizes", action="append", type=int, default=None)
     parser.add_argument("--repeat", type=int, default=7)
     parser.add_argument("--warmup", type=int, default=3)

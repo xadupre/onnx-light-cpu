@@ -1,4 +1,8 @@
-from tools.benchmark_exp_log_parity import measure_alternating, summarize
+from tools.benchmark_exp_log_parity import _parse_cpu_list, measure_alternating, summarize
+
+
+def test_cpu_list_parses_ranges_and_individual_processors():
+    assert _parse_cpu_list("0-2,4") == {0, 1, 2, 4}
 
 
 def test_measurement_order_alternates_candidates():
