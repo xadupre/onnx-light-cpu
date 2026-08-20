@@ -43,6 +43,21 @@ enum class TreeValueType {
   kFloat64,
 };
 
+enum class TreeEnsembleExecutionStrategy {
+  kRowParallel,
+  kTreeParallel,
+  kTreeMajorBatch,
+};
+
+struct TreeEnsembleExecutionDecision {
+  TreeEnsembleExecutionStrategy strategy = TreeEnsembleExecutionStrategy::kTreeMajorBatch;
+  std::size_t batch_rows = 0;
+  std::size_t participants = 1;
+  std::size_t row_chunk = 1;
+  std::size_t tree_chunk = 1;
+  std::size_t workspace_bytes = 0;
+};
+
 struct TreeEnsembleRegressorAttributes;
 struct TreeEnsembleClassifierAttributes;
 
@@ -173,6 +188,8 @@ public:
   explicit TreeEnsemblePlan(const TreeEnsembleClassifierAttributes &attributes);
 
   std::vector<double> Evaluate(const std::vector<double> &input, std::size_t rows) const;
+  TreeEnsembleExecutionDecision SelectExecution(std::size_t rows,
+                                                std::size_t effective_threads = 0) const noexcept;
 
   const TreeEnsembleAttributes &attributes() const noexcept { return attributes_; }
   const std::vector<std::int64_t> &tree_roots() const noexcept { return tree_roots_; }

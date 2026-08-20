@@ -66,6 +66,9 @@ inline int64_t ExecutionBlockCount(int64_t total, double cost_per_element = 1.0)
   if (total <= 0) {
     return 0;
   }
+  if (ExecutionInParallelRegion()) {
+    return 1;
+  }
   const int64_t max_threads = ExecutionThreadCount();
   if (max_threads <= 1) {
     return 1;

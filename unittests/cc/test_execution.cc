@@ -90,4 +90,26 @@ TEST(Execution, SmallInjectedWorkRemainsInline) {
   EXPECT_EQ(executor.dispatches, 0);
 }
 
+TEST(Execution, NestedRangesDoNotDispatchAgain) {
+  InlineExecutor executor;
+  ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run};
+  {
+    ExecutionExecutorScope scope(&view);
+    ExecuteRanges(4, static_cast<double>(onnx_light_cpu::kExecutionGrainSize),
+                  [](int64_t begin, int64_t end) {
+                    for (int64_t outer = begin; outer < end; ++outer) {
+                      (void)outer;
+                      int calls = 0;
+                      ExecuteRanges(1000000, [&calls](int64_t inner_begin, int64_t inner_end) {
+                        EXPECT_EQ(inner_begin, 0);
+                        EXPECT_EQ(inner_end, 1000000);
+                        ++calls;
+                      });
+                      EXPECT_EQ(calls, 1);
+                    }
+                  });
+  }
+  EXPECT_EQ(executor.dispatches, 1);
+}
+
 } // namespace

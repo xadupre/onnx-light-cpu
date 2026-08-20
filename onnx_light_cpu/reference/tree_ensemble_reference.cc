@@ -4,7 +4,10 @@
 
 #include "onnx_light_cpu/reference/tree_ensemble_reference.h"
 
+#include "onnx_light_cpu/impl/execution.h"
+
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <cmath>
 #include <cstddef>
@@ -20,6 +23,38 @@
 
 namespace onnx_light_cpu::reference {
 namespace {
+
+constexpr std::size_t kTreeParallelThreshold = 80;
+constexpr std::size_t kTreeMajorBatchRows = 128;
+constexpr std::size_t kRowParallelThreshold = 50;
+
+enum class SchedulingCondition {
+  kSerial,
+  kSingleRowLargeForest,
+  kSmallBatch,
+  kEnoughTreesForWorkers,
+  kDefault,
+};
+
+struct SchedulingRule {
+  SchedulingCondition condition;
+  TreeEnsembleExecutionStrategy strategy;
+};
+
+constexpr std::array<SchedulingRule, 5> kSchedulingRules{{
+    {SchedulingCondition::kSerial, TreeEnsembleExecutionStrategy::kTreeMajorBatch},
+    {SchedulingCondition::kSingleRowLargeForest, TreeEnsembleExecutionStrategy::kTreeParallel},
+    {SchedulingCondition::kSmallBatch, TreeEnsembleExecutionStrategy::kTreeMajorBatch},
+    {SchedulingCondition::kEnoughTreesForWorkers, TreeEnsembleExecutionStrategy::kTreeParallel},
+    {SchedulingCondition::kDefault, TreeEnsembleExecutionStrategy::kRowParallel},
+}};
+
+std::size_t SaturatingMultiply(std::size_t left, std::size_t right) noexcept {
+  if (left != 0 && right > std::numeric_limits<std::size_t>::max() / left) {
+    return std::numeric_limits<std::size_t>::max();
+  }
+  return left * right;
+}
 
 [[noreturn]] void Invalid(const std::string &message) {
   throw std::invalid_argument("TreeEnsemble reference: " + message);
@@ -534,9 +569,10 @@ TreeEnsemblePlan::TreeEnsemblePlan(TreeEnsembleAttributes attributes)
                 static_cast<std::uint64_t>(attributes_.tree_roots.size())});
   uses_64_bit_indices_ =
       maximum_index > static_cast<std::uint64_t>(std::numeric_limits<std::uint32_t>::max());
-  workspace_bytes_ =
-      std::max<std::size_t>(1U, (attributes_.n_targets + tree_roots_.size()) *
-                                    (nodes_.size() + leaves_.size()) * sizeof(double));
+  workspace_bytes_ = std::max<std::size_t>(
+      1U, SaturatingMultiply(SaturatingMultiply(kTreeMajorBatchRows,
+                                                static_cast<std::size_t>(attributes_.n_targets)),
+                             sizeof(double) + sizeof(std::size_t)));
 }
 
 TreeEnsemblePlan::TreeEnsemblePlan(const TreeEnsembleRegressorAttributes &attributes)
@@ -544,6 +580,66 @@ TreeEnsemblePlan::TreeEnsemblePlan(const TreeEnsembleRegressorAttributes &attrib
 
 TreeEnsemblePlan::TreeEnsemblePlan(const TreeEnsembleClassifierAttributes &attributes)
     : TreeEnsemblePlan(LowerTreeEnsembleClassifier(attributes)) {}
+
+TreeEnsembleExecutionDecision
+TreeEnsemblePlan::SelectExecution(std::size_t rows, std::size_t effective_threads) const noexcept {
+  const std::size_t trees = tree_roots_.size();
+  if (effective_threads == 0) {
+    effective_threads = static_cast<std::size_t>(ExecutionThreadCount());
+  }
+  effective_threads = std::max<std::size_t>(effective_threads, 1);
+
+  TreeEnsembleExecutionStrategy strategy = TreeEnsembleExecutionStrategy::kTreeMajorBatch;
+  for (const SchedulingRule &rule : kSchedulingRules) {
+    bool matches = false;
+    switch (rule.condition) {
+    case SchedulingCondition::kSerial:
+      matches = effective_threads == 1;
+      break;
+    case SchedulingCondition::kSingleRowLargeForest:
+      matches = rows == 1 && trees > kTreeParallelThreshold;
+      break;
+    case SchedulingCondition::kSmallBatch:
+      matches = rows <= kRowParallelThreshold;
+      break;
+    case SchedulingCondition::kEnoughTreesForWorkers:
+      matches = trees >= effective_threads;
+      break;
+    case SchedulingCondition::kDefault:
+      matches = true;
+      break;
+    }
+    if (matches) {
+      strategy = rule.strategy;
+      break;
+    }
+  }
+
+  TreeEnsembleExecutionDecision decision;
+  decision.strategy = strategy;
+  if (rows == 0) {
+    decision.batch_rows = 0;
+    decision.workspace_bytes = 0;
+    return decision;
+  }
+  if (strategy == TreeEnsembleExecutionStrategy::kTreeParallel) {
+    decision.participants = std::min(effective_threads, trees);
+    decision.batch_rows = std::min(rows, kTreeMajorBatchRows);
+  } else if (strategy == TreeEnsembleExecutionStrategy::kRowParallel) {
+    decision.participants = std::min(effective_threads, rows);
+    decision.batch_rows = 1;
+  } else {
+    decision.participants = 1;
+    decision.batch_rows = std::min(rows, kTreeMajorBatchRows);
+  }
+  decision.row_chunk = (rows + decision.participants - 1) / decision.participants;
+  decision.tree_chunk = (trees + decision.participants - 1) / decision.participants;
+  decision.workspace_bytes = SaturatingMultiply(
+      SaturatingMultiply(SaturatingMultiply(decision.participants, decision.batch_rows),
+                         static_cast<std::size_t>(attributes_.n_targets)),
+      sizeof(double) + sizeof(std::size_t));
+  return decision;
+}
 
 std::vector<double> TreeEnsemblePlan::Evaluate(const std::vector<double> &input,
                                                std::size_t rows) const {
@@ -553,61 +649,68 @@ std::vector<double> TreeEnsemblePlan::Evaluate(const std::vector<double> &input,
     Invalid("input shape does not match n_features");
   }
   std::vector<double> output(rows * targets);
-  for (std::size_t row = 0; row < rows; ++row) {
-    std::vector<double> values(targets, 0.0);
-    for (std::size_t target = 0; target < targets && target < attributes_.base_values.size();
-         ++target) {
-      values[target] = attributes_.base_values[target];
-    }
-    std::vector<std::size_t> counts(targets, 0);
-    for (std::int64_t root : tree_roots_) {
-      std::size_t node = static_cast<std::size_t>(root);
-      std::size_t leaf = 0;
-      for (;;) {
-        const double value = RoundValue(
-            input[row * features + static_cast<std::size_t>(attributes_.nodes_featureids[node])],
-            attributes_.value_type);
-        bool go_true;
-        if (std::isnan(value)) {
-          go_true = !attributes_.nodes_missing_value_tracks_true.empty() &&
-                    attributes_.nodes_missing_value_tracks_true[node] != 0;
-        } else {
-          go_true = Compare(attributes_.nodes_modes[node], value,
-                            RoundValue(attributes_.nodes_splits[node], attributes_.value_type),
-                            membership_sets_[node]);
-        }
-        const bool is_leaf =
-            (go_true ? attributes_.nodes_trueleafs[node] : attributes_.nodes_falseleafs[node]) != 0;
-        const std::int64_t next =
-            go_true ? attributes_.nodes_truenodeids[node] : attributes_.nodes_falsenodeids[node];
-        if (is_leaf) {
-          leaf = static_cast<std::size_t>(next);
-          break;
-        }
-        node = static_cast<std::size_t>(next);
+  if (rows == 0) {
+    return output;
+  }
+
+  const auto find_leaf = [&](std::size_t row, std::size_t tree) {
+    std::size_t node = static_cast<std::size_t>(tree_roots_[tree]);
+    for (;;) {
+      const TreeEnsembleNode &current = nodes_[node];
+      const double value =
+          RoundValue(input[row * features + static_cast<std::size_t>(current.feature_id)],
+                     attributes_.value_type);
+      const bool go_true =
+          std::isnan(value)
+              ? current.missing_value_tracks_true
+              : Compare(current.mode, value, RoundValue(current.split, attributes_.value_type),
+                        membership_sets_[node]);
+      const bool is_leaf = go_true ? current.true_is_leaf : current.false_is_leaf;
+      const std::int64_t next = go_true ? current.true_child : current.false_child;
+      if (is_leaf) {
+        return static_cast<std::size_t>(next);
       }
-      const std::size_t target = static_cast<std::size_t>(attributes_.leaf_targetids[leaf]);
-      const double weight = RoundValue(attributes_.leaf_weights[leaf], attributes_.value_type);
-      const double bias =
-          target < attributes_.base_values.size() ? attributes_.base_values[target] : 0.0;
-      const double contribution = RoundValue(bias + weight, attributes_.value_type);
-      if (counts[target] == 0) {
-        if (attributes_.aggregate == TreeAggregate::kMin ||
-            attributes_.aggregate == TreeAggregate::kMax) {
-          values[target] = contribution;
-        } else {
-          values[target] = RoundValue(values[target] + weight, attributes_.value_type);
-        }
-      } else if (attributes_.aggregate == TreeAggregate::kSum ||
-                 attributes_.aggregate == TreeAggregate::kAverage) {
-        values[target] = RoundValue(values[target] + weight, attributes_.value_type);
-      } else if (attributes_.aggregate == TreeAggregate::kMin) {
-        values[target] = std::min(values[target], contribution);
-      } else {
-        values[target] = std::max(values[target], contribution);
-      }
-      ++counts[target];
+      node = static_cast<std::size_t>(next);
     }
+  };
+
+  const auto initialize = [&](std::vector<double> &values, std::vector<std::size_t> &counts,
+                              std::size_t active_rows, bool include_base) {
+    std::fill(values.begin(), values.end(), 0.0);
+    std::fill(counts.begin(), counts.end(), 0);
+    if (include_base) {
+      for (std::size_t row = 0; row < active_rows; ++row) {
+        for (std::size_t target = 0; target < targets && target < attributes_.base_values.size();
+             ++target) {
+          values[row * targets + target] = attributes_.base_values[target];
+        }
+      }
+    }
+  };
+
+  const auto accumulate = [&](std::vector<double> &values, std::vector<std::size_t> &counts,
+                              std::size_t offset, std::size_t leaf) {
+    const std::size_t target = static_cast<std::size_t>(leaves_[leaf].target_id);
+    const std::size_t index = offset * targets + target;
+    const double weight = leaves_[leaf].weight;
+    const double bias =
+        target < attributes_.base_values.size() ? attributes_.base_values[target] : 0.0;
+    const double contribution = RoundValue(bias + weight, attributes_.value_type);
+    if (counts[index] == 0 && (attributes_.aggregate == TreeAggregate::kMin ||
+                               attributes_.aggregate == TreeAggregate::kMax)) {
+      values[index] = contribution;
+    } else if (attributes_.aggregate == TreeAggregate::kSum ||
+               attributes_.aggregate == TreeAggregate::kAverage) {
+      values[index] = RoundValue(values[index] + weight, attributes_.value_type);
+    } else if (attributes_.aggregate == TreeAggregate::kMin) {
+      values[index] = std::min(values[index], contribution);
+    } else {
+      values[index] = std::max(values[index], contribution);
+    }
+    ++counts[index];
+  };
+
+  const auto finish = [&](std::vector<double> &values, std::size_t output_row) {
     if (attributes_.aggregate == TreeAggregate::kAverage) {
       for (double &value : values) {
         value = RoundValue(value / static_cast<double>(tree_roots_.size()), attributes_.value_type);
@@ -615,7 +718,100 @@ std::vector<double> TreeEnsemblePlan::Evaluate(const std::vector<double> &input,
     }
     ApplyPostTransform(values, attributes_.post_transform);
     for (std::size_t target = 0; target < targets; ++target) {
-      output[row * targets + target] = RoundValue(values[target], attributes_.value_type);
+      output[output_row * targets + target] = RoundValue(values[target], attributes_.value_type);
+    }
+  };
+
+  const TreeEnsembleExecutionDecision decision = SelectExecution(rows);
+  if (decision.strategy == TreeEnsembleExecutionStrategy::kRowParallel) {
+    ExecuteRanges(static_cast<std::int64_t>(rows), static_cast<double>(kExecutionGrainSize),
+                  [&](std::int64_t begin, std::int64_t end) {
+                    std::vector<double> values(targets);
+                    std::vector<std::size_t> counts(targets);
+                    for (std::size_t row = static_cast<std::size_t>(begin);
+                         row < static_cast<std::size_t>(end); ++row) {
+                      initialize(values, counts, 1, true);
+                      for (std::size_t tree = 0; tree < tree_roots_.size(); ++tree) {
+                        accumulate(values, counts, 0, find_leaf(row, tree));
+                      }
+                      finish(values, row);
+                    }
+                  });
+    return output;
+  }
+
+  if (decision.strategy == TreeEnsembleExecutionStrategy::kTreeMajorBatch) {
+    std::vector<double> values(decision.batch_rows * targets);
+    std::vector<std::size_t> counts(decision.batch_rows * targets);
+    std::vector<double> row_values(targets);
+    for (std::size_t batch = 0; batch < rows; batch += decision.batch_rows) {
+      const std::size_t active_rows = std::min(decision.batch_rows, rows - batch);
+      initialize(values, counts, active_rows, true);
+      for (std::size_t tree = 0; tree < tree_roots_.size(); ++tree) {
+        for (std::size_t row = 0; row < active_rows; ++row) {
+          accumulate(values, counts, row, find_leaf(batch + row, tree));
+        }
+      }
+      for (std::size_t row = 0; row < active_rows; ++row) {
+        std::copy_n(values.begin() + static_cast<std::ptrdiff_t>(row * targets), targets,
+                    row_values.begin());
+        finish(row_values, batch + row);
+      }
+    }
+    return output;
+  }
+
+  const std::size_t participants = decision.participants;
+  std::vector<double> partial_values(participants * decision.batch_rows * targets);
+  std::vector<std::size_t> partial_counts(participants * decision.batch_rows * targets);
+  std::vector<double> row_values(targets);
+  std::vector<std::size_t> row_counts(targets);
+  for (std::size_t batch = 0; batch < rows; batch += decision.batch_rows) {
+    const std::size_t active_rows = std::min(decision.batch_rows, rows - batch);
+    initialize(partial_values, partial_counts, participants * active_rows, false);
+    ExecuteRanges(static_cast<std::int64_t>(participants), static_cast<double>(kExecutionGrainSize),
+                  [&](std::int64_t begin, std::int64_t end) {
+                    for (std::size_t participant = static_cast<std::size_t>(begin);
+                         participant < static_cast<std::size_t>(end); ++participant) {
+                      const std::size_t tree_begin =
+                          tree_roots_.size() * participant / participants;
+                      const std::size_t tree_end =
+                          tree_roots_.size() * (participant + 1) / participants;
+                      for (std::size_t tree = tree_begin; tree < tree_end; ++tree) {
+                        for (std::size_t row = 0; row < active_rows; ++row) {
+                          accumulate(partial_values, partial_counts,
+                                     participant * active_rows + row, find_leaf(batch + row, tree));
+                        }
+                      }
+                    }
+                  });
+    for (std::size_t row = 0; row < active_rows; ++row) {
+      initialize(row_values, row_counts, 1, true);
+      for (std::size_t participant = 0; participant < participants; ++participant) {
+        const std::size_t partial_offset = (participant * active_rows + row) * targets;
+        for (std::size_t target = 0; target < targets; ++target) {
+          if (partial_counts[partial_offset + target] == 0) {
+            continue;
+          }
+          if (row_counts[target] == 0 && (attributes_.aggregate == TreeAggregate::kMin ||
+                                          attributes_.aggregate == TreeAggregate::kMax)) {
+            row_values[target] = partial_values[partial_offset + target];
+          } else if (attributes_.aggregate == TreeAggregate::kSum ||
+                     attributes_.aggregate == TreeAggregate::kAverage) {
+            row_values[target] =
+                RoundValue(row_values[target] + partial_values[partial_offset + target],
+                           attributes_.value_type);
+          } else if (attributes_.aggregate == TreeAggregate::kMin) {
+            row_values[target] =
+                std::min(row_values[target], partial_values[partial_offset + target]);
+          } else {
+            row_values[target] =
+                std::max(row_values[target], partial_values[partial_offset + target]);
+          }
+          row_counts[target] += partial_counts[partial_offset + target];
+        }
+      }
+      finish(row_values, batch + row);
     }
   }
   return output;
