@@ -33,7 +33,9 @@
 
 namespace onnx_light_cpu {
 
+// Retain the established cost model for float64 and the scalar conversion paths.
 inline constexpr double kExpLogCostPerElement = 20.0;
+// Float16 conversion plus scalar libm work benefits from earlier dispatch.
 inline constexpr double kExpLogHalfCostPerElement = 40.0;
 
 namespace {

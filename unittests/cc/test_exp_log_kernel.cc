@@ -510,8 +510,11 @@ TEST(ExpLogParallel, OperatorSpecificParticipantPolicy) {
   executor = {};
   onnx_light_cpu::LogFloat32(input.data(), output.data(), 131071);
   EXPECT_EQ(executor.dispatches, 0);
-  onnx_light_cpu::LogFloat32(input.data(), output.data(), 262144);
+  onnx_light_cpu::LogFloat32(input.data(), output.data(), 131072);
   EXPECT_EQ(executor.dispatches, 1);
+  EXPECT_EQ(executor.blocks, 2);
+  onnx_light_cpu::LogFloat32(input.data(), output.data(), 262144);
+  EXPECT_EQ(executor.dispatches, 2);
   EXPECT_EQ(executor.blocks, 4);
 }
 
