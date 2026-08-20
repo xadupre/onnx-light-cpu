@@ -9,6 +9,10 @@
 
 #include "onnx_light_cpu/impl/math/gemm/vnni/integer_gemm_vnni.h"
 
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_INTEGER
+#include "onnx_light_cpu/impl/simd_level.h"
+#endif
+
 #ifdef ONNX_LIGHT_CPU_HAVE_AMX_INT8
 #include "onnx_light_cpu/impl/math/gemm/amx/gemm_amx_int8.h"
 #include "onnx_light_cpu/impl/math/gemm/amx/gemm_amx_tile.h"
@@ -76,6 +80,17 @@ void CheckAllPaths(const std::vector<std::uint8_t> &a, bool a_signed,
       scalar.data(), rows, cols, depth, azp.data(), static_cast<std::int64_t>(azp.size()),
       bzp.data(), static_cast<std::int64_t>(bzp.size()));
   EXPECT_EQ(scalar, expected);
+
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_INTEGER
+  if (onnx_light_cpu::DetectSimdLevel() >= onnx_light_cpu::SimdLevel::kAVX2) {
+    std::vector<std::int32_t> native(expected.size(), 0);
+    onnx_light_cpu::detail::IntegerMatMul2DWithDot(
+        &onnx_light_cpu::detail::IntegerDotU8S8Avx2, a.data(), a_signed, b.data(), b_signed,
+        native.data(), rows, cols, depth, azp.data(), static_cast<std::int64_t>(azp.size()),
+        bzp.data(), static_cast<std::int64_t>(bzp.size()));
+    EXPECT_EQ(native, expected);
+  }
+#endif
 
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512VNNI
   if (onnx_light_cpu::IntegerMatMul2DUsesVnni()) {
@@ -188,6 +203,17 @@ void Check4BitAllPaths(bool a_signed, bool b_signed, std::int64_t rows, std::int
       bzp.data(), static_cast<std::int64_t>(bzp.size()));
   EXPECT_EQ(scalar, expected);
 
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_INTEGER
+  if (onnx_light_cpu::DetectSimdLevel() >= onnx_light_cpu::SimdLevel::kAVX2) {
+    std::vector<std::int32_t> native(expected.size(), 0);
+    onnx_light_cpu::detail::IntegerMatMul4Bit2DWithDot(
+        &onnx_light_cpu::detail::IntegerDotU8S8Avx2, packed_a.data(), a_signed, packed_b.data(),
+        b_signed, native.data(), rows, cols, depth, azp.data(),
+        static_cast<std::int64_t>(azp.size()), bzp.data(), static_cast<std::int64_t>(bzp.size()));
+    EXPECT_EQ(native, expected);
+  }
+#endif
+
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512VNNI
   if (onnx_light_cpu::IntegerMatMul2DUsesVnni()) {
     std::vector<std::int32_t> native(expected.size(), 0);
@@ -276,6 +302,24 @@ TEST(IntegerVnniKernel, HandlesZeroDepth) {
                                   zero.data(), 1);
   EXPECT_EQ(output, 0);
 }
+
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_INTEGER
+TEST(IntegerVnniKernel, Avx2DotAvoidsPairwiseSaturation) {
+  if (onnx_light_cpu::DetectSimdLevel() < onnx_light_cpu::SimdLevel::kAVX2) {
+    GTEST_SKIP() << "AVX2 is not available on this CPU";
+  }
+  for (std::int64_t depth : {31, 32, 33, 255, 256, 257}) {
+    std::vector<std::uint8_t> a(static_cast<std::size_t>(depth));
+    std::vector<std::int8_t> b(static_cast<std::size_t>(depth));
+    for (std::int64_t index = 0; index < depth; ++index) {
+      a[static_cast<std::size_t>(index)] = index % 3 == 0 ? std::uint8_t{255} : std::uint8_t{128};
+      b[static_cast<std::size_t>(index)] = index % 2 == 0 ? std::int8_t{127} : std::int8_t{-128};
+    }
+    EXPECT_EQ(onnx_light_cpu::detail::IntegerDotU8S8Avx2(a.data(), b.data(), depth),
+              onnx_light_cpu::detail::IntegerDotU8S8Scalar(a.data(), b.data(), depth));
+  }
+}
+#endif
 
 TEST(IntegerPacked4Bit, MatchesReferenceAcrossFormatsAndOddTails) {
   for (bool a_signed : {false, true}) {

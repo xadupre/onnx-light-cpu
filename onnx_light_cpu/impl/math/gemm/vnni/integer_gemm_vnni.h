@@ -7,10 +7,10 @@
 // product exactly, dispatching to the native ARM NEON dot-product kernel when
 // the running CPU reports it (``CpuSupportsNeonDotProd``, Roadmap PR09.3), then
 // to a native x86 AVX-512 VNNI (``vpdpbusd``) path when the CPU reports that ISA
-// (``CpuSupportsAvx512Vnni``, Roadmap PR09.2), and otherwise to a portable
-// scalar sibling that produces identical results. All paths share the same
-// packing and zero-point correction, so they are differentially testable over
-// the portable PR09.1 fallback.
+// (``CpuSupportsAvx512Vnni``, Roadmap PR09.2), an exact AVX2 fallback, and
+// finally a portable scalar sibling. All paths share the same packing and
+// zero-point correction, so they are differentially testable over the portable
+// PR09.1 fallback.
 //
 // The native dot-product ``IntegerDotU8S8Avx512Vnni`` is only usable when
 // ``ONNX_LIGHT_CPU_HAVE_AVX512VNNI`` is defined: integer_gemm_avx512vnni.cc
@@ -31,9 +31,9 @@ namespace onnx_light_cpu {
 // INT8 (``true``) or UINT8 (``false``). ``a_zero_point`` holds either a single
 // value (``a_zero_point_count == 1``) applied to every row or one value per row
 // (``a_zero_point_count == rows``); ``b_zero_point`` is scalar or per-column in
-// the same way. Dispatches to the native ARM NEON dot-product kernel or the
-// native x86 AVX-512 VNNI kernel when available and otherwise to the portable
-// scalar path, producing identical results.
+// the same way. Dispatches to the native ARM NEON dot-product, x86 AVX-512 VNNI,
+// or x86 AVX2 kernel when available and otherwise to the portable scalar path,
+// producing identical results.
 void IntegerMatMul2D(const std::uint8_t *a, bool a_signed, const std::uint8_t *b, bool b_signed,
                      std::int32_t *c, std::int64_t rows, std::int64_t cols, std::int64_t depth,
                      const std::int32_t *a_zero_point, std::int64_t a_zero_point_count,
@@ -47,8 +47,8 @@ void IntegerMatMul2D(const std::uint8_t *a, bool a_signed, const std::uint8_t *b
 // complement in the range [-8, 7]; unsigned nibbles use [0, 15].
 //
 // Packing expands directly into the UINT8 x INT8 panels consumed by the scalar,
-// AVX-512 VNNI, or ARM NEON dot-product implementation. It never materializes
-// separate unpacked source matrices.
+// AVX2, AVX-512 VNNI, or ARM NEON dot-product implementation. It never
+// materializes separate unpacked source matrices.
 void IntegerMatMul4Bit2D(const std::uint8_t *a, bool a_signed, const std::uint8_t *b, bool b_signed,
                          std::int32_t *c, std::int64_t rows, std::int64_t cols, std::int64_t depth,
                          const std::int32_t *a_zero_point, std::int64_t a_zero_point_count,
@@ -70,6 +70,12 @@ using IntegerVnniDotFn = std::int32_t (*)(const std::uint8_t *ua, const std::int
 // Portable scalar reference for ``IntegerVnniDotFn``.
 std::int32_t IntegerDotU8S8Scalar(const std::uint8_t *ua, const std::int8_t *sb,
                                   std::int64_t depth);
+
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_INTEGER
+// Exact AVX2 fallback. It splits each UINT8 value into low-seven-bit and
+// high-bit terms before ``vpmaddubsw``, keeping both pair sums in range.
+std::int32_t IntegerDotU8S8Avx2(const std::uint8_t *ua, const std::int8_t *sb, std::int64_t depth);
+#endif
 
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512VNNI
 // Native AVX-512 VNNI (``vpdpbusd``) implementation of ``IntegerVnniDotFn``,
