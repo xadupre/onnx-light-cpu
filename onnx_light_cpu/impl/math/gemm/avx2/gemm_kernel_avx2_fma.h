@@ -30,6 +30,12 @@ void GemmMicroKernel_AVX2FMA_F64(std::size_t mr, std::size_t nb, std::size_t K, 
 // this translation unit.
 void GemmConvertBFloat16ToFloat32_AVX2(const std::uint16_t *src, float *dst, std::size_t n);
 
+// Transposes and widens a ``dst_rows x dst_cols`` BFLOAT16 panel from a
+// column-major source view. Full 8 x 8 tiles use an in-register transpose.
+void GemmPackTransposeBFloat16ToFloat32_AVX2(const std::uint16_t *src, std::size_t src_stride,
+                                             float *dst, std::size_t dst_rows,
+                                             std::size_t dst_cols);
+
 // Narrows ``n`` contiguous float32 values to BFLOAT16 with round-to-nearest-even,
 // canonical NaNs, and an exact scalar tail.
 void GemmConvertFloat32ToBFloat16_AVX2(const float *src, std::uint16_t *dst, std::size_t n);
@@ -57,6 +63,10 @@ void GemmDecodeFloat8ToFloat32_AVX2(const float *table, const std::uint8_t *src,
 // while packing in the GEMM packing loops. Requires the F16C ISA extension, so
 // it is only declared/defined when the translation unit is compiled with it.
 void GemmConvertFloat16ToFloat32_F16C(const std::uint16_t *src, float *dst, std::size_t n);
+
+// F16C counterpart of GemmPackTransposeBFloat16ToFloat32_AVX2.
+void GemmPackTransposeFloat16ToFloat32_F16C(const std::uint16_t *src, std::size_t src_stride,
+                                            float *dst, std::size_t dst_rows, std::size_t dst_cols);
 
 // Narrows ``n`` contiguous float32 values to FLOAT16 with F16C
 // round-to-nearest-even conversion, canonical NaNs, and an exact scalar tail.

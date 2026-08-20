@@ -1365,6 +1365,15 @@ ONNX Runtime; ``tiny_dynamic`` and ``tiny_constant`` remain above parity at
 1.252x and 1.046x. The float32 workspace now comes from the reusable runtime
 execution arena instead of a new ``std::vector`` allocation on every invocation.
 
+The third pass replaces scalar transposed FP16/BF16 gathers on AVX2 with blocked
+``8 x 8`` 16-bit register transposes followed by eight-lane F16C or AVX2 BF16
+widening. Both transposed A and B packing use the same kernel, while arbitrary
+row and column tails retain the scalar conversion contract, including NaNs.
+The compact throughput driver now reports isolated FP16 and BF16 throughput
+alongside the other compact formats. Parity reports retain every timing sample
+and dispersion and additionally record affinity policy, compiler, and NumPy,
+onnx-light, onnx-light-cpu, and ONNX Runtime versions.
+
 The published numbers above are diagnostic WSL measurements, not the
 dedicated-machine evidence required to close PR10.3. ONNX Runtime 1.28.0 does
 not implement CPU BFLOAT16 Gemm on this host, so BFLOAT16 remains an isolated

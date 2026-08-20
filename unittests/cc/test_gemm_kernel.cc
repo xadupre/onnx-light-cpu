@@ -772,6 +772,58 @@ TEST(GemmHalf, BFloat16VectorizedPackingTails) {
   CheckGemmHalf(true, false, false, 33, 70, 66, true, 251);
 }
 
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
+TEST(GemmHalf, Avx2BlockedTransposePackingHandlesTailsAndNaNs) {
+  if (onnx_light_cpu::DetectSimdLevel() < onnx_light_cpu::SimdLevel::kAVX2) {
+    GTEST_SKIP() << "AVX2 transpose packing requires AVX2.";
+  }
+  constexpr std::size_t rows = 17;
+  constexpr std::size_t columns = 19;
+  constexpr std::size_t stride = rows + 3;
+  const float nan = std::numeric_limits<float>::quiet_NaN();
+  std::vector<float> values(columns * stride, 0.0f);
+  for (std::size_t column = 0; column < columns; ++column) {
+    for (std::size_t row = 0; row < rows; ++row) {
+      values[column * stride + row] =
+          (row == 8 && column == 8)
+              ? nan
+              : static_cast<float>(static_cast<std::ptrdiff_t>(row * 7 + column) - 50);
+    }
+  }
+
+  for (const bool is_bfloat16 : {false, true}) {
+    if (!is_bfloat16 && !onnx_light_cpu::CpuSupportsF16C()) {
+      continue;
+    }
+    const auto bits = NarrowHalf(values, is_bfloat16);
+    std::vector<float> packed(rows * columns);
+    if (is_bfloat16) {
+      onnx_light_cpu::GemmPackTransposeBFloat16ToFloat32_AVX2(bits.data(), stride, packed.data(),
+                                                              rows, columns);
+    } else {
+#ifdef ONNX_LIGHT_CPU_HAVE_F16C
+      onnx_light_cpu::GemmPackTransposeFloat16ToFloat32_F16C(bits.data(), stride, packed.data(),
+                                                             rows, columns);
+#endif
+    }
+    for (std::size_t row = 0; row < rows; ++row) {
+      for (std::size_t column = 0; column < columns; ++column) {
+        const std::uint16_t expected_bits = bits[column * stride + row];
+        const float expected = is_bfloat16
+                                   ? onnx_light_cpu::detail::Bfloat16BitsToFloat(expected_bits)
+                                   : onnx_light_cpu::detail::Float16BitsToFloat(expected_bits);
+        const float actual = packed[row * columns + column];
+        if (std::isnan(expected)) {
+          EXPECT_TRUE(std::isnan(actual));
+        } else {
+          EXPECT_EQ(actual, expected) << "row=" << row << " column=" << column;
+        }
+      }
+    }
+  }
+}
+#endif
+
 // Roadmap PR10.1 correctness gate: run the same mixed corpus for FLOAT16 and
 // BFLOAT16 so native kernels and fallback paths (transpose combinations,
 // non-trivial tails, and empty-K bias handling) are validated together.
