@@ -1,3 +1,5 @@
+import math
+
 from tools.benchmark_exp_log_parity import _parse_cpu_list, measure_alternating, summarize
 
 
@@ -31,7 +33,7 @@ def test_summary_applies_complete_parity_gate():
     summary = summarize(results)
 
     assert summary["passed"]
-    assert summary["median_speedup"] == 1.025
+    assert math.isclose(summary["median_speedup"], 1.025)
     assert summary["minimum_speedup"] == 0.9
 
 
