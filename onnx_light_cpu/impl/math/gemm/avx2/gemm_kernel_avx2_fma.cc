@@ -25,7 +25,8 @@ template <bool Bfloat16> inline float ReadHalf(const std::uint16_t *value) {
     return detail::Bfloat16BitsToFloat(*value);
   } else {
 #ifdef ONNX_LIGHT_CPU_HAVE_F16C
-    return _cvtsh_ss(*value);
+    const __m128i half = _mm_cvtsi32_si128(static_cast<int>(*value));
+    return _mm_cvtss_f32(_mm_cvtph_ps(half));
 #else
     return detail::Float16BitsToFloat(*value);
 #endif
