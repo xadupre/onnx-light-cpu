@@ -14,6 +14,8 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
+#include <fstream>
 #include <limits>
 #include <memory>
 #include <set>
@@ -30,6 +32,10 @@ using onnx_light_cpu::reference::LegacyTreeAttributes;
 using onnx_light_cpu::reference::TreeAggregate;
 using onnx_light_cpu::reference::TreeBranchMode;
 using onnx_light_cpu::reference::TreeEnsembleAttributes;
+using onnx_light_cpu::reference::TreeEnsembleCalibrationCandidate;
+using onnx_light_cpu::reference::TreeEnsembleCalibrationMeasurement;
+using onnx_light_cpu::reference::TreeEnsembleCalibrationOptions;
+using onnx_light_cpu::reference::TreeEnsembleCalibrationStage;
 using onnx_light_cpu::reference::TreeEnsembleClassifierAttributes;
 using onnx_light_cpu::reference::TreeEnsembleExecutionStrategy;
 using onnx_light_cpu::reference::TreeEnsembleNodeLayout;
@@ -362,6 +368,138 @@ TEST(TreeEnsembleReference, InvalidOrIncompatiblePoliciesUseExplicitSafeFallback
   const TreeEnsemblePlan layout_fallback(StumpForest(3), context, &registry);
   EXPECT_EQ(layout_fallback.profile_source(), TreeEnsembleProfileSource::kSafeFallback);
   EXPECT_LE(layout_fallback.tuning_policy().regions.size(), 4U);
+}
+
+TEST(TreeEnsembleReference, CalibrationRejectsInvalidCandidatesAndPersistsEvidenceAtomically) {
+  const TreeEnsembleTuningContext context{"calibration-cpu", 4};
+  const TreeEnsemblePlan key_plan(StumpForest(3), context, nullptr);
+  const TreeEnsembleTuningPolicy fallback =
+      OneRegionPolicy(TreeEnsembleExecutionStrategy::kTreeMajorBatch, 1, 2);
+  TreeEnsembleTuningPolicy oversized =
+      OneRegionPolicy(TreeEnsembleExecutionStrategy::kRowParallel, 1, 2);
+  oversized.regions[0].workspace_bytes = 4096;
+  const TreeEnsembleTuningPolicy incorrect =
+      OneRegionPolicy(TreeEnsembleExecutionStrategy::kTreeParallel, 1, 2);
+  const TreeEnsembleTuningPolicy winner =
+      OneRegionPolicy(TreeEnsembleExecutionStrategy::kRowParallel, 1, 2);
+  const std::vector<TreeEnsembleCalibrationCandidate> candidates{
+      {"oversized", TreeEnsembleCalibrationStage::kLayout, oversized},
+      {"incorrect", TreeEnsembleCalibrationStage::kScheduling, incorrect},
+      {"winner", TreeEnsembleCalibrationStage::kScheduling, winner},
+  };
+  const std::filesystem::path evidence_path =
+      std::filesystem::temp_directory_path() / "onnx_light_cpu_tree_calibration.txt";
+  std::filesystem::remove(evidence_path);
+
+  TreeEnsembleCalibrationOptions options;
+  options.duration_budget_ns = 1'000'000'000;
+  options.memory_budget_bytes = 1024;
+  options.warmup_runs = 2;
+  options.repetitions = 3;
+  options.required_wins = 2;
+  options.minimum_improvement = 0.05;
+  options.evidence_path = evidence_path.string();
+  std::size_t calls = 0;
+  const auto measure = [&](const TreeEnsembleTuningPolicy &policy, std::size_t warmups,
+                           std::size_t repetitions) {
+    ++calls;
+    EXPECT_EQ(warmups, 2U);
+    EXPECT_EQ(repetitions, 3U);
+    TreeEnsembleCalibrationMeasurement result;
+    result.elapsed_ns = 100;
+    const auto strategy = policy.regions[0].strategy;
+    result.correct = strategy != TreeEnsembleExecutionStrategy::kTreeParallel;
+    result.samples_ns.assign(
+        repetitions, strategy == TreeEnsembleExecutionStrategy::kRowParallel ? 80.0 : 100.0);
+    if (!result.correct) {
+      result.failure = "output mismatch";
+    }
+    return result;
+  };
+
+  TreeEnsembleTuningRegistry registry;
+  const auto report =
+      registry.CalibrateExact(key_plan.model_key(), fallback, candidates, options, measure);
+  EXPECT_TRUE(report.changed);
+  EXPECT_TRUE(report.persisted);
+  EXPECT_FALSE(report.budget_exhausted);
+  EXPECT_EQ(report.selected_policy, winner);
+  EXPECT_EQ(calls, 6U);
+  ASSERT_TRUE(std::filesystem::exists(evidence_path));
+  EXPECT_FALSE(std::filesystem::exists(evidence_path.string() + ".tmp.0"));
+  std::ifstream first_stream(evidence_path);
+  const std::string first((std::istreambuf_iterator<char>(first_stream)),
+                          std::istreambuf_iterator<char>());
+  EXPECT_NE(first.find("output mismatch"), std::string::npos);
+  EXPECT_NE(first.find("memory budget exceeded"), std::string::npos);
+  EXPECT_NE(first.find("onnx_light_cpu_tree_calibration_v1"), std::string::npos);
+
+  TreeEnsembleTuningRegistry repeated_registry;
+  const auto repeated_report = repeated_registry.CalibrateExact(key_plan.model_key(), fallback,
+                                                                candidates, options, measure);
+  EXPECT_TRUE(repeated_report.persisted);
+  std::ifstream second_stream(evidence_path);
+  const std::string second((std::istreambuf_iterator<char>(second_stream)),
+                           std::istreambuf_iterator<char>());
+  EXPECT_EQ(second, first);
+
+  const auto inspection = registry.InspectExact(key_plan.model_key());
+  ASSERT_TRUE(inspection.selected_policy.has_value());
+  EXPECT_EQ(*inspection.selected_policy, winner);
+  EXPECT_EQ(inspection.rejected_reasons.size(), 2U);
+  const TreeEnsemblePlan calibrated(StumpForest(3), context, &registry);
+  EXPECT_EQ(calibrated.SelectExecution(64, 4).strategy,
+            TreeEnsembleExecutionStrategy::kRowParallel);
+
+  registry.OverrideExact(key_plan.model_key(), incorrect);
+  EXPECT_TRUE(registry.InspectExact(key_plan.model_key()).override_policy.has_value());
+  EXPECT_EQ(TreeEnsemblePlan(StumpForest(3), context, &registry).SelectExecution(64, 4).strategy,
+            TreeEnsembleExecutionStrategy::kTreeParallel);
+  registry.PutPortable(key_plan.structural_buckets(), fallback);
+  registry.ForcePortable(key_plan.model_key(), true);
+  EXPECT_TRUE(registry.InspectExact(key_plan.model_key()).force_portable);
+  EXPECT_EQ(TreeEnsemblePlan(StumpForest(3), context, &registry).SelectExecution(64, 4).strategy,
+            TreeEnsembleExecutionStrategy::kTreeMajorBatch);
+
+  std::filesystem::remove(evidence_path);
+}
+
+TEST(TreeEnsembleReference, CalibrationBudgetFailurePreservesActiveProfileAndCanBeDisabled) {
+  const TreeEnsembleTuningContext context{"calibration-cpu", 4};
+  const TreeEnsemblePlan key_plan(StumpForest(3), context, nullptr);
+  const TreeEnsembleTuningPolicy active =
+      OneRegionPolicy(TreeEnsembleExecutionStrategy::kTreeParallel, 1, 2);
+  const TreeEnsembleTuningPolicy candidate =
+      OneRegionPolicy(TreeEnsembleExecutionStrategy::kRowParallel, 1, 2);
+  TreeEnsembleTuningRegistry registry;
+  registry.PutExact(key_plan.model_key(), active);
+  TreeEnsembleCalibrationOptions options;
+  options.duration_budget_ns = 10;
+  options.repetitions = 1;
+  options.required_wins = 1;
+  const auto report = registry.CalibrateExact(
+      key_plan.model_key(), active,
+      {{"candidate", TreeEnsembleCalibrationStage::kScheduling, candidate}}, options,
+      [](const TreeEnsembleTuningPolicy &, std::size_t, std::size_t) {
+        return TreeEnsembleCalibrationMeasurement{true, {1.0}, 10, {}};
+      });
+  EXPECT_TRUE(report.budget_exhausted);
+  EXPECT_FALSE(report.changed);
+  EXPECT_EQ(*registry.InspectExact(key_plan.model_key()).selected_policy, active);
+
+  registry.SetCalibrationEnabled(false);
+  std::size_t calls = 0;
+  const auto disabled = registry.CalibrateExact(
+      key_plan.model_key(), active,
+      {{"candidate", TreeEnsembleCalibrationStage::kScheduling, candidate}}, options,
+      [&](const TreeEnsembleTuningPolicy &, std::size_t, std::size_t) {
+        ++calls;
+        return TreeEnsembleCalibrationMeasurement{};
+      });
+  EXPECT_EQ(calls, 0U);
+  ASSERT_EQ(disabled.evidence.size(), 1U);
+  EXPECT_EQ(disabled.evidence[0].rejected_reason, "calibration disabled");
+  EXPECT_FALSE(registry.InspectExact(key_plan.model_key()).calibration_enabled);
 }
 
 TEST(TreeEnsembleReference, EverySchedulingStrategyMatchesScalarAcrossThreadCounts) {

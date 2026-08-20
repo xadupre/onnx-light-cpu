@@ -6,6 +6,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -118,6 +119,8 @@ struct TreeEnsembleExecutionRegion {
   std::size_t row_chunk = 1;
   std::size_t tree_chunk = 1;
   std::size_t workspace_bytes = 0;
+
+  bool operator==(const TreeEnsembleExecutionRegion &) const = default;
 };
 
 struct TreeEnsembleTuningPolicy {
@@ -126,6 +129,8 @@ struct TreeEnsembleTuningPolicy {
   std::size_t membership_linear_limit = 8;
   std::size_t membership_bitset_range_limit = 256;
   std::size_t traversal_prefetch_distance = 0;
+
+  bool operator==(const TreeEnsembleTuningPolicy &) const = default;
 };
 
 enum class TreeEnsembleProfileSource : std::uint8_t {
@@ -137,6 +142,71 @@ enum class TreeEnsembleProfileSource : std::uint8_t {
 struct TreeEnsembleTuningContext {
   std::string processor = "portable";
   std::size_t threads = 0;
+};
+
+enum class TreeEnsembleCalibrationStage : std::uint8_t {
+  kLayout,
+  kTraversal,
+  kScheduling,
+  kBatch,
+  kChunk,
+  kWorkspace,
+};
+
+struct TreeEnsembleCalibrationCandidate {
+  std::string name;
+  TreeEnsembleCalibrationStage stage = TreeEnsembleCalibrationStage::kLayout;
+  TreeEnsembleTuningPolicy policy;
+};
+
+struct TreeEnsembleCalibrationMeasurement {
+  bool correct = false;
+  std::vector<double> samples_ns;
+  std::uint64_t elapsed_ns = 0;
+  std::string failure;
+};
+
+struct TreeEnsembleCalibrationOptions {
+  std::uint64_t duration_budget_ns = 1'000'000'000;
+  std::size_t memory_budget_bytes = 64 * 1024 * 1024;
+  std::size_t warmup_runs = 3;
+  std::size_t repetitions = 11;
+  std::size_t required_wins = 2;
+  double minimum_improvement = 0.0;
+  std::string evidence_path;
+};
+
+struct TreeEnsembleCalibrationEvidence {
+  std::string candidate;
+  TreeEnsembleCalibrationStage stage = TreeEnsembleCalibrationStage::kLayout;
+  TreeEnsembleTuningPolicy policy;
+  std::vector<double> samples_ns;
+  double median_ns = 0.0;
+  double dispersion_ns = 0.0;
+  bool correct = false;
+  bool selected = false;
+  std::string rejected_reason;
+};
+
+struct TreeEnsembleCalibrationReport {
+  TreeEnsembleModelKey key;
+  TreeEnsembleTuningPolicy selected_policy;
+  std::vector<TreeEnsembleCalibrationEvidence> evidence;
+  bool changed = false;
+  bool budget_exhausted = false;
+  bool persisted = false;
+};
+
+using TreeEnsembleCalibrationMeasure = std::function<TreeEnsembleCalibrationMeasurement(
+    const TreeEnsembleTuningPolicy &, std::size_t warmup_runs, std::size_t repetitions)>;
+
+struct TreeEnsembleTuningInspection {
+  std::optional<TreeEnsembleTuningPolicy> selected_policy;
+  std::optional<TreeEnsembleTuningPolicy> override_policy;
+  std::vector<TreeEnsembleCalibrationEvidence> evidence;
+  std::vector<std::string> rejected_reasons;
+  bool force_portable = false;
+  bool calibration_enabled = true;
 };
 
 struct TreeEnsembleExecutionDecision {
@@ -154,6 +224,16 @@ class TreeEnsembleTuningRegistry {
 public:
   void PutExact(TreeEnsembleModelKey key, TreeEnsembleTuningPolicy policy);
   void PutPortable(TreeEnsembleStructuralBuckets buckets, TreeEnsembleTuningPolicy policy);
+  TreeEnsembleCalibrationReport
+  CalibrateExact(const TreeEnsembleModelKey &key, const TreeEnsembleTuningPolicy &fallback,
+                 const std::vector<TreeEnsembleCalibrationCandidate> &candidates,
+                 const TreeEnsembleCalibrationOptions &options,
+                 const TreeEnsembleCalibrationMeasure &measure);
+  void OverrideExact(const TreeEnsembleModelKey &key, TreeEnsembleTuningPolicy policy);
+  void ClearExactOverride(const TreeEnsembleModelKey &key);
+  void ForcePortable(const TreeEnsembleModelKey &key, bool enabled);
+  void SetCalibrationEnabled(bool enabled);
+  TreeEnsembleTuningInspection InspectExact(const TreeEnsembleModelKey &key) const;
 
   std::uint64_t generation() const noexcept;
 
@@ -161,7 +241,10 @@ private:
   friend class TreeEnsemblePlan;
   struct ExactEntry {
     TreeEnsembleModelKey key;
-    TreeEnsembleTuningPolicy policy;
+    std::optional<TreeEnsembleTuningPolicy> policy;
+    std::optional<TreeEnsembleTuningPolicy> override_policy;
+    std::vector<TreeEnsembleCalibrationEvidence> evidence;
+    bool force_portable = false;
   };
   struct PortableEntry {
     TreeEnsembleStructuralBuckets buckets;
@@ -172,6 +255,7 @@ private:
   std::vector<ExactEntry> exact_;
   std::vector<PortableEntry> portable_;
   std::uint64_t generation_ = 0;
+  bool calibration_enabled_ = true;
 };
 
 struct TreeEnsembleRegressorAttributes;

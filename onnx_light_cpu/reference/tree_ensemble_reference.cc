@@ -7,10 +7,14 @@
 #include "onnx_light_cpu/impl/execution.h"
 
 #include <algorithm>
+#include <atomic>
 #include <bit>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
+#include <fstream>
 #include <functional>
 #include <iomanip>
 #include <limits>
@@ -70,6 +74,15 @@ void ValidatePolicyShape(const TreeEnsembleTuningPolicy &policy) {
         region.tree_chunk == 0 || region.workspace_bytes == 0) {
       Invalid("execution region parameters and workspace must be positive");
     }
+  }
+}
+
+void ValidateExactKey(const TreeEnsembleModelKey &key) {
+  if (key.library != "onnx_light_cpu" || key.kernel != "TreeEnsemble" ||
+      key.domain != "ai.onnx.ml" || key.opset != 5 ||
+      key.implementation != "prepared_tree_ensemble" || key.processor.empty() || key.threads == 0 ||
+      key.model_digest.empty()) {
+    Invalid("exact profile key is incomplete or incompatible");
   }
 }
 
@@ -553,17 +566,89 @@ void ValidateWeights(const LegacyTreeAttributes &tree, const LegacyPrepared &pre
   }
 }
 
+double Median(std::vector<double> samples) {
+  std::sort(samples.begin(), samples.end());
+  const std::size_t middle = samples.size() / 2;
+  return samples.size() % 2 == 0 ? (samples[middle - 1] + samples[middle]) * 0.5 : samples[middle];
+}
+
+double MedianAbsoluteDeviation(const std::vector<double> &samples, double median) {
+  std::vector<double> deviations;
+  deviations.reserve(samples.size());
+  for (double sample : samples) {
+    deviations.push_back(std::abs(sample - median));
+  }
+  return Median(std::move(deviations));
+}
+
+std::size_t PolicyWorkspace(const TreeEnsembleTuningPolicy &policy) noexcept {
+  std::size_t result = 0;
+  for (const TreeEnsembleExecutionRegion &region : policy.regions) {
+    result = std::max(result, region.workspace_bytes);
+  }
+  return result;
+}
+
+void WritePolicy(std::ostream &stream, const TreeEnsembleTuningPolicy &policy) {
+  stream << static_cast<int>(policy.layout) << ' ' << policy.membership_linear_limit << ' '
+         << policy.membership_bitset_range_limit << ' ' << policy.traversal_prefetch_distance << ' '
+         << policy.regions.size() << '\n';
+  for (const TreeEnsembleExecutionRegion &region : policy.regions) {
+    stream << (region.maximum_rows.has_value() ? 1 : 0) << ' ' << region.maximum_rows.value_or(0)
+           << ' ' << static_cast<int>(region.strategy) << ' ' << region.batch_rows << ' '
+           << region.maximum_threads << ' ' << region.row_chunk << ' ' << region.tree_chunk << ' '
+           << region.workspace_bytes << '\n';
+  }
+}
+
+void PersistCalibrationEvidence(const TreeEnsembleCalibrationReport &report,
+                                const std::string &path) {
+  static std::atomic<std::uint64_t> sequence{0};
+  const std::filesystem::path destination(path);
+  std::filesystem::path temporary(path + ".tmp." + std::to_string(sequence.fetch_add(1)));
+  if (!destination.parent_path().empty()) {
+    std::filesystem::create_directories(destination.parent_path());
+  }
+  try {
+    std::ofstream stream(temporary, std::ios::binary | std::ios::trunc);
+    if (!stream) {
+      throw std::runtime_error("unable to open temporary evidence file");
+    }
+    stream << "onnx_light_cpu_tree_calibration_v1\n"
+           << std::quoted(report.key.processor) << ' ' << report.key.threads << ' '
+           << std::quoted(report.key.model_digest) << '\n';
+    WritePolicy(stream, report.selected_policy);
+    stream << report.evidence.size() << '\n' << std::setprecision(17);
+    for (const TreeEnsembleCalibrationEvidence &evidence : report.evidence) {
+      stream << std::quoted(evidence.candidate) << ' ' << static_cast<int>(evidence.stage) << ' '
+             << evidence.correct << ' ' << evidence.selected << ' ' << evidence.median_ns << ' '
+             << evidence.dispersion_ns << ' ' << std::quoted(evidence.rejected_reason) << ' '
+             << evidence.samples_ns.size();
+      for (double sample : evidence.samples_ns) {
+        stream << ' ' << sample;
+      }
+      stream << '\n';
+      WritePolicy(stream, evidence.policy);
+    }
+    stream.flush();
+    if (!stream) {
+      throw std::runtime_error("unable to write calibration evidence");
+    }
+    stream.close();
+    std::filesystem::rename(temporary, destination);
+  } catch (...) {
+    std::error_code ignored;
+    std::filesystem::remove(temporary, ignored);
+    throw;
+  }
+}
+
 } // namespace
 
 void TreeEnsembleTuningRegistry::PutExact(TreeEnsembleModelKey key,
                                           TreeEnsembleTuningPolicy policy) {
   ValidatePolicyShape(policy);
-  if (key.library != "onnx_light_cpu" || key.kernel != "TreeEnsemble" ||
-      key.domain != "ai.onnx.ml" || key.opset != 5 ||
-      key.implementation != "prepared_tree_ensemble" || key.processor.empty() || key.threads == 0 ||
-      key.model_digest.empty()) {
-    Invalid("exact profile key is incomplete or incompatible");
-  }
+  ValidateExactKey(key);
   std::lock_guard<std::mutex> lock(mutex_);
   const auto found = std::find_if(exact_.begin(), exact_.end(),
                                   [&](const ExactEntry &entry) { return entry.key == key; });
@@ -588,6 +673,289 @@ void TreeEnsembleTuningRegistry::PutPortable(TreeEnsembleStructuralBuckets bucke
     found->policy = std::move(policy);
   }
   ++generation_;
+}
+
+TreeEnsembleCalibrationReport TreeEnsembleTuningRegistry::CalibrateExact(
+    const TreeEnsembleModelKey &key, const TreeEnsembleTuningPolicy &fallback,
+    const std::vector<TreeEnsembleCalibrationCandidate> &candidates,
+    const TreeEnsembleCalibrationOptions &options, const TreeEnsembleCalibrationMeasure &measure) {
+  ValidateExactKey(key);
+  ValidatePolicyShape(fallback);
+  if (!measure || options.duration_budget_ns == 0 || options.memory_budget_bytes == 0 ||
+      options.repetitions == 0 || options.required_wins == 0 ||
+      !std::isfinite(options.minimum_improvement) || options.minimum_improvement < 0.0 ||
+      options.minimum_improvement >= 1.0) {
+    Invalid("calibration options are invalid");
+  }
+
+  TreeEnsembleCalibrationReport report;
+  report.key = key;
+  report.selected_policy = fallback;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!calibration_enabled_) {
+      for (const TreeEnsembleCalibrationCandidate &candidate : candidates) {
+        report.evidence.push_back({candidate.name,
+                                   candidate.stage,
+                                   candidate.policy,
+                                   {},
+                                   0.0,
+                                   0.0,
+                                   false,
+                                   false,
+                                   "calibration disabled"});
+      }
+      return report;
+    }
+  }
+
+  const auto calibration_start = std::chrono::steady_clock::now();
+  std::uint64_t reported_duration = 0;
+  const auto budget_available = [&]() {
+    const auto actual = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                            std::chrono::steady_clock::now() - calibration_start)
+                            .count();
+    return actual >= 0 && static_cast<std::uint64_t>(actual) < options.duration_budget_ns &&
+           reported_duration < options.duration_budget_ns;
+  };
+  const auto run = [&](const TreeEnsembleTuningPolicy &policy,
+                       TreeEnsembleCalibrationEvidence &evidence) {
+    if (!budget_available()) {
+      evidence.rejected_reason = "duration budget exceeded";
+      report.budget_exhausted = true;
+      return false;
+    }
+    TreeEnsembleCalibrationMeasurement measurement;
+    try {
+      measurement = measure(policy, options.warmup_runs, options.repetitions);
+    } catch (const std::exception &exception) {
+      evidence.rejected_reason = std::string("measurement failed: ") + exception.what();
+      return false;
+    }
+    if (measurement.elapsed_ns > options.duration_budget_ns - reported_duration) {
+      reported_duration = options.duration_budget_ns;
+    } else {
+      reported_duration += measurement.elapsed_ns;
+    }
+    evidence.correct = measurement.correct;
+    evidence.samples_ns.insert(evidence.samples_ns.end(), measurement.samples_ns.begin(),
+                               measurement.samples_ns.end());
+    if (!measurement.correct) {
+      evidence.rejected_reason =
+          measurement.failure.empty() ? "correctness validation failed" : measurement.failure;
+      return false;
+    }
+    if (measurement.samples_ns.size() != options.repetitions ||
+        std::any_of(measurement.samples_ns.begin(), measurement.samples_ns.end(),
+                    [](double sample) { return !std::isfinite(sample) || sample <= 0.0; })) {
+      evidence.rejected_reason = "invalid timing samples";
+      return false;
+    }
+    if (!budget_available()) {
+      evidence.rejected_reason = "duration budget exceeded";
+      report.budget_exhausted = true;
+      return false;
+    }
+    return true;
+  };
+
+  for (int stage_code = static_cast<int>(TreeEnsembleCalibrationStage::kLayout);
+       stage_code <= static_cast<int>(TreeEnsembleCalibrationStage::kWorkspace); ++stage_code) {
+    const auto stage = static_cast<TreeEnsembleCalibrationStage>(stage_code);
+    std::vector<const TreeEnsembleCalibrationCandidate *> stage_candidates;
+    for (const TreeEnsembleCalibrationCandidate &candidate : candidates) {
+      if (candidate.stage == stage) {
+        stage_candidates.push_back(&candidate);
+      }
+    }
+    if (stage_candidates.empty()) {
+      continue;
+    }
+
+    const TreeEnsembleTuningPolicy stage_fallback = report.selected_policy;
+    double best_median = std::numeric_limits<double>::infinity();
+    const TreeEnsembleCalibrationCandidate *best = nullptr;
+    std::size_t best_evidence = 0;
+    for (const TreeEnsembleCalibrationCandidate *candidate : stage_candidates) {
+      TreeEnsembleCalibrationEvidence evidence;
+      evidence.candidate = candidate->name;
+      evidence.stage = candidate->stage;
+      evidence.policy = candidate->policy;
+      try {
+        ValidatePolicyShape(candidate->policy);
+      } catch (const std::invalid_argument &exception) {
+        evidence.rejected_reason = exception.what();
+        report.evidence.push_back(std::move(evidence));
+        continue;
+      }
+      if (candidate->policy.layout != TreeEnsembleNodeLayout::kOrtCompactAosPointer) {
+        evidence.rejected_reason = "layout is not implemented";
+        report.evidence.push_back(std::move(evidence));
+        continue;
+      }
+      if (PolicyWorkspace(candidate->policy) > options.memory_budget_bytes) {
+        evidence.rejected_reason = "memory budget exceeded";
+        report.evidence.push_back(std::move(evidence));
+        continue;
+      }
+
+      bool won_every_repeat = true;
+      for (std::size_t repeat = 0; repeat < options.required_wins; ++repeat) {
+        TreeEnsembleCalibrationEvidence baseline;
+        baseline.candidate = candidate->name + ":fallback";
+        baseline.stage = stage;
+        baseline.policy = stage_fallback;
+        if (!run(stage_fallback, baseline)) {
+          won_every_repeat = false;
+          if (report.budget_exhausted) {
+            evidence.rejected_reason = "duration budget exceeded";
+          } else {
+            evidence.rejected_reason = "fallback validation failed";
+          }
+          break;
+        }
+        baseline.median_ns = Median(baseline.samples_ns);
+        baseline.dispersion_ns = MedianAbsoluteDeviation(baseline.samples_ns, baseline.median_ns);
+        report.evidence.push_back(std::move(baseline));
+        const double fallback_median = report.evidence.back().median_ns;
+
+        const std::size_t previous_sample_count = evidence.samples_ns.size();
+        if (!run(candidate->policy, evidence)) {
+          won_every_repeat = false;
+          break;
+        }
+        const std::vector<double> repeat_samples(
+            evidence.samples_ns.begin() + static_cast<std::ptrdiff_t>(previous_sample_count),
+            evidence.samples_ns.end());
+        if (Median(repeat_samples) > fallback_median * (1.0 - options.minimum_improvement)) {
+          evidence.rejected_reason = "did not improve or retain the priority profile";
+          won_every_repeat = false;
+          break;
+        }
+      }
+      if (!evidence.samples_ns.empty()) {
+        evidence.median_ns = Median(evidence.samples_ns);
+        evidence.dispersion_ns = MedianAbsoluteDeviation(evidence.samples_ns, evidence.median_ns);
+      }
+      const std::size_t evidence_index = report.evidence.size();
+      report.evidence.push_back(std::move(evidence));
+      if (won_every_repeat && report.evidence.back().median_ns < best_median) {
+        best = candidate;
+        best_median = report.evidence.back().median_ns;
+        best_evidence = evidence_index;
+      }
+      if (report.budget_exhausted) {
+        break;
+      }
+    }
+    if (best != nullptr) {
+      report.selected_policy = best->policy;
+      report.evidence[best_evidence].selected = true;
+    }
+    if (report.budget_exhausted) {
+      break;
+    }
+  }
+  report.changed =
+      report.selected_policy.regions != fallback.regions ||
+      report.selected_policy.layout != fallback.layout ||
+      report.selected_policy.membership_linear_limit != fallback.membership_linear_limit ||
+      report.selected_policy.membership_bitset_range_limit !=
+          fallback.membership_bitset_range_limit ||
+      report.selected_policy.traversal_prefetch_distance != fallback.traversal_prefetch_distance;
+
+  if (!options.evidence_path.empty()) {
+    PersistCalibrationEvidence(report, options.evidence_path);
+    report.persisted = true;
+  }
+
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto found = std::find_if(exact_.begin(), exact_.end(),
+                              [&](const ExactEntry &entry) { return entry.key == key; });
+    if (found == exact_.end()) {
+      exact_.push_back(
+          {key, report.changed ? std::optional(report.selected_policy) : std::nullopt});
+      found = std::prev(exact_.end());
+    } else if (report.changed) {
+      found->policy = report.selected_policy;
+    }
+    found->evidence = report.evidence;
+    ++generation_;
+  }
+  return report;
+}
+
+void TreeEnsembleTuningRegistry::OverrideExact(const TreeEnsembleModelKey &key,
+                                               TreeEnsembleTuningPolicy policy) {
+  ValidateExactKey(key);
+  ValidatePolicyShape(policy);
+  std::lock_guard<std::mutex> lock(mutex_);
+  auto found = std::find_if(exact_.begin(), exact_.end(),
+                            [&](const ExactEntry &entry) { return entry.key == key; });
+  if (found == exact_.end()) {
+    exact_.push_back({key, std::nullopt, std::move(policy)});
+  } else {
+    found->override_policy = std::move(policy);
+  }
+  ++generation_;
+}
+
+void TreeEnsembleTuningRegistry::ClearExactOverride(const TreeEnsembleModelKey &key) {
+  ValidateExactKey(key);
+  std::lock_guard<std::mutex> lock(mutex_);
+  const auto found = std::find_if(exact_.begin(), exact_.end(),
+                                  [&](const ExactEntry &entry) { return entry.key == key; });
+  if (found != exact_.end() && found->override_policy.has_value()) {
+    found->override_policy.reset();
+    ++generation_;
+  }
+}
+
+void TreeEnsembleTuningRegistry::ForcePortable(const TreeEnsembleModelKey &key, bool enabled) {
+  ValidateExactKey(key);
+  std::lock_guard<std::mutex> lock(mutex_);
+  auto found = std::find_if(exact_.begin(), exact_.end(),
+                            [&](const ExactEntry &entry) { return entry.key == key; });
+  if (found == exact_.end()) {
+    exact_.push_back({key, std::nullopt, std::nullopt, {}, enabled});
+  } else if (found->force_portable != enabled) {
+    found->force_portable = enabled;
+  } else {
+    return;
+  }
+  ++generation_;
+}
+
+void TreeEnsembleTuningRegistry::SetCalibrationEnabled(bool enabled) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (calibration_enabled_ != enabled) {
+    calibration_enabled_ = enabled;
+    ++generation_;
+  }
+}
+
+TreeEnsembleTuningInspection
+TreeEnsembleTuningRegistry::InspectExact(const TreeEnsembleModelKey &key) const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  TreeEnsembleTuningInspection inspection;
+  inspection.calibration_enabled = calibration_enabled_;
+  const auto found = std::find_if(exact_.begin(), exact_.end(),
+                                  [&](const ExactEntry &entry) { return entry.key == key; });
+  if (found == exact_.end()) {
+    return inspection;
+  }
+  inspection.override_policy = found->override_policy;
+  inspection.selected_policy =
+      found->override_policy.has_value() ? found->override_policy : found->policy;
+  inspection.evidence = found->evidence;
+  inspection.force_portable = found->force_portable;
+  for (const TreeEnsembleCalibrationEvidence &evidence : found->evidence) {
+    if (!evidence.rejected_reason.empty()) {
+      inspection.rejected_reasons.push_back(evidence.candidate + ": " + evidence.rejected_reason);
+    }
+  }
+  return inspection;
 }
 
 std::uint64_t TreeEnsembleTuningRegistry::generation() const noexcept {
@@ -787,10 +1155,18 @@ TreeEnsemblePlan::TreeEnsemblePlan(TreeEnsembleAttributes attributes,
                                     [&](const TreeEnsembleTuningRegistry::ExactEntry &entry) {
                                       return entry.key == model_key_;
                                     });
-    if (exact != registry->exact_.end()) {
-      if (PolicyCompatible(exact->policy, static_cast<std::size_t>(attributes_.n_targets),
+    const TreeEnsembleTuningPolicy *exact_policy = nullptr;
+    if (exact != registry->exact_.end() && !exact->force_portable) {
+      if (exact->override_policy.has_value()) {
+        exact_policy = &*exact->override_policy;
+      } else if (exact->policy.has_value()) {
+        exact_policy = &*exact->policy;
+      }
+    }
+    if (exact_policy != nullptr) {
+      if (PolicyCompatible(*exact_policy, static_cast<std::size_t>(attributes_.n_targets),
                            context.threads)) {
-        tuning_policy_ = exact->policy;
+        tuning_policy_ = *exact_policy;
         profile_source_ = TreeEnsembleProfileSource::kExact;
       }
     } else {
