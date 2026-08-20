@@ -178,6 +178,47 @@ TEST(TreeEnsembleReference, AggregatesMultipleTargetsAndAppliesTransforms) {
   EXPECT_NEAR(actual[1], 0.3775407, 1e-6);
 }
 
+TEST(TreeEnsembleReference, AggregatesMinMaxWithoutZeroBiasAndRetainsAverageTreeDivisor) {
+  TreeEnsembleAttributes average;
+  average.n_features = 1;
+  average.n_targets = 2;
+  average.aggregate = TreeAggregate::kAverage;
+  average.tree_roots = {0, 1};
+  average.nodes_featureids = {0, 0};
+  average.nodes_splits = {0.0, 0.0};
+  average.nodes_modes = {TreeBranchMode::kLeq, TreeBranchMode::kLeq};
+  average.nodes_truenodeids = {0, 2};
+  average.nodes_falsenodeids = {1, 3};
+  average.nodes_trueleafs = {1, 1};
+  average.nodes_falseleafs = {1, 1};
+  average.leaf_targetids = {0, 0, 1, 1};
+  average.leaf_weights = {6.0, 4.0, 2.0, 1.0};
+  const std::vector<double> average_actual = TreeEnsembleReference(average).Evaluate({0.0}, 1);
+  EXPECT_EQ(average_actual, (std::vector<double>{3.0, 1.0}));
+
+  TreeEnsembleAttributes minimum = average;
+  minimum.aggregate = TreeAggregate::kMin;
+  minimum.leaf_weights = {5.0, 10.0, 3.0, 7.0};
+  const std::vector<double> minimum_actual = TreeEnsembleReference(minimum).Evaluate({0.0}, 1);
+  EXPECT_EQ(minimum_actual, (std::vector<double>{5.0, 3.0}));
+
+  TreeEnsembleAttributes maximum = average;
+  maximum.aggregate = TreeAggregate::kMax;
+  maximum.leaf_weights = {-5.0, -10.0, -3.0, -7.0};
+  const std::vector<double> maximum_actual = TreeEnsembleReference(maximum).Evaluate({0.0}, 1);
+  EXPECT_EQ(maximum_actual, (std::vector<double>{-5.0, -3.0}));
+
+  TreeEnsembleAttributes biased_min = minimum;
+  biased_min.base_values = {10.0, 2.0};
+  biased_min.leaf_weights = {5.0, 12.0, 7.0, 9.0};
+  EXPECT_EQ(TreeEnsembleReference(biased_min).Evaluate({0.0}, 1), (std::vector<double>{15.0, 9.0}));
+
+  const TreeEnsemblePlan minimum_plan(minimum);
+  EXPECT_EQ(minimum_plan.Evaluate({0.0}, 1), (std::vector<double>{5.0, 3.0}));
+  const TreeEnsemblePlan maximum_plan(maximum);
+  EXPECT_EQ(maximum_plan.Evaluate({0.0}, 1), (std::vector<double>{-5.0, -3.0}));
+}
+
 TEST(TreeEnsembleReference, RejectsMalformedAttributeLengthsAndIndices) {
   TreeEnsembleAttributes attributes = Stump();
   attributes.nodes_splits.clear();

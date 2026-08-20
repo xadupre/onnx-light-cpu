@@ -588,13 +588,23 @@ std::vector<double> TreeEnsemblePlan::Evaluate(const std::vector<double> &input,
       }
       const std::size_t target = static_cast<std::size_t>(attributes_.leaf_targetids[leaf]);
       const double weight = RoundValue(attributes_.leaf_weights[leaf], attributes_.value_type);
-      if (counts[target] == 0 || attributes_.aggregate == TreeAggregate::kSum ||
-          attributes_.aggregate == TreeAggregate::kAverage) {
+      const double bias =
+          target < attributes_.base_values.size() ? attributes_.base_values[target] : 0.0;
+      const double contribution = RoundValue(bias + weight, attributes_.value_type);
+      if (counts[target] == 0) {
+        if (attributes_.aggregate == TreeAggregate::kMin ||
+            attributes_.aggregate == TreeAggregate::kMax) {
+          values[target] = contribution;
+        } else {
+          values[target] = RoundValue(values[target] + weight, attributes_.value_type);
+        }
+      } else if (attributes_.aggregate == TreeAggregate::kSum ||
+                 attributes_.aggregate == TreeAggregate::kAverage) {
         values[target] = RoundValue(values[target] + weight, attributes_.value_type);
       } else if (attributes_.aggregate == TreeAggregate::kMin) {
-        values[target] = std::min(values[target], weight);
+        values[target] = std::min(values[target], contribution);
       } else {
-        values[target] = std::max(values[target], weight);
+        values[target] = std::max(values[target], contribution);
       }
       ++counts[target];
     }
@@ -908,7 +918,7 @@ std::vector<double> TreeEnsembleReference::Evaluate(const std::vector<double> &i
          ++target) {
       values[target] = attributes_.base_values[target];
     }
-    std::vector<std::size_t> counts(targets);
+    std::vector<std::size_t> counts(targets, 0);
     for (std::int64_t root : attributes_.tree_roots) {
       std::size_t node = static_cast<std::size_t>(root);
       std::size_t leaf;
@@ -937,13 +947,23 @@ std::vector<double> TreeEnsembleReference::Evaluate(const std::vector<double> &i
       }
       const std::size_t target = static_cast<std::size_t>(attributes_.leaf_targetids[leaf]);
       const double weight = RoundValue(attributes_.leaf_weights[leaf], attributes_.value_type);
-      if (counts[target] == 0 || attributes_.aggregate == TreeAggregate::kSum ||
-          attributes_.aggregate == TreeAggregate::kAverage) {
+      const double bias =
+          target < attributes_.base_values.size() ? attributes_.base_values[target] : 0.0;
+      const double contribution = RoundValue(bias + weight, attributes_.value_type);
+      if (counts[target] == 0) {
+        if (attributes_.aggregate == TreeAggregate::kMin ||
+            attributes_.aggregate == TreeAggregate::kMax) {
+          values[target] = contribution;
+        } else {
+          values[target] = RoundValue(values[target] + weight, attributes_.value_type);
+        }
+      } else if (attributes_.aggregate == TreeAggregate::kSum ||
+                 attributes_.aggregate == TreeAggregate::kAverage) {
         values[target] = RoundValue(values[target] + weight, attributes_.value_type);
       } else if (attributes_.aggregate == TreeAggregate::kMin) {
-        values[target] = std::min(values[target], weight);
+        values[target] = std::min(values[target], contribution);
       } else {
-        values[target] = std::max(values[target], weight);
+        values[target] = std::max(values[target], contribution);
       }
       ++counts[target];
     }
@@ -999,13 +1019,24 @@ std::vector<float> EvaluateTreeEnsembleRegressor(const TreeEnsembleRegressorAttr
       for (const auto &[target_id, weight] : it->second) {
         const std::size_t target = static_cast<std::size_t>(target_id);
         float &value = result[row * targets + target];
-        if (counts[target] == 0 || attributes.aggregate == TreeAggregate::kSum ||
-            attributes.aggregate == TreeAggregate::kAverage) {
+        const float bias = !attributes.base_values.empty()
+                               ? static_cast<float>(attributes.base_values[target])
+                               : 0.0f;
+        const float contribution = bias + static_cast<float>(weight);
+        if (counts[target] == 0) {
+          if (attributes.aggregate == TreeAggregate::kMin ||
+              attributes.aggregate == TreeAggregate::kMax) {
+            value = contribution;
+          } else {
+            value += static_cast<float>(weight);
+          }
+        } else if (attributes.aggregate == TreeAggregate::kSum ||
+                   attributes.aggregate == TreeAggregate::kAverage) {
           value += static_cast<float>(weight);
         } else if (attributes.aggregate == TreeAggregate::kMin) {
-          value = std::min(value, static_cast<float>(weight));
+          value = std::min(value, contribution);
         } else {
-          value = std::max(value, static_cast<float>(weight));
+          value = std::max(value, contribution);
         }
         ++counts[target];
       }
