@@ -1035,6 +1035,7 @@ TEST(GemmHalf, Float16GemvSkinnyMMatchesReference) {
 
 TEST(GemmHalf, Float16SplitKMatchesReference) {
   // A tiny output with a very deep K selects the split-K algorithm.
+  CheckGemmHalf(false, false, false, 2, 2, 4096, false, 356);
   CheckGemmHalf(false, false, false, 8, 4, 4096, false, 361);
   CheckGemmHalf(false, false, false, 4, 4, 5000, true, 371);
 }
