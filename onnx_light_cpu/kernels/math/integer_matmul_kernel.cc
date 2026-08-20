@@ -422,7 +422,8 @@ Tensor QLinearMatMulKernel::operator()(const Tensor &a, const Tensor &a_scale,
     const double cost =
         static_cast<double>(matrix_size) * static_cast<double>(std::max<int64_t>(layout.k, 1));
     ExecuteRanges(static_cast<int64_t>(work_items.size()), cost, [&](int64_t begin, int64_t end) {
-      std::vector<std::int32_t> accum(static_cast<std::size_t>(matrix_size));
+      thread_local std::vector<std::int32_t> accum;
+      accum.resize(static_cast<std::size_t>(matrix_size));
       for (int64_t index = begin; index < end; ++index) {
         const BatchWorkItem &item = work_items[static_cast<std::size_t>(index)];
         IntegerMatMul2D(a_bytes + item.a_base, a_signed, b_bytes + item.b_base, b_signed,

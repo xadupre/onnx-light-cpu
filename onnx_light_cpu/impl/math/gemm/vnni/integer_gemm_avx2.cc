@@ -10,6 +10,7 @@
 #include <bit>
 #include <cmath>
 #include <cstdint>
+#include <type_traits>
 
 #include <immintrin.h>
 
@@ -56,10 +57,15 @@ void RequantizeInt32ImplAvx2(const std::int32_t *src, T *dst, std::int64_t count
     hi = _mm256_max_pd(min_pd, _mm256_min_pd(max_pd, hi));
     const __m128i lo_i = _mm256_cvtpd_epi32(lo);
     const __m128i hi_i = _mm256_cvtpd_epi32(hi);
-    alignas(32) std::int32_t narrowed[8];
-    _mm256_store_si256(reinterpret_cast<__m256i *>(narrowed), _mm256_set_m128i(hi_i, lo_i));
-    for (int lane = 0; lane < 8; ++lane) {
-      dst[index + lane] = static_cast<T>(narrowed[lane]);
+    if constexpr (std::is_same_v<T, std::int8_t>) {
+      const __m128i packed16 = _mm_packs_epi32(lo_i, hi_i);
+      const __m128i packed8 = _mm_packs_epi16(packed16, packed16);
+      _mm_storel_epi64(reinterpret_cast<__m128i *>(dst + index), packed8);
+    } else {
+      static_assert(std::is_same_v<T, std::uint8_t>);
+      const __m128i packed16 = _mm_packs_epi32(lo_i, hi_i);
+      const __m128i packed8 = _mm_packus_epi16(packed16, _mm_setzero_si128());
+      _mm_storel_epi64(reinterpret_cast<__m128i *>(dst + index), packed8);
     }
   }
   for (; index < count; ++index) {
