@@ -15,6 +15,7 @@ def test_documentation_build_is_linux_only():
     assert "runs-on: ubuntu-latest" in _DOCS_WORKFLOW
     assert "matrix:" not in _DOCS_WORKFLOW
     assert "sphinx-build -b html docs dist/html" in _DOCS_WORKFLOW
+    assert "PYTHONPATH: ${{ github.workspace }}" in _DOCS_WORKFLOW
 
 
 def test_documentation_does_not_replace_onnx_light_main():
