@@ -16,6 +16,7 @@
 #include <mutex>
 #include <string_view>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -138,7 +139,8 @@ std::string_view StrategyName(TreeEnsembleExecutionStrategy strategy) {
   return "unknown";
 }
 
-void Measure(std::string_view scenario, std::size_t trees, std::size_t rows, std::size_t threads) {
+void Measure(std::string_view scenario, std::string_view configuration, std::size_t trees,
+             std::size_t rows, std::size_t threads) {
   const TreeEnsemblePlan plan(MakeForest(trees));
   std::vector<double> input(rows);
   for (std::size_t row = 0; row < rows; ++row) {
@@ -163,8 +165,8 @@ void Measure(std::string_view scenario, std::size_t trees, std::size_t rows, std
   }
   std::sort(samples.begin(), samples.end());
   const double median_us = samples[samples.size() / 2];
-  std::cout << scenario << "," << trees << "," << rows << "," << threads << ","
-            << StrategyName(decision.strategy) << "," << decision.workspace_bytes << ","
+  std::cout << scenario << "," << configuration << "," << trees << "," << rows << "," << threads
+            << "," << StrategyName(decision.strategy) << "," << decision.workspace_bytes << ","
             << std::fixed << std::setprecision(2) << median_us << ","
             << static_cast<double>(rows) * 1.0e6 / median_us << "," << checksum << "\n";
 }
@@ -174,13 +176,14 @@ void Measure(std::string_view scenario, std::size_t trees, std::size_t rows, std
 int main() {
   const std::size_t physical_threads =
       std::max<std::size_t>(onnx_light_cpu::GetCpuTopology().physical_core_count, 1);
-  std::vector<std::size_t> thread_counts{1, 2, 4, physical_threads};
-  std::cout << "scenario,trees,rows,threads,strategy,workspace_bytes,median_us,rows_per_s,"
-               "checksum\n";
-  for (const std::size_t threads : thread_counts) {
-    Measure("single_row_large_forest", 1024, 1, threads);
-    Measure("large_batch_large_forest", 81, 4096, threads);
-    Measure("large_batch_small_forest", 3, 4096, threads);
+  const std::vector<std::pair<std::string_view, std::size_t>> configurations{
+      {"1", 1}, {"2", 2}, {"4", 4}, {"physical", physical_threads}};
+  std::cout << "scenario,configuration,trees,rows,threads,strategy,workspace_bytes,median_us,"
+               "rows_per_s,checksum\n";
+  for (const auto &[configuration, threads] : configurations) {
+    Measure("single_row_large_forest", configuration, 1024, 1, threads);
+    Measure("large_batch_large_forest", configuration, 81, 4096, threads);
+    Measure("large_batch_small_forest", configuration, 3, 4096, threads);
   }
   return 0;
 }
