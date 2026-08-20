@@ -166,6 +166,10 @@ TEST(ExpFloat32, VectorSubnormalRange) {
 
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
 TEST(ExpFloat32, Avx2FmaMatchesStd) {
+  if (onnx_light_cpu::DetectSimdLevel() < onnx_light_cpu::SimdLevel::kAVX2 ||
+      !onnx_light_cpu::CpuSupportsFma()) {
+    GTEST_SKIP() << "AVX2+FMA is unavailable";
+  }
   const std::vector<float> values = {-103.0f, -100.0f, -90.0f, -1.0f, 0.0f,
                                      1.0f,    20.0f,   88.0f,  90.0f, 100.0f};
   std::vector<float> input(2 * values.size() + 1);
