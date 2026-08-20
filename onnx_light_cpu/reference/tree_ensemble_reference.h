@@ -43,6 +43,9 @@ enum class TreeValueType {
   kFloat64,
 };
 
+struct TreeEnsembleRegressorAttributes;
+struct TreeEnsembleClassifierAttributes;
+
 /// Direct representation of the ai.onnx.ml TreeEnsemble-5 attributes.
 struct TreeEnsembleAttributes {
   std::int64_t n_features = 0;
@@ -63,7 +66,19 @@ struct TreeEnsembleAttributes {
   std::vector<double> membership_values;
   std::vector<std::int64_t> leaf_targetids;
   std::vector<double> leaf_weights;
+  std::vector<double> base_values;
 };
+
+/// Lower a deprecated TreeEnsembleRegressor-5 graph into the canonical
+/// TreeEnsemble-5 plan representation. The returned values are validated by the
+/// same structural checks used by TreeEnsembleReference.
+TreeEnsembleAttributes
+LowerTreeEnsembleRegressor(const TreeEnsembleRegressorAttributes &attributes);
+
+/// Lower a deprecated TreeEnsembleClassifier-5 graph into the canonical
+/// TreeEnsemble-5 plan representation.
+TreeEnsembleAttributes
+LowerTreeEnsembleClassifier(const TreeEnsembleClassifierAttributes &attributes);
 
 /// Scalar, allocation-free-per-path oracle for TreeEnsemble-5.
 ///
@@ -127,6 +142,72 @@ struct TreeClassifierResult {
   std::vector<std::int64_t> integer_labels;
   std::vector<std::string> string_labels;
   std::vector<float> scores;
+};
+
+/// Canonical node layout used by a prepared TreeEnsemble plan.
+struct TreeEnsembleNode {
+  std::int64_t feature_id = 0;
+  double split = 0.0;
+  TreeBranchMode mode = TreeBranchMode::kLeq;
+  std::int64_t true_child = 0;
+  std::int64_t false_child = 0;
+  bool true_is_leaf = false;
+  bool false_is_leaf = false;
+  bool missing_value_tracks_true = false;
+  std::vector<double> members;
+  std::vector<std::size_t> true_leaf_indices;
+  std::vector<std::size_t> false_leaf_indices;
+};
+
+/// Canonical leaf entry used by a prepared TreeEnsemble plan.
+struct TreeEnsembleLeaf {
+  std::int64_t target_id = 0;
+  double weight = 0.0;
+};
+
+/// Immutable prepared representation for the ai.onnx.ml TreeEnsemble-5 schema.
+class TreeEnsemblePlan {
+public:
+  explicit TreeEnsemblePlan(TreeEnsembleAttributes attributes);
+  explicit TreeEnsemblePlan(const TreeEnsembleRegressorAttributes &attributes);
+  explicit TreeEnsemblePlan(const TreeEnsembleClassifierAttributes &attributes);
+
+  std::vector<double> Evaluate(const std::vector<double> &input, std::size_t rows) const;
+
+  const TreeEnsembleAttributes &attributes() const noexcept { return attributes_; }
+  const std::vector<std::int64_t> &tree_roots() const noexcept { return tree_roots_; }
+  const std::vector<TreeEnsembleNode> &nodes() const noexcept { return nodes_; }
+  const std::vector<TreeEnsembleLeaf> &leaves() const noexcept { return leaves_; }
+  const std::vector<double> &base_values() const noexcept { return base_values_; }
+  const std::vector<std::vector<double>> &membership_sets() const noexcept {
+    return membership_sets_;
+  }
+  const std::vector<std::size_t> &true_leaf_indices(std::size_t node_index) const noexcept {
+    return nodes_[node_index].true_leaf_indices;
+  }
+  const std::vector<std::size_t> &false_leaf_indices(std::size_t node_index) const noexcept {
+    return nodes_[node_index].false_leaf_indices;
+  }
+  std::size_t max_depth() const noexcept { return max_depth_; }
+  std::size_t average_depth() const noexcept { return average_depth_; }
+  const std::string &model_signature() const noexcept { return model_signature_; }
+  std::size_t workspace_bytes() const noexcept { return workspace_bytes_; }
+  bool uses_64bit_indices() const noexcept { return uses_64_bit_indices_; }
+
+private:
+  static std::string MakeModelSignature(const TreeEnsembleAttributes &attributes);
+
+  TreeEnsembleAttributes attributes_;
+  std::vector<std::int64_t> tree_roots_;
+  std::vector<TreeEnsembleNode> nodes_;
+  std::vector<TreeEnsembleLeaf> leaves_;
+  std::vector<double> base_values_;
+  std::vector<std::vector<double>> membership_sets_;
+  std::size_t max_depth_ = 0;
+  std::size_t average_depth_ = 0;
+  std::string model_signature_;
+  std::size_t workspace_bytes_ = 0;
+  bool uses_64_bit_indices_ = false;
 };
 
 /// Version-5 deprecated schema adapters backed by the same scalar semantics.
