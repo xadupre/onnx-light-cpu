@@ -591,9 +591,6 @@ std::vector<float> EvaluateTreeEnsembleRegressor(const TreeEnsembleRegressorAttr
         Invalid("legacy regressor leaf has no target metadata");
       }
       for (const auto &[target_id, weight] : it->second) {
-        if (target_id < 0 || target_id >= attributes.n_targets) {
-          Invalid("legacy regressor target id is out of range");
-        }
         const std::size_t target = static_cast<std::size_t>(target_id);
         float &value = result[row * targets + target];
         if (counts[target] == 0 || attributes.aggregate == TreeAggregate::kSum ||
@@ -665,9 +662,6 @@ EvaluateTreeEnsembleClassifier(const TreeEnsembleClassifierAttributes &attribute
         Invalid("legacy classifier leaf has no class metadata");
       }
       for (const auto &[class_id, weight] : it->second) {
-        if (class_id < 0 || static_cast<std::size_t>(class_id) >= class_count) {
-          Invalid("legacy classifier class id is out of range");
-        }
         scores[static_cast<std::size_t>(class_id)] += weight;
       }
     }
