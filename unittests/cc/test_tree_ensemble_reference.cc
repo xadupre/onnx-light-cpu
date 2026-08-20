@@ -687,6 +687,43 @@ TEST(TreeEnsembleReference, OptimizedFloat16MatchesCompleteV5Corpus) {
   }
 }
 
+TEST(TreeEnsembleReference, SchedulingPreservesSparseWorkspaceDensity) {
+  const TreeEnsembleAttributes attributes = StumpForest(3, 64);
+  const TreeEnsembleTuningContext context{"sparse-scheduling-cpu", 4};
+  const TreeEnsemblePlan key_plan(attributes, context, nullptr);
+  const TreeEnsembleTuningPolicy fallback =
+      OneRegionPolicy(TreeEnsembleExecutionStrategy::kTreeMajorBatch, 1, 64);
+  TreeEnsembleTuningPolicy sparse = fallback;
+  sparse.target_layout = onnx_light_cpu::reference::TreeEnsembleTargetLayout::kSparse;
+  sparse.regions[0].workspace_bytes = 3U * (sizeof(double) + sizeof(std::size_t));
+  TreeEnsembleTuningPolicy scheduling = fallback;
+  scheduling.regions[0].maximum_threads = 4;
+  scheduling.regions[0].workspace_bytes *= 4;
+  TreeEnsembleCalibrationOptions options;
+  options.repetitions = 1;
+  options.required_wins = 1;
+  options.memory_budget_bytes = 4096;
+  TreeEnsembleTuningRegistry registry;
+  const auto report = registry.CalibrateExact(
+      key_plan.model_key(), fallback,
+      {{"sparse", TreeEnsembleCalibrationStage::kTraversal, sparse},
+       {"scheduling", TreeEnsembleCalibrationStage::kScheduling, scheduling}},
+      options, [](const TreeEnsembleTuningPolicy &policy, std::size_t, std::size_t) {
+        const bool sparse =
+            policy.target_layout == onnx_light_cpu::reference::TreeEnsembleTargetLayout::kSparse;
+        const double sample =
+            sparse ? (policy.regions[0].maximum_threads == 4 ? 60.0 : 80.0) : 100.0;
+        return TreeEnsembleCalibrationMeasurement{true, {sample}, 1, {}};
+      });
+  EXPECT_EQ(report.selected_policy.target_layout,
+            onnx_light_cpu::reference::TreeEnsembleTargetLayout::kSparse);
+  EXPECT_EQ(report.selected_policy.regions[0].maximum_threads, 4U);
+  EXPECT_EQ(report.selected_policy.regions[0].workspace_bytes,
+            4U * 3U * (sizeof(double) + sizeof(std::size_t)));
+  EXPECT_EQ(TreeEnsemblePlan(attributes, context, &registry).profile_source(),
+            TreeEnsembleProfileSource::kExact);
+}
+
 TEST(TreeEnsembleReference, EverySchedulingStrategyMatchesScalarAcrossThreadCounts) {
   const TreeEnsembleAttributes attributes = StumpForest(81);
   const TreeEnsembleReference reference(attributes);
