@@ -30,6 +30,11 @@ class GemmCase:
     trans_b: bool = False
     constant_b: bool = False
     bias: str = "none"
+    operator: str = "Gemm"
+    batch_shape: tuple[int, ...] = ()
+    b_batch_shape: tuple[int, ...] = ()
+    vector_a: bool = False
+    vector_b: bool = False
 
     @property
     def operations(self) -> int:
@@ -55,6 +60,23 @@ PRIORITY_CASES = (
     GemmCase("trans_b", 128, 128, 128, trans_b=True),
     GemmCase("trans_ab", 128, 128, 128, trans_a=True, trans_b=True),
     GemmCase("transformer_projection", 128, 3072, 768, constant_b=True),
+)
+
+MATMUL_PRIORITY_CASES = (
+    GemmCase("batched_direct", 32, 128, 16, operator="MatMul", batch_shape=(4,)),
+    GemmCase("batched_square", 128, 128, 128, operator="MatMul", batch_shape=(2,)),
+    GemmCase(
+        "broadcast_b",
+        128,
+        128,
+        128,
+        operator="MatMul",
+        batch_shape=(4,),
+        b_batch_shape=(1,),
+    ),
+    GemmCase("vector_matrix", 1, 128, 128, operator="MatMul", vector_a=True),
+    GemmCase("matrix_vector", 128, 1, 128, operator="MatMul", vector_b=True),
+    GemmCase("large_k", 32, 32, 4096, operator="MatMul", batch_shape=(2,)),
 )
 
 PARITY_DTYPES = ("float32", "float64", "float16")
@@ -215,6 +237,16 @@ def _bias_shape(case: GemmCase) -> tuple[int, ...]:
     return ()
 
 
+def _matmul_operand_shape(
+    batch_shape: tuple[int, ...], matrix_shape: tuple[int, ...], vector: bool, k: int
+) -> tuple[int, ...]:
+    if vector:
+        if batch_shape:
+            raise ValueError("MatMul vector operands cannot have batch dimensions.")
+        return (k,)
+    return batch_shape + matrix_shape
+
+
 def _build_case(case: GemmCase, dtype_name: str, rng: Any) -> tuple[bytes, dict[str, Any]]:
     import numpy as np
     from onnx_light.onnx import TensorProto, checker, helper, numpy_helper
@@ -229,8 +261,10 @@ def _build_case(case: GemmCase, dtype_name: str, rng: Any) -> tuple[bytes, dict[
         "float64": TensorProto.DOUBLE,
         "float16": TensorProto.FLOAT16,
     }[dtype_name]
-    a_shape = (case.k, case.m) if case.trans_a else (case.m, case.k)
-    b_shape = (case.n, case.k) if case.trans_b else (case.k, case.n)
+    a_matrix_shape = (case.k, case.m) if case.trans_a else (case.m, case.k)
+    b_matrix_shape = (case.n, case.k) if case.trans_b else (case.k, case.n)
+    a_shape = _matmul_operand_shape(case.batch_shape, a_matrix_shape, case.vector_a, case.k)
+    b_shape = _matmul_operand_shape(case.b_batch_shape, b_matrix_shape, case.vector_b, case.k)
     a = rng.standard_normal(a_shape).astype(dtype)
     b = rng.standard_normal(b_shape).astype(dtype)
 
@@ -251,18 +285,16 @@ def _build_case(case: GemmCase, dtype_name: str, rng: Any) -> tuple[bytes, dict[
         feeds["C"] = bias
         node_inputs.append("C")
 
-    node = helper.make_node(
-        "Gemm",
-        node_inputs,
-        ["Y"],
-        transA=int(case.trans_a),
-        transB=int(case.trans_b),
-    )
+    node_attributes = {}
+    if case.operator == "Gemm":
+        node_attributes = {"transA": int(case.trans_a), "transB": int(case.trans_b)}
+    node = helper.make_node(case.operator, node_inputs, ["Y"], **node_attributes)
+    output_shape = None if case.operator == "MatMul" else (case.m, case.n)
     graph = helper.make_graph(
         [node],
         f"gemm_parity_{case.name}_{dtype_name}",
         inputs,
-        [helper.make_tensor_value_info("Y", tensor_type, (case.m, case.n))],
+        [helper.make_tensor_value_info("Y", tensor_type, output_shape)],
         initializer=initializers,
     )
     model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 18)], ir_version=13)
@@ -327,12 +359,17 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
     results: list[dict[str, Any]] = []
     dtype_names = PARITY_DTYPES if args.dtype == "all" else (args.dtype,)
+    case_corpus = (*PRIORITY_CASES, *MATMUL_PRIORITY_CASES)
+    if args.operator == "gemm":
+        case_corpus = PRIORITY_CASES
+    elif args.operator == "matmul":
+        case_corpus = MATMUL_PRIORITY_CASES
     selected_cases = (
-        PRIORITY_CASES
+        case_corpus
         if not args.case
-        else tuple(case for case in PRIORITY_CASES if case.name in args.case)
+        else tuple(case for case in case_corpus if case.name in args.case)
     )
-    unknown_cases = set(args.case) - {case.name for case in selected_cases}
+    unknown_cases = set(args.case) - {case.name for case in case_corpus}
     if unknown_cases:
         raise ValueError(f"Unknown cases: {', '.join(sorted(unknown_cases))}.")
 
@@ -421,6 +458,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--warmup", type=int, default=3)
     parser.add_argument("--dtype", choices=("all", *PARITY_DTYPES), default="all")
+    parser.add_argument("--operator", choices=("all", "gemm", "matmul"), default="all")
     parser.add_argument(
         "--case",
         action="append",

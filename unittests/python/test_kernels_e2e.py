@@ -141,6 +141,7 @@ class TestBackendCases:
             "Exp": "onnx_light_cpu::Exp",
             "Log": "onnx_light_cpu::Log",
             "Gemm": "onnx_light_cpu::Gemm",
+            "MatMul": "onnx_light_cpu::MatMul",
             "MatMulInteger": "onnx_light_cpu::MatMulInteger",
             "QLinearMatMul": "onnx_light_cpu::QLinearMatMul",
             "Not": "onnx_light_cpu::Not",

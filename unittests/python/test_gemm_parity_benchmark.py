@@ -1,4 +1,5 @@
 from tools.benchmark_gemm_parity import (
+    MATMUL_PRIORITY_CASES,
     PARITY_DTYPES,
     GemmCase,
     _build_case,
@@ -74,3 +75,12 @@ def test_float16_is_a_parity_dtype():
     assert model
     assert feeds["A"].dtype == np.float16
     assert feeds["B"].dtype == np.float16
+
+
+def test_matmul_corpus_covers_batches_broadcasting_and_vectors():
+    names = {case.name for case in MATMUL_PRIORITY_CASES}
+    assert {"batched_direct", "broadcast_b", "vector_matrix", "matrix_vector"} <= names
+    assert all(case.operator == "MatMul" for case in MATMUL_PRIORITY_CASES)
+    assert any(case.batch_shape for case in MATMUL_PRIORITY_CASES)
+    assert any(case.b_batch_shape for case in MATMUL_PRIORITY_CASES)
+    assert any(case.vector_a or case.vector_b for case in MATMUL_PRIORITY_CASES)
