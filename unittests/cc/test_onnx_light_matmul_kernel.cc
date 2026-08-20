@@ -13,7 +13,7 @@ namespace rt_ns = ONNX_LIGHT_NAMESPACE::core::runtime;
 
 rt_ns::KernelContext MakeCtx() { return rt_ns::KernelContext(rt_ns::OpsetId(std::string(), 18)); }
 
-TEST(MatMulKernel, BroadcastsBatchesAndSupportsVectors) {
+TEST(MatMulKernel, BroadcastsBatches) {
   onnx_light_cpu::MatMulKernel kernel(MakeCtx());
   const auto a = rt_ns::Tensor::From<float>("a", {2, 1, 2}, {1, 2, 3, 4});
   const auto b = rt_ns::Tensor::From<float>("b", {1, 2, 2}, {5, 6, 7, 8});
@@ -25,7 +25,10 @@ TEST(MatMulKernel, BroadcastsBatchesAndSupportsVectors) {
   EXPECT_FLOAT_EQ(y.AsFloat()[1], 22.0f);
   EXPECT_FLOAT_EQ(y.AsFloat()[2], 43.0f);
   EXPECT_FLOAT_EQ(y.AsFloat()[3], 50.0f);
+}
 
+TEST(MatMulKernel, SupportsVectorDot) {
+  onnx_light_cpu::MatMulKernel kernel(MakeCtx());
   const auto vector_a = rt_ns::Tensor::From<float>("va", {2}, {2, 3});
   const auto vector_b = rt_ns::Tensor::From<float>("vb", {2}, {4, 5});
   const auto dot = kernel(vector_a, vector_b);
