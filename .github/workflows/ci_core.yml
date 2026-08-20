@@ -135,6 +135,9 @@ jobs:
           fi
           export CMAKE_ARGS
           pip install -C build.verbose=true "${onnx_light_source}" -v
+          if [[ "${RUNNER_OS}" == "Windows" ]]; then
+            echo "ONNX_LIGHT_CPU_ONNX_LIGHT_IMPLIB_DIR=${onnx_light_source}/build" >> "$GITHUB_ENV"
+          fi
           python - <<'PY'
           import os
           from onnx_light import get_cpp_build_info

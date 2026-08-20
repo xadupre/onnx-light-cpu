@@ -42,6 +42,10 @@ set(ONNX_LIGHT_CPU_ONNX_LIGHT_IMPLIB "" CACHE FILEPATH
     "Windows import library for ONNX_LIGHT_CPU_ONNX_LIGHT_LIBRARY.")
 set(ONNX_LIGHT_CPU_ONNX_LIGHT_PROTO_IMPLIB "" CACHE FILEPATH
     "Windows import library for ONNX_LIGHT_CPU_ONNX_LIGHT_PROTO_LIBRARY.")
+set(ONNX_LIGHT_CPU_ONNX_LIGHT_KERNELS_IMPLIB "" CACHE FILEPATH
+    "Windows import library for the onnx-light kernels runtime.")
+set(ONNX_LIGHT_CPU_ONNX_LIGHT_BACKEND_TEST_IMPLIB "" CACHE FILEPATH
+    "Windows import library for the onnx-light backend-test runtime.")
 option(ONNX_LIGHT_CPU_ENABLE_COVERAGE
        "Instrument the C++ targets for code coverage (GCC/Clang only)." OFF)
 
@@ -565,6 +569,11 @@ if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
             "${ONNX_LIGHT_CPU_ONNX_LIGHT_SOURCE_DIR}/onnx_light;${ONNX_LIGHT_CPU_ONNX_LIGHT_SOURCE_DIR}/onnx_light/onnx_helpers/include;${ONNX_LIGHT_CPU_ONNX_LIGHT_SOURCE_DIR}/onnx_light/onnx_proto"
         INTERFACE_LINK_LIBRARIES onnx_light::lib_onnx_proto)
     if(ONNX_LIGHT_CPU_ONNX_LIGHT_IMPLIB)
+      if(NOT ONNX_LIGHT_CPU_ONNX_LIGHT_PROTO_IMPLIB)
+        message(FATAL_ERROR
+            "ONNX_LIGHT_CPU_ONNX_LIGHT_PROTO_IMPLIB is required with "
+            "ONNX_LIGHT_CPU_ONNX_LIGHT_IMPLIB.")
+      endif()
       set_property(TARGET onnx_light::lib_onnx_core PROPERTY
           IMPORTED_IMPLIB "${ONNX_LIGHT_CPU_ONNX_LIGHT_IMPLIB}")
       set_property(TARGET onnx_light::lib_onnx_proto PROPERTY
@@ -597,6 +606,18 @@ if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
           IMPORTED_LOCATION "${_onnx_light_backend_test_lib}"
           INTERFACE_LINK_LIBRARIES
               "onnx_light::lib_onnx_proto;onnx_light::lib_onnx_kernels")
+      if(WIN32)
+        if(NOT ONNX_LIGHT_CPU_ONNX_LIGHT_KERNELS_IMPLIB OR
+           NOT ONNX_LIGHT_CPU_ONNX_LIGHT_BACKEND_TEST_IMPLIB)
+          message(FATAL_ERROR
+              "The onnx-light kernels and backend-test Windows import "
+              "libraries are required for source-runtime integration.")
+        endif()
+        set_property(TARGET onnx_light::lib_onnx_kernels PROPERTY
+            IMPORTED_IMPLIB "${ONNX_LIGHT_CPU_ONNX_LIGHT_KERNELS_IMPLIB}")
+        set_property(TARGET onnx_light::lib_onnx_backend_test PROPERTY
+            IMPORTED_IMPLIB "${ONNX_LIGHT_CPU_ONNX_LIGHT_BACKEND_TEST_IMPLIB}")
+      endif()
     endif()
   else()
     find_package(onnx_light CONFIG REQUIRED)
