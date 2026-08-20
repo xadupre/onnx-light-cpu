@@ -643,6 +643,7 @@ TreeEnsembleTuningPolicy ComposeCandidatePolicy(const TreeEnsembleTuningPolicy &
          ++index) {
       composed.regions[index].maximum_rows = candidate.regions[index].maximum_rows;
       composed.regions[index].batch_rows = candidate.regions[index].batch_rows;
+      composed.regions[index].workspace_bytes = candidate.regions[index].workspace_bytes;
     }
     break;
   case TreeEnsembleCalibrationStage::kChunk:
@@ -651,6 +652,7 @@ TreeEnsembleTuningPolicy ComposeCandidatePolicy(const TreeEnsembleTuningPolicy &
       composed.regions[index].maximum_threads = candidate.regions[index].maximum_threads;
       composed.regions[index].row_chunk = candidate.regions[index].row_chunk;
       composed.regions[index].tree_chunk = candidate.regions[index].tree_chunk;
+      composed.regions[index].workspace_bytes = candidate.regions[index].workspace_bytes;
     }
     break;
   case TreeEnsembleCalibrationStage::kWorkspace:

@@ -602,6 +602,9 @@ TEST(TreeEnsembleReference, CalibrationComposesStagesAndEnforcesAdvancedGates) {
   index.layout = TreeEnsembleNodeLayout::kCompactAosIndex;
   TreeEnsembleTuningPolicy stump = fallback;
   stump.traversal = TreeEnsembleTraversal::kStump;
+  TreeEnsembleTuningPolicy batch = fallback;
+  batch.regions[0].batch_rows = 256;
+  batch.regions[0].workspace_bytes *= 2;
   TreeEnsembleCalibrationOptions options;
   options.repetitions = 1;
   options.required_wins = 1;
@@ -610,16 +613,24 @@ TEST(TreeEnsembleReference, CalibrationComposesStagesAndEnforcesAdvancedGates) {
   const auto composed = registry.CalibrateExact(
       key_plan.model_key(), fallback,
       {{"index", TreeEnsembleCalibrationStage::kLayout, index},
-       {"stump", TreeEnsembleCalibrationStage::kTraversal, stump}},
+       {"stump", TreeEnsembleCalibrationStage::kTraversal, stump},
+       {"batch", TreeEnsembleCalibrationStage::kBatch, batch}},
       options, [](const TreeEnsembleTuningPolicy &policy, std::size_t, std::size_t) {
         double sample = 100.0;
         if (policy.layout == TreeEnsembleNodeLayout::kCompactAosIndex) {
           sample = policy.traversal == TreeEnsembleTraversal::kStump ? 60.0 : 80.0;
         }
+        if (policy.regions[0].batch_rows == 256) {
+          sample = 50.0;
+        }
         return TreeEnsembleCalibrationMeasurement{true, {sample}, 1, {}};
       });
   EXPECT_EQ(composed.selected_policy.layout, TreeEnsembleNodeLayout::kCompactAosIndex);
   EXPECT_EQ(composed.selected_policy.traversal, TreeEnsembleTraversal::kStump);
+  EXPECT_EQ(composed.selected_policy.regions[0].batch_rows, 256U);
+  EXPECT_EQ(composed.selected_policy.regions[0].workspace_bytes, batch.regions[0].workspace_bytes);
+  EXPECT_EQ(TreeEnsemblePlan(Stump(), context, &registry).profile_source(),
+            TreeEnsembleProfileSource::kExact);
 
   TreeEnsembleTuningPolicy soa = fallback;
   soa.layout = TreeEnsembleNodeLayout::kSplitSoa;
