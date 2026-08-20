@@ -51,6 +51,13 @@ std::size_t SaturatingMultiply(std::size_t left, std::size_t right) noexcept {
   return left * right;
 }
 
+std::size_t SaturatingAdd(std::size_t left, std::size_t right) noexcept {
+  if (right > std::numeric_limits<std::size_t>::max() - left) {
+    return std::numeric_limits<std::size_t>::max();
+  }
+  return left + right;
+}
+
 std::size_t RegionWorkspaceBytes(const TreeEnsembleExecutionRegion &region,
                                  std::size_t targets) noexcept {
   return SaturatingMultiply(
@@ -1504,24 +1511,65 @@ TreeEnsemblePlan::TreeEnsemblePlan(const TreeEnsembleClassifierAttributes &attri
     : TreeEnsemblePlan(LowerTreeEnsembleClassifier(attributes)) {}
 
 std::size_t TreeEnsemblePlan::prepared_storage_bytes() const noexcept {
-  std::size_t bytes = nodes_.size() * sizeof(TreeEnsembleNode);
-  bytes += feature_ids32_.size() * sizeof(std::uint32_t);
-  bytes += true_children32_.size() * sizeof(std::uint32_t);
-  bytes += false_children32_.size() * sizeof(std::uint32_t);
-  bytes += prepared_splits_.size() * sizeof(double);
-  bytes += prepared_half_splits_.size() * sizeof(float);
-  bytes += prepared_modes_.size() * sizeof(std::uint8_t);
-  bytes += prepared_flags_.size() * sizeof(std::uint8_t);
-  bytes += compact_nodes_.size() * sizeof(TreeEnsembleCompactNode);
-  bytes += hot_tree_roots_.size() * sizeof(std::uint32_t);
-  bytes += hot_feature_ids_.size() * sizeof(std::uint32_t);
-  bytes += hot_true_children_.size() * sizeof(std::uint32_t);
-  bytes += hot_false_children_.size() * sizeof(std::uint32_t);
-  bytes += hot_splits_.size() * sizeof(double);
-  bytes += hot_half_splits_.size() * sizeof(float);
-  bytes += hot_modes_.size() * sizeof(std::uint8_t);
-  bytes += hot_flags_.size() * sizeof(std::uint8_t);
-  bytes += hot_membership_indices_.size() * sizeof(std::uint32_t);
+  std::size_t bytes = 0;
+  const auto add_vector = [&](const auto &values) {
+    using Value = typename std::remove_cvref_t<decltype(values)>::value_type;
+    bytes = SaturatingAdd(bytes, SaturatingMultiply(values.capacity(), sizeof(Value)));
+  };
+  add_vector(attributes_.tree_roots);
+  add_vector(attributes_.nodes_featureids);
+  add_vector(attributes_.nodes_splits);
+  add_vector(attributes_.nodes_modes);
+  add_vector(attributes_.nodes_truenodeids);
+  add_vector(attributes_.nodes_falsenodeids);
+  add_vector(attributes_.nodes_trueleafs);
+  add_vector(attributes_.nodes_falseleafs);
+  add_vector(attributes_.nodes_missing_value_tracks_true);
+  add_vector(attributes_.nodes_hitrates);
+  add_vector(attributes_.membership_values);
+  add_vector(attributes_.leaf_targetids);
+  add_vector(attributes_.leaf_weights);
+  add_vector(attributes_.base_values);
+  add_vector(tree_roots_);
+  add_vector(nodes_);
+  for (const TreeEnsembleNode &node : nodes_) {
+    add_vector(node.members);
+    add_vector(node.true_leaf_indices);
+    add_vector(node.false_leaf_indices);
+  }
+  add_vector(leaves_);
+  add_vector(base_values_);
+  add_vector(membership_sets_);
+  for (const std::vector<double> &members : membership_sets_) {
+    add_vector(members);
+  }
+  add_vector(tuning_policy_.regions);
+  add_vector(feature_ids32_);
+  add_vector(true_children32_);
+  add_vector(false_children32_);
+  add_vector(prepared_splits_);
+  add_vector(prepared_half_splits_);
+  add_vector(prepared_modes_);
+  add_vector(prepared_flags_);
+  add_vector(compact_nodes_);
+  add_vector(hot_tree_roots_);
+  add_vector(hot_feature_ids_);
+  add_vector(hot_true_children_);
+  add_vector(hot_false_children_);
+  add_vector(hot_splits_);
+  add_vector(hot_half_splits_);
+  add_vector(hot_modes_);
+  add_vector(hot_flags_);
+  add_vector(hot_membership_indices_);
+  add_vector(active_targets_);
+  add_vector(target_to_active_);
+  bytes = SaturatingAdd(bytes, model_signature_.capacity());
+  bytes = SaturatingAdd(bytes, model_key_.library.capacity());
+  bytes = SaturatingAdd(bytes, model_key_.kernel.capacity());
+  bytes = SaturatingAdd(bytes, model_key_.domain.capacity());
+  bytes = SaturatingAdd(bytes, model_key_.implementation.capacity());
+  bytes = SaturatingAdd(bytes, model_key_.processor.capacity());
+  bytes = SaturatingAdd(bytes, model_key_.model_digest.capacity());
   return bytes;
 }
 
