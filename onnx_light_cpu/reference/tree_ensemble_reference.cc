@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <limits>
 #include <numbers>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -306,6 +307,28 @@ LegacyPrepared ValidateLegacy(const LegacyTreeAttributes &tree) {
   return prepared;
 }
 
+TreeBranchMode ParseLegacyBranchMode(const std::string &mode) {
+  if (mode == "BRANCH_LEQ") {
+    return TreeBranchMode::kLeq;
+  }
+  if (mode == "BRANCH_LT") {
+    return TreeBranchMode::kLt;
+  }
+  if (mode == "BRANCH_GTE") {
+    return TreeBranchMode::kGte;
+  }
+  if (mode == "BRANCH_GT") {
+    return TreeBranchMode::kGt;
+  }
+  if (mode == "BRANCH_EQ") {
+    return TreeBranchMode::kEq;
+  }
+  if (mode == "BRANCH_NEQ") {
+    return TreeBranchMode::kNeq;
+  }
+  Invalid("invalid legacy node mode " + mode);
+}
+
 std::vector<LegacyKey> EvaluateLegacyLeaves(const LegacyTreeAttributes &tree,
                                             const LegacyPrepared &prepared,
                                             const std::vector<double> &input, std::size_t rows) {
@@ -389,12 +412,390 @@ void ValidateWeights(const LegacyTreeAttributes &tree, const LegacyPrepared &pre
 
 } // namespace
 
+std::string TreeEnsemblePlan::MakeModelSignature(const TreeEnsembleAttributes &attributes) {
+  std::ostringstream stream;
+  stream << "tree_ensemble_v5|features=" << attributes.n_features
+         << "|targets=" << attributes.n_targets
+         << "|value=" << static_cast<int>(attributes.value_type)
+         << "|aggregate=" << static_cast<int>(attributes.aggregate)
+         << "|transform=" << static_cast<int>(attributes.post_transform)
+         << "|roots=" << attributes.tree_roots.size()
+         << "|nodes=" << attributes.nodes_featureids.size()
+         << "|leaves=" << attributes.leaf_targetids.size()
+         << "|base_values=" << attributes.base_values.size()
+         << "|membership=" << attributes.membership_values.size();
+  for (std::size_t index = 0; index < attributes.nodes_featureids.size(); ++index) {
+    const std::int64_t missing = attributes.nodes_missing_value_tracks_true.empty()
+                                     ? 0
+                                     : attributes.nodes_missing_value_tracks_true[index];
+    stream << "|n" << index << ":" << attributes.nodes_featureids[index] << ":"
+           << static_cast<int>(attributes.nodes_modes[index]) << ":"
+           << attributes.nodes_truenodeids[index] << ":" << attributes.nodes_falsenodeids[index]
+           << ":" << attributes.nodes_trueleafs[index] << ":" << attributes.nodes_falseleafs[index]
+           << ":" << missing;
+  }
+  for (std::size_t index = 0; index < attributes.leaf_targetids.size(); ++index) {
+    stream << "|l" << index << ":" << attributes.leaf_targetids[index] << ":"
+           << attributes.leaf_weights[index];
+  }
+  return stream.str();
+}
+
+TreeEnsemblePlan::TreeEnsemblePlan(TreeEnsembleAttributes attributes)
+    : attributes_(std::move(attributes)) {
+  TreeEnsembleReference reference(attributes_);
+  (void)reference;
+  tree_roots_ = attributes_.tree_roots;
+  base_values_ = attributes_.base_values;
+  const std::size_t size = attributes_.nodes_featureids.size();
+  nodes_.resize(size);
+  membership_sets_.resize(size);
+  std::size_t cursor = 0;
+  for (std::size_t index = 0; index < size; ++index) {
+    nodes_[index].feature_id = attributes_.nodes_featureids[index];
+    nodes_[index].split = attributes_.nodes_splits[index];
+    nodes_[index].mode = attributes_.nodes_modes[index];
+    nodes_[index].true_child = attributes_.nodes_truenodeids[index];
+    nodes_[index].false_child = attributes_.nodes_falsenodeids[index];
+    nodes_[index].true_is_leaf = attributes_.nodes_trueleafs[index] != 0;
+    nodes_[index].false_is_leaf = attributes_.nodes_falseleafs[index] != 0;
+    nodes_[index].missing_value_tracks_true =
+        !attributes_.nodes_missing_value_tracks_true.empty() &&
+        attributes_.nodes_missing_value_tracks_true[index] != 0;
+    if (nodes_[index].mode == TreeBranchMode::kMember) {
+      std::vector<double> set;
+      while (cursor < attributes_.membership_values.size() &&
+             !std::isnan(attributes_.membership_values[cursor])) {
+        set.push_back(RoundValue(attributes_.membership_values[cursor], attributes_.value_type));
+        ++cursor;
+      }
+      if (set.empty() || cursor == attributes_.membership_values.size()) {
+        Invalid("each membership node requires a non-empty NaN-delimited set");
+      }
+      membership_sets_[index] = std::move(set);
+      nodes_[index].members = membership_sets_[index];
+      ++cursor;
+    }
+    if (nodes_[index].true_is_leaf) {
+      nodes_[index].true_leaf_indices.push_back(static_cast<std::size_t>(nodes_[index].true_child));
+    }
+    if (nodes_[index].false_is_leaf) {
+      nodes_[index].false_leaf_indices.push_back(
+          static_cast<std::size_t>(nodes_[index].false_child));
+    }
+  }
+  if (cursor != attributes_.membership_values.size()) {
+    Invalid("membership_values contains missing or extra delimiters");
+  }
+  leaves_.resize(attributes_.leaf_targetids.size());
+  for (std::size_t index = 0; index < attributes_.leaf_targetids.size(); ++index) {
+    leaves_[index].target_id = attributes_.leaf_targetids[index];
+    leaves_[index].weight = RoundValue(attributes_.leaf_weights[index], attributes_.value_type);
+  }
+  model_signature_ = MakeModelSignature(attributes_);
+  const auto depth = [&](auto &&self, std::size_t node) -> std::size_t {
+    if (attributes_.nodes_trueleafs[node] != 0 && attributes_.nodes_falseleafs[node] != 0) {
+      return 1U;
+    }
+    std::size_t best = 1U;
+    if (attributes_.nodes_trueleafs[node] == 0) {
+      best = std::max(
+          best, 1U + self(self, static_cast<std::size_t>(attributes_.nodes_truenodeids[node])));
+    }
+    if (attributes_.nodes_falseleafs[node] == 0) {
+      best = std::max(
+          best, 1U + self(self, static_cast<std::size_t>(attributes_.nodes_falsenodeids[node])));
+    }
+    return best;
+  };
+  std::vector<int> visited(size, 0);
+  const auto calculate_depth = [&](auto &&self, std::size_t node) -> std::size_t {
+    if (visited[node] == 2) {
+      return 0U;
+    }
+    visited[node] = 1;
+    const std::size_t answer = depth(self, node);
+    visited[node] = 2;
+    return answer;
+  };
+  std::size_t total_depth = 0;
+  for (std::int64_t root : tree_roots_) {
+    const std::size_t depth_value =
+        calculate_depth(calculate_depth, static_cast<std::size_t>(root));
+    total_depth += depth_value;
+    max_depth_ = std::max(max_depth_, depth_value);
+  }
+  average_depth_ = tree_roots_.empty() ? 0U : total_depth / tree_roots_.size();
+  const auto maximum_index =
+      std::max({static_cast<std::uint64_t>(attributes_.n_features),
+                static_cast<std::uint64_t>(attributes_.n_targets),
+                static_cast<std::uint64_t>(attributes_.nodes_featureids.size()),
+                static_cast<std::uint64_t>(attributes_.leaf_targetids.size()),
+                static_cast<std::uint64_t>(attributes_.tree_roots.size())});
+  uses_64_bit_indices_ =
+      maximum_index > static_cast<std::uint64_t>(std::numeric_limits<std::uint32_t>::max());
+  workspace_bytes_ =
+      std::max<std::size_t>(1U, (attributes_.n_targets + tree_roots_.size()) *
+                                    (nodes_.size() + leaves_.size()) * sizeof(double));
+}
+
+TreeEnsemblePlan::TreeEnsemblePlan(const TreeEnsembleRegressorAttributes &attributes)
+    : TreeEnsemblePlan(LowerTreeEnsembleRegressor(attributes)) {}
+
+TreeEnsemblePlan::TreeEnsemblePlan(const TreeEnsembleClassifierAttributes &attributes)
+    : TreeEnsemblePlan(LowerTreeEnsembleClassifier(attributes)) {}
+
+std::vector<double> TreeEnsemblePlan::Evaluate(const std::vector<double> &input,
+                                               std::size_t rows) const {
+  const std::size_t features = static_cast<std::size_t>(attributes_.n_features);
+  const std::size_t targets = static_cast<std::size_t>(attributes_.n_targets);
+  if (input.size() != rows * features) {
+    Invalid("input shape does not match n_features");
+  }
+  std::vector<double> output(rows * targets);
+  for (std::size_t row = 0; row < rows; ++row) {
+    std::vector<double> values(targets, 0.0);
+    for (std::size_t target = 0; target < targets && target < attributes_.base_values.size();
+         ++target) {
+      values[target] = attributes_.base_values[target];
+    }
+    std::vector<std::size_t> counts(targets, 0);
+    for (std::int64_t root : tree_roots_) {
+      std::size_t node = static_cast<std::size_t>(root);
+      std::size_t leaf = 0;
+      for (;;) {
+        const double value = RoundValue(
+            input[row * features + static_cast<std::size_t>(attributes_.nodes_featureids[node])],
+            attributes_.value_type);
+        bool go_true;
+        if (std::isnan(value)) {
+          go_true = !attributes_.nodes_missing_value_tracks_true.empty() &&
+                    attributes_.nodes_missing_value_tracks_true[node] != 0;
+        } else {
+          go_true = Compare(attributes_.nodes_modes[node], value,
+                            RoundValue(attributes_.nodes_splits[node], attributes_.value_type),
+                            membership_sets_[node]);
+        }
+        const bool is_leaf =
+            (go_true ? attributes_.nodes_trueleafs[node] : attributes_.nodes_falseleafs[node]) != 0;
+        const std::int64_t next =
+            go_true ? attributes_.nodes_truenodeids[node] : attributes_.nodes_falsenodeids[node];
+        if (is_leaf) {
+          leaf = static_cast<std::size_t>(next);
+          break;
+        }
+        node = static_cast<std::size_t>(next);
+      }
+      const std::size_t target = static_cast<std::size_t>(attributes_.leaf_targetids[leaf]);
+      const double weight = RoundValue(attributes_.leaf_weights[leaf], attributes_.value_type);
+      if (counts[target] == 0 || attributes_.aggregate == TreeAggregate::kSum ||
+          attributes_.aggregate == TreeAggregate::kAverage) {
+        values[target] = RoundValue(values[target] + weight, attributes_.value_type);
+      } else if (attributes_.aggregate == TreeAggregate::kMin) {
+        values[target] = std::min(values[target], weight);
+      } else {
+        values[target] = std::max(values[target], weight);
+      }
+      ++counts[target];
+    }
+    if (attributes_.aggregate == TreeAggregate::kAverage) {
+      for (double &value : values) {
+        value = RoundValue(value / static_cast<double>(tree_roots_.size()), attributes_.value_type);
+      }
+    }
+    ApplyPostTransform(values, attributes_.post_transform);
+    for (std::size_t target = 0; target < targets; ++target) {
+      output[row * targets + target] = RoundValue(values[target], attributes_.value_type);
+    }
+  }
+  return output;
+}
+
+TreeEnsembleAttributes
+LowerTreeEnsembleRegressor(const TreeEnsembleRegressorAttributes &attributes) {
+  ValidateAggregate(attributes.aggregate);
+  ValidateTransform(attributes.post_transform);
+  if (attributes.n_targets <= 0) {
+    Invalid("legacy regressor n_targets must be positive");
+  }
+  if (!attributes.base_values.empty() &&
+      attributes.base_values.size() != static_cast<std::size_t>(attributes.n_targets)) {
+    Invalid("legacy regressor base_values has the wrong length");
+  }
+  const LegacyPrepared prepared = ValidateLegacy(attributes.tree);
+  const auto weights = MakeWeights(attributes.target_treeids, attributes.target_nodeids,
+                                   attributes.target_ids, attributes.target_weights);
+  ValidateWeights(attributes.tree, prepared, weights);
+  TreeEnsembleAttributes lowered;
+  lowered.n_features = attributes.tree.n_features;
+  lowered.n_targets = attributes.n_targets;
+  lowered.value_type = TreeValueType::kFloat64;
+  lowered.aggregate = attributes.aggregate;
+  lowered.post_transform = attributes.post_transform;
+  lowered.base_values = attributes.base_values;
+  lowered.tree_roots.reserve(prepared.roots.size());
+  std::unordered_map<LegacyKey, std::size_t, LegacyKeyHash> internal_nodes;
+  std::unordered_map<LegacyKey, std::vector<std::size_t>, LegacyKeyHash> leaf_map;
+  for (std::size_t index = 0; index < attributes.tree.nodes_nodeids.size(); ++index) {
+    const LegacyKey key{attributes.tree.nodes_treeids[index], attributes.tree.nodes_nodeids[index]};
+    if (attributes.tree.nodes_modes[index] == "LEAF") {
+      auto it = weights.find(key);
+      if (it == weights.end()) {
+        Invalid("legacy regressor leaf has no target metadata");
+      }
+      for (const auto &[target_id, weight] : it->second) {
+        lowered.leaf_targetids.push_back(target_id);
+        lowered.leaf_weights.push_back(weight);
+        leaf_map[key].push_back(lowered.leaf_targetids.size() - 1);
+      }
+      continue;
+    }
+    internal_nodes[key] = lowered.nodes_featureids.size();
+    lowered.nodes_featureids.push_back(attributes.tree.nodes_featureids[index]);
+    lowered.nodes_splits.push_back(attributes.tree.nodes_values[index]);
+    lowered.nodes_modes.push_back(ParseLegacyBranchMode(attributes.tree.nodes_modes[index]));
+    lowered.nodes_truenodeids.push_back(0);
+    lowered.nodes_falsenodeids.push_back(0);
+    lowered.nodes_trueleafs.push_back(0);
+    lowered.nodes_falseleafs.push_back(0);
+    if (!attributes.tree.nodes_missing_value_tracks_true.empty()) {
+      lowered.nodes_missing_value_tracks_true.push_back(
+          attributes.tree.nodes_missing_value_tracks_true[index]);
+    }
+  }
+  for (std::size_t index = 0; index < attributes.tree.nodes_nodeids.size(); ++index) {
+    const LegacyKey key{attributes.tree.nodes_treeids[index], attributes.tree.nodes_nodeids[index]};
+    if (attributes.tree.nodes_modes[index] == "LEAF") {
+      continue;
+    }
+    const std::size_t canonical_index = internal_nodes.at(key);
+    const auto attach_child = [&](std::int64_t child, std::int64_t &target, std::int64_t &is_leaf) {
+      const auto child_key = LegacyKey{attributes.tree.nodes_treeids[index], child};
+      const auto it = internal_nodes.find(child_key);
+      if (it != internal_nodes.end()) {
+        target = static_cast<std::int64_t>(it->second);
+        is_leaf = 0;
+      } else {
+        const auto leaf_it = leaf_map.find(child_key);
+        if (leaf_it == leaf_map.end()) {
+          Invalid("legacy path does not terminate at a valid node");
+        }
+        is_leaf = 1;
+        target = static_cast<std::int64_t>(leaf_it->second.front());
+      }
+    };
+    attach_child(attributes.tree.nodes_truenodeids[index],
+                 lowered.nodes_truenodeids[canonical_index],
+                 lowered.nodes_trueleafs[canonical_index]);
+    attach_child(attributes.tree.nodes_falsenodeids[index],
+                 lowered.nodes_falsenodeids[canonical_index],
+                 lowered.nodes_falseleafs[canonical_index]);
+  }
+  for (std::int64_t root : prepared.roots) {
+    const LegacyKey key{attributes.tree.nodes_treeids[static_cast<std::size_t>(root)],
+                        attributes.tree.nodes_nodeids[static_cast<std::size_t>(root)]};
+    lowered.tree_roots.push_back(static_cast<std::int64_t>(internal_nodes.at(key)));
+  }
+  return lowered;
+}
+
+TreeEnsembleAttributes
+LowerTreeEnsembleClassifier(const TreeEnsembleClassifierAttributes &attributes) {
+  ValidateTransform(attributes.post_transform);
+  const std::size_t class_count =
+      std::visit([](const auto &labels) { return labels.size(); }, attributes.labels);
+  if (class_count == 0) {
+    Invalid("legacy classifier labels must not be empty");
+  }
+  if (!attributes.base_values.empty() && attributes.base_values.size() != class_count) {
+    Invalid("legacy classifier base_values has the wrong length");
+  }
+  const LegacyPrepared prepared = ValidateLegacy(attributes.tree);
+  const auto weights = MakeWeights(attributes.class_treeids, attributes.class_nodeids,
+                                   attributes.class_ids, attributes.class_weights);
+  ValidateWeights(attributes.tree, prepared, weights);
+  TreeEnsembleAttributes lowered;
+  lowered.n_features = attributes.tree.n_features;
+  lowered.n_targets = static_cast<std::int64_t>(class_count);
+  lowered.value_type = TreeValueType::kFloat64;
+  lowered.aggregate = TreeAggregate::kSum;
+  lowered.post_transform = attributes.post_transform;
+  lowered.base_values = attributes.base_values;
+  std::unordered_map<LegacyKey, std::size_t, LegacyKeyHash> internal_nodes;
+  std::unordered_map<LegacyKey, std::vector<std::size_t>, LegacyKeyHash> leaf_map;
+  for (std::size_t index = 0; index < attributes.tree.nodes_nodeids.size(); ++index) {
+    const LegacyKey key{attributes.tree.nodes_treeids[index], attributes.tree.nodes_nodeids[index]};
+    if (attributes.tree.nodes_modes[index] == "LEAF") {
+      const auto it = weights.find(key);
+      if (it == weights.end()) {
+        Invalid("legacy classifier leaf has no class metadata");
+      }
+      for (const auto &[class_id, weight] : it->second) {
+        lowered.leaf_targetids.push_back(static_cast<std::int64_t>(class_id));
+        lowered.leaf_weights.push_back(weight);
+        leaf_map[key].push_back(lowered.leaf_targetids.size() - 1);
+      }
+      continue;
+    }
+    internal_nodes[key] = lowered.nodes_featureids.size();
+    lowered.nodes_featureids.push_back(attributes.tree.nodes_featureids[index]);
+    lowered.nodes_splits.push_back(attributes.tree.nodes_values[index]);
+    lowered.nodes_modes.push_back(ParseLegacyBranchMode(attributes.tree.nodes_modes[index]));
+    lowered.nodes_truenodeids.push_back(0);
+    lowered.nodes_falsenodeids.push_back(0);
+    lowered.nodes_trueleafs.push_back(0);
+    lowered.nodes_falseleafs.push_back(0);
+    if (!attributes.tree.nodes_missing_value_tracks_true.empty()) {
+      lowered.nodes_missing_value_tracks_true.push_back(
+          attributes.tree.nodes_missing_value_tracks_true[index]);
+    }
+  }
+  for (std::size_t index = 0; index < attributes.tree.nodes_nodeids.size(); ++index) {
+    const LegacyKey key{attributes.tree.nodes_treeids[index], attributes.tree.nodes_nodeids[index]};
+    if (attributes.tree.nodes_modes[index] == "LEAF") {
+      continue;
+    }
+    const std::size_t canonical_index = internal_nodes.at(key);
+    const auto attach_child = [&](std::int64_t child, std::int64_t &target, std::int64_t &is_leaf) {
+      const auto child_key = LegacyKey{attributes.tree.nodes_treeids[index], child};
+      const auto it = internal_nodes.find(child_key);
+      if (it != internal_nodes.end()) {
+        target = static_cast<std::int64_t>(it->second);
+        is_leaf = 0;
+      } else {
+        const auto leaf_it = leaf_map.find(child_key);
+        if (leaf_it == leaf_map.end()) {
+          Invalid("legacy path does not terminate at a valid node");
+        }
+        is_leaf = 1;
+        target = static_cast<std::int64_t>(leaf_it->second.front());
+      }
+    };
+    attach_child(attributes.tree.nodes_truenodeids[index],
+                 lowered.nodes_truenodeids[canonical_index],
+                 lowered.nodes_trueleafs[canonical_index]);
+    attach_child(attributes.tree.nodes_falsenodeids[index],
+                 lowered.nodes_falsenodeids[canonical_index],
+                 lowered.nodes_falseleafs[canonical_index]);
+  }
+  for (std::int64_t root : prepared.roots) {
+    const LegacyKey key{attributes.tree.nodes_treeids[static_cast<std::size_t>(root)],
+                        attributes.tree.nodes_nodeids[static_cast<std::size_t>(root)]};
+    lowered.tree_roots.push_back(static_cast<std::int64_t>(internal_nodes.at(key)));
+  }
+  return lowered;
+}
+
 TreeEnsembleReference::TreeEnsembleReference(TreeEnsembleAttributes attributes)
     : attributes_(std::move(attributes)) {
   ValidateAggregate(attributes_.aggregate);
   ValidateTransform(attributes_.post_transform);
   if (attributes_.n_features <= 0 || attributes_.n_targets <= 0) {
     Invalid("n_features and n_targets must be positive");
+  }
+  if (!attributes_.base_values.empty() &&
+      attributes_.base_values.size() != static_cast<std::size_t>(attributes_.n_targets)) {
+    Invalid("base_values has the wrong length");
   }
   const std::size_t size = attributes_.nodes_featureids.size();
   if (size == 0 || attributes_.tree_roots.empty()) {
@@ -502,7 +903,11 @@ std::vector<double> TreeEnsembleReference::Evaluate(const std::vector<double> &i
   }
   std::vector<double> output(rows * targets);
   for (std::size_t row = 0; row < rows; ++row) {
-    std::vector<double> values(targets);
+    std::vector<double> values(targets, 0.0);
+    for (std::size_t target = 0; target < targets && target < attributes_.base_values.size();
+         ++target) {
+      values[target] = attributes_.base_values[target];
+    }
     std::vector<std::size_t> counts(targets);
     for (std::int64_t root : attributes_.tree_roots) {
       std::size_t node = static_cast<std::size_t>(root);

@@ -147,6 +147,9 @@ NodeProto MakeTreeEnsembleNode(const TreeEnsembleAttributes &attributes) {
   }
   AddInts(node, "leaf_targetids", attributes.leaf_targetids);
   AddTypedTensor(node, "leaf_weights", attributes.value_type, attributes.leaf_weights);
+  if (!attributes.base_values.empty()) {
+    AddTypedTensor(node, "base_values", attributes.value_type, attributes.base_values);
+  }
   AddInt(node, "n_targets", attributes.n_targets);
   AddInt(node, "aggregate_function", static_cast<std::int64_t>(attributes.aggregate));
   AddInt(node, "post_transform", static_cast<std::int64_t>(attributes.post_transform));

@@ -26,6 +26,7 @@ using onnx_light_cpu::reference::TreeAggregate;
 using onnx_light_cpu::reference::TreeBranchMode;
 using onnx_light_cpu::reference::TreeEnsembleAttributes;
 using onnx_light_cpu::reference::TreeEnsembleClassifierAttributes;
+using onnx_light_cpu::reference::TreeEnsemblePlan;
 using onnx_light_cpu::reference::TreeEnsembleReference;
 using onnx_light_cpu::reference::TreeEnsembleRegressorAttributes;
 using onnx_light_cpu::reference::TreePostTransform;
@@ -97,6 +98,29 @@ TEST(TreeEnsembleReference, CorpusCoversV5ContractAndIsDeterministic) {
   EXPECT_TRUE(has_multi_target);
   EXPECT_TRUE(has_large_membership);
   EXPECT_TRUE(has_depth_extreme);
+}
+
+TEST(TreeEnsembleReference, CanonicalPlanLowersAndEvaluatesDeterministically) {
+  TreeEnsembleAttributes attributes = Stump();
+  attributes.value_type = TreeValueType::kFloat32;
+  const TreeEnsemblePlan plan(attributes);
+  EXPECT_EQ(plan.model_signature().find("tree_ensemble_v5"), 0U);
+  EXPECT_EQ(plan.tree_roots().size(), 1U);
+  EXPECT_EQ(plan.nodes().size(), 1U);
+  EXPECT_EQ(plan.leaves().size(), 2U);
+  EXPECT_GT(plan.workspace_bytes(), 0U);
+  EXPECT_EQ(plan.Evaluate({-1.0, 3.0}, 2), (std::vector<double>{1.0, -1.0}));
+}
+
+TEST(TreeEnsembleReference, CanonicalPlanAppliesBaseValues) {
+  TreeEnsembleAttributes attributes = Stump();
+  attributes.value_type = TreeValueType::kFloat32;
+  attributes.base_values = {0.5};
+  const TreeEnsemblePlan plan(attributes);
+  EXPECT_EQ(plan.base_values(), (std::vector<double>{0.5}));
+  EXPECT_EQ(plan.Evaluate({-1.0, 3.0}, 2), (std::vector<double>{1.5, -0.5}));
+  EXPECT_EQ(TreeEnsembleReference(attributes).Evaluate({-1.0, 3.0}, 2),
+            (std::vector<double>{1.5, -0.5}));
 }
 
 TEST(TreeEnsembleReference, ThresholdsSignedZeroInfinityAndMissingRouting) {
