@@ -8,6 +8,11 @@
 #include "onnx_light_cpu/impl/math/gemm/vnni/integer_gemm_vnni.h"
 #include "onnx_light_cpu/impl/math/half_conversion.h"
 #include "onnx_light_cpu/impl/math/math_kernels.h"
+#include "onnx_light_cpu/impl/simd_level.h"
+
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
+#include "onnx_light_cpu/impl/math/gemm/avx2/gemm_kernel_avx2_fma.h"
+#endif
 
 #include <gtest/gtest.h>
 
@@ -1042,6 +1047,7 @@ TEST(GemmHalf, Float16SplitKMatchesReference) {
 
 TEST(GemmHalf, Float16DirectSmallKMatchesReference) {
   // K <= 32 with no transpose selects the direct small-K path.
+  CheckGemmHalf(false, false, false, 32, 128, 16, false, 380);
   CheckGemmHalf(false, false, false, 40, 48, 16, false, 381);
   CheckGemmHalf(false, false, false, 40, 48, 31, true, 391);
 }
@@ -1050,8 +1056,51 @@ TEST(GemmHalf, BFloat16AlgorithmVariantsMatchReference) {
   CheckGemmHalf(true, false, false, 200, 1, 300, false, 401); // skinny-N
   CheckGemmHalf(true, false, false, 1, 200, 300, false, 411); // skinny-M
   CheckGemmHalf(true, false, false, 8, 4, 4096, false, 421);  // split-K
+  CheckGemmHalf(true, false, false, 32, 128, 16, false, 430); // AVX2 direct
   CheckGemmHalf(true, false, false, 40, 48, 16, true, 431);   // direct small-K
 }
+
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
+TEST(GemmHalf, Avx2OutputNarrowingMatchesScalarConversion) {
+  if (onnx_light_cpu::DetectSimdLevel() < onnx_light_cpu::SimdLevel::kAVX2) {
+    GTEST_SKIP() << "AVX2 is not available.";
+  }
+  const std::vector<float> values = {
+      0.0f,
+      -0.0f,
+      1.0f,
+      -1.0f,
+      std::numeric_limits<float>::min(),
+      std::numeric_limits<float>::denorm_min(),
+      std::numeric_limits<float>::max(),
+      std::numeric_limits<float>::infinity(),
+      -std::numeric_limits<float>::infinity(),
+      std::bit_cast<float>(std::uint32_t{0x7f800001u}),
+      std::bit_cast<float>(std::uint32_t{0xffc12345u}),
+      1.00048828125f,
+      1.00146484375f,
+      3.14159265f,
+      -2.71828183f,
+      65504.0f,
+      65520.0f,
+  };
+  std::vector<std::uint16_t> actual(values.size());
+  onnx_light_cpu::GemmConvertFloat32ToBFloat16_AVX2(values.data(), actual.data(), values.size());
+  for (std::size_t i = 0; i < values.size(); ++i) {
+    EXPECT_EQ(actual[i], onnx_light_cpu::detail::FloatToBFloat16Bits(values[i])) << "i=" << i;
+  }
+
+#ifdef ONNX_LIGHT_CPU_HAVE_F16C
+  if (!onnx_light_cpu::CpuSupportsF16C()) {
+    return;
+  }
+  onnx_light_cpu::GemmConvertFloat32ToFloat16_F16C(values.data(), actual.data(), values.size());
+  for (std::size_t i = 0; i < values.size(); ++i) {
+    EXPECT_EQ(actual[i], onnx_light_cpu::detail::FloatToFloat16Bits(values[i])) << "i=" << i;
+  }
+#endif
+}
+#endif
 
 namespace {
 

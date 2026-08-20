@@ -177,6 +177,66 @@ void GemmHalfSkinnyN(std::size_t M, std::size_t K, float alpha, const std::uint1
   });
 }
 
+template <bool Bfloat16, std::size_t MR>
+void GemmMicroKernel_AVX2HalfImpl(std::size_t nb, std::size_t K, float alpha, float beta,
+                                  const std::uint16_t *Bmat, std::size_t N, const float *Crow_base,
+                                  std::size_t Cstride, float *Yrow_base, std::size_t Ystride,
+                                  std::size_t n0, GemmAccumMode mode, const std::uint16_t *Apack) {
+  static_assert(MR >= 1 && MR <= kGemmAVX2MR);
+  const __m256 valpha = _mm256_set1_ps(alpha);
+  const __m256 vbeta = _mm256_set1_ps(beta);
+  const bool alpha_is_one = alpha == 1.0f;
+  const bool beta_is_one = beta == 1.0f;
+  std::size_t n = 0;
+  for (; n + 16 <= nb; n += 16) {
+    __m256 acc0[MR];
+    __m256 acc1[MR];
+    for (std::size_t row = 0; row < MR; ++row) {
+      acc0[row] = _mm256_setzero_ps();
+      acc1[row] = _mm256_setzero_ps();
+    }
+    for (std::size_t depth = 0; depth < K; ++depth) {
+      const std::uint16_t *b = Bmat + depth * N + n0 + n;
+      const __m256 vb0 = WidenHalf8<Bfloat16>(b);
+      const __m256 vb1 = WidenHalf8<Bfloat16>(b + 8);
+      if (depth + kGemmPrefetchDistanceK < K) {
+        PrefetchT0(b + kGemmPrefetchDistanceK * N);
+      }
+      for (std::size_t row = 0; row < MR; ++row) {
+        const __m256 va = _mm256_set1_ps(ReadHalf<Bfloat16>(Apack + row * K + depth));
+        acc0[row] = _mm256_fmadd_ps(va, vb0, acc0[row]);
+        acc1[row] = _mm256_fmadd_ps(va, vb1, acc1[row]);
+      }
+    }
+    for (std::size_t row = 0; row < MR; ++row) {
+      float *y = Yrow_base + row * Ystride + n0 + n;
+      __m256 result0 = alpha_is_one ? acc0[row] : _mm256_mul_ps(valpha, acc0[row]);
+      __m256 result1 = alpha_is_one ? acc1[row] : _mm256_mul_ps(valpha, acc1[row]);
+      if (mode == GemmAccumMode::kInitBias) {
+        const float *c = Crow_base + row * Cstride + n0 + n;
+        const __m256 c0 = _mm256_loadu_ps(c);
+        const __m256 c1 = _mm256_loadu_ps(c + 8);
+        result0 = _mm256_add_ps(result0, beta_is_one ? c0 : _mm256_mul_ps(vbeta, c0));
+        result1 = _mm256_add_ps(result1, beta_is_one ? c1 : _mm256_mul_ps(vbeta, c1));
+      } else if (mode == GemmAccumMode::kAccumulate) {
+        result0 = _mm256_add_ps(result0, _mm256_loadu_ps(y));
+        result1 = _mm256_add_ps(result1, _mm256_loadu_ps(y + 8));
+      }
+      _mm256_storeu_ps(y, result0);
+      _mm256_storeu_ps(y + 8, result1);
+    }
+  }
+  if (n < nb) {
+    if constexpr (Bfloat16) {
+      GemmMicroKernel_ScalarBf16(MR, nb - n, K, alpha, beta, Bmat, N, Crow_base, Cstride, Yrow_base,
+                                 Ystride, n0 + n, mode, Apack);
+    } else {
+      GemmMicroKernel_ScalarFp16(MR, nb - n, K, alpha, beta, Bmat, N, Crow_base, Cstride, Yrow_base,
+                                 Ystride, n0 + n, mode, Apack);
+    }
+  }
+}
+
 } // namespace
 
 template <std::size_t MR>
@@ -450,6 +510,30 @@ void GemmConvertBFloat16ToFloat32_AVX2(const std::uint16_t *src, float *dst, std
   }
 }
 
+void GemmConvertFloat32ToBFloat16_AVX2(const float *src, std::uint16_t *dst, std::size_t n) {
+  const __m256i absolute_mask = _mm256_set1_epi32(0x7fffffff);
+  const __m256i infinity = _mm256_set1_epi32(0x7f800000);
+  const __m256i rounding_base = _mm256_set1_epi32(0x7fff);
+  const __m256i one = _mm256_set1_epi32(1);
+  const __m256i quiet_nan = _mm256_set1_epi32(0x40);
+  std::size_t i = 0;
+  for (; i + 8 <= n; i += 8) {
+    const __m256i bits = _mm256_castps_si256(_mm256_loadu_ps(src + i));
+    const __m256i upper = _mm256_srli_epi32(bits, 16);
+    const __m256i rounding = _mm256_add_epi32(rounding_base, _mm256_and_si256(upper, one));
+    const __m256i rounded = _mm256_srli_epi32(_mm256_add_epi32(bits, rounding), 16);
+    const __m256i is_nan = _mm256_cmpgt_epi32(_mm256_and_si256(bits, absolute_mask), infinity);
+    const __m256i canonical_nan = _mm256_or_si256(upper, quiet_nan);
+    const __m256i converted = _mm256_blendv_epi8(rounded, canonical_nan, is_nan);
+    const __m128i packed =
+        _mm_packus_epi32(_mm256_castsi256_si128(converted), _mm256_extracti128_si256(converted, 1));
+    _mm_storeu_si128(reinterpret_cast<__m128i *>(dst + i), packed);
+  }
+  for (; i < n; ++i) {
+    dst[i] = detail::FloatToBFloat16Bits(src[i]);
+  }
+}
+
 void GemmDecodeFloat8ToFloat32_AVX2(const float *table, const std::uint8_t *src, float *dst,
                                     std::size_t n) {
   std::size_t i = 0;
@@ -465,6 +549,33 @@ void GemmDecodeFloat8ToFloat32_AVX2(const float *table, const std::uint8_t *src,
   }
 }
 
+void GemmMicroKernel_AVX2BF16(std::size_t mr, std::size_t nb, std::size_t K, float alpha,
+                              float beta, const std::uint16_t *Bmat, std::size_t N,
+                              const float *Crow_base, std::size_t Cstride, float *Yrow_base,
+                              std::size_t Ystride, std::size_t n0, GemmAccumMode mode,
+                              const std::uint16_t *Apack) {
+  switch (mr) {
+  case 1:
+    return GemmMicroKernel_AVX2HalfImpl<true, 1>(nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
+                                                 Yrow_base, Ystride, n0, mode, Apack);
+  case 2:
+    return GemmMicroKernel_AVX2HalfImpl<true, 2>(nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
+                                                 Yrow_base, Ystride, n0, mode, Apack);
+  case 3:
+    return GemmMicroKernel_AVX2HalfImpl<true, 3>(nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
+                                                 Yrow_base, Ystride, n0, mode, Apack);
+  case 4:
+    return GemmMicroKernel_AVX2HalfImpl<true, 4>(nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
+                                                 Yrow_base, Ystride, n0, mode, Apack);
+  case 5:
+    return GemmMicroKernel_AVX2HalfImpl<true, 5>(nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
+                                                 Yrow_base, Ystride, n0, mode, Apack);
+  default:
+    return GemmMicroKernel_ScalarBf16(mr, nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
+                                      Yrow_base, Ystride, n0, mode, Apack);
+  }
+}
+
 #ifdef ONNX_LIGHT_CPU_HAVE_F16C
 void GemmConvertFloat16ToFloat32_F16C(const std::uint16_t *src, float *dst, std::size_t n) {
   std::size_t i = 0;
@@ -477,58 +588,24 @@ void GemmConvertFloat16ToFloat32_F16C(const std::uint16_t *src, float *dst, std:
   }
 }
 
-template <std::size_t MR>
-void GemmMicroKernel_AVX2F16CImpl(std::size_t nb, std::size_t K, float alpha, float beta,
-                                  const std::uint16_t *Bmat, std::size_t N, const float *Crow_base,
-                                  std::size_t Cstride, float *Yrow_base, std::size_t Ystride,
-                                  std::size_t n0, GemmAccumMode mode, const std::uint16_t *Apack) {
-  static_assert(MR >= 1 && MR <= kGemmAVX2MR);
-  const __m256 valpha = _mm256_set1_ps(alpha);
-  const __m256 vbeta = _mm256_set1_ps(beta);
-  const bool alpha_is_one = alpha == 1.0f;
-  const bool beta_is_one = beta == 1.0f;
-  std::size_t n = 0;
-  for (; n + 16 <= nb; n += 16) {
-    __m256 acc0[MR];
-    __m256 acc1[MR];
-    for (std::size_t row = 0; row < MR; ++row) {
-      acc0[row] = _mm256_setzero_ps();
-      acc1[row] = _mm256_setzero_ps();
-    }
-    for (std::size_t depth = 0; depth < K; ++depth) {
-      const std::uint16_t *b = Bmat + depth * N + n0 + n;
-      const __m256 vb0 = WidenHalf8<false>(b);
-      const __m256 vb1 = WidenHalf8<false>(b + 8);
-      if (depth + kGemmPrefetchDistanceK < K) {
-        PrefetchT0(b + kGemmPrefetchDistanceK * N);
+void GemmConvertFloat32ToFloat16_F16C(const float *src, std::uint16_t *dst, std::size_t n) {
+  std::size_t i = 0;
+  for (; i + 8 <= n; i += 8) {
+    const __m256 values = _mm256_loadu_ps(src + i);
+    const __m128i halves = _mm256_cvtps_ph(values, _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC);
+    _mm_storeu_si128(reinterpret_cast<__m128i *>(dst + i), halves);
+    const int nan_mask = _mm256_movemask_ps(_mm256_cmp_ps(values, values, _CMP_UNORD_Q));
+    if (nan_mask != 0) {
+      for (int lane = 0; lane < 8; ++lane) {
+        if ((nan_mask & (1 << lane)) != 0) {
+          dst[i + static_cast<std::size_t>(lane)] =
+              detail::FloatToFloat16Bits(src[i + static_cast<std::size_t>(lane)]);
+        }
       }
-      for (std::size_t row = 0; row < MR; ++row) {
-        const __m256 va = _mm256_set1_ps(ReadHalf<false>(Apack + row * K + depth));
-        acc0[row] = _mm256_fmadd_ps(va, vb0, acc0[row]);
-        acc1[row] = _mm256_fmadd_ps(va, vb1, acc1[row]);
-      }
-    }
-    for (std::size_t row = 0; row < MR; ++row) {
-      float *y = Yrow_base + row * Ystride + n0 + n;
-      __m256 result0 = alpha_is_one ? acc0[row] : _mm256_mul_ps(valpha, acc0[row]);
-      __m256 result1 = alpha_is_one ? acc1[row] : _mm256_mul_ps(valpha, acc1[row]);
-      if (mode == GemmAccumMode::kInitBias) {
-        const float *c = Crow_base + row * Cstride + n0 + n;
-        const __m256 c0 = _mm256_loadu_ps(c);
-        const __m256 c1 = _mm256_loadu_ps(c + 8);
-        result0 = _mm256_add_ps(result0, beta_is_one ? c0 : _mm256_mul_ps(vbeta, c0));
-        result1 = _mm256_add_ps(result1, beta_is_one ? c1 : _mm256_mul_ps(vbeta, c1));
-      } else if (mode == GemmAccumMode::kAccumulate) {
-        result0 = _mm256_add_ps(result0, _mm256_loadu_ps(y));
-        result1 = _mm256_add_ps(result1, _mm256_loadu_ps(y + 8));
-      }
-      _mm256_storeu_ps(y, result0);
-      _mm256_storeu_ps(y + 8, result1);
     }
   }
-  if (n < nb) {
-    GemmMicroKernel_ScalarFp16(MR, nb - n, K, alpha, beta, Bmat, N, Crow_base, Cstride, Yrow_base,
-                               Ystride, n0 + n, mode, Apack);
+  for (; i < n; ++i) {
+    dst[i] = detail::FloatToFloat16Bits(src[i]);
   }
 }
 
@@ -539,20 +616,20 @@ void GemmMicroKernel_AVX2F16C(std::size_t mr, std::size_t nb, std::size_t K, flo
                               const std::uint16_t *Apack) {
   switch (mr) {
   case 1:
-    return GemmMicroKernel_AVX2F16CImpl<1>(nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
-                                           Yrow_base, Ystride, n0, mode, Apack);
+    return GemmMicroKernel_AVX2HalfImpl<false, 1>(nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
+                                                  Yrow_base, Ystride, n0, mode, Apack);
   case 2:
-    return GemmMicroKernel_AVX2F16CImpl<2>(nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
-                                           Yrow_base, Ystride, n0, mode, Apack);
+    return GemmMicroKernel_AVX2HalfImpl<false, 2>(nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
+                                                  Yrow_base, Ystride, n0, mode, Apack);
   case 3:
-    return GemmMicroKernel_AVX2F16CImpl<3>(nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
-                                           Yrow_base, Ystride, n0, mode, Apack);
+    return GemmMicroKernel_AVX2HalfImpl<false, 3>(nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
+                                                  Yrow_base, Ystride, n0, mode, Apack);
   case 4:
-    return GemmMicroKernel_AVX2F16CImpl<4>(nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
-                                           Yrow_base, Ystride, n0, mode, Apack);
+    return GemmMicroKernel_AVX2HalfImpl<false, 4>(nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
+                                                  Yrow_base, Ystride, n0, mode, Apack);
   case 5:
-    return GemmMicroKernel_AVX2F16CImpl<5>(nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
-                                           Yrow_base, Ystride, n0, mode, Apack);
+    return GemmMicroKernel_AVX2HalfImpl<false, 5>(nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
+                                                  Yrow_base, Ystride, n0, mode, Apack);
   default:
     return GemmMicroKernel_ScalarFp16(mr, nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
                                       Yrow_base, Ystride, n0, mode, Apack);

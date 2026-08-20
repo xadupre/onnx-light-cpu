@@ -13,6 +13,7 @@
 #include "onnx_core/runtime/kernels/kernel_dispatch_table.h"
 #include "onnx_core/runtime/kernels/node_helpers.h"
 #include "onnx_core/runtime/kernels/parallel_for.h"
+#include "onnx_core/runtime/memory/temporary_buffer.h"
 #include "onnx_core/symbolic/sym_tensor.h"
 
 #include <cstddef>
@@ -306,7 +307,8 @@ Tensor GemmKernel::Compute(const Tensor &a, const Tensor &b, const Tensor *c, fl
     epilogue.output_conversion =
         is_bfloat16 ? GemmOutputConversion::kBFloat16 : GemmOutputConversion::kFloat16;
     epilogue.converted_output = reinterpret_cast<std::uint16_t *>(y.mutable_bytes());
-    std::vector<float> y_f32(M * N);
+    rt_ns::detail::TemporaryTypedBuffer<float> y_f32(
+        M * N, rt != nullptr ? rt->execution_allocator() : nullptr, "Gemm FP32 workspace");
     plan->Execute(a_bits, b_bits, epilogue, y_f32.data());
     return y;
   }
