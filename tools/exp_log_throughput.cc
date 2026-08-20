@@ -19,6 +19,7 @@
 #include <numeric>
 #include <string>
 #include <thread>
+#include <unordered_set>
 #include <vector>
 
 namespace {
@@ -50,6 +51,18 @@ std::string CpuModel() {
   return "unknown";
 }
 
+std::size_t PhysicalCores() {
+  std::unordered_set<std::string> cores;
+  for (std::size_t cpu = 0; cpu < std::thread::hardware_concurrency(); ++cpu) {
+    std::ifstream core("/sys/devices/system/cpu/cpu" + std::to_string(cpu) + "/topology/core_id");
+    std::string id;
+    if (core >> id) {
+      cores.insert(id);
+    }
+  }
+  return cores.empty() ? std::thread::hardware_concurrency() : cores.size();
+}
+
 std::vector<std::size_t> Sizes() {
   return {100, 1'000, 10'000, 100'000, 1'000'000, 4'194'304, 10'000'000, 100'000'000};
 }
@@ -75,14 +88,9 @@ std::vector<double> Measure(Function function, std::size_t count, std::size_t sa
   return timings;
 }
 
-double Median(std::vector<double> values) {
+std::pair<double, double> Summary(std::vector<double> values) {
   std::sort(values.begin(), values.end());
-  return values[values.size() / 2];
-}
-
-double Iqr(std::vector<double> values) {
-  std::sort(values.begin(), values.end());
-  return values[(values.size() * 3) / 4] - values[values.size() / 4];
+  return {values[values.size() / 2], values[(values.size() * 3) / 4] - values[values.size() / 4]};
 }
 
 } // namespace
@@ -96,7 +104,7 @@ int main(int argc, char **argv) {
   }
   std::printf("timestamp=steady  cpu_model=%s  logical_cpus=%u  physical_threads=%u\n",
               CpuModel().c_str(), std::thread::hardware_concurrency(),
-              std::thread::hardware_concurrency());
+              static_cast<unsigned>(PhysicalCores()));
   std::printf("compiler=%s  cxx=%ld  isa=%s  samples=%zu  configured_threads=1,2,4,physical\n",
 #if defined(__clang__)
               "clang",
@@ -114,8 +122,8 @@ int main(int argc, char **argv) {
     const auto log = Measure(onnx_light_cpu::LogFloat32, size, samples);
     for (const auto &entry :
          {std::pair<const char *, std::vector<double>>{"Exp", exp}, {"Log", log}}) {
-      const double median = Median(entry.second);
-      std::printf("%s,%zu,%.9g,%.9g,not_recorded\n", entry.first, size, median, Iqr(entry.second));
+      const auto [median, iqr] = Summary(entry.second);
+      std::printf("%s,%zu,%.9g,%.9g,not_recorded\n", entry.first, size, median, iqr);
     }
   }
   return 0;

@@ -37,7 +37,12 @@ def _measure(function: Any, repeat: int, warmup: int) -> list[float]:
 
 
 def _physical_threads() -> int:
-    return max(1, (os.cpu_count() or 1) // 2)
+    topology = Path("/sys/devices/system/cpu")
+    cores = {
+        path.read_text(encoding="utf-8").strip()
+        for path in topology.glob("cpu[0-9]*/topology/core_id")
+    }
+    return len(cores) or max(1, os.cpu_count() or 1)
 
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
@@ -54,7 +59,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         for size in args.sizes:
             values = np.linspace(-8, 8, size, dtype=np.float32)
             if operator == "Log":
-                values = np.exp(values, dtype=np.float32)
+                values = np.exp(values)
             model = helper.make_model(
                 helper.make_graph(
                     [helper.make_node(operator, ["X"], ["Y"])],
@@ -98,7 +103,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     "ort_samples_seconds": ort_samples,
                     "cpu_median_seconds": cpu_median,
                     "ort_median_seconds": ort_median,
-                    "speedup": ort_median / cpu_median,
+                    "speedup": ort_median / cpu_median if cpu_median else float("inf"),
                     "allocation_and_dispatch_included": True,
                 }
             )
