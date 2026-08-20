@@ -967,6 +967,14 @@ if(ONNX_LIGHT_CPU_BUILD_BENCHMARKS)
     target_compile_options(compact_gemm_throughput PRIVATE ${_simd_flags})
   endif()
   onnx_light_apply_hardening(compact_gemm_throughput)
+
+  add_executable(exp_log_throughput
+      "${CMAKE_CURRENT_SOURCE_DIR}/tools/exp_log_throughput.cc")
+  target_link_libraries(exp_log_throughput PRIVATE lib_onnx_light_cpu)
+  if(ONNX_LIGHT_CPU_SIMD_FLAGS)
+    target_compile_options(exp_log_throughput PRIVATE ${_simd_flags})
+  endif()
+  onnx_light_apply_hardening(exp_log_throughput)
 endif()
 
 # ---------------------------------------------------------------------------

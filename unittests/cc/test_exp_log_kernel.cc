@@ -6,6 +6,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -121,6 +122,48 @@ TEST(ExpFloat32, SpecialValues) {
   EXPECT_FLOAT_EQ(out[8], 0.0f);
 }
 
+enum class FloatClass { kZero, kSubnormal, kNormal, kInfinity, kNan };
+
+FloatClass Classify(float value) {
+  if (std::isnan(value)) {
+    return FloatClass::kNan;
+  }
+  if (std::isinf(value)) {
+    return FloatClass::kInfinity;
+  }
+  if (value == 0.0f) {
+    return FloatClass::kZero;
+  }
+  return std::fpclassify(value) == FP_SUBNORMAL ? FloatClass::kSubnormal : FloatClass::kNormal;
+}
+
+TEST(ExpFloat32, TailsUnalignedAndClassification) {
+  const std::vector<float> values = {-80.0f, -20.0f, -0.0f, 0.0f, 20.0f, 88.0f, 90.0f, 100.0f};
+  std::vector<float> storage(values.size() + 2, 0.0f);
+  std::copy(values.begin(), values.end(), storage.begin() + 1);
+  std::vector<float> output(values.size() + 2, -1.0f);
+  onnx_light_cpu::ExpFloat32(storage.data() + 1, output.data() + 1, values.size());
+  for (std::size_t i = 0; i < values.size(); ++i) {
+    const float reference = std::exp(values[i]);
+    EXPECT_EQ(Classify(output[i + 1]), Classify(reference)) << "at index " << i;
+    if (std::isfinite(reference)) {
+      EXPECT_NEAR(output[i + 1], reference, std::fabs(reference) * 2e-5f + 1e-7f)
+          << "at index " << i;
+    }
+  }
+}
+
+// These tests intentionally remain disabled until PR02 fixes the known SIMD
+// subnormal range-reduction bugs. They are retained as the numerical gate.
+TEST(DISABLED_ExpFloat32, VectorSubnormalRange) {
+  const std::vector<float> values = {-90.0f, -95.0f, -100.0f, -103.0f};
+  std::vector<float> output(values.size());
+  onnx_light_cpu::ExpFloat32(values.data(), output.data(), values.size());
+  for (std::size_t i = 0; i < values.size(); ++i) {
+    EXPECT_EQ(Classify(output[i]), Classify(std::exp(values[i])));
+  }
+}
+
 // ---------------------------------------------------------------------------
 // LogFloat32
 // ---------------------------------------------------------------------------
@@ -158,6 +201,34 @@ TEST(LogFloat32, SpecialValues) {
   EXPECT_TRUE(std::isnan(out[3]));
   EXPECT_EQ(out[4], inf);
   EXPECT_TRUE(std::isnan(out[5]));
+}
+
+TEST(LogFloat32, TailsUnalignedAndClassification) {
+  const std::vector<float> values = {1.0e-30f, 1.0e-10f, 0.5f,
+                                     1.0f,     2.0f,     std::numeric_limits<float>::infinity()};
+  std::vector<float> storage(values.size() + 2, 1.0f);
+  std::copy(values.begin(), values.end(), storage.begin() + 1);
+  std::vector<float> output(values.size() + 2, 0.0f);
+  onnx_light_cpu::LogFloat32(storage.data() + 1, output.data() + 1, values.size());
+  for (std::size_t i = 0; i < values.size(); ++i) {
+    const float reference = std::log(values[i]);
+    EXPECT_EQ(Classify(output[i + 1]), Classify(reference)) << "at index " << i;
+    if (std::isfinite(reference)) {
+      EXPECT_NEAR(output[i + 1], reference, std::fabs(reference) * 2e-5f + 1e-6f)
+          << "at index " << i;
+    }
+  }
+}
+
+TEST(DISABLED_LogFloat32, PositiveSubnormalCorpus) {
+  const std::vector<float> values = {std::numeric_limits<float>::denorm_min(),
+                                     2.0f * std::numeric_limits<float>::denorm_min(),
+                                     0x1.fffffep-127f};
+  std::vector<float> output(values.size());
+  onnx_light_cpu::LogFloat32(values.data(), output.data(), values.size());
+  for (std::size_t i = 0; i < values.size(); ++i) {
+    EXPECT_NEAR(output[i], std::log(values[i]), 2e-5f * std::fabs(std::log(values[i])) + 1e-6f);
+  }
 }
 
 // ---------------------------------------------------------------------------

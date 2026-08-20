@@ -3,7 +3,7 @@ Exp and Log ONNX Runtime Parity Roadmap
 
 :Date: 2026-08
 
-**in progress**
+**in progress** (ExpLog PR01 benchmark and numerical gate established)
 
 Objective
 ---------
@@ -159,6 +159,18 @@ The differential corpus must cover:
 * float64, float16, and bfloat16 regression coverage even though initial
   performance parity targets float32.
 
+The reproducible runners are ``tools/exp_log_throughput`` (preallocated C++
+compute) and ``tools/benchmark_exp_log_parity.py`` (ReferenceEvaluator versus
+ONNX Runtime, including allocation and dispatch). The C++ runner emits raw
+samples and dispersion for every priority size; the Python runner stores JSON
+with raw samples, affinity, thread configuration, and environment metadata.
+Build the isolated runner with
+``cmake -DONNX_LIGHT_CPU_BUILD_BENCHMARKS=ON`` and select a session thread
+count with ``--threads 1``, ``--threads 2``, ``--threads 4``, or
+``--threads physical`` in the end-to-end runner. The disabled subnormal tests
+in ``unittests/cc/test_exp_log_kernel.cc`` are the PR02 numerical gate and
+document the currently known SIMD failures without changing production code.
+
 Accuracy is measured in ULPs for finite float32 results, with explicit
 classification checks for zero, subnormal, normal, infinity, and NaN.
 Vectorized and scalar-tail results must obey the same contract.
@@ -230,7 +242,7 @@ Remaining pull-request sequence
        metadata. Differential tests expose SIMD subnormal failures, tails, and
        transition boundaries without changing production behavior.
      - None
-     - Pending
+     - Complete
    * - ExpLog PR02
      - Correct full-domain SIMD semantics.
      - ``Exp`` preserves valid subnormal outputs; ``Log`` normalizes positive
