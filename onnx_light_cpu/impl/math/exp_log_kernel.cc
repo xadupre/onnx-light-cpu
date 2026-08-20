@@ -82,6 +82,11 @@ constexpr float kExpHi32 = 88.3762626647949f;
 // -88.376 flushed every valid subnormal result (down to -103.972...) to
 // zero. Range reduction below this bound uses a split power-of-two
 // reconstruction (see ExpPs/ExpPs256) so subnormal results round correctly.
+// Because x is clamped to this bound before the reduced exponent n is
+// computed, n never drops below -150 (roughly kExpLo32 * kLog2ef); n1 = n>>1
+// and n2 = n - n1 therefore never exceed a magnitude of 75, keeping both
+// halves of the split power of two (biased by 0x7f) safely within the
+// normal exponent range [1, 254].
 constexpr float kExpLo32 = -103.97208f;
 
 // Smallest positive normal float32 (bit pattern 0x00800000). Log inputs below
@@ -221,7 +226,7 @@ __m128 LogPs(__m128 x) {
   // mantissa. The extracted exponent is corrected below by subtracting 23
   // for the lanes that were normalized.
   const __m128 smallest_normal = _mm_castsi128_ps(_mm_set1_epi32(0x00800000));
-  const __m128 is_subnormal = _mm_cmplt_ps(x, smallest_normal);
+  const __m128 is_subnormal = _mm_and_ps(_mm_cmpgt_ps(x, zero), _mm_cmplt_ps(x, smallest_normal));
   const __m128 scaled = _mm_mul_ps(x, _mm_set1_ps(kSubnormalScale32));
   __m128 xw = Select(is_subnormal, scaled, x);
   __m128i emm0 = _mm_srli_epi32(_mm_castps_si128(xw), 23);
@@ -467,7 +472,8 @@ __m256 LogPs256(__m256 x) {
   // See LogPs: normalize positive subnormals instead of clamping so distinct
   // subnormals still yield distinct, correct results.
   const __m256 smallest_normal = _mm256_castsi256_ps(_mm256_set1_epi32(0x00800000));
-  const __m256 is_subnormal = _mm256_cmp_ps(x, smallest_normal, _CMP_LT_OQ);
+  const __m256 is_subnormal = _mm256_and_ps(_mm256_cmp_ps(x, zero, _CMP_GT_OQ),
+                                            _mm256_cmp_ps(x, smallest_normal, _CMP_LT_OQ));
   const __m256 scaled = _mm256_mul_ps(x, _mm256_set1_ps(kSubnormalScale32));
   __m256 xw = Select(is_subnormal, scaled, x);
   __m256i emm0 = _mm256_srli_epi32(_mm256_castps_si256(xw), 23);

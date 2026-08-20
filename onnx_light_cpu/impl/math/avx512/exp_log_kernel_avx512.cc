@@ -16,7 +16,10 @@ constexpr float kExpHi = 88.3762626647949f;
 // True float32 underflow boundary (half of the smallest subnormal, i.e.
 // -150 * ln(2)); see exp_log_kernel.cc for the full rationale. Range
 // reduction below this bound uses a split power-of-two reconstruction so
-// subnormal results round correctly instead of flushing to zero early.
+// subnormal results round correctly instead of flushing to zero early. The
+// clamp keeps the reduced exponent n above -150, so the split halves
+// (n1 = n>>1, n2 = n-n1, biased by 0x7f) always stay within the normal
+// exponent range [1, 254].
 constexpr float kExpLo = -103.97208f;
 
 // Smallest positive normal float32 (bit pattern 0x00800000) and the exact
@@ -143,7 +146,8 @@ __m512 LogPs(__m512 x) {
   // Normalize positive subnormals instead of clamping them to the smallest
   // normal float (see exp_log_kernel.cc) so distinct subnormals still yield
   // distinct, correct results.
-  const __mmask16 is_subnormal = _mm512_cmp_ps_mask(x, _mm512_set1_ps(kSmallestNormal), _CMP_LT_OQ);
+  const __mmask16 is_subnormal = _mm512_cmp_ps_mask(x, zero, _CMP_GT_OQ) &
+                                 _mm512_cmp_ps_mask(x, _mm512_set1_ps(kSmallestNormal), _CMP_LT_OQ);
   const __m512 scaled = _mm512_mul_ps(x, _mm512_set1_ps(kSubnormalScale));
   __m512 reduced = Select(is_subnormal, scaled, x);
   __m512i exponent_int = _mm512_srli_epi32(_mm512_castps_si512(reduced), 23);
