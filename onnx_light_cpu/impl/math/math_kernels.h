@@ -120,6 +120,10 @@ void ExpFloat16(const uint16_t *input, uint16_t *output, std::size_t count);
 /// NaN) match ``std::log``.
 void LogFloat32(const float *input, float *output, std::size_t count);
 
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
+void LogFloat32_AVX2_FMA(const float *input, float *output, std::size_t count);
+#endif
+
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512
 void LogFloat32_AVX512(const float *input, float *output, std::size_t count);
 #endif

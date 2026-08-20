@@ -86,7 +86,13 @@ __m512d Select(__mmask8 mask, __m512d selected, __m512d fallback) {
   return _mm512_mask_mov_pd(fallback, mask, selected);
 }
 
-__m512 ExpPs(__m512 x) {
+#if defined(_MSC_VER)
+#define ONNX_LIGHT_CPU_FORCE_INLINE __forceinline
+#else
+#define ONNX_LIGHT_CPU_FORCE_INLINE inline __attribute__((always_inline))
+#endif
+
+ONNX_LIGHT_CPU_FORCE_INLINE __m512 ExpPs(__m512 x) {
   const __m512 one = _mm512_set1_ps(1.0f);
   const __m512 hi = _mm512_set1_ps(kExpHi);
   const __m512 lo = _mm512_set1_ps(kExpLo);
@@ -96,29 +102,27 @@ __m512 ExpPs(__m512 x) {
   const __mmask16 under = _mm512_cmp_ps_mask(x, lo, _CMP_LT_OQ);
 
   __m512 reduced = _mm512_min_ps(_mm512_max_ps(x, lo), hi);
-  __m512 exponent =
-      _mm512_add_ps(_mm512_mul_ps(reduced, _mm512_set1_ps(kLog2ef)), _mm512_set1_ps(0.5f));
-  __m512i exponent_int = _mm512_cvttps_epi32(exponent);
-  const __m512 exponent_floor = _mm512_cvtepi32_ps(exponent_int);
-  const __mmask16 floor_mask = _mm512_cmp_ps_mask(exponent_floor, exponent, _CMP_GT_OQ);
-  exponent = _mm512_sub_ps(exponent_floor, _mm512_maskz_mov_ps(floor_mask, one));
+  const __m512 magic = _mm512_set1_ps(12582912.0f);
+  const __m512 scaled = _mm512_fmadd_ps(reduced, _mm512_set1_ps(kLog2ef), magic);
+  const __m512i exponent_int =
+      _mm512_sub_epi32(_mm512_castps_si512(scaled), _mm512_set1_epi32(0x4b400000));
+  const __m512 exponent = _mm512_cvtepi32_ps(exponent_int);
 
-  reduced = _mm512_sub_ps(reduced, _mm512_mul_ps(exponent, _mm512_set1_ps(kExpC1)));
-  reduced = _mm512_sub_ps(reduced, _mm512_mul_ps(exponent, _mm512_set1_ps(kExpC2)));
+  reduced = _mm512_fnmadd_ps(exponent, _mm512_set1_ps(kExpC1), reduced);
+  reduced = _mm512_fnmadd_ps(exponent, _mm512_set1_ps(kExpC2), reduced);
   const __m512 squared = _mm512_mul_ps(reduced, reduced);
 
   __m512 polynomial = _mm512_set1_ps(kExpP0);
-  polynomial = _mm512_add_ps(_mm512_mul_ps(polynomial, reduced), _mm512_set1_ps(kExpP1));
-  polynomial = _mm512_add_ps(_mm512_mul_ps(polynomial, reduced), _mm512_set1_ps(kExpP2));
-  polynomial = _mm512_add_ps(_mm512_mul_ps(polynomial, reduced), _mm512_set1_ps(kExpP3));
-  polynomial = _mm512_add_ps(_mm512_mul_ps(polynomial, reduced), _mm512_set1_ps(kExpP4));
-  polynomial = _mm512_add_ps(_mm512_mul_ps(polynomial, reduced), _mm512_set1_ps(kExpP5));
-  polynomial = _mm512_add_ps(_mm512_mul_ps(polynomial, squared), reduced);
+  polynomial = _mm512_fmadd_ps(polynomial, reduced, _mm512_set1_ps(kExpP1));
+  polynomial = _mm512_fmadd_ps(polynomial, reduced, _mm512_set1_ps(kExpP2));
+  polynomial = _mm512_fmadd_ps(polynomial, reduced, _mm512_set1_ps(kExpP3));
+  polynomial = _mm512_fmadd_ps(polynomial, reduced, _mm512_set1_ps(kExpP4));
+  polynomial = _mm512_fmadd_ps(polynomial, reduced, _mm512_set1_ps(kExpP5));
+  polynomial = _mm512_fmadd_ps(polynomial, squared, reduced);
   polynomial = _mm512_add_ps(polynomial, one);
 
   // Reconstruct 2^n as two normal-range factors (see exp_log_kernel.cc) so
   // subnormal exponents down to -149 round correctly.
-  exponent_int = _mm512_cvttps_epi32(exponent);
   const __m512i exponent_n1 = _mm512_srai_epi32(exponent_int, 1);
   const __m512i exponent_n2 = _mm512_sub_epi32(exponent_int, exponent_n1);
   const __m512i pow1 =
@@ -133,7 +137,7 @@ __m512 ExpPs(__m512 x) {
   return Select(is_nan, _mm512_set1_ps(std::numeric_limits<float>::quiet_NaN()), result);
 }
 
-__m512 LogPs(__m512 x) {
+ONNX_LIGHT_CPU_FORCE_INLINE __m512 LogPs(__m512 x) {
   const __m512 one = _mm512_set1_ps(1.0f);
   const __m512 zero = _mm512_setzero_ps();
   const __m512 positive_infinity = _mm512_set1_ps(std::numeric_limits<float>::infinity());
@@ -167,26 +171,28 @@ __m512 LogPs(__m512 x) {
   const __m512 squared = _mm512_mul_ps(reduced, reduced);
 
   __m512 polynomial = _mm512_set1_ps(kLogP0);
-  polynomial = _mm512_add_ps(_mm512_mul_ps(polynomial, reduced), _mm512_set1_ps(kLogP1));
-  polynomial = _mm512_add_ps(_mm512_mul_ps(polynomial, reduced), _mm512_set1_ps(kLogP2));
-  polynomial = _mm512_add_ps(_mm512_mul_ps(polynomial, reduced), _mm512_set1_ps(kLogP3));
-  polynomial = _mm512_add_ps(_mm512_mul_ps(polynomial, reduced), _mm512_set1_ps(kLogP4));
-  polynomial = _mm512_add_ps(_mm512_mul_ps(polynomial, reduced), _mm512_set1_ps(kLogP5));
-  polynomial = _mm512_add_ps(_mm512_mul_ps(polynomial, reduced), _mm512_set1_ps(kLogP6));
-  polynomial = _mm512_add_ps(_mm512_mul_ps(polynomial, reduced), _mm512_set1_ps(kLogP7));
-  polynomial = _mm512_add_ps(_mm512_mul_ps(polynomial, reduced), _mm512_set1_ps(kLogP8));
+  polynomial = _mm512_fmadd_ps(polynomial, reduced, _mm512_set1_ps(kLogP1));
+  polynomial = _mm512_fmadd_ps(polynomial, reduced, _mm512_set1_ps(kLogP2));
+  polynomial = _mm512_fmadd_ps(polynomial, reduced, _mm512_set1_ps(kLogP3));
+  polynomial = _mm512_fmadd_ps(polynomial, reduced, _mm512_set1_ps(kLogP4));
+  polynomial = _mm512_fmadd_ps(polynomial, reduced, _mm512_set1_ps(kLogP5));
+  polynomial = _mm512_fmadd_ps(polynomial, reduced, _mm512_set1_ps(kLogP6));
+  polynomial = _mm512_fmadd_ps(polynomial, reduced, _mm512_set1_ps(kLogP7));
+  polynomial = _mm512_fmadd_ps(polynomial, reduced, _mm512_set1_ps(kLogP8));
   polynomial = _mm512_mul_ps(polynomial, reduced);
   polynomial = _mm512_mul_ps(polynomial, squared);
-  polynomial = _mm512_add_ps(polynomial, _mm512_mul_ps(exponent, _mm512_set1_ps(kLogQ1)));
-  polynomial = _mm512_sub_ps(polynomial, _mm512_mul_ps(squared, _mm512_set1_ps(0.5f)));
+  polynomial = _mm512_fmadd_ps(exponent, _mm512_set1_ps(kLogQ1), polynomial);
+  polynomial = _mm512_fnmadd_ps(squared, _mm512_set1_ps(0.5f), polynomial);
   __m512 result = _mm512_add_ps(reduced, polynomial);
-  result = _mm512_add_ps(result, _mm512_mul_ps(exponent, _mm512_set1_ps(kLogQ2)));
+  result = _mm512_fmadd_ps(exponent, _mm512_set1_ps(kLogQ2), result);
 
   result = Select(is_negative, _mm512_set1_ps(std::numeric_limits<float>::quiet_NaN()), result);
   result = Select(is_zero, _mm512_set1_ps(-std::numeric_limits<float>::infinity()), result);
   result = Select(is_infinite, positive_infinity, result);
   return Select(is_nan, _mm512_set1_ps(std::numeric_limits<float>::quiet_NaN()), result);
 }
+
+#undef ONNX_LIGHT_CPU_FORCE_INLINE
 
 __m512d ExpPd(__m512d x) {
   const __m512d one = _mm512_set1_pd(1.0);
@@ -289,6 +295,10 @@ __m512d LogPd(__m512d x) {
 
 void ExpFloat32_AVX512(const float *input, float *output, std::size_t count) {
   std::size_t i = 0;
+  for (; i + 32 <= count; i += 32) {
+    _mm512_storeu_ps(output + i, ExpPs(_mm512_loadu_ps(input + i)));
+    _mm512_storeu_ps(output + i + 16, ExpPs(_mm512_loadu_ps(input + i + 16)));
+  }
   for (; i + 16 <= count; i += 16) {
     _mm512_storeu_ps(output + i, ExpPs(_mm512_loadu_ps(input + i)));
   }
@@ -301,6 +311,10 @@ void ExpFloat32_AVX512(const float *input, float *output, std::size_t count) {
 
 void LogFloat32_AVX512(const float *input, float *output, std::size_t count) {
   std::size_t i = 0;
+  for (; i + 32 <= count; i += 32) {
+    _mm512_storeu_ps(output + i, LogPs(_mm512_loadu_ps(input + i)));
+    _mm512_storeu_ps(output + i + 16, LogPs(_mm512_loadu_ps(input + i + 16)));
+  }
   for (; i + 16 <= count; i += 16) {
     _mm512_storeu_ps(output + i, LogPs(_mm512_loadu_ps(input + i)));
   }
