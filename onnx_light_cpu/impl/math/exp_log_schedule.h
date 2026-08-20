@@ -8,7 +8,7 @@
 
 namespace onnx_light_cpu {
 
-inline constexpr ExecutionSchedule kExpExecutionSchedule{524288, 262144, 2};
+inline constexpr ExecutionSchedule kExpExecutionSchedule{65536, 32768, 2};
 inline constexpr ExecutionSchedule kLogExecutionSchedule{131072, 65536, 4};
 
 } // namespace onnx_light_cpu

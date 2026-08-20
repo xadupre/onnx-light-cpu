@@ -127,7 +127,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     from onnx_light_cpu import register_kernels
 
     register_kernels()
-    requested = _physical_threads() if args.threads == "physical" else int(args.threads)
+    physical_threads = _physical_threads()
+    requested = physical_threads if args.threads == "physical" else int(args.threads)
     rows: list[dict[str, Any]] = []
     actual_threads = None
     affinity_policy = None
@@ -149,9 +150,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             feeds = {"X": values}
             # Session construction and output allocation are intentionally
             # outside the timed call; dispatch and execution remain measured.
-            cpu = ReferenceEvaluator(
-                model.SerializeToString(), cpu_execution={"num_threads": requested}
-            )
+            cpu_execution: dict[str, Any] = {"num_threads": requested}
+            if requested > physical_threads:
+                cpu_execution["affinity_policy"] = "physical_then_smt"
+            cpu = ReferenceEvaluator(model.SerializeToString(), cpu_execution=cpu_execution)
             resolution = cpu.cpu_execution_resolution
             session_threads = resolution.effective_threads
             session_affinity = resolution.request.affinity_policy.name.lower()
@@ -208,7 +210,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "machine": platform.machine(),
             "cpu_model": _cpu_model(),
             "logical_cpus": os.cpu_count(),
-            "physical_cores": _physical_threads(),
+            "physical_cores": physical_threads,
             "affinity": (
                 sorted(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else []
             ),
