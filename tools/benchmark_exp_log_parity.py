@@ -5,31 +5,39 @@ from __future__ import annotations
 
 import argparse
 import gc
+import importlib.metadata
 import json
 import os
 import platform
+import shlex
 import statistics
+import subprocess
 import sys
 import time
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 SIZES = (100, 1_000, 10_000, 100_000, 1_000_000, 4_194_304, 10_000_000, 100_000_000)
 THREAD_COUNTS = ("1", "2", "4", "physical")
 
 
-def _measure(function: Any, repeat: int, warmup: int) -> list[float]:
-    for _ in range(warmup):
-        function()
-    samples: list[float] = []
+def measure_alternating(
+    functions: Sequence[Callable[[], Any]], repeat: int, warmup: int
+) -> tuple[list[float], ...]:
+    for iteration in range(warmup):
+        for offset in range(len(functions)):
+            functions[(iteration + offset) % len(functions)]()
+    samples: tuple[list[float], ...] = tuple([] for _ in functions)
     enabled = gc.isenabled()
     gc.disable()
     try:
-        for _ in range(repeat):
-            start = time.perf_counter_ns()
-            function()
-            samples.append((time.perf_counter_ns() - start) / 1e9)
+        for iteration in range(repeat):
+            for offset in range(len(functions)):
+                index = (iteration + offset) % len(functions)
+                start = time.perf_counter_ns()
+                functions[index]()
+                samples[index].append((time.perf_counter_ns() - start) / 1e9)
     finally:
         if enabled:
             gc.enable()
@@ -45,6 +53,54 @@ def _physical_threads() -> int:
     return len(cores) or max(1, os.cpu_count() or 1)
 
 
+def _cpu_model() -> str:
+    cpuinfo = Path("/proc/cpuinfo")
+    if cpuinfo.exists():
+        for line in cpuinfo.read_text(encoding="utf-8").splitlines():
+            if line.startswith(("model name", "Model")) and ":" in line:
+                return line.split(":", 1)[1].strip()
+    return platform.processor() or "unknown"
+
+
+def _command_output(command: Sequence[str]) -> str:
+    try:
+        output = subprocess.run(command, check=True, capture_output=True, text=True).stdout
+    except (OSError, subprocess.CalledProcessError):
+        return "unknown"
+    return output.splitlines()[0] if output else "unknown"
+
+
+def _package_versions() -> dict[str, str]:
+    versions = {}
+    for package in ("numpy", "onnx-light", "onnx-light-cpu", "onnxruntime"):
+        try:
+            versions[package] = importlib.metadata.version(package)
+        except importlib.metadata.PackageNotFoundError:
+            versions[package] = "not installed"
+    return versions
+
+
+def summarize(results: Sequence[dict[str, Any]]) -> dict[str, Any]:
+    speedups = [float(result["speedup"]) for result in results]
+    large_model_speedups = {
+        str(result["operator"]): float(result["speedup"])
+        for result in results
+        if result["size"] == 4_194_304
+    }
+    median = statistics.median(speedups)
+    minimum = min(speedups)
+    large_models_passed = (
+        set(large_model_speedups) == {"Exp", "Log"} and min(large_model_speedups.values()) >= 0.95
+    )
+    return {
+        "passed": median >= 1.0 and minimum >= 0.9 and large_models_passed,
+        "thresholds": {"median": 1.0, "minimum": 0.9, "large_model": 0.95},
+        "median_speedup": median,
+        "minimum_speedup": minimum,
+        "large_model_speedups": large_model_speedups,
+    }
+
+
 def run(args: argparse.Namespace) -> dict[str, Any]:
     import numpy as np
     import onnxruntime
@@ -55,6 +111,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     register_kernels()
     requested = _physical_threads() if args.threads == "physical" else int(args.threads)
     rows: list[dict[str, Any]] = []
+    actual_threads = None
     for operator in ("Exp", "Log"):
         for size in args.sizes:
             values = np.linspace(-8, 8, size, dtype=np.float32)
@@ -74,11 +131,20 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             # Session construction and output allocation are intentionally
             # outside the timed call; dispatch and execution remain measured.
             cpu = ReferenceEvaluator(
-                model.SerializeToString(), cpu_execution={"num_threads": requested}
+                model.SerializeToString(),
+                cpu_execution={"num_threads": requested, "affinity_policy": "none"},
             )
+            session_threads = cpu.cpu_execution_resolution.effective_threads
+            if actual_threads is None:
+                actual_threads = session_threads
+            elif actual_threads != session_threads:
+                raise RuntimeError(
+                    "onnx-light resolved inconsistent participant counts across sessions."
+                )
             options = onnxruntime.SessionOptions()
             options.intra_op_num_threads = requested
             options.inter_op_num_threads = 1
+            options.execution_mode = onnxruntime.ExecutionMode.ORT_SEQUENTIAL
             ort = onnxruntime.InferenceSession(
                 model.SerializeToString(),
                 sess_options=options,
@@ -92,8 +158,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 return session.run(None, current_feeds)[0]
 
             np.testing.assert_allclose(cpu_run(), ort_run(), rtol=2e-5, atol=2e-6)
-            cpu_samples = _measure(cpu_run, args.repeat, args.warmup)
-            ort_samples = _measure(ort_run, args.repeat, args.warmup)
+            cpu_samples, ort_samples = measure_alternating(
+                (cpu_run, ort_run), args.repeat, args.warmup
+            )
             cpu_median = statistics.median(cpu_samples)
             ort_median = statistics.median(ort_samples)
             rows.append(
@@ -105,25 +172,42 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     "ort_samples_seconds": ort_samples,
                     "cpu_median_seconds": cpu_median,
                     "ort_median_seconds": ort_median,
-                    "speedup": cpu_median / ort_median if ort_median else float("inf"),
+                    "speedup": ort_median / cpu_median if cpu_median else float("inf"),
                     "allocation_and_dispatch_included": True,
+                    "sample_order": "alternating; onnx-light-cpu first on even samples",
                 }
             )
-    return {
+    if actual_threads is None:
+        raise RuntimeError("No benchmark cases were selected.")
+    report = {
         "metadata": {
             "timestamp_utc": datetime.now(UTC).isoformat(),
+            "git_revision": _command_output(("git", "rev-parse", "HEAD")),
             "platform": platform.platform(),
             "machine": platform.machine(),
+            "cpu_model": _cpu_model(),
             "logical_cpus": os.cpu_count(),
+            "physical_cores": _physical_threads(),
             "affinity": (
                 sorted(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else []
             ),
             "requested_threads": requested,
+            "actual_threads": actual_threads,
+            "affinity_policy": "none",
             "configured_thread_counts": THREAD_COUNTS,
             "compiler_flags": os.environ.get("CXXFLAGS", ""),
+            "compiler": _command_output(
+                (*shlex.split(os.environ.get("CXX", "c++")), "--version")
+            ),
+            "python": platform.python_version(),
+            "versions": _package_versions(),
+            "ort_execution_mode": "sequential",
+            "ort_inter_op_threads": 1,
         },
         "results": rows,
     }
+    report["summary"] = summarize(rows)
+    return report
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -133,6 +217,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--repeat", type=int, default=7)
     parser.add_argument("--warmup", type=int, default=3)
     parser.add_argument("--output", type=Path, default=Path("exp_log_parity_results.json"))
+    parser.add_argument(
+        "--enforce", action="store_true", help="Exit nonzero when the parity gate fails."
+    )
     args = parser.parse_args(argv)
     args.sizes = tuple(args.sizes or SIZES)
     if args.repeat < 1 or args.warmup < 0:
@@ -152,7 +239,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             f"speedup={row['speedup']:.3f}x"
         )
     print(f"raw results: {args.output}")
-    return 0
+    print(json.dumps(report["summary"], indent=2))
+    return int(args.enforce and not report["summary"]["passed"])
 
 
 if __name__ == "__main__":
