@@ -609,38 +609,32 @@ void PersistCalibrationEvidence(const TreeEnsembleCalibrationReport &report,
   if (!destination.parent_path().empty()) {
     std::filesystem::create_directories(destination.parent_path());
   }
-  try {
-    std::ofstream stream(temporary, std::ios::binary | std::ios::trunc);
-    if (!stream) {
-      throw std::runtime_error("unable to open temporary evidence file");
-    }
-    stream << "onnx_light_cpu_tree_calibration_v1\n"
-           << std::quoted(report.key.processor) << ' ' << report.key.threads << ' '
-           << std::quoted(report.key.model_digest) << '\n';
-    WritePolicy(stream, report.selected_policy);
-    stream << report.evidence.size() << '\n' << std::setprecision(17);
-    for (const TreeEnsembleCalibrationEvidence &evidence : report.evidence) {
-      stream << std::quoted(evidence.candidate) << ' ' << static_cast<int>(evidence.stage) << ' '
-             << evidence.correct << ' ' << evidence.selected << ' ' << evidence.median_ns << ' '
-             << evidence.dispersion_ns << ' ' << std::quoted(evidence.rejected_reason) << ' '
-             << evidence.samples_ns.size();
-      for (double sample : evidence.samples_ns) {
-        stream << ' ' << sample;
-      }
-      stream << '\n';
-      WritePolicy(stream, evidence.policy);
-    }
-    stream.flush();
-    if (!stream) {
-      throw std::runtime_error("unable to write calibration evidence");
-    }
-    stream.close();
-    std::filesystem::rename(temporary, destination);
-  } catch (...) {
-    std::error_code ignored;
-    std::filesystem::remove(temporary, ignored);
-    throw;
+  std::ofstream stream(temporary, std::ios::binary | std::ios::trunc);
+  if (!stream) {
+    throw std::runtime_error("unable to open temporary evidence file");
   }
+  stream << "onnx_light_cpu_tree_calibration_v1\n"
+         << std::quoted(report.key.processor) << ' ' << report.key.threads << ' '
+         << std::quoted(report.key.model_digest) << '\n';
+  WritePolicy(stream, report.selected_policy);
+  stream << report.evidence.size() << '\n' << std::setprecision(17);
+  for (const TreeEnsembleCalibrationEvidence &evidence : report.evidence) {
+    stream << std::quoted(evidence.candidate) << ' ' << static_cast<int>(evidence.stage) << ' '
+           << evidence.correct << ' ' << evidence.selected << ' ' << evidence.median_ns << ' '
+           << evidence.dispersion_ns << ' ' << std::quoted(evidence.rejected_reason) << ' '
+           << evidence.samples_ns.size();
+    for (double sample : evidence.samples_ns) {
+      stream << ' ' << sample;
+    }
+    stream << '\n';
+    WritePolicy(stream, evidence.policy);
+  }
+  stream.flush();
+  if (!stream) {
+    throw std::runtime_error("unable to write calibration evidence");
+  }
+  stream.close();
+  std::filesystem::rename(temporary, destination);
 }
 
 } // namespace
