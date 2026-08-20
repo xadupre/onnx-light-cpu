@@ -12,6 +12,7 @@ _ROOT = Path(__file__).resolve().parents[2]
 def test_private_parallel_for_is_absent():
     assert not (_ROOT / "onnx_light_cpu" / "impl" / "parallel_for.h").exists()
     assert not (_ROOT / "onnx_light_cpu" / "impl" / "parallel_for.cc").exists()
+    assert not (_ROOT / "onnx_light_cpu" / "kernels" / "session_executor_adapter.h").exists()
 
 
 def test_private_scheduler_controls_are_absent():
