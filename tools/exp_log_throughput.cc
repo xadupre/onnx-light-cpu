@@ -109,7 +109,7 @@ int main(int argc, char **argv) {
   std::printf("timestamp=steady  cpu_model=%s  logical_cpus=%u  physical_cores=%u\n",
               CpuModel().c_str(), std::thread::hardware_concurrency(),
               static_cast<unsigned>(PhysicalCores()));
-  std::printf("compiler=%s  cxx=%ld  isa=%s  samples=%zu  configured_threads=1,2,4,physical\n",
+  std::printf("compiler=%s  cxx=%ld  isa=%s  samples=%zu  standalone_threads=1\n",
 #if defined(__clang__)
               "clang",
 #elif defined(__GNUC__)
@@ -127,7 +127,7 @@ int main(int argc, char **argv) {
     for (const auto &entry :
          {std::pair<const char *, std::vector<double>>{"Exp", exp}, {"Log", log}}) {
       const auto [median, iqr] = Summary(entry.second);
-      std::printf("%s,%zu,%.9g,%.9g,not_recorded\n", entry.first, size, median, iqr);
+      std::printf("%s,%zu,%.9g,%.9g,nan\n", entry.first, size, median, iqr);
     }
   }
   return 0;

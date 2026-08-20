@@ -105,7 +105,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     "ort_samples_seconds": ort_samples,
                     "cpu_median_seconds": cpu_median,
                     "ort_median_seconds": ort_median,
-                    "speedup": ort_median / cpu_median if cpu_median else float("inf"),
+                    "speedup": cpu_median / ort_median if ort_median else float("inf"),
                     "allocation_and_dispatch_included": True,
                 }
             )
