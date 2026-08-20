@@ -856,13 +856,7 @@ TreeEnsembleCalibrationReport TreeEnsembleTuningRegistry::CalibrateExact(
       break;
     }
   }
-  report.changed =
-      report.selected_policy.regions != fallback.regions ||
-      report.selected_policy.layout != fallback.layout ||
-      report.selected_policy.membership_linear_limit != fallback.membership_linear_limit ||
-      report.selected_policy.membership_bitset_range_limit !=
-          fallback.membership_bitset_range_limit ||
-      report.selected_policy.traversal_prefetch_distance != fallback.traversal_prefetch_distance;
+  report.changed = !(report.selected_policy == fallback);
 
   if (!options.evidence_path.empty()) {
     PersistCalibrationEvidence(report, options.evidence_path);
