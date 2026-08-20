@@ -80,6 +80,12 @@ std::int32_t IntegerDotU8S8Avx2(const std::uint8_t *ua, const std::int8_t *sb, s
 // The 2x2 output micro-kernel reuses loaded A and B vectors across outputs.
 void IntegerMatMulU8S8Avx2(const std::uint8_t *a, const std::int8_t *b, std::int32_t *c,
                            std::int64_t rows, std::int64_t cols, std::int64_t depth);
+
+// AVX2 requantization epilogues for contiguous INT32 accumulators.
+void RequantizeInt32ToInt8Avx2(const std::int32_t *src, std::int8_t *dst, std::int64_t count,
+                               float scale, std::int32_t zero_point);
+void RequantizeInt32ToUint8Avx2(const std::int32_t *src, std::uint8_t *dst, std::int64_t count,
+                                float scale, std::int32_t zero_point);
 #endif
 
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512VNNI

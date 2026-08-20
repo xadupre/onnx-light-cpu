@@ -9,6 +9,8 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <limits>
 #include <vector>
@@ -22,6 +24,15 @@ rt_ns::KernelContext MakeCtx() { return rt_ns::KernelContext(rt_ns::OpsetId(std:
 template <typename T>
 rt_ns::Tensor Tensor(const char *name, const rt_ns::Shape &shape, std::vector<T> values) {
   return rt_ns::Tensor::From<T>(name, shape, values);
+}
+
+template <typename T> T RequantizeReference(int32_t accumulator, float scale, int32_t zero_point) {
+  const double rounded =
+      std::nearbyint(static_cast<double>(accumulator) * static_cast<double>(scale));
+  const double shifted = rounded + static_cast<double>(zero_point);
+  const double clamped = std::clamp(shifted, static_cast<double>(std::numeric_limits<T>::min()),
+                                    static_cast<double>(std::numeric_limits<T>::max()));
+  return static_cast<T>(clamped);
 }
 
 TEST(OnnxLightMatMulIntegerKernel, MixedSignedInputsAndPerAxisZeroPoints) {
@@ -112,6 +123,42 @@ TEST(OnnxLightQLinearMatMulKernel, RejectsInvalidScaleAndZeroPointTypes) {
   EXPECT_THROW(kernel(a, one, zero, b, one, zero, zero_scale, zero), std::invalid_argument);
   EXPECT_THROW(kernel(a, negative_scale, zero, b, one, zero, one, zero), std::invalid_argument);
   EXPECT_THROW(kernel(a, one, uzero, b, one, zero, one, zero), std::invalid_argument);
+}
+
+TEST(OnnxLightQLinearMatMulKernel, ContiguousPathMatchesReferenceAndBatchBroadcast) {
+  onnx_light_cpu::QLinearMatMulKernel kernel(MakeCtx());
+  const auto a = Tensor<std::int8_t>("a", {2, 3, 5},
+                                     {1,  -2, 7,  12, -6, 3, 4,  -5, 9,  2, -8, 5,  6, -1, 10,
+                                      -4, 11, -7, 8,  0,  2, -3, 14, -9, 1, 6,  -5, 4, 7,  -2});
+  const auto b = Tensor<std::int8_t>(
+      "b", {1, 5, 4}, {3, -4, 2, 5, -6, 1, 7, -3, 4, 8, -2, 6, -5, 9, 0, 1, 2, -7, 3, 4});
+  const auto scale_a = Tensor<float>("a_scale", {}, {0.5f});
+  const auto scale_b = Tensor<float>("b_scale", {}, {0.25f});
+  const auto scale_y = Tensor<float>("y_scale", {}, {0.2f});
+  const auto zp_a = Tensor<std::int8_t>("a_zero", {}, {2});
+  const auto zp_b = Tensor<std::int8_t>("b_zero", {}, {-3});
+  const auto zp_y = Tensor<std::int8_t>("y_zero", {}, {4});
+
+  const auto y = kernel(a, scale_a, zp_a, b, scale_b, zp_b, scale_y, zp_y);
+  ASSERT_EQ(y.shape, (rt_ns::Shape{2, 3, 4}));
+
+  const float combined_scale = (0.5f * 0.25f) / 0.2f;
+  std::vector<std::int8_t> expected(static_cast<std::size_t>(2 * 3 * 4));
+  for (int64_t batch = 0; batch < 2; ++batch) {
+    for (int64_t row = 0; row < 3; ++row) {
+      for (int64_t column = 0; column < 4; ++column) {
+        int32_t accumulator = 0;
+        for (int64_t depth = 0; depth < 5; ++depth) {
+          const int32_t av = static_cast<int32_t>(a.AsInt8()[batch * 15 + row * 5 + depth]);
+          const int32_t bv = static_cast<int32_t>(b.AsInt8()[depth * 4 + column]);
+          accumulator += (av - 2) * (bv + 3);
+        }
+        expected[static_cast<std::size_t>(batch * 12 + row * 4 + column)] =
+            RequantizeReference<std::int8_t>(accumulator, combined_scale, 4);
+      }
+    }
+  }
+  EXPECT_EQ(std::vector<std::int8_t>(y.AsInt8(), y.AsInt8() + expected.size()), expected);
 }
 
 } // namespace
