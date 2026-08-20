@@ -499,6 +499,24 @@ per-participant workspace. Hybrid processors require topology-aware worker
 selection; calibration results from one P/E-core policy are not reused under
 another policy.
 
+PR07 advanced candidates
+------------------------
+
+The prepared plan now exposes bounded candidates for compact 32-bit AoS, split
+SoA, hit-rate-guided preorder, stump and symmetric traversal, four-row
+interleaving, sparse targets, prefetch distances, and prepared float16 splits.
+The ONNX Runtime-style evaluator remains the portable default. Advanced
+policies are captured only after calibration proves an end-to-end win on every
+required repeat and passes typed correctness, shifted-input correctness and
+latency, declared workspace, prepared-storage, and observed peak-memory gates.
+Later calibration stages compose with earlier winners instead of resetting
+them.
+
+Float16 traversal prepares exactly rounded binary16 split values and passes the
+complete v5 corpus, including rounding boundaries. It remains an internal
+correctness and regression result and is not included in ONNX Runtime parity
+claims because ONNX Runtime has no equivalent version-5 CPU kernel.
+
 Remaining pull-request sequence
 -------------------------------
 
@@ -560,7 +578,8 @@ Remaining pull-request sequence
        retains every priority profile. Selection and overrides are inspectable
        through the existing tuning APIs.
      - PR05
-     - Implemented in this pull request.
+     - `Implemented in #318
+       <https://github.com/xadupre/onnx-light-cpu/pull/318>`_
    * - Trees PR07
      - Advanced layouts, traversal, and float16.
      - Index AoS, SoA, hit-rate layout, stump, symmetric-tree,
@@ -569,7 +588,7 @@ Remaining pull-request sequence
        distribution-shift, and memory gates. General trees retain the
        ONNX Runtime-style portable evaluator.
      - PR05, PR06
-     - Pending
+     - Implemented in this pull request.
    * - Trees PR08
      - Final parity gate.
      - Float32/float64 median end-to-end performance is at least ``1.0x`` ONNX
