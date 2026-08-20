@@ -442,6 +442,7 @@ TEST(TreeEnsembleReference, CalibrationRejectsInvalidCandidatesAndPersistsEviden
   std::ifstream second_stream(evidence_path);
   const std::string second((std::istreambuf_iterator<char>(second_stream)),
                            std::istreambuf_iterator<char>());
+  second_stream.close();
   EXPECT_EQ(second, first);
 
   const auto inspection = registry.InspectExact(key_plan.model_key());
