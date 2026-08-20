@@ -15,7 +15,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Sequence
 
-
 SIZES = (100, 1_000, 10_000, 100_000, 1_000_000, 4_194_304, 10_000_000, 100_000_000)
 THREAD_COUNTS = ("1", "2", "4", "physical")
 
@@ -67,15 +66,24 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 ir_version=13,
             )
             feeds = {"X": values}
-            cpu = ReferenceEvaluator(model.SerializeToString(), cpu_execution={"num_threads": requested})
+            cpu = ReferenceEvaluator(
+                model.SerializeToString(), cpu_execution={"num_threads": requested}
+            )
             options = onnxruntime.SessionOptions()
             options.intra_op_num_threads = requested
             options.inter_op_num_threads = 1
             ort = onnxruntime.InferenceSession(
-                model.SerializeToString(), sess_options=options, providers=["CPUExecutionProvider"]
+                model.SerializeToString(),
+                sess_options=options,
+                providers=["CPUExecutionProvider"],
             )
-            cpu_run = lambda: cpu.run(None, feeds)[0]
-            ort_run = lambda: ort.run(None, feeds)[0]
+
+            def cpu_run(session=cpu, current_feeds=feeds):
+                return session.run(None, current_feeds)[0]
+
+            def ort_run(session=ort, current_feeds=feeds):
+                return session.run(None, current_feeds)[0]
+
             np.testing.assert_allclose(cpu_run(), ort_run(), rtol=2e-5, atol=2e-6)
             cpu_samples = _measure(cpu_run, args.repeat, args.warmup)
             ort_samples = _measure(ort_run, args.repeat, args.warmup)
@@ -100,7 +108,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "platform": platform.platform(),
             "machine": platform.machine(),
             "logical_cpus": os.cpu_count(),
-            "affinity": sorted(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else [],
+            "affinity": (
+                sorted(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else []
+            ),
             "requested_threads": requested,
             "configured_thread_counts": THREAD_COUNTS,
             "compiler_flags": os.environ.get("CXXFLAGS", ""),

@@ -51,8 +51,7 @@ std::string CpuModel() {
 }
 
 std::vector<std::size_t> Sizes() {
-  return {100, 1'000, 10'000, 100'000, 1'000'000, 4'194'304, 10'000'000,
-          100'000'000};
+  return {100, 1'000, 10'000, 100'000, 1'000'000, 4'194'304, 10'000'000, 100'000'000};
 }
 
 template <typename Function>
@@ -113,8 +112,8 @@ int main(int argc, char **argv) {
   for (const std::size_t size : Sizes()) {
     const auto exp = Measure(onnx_light_cpu::ExpFloat32, size, samples);
     const auto log = Measure(onnx_light_cpu::LogFloat32, size, samples);
-    for (const auto &entry : {std::pair<const char *, std::vector<double>>{"Exp", exp},
-                              {"Log", log}}) {
+    for (const auto &entry :
+         {std::pair<const char *, std::vector<double>>{"Exp", exp}, {"Log", log}}) {
       const double median = Median(entry.second);
       std::printf("%s,%zu,%.9g,%.9g,not_recorded\n", entry.first, size, median, Iqr(entry.second));
     }
