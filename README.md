@@ -82,9 +82,10 @@ ctest --test-dir build
 ```
 
 `onnx-light-cpu` does not own a thread pool. Direct standalone kernel calls run
-on the calling thread. Kernels registered with `onnx-light` split work through
-the session `CpuExecutor`, so thread count, affinity, spin policy, nesting, and
-inspection all come from the session execution policy.
+on the calling thread. Kernels registered with `onnx-light` use the session
+`CpuExecutor` already installed by `onnx-light` itself, so thread count,
+affinity, spin policy, nesting, and inspection all come from the session
+execution policy.
 
 ### AVX-512 support
 

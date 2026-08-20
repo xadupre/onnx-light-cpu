@@ -389,6 +389,9 @@ target_include_directories(lib_onnx_light_cpu PUBLIC
 )
 set_property(TARGET lib_onnx_light_cpu PROPERTY POSITION_INDEPENDENT_CODE ON)
 target_compile_features(lib_onnx_light_cpu PUBLIC cxx_std_20)
+if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
+  target_compile_definitions(lib_onnx_light_cpu PRIVATE ONNX_LIGHT_CPU_WITH_ONNX_LIGHT=1)
+endif()
 
 # Thread topology detection and public affinity helpers use the platform
 # threading library, but kernel scheduling is owned by onnx-light.
@@ -659,6 +662,11 @@ if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
   else()
     find_package(onnx_light CONFIG REQUIRED)
   endif()
+
+  # When the optional onnx-light integration is enabled, ``execution.cc`` can
+  # observe the current session ``CpuExecutor`` directly. Keep that dependency
+  # private so standalone builds remain unchanged when the integration is off.
+  target_link_libraries(lib_onnx_light_cpu PRIVATE onnx_light::lib_onnx_core)
 
   file(GLOB CPU_KERNEL_REGISTRATION_SOURCES CONFIGURE_DEPENDS
       "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/kernels/*.cc"

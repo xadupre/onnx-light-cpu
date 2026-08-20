@@ -194,9 +194,10 @@ promotion, batched matrix multiplication, multidirectional batch broadcasting,
 transpose-aware matrix dimensions, empty dimensions, and plan-owned constant B
 tensors. ``StridedBatchedGemm`` and ``GroupedGemm`` expose uniform and
 heterogeneous batches respectively. Small independent products can be
-scheduled across the injected session executor; products with useful internal
-M/N parallelism keep the batch loop serial. Plans derive ``MC``, ``NC``, and
-``KC`` from deterministic CPUID cache descriptors on x86, align them to
+scheduled across the current session ``CpuExecutor``; products with useful
+internal M/N parallelism keep the batch loop serial. Plans derive ``MC``,
+``NC``, and ``KC`` from deterministic CPUID cache descriptors on x86, align
+them to
 register tiles, then reduce ``MC``/``NC`` when necessary to expose enough work
 for the available threads. The selected values and ``useful_threads`` estimate
 drive execution rather than being descriptive metadata.
