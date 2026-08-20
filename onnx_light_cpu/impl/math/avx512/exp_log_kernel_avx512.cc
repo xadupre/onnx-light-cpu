@@ -13,7 +13,17 @@ namespace onnx_light_cpu {
 namespace {
 
 constexpr float kExpHi = 88.3762626647949f;
-constexpr float kExpLo = -88.3762626647949f;
+// True float32 underflow boundary (half of the smallest subnormal, i.e.
+// -150 * ln(2)); see exp_log_kernel.cc for the full rationale. Range
+// reduction below this bound uses a split power-of-two reconstruction so
+// subnormal results round correctly instead of flushing to zero early.
+constexpr float kExpLo = -103.97208f;
+
+// Smallest positive normal float32 (bit pattern 0x00800000) and the exact
+// 2^23 scale factor used to normalize positive Log subnormals without
+// rounding error; see exp_log_kernel.cc for the full rationale.
+constexpr float kSmallestNormal = 1.17549435e-38f;
+constexpr float kSubnormalScale = 8388608.0f;
 constexpr float kLog2ef = 1.44269504088896341f;
 constexpr float kExpC1 = 0.693359375f;
 constexpr float kExpC2 = -2.12194440e-4f;
@@ -103,10 +113,17 @@ __m512 ExpPs(__m512 x) {
   polynomial = _mm512_add_ps(_mm512_mul_ps(polynomial, squared), reduced);
   polynomial = _mm512_add_ps(polynomial, one);
 
+  // Reconstruct 2^n as two normal-range factors (see exp_log_kernel.cc) so
+  // subnormal exponents down to -149 round correctly.
   exponent_int = _mm512_cvttps_epi32(exponent);
-  exponent_int = _mm512_add_epi32(exponent_int, _mm512_set1_epi32(0x7f));
-  exponent_int = _mm512_slli_epi32(exponent_int, 23);
-  __m512 result = _mm512_mul_ps(polynomial, _mm512_castsi512_ps(exponent_int));
+  const __m512i exponent_n1 = _mm512_srai_epi32(exponent_int, 1);
+  const __m512i exponent_n2 = _mm512_sub_epi32(exponent_int, exponent_n1);
+  const __m512i pow1 =
+      _mm512_slli_epi32(_mm512_add_epi32(exponent_n1, _mm512_set1_epi32(0x7f)), 23);
+  const __m512i pow2 =
+      _mm512_slli_epi32(_mm512_add_epi32(exponent_n2, _mm512_set1_epi32(0x7f)), 23);
+  __m512 result = _mm512_mul_ps(polynomial, _mm512_castsi512_ps(pow1));
+  result = _mm512_mul_ps(result, _mm512_castsi512_ps(pow2));
 
   result = Select(under, _mm512_setzero_ps(), result);
   result = Select(over, _mm512_set1_ps(std::numeric_limits<float>::infinity()), result);
@@ -123,7 +140,12 @@ __m512 LogPs(__m512 x) {
   const __mmask16 is_zero = _mm512_cmp_ps_mask(x, zero, _CMP_EQ_OQ);
   const __mmask16 is_infinite = _mm512_cmp_ps_mask(x, positive_infinity, _CMP_EQ_OQ);
 
-  __m512 reduced = _mm512_max_ps(x, _mm512_castsi512_ps(_mm512_set1_epi32(0x00800000)));
+  // Normalize positive subnormals instead of clamping them to the smallest
+  // normal float (see exp_log_kernel.cc) so distinct subnormals still yield
+  // distinct, correct results.
+  const __mmask16 is_subnormal = _mm512_cmp_ps_mask(x, _mm512_set1_ps(kSmallestNormal), _CMP_LT_OQ);
+  const __m512 scaled = _mm512_mul_ps(x, _mm512_set1_ps(kSubnormalScale));
+  __m512 reduced = Select(is_subnormal, scaled, x);
   __m512i exponent_int = _mm512_srli_epi32(_mm512_castps_si512(reduced), 23);
   __m512i reduced_bits = _mm512_and_si512(_mm512_castps_si512(reduced),
                                           _mm512_set1_epi32(static_cast<int>(~0x7f800000u)));
@@ -131,6 +153,7 @@ __m512 LogPs(__m512 x) {
   reduced = _mm512_castsi512_ps(reduced_bits);
   exponent_int = _mm512_sub_epi32(exponent_int, _mm512_set1_epi32(0x7f));
   __m512 exponent = _mm512_add_ps(_mm512_cvtepi32_ps(exponent_int), one);
+  exponent = _mm512_sub_ps(exponent, _mm512_maskz_mov_ps(is_subnormal, _mm512_set1_ps(23.0f)));
 
   const __mmask16 normalize = _mm512_cmp_ps_mask(reduced, _mm512_set1_ps(kSqrtHalf), _CMP_LT_OQ);
   const __m512 normalized_part = _mm512_maskz_mov_ps(normalize, reduced);

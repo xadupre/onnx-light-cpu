@@ -3,7 +3,7 @@ Exp and Log ONNX Runtime Parity Roadmap
 
 :Date: 2026-08
 
-**in progress** (ExpLog PR01 benchmark and numerical gate established)
+**in progress** (ExpLog PR02 full-domain SIMD subnormal semantics corrected)
 
 Objective
 ---------
@@ -92,24 +92,31 @@ translation unit, selected only when both features are available. Enabling
 ``-mfma`` for the complete baseline library is not acceptable because runtime
 dispatch must keep binaries usable on AVX2 processors without FMA.
 
-Incorrect SIMD subnormal behavior
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Incorrect SIMD subnormal behavior (fixed in ExpLog PR02)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-The current SIMD ``Exp`` clamps its lower range near ``-88.38`` and constructs
+The SIMD ``Exp`` used to clamp its lower range near ``-88.38`` and construct
 one exponent scale from the biased IEEE exponent field. Values such as
-``exp(-90)`` and ``exp(-100)`` incorrectly become zero even though the
+``exp(-90)`` and ``exp(-100)`` incorrectly became zero even though the
 float32 result is subnormal. The true non-zero range extends to approximately
-``-103.97``.
+``-103.97``. ExpLog PR02 lowered the clamp to that true underflow boundary and
+reconstructs ``2^n`` as two normal-range factors so exponents down to ``-149``
+still round to the correct subnormal result.
 
-The SIMD ``Log`` path clamps every positive subnormal to the smallest positive
-normal value before exponent extraction. A full SIMD vector therefore returns
-the same result for distinct subnormal inputs. Scalar tail elements call
-``std::log`` and return the correct values, so results currently depend on
-array length and lane position.
+The SIMD ``Log`` path used to clamp every positive subnormal to the smallest
+positive normal value before exponent extraction. A full SIMD vector
+therefore returned the same result for distinct subnormal inputs, while
+scalar tail elements called ``std::log`` and returned the correct values, so
+results depended on array length and lane position. ExpLog PR02 normalizes
+positive subnormals by an exact ``2^23`` scale and corrects the extracted
+exponent instead of clamping, so vectorized, scalar, and tail results now
+agree.
 
-Existing tests cover ordinary ranges and special values but do not exercise
-these vectorized subnormal cases. Correctness must be fixed before comparing
-alternative approximations.
+Existing tests cover ordinary ranges and special values; the differential
+subnormal corpus added in ExpLog PR01/PR02 (``ExpFloat32.VectorSubnormalRange``
+and ``LogFloat32.PositiveSubnormalCorpus`` in
+``unittests/cc/test_exp_log_kernel.cc``) now passes and is the regression gate
+before comparing alternative approximations.
 
 Uncalibrated shared scheduling cost
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -167,9 +174,10 @@ with raw samples, affinity, thread configuration, and environment metadata.
 Build the isolated runner with
 ``cmake -DONNX_LIGHT_CPU_BUILD_BENCHMARKS=ON`` and select a session thread
 count with ``--threads 1``, ``--threads 2``, ``--threads 4``, or
-``--threads physical`` in the end-to-end runner. The disabled subnormal tests
-in ``unittests/cc/test_exp_log_kernel.cc`` are the PR02 numerical gate and
-document the currently known SIMD failures without changing production code.
+``--threads physical`` in the end-to-end runner. The subnormal tests in
+``unittests/cc/test_exp_log_kernel.cc`` (``ExpFloat32.VectorSubnormalRange``
+and ``LogFloat32.PositiveSubnormalCorpus``) are the PR02 numerical gate and
+now pass against the corrected production code.
 
 Accuracy is measured in ULPs for finite float32 results, with explicit
 classification checks for zero, subnormal, normal, infinity, and NaN.
@@ -249,7 +257,7 @@ Remaining pull-request sequence
        subnormals; scalar and every SIMD width/tail satisfy the same
        classification and ULP contract.
      - PR01
-     - Pending
+     - Complete
    * - ExpLog PR03
      - AVX2+FMA float32 ``Exp`` kernel.
      - Runtime feature dispatch selects a dedicated FMA unit. Isolated
