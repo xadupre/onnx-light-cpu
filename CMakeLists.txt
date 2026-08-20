@@ -550,6 +550,10 @@ endif()
 # ``Abs`` runs the accelerated kernel. Requires the onnx-light C++ package and
 # is therefore opt-in via ONNX_LIGHT_CPU_WITH_ONNX_LIGHT.
 if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
+  set(_onnx_light_imported_library_type UNKNOWN)
+  if(WIN32)
+    set(_onnx_light_imported_library_type SHARED)
+  endif()
   if(ONNX_LIGHT_CPU_ONNX_LIGHT_SOURCE_DIR)
     if(NOT ONNX_LIGHT_CPU_ONNX_LIGHT_LIBRARY OR
        NOT ONNX_LIGHT_CPU_ONNX_LIGHT_PROTO_LIBRARY)
@@ -559,10 +563,12 @@ if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
           "ONNX_LIGHT_CPU_ONNX_LIGHT_SOURCE_DIR. They must name the exact "
           "shared libraries loaded by onnx-light's Python runtime.")
     endif()
-    add_library(onnx_light::lib_onnx_proto UNKNOWN IMPORTED GLOBAL)
+    add_library(onnx_light::lib_onnx_proto
+        ${_onnx_light_imported_library_type} IMPORTED GLOBAL)
     set_target_properties(onnx_light::lib_onnx_proto PROPERTIES
         IMPORTED_LOCATION "${ONNX_LIGHT_CPU_ONNX_LIGHT_PROTO_LIBRARY}")
-    add_library(onnx_light::lib_onnx_core UNKNOWN IMPORTED GLOBAL)
+    add_library(onnx_light::lib_onnx_core
+        ${_onnx_light_imported_library_type} IMPORTED GLOBAL)
     set_target_properties(onnx_light::lib_onnx_core PROPERTIES
         IMPORTED_LOCATION "${ONNX_LIGHT_CPU_ONNX_LIGHT_LIBRARY}"
         INTERFACE_INCLUDE_DIRECTORIES
@@ -597,11 +603,13 @@ if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
     if(_onnx_light_kernels_lib AND _onnx_light_backend_test_lib)
       list(GET _onnx_light_kernels_lib 0 _onnx_light_kernels_lib)
       list(GET _onnx_light_backend_test_lib 0 _onnx_light_backend_test_lib)
-      add_library(onnx_light::lib_onnx_kernels UNKNOWN IMPORTED GLOBAL)
+      add_library(onnx_light::lib_onnx_kernels
+          ${_onnx_light_imported_library_type} IMPORTED GLOBAL)
       set_target_properties(onnx_light::lib_onnx_kernels PROPERTIES
           IMPORTED_LOCATION "${_onnx_light_kernels_lib}"
           INTERFACE_LINK_LIBRARIES onnx_light::lib_onnx_core)
-      add_library(onnx_light::lib_onnx_backend_test UNKNOWN IMPORTED GLOBAL)
+      add_library(onnx_light::lib_onnx_backend_test
+          ${_onnx_light_imported_library_type} IMPORTED GLOBAL)
       set_target_properties(onnx_light::lib_onnx_backend_test PROPERTIES
           IMPORTED_LOCATION "${_onnx_light_backend_test_lib}"
           INTERFACE_LINK_LIBRARIES
