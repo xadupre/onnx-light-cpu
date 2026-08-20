@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "onnx_light_cpu/impl/execution.h"
 #include "onnx_light_cpu/impl/math/math_kernels.h"
 
 #include <gtest/gtest.h>
@@ -14,6 +15,21 @@
 #include <vector>
 
 namespace {
+
+struct InlineExecutor {
+  std::int64_t dispatches = 0;
+  std::int64_t blocks = 0;
+
+  static void Run(void *context, std::int64_t num_blocks, void *task_context,
+                  onnx_light_cpu::ExecutionBlockFn task) {
+    auto &self = *static_cast<InlineExecutor *>(context);
+    ++self.dispatches;
+    self.blocks = num_blocks;
+    for (std::int64_t block = 0; block < num_blocks; ++block) {
+      task(task_context, block);
+    }
+  }
+};
 
 // float16 <-> float32 helpers mirroring the reference implementation, used so
 // the tests can express expectations in float and compare the rounded result.
@@ -476,6 +492,27 @@ TEST(ExpLogParallel, LargeArrayMatchesStd) {
     const float ref = std::log(pos[i]);
     EXPECT_NEAR(out[i], ref, std::fabs(ref) * 1e-5f + 1e-6f) << "log at index " << i;
   }
+}
+
+TEST(ExpLogParallel, OperatorSpecificParticipantPolicy) {
+  InlineExecutor executor;
+  onnx_light_cpu::ExecutionExecutorView view{&executor, 8, &InlineExecutor::Run};
+  onnx_light_cpu::ExecutionExecutorScope scope(&view);
+  std::vector<float> input(524288, 1.0f);
+  std::vector<float> output(input.size());
+
+  onnx_light_cpu::ExpFloat32(input.data(), output.data(), input.size() - 1);
+  EXPECT_EQ(executor.dispatches, 0);
+  onnx_light_cpu::ExpFloat32(input.data(), output.data(), input.size());
+  EXPECT_EQ(executor.dispatches, 1);
+  EXPECT_EQ(executor.blocks, 2);
+
+  executor = {};
+  onnx_light_cpu::LogFloat32(input.data(), output.data(), 131071);
+  EXPECT_EQ(executor.dispatches, 0);
+  onnx_light_cpu::LogFloat32(input.data(), output.data(), 262144);
+  EXPECT_EQ(executor.dispatches, 1);
+  EXPECT_EQ(executor.blocks, 4);
 }
 
 } // namespace

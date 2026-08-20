@@ -90,4 +90,15 @@ TEST(Execution, SmallInjectedWorkRemainsInline) {
   EXPECT_EQ(executor.dispatches, 0);
 }
 
+TEST(Execution, NestedWorkRemainsInline) {
+  InlineExecutor executor;
+  ExecutionExecutorView view{&executor, 8, &InlineExecutor::Run};
+  {
+    ExecutionExecutorScope scope(&view);
+    ExecuteRanges(200000, 1.0,
+                  [&](int64_t, int64_t) { ExecuteRanges(200000, 1.0, [](int64_t, int64_t) {}); });
+  }
+  EXPECT_EQ(executor.dispatches, 1);
+}
+
 } // namespace

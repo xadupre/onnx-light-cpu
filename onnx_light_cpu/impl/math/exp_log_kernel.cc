@@ -17,6 +17,7 @@
 #include "onnx_light_cpu/impl/math/math_kernels.h"
 
 #include "onnx_light_cpu/impl/execution.h"
+#include "onnx_light_cpu/impl/math/exp_log_schedule.h"
 #include "onnx_light_cpu/impl/math/half_conversion.h"
 
 #include <cmath>
@@ -31,18 +32,6 @@
 #endif
 
 namespace onnx_light_cpu {
-
-// Relative per-element cost passed to ExecuteRanges for the Exp/Log kernels. These
-// evaluate a minimax polynomial (float32/float64) per element and are therefore
-// compute bound, so they benefit from threading on much smaller arrays than the
-// memory-bound Abs/Not kernels. A cost well above 1 lowers the parallel
-// threshold (~kExecutionGrainSize / cost elements) accordingly.
-inline constexpr double kExpLogCostPerElement = 20.0;
-
-// The float16 paths run the scalar std::exp/std::log per element (plus two
-// float16<->float32 conversions) with no SIMD, so they are the heaviest and use
-// an even higher cost to parallelize sooner.
-inline constexpr double kExpLogHalfCostPerElement = 40.0;
 
 namespace {
 
@@ -691,7 +680,7 @@ void ExpFloat32_Dispatch(const float *input, float *output, std::size_t count) {
 void ExpFloat32(const float *input, float *output, std::size_t count) {
   if (count == 0)
     return;
-  ExecuteRanges(static_cast<std::int64_t>(count), kExpLogCostPerElement,
+  ExecuteRanges(static_cast<std::int64_t>(count), kExpExecutionSchedule,
                 ExecutionSimdLanes<float>(), [input, output](std::int64_t begin, std::int64_t end) {
                   ExpFloat32_Dispatch(input + begin, output + begin,
                                       static_cast<std::size_t>(end - begin));
@@ -733,7 +722,7 @@ void LogFloat32_Dispatch(const float *input, float *output, std::size_t count) {
 void LogFloat32(const float *input, float *output, std::size_t count) {
   if (count == 0)
     return;
-  ExecuteRanges(static_cast<std::int64_t>(count), kExpLogCostPerElement,
+  ExecuteRanges(static_cast<std::int64_t>(count), kLogExecutionSchedule,
                 ExecutionSimdLanes<float>(), [input, output](std::int64_t begin, std::int64_t end) {
                   LogFloat32_Dispatch(input + begin, output + begin,
                                       static_cast<std::size_t>(end - begin));
@@ -767,7 +756,7 @@ void ExpFloat64(const double *input, double *output, std::size_t count) {
   if (count == 0)
     return;
   ExecuteRanges(
-      static_cast<std::int64_t>(count), kExpLogCostPerElement, ExecutionSimdLanes<double>(),
+      static_cast<std::int64_t>(count), kExpExecutionSchedule, ExecutionSimdLanes<double>(),
       [input, output](std::int64_t begin, std::int64_t end) {
         ExpFloat64_Dispatch(input + begin, output + begin, static_cast<std::size_t>(end - begin));
       });
@@ -800,7 +789,7 @@ void LogFloat64(const double *input, double *output, std::size_t count) {
   if (count == 0)
     return;
   ExecuteRanges(
-      static_cast<std::int64_t>(count), kExpLogCostPerElement, ExecutionSimdLanes<double>(),
+      static_cast<std::int64_t>(count), kLogExecutionSchedule, ExecutionSimdLanes<double>(),
       [input, output](std::int64_t begin, std::int64_t end) {
         LogFloat64_Dispatch(input + begin, output + begin, static_cast<std::size_t>(end - begin));
       });
@@ -809,7 +798,7 @@ void LogFloat64(const double *input, double *output, std::size_t count) {
 void ExpFloat16(const uint16_t *input, uint16_t *output, std::size_t count) {
   if (count == 0)
     return;
-  ExecuteRanges(static_cast<std::int64_t>(count), kExpLogHalfCostPerElement,
+  ExecuteRanges(static_cast<std::int64_t>(count), kExpExecutionSchedule,
                 [input, output](std::int64_t begin, std::int64_t end) {
                   for (std::int64_t i = begin; i < end; ++i) {
                     output[i] =
@@ -821,7 +810,7 @@ void ExpFloat16(const uint16_t *input, uint16_t *output, std::size_t count) {
 void LogFloat16(const uint16_t *input, uint16_t *output, std::size_t count) {
   if (count == 0)
     return;
-  ExecuteRanges(static_cast<std::int64_t>(count), kExpLogHalfCostPerElement,
+  ExecuteRanges(static_cast<std::int64_t>(count), kLogExecutionSchedule,
                 [input, output](std::int64_t begin, std::int64_t end) {
                   for (std::int64_t i = begin; i < end; ++i) {
                     output[i] =
