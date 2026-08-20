@@ -42,6 +42,10 @@ set(ONNX_LIGHT_CPU_ONNX_LIGHT_IMPLIB "" CACHE FILEPATH
     "Windows import library for ONNX_LIGHT_CPU_ONNX_LIGHT_LIBRARY.")
 set(ONNX_LIGHT_CPU_ONNX_LIGHT_PROTO_IMPLIB "" CACHE FILEPATH
     "Windows import library for ONNX_LIGHT_CPU_ONNX_LIGHT_PROTO_LIBRARY.")
+set(ONNX_LIGHT_CPU_ONNX_LIGHT_KERNELS_IMPLIB "" CACHE FILEPATH
+    "Windows import library for the onnx-light kernels runtime.")
+set(ONNX_LIGHT_CPU_ONNX_LIGHT_BACKEND_TEST_IMPLIB "" CACHE FILEPATH
+    "Windows import library for the onnx-light backend-test runtime.")
 option(ONNX_LIGHT_CPU_ENABLE_COVERAGE
        "Instrument the C++ targets for code coverage (GCC/Clang only)." OFF)
 
@@ -80,7 +84,7 @@ endif()
 
 include(GNUInstallDirs)
 
-# Threads: required by the header-only ParallelFor helper (std::thread).
+# Thread topology detection uses std::thread::hardware_concurrency().
 set(CMAKE_THREAD_PREFER_PTHREAD TRUE)
 set(THREADS_PREFER_PTHREAD_FLAG TRUE)
 find_package(Threads REQUIRED)
@@ -195,18 +199,6 @@ if(ONNX_LIGHT_CPU_HAVE_NEON_INTRINSICS AND NOT MSVC)
   set(CMAKE_REQUIRED_FLAGS "${_saved_required_flags}")
 else()
   set(ONNX_LIGHT_CPU_HAVE_NEON_DOTPROD_INTRINSICS FALSE)
-endif()
-
-# By default the runtime uses one logical processor per detected physical core;
-# the per-kernel cost model may use fewer participants. A build-time ceiling is
-# still available for constrained targets, but zero must not impose an
-# arbitrary machine-independent cap.
-set(ONNX_LIGHT_CPU_MAX_THREADS "0" CACHE STRING
-    "Maximum shared-pool thread count; 0 uses the detected hardware limit.")
-if(NOT ONNX_LIGHT_CPU_MAX_THREADS MATCHES "^(0|[1-9][0-9]*)$")
-  message(FATAL_ERROR
-      "ONNX_LIGHT_CPU_MAX_THREADS must be a non-negative integer, got "
-      "'${ONNX_LIGHT_CPU_MAX_THREADS}'.")
 endif()
 
 # The dedicated AVX-512 translation units are compiled with feature-specific
@@ -390,11 +382,9 @@ target_include_directories(lib_onnx_light_cpu PUBLIC
 )
 set_property(TARGET lib_onnx_light_cpu PROPERTY POSITION_INDEPENDENT_CODE ON)
 target_compile_features(lib_onnx_light_cpu PUBLIC cxx_std_20)
-target_compile_definitions(lib_onnx_light_cpu PUBLIC
-    ONNX_LIGHT_CPU_MAX_THREADS=${ONNX_LIGHT_CPU_MAX_THREADS})
 
-# The kernels dispatch large ranges through the ParallelFor helper, which uses
-# std::thread; link the platform threading library.
+# Thread topology detection and public affinity helpers use the platform
+# threading library, but kernel scheduling is owned by onnx-light.
 target_link_libraries(lib_onnx_light_cpu PUBLIC Threads::Threads)
 
 # Apply SIMD flags to the kernel library.
@@ -560,6 +550,10 @@ endif()
 # ``Abs`` runs the accelerated kernel. Requires the onnx-light C++ package and
 # is therefore opt-in via ONNX_LIGHT_CPU_WITH_ONNX_LIGHT.
 if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
+  set(_onnx_light_imported_library_type UNKNOWN)
+  if(WIN32)
+    set(_onnx_light_imported_library_type SHARED)
+  endif()
   if(ONNX_LIGHT_CPU_ONNX_LIGHT_SOURCE_DIR)
     if(NOT ONNX_LIGHT_CPU_ONNX_LIGHT_LIBRARY OR
        NOT ONNX_LIGHT_CPU_ONNX_LIGHT_PROTO_LIBRARY)
@@ -569,16 +563,23 @@ if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
           "ONNX_LIGHT_CPU_ONNX_LIGHT_SOURCE_DIR. They must name the exact "
           "shared libraries loaded by onnx-light's Python runtime.")
     endif()
-    add_library(onnx_light::lib_onnx_proto UNKNOWN IMPORTED GLOBAL)
+    add_library(onnx_light::lib_onnx_proto
+        ${_onnx_light_imported_library_type} IMPORTED GLOBAL)
     set_target_properties(onnx_light::lib_onnx_proto PROPERTIES
         IMPORTED_LOCATION "${ONNX_LIGHT_CPU_ONNX_LIGHT_PROTO_LIBRARY}")
-    add_library(onnx_light::lib_onnx_core UNKNOWN IMPORTED GLOBAL)
+    add_library(onnx_light::lib_onnx_core
+        ${_onnx_light_imported_library_type} IMPORTED GLOBAL)
     set_target_properties(onnx_light::lib_onnx_core PROPERTIES
         IMPORTED_LOCATION "${ONNX_LIGHT_CPU_ONNX_LIGHT_LIBRARY}"
         INTERFACE_INCLUDE_DIRECTORIES
             "${ONNX_LIGHT_CPU_ONNX_LIGHT_SOURCE_DIR}/onnx_light;${ONNX_LIGHT_CPU_ONNX_LIGHT_SOURCE_DIR}/onnx_light/onnx_helpers/include;${ONNX_LIGHT_CPU_ONNX_LIGHT_SOURCE_DIR}/onnx_light/onnx_proto"
         INTERFACE_LINK_LIBRARIES onnx_light::lib_onnx_proto)
     if(ONNX_LIGHT_CPU_ONNX_LIGHT_IMPLIB)
+      if(NOT ONNX_LIGHT_CPU_ONNX_LIGHT_PROTO_IMPLIB)
+        message(FATAL_ERROR
+            "ONNX_LIGHT_CPU_ONNX_LIGHT_PROTO_IMPLIB is required with "
+            "ONNX_LIGHT_CPU_ONNX_LIGHT_IMPLIB.")
+      endif()
       set_property(TARGET onnx_light::lib_onnx_core PROPERTY
           IMPORTED_IMPLIB "${ONNX_LIGHT_CPU_ONNX_LIGHT_IMPLIB}")
       set_property(TARGET onnx_light::lib_onnx_proto PROPERTY
@@ -602,15 +603,29 @@ if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
     if(_onnx_light_kernels_lib AND _onnx_light_backend_test_lib)
       list(GET _onnx_light_kernels_lib 0 _onnx_light_kernels_lib)
       list(GET _onnx_light_backend_test_lib 0 _onnx_light_backend_test_lib)
-      add_library(onnx_light::lib_onnx_kernels UNKNOWN IMPORTED GLOBAL)
+      add_library(onnx_light::lib_onnx_kernels
+          ${_onnx_light_imported_library_type} IMPORTED GLOBAL)
       set_target_properties(onnx_light::lib_onnx_kernels PROPERTIES
           IMPORTED_LOCATION "${_onnx_light_kernels_lib}"
           INTERFACE_LINK_LIBRARIES onnx_light::lib_onnx_core)
-      add_library(onnx_light::lib_onnx_backend_test UNKNOWN IMPORTED GLOBAL)
+      add_library(onnx_light::lib_onnx_backend_test
+          ${_onnx_light_imported_library_type} IMPORTED GLOBAL)
       set_target_properties(onnx_light::lib_onnx_backend_test PROPERTIES
           IMPORTED_LOCATION "${_onnx_light_backend_test_lib}"
           INTERFACE_LINK_LIBRARIES
               "onnx_light::lib_onnx_proto;onnx_light::lib_onnx_kernels")
+      if(WIN32)
+        if(NOT ONNX_LIGHT_CPU_ONNX_LIGHT_KERNELS_IMPLIB OR
+           NOT ONNX_LIGHT_CPU_ONNX_LIGHT_BACKEND_TEST_IMPLIB)
+          message(FATAL_ERROR
+              "The onnx-light kernels and backend-test Windows import "
+              "libraries are required for source-runtime integration.")
+        endif()
+        set_property(TARGET onnx_light::lib_onnx_kernels PROPERTY
+            IMPORTED_IMPLIB "${ONNX_LIGHT_CPU_ONNX_LIGHT_KERNELS_IMPLIB}")
+        set_property(TARGET onnx_light::lib_onnx_backend_test PROPERTY
+            IMPORTED_IMPLIB "${ONNX_LIGHT_CPU_ONNX_LIGHT_BACKEND_TEST_IMPLIB}")
+      endif()
     endif()
   else()
     find_package(onnx_light CONFIG REQUIRED)
@@ -857,7 +872,7 @@ if(ONNX_LIGHT_CPU_INSTALL)
       DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/onnx_light_cpu/impl")
 
   install(FILES
-      "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/parallel_for.h"
+      "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/execution.h"
       "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/thread_topology.h"
       DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/onnx_light_cpu/impl")
 

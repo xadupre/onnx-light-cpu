@@ -4,7 +4,7 @@
 
 #include "onnx_light_cpu/impl/logical/logical_kernels.h"
 
-#include "onnx_light_cpu/impl/parallel_for.h"
+#include "onnx_light_cpu/impl/execution.h"
 
 #include <cstdint>
 
@@ -17,7 +17,7 @@
 
 namespace onnx_light_cpu {
 
-// Relative per-element cost passed to ParallelFor for the Not kernel. Not is a
+// Relative per-element cost passed to ExecuteRanges for the Not kernel. Not is a
 // single byte comparison per element and is therefore memory-bandwidth bound,
 // like Abs, so a trivial cost of 1 keeps its parallel threshold high.
 inline constexpr double kNotCostPerElement = 1.0;
@@ -108,8 +108,8 @@ void NotBool_Dispatch(const uint8_t *input, uint8_t *output, std::size_t count) 
 void NotBool(const uint8_t *input, uint8_t *output, std::size_t count) {
   if (count == 0)
     return;
-  ParallelFor(
-      static_cast<std::int64_t>(count), kNotCostPerElement, ParallelForSimdLanes<std::uint8_t>(),
+  ExecuteRanges(
+      static_cast<std::int64_t>(count), kNotCostPerElement, ExecutionSimdLanes<std::uint8_t>(),
       [input, output](std::int64_t begin, std::int64_t end) {
         NotBool_Dispatch(input + begin, output + begin, static_cast<std::size_t>(end - begin));
       });

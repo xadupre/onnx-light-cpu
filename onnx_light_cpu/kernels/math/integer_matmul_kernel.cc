@@ -6,6 +6,7 @@
 
 #include "onnx_light_cpu/impl/math/gemm/vnni/integer_gemm_vnni.h"
 #include "onnx_light_cpu/kernels/kernel_usage.h"
+#include "onnx_light_cpu/kernels/session_executor_adapter.h"
 
 #include "onnx_core/runtime/kernels/cast_helper.h"
 #include "onnx_core/runtime/kernels/kernel_dispatch_table.h"
@@ -395,17 +396,13 @@ void QLinearMatMulKernel::Run(RuntimeContext &rt) {
 void RegisterIntegerMatMulKernels() {
   NodeKernelFn matmul_integer = [](const NodeProto &node,
                                    RuntimeContext &rt) -> std::unique_ptr<rt_ns::KernelBase> {
-    auto kernel = std::make_unique<MatMulIntegerKernel>(rt.kernel_ctx());
-    kernel->set_node(node);
-    return kernel;
+    return MakeSessionKernel<MatMulIntegerKernel>(node, rt);
   };
   rt_ns::RegisterKernelFn("", "MatMulInteger", sym_ns::Device::kCPU, std::move(matmul_integer));
 
   NodeKernelFn qlinear_matmul = [](const NodeProto &node,
                                    RuntimeContext &rt) -> std::unique_ptr<rt_ns::KernelBase> {
-    auto kernel = std::make_unique<QLinearMatMulKernel>(rt.kernel_ctx());
-    kernel->set_node(node);
-    return kernel;
+    return MakeSessionKernel<QLinearMatMulKernel>(node, rt);
   };
   rt_ns::RegisterKernelFn("", "QLinearMatMul", sym_ns::Device::kCPU, std::move(qlinear_matmul));
 }

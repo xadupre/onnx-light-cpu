@@ -7,6 +7,7 @@
 #include "onnx_light_cpu/impl/math/gemm/gemm_plan.h"
 #include "onnx_light_cpu/impl/math/math_kernels.h"
 #include "onnx_light_cpu/kernels/kernel_usage.h"
+#include "onnx_light_cpu/kernels/session_executor_adapter.h"
 
 #include "onnx_core/runtime/kernels/cast_helper.h"
 #include "onnx_core/runtime/kernels/kernel_dispatch_table.h"
@@ -169,7 +170,7 @@ GemmBroadcast ResolveBiasLayout(const Tensor &c, std::size_t M, std::size_t N) {
 
 // Widens a FLOAT16 (``is_bfloat16 == false``) or BFLOAT16 (``is_bfloat16 ==
 // true``) tensor's raw 16-bit elements into a fresh ``float32`` buffer,
-// running the per-element bit decode across the shared thread pool for large
+// running the per-element bit decode through the session executor for large
 // tensors.
 std::vector<float> WidenHalfLike(const Tensor &t, bool is_bfloat16) {
   const std::uint16_t *bits = reinterpret_cast<const std::uint16_t *>(t.bytes());
@@ -344,9 +345,7 @@ void GemmKernel::Run(RuntimeContext &rt) {
 void RegisterGemmKernel() {
   NodeKernelFn factory = [](const NodeProto &node,
                             RuntimeContext &rt) -> std::unique_ptr<rt_ns::KernelBase> {
-    auto kernel = std::make_unique<GemmKernel>(rt.kernel_ctx());
-    kernel->set_node(node);
-    return kernel;
+    return MakeSessionKernel<GemmKernel>(node, rt);
   };
   // Empty domain -> normalised to the default ONNX domain, overriding the
   // built-in Gemm entry with the SIMD-accelerated kernel for the CPU device.

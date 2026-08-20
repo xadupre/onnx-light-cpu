@@ -285,25 +285,15 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         if not hasattr(os, "sched_setaffinity"):
             raise RuntimeError("--cpus is only supported on platforms with sched_setaffinity().")
         os.sched_setaffinity(0, _parse_cpu_list(args.cpus))
-    os.environ["ONNX_LIGHT_CPU_NUM_THREADS"] = str(args.threads)
-
     import numpy as np
     import onnxruntime
     from onnx_light.onnx.reference import ReferenceEvaluator
     from onnx_light_cpu import register_kernels
-    from onnx_light_cpu.onnx_py._cpukernels import (
-        detect_simd_level,
-        parallel_for_thread_count,
-    )
+    from onnx_light_cpu.onnx_py._cpukernels import detect_simd_level
     from onnx_light_cpu.onnx_py._cpuregister import set_kernel_usage_recording
 
     register_kernels()
     set_kernel_usage_recording(False)
-    actual_threads = parallel_for_thread_count()
-    if actual_threads != args.threads:
-        raise RuntimeError(
-            f"Requested {args.threads} threads but the runtime configured {actual_threads}."
-        )
     session_options = onnxruntime.SessionOptions()
     session_options.intra_op_num_threads = args.threads
     session_options.inter_op_num_threads = 1
@@ -320,11 +310,25 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     if unknown_cases:
         raise ValueError(f"Unknown cases: {', '.join(sorted(unknown_cases))}.")
 
+    actual_threads = None
     for dtype_index, dtype_name in enumerate(dtype_names):
         for case_index, case in enumerate(selected_cases):
             rng = np.random.default_rng(1000 * dtype_index + case_index)
             model_bytes, feeds = _build_case(case, dtype_name, rng)
-            cpu_session = ReferenceEvaluator(model_bytes)
+            cpu_session = ReferenceEvaluator(
+                model_bytes,
+                cpu_execution={
+                    "num_threads": args.threads,
+                    "affinity_policy": "none",
+                },
+            )
+            session_threads = cpu_session.cpu_execution_resolution.effective_threads
+            if actual_threads is None:
+                actual_threads = session_threads
+            elif actual_threads != session_threads:
+                raise RuntimeError(
+                    "onnx-light resolved inconsistent participant counts across sessions."
+                )
             ort_session = onnxruntime.InferenceSession(
                 model_bytes, sess_options=session_options, providers=["CPUExecutionProvider"]
             )
@@ -373,6 +377,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 flush=True,
             )
 
+    if actual_threads is None:
+        raise RuntimeError("No benchmark cases were selected.")
     report = {
         "metadata": _metadata(args.threads, actual_threads, detect_simd_level()),
         "results": results,

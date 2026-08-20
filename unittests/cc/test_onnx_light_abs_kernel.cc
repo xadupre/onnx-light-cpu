@@ -3,11 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "onnx_light_cpu/kernels/math/abs_kernel.h"
+#include "onnx_light_cpu/kernels/register_kernels.h"
 
 #include "onnx_core/compute/raw_buffer_allocator.h"
 #include "onnx_core/runtime/kernels/kernel_context.h"
+#include "onnx_core/runtime/kernels/kernel_dispatch_table.h"
 #include "onnx_core/runtime/memory/simple_tensor.h"
 #include "onnx_core/runtime/runtime_context.h"
+#include "onnx_core/runtime/tuning/cpu_executor.h"
 
 #include <gtest/gtest.h>
 
@@ -84,10 +87,8 @@ TEST(OnnxLightAbsKernel, OutputUsesSlotAllocator) {
   }
 }
 
-// Exercises the ParallelFor path: the array is large enough (above
-// ``kParallelForGrainSize``) that ``AbsKernel`` splits it across the shared
-// thread pool. The result must stay bit-exact regardless of how many threads
-// process it.
+// Exercises a large direct kernel call, which remains serial unless a
+// registered session installs its executor.
 TEST(OnnxLightAbsKernel, Float32LargeParallel) {
   onnx_light_cpu::AbsKernel kernel(MakeCtx());
   const int64_t n = 2000003; // Above Abs's discounted parallel grain.
@@ -102,6 +103,39 @@ TEST(OnnxLightAbsKernel, Float32LargeParallel) {
   for (std::size_t i = 0; i < values.size(); ++i) {
     EXPECT_FLOAT_EQ(py[i], std::fabs(values[i]));
   }
+}
+
+TEST(OnnxLightAbsKernel, RegisteredKernelUsesSessionExecutorWithoutPrivatePool) {
+  onnx_light_cpu::RegisterAllKernels();
+  const auto &table = rt_ns::KernelDispatchTable();
+  const auto factory = table.find("ai.onnx:Abs");
+  ASSERT_NE(factory, table.end());
+
+  if (rt_ns::ProcessVisibleLogicalProcessors().size() < 2) {
+    GTEST_SKIP() << "Session executor dispatch test requires two visible processors.";
+  }
+  const uint32_t participants = 2;
+  rt_ns::CpuExecutionPolicy policy;
+  policy.num_threads = static_cast<int32_t>(participants);
+  policy.affinity_policy = rt_ns::CpuAffinityPolicy::kNone;
+  rt_ns::CpuExecutorRegistry registry(1);
+  std::shared_ptr<rt_ns::CpuExecutor> executor = registry.Acquire(policy);
+  executor->EnableCounters();
+
+  ONNX_LIGHT_NAMESPACE::NodeProto node;
+  node.set_op_type("Abs");
+  node.add_input("x");
+  node.add_output("y");
+  rt_ns::RuntimeContext runtime(rt_ns::KernelContext(rt_ns::DefaultOpset(18)));
+  runtime.set_cpu_executor(executor.get());
+  const int64_t n = 2000003;
+  std::vector<float> values(static_cast<std::size_t>(n), -3.0f);
+  runtime.Set("x", rt_ns::Tensor::FromFloat("x", {n}, values));
+  std::unique_ptr<rt_ns::KernelBase> kernel = factory->second(node, runtime);
+  kernel->Run(runtime);
+
+  EXPECT_EQ(runtime.Get("y").element_count(), n);
+  EXPECT_GE(executor->counters().dispatches, 1u);
 }
 
 } // namespace

@@ -6,6 +6,7 @@
 
 #include "onnx_light_cpu/impl/math/math_kernels.h"
 #include "onnx_light_cpu/kernels/kernel_usage.h"
+#include "onnx_light_cpu/kernels/session_executor_adapter.h"
 
 #include "onnx_core/runtime/kernels/cast_helper.h"
 #include "onnx_core/runtime/kernels/kernel_dispatch_table.h"
@@ -33,13 +34,9 @@ using rt_ns::Tensor;
 
 namespace {
 
-// Runs the elementwise SIMD kernel ``Fn`` over ``[0, n)``. ``Fn`` (defined in
-// ``onnx_light_cpu/impl/math/math_kernels.h``) already parallelizes internally
-// via onnx-light-cpu's own thread pool (see ``onnx_light_cpu/impl/parallel_for.h``),
-// so it is called directly on the whole range here; wrapping it in another
-// ``ParallelFor`` (onnx-light's core thread pool) would nest two independent,
-// non-cooperating thread pools and oversubscribe the CPU instead of speeding
-// things up.
+// Runs the elementwise SIMD kernel ``Fn`` over ``[0, n)``. The session adapter
+// installs the runtime executor before this function is reached, so the
+// implementation can split the work without owning another scheduler.
 template <typename T, void (*Fn)(const T *, T *, std::size_t)>
 void RunParallel(const T *input, T *output, std::int64_t n) {
   Fn(input, output, static_cast<std::size_t>(n));
@@ -128,9 +125,7 @@ void AbsKernel::Run(RuntimeContext &rt) {
 void RegisterAbsKernel() {
   NodeKernelFn factory = [](const NodeProto &node,
                             RuntimeContext &rt) -> std::unique_ptr<rt_ns::KernelBase> {
-    auto kernel = std::make_unique<AbsKernel>(rt.kernel_ctx());
-    kernel->set_node(node);
-    return kernel;
+    return MakeSessionKernel<AbsKernel>(node, rt);
   };
   // Empty domain -> normalised to the default ONNX domain, overriding the
   // built-in Abs entry with the SIMD-accelerated kernel for the CPU device.

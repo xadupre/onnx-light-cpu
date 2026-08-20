@@ -4,10 +4,10 @@
 
 #include "onnx_light_cpu/impl/math/gemm/gemm_plan.h"
 
+#include "onnx_light_cpu/impl/execution.h"
 #include "onnx_light_cpu/impl/math/gemm/arm/gemm_kernel_arm.h"
 #include "onnx_light_cpu/impl/math/gemm/gemm_common.h"
 #include "onnx_light_cpu/impl/math/math_kernels.h"
-#include "onnx_light_cpu/impl/parallel_for.h"
 #include "onnx_light_cpu/impl/simd_level.h"
 
 #include <algorithm>
@@ -165,7 +165,7 @@ std::size_t UsefulThreads(std::size_t m, std::size_t n, std::size_t k,
           : static_cast<std::int64_t>(task_count);
   const double cost = static_cast<double>(std::min(m, blocking.mc)) * std::min(n, blocking.nc) *
                       std::min(k, blocking.kc) / kGemmFmasPerParallelWorkUnit;
-  return static_cast<std::size_t>(ParallelForBlockCount(parallel_tasks, cost));
+  return static_cast<std::size_t>(ExecutionBlockCount(parallel_tasks, cost));
 }
 
 template <typename T> double GemmWork(const GemmPlan<T> &plan) {
@@ -308,7 +308,7 @@ GemmPlan<T>::GemmPlan(const GemmPlanOptions<T> &options)
                                              options.k, VectorLanes<T>(), RegisterRows())),
       blocking_(detail::ConstrainGemmBlockingForTasks(
           detail::SelectGemmBlocking(sizeof(T), VectorLanes<T>(), RegisterRows()), options.m,
-          options.n, static_cast<std::size_t>(ParallelForThreadCount()))),
+          options.n, static_cast<std::size_t>(ExecutionThreadCount()))),
       useful_threads_(UsefulThreads(options.m, options.n, options.k, blocking_)),
       has_constant_b_(!options.constant_b.empty()),
       constant_b_(options.constant_b.begin(), options.constant_b.end()),
@@ -406,7 +406,7 @@ GemmHalfPlan::GemmHalfPlan(const GemmHalfPlanOptions &options)
                                              options.k, VectorLanes<float>(), RegisterRows())),
       blocking_(detail::ConstrainGemmBlockingForTasks(
           detail::SelectGemmBlocking(sizeof(float), VectorLanes<float>(), RegisterRows()),
-          options.m, options.n, static_cast<std::size_t>(ParallelForThreadCount()))),
+          options.m, options.n, static_cast<std::size_t>(ExecutionThreadCount()))),
       useful_threads_(UsefulThreads(options.m, options.n, options.k, blocking_)),
       kernel_(SelectHalfKernel(algorithm_)) {
   CheckedProduct(m_, k_, "A");
@@ -506,7 +506,7 @@ template <typename T> void MatMulPlan<T>::Execute(const T *a, const T *b, T *y) 
     }
   };
   if (gemm_plan_.useful_threads() == 1) {
-    ParallelFor(static_cast<std::int64_t>(batch_count_), GemmWork(gemm_plan_), execute);
+    ExecuteRanges(static_cast<std::int64_t>(batch_count_), GemmWork(gemm_plan_), execute);
   } else {
     execute(0, static_cast<std::int64_t>(batch_count_));
   }
@@ -540,7 +540,7 @@ void StridedBatchedGemm(const GemmPlan<T> &plan, std::size_t batch_count, const 
     }
   };
   if (plan.useful_threads() == 1) {
-    ParallelFor(static_cast<std::int64_t>(batch_count), GemmWork(plan), execute);
+    ExecuteRanges(static_cast<std::int64_t>(batch_count), GemmWork(plan), execute);
   } else {
     execute(0, static_cast<std::int64_t>(batch_count));
   }
@@ -580,7 +580,7 @@ template <typename T> void GroupedGemm(std::span<const GroupedGemmProblem<T>> pr
       average_cost += GemmWork(*problem.plan);
     }
     average_cost = problems.empty() ? 1.0 : average_cost / static_cast<double>(problems.size());
-    ParallelFor(static_cast<std::int64_t>(problems.size()), average_cost, execute);
+    ExecuteRanges(static_cast<std::int64_t>(problems.size()), average_cost, execute);
   } else {
     execute(0, static_cast<std::int64_t>(problems.size()));
   }

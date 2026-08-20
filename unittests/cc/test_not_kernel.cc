@@ -62,8 +62,8 @@ TEST(NotBool, LargeArray) {
 }
 
 TEST(NotBool, ParallelLargeArrayMatchesScalar) {
-  // Above kParallelForGrainSize (32768) so NotBool runs through the multi-block
-  // parallel path; the canonical 0/1 result must match the serial reference.
+  // Large enough to exercise the vectorized path used by session ranges; the
+  // canonical 0/1 result must match the serial reference.
   const std::size_t size = 100000;
   std::vector<std::uint8_t> in(size);
   std::vector<std::uint8_t> out(size, 42);

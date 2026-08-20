@@ -54,7 +54,6 @@ from onnx_light_cpu import (
 from onnx_light_cpu.onnx_py._cpukernels import (
     detect_simd_level,
     has_cpu_kernels,
-    parallel_for_thread_count,
 )
 from onnx_light_cpu.onnx_py._cpuregister import set_kernel_usage_recording
 
@@ -91,8 +90,6 @@ model = make_abs_model()
 # Serialize once (outside the timed region) so the setup timing below measures
 # only the session construction and not the protobuf serialization.
 model_bytes = model.SerializeToString()
-
-print(f"onnx-light-cpu thread count: {parallel_for_thread_count()}")
 
 # %%
 # Sizes benchmarked
@@ -148,6 +145,9 @@ registration_time = time.perf_counter() - _registration_start
 _light_setup_start = time.perf_counter()
 light_session = ReferenceEvaluator(model)
 light_setup_time = time.perf_counter() - _light_setup_start
+print(
+    f"onnx-light session thread count: {light_session.cpu_execution_resolution.effective_threads}"
+)
 
 # Confirm the model dispatches to the onnx-light-cpu ``Abs`` kernel (identified
 # by the library-qualified name it records when it runs) rather than

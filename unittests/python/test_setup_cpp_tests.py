@@ -111,6 +111,10 @@ class TestSetupOnnxLight:
         assert "ONNX_LIGHT_CPU_ONNX_LIGHT_SOURCE_DIR=" in output
         assert "ONNX_LIGHT_CPU_ONNX_LIGHT_LIBRARY=" in output
         assert "ONNX_LIGHT_CPU_ONNX_LIGHT_PROTO_LIBRARY=" in output
+        assert "ONNX_LIGHT_CPU_ONNX_LIGHT_IMPLIB=" in output
+        assert "ONNX_LIGHT_CPU_ONNX_LIGHT_PROTO_IMPLIB=" in output
+        assert "ONNX_LIGHT_CPU_ONNX_LIGHT_KERNELS_IMPLIB=" in output
+        assert "ONNX_LIGHT_CPU_ONNX_LIGHT_BACKEND_TEST_IMPLIB=" in output
 
     def test_without_flag_skips_integration(self):
         output = _dry_run()
