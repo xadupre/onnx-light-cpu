@@ -30,6 +30,18 @@ void GemmMicroKernel_AVX2FMA_F64(std::size_t mr, std::size_t nb, std::size_t K, 
 // this translation unit.
 void GemmConvertBFloat16ToFloat32_AVX2(const std::uint16_t *src, float *dst, std::size_t n);
 
+// Narrows ``n`` contiguous float32 values to BFLOAT16 with round-to-nearest-even,
+// canonical NaNs, and an exact scalar tail.
+void GemmConvertFloat32ToBFloat16_AVX2(const float *src, std::uint16_t *dst, std::size_t n);
+
+// Native AVX2 BFLOAT16 micro-kernel with float32 accumulation. B and the packed
+// A rows remain BFLOAT16 until they enter the register file.
+void GemmMicroKernel_AVX2BF16(std::size_t mr, std::size_t nb, std::size_t K, float alpha,
+                              float beta, const std::uint16_t *Bmat, std::size_t N,
+                              const float *Crow_base, std::size_t Cstride, float *Yrow_base,
+                              std::size_t Ystride, std::size_t n0, GemmAccumMode mode,
+                              const std::uint16_t *Apack);
+
 // Decodes ``n`` contiguous Float8 patterns to float32 (Roadmap PR09.5) eight at
 // a time through an AVX2 ``vgatherdps`` from the caller-supplied exact 256-entry
 // per-format decode table (``detail::BuildFloat8DecodeTable``), with an exact
@@ -45,6 +57,10 @@ void GemmDecodeFloat8ToFloat32_AVX2(const float *table, const std::uint8_t *src,
 // while packing in the GEMM packing loops. Requires the F16C ISA extension, so
 // it is only declared/defined when the translation unit is compiled with it.
 void GemmConvertFloat16ToFloat32_F16C(const std::uint16_t *src, float *dst, std::size_t n);
+
+// Narrows ``n`` contiguous float32 values to FLOAT16 with F16C
+// round-to-nearest-even conversion, canonical NaNs, and an exact scalar tail.
+void GemmConvertFloat32ToFloat16_F16C(const float *src, std::uint16_t *dst, std::size_t n);
 
 // Native AVX2/F16C FLOAT16 micro-kernel with float32 accumulation. B and the
 // packed A rows remain FLOAT16 until they enter the register file.

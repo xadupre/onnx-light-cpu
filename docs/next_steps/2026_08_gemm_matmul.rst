@@ -1295,13 +1295,14 @@ fallbacks are ordered. Completed rows remain visible so scope is not lost.
        median with no priority case below 0.9x where the type is supported.
        The PR contains measurement-driven tuning only.
      - PR10.1
-     - `In progress in #267
-       <https://github.com/xadupre/onnx-light-cpu/pull/267>`_. The parity runner
-       now covers FLOAT16. On a pinned AVX2/FMA/F16C i7-13800H thread, the first
-       tuning pass raises the 18-case median from 0.341x to 0.479x ONNX Runtime
-       and the minimum from 0.138x to 0.237x. Skinny-M, skinny-N, and the tiny
-       split-K case reach 1.566x, 2.159x, and 2.174x respectively. The complete
-       gate remains open.
+     - In progress. The `first tuning pass in #267
+       <https://github.com/xadupre/onnx-light-cpu/pull/267>`_ raises the 18-case
+       median from 0.341x to 0.479x ONNX Runtime and the minimum from 0.138x to
+       0.237x on a pinned AVX2/FMA/F16C i7-13800H thread. The second pass
+       vectorizes FP16/BF16 output narrowing, adds an AVX2 BF16 direct
+       micro-kernel, and routes the operator workspace through the runtime
+       arena. The focused FLOAT16 direct/tiny corpus reaches a 1.178x median
+       and 1.046x minimum. The complete dedicated-machine gate remains open.
    * - Roadmap PR10.4
      - Integer and compact-format performance gate.
      - Dedicated-machine results are published per type and ISA. Types
@@ -1337,6 +1338,22 @@ split-K instead bypasses thread-pool partials and uses a two-column,
 K-vectorized kernel; this changes its pinned one-thread result from 0.148x to
 2.174x and its ten-thread result from 0.056x to 2.215x.
 
+The second pass isolates the ``32 x 128 x 16`` direct shape and shows that its
+prepared kernel reaches only 3.30 GFLOP/s FP16 and 1.97 GFLOP/s BF16 before
+operator dispatch is included, disproving the initial assumption that plan
+construction is the primary bottleneck. The hot epilogue narrows every float32
+accumulator through a scalar software conversion. AVX2/F16C conversion now
+narrows eight FP16 outputs at once, AVX2 integer rounding narrows eight BF16
+outputs at once, and both retain the scalar contract for NaNs and tails. The
+direct BF16 path also keeps its compact inputs to the register file through an
+AVX2 micro-kernel instead of using converted FP32 panels. Isolated direct
+throughput rises to 20.60 GFLOP/s FP16 and 23.36 GFLOP/s BF16 on the same host.
+At the operator level, FLOAT16 direct falls from 26.54 to 7.45 microseconds and
+rises from 0.330x to 1.178x ONNX Runtime; ``tiny_dynamic`` and
+``tiny_constant`` remain above parity at 1.252x and 1.046x. The float32
+workspace now comes from the reusable runtime execution arena instead of a new
+``std::vector`` allocation on every invocation.
+
 The published numbers above are diagnostic WSL measurements, not the
 dedicated-machine evidence required to close PR10.3. ONNX Runtime 1.28.0 does
 not implement CPU BFLOAT16 Gemm on this host, so BFLOAT16 remains an isolated
@@ -1345,10 +1362,6 @@ required.
 
 The remaining PR10.3 tuning order is:
 
-#. Remove the small/direct and operator-plan fixed cost. The current direct
-   minimum is 0.237x even after the F16C micro-kernel, so trace plan creation,
-   dispatch, packing allocation, and output handling separately before changing
-   arithmetic.
 #. Reuse compact B panels across row tasks. For medium and large non-transposed
    GEMM, benchmark a cache-sized FP16 packed-B layout whose conversion happens
    inside the micro-kernel, but only dispatch it when B reuse beats the current

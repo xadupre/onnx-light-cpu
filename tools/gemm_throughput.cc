@@ -51,6 +51,8 @@ struct GemmCase {
 // few extra square sizes so the large-matrix sustain from 512 to 2048 is
 // visible at a glance.
 constexpr GemmCase kCases[] = {
+    {"direct", 32, 128, 16},
+    {"tiny_dynamic", 1, 64, 64},
     {"square_128", 128, 128, 128},
     {"square_256", 256, 256, 256},
     {"square_512", 512, 512, 512},

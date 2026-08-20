@@ -1534,6 +1534,16 @@ void GemmHalfPlanned(bool is_bfloat16, bool trans_a, bool trans_b, std::size_t M
   if (is_bfloat16) {
     const auto *a = reinterpret_cast<const BFloat16Source *>(A);
     const auto *b = reinterpret_cast<const BFloat16Source *>(B);
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
+    if constexpr (Algorithm == GemmAlgorithm::kDirect) {
+      static const bool use_avx2 = DetectSimdLevel() >= SimdLevel::kAVX2 && CpuSupportsFma();
+      if (use_avx2 && !trans_b) {
+        const std::size_t mr = std::min<std::size_t>(selected.mr, kGemmAVX2MR);
+        GemmBf16NativeGeneral(trans_a, M, N, K, alpha, A, B, Y, &GemmMicroKernel_AVX2BF16, mr);
+        return;
+      }
+    }
+#endif
 #ifdef ONNX_LIGHT_CPU_HAVE_AMX_BF16
     // Roadmap PR07.6: prefer the native AMX-BF16 tile kernel when the CPU
     // supports AMX-BF16 and the OS has enabled tile state. Like the AVX-512BF16
@@ -1965,6 +1975,37 @@ void ApplyGemmEpilogue(std::size_t M, std::size_t N, const GemmEpilogue<T> &epil
   if (!has_bias && !has_residual && !has_activation && !converts_output) {
     return;
   }
+
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
+  if constexpr (std::is_same_v<T, float>) {
+    if (!has_bias && !has_residual && !has_activation && converts_output) {
+      static const bool use_avx2 = DetectSimdLevel() >= SimdLevel::kAVX2;
+      if (use_avx2 && epilogue.output_conversion == GemmOutputConversion::kBFloat16) {
+        ExecuteRanges(static_cast<std::int64_t>(M), static_cast<double>(N),
+                      [Y, &epilogue, N](std::int64_t begin, std::int64_t end) {
+                        const std::size_t offset = static_cast<std::size_t>(begin) * N;
+                        GemmConvertFloat32ToBFloat16_AVX2(
+                            Y + offset, epilogue.converted_output + offset,
+                            static_cast<std::size_t>(end - begin) * N);
+                      });
+        return;
+      }
+#ifdef ONNX_LIGHT_CPU_HAVE_F16C
+      static const bool use_f16c = use_avx2 && CpuSupportsF16C();
+      if (use_f16c && epilogue.output_conversion == GemmOutputConversion::kFloat16) {
+        ExecuteRanges(static_cast<std::int64_t>(M), static_cast<double>(N),
+                      [Y, &epilogue, N](std::int64_t begin, std::int64_t end) {
+                        const std::size_t offset = static_cast<std::size_t>(begin) * N;
+                        GemmConvertFloat32ToFloat16_F16C(Y + offset,
+                                                         epilogue.converted_output + offset,
+                                                         static_cast<std::size_t>(end - begin) * N);
+                      });
+        return;
+      }
+#endif
+    }
+  }
+#endif
 
   const double cost = static_cast<double>(N) *
                       (1.0 + static_cast<double>(has_bias) + static_cast<double>(has_residual) +

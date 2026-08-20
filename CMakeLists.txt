@@ -989,6 +989,14 @@ if(ONNX_LIGHT_CPU_BUILD_TESTS)
         target_compile_definitions(${_name} PRIVATE ONNX_LIGHT_CPU_HAVE_NEON_DOTPROD=1)
       endif()
     endif()
+    if(_name STREQUAL "test_gemm_kernel" AND ONNX_LIGHT_CPU_HAVE_AVX2_FMA_FLAG)
+      # This differential test calls optional AVX2 conversion helpers directly.
+      # Mirror the private library definitions only when those helpers were built.
+      target_compile_definitions(${_name} PRIVATE ONNX_LIGHT_CPU_HAVE_AVX2_FMA=1)
+      if(ONNX_LIGHT_CPU_HAVE_F16C_FLAG)
+        target_compile_definitions(${_name} PRIVATE ONNX_LIGHT_CPU_HAVE_F16C=1)
+      endif()
+    endif()
     if("lib_onnx_light_cpu_kernels" IN_LIST _link_lib AND
        ONNX_LIGHT_CPU_ONNX_LIGHT_PY_LIBDIR)
       set_target_properties(${_name} PROPERTIES
