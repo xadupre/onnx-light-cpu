@@ -9,6 +9,7 @@
 #include "onnx_light_cpu/kernels/math/exp_log_kernel.h"
 #include "onnx_light_cpu/kernels/math/gemm_kernel.h"
 #include "onnx_light_cpu/kernels/math/integer_matmul_kernel.h"
+#include "onnx_light_cpu/kernels/math/matmul_kernel.h"
 
 namespace onnx_light_cpu {
 
@@ -17,6 +18,7 @@ void RegisterAllKernels() {
   RegisterExpKernel();
   RegisterLogKernel();
   RegisterGemmKernel();
+  RegisterMatMulKernel();
   RegisterIntegerMatMulKernels();
   RegisterNotKernel();
 }

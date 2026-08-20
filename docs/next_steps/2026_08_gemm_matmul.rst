@@ -1333,6 +1333,15 @@ fallbacks are ordered. Completed rows remain visible so scope is not lost.
 
 Roadmap PR10.5 is the final Gemm and MatMul roadmap PR.
 
+The reproducible gate command is ``tools/benchmark_gemm_parity.py
+--operator all --dtype all --threads 1 --output gemm_matmul_parity_results.json``.
+It alternates the registered CPU kernel with ONNX Runtime, records every raw
+sample and environment field, and includes dynamic and constant ``Gemm``,
+shared ``MatMul``, batched/broadcast, vector, transpose, bias, skinny,
+large-K, split-K, and transformer cases. Repeat the command with the
+physical-core affinity and thread count for each priority machine; pass
+``--enforce`` only when publishing a completed dedicated-machine result.
+
 Roadmap PR10.3 tuning record
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 

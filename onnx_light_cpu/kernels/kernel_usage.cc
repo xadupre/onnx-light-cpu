@@ -9,6 +9,7 @@
 #include "onnx_light_cpu/kernels/math/exp_log_kernel.h"
 #include "onnx_light_cpu/kernels/math/gemm_kernel.h"
 #include "onnx_light_cpu/kernels/math/integer_matmul_kernel.h"
+#include "onnx_light_cpu/kernels/math/matmul_kernel.h"
 
 #include <atomic>
 #include <mutex>
@@ -65,6 +66,7 @@ const std::vector<std::pair<std::string, std::string>> &RegisteredKernelNames() 
       {"Exp", ExpKernel::kName},
       {"Log", LogKernel::kName},
       {"Gemm", GemmKernel::kName},
+      {"MatMul", MatMulKernel::kName},
       {"MatMulInteger", MatMulIntegerKernel::kName},
       {"QLinearMatMul", QLinearMatMulKernel::kName},
       {"Not", NotKernel::kName},
