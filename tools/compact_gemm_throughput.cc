@@ -2,9 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Isolated INT8/INT4/Float8 GEMM throughput driver.
+// Isolated FP16/BF16/INT8/INT4/Float8 GEMM throughput driver.
 
 #include "onnx_light_cpu/impl/math/gemm/vnni/integer_gemm_vnni.h"
+#include "onnx_light_cpu/impl/math/half_conversion.h"
 #include "onnx_light_cpu/impl/math/math_kernels.h"
 
 #include <algorithm>
@@ -90,6 +91,28 @@ double MeasureInt4(const GemmCase &shape) {
   });
 }
 
+double MeasureHalf(const GemmCase &shape, bool is_bfloat16) {
+  std::mt19937 rng(is_bfloat16 ? 0xbf16u : 0xf16u);
+  std::uniform_real_distribution<float> value(-1.0f, 1.0f);
+  std::vector<std::uint16_t> a(static_cast<std::size_t>(shape.m * shape.k));
+  std::vector<std::uint16_t> b(static_cast<std::size_t>(shape.k * shape.n));
+  std::vector<float> y(static_cast<std::size_t>(shape.m * shape.n));
+  const auto narrow = [&](std::uint16_t &bits) {
+    const float input = value(rng);
+    bits = is_bfloat16 ? onnx_light_cpu::detail::FloatToBFloat16Bits(input)
+                       : onnx_light_cpu::detail::FloatToFloat16Bits(input);
+  };
+  std::for_each(a.begin(), a.end(), narrow);
+  std::for_each(b.begin(), b.end(), narrow);
+  onnx_light_cpu::GemmEpilogue<float> epilogue;
+  return MeasureGops(shape, [&]() {
+    onnx_light_cpu::GemmHalfWithEpilogue(
+        is_bfloat16, false, false, static_cast<std::size_t>(shape.m),
+        static_cast<std::size_t>(shape.n), static_cast<std::size_t>(shape.k), 1.0f, a.data(),
+        b.data(), epilogue, y.data());
+  });
+}
+
 double MeasureFloat8(const GemmCase &shape, onnx_light_cpu::GemmFloat8Format format) {
   std::mt19937 rng(0xf8u);
   std::uniform_int_distribution<int> finite_e4m3(0, 0x7e);
@@ -109,16 +132,18 @@ double MeasureFloat8(const GemmCase &shape, onnx_light_cpu::GemmFloat8Format for
 } // namespace
 
 int main() {
-  std::printf("%-14s %6s %6s %6s %13s %13s %13s %13s\n", "case", "M", "N", "K", "INT8 GOPS",
-              "INT4 GOPS", "E4M3 GOPS", "E5M2 GOPS");
+  std::printf("%-14s %6s %6s %6s %13s %13s %13s %13s %13s %13s\n", "case", "M", "N", "K",
+              "FP16 GFLOPS", "BF16 GFLOPS", "INT8 GOPS", "INT4 GOPS", "E4M3 GOPS", "E5M2 GOPS");
   for (const GemmCase &shape : kCases) {
+    const double fp16 = MeasureHalf(shape, false);
+    const double bf16 = MeasureHalf(shape, true);
     const double int8 = MeasureInt8(shape);
     const double int4 = MeasureInt4(shape);
     const double e4m3 = MeasureFloat8(shape, onnx_light_cpu::GemmFloat8Format::kE4M3FN);
     const double e5m2 = MeasureFloat8(shape, onnx_light_cpu::GemmFloat8Format::kE5M2);
-    std::printf("%-14s %6lld %6lld %6lld %13.2f %13.2f %13.2f %13.2f\n", shape.name,
+    std::printf("%-14s %6lld %6lld %6lld %13.2f %13.2f %13.2f %13.2f %13.2f %13.2f\n", shape.name,
                 static_cast<long long>(shape.m), static_cast<long long>(shape.n),
-                static_cast<long long>(shape.k), int8, int4, e4m3, e5m2);
+                static_cast<long long>(shape.k), fp16, bf16, int8, int4, e4m3, e5m2);
   }
   return 0;
 }

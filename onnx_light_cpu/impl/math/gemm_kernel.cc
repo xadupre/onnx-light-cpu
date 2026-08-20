@@ -971,6 +971,26 @@ void PackBPanel(bool trans_b, const SrcT *B, std::size_t K, std::size_t N, std::
       }
       continue;
     }
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
+    if constexpr (std::is_same_v<T, float> && std::is_same_v<SrcT, BFloat16Source>) {
+      static const bool use_avx2 = DetectSimdLevel() >= SimdLevel::kAVX2;
+      if (use_avx2) {
+        GemmPackTransposeBFloat16ToFloat32_AVX2(
+            reinterpret_cast<const std::uint16_t *>(B) + (n0 + j) * K + k0, K, dst, kc, jb);
+        continue;
+      }
+    }
+#endif
+#ifdef ONNX_LIGHT_CPU_HAVE_F16C
+    if constexpr (std::is_same_v<T, float> && std::is_same_v<SrcT, Float16Source>) {
+      static const bool use_f16c = CpuSupportsF16C();
+      if (use_f16c) {
+        GemmPackTransposeFloat16ToFloat32_F16C(
+            reinterpret_cast<const std::uint16_t *>(B) + (n0 + j) * K + k0, K, dst, kc, jb);
+        continue;
+      }
+    }
+#endif
     for (std::size_t k = 0; k < kc; ++k) {
       for (std::size_t n = 0; n < jb; ++n) {
         dst[k * jb + n] = static_cast<T>(B[(n0 + j + n) * K + k0 + k]);
@@ -982,6 +1002,28 @@ void PackBPanel(bool trans_b, const SrcT *B, std::size_t K, std::size_t N, std::
 template <typename T, typename SrcT = T>
 void PackAPanel(bool trans_a, const SrcT *A, std::size_t M, std::size_t K, std::size_t m0,
                 std::size_t mc, std::size_t k0, std::size_t kc, T *Apack) {
+  if (trans_a) {
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
+    if constexpr (std::is_same_v<T, float> && std::is_same_v<SrcT, BFloat16Source>) {
+      static const bool use_avx2 = DetectSimdLevel() >= SimdLevel::kAVX2;
+      if (use_avx2) {
+        GemmPackTransposeBFloat16ToFloat32_AVX2(
+            reinterpret_cast<const std::uint16_t *>(A) + k0 * M + m0, M, Apack, mc, kc);
+        return;
+      }
+    }
+#endif
+#ifdef ONNX_LIGHT_CPU_HAVE_F16C
+    if constexpr (std::is_same_v<T, float> && std::is_same_v<SrcT, Float16Source>) {
+      static const bool use_f16c = CpuSupportsF16C();
+      if (use_f16c) {
+        GemmPackTransposeFloat16ToFloat32_F16C(
+            reinterpret_cast<const std::uint16_t *>(A) + k0 * M + m0, M, Apack, mc, kc);
+        return;
+      }
+    }
+#endif
+  }
   for (std::size_t m = 0; m < mc; ++m) {
     T *dst = Apack + m * kc;
     if (trans_a) {

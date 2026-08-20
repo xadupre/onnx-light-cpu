@@ -43,6 +43,69 @@ template <bool Bfloat16> inline __m256 WidenHalf8(const std::uint16_t *values) {
   }
 }
 
+inline void Transpose8x8U16(const std::uint16_t *src, std::size_t src_stride, std::uint16_t *dst) {
+  const __m128i r0 = _mm_loadu_si128(reinterpret_cast<const __m128i *>(src));
+  const __m128i r1 = _mm_loadu_si128(reinterpret_cast<const __m128i *>(src + src_stride));
+  const __m128i r2 = _mm_loadu_si128(reinterpret_cast<const __m128i *>(src + 2 * src_stride));
+  const __m128i r3 = _mm_loadu_si128(reinterpret_cast<const __m128i *>(src + 3 * src_stride));
+  const __m128i r4 = _mm_loadu_si128(reinterpret_cast<const __m128i *>(src + 4 * src_stride));
+  const __m128i r5 = _mm_loadu_si128(reinterpret_cast<const __m128i *>(src + 5 * src_stride));
+  const __m128i r6 = _mm_loadu_si128(reinterpret_cast<const __m128i *>(src + 6 * src_stride));
+  const __m128i r7 = _mm_loadu_si128(reinterpret_cast<const __m128i *>(src + 7 * src_stride));
+  const __m128i a0 = _mm_unpacklo_epi16(r0, r1);
+  const __m128i a1 = _mm_unpackhi_epi16(r0, r1);
+  const __m128i a2 = _mm_unpacklo_epi16(r2, r3);
+  const __m128i a3 = _mm_unpackhi_epi16(r2, r3);
+  const __m128i a4 = _mm_unpacklo_epi16(r4, r5);
+  const __m128i a5 = _mm_unpackhi_epi16(r4, r5);
+  const __m128i a6 = _mm_unpacklo_epi16(r6, r7);
+  const __m128i a7 = _mm_unpackhi_epi16(r6, r7);
+  const __m128i b0 = _mm_unpacklo_epi32(a0, a2);
+  const __m128i b1 = _mm_unpackhi_epi32(a0, a2);
+  const __m128i b2 = _mm_unpacklo_epi32(a1, a3);
+  const __m128i b3 = _mm_unpackhi_epi32(a1, a3);
+  const __m128i b4 = _mm_unpacklo_epi32(a4, a6);
+  const __m128i b5 = _mm_unpackhi_epi32(a4, a6);
+  const __m128i b6 = _mm_unpacklo_epi32(a5, a7);
+  const __m128i b7 = _mm_unpackhi_epi32(a5, a7);
+  _mm_storeu_si128(reinterpret_cast<__m128i *>(dst), _mm_unpacklo_epi64(b0, b4));
+  _mm_storeu_si128(reinterpret_cast<__m128i *>(dst + 8), _mm_unpackhi_epi64(b0, b4));
+  _mm_storeu_si128(reinterpret_cast<__m128i *>(dst + 16), _mm_unpacklo_epi64(b1, b5));
+  _mm_storeu_si128(reinterpret_cast<__m128i *>(dst + 24), _mm_unpackhi_epi64(b1, b5));
+  _mm_storeu_si128(reinterpret_cast<__m128i *>(dst + 32), _mm_unpacklo_epi64(b2, b6));
+  _mm_storeu_si128(reinterpret_cast<__m128i *>(dst + 40), _mm_unpackhi_epi64(b2, b6));
+  _mm_storeu_si128(reinterpret_cast<__m128i *>(dst + 48), _mm_unpacklo_epi64(b3, b7));
+  _mm_storeu_si128(reinterpret_cast<__m128i *>(dst + 56), _mm_unpackhi_epi64(b3, b7));
+}
+
+template <bool Bfloat16>
+void PackTransposeHalfToFloat32(const std::uint16_t *src, std::size_t src_stride, float *dst,
+                                std::size_t dst_rows, std::size_t dst_cols) {
+  alignas(16) std::uint16_t tile[64];
+  std::size_t row = 0;
+  for (; row + 8 <= dst_rows; row += 8) {
+    std::size_t column = 0;
+    for (; column + 8 <= dst_cols; column += 8) {
+      Transpose8x8U16(src + column * src_stride + row, src_stride, tile);
+      for (std::size_t tile_row = 0; tile_row < 8; ++tile_row) {
+        _mm256_storeu_ps(dst + (row + tile_row) * dst_cols + column,
+                         WidenHalf8<Bfloat16>(tile + tile_row * 8));
+      }
+    }
+    for (; column < dst_cols; ++column) {
+      for (std::size_t tile_row = 0; tile_row < 8; ++tile_row) {
+        dst[(row + tile_row) * dst_cols + column] =
+            ReadHalf<Bfloat16>(src + column * src_stride + row + tile_row);
+      }
+    }
+  }
+  for (; row < dst_rows; ++row) {
+    for (std::size_t column = 0; column < dst_cols; ++column) {
+      dst[row * dst_cols + column] = ReadHalf<Bfloat16>(src + column * src_stride + row);
+    }
+  }
+}
+
 inline float HorizontalSum(__m256 value) {
   const __m128 low = _mm256_castps256_ps128(value);
   const __m128 high = _mm256_extractf128_ps(value, 1);
@@ -510,6 +573,12 @@ void GemmConvertBFloat16ToFloat32_AVX2(const std::uint16_t *src, float *dst, std
   }
 }
 
+void GemmPackTransposeBFloat16ToFloat32_AVX2(const std::uint16_t *src, std::size_t src_stride,
+                                             float *dst, std::size_t dst_rows,
+                                             std::size_t dst_cols) {
+  PackTransposeHalfToFloat32<true>(src, src_stride, dst, dst_rows, dst_cols);
+}
+
 void GemmConvertFloat32ToBFloat16_AVX2(const float *src, std::uint16_t *dst, std::size_t n) {
   const __m256i absolute_mask = _mm256_set1_epi32(0x7fffffff);
   const __m256i infinity = _mm256_set1_epi32(0x7f800000);
@@ -586,6 +655,12 @@ void GemmConvertFloat16ToFloat32_F16C(const std::uint16_t *src, float *dst, std:
   for (; i < n; ++i) {
     dst[i] = detail::Float16BitsToFloat(src[i]);
   }
+}
+
+void GemmPackTransposeFloat16ToFloat32_F16C(const std::uint16_t *src, std::size_t src_stride,
+                                            float *dst, std::size_t dst_rows,
+                                            std::size_t dst_cols) {
+  PackTransposeHalfToFloat32<false>(src, src_stride, dst, dst_rows, dst_cols);
 }
 
 void GemmConvertFloat32ToFloat16_F16C(const float *src, std::uint16_t *dst, std::size_t n) {
