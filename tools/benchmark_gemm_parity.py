@@ -9,6 +9,7 @@ import importlib.metadata
 import json
 import os
 import platform
+import shlex
 import statistics
 import subprocess
 import sys
@@ -180,17 +181,24 @@ def _git_revision() -> str:
 
 
 def _compiler() -> str:
-    command = os.environ.get("CXX", "c++")
-    return subprocess.run(
-        [command, "--version"], check=True, capture_output=True, text=True
-    ).stdout.splitlines()[0]
+    command = shlex.split(os.environ.get("CXX", "c++"))
+    try:
+        output = subprocess.run(
+            [*command, "--version"], check=True, capture_output=True, text=True
+        ).stdout
+    except (OSError, subprocess.CalledProcessError):
+        return "unknown"
+    return output.splitlines()[0] if output else "unknown"
 
 
 def _package_versions() -> dict[str, str]:
-    return {
-        package: importlib.metadata.version(package)
-        for package in ("numpy", "onnx-light", "onnx-light-cpu", "onnxruntime")
-    }
+    versions = {}
+    for package in ("numpy", "onnx-light", "onnx-light-cpu", "onnxruntime"):
+        try:
+            versions[package] = importlib.metadata.version(package)
+        except importlib.metadata.PackageNotFoundError:
+            versions[package] = "not installed"
+    return versions
 
 
 def _bias_shape(case: GemmCase) -> tuple[int, ...]:
