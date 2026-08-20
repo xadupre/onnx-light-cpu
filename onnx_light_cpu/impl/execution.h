@@ -20,6 +20,7 @@ struct ExecutionExecutorView {
 };
 
 struct ExecutionSchedule {
+  // Non-positive values are normalized to one by ExecutionBlockCount.
   int64_t min_parallel_size = 1;
   int64_t min_block_size = 1;
   int64_t max_participants = 1;
