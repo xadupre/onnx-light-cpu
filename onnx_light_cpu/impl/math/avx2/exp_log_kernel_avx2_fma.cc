@@ -86,10 +86,8 @@ void ExpFloat32_AVX2_FMA(const float *input, float *output, std::size_t count) {
   for (; i + 8 <= count; i += 8) {
     _mm256_storeu_ps(output + i, ExpPs256Fma(_mm256_loadu_ps(input + i)));
   }
-  if (i < count) {
-    for (; i < count; ++i) {
-      output[i] = std::exp(input[i]);
-    }
+  for (; i < count; ++i) {
+    output[i] = std::exp(input[i]);
   }
 }
 
