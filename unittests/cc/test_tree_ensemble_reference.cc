@@ -430,6 +430,7 @@ TEST(TreeEnsembleReference, CalibrationRejectsInvalidCandidatesAndPersistsEviden
   std::ifstream first_stream(evidence_path);
   const std::string first((std::istreambuf_iterator<char>(first_stream)),
                           std::istreambuf_iterator<char>());
+  first_stream.close();
   EXPECT_NE(first.find("output mismatch"), std::string::npos);
   EXPECT_NE(first.find("memory budget exceeded"), std::string::npos);
   EXPECT_NE(first.find("onnx_light_cpu_tree_calibration_v1"), std::string::npos);
