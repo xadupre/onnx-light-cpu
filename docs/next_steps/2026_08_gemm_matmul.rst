@@ -1434,13 +1434,15 @@ and 80.33 GOPS to 105.12, 69.90, and 91.81 GOPS. Tiny and small-K products keep
 the single-output reduction. These are diagnostic results, not the dedicated
 machine evidence required to close PR10.4.
 
-The remaining PR10.4 tuning order is:
+The current pass keeps the shared integer panels reusable across row work by
+partitioning contiguous matrix batches through ``ExecuteRanges`` under the
+session executor. ``QLinearMatMul`` now routes contiguous rank-2+ products
+through ``IntegerMatMul2D`` and applies a vectorized AVX2 requantization
+epilogue for INT8/UINT8 outputs while retaining the scalar fallback and exact
+tail behavior for non-AVX2 and rank-1 promotion paths.
 
-#. Cache constant-B integer panels and partition reusable panel tasks through
-   the session executor before tuning multi-core blocking.
-#. Route contiguous ``QLinearMatMul`` through the shared integer engine and
-   vectorize its requantization epilogue.
-#. Tune packed-4-bit unpacking and Float8 decode/packing independently, keeping
-   exact scalar tails and unsupported-format throughput reports.
-#. Run dedicated x86 and ARM sweeps and keep PR10.4 open until supported types
-   satisfy the 1.0x median and 0.9x minimum gates.
+The final PR10.4 closure step is the dedicated machine evidence: run pinned
+x86 and ARM one-thread and physical-core sweeps, publish raw samples and
+dispersion with complete environment metadata, and keep the implementation PR
+open until ORT-supported integer/compact formats satisfy the 1.0x median and
+0.9x minimum parity gates.

@@ -4,9 +4,14 @@
 
 #include "onnx_light_cpu/kernels/math/integer_matmul_kernel.h"
 
+#include "onnx_light_cpu/impl/execution.h"
 #include "onnx_light_cpu/impl/math/gemm/vnni/integer_gemm_vnni.h"
 #include "onnx_light_cpu/kernels/kernel_usage.h"
 #include "onnx_light_cpu/kernels/session_executor_adapter.h"
+
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_INTEGER
+#include "onnx_light_cpu/impl/simd_level.h"
+#endif
 
 #include "onnx_core/runtime/kernels/cast_helper.h"
 #include "onnx_core/runtime/kernels/kernel_dispatch_table.h"
@@ -90,6 +95,12 @@ struct MatMulLayout {
   int64_t n = 0;
   int64_t k = 0;
   int64_t batch_count = 1;
+};
+
+struct BatchWorkItem {
+  int64_t a_base = 0;
+  int64_t b_base = 0;
+  int64_t output_base = 0;
 };
 
 Shape ComputeStrides(const Shape &shape) {
@@ -178,6 +189,7 @@ template <typename Fn> void ForEachBatch(const MatMulLayout &layout, Fn fn) {
         const std::size_t a_dimension = dimension - (batch_rank - a_prefix.size());
         a_base += (a_prefix[a_dimension] == 1 ? 0 : coordinate) * layout.a_strides[a_dimension];
       }
+
       if (dimension + b_prefix.size() >= batch_rank) {
         const std::size_t b_dimension = dimension - (batch_rank - b_prefix.size());
         b_base += (b_prefix[b_dimension] == 1 ? 0 : coordinate) * layout.b_strides[b_dimension];
@@ -194,6 +206,15 @@ template <typename Fn> void ForEachBatch(const MatMulLayout &layout, Fn fn) {
       batch_index[dimension] = 0;
     }
   }
+}
+
+std::vector<BatchWorkItem> BuildBatchWorkItems(const MatMulLayout &layout) {
+  std::vector<BatchWorkItem> items;
+  items.reserve(static_cast<std::size_t>(layout.batch_count));
+  ForEachBatch(layout, [&](int64_t a_base, int64_t b_base, int64_t output_base) {
+    items.push_back({a_base, b_base, output_base});
+  });
+  return items;
 }
 
 template <typename Fn>
@@ -246,6 +267,32 @@ template <typename T> T Requantize(int64_t accumulator, float scale, int32_t zer
   return static_cast<T>(clamped);
 }
 
+void RequantizeInt32Buffer(const int32_t *src, int8_t *dst, int64_t count, float scale,
+                           int32_t zero_point) {
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_INTEGER
+  if (DetectSimdLevel() >= SimdLevel::kAVX2) {
+    detail::RequantizeInt32ToInt8Avx2(src, dst, count, scale, zero_point);
+    return;
+  }
+#endif
+  for (int64_t index = 0; index < count; ++index) {
+    dst[index] = Requantize<int8_t>(src[index], scale, zero_point);
+  }
+}
+
+void RequantizeInt32Buffer(const int32_t *src, uint8_t *dst, int64_t count, float scale,
+                           int32_t zero_point) {
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_INTEGER
+  if (DetectSimdLevel() >= SimdLevel::kAVX2) {
+    detail::RequantizeInt32ToUint8Avx2(src, dst, count, scale, zero_point);
+    return;
+  }
+#endif
+  for (int64_t index = 0; index < count; ++index) {
+    dst[index] = Requantize<uint8_t>(src[index], scale, zero_point);
+  }
+}
+
 } // namespace
 
 Tensor MatMulIntegerKernel::operator()(const Tensor &a, const Tensor &b, const Tensor *a_zero_point,
@@ -278,10 +325,17 @@ Tensor MatMulIntegerKernel::operator()(const Tensor &a, const Tensor &b, const T
     const auto *b_bytes = reinterpret_cast<const std::uint8_t *>(b.bytes());
     const bool a_signed = a.data_type == static_cast<int32_t>(DataType::INT8);
     const bool b_signed = b.data_type == static_cast<int32_t>(DataType::INT8);
-    ForEachBatch(layout, [&](int64_t a_base, int64_t b_base, int64_t output_base) {
-      IntegerMatMul2D(a_bytes + a_base, a_signed, b_bytes + b_base, b_signed, values + output_base,
-                      layout.m, layout.n, layout.k, a_zp.data(), static_cast<int64_t>(a_zp.size()),
-                      b_zp.data(), static_cast<int64_t>(b_zp.size()));
+    const std::vector<BatchWorkItem> work_items = BuildBatchWorkItems(layout);
+    const double cost = static_cast<double>(layout.m) * static_cast<double>(layout.n) *
+                        static_cast<double>(std::max<int64_t>(layout.k, 1));
+    ExecuteRanges(static_cast<int64_t>(work_items.size()), cost, [&](int64_t begin, int64_t end) {
+      for (int64_t index = begin; index < end; ++index) {
+        const BatchWorkItem &item = work_items[static_cast<std::size_t>(index)];
+        IntegerMatMul2D(a_bytes + item.a_base, a_signed, b_bytes + item.b_base, b_signed,
+                        values + item.output_base, layout.m, layout.n, layout.k, a_zp.data(),
+                        static_cast<int64_t>(a_zp.size()), b_zp.data(),
+                        static_cast<int64_t>(b_zp.size()));
+      }
     });
     return output;
   }
@@ -355,6 +409,36 @@ Tensor QLinearMatMulKernel::operator()(const Tensor &a, const Tensor &a_scale,
           : rt_ns::MakeOutputTensor(y_zero_point.data_type, layout.output_shape, output_bytes,
                                     nullptr);
   const float combined_scale = as * bs / ys;
+
+  if (a.shape.size() >= 2 && b.shape.size() >= 2) {
+    const auto *a_bytes = reinterpret_cast<const std::uint8_t *>(a.bytes());
+    const auto *b_bytes = reinterpret_cast<const std::uint8_t *>(b.bytes());
+    const bool a_signed = a.data_type == static_cast<int32_t>(DataType::INT8);
+    const bool b_signed = b.data_type == static_cast<int32_t>(DataType::INT8);
+    const std::int32_t a_zp[1] = {az};
+    const std::int32_t b_zp[1] = {bz};
+    const std::vector<BatchWorkItem> work_items = BuildBatchWorkItems(layout);
+    const int64_t matrix_size = layout.m * layout.n;
+    const double cost =
+        static_cast<double>(matrix_size) * static_cast<double>(std::max<int64_t>(layout.k, 1));
+    ExecuteRanges(static_cast<int64_t>(work_items.size()), cost, [&](int64_t begin, int64_t end) {
+      thread_local std::vector<std::int32_t> accum;
+      accum.resize(static_cast<std::size_t>(matrix_size));
+      for (int64_t index = begin; index < end; ++index) {
+        const BatchWorkItem &item = work_items[static_cast<std::size_t>(index)];
+        IntegerMatMul2D(a_bytes + item.a_base, a_signed, b_bytes + item.b_base, b_signed,
+                        accum.data(), layout.m, layout.n, layout.k, a_zp, 1, b_zp, 1);
+        if (output.data_type == static_cast<int32_t>(DataType::INT8)) {
+          RequantizeInt32Buffer(accum.data(), output.AsInt8() + item.output_base, matrix_size,
+                                combined_scale, yz);
+        } else {
+          RequantizeInt32Buffer(accum.data(), output.AsUint8() + item.output_base, matrix_size,
+                                combined_scale, yz);
+        }
+      }
+    });
+    return output;
+  }
 
   ForEachOutput(
       a, b, layout,

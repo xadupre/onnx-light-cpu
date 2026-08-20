@@ -6,8 +6,11 @@
 
 #include "onnx_light_cpu/impl/math/gemm/vnni/integer_gemm_vnni.h"
 
+#include <algorithm>
 #include <bit>
+#include <cmath>
 #include <cstdint>
+#include <type_traits>
 
 #include <immintrin.h>
 
@@ -30,6 +33,48 @@ std::uint32_t Reduce(__m256i accumulator) {
   total128 = _mm_add_epi32(total128, _mm_shuffle_epi32(total128, _MM_SHUFFLE(1, 0, 3, 2)));
   total128 = _mm_add_epi32(total128, _mm_shuffle_epi32(total128, _MM_SHUFFLE(2, 3, 0, 1)));
   return static_cast<std::uint32_t>(_mm_cvtsi128_si32(total128));
+}
+
+template <typename T>
+void RequantizeInt32ImplAvx2(const std::int32_t *src, T *dst, std::int64_t count, float scale,
+                             std::int32_t zero_point, double min_value, double max_value) {
+  const __m256d scale_pd = _mm256_set1_pd(static_cast<double>(scale));
+  const __m256d zp_pd = _mm256_set1_pd(static_cast<double>(zero_point));
+  const __m256d min_pd = _mm256_set1_pd(min_value);
+  const __m256d max_pd = _mm256_set1_pd(max_value);
+  std::int64_t index = 0;
+  for (; index + 8 <= count; index += 8) {
+    const __m256i input = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(src + index));
+    __m256d lo = _mm256_cvtepi32_pd(_mm256_castsi256_si128(input));
+    __m256d hi = _mm256_cvtepi32_pd(_mm256_extracti128_si256(input, 1));
+    lo = _mm256_add_pd(
+        _mm256_round_pd(_mm256_mul_pd(lo, scale_pd), _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC),
+        zp_pd);
+    hi = _mm256_add_pd(
+        _mm256_round_pd(_mm256_mul_pd(hi, scale_pd), _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC),
+        zp_pd);
+    lo = _mm256_max_pd(min_pd, _mm256_min_pd(max_pd, lo));
+    hi = _mm256_max_pd(min_pd, _mm256_min_pd(max_pd, hi));
+    const __m128i lo_i = _mm256_cvtpd_epi32(lo);
+    const __m128i hi_i = _mm256_cvtpd_epi32(hi);
+    if constexpr (std::is_same_v<T, std::int8_t>) {
+      const __m128i packed16 = _mm_packs_epi32(lo_i, hi_i);
+      const __m128i packed8 = _mm_packs_epi16(packed16, packed16);
+      _mm_storel_epi64(reinterpret_cast<__m128i *>(dst + index), packed8);
+    } else {
+      static_assert(std::is_same_v<T, std::uint8_t>);
+      const __m128i packed16 = _mm_packs_epi32(lo_i, hi_i);
+      const __m128i packed8 = _mm_packus_epi16(packed16, _mm_setzero_si128());
+      _mm_storel_epi64(reinterpret_cast<__m128i *>(dst + index), packed8);
+    }
+  }
+  for (; index < count; ++index) {
+    const double rounded =
+        std::nearbyint(static_cast<double>(src[index]) * static_cast<double>(scale));
+    const double shifted = rounded + static_cast<double>(zero_point);
+    const double clamped = std::clamp(shifted, min_value, max_value);
+    dst[index] = static_cast<T>(clamped);
+  }
 }
 
 } // namespace
@@ -110,6 +155,16 @@ void IntegerMatMulU8S8Avx2(const std::uint8_t *a, const std::int8_t *b, std::int
       c[row * cols + column] = IntegerDotU8S8Avx2(a + row * depth, b + column * depth, depth);
     }
   }
+}
+
+void RequantizeInt32ToInt8Avx2(const std::int32_t *src, std::int8_t *dst, std::int64_t count,
+                               float scale, std::int32_t zero_point) {
+  RequantizeInt32ImplAvx2(src, dst, count, scale, zero_point, -128.0, 127.0);
+}
+
+void RequantizeInt32ToUint8Avx2(const std::int32_t *src, std::uint8_t *dst, std::int64_t count,
+                                float scale, std::int32_t zero_point) {
+  RequantizeInt32ImplAvx2(src, dst, count, scale, zero_point, 0.0, 255.0);
 }
 
 } // namespace detail
