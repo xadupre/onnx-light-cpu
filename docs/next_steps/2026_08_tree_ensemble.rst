@@ -286,6 +286,52 @@ diagnose kernel and scheduling differences. Construction and conversion time
 must not be hidden in steady-state inference, but neither may it be charged on
 every run.
 
+PR04 scheduling baseline measurements
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The isolated ``tree_ensemble_throughput`` driver records the selected strategy,
+bounded workspace, latency, and throughput. The initial diagnostic run used an
+AMD EPYC 7763 GitHub runner exposing two physical cores and four logical
+processors, a persistent executor without affinity, Release mode, three warmups,
+and the median of eleven samples. The synthetic forests contain one-target
+stumps; these numbers validate scheduling and expose the cost of the portable
+ONNX Runtime crossover table rather than claiming final tuning wins.
+
+.. list-table:: Rows per second (2026-08-20)
+   :header-rows: 1
+   :widths: 28 10 12 12 12 14
+
+   * - Scenario
+     - Strategy at 4 threads
+     - 1 thread
+     - 2 threads
+     - 4 threads
+     - Physical (2)
+   * - 1 row, 1,024 trees
+     - ``tree_parallel``
+     - 98,629
+     - 25,966
+     - 22,048
+     - 29,724
+   * - 4,096 rows, 81 trees
+     - ``tree_parallel``
+     - 1,312,423
+     - 1,482,799
+     - 1,381,058
+     - 1,509,951
+   * - 4,096 rows, 3 trees
+     - ``row_parallel``
+     - 30,739,443
+     - 3,819,951
+     - 40,458,317
+     - 4,170,332
+
+The large penalty for two-thread, three-tree execution is inherited from the
+baseline rule (trees greater than or equal to workers choose tree parallelism)
+and is evidence for PR05 tuning rather than a reason to alter the compatibility
+table in PR04. Peak scratch space in this run was 8,192 bytes for the
+four-thread, 128-row tree-parallel batch.
+
 Tuning architecture
 -------------------
 
@@ -496,7 +542,8 @@ Remaining pull-request sequence
        through one dynamic decision table. Bounded workspace and the session
        executor introduce no oversubscription or nondeterministic label result.
      - PR03; Runtime Controls PR02
-     - Pending
+     - `Implemented in #311
+       <https://github.com/xadupre/onnx-light-cpu/pull/311>`_
    * - Trees PR05
      - Dynamic tuning policy and structural signatures.
      - Exact keys, portable buckets, typed ordered regions, model digests,

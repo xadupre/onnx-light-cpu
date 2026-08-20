@@ -64,6 +64,14 @@ kernels are registered: ``onnx-light``'s bulk built-in registration never
 replaces an entry that is already present, and an explicit registration always
 replaces the built-in one.
 
+The registered kernels are plain ``KernelBase`` subclasses. They do not install
+an onnx-light-cpu-specific scheduler bridge: when ``onnx-light`` runs a session
+it already places that session's ``CpuExecutor`` on the calling thread, and the
+low-level SIMD helpers pick it up directly. Calling a kernel class directly
+outside a session therefore stays serial unless the caller installs an
+``onnx-light`` ``CpuExecutorScope`` first, matching native ``onnx-light``
+kernels.
+
 Checking which kernels are used
 -------------------------------
 

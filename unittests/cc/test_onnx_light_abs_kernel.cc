@@ -132,7 +132,10 @@ TEST(OnnxLightAbsKernel, RegisteredKernelUsesSessionExecutorWithoutPrivatePool) 
   std::vector<float> values(static_cast<std::size_t>(n), -3.0f);
   runtime.Set("x", rt_ns::Tensor::FromFloat("x", {n}, values));
   std::unique_ptr<rt_ns::KernelBase> kernel = factory->second(node, runtime);
-  kernel->Run(runtime);
+  {
+    rt_ns::CpuExecutorScope scope(executor.get());
+    kernel->Run(runtime);
+  }
 
   EXPECT_EQ(runtime.Get("y").element_count(), n);
   EXPECT_GE(executor->counters().dispatches, 1u);

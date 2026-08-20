@@ -5,15 +5,19 @@
 #include "onnx_light_cpu/reference/tree_ensemble_corpus.h"
 #include "onnx_light_cpu/reference/tree_ensemble_reference.h"
 
+#include "onnx_light_cpu/impl/execution.h"
+
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <set>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -26,6 +30,7 @@ using onnx_light_cpu::reference::TreeAggregate;
 using onnx_light_cpu::reference::TreeBranchMode;
 using onnx_light_cpu::reference::TreeEnsembleAttributes;
 using onnx_light_cpu::reference::TreeEnsembleClassifierAttributes;
+using onnx_light_cpu::reference::TreeEnsembleExecutionStrategy;
 using onnx_light_cpu::reference::TreeEnsemblePlan;
 using onnx_light_cpu::reference::TreeEnsembleReference;
 using onnx_light_cpu::reference::TreeEnsembleRegressorAttributes;
@@ -48,6 +53,59 @@ TreeEnsembleAttributes Stump() {
   attributes.leaf_weights = {1.0, -1.0};
   return attributes;
 }
+
+TreeEnsembleAttributes StumpForest(std::size_t trees, std::size_t targets = 2) {
+  TreeEnsembleAttributes attributes;
+  attributes.n_features = 1;
+  attributes.n_targets = static_cast<std::int64_t>(targets);
+  attributes.value_type = TreeValueType::kFloat32;
+  attributes.base_values.resize(targets, 0.5);
+  for (std::size_t tree = 0; tree < trees; ++tree) {
+    const std::int64_t node = static_cast<std::int64_t>(tree);
+    const std::int64_t leaf = static_cast<std::int64_t>(2 * tree);
+    attributes.tree_roots.push_back(node);
+    attributes.nodes_featureids.push_back(0);
+    attributes.nodes_splits.push_back(0.0);
+    attributes.nodes_modes.push_back(TreeBranchMode::kLeq);
+    attributes.nodes_truenodeids.push_back(leaf);
+    attributes.nodes_falsenodeids.push_back(leaf + 1);
+    attributes.nodes_trueleafs.push_back(1);
+    attributes.nodes_falseleafs.push_back(1);
+    attributes.leaf_targetids.push_back(static_cast<std::int64_t>(tree % targets));
+    attributes.leaf_targetids.push_back(static_cast<std::int64_t>(tree % targets));
+    attributes.leaf_weights.push_back(0.25);
+    attributes.leaf_weights.push_back(-0.25);
+  }
+  return attributes;
+}
+
+struct ThreadedExecutor {
+  std::atomic<std::size_t> dispatches{0};
+  std::atomic<std::size_t> maximum_active{0};
+
+  static void Run(void *context, int64_t num_blocks, void *task_context,
+                  onnx_light_cpu::ExecutionBlockFn task) {
+    auto &self = *static_cast<ThreadedExecutor *>(context);
+    self.dispatches.fetch_add(1, std::memory_order_relaxed);
+    std::atomic<std::size_t> active{0};
+    std::vector<std::thread> workers;
+    workers.reserve(static_cast<std::size_t>(num_blocks));
+    for (int64_t block = num_blocks; block > 0; --block) {
+      workers.emplace_back([&, index = block - 1] {
+        const std::size_t now = active.fetch_add(1, std::memory_order_relaxed) + 1;
+        std::size_t maximum = self.maximum_active.load(std::memory_order_relaxed);
+        while (now > maximum && !self.maximum_active.compare_exchange_weak(
+                                    maximum, now, std::memory_order_relaxed)) {
+        }
+        task(task_context, index);
+        active.fetch_sub(1, std::memory_order_relaxed);
+      });
+    }
+    for (std::thread &worker : workers) {
+      worker.join();
+    }
+  }
+};
 
 LegacyTreeAttributes LegacyStump() {
   LegacyTreeAttributes tree;
@@ -121,6 +179,75 @@ TEST(TreeEnsembleReference, CanonicalPlanAppliesBaseValues) {
   EXPECT_EQ(plan.Evaluate({-1.0, 3.0}, 2), (std::vector<double>{1.5, -0.5}));
   EXPECT_EQ(TreeEnsembleReference(attributes).Evaluate({-1.0, 3.0}, 2),
             (std::vector<double>{1.5, -0.5}));
+}
+
+TEST(TreeEnsembleReference, SchedulingDecisionMatchesOrtCrossovers) {
+  const TreeEnsemblePlan small_forest(StumpForest(79));
+  EXPECT_EQ(small_forest.SelectExecution(1, 4).strategy,
+            TreeEnsembleExecutionStrategy::kTreeMajorBatch);
+
+  const TreeEnsemblePlan large_forest(StumpForest(81));
+  EXPECT_EQ(large_forest.SelectExecution(1, 4).strategy,
+            TreeEnsembleExecutionStrategy::kTreeParallel);
+  EXPECT_EQ(large_forest.SelectExecution(50, 4).strategy,
+            TreeEnsembleExecutionStrategy::kTreeMajorBatch);
+  EXPECT_EQ(large_forest.SelectExecution(51, 4).strategy,
+            TreeEnsembleExecutionStrategy::kTreeParallel);
+
+  const TreeEnsemblePlan few_trees(StumpForest(3));
+  EXPECT_EQ(few_trees.SelectExecution(51, 4).strategy, TreeEnsembleExecutionStrategy::kRowParallel);
+  EXPECT_EQ(few_trees.SelectExecution(1000, 1).strategy,
+            TreeEnsembleExecutionStrategy::kTreeMajorBatch);
+  EXPECT_EQ(few_trees.SelectExecution(1000, 1).batch_rows, 128U);
+
+  const TreeEnsemblePlan four_single_target_trees(StumpForest(4, 1));
+  const TreeEnsemblePlan four_multi_target_trees(StumpForest(4, 2));
+  EXPECT_EQ(four_single_target_trees.SelectExecution(51, 4).strategy,
+            TreeEnsembleExecutionStrategy::kRowParallel);
+  EXPECT_EQ(four_multi_target_trees.SelectExecution(51, 4).strategy,
+            TreeEnsembleExecutionStrategy::kTreeParallel);
+}
+
+TEST(TreeEnsembleReference, SchedulingWorkspaceIsBoundedByActiveBatch) {
+  const TreeEnsemblePlan plan(StumpForest(81));
+  const auto one_row = plan.SelectExecution(1, 4);
+  const auto many_rows = plan.SelectExecution(1000000, 4);
+  const std::size_t accumulator_bytes = sizeof(double) + sizeof(std::size_t);
+  EXPECT_EQ(one_row.workspace_bytes, 4U * 1U * 2U * accumulator_bytes);
+  EXPECT_EQ(many_rows.batch_rows, 128U);
+  EXPECT_EQ(many_rows.workspace_bytes, 4U * 128U * 2U * accumulator_bytes);
+}
+
+TEST(TreeEnsembleReference, EverySchedulingStrategyMatchesScalarAcrossThreadCounts) {
+  const TreeEnsembleAttributes attributes = StumpForest(81);
+  const TreeEnsembleReference reference(attributes);
+  const TreeEnsemblePlan plan(attributes);
+  for (const std::size_t rows : {1U, 49U, 50U, 51U, 129U}) {
+    std::vector<double> input(rows);
+    for (std::size_t row = 0; row < rows; ++row) {
+      input[row] = (row % 2 == 0) ? -1.0 : 1.0;
+    }
+    const std::vector<double> expected = reference.Evaluate(input, rows);
+    for (const int64_t threads : {1, 2, 4}) {
+      ThreadedExecutor executor;
+      onnx_light_cpu::ExecutionExecutorView view{&executor, threads, &ThreadedExecutor::Run};
+      onnx_light_cpu::ExecutionExecutorScope scope(&view);
+      EXPECT_EQ(plan.Evaluate(input, rows), expected) << "rows=" << rows << ", threads=" << threads;
+      EXPECT_LE(executor.maximum_active.load(std::memory_order_relaxed),
+                static_cast<std::size_t>(threads));
+    }
+  }
+
+  const TreeEnsembleAttributes row_attributes = StumpForest(3);
+  const TreeEnsembleReference row_reference(row_attributes);
+  const TreeEnsemblePlan row_plan(row_attributes);
+  std::vector<double> input(51, -1.0);
+  ThreadedExecutor executor;
+  onnx_light_cpu::ExecutionExecutorView view{&executor, 4, &ThreadedExecutor::Run};
+  onnx_light_cpu::ExecutionExecutorScope scope(&view);
+  EXPECT_EQ(row_plan.SelectExecution(input.size()).strategy,
+            TreeEnsembleExecutionStrategy::kRowParallel);
+  EXPECT_EQ(row_plan.Evaluate(input, input.size()), row_reference.Evaluate(input, input.size()));
 }
 
 TEST(TreeEnsembleReference, ThresholdsSignedZeroInfinityAndMissingRouting) {

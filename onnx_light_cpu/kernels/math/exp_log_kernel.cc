@@ -6,7 +6,6 @@
 
 #include "onnx_light_cpu/impl/math/math_kernels.h"
 #include "onnx_light_cpu/kernels/kernel_usage.h"
-#include "onnx_light_cpu/kernels/session_executor_adapter.h"
 
 #include "onnx_core/runtime/kernels/cast_helper.h"
 #include "onnx_core/runtime/kernels/kernel_dispatch_table.h"
@@ -60,8 +59,9 @@ void ComputeUnary(const Tensor &x, Tensor &output, const char *kernel_name, Floa
   case DataType::FLOAT: {
     const float *px = x.AsFloat();
     float *py = output.AsFloat();
-    // The session adapter lets the SIMD implementation split this range
-    // through the runtime executor without another scheduler.
+    // When onnx-light has installed a session ``CpuExecutor`` on the calling
+    // thread, the SIMD implementation can split this range through it without
+    // another scheduler.
     f32(px, py, static_cast<std::size_t>(n));
     return;
   }
@@ -146,7 +146,9 @@ void LogKernel::Run(RuntimeContext &rt) {
 void RegisterExpKernel() {
   NodeKernelFn factory = [](const NodeProto &node,
                             RuntimeContext &rt) -> std::unique_ptr<rt_ns::KernelBase> {
-    return MakeSessionKernel<ExpKernel>(node, rt);
+    auto kernel = std::make_unique<ExpKernel>(rt.kernel_ctx());
+    kernel->set_node(node);
+    return kernel;
   };
   // Empty domain -> normalised to the default ONNX domain, overriding the
   // built-in Exp entry with the SIMD-accelerated kernel for the CPU device.
@@ -156,7 +158,9 @@ void RegisterExpKernel() {
 void RegisterLogKernel() {
   NodeKernelFn factory = [](const NodeProto &node,
                             RuntimeContext &rt) -> std::unique_ptr<rt_ns::KernelBase> {
-    return MakeSessionKernel<LogKernel>(node, rt);
+    auto kernel = std::make_unique<LogKernel>(rt.kernel_ctx());
+    kernel->set_node(node);
+    return kernel;
   };
   // Empty domain -> normalised to the default ONNX domain, overriding the
   // built-in Log entry with the SIMD-accelerated kernel for the CPU device.

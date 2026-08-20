@@ -5,6 +5,7 @@
 #include "onnx_light_cpu/kernels/register_kernels.h"
 
 #include "onnx_core/runtime/kernels/kernel_dispatch_table.h"
+#include "onnx_core/runtime/memory/simple_tensor.h"
 #include "onnx_core/runtime/runtime_context.h"
 
 #include <gtest/gtest.h>
@@ -20,7 +21,7 @@ TEST(OnnxLightRegisterKernels, RegisterAllKernels) {
   EXPECT_NO_THROW(onnx_light_cpu::RegisterAllKernels());
 }
 
-TEST(OnnxLightRegisterKernels, RegisteredFactoriesRequireSessionExecutor) {
+TEST(OnnxLightRegisterKernels, RegisteredFactoriesConstructWithoutSessionExecutor) {
   namespace rt_ns = ONNX_LIGHT_NAMESPACE::core::runtime;
   onnx_light_cpu::RegisterAllKernels();
   const auto &table = rt_ns::KernelDispatchTable();
@@ -31,8 +32,17 @@ TEST(OnnxLightRegisterKernels, RegisteredFactoriesRequireSessionExecutor) {
   node.add_input("x");
   node.add_output("y");
   rt_ns::RuntimeContext runtime(rt_ns::KernelContext(rt_ns::DefaultOpset(18)));
+  runtime.Set("x", rt_ns::Tensor::FromFloat("x", {4}, {-1.0f, 2.0f, -3.5f, 4.0f}));
 
-  EXPECT_THROW(factory->second(node, runtime), std::invalid_argument);
+  std::unique_ptr<rt_ns::KernelBase> kernel;
+  ASSERT_NO_THROW(kernel = factory->second(node, runtime));
+  ASSERT_NE(kernel, nullptr);
+  EXPECT_NO_THROW(kernel->Run(runtime));
+  const float *y = runtime.Get("y").AsFloat();
+  EXPECT_FLOAT_EQ(y[0], 1.0f);
+  EXPECT_FLOAT_EQ(y[1], 2.0f);
+  EXPECT_FLOAT_EQ(y[2], 3.5f);
+  EXPECT_FLOAT_EQ(y[3], 4.0f);
 }
 
 } // namespace
