@@ -75,6 +75,11 @@ std::int32_t IntegerDotU8S8Scalar(const std::uint8_t *ua, const std::int8_t *sb,
 // Exact AVX2 fallback. It splits each UINT8 value into low-seven-bit and
 // high-bit terms before ``vpmaddubsw``, keeping both pair sums in range.
 std::int32_t IntegerDotU8S8Avx2(const std::uint8_t *ua, const std::int8_t *sb, std::int64_t depth);
+
+// Computes all raw dot products from packed row-major A and transposed B panels.
+// The 2x2 output micro-kernel reuses loaded A and B vectors across outputs.
+void IntegerMatMulU8S8Avx2(const std::uint8_t *a, const std::int8_t *b, std::int32_t *c,
+                           std::int64_t rows, std::int64_t cols, std::int64_t depth);
 #endif
 
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512VNNI

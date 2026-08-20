@@ -1316,7 +1316,10 @@ fallbacks are ordered. Completed rows remain visible so scope is not lost.
        INT8 dot product used by both byte and packed-4-bit GEMM. On the
        diagnostic AVX2 host, isolated square-512 throughput rises from 20.66 to
        58.54 GOPS for INT8 and from 18.64 to 49.97 GOPS for INT4. The full
-       dedicated-machine gate remains open.
+       dedicated-machine gate remains open. The second pass replaces the
+       per-output AVX2 reduction with a 2x2 blocked output micro-kernel that
+       reuses loaded A and packed B vectors across outputs while preserving the
+       exact scalar output and reduction tails.
    * - Roadmap PR10.5
      - Final blocking GEMM parity gate.
      - Raw dedicated-machine results cover Gemm, shared MatMul, batched paths,
@@ -1412,12 +1415,18 @@ packed INT4 square-512 rises from 18.64 to 49.97 GOPS.
 The one-thread end-to-end MatMulInteger median improves from 0.109x to 0.193x
 ONNX Runtime and its minimum from 0.063x to 0.097x on the diagnostic host. This
 does not close PR10.4: the current driver still packs complete matrices for
-every invocation and computes one output dot product at a time.
+every invocation.
+
+The second pass replaces the per-output AVX2 reduction with a register-budgeted
+2x2 micro-kernel for products with at least two rows, two columns, and one
+32-byte reduction vector. On the same host with VNNI and AMX disabled, the
+isolated square-512, large-K, and transformer cases improve from 102.15, 57.46,
+and 80.33 GOPS to 105.12, 69.90, and 91.81 GOPS. Tiny and small-K products keep
+the single-output reduction. These are diagnostic results, not the dedicated
+machine evidence required to close PR10.4.
 
 The remaining PR10.4 tuning order is:
 
-#. Replace the per-column AVX2 reduction with a blocked M x N micro-kernel that
-   reuses A vectors and packed B panels across multiple outputs.
 #. Cache constant-B integer panels and partition reusable panel tasks through
    the session executor before tuning multi-core blocking.
 #. Route contiguous ``QLinearMatMul`` through the shared integer engine and
