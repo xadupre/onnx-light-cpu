@@ -4,7 +4,6 @@
 
 #include "onnx_light_cpu/kernels/math/exp_log_kernel.h"
 
-#include "onnx_light_cpu/impl/math/exp_log_schedule.h"
 #include "onnx_light_cpu/impl/math/math_kernels.h"
 #include "onnx_light_cpu/kernels/kernel_usage.h"
 #include "onnx_light_cpu/kernels/session_executor_adapter.h"
@@ -12,6 +11,7 @@
 #include "onnx_core/runtime/kernels/cast_helper.h"
 #include "onnx_core/runtime/kernels/kernel_dispatch_table.h"
 #include "onnx_core/runtime/kernels/node_helpers.h"
+#include "onnx_core/runtime/kernels/parallel_for.h"
 #include "onnx_core/symbolic/sym_tensor.h"
 
 #include <cmath>
@@ -42,8 +42,7 @@ using Float16Fn = void (*)(const std::uint16_t *, std::uint16_t *, std::size_t);
 // (``Exp``/``Log``). ``scalar`` is used for the ``bfloat16`` fallback and to
 // name the kernel in error messages.
 void ComputeUnary(const Tensor &x, Tensor &output, const char *kernel_name, Float32Fn f32,
-                  Float64Fn f64, Float16Fn f16, float (*scalar)(float),
-                  const ExecutionSchedule &schedule) {
+                  Float64Fn f64, Float16Fn f16, float (*scalar)(float)) {
   if (output.data_type != x.data_type) {
     throw std::invalid_argument(std::string("onnx_light_cpu::") + kernel_name +
                                 ": output dtype must match input dtype.");
@@ -81,7 +80,7 @@ void ComputeUnary(const Tensor &x, Tensor &output, const char *kernel_name, Floa
   case DataType::BFLOAT16: {
     const std::uint16_t *px = reinterpret_cast<const std::uint16_t *>(x.bytes());
     std::uint16_t *py = reinterpret_cast<std::uint16_t *>(output.mutable_bytes());
-    ExecuteRanges(n, schedule, [px, py, scalar](std::int64_t begin, std::int64_t end) {
+    rt_ns::ParallelFor(n, [px, py, scalar](std::int64_t begin, std::int64_t end) {
       for (std::int64_t i = begin; i < end; ++i) {
         py[i] = rt_ns::FloatToBfloat16Bits(scalar(rt_ns::Bfloat16BitsToFloat(px[i])));
       }
@@ -113,8 +112,7 @@ Tensor ExpKernel::operator()(const Tensor &x, RuntimeContext *rt) const {
 }
 
 void ExpKernel::operator()(const Tensor &x, Tensor &output) const {
-  ComputeUnary(x, output, "ExpKernel", &ExpFloat32, &ExpFloat64, &ExpFloat16, &ScalarExp,
-               kExpExecutionSchedule);
+  ComputeUnary(x, output, "ExpKernel", &ExpFloat32, &ExpFloat64, &ExpFloat16, &ScalarExp);
 }
 
 void ExpKernel::Run(RuntimeContext &rt) {
@@ -133,8 +131,7 @@ Tensor LogKernel::operator()(const Tensor &x, RuntimeContext *rt) const {
 }
 
 void LogKernel::operator()(const Tensor &x, Tensor &output) const {
-  ComputeUnary(x, output, "LogKernel", &LogFloat32, &LogFloat64, &LogFloat16, &ScalarLog,
-               kLogExecutionSchedule);
+  ComputeUnary(x, output, "LogKernel", &LogFloat32, &LogFloat64, &LogFloat16, &ScalarLog);
 }
 
 void LogKernel::Run(RuntimeContext &rt) {

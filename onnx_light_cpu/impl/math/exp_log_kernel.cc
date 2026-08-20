@@ -33,6 +33,9 @@
 
 namespace onnx_light_cpu {
 
+inline constexpr double kExpLogCostPerElement = 20.0;
+inline constexpr double kExpLogHalfCostPerElement = 40.0;
+
 namespace {
 
 void ExpFloat32_Scalar(const float *input, float *output, std::size_t count) {
@@ -756,7 +759,7 @@ void ExpFloat64(const double *input, double *output, std::size_t count) {
   if (count == 0)
     return;
   ExecuteRanges(
-      static_cast<std::int64_t>(count), kExpExecutionSchedule, ExecutionSimdLanes<double>(),
+      static_cast<std::int64_t>(count), kExpLogCostPerElement, ExecutionSimdLanes<double>(),
       [input, output](std::int64_t begin, std::int64_t end) {
         ExpFloat64_Dispatch(input + begin, output + begin, static_cast<std::size_t>(end - begin));
       });
@@ -789,7 +792,7 @@ void LogFloat64(const double *input, double *output, std::size_t count) {
   if (count == 0)
     return;
   ExecuteRanges(
-      static_cast<std::int64_t>(count), kLogExecutionSchedule, ExecutionSimdLanes<double>(),
+      static_cast<std::int64_t>(count), kExpLogCostPerElement, ExecutionSimdLanes<double>(),
       [input, output](std::int64_t begin, std::int64_t end) {
         LogFloat64_Dispatch(input + begin, output + begin, static_cast<std::size_t>(end - begin));
       });
@@ -798,7 +801,7 @@ void LogFloat64(const double *input, double *output, std::size_t count) {
 void ExpFloat16(const uint16_t *input, uint16_t *output, std::size_t count) {
   if (count == 0)
     return;
-  ExecuteRanges(static_cast<std::int64_t>(count), kExpExecutionSchedule,
+  ExecuteRanges(static_cast<std::int64_t>(count), kExpLogHalfCostPerElement,
                 [input, output](std::int64_t begin, std::int64_t end) {
                   for (std::int64_t i = begin; i < end; ++i) {
                     output[i] =
@@ -810,7 +813,7 @@ void ExpFloat16(const uint16_t *input, uint16_t *output, std::size_t count) {
 void LogFloat16(const uint16_t *input, uint16_t *output, std::size_t count) {
   if (count == 0)
     return;
-  ExecuteRanges(static_cast<std::int64_t>(count), kLogExecutionSchedule,
+  ExecuteRanges(static_cast<std::int64_t>(count), kExpLogHalfCostPerElement,
                 [input, output](std::int64_t begin, std::int64_t end) {
                   for (std::int64_t i = begin; i < end; ++i) {
                     output[i] =
