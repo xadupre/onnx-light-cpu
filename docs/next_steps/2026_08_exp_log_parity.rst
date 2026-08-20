@@ -244,6 +244,15 @@ thresholds are chosen from isolated measurements, not inferred from polynomial
 degree. Each block must contain enough vectors to amortize dispatch, and the
 participant count must stop increasing after throughput saturates.
 
+ExpLog PR05 selects a 524,288-element threshold, 262,144-element blocks, and a
+two-participant cap for ``Exp``. ``Log`` uses a 131,072-element threshold,
+65,536-element blocks, and a four-participant cap. Isolated 1/2/4-participant
+measurements showed that dispatch dominated below these ranges, that ``Exp``
+saturated at two participants through the multi-million-element range, and that
+the heavier ``Log`` kernel retained useful four-way scaling. Executor-policy
+tests lock down both decisions and verify that an existing parallel region
+executes nested work inline.
+
 Registered runtime execution uses the session-owned executor described by the
 runtime-controls roadmap. Standalone calls remain serial and cannot introduce
 nested workers.
@@ -294,7 +303,7 @@ Remaining pull-request sequence
        priority size and thread configuration. No nested-pool or
        oversubscription regression is observed.
      - PR03, PR04
-     - Pending
+     - Complete
    * - ExpLog PR06
      - Final ONNX Runtime parity gate.
      - The priority-corpus median is at least ``1.0x``, every priority case is

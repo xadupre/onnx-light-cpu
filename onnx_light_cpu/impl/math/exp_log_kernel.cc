@@ -17,6 +17,7 @@
 #include "onnx_light_cpu/impl/math/math_kernels.h"
 
 #include "onnx_light_cpu/impl/execution.h"
+#include "onnx_light_cpu/impl/math/exp_log_schedule.h"
 #include "onnx_light_cpu/impl/math/half_conversion.h"
 
 #include <cmath>
@@ -32,16 +33,9 @@
 
 namespace onnx_light_cpu {
 
-// Relative per-element cost passed to ExecuteRanges for the Exp/Log kernels. These
-// evaluate a minimax polynomial (float32/float64) per element and are therefore
-// compute bound, so they benefit from threading on much smaller arrays than the
-// memory-bound Abs/Not kernels. A cost well above 1 lowers the parallel
-// threshold (~kExecutionGrainSize / cost elements) accordingly.
+// Retain the established cost model for float64 and the scalar conversion paths.
 inline constexpr double kExpLogCostPerElement = 20.0;
-
-// The float16 paths run the scalar std::exp/std::log per element (plus two
-// float16<->float32 conversions) with no SIMD, so they are the heaviest and use
-// an even higher cost to parallelize sooner.
+// Float16 conversion plus scalar libm work benefits from earlier dispatch.
 inline constexpr double kExpLogHalfCostPerElement = 40.0;
 
 namespace {
@@ -691,7 +685,7 @@ void ExpFloat32_Dispatch(const float *input, float *output, std::size_t count) {
 void ExpFloat32(const float *input, float *output, std::size_t count) {
   if (count == 0)
     return;
-  ExecuteRanges(static_cast<std::int64_t>(count), kExpLogCostPerElement,
+  ExecuteRanges(static_cast<std::int64_t>(count), kExpExecutionSchedule,
                 ExecutionSimdLanes<float>(), [input, output](std::int64_t begin, std::int64_t end) {
                   ExpFloat32_Dispatch(input + begin, output + begin,
                                       static_cast<std::size_t>(end - begin));
@@ -733,7 +727,7 @@ void LogFloat32_Dispatch(const float *input, float *output, std::size_t count) {
 void LogFloat32(const float *input, float *output, std::size_t count) {
   if (count == 0)
     return;
-  ExecuteRanges(static_cast<std::int64_t>(count), kExpLogCostPerElement,
+  ExecuteRanges(static_cast<std::int64_t>(count), kLogExecutionSchedule,
                 ExecutionSimdLanes<float>(), [input, output](std::int64_t begin, std::int64_t end) {
                   LogFloat32_Dispatch(input + begin, output + begin,
                                       static_cast<std::size_t>(end - begin));
