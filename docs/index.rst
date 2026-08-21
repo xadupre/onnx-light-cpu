@@ -15,7 +15,7 @@ C++ kernel dispatch table so any ONNX model using a supported operator runs the
 optimized kernel when evaluated through a ``ReferenceEvaluator``. See
 :doc:`getting_started` to install the package and run your first model, the
 :doc:`kernels` page for the list of operators provided by this repository, the
-:doc:`examples` gallery for runnable examples, and the :doc:`benchmarks` gallery
+:doc:`examples` gallery for runnable examples, and the :ref:`benchmarks-gallery` gallery
 for performance comparisons against other back-ends.
 
 .. toctree::

@@ -3,7 +3,11 @@ Attention Performance Roadmap
 
 :Date: 2026-08
 
-**in progress**
+**discussion**
+
+The portable runtime provides tensor-based Attention correctness, but
+``onnx-light-cpu`` does not yet provide the optimized materialized or streaming
+kernel described here. Roadmap PR11 through PR15 remain pending.
 
 Objective
 ---------

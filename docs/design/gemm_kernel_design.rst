@@ -9,7 +9,7 @@ micro-kernel at runtime, and which further optimizations were considered but
 not (yet) implemented, with their expected gain and risk. Delivery order,
 performance gates, and remaining work are tracked in the
 :doc:`Gemm, MatMul, and Attention roadmap
-<../next_steps/2026_08_gemm_matmul>`.
+<../next_steps/2026/2026_08_gemm_matmul>`.
 
 Kernel selection decision tree
 -------------------------------

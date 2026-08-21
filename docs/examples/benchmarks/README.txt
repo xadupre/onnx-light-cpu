@@ -8,7 +8,7 @@ A gallery of benchmarks comparing the SIMD-accelerated CPU kernels provided by
 and ``onnx-light``'s built-in reference kernels.
 
 The Gemm and Attention corpora used by the
-:doc:`Gemm and MatMul roadmap <next_steps/2026_08_gemm_matmul>` are implemented
+:doc:`Gemm and MatMul roadmap </next_steps/2026/2026_08_gemm_matmul>` are implemented
 as C++ backend cases in ``TestMode::BENCHMARK``. This is the benchmark framework
 provided by ``onnx-light``: cases are generated lazily in C++, exposed through
 ``CollectTestCases``, and consumed by the common benchmark recorder. The Gemm

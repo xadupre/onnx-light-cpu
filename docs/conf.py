@@ -13,7 +13,9 @@ extensions = [
     "breathe",
     "myst_parser",
     "sphinx_copybutton",
+    "sphinx_datatables",
     "sphinx_gallery.gen_gallery",
+    "sphinx_reredirects",
     "onnx_kernels",
 ]
 
@@ -48,6 +50,25 @@ def setup(app):
 
 html_theme = "pydata_sphinx_theme"
 html_static_path = ["_static"]
+
+redirects = {
+    "next_steps/2026_08_attention": "2026/2026_08_attention.html",
+    "next_steps/2026_08_binary_elementwise": "2026/2026_08_binary_elementwise.html",
+    "next_steps/2026_08_conv": "2026/2026_08_conv.html",
+    "next_steps/2026_08_elementwise_kernel_tuning": (
+        "2026/2026_08_elementwise_kernel_tuning.html"
+    ),
+    "next_steps/2026_08_exp_log_parity": "2026/2026_08_exp_log_parity.html",
+    "next_steps/2026_08_gemm_matmul": "2026/2026_08_gemm_matmul.html",
+    "next_steps/2026_08_kv_cache": "2026/2026_08_kv_cache.html",
+    "next_steps/2026_08_qwen3_inference": "2026/2026_08_qwen3_inference.html",
+    "next_steps/2026_08_runtime_execution_controls": (
+        "2026/2026_08_runtime_execution_controls.html"
+    ),
+    "next_steps/2026_08_svm": "2026/2026_08_svm.html",
+    "next_steps/2026_08_tree_ensemble": "2026/2026_08_tree_ensemble.html",
+    "next_steps/2026_08_unary_elementwise": "2026/2026_08_unary_elementwise.html",
+}
 html_logo = "_static/logo.svg"
 html_favicon = "_static/logo.svg"
 html_theme_options = {

@@ -3,7 +3,7 @@ Runtime Execution Controls Roadmap
 
 :Date: 2026-08
 
-**discussion**
+**complete**
 
 Objective
 ---------
@@ -185,7 +185,7 @@ count is part of the calibrated parameter set, not a second hidden pool limit.
 Benchmark and validation plan
 -----------------------------
 
-Follow :doc:`the benchmark methodology <../design/benchmark_methodology>`.
+Follow :doc:`the benchmark methodology <../../design/benchmark_methodology>`.
 Cover:
 
 * serial, 2, 4, physical-core, and logical-thread counts;
@@ -257,10 +257,11 @@ Pull-request sequence
    * - Runtime PR07
      - Both: private-scheduler removal and compatibility gate.
      - The complete policy matrix passes correctness tests; default latency and
-       throughput do not regress; ``onnx-light-cpu`` owns no worker pool and
-       registered kernels use only the session executor.
+       throughput do not regress; ``onnx-light-cpu`` owns no worker pool after
+       `#314 <https://github.com/xadupre/onnx-light-cpu/pull/314>`_ removes the
+       adapter and registered kernels use only the session executor.
      - PR05, PR06
-     - In review (`Pool PR07
+     - Merged (`Pool PR07
        <https://github.com/xadupre/onnx-light-cpu/pull/271>`_)
 
-Runtime PR07 is the final roadmap PR.
+Runtime PR07 completed the roadmap.

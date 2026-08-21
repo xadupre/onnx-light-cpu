@@ -5,6 +5,11 @@ Gemm and MatMul Performance Roadmap
 
 **in progress**
 
+PR `#307 <https://github.com/xadupre/onnx-light-cpu/pull/307>`_
+delivered the shared MatMul kernel and final parity corpus. The roadmap remains
+open until the dedicated-machine PR10.3, PR10.4, and PR10.5 measurements
+satisfy their published gates.
+
 Objective
 ---------
 
@@ -18,7 +23,7 @@ with standard ONNX tensors and semantics.
 The current implementation is a correctness-first, register-blocked kernel
 with AVX2/AVX-512 paths, K blocking, A/B packing, a task-aware M x N scheduler,
 batch scheduling, packed SIMD split-K, and typed broadcast/fused epilogues; see
-:doc:`the current design <../design/gemm_kernel_design>`. Roadmap PR01 closed
+:doc:`the current design <../../design/gemm_kernel_design>`. Roadmap PR01 closed
 the scheduler under-utilization identified on multi-panel shapes, and Roadmap
 PR02 removed expanded bias temporaries. The FP32 investigation in
 `onnx-light-cpu #162

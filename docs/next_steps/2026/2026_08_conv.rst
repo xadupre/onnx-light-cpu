@@ -14,7 +14,8 @@ where a model-aware execution plan can specialize layouts, transformed
 weights, epilogues, and neighboring operators.
 
 Conv should reuse the ``GemmPlan`` infrastructure described in
-:doc:`gemm_matmul`, including ISA dispatch, packing primitives, micro-kernels,
+:doc:`Gemm and MatMul roadmap <2026_08_gemm_matmul>`, including ISA dispatch,
+packing primitives, micro-kernels,
 low-precision conversion, and scheduling. It must not lower every convolution
 to a materialized ``im2col`` matrix: data replication and extra memory traffic
 make that approach unsuitable for an optimized inference runtime.
