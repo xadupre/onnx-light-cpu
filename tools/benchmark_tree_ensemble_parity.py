@@ -516,11 +516,16 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
         cpu_output = cpu_run()
         ort_output = ort_run()
+        tolerance = 2e-5 if case.dtype == "float32" else 1e-9
         if case.task == "classification":
             np.testing.assert_array_equal(cpu_output[0], ort_output[0])
-            np.testing.assert_allclose(cpu_output[1], ort_output[1], rtol=2e-5, atol=2e-6)
+            np.testing.assert_allclose(
+                cpu_output[1], ort_output[1], rtol=tolerance, atol=tolerance
+            )
         else:
-            np.testing.assert_allclose(cpu_output[0], ort_output[0], rtol=2e-5, atol=2e-6)
+            np.testing.assert_allclose(
+                cpu_output[0], ort_output[0], rtol=tolerance, atol=tolerance
+            )
         repeat = repeat_count(case, args.minimum_repeats, args.maximum_repeats)
         cpu_samples, ort_samples = measure_alternating(
             (cpu_run, ort_run), repeat=repeat, warmup=args.warmup

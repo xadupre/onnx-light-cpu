@@ -63,15 +63,21 @@ def test_summary_enforces_both_tasks_dtypes_and_single_row_baseline():
     assert report["single_row"]["passed"]
 
 
-def test_summary_rejects_slow_case_and_missing_baseline():
+def test_summary_rejects_a_slow_case_even_when_median_passes():
     results = [
+        _result("reg32_fast", "regression", "float32", 1.2),
         _result("reg32", "regression", "float32", 0.89),
         _result("reg64", "regression", "float64", 1.0),
         _result("cls32", "classification", "float32", 1.0),
         _result("cls64", "classification", "float64", 1.0),
     ]
+    baseline = {row["name"]: 1.0 for row in results}
 
-    assert not summarize(results)["passed"]
+    report = summarize(results, baseline)
+
+    assert report["groups"]["regression_float32"]["median_speedup"] > 1.0
+    assert not report["groups"]["regression_float32"]["passed"]
+    assert not report["passed"]
 
 
 def test_comparison_table_reports_both_engines():
