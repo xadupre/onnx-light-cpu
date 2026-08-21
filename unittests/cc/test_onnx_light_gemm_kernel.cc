@@ -7,6 +7,7 @@
 #include "onnx_core/runtime/kernels/cast_helper.h"
 #include "onnx_core/runtime/kernels/kernel_context.h"
 #include "onnx_core/runtime/memory/simple_tensor.h"
+#include "onnx_core/runtime/tuning/kernel_tuning.h"
 
 #include <gtest/gtest.h>
 
@@ -19,6 +20,20 @@ namespace {
 namespace rt_ns = ONNX_LIGHT_NAMESPACE::core::runtime;
 
 rt_ns::KernelContext MakeCtx() { return rt_ns::KernelContext(rt_ns::OpsetId(std::string(), 18)); }
+
+void ConfigureTuning(onnx_light_cpu::GemmKernel &kernel, rt_ns::DataType data_type) {
+  onnx_light_cpu::GemmKernel::RegisterTuningSchemas();
+  const auto schema = rt_ns::GetKernelTuningRegistry().FindSchema(
+      kernel.TuningKey(static_cast<int32_t>(data_type)));
+  ASSERT_NE(schema, nullptr);
+  auto parameters = schema->portable_defaults();
+  for (const char *name :
+       {"blocking.mc", "blocking.nc", "blocking.kc", "compact_blocking.mc", "compact_blocking.nc",
+        "compact_blocking.kc", "parallel.maximum_threads"}) {
+    parameters.values[name] = int64_t{1};
+  }
+  kernel.Configure(parameters);
+}
 
 // Straightforward reference Gemm: Y = alpha * op(A) @ op(B) + beta * C, with C
 // broadcast (here only the full M x N case is exercised).
@@ -45,8 +60,65 @@ std::vector<float> ReferenceGemm(bool trans_a, bool trans_b, std::size_t M, std:
   return Y;
 }
 
+TEST(OnnxLightGemmKernel, RegistersAndValidatesTuningSchemas) {
+  EXPECT_NO_THROW(onnx_light_cpu::GemmKernel::RegisterTuningSchemas());
+  EXPECT_NO_THROW(onnx_light_cpu::GemmKernel::RegisterTuningSchemas());
+
+  for (rt_ns::DataType data_type : {rt_ns::DataType::FLOAT, rt_ns::DataType::DOUBLE,
+                                    rt_ns::DataType::FLOAT16, rt_ns::DataType::BFLOAT16}) {
+    onnx_light_cpu::GemmKernel kernel(MakeCtx());
+    const auto key = kernel.TuningKey(static_cast<int32_t>(data_type));
+    EXPECT_EQ(key.library, "onnx_light_cpu");
+    EXPECT_EQ(key.kernel, "Gemm");
+    EXPECT_EQ(key.implementation, "simd_dispatch");
+    EXPECT_EQ(key.tuning_abi, onnx_light_cpu::GemmKernel::kTuningAbi);
+
+    const auto schema = rt_ns::GetKernelTuningRegistry().FindSchema(key);
+    ASSERT_NE(schema, nullptr);
+    auto parameters = schema->portable_defaults();
+    for (const char *name :
+         {"blocking.mc", "blocking.nc", "blocking.kc", "compact_blocking.mc", "compact_blocking.nc",
+          "compact_blocking.kc", "parallel.maximum_threads"}) {
+      EXPECT_EQ(parameters.Get<int64_t>(name), 0);
+      parameters.values[name] = int64_t{7};
+    }
+    EXPECT_NO_THROW(schema->Validate(parameters));
+    EXPECT_NO_THROW(kernel.Configure(parameters));
+
+    parameters.values["blocking.mc"] = int64_t{-1};
+    EXPECT_THROW(schema->Validate(parameters), std::invalid_argument);
+    EXPECT_THROW(kernel.Configure(parameters), std::invalid_argument);
+  }
+
+  onnx_light_cpu::GemmKernel kernel(MakeCtx());
+  EXPECT_EQ(kernel.TuningKey(static_cast<int32_t>(rt_ns::DataType::INT32)).device,
+            ONNX_LIGHT_NAMESPACE::core::symbolic::Device::kUndefined);
+}
+
+TEST(OnnxLightGemmKernel, ConfigurationChangeRebuildsCachedPlan) {
+  ONNX_LIGHT_NAMESPACE::NodeProto node;
+  node.set_op_type("Gemm");
+  node.add_input("A");
+  node.add_input("B");
+  node.add_output("Y");
+  rt_ns::RuntimeContext runtime(MakeCtx());
+  runtime.Set("A", rt_ns::Tensor::FromFloat("A", {2, 2}, {1, 2, 3, 4}));
+  runtime.Set("B", rt_ns::Tensor::FromFloat("B", {2, 2}, {1, 0, 0, 1}));
+
+  onnx_light_cpu::GemmKernel kernel(MakeCtx());
+  kernel.set_node(node);
+  kernel.Run(runtime);
+  EXPECT_FLOAT_EQ(runtime.Get("Y").AsFloat()[3], 4.0f);
+
+  ConfigureTuning(kernel, rt_ns::DataType::FLOAT);
+  kernel.Run(runtime);
+  EXPECT_FLOAT_EQ(runtime.Get("Y").AsFloat()[0], 1.0f);
+  EXPECT_FLOAT_EQ(runtime.Get("Y").AsFloat()[3], 4.0f);
+}
+
 TEST(OnnxLightGemmKernel, Float32Matmul) {
   onnx_light_cpu::GemmKernel kernel(MakeCtx());
+  ConfigureTuning(kernel, rt_ns::DataType::FLOAT);
   const std::size_t M = 2, N = 3, K = 4;
   const std::vector<float> a = {1, 2, 3, 4, 5, 6, 7, 8};
   const std::vector<float> b = {1, 0, 2, 0, 1, 0, 2, 0, 1, 0, 2, 0};
@@ -159,6 +231,7 @@ TEST(OnnxLightGemmKernel, Float32TransposeVariants) {
 // rounded back to fp16.
 TEST(OnnxLightGemmKernel, Float16AlphaBetaBias) {
   onnx_light_cpu::GemmKernel kernel(MakeCtx());
+  ConfigureTuning(kernel, rt_ns::DataType::FLOAT16);
   const std::size_t M = 2, N = 2, K = 3;
   const std::vector<float> a = {1, 2, 3, 4, 5, 6};
   const std::vector<float> b = {1, 2, 3, 4, 5, 6};
@@ -201,6 +274,7 @@ TEST(OnnxLightGemmKernel, Float16BroadcastRowBias) {
 // BFLOAT16 support, mirroring the FLOAT16 test above.
 TEST(OnnxLightGemmKernel, Bfloat16AlphaBetaBias) {
   onnx_light_cpu::GemmKernel kernel(MakeCtx());
+  ConfigureTuning(kernel, rt_ns::DataType::BFLOAT16);
   const std::size_t M = 2, N = 2, K = 3;
   const std::vector<float> a = {1, 2, 3, 4, 5, 6};
   const std::vector<float> b = {1, 2, 3, 4, 5, 6};
@@ -241,6 +315,7 @@ TEST(OnnxLightGemmKernel, Float16NoBias) {
 
 TEST(OnnxLightGemmKernel, Float64Matmul) {
   onnx_light_cpu::GemmKernel kernel(MakeCtx());
+  ConfigureTuning(kernel, rt_ns::DataType::DOUBLE);
   const std::vector<double> a = {1, 2, 3, 4};
   const std::vector<double> b = {5, 6, 7, 8};
   const rt_ns::Tensor A = rt_ns::Tensor::FromDouble("A", {2, 2}, a);

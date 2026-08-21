@@ -9,6 +9,7 @@
 #include "onnx_core/runtime/runtime_context.h"
 
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 
 #ifndef ONNX_LIGHT_NAMESPACE
@@ -54,6 +55,13 @@ public:
   /// :cpp:func:`RecordKernelUsage` on every :cpp:func:`Run` so callers can
   /// tell the onnx-light-cpu kernel apart from onnx-light's built-in ``Gemm``.
   static constexpr const char *kName = "onnx_light_cpu::Gemm";
+  static constexpr std::uint32_t kTuningAbi = 1;
+
+  static void RegisterTuningSchemas();
+  ONNX_LIGHT_NAMESPACE::core::runtime::KernelTuningKey
+  TuningKey(int32_t element_type) const override;
+  void
+  Configure(const ONNX_LIGHT_NAMESPACE::core::runtime::KernelTuningParameters &parameters) override;
 
   /// Reads the node's ``A``, ``B`` and optional ``C`` inputs together with the
   /// ``alpha``, ``beta``, ``transA`` and ``transB`` attributes, computes the
@@ -88,6 +96,17 @@ private:
   struct GemmPlanCache;
   std::unique_ptr<GemmPlanCache> plan_cache_;
 
+  struct Tuning {
+    std::size_t mc = 0;
+    std::size_t nc = 0;
+    std::size_t kc = 0;
+    std::size_t compact_mc = 0;
+    std::size_t compact_nc = 0;
+    std::size_t compact_kc = 0;
+    std::size_t maximum_participants = 0;
+  };
+  Tuning tuning_;
+
   /// Shared computation for the operator ``Run`` and ``operator()`` paths. When
   /// ``cache`` is non-null, the FP32/FP64 paths retrieve or rebuild a keyed
   /// immutable plan through it; otherwise a transient plan is prepared.
@@ -96,7 +115,7 @@ private:
           const ONNX_LIGHT_NAMESPACE::core::runtime::Tensor &b,
           const ONNX_LIGHT_NAMESPACE::core::runtime::Tensor *c, float alpha, float beta,
           bool trans_a, bool trans_b, ONNX_LIGHT_NAMESPACE::core::runtime::RuntimeContext *rt,
-          GemmPlanCache *cache);
+          GemmPlanCache *cache, const Tuning &tuning);
 };
 
 /// Registers the onnx-light-cpu ``Gemm`` kernel into onnx-light's shared
