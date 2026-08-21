@@ -10,6 +10,29 @@ delivered the shared MatMul kernel and final parity corpus. The roadmap remains
 open until the dedicated-machine PR10.3, PR10.4, and PR10.5 measurements
 satisfy their published gates.
 
+Open gates
+----------
+
+Only three issues remain open. Each implementation gate owns both its remaining
+tuning and its dedicated-machine evidence so the work is not fragmented:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 18 52 30
+
+   * - Gate
+     - Remaining work
+     - Closure evidence
+   * - `#277 <https://github.com/xadupre/onnx-light-cpu/issues/277>`_
+     - Reuse compact FP16/BF16 B panels and fix physical-core scaling.
+     - Publish passing dedicated x86/ARM FP16 parity and BF16 throughput.
+   * - `#281 <https://github.com/xadupre/onnx-light-cpu/issues/281>`_
+     - Close remaining integer and compact-format end-to-end gaps.
+     - Publish passing dedicated x86/ARM integer/compact results.
+   * - `#286 <https://github.com/xadupre/onnx-light-cpu/issues/286>`_
+     - Combine Gemm, MatMul, batched paths, platforms, and supported types.
+     - Publish the final raw report after #277 and #281 close.
+
 Objective
 ---------
 
@@ -1300,7 +1323,8 @@ fallbacks are ordered. Completed rows remain visible so scope is not lost.
        median with no priority case below 0.9x where the type is supported.
        The PR contains measurement-driven tuning only.
      - PR10.1
-     - In progress. The `first tuning pass in #267
+     - Open (`#277 <https://github.com/xadupre/onnx-light-cpu/issues/277>`_).
+       The `first tuning pass in #267
        <https://github.com/xadupre/onnx-light-cpu/pull/267>`_ raises the 18-case
        median from 0.341x to 0.479x ONNX Runtime and the minimum from 0.138x to
        0.237x on a pinned AVX2/FMA/F16C i7-13800H thread. The `second tuning
@@ -1308,14 +1332,15 @@ fallbacks are ordered. Completed rows remain visible so scope is not lost.
        vectorizes FP16/BF16 output narrowing, adds an AVX2 BF16 direct
        micro-kernel, and routes the operator workspace through the runtime
        arena. The focused FLOAT16 direct/tiny corpus reaches a 1.178x median
-       and 1.046x minimum. The complete dedicated-machine gate remains open.
+       and 1.046x minimum. Remaining tuning and evidence stay in #277.
    * - Roadmap PR10.4
      - Integer and compact-format performance gate.
      - Dedicated-machine results are published per type and ISA. Types
        supported by ONNX Runtime reach at least 1.0x median with no priority
        case below 0.9x; unsupported types publish correctness and throughput.
      - PR10.2
-     - In progress. The `first tuning pass in #274
+     - Open (`#281 <https://github.com/xadupre/onnx-light-cpu/issues/281>`_).
+       The `first tuning pass in #274
        <https://github.com/xadupre/onnx-light-cpu/pull/274>`_ adds the integer
        parity and compact throughput instruments plus an exact AVX2 UINT8 x
        INT8 dot product used by both byte and packed-4-bit GEMM. On the
@@ -1324,7 +1349,8 @@ fallbacks are ordered. Completed rows remain visible so scope is not lost.
        dedicated-machine gate remains open. The second pass replaces the
        per-output AVX2 reduction with a 2x2 blocked output micro-kernel that
        reuses loaded A and packed B vectors across outputs while preserving the
-       exact scalar output and reduction tails.
+       exact scalar output and reduction tails. Remaining tuning and evidence
+       stay in #281.
    * - Roadmap PR10.5
      - Final blocking GEMM parity gate.
      - Raw dedicated-machine results cover Gemm, shared MatMul, batched paths,
@@ -1334,7 +1360,8 @@ fallbacks are ordered. Completed rows remain visible so scope is not lost.
        fails. The separate :doc:`Attention roadmap <2026_08_attention>` starts
        after this gate closes.
      - PR10.3, PR10.4
-     - Pending
+     - Open (`#286 <https://github.com/xadupre/onnx-light-cpu/issues/286>`_),
+       blocked by #277 and #281.
 
 Roadmap PR10.5 is the final Gemm and MatMul roadmap PR.
 
@@ -1394,15 +1421,12 @@ not implement CPU BFLOAT16 Gemm on this host, so BFLOAT16 remains an isolated
 throughput measurement rather than a parity ratio. ARM results are also still
 required.
 
-The remaining PR10.3 tuning order is:
+The remaining PR10.3 order, tracked entirely by #277, is:
 
 #. Reuse compact B panels across row tasks. For medium and large non-transposed
-   GEMM, benchmark a cache-sized FP16 packed-B layout whose conversion happens
-   inside the micro-kernel, but only dispatch it when B reuse beats the current
-   once-per-panel FP32 widening.
-#. Vectorize transposed packing. Add blocked FP16 transpose/convert kernels for
-   A and B, then tune square and rectangular block sizes against ``trans_a``,
-   ``trans_b``, and ``trans_ab`` independently.
+   GEMM, benchmark a cache-sized FP16/BF16 packed-B layout whose conversion
+   happens inside the micro-kernel, but only dispatch it when B reuse beats the
+   current once-per-panel FP32 widening.
 #. Fix physical-core scaling. A ten-thread diagnostic corpus reaches only
    0.309x median after the tiny split-K correction, with high variance and a
    0.040x minimum; partition packed B panels across reusable physical-core
@@ -1410,8 +1434,8 @@ The remaining PR10.3 tuning order is:
    retuning MC/NC/KC.
 #. Run dedicated x86 and ARM sweeps. Publish one-thread and physical-core raw
    samples, dispersion, FP16 parity, and isolated BF16 throughput per ISA. Keep
-   PR10.3 open until every supported platform reaches the stated 1.0x median
-   and 0.9x minimum gates.
+   #277 open until every supported platform reaches the stated 1.0x median and
+   0.9x minimum gates.
 
 Roadmap PR10.4 tuning record
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1455,8 +1479,9 @@ through ``IntegerMatMul2D`` and applies a vectorized AVX2 requantization
 epilogue for INT8/UINT8 outputs while retaining the scalar fallback and exact
 tail behavior for non-AVX2 and rank-1 promotion paths.
 
-The final PR10.4 closure step is the dedicated machine evidence: run pinned
-x86 and ARM one-thread and physical-core sweeps, publish raw samples and
-dispersion with complete environment metadata, and keep the implementation PR
-open until ORT-supported integer/compact formats satisfy the 1.0x median and
-0.9x minimum parity gates.
+The remaining PR10.4 work, tracked entirely by #281, closes measured
+MatMulInteger, QLinearMatMul, INT4, and Float8 gaps before running pinned x86
+and ARM one-thread and physical-core sweeps. The issue remains open until raw
+samples and dispersion with complete environment metadata are published and
+ORT-supported integer/compact formats satisfy the 1.0x median and 0.9x minimum
+parity gates.
