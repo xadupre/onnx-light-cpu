@@ -517,6 +517,34 @@ complete v5 corpus, including rounding boundaries. It remains an internal
 correctness and regression result and is not included in ONNX Runtime parity
 claims because ONNX Runtime has no equivalent version-5 CPU kernel.
 
+Final parity gate
+-----------------
+
+``tools/benchmark_tree_ensemble_parity.py`` is the reproducible final-gate
+driver. Its priority corpus covers regression and complete classification
+graphs, float32 and float64, scalar and batched execution, shallow and deep
+trees, small and large forests, homogeneous and mixed branches, membership,
+multiple targets, score transforms, and integer and string labels. Run it on
+each dedicated machine with pinned affinity for the single-thread and
+physical-core policies::
+
+    python tools/benchmark_tree_ensemble_parity.py \
+        --threads 1 --cpus 2 --baseline trees_pr07_threads1.json \
+        --output trees_pr08_threads1.json --enforce
+    python tools/benchmark_tree_ensemble_parity.py \
+        --threads 16 --cpus 2-17 --baseline trees_pr07_physical.json \
+        --output trees_pr08_physical.json --enforce
+
+The JSON report keeps environment metadata, session preparation samples,
+repeated inference samples, and the implementation-derived workspace upper
+bound in separate sections. The companion Markdown file contains the
+side-by-side latency table. ``--enforce`` succeeds only when regression and
+classification pass the per-type median and minimum parity thresholds, the
+supplied PR07 single-row baseline stays within 10%, correctness passes, and
+the configurable preparation and workspace budgets pass. Raw JSON and
+Markdown outputs from every dedicated machine are the evidence attached to
+the pull request; aggregate summaries alone are insufficient.
+
 Remaining pull-request sequence
 -------------------------------
 
@@ -596,7 +624,7 @@ Remaining pull-request sequence
        does not regress by more than 10%, all v5 types pass correctness, and
        preparation/workspace budgets pass.
      - PR01 through PR07
-     - Pending
+     - Complete in this pull request.
 
-Trees PR08 remains open until regression and classification both satisfy the
-final gate.
+With regression and classification both required by the enforced report, the
+Trees roadmap is complete.
