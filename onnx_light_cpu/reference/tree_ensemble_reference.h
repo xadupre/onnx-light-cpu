@@ -50,12 +50,25 @@ enum class TreeEnsembleExecutionStrategy {
   kRowParallel,
   kTreeParallel,
   kTreeMajorBatch,
+  kInterleavedRows,
 };
 
 enum class TreeEnsembleNodeLayout {
   kOrtCompactAosPointer,
   kCompactAosIndex,
   kSplitSoa,
+  kPreorderHot,
+};
+
+enum class TreeEnsembleTraversal {
+  kGeneral,
+  kStump,
+  kSymmetric,
+};
+
+enum class TreeEnsembleTargetLayout {
+  kDense,
+  kSparse,
 };
 
 enum class TreeEnsembleCountBucket : std::uint8_t {
@@ -125,10 +138,13 @@ struct TreeEnsembleExecutionRegion {
 
 struct TreeEnsembleTuningPolicy {
   TreeEnsembleNodeLayout layout = TreeEnsembleNodeLayout::kOrtCompactAosPointer;
+  TreeEnsembleTraversal traversal = TreeEnsembleTraversal::kGeneral;
+  TreeEnsembleTargetLayout target_layout = TreeEnsembleTargetLayout::kDense;
   std::vector<TreeEnsembleExecutionRegion> regions;
   std::size_t membership_linear_limit = 8;
   std::size_t membership_bitset_range_limit = 256;
   std::size_t traversal_prefetch_distance = 0;
+  bool optimized_float16 = false;
 
   bool operator==(const TreeEnsembleTuningPolicy &) const = default;
 };
@@ -151,12 +167,15 @@ enum class TreeEnsembleCalibrationStage : std::uint8_t {
   kBatch,
   kChunk,
   kWorkspace,
+  kPrefetch,
 };
 
 struct TreeEnsembleCalibrationCandidate {
   std::string name;
   TreeEnsembleCalibrationStage stage = TreeEnsembleCalibrationStage::kLayout;
   TreeEnsembleTuningPolicy policy;
+  std::size_t prepared_bytes = 0;
+  bool requires_distribution_shift = false;
 };
 
 struct TreeEnsembleCalibrationMeasurement {
@@ -164,6 +183,10 @@ struct TreeEnsembleCalibrationMeasurement {
   std::vector<double> samples_ns;
   std::uint64_t elapsed_ns = 0;
   std::string failure;
+  bool distribution_shift_correct = true;
+  std::size_t peak_memory_bytes = 0;
+  std::string distribution_shift_failure;
+  std::vector<double> distribution_shift_samples_ns;
 };
 
 struct TreeEnsembleCalibrationOptions {
@@ -173,6 +196,7 @@ struct TreeEnsembleCalibrationOptions {
   std::size_t repetitions = 11;
   std::size_t required_wins = 2;
   double minimum_improvement = 0.0;
+  double maximum_distribution_shift_regression = 0.1;
   std::string evidence_path;
 };
 
@@ -186,6 +210,10 @@ struct TreeEnsembleCalibrationEvidence {
   bool correct = false;
   bool selected = false;
   std::string rejected_reason;
+  bool distribution_shift_correct = true;
+  std::size_t peak_memory_bytes = 0;
+  std::vector<double> distribution_shift_samples_ns;
+  double distribution_shift_median_ns = 0.0;
 };
 
 struct TreeEnsembleCalibrationReport {
@@ -278,6 +306,7 @@ struct TreeEnsembleAttributes {
   std::vector<std::int64_t> nodes_trueleafs;
   std::vector<std::int64_t> nodes_falseleafs;
   std::vector<std::int64_t> nodes_missing_value_tracks_true;
+  std::vector<double> nodes_hitrates;
   std::vector<double> membership_values;
   std::vector<std::int64_t> leaf_targetids;
   std::vector<double> leaf_weights;
@@ -380,6 +409,16 @@ struct TreeEnsembleLeaf {
   double weight = 0.0;
 };
 
+struct TreeEnsembleCompactNode {
+  double split = 0.0;
+  float half_split = 0.0F;
+  std::uint32_t feature_id = 0;
+  std::uint32_t true_child = 0;
+  std::uint32_t false_child = 0;
+  std::uint8_t mode = 0;
+  std::uint8_t flags = 0;
+};
+
 /// Immutable prepared representation for the ai.onnx.ml TreeEnsemble-5 schema.
 class TreeEnsemblePlan {
 public:
@@ -418,7 +457,11 @@ public:
   TreeEnsembleProfileSource profile_source() const noexcept { return profile_source_; }
   std::uint64_t profile_generation() const noexcept { return profile_generation_; }
   std::size_t workspace_bytes() const noexcept { return workspace_bytes_; }
+  std::size_t prepared_storage_bytes() const noexcept;
   bool uses_64bit_indices() const noexcept { return uses_64_bit_indices_; }
+  bool all_trees_are_stumps() const noexcept { return all_trees_are_stumps_; }
+  bool all_trees_are_symmetric() const noexcept { return all_trees_are_symmetric_; }
+  std::vector<TreeEnsembleCalibrationCandidate> GenerateCalibrationCandidates() const;
 
 private:
   static std::string MakeModelSignature(const TreeEnsembleAttributes &attributes,
@@ -441,6 +484,27 @@ private:
   std::size_t workspace_bytes_ = 0;
   bool uses_64_bit_indices_ = false;
   bool uses_dynamic_safe_policy_ = false;
+  bool all_trees_are_stumps_ = false;
+  bool all_trees_are_symmetric_ = false;
+  std::vector<std::uint32_t> feature_ids32_;
+  std::vector<std::uint32_t> true_children32_;
+  std::vector<std::uint32_t> false_children32_;
+  std::vector<double> prepared_splits_;
+  std::vector<float> prepared_half_splits_;
+  std::vector<std::uint8_t> prepared_modes_;
+  std::vector<std::uint8_t> prepared_flags_;
+  std::vector<TreeEnsembleCompactNode> compact_nodes_;
+  std::vector<std::uint32_t> hot_tree_roots_;
+  std::vector<std::uint32_t> hot_feature_ids_;
+  std::vector<std::uint32_t> hot_true_children_;
+  std::vector<std::uint32_t> hot_false_children_;
+  std::vector<double> hot_splits_;
+  std::vector<float> hot_half_splits_;
+  std::vector<std::uint8_t> hot_modes_;
+  std::vector<std::uint8_t> hot_flags_;
+  std::vector<std::uint32_t> hot_membership_indices_;
+  std::vector<std::size_t> active_targets_;
+  std::vector<std::size_t> target_to_active_;
 };
 
 /// Version-5 deprecated schema adapters backed by the same scalar semantics.

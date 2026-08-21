@@ -43,6 +43,7 @@ using onnx_light_cpu::reference::TreeEnsemblePlan;
 using onnx_light_cpu::reference::TreeEnsembleProfileSource;
 using onnx_light_cpu::reference::TreeEnsembleReference;
 using onnx_light_cpu::reference::TreeEnsembleRegressorAttributes;
+using onnx_light_cpu::reference::TreeEnsembleTraversal;
 using onnx_light_cpu::reference::TreeEnsembleTuningContext;
 using onnx_light_cpu::reference::TreeEnsembleTuningPolicy;
 using onnx_light_cpu::reference::TreeEnsembleTuningRegistry;
@@ -88,6 +89,23 @@ TreeEnsembleAttributes StumpForest(std::size_t trees, std::size_t targets = 2) {
     attributes.leaf_weights.push_back(0.25);
     attributes.leaf_weights.push_back(-0.25);
   }
+  return attributes;
+}
+
+TreeEnsembleAttributes SymmetricTree() {
+  TreeEnsembleAttributes attributes;
+  attributes.n_features = 2;
+  attributes.n_targets = 1;
+  attributes.tree_roots = {0};
+  attributes.nodes_featureids = {0, 1, 1};
+  attributes.nodes_splits = {0.0, 0.0, 0.0};
+  attributes.nodes_modes = {TreeBranchMode::kLeq, TreeBranchMode::kLeq, TreeBranchMode::kLeq};
+  attributes.nodes_truenodeids = {1, 0, 2};
+  attributes.nodes_falsenodeids = {2, 1, 3};
+  attributes.nodes_trueleafs = {0, 1, 1};
+  attributes.nodes_falseleafs = {0, 1, 1};
+  attributes.leaf_targetids = {0, 0, 0, 0};
+  attributes.leaf_weights = {1.0, 2.0, 3.0, 4.0};
   return attributes;
 }
 
@@ -363,7 +381,7 @@ TEST(TreeEnsembleReference, InvalidOrIncompatiblePoliciesUseExplicitSafeFallback
 
   TreeEnsembleTuningPolicy unsupported =
       OneRegionPolicy(TreeEnsembleExecutionStrategy::kTreeParallel, 4, 2);
-  unsupported.layout = TreeEnsembleNodeLayout::kSplitSoa;
+  unsupported.layout = TreeEnsembleNodeLayout::kPreorderHot;
   registry.PutExact(baseline.model_key(), unsupported);
   const TreeEnsemblePlan layout_fallback(StumpForest(3), context, &registry);
   EXPECT_EQ(layout_fallback.profile_source(), TreeEnsembleProfileSource::kSafeFallback);
@@ -383,7 +401,7 @@ TEST(TreeEnsembleReference, CalibrationRejectsInvalidCandidatesAndPersistsEviden
   const TreeEnsembleTuningPolicy winner =
       OneRegionPolicy(TreeEnsembleExecutionStrategy::kRowParallel, 1, 2);
   const std::vector<TreeEnsembleCalibrationCandidate> candidates{
-      {"oversized", TreeEnsembleCalibrationStage::kLayout, oversized},
+      {"oversized", TreeEnsembleCalibrationStage::kWorkspace, oversized},
       {"incorrect", TreeEnsembleCalibrationStage::kScheduling, incorrect},
       {"winner", TreeEnsembleCalibrationStage::kScheduling, winner},
   };
@@ -502,6 +520,208 @@ TEST(TreeEnsembleReference, CalibrationBudgetFailurePreservesActiveProfileAndCan
   ASSERT_EQ(disabled.evidence.size(), 1U);
   EXPECT_EQ(disabled.evidence[0].rejected_reason, "calibration disabled");
   EXPECT_FALSE(registry.InspectExact(key_plan.model_key()).calibration_enabled);
+}
+
+TEST(TreeEnsembleReference, AdvancedCandidatesAreStructuralAndDeterministic) {
+  TreeEnsembleAttributes attributes = StumpForest(3, 64);
+  attributes.value_type = TreeValueType::kFloat16;
+  attributes.nodes_hitrates = {0.9, 0.5, 0.1};
+  const TreeEnsemblePlan plan(attributes, TreeEnsembleTuningContext{"candidate-cpu", 1}, nullptr);
+  EXPECT_TRUE(plan.all_trees_are_stumps());
+  EXPECT_TRUE(plan.all_trees_are_symmetric());
+  EXPECT_GT(plan.prepared_storage_bytes(), 0U);
+  const auto first = plan.GenerateCalibrationCandidates();
+  const auto second = plan.GenerateCalibrationCandidates();
+  std::vector<std::string> names;
+  for (const auto &candidate : first) {
+    names.push_back(candidate.name);
+    EXPECT_TRUE(candidate.requires_distribution_shift);
+    EXPECT_EQ(candidate.prepared_bytes, plan.prepared_storage_bytes());
+  }
+  std::vector<std::string> repeated_names;
+  for (const auto &candidate : second) {
+    repeated_names.push_back(candidate.name);
+  }
+  EXPECT_EQ(names, repeated_names);
+  for (const std::string &required :
+       {"compact_aos_index", "split_soa", "preorder_hot", "stump", "interleaved_rows",
+        "sparse_target", "optimized_float16", "prefetch_1", "prefetch_2", "prefetch_4"}) {
+    EXPECT_NE(std::find(names.begin(), names.end(), required), names.end()) << required;
+  }
+
+  const auto sparse = std::find_if(first.begin(), first.end(), [](const auto &candidate) {
+    return candidate.name == "sparse_target";
+  });
+  ASSERT_NE(sparse, first.end());
+  TreeEnsembleTuningRegistry registry;
+  registry.PutExact(plan.model_key(), sparse->policy);
+  const TreeEnsemblePlan sparse_plan(attributes, TreeEnsembleTuningContext{"candidate-cpu", 1},
+                                     &registry);
+  const std::vector<double> input{-1.0, 1.0, -1.0, 1.0, -1.0};
+  EXPECT_EQ(sparse_plan.Evaluate(input, input.size()),
+            TreeEnsembleReference(attributes).Evaluate(input, input.size()));
+  EXPECT_LT(sparse_plan.SelectExecution(input.size(), 1).workspace_bytes,
+            plan.SelectExecution(input.size(), 1).workspace_bytes);
+}
+
+TEST(TreeEnsembleReference, AdvancedLayoutsAndInterleavingRetainPortableResults) {
+  TreeEnsembleAttributes attributes = SymmetricTree();
+  attributes.nodes_hitrates = {0.8, 0.2, 0.7};
+  const std::vector<double> input{-2.0, -2.0, -2.0, 0.0, 2.0, 0.0, 2.0, 2.0, 0.0, 0.0};
+  const std::vector<double> expected = TreeEnsembleReference(attributes).Evaluate(input, 5);
+  const TreeEnsembleTuningContext context{"layout-cpu", 2};
+  const TreeEnsemblePlan key_plan(attributes, context, nullptr);
+  EXPECT_TRUE(key_plan.all_trees_are_symmetric());
+  for (const TreeEnsembleNodeLayout layout :
+       {TreeEnsembleNodeLayout::kCompactAosIndex, TreeEnsembleNodeLayout::kSplitSoa,
+        TreeEnsembleNodeLayout::kPreorderHot}) {
+    TreeEnsembleTuningPolicy policy = key_plan.tuning_policy();
+    policy.layout = layout;
+    policy.traversal = TreeEnsembleTraversal::kSymmetric;
+    TreeEnsembleTuningRegistry registry;
+    registry.PutExact(key_plan.model_key(), policy);
+    const TreeEnsemblePlan plan(attributes, context, &registry);
+    EXPECT_EQ(plan.profile_source(), TreeEnsembleProfileSource::kExact);
+    EXPECT_EQ(plan.Evaluate(input, 5), expected);
+  }
+
+  TreeEnsembleTuningPolicy interleaved = key_plan.tuning_policy();
+  interleaved.regions[0].strategy = TreeEnsembleExecutionStrategy::kInterleavedRows;
+  TreeEnsembleTuningRegistry registry;
+  registry.PutExact(key_plan.model_key(), interleaved);
+  const TreeEnsemblePlan plan(attributes, context, &registry);
+  EXPECT_EQ(plan.SelectExecution(5, 2).strategy, TreeEnsembleExecutionStrategy::kInterleavedRows);
+  EXPECT_EQ(plan.Evaluate(input, 5), expected);
+}
+
+TEST(TreeEnsembleReference, CalibrationComposesStagesAndEnforcesAdvancedGates) {
+  const TreeEnsembleTuningContext context{"advanced-calibration-cpu", 4};
+  const TreeEnsemblePlan key_plan(Stump(), context, nullptr);
+  const TreeEnsembleTuningPolicy fallback =
+      OneRegionPolicy(TreeEnsembleExecutionStrategy::kTreeMajorBatch, 1, 1, 128);
+  TreeEnsembleTuningPolicy index = fallback;
+  index.layout = TreeEnsembleNodeLayout::kCompactAosIndex;
+  TreeEnsembleTuningPolicy stump = fallback;
+  stump.traversal = TreeEnsembleTraversal::kStump;
+  TreeEnsembleTuningPolicy scheduling = fallback;
+  scheduling.regions[0].maximum_threads = 4;
+  scheduling.regions[0].workspace_bytes *= 4;
+  TreeEnsembleTuningPolicy batch = fallback;
+  batch.regions[0].batch_rows = 256;
+  batch.regions[0].workspace_bytes *= 2;
+  TreeEnsembleCalibrationOptions options;
+  options.repetitions = 1;
+  options.required_wins = 1;
+  options.memory_budget_bytes = 32768;
+  TreeEnsembleTuningRegistry registry;
+  const auto composed = registry.CalibrateExact(
+      key_plan.model_key(), fallback,
+      {{"index", TreeEnsembleCalibrationStage::kLayout, index},
+       {"stump", TreeEnsembleCalibrationStage::kTraversal, stump},
+       {"scheduling", TreeEnsembleCalibrationStage::kScheduling, scheduling},
+       {"batch", TreeEnsembleCalibrationStage::kBatch, batch}},
+      options, [](const TreeEnsembleTuningPolicy &policy, std::size_t, std::size_t) {
+        double sample = 100.0;
+        if (policy.layout == TreeEnsembleNodeLayout::kCompactAosIndex) {
+          sample = policy.traversal == TreeEnsembleTraversal::kStump ? 60.0 : 80.0;
+        }
+        if (policy.regions[0].batch_rows == 256) {
+          sample = 50.0;
+        } else if (policy.regions[0].maximum_threads == 4) {
+          sample = 55.0;
+        }
+        return TreeEnsembleCalibrationMeasurement{true, {sample}, 1, {}};
+      });
+  EXPECT_EQ(composed.selected_policy.layout, TreeEnsembleNodeLayout::kCompactAosIndex);
+  EXPECT_EQ(composed.selected_policy.traversal, TreeEnsembleTraversal::kStump);
+  EXPECT_EQ(composed.selected_policy.regions[0].maximum_threads, 4U);
+  EXPECT_EQ(composed.selected_policy.regions[0].batch_rows, 256U);
+  EXPECT_EQ(composed.selected_policy.regions[0].workspace_bytes,
+            4U * 256U * (sizeof(double) + sizeof(std::size_t)));
+  EXPECT_EQ(TreeEnsemblePlan(Stump(), context, &registry).profile_source(),
+            TreeEnsembleProfileSource::kExact);
+
+  TreeEnsembleTuningPolicy soa = fallback;
+  soa.layout = TreeEnsembleNodeLayout::kSplitSoa;
+  const auto shifted = registry.CalibrateExact(
+      key_plan.model_key(), fallback,
+      {{"shifted", TreeEnsembleCalibrationStage::kLayout, soa, 0, true}}, options,
+      [](const TreeEnsembleTuningPolicy &policy, std::size_t, std::size_t) {
+        TreeEnsembleCalibrationMeasurement result;
+        result.correct = true;
+        result.elapsed_ns = 1;
+        result.samples_ns = {policy.layout == TreeEnsembleNodeLayout::kSplitSoa ? 80.0 : 100.0};
+        result.distribution_shift_samples_ns = {
+            policy.layout == TreeEnsembleNodeLayout::kSplitSoa ? 120.0 : 100.0};
+        return result;
+      });
+  EXPECT_FALSE(shifted.changed);
+  EXPECT_EQ(shifted.evidence.back().rejected_reason, "distribution-shift performance regression");
+
+  const auto memory = registry.CalibrateExact(
+      key_plan.model_key(), fallback, {{"memory", TreeEnsembleCalibrationStage::kLayout, soa}},
+      options, [](const TreeEnsembleTuningPolicy &policy, std::size_t, std::size_t) {
+        TreeEnsembleCalibrationMeasurement result{true, {80.0}, 1, {}};
+        if (policy.layout == TreeEnsembleNodeLayout::kSplitSoa) {
+          result.peak_memory_bytes = 65536;
+        }
+        return result;
+      });
+  EXPECT_FALSE(memory.changed);
+  EXPECT_EQ(memory.evidence.back().rejected_reason, "measured memory budget exceeded");
+}
+
+TEST(TreeEnsembleReference, OptimizedFloat16MatchesCompleteV5Corpus) {
+  const TreeEnsembleTuningContext context{"float16-cpu", 1};
+  for (const auto &test_case : GenerateTreeEnsembleV5Corpus()) {
+    if (test_case.attributes.value_type != TreeValueType::kFloat16) {
+      continue;
+    }
+    const TreeEnsemblePlan key_plan(test_case.attributes, context, nullptr);
+    TreeEnsembleTuningPolicy policy = key_plan.tuning_policy();
+    policy.optimized_float16 = true;
+    TreeEnsembleTuningRegistry registry;
+    registry.PutExact(key_plan.model_key(), policy);
+    const TreeEnsemblePlan plan(test_case.attributes, context, &registry);
+    EXPECT_EQ(plan.Evaluate(test_case.input, test_case.rows), test_case.expected) << test_case.name;
+  }
+}
+
+TEST(TreeEnsembleReference, SchedulingPreservesSparseWorkspaceDensity) {
+  const TreeEnsembleAttributes attributes = StumpForest(3, 64);
+  const TreeEnsembleTuningContext context{"sparse-scheduling-cpu", 4};
+  const TreeEnsemblePlan key_plan(attributes, context, nullptr);
+  const TreeEnsembleTuningPolicy fallback =
+      OneRegionPolicy(TreeEnsembleExecutionStrategy::kTreeMajorBatch, 1, 64);
+  TreeEnsembleTuningPolicy sparse = fallback;
+  sparse.target_layout = onnx_light_cpu::reference::TreeEnsembleTargetLayout::kSparse;
+  sparse.regions[0].workspace_bytes = 3U * (sizeof(double) + sizeof(std::size_t));
+  TreeEnsembleTuningPolicy scheduling = fallback;
+  scheduling.regions[0].maximum_threads = 4;
+  scheduling.regions[0].workspace_bytes *= 4;
+  TreeEnsembleCalibrationOptions options;
+  options.repetitions = 1;
+  options.required_wins = 1;
+  options.memory_budget_bytes = 4096;
+  TreeEnsembleTuningRegistry registry;
+  const auto report = registry.CalibrateExact(
+      key_plan.model_key(), fallback,
+      {{"sparse", TreeEnsembleCalibrationStage::kTraversal, sparse},
+       {"scheduling", TreeEnsembleCalibrationStage::kScheduling, scheduling}},
+      options, [](const TreeEnsembleTuningPolicy &policy, std::size_t, std::size_t) {
+        const bool sparse =
+            policy.target_layout == onnx_light_cpu::reference::TreeEnsembleTargetLayout::kSparse;
+        const double sample =
+            sparse ? (policy.regions[0].maximum_threads == 4 ? 60.0 : 80.0) : 100.0;
+        return TreeEnsembleCalibrationMeasurement{true, {sample}, 1, {}};
+      });
+  EXPECT_EQ(report.selected_policy.target_layout,
+            onnx_light_cpu::reference::TreeEnsembleTargetLayout::kSparse);
+  EXPECT_EQ(report.selected_policy.regions[0].maximum_threads, 4U);
+  EXPECT_EQ(report.selected_policy.regions[0].workspace_bytes,
+            4U * 3U * (sizeof(double) + sizeof(std::size_t)));
+  EXPECT_EQ(TreeEnsemblePlan(attributes, context, &registry).profile_source(),
+            TreeEnsembleProfileSource::kExact);
 }
 
 TEST(TreeEnsembleReference, EverySchedulingStrategyMatchesScalarAcrossThreadCounts) {

@@ -135,6 +135,8 @@ std::string_view StrategyName(TreeEnsembleExecutionStrategy strategy) {
     return "tree_parallel";
   case TreeEnsembleExecutionStrategy::kTreeMajorBatch:
     return "tree_major_batch";
+  case TreeEnsembleExecutionStrategy::kInterleavedRows:
+    return "interleaved_rows";
   }
   return "unknown";
 }
