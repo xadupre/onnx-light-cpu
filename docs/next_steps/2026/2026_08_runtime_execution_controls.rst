@@ -185,7 +185,7 @@ count is part of the calibrated parameter set, not a second hidden pool limit.
 Benchmark and validation plan
 -----------------------------
 
-Follow :doc:`the benchmark methodology <../design/benchmark_methodology>`.
+Follow :doc:`the benchmark methodology <../../design/benchmark_methodology>`.
 Cover:
 
 * serial, 2, 4, physical-core, and logical-thread counts;

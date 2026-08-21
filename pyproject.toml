@@ -36,7 +36,9 @@ docs = [
     "pydata-sphinx-theme",
     "sphinx>=7",
     "sphinx-copybutton",
+    "sphinx-datatables",
     "sphinx-gallery",
+    "sphinx-reredirects",
 ]
 
 [tool.scikit-build]
