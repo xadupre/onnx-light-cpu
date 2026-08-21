@@ -25,6 +25,7 @@ to sort the table.
     2026/2026_08_svm
     2026/2026_08_runtime_execution_controls
     2026/2026_08_kv_cache
+    2026/2026_08_registered_kernel_documentation
 
 .. list-table::
     :header-rows: 1
@@ -80,6 +81,12 @@ to sort the table.
       - :doc:`Runtime execution controls <2026/2026_08_runtime_execution_controls>`
       - Use the typed session policy and executor for every registered kernel.
       - A second CPU scheduler would invalidate runtime limits and diagnostics.
+    * - Planned
+      - :doc:`Registered kernel documentation <2026/2026_08_registered_kernel_documentation>`
+      - Derive the Python inventory and generated reference from actual C++
+        registrations.
+      - Separate hard-coded lists and source scans become stale when kernels
+        change.
     * - Discussed
       - :doc:`Persistent KV cache <2026/2026_08_kv_cache>`
       - Add mutable, paged, and optionally quantized cache storage.
