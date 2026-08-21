@@ -9,6 +9,7 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parents[2]
 _CORE_WORKFLOW = (_ROOT / ".github" / "workflows" / "ci_core.yml").read_text(encoding="utf-8")
 _DOCS_WORKFLOW = (_ROOT / ".github" / "workflows" / "docs.yml").read_text(encoding="utf-8")
+_CODECOV_CONFIG = (_ROOT / ".codecov.yml").read_text(encoding="utf-8")
 
 
 def test_documentation_build_is_linux_only():
@@ -37,3 +38,7 @@ def test_onnx_light_main_integration_runs_on_every_supported_os():
     assert "--cpp-tests --onnx-light-source" in source_job
     assert "-DCMAKE_DISABLE_FIND_PACKAGE_OpenSSL=ON" in source_job
     assert "0.1.19" not in source_job
+
+
+def test_cpp_coverage_is_carried_forward_between_weekly_runs():
+    assert "cpp:\n    carryforward: true" in _CODECOV_CONFIG
