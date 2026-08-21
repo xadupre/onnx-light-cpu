@@ -3,7 +3,7 @@ Exp and Log ONNX Runtime Parity Roadmap
 
 :Date: 2026-08
 
-**complete** (ExpLog PR04 AVX2+FMA ``Log`` and AVX-512 alignment)
+**complete** (ExpLog PR06 ONNX Runtime parity gate)
 
 Objective
 ---------
@@ -244,7 +244,7 @@ thresholds are chosen from isolated measurements, not inferred from polynomial
 degree. Each block must contain enough vectors to amortize dispatch, and the
 participant count must stop increasing after throughput saturates.
 
-ExpLog PR05 selects a 524,288-element threshold, 262,144-element blocks, and a
+ExpLog PR06 selects a 65,536-element threshold, 32,768-element blocks, and a
 two-participant cap for ``Exp``. ``Log`` uses a 131,072-element threshold,
 65,536-element blocks, and a four-participant cap. Isolated 1/2/4-participant
 measurements showed that dispatch dominated below these ranges, that ``Exp``
@@ -256,6 +256,46 @@ executes nested work inline.
 Registered runtime execution uses the session-owned executor described by the
 runtime-controls roadmap. Standalone calls remain serial and cannot introduce
 nested workers.
+
+Final parity gate
+-----------------
+
+The complete one-thread priority corpus was measured on an isolated Intel Xeon
+Platinum 8370C runner with ONNX Runtime 1.29.0. Fifteen samples per candidate
+were collected in alternating order after five warmups. The
+:download:`raw JSON report <data/2026_08_exp_log_parity_threads_1.json>` records
+every sample, affinity, resolved thread policy, CPU topology, compiler, package
+versions, and git revision.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 33 22 22 23
+
+   * - Gate
+     - Required
+     - Measured
+     - Result
+   * - Combined priority-corpus median
+     - ``>=1.0x``
+     - ``1.967x``
+     - Pass
+   * - Minimum priority case
+     - ``>=0.9x``
+     - ``0.936x``
+     - Pass
+   * - 4,194,304-element ``Exp``
+     - ``>=0.95x``
+     - ``1.108x``
+     - Pass
+   * - 4,194,304-element ``Log``
+     - ``>=0.95x``
+     - ``3.310x``
+     - Pass
+
+The final gate exposed an AVX-512 ``Exp`` regression. Its range reduction now
+uses the direct minimax polynomial and ``VSCALEFPS`` reconstruction, preserving
+the classification and ULP contract while removing the extra exponent-building
+instructions. The numerical corpus remains the correctness gate.
 
 Remaining pull-request sequence
 -------------------------------
@@ -310,6 +350,6 @@ Remaining pull-request sequence
        at least ``0.9x``, and both 4,194,304-element models reach at least
        ``0.95x`` under the published benchmark contract.
      - PR01 through PR05
-     - Pending
+     - Complete
 
-ExpLog PR06 remains open until both operators satisfy the final gate.
+ExpLog PR06 completed after both operators satisfied the final gate.

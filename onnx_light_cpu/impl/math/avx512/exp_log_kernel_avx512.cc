@@ -12,7 +12,7 @@ namespace onnx_light_cpu {
 
 namespace {
 
-constexpr float kExpHi = 88.3762626647949f;
+constexpr float kExpHi = 88.7762626647950f;
 // True float32 underflow boundary (half of the smallest subnormal, i.e.
 // -150 * ln(2)); see exp_log_kernel.cc for the full rationale. Range
 // reduction below this bound uses a split power-of-two reconstruction so
@@ -28,14 +28,13 @@ constexpr float kExpLo = -103.97208f;
 constexpr float kSmallestNormal = 1.17549435e-38f;
 constexpr float kSubnormalScale = 8388608.0f;
 constexpr float kLog2ef = 1.44269504088896341f;
-constexpr float kExpC1 = 0.693359375f;
-constexpr float kExpC2 = -2.12194440e-4f;
-constexpr float kExpP0 = 1.9875691500e-4f;
-constexpr float kExpP1 = 1.3981999507e-3f;
-constexpr float kExpP2 = 8.3334519073e-3f;
-constexpr float kExpP3 = 4.1665795894e-2f;
-constexpr float kExpP4 = 1.6666665459e-1f;
-constexpr float kExpP5 = 5.0000001201e-1f;
+constexpr float kExpC1 = -6.93145752e-1f;
+constexpr float kExpC2 = -1.42860677e-6f;
+constexpr float kExpP0 = 0x1.694000p-10f;
+constexpr float kExpP1 = 0x1.125edcp-7f;
+constexpr float kExpP2 = 0x1.555b5ap-5f;
+constexpr float kExpP3 = 0x1.555450p-3f;
+constexpr float kExpP4 = 0x1.fffff6p-2f;
 
 constexpr float kSqrtHalf = 0.707106781186547524f;
 constexpr float kLogP0 = 7.0376836292e-2f;
@@ -108,29 +107,17 @@ ONNX_LIGHT_CPU_FORCE_INLINE __m512 ExpPs(__m512 x) {
       _mm512_sub_epi32(_mm512_castps_si512(scaled), _mm512_set1_epi32(0x4b400000));
   const __m512 exponent = _mm512_cvtepi32_ps(exponent_int);
 
-  reduced = _mm512_fnmadd_ps(exponent, _mm512_set1_ps(kExpC1), reduced);
-  reduced = _mm512_fnmadd_ps(exponent, _mm512_set1_ps(kExpC2), reduced);
-  const __m512 squared = _mm512_mul_ps(reduced, reduced);
+  reduced = _mm512_fmadd_ps(exponent, _mm512_set1_ps(kExpC1), reduced);
+  reduced = _mm512_fmadd_ps(exponent, _mm512_set1_ps(kExpC2), reduced);
 
   __m512 polynomial = _mm512_set1_ps(kExpP0);
   polynomial = _mm512_fmadd_ps(polynomial, reduced, _mm512_set1_ps(kExpP1));
   polynomial = _mm512_fmadd_ps(polynomial, reduced, _mm512_set1_ps(kExpP2));
   polynomial = _mm512_fmadd_ps(polynomial, reduced, _mm512_set1_ps(kExpP3));
   polynomial = _mm512_fmadd_ps(polynomial, reduced, _mm512_set1_ps(kExpP4));
-  polynomial = _mm512_fmadd_ps(polynomial, reduced, _mm512_set1_ps(kExpP5));
-  polynomial = _mm512_fmadd_ps(polynomial, squared, reduced);
-  polynomial = _mm512_add_ps(polynomial, one);
-
-  // Reconstruct 2^n as two normal-range factors (see exp_log_kernel.cc) so
-  // subnormal exponents down to -149 round correctly.
-  const __m512i exponent_n1 = _mm512_srai_epi32(exponent_int, 1);
-  const __m512i exponent_n2 = _mm512_sub_epi32(exponent_int, exponent_n1);
-  const __m512i pow1 =
-      _mm512_slli_epi32(_mm512_add_epi32(exponent_n1, _mm512_set1_epi32(0x7f)), 23);
-  const __m512i pow2 =
-      _mm512_slli_epi32(_mm512_add_epi32(exponent_n2, _mm512_set1_epi32(0x7f)), 23);
-  __m512 result = _mm512_mul_ps(polynomial, _mm512_castsi512_ps(pow1));
-  result = _mm512_mul_ps(result, _mm512_castsi512_ps(pow2));
+  polynomial = _mm512_fmadd_ps(polynomial, reduced, one);
+  polynomial = _mm512_fmadd_ps(polynomial, reduced, one);
+  __m512 result = _mm512_scalef_ps(polynomial, exponent);
 
   result = Select(under, _mm512_setzero_ps(), result);
   result = Select(over, _mm512_set1_ps(std::numeric_limits<float>::infinity()), result);

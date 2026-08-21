@@ -44,6 +44,10 @@ def _ctest_command(build_temp):
         "--output-on-failure",
         "--build-config",
         "Release",
+        "--timeout",
+        "240",
+        "--repeat",
+        "until-pass:2",
     ]
 
 

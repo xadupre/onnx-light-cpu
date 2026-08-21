@@ -44,6 +44,7 @@ class TestSetupCppTests:
         output = _dry_run("--cpp-tests")
         assert "ONNX_LIGHT_CPU_BUILD_TESTS=ON" in output
         assert "ctest" in output
+        assert "--timeout 240 --repeat until-pass:2" in output
 
     def test_without_flag_skips_ctest(self):
         output = _dry_run()
