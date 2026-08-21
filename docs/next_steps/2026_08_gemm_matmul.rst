@@ -5,6 +5,11 @@ Gemm and MatMul Performance Roadmap
 
 **in progress**
 
+PR `#307 <https://github.com/xadupre/onnx-light-cpu/pull/307>`_
+delivered the shared MatMul kernel and final parity corpus. The roadmap remains
+open until the dedicated-machine PR10.3, PR10.4, and PR10.5 measurements
+satisfy their published gates.
+
 Objective
 ---------
 

@@ -42,6 +42,12 @@ defaults, validation, and calibration owned by ``library="onnx_light_cpu"``.
 Required execution contract
 ---------------------------
 
+The execution-control prerequisite is complete through
+`onnx-light-cpu #271 <https://github.com/xadupre/onnx-light-cpu/pull/271>`_
+and `#314 <https://github.com/xadupre/onnx-light-cpu/pull/314>`_. This unblocks
+the tuning sequence but does not complete it: Tuning PR01 through PR06 remain
+pending.
+
 The session executor, affinity, and spin API is tracked by the
 :doc:`Runtime Execution Controls Roadmap <2026_08_runtime_execution_controls>`.
 Registered adapters execute SIMD ranges through the session-owned executor, so

@@ -3,7 +3,7 @@ Tree Ensemble Classification and Regression Roadmap
 
 :Date: 2026-08
 
-**discussion**
+**complete**
 
 Objective
 ---------
@@ -572,7 +572,8 @@ Remaining pull-request sequence
        execution performs no parsing, validation, allocation, lock, or string
        dispatch in traversal.
      - PR01
-     - Pending
+     - `Implemented in #305
+       <https://github.com/xadupre/onnx-light-cpu/pull/305>`_
    * - Trees PR03
      - ONNX Runtime-compatible serial baseline.
      - The compact AoS/pointer layout, false-child fall-through, homogeneous
@@ -580,7 +581,8 @@ Remaining pull-request sequence
        the scalar corpus. Prepared membership, aggregation, and transforms
        improve or retain single-thread latency against ONNX Runtime.
      - PR02
-     - Pending
+     - `Implemented in #309
+       <https://github.com/xadupre/onnx-light-cpu/pull/309>`_
    * - Trees PR04
      - ONNX Runtime-compatible scheduling baseline.
      - Row-parallel, tree-parallel, and 128-row tree-major batching reproduce
@@ -616,7 +618,8 @@ Remaining pull-request sequence
        distribution-shift, and memory gates. General trees retain the
        ONNX Runtime-style portable evaluator.
      - PR05, PR06
-     - Implemented in this pull request.
+     - `Implemented in #319
+       <https://github.com/xadupre/onnx-light-cpu/pull/319>`_
    * - Trees PR08
      - Final parity gate.
      - Float32/float64 median end-to-end performance is at least ``1.0x`` ONNX
@@ -624,7 +627,7 @@ Remaining pull-request sequence
        does not regress by more than 10%, all v5 types pass correctness, and
        preparation/workspace budgets pass.
      - PR01 through PR07
-     - Complete in this pull request.
+     - `Implemented in #320
+       <https://github.com/xadupre/onnx-light-cpu/pull/320>`_
 
-With regression and classification both required by the enforced report, the
-Trees roadmap is complete.
+The TreeEnsemble roadmap is complete.
