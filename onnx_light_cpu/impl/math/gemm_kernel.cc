@@ -1383,6 +1383,83 @@ void GemmImpl(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::siz
   }
 }
 
+template <typename MicroKernel>
+void GemmHalfNativeGeneral(bool trans_a, std::size_t M, std::size_t N, std::size_t K, float alpha,
+                           const std::uint16_t *A, const std::uint16_t *B, float *Y,
+                           MicroKernel kernel, std::size_t mr, const GemmBlocking *blocking) {
+  if (M == 0 || N == 0) {
+    return;
+  }
+  if (K == 0) {
+    InitializeOutput(M, N, 0.0f, static_cast<const float *>(nullptr), Y);
+    return;
+  }
+
+  const std::size_t mr_block = std::max<std::size_t>(1, mr);
+  static const GemmKernelKind default_kind = SelectGemmKernelKind<float>();
+  GemmBlocking selected =
+      blocking == nullptr
+          ? detail::SelectGemmBlocking(sizeof(std::uint16_t), GemmVectorLanes<float>(default_kind),
+                                       mr_block)
+          : *blocking;
+  selected.mc = std::max(selected.mc, mr_block);
+  selected.nc = std::max<std::size_t>(selected.nc, 1);
+  selected.kc = std::max<std::size_t>(selected.kc, 1);
+
+  const std::size_t column_panels = (N + selected.nc - 1) / selected.nc;
+  const std::size_t row_panels = (M + selected.mc - 1) / selected.mc;
+  const std::size_t thread_count = static_cast<std::size_t>(ExecutionThreadCount());
+  const std::size_t panels_per_wave = std::min(
+      column_panels, std::max<std::size_t>(1, (thread_count + row_panels - 1) / row_panels));
+  const std::size_t panel_capacity = selected.kc * selected.nc;
+  AlignedVector<std::uint16_t> bpack(panels_per_wave * panel_capacity);
+
+  for (std::size_t k0 = 0; k0 < K; k0 += selected.kc) {
+    const std::size_t kc = std::min(selected.kc, K - k0);
+    const GemmAccumMode mode = k0 == 0 ? GemmAccumMode::kInitZero : GemmAccumMode::kAccumulate;
+    for (std::size_t first_panel = 0; first_panel < column_panels; first_panel += panels_per_wave) {
+      const std::size_t wave_panels = std::min(panels_per_wave, column_panels - first_panel);
+      for (std::size_t panel = 0; panel < wave_panels; ++panel) {
+        const std::size_t n0 = (first_panel + panel) * selected.nc;
+        const std::size_t nb = std::min(selected.nc, N - n0);
+        std::uint16_t *panel_b = bpack.data() + panel * panel_capacity;
+        for (std::size_t k = 0; k < kc; ++k) {
+          std::memcpy(panel_b + k * nb, B + (k0 + k) * N + n0, nb * sizeof(std::uint16_t));
+        }
+      }
+
+      const std::size_t task_count = row_panels * wave_panels;
+      const std::size_t first_n = first_panel * selected.nc;
+      const std::size_t task_columns = std::min(selected.nc, N - first_n);
+      const double cost = static_cast<double>(std::min(selected.mc, M)) * task_columns * kc /
+                          kGemmFmasPerParallelWorkUnit;
+      ExecuteRanges(static_cast<std::int64_t>(task_count), cost,
+                    [&](std::int64_t begin, std::int64_t end) {
+                      AlignedVector<std::uint16_t> apack(selected.mc * kc);
+                      std::size_t packed_row_panel = row_panels;
+                      for (std::int64_t task = begin; task < end; ++task) {
+                        const std::size_t row_panel = static_cast<std::size_t>(task) / wave_panels;
+                        const std::size_t wave_panel = static_cast<std::size_t>(task) % wave_panels;
+                        const std::size_t m0 = row_panel * selected.mc;
+                        const std::size_t n0 = (first_panel + wave_panel) * selected.nc;
+                        const std::size_t mc = std::min(selected.mc, M - m0);
+                        const std::size_t nb = std::min(selected.nc, N - n0);
+                        if (packed_row_panel != row_panel) {
+                          PackAPanel(trans_a, A, M, K, m0, mc, k0, kc, apack.data());
+                          packed_row_panel = row_panel;
+                        }
+                        const std::uint16_t *panel_b = bpack.data() + wave_panel * panel_capacity;
+                        for (std::size_t ir = 0; ir < mc; ir += mr_block) {
+                          const std::size_t rows = std::min(mr_block, mc - ir);
+                          kernel(rows, nb, kc, alpha, 0.0f, panel_b, nb, nullptr, 0,
+                                 Y + (m0 + ir) * N + n0, N, 0, mode, apack.data() + ir * kc);
+                        }
+                      }
+                    });
+    }
+  }
+}
+
 } // namespace
 
 namespace detail {
@@ -1431,106 +1508,32 @@ void GemmFloat64Planned(bool trans_a, bool trans_b, std::size_t M, std::size_t N
                               SelectGemmKernelKind<double>(), tile, selected);
 }
 
-// Native FLOAT16 general GEMM driver (Roadmap PR07.3). See the declaration in
-// gemm_common.h: it packs each ``mr``-row block of ``A`` into a FLOAT16 panel
-// (resolving ``trans_a``) and streams the non-transposed FLOAT16 ``B`` matrix
-// through ``kernel`` with float32 accumulation, writing ``alpha * (A @ B)`` to
-// the float32 ``Y`` with no bias. The kernel is injected so the same driver,
-// packing, and column-tail logic can be tested with the portable scalar member
-// and dispatched to the AVX-512FP16 member in production.
 void GemmFp16NativeGeneral(bool trans_a, std::size_t M, std::size_t N, std::size_t K, float alpha,
                            const std::uint16_t *A, const std::uint16_t *B, float *Y,
-                           GemmFp16MicroKernel kernel, std::size_t mr) {
-  if (M == 0 || N == 0) {
-    return;
-  }
-  if (K == 0) {
-    InitializeOutput(M, N, 0.0f, static_cast<const float *>(nullptr), Y);
-    return;
-  }
-  const std::size_t mr_block = std::max<std::size_t>(1, mr);
-  const std::size_t row_blocks = (M + mr_block - 1) / mr_block;
-  const double cost = static_cast<double>(K) * mr_block * N / kGemmFmasPerParallelWorkUnit;
-  ExecuteRanges(static_cast<std::int64_t>(row_blocks), cost,
-                [&](std::int64_t begin, std::int64_t end) {
-                  AlignedVector<std::uint16_t> apack(mr_block * K);
-                  for (std::int64_t task = begin; task < end; ++task) {
-                    const std::size_t m0 = static_cast<std::size_t>(task) * mr_block;
-                    const std::size_t rows = std::min(mr_block, M - m0);
-                    for (std::size_t r = 0; r < rows; ++r) {
-                      std::uint16_t *dst = apack.data() + r * K;
-                      if (trans_a) {
-                        // ``A`` is ``K x M`` row-major: ``A(k, m)`` is ``A[k * M + m]``.
-                        for (std::size_t k = 0; k < K; ++k) {
-                          dst[k] = A[k * M + (m0 + r)];
-                        }
-                      } else {
-                        std::memcpy(dst, A + (m0 + r) * K, K * sizeof(std::uint16_t));
-                      }
-                    }
-                    kernel(rows, N, K, alpha, 0.0f, B, N, nullptr, 0, Y + m0 * N, N, 0,
-                           GemmAccumMode::kInitZero, apack.data());
-                  }
-                });
+                           GemmFp16MicroKernel kernel, std::size_t mr,
+                           const GemmBlocking *blocking) {
+  GemmHalfNativeGeneral(trans_a, M, N, K, alpha, A, B, Y, kernel, mr, blocking);
 }
 
-// Native BFLOAT16 general GEMM driver (Roadmap PR07.4). See the declaration in
-// gemm_common.h: it mirrors :cpp:func:`GemmFp16NativeGeneral` for BFLOAT16,
-// packing each ``mr``-row block of ``A`` into a BFLOAT16 panel (resolving
-// ``trans_a``) and streaming the non-transposed BFLOAT16 ``B`` matrix through
-// ``kernel`` with float32 accumulation, writing ``alpha * (A @ B)`` to the
-// float32 ``Y`` with no bias. The kernel is injected so the same driver,
-// packing, and column-tail logic can be tested with the portable scalar member
-// and dispatched to the AVX-512BF16 member in production.
 void GemmBf16NativeGeneral(bool trans_a, std::size_t M, std::size_t N, std::size_t K, float alpha,
                            const std::uint16_t *A, const std::uint16_t *B, float *Y,
-                           GemmBf16MicroKernel kernel, std::size_t mr) {
-  if (M == 0 || N == 0) {
-    return;
-  }
-  if (K == 0) {
-    InitializeOutput(M, N, 0.0f, static_cast<const float *>(nullptr), Y);
-    return;
-  }
-  const std::size_t mr_block = std::max<std::size_t>(1, mr);
-  const std::size_t row_blocks = (M + mr_block - 1) / mr_block;
-  const double cost = static_cast<double>(K) * mr_block * N / kGemmFmasPerParallelWorkUnit;
-  ExecuteRanges(static_cast<std::int64_t>(row_blocks), cost,
-                [&](std::int64_t begin, std::int64_t end) {
-                  AlignedVector<std::uint16_t> apack(mr_block * K);
-                  for (std::int64_t task = begin; task < end; ++task) {
-                    const std::size_t m0 = static_cast<std::size_t>(task) * mr_block;
-                    const std::size_t rows = std::min(mr_block, M - m0);
-                    for (std::size_t r = 0; r < rows; ++r) {
-                      std::uint16_t *dst = apack.data() + r * K;
-                      if (trans_a) {
-                        // ``A`` is ``K x M`` row-major: ``A(k, m)`` is ``A[k * M + m]``.
-                        for (std::size_t k = 0; k < K; ++k) {
-                          dst[k] = A[k * M + (m0 + r)];
-                        }
-                      } else {
-                        std::memcpy(dst, A + (m0 + r) * K, K * sizeof(std::uint16_t));
-                      }
-                    }
-                    kernel(rows, N, K, alpha, 0.0f, B, N, nullptr, 0, Y + m0 * N, N, 0,
-                           GemmAccumMode::kInitZero, apack.data());
-                  }
-                });
+                           GemmBf16MicroKernel kernel, std::size_t mr,
+                           const GemmBlocking *blocking) {
+  GemmHalfNativeGeneral(trans_a, M, N, K, alpha, A, B, Y, kernel, mr, blocking);
 }
 
-// FP16/BF16 GEMM accumulated in float32, executed through the typed source
-// path for one prepared algorithm. ``A`` and ``B`` are raw 16-bit patterns
-// viewed as ``HalfSource`` and converted to float32 element by element while
-// the operands are packed (general/direct/skinny-M) or reduced (skinny-N), so
-// no full-tensor widening buffer is allocated for any shape. Split-K reuses the
-// same converting five-loop range per partition. The reduction accumulates in
-// float32 and the raw ``M x N`` product is written to ``Y`` for the caller's
+// FP16/BF16 GEMM accumulated in float32, executed through the typed source path
+// for one prepared algorithm. Native non-transposed-B paths keep compact A/B
+// panels in the 16-bit source format; fallback paths view the operands as
+// ``HalfSource`` and convert while packing or reducing. No full-tensor widening
+// buffer is allocated. Split-K reuses the converting five-loop range per
+// partition. The raw ``M x N`` product is written to ``Y`` for the caller's
 // narrowing epilogue. ``blocking`` overrides the cached plan blocking when
 // non-null; otherwise the default blocking is derived here.
 template <GemmAlgorithm Algorithm>
 void GemmHalfPlanned(bool is_bfloat16, bool trans_a, bool trans_b, std::size_t M, std::size_t N,
                      std::size_t K, float alpha, const std::uint16_t *A, const std::uint16_t *B,
-                     float *Y, const GemmBlocking *blocking) {
+                     float *Y, const GemmBlocking *blocking, const GemmBlocking *compact_blocking) {
   const auto tile = [](GemmKernelKind kind, std::size_t mr, std::size_t nb, std::size_t k,
                        float alpha, float beta, const float *Bmat, std::size_t N,
                        const float *Crow_base, std::size_t Cstride, float *Yrow_base,
@@ -1542,9 +1545,14 @@ void GemmHalfPlanned(bool is_bfloat16, bool trans_a, bool trans_b, std::size_t M
   static const GemmKernelKind default_kind = SelectGemmKernelKind<float>();
   static const GemmBlocking default_blocking = SelectGemmBlocking(
       sizeof(float), GemmVectorLanes<float>(default_kind), GemmRegisterRows(default_kind));
+  static const GemmBlocking default_compact_blocking = SelectGemmBlocking(
+      sizeof(std::uint16_t), GemmVectorLanes<float>(default_kind), GemmRegisterRows(default_kind));
   const GemmBlocking selected =
       ConstrainGemmBlockingForTasks(blocking == nullptr ? default_blocking : *blocking, M, N,
                                     static_cast<std::size_t>(ExecutionThreadCount()));
+  const GemmBlocking compact_selected = ConstrainGemmBlockingForTasks(
+      compact_blocking == nullptr ? default_compact_blocking : *compact_blocking, M, N,
+      static_cast<std::size_t>(ExecutionThreadCount()));
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
   static const bool use_avx2 = DetectSimdLevel() >= SimdLevel::kAVX2 && CpuSupportsFma();
   if (use_avx2) {
@@ -1577,11 +1585,12 @@ void GemmHalfPlanned(bool is_bfloat16, bool trans_a, bool trans_b, std::size_t M
     const auto *a = reinterpret_cast<const BFloat16Source *>(A);
     const auto *b = reinterpret_cast<const BFloat16Source *>(B);
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
-    if constexpr (Algorithm == GemmAlgorithm::kDirect) {
+    if constexpr (Algorithm == GemmAlgorithm::kGeneral || Algorithm == GemmAlgorithm::kDirect) {
       static const bool use_avx2 = DetectSimdLevel() >= SimdLevel::kAVX2 && CpuSupportsFma();
       if (use_avx2 && !trans_b) {
         const std::size_t mr = std::min<std::size_t>(selected.mr, kGemmAVX2MR);
-        GemmBf16NativeGeneral(trans_a, M, N, K, alpha, A, B, Y, &GemmMicroKernel_AVX2BF16, mr);
+        GemmBf16NativeGeneral(trans_a, M, N, K, alpha, A, B, Y, &GemmMicroKernel_AVX2BF16, mr,
+                              &compact_selected);
         return;
       }
     }
@@ -1596,7 +1605,7 @@ void GemmHalfPlanned(bool is_bfloat16, bool trans_a, bool trans_b, std::size_t M
       static const bool use_amx_bf16 = CpuSupportsAmxBf16() && AmxTileStateAvailable();
       if (use_amx_bf16 && !trans_b) {
         GemmBf16NativeGeneral(trans_a, M, N, K, alpha, A, B, Y, &GemmMicroKernel_AMXBF16,
-                              kGemmAmxBf16MR);
+                              kGemmAmxBf16MR, &compact_selected);
         return;
       }
     }
@@ -1612,7 +1621,8 @@ void GemmHalfPlanned(bool is_bfloat16, bool trans_a, bool trans_b, std::size_t M
       static const bool use_avx512bf16 = CpuSupportsAvx512Bf16();
       if (use_avx512bf16 && !trans_b) {
         const std::size_t mr = std::min<std::size_t>(selected.mr, kGemmAVX512MR);
-        GemmBf16NativeGeneral(trans_a, M, N, K, alpha, A, B, Y, &GemmMicroKernel_AVX512BF16, mr);
+        GemmBf16NativeGeneral(trans_a, M, N, K, alpha, A, B, Y, &GemmMicroKernel_AVX512BF16, mr,
+                              &compact_selected);
         return;
       }
     }
@@ -1627,7 +1637,8 @@ void GemmHalfPlanned(bool is_bfloat16, bool trans_a, bool trans_b, std::size_t M
       static const ArmGemmProfile arm_profile = DetectArmGemmProfile();
       if (!trans_b && arm_profile.kind == ArmGemmKernelKind::kSve) {
         const std::size_t mr = std::min<std::size_t>(selected.mr, kGemmSveMR);
-        GemmBf16NativeGeneral(trans_a, M, N, K, alpha, A, B, Y, &GemmMicroKernel_SVE_BF16, mr);
+        GemmBf16NativeGeneral(trans_a, M, N, K, alpha, A, B, Y, &GemmMicroKernel_SVE_BF16, mr,
+                              &compact_selected);
         return;
       }
     }
@@ -1642,7 +1653,8 @@ void GemmHalfPlanned(bool is_bfloat16, bool trans_a, bool trans_b, std::size_t M
     if constexpr (Algorithm == GemmAlgorithm::kGeneral) {
       if (!trans_b) {
         const std::size_t mr = std::min<std::size_t>(selected.mr, kGemmNeonMR);
-        GemmBf16NativeGeneral(trans_a, M, N, K, alpha, A, B, Y, &GemmMicroKernel_NEON_BF16, mr);
+        GemmBf16NativeGeneral(trans_a, M, N, K, alpha, A, B, Y, &GemmMicroKernel_NEON_BF16, mr,
+                              &compact_selected);
         return;
       }
     }
@@ -1663,7 +1675,8 @@ void GemmHalfPlanned(bool is_bfloat16, bool trans_a, bool trans_b, std::size_t M
       static const bool use_avx512fp16 = CpuSupportsAvx512Fp16();
       if (use_avx512fp16 && !trans_b) {
         const std::size_t mr = std::min<std::size_t>(selected.mr, kGemmAVX512MR);
-        GemmFp16NativeGeneral(trans_a, M, N, K, alpha, A, B, Y, &GemmMicroKernel_AVX512FP16, mr);
+        GemmFp16NativeGeneral(trans_a, M, N, K, alpha, A, B, Y, &GemmMicroKernel_AVX512FP16, mr,
+                              &compact_selected);
         return;
       }
     }
@@ -1679,7 +1692,8 @@ void GemmHalfPlanned(bool is_bfloat16, bool trans_a, bool trans_b, std::size_t M
       static const ArmGemmProfile arm_profile = DetectArmGemmProfile();
       if (!trans_b && arm_profile.kind == ArmGemmKernelKind::kSve) {
         const std::size_t mr = std::min<std::size_t>(selected.mr, kGemmSveMR);
-        GemmFp16NativeGeneral(trans_a, M, N, K, alpha, A, B, Y, &GemmMicroKernel_SVE_FP16, mr);
+        GemmFp16NativeGeneral(trans_a, M, N, K, alpha, A, B, Y, &GemmMicroKernel_SVE_FP16, mr,
+                              &compact_selected);
         return;
       }
     }
@@ -1694,22 +1708,22 @@ void GemmHalfPlanned(bool is_bfloat16, bool trans_a, bool trans_b, std::size_t M
     if constexpr (Algorithm == GemmAlgorithm::kGeneral) {
       if (!trans_b) {
         const std::size_t mr = std::min<std::size_t>(selected.mr, kGemmNeonMR);
-        GemmFp16NativeGeneral(trans_a, M, N, K, alpha, A, B, Y, &GemmMicroKernel_NEON_FP16, mr);
+        GemmFp16NativeGeneral(trans_a, M, N, K, alpha, A, B, Y, &GemmMicroKernel_NEON_FP16, mr,
+                              &compact_selected);
         return;
       }
     }
 #endif
 #if defined(ONNX_LIGHT_CPU_HAVE_AVX2_FMA) && defined(ONNX_LIGHT_CPU_HAVE_F16C)
-    // Avoid the native kernel for general GEMM: repeatedly widening the same
-    // B values for every row tile loses to the shared float32 packed panel once
-    // M grows. Small-K direct GEMM does not amortize packing and benefits from
-    // widening directly in registers.
-    if constexpr (Algorithm == GemmAlgorithm::kDirect) {
+    // Compact B panels make the native general kernel competitive with the
+    // once-widened float32 path while avoiding repeated full-width B traffic.
+    if constexpr (Algorithm == GemmAlgorithm::kGeneral || Algorithm == GemmAlgorithm::kDirect) {
       static const bool use_avx2_f16c =
           DetectSimdLevel() >= SimdLevel::kAVX2 && CpuSupportsFma() && CpuSupportsF16C();
       if (use_avx2_f16c && !trans_b) {
         const std::size_t mr = std::min<std::size_t>(selected.mr, kGemmAVX2MR);
-        GemmFp16NativeGeneral(trans_a, M, N, K, alpha, A, B, Y, &GemmMicroKernel_AVX2F16C, mr);
+        GemmFp16NativeGeneral(trans_a, M, N, K, alpha, A, B, Y, &GemmMicroKernel_AVX2F16C, mr,
+                              &compact_selected);
         return;
       }
     }
@@ -1838,9 +1852,9 @@ void GemmFloat8ToFloat(Float8Format format, bool trans_a, bool trans_b, std::siz
   template void GemmFloat64Planned<Algorithm>(bool, bool, std::size_t, std::size_t, std::size_t,   \
                                               double, const double *, const double *, double,      \
                                               const double *, double *, const GemmBlocking *);     \
-  template void GemmHalfPlanned<Algorithm>(bool, bool, bool, std::size_t, std::size_t,             \
-                                           std::size_t, float, const std::uint16_t *,              \
-                                           const std::uint16_t *, float *, const GemmBlocking *)
+  template void GemmHalfPlanned<Algorithm>(                                                        \
+      bool, bool, bool, std::size_t, std::size_t, std::size_t, float, const std::uint16_t *,       \
+      const std::uint16_t *, float *, const GemmBlocking *, const GemmBlocking *)
 
 INSTANTIATE_PLANNED_GEMM(GemmAlgorithm::kGeneral);
 INSTANTIATE_PLANNED_GEMM(GemmAlgorithm::kDirect);

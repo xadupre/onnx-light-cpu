@@ -75,14 +75,16 @@ void GemmFloat64Planned(bool trans_a, bool trans_b, std::size_t M, std::size_t N
 
 /// FP16/BF16 GEMM executed through the typed source path for one prepared
 /// algorithm. ``A`` and ``B`` are raw 16-bit ``FLOAT16`` (``is_bfloat16 ==
-/// false``) or ``BFLOAT16`` (``is_bfloat16 == true``) patterns converted to
-/// float32 while packing or reducing, so no full-tensor widening buffer is
+/// false``) or ``BFLOAT16`` (``is_bfloat16 == true``) patterns. Native
+/// non-transposed-B paths keep compact panels in the source format; fallback
+/// paths convert while packing or reducing. No full-tensor widening buffer is
 /// allocated. The float32 ``M x N`` product is written to ``Y`` for the
 /// caller's narrowing epilogue.
 template <GemmAlgorithm Algorithm>
 void GemmHalfPlanned(bool is_bfloat16, bool trans_a, bool trans_b, std::size_t M, std::size_t N,
                      std::size_t K, float alpha, const std::uint16_t *A, const std::uint16_t *B,
-                     float *Y, const GemmBlocking *blocking = nullptr);
+                     float *Y, const GemmBlocking *blocking = nullptr,
+                     const GemmBlocking *compact_blocking = nullptr);
 
 } // namespace detail
 
@@ -148,10 +150,11 @@ void GemmMicroKernel_Scalar_F64(std::size_t mr, std::size_t nb, std::size_t K, d
 // family (Roadmap PR07.3). Unlike the FP32 micro-kernels, both operands stay in
 // FLOAT16: ``Apack`` is a packed contiguous ``mr x K`` row-major panel of raw
 // FLOAT16 patterns (``Apack[r * K + k]`` is ``A(m + r, k0 + k)``) and ``Bmat``
-// is the FLOAT16 ``B`` matrix read with row stride ``N``. Each element is
-// converted to float on the fly and the dot products accumulate in float32, so
-// the float32 result matches the widen-then-float32 reference; the epilogue
-// combines ``alpha * acc`` with ``Y`` according to ``mode`` and writes float32.
+// is a row-major FLOAT16 matrix or compact panel read with row stride ``N``.
+// Each element is converted to float on the fly and the dot products accumulate
+// in float32, so the float32 result matches the widen-then-float32 reference;
+// the epilogue combines ``alpha * acc`` with ``Y`` according to ``mode`` and
+// writes float32.
 using GemmFp16MicroKernel = void (*)(std::size_t mr, std::size_t nb, std::size_t K, float alpha,
                                      float beta, const std::uint16_t *Bmat, std::size_t N,
                                      const float *Crow_base, std::size_t Cstride, float *Yrow_base,
@@ -171,10 +174,10 @@ void GemmMicroKernel_ScalarFp16(std::size_t mr, std::size_t nb, std::size_t K, f
 // family (Roadmap PR07.4). It mirrors ``GemmFp16MicroKernel`` but consumes
 // BFLOAT16 (raw ``std::uint16_t``) operands: ``Apack`` is a packed contiguous
 // ``mr x K`` row-major panel (``Apack[r * K + k]`` is ``A(m + r, k0 + k)``) and
-// ``Bmat`` is the BFLOAT16 ``B`` matrix read with row stride ``N``. Products
-// accumulate in float32 so the result matches the widen-then-float32 reference;
-// the epilogue combines ``alpha * acc`` with ``Y`` according to ``mode`` and
-// writes float32.
+// ``Bmat`` is a row-major BFLOAT16 matrix or compact panel read with row stride
+// ``N``. Products accumulate in float32 so the result matches the
+// widen-then-float32 reference; the epilogue combines ``alpha * acc`` with
+// ``Y`` according to ``mode`` and writes float32.
 using GemmBf16MicroKernel = void (*)(std::size_t mr, std::size_t nb, std::size_t K, float alpha,
                                      float beta, const std::uint16_t *Bmat, std::size_t N,
                                      const float *Crow_base, std::size_t Cstride, float *Yrow_base,
@@ -192,28 +195,23 @@ void GemmMicroKernel_ScalarBf16(std::size_t mr, std::size_t nb, std::size_t K, f
 
 namespace detail {
 
-// Native FLOAT16 general GEMM driver (Roadmap PR07.3). It packs each ``mr``-row
-// block of ``A`` into a FLOAT16 panel (resolving ``trans_a``) and streams the
-// non-transposed FLOAT16 ``B`` matrix through ``kernel`` with float32
-// accumulation, writing ``alpha * (A @ B)`` to the float32 ``Y`` (no bias). The
-// micro-kernel is injected so the same driver, packing, and column-tail logic
-// can be exercised in tests with the portable scalar member and dispatched to
-// the AVX-512FP16 member in production.
+// Native FLOAT16 general GEMM driver. It packs matching K chunks of ``A`` and
+// compact ``kc x nb`` panels of non-transposed ``B``. Each B panel is copied
+// once, shared read-only across parallel row panels, and passed to ``kernel``
+// with row stride ``nb`` and ``n0 == 0``. Later K chunks accumulate into the
+// float32 ``Y``. ``blocking`` may provide the prepared plan dimensions;
+// otherwise dimensions suitable for 16-bit panels are selected locally.
 void GemmFp16NativeGeneral(bool trans_a, std::size_t M, std::size_t N, std::size_t K, float alpha,
                            const std::uint16_t *A, const std::uint16_t *B, float *Y,
-                           GemmFp16MicroKernel kernel, std::size_t mr);
+                           GemmFp16MicroKernel kernel, std::size_t mr,
+                           const GemmBlocking *blocking = nullptr);
 
-// Native BFLOAT16 general GEMM driver (Roadmap PR07.4). It mirrors
-// :cpp:func:`GemmFp16NativeGeneral`: it packs each ``mr``-row block of ``A``
-// into a BFLOAT16 panel (resolving ``trans_a``) and streams the non-transposed
-// BFLOAT16 ``B`` matrix through ``kernel`` with float32 accumulation, writing
-// ``alpha * (A @ B)`` to the float32 ``Y`` (no bias). The micro-kernel is
-// injected so the same driver, packing, and column-tail logic can be exercised
-// in tests with the portable scalar member and dispatched to the AVX-512BF16
-// member in production.
+// Native BFLOAT16 general GEMM driver. It uses the same compact B-panel and
+// K-chunk accumulation driver as :cpp:func:`GemmFp16NativeGeneral`.
 void GemmBf16NativeGeneral(bool trans_a, std::size_t M, std::size_t N, std::size_t K, float alpha,
                            const std::uint16_t *A, const std::uint16_t *B, float *Y,
-                           GemmBf16MicroKernel kernel, std::size_t mr);
+                           GemmBf16MicroKernel kernel, std::size_t mr,
+                           const GemmBlocking *blocking = nullptr);
 
 } // namespace detail
 

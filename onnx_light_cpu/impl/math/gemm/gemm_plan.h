@@ -105,11 +105,9 @@ struct GemmHalfPlanOptions {
 
 /// Reusable prepared rank-2 FP16/BF16 general matrix multiplication.
 ///
-/// FP16/BF16 have no native micro-kernel: the operands are converted to
-/// float32 while packing or reducing and the reduction accumulates in float32
-/// (no full-tensor widening). The plan records the selected algorithm,
-/// blocking, and thread count derived from the float32 kernel selection once,
-/// so they are not re-derived on every run. B is always dynamic.
+/// Native FP16/BF16 kernels keep compact panels in the source format; fallback
+/// paths convert to float32 while packing or reducing. The plan records both
+/// blocking profiles and the selected algorithm once. B is always dynamic.
 class GemmHalfPlan {
 public:
   explicit GemmHalfPlan(const GemmHalfPlanOptions &options);
@@ -130,12 +128,13 @@ public:
   float alpha() const noexcept { return alpha_; }
   GemmAlgorithm algorithm() const noexcept { return algorithm_; }
   const GemmBlocking &blocking() const noexcept { return blocking_; }
+  const GemmBlocking &compact_blocking() const noexcept { return compact_blocking_; }
   std::size_t useful_threads() const noexcept { return useful_threads_; }
 
 private:
   using KernelFn = void (*)(bool, bool, bool, std::size_t, std::size_t, std::size_t, float,
                             const std::uint16_t *, const std::uint16_t *, float *,
-                            const GemmBlocking *);
+                            const GemmBlocking *, const GemmBlocking *);
 
   bool is_bfloat16_;
   bool trans_a_;
@@ -146,6 +145,7 @@ private:
   float alpha_;
   GemmAlgorithm algorithm_;
   GemmBlocking blocking_;
+  GemmBlocking compact_blocking_;
   std::size_t useful_threads_;
   KernelFn kernel_;
 };

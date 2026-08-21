@@ -23,8 +23,8 @@ namespace onnx_light_cpu {
 // Native AMX-BF16 member of the BFLOAT16 micro-kernel family. It shares the
 // ``GemmBf16MicroKernel`` signature so the shared ``GemmBf16NativeGeneral``
 // driver, BFLOAT16 ``A`` packing, and column-tail handling are reused: ``Apack``
-// is a packed ``mr x K`` row-major BFLOAT16 panel and ``Bmat`` is the BFLOAT16
-// ``B`` matrix with row stride ``N``. Internally it configures three AMX tiles
+// is a packed ``mr x K`` row-major BFLOAT16 panel and ``Bmat`` is a compact
+// BFLOAT16 panel with row stride ``N``. Internally it configures three AMX tiles
 // through the PR07.5 tile-state lifecycle and reduces the ``K`` dimension with
 // the ``tdpbf16ps`` (``_tile_dpbf16ps``) tile dot-product, accumulating in
 // float32, so the result matches the widen-then-float32 reference within

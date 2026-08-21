@@ -1415,6 +1415,17 @@ alongside the other compact formats. Parity reports retain every timing sample
 and dispersion and additionally record affinity policy, compiler, and NumPy,
 onnx-light, onnx-light-cpu, and ONNX Runtime versions.
 
+The `fourth pass in #330
+<https://github.com/xadupre/onnx-light-cpu/pull/330>`_ packs each native
+FP16/BF16 B panel once per K and column chunk, then shares it read-only across
+parallel row tasks. Prepared half plans retain separate blocking profiles for
+the compact native panels and the float32 fallback. The AVX2 general path now
+uses the compact driver, including a six-row micro-kernel dispatch for the Zen
+profile. Three one-thread diagnostic runs on the i7-13800H show FP16 ratios
+between 0.98x and 1.31x and BF16 ratios between 0.99x and 1.51x against the
+previous once-widened float32 path across square, transposed-A, and transformer
+projection cases.
+
 The published numbers above are diagnostic WSL measurements, not the
 dedicated-machine evidence required to close PR10.3. ONNX Runtime 1.28.0 does
 not implement CPU BFLOAT16 Gemm on this host, so BFLOAT16 remains an isolated
@@ -1423,10 +1434,6 @@ required.
 
 The remaining PR10.3 order, tracked entirely by #277, is:
 
-#. Reuse compact B panels across row tasks. For medium and large non-transposed
-   GEMM, benchmark a cache-sized FP16/BF16 packed-B layout whose conversion
-   happens inside the micro-kernel, but only dispatch it when B reuse beats the
-   current once-per-panel FP32 widening.
 #. Fix physical-core scaling. A ten-thread diagnostic corpus reaches only
    0.309x median after the tiny split-K correction, with high variance and a
    0.040x minimum; partition packed B panels across reusable physical-core

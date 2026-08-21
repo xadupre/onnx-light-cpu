@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "onnx_light_cpu/impl/execution.h"
 #include "onnx_light_cpu/impl/math/gemm/amx/gemm_amx_tile.h"
 #include "onnx_light_cpu/impl/math/gemm/float8/float8_conversion.h"
 #include "onnx_light_cpu/impl/math/gemm/gemm_common.h"
@@ -26,6 +27,7 @@
 #include <limits>
 #include <new>
 #include <random>
+#include <thread>
 #include <vector>
 
 #if defined(_MSC_VER)
@@ -36,8 +38,7 @@
 // below. While ``g_alloc_recording`` is set, every global allocation updates
 // ``g_alloc_peak`` with the largest single request seen (including worker-thread
 // allocations), so a test can assert the half-precision path never allocates a
-// buffer larger than the equivalent float32 path -- i.e. it never widens a full
-// ``M*K`` or ``K*N`` operand (Roadmap PR07.2).
+// buffer large enough to widen a full ``M*K`` or ``K*N`` operand (Roadmap PR07.2).
 namespace {
 std::atomic<bool> g_alloc_recording{false};
 std::atomic<std::size_t> g_alloc_peak{0};
@@ -883,6 +884,34 @@ TEST(GemmHalf, Float16NativeGeneralColumnTails) {
 
 namespace {
 
+struct ThreadedExecutor {
+  std::atomic<std::size_t> dispatches{0};
+  std::atomic<std::size_t> maximum_active{0};
+
+  static void Run(void *context, int64_t num_blocks, void *task_context,
+                  onnx_light_cpu::ExecutionBlockFn task) {
+    auto &self = *static_cast<ThreadedExecutor *>(context);
+    self.dispatches.fetch_add(1, std::memory_order_relaxed);
+    std::atomic<std::size_t> active{0};
+    std::vector<std::thread> workers;
+    workers.reserve(static_cast<std::size_t>(num_blocks));
+    for (int64_t block = 0; block < num_blocks; ++block) {
+      workers.emplace_back([&, block] {
+        const std::size_t now = active.fetch_add(1, std::memory_order_relaxed) + 1;
+        std::size_t maximum = self.maximum_active.load(std::memory_order_relaxed);
+        while (now > maximum && !self.maximum_active.compare_exchange_weak(
+                                    maximum, now, std::memory_order_relaxed)) {
+        }
+        task(task_context, block);
+        active.fetch_sub(1, std::memory_order_relaxed);
+      });
+    }
+    for (std::thread &worker : workers) {
+      worker.join();
+    }
+  }
+};
+
 // Runs the native FLOAT16 general driver (Roadmap PR07.3) with an injected
 // micro-kernel and compares ``alpha * op(A) @ B`` against the equivalent
 // widen-then-float32 reference. The driver, FLOAT16 A packing (including
@@ -891,7 +920,8 @@ namespace {
 // AVX-512FP16 member only runs on capable hardware.
 void CheckGemmFp16NativeDriver(bool trans_a, std::size_t M, std::size_t N, std::size_t K,
                                float alpha, unsigned seed,
-                               onnx_light_cpu::GemmFp16MicroKernel kernel) {
+                               onnx_light_cpu::GemmFp16MicroKernel kernel,
+                               const onnx_light_cpu::GemmBlocking *blocking = nullptr) {
   const auto a_f = RandomVector(trans_a ? K * M : M * K, seed);
   const auto b_f = RandomVector(K * N, seed + 1);
   const auto a_bits = NarrowHalf(a_f, false);
@@ -903,7 +933,7 @@ void CheckGemmFp16NativeDriver(bool trans_a, std::size_t M, std::size_t N, std::
 
   std::vector<float> Y(M * N, -1.0f);
   onnx_light_cpu::detail::GemmFp16NativeGeneral(trans_a, M, N, K, alpha, a_bits.data(),
-                                                b_bits.data(), Y.data(), kernel, 6);
+                                                b_bits.data(), Y.data(), kernel, 6, blocking);
 
   for (std::size_t i = 0; i < M * N; ++i) {
     const float tol = 1e-3f * std::max(1.0f, std::abs(expected[i]));
@@ -924,6 +954,39 @@ TEST(GemmFp16Native, ScalarKernelMatchesReference) {
                             &onnx_light_cpu::GemmMicroKernel_ScalarFp16);
   CheckGemmFp16NativeDriver(false, 7, 5, 0, 1.0f, 331, &onnx_light_cpu::GemmMicroKernel_ScalarFp16);
 }
+
+TEST(GemmFp16Native, CompactBPanelsCrossBlockingBoundaries) {
+  // Each dimension spans three blocking chunks and leaves M/N/K tails.
+  const onnx_light_cpu::GemmBlocking blocking{12, 16, 7, 6, 8};
+  CheckGemmFp16NativeDriver(false, 25, 37, 19, 0.75f, 341,
+                            &onnx_light_cpu::GemmMicroKernel_ScalarFp16, &blocking);
+  CheckGemmFp16NativeDriver(true, 25, 37, 20, 0.5f, 351,
+                            &onnx_light_cpu::GemmMicroKernel_ScalarFp16, &blocking);
+}
+
+TEST(GemmFp16Native, CompactBPanelWaveIsSharedAcrossParallelRows) {
+  const onnx_light_cpu::GemmBlocking blocking{96, 128, 128, 6, 8};
+  ThreadedExecutor executor;
+  onnx_light_cpu::ExecutionExecutorView view{&executor, 4, &ThreadedExecutor::Run};
+  {
+    onnx_light_cpu::ExecutionExecutorScope scope(&view);
+    CheckGemmFp16NativeDriver(false, 193, 257, 257, 0.75f, 356,
+                              &onnx_light_cpu::GemmMicroKernel_ScalarFp16, &blocking);
+  }
+  EXPECT_GT(executor.dispatches.load(std::memory_order_relaxed), 0u);
+  EXPECT_GT(executor.maximum_active.load(std::memory_order_relaxed), 1u);
+}
+
+#if defined(ONNX_LIGHT_CPU_HAVE_AVX2_FMA) && defined(ONNX_LIGHT_CPU_HAVE_F16C)
+TEST(GemmFp16Native, Avx2KernelSupportsSixRows) {
+  if (onnx_light_cpu::DetectSimdLevel() < onnx_light_cpu::SimdLevel::kAVX2 ||
+      !onnx_light_cpu::CpuSupportsFma() || !onnx_light_cpu::CpuSupportsF16C()) {
+    GTEST_SKIP() << "CPU does not support AVX2/FMA/F16C";
+  }
+  CheckGemmFp16NativeDriver(false, 13, 19, 33, 0.75f, 361,
+                            &onnx_light_cpu::GemmMicroKernel_AVX2F16C);
+}
+#endif
 
 TEST(GemmFp16Native, Avx512Fp16KernelMatchesReferenceWhenSupported) {
   if (!onnx_light_cpu::CpuSupportsAvx512Fp16()) {
@@ -960,7 +1023,8 @@ namespace {
 // on capable hardware.
 void CheckGemmBf16NativeDriver(bool trans_a, std::size_t M, std::size_t N, std::size_t K,
                                float alpha, unsigned seed,
-                               onnx_light_cpu::GemmBf16MicroKernel kernel) {
+                               onnx_light_cpu::GemmBf16MicroKernel kernel,
+                               const onnx_light_cpu::GemmBlocking *blocking = nullptr) {
   const auto a_f = RandomVector(trans_a ? K * M : M * K, seed);
   const auto b_f = RandomVector(K * N, seed + 1);
   const auto a_bits = NarrowHalf(a_f, true);
@@ -972,7 +1036,7 @@ void CheckGemmBf16NativeDriver(bool trans_a, std::size_t M, std::size_t N, std::
 
   std::vector<float> Y(M * N, -1.0f);
   onnx_light_cpu::detail::GemmBf16NativeGeneral(trans_a, M, N, K, alpha, a_bits.data(),
-                                                b_bits.data(), Y.data(), kernel, 6);
+                                                b_bits.data(), Y.data(), kernel, 6, blocking);
 
   for (std::size_t i = 0; i < M * N; ++i) {
     const float tol = 8e-3f * std::max(1.0f, std::abs(expected[i]));
@@ -993,6 +1057,26 @@ TEST(GemmBf16Native, ScalarKernelMatchesReference) {
                             &onnx_light_cpu::GemmMicroKernel_ScalarBf16);
   CheckGemmBf16NativeDriver(false, 7, 5, 0, 1.0f, 531, &onnx_light_cpu::GemmMicroKernel_ScalarBf16);
 }
+
+TEST(GemmBf16Native, CompactBPanelsCrossBlockingBoundaries) {
+  // Each dimension spans three blocking chunks and leaves M/N/K tails.
+  const onnx_light_cpu::GemmBlocking blocking{12, 16, 7, 6, 8};
+  CheckGemmBf16NativeDriver(false, 25, 37, 19, 0.75f, 541,
+                            &onnx_light_cpu::GemmMicroKernel_ScalarBf16, &blocking);
+  CheckGemmBf16NativeDriver(true, 25, 37, 20, 0.5f, 551,
+                            &onnx_light_cpu::GemmMicroKernel_ScalarBf16, &blocking);
+}
+
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
+TEST(GemmBf16Native, Avx2KernelSupportsSixRows) {
+  if (onnx_light_cpu::DetectSimdLevel() < onnx_light_cpu::SimdLevel::kAVX2 ||
+      !onnx_light_cpu::CpuSupportsFma()) {
+    GTEST_SKIP() << "CPU does not support AVX2/FMA";
+  }
+  CheckGemmBf16NativeDriver(false, 13, 19, 33, 0.75f, 561,
+                            &onnx_light_cpu::GemmMicroKernel_AVX2BF16);
+}
+#endif
 
 TEST(GemmBf16Native, Avx512Bf16KernelMatchesReferenceWhenSupported) {
   if (!onnx_light_cpu::CpuSupportsAvx512Bf16()) {
@@ -1167,24 +1251,15 @@ template <typename Fn> std::size_t PeakAllocationBytes(Fn fn) {
   return g_alloc_peak.load(std::memory_order_relaxed);
 }
 
-// Confirms the FP16/BF16 path for a shape that shares its algorithm with float32
-// never allocates a larger buffer than the float32 path. Since the only removed
-// step is the full-tensor widening, an equal peak proves the half path packs the
-// same bounded panels and no longer expands a full ``M*K`` or ``K*N`` operand.
+// Confirms the FP16/BF16 path never allocates enough space to widen its larger
+// operand in full. Native kernels use a separate compact blocking profile, so
+// their bounded panel allocation need not match the float32 path's panel size.
 void CheckHalfNoExpandedOperand(bool is_bfloat16, std::size_t M, std::size_t N, std::size_t K,
                                 unsigned seed) {
   const auto a_f = RandomVector(M * K, seed);
   const auto b_f = RandomVector(K * N, seed + 1);
   const auto a_bits = NarrowHalf(a_f, is_bfloat16);
   const auto b_bits = NarrowHalf(b_f, is_bfloat16);
-  const auto a_round = WidenHalf(a_bits, is_bfloat16);
-  const auto b_round = WidenHalf(b_bits, is_bfloat16);
-
-  std::vector<float> y_fp32(M * N, 0.0f);
-  const std::size_t fp32_peak = PeakAllocationBytes([&] {
-    onnx_light_cpu::GemmFloat32(false, false, M, N, K, 1.0f, a_round.data(), b_round.data(), 0.0f,
-                                nullptr, y_fp32.data());
-  });
 
   std::vector<float> y_half(M * N, 0.0f);
   std::vector<std::uint16_t> out_bits(M * N, 0);
@@ -1197,11 +1272,9 @@ void CheckHalfNoExpandedOperand(bool is_bfloat16, std::size_t M, std::size_t N, 
                                          b_bits.data(), epilogue, y_half.data());
   });
 
-  // Without full-tensor widening the half path packs the same bounded float
-  // panels as float32, so its peak single allocation must not exceed the
-  // float32 peak.
-  EXPECT_LE(half_peak, fp32_peak) << "half path allocated more than float32 for M=" << M
-                                  << " N=" << N << " K=" << K;
+  const std::size_t expanded_operand_bytes = std::max(M * K, K * N) * sizeof(float);
+  EXPECT_LT(half_peak, expanded_operand_bytes)
+      << "half path allocated a full expanded operand for M=" << M << " N=" << N << " K=" << K;
 }
 
 } // namespace

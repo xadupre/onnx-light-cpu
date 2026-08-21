@@ -639,6 +639,9 @@ void GemmMicroKernel_AVX2BF16(std::size_t mr, std::size_t nb, std::size_t K, flo
   case 5:
     return GemmMicroKernel_AVX2HalfImpl<true, 5>(nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
                                                  Yrow_base, Ystride, n0, mode, Apack);
+  case 6:
+    return GemmMicroKernel_AVX2HalfImpl<true, 6>(nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
+                                                 Yrow_base, Ystride, n0, mode, Apack);
   default:
     return GemmMicroKernel_ScalarBf16(mr, nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
                                       Yrow_base, Ystride, n0, mode, Apack);
@@ -704,6 +707,9 @@ void GemmMicroKernel_AVX2F16C(std::size_t mr, std::size_t nb, std::size_t K, flo
                                                   Yrow_base, Ystride, n0, mode, Apack);
   case 5:
     return GemmMicroKernel_AVX2HalfImpl<false, 5>(nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
+                                                  Yrow_base, Ystride, n0, mode, Apack);
+  case 6:
+    return GemmMicroKernel_AVX2HalfImpl<false, 6>(nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
                                                   Yrow_base, Ystride, n0, mode, Apack);
   default:
     return GemmMicroKernel_ScalarFp16(mr, nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
