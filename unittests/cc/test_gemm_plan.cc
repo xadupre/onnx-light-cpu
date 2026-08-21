@@ -706,6 +706,7 @@ TEST(GemmHalfPlan, ExecutesBFloat16AndExposesSelection) {
   EXPECT_EQ(plan.k(), 3u);
   EXPECT_FLOAT_EQ(plan.alpha(), 0.5f);
   EXPECT_GE(plan.blocking().kc, 64u);
+  EXPECT_GE(plan.compact_blocking().kc, plan.blocking().kc);
   EXPECT_GE(plan.useful_threads(), 1u);
 }
 

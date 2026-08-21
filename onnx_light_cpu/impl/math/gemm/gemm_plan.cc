@@ -131,7 +131,8 @@ auto SelectKernel(GemmAlgorithm algorithm)
 
 auto SelectHalfKernel(GemmAlgorithm algorithm)
     -> void (*)(bool, bool, bool, std::size_t, std::size_t, std::size_t, float,
-                const std::uint16_t *, const std::uint16_t *, float *, const GemmBlocking *) {
+                const std::uint16_t *, const std::uint16_t *, float *, const GemmBlocking *,
+                const GemmBlocking *) {
   switch (algorithm) {
   case GemmAlgorithm::kDirect:
     return &detail::GemmHalfPlanned<GemmAlgorithm::kDirect>;
@@ -400,14 +401,16 @@ void GemmPlan<T>::Execute(const T *a, const GemmEpilogue<T> &epilogue, T *y) con
 GemmHalfPlan::GemmHalfPlan(const GemmHalfPlanOptions &options)
     : is_bfloat16_(options.is_bfloat16), trans_a_(options.trans_a), trans_b_(options.trans_b),
       m_(options.m), n_(options.n), k_(options.k), alpha_(options.alpha),
-      // FP16/BF16 accumulate in float32, so the algorithm, blocking, and thread
-      // count are derived from the float32 kernel selection (sizeof(float)).
       algorithm_(detail::SelectGemmAlgorithm(options.trans_a, options.trans_b, options.m, options.n,
                                              options.k, VectorLanes<float>(), RegisterRows())),
       blocking_(detail::ConstrainGemmBlockingForTasks(
           detail::SelectGemmBlocking(sizeof(float), VectorLanes<float>(), RegisterRows()),
           options.m, options.n, static_cast<std::size_t>(ExecutionThreadCount()))),
-      useful_threads_(UsefulThreads(options.m, options.n, options.k, blocking_)),
+      compact_blocking_(detail::ConstrainGemmBlockingForTasks(
+          detail::SelectGemmBlocking(sizeof(std::uint16_t), VectorLanes<float>(), RegisterRows()),
+          options.m, options.n, static_cast<std::size_t>(ExecutionThreadCount()))),
+      useful_threads_(std::max(UsefulThreads(options.m, options.n, options.k, blocking_),
+                               UsefulThreads(options.m, options.n, options.k, compact_blocking_))),
       kernel_(SelectHalfKernel(algorithm_)) {
   CheckedProduct(m_, k_, "A");
   CheckedProduct(k_, n_, "B");
@@ -434,7 +437,8 @@ void GemmHalfPlan::Execute(const std::uint16_t *a, const std::uint16_t *b,
   // FP16/BF16 has no fused bias micro-kernel: the plan's kernel writes the raw
   // ``alpha * op(A) @ op(B)`` float32 product, then the epilogue adds the
   // broadcast bias/residual, applies the activation, and narrows the output.
-  kernel_(is_bfloat16_, trans_a_, trans_b_, m_, n_, k_, alpha_, a, b, y, &blocking_);
+  kernel_(is_bfloat16_, trans_a_, trans_b_, m_, n_, k_, alpha_, a, b, y, &blocking_,
+          &compact_blocking_);
   ApplyGemmEpilogue(m_, n_, epilogue, y);
 }
 
