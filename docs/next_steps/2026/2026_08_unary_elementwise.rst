@@ -15,11 +15,12 @@ median performance, with no priority case below ``0.9x``. Correctness includes
 all supported data types, attributes, special values, empty tensors, tails,
 aliasing rules, and opset-specific behavior.
 
-``onnx-light-cpu`` currently registers optimized kernels for ``Abs``, ``Exp``,
-``Log``, and ``Not``. They already provide useful SIMD, dispatch, and thread
-pool components, but each operator has its own entry points. The next
-implementation should retain these kernels while moving selection, traversal,
-type conversion, accuracy policy, and scheduling into a common unary plan.
+``onnx-light-cpu`` already registers optimized kernels for ``Abs``, ``Exp``,
+``Log``, and ``Not``. These operators exist today; the roadmap extends their
+shared architecture and adds the remaining operators rather than replacing
+their working entry points. The common unary plan should retain their kernels
+while moving selection, traversal, type conversion, accuracy policy, and
+scheduling policy into shared preparation.
 
 Scope
 -----
@@ -183,8 +184,10 @@ Parallel scheduling
 -------------------
 
 Unary arithmetic is usually memory-bandwidth-bound, while transcendental
-operators are compute-bound. The shared scheduler therefore uses measured
-thresholds by operator family, type, and ISA:
+operators are compute-bound. Registered kernels already execute through the
+onnx-light session executor, with no private ``onnx-light-cpu`` scheduler.
+Prepared kernels therefore select measured limits for the session-owned
+executor by operator family, type, processor profile, and ISA:
 
 * cheap kernels stay single-threaded until enough bytes amortize dispatch;
 * expensive functions may parallelize at much smaller element counts;
@@ -219,6 +222,28 @@ against ONNX Runtime. It covers:
 Shared CI enforces correctness. Tight performance and numerical-search gates
 run on pinned machines and preserve raw samples and environment metadata.
 
+Completed foundations
+---------------------
+
+The dedicated :doc:`Exp and Log ONNX Runtime Parity Roadmap
+<2026_08_exp_log_parity>` is complete through
+`onnx-light-cpu #315
+<https://github.com/xadupre/onnx-light-cpu/pull/315>`_. Its numerical gates,
+AVX2+FMA and AVX-512 kernels, benchmark corpus, operator-specific scheduling,
+and preserved evidence are inputs to this roadmap. Unary PR03 reuses those
+``Exp``/``Log`` implementations and primitives; it does not reimplement their
+parity work.
+
+The :doc:`Runtime Execution Controls Roadmap
+<2026_08_runtime_execution_controls>` is also complete through
+`onnx-light-cpu #271
+<https://github.com/xadupre/onnx-light-cpu/pull/271>`_ and
+`#314 <https://github.com/xadupre/onnx-light-cpu/pull/314>`_. Registered
+kernels use the session-owned executor, and the existing onnx-light
+processor-aware tuning registry supplies the profile-resolution foundation.
+The remaining unary PRs build on these completed foundations; they do not add
+a private scheduler.
+
 Remaining pull-request sequence
 -------------------------------
 
@@ -237,8 +262,9 @@ The following table is the single source of truth for the unary roadmap.
      - Corpus, plan, registry, and scalar semantics.
      - ``UnaryElementwisePlan`` and common adapters cover every in-scope
        operator/type/opset with guarded scalar fallbacks. Differential cases
-       include attributes, special values, empty tensors, tails, and aliasing.
-     - None
+       include attributes, special values, empty tensors, tails, and aliasing,
+       while existing ``Abs``/``Exp``/``Log``/``Not`` kernels remain usable.
+     - Completed runtime foundation
      - Pending
    * - Unary PR02
      - Native arithmetic, predicates, bits, and numeric casts.
@@ -248,10 +274,13 @@ The following table is the single source of truth for the unary roadmap.
      - PR01
      - Pending
    * - Unary PR03
-     - Shared exponential primitives and composite activations.
-     - ``Exp``, ``Log``, reciprocal, sqrt, sigmoid, softplus, softsign,
-       hard activations, swish, mish, GELU, Elu/Celu/Selu, shrink, and clip use
-       fused vector kernels with documented special-value and error contracts.
+     - Reuse Exp/Log primitives for reciprocal, sqrt, and composite
+       activations.
+     - The merged ``Exp``/``Log`` kernels, numerical gates, corpus, and
+       scheduling evidence remain authoritative. Reciprocal, sqrt, sigmoid,
+       softplus, softsign, hard activations, swish, mish, GELU, Elu/Celu/Selu,
+       shrink, and clip use fused vector kernels with documented special-value
+       and error contracts.
      - PR01, PR02
      - Pending
    * - Unary PR04
@@ -270,11 +299,11 @@ The following table is the single source of truth for the unary roadmap.
      - PR02 through PR04
      - Pending
    * - Unary PR06
-     - Scheduler and fusion integration.
-     - Cost-aware scheduling scales compute-bound kernels and caps
-       bandwidth-bound kernels without small-tensor regressions. Unary
-       functions integrate with ``ElementwisePlan`` without indirect calls in
-       hot loops.
+     - Session-executor tuning and fusion integration.
+     - Processor-aware limits submitted to the session executor scale
+       compute-bound kernels and cap bandwidth-bound kernels without
+       small-tensor regressions or a private scheduler. Unary functions
+       integrate with ``ElementwisePlan`` without indirect calls in hot loops.
      - PR02 through PR05; Binary PR06
      - Pending
    * - Unary PR07

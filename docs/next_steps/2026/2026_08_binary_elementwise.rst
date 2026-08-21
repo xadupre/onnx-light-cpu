@@ -15,10 +15,12 @@ priority case below ``0.9x``. The engine should exceed ONNX Runtime where a
 prepared broadcast plan, a shape-specific loop, or fusion across several
 elementwise operators removes indexing and memory traffic.
 
-The correctness implementation in ``onnx-light`` already centralizes broadcast
-validation in ``BroadcastInfo`` and provides equal-shape, scalar, and generic
-rank-aware loops through ``BinaryElementwise``. The generic loop computes both
-input offsets from every dimension for every output element. That is an
+The correctness implementation in ``onnx-light`` already provides
+``BroadcastShape``/``BroadcastInfo`` validation and equal-shape, scalar, and
+generic rank-aware traversal through ``BinaryElementwise``. The roadmap builds
+``BinaryBroadcastPlan`` and optimized loop selection on top of that baseline;
+it does not recreate broadcast validation. The generic loop computes both
+input offsets from every dimension for every output element. That remains an
 appropriate fallback, but not an optimized implementation for large tensors or
 repeated inference.
 
@@ -213,7 +215,10 @@ Parallel scheduling
 -------------------
 
 Binary elementwise kernels are normally bandwidth-bound. Parallel execution
-should therefore be conservative:
+should therefore be conservative. Registered kernels use the existing
+onnx-light session executor and processor-aware tuning foundation; this
+roadmap adds plan-selected work partitioning and limits, not a private
+scheduler:
 
 * remain single-threaded below a measured byte-count threshold;
 * split contiguous output ranges into cache-line-aligned chunks;
@@ -291,6 +296,26 @@ family, selected ISA, and thread count. For broadcasting, a bandwidth metric
 must count reused input values according to actual loads rather than output
 elements alone.
 
+Completed foundations
+---------------------
+
+``onnx-light`` already supplies ``BroadcastShape``/``BroadcastInfo`` validation
+and the correctness-first ``BinaryElementwise`` traversal used as the portable
+fallback. Binary PR01 starts after that baseline and concentrates on reusable
+plan preparation, dimension coalescing, cached traversal, and loop
+classification.
+
+The :doc:`Runtime Execution Controls Roadmap
+<2026_08_runtime_execution_controls>` is complete through
+`onnx-light-cpu #271
+<https://github.com/xadupre/onnx-light-cpu/pull/271>`_ and
+`#314 <https://github.com/xadupre/onnx-light-cpu/pull/314>`_. Registered
+kernels execute through the session-owned executor, while the onnx-light
+processor-aware tuning registry completed in
+`onnx-light #4428 <https://github.com/xadupre/onnx-light/pull/4428>`_
+provides immutable processor and effective-thread profiles. The remaining
+binary PRs consume these foundations and add no private scheduler.
+
 Remaining pull-request sequence
 -------------------------------
 
@@ -304,12 +329,13 @@ Remaining pull-request sequence
      - Depends on
      - Status
    * - Binary PR01
-     - Corpus, plan, dimension coalescing, and scalar fallback.
+     - Corpus, prepared plan, dimension coalescing, and cached traversal.
      - Every in-scope operator/type/opset and broadcast family has differential
-       cases. ``BinaryBroadcastPlan`` validates and coalesces shapes, selects a
-       loop, and advances general offsets per inner block rather than per
-       element.
-     - None
+       cases against the existing validated fallback. ``BinaryBroadcastPlan``
+       consumes ``BroadcastShape``/``BroadcastInfo`` results, coalesces shapes,
+       caches guarded traversal metadata, selects a loop, and advances general
+       offsets per inner block rather than per element.
+     - Existing onnx-light broadcast validation and traversal
      - Pending
    * - Binary PR02
      - FP32/FP64 arithmetic SIMD.
@@ -319,11 +345,13 @@ Remaining pull-request sequence
      - PR01
      - Pending
    * - Binary PR03
-     - Broadcast loop families and scheduler.
+     - Broadcast loop families and session-executor integration.
      - Repeated block, inner-vector, outer, and general strided patterns use
-       vector inner loops. Cost-aware scheduling scales expensive operations,
-       caps bandwidth-bound operations, and does not regress small tensors.
-     - PR02
+       vector inner loops. Processor-aware plan limits submitted to the
+       session executor scale expensive operations, cap bandwidth-bound
+       operations, and do not regress small tensors or introduce another
+       scheduler.
+     - PR01, PR02; completed runtime foundation
      - Pending
    * - Binary PR04
      - Comparison, logical, bitwise, shift, and integer arithmetic.
@@ -344,9 +372,9 @@ Remaining pull-request sequence
      - Shared ``ElementwisePlan`` fusion.
      - Bounded unary/binary expressions retain intermediates in registers,
        preserve broadcasting, types, evaluation order, aliasing, and graph
-       lifetimes, and show at least 1.20x ONNX Runtime on two representative
-       model expressions.
-     - PR05; Unary PR01 through PR05
+       lifetimes, reuse prepared traversal and the session executor, and show
+       at least 1.20x ONNX Runtime on two representative model expressions.
+     - PR01 through PR05; Unary PR01 through PR05
      - Pending
    * - Binary PR07
      - Final correctness and parity gate.
