@@ -60,6 +60,7 @@ PRIORITY_CASES = (
         8,
         2,
         transform="LOGISTIC",
+        labels="zero_based",
     ),
     TreeEnsembleCase(
         "cls_batch_strings_f32",
@@ -361,9 +362,9 @@ def _build_case(case: TreeEnsembleCase, seed: int) -> tuple[bytes, dict[str, Any
             label_name = "label"
             label_type = TensorProto.STRING
         elif case.labels == "int64":
-            labels = np.arange(100, 100 + case.outputs, dtype=np.int64)
             nodes.append(helper.make_node("Gather", ["labels", "class_index"], ["label"], axis=0))
             label_name = "label"
+            label_type = TensorProto.INT64
         outputs.extend(
             [
                 helper.make_tensor_value_info(label_name, label_type, [case.rows]),
