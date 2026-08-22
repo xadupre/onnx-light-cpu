@@ -177,6 +177,16 @@ onnx-light's runtime after registration (see :func:`register_all_kernels` and
    library-qualified name each kernel records when it runs, so callers can check
    that the accelerated kernels are the ones actually used.
 
+.. py:function:: registered_kernels() -> list[tuple[str, str, str, str, list[str], int | None, int | None]]
+
+   Returns one ``(domain, op_type, device, kernel_name, types, since_version,
+   until_version)`` tuple per onnx-light-cpu kernel registration, collected
+   from the C++ :cpp:func:`CollectRegisteredKernels` inventory without
+   installing, replacing, or executing any kernel. Sorted by ``(domain,
+   op_type, device, kernel_name)``. This is the raw binding wrapped by
+   :func:`onnx_light_cpu.registered_kernels`, which converts each tuple into an
+   immutable :class:`onnx_light_cpu.RegisteredKernel` record.
+
 .. py:function:: used_kernel_names() -> list[str]
 
    Returns the library-qualified names of the onnx-light-cpu kernels that ran
@@ -219,8 +229,60 @@ Registering kernels with onnx-light
    onnx-light-cpu overrides to the library-qualified name of the accelerated
    kernel installed for it (for example ``{"Abs": "onnx_light_cpu::Abs"}``). Use
    it to confirm the accelerated kernels — rather than onnx-light's built-in
-   ones — are registered. Wraps
-   :func:`onnx_light_cpu.onnx_py._cpuregister.registered_kernel_names`.
+   ones — are registered. Derived from :func:`registered_kernels` instead of
+   maintaining a second operator list.
+
+.. py:class:: RegisteredKernel
+
+   Immutable ``NamedTuple`` record describing one onnx-light-cpu kernel
+   registration, as returned by :func:`registered_kernels`.
+
+   .. py:attribute:: domain
+      :type: str
+
+      ONNX operator domain, e.g. ``"ai.onnx"``.
+
+   .. py:attribute:: op_type
+      :type: str
+
+      ONNX operator type name, e.g. ``"Abs"``.
+
+   .. py:attribute:: device
+      :type: str
+
+      Device the kernel runs on, e.g. ``"CPU"``.
+
+   .. py:attribute:: kernel_name
+      :type: str
+
+      Library-qualified C++ kernel class name, e.g. ``"onnx_light_cpu::Abs"``.
+
+   .. py:attribute:: types
+      :type: tuple[str, ...]
+
+      Element type names (``TensorProto::DataType`` names, e.g. ``"FLOAT"``)
+      the kernel accepts for its primary tensor operands.
+
+   .. py:attribute:: since_version
+      :type: int | None
+
+      Inclusive opset lower bound, or ``None`` when there is no lower bound.
+
+   .. py:attribute:: until_version
+      :type: int | None
+
+      Inclusive opset upper bound, or ``None`` when there is no upper bound.
+
+.. py:function:: registered_kernels() -> tuple[RegisteredKernel, ...]
+
+   Returns one immutable :class:`RegisteredKernel` record per onnx-light-cpu
+   kernel registration, collected from the C++
+   :cpp:func:`CollectRegisteredKernels` inventory without installing,
+   replacing, or executing any kernel. Records are sorted deterministically by
+   ``(domain, op_type, device, kernel_name)``, and
+   :func:`registered_kernel_names` derives its ``{op_type: kernel name}``
+   mapping from this same inventory. Wraps
+   :func:`onnx_light_cpu.onnx_py._cpuregister.registered_kernels`.
 
 .. py:function:: used_kernel_names() -> list[str]
 

@@ -16,7 +16,28 @@ built-in ones.
 from __future__ import annotations
 
 from importlib import import_module
-from typing import Any
+from typing import Any, NamedTuple
+
+
+class RegisteredKernel(NamedTuple):
+    """Immutable record describing one onnx-light-cpu kernel registration.
+
+    One instance mirrors exactly what a single ``Register*Kernel[s]`` call
+    handed to the C++ ``RegisterKernel`` helper (see
+    ``onnx_light_cpu::KernelRegistration``): the ONNX operator domain and
+    ``op_type``, the device the kernel runs on, the library-qualified C++
+    kernel name it records when it runs, the element types it supports (as
+    ``TensorProto::DataType`` names, e.g. ``"FLOAT"``), and its optional
+    inclusive opset bounds (``None`` when a bound does not apply).
+    """
+
+    domain: str
+    op_type: str
+    device: str
+    kernel_name: str
+    types: tuple[str, ...]
+    since_version: int | None
+    until_version: int | None
 
 
 def _register_all_kernels() -> None:
@@ -82,6 +103,42 @@ def register_kernels(sess: Any = None) -> Any:
     return sess
 
 
+def registered_kernels() -> tuple[RegisteredKernel, ...]:
+    """Returns one immutable record per onnx-light-cpu kernel registration.
+
+    Each :class:`RegisteredKernel` mirrors exactly one C++ registration
+    collected (without installing or executing any kernel) from
+    ``onnx_light_cpu::CollectRegisteredKernels``: its ONNX domain, ``op_type``,
+    device, library-qualified C++ kernel name, supported element types, and
+    optional inclusive opset bounds. Records are sorted deterministically by
+    ``(domain, op_type, device, kernel_name)`` -- the same order every call
+    returns, and the order :func:`registered_kernel_names` derives its
+    ``{op_type: kernel name}`` mapping from.
+
+    Returns
+    -------
+    A tuple of :class:`RegisteredKernel` records, one per registration.
+    """
+    from .onnx_py._cpuregister import (  # pyrefly: ignore[missing-import]
+        registered_kernels as _registered_kernels,
+    )
+
+    return tuple(
+        RegisteredKernel(
+            domain=domain,
+            op_type=op_type,
+            device=device,
+            kernel_name=kernel_name,
+            types=tuple(types),
+            since_version=since_version,
+            until_version=until_version,
+        )
+        for domain, op_type, device, kernel_name, types, since_version, until_version in (
+            _registered_kernels()
+        )
+    )
+
+
 def registered_kernel_names() -> dict[str, str]:
     """Returns ``{op_type: kernel name}`` for every onnx-light-cpu kernel.
 
@@ -90,12 +147,11 @@ def registered_kernel_names() -> dict[str, str]:
     each ONNX ``op_type`` onnx-light-cpu overrides to the name of the
     accelerated kernel installed for it, so callers can check the accelerated
     kernels — rather than onnx-light's built-in ones — are the kernels used.
-    """
-    from .onnx_py._cpuregister import (  # pyrefly: ignore[missing-import]
-        registered_kernel_names as _registered_kernel_names,
-    )
 
-    return dict(_registered_kernel_names())
+    Derived from :func:`registered_kernels` instead of maintaining a second
+    operator list, so it always stays in sync with the structured inventory.
+    """
+    return {record.op_type: record.kernel_name for record in registered_kernels()}
 
 
 def used_kernel_names() -> list[str]:

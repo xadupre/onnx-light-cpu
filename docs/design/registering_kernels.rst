@@ -87,11 +87,13 @@ records every time it runs. The names can be inspected from Python:
         clear_used_kernel_names,
         register_kernels,
         registered_kernel_names,
+        registered_kernels,
         used_kernel_names,
     )
 
     register_kernels()
     registered_kernel_names()  # {'Abs': 'onnx_light_cpu::Abs', 'Exp': ...}
+    registered_kernels()       # (RegisteredKernel(domain='ai.onnx', op_type='Abs', ...), ...)
 
     clear_used_kernel_names()
     sess.run(None, feeds)      # run a model containing e.g. an Abs node

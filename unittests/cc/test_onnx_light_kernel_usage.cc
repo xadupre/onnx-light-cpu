@@ -33,17 +33,17 @@ TEST(OnnxLightKernelUsage, KernelNamesAreLibraryQualified) {
 }
 
 // ``RegisteredKernelNames`` maps every overridden ONNX op_type to the
-// library-qualified name of the accelerated kernel installed for it.
+// library-qualified name of the accelerated kernel installed for it. It is
+// derived from ``CollectRegisteredKernels()``'s structured inventory, so
+// entries are ordered by ``(domain, op_type, device, kernel_name)`` --
+// alphabetically by ``op_type`` here, since every registration shares the
+// same domain and device.
 TEST(OnnxLightKernelUsage, RegisteredKernelNames) {
   const std::vector<std::pair<std::string, std::string>> expected = {
-      {"Abs", "onnx_light_cpu::Abs"},
-      {"Exp", "onnx_light_cpu::Exp"},
-      {"Log", "onnx_light_cpu::Log"},
-      {"Gemm", "onnx_light_cpu::Gemm"},
-      {"MatMul", "onnx_light_cpu::MatMul"},
-      {"MatMulInteger", "onnx_light_cpu::MatMulInteger"},
-      {"QLinearMatMul", "onnx_light_cpu::QLinearMatMul"},
-      {"Not", "onnx_light_cpu::Not"},
+      {"Abs", "onnx_light_cpu::Abs"},       {"Exp", "onnx_light_cpu::Exp"},
+      {"Gemm", "onnx_light_cpu::Gemm"},     {"Log", "onnx_light_cpu::Log"},
+      {"MatMul", "onnx_light_cpu::MatMul"}, {"MatMulInteger", "onnx_light_cpu::MatMulInteger"},
+      {"Not", "onnx_light_cpu::Not"},       {"QLinearMatMul", "onnx_light_cpu::QLinearMatMul"},
   };
   EXPECT_EQ(onnx_light_cpu::RegisteredKernelNames(), expected);
 }

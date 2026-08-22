@@ -53,7 +53,7 @@ Implementation sequence
      - Python returns domain, operator, device, kernel name, types, and optional
        version bounds for every C++ registration.
      - Step 1
-     - Not started
+     - Complete
    * - 3
      - Replace the Sphinx source scanner with API-driven page and index
        generation, including stale-page removal.
@@ -80,6 +80,18 @@ its node factory, to ``RegisterKernel`` instead of calling onnx-light's
 onnx-light's shared ``KernelDispatchTable``, and returns the metadata sorted
 by ``(domain, operator, device, kernel_name)``. A registration pass rejects a
 repeated ``(domain, operator, device)`` key with ``std::invalid_argument``.
+
+Step 2 (this PR) exposes that inventory to Python. The compiled
+``_cpuregister`` extension gains a ``registered_kernels()`` binding that calls
+``CollectRegisteredKernels()`` and renders each record's ``Device`` and
+``TensorProto::DataType`` fields as strings. The public
+``onnx_light_cpu`` package wraps each tuple into an immutable
+``RegisteredKernel`` (``typing.NamedTuple``) record through
+``onnx_light_cpu.registered_kernels()``, and
+``onnx_light_cpu.registered_kernel_names()`` (and the C++
+``RegisteredKernelNames()`` it is built on) is now derived from those same
+records instead of a separately hand-maintained ``op_type -> kernel name``
+list.
 
 Validation and compatibility
 ----------------------------

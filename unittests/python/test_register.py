@@ -15,8 +15,15 @@ import sys
 from types import ModuleType
 from unittest import mock
 
+import pytest
+
 import onnx_light_cpu._register as reg
-from onnx_light_cpu import register_kernels
+from onnx_light_cpu import (
+    RegisteredKernel,
+    register_kernels,
+    registered_kernel_names,
+    registered_kernels,
+)
 
 
 class TestRegisterKernels:
@@ -51,3 +58,55 @@ class TestRegisterKernels:
     def test_returns_none_without_sess(self):
         with mock.patch.object(reg, "_register_all_kernels"):
             assert register_kernels() is None
+
+
+class TestRegisteredKernels:
+    """Tests for :func:`onnx_light_cpu.registered_kernels`.
+
+    The underlying binding (``_cpuregister.registered_kernels``) requires the
+    onnx-light integration build, so these tests patch it with plain tuples
+    (mirroring what the C++ binding returns) to exercise the Python-side
+    wrapping into immutable :class:`onnx_light_cpu.RegisteredKernel` records.
+    """
+
+    def _patch_binding(self, raw_records):
+        extension = ModuleType("onnx_light_cpu.onnx_py._cpuregister")
+        extension.registered_kernels = mock.Mock(return_value=raw_records)
+        return mock.patch.dict(sys.modules, {"onnx_light_cpu.onnx_py._cpuregister": extension})
+
+    def test_wraps_raw_tuples_into_registered_kernel_records(self):
+        raw_records = [
+            ("ai.onnx", "Abs", "CPU", "onnx_light_cpu::Abs", ["FLOAT", "DOUBLE"], None, None),
+            ("ai.onnx", "Gemm", "CPU", "onnx_light_cpu::Gemm", ["FLOAT"], 7, None),
+        ]
+        with self._patch_binding(raw_records):
+            records = registered_kernels()
+
+        assert records == (
+            RegisteredKernel(
+                "ai.onnx", "Abs", "CPU", "onnx_light_cpu::Abs", ("FLOAT", "DOUBLE"), None, None
+            ),
+            RegisteredKernel(
+                "ai.onnx", "Gemm", "CPU", "onnx_light_cpu::Gemm", ("FLOAT",), 7, None
+            ),
+        )
+        assert isinstance(records, tuple)
+        assert all(isinstance(record.types, tuple) for record in records)
+
+    def test_registered_kernel_names_is_derived_from_registered_kernels(self):
+        raw_records = [
+            ("ai.onnx", "Abs", "CPU", "onnx_light_cpu::Abs", ["FLOAT"], None, None),
+            ("ai.onnx", "Not", "CPU", "onnx_light_cpu::Not", ["BOOL"], None, None),
+        ]
+        with self._patch_binding(raw_records):
+            assert registered_kernel_names() == {
+                "Abs": "onnx_light_cpu::Abs",
+                "Not": "onnx_light_cpu::Not",
+            }
+
+    def test_records_are_immutable(self):
+        record = RegisteredKernel(
+            "ai.onnx", "Abs", "CPU", "onnx_light_cpu::Abs", ("FLOAT",), None, None
+        )
+        with pytest.raises(AttributeError):
+            record.op_type = "Other"
