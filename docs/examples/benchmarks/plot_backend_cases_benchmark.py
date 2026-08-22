@@ -38,7 +38,7 @@ import numpy as np
 import onnxruntime
 
 from onnx_light.onnx import TensorProto
-from onnx_light.onnx.backend import TestMode, collect_test_cases
+from onnx_light.onnx.backend import TestMode, collect_test_cases_by_name
 from onnx_light.onnx.reference import ReferenceEvaluator
 
 from onnx_light_cpu import (
@@ -71,6 +71,10 @@ _TARGET_DTYPE = {
     for op_type in _TARGET_KERNELS
 }
 
+# A single regular expression matching every "test_cpu_<op>_..." benchmark
+# case name for the target operators, instead of collecting per operator.
+_CASE_NAME_PATTERN = "^test_cpu_(" + "|".join(op.lower() for op in _TARGET_KERNELS) + ")_"
+
 
 def _single_node_op_type(tc):
     """Returns the op_type when ``tc``'s graph is a single node, else ``None``."""
@@ -100,18 +104,18 @@ def _collect_cases():
     register_backend_test_cases()
     unit_test_going = os.environ.get("UNITTEST_GOING", "0") in ("1", "true", "True")
     cases_per_op = 2 if unit_test_going else None
+    matched_by_op = {op_type: [] for op_type in _TARGET_KERNELS}
+    for tc in collect_test_cases_by_name(_CASE_NAME_PATTERN, mode=TestMode.BENCHMARK):
+        op_type = _single_node_op_type(tc)
+        if (
+            op_type in _TARGET_KERNELS
+            and tc.data_sets
+            and _matches_dtype(tc, _TARGET_DTYPE[op_type])
+        ):
+            matched_by_op[op_type].append(tc)
     collected = []
     for op_type in _TARGET_KERNELS:
-        matched = []
-        for tc in collect_test_cases(op_type, mode=TestMode.BENCHMARK):
-            if (
-                tc.name.startswith("test_cpu_")
-                and _single_node_op_type(tc) == op_type
-                and tc.data_sets
-                and _matches_dtype(tc, _TARGET_DTYPE[op_type])
-            ):
-                matched.append(tc)
-        collected.extend(matched[:cases_per_op])
+        collected.extend(matched_by_op[op_type][:cases_per_op])
     return collected
 
 
