@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "onnx_light_cpu/impl/execution.h"
 #include "onnx_light_cpu/impl/math/gemm/arm/gemm_kernel_arm.h"
 #include "onnx_light_cpu/impl/math/gemm/gemm_plan.h"
 
@@ -88,6 +89,22 @@ TEST(GemmPlan, SelectsShapeSpecificAlgorithms) {
   EXPECT_EQ(skinny_m.algorithm(), GemmAlgorithm::kSkinnyM);
   EXPECT_EQ(skinny_n.algorithm(), GemmAlgorithm::kSkinnyN);
   EXPECT_EQ(split_k.algorithm(), GemmAlgorithm::kSplitK);
+}
+
+TEST(GemmPlan, AppliesConfiguredBlockingAndParticipantLimit) {
+  onnx_light_cpu::ExecutionExecutorView executor;
+  executor.effective_threads = 8;
+  onnx_light_cpu::ExecutionExecutorScope scope(&executor);
+  GemmPlanOptions<float> options{false, false, 2048, 2048, 512};
+  options.blocking = {64, 64, 512, 0, 0};
+  options.maximum_participants = 2;
+
+  const GemmPlan<float> plan(options);
+
+  EXPECT_EQ(plan.blocking().mc, 64u);
+  EXPECT_EQ(plan.blocking().nc, 64u);
+  EXPECT_EQ(plan.blocking().kc, 512u);
+  EXPECT_EQ(plan.useful_threads(), 2u);
 }
 
 TEST(GemmPlan, BlockingUsesIsaSpecificRegisterRows) {
@@ -708,6 +725,21 @@ TEST(GemmHalfPlan, ExecutesBFloat16AndExposesSelection) {
   EXPECT_GE(plan.blocking().kc, 64u);
   EXPECT_GE(plan.compact_blocking().kc, plan.blocking().kc);
   EXPECT_GE(plan.useful_threads(), 1u);
+}
+
+TEST(GemmHalfPlan, AppliesNormalAndCompactBlocking) {
+  GemmHalfPlanOptions options{true, false, false, 16, 16, 16, 1.0f};
+  options.blocking = {11, 13, 17, 0, 0};
+  options.compact_blocking = {19, 23, 29, 0, 0};
+
+  const GemmHalfPlan plan(options);
+
+  EXPECT_EQ(plan.blocking().mc, 11u);
+  EXPECT_EQ(plan.blocking().nc, 13u);
+  EXPECT_EQ(plan.blocking().kc, 17u);
+  EXPECT_EQ(plan.compact_blocking().mc, 19u);
+  EXPECT_EQ(plan.compact_blocking().nc, 23u);
+  EXPECT_EQ(plan.compact_blocking().kc, 29u);
 }
 
 } // namespace

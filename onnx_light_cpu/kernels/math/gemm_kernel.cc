@@ -13,11 +13,16 @@
 #include "onnx_core/runtime/kernels/node_helpers.h"
 #include "onnx_core/runtime/kernels/parallel_for.h"
 #include "onnx_core/runtime/memory/temporary_buffer.h"
+#include "onnx_core/runtime/tuning/kernel_tuning.h"
 #include "onnx_core/symbolic/sym_tensor.h"
 
+#include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -36,6 +41,54 @@ using rt_ns::NodeKernelFn;
 using rt_ns::RuntimeContext;
 using rt_ns::Shape;
 using rt_ns::Tensor;
+
+namespace {
+
+constexpr const char *kBlockingMc = "blocking.mc";
+constexpr const char *kBlockingNc = "blocking.nc";
+constexpr const char *kBlockingKc = "blocking.kc";
+constexpr const char *kCompactBlockingMc = "compact_blocking.mc";
+constexpr const char *kCompactBlockingNc = "compact_blocking.nc";
+constexpr const char *kCompactBlockingKc = "compact_blocking.kc";
+constexpr const char *kMaximumParticipants = "parallel.maximum_threads";
+
+constexpr std::array<int32_t, 4> kSupportedElementTypes = {
+    static_cast<int32_t>(DataType::FLOAT), static_cast<int32_t>(DataType::DOUBLE),
+    static_cast<int32_t>(DataType::FLOAT16), static_cast<int32_t>(DataType::BFLOAT16)};
+
+rt_ns::KernelTuningKey MakeTuningKey(int32_t element_type) {
+  return {"onnx_light_cpu",      "Gemm", "simd_dispatch", element_type, sym_ns::Device::kCPU,
+          GemmKernel::kTuningAbi};
+}
+
+void ValidateTuning(const rt_ns::KernelTuningParameters &parameters) {
+  for (const char *name : {kBlockingMc, kBlockingNc, kBlockingKc, kCompactBlockingMc,
+                           kCompactBlockingNc, kCompactBlockingKc, kMaximumParticipants}) {
+    const int64_t value = parameters.Get<int64_t>(name);
+    if (value < 0 || static_cast<uint64_t>(value) > std::numeric_limits<std::size_t>::max()) {
+      throw std::invalid_argument(std::string("Gemm ") + name +
+                                  " must be zero or a positive value representable by size_t.");
+    }
+  }
+}
+
+rt_ns::KernelTuningParameters MakeTuningDefaults(int32_t element_type) {
+  return {MakeTuningKey(element_type),
+          {{kBlockingMc, int64_t{0}},
+           {kBlockingNc, int64_t{0}},
+           {kBlockingKc, int64_t{0}},
+           {kCompactBlockingMc, int64_t{0}},
+           {kCompactBlockingNc, int64_t{0}},
+           {kCompactBlockingKc, int64_t{0}},
+           {kMaximumParticipants, int64_t{0}}}};
+}
+
+bool IsSupportedElementType(int32_t element_type) {
+  return std::find(kSupportedElementTypes.begin(), kSupportedElementTypes.end(), element_type) !=
+         kSupportedElementTypes.end();
+}
+
+} // namespace
 
 // Immutable-plan cache backing the FP32/FP64/FP16/BF16 operator path (Roadmap
 // PR06.4 and PR07.2). The plan encodes the selected algorithm, blocking, thread
@@ -57,7 +110,7 @@ struct GemmKernel::GemmPlanCache {
 
   template <typename T>
   const GemmPlan<T> &GetOrBuild(int dt, bool ta, bool tb, std::size_t rows, std::size_t cols,
-                                std::size_t depth, T scale) {
+                                std::size_t depth, T scale, const Tuning &tuning) {
     std::unique_ptr<GemmPlan<T>> &slot = Slot<T>();
     // Compare ``alpha`` against the cached plan's own ``T`` value so the
     // change-detection stays in the input precision instead of widening to
@@ -65,8 +118,17 @@ struct GemmKernel::GemmPlanCache {
     const bool match = has_key && data_type == dt && trans_a == ta && trans_b == tb && m == rows &&
                        n == cols && k == depth && slot != nullptr && slot->alpha() == scale;
     if (!match) {
-      slot = std::make_unique<GemmPlan<T>>(
-          GemmPlanOptions<T>{ta, tb, rows, cols, depth, scale, T(0), {}});
+      slot =
+          std::make_unique<GemmPlan<T>>(GemmPlanOptions<T>{ta,
+                                                           tb,
+                                                           rows,
+                                                           cols,
+                                                           depth,
+                                                           scale,
+                                                           T(0),
+                                                           {},
+                                                           {tuning.mc, tuning.nc, tuning.kc, 0, 0},
+                                                           tuning.maximum_participants});
       has_key = true;
       data_type = dt;
       trans_a = ta;
@@ -81,13 +143,23 @@ struct GemmKernel::GemmPlanCache {
   // FP16/BF16 counterpart of :cpp:func:`GetOrBuild`. ``is_bfloat16`` selects the
   // decode; ``dt`` (FLOAT16 vs BFLOAT16) keeps the key distinct across types.
   const GemmHalfPlan &GetOrBuildHalf(bool is_bfloat16, int dt, bool ta, bool tb, std::size_t rows,
-                                     std::size_t cols, std::size_t depth, float scale) {
+                                     std::size_t cols, std::size_t depth, float scale,
+                                     const Tuning &tuning) {
     const bool match = has_key && data_type == dt && trans_a == ta && trans_b == tb && m == rows &&
                        n == cols && k == depth && plan_half != nullptr &&
                        plan_half->alpha() == scale;
     if (!match) {
       plan_half = std::make_unique<GemmHalfPlan>(
-          GemmHalfPlanOptions{is_bfloat16, ta, tb, rows, cols, depth, scale});
+          GemmHalfPlanOptions{is_bfloat16,
+                              ta,
+                              tb,
+                              rows,
+                              cols,
+                              depth,
+                              scale,
+                              {tuning.mc, tuning.nc, tuning.kc, 0, 0},
+                              {tuning.compact_mc, tuning.compact_nc, tuning.compact_kc, 0, 0},
+                              tuning.maximum_participants});
       has_key = true;
       data_type = dt;
       trans_a = ta;
@@ -114,6 +186,37 @@ GemmKernel::GemmKernel(const rt_ns::KernelContext &ctx)
     : rt_ns::KernelBase(ctx), plan_cache_(std::make_unique<GemmPlanCache>()) {}
 
 GemmKernel::~GemmKernel() = default;
+
+void GemmKernel::RegisterTuningSchemas() {
+  static std::once_flag once;
+  std::call_once(once, [] {
+    for (int32_t element_type : kSupportedElementTypes) {
+      rt_ns::RegisterKernelTuningSchema(
+          rt_ns::KernelTuningSchema(MakeTuningDefaults(element_type), ValidateTuning));
+    }
+  });
+}
+
+rt_ns::KernelTuningKey GemmKernel::TuningKey(int32_t element_type) const {
+  return IsSupportedElementType(element_type) ? MakeTuningKey(element_type)
+                                              : rt_ns::KernelTuningKey{};
+}
+
+void GemmKernel::Configure(const rt_ns::KernelTuningParameters &parameters) {
+  if (!IsSupportedElementType(parameters.key.element_type) ||
+      parameters.key != MakeTuningKey(parameters.key.element_type)) {
+    throw std::invalid_argument("Gemm tuning parameters have an incompatible key.");
+  }
+  ValidateTuning(parameters);
+  tuning_ = {static_cast<std::size_t>(parameters.Get<int64_t>(kBlockingMc)),
+             static_cast<std::size_t>(parameters.Get<int64_t>(kBlockingNc)),
+             static_cast<std::size_t>(parameters.Get<int64_t>(kBlockingKc)),
+             static_cast<std::size_t>(parameters.Get<int64_t>(kCompactBlockingMc)),
+             static_cast<std::size_t>(parameters.Get<int64_t>(kCompactBlockingNc)),
+             static_cast<std::size_t>(parameters.Get<int64_t>(kCompactBlockingKc)),
+             static_cast<std::size_t>(parameters.Get<int64_t>(kMaximumParticipants))};
+  plan_cache_ = std::make_unique<GemmPlanCache>();
+}
 
 namespace {
 
@@ -200,7 +303,7 @@ std::vector<float> WidenHalfLike(const Tensor &t, bool is_bfloat16) {
 // blocking, and thread count on every run (Roadmap PR06.4).
 Tensor GemmKernel::Compute(const Tensor &a, const Tensor &b, const Tensor *c, float alpha,
                            float beta, bool trans_a, bool trans_b, RuntimeContext *rt,
-                           GemmPlanCache *cache) {
+                           GemmPlanCache *cache, const Tuning &tuning) {
   if (a.data_type != b.data_type) {
     throw std::invalid_argument("onnx_light_cpu::GemmKernel: A and B must share the same dtype.");
   }
@@ -229,9 +332,18 @@ Tensor GemmKernel::Compute(const Tensor &a, const Tensor &b, const Tensor *c, fl
     std::optional<GemmPlan<float>> transient;
     const GemmPlan<float> *plan = nullptr;
     if (cache != nullptr) {
-      plan = &cache->GetOrBuild<float>(a.data_type, trans_a, trans_b, M, N, K, alpha);
+      plan = &cache->GetOrBuild<float>(a.data_type, trans_a, trans_b, M, N, K, alpha, tuning);
     } else {
-      transient.emplace(GemmPlanOptions<float>{trans_a, trans_b, M, N, K, alpha, 0.0f, {}});
+      transient.emplace(GemmPlanOptions<float>{trans_a,
+                                               trans_b,
+                                               M,
+                                               N,
+                                               K,
+                                               alpha,
+                                               0.0f,
+                                               {},
+                                               {tuning.mc, tuning.nc, tuning.kc, 0, 0},
+                                               tuning.maximum_participants});
       plan = &*transient;
     }
     GemmEpilogue<float> epilogue;
@@ -251,10 +363,18 @@ Tensor GemmKernel::Compute(const Tensor &a, const Tensor &b, const Tensor *c, fl
     const GemmPlan<double> *plan = nullptr;
     if (cache != nullptr) {
       plan = &cache->GetOrBuild<double>(a.data_type, trans_a, trans_b, M, N, K,
-                                        static_cast<double>(alpha));
+                                        static_cast<double>(alpha), tuning);
     } else {
-      transient.emplace(
-          GemmPlanOptions<double>{trans_a, trans_b, M, N, K, static_cast<double>(alpha), 0.0, {}});
+      transient.emplace(GemmPlanOptions<double>{trans_a,
+                                                trans_b,
+                                                M,
+                                                N,
+                                                K,
+                                                static_cast<double>(alpha),
+                                                0.0,
+                                                {},
+                                                {tuning.mc, tuning.nc, tuning.kc, 0, 0},
+                                                tuning.maximum_participants});
       plan = &*transient;
     }
     GemmEpilogue<double> epilogue;
@@ -285,9 +405,20 @@ Tensor GemmKernel::Compute(const Tensor &a, const Tensor &b, const Tensor *c, fl
     std::optional<GemmHalfPlan> transient;
     const GemmHalfPlan *plan = nullptr;
     if (cache != nullptr) {
-      plan = &cache->GetOrBuildHalf(is_bfloat16, a.data_type, trans_a, trans_b, M, N, K, alpha);
+      plan = &cache->GetOrBuildHalf(is_bfloat16, a.data_type, trans_a, trans_b, M, N, K, alpha,
+                                    tuning);
     } else {
-      transient.emplace(GemmHalfPlanOptions{is_bfloat16, trans_a, trans_b, M, N, K, alpha});
+      transient.emplace(
+          GemmHalfPlanOptions{is_bfloat16,
+                              trans_a,
+                              trans_b,
+                              M,
+                              N,
+                              K,
+                              alpha,
+                              {tuning.mc, tuning.nc, tuning.kc, 0, 0},
+                              {tuning.compact_mc, tuning.compact_nc, tuning.compact_kc, 0, 0},
+                              tuning.maximum_participants});
       plan = &*transient;
     }
 
@@ -320,12 +451,12 @@ Tensor GemmKernel::Compute(const Tensor &a, const Tensor &b, const Tensor *c, fl
 
 Tensor GemmKernel::operator()(const Tensor &a, const Tensor &b, const Tensor &c, float alpha,
                               float beta, bool trans_a, bool trans_b, RuntimeContext *rt) const {
-  return Compute(a, b, &c, alpha, beta, trans_a, trans_b, rt, nullptr);
+  return Compute(a, b, &c, alpha, beta, trans_a, trans_b, rt, nullptr, tuning_);
 }
 
 Tensor GemmKernel::operator()(const Tensor &a, const Tensor &b, float alpha, bool trans_a,
                               bool trans_b, RuntimeContext *rt) const {
-  return Compute(a, b, nullptr, alpha, 0.0f, trans_a, trans_b, rt, nullptr);
+  return Compute(a, b, nullptr, alpha, 0.0f, trans_a, trans_b, rt, nullptr, tuning_);
 }
 
 void GemmKernel::Run(RuntimeContext &rt) {
@@ -339,11 +470,12 @@ void GemmKernel::Run(RuntimeContext &rt) {
   const float beta = rt_ns::GetAttributeFloatOrDefault(node, "beta", 1.0f);
   const bool trans_a = rt_ns::GetAttributeIntOrDefault(node, "transA", 0) != 0;
   const bool trans_b = rt_ns::GetAttributeIntOrDefault(node, "transB", 0) != 0;
-  Tensor y = Compute(a, b, c, alpha, beta, trans_a, trans_b, &rt, plan_cache_.get());
+  Tensor y = Compute(a, b, c, alpha, beta, trans_a, trans_b, &rt, plan_cache_.get(), tuning_);
   rt_ns::SetOutput(node, 0, std::move(y), rt);
 }
 
 void RegisterGemmKernel() {
+  GemmKernel::RegisterTuningSchemas();
   NodeKernelFn factory = [](const NodeProto &node,
                             RuntimeContext &rt) -> std::unique_ptr<rt_ns::KernelBase> {
     auto kernel = std::make_unique<GemmKernel>(rt.kernel_ctx());

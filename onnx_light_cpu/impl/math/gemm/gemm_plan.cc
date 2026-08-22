@@ -54,6 +54,52 @@ std::size_t ElementCount(std::span<const std::size_t> shape, const char *name) {
   return count;
 }
 
+GemmBlocking ResolveBlocking(GemmBlocking configured, std::size_t element_size,
+                             std::size_t vector_lanes, std::size_t register_rows, std::size_t m,
+                             std::size_t n, std::size_t participants) {
+  GemmBlocking resolved = detail::ConstrainGemmBlockingForTasks(
+      detail::SelectGemmBlocking(element_size, vector_lanes, register_rows), m, n, participants);
+  if (configured.mc != 0) {
+    resolved.mc = configured.mc;
+  }
+  if (configured.nc != 0) {
+    resolved.nc = configured.nc;
+  }
+  if (configured.kc != 0) {
+    resolved.kc = configured.kc;
+  }
+  return resolved;
+}
+
+std::size_t ResolveParticipantCount(std::size_t configured) {
+  const std::size_t available = static_cast<std::size_t>(ExecutionThreadCount());
+  return configured == 0 ? available : std::min(configured, available);
+}
+
+class ParticipantLimitScope {
+public:
+  explicit ParticipantLimitScope(std::size_t maximum_participants)
+      : original_(CurrentExecutionExecutor()),
+        executor_(original_ == nullptr ? ExecutionExecutorView{} : *original_),
+        scope_(Limit(maximum_participants)) {}
+
+private:
+  const ExecutionExecutorView *Limit(std::size_t maximum_participants) {
+    if (original_ == nullptr || maximum_participants == 0) {
+      return original_;
+    }
+    const std::size_t bounded = std::min(
+        maximum_participants, static_cast<std::size_t>(std::numeric_limits<int64_t>::max()));
+    executor_.effective_threads =
+        std::min(executor_.effective_threads, static_cast<int64_t>(bounded));
+    return &executor_;
+  }
+
+  const ExecutionExecutorView *original_;
+  ExecutionExecutorView executor_;
+  ExecutionExecutorScope scope_;
+};
+
 template <typename T> std::size_t VectorLanes() {
 #ifdef ONNX_LIGHT_CPU_HAVE_NEON
   const ArmGemmProfile arm_profile = DetectArmGemmProfile();
@@ -307,10 +353,12 @@ GemmPlan<T>::GemmPlan(const GemmPlanOptions<T> &options)
       k_(options.k), alpha_(options.alpha), beta_(options.beta),
       algorithm_(detail::SelectGemmAlgorithm(options.trans_a, options.trans_b, options.m, options.n,
                                              options.k, VectorLanes<T>(), RegisterRows())),
-      blocking_(detail::ConstrainGemmBlockingForTasks(
-          detail::SelectGemmBlocking(sizeof(T), VectorLanes<T>(), RegisterRows()), options.m,
-          options.n, static_cast<std::size_t>(ExecutionThreadCount()))),
-      useful_threads_(UsefulThreads(options.m, options.n, options.k, blocking_)),
+      blocking_(ResolveBlocking(options.blocking, sizeof(T), VectorLanes<T>(), RegisterRows(),
+                                options.m, options.n,
+                                ResolveParticipantCount(options.maximum_participants))),
+      useful_threads_(std::min(UsefulThreads(options.m, options.n, options.k, blocking_),
+                               ResolveParticipantCount(options.maximum_participants))),
+      maximum_participants_(options.maximum_participants),
       has_constant_b_(!options.constant_b.empty()),
       constant_b_(options.constant_b.begin(), options.constant_b.end()),
       kernel_(SelectKernel<T>(algorithm_)) {
@@ -323,6 +371,7 @@ GemmPlan<T>::GemmPlan(const GemmPlanOptions<T> &options)
 }
 
 template <typename T> void GemmPlan<T>::Execute(const T *a, const T *b, const T *c, T *y) const {
+  ParticipantLimitScope participant_limit(maximum_participants_);
   if (m_ == 0 || n_ == 0) {
     return;
   }
@@ -349,6 +398,7 @@ template <typename T> void GemmPlan<T>::Execute(const T *a, const T *c, T *y) co
 
 template <typename T>
 void GemmPlan<T>::Execute(const T *a, const T *b, const GemmEpilogue<T> &epilogue, T *y) const {
+  ParticipantLimitScope participant_limit(maximum_participants_);
   if (m_ == 0 || n_ == 0) {
     return;
   }
@@ -403,15 +453,17 @@ GemmHalfPlan::GemmHalfPlan(const GemmHalfPlanOptions &options)
       m_(options.m), n_(options.n), k_(options.k), alpha_(options.alpha),
       algorithm_(detail::SelectGemmAlgorithm(options.trans_a, options.trans_b, options.m, options.n,
                                              options.k, VectorLanes<float>(), RegisterRows())),
-      blocking_(detail::ConstrainGemmBlockingForTasks(
-          detail::SelectGemmBlocking(sizeof(float), VectorLanes<float>(), RegisterRows()),
-          options.m, options.n, static_cast<std::size_t>(ExecutionThreadCount()))),
-      compact_blocking_(detail::ConstrainGemmBlockingForTasks(
-          detail::SelectGemmBlocking(sizeof(std::uint16_t), VectorLanes<float>(), RegisterRows()),
-          options.m, options.n, static_cast<std::size_t>(ExecutionThreadCount()))),
-      useful_threads_(std::max(UsefulThreads(options.m, options.n, options.k, blocking_),
-                               UsefulThreads(options.m, options.n, options.k, compact_blocking_))),
-      kernel_(SelectHalfKernel(algorithm_)) {
+      blocking_(ResolveBlocking(options.blocking, sizeof(float), VectorLanes<float>(),
+                                RegisterRows(), options.m, options.n,
+                                ResolveParticipantCount(options.maximum_participants))),
+      compact_blocking_(ResolveBlocking(options.compact_blocking, sizeof(std::uint16_t),
+                                        VectorLanes<float>(), RegisterRows(), options.m, options.n,
+                                        ResolveParticipantCount(options.maximum_participants))),
+      useful_threads_(
+          std::min(std::max(UsefulThreads(options.m, options.n, options.k, blocking_),
+                            UsefulThreads(options.m, options.n, options.k, compact_blocking_)),
+                   ResolveParticipantCount(options.maximum_participants))),
+      maximum_participants_(options.maximum_participants), kernel_(SelectHalfKernel(algorithm_)) {
   CheckedProduct(m_, k_, "A");
   CheckedProduct(k_, n_, "B");
   CheckedProduct(m_, n_, "Y");
@@ -419,6 +471,7 @@ GemmHalfPlan::GemmHalfPlan(const GemmHalfPlanOptions &options)
 
 void GemmHalfPlan::Execute(const std::uint16_t *a, const std::uint16_t *b,
                            const GemmEpilogue<float> &epilogue, float *y) const {
+  ParticipantLimitScope participant_limit(maximum_participants_);
   if (m_ == 0 || n_ == 0) {
     return;
   }

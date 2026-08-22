@@ -36,6 +36,8 @@ template <typename T> struct GemmPlanOptions {
   /// Its size must be ``k * n`` elements, regardless of ``trans_b``. An empty
   /// span selects a dynamic B supplied to :cpp:func:`GemmPlan::Execute`.
   std::span<const T> constant_b;
+  GemmBlocking blocking;
+  std::size_t maximum_participants = 0;
 };
 
 /// Reusable prepared rank-2 general matrix multiplication.
@@ -87,6 +89,7 @@ private:
   GemmAlgorithm algorithm_;
   GemmBlocking blocking_;
   std::size_t useful_threads_;
+  std::size_t maximum_participants_;
   bool has_constant_b_;
   std::vector<T> constant_b_;
   KernelFn kernel_;
@@ -101,6 +104,9 @@ struct GemmHalfPlanOptions {
   std::size_t n = 0;
   std::size_t k = 0;
   float alpha = 1.0f;
+  GemmBlocking blocking;
+  GemmBlocking compact_blocking;
+  std::size_t maximum_participants = 0;
 };
 
 /// Reusable prepared rank-2 FP16/BF16 general matrix multiplication.
@@ -147,6 +153,7 @@ private:
   GemmBlocking blocking_;
   GemmBlocking compact_blocking_;
   std::size_t useful_threads_;
+  std::size_t maximum_participants_;
   KernelFn kernel_;
 };
 
