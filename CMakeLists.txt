@@ -667,6 +667,12 @@ if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
   # observe the current session ``CpuExecutor`` directly. Keep that dependency
   # private so standalone builds remain unchanged when the integration is off.
   target_link_libraries(lib_onnx_light_cpu PRIVATE onnx_light::lib_onnx_core)
+  if(UNIX AND NOT APPLE AND ONNX_LIGHT_CPU_ONNX_LIGHT_SOURCE_DIR)
+    # lib_onnx_core has no RUNPATH to the adjacent lib_onnx_proto. Retain proto
+    # as a direct dependency so standalone test executables can resolve it.
+    target_link_options(lib_onnx_light_cpu PRIVATE
+        "LINKER:--no-as-needed")
+  endif()
 
   file(GLOB CPU_KERNEL_REGISTRATION_SOURCES CONFIGURE_DEPENDS
       "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/kernels/*.cc"
