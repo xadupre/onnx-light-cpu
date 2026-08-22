@@ -65,7 +65,11 @@ void RegisterCpuAbsCases(std::vector<TestCase> &registry, TestMode mode) {
   const std::vector<float> f = {-1.0f, 0.0f, 1.5f, -2.25f, 3.5f, -4.75f};
 
   if (mode == TestMode::BENCHMARK) {
-    ExpectBenchmarkUnaryFloat("Abs", abs_kernel, "test_cpu_abs_benchmark", opset, registry);
+    for (const int64_t size : {1024, 32768, 65535, 65536, 131072, 1048576, 4194304}) {
+      ExpectBenchmarkUnaryFloat("Abs", abs_kernel,
+                                "test_cpu_abs_n" + std::to_string(size) + "_benchmark", opset,
+                                registry, true, true, size);
+    }
     return;
   }
 

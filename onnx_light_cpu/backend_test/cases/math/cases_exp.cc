@@ -64,7 +64,11 @@ void RegisterCpuExpCases(std::vector<TestCase> &registry, TestMode mode) {
   const std::vector<float> f = {-2.0f, -1.0f, 0.0f, 0.5f, 1.0f, 2.0f};
 
   if (mode == TestMode::BENCHMARK) {
-    ExpectBenchmarkUnaryFloat("Exp", exp_kernel, "test_cpu_exp_benchmark", opset, registry);
+    for (const int64_t size : {1024, 32768, 65535, 65536, 131072, 1048576, 4194304}) {
+      ExpectBenchmarkUnaryFloat("Exp", exp_kernel,
+                                "test_cpu_exp_n" + std::to_string(size) + "_benchmark", opset,
+                                registry, true, true, size);
+    }
     return;
   }
 

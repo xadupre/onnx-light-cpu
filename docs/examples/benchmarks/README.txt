@@ -26,3 +26,9 @@ Integration benchmarks compare participant counts through the ``onnx-light``
 session ``cpu_execution`` policy, which owns thread count, affinity, and spin
 behavior. ``onnx-light-cpu`` does not create workers or read thread-control
 environment variables.
+
+The unary backend corpus samples both sides of the ``Exp`` and ``Log``
+scheduling thresholds. ``plot_exp_log_benchmark.py`` visualizes those
+transitions. ``plot_tree_ensemble_benchmark.py`` visualizes representative
+cases from the maintained TreeEnsemble parity runner; it does not claim
+backend-test kernel coverage because TreeEnsemble is not registered there.
