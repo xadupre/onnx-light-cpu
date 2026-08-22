@@ -19,8 +19,23 @@ import tempfile
 import matplotlib.pyplot as plt
 import numpy as np
 
-root = Path(__file__).resolve().parents[3]
-runner = root / "tools" / "benchmark_tree_ensemble_parity.py"
+runner_name = Path("tools") / "benchmark_tree_ensemble_parity.py"
+if "__file__" in globals():
+    root_candidates = [Path(__file__).resolve().parent, Path.cwd()]
+else:
+    root_candidates = [Path.cwd()]
+
+root = None
+for candidate in root_candidates:
+    for parent in [candidate, *candidate.parents]:
+        if (parent / runner_name).exists():
+            root = parent
+            break
+    if root is not None:
+        break
+if root is None:
+    raise RuntimeError(f"Unable to locate repository root containing {runner_name}.")
+runner = root / runner_name
 if os.environ.get("UNITTEST_GOING"):
     cases = ["reg_batch_shallow_f32", "reg_large_membership_f32"]
     repeats = "2"
