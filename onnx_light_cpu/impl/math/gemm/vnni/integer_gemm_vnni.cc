@@ -64,6 +64,34 @@ std::int64_t ReadPacked4Bit(const std::uint8_t *data, std::int64_t index, bool i
   return is_signed && nibble >= 8 ? nibble - 16 : nibble;
 }
 
+// Unpacks the first ``count`` logical INT4/UINT4 elements of ``packed`` (the
+// same layout as ``ReadPacked4Bit``: even index in the low nibble, odd index
+// in the high nibble, no padding) into ``raw``, one raw signed value per
+// element. Unlike calling ``ReadPacked4Bit`` per element, this walks whole
+// bytes and extracts both nibbles per iteration with no per-element index
+// shift/mask recomputation, so the compiler can auto-vectorize it; a single
+// bulk unpack of the whole operand is far cheaper than unpacking through the
+// transposed per-row/per-column access pattern used to build the dot-product
+// panels below.
+void UnpackPacked4BitBuffer(const std::uint8_t *packed, std::int64_t count, bool is_signed,
+                            std::int8_t *raw) {
+  const std::int64_t full_pairs = count / 2;
+  for (std::int64_t i = 0; i < full_pairs; ++i) {
+    const std::uint8_t byte = packed[i];
+    int low = byte & 0x0f;
+    int high = (byte >> 4) & 0x0f;
+    if (is_signed) {
+      low -= (low >= 8) ? 16 : 0;
+      high -= (high >= 8) ? 16 : 0;
+    }
+    raw[2 * i] = static_cast<std::int8_t>(low);
+    raw[2 * i + 1] = static_cast<std::int8_t>(high);
+  }
+  if (count & 1) {
+    raw[count - 1] = static_cast<std::int8_t>(ReadPacked4Bit(packed, count - 1, is_signed));
+  }
+}
+
 } // namespace
 
 void IntegerMatMul2DWithDot(IntegerVnniDotFn dot, const std::uint8_t *a, bool a_signed,
@@ -141,26 +169,36 @@ void IntegerMatMul4Bit2DWithDot(IntegerVnniDotFn dot, const std::uint8_t *a, boo
   const std::int64_t oa = a_signed ? 8 : 0;
   const std::int64_t ob = b_signed ? 0 : 8;
 
+  // A's logical (row, inner) index is exactly ``row * depth + inner`` with no
+  // padding, so the whole operand can be unpacked in a single contiguous pass
+  // before the per-row panel and row-sum are derived from plain byte reads.
+  std::vector<std::int8_t> a_raw(static_cast<std::size_t>(rows * depth));
+  UnpackPacked4BitBuffer(a, rows * depth, a_signed, a_raw.data());
   std::vector<std::uint8_t> a_panel(static_cast<std::size_t>(rows * depth));
   std::vector<std::int64_t> a_row_sum(static_cast<std::size_t>(rows), 0);
   for (std::int64_t row = 0; row < rows; ++row) {
     std::int64_t row_sum = 0;
+    const std::int8_t *raw_row = a_raw.data() + row * depth;
     std::uint8_t *packed = a_panel.data() + row * depth;
     for (std::int64_t inner = 0; inner < depth; ++inner) {
-      const std::int64_t value = ReadPacked4Bit(a, row * depth + inner, a_signed);
-      row_sum += value;
-      packed[inner] = static_cast<std::uint8_t>(value + oa);
+      row_sum += raw_row[inner];
+      packed[inner] = static_cast<std::uint8_t>(raw_row[inner] + oa);
     }
     a_row_sum[static_cast<std::size_t>(row)] = row_sum;
   }
 
+  // B's logical (inner, column) index is ``inner * cols + column``: a single
+  // bulk unpack in that same row-major order is contiguous, unlike the
+  // transposed per-column panel built from it below.
+  std::vector<std::int8_t> b_raw(static_cast<std::size_t>(cols * depth));
+  UnpackPacked4BitBuffer(b, cols * depth, b_signed, b_raw.data());
   std::vector<std::int8_t> b_panel(static_cast<std::size_t>(cols * depth));
   std::vector<std::int64_t> b_col_sum(static_cast<std::size_t>(cols), 0);
   for (std::int64_t column = 0; column < cols; ++column) {
     std::int64_t column_sum = 0;
     std::int8_t *packed = b_panel.data() + column * depth;
     for (std::int64_t inner = 0; inner < depth; ++inner) {
-      const std::int64_t value = ReadPacked4Bit(b, inner * cols + column, b_signed);
+      const std::int8_t value = b_raw[static_cast<std::size_t>(inner * cols + column)];
       column_sum += value;
       packed[inner] = static_cast<std::int8_t>(value - ob);
     }
