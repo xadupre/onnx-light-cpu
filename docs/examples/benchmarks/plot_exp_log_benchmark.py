@@ -121,25 +121,26 @@ for op_type, arrays in (("Exp", exp_arrays), ("Log", log_arrays)):
     }
 
 fig, axes = plt.subplots(2, 2, figsize=(12, 8), sharex="col")
-for column, op_type in enumerate(("Exp", "Log")):
+for row, op_type in enumerate(("Exp", "Log")):
     times = all_times[op_type]
     for label, values in times.items():
-        axes[0, column].plot(sizes, values * 1e6, marker="o", label=label)
-        axes[1, column].plot(sizes, times["ONNX Runtime"] / values, marker="o", label=label)
+        axes[row, 0].plot(sizes, values * 1e6, marker="o", label=label)
+        axes[row, 1].plot(sizes, times["ONNX Runtime"] / values, marker="o", label=label)
     threshold = 65536 if op_type == "Exp" else 131072
-    for row in range(2):
+    for column in range(2):
         axes[row, column].axvline(
             threshold, color="black", linestyle="--", alpha=0.5, label="CPU threshold"
         )
         axes[row, column].set_xscale("log", base=2)
         axes[row, column].grid(True)
-    axes[0, column].set_yscale("log")
-    axes[0, column].set_title(f"{op_type} inference time")
-    axes[1, column].set_title(f"{op_type} speedup over ONNX Runtime")
-    axes[1, column].set_xlabel("tensor elements")
+    axes[row, 0].set_yscale("log")
+    axes[row, 0].set_title(f"{op_type} inference time")
+    axes[row, 1].set_title(f"{op_type} speedup over ONNX Runtime")
+    axes[row, 0].set_ylabel("median time (us)")
+    axes[row, 1].set_ylabel("speedup")
 
-axes[0, 0].set_ylabel("median time (us)")
-axes[1, 0].set_ylabel("speedup")
+axes[1, 0].set_xlabel("tensor elements")
+axes[1, 1].set_xlabel("tensor elements")
 axes[0, 0].legend()
 plt.tight_layout()
 plt.show()
