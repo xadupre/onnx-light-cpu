@@ -253,7 +253,9 @@ TEST(OnnxLightBackendKernels, NotBenchmarkRunsThroughRuntime) {
 
 TEST(OnnxLightBackendKernels, UnaryBenchmarkCorporaCoverParallelThresholds) {
   onnx_light_cpu::backend_test::RegisterCpuKernelBackendTestCases();
-  for (const std::string &op : {"Abs", "Exp", "Log"}) {
+  std::set<int64_t> exp_sizes;
+  std::set<int64_t> not_sizes;
+  for (const std::string &op : {"Abs", "Exp", "Log", "Not"}) {
     std::vector<TestCase> cases =
         CollectTestCases(op, /*include_big=*/false, core::backend_test::TestMode::BENCHMARK);
     std::set<int64_t> sizes;
@@ -269,7 +271,13 @@ TEST(OnnxLightBackendKernels, UnaryBenchmarkCorporaCoverParallelThresholds) {
     const int64_t threshold = op == "Log" ? 131072 : 65536;
     EXPECT_TRUE(sizes.contains(threshold - 1)) << op;
     EXPECT_TRUE(sizes.contains(threshold)) << op;
+    if (op == "Exp") {
+      exp_sizes = sizes;
+    } else if (op == "Not") {
+      not_sizes = sizes;
+    }
   }
+  EXPECT_EQ(not_sizes, exp_sizes);
 }
 
 TEST(OnnxLightBackendKernels, GemmBenchmarkRunsThroughRuntime) {
