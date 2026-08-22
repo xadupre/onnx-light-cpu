@@ -11,7 +11,6 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
-#include <set>
 #include <stdexcept>
 #include <string>
 #include <tuple>
@@ -31,20 +30,85 @@ using onnx_light_cpu::KernelRegistration;
 TEST(KernelRegistration, CollectionReportsEveryActualRegistration) {
   const std::vector<KernelRegistration> records = onnx_light_cpu::CollectRegisteredKernels();
 
-  std::set<std::string> op_types;
-  for (const KernelRegistration &record : records) {
-    op_types.insert(record.op_type);
-    EXPECT_EQ(record.domain, "ai.onnx");
-    EXPECT_EQ(record.device, sym_ns::Device::kCPU);
-    EXPECT_FALSE(record.kernel_name.empty());
-    EXPECT_FALSE(record.types.empty());
-  }
-
-  const std::set<std::string> expected_op_types = {
-      "Abs", "Exp", "Log", "Gemm", "MatMul", "MatMulInteger", "QLinearMatMul", "Not",
+  const std::vector<KernelRegistration> expected = {
+      {"ai.onnx",
+       "Abs",
+       sym_ns::Device::kCPU,
+       "onnx_light_cpu::Abs",
+       {rt_ns::DataType::FLOAT, rt_ns::DataType::DOUBLE, rt_ns::DataType::INT32,
+        rt_ns::DataType::INT64, rt_ns::DataType::FLOAT16, rt_ns::DataType::BFLOAT16,
+        rt_ns::DataType::INT8, rt_ns::DataType::INT16},
+       std::nullopt,
+       std::nullopt},
+      {"ai.onnx",
+       "Exp",
+       sym_ns::Device::kCPU,
+       "onnx_light_cpu::Exp",
+       {rt_ns::DataType::FLOAT, rt_ns::DataType::DOUBLE, rt_ns::DataType::FLOAT16,
+        rt_ns::DataType::BFLOAT16},
+       std::nullopt,
+       std::nullopt},
+      {"ai.onnx",
+       "Log",
+       sym_ns::Device::kCPU,
+       "onnx_light_cpu::Log",
+       {rt_ns::DataType::FLOAT, rt_ns::DataType::DOUBLE, rt_ns::DataType::FLOAT16,
+        rt_ns::DataType::BFLOAT16},
+       std::nullopt,
+       std::nullopt},
+      {"ai.onnx",
+       "Gemm",
+       sym_ns::Device::kCPU,
+       "onnx_light_cpu::Gemm",
+       {rt_ns::DataType::FLOAT, rt_ns::DataType::DOUBLE, rt_ns::DataType::FLOAT16,
+        rt_ns::DataType::BFLOAT16},
+       std::nullopt,
+       std::nullopt},
+      {"ai.onnx",
+       "MatMul",
+       sym_ns::Device::kCPU,
+       "onnx_light_cpu::MatMul",
+       {rt_ns::DataType::FLOAT, rt_ns::DataType::DOUBLE, rt_ns::DataType::FLOAT16,
+        rt_ns::DataType::BFLOAT16},
+       std::nullopt,
+       std::nullopt},
+      {"ai.onnx",
+       "MatMulInteger",
+       sym_ns::Device::kCPU,
+       "onnx_light_cpu::MatMulInteger",
+       {rt_ns::DataType::INT8, rt_ns::DataType::UINT8},
+       std::nullopt,
+       std::nullopt},
+      {"ai.onnx",
+       "QLinearMatMul",
+       sym_ns::Device::kCPU,
+       "onnx_light_cpu::QLinearMatMul",
+       {rt_ns::DataType::INT8, rt_ns::DataType::UINT8},
+       std::nullopt,
+       std::nullopt},
+      {"ai.onnx",
+       "Not",
+       sym_ns::Device::kCPU,
+       "onnx_light_cpu::Not",
+       {rt_ns::DataType::BOOL},
+       std::nullopt,
+       std::nullopt},
   };
-  EXPECT_EQ(op_types, expected_op_types);
-  EXPECT_EQ(records.size(), expected_op_types.size());
+  ASSERT_EQ(records.size(), expected.size());
+  for (const KernelRegistration &expected_record : expected) {
+    const auto actual = std::find_if(records.begin(), records.end(),
+                                     [&expected_record](const KernelRegistration &record) {
+                                       return record.op_type == expected_record.op_type;
+                                     });
+    ASSERT_NE(actual, records.end()) << expected_record.op_type;
+    EXPECT_EQ(actual->domain, expected_record.domain);
+    EXPECT_EQ(actual->op_type, expected_record.op_type);
+    EXPECT_EQ(actual->device, expected_record.device);
+    EXPECT_EQ(actual->kernel_name, expected_record.kernel_name);
+    EXPECT_EQ(actual->types, expected_record.types);
+    EXPECT_EQ(actual->since_version, expected_record.since_version);
+    EXPECT_EQ(actual->until_version, expected_record.until_version);
+  }
 }
 
 // Collection returns records already sorted by
@@ -73,13 +137,20 @@ TEST(KernelRegistration, CollectionIsDeterministicallyOrdered) {
 // Collecting the inventory must never install, replace, or execute a kernel:
 // it must not mutate onnx-light's shared ``KernelDispatchTable`` at all.
 TEST(KernelRegistration, CollectionDoesNotMutateDispatchTable) {
-  rt_ns::KernelDispatchTable(); // Ensure the table exists before snapshotting.
+  rt_ns::RegisterKernelFn("ai.onnx", "Abs", sym_ns::Device::kCPU,
+                          [](const ONNX_LIGHT_NAMESPACE::NodeProto &, rt_ns::RuntimeContext &)
+                              -> std::unique_ptr<rt_ns::KernelBase> { return nullptr; });
   const std::size_t before = rt_ns::KernelDispatchTable().size();
 
   const std::vector<KernelRegistration> records = onnx_light_cpu::CollectRegisteredKernels();
   EXPECT_FALSE(records.empty());
 
   EXPECT_EQ(rt_ns::KernelDispatchTable().size(), before);
+  const auto factory = rt_ns::KernelDispatchTable().find("ai.onnx:Abs");
+  ASSERT_NE(factory, rt_ns::KernelDispatchTable().end());
+  ONNX_LIGHT_NAMESPACE::NodeProto node;
+  rt_ns::RuntimeContext runtime(rt_ns::KernelContext(rt_ns::DefaultOpset(18)));
+  EXPECT_EQ(factory->second(node, runtime), nullptr);
 }
 
 // A repeated ``(domain, op_type, device)`` registration within a single pass
