@@ -67,7 +67,7 @@ Implementation sequence
      - A clean warnings-as-errors Sphinx build contains exactly one page per
        inventory record; focused C++ and Python suites pass.
      - Steps 1 through 3
-     - Not started
+     - Complete
 
 Step 1 (this PR) adds ``onnx_light_cpu::KernelRegistration`` (the structured
 domain/operator/device/kernel-name/types/opset-bounds record) together with
@@ -106,6 +106,27 @@ are derived from ``(domain, op_type, device)`` and disambiguated in the same
 stable order on the rare slugify collision, so two consecutive generations
 are byte-identical; any page left over from a renamed or removed registration
 is deleted so the directory always matches the current inventory exactly.
+
+Step 4 (this PR) adds the final parity coverage across the whole pipeline,
+on top of the C++ (``unittests/cc/test_onnx_light_kernel_registration.cc``,
+``unittests/cc/test_onnx_light_kernel_usage.cc``) and Python
+(``unittests/python/test_kernels_doc.py``, ``unittests/python/test_kernels_e2e.py``,
+``unittests/python/test_api_doc.py``) suites steps 1 through 3 already added.
+This PR extends ``test_onnx_light_kernel_registration.cc`` with a test proving
+that optional opset bounds (``since_version``/``until_version``) round-trip
+exactly through ``RegisterKernel``/``CollectRegisteredKernels`` alongside the
+existing deterministic-ordering, no-mutation, and duplicate-rejection
+coverage. It also extends ``test_kernels_doc.py`` with a new
+``TestGenerationParityWithLiveInventory`` class proving the *live*
+``onnx_light_cpu.registered_kernels()`` inventory -- not just the fabricated
+records the rest of that file already exercised -- produces exactly one
+generated page and index entry per record, with content that matches the
+record it documents, and regenerates byte-identically. Finally, the ``docs``
+workflow now builds Sphinx with ``-W`` (warnings treated as errors), so a
+broken cross-reference or any other build warning fails CI instead of
+silently degrading the generated documentation; a local ``sphinx-build -W``
+run confirmed the ``kernels_generated/`` directory contains exactly one page
+per ``registered_kernels()`` record plus the index, with zero warnings.
 
 Validation and compatibility
 ----------------------------

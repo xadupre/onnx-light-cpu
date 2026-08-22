@@ -96,7 +96,7 @@ to sort the table.
         arithmetic throughput through one explicit Python API.
       - A measured machine profile supplies the cost model for Roofline
         analysis, kernel tuning, and future optimal-transport GEMM planning.
-    * - Planned
+    * - Completed
       - :doc:`Registered kernel documentation <2026/2026_08_registered_kernel_documentation>`
       - Derive the Python inventory and generated reference from actual C++
         registrations.

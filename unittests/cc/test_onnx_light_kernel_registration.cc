@@ -184,6 +184,55 @@ TEST(KernelRegistration, RejectsDuplicateRegistrationWithinOnePass) {
   EXPECT_EQ(inventory.size(), 1u);
 }
 
+// Optional opset bounds (``since_version``/``until_version``) must round-trip
+// exactly through ``RegisterKernel`` into the collected inventory: a bounded
+// record must keep its bounds, and an unbounded record collected in the same
+// pass must keep reporting ``std::nullopt`` for both, so the two never bleed
+// into each other.
+TEST(KernelRegistration, OpsetBoundsRoundTripThroughCollection) {
+  std::vector<KernelRegistration> inventory;
+  onnx_light_cpu::KernelRegistrationScope scope(&inventory);
+
+  auto noop_factory = [](const ONNX_LIGHT_NAMESPACE::NodeProto &,
+                         rt_ns::RuntimeContext &) -> std::unique_ptr<rt_ns::KernelBase> {
+    return nullptr;
+  };
+
+  KernelRegistration bounded;
+  bounded.domain = "";
+  bounded.op_type = "BoundedOp";
+  bounded.device = sym_ns::Device::kCPU;
+  bounded.kernel_name = "onnx_light_cpu::BoundedOp";
+  bounded.types = {rt_ns::DataType::FLOAT};
+  bounded.since_version = 9;
+  bounded.until_version = 13;
+  onnx_light_cpu::RegisterKernel(bounded, noop_factory);
+
+  KernelRegistration unbounded;
+  unbounded.domain = "";
+  unbounded.op_type = "UnboundedOp";
+  unbounded.device = sym_ns::Device::kCPU;
+  unbounded.kernel_name = "onnx_light_cpu::UnboundedOp";
+  unbounded.types = {rt_ns::DataType::FLOAT};
+  onnx_light_cpu::RegisterKernel(unbounded, noop_factory);
+
+  ASSERT_EQ(inventory.size(), 2u);
+  const auto found_bounded =
+      std::find_if(inventory.begin(), inventory.end(),
+                   [](const KernelRegistration &record) { return record.op_type == "BoundedOp"; });
+  ASSERT_NE(found_bounded, inventory.end());
+  EXPECT_EQ(found_bounded->since_version, 9);
+  EXPECT_EQ(found_bounded->until_version, 13);
+
+  const auto found_unbounded =
+      std::find_if(inventory.begin(), inventory.end(), [](const KernelRegistration &record) {
+        return record.op_type == "UnboundedOp";
+      });
+  ASSERT_NE(found_unbounded, inventory.end());
+  EXPECT_EQ(found_unbounded->since_version, std::nullopt);
+  EXPECT_EQ(found_unbounded->until_version, std::nullopt);
+}
+
 // Normal-mode registration (``RegisterAllKernels``) must keep installing the
 // same kernels into the shared dispatch table exactly as before, so runtime
 // dispatch is unaffected by routing registrations through the new helper.
