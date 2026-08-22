@@ -271,7 +271,7 @@ own issue and must not absorb a later row.
        cross-platform, confidence-labelled, and covered by injected-topology
        tests. Existing GEMM blocking behavior is unchanged.
      - Completed runtime controls
-     - Pending
+     - Completed
    * - Profile PR02
      - Memory bandwidth and latency measurement engine.
      - L1/L2/L3/RAM working-set selection, read/write/copy/read-modify-write,
