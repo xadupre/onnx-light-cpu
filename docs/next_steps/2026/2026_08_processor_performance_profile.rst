@@ -278,7 +278,7 @@ own issue and must not absorb a later row.
        pointer-chase latency, affinity, raw samples, budgets, and explicit
        unavailable states pass deterministic and bounded native tests.
      - PR01
-     - Pending
+     - Completed
    * - Profile PR03
      - Register-resident compute measurement engine.
      - FP32/FP64 and supported low-precision paths report correct operation
