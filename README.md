@@ -26,7 +26,7 @@ fallback).
 - C++20 compiler with AVX2 support (GCC ≥ 11, Clang ≥ 14, MSVC ≥ 2022)
 - CMake ≥ 3.15
 - Python ≥ 3.10
-- [nanobind](https://github.com/wjakob/nanobind) ≥ 1.3.2
+- [nanobind](https://github.com/wjakob/nanobind) ≥ 3.0
 
 ### Python wheel (recommended)
 
