@@ -30,6 +30,7 @@ _REQUIREMENTS = {
     "plot_abs_benchmark.py": ("matplotlib", "onnx", "onnxruntime", "onnx_light"),
     "plot_gemm_benchmark.py": ("matplotlib", "onnx", "onnxruntime", "onnx_light"),
     "plot_gemm_dtype_benchmark.py": ("matplotlib", "onnx", "onnx_light", "ml_dtypes"),
+    "plot_backend_cases_benchmark.py": ("matplotlib", "onnx", "onnxruntime", "onnx_light"),
 }
 
 

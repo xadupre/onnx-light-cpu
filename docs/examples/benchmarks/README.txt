@@ -32,3 +32,10 @@ scheduling thresholds. ``plot_exp_log_benchmark.py`` visualizes those
 transitions. ``plot_tree_ensemble_benchmark.py`` visualizes representative
 cases from the maintained TreeEnsemble parity runner; it does not claim
 backend-test kernel coverage because TreeEnsemble is not registered there.
+
+``plot_backend_cases_benchmark.py`` walks a subset of the ``TestMode::BENCHMARK``
+``test_cpu_*`` backend test cases -- covering every operator with an
+onnx-light-cpu backend test registration (``Abs``, ``Exp``, ``Log``, ``Gemm``
+and ``Not``) -- and times each one through onnx-light (with onnx-light-cpu's
+accelerated kernels registered) and through ONNX Runtime, using the exact same
+generated model and inputs for both.
