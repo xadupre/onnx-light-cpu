@@ -16,14 +16,14 @@ namespace {
 using onnx_light_cpu::BenchmarkProcessorPerformance;
 using onnx_light_cpu::ComputeElementType;
 using onnx_light_cpu::CpuAffinity;
+using onnx_light_cpu::kProcessorPerformanceProfileSchemaVersion;
 using onnx_light_cpu::MemoryProfileLevel;
 using onnx_light_cpu::ParseProcessorThreadPolicy;
-using onnx_light_cpu::ProcessorProfileOptions;
 using onnx_light_cpu::ProcessorPerformanceProfile;
+using onnx_light_cpu::ProcessorProfileOptions;
 using onnx_light_cpu::ProcessorThreadPolicy;
 using onnx_light_cpu::ProcessorThreadPolicyName;
 using onnx_light_cpu::ValidateProcessorProfileOptions;
-using onnx_light_cpu::kProcessorPerformanceProfileSchemaVersion;
 
 ProcessorProfileOptions BoundedOptions() {
   ProcessorProfileOptions options;
@@ -120,7 +120,7 @@ TEST(ProcessorPerformanceProfile, BoundedSinglePolicyProfileIsCoherent) {
   const bool has_l1_entry =
       std::any_of(profile.memory.begin(), profile.memory.end(), [](const auto &entry) {
         return entry.level == MemoryProfileLevel::kL1 &&
-              entry.policy == ProcessorThreadPolicy::kSingle;
+               entry.policy == ProcessorThreadPolicy::kSingle;
       });
   EXPECT_TRUE(has_l1_entry);
 
@@ -139,7 +139,7 @@ TEST(ProcessorPerformanceProfile, BoundedSinglePolicyProfileIsCoherent) {
   const bool has_float32_entry =
       std::any_of(profile.compute.begin(), profile.compute.end(), [](const auto &entry) {
         return entry.element_type == ComputeElementType::kFloat32 &&
-              entry.policy == ProcessorThreadPolicy::kSingle;
+               entry.policy == ProcessorThreadPolicy::kSingle;
       });
   EXPECT_TRUE(has_float32_entry);
   for (const auto &entry : profile.compute) {
@@ -188,9 +188,8 @@ TEST(ProcessorPerformanceProfile, ImpossibleRamBudgetIsAbsentAndExplained) {
 
   const ProcessorPerformanceProfile profile = BenchmarkProcessorPerformance(options);
   const bool has_ram_entry =
-      std::any_of(profile.memory.begin(), profile.memory.end(), [](const auto &entry) {
-        return entry.level == MemoryProfileLevel::kRam;
-      });
+      std::any_of(profile.memory.begin(), profile.memory.end(),
+                  [](const auto &entry) { return entry.level == MemoryProfileLevel::kRam; });
   EXPECT_FALSE(has_ram_entry);
   EXPECT_FALSE(profile.warnings.empty());
 }

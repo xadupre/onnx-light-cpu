@@ -55,7 +55,7 @@ struct ProcessorProfileOptions {
   /// Thread policies to measure for every memory and compute section. Must
   /// be non-empty.
   std::vector<ProcessorThreadPolicy> thread_policies{ProcessorThreadPolicy::kSingle,
-                                                      ProcessorThreadPolicy::kPhysical};
+                                                     ProcessorThreadPolicy::kPhysical};
   /// Number of recorded samples after warmup, forwarded to both engines.
   std::size_t repeats = 7;
   /// Minimum wall-clock duration, per recorded sample, forwarded to both
@@ -171,6 +171,7 @@ struct ProcessorPerformanceProfile {
 /// resulting ``ProcessorPerformanceProfile``. Throws ``std::invalid_argument``
 /// (with the message from ``ValidateProcessorProfileOptions``) before
 /// allocating or timing anything when ``options`` is invalid.
-ProcessorPerformanceProfile BenchmarkProcessorPerformance(const ProcessorProfileOptions &options = {});
+ProcessorPerformanceProfile
+BenchmarkProcessorPerformance(const ProcessorProfileOptions &options = {});
 
 } // namespace onnx_light_cpu

@@ -69,20 +69,19 @@ const char *ComputeElementTypeName(ComputeElementType element_type) {
 
 MemoryParticipantPolicy ToMemoryPolicy(ProcessorThreadPolicy policy) {
   return policy == ProcessorThreadPolicy::kPhysical ? MemoryParticipantPolicy::kPhysical
-                                                     : MemoryParticipantPolicy::kSingle;
+                                                    : MemoryParticipantPolicy::kSingle;
 }
 
 ComputeParticipantPolicy ToComputePolicy(ProcessorThreadPolicy policy) {
   return policy == ProcessorThreadPolicy::kPhysical ? ComputeParticipantPolicy::kPhysical
-                                                     : ComputeParticipantPolicy::kSingle;
+                                                    : ComputeParticipantPolicy::kSingle;
 }
 
 bool HasLogicalProcessor(const CpuTopology &topology, const CpuAffinity &affinity) {
-  return std::any_of(topology.threads.begin(), topology.threads.end(),
-                     [&affinity](const CpuThread &thread) {
-                       return thread.affinity.group == affinity.group &&
-                             thread.affinity.index == affinity.index;
-                     });
+  return std::any_of(
+      topology.threads.begin(), topology.threads.end(), [&affinity](const CpuThread &thread) {
+        return thread.affinity.group == affinity.group && thread.affinity.index == affinity.index;
+      });
 }
 
 constexpr std::array<MemoryProfileLevel, 4> kMemoryLevels{
@@ -160,7 +159,7 @@ std::string ValidateProcessorProfileOptions(const ProcessorProfileOptions &optio
   if (options.explicit_single_affinity.has_value() &&
       !HasLogicalProcessor(GetCpuTopology(), *options.explicit_single_affinity)) {
     return "explicit_single_affinity does not reference a logical processor visible to this "
-          "process";
+           "process";
   }
   return {};
 }
@@ -174,8 +173,8 @@ ProcessorPerformanceProfile BenchmarkProcessorPerformance(const ProcessorProfile
   ProcessorPerformanceProfile profile;
 
   profile.metadata.unix_timestamp_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                          std::chrono::system_clock::now().time_since_epoch())
-                                          .count();
+                                           std::chrono::system_clock::now().time_since_epoch())
+                                           .count();
   profile.metadata.platform = PlatformName();
   profile.metadata.compiler = CompilerName();
   profile.metadata.timer_name = MemoryProfileTimerName();
@@ -219,8 +218,7 @@ ProcessorPerformanceProfile BenchmarkProcessorPerformance(const ProcessorProfile
         } else {
           profile.warnings.push_back(std::string("memory ") + MemoryLevelName(level) + " " +
                                      MemoryTrafficModeName(mode) + " (" +
-                                     ProcessorThreadPolicyName(policy) +
-                                     "): " + result.diagnostic);
+                                     ProcessorThreadPolicyName(policy) + "): " + result.diagnostic);
         }
       }
 
