@@ -198,6 +198,9 @@ for tc in _CASES:
                 equal_nan=True,
             )
 
+    # Aim for roughly a constant total element budget per case (~2e7 elements
+    # processed across all repeats) so large cases are not re-run too many
+    # times, but always repeat at least 3 times and never more than 30.
     repeat = max(3, min(30, 20_000_000 // _case_element_count(tc)))
     light_time = measure(lambda feeds=feeds, sess=light_session: sess.run(None, feeds), repeat)
     ort_time = measure(lambda feeds=feeds, sess=ort_session: sess.run(None, feeds), repeat)
