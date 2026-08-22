@@ -9,7 +9,7 @@ description = "Highly optimized CPU kernels (Abs) for onnx-light with AVX/AVX2/A
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 dependencies = [
     "numpy>=2.1",
 ]
@@ -57,7 +57,7 @@ project-includes = ["onnx_light_cpu/**/*.py"]
 [tool.black]
 extend-exclude = "/(build|dist|docs/auto_[^/]+)/"
 line-length = 98
-target-version = ["py310"]
+target-version = ["py312"]
 
 [tool.ruff]
 exclude = [".eggs", ".git", "build", "dist"]
