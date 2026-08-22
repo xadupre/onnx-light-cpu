@@ -205,6 +205,24 @@ TEST(OnnxLightBackendKernels, TreeEnsembleCorpusRegistersOnlyMlOpset5) {
   EXPECT_EQ(CountCpuCasesAtMlOpset5("TreeEnsembleClassifier"), 2U);
 }
 
+TEST(OnnxLightBackendKernels, TreeEnsembleBenchmarkCoversPriorityDimensions) {
+  onnx_light_cpu::backend_test::RegisterCpuKernelBackendTestCases();
+  const std::vector<TestCase> cases = CollectTestCases("TreeEnsemble", /*include_big=*/false,
+                                                       core::backend_test::TestMode::BENCHMARK);
+  std::set<std::string> names;
+  for (const TestCase &test_case : cases) {
+    if (test_case.name.rfind("test_cpu_treeensemble_", 0) == 0) {
+      names.insert(test_case.name);
+    }
+  }
+  EXPECT_EQ(names.size(), 5U);
+  EXPECT_TRUE(names.contains("test_cpu_treeensemble_t10_f4_b1_benchmark"));
+  EXPECT_TRUE(names.contains("test_cpu_treeensemble_t100_f64_b8_benchmark"));
+  EXPECT_TRUE(names.contains("test_cpu_treeensemble_t1000_f1024_b32_benchmark"));
+  EXPECT_TRUE(names.contains("test_cpu_treeensemble_t10000_f4096_b1_benchmark"));
+  EXPECT_TRUE(names.contains("test_cpu_treeensemble_t10000_f4096_b128_benchmark"));
+}
+
 // Benchmark-mode cases: registered per kernel alongside the correctness cases.
 // The unit test exercises them (executes the large model through the runtime)
 // to keep the benchmark registration covered; timings are collected by a
