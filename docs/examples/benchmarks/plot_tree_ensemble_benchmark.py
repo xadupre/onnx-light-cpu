@@ -46,9 +46,6 @@ else:
         "reg_large_membership_f32",
         "reg_many_targets_f32",
         "reg_large_batch_f64",
-        "cls_batch_strings_f32",
-        "cls_large_classes_f32",
-        "cls_membership_f64",
     ]
     repeats = "7"
 
