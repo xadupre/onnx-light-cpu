@@ -1,12 +1,19 @@
 from tools.benchmark_gemm_parity import (
     MATMUL_PRIORITY_CASES,
     PARITY_DTYPES,
+    PRIORITY_CASES,
     GemmCase,
     _build_case,
+    parse_args,
     render_comparison_table,
     repeat_count,
     summarize,
 )
+
+
+def test_default_thread_policy_is_not_overridden():
+    assert parse_args([]).threads is None
+    assert parse_args(["--threads", "4"]).threads == 4
 
 
 def test_repeat_count_is_bounded():
@@ -84,3 +91,10 @@ def test_matmul_corpus_covers_batches_broadcasting_and_vectors():
     assert any(case.batch_shape for case in MATMUL_PRIORITY_CASES)
     assert any(case.b_batch_shape for case in MATMUL_PRIORITY_CASES)
     assert any(case.vector_a or case.vector_b for case in MATMUL_PRIORITY_CASES)
+
+
+def test_transformer_projection_covers_dynamic_and_constant_b():
+    cases = {case.name: case for case in PRIORITY_CASES}
+
+    assert not cases["transformer_projection_dynamic"].constant_b
+    assert cases["transformer_projection"].constant_b

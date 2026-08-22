@@ -59,6 +59,7 @@ PRIORITY_CASES = (
     GemmCase("trans_a", 128, 128, 128, trans_a=True),
     GemmCase("trans_b", 128, 128, 128, trans_b=True),
     GemmCase("trans_ab", 128, 128, 128, trans_a=True, trans_b=True),
+    GemmCase("transformer_projection_dynamic", 128, 3072, 768),
     GemmCase("transformer_projection", 128, 3072, 768, constant_b=True),
 )
 
@@ -315,7 +316,12 @@ def _parse_cpu_list(value: str) -> set[int]:
     return cpus
 
 
-def _metadata(requested_threads: int, actual_threads: int, simd_level: int) -> dict[str, Any]:
+def _metadata(
+    requested_threads: int | None,
+    actual_threads: int,
+    affinity_policy: str,
+    simd_level: int,
+) -> dict[str, Any]:
     try:
         affinity = sorted(os.sched_getaffinity(0))
     except AttributeError:
@@ -329,8 +335,10 @@ def _metadata(requested_threads: int, actual_threads: int, simd_level: int) -> d
         "logical_cpus": os.cpu_count(),
         "affinity": affinity,
         "requested_threads": requested_threads,
-        "actual_threads": actual_threads,
-        "affinity_policy": "none",
+        "onnx_light_effective_threads": actual_threads,
+        "onnx_light_affinity_policy": affinity_policy,
+        "onnxruntime_intra_op_threads": requested_threads,
+        "backend_isolation": "separate session lifetimes; order alternates by case",
         "simd_level": simd_level,
         "compiler": _compiler(),
         "versions": _package_versions(),
@@ -352,10 +360,14 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
     register_kernels()
     set_kernel_usage_recording(False)
-    session_options = onnxruntime.SessionOptions()
-    session_options.intra_op_num_threads = args.threads
-    session_options.inter_op_num_threads = 1
-    session_options.execution_mode = onnxruntime.ExecutionMode.ORT_SEQUENTIAL
+    session_options = None
+    cpu_execution = None
+    if args.threads is not None:
+        session_options = onnxruntime.SessionOptions()
+        session_options.intra_op_num_threads = args.threads
+        session_options.inter_op_num_threads = 1
+        session_options.execution_mode = onnxruntime.ExecutionMode.ORT_SEQUENTIAL
+        cpu_execution = {"num_threads": args.threads, "affinity_policy": "none"}
 
     results: list[dict[str, Any]] = []
     dtype_names = PARITY_DTYPES if args.dtype == "all" else (args.dtype,)
@@ -374,36 +386,63 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError(f"Unknown cases: {', '.join(sorted(unknown_cases))}.")
 
     actual_threads = None
+    affinity_policy = None
+
+    def measure_cpu(model_bytes, feeds, repeat):
+        session = ReferenceEvaluator(model_bytes, cpu_execution=cpu_execution)
+        resolution = session.cpu_execution_resolution
+
+        def execute():
+            return session.run(None, feeds)[0]
+
+        output = execute()
+        samples = measure_alternating((execute,), repeat=repeat, warmup=args.warmup)[0]
+        return (
+            output,
+            samples,
+            resolution.effective_threads,
+            resolution.request.affinity_policy.name.lower(),
+        )
+
+    def measure_ort(model_bytes, feeds, repeat):
+        session = onnxruntime.InferenceSession(
+            model_bytes,
+            sess_options=session_options,
+            providers=["CPUExecutionProvider"],
+        )
+
+        def execute():
+            return session.run(None, feeds)[0]
+
+        output = execute()
+        samples = measure_alternating((execute,), repeat=repeat, warmup=args.warmup)[0]
+        return output, samples
+
     for dtype_index, dtype_name in enumerate(dtype_names):
         for case_index, case in enumerate(selected_cases):
             rng = np.random.default_rng(1000 * dtype_index + case_index)
             model_bytes, feeds = _build_case(case, dtype_name, rng)
-            cpu_session = ReferenceEvaluator(
-                model_bytes,
-                cpu_execution={
-                    "num_threads": args.threads,
-                    "affinity_policy": "none",
-                },
-            )
-            session_threads = cpu_session.cpu_execution_resolution.effective_threads
+            repeat = repeat_count(case, args.minimum_repeats, args.maximum_repeats)
+            if (dtype_index + case_index) % 2 == 0:
+                cpu_output, cpu_samples, session_threads, session_affinity = measure_cpu(
+                    model_bytes, feeds, repeat
+                )
+                gc.collect()
+                ort_output, ort_samples = measure_ort(model_bytes, feeds, repeat)
+            else:
+                ort_output, ort_samples = measure_ort(model_bytes, feeds, repeat)
+                gc.collect()
+                cpu_output, cpu_samples, session_threads, session_affinity = measure_cpu(
+                    model_bytes, feeds, repeat
+                )
+            gc.collect()
             if actual_threads is None:
                 actual_threads = session_threads
-            elif actual_threads != session_threads:
+                affinity_policy = session_affinity
+            elif actual_threads != session_threads or affinity_policy != session_affinity:
                 raise RuntimeError(
-                    "onnx-light resolved inconsistent participant counts across sessions."
+                    "onnx-light resolved inconsistent CPU policies across sessions."
                 )
-            ort_session = onnxruntime.InferenceSession(
-                model_bytes, sess_options=session_options, providers=["CPUExecutionProvider"]
-            )
-
-            def cpu_run(session=cpu_session, current_feeds=feeds):
-                return session.run(None, current_feeds)[0]
-
-            def ort_run(session=ort_session, current_feeds=feeds):
-                return session.run(None, current_feeds)[0]
-
-            cpu_output = cpu_run()
-            ort_output = ort_run()
             tolerance = {
                 "float16": 2e-2,
                 "float32": 2e-2,
@@ -411,10 +450,6 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             }[dtype_name]
             np.testing.assert_allclose(cpu_output, ort_output, rtol=tolerance, atol=tolerance)
 
-            repeat = repeat_count(case, args.minimum_repeats, args.maximum_repeats)
-            cpu_samples, ort_samples = measure_alternating(
-                (cpu_run, ort_run), repeat=repeat, warmup=args.warmup
-            )
             cpu_median = statistics.median(cpu_samples)
             ort_median = statistics.median(ort_samples)
             result = {
@@ -443,7 +478,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     if actual_threads is None:
         raise RuntimeError("No benchmark cases were selected.")
     report = {
-        "metadata": _metadata(args.threads, actual_threads, detect_simd_level()),
+        "metadata": _metadata(args.threads, actual_threads, affinity_policy, detect_simd_level()),
         "results": results,
         "summary": summarize(results),
     }
@@ -452,7 +487,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--threads", type=int, default=1)
+    parser.add_argument(
+        "--threads",
+        type=int,
+        default=None,
+        help="Explicit thread count for controlled diagnostics; defaults to each runtime policy.",
+    )
     parser.add_argument(
         "--cpus", default="", help="Linux CPU affinity, for example 0-3 or 0,2,4."
     )
@@ -472,7 +512,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--enforce", action="store_true", help="Exit nonzero when the gate fails."
     )
     args = parser.parse_args(argv)
-    if args.threads < 1:
+    if args.threads is not None and args.threads < 1:
         parser.error("--threads must be positive.")
     if args.minimum_repeats < 1 or args.maximum_repeats < args.minimum_repeats:
         parser.error("repeat bounds must be positive and ordered.")
