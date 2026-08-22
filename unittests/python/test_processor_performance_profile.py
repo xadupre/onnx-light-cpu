@@ -202,6 +202,12 @@ class TestPythonWrapping:
         with pytest.raises(AttributeError):
             profile.metadata.schema_version = 2  # frozen dataclass
 
+        with pytest.raises(TypeError):
+            profile.memory["L1"]["single"] = profile.memory["L1"]["single"]  # read-only mapping
+
+        with pytest.raises(TypeError):
+            profile.memory["L1"]["extra"] = profile.memory["L1"]["single"]  # read-only mapping
+
     def test_to_dict_is_json_serializable_and_stable(self):
         with self._patch_binding(_raw_profile_stub()):
             profile = benchmark_processor_performance(

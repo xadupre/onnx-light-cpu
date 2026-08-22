@@ -37,6 +37,8 @@ const char *CompilerName() {
 #endif
 }
 
+} // namespace
+
 const char *MemoryLevelName(MemoryProfileLevel level) {
   switch (level) {
   case MemoryProfileLevel::kL1:
@@ -66,6 +68,8 @@ const char *ComputeElementTypeName(ComputeElementType element_type) {
   }
   return "unknown";
 }
+
+namespace {
 
 MemoryParticipantPolicy ToMemoryPolicy(ProcessorThreadPolicy policy) {
   return policy == ProcessorThreadPolicy::kPhysical ? MemoryParticipantPolicy::kPhysical

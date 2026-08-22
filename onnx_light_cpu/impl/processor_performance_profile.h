@@ -48,6 +48,17 @@ bool ParseProcessorThreadPolicy(const std::string &name, ProcessorThreadPolicy &
 /// ``"physical"``).
 const char *ProcessorThreadPolicyName(ProcessorThreadPolicy policy);
 
+/// Returns the stable spelling of ``level`` (``"L1"``, ``"L2"``, ``"L3"``, or
+/// ``"RAM"``). Shared between the C++ aggregator and the Python binding so
+/// both report the same names.
+const char *MemoryLevelName(MemoryProfileLevel level);
+
+/// Returns the stable lowercase spelling of ``element_type`` (``"float32"``,
+/// ``"float64"``, ``"float16"``, ``"bfloat16"``, or ``"int8"``). Shared
+/// between the C++ aggregator and the Python binding so both report the same
+/// names.
+const char *ComputeElementTypeName(ComputeElementType element_type);
+
 /// Options accepted by ``BenchmarkProcessorPerformance``. Every field is
 /// validated by ``ValidateProcessorProfileOptions`` before any allocation or
 /// timing happens.

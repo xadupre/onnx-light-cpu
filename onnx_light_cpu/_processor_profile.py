@@ -22,7 +22,8 @@ instead of being represented by a zero or fabricated value.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, NamedTuple
+from types import MappingProxyType
+from typing import Any, Mapping, NamedTuple
 
 #: Schema version of the ``to_dict()`` shape returned by
 #: :class:`ProcessorPerformanceProfile`. Mirrors
@@ -284,9 +285,9 @@ class ProcessorPerformanceProfile:
 
     metadata: ProcessorProfileMetadata
     topology: ProcessorProfileTopology
-    memory: dict[str, dict[str, MemoryLevelMeasurement]]
-    compute: dict[str, dict[str, ComputeMeasurement]]
-    roofline: dict[str, dict[str, dict[str, RooflineMeasurement]]]
+    memory: Mapping[str, Mapping[str, MemoryLevelMeasurement]]
+    compute: Mapping[str, Mapping[str, ComputeMeasurement]]
+    roofline: Mapping[str, Mapping[str, Mapping[str, RooflineMeasurement]]]
     warnings: tuple[str, ...] = field(default=())
 
     def to_dict(self) -> dict[str, Any]:
@@ -564,8 +565,22 @@ def benchmark_processor_performance(
     return ProcessorPerformanceProfile(
         metadata=metadata,
         topology=topology,
-        memory=memory,
-        compute=compute,
-        roofline=roofline,
+        memory=MappingProxyType(
+            {level: MappingProxyType(policies) for level, policies in memory.items()}
+        ),
+        compute=MappingProxyType(
+            {
+                element_type: MappingProxyType(policies)
+                for element_type, policies in compute.items()
+            }
+        ),
+        roofline=MappingProxyType(
+            {
+                element_type: MappingProxyType(
+                    {policy: MappingProxyType(levels) for policy, levels in policies.items()}
+                )
+                for element_type, policies in roofline.items()
+            }
+        ),
         warnings=tuple(raw_warnings),
     )

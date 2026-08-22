@@ -36,35 +36,10 @@ namespace onnx_light_cpu {
 
 namespace {
 
-const char *MemoryLevelName(MemoryProfileLevel level) {
-  switch (level) {
-  case MemoryProfileLevel::kL1:
-    return "L1";
-  case MemoryProfileLevel::kL2:
-    return "L2";
-  case MemoryProfileLevel::kL3:
-    return "L3";
-  case MemoryProfileLevel::kRam:
-    return "RAM";
-  }
-  return "unknown";
-}
-
-const char *ComputeElementTypeName(ComputeElementType element_type) {
-  switch (element_type) {
-  case ComputeElementType::kFloat32:
-    return "float32";
-  case ComputeElementType::kFloat64:
-    return "float64";
-  case ComputeElementType::kFloat16:
-    return "float16";
-  case ComputeElementType::kBFloat16:
-    return "bfloat16";
-  case ComputeElementType::kInt8:
-    return "int8";
-  }
-  return "unknown";
-}
+// ``MemoryLevelName`` and ``ComputeElementTypeName`` are declared in
+// ``processor_performance_profile.h`` and defined once in
+// ``processor_performance_profile.cc`` so this binding and the C++
+// aggregator always report the same names.
 
 const char *CpuCacheKindName(CpuCacheKind kind) {
   switch (kind) {
