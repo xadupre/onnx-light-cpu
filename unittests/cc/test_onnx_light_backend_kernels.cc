@@ -38,6 +38,7 @@
 #include <gtest/gtest.h>
 
 #include <cstdint>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -232,9 +233,30 @@ TEST(OnnxLightBackendKernels, NotBenchmarkRunsThroughRuntime) {
   EXPECT_TRUE(failures.empty()) << Describe(failures);
 }
 
+TEST(OnnxLightBackendKernels, UnaryBenchmarkCorporaCoverParallelThresholds) {
+  onnx_light_cpu::backend_test::RegisterCpuKernelBackendTestCases();
+  for (const std::string &op : {"Abs", "Exp", "Log"}) {
+    std::vector<TestCase> cases =
+        CollectTestCases(op, /*include_big=*/false, core::backend_test::TestMode::BENCHMARK);
+    std::set<int64_t> sizes;
+    for (const TestCase &test_case : cases) {
+      if (test_case.name.rfind("test_cpu_", 0) == 0) {
+        ASSERT_EQ(test_case.declared_input_element_counts.size(), 1u);
+        sizes.insert(test_case.declared_input_element_counts[0]);
+      }
+    }
+    EXPECT_GE(sizes.size(), 7u) << op;
+    EXPECT_TRUE(sizes.contains(1048576)) << op;
+    EXPECT_TRUE(sizes.contains(4194304)) << op;
+    const int64_t threshold = op == "Log" ? 131072 : 65536;
+    EXPECT_TRUE(sizes.contains(threshold - 1)) << op;
+    EXPECT_TRUE(sizes.contains(threshold)) << op;
+  }
+}
+
 TEST(OnnxLightBackendKernels, GemmBenchmarkRunsThroughRuntime) {
   // Execute one bounded representative case through the real multithreaded
-  // runtime. The metadata test below validates the complete 48-case benchmark
+  // runtime. The metadata test below validates the complete 72-case benchmark
   // corpus without materializing and executing every large timing workload as
   // part of the unit-test suite.
   const std::vector<std::string> failures = RunCpuBackendCases(
@@ -262,6 +284,14 @@ TEST(OnnxLightBackendKernels, GemmBenchmarkCorpusIsLazyAndCoversPriorityShapes) 
   bool has_float32 = false;
   bool has_float16 = false;
   bool has_bfloat16 = false;
+  bool has_direct_k32 = false;
+  bool has_square_128 = false;
+  bool has_square_1024 = false;
+  bool has_skinny_m_small = false;
+  bool has_skinny_n_small = false;
+  bool has_large_k_1024 = false;
+  bool has_split_k_16384 = false;
+  bool has_transformer_decode = false;
   for (const TestCase &test_case : cases) {
     if (test_case.name.rfind("test_cpu_gemm_", 0) != 0) {
       continue;
@@ -287,9 +317,18 @@ TEST(OnnxLightBackendKernels, GemmBenchmarkCorpusIsLazyAndCoversPriorityShapes) 
     has_float32 |= test_case.name.find("_float32_") != std::string::npos;
     has_float16 |= test_case.name.find("_float16_") != std::string::npos;
     has_bfloat16 |= test_case.name.find("_bfloat16_") != std::string::npos;
+    has_direct_k32 |= test_case.name.find("direct_k32") != std::string::npos;
+    has_square_128 |= test_case.name.find("square_128") != std::string::npos;
+    has_square_1024 |= test_case.name.find("square_1024") != std::string::npos;
+    has_skinny_m_small |= test_case.name.find("skinny_m_small") != std::string::npos;
+    has_skinny_n_small |= test_case.name.find("skinny_n_small") != std::string::npos;
+    has_large_k_1024 |= test_case.name.find("large_k_1024") != std::string::npos;
+    has_split_k_16384 |= test_case.name.find("split_k_16384") != std::string::npos;
+    has_transformer_decode |=
+        test_case.name.find("transformer_projection_decode") != std::string::npos;
   }
-  // 16 prepared shapes, each registered for float32, float16 and bfloat16.
-  EXPECT_EQ(cpu_cases, 48u);
+  // 24 prepared shapes, each registered for float32, float16 and bfloat16.
+  EXPECT_EQ(cpu_cases, 72u);
   EXPECT_TRUE(has_constant_b);
   EXPECT_TRUE(has_direct);
   EXPECT_TRUE(has_skinny_m);
@@ -304,6 +343,14 @@ TEST(OnnxLightBackendKernels, GemmBenchmarkCorpusIsLazyAndCoversPriorityShapes) 
   EXPECT_TRUE(has_float32);
   EXPECT_TRUE(has_float16);
   EXPECT_TRUE(has_bfloat16);
+  EXPECT_TRUE(has_direct_k32);
+  EXPECT_TRUE(has_square_128);
+  EXPECT_TRUE(has_square_1024);
+  EXPECT_TRUE(has_skinny_m_small);
+  EXPECT_TRUE(has_skinny_n_small);
+  EXPECT_TRUE(has_large_k_1024);
+  EXPECT_TRUE(has_split_k_16384);
+  EXPECT_TRUE(has_transformer_decode);
 }
 
 } // namespace

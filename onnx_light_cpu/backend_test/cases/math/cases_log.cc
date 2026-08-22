@@ -68,7 +68,11 @@ void RegisterCpuLogCases(std::vector<TestCase> &registry, TestMode mode) {
     // (matching onnx-light's own ``Log`` benchmark), so some values are negative
     // and map to NaN. That is fine for a *timing* case, which is not compared
     // for numeric correctness.
-    ExpectBenchmarkUnaryFloat("Log", log_kernel, "test_cpu_log_benchmark", opset, registry);
+    for (const int64_t size : {1024, 65536, 131071, 131072, 262144, 1048576, 4194304}) {
+      ExpectBenchmarkUnaryFloat("Log", log_kernel,
+                                "test_cpu_log_n" + std::to_string(size) + "_benchmark", opset,
+                                registry, true, true, size);
+    }
     return;
   }
 
