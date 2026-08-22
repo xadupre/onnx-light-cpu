@@ -5,6 +5,7 @@
 #include "onnx_light_cpu/kernels/logical/not_kernel.h"
 
 #include "onnx_light_cpu/impl/logical/logical_kernels.h"
+#include "onnx_light_cpu/kernels/kernel_registration.h"
 #include "onnx_light_cpu/kernels/kernel_usage.h"
 
 #include "onnx_core/runtime/kernels/kernel_dispatch_table.h"
@@ -78,7 +79,13 @@ void RegisterNotKernel() {
   };
   // Empty domain -> normalised to the default ONNX domain, overriding the
   // built-in Not entry with the SIMD-accelerated kernel for the CPU device.
-  rt_ns::RegisterKernelFn("", "Not", sym_ns::Device::kCPU, std::move(factory));
+  KernelRegistration info;
+  info.domain = "";
+  info.op_type = "Not";
+  info.device = sym_ns::Device::kCPU;
+  info.kernel_name = NotKernel::kName;
+  info.types = {DataType::BOOL};
+  RegisterKernel(std::move(info), std::move(factory));
 }
 
 } // namespace onnx_light_cpu

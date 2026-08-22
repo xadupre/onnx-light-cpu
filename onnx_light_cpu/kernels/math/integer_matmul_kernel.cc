@@ -6,6 +6,7 @@
 
 #include "onnx_light_cpu/impl/execution.h"
 #include "onnx_light_cpu/impl/math/gemm/vnni/integer_gemm_vnni.h"
+#include "onnx_light_cpu/kernels/kernel_registration.h"
 #include "onnx_light_cpu/kernels/kernel_usage.h"
 
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2_INTEGER
@@ -483,7 +484,15 @@ void RegisterIntegerMatMulKernels() {
     kernel->set_node(node);
     return kernel;
   };
-  rt_ns::RegisterKernelFn("", "MatMulInteger", sym_ns::Device::kCPU, std::move(matmul_integer));
+  {
+    KernelRegistration info;
+    info.domain = "";
+    info.op_type = "MatMulInteger";
+    info.device = sym_ns::Device::kCPU;
+    info.kernel_name = MatMulIntegerKernel::kName;
+    info.types = {DataType::INT8, DataType::UINT8};
+    RegisterKernel(std::move(info), std::move(matmul_integer));
+  }
 
   NodeKernelFn qlinear_matmul = [](const NodeProto &node,
                                    RuntimeContext &rt) -> std::unique_ptr<rt_ns::KernelBase> {
@@ -491,7 +500,15 @@ void RegisterIntegerMatMulKernels() {
     kernel->set_node(node);
     return kernel;
   };
-  rt_ns::RegisterKernelFn("", "QLinearMatMul", sym_ns::Device::kCPU, std::move(qlinear_matmul));
+  {
+    KernelRegistration info;
+    info.domain = "";
+    info.op_type = "QLinearMatMul";
+    info.device = sym_ns::Device::kCPU;
+    info.kernel_name = QLinearMatMulKernel::kName;
+    info.types = {DataType::INT8, DataType::UINT8};
+    RegisterKernel(std::move(info), std::move(qlinear_matmul));
+  }
 }
 
 } // namespace onnx_light_cpu

@@ -1,0 +1,137 @@
+// Copyright (c) ONNX Project Contributors
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include "onnx_light_cpu/kernels/kernel_registration.h"
+
+#include "onnx_light_cpu/kernels/register_kernels.h"
+
+#include "onnx_core/runtime/kernels/kernel_dispatch_table.h"
+
+#include <gtest/gtest.h>
+
+#include <algorithm>
+#include <set>
+#include <stdexcept>
+#include <string>
+#include <tuple>
+#include <vector>
+
+namespace {
+
+namespace rt_ns = ONNX_LIGHT_NAMESPACE::core::runtime;
+namespace sym_ns = ONNX_LIGHT_NAMESPACE::core::symbolic;
+
+using onnx_light_cpu::KernelRegistration;
+
+// ``CollectRegisteredKernels`` must report one record for every ``op_type``
+// that ``RegisterAllKernels`` installs into onnx-light's shared dispatch
+// table (see ``kernel_usage.cc``'s hand-maintained ``RegisteredKernelNames``
+// list, which this inventory is meant to eventually replace).
+TEST(KernelRegistration, CollectionReportsEveryActualRegistration) {
+  const std::vector<KernelRegistration> records = onnx_light_cpu::CollectRegisteredKernels();
+
+  std::set<std::string> op_types;
+  for (const KernelRegistration &record : records) {
+    op_types.insert(record.op_type);
+    EXPECT_EQ(record.domain, "ai.onnx");
+    EXPECT_EQ(record.device, sym_ns::Device::kCPU);
+    EXPECT_FALSE(record.kernel_name.empty());
+    EXPECT_FALSE(record.types.empty());
+  }
+
+  const std::set<std::string> expected_op_types = {
+      "Abs", "Exp", "Log", "Gemm", "MatMul", "MatMulInteger", "QLinearMatMul", "Not",
+  };
+  EXPECT_EQ(op_types, expected_op_types);
+  EXPECT_EQ(records.size(), expected_op_types.size());
+}
+
+// Collection returns records already sorted by
+// ``(domain, op_type, device, kernel_name)``, so callers never need to sort
+// (or otherwise depend on registration order) themselves.
+TEST(KernelRegistration, CollectionIsDeterministicallyOrdered) {
+  const std::vector<KernelRegistration> first = onnx_light_cpu::CollectRegisteredKernels();
+  const std::vector<KernelRegistration> second = onnx_light_cpu::CollectRegisteredKernels();
+
+  ASSERT_EQ(first.size(), second.size());
+  for (std::size_t i = 0; i < first.size(); ++i) {
+    EXPECT_EQ(first[i].domain, second[i].domain);
+    EXPECT_EQ(first[i].op_type, second[i].op_type);
+    EXPECT_EQ(first[i].device, second[i].device);
+    EXPECT_EQ(first[i].kernel_name, second[i].kernel_name);
+  }
+
+  std::vector<std::tuple<std::string, std::string, sym_ns::Device, std::string>> sort_keys;
+  sort_keys.reserve(first.size());
+  for (const KernelRegistration &record : first) {
+    sort_keys.emplace_back(record.domain, record.op_type, record.device, record.kernel_name);
+  }
+  EXPECT_TRUE(std::is_sorted(sort_keys.begin(), sort_keys.end()));
+}
+
+// Collecting the inventory must never install, replace, or execute a kernel:
+// it must not mutate onnx-light's shared ``KernelDispatchTable`` at all.
+TEST(KernelRegistration, CollectionDoesNotMutateDispatchTable) {
+  rt_ns::KernelDispatchTable(); // Ensure the table exists before snapshotting.
+  const std::size_t before = rt_ns::KernelDispatchTable().size();
+
+  const std::vector<KernelRegistration> records = onnx_light_cpu::CollectRegisteredKernels();
+  EXPECT_FALSE(records.empty());
+
+  EXPECT_EQ(rt_ns::KernelDispatchTable().size(), before);
+}
+
+// A repeated ``(domain, op_type, device)`` registration within a single pass
+// must fail explicitly rather than silently overwrite the earlier entry or
+// the collected inventory. Uses ``KernelRegistrationScope`` directly (as
+// ``RegisterAllKernels``/``CollectRegisteredKernels`` do internally) to bound
+// both calls to the same pass; two independent top-level ``RegisterKernel``
+// calls made outside any pass are, by contrast, each checked in isolation.
+TEST(KernelRegistration, RejectsDuplicateRegistrationWithinOnePass) {
+  std::vector<KernelRegistration> inventory;
+  onnx_light_cpu::KernelRegistrationScope scope(&inventory);
+
+  KernelRegistration first;
+  first.domain = "";
+  first.op_type = "Abs";
+  first.device = sym_ns::Device::kCPU;
+  first.kernel_name = "onnx_light_cpu::Abs";
+  onnx_light_cpu::RegisterKernel(
+      first,
+      [](const ONNX_LIGHT_NAMESPACE::NodeProto &,
+         rt_ns::RuntimeContext &) -> std::unique_ptr<rt_ns::KernelBase> { return nullptr; });
+  ASSERT_EQ(inventory.size(), 1u);
+
+  KernelRegistration duplicate = first;
+  EXPECT_THROW(onnx_light_cpu::RegisterKernel(
+                   duplicate,
+                   [](const ONNX_LIGHT_NAMESPACE::NodeProto &, rt_ns::RuntimeContext &)
+                       -> std::unique_ptr<rt_ns::KernelBase> { return nullptr; }),
+               std::invalid_argument);
+  // The failed duplicate must not have been appended to the inventory.
+  EXPECT_EQ(inventory.size(), 1u);
+}
+
+// Normal-mode registration (``RegisterAllKernels``) must keep installing the
+// same kernels into the shared dispatch table exactly as before, so runtime
+// dispatch is unaffected by routing registrations through the new helper.
+TEST(KernelRegistration, NormalModeStillInstallsKernelsIntoDispatchTable) {
+  onnx_light_cpu::RegisterAllKernels();
+  const auto &table = rt_ns::KernelDispatchTable();
+  for (const std::string &key :
+       {"ai.onnx:Abs", "ai.onnx:Exp", "ai.onnx:Log", "ai.onnx:Gemm", "ai.onnx:MatMul",
+        "ai.onnx:MatMulInteger", "ai.onnx:QLinearMatMul", "ai.onnx:Not"}) {
+    EXPECT_NE(table.find(key), table.end()) << key;
+  }
+}
+
+// ``RegisterAllKernels`` itself must not trip its own duplicate check: it is
+// expected to be callable more than once (e.g. re-registration during tests
+// or repeated Python imports).
+TEST(KernelRegistration, RegisterAllKernelsCanBeCalledRepeatedly) {
+  EXPECT_NO_THROW(onnx_light_cpu::RegisterAllKernels());
+  EXPECT_NO_THROW(onnx_light_cpu::RegisterAllKernels());
+}
+
+} // namespace
