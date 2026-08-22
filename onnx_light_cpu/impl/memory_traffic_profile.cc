@@ -537,6 +537,8 @@ MemoryBandwidthResult MeasureMemoryBandwidth(MemoryProfileLevel level, MemoryTra
     } else {
       participant_count = 1;
     }
+  } else if (options.explicit_single_affinity.has_value()) {
+    affinity_pinned = SetCurrentThreadAffinity(*options.explicit_single_affinity);
   }
 
   const MemoryWorkingSet working_set = SelectMemoryWorkingSet(
@@ -630,6 +632,8 @@ MemoryLatencyResult MeasureMemoryLatency(MemoryProfileLevel level, MemoryPartici
     } else {
       participant_count = 1;
     }
+  } else if (options.explicit_single_affinity.has_value()) {
+    affinity_pinned = SetCurrentThreadAffinity(*options.explicit_single_affinity);
   }
 
   const MemoryWorkingSet working_set = SelectMemoryWorkingSet(

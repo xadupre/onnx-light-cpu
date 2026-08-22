@@ -12,11 +12,13 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
 #include "onnx_light_cpu/impl/arm_simd_level.h"
 #include "onnx_light_cpu/impl/simd_level.h"
+#include "onnx_light_cpu/impl/thread_topology.h"
 
 namespace onnx_light_cpu {
 
@@ -74,6 +76,12 @@ struct ComputeProfileOptions {
   /// Minimum wall-clock duration, per recorded sample, used to size the
   /// number of internal passes so timer resolution stays negligible.
   double minimum_duration_ms = 20.0;
+  /// Explicit logical-processor affinity used to pin the lone participant of
+  /// the ``kSingle`` policy. Empty (the default) leaves the calling thread
+  /// unpinned, matching prior behavior. Ignored by the ``kPhysical`` policy,
+  /// which continues to select its own affinities from the process-visible
+  /// topology.
+  std::optional<CpuAffinity> explicit_single_affinity;
 };
 
 /// Pure, timing-independent operation accounting for one arithmetic kernel.

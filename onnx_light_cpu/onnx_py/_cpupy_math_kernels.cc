@@ -29,7 +29,10 @@ NB_MODULE(_cpukernels, m) {
   m.doc() = "Python bindings for onnx-light-cpu: exposes SIMD introspection helpers for the "
             "highly optimized CPU kernels (Abs, Exp, Log, Gemm, Not) with "
             "AVX/AVX2/AVX-512 dispatch. The kernels themselves are only "
-            "reachable through onnx-light's runtime after registration.";
+            "reachable through onnx-light's runtime after registration. Also exposes the "
+            "versioned processor performance profile (benchmark_processor_performance_raw), "
+            "which links neither onnx-light nor any kernel dispatch table.";
 
   onnx_light_cpu::RegisterMathKernels(m);
+  onnx_light_cpu::RegisterProcessorPerformanceProfile(m);
 }
