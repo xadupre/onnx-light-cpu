@@ -6,15 +6,19 @@ Gemm and MatMul Performance Roadmap
 **in progress**
 
 PR `#307 <https://github.com/xadupre/onnx-light-cpu/pull/307>`_
-delivered the shared MatMul kernel and final parity corpus. The roadmap remains
-open until the dedicated-machine PR10.3, PR10.4, and PR10.5 measurements
-satisfy their published gates.
+delivered the shared MatMul kernel and final parity corpus. The implementation
+and correctness foundations are complete, but the roadmap remains open until
+the dedicated-machine PR10.3, PR10.4, and PR10.5 measurements satisfy their
+published gates. Issues #333, #334, and #335 were closed without that evidence;
+their closure does not complete any gate.
 
-Open gates
-----------
+Completion gates
+----------------
 
-Only three issues remain open. Each implementation gate owns both its remaining
-tuning and its dedicated-machine evidence so the work is not fragmented:
+Exactly three new issues own the remaining work. Each gate owns its
+measurement-driven fixes, complete reruns, and committed raw evidence so the
+work cannot be declared complete after a tooling or documentation-only PR.
+Missing hardware or dependencies means **blocked**, not completed.
 
 .. list-table::
    :header-rows: 1
@@ -23,17 +27,21 @@ tuning and its dedicated-machine evidence so the work is not fragmented:
    * - Gate
      - Remaining work
      - Closure evidence
-   * - `#277 <https://github.com/xadupre/onnx-light-cpu/issues/277>`_ /
-       `#333 <https://github.com/xadupre/onnx-light-cpu/issues/333>`_
-     - Use the tuning tool to select blocking/participant values and fix
-       physical-core scaling; no hard-coded machine thresholds.
-     - Publish passing dedicated x86/ARM FP16 parity and BF16 throughput.
-   * - `#281 <https://github.com/xadupre/onnx-light-cpu/issues/281>`_
-     - Close remaining integer and compact-format end-to-end gaps.
-     - Publish passing dedicated x86/ARM integer/compact results.
-   * - `#286 <https://github.com/xadupre/onnx-light-cpu/issues/286>`_
-     - Combine Gemm, MatMul, batched paths, platforms, and supported types.
-     - Publish the final raw report after #277 and #281 close.
+   * - `#341 <https://github.com/xadupre/onnx-light-cpu/issues/341>`_
+     - Complete FP16/BF16 tuning and dedicated x86/ARM one-thread and
+       physical-core sweeps.
+     - Passing FP16 parity plus BF16 correctness and isolated throughput per
+       ISA, with committed raw JSON.
+   * - `#340 <https://github.com/xadupre/onnx-light-cpu/issues/340>`_
+     - Complete integer/compact tuning and dedicated x86/ARM one-thread and
+       physical-core sweeps.
+     - Passing ORT-supported integer parity plus compact-format correctness and
+       throughput per ISA, with committed raw JSON.
+   * - `#342 <https://github.com/xadupre/onnx-light-cpu/issues/342>`_
+     - After #340 and #341, rerun the complete Gemm/MatMul matrix from the final
+       commit and fix every failing case.
+     - Final per-platform raw JSON passes ``--enforce``; only then may this
+       roadmap change to **completed**.
 
 Objective
 ---------
@@ -1325,8 +1333,9 @@ fallbacks are ordered. Completed rows remain visible so scope is not lost.
        median with no priority case below 0.9x where the type is supported.
        The PR contains measurement-driven tuning only.
      - PR10.1
-     - Closed (`#333 <https://github.com/xadupre/onnx-light-cpu/issues/333>`_,
-       replacing #277). The `first tuning pass in #267
+     - Open (`#341 <https://github.com/xadupre/onnx-light-cpu/issues/341>`_).
+       The earlier #333 was closed without the required dedicated-machine
+       parity evidence. The `first tuning pass in #267
        <https://github.com/xadupre/onnx-light-cpu/pull/267>`_ raises the 18-case
        median from 0.341x to 0.479x ONNX Runtime and the minimum from 0.138x to
        0.237x on a pinned AVX2/FMA/F16C i7-13800H thread. The `second tuning
@@ -1339,15 +1348,16 @@ fallbacks are ordered. Completed rows remain visible so scope is not lost.
        ``compact_gemm_throughput`` through the tunable ``GemmHalfPlan`` and
        runs pinned one-thread/two-physical-core ``MC``/``NC``/``KC`` sweeps on
        an isolated x86 host, finding every setting within noise of the
-       automatic default, closing #333.
+       automatic default. These diagnostic results do not close #341.
    * - Roadmap PR10.4
      - Integer and compact-format performance gate.
      - Dedicated-machine results are published per type and ISA. Types
        supported by ONNX Runtime reach at least 1.0x median with no priority
        case below 0.9x; unsupported types publish correctness and throughput.
      - PR10.2
-     - Closed (`#334 <https://github.com/xadupre/onnx-light-cpu/issues/334>`_,
-       replacing #281). The `first tuning pass in #274
+     - Open (`#340 <https://github.com/xadupre/onnx-light-cpu/issues/340>`_).
+       The earlier #334 was closed without the required dedicated-machine
+       end-to-end parity evidence. The `first tuning pass in #274
        <https://github.com/xadupre/onnx-light-cpu/pull/274>`_ adds the integer
        parity and compact throughput instruments plus an exact AVX2 UINT8 x
        INT8 dot product used by both byte and packed-4-bit GEMM. On the
@@ -1359,7 +1369,8 @@ fallbacks are ordered. Completed rows remain visible so scope is not lost.
        `third pass (#338) <https://github.com/xadupre/onnx-light-cpu/pull/338>`_
        fixes a measured INT4/UINT4 unpacking regression (``skinny_n`` rises
        from 0.49 to 12.70 GOPS) and publishes complete raw JSON samples for
-       INT8, INT4, E4M3, and E5M2 alongside FP16/BF16, closing #334.
+       INT8, INT4, E4M3, and E5M2 alongside FP16/BF16. These isolated results
+       do not close #340.
    * - Roadmap PR10.5
      - Final blocking GEMM parity gate.
      - Raw dedicated-machine results cover Gemm, shared MatMul, batched paths,
@@ -1369,9 +1380,9 @@ fallbacks are ordered. Completed rows remain visible so scope is not lost.
        fails. The separate :doc:`Attention roadmap <2026_08_attention>` starts
        after this gate closes.
      - PR10.3, PR10.4
-     - Open (`#335 <https://github.com/xadupre/onnx-light-cpu/issues/335>`_,
-       replacing #286), blocked on dedicated-machine ONNX Runtime parity
-       evidence; see the PR10.5 final-pass record below.
+     - Open (`#342 <https://github.com/xadupre/onnx-light-cpu/issues/342>`_),
+       blocked on #340 and #341. The earlier #335 was closed by a documentation
+       PR that explicitly did not run the gate; see the PR10.5 record below.
 
 Roadmap PR10.5 is the final Gemm and MatMul roadmap PR.
 
@@ -1387,9 +1398,10 @@ physical-core affinity and thread count for each priority machine; pass
 Roadmap PR10.5 final validation pass
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-With #333 and #334 both closed, this pass runs the final regression checks
-available in this sandbox and confirms none of the fixes from PR10.3/PR10.4
-regressed the shared GEMM implementation. ``test_gemm_kernel`` (65 passed, 2
+After #333 and #334 were closed without their required evidence, this pass ran
+the regression checks available in its sandbox and confirmed none of the fixes
+from PR10.3/PR10.4 regressed the shared GEMM implementation.
+``test_gemm_kernel`` (65 passed, 2
 skipped for missing AVX-512FP16/AMX-BF16 hardware) and ``test_gemm_plan`` (31
 passed) build and pass cleanly against a fresh AVX-512/Zen4 configuration.
 The isolated ``gemm_throughput`` and ``compact_gemm_throughput`` drivers also
@@ -1488,11 +1500,11 @@ kernel change is made from this pass. The
 <data/2026_08_gemm_fp16_bf16_compact_physical_cores.json>` record every sample
 alongside the metadata above.
 
-This pass does not close #333: the sandbox running it has no ``onnxruntime``
+This pass does not close #341: the sandbox running it has no ``onnxruntime``
 or ``onnx-light`` install, so it cannot reproduce the FLOAT16-vs-ONNX-Runtime
 ``benchmark_gemm_parity.py`` median/minimum gate, and it has no ARM hardware.
 The isolated instrument above is ready for the required dedicated x86 and ARM
-one-thread and physical-core sweeps; #333 stays open until those pinned
+one-thread and physical-core sweeps; #341 stays open until those pinned
 ``benchmark_gemm_parity.py`` FP16 parity runs reach the 1.0x median / 0.9x
 minimum gates and BF16 correctness and isolated throughput are published per
 ISA.
@@ -1503,7 +1515,7 @@ not implement CPU BFLOAT16 Gemm on this host, so BFLOAT16 remains an isolated
 throughput measurement rather than a parity ratio. ARM results are also still
 required.
 
-The remaining PR10.3 order, tracked entirely by #277 and #333, is:
+The remaining PR10.3 order, tracked entirely by #341, is:
 
 #. Fix physical-core scaling. A ten-thread diagnostic corpus reaches only
    0.309x median after the tiny split-K correction, with high variance and a
@@ -1512,8 +1524,8 @@ The remaining PR10.3 order, tracked entirely by #277 and #333, is:
    retuning MC/NC/KC.
 #. Run dedicated x86 and ARM sweeps. Publish one-thread and physical-core raw
    samples, dispersion, FP16 parity, and isolated BF16 throughput per ISA. Keep
-   #277 and #333 open until every supported platform reaches the stated 1.0x
-   median and 0.9x minimum gates.
+   #341 open until every supported platform reaches the stated 1.0x median and
+   0.9x minimum gates.
 
 Roadmap PR10.4 tuning record
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1591,7 +1603,7 @@ above alongside INT8, E4M3, and E5M2 samples and the same hardware/compiler/
 ISA metadata as the FP16/BF16 reports.
 
 This pass remains diagnostic, not the dedicated-machine evidence required to
-close #281: the sandbox running it has no ``onnxruntime`` or ``onnx-light``
+close #340: the sandbox running it has no ``onnxruntime`` or ``onnx-light``
 install, so ``benchmark_integer_gemm_parity.py`` and
 ``benchmark_gemm_parity.py --operator qlinearmatmul`` cannot be run to
 reproduce the ONNX Runtime ``MatMulInteger``/``QLinearMatMul`` median/minimum
@@ -1600,7 +1612,7 @@ in the isolated INT8, INT4, E4M3, or E5M2 throughput on this host; tuning the
 ``blocking``/``compact_blocking`` knobs is not applicable to the integer path,
 which has no plan-owned blocking parameters (unlike ``GemmHalfPlan``).
 
-The remaining PR10.4 work, tracked entirely by #281, is to run pinned
+The remaining PR10.4 work, tracked entirely by #340, is to run pinned
 dedicated x86 and ARM one-thread and physical-core
 ``benchmark_integer_gemm_parity.py`` and ``benchmark_gemm_parity.py`` sweeps
 and publish their raw samples, dispersion, and complete environment metadata.
