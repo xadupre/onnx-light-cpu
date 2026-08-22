@@ -28,7 +28,7 @@ else:
 root = None
 for candidate in root_candidates:
     for parent in [candidate, *candidate.parents]:
-        if (parent / runner_name).exists():
+        if (parent / runner_name).exists() and (parent / "CMakeLists.txt").exists():
             root = parent
             break
     if root is not None:
