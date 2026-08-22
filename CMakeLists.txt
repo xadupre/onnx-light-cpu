@@ -942,6 +942,7 @@ if(ONNX_LIGHT_CPU_INSTALL)
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 
     install(FILES
+        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/kernels/kernel_registration.h"
         "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/kernels/register_kernels.h"
         DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/onnx_light_cpu/kernels")
 

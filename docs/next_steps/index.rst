@@ -90,6 +90,12 @@ to sort the table.
       - A measured machine profile supplies the cost model for Roofline
         analysis, kernel tuning, and future optimal-transport GEMM planning.
     * - Planned
+      - :doc:`Processor performance profile <2026/2026_08_processor_performance_profile>`
+      - Measure effective L1/L2/L3/RAM bandwidth and latency plus sustained
+        arithmetic throughput through one explicit Python API.
+      - A measured machine profile supplies the cost model for Roofline
+        analysis, kernel tuning, and future optimal-transport GEMM planning.
+    * - Planned
       - :doc:`Registered kernel documentation <2026/2026_08_registered_kernel_documentation>`
       - Derive the Python inventory and generated reference from actual C++
         registrations.

@@ -5,6 +5,7 @@
 #include "onnx_light_cpu/kernels/math/exp_log_kernel.h"
 
 #include "onnx_light_cpu/impl/math/math_kernels.h"
+#include "onnx_light_cpu/kernels/kernel_registration.h"
 #include "onnx_light_cpu/kernels/kernel_usage.h"
 
 #include "onnx_core/runtime/kernels/cast_helper.h"
@@ -152,7 +153,13 @@ void RegisterExpKernel() {
   };
   // Empty domain -> normalised to the default ONNX domain, overriding the
   // built-in Exp entry with the SIMD-accelerated kernel for the CPU device.
-  rt_ns::RegisterKernelFn("", "Exp", sym_ns::Device::kCPU, std::move(factory));
+  KernelRegistration info;
+  info.domain = "";
+  info.op_type = "Exp";
+  info.device = sym_ns::Device::kCPU;
+  info.kernel_name = ExpKernel::kName;
+  info.types = {DataType::FLOAT, DataType::DOUBLE, DataType::FLOAT16, DataType::BFLOAT16};
+  RegisterKernel(std::move(info), std::move(factory));
 }
 
 void RegisterLogKernel() {
@@ -164,7 +171,13 @@ void RegisterLogKernel() {
   };
   // Empty domain -> normalised to the default ONNX domain, overriding the
   // built-in Log entry with the SIMD-accelerated kernel for the CPU device.
-  rt_ns::RegisterKernelFn("", "Log", sym_ns::Device::kCPU, std::move(factory));
+  KernelRegistration info;
+  info.domain = "";
+  info.op_type = "Log";
+  info.device = sym_ns::Device::kCPU;
+  info.kernel_name = LogKernel::kName;
+  info.types = {DataType::FLOAT, DataType::DOUBLE, DataType::FLOAT16, DataType::BFLOAT16};
+  RegisterKernel(std::move(info), std::move(factory));
 }
 
 } // namespace onnx_light_cpu

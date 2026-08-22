@@ -346,3 +346,4 @@ The first conservative tile estimate is:
 This roadmap only supplies measured inputs and their uncertainty. It does not
 select GEMM tiles, infer overlap, or claim that the Roofline maximum is an exact
 execution-time predictor.
+

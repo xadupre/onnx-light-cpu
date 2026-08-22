@@ -5,6 +5,7 @@
 #include "onnx_light_cpu/kernels/math/abs_kernel.h"
 
 #include "onnx_light_cpu/impl/math/math_kernels.h"
+#include "onnx_light_cpu/kernels/kernel_registration.h"
 #include "onnx_light_cpu/kernels/kernel_usage.h"
 
 #include "onnx_core/runtime/kernels/cast_helper.h"
@@ -130,7 +131,14 @@ void RegisterAbsKernel() {
   };
   // Empty domain -> normalised to the default ONNX domain, overriding the
   // built-in Abs entry with the SIMD-accelerated kernel for the CPU device.
-  rt_ns::RegisterKernelFn("", "Abs", sym_ns::Device::kCPU, std::move(factory));
+  KernelRegistration info;
+  info.domain = "";
+  info.op_type = "Abs";
+  info.device = sym_ns::Device::kCPU;
+  info.kernel_name = AbsKernel::kName;
+  info.types = {DataType::FLOAT,   DataType::DOUBLE,   DataType::INT32, DataType::INT64,
+                DataType::FLOAT16, DataType::BFLOAT16, DataType::INT8,  DataType::INT16};
+  RegisterKernel(std::move(info), std::move(factory));
 }
 
 } // namespace onnx_light_cpu
