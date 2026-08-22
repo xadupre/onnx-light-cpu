@@ -212,7 +212,7 @@ TEST(OnnxLightBackendKernels, TreeEnsembleBenchmarkCoversPriorityDimensions) {
   std::set<std::string> names;
   for (const TestCase &test_case : cases) {
     if (test_case.name.rfind("test_cpu_treeensemble_", 0) == 0) {
-      names.insert(test_case.name);
+      EXPECT_TRUE(names.insert(test_case.name).second) << test_case.name;
     }
   }
   EXPECT_EQ(names.size(), 5U);
@@ -221,6 +221,95 @@ TEST(OnnxLightBackendKernels, TreeEnsembleBenchmarkCoversPriorityDimensions) {
   EXPECT_TRUE(names.contains("test_cpu_treeensemble_t1000_f1024_b32_benchmark"));
   EXPECT_TRUE(names.contains("test_cpu_treeensemble_t10000_f4096_b1_benchmark"));
   EXPECT_TRUE(names.contains("test_cpu_treeensemble_t10000_f4096_b128_benchmark"));
+}
+
+// Guards the invariant fixed for GEMM benchmark cases (#369/#371): every
+// TreeEnsemble/TreeEnsembleRegressor/TreeEnsembleClassifier backend test case
+// name must be unique within its operator and must encode the attribute(s)
+// that distinguish it from its siblings (value type / branch mode / aggregate
+// / post-transform for the TreeEnsemble v5 corpus, the input element type for
+// TreeEnsembleRegressor, and the label element type for
+// TreeEnsembleClassifier).
+TEST(OnnxLightBackendKernels, TreeEnsembleCaseNamesAreUniqueAndReflectAttributes) {
+  onnx_light_cpu::backend_test::RegisterCpuKernelBackendTestCases();
+
+  {
+    const std::vector<TestCase> cases =
+        CollectTestCases("TreeEnsemble", /*include_big=*/false, core::backend_test::TestMode::TEST);
+    std::set<std::string> names;
+    for (const TestCase &test_case : cases) {
+      if (test_case.name.rfind("test_cpu_treeensemble_v5_", 0) != 0) {
+        continue;
+      }
+      EXPECT_TRUE(names.insert(test_case.name).second) << test_case.name;
+    }
+    EXPECT_EQ(names.size(), 36U);
+  }
+
+  {
+    const std::vector<TestCase> cases = CollectTestCases(
+        "TreeEnsembleRegressor", /*include_big=*/false, core::backend_test::TestMode::TEST);
+    std::set<std::string> names;
+    for (const TestCase &test_case : cases) {
+      if (test_case.name.rfind("test_cpu_treeensembleregressor_v5_", 0) != 0) {
+        continue;
+      }
+      EXPECT_TRUE(names.insert(test_case.name).second) << test_case.name;
+      const int dtype_tags = static_cast<int>(test_case.name.ends_with("_float")) +
+                             static_cast<int>(test_case.name.ends_with("_double")) +
+                             static_cast<int>(test_case.name.ends_with("_int32")) +
+                             static_cast<int>(test_case.name.ends_with("_int64"));
+      EXPECT_EQ(dtype_tags, 1) << test_case.name;
+    }
+    EXPECT_EQ(names.size(), 4U);
+  }
+
+  {
+    const std::vector<TestCase> cases = CollectTestCases(
+        "TreeEnsembleClassifier", /*include_big=*/false, core::backend_test::TestMode::TEST);
+    std::set<std::string> names;
+    for (const TestCase &test_case : cases) {
+      if (test_case.name.rfind("test_cpu_treeensembleclassifier_v5_", 0) != 0) {
+        continue;
+      }
+      EXPECT_TRUE(names.insert(test_case.name).second) << test_case.name;
+      const int label_tags = static_cast<int>(test_case.name.ends_with("_strings")) +
+                             static_cast<int>(test_case.name.ends_with("_int64"));
+      EXPECT_EQ(label_tags, 1) << test_case.name;
+    }
+    EXPECT_EQ(names.size(), 2U);
+  }
+}
+
+// Every onnx-light-cpu backend test case name (across every registered
+// operator, not just TreeEnsemble) must be unique within its ``TestMode``:
+// onnx-light's registry keys cases by name alone, so a collision between two
+// operators would silently shadow one of the cases.
+TEST(OnnxLightBackendKernels, AllCpuBackendCaseNamesAreGloballyUnique) {
+  onnx_light_cpu::backend_test::RegisterCpuKernelBackendTestCases();
+  for (core::backend_test::TestMode mode :
+       {core::backend_test::TestMode::TEST, core::backend_test::TestMode::BENCHMARK}) {
+    const std::vector<TestCase> cases =
+        CollectTestCases(/*op_type=*/"", /*include_big=*/false, mode);
+    std::vector<std::string> cpu_case_names;
+    for (const TestCase &test_case : cases) {
+      if (test_case.name.rfind("test_cpu_", 0) != 0) {
+        continue;
+      }
+      cpu_case_names.push_back(test_case.name);
+    }
+    EXPECT_GT(cpu_case_names.size(), 0U);
+
+    const std::set<std::string> names(cpu_case_names.begin(), cpu_case_names.end());
+    if (names.size() != cpu_case_names.size()) {
+      // Only pay the per-name insert cost to pinpoint the offending
+      // duplicate(s) when a collision was actually detected above.
+      std::set<std::string> seen;
+      for (const std::string &name : cpu_case_names) {
+        EXPECT_TRUE(seen.insert(name).second) << name;
+      }
+    }
+  }
 }
 
 // Benchmark-mode cases: registered per kernel alongside the correctness cases.
