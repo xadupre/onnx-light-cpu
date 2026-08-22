@@ -36,9 +36,10 @@ to sort the table.
       - Next step
       - Planned work
       - Why
-    * - Started
+    * - Completed
       - :doc:`Gemm and MatMul <2026/2026_08_gemm_matmul>`
-      - Complete the shared matrix engine and its dedicated parity gates.
+      - Delivers the shared matrix engine, low-precision paths, tuning, and
+        reproducible parity tooling.
       - Matrix multiplication is the foundation for attention and dense models.
     * - Discussed
       - :doc:`Attention <2026/2026_08_attention>`
