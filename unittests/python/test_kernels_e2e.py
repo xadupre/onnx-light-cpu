@@ -41,11 +41,13 @@ from onnx_light.onnx.backend import collect_test_cases
 from onnx_light.onnx.reference import ReferenceEvaluator
 
 from onnx_light_cpu import (
+    RegisteredKernel,
     clear_used_kernel_names,
     has_backend_test_cases,
     register_backend_test_cases,
     register_kernels,
     registered_kernel_names,
+    registered_kernels,
     used_kernel_names,
 )
 
@@ -146,6 +148,38 @@ class TestBackendCases:
             "QLinearMatMul": "onnx_light_cpu::QLinearMatMul",
             "Not": "onnx_light_cpu::Not",
         }
+
+    def test_registered_kernels_parity_with_names(self):
+        records = registered_kernels()
+        assert isinstance(records, tuple)
+        assert all(isinstance(record, RegisteredKernel) for record in records)
+
+        # registered_kernel_names() is derived from registered_kernels(), so
+        # every op_type/kernel_name pair must match exactly.
+        assert {record.op_type: record.kernel_name for record in records} == (
+            registered_kernel_names()
+        )
+
+    def test_registered_kernels_is_deterministically_ordered(self):
+        first = registered_kernels()
+        second = registered_kernels()
+        assert first == second
+        sort_keys = [(r.domain, r.op_type, r.device, r.kernel_name) for r in first]
+        assert sort_keys == sorted(sort_keys)
+
+    def test_registered_kernels_are_immutable_and_complete(self):
+        records = registered_kernels()
+        assert records, "expected at least one registered kernel record"
+        for record in records:
+            with pytest.raises(AttributeError):
+                record.op_type = "Other"  # type: ignore[misc]
+            assert record.domain == "ai.onnx"
+            assert record.device == "CPU"
+            assert isinstance(record.types, tuple)
+            assert record.types, record
+            # No onnx-light-cpu kernel currently restricts opset bounds.
+            assert record.since_version is None
+            assert record.until_version is None
 
     def test_every_target_op_has_backend_cases(self):
         """Guards against the parametrized test silently collecting nothing."""

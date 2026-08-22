@@ -4,12 +4,7 @@
 
 #include "onnx_light_cpu/kernels/kernel_usage.h"
 
-#include "onnx_light_cpu/kernels/logical/not_kernel.h"
-#include "onnx_light_cpu/kernels/math/abs_kernel.h"
-#include "onnx_light_cpu/kernels/math/exp_log_kernel.h"
-#include "onnx_light_cpu/kernels/math/gemm_kernel.h"
-#include "onnx_light_cpu/kernels/math/integer_matmul_kernel.h"
-#include "onnx_light_cpu/kernels/math/matmul_kernel.h"
+#include "onnx_light_cpu/kernels/kernel_registration.h"
 
 #include <atomic>
 #include <mutex>
@@ -61,16 +56,20 @@ void SetKernelUsageRecording(bool enabled) noexcept {
 }
 
 const std::vector<std::pair<std::string, std::string>> &RegisteredKernelNames() {
-  static const std::vector<std::pair<std::string, std::string>> names = {
-      {"Abs", AbsKernel::kName},
-      {"Exp", ExpKernel::kName},
-      {"Log", LogKernel::kName},
-      {"Gemm", GemmKernel::kName},
-      {"MatMul", MatMulKernel::kName},
-      {"MatMulInteger", MatMulIntegerKernel::kName},
-      {"QLinearMatMul", QLinearMatMulKernel::kName},
-      {"Not", NotKernel::kName},
-  };
+  // Derived from ``CollectRegisteredKernels()`` (the same structured
+  // inventory :cpp:func:`onnx_light_cpu::CollectRegisteredKernels` builds
+  // from every ``Register*Kernel[s]`` call) rather than a second,
+  // hand-maintained ``op_type -> kernel name`` list, so the two never drift
+  // apart. The result is ordered by ``(domain, op_type, device, kernel_name)``
+  // (the inventory's deterministic sort order), i.e. alphabetically by
+  // ``op_type`` here since every entry shares the same domain and device.
+  static const std::vector<std::pair<std::string, std::string>> names = [] {
+    std::vector<std::pair<std::string, std::string>> result;
+    for (const KernelRegistration &record : CollectRegisteredKernels()) {
+      result.emplace_back(record.op_type, record.kernel_name);
+    }
+    return result;
+  }();
   return names;
 }
 

@@ -25,8 +25,8 @@ using onnx_light_cpu::KernelRegistration;
 
 // ``CollectRegisteredKernels`` must report one record for every ``op_type``
 // that ``RegisterAllKernels`` installs into onnx-light's shared dispatch
-// table (see ``kernel_usage.cc``'s hand-maintained ``RegisteredKernelNames``
-// list, which this inventory is meant to eventually replace).
+// table (``kernel_usage.cc``'s ``RegisteredKernelNames`` is derived from this
+// same inventory).
 TEST(KernelRegistration, CollectionReportsEveryActualRegistration) {
   const std::vector<KernelRegistration> records = onnx_light_cpu::CollectRegisteredKernels();
 
