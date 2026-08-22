@@ -124,6 +124,26 @@ PRIORITY_CASES = (
     ),
 )
 
+TREE_ENSEMBLE_GRID_FEATURES = (4, 16, 64, 256, 1024, 4096)
+TREE_ENSEMBLE_GRID_BATCHES = (1, 8, 32, 128)
+TREE_ENSEMBLE_GRID_TREES = (10, 100, 1000, 10000)
+BENCHMARK_GRID_CASES = tuple(
+    TreeEnsembleCase(
+        f"reg_grid_t{trees}_f{features}_b{rows}_f32",
+        "regression",
+        "float32",
+        rows,
+        trees,
+        4,
+        features,
+        1,
+    )
+    for trees in TREE_ENSEMBLE_GRID_TREES
+    for features in TREE_ENSEMBLE_GRID_FEATURES
+    for rows in TREE_ENSEMBLE_GRID_BATCHES
+)
+ALL_CASES = PRIORITY_CASES + BENCHMARK_GRID_CASES
+
 THREAD_POLICIES = ("single", "physical")
 PARITY_DTYPES = ("float32", "float64")
 MEDIAN_GATE = 1.0
@@ -226,6 +246,7 @@ def render_comparison_table(results: Sequence[dict[str, Any]]) -> str:
             "dtype",
             "case",
             "rows",
+            "features",
             "trees",
             "depth",
             "onnx-light-cpu (us)",
@@ -240,6 +261,7 @@ def render_comparison_table(results: Sequence[dict[str, Any]]) -> str:
                 str(result["dtype"]),
                 str(result["name"]),
                 str(result["rows"]),
+                str(result["features"]),
                 str(result["trees"]),
                 str(result["depth"]),
                 f"{float(result['cpu_median_seconds']) * 1e6:.2f}",
@@ -476,9 +498,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     selected = (
         PRIORITY_CASES
         if not args.case
-        else tuple(case for case in PRIORITY_CASES if case.name in args.case)
+        else tuple(case for case in ALL_CASES if case.name in args.case)
     )
-    unknown = set(args.case) - {case.name for case in PRIORITY_CASES}
+    unknown = set(args.case) - {case.name for case in ALL_CASES}
     if unknown:
         raise ValueError(f"Unknown cases: {', '.join(sorted(unknown))}.")
 
