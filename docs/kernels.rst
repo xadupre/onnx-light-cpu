@@ -1,15 +1,18 @@
 Kernels
 =======
 
-The table below lists the kernels **provided by this repository**
-(``onnx-light-cpu``). It does not include the kernels that come with onnx-light
-itself. The list is generated automatically at documentation build time by
-scanning this repository's public C++ headers
-(``onnx_light_cpu/impl/math/math_kernels.h`` and
-``onnx_light_cpu/impl/logical/logical_kernels.h``), so it always reflects the
-kernels this repository actually provides.
+The pages below list the kernels **provided by this repository**
+(``onnx-light-cpu``). They do not include the kernels that come with
+onnx-light itself. They are generated automatically at documentation build
+time from ``onnx_light_cpu.registered_kernels()``, the public inventory of the
+C++ registrations the runtime actually executes, so they always reflect the
+kernels this repository actually provides -- one stable page per registration,
+without any documentation-side operator list to keep in sync.
 
-.. registered-kernels::
+.. toctree::
+   :maxdepth: 1
+
+   kernels_generated/index
 
 Each kernel implements an ONNX operator for the given element data type. The
 ``Abs`` kernels compute the elementwise absolute value, the ``Exp`` kernels the
