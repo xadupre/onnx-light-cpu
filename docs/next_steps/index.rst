@@ -24,6 +24,7 @@ to sort the table.
     2026/2026_08_tree_ensemble
     2026/2026_08_svm
     2026/2026_08_runtime_execution_controls
+    2026/2026_08_processor_performance_profile
     2026/2026_08_kv_cache
     2026/2026_08_registered_kernel_documentation
 
@@ -82,6 +83,12 @@ to sort the table.
       - :doc:`Runtime execution controls <2026/2026_08_runtime_execution_controls>`
       - Use the typed session policy and executor for every registered kernel.
       - A second CPU scheduler would invalidate runtime limits and diagnostics.
+    * - Planned
+      - :doc:`Processor performance profile <2026/2026_08_processor_performance_profile>`
+      - Measure effective L1/L2/L3/RAM bandwidth and latency plus sustained
+        arithmetic throughput through one explicit Python API.
+      - A measured machine profile supplies the cost model for Roofline
+        analysis, kernel tuning, and future optimal-transport GEMM planning.
     * - Planned
       - :doc:`Registered kernel documentation <2026/2026_08_registered_kernel_documentation>`
       - Derive the Python inventory and generated reference from actual C++
