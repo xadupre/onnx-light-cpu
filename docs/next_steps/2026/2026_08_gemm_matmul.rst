@@ -3,23 +3,26 @@ Gemm and MatMul Performance Roadmap
 
 :Date: 2026-08
 
-**completed**
+**in progress**
 
 PR `#307 <https://github.com/xadupre/onnx-light-cpu/pull/307>`_
-delivered the shared MatMul kernel and final parity corpus. The implementation
-and correctness foundations are complete, including the FP16/BF16, integer,
-compact-format, tuning, and reproducible parity paths. Issues #340, #341, and
-#342 are closed because no implementation work remains.
+delivered the shared MatMul kernel and the original parity corpus. The
+correctness foundations are complete, including the FP16/BF16, integer,
+compact-format, and tuning paths. The expanded benchmark corpus has since
+exposed weak float32 scaling under default runtime policies, so issue
+`#374 <https://github.com/xadupre/onnx-light-cpu/issues/374>`_ reopens the
+performance work.
 
-Completion status
------------------
+Current status
+--------------
 
-Dedicated x86 and ARM measurements remain useful external validation, but are
-not unfinished implementation and do not keep this roadmap open. The available
-reports document isolated x86 measurements; they do not claim that every
-historical cross-machine parity target was demonstrated. Roadmap completion
-means that the planned code, correctness coverage, benchmark corpus, and
-reproducible measurement tools were delivered.
+The original roadmap did not validate the primary end-to-end configuration.
+``tools/benchmark_gemm_parity.py`` defaulted to one thread and passed the same
+explicit count to both runtimes. Those controlled measurements remain useful
+diagnostics, but they did not test the autonomous execution policies used by
+the published dashboard. The larger corpus revealed that float32 is close to
+ONNX Runtime on one thread but scales substantially less on representative
+multi-core shapes.
 
 .. list-table::
    :header-rows: 1
@@ -28,6 +31,10 @@ reproducible measurement tools were delivered.
    * - Gate
      - Delivered scope
      - Status
+   * - `#374 <https://github.com/xadupre/onnx-light-cpu/issues/374>`_
+     - Default-policy float32 profiling, scaling correction, parity-runner
+       semantics, and this roadmap correction.
+     - In progress; exactly one implementation PR must close this issue.
    * - `#341 <https://github.com/xadupre/onnx-light-cpu/issues/341>`_
      - FP16/BF16 kernels, tuning, correctness coverage, and isolated benchmark
        reports.
@@ -39,7 +46,8 @@ reproducible measurement tools were delivered.
    * - `#342 <https://github.com/xadupre/onnx-light-cpu/issues/342>`_
      - Complete Gemm/MatMul corpus and an ``--enforce`` mode for reproducible
        final certification runs.
-     - Closed; the implementation roadmap is complete.
+     - Closed; its original controlled-thread gate is delivered, but #374 adds
+       the missing default-policy gate.
 
 Objective
 ---------
@@ -136,10 +144,16 @@ Optimization must begin with a reproducible benchmark. End-to-end runtime
 measurements and isolated kernel measurements answer different questions and
 must both be retained.
 
-* Use identical tensors, transposition flags, thread counts, CPU affinity, and
-  correctness tolerances for MLAS and ``onnx-light-cpu``.
-* Warm up every candidate, alternate candidate order, and report median and
-  dispersion rather than the best observation.
+* Use identical tensors, transposition flags, and correctness tolerances for
+  MLAS and ``onnx-light-cpu``.
+* The primary end-to-end parity run leaves thread selection and affinity to
+  each runtime. Record resolved information only when the runtime exposes it;
+  do not infer an ONNX Runtime thread count.
+* Explicit 1-, 2-, 4-, physical-core, and logical-core runs are controlled
+  scaling diagnostics, not substitutes for the default-policy parity gate.
+* Isolate backend session lifetimes so an idle thread pool cannot perturb the
+  other runtime. Warm up every candidate, alternate backend order between
+  cases, and report median and dispersion rather than the best observation.
 * Run on an otherwise idle, pinned machine with a fixed power policy. Record
   CPU model, cache sizes, ISA features, compiler, and build flags.
 * Measure packing, the blocked multiplication, and low-precision conversion
@@ -148,10 +162,12 @@ must both be retained.
 * Cover tiny matrices, square matrices, skinny M, skinny N, large K, batched
   MatMul, broadcast batches, every transpose combination, and transformer
   projection shapes.
-* Separate dynamic-B from constant-B cases. Constant weights must be packed
-  once, not once per invocation.
-* Compare single-thread throughput and scaling at 2, 4, physical-core, and
-  logical-core thread counts. Hybrid P/E-core machines need their own results.
+* Separate dynamic-B from constant-B cases. Dynamic inputs can only be packed
+  at execution time. An initializer may be prepacked during session
+  preparation once the runtime has explicitly identified it as constant.
+* Compare controlled single-thread throughput and scaling at 2, 4,
+  physical-core, and logical-core thread counts. Hybrid P/E-core machines need
+  their own results.
 
 Four committed instruments implement this contract. ``tools/benchmark_gemm_parity.py``
 is the end-to-end floating-point parity runner (PR06.0/PR10.3): it alternates
@@ -1386,16 +1402,38 @@ fallbacks are ordered. Completed rows remain visible so scope is not lost.
        complete certification command remains available for optional
        cross-machine validation.
 
-Roadmap PR10.5 completed the Gemm and MatMul implementation roadmap.
+Roadmap PR10.5 delivered the original controlled-thread validation tooling. It
+did not complete the default-policy parity gate now tracked by #374.
 
 The reproducible gate command is ``tools/benchmark_gemm_parity.py
---operator all --dtype all --threads 1 --output gemm_matmul_parity_results.json``.
-It alternates the registered CPU kernel with ONNX Runtime, records every raw
-sample and environment field, and includes dynamic and constant ``Gemm``,
-shared ``MatMul``, batched/broadcast, vector, transpose, bias, skinny,
-large-K, split-K, and transformer cases. Repeat the command with the
-physical-core affinity and thread count for each priority machine; pass
-``--enforce`` only when publishing a completed dedicated-machine result.
+--operator all --dtype all --output gemm_matmul_parity_results.json``.
+It measures the registered CPU kernel and ONNX Runtime in separate session
+lifetimes, alternates backend order between cases, records every raw sample and
+environment field, and includes dynamic and constant ``Gemm``, shared
+``MatMul``, batched/broadcast, vector, transpose, bias, skinny, large-K,
+split-K, and transformer cases. The primary command leaves execution policy
+selection to each runtime. Explicit ``--threads`` runs remain available for
+controlled scaling diagnostics; pass ``--enforce`` only when publishing a
+completed dedicated-machine result.
+
+Issue #374 corrective pass
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The corrective pass keeps dynamic B packing in the invocation, but distributes
+native float32 panels of at least 131,072 elements across the session executor.
+This provisional threshold is deliberately left for a later dedicated-machine
+tuning pass. All micro-panels in one B-panel wave share one dispatch, and
+smaller panels stay inline. The multiplication phase assigns balanced tile
+intervals only when equal-size scheduler blocks would lose participants: for
+example, 12 tiles with 10 requested blocks previously collapsed to only 6
+effective blocks. Otherwise the existing task distribution is retained.
+
+On the local i7-13800H diagnostic, pinned four-thread square-1024 latency drops
+from approximately 14.1 ms on ``main`` to 6.9 ms, while the one-thread
+square-128 path remains approximately 60 us. These are diagnostic A/B results,
+not a completed parity claim. The default-policy float32 corpus still misses
+the 1.0x median / 0.9x minimum gate, especially on skinny-N and constant-weight
+transformer cases, so the roadmap remains open.
 
 Roadmap PR10.5 final validation pass
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1424,10 +1462,11 @@ changes to run the gate once it is executed on a dedicated machine with
 ONNX Runtime and onnx-light installed::
 
     python tools/benchmark_gemm_parity.py --operator all --dtype all \
-        --threads 1 --output gemm_matmul_parity_results.json
+        --output gemm_matmul_parity_results.json
 
-Repeat with physical-core affinity and thread count, then pass ``--enforce``
-once every priority case reaches the 1.0x median / 0.9x minimum gate.
+Repeat with explicit one-thread and physical-core settings for controlled
+diagnostics, then pass ``--enforce`` once every priority case reaches the 1.0x
+median / 0.9x minimum gate.
 
 Roadmap PR10.4 follow-up validation record
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1554,13 +1593,14 @@ not implement CPU BFLOAT16 Gemm on this host, so BFLOAT16 remains an isolated
 throughput measurement rather than a parity ratio. The existing reports contain
 no ARM results.
 
-Possible follow-up validation and tuning, outside the completed roadmap, is:
+Active corrective work is:
 
-#. Fix physical-core scaling. A ten-thread diagnostic corpus reaches only
-   0.309x median after the tiny split-K correction, with high variance and a
-   0.040x minimum; partition packed B panels across reusable physical-core
-   tasks and eliminate per-invocation pool and allocation costs before
-   retuning MC/NC/KC.
+#. Complete `#374 <https://github.com/xadupre/onnx-light-cpu/issues/374>`_ in
+   one PR. Profile packing, compute, dispatch, and admitted participants before
+   changing the decomposition. Parallel B packing only where an A/B benchmark
+   demonstrates a gain, preserve the serial path for smaller panels, and
+   correct the parity runner so its primary mode does not impose a thread
+   count on either runtime.
 #. Run dedicated x86 and ARM sweeps and publish one-thread and physical-core
    raw samples, dispersion, FP16 parity, and isolated BF16 throughput per ISA.
 

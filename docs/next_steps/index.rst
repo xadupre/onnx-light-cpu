@@ -37,11 +37,12 @@ to sort the table.
       - Next step
       - Planned work
       - Why
-    * - Completed
+    * - In progress
       - :doc:`Gemm and MatMul <2026/2026_08_gemm_matmul>`
-      - Delivers the shared matrix engine, low-precision paths, tuning, and
-        reproducible parity tooling.
-      - Matrix multiplication is the foundation for attention and dense models.
+      - Restore float32 default-policy scaling and correct the parity gate while
+        retaining the shared matrix engine and low-precision paths.
+      - The expanded corpus exposed a multi-core scaling gap that the original
+        controlled-thread validation did not cover.
     * - Discussed
       - :doc:`Attention <2026/2026_08_attention>`
       - Add materialized and streaming MHA, GQA, and MQA CPU kernels.

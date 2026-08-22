@@ -957,46 +957,86 @@ inline void PackConvertContiguous(const Float8Source<Format> *src, float *dst, s
 // for the FP16/BF16 path, which converts to ``T`` element by element while
 // packing. The packed panels themselves are always ``T`` (float or double).
 template <typename T, typename SrcT = T>
-void PackBPanel(bool trans_b, const SrcT *B, std::size_t K, std::size_t N, std::size_t k0,
-                std::size_t kc, std::size_t n0, std::size_t nb, std::size_t column_block,
-                T *Bpack) {
-  for (std::size_t j = 0; j < nb; j += column_block) {
-    const std::size_t jb = std::min(column_block, nb - j);
-    T *dst = Bpack + j * kc;
-    if (!trans_b) {
-      for (std::size_t k = 0; k < kc; ++k) {
-        const SrcT *src = B + (k0 + k) * N + n0 + j;
-        T *out = dst + k * jb;
-        PackConvertContiguous(src, out, jb);
-      }
-      continue;
-    }
-#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
-    if constexpr (std::is_same_v<T, float> && std::is_same_v<SrcT, BFloat16Source>) {
-      static const bool use_avx2 = DetectSimdLevel() >= SimdLevel::kAVX2;
-      if (use_avx2) {
-        GemmPackTransposeBFloat16ToFloat32_AVX2(
-            reinterpret_cast<const std::uint16_t *>(B) + (n0 + j) * K + k0, K, dst, kc, jb);
-        continue;
-      }
-    }
-#endif
-#ifdef ONNX_LIGHT_CPU_HAVE_F16C
-    if constexpr (std::is_same_v<T, float> && std::is_same_v<SrcT, Float16Source>) {
-      static const bool use_f16c = CpuSupportsF16C();
-      if (use_f16c) {
-        GemmPackTransposeFloat16ToFloat32_F16C(
-            reinterpret_cast<const std::uint16_t *>(B) + (n0 + j) * K + k0, K, dst, kc, jb);
-        continue;
-      }
-    }
-#endif
+void PackBMicroPanel(bool trans_b, const SrcT *B, std::size_t K, std::size_t N, std::size_t k0,
+                     std::size_t kc, std::size_t n0, std::size_t nb, std::size_t j,
+                     std::size_t column_block, T *Bpack) {
+  const std::size_t jb = std::min(column_block, nb - j);
+  T *dst = Bpack + j * kc;
+  if (!trans_b) {
     for (std::size_t k = 0; k < kc; ++k) {
-      for (std::size_t n = 0; n < jb; ++n) {
-        dst[k * jb + n] = static_cast<T>(B[(n0 + j + n) * K + k0 + k]);
-      }
+      const SrcT *src = B + (k0 + k) * N + n0 + j;
+      T *out = dst + k * jb;
+      PackConvertContiguous(src, out, jb);
+    }
+    return;
+  }
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
+  if constexpr (std::is_same_v<T, float> && std::is_same_v<SrcT, BFloat16Source>) {
+    static const bool use_avx2 = DetectSimdLevel() >= SimdLevel::kAVX2;
+    if (use_avx2) {
+      GemmPackTransposeBFloat16ToFloat32_AVX2(
+          reinterpret_cast<const std::uint16_t *>(B) + (n0 + j) * K + k0, K, dst, kc, jb);
+      return;
     }
   }
+#endif
+#ifdef ONNX_LIGHT_CPU_HAVE_F16C
+  if constexpr (std::is_same_v<T, float> && std::is_same_v<SrcT, Float16Source>) {
+    static const bool use_f16c = CpuSupportsF16C();
+    if (use_f16c) {
+      GemmPackTransposeFloat16ToFloat32_F16C(
+          reinterpret_cast<const std::uint16_t *>(B) + (n0 + j) * K + k0, K, dst, kc, jb);
+      return;
+    }
+  }
+#endif
+  for (std::size_t k = 0; k < kc; ++k) {
+    for (std::size_t n = 0; n < jb; ++n) {
+      dst[k * jb + n] = static_cast<T>(B[(n0 + j + n) * K + k0 + k]);
+    }
+  }
+}
+
+template <typename T, typename SrcT = T>
+void PackBPanelWave(bool trans_b, const SrcT *B, std::size_t K, std::size_t N, std::size_t k0,
+                    std::size_t kc, std::size_t first_panel, std::size_t wave_panels,
+                    std::size_t panel_width, std::size_t column_block, std::size_t panel_capacity,
+                    T *Bpack) {
+  const std::size_t micro_panels_per_panel = (panel_width + column_block - 1) / column_block;
+  const std::size_t task_count = wave_panels * micro_panels_per_panel;
+  const auto pack = [&](std::int64_t begin, std::int64_t end) {
+    for (std::int64_t task = begin; task < end; ++task) {
+      const std::size_t panel = static_cast<std::size_t>(task) / micro_panels_per_panel;
+      const std::size_t micro_panel = static_cast<std::size_t>(task) % micro_panels_per_panel;
+      const std::size_t n0 = (first_panel + panel) * panel_width;
+      const std::size_t nb = std::min(panel_width, N - n0);
+      const std::size_t j = micro_panel * column_block;
+      if (j >= nb) {
+        continue;
+      }
+      PackBMicroPanel(trans_b, B, K, N, k0, kc, n0, nb, j, column_block,
+                      Bpack + panel * panel_capacity);
+    }
+  };
+  // TODO: Retune this threshold on dedicated x86 and ARM hosts during the next
+  // GEMM tuning pass. The smallest promising value preserves today's choice.
+  constexpr std::size_t kMinParallelPackElements = 1U << 17;
+  constexpr bool kSupportsParallelPacking = std::is_same_v<T, float> && std::is_same_v<SrcT, float>;
+  const std::size_t first_column = first_panel * panel_width;
+  const std::size_t remaining_columns = N - first_column;
+  const std::size_t remaining_panels =
+      remaining_columns / panel_width +
+      static_cast<std::size_t>(remaining_columns % panel_width != 0);
+  const std::size_t packed_columns =
+      wave_panels == remaining_panels ? remaining_columns : wave_panels * panel_width;
+  if (!kSupportsParallelPacking || kc * packed_columns < kMinParallelPackElements ||
+      ExecutionInParallelRegion()) {
+    pack(0, static_cast<std::int64_t>(task_count));
+    return;
+  }
+  const double cost =
+      static_cast<double>(kc) * static_cast<double>(std::min(column_block, panel_width));
+  ExecuteRanges(static_cast<std::int64_t>(task_count), cost, pack);
 }
 
 template <typename T, typename SrcT = T>
@@ -1247,42 +1287,57 @@ void GemmFiveLoopRange(bool trans_a, bool trans_b, std::size_t M, std::size_t N,
                       : GemmAccumMode::kAccumulate;
     for (std::size_t first_panel = 0; first_panel < column_panels; first_panel += panels_per_wave) {
       const std::size_t wave_panels = std::min(panels_per_wave, column_panels - first_panel);
-      for (std::size_t panel = 0; panel < wave_panels; ++panel) {
-        const std::size_t n0 = (first_panel + panel) * blocking.nc;
-        const std::size_t nb = std::min(blocking.nc, N - n0);
-        PackBPanel(trans_b, B, K, N, k0, kc, n0, nb, column_block,
-                   bpack.data() + panel * panel_capacity);
-      }
+      PackBPanelWave(trans_b, B, K, N, k0, kc, first_panel, wave_panels, blocking.nc, column_block,
+                     panel_capacity, bpack.data());
 
       const std::size_t task_count = row_panels * wave_panels;
       const std::size_t first_n = first_panel * blocking.nc;
       const std::size_t task_columns = std::min(blocking.nc, N - first_n);
       const double cost = static_cast<double>(std::min(blocking.mc, M)) * task_columns * kc /
                           kGemmFmasPerParallelWorkUnit;
-      ExecuteRanges(static_cast<std::int64_t>(task_count), cost,
+      const std::size_t requested_blocks = static_cast<std::size_t>(
+          ExecutionBlockCount(static_cast<std::int64_t>(task_count), cost));
+      const std::size_t equal_block_size = (task_count + requested_blocks - 1) / requested_blocks;
+      const std::size_t equal_block_count = (task_count + equal_block_size - 1) / equal_block_size;
+      const bool loses_participants = equal_block_count < requested_blocks;
+      const std::size_t participant_count = loses_participants ? requested_blocks : task_count;
+      // Equal-size blocks can admit fewer workers when task_count is just above
+      // the requested block count. Balanced intervals are used only in that case.
+      ExecuteRanges(static_cast<std::int64_t>(participant_count),
+                    cost * static_cast<double>(task_count) / static_cast<double>(participant_count),
                     [&](std::int64_t begin, std::int64_t end) {
                       AlignedVector<T> apack(row_capacity * kc);
                       std::size_t packed_row_panel = row_panels;
-                      for (std::int64_t task = begin; task < end; ++task) {
-                        const std::size_t row_panel = static_cast<std::size_t>(task) / wave_panels;
-                        const std::size_t wave_panel = static_cast<std::size_t>(task) % wave_panels;
-                        const std::size_t m0 = row_panel * blocking.mc;
-                        const std::size_t n0 = (first_panel + wave_panel) * blocking.nc;
-                        const std::size_t mc = std::min(blocking.mc, M - m0);
-                        const std::size_t nb = std::min(blocking.nc, N - n0);
-                        if (packed_row_panel != row_panel) {
-                          PackAPanel(trans_a, A, M, K, m0, mc, k0, kc, apack.data());
-                          packed_row_panel = row_panel;
-                        }
-                        const T *panel_b = bpack.data() + wave_panel * panel_capacity;
-                        for (std::size_t jr = 0; jr < nb; jr += column_block) {
-                          const std::size_t jb = std::min(column_block, nb - jr);
-                          const T *micro_b = panel_b + jr * kc;
-                          for (std::size_t ir = 0; ir < mc; ir += blocking.mr) {
-                            const std::size_t mr = std::min(blocking.mr, mc - ir);
-                            tile(kind, mr, jb, kc, alpha, beta, micro_b, jb,
-                                 has_bias ? C + (m0 + ir) * N + n0 + jr : nullptr, N,
-                                 Y + (m0 + ir) * N + n0 + jr, N, 0, mode, apack.data() + ir * kc);
+                      for (std::int64_t participant = begin; participant < end; ++participant) {
+                        const std::size_t participant_index = static_cast<std::size_t>(participant);
+                        const std::size_t tasks_per_participant = task_count / participant_count;
+                        const std::size_t extra_tasks = task_count % participant_count;
+                        const std::size_t first_task = participant_index * tasks_per_participant +
+                                                       std::min(participant_index, extra_tasks);
+                        const std::size_t last_task =
+                            first_task + tasks_per_participant +
+                            static_cast<std::size_t>(participant_index < extra_tasks);
+                        for (std::size_t task = first_task; task < last_task; ++task) {
+                          const std::size_t row_panel = task / wave_panels;
+                          const std::size_t wave_panel = task % wave_panels;
+                          const std::size_t m0 = row_panel * blocking.mc;
+                          const std::size_t n0 = (first_panel + wave_panel) * blocking.nc;
+                          const std::size_t mc = std::min(blocking.mc, M - m0);
+                          const std::size_t nb = std::min(blocking.nc, N - n0);
+                          if (packed_row_panel != row_panel) {
+                            PackAPanel(trans_a, A, M, K, m0, mc, k0, kc, apack.data());
+                            packed_row_panel = row_panel;
+                          }
+                          const T *panel_b = bpack.data() + wave_panel * panel_capacity;
+                          for (std::size_t jr = 0; jr < nb; jr += column_block) {
+                            const std::size_t jb = std::min(column_block, nb - jr);
+                            const T *micro_b = panel_b + jr * kc;
+                            for (std::size_t ir = 0; ir < mc; ir += blocking.mr) {
+                              const std::size_t mr = std::min(blocking.mr, mc - ir);
+                              tile(kind, mr, jb, kc, alpha, beta, micro_b, jb,
+                                   has_bias ? C + (m0 + ir) * N + n0 + jr : nullptr, N,
+                                   Y + (m0 + ir) * N + n0 + jr, N, 0, mode, apack.data() + ir * kc);
+                            }
                           }
                         }
                       }

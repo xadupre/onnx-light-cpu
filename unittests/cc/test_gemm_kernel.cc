@@ -887,11 +887,17 @@ namespace {
 struct ThreadedExecutor {
   std::atomic<std::size_t> dispatches{0};
   std::atomic<std::size_t> maximum_active{0};
+  std::atomic<std::size_t> maximum_blocks{0};
 
   static void Run(void *context, int64_t num_blocks, void *task_context,
                   onnx_light_cpu::ExecutionBlockFn task) {
     auto &self = *static_cast<ThreadedExecutor *>(context);
     self.dispatches.fetch_add(1, std::memory_order_relaxed);
+    const std::size_t blocks = static_cast<std::size_t>(num_blocks);
+    std::size_t maximum_blocks = self.maximum_blocks.load(std::memory_order_relaxed);
+    while (blocks > maximum_blocks && !self.maximum_blocks.compare_exchange_weak(
+                                          maximum_blocks, blocks, std::memory_order_relaxed)) {
+    }
     std::atomic<std::size_t> active{0};
     std::vector<std::thread> workers;
     workers.reserve(static_cast<std::size_t>(num_blocks));
@@ -942,6 +948,77 @@ void CheckGemmFp16NativeDriver(bool trans_a, std::size_t M, std::size_t N, std::
 }
 
 } // namespace
+
+TEST(GemmFloat32, LargeBPanelPackingUsesExecutor) {
+  constexpr std::size_t M = 16;
+  constexpr std::size_t N = 1024;
+  constexpr std::size_t K = 512;
+  const onnx_light_cpu::GemmBlocking blocking{8, 1024, 512, 4, 16};
+  ThreadedExecutor executor;
+  onnx_light_cpu::ExecutionExecutorView view{&executor, 4, &ThreadedExecutor::Run};
+
+  for (bool trans_b : {false, true}) {
+    const auto A = RandomVector(M * K, trans_b ? 401 : 400);
+    const auto B = RandomVector(K * N, trans_b ? 403 : 402);
+    const auto expected = ReferenceGemm<float>(false, trans_b, M, N, K, 1.0f, A, B, 0.0f, nullptr);
+    std::vector<float> Y(M * N);
+    {
+      onnx_light_cpu::ExecutionExecutorScope scope(&view);
+      onnx_light_cpu::detail::GemmFloat32Planned<onnx_light_cpu::GemmAlgorithm::kGeneral>(
+          false, trans_b, M, N, K, 1.0f, A.data(), B.data(), 0.0f, nullptr, Y.data(), &blocking);
+    }
+    for (std::size_t i = 0; i < Y.size(); ++i) {
+      EXPECT_NEAR(Y[i], expected[i], 2e-2f) << "trans_b=" << trans_b << " i=" << i;
+    }
+  }
+  EXPECT_GE(executor.dispatches.load(std::memory_order_relaxed), 4u);
+  EXPECT_GT(executor.maximum_active.load(std::memory_order_relaxed), 1u);
+}
+
+TEST(GemmFloat32, SmallBPanelPackingStaysInline) {
+  constexpr std::size_t M = 8;
+  constexpr std::size_t N = 256;
+  constexpr std::size_t K = 256;
+  const onnx_light_cpu::GemmBlocking blocking{8, 256, 256, 4, 16};
+  ThreadedExecutor executor;
+  onnx_light_cpu::ExecutionExecutorView view{&executor, 4, &ThreadedExecutor::Run};
+  const auto A = RandomVector(M * K, 404);
+  const auto B = RandomVector(K * N, 405);
+  const auto expected = ReferenceGemm<float>(false, false, M, N, K, 1.0f, A, B, 0.0f, nullptr);
+  std::vector<float> Y(M * N);
+  {
+    onnx_light_cpu::ExecutionExecutorScope scope(&view);
+    onnx_light_cpu::detail::GemmFloat32Planned<onnx_light_cpu::GemmAlgorithm::kGeneral>(
+        false, false, M, N, K, 1.0f, A.data(), B.data(), 0.0f, nullptr, Y.data(), &blocking);
+  }
+
+  for (std::size_t i = 0; i < Y.size(); ++i) {
+    EXPECT_NEAR(Y[i], expected[i], 2e-2f) << "i=" << i;
+  }
+  EXPECT_EQ(executor.dispatches.load(std::memory_order_relaxed), 0u);
+}
+
+TEST(GemmFloat32, ImbalancedTileCountUsesAllRequestedBlocks) {
+  constexpr std::size_t M = 768;
+  constexpr std::size_t N = 512;
+  constexpr std::size_t K = 255;
+  const onnx_light_cpu::GemmBlocking blocking{256, 128, 255, 4, 16};
+  ThreadedExecutor executor;
+  onnx_light_cpu::ExecutionExecutorView view{&executor, 10, &ThreadedExecutor::Run};
+  const std::vector<float> A(M * K, 1.0f);
+  const std::vector<float> B(K * N, 1.0f);
+  std::vector<float> Y(M * N);
+  {
+    onnx_light_cpu::ExecutionExecutorScope scope(&view);
+    onnx_light_cpu::detail::GemmFloat32Planned<onnx_light_cpu::GemmAlgorithm::kGeneral>(
+        false, false, M, N, K, 1.0f, A.data(), B.data(), 0.0f, nullptr, Y.data(), &blocking);
+  }
+
+  EXPECT_EQ(executor.maximum_blocks.load(std::memory_order_relaxed), 10u);
+  for (float value : Y) {
+    EXPECT_FLOAT_EQ(value, static_cast<float>(K));
+  }
+}
 
 TEST(GemmFp16Native, ScalarKernelMatchesReference) {
   // Portable scalar member: several row blocks (M > 6), exact-16 and tail N, an
