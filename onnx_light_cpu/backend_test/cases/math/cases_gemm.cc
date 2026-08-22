@@ -133,7 +133,8 @@ void RegisterGemmBenchmark(std::vector<TestCase> &registry,
                            int64_t m, int64_t n, int64_t k, bool trans_a = false,
                            bool trans_b = false, bool constant_b = false,
                            BiasShape bias_shape = BiasShape::kNone) {
-  const std::string name = base_name + "_" + GemmDtypeSuffix(dtype) + "_bias_" +
+  const std::string name = base_name + "_" + GemmDtypeSuffix(dtype) + "_transA_" +
+                           (trans_a ? "1" : "0") + "_transB_" + (trans_b ? "1" : "0") + "_bias_" +
                            GemmBiasSuffix(bias_shape) + "_benchmark";
   NodeProto node = MakeGemmNode();
   if (trans_a) {
@@ -276,10 +277,10 @@ void RegisterCpuGemmCases(std::vector<TestCase> &registry, TestMode mode) {
                             4096);
       RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_split_k_16384", dtype, 2,
                             2, 16384);
-      RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_trans_a", dtype, 128, 128,
-                            128, true);
-      RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_trans_b", dtype, 128, 128,
-                            128, false, true);
+      RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_square_128", dtype, 128,
+                            128, 128, true);
+      RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_square_128", dtype, 128,
+                            128, 128, false, true);
       RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_transformer_projection",
                             dtype, 128, 3072, 768, false, false, true);
       RegisterGemmBenchmark(registry, gemm_kernel, opset,
