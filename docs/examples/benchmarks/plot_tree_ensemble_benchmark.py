@@ -21,8 +21,9 @@ import numpy as np
 
 runner_name = Path("tools") / "benchmark_tree_ensemble_parity.py"
 root = None
-if "__file__" in globals():
-    candidate = Path(__file__).resolve().parents[3]
+file_name = globals().get("__file__")
+if file_name is not None:
+    candidate = Path(file_name).resolve().parents[3]
     if (candidate / runner_name).exists() and (candidate / "CMakeLists.txt").exists():
         root = candidate
 
