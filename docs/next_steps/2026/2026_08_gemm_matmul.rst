@@ -1420,12 +1420,13 @@ Issue #374 corrective pass
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 The corrective pass keeps dynamic B packing in the invocation, but distributes
-native float32 panels of at least 262,144 elements across the session executor.
-All micro-panels in one B-panel wave share one dispatch, and smaller panels stay
-inline. The multiplication phase now assigns balanced tile intervals to the
-resolved participants instead of relying on equal-size scheduler blocks: for
-example, 12 tiles with 10 available participants previously collapsed to only
-6 effective blocks.
+native float32 panels of at least 131,072 elements across the session executor.
+This provisional threshold is deliberately left for a later dedicated-machine
+tuning pass. All micro-panels in one B-panel wave share one dispatch, and
+smaller panels stay inline. The multiplication phase assigns balanced tile
+intervals only when equal-size scheduler blocks would lose participants: for
+example, 12 tiles with 10 requested blocks previously collapsed to only 6
+effective blocks. Otherwise the existing task distribution is retained.
 
 On the local i7-13800H diagnostic, pinned four-thread square-1024 latency drops
 from approximately 14.1 ms on ``main`` to 6.9 ms, while the one-thread

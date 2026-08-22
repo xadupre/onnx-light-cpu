@@ -1018,7 +1018,9 @@ void PackBPanelWave(bool trans_b, const SrcT *B, std::size_t K, std::size_t N, s
                       Bpack + panel * panel_capacity);
     }
   };
-  constexpr std::size_t kMinParallelPackElements = 1U << 18;
+  // TODO: Retune this threshold on dedicated x86 and ARM hosts during the next
+  // GEMM tuning pass. The smallest promising value preserves today's choice.
+  constexpr std::size_t kMinParallelPackElements = 1U << 17;
   constexpr bool kSupportsParallelPacking = std::is_same_v<T, float> && std::is_same_v<SrcT, float>;
   const std::size_t first_column = first_panel * panel_width;
   const std::size_t remaining_columns = N - first_column;
@@ -1293,9 +1295,14 @@ void GemmFiveLoopRange(bool trans_a, bool trans_b, std::size_t M, std::size_t N,
       const std::size_t task_columns = std::min(blocking.nc, N - first_n);
       const double cost = static_cast<double>(std::min(blocking.mc, M)) * task_columns * kc /
                           kGemmFmasPerParallelWorkUnit;
-      const std::size_t participant_count = std::min(thread_count, task_count);
+      const std::size_t requested_blocks = static_cast<std::size_t>(
+          ExecutionBlockCount(static_cast<std::int64_t>(task_count), cost));
+      const std::size_t equal_block_size = (task_count + requested_blocks - 1) / requested_blocks;
+      const std::size_t equal_block_count = (task_count + equal_block_size - 1) / equal_block_size;
+      const bool loses_participants = equal_block_count < requested_blocks;
+      const std::size_t participant_count = loses_participants ? requested_blocks : task_count;
       // Equal-size blocks can admit fewer workers when task_count is just above
-      // thread_count. Give each participant one balanced tile interval instead.
+      // the requested block count. Balanced intervals are used only in that case.
       ExecuteRanges(static_cast<std::int64_t>(participant_count),
                     cost * static_cast<double>(task_count) / static_cast<double>(participant_count),
                     [&](std::int64_t begin, std::int64_t end) {
