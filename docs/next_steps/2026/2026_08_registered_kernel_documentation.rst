@@ -61,7 +61,7 @@ Implementation sequence
        removing a registration changes the generated pages without editing a
        documentation-side operator list.
      - Step 2
-     - Not started
+     - Complete
    * - 4
      - Add C++, Python, API-documentation, and Sphinx parity tests.
      - A clean warnings-as-errors Sphinx build contains exactly one page per
@@ -92,6 +92,20 @@ Step 2 (this PR) exposes that inventory to Python. The compiled
 ``RegisteredKernelNames()`` it is built on) is now derived from those same
 records instead of a separately hand-maintained ``op_type -> kernel name``
 list.
+
+Step 3 (this PR) replaces the C++ source scanner with generation driven
+exclusively by ``onnx_light_cpu.registered_kernels()``. The
+``docs/_ext/kernel_scan.py`` and ``docs/_ext/onnx_kernels.py`` modules (and
+the ``registered-kernels`` directive they provided) are deleted. The new
+``docs/_ext/kernel_pages.py`` extension connects to Sphinx's
+``builder-inited`` event and, before any source file is read, writes one RST
+page per registration plus a deterministic index under
+``docs/kernels_generated/`` (an entirely build-generated, ``.gitignore``-d
+directory that ``docs/kernels.rst`` links to through a toctree). Filenames
+are derived from ``(domain, op_type, device)`` and disambiguated in the same
+stable order on the rare slugify collision, so two consecutive generations
+are byte-identical; any page left over from a renamed or removed registration
+is deleted so the directory always matches the current inventory exactly.
 
 Validation and compatibility
 ----------------------------

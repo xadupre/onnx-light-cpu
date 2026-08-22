@@ -16,7 +16,7 @@ extensions = [
     "sphinx_datatables",
     "sphinx_gallery.gen_gallery",
     "sphinx_reredirects",
-    "onnx_kernels",
+    "kernel_pages",
 ]
 
 templates_path = ["_templates"]

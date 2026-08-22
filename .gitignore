@@ -54,6 +54,7 @@ cover/
 docs/_build/
 docs/_doxygen/
 docs/auto_examples/
+docs/kernels_generated/
 docs/sg_execution_times.rst
 docs/examples/**/*.png
 
