@@ -111,13 +111,30 @@ const char *GemmDtypeSuffix(DataType dtype) {
   }
 }
 
+const char *GemmBiasSuffix(BiasShape bias_shape) {
+  switch (bias_shape) {
+  case BiasShape::kNone:
+    return "none";
+  case BiasShape::kScalar:
+    return "scalar";
+  case BiasShape::kRow:
+    return "row";
+  case BiasShape::kColumn:
+    return "column";
+  case BiasShape::kMatrix:
+    return "matrix";
+  }
+  return "none";
+}
+
 void RegisterGemmBenchmark(std::vector<TestCase> &registry,
                            const std::shared_ptr<onnx_light_cpu::GemmKernel> &kernel,
                            const OpsetId &opset, const std::string &base_name, DataType dtype,
                            int64_t m, int64_t n, int64_t k, bool trans_a = false,
                            bool trans_b = false, bool constant_b = false,
                            BiasShape bias_shape = BiasShape::kNone) {
-  const std::string name = base_name + "_" + GemmDtypeSuffix(dtype) + "_benchmark";
+  const std::string name = base_name + "_" + GemmDtypeSuffix(dtype) + "_bias_" +
+                           GemmBiasSuffix(bias_shape) + "_benchmark";
   NodeProto node = MakeGemmNode();
   if (trans_a) {
     AddIntAttribute(node, "transA", 1);
@@ -235,14 +252,14 @@ void RegisterCpuGemmCases(std::vector<TestCase> &registry, TestMode mode) {
                             512, 512);
       RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_square_1024", dtype, 1024,
                             1024, 1024);
-      RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_scalar_bias_256", dtype,
-                            256, 256, 256, false, false, false, BiasShape::kScalar);
-      RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_row_bias_256", dtype, 256,
+      RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_square_256", dtype, 256,
+                            256, 256, false, false, false, BiasShape::kScalar);
+      RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_square_256", dtype, 256,
                             256, 256, false, false, false, BiasShape::kRow);
-      RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_column_bias_256", dtype,
-                            256, 256, 256, false, false, false, BiasShape::kColumn);
-      RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_matrix_bias_256", dtype,
-                            256, 256, 256, false, false, false, BiasShape::kMatrix);
+      RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_square_256", dtype, 256,
+                            256, 256, false, false, false, BiasShape::kColumn);
+      RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_square_256", dtype, 256,
+                            256, 256, false, false, false, BiasShape::kMatrix);
       RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_skinny_m", dtype, 1, 1024,
                             1024);
       RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_skinny_m_small", dtype, 1,

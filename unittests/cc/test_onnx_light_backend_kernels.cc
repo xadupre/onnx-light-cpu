@@ -259,8 +259,9 @@ TEST(OnnxLightBackendKernels, GemmBenchmarkRunsThroughRuntime) {
   // runtime. The metadata test below validates the complete 72-case benchmark
   // corpus without materializing and executing every large timing workload as
   // part of the unit-test suite.
-  const std::vector<std::string> failures = RunCpuBackendCases(
-      "Gemm", core::backend_test::TestMode::BENCHMARK, "test_cpu_gemm_direct_float32_benchmark");
+  const std::vector<std::string> failures =
+      RunCpuBackendCases("Gemm", core::backend_test::TestMode::BENCHMARK,
+                         "test_cpu_gemm_direct_float32_bias_none_benchmark");
   EXPECT_TRUE(failures.empty()) << Describe(failures);
 }
 
@@ -292,11 +293,13 @@ TEST(OnnxLightBackendKernels, GemmBenchmarkCorpusIsLazyAndCoversPriorityShapes) 
   bool has_large_k_1024 = false;
   bool has_split_k_16384 = false;
   bool has_transformer_decode = false;
+  std::set<std::string> names;
   for (const TestCase &test_case : cases) {
     if (test_case.name.rfind("test_cpu_gemm_", 0) != 0) {
       continue;
     }
     ++cpu_cases;
+    EXPECT_TRUE(names.insert(test_case.name).second) << test_case.name;
     EXPECT_TRUE(test_case.is_lazy());
     EXPECT_FALSE(test_case.materialized());
     EXPECT_TRUE(test_case.name.ends_with("_benchmark"));
@@ -310,10 +313,17 @@ TEST(OnnxLightBackendKernels, GemmBenchmarkCorpusIsLazyAndCoversPriorityShapes) 
     has_large_k |= test_case.name.find("large_k") != std::string::npos;
     has_split_k |= test_case.name.find("split_k") != std::string::npos;
     has_transpose |= test_case.name.find("trans_") != std::string::npos;
-    has_scalar_bias |= test_case.name.find("scalar_bias") != std::string::npos;
-    has_row_bias |= test_case.name.find("row_bias") != std::string::npos;
-    has_column_bias |= test_case.name.find("column_bias") != std::string::npos;
-    has_matrix_bias |= test_case.name.find("matrix_bias") != std::string::npos;
+    has_scalar_bias |= test_case.name.find("_bias_scalar_") != std::string::npos;
+    has_row_bias |= test_case.name.find("_bias_row_") != std::string::npos;
+    has_column_bias |= test_case.name.find("_bias_column_") != std::string::npos;
+    has_matrix_bias |= test_case.name.find("_bias_matrix_") != std::string::npos;
+    const int bias_tags =
+        static_cast<int>(test_case.name.find("_bias_none_") != std::string::npos) +
+        static_cast<int>(test_case.name.find("_bias_scalar_") != std::string::npos) +
+        static_cast<int>(test_case.name.find("_bias_row_") != std::string::npos) +
+        static_cast<int>(test_case.name.find("_bias_column_") != std::string::npos) +
+        static_cast<int>(test_case.name.find("_bias_matrix_") != std::string::npos);
+    EXPECT_EQ(bias_tags, 1) << test_case.name;
     has_float32 |= test_case.name.find("_float32_") != std::string::npos;
     has_float16 |= test_case.name.find("_float16_") != std::string::npos;
     has_bfloat16 |= test_case.name.find("_bfloat16_") != std::string::npos;
