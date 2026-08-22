@@ -723,6 +723,8 @@ ComputeThroughputResult MeasureComputeArithmeticThroughput(ComputeElementType el
     } else {
       participant_count = 1;
     }
+  } else if (options.explicit_single_affinity.has_value()) {
+    affinity_pinned = SetCurrentThreadAffinity(*options.explicit_single_affinity);
   }
   result.participant_count = participant_count;
   result.affinity_pinned = affinity_pinned;
