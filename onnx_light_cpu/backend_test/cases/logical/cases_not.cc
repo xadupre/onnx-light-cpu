@@ -41,10 +41,6 @@ NodeProto MakeNotNode() {
   return node;
 }
 
-// 1-D bool benchmark size (4M elements), matching the element-wise benchmark
-// scale used by onnx-light's float helpers.
-constexpr std::int64_t kNotBenchmarkSize = 1 << 22;
-
 } // namespace
 
 // Not — the only element type ``NotKernel`` implements: bool.
@@ -53,17 +49,18 @@ void RegisterCpuNotCases(std::vector<TestCase> &registry, TestMode mode) {
   const onnx_light_cpu::NotKernel not_kernel{KernelContext{opset}};
 
   if (mode == TestMode::BENCHMARK) {
-    Expect(registry, MakeNotNode(), "test_cpu_not_benchmark", {opset}, {kNotBenchmarkSize},
-           {kNotBenchmarkSize}, [not_kernel]() -> IoData {
-             std::vector<std::uint8_t> raw(static_cast<std::size_t>(kNotBenchmarkSize));
-             for (std::size_t i = 0; i < raw.size(); ++i) {
-               raw[i] = static_cast<std::uint8_t>(i & 1U);
-             }
-             Tensor x("", static_cast<std::int32_t>(DataType::BOOL), {kNotBenchmarkSize},
-                      std::move(raw));
-             Tensor y = not_kernel(x);
-             return IoData{{std::move(x)}, {std::move(y)}};
-           });
+    for (const std::int64_t size : {1024, 32768, 65535, 65536, 131072, 1048576, 4194304}) {
+      Expect(registry, MakeNotNode(), "test_cpu_not_n" + std::to_string(size) + "_benchmark",
+             {opset}, {size}, {size}, [not_kernel, size]() -> IoData {
+               std::vector<std::uint8_t> raw(static_cast<std::size_t>(size));
+               for (std::size_t i = 0; i < raw.size(); ++i) {
+                 raw[i] = static_cast<std::uint8_t>(i & 1U);
+               }
+               Tensor x("", static_cast<std::int32_t>(DataType::BOOL), {size}, std::move(raw));
+               Tensor y = not_kernel(x);
+               return IoData{{std::move(x)}, {std::move(y)}};
+             });
+    }
     return;
   }
 

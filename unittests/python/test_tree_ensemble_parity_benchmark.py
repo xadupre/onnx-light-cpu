@@ -1,10 +1,34 @@
 from tools.benchmark_tree_ensemble_parity import (
+    BENCHMARK_GRID_CASES,
     PRIORITY_CASES,
+    TREE_ENSEMBLE_GRID_BATCHES,
+    TREE_ENSEMBLE_GRID_FEATURES,
+    TREE_ENSEMBLE_GRID_TREES,
     TreeEnsembleCase,
     render_comparison_table,
     repeat_count,
     summarize,
 )
+
+
+def test_benchmark_grid_crosses_trees_features_and_batches():
+    dimensions = {(case.trees, case.features, case.rows) for case in BENCHMARK_GRID_CASES}
+
+    assert dimensions == {
+        (trees, features, batch)
+        for trees in TREE_ENSEMBLE_GRID_TREES
+        for features in TREE_ENSEMBLE_GRID_FEATURES
+        for batch in TREE_ENSEMBLE_GRID_BATCHES
+    }
+    assert 1 in TREE_ENSEMBLE_GRID_BATCHES
+    assert max(TREE_ENSEMBLE_GRID_FEATURES) >= 4096
+    assert max(TREE_ENSEMBLE_GRID_TREES) >= 10000
+    assert len(TREE_ENSEMBLE_GRID_FEATURES) > 1
+    assert len(TREE_ENSEMBLE_GRID_BATCHES) > 1
+    assert len(TREE_ENSEMBLE_GRID_TREES) > 1
+    assert {(case.depth, case.dtype, case.outputs) for case in BENCHMARK_GRID_CASES} == {
+        (4, "float32", 1)
+    }
 
 
 def _result(name, task, dtype, speedup, rows=32):
@@ -85,6 +109,7 @@ def test_comparison_table_reports_both_engines():
         [
             {
                 **_result("forest", "regression", "float32", 2.0),
+                "features": 32,
                 "trees": 81,
                 "depth": 4,
                 "cpu_median_seconds": 0.001,
@@ -95,5 +120,6 @@ def test_comparison_table_reports_both_engines():
 
     assert "onnx-light-cpu (us)" in table
     assert "onnxruntime (us)" in table
+    assert "features" in table
     assert "forest" in table
     assert "2.000x" in table

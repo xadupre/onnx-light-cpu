@@ -205,6 +205,24 @@ TEST(OnnxLightBackendKernels, TreeEnsembleCorpusRegistersOnlyMlOpset5) {
   EXPECT_EQ(CountCpuCasesAtMlOpset5("TreeEnsembleClassifier"), 2U);
 }
 
+TEST(OnnxLightBackendKernels, TreeEnsembleBenchmarkCoversPriorityDimensions) {
+  onnx_light_cpu::backend_test::RegisterCpuKernelBackendTestCases();
+  const std::vector<TestCase> cases = CollectTestCases("TreeEnsemble", /*include_big=*/false,
+                                                       core::backend_test::TestMode::BENCHMARK);
+  std::set<std::string> names;
+  for (const TestCase &test_case : cases) {
+    if (test_case.name.rfind("test_cpu_treeensemble_", 0) == 0) {
+      names.insert(test_case.name);
+    }
+  }
+  EXPECT_EQ(names.size(), 5U);
+  EXPECT_TRUE(names.contains("test_cpu_treeensemble_t10_f4_b1_benchmark"));
+  EXPECT_TRUE(names.contains("test_cpu_treeensemble_t100_f64_b8_benchmark"));
+  EXPECT_TRUE(names.contains("test_cpu_treeensemble_t1000_f1024_b32_benchmark"));
+  EXPECT_TRUE(names.contains("test_cpu_treeensemble_t10000_f4096_b1_benchmark"));
+  EXPECT_TRUE(names.contains("test_cpu_treeensemble_t10000_f4096_b128_benchmark"));
+}
+
 // Benchmark-mode cases: registered per kernel alongside the correctness cases.
 // The unit test exercises them (executes the large model through the runtime)
 // to keep the benchmark registration covered; timings are collected by a
@@ -235,7 +253,9 @@ TEST(OnnxLightBackendKernels, NotBenchmarkRunsThroughRuntime) {
 
 TEST(OnnxLightBackendKernels, UnaryBenchmarkCorporaCoverParallelThresholds) {
   onnx_light_cpu::backend_test::RegisterCpuKernelBackendTestCases();
-  for (const std::string &op : {"Abs", "Exp", "Log"}) {
+  std::set<int64_t> exp_sizes;
+  std::set<int64_t> not_sizes;
+  for (const std::string &op : {"Abs", "Exp", "Log", "Not"}) {
     std::vector<TestCase> cases =
         CollectTestCases(op, /*include_big=*/false, core::backend_test::TestMode::BENCHMARK);
     std::set<int64_t> sizes;
@@ -251,7 +271,13 @@ TEST(OnnxLightBackendKernels, UnaryBenchmarkCorporaCoverParallelThresholds) {
     const int64_t threshold = op == "Log" ? 131072 : 65536;
     EXPECT_TRUE(sizes.contains(threshold - 1)) << op;
     EXPECT_TRUE(sizes.contains(threshold)) << op;
+    if (op == "Exp") {
+      exp_sizes = sizes;
+    } else if (op == "Not") {
+      not_sizes = sizes;
+    }
   }
+  EXPECT_EQ(not_sizes, exp_sizes);
 }
 
 TEST(OnnxLightBackendKernels, GemmBenchmarkRunsThroughRuntime) {
@@ -259,8 +285,9 @@ TEST(OnnxLightBackendKernels, GemmBenchmarkRunsThroughRuntime) {
   // runtime. The metadata test below validates the complete 72-case benchmark
   // corpus without materializing and executing every large timing workload as
   // part of the unit-test suite.
-  const std::vector<std::string> failures = RunCpuBackendCases(
-      "Gemm", core::backend_test::TestMode::BENCHMARK, "test_cpu_gemm_direct_float32_benchmark");
+  const std::vector<std::string> failures =
+      RunCpuBackendCases("Gemm", core::backend_test::TestMode::BENCHMARK,
+                         "test_cpu_gemm_direct_float32_transA_0_transB_0_bias_none_benchmark");
   EXPECT_TRUE(failures.empty()) << Describe(failures);
 }
 
@@ -292,11 +319,13 @@ TEST(OnnxLightBackendKernels, GemmBenchmarkCorpusIsLazyAndCoversPriorityShapes) 
   bool has_large_k_1024 = false;
   bool has_split_k_16384 = false;
   bool has_transformer_decode = false;
+  std::set<std::string> names;
   for (const TestCase &test_case : cases) {
     if (test_case.name.rfind("test_cpu_gemm_", 0) != 0) {
       continue;
     }
     ++cpu_cases;
+    EXPECT_TRUE(names.insert(test_case.name).second) << test_case.name;
     EXPECT_TRUE(test_case.is_lazy());
     EXPECT_FALSE(test_case.materialized());
     EXPECT_TRUE(test_case.name.ends_with("_benchmark"));
@@ -309,11 +338,27 @@ TEST(OnnxLightBackendKernels, GemmBenchmarkCorpusIsLazyAndCoversPriorityShapes) 
     has_skinny_n |= test_case.name.find("skinny_n") != std::string::npos;
     has_large_k |= test_case.name.find("large_k") != std::string::npos;
     has_split_k |= test_case.name.find("split_k") != std::string::npos;
-    has_transpose |= test_case.name.find("trans_") != std::string::npos;
-    has_scalar_bias |= test_case.name.find("scalar_bias") != std::string::npos;
-    has_row_bias |= test_case.name.find("row_bias") != std::string::npos;
-    has_column_bias |= test_case.name.find("column_bias") != std::string::npos;
-    has_matrix_bias |= test_case.name.find("matrix_bias") != std::string::npos;
+    has_transpose |= test_case.name.find("_transA_1_") != std::string::npos ||
+                     test_case.name.find("_transB_1_") != std::string::npos;
+    has_scalar_bias |= test_case.name.find("_bias_scalar_") != std::string::npos;
+    has_row_bias |= test_case.name.find("_bias_row_") != std::string::npos;
+    has_column_bias |= test_case.name.find("_bias_column_") != std::string::npos;
+    has_matrix_bias |= test_case.name.find("_bias_matrix_") != std::string::npos;
+    const int bias_tags =
+        static_cast<int>(test_case.name.find("_bias_none_") != std::string::npos) +
+        static_cast<int>(test_case.name.find("_bias_scalar_") != std::string::npos) +
+        static_cast<int>(test_case.name.find("_bias_row_") != std::string::npos) +
+        static_cast<int>(test_case.name.find("_bias_column_") != std::string::npos) +
+        static_cast<int>(test_case.name.find("_bias_matrix_") != std::string::npos);
+    EXPECT_EQ(bias_tags, 1) << test_case.name;
+    const int trans_a_tags =
+        static_cast<int>(test_case.name.find("_transA_0_") != std::string::npos) +
+        static_cast<int>(test_case.name.find("_transA_1_") != std::string::npos);
+    const int trans_b_tags =
+        static_cast<int>(test_case.name.find("_transB_0_") != std::string::npos) +
+        static_cast<int>(test_case.name.find("_transB_1_") != std::string::npos);
+    EXPECT_EQ(trans_a_tags, 1) << test_case.name;
+    EXPECT_EQ(trans_b_tags, 1) << test_case.name;
     has_float32 |= test_case.name.find("_float32_") != std::string::npos;
     has_float16 |= test_case.name.find("_float16_") != std::string::npos;
     has_bfloat16 |= test_case.name.find("_bfloat16_") != std::string::npos;

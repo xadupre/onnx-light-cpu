@@ -211,6 +211,57 @@ TreeEnsembleRegressorAttributes MakeRegressor() {
   return attributes;
 }
 
+TreeEnsembleAttributes MakeBenchmarkForest(std::size_t trees, std::int64_t features) {
+  constexpr std::size_t kDepth = 4;
+  constexpr std::size_t kInternalNodes = (1U << kDepth) - 1;
+  constexpr std::size_t kLeaves = 1U << kDepth;
+  TreeEnsembleAttributes attributes;
+  attributes.n_features = features;
+  attributes.n_targets = 1;
+  attributes.value_type = TreeValueType::kFloat32;
+  for (std::size_t tree = 0; tree < trees; ++tree) {
+    const std::size_t node_offset = tree * kInternalNodes;
+    const std::size_t leaf_offset = tree * kLeaves;
+    attributes.tree_roots.push_back(static_cast<std::int64_t>(node_offset));
+    for (std::size_t node = 0; node < kInternalNodes; ++node) {
+      attributes.nodes_featureids.push_back(
+          static_cast<std::int64_t>((tree + node) % static_cast<std::size_t>(features)));
+      attributes.nodes_splits.push_back(static_cast<double>(static_cast<int>(node % 7) - 3) * 0.25);
+      attributes.nodes_modes.push_back(reference::TreeBranchMode::kLeq);
+      for (bool true_branch : {true, false}) {
+        const std::size_t child = 2 * node + (true_branch ? 1 : 2);
+        const bool leaf = child >= kInternalNodes;
+        const std::int64_t child_id = static_cast<std::int64_t>(
+            leaf ? leaf_offset + child - kInternalNodes : node_offset + child);
+        if (true_branch) {
+          attributes.nodes_truenodeids.push_back(child_id);
+          attributes.nodes_trueleafs.push_back(leaf ? 1 : 0);
+        } else {
+          attributes.nodes_falsenodeids.push_back(child_id);
+          attributes.nodes_falseleafs.push_back(leaf ? 1 : 0);
+        }
+      }
+    }
+    for (std::size_t leaf = 0; leaf < kLeaves; ++leaf) {
+      attributes.leaf_targetids.push_back(0);
+      attributes.leaf_weights.push_back(
+          static_cast<double>(static_cast<int>((leaf + tree) % 11) - 5) /
+          (static_cast<double>(trees) * 8.0));
+    }
+  }
+  return attributes;
+}
+
+struct TreeEnsembleBenchmarkSpec {
+  std::size_t trees;
+  std::int64_t features;
+  std::size_t rows;
+};
+
+constexpr TreeEnsembleBenchmarkSpec kTreeEnsembleBenchmarkCases[] = {
+    {10, 4, 1}, {100, 64, 8}, {1000, 1024, 32}, {10000, 4096, 1}, {10000, 4096, 128},
+};
+
 NodeProto MakeRegressorNode(const TreeEnsembleRegressorAttributes &attributes) {
   NodeProto node;
   node.set_op_type("TreeEnsembleRegressor");
@@ -272,10 +323,34 @@ template <typename T> Tensor MakeNumericInput(const std::vector<T> &values) {
 } // namespace
 
 void RegisterCpuTreeEnsembleCases(std::vector<TestCase> &registry, TestMode mode) {
+  const OpsetId ml_opset("ai.onnx.ml", kMlOpsetVersion);
+  if (mode == TestMode::BENCHMARK) {
+    for (const TreeEnsembleBenchmarkSpec &spec : kTreeEnsembleBenchmarkCases) {
+      TreeEnsembleAttributes attributes = MakeBenchmarkForest(spec.trees, spec.features);
+      NodeProto node = MakeTreeEnsembleNode(attributes);
+      const std::string name = "test_cpu_treeensemble_t" + std::to_string(spec.trees) + "_f" +
+                               std::to_string(spec.features) + "_b" + std::to_string(spec.rows) +
+                               "_benchmark";
+      Expect(registry, std::move(node), name, {DefaultOpset(13), ml_opset},
+             [attributes = std::move(attributes), spec]() mutable -> IoData {
+               std::vector<double> values(spec.rows * static_cast<std::size_t>(spec.features));
+               for (std::size_t index = 0; index < values.size(); ++index) {
+                 values[index] = static_cast<double>(static_cast<int>(index % 17) - 8) * 0.25;
+               }
+               reference::TreeEnsembleReference reference(attributes);
+               std::vector<double> expected = reference.Evaluate(values, spec.rows);
+               Tensor input = Tensor::FromFloat(
+                   "", {static_cast<std::int64_t>(spec.rows), spec.features}, ToFloat(values));
+               Tensor output = Tensor::FromFloat("", {static_cast<std::int64_t>(spec.rows), 1},
+                                                 ToFloat(expected));
+               return IoData{{std::move(input)}, {std::move(output)}};
+             });
+    }
+    return;
+  }
   if (mode != TestMode::TEST) {
     return;
   }
-  const OpsetId ml_opset("ai.onnx.ml", kMlOpsetVersion);
   for (TreeEnsembleCorpusCase test_case : reference::GenerateTreeEnsembleV5Corpus()) {
     NodeProto node = MakeTreeEnsembleNode(test_case.attributes);
     const std::string name = "test_cpu_treeensemble_v5_" + test_case.name;
