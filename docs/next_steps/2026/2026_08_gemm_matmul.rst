@@ -1427,6 +1427,51 @@ ONNX Runtime and onnx-light installed::
 Repeat with physical-core affinity and thread count, then pass ``--enforce``
 once every priority case reaches the 1.0x median / 0.9x minimum gate.
 
+Roadmap PR10.4 follow-up: issue #340 status
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+`Issue #340 <https://github.com/xadupre/onnx-light-cpu/issues/340>`_ reopens
+the integer/compact gate because #334 was closed without the dedicated-machine
+pinned one-thread/physical-core sweeps and without the ``MatMulInteger``/
+``QLinearMatMul`` ONNX Runtime parity reruns its closure rule requires. This
+pass records exactly what this sandbox can and cannot verify so the issue is
+not closed again on incomplete evidence.
+
+What this sandbox reproduces: ``test_gemm_kernel`` (64 passed, 3 skipped for
+missing AVX-512FP16/AVX-512BF16/AMX-BF16 hardware), ``test_gemm_plan`` (31
+passed), and ``test_integer_gemm_vnni`` (8 passed) build and pass cleanly on
+this AVX-512/AVX-512VNNI x86 host, confirming the #338 packing fix and the
+2x2 blocked integer micro-kernel are not regressed. The isolated
+``compact_gemm_throughput`` driver, pinned to a single core with ``taskset``,
+also runs without error and produces INT8/INT4/E4M3/E5M2 GOPS across every
+priority shape (for example ``square_512`` reaches 93.17 INT8 GOPS and 69.77
+INT4 GOPS on this host's AVX-512VNNI path), with no shape collapsing to the
+kind of sub-1-GOPS regression the #338 fix addressed.
+
+What this sandbox cannot reproduce: it has no ``onnx-light`` install (the
+package is not published and its source is not part of this checkout) and no
+access to a dedicated, frequency-pinned x86 or ARM machine, so
+``tools/benchmark_integer_gemm_parity.py`` and
+``tools/benchmark_gemm_parity.py`` cannot be executed here against ONNX
+Runtime, and no ARM sweep of any kind is possible. ``onnxruntime`` itself can
+be installed from PyPI in this sandbox, but the parity tools require the
+CPU kernel to be importable as ``onnx_light_cpu`` through an ``onnx-light``
+build (see ``onnx_light_cpu/kernels/math/gemm_kernel.cc`` registration and
+``tools/benchmark_integer_gemm_parity.py``'s ``onnx_light``/``onnx_light_cpu``
+imports), which this environment cannot provide. The virtualized CPU used for
+this run (cloud hypervisor, shared vCPUs, no pinned frequency) also does not
+qualify as the "dedicated" machine the issue and its closure rule require
+even where the parity tools could run.
+
+Per the issue's closure rule, a missing runner, dependency, or dedicated
+machine keeps the issue **blocked**, so #340 remains open. No PR resolving
+only this sandbox-visible portion of the work may use ``Fixes``/``Closes``
+against #340; the dedicated-machine ``MatMulInteger``/``QLinearMatMul`` ONNX
+Runtime sweeps and INT4/UINT4/Float8 correctness-and-throughput evidence
+still need to be produced and committed under
+``docs/next_steps/2026/data/`` from a real dedicated x86 machine and a real
+dedicated ARM machine before this gate can close.
+
 Roadmap PR10.3 tuning record
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
