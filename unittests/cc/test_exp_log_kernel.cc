@@ -501,10 +501,16 @@ TEST(ExpLogParallel, OperatorSpecificParticipantPolicy) {
   std::vector<float> input(524288, 1.0f);
   std::vector<float> output(input.size());
 
-  onnx_light_cpu::ExpFloat32(input.data(), output.data(), 65535);
+  onnx_light_cpu::ExpFloat32(input.data(), output.data(), 32767);
   EXPECT_EQ(executor.dispatches, 0);
-  onnx_light_cpu::ExpFloat32(input.data(), output.data(), 65536);
+  onnx_light_cpu::ExpFloat32(input.data(), output.data(), 32768);
   EXPECT_EQ(executor.dispatches, 1);
+  EXPECT_EQ(executor.blocks, 2);
+  onnx_light_cpu::ExpFloat32(input.data(), output.data(), 65535);
+  EXPECT_EQ(executor.dispatches, 2);
+  EXPECT_EQ(executor.blocks, 2);
+  onnx_light_cpu::ExpFloat32(input.data(), output.data(), 65536);
+  EXPECT_EQ(executor.dispatches, 3);
   EXPECT_EQ(executor.blocks, 2);
 
   executor = {};
