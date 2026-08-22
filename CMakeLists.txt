@@ -919,6 +919,7 @@ if(ONNX_LIGHT_CPU_INSTALL)
   install(FILES
       "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/execution.h"
       "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/thread_topology.h"
+      "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/cpu_cache_topology.h"
       DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/onnx_light_cpu/impl")
 
   install(FILES

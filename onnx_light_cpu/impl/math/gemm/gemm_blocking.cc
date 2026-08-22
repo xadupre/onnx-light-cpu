@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "onnx_light_cpu/impl/cpu_cache_topology.h"
 #include "onnx_light_cpu/impl/math/gemm/gemm_common.h"
 
 #include <algorithm>
@@ -23,6 +24,10 @@ namespace onnx_light_cpu::detail {
 
 namespace {
 
+// Portable defaults used whenever the reusable cache topology (see
+// cpu_cache_topology.h) reports no detected data or unified cache at a
+// level. These match the historical hard-coded values so existing blocking
+// behavior is unchanged when detection is unavailable.
 struct CacheSizes {
   std::size_t l1 = 32 * 1024;
   std::size_t l2 = 256 * 1024;
@@ -80,47 +85,17 @@ GemmMicroarchitecture DetectMicroarchitecture() {
   return GemmMicroarchitecture::kGeneric;
 }
 
-bool ReadDeterministicCaches(unsigned int leaf, CacheSizes &sizes) {
-  bool found = false;
-  for (unsigned int index = 0;; ++index) {
-    const CpuidResult cache = Cpuid(leaf, index);
-    const unsigned int type = cache.eax & 0x1fu;
-    if (type == 0) {
-      break;
-    }
-    if (type == 2) {
-      continue;
-    }
-    found = true;
-    const unsigned int level = (cache.eax >> 5) & 0x7u;
-    const std::size_t line_size = (cache.ebx & 0xfffu) + 1;
-    const std::size_t partitions = ((cache.ebx >> 12) & 0x3ffu) + 1;
-    const std::size_t ways = ((cache.ebx >> 22) & 0x3ffu) + 1;
-    const std::size_t sets = static_cast<std::size_t>(cache.ecx) + 1;
-    const std::size_t size = line_size * partitions * ways * sets;
-    if (level == 1) {
-      sizes.l1 = std::max(sizes.l1, size);
-    } else if (level == 2) {
-      sizes.l2 = std::max(sizes.l2, size);
-    } else if (level == 3) {
-      sizes.l3 = std::max(sizes.l3, size);
-    }
-  }
-  return found;
-}
-
 #endif
 
+// Reads the reusable, cross-platform cache descriptor (see
+// cpu_cache_topology.h) once and falls back to the historical portable
+// defaults for any level it did not detect.
 CacheSizes DetectCacheSizes() {
   CacheSizes sizes;
-#if ONNX_LIGHT_CPU_X86
-  const unsigned int max_basic = Cpuid(0).eax;
-  const bool found = max_basic >= 4 && ReadDeterministicCaches(4, sizes);
-  const unsigned int max_extended = Cpuid(0x80000000u).eax;
-  if (!found && max_extended >= 0x8000001du) {
-    ReadDeterministicCaches(0x8000001du, sizes);
-  }
-#endif
+  const CpuCacheTopology &topology = GetCpuCacheTopology();
+  sizes.l1 = CpuCacheSizeBytesOrFallback(topology, 1, sizes.l1);
+  sizes.l2 = CpuCacheSizeBytesOrFallback(topology, 2, sizes.l2);
+  sizes.l3 = CpuCacheSizeBytesOrFallback(topology, 3, sizes.l3);
   return sizes;
 }
 
