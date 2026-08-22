@@ -281,6 +281,29 @@ TEST(OnnxLightBackendKernels, TreeEnsembleCaseNamesAreUniqueAndReflectAttributes
   }
 }
 
+// Every onnx-light-cpu backend test case name (across every registered
+// operator, not just TreeEnsemble) must be unique within its ``TestMode``:
+// onnx-light's registry keys cases by name alone, so a collision between two
+// operators would silently shadow one of the cases.
+TEST(OnnxLightBackendKernels, AllCpuBackendCaseNamesAreGloballyUnique) {
+  onnx_light_cpu::backend_test::RegisterCpuKernelBackendTestCases();
+  for (core::backend_test::TestMode mode :
+       {core::backend_test::TestMode::TEST, core::backend_test::TestMode::BENCHMARK}) {
+    const std::vector<TestCase> cases =
+        CollectTestCases(/*op_type=*/"", /*include_big=*/false, mode);
+    std::set<std::string> names;
+    size_t cpu_cases = 0;
+    for (const TestCase &test_case : cases) {
+      if (test_case.name.rfind("test_cpu_", 0) != 0) {
+        continue;
+      }
+      ++cpu_cases;
+      EXPECT_TRUE(names.insert(test_case.name).second) << test_case.name;
+    }
+    EXPECT_GT(cpu_cases, 0U);
+  }
+}
+
 // Benchmark-mode cases: registered per kernel alongside the correctness cases.
 // The unit test exercises them (executes the large model through the runtime)
 // to keep the benchmark registration covered; timings are collected by a
