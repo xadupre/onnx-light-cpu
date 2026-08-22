@@ -26,7 +26,9 @@ class TestApiDocReflectsPublicApi:
         assert marker in text, "docs/api/index.rst is missing the onnx_light_cpu module directive"
         section = text.split(marker, 1)[1]
         for name in onnx_light_cpu.__all__:
-            assert f".. py:function:: {name}" in section, (
-                f"docs/api/index.rst does not document the public function {name!r} "
+            # Functions are documented with ``.. py:function::``; classes (e.g.
+            # the ``RegisteredKernel`` NamedTuple) with ``.. py:class::``.
+            assert f".. py:function:: {name}" in section or f".. py:class:: {name}" in section, (
+                f"docs/api/index.rst does not document the public symbol {name!r} "
                 "in the onnx_light_cpu package section"
             )

@@ -89,7 +89,7 @@ Step 2 (this PR) exposes that inventory to Python. The compiled
 ``RegisteredKernel`` (``typing.NamedTuple``) record through
 ``onnx_light_cpu.registered_kernels()``, and
 ``onnx_light_cpu.registered_kernel_names()`` (and the C++
-``RegisteredKernelNames()`` it is built on) is now derived from that same
+``RegisteredKernelNames()`` it is built on) is now derived from those same
 records instead of a separately hand-maintained ``op_type -> kernel name``
 list.
 
