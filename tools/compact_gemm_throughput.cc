@@ -328,7 +328,14 @@ Options ParseArgs(int argc, char **argv) {
       std::fprintf(stderr, "Missing value for argument %s\n", argv[index]);
       std::exit(1);
     }
-    return static_cast<std::size_t>(std::strtoull(argv[++index], nullptr, 10));
+    const char *token = argv[++index];
+    char *end = nullptr;
+    const unsigned long long parsed = std::strtoull(token, &end, 10);
+    if (end == token || *end != '\0') {
+      std::fprintf(stderr, "Invalid numeric value %s for argument %s\n", token, argv[index - 1]);
+      std::exit(1);
+    }
+    return static_cast<std::size_t>(parsed);
   };
   for (int i = 1; i < argc; ++i) {
     const std::string arg = argv[i];
@@ -406,6 +413,10 @@ int main(int argc, char **argv) {
 
   if (!options.json_path.empty()) {
     std::ofstream out(options.json_path);
+    if (!out) {
+      std::fprintf(stderr, "Failed to open %s for writing.\n", options.json_path.c_str());
+      return 1;
+    }
     out << "{\n"
         << "  \"metadata\": {\n"
         << "    \"timestamp_utc\": \"" << TimestampUtc() << "\",\n"
@@ -425,6 +436,10 @@ int main(int argc, char **argv) {
     }
     out << "  ]\n"
         << "}\n";
+    if (!out.good()) {
+      std::fprintf(stderr, "Failed to write %s.\n", options.json_path.c_str());
+      return 1;
+    }
     std::printf("raw results: %s\n", options.json_path.c_str());
   }
   return 0;
