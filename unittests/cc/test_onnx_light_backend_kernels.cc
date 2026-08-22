@@ -291,16 +291,24 @@ TEST(OnnxLightBackendKernels, AllCpuBackendCaseNamesAreGloballyUnique) {
        {core::backend_test::TestMode::TEST, core::backend_test::TestMode::BENCHMARK}) {
     const std::vector<TestCase> cases =
         CollectTestCases(/*op_type=*/"", /*include_big=*/false, mode);
-    std::set<std::string> names;
-    size_t cpu_cases = 0;
+    std::vector<std::string> cpu_case_names;
     for (const TestCase &test_case : cases) {
       if (test_case.name.rfind("test_cpu_", 0) != 0) {
         continue;
       }
-      ++cpu_cases;
-      EXPECT_TRUE(names.insert(test_case.name).second) << test_case.name;
+      cpu_case_names.push_back(test_case.name);
     }
-    EXPECT_GT(cpu_cases, 0U);
+    EXPECT_GT(cpu_case_names.size(), 0U);
+
+    const std::set<std::string> names(cpu_case_names.begin(), cpu_case_names.end());
+    if (names.size() != cpu_case_names.size()) {
+      // Only pay the per-name insert cost to pinpoint the offending
+      // duplicate(s) when a collision was actually detected above.
+      std::set<std::string> seen;
+      for (const std::string &name : cpu_case_names) {
+        EXPECT_TRUE(seen.insert(name).second) << name;
+      }
+    }
   }
 }
 
