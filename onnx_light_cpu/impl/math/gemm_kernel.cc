@@ -1235,7 +1235,9 @@ void GemmFiveLoopRange(bool trans_a, bool trans_b, std::size_t M, std::size_t N,
   // row tile, and that traffic caps large-matrix throughput well below the
   // micro-kernel rate.
   const std::size_t column_block = detail::SelectGemmColumnBlock(blocking, sizeof(T));
-  const std::size_t panel_capacity = blocking.kc * AlignUp(blocking.nc, column_block);
+  const std::size_t panel_capacity =
+      std::min(blocking.kc, k_end - k_begin) * AlignUp(std::min(blocking.nc, N), column_block);
+  const std::size_t row_capacity = std::min(blocking.mc, M);
   AlignedVector<T> bpack(panels_per_wave * panel_capacity);
 
   for (std::size_t k0 = k_begin; k0 < k_end; k0 += blocking.kc) {
@@ -1259,7 +1261,7 @@ void GemmFiveLoopRange(bool trans_a, bool trans_b, std::size_t M, std::size_t N,
                           kGemmFmasPerParallelWorkUnit;
       ExecuteRanges(static_cast<std::int64_t>(task_count), cost,
                     [&](std::int64_t begin, std::int64_t end) {
-                      AlignedVector<T> apack(blocking.mc * kc);
+                      AlignedVector<T> apack(row_capacity * kc);
                       std::size_t packed_row_panel = row_panels;
                       for (std::int64_t task = begin; task < end; ++task) {
                         const std::size_t row_panel = static_cast<std::size_t>(task) / wave_panels;
@@ -1411,7 +1413,8 @@ void GemmHalfNativeGeneral(bool trans_a, std::size_t M, std::size_t N, std::size
   const std::size_t thread_count = static_cast<std::size_t>(ExecutionThreadCount());
   const std::size_t panels_per_wave = std::min(
       column_panels, std::max<std::size_t>(1, (thread_count + row_panels - 1) / row_panels));
-  const std::size_t panel_capacity = selected.kc * selected.nc;
+  const std::size_t panel_capacity = std::min(selected.kc, K) * std::min(selected.nc, N);
+  const std::size_t row_capacity = std::min(selected.mc, M);
   AlignedVector<std::uint16_t> bpack(panels_per_wave * panel_capacity);
 
   for (std::size_t k0 = 0; k0 < K; k0 += selected.kc) {
@@ -1435,7 +1438,7 @@ void GemmHalfNativeGeneral(bool trans_a, std::size_t M, std::size_t N, std::size
                           kGemmFmasPerParallelWorkUnit;
       ExecuteRanges(static_cast<std::int64_t>(task_count), cost,
                     [&](std::int64_t begin, std::int64_t end) {
-                      AlignedVector<std::uint16_t> apack(selected.mc * kc);
+                      AlignedVector<std::uint16_t> apack(row_capacity * kc);
                       std::size_t packed_row_panel = row_panels;
                       for (std::int64_t task = begin; task < end; ++task) {
                         const std::size_t row_panel = static_cast<std::size_t>(task) / wave_panels;
