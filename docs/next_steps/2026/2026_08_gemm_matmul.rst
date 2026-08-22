@@ -23,8 +23,10 @@ tuning and its dedicated-machine evidence so the work is not fragmented:
    * - Gate
      - Remaining work
      - Closure evidence
-   * - `#277 <https://github.com/xadupre/onnx-light-cpu/issues/277>`_
-     - Reuse compact FP16/BF16 B panels and fix physical-core scaling.
+   * - `#277 <https://github.com/xadupre/onnx-light-cpu/issues/277>`_ /
+       `#333 <https://github.com/xadupre/onnx-light-cpu/issues/333>`_
+     - Use the tuning tool to select blocking/participant values and fix
+       physical-core scaling; no hard-coded machine thresholds.
      - Publish passing dedicated x86/ARM FP16 parity and BF16 throughput.
    * - `#281 <https://github.com/xadupre/onnx-light-cpu/issues/281>`_
      - Close remaining integer and compact-format end-to-end gaps.
@@ -1426,13 +1428,43 @@ between 0.98x and 1.31x and BF16 ratios between 0.99x and 1.51x against the
 previous once-widened float32 path across square, transposed-A, and transformer
 projection cases.
 
+The fifth pass (#333, following #332's exposed ``blocking``/``compact_blocking``/
+``parallel.maximum_threads`` tuning knobs) extends ``tools/compact_gemm_throughput``
+to build its FP16/BF16 measurements through the same tunable ``GemmHalfPlan``
+instead of the untuned convenience entry point, so ``--mc``/``--nc``/``--kc``,
+``--compact-mc``/``--compact-nc``/``--compact-kc``, and ``--participants`` select
+blocking and participant values with the tuning tool instead of hard-coding a
+machine threshold; ``--json`` publishes every raw sample plus CPU model,
+affinity, compiler, and detected ISA. A one-thread and a two-physical-core
+sweep of ``MC``/``NC``/``KC`` in ``{0, 64, 128, 256} x {0, 128, 256, 512} x {0,
+128, 256}`` on the isolated Intel Xeon Platinum 8370C runner (the same host used
+for the :doc:`Exp/Log parity gate <2026_08_exp_log_parity>`) shows every
+setting within one standard deviation of the automatic (``0``) default for
+``square_512`` and ``transformer`` (FP16 35.1-36.5 GFLOP/s, BF16 44.1-46.5
+GFLOP/s); no configuration measurably regresses, so no blocking heuristic or
+kernel change is made from this pass. The
+:download:`one-thread raw JSON report
+<data/2026_08_gemm_fp16_bf16_compact_threads_1.json>` and the
+:download:`two-physical-core raw JSON report
+<data/2026_08_gemm_fp16_bf16_compact_physical_cores.json>` record every sample
+alongside the metadata above.
+
+This pass does not close #333: the sandbox running it has no ``onnxruntime``
+or ``onnx-light`` install, so it cannot reproduce the FLOAT16-vs-ONNX-Runtime
+``benchmark_gemm_parity.py`` median/minimum gate, and it has no ARM hardware.
+The isolated instrument above is ready for the required dedicated x86 and ARM
+one-thread and physical-core sweeps; #333 stays open until those pinned
+``benchmark_gemm_parity.py`` FP16 parity runs reach the 1.0x median / 0.9x
+minimum gates and BF16 correctness and isolated throughput are published per
+ISA.
+
 The published numbers above are diagnostic WSL measurements, not the
 dedicated-machine evidence required to close PR10.3. ONNX Runtime 1.28.0 does
 not implement CPU BFLOAT16 Gemm on this host, so BFLOAT16 remains an isolated
 throughput measurement rather than a parity ratio. ARM results are also still
 required.
 
-The remaining PR10.3 order, tracked entirely by #277, is:
+The remaining PR10.3 order, tracked entirely by #277 and #333, is:
 
 #. Fix physical-core scaling. A ten-thread diagnostic corpus reaches only
    0.309x median after the tiny split-K correction, with high variance and a
@@ -1441,8 +1473,8 @@ The remaining PR10.3 order, tracked entirely by #277, is:
    retuning MC/NC/KC.
 #. Run dedicated x86 and ARM sweeps. Publish one-thread and physical-core raw
    samples, dispersion, FP16 parity, and isolated BF16 throughput per ISA. Keep
-   #277 open until every supported platform reaches the stated 1.0x median and
-   0.9x minimum gates.
+   #277 and #333 open until every supported platform reaches the stated 1.0x
+   median and 0.9x minimum gates.
 
 Roadmap PR10.4 tuning record
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
