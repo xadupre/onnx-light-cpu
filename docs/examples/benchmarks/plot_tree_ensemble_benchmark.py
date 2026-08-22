@@ -26,9 +26,8 @@ if "__file__" in globals():
     if (candidate / runner_name).exists() and (candidate / "CMakeLists.txt").exists():
         root = candidate
 
-for candidate in [Path.cwd()]:
-    if root is not None:
-        break
+if root is None:
+    candidate = Path.cwd()
     for parent in [candidate, *candidate.parents]:
         if (parent / runner_name).exists() and (parent / "CMakeLists.txt").exists():
             root = parent
