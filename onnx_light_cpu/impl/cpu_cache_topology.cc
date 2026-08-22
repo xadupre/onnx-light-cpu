@@ -2,6 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#if defined(_WIN32)
+// Must be defined before the first inclusion of <windows.h> anywhere in this
+// translation unit (including transitively through other headers) so its
+// min/max macros never shadow std::max used below.
+#define NOMINMAX
+#endif
+
 #include "onnx_light_cpu/impl/cpu_cache_topology.h"
 
 #include <algorithm>
@@ -20,7 +27,6 @@
 #endif
 
 #if defined(_WIN32)
-#define NOMINMAX
 #include <windows.h>
 #elif defined(__linux__)
 #include <cctype>
@@ -170,9 +176,6 @@ std::vector<CpuCacheRecord> DetectLinuxCacheRecords() {
         "/sys/devices/system/cpu/cpu0/cache/index" + std::to_string(index) + "/";
     std::string level_text;
     if (!ReadFirstLine(base + "level", level_text)) {
-      if (index == 0) {
-        continue;
-      }
       break;
     }
     CpuCacheRecord record;
@@ -325,6 +328,12 @@ std::vector<CpuCacheRecord> DetectPlatformCacheRecords() {
 #endif
 }
 
+#if defined(__linux__) || defined(_WIN32) || defined(__APPLE__) || ONNX_LIGHT_CPU_CACHE_X86
+constexpr bool kPlatformCacheDetectorAvailable = true;
+#else
+constexpr bool kPlatformCacheDetectorAvailable = false;
+#endif
+
 } // namespace
 
 CpuCacheTopology BuildCpuCacheTopology(const std::vector<CpuCacheRecord> &records,
@@ -365,8 +374,8 @@ std::vector<CpuCacheRecord> DetectRawCpuCacheRecords() {
 namespace {
 
 const CpuCacheTopology &CachedCpuCacheTopology() {
-  static const CpuCacheTopology topology =
-      detail::BuildCpuCacheTopology(detail::DetectRawCpuCacheRecords(), true);
+  static const CpuCacheTopology topology = detail::BuildCpuCacheTopology(
+      detail::DetectRawCpuCacheRecords(), detail::kPlatformCacheDetectorAvailable);
   return topology;
 }
 
