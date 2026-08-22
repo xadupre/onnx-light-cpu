@@ -1351,8 +1351,11 @@ fallbacks are ordered. Completed rows remain visible so scope is not lost.
        dedicated-machine gate remains open. The second pass replaces the
        per-output AVX2 reduction with a 2x2 blocked output micro-kernel that
        reuses loaded A and packed B vectors across outputs while preserving the
-       exact scalar output and reduction tails. Remaining tuning and evidence
-       stay in #281.
+       exact scalar output and reduction tails. The third pass (#338) fixes a
+       measured INT4/UINT4 unpacking regression (``skinny_n`` rises from 0.49
+       to 12.70 GOPS) and publishes complete raw JSON samples for INT8, INT4,
+       E4M3, and E5M2 alongside FP16/BF16. Remaining tuning and evidence stay
+       in #281.
    * - Roadmap PR10.5
      - Final blocking GEMM parity gate.
      - Raw dedicated-machine results cover Gemm, shared MatMul, batched paths,
@@ -1518,9 +1521,52 @@ through ``IntegerMatMul2D`` and applies a vectorized AVX2 requantization
 epilogue for INT8/UINT8 outputs while retaining the scalar fallback and exact
 tail behavior for non-AVX2 and rank-1 promotion paths.
 
-The remaining PR10.4 work, tracked entirely by #281, closes measured
-MatMulInteger, QLinearMatMul, INT4, and Float8 gaps before running pinned x86
-and ARM one-thread and physical-core sweeps. The issue remains open until raw
-samples and dispersion with complete environment metadata are published and
-ORT-supported integer/compact formats satisfy the 1.0x median and 0.9x minimum
-parity gates.
+The `#338 pass <https://github.com/xadupre/onnx-light-cpu/pull/338>`_ measures
+``compact_gemm_throughput`` (which already reports INT8, packed INT4, E4M3,
+and E5M2 alongside FP16/BF16) on the isolated sandbox host and finds a
+measured INT4/UINT4 regression: ``IntegerMatMul4Bit2DWithDot`` unpacked every
+4-bit element through a per-element ``ReadPacked4Bit`` call while building the
+transposed per-row (A) and per-column (B) dot-product panels, recomputing the
+nibble index shift and mask for every element instead of walking whole bytes.
+Isolated profiling attributes effectively all of the unpack time to this
+per-element call: on ``skinny_n`` (``1024 x 1 x 1024``) it costs 4.2 ms versus
+0.03 ms for the vectorized dot product that consumes its output, an over
+150x gap for work that is the same order of magnitude as the reduction itself.
+The fix unpacks each whole operand once, in its natural contiguous order
+(``row * depth + inner`` for A, ``inner * cols + column`` for B), into a raw
+signed byte buffer using a branchless byte-pair loop that extracts both
+nibbles per iteration; the existing per-row/per-column panel-building loops
+then read plain bytes from that buffer instead of calling ``ReadPacked4Bit``,
+with no change to the exact modulo-2^32 result, signedness handling, or
+odd-tail behavior already covered by ``IntegerPacked4Bit.*``. On the same
+one-thread sandbox host, isolated INT4 throughput rises from 0.47 to 1.97
+GOPS on ``skinny_m``, from 0.49 to 12.70 GOPS on ``skinny_n``, from 7.62 to
+57.42 GOPS on ``large_k``, from 41.41 to 74.63 GOPS on ``transformer``, and
+from 62.12 to 99.72 GOPS on ``square_512``, closing most of the previous gap
+to INT8 on the same shapes.
+
+This pass also closes a JSON-publishing gap: ``compact_gemm_throughput
+--json`` previously wrote only the FP16/BF16 medians and raw seconds samples
+even though INT8, INT4, E4M3, and E5M2 were already measured and printed to
+stdout. The tool now publishes the median and raw seconds samples for every
+format it measures. The :download:`one-thread raw JSON report
+<data/2026_08_gemm_integer_compact_threads_1.json>` records the INT4 fix
+above alongside INT8, E4M3, and E5M2 samples and the same hardware/compiler/
+ISA metadata as the FP16/BF16 reports.
+
+This pass remains diagnostic, not the dedicated-machine evidence required to
+close #281: the sandbox running it has no ``onnxruntime`` or ``onnx-light``
+install, so ``benchmark_integer_gemm_parity.py`` and
+``benchmark_gemm_parity.py --operator qlinearmatmul`` cannot be run to
+reproduce the ONNX Runtime ``MatMulInteger``/``QLinearMatMul`` median/minimum
+gate, and it has no ARM hardware. No further measured regression is evident
+in the isolated INT8, INT4, E4M3, or E5M2 throughput on this host; tuning the
+``blocking``/``compact_blocking`` knobs is not applicable to the integer path,
+which has no plan-owned blocking parameters (unlike ``GemmHalfPlan``).
+
+The remaining PR10.4 work, tracked entirely by #281, is to run pinned
+dedicated x86 and ARM one-thread and physical-core
+``benchmark_integer_gemm_parity.py`` and ``benchmark_gemm_parity.py`` sweeps
+and publish their raw samples, dispersion, and complete environment metadata.
+The issue remains open until ORT-supported integer/compact formats satisfy
+the 1.0x median and 0.9x minimum parity gates on those dedicated machines.

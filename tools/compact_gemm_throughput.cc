@@ -97,7 +97,7 @@ template <typename Fn> double MeasureGops(const GemmCase &shape, Fn run) {
   return GopsFromMedian(shape, MeasureSeconds(shape, run));
 }
 
-double MeasureInt8(const GemmCase &shape) {
+std::vector<double> MeasureInt8Seconds(const GemmCase &shape) {
   std::mt19937 rng(0x104u);
   std::uniform_int_distribution<int> byte(0, 255);
   std::vector<std::uint8_t> a(static_cast<std::size_t>(shape.m * shape.k));
@@ -107,13 +107,13 @@ double MeasureInt8(const GemmCase &shape) {
   std::generate(b.begin(), b.end(), [&]() { return static_cast<std::uint8_t>(byte(rng)); });
   const std::int32_t a_zero_point = 128;
   const std::int32_t b_zero_point = 0;
-  return MeasureGops(shape, [&]() {
+  return MeasureSeconds(shape, [&]() {
     onnx_light_cpu::IntegerMatMul2D(a.data(), false, b.data(), true, c.data(), shape.m, shape.n,
                                     shape.k, &a_zero_point, 1, &b_zero_point, 1);
   });
 }
 
-double MeasureInt4(const GemmCase &shape) {
+std::vector<double> MeasureInt4Seconds(const GemmCase &shape) {
   std::mt19937 rng(0x404u);
   std::uniform_int_distribution<int> byte(0, 255);
   const std::size_t a_count = static_cast<std::size_t>(shape.m * shape.k);
@@ -124,7 +124,7 @@ double MeasureInt4(const GemmCase &shape) {
   std::generate(a.begin(), a.end(), [&]() { return static_cast<std::uint8_t>(byte(rng)); });
   std::generate(b.begin(), b.end(), [&]() { return static_cast<std::uint8_t>(byte(rng)); });
   const std::int32_t zero_point = 0;
-  return MeasureGops(shape, [&]() {
+  return MeasureSeconds(shape, [&]() {
     onnx_light_cpu::IntegerMatMul4Bit2D(a.data(), true, b.data(), true, c.data(), shape.m, shape.n,
                                         shape.k, &zero_point, 1, &zero_point, 1);
   });
@@ -160,7 +160,8 @@ std::vector<double> MeasureHalfSeconds(const GemmCase &shape, bool is_bfloat16,
   return MeasureSeconds(shape, [&]() { plan.Execute(a.data(), b.data(), epilogue, y.data()); });
 }
 
-double MeasureFloat8(const GemmCase &shape, onnx_light_cpu::GemmFloat8Format format) {
+std::vector<double> MeasureFloat8Seconds(const GemmCase &shape,
+                                         onnx_light_cpu::GemmFloat8Format format) {
   std::mt19937 rng(0xf8u);
   std::uniform_int_distribution<int> finite_e4m3(0, 0x7e);
   std::vector<std::uint8_t> a(static_cast<std::size_t>(shape.m * shape.k));
@@ -169,7 +170,7 @@ double MeasureFloat8(const GemmCase &shape, onnx_light_cpu::GemmFloat8Format for
   std::generate(a.begin(), a.end(), [&]() { return static_cast<std::uint8_t>(finite_e4m3(rng)); });
   std::generate(b.begin(), b.end(), [&]() { return static_cast<std::uint8_t>(finite_e4m3(rng)); });
   onnx_light_cpu::GemmEpilogue<float> epilogue;
-  return MeasureGops(shape, [&]() {
+  return MeasureSeconds(shape, [&]() {
     onnx_light_cpu::GemmFloat8WithEpilogue(
         format, false, false, static_cast<std::size_t>(shape.m), static_cast<std::size_t>(shape.n),
         static_cast<std::size_t>(shape.k), 1.0f, a.data(), b.data(), epilogue, y.data());
@@ -387,10 +388,16 @@ int main(int argc, char **argv) {
     const std::vector<double> bf16_seconds = MeasureHalfSeconds(shape, true, options.tuning);
     const double fp16 = GopsFromMedian(shape, fp16_seconds);
     const double bf16 = GopsFromMedian(shape, bf16_seconds);
-    const double int8 = MeasureInt8(shape);
-    const double int4 = MeasureInt4(shape);
-    const double e4m3 = MeasureFloat8(shape, onnx_light_cpu::GemmFloat8Format::kE4M3FN);
-    const double e5m2 = MeasureFloat8(shape, onnx_light_cpu::GemmFloat8Format::kE5M2);
+    const std::vector<double> int8_seconds = MeasureInt8Seconds(shape);
+    const std::vector<double> int4_seconds = MeasureInt4Seconds(shape);
+    const std::vector<double> e4m3_seconds =
+        MeasureFloat8Seconds(shape, onnx_light_cpu::GemmFloat8Format::kE4M3FN);
+    const std::vector<double> e5m2_seconds =
+        MeasureFloat8Seconds(shape, onnx_light_cpu::GemmFloat8Format::kE5M2);
+    const double int8 = GopsFromMedian(shape, int8_seconds);
+    const double int4 = GopsFromMedian(shape, int4_seconds);
+    const double e4m3 = GopsFromMedian(shape, e4m3_seconds);
+    const double e5m2 = GopsFromMedian(shape, e5m2_seconds);
     std::printf("%-14s %6lld %6lld %6lld %13.2f %13.2f %13.2f %13.2f %13.2f %13.2f\n", shape.name,
                 static_cast<long long>(shape.m), static_cast<long long>(shape.n),
                 static_cast<long long>(shape.k), fp16, bf16, int8, int4, e4m3, e5m2);
@@ -404,8 +411,16 @@ int main(int argc, char **argv) {
             << "      \"k\": " << shape.k << ",\n"
             << "      \"fp16_gflops_median\": " << fp16 << ",\n"
             << "      \"bf16_gflops_median\": " << bf16 << ",\n"
+            << "      \"int8_gops_median\": " << int8 << ",\n"
+            << "      \"int4_gops_median\": " << int4 << ",\n"
+            << "      \"e4m3_gops_median\": " << e4m3 << ",\n"
+            << "      \"e5m2_gops_median\": " << e5m2 << ",\n"
             << "      \"fp16_seconds_samples\": " << JsonSecondsArray(fp16_seconds) << ",\n"
-            << "      \"bf16_seconds_samples\": " << JsonSecondsArray(bf16_seconds) << "\n"
+            << "      \"bf16_seconds_samples\": " << JsonSecondsArray(bf16_seconds) << ",\n"
+            << "      \"int8_seconds_samples\": " << JsonSecondsArray(int8_seconds) << ",\n"
+            << "      \"int4_seconds_samples\": " << JsonSecondsArray(int4_seconds) << ",\n"
+            << "      \"e4m3_seconds_samples\": " << JsonSecondsArray(e4m3_seconds) << ",\n"
+            << "      \"e5m2_seconds_samples\": " << JsonSecondsArray(e5m2_seconds) << "\n"
             << "    }";
       json_cases.push_back(entry.str());
     }
