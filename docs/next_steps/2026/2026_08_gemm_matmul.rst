@@ -1407,11 +1407,13 @@ already covers the full required corpus (Gemm, shared MatMul, batched paths,
 transpose, bias/epilogue, dynamic/constant B, skinny, large-K, split-K, and
 transformer cases across FLOAT32/FLOAT64/FLOAT16) and needs no further
 changes to run the gate once it is executed on a dedicated machine with
-ONNX Runtime and onnx-light installed:
-``python tools/benchmark_gemm_parity.py --operator all --dtype all --threads 1
---output gemm_matmul_parity_results.json`` (repeated with physical-core
-affinity), followed by ``--enforce`` once every priority case reaches the
-1.0x median / 0.9x minimum gate.
+ONNX Runtime and onnx-light installed::
+
+    python tools/benchmark_gemm_parity.py --operator all --dtype all \
+        --threads 1 --output gemm_matmul_parity_results.json
+
+Repeat with physical-core affinity and thread count, then pass ``--enforce``
+once every priority case reaches the 1.0x median / 0.9x minimum gate.
 
 Roadmap PR10.3 tuning record
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
