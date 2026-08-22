@@ -20,19 +20,19 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 runner_name = Path("tools") / "benchmark_tree_ensemble_parity.py"
-if "__file__" in globals():
-    root_candidates = [Path(__file__).resolve().parent, Path.cwd()]
-else:
-    root_candidates = [Path.cwd()]
-
 root = None
-for candidate in root_candidates:
+if "__file__" in globals():
+    candidate = Path(__file__).resolve().parents[3]
+    if (candidate / runner_name).exists() and (candidate / "CMakeLists.txt").exists():
+        root = candidate
+
+for candidate in [Path.cwd()]:
+    if root is not None:
+        break
     for parent in [candidate, *candidate.parents]:
         if (parent / runner_name).exists() and (parent / "CMakeLists.txt").exists():
             root = parent
             break
-    if root is not None:
-        break
 if root is None:
     raise RuntimeError(f"Unable to locate repository root containing {runner_name}.")
 runner = root / runner_name
