@@ -6,6 +6,7 @@
 
 #include "onnx_light_cpu/impl/math/gemm/gemm_plan.h"
 #include "onnx_light_cpu/impl/math/math_kernels.h"
+#include "onnx_light_cpu/kernels/kernel_registration.h"
 #include "onnx_light_cpu/kernels/kernel_usage.h"
 
 #include "onnx_core/runtime/kernels/cast_helper.h"
@@ -484,7 +485,13 @@ void RegisterGemmKernel() {
   };
   // Empty domain -> normalised to the default ONNX domain, overriding the
   // built-in Gemm entry with the SIMD-accelerated kernel for the CPU device.
-  rt_ns::RegisterKernelFn("", "Gemm", sym_ns::Device::kCPU, std::move(factory));
+  KernelRegistration info;
+  info.domain = "";
+  info.op_type = "Gemm";
+  info.device = sym_ns::Device::kCPU;
+  info.kernel_name = GemmKernel::kName;
+  info.types = {DataType::FLOAT, DataType::DOUBLE, DataType::FLOAT16, DataType::BFLOAT16};
+  RegisterKernel(std::move(info), std::move(factory));
 }
 
 } // namespace onnx_light_cpu

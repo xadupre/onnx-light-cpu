@@ -5,6 +5,7 @@
 #include "onnx_light_cpu/kernels/math/matmul_kernel.h"
 
 #include "onnx_light_cpu/impl/math/gemm/gemm_plan.h"
+#include "onnx_light_cpu/kernels/kernel_registration.h"
 #include "onnx_light_cpu/kernels/kernel_usage.h"
 
 #include "onnx_core/runtime/kernels/cast_helper.h"
@@ -148,7 +149,13 @@ void RegisterMatMulKernel() {
     kernel->set_node(node);
     return kernel;
   };
-  rt_ns::RegisterKernelFn("", "MatMul", sym_ns::Device::kCPU, std::move(matmul));
+  KernelRegistration info;
+  info.domain = "";
+  info.op_type = "MatMul";
+  info.device = sym_ns::Device::kCPU;
+  info.kernel_name = MatMulKernel::kName;
+  info.types = {DataType::FLOAT, DataType::DOUBLE, DataType::FLOAT16, DataType::BFLOAT16};
+  RegisterKernel(std::move(info), std::move(matmul));
 }
 
 } // namespace onnx_light_cpu

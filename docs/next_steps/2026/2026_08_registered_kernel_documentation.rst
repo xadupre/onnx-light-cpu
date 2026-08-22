@@ -28,16 +28,17 @@ ordering, and removes stale generated pages. The current C++ source scanner is
 deleted.
 
 Implementation sequence
------------------------
+------------------------
 
 .. list-table::
    :header-rows: 1
-   :widths: 14 27 39 20
+   :widths: 10 25 35 18 12
 
    * - Step
      - Work
      - Completion gate
      - Depends on
+     - Status
    * - 1
      - Add the common C++ registration helper and structured metadata record.
        Route every existing kernel registration through it.
@@ -45,12 +46,14 @@ Implementation sequence
        every registration in deterministic order and rejects duplicate
        ``(domain, operator, device)`` entries.
      - None
+     - Complete
    * - 2
      - Expose ``registered_kernels()`` in the compiled binding and public Python
        package. Derive ``registered_kernel_names()`` from it.
      - Python returns domain, operator, device, kernel name, types, and optional
        version bounds for every C++ registration.
      - Step 1
+     - Not started
    * - 3
      - Replace the Sphinx source scanner with API-driven page and index
        generation, including stale-page removal.
@@ -58,11 +61,25 @@ Implementation sequence
        removing a registration changes the generated pages without editing a
        documentation-side operator list.
      - Step 2
+     - Not started
    * - 4
      - Add C++, Python, API-documentation, and Sphinx parity tests.
      - A clean warnings-as-errors Sphinx build contains exactly one page per
        inventory record; focused C++ and Python suites pass.
      - Steps 1 through 3
+     - Not started
+
+Step 1 (this PR) adds ``onnx_light_cpu::KernelRegistration`` (the structured
+domain/operator/device/kernel-name/types/opset-bounds record) together with
+``RegisterKernel`` and ``CollectRegisteredKernels`` in
+``onnx_light_cpu/kernels/kernel_registration.{h,cc}``. Every
+``Register*Kernel[s]`` function now builds one such record and hands it, with
+its node factory, to ``RegisterKernel`` instead of calling onnx-light's
+``RegisterKernelFn`` directly. ``CollectRegisteredKernels`` runs
+``RegisterAllKernels`` with an inventory scope active, so it never mutates
+onnx-light's shared ``KernelDispatchTable``, and returns the metadata sorted
+by ``(domain, operator, device, kernel_name)``. A registration pass rejects a
+repeated ``(domain, operator, device)`` key with ``std::invalid_argument``.
 
 Validation and compatibility
 ----------------------------
