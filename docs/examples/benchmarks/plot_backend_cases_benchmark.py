@@ -71,26 +71,6 @@ _TARGET_DTYPE = {
     for op_type in _TARGET_KERNELS
 }
 
-# A single regular expression matching every "test_cpu_<op>_..." benchmark
-# case name for the target operators, instead of collecting per operator.
-_CASE_NAME_PATTERN = "^test_cpu_(" + "|".join(op.lower() for op in _TARGET_KERNELS) + ")_"
-
-
-def _single_node_op_type(tc):
-    """Returns the op_type when ``tc``'s graph is a single node, else ``None``."""
-    nodes = list(tc.model.graph.node)
-    if len(nodes) != 1:
-        return None
-    return nodes[0].op_type
-
-
-def _matches_dtype(tc, data_type):
-    return all(
-        int(tensor.data_type) == int(data_type)
-        for data_set in tc.data_sets
-        for tensor in (*data_set.inputs, *data_set.outputs)
-    )
-
 
 def _to_numpy(tensor):
     """Decodes a backend test case ``Tensor`` into a numpy array."""
@@ -100,23 +80,33 @@ def _to_numpy(tensor):
 
 
 def _collect_cases():
-    """Registers and collects a subset of the "test_cpu_*" BENCHMARK cases."""
+    """Registers and collects a subset of the "test_cpu_*" BENCHMARK cases.
+
+    A single regular expression -- matching every "test_cpu_<op>_..." name
+    for the target operators -- is used instead of collecting per operator.
+    """
     register_backend_test_cases()
-    unit_test_going = os.environ.get("UNITTEST_GOING", "0") in ("1", "true", "True")
-    cases_per_op = 2 if unit_test_going else None
-    matched_by_op = {op_type: [] for op_type in _TARGET_KERNELS}
-    for tc in collect_test_cases_by_name(_CASE_NAME_PATTERN, mode=TestMode.BENCHMARK):
-        op_type = _single_node_op_type(tc)
-        if (
-            op_type in _TARGET_KERNELS
-            and tc.data_sets
-            and _matches_dtype(tc, _TARGET_DTYPE[op_type])
+    pattern = "^test_cpu_(" + "|".join(op.lower() for op in _TARGET_KERNELS) + ")_"
+    max_per_op = 2 if os.environ.get("UNITTEST_GOING", "0") in ("1", "true", "True") else None
+    counts = dict.fromkeys(_TARGET_KERNELS, 0)
+    cases = []
+    for tc in collect_test_cases_by_name(pattern, mode=TestMode.BENCHMARK):
+        nodes = list(tc.model.graph.node)
+        op_type = nodes[0].op_type if len(nodes) == 1 else None
+        if op_type not in _TARGET_KERNELS or not tc.data_sets:
+            continue
+        data_type = _TARGET_DTYPE[op_type]
+        if not all(
+            int(tensor.data_type) == int(data_type)
+            for data_set in tc.data_sets
+            for tensor in (*data_set.inputs, *data_set.outputs)
         ):
-            matched_by_op[op_type].append(tc)
-    collected = []
-    for op_type in _TARGET_KERNELS:
-        collected.extend(matched_by_op[op_type][:cases_per_op])
-    return collected
+            continue
+        if max_per_op is not None and counts[op_type] >= max_per_op:
+            continue
+        counts[op_type] += 1
+        cases.append(tc)
+    return cases
 
 
 _CASES = _collect_cases()
@@ -165,7 +155,7 @@ register_kernels()
 
 rows = []
 for tc in _CASES:
-    op_type = _single_node_op_type(tc)
+    op_type = tc.model.graph.node[0].op_type
     expected_kernel = _TARGET_KERNELS[op_type]
     model_bytes = tc.model.SerializeToString()
     # Some Gemm benchmark cases turn "B" into a graph initializer to exercise
