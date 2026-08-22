@@ -57,10 +57,12 @@ namespace {
 
 using Clock = std::chrono::steady_clock;
 
-// Volatile module-level sink. Every measurement writes its post-timing
-// checksum here so the compiler cannot prove the timed arithmetic is dead,
-// without adding any consumption inside a timed sample.
-volatile double g_compute_profile_sink = 0.0;
+// Module-level sink. Every measurement writes its post-timing checksum here
+// so the compiler cannot prove the timed arithmetic is dead, without adding
+// any consumption inside a timed sample. Atomic (relaxed) because multiple
+// worker threads and the main thread accumulate into it concurrently; only
+// the side effect matters, not the accumulated value.
+std::atomic<double> g_compute_profile_sink{0.0};
 
 double ToSeconds(Clock::duration duration) {
   return std::chrono::duration<double>(duration).count();
@@ -382,7 +384,7 @@ public:
           }
           const double checksum = kernel_(passes, static_cast<double>(index) + 1.0);
           barrier_.arrive_and_wait();
-          g_compute_profile_sink += checksum;
+          g_compute_profile_sink.fetch_add(checksum, std::memory_order_relaxed);
         }
       });
     }
@@ -409,7 +411,7 @@ public:
     const double checksum = kernel_(passes, 0.0);
     barrier_.arrive_and_wait();
     const Clock::time_point end = Clock::now();
-    g_compute_profile_sink += checksum;
+    g_compute_profile_sink.fetch_add(checksum, std::memory_order_relaxed);
     return ToSeconds(end - start);
   }
 
