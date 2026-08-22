@@ -277,6 +277,12 @@ void RegisterCpuGemmCases(std::vector<TestCase> &registry, TestMode mode) {
                             4096);
       RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_split_k_16384", dtype, 2,
                             2, 16384);
+      RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_big_m8192_n128_k128",
+                            dtype, 8192, 128, 128);
+      RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_big_m128_n8192_k128",
+                            dtype, 128, 8192, 128);
+      RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_big_m128_n128_k8192",
+                            dtype, 128, 128, 8192);
       RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_square_128", dtype, 128,
                             128, 128, true);
       RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_square_128", dtype, 128,
