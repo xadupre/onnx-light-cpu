@@ -233,7 +233,7 @@ public:
         }
         while (true) {
           barrier_.arrive_and_wait();
-          const std::size_t passes = passes_.load(std::memory_order_relaxed);
+          const std::size_t passes = passes_.load(std::memory_order_acquire);
           if (passes == 0 && stop_.load(std::memory_order_relaxed)) {
             barrier_.arrive_and_wait();
             return;
@@ -247,7 +247,7 @@ public:
 
   ~BandwidthWorkerPool() {
     if (!workers_.empty()) {
-      passes_.store(0, std::memory_order_relaxed);
+      passes_.store(0, std::memory_order_release);
       stop_.store(true, std::memory_order_relaxed);
       barrier_.arrive_and_wait();
       barrier_.arrive_and_wait();
@@ -260,7 +260,7 @@ public:
   // Runs one synchronized round of ``passes`` iterations across every
   // participant and returns the aggregate wall-clock seconds elapsed.
   double RunRound(std::size_t passes, std::uint64_t seed) {
-    passes_.store(passes, std::memory_order_relaxed);
+    passes_.store(passes, std::memory_order_release);
     barrier_.arrive_and_wait();
     const Clock::time_point start = Clock::now();
     const std::uint64_t checksum = RunBandwidthRound(mode_, participants_[0], passes, seed);
@@ -436,6 +436,76 @@ struct LatencyParticipant {
   std::vector<std::uint32_t> permutation;
 };
 
+// Coordinates persistent worker threads (participants 1..N-1) through
+// repeated timed pointer-chase rounds without creating or joining threads
+// inside any timed sample. Participant 0 always runs on the calling thread.
+// Each round records every participant's own elapsed seconds so aggregate
+// latency reflects each independent dependent chain rather than only the
+// outer wall-clock span.
+class LatencyWorkerPool {
+public:
+  LatencyWorkerPool(std::vector<LatencyParticipant> &participants,
+                    const std::vector<CpuAffinity> &affinities)
+      : participants_(participants), barrier_(static_cast<std::ptrdiff_t>(participants.size())),
+        elapsed_seconds_(participants.size(), 0.0) {
+    for (std::size_t index = 1; index < participants_.size(); ++index) {
+      const CpuAffinity *affinity = index < affinities.size() ? &affinities[index] : nullptr;
+      workers_.emplace_back([this, index, affinity]() {
+        if (affinity != nullptr) {
+          SetCurrentThreadAffinity(*affinity);
+        }
+        while (true) {
+          barrier_.arrive_and_wait();
+          const std::size_t iterations = iterations_.load(std::memory_order_acquire);
+          if (iterations == 0 && stop_.load(std::memory_order_relaxed)) {
+            barrier_.arrive_and_wait();
+            return;
+          }
+          const Clock::time_point local_start = Clock::now();
+          const std::uint32_t last =
+              ChasePointers(participants_[index].permutation.data(), 0, iterations);
+          elapsed_seconds_[index] = ToSeconds(Clock::now() - local_start);
+          g_memory_profile_sink += last;
+          barrier_.arrive_and_wait();
+        }
+      });
+    }
+  }
+
+  ~LatencyWorkerPool() {
+    if (!workers_.empty()) {
+      iterations_.store(0, std::memory_order_release);
+      stop_.store(true, std::memory_order_relaxed);
+      barrier_.arrive_and_wait();
+      barrier_.arrive_and_wait();
+      for (std::thread &worker : workers_) {
+        worker.join();
+      }
+    }
+  }
+
+  // Runs one synchronized round of ``iterations`` dependent loads across
+  // every participant and returns each participant's own elapsed seconds.
+  const std::vector<double> &RunRound(std::size_t iterations) {
+    iterations_.store(iterations, std::memory_order_release);
+    barrier_.arrive_and_wait();
+    const Clock::time_point start = Clock::now();
+    const std::uint32_t last = ChasePointers(participants_[0].permutation.data(), 0, iterations);
+    elapsed_seconds_[0] = ToSeconds(Clock::now() - start);
+    barrier_.arrive_and_wait();
+    g_memory_profile_sink += last;
+    return elapsed_seconds_;
+  }
+
+private:
+  std::vector<LatencyParticipant> &participants_;
+  std::barrier<> barrier_;
+  std::vector<std::thread> workers_;
+  std::vector<double> elapsed_seconds_;
+  std::atomic<std::size_t> iterations_{0};
+  std::atomic<bool> stop_{false};
+};
+
 } // namespace
 
 MemoryBandwidthResult MeasureMemoryBandwidth(MemoryProfileLevel level, MemoryTrafficMode mode,
@@ -449,7 +519,7 @@ MemoryBandwidthResult MeasureMemoryBandwidth(MemoryProfileLevel level, MemoryTra
 
   if (options.repeats == 0 || options.minimum_duration_ms <= 0.0 ||
       options.memory_budget_bytes == 0) {
-    result.unavailable_reason = MemoryProfileUnavailableReason::kMemoryBudgetExceeded;
+    result.unavailable_reason = MemoryProfileUnavailableReason::kInvalidOptions;
     result.diagnostic = "invalid measurement options";
     return result;
   }
@@ -542,7 +612,7 @@ MemoryLatencyResult MeasureMemoryLatency(MemoryProfileLevel level, MemoryPartici
 
   if (options.repeats == 0 || options.minimum_duration_ms <= 0.0 ||
       options.memory_budget_bytes == 0) {
-    result.unavailable_reason = MemoryProfileUnavailableReason::kMemoryBudgetExceeded;
+    result.unavailable_reason = MemoryProfileUnavailableReason::kInvalidOptions;
     result.diagnostic = "invalid measurement options";
     return result;
   }
@@ -594,15 +664,16 @@ MemoryLatencyResult MeasureMemoryLatency(MemoryProfileLevel level, MemoryPartici
   // minimum duration.
   ChasePointers(participants[0].permutation.data(), 0, element_count);
 
+  if (!affinity_pinned) {
+    affinities.clear();
+  }
+  LatencyWorkerPool pool(participants, affinities);
+
   std::size_t iterations = element_count;
   {
-    const Clock::time_point start = Clock::now();
-    const std::uint32_t last = ChasePointers(participants[0].permutation.data(), 0, iterations);
-    const Clock::time_point end = Clock::now();
-    g_memory_profile_sink += last;
-    const double elapsed = ToSeconds(end - start);
+    const std::vector<double> &calibration_elapsed = pool.RunRound(iterations);
     const double target_seconds = options.minimum_duration_ms / 1000.0;
-    const double safe_elapsed = elapsed > 0.0 ? elapsed : 1e-9;
+    const double safe_elapsed = calibration_elapsed[0] > 0.0 ? calibration_elapsed[0] : 1e-9;
     const double scale = target_seconds / safe_elapsed;
     const double estimated_iterations = static_cast<double>(iterations) * std::max(1.0, scale);
     iterations = static_cast<std::size_t>(
@@ -613,34 +684,19 @@ MemoryLatencyResult MeasureMemoryLatency(MemoryProfileLevel level, MemoryPartici
 
   result.raw_ns_per_load_samples.reserve(options.repeats);
   for (std::size_t repeat = 0; repeat < options.repeats; ++repeat) {
-    std::vector<std::thread> workers;
-    std::vector<double> per_participant_elapsed(participant_count, 0.0);
-    const Clock::time_point start = Clock::now();
-    for (std::size_t index = 1; index < participant_count; ++index) {
-      workers.emplace_back([&, index]() {
-        if (index < affinities.size()) {
-          SetCurrentThreadAffinity(affinities[index]);
-        }
-        const Clock::time_point local_start = Clock::now();
-        const std::uint32_t last =
-            ChasePointers(participants[index].permutation.data(), 0, iterations);
-        per_participant_elapsed[index] = ToSeconds(Clock::now() - local_start);
-        g_memory_profile_sink += last;
-      });
+    const std::vector<double> &per_participant_elapsed = pool.RunRound(iterations);
+    // Each participant chases its own independent, disjoint permutation, so
+    // the per-load latency for this round is the average of every
+    // participant's own elapsed time divided by its own iteration count,
+    // not the outer wall-clock span (which would conflate independent
+    // chains with scheduling jitter across participants).
+    double total_ns_per_load = 0.0;
+    for (double elapsed_seconds : per_participant_elapsed) {
+      const double safe_elapsed = elapsed_seconds > 0.0 ? elapsed_seconds : 1e-12;
+      total_ns_per_load += safe_elapsed * 1.0e9 / static_cast<double>(iterations);
     }
-    const std::uint32_t last = ChasePointers(participants[0].permutation.data(), 0, iterations);
-    per_participant_elapsed[0] = ToSeconds(Clock::now() - start);
-    for (std::thread &worker : workers) {
-      worker.join();
-    }
-    const Clock::time_point end = Clock::now();
-    g_memory_profile_sink += last;
-
-    const double aggregate_elapsed = ToSeconds(end - start);
-    const double safe_elapsed = aggregate_elapsed > 0.0 ? aggregate_elapsed : 1e-12;
-    const double total_loads =
-        static_cast<double>(iterations) * static_cast<double>(participant_count);
-    result.raw_ns_per_load_samples.push_back(safe_elapsed * 1.0e9 / total_loads);
+    result.raw_ns_per_load_samples.push_back(total_ns_per_load /
+                                             static_cast<double>(participant_count));
   }
 
   result.median_ns_per_load = Median(result.raw_ns_per_load_samples);

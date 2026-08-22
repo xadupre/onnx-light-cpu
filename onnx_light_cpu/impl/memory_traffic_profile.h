@@ -43,6 +43,9 @@ enum class MemoryProfileUnavailableReason {
   /// The configured memory budget cannot satisfy the level's working-set
   /// contract (for example RAM must exceed twice the last-level cache).
   kMemoryBudgetExceeded,
+  /// The requested repeat count, minimum duration, or memory budget is
+  /// invalid; the measurement fails before allocating or timing anything.
+  kInvalidOptions,
 };
 
 /// Options shared by every memory bandwidth and latency measurement.

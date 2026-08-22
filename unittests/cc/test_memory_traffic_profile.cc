@@ -306,6 +306,7 @@ TEST(MemoryTrafficProfile, InvalidOptionsFailBeforeAllocatingOrTiming) {
   const MemoryBandwidthResult result = MeasureMemoryBandwidth(
       MemoryProfileLevel::kL1, MemoryTrafficMode::kRead, MemoryParticipantPolicy::kSingle, options);
   EXPECT_FALSE(result.available);
+  EXPECT_EQ(result.unavailable_reason, MemoryProfileUnavailableReason::kInvalidOptions);
   EXPECT_FALSE(result.diagnostic.empty());
 }
 
