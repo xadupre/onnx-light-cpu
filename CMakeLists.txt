@@ -315,11 +315,22 @@ set(_exp_log_avx2_fma_source
     "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/avx2/exp_log_kernel_avx2_fma.cc")
 set(_not_avx512_source
     "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/logical/avx512/not_kernel_avx512.cc")
+set(_compute_avx512_source
+    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/compute/avx512/compute_kernel_avx512.cc")
+set(_compute_avx512fp16_source
+    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/compute/avx512fp16/compute_kernel_avx512fp16.cc")
+set(_compute_avx512bf16_source
+    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/compute/avx512bf16/compute_kernel_avx512bf16.cc")
+set(_compute_avx512vnni_source
+    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/compute/avx512vnni/compute_kernel_avx512vnni.cc")
+set(_compute_neon_dotprod_source
+    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/compute/arm/compute_kernel_neon_dotprod.cc")
 if(NOT ONNX_LIGHT_CPU_HAVE_AVX512F_FLAG)
   # Exclude AVX-512F translation units rather than fail on unsupported targets.
   list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_gemm_avx512_source}")
   list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_abs_avx512_source}")
   list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_exp_log_avx512_source}")
+  list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_compute_avx512_source}")
 endif()
 if(NOT ONNX_LIGHT_CPU_HAVE_AVX2_FMA_FLAG)
   list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_gemm_avx2_fma_source}")
@@ -333,16 +344,19 @@ if(NOT ONNX_LIGHT_CPU_HAVE_AVX512FP16_FLAG)
   # Exclude the native AVX-512FP16 GEMM kernel when the compiler cannot target
   # the ISA; the FLOAT16 path keeps its converting float32 fallback.
   list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_gemm_avx512fp16_source}")
+  list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_compute_avx512fp16_source}")
 endif()
 if(NOT ONNX_LIGHT_CPU_HAVE_AVX512BF16_FLAG)
   # Exclude the native AVX-512BF16 GEMM kernel when the compiler cannot target
   # the ISA; the BFLOAT16 path keeps its converting float32 fallback.
   list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_gemm_avx512bf16_source}")
+  list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_compute_avx512bf16_source}")
 endif()
 if(NOT ONNX_LIGHT_CPU_HAVE_AVX512VNNI_FLAG)
   # Exclude the native AVX-512 VNNI INT8 dot-product when the compiler cannot
   # target the ISA; the integer matmul keeps its AVX2/scalar fallbacks.
   list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_gemm_avx512vnni_source}")
+  list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_compute_avx512vnni_source}")
 endif()
 if(NOT ONNX_LIGHT_CPU_HAVE_AMX_BF16_FLAG)
   # Exclude the native AMX-BF16 GEMM kernel when the compiler cannot target the
@@ -362,6 +376,7 @@ if(NOT ONNX_LIGHT_CPU_HAVE_SVE_INTRINSICS)
 endif()
 if(NOT ONNX_LIGHT_CPU_HAVE_NEON_DOTPROD_INTRINSICS)
   list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_gemm_neon_dotprod_source}")
+  list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_compute_neon_dotprod_source}")
 endif()
 
 file(GLOB PY_KERNELS_SOURCES CONFIGURE_DEPENDS
@@ -411,6 +426,8 @@ if(ONNX_LIGHT_CPU_HAVE_AVX512F_FLAG)
         COMPILE_OPTIONS "-mavx512f")
     set_source_files_properties("${_exp_log_avx512_source}" PROPERTIES
         COMPILE_OPTIONS "-mavx512f")
+    set_source_files_properties("${_compute_avx512_source}" PROPERTIES
+        COMPILE_OPTIONS "-mavx512f")
   else()
     set_source_files_properties("${_gemm_avx512_source}" PROPERTIES
         COMPILE_OPTIONS "/arch:AVX512")
@@ -418,18 +435,24 @@ if(ONNX_LIGHT_CPU_HAVE_AVX512F_FLAG)
         COMPILE_OPTIONS "/arch:AVX512")
     set_source_files_properties("${_exp_log_avx512_source}" PROPERTIES
         COMPILE_OPTIONS "/arch:AVX512")
+    set_source_files_properties("${_compute_avx512_source}" PROPERTIES
+        COMPILE_OPTIONS "/arch:AVX512")
   endif()
   # Told gemm_kernel.cc (compiled at the baseline ONNX_LIGHT_CPU_SIMD_FLAGS)
-  # that GemmMicroKernel_AVX512_F32/F64 are available to dispatch to.
+  # that GemmMicroKernel_AVX512_F32/F64 are available to dispatch to. The
+  # register-resident compute-profile FP32/FP64 kernel (Processor Profile
+  # PR03) dispatches on the same definition.
   target_compile_definitions(lib_onnx_light_cpu PRIVATE ONNX_LIGHT_CPU_HAVE_AVX512=1)
 endif()
 
 if(ONNX_LIGHT_CPU_HAVE_AVX512FP16_FLAG)
   # The native FLOAT16 GEMM kernel needs -mavx512fp16 for the _Float16 type and
   # the vcvtph2psx conversion; the rest of the library keeps the baseline flags
-  # and only dispatches here once CpuSupportsAvx512Fp16() reports the ISA.
-  set_source_files_properties("${_gemm_avx512fp16_source}" PROPERTIES
-      COMPILE_OPTIONS "-mavx512fp16")
+  # and only dispatches here once CpuSupportsAvx512Fp16() reports the ISA. The
+  # register-resident compute-profile FP16 throughput kernel (Processor
+  # Profile PR03) needs the same flag for native ``vfmadd*ph`` arithmetic.
+  set_source_files_properties("${_gemm_avx512fp16_source}" "${_compute_avx512fp16_source}"
+      PROPERTIES COMPILE_OPTIONS "-mavx512fp16")
   target_compile_definitions(lib_onnx_light_cpu PRIVATE
       ONNX_LIGHT_CPU_HAVE_AVX512FP16=1)
 endif()
@@ -438,9 +461,11 @@ if(ONNX_LIGHT_CPU_HAVE_AVX512BF16_FLAG)
   # The native BFLOAT16 GEMM kernel needs -mavx512bf16 for the __m512bh type and
   # the vdpbf16ps dot-product (plus -mavx512bw for the 512-bit zero-extend used
   # to build the pair layout); the rest of the library keeps the baseline flags
-  # and only dispatches here once CpuSupportsAvx512Bf16() reports the ISA.
-  set_source_files_properties("${_gemm_avx512bf16_source}" PROPERTIES
-      COMPILE_OPTIONS "-mavx512f;-mavx512bw;-mavx512bf16")
+  # and only dispatches here once CpuSupportsAvx512Bf16() reports the ISA. The
+  # register-resident compute-profile BFLOAT16 dot-product kernel (Processor
+  # Profile PR03) needs the same flags.
+  set_source_files_properties("${_gemm_avx512bf16_source}" "${_compute_avx512bf16_source}"
+      PROPERTIES COMPILE_OPTIONS "-mavx512f;-mavx512bw;-mavx512bf16")
   target_compile_definitions(lib_onnx_light_cpu PRIVATE
       ONNX_LIGHT_CPU_HAVE_AVX512BF16=1)
 endif()
@@ -471,9 +496,11 @@ if(ONNX_LIGHT_CPU_HAVE_AVX512VNNI_FLAG)
   # The native INT8 VNNI dot-product needs -mavx512vnni for the vpdpbusd
   # (_mm512_dpbusd_epi32) intrinsic and -mavx512f for the ZMM load / reduce; the
   # rest of the library keeps the baseline flags and only dispatches here once
-  # CpuSupportsAvx512Vnni() reports the ISA.
-  set_source_files_properties("${_gemm_avx512vnni_source}" PROPERTIES
-      COMPILE_OPTIONS "-mavx512f;-mavx512vnni")
+  # CpuSupportsAvx512Vnni() reports the ISA. The register-resident
+  # compute-profile INT8 dot-product kernel (Processor Profile PR03) needs the
+  # same flags.
+  set_source_files_properties("${_gemm_avx512vnni_source}" "${_compute_avx512vnni_source}"
+      PROPERTIES COMPILE_OPTIONS "-mavx512f;-mavx512vnni")
   target_compile_definitions(lib_onnx_light_cpu PRIVATE
       ONNX_LIGHT_CPU_HAVE_AVX512VNNI=1)
 endif()
@@ -550,8 +577,8 @@ if(ONNX_LIGHT_CPU_HAVE_SVE_INTRINSICS)
 endif()
 
 if(ONNX_LIGHT_CPU_HAVE_NEON_DOTPROD_INTRINSICS)
-  set_source_files_properties("${_gemm_neon_dotprod_source}" PROPERTIES
-      COMPILE_OPTIONS "-march=armv8.2-a+dotprod")
+  set_source_files_properties("${_gemm_neon_dotprod_source}" "${_compute_neon_dotprod_source}"
+      PROPERTIES COMPILE_OPTIONS "-march=armv8.2-a+dotprod")
   target_compile_definitions(lib_onnx_light_cpu PRIVATE
       ONNX_LIGHT_CPU_HAVE_NEON_DOTPROD=1)
 endif()
@@ -921,6 +948,7 @@ if(ONNX_LIGHT_CPU_INSTALL)
       "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/thread_topology.h"
       "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/cpu_cache_topology.h"
       "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/memory_traffic_profile.h"
+      "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/compute_arithmetic_profile.h"
       DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/onnx_light_cpu/impl")
 
   install(FILES

@@ -285,7 +285,7 @@ own issue and must not absorb a later row.
        counts, implementation identity, raw samples, and single/physical-core
        throughput without memory-sized timed operands.
      - PR01
-     - Pending
+     - Completed
    * - Profile PR04
      - Aggregate profile and public Python API.
      - ``benchmark_processor_performance`` returns the immutable, versioned,
