@@ -117,6 +117,11 @@ class TestSetupOnnxLight:
         assert "ONNX_LIGHT_CPU_ONNX_LIGHT_KERNELS_IMPLIB=" in output
         assert "ONNX_LIGHT_CPU_ONNX_LIGHT_BACKEND_TEST_IMPLIB=" in output
 
+    def test_source_runtime_keeps_proto_as_a_direct_dependency(self):
+        contents = _CMAKELISTS.read_text(encoding="utf-8")
+        assert "target_link_options(lib_onnx_light_cpu PRIVATE" in contents
+        assert '"LINKER:--no-as-needed"' in contents
+
     def test_without_flag_skips_integration(self):
         output = _dry_run()
         assert "ONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON" not in output
