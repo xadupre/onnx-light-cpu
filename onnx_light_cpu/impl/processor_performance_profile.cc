@@ -131,6 +131,33 @@ const char *MemoryTrafficModeName(MemoryTrafficMode mode) {
 
 } // namespace
 
+std::vector<ProcessorProfileRooflineEntry>
+DeriveRooflineEntries(const std::vector<ProcessorProfileComputeEntry> &compute,
+                      const std::vector<ProcessorProfileMemoryEntry> &memory) {
+  std::vector<ProcessorProfileRooflineEntry> roofline;
+  for (const ProcessorProfileComputeEntry &compute_entry : compute) {
+    for (const ProcessorProfileMemoryEntry &memory_entry : memory) {
+      if (memory_entry.policy != compute_entry.policy || !memory_entry.read.has_value()) {
+        continue;
+      }
+      const double compute_gops = compute_entry.result.median_gops;
+      const double memory_read_gbps = memory_entry.read->median_gbps;
+      if (!(memory_read_gbps > 0.0)) {
+        continue;
+      }
+      ProcessorProfileRooflineEntry roofline_entry;
+      roofline_entry.element_type = compute_entry.element_type;
+      roofline_entry.policy = compute_entry.policy;
+      roofline_entry.level = memory_entry.level;
+      roofline_entry.compute_gops = compute_gops;
+      roofline_entry.memory_read_gbps = memory_read_gbps;
+      roofline_entry.arithmetic_intensity_crossover = compute_gops / memory_read_gbps;
+      roofline.push_back(roofline_entry);
+    }
+  }
+  return roofline;
+}
+
 bool ParseProcessorThreadPolicy(const std::string &name, ProcessorThreadPolicy &policy) {
   if (name == "single") {
     policy = ProcessorThreadPolicy::kSingle;
@@ -265,28 +292,10 @@ ProcessorPerformanceProfile BenchmarkProcessorPerformance(const ProcessorProfile
     }
   }
 
-  // Roofline: for every available compute entry, pair it with that same
-  // policy's available read bandwidth at every memory level.
-  for (const ProcessorProfileComputeEntry &compute_entry : profile.compute) {
-    for (const ProcessorProfileMemoryEntry &memory_entry : profile.memory) {
-      if (memory_entry.policy != compute_entry.policy || !memory_entry.read.has_value()) {
-        continue;
-      }
-      const double compute_gops = compute_entry.result.median_gops;
-      const double memory_read_gbps = memory_entry.read->median_gbps;
-      if (!(memory_read_gbps > 0.0)) {
-        continue;
-      }
-      ProcessorProfileRooflineEntry roofline_entry;
-      roofline_entry.element_type = compute_entry.element_type;
-      roofline_entry.policy = compute_entry.policy;
-      roofline_entry.level = memory_entry.level;
-      roofline_entry.compute_gops = compute_gops;
-      roofline_entry.memory_read_gbps = memory_read_gbps;
-      roofline_entry.arithmetic_intensity_crossover = compute_gops / memory_read_gbps;
-      profile.roofline.push_back(roofline_entry);
-    }
-  }
+  // Roofline: derive crossover points from the compute/memory entries just
+  // assembled (pure function, independently tested against synthetic
+  // profiles in test_processor_performance_profile.cc).
+  profile.roofline = DeriveRooflineEntries(profile.compute, profile.memory);
 
   return profile;
 }
