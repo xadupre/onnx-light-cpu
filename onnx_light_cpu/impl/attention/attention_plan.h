@@ -163,6 +163,6 @@ struct AttentionPlan {
 /// it is :cpp:enumerator:`AttentionMaskKind::kAdditive`; it is unused (may be
 /// ``nullptr``) when :cpp:enumerator:`AttentionMaskKind::kNone`.
 void ComputeAttentionFloat32(const AttentionPlan &plan, const float *q, const float *k,
-                            const float *v, const void *mask, float *y);
+                             const float *v, const void *mask, float *y);
 
 } // namespace onnx_light_cpu

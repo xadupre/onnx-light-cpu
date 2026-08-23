@@ -1,0 +1,239 @@
+// Copyright (c) ONNX Project Contributors
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include "onnx_light_cpu/backend_test/cases/attention/include_attention_cases.h"
+
+#include "onnx_light_cpu/backend_test/cases/math/benchmark_helpers.h"
+#include "onnx_light_cpu/kernels/attention/attention_kernel.h"
+
+#include "onnx_core/backend_test/expect.h"
+#include "onnx_core/runtime/kernels/kernel_context.h"
+#include "onnx_core/runtime/kernels/random.h"
+
+#include <cstdint>
+#include <optional>
+#include <string>
+#include <utility>
+#include <vector>
+
+namespace onnx_light_cpu::backend_test {
+
+namespace {
+
+namespace bt_ns = ONNX_LIGHT_NAMESPACE::core::backend_test;
+namespace rt_ns = ONNX_LIGHT_NAMESPACE::core::runtime;
+
+using bt_ns::Expect;
+using bt_ns::IoData;
+using bt_ns::TestCase;
+using bt_ns::TestMode;
+using ONNX_LIGHT_NAMESPACE::NodeProto;
+using rt_ns::DataType;
+using rt_ns::DefaultOpset;
+using rt_ns::KernelContext;
+using rt_ns::OpsetId;
+using rt_ns::Tensor;
+
+enum class Geometry { kMha, kGqa, kMqa };
+enum class Mask { kNone, kCausal, kBoolean, kAdditive };
+
+const char *GeometryName(Geometry geometry) {
+  switch (geometry) {
+  case Geometry::kMha:
+    return "mha";
+  case Geometry::kGqa:
+    return "gqa";
+  case Geometry::kMqa:
+    return "mqa";
+  }
+  return "mha";
+}
+
+const char *MaskName(Mask mask) {
+  switch (mask) {
+  case Mask::kNone:
+    return "none";
+  case Mask::kCausal:
+    return "causal";
+  case Mask::kBoolean:
+    return "bool";
+  case Mask::kAdditive:
+    return "additive";
+  }
+  return "none";
+}
+
+// (q_num_heads, kv_num_heads) for each geometry, kept small for correctness
+// cases and moderate for benchmark cases.
+std::pair<std::int64_t, std::int64_t> HeadCounts(Geometry geometry, bool benchmark) {
+  switch (geometry) {
+  case Geometry::kMha:
+    return benchmark ? std::pair<std::int64_t, std::int64_t>{12, 12}
+                     : std::pair<std::int64_t, std::int64_t>{2, 2};
+  case Geometry::kGqa:
+    return benchmark ? std::pair<std::int64_t, std::int64_t>{16, 4}
+                     : std::pair<std::int64_t, std::int64_t>{4, 2};
+  case Geometry::kMqa:
+    return benchmark ? std::pair<std::int64_t, std::int64_t>{16, 1}
+                     : std::pair<std::int64_t, std::int64_t>{4, 1};
+  }
+  return {1, 1};
+}
+
+void AddIntAttribute(NodeProto &node, const char *name, std::int64_t value) {
+  auto *attribute = node.add_attribute();
+  attribute->set_name(name);
+  attribute->set_type(ONNX_LIGHT_NAMESPACE::AttributeProto::AttributeType::INT);
+  attribute->set_i(value);
+}
+
+NodeProto MakeAttentionNode(bool rank3, std::int64_t q_num_heads, std::int64_t kv_num_heads,
+                            bool is_causal, bool has_mask) {
+  NodeProto node;
+  node.set_op_type("Attention");
+  node.add_input("Q");
+  node.add_input("K");
+  node.add_input("V");
+  if (has_mask) {
+    node.add_input("attn_mask");
+  }
+  node.add_output("Y");
+  if (rank3) {
+    AddIntAttribute(node, "q_num_heads", q_num_heads);
+    AddIntAttribute(node, "kv_num_heads", kv_num_heads);
+  }
+  if (is_causal) {
+    AddIntAttribute(node, "is_causal", 1);
+  }
+  return node;
+}
+
+std::vector<std::int64_t> QkvShape(bool rank3, std::int64_t batch, std::int64_t num_heads,
+                                   std::int64_t length, std::int64_t head_dim) {
+  if (rank3) {
+    return {batch, length, num_heads * head_dim};
+  }
+  return {batch, num_heads, length, head_dim};
+}
+
+// Registers one Attention correctness/benchmark case. ``head_dim`` is shared
+// by Q/K/V (v_head_size == head_size) for this stateless FP32 baseline.
+void RegisterAttentionCase(std::vector<TestCase> &registry, const OpsetId &opset,
+                           std::int64_t opset_version, bool rank3, Geometry geometry, Mask mask,
+                           std::int64_t batch, std::int64_t q_len, std::int64_t kv_len,
+                           std::int64_t head_dim, bool benchmark) {
+  const auto [q_heads, kv_heads] = HeadCounts(geometry, benchmark);
+  const bool is_causal = mask == Mask::kCausal;
+  const bool has_mask = mask == Mask::kBoolean || mask == Mask::kAdditive;
+
+  const std::string name = "test_cpu_attention_opset" + std::to_string(opset_version) + "_" +
+                           (rank3 ? std::string("rank3") : std::string("rank4")) + "_" +
+                           GeometryName(geometry) + "_q" + std::to_string(q_len) + "_kv" +
+                           std::to_string(kv_len) + "_" + MaskName(mask) + "_float32" +
+                           (benchmark ? "_benchmark" : "");
+
+  const NodeProto node = MakeAttentionNode(rank3, q_heads, kv_heads, is_causal, has_mask);
+  const std::vector<std::int64_t> q_shape = QkvShape(rank3, batch, q_heads, q_len, head_dim);
+  const std::vector<std::int64_t> k_shape = QkvShape(rank3, batch, kv_heads, kv_len, head_dim);
+  const std::vector<std::int64_t> v_shape = QkvShape(rank3, batch, kv_heads, kv_len, head_dim);
+  const std::int64_t q_count = batch * q_heads * q_len * head_dim;
+  const std::int64_t k_count = batch * kv_heads * kv_len * head_dim;
+  const std::int64_t v_count = k_count;
+  const std::int64_t y_count = q_count;
+  const std::int64_t mask_count = q_len * kv_len;
+
+  std::vector<std::int64_t> input_counts = {q_count, k_count, v_count};
+  if (has_mask) {
+    input_counts.push_back(mask_count);
+  }
+
+  Expect(registry, node, name, {opset}, input_counts, {y_count},
+         [q_shape, k_shape, v_shape, has_mask, mask, node, q_len, kv_len]() -> IoData {
+           const onnx_light_cpu::AttentionKernel kernel{KernelContext{DefaultOpset(23)}};
+           Tensor q = MakeBenchmarkTensor(DataType::FLOAT, q_shape, 501);
+           Tensor k = MakeBenchmarkTensor(DataType::FLOAT, k_shape, 502);
+           Tensor v = MakeBenchmarkTensor(DataType::FLOAT, v_shape, 503);
+           std::optional<Tensor> mask_tensor;
+           const Tensor *mask_ptr = nullptr;
+           if (has_mask) {
+             if (mask == Mask::kBoolean) {
+               const std::vector<float> random = rt_ns::Randn<float>({q_len, kv_len}, 504);
+               std::vector<std::uint8_t> values(random.size());
+               for (std::size_t i = 0; i < values.size(); ++i) {
+                 values[i] = random[i] > 0.0f ? 1 : 0;
+               }
+               mask_tensor.emplace(Tensor("", DataType::BOOL, {q_len, kv_len}, std::move(values)));
+             } else {
+               mask_tensor.emplace(MakeBenchmarkTensor(DataType::FLOAT, {q_len, kv_len}, 505));
+             }
+             mask_ptr = &(*mask_tensor);
+           }
+           Tensor y = kernel(node, q, k, v, mask_ptr);
+           if (has_mask) {
+             return IoData{{std::move(q), std::move(k), std::move(v), std::move(*mask_tensor)},
+                           {std::move(y)}};
+           }
+           return IoData{{std::move(q), std::move(k), std::move(v)}, {std::move(y)}};
+         });
+}
+
+} // namespace
+
+void RegisterCpuAttentionCases(std::vector<TestCase> &registry, TestMode mode) {
+  const OpsetId opset23 = DefaultOpset(23);
+  const OpsetId opset24 = DefaultOpset(24);
+
+  if (mode == TestMode::BENCHMARK) {
+    constexpr std::int64_t kHeadDim = 64;
+    // Prefill, rank-4, MHA: full mask matrix (no full Cartesian product with
+    // geometry/layout, per the roadmap benchmark contract).
+    for (Mask mask : {Mask::kNone, Mask::kCausal, Mask::kBoolean, Mask::kAdditive}) {
+      RegisterAttentionCase(registry, opset23, 23, false, Geometry::kMha, mask, 1, 128, 128,
+                            kHeadDim, true);
+    }
+    // One representative case each for GQA and MQA, causal (the common
+    // decode-oriented shape).
+    RegisterAttentionCase(registry, opset23, 23, false, Geometry::kGqa, Mask::kCausal, 1, 128, 128,
+                          kHeadDim, true);
+    RegisterAttentionCase(registry, opset23, 23, false, Geometry::kMqa, Mask::kCausal, 1, 128, 128,
+                          kHeadDim, true);
+    // Rank-3 packed layout, MHA.
+    RegisterAttentionCase(registry, opset23, 23, true, Geometry::kMha, Mask::kNone, 1, 128, 128,
+                          kHeadDim, true);
+    // Query-length sweep (decode through long prefill), MHA, no mask.
+    for (std::int64_t q_len :
+         {std::int64_t{1}, std::int64_t{2}, std::int64_t{8}, std::int64_t{16}, std::int64_t{512}}) {
+      RegisterAttentionCase(registry, opset23, 23, false, Geometry::kMha, Mask::kNone, 1, q_len,
+                            128, kHeadDim, true);
+    }
+    // KV-length sweep, MHA, no mask.
+    for (std::int64_t kv_len : {std::int64_t{1}, std::int64_t{1024}, std::int64_t{4096}}) {
+      RegisterAttentionCase(registry, opset23, 23, false, Geometry::kMha, Mask::kNone, 1, 128,
+                            kv_len, kHeadDim, true);
+    }
+    // Larger head dimension.
+    RegisterAttentionCase(registry, opset23, 23, false, Geometry::kMha, Mask::kCausal, 1, 128, 128,
+                          128, true);
+    // Opset 24 wiring smoke case (stateless: identical semantics to opset 23).
+    RegisterAttentionCase(registry, opset24, 24, false, Geometry::kMha, Mask::kNone, 1, 128, 128,
+                          kHeadDim, true);
+    return;
+  }
+
+  // Correctness cases: pair the full mask x geometry x layout matrix with
+  // small, cheap shapes for both opsets (stateless behavior is identical).
+  for (const auto &[opset, opset_version] : {std::pair<OpsetId, std::int64_t>{opset23, 23},
+                                             std::pair<OpsetId, std::int64_t>{opset24, 24}}) {
+    for (bool rank3 : {false, true}) {
+      for (Geometry geometry : {Geometry::kMha, Geometry::kGqa, Geometry::kMqa}) {
+        for (Mask mask : {Mask::kNone, Mask::kCausal, Mask::kBoolean, Mask::kAdditive}) {
+          RegisterAttentionCase(registry, opset, opset_version, rank3, geometry, mask, 2, 4, 5, 8,
+                                false);
+        }
+      }
+    }
+  }
+}
+
+} // namespace onnx_light_cpu::backend_test

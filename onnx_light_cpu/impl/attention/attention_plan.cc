@@ -45,7 +45,7 @@ void AttentionDescriptor::Validate() const {
   }
   if (has_nonpad_kv_seqlen && (has_past_key || has_present_key)) {
     Fail("AttentionDescriptor: nonpad_kv_seqlen cannot be combined with a tensor "
-        "past/present cache.");
+         "past/present cache.");
   }
 }
 
@@ -53,19 +53,18 @@ void AttentionDescriptor::ValidateSupportedByMaterializedPath() const {
   Validate();
   if (has_past_key || has_past_value || has_present_key || has_present_value) {
     Fail("AttentionDescriptor: tensor past/present cache is not yet supported by the CPU "
-        "materialized path.");
+         "materialized path.");
   }
   if (has_nonpad_kv_seqlen) {
-    Fail(
-        "AttentionDescriptor: nonpad_kv_seqlen is not yet supported by the CPU materialized "
-        "path.");
+    Fail("AttentionDescriptor: nonpad_kv_seqlen is not yet supported by the CPU materialized "
+         "path.");
   }
   if (softcap != 0.0f) {
     Fail("AttentionDescriptor: softcap is not yet supported by the CPU materialized path.");
   }
   if (has_qk_matmul_output) {
     Fail("AttentionDescriptor: qk_matmul_output is not yet supported by the CPU materialized "
-        "path.");
+         "path.");
   }
   if (softmax_precision.has_value()) {
     // FLOAT == 1 in onnx::TensorProto::DataType; only the default (input)
@@ -73,7 +72,7 @@ void AttentionDescriptor::ValidateSupportedByMaterializedPath() const {
     constexpr std::int64_t kFloat = 1;
     if (*softmax_precision != kFloat) {
       Fail("AttentionDescriptor: only the default softmax_precision is supported by the CPU "
-          "materialized path.");
+           "materialized path.");
     }
   }
 }
@@ -82,8 +81,7 @@ AttentionPlan::AttentionPlan(const AttentionDescriptor &descriptor, AttentionLay
                              std::span<const std::int64_t> q_shape,
                              std::span<const std::int64_t> k_shape,
                              std::span<const std::int64_t> v_shape,
-                             std::span<const std::int64_t> mask_shape,
-                             AttentionMaskKind mask_kind)
+                             std::span<const std::int64_t> mask_shape, AttentionMaskKind mask_kind)
     : layout(layout), mask_kind(mask_kind) {
   descriptor.Validate();
 
@@ -115,17 +113,17 @@ AttentionPlan::AttentionPlan(const AttentionDescriptor &descriptor, AttentionLay
       Fail("AttentionPlan: Q and K must share the same head_size.");
     }
     q_strides = {static_cast<std::ptrdiff_t>(q_num_heads * q_length * head_dim),
-                static_cast<std::ptrdiff_t>(q_length * head_dim),
-                static_cast<std::ptrdiff_t>(head_dim)};
+                 static_cast<std::ptrdiff_t>(q_length * head_dim),
+                 static_cast<std::ptrdiff_t>(head_dim)};
     k_strides = {static_cast<std::ptrdiff_t>(kv_num_heads * kv_length * head_dim),
-                static_cast<std::ptrdiff_t>(kv_length * head_dim),
-                static_cast<std::ptrdiff_t>(head_dim)};
+                 static_cast<std::ptrdiff_t>(kv_length * head_dim),
+                 static_cast<std::ptrdiff_t>(head_dim)};
     v_strides = {static_cast<std::ptrdiff_t>(kv_num_heads * kv_length * v_head_dim),
-                static_cast<std::ptrdiff_t>(kv_length * v_head_dim),
-                static_cast<std::ptrdiff_t>(v_head_dim)};
+                 static_cast<std::ptrdiff_t>(kv_length * v_head_dim),
+                 static_cast<std::ptrdiff_t>(v_head_dim)};
     y_strides = {static_cast<std::ptrdiff_t>(q_num_heads * q_length * v_head_dim),
-                static_cast<std::ptrdiff_t>(q_length * v_head_dim),
-                static_cast<std::ptrdiff_t>(v_head_dim)};
+                 static_cast<std::ptrdiff_t>(q_length * v_head_dim),
+                 static_cast<std::ptrdiff_t>(v_head_dim)};
   } else {
     if (q_shape.size() != 3 || k_shape.size() != 3 || v_shape.size() != 3) {
       Fail("AttentionPlan: rank-3 Q/K/V must each have 3 dimensions.");
@@ -172,18 +170,14 @@ AttentionPlan::AttentionPlan(const AttentionDescriptor &descriptor, AttentionLay
     }
     v_head_dim = v_hidden / kv_num_heads;
     q_strides = {static_cast<std::ptrdiff_t>(q_length * q_hidden),
-                static_cast<std::ptrdiff_t>(head_dim),
-                static_cast<std::ptrdiff_t>(q_hidden)};
+                 static_cast<std::ptrdiff_t>(head_dim), static_cast<std::ptrdiff_t>(q_hidden)};
     k_strides = {static_cast<std::ptrdiff_t>(kv_length * k_hidden),
-                static_cast<std::ptrdiff_t>(head_dim),
-                static_cast<std::ptrdiff_t>(k_hidden)};
+                 static_cast<std::ptrdiff_t>(head_dim), static_cast<std::ptrdiff_t>(k_hidden)};
     v_strides = {static_cast<std::ptrdiff_t>(kv_length * v_hidden),
-                static_cast<std::ptrdiff_t>(v_head_dim),
-                static_cast<std::ptrdiff_t>(v_hidden)};
+                 static_cast<std::ptrdiff_t>(v_head_dim), static_cast<std::ptrdiff_t>(v_hidden)};
     const std::size_t y_hidden = q_num_heads * v_head_dim;
     y_strides = {static_cast<std::ptrdiff_t>(q_length * y_hidden),
-                static_cast<std::ptrdiff_t>(v_head_dim),
-                static_cast<std::ptrdiff_t>(y_hidden)};
+                 static_cast<std::ptrdiff_t>(v_head_dim), static_cast<std::ptrdiff_t>(y_hidden)};
   }
 
   if (kv_num_heads == 0 || q_num_heads % kv_num_heads != 0) {
@@ -192,9 +186,9 @@ AttentionPlan::AttentionPlan(const AttentionDescriptor &descriptor, AttentionLay
   group_size = q_num_heads / kv_num_heads;
 
   scale = descriptor.scale.has_value()
-             ? *descriptor.scale
-             : (head_dim > 0 ? static_cast<float>(1.0 / std::sqrt(static_cast<double>(head_dim)))
-                             : 1.0f);
+              ? *descriptor.scale
+              : (head_dim > 0 ? static_cast<float>(1.0 / std::sqrt(static_cast<double>(head_dim)))
+                              : 1.0f);
   // Stateless invocation (no past cache, no external nonpad_kv_seqlen): the
   // causal offset is always zero, so causal masking reduces to the standard
   // top-left/lower-triangular pattern (j <= i) for both opset 23 and 24.
@@ -217,7 +211,7 @@ AttentionPlan::AttentionPlan(const AttentionDescriptor &descriptor, AttentionLay
     for (std::size_t i = 0; i < 4; ++i) {
       if (aligned[i] != 1 && aligned[i] != target[i]) {
         Fail("AttentionPlan: attn_mask is not broadcastable to (batch_size, q_num_heads, "
-            "q_sequence_length, total_sequence_length).");
+             "q_sequence_length, total_sequence_length).");
       }
     }
     std::array<std::ptrdiff_t, 4> contiguous_stride = {0, 0, 0, 0};
@@ -236,10 +230,10 @@ AttentionPlan::AttentionPlan(const AttentionDescriptor &descriptor, AttentionLay
 std::vector<std::int64_t> AttentionPlan::output_shape() const {
   if (layout == AttentionLayout::kRank4) {
     return {static_cast<std::int64_t>(batch), static_cast<std::int64_t>(q_num_heads),
-           static_cast<std::int64_t>(q_length), static_cast<std::int64_t>(v_head_dim)};
+            static_cast<std::int64_t>(q_length), static_cast<std::int64_t>(v_head_dim)};
   }
   return {static_cast<std::int64_t>(batch), static_cast<std::int64_t>(q_length),
-         static_cast<std::int64_t>(q_num_heads * v_head_dim)};
+          static_cast<std::int64_t>(q_num_heads * v_head_dim)};
 }
 
 namespace {
@@ -249,7 +243,7 @@ constexpr float kNegativeInfinity = -std::numeric_limits<float>::infinity();
 }
 
 void ComputeAttentionFloat32(const AttentionPlan &plan, const float *q, const float *k,
-                            const float *v, const void *mask, float *y) {
+                             const float *v, const void *mask, float *y) {
   const auto *mask_bool = static_cast<const std::uint8_t *>(mask);
   const auto *mask_float = static_cast<const float *>(mask);
 
@@ -266,8 +260,8 @@ void ComputeAttentionFloat32(const AttentionPlan &plan, const float *q, const fl
 
       for (std::size_t i = 0; i < plan.q_length; ++i) {
         const float *q_row = q_head + i * plan.q_strides.sequence;
-        const std::ptrdiff_t mask_row = mask_base + static_cast<std::ptrdiff_t>(i) *
-                                                        plan.mask_strides.q;
+        const std::ptrdiff_t mask_row =
+            mask_base + static_cast<std::ptrdiff_t>(i) * plan.mask_strides.q;
         float row_max = kNegativeInfinity;
         for (std::size_t j = 0; j < plan.kv_length; ++j) {
           float bias = 0.0f;
@@ -276,12 +270,12 @@ void ComputeAttentionFloat32(const AttentionPlan &plan, const float *q, const fl
             allowed = j <= i;
           }
           if (allowed && plan.mask_kind == AttentionMaskKind::kBoolean) {
-            const std::ptrdiff_t index = mask_row + static_cast<std::ptrdiff_t>(j) *
-                                                        plan.mask_strides.kv;
+            const std::ptrdiff_t index =
+                mask_row + static_cast<std::ptrdiff_t>(j) * plan.mask_strides.kv;
             allowed = mask_bool[index] != 0;
           } else if (allowed && plan.mask_kind == AttentionMaskKind::kAdditive) {
-            const std::ptrdiff_t index = mask_row + static_cast<std::ptrdiff_t>(j) *
-                                                        plan.mask_strides.kv;
+            const std::ptrdiff_t index =
+                mask_row + static_cast<std::ptrdiff_t>(j) * plan.mask_strides.kv;
             bias = mask_float[index];
           }
           if (!allowed) {

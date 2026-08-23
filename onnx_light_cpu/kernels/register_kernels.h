@@ -15,6 +15,8 @@ namespace onnx_light_cpu {
 /// :cpp:func:`RegisterIntegerMatMulKernels` and :cpp:func:`RegisterNotKernel`),
 /// so a single call installs the accelerated elementwise/GEMM kernels and the
 /// portable integer matrix-multiplication kernels.
+/// (:cpp:func:`RegisterAttentionKernel` is also called and installs the
+/// stateless FP32 materialized ``Attention`` baseline.)
 /// After this call every such node dispatched by onnx-light's
 /// runtime (``RunNode`` / ``RuntimeSession``, and therefore any model executed
 /// through ``ReferenceEvaluator``) resolves to the onnx-light-cpu kernel,

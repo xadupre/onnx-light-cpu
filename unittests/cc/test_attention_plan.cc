@@ -35,9 +35,8 @@ std::vector<float> RandomTensor(std::size_t count, std::uint32_t seed) {
 // Naive, independently-written oracle mirroring the ONNX Attention spec: it
 // only understands the rank-4 layout, so rank-3 test cases reshape their
 // inputs into the equivalent rank-4 tensors before comparison.
-std::vector<float> ReferenceAttention(std::size_t batch, std::size_t q_heads,
-                                      std::size_t kv_heads, std::size_t q_len,
-                                      std::size_t kv_len, std::size_t head_dim,
+std::vector<float> ReferenceAttention(std::size_t batch, std::size_t q_heads, std::size_t kv_heads,
+                                      std::size_t q_len, std::size_t kv_len, std::size_t head_dim,
                                       std::size_t v_head_dim, const std::vector<float> &q,
                                       const std::vector<float> &k, const std::vector<float> &v,
                                       float scale, bool causal,
@@ -67,7 +66,7 @@ std::vector<float> ReferenceAttention(std::size_t batch, std::size_t q_heads,
           float dot = 0.0f;
           for (std::size_t d = 0; d < head_dim; ++d) {
             dot += q[((b * q_heads + h) * q_len + i) * head_dim + d] *
-                  k[((b * kv_heads + kv_h) * kv_len + j) * head_dim + d];
+                   k[((b * kv_heads + kv_h) * kv_len + j) * head_dim + d];
           }
           scores[j] = scale * dot + bias;
           row_max = std::max(row_max, scores[j]);
@@ -169,10 +168,9 @@ TEST(AttentionPlan, RejectsHeadCountNotDivisible) {
   const std::int64_t q_shape[] = {1, 5, 4, 8};
   const std::int64_t k_shape[] = {1, 2, 4, 8};
   const std::int64_t v_shape[] = {1, 2, 4, 8};
-  EXPECT_THROW(
-      AttentionPlan(descriptor, AttentionLayout::kRank4, q_shape, k_shape, v_shape, {},
-                   AttentionMaskKind::kNone),
-      std::invalid_argument);
+  EXPECT_THROW(AttentionPlan(descriptor, AttentionLayout::kRank4, q_shape, k_shape, v_shape, {},
+                             AttentionMaskKind::kNone),
+               std::invalid_argument);
 }
 
 TEST(AttentionPlan, Rank3RequiresHeadCountAttributes) {
@@ -180,10 +178,9 @@ TEST(AttentionPlan, Rank3RequiresHeadCountAttributes) {
   const std::int64_t q_shape[] = {1, 4, 32};
   const std::int64_t k_shape[] = {1, 4, 32};
   const std::int64_t v_shape[] = {1, 4, 32};
-  EXPECT_THROW(
-      AttentionPlan(descriptor, AttentionLayout::kRank3, q_shape, k_shape, v_shape, {},
-                   AttentionMaskKind::kNone),
-      std::invalid_argument);
+  EXPECT_THROW(AttentionPlan(descriptor, AttentionLayout::kRank3, q_shape, k_shape, v_shape, {},
+                             AttentionMaskKind::kNone),
+               std::invalid_argument);
 }
 
 // MHA, rank-4, no mask, no causal: differential test against the naive
@@ -203,9 +200,8 @@ TEST(ComputeAttentionFloat32, Rank4MhaNoMaskMatchesReference) {
   std::vector<float> y(batch * heads * q_len * v_head_dim);
   ComputeAttentionFloat32(plan, q.data(), k.data(), v.data(), nullptr, y.data());
 
-  const auto expected = ReferenceAttention(batch, heads, heads, q_len, kv_len, head_dim,
-                                           v_head_dim, q, k, v, plan.scale, false, nullptr,
-                                           nullptr);
+  const auto expected = ReferenceAttention(batch, heads, heads, q_len, kv_len, head_dim, v_head_dim,
+                                           q, k, v, plan.scale, false, nullptr, nullptr);
   ExpectClose(y, expected);
 }
 
@@ -213,8 +209,7 @@ TEST(ComputeAttentionFloat32, Rank4MhaNoMaskMatchesReference) {
 TEST(ComputeAttentionFloat32, Rank4GqaCausalMatchesReference) {
   AttentionDescriptor descriptor;
   descriptor.is_causal = true;
-  constexpr std::size_t batch = 1, q_heads = 4, kv_heads = 2, len = 6, head_dim = 4,
-                        v_head_dim = 4;
+  constexpr std::size_t batch = 1, q_heads = 4, kv_heads = 2, len = 6, head_dim = 4, v_head_dim = 4;
   const std::int64_t q_shape[] = {batch, q_heads, len, head_dim};
   const std::int64_t k_shape[] = {batch, kv_heads, len, head_dim};
   const std::int64_t v_shape[] = {batch, kv_heads, len, v_head_dim};
@@ -229,17 +224,16 @@ TEST(ComputeAttentionFloat32, Rank4GqaCausalMatchesReference) {
   std::vector<float> y(batch * q_heads * len * v_head_dim);
   ComputeAttentionFloat32(plan, q.data(), k.data(), v.data(), nullptr, y.data());
 
-  const auto expected = ReferenceAttention(batch, q_heads, kv_heads, len, len, head_dim,
-                                           v_head_dim, q, k, v, plan.scale, true, nullptr,
-                                           nullptr);
+  const auto expected = ReferenceAttention(batch, q_heads, kv_heads, len, len, head_dim, v_head_dim,
+                                           q, k, v, plan.scale, true, nullptr, nullptr);
   ExpectClose(y, expected);
 }
 
 // MQA, rank-4, boolean mask.
 TEST(ComputeAttentionFloat32, Rank4MqaBooleanMaskMatchesReference) {
   AttentionDescriptor descriptor;
-  constexpr std::size_t batch = 1, q_heads = 4, kv_heads = 1, q_len = 3, kv_len = 5,
-                        head_dim = 4, v_head_dim = 4;
+  constexpr std::size_t batch = 1, q_heads = 4, kv_heads = 1, q_len = 3, kv_len = 5, head_dim = 4,
+                        v_head_dim = 4;
   const std::int64_t q_shape[] = {batch, q_heads, q_len, head_dim};
   const std::int64_t k_shape[] = {batch, kv_heads, kv_len, head_dim};
   const std::int64_t v_shape[] = {batch, kv_heads, kv_len, v_head_dim};
@@ -267,9 +261,9 @@ TEST(ComputeAttentionFloat32, Rank4MqaBooleanMaskMatchesReference) {
       }
     }
   }
-  const auto expected = ReferenceAttention(batch, q_heads, kv_heads, q_len, kv_len, head_dim,
-                                           v_head_dim, q, k, v, plan.scale, false, nullptr,
-                                           &broadcast_mask);
+  const auto expected =
+      ReferenceAttention(batch, q_heads, kv_heads, q_len, kv_len, head_dim, v_head_dim, q, k, v,
+                         plan.scale, false, nullptr, &broadcast_mask);
   ExpectClose(y, expected);
 }
 
@@ -278,8 +272,7 @@ TEST(ComputeAttentionFloat32, Rank3AdditiveMaskMatchesReference) {
   AttentionDescriptor descriptor;
   descriptor.q_num_heads = 2;
   descriptor.kv_num_heads = 2;
-  constexpr std::size_t batch = 2, heads = 2, q_len = 3, kv_len = 4, head_dim = 4,
-                        v_head_dim = 4;
+  constexpr std::size_t batch = 2, heads = 2, q_len = 3, kv_len = 4, head_dim = 4, v_head_dim = 4;
   const std::int64_t q_shape[] = {batch, q_len, heads * head_dim};
   const std::int64_t k_shape[] = {batch, kv_len, heads * head_dim};
   const std::int64_t v_shape[] = {batch, kv_len, heads * v_head_dim};
@@ -322,9 +315,8 @@ TEST(ComputeAttentionFloat32, Rank3AdditiveMaskMatchesReference) {
       }
     }
   }
-  const auto expected = ReferenceAttention(batch, heads, heads, q_len, kv_len, head_dim,
-                                           v_head_dim, q4, k4, v4, plan.scale, false,
-                                           &broadcast_mask, nullptr);
+  const auto expected = ReferenceAttention(batch, heads, heads, q_len, kv_len, head_dim, v_head_dim,
+                                           q4, k4, v4, plan.scale, false, &broadcast_mask, nullptr);
 
   // Reshape the rank-4 oracle output back to rank-3 [B, L, H*D] for comparison.
   std::vector<float> expected_r3(batch * q_len * heads * v_head_dim);
