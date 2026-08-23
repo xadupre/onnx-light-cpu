@@ -216,8 +216,6 @@ TEST(ProcessorPerformanceProfile, RepeatedRunsProduceIndependentImmutableValues)
 // read bandwidth, independent of any live measurement.
 // ---------------------------------------------------------------------------
 
-namespace {
-
 ProcessorProfileComputeEntry MakeComputeEntry(ComputeElementType element_type,
                                               ProcessorThreadPolicy policy, double median_gops) {
   ProcessorProfileComputeEntry entry;
@@ -240,8 +238,6 @@ ProcessorProfileMemoryEntry MakeMemoryEntryWithRead(MemoryProfileLevel level,
   entry.read = read;
   return entry;
 }
-
-} // namespace
 
 TEST(ProcessorPerformanceProfileRoofline, CrossoverMatchesComputeOverBandwidth) {
   const std::vector<ProcessorProfileComputeEntry> compute{

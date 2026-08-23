@@ -26,6 +26,7 @@ document linked above for the full measurement contract).
 # unit test while exercising every public result path: both thread policies,
 # latency, an explicit affinity, and every element type this host can supply.
 
+import json
 import os
 
 import matplotlib.pyplot as plt
@@ -246,8 +247,6 @@ plt.show()
 # the whole profile (metadata, topology, memory, compute, roofline, and
 # warnings), suitable for archiving alongside a run or feeding a future
 # optimal-transport GEMM tile-placement cost model.
-
-import json
 
 serialized = profile.to_dict()
 assert serialized["metadata"]["schema_version"] == profile.metadata.schema_version
