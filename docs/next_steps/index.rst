@@ -58,9 +58,10 @@ roadmap is not implementation-ready and no implementation is active.
       - :doc:`Exp and Log parity <2026/2026_08_exp_log_parity>`
       - Reach the published ONNX Runtime parity and numerical gates.
       - Transcendental kernels are common and expose SIMD and scheduling gaps.
-    * - Discussed
+    * - Planned
       - :doc:`Qwen3 inference <2026/2026_08_qwen3_inference>`
-      - Build the batch-1 INT4, GQA, and decode critical path.
+      - Start the frozen-model/backend benchmark, then build the canonical
+        batch-1 QDQ INT4, shared GQA, and persistent-decode path.
       - A frozen dense model provides an end-to-end target for kernel priorities.
     * - Discussed
       - :doc:`Conv <2026/2026_08_conv>`

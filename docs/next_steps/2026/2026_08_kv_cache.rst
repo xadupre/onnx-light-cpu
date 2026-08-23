@@ -274,20 +274,20 @@ Implementation order and dependencies
        ``onnx-light``.
      - Cache values survive invocation cleanup, are explicitly reset, and pass
        ownership, subgraph, release-plan, and request-isolation tests.
-     - Attention step P6.
+     - Attention PR12 / #389 (complete tensor-cache semantics).
      - TBD.
    * - C1
      - Tensor import/export adapters, safe graph rewrite, contiguous CPU cache,
        and cache append/view operations.
      - Standard ONNX outputs remain identical; append copies only new tokens;
        rewrite falls back whenever cache state is externally observable.
-     - C0 and Attention step P6.
+     - C0 and Attention PR12 / #389.
      - TBD.
    * - C2
      - Cache-aware streaming single-token decode.
      - Decode is within 1.1x of ONNX Runtime over the target context range and
        no complete score, present tensor, or cache gather is materialized.
-     - C1 and Attention step P7.
+     - C1 and Attention PR14 / #391 (streaming cache modes).
      - TBD.
    * - C3
      - Paged storage, sliding-window eviction, beam fork/reorder, copy-on-write,
