@@ -35,10 +35,10 @@ class ExplicitAffinity(NamedTuple):
     """One explicit logical-processor affinity (processor group, index)."""
 
     group: int
-    index: int
+    processor_index: int
 
     def to_dict(self) -> dict[str, int]:
-        return {"group": self.group, "index": self.index}
+        return {"group": self.group, "index": self.processor_index}
 
 
 @dataclass(frozen=True)
@@ -503,7 +503,7 @@ def benchmark_processor_performance(
 
     memory: dict[str, dict[str, MemoryLevelMeasurement]] = {}
     for level, policy, read, write, copy, read_modify_write, latency in raw_memory:
-        entry = MemoryLevelMeasurement(
+        memory_entry = MemoryLevelMeasurement(
             level=level,
             policy=policy,
             read=_bandwidth(read),
@@ -512,7 +512,7 @@ def benchmark_processor_performance(
             read_modify_write=_bandwidth(read_modify_write),
             latency=_latency(latency),
         )
-        memory.setdefault(level, {})[policy] = entry
+        memory.setdefault(level, {})[policy] = memory_entry
 
     compute: dict[str, dict[str, ComputeMeasurement]] = {}
     for (
@@ -528,7 +528,7 @@ def benchmark_processor_performance(
         median,
         dispersion,
     ) in raw_compute:
-        entry = ComputeMeasurement(
+        compute_entry = ComputeMeasurement(
             element_type=element_type,
             policy=policy,
             implementation_name=implementation_name,
@@ -541,7 +541,7 @@ def benchmark_processor_performance(
             median_gops=median,
             dispersion_gops=dispersion,
         )
-        compute.setdefault(element_type, {})[policy] = entry
+        compute.setdefault(element_type, {})[policy] = compute_entry
 
     roofline: dict[str, dict[str, dict[str, RooflineMeasurement]]] = {}
     for (
@@ -552,7 +552,7 @@ def benchmark_processor_performance(
         memory_read_gbps,
         arithmetic_intensity_crossover,
     ) in raw_roofline:
-        entry = RooflineMeasurement(
+        roofline_entry = RooflineMeasurement(
             element_type=element_type,
             policy=policy,
             level=level,
@@ -560,7 +560,7 @@ def benchmark_processor_performance(
             memory_read_gbps=memory_read_gbps,
             arithmetic_intensity_crossover=arithmetic_intensity_crossover,
         )
-        roofline.setdefault(element_type, {}).setdefault(policy, {})[level] = entry
+        roofline.setdefault(element_type, {}).setdefault(policy, {})[level] = roofline_entry
 
     return ProcessorPerformanceProfile(
         metadata=metadata,
