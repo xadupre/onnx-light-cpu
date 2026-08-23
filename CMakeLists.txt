@@ -669,6 +669,15 @@ if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
       set_target_properties(onnx_light::lib_onnx_op PROPERTIES
           IMPORTED_LOCATION "${_onnx_light_op_lib}"
           INTERFACE_LINK_LIBRARIES onnx_light::lib_onnx_core)
+      if(WIN32)
+        if(NOT ONNX_LIGHT_CPU_ONNX_LIGHT_OP_IMPLIB)
+          message(FATAL_ERROR
+              "The onnx-light op Windows import library is required for "
+              "source-runtime integration.")
+        endif()
+        set_property(TARGET onnx_light::lib_onnx_op PROPERTY
+            IMPORTED_IMPLIB "${ONNX_LIGHT_CPU_ONNX_LIGHT_OP_IMPLIB}")
+      endif()
     endif()
     if(_onnx_light_kernels_lib AND _onnx_light_backend_test_lib)
       list(GET _onnx_light_kernels_lib 0 _onnx_light_kernels_lib)
