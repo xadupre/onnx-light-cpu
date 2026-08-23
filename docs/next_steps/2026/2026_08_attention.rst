@@ -3,11 +3,13 @@ Attention Performance Roadmap
 
 :Date: 2026-08
 
-**discussion**
+**planned**
 
 The portable runtime provides tensor-based Attention correctness, but
 ``onnx-light-cpu`` does not yet provide the optimized materialized or streaming
-kernel described here. Roadmap PR11 through PR15 remain pending.
+kernel described here. The shared GEMM/MatMul engine and its benchmark tooling
+are available, so Roadmap PR11 may start. The separate default-policy GEMM
+parity work may continue without blocking this roadmap.
 
 Objective
 ---------
@@ -17,17 +19,18 @@ ONNX ``Attention`` with performance parity against the ONNX Runtime CPU
 execution provider. Parity means a corpus median speed-up of at least ``1.0x``
 and no priority case below ``0.9x`` on dedicated hardware.
 
-This roadmap starts after the final blocking GEMM and MatMul parity gate,
-:doc:`Roadmap PR10.5 <2026_08_gemm_matmul>`. Attention reuses the shared
-matrix-multiplication engine's packing, dot-product micro-kernels, type
-conversion, and scheduler, but is not implemented as two ordinary materialized
-MatMul calls on its optimized path.
+This roadmap starts from the shared matrix engine delivered through
+:doc:`Roadmap PR10.5 <2026_08_gemm_matmul>`. Attention reuses its packing,
+dot-product micro-kernels, type conversion, and scheduler. The materialized
+correctness path may compose those primitives, but the optimized path is not
+implemented as two ordinary materialized MatMul calls.
 
 Related roadmaps
 ----------------
 
 * :doc:`Gemm and MatMul Performance Roadmap <2026_08_gemm_matmul>` provides
-  the prerequisite matrix-multiplication engine and closes with PR10.5.
+  the prerequisite matrix-multiplication engine. Its remaining default-policy
+  parity work is independent of Attention.
 * :doc:`Persistent KV Cache and Decode roadmap <2026_08_kv_cache>` owns
   persistent state, paged storage, cache quantization, and optimized cache
   append. This roadmap covers standard tensor ``past``/``present``
@@ -36,18 +39,38 @@ Related roadmaps
 Scope
 -----
 
-The Attention adapter handles Q/K/V head geometry, scaling, masks, causal
-behavior, grouped-query and multi-query head mapping, and optional tensor
-``past``/``present`` state according to the selected ONNX opset.
+The adapter implements ``ai.onnx::Attention`` v23 and v24. It handles Q/K/V
+head geometry, scaling, masks, causal behavior, grouped-query and multi-query
+head mapping, and optional tensor cache state according to the selected opset.
 
 The implementation supports:
 
-* MHA, GQA, and MQA through one internal descriptor;
-* boolean, additive, padding, causal, sliding-window, and sparse masks;
+* rank-4 ``[B, H, L, D]`` and rank-3 packed ``[B, L, H * D]`` layouts;
+* MHA, GQA, and MQA through one internal descriptor, including a value head
+  dimension different from the Q/K head dimension;
+* broadcastable rank-2 through rank-4 boolean and additive ``attn_mask``
+  tensors, causal masking, their intersection, and zero output for a fully
+  masked query row;
+* v24 ``nonpad_kv_seqlen`` external-cache masking and v23/v24 internal
+  ``past_key``/``past_value`` concatenation with optional ``present`` outputs;
+* ``scale``, ``softcap``, ``qk_matmul_output_mode`` 0 through 3, and the
+  optional observable ``qk_matmul_output``;
 * prefill, short-query lengths 2-16, and single-token decode;
-* FP32, FP16, and BF16 inputs with FP32 softmax accumulation;
+* equal-type FP32, FP16, and BF16 Q/K/V with default or explicit FP32 softmax
+  accumulation;
 * zero-copy GQA/MQA head mapping, without physically repeating K or V;
 * exact ONNX layouts, output shapes, empty sequences, and validation errors.
+
+The ONNX schema also permits DOUBLE, a V type different from Q/K, and softmax
+precisions other than FP32. Those combinations are outside this roadmap and
+are not currently supported by the portable kernel either. CPU registration
+must not advertise unsupported Q/K types; combinations that can reach the CPU
+adapter through a supported Q type fail with an explicit unsupported error
+rather than silently changing precision or returning an approximation. A
+requested ``qk_matmul_output`` necessarily materializes that observable tensor;
+the dispatcher therefore selects the materialized path for it. Sliding-window
+or sparse behavior is in scope only when represented by a valid
+``attn_mask``. It does not introduce a separate non-standard mask contract.
 
 Benchmark contract
 ------------------
@@ -56,32 +79,58 @@ Optimization begins with reproducible end-to-end measurements against ONNX
 Runtime and isolated measurements for the score, softmax, and value-update
 stages.
 
-* Use identical tensors, masks, layouts, thread counts, CPU affinity, and
-  correctness tolerances.
+* Use identical tensors, masks, layouts, CPU affinity, and correctness
+  tolerances.
+* The primary comparison leaves thread selection unset so ONNX Runtime and
+  onnx-light choose their own default execution policies. Explicit equal-thread
+  runs are separate scaling diagnostics and never replace the primary result.
 * Warm up every candidate, alternate candidate order, and report median and
   dispersion rather than the best observation.
 * Run on an idle, pinned machine with a fixed power policy and record CPU,
   cache, ISA, compiler, and build metadata.
-* Cover query lengths 1, 2-16, and long prefill; KV lengths from 1 to the
-  target context limit; MHA, GQA, and MQA; every supported mask and type.
+* Cover query lengths 1, 2, 8, 16, 128, and 512; KV lengths 1, 128, 1024,
+  4096, and 8192 when machine memory permits; MHA ``12/12``, GQA ``16/4``,
+  and MQA ``16/1`` query/KV-head ratios; head dimensions 64 and 128; rank-3
+  and rank-4 layouts; and FP32, FP16, and BF16.
+* Pair the full attribute and mask matrix with small correctness cases. The
+  timed priority corpus covers no mask, causal, boolean, additive, v24
+  ``nonpad_kv_seqlen``, and internal tensor-cache cases without taking their
+  impractical Cartesian product.
 * Report time to first token, per-token decode latency, tokens/second, peak
-  temporary memory, and effective KV-cache bandwidth.
+  temporary memory, bytes copied for tensor ``past``/``present``, and effective
+  KV-cache bandwidth.
 * Measure materialized and streaming paths separately. End-to-end results must
   include every conversion, allocation, mask, and tensor past/present copy
   visible to the caller.
+* The priority platforms are x86-64 AVX2, x86-64 AVX-512 when dedicated
+  hardware is available, and Arm64 NEON. SVE measurements are reported
+  separately until a dedicated SVE machine is part of the regular gate.
 
 Phase 1: plan and materialized correctness path
 -----------------------------------------------
 
-An immutable ``AttentionPlan`` is built from model metadata, static
-dimensions, CPU features, and runtime options. It records:
+An immutable ``AttentionDescriptor`` is built when the node is initialized. It
+contains only information known without runtime inputs:
+
+* opset, attributes, optional input/output positions, and observable outputs;
+* statically known rank, type, head counts, and head dimensions when present;
+* candidate dot-product, conversion, and packing functions allowed by the CPU.
+
+Every invocation validates the actual Q/K/V, mask, and cache tensors and builds
+a lightweight ``AttentionPlan`` from their concrete shapes and strides. It
+records:
 
 * batch size, query-head and KV-head counts, head dimensions, and GQA ratio;
-* input/output layouts and strides;
-* scale, causal mode, mask kind, and tensor past/present use;
-* prefill, short-query, or single-token decode algorithm;
-* query-row and KV-column block sizes;
-* dot-product/packing functions, accumulation type, and useful thread count.
+* input/output layouts and strides, query and KV lengths, and cache mode;
+* resolved scale, causal bounds, mask representation, and output obligations;
+* materialized, prefill-streaming, short-query, or decode algorithm;
+* query-row and KV-column block sizes and the available outer task count.
+
+The plan does not prepack Q, K, or V at model load because those tensors are
+unknown then. It emits work items to the onnx-light executor; it does not store
+or impose a fixed thread count. The runtime policy decides how many workers are
+admitted. Shape-specialized decisions may be cached only by a complete key and
+must not retain invocation tensors.
 
 The first implementation is a materialized correctness path:
 
@@ -92,9 +141,11 @@ The first implementation is a materialized correctness path:
    P = softmax(S)
    O = P @ V
 
-It validates all shape, mask, head-mapping, precision, and tensor
-past/present semantics against ONNX Runtime. It remains the deterministic
-fallback for combinations not supported by streaming Attention.
+It validates all shape, mask, head-mapping, precision, optional-output, and
+tensor cache semantics against ONNX Runtime. It remains the deterministic CPU
+fallback for supported types. DOUBLE, mixed Q/K and V types, and unsupported
+``softmax_precision`` combinations remain outside the registered support
+boundary and produce an explicit error if encountered.
 
 Phase 2: streaming and online softmax
 -------------------------------------
@@ -129,6 +180,12 @@ The CPU engine requires:
 * dedicated MHA/GQA/MQA algorithms for query lengths 1 and 2-16;
 * FP16/BF16 score and V-update kernels with the materialized path as fallback.
 
+Here sliding-window and sparse tile skipping are optimizations inferred from a
+valid boolean or additive ``attn_mask``. Arbitrary masks remain correct even
+when no skip structure can be inferred. Internal ``past`` tensors and external
+v24 caches may be consumed block by block, but requested ``present`` or
+``qk_matmul_output`` tensors still incur the allocations required by ONNX.
+
 Temporary score storage falls from
 ``O(B * Hq * Lq * Lkv)`` to ``O(Br * Bc)`` per worker. The expected gain is
 ``0-20%`` when ONNX Runtime already uses a fused path and ``1.2-2x`` when it
@@ -145,22 +202,26 @@ Acceptance criteria
    * - Area
      - Exit criterion
    * - Correctness
-     - Differential tests cover stateless Attention and tensor past/present,
-       MHA/GQA/MQA, every mask, causal boundary, layout, empty sequence, and
-       supported type.
+     - Differential tests against ONNX Runtime and the portable kernel cover
+       v23/v24, stateless and both cache modes, MHA/GQA/MQA, every attribute
+       and optional output, mask/causal composition, fully masked rows, rank-3
+       and rank-4 layouts, empty sequences, and every dispatched type.
    * - Fallback
-     - The materialized path remains registered for every valid combination
-       not handled by the streaming path.
+     - The materialized path handles every optimized-type combination not
+       handled by streaming. Types and precision modes outside CPU scope are
+       not advertised and fail explicitly if dispatch still reaches the CPU
+       adapter.
    * - Memory
      - Streaming Attention never materializes the complete score or
        probability tensor; temporary memory is bounded by worker count and
        ``Br x Bc`` blocks.
    * - Scaling
-     - Prefill scheduling scales through the physical-core count, while
-       short-query and decode paths avoid harmful parallel overhead.
+     - Prefill exposes enough independent work to scale through the physical
+       cores when useful, while short-query and decode avoid harmful parallel
+       overhead. The runtime, not the kernel, controls admitted workers.
    * - Performance
-     - Every priority platform/type case reaches at least ``1.0x`` ONNX Runtime
-       median performance with no priority case below ``0.9x``.
+     - On each priority platform/type corpus, median speed-up is at least
+       ``1.0x`` ONNX Runtime and no priority case is below ``0.9x``.
    * - Reproducibility
      - Dedicated-machine results retain raw samples and environment metadata;
        shared CI enforces correctness but does not decide narrow performance
@@ -179,39 +240,47 @@ Pull-request sequence
      - Dependency
      - Status
    * - Roadmap PR11
-     - Materialized Attention implementation.
-     - ``AttentionPlan`` validates layouts, head geometry, scale, masks, types,
-       blocks, and threads. Materialized QK-softmax-PV supports all masks,
-       zero-copy GQA/MQA mapping, tensor past/present, FP32/FP16/BF16, and
-       batch/head/query scheduling.
-     - GEMM/MatMul PR10.5
+     - Adapter, planning contract, corpus, and FP32 materialized baseline.
+     - ``AttentionDescriptor`` parses v23/v24 attributes and optional IO.
+       Per-invocation planning validates concrete tensors without prepacking
+       unknown inputs or fixing threads. Rank-3/rank-4 stateless FP32
+       MHA/GQA/MQA, scale, causal and boolean/additive masks pass differential
+       tests. Features not implemented yet delegate to the portable kernel only
+       when that kernel already supports them; otherwise they fail explicitly.
+     - Shared GEMM/MatMul engine
      - Pending
    * - Roadmap PR12
-     - Materialized Attention correctness gate.
-     - The complete MHA/GQA/MQA, mask, causal, past/present, layout, empty
-       sequence, and type corpus matches ONNX Runtime; the path is registered
-       as the streaming fallback.
+     - Complete materialized semantics and type gate.
+     - FP16/BF16, softcap, mask/causal intersection, fully masked rows, all
+       ``qk_matmul_output_mode`` values, optional outputs, internal tensor
+       past/present, and v24 external-cache ``nonpad_kv_seqlen`` match ONNX
+       Runtime. Explicit FP32 ``softmax_precision`` matches the default
+       accumulation. DOUBLE, mixed-type, and other softmax-precision cases
+       prove the declared unsupported boundary.
      - PR11
      - Pending
    * - Roadmap PR13
-     - Online Attention compute engine.
-     - The online recurrence matches the materialized path. SIMD score kernels
-       fuse scale, masks, causal bounds, and row maximum; vector exponential
-       and reductions are accurate; probability-by-V updates output directly.
+     - FP32 online Attention compute engine.
+     - The online recurrence matches the materialized path for stateless
+       prefill, short-query, and decode. SIMD score kernels fuse scale, masks,
+       causal bounds, softcap, and row maximum; vector exponential and
+       reductions are accurate; probability-by-V updates output directly.
      - PR12
      - Pending
    * - Roadmap PR14
-     - Streaming scheduling and types.
-     - Prefill and dedicated short-query/decode scheduling cover MHA/GQA/MQA
-       without nested pools. FP16/BF16 score and V-update kernels match the
-       materialized fallback.
-     - GEMM/MatMul PR10.3, PR13
+     - Streaming scheduling, cache modes, and low-precision types.
+     - Runtime-owned scheduling covers MHA/GQA/MQA without nested pools or a
+       fixed worker count. Internal/external cache blocks, inferable mask tile
+       skipping, and FP16/BF16 score/V-update kernels match the materialized
+       fallback. Observable full-tensor outputs select materialized execution.
+     - PR13
      - Pending
    * - Roadmap PR15
      - Final parity and memory gate.
-     - Every priority prefill/decode platform/type case has bounded temporary
-       memory, reaches at least ``1.0x`` ONNX Runtime median performance, and
-       has no priority case below ``0.9x``.
+     - Every priority platform/type corpus has bounded temporary memory,
+       reaches at least ``1.0x`` median speed-up over ONNX Runtime, and has no
+       priority case below ``0.9x``. Raw default-policy samples and environment
+       metadata are published; controlled-thread runs remain diagnostic.
      - PR14
      - Pending
 

@@ -43,9 +43,10 @@ to sort the table.
         retaining the shared matrix engine and low-precision paths.
       - The expanded corpus exposed a multi-core scaling gap that the original
         controlled-thread validation did not cover.
-    * - Discussed
+    * - Planned
       - :doc:`Attention <2026/2026_08_attention>`
-      - Add materialized and streaming MHA, GQA, and MQA CPU kernels.
+      - Start the v23/v24 adapter and runtime-shaped materialized FP32 baseline,
+        then add complete semantics and bounded-memory streaming.
       - Transformer inference needs bounded-memory attention without avoidable
         score and head materialization.
     * - Completed
