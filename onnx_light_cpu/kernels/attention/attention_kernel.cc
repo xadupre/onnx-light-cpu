@@ -111,9 +111,11 @@ Tensor Compute(const Tensor &q, const Tensor &k, const Tensor &v, const Tensor *
       descriptor, layout, ShapeAsInt64(q.shape), ShapeAsInt64(k.shape), ShapeAsInt64(v.shape),
       mask != nullptr ? ShapeAsInt64(mask->shape) : std::vector<std::int64_t>{}, mask_kind);
 
-  const Shape output_shape(plan.output_shape().begin(), plan.output_shape().end());
+  Shape output_shape;
+  output_shape.reserve(plan.output_shape().size());
   std::size_t element_count = 1;
-  for (const std::int64_t dimension : output_shape) {
+  for (const std::int64_t dimension : plan.output_shape()) {
+    output_shape.push_back(dimension);
     element_count *= static_cast<std::size_t>(dimension);
   }
   const std::size_t bytes = element_count * sizeof(float);
