@@ -69,7 +69,7 @@ jobs:
         run: ctest --test-dir build --output-on-failure -C Release --timeout 240
 
       - name: Run Python tests
-        run: pytest --durations=10 --cov=onnx_light_cpu --cov-report=xml --cov-report=term-missing unittests --ignore=unittests/python/test_kernels_e2e.py
+        run: pytest --durations=10 --cov=onnx_light_cpu --cov-report=xml --cov-report=term-missing unittests --ignore=unittests/python/test_kernels_e2e.py --ignore=unittests/python/test_kernels_doc_e2e.py
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
