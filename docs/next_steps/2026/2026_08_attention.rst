@@ -106,6 +106,31 @@ stages.
   hardware is available, and Arm64 NEON. SVE measurements are reported
   separately until a dedicated SVE machine is part of the regular gate.
 
+Backend test corpus
+-------------------
+
+Roadmap PR11 adds ``onnx-light-cpu`` backend test cases for ``Attention`` in
+both correctness and ``TestMode::BENCHMARK`` modes. The benchmark cases:
+
+* are registered through ``RegisterCpuAttentionCases`` and the CPU backend
+  collector, so the standard onnx-light backend API, the onnx-light-cpu
+  benchmark runner, and the dashboard consume the same models;
+* produce inputs and expected outputs lazily so large context cases are not
+  allocated while the registry is collected;
+* use globally unique ``test_cpu_attention_*_benchmark`` names encoding opset,
+  rank-3/rank-4 layout, MHA/GQA/MQA geometry, query and KV lengths, cache and
+  mask mode, and element type;
+* include the complete timed priority corpus defined above, including KV length
+  8192 only in the opt-in large corpus when machine memory permits.
+
+Unit tests execute bounded representative benchmark cases through the
+registered CPU kernel. Metadata tests cover the complete corpus without
+materializing every workload and enforce unique names, lazy construction,
+declared input/output element counts, every priority type and geometry, and
+the opt-in 8192 cases. The benchmark runner records the backend case name in
+raw output so published dashboard rows remain traceable to the registered
+model.
+
 Phase 1: plan and materialized correctness path
 -----------------------------------------------
 
@@ -240,13 +265,16 @@ Pull-request sequence
      - Dependency
      - Status
    * - Roadmap PR11
-     - Adapter, planning contract, corpus, and FP32 materialized baseline.
+     - Adapter, planning contract, backend corpus, and FP32 materialized
+       baseline.
      - ``AttentionDescriptor`` parses v23/v24 attributes and optional IO.
        Per-invocation planning validates concrete tensors without prepacking
        unknown inputs or fixing threads. Rank-3/rank-4 stateless FP32
        MHA/GQA/MQA, scale, causal and boolean/additive masks pass differential
-       tests. Features not implemented yet delegate to the portable kernel only
-       when that kernel already supports them; otherwise they fail explicitly.
+       tests. Lazy correctness and ``TestMode::BENCHMARK`` backend cases are
+       available through the shared collector and enforce the priority corpus.
+       Features not implemented yet delegate to the portable kernel only when
+       that kernel already supports them; otherwise they fail explicitly.
      - Shared GEMM/MatMul engine
      - Pending
    * - Roadmap PR12

@@ -1,6 +1,10 @@
 Registered kernel documentation
 ===============================
 
+:Date: 2026-08
+
+**complete**
+
 Issue `#258 <https://github.com/xadupre/onnx-light-cpu/issues/258>`_ replaces
 the manually maintained and source-scanned kernel inventories with metadata
 collected from the registrations that the runtime actually executes. The same
@@ -154,4 +158,3 @@ causes unresolved executor symbols, while embedding a separate static runtime
 would create a second dispatch table. CI and local validation must therefore
 rebuild onnx-light consistently and use the repository's supported integration
 configuration.
-

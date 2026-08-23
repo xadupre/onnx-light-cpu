@@ -9,6 +9,11 @@ optimize next.
 Use the search field to filter by status or text, and select a column heading
 to sort the table.
 
+``Completed`` means every roadmap gate is delivered. ``In progress`` means
+implementation or a final gate remains active. ``Planned`` means the contract
+is implementation-ready but work has not started. ``Discussed`` means the
+roadmap is not implementation-ready and no implementation is active.
+
 .. toctree::
     :maxdepth: 1
     :hidden:
