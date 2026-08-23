@@ -10,11 +10,12 @@ namespace onnx_light_cpu {
 /// ``KernelDispatchTable`` for the CPU device.
 ///
 /// This is a convenience wrapper that calls each per-operator registration
-/// function (:cpp:func:`RegisterAbsKernel`, :cpp:func:`RegisterExpKernel`,
-/// :cpp:func:`RegisterLogKernel`, :cpp:func:`RegisterGemmKernel`,
-/// :cpp:func:`RegisterIntegerMatMulKernels` and :cpp:func:`RegisterNotKernel`),
-/// so a single call installs the accelerated elementwise/GEMM kernels and the
-/// portable integer matrix-multiplication kernels.
+/// function (:cpp:func:`RegisterAbsKernel`, :cpp:func:`RegisterBinaryKernels`,
+/// :cpp:func:`RegisterExpKernel`, :cpp:func:`RegisterLogKernel`,
+/// :cpp:func:`RegisterGemmKernel`, :cpp:func:`RegisterIntegerMatMulKernels`
+/// and :cpp:func:`RegisterNotKernel`), so a single call installs the
+/// accelerated elementwise/GEMM kernels and the portable integer
+/// matrix-multiplication kernels.
 /// After this call every such node dispatched by onnx-light's
 /// runtime (``RunNode`` / ``RuntimeSession``, and therefore any model executed
 /// through ``ReferenceEvaluator``) resolves to the onnx-light-cpu kernel,

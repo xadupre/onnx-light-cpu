@@ -4,6 +4,7 @@
 
 #include "onnx_light_cpu/kernels/kernel_registration.h"
 
+#include "onnx_light_cpu/impl/math/binary/binary_manifest.h"
 #include "onnx_light_cpu/kernels/register_kernels.h"
 
 #include "onnx_core/runtime/kernels/kernel_dispatch_table.h"
@@ -22,6 +23,17 @@ namespace rt_ns = ONNX_LIGHT_NAMESPACE::core::runtime;
 namespace sym_ns = ONNX_LIGHT_NAMESPACE::core::symbolic;
 
 using onnx_light_cpu::KernelRegistration;
+
+std::vector<rt_ns::DataType> UniqueLeftTypes(const onnx_light_cpu::BinaryManifestEntry &entry) {
+  std::vector<rt_ns::DataType> types;
+  for (const auto &signature : entry.signatures) {
+    const auto type = static_cast<rt_ns::DataType>(signature.left);
+    if (std::find(types.begin(), types.end(), type) == types.end()) {
+      types.push_back(type);
+    }
+  }
+  return types;
+}
 
 // ``CollectRegisteredKernels`` must report one record for every ``op_type``
 // that ``RegisterAllKernels`` installs into onnx-light's shared dispatch
@@ -94,8 +106,14 @@ TEST(KernelRegistration, CollectionReportsEveryActualRegistration) {
        std::nullopt,
        std::nullopt},
   };
-  ASSERT_EQ(records.size(), expected.size());
-  for (const KernelRegistration &expected_record : expected) {
+  std::vector<KernelRegistration> all_expected = expected;
+  for (const auto &entry : onnx_light_cpu::GetBinaryManifest()) {
+    all_expected.push_back({"ai.onnx", std::string(entry.op_type), sym_ns::Device::kCPU,
+                            std::string("onnx_light_cpu::") + std::string(entry.op_type),
+                            UniqueLeftTypes(entry), entry.since_version, std::nullopt});
+  }
+  ASSERT_EQ(records.size(), all_expected.size());
+  for (const KernelRegistration &expected_record : all_expected) {
     const auto actual = std::find_if(records.begin(), records.end(),
                                      [&expected_record](const KernelRegistration &record) {
                                        return record.op_type == expected_record.op_type;

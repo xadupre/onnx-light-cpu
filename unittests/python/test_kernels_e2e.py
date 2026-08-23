@@ -59,12 +59,40 @@ assert has_backend_test_cases(), (
 # Operators whose onnx-light-cpu kernel we validate against every ``test_cpu_*``
 # backend test case, mapped to the library-qualified name each kernel records
 # when it runs.
-_TARGET_KERNELS = {
+_REGISTERED_KERNELS = {
     "Abs": "onnx_light_cpu::Abs",
+    "Add": "onnx_light_cpu::Add",
+    "And": "onnx_light_cpu::And",
+    "BitShift": "onnx_light_cpu::BitShift",
+    "BitwiseAnd": "onnx_light_cpu::BitwiseAnd",
+    "BitwiseOr": "onnx_light_cpu::BitwiseOr",
+    "BitwiseXor": "onnx_light_cpu::BitwiseXor",
+    "Div": "onnx_light_cpu::Div",
+    "Equal": "onnx_light_cpu::Equal",
     "Exp": "onnx_light_cpu::Exp",
-    "Log": "onnx_light_cpu::Log",
     "Gemm": "onnx_light_cpu::Gemm",
+    "Greater": "onnx_light_cpu::Greater",
+    "GreaterOrEqual": "onnx_light_cpu::GreaterOrEqual",
+    "Less": "onnx_light_cpu::Less",
+    "LessOrEqual": "onnx_light_cpu::LessOrEqual",
+    "Log": "onnx_light_cpu::Log",
+    "MatMul": "onnx_light_cpu::MatMul",
+    "MatMulInteger": "onnx_light_cpu::MatMulInteger",
+    "Mod": "onnx_light_cpu::Mod",
+    "Mul": "onnx_light_cpu::Mul",
     "Not": "onnx_light_cpu::Not",
+    "Or": "onnx_light_cpu::Or",
+    "PRelu": "onnx_light_cpu::PRelu",
+    "Pow": "onnx_light_cpu::Pow",
+    "QLinearMatMul": "onnx_light_cpu::QLinearMatMul",
+    "Sub": "onnx_light_cpu::Sub",
+    "Xor": "onnx_light_cpu::Xor",
+}
+
+_TARGET_KERNELS = {
+    op_type: kernel_name
+    for op_type, kernel_name in _REGISTERED_KERNELS.items()
+    if op_type != "QLinearMatMul"
 }
 
 # ``TensorProto`` element type -> numpy dtype used to decode a backend test
@@ -77,6 +105,9 @@ _TP_TO_NP = {
     int(TensorProto.INT32): np.int32,
     int(TensorProto.INT64): np.int64,
     int(TensorProto.UINT8): np.uint8,
+    int(TensorProto.UINT16): np.uint16,
+    int(TensorProto.UINT32): np.uint32,
+    int(TensorProto.UINT64): np.uint64,
     int(TensorProto.BOOL): np.bool_,
     int(TensorProto.FLOAT16): np.float16,
 }
@@ -138,16 +169,7 @@ class TestBackendCases:
         register_kernels()
 
     def test_registered_kernel_names(self):
-        assert registered_kernel_names() == {
-            "Abs": "onnx_light_cpu::Abs",
-            "Exp": "onnx_light_cpu::Exp",
-            "Log": "onnx_light_cpu::Log",
-            "Gemm": "onnx_light_cpu::Gemm",
-            "MatMul": "onnx_light_cpu::MatMul",
-            "MatMulInteger": "onnx_light_cpu::MatMulInteger",
-            "QLinearMatMul": "onnx_light_cpu::QLinearMatMul",
-            "Not": "onnx_light_cpu::Not",
-        }
+        assert registered_kernel_names() == _REGISTERED_KERNELS
 
     def test_registered_kernels_parity_with_names(self):
         records = registered_kernels()
@@ -177,8 +199,31 @@ class TestBackendCases:
             assert record.device == "CPU"
             assert isinstance(record.types, tuple)
             assert record.types, record
-            # No onnx-light-cpu kernel currently restricts opset bounds.
-            assert record.since_version is None
+            if record.op_type in {
+                "Add",
+                "And",
+                "BitShift",
+                "BitwiseAnd",
+                "BitwiseOr",
+                "BitwiseXor",
+                "Div",
+                "Equal",
+                "Greater",
+                "GreaterOrEqual",
+                "Less",
+                "LessOrEqual",
+                "Mod",
+                "Mul",
+                "Or",
+                "PRelu",
+                "Pow",
+                "Sub",
+                "Xor",
+            }:
+                assert isinstance(record.since_version, int)
+                assert record.since_version >= 1
+            else:
+                assert record.since_version is None
             assert record.until_version is None
 
     def test_every_target_op_has_backend_cases(self):
