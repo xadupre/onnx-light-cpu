@@ -294,7 +294,12 @@ void ComputeAttentionFloat32(const AttentionPlan &plan, const float *q, const fl
 
         float *y_row = y_head + i * plan.y_strides.sequence;
         if (row_max == kNegativeInfinity) {
-          // Fully-masked query row: zero output, not NaN.
+          // Fully-masked query row: zero output, not NaN. This only triggers
+          // when every position is masked by the boolean/causal path (which
+          // sets `scores[j]` to exactly `kNegativeInfinity`) or when an
+          // additive mask supplies `-inf` bias for every position; additive
+          // biases that are merely very negative (but finite) fall through to
+          // the ordinary softmax below, as intended.
           std::fill(y_row, y_row + plan.v_head_dim, 0.0f);
           continue;
         }

@@ -118,7 +118,10 @@ std::vector<std::int64_t> QkvShape(bool rank3, std::int64_t batch, std::int64_t 
 }
 
 // Registers one Attention correctness/benchmark case. ``head_dim`` is shared
-// by Q/K/V (v_head_size == head_size) for this stateless FP32 baseline.
+// by Q/K/V (v_head_size == head_size) for this stateless FP32 baseline; this
+// is why a single ``head_dim`` sizes both the Q/K/V input shapes below and
+// the ``y_count`` output element count (``y_count == q_count``, derived from
+// the same ``head_dim``).
 void RegisterAttentionCase(std::vector<TestCase> &registry, const OpsetId &opset,
                            std::int64_t opset_version, bool rank3, Geometry geometry, Mask mask,
                            std::int64_t batch, std::int64_t q_len, std::int64_t kv_len,
