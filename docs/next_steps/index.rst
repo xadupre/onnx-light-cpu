@@ -71,9 +71,10 @@ roadmap is not implementation-ready and no implementation is active.
       - :doc:`Unary elementwise <2026/2026_08_unary_elementwise>`
       - Unify scalar, SIMD, traversal, and scheduling for unary operators.
       - Individual kernels duplicate dispatch logic and leave broad gaps.
-    * - Discussed
+    * - Planned
       - :doc:`Binary elementwise <2026/2026_08_binary_elementwise>`
-      - Add a prepared SIMD engine for binary operators and broadcasting.
+      - Start the generated schema/type manifest and lazy backend corpus, then
+        add the prepared SIMD broadcast engine and bounded fusion.
       - Generic rank-aware offset computation is too expensive per element.
     * - Discussed
       - :doc:`Processor-aware tuning <2026/2026_08_elementwise_kernel_tuning>`

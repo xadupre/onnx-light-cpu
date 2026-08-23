@@ -304,7 +304,7 @@ The following table is the single source of truth for the unary roadmap.
        compute-bound kernels and cap bandwidth-bound kernels without
        small-tensor regressions or a private scheduler. Unary functions
        integrate with ``ElementwisePlan`` without indirect calls in hot loops.
-     - PR02 through PR05; Binary PR06
+     - PR02 through PR05; Binary PR07
      - Pending
    * - Unary PR07
      - Final correctness and parity gate.
