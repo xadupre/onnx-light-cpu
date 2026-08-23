@@ -758,7 +758,9 @@ if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
         "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/cases/logical/collect_logical_cases.cc"
         "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/cases/logical/cases_not.cc"
         "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/cases/traditionalml/collect_traditionalml_cases.cc"
-        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/cases/traditionalml/cases_tree_ensemble.cc")
+        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/cases/traditionalml/cases_tree_ensemble.cc"
+        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/cases/attention/collect_attention_cases.cc"
+        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/cases/attention/cases_attention.cc")
     target_include_directories(lib_onnx_light_cpu_backend_test PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>

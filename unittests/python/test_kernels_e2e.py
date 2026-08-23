@@ -140,6 +140,7 @@ class TestBackendCases:
     def test_registered_kernel_names(self):
         assert registered_kernel_names() == {
             "Abs": "onnx_light_cpu::Abs",
+            "Attention": "onnx_light_cpu::Attention",
             "Exp": "onnx_light_cpu::Exp",
             "Log": "onnx_light_cpu::Log",
             "Gemm": "onnx_light_cpu::Gemm",
@@ -177,8 +178,12 @@ class TestBackendCases:
             assert record.device == "CPU"
             assert isinstance(record.types, tuple)
             assert record.types, record
-            # No onnx-light-cpu kernel currently restricts opset bounds.
-            assert record.since_version is None
+            # Attention is the only onnx-light-cpu kernel that restricts its
+            # opset lower bound so far (opset 23 introduced the operator).
+            if record.op_type == "Attention":
+                assert record.since_version == 23
+            else:
+                assert record.since_version is None
             assert record.until_version is None
 
     def test_every_target_op_has_backend_cases(self):

@@ -277,7 +277,7 @@ Pull-request sequence
        Features not implemented yet delegate to the portable kernel only when
        that kernel already supports them; otherwise they fail explicitly.
      - Shared GEMM/MatMul engine
-     - Open; implementation not started.
+     - Implemented.
    * - Roadmap PR12 (`#389
        <https://github.com/xadupre/onnx-light-cpu/issues/389>`_)
      - Complete materialized semantics and type gate.
