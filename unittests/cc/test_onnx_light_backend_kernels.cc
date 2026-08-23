@@ -37,6 +37,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <set>
 #include <string>
@@ -199,6 +200,18 @@ TEST(OnnxLightBackendKernels, GemmRunsThroughRuntime) {
   EXPECT_TRUE(failures.empty()) << Describe(failures);
 }
 
+TEST(OnnxLightBackendKernels, MatMulRunsThroughRuntime) {
+  const std::vector<std::string> failures =
+      RunCpuBackendCases("MatMul", core::backend_test::TestMode::TEST);
+  EXPECT_TRUE(failures.empty()) << Describe(failures);
+}
+
+TEST(OnnxLightBackendKernels, MatMulIntegerRunsThroughRuntime) {
+  const std::vector<std::string> failures =
+      RunCpuBackendCases("MatMulInteger", core::backend_test::TestMode::TEST);
+  EXPECT_TRUE(failures.empty()) << Describe(failures);
+}
+
 TEST(OnnxLightBackendKernels, TreeEnsembleCorpusRegistersOnlyMlOpset5) {
   EXPECT_GE(CountCpuCasesAtMlOpset5("TreeEnsemble"), 36U);
   EXPECT_EQ(CountCpuCasesAtMlOpset5("TreeEnsembleRegressor"), 4U);
@@ -312,31 +325,31 @@ TEST(OnnxLightBackendKernels, AllCpuBackendCaseNamesAreGloballyUnique) {
   }
 }
 
-// Benchmark-mode cases: registered per kernel alongside the correctness cases.
-// The unit test exercises them (executes the large model through the runtime)
-// to keep the benchmark registration covered; timings are collected by a
-// dedicated benchmark harness, so only successful execution is asserted here.
+// Benchmark-mode cases are registered per kernel alongside the correctness
+// cases. The runtime tests execute one bounded representative per corpus; the
+// metadata tests below cover every large timing workload without materializing
+// all of them in the unit-test suite.
 TEST(OnnxLightBackendKernels, AbsBenchmarkRunsThroughRuntime) {
-  const std::vector<std::string> failures =
-      RunCpuBackendCases("Abs", core::backend_test::TestMode::BENCHMARK);
+  const std::vector<std::string> failures = RunCpuBackendCases(
+      "Abs", core::backend_test::TestMode::BENCHMARK, "test_cpu_abs_n1024_float32_benchmark");
   EXPECT_TRUE(failures.empty()) << Describe(failures);
 }
 
 TEST(OnnxLightBackendKernels, ExpBenchmarkRunsThroughRuntime) {
-  const std::vector<std::string> failures =
-      RunCpuBackendCases("Exp", core::backend_test::TestMode::BENCHMARK);
+  const std::vector<std::string> failures = RunCpuBackendCases(
+      "Exp", core::backend_test::TestMode::BENCHMARK, "test_cpu_exp_n1024_float32_benchmark");
   EXPECT_TRUE(failures.empty()) << Describe(failures);
 }
 
 TEST(OnnxLightBackendKernels, LogBenchmarkRunsThroughRuntime) {
-  const std::vector<std::string> failures =
-      RunCpuBackendCases("Log", core::backend_test::TestMode::BENCHMARK);
+  const std::vector<std::string> failures = RunCpuBackendCases(
+      "Log", core::backend_test::TestMode::BENCHMARK, "test_cpu_log_n1024_float32_benchmark");
   EXPECT_TRUE(failures.empty()) << Describe(failures);
 }
 
 TEST(OnnxLightBackendKernels, NotBenchmarkRunsThroughRuntime) {
-  const std::vector<std::string> failures =
-      RunCpuBackendCases("Not", core::backend_test::TestMode::BENCHMARK);
+  const std::vector<std::string> failures = RunCpuBackendCases(
+      "Not", core::backend_test::TestMode::BENCHMARK, "test_cpu_not_n1024_bool_benchmark");
   EXPECT_TRUE(failures.empty()) << Describe(failures);
 }
 
@@ -367,6 +380,81 @@ TEST(OnnxLightBackendKernels, UnaryBenchmarkCorporaCoverParallelThresholds) {
     }
   }
   EXPECT_EQ(not_sizes, exp_sizes);
+}
+
+TEST(OnnxLightBackendKernels, UnaryBenchmarkCorporaCoverEverySupportedType) {
+  onnx_light_cpu::backend_test::RegisterCpuKernelBackendTestCases();
+  const std::vector<std::pair<std::string, std::set<std::string>>> expected = {
+      {"Abs", {"float32", "float64", "int8", "int16", "int32", "int64", "float16", "bfloat16"}},
+      {"Exp", {"float32", "float64", "float16", "bfloat16"}},
+      {"Log", {"float32", "float64", "float16", "bfloat16"}},
+      {"Not", {"bool"}},
+  };
+  for (const auto &[op, suffixes] : expected) {
+    const std::vector<TestCase> cases =
+        CollectTestCases(op, /*include_big=*/false, core::backend_test::TestMode::BENCHMARK);
+    const std::size_t cpu_case_count =
+        static_cast<std::size_t>(std::count_if(cases.begin(), cases.end(), [](const TestCase &tc) {
+          return tc.name.rfind("test_cpu_", 0) == 0;
+        }));
+    EXPECT_EQ(cpu_case_count, suffixes.size() * 7) << op;
+    for (const std::string &suffix : suffixes) {
+      EXPECT_TRUE(std::any_of(cases.begin(), cases.end(),
+                              [&suffix](const TestCase &test_case) {
+                                return test_case.name.rfind("test_cpu_", 0) == 0 &&
+                                       test_case.name.find("_" + suffix + "_benchmark") !=
+                                           std::string::npos;
+                              }))
+          << op << ": " << suffix;
+    }
+  }
+}
+
+TEST(OnnxLightBackendKernels, MatMulBenchmarkCorporaCoverTypesAndPriorityShapes) {
+  onnx_light_cpu::backend_test::RegisterCpuKernelBackendTestCases();
+  const std::vector<TestCase> matmul =
+      CollectTestCases("MatMul", /*include_big=*/false, core::backend_test::TestMode::BENCHMARK);
+  EXPECT_EQ(
+      std::count_if(matmul.begin(), matmul.end(),
+                    [](const TestCase &tc) { return tc.name.rfind("test_cpu_matmul_", 0) == 0; }),
+      28);
+  for (const std::string &type : {"float32", "float64", "float16", "bfloat16"}) {
+    for (const std::string &shape :
+         {"square_64", "square_1024", "skinny_m", "skinny_n", "large_k"}) {
+      const std::string expected = "test_cpu_matmul_" + shape + "_" + type + "_benchmark";
+      EXPECT_TRUE(std::any_of(matmul.begin(), matmul.end(), [&expected](const TestCase &test_case) {
+        return test_case.name == expected;
+      })) << expected;
+    }
+  }
+
+  const std::vector<TestCase> integer = CollectTestCases("MatMulInteger", /*include_big=*/false,
+                                                         core::backend_test::TestMode::BENCHMARK);
+  EXPECT_EQ(std::count_if(integer.begin(), integer.end(),
+                          [](const TestCase &tc) {
+                            return tc.name.rfind("test_cpu_matmulinteger_", 0) == 0;
+                          }),
+            20);
+  for (const std::string &types : {"int8xint8", "int8xuint8", "uint8xint8", "uint8xuint8"}) {
+    for (const std::string &shape : {"square_64", "square_512", "skinny_m", "large_k"}) {
+      const std::string expected = "test_cpu_matmulinteger_" + shape + "_" + types + "_benchmark";
+      EXPECT_TRUE(std::any_of(
+          integer.begin(), integer.end(),
+          [&expected](const TestCase &test_case) { return test_case.name == expected; }))
+          << expected;
+    }
+  }
+}
+
+TEST(OnnxLightBackendKernels, MatMulBenchmarksRunThroughRuntime) {
+  std::vector<std::string> failures =
+      RunCpuBackendCases("MatMul", core::backend_test::TestMode::BENCHMARK,
+                         "test_cpu_matmul_square_64_float32_benchmark");
+  const std::vector<std::string> integer_failures =
+      RunCpuBackendCases("MatMulInteger", core::backend_test::TestMode::BENCHMARK,
+                         "test_cpu_matmulinteger_square_64_int8xuint8_benchmark");
+  failures.insert(failures.end(), integer_failures.begin(), integer_failures.end());
+  EXPECT_TRUE(failures.empty()) << Describe(failures);
 }
 
 TEST(OnnxLightBackendKernels, GemmBenchmarkRunsThroughRuntime) {

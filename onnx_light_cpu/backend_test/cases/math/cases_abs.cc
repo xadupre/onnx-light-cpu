@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "onnx_light_cpu/backend_test/cases/math/benchmark_helpers.h"
 #include "onnx_light_cpu/backend_test/cases/math/include_math_cases.h"
 
 #include "onnx_light_cpu/kernels/math/abs_kernel.h"
@@ -23,7 +24,6 @@ namespace bt_ns = ONNX_LIGHT_NAMESPACE::core::backend_test;
 namespace rt_ns = ONNX_LIGHT_NAMESPACE::core::runtime;
 
 using bt_ns::Expect;
-using bt_ns::ExpectBenchmarkUnaryFloat;
 using bt_ns::IoData;
 using bt_ns::TestCase;
 using bt_ns::TestMode;
@@ -66,9 +66,11 @@ void RegisterCpuAbsCases(std::vector<TestCase> &registry, TestMode mode) {
 
   if (mode == TestMode::BENCHMARK) {
     for (const int64_t size : {1024, 32768, 65535, 65536, 131072, 1048576, 4194304}) {
-      ExpectBenchmarkUnaryFloat("Abs", abs_kernel,
-                                "test_cpu_abs_n" + std::to_string(size) + "_benchmark", opset,
-                                registry, true, true, size);
+      for (const DataType data_type :
+           {DataType::FLOAT, DataType::DOUBLE, DataType::INT8, DataType::INT16, DataType::INT32,
+            DataType::INT64, DataType::FLOAT16, DataType::BFLOAT16}) {
+        RegisterUnaryBenchmark(registry, "Abs", abs_kernel, opset, data_type, size);
+      }
     }
     return;
   }

@@ -50,7 +50,7 @@ void RegisterCpuNotCases(std::vector<TestCase> &registry, TestMode mode) {
 
   if (mode == TestMode::BENCHMARK) {
     for (const std::int64_t size : {1024, 32768, 65535, 65536, 131072, 1048576, 4194304}) {
-      Expect(registry, MakeNotNode(), "test_cpu_not_n" + std::to_string(size) + "_benchmark",
+      Expect(registry, MakeNotNode(), "test_cpu_not_n" + std::to_string(size) + "_bool_benchmark",
              {opset}, {size}, {size}, [not_kernel, size]() -> IoData {
                std::vector<std::uint8_t> raw(static_cast<std::size_t>(size));
                for (std::size_t i = 0; i < raw.size(); ++i) {

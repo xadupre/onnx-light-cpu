@@ -753,6 +753,8 @@ if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
         "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/cases/math/cases_exp.cc"
         "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/cases/math/cases_log.cc"
         "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/cases/math/cases_gemm.cc"
+        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/cases/math/cases_matmul.cc"
+        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/cases/math/cases_matmul_integer.cc"
         "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/cases/logical/collect_logical_cases.cc"
         "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/cases/logical/cases_not.cc"
         "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/cases/traditionalml/collect_traditionalml_cases.cc"
