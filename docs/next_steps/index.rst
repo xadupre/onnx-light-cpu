@@ -84,13 +84,7 @@ to sort the table.
       - :doc:`Runtime execution controls <2026/2026_08_runtime_execution_controls>`
       - Use the typed session policy and executor for every registered kernel.
       - A second CPU scheduler would invalidate runtime limits and diagnostics.
-    * - In progress
-      - :doc:`Processor performance profile <2026/2026_08_processor_performance_profile>`
-      - Measure effective L1/L2/L3/RAM bandwidth and latency plus sustained
-        arithmetic throughput through one explicit Python API.
-      - A measured machine profile supplies the cost model for Roofline
-        analysis, kernel tuning, and future optimal-transport GEMM planning.
-    * - Planned
+    * - Completed
       - :doc:`Processor performance profile <2026/2026_08_processor_performance_profile>`
       - Measure effective L1/L2/L3/RAM bandwidth and latency plus sustained
         arithmetic throughput through one explicit Python API.

@@ -5,7 +5,7 @@ Processor Memory and Compute Performance Profile
 
 :Date: 2026-08
 
-**planned**
+**complete** (Profile PR05 portability gate)
 
 Objective
 ---------
@@ -299,7 +299,7 @@ own issue and must not absorb a later row.
        Linux, Windows, and macOS are supported or explicitly diagnosed; focused
        C++/Python tests and a warnings-as-errors documentation build pass.
      - PR04
-     - Pending
+     - Completed
 
 Profile PR05 completes this roadmap.
 

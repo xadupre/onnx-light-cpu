@@ -178,6 +178,16 @@ struct ProcessorPerformanceProfile {
   std::vector<std::string> warnings;
 };
 
+/// Pure derivation of Roofline crossover points from already-measured compute
+/// and memory entries: for every compute entry, pairs it with every memory
+/// entry that shares the same policy and has an available ``read``
+/// bandwidth, and computes ``compute_gops / memory_read_gbps``. Performs no
+/// measurement, allocation beyond the returned vector, or timing, so it can
+/// be exercised directly against hand-built synthetic entries.
+std::vector<ProcessorProfileRooflineEntry>
+DeriveRooflineEntries(const std::vector<ProcessorProfileComputeEntry> &compute,
+                      const std::vector<ProcessorProfileMemoryEntry> &memory);
+
 /// Runs every configured memory and compute measurement and assembles the
 /// resulting ``ProcessorPerformanceProfile``. Throws ``std::invalid_argument``
 /// (with the message from ``ValidateProcessorProfileOptions``) before

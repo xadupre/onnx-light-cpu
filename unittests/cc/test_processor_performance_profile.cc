@@ -16,10 +16,13 @@ namespace {
 using onnx_light_cpu::BenchmarkProcessorPerformance;
 using onnx_light_cpu::ComputeElementType;
 using onnx_light_cpu::CpuAffinity;
+using onnx_light_cpu::DeriveRooflineEntries;
 using onnx_light_cpu::kProcessorPerformanceProfileSchemaVersion;
 using onnx_light_cpu::MemoryProfileLevel;
 using onnx_light_cpu::ParseProcessorThreadPolicy;
 using onnx_light_cpu::ProcessorPerformanceProfile;
+using onnx_light_cpu::ProcessorProfileComputeEntry;
+using onnx_light_cpu::ProcessorProfileMemoryEntry;
 using onnx_light_cpu::ProcessorProfileOptions;
 using onnx_light_cpu::ProcessorThreadPolicy;
 using onnx_light_cpu::ProcessorThreadPolicyName;
@@ -205,6 +208,109 @@ TEST(ProcessorPerformanceProfile, RepeatedRunsProduceIndependentImmutableValues)
   EXPECT_EQ(first.metadata.schema_version, second.metadata.schema_version);
   EXPECT_FALSE(first.memory.empty());
   EXPECT_FALSE(second.memory.empty());
+}
+
+// ---------------------------------------------------------------------------
+// Roofline derivation against known synthetic profiles: exact crossover
+// arithmetic, correct policy pairing, and correct handling of missing/zero
+// read bandwidth, independent of any live measurement.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+ProcessorProfileComputeEntry MakeComputeEntry(ComputeElementType element_type,
+                                              ProcessorThreadPolicy policy, double median_gops) {
+  ProcessorProfileComputeEntry entry;
+  entry.element_type = element_type;
+  entry.policy = policy;
+  entry.result.available = true;
+  entry.result.median_gops = median_gops;
+  return entry;
+}
+
+ProcessorProfileMemoryEntry MakeMemoryEntryWithRead(MemoryProfileLevel level,
+                                                    ProcessorThreadPolicy policy,
+                                                    double median_gbps) {
+  ProcessorProfileMemoryEntry entry;
+  entry.level = level;
+  entry.policy = policy;
+  onnx_light_cpu::MemoryBandwidthResult read;
+  read.available = true;
+  read.median_gbps = median_gbps;
+  entry.read = read;
+  return entry;
+}
+
+} // namespace
+
+TEST(ProcessorPerformanceProfileRoofline, CrossoverMatchesComputeOverBandwidth) {
+  const std::vector<ProcessorProfileComputeEntry> compute{
+      MakeComputeEntry(ComputeElementType::kFloat32, ProcessorThreadPolicy::kSingle, 100.0)};
+  const std::vector<ProcessorProfileMemoryEntry> memory{
+      MakeMemoryEntryWithRead(MemoryProfileLevel::kL1, ProcessorThreadPolicy::kSingle, 40.0)};
+
+  const auto roofline = DeriveRooflineEntries(compute, memory);
+  ASSERT_EQ(roofline.size(), 1u);
+  EXPECT_EQ(roofline[0].element_type, ComputeElementType::kFloat32);
+  EXPECT_EQ(roofline[0].policy, ProcessorThreadPolicy::kSingle);
+  EXPECT_EQ(roofline[0].level, MemoryProfileLevel::kL1);
+  EXPECT_DOUBLE_EQ(roofline[0].compute_gops, 100.0);
+  EXPECT_DOUBLE_EQ(roofline[0].memory_read_gbps, 40.0);
+  EXPECT_DOUBLE_EQ(roofline[0].arithmetic_intensity_crossover, 2.5);
+}
+
+TEST(ProcessorPerformanceProfileRoofline, PairsEveryComputeEntryWithMatchingPolicyLevels) {
+  const std::vector<ProcessorProfileComputeEntry> compute{
+      MakeComputeEntry(ComputeElementType::kFloat32, ProcessorThreadPolicy::kSingle, 100.0),
+      MakeComputeEntry(ComputeElementType::kFloat32, ProcessorThreadPolicy::kPhysical, 200.0)};
+  const std::vector<ProcessorProfileMemoryEntry> memory{
+      MakeMemoryEntryWithRead(MemoryProfileLevel::kL1, ProcessorThreadPolicy::kSingle, 50.0),
+      MakeMemoryEntryWithRead(MemoryProfileLevel::kL2, ProcessorThreadPolicy::kSingle, 25.0),
+      MakeMemoryEntryWithRead(MemoryProfileLevel::kL1, ProcessorThreadPolicy::kPhysical, 100.0)};
+
+  const auto roofline = DeriveRooflineEntries(compute, memory);
+  // The single-policy compute entry pairs with both single-policy memory
+  // levels; the physical-policy compute entry only pairs with the one
+  // physical-policy memory level.
+  ASSERT_EQ(roofline.size(), 3u);
+  int single_count = 0;
+  int physical_count = 0;
+  for (const auto &entry : roofline) {
+    if (entry.policy == ProcessorThreadPolicy::kSingle) {
+      ++single_count;
+    } else {
+      ++physical_count;
+      EXPECT_DOUBLE_EQ(entry.arithmetic_intensity_crossover, 2.0);
+    }
+  }
+  EXPECT_EQ(single_count, 2);
+  EXPECT_EQ(physical_count, 1);
+}
+
+TEST(ProcessorPerformanceProfileRoofline, MissingOrZeroReadBandwidthYieldsNoEntry) {
+  ProcessorProfileMemoryEntry no_read;
+  no_read.level = MemoryProfileLevel::kL1;
+  no_read.policy = ProcessorThreadPolicy::kSingle;
+  // ``read`` left unset (unavailable).
+
+  const std::vector<ProcessorProfileComputeEntry> compute{
+      MakeComputeEntry(ComputeElementType::kFloat32, ProcessorThreadPolicy::kSingle, 100.0)};
+
+  EXPECT_TRUE(DeriveRooflineEntries(compute, {no_read}).empty());
+  EXPECT_TRUE(
+      DeriveRooflineEntries(compute, {MakeMemoryEntryWithRead(MemoryProfileLevel::kL1,
+                                                              ProcessorThreadPolicy::kSingle, 0.0)})
+          .empty());
+}
+
+TEST(ProcessorPerformanceProfileRoofline, EmptyComputeOrMemoryYieldsEmptyRoofline) {
+  const std::vector<ProcessorProfileComputeEntry> compute{
+      MakeComputeEntry(ComputeElementType::kFloat32, ProcessorThreadPolicy::kSingle, 100.0)};
+  const std::vector<ProcessorProfileMemoryEntry> memory{
+      MakeMemoryEntryWithRead(MemoryProfileLevel::kL1, ProcessorThreadPolicy::kSingle, 40.0)};
+
+  EXPECT_TRUE(DeriveRooflineEntries({}, memory).empty());
+  EXPECT_TRUE(DeriveRooflineEntries(compute, {}).empty());
 }
 
 } // namespace
