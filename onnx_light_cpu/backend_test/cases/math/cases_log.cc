@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "onnx_light_cpu/backend_test/cases/math/benchmark_helpers.h"
 #include "onnx_light_cpu/backend_test/cases/math/include_math_cases.h"
 
 #include "onnx_light_cpu/kernels/math/exp_log_kernel.h"
@@ -23,7 +24,6 @@ namespace bt_ns = ONNX_LIGHT_NAMESPACE::core::backend_test;
 namespace rt_ns = ONNX_LIGHT_NAMESPACE::core::runtime;
 
 using bt_ns::Expect;
-using bt_ns::ExpectBenchmarkUnaryFloat;
 using bt_ns::IoData;
 using bt_ns::TestCase;
 using bt_ns::TestMode;
@@ -69,9 +69,10 @@ void RegisterCpuLogCases(std::vector<TestCase> &registry, TestMode mode) {
     // and map to NaN. That is fine for a *timing* case, which is not compared
     // for numeric correctness.
     for (const int64_t size : {1024, 65536, 131071, 131072, 262144, 1048576, 4194304}) {
-      ExpectBenchmarkUnaryFloat("Log", log_kernel,
-                                "test_cpu_log_n" + std::to_string(size) + "_benchmark", opset,
-                                registry, true, true, size);
+      for (const DataType data_type :
+           {DataType::FLOAT, DataType::DOUBLE, DataType::FLOAT16, DataType::BFLOAT16}) {
+        RegisterUnaryBenchmark(registry, "Log", log_kernel, opset, data_type, size);
+      }
     }
     return;
   }
