@@ -5,6 +5,7 @@
 #include "onnx_light_cpu/kernels/kernel_usage.h"
 
 #include "onnx_light_cpu/impl/math/binary/binary_manifest.h"
+#include "onnx_light_cpu/kernels/attention/attention_kernel.h"
 #include "onnx_light_cpu/kernels/logical/not_kernel.h"
 #include "onnx_light_cpu/kernels/math/abs_kernel.h"
 #include "onnx_light_cpu/kernels/math/exp_log_kernel.h"
@@ -25,6 +26,7 @@ namespace {
 // built-in one.
 TEST(OnnxLightKernelUsage, KernelNamesAreLibraryQualified) {
   EXPECT_STREQ(onnx_light_cpu::AbsKernel::kName, "onnx_light_cpu::Abs");
+  EXPECT_STREQ(onnx_light_cpu::AttentionKernel::kName, "onnx_light_cpu::Attention");
   EXPECT_STREQ(onnx_light_cpu::ExpKernel::kName, "onnx_light_cpu::Exp");
   EXPECT_STREQ(onnx_light_cpu::LogKernel::kName, "onnx_light_cpu::Log");
   EXPECT_STREQ(onnx_light_cpu::GemmKernel::kName, "onnx_light_cpu::Gemm");
@@ -42,10 +44,15 @@ TEST(OnnxLightKernelUsage, KernelNamesAreLibraryQualified) {
 // same domain and device.
 TEST(OnnxLightKernelUsage, RegisteredKernelNames) {
   std::vector<std::pair<std::string, std::string>> expected = {
-      {"Abs", "onnx_light_cpu::Abs"},       {"Exp", "onnx_light_cpu::Exp"},
-      {"Gemm", "onnx_light_cpu::Gemm"},     {"Log", "onnx_light_cpu::Log"},
-      {"MatMul", "onnx_light_cpu::MatMul"}, {"MatMulInteger", "onnx_light_cpu::MatMulInteger"},
-      {"Not", "onnx_light_cpu::Not"},       {"QLinearMatMul", "onnx_light_cpu::QLinearMatMul"},
+      {"Abs", "onnx_light_cpu::Abs"},
+      {"Attention", "onnx_light_cpu::Attention"},
+      {"Exp", "onnx_light_cpu::Exp"},
+      {"Gemm", "onnx_light_cpu::Gemm"},
+      {"Log", "onnx_light_cpu::Log"},
+      {"MatMul", "onnx_light_cpu::MatMul"},
+      {"MatMulInteger", "onnx_light_cpu::MatMulInteger"},
+      {"Not", "onnx_light_cpu::Not"},
+      {"QLinearMatMul", "onnx_light_cpu::QLinearMatMul"},
   };
   for (const auto &entry : onnx_light_cpu::GetBinaryManifest()) {
     expected.emplace_back(std::string(entry.op_type),

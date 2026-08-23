@@ -4,6 +4,7 @@
 
 #include "onnx_light_cpu/kernels/register_kernels.h"
 
+#include "onnx_light_cpu/kernels/attention/attention_kernel.h"
 #include "onnx_light_cpu/kernels/elementwise/binary_kernel.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
 #include "onnx_light_cpu/kernels/logical/not_kernel.h"
@@ -22,6 +23,7 @@ void RegisterAllKernels() {
   // ``KernelRegistrationScope``).
   KernelRegistrationScope scope;
   RegisterAbsKernel();
+  RegisterAttentionKernel();
   RegisterBinaryKernels();
   RegisterExpKernel();
   RegisterLogKernel();
