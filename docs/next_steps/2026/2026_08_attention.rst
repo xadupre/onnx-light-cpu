@@ -264,7 +264,8 @@ Pull-request sequence
      - Merge criterion
      - Dependency
      - Status
-   * - Roadmap PR11
+   * - Roadmap PR11 (`#387
+       <https://github.com/xadupre/onnx-light-cpu/issues/387>`_)
      - Adapter, planning contract, backend corpus, and FP32 materialized
        baseline.
      - ``AttentionDescriptor`` parses v23/v24 attributes and optional IO.
@@ -276,8 +277,9 @@ Pull-request sequence
        Features not implemented yet delegate to the portable kernel only when
        that kernel already supports them; otherwise they fail explicitly.
      - Shared GEMM/MatMul engine
-     - Pending
-   * - Roadmap PR12
+     - Open; implementation not started.
+   * - Roadmap PR12 (`#389
+       <https://github.com/xadupre/onnx-light-cpu/issues/389>`_)
      - Complete materialized semantics and type gate.
      - FP16/BF16, softcap, mask/causal intersection, fully masked rows, all
        ``qk_matmul_output_mode`` values, optional outputs, internal tensor
@@ -285,31 +287,36 @@ Pull-request sequence
        Runtime. Explicit FP32 ``softmax_precision`` matches the default
        accumulation. DOUBLE, mixed-type, and other softmax-precision cases
        prove the declared unsupported boundary.
-     - PR11
-     - Pending
-   * - Roadmap PR13
+     - PR11 / #387
+     - Open; blocked by #387.
+   * - Roadmap PR13 (`#388
+       <https://github.com/xadupre/onnx-light-cpu/issues/388>`_)
      - FP32 online Attention compute engine.
      - The online recurrence matches the materialized path for stateless
        prefill, short-query, and decode. SIMD score kernels fuse scale, masks,
        causal bounds, softcap, and row maximum; vector exponential and
        reductions are accurate; probability-by-V updates output directly.
-     - PR12
-     - Pending
-   * - Roadmap PR14
+     - PR12 / #389
+     - Open; blocked by #389.
+   * - Roadmap PR14 (`#391
+       <https://github.com/xadupre/onnx-light-cpu/issues/391>`_)
      - Streaming scheduling, cache modes, and low-precision types.
      - Runtime-owned scheduling covers MHA/GQA/MQA without nested pools or a
        fixed worker count. Internal/external cache blocks, inferable mask tile
        skipping, and FP16/BF16 score/V-update kernels match the materialized
        fallback. Observable full-tensor outputs select materialized execution.
-     - PR13
-     - Pending
-   * - Roadmap PR15
+     - PR13 / #388
+     - Open; blocked by #388.
+   * - Roadmap PR15 (`#390
+       <https://github.com/xadupre/onnx-light-cpu/issues/390>`_)
      - Final parity and memory gate.
      - Every priority platform/type corpus has bounded temporary memory,
        reaches at least ``1.0x`` median speed-up over ONNX Runtime, and has no
        priority case below ``0.9x``. Raw default-policy samples and environment
        metadata are published; controlled-thread runs remain diagnostic.
-     - PR14
-     - Pending
+     - PR14 / #391
+     - Open; blocked by #391.
 
-Roadmap PR15 is the final Attention PR.
+Roadmap PR15 (`#390
+<https://github.com/xadupre/onnx-light-cpu/issues/390>`_) is the final
+Attention PR.
