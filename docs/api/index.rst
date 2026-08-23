@@ -158,6 +158,16 @@ are not exposed as numpy-like Python functions; they are reachable through
 onnx-light's runtime after registration (see :func:`register_all_kernels` and
 :func:`onnx_light_cpu.register_kernels`).
 
+.. py:function:: benchmark_processor_performance_raw(thread_policies, repeats, minimum_duration_ms, memory_budget_bytes, include_latency, explicit_single_affinity=None)
+
+   Runs the versioned processor performance profile (effective memory
+   bandwidth/latency plus register-resident compute throughput) and returns it
+   as a plain nested-tuple structure. Raises ``ValueError`` before allocating
+   or timing anything when an option is invalid. This binding links neither
+   onnx-light nor any kernel dispatch table. It is wrapped by
+   :func:`onnx_light_cpu.benchmark_processor_performance`, which converts the
+   raw tuples into immutable, documented result objects.
+
 .. py:module:: onnx_light_cpu.onnx_py._cpuregister
 
 .. py:function:: register_all_kernels() -> None
@@ -314,3 +324,153 @@ Registering kernels with onnx-light
    is only built when the ``_cpuregister`` extension links onnx-light's backend
    test registry (``lib_onnx_backend_test``). When ``False``,
    :func:`register_backend_test_cases` is not usable.
+
+Processor performance profile
+------------------------------
+
+.. py:function:: benchmark_processor_performance(thread_policies=("single", "physical"), repeats=7, minimum_duration_ms=20.0, memory_budget_bytes=512 * 1024 * 1024, include_latency=True, explicit_single_affinity=None) -> ProcessorPerformanceProfile
+
+   Measures and returns one immutable, versioned :class:`ProcessorPerformanceProfile`:
+   effective L1/L2/L3/RAM bandwidth and dependent-load latency (see
+   ``onnx_light_cpu/impl/memory_traffic_profile.h``) together with
+   register-resident FP32/FP64/FP16/BF16/INT8 arithmetic throughput (see
+   ``onnx_light_cpu/impl/compute_arithmetic_profile.h``). This is an explicit,
+   expensive action: it is never called during import, session creation,
+   calibration lookup, or inference.
+
+   Every option is validated before any allocation or timing happens; invalid
+   ``thread_policies``, ``repeats``, ``minimum_duration_ms``,
+   ``memory_budget_bytes``, or ``explicit_single_affinity`` raise
+   ``ValueError``. A memory level or compute element type that cannot be
+   measured truthfully (for example because the host has no matching cache
+   level, or no compiled and detected native low-precision path) is absent
+   from the result rather than represented by a zero or fabricated value, and
+   is explained in :attr:`ProcessorPerformanceProfile.warnings`.
+
+   .. code-block:: python
+
+      from onnx_light_cpu import benchmark_processor_performance
+
+      profile = benchmark_processor_performance(
+          thread_policies=("single", "physical"),
+          repeats=7,
+          minimum_duration_ms=50,
+          memory_budget_bytes=512 * 1024 * 1024,
+          include_latency=True,
+      )
+
+      print(profile.memory["L1"]["single"].read.median_gbps)
+      print(profile.memory["RAM"]["physical"].copy.median_gbps)
+      print(profile.compute["float32"]["physical"].median_gops)
+
+.. py:class:: ProcessorPerformanceProfile
+
+   Immutable, versioned processor performance profile returned by
+   :func:`benchmark_processor_performance`. ``to_dict()`` returns a
+   deterministic, JSON-compatible serialization including
+   :attr:`ProcessorProfileMetadata.schema_version`.
+
+   .. py:attribute:: metadata
+      :type: ProcessorProfileMetadata
+
+   .. py:attribute:: topology
+      :type: ProcessorProfileTopology
+
+   .. py:attribute:: memory
+      :type: dict[str, dict[str, MemoryLevelMeasurement]]
+
+      Keyed by memory level (``"L1"``, ``"L2"``, ``"L3"``, ``"RAM"``), then by
+      thread policy (``"single"``, ``"physical"``). A missing level or policy
+      means it could not be measured truthfully; see ``warnings``.
+
+   .. py:attribute:: compute
+      :type: dict[str, dict[str, ComputeMeasurement]]
+
+      Keyed by element type (``"float32"``, ``"float64"``, ``"float16"``,
+      ``"bfloat16"``, ``"int8"``), then by thread policy. A missing element
+      type means no compiled and runtime-detected native arithmetic path
+      exists for it; see ``warnings``.
+
+   .. py:attribute:: roofline
+      :type: dict[str, dict[str, dict[str, RooflineMeasurement]]]
+
+      Keyed by element type, then thread policy, then memory level. Each
+      entry is the arithmetic-intensity crossover derived from that
+      policy/element type's compute throughput and that policy/level's read
+      bandwidth.
+
+   .. py:attribute:: warnings
+      :type: tuple[str, ...]
+
+      Explicit unavailable, inferred, noisy, unpinned, or memory-budget
+      limited conditions encountered while assembling this profile.
+
+.. py:class:: ProcessorProfileMetadata
+
+   Schema version, timestamp, platform/compiler identity, the resolved
+   options, and the shared timer identity for one profile run.
+
+   .. py:attribute:: schema_version
+      :type: int
+
+   .. py:attribute:: unix_timestamp_ns
+      :type: int
+
+   .. py:attribute:: platform
+      :type: str
+
+   .. py:attribute:: compiler
+      :type: str
+
+   .. py:attribute:: timer_name
+      :type: str
+
+   .. py:attribute:: options
+      :type: ProcessorProfileOptionsEcho
+
+   .. py:attribute:: diagnostics
+      :type: tuple[str, ...]
+
+.. py:class:: ProcessorProfileOptionsEcho
+
+   Immutable echo of the options a profile run was measured with.
+
+.. py:class:: ProcessorProfileTopology
+
+   Process-visible logical/physical topology and cache descriptors, reused
+   from ``onnx_light_cpu::GetCpuTopology`` and
+   ``onnx_light_cpu::GetCpuCacheTopology``.
+
+.. py:class:: CacheDescriptor
+
+   One reusable cache level descriptor, mirroring
+   ``onnx_light_cpu::CpuCacheDescriptor``.
+
+.. py:class:: BandwidthMeasurement
+
+   One available bandwidth measurement (read, write, copy, or
+   read-modify-write) for one memory level and thread policy.
+
+.. py:class:: LatencyMeasurement
+
+   One available dependent-load pointer-chase latency measurement.
+
+.. py:class:: MemoryLevelMeasurement
+
+   One memory level's measurements for one thread policy. Each of ``read``,
+   ``write``, ``copy``, ``read_modify_write``, and ``latency`` is ``None``
+   exactly when the underlying engine reported it unavailable.
+
+.. py:class:: ComputeMeasurement
+
+   One available register-resident arithmetic throughput measurement.
+
+.. py:class:: RooflineMeasurement
+
+   One derived Roofline crossover point for one element type, thread policy,
+   and memory level.
+
+.. py:class:: ExplicitAffinity
+
+   One explicit logical-processor affinity ``(group, index)``, used to pin
+   the ``"single"`` thread policy's lone participant.

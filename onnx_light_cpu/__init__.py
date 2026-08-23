@@ -11,6 +11,20 @@ or ``Not`` runs the optimized kernel when evaluated through a
 ``ReferenceEvaluator``.
 """
 
+from ._processor_profile import (
+    BandwidthMeasurement,
+    CacheDescriptor,
+    ComputeMeasurement,
+    ExplicitAffinity,
+    LatencyMeasurement,
+    MemoryLevelMeasurement,
+    ProcessorPerformanceProfile,
+    ProcessorProfileMetadata,
+    ProcessorProfileOptionsEcho,
+    ProcessorProfileTopology,
+    RooflineMeasurement,
+    benchmark_processor_performance,
+)
 from ._register import (
     RegisteredKernel,
     clear_used_kernel_names,
@@ -25,7 +39,19 @@ from ._register import (
 __version__ = "0.1.16"
 
 __all__ = [
+    "BandwidthMeasurement",
+    "CacheDescriptor",
+    "ComputeMeasurement",
+    "ExplicitAffinity",
+    "LatencyMeasurement",
+    "MemoryLevelMeasurement",
+    "ProcessorPerformanceProfile",
+    "ProcessorProfileMetadata",
+    "ProcessorProfileOptionsEcho",
+    "ProcessorProfileTopology",
     "RegisteredKernel",
+    "RooflineMeasurement",
+    "benchmark_processor_performance",
     "clear_used_kernel_names",
     "has_backend_test_cases",
     "register_backend_test_cases",

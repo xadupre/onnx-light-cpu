@@ -6,10 +6,12 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
 #include "onnx_light_cpu/impl/cpu_cache_topology.h"
+#include "onnx_light_cpu/impl/thread_topology.h"
 
 namespace onnx_light_cpu {
 
@@ -57,6 +59,12 @@ struct MemoryProfileOptions {
   double minimum_duration_ms = 20.0;
   /// Total memory budget available across every participant.
   std::size_t memory_budget_bytes = 512 * 1024 * 1024;
+  /// Explicit logical-processor affinity used to pin the lone participant of
+  /// the ``kSingle`` policy. Empty (the default) leaves the calling thread
+  /// unpinned, matching prior behavior. Ignored by the ``kPhysical`` policy,
+  /// which continues to select its own affinities from the process-visible
+  /// topology.
+  std::optional<CpuAffinity> explicit_single_affinity;
 };
 
 /// Deterministic, pure working-set selection for one memory level. Exposed

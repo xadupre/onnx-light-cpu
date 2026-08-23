@@ -292,7 +292,7 @@ own issue and must not absorb a later row.
        serializable profile; validation and warning semantics are tested and no
        benchmark runs during import, session creation, or inference.
      - PR02, PR03
-     - Pending
+     - Completed
    * - Profile PR05
      - Python example, Roofline derivation, and final portability gate.
      - The example exercises every result section in normal and bounded modes;
