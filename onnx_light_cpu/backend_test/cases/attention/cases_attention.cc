@@ -133,8 +133,8 @@ void RegisterAttentionCase(std::vector<TestCase> &registry, const OpsetId &opset
   const std::string name = "test_cpu_attention_opset" + std::to_string(opset_version) + "_" +
                            (rank3 ? std::string("rank3") : std::string("rank4")) + "_" +
                            GeometryName(geometry) + "_q" + std::to_string(q_len) + "_kv" +
-                           std::to_string(kv_len) + "_" + MaskName(mask) + "_float32" +
-                           (benchmark ? "_benchmark" : "");
+                           std::to_string(kv_len) + "_hd" + std::to_string(head_dim) + "_" +
+                           MaskName(mask) + "_float32" + (benchmark ? "_benchmark" : "");
 
   const NodeProto node = MakeAttentionNode(rank3, q_heads, kv_heads, is_causal, has_mask);
   const std::vector<std::int64_t> q_shape = QkvShape(rank3, batch, q_heads, q_len, head_dim);
