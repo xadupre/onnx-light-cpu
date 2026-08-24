@@ -120,6 +120,26 @@ for op_type, arrays in (("Exp", exp_arrays), ("Log", log_arrays)):
         "NumPy": measure(numpy_op, arrays, repeat),
     }
 
+    print(f"\n{op_type}:")
+    for size, numpy_time, light_time, cpu_time, ort_time in zip(
+        sizes,
+        all_times[op_type]["NumPy"],
+        all_times[op_type]["onnx-light"],
+        all_times[op_type]["onnx-light-cpu"],
+        all_times[op_type]["ONNX Runtime"],
+        strict=True,
+    ):
+        cpu_speedup = light_time / cpu_time
+        ort_speedup = ort_time / cpu_time
+        print(
+            f"  size={size:>9} | numpy={numpy_time * 1e6:10.2f} us | "
+            f"onnx-light={light_time * 1e6:10.2f} us | "
+            f"onnx-light-cpu={cpu_time * 1e6:10.2f} us | "
+            f"cpu vs built-in={cpu_speedup:5.2f}x | "
+            f"onnxruntime={ort_time * 1e6:10.2f} us | "
+            f"cpu vs onnxruntime={ort_speedup:5.2f}x"
+        )
+
 fig, axes = plt.subplots(2, 2, figsize=(12, 8), sharex="col")
 for row, op_type in enumerate(("Exp", "Log")):
     times = all_times[op_type]
@@ -143,4 +163,5 @@ axes[1, 0].set_xlabel("tensor elements")
 axes[1, 1].set_xlabel("tensor elements")
 axes[0, 0].legend()
 plt.tight_layout()
+fig.savefig("plot_exp_log_benchmark.png")
 plt.show()

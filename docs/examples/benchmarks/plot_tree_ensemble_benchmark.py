@@ -152,4 +152,5 @@ for axis in axes.flat:
 fig.colorbar(timing_image, ax=axes[:, 0], label="onnx-light CPU median time (us)")
 fig.colorbar(speedup_image, ax=axes[:, 1], label="speedup over ONNX Runtime")
 fig.suptitle("TreeEnsemble: depth 4, float32, one output")
+fig.savefig("plot_tree_ensemble_benchmark.png")
 plt.show()
