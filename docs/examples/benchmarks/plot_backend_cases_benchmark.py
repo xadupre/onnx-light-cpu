@@ -93,6 +93,12 @@ for _op_type in ("And", "Not", "Or", "Xor"):
 for _op_type in ("BitwiseAnd", "BitwiseOr", "BitwiseXor"):
     _TARGET_DTYPES[_op_type] = (TensorProto.INT8, TensorProto.INT8)
 _TARGET_DTYPES["BitShift"] = (TensorProto.UINT8, TensorProto.UINT8)
+_DTYPE_SUFFIXES = {
+    TensorProto.BOOL: "bool",
+    TensorProto.FLOAT: "float32",
+    TensorProto.INT8: "int8",
+    TensorProto.UINT8: "uint8",
+}
 
 
 def _to_numpy(tensor):
@@ -110,11 +116,18 @@ def _to_numpy(tensor):
 def _collect_cases():
     """Registers and collects a subset of the "test_cpu_*" BENCHMARK cases.
 
-    A single regular expression -- matching every "test_cpu_<op>_..." name
-    for the target operators -- is used instead of collecting per operator.
+    The regular expression includes the selected input type so cases for other
+    supported types remain lazy.
     """
     register_backend_test_cases()
-    pattern = "^test_cpu_(" + "|".join(op.lower() for op in _TARGET_KERNELS) + ")_"
+    pattern = (
+        "^test_cpu_(?:"
+        + "|".join(
+            f"{op_type.lower()}_.*_{_DTYPE_SUFFIXES[input_type]}"
+            for op_type, (input_type, _) in _TARGET_DTYPES.items()
+        )
+        + ").*_benchmark$"
+    )
     max_per_op = 2 if os.environ.get("UNITTEST_GOING", "0") in ("1", "true", "True") else None
     counts = dict.fromkeys(_TARGET_KERNELS, 0)
     cases = []

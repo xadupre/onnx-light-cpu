@@ -37,7 +37,7 @@ import numpy as np
 import pytest
 
 from onnx_light.onnx import TensorProto, helper
-from onnx_light.onnx.backend import TestMode, collect_test_cases
+from onnx_light.onnx.backend import TestMode, collect_test_cases, collect_test_cases_by_name
 from onnx_light.onnx.reference import ReferenceEvaluator
 
 from onnx_light_cpu import (
@@ -101,6 +101,22 @@ _TARGET_KERNELS = {
     for op_type, kernel_name in _REGISTERED_KERNELS.items()
     if op_type not in {"Max", "Mean", "Min", "QLinearMatMul", "Sum"}
 }
+
+_BENCHMARK_TYPE_SUFFIXES = dict.fromkeys(_TARGET_KERNELS, "float32")
+for _op_type in ("And", "Not", "Or", "Xor"):
+    _BENCHMARK_TYPE_SUFFIXES[_op_type] = "bool"
+for _op_type in ("BitwiseAnd", "BitwiseOr", "BitwiseXor", "MatMulInteger"):
+    _BENCHMARK_TYPE_SUFFIXES[_op_type] = "int8"
+_BENCHMARK_TYPE_SUFFIXES["BitShift"] = "uint8"
+_BENCHMARK_NAME_PATTERN = (
+    "^test_cpu_(?:"
+    + "|".join(
+        f"{op_type.lower()}_.*_{suffix}"
+        for op_type, suffix in _BENCHMARK_TYPE_SUFFIXES.items()
+        if op_type != "TreeEnsemble"
+    )
+    + "|treeensemble_.*).*_benchmark$"
+)
 
 # ``TensorProto`` element type -> numpy dtype used to decode a backend test
 # case ``Tensor``'s raw little-endian row-major buffer.
@@ -247,8 +263,9 @@ class TestBackendCases:
     def test_every_cpu_benchmark_has_a_registered_kernel(self):
         benchmark_ops = {
             _single_node_op_type(tc)
-            for tc in collect_test_cases(include_big=True, mode=TestMode.BENCHMARK)
-            if tc.name.startswith("test_cpu_") and tc.name.endswith("_benchmark")
+            for tc in collect_test_cases_by_name(
+                _BENCHMARK_NAME_PATTERN, include_big=True, mode=TestMode.BENCHMARK
+            )
         }
         assert benchmark_ops
         assert benchmark_ops <= set(_REGISTERED_KERNELS)

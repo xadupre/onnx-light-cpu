@@ -326,12 +326,9 @@ std::string CaseName(const BinaryManifestEntry &entry, const BinaryTypeSignature
 
 void RegisterBenchmarksForSignature(std::vector<TestCase> &registry,
                                     const BinaryManifestEntry &entry,
-                                    const BinaryTypeSignature &signature,
-                                    bool cover_priority_shapes) {
+                                    const BinaryTypeSignature &signature) {
   const std::vector<ShapePair> &shape_pairs = BinaryBenchmarkShapePairs();
-  const std::size_t shape_count = cover_priority_shapes ? shape_pairs.size() : 1;
-  for (std::size_t shape_index = 0; shape_index < shape_count; ++shape_index) {
-    const ShapePair &shape_pair = shape_pairs[shape_index];
+  for (const ShapePair &shape_pair : shape_pairs) {
     const std::int64_t left_count = static_cast<std::int64_t>(ElementCount(shape_pair.left));
     const std::int64_t right_count = static_cast<std::int64_t>(ElementCount(shape_pair.right));
     const std::int64_t output_count =
@@ -372,11 +369,8 @@ void RegisterCpuBinaryCases(std::vector<TestCase> &registry, const std::string &
                             TestMode mode) {
   const BinaryManifestEntry &entry = GetBinaryManifestEntry(op_type);
   if (mode == TestMode::BENCHMARK) {
-    const std::size_t priority_signature = entry.op == BinaryOperator::kEqual ? 1 : 0;
-    for (std::size_t signature_index = 0; signature_index < entry.signatures.size();
-         ++signature_index) {
-      RegisterBenchmarksForSignature(registry, entry, entry.signatures[signature_index],
-                                     signature_index == priority_signature);
+    for (const BinaryTypeSignature &signature : entry.signatures) {
+      RegisterBenchmarksForSignature(registry, entry, signature);
     }
     return;
   }
