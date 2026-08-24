@@ -150,13 +150,12 @@ def _case_element_count(tc):
 print("-- register_kernels")
 register_kernels()
 
-# By default, ONNX Runtime's intra/inter-op thread pools spin-wait for new
-# work instead of blocking, so an idle ORT session still keeps every one of
-# its worker threads spinning on this machine's many cores; that busy-waiting
-# starves onnx-light-cpu's own thread pool between ORT calls and can make
-# onnx-light-cpu look an order of magnitude slower than it actually is.
-# Disabling spinning (ORT threads block instead of spin when idle) removes
-# that contention without limiting ORT's own thread count.
+# Both runtimes normally spin briefly before parking idle workers. Measuring
+# them consecutively in one process then lets the runtime measured first steal
+# CPU cycles from the runtime measured second. Disable spinning on both sides
+# so idle workers block immediately without changing either runtime's thread
+# count.
+_LIGHT_CPU_EXECUTION = {"spin_policy": "park_immediately"}
 _ORT_SESSION_OPTIONS = onnxruntime.SessionOptions()
 _ORT_SESSION_OPTIONS.add_session_config_entry("session.intra_op.allow_spinning", "0")
 _ORT_SESSION_OPTIONS.add_session_config_entry("session.inter_op.allow_spinning", "0")
@@ -181,7 +180,7 @@ for tc in _progress:
     initializer_names = {init.name for init in tc.model.graph.initializer}
     input_names = [vi.name for vi in tc.model.graph.input if vi.name not in initializer_names]
 
-    light_session = ReferenceEvaluator(tc.model)
+    light_session = ReferenceEvaluator(tc.model, cpu_execution=_LIGHT_CPU_EXECUTION)
     ort_error = None
     model_bytes = tc.model.SerializeToString()
     try:
