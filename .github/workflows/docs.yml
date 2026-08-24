@@ -60,7 +60,7 @@ jobs:
           pip install \
             breathe matplotlib myst-parser openpyxl onnxruntime pandas \
             pydata-sphinx-theme "sphinx>=7" sphinx-copybutton sphinx-datatables \
-            sphinx-gallery sphinx-reredirects
+            sphinx-gallery sphinx-reredirects tqdm
 
       # Link to the exact onnx-light runtime installed above. Installing the
       # ``dev`` extra here would replace it with the released Linux-only wheel.

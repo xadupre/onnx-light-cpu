@@ -38,6 +38,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import onnxruntime
 import pandas as pd
+from tqdm import tqdm
 
 from onnx_light.onnx import TensorProto
 from onnx_light.onnx.backend import TestMode, collect_test_cases_by_name
@@ -206,7 +207,7 @@ def _case_element_count(tc):
 register_kernels()
 
 rows = []
-for tc in _CASES:
+for tc in tqdm(_CASES, desc="benchmarking backend cases", unit="case"):
     op_type = tc.model.graph.node[0].op_type
     expected_kernel = _TARGET_KERNELS[op_type]
     model_bytes = tc.model.SerializeToString()

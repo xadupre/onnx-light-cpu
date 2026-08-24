@@ -169,6 +169,7 @@ jobs:
         env:
           UNITTEST_GOING: "1"
           MPLBACKEND: Agg
+          PYTHONPATH: ${{ github.workspace }}
         # -u: unbuffered stdout, so progress streams live in the CI log
         # instead of appearing as one block at the very end.
         run: python -u docs/examples/processor/plot_processor_performance.py

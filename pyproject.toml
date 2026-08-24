@@ -33,6 +33,7 @@ docs = [
     "myst-parser",
     "openpyxl",
     "pandas",
+    "tqdm",
     # "onnx-light",
     "onnxruntime",
     "pydata-sphinx-theme",
