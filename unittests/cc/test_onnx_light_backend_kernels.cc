@@ -300,10 +300,12 @@ TEST(OnnxLightBackendKernels, AttentionRunsThroughRuntime) {
   EXPECT_TRUE(failures.empty()) << Describe(failures);
 }
 
-TEST(OnnxLightBackendKernels, AttentionLowPrecisionAndCacheBenchmarksRunThroughRuntime) {
+TEST(OnnxLightBackendKernels, AttentionPriorityBenchmarksRunThroughRuntime) {
   std::vector<std::string> failures;
   for (const std::string &name :
        {"test_cpu_attention_opset23_rank4_mha_q1_kv128_hd64_none_stateless_float16_benchmark",
+        "test_cpu_attention_opset23_rank4_gqa_q128_kv128_hd64_causal_stateless_bfloat16_benchmark",
+        "test_cpu_attention_opset23_rank3_mha_q128_kv128_hd64_none_stateless_float32_benchmark",
         "test_cpu_attention_opset23_rank4_mha_q1_kv1024_hd64_none_internal_cache_bfloat16_"
         "benchmark",
         "test_cpu_attention_opset24_rank4_mha_q8_kv1024_hd64_causal_nonpad_float32_benchmark"}) {
@@ -405,6 +407,12 @@ TEST(OnnxLightBackendKernels, AttentionBenchmarkCoversPriorityCorpus) {
     }
   }
   EXPECT_EQ(names.size(), 57U);
+  for (std::string_view name :
+       {"test_cpu_attention_opset23_rank4_mha_q1_kv128_hd64_none_stateless_float16_benchmark",
+        "test_cpu_attention_opset23_rank4_gqa_q128_kv128_hd64_causal_stateless_bfloat16_benchmark",
+        "test_cpu_attention_opset23_rank3_mha_q128_kv128_hd64_none_stateless_float32_benchmark"}) {
+    EXPECT_TRUE(names.contains(name)) << name;
+  }
   for (std::string_view tag :
        {"_float32_benchmark", "_float16_benchmark", "_bfloat16_benchmark", "_rank3_", "_rank4_",
         "_mha_", "_gqa_", "_mqa_", "_hd64_", "_hd128_", "_none_", "_causal_", "_bool_",
