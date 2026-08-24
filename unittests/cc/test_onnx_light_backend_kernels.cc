@@ -469,7 +469,7 @@ TEST(OnnxLightBackendKernels, AllCpuBackendCaseNamesAreGloballyUnique) {
 // all of them in the unit-test suite.
 TEST(OnnxLightBackendKernels, AbsBenchmarkRunsThroughRuntime) {
   const std::vector<std::string> failures = RunCpuBackendCases(
-      "Abs", core::backend_test::TestMode::BENCHMARK, "test_cpu_abs_n1024_float32_benchmark");
+      "Abs", core::backend_test::TestMode::BENCHMARK, "test_cpu_abs_shape1024_float32_benchmark");
   EXPECT_TRUE(failures.empty()) << Describe(failures);
 }
 
@@ -536,6 +536,23 @@ TEST(OnnxLightBackendKernels, UnaryBenchmarkCorporaCoverParallelThresholds) {
     }
   }
   EXPECT_EQ(not_sizes, exp_sizes);
+}
+
+TEST(OnnxLightBackendKernels, AbsBenchmarkCorpusCoversTensorRanks) {
+  const std::vector<TestCase> cases =
+      CollectCpuCases("Abs", core::backend_test::TestMode::BENCHMARK);
+  std::set<std::size_t> ranks;
+  constexpr std::string_view prefix = "test_cpu_abs_shape";
+  constexpr std::string_view suffix = "_float32_benchmark";
+  for (const TestCase &test_case : cases) {
+    if (test_case.name.starts_with(prefix) && test_case.name.ends_with(suffix)) {
+      const std::string_view shape =
+          std::string_view(test_case.name)
+              .substr(prefix.size(), test_case.name.size() - prefix.size() - suffix.size());
+      ranks.insert(static_cast<std::size_t>(std::count(shape.begin(), shape.end(), 'x') + 1));
+    }
+  }
+  EXPECT_EQ(ranks, (std::set<std::size_t>{1, 2, 3, 4, 5}));
 }
 
 TEST(OnnxLightBackendKernels, UnaryBenchmarkCorporaCoverEverySupportedType) {

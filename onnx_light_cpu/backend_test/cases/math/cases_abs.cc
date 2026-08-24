@@ -65,11 +65,15 @@ void RegisterCpuAbsCases(std::vector<TestCase> &registry, TestMode mode) {
   const std::vector<float> f = {-1.0f, 0.0f, 1.5f, -2.25f, 3.5f, -4.75f};
 
   if (mode == TestMode::BENCHMARK) {
-    for (const int64_t size : {1024, 32768, 65535, 65536, 131072, 1048576, 4194304}) {
+    const std::vector<rt_ns::Shape> benchmark_shapes = {
+        {1024},          {128, 256},       {3, 5, 17, 257},     {4, 16, 1024},
+        {2, 8, 128, 64}, {4, 16, 256, 64}, {4, 8, 16, 128, 64},
+    };
+    for (const rt_ns::Shape &benchmark_shape : benchmark_shapes) {
       for (const DataType data_type :
            {DataType::FLOAT, DataType::DOUBLE, DataType::INT8, DataType::INT16, DataType::INT32,
             DataType::INT64, DataType::FLOAT16, DataType::BFLOAT16}) {
-        RegisterUnaryBenchmark(registry, "Abs", abs_kernel, opset, data_type, size);
+        RegisterUnaryBenchmark(registry, "Abs", abs_kernel, opset, data_type, benchmark_shape);
       }
     }
     return;
