@@ -28,7 +28,9 @@ public:
   struct Adapter {
     BinaryTypeSignature signature;
     using ScalarFn = void (*)(const void *, const void *, void *);
+    using ValidateFn = void (*)(const void *, const void *);
     ScalarFn scalar = nullptr;
+    ValidateFn validate = nullptr;
     std::size_t left_size = 0;
     std::size_t right_size = 0;
     std::size_t output_size = 0;

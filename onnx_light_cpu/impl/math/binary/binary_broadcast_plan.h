@@ -53,6 +53,7 @@ public:
 
 private:
   void ClassifyLoopFamily();
+  void ValidateInputs(const std::byte *left, const std::byte *right) const;
   void ExecuteInner(const std::byte *left, const std::byte *right, std::byte *output,
                     std::ptrdiff_t left_offset, std::ptrdiff_t right_offset,
                     std::ptrdiff_t output_offset) const;
