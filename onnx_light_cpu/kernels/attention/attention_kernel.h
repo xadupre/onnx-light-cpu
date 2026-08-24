@@ -20,13 +20,10 @@ namespace onnx_light_cpu {
 
 /// CPU kernel for the ``ai.onnx::Attention`` operator (opset 23 and 24).
 ///
-/// Roadmap PR11 scope: the stateless FP32 materialized baseline for rank-3
-/// and rank-4 MHA/GQA/MQA, with ``scale``, causal, boolean and additive
-/// ``attn_mask`` support. Tensor ``past``/``present`` cache, ``softcap``,
-/// the observable ``qk_matmul_output``, ``nonpad_kv_seqlen``, and any type
-/// other than FLOAT are not yet advertised; ``Run`` throws
-/// ``std::invalid_argument`` if a node still reaches this kernel with one of
-/// those features wired.
+/// Supports rank-3/rank-4 FP32, FP16, and BF16 MHA/GQA/MQA. Streaming
+/// invocations may consume tensor ``past`` inputs and v24
+/// ``nonpad_kv_seqlen`` directly; observable ``present`` and
+/// ``qk_matmul_output`` outputs use the materialized FP32 path.
 class AttentionKernel : public ONNX_LIGHT_NAMESPACE::core::runtime::KernelBase {
 public:
   explicit AttentionKernel(const ONNX_LIGHT_NAMESPACE::core::runtime::KernelContext &ctx);
@@ -35,18 +32,17 @@ public:
 
   void Run(ONNX_LIGHT_NAMESPACE::core::runtime::RuntimeContext &rt) override;
 
-  /// Direct invocation used by backend test cases: computes stateless FP32
-  /// Attention for ``q``/``k``/``v`` (and optional ``mask``, ``nullptr`` when
-  /// there is none), honoring ``is_causal``/``scale``/head-count attributes
-  /// carried on ``node``. Throws ``std::invalid_argument`` for any feature
-  /// outside the materialized baseline (see class documentation).
+  /// Direct invocation used by backend test cases.
   ONNX_LIGHT_NAMESPACE::core::runtime::Tensor
   operator()(const ONNX_LIGHT_NAMESPACE::NodeProto &node,
              const ONNX_LIGHT_NAMESPACE::core::runtime::Tensor &q,
              const ONNX_LIGHT_NAMESPACE::core::runtime::Tensor &k,
              const ONNX_LIGHT_NAMESPACE::core::runtime::Tensor &v,
              const ONNX_LIGHT_NAMESPACE::core::runtime::Tensor *mask,
-             ONNX_LIGHT_NAMESPACE::core::runtime::RuntimeContext *rt = nullptr) const;
+             ONNX_LIGHT_NAMESPACE::core::runtime::RuntimeContext *rt = nullptr,
+             const ONNX_LIGHT_NAMESPACE::core::runtime::Tensor *past_k = nullptr,
+             const ONNX_LIGHT_NAMESPACE::core::runtime::Tensor *past_v = nullptr,
+             const ONNX_LIGHT_NAMESPACE::core::runtime::Tensor *nonpad_kv_seqlen = nullptr) const;
 };
 
 void RegisterAttentionKernel();
