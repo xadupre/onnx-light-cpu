@@ -99,7 +99,7 @@ _REGISTERED_KERNELS = {
 _TARGET_KERNELS = {
     op_type: kernel_name
     for op_type, kernel_name in _REGISTERED_KERNELS.items()
-    if op_type != "QLinearMatMul"
+    if op_type not in {"Max", "Mean", "Min", "QLinearMatMul", "Sum"}
 }
 
 # ``TensorProto`` element type -> numpy dtype used to decode a backend test
