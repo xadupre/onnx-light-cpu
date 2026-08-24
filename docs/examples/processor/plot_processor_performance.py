@@ -35,11 +35,23 @@ core.
 
 import json
 import os
+import platform
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
 
 from onnx_light_cpu import ExplicitAffinity, benchmark_processor_performance
+
+
+def _processor_name():
+    cpuinfo = Path("/proc/cpuinfo")
+    if cpuinfo.exists():
+        for line in cpuinfo.read_text(encoding="utf-8").splitlines():
+            if line.startswith(("model name", "Model")) and ":" in line:
+                return line.split(":", 1)[1].strip()
+    return platform.processor() or "unknown"
+
 
 unit_test_going = os.environ.get("UNITTEST_GOING", "0") in ("1", "true", "True")
 
@@ -65,6 +77,7 @@ profile = benchmark_processor_performance(
 # It does not mean that every cache at a given level has one global instance.
 
 topology = profile.topology
+print(f"processor={_processor_name()}")
 print(f"platform={profile.metadata.platform} compiler={profile.metadata.compiler}")
 print(f"timer={profile.metadata.timer_name} schema_version={profile.metadata.schema_version}")
 print(
