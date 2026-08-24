@@ -200,6 +200,18 @@ for tc in _progress:
         except Exception as exc:  # noqa: BLE001 -- reported as "n/a", not raised.
             ort_session = None
             ort_error = str(exc).splitlines()[0][:40]
+        else:
+            for actual, expected in zip(light_out, ort_out, strict=True):
+                if expected.dtype == np.bool_:
+                    np.testing.assert_array_equal(actual, expected)
+                else:
+                    np.testing.assert_allclose(
+                        actual.astype(np.float64),
+                        expected.astype(np.float64),
+                        rtol=rtol,
+                        atol=atol,
+                        equal_nan=True,
+                    )
 
     # Aim for roughly a constant total element budget per case (~2e7 elements
     # processed across all repeats) so large cases are not re-run too many
