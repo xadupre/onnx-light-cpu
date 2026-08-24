@@ -9,8 +9,17 @@ a failure (e.g. a broken import or a mismatched result) surfaces as a failing
 test. All of their optional third-party dependencies (matplotlib, onnxruntime,
 onnx-light, ...) are part of the ``dev`` extra, so they are assumed to be
 installed rather than probed for and skipped.
+
+``docs/examples/benchmarks`` compares onnx-light-cpu kernels against onnx-light's
+``ReferenceEvaluator``/onnxruntime, so those examples additionally need
+onnx-light-cpu's onnx-light integration extension (``_cpuregister``), which is
+only built with ``ONNX_LIGHT_CPU_WITH_ONNX_LIGHT``/``--onnx-light-source``
+(e.g. the plain ``core`` CI matrix builds onnx-light-cpu's standalone kernels
+without that integration). Skip that whole directory rather than each
+individual example when the extension is unavailable.
 """
 
+import importlib.util
 import os
 import subprocess
 import sys
@@ -26,8 +35,22 @@ def _example_files():
     return sorted(_EXAMPLES_DIR.rglob("plot_*.py"))
 
 
+def _requires_onnx_light_integration(example):
+    return example.parent.name == "benchmarks"
+
+
+def _onnx_light_integration_available():
+    return importlib.util.find_spec("onnx_light_cpu.onnx_py._cpuregister") is not None
+
+
 @pytest.mark.parametrize("example", _example_files(), ids=lambda p: p.name)
 def test_documentation_example(example):
+    if _requires_onnx_light_integration(example) and not _onnx_light_integration_available():
+        pytest.skip(
+            "onnx-light-cpu was built without onnx-light integration "
+            "(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT/--onnx-light-source)"
+        )
+
     env = dict(os.environ)
     python_path = env.get("PYTHONPATH")
     env["PYTHONPATH"] = str(_ROOT) if not python_path else str(_ROOT) + os.pathsep + python_path
