@@ -162,6 +162,13 @@ struct AttentionPlan {
   std::int64_t qk_matmul_output_mode = 0;
   /// Whether the optional ``qk_matmul_output`` output is wired.
   bool has_qk_matmul_output = false;
+  /// Whether the optional ``present_key``/``present_value`` outputs are
+  /// wired (copied from :cpp:member:`AttentionDescriptor::has_present_key`/
+  /// :cpp:member:`AttentionDescriptor::has_present_value`, which are used
+  /// together). A requested ``present`` output, like ``qk_matmul_output``,
+  /// necessarily materializes a full observable tensor, so streaming
+  /// dispatch must not be selected when this is set.
+  bool has_present_output = false;
 
   TensorStrides q_strides;
   TensorStrides k_strides;
@@ -230,26 +237,66 @@ void ComputeAttentionFloat32(const AttentionPlan &plan, const float *q, const fl
                              const std::int64_t *nonpad_kv_seqlen = nullptr,
                              float *qk_matmul_output = nullptr);
 
-/// Roadmap PR13: executes the stateless FP32 attention blocked online-softmax
-/// recurrence directly. ``ComputeAttentionFloat32`` already dispatches to this
-/// path automatically whenever its preconditions hold (no tensor
-/// ``past_key``/``past_value`` cache, no ``nonpad_kv_seqlen``, and no
-/// observable ``qk_matmul_output``); this entry point exists so tests and
-/// benchmarks can invoke the streaming recurrence directly and compare it
-/// against :cpp:func:`ComputeAttentionFloat32Materialized` for identical
-/// inputs. Callers must not invoke it when those preconditions do not hold.
+/// Roadmap PR13/PR14: executes the FP32 attention blocked online-softmax
+/// recurrence directly, consuming an internal tensor ``past_key``/
+/// ``past_value`` cache and/or a v24 ``nonpad_kv_seqlen`` external cache
+/// block by block when supplied. ``ComputeAttentionFloat32`` already
+/// dispatches to this path automatically whenever its preconditions hold (no
+/// observable ``qk_matmul_output`` and no requested ``present`` output, i.e.
+/// :cpp:member:`AttentionPlan::has_qk_matmul_output` and
+/// :cpp:member:`AttentionPlan::has_present_output` are both ``false``); this
+/// entry point exists so tests and benchmarks can invoke the streaming
+/// recurrence directly and compare it against
+/// :cpp:func:`ComputeAttentionFloat32Materialized` for identical inputs.
+/// Callers must not invoke it when those preconditions do not hold.
 ///
-/// For each query block, ``Kv`` blocks are visited left to right while
-/// maintaining a running maximum, denominator, and unnormalized output per
-/// query row (the standard online-softmax recurrence); the complete
+/// For each query row, ``Kv`` blocks are visited left to right while
+/// maintaining a running maximum, denominator, and unnormalized output (the
+/// standard online-softmax recurrence); the complete
 /// ``[q_length, total_kv_length]`` score or probability matrix is never
 /// materialized. Peak temporary score storage is bounded by one
 /// ``Br x Bc`` block, independent of ``q_length``/``total_kv_length``. A
-/// causal plan additionally skips ``Kv`` blocks strictly beyond the causal
-/// frontier of every row in the current query block; arbitrary
-/// boolean/additive masks do not infer any tile skipping and remain correct.
+/// causal plan and/or ``nonpad_kv_seqlen`` skip ``Kv`` blocks strictly beyond
+/// the resolved frontier of every row; a boolean ``attn_mask`` additionally
+/// skips any block that disallows every position it covers. Arbitrary
+/// additive masks do not infer any tile skipping and remain correct. The
+/// outer batch/head/query-row work is scheduled through
+/// :cpp:func:`onnx_light_cpu::ExecuteRanges`: the runtime executor, not this
+/// function, decides how many workers are admitted, so prefill (many rows)
+/// can scale across cores while short-query/decode (few rows) run without
+/// forced parallel overhead.
 void ComputeAttentionFloat32Streaming(const AttentionPlan &plan, const float *q, const float *k,
-                                      const float *v, const void *mask, float *y);
+                                      const float *v, const void *mask, float *y,
+                                      const float *past_k = nullptr, const float *past_v = nullptr,
+                                      const std::int64_t *nonpad_kv_seqlen = nullptr);
+
+/// Roadmap PR14: FP16 counterpart of :cpp:func:`ComputeAttentionFloat32Streaming`.
+/// ``q``/``k``/``v``/``y``/``past_k``/``past_v`` are IEEE-754 binary16
+/// elements stored as raw ``uint16_t`` bit patterns; the score (``Q @ K^T``)
+/// and ``P @ V`` update are computed with FP32 accumulation throughout (the
+/// same online-softmax recurrence as the FP32 path), and only the final
+/// per-row output is rounded back to FP16. ``mask`` follows
+/// :cpp:member:`AttentionPlan::mask_kind` (``bool``-sized for
+/// :cpp:enumerator:`AttentionMaskKind::kBoolean`, FP32 for
+/// :cpp:enumerator:`AttentionMaskKind::kAdditive`) exactly like the FP32
+/// entry point.
+void ComputeAttentionFloat16Streaming(const AttentionPlan &plan, const std::uint16_t *q,
+                                      const std::uint16_t *k, const std::uint16_t *v,
+                                      const void *mask, std::uint16_t *y,
+                                      const std::uint16_t *past_k = nullptr,
+                                      const std::uint16_t *past_v = nullptr,
+                                      const std::int64_t *nonpad_kv_seqlen = nullptr);
+
+/// Roadmap PR14: BF16 counterpart of :cpp:func:`ComputeAttentionFloat32Streaming`;
+/// see :cpp:func:`ComputeAttentionFloat16Streaming` for the shared contract.
+/// ``q``/``k``/``v``/``y``/``past_k``/``past_v`` are ``bfloat16`` elements
+/// stored as raw ``uint16_t`` bit patterns.
+void ComputeAttentionBFloat16Streaming(const AttentionPlan &plan, const std::uint16_t *q,
+                                       const std::uint16_t *k, const std::uint16_t *v,
+                                       const void *mask, std::uint16_t *y,
+                                       const std::uint16_t *past_k = nullptr,
+                                       const std::uint16_t *past_v = nullptr,
+                                       const std::int64_t *nonpad_kv_seqlen = nullptr);
 
 /// Roadmap PR13: the ``S = scale * Q @ transpose(K)`` / mask / softmax /
 /// ``Y = P @ V`` baseline from Roadmap PR11/PR12, exposed under this name so

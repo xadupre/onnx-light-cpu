@@ -288,7 +288,7 @@ Pull-request sequence
        accumulation. DOUBLE, mixed-type, and other softmax-precision cases
        prove the declared unsupported boundary.
      - PR11 / #387
-     - Open; blocked by #387.
+     - Implemented.
    * - Roadmap PR13 (`#388
        <https://github.com/xadupre/onnx-light-cpu/issues/388>`_)
      - FP32 online Attention compute engine.
@@ -297,7 +297,7 @@ Pull-request sequence
        causal bounds, softcap, and row maximum; vector exponential and
        reductions are accurate; probability-by-V updates output directly.
      - PR12 / #389
-     - Open; blocked by #389.
+     - Implemented.
    * - Roadmap PR14 (`#391
        <https://github.com/xadupre/onnx-light-cpu/issues/391>`_)
      - Streaming scheduling, cache modes, and low-precision types.
@@ -306,7 +306,7 @@ Pull-request sequence
        skipping, and FP16/BF16 score/V-update kernels match the materialized
        fallback. Observable full-tensor outputs select materialized execution.
      - PR13 / #388
-     - Open; blocked by #388.
+     - Implemented.
    * - Roadmap PR15 (`#390
        <https://github.com/xadupre/onnx-light-cpu/issues/390>`_)
      - Final parity and memory gate.
@@ -315,7 +315,7 @@ Pull-request sequence
        priority case below ``0.9x``. Raw default-policy samples and environment
        metadata are published; controlled-thread runs remain diagnostic.
      - PR14 / #391
-     - Open; blocked by #391.
+     - Open; ready to start.
 
 Roadmap PR15 (`#390
 <https://github.com/xadupre/onnx-light-cpu/issues/390>`_) is the final

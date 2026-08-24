@@ -4,6 +4,9 @@
 
 #include "onnx_light_cpu/impl/attention/attention_plan.h"
 
+#include "onnx_light_cpu/impl/execution.h"
+#include "onnx_light_cpu/impl/math/half_conversion.h"
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -224,6 +227,7 @@ AttentionPlan::AttentionPlan(const AttentionDescriptor &descriptor, AttentionLay
   softcap = descriptor.softcap;
   qk_matmul_output_mode = descriptor.qk_matmul_output_mode;
   has_qk_matmul_output = descriptor.has_qk_matmul_output;
+  has_present_output = descriptor.has_present_key || descriptor.has_present_value;
 
   if (mask_kind != AttentionMaskKind::kNone) {
     // Right-justify mask_shape to (batch, q_num_heads, q_length,
@@ -444,148 +448,299 @@ namespace {
 // buffer to a constant instead of `O(total_kv_length)`.
 constexpr std::size_t kStreamingKvBlock = 128;
 
+// Estimated FMA cost of one query row visiting every KV position it may
+// attend to (`head_dim` for the QK dot product plus `v_head_dim` for the
+// P @ V accumulation): only used to size the runtime-owned outer schedule
+// (`ExecuteRanges`) below; it never changes the numeric result.
+double StreamingRowCost(const AttentionPlan &plan) {
+  return static_cast<double>(plan.head_dim + plan.v_head_dim) *
+         static_cast<double>(std::max<std::size_t>(plan.total_kv_length, std::size_t{1}));
+}
+
+// FP32-storage codec: streaming Q/K/V/Y elements are already FP32, so
+// loading/storing is a no-op copy.
+struct Float32Codec {
+  using Storage = float;
+  static float Load(Storage value) noexcept { return value; }
+  static Storage Store(float value) noexcept { return value; }
+};
+
+// FP16-storage codec: elements are IEEE-754 binary16 stored as raw
+// `uint16_t` bit patterns; every arithmetic operation still happens in FP32.
+struct Float16Codec {
+  using Storage = std::uint16_t;
+  static float Load(Storage value) noexcept { return detail::Float16BitsToFloat(value); }
+  static Storage Store(float value) noexcept { return detail::FloatToFloat16Bits(value); }
+};
+
+// BF16-storage codec: elements are `bfloat16` stored as raw `uint16_t` bit
+// patterns; every arithmetic operation still happens in FP32.
+struct BFloat16Codec {
+  using Storage = std::uint16_t;
+  static float Load(Storage value) noexcept { return detail::Bfloat16BitsToFloat(value); }
+  static Storage Store(float value) noexcept { return detail::FloatToBFloat16Bits(value); }
+};
+
+// Shared streaming online-softmax recurrence, templated on `Codec` so FP32,
+// FP16, and BF16 Q/K/V/Y share one implementation while every intermediate
+// (score, softmax denominator, and P @ V accumulator) stays FP32. Consumes an
+// internal tensor `past_key`/`past_value` cache and/or `nonpad_kv_seqlen`
+// block by block: neither is materialized. Callers (the type-specific public
+// entry points) must not invoke this when `plan.has_qk_matmul_output` or
+// `plan.has_present_output` is set: those require the materialized path.
+// `past_k`/`past_v` must be non-null whenever `plan.past_length != 0` (and
+// may be null otherwise); this mirrors the same precondition already
+// documented on `ComputeAttentionFloat32Materialized`.
+template <typename Codec>
+void ComputeAttentionStreamingGeneric(const AttentionPlan &plan, const typename Codec::Storage *q,
+                                      const typename Codec::Storage *k,
+                                      const typename Codec::Storage *v, const void *mask,
+                                      typename Codec::Storage *y,
+                                      const typename Codec::Storage *past_k,
+                                      const typename Codec::Storage *past_v,
+                                      const std::int64_t *nonpad_kv_seqlen) {
+  const auto *mask_bool = static_cast<const std::uint8_t *>(mask);
+  const auto *mask_float = static_cast<const float *>(mask);
+  const std::size_t total_kv_length = plan.total_kv_length;
+  const bool has_softcap = plan.softcap != 0.0f;
+  const std::size_t block =
+      total_kv_length == 0 ? std::size_t{0} : std::min(total_kv_length, kStreamingKvBlock);
+  const std::size_t rows_per_batch = plan.q_num_heads * plan.q_length;
+  const std::size_t total_rows = plan.batch * rows_per_batch;
+
+  // Runtime-owned outer schedule: one task per (batch, head, query-row)
+  // triple. `ExecuteRanges` decides how many workers to admit from the total
+  // estimated cost; it never fixes a thread count, and collapses to a single
+  // worker (no parallel overhead) when there is little work -- always the
+  // case for short-query/decode invocations -- while a prefill invocation
+  // (many rows) exposes enough independent outer work to scale.
+  ExecuteRanges(
+      static_cast<std::int64_t>(total_rows), StreamingRowCost(plan),
+      [&](std::int64_t begin, std::int64_t end) {
+        // Peak temporary storage: one `Bc`-sized score tile, one
+        // `head_dim`-sized FP32 query cache, and one `v_head_dim`
+        // accumulator per worker (`Br == 1`); never the full
+        // `[q_length, total_kv_length]` score or probability tensor.
+        std::vector<float> scores(block);
+        std::vector<float> q_fp32(plan.head_dim);
+        std::vector<float> accumulator(plan.v_head_dim);
+
+        for (std::int64_t row = begin; row < end; ++row) {
+          const std::size_t b = static_cast<std::size_t>(row) / rows_per_batch;
+          const std::size_t rem = static_cast<std::size_t>(row) % rows_per_batch;
+          const std::size_t h = rem / plan.q_length;
+          const std::size_t i = rem % plan.q_length;
+          const std::size_t kv_h = h / plan.group_size;
+
+          const typename Codec::Storage *q_head =
+              q + b * plan.q_strides.batch + h * plan.q_strides.head;
+          const typename Codec::Storage *k_head =
+              k + b * plan.k_strides.batch + kv_h * plan.k_strides.head;
+          const typename Codec::Storage *v_head =
+              v + b * plan.v_strides.batch + kv_h * plan.v_strides.head;
+          const typename Codec::Storage *past_k_head =
+              past_k != nullptr
+                  ? past_k + b * plan.past_k_strides.batch + kv_h * plan.past_k_strides.head
+                  : nullptr;
+          const typename Codec::Storage *past_v_head =
+              past_v != nullptr
+                  ? past_v + b * plan.past_v_strides.batch + kv_h * plan.past_v_strides.head
+                  : nullptr;
+          typename Codec::Storage *y_head = y + b * plan.y_strides.batch + h * plan.y_strides.head;
+          const std::ptrdiff_t mask_base =
+              b * plan.mask_strides.batch + static_cast<std::ptrdiff_t>(h) * plan.mask_strides.head;
+
+          // Bottom-right, offset-aware causal frontier: `nonpad_kv_seqlen`,
+          // when supplied, overrides the plan's scalar `causal_offset` with a
+          // per-batch value and additionally bounds the KV axis to a
+          // contiguous prefix, exactly like the materialized path.
+          const std::int64_t causal_offset =
+              nonpad_kv_seqlen != nullptr
+                  ? nonpad_kv_seqlen[b] - static_cast<std::int64_t>(plan.q_length)
+                  : plan.causal_offset;
+          const std::int64_t nonpad_length = nonpad_kv_seqlen != nullptr ? nonpad_kv_seqlen[b] : -1;
+
+          const typename Codec::Storage *q_row = q_head + i * plan.q_strides.sequence;
+          const std::ptrdiff_t mask_row =
+              mask_base + static_cast<std::ptrdiff_t>(i) * plan.mask_strides.q;
+          typename Codec::Storage *y_row = y_head + i * plan.y_strides.sequence;
+
+          // Fold Q into FP32 once per row rather than once per KV element.
+          for (std::size_t d = 0; d < plan.head_dim; ++d) {
+            q_fp32[d] = Codec::Load(q_row[d]);
+          }
+
+          // Combined causal/`nonpad_kv_seqlen` bound: the last KV index
+          // (inclusive) this row may ever attend to. Positions beyond it are
+          // never visited -- a safe, always-correct tile skip, since both
+          // are contiguous suffixes of the KV axis.
+          std::int64_t bound = static_cast<std::int64_t>(total_kv_length) - 1;
+          if (plan.causal) {
+            bound = std::min(bound, static_cast<std::int64_t>(i) + causal_offset);
+          }
+          if (nonpad_length >= 0) {
+            bound = std::min(bound, nonpad_length - 1);
+          }
+          const std::size_t kv_limit =
+              bound < 0 ? std::size_t{0}
+                        : std::min(total_kv_length, static_cast<std::size_t>(bound) + 1);
+
+          float m = kNegativeInfinity;
+          float l = 0.0f;
+          std::fill(accumulator.begin(), accumulator.end(), 0.0f);
+          bool any_valid = false;
+
+          for (std::size_t j0 = 0; j0 < kv_limit; j0 += block) {
+            const std::size_t j1 = std::min(j0 + block, kv_limit);
+            const std::size_t count = j1 - j0;
+
+            // Safe inferable tile skip: a boolean `attn_mask` that
+            // disallows every position in this block contributes nothing,
+            // so the QK dot products for the whole block can be skipped
+            // outright. Additive masks are not inspected here: an arbitrary
+            // real bias cannot be assumed to ever equal -infinity, so no
+            // skip is inferred for them and they remain exactly correct.
+            if (plan.mask_kind == AttentionMaskKind::kBoolean) {
+              bool any_allowed = false;
+              for (std::size_t jj = 0; jj < count && !any_allowed; ++jj) {
+                const std::size_t j = j0 + jj;
+                const std::ptrdiff_t index =
+                    mask_row + static_cast<std::ptrdiff_t>(j) * plan.mask_strides.kv;
+                any_allowed = mask_bool[index] != 0;
+              }
+              if (!any_allowed) {
+                continue;
+              }
+            }
+
+            float block_max = kNegativeInfinity;
+            for (std::size_t jj = 0; jj < count; ++jj) {
+              const std::size_t j = j0 + jj;
+              bool allowed = true;
+              float additive_bias = 0.0f;
+              if (plan.mask_kind == AttentionMaskKind::kBoolean) {
+                const std::ptrdiff_t index =
+                    mask_row + static_cast<std::ptrdiff_t>(j) * plan.mask_strides.kv;
+                allowed = mask_bool[index] != 0;
+              } else if (plan.mask_kind == AttentionMaskKind::kAdditive) {
+                const std::ptrdiff_t index =
+                    mask_row + static_cast<std::ptrdiff_t>(j) * plan.mask_strides.kv;
+                additive_bias = mask_float[index];
+              }
+              const float bias = (allowed ? 0.0f : kNegativeInfinity) + additive_bias;
+
+              const typename Codec::Storage *k_row;
+              if (j < plan.past_length) {
+                k_row = past_k_head + j * plan.past_k_strides.sequence;
+              } else {
+                k_row = k_head + (j - plan.past_length) * plan.k_strides.sequence;
+              }
+              float dot = 0.0f;
+              for (std::size_t d = 0; d < plan.head_dim; ++d) {
+                dot += q_fp32[d] * Codec::Load(k_row[d]);
+              }
+              const float raw = plan.scale * dot;
+              const float capped = has_softcap ? plan.softcap * std::tanh(raw / plan.softcap) : raw;
+              const float with_bias = capped + bias;
+              scores[jj] = with_bias;
+              if (with_bias != kNegativeInfinity) {
+                any_valid = true;
+              }
+              block_max = std::max(block_max, with_bias);
+            }
+
+            // Online softmax recurrence: rescale the running denominator and
+            // accumulator to the new running maximum before folding in this
+            // block's contribution.
+            const float m_new = std::max(m, block_max);
+            float correction = 1.0f;
+            if (m_new != kNegativeInfinity) {
+              correction = m == kNegativeInfinity ? 0.0f : std::exp(m - m_new);
+            }
+            l *= correction;
+            for (std::size_t d = 0; d < plan.v_head_dim; ++d) {
+              accumulator[d] *= correction;
+            }
+
+            for (std::size_t jj = 0; jj < count; ++jj) {
+              const float score = scores[jj];
+              const float p = score == kNegativeInfinity ? 0.0f : std::exp(score - m_new);
+              if (p == 0.0f) {
+                continue;
+              }
+              l += p;
+              const std::size_t j = j0 + jj;
+              const typename Codec::Storage *v_row;
+              if (j < plan.past_length) {
+                v_row = past_v_head + j * plan.past_v_strides.sequence;
+              } else {
+                v_row = v_head + (j - plan.past_length) * plan.v_strides.sequence;
+              }
+              for (std::size_t d = 0; d < plan.v_head_dim; ++d) {
+                accumulator[d] += p * Codec::Load(v_row[d]);
+              }
+            }
+            m = m_new;
+          }
+
+          if (!any_valid || l == 0.0f) {
+            // Fully-masked query row (or an empty KV length): zero output
+            // rather than NaN, matching the materialized path.
+            for (std::size_t d = 0; d < plan.v_head_dim; ++d) {
+              y_row[d] = Codec::Store(0.0f);
+            }
+            continue;
+          }
+          const float inv_l = 1.0f / l;
+          for (std::size_t d = 0; d < plan.v_head_dim; ++d) {
+            y_row[d] = Codec::Store(accumulator[d] * inv_l);
+          }
+        }
+      });
+}
+
 } // namespace
 
 void ComputeAttentionFloat32Streaming(const AttentionPlan &plan, const float *q, const float *k,
-                                      const float *v, const void *mask, float *y) {
-  const auto *mask_bool = static_cast<const std::uint8_t *>(mask);
-  const auto *mask_float = static_cast<const float *>(mask);
-  // The streaming path never receives a tensor `past_key`/`past_value` cache
-  // (dispatched only when `plan.past_length == 0`), so `total_kv_length` is
-  // simply `kv_length` here.
-  const std::size_t kv_length = plan.kv_length;
-  const bool has_softcap = plan.softcap != 0.0f;
-  const std::size_t block = kv_length == 0 ? 0 : std::min(kv_length, kStreamingKvBlock);
+                                      const float *v, const void *mask, float *y,
+                                      const float *past_k, const float *past_v,
+                                      const std::int64_t *nonpad_kv_seqlen) {
+  ComputeAttentionStreamingGeneric<Float32Codec>(plan, q, k, v, mask, y, past_k, past_v,
+                                                 nonpad_kv_seqlen);
+}
 
-  // Peak temporary storage: one `Bc`-sized score tile and one `v_head_dim`
-  // accumulator per query row (`Br == 1` here); never the full
-  // `[q_length, total_kv_length]` score or probability tensor.
-  std::vector<float> scores(block);
-  std::vector<float> accumulator(plan.v_head_dim);
+void ComputeAttentionFloat16Streaming(const AttentionPlan &plan, const std::uint16_t *q,
+                                      const std::uint16_t *k, const std::uint16_t *v,
+                                      const void *mask, std::uint16_t *y,
+                                      const std::uint16_t *past_k, const std::uint16_t *past_v,
+                                      const std::int64_t *nonpad_kv_seqlen) {
+  ComputeAttentionStreamingGeneric<Float16Codec>(plan, q, k, v, mask, y, past_k, past_v,
+                                                 nonpad_kv_seqlen);
+}
 
-  for (std::size_t b = 0; b < plan.batch; ++b) {
-    for (std::size_t h = 0; h < plan.q_num_heads; ++h) {
-      const std::size_t kv_h = h / plan.group_size;
-      const float *q_head = q + b * plan.q_strides.batch + h * plan.q_strides.head;
-      const float *k_head = k + b * plan.k_strides.batch + kv_h * plan.k_strides.head;
-      const float *v_head = v + b * plan.v_strides.batch + kv_h * plan.v_strides.head;
-      float *y_head = y + b * plan.y_strides.batch + h * plan.y_strides.head;
-      const std::ptrdiff_t mask_base =
-          b * plan.mask_strides.batch + static_cast<std::ptrdiff_t>(h) * plan.mask_strides.head;
-
-      for (std::size_t i = 0; i < plan.q_length; ++i) {
-        const float *q_row = q_head + i * plan.q_strides.sequence;
-        const std::ptrdiff_t mask_row =
-            mask_base + static_cast<std::ptrdiff_t>(i) * plan.mask_strides.q;
-        float *y_row = y_head + i * plan.y_strides.sequence;
-
-        // Causal frontier: last KV index (inclusive) this row may attend to.
-        // `causal_offset` is `0` here since the streaming path never carries
-        // a tensor `past_key` cache. Blocks strictly beyond it are skipped.
-        const std::int64_t frontier = plan.causal
-                                          ? static_cast<std::int64_t>(i) + plan.causal_offset
-                                          : static_cast<std::int64_t>(kv_length) - 1;
-        const std::size_t kv_limit =
-            frontier < 0 ? std::size_t{0}
-                         : std::min(kv_length, static_cast<std::size_t>(frontier) + 1);
-
-        float m = kNegativeInfinity;
-        float l = 0.0f;
-        std::fill(accumulator.begin(), accumulator.end(), 0.0f);
-        bool any_valid = false;
-
-        for (std::size_t j0 = 0; j0 < kv_limit; j0 += block) {
-          const std::size_t j1 = std::min(j0 + block, kv_limit);
-          const std::size_t count = j1 - j0;
-
-          float block_max = kNegativeInfinity;
-          for (std::size_t jj = 0; jj < count; ++jj) {
-            const std::size_t j = j0 + jj;
-            bool allowed = !plan.causal || static_cast<std::int64_t>(j) <= frontier;
-            float additive_bias = 0.0f;
-            if (plan.mask_kind == AttentionMaskKind::kBoolean) {
-              const std::ptrdiff_t index =
-                  mask_row + static_cast<std::ptrdiff_t>(j) * plan.mask_strides.kv;
-              allowed = allowed && mask_bool[index] != 0;
-            } else if (plan.mask_kind == AttentionMaskKind::kAdditive) {
-              const std::ptrdiff_t index =
-                  mask_row + static_cast<std::ptrdiff_t>(j) * plan.mask_strides.kv;
-              additive_bias = mask_float[index];
-            }
-            const float bias = (allowed ? 0.0f : kNegativeInfinity) + additive_bias;
-
-            const float *k_row = k_head + j * plan.k_strides.sequence;
-            float dot = 0.0f;
-            for (std::size_t d = 0; d < plan.head_dim; ++d) {
-              dot += q_row[d] * k_row[d];
-            }
-            const float raw = plan.scale * dot;
-            const float capped = has_softcap ? plan.softcap * std::tanh(raw / plan.softcap) : raw;
-            const float with_bias = capped + bias;
-            scores[jj] = with_bias;
-            if (with_bias != kNegativeInfinity) {
-              any_valid = true;
-            }
-            block_max = std::max(block_max, with_bias);
-          }
-
-          // Online softmax recurrence: rescale the running denominator and
-          // accumulator to the new running maximum before folding in this
-          // block's contribution.
-          const float m_new = std::max(m, block_max);
-          float correction = 1.0f;
-          if (m_new != kNegativeInfinity) {
-            correction = m == kNegativeInfinity ? 0.0f : std::exp(m - m_new);
-          }
-          l *= correction;
-          for (std::size_t d = 0; d < plan.v_head_dim; ++d) {
-            accumulator[d] *= correction;
-          }
-
-          for (std::size_t jj = 0; jj < count; ++jj) {
-            const float score = scores[jj];
-            const float p = score == kNegativeInfinity ? 0.0f : std::exp(score - m_new);
-            if (p == 0.0f) {
-              continue;
-            }
-            l += p;
-            const float *v_row = v_head + (j0 + jj) * plan.v_strides.sequence;
-            for (std::size_t d = 0; d < plan.v_head_dim; ++d) {
-              accumulator[d] += p * v_row[d];
-            }
-          }
-          m = m_new;
-        }
-
-        if (!any_valid || l == 0.0f) {
-          // Fully-masked query row (or an empty KV length): zero output
-          // rather than NaN, matching the materialized path.
-          std::fill(y_row, y_row + plan.v_head_dim, 0.0f);
-          continue;
-        }
-        const float inv_l = 1.0f / l;
-        for (std::size_t d = 0; d < plan.v_head_dim; ++d) {
-          y_row[d] = accumulator[d] * inv_l;
-        }
-      }
-    }
-  }
+void ComputeAttentionBFloat16Streaming(const AttentionPlan &plan, const std::uint16_t *q,
+                                       const std::uint16_t *k, const std::uint16_t *v,
+                                       const void *mask, std::uint16_t *y,
+                                       const std::uint16_t *past_k, const std::uint16_t *past_v,
+                                       const std::int64_t *nonpad_kv_seqlen) {
+  ComputeAttentionStreamingGeneric<BFloat16Codec>(plan, q, k, v, mask, y, past_k, past_v,
+                                                  nonpad_kv_seqlen);
 }
 
 void ComputeAttentionFloat32(const AttentionPlan &plan, const float *q, const float *k,
                              const float *v, const void *mask, float *y, const float *past_k,
                              const float *past_v, const std::int64_t *nonpad_kv_seqlen,
                              float *qk_matmul_output) {
-  // Streaming preconditions: no tensor past/present cache, no
-  // `nonpad_kv_seqlen`, and no observable `qk_matmul_output`. Any of these
-  // requires the materialized path (either because streaming does not
-  // implement that behavior yet, or because a full `qk_matmul_output` must be
-  // observable).
-  const bool can_stream = past_k == nullptr && past_v == nullptr && plan.past_length == 0 &&
-                          nonpad_kv_seqlen == nullptr && qk_matmul_output == nullptr &&
-                          !plan.has_qk_matmul_output;
+  // Streaming preconditions: no observable `qk_matmul_output` and no
+  // requested `present` output. Either necessarily materializes a full
+  // observable tensor, so the materialized path is selected instead. An
+  // internal tensor `past_key`/`past_value` cache and `nonpad_kv_seqlen` are
+  // consumed block by block by the streaming path itself, so neither
+  // excludes it.
+  const bool can_stream =
+      qk_matmul_output == nullptr && !plan.has_qk_matmul_output && !plan.has_present_output;
   if (can_stream) {
-    ComputeAttentionFloat32Streaming(plan, q, k, v, mask, y);
+    ComputeAttentionFloat32Streaming(plan, q, k, v, mask, y, past_k, past_v, nonpad_kv_seqlen);
     return;
   }
   ComputeAttentionFloat32Materialized(plan, q, k, v, mask, y, past_k, past_v, nonpad_kv_seqlen,
