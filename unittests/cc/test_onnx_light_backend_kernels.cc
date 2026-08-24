@@ -516,8 +516,9 @@ TEST(OnnxLightBackendKernels, BinaryBenchmarkCorporaAreLazyAndRunThroughRuntime)
 
 TEST(OnnxLightBackendKernels, BinaryBenchmarkCorporaCoverPriorityShapes) {
   const std::set<std::string> expected_shape_tags = {
-      "contiguous_1d",     "contiguous_2d",   "contiguous_3d", "contiguous_4d",
-      "repeated_block_4d", "inner_vector_4d", "general_5d",    "general_6d",
+      "contiguous_1d", "contiguous_2d",           "contiguous_3d",
+      "contiguous_4d", "repeated_block_4d",       "inner_vector_4d",
+      "general_5d",    "repeated_block_4d_large", "inner_vector_4d_large",
   };
   const std::set<int64_t> expected_output_sizes = {
       1024, 32768, 65535, 65536, 131072, 1048576, 4194304,
