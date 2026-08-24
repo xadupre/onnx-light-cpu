@@ -13,6 +13,7 @@ extensions = [
     "breathe",
     "myst_parser",
     "sphinx_copybutton",
+    "sphinxcontrib.jquery",
     "sphinx_datatables",
     "sphinx_gallery.gen_gallery",
     "sphinx_reredirects",

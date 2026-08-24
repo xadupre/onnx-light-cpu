@@ -13,5 +13,7 @@ def test_next_steps_table_is_sortable_and_filterable():
     conf = (_ROOT / "docs" / "conf.py").read_text(encoding="utf-8")
     next_steps = (_ROOT / "docs" / "next_steps" / "index.rst").read_text(encoding="utf-8")
 
-    assert "sphinx_datatables" in conf
+    assert '"sphinxcontrib.jquery"' in conf
+    assert '"sphinx_datatables"' in conf
+    assert conf.index('"sphinxcontrib.jquery"') < conf.index('"sphinx_datatables"')
     assert ":class: sphinx-datatable" in next_steps
