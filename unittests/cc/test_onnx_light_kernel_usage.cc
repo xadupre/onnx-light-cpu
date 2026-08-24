@@ -53,8 +53,12 @@ TEST(OnnxLightKernelUsage, RegisteredKernelNames) {
       {"Log", "onnx_light_cpu::Log"},
       {"MatMul", "onnx_light_cpu::MatMul"},
       {"MatMulInteger", "onnx_light_cpu::MatMulInteger"},
+      {"Max", "onnx_light_cpu::Max"},
+      {"Mean", "onnx_light_cpu::Mean"},
+      {"Min", "onnx_light_cpu::Min"},
       {"Not", "onnx_light_cpu::Not"},
       {"QLinearMatMul", "onnx_light_cpu::QLinearMatMul"},
+      {"Sum", "onnx_light_cpu::Sum"},
       {"SwiGLU", "onnx_light_cpu::SwiGLU"},
   };
   for (const auto &entry : onnx_light_cpu::GetBinaryManifest()) {
