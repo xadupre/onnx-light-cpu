@@ -217,14 +217,19 @@ for level, policies in profile.memory.items():
         copy = entry.copy.median_gbps if entry.copy else float("nan")
         print(f"  {level:<4} {policy:<8} {read:>10.2f} {write:>11.2f} {copy:>10.2f}")
 
-print("\ncompute throughput (effective, median of raw samples):")
-print(f"  {'dtype':<9} {'policy':<8} {'impl':<10} {'GOP/s':>10}")
+print("\ncompute throughput (effective, median of raw samples, GOP/s):")
+compute_policies = [
+    p for p in ("single", "physical") if any(p in v for v in profile.compute.values())
+]
+header = f"  {'dtype':<9} {'impl':<10}" + "".join(f"{p:>12}" for p in compute_policies)
+print(header)
 for element_type, policies in profile.compute.items():
-    for policy, entry in policies.items():
-        print(
-            f"  {element_type:<9} {policy:<8} {entry.implementation_name:<10} "
-            f"{entry.median_gops:>10.2f}"
-        )
+    implementation_name = next(iter(policies.values())).implementation_name
+    row = f"  {element_type:<9} {implementation_name:<10}"
+    for policy in compute_policies:
+        entry = policies.get(policy)
+        row += f"{entry.median_gops:>12.2f}" if entry else f"{'--':>12}"
+    print(row)
 
 # %%
 # Plot 2: bandwidth by memory level
