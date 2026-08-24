@@ -6,11 +6,11 @@
 
 Every ``docs/examples/**/plot_*.py`` gallery script is executed in a subprocess so
 a failure (e.g. a broken import or a mismatched result) surfaces as a failing
-test. Examples that need optional dependencies which are not installed are
-skipped instead of failing.
+test. All of their optional third-party dependencies (matplotlib, onnxruntime,
+onnx-light, ...) are part of the ``dev`` extra, so they are assumed to be
+installed rather than probed for and skipped.
 """
 
-import importlib.util
 import os
 import subprocess
 import sys
@@ -21,36 +21,13 @@ import pytest
 _ROOT = Path(__file__).resolve().parents[2]
 _EXAMPLES_DIR = _ROOT / "docs" / "examples"
 
-# Optional third-party modules each example needs on top of ``onnx-light-cpu``
-# and ``numpy``. When any of them is missing the example is skipped. Examples
-# not listed here fall back to requiring ``matplotlib`` (every gallery plot
-# script imports it).
-_REQUIREMENTS = {
-    "plot_abs_simd.py": ("matplotlib",),
-    "plot_abs_benchmark.py": ("matplotlib", "onnx", "onnxruntime", "onnx_light"),
-    "plot_exp_log_benchmark.py": ("matplotlib", "onnx", "onnxruntime", "onnx_light"),
-    "plot_gemm_benchmark.py": ("matplotlib", "onnx", "onnxruntime", "onnx_light"),
-    "plot_gemm_dtype_benchmark.py": ("matplotlib", "onnx", "onnx_light", "ml_dtypes"),
-    "plot_backend_cases_benchmark.py": ("matplotlib", "onnx", "onnxruntime", "onnx_light"),
-    "plot_tree_ensemble_benchmark.py": ("matplotlib", "onnx", "onnxruntime", "onnx_light"),
-}
-
 
 def _example_files():
     return sorted(_EXAMPLES_DIR.rglob("plot_*.py"))
 
 
-def _missing_modules(names):
-    return [name for name in names if importlib.util.find_spec(name) is None]
-
-
 @pytest.mark.parametrize("example", _example_files(), ids=lambda p: p.name)
 def test_documentation_example(example):
-    required = _REQUIREMENTS.get(example.name, ("matplotlib",))
-    missing = _missing_modules(required)
-    if missing:
-        pytest.skip(f"missing modules: {', '.join(missing)}")
-
     env = dict(os.environ)
     python_path = env.get("PYTHONPATH")
     env["PYTHONPATH"] = str(_ROOT) if not python_path else str(_ROOT) + os.pathsep + python_path
