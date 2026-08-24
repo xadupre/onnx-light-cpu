@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "onnx_light_cpu/reference/tree_ensemble_reference.h"
+#include "onnx_light_cpu/impl/traditionalml/tree_ensemble.h"
 
 #include "onnx_core/runtime/kernels/kernel_context.h"
 #include "onnx_core/runtime/runtime_context.h"
@@ -26,7 +26,7 @@ public:
 
 private:
   std::once_flag initialize_once_;
-  std::unique_ptr<reference::TreeEnsemblePlan> plan_;
+  std::unique_ptr<TreeEnsemblePlan> plan_;
   std::int32_t input_data_type_ = 0;
   std::int64_t feature_count_ = 0;
 };

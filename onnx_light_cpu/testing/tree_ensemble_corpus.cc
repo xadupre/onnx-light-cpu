@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "onnx_light_cpu/reference/tree_ensemble_corpus.h"
+#include "onnx_light_cpu/testing/tree_ensemble_corpus.h"
 
 #include <cmath>
 #include <cstddef>
@@ -12,7 +12,7 @@
 #include <utility>
 #include <vector>
 
-namespace onnx_light_cpu::reference {
+namespace onnx_light_cpu::testing {
 namespace {
 
 TreeEnsembleAttributes MakeStump(TreeBranchMode mode, TreeValueType type) {
@@ -39,8 +39,8 @@ TreeEnsembleAttributes MakeStump(TreeBranchMode mode, TreeValueType type) {
 
 void AddCase(std::vector<TreeEnsembleCorpusCase> &cases, std::string name,
              TreeEnsembleAttributes attributes, std::vector<double> input, std::size_t rows) {
-  TreeEnsembleReference reference(attributes);
-  std::vector<double> expected = reference.Evaluate(input, rows);
+  TreeEnsembleOracle oracle(attributes);
+  std::vector<double> expected = oracle.Evaluate(input, rows);
   cases.push_back({std::move(name), "ai.onnx.ml", "TreeEnsemble", 5, std::move(attributes),
                    std::move(input), rows, std::move(expected)});
 }
@@ -211,4 +211,4 @@ std::vector<TreeEnsembleCorpusCase> GenerateTreeEnsembleV5Corpus() {
   return cases;
 }
 
-} // namespace onnx_light_cpu::reference
+} // namespace onnx_light_cpu::testing

@@ -4,7 +4,7 @@
 
 #include "onnx_light_cpu/impl/execution.h"
 #include "onnx_light_cpu/impl/thread_topology.h"
-#include "onnx_light_cpu/reference/tree_ensemble_reference.h"
+#include "onnx_light_cpu/impl/traditionalml/tree_ensemble.h"
 
 #include <algorithm>
 #include <chrono>
@@ -24,10 +24,10 @@ namespace {
 using onnx_light_cpu::ExecutionBlockFn;
 using onnx_light_cpu::ExecutionExecutorScope;
 using onnx_light_cpu::ExecutionExecutorView;
-using onnx_light_cpu::reference::TreeBranchMode;
-using onnx_light_cpu::reference::TreeEnsembleAttributes;
-using onnx_light_cpu::reference::TreeEnsembleExecutionStrategy;
-using onnx_light_cpu::reference::TreeEnsemblePlan;
+using onnx_light_cpu::TreeBranchMode;
+using onnx_light_cpu::TreeEnsembleAttributes;
+using onnx_light_cpu::TreeEnsembleExecutionStrategy;
+using onnx_light_cpu::TreeEnsemblePlan;
 
 struct ThreadExecutor {
   explicit ThreadExecutor(std::size_t threads) {

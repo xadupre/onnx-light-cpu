@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "onnx_light_cpu/reference/tree_ensemble_corpus.h"
-#include "onnx_light_cpu/reference/tree_ensemble_reference.h"
+#include "onnx_light_cpu/impl/traditionalml/tree_ensemble.h"
+#include "onnx_light_cpu/testing/tree_ensemble_corpus.h"
 
 #include "onnx_light_cpu/impl/execution.h"
 
@@ -26,29 +26,29 @@
 
 namespace {
 
-using onnx_light_cpu::reference::ClassLabels;
-using onnx_light_cpu::reference::GenerateTreeEnsembleV5Corpus;
-using onnx_light_cpu::reference::LegacyTreeAttributes;
-using onnx_light_cpu::reference::TreeAggregate;
-using onnx_light_cpu::reference::TreeBranchMode;
-using onnx_light_cpu::reference::TreeEnsembleAttributes;
-using onnx_light_cpu::reference::TreeEnsembleCalibrationCandidate;
-using onnx_light_cpu::reference::TreeEnsembleCalibrationMeasurement;
-using onnx_light_cpu::reference::TreeEnsembleCalibrationOptions;
-using onnx_light_cpu::reference::TreeEnsembleCalibrationStage;
-using onnx_light_cpu::reference::TreeEnsembleClassifierAttributes;
-using onnx_light_cpu::reference::TreeEnsembleExecutionStrategy;
-using onnx_light_cpu::reference::TreeEnsembleNodeLayout;
-using onnx_light_cpu::reference::TreeEnsemblePlan;
-using onnx_light_cpu::reference::TreeEnsembleProfileSource;
-using onnx_light_cpu::reference::TreeEnsembleReference;
-using onnx_light_cpu::reference::TreeEnsembleRegressorAttributes;
-using onnx_light_cpu::reference::TreeEnsembleTraversal;
-using onnx_light_cpu::reference::TreeEnsembleTuningContext;
-using onnx_light_cpu::reference::TreeEnsembleTuningPolicy;
-using onnx_light_cpu::reference::TreeEnsembleTuningRegistry;
-using onnx_light_cpu::reference::TreePostTransform;
-using onnx_light_cpu::reference::TreeValueType;
+using onnx_light_cpu::ClassLabels;
+using onnx_light_cpu::LegacyTreeAttributes;
+using onnx_light_cpu::TreeAggregate;
+using onnx_light_cpu::TreeBranchMode;
+using onnx_light_cpu::TreeEnsembleAttributes;
+using onnx_light_cpu::TreeEnsembleCalibrationCandidate;
+using onnx_light_cpu::TreeEnsembleCalibrationMeasurement;
+using onnx_light_cpu::TreeEnsembleCalibrationOptions;
+using onnx_light_cpu::TreeEnsembleCalibrationStage;
+using onnx_light_cpu::TreeEnsembleClassifierAttributes;
+using onnx_light_cpu::TreeEnsembleExecutionStrategy;
+using onnx_light_cpu::TreeEnsembleNodeLayout;
+using onnx_light_cpu::TreeEnsembleOracle;
+using onnx_light_cpu::TreeEnsemblePlan;
+using onnx_light_cpu::TreeEnsembleProfileSource;
+using onnx_light_cpu::TreeEnsembleRegressorAttributes;
+using onnx_light_cpu::TreeEnsembleTraversal;
+using onnx_light_cpu::TreeEnsembleTuningContext;
+using onnx_light_cpu::TreeEnsembleTuningPolicy;
+using onnx_light_cpu::TreeEnsembleTuningRegistry;
+using onnx_light_cpu::TreePostTransform;
+using onnx_light_cpu::TreeValueType;
+using onnx_light_cpu::testing::GenerateTreeEnsembleV5Corpus;
 
 TreeEnsembleAttributes Stump() {
   TreeEnsembleAttributes attributes;
@@ -160,7 +160,7 @@ LegacyTreeAttributes LegacyStump() {
   return tree;
 }
 
-TEST(TreeEnsembleReference, CorpusCoversV5ContractAndIsDeterministic) {
+TEST(TreeEnsembleOracle, CorpusCoversV5ContractAndIsDeterministic) {
   const auto cases = GenerateTreeEnsembleV5Corpus();
   ASSERT_GE(cases.size(), 36U);
   std::set<TreeBranchMode> modes;
@@ -175,7 +175,7 @@ TEST(TreeEnsembleReference, CorpusCoversV5ContractAndIsDeterministic) {
     EXPECT_EQ(test_case.domain, "ai.onnx.ml");
     EXPECT_EQ(test_case.op_type, "TreeEnsemble");
     EXPECT_EQ(test_case.opset, 5);
-    EXPECT_EQ(TreeEnsembleReference(test_case.attributes).Evaluate(test_case.input, test_case.rows),
+    EXPECT_EQ(TreeEnsembleOracle(test_case.attributes).Evaluate(test_case.input, test_case.rows),
               test_case.expected)
         << test_case.name;
     modes.insert(test_case.attributes.nodes_modes.begin(), test_case.attributes.nodes_modes.end());
@@ -198,7 +198,7 @@ TEST(TreeEnsembleReference, CorpusCoversV5ContractAndIsDeterministic) {
   EXPECT_TRUE(has_depth_extreme);
 }
 
-TEST(TreeEnsembleReference, CanonicalPlanLowersAndEvaluatesDeterministically) {
+TEST(TreeEnsembleOracle, CanonicalPlanLowersAndEvaluatesDeterministically) {
   TreeEnsembleAttributes attributes = Stump();
   attributes.value_type = TreeValueType::kFloat32;
   const TreeEnsemblePlan plan(attributes);
@@ -210,18 +210,18 @@ TEST(TreeEnsembleReference, CanonicalPlanLowersAndEvaluatesDeterministically) {
   EXPECT_EQ(plan.Evaluate({-1.0, 3.0}, 2), (std::vector<double>{1.0, -1.0}));
 }
 
-TEST(TreeEnsembleReference, CanonicalPlanAppliesBaseValues) {
+TEST(TreeEnsembleOracle, CanonicalPlanAppliesBaseValues) {
   TreeEnsembleAttributes attributes = Stump();
   attributes.value_type = TreeValueType::kFloat32;
   attributes.base_values = {0.5};
   const TreeEnsemblePlan plan(attributes);
   EXPECT_EQ(plan.base_values(), (std::vector<double>{0.5}));
   EXPECT_EQ(plan.Evaluate({-1.0, 3.0}, 2), (std::vector<double>{1.5, -0.5}));
-  EXPECT_EQ(TreeEnsembleReference(attributes).Evaluate({-1.0, 3.0}, 2),
+  EXPECT_EQ(TreeEnsembleOracle(attributes).Evaluate({-1.0, 3.0}, 2),
             (std::vector<double>{1.5, -0.5}));
 }
 
-TEST(TreeEnsembleReference, SchedulingDecisionMatchesOrtCrossovers) {
+TEST(TreeEnsembleOracle, SchedulingDecisionMatchesOrtCrossovers) {
   const TreeEnsemblePlan small_forest(StumpForest(79));
   EXPECT_EQ(small_forest.SelectExecution(1, 4).strategy,
             TreeEnsembleExecutionStrategy::kTreeMajorBatch);
@@ -248,7 +248,7 @@ TEST(TreeEnsembleReference, SchedulingDecisionMatchesOrtCrossovers) {
             TreeEnsembleExecutionStrategy::kTreeParallel);
 }
 
-TEST(TreeEnsembleReference, SchedulingWorkspaceIsBoundedByActiveBatch) {
+TEST(TreeEnsembleOracle, SchedulingWorkspaceIsBoundedByActiveBatch) {
   const TreeEnsemblePlan plan(StumpForest(81));
   const auto one_row = plan.SelectExecution(1, 4);
   const auto many_rows = plan.SelectExecution(1000000, 4);
@@ -258,7 +258,7 @@ TEST(TreeEnsembleReference, SchedulingWorkspaceIsBoundedByActiveBatch) {
   EXPECT_EQ(many_rows.workspace_bytes, 4U * 128U * 2U * accumulator_bytes);
 }
 
-TEST(TreeEnsembleReference, PreparedPolicyCoversEveryInclusiveRowCrossover) {
+TEST(TreeEnsembleOracle, PreparedPolicyCoversEveryInclusiveRowCrossover) {
   const TreeEnsemblePlan plan(StumpForest(81), TreeEnsembleTuningContext{"test-cpu", 4}, nullptr);
   const auto &regions = plan.tuning_policy().regions;
   ASSERT_EQ(regions.size(), 3U);
@@ -281,7 +281,7 @@ TEST(TreeEnsembleReference, PreparedPolicyCoversEveryInclusiveRowCrossover) {
   EXPECT_EQ(few_trees.SelectExecution(51, 4).strategy, TreeEnsembleExecutionStrategy::kRowParallel);
 }
 
-TEST(TreeEnsembleReference, ModelKeyAndStructuralDigestAreStableAndExact) {
+TEST(TreeEnsembleOracle, ModelKeyAndStructuralDigestAreStableAndExact) {
   TreeEnsembleAttributes first = StumpForest(4);
   TreeEnsembleAttributes value_only = first;
   value_only.nodes_splits[0] = 42.0;
@@ -306,7 +306,7 @@ TEST(TreeEnsembleReference, ModelKeyAndStructuralDigestAreStableAndExact) {
   EXPECT_EQ(first_plan.model_key().opset, 5);
 }
 
-TEST(TreeEnsembleReference, ExactProfileOverridesPortableAndDoesNotLeakAcrossModels) {
+TEST(TreeEnsembleOracle, ExactProfileOverridesPortableAndDoesNotLeakAcrossModels) {
   const TreeEnsembleTuningContext context{"test-cpu", 4};
   const TreeEnsemblePlan baseline(StumpForest(81), context, nullptr);
   TreeEnsembleTuningRegistry registry;
@@ -335,7 +335,7 @@ TEST(TreeEnsembleReference, ExactProfileOverridesPortableAndDoesNotLeakAcrossMod
   EXPECT_NE(other_threads.profile_source(), TreeEnsembleProfileSource::kExact);
 }
 
-TEST(TreeEnsembleReference, ProfileLifecycleIsCapturedAndHotPathOwnsItsPolicy) {
+TEST(TreeEnsembleOracle, ProfileLifecycleIsCapturedAndHotPathOwnsItsPolicy) {
   const TreeEnsembleTuningContext context{"test-cpu", 4};
   std::unique_ptr<TreeEnsemblePlan> captured;
   std::uint64_t captured_generation = 0;
@@ -359,7 +359,7 @@ TEST(TreeEnsembleReference, ProfileLifecycleIsCapturedAndHotPathOwnsItsPolicy) {
   EXPECT_EQ(captured->SelectExecution(64, 4).strategy, TreeEnsembleExecutionStrategy::kRowParallel);
 }
 
-TEST(TreeEnsembleReference, InvalidOrIncompatiblePoliciesUseExplicitSafeFallback) {
+TEST(TreeEnsembleOracle, InvalidOrIncompatiblePoliciesUseExplicitSafeFallback) {
   TreeEnsembleTuningRegistry registry;
   TreeEnsembleTuningPolicy unordered =
       OneRegionPolicy(TreeEnsembleExecutionStrategy::kRowParallel, 1, 1);
@@ -388,7 +388,7 @@ TEST(TreeEnsembleReference, InvalidOrIncompatiblePoliciesUseExplicitSafeFallback
   EXPECT_LE(layout_fallback.tuning_policy().regions.size(), 4U);
 }
 
-TEST(TreeEnsembleReference, CalibrationRejectsInvalidCandidatesAndPersistsEvidenceAtomically) {
+TEST(TreeEnsembleOracle, CalibrationRejectsInvalidCandidatesAndPersistsEvidenceAtomically) {
   const TreeEnsembleTuningContext context{"calibration-cpu", 4};
   const TreeEnsemblePlan key_plan(StumpForest(3), context, nullptr);
   const TreeEnsembleTuningPolicy fallback =
@@ -484,7 +484,7 @@ TEST(TreeEnsembleReference, CalibrationRejectsInvalidCandidatesAndPersistsEviden
   std::filesystem::remove(evidence_path);
 }
 
-TEST(TreeEnsembleReference, CalibrationBudgetFailurePreservesActiveProfileAndCanBeDisabled) {
+TEST(TreeEnsembleOracle, CalibrationBudgetFailurePreservesActiveProfileAndCanBeDisabled) {
   const TreeEnsembleTuningContext context{"calibration-cpu", 4};
   const TreeEnsemblePlan key_plan(StumpForest(3), context, nullptr);
   const TreeEnsembleTuningPolicy active =
@@ -522,7 +522,7 @@ TEST(TreeEnsembleReference, CalibrationBudgetFailurePreservesActiveProfileAndCan
   EXPECT_FALSE(registry.InspectExact(key_plan.model_key()).calibration_enabled);
 }
 
-TEST(TreeEnsembleReference, AdvancedCandidatesAreStructuralAndDeterministic) {
+TEST(TreeEnsembleOracle, AdvancedCandidatesAreStructuralAndDeterministic) {
   TreeEnsembleAttributes attributes = StumpForest(3, 64);
   attributes.value_type = TreeValueType::kFloat16;
   attributes.nodes_hitrates = {0.9, 0.5, 0.1};
@@ -559,16 +559,16 @@ TEST(TreeEnsembleReference, AdvancedCandidatesAreStructuralAndDeterministic) {
                                      &registry);
   const std::vector<double> input{-1.0, 1.0, -1.0, 1.0, -1.0};
   EXPECT_EQ(sparse_plan.Evaluate(input, input.size()),
-            TreeEnsembleReference(attributes).Evaluate(input, input.size()));
+            TreeEnsembleOracle(attributes).Evaluate(input, input.size()));
   EXPECT_LT(sparse_plan.SelectExecution(input.size(), 1).workspace_bytes,
             plan.SelectExecution(input.size(), 1).workspace_bytes);
 }
 
-TEST(TreeEnsembleReference, AdvancedLayoutsAndInterleavingRetainPortableResults) {
+TEST(TreeEnsembleOracle, AdvancedLayoutsAndInterleavingRetainPortableResults) {
   TreeEnsembleAttributes attributes = SymmetricTree();
   attributes.nodes_hitrates = {0.8, 0.2, 0.7};
   const std::vector<double> input{-2.0, -2.0, -2.0, 0.0, 2.0, 0.0, 2.0, 2.0, 0.0, 0.0};
-  const std::vector<double> expected = TreeEnsembleReference(attributes).Evaluate(input, 5);
+  const std::vector<double> expected = TreeEnsembleOracle(attributes).Evaluate(input, 5);
   const TreeEnsembleTuningContext context{"layout-cpu", 2};
   const TreeEnsemblePlan key_plan(attributes, context, nullptr);
   EXPECT_TRUE(key_plan.all_trees_are_symmetric());
@@ -594,7 +594,7 @@ TEST(TreeEnsembleReference, AdvancedLayoutsAndInterleavingRetainPortableResults)
   EXPECT_EQ(plan.Evaluate(input, 5), expected);
 }
 
-TEST(TreeEnsembleReference, CalibrationComposesStagesAndEnforcesAdvancedGates) {
+TEST(TreeEnsembleOracle, CalibrationComposesStagesAndEnforcesAdvancedGates) {
   const TreeEnsembleTuningContext context{"advanced-calibration-cpu", 4};
   const TreeEnsemblePlan key_plan(Stump(), context, nullptr);
   const TreeEnsembleTuningPolicy fallback =
@@ -671,7 +671,7 @@ TEST(TreeEnsembleReference, CalibrationComposesStagesAndEnforcesAdvancedGates) {
   EXPECT_EQ(memory.evidence.back().rejected_reason, "measured memory budget exceeded");
 }
 
-TEST(TreeEnsembleReference, OptimizedFloat16MatchesCompleteV5Corpus) {
+TEST(TreeEnsembleOracle, OptimizedFloat16MatchesCompleteV5Corpus) {
   const TreeEnsembleTuningContext context{"float16-cpu", 1};
   for (const auto &test_case : GenerateTreeEnsembleV5Corpus()) {
     if (test_case.attributes.value_type != TreeValueType::kFloat16) {
@@ -687,14 +687,14 @@ TEST(TreeEnsembleReference, OptimizedFloat16MatchesCompleteV5Corpus) {
   }
 }
 
-TEST(TreeEnsembleReference, SchedulingPreservesSparseWorkspaceDensity) {
+TEST(TreeEnsembleOracle, SchedulingPreservesSparseWorkspaceDensity) {
   const TreeEnsembleAttributes attributes = StumpForest(3, 64);
   const TreeEnsembleTuningContext context{"sparse-scheduling-cpu", 4};
   const TreeEnsemblePlan key_plan(attributes, context, nullptr);
   const TreeEnsembleTuningPolicy fallback =
       OneRegionPolicy(TreeEnsembleExecutionStrategy::kTreeMajorBatch, 1, 64);
   TreeEnsembleTuningPolicy sparse = fallback;
-  sparse.target_layout = onnx_light_cpu::reference::TreeEnsembleTargetLayout::kSparse;
+  sparse.target_layout = onnx_light_cpu::TreeEnsembleTargetLayout::kSparse;
   sparse.regions[0].workspace_bytes = 3U * (sizeof(double) + sizeof(std::size_t));
   TreeEnsembleTuningPolicy scheduling = fallback;
   scheduling.regions[0].maximum_threads = 4;
@@ -710,13 +710,13 @@ TEST(TreeEnsembleReference, SchedulingPreservesSparseWorkspaceDensity) {
        {"scheduling", TreeEnsembleCalibrationStage::kScheduling, scheduling}},
       options, [](const TreeEnsembleTuningPolicy &policy, std::size_t, std::size_t) {
         const bool sparse =
-            policy.target_layout == onnx_light_cpu::reference::TreeEnsembleTargetLayout::kSparse;
+            policy.target_layout == onnx_light_cpu::TreeEnsembleTargetLayout::kSparse;
         const double sample =
             sparse ? (policy.regions[0].maximum_threads == 4 ? 60.0 : 80.0) : 100.0;
         return TreeEnsembleCalibrationMeasurement{true, {sample}, 1, {}};
       });
   EXPECT_EQ(report.selected_policy.target_layout,
-            onnx_light_cpu::reference::TreeEnsembleTargetLayout::kSparse);
+            onnx_light_cpu::TreeEnsembleTargetLayout::kSparse);
   EXPECT_EQ(report.selected_policy.regions[0].maximum_threads, 4U);
   EXPECT_EQ(report.selected_policy.regions[0].workspace_bytes,
             4U * 3U * (sizeof(double) + sizeof(std::size_t)));
@@ -724,16 +724,16 @@ TEST(TreeEnsembleReference, SchedulingPreservesSparseWorkspaceDensity) {
             TreeEnsembleProfileSource::kExact);
 }
 
-TEST(TreeEnsembleReference, EverySchedulingStrategyMatchesScalarAcrossThreadCounts) {
+TEST(TreeEnsembleOracle, EverySchedulingStrategyMatchesScalarAcrossThreadCounts) {
   const TreeEnsembleAttributes attributes = StumpForest(81);
-  const TreeEnsembleReference reference(attributes);
+  const TreeEnsembleOracle oracle(attributes);
   const TreeEnsemblePlan plan(attributes);
   for (const std::size_t rows : {1U, 49U, 50U, 51U, 129U}) {
     std::vector<double> input(rows);
     for (std::size_t row = 0; row < rows; ++row) {
       input[row] = (row % 2 == 0) ? -1.0 : 1.0;
     }
-    const std::vector<double> expected = reference.Evaluate(input, rows);
+    const std::vector<double> expected = oracle.Evaluate(input, rows);
     for (const int64_t threads : {1, 2, 4}) {
       ThreadedExecutor executor;
       onnx_light_cpu::ExecutionExecutorView view{&executor, threads, &ThreadedExecutor::Run};
@@ -745,7 +745,7 @@ TEST(TreeEnsembleReference, EverySchedulingStrategyMatchesScalarAcrossThreadCoun
   }
 
   const TreeEnsembleAttributes row_attributes = StumpForest(3);
-  const TreeEnsembleReference row_reference(row_attributes);
+  const TreeEnsembleOracle row_oracle(row_attributes);
   const TreeEnsemblePlan row_plan(row_attributes);
   std::vector<double> input(51, -1.0);
   ThreadedExecutor executor;
@@ -753,10 +753,10 @@ TEST(TreeEnsembleReference, EverySchedulingStrategyMatchesScalarAcrossThreadCoun
   onnx_light_cpu::ExecutionExecutorScope scope(&view);
   EXPECT_EQ(row_plan.SelectExecution(input.size()).strategy,
             TreeEnsembleExecutionStrategy::kRowParallel);
-  EXPECT_EQ(row_plan.Evaluate(input, input.size()), row_reference.Evaluate(input, input.size()));
+  EXPECT_EQ(row_plan.Evaluate(input, input.size()), row_oracle.Evaluate(input, input.size()));
 }
 
-TEST(TreeEnsembleReference, ThresholdsSignedZeroInfinityAndMissingRouting) {
+TEST(TreeEnsembleOracle, ThresholdsSignedZeroInfinityAndMissingRouting) {
   TreeEnsembleAttributes attributes = Stump();
   attributes.value_type = TreeValueType::kFloat64;
   attributes.nodes_splits = {-0.0};
@@ -764,30 +764,30 @@ TEST(TreeEnsembleReference, ThresholdsSignedZeroInfinityAndMissingRouting) {
   attributes.nodes_missing_value_tracks_true = {1};
   const double infinity = std::numeric_limits<double>::infinity();
   const double nan = std::numeric_limits<double>::quiet_NaN();
-  const std::vector<double> actual = TreeEnsembleReference(std::move(attributes))
-                                         .Evaluate({-0.0, 0.0, -infinity, infinity, nan}, 5);
+  const std::vector<double> actual =
+      TreeEnsembleOracle(std::move(attributes)).Evaluate({-0.0, 0.0, -infinity, infinity, nan}, 5);
   EXPECT_EQ(actual, (std::vector<double>{1.0, 1.0, -1.0, -1.0, 1.0}));
 }
 
-TEST(TreeEnsembleReference, Float16RoundsAtTieToEvenBoundary) {
+TEST(TreeEnsembleOracle, Float16RoundsAtTieToEvenBoundary) {
   TreeEnsembleAttributes attributes = Stump();
   attributes.value_type = TreeValueType::kFloat16;
   attributes.nodes_splits = {1.00048828125};
   const std::vector<double> actual =
-      TreeEnsembleReference(std::move(attributes)).Evaluate({1.0, 1.00048828125, 1.0009765625}, 3);
+      TreeEnsembleOracle(std::move(attributes)).Evaluate({1.0, 1.00048828125, 1.0009765625}, 3);
   EXPECT_EQ(actual, (std::vector<double>{1.0, 1.0, -1.0}));
 }
 
-TEST(TreeEnsembleReference, MembershipUsesNonEmptyNanDelimitedSets) {
+TEST(TreeEnsembleOracle, MembershipUsesNonEmptyNanDelimitedSets) {
   TreeEnsembleAttributes attributes = Stump();
   attributes.nodes_modes = {TreeBranchMode::kMember};
   attributes.membership_values = {-0.0, 2.0, 2.0, std::numeric_limits<double>::quiet_NaN()};
   const std::vector<double> actual =
-      TreeEnsembleReference(std::move(attributes)).Evaluate({0.0, 2.0, 3.0}, 3);
+      TreeEnsembleOracle(std::move(attributes)).Evaluate({0.0, 2.0, 3.0}, 3);
   EXPECT_EQ(actual, (std::vector<double>{1.0, 1.0, -1.0}));
 }
 
-TEST(TreeEnsembleReference, AggregatesMultipleTargetsAndAppliesTransforms) {
+TEST(TreeEnsembleOracle, AggregatesMultipleTargetsAndAppliesTransforms) {
   TreeEnsembleAttributes attributes;
   attributes.n_features = 1;
   attributes.n_targets = 2;
@@ -804,14 +804,13 @@ TEST(TreeEnsembleReference, AggregatesMultipleTargetsAndAppliesTransforms) {
   attributes.leaf_weights = {2.0, 4.0, 1.0, 3.0};
   attributes.aggregate = TreeAggregate::kAverage;
   attributes.post_transform = TreePostTransform::kSoftmax;
-  const std::vector<double> actual =
-      TreeEnsembleReference(std::move(attributes)).Evaluate({0.0}, 1);
+  const std::vector<double> actual = TreeEnsembleOracle(std::move(attributes)).Evaluate({0.0}, 1);
   ASSERT_EQ(actual.size(), 2U);
   EXPECT_NEAR(actual[0], 0.6224593, 1e-6);
   EXPECT_NEAR(actual[1], 0.3775407, 1e-6);
 }
 
-TEST(TreeEnsembleReference, AggregatesMinMaxWithoutZeroBiasAndRetainsAverageTreeDivisor) {
+TEST(TreeEnsembleOracle, AggregatesMinMaxWithoutZeroBiasAndRetainsAverageTreeDivisor) {
   TreeEnsembleAttributes average;
   average.n_features = 1;
   average.n_targets = 2;
@@ -826,25 +825,25 @@ TEST(TreeEnsembleReference, AggregatesMinMaxWithoutZeroBiasAndRetainsAverageTree
   average.nodes_falseleafs = {1, 1};
   average.leaf_targetids = {0, 0, 1, 1};
   average.leaf_weights = {6.0, 4.0, 2.0, 1.0};
-  const std::vector<double> average_actual = TreeEnsembleReference(average).Evaluate({0.0}, 1);
+  const std::vector<double> average_actual = TreeEnsembleOracle(average).Evaluate({0.0}, 1);
   EXPECT_EQ(average_actual, (std::vector<double>{3.0, 1.0}));
 
   TreeEnsembleAttributes minimum = average;
   minimum.aggregate = TreeAggregate::kMin;
   minimum.leaf_weights = {5.0, 10.0, 3.0, 7.0};
-  const std::vector<double> minimum_actual = TreeEnsembleReference(minimum).Evaluate({0.0}, 1);
+  const std::vector<double> minimum_actual = TreeEnsembleOracle(minimum).Evaluate({0.0}, 1);
   EXPECT_EQ(minimum_actual, (std::vector<double>{5.0, 3.0}));
 
   TreeEnsembleAttributes maximum = average;
   maximum.aggregate = TreeAggregate::kMax;
   maximum.leaf_weights = {-5.0, -10.0, -3.0, -7.0};
-  const std::vector<double> maximum_actual = TreeEnsembleReference(maximum).Evaluate({0.0}, 1);
+  const std::vector<double> maximum_actual = TreeEnsembleOracle(maximum).Evaluate({0.0}, 1);
   EXPECT_EQ(maximum_actual, (std::vector<double>{-5.0, -3.0}));
 
   TreeEnsembleAttributes biased_min = minimum;
   biased_min.base_values = {10.0, 2.0};
   biased_min.leaf_weights = {5.0, 12.0, 7.0, 9.0};
-  EXPECT_EQ(TreeEnsembleReference(biased_min).Evaluate({0.0}, 1), (std::vector<double>{15.0, 9.0}));
+  EXPECT_EQ(TreeEnsembleOracle(biased_min).Evaluate({0.0}, 1), (std::vector<double>{15.0, 9.0}));
 
   const TreeEnsemblePlan minimum_plan(minimum);
   EXPECT_EQ(minimum_plan.Evaluate({0.0}, 1), (std::vector<double>{5.0, 3.0}));
@@ -852,29 +851,29 @@ TEST(TreeEnsembleReference, AggregatesMinMaxWithoutZeroBiasAndRetainsAverageTree
   EXPECT_EQ(maximum_plan.Evaluate({0.0}, 1), (std::vector<double>{-5.0, -3.0}));
 }
 
-TEST(TreeEnsembleReference, RejectsMalformedAttributeLengthsAndIndices) {
+TEST(TreeEnsembleOracle, RejectsMalformedAttributeLengthsAndIndices) {
   TreeEnsembleAttributes attributes = Stump();
   attributes.nodes_splits.clear();
-  EXPECT_THROW(TreeEnsembleReference(std::move(attributes)), std::invalid_argument);
+  EXPECT_THROW(TreeEnsembleOracle(std::move(attributes)), std::invalid_argument);
 
   attributes = Stump();
   attributes.nodes_featureids[0] = 1;
-  EXPECT_THROW(TreeEnsembleReference(std::move(attributes)), std::invalid_argument);
+  EXPECT_THROW(TreeEnsembleOracle(std::move(attributes)), std::invalid_argument);
 
   attributes = Stump();
   attributes.nodes_truenodeids[0] = 2;
-  EXPECT_THROW(TreeEnsembleReference(std::move(attributes)), std::invalid_argument);
+  EXPECT_THROW(TreeEnsembleOracle(std::move(attributes)), std::invalid_argument);
 
   attributes = Stump();
   attributes.leaf_targetids[0] = 1;
-  EXPECT_THROW(TreeEnsembleReference(std::move(attributes)), std::invalid_argument);
+  EXPECT_THROW(TreeEnsembleOracle(std::move(attributes)), std::invalid_argument);
 
   attributes = Stump();
   attributes.tree_roots[0] = 1;
-  EXPECT_THROW(TreeEnsembleReference(std::move(attributes)), std::invalid_argument);
+  EXPECT_THROW(TreeEnsembleOracle(std::move(attributes)), std::invalid_argument);
 }
 
-TEST(TreeEnsembleReference, RejectsCyclesSharedAndUnreachableNodes) {
+TEST(TreeEnsembleOracle, RejectsCyclesSharedAndUnreachableNodes) {
   TreeEnsembleAttributes attributes = Stump();
   attributes.nodes_featureids = {0, 0};
   attributes.nodes_splits = {0, 0};
@@ -883,13 +882,13 @@ TEST(TreeEnsembleReference, RejectsCyclesSharedAndUnreachableNodes) {
   attributes.nodes_falsenodeids = {0, 1};
   attributes.nodes_trueleafs = {0, 0};
   attributes.nodes_falseleafs = {1, 1};
-  EXPECT_THROW(TreeEnsembleReference{attributes}, std::invalid_argument);
+  EXPECT_THROW(TreeEnsembleOracle{attributes}, std::invalid_argument);
 
   attributes.nodes_truenodeids = {1, 0};
   attributes.nodes_falsenodeids = {1, 1};
   attributes.nodes_trueleafs = {0, 1};
   attributes.nodes_falseleafs[0] = 0;
-  EXPECT_THROW(TreeEnsembleReference{attributes}, std::invalid_argument);
+  EXPECT_THROW(TreeEnsembleOracle{attributes}, std::invalid_argument);
 
   attributes = Stump();
   attributes.nodes_featureids.push_back(0);
@@ -899,25 +898,25 @@ TEST(TreeEnsembleReference, RejectsCyclesSharedAndUnreachableNodes) {
   attributes.nodes_falsenodeids.push_back(1);
   attributes.nodes_trueleafs.push_back(1);
   attributes.nodes_falseleafs.push_back(1);
-  EXPECT_THROW(TreeEnsembleReference(std::move(attributes)), std::invalid_argument);
+  EXPECT_THROW(TreeEnsembleOracle(std::move(attributes)), std::invalid_argument);
 }
 
-TEST(TreeEnsembleReference, RejectsMalformedMembershipDelimiters) {
+TEST(TreeEnsembleOracle, RejectsMalformedMembershipDelimiters) {
   TreeEnsembleAttributes attributes = Stump();
   attributes.nodes_modes = {TreeBranchMode::kMember};
-  EXPECT_THROW(TreeEnsembleReference{attributes}, std::invalid_argument);
+  EXPECT_THROW(TreeEnsembleOracle{attributes}, std::invalid_argument);
 
   attributes.membership_values = {std::numeric_limits<double>::quiet_NaN()};
-  EXPECT_THROW(TreeEnsembleReference{attributes}, std::invalid_argument);
+  EXPECT_THROW(TreeEnsembleOracle{attributes}, std::invalid_argument);
 
   attributes.membership_values = {1.0};
-  EXPECT_THROW(TreeEnsembleReference{attributes}, std::invalid_argument);
+  EXPECT_THROW(TreeEnsembleOracle{attributes}, std::invalid_argument);
 
   attributes.membership_values = {1.0, std::numeric_limits<double>::quiet_NaN(), 2.0};
-  EXPECT_THROW(TreeEnsembleReference(std::move(attributes)), std::invalid_argument);
+  EXPECT_THROW(TreeEnsembleOracle(std::move(attributes)), std::invalid_argument);
 }
 
-TEST(TreeEnsembleReference, DeprecatedRegressorV5AdapterHandlesIntegerInputs) {
+TEST(TreeEnsembleOracle, DeprecatedRegressorV5AdapterHandlesIntegerInputs) {
   TreeEnsembleRegressorAttributes attributes;
   attributes.tree = LegacyStump();
   attributes.n_targets = 2;
@@ -929,7 +928,7 @@ TEST(TreeEnsembleReference, DeprecatedRegressorV5AdapterHandlesIntegerInputs) {
   attributes.target_weights = {1.0, -1.0, 2.0, -2.0};
   attributes.base_values = {0.5, 0.5};
   const std::vector<float> actual =
-      onnx_light_cpu::reference::EvaluateTreeEnsembleRegressor(attributes, {-1, 1}, 2);
+      onnx_light_cpu::EvaluateTreeEnsembleRegressor(attributes, {-1, 1}, 2);
   ASSERT_EQ(actual.size(), 4U);
   EXPECT_NEAR(actual[0], 0.8175745f, 1e-6f);
   EXPECT_NEAR(actual[1], 0.3775407f, 1e-6f);
@@ -937,7 +936,7 @@ TEST(TreeEnsembleReference, DeprecatedRegressorV5AdapterHandlesIntegerInputs) {
   EXPECT_NEAR(actual[3], 0.1824255f, 1e-6f);
 }
 
-TEST(TreeEnsembleReference, DeprecatedClassifierComposesLabelsAndUsesStableTies) {
+TEST(TreeEnsembleOracle, DeprecatedClassifierComposesLabelsAndUsesStableTies) {
   TreeEnsembleClassifierAttributes attributes;
   attributes.tree = LegacyStump();
   attributes.class_treeids = {0, 0, 0, 0};
@@ -945,18 +944,17 @@ TEST(TreeEnsembleReference, DeprecatedClassifierComposesLabelsAndUsesStableTies)
   attributes.class_ids = {0, 1, 0, 1};
   attributes.class_weights = {1.0, 1.0, 0.0, 2.0};
   attributes.labels = ClassLabels(std::vector<std::string>{"left", "right"});
-  const auto actual =
-      onnx_light_cpu::reference::EvaluateTreeEnsembleClassifier(attributes, {-1, 1}, 2);
+  const auto actual = onnx_light_cpu::EvaluateTreeEnsembleClassifier(attributes, {-1, 1}, 2);
   EXPECT_TRUE(actual.integer_labels.empty());
   EXPECT_EQ(actual.string_labels, (std::vector<std::string>{"left", "right"}));
   EXPECT_EQ(actual.scores, (std::vector<float>{1.0f, 1.0f, 0.0f, 2.0f}));
 }
 
-TEST(TreeEnsembleReference, DeprecatedAdaptersRejectLabelsAndTargetMetadata) {
+TEST(TreeEnsembleOracle, DeprecatedAdaptersRejectLabelsAndTargetMetadata) {
   TreeEnsembleClassifierAttributes classifier;
   classifier.tree = LegacyStump();
   classifier.labels = ClassLabels(std::vector<std::int64_t>{});
-  EXPECT_THROW(onnx_light_cpu::reference::EvaluateTreeEnsembleClassifier(classifier, {0}, 1),
+  EXPECT_THROW(onnx_light_cpu::EvaluateTreeEnsembleClassifier(classifier, {0}, 1),
                std::invalid_argument);
 
   TreeEnsembleRegressorAttributes regressor;
@@ -966,7 +964,7 @@ TEST(TreeEnsembleReference, DeprecatedAdaptersRejectLabelsAndTargetMetadata) {
   regressor.target_nodeids = {1};
   regressor.target_ids = {1};
   regressor.target_weights = {1};
-  EXPECT_THROW(onnx_light_cpu::reference::EvaluateTreeEnsembleRegressor(regressor, {-1}, 1),
+  EXPECT_THROW(onnx_light_cpu::EvaluateTreeEnsembleRegressor(regressor, {-1}, 1),
                std::invalid_argument);
 }
 

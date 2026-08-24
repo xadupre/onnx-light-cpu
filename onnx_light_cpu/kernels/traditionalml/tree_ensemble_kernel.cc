@@ -102,7 +102,7 @@ std::vector<double> ReadValueTensor(const NodeProto &node, const char *name, boo
   }
 }
 
-std::vector<reference::TreeBranchMode> ReadNodeModes(const NodeProto &node) {
+std::vector<TreeBranchMode> ReadNodeModes(const NodeProto &node) {
   const Tensor tensor = GetTensorAttribute(node, "nodes_modes", true);
   if (static_cast<DataType>(tensor.data_type) != DataType::UINT8) {
     throw std::invalid_argument(
@@ -110,41 +110,41 @@ std::vector<reference::TreeBranchMode> ReadNodeModes(const NodeProto &node) {
   }
   const std::size_t size = static_cast<std::size_t>(tensor.element_count());
   const auto *source = reinterpret_cast<const std::uint8_t *>(tensor.bytes());
-  std::vector<reference::TreeBranchMode> modes;
+  std::vector<TreeBranchMode> modes;
   modes.reserve(size);
   for (std::size_t index = 0; index < size; ++index) {
-    if (source[index] > static_cast<std::uint8_t>(reference::TreeBranchMode::kMember)) {
+    if (source[index] > static_cast<std::uint8_t>(TreeBranchMode::kMember)) {
       throw std::invalid_argument(
           "onnx_light_cpu::TreeEnsemble: 'nodes_modes' contains an invalid mode.");
     }
-    modes.push_back(static_cast<reference::TreeBranchMode>(source[index]));
+    modes.push_back(static_cast<TreeBranchMode>(source[index]));
   }
   return modes;
 }
 
-reference::TreeValueType ValueType(std::int32_t data_type) {
+TreeValueType ValueType(std::int32_t data_type) {
   switch (static_cast<DataType>(data_type)) {
   case DataType::FLOAT:
-    return reference::TreeValueType::kFloat32;
+    return TreeValueType::kFloat32;
   case DataType::DOUBLE:
-    return reference::TreeValueType::kFloat64;
+    return TreeValueType::kFloat64;
   case DataType::FLOAT16:
-    return reference::TreeValueType::kFloat16;
+    return TreeValueType::kFloat16;
   default:
     throw std::invalid_argument(
         "onnx_light_cpu::TreeEnsemble: only FLOAT, DOUBLE and FLOAT16 inputs are supported.");
   }
 }
 
-reference::TreeEnsembleAttributes BuildAttributes(const NodeProto &node, const Tensor &input) {
-  reference::TreeEnsembleAttributes attributes;
+TreeEnsembleAttributes BuildAttributes(const NodeProto &node, const Tensor &input) {
+  TreeEnsembleAttributes attributes;
   attributes.n_features = input.shape[1];
   attributes.n_targets = rt_ns::GetAttributeIntOrDefault(node, "n_targets", 1);
   attributes.value_type = ValueType(input.data_type);
-  attributes.aggregate = static_cast<reference::TreeAggregate>(
-      rt_ns::GetAttributeIntOrDefault(node, "aggregate_function", 1));
-  attributes.post_transform = static_cast<reference::TreePostTransform>(
-      rt_ns::GetAttributeIntOrDefault(node, "post_transform", 0));
+  attributes.aggregate =
+      static_cast<TreeAggregate>(rt_ns::GetAttributeIntOrDefault(node, "aggregate_function", 1));
+  attributes.post_transform =
+      static_cast<TreePostTransform>(rt_ns::GetAttributeIntOrDefault(node, "post_transform", 0));
   attributes.tree_roots = rt_ns::GetAttributeIntsOrDefault(node, "tree_roots", {});
   attributes.nodes_featureids = rt_ns::GetAttributeIntsOrDefault(node, "nodes_featureids", {});
   attributes.nodes_splits = ReadValueTensor(node, "nodes_splits", true, input.data_type);
@@ -238,7 +238,7 @@ void TreeEnsembleKernel::Run(RuntimeContext &rt) {
   }
 
   std::call_once(initialize_once_, [&]() {
-    auto plan = std::make_unique<reference::TreeEnsemblePlan>(BuildAttributes(node, input));
+    auto plan = std::make_unique<TreeEnsemblePlan>(BuildAttributes(node, input));
     input_data_type_ = input.data_type;
     feature_count_ = input.shape[1];
     plan_ = std::move(plan);

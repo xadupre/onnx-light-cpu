@@ -4,14 +4,14 @@
 
 #pragma once
 
-#include "onnx_light_cpu/reference/tree_ensemble_reference.h"
+#include "onnx_light_cpu/impl/traditionalml/tree_ensemble.h"
 
 #include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
 
-namespace onnx_light_cpu::reference {
+namespace onnx_light_cpu::testing {
 
 /// Reusable differential case for the ai.onnx.ml TreeEnsemble-5 schema.
 struct TreeEnsembleCorpusCase {
@@ -27,7 +27,7 @@ struct TreeEnsembleCorpusCase {
 
 /// Generates the deterministic correctness corpus used by this project and by
 /// later optimized TreeEnsemble kernels. Expected values always come from the
-/// independent scalar reference.
+/// independent scalar oracle.
 std::vector<TreeEnsembleCorpusCase> GenerateTreeEnsembleV5Corpus();
 
-} // namespace onnx_light_cpu::reference
+} // namespace onnx_light_cpu::testing
