@@ -58,7 +58,7 @@ jobs:
       - name: Install documentation dependencies
         run: |
           pip install \
-            breathe matplotlib myst-parser openpyxl onnxruntime pandas \
+            breathe matplotlib ml_dtypes myst-parser openpyxl onnxruntime pandas \
             pydata-sphinx-theme "sphinx>=7" sphinx-copybutton sphinx-datatables \
             sphinx-gallery sphinx-reredirects tqdm
 

@@ -36,6 +36,7 @@ dev = [
 docs = [
     "breathe",
     "matplotlib",
+    "ml_dtypes",
     "myst-parser",
     "openpyxl",
     "pandas",
