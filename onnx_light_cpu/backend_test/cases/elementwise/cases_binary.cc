@@ -66,6 +66,7 @@ const std::vector<ShapePair> &BinaryBenchmarkShapePairs() {
       {"repeated_block_4d", {2, 8, 128, 64}, {8, 1, 1}},
       {"inner_vector_4d", {4, 16, 256, 64}, {1, 16, 1, 64}},
       {"general_5d", {4, 1, 16, 1, 64}, {1, 8, 1, 128, 1}},
+      {"general_6d", {4, 1, 8, 1, 16, 1}, {1, 4, 1, 8, 1, 256}},
   };
   return kPairs;
 }
