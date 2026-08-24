@@ -578,7 +578,7 @@ TEST(OnnxLightBackendKernels, BinaryBenchmarkCorporaAreLazyAndRunThroughRuntime)
     }
     const auto representative =
         std::find_if(cases.begin(), cases.end(), [](const TestCase &test_case) {
-          return test_case.name.find("_repeated_block_4d_") != std::string::npos;
+          return test_case.name.find("_row_") != std::string::npos;
         });
     ASSERT_NE(representative, cases.end()) << entry.op_type;
     const std::vector<std::string> op_failures = RunCpuBackendCases(
@@ -590,12 +590,13 @@ TEST(OnnxLightBackendKernels, BinaryBenchmarkCorporaAreLazyAndRunThroughRuntime)
 
 TEST(OnnxLightBackendKernels, BinaryBenchmarkCorporaCoverEverySignatureAndPriorityShape) {
   const std::set<std::string> expected_shape_tags = {
-      "contiguous_1d", "contiguous_2d",           "contiguous_3d",
-      "contiguous_4d", "repeated_block_4d",       "inner_vector_4d",
-      "general_5d",    "repeated_block_4d_large", "inner_vector_4d_large",
+      "contiguous", "left_scalar", "right_scalar", "row", "per_channel", "outer", "general",
   };
   const std::set<int64_t> expected_output_sizes = {
-      1024, 32768, 65535, 65536, 131072, 1048576, 4194304,
+      4096,
+      65536,
+      1048576,
+      4194304,
   };
   for (const auto &entry : onnx_light_cpu::GetBinaryManifest()) {
     const std::vector<TestCase> cases =

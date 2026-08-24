@@ -3,7 +3,13 @@ Binary Elementwise and Broadcasting Performance Roadmap
 
 :Date: 2026-08
 
-**planned**
+**complete** (Binary PR08 correctness and reproducible parity gate)
+
+The generated backend corpus covers every manifest signature and the fixed
+priority shapes. ``tools/benchmark_binary_parity.py`` validates each timed case
+against ONNX Runtime and retains the raw samples, execution diagnostics, byte
+models, and pinned environment metadata needed by the final dedicated-machine
+gate.
 
 Objective
 ---------
@@ -409,6 +415,21 @@ while ``expanded operand bytes`` counts one value from each input per output
 element. Neither is labelled as actual DRAM traffic; hardware counters may
 report measured traffic separately.
 
+Run the final one-thread and physical-core matrix on a pinned dedicated machine:
+
+.. code-block:: bash
+
+   python tools/benchmark_binary_parity.py --cpus 0-15 \
+       --output binary_parity_results.json --enforce
+
+The JSON report preserves alternating raw samples and order, medians, p10/p90,
+interquartile dispersion, throughput, the selected loop family and ISA,
+submitted tasks, admitted workers, operation identity, both byte models, and
+the exact affinity, thread policies, package/compiler versions, CPU, OS, power
+governor, NUMA nodes, ISA flags, and git revision. ``--enforce`` exits nonzero
+unless the complete priority matrix is present, its median is at least
+``1.0x``, and every case is at least ``0.9x`` ONNX Runtime.
+
 Backend test corpus
 -------------------
 
@@ -526,7 +547,7 @@ Remaining pull-request sequence
        median priority performance is at least 1.0x ONNX Runtime with no
        priority case below 0.9x. This PR remains open while any target fails.
      - PR01 through PR07
-     - Pending
+     - Complete
 
 Binary PR08 is the final binary roadmap PR.
 

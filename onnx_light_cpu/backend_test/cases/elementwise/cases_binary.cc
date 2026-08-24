@@ -58,17 +58,20 @@ const std::vector<ShapePair> &BinaryShapePairs() {
 }
 
 const std::vector<ShapePair> &BinaryBenchmarkShapePairs() {
-  static const std::vector<ShapePair> kPairs = {
-      {"contiguous_1d", {1024}, {1024}},
-      {"contiguous_2d", {128, 256}, {128, 256}},
-      {"contiguous_4d", {3, 5, 17, 257}, {3, 5, 17, 257}},
-      {"contiguous_3d", {4, 16, 1024}, {4, 16, 1024}},
-      {"repeated_block_4d", {2, 8, 128, 64}, {8, 1, 1}},
-      {"inner_vector_4d", {4, 16, 256, 64}, {1, 16, 1, 64}},
-      {"general_5d", {4, 1, 16, 1, 64}, {1, 8, 1, 128, 1}},
-      {"repeated_block_4d_large", {8, 32, 256, 64}, {32, 1, 1}},
-      {"inner_vector_4d_large", {16, 16, 256, 64}, {1, 16, 1, 64}},
-  };
+  static const std::vector<ShapePair> kPairs = [] {
+    std::vector<ShapePair> pairs;
+    for (std::int64_t count : {4096, 65536, 1048576, 4194304}) {
+      const std::int64_t scale = count / 4096;
+      pairs.push_back({"contiguous", {count}, {count}});
+      pairs.push_back({"left_scalar", {}, {count}});
+      pairs.push_back({"right_scalar", {count}, {}});
+      pairs.push_back({"row", {16 * scale, 256}, {256}});
+      pairs.push_back({"per_channel", {2 * scale, 64, 32}, {64, 1}});
+      pairs.push_back({"outer", {64 * scale, 1}, {1, 64}});
+      pairs.push_back({"general", {2 * scale, 1, 8, 1}, {1, 4, 1, 64}});
+    }
+    return pairs;
+  }();
   return kPairs;
 }
 
