@@ -113,18 +113,26 @@ assert _CASES, _no_cases_message
 # -------------
 #
 # Each candidate gets three untimed warm-up calls, then is called ``repeat``
-# times and the median wall-clock time is retained. ``repeat`` shrinks as the
-# case's inputs grow but never below three.
+# times at most and the median wall-clock time is retained. Measurement stops
+# earlier when its cumulative duration reaches two seconds. ``repeat`` shrinks
+# as the case's inputs grow but never below three.
+
+MAX_MEASURE_DURATION = 2.0
 
 
-def measure(func, repeat, warmup=3):
+def measure(func, repeat, warmup=3, max_duration=MAX_MEASURE_DURATION):
     for _ in range(warmup):
         func()
     timings = []
+    total_duration = 0.0
     for _ in range(repeat):
         start = time.perf_counter()
         func()
-        timings.append(time.perf_counter() - start)
+        duration = time.perf_counter() - start
+        timings.append(duration)
+        total_duration += duration
+        if total_duration >= max_duration:
+            break
     return float(np.median(timings))
 
 
