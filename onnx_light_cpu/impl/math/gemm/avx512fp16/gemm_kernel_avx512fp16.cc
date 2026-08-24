@@ -20,8 +20,10 @@
 
 #include "onnx_light_cpu/impl/math/gemm/avx512fp16/gemm_kernel_avx512fp16.h"
 
+#include <array>
 #include <cassert>
 #include <cstring>
+#include <vector>
 
 #include <immintrin.h>
 
@@ -37,13 +39,13 @@ inline void PrefetchT0(const std::uint16_t *ptr) {
   _mm_prefetch(reinterpret_cast<const char *>(ptr), _MM_HINT_T0);
 }
 
-// Broadcasts one packed FLOAT16 element to a float32 vector. The raw 16-bit
-// pattern is an IEEE binary16 value, so it is copied into a ``_Float16`` and
-// widened with the compiler's standard conversion.
-inline __m512 BroadcastHalf(const std::uint16_t *bits) {
+// Widens one packed FLOAT16 element to float32. The raw 16-bit pattern is an
+// IEEE binary16 value, so it is copied into a ``_Float16`` and widened with
+// the compiler's standard conversion.
+inline float WidenHalfScalar(const std::uint16_t *bits) {
   _Float16 value;
   std::memcpy(&value, bits, sizeof(value));
-  return _mm512_set1_ps(static_cast<float>(value));
+  return static_cast<float>(value);
 }
 
 } // namespace
@@ -60,6 +62,20 @@ void GemmMicroKernel_AVX512FP16(std::size_t mr, std::size_t nb, std::size_t K, f
   const __m512 vbeta = _mm512_set1_ps(beta);
   const bool alpha_is_one = alpha == 1.0f;
   const bool beta_is_one = beta == 1.0f;
+
+  // ``Apack`` is reused unchanged across every 16-column block of ``nb`` below,
+  // so widen each of its ``mr * K`` FLOAT16 entries to float32 exactly once
+  // instead of re-widening the same scalar with every column block (the
+  // previous version paid this conversion ``nb / 16`` times over).
+  std::array<std::vector<float>, kGemmAVX512MR> a_widened;
+  for (std::size_t r = 0; r < mr; ++r) {
+    a_widened[r].resize(K);
+    const std::uint16_t *arow = Apack + r * K;
+    for (std::size_t k = 0; k < K; ++k) {
+      a_widened[r][k] = WidenHalfScalar(arow + k);
+    }
+  }
+
   std::size_t n = 0;
   // One 16-lane float32 vector (16 FLOAT16 columns) per step, register-blocked
   // over ``mr`` rows across the whole K reduction.
@@ -76,7 +92,7 @@ void GemmMicroKernel_AVX512FP16(std::size_t mr, std::size_t nb, std::size_t K, f
         PrefetchT0(Brow + kGemmPrefetchDistanceK * N);
       }
       for (std::size_t r = 0; r < mr; ++r) {
-        const __m512 va = BroadcastHalf(Apack + r * K + k);
+        const __m512 va = _mm512_set1_ps(a_widened[r][k]);
         acc[r] = _mm512_fmadd_ps(va, vb, acc[r]);
       }
     };
