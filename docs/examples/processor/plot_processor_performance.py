@@ -33,6 +33,7 @@ core.
 # unit test while exercising every public result path: both thread policies,
 # latency, an explicit affinity, and every element type this host can supply.
 
+import argparse
 import json
 import os
 import platform
@@ -56,10 +57,34 @@ def _processor_name():
 
 unit_test_going = os.environ.get("UNITTEST_GOING", "0") in ("1", "true", "True")
 
+# ``--repeats``/``--minimum-duration-ms`` let the measurement be lengthened
+# (e.g. to steady the noisy ``physical`` policy on a busy or high-core-count
+# host) without touching the source. ``parse_known_args`` ignores unrelated
+# arguments injected by pytest/sphinx-gallery when this file runs as a test
+# or a documentation example.
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument(
+    "--repeats",
+    type=int,
+    default=2 if unit_test_going else 12,
+    help="number of measurement repeats per (dtype, policy) combination",
+)
+parser.add_argument(
+    "--minimum-duration-ms",
+    type=float,
+    default=1.0 if unit_test_going else 40.0,
+    help="minimum wall-clock duration, in milliseconds, of a single measurement sample",
+)
+args, _ = parser.parse_known_args()
+
+print(
+    f"benchmark parameters: repeats={args.repeats} minimum_duration_ms={args.minimum_duration_ms}"
+)
+
 profile = benchmark_processor_performance(
     thread_policies=("single", "physical"),
-    repeats=2 if unit_test_going else 5,
-    minimum_duration_ms=1.0 if unit_test_going else 15.0,
+    repeats=args.repeats,
+    minimum_duration_ms=args.minimum_duration_ms,
     memory_budget_bytes=(8 * 1024 * 1024) if unit_test_going else (128 * 1024 * 1024),
     include_latency=True,
     explicit_single_affinity=ExplicitAffinity(0, 0),
