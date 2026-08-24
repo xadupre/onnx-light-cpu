@@ -15,7 +15,7 @@
 
 #include "onnx_light_cpu/impl/compute_arithmetic_profile.h"
 
-#include <cstring>
+#include <bit>
 
 #include <immintrin.h>
 
@@ -32,8 +32,7 @@ namespace {
 constexpr int kRegisters = 4;
 
 std::uint16_t Float32ToBf16(float value) {
-  std::uint32_t bits;
-  std::memcpy(&bits, &value, sizeof(bits));
+  const std::uint32_t bits = std::bit_cast<std::uint32_t>(value);
   return static_cast<std::uint16_t>(bits >> 16);
 }
 
