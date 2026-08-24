@@ -155,6 +155,13 @@ def _case_element_count(tc):
 
 register_kernels()
 
+# Some onnx-light-cpu Attention benchmark cases (e.g. streaming past_key/
+# past_value without materializing present_key/present_value, or FLOAT16/
+# BFLOAT16 inputs) are rejected by ONNX Runtime -- either at session-creation
+# time or while running -- even though onnx-light-cpu's kernel handles them
+# fine. Rather than special-case those by name, any ONNX Runtime failure is
+# caught here and the case is still timed/reported for onnx-light-cpu alone,
+# with "n/a" standing in for the ONNX Runtime side.
 rows = []
 for tc in tqdm(_CASES, desc="benchmarking backend cases", unit="case"):
     op_type = tc.model.graph.node[0].op_type
@@ -167,7 +174,14 @@ for tc in tqdm(_CASES, desc="benchmarking backend cases", unit="case"):
     input_names = [vi.name for vi in tc.model.graph.input if vi.name not in initializer_names]
 
     light_session = ReferenceEvaluator(tc.model)
-    ort_session = onnxruntime.InferenceSession(model_bytes, providers=["CPUExecutionProvider"])
+    ort_error = None
+    try:
+        ort_session = onnxruntime.InferenceSession(
+            model_bytes, providers=["CPUExecutionProvider"]
+        )
+    except Exception as exc:  # noqa: BLE001 -- reported as "n/a", not raised.
+        ort_session = None
+        ort_error = str(exc).splitlines()[0]
 
     ds = tc.data_sets[0]
     feeds = {name: _to_numpy(t) for name, t in zip(input_names, ds.inputs, strict=True)}
@@ -181,43 +195,56 @@ for tc in tqdm(_CASES, desc="benchmarking backend cases", unit="case"):
     clear_used_kernel_names()
     light_out = light_session.run(None, feeds)
     assert expected_kernel in used_kernel_names(), used_kernel_names()
-    ort_out = ort_session.run(None, feeds)
-    for actual, expected in zip(light_out, ort_out, strict=True):
-        if expected.dtype == np.bool_:
-            np.testing.assert_array_equal(actual, expected)
+    ort_time = None
+    if ort_session is not None:
+        try:
+            ort_out = ort_session.run(None, feeds)
+        except Exception as exc:  # noqa: BLE001 -- reported as "n/a", not raised.
+            ort_session = None
+            ort_error = str(exc).splitlines()[0]
         else:
-            np.testing.assert_allclose(
-                actual.astype(np.float64),
-                expected.astype(np.float64),
-                rtol=rtol,
-                atol=atol,
-                equal_nan=True,
-            )
+            for actual, expected in zip(light_out, ort_out, strict=True):
+                if expected.dtype == np.bool_:
+                    np.testing.assert_array_equal(actual, expected)
+                else:
+                    np.testing.assert_allclose(
+                        actual.astype(np.float64),
+                        expected.astype(np.float64),
+                        rtol=rtol,
+                        atol=atol,
+                        equal_nan=True,
+                    )
 
     # Aim for roughly a constant total element budget per case (~2e7 elements
     # processed across all repeats) so large cases are not re-run too many
     # times, but always repeat at least 3 times and never more than 30.
     repeat = max(3, min(30, 20_000_000 // _case_element_count(tc)))
     light_time = measure(lambda feeds=feeds, sess=light_session: sess.run(None, feeds), repeat)
-    ort_time = measure(lambda feeds=feeds, sess=ort_session: sess.run(None, feeds), repeat)
+    if ort_session is not None:
+        ort_time = measure(lambda feeds=feeds, sess=ort_session: sess.run(None, feeds), repeat)
     shapes = ",".join(
         "x".join(str(d) for d in array.shape) or "scalar" for array in feeds.values()
     )
     dtypes = ",".join(str(array.dtype) for array in feeds.values())
-    rows.append((op_type, tc.name, shapes, dtypes, light_time, ort_time))
+    rows.append((op_type, tc.name, shapes, dtypes, light_time, ort_time, ort_error))
 
 # Print an aligned table once every case has run, since column widths (name,
-# input shapes, dtypes) are not known ahead of time.
+# input shapes, dtypes) are not known ahead of time. Cases ONNX Runtime could
+# not run (ort_time is None) show its error message instead of a timing/
+# speed-up.
 op_width = max(len(op_type) for op_type, *_ in rows)
 name_width = max(len(name) for _, name, *_ in rows)
-shapes_width = max(len(shapes) for _, _, shapes, _, _, _ in rows)
-dtypes_width = max(len(dtypes) for _, _, _, dtypes, _, _ in rows)
-for op_type, name, shapes, dtypes, light_time, ort_time in rows:
+shapes_width = max(len(shapes) for _, _, shapes, _, _, _, _ in rows)
+dtypes_width = max(len(dtypes) for _, _, _, dtypes, _, _, _ in rows)
+for op_type, name, shapes, dtypes, light_time, ort_time, ort_error in rows:
+    ort_str = f"{ort_time * 1e6:10.2f} us" if ort_time is not None else f"{'error':>13}"
+    speedup_str = f"{ort_time / light_time:6.2f}x" if ort_time is not None else f"{'n/a':>7}"
     print(
         f"{op_type:>{op_width}} | {name:<{name_width}} | shapes={shapes:<{shapes_width}} | "
         f"dtype={dtypes:<{dtypes_width}} | "
         f"onnx-light-cpu={light_time * 1e6:10.2f} us | "
-        f"onnxruntime={ort_time * 1e6:10.2f} us | speed-up={ort_time / light_time:6.2f}x"
+        f"onnxruntime={ort_str} | speed-up={speedup_str}"
+        + (f" | onnxruntime_error={ort_error}" if ort_error is not None else "")
     )
 
 # %%
@@ -236,10 +263,11 @@ results_frame = pd.DataFrame(
             "input_shapes": shapes,
             "input_dtypes": dtypes,
             "onnx_light_cpu_us": light_time * 1e6,
-            "onnxruntime_us": ort_time * 1e6,
-            "speed_up": ort_time / light_time,
+            "onnxruntime_us": ort_time * 1e6 if ort_time is not None else None,
+            "speed_up": ort_time / light_time if ort_time is not None else None,
+            "onnxruntime_error": ort_error,
         }
-        for op_type, name, shapes, dtypes, light_time, ort_time in rows
+        for op_type, name, shapes, dtypes, light_time, ort_time, ort_error in rows
     ]
 )
 results_frame.to_excel("plot_backend_cases_benchmark.xlsx", index=False)
@@ -251,9 +279,12 @@ results_frame.to_excel("plot_backend_cases_benchmark.xlsx", index=False)
 # One bar per case, grouped and colored by operator, showing onnx-light-cpu's
 # speed-up over ONNX Runtime (values above 1 mean onnx-light-cpu is faster).
 # The x-axis is logarithmic so a speed-up and its reciprocal are equidistant
-# from the ``1`` baseline.
+# from the ``1`` baseline. Cases ONNX Runtime failed to run (ort_time is
+# None, see the try/except above) are left out of the plot since they have no
+# speed-up to show.
 
-_unique_op_types = sorted({op_type for op_type, *_ in rows})
+_plotted_rows = [row for row in rows if row[5] is not None]
+_unique_op_types = sorted({op_type for op_type, *_ in _plotted_rows})
 _COLOR_MAP = plt.get_cmap("turbo", len(_unique_op_types))
 _COLORS = {op_type: _COLOR_MAP(index) for index, op_type in enumerate(_unique_op_types)}
 
@@ -264,12 +295,14 @@ def _short_label(op_type, name):
     return label.removesuffix("_benchmark")
 
 
-labels = [_short_label(op_type, name) for op_type, name, _, _, _, _ in rows]
-speedups = np.array([ort_time / light_time for _, _, _, _, light_time, ort_time in rows])
-colors = [_COLORS[op_type] for op_type, _, _, _, _, _ in rows]
+labels = [_short_label(op_type, name) for op_type, name, *_ in _plotted_rows]
+speedups = np.array(
+    [ort_time / light_time for _, _, _, _, light_time, ort_time, _ in _plotted_rows]
+)
+colors = [_COLORS[op_type] for op_type, *_ in _plotted_rows]
 
-fig, ax = plt.subplots(figsize=(8, max(5, 0.4 * len(rows))))
-positions = np.arange(len(rows))
+fig, ax = plt.subplots(figsize=(8, max(5, 0.4 * len(_plotted_rows))))
+positions = np.arange(len(_plotted_rows))
 ax.barh(positions, speedups, color=colors)
 ax.axvline(1.0, color="grey", linewidth=0.8, linestyle=":")
 ax.set_xscale("log")
