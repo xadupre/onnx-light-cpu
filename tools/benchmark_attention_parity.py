@@ -282,7 +282,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         score_tile_bytes = workers * min(case["kv_length"], KV_BLOCK) * 4
         peak_temporary_bytes = score_tile_bytes + workers * case["head_dim"] * 8
         element_bytes = 4 if case["dtype"] == "float32" else 2
-        q_heads = 12 if case["geometry"] == "mha" else 16
+        q_shape = feeds["Q"].shape
+        q_heads = (
+            int(q_shape[1]) if case["layout"] == "rank4" else int(q_shape[2]) // case["head_dim"]
+        )
         kv_bytes = (
             q_heads * case["q_length"] * case["kv_length"] * case["head_dim"] * 2 * element_bytes
         )
