@@ -235,51 +235,53 @@ void VariadicElementwisePlan::Execute(std::span<const void *const> inputs, void 
   std::vector<std::size_t> coordinates(rank, 0);
   std::vector<std::size_t> offsets(input_count_, 0);
   auto *out = static_cast<std::byte *>(output);
-  for (std::size_t index = 0; index < element_count_; ++index) {
-    switch (data_type_) {
-    case BinaryDataType::FLOAT:
-      ExecuteTyped<float>(op_, inputs, offsets, out + index * element_size_);
-      break;
-    case BinaryDataType::DOUBLE:
-      ExecuteTyped<double>(op_, inputs, offsets, out + index * element_size_);
-      break;
-    case BinaryDataType::FLOAT16:
-      ExecuteHalf<false>(op_, inputs, offsets, out + index * element_size_);
-      break;
-    case BinaryDataType::BFLOAT16:
-      ExecuteHalf<true>(op_, inputs, offsets, out + index * element_size_);
-      break;
+  const auto execute = [&](auto execute_element) {
+    for (std::size_t index = 0; index < element_count_; ++index) {
+      execute_element(out + index * element_size_);
+      for (std::size_t axis = rank; axis-- > 0;) {
+        ++coordinates[axis];
+        for (std::size_t input = 0; input < input_count_; ++input) {
+          offsets[input] += input_strides_[input * rank + axis];
+        }
+        if (coordinates[axis] < static_cast<std::size_t>(output_shape_[axis])) {
+          break;
+        }
+        coordinates[axis] = 0;
+        for (std::size_t input = 0; input < input_count_; ++input) {
+          offsets[input] -=
+              input_strides_[input * rank + axis] * static_cast<std::size_t>(output_shape_[axis]);
+        }
+      }
+    }
+  };
+  switch (data_type_) {
+  case BinaryDataType::FLOAT:
+    execute([&](std::byte *element) { ExecuteTyped<float>(op_, inputs, offsets, element); });
+    break;
+  case BinaryDataType::DOUBLE:
+    execute([&](std::byte *element) { ExecuteTyped<double>(op_, inputs, offsets, element); });
+    break;
+  case BinaryDataType::FLOAT16:
+    execute([&](std::byte *element) { ExecuteHalf<false>(op_, inputs, offsets, element); });
+    break;
+  case BinaryDataType::BFLOAT16:
+    execute([&](std::byte *element) { ExecuteHalf<true>(op_, inputs, offsets, element); });
+    break;
 #define ONNX_LIGHT_CPU_VARIADIC_INTEGER_CASE(TYPE, CPP_TYPE)                                       \
   case BinaryDataType::TYPE:                                                                       \
-    ExecuteTyped<CPP_TYPE>(op_, inputs, offsets, out + index * element_size_);                     \
+    execute([&](std::byte *element) { ExecuteTyped<CPP_TYPE>(op_, inputs, offsets, element); });   \
     break
-      ONNX_LIGHT_CPU_VARIADIC_INTEGER_CASE(INT8, std::int8_t);
-      ONNX_LIGHT_CPU_VARIADIC_INTEGER_CASE(INT16, std::int16_t);
-      ONNX_LIGHT_CPU_VARIADIC_INTEGER_CASE(INT32, std::int32_t);
-      ONNX_LIGHT_CPU_VARIADIC_INTEGER_CASE(INT64, std::int64_t);
-      ONNX_LIGHT_CPU_VARIADIC_INTEGER_CASE(UINT8, std::uint8_t);
-      ONNX_LIGHT_CPU_VARIADIC_INTEGER_CASE(UINT16, std::uint16_t);
-      ONNX_LIGHT_CPU_VARIADIC_INTEGER_CASE(UINT32, std::uint32_t);
-      ONNX_LIGHT_CPU_VARIADIC_INTEGER_CASE(UINT64, std::uint64_t);
+    ONNX_LIGHT_CPU_VARIADIC_INTEGER_CASE(INT8, std::int8_t);
+    ONNX_LIGHT_CPU_VARIADIC_INTEGER_CASE(INT16, std::int16_t);
+    ONNX_LIGHT_CPU_VARIADIC_INTEGER_CASE(INT32, std::int32_t);
+    ONNX_LIGHT_CPU_VARIADIC_INTEGER_CASE(INT64, std::int64_t);
+    ONNX_LIGHT_CPU_VARIADIC_INTEGER_CASE(UINT8, std::uint8_t);
+    ONNX_LIGHT_CPU_VARIADIC_INTEGER_CASE(UINT16, std::uint16_t);
+    ONNX_LIGHT_CPU_VARIADIC_INTEGER_CASE(UINT32, std::uint32_t);
+    ONNX_LIGHT_CPU_VARIADIC_INTEGER_CASE(UINT64, std::uint64_t);
 #undef ONNX_LIGHT_CPU_VARIADIC_INTEGER_CASE
-    default:
-      break;
-    }
-
-    for (std::size_t axis = rank; axis-- > 0;) {
-      ++coordinates[axis];
-      for (std::size_t input = 0; input < input_count_; ++input) {
-        offsets[input] += input_strides_[input * rank + axis];
-      }
-      if (coordinates[axis] < static_cast<std::size_t>(output_shape_[axis])) {
-        break;
-      }
-      coordinates[axis] = 0;
-      for (std::size_t input = 0; input < input_count_; ++input) {
-        offsets[input] -=
-            input_strides_[input * rank + axis] * static_cast<std::size_t>(output_shape_[axis]);
-      }
-    }
+  default:
+    break;
   }
 }
 
