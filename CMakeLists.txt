@@ -729,6 +729,21 @@ if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
     # as a direct dependency so standalone test executables can resolve it.
     target_link_options(lib_onnx_light_cpu PRIVATE
         "LINKER:--no-as-needed")
+    # The --no-as-needed flag above makes lib_onnx_light_cpu directly NEED
+    # onnx-light's lib_onnx_core/lib_onnx_proto, which live in onnx-light's own
+    # installed Python package directory -- a different directory tree than
+    # this package's onnx_light_cpu/onnx_py. Without an explicit RPATH entry
+    # pointing at onnx-light's library directory, importing _cpukernels alone
+    # (i.e. without onnx-light's own extension modules having already loaded
+    # those libraries into the process) fails at runtime with "liblib_onnx_core.so:
+    # cannot open shared object file". See the matching comment near
+    # ONNX_LIGHT_CPU_ONNX_LIGHT_PY_LIBDIR below for lib_onnx_light_cpu_kernels.
+    if(_cpu_lib_type STREQUAL "SHARED")
+      set_target_properties(lib_onnx_light_cpu PROPERTIES
+          INSTALL_RPATH "$ORIGIN;$<TARGET_FILE_DIR:onnx_light::lib_onnx_core>"
+          BUILD_RPATH "$ORIGIN;$<TARGET_FILE_DIR:onnx_light::lib_onnx_core>"
+      )
+    endif()
   endif()
 
   file(GLOB CPU_KERNEL_REGISTRATION_SOURCES CONFIGURE_DEPENDS
@@ -881,10 +896,23 @@ if(ONNX_LIGHT_CPU_BUILD_PYTHON)
       "${CMAKE_CURRENT_SOURCE_DIR}")
   target_link_libraries(_cpukernels PRIVATE lib_onnx_light_cpu)
 
-  set_target_properties(_cpukernels PROPERTIES
-      INSTALL_RPATH "$ORIGIN"
-      BUILD_RPATH "$ORIGIN"
-  )
+  # lib_onnx_light_cpu itself directly NEEDs onnx-light's lib_onnx_core/
+  # lib_onnx_proto when built with ONNX_LIGHT_CPU_WITH_ONNX_LIGHT (see the
+  # --no-as-needed comment above); _cpukernels needs the same extra RPATH
+  # entry so importing it standalone (without onnx-light's own extension
+  # modules having already loaded those libraries into the process) does not
+  # fail with "liblib_onnx_core.so: cannot open shared object file".
+  if(ONNX_LIGHT_CPU_ONNX_LIGHT_PY_LIBDIR)
+    set_target_properties(_cpukernels PROPERTIES
+        INSTALL_RPATH "$ORIGIN;${ONNX_LIGHT_CPU_ONNX_LIGHT_PY_LIBDIR}"
+        BUILD_RPATH "$ORIGIN;${ONNX_LIGHT_CPU_ONNX_LIGHT_PY_LIBDIR}"
+    )
+  else()
+    set_target_properties(_cpukernels PROPERTIES
+        INSTALL_RPATH "$ORIGIN"
+        BUILD_RPATH "$ORIGIN"
+    )
+  endif()
 
   install(TARGETS _cpukernels
       LIBRARY DESTINATION onnx_light_cpu/onnx_py
