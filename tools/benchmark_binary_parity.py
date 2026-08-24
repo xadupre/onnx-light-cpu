@@ -326,7 +326,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     cases = _collect_cases(args.case)
     register_kernels()
     physical_threads = _physical_threads()
-    _, flags = _cpu_model_and_flags()
+    cpu_model, flags = _cpu_model_and_flags()
     rows = []
     for policy in args.threads:
         requested_threads = 1 if policy == "1" else physical_threads
@@ -419,7 +419,6 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     "speedup": ort_median / cpu_median,
                 }
             )
-    cpu_model, flags = _cpu_model_and_flags()
     report = {
         "metadata": {
             "timestamp_utc": datetime.now(UTC).isoformat(),
