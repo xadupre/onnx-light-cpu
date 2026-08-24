@@ -25,8 +25,12 @@ exclude_patterns = ["_build"]
 html_last_updated_fmt = "%b %d, %Y"
 
 sphinx_gallery_conf = {
-    "examples_dirs": ["examples/kernels", "examples/benchmarks"],
-    "gallery_dirs": ["auto_examples/kernels", "auto_examples/benchmarks"],
+    "examples_dirs": ["examples/kernels", "examples/benchmarks", "examples/processor"],
+    "gallery_dirs": [
+        "auto_examples/kernels",
+        "auto_examples/benchmarks",
+        "auto_examples/processor",
+    ],
     "filename_pattern": r"/plot_",
 }
 

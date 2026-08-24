@@ -236,7 +236,7 @@ measurement map and explained in ``warnings``.
 Python example
 --------------
 
-``docs/examples/benchmarks/plot_processor_performance.py`` must:
+``docs/examples/processor/plot_processor_performance.py`` must:
 
 * call the public function rather than duplicate measurement code;
 * print topology, working-set sizes, warnings, and a compact result table;
@@ -346,4 +346,3 @@ The first conservative tile estimate is:
 This roadmap only supplies measured inputs and their uncertainty. It does not
 select GEMM tiles, infer overlap, or claim that the Roofline maximum is an exact
 execution-time predictor.
-
