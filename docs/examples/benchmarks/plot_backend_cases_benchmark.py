@@ -1,17 +1,17 @@
 """
-Benchmark a subset of backend test cases against ONNX Runtime
-================================================================
+Benchmark backend test cases against ONNX Runtime
+====================================================
 
 onnx-light-cpu ships its own ONNX backend test cases -- named ``test_cpu_*``
 -- in a dedicated C++ registration library
 (``lib_onnx_light_cpu_backend_test``, see :func:`onnx_light_cpu.register_backend_test_cases`).
 Every case that has an accelerated kernel also has a ``TestMode.BENCHMARK``
 variant: the same operator and attributes, but with inputs large enough that a
-single evaluation takes a measurable amount of time. This example walks those
-benchmark cases -- covering unary, binary, and matrix operators -- and times
-each one through ``onnx-light`` (with onnx-light-cpu's accelerated kernel
-registered) and through ONNX Runtime, using the exact same generated model and
-inputs for both.
+single evaluation takes a measurable amount of time. This example collects
+every ``test_cpu_*_benchmark`` case -- across every operator and element type
+onnx-light-cpu ships one for -- and times each one through ``onnx-light``
+(with onnx-light-cpu's accelerated kernel registered) and through ONNX
+Runtime, using the exact same generated model and inputs for both.
 
 Each case is also checked for correctness (both runtimes must agree, within
 the case's tolerance) and for kernel dispatch (the accelerated onnx-light-cpu
@@ -23,11 +23,11 @@ way :mod:`unittests.python.test_kernels_e2e` verifies these backend cases.
 # Setup
 # -----
 #
-# Only ``float32`` (``bool`` for ``Not``) cases are kept so every candidate can
-# be compared directly; onnx-light-cpu also ships ``float16``/``bfloat16``
-# benchmark variants of the same cases (see
-# ``onnx_light_cpu/backend_test/cases/math/cases_gemm.cc``) which are outside
-# the scope of this example.
+# Every ``test_cpu_*_benchmark`` case registered by onnx-light-cpu is
+# collected via :func:`onnx_light.onnx.backend.collect_test_cases_by_name`
+# (which accepts an ECMAScript regular expression), regardless of operator or
+# element type; ``--filter`` further narrows that set down when only a subset
+# is of interest.
 
 import argparse
 import os
@@ -40,8 +40,8 @@ import onnxruntime
 import pandas as pd
 from tqdm import tqdm
 
-from onnx_light.onnx import TensorProto
 from onnx_light.onnx.backend import TestMode, collect_test_cases_by_name
+from onnx_light.onnx.helper import tensor_dtype_to_np_dtype
 from onnx_light.onnx.reference import ReferenceEvaluator
 
 from onnx_light_cpu import (
@@ -57,12 +57,12 @@ assert has_backend_test_cases(), (
     "(register_backend_test_cases binding unavailable)."
 )
 
-# ``--filter`` narrows the collected cases down to those whose name matches an
-# additional regular expression, on top of the fixed per-operator selection
-# below (e.g. ``--filter gemm`` keeps only Gemm cases, ``--filter '_2d_'``
-# keeps only 2-D cases across every operator). ``parse_known_args`` ignores
-# unrelated arguments injected by pytest/sphinx-gallery when this file runs as
-# a test or a documentation example.
+# ``--filter`` narrows the collected "test_cpu_*_benchmark" cases down to
+# those whose name additionally matches a regular expression (e.g. ``--filter
+# gemm`` keeps only Gemm cases, ``--filter '_2d_'`` keeps only 2-D cases
+# across every operator). ``parse_known_args`` ignores unrelated arguments
+# injected by pytest/sphinx-gallery when this file runs as a test or a
+# documentation example.
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument(
     "--filter",
@@ -73,101 +73,37 @@ args, _ = parser.parse_known_args()
 _name_filter = re.compile(args.filter) if args.filter else None
 
 
-# Operators covered by onnx-light-cpu's "test_cpu_*" backend test cases, mapped
-# to the library-qualified kernel name each records when it runs.
-_TARGET_KERNELS = {
-    "Add": "onnx_light_cpu::Add",
-    "And": "onnx_light_cpu::And",
-    "Abs": "onnx_light_cpu::Abs",
-    "BitShift": "onnx_light_cpu::BitShift",
-    "BitwiseAnd": "onnx_light_cpu::BitwiseAnd",
-    "BitwiseOr": "onnx_light_cpu::BitwiseOr",
-    "BitwiseXor": "onnx_light_cpu::BitwiseXor",
-    "Div": "onnx_light_cpu::Div",
-    "Equal": "onnx_light_cpu::Equal",
-    "Exp": "onnx_light_cpu::Exp",
-    "Greater": "onnx_light_cpu::Greater",
-    "GreaterOrEqual": "onnx_light_cpu::GreaterOrEqual",
-    "Log": "onnx_light_cpu::Log",
-    "Less": "onnx_light_cpu::Less",
-    "LessOrEqual": "onnx_light_cpu::LessOrEqual",
-    "Mod": "onnx_light_cpu::Mod",
-    "Mul": "onnx_light_cpu::Mul",
-    "Gemm": "onnx_light_cpu::Gemm",
-    "Not": "onnx_light_cpu::Not",
-    "Or": "onnx_light_cpu::Or",
-    "PRelu": "onnx_light_cpu::PRelu",
-    "Pow": "onnx_light_cpu::Pow",
-    "Sub": "onnx_light_cpu::Sub",
-    "Xor": "onnx_light_cpu::Xor",
-}
-
-# The input/output type pair kept for each operator. Comparisons consume
-# float32 and produce bool; logical and bitwise operators use their natural
-# homogeneous types.
-_TARGET_DTYPES = dict.fromkeys(_TARGET_KERNELS, (TensorProto.FLOAT, TensorProto.FLOAT))
-for _op_type in ("Equal", "Greater", "GreaterOrEqual", "Less", "LessOrEqual"):
-    _TARGET_DTYPES[_op_type] = (TensorProto.FLOAT, TensorProto.BOOL)
-for _op_type in ("And", "Not", "Or", "Xor"):
-    _TARGET_DTYPES[_op_type] = (TensorProto.BOOL, TensorProto.BOOL)
-for _op_type in ("BitwiseAnd", "BitwiseOr", "BitwiseXor"):
-    _TARGET_DTYPES[_op_type] = (TensorProto.INT8, TensorProto.INT8)
-_TARGET_DTYPES["BitShift"] = (TensorProto.UINT8, TensorProto.UINT8)
-_DTYPE_SUFFIXES = {
-    TensorProto.BOOL: "bool",
-    TensorProto.FLOAT: "float32",
-    TensorProto.INT8: "int8",
-    TensorProto.UINT8: "uint8",
-}
-
-
 def _to_numpy(tensor):
     """Decodes a backend test case ``Tensor`` into a numpy array."""
-    dtype = {
-        int(TensorProto.BOOL): np.bool_,
-        int(TensorProto.FLOAT): np.float32,
-        int(TensorProto.INT8): np.int8,
-        int(TensorProto.UINT8): np.uint8,
-    }[int(tensor.data_type)]
+    dtype = tensor_dtype_to_np_dtype(int(tensor.data_type))
     shape = tuple(int(d) for d in tensor.shape)
     return np.frombuffer(tensor.raw_data(), dtype=dtype).reshape(shape)
 
 
 def _collect_cases():
-    """Registers and collects a subset of the "test_cpu_*" BENCHMARK cases.
+    """Registers and collects every "test_cpu_*_benchmark" backend test case.
 
-    The regular expression includes the selected input type so cases for other
-    supported types remain lazy.
+    Every operator and element type onnx-light-cpu ships a BENCHMARK variant
+    for is included; ``--filter`` (``_name_filter``) is the only further
+    restriction applied here.
     """
     register_backend_test_cases()
-    pattern = (
-        "^test_cpu_(?:"
-        + "|".join(
-            f"{op_type.lower()}_.*_{_DTYPE_SUFFIXES[input_type]}"
-            for op_type, (input_type, _) in _TARGET_DTYPES.items()
-        )
-        + ").*_benchmark$"
+    max_per_case_group = (
+        2 if os.environ.get("UNITTEST_GOING", "0") in ("1", "true", "True") else None
     )
-    max_per_op = 2 if os.environ.get("UNITTEST_GOING", "0") in ("1", "true", "True") else None
-    counts = dict.fromkeys(_TARGET_KERNELS, 0)
+    counts: dict[str, int] = {}
     cases = []
-    for tc in collect_test_cases_by_name(pattern, mode=TestMode.BENCHMARK):
+    for tc in collect_test_cases_by_name("^test_cpu_.*_benchmark$", mode=TestMode.BENCHMARK):
         nodes = list(tc.model.graph.node)
-        op_type = nodes[0].op_type if len(nodes) == 1 else None
-        if op_type not in _TARGET_KERNELS or not tc.data_sets:
+        if len(nodes) != 1 or not tc.data_sets:
             continue
         if _name_filter is not None and not _name_filter.search(tc.name):
             continue
-        input_type, output_type = _TARGET_DTYPES[op_type]
-        if not all(
-            all(int(tensor.data_type) == int(input_type) for tensor in data_set.inputs)
-            and all(int(tensor.data_type) == int(output_type) for tensor in data_set.outputs)
-            for data_set in tc.data_sets
-        ):
-            continue
-        if max_per_op is not None and counts[op_type] >= max_per_op:
-            continue
-        counts[op_type] += 1
+        op_type = nodes[0].op_type
+        if max_per_case_group is not None:
+            if counts.get(op_type, 0) >= max_per_case_group:
+                continue
+            counts[op_type] = counts.get(op_type, 0) + 1
         cases.append(tc)
     return cases
 
@@ -222,7 +158,7 @@ register_kernels()
 rows = []
 for tc in tqdm(_CASES, desc="benchmarking backend cases", unit="case"):
     op_type = tc.model.graph.node[0].op_type
-    expected_kernel = _TARGET_KERNELS[op_type]
+    expected_kernel = f"onnx_light_cpu::{op_type}"
     model_bytes = tc.model.SerializeToString()
     # Some Gemm benchmark cases turn "B" into a graph initializer to exercise
     # the constant-B code path; its value is baked into the model rather than
@@ -317,8 +253,9 @@ results_frame.to_excel("plot_backend_cases_benchmark.xlsx", index=False)
 # The x-axis is logarithmic so a speed-up and its reciprocal are equidistant
 # from the ``1`` baseline.
 
-_COLOR_MAP = plt.get_cmap("turbo", len(_TARGET_KERNELS))
-_COLORS = {op_type: _COLOR_MAP(index) for index, op_type in enumerate(_TARGET_KERNELS)}
+_unique_op_types = sorted({op_type for op_type, *_ in rows})
+_COLOR_MAP = plt.get_cmap("turbo", len(_unique_op_types))
+_COLORS = {op_type: _COLOR_MAP(index) for index, op_type in enumerate(_unique_op_types)}
 
 
 def _short_label(op_type, name):
