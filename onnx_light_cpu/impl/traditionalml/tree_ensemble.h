@@ -13,7 +13,7 @@
 #include <variant>
 #include <vector>
 
-namespace onnx_light_cpu::reference {
+namespace onnx_light_cpu {
 
 enum class TreeBranchMode : std::uint8_t {
   kLeq = 0,
@@ -315,7 +315,7 @@ struct TreeEnsembleAttributes {
 
 /// Lower a deprecated TreeEnsembleRegressor-5 graph into the canonical
 /// TreeEnsemble-5 plan representation. The returned values are validated by the
-/// same structural checks used by TreeEnsembleReference.
+/// same structural checks used by TreeEnsembleOracle.
 TreeEnsembleAttributes
 LowerTreeEnsembleRegressor(const TreeEnsembleRegressorAttributes &attributes);
 
@@ -330,9 +330,9 @@ LowerTreeEnsembleClassifier(const TreeEnsembleClassifierAttributes &attributes);
 /// doubles and rounds inputs, attributes, intermediates, and outputs according
 /// to value_type, which also permits exact float16 corpus generation without a
 /// compiler-specific half type.
-class TreeEnsembleReference {
+class TreeEnsembleOracle {
 public:
-  explicit TreeEnsembleReference(TreeEnsembleAttributes attributes);
+  explicit TreeEnsembleOracle(TreeEnsembleAttributes attributes);
 
   const TreeEnsembleAttributes &attributes() const noexcept { return attributes_; }
 
@@ -516,4 +516,4 @@ TreeClassifierResult
 EvaluateTreeEnsembleClassifier(const TreeEnsembleClassifierAttributes &attributes,
                                const std::vector<double> &input, std::size_t rows);
 
-} // namespace onnx_light_cpu::reference
+} // namespace onnx_light_cpu

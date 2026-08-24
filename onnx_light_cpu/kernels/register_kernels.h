@@ -14,9 +14,10 @@ namespace onnx_light_cpu {
 /// :cpp:func:`RegisterBinaryKernels`, :cpp:func:`RegisterExpKernel`,
 /// :cpp:func:`RegisterLogKernel`, :cpp:func:`RegisterGemmKernel`,
 /// :cpp:func:`RegisterMatMulKernel`, :cpp:func:`RegisterIntegerMatMulKernels`
-/// and :cpp:func:`RegisterNotKernel`), so a single call installs the
-/// accelerated elementwise/GEMM kernels, the stateless FP32 materialized
-/// ``Attention`` baseline, and the portable integer matrix-multiplication
+/// :cpp:func:`RegisterNotKernel`, and :cpp:func:`RegisterTreeEnsembleKernel`),
+/// so a single call installs the accelerated elementwise/GEMM kernels, the
+/// stateless materialized ``Attention`` baseline, the prepared
+/// ``TreeEnsemble`` kernel, and the portable integer matrix-multiplication
 /// kernels.
 /// After this call every such node dispatched by onnx-light's
 /// runtime (``RunNode`` / ``RuntimeSession``, and therefore any model executed

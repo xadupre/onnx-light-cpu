@@ -6,7 +6,7 @@
 #define NOMINMAX
 #endif
 
-#include "onnx_light_cpu/reference/tree_ensemble_reference.h"
+#include "onnx_light_cpu/impl/traditionalml/tree_ensemble.h"
 
 #include "onnx_light_cpu/impl/execution.h"
 
@@ -36,7 +36,7 @@
 #include <windows.h>
 #endif
 
-namespace onnx_light_cpu::reference {
+namespace onnx_light_cpu {
 namespace {
 
 constexpr std::size_t kTreeParallelThreshold = 80;
@@ -66,7 +66,7 @@ std::size_t RegionWorkspaceBytes(const TreeEnsembleExecutionRegion &region,
 }
 
 [[noreturn]] void Invalid(const std::string &message) {
-  throw std::invalid_argument("TreeEnsemble reference: " + message);
+  throw std::invalid_argument("TreeEnsemble: " + message);
 }
 
 void ValidatePolicyShape(const TreeEnsembleTuningPolicy &policy) {
@@ -1207,8 +1207,8 @@ TreeEnsemblePlan::TreeEnsemblePlan(TreeEnsembleAttributes attributes,
                                    TreeEnsembleTuningContext context,
                                    const TreeEnsembleTuningRegistry *registry)
     : attributes_(std::move(attributes)) {
-  TreeEnsembleReference reference(attributes_);
-  (void)reference;
+  TreeEnsembleOracle oracle(attributes_);
+  (void)oracle;
   tree_roots_ = attributes_.tree_roots;
   base_values_ = attributes_.base_values;
   const std::size_t size = attributes_.nodes_featureids.size();
@@ -2188,7 +2188,7 @@ LowerTreeEnsembleClassifier(const TreeEnsembleClassifierAttributes &attributes) 
   return lowered;
 }
 
-TreeEnsembleReference::TreeEnsembleReference(TreeEnsembleAttributes attributes)
+TreeEnsembleOracle::TreeEnsembleOracle(TreeEnsembleAttributes attributes)
     : attributes_(std::move(attributes)) {
   ValidateAggregate(attributes_.aggregate);
   ValidateTransform(attributes_.post_transform);
@@ -2301,8 +2301,8 @@ TreeEnsembleReference::TreeEnsembleReference(TreeEnsembleAttributes attributes)
   }
 }
 
-std::vector<double> TreeEnsembleReference::Evaluate(const std::vector<double> &input,
-                                                    std::size_t rows) const {
+std::vector<double> TreeEnsembleOracle::Evaluate(const std::vector<double> &input,
+                                                 std::size_t rows) const {
   const std::size_t features = static_cast<std::size_t>(attributes_.n_features);
   const std::size_t targets = static_cast<std::size_t>(attributes_.n_targets);
   if (input.size() != rows * features) {
@@ -2514,4 +2514,4 @@ EvaluateTreeEnsembleClassifier(const TreeEnsembleClassifierAttributes &attribute
   return result;
 }
 
-} // namespace onnx_light_cpu::reference
+} // namespace onnx_light_cpu
