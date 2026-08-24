@@ -185,6 +185,31 @@ void BinaryBroadcastPlan::ClassifyLoopFamily() {
   }
 }
 
+void BinaryBroadcastPlan::ValidateInputs(const std::byte *left, const std::byte *right) const {
+  if (adapter_.validate == nullptr) {
+    return;
+  }
+  const std::size_t outer_dims = dimensions_.size() - 1;
+  std::vector<std::size_t> indices(outer_dims, 0);
+  std::ptrdiff_t left_offset = 0;
+  std::ptrdiff_t right_offset = 0;
+  std::ptrdiff_t output_offset = 0;
+  ComputeOuterOffsets(0, indices, left_offset, right_offset, output_offset);
+  const Dimension &inner = dimensions_.back();
+  for (std::size_t block = 0; block < outer_block_count_; ++block) {
+    for (std::size_t i = 0; i < inner_loop_elements_; ++i) {
+      adapter_.validate(left + (left_offset + static_cast<std::ptrdiff_t>(i) * inner.left_stride) *
+                                   adapter_.left_size,
+                        right +
+                            (right_offset + static_cast<std::ptrdiff_t>(i) * inner.right_stride) *
+                                adapter_.right_size);
+    }
+    if (block + 1 != outer_block_count_) {
+      AdvanceOuterIndices(indices, left_offset, right_offset, output_offset);
+    }
+  }
+}
+
 void BinaryBroadcastPlan::ExecuteInner(const std::byte *left, const std::byte *right,
                                        std::byte *output, std::ptrdiff_t left_offset,
                                        std::ptrdiff_t right_offset,
@@ -387,6 +412,7 @@ void BinaryBroadcastPlan::Execute(const void *left, const void *right, void *out
   const auto *left_bytes = reinterpret_cast<const std::byte *>(left);
   const auto *right_bytes = reinterpret_cast<const std::byte *>(right);
   auto *output_bytes = reinterpret_cast<std::byte *>(output);
+  ValidateInputs(left_bytes, right_bytes);
 
   // Binary PR02/PR03: contiguous and left/right-scalar loops collapse to a
   // single dimension (see ClassifyLoopFamily). Every remaining family

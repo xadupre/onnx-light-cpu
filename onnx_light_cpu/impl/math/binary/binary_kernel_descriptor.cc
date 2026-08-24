@@ -160,6 +160,22 @@ template <typename T> void ComputeDiv(const void *left, const void *right, void 
   WriteTyped<T>(out, static_cast<T>(lhs / rhs));
 }
 
+template <typename T>
+void ValidateIntegerDivision(const void *left, const void *right, const char *op_name) {
+  const T lhs = ReadTyped<T>(left);
+  const T rhs = ReadTyped<T>(right);
+  ValidateIntegerDivisor(rhs, op_name);
+  ValidateSignedDivisionOverflow(lhs, rhs, op_name);
+}
+
+template <typename T> void ValidateDiv(const void *left, const void *right) {
+  ValidateIntegerDivision<T>(left, right, "Div");
+}
+
+template <typename T> void ValidateMod(const void *left, const void *right) {
+  ValidateIntegerDivision<T>(left, right, "Mod");
+}
+
 // Binary PR02: type-erased wrappers around the SIMD-dispatched bulk kernels
 // declared in binary_arithmetic_kernel.h, adapting their typed signatures to
 // the ``void *``-based function pointers stored on ``Adapter``.
@@ -315,6 +331,12 @@ template <typename T> void ComputeBitShiftRight(const void *left, const void *ri
     throw std::invalid_argument("onnx_light_cpu::BitShift: shift amount is out of range.");
   }
   WriteTyped<T>(out, static_cast<T>(ReadTyped<T>(left) >> static_cast<unsigned>(shift)));
+}
+
+template <typename T> void ValidateBitShift(const void *, const void *right) {
+  if (ReadTyped<T>(right) >= static_cast<T>(sizeof(T) * 8)) {
+    throw std::invalid_argument("onnx_light_cpu::BitShift: shift amount is out of range.");
+  }
 }
 
 template <typename T> void ComputePRelu(const void *left, const void *right, void *out) {
@@ -971,6 +993,32 @@ BinaryKernelDescriptor::Adapter::ScalarFn SelectScalar(BinaryOperator op, DT lef
       "onnx_light_cpu::BinaryKernelDescriptor: unsupported type signature.");
 }
 
+BinaryKernelDescriptor::Adapter::ValidateFn SelectValidator(BinaryOperator op, DT left) {
+  if (op != BinaryOperator::kDiv && op != BinaryOperator::kMod && op != BinaryOperator::kBitShift) {
+    return nullptr;
+  }
+#define ONNX_LIGHT_CPU_INTEGER_VALIDATOR(TYPE, CPP_TYPE)                                           \
+  case DT::TYPE:                                                                                   \
+    if (op == BinaryOperator::kDiv)                                                                \
+      return &ValidateDiv<CPP_TYPE>;                                                               \
+    if (op == BinaryOperator::kMod)                                                                \
+      return &ValidateMod<CPP_TYPE>;                                                               \
+    return &ValidateBitShift<CPP_TYPE>;
+  switch (left) {
+    ONNX_LIGHT_CPU_INTEGER_VALIDATOR(INT8, std::int8_t)
+    ONNX_LIGHT_CPU_INTEGER_VALIDATOR(INT16, std::int16_t)
+    ONNX_LIGHT_CPU_INTEGER_VALIDATOR(INT32, std::int32_t)
+    ONNX_LIGHT_CPU_INTEGER_VALIDATOR(INT64, std::int64_t)
+    ONNX_LIGHT_CPU_INTEGER_VALIDATOR(UINT8, std::uint8_t)
+    ONNX_LIGHT_CPU_INTEGER_VALIDATOR(UINT16, std::uint16_t)
+    ONNX_LIGHT_CPU_INTEGER_VALIDATOR(UINT32, std::uint32_t)
+    ONNX_LIGHT_CPU_INTEGER_VALIDATOR(UINT64, std::uint64_t)
+  default:
+    return nullptr;
+  }
+#undef ONNX_LIGHT_CPU_INTEGER_VALIDATOR
+}
+
 } // namespace
 
 BinaryKernelDescriptor::BinaryKernelDescriptor(std::string op_type, std::int64_t opset_version,
@@ -997,6 +1045,7 @@ BinaryKernelDescriptor::BinaryKernelDescriptor(std::string op_type, std::int64_t
     Adapter adapter;
     adapter.signature = signature;
     adapter.scalar = SelectScalar(manifest_.op, signature.left, signature.right, attributes_);
+    adapter.validate = SelectValidator(manifest_.op, signature.left);
     adapter.left_size = ElementSize(signature.left);
     adapter.right_size = ElementSize(signature.right);
     adapter.output_size = ElementSize(signature.output);
