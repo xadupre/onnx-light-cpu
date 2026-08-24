@@ -280,7 +280,6 @@ file(GLOB CPU_KERNEL_SOURCES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/*/*.cc"
     "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/*/*/*.cc"
     "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/*/*/*/*.cc"
-    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/reference/*.cc"
 )
 
 set(_gemm_avx512_source
@@ -793,6 +792,7 @@ if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
         "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/cases/logical/cases_not.cc"
         "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/cases/traditionalml/collect_traditionalml_cases.cc"
         "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/cases/traditionalml/cases_tree_ensemble.cc"
+        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/cases/traditionalml/tree_ensemble_corpus.cc"
         "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/cases/attention/collect_attention_cases.cc"
         "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/cases/attention/cases_attention.cc")
     target_include_directories(lib_onnx_light_cpu_backend_test PUBLIC
@@ -1109,6 +1109,10 @@ if(ONNX_LIGHT_CPU_BUILD_TESTS)
   function(onnx_light_cpu_add_test _src _link_lib)
     get_filename_component(_name "${_src}" NAME_WE)
     add_executable(${_name} "${_src}")
+    if(_name STREQUAL "test_tree_ensemble")
+      target_sources(${_name} PRIVATE
+          "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/cases/traditionalml/tree_ensemble_corpus.cc")
+    endif()
     target_link_libraries(${_name} PRIVATE ${_link_lib} GTest::gtest_main)
     target_include_directories(${_name} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
     if(_name STREQUAL "test_integer_gemm_vnni")

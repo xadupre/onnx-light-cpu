@@ -630,4 +630,8 @@ Remaining pull-request sequence
      - `Implemented in #320
        <https://github.com/xadupre/onnx-light-cpu/pull/320>`_
 
-The TreeEnsemble roadmap is complete.
+The TreeEnsemble roadmap is complete, including the
+``ai.onnx.ml::TreeEnsemble`` runtime adapter. Integration tests execute both
+the correctness corpus and a benchmark case through the registered
+onnx-light-cpu kernel, and reject any CPU benchmark family without a matching
+kernel registration.

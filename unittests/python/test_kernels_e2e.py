@@ -37,7 +37,7 @@ import numpy as np
 import pytest
 
 from onnx_light.onnx import TensorProto, helper
-from onnx_light.onnx.backend import collect_test_cases
+from onnx_light.onnx.backend import TestMode, collect_test_cases
 from onnx_light.onnx.reference import ReferenceEvaluator
 
 from onnx_light_cpu import (
@@ -88,6 +88,7 @@ _REGISTERED_KERNELS = {
     "QLinearMatMul": "onnx_light_cpu::QLinearMatMul",
     "Sub": "onnx_light_cpu::Sub",
     "SwiGLU": "onnx_light_cpu::SwiGLU",
+    "TreeEnsemble": "onnx_light_cpu::TreeEnsemble",
     "Xor": "onnx_light_cpu::Xor",
 }
 
@@ -197,7 +198,8 @@ class TestBackendCases:
         for record in records:
             with pytest.raises(AttributeError):
                 record.op_type = "Other"  # type: ignore[misc]
-            assert record.domain == "ai.onnx"
+            expected_domain = "ai.onnx.ml" if record.op_type == "TreeEnsemble" else "ai.onnx"
+            assert record.domain == expected_domain
             assert record.device == "CPU"
             assert isinstance(record.types, tuple)
             assert record.types, record
@@ -228,9 +230,20 @@ class TestBackendCases:
                 assert record.since_version == 23
             elif record.op_type == "SwiGLU":
                 assert record.since_version == 28
+            elif record.op_type == "TreeEnsemble":
+                assert record.since_version == 5
             else:
                 assert record.since_version is None
             assert record.until_version is None
+
+    def test_every_cpu_benchmark_has_a_registered_kernel(self):
+        benchmark_ops = {
+            _single_node_op_type(tc)
+            for tc in collect_test_cases(include_big=True, mode=TestMode.BENCHMARK)
+            if tc.name.startswith("test_cpu_") and tc.name.endswith("_benchmark")
+        }
+        assert benchmark_ops
+        assert benchmark_ops <= set(_REGISTERED_KERNELS)
 
     def test_every_target_op_has_backend_cases(self):
         """Guards against the parametrized test silently collecting nothing."""

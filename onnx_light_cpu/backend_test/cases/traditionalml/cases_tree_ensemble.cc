@@ -3,9 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "onnx_light_cpu/backend_test/cases/traditionalml/include_traditionalml_cases.h"
+#include "onnx_light_cpu/backend_test/cases/traditionalml/tree_ensemble_corpus.h"
 
-#include "onnx_light_cpu/reference/tree_ensemble_corpus.h"
-#include "onnx_light_cpu/reference/tree_ensemble_reference.h"
+#include "onnx_light_cpu/impl/traditionalml/tree_ensemble.h"
 
 #include "onnx_core/backend_test/expect.h"
 #include "onnx_core/runtime/kernels/cast_helper.h"
@@ -29,17 +29,10 @@ using bt_ns::IoData;
 using ONNX_LIGHT_NAMESPACE::AttributeProto;
 using ONNX_LIGHT_NAMESPACE::NodeProto;
 using ONNX_LIGHT_NAMESPACE::TensorProto;
-using reference::LegacyTreeAttributes;
-using reference::TreeEnsembleAttributes;
-using reference::TreeEnsembleClassifierAttributes;
-using reference::TreeEnsembleCorpusCase;
-using reference::TreeEnsembleRegressorAttributes;
-using reference::TreeValueType;
 using rt_ns::DataType;
 using rt_ns::DefaultOpset;
 using rt_ns::OpsetId;
 using rt_ns::Tensor;
-
 constexpr std::int64_t kMlOpsetVersion = 5;
 
 void AddInt(NodeProto &node, const char *name, std::int64_t value) {
@@ -116,10 +109,10 @@ void AddTypedTensor(NodeProto &node, const char *name, TreeValueType type,
   AddTensor(node, name, TensorProto::FLOAT16, halves);
 }
 
-void AddModes(NodeProto &node, const std::vector<reference::TreeBranchMode> &modes) {
+void AddModes(NodeProto &node, const std::vector<TreeBranchMode> &modes) {
   std::vector<std::uint8_t> values;
   values.reserve(modes.size());
-  for (reference::TreeBranchMode mode : modes) {
+  for (TreeBranchMode mode : modes) {
     values.push_back(static_cast<std::uint8_t>(mode));
   }
   AddTensor(node, "nodes_modes", TensorProto::UINT8, values);
@@ -207,7 +200,7 @@ TreeEnsembleRegressorAttributes MakeRegressor() {
   attributes.target_ids = {0, 1, 0, 1};
   attributes.target_weights = {1.0, -1.0, 2.0, -2.0};
   attributes.base_values = {0.5, 0.5};
-  attributes.post_transform = reference::TreePostTransform::kLogistic;
+  attributes.post_transform = TreePostTransform::kLogistic;
   return attributes;
 }
 
@@ -227,7 +220,7 @@ TreeEnsembleAttributes MakeBenchmarkForest(std::size_t trees, std::int64_t featu
       attributes.nodes_featureids.push_back(
           static_cast<std::int64_t>((tree + node) % static_cast<std::size_t>(features)));
       attributes.nodes_splits.push_back(static_cast<double>(static_cast<int>(node % 7) - 3) * 0.25);
-      attributes.nodes_modes.push_back(reference::TreeBranchMode::kLeq);
+      attributes.nodes_modes.push_back(TreeBranchMode::kLeq);
       for (bool true_branch : {true, false}) {
         const std::size_t child = 2 * node + (true_branch ? 1 : 2);
         const bool leaf = child >= kInternalNodes;
@@ -337,8 +330,8 @@ void RegisterCpuTreeEnsembleCases(std::vector<TestCase> &registry, TestMode mode
                for (std::size_t index = 0; index < values.size(); ++index) {
                  values[index] = static_cast<double>(static_cast<int>(index % 17) - 8) * 0.25;
                }
-               reference::TreeEnsembleReference reference(attributes);
-               std::vector<double> expected = reference.Evaluate(values, spec.rows);
+               TreeEnsembleOracle oracle(attributes);
+               std::vector<double> expected = oracle.Evaluate(values, spec.rows);
                Tensor input = Tensor::FromFloat(
                    "", {static_cast<std::int64_t>(spec.rows), spec.features}, ToFloat(values));
                Tensor output = Tensor::FromFloat("", {static_cast<std::int64_t>(spec.rows), 1},
@@ -351,7 +344,7 @@ void RegisterCpuTreeEnsembleCases(std::vector<TestCase> &registry, TestMode mode
   if (mode != TestMode::TEST) {
     return;
   }
-  for (TreeEnsembleCorpusCase test_case : reference::GenerateTreeEnsembleV5Corpus()) {
+  for (TreeEnsembleCorpusCase test_case : GenerateTreeEnsembleV5Corpus()) {
     NodeProto node = MakeTreeEnsembleNode(test_case.attributes);
     const std::string name = "test_cpu_treeensemble_v5_" + test_case.name;
     Expect(registry, std::move(node), name, {DefaultOpset(13), ml_opset},
@@ -376,8 +369,7 @@ void RegisterCpuTreeEnsembleRegressorCases(std::vector<TestCase> &registry, Test
   const OpsetId ml_opset("ai.onnx.ml", kMlOpsetVersion);
   const TreeEnsembleRegressorAttributes attributes = MakeRegressor();
   const std::vector<double> input_values = {-1.0, 1.0};
-  const std::vector<float> expected =
-      reference::EvaluateTreeEnsembleRegressor(attributes, input_values, 2);
+  const std::vector<float> expected = EvaluateTreeEnsembleRegressor(attributes, input_values, 2);
   for (DataType type : {DataType::FLOAT, DataType::DOUBLE, DataType::INT32, DataType::INT64}) {
     NodeProto node = MakeRegressorNode(attributes);
     const std::string suffix = type == DataType::FLOAT    ? "float"
@@ -403,8 +395,8 @@ void RegisterCpuTreeEnsembleClassifierCases(std::vector<TestCase> &registry, Tes
   const OpsetId ml_opset("ai.onnx.ml", kMlOpsetVersion);
   for (bool string_labels : {false, true}) {
     const TreeEnsembleClassifierAttributes attributes = MakeClassifier(string_labels);
-    const reference::TreeClassifierResult expected =
-        reference::EvaluateTreeEnsembleClassifier(attributes, {-1.0, 1.0}, 2);
+    const TreeClassifierResult expected =
+        EvaluateTreeEnsembleClassifier(attributes, {-1.0, 1.0}, 2);
     NodeProto node = MakeClassifierNode(attributes);
     const std::string suffix = string_labels ? "strings" : "int64";
     Expect(registry, std::move(node), "test_cpu_treeensembleclassifier_v5_" + suffix,
