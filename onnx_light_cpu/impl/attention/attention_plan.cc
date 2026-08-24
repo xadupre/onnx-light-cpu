@@ -198,8 +198,7 @@ AttentionPlan::AttentionPlan(const AttentionDescriptor &descriptor, AttentionLay
     if (ToSize(past_k_shape[3], "AttentionPlan: head_size must be non-negative.") != head_dim) {
       Fail("AttentionPlan: past_key must share Q/K's head_size.");
     }
-    if (ToSize(past_v_shape[3], "AttentionPlan: v_head_size must be non-negative.") !=
-        v_head_dim) {
+    if (ToSize(past_v_shape[3], "AttentionPlan: v_head_size must be non-negative.") != v_head_dim) {
       Fail("AttentionPlan: past_value must share V's v_head_size.");
     }
     past_k_strides = {static_cast<std::ptrdiff_t>(kv_num_heads * past_length * head_dim),
@@ -306,9 +305,8 @@ void ComputeAttentionFloat32(const AttentionPlan &plan, const float *q, const fl
     // value (`nonpad_kv_seqlen[b] - q_length`) and additionally masks KV
     // positions beyond `nonpad_kv_seqlen[b]` regardless of `is_causal`.
     const std::int64_t causal_offset =
-        nonpad_kv_seqlen != nullptr
-            ? nonpad_kv_seqlen[b] - static_cast<std::int64_t>(plan.q_length)
-            : plan.causal_offset;
+        nonpad_kv_seqlen != nullptr ? nonpad_kv_seqlen[b] - static_cast<std::int64_t>(plan.q_length)
+                                    : plan.causal_offset;
     const std::int64_t nonpad_length = nonpad_kv_seqlen != nullptr ? nonpad_kv_seqlen[b] : -1;
 
     for (std::size_t h = 0; h < plan.q_num_heads; ++h) {
@@ -316,19 +314,17 @@ void ComputeAttentionFloat32(const AttentionPlan &plan, const float *q, const fl
       const float *q_head = q + b * plan.q_strides.batch + h * plan.q_strides.head;
       const float *k_head = k + b * plan.k_strides.batch + kv_h * plan.k_strides.head;
       const float *v_head = v + b * plan.v_strides.batch + kv_h * plan.v_strides.head;
-      const float *past_k_head =
-          past_k != nullptr ? past_k + b * plan.past_k_strides.batch +
-                                  kv_h * plan.past_k_strides.head
-                            : nullptr;
-      const float *past_v_head =
-          past_v != nullptr ? past_v + b * plan.past_v_strides.batch +
-                                  kv_h * plan.past_v_strides.head
-                            : nullptr;
+      const float *past_k_head = past_k != nullptr ? past_k + b * plan.past_k_strides.batch +
+                                                         kv_h * plan.past_k_strides.head
+                                                   : nullptr;
+      const float *past_v_head = past_v != nullptr ? past_v + b * plan.past_v_strides.batch +
+                                                         kv_h * plan.past_v_strides.head
+                                                   : nullptr;
       float *y_head = y + b * plan.y_strides.batch + h * plan.y_strides.head;
-      float *qk_head = plan.has_qk_matmul_output
-                            ? qk_matmul_output +
-                                  (b * plan.q_num_heads + h) * plan.q_length * total_kv_length
-                            : nullptr;
+      float *qk_head =
+          plan.has_qk_matmul_output
+              ? qk_matmul_output + (b * plan.q_num_heads + h) * plan.q_length * total_kv_length
+              : nullptr;
       const std::ptrdiff_t mask_base =
           b * plan.mask_strides.batch + static_cast<std::ptrdiff_t>(h) * plan.mask_strides.head;
 

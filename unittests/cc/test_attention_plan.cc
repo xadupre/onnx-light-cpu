@@ -382,6 +382,9 @@ TEST(ComputeAttentionFloat32, SoftcapMatchesManualTanhFormula) {
   AttentionDescriptor descriptor;
   descriptor.softcap = 2.0f;
   descriptor.has_qk_matmul_output = true;
+  // Mode 1 captures the post-softcap (pre-bias) score; mode 0 (the default)
+  // captures the raw pre-softcap score instead.
+  descriptor.qk_matmul_output_mode = 1;
   constexpr std::size_t batch = 1, heads = 1, q_len = 1, kv_len = 3, head_dim = 4, v_head_dim = 4;
   const std::int64_t q_shape[] = {batch, heads, q_len, head_dim};
   const std::int64_t k_shape[] = {batch, heads, kv_len, head_dim};
@@ -498,7 +501,7 @@ TEST(ComputeAttentionFloat32, InternalPastCacheShiftsCausalOffsetAndMatchesRefer
   EXPECT_EQ(plan.total_kv_length, past_len + kv_len);
   EXPECT_EQ(plan.causal_offset, static_cast<std::int64_t>(past_len));
   const std::vector<std::int64_t> expected_present_key = {batch, heads, past_len + kv_len,
-                                                           head_dim};
+                                                          head_dim};
   EXPECT_EQ(plan.present_key_shape(), expected_present_key);
 
   const auto q = RandomTensor(batch * heads * q_len * head_dim, 71);
@@ -542,8 +545,8 @@ TEST(ComputeAttentionFloat32, InternalPastCacheShiftsCausalOffsetAndMatchesRefer
     }
   }
   const auto expected =
-      ReferenceAttention(batch, heads, heads, q_len, past_len + kv_len, head_dim, v_head_dim,
-                         q, full_k, full_v, plan.scale, false, &bias_mask, nullptr);
+      ReferenceAttention(batch, heads, heads, q_len, past_len + kv_len, head_dim, v_head_dim, q,
+                         full_k, full_v, plan.scale, false, &bias_mask, nullptr);
   ExpectClose(y, expected);
 }
 
@@ -576,8 +579,8 @@ TEST(ComputeAttentionFloat32, NonpadKvSeqlenAppliesPerBatchOffsetAndPaddingMask)
     const std::int64_t offset = nonpad[b] - static_cast<std::int64_t>(q_len);
     for (std::size_t i = 0; i < q_len; ++i) {
       for (std::size_t j = 0; j < kv_len; ++j) {
-        const bool allowed_causal = static_cast<std::int64_t>(j) <=
-                                    static_cast<std::int64_t>(i) + offset;
+        const bool allowed_causal =
+            static_cast<std::int64_t>(j) <= static_cast<std::int64_t>(i) + offset;
         const bool allowed_pad = static_cast<std::int64_t>(j) < nonpad[b];
         bias_mask[((b * heads) * q_len + i) * kv_len + j] =
             (allowed_causal && allowed_pad) ? 0.0f : -std::numeric_limits<float>::infinity();

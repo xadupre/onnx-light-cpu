@@ -121,8 +121,7 @@ struct AttentionPlan {
   AttentionPlan(const AttentionDescriptor &descriptor, AttentionLayout layout,
                 std::span<const std::int64_t> q_shape, std::span<const std::int64_t> k_shape,
                 std::span<const std::int64_t> v_shape, std::span<const std::int64_t> mask_shape,
-                AttentionMaskKind mask_kind,
-                std::span<const std::int64_t> past_k_shape = {},
+                AttentionMaskKind mask_kind, std::span<const std::int64_t> past_k_shape = {},
                 std::span<const std::int64_t> past_v_shape = {});
 
   AttentionLayout layout = AttentionLayout::kRank4;
