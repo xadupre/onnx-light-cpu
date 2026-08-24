@@ -57,6 +57,19 @@ const std::vector<ShapePair> &BinaryShapePairs() {
   return kPairs;
 }
 
+const std::vector<ShapePair> &BinaryBenchmarkShapePairs() {
+  static const std::vector<ShapePair> kPairs = {
+      {"contiguous_1d", {1024}, {1024}},
+      {"contiguous_2d", {128, 256}, {128, 256}},
+      {"contiguous_4d", {3, 5, 17, 257}, {3, 5, 17, 257}},
+      {"contiguous_3d", {4, 16, 1024}, {4, 16, 1024}},
+      {"repeated_block_4d", {2, 8, 128, 64}, {8, 1, 1}},
+      {"inner_vector_4d", {4, 16, 256, 64}, {1, 16, 1, 64}},
+      {"general_5d", {4, 1, 16, 1, 64}, {1, 8, 1, 128, 1}},
+  };
+  return kPairs;
+}
+
 bool IsNonCommutative(BinaryOperator op) {
   switch (op) {
   case BinaryOperator::kSub:
@@ -110,6 +123,21 @@ std::size_t ElementCount(const rt_ns::Shape &shape) {
   std::size_t value = 1;
   for (std::int64_t dim : shape) {
     value *= static_cast<std::size_t>(std::max<std::int64_t>(dim, 0));
+  }
+  return value;
+}
+
+std::size_t BroadcastElementCount(const rt_ns::Shape &left, const rt_ns::Shape &right) {
+  const std::size_t rank = std::max(left.size(), right.size());
+  std::size_t value = 1;
+  for (std::size_t axis = 0; axis < rank; ++axis) {
+    const std::int64_t left_dim = axis < rank - left.size() ? 1 : left[axis - (rank - left.size())];
+    const std::int64_t right_dim =
+        axis < rank - right.size() ? 1 : right[axis - (rank - right.size())];
+    if (left_dim != right_dim && left_dim != 1 && right_dim != 1) {
+      throw std::invalid_argument("Incompatible binary benchmark shapes.");
+    }
+    value *= static_cast<std::size_t>(std::max(left_dim, right_dim));
   }
   return value;
 }
@@ -296,34 +324,43 @@ std::string CaseName(const BinaryManifestEntry &entry, const BinaryTypeSignature
 
 void RegisterBenchmarksForSignature(std::vector<TestCase> &registry,
                                     const BinaryManifestEntry &entry,
-                                    const BinaryTypeSignature &signature) {
-  const ShapePair shape_pair{"contiguous", {1024}, {1024}};
-  BinaryKernelDescriptor::Attributes attributes = DefaultAttributes(entry, signature.left);
-  const NodeProto node = MakeNode(entry.op_type, attributes);
-  const OpsetId opset(std::string(), entry.since_version);
-  const BinaryElementwiseKernel kernel(node, KernelContext{opset});
-  const std::string name = CaseName(entry, signature, shape_pair, attributes, false, true, 1024);
-  Expect(registry, node, name, {opset}, {1024, 1024}, {1024},
-         [entry, signature, shape_pair, attributes]() -> IoData {
-           return MakeBinaryIoData(entry, signature, shape_pair, attributes, false);
-         });
-  if (IsNonCommutative(entry.op)) {
-    const std::string swapped_name =
-        CaseName(entry, signature, shape_pair, attributes, true, true, 1024);
-    Expect(registry, node, swapped_name, {opset}, {1024, 1024}, {1024},
-           [entry, signature, shape_pair, attributes]() -> IoData {
-             return MakeBinaryIoData(entry, signature, shape_pair, attributes, true);
-           });
-  }
-  if (entry.op == BinaryOperator::kBitShift) {
-    attributes.bitshift_direction = BinaryKernelDescriptor::Attributes::BitShiftDirection::kRight;
-    const NodeProto right_node = MakeNode(entry.op_type, attributes);
-    const std::string right_name =
-        CaseName(entry, signature, shape_pair, attributes, false, true, 1024);
-    Expect(registry, right_node, right_name, {opset}, {1024, 1024}, {1024},
+                                    const BinaryTypeSignature &signature,
+                                    bool cover_priority_shapes) {
+  const std::vector<ShapePair> &shape_pairs = BinaryBenchmarkShapePairs();
+  const std::size_t shape_count = cover_priority_shapes ? shape_pairs.size() : 1;
+  for (std::size_t shape_index = 0; shape_index < shape_count; ++shape_index) {
+    const ShapePair &shape_pair = shape_pairs[shape_index];
+    const std::int64_t left_count = static_cast<std::int64_t>(ElementCount(shape_pair.left));
+    const std::int64_t right_count = static_cast<std::int64_t>(ElementCount(shape_pair.right));
+    const std::int64_t output_count =
+        static_cast<std::int64_t>(BroadcastElementCount(shape_pair.left, shape_pair.right));
+    BinaryKernelDescriptor::Attributes attributes = DefaultAttributes(entry, signature.left);
+    const NodeProto node = MakeNode(entry.op_type, attributes);
+    const OpsetId opset(std::string(), entry.since_version);
+    const std::string name =
+        CaseName(entry, signature, shape_pair, attributes, false, true, output_count);
+    Expect(registry, node, name, {opset}, {left_count, right_count}, {output_count},
            [entry, signature, shape_pair, attributes]() -> IoData {
              return MakeBinaryIoData(entry, signature, shape_pair, attributes, false);
            });
+    if (IsNonCommutative(entry.op)) {
+      const std::string swapped_name =
+          CaseName(entry, signature, shape_pair, attributes, true, true, output_count);
+      Expect(registry, node, swapped_name, {opset}, {right_count, left_count}, {output_count},
+             [entry, signature, shape_pair, attributes]() -> IoData {
+               return MakeBinaryIoData(entry, signature, shape_pair, attributes, true);
+             });
+    }
+    if (entry.op == BinaryOperator::kBitShift) {
+      attributes.bitshift_direction = BinaryKernelDescriptor::Attributes::BitShiftDirection::kRight;
+      const NodeProto right_node = MakeNode(entry.op_type, attributes);
+      const std::string right_name =
+          CaseName(entry, signature, shape_pair, attributes, false, true, output_count);
+      Expect(registry, right_node, right_name, {opset}, {left_count, right_count}, {output_count},
+             [entry, signature, shape_pair, attributes]() -> IoData {
+               return MakeBinaryIoData(entry, signature, shape_pair, attributes, false);
+             });
+    }
   }
 }
 
@@ -333,8 +370,11 @@ void RegisterCpuBinaryCases(std::vector<TestCase> &registry, const std::string &
                             TestMode mode) {
   const BinaryManifestEntry &entry = GetBinaryManifestEntry(op_type);
   if (mode == TestMode::BENCHMARK) {
-    for (const BinaryTypeSignature &signature : entry.signatures) {
-      RegisterBenchmarksForSignature(registry, entry, signature);
+    const std::size_t priority_signature = entry.op == BinaryOperator::kEqual ? 1 : 0;
+    for (std::size_t signature_index = 0; signature_index < entry.signatures.size();
+         ++signature_index) {
+      RegisterBenchmarksForSignature(registry, entry, entry.signatures[signature_index],
+                                     signature_index == priority_signature);
     }
     return;
   }
