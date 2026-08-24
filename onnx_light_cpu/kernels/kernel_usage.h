@@ -40,9 +40,7 @@ void SetKernelUsageRecording(bool enabled) noexcept;
 ///
 /// Derived from :cpp:func:`CollectRegisteredKernels`'s structured inventory
 /// rather than a second, hand-maintained list, so entries are ordered the
-/// same way: by ``(domain, op_type, device, kernel_name)``, i.e.
-/// alphabetically by ``op_type`` since every onnx-light-cpu registration
-/// currently shares the same domain and device.
+/// same way: by ``(domain, op_type, device, kernel_name)``.
 const std::vector<std::pair<std::string, std::string>> &RegisteredKernelNames();
 
 } // namespace onnx_light_cpu

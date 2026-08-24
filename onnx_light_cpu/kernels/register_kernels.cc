@@ -6,6 +6,7 @@
 
 #include "onnx_light_cpu/kernels/attention/attention_kernel.h"
 #include "onnx_light_cpu/kernels/elementwise/binary_kernel.h"
+#include "onnx_light_cpu/kernels/elementwise/variadic_kernel.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
 #include "onnx_light_cpu/kernels/logical/not_kernel.h"
 #include "onnx_light_cpu/kernels/math/abs_kernel.h"
@@ -35,6 +36,7 @@ void RegisterAllKernels() {
   RegisterNotKernel();
   RegisterSwiGLUKernel();
   RegisterTreeEnsembleKernel();
+  RegisterVariadicElementwiseKernels();
 }
 
 } // namespace onnx_light_cpu

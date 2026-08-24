@@ -37,7 +37,7 @@ import numpy as np
 import pytest
 
 from onnx_light.onnx import TensorProto, helper
-from onnx_light.onnx.backend import TestMode, collect_test_cases
+from onnx_light.onnx.backend import TestMode, collect_test_cases, collect_test_cases_by_name
 from onnx_light.onnx.reference import ReferenceEvaluator
 
 from onnx_light_cpu import (
@@ -79,6 +79,9 @@ _REGISTERED_KERNELS = {
     "Log": "onnx_light_cpu::Log",
     "MatMul": "onnx_light_cpu::MatMul",
     "MatMulInteger": "onnx_light_cpu::MatMulInteger",
+    "Max": "onnx_light_cpu::Max",
+    "Mean": "onnx_light_cpu::Mean",
+    "Min": "onnx_light_cpu::Min",
     "Mod": "onnx_light_cpu::Mod",
     "Mul": "onnx_light_cpu::Mul",
     "Not": "onnx_light_cpu::Not",
@@ -87,6 +90,7 @@ _REGISTERED_KERNELS = {
     "Pow": "onnx_light_cpu::Pow",
     "QLinearMatMul": "onnx_light_cpu::QLinearMatMul",
     "Sub": "onnx_light_cpu::Sub",
+    "Sum": "onnx_light_cpu::Sum",
     "SwiGLU": "onnx_light_cpu::SwiGLU",
     "TreeEnsemble": "onnx_light_cpu::TreeEnsemble",
     "Xor": "onnx_light_cpu::Xor",
@@ -95,8 +99,24 @@ _REGISTERED_KERNELS = {
 _TARGET_KERNELS = {
     op_type: kernel_name
     for op_type, kernel_name in _REGISTERED_KERNELS.items()
-    if op_type != "QLinearMatMul"
+    if op_type not in {"Max", "Mean", "Min", "QLinearMatMul", "Sum"}
 }
+
+_BENCHMARK_TYPE_SUFFIXES = dict.fromkeys(_TARGET_KERNELS, "float32")
+for _op_type in ("And", "Not", "Or", "Xor"):
+    _BENCHMARK_TYPE_SUFFIXES[_op_type] = "bool"
+for _op_type in ("BitwiseAnd", "BitwiseOr", "BitwiseXor", "MatMulInteger"):
+    _BENCHMARK_TYPE_SUFFIXES[_op_type] = "int8"
+_BENCHMARK_TYPE_SUFFIXES["BitShift"] = "uint8"
+_BENCHMARK_NAME_PATTERN = (
+    "^test_cpu_(?:"
+    + "|".join(
+        f"{op_type.lower()}_.*_{suffix}"
+        for op_type, suffix in _BENCHMARK_TYPE_SUFFIXES.items()
+        if op_type != "TreeEnsemble"
+    )
+    + "|treeensemble_.*).*_benchmark$"
+)
 
 # ``TensorProto`` element type -> numpy dtype used to decode a backend test
 # case ``Tensor``'s raw little-endian row-major buffer.
@@ -216,12 +236,16 @@ class TestBackendCases:
                 "GreaterOrEqual",
                 "Less",
                 "LessOrEqual",
+                "Max",
+                "Mean",
+                "Min",
                 "Mod",
                 "Mul",
                 "Or",
                 "PRelu",
                 "Pow",
                 "Sub",
+                "Sum",
                 "Xor",
             }:
                 assert isinstance(record.since_version, int)
@@ -239,8 +263,9 @@ class TestBackendCases:
     def test_every_cpu_benchmark_has_a_registered_kernel(self):
         benchmark_ops = {
             _single_node_op_type(tc)
-            for tc in collect_test_cases(include_big=True, mode=TestMode.BENCHMARK)
-            if tc.name.startswith("test_cpu_") and tc.name.endswith("_benchmark")
+            for tc in collect_test_cases_by_name(
+                _BENCHMARK_NAME_PATTERN, include_big=True, mode=TestMode.BENCHMARK
+            )
         }
         assert benchmark_ops
         assert benchmark_ops <= set(_REGISTERED_KERNELS)

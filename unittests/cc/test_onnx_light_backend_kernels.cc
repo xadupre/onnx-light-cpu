@@ -588,7 +588,7 @@ TEST(OnnxLightBackendKernels, BinaryBenchmarkCorporaAreLazyAndRunThroughRuntime)
   EXPECT_TRUE(failures.empty()) << Describe(failures);
 }
 
-TEST(OnnxLightBackendKernels, BinaryBenchmarkCorporaCoverPriorityShapes) {
+TEST(OnnxLightBackendKernels, BinaryBenchmarkCorporaCoverEverySignatureAndPriorityShape) {
   const std::set<std::string> expected_shape_tags = {
       "contiguous_1d", "contiguous_2d",           "contiguous_3d",
       "contiguous_4d", "repeated_block_4d",       "inner_vector_4d",
@@ -613,6 +613,19 @@ TEST(OnnxLightBackendKernels, BinaryBenchmarkCorporaCoverPriorityShapes) {
     }
     EXPECT_EQ(shape_tags, expected_shape_tags) << entry.op_type;
     EXPECT_EQ(output_sizes, expected_output_sizes) << entry.op_type;
+    for (const auto &signature : entry.signatures) {
+      const std::string signature_tag = "_" + BinaryTypeSuffix(signature.left) + "x" +
+                                        BinaryTypeSuffix(signature.right) + "_to_" +
+                                        BinaryTypeSuffix(signature.output);
+      for (const std::string &shape_tag : expected_shape_tags) {
+        EXPECT_TRUE(std::any_of(cases.begin(), cases.end(),
+                                [&](const TestCase &test_case) {
+                                  return test_case.name.find("_" + shape_tag + signature_tag) !=
+                                         std::string::npos;
+                                }))
+            << entry.op_type << ": " << signature_tag << ", " << shape_tag;
+      }
+    }
   }
 }
 

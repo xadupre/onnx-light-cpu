@@ -60,9 +60,8 @@ const std::vector<std::pair<std::string, std::string>> &RegisteredKernelNames() 
   // inventory :cpp:func:`onnx_light_cpu::CollectRegisteredKernels` builds
   // from every ``Register*Kernel[s]`` call) rather than a second,
   // hand-maintained ``op_type -> kernel name`` list, so the two never drift
-  // apart. The result is ordered by ``(domain, op_type, device, kernel_name)``
-  // (the inventory's deterministic sort order), i.e. alphabetically by
-  // ``op_type`` here since every entry shares the same domain and device.
+  // apart. The result uses the inventory's deterministic
+  // ``(domain, op_type, device, kernel_name)`` order.
   static const std::vector<std::pair<std::string, std::string>> names = [] {
     std::vector<std::pair<std::string, std::string>> result;
     for (const KernelRegistration &record : CollectRegisteredKernels()) {
