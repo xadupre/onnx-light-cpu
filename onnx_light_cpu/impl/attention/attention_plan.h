@@ -81,12 +81,13 @@ struct AttentionDescriptor {
   /// ``std::invalid_argument`` on an invalid configuration.
   void Validate() const;
 
-  /// Throws ``std::invalid_argument`` when this instance uses a feature not
-  /// yet implemented by the CPU materialized path: tensor ``past``/``present``
-  /// cache, ``nonpad_kv_seqlen``, a non-zero ``softcap``, an observable
-  /// ``qk_matmul_output``, or a ``softmax_precision`` other than the default.
-  /// Roadmap PR11 only delivers the stateless FP32 materialized baseline;
-  /// later PRs lift these restrictions.
+  /// Throws ``std::invalid_argument`` when this instance uses a feature
+  /// outside the CPU materialized path's advertised boundary. Roadmap PR12
+  /// implements tensor ``past``/``present`` cache, ``nonpad_kv_seqlen``,
+  /// ``softcap``, every ``qk_matmul_output_mode``, and the observable
+  /// ``qk_matmul_output`` for equal-type FP32/FP16/BF16 Q/K/V. Only the
+  /// default (input-precision) or explicit FP32 ``softmax_precision`` are
+  /// supported; any other value is rejected here.
   void ValidateSupportedByMaterializedPath() const;
 };
 
@@ -95,14 +96,33 @@ struct AttentionDescriptor {
 /// cheap to construct (no allocation beyond the mask strides) and is not
 /// retained across invocations: shapes and strides may change every call.
 struct AttentionPlan {
+  /// Per-tensor element strides indexed as ``[batch, head, sequence]``; the
+  /// innermost (head-size) dimension is always contiguous (stride 1). Rank-3
+  /// and rank-4 layouts only differ in the relative order of ``head`` and
+  /// ``sequence`` strides, so the materialized kernel is layout-agnostic.
+  struct TensorStrides {
+    std::ptrdiff_t batch = 0;
+    std::ptrdiff_t head = 0;
+    std::ptrdiff_t sequence = 0;
+  };
+
   /// Builds the plan and validates ``q_shape``/``k_shape``/``v_shape`` (and
   /// ``mask_shape`` when ``mask_kind != kNone``) against ``descriptor`` and
   /// ``layout``. Throws ``std::invalid_argument`` on any shape mismatch (rank,
   /// head-count divisibility, incompatible head/mask dimensions).
+  ///
+  /// ``past_k_shape``/``past_v_shape`` are the (rank-4, always
+  /// ``(batch, kv_num_heads, past_sequence_length, head_size)``/
+  /// ``(batch, kv_num_heads, past_sequence_length, v_head_size)``) shapes of
+  /// the optional tensor cache; pass empty spans when there is no ``past_key``
+  /// / ``past_value`` input. ``attn_mask`` (and every mask broadcast target)
+  /// is resolved against the *total* KV length, i.e.
+  /// ``past_sequence_length + kv_sequence_length``.
   AttentionPlan(const AttentionDescriptor &descriptor, AttentionLayout layout,
                 std::span<const std::int64_t> q_shape, std::span<const std::int64_t> k_shape,
                 std::span<const std::int64_t> v_shape, std::span<const std::int64_t> mask_shape,
-                AttentionMaskKind mask_kind);
+                AttentionMaskKind mask_kind, std::span<const std::int64_t> past_k_shape = {},
+                std::span<const std::int64_t> past_v_shape = {});
 
   AttentionLayout layout = AttentionLayout::kRank4;
 
@@ -114,32 +134,48 @@ struct AttentionPlan {
   /// ``V`` head size (``Y`` head size); may differ from :cpp:member:`head_dim`.
   std::size_t v_head_dim = 0;
   std::size_t q_length = 0;
+  /// Length of the ``K``/``V`` inputs of *this* invocation (excludes any
+  /// tensor ``past_key``/``past_value`` cache).
   std::size_t kv_length = 0;
+  /// Length of the ``past_key``/``past_value`` cache; ``0`` when there is
+  /// none.
+  std::size_t past_length = 0;
+  /// ``past_length + kv_length``: the effective (total) KV length attended
+  /// to, and the length ``attn_mask``/``present_key``/``present_value`` are
+  /// resolved against.
+  std::size_t total_kv_length = 0;
   /// ``q_num_heads / kv_num_heads``; ``1`` for MHA, ``> 1`` for GQA/MQA.
   std::size_t group_size = 1;
 
   float scale = 1.0f;
   bool causal = false;
+  /// Bottom-right causal offset used when no per-batch offset (derived from
+  /// ``nonpad_kv_seqlen``) is supplied at compute time: query in-block index
+  /// ``i`` attends key ``j`` iff ``j <= i + causal_offset``. Equals
+  /// :cpp:member:`past_length` when a tensor ``past_key`` cache is present,
+  /// ``0`` otherwise.
+  std::int64_t causal_offset = 0;
   AttentionMaskKind mask_kind = AttentionMaskKind::kNone;
+  /// ``softcap`` attribute, copied from the descriptor; ``0`` disables it.
+  float softcap = 0.0f;
+  /// ``qk_matmul_output_mode`` attribute, copied from the descriptor.
+  std::int64_t qk_matmul_output_mode = 0;
+  /// Whether the optional ``qk_matmul_output`` output is wired.
+  bool has_qk_matmul_output = false;
 
-  /// Per-tensor element strides indexed as ``[batch, head, sequence]``; the
-  /// innermost (head-size) dimension is always contiguous (stride 1). Rank-3
-  /// and rank-4 layouts only differ in the relative order of ``head`` and
-  /// ``sequence`` strides, so the materialized kernel is layout-agnostic.
-  struct TensorStrides {
-    std::ptrdiff_t batch = 0;
-    std::ptrdiff_t head = 0;
-    std::ptrdiff_t sequence = 0;
-  };
   TensorStrides q_strides;
   TensorStrides k_strides;
   TensorStrides v_strides;
   TensorStrides y_strides;
+  /// Strides of the tensor ``past_key``/``past_value`` cache; only valid when
+  /// :cpp:member:`past_length` is non-zero.
+  TensorStrides past_k_strides;
+  TensorStrides past_v_strides;
 
   /// ``attn_mask`` element strides aligned (right-justified, ONNX broadcast
-  /// rules) to ``(batch, q_num_heads, q_length, kv_length)``; a broadcast
-  /// dimension has stride ``0``. Unused when :cpp:member:`mask_kind` is
-  /// :cpp:enumerator:`AttentionMaskKind::kNone`.
+  /// rules) to ``(batch, q_num_heads, q_length, total_kv_length)``; a
+  /// broadcast dimension has stride ``0``. Unused when
+  /// :cpp:member:`mask_kind` is :cpp:enumerator:`AttentionMaskKind::kNone`.
   struct MaskStrides {
     std::ptrdiff_t batch = 0;
     std::ptrdiff_t head = 0;
@@ -150,19 +186,48 @@ struct AttentionPlan {
 
   /// ``Y`` output shape, in :cpp:member:`layout`.
   std::vector<std::int64_t> output_shape() const;
+  /// ``present_key`` output shape: always rank-4
+  /// ``(batch, kv_num_heads, total_kv_length, head_size)``.
+  std::vector<std::int64_t> present_key_shape() const;
+  /// ``present_value`` output shape: always rank-4
+  /// ``(batch, kv_num_heads, total_kv_length, v_head_size)``.
+  std::vector<std::int64_t> present_value_shape() const;
+  /// ``qk_matmul_output`` output shape (when requested): always rank-4
+  /// ``(batch, q_num_heads, q_length, total_kv_length)``.
+  std::vector<std::int64_t> qk_matmul_output_shape() const;
 };
 
-/// Executes the stateless FP32 materialized baseline:
-/// ``S = scale * Q @ K^T``; composes causal and ``attn_mask`` biases
-/// additively; ``P = softmax(S)`` (a fully-masked row produces an all-zero
-/// output row rather than ``NaN``); ``Y = P @ V``.
+/// Executes the stateless-or-cached FP32 materialized baseline:
+/// ``S = scale * Q @ transpose(K)``; applies ``softcap`` when configured;
+/// composes causal and ``attn_mask`` biases additively (bottom-right,
+/// offset-aware causal per :cpp:member:`AttentionPlan::causal_offset` or, when
+/// ``nonpad_kv_seqlen`` is supplied, a per-batch offset and padding mask);
+/// ``P = softmax(S)`` (a fully-masked row produces an all-zero output row
+/// rather than ``NaN``); ``Y = P @ V``.
 ///
 /// ``mask`` points to ``bool``-sized (``uint8_t``, non-zero is ``true``)
 /// elements when :cpp:member:`AttentionPlan::mask_kind` is
 /// :cpp:enumerator:`AttentionMaskKind::kBoolean`, or ``float`` elements when
 /// it is :cpp:enumerator:`AttentionMaskKind::kAdditive`; it is unused (may be
 /// ``nullptr``) when :cpp:enumerator:`AttentionMaskKind::kNone`.
+///
+/// ``past_k``/``past_v`` (may be ``nullptr`` when
+/// :cpp:member:`AttentionPlan::past_length` is ``0``) are read through
+/// :cpp:member:`AttentionPlan::past_k_strides`/:cpp:member:`AttentionPlan::past_v_strides`
+/// and logically precede ``k``/``v`` along the KV axis.
+///
+/// ``nonpad_kv_seqlen`` (may be ``nullptr``), when supplied, is a per-batch
+/// ``int64`` array of length :cpp:member:`AttentionPlan::batch`: it overrides
+/// the causal offset with ``nonpad_kv_seqlen[b] - q_length`` and additionally
+/// masks KV positions ``>= nonpad_kv_seqlen[b]``.
+///
+/// ``qk_matmul_output`` (may be ``nullptr``), when supplied, is filled with
+/// the ``(batch, q_num_heads, q_length, total_kv_length)`` tensor selected by
+/// :cpp:member:`AttentionPlan::qk_matmul_output_mode`.
 void ComputeAttentionFloat32(const AttentionPlan &plan, const float *q, const float *k,
-                             const float *v, const void *mask, float *y);
+                             const float *v, const void *mask, float *y,
+                             const float *past_k = nullptr, const float *past_v = nullptr,
+                             const std::int64_t *nonpad_kv_seqlen = nullptr,
+                             float *qk_matmul_output = nullptr);
 
 } // namespace onnx_light_cpu
