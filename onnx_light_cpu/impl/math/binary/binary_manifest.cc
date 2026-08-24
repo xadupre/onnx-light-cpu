@@ -80,9 +80,22 @@ constexpr std::array<Signature, 8> kPReluSignatures = {{{DT::FLOAT, DT::FLOAT, D
                                                         {DT::UINT32, DT::UINT32, DT::UINT32},
                                                         {DT::UINT64, DT::UINT64, DT::UINT64}}};
 
-constexpr std::array<Signature, 2> kPowSignatures = {{
-    {DT::FLOAT, DT::FLOAT, DT::FLOAT},
-    {DT::FLOAT16, DT::FLOAT16, DT::FLOAT16},
+constexpr std::array<Signature, 29> kPowSignatures = {{
+    {DT::FLOAT, DT::FLOAT, DT::FLOAT},          {DT::FLOAT, DT::INT32, DT::FLOAT},
+    {DT::FLOAT, DT::INT64, DT::FLOAT},          {DT::FLOAT, DT::UINT32, DT::FLOAT},
+    {DT::FLOAT, DT::UINT64, DT::FLOAT},         {DT::FLOAT16, DT::FLOAT, DT::FLOAT16},
+    {DT::FLOAT16, DT::FLOAT16, DT::FLOAT16},    {DT::FLOAT16, DT::BFLOAT16, DT::FLOAT16},
+    {DT::FLOAT16, DT::INT32, DT::FLOAT16},      {DT::FLOAT16, DT::INT64, DT::FLOAT16},
+    {DT::FLOAT16, DT::UINT32, DT::FLOAT16},     {DT::FLOAT16, DT::UINT64, DT::FLOAT16},
+    {DT::BFLOAT16, DT::FLOAT, DT::BFLOAT16},    {DT::BFLOAT16, DT::FLOAT16, DT::BFLOAT16},
+    {DT::BFLOAT16, DT::BFLOAT16, DT::BFLOAT16}, {DT::BFLOAT16, DT::INT32, DT::BFLOAT16},
+    {DT::BFLOAT16, DT::INT64, DT::BFLOAT16},    {DT::BFLOAT16, DT::UINT32, DT::BFLOAT16},
+    {DT::BFLOAT16, DT::UINT64, DT::BFLOAT16},   {DT::INT32, DT::FLOAT, DT::INT32},
+    {DT::INT32, DT::INT32, DT::INT32},          {DT::INT32, DT::INT64, DT::INT32},
+    {DT::INT32, DT::UINT32, DT::INT32},         {DT::INT32, DT::UINT64, DT::INT32},
+    {DT::INT64, DT::FLOAT, DT::INT64},          {DT::INT64, DT::INT32, DT::INT64},
+    {DT::INT64, DT::INT64, DT::INT64},          {DT::INT64, DT::UINT32, DT::INT64},
+    {DT::INT64, DT::UINT64, DT::INT64},
 }};
 
 constexpr std::array<BinaryManifestEntry, 19> kManifest = {{
@@ -91,7 +104,7 @@ constexpr std::array<BinaryManifestEntry, 19> kManifest = {{
     {BinaryOperator::kMul, "Mul", 14, kArithmeticSignatures},
     {BinaryOperator::kDiv, "Div", 14, kArithmeticSignatures},
     {BinaryOperator::kMod, "Mod", 13, kArithmeticSignatures},
-    {BinaryOperator::kPow, "Pow", 7, kPowSignatures},
+    {BinaryOperator::kPow, "Pow", 15, kPowSignatures},
     {BinaryOperator::kEqual, "Equal", 19, kEqualSignatures},
     {BinaryOperator::kGreater, "Greater", 13, kComparisonSignatures},
     {BinaryOperator::kGreaterOrEqual, "GreaterOrEqual", 16, kComparisonSignatures},

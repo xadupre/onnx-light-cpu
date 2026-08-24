@@ -4,10 +4,12 @@
 
 #include "onnx_light_cpu/impl/math/binary/binary_kernel_descriptor.h"
 #include "onnx_light_cpu/impl/math/binary/binary_manifest.h"
+#include "onnx_light_cpu/impl/math/half_conversion.h"
 
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -62,14 +64,20 @@ TEST(BinaryKernelDescriptor, FiltersAndResolvesSupportedTypeSignatures) {
   EXPECT_EQ(float_mod.ResolveOutputType(BinaryDataType::FLOAT, BinaryDataType::FLOAT),
             BinaryDataType::FLOAT);
 
-  const BinaryKernelDescriptor pow("Pow", 7, {});
+  const BinaryKernelDescriptor pow("Pow", 15, {});
   EXPECT_EQ(pow.ResolveOutputType(BinaryDataType::FLOAT, BinaryDataType::FLOAT),
             BinaryDataType::FLOAT);
   EXPECT_EQ(
       pow.ResolveAdapter(BinaryDataType::FLOAT16, BinaryDataType::FLOAT16, BinaryDataType::FLOAT16)
           .output_size,
       2u);
-  EXPECT_THROW((pow.ResolveOutputType(BinaryDataType::INT64, BinaryDataType::UINT32)),
+  EXPECT_EQ(pow.ResolveOutputType(BinaryDataType::FLOAT, BinaryDataType::INT64),
+            BinaryDataType::FLOAT);
+  EXPECT_EQ(pow.ResolveOutputType(BinaryDataType::BFLOAT16, BinaryDataType::UINT32),
+            BinaryDataType::BFLOAT16);
+  EXPECT_EQ(pow.ResolveOutputType(BinaryDataType::INT64, BinaryDataType::UINT32),
+            BinaryDataType::INT64);
+  EXPECT_THROW((pow.ResolveOutputType(BinaryDataType::INT64, BinaryDataType::FLOAT16)),
                std::invalid_argument);
 
   const BinaryKernelDescriptor prelu("PRelu", 16, {});
@@ -83,6 +91,31 @@ TEST(BinaryKernelDescriptor, AssignsStableDistinctCacheIdentities) {
   EXPECT_NE(first.cache_identity(), 0u);
   EXPECT_NE(second.cache_identity(), 0u);
   EXPECT_NE(first.cache_identity(), second.cache_identity());
+}
+
+TEST(BinaryKernelDescriptor, PowMixedTypesExecuteWithBaseOutputType) {
+  const BinaryKernelDescriptor pow("Pow", 15, {});
+
+  const float float_base = 2.0f;
+  const std::int64_t integer_exponent = 3;
+  float float_output = 0.0f;
+  pow.ResolveAdapter(BinaryDataType::FLOAT, BinaryDataType::INT64, BinaryDataType::FLOAT)
+      .scalar(&float_base, &integer_exponent, &float_output);
+  EXPECT_FLOAT_EQ(float_output, 8.0f);
+
+  const std::int32_t integer_base = -3;
+  const float integral_float_exponent = 2.0f;
+  std::int32_t integer_output = 0;
+  pow.ResolveAdapter(BinaryDataType::INT32, BinaryDataType::FLOAT, BinaryDataType::INT32)
+      .scalar(&integer_base, &integral_float_exponent, &integer_output);
+  EXPECT_EQ(integer_output, 9);
+
+  const std::uint16_t half_base = onnx_light_cpu::detail::FloatToFloat16Bits(4.0f);
+  const std::uint16_t bfloat_exponent = onnx_light_cpu::detail::FloatToBFloat16Bits(0.5f);
+  std::uint16_t half_output = 0;
+  pow.ResolveAdapter(BinaryDataType::FLOAT16, BinaryDataType::BFLOAT16, BinaryDataType::FLOAT16)
+      .scalar(&half_base, &bfloat_exponent, &half_output);
+  EXPECT_FLOAT_EQ(onnx_light_cpu::detail::Float16BitsToFloat(half_output), 2.0f);
 }
 
 } // namespace

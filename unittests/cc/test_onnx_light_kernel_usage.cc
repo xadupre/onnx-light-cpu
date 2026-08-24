@@ -12,6 +12,7 @@
 #include "onnx_light_cpu/kernels/math/gemm_kernel.h"
 #include "onnx_light_cpu/kernels/math/integer_matmul_kernel.h"
 #include "onnx_light_cpu/kernels/math/matmul_kernel.h"
+#include "onnx_light_cpu/kernels/math/swiglu_kernel.h"
 
 #include <gtest/gtest.h>
 
@@ -34,6 +35,7 @@ TEST(OnnxLightKernelUsage, KernelNamesAreLibraryQualified) {
   EXPECT_STREQ(onnx_light_cpu::MatMulIntegerKernel::kName, "onnx_light_cpu::MatMulInteger");
   EXPECT_STREQ(onnx_light_cpu::QLinearMatMulKernel::kName, "onnx_light_cpu::QLinearMatMul");
   EXPECT_STREQ(onnx_light_cpu::NotKernel::kName, "onnx_light_cpu::Not");
+  EXPECT_STREQ(onnx_light_cpu::SwiGLUKernel::kName, "onnx_light_cpu::SwiGLU");
 }
 
 // ``RegisteredKernelNames`` maps every overridden ONNX op_type to the
@@ -53,6 +55,7 @@ TEST(OnnxLightKernelUsage, RegisteredKernelNames) {
       {"MatMulInteger", "onnx_light_cpu::MatMulInteger"},
       {"Not", "onnx_light_cpu::Not"},
       {"QLinearMatMul", "onnx_light_cpu::QLinearMatMul"},
+      {"SwiGLU", "onnx_light_cpu::SwiGLU"},
   };
   for (const auto &entry : onnx_light_cpu::GetBinaryManifest()) {
     expected.emplace_back(std::string(entry.op_type),

@@ -270,6 +270,12 @@ TEST(OnnxLightBackendKernels, LogRunsThroughRuntime) {
   EXPECT_TRUE(failures.empty()) << Describe(failures);
 }
 
+TEST(OnnxLightBackendKernels, SwiGLURunsThroughRuntime) {
+  const std::vector<std::string> failures =
+      RunCpuBackendCases("SwiGLU", core::backend_test::TestMode::TEST);
+  EXPECT_TRUE(failures.empty()) << Describe(failures);
+}
+
 TEST(OnnxLightBackendKernels, NotRunsThroughRuntime) {
   const std::vector<std::string> failures =
       RunCpuBackendCases("Not", core::backend_test::TestMode::TEST);

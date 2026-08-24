@@ -5,6 +5,7 @@
 #pragma once
 
 #include <bit>
+#include <cstddef>
 #include <cstdint>
 
 namespace onnx_light_cpu::detail {
@@ -85,5 +86,10 @@ inline std::uint16_t FloatToBFloat16Bits(float value) {
   const std::uint32_t rounding_bias = 0x7fffu + ((bits >> 16) & 1u);
   return static_cast<std::uint16_t>((bits + rounding_bias) >> 16);
 }
+
+void ConvertFloat16ToFloat32(const std::uint16_t *src, float *dst, std::size_t count);
+void ConvertBFloat16ToFloat32(const std::uint16_t *src, float *dst, std::size_t count);
+void ConvertFloat32ToFloat16(const float *src, std::uint16_t *dst, std::size_t count);
+void ConvertFloat32ToBFloat16(const float *src, std::uint16_t *dst, std::size_t count);
 
 } // namespace onnx_light_cpu::detail

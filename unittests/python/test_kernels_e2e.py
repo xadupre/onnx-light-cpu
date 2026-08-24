@@ -87,6 +87,7 @@ _REGISTERED_KERNELS = {
     "Pow": "onnx_light_cpu::Pow",
     "QLinearMatMul": "onnx_light_cpu::QLinearMatMul",
     "Sub": "onnx_light_cpu::Sub",
+    "SwiGLU": "onnx_light_cpu::SwiGLU",
     "Xor": "onnx_light_cpu::Xor",
 }
 
@@ -223,11 +224,10 @@ class TestBackendCases:
             }:
                 assert isinstance(record.since_version, int)
                 assert record.since_version >= 1
-            # Attention is the only onnx-light-cpu kernel that restricts its
-            # opset lower bound to a specific version (opset 23 introduced the
-            # operator).
             elif record.op_type == "Attention":
                 assert record.since_version == 23
+            elif record.op_type == "SwiGLU":
+                assert record.since_version == 28
             else:
                 assert record.since_version is None
             assert record.until_version is None

@@ -113,6 +113,15 @@ void ExpFloat64_AVX512(const double *input, double *output, std::size_t count);
 /// back to float16.
 void ExpFloat16(const uint16_t *input, uint16_t *output, std::size_t count);
 
+void SwiGLUFloat32(const float *gate, const float *value, float *output, std::size_t count,
+                   float alpha);
+void SwiGLUFloat64(const double *gate, const double *value, double *output, std::size_t count,
+                   double alpha);
+void SwiGLUFloat16(const std::uint16_t *gate, const std::uint16_t *value, std::uint16_t *output,
+                   std::size_t count, float alpha);
+void SwiGLUBFloat16(const std::uint16_t *gate, const std::uint16_t *value, std::uint16_t *output,
+                    std::size_t count, float alpha);
+
 /// Computes elementwise natural logarithm: out[i] = log(input[i]) for float32.
 /// Uses a vectorized minimax polynomial approximation with runtime AVX-512/
 /// AVX/SSE2 dispatch and a ``std::log`` scalar fallback. The result is accurate
