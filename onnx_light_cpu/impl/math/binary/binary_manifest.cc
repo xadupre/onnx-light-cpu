@@ -104,7 +104,7 @@ constexpr std::array<BinaryManifestEntry, 19> kManifest = {{
     {BinaryOperator::kMul, "Mul", 14, kArithmeticSignatures},
     {BinaryOperator::kDiv, "Div", 14, kArithmeticSignatures},
     {BinaryOperator::kMod, "Mod", 13, kArithmeticSignatures},
-    {BinaryOperator::kPow, "Pow", 7, kPowSignatures},
+    {BinaryOperator::kPow, "Pow", 15, kPowSignatures},
     {BinaryOperator::kEqual, "Equal", 19, kEqualSignatures},
     {BinaryOperator::kGreater, "Greater", 13, kComparisonSignatures},
     {BinaryOperator::kGreaterOrEqual, "GreaterOrEqual", 16, kComparisonSignatures},

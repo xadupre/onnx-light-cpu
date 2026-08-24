@@ -64,7 +64,7 @@ TEST(BinaryKernelDescriptor, FiltersAndResolvesSupportedTypeSignatures) {
   EXPECT_EQ(float_mod.ResolveOutputType(BinaryDataType::FLOAT, BinaryDataType::FLOAT),
             BinaryDataType::FLOAT);
 
-  const BinaryKernelDescriptor pow("Pow", 7, {});
+  const BinaryKernelDescriptor pow("Pow", 15, {});
   EXPECT_EQ(pow.ResolveOutputType(BinaryDataType::FLOAT, BinaryDataType::FLOAT),
             BinaryDataType::FLOAT);
   EXPECT_EQ(
@@ -94,7 +94,7 @@ TEST(BinaryKernelDescriptor, AssignsStableDistinctCacheIdentities) {
 }
 
 TEST(BinaryKernelDescriptor, PowMixedTypesExecuteWithBaseOutputType) {
-  const BinaryKernelDescriptor pow("Pow", 7, {});
+  const BinaryKernelDescriptor pow("Pow", 15, {});
 
   const float float_base = 2.0f;
   const std::int64_t integer_exponent = 3;

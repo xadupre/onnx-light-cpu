@@ -367,7 +367,7 @@ TEST(BinaryBroadcastPlan, HalfPrecisionAdaptersUseBulkConversionAndMatchScalarRe
   const std::array<std::size_t, 7> sizes = {0, 1, 7, 8, 15, 256, 263};
   for (std::string_view op : ops) {
     for (BinaryDataType type : types) {
-      const BinaryKernelDescriptor descriptor(std::string(op), op == "Pow" ? 7 : 16,
+      const BinaryKernelDescriptor descriptor(std::string(op), op == "Pow" ? 15 : 16,
                                               DefaultAttributes(op, type));
       const auto &adapter = descriptor.ResolveAdapter(type, type, type);
       ASSERT_NE(adapter.bulk_contiguous, nullptr) << op;
