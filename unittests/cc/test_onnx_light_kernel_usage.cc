@@ -56,13 +56,13 @@ TEST(OnnxLightKernelUsage, RegisteredKernelNames) {
       {"Not", "onnx_light_cpu::Not"},
       {"QLinearMatMul", "onnx_light_cpu::QLinearMatMul"},
       {"SwiGLU", "onnx_light_cpu::SwiGLU"},
-      {"TreeEnsemble", "onnx_light_cpu::TreeEnsemble"},
   };
   for (const auto &entry : onnx_light_cpu::GetBinaryManifest()) {
     expected.emplace_back(std::string(entry.op_type),
                           std::string("onnx_light_cpu::") + std::string(entry.op_type));
   }
   std::sort(expected.begin(), expected.end());
+  expected.emplace_back("TreeEnsemble", "onnx_light_cpu::TreeEnsemble");
   EXPECT_EQ(onnx_light_cpu::RegisteredKernelNames(), expected);
 }
 

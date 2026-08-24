@@ -3,9 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "onnx_light_cpu/backend_test/cases/traditionalml/include_traditionalml_cases.h"
+#include "onnx_light_cpu/backend_test/cases/traditionalml/tree_ensemble_corpus.h"
 
 #include "onnx_light_cpu/impl/traditionalml/tree_ensemble.h"
-#include "onnx_light_cpu/testing/tree_ensemble_corpus.h"
 
 #include "onnx_core/backend_test/expect.h"
 #include "onnx_core/runtime/kernels/cast_helper.h"
@@ -33,8 +33,6 @@ using rt_ns::DataType;
 using rt_ns::DefaultOpset;
 using rt_ns::OpsetId;
 using rt_ns::Tensor;
-using testing::TreeEnsembleCorpusCase;
-
 constexpr std::int64_t kMlOpsetVersion = 5;
 
 void AddInt(NodeProto &node, const char *name, std::int64_t value) {
@@ -346,7 +344,7 @@ void RegisterCpuTreeEnsembleCases(std::vector<TestCase> &registry, TestMode mode
   if (mode != TestMode::TEST) {
     return;
   }
-  for (TreeEnsembleCorpusCase test_case : testing::GenerateTreeEnsembleV5Corpus()) {
+  for (TreeEnsembleCorpusCase test_case : GenerateTreeEnsembleV5Corpus()) {
     NodeProto node = MakeTreeEnsembleNode(test_case.attributes);
     const std::string name = "test_cpu_treeensemble_v5_" + test_case.name;
     Expect(registry, std::move(node), name, {DefaultOpset(13), ml_opset},

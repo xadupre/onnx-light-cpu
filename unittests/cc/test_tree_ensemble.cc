@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "onnx_light_cpu/backend_test/cases/traditionalml/tree_ensemble_corpus.h"
 #include "onnx_light_cpu/impl/traditionalml/tree_ensemble.h"
-#include "onnx_light_cpu/testing/tree_ensemble_corpus.h"
 
 #include "onnx_light_cpu/impl/execution.h"
 
@@ -48,7 +48,7 @@ using onnx_light_cpu::TreeEnsembleTuningPolicy;
 using onnx_light_cpu::TreeEnsembleTuningRegistry;
 using onnx_light_cpu::TreePostTransform;
 using onnx_light_cpu::TreeValueType;
-using onnx_light_cpu::testing::GenerateTreeEnsembleV5Corpus;
+using onnx_light_cpu::backend_test::GenerateTreeEnsembleV5Corpus;
 
 TreeEnsembleAttributes Stump() {
   TreeEnsembleAttributes attributes;

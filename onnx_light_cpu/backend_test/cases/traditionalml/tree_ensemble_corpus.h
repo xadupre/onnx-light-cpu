@@ -11,7 +11,7 @@
 #include <string>
 #include <vector>
 
-namespace onnx_light_cpu::testing {
+namespace onnx_light_cpu::backend_test {
 
 /// Reusable differential case for the ai.onnx.ml TreeEnsemble-5 schema.
 struct TreeEnsembleCorpusCase {
@@ -30,4 +30,4 @@ struct TreeEnsembleCorpusCase {
 /// independent scalar oracle.
 std::vector<TreeEnsembleCorpusCase> GenerateTreeEnsembleV5Corpus();
 
-} // namespace onnx_light_cpu::testing
+} // namespace onnx_light_cpu::backend_test

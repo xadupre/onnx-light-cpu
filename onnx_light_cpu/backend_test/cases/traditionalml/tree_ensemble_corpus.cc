@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "onnx_light_cpu/testing/tree_ensemble_corpus.h"
+#include "onnx_light_cpu/backend_test/cases/traditionalml/tree_ensemble_corpus.h"
 
 #include <cmath>
 #include <cstddef>
@@ -12,7 +12,7 @@
 #include <utility>
 #include <vector>
 
-namespace onnx_light_cpu::testing {
+namespace onnx_light_cpu::backend_test {
 namespace {
 
 TreeEnsembleAttributes MakeStump(TreeBranchMode mode, TreeValueType type) {
@@ -211,4 +211,4 @@ std::vector<TreeEnsembleCorpusCase> GenerateTreeEnsembleV5Corpus() {
   return cases;
 }
 
-} // namespace onnx_light_cpu::testing
+} // namespace onnx_light_cpu::backend_test
