@@ -417,7 +417,7 @@ TEST(OnnxLightBackendKernels, AttentionBenchmarkCoversPriorityCorpus) {
        {"test_cpu_attention_opset23_rank4_mha_q1_kv128_hd64_none_stateless_float16_benchmark",
         "test_cpu_attention_opset23_rank4_gqa_q128_kv128_hd64_causal_stateless_bfloat16_benchmark",
         "test_cpu_attention_opset23_rank3_mha_q128_kv128_hd64_none_stateless_float32_benchmark"}) {
-    EXPECT_TRUE(names.contains(name)) << name;
+    EXPECT_TRUE(names.contains(std::string(name))) << name;
   }
   for (std::string_view tag :
        {"_float32_benchmark", "_float16_benchmark", "_bfloat16_benchmark", "_rank3_", "_rank4_",
