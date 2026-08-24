@@ -656,9 +656,29 @@ if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
     file(GLOB _onnx_light_kernels_lib
         "${_onnx_light_libdir}/liblib_onnx_kernels.*"
         "${_onnx_light_libdir}/lib_onnx_kernels.*")
+    file(GLOB _onnx_light_op_lib
+        "${_onnx_light_libdir}/liblib_onnx_op.*"
+        "${_onnx_light_libdir}/lib_onnx_op.*")
     file(GLOB _onnx_light_backend_test_lib
         "${_onnx_light_libdir}/liblib_onnx_backend_test.*"
         "${_onnx_light_libdir}/lib_onnx_backend_test.*")
+    if(_onnx_light_op_lib)
+      list(GET _onnx_light_op_lib 0 _onnx_light_op_lib)
+      add_library(onnx_light::lib_onnx_op
+          ${_onnx_light_imported_library_type} IMPORTED GLOBAL)
+      set_target_properties(onnx_light::lib_onnx_op PROPERTIES
+          IMPORTED_LOCATION "${_onnx_light_op_lib}"
+          INTERFACE_LINK_LIBRARIES onnx_light::lib_onnx_core)
+      if(WIN32)
+        if(NOT ONNX_LIGHT_CPU_ONNX_LIGHT_OP_IMPLIB)
+          message(FATAL_ERROR
+              "The onnx-light op Windows import library is required for "
+              "source-runtime integration.")
+        endif()
+        set_property(TARGET onnx_light::lib_onnx_op PROPERTY
+            IMPORTED_IMPLIB "${ONNX_LIGHT_CPU_ONNX_LIGHT_OP_IMPLIB}")
+      endif()
+    endif()
     if(_onnx_light_kernels_lib AND _onnx_light_backend_test_lib)
       list(GET _onnx_light_kernels_lib 0 _onnx_light_kernels_lib)
       list(GET _onnx_light_backend_test_lib 0 _onnx_light_backend_test_lib)
@@ -748,6 +768,8 @@ if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
   if(TARGET onnx_light::lib_onnx_backend_test)
     add_library(lib_onnx_light_cpu_backend_test ${_cpu_lib_type}
         "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/collect_test_cases.cc"
+        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/cases/elementwise/collect_elementwise_cases.cc"
+        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/cases/elementwise/cases_binary.cc"
         "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/cases/math/collect_math_cases.cc"
         "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/cases/math/cases_abs.cc"
         "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/cases/math/cases_exp.cc"
@@ -1147,6 +1169,11 @@ if(ONNX_LIGHT_CPU_BUILD_TESTS)
           if(TARGET lib_onnx_light_cpu_backend_test)
             onnx_light_cpu_add_test("${_test_src}"
                 "lib_onnx_light_cpu_kernels;lib_onnx_light_cpu_backend_test")
+          endif()
+        elseif(_test_name STREQUAL "test_onnx_light_binary_manifest")
+          if(TARGET onnx_light::lib_onnx_op)
+            onnx_light_cpu_add_test("${_test_src}"
+                "lib_onnx_light_cpu_kernels;onnx_light::lib_onnx_op")
           endif()
         else()
           onnx_light_cpu_add_test("${_test_src}" lib_onnx_light_cpu_kernels)

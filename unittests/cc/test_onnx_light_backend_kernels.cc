@@ -26,6 +26,7 @@
 // onnx-light itself.
 
 #include "onnx_light_cpu/backend_test/collect_test_cases.h"
+#include "onnx_light_cpu/impl/math/binary/binary_manifest.h"
 #include "onnx_light_cpu/kernels/register_kernels.h"
 
 #include "onnx_core/backend_test/test_case.h"
@@ -38,9 +39,12 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
+#include <cctype>
 #include <cstdint>
 #include <set>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -60,11 +64,85 @@ using core::runtime::Tensor;
 using core::runtime::TensorComparison;
 using core::runtime::Tensors;
 
+const std::array<std::string_view, 7> kBinaryShapeTags = {
+    "contiguous",   "left_scalar",     "right_scalar", "repeated_block",
+    "inner_vector", "outer_broadcast", "general",
+};
+
+std::string Lowercase(std::string value) {
+  std::transform(value.begin(), value.end(), value.begin(),
+                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+  return value;
+}
+
+std::string BinaryTypeSuffix(onnx_light_cpu::BinaryDataType type) {
+  switch (type) {
+  case onnx_light_cpu::BinaryDataType::BOOL:
+    return "bool";
+  case onnx_light_cpu::BinaryDataType::FLOAT:
+    return "float32";
+  case onnx_light_cpu::BinaryDataType::DOUBLE:
+    return "float64";
+  case onnx_light_cpu::BinaryDataType::FLOAT16:
+    return "float16";
+  case onnx_light_cpu::BinaryDataType::BFLOAT16:
+    return "bfloat16";
+  case onnx_light_cpu::BinaryDataType::INT8:
+    return "int8";
+  case onnx_light_cpu::BinaryDataType::INT16:
+    return "int16";
+  case onnx_light_cpu::BinaryDataType::INT32:
+    return "int32";
+  case onnx_light_cpu::BinaryDataType::INT64:
+    return "int64";
+  case onnx_light_cpu::BinaryDataType::UINT8:
+    return "uint8";
+  case onnx_light_cpu::BinaryDataType::UINT16:
+    return "uint16";
+  case onnx_light_cpu::BinaryDataType::UINT32:
+    return "uint32";
+  case onnx_light_cpu::BinaryDataType::UINT64:
+    return "uint64";
+  default:
+    throw std::invalid_argument("unsupported binary type");
+  }
+}
+
+bool IsBinaryNonCommutative(onnx_light_cpu::BinaryOperator op) {
+  using onnx_light_cpu::BinaryOperator;
+  switch (op) {
+  case BinaryOperator::kSub:
+  case BinaryOperator::kDiv:
+  case BinaryOperator::kPow:
+  case BinaryOperator::kGreater:
+  case BinaryOperator::kGreaterOrEqual:
+  case BinaryOperator::kLess:
+  case BinaryOperator::kLessOrEqual:
+  case BinaryOperator::kBitShift:
+    return true;
+  default:
+    return false;
+  }
+}
+
+std::vector<TestCase> CollectCpuCases(const std::string &op_type,
+                                      core::backend_test::TestMode mode) {
+  onnx_light_cpu::backend_test::RegisterCpuKernelBackendTestCases();
+  std::vector<TestCase> filtered;
+  std::vector<TestCase> cases = CollectTestCases(op_type, /*include_big=*/false, mode);
+  for (TestCase &tc : cases) {
+    if (tc.name.rfind("test_cpu_", 0) == 0) {
+      filtered.emplace_back(std::move(tc));
+    }
+  }
+  return filtered;
+}
+
 // onnx-light resolves kernels by (domain, op_type) only — never by opset
 // version — so the concrete default opset used to build the runtime context
 // does not affect which kernel a node dispatches to. A fixed recent version is
 // therefore sufficient to drive every registered case.
-constexpr int64_t kRuntimeDefaultOpsetVersion = 18;
+constexpr int64_t kRuntimeDefaultOpsetVersion = 20;
 
 // Compares a runtime output tensor against the reference output of a backend
 // test case using onnx-light's public ``CompareTensors`` helper
@@ -131,7 +209,11 @@ std::vector<std::string> RunCpuBackendCases(const std::string &op_type,
       continue;
     }
     ++cpu_cases;
-    RunCaseThroughRuntime(tc, compare, failures);
+    try {
+      RunCaseThroughRuntime(tc, compare, failures);
+    } catch (const std::exception &e) {
+      failures.push_back(tc.name + ": " + e.what());
+    }
   }
   if (cpu_cases == 0) {
     failures.push_back("no onnx-light-cpu backend test cases registered for " + op_type);
@@ -210,6 +292,62 @@ TEST(OnnxLightBackendKernels, MatMulIntegerRunsThroughRuntime) {
   const std::vector<std::string> failures =
       RunCpuBackendCases("MatMulInteger", core::backend_test::TestMode::TEST);
   EXPECT_TRUE(failures.empty()) << Describe(failures);
+}
+
+TEST(OnnxLightBackendKernels, BinaryElementwiseRunsThroughRuntime) {
+  std::vector<std::string> failures;
+  for (const auto &entry : onnx_light_cpu::GetBinaryManifest()) {
+    const std::vector<std::string> op_failures =
+        RunCpuBackendCases(std::string(entry.op_type), core::backend_test::TestMode::TEST);
+    failures.insert(failures.end(), op_failures.begin(), op_failures.end());
+  }
+  EXPECT_TRUE(failures.empty()) << Describe(failures);
+}
+
+TEST(OnnxLightBackendKernels, BinaryElementwiseCorpusCoversTypesShapesAndSwapCases) {
+  for (const auto &entry : onnx_light_cpu::GetBinaryManifest()) {
+    const std::vector<TestCase> cases =
+        CollectCpuCases(std::string(entry.op_type), core::backend_test::TestMode::TEST);
+    ASSERT_FALSE(cases.empty()) << entry.op_type;
+    const std::string op_prefix = "test_cpu_" + Lowercase(std::string(entry.op_type)) + "_";
+    for (std::string_view tag : kBinaryShapeTags) {
+      EXPECT_TRUE(std::any_of(cases.begin(), cases.end(),
+                              [&](const TestCase &test_case) {
+                                return test_case.name.rfind(op_prefix, 0) == 0 &&
+                                       test_case.name.find("_" + std::string(tag) + "_") !=
+                                           std::string::npos;
+                              }))
+          << entry.op_type << " missing tag " << tag;
+    }
+    for (const auto &signature : entry.signatures) {
+      const std::string type_tag = BinaryTypeSuffix(signature.left) + "x" +
+                                   BinaryTypeSuffix(signature.right) + "_to_" +
+                                   BinaryTypeSuffix(signature.output);
+      EXPECT_TRUE(std::any_of(cases.begin(), cases.end(),
+                              [&](const TestCase &test_case) {
+                                return test_case.name.rfind(op_prefix, 0) == 0 &&
+                                       test_case.name.find(type_tag) != std::string::npos;
+                              }))
+          << entry.op_type << " missing signature " << type_tag;
+      if (IsBinaryNonCommutative(entry.op)) {
+        EXPECT_TRUE(std::any_of(cases.begin(), cases.end(),
+                                [&](const TestCase &test_case) {
+                                  return test_case.name.rfind(op_prefix, 0) == 0 &&
+                                         test_case.name.find(type_tag) != std::string::npos &&
+                                         test_case.name.ends_with("_swapped");
+                                }))
+            << entry.op_type << " missing swapped signature " << type_tag;
+      }
+    }
+    if (entry.op == onnx_light_cpu::BinaryOperator::kBitShift) {
+      EXPECT_TRUE(std::any_of(cases.begin(), cases.end(), [](const TestCase &test_case) {
+        return test_case.name.find("_left") != std::string::npos;
+      }));
+      EXPECT_TRUE(std::any_of(cases.begin(), cases.end(), [](const TestCase &test_case) {
+        return test_case.name.find("_right") != std::string::npos;
+      }));
+    }
+  }
 }
 
 TEST(OnnxLightBackendKernels, TreeEnsembleCorpusRegistersOnlyMlOpset5) {
@@ -350,6 +488,24 @@ TEST(OnnxLightBackendKernels, LogBenchmarkRunsThroughRuntime) {
 TEST(OnnxLightBackendKernels, NotBenchmarkRunsThroughRuntime) {
   const std::vector<std::string> failures = RunCpuBackendCases(
       "Not", core::backend_test::TestMode::BENCHMARK, "test_cpu_not_n1024_bool_benchmark");
+  EXPECT_TRUE(failures.empty()) << Describe(failures);
+}
+
+TEST(OnnxLightBackendKernels, BinaryBenchmarkCorporaAreLazyAndRunThroughRuntime) {
+  std::vector<std::string> failures;
+  for (const auto &entry : onnx_light_cpu::GetBinaryManifest()) {
+    const std::vector<TestCase> cases =
+        CollectCpuCases(std::string(entry.op_type), core::backend_test::TestMode::BENCHMARK);
+    ASSERT_FALSE(cases.empty()) << entry.op_type;
+    for (const TestCase &test_case : cases) {
+      EXPECT_TRUE(test_case.is_lazy()) << test_case.name;
+      EXPECT_FALSE(test_case.materialized()) << test_case.name;
+      EXPECT_TRUE(test_case.name.ends_with("_benchmark")) << test_case.name;
+    }
+    const std::vector<std::string> op_failures = RunCpuBackendCases(
+        std::string(entry.op_type), core::backend_test::TestMode::BENCHMARK, cases.front().name);
+    failures.insert(failures.end(), op_failures.begin(), op_failures.end());
+  }
   EXPECT_TRUE(failures.empty()) << Describe(failures);
 }
 

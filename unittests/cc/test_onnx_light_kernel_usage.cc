@@ -4,6 +4,7 @@
 
 #include "onnx_light_cpu/kernels/kernel_usage.h"
 
+#include "onnx_light_cpu/impl/math/binary/binary_manifest.h"
 #include "onnx_light_cpu/kernels/attention/attention_kernel.h"
 #include "onnx_light_cpu/kernels/logical/not_kernel.h"
 #include "onnx_light_cpu/kernels/math/abs_kernel.h"
@@ -14,6 +15,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -41,7 +43,7 @@ TEST(OnnxLightKernelUsage, KernelNamesAreLibraryQualified) {
 // alphabetically by ``op_type`` here, since every registration shares the
 // same domain and device.
 TEST(OnnxLightKernelUsage, RegisteredKernelNames) {
-  const std::vector<std::pair<std::string, std::string>> expected = {
+  std::vector<std::pair<std::string, std::string>> expected = {
       {"Abs", "onnx_light_cpu::Abs"},
       {"Attention", "onnx_light_cpu::Attention"},
       {"Exp", "onnx_light_cpu::Exp"},
@@ -52,6 +54,11 @@ TEST(OnnxLightKernelUsage, RegisteredKernelNames) {
       {"Not", "onnx_light_cpu::Not"},
       {"QLinearMatMul", "onnx_light_cpu::QLinearMatMul"},
   };
+  for (const auto &entry : onnx_light_cpu::GetBinaryManifest()) {
+    expected.emplace_back(std::string(entry.op_type),
+                          std::string("onnx_light_cpu::") + std::string(entry.op_type));
+  }
+  std::sort(expected.begin(), expected.end());
   EXPECT_EQ(onnx_light_cpu::RegisteredKernelNames(), expected);
 }
 
