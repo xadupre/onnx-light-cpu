@@ -210,7 +210,7 @@ for tc in _CASES:
 #
 # One bar per case, grouped and colored by operator, showing onnx-light-cpu's
 # speed-up over ONNX Runtime (values above 1 mean onnx-light-cpu is faster).
-# The y-axis is logarithmic so a speed-up and its reciprocal are equidistant
+# The x-axis is logarithmic so a speed-up and its reciprocal are equidistant
 # from the ``1`` baseline.
 
 _COLORS = {
@@ -232,13 +232,13 @@ labels = [_short_label(op_type, name) for op_type, name, _, _ in rows]
 speedups = np.array([ort_time / light_time for _, _, light_time, ort_time in rows])
 colors = [_COLORS[op_type] for op_type, _, _, _ in rows]
 
-fig, ax = plt.subplots(figsize=(max(8, 0.4 * len(rows)), 5))
+fig, ax = plt.subplots(figsize=(8, max(5, 0.4 * len(rows))))
 positions = np.arange(len(rows))
-ax.bar(positions, speedups, color=colors)
-ax.axhline(1.0, color="grey", linewidth=0.8, linestyle=":")
-ax.set_yscale("log")
-ax.set_xticks(positions, labels, rotation=75, ha="right", fontsize=7)
-ax.set_ylabel("speed-up vs onnxruntime")
+ax.barh(positions, speedups, color=colors)
+ax.axvline(1.0, color="grey", linewidth=0.8, linestyle=":")
+ax.set_xscale("log")
+ax.set_yticks(positions, labels, fontsize=7)
+ax.set_xlabel("speed-up vs onnxruntime")
 ax.set_title("onnx-light-cpu speed-up over onnxruntime on a subset of backend cases")
 
 handles = [plt.Rectangle((0, 0), 1, 1, color=color) for color in _COLORS.values()]
