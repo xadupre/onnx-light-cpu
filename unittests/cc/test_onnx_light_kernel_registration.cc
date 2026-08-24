@@ -120,6 +120,13 @@ TEST(KernelRegistration, CollectionReportsEveryActualRegistration) {
         rt_ns::DataType::BFLOAT16},
        28,
        std::nullopt},
+      {"ai.onnx.ml",
+       "TreeEnsemble",
+       sym_ns::Device::kCPU,
+       "onnx_light_cpu::TreeEnsemble",
+       {rt_ns::DataType::FLOAT, rt_ns::DataType::DOUBLE, rt_ns::DataType::FLOAT16},
+       5,
+       std::nullopt},
   };
   std::vector<KernelRegistration> all_expected = expected;
   for (const auto &entry : onnx_light_cpu::GetBinaryManifest()) {

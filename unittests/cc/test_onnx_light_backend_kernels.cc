@@ -384,6 +384,19 @@ TEST(OnnxLightBackendKernels, TreeEnsembleCorpusRegistersOnlyMlOpset5) {
   EXPECT_EQ(CountCpuCasesAtMlOpset5("TreeEnsembleClassifier"), 2U);
 }
 
+TEST(OnnxLightBackendKernels, TreeEnsembleRunsThroughRuntime) {
+  const std::vector<std::string> failures =
+      RunCpuBackendCases("TreeEnsemble", core::backend_test::TestMode::TEST);
+  EXPECT_TRUE(failures.empty()) << Describe(failures);
+}
+
+TEST(OnnxLightBackendKernels, TreeEnsembleBenchmarkRunsThroughRuntime) {
+  const std::vector<std::string> failures =
+      RunCpuBackendCases("TreeEnsemble", core::backend_test::TestMode::BENCHMARK,
+                         "test_cpu_treeensemble_t10_f4_b1_benchmark");
+  EXPECT_TRUE(failures.empty()) << Describe(failures);
+}
+
 TEST(OnnxLightBackendKernels, TreeEnsembleBenchmarkCoversPriorityDimensions) {
   onnx_light_cpu::backend_test::RegisterCpuKernelBackendTestCases();
   const std::vector<TestCase> cases = CollectTestCases("TreeEnsemble", /*include_big=*/false,
