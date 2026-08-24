@@ -28,9 +28,11 @@ _EXAMPLES_DIR = _ROOT / "docs" / "examples"
 _REQUIREMENTS = {
     "plot_abs_simd.py": ("matplotlib",),
     "plot_abs_benchmark.py": ("matplotlib", "onnx", "onnxruntime", "onnx_light"),
+    "plot_exp_log_benchmark.py": ("matplotlib", "onnx", "onnxruntime", "onnx_light"),
     "plot_gemm_benchmark.py": ("matplotlib", "onnx", "onnxruntime", "onnx_light"),
     "plot_gemm_dtype_benchmark.py": ("matplotlib", "onnx", "onnx_light", "ml_dtypes"),
     "plot_backend_cases_benchmark.py": ("matplotlib", "onnx", "onnxruntime", "onnx_light"),
+    "plot_tree_ensemble_benchmark.py": ("matplotlib", "onnx", "onnxruntime", "onnx_light"),
 }
 
 
