@@ -361,6 +361,30 @@ TEST(BinaryBroadcastPlan, ArithmeticFastPathMatchesScalarReferenceAcrossOpsTypes
   }
 }
 
+TEST(BinaryBroadcastPlan, HalfPrecisionAdaptersUseBulkConversionAndMatchScalarReference) {
+  const std::array<std::string_view, 3> ops = {"Mod", "Pow", "PRelu"};
+  const std::array<BinaryDataType, 2> types = {BinaryDataType::FLOAT16, BinaryDataType::BFLOAT16};
+  const std::array<std::size_t, 7> sizes = {0, 1, 7, 8, 15, 256, 263};
+  for (std::string_view op : ops) {
+    for (BinaryDataType type : types) {
+      const BinaryKernelDescriptor descriptor(std::string(op), op == "Pow" ? 7 : 16,
+                                              DefaultAttributes(op, type));
+      const auto &adapter = descriptor.ResolveAdapter(type, type, type);
+      ASSERT_NE(adapter.bulk_contiguous, nullptr) << op;
+      for (std::size_t count : sizes) {
+        const std::array<std::int64_t, 1> shape{static_cast<std::int64_t>(count)};
+        const BinaryBroadcastPlan plan(descriptor, type, type, type, shape, shape);
+        const auto left = MakeBuffer(type, shape, true, op);
+        const auto right = MakeBuffer(type, shape, false, op);
+        const auto expected = ReferenceExecute(adapter, shape, shape, shape, left, right);
+        std::vector<std::byte> actual(expected.size());
+        plan.Execute(left.data(), right.data(), actual.data());
+        EXPECT_EQ(actual, expected) << "op=" << op << " count=" << count;
+      }
+    }
+  }
+}
+
 struct InlineExecutor {
   std::int64_t dispatches = 0;
   std::int64_t blocks = 0;

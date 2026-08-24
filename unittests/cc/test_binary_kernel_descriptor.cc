@@ -69,7 +69,13 @@ TEST(BinaryKernelDescriptor, FiltersAndResolvesSupportedTypeSignatures) {
       pow.ResolveAdapter(BinaryDataType::FLOAT16, BinaryDataType::FLOAT16, BinaryDataType::FLOAT16)
           .output_size,
       2u);
-  EXPECT_THROW((pow.ResolveOutputType(BinaryDataType::INT64, BinaryDataType::UINT32)),
+  EXPECT_EQ(pow.ResolveOutputType(BinaryDataType::FLOAT, BinaryDataType::INT64),
+            BinaryDataType::FLOAT);
+  EXPECT_EQ(pow.ResolveOutputType(BinaryDataType::BFLOAT16, BinaryDataType::UINT32),
+            BinaryDataType::BFLOAT16);
+  EXPECT_EQ(pow.ResolveOutputType(BinaryDataType::INT64, BinaryDataType::UINT32),
+            BinaryDataType::INT64);
+  EXPECT_THROW((pow.ResolveOutputType(BinaryDataType::INT64, BinaryDataType::FLOAT16)),
                std::invalid_argument);
 
   const BinaryKernelDescriptor prelu("PRelu", 16, {});

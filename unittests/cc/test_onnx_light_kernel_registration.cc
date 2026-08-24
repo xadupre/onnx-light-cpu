@@ -112,6 +112,14 @@ TEST(KernelRegistration, CollectionReportsEveryActualRegistration) {
        {rt_ns::DataType::BOOL},
        std::nullopt,
        std::nullopt},
+      {"ai.onnx",
+       "SwiGLU",
+       sym_ns::Device::kCPU,
+       "onnx_light_cpu::SwiGLU",
+       {rt_ns::DataType::FLOAT, rt_ns::DataType::DOUBLE, rt_ns::DataType::FLOAT16,
+        rt_ns::DataType::BFLOAT16},
+       28,
+       std::nullopt},
   };
   std::vector<KernelRegistration> all_expected = expected;
   for (const auto &entry : onnx_light_cpu::GetBinaryManifest()) {
@@ -266,7 +274,7 @@ TEST(KernelRegistration, NormalModeStillInstallsKernelsIntoDispatchTable) {
   const auto &table = rt_ns::KernelDispatchTable();
   for (const std::string &key :
        {"ai.onnx:Abs", "ai.onnx:Exp", "ai.onnx:Log", "ai.onnx:Gemm", "ai.onnx:MatMul",
-        "ai.onnx:MatMulInteger", "ai.onnx:QLinearMatMul", "ai.onnx:Not"}) {
+        "ai.onnx:MatMulInteger", "ai.onnx:QLinearMatMul", "ai.onnx:Not", "ai.onnx:SwiGLU"}) {
     EXPECT_NE(table.find(key), table.end()) << key;
   }
 }

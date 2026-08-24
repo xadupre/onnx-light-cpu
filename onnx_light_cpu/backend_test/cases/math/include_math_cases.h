@@ -21,6 +21,7 @@ void RegisterCpuGemmCases(std::vector<TestCase> &registry, TestMode mode);
 void RegisterCpuLogCases(std::vector<TestCase> &registry, TestMode mode);
 void RegisterCpuMatMulCases(std::vector<TestCase> &registry, TestMode mode);
 void RegisterCpuMatMulIntegerCases(std::vector<TestCase> &registry, TestMode mode);
+void RegisterCpuSwiGLUCases(std::vector<TestCase> &registry, TestMode mode);
 
 void CollectCpuMathTestCases(std::vector<TestCase> &registry, const std::string &op_type = "",
                              TestMode mode = TestMode::TEST);

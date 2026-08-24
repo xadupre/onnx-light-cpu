@@ -7,6 +7,7 @@
 #include "onnx_light_cpu/impl/math/binary/binary_arithmetic_kernel.h"
 #include "onnx_light_cpu/impl/math/half_conversion.h"
 
+#include <algorithm>
 #include <atomic>
 #include <bit>
 #include <cmath>
@@ -194,6 +195,13 @@ void BulkRightScalarWrapper(const void *left, const void *right, void *out, std:
   Fn(static_cast<const T *>(left), *static_cast<const T *>(right), static_cast<T *>(out), count);
 }
 
+void BulkFloat16Mod(const void *, const void *, void *, std::size_t);
+void BulkBfloat16Mod(const void *, const void *, void *, std::size_t);
+void BulkFloat16Pow(const void *, const void *, void *, std::size_t);
+void BulkBfloat16Pow(const void *, const void *, void *, std::size_t);
+void BulkFloat16PRelu(const void *, const void *, void *, std::size_t);
+void BulkBfloat16PRelu(const void *, const void *, void *, std::size_t);
+
 void SelectBulk(BinaryOperator op, DT left, BinaryKernelDescriptor::Adapter &adapter) {
 #define ONNX_LIGHT_CPU_BIND_BULK(STEM, T)                                                          \
   adapter.bulk_contiguous = &BulkContiguousWrapper<T, &STEM##Contiguous>;                          \
@@ -227,6 +235,19 @@ void SelectBulk(BinaryOperator op, DT left, BinaryKernelDescriptor::Adapter &ada
     } else if (left == DT::DOUBLE) {
       ONNX_LIGHT_CPU_BIND_BULK(BinaryDivFloat64, double)
     }
+    break;
+  case BinaryOperator::kMod:
+    adapter.bulk_contiguous =
+        left == DT::FLOAT16 ? &BulkFloat16Mod : (left == DT::BFLOAT16 ? &BulkBfloat16Mod : nullptr);
+    break;
+  case BinaryOperator::kPow:
+    adapter.bulk_contiguous =
+        left == DT::FLOAT16 ? &BulkFloat16Pow : (left == DT::BFLOAT16 ? &BulkBfloat16Pow : nullptr);
+    break;
+  case BinaryOperator::kPRelu:
+    adapter.bulk_contiguous = left == DT::FLOAT16
+                                  ? &BulkFloat16PRelu
+                                  : (left == DT::BFLOAT16 ? &BulkBfloat16PRelu : nullptr);
     break;
   default:
     break;
@@ -421,13 +442,64 @@ void ComputeBfloat16PRelu(const void *left, const void *right, void *out) {
   WriteTyped<std::uint16_t>(out, detail::FloatToBFloat16Bits(a < 0.0f ? a * b : a));
 }
 
-template <typename TBase, typename TExp, auto Decode, auto Encode>
-void ComputeHalfPow(const void *left, const void *right, void *out) {
-  const float base = Decode(ReadTyped<std::uint16_t>(left));
-  const TExp exponent = ReadTyped<TExp>(right);
-  WriteTyped<std::uint16_t>(
-      out, Encode(static_cast<float>(std::pow(base, static_cast<float>(exponent)))));
+template <auto Decode, auto Encode, typename Op>
+void BulkHalfContiguous(const void *left, const void *right, void *out, std::size_t count, Op op) {
+  constexpr std::size_t kBlockSize = 256;
+  const auto *a = static_cast<const std::uint16_t *>(left);
+  const auto *b = static_cast<const std::uint16_t *>(right);
+  auto *y = static_cast<std::uint16_t *>(out);
+  alignas(32) float af[kBlockSize];
+  alignas(32) float bf[kBlockSize];
+  alignas(32) float yf[kBlockSize];
+  for (std::size_t offset = 0; offset < count; offset += kBlockSize) {
+    const std::size_t block = std::min(kBlockSize, count - offset);
+    Decode(a + offset, af, block);
+    Decode(b + offset, bf, block);
+    for (std::size_t i = 0; i < block; ++i) {
+      yf[i] = op(af[i], bf[i]);
+    }
+    Encode(yf, y + offset, block);
+  }
 }
+
+void BulkFloat16Mod(const void *left, const void *right, void *out, std::size_t count) {
+  BulkHalfContiguous<detail::ConvertFloat16ToFloat32, detail::ConvertFloat32ToFloat16>(
+      left, right, out, count, [](float a, float b) { return std::fmod(a, b); });
+}
+
+void BulkBfloat16Mod(const void *left, const void *right, void *out, std::size_t count) {
+  BulkHalfContiguous<detail::ConvertBFloat16ToFloat32, detail::ConvertFloat32ToBFloat16>(
+      left, right, out, count, [](float a, float b) { return std::fmod(a, b); });
+}
+
+void BulkFloat16Pow(const void *left, const void *right, void *out, std::size_t count) {
+  BulkHalfContiguous<detail::ConvertFloat16ToFloat32, detail::ConvertFloat32ToFloat16>(
+      left, right, out, count, [](float a, float b) { return std::pow(a, b); });
+}
+
+void BulkBfloat16Pow(const void *left, const void *right, void *out, std::size_t count) {
+  BulkHalfContiguous<detail::ConvertBFloat16ToFloat32, detail::ConvertFloat32ToBFloat16>(
+      left, right, out, count, [](float a, float b) { return std::pow(a, b); });
+}
+
+void BulkFloat16PRelu(const void *left, const void *right, void *out, std::size_t count) {
+  BulkHalfContiguous<detail::ConvertFloat16ToFloat32, detail::ConvertFloat32ToFloat16>(
+      left, right, out, count, [](float a, float b) { return a < 0.0f ? a * b : a; });
+}
+
+void BulkBfloat16PRelu(const void *left, const void *right, void *out, std::size_t count) {
+  BulkHalfContiguous<detail::ConvertBFloat16ToFloat32, detail::ConvertFloat32ToBFloat16>(
+      left, right, out, count, [](float a, float b) { return a < 0.0f ? a * b : a; });
+}
+
+template <typename TExp, auto DecodeBase, auto Encode, auto DecodeExponent>
+void ComputeHalfPow(const void *left, const void *right, void *out) {
+  const float base = DecodeBase(ReadTyped<std::uint16_t>(left));
+  const float exponent = DecodeExponent(ReadTyped<TExp>(right));
+  WriteTyped<std::uint16_t>(out, Encode(static_cast<float>(std::pow(base, exponent))));
+}
+
+template <typename T> float CastExponent(T value) { return static_cast<float>(value); }
 
 template <typename TBase, auto Decode>
 void ComputeHalfCompareEq(const void *left, const void *right, void *out) {
@@ -640,52 +712,52 @@ BinaryKernelDescriptor::Adapter::ScalarFn SelectScalar(BinaryOperator op, DT lef
     } else if (left == DT::FLOAT16) {
       switch (right) {
       case DT::FLOAT:
-        return &ComputeHalfPow<std::uint16_t, float, detail::Float16BitsToFloat,
-                               detail::FloatToFloat16Bits>;
+        return &ComputeHalfPow<float, detail::Float16BitsToFloat, detail::FloatToFloat16Bits,
+                               CastExponent<float>>;
       case DT::FLOAT16:
-        return &ComputeHalfPow<std::uint16_t, std::uint16_t, detail::Float16BitsToFloat,
-                               detail::FloatToFloat16Bits>;
+        return &ComputeHalfPow<std::uint16_t, detail::Float16BitsToFloat,
+                               detail::FloatToFloat16Bits, detail::Float16BitsToFloat>;
       case DT::BFLOAT16:
-        return &ComputeHalfPow<std::uint16_t, std::uint16_t, detail::Float16BitsToFloat,
-                               detail::FloatToFloat16Bits>;
+        return &ComputeHalfPow<std::uint16_t, detail::Float16BitsToFloat,
+                               detail::FloatToFloat16Bits, detail::Bfloat16BitsToFloat>;
       case DT::INT32:
-        return &ComputeHalfPow<std::uint16_t, std::int32_t, detail::Float16BitsToFloat,
-                               detail::FloatToFloat16Bits>;
+        return &ComputeHalfPow<std::int32_t, detail::Float16BitsToFloat, detail::FloatToFloat16Bits,
+                               CastExponent<std::int32_t>>;
       case DT::INT64:
-        return &ComputeHalfPow<std::uint16_t, std::int64_t, detail::Float16BitsToFloat,
-                               detail::FloatToFloat16Bits>;
+        return &ComputeHalfPow<std::int64_t, detail::Float16BitsToFloat, detail::FloatToFloat16Bits,
+                               CastExponent<std::int64_t>>;
       case DT::UINT32:
-        return &ComputeHalfPow<std::uint16_t, std::uint32_t, detail::Float16BitsToFloat,
-                               detail::FloatToFloat16Bits>;
+        return &ComputeHalfPow<std::uint32_t, detail::Float16BitsToFloat,
+                               detail::FloatToFloat16Bits, CastExponent<std::uint32_t>>;
       case DT::UINT64:
-        return &ComputeHalfPow<std::uint16_t, std::uint64_t, detail::Float16BitsToFloat,
-                               detail::FloatToFloat16Bits>;
+        return &ComputeHalfPow<std::uint64_t, detail::Float16BitsToFloat,
+                               detail::FloatToFloat16Bits, CastExponent<std::uint64_t>>;
       default:
         break;
       }
     } else if (left == DT::BFLOAT16) {
       switch (right) {
       case DT::FLOAT:
-        return &ComputeHalfPow<std::uint16_t, float, detail::Bfloat16BitsToFloat,
-                               detail::FloatToBFloat16Bits>;
+        return &ComputeHalfPow<float, detail::Bfloat16BitsToFloat, detail::FloatToBFloat16Bits,
+                               CastExponent<float>>;
       case DT::FLOAT16:
-        return &ComputeHalfPow<std::uint16_t, std::uint16_t, detail::Bfloat16BitsToFloat,
-                               detail::FloatToBFloat16Bits>;
+        return &ComputeHalfPow<std::uint16_t, detail::Bfloat16BitsToFloat,
+                               detail::FloatToBFloat16Bits, detail::Float16BitsToFloat>;
       case DT::BFLOAT16:
-        return &ComputeHalfPow<std::uint16_t, std::uint16_t, detail::Bfloat16BitsToFloat,
-                               detail::FloatToBFloat16Bits>;
+        return &ComputeHalfPow<std::uint16_t, detail::Bfloat16BitsToFloat,
+                               detail::FloatToBFloat16Bits, detail::Bfloat16BitsToFloat>;
       case DT::INT32:
-        return &ComputeHalfPow<std::uint16_t, std::int32_t, detail::Bfloat16BitsToFloat,
-                               detail::FloatToBFloat16Bits>;
+        return &ComputeHalfPow<std::int32_t, detail::Bfloat16BitsToFloat,
+                               detail::FloatToBFloat16Bits, CastExponent<std::int32_t>>;
       case DT::INT64:
-        return &ComputeHalfPow<std::uint16_t, std::int64_t, detail::Bfloat16BitsToFloat,
-                               detail::FloatToBFloat16Bits>;
+        return &ComputeHalfPow<std::int64_t, detail::Bfloat16BitsToFloat,
+                               detail::FloatToBFloat16Bits, CastExponent<std::int64_t>>;
       case DT::UINT32:
-        return &ComputeHalfPow<std::uint16_t, std::uint32_t, detail::Bfloat16BitsToFloat,
-                               detail::FloatToBFloat16Bits>;
+        return &ComputeHalfPow<std::uint32_t, detail::Bfloat16BitsToFloat,
+                               detail::FloatToBFloat16Bits, CastExponent<std::uint32_t>>;
       case DT::UINT64:
-        return &ComputeHalfPow<std::uint16_t, std::uint64_t, detail::Bfloat16BitsToFloat,
-                               detail::FloatToBFloat16Bits>;
+        return &ComputeHalfPow<std::uint64_t, detail::Bfloat16BitsToFloat,
+                               detail::FloatToBFloat16Bits, CastExponent<std::uint64_t>>;
       default:
         break;
       }

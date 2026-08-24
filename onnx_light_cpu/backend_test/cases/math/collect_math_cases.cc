@@ -15,6 +15,7 @@ void CollectCpuMathTestCases(std::vector<TestCase> &registry, const std::string 
       {"Abs", &RegisterCpuAbsCases},       {"Exp", &RegisterCpuExpCases},
       {"Gemm", &RegisterCpuGemmCases},     {"Log", &RegisterCpuLogCases},
       {"MatMul", &RegisterCpuMatMulCases}, {"MatMulInteger", &RegisterCpuMatMulIntegerCases},
+      {"SwiGLU", &RegisterCpuSwiGLUCases},
   };
   DispatchRegisterByOpType(registry, op_type, kEntries, mode);
 }
