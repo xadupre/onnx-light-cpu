@@ -224,11 +224,10 @@ class TestBackendCases:
             }:
                 assert isinstance(record.since_version, int)
                 assert record.since_version >= 1
-            # Attention is the only onnx-light-cpu kernel that restricts its
-            # opset lower bound to a specific version (opset 23 introduced the
-            # operator).
             elif record.op_type == "Attention":
                 assert record.since_version == 23
+            elif record.op_type == "SwiGLU":
+                assert record.since_version == 28
             else:
                 assert record.since_version is None
             assert record.until_version is None
