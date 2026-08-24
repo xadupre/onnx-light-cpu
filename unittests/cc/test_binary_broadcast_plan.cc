@@ -9,9 +9,12 @@
 
 #include <array>
 #include <bit>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <string>
+#include <string_view>
 #include <vector>
 
 namespace {
@@ -295,6 +298,64 @@ TEST(BinaryBroadcastPlan, ExecutesRepresentativeBroadcastLoops) {
     ASSERT_EQ(actual.size(), expected.size());
     for (std::size_t i = 0; i < actual.size(); ++i) {
       EXPECT_FLOAT_EQ(actual[i], expected[i]) << "index=" << i;
+    }
+  }
+}
+
+// Binary PR02: BinaryBroadcastPlan::Execute now special-cases kContiguous,
+// kLeftScalar and kRightScalar to invoke a bulk SIMD kernel instead of the
+// per-element scalar loop. This test drives that fast path directly for
+// every arithmetic op, FP32 and FP64, across SIMD tail sizes, and checks the
+// bulk result against the same adapter's per-element scalar reference
+// (ReferenceExecute), which never uses a bulk kernel.
+template <typename T> BinaryDataType TypeOf();
+template <> BinaryDataType TypeOf<float>() { return BinaryDataType::FLOAT; }
+template <> BinaryDataType TypeOf<double>() { return BinaryDataType::DOUBLE; }
+
+template <typename T>
+void CheckArithmeticFastPathMatchesScalarReference(std::string_view op_type, std::size_t count) {
+  const BinaryDataType type = TypeOf<T>();
+  const BinaryKernelDescriptor descriptor(std::string(op_type), 14, {});
+  const std::array<std::pair<std::vector<std::int64_t>, std::vector<std::int64_t>>, 3> shapes{{
+      {std::vector<std::int64_t>{static_cast<std::int64_t>(count)},
+       std::vector<std::int64_t>{static_cast<std::int64_t>(count)}},
+      {std::vector<std::int64_t>{}, std::vector<std::int64_t>{static_cast<std::int64_t>(count)}},
+      {std::vector<std::int64_t>{static_cast<std::int64_t>(count)}, std::vector<std::int64_t>{}},
+  }};
+  for (const auto &[left_shape, right_shape] : shapes) {
+    const BinaryBroadcastPlan plan(descriptor, type, type, type, left_shape, right_shape);
+    const std::vector<std::byte> left = MakeBuffer(type, left_shape, /*is_left=*/true, op_type);
+    const std::vector<std::byte> right = MakeBuffer(type, right_shape, /*is_left=*/false, op_type);
+    const std::vector<std::byte> expected =
+        ReferenceExecute(descriptor.ResolveAdapter(type, type, type), left_shape, right_shape,
+                         plan.output_shape(), left, right);
+    std::vector<std::byte> actual(expected.size(), std::byte{0xCD});
+    plan.Execute(left.data(), right.data(), actual.data());
+    ASSERT_EQ(actual.size(), expected.size());
+    const std::size_t output_count = ElementCount(plan.output_shape());
+    for (std::size_t i = 0; i < output_count; ++i) {
+      T actual_value;
+      T expected_value;
+      std::memcpy(&actual_value, actual.data() + i * sizeof(T), sizeof(T));
+      std::memcpy(&expected_value, expected.data() + i * sizeof(T), sizeof(T));
+      if (std::isnan(expected_value)) {
+        EXPECT_TRUE(std::isnan(actual_value))
+            << "op=" << op_type << " count=" << count << " index=" << i;
+      } else {
+        EXPECT_EQ(actual_value, expected_value)
+            << "op=" << op_type << " count=" << count << " index=" << i;
+      }
+    }
+  }
+}
+
+TEST(BinaryBroadcastPlan, ArithmeticFastPathMatchesScalarReferenceAcrossOpsTypesAndTailSizes) {
+  const std::array<std::string_view, 4> ops = {"Add", "Sub", "Mul", "Div"};
+  const std::array<std::size_t, 13> sizes = {0, 1, 3, 4, 5, 7, 8, 9, 15, 16, 17, 31, 32};
+  for (std::string_view op : ops) {
+    for (std::size_t count : sizes) {
+      CheckArithmeticFastPathMatchesScalarReference<float>(op, count);
+      CheckArithmeticFastPathMatchesScalarReference<double>(op, count);
     }
   }
 }

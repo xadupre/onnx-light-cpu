@@ -50,9 +50,9 @@ ONNX_LIGHT_CPU_DECLARE_BINARY_ARITH(BinaryDivFloat64, double)
 // ``-mavx512f``/``/arch:AVX512``. Declared here so the baseline dispatcher
 // (compiled without that flag) can call them once ``DetectSimdLevel()``
 // reports AVX-512 support.
-#define ONNX_LIGHT_CPU_DECLARE_BINARY_ARITH_AVX512(NAME, T)                                         \
-  void NAME##_AVX512(const T *left, const T *right, T *out, std::size_t count);                     \
-  void NAME##Left_AVX512(T left, const T *right, T *out, std::size_t count);                        \
+#define ONNX_LIGHT_CPU_DECLARE_BINARY_ARITH_AVX512(NAME, T)                                        \
+  void NAME##_AVX512(const T *left, const T *right, T *out, std::size_t count);                    \
+  void NAME##Left_AVX512(T left, const T *right, T *out, std::size_t count);                       \
   void NAME##Right_AVX512(const T *left, T right, T *out, std::size_t count);
 
 ONNX_LIGHT_CPU_DECLARE_BINARY_ARITH_AVX512(BinaryAddFloat32, float)
@@ -72,9 +72,9 @@ ONNX_LIGHT_CPU_DECLARE_BINARY_ARITH_AVX512(BinaryDivFloat64, double)
 // Raw SVE/SVE2 implementations (SVE2 shares the same baseline SVE FP32/FP64
 // arithmetic instructions, so one kernel serves both levels), defined in a
 // translation unit compiled with ``-march=armv8-a+sve``.
-#define ONNX_LIGHT_CPU_DECLARE_BINARY_ARITH_SVE(NAME, T)                                            \
-  void NAME##_SVE(const T *left, const T *right, T *out, std::size_t count);                        \
-  void NAME##Left_SVE(T left, const T *right, T *out, std::size_t count);                           \
+#define ONNX_LIGHT_CPU_DECLARE_BINARY_ARITH_SVE(NAME, T)                                           \
+  void NAME##_SVE(const T *left, const T *right, T *out, std::size_t count);                       \
+  void NAME##Left_SVE(T left, const T *right, T *out, std::size_t count);                          \
   void NAME##Right_SVE(const T *left, T right, T *out, std::size_t count);
 
 ONNX_LIGHT_CPU_DECLARE_BINARY_ARITH_SVE(BinaryAddFloat32, float)

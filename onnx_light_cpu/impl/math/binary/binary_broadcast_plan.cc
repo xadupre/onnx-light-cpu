@@ -206,6 +206,26 @@ void BinaryBroadcastPlan::Execute(const void *left, const void *right, void *out
   const auto *left_bytes = reinterpret_cast<const std::byte *>(left);
   const auto *right_bytes = reinterpret_cast<const std::byte *>(right);
   auto *output_bytes = reinterpret_cast<std::byte *>(output);
+
+  // Binary PR02: contiguous and left/right-scalar loops collapse to a single
+  // dimension (see ClassifyLoopFamily), so a bulk SIMD kernel can process the
+  // whole extent in one call instead of looping element-by-element.
+  if (dimensions_.size() == 1) {
+    const std::size_t count = dimensions_[0].extent;
+    if (loop_family_ == LoopFamily::kContiguous && adapter_.bulk_contiguous != nullptr) {
+      adapter_.bulk_contiguous(left_bytes, right_bytes, output_bytes, count);
+      return;
+    }
+    if (loop_family_ == LoopFamily::kLeftScalar && adapter_.bulk_left_scalar != nullptr) {
+      adapter_.bulk_left_scalar(left_bytes, right_bytes, output_bytes, count);
+      return;
+    }
+    if (loop_family_ == LoopFamily::kRightScalar && adapter_.bulk_right_scalar != nullptr) {
+      adapter_.bulk_right_scalar(left_bytes, right_bytes, output_bytes, count);
+      return;
+    }
+  }
+
   std::vector<std::size_t> indices(iteration_dimensions_.size(), 0);
   std::ptrdiff_t left_offset = 0;
   std::ptrdiff_t right_offset = 0;
