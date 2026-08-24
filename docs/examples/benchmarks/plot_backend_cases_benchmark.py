@@ -37,6 +37,7 @@ import time
 import matplotlib.pyplot as plt
 import numpy as np
 import onnxruntime
+import pandas as pd
 
 from onnx_light.onnx import TensorProto
 from onnx_light.onnx.backend import TestMode, collect_test_cases_by_name
@@ -252,19 +253,46 @@ for tc in _CASES:
     shapes = ",".join(
         "x".join(str(d) for d in array.shape) or "scalar" for array in feeds.values()
     )
-    rows.append((op_type, tc.name, shapes, light_time, ort_time))
+    dtypes = ",".join(str(array.dtype) for array in feeds.values())
+    rows.append((op_type, tc.name, shapes, dtypes, light_time, ort_time))
 
 # Print an aligned table once every case has run, since column widths (name,
-# input shapes) are not known ahead of time.
+# input shapes, dtypes) are not known ahead of time.
 op_width = max(len(op_type) for op_type, *_ in rows)
 name_width = max(len(name) for _, name, *_ in rows)
-shapes_width = max(len(shapes) for _, _, shapes, _, _ in rows)
-for op_type, name, shapes, light_time, ort_time in rows:
+shapes_width = max(len(shapes) for _, _, shapes, _, _, _ in rows)
+dtypes_width = max(len(dtypes) for _, _, _, dtypes, _, _ in rows)
+for op_type, name, shapes, dtypes, light_time, ort_time in rows:
     print(
         f"{op_type:>{op_width}} | {name:<{name_width}} | shapes={shapes:<{shapes_width}} | "
+        f"dtype={dtypes:<{dtypes_width}} | "
         f"onnx-light-cpu={light_time * 1e6:10.2f} us | "
         f"onnxruntime={ort_time * 1e6:10.2f} us | speed-up={ort_time / light_time:6.2f}x"
     )
+
+# %%
+# Excel export
+# ------------
+#
+# The full results table -- one row per benchmark case -- is also written to
+# an ``.xlsx`` workbook so it can be inspected, filtered, or archived outside
+# this script, alongside the printed table and the plot below.
+
+results_frame = pd.DataFrame(
+    [
+        {
+            "operator": op_type,
+            "case": name,
+            "input_shapes": shapes,
+            "input_dtypes": dtypes,
+            "onnx_light_cpu_us": light_time * 1e6,
+            "onnxruntime_us": ort_time * 1e6,
+            "speed_up": ort_time / light_time,
+        }
+        for op_type, name, shapes, dtypes, light_time, ort_time in rows
+    ]
+)
+results_frame.to_excel("plot_backend_cases_benchmark.xlsx", index=False)
 
 # %%
 # Plot the speed-ups
@@ -285,9 +313,9 @@ def _short_label(op_type, name):
     return label.removesuffix("_benchmark")
 
 
-labels = [_short_label(op_type, name) for op_type, name, _, _, _ in rows]
-speedups = np.array([ort_time / light_time for _, _, _, light_time, ort_time in rows])
-colors = [_COLORS[op_type] for op_type, _, _, _, _ in rows]
+labels = [_short_label(op_type, name) for op_type, name, _, _, _, _ in rows]
+speedups = np.array([ort_time / light_time for _, _, _, _, light_time, ort_time in rows])
+colors = [_COLORS[op_type] for op_type, _, _, _, _, _ in rows]
 
 fig, ax = plt.subplots(figsize=(8, max(5, 0.4 * len(rows))))
 positions = np.arange(len(rows))
