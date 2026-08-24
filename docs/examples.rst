@@ -9,3 +9,4 @@ kernels provided by ``onnx-light-cpu`` from Python.
 
     auto_examples/kernels/index
     auto_examples/benchmarks/index
+    auto_examples/processor/index

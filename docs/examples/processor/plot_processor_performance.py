@@ -15,6 +15,13 @@ straight from the profile returned by that one call. Every reported number is
 an *effective, working-set measurement* taken on this exact host -- never a
 hardware maximum, a physical link rate, or a guaranteed peak (see the roadmap
 document linked above for the full measurement contract).
+
+The two participant policies answer different questions. ``single`` runs one
+worker (pinned to the requested logical processor when affinity is available);
+``physical`` runs one worker per process-visible physical core, deliberately
+excluding extra simultaneous-multithreading siblings. The latter therefore
+reports aggregate throughput across physical cores, not throughput from one
+core.
 """
 
 # %%
@@ -51,6 +58,11 @@ profile = benchmark_processor_performance(
 #
 # Everything below is read from ``profile.topology`` and ``profile.memory`` /
 # ``profile.compute`` -- no separate measurement is taken here.
+#
+# A cache descriptor's ``sharing_thread_count`` is the number of logical
+# processors that share that cache instance: one means private to one logical
+# processor, while a larger value means shared by that many logical processors.
+# It does not mean that every cache at a given level has one global instance.
 
 topology = profile.topology
 print(f"platform={profile.metadata.platform} compiler={profile.metadata.compiler}")
@@ -87,6 +99,93 @@ if profile.warnings:
         print(f"  - {warning}")
 
 # %%
+# Plot 1: cache hierarchy and measured working sets
+# --------------------------------------------------
+#
+# The detected cache capacities and the actual per-participant working sets are
+# different quantities, so both are shown. L1/L2/L3 measurements choose working
+# sets inside the named cache level; RAM chooses one larger than the last-level
+# cache. Cache annotations state whether each selected cache descriptor is
+# private or how many logical processors share it. RAM has no detected capacity:
+# its bar is only the working set used by the benchmark.
+
+
+def _format_bytes(value):
+    if value >= 1024**2:
+        return f"{value / 1024**2:.1f} MiB"
+    return f"{value / 1024:.1f} KiB"
+
+
+levels = list(profile.memory.keys())
+cache_by_level = {}
+for cache in topology.caches:
+    if cache.kind not in ("data", "unified"):
+        continue
+    level = f"L{cache.level}"
+    if level not in cache_by_level or cache.size_bytes > cache_by_level[level].size_bytes:
+        cache_by_level[level] = cache
+
+working_sets = {}
+for level, policies in profile.memory.items():
+    entry = policies.get("single") or next(iter(policies.values()))
+    reference = entry.read or entry.write or entry.copy or entry.read_modify_write
+    if reference is not None:
+        working_sets[level] = reference.working_set_bytes
+
+fig_hierarchy, ax_hierarchy = plt.subplots(1, 1, figsize=(7.5, 4.5))
+x = np.arange(len(levels))
+width = 0.36
+for i, level in enumerate(levels):
+    cache = cache_by_level.get(level)
+    if cache is not None:
+        ax_hierarchy.bar(
+            i - width / 2,
+            cache.size_bytes,
+            width,
+            label="detected cache" if i == 0 else "",
+        )
+        sharing = (
+            "private to 1 logical processor"
+            if cache.sharing_thread_count == 1
+            else f"shared by {cache.sharing_thread_count} logical processors"
+        )
+        ax_hierarchy.annotate(
+            f"{_format_bytes(cache.size_bytes)}\n{sharing}",
+            (i - width / 2, cache.size_bytes),
+            xytext=(0, 3),
+            textcoords="offset points",
+            ha="center",
+            va="bottom",
+            fontsize=7,
+        )
+    if level in working_sets:
+        value = working_sets[level]
+        ax_hierarchy.bar(
+            i + width / 2,
+            value,
+            width,
+            label="measured working set" if i == 0 else "",
+            color="#f4a259",
+        )
+        ax_hierarchy.annotate(
+            _format_bytes(value),
+            (i + width / 2, value),
+            xytext=(0, 3),
+            textcoords="offset points",
+            ha="center",
+            va="bottom",
+            fontsize=7,
+        )
+ax_hierarchy.set_yscale("log")
+ax_hierarchy.set_xticks(x)
+ax_hierarchy.set_xticklabels(levels)
+ax_hierarchy.set_ylabel("bytes (log scale)")
+ax_hierarchy.set_title("cache capacity and benchmark working set per participant")
+ax_hierarchy.legend(fontsize=8)
+fig_hierarchy.tight_layout()
+fig_hierarchy.savefig("plot_processor_performance_hierarchy.png")
+
+# %%
 # Compact measurement table
 # -------------------------
 #
@@ -114,13 +213,15 @@ for element_type, policies in profile.compute.items():
         )
 
 # %%
-# Plot 1: bandwidth by memory level
+# Plot 2: bandwidth by memory level
 # ----------------------------------
 #
-# One group of bars per available memory level, one bar per traffic mode
-# (read/write/copy), split by thread policy.
+# Each recorded sample times repeated sequential aligned streams after warmup:
+# loads for read, cached stores for write, and one source plus one destination
+# for copy. Useful bytes are divided by elapsed monotonic wall-clock time, then
+# the plot uses the median across recorded samples. Each participant owns
+# disjoint storage; ``physical`` values are aggregate bandwidth.
 
-levels = list(profile.memory.keys())
 policies_order = [
     p for p in ("single", "physical") if any(p in profile.memory[lv] for lv in levels)
 ]
@@ -149,8 +250,12 @@ fig.tight_layout()
 fig.savefig("plot_processor_performance_bandwidth.png")
 
 # %%
-# Plot 2: dependent-load latency by memory level
+# Plot 3: dependent-load latency by memory level
 # ------------------------------------------------
+#
+# Latency uses a randomized single-cycle pointer permutation built before
+# timing. Every load determines the address of the next, preventing overlap;
+# the plotted value is the median nanoseconds per dependent load.
 
 fig_lat, ax_lat = plt.subplots(1, 1, figsize=(6, 4.2))
 x = np.arange(len(levels))
@@ -172,8 +277,13 @@ fig_lat.tight_layout()
 fig_lat.savefig("plot_processor_performance_latency.png")
 
 # %%
-# Plot 3: arithmetic throughput by element type and thread policy
+# Plot 4: arithmetic throughput by element type and thread policy
 # -------------------------------------------------------------------
+#
+# Small native kernels keep independent operands and accumulators in registers,
+# so this measures arithmetic rather than memory traffic. Operations are
+# divided by elapsed monotonic wall-clock time and medians are plotted; a fused
+# multiply-add counts as two floating-point operations.
 
 element_types = list(profile.compute.keys())
 fig_compute, ax_compute = plt.subplots(1, 1, figsize=(6.5, 4.2))
@@ -198,7 +308,7 @@ fig_compute.tight_layout()
 fig_compute.savefig("plot_processor_performance_compute.png")
 
 # %%
-# Plot 4: Roofline
+# Plot 5: Roofline
 # ----------------
 #
 # Every point below is read from ``profile.roofline``: a horizontal ceiling at
