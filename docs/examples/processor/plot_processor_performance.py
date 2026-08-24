@@ -48,8 +48,9 @@ def _processor_name():
     cpuinfo = Path("/proc/cpuinfo")
     if cpuinfo.exists():
         for line in cpuinfo.read_text(encoding="utf-8").splitlines():
-            if line.startswith(("model name", "Model")) and ":" in line:
-                return line.split(":", 1)[1].strip()
+            key, separator, value = line.partition(":")
+            if separator and key.strip() == "model name":
+                return value.strip()
     return platform.processor() or "unknown"
 
 
