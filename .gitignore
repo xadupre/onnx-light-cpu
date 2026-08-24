@@ -9,6 +9,7 @@ __pycache__/
 *.bin
 *.tmp
 *.png
+*.xlsx
 
 # Distribution / packaging
 .Python
