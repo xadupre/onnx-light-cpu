@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "onnx_light_cpu/impl/execution.h"
 #include "onnx_light_cpu/impl/math/binary/binary_broadcast_plan.h"
 #include "onnx_light_cpu/impl/math/half_conversion.h"
 
@@ -357,6 +358,112 @@ TEST(BinaryBroadcastPlan, ArithmeticFastPathMatchesScalarReferenceAcrossOpsTypes
       CheckArithmeticFastPathMatchesScalarReference<float>(op, count);
       CheckArithmeticFastPathMatchesScalarReference<double>(op, count);
     }
+  }
+}
+
+struct InlineExecutor {
+  std::int64_t dispatches = 0;
+  std::int64_t blocks = 0;
+
+  static void Run(void *context, std::int64_t num_blocks, void *task_context,
+                  onnx_light_cpu::ExecutionBlockFn task) {
+    auto &self = *static_cast<InlineExecutor *>(context);
+    ++self.dispatches;
+    self.blocks = num_blocks;
+    for (std::int64_t block = 0; block < num_blocks; ++block) {
+      task(task_context, block);
+    }
+  }
+};
+
+// Binary PR03: BinaryBroadcastPlan::Execute now vectorizes the repeated
+// block, inner-vector broadcast, outer broadcast and general strided
+// families by dispatching a bulk kernel over each outer block's inner
+// extent (or the per-element scalar fallback when no bulk kernel applies),
+// and may submit independent outer-block ranges to the session executor.
+// This checks every non-trivial family against the naive per-element
+// reference, both serially and while forced through an executor, across
+// sizes that straddle the parallel byte thresholds.
+TEST(BinaryBroadcastPlan, MultiDimensionalFamiliesMatchNaiveReferenceSerialAndParallel) {
+  const BinaryKernelDescriptor descriptor("Add", 14, {});
+  const std::array<std::pair<std::vector<std::int64_t>, std::vector<std::int64_t>>, 5> shapes{{
+      // kRepeatedContiguousBlock: row broadcast, large enough to cross the
+      // 256 KiB block-parallel threshold (400*8192*4 bytes >> 256 KiB).
+      {std::vector<std::int64_t>{400, 8192}, std::vector<std::int64_t>{8192}},
+      // kOuterBroadcast: both inner strides contiguous, broadcast outer dim.
+      {std::vector<std::int64_t>{300, 2, 4096}, std::vector<std::int64_t>{1, 2, 4096}},
+      // kInnerVectorBroadcast: alternating singleton dims.
+      {std::vector<std::int64_t>{2, 1, 4, 1, 8, 1}, std::vector<std::int64_t>{1, 3, 1, 5, 1, 7}},
+      // kGeneralStrided: column broadcast, no contiguous inner run on the
+      // scalar side, large enough to cross the 16 KiB scalar threshold.
+      {std::vector<std::int64_t>{4096, 64}, std::vector<std::int64_t>{4096, 1}},
+      // Small case that should stay below every parallel threshold.
+      {std::vector<std::int64_t>{3, 1, 5}, std::vector<std::int64_t>{1, 4, 1}},
+  }};
+
+  for (const auto &[left_shape, right_shape] : shapes) {
+    const BinaryBroadcastPlan plan(descriptor, BinaryDataType::FLOAT, BinaryDataType::FLOAT,
+                                   BinaryDataType::FLOAT, left_shape, right_shape);
+    ASSERT_GT(plan.dimensions().size(), 1u) << "expected a multi-dimensional plan";
+    std::vector<float> left(ElementCount(left_shape));
+    std::vector<float> right(ElementCount(right_shape));
+    for (std::size_t i = 0; i < left.size(); ++i)
+      left[i] = static_cast<float>(static_cast<int>(i % 13) - 6);
+    for (std::size_t i = 0; i < right.size(); ++i)
+      right[i] = static_cast<float>(static_cast<int>(i % 11) - 5);
+    const auto expected = NaiveAdd<float>(left, left_shape, right, right_shape);
+
+    std::vector<float> serial(expected.size(), -1.0f);
+    plan.Execute(left.data(), right.data(), serial.data());
+    ASSERT_EQ(serial.size(), expected.size());
+    for (std::size_t i = 0; i < serial.size(); ++i) {
+      EXPECT_FLOAT_EQ(serial[i], expected[i]) << "serial index=" << i;
+    }
+
+    InlineExecutor executor;
+    onnx_light_cpu::ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run};
+    onnx_light_cpu::ExecutionExecutorScope scope(&view);
+    std::vector<float> parallel(expected.size(), -1.0f);
+    plan.Execute(left.data(), right.data(), parallel.data());
+    ASSERT_EQ(parallel.size(), expected.size());
+    for (std::size_t i = 0; i < parallel.size(); ++i) {
+      EXPECT_FLOAT_EQ(parallel[i], expected[i]) << "parallel index=" << i;
+    }
+  }
+}
+
+// Binary PR03: the flat contiguous/left-scalar/right-scalar path submits
+// independent element ranges to the session executor once a plan's byte
+// count crosses the calibrated threshold, and stays single-dispatch below
+// it, mirroring ExpLogParallel.OperatorSpecificParticipantPolicy.
+TEST(BinaryBroadcastPlan, FlatPathDispatchesToExecutorAboveThreshold) {
+  const BinaryKernelDescriptor descriptor("Add", 14, {});
+  InlineExecutor executor;
+  onnx_light_cpu::ExecutionExecutorView view{&executor, 8, &InlineExecutor::Run};
+  onnx_light_cpu::ExecutionExecutorScope scope(&view);
+
+  // The 64 KiB calibrated contiguous bulk threshold (see
+  // binary_execution_schedule.h) covers left + right + output traffic
+  // (4 + 4 + 4 bytes per FP32 element), i.e. ceil(65536 / 12) = 5462
+  // elements.
+  constexpr std::size_t kThresholdElements = 5462;
+  const std::vector<std::int64_t> below_shape{static_cast<std::int64_t>(kThresholdElements - 1)};
+  const std::vector<std::int64_t> at_shape{static_cast<std::int64_t>(kThresholdElements)};
+  const BinaryBroadcastPlan below(descriptor, BinaryDataType::FLOAT, BinaryDataType::FLOAT,
+                                  BinaryDataType::FLOAT, below_shape, below_shape);
+  const BinaryBroadcastPlan at(descriptor, BinaryDataType::FLOAT, BinaryDataType::FLOAT,
+                               BinaryDataType::FLOAT, at_shape, at_shape);
+  std::vector<float> left(kThresholdElements, 1.0f);
+  std::vector<float> right(kThresholdElements, 2.0f);
+  std::vector<float> output(kThresholdElements);
+
+  below.Execute(left.data(), right.data(), output.data());
+  EXPECT_EQ(executor.dispatches, 0);
+
+  at.Execute(left.data(), right.data(), output.data());
+  EXPECT_EQ(executor.dispatches, 1);
+  for (float value : output) {
+    EXPECT_FLOAT_EQ(value, 3.0f);
   }
 }
 

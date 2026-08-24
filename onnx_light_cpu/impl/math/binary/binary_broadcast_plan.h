@@ -56,11 +56,24 @@ private:
   void ExecuteInner(const std::byte *left, const std::byte *right, std::byte *output,
                     std::ptrdiff_t left_offset, std::ptrdiff_t right_offset,
                     std::ptrdiff_t output_offset) const;
+  // Binary PR03: single-dimension (kContiguous/kLeftScalar/kRightScalar) and
+  // multi-dimensional (repeated block/inner-vector/outer/general-strided)
+  // dispatch, each submitting independent, per-invocation work to the
+  // session executor via ``ExecuteRanges`` instead of a private scheduler.
+  void ExecuteFlat(const std::byte *left, const std::byte *right, std::byte *output) const;
+  void ExecuteMultiDimensional(const std::byte *left, const std::byte *right,
+                               std::byte *output) const;
+  void ExecuteOuterRange(const std::byte *left, const std::byte *right, std::byte *output,
+                         std::size_t outer_begin, std::size_t outer_end) const;
+  void ComputeOuterOffsets(std::size_t outer_index, std::vector<std::size_t> &indices,
+                           std::ptrdiff_t &left_offset, std::ptrdiff_t &right_offset,
+                           std::ptrdiff_t &output_offset) const;
+  void AdvanceOuterIndices(std::vector<std::size_t> &indices, std::ptrdiff_t &left_offset,
+                           std::ptrdiff_t &right_offset, std::ptrdiff_t &output_offset) const;
 
   const BinaryKernelDescriptor &descriptor_;
   const BinaryKernelDescriptor::Adapter &adapter_;
   std::vector<std::int64_t> output_shape_;
-  std::vector<Dimension> iteration_dimensions_;
   std::vector<Dimension> dimensions_;
   std::size_t element_count_ = 0;
   std::size_t inner_loop_elements_ = 0;

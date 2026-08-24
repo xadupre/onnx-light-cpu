@@ -4,8 +4,12 @@
 
 #include "onnx_light_cpu/impl/math/binary/binary_broadcast_plan.h"
 
+#include "onnx_light_cpu/impl/execution.h"
+#include "onnx_light_cpu/impl/math/binary/binary_execution_schedule.h"
+
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -85,15 +89,12 @@ BinaryBroadcastPlan::BinaryBroadcastPlan(const BinaryKernelDescriptor &descripto
 
   std::ptrdiff_t output_stride = 1;
   for (std::size_t i = rank; i-- > 0;) {
-    iteration_dimensions_.push_back(Dimension{static_cast<std::size_t>(output_shape_[i]),
-                                              left_strides[i], right_strides[i], output_stride});
     if (output_shape_[i] != 1) {
       dimensions_.push_back(Dimension{static_cast<std::size_t>(output_shape_[i]), left_strides[i],
                                       right_strides[i], output_stride});
     }
     output_stride *= output_shape_[i];
   }
-  std::reverse(iteration_dimensions_.begin(), iteration_dimensions_.end());
   std::reverse(dimensions_.begin(), dimensions_.end());
   std::vector<Dimension> coalesced;
   for (const Dimension &dimension : dimensions_) {
@@ -199,6 +200,186 @@ void BinaryBroadcastPlan::ExecuteInner(const std::byte *left, const std::byte *r
   }
 }
 
+namespace {
+
+// The general N-D fallback loop advances offsets by addition/subtraction only
+// (see ``ClassifyLoopFamily``/generic traversal below); no offset division or
+// modulo ever appears inside a per-element hot loop. Division/modulo is only
+// used once per parallel block, to seed a block's starting offsets, which is
+// outside the hot loop by construction.
+std::size_t ByteThresholdToUnits(std::size_t threshold_bytes, std::size_t bytes_per_unit) {
+  return bytes_per_unit == 0 ? 0 : (threshold_bytes + bytes_per_unit - 1) / bytes_per_unit;
+}
+
+} // namespace
+
+void BinaryBroadcastPlan::ExecuteFlat(const std::byte *left, const std::byte *right,
+                                      std::byte *output) const {
+  const std::size_t count = dimensions_[0].extent;
+  const std::ptrdiff_t left_stride = dimensions_[0].left_stride;
+  const std::ptrdiff_t right_stride = dimensions_[0].right_stride;
+  BinaryKernelDescriptor::Adapter::BulkContiguousFn bulk = nullptr;
+  if (loop_family_ == LoopFamily::kContiguous) {
+    bulk = adapter_.bulk_contiguous;
+  } else if (loop_family_ == LoopFamily::kLeftScalar) {
+    bulk = adapter_.bulk_left_scalar;
+  } else if (loop_family_ == LoopFamily::kRightScalar) {
+    bulk = adapter_.bulk_right_scalar;
+  }
+
+  const std::size_t bytes_per_unit = (left_stride != 0 ? adapter_.left_size : 0) +
+                                     (right_stride != 0 ? adapter_.right_size : 0) +
+                                     adapter_.output_size;
+  const std::size_t threshold_bytes =
+      bulk != nullptr ? kBinaryBulkParallelThresholdBytes : kBinaryScalarParallelThresholdBytes;
+  const std::size_t min_units = ByteThresholdToUnits(threshold_bytes, bytes_per_unit);
+  const std::int64_t max_participants =
+      bulk != nullptr ? kBinaryBulkMaxParticipants : kBinaryUnboundedParticipants;
+  const std::size_t element_size = std::max<std::size_t>(adapter_.output_size, 1);
+  const std::int64_t block_multiple =
+      std::max<std::int64_t>(static_cast<std::int64_t>(kExecutionSimdWidthBytes / element_size), 1);
+
+  // ``min_block_size`` is deliberately a fraction of ``min_parallel_size``:
+  // ``ExecuteRanges`` only submits work to the executor once it can form at
+  // least two blocks, so keeping them equal would silently double the
+  // effective crossover threshold.
+  const std::size_t min_units_bound = std::max<std::size_t>(min_units, 1);
+  const std::int64_t block_divisor =
+      max_participants == kBinaryUnboundedParticipants ? 4 : max_participants;
+  const std::int64_t min_block_size =
+      std::max<std::int64_t>(static_cast<std::int64_t>(min_units_bound) / block_divisor, 1);
+  const ExecutionSchedule schedule{static_cast<std::int64_t>(min_units_bound), min_block_size,
+                                   max_participants};
+  ExecuteRanges(static_cast<std::int64_t>(count), schedule, block_multiple,
+                [&](std::int64_t begin, std::int64_t end) {
+                  const std::size_t sub_count = static_cast<std::size_t>(end - begin);
+                  const std::byte *sub_left =
+                      left + (left_stride != 0 ? begin : 0) * adapter_.left_size;
+                  const std::byte *sub_right =
+                      right + (right_stride != 0 ? begin : 0) * adapter_.right_size;
+                  std::byte *sub_output = output + begin * adapter_.output_size;
+                  if (bulk != nullptr) {
+                    bulk(sub_left, sub_right, sub_output, sub_count);
+                    return;
+                  }
+                  for (std::size_t i = 0; i < sub_count; ++i) {
+                    adapter_.scalar(sub_left + (left_stride != 0 ? i : 0) * adapter_.left_size,
+                                    sub_right + (right_stride != 0 ? i : 0) * adapter_.right_size,
+                                    sub_output + i * adapter_.output_size);
+                  }
+                });
+}
+
+void BinaryBroadcastPlan::ComputeOuterOffsets(std::size_t outer_index,
+                                              std::vector<std::size_t> &indices,
+                                              std::ptrdiff_t &left_offset,
+                                              std::ptrdiff_t &right_offset,
+                                              std::ptrdiff_t &output_offset) const {
+  left_offset = 0;
+  right_offset = 0;
+  output_offset = 0;
+  std::size_t remaining = outer_index;
+  for (std::size_t d = indices.size(); d-- > 0;) {
+    const Dimension &dimension = dimensions_[d];
+    const std::size_t idx = remaining % dimension.extent;
+    remaining /= dimension.extent;
+    indices[d] = idx;
+    left_offset += static_cast<std::ptrdiff_t>(idx) * dimension.left_stride;
+    right_offset += static_cast<std::ptrdiff_t>(idx) * dimension.right_stride;
+    output_offset += static_cast<std::ptrdiff_t>(idx) * dimension.output_stride;
+  }
+}
+
+void BinaryBroadcastPlan::AdvanceOuterIndices(std::vector<std::size_t> &indices,
+                                              std::ptrdiff_t &left_offset,
+                                              std::ptrdiff_t &right_offset,
+                                              std::ptrdiff_t &output_offset) const {
+  for (std::size_t d = indices.size(); d-- > 0;) {
+    const Dimension &dimension = dimensions_[d];
+    ++indices[d];
+    left_offset += dimension.left_stride;
+    right_offset += dimension.right_stride;
+    output_offset += dimension.output_stride;
+    if (indices[d] < dimension.extent) {
+      return;
+    }
+    left_offset -= static_cast<std::ptrdiff_t>(indices[d]) * dimension.left_stride;
+    right_offset -= static_cast<std::ptrdiff_t>(indices[d]) * dimension.right_stride;
+    output_offset -= static_cast<std::ptrdiff_t>(indices[d]) * dimension.output_stride;
+    indices[d] = 0;
+  }
+}
+
+void BinaryBroadcastPlan::ExecuteOuterRange(const std::byte *left, const std::byte *right,
+                                            std::byte *output, std::size_t outer_begin,
+                                            std::size_t outer_end) const {
+  if (outer_begin >= outer_end) {
+    return;
+  }
+  const std::size_t outer_dims = dimensions_.size() - 1;
+  std::vector<std::size_t> indices(outer_dims, 0);
+  std::ptrdiff_t left_offset = 0;
+  std::ptrdiff_t right_offset = 0;
+  std::ptrdiff_t output_offset = 0;
+  ComputeOuterOffsets(outer_begin, indices, left_offset, right_offset, output_offset);
+  const Dimension &inner = dimensions_.back();
+  for (std::size_t block = outer_begin; block < outer_end; ++block) {
+    // Vectorize the inner extent whenever the plan's inner dimension leaves
+    // one side contiguous (repeated block / inner-vector broadcast), both
+    // sides contiguous (outer broadcast), or by falling back to the
+    // per-element scalar loop (general strided).
+    if (inner.left_stride == 0 && inner.right_stride == 1 && adapter_.bulk_left_scalar != nullptr) {
+      adapter_.bulk_left_scalar(
+          left + left_offset * adapter_.left_size, right + right_offset * adapter_.right_size,
+          output + output_offset * adapter_.output_size, inner_loop_elements_);
+    } else if (inner.right_stride == 0 && inner.left_stride == 1 &&
+               adapter_.bulk_right_scalar != nullptr) {
+      adapter_.bulk_right_scalar(
+          left + left_offset * adapter_.left_size, right + right_offset * adapter_.right_size,
+          output + output_offset * adapter_.output_size, inner_loop_elements_);
+    } else if (inner.left_stride == 1 && inner.right_stride == 1 &&
+               adapter_.bulk_contiguous != nullptr) {
+      adapter_.bulk_contiguous(left + left_offset * adapter_.left_size,
+                               right + right_offset * adapter_.right_size,
+                               output + output_offset * adapter_.output_size, inner_loop_elements_);
+    } else {
+      ExecuteInner(left, right, output, left_offset, right_offset, output_offset);
+    }
+    if (block + 1 == outer_end) {
+      break;
+    }
+    AdvanceOuterIndices(indices, left_offset, right_offset, output_offset);
+  }
+}
+
+void BinaryBroadcastPlan::ExecuteMultiDimensional(const std::byte *left, const std::byte *right,
+                                                  std::byte *output) const {
+  const Dimension &inner = dimensions_.back();
+  const bool has_bulk_inner =
+      (inner.left_stride == 0 && inner.right_stride == 1 && adapter_.bulk_left_scalar != nullptr) ||
+      (inner.right_stride == 0 && inner.left_stride == 1 &&
+       adapter_.bulk_right_scalar != nullptr) ||
+      (inner.left_stride == 1 && inner.right_stride == 1 && adapter_.bulk_contiguous != nullptr);
+
+  const std::size_t bytes_per_block =
+      inner_loop_elements_ *
+      ((inner.left_stride != 0 ? adapter_.left_size : 0) +
+       (inner.right_stride != 0 ? adapter_.right_size : 0) + adapter_.output_size);
+  const std::size_t threshold_bytes =
+      has_bulk_inner ? kBinaryBlockParallelThresholdBytes : kBinaryScalarParallelThresholdBytes;
+  const std::size_t min_units = ByteThresholdToUnits(threshold_bytes, bytes_per_block);
+  const std::int64_t max_participants =
+      has_bulk_inner ? kBinaryBlockMaxParticipants : kBinaryUnboundedParticipants;
+
+  const ExecutionSchedule schedule{static_cast<std::int64_t>(std::max<std::size_t>(min_units, 1)),
+                                   1, max_participants};
+  ExecuteRanges(static_cast<std::int64_t>(outer_block_count_), schedule,
+                [&](std::int64_t begin, std::int64_t end) {
+                  ExecuteOuterRange(left, right, output, static_cast<std::size_t>(begin),
+                                    static_cast<std::size_t>(end));
+                });
+}
+
 void BinaryBroadcastPlan::Execute(const void *left, const void *right, void *output) const {
   if (element_count_ == 0) {
     return;
@@ -207,51 +388,17 @@ void BinaryBroadcastPlan::Execute(const void *left, const void *right, void *out
   const auto *right_bytes = reinterpret_cast<const std::byte *>(right);
   auto *output_bytes = reinterpret_cast<std::byte *>(output);
 
-  // Binary PR02: contiguous and left/right-scalar loops collapse to a single
-  // dimension (see ClassifyLoopFamily), so a bulk SIMD kernel can process the
-  // whole extent in one call instead of looping element-by-element.
+  // Binary PR02/PR03: contiguous and left/right-scalar loops collapse to a
+  // single dimension (see ClassifyLoopFamily). Every remaining family
+  // (repeated block, inner-vector broadcast, outer broadcast, general
+  // strided) vectorizes its inner extent whenever the plan's strides allow a
+  // bulk SIMD kernel, and submits independent per-invocation work to the
+  // existing session executor instead of looping element-by-element serially.
   if (dimensions_.size() == 1) {
-    const std::size_t count = dimensions_[0].extent;
-    if (loop_family_ == LoopFamily::kContiguous && adapter_.bulk_contiguous != nullptr) {
-      adapter_.bulk_contiguous(left_bytes, right_bytes, output_bytes, count);
-      return;
-    }
-    if (loop_family_ == LoopFamily::kLeftScalar && adapter_.bulk_left_scalar != nullptr) {
-      adapter_.bulk_left_scalar(left_bytes, right_bytes, output_bytes, count);
-      return;
-    }
-    if (loop_family_ == LoopFamily::kRightScalar && adapter_.bulk_right_scalar != nullptr) {
-      adapter_.bulk_right_scalar(left_bytes, right_bytes, output_bytes, count);
-      return;
-    }
+    ExecuteFlat(left_bytes, right_bytes, output_bytes);
+    return;
   }
-
-  std::vector<std::size_t> indices(iteration_dimensions_.size(), 0);
-  std::ptrdiff_t left_offset = 0;
-  std::ptrdiff_t right_offset = 0;
-  std::ptrdiff_t output_offset = 0;
-  for (std::size_t element = 0; element < element_count_; ++element) {
-    adapter_.scalar(left_bytes + left_offset * adapter_.left_size,
-                    right_bytes + right_offset * adapter_.right_size,
-                    output_bytes + output_offset * adapter_.output_size);
-    if (element + 1 == element_count_) {
-      break;
-    }
-    for (std::size_t d = indices.size(); d-- > 0;) {
-      const Dimension &dimension = iteration_dimensions_[d];
-      ++indices[d];
-      left_offset += dimension.left_stride;
-      right_offset += dimension.right_stride;
-      output_offset += dimension.output_stride;
-      if (indices[d] < dimension.extent) {
-        break;
-      }
-      left_offset -= static_cast<std::ptrdiff_t>(indices[d]) * dimension.left_stride;
-      right_offset -= static_cast<std::ptrdiff_t>(indices[d]) * dimension.right_stride;
-      output_offset -= static_cast<std::ptrdiff_t>(indices[d]) * dimension.output_stride;
-      indices[d] = 0;
-    }
-  }
+  ExecuteMultiDimensional(left_bytes, right_bytes, output_bytes);
 }
 
 bool BinaryBroadcastPlanCache::Key::operator==(const Key &other) const noexcept {
