@@ -288,10 +288,11 @@ constexpr float kNegativeInfinity = -std::numeric_limits<float>::infinity();
 
 }
 
-void ComputeAttentionFloat32(const AttentionPlan &plan, const float *q, const float *k,
-                             const float *v, const void *mask, float *y, const float *past_k,
-                             const float *past_v, const std::int64_t *nonpad_kv_seqlen,
-                             float *qk_matmul_output) {
+void ComputeAttentionFloat32Materialized(const AttentionPlan &plan, const float *q, const float *k,
+                                         const float *v, const void *mask, float *y,
+                                         const float *past_k, const float *past_v,
+                                         const std::int64_t *nonpad_kv_seqlen,
+                                         float *qk_matmul_output) {
   const auto *mask_bool = static_cast<const std::uint8_t *>(mask);
   const auto *mask_float = static_cast<const float *>(mask);
   const std::size_t total_kv_length = plan.total_kv_length;
