@@ -43,7 +43,7 @@ TEST(OnnxLightKernelUsage, KernelNamesAreLibraryQualified) {
 // ``RegisteredKernelNames`` maps every overridden ONNX op_type to the
 // library-qualified name of the accelerated kernel installed for it. It is
 // derived from ``CollectRegisteredKernels()``'s structured inventory, so
-// entries are ordered by ``op_type`` for the public name map.
+// entries are ordered by ``domain`` and then ``op_type`` for the public name map.
 TEST(OnnxLightKernelUsage, RegisteredKernelNames) {
   std::vector<std::pair<std::string, std::string>> expected = {
       {"Abs", "onnx_light_cpu::Abs"},
