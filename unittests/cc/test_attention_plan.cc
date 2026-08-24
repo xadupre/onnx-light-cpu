@@ -4,6 +4,8 @@
 
 #include "onnx_light_cpu/impl/attention/attention_plan.h"
 
+#include "onnx_light_cpu/impl/math/half_conversion.h"
+
 #include <gtest/gtest.h>
 
 #include <cmath>
@@ -20,7 +22,10 @@ using onnx_light_cpu::AttentionDescriptor;
 using onnx_light_cpu::AttentionLayout;
 using onnx_light_cpu::AttentionMaskKind;
 using onnx_light_cpu::AttentionPlan;
+using onnx_light_cpu::ComputeAttentionBFloat16Streaming;
+using onnx_light_cpu::ComputeAttentionFloat16Streaming;
 using onnx_light_cpu::ComputeAttentionFloat32;
+using onnx_light_cpu::ComputeAttentionFloat32Streaming;
 
 std::vector<float> RandomTensor(std::size_t count, std::uint32_t seed) {
   std::mt19937 rng(seed);
@@ -590,6 +595,253 @@ TEST(ComputeAttentionFloat32, NonpadKvSeqlenAppliesPerBatchOffsetAndPaddingMask)
   const auto expected = ReferenceAttention(batch, heads, heads, q_len, kv_len, head_dim, v_head_dim,
                                            q, k, v, plan.scale, false, &bias_mask, nullptr);
   ExpectClose(y, expected);
+}
+
+// Roadmap PR14: the streaming entry point now consumes an internal tensor
+// past_key/past_value cache directly (block by block, without concatenating
+// past and new K/V), so it must match the materialized path exactly for the
+// same cache configuration that Roadmap PR13's dispatcher previously routed
+// to the materialized path only.
+TEST(ComputeAttentionFloat32Streaming, InternalPastCacheMatchesMaterialized) {
+  AttentionDescriptor descriptor;
+  descriptor.is_causal = true;
+  constexpr std::size_t batch = 2, heads = 4, group = 2, past_len = 5, q_len = 3, kv_len = 6,
+                        head_dim = 8, v_head_dim = 8;
+  constexpr std::size_t kv_heads = heads / group;
+  const std::int64_t q_shape[] = {batch, heads, q_len, head_dim};
+  const std::int64_t k_shape[] = {batch, kv_heads, kv_len, head_dim};
+  const std::int64_t v_shape[] = {batch, kv_heads, kv_len, v_head_dim};
+  const std::int64_t past_k_shape[] = {batch, kv_heads, past_len, head_dim};
+  const std::int64_t past_v_shape[] = {batch, kv_heads, past_len, v_head_dim};
+  AttentionPlan plan(descriptor, AttentionLayout::kRank4, q_shape, k_shape, v_shape, {},
+                     AttentionMaskKind::kNone, past_k_shape, past_v_shape);
+  ASSERT_FALSE(plan.has_qk_matmul_output);
+  ASSERT_FALSE(plan.has_present_output);
+
+  const auto q = RandomTensor(batch * heads * q_len * head_dim, 601);
+  const auto k = RandomTensor(batch * kv_heads * kv_len * head_dim, 602);
+  const auto v = RandomTensor(batch * kv_heads * kv_len * v_head_dim, 603);
+  const auto past_k = RandomTensor(batch * kv_heads * past_len * head_dim, 604);
+  const auto past_v = RandomTensor(batch * kv_heads * past_len * v_head_dim, 605);
+
+  std::vector<float> streaming_y(batch * heads * q_len * v_head_dim);
+  ComputeAttentionFloat32Streaming(plan, q.data(), k.data(), v.data(), nullptr, streaming_y.data(),
+                                   past_k.data(), past_v.data());
+
+  std::vector<float> materialized_y(batch * heads * q_len * v_head_dim);
+  onnx_light_cpu::ComputeAttentionFloat32Materialized(plan, q.data(), k.data(), v.data(), nullptr,
+                                                      materialized_y.data(), past_k.data(),
+                                                      past_v.data());
+
+  ExpectClose(streaming_y, materialized_y);
+}
+
+// Roadmap PR14: the streaming entry point also consumes `nonpad_kv_seqlen`
+// (the v24 external cache) directly, matching the materialized path.
+TEST(ComputeAttentionFloat32Streaming, NonpadKvSeqlenMatchesMaterialized) {
+  AttentionDescriptor descriptor;
+  descriptor.is_causal = true;
+  constexpr std::size_t batch = 2, heads = 2, q_len = 3, kv_len = 7, head_dim = 8, v_head_dim = 8;
+  const std::int64_t q_shape[] = {batch, heads, q_len, head_dim};
+  const std::int64_t k_shape[] = {batch, heads, kv_len, head_dim};
+  const std::int64_t v_shape[] = {batch, heads, kv_len, v_head_dim};
+  AttentionPlan plan(descriptor, AttentionLayout::kRank4, q_shape, k_shape, v_shape, {},
+                     AttentionMaskKind::kNone);
+
+  const auto q = RandomTensor(batch * heads * q_len * head_dim, 611);
+  const auto k = RandomTensor(batch * heads * kv_len * head_dim, 612);
+  const auto v = RandomTensor(batch * heads * kv_len * v_head_dim, 613);
+  const std::vector<std::int64_t> nonpad = {3, 6};
+
+  std::vector<float> streaming_y(batch * heads * q_len * v_head_dim);
+  ComputeAttentionFloat32Streaming(plan, q.data(), k.data(), v.data(), nullptr, streaming_y.data(),
+                                   nullptr, nullptr, nonpad.data());
+
+  std::vector<float> materialized_y(batch * heads * q_len * v_head_dim);
+  onnx_light_cpu::ComputeAttentionFloat32Materialized(plan, q.data(), k.data(), v.data(), nullptr,
+                                                      materialized_y.data(), nullptr, nullptr,
+                                                      nonpad.data());
+
+  ExpectClose(streaming_y, materialized_y);
+}
+
+// Roadmap PR14: a boolean attn_mask carves out a fully-disallowed block in
+// the middle of the KV axis (a sliding-window-like shape spanning more than
+// one `kStreamingKvBlock`-sized tile): the streaming path must infer the
+// safe per-block skip and still match the reference exactly, and it must
+// also match the materialized path bit-for-bit in behavior (both must zero a
+// fully-masked row rather than produce NaN).
+TEST(ComputeAttentionFloat32Streaming, BooleanMaskTileSkipMatchesReference) {
+  AttentionDescriptor descriptor;
+  constexpr std::size_t batch = 1, heads = 1, q_len = 2, kv_len = 300, head_dim = 4, v_head_dim = 4;
+  const std::int64_t q_shape[] = {batch, heads, q_len, head_dim};
+  const std::int64_t k_shape[] = {batch, heads, kv_len, head_dim};
+  const std::int64_t v_shape[] = {batch, heads, kv_len, v_head_dim};
+  const std::int64_t mask_shape[] = {q_len, kv_len};
+
+  const auto q = RandomTensor(batch * heads * q_len * head_dim, 621);
+  const auto k = RandomTensor(batch * heads * kv_len * head_dim, 622);
+  const auto v = RandomTensor(batch * heads * kv_len * v_head_dim, 623);
+
+  // Two disjoint allowed windows (each narrower than `kStreamingKvBlock`),
+  // separated by a fully-disallowed gap spanning several whole KV blocks.
+  std::vector<std::uint8_t> bool_mask(q_len * kv_len, 0);
+  for (std::size_t i = 0; i < q_len; ++i) {
+    for (std::size_t j : {std::size_t{10}, std::size_t{11}, std::size_t{250}, std::size_t{251}}) {
+      bool_mask[i * kv_len + j] = 1;
+    }
+  }
+
+  AttentionPlan plan(descriptor, AttentionLayout::kRank4, q_shape, k_shape, v_shape, mask_shape,
+                     AttentionMaskKind::kBoolean);
+  std::vector<float> y(batch * heads * q_len * v_head_dim);
+  ComputeAttentionFloat32Streaming(plan, q.data(), k.data(), v.data(), bool_mask.data(), y.data());
+
+  const auto expected = ReferenceAttention(batch, heads, heads, q_len, kv_len, head_dim, v_head_dim,
+                                           q, k, v, plan.scale, false, nullptr, &bool_mask);
+  ExpectClose(y, expected);
+
+  // The materialized path must agree exactly on the same inputs.
+  std::vector<float> materialized_y(batch * heads * q_len * v_head_dim);
+  onnx_light_cpu::ComputeAttentionFloat32Materialized(plan, q.data(), k.data(), v.data(),
+                                                      bool_mask.data(), materialized_y.data());
+  ExpectClose(y, materialized_y);
+}
+
+namespace half_precision {
+
+std::vector<std::uint16_t> ToFloat16(const std::vector<float> &values) {
+  std::vector<std::uint16_t> out(values.size());
+  for (std::size_t i = 0; i < values.size(); ++i) {
+    out[i] = onnx_light_cpu::detail::FloatToFloat16Bits(values[i]);
+  }
+  return out;
+}
+
+std::vector<float> FromFloat16(const std::vector<std::uint16_t> &values) {
+  std::vector<float> out(values.size());
+  for (std::size_t i = 0; i < values.size(); ++i) {
+    out[i] = onnx_light_cpu::detail::Float16BitsToFloat(values[i]);
+  }
+  return out;
+}
+
+std::vector<std::uint16_t> ToBFloat16(const std::vector<float> &values) {
+  std::vector<std::uint16_t> out(values.size());
+  for (std::size_t i = 0; i < values.size(); ++i) {
+    out[i] = onnx_light_cpu::detail::FloatToBFloat16Bits(values[i]);
+  }
+  return out;
+}
+
+std::vector<float> FromBFloat16(const std::vector<std::uint16_t> &values) {
+  std::vector<float> out(values.size());
+  for (std::size_t i = 0; i < values.size(); ++i) {
+    out[i] = onnx_light_cpu::detail::Bfloat16BitsToFloat(values[i]);
+  }
+  return out;
+}
+
+} // namespace half_precision
+
+// Roadmap PR14: the FP16 streaming path rounds Q/K/V once on the way in and
+// Y once on the way out, but performs the score/softmax/P@V recurrence in
+// FP32 throughout. Round-tripping the same FP16-representable inputs through
+// the FP32 streaming/materialized path (no further rounding) must therefore
+// match the FP16 path within FP16 rounding tolerance.
+TEST(ComputeAttentionFloat16Streaming, MatchesFloat32ReferenceWithinHalfPrecisionTolerance) {
+  AttentionDescriptor descriptor;
+  descriptor.is_causal = true;
+  constexpr std::size_t batch = 1, heads = 2, q_len = 4, kv_len = 9, head_dim = 8, v_head_dim = 8;
+  const std::int64_t q_shape[] = {batch, heads, q_len, head_dim};
+  const std::int64_t k_shape[] = {batch, heads, kv_len, head_dim};
+  const std::int64_t v_shape[] = {batch, heads, kv_len, v_head_dim};
+  AttentionPlan plan(descriptor, AttentionLayout::kRank4, q_shape, k_shape, v_shape, {},
+                     AttentionMaskKind::kNone);
+
+  // Build FP32 tensors that already round-trip exactly through FP16, so the
+  // only source of divergence between the two paths is Y's final rounding.
+  const auto q32 = half_precision::FromFloat16(
+      half_precision::ToFloat16(RandomTensor(batch * heads * q_len * head_dim, 631)));
+  const auto k32 = half_precision::FromFloat16(
+      half_precision::ToFloat16(RandomTensor(batch * heads * kv_len * head_dim, 632)));
+  const auto v32 = half_precision::FromFloat16(
+      half_precision::ToFloat16(RandomTensor(batch * heads * kv_len * v_head_dim, 633)));
+
+  const auto q16 = half_precision::ToFloat16(q32);
+  const auto k16 = half_precision::ToFloat16(k32);
+  const auto v16 = half_precision::ToFloat16(v32);
+
+  std::vector<std::uint16_t> y16(batch * heads * q_len * v_head_dim);
+  ComputeAttentionFloat16Streaming(plan, q16.data(), k16.data(), v16.data(), nullptr, y16.data());
+  const auto y = half_precision::FromFloat16(y16);
+
+  std::vector<float> expected(batch * heads * q_len * v_head_dim);
+  ComputeAttentionFloat32(plan, q32.data(), k32.data(), v32.data(), nullptr, expected.data());
+
+  ExpectClose(y, expected, 5e-3f);
+}
+
+// Roadmap PR14: same contract as the FP16 test above, for BF16.
+TEST(ComputeAttentionBFloat16Streaming, MatchesFloat32ReferenceWithinHalfPrecisionTolerance) {
+  AttentionDescriptor descriptor;
+  constexpr std::size_t batch = 2, heads = 4, group = 2, q_len = 2, kv_len = 5, head_dim = 8,
+                        v_head_dim = 8;
+  constexpr std::size_t kv_heads = heads / group;
+  const std::int64_t q_shape[] = {batch, heads, q_len, head_dim};
+  const std::int64_t k_shape[] = {batch, kv_heads, kv_len, head_dim};
+  const std::int64_t v_shape[] = {batch, kv_heads, kv_len, v_head_dim};
+  AttentionPlan plan(descriptor, AttentionLayout::kRank4, q_shape, k_shape, v_shape, {},
+                     AttentionMaskKind::kNone);
+
+  const auto q32 = half_precision::FromBFloat16(
+      half_precision::ToBFloat16(RandomTensor(batch * heads * q_len * head_dim, 641)));
+  const auto k32 = half_precision::FromBFloat16(
+      half_precision::ToBFloat16(RandomTensor(batch * kv_heads * kv_len * head_dim, 642)));
+  const auto v32 = half_precision::FromBFloat16(
+      half_precision::ToBFloat16(RandomTensor(batch * kv_heads * kv_len * v_head_dim, 643)));
+
+  const auto q16 = half_precision::ToBFloat16(q32);
+  const auto k16 = half_precision::ToBFloat16(k32);
+  const auto v16 = half_precision::ToBFloat16(v32);
+
+  std::vector<std::uint16_t> y16(batch * heads * q_len * v_head_dim);
+  ComputeAttentionBFloat16Streaming(plan, q16.data(), k16.data(), v16.data(), nullptr, y16.data());
+  const auto y = half_precision::FromBFloat16(y16);
+
+  std::vector<float> expected(batch * heads * q_len * v_head_dim);
+  ComputeAttentionFloat32(plan, q32.data(), k32.data(), v32.data(), nullptr, expected.data());
+
+  // BF16 has fewer mantissa bits than FP16, so use a looser tolerance.
+  ExpectClose(y, expected, 3e-2f);
+}
+
+// Roadmap PR14: a plan with a requested `present` output must never
+// dispatch to streaming, since it necessarily materializes a full observable
+// tensor (like `qk_matmul_output`, covered by
+// ComputeAttentionFloat32.QkMatmulOutputModesCaptureEachStage above).
+TEST(ComputeAttentionFloat32, PresentOutputSelectsMaterializedExecution) {
+  AttentionDescriptor descriptor;
+  descriptor.has_present_key = true;
+  descriptor.has_present_value = true;
+  constexpr std::size_t batch = 1, heads = 1, q_len = 1, kv_len = 4, head_dim = 4, v_head_dim = 4;
+  const std::int64_t q_shape[] = {batch, heads, q_len, head_dim};
+  const std::int64_t k_shape[] = {batch, heads, kv_len, head_dim};
+  const std::int64_t v_shape[] = {batch, heads, kv_len, v_head_dim};
+  AttentionPlan plan(descriptor, AttentionLayout::kRank4, q_shape, k_shape, v_shape, {},
+                     AttentionMaskKind::kNone);
+  EXPECT_TRUE(plan.has_present_output);
+
+  const auto q = RandomTensor(batch * heads * q_len * head_dim, 651);
+  const auto k = RandomTensor(batch * heads * kv_len * head_dim, 652);
+  const auto v = RandomTensor(batch * heads * kv_len * v_head_dim, 653);
+  std::vector<float> y(batch * heads * q_len * v_head_dim);
+  std::vector<float> materialized_y(batch * heads * q_len * v_head_dim);
+
+  ComputeAttentionFloat32(plan, q.data(), k.data(), v.data(), nullptr, y.data());
+  onnx_light_cpu::ComputeAttentionFloat32Materialized(plan, q.data(), k.data(), v.data(), nullptr,
+                                                      materialized_y.data());
+  ExpectClose(y, materialized_y, 0.0f);
 }
 
 } // namespace
