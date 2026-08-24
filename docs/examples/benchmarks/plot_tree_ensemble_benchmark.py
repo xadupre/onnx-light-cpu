@@ -110,22 +110,22 @@ speedup_norm = TwoSlopeNorm(
 )
 
 fig, axes = plt.subplots(
-    2,
     len(tree_counts),
-    figsize=(5 * len(tree_counts), 9),
+    2,
+    figsize=(12, 4 * len(tree_counts)),
     squeeze=False,
     layout="constrained",
 )
-for column, trees in enumerate(tree_counts):
-    timing_image = axes[0, column].imshow(
+for row, trees in enumerate(tree_counts):
+    timing_image = axes[row, 0].imshow(
         timings[trees], aspect="auto", cmap="viridis", norm=timing_norm
     )
-    speedup_image = axes[1, column].imshow(
+    speedup_image = axes[row, 1].imshow(
         speedups[trees], aspect="auto", cmap="coolwarm", norm=speedup_norm
     )
     for row_index in range(len(batch_sizes)):
         for feature_index in range(len(feature_counts)):
-            axes[0, column].text(
+            axes[row, 0].text(
                 feature_index,
                 row_index,
                 f"{timings[trees][row_index, feature_index]:.1f}",
@@ -133,7 +133,7 @@ for column, trees in enumerate(tree_counts):
                 va="center",
                 color="white",
             )
-            axes[1, column].text(
+            axes[row, 1].text(
                 feature_index,
                 row_index,
                 f"{speedups[trees][row_index, feature_index]:.2f}x",
@@ -141,14 +141,15 @@ for column, trees in enumerate(tree_counts):
                 va="center",
                 color="black",
             )
-    axes[0, column].set_title(f"{trees:,} trees")
+    axes[row, 0].set_title(f"{trees:,} trees — CPU median time")
+    axes[row, 1].set_title(f"{trees:,} trees — speedup")
 
 for axis in axes.flat:
     axis.set_xticks(range(len(feature_counts)), feature_counts, rotation=30)
     axis.set_yticks(range(len(batch_sizes)), batch_sizes)
     axis.set_xlabel("number of features")
     axis.set_ylabel("batch size")
-fig.colorbar(timing_image, ax=axes[0, :], label="onnx-light CPU median time (us)")
-fig.colorbar(speedup_image, ax=axes[1, :], label="speedup over ONNX Runtime")
+fig.colorbar(timing_image, ax=axes[:, 0], label="onnx-light CPU median time (us)")
+fig.colorbar(speedup_image, ax=axes[:, 1], label="speedup over ONNX Runtime")
 fig.suptitle("TreeEnsemble: depth 4, float32, one output")
 plt.show()
