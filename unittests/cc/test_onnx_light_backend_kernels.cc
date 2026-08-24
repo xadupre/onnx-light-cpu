@@ -502,11 +502,44 @@ TEST(OnnxLightBackendKernels, BinaryBenchmarkCorporaAreLazyAndRunThroughRuntime)
       EXPECT_FALSE(test_case.materialized()) << test_case.name;
       EXPECT_TRUE(test_case.name.ends_with("_benchmark")) << test_case.name;
     }
+    const auto representative =
+        std::find_if(cases.begin(), cases.end(), [](const TestCase &test_case) {
+          return test_case.name.find("_repeated_block_4d_") != std::string::npos;
+        });
+    ASSERT_NE(representative, cases.end()) << entry.op_type;
     const std::vector<std::string> op_failures = RunCpuBackendCases(
-        std::string(entry.op_type), core::backend_test::TestMode::BENCHMARK, cases.front().name);
+        std::string(entry.op_type), core::backend_test::TestMode::BENCHMARK, representative->name);
     failures.insert(failures.end(), op_failures.begin(), op_failures.end());
   }
   EXPECT_TRUE(failures.empty()) << Describe(failures);
+}
+
+TEST(OnnxLightBackendKernels, BinaryBenchmarkCorporaCoverPriorityShapes) {
+  const std::set<std::string> expected_shape_tags = {
+      "contiguous_1d", "contiguous_2d",           "contiguous_3d",
+      "contiguous_4d", "repeated_block_4d",       "inner_vector_4d",
+      "general_5d",    "repeated_block_4d_large", "inner_vector_4d_large",
+  };
+  const std::set<int64_t> expected_output_sizes = {
+      1024, 32768, 65535, 65536, 131072, 1048576, 4194304,
+  };
+  for (const auto &entry : onnx_light_cpu::GetBinaryManifest()) {
+    const std::vector<TestCase> cases =
+        CollectCpuCases(std::string(entry.op_type), core::backend_test::TestMode::BENCHMARK);
+    std::set<std::string> shape_tags;
+    std::set<int64_t> output_sizes;
+    for (const TestCase &test_case : cases) {
+      for (const std::string &shape_tag : expected_shape_tags) {
+        if (test_case.name.find("_" + shape_tag + "_") != std::string::npos) {
+          shape_tags.insert(shape_tag);
+        }
+      }
+      ASSERT_EQ(test_case.declared_output_element_counts.size(), 1u) << test_case.name;
+      output_sizes.insert(test_case.declared_output_element_counts[0]);
+    }
+    EXPECT_EQ(shape_tags, expected_shape_tags) << entry.op_type;
+    EXPECT_EQ(output_sizes, expected_output_sizes) << entry.op_type;
+  }
 }
 
 TEST(OnnxLightBackendKernels, UnaryBenchmarkCorporaCoverParallelThresholds) {
