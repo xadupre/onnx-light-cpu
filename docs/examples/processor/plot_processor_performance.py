@@ -58,9 +58,9 @@ unit_test_going = os.environ.get("UNITTEST_GOING", "0") in ("1", "true", "True")
 
 profile = benchmark_processor_performance(
     thread_policies=("single", "physical"),
-    repeats=2 if unit_test_going else 7,
-    minimum_duration_ms=1.0 if unit_test_going else 20.0,
-    memory_budget_bytes=(8 * 1024 * 1024) if unit_test_going else (256 * 1024 * 1024),
+    repeats=2 if unit_test_going else 4,
+    minimum_duration_ms=1.0 if unit_test_going else 10.0,
+    memory_budget_bytes=(8 * 1024 * 1024) if unit_test_going else (64 * 1024 * 1024),
     include_latency=True,
     explicit_single_affinity=ExplicitAffinity(0, 0),
 )

@@ -169,7 +169,9 @@ jobs:
         env:
           UNITTEST_GOING: "1"
           MPLBACKEND: Agg
-        run: python docs/examples/processor/plot_processor_performance.py
+        # -u: unbuffered stdout, so progress streams live in the CI log
+        # instead of appearing as one block at the very end.
+        run: python -u docs/examples/processor/plot_processor_performance.py
 
       - name: Run onnx-light integration tests
         run: python -m pytest unittests
