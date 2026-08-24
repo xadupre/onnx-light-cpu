@@ -29,7 +29,9 @@ way :mod:`unittests.python.test_kernels_e2e` verifies these backend cases.
 # ``onnx_light_cpu/backend_test/cases/math/cases_gemm.cc``) which are outside
 # the scope of this example.
 
+import argparse
 import os
+import re
 import time
 
 import matplotlib.pyplot as plt
@@ -52,6 +54,22 @@ assert has_backend_test_cases(), (
     "onnx-light-cpu must be built with onnx-light's backend test registry "
     "(register_backend_test_cases binding unavailable)."
 )
+
+# ``--filter`` narrows the collected cases down to those whose name matches an
+# additional regular expression, on top of the fixed per-operator selection
+# below (e.g. ``--filter gemm`` keeps only Gemm cases, ``--filter '_2d_'``
+# keeps only 2-D cases across every operator). ``parse_known_args`` ignores
+# unrelated arguments injected by pytest/sphinx-gallery when this file runs as
+# a test or a documentation example.
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument(
+    "--filter",
+    default=None,
+    help="regular expression a case name must additionally match, e.g. '^test_cpu_gemm_'",
+)
+args, _ = parser.parse_known_args()
+_name_filter = re.compile(args.filter) if args.filter else None
+
 
 # Operators covered by onnx-light-cpu's "test_cpu_*" backend test cases, mapped
 # to the library-qualified kernel name each records when it runs.
@@ -123,6 +141,8 @@ def _collect_cases():
         op_type = nodes[0].op_type if len(nodes) == 1 else None
         if op_type not in _TARGET_KERNELS or not tc.data_sets:
             continue
+        if _name_filter is not None and not _name_filter.search(tc.name):
+            continue
         input_type, output_type = _TARGET_DTYPES[op_type]
         if not all(
             all(int(tensor.data_type) == int(input_type) for tensor in data_set.inputs)
@@ -138,7 +158,10 @@ def _collect_cases():
 
 
 _CASES = _collect_cases()
-assert _CASES, "no onnx-light-cpu BENCHMARK backend test cases were collected"
+_no_cases_message = (
+    f"no onnx-light-cpu BENCHMARK backend test cases were collected (filter={args.filter!r})"
+)
+assert _CASES, _no_cases_message
 
 # %%
 # Timing helper
