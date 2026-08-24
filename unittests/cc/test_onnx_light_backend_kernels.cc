@@ -749,14 +749,18 @@ TEST(OnnxLightBackendKernels, GemmBenchmarkCorpusIsLazyAndCoversPriorityShapes) 
   bool has_column_bias = false;
   bool has_matrix_bias = false;
   bool has_float32 = false;
+  bool has_float64 = false;
   bool has_float16 = false;
   bool has_bfloat16 = false;
   bool has_direct_k32 = false;
   bool has_square_128 = false;
   bool has_square_1024 = false;
+  bool has_square_2048 = false;
+  bool has_square_4096 = false;
   bool has_skinny_m_small = false;
   bool has_skinny_n_small = false;
   bool has_large_k_1024 = false;
+  bool has_large_k_16384 = false;
   bool has_split_k_16384 = false;
   bool has_transformer_decode = false;
   std::set<std::string> names;
@@ -800,20 +804,25 @@ TEST(OnnxLightBackendKernels, GemmBenchmarkCorpusIsLazyAndCoversPriorityShapes) 
     EXPECT_EQ(trans_a_tags, 1) << test_case.name;
     EXPECT_EQ(trans_b_tags, 1) << test_case.name;
     has_float32 |= test_case.name.find("_float32_") != std::string::npos;
+    has_float64 |= test_case.name.find("_float64_") != std::string::npos;
     has_float16 |= test_case.name.find("_float16_") != std::string::npos;
     has_bfloat16 |= test_case.name.find("_bfloat16_") != std::string::npos;
     has_direct_k32 |= test_case.name.find("direct_k32") != std::string::npos;
     has_square_128 |= test_case.name.find("square_128") != std::string::npos;
     has_square_1024 |= test_case.name.find("square_1024") != std::string::npos;
+    has_square_2048 |= test_case.name.find("square_2048") != std::string::npos;
+    has_square_4096 |= test_case.name.find("square_4096") != std::string::npos;
     has_skinny_m_small |= test_case.name.find("skinny_m_small") != std::string::npos;
     has_skinny_n_small |= test_case.name.find("skinny_n_small") != std::string::npos;
     has_large_k_1024 |= test_case.name.find("large_k_1024") != std::string::npos;
+    has_large_k_16384 |= test_case.name.find("large_k_16384") != std::string::npos;
     has_split_k_16384 |= test_case.name.find("split_k_16384") != std::string::npos;
     has_transformer_decode |=
         test_case.name.find("transformer_projection_decode") != std::string::npos;
   }
-  // 24 prepared shapes, each registered for float32, float16 and bfloat16.
-  EXPECT_EQ(cpu_cases, 72u);
+  // 27 prepared shapes, each registered for float32, float64, float16 and
+  // bfloat16.
+  EXPECT_EQ(cpu_cases, 108u);
   EXPECT_TRUE(has_constant_b);
   EXPECT_TRUE(has_direct);
   EXPECT_TRUE(has_skinny_m);
@@ -826,19 +835,23 @@ TEST(OnnxLightBackendKernels, GemmBenchmarkCorpusIsLazyAndCoversPriorityShapes) 
   EXPECT_TRUE(has_column_bias);
   EXPECT_TRUE(has_matrix_bias);
   EXPECT_TRUE(has_float32);
+  EXPECT_TRUE(has_float64);
   EXPECT_TRUE(has_float16);
   EXPECT_TRUE(has_bfloat16);
   EXPECT_TRUE(has_direct_k32);
   EXPECT_TRUE(has_square_128);
   EXPECT_TRUE(has_square_1024);
+  EXPECT_TRUE(has_square_2048);
+  EXPECT_TRUE(has_square_4096);
   EXPECT_TRUE(has_skinny_m_small);
   EXPECT_TRUE(has_skinny_n_small);
   EXPECT_TRUE(has_large_k_1024);
+  EXPECT_TRUE(has_large_k_16384);
   EXPECT_TRUE(has_split_k_16384);
   EXPECT_TRUE(has_transformer_decode);
 }
 
-TEST(OnnxLightBackendKernels, GemmBigBenchmarkCorpusCovers8192OnEveryAxis) {
+TEST(OnnxLightBackendKernels, GemmBigBenchmarkCorpusCovers8192And16384OnEveryAxis) {
   onnx_light_cpu::backend_test::RegisterCpuKernelBackendTestCases();
   std::vector<TestCase> cases =
       CollectTestCases("Gemm", /*include_big=*/true, core::backend_test::TestMode::BENCHMARK);
@@ -847,7 +860,11 @@ TEST(OnnxLightBackendKernels, GemmBigBenchmarkCorpusCovers8192OnEveryAxis) {
   bool has_large_m = false;
   bool has_large_n = false;
   bool has_large_k = false;
+  bool has_larger_m = false;
+  bool has_larger_n = false;
+  bool has_larger_k = false;
   bool has_float32 = false;
+  bool has_float64 = false;
   bool has_float16 = false;
   bool has_bfloat16 = false;
   for (const TestCase &test_case : cases) {
@@ -860,15 +877,23 @@ TEST(OnnxLightBackendKernels, GemmBigBenchmarkCorpusCovers8192OnEveryAxis) {
     has_large_m |= test_case.name.find("_m8192_n128_k128_") != std::string::npos;
     has_large_n |= test_case.name.find("_m128_n8192_k128_") != std::string::npos;
     has_large_k |= test_case.name.find("_m128_n128_k8192_") != std::string::npos;
+    has_larger_m |= test_case.name.find("_m16384_n128_k128_") != std::string::npos;
+    has_larger_n |= test_case.name.find("_m128_n16384_k128_") != std::string::npos;
+    has_larger_k |= test_case.name.find("_m128_n128_k16384_") != std::string::npos;
     has_float32 |= test_case.name.find("_float32_") != std::string::npos;
+    has_float64 |= test_case.name.find("_float64_") != std::string::npos;
     has_float16 |= test_case.name.find("_float16_") != std::string::npos;
     has_bfloat16 |= test_case.name.find("_bfloat16_") != std::string::npos;
   }
-  EXPECT_EQ(big_cases, 9U);
+  EXPECT_EQ(big_cases, 24U);
   EXPECT_TRUE(has_large_m);
   EXPECT_TRUE(has_large_n);
   EXPECT_TRUE(has_large_k);
+  EXPECT_TRUE(has_larger_m);
+  EXPECT_TRUE(has_larger_n);
+  EXPECT_TRUE(has_larger_k);
   EXPECT_TRUE(has_float32);
+  EXPECT_TRUE(has_float64);
   EXPECT_TRUE(has_float16);
   EXPECT_TRUE(has_bfloat16);
 }
