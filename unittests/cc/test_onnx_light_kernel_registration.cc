@@ -56,7 +56,7 @@ TEST(KernelRegistration, CollectionReportsEveryActualRegistration) {
        "Attention",
        sym_ns::Device::kCPU,
        "onnx_light_cpu::Attention",
-       {rt_ns::DataType::FLOAT},
+       {rt_ns::DataType::FLOAT, rt_ns::DataType::FLOAT16, rt_ns::DataType::BFLOAT16},
        23,
        std::nullopt},
       {"ai.onnx",
