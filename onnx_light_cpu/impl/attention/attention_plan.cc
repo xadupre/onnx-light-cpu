@@ -288,10 +288,11 @@ constexpr float kNegativeInfinity = -std::numeric_limits<float>::infinity();
 
 }
 
-void ComputeAttentionFloat32(const AttentionPlan &plan, const float *q, const float *k,
-                             const float *v, const void *mask, float *y, const float *past_k,
-                             const float *past_v, const std::int64_t *nonpad_kv_seqlen,
-                             float *qk_matmul_output) {
+void ComputeAttentionFloat32Materialized(const AttentionPlan &plan, const float *q, const float *k,
+                                         const float *v, const void *mask, float *y,
+                                         const float *past_k, const float *past_v,
+                                         const std::int64_t *nonpad_kv_seqlen,
+                                         float *qk_matmul_output) {
   const auto *mask_bool = static_cast<const std::uint8_t *>(mask);
   const auto *mask_float = static_cast<const float *>(mask);
   const std::size_t total_kv_length = plan.total_kv_length;
@@ -435,6 +436,160 @@ void ComputeAttentionFloat32(const AttentionPlan &plan, const float *q, const fl
       }
     }
   }
+}
+
+namespace {
+
+// KV block size for the streaming recurrence: bounds the temporary score
+// buffer to a constant instead of `O(total_kv_length)`.
+constexpr std::size_t kStreamingKvBlock = 128;
+
+} // namespace
+
+void ComputeAttentionFloat32Streaming(const AttentionPlan &plan, const float *q, const float *k,
+                                      const float *v, const void *mask, float *y) {
+  const auto *mask_bool = static_cast<const std::uint8_t *>(mask);
+  const auto *mask_float = static_cast<const float *>(mask);
+  // The streaming path never receives a tensor `past_key`/`past_value` cache
+  // (dispatched only when `plan.past_length == 0`), so `total_kv_length` is
+  // simply `kv_length` here.
+  const std::size_t kv_length = plan.kv_length;
+  const bool has_softcap = plan.softcap != 0.0f;
+  const std::size_t block = kv_length == 0 ? 0 : std::min(kv_length, kStreamingKvBlock);
+
+  // Peak temporary storage: one `Bc`-sized score tile and one `v_head_dim`
+  // accumulator per query row (`Br == 1` here); never the full
+  // `[q_length, total_kv_length]` score or probability tensor.
+  std::vector<float> scores(block);
+  std::vector<float> accumulator(plan.v_head_dim);
+
+  for (std::size_t b = 0; b < plan.batch; ++b) {
+    for (std::size_t h = 0; h < plan.q_num_heads; ++h) {
+      const std::size_t kv_h = h / plan.group_size;
+      const float *q_head = q + b * plan.q_strides.batch + h * plan.q_strides.head;
+      const float *k_head = k + b * plan.k_strides.batch + kv_h * plan.k_strides.head;
+      const float *v_head = v + b * plan.v_strides.batch + kv_h * plan.v_strides.head;
+      float *y_head = y + b * plan.y_strides.batch + h * plan.y_strides.head;
+      const std::ptrdiff_t mask_base =
+          b * plan.mask_strides.batch + static_cast<std::ptrdiff_t>(h) * plan.mask_strides.head;
+
+      for (std::size_t i = 0; i < plan.q_length; ++i) {
+        const float *q_row = q_head + i * plan.q_strides.sequence;
+        const std::ptrdiff_t mask_row =
+            mask_base + static_cast<std::ptrdiff_t>(i) * plan.mask_strides.q;
+        float *y_row = y_head + i * plan.y_strides.sequence;
+
+        // Causal frontier: last KV index (inclusive) this row may attend to.
+        // `causal_offset` is `0` here since the streaming path never carries
+        // a tensor `past_key` cache. Blocks strictly beyond it are skipped.
+        const std::int64_t frontier = plan.causal
+                                          ? static_cast<std::int64_t>(i) + plan.causal_offset
+                                          : static_cast<std::int64_t>(kv_length) - 1;
+        const std::size_t kv_limit =
+            frontier < 0 ? std::size_t{0}
+                         : std::min(kv_length, static_cast<std::size_t>(frontier) + 1);
+
+        float m = kNegativeInfinity;
+        float l = 0.0f;
+        std::fill(accumulator.begin(), accumulator.end(), 0.0f);
+        bool any_valid = false;
+
+        for (std::size_t j0 = 0; j0 < kv_limit; j0 += block) {
+          const std::size_t j1 = std::min(j0 + block, kv_limit);
+          const std::size_t count = j1 - j0;
+
+          float block_max = kNegativeInfinity;
+          for (std::size_t jj = 0; jj < count; ++jj) {
+            const std::size_t j = j0 + jj;
+            bool allowed = !plan.causal || static_cast<std::int64_t>(j) <= frontier;
+            float additive_bias = 0.0f;
+            if (plan.mask_kind == AttentionMaskKind::kBoolean) {
+              const std::ptrdiff_t index =
+                  mask_row + static_cast<std::ptrdiff_t>(j) * plan.mask_strides.kv;
+              allowed = allowed && mask_bool[index] != 0;
+            } else if (plan.mask_kind == AttentionMaskKind::kAdditive) {
+              const std::ptrdiff_t index =
+                  mask_row + static_cast<std::ptrdiff_t>(j) * plan.mask_strides.kv;
+              additive_bias = mask_float[index];
+            }
+            const float bias = (allowed ? 0.0f : kNegativeInfinity) + additive_bias;
+
+            const float *k_row = k_head + j * plan.k_strides.sequence;
+            float dot = 0.0f;
+            for (std::size_t d = 0; d < plan.head_dim; ++d) {
+              dot += q_row[d] * k_row[d];
+            }
+            const float raw = plan.scale * dot;
+            const float capped = has_softcap ? plan.softcap * std::tanh(raw / plan.softcap) : raw;
+            const float with_bias = capped + bias;
+            scores[jj] = with_bias;
+            if (with_bias != kNegativeInfinity) {
+              any_valid = true;
+            }
+            block_max = std::max(block_max, with_bias);
+          }
+
+          // Online softmax recurrence: rescale the running denominator and
+          // accumulator to the new running maximum before folding in this
+          // block's contribution.
+          const float m_new = std::max(m, block_max);
+          float correction = 1.0f;
+          if (m_new != kNegativeInfinity) {
+            correction = m == kNegativeInfinity ? 0.0f : std::exp(m - m_new);
+          }
+          l *= correction;
+          for (std::size_t d = 0; d < plan.v_head_dim; ++d) {
+            accumulator[d] *= correction;
+          }
+
+          for (std::size_t jj = 0; jj < count; ++jj) {
+            const float score = scores[jj];
+            const float p = score == kNegativeInfinity ? 0.0f : std::exp(score - m_new);
+            if (p == 0.0f) {
+              continue;
+            }
+            l += p;
+            const float *v_row = v_head + (j0 + jj) * plan.v_strides.sequence;
+            for (std::size_t d = 0; d < plan.v_head_dim; ++d) {
+              accumulator[d] += p * v_row[d];
+            }
+          }
+          m = m_new;
+        }
+
+        if (!any_valid || l == 0.0f) {
+          // Fully-masked query row (or an empty KV length): zero output
+          // rather than NaN, matching the materialized path.
+          std::fill(y_row, y_row + plan.v_head_dim, 0.0f);
+          continue;
+        }
+        const float inv_l = 1.0f / l;
+        for (std::size_t d = 0; d < plan.v_head_dim; ++d) {
+          y_row[d] = accumulator[d] * inv_l;
+        }
+      }
+    }
+  }
+}
+
+void ComputeAttentionFloat32(const AttentionPlan &plan, const float *q, const float *k,
+                             const float *v, const void *mask, float *y, const float *past_k,
+                             const float *past_v, const std::int64_t *nonpad_kv_seqlen,
+                             float *qk_matmul_output) {
+  // Streaming preconditions: no tensor past/present cache, no
+  // `nonpad_kv_seqlen`, and no observable `qk_matmul_output`. Any of these
+  // requires the materialized path (either because streaming does not
+  // implement that behavior yet, or because a full `qk_matmul_output` must be
+  // observable).
+  const bool can_stream = past_k == nullptr && past_v == nullptr && plan.past_length == 0 &&
+                          nonpad_kv_seqlen == nullptr && qk_matmul_output == nullptr &&
+                          !plan.has_qk_matmul_output;
+  if (can_stream) {
+    ComputeAttentionFloat32Streaming(plan, q, k, v, mask, y);
+    return;
+  }
+  ComputeAttentionFloat32Materialized(plan, q, k, v, mask, y, past_k, past_v, nonpad_kv_seqlen,
+                                      qk_matmul_output);
 }
 
 } // namespace onnx_light_cpu

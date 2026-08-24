@@ -230,4 +230,37 @@ void ComputeAttentionFloat32(const AttentionPlan &plan, const float *q, const fl
                              const std::int64_t *nonpad_kv_seqlen = nullptr,
                              float *qk_matmul_output = nullptr);
 
+/// Roadmap PR13: executes the stateless FP32 attention blocked online-softmax
+/// recurrence directly. ``ComputeAttentionFloat32`` already dispatches to this
+/// path automatically whenever its preconditions hold (no tensor
+/// ``past_key``/``past_value`` cache, no ``nonpad_kv_seqlen``, and no
+/// observable ``qk_matmul_output``); this entry point exists so tests and
+/// benchmarks can invoke the streaming recurrence directly and compare it
+/// against :cpp:func:`ComputeAttentionFloat32Materialized` for identical
+/// inputs. Callers must not invoke it when those preconditions do not hold.
+///
+/// For each query block, ``Kv`` blocks are visited left to right while
+/// maintaining a running maximum, denominator, and unnormalized output per
+/// query row (the standard online-softmax recurrence); the complete
+/// ``[q_length, total_kv_length]`` score or probability matrix is never
+/// materialized. Peak temporary score storage is bounded by one
+/// ``Br x Bc`` block, independent of ``q_length``/``total_kv_length``. A
+/// causal plan additionally skips ``Kv`` blocks strictly beyond the causal
+/// frontier of every row in the current query block; arbitrary
+/// boolean/additive masks do not infer any tile skipping and remain correct.
+void ComputeAttentionFloat32Streaming(const AttentionPlan &plan, const float *q, const float *k,
+                                      const float *v, const void *mask, float *y);
+
+/// Roadmap PR13: the ``S = scale * Q @ transpose(K)`` / mask / softmax /
+/// ``Y = P @ V`` baseline from Roadmap PR11/PR12, exposed under this name so
+/// it can be invoked directly (bypassing streaming dispatch) for differential
+/// testing against :cpp:func:`ComputeAttentionFloat32Streaming`. Semantics are
+/// identical to (and shared with) :cpp:func:`ComputeAttentionFloat32`.
+void ComputeAttentionFloat32Materialized(const AttentionPlan &plan, const float *q, const float *k,
+                                         const float *v, const void *mask, float *y,
+                                         const float *past_k = nullptr,
+                                         const float *past_v = nullptr,
+                                         const std::int64_t *nonpad_kv_seqlen = nullptr,
+                                         float *qk_matmul_output = nullptr);
+
 } // namespace onnx_light_cpu
