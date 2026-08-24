@@ -3,13 +3,13 @@ Attention Performance Roadmap
 
 :Date: 2026-08
 
-**planned**
+**complete** (Attention PR15 parity, memory, and reproducibility gate)
 
-The portable runtime provides tensor-based Attention correctness, but
-``onnx-light-cpu`` does not yet provide the optimized materialized or streaming
-kernel described here. The shared GEMM/MatMul engine and its benchmark tooling
-are available, so Roadmap PR11 may start. The separate default-policy GEMM
-parity work may continue without blocking this roadmap.
+``onnx-light-cpu`` provides materialized and bounded-memory streaming Attention
+for the roadmap types and cache modes. The registered backend corpus and
+``tools/benchmark_attention_parity.py`` provide the final reproducible
+default-policy gate against ONNX Runtime. Dedicated-machine reports, rather
+than shared CI timings, decide the narrow performance thresholds.
 
 Objective
 ---------
@@ -130,6 +130,32 @@ declared input/output element counts, every priority type and geometry, and
 the opt-in 8192 cases. The benchmark runner records the backend case name in
 raw output so published dashboard rows remain traceable to the registered
 model.
+
+Final parity gate
+-----------------
+
+The default-policy corpus is run on a pinned dedicated machine with:
+
+.. code-block:: bash
+
+   python tools/benchmark_attention_parity.py --cpus 0-15 \
+       --output attention_parity_results.json --enforce
+
+The default excludes the memory-intensive KV-length 8192 cases; add ``--large``
+when machine memory permits. ``--threads N`` produces a separate equal-thread
+diagnostic and cannot be combined with ``--enforce``.
+
+Every JSON row retains the globally unique backend case name, raw alternating
+samples and candidate order, median and interquartile dispersion, effective
+worker count, conservative peak streaming scratch and score-tile bytes from the
+kernel's allocation model, tensor-cache bytes copied, and effective KV
+bandwidth. Report metadata includes affinity, CPU and cache topology, ISA flags,
+compiler and flags, package versions, platform, and the exact git revision. The
+summary applies the ``1.0x`` median and ``0.9x`` minimum thresholds
+independently to FP32, FP16, and BF16 and also requires the streaming-memory
+bound. Shared CI checks the corpus structure, globally unique names, gate
+arithmetic, dispatch correctness, and bounded streaming implementation; it does
+not run ``--enforce``.
 
 Phase 1: plan and materialized correctness path
 -----------------------------------------------
@@ -315,8 +341,8 @@ Pull-request sequence
        priority case below ``0.9x``. Raw default-policy samples and environment
        metadata are published; controlled-thread runs remain diagnostic.
      - PR14 / #391
-     - Open; ready to start.
+     - Implemented.
 
 Roadmap PR15 (`#390
-<https://github.com/xadupre/onnx-light-cpu/issues/390>`_) is the final
-Attention PR.
+<https://github.com/xadupre/onnx-light-cpu/issues/390>`_) completed the
+Attention roadmap.

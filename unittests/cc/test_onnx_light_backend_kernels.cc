@@ -294,6 +294,26 @@ TEST(OnnxLightBackendKernels, MatMulIntegerRunsThroughRuntime) {
   EXPECT_TRUE(failures.empty()) << Describe(failures);
 }
 
+TEST(OnnxLightBackendKernels, AttentionRunsThroughRuntime) {
+  const std::vector<std::string> failures =
+      RunCpuBackendCases("Attention", core::backend_test::TestMode::TEST);
+  EXPECT_TRUE(failures.empty()) << Describe(failures);
+}
+
+TEST(OnnxLightBackendKernels, AttentionLowPrecisionAndCacheBenchmarksRunThroughRuntime) {
+  std::vector<std::string> failures;
+  for (const std::string &name :
+       {"test_cpu_attention_opset23_rank4_mha_q1_kv128_hd64_none_stateless_float16_benchmark",
+        "test_cpu_attention_opset23_rank4_mha_q1_kv1024_hd64_none_internal_cache_bfloat16_"
+        "benchmark",
+        "test_cpu_attention_opset24_rank4_mha_q8_kv1024_hd64_causal_nonpad_float32_benchmark"}) {
+    const std::vector<std::string> case_failures =
+        RunCpuBackendCases("Attention", core::backend_test::TestMode::BENCHMARK, name);
+    failures.insert(failures.end(), case_failures.begin(), case_failures.end());
+  }
+  EXPECT_TRUE(failures.empty()) << Describe(failures);
+}
+
 TEST(OnnxLightBackendKernels, BinaryElementwiseRunsThroughRuntime) {
   std::vector<std::string> failures;
   for (const auto &entry : onnx_light_cpu::GetBinaryManifest()) {
@@ -372,6 +392,33 @@ TEST(OnnxLightBackendKernels, TreeEnsembleBenchmarkCoversPriorityDimensions) {
   EXPECT_TRUE(names.contains("test_cpu_treeensemble_t1000_f1024_b32_benchmark"));
   EXPECT_TRUE(names.contains("test_cpu_treeensemble_t10000_f4096_b1_benchmark"));
   EXPECT_TRUE(names.contains("test_cpu_treeensemble_t10000_f4096_b128_benchmark"));
+}
+
+TEST(OnnxLightBackendKernels, AttentionBenchmarkCoversPriorityCorpus) {
+  onnx_light_cpu::backend_test::RegisterCpuKernelBackendTestCases();
+  const std::vector<TestCase> cases =
+      CollectTestCases("Attention", /*include_big=*/false, core::backend_test::TestMode::BENCHMARK);
+  std::set<std::string> names;
+  for (const TestCase &test_case : cases) {
+    if (test_case.name.rfind("test_cpu_attention_", 0) == 0) {
+      EXPECT_TRUE(names.insert(test_case.name).second) << test_case.name;
+    }
+  }
+  EXPECT_EQ(names.size(), 57U);
+  for (std::string_view tag :
+       {"_float32_benchmark", "_float16_benchmark", "_bfloat16_benchmark", "_rank3_", "_rank4_",
+        "_mha_", "_gqa_", "_mqa_", "_hd64_", "_hd128_", "_none_", "_causal_", "_bool_",
+        "_additive_", "_internal_cache_", "_nonpad_"}) {
+    EXPECT_TRUE(std::any_of(names.begin(), names.end(), [tag](const std::string &name) {
+      return name.find(tag) != std::string::npos;
+    })) << tag;
+  }
+  for (std::string_view tag : {"_q1_", "_q2_", "_q8_", "_q16_", "_q128_", "_q512_", "_kv1_",
+                               "_kv128_", "_kv1024_", "_kv4096_", "_kv8192_"}) {
+    EXPECT_TRUE(std::any_of(names.begin(), names.end(), [tag](const std::string &name) {
+      return name.find(tag) != std::string::npos;
+    })) << tag;
+  }
 }
 
 // Guards the invariant fixed for GEMM benchmark cases (#369/#371): every
