@@ -27,6 +27,71 @@ def _set_cmake_default_define(cmake_args, name, value):
     return [*cmake_args, f"{prefix}{value}"]
 
 
+def _editable_install_onnx_py_dir(root):
+    """Returns the ``onnx_py`` directory of a *separate* editable install of
+    this project in site-packages, if any, or ``None`` otherwise.
+
+    ``pip install -e .`` (scikit-build-core) hard-wires the compiled
+    extension modules (``_cpukernels*``, ``liblib_onnx_light_cpu*``) to the
+    copy it placed under site-packages at install time; unlike the pure
+    Python sources, that copy is *not* redirected back to this source tree.
+    If that copy exists but this in-place build is not itself running from
+    it, it silently shadows the fresh in-place build for any module it
+    contains (same file name resolved first), which can undefined-symbol at
+    import time once the two builds drift apart. Keep it in sync instead of
+    just relying on a separate ``pip install -e .`` step.
+    """
+    import contextlib
+    import site
+
+    site_dirs = []
+    with contextlib.suppress(AttributeError):  # not available in venvs on some platforms
+        site_dirs.extend(site.getsitepackages())
+    with contextlib.suppress(AttributeError):
+        site_dirs.append(site.getusersitepackages())
+
+    for site_dir in site_dirs:
+        candidate = Path(site_dir) / "onnx_light_cpu" / "onnx_py"
+        try:
+            if candidate.resolve() == (root / "onnx_light_cpu" / "onnx_py").resolve():
+                continue  # this *is* the in-place tree (e.g. an inplace-only editable dir)
+        except OSError:
+            continue
+        if candidate.is_dir():
+            return candidate
+    return None
+
+
+def _sync_editable_install(root, install_prefix):
+    """Copies freshly built binary artifacts into a stale editable install.
+
+    Only overwrites files that already exist in the site-packages copy, so a
+    plain (non ``--onnx-light-source``) editable install never gains
+    dev-only artifacts (e.g. ``_cpuregister*``) it never shipped.
+    """
+    built_onnx_py = install_prefix / "onnx_light_cpu" / "onnx_py"
+    if not built_onnx_py.is_dir():
+        return
+    editable_onnx_py = _editable_install_onnx_py_dir(root)
+    if editable_onnx_py is None:
+        return
+    for built_file in built_onnx_py.iterdir():
+        if built_file.suffix not in {".so", ".pyd", ".dll"}:
+            continue
+        target = editable_onnx_py / built_file.name
+        if not target.exists():
+            continue  # never introduce files a plain editable install never had
+        print(f"copying {built_file} -> {target}")
+        _copy_file(built_file, target)
+
+
+def _copy_file(src, dst):
+    """Copies ``src`` onto ``dst``, replacing it (``shutil.copy2`` mirror)."""
+    import shutil
+
+    shutil.copy2(src, dst)
+
+
 def _default_parallel_jobs():
     """Returns default parallel jobs for CMake builds."""
     cmake_parallel = os.environ.get("CMAKE_BUILD_PARALLEL_LEVEL")
@@ -300,6 +365,8 @@ except ModuleNotFoundError:
         )
         if cpp_tests:
             _spawn(_ctest_command(build_temp_path), dry_run)
+        if inplace and not dry_run:
+            _sync_editable_install(root, install_prefix)
         return True
 
     if _run_build_ext_without_packaging(sys.argv[1:]):
@@ -452,6 +519,8 @@ class BuildExt(Command):
         )
         if self.cpp_tests:
             self._spawn(_ctest_command(build_temp))
+        if self.inplace and not self.dry_run:
+            _sync_editable_install(root, install_prefix)
 
 
 setup(

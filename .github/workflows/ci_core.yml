@@ -126,7 +126,7 @@ jobs:
           SCCACHE_GHA_ENABLED: "true"
         shell: bash
         run: |
-          pip install nanobind scikit-build-core setuptools numpy pytest
+          pip install nanobind scikit-build-core setuptools numpy pytest matplotlib ml_dtypes onnxruntime openpyxl pandas tqdm
           onnx_light_source="${RUNNER_TEMP}/onnx-light"
           git clone --depth 1 --branch main https://github.com/xadupre/onnx-light.git "${onnx_light_source}"
           CMAKE_ARGS="-DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache"
@@ -159,6 +159,20 @@ jobs:
           SCCACHE_GHA_ENABLED: "true"
           CMAKE_ARGS: "-DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache"
         run: python setup.py build_ext --inplace --cpp-tests --onnx-light-source
+
+      # Regression check for the onnx-light-source integration: imports
+      # onnx_light_cpu._cpukernels standalone (this example never imports
+      # onnx_light itself), which previously failed with "liblib_onnx_core.so:
+      # cannot open shared object file" when lib_onnx_light_cpu/_cpukernels
+      # were missing the RPATH to onnx-light's Python library directory.
+      - name: Run processor performance example
+        env:
+          UNITTEST_GOING: "1"
+          MPLBACKEND: Agg
+          PYTHONPATH: ${{ github.workspace }}
+        # -u: unbuffered stdout, so progress streams live in the CI log
+        # instead of appearing as one block at the very end.
+        run: python -u docs/examples/processor/plot_processor_performance.py
 
       - name: Run onnx-light integration tests
         run: python -m pytest unittests

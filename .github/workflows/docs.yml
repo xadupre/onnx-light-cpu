@@ -58,9 +58,9 @@ jobs:
       - name: Install documentation dependencies
         run: |
           pip install \
-            breathe matplotlib myst-parser onnxruntime pydata-sphinx-theme \
-            "sphinx>=7" sphinx-copybutton sphinx-datatables sphinx-gallery \
-            sphinx-reredirects
+            breathe matplotlib ml_dtypes myst-parser openpyxl onnxruntime pandas \
+            pydata-sphinx-theme "sphinx>=7" sphinx-copybutton sphinx-datatables \
+            sphinx-gallery sphinx-reredirects tqdm
 
       # Link to the exact onnx-light runtime installed above. Installing the
       # ``dev`` extra here would replace it with the released Linux-only wheel.

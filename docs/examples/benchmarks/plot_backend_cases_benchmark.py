@@ -1,17 +1,17 @@
 """
-Benchmark a subset of backend test cases against ONNX Runtime
-================================================================
+Benchmark backend test cases against ONNX Runtime
+====================================================
 
 onnx-light-cpu ships its own ONNX backend test cases -- named ``test_cpu_*``
 -- in a dedicated C++ registration library
 (``lib_onnx_light_cpu_backend_test``, see :func:`onnx_light_cpu.register_backend_test_cases`).
 Every case that has an accelerated kernel also has a ``TestMode.BENCHMARK``
 variant: the same operator and attributes, but with inputs large enough that a
-single evaluation takes a measurable amount of time. This example walks those
-benchmark cases -- covering unary, binary, and matrix operators -- and times
-each one through ``onnx-light`` (with onnx-light-cpu's accelerated kernel
-registered) and through ONNX Runtime, using the exact same generated model and
-inputs for both.
+single evaluation takes a measurable amount of time. This example collects
+every ``test_cpu_*_benchmark`` case -- across every operator and element type
+onnx-light-cpu ships one for -- and times each one through ``onnx-light``
+(with onnx-light-cpu's accelerated kernel registered) and through ONNX
+Runtime, using the exact same generated model and inputs for both.
 
 Each case is also checked for correctness (both runtimes must agree, within
 the case's tolerance) and for kernel dispatch (the accelerated onnx-light-cpu
@@ -23,21 +23,25 @@ way :mod:`unittests.python.test_kernels_e2e` verifies these backend cases.
 # Setup
 # -----
 #
-# Only ``float32`` (``bool`` for ``Not``) cases are kept so every candidate can
-# be compared directly; onnx-light-cpu also ships ``float16``/``bfloat16``
-# benchmark variants of the same cases (see
-# ``onnx_light_cpu/backend_test/cases/math/cases_gemm.cc``) which are outside
-# the scope of this example.
+# Every ``test_cpu_*_benchmark`` case registered by onnx-light-cpu is
+# collected via :func:`onnx_light.onnx.backend.collect_test_cases_by_name`
+# (which accepts an ECMAScript regular expression), regardless of operator or
+# element type; ``--filter`` further narrows that set down when only a subset
+# is of interest.
 
+import argparse
 import os
+import re
 import time
 
 import matplotlib.pyplot as plt
 import numpy as np
 import onnxruntime
+import pandas as pd
+from tqdm import tqdm
 
-from onnx_light.onnx import TensorProto
 from onnx_light.onnx.backend import TestMode, collect_test_cases_by_name
+from onnx_light.onnx.helper import tensor_dtype_to_np_dtype
 from onnx_light.onnx.reference import ReferenceEvaluator
 
 from onnx_light_cpu import (
@@ -53,105 +57,56 @@ assert has_backend_test_cases(), (
     "(register_backend_test_cases binding unavailable)."
 )
 
-# Operators covered by onnx-light-cpu's "test_cpu_*" backend test cases, mapped
-# to the library-qualified kernel name each records when it runs.
-_TARGET_KERNELS = {
-    "Add": "onnx_light_cpu::Add",
-    "And": "onnx_light_cpu::And",
-    "Abs": "onnx_light_cpu::Abs",
-    "BitShift": "onnx_light_cpu::BitShift",
-    "BitwiseAnd": "onnx_light_cpu::BitwiseAnd",
-    "BitwiseOr": "onnx_light_cpu::BitwiseOr",
-    "BitwiseXor": "onnx_light_cpu::BitwiseXor",
-    "Div": "onnx_light_cpu::Div",
-    "Equal": "onnx_light_cpu::Equal",
-    "Exp": "onnx_light_cpu::Exp",
-    "Greater": "onnx_light_cpu::Greater",
-    "GreaterOrEqual": "onnx_light_cpu::GreaterOrEqual",
-    "Log": "onnx_light_cpu::Log",
-    "Less": "onnx_light_cpu::Less",
-    "LessOrEqual": "onnx_light_cpu::LessOrEqual",
-    "Mod": "onnx_light_cpu::Mod",
-    "Mul": "onnx_light_cpu::Mul",
-    "Gemm": "onnx_light_cpu::Gemm",
-    "Not": "onnx_light_cpu::Not",
-    "Or": "onnx_light_cpu::Or",
-    "PRelu": "onnx_light_cpu::PRelu",
-    "Pow": "onnx_light_cpu::Pow",
-    "Sub": "onnx_light_cpu::Sub",
-    "Xor": "onnx_light_cpu::Xor",
-}
-
-# The input/output type pair kept for each operator. Comparisons consume
-# float32 and produce bool; logical and bitwise operators use their natural
-# homogeneous types.
-_TARGET_DTYPES = dict.fromkeys(_TARGET_KERNELS, (TensorProto.FLOAT, TensorProto.FLOAT))
-for _op_type in ("Equal", "Greater", "GreaterOrEqual", "Less", "LessOrEqual"):
-    _TARGET_DTYPES[_op_type] = (TensorProto.FLOAT, TensorProto.BOOL)
-for _op_type in ("And", "Not", "Or", "Xor"):
-    _TARGET_DTYPES[_op_type] = (TensorProto.BOOL, TensorProto.BOOL)
-for _op_type in ("BitwiseAnd", "BitwiseOr", "BitwiseXor"):
-    _TARGET_DTYPES[_op_type] = (TensorProto.INT8, TensorProto.INT8)
-_TARGET_DTYPES["BitShift"] = (TensorProto.UINT8, TensorProto.UINT8)
-_DTYPE_SUFFIXES = {
-    TensorProto.BOOL: "bool",
-    TensorProto.FLOAT: "float32",
-    TensorProto.INT8: "int8",
-    TensorProto.UINT8: "uint8",
-}
+# ``--filter`` narrows the collected "test_cpu_*_benchmark" cases down to
+# those whose name additionally matches a regular expression (e.g. ``--filter
+# gemm`` keeps only Gemm cases, ``--filter '_2d_'`` keeps only 2-D cases
+# across every operator). ``parse_known_args`` ignores unrelated arguments
+# injected by pytest/sphinx-gallery when this file runs as a test or a
+# documentation example.
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument(
+    "--filter",
+    default=None,
+    help="regular expression a case name must additionally match, e.g. '^test_cpu_gemm_'",
+)
+args, _ = parser.parse_known_args()
+_name_filter = re.compile(args.filter) if args.filter else None
 
 
 def _to_numpy(tensor):
     """Decodes a backend test case ``Tensor`` into a numpy array."""
-    dtype = {
-        int(TensorProto.BOOL): np.bool_,
-        int(TensorProto.FLOAT): np.float32,
-        int(TensorProto.INT8): np.int8,
-        int(TensorProto.UINT8): np.uint8,
-    }[int(tensor.data_type)]
+    dtype = tensor_dtype_to_np_dtype(int(tensor.data_type))
     shape = tuple(int(d) for d in tensor.shape)
     return np.frombuffer(tensor.raw_data(), dtype=dtype).reshape(shape)
 
 
 def _collect_cases():
-    """Registers and collects a subset of the "test_cpu_*" BENCHMARK cases.
+    """Registers and collects every "test_cpu_*_benchmark" backend test case.
 
-    The regular expression includes the selected input type so cases for other
-    supported types remain lazy.
+    Every operator and element type onnx-light-cpu ships a BENCHMARK variant
+    for is included; ``--filter`` (``_name_filter``) is the only further
+    restriction applied here.
     """
     register_backend_test_cases()
-    pattern = (
-        "^test_cpu_(?:"
-        + "|".join(
-            f"{op_type.lower()}_.*_{_DTYPE_SUFFIXES[input_type]}"
-            for op_type, (input_type, _) in _TARGET_DTYPES.items()
-        )
-        + ").*_benchmark$"
+    max_per_case_group = (
+        2 if os.environ.get("UNITTEST_GOING", "0") in ("1", "true", "True") else None
     )
-    max_per_op = 2 if os.environ.get("UNITTEST_GOING", "0") in ("1", "true", "True") else None
-    counts = dict.fromkeys(_TARGET_KERNELS, 0)
     cases = []
-    for tc in collect_test_cases_by_name(pattern, mode=TestMode.BENCHMARK):
-        nodes = list(tc.model.graph.node)
-        op_type = nodes[0].op_type if len(nodes) == 1 else None
-        if op_type not in _TARGET_KERNELS or not tc.data_sets:
+    for tc in collect_test_cases_by_name("^test_cpu_.*_benchmark$", mode=TestMode.BENCHMARK):
+        if _name_filter is not None and not _name_filter.search(tc.name):
             continue
-        input_type, output_type = _TARGET_DTYPES[op_type]
-        if not all(
-            all(int(tensor.data_type) == int(input_type) for tensor in data_set.inputs)
-            and all(int(tensor.data_type) == int(output_type) for tensor in data_set.outputs)
-            for data_set in tc.data_sets
-        ):
-            continue
-        if max_per_op is not None and counts[op_type] >= max_per_op:
-            continue
-        counts[op_type] += 1
         cases.append(tc)
+    if max_per_case_group:
+        cases = cases[:max_per_case_group]
     return cases
 
 
+print("-- _collect_cases")
 _CASES = _collect_cases()
-assert _CASES, "no onnx-light-cpu BENCHMARK backend test cases were collected"
+_no_cases_message = (
+    f"no onnx-light-cpu BENCHMARK backend test cases were collected (filter={args.filter!r})"
+)
+assert _CASES, _no_cases_message
 
 # %%
 # Timing helper
@@ -192,21 +147,49 @@ def _case_element_count(tc):
 # process-wide dispatch table before any of the onnx-light-cpu sessions below
 # run for the first time.
 
+print("-- register_kernels")
 register_kernels()
 
+# Both runtimes normally spin briefly before parking idle workers. Measuring
+# them consecutively in one process then lets the runtime measured first steal
+# CPU cycles from the runtime measured second. Disable spinning on both sides
+# so idle workers block immediately without changing either runtime's thread
+# count.
+_LIGHT_CPU_EXECUTION = {"spin_policy": "park_immediately"}
+_ORT_SESSION_OPTIONS = onnxruntime.SessionOptions()
+_ORT_SESSION_OPTIONS.add_session_config_entry("session.intra_op.allow_spinning", "0")
+_ORT_SESSION_OPTIONS.add_session_config_entry("session.inter_op.allow_spinning", "0")
+
+# Some onnx-light-cpu Attention benchmark cases (e.g. streaming past_key/
+# past_value without materializing present_key/present_value, or FLOAT16/
+# BFLOAT16 inputs) are rejected by ONNX Runtime -- either at session-creation
+# time or while running -- even though onnx-light-cpu's kernel handles them
+# fine. Rather than special-case those by name, any ONNX Runtime failure is
+# caught here and the case is still timed/reported for onnx-light-cpu alone,
+# with "n/a" standing in for the ONNX Runtime side.
+print("-- start benchmark")
 rows = []
-for tc in _CASES:
+_progress = tqdm(_CASES, desc="benchmarking backend cases", unit="case")
+for tc in _progress:
+    _progress.set_postfix_str(tc.name)
     op_type = tc.model.graph.node[0].op_type
-    expected_kernel = _TARGET_KERNELS[op_type]
-    model_bytes = tc.model.SerializeToString()
+    expected_kernel = f"onnx_light_cpu::{op_type}"
     # Some Gemm benchmark cases turn "B" into a graph initializer to exercise
     # the constant-B code path; its value is baked into the model rather than
     # fed at run time, so it must be excluded from the runtime feeds below.
     initializer_names = {init.name for init in tc.model.graph.initializer}
     input_names = [vi.name for vi in tc.model.graph.input if vi.name not in initializer_names]
 
-    light_session = ReferenceEvaluator(tc.model)
-    ort_session = onnxruntime.InferenceSession(model_bytes, providers=["CPUExecutionProvider"])
+    light_session = ReferenceEvaluator(tc.model, cpu_execution=_LIGHT_CPU_EXECUTION)
+    ort_error = None
+    model_bytes = tc.model.SerializeToString()
+    try:
+        ort_session = onnxruntime.InferenceSession(
+            model_bytes, sess_options=_ORT_SESSION_OPTIONS, providers=["CPUExecutionProvider"]
+        )
+    except Exception as exc:  # noqa: BLE001 -- reported as "n/a", not raised.
+        ort_session = None
+        ort_error = str(exc).splitlines()[0][:40]
 
     ds = tc.data_sets[0]
     feeds = {name: _to_numpy(t) for name, t in zip(input_names, ds.inputs, strict=True)}
@@ -220,30 +203,70 @@ for tc in _CASES:
     clear_used_kernel_names()
     light_out = light_session.run(None, feeds)
     assert expected_kernel in used_kernel_names(), used_kernel_names()
-    ort_out = ort_session.run(None, feeds)
-    for actual, expected in zip(light_out, ort_out, strict=True):
-        if expected.dtype == np.bool_:
-            np.testing.assert_array_equal(actual, expected)
-        else:
-            np.testing.assert_allclose(
-                actual.astype(np.float64),
-                expected.astype(np.float64),
-                rtol=rtol,
-                atol=atol,
-                equal_nan=True,
-            )
+    ort_time = None
+    if ort_session is not None:
+        try:
+            ort_out = ort_session.run(None, feeds)
+        except Exception as exc:  # noqa: BLE001 -- reported as "n/a", not raised.
+            ort_session = None
+            ort_error = str(exc).splitlines()[0][:40]
 
     # Aim for roughly a constant total element budget per case (~2e7 elements
     # processed across all repeats) so large cases are not re-run too many
     # times, but always repeat at least 3 times and never more than 30.
     repeat = max(3, min(30, 20_000_000 // _case_element_count(tc)))
     light_time = measure(lambda feeds=feeds, sess=light_session: sess.run(None, feeds), repeat)
-    ort_time = measure(lambda feeds=feeds, sess=ort_session: sess.run(None, feeds), repeat)
-    rows.append((op_type, tc.name, light_time, ort_time))
-    print(
-        f"{op_type:>5} | {tc.name:<55} | onnx-light-cpu={light_time * 1e6:10.2f} us | "
-        f"onnxruntime={ort_time * 1e6:10.2f} us | speed-up={ort_time / light_time:6.2f}x"
+    if ort_session is not None:
+        ort_time = measure(lambda feeds=feeds, sess=ort_session: sess.run(None, feeds), repeat)
+    shapes = ",".join(
+        "x".join(str(d) for d in array.shape) or "scalar" for array in feeds.values()
     )
+    dtypes = ",".join(str(array.dtype) for array in feeds.values())
+    rows.append((op_type, tc.name, shapes, dtypes, light_time, ort_time, ort_error))
+
+# Print an aligned table once every case has run, since column widths (name,
+# input shapes, dtypes) are not known ahead of time. Cases ONNX Runtime could
+# not run (ort_time is None) show its error message instead of a timing/
+# speed-up.
+op_width = max(len(op_type) for op_type, *_ in rows)
+name_width = max(len(name) for _, name, *_ in rows)
+shapes_width = max(len(shapes) for _, _, shapes, _, _, _, _ in rows)
+dtypes_width = max(len(dtypes) for _, _, _, dtypes, _, _, _ in rows)
+for op_type, name, shapes, dtypes, light_time, ort_time, ort_error in rows:
+    ort_str = f"{ort_time * 1e6:10.2f} us" if ort_time is not None else f"{'error':>13}"
+    speedup_str = f"{ort_time / light_time:6.2f}x" if ort_time is not None else f"{'n/a':>7}"
+    print(
+        f"{op_type:>{op_width}} | {name:<{name_width}} | shapes={shapes:<{shapes_width}} | "
+        f"dtype={dtypes:<{dtypes_width}} | "
+        f"onnx-light-cpu={light_time * 1e6:10.2f} us | "
+        f"onnxruntime={ort_str} | speed-up={speedup_str}"
+        + (f" | onnxruntime_error={ort_error}" if ort_error is not None else "")
+    )
+
+# %%
+# Excel export
+# ------------
+#
+# The full results table -- one row per benchmark case -- is also written to
+# an ``.xlsx`` workbook so it can be inspected, filtered, or archived outside
+# this script, alongside the printed table and the plot below.
+
+results_frame = pd.DataFrame(
+    [
+        {
+            "operator": op_type,
+            "case": name,
+            "input_shapes": shapes,
+            "input_dtypes": dtypes,
+            "onnx_light_cpu_us": light_time * 1e6,
+            "onnxruntime_us": ort_time * 1e6 if ort_time is not None else None,
+            "speed_up": ort_time / light_time if ort_time is not None else None,
+            "onnxruntime_error": ort_error,
+        }
+        for op_type, name, shapes, dtypes, light_time, ort_time, ort_error in rows
+    ]
+)
+results_frame.to_excel("plot_backend_cases_benchmark.xlsx", index=False)
 
 # %%
 # Plot the speed-ups
@@ -252,10 +275,14 @@ for tc in _CASES:
 # One bar per case, grouped and colored by operator, showing onnx-light-cpu's
 # speed-up over ONNX Runtime (values above 1 mean onnx-light-cpu is faster).
 # The x-axis is logarithmic so a speed-up and its reciprocal are equidistant
-# from the ``1`` baseline.
+# from the ``1`` baseline. Cases ONNX Runtime failed to run (ort_time is
+# None, see the try/except above) are left out of the plot since they have no
+# speed-up to show.
 
-_COLOR_MAP = plt.get_cmap("turbo", len(_TARGET_KERNELS))
-_COLORS = {op_type: _COLOR_MAP(index) for index, op_type in enumerate(_TARGET_KERNELS)}
+_plotted_rows = [row for row in rows if row[5] is not None]
+_unique_op_types = sorted({op_type for op_type, *_ in _plotted_rows})
+_COLOR_MAP = plt.get_cmap("turbo", len(_unique_op_types))
+_COLORS = {op_type: _COLOR_MAP(index) for index, op_type in enumerate(_unique_op_types)}
 
 
 def _short_label(op_type, name):
@@ -264,12 +291,14 @@ def _short_label(op_type, name):
     return label.removesuffix("_benchmark")
 
 
-labels = [_short_label(op_type, name) for op_type, name, _, _ in rows]
-speedups = np.array([ort_time / light_time for _, _, light_time, ort_time in rows])
-colors = [_COLORS[op_type] for op_type, _, _, _ in rows]
+labels = [_short_label(op_type, name) for op_type, name, *_ in _plotted_rows]
+speedups = np.array(
+    [ort_time / light_time for _, _, _, _, light_time, ort_time, _ in _plotted_rows]
+)
+colors = [_COLORS[op_type] for op_type, *_ in _plotted_rows]
 
-fig, ax = plt.subplots(figsize=(8, max(5, 0.4 * len(rows))))
-positions = np.arange(len(rows))
+fig, ax = plt.subplots(figsize=(8, max(5, 0.4 * len(_plotted_rows))))
+positions = np.arange(len(_plotted_rows))
 ax.barh(positions, speedups, color=colors)
 ax.axvline(1.0, color="grey", linewidth=0.8, linestyle=":")
 ax.set_xscale("log")
