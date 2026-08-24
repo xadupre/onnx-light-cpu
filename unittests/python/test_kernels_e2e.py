@@ -79,6 +79,9 @@ _REGISTERED_KERNELS = {
     "Log": "onnx_light_cpu::Log",
     "MatMul": "onnx_light_cpu::MatMul",
     "MatMulInteger": "onnx_light_cpu::MatMulInteger",
+    "Max": "onnx_light_cpu::Max",
+    "Mean": "onnx_light_cpu::Mean",
+    "Min": "onnx_light_cpu::Min",
     "Mod": "onnx_light_cpu::Mod",
     "Mul": "onnx_light_cpu::Mul",
     "Not": "onnx_light_cpu::Not",
@@ -87,6 +90,7 @@ _REGISTERED_KERNELS = {
     "Pow": "onnx_light_cpu::Pow",
     "QLinearMatMul": "onnx_light_cpu::QLinearMatMul",
     "Sub": "onnx_light_cpu::Sub",
+    "Sum": "onnx_light_cpu::Sum",
     "SwiGLU": "onnx_light_cpu::SwiGLU",
     "TreeEnsemble": "onnx_light_cpu::TreeEnsemble",
     "Xor": "onnx_light_cpu::Xor",
@@ -95,7 +99,7 @@ _REGISTERED_KERNELS = {
 _TARGET_KERNELS = {
     op_type: kernel_name
     for op_type, kernel_name in _REGISTERED_KERNELS.items()
-    if op_type != "QLinearMatMul"
+    if op_type not in {"Max", "Mean", "Min", "QLinearMatMul", "Sum"}
 }
 
 # ``TensorProto`` element type -> numpy dtype used to decode a backend test
@@ -216,12 +220,16 @@ class TestBackendCases:
                 "GreaterOrEqual",
                 "Less",
                 "LessOrEqual",
+                "Max",
+                "Mean",
+                "Min",
                 "Mod",
                 "Mul",
                 "Or",
                 "PRelu",
                 "Pow",
                 "Sub",
+                "Sum",
                 "Xor",
             }:
                 assert isinstance(record.since_version, int)

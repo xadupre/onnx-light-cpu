@@ -43,7 +43,7 @@ TEST(OnnxLightKernelUsage, KernelNamesAreLibraryQualified) {
 // ``RegisteredKernelNames`` maps every overridden ONNX op_type to the
 // library-qualified name of the accelerated kernel installed for it. It is
 // derived from ``CollectRegisteredKernels()``'s structured inventory, so
-// entries are ordered by ``op_type`` for the public name map.
+// entries are ordered by ``domain`` and then ``op_type`` for the public name map.
 TEST(OnnxLightKernelUsage, RegisteredKernelNames) {
   std::vector<std::pair<std::string, std::string>> expected = {
       {"Abs", "onnx_light_cpu::Abs"},
@@ -53,8 +53,12 @@ TEST(OnnxLightKernelUsage, RegisteredKernelNames) {
       {"Log", "onnx_light_cpu::Log"},
       {"MatMul", "onnx_light_cpu::MatMul"},
       {"MatMulInteger", "onnx_light_cpu::MatMulInteger"},
+      {"Max", "onnx_light_cpu::Max"},
+      {"Mean", "onnx_light_cpu::Mean"},
+      {"Min", "onnx_light_cpu::Min"},
       {"Not", "onnx_light_cpu::Not"},
       {"QLinearMatMul", "onnx_light_cpu::QLinearMatMul"},
+      {"Sum", "onnx_light_cpu::Sum"},
       {"SwiGLU", "onnx_light_cpu::SwiGLU"},
   };
   for (const auto &entry : onnx_light_cpu::GetBinaryManifest()) {
