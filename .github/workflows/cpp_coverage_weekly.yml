@@ -42,13 +42,22 @@ jobs:
           fi
 
   cpp-coverage:
-    name: C++ coverage (ubuntu-latest)
+    name: C++ coverage (${{ matrix.os }})
     needs: check_recent_commit
     if: needs.check_recent_commit.outputs.should_run == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 25
     permissions:
       contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        # Measuring coverage on a single architecture only exercises the
+        # kernels compiled for that machine (e.g. AVX2/AVX512 on x86_64),
+        # leaving architecture-specific code such as the ARM NEON kernels
+        # unmeasured and dragging down the reported coverage. Run the job on
+        # both x86_64 and arm64 runners so both code paths are covered.
+        os: ["ubuntu-latest", "ubuntu-24.04-arm"]
     steps:
       - uses: actions/checkout@v7
 
@@ -104,7 +113,7 @@ jobs:
       - name: Upload coverage artifact
         uses: actions/upload-artifact@v4
         with:
-          name: cpp-coverage
+          name: cpp-coverage-${{ matrix.os }}
           path: |
             coverage.xml
             coverage-html
@@ -113,6 +122,7 @@ jobs:
         uses: codecov/codecov-action@v5
         with:
           files: coverage.xml
-          flags: cpp
+          flags: cpp-${{ matrix.os }}
+          name: cpp-${{ matrix.os }}
           token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: false
