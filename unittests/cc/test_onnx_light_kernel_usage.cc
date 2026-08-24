@@ -13,6 +13,7 @@
 #include "onnx_light_cpu/kernels/math/integer_matmul_kernel.h"
 #include "onnx_light_cpu/kernels/math/matmul_kernel.h"
 #include "onnx_light_cpu/kernels/math/swiglu_kernel.h"
+#include "onnx_light_cpu/kernels/traditionalml/tree_ensemble_kernel.h"
 
 #include <gtest/gtest.h>
 
@@ -36,14 +37,13 @@ TEST(OnnxLightKernelUsage, KernelNamesAreLibraryQualified) {
   EXPECT_STREQ(onnx_light_cpu::QLinearMatMulKernel::kName, "onnx_light_cpu::QLinearMatMul");
   EXPECT_STREQ(onnx_light_cpu::NotKernel::kName, "onnx_light_cpu::Not");
   EXPECT_STREQ(onnx_light_cpu::SwiGLUKernel::kName, "onnx_light_cpu::SwiGLU");
+  EXPECT_STREQ(onnx_light_cpu::TreeEnsembleKernel::kName, "onnx_light_cpu::TreeEnsemble");
 }
 
 // ``RegisteredKernelNames`` maps every overridden ONNX op_type to the
 // library-qualified name of the accelerated kernel installed for it. It is
 // derived from ``CollectRegisteredKernels()``'s structured inventory, so
-// entries are ordered by ``(domain, op_type, device, kernel_name)`` --
-// alphabetically by ``op_type`` here, since every registration shares the
-// same domain and device.
+// entries are ordered by ``op_type`` for the public name map.
 TEST(OnnxLightKernelUsage, RegisteredKernelNames) {
   std::vector<std::pair<std::string, std::string>> expected = {
       {"Abs", "onnx_light_cpu::Abs"},
@@ -56,6 +56,7 @@ TEST(OnnxLightKernelUsage, RegisteredKernelNames) {
       {"Not", "onnx_light_cpu::Not"},
       {"QLinearMatMul", "onnx_light_cpu::QLinearMatMul"},
       {"SwiGLU", "onnx_light_cpu::SwiGLU"},
+      {"TreeEnsemble", "onnx_light_cpu::TreeEnsemble"},
   };
   for (const auto &entry : onnx_light_cpu::GetBinaryManifest()) {
     expected.emplace_back(std::string(entry.op_type),
