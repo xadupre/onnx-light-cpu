@@ -95,22 +95,11 @@ inline rt_ns::Tensor MakeBenchmarkTensor(rt_ns::DataType data_type, const rt_ns:
   }
 }
 
-inline std::string BenchmarkShapeSuffix(const rt_ns::Shape &shape) {
-  std::string suffix;
-  for (std::int64_t dimension : shape) {
-    if (!suffix.empty()) {
-      suffix += "x";
-    }
-    suffix += std::to_string(dimension);
-  }
-  return suffix;
-}
-
 template <typename Kernel>
-void RegisterUnaryBenchmarkWithShape(
+void RegisterUnaryBenchmark(
     std::vector<ONNX_LIGHT_NAMESPACE::core::backend_test::TestCase> &registry,
     const std::string &op_type, const Kernel &kernel, const rt_ns::OpsetId &opset,
-    rt_ns::DataType data_type, const rt_ns::Shape &shape, const std::string &size_tag) {
+    rt_ns::DataType data_type, std::int64_t size) {
   namespace bt_ns = ONNX_LIGHT_NAMESPACE::core::backend_test;
   ONNX_LIGHT_NAMESPACE::NodeProto node;
   node.set_op_type(op_type);
@@ -122,36 +111,14 @@ void RegisterUnaryBenchmarkWithShape(
       character = static_cast<char>(character - 'A' + 'a');
     }
   }
-  std::int64_t size = 1;
-  for (std::int64_t dimension : shape) {
-    size *= dimension;
-  }
-  const std::string name =
-      "test_cpu_" + op_tag + "_" + size_tag + "_" + DataTypeSuffix(data_type) + "_benchmark";
+  const std::string name = "test_cpu_" + op_tag + "_n" + std::to_string(size) + "_" +
+                           DataTypeSuffix(data_type) + "_benchmark";
   bt_ns::Expect(registry, std::move(node), name, {opset}, {size}, {size},
-                [kernel, data_type, shape]() -> bt_ns::IoData {
-                  rt_ns::Tensor x = MakeBenchmarkTensor(data_type, shape, 987654321ULL);
+                [kernel, data_type, size]() -> bt_ns::IoData {
+                  rt_ns::Tensor x = MakeBenchmarkTensor(data_type, {size}, 987654321ULL);
                   rt_ns::Tensor y = kernel(x);
                   return bt_ns::IoData{{std::move(x)}, {std::move(y)}};
                 });
-}
-
-template <typename Kernel>
-void RegisterUnaryBenchmark(
-    std::vector<ONNX_LIGHT_NAMESPACE::core::backend_test::TestCase> &registry,
-    const std::string &op_type, const Kernel &kernel, const rt_ns::OpsetId &opset,
-    rt_ns::DataType data_type, const rt_ns::Shape &shape) {
-  RegisterUnaryBenchmarkWithShape(registry, op_type, kernel, opset, data_type, shape,
-                                  "shape" + BenchmarkShapeSuffix(shape));
-}
-
-template <typename Kernel>
-void RegisterUnaryBenchmark(
-    std::vector<ONNX_LIGHT_NAMESPACE::core::backend_test::TestCase> &registry,
-    const std::string &op_type, const Kernel &kernel, const rt_ns::OpsetId &opset,
-    rt_ns::DataType data_type, std::int64_t size) {
-  RegisterUnaryBenchmarkWithShape(registry, op_type, kernel, opset, data_type, rt_ns::Shape{size},
-                                  "n" + std::to_string(size));
 }
 
 } // namespace onnx_light_cpu::backend_test
