@@ -309,6 +309,10 @@ set(_gemm_neon_dotprod_source
     "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/gemm/arm/gemm_kernel_neon_dotprod.cc")
 set(_abs_avx512_source
     "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/avx512/abs_kernel_avx512.cc")
+set(_binary_arithmetic_avx512_source
+    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/avx512/binary_arithmetic_kernel_avx512.cc")
+set(_binary_arithmetic_sve_source
+    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/binary/arm/binary_arithmetic_kernel_sve.cc")
 set(_exp_log_avx512_source
     "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/avx512/exp_log_kernel_avx512.cc")
 set(_exp_log_avx2_fma_source
@@ -331,6 +335,7 @@ if(NOT ONNX_LIGHT_CPU_HAVE_AVX512F_FLAG)
   list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_abs_avx512_source}")
   list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_exp_log_avx512_source}")
   list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_compute_avx512_source}")
+  list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_binary_arithmetic_avx512_source}")
 endif()
 if(NOT ONNX_LIGHT_CPU_HAVE_AVX2_FMA_FLAG)
   list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_gemm_avx2_fma_source}")
@@ -373,6 +378,7 @@ if(NOT ONNX_LIGHT_CPU_HAVE_NEON_INTRINSICS)
 endif()
 if(NOT ONNX_LIGHT_CPU_HAVE_SVE_INTRINSICS)
   list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_gemm_sve_source}")
+  list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_binary_arithmetic_sve_source}")
 endif()
 if(NOT ONNX_LIGHT_CPU_HAVE_NEON_DOTPROD_INTRINSICS)
   list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_gemm_neon_dotprod_source}")
@@ -428,6 +434,8 @@ if(ONNX_LIGHT_CPU_HAVE_AVX512F_FLAG)
         COMPILE_OPTIONS "-mavx512f")
     set_source_files_properties("${_compute_avx512_source}" PROPERTIES
         COMPILE_OPTIONS "-mavx512f")
+    set_source_files_properties("${_binary_arithmetic_avx512_source}" PROPERTIES
+        COMPILE_OPTIONS "-mavx512f")
   else()
     set_source_files_properties("${_gemm_avx512_source}" PROPERTIES
         COMPILE_OPTIONS "/arch:AVX512")
@@ -437,11 +445,14 @@ if(ONNX_LIGHT_CPU_HAVE_AVX512F_FLAG)
         COMPILE_OPTIONS "/arch:AVX512")
     set_source_files_properties("${_compute_avx512_source}" PROPERTIES
         COMPILE_OPTIONS "/arch:AVX512")
+    set_source_files_properties("${_binary_arithmetic_avx512_source}" PROPERTIES
+        COMPILE_OPTIONS "/arch:AVX512")
   endif()
   # Told gemm_kernel.cc (compiled at the baseline ONNX_LIGHT_CPU_SIMD_FLAGS)
   # that GemmMicroKernel_AVX512_F32/F64 are available to dispatch to. The
   # register-resident compute-profile FP32/FP64 kernel (Processor Profile
-  # PR03) dispatches on the same definition.
+  # PR03) and the binary arithmetic SIMD kernels (Binary PR02) dispatch on the
+  # same definition.
   target_compile_definitions(lib_onnx_light_cpu PRIVATE ONNX_LIGHT_CPU_HAVE_AVX512=1)
 endif()
 
@@ -570,7 +581,7 @@ if(ONNX_LIGHT_CPU_HAVE_NEON_INTRINSICS)
 endif()
 
 if(ONNX_LIGHT_CPU_HAVE_SVE_INTRINSICS)
-  set_source_files_properties("${_gemm_sve_source}" PROPERTIES
+  set_source_files_properties("${_gemm_sve_source}" "${_binary_arithmetic_sve_source}" PROPERTIES
       COMPILE_OPTIONS "-march=armv8-a+sve")
   target_compile_definitions(lib_onnx_light_cpu PRIVATE
       ONNX_LIGHT_CPU_HAVE_SVE=1)

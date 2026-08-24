@@ -4,6 +4,7 @@
 
 #include "onnx_light_cpu/impl/math/binary/binary_kernel_descriptor.h"
 
+#include "onnx_light_cpu/impl/math/binary/binary_arithmetic_kernel.h"
 #include "onnx_light_cpu/impl/math/half_conversion.h"
 
 #include <atomic>
@@ -157,6 +158,64 @@ template <typename T> void ComputeDiv(const void *left, const void *right, void 
     ValidateSignedDivisionOverflow(lhs, rhs, "Div");
   }
   WriteTyped<T>(out, static_cast<T>(lhs / rhs));
+}
+
+// Binary PR02: type-erased wrappers around the SIMD-dispatched bulk kernels
+// declared in binary_arithmetic_kernel.h, adapting their typed signatures to
+// the ``void *``-based function pointers stored on ``Adapter``.
+template <typename T, void (*Fn)(const T *, const T *, T *, std::size_t)>
+void BulkContiguousWrapper(const void *left, const void *right, void *out, std::size_t count) {
+  Fn(static_cast<const T *>(left), static_cast<const T *>(right), static_cast<T *>(out), count);
+}
+
+template <typename T, void (*Fn)(T, const T *, T *, std::size_t)>
+void BulkLeftScalarWrapper(const void *left, const void *right, void *out, std::size_t count) {
+  Fn(*static_cast<const T *>(left), static_cast<const T *>(right), static_cast<T *>(out), count);
+}
+
+template <typename T, void (*Fn)(const T *, T, T *, std::size_t)>
+void BulkRightScalarWrapper(const void *left, const void *right, void *out, std::size_t count) {
+  Fn(static_cast<const T *>(left), *static_cast<const T *>(right), static_cast<T *>(out), count);
+}
+
+void SelectBulk(BinaryOperator op, DT left, BinaryKernelDescriptor::Adapter &adapter) {
+#define ONNX_LIGHT_CPU_BIND_BULK(STEM, T)                                                          \
+  adapter.bulk_contiguous = &BulkContiguousWrapper<T, &STEM##Contiguous>;                          \
+  adapter.bulk_left_scalar = &BulkLeftScalarWrapper<T, &STEM##LeftScalar>;                         \
+  adapter.bulk_right_scalar = &BulkRightScalarWrapper<T, &STEM##RightScalar>;
+  switch (op) {
+  case BinaryOperator::kAdd:
+    if (left == DT::FLOAT) {
+      ONNX_LIGHT_CPU_BIND_BULK(BinaryAddFloat32, float)
+    } else if (left == DT::DOUBLE) {
+      ONNX_LIGHT_CPU_BIND_BULK(BinaryAddFloat64, double)
+    }
+    break;
+  case BinaryOperator::kSub:
+    if (left == DT::FLOAT) {
+      ONNX_LIGHT_CPU_BIND_BULK(BinarySubFloat32, float)
+    } else if (left == DT::DOUBLE) {
+      ONNX_LIGHT_CPU_BIND_BULK(BinarySubFloat64, double)
+    }
+    break;
+  case BinaryOperator::kMul:
+    if (left == DT::FLOAT) {
+      ONNX_LIGHT_CPU_BIND_BULK(BinaryMulFloat32, float)
+    } else if (left == DT::DOUBLE) {
+      ONNX_LIGHT_CPU_BIND_BULK(BinaryMulFloat64, double)
+    }
+    break;
+  case BinaryOperator::kDiv:
+    if (left == DT::FLOAT) {
+      ONNX_LIGHT_CPU_BIND_BULK(BinaryDivFloat32, float)
+    } else if (left == DT::DOUBLE) {
+      ONNX_LIGHT_CPU_BIND_BULK(BinaryDivFloat64, double)
+    }
+    break;
+  default:
+    break;
+  }
+#undef ONNX_LIGHT_CPU_BIND_BULK
 }
 
 template <typename T> T PythonMod(T left, T right) {
@@ -941,6 +1000,9 @@ BinaryKernelDescriptor::BinaryKernelDescriptor(std::string op_type, std::int64_t
     adapter.left_size = ElementSize(signature.left);
     adapter.right_size = ElementSize(signature.right);
     adapter.output_size = ElementSize(signature.output);
+    if (signature.left == signature.right && signature.left == signature.output) {
+      SelectBulk(manifest_.op, signature.left, adapter);
+    }
     adapters_.push_back(adapter);
   }
 }
