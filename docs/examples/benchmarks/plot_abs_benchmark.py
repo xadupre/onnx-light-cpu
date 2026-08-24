@@ -98,15 +98,29 @@ model_bytes = model.SerializeToString()
 size_grid = [100, 1000] if unit_test_going else [10**k for k in range(2, 9)]
 
 
-def measure(func, repeat, warmup=3, number=1):
+MAX_MEASURE_DURATION = 2.0
+
+
+def measure(
+    func,
+    repeat,
+    warmup=3,
+    number=1,
+    max_duration=MAX_MEASURE_DURATION,
+):
     for _ in range(warmup):
         func()
     timings = []
+    total_duration = 0.0
     for _ in range(repeat):
         start = time.perf_counter()
         for _ in range(number):
             func()
-        timings.append((time.perf_counter() - start) / number)
+        duration = time.perf_counter() - start
+        timings.append(duration / number)
+        total_duration += duration
+        if total_duration >= max_duration:
+            break
     return float(np.median(timings))
 
 
@@ -247,6 +261,11 @@ set_kernel_usage_recording(False)
 
 benchmark_phase(lambda inp: alone_session.run(None, {"X": inp})[0], 2)
 
+plot_light_results = light_session is not None
+light_session = None
+alone_session = None
+gc.collect()
+
 _ort_setup_start = time.perf_counter()
 session = onnxruntime.InferenceSession(model_bytes, providers=["CPUExecutionProvider"])
 ort_setup_time = time.perf_counter() - _ort_setup_start
@@ -293,7 +312,7 @@ import matplotlib.pyplot as plt
 fig, (ax_time, ax_speedup) = plt.subplots(1, 2, figsize=(12, 4.5))
 
 ax_time.plot(sizes, numpy_times * 1e6, "o--", label="numpy", color="#9b7ec8")
-if light_session is not None:
+if plot_light_results:
     ax_time.plot(
         sizes,
         cpu_times * 1e6,
@@ -318,7 +337,7 @@ ax_time.tick_params(axis="x", labelrotation=45)
 ax_time.legend()
 
 ax_speedup.plot(sizes, ort_times / numpy_times, "o--", label="numpy", color="#9b7ec8")
-if light_session is not None:
+if plot_light_results:
     cpu_speedup = ort_times / cpu_times
     ax_speedup.plot(
         sizes,

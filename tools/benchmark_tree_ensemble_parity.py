@@ -149,28 +149,34 @@ PARITY_DTYPES = ("float32", "float64")
 MEDIAN_GATE = 1.0
 MINIMUM_GATE = 0.9
 SINGLE_ROW_REGRESSION_GATE = 1.1
+MAX_MEASURE_DURATION = 2.0
 
 
 def repeat_count(case: TreeEnsembleCase, minimum: int, maximum: int) -> int:
     return max(minimum, min(maximum, 20_000_000 // max(1, case.visits)))
 
 
-def measure_alternating(
-    functions: Sequence[Callable[[], Any]], repeat: int, warmup: int
-) -> tuple[list[float], ...]:
-    for iteration in range(warmup):
-        for offset in range(len(functions)):
-            functions[(iteration + offset) % len(functions)]()
-    timings: tuple[list[float], ...] = tuple([] for _ in functions)
+def measure_one(
+    function: Callable[[], Any],
+    repeat: int,
+    warmup: int,
+    max_duration: float = MAX_MEASURE_DURATION,
+) -> list[float]:
+    for _ in range(warmup):
+        function()
+    timings = []
+    total_duration = 0.0
     gc_enabled = gc.isenabled()
     gc.disable()
     try:
-        for iteration in range(repeat):
-            for offset in range(len(functions)):
-                index = (iteration + offset) % len(functions)
-                start = time.perf_counter_ns()
-                functions[index]()
-                timings[index].append((time.perf_counter_ns() - start) / 1e9)
+        for _ in range(repeat):
+            start = time.perf_counter_ns()
+            function()
+            duration = (time.perf_counter_ns() - start) / 1e9
+            timings.append(duration)
+            total_duration += duration
+            if total_duration >= max_duration:
+                break
     finally:
         if gc_enabled:
             gc.enable()
@@ -504,7 +510,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     if unknown:
         raise ValueError(f"Unknown cases: {', '.join(sorted(unknown))}.")
 
-    results = []
+    cpu_records = {}
     actual_threads = None
     for index, case in enumerate(selected):
         model, feeds = _build_case(case, index)
@@ -515,16 +521,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 cpu_execution={"num_threads": args.threads, "affinity_policy": "none"},
             )
 
-        def prepare_ort(model_bytes=model):
-            return onnxruntime.InferenceSession(
-                model_bytes, sess_options=options, providers=["CPUExecutionProvider"]
-            )
-
-        cpu_preparation, ort_preparation = measure_alternating(
-            (prepare_cpu, prepare_ort), args.preparation_repeats, 0
-        )
+        cpu_preparation = measure_one(prepare_cpu, args.preparation_repeats, 0)
         cpu_session = prepare_cpu()
-        ort_session = prepare_ort()
         resolved_threads = cpu_session.cpu_execution_resolution.effective_threads
         actual_threads = resolved_threads if actual_threads is None else actual_threads
         if actual_threads != resolved_threads:
@@ -533,11 +531,39 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         def cpu_run(session=cpu_session, current_feeds=feeds):
             return session.run(None, current_feeds)
 
+        cpu_output = cpu_run()
+        repeat = repeat_count(case, args.minimum_repeats, args.maximum_repeats)
+        cpu_samples = measure_one(cpu_run, repeat=repeat, warmup=args.warmup)
+        cpu_records[case.name] = {
+            "output": cpu_output,
+            "samples": cpu_samples,
+            "preparation": cpu_preparation,
+            "repeat": repeat,
+            "resolved_threads": resolved_threads,
+        }
+
+    del cpu_session
+    del cpu_run
+    gc.collect()
+
+    results = []
+    for index, case in enumerate(selected):
+        model, feeds = _build_case(case, index)
+
+        def prepare_ort(model_bytes=model):
+            return onnxruntime.InferenceSession(
+                model_bytes, sess_options=options, providers=["CPUExecutionProvider"]
+            )
+
+        ort_preparation = measure_one(prepare_ort, args.preparation_repeats, 0)
+        ort_session = prepare_ort()
+
         def ort_run(session=ort_session, current_feeds=feeds):
             return session.run(None, current_feeds)
 
-        cpu_output = cpu_run()
         ort_output = ort_run()
+        cpu_record = cpu_records[case.name]
+        cpu_output = cpu_record["output"]
         tolerance = 2e-5 if case.dtype == "float32" else 1e-9
         if case.task == "classification":
             np.testing.assert_array_equal(cpu_output[0], ort_output[0])
@@ -548,26 +574,28 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             np.testing.assert_allclose(
                 cpu_output[0], ort_output[0], rtol=tolerance, atol=tolerance
             )
-        repeat = repeat_count(case, args.minimum_repeats, args.maximum_repeats)
-        cpu_samples, ort_samples = measure_alternating(
-            (cpu_run, ort_run), repeat=repeat, warmup=args.warmup
+        ort_samples = measure_one(
+            ort_run,
+            repeat=cpu_record["repeat"],
+            warmup=args.warmup,
         )
+        cpu_samples = cpu_record["samples"]
         cpu_median = statistics.median(cpu_samples)
         ort_median = statistics.median(ort_samples)
-        preparation_ratio = statistics.median(cpu_preparation) / statistics.median(
+        preparation_ratio = statistics.median(cpu_record["preparation"]) / statistics.median(
             ort_preparation
         )
-        workspace_bound = min(case.rows, 128) * case.outputs * 16 * resolved_threads
+        workspace_bound = min(case.rows, 128) * case.outputs * 16 * cpu_record["resolved_threads"]
         result = {
             **asdict(case),
-            "repeat": repeat,
+            "repeat": cpu_record["repeat"],
             "correct": True,
             "cpu_samples_seconds": cpu_samples,
             "ort_samples_seconds": ort_samples,
             "cpu_median_seconds": cpu_median,
             "ort_median_seconds": ort_median,
             "speedup": ort_median / cpu_median,
-            "cpu_preparation_samples_seconds": cpu_preparation,
+            "cpu_preparation_samples_seconds": cpu_record["preparation"],
             "ort_preparation_samples_seconds": ort_preparation,
             "preparation_ratio": preparation_ratio,
             "preparation_passed": preparation_ratio <= args.max_preparation_ratio,

@@ -55,21 +55,23 @@ Control persistent executors
 ONNX Runtime, ``onnx-light``, ``onnx-light-cpu``, NumPy, and the BLAS selected by
 NumPy may each own a persistent worker pool whose idle workers spin, retain
 affinity, and perturb a different backend without appearing in its timed
-interval. On shared or uncontrolled machines, measure backends in isolated
+interval. On shared or uncontrolled machines, measure backends in isolated global
 phases:
 
-#. run ``onnx-light-cpu`` before constructing ONNX Runtime or invoking a
-   multithreaded NumPy/BLAS operation;
-#. measure a cached built-in ``onnx-light`` session;
-#. measure NumPy;
-#. construct and measure ONNX Runtime last;
+#. prepare identical models and inputs without constructing competing runtime
+   sessions;
+#. run every ``onnx-light-cpu`` and built-in ``onnx-light`` case;
+#. release all of those sessions;
+#. measure NumPy in its own phase when it may initialize a threaded BLAS;
+#. only then construct and run every ONNX Runtime session;
 #. perform cross-backend correctness checks after every timed phase.
 
 Regenerate identical inputs from the same seed in each phase. For strict
 isolation, run one backend per child process. Alternating candidates in one
 process is appropriate only on a dedicated, pinned host after proving they leave
-no competing spinning pools. Never run independent CPU benchmarks concurrently on
-the same cores.
+no competing spinning pools. Keep each runtime's documented default spin policy;
+phase separation, rather than disabling spin, prevents cross-runtime pollution.
+Never run independent CPU benchmarks concurrently on the same cores.
 
 Threads, affinity, and spinning
 -------------------------------
@@ -107,6 +109,10 @@ Warmup and sampling
 
 Warm up until lazy preparation, allocation growth, packing caches, and worker
 creation have completed, and keep warmup outside every timed sample.
+
+Bound each repeated gallery measurement by both a maximum repetition count and
+two seconds of cumulative measured execution. Stop at whichever limit is
+reached first, allowing a call already in progress to finish.
 
 Retain raw samples and report at least the median and a dispersion measure
 (interquartile range or percentiles). Use enough work per sample that timer and
@@ -185,4 +191,3 @@ Before accepting benchmark evidence, verify all of the following:
 * Raw samples, median, and dispersion are retained.
 * Unsupported dtype/backend combinations are reported as ``not supported``.
 * Shared-runner results are labeled diagnostic.
-
