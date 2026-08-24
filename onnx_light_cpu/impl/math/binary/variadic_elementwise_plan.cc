@@ -211,6 +211,10 @@ VariadicElementwisePlan::VariadicElementwisePlan(
     }
     element_count_ *= static_cast<std::size_t>(dimension);
   }
+  if (element_count_ > std::numeric_limits<std::size_t>::max() / element_size_) {
+    throw std::invalid_argument("onnx_light_cpu::" + std::string(ToString(op)) +
+                                ": output tensor is too large.");
+  }
 }
 
 void VariadicElementwisePlan::Execute(std::span<const void *const> inputs, void *output) const {

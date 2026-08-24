@@ -10,6 +10,8 @@
 
 #include <gtest/gtest.h>
 
+#include <vector>
+
 namespace {
 
 // ``RegisterAllKernels`` installs every onnx-light-cpu kernel class into
@@ -43,6 +45,32 @@ TEST(OnnxLightRegisterKernels, RegisteredFactoriesConstructWithoutSessionExecuto
   EXPECT_FLOAT_EQ(y[1], 2.0f);
   EXPECT_FLOAT_EQ(y[2], 3.5f);
   EXPECT_FLOAT_EQ(y[3], 4.0f);
+}
+
+TEST(OnnxLightRegisterKernels, VariadicFactoryUsesOneCommonBroadcastPlan) {
+  namespace rt_ns = ONNX_LIGHT_NAMESPACE::core::runtime;
+  onnx_light_cpu::RegisterAllKernels();
+  const auto factory = rt_ns::KernelDispatchTable().find("ai.onnx:Sum");
+  ASSERT_NE(factory, rt_ns::KernelDispatchTable().end());
+  ONNX_LIGHT_NAMESPACE::NodeProto node;
+  node.set_op_type("Sum");
+  node.add_input("a");
+  node.add_input("b");
+  node.add_input("c");
+  node.add_output("y");
+  rt_ns::RuntimeContext runtime(rt_ns::KernelContext(rt_ns::DefaultOpset(18)));
+  runtime.Set("a", rt_ns::Tensor::FromFloat("a", {2, 1}, {1.0f, 2.0f}));
+  runtime.Set("b", rt_ns::Tensor::FromFloat("b", {1, 3}, {10.0f, 20.0f, 30.0f}));
+  runtime.Set("c", rt_ns::Tensor::FromFloat("c", {}, {100.0f}));
+
+  std::unique_ptr<rt_ns::KernelBase> kernel = factory->second(node, runtime);
+  ASSERT_NE(kernel, nullptr);
+  ASSERT_NO_THROW(kernel->Run(runtime));
+  const rt_ns::Tensor &output = runtime.Get("y");
+  EXPECT_EQ(output.shape, (rt_ns::Shape{2, 3}));
+  const float *values = output.AsFloat();
+  EXPECT_EQ(std::vector<float>(values, values + 6),
+            (std::vector<float>{111.0f, 121.0f, 131.0f, 112.0f, 122.0f, 132.0f}));
 }
 
 } // namespace

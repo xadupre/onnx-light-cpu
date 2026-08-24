@@ -96,19 +96,23 @@ TEST(VariadicElementwisePlan, WrapsSignedIntegerSumWithoutUndefinedBehavior) {
 
 TEST(VariadicElementwisePlan, MatchesPortableMinMaxNanAndSignedZeroSemantics) {
   const float nan = std::numeric_limits<float>::quiet_NaN();
-  const std::vector<std::vector<std::int64_t>> shapes(3);
-  const std::vector<std::vector<float>> values = {{nan}, {2.0f}, {nan}};
-  EXPECT_TRUE(
-      std::isnan(Execute<float>(VariadicOperator::kMin, BinaryDataType::FLOAT, shapes, values)[0]));
-  EXPECT_TRUE(
-      std::isnan(Execute<float>(VariadicOperator::kMax, BinaryDataType::FLOAT, shapes, values)[0]));
+  const std::vector<std::vector<std::int64_t>> shapes(2);
+  const std::vector<std::vector<float>> leading_nan = {{nan}, {2.0f}};
+  const std::vector<std::vector<float>> trailing_nan = {{2.0f}, {nan}};
+  EXPECT_FLOAT_EQ(
+      Execute<float>(VariadicOperator::kMin, BinaryDataType::FLOAT, shapes, leading_nan)[0], 2.0f);
+  EXPECT_FLOAT_EQ(
+      Execute<float>(VariadicOperator::kMax, BinaryDataType::FLOAT, shapes, leading_nan)[0], 2.0f);
+  EXPECT_TRUE(std::isnan(
+      Execute<float>(VariadicOperator::kMin, BinaryDataType::FLOAT, shapes, trailing_nan)[0]));
+  EXPECT_TRUE(std::isnan(
+      Execute<float>(VariadicOperator::kMax, BinaryDataType::FLOAT, shapes, trailing_nan)[0]));
 
-  const std::vector<std::vector<std::int64_t>> pair_shapes(2);
   const std::vector<std::vector<float>> zeros = {{0.0f}, {-0.0f}};
   const float minimum =
-      Execute<float>(VariadicOperator::kMin, BinaryDataType::FLOAT, pair_shapes, zeros)[0];
+      Execute<float>(VariadicOperator::kMin, BinaryDataType::FLOAT, shapes, zeros)[0];
   const float maximum =
-      Execute<float>(VariadicOperator::kMax, BinaryDataType::FLOAT, pair_shapes, zeros)[0];
+      Execute<float>(VariadicOperator::kMax, BinaryDataType::FLOAT, shapes, zeros)[0];
   EXPECT_TRUE(std::signbit(minimum));
   EXPECT_TRUE(std::signbit(maximum));
 }
