@@ -120,6 +120,30 @@ TBase CheckedIntegerPow(TBase base, TExp exponent, const char *op_name) {
   }
 }
 
+template <typename TBase, typename TExp> TBase PowIntegerExponent(TBase base, TExp exponent) {
+  using UnsignedExponent = std::make_unsigned_t<TExp>;
+  bool negative = false;
+  if constexpr (std::is_signed_v<TExp>) {
+    negative = exponent < 0;
+  }
+  UnsignedExponent remaining = static_cast<UnsignedExponent>(exponent);
+  if (negative) {
+    remaining = UnsignedExponent{0} - remaining;
+  }
+  TBase result = static_cast<TBase>(1);
+  TBase factor = base;
+  while (remaining != 0) {
+    if ((remaining & UnsignedExponent{1}) != 0) {
+      result *= factor;
+    }
+    remaining >>= 1;
+    if (remaining != 0) {
+      factor *= factor;
+    }
+  }
+  return negative ? static_cast<TBase>(1) / result : result;
+}
+
 template <typename T> void WriteTyped(void *out, T value) { *reinterpret_cast<T *>(out) = value; }
 
 template <typename T> T ReadTyped(const void *in) { return *reinterpret_cast<const T *>(in); }
@@ -161,6 +185,10 @@ template <typename T> void ComputeDiv(const void *left, const void *right, void 
   WriteTyped<T>(out, static_cast<T>(lhs / rhs));
 }
 
+template <typename T> void ComputeDivUnchecked(const void *left, const void *right, void *out) {
+  WriteTyped<T>(out, static_cast<T>(ReadTyped<T>(left) / ReadTyped<T>(right)));
+}
+
 template <typename T>
 void ValidateIntegerDivision(const void *left, const void *right, const char *op_name) {
   const T lhs = ReadTyped<T>(left);
@@ -195,29 +223,32 @@ void BulkRightScalarWrapper(const void *left, const void *right, void *out, std:
   Fn(static_cast<const T *>(left), *static_cast<const T *>(right), static_cast<T *>(out), count);
 }
 
-template <typename T, void (*Compute)(const void *, const void *, void *)>
+template <typename TLeft, typename TRight, typename TOut,
+          void (*Compute)(const void *, const void *, void *)>
 void BulkComputeContiguous(const void *left, const void *right, void *out, std::size_t count) {
-  const auto *typed_left = static_cast<const T *>(left);
-  const auto *typed_right = static_cast<const T *>(right);
-  auto *typed_out = static_cast<T *>(out);
+  const auto *typed_left = static_cast<const TLeft *>(left);
+  const auto *typed_right = static_cast<const TRight *>(right);
+  auto *typed_out = static_cast<TOut *>(out);
   for (std::size_t i = 0; i < count; ++i) {
     Compute(typed_left + i, typed_right + i, typed_out + i);
   }
 }
 
-template <typename T, void (*Compute)(const void *, const void *, void *)>
+template <typename TLeft, typename TRight, typename TOut,
+          void (*Compute)(const void *, const void *, void *)>
 void BulkComputeLeftScalar(const void *left, const void *right, void *out, std::size_t count) {
-  const auto *typed_right = static_cast<const T *>(right);
-  auto *typed_out = static_cast<T *>(out);
+  const auto *typed_right = static_cast<const TRight *>(right);
+  auto *typed_out = static_cast<TOut *>(out);
   for (std::size_t i = 0; i < count; ++i) {
     Compute(left, typed_right + i, typed_out + i);
   }
 }
 
-template <typename T, void (*Compute)(const void *, const void *, void *)>
+template <typename TLeft, typename TRight, typename TOut,
+          void (*Compute)(const void *, const void *, void *)>
 void BulkComputeRightScalar(const void *left, const void *right, void *out, std::size_t count) {
-  const auto *typed_left = static_cast<const T *>(left);
-  auto *typed_out = static_cast<T *>(out);
+  const auto *typed_left = static_cast<const TLeft *>(left);
+  auto *typed_out = static_cast<TOut *>(out);
   for (std::size_t i = 0; i < count; ++i) {
     Compute(typed_left + i, right, typed_out + i);
   }
@@ -229,6 +260,19 @@ void ComputeFloat16Sub(const void *, const void *, void *);
 void ComputeBfloat16Sub(const void *, const void *, void *);
 void ComputeFloat16Mul(const void *, const void *, void *);
 void ComputeBfloat16Mul(const void *, const void *, void *);
+#define ONNX_LIGHT_CPU_DECLARE_HALF_BULK(NAME)                                                     \
+  void BulkFloat16##NAME(const void *, const void *, void *, std::size_t);                         \
+  void BulkFloat16##NAME##Left(const void *, const void *, void *, std::size_t);                   \
+  void BulkFloat16##NAME##Right(const void *, const void *, void *, std::size_t);                  \
+  void BulkBfloat16##NAME(const void *, const void *, void *, std::size_t);                        \
+  void BulkBfloat16##NAME##Left(const void *, const void *, void *, std::size_t);                  \
+  void BulkBfloat16##NAME##Right(const void *, const void *, void *, std::size_t);
+ONNX_LIGHT_CPU_DECLARE_HALF_BULK(Add)
+ONNX_LIGHT_CPU_DECLARE_HALF_BULK(Sub)
+ONNX_LIGHT_CPU_DECLARE_HALF_BULK(Mul)
+ONNX_LIGHT_CPU_DECLARE_HALF_BULK(Div)
+ONNX_LIGHT_CPU_DECLARE_HALF_BULK(PRelu)
+#undef ONNX_LIGHT_CPU_DECLARE_HALF_BULK
 void BulkFloat16Mod(const void *, const void *, void *, std::size_t);
 void BulkBfloat16Mod(const void *, const void *, void *, std::size_t);
 void BulkFloat16Pow(const void *, const void *, void *, std::size_t);
@@ -242,9 +286,13 @@ void SelectBulk(BinaryOperator op, DT left, BinaryKernelDescriptor::Adapter &ada
   adapter.bulk_left_scalar = &BulkLeftScalarWrapper<T, &STEM##LeftScalar>;                         \
   adapter.bulk_right_scalar = &BulkRightScalarWrapper<T, &STEM##RightScalar>;
 #define ONNX_LIGHT_CPU_BIND_COMPUTE_BULK(T, COMPUTE)                                               \
-  adapter.bulk_contiguous = &BulkComputeContiguous<T, &COMPUTE>;                                   \
-  adapter.bulk_left_scalar = &BulkComputeLeftScalar<T, &COMPUTE>;                                  \
-  adapter.bulk_right_scalar = &BulkComputeRightScalar<T, &COMPUTE>;
+  adapter.bulk_contiguous = &BulkComputeContiguous<T, T, T, &COMPUTE>;                             \
+  adapter.bulk_left_scalar = &BulkComputeLeftScalar<T, T, T, &COMPUTE>;                            \
+  adapter.bulk_right_scalar = &BulkComputeRightScalar<T, T, T, &COMPUTE>;
+#define ONNX_LIGHT_CPU_BIND_HALF_BULK(PREFIX, NAME)                                                \
+  adapter.bulk_contiguous = &Bulk##PREFIX##NAME;                                                   \
+  adapter.bulk_left_scalar = &Bulk##PREFIX##NAME##Left;                                            \
+  adapter.bulk_right_scalar = &Bulk##PREFIX##NAME##Right;
 #define ONNX_LIGHT_CPU_BIND_INTEGER_BULK(COMPUTE)                                                  \
   switch (left) {                                                                                  \
   case DT::INT8:                                                                                   \
@@ -281,9 +329,9 @@ void SelectBulk(BinaryOperator op, DT left, BinaryKernelDescriptor::Adapter &ada
     } else if (left == DT::DOUBLE) {
       ONNX_LIGHT_CPU_BIND_BULK(BinaryAddFloat64, double)
     } else if (left == DT::FLOAT16) {
-      ONNX_LIGHT_CPU_BIND_COMPUTE_BULK(std::uint16_t, ComputeFloat16Add)
+      ONNX_LIGHT_CPU_BIND_HALF_BULK(Float16, Add)
     } else if (left == DT::BFLOAT16) {
-      ONNX_LIGHT_CPU_BIND_COMPUTE_BULK(std::uint16_t, ComputeBfloat16Add)
+      ONNX_LIGHT_CPU_BIND_HALF_BULK(Bfloat16, Add)
     } else {
       ONNX_LIGHT_CPU_BIND_INTEGER_BULK(ComputeAdd)
     }
@@ -294,9 +342,9 @@ void SelectBulk(BinaryOperator op, DT left, BinaryKernelDescriptor::Adapter &ada
     } else if (left == DT::DOUBLE) {
       ONNX_LIGHT_CPU_BIND_BULK(BinarySubFloat64, double)
     } else if (left == DT::FLOAT16) {
-      ONNX_LIGHT_CPU_BIND_COMPUTE_BULK(std::uint16_t, ComputeFloat16Sub)
+      ONNX_LIGHT_CPU_BIND_HALF_BULK(Float16, Sub)
     } else if (left == DT::BFLOAT16) {
-      ONNX_LIGHT_CPU_BIND_COMPUTE_BULK(std::uint16_t, ComputeBfloat16Sub)
+      ONNX_LIGHT_CPU_BIND_HALF_BULK(Bfloat16, Sub)
     } else {
       ONNX_LIGHT_CPU_BIND_INTEGER_BULK(ComputeSub)
     }
@@ -307,9 +355,9 @@ void SelectBulk(BinaryOperator op, DT left, BinaryKernelDescriptor::Adapter &ada
     } else if (left == DT::DOUBLE) {
       ONNX_LIGHT_CPU_BIND_BULK(BinaryMulFloat64, double)
     } else if (left == DT::FLOAT16) {
-      ONNX_LIGHT_CPU_BIND_COMPUTE_BULK(std::uint16_t, ComputeFloat16Mul)
+      ONNX_LIGHT_CPU_BIND_HALF_BULK(Float16, Mul)
     } else if (left == DT::BFLOAT16) {
-      ONNX_LIGHT_CPU_BIND_COMPUTE_BULK(std::uint16_t, ComputeBfloat16Mul)
+      ONNX_LIGHT_CPU_BIND_HALF_BULK(Bfloat16, Mul)
     } else {
       ONNX_LIGHT_CPU_BIND_INTEGER_BULK(ComputeMul)
     }
@@ -319,6 +367,10 @@ void SelectBulk(BinaryOperator op, DT left, BinaryKernelDescriptor::Adapter &ada
       ONNX_LIGHT_CPU_BIND_BULK(BinaryDivFloat32, float)
     } else if (left == DT::DOUBLE) {
       ONNX_LIGHT_CPU_BIND_BULK(BinaryDivFloat64, double)
+    } else if (left == DT::FLOAT16) {
+      ONNX_LIGHT_CPU_BIND_HALF_BULK(Float16, Div)
+    } else if (left == DT::BFLOAT16) {
+      ONNX_LIGHT_CPU_BIND_HALF_BULK(Bfloat16, Div)
     }
     break;
   case BinaryOperator::kMod:
@@ -330,15 +382,18 @@ void SelectBulk(BinaryOperator op, DT left, BinaryKernelDescriptor::Adapter &ada
         left == DT::FLOAT16 ? &BulkFloat16Pow : (left == DT::BFLOAT16 ? &BulkBfloat16Pow : nullptr);
     break;
   case BinaryOperator::kPRelu:
-    adapter.bulk_contiguous = left == DT::FLOAT16
-                                  ? &BulkFloat16PRelu
-                                  : (left == DT::BFLOAT16 ? &BulkBfloat16PRelu : nullptr);
+    if (left == DT::FLOAT16) {
+      ONNX_LIGHT_CPU_BIND_HALF_BULK(Float16, PRelu)
+    } else if (left == DT::BFLOAT16) {
+      ONNX_LIGHT_CPU_BIND_HALF_BULK(Bfloat16, PRelu)
+    }
     break;
   default:
     break;
   }
 #undef ONNX_LIGHT_CPU_BIND_INTEGER_BULK
 #undef ONNX_LIGHT_CPU_BIND_COMPUTE_BULK
+#undef ONNX_LIGHT_CPU_BIND_HALF_BULK
 #undef ONNX_LIGHT_CPU_BIND_BULK
 }
 
@@ -361,6 +416,13 @@ void ComputeModInt(const void *left, const void *right, void *out, std::int64_t 
   WriteTyped<T>(out, fmod == 0 ? PythonMod(lhs, rhs) : static_cast<T>(lhs % rhs));
 }
 
+template <typename T, bool Fmod>
+void ComputeModIntUnchecked(const void *left, const void *right, void *out) {
+  const T lhs = ReadTyped<T>(left);
+  const T rhs = ReadTyped<T>(right);
+  WriteTyped<T>(out, Fmod ? static_cast<T>(lhs % rhs) : PythonMod(lhs, rhs));
+}
+
 template <typename T> void ComputeModFloat(const void *left, const void *right, void *out) {
   WriteTyped<T>(out, static_cast<T>(std::fmod(ReadTyped<T>(left), ReadTyped<T>(right))));
 }
@@ -371,9 +433,10 @@ void ComputePow(const void *left, const void *right, void *out) {
   const TExp rhs = ReadTyped<TExp>(right);
   if constexpr (std::is_integral_v<TBase>) {
     WriteTyped<TBase>(out, CheckedIntegerPow(lhs, rhs, "Pow"));
+  } else if constexpr (std::is_integral_v<TExp>) {
+    WriteTyped<TBase>(out, PowIntegerExponent(lhs, rhs));
   } else {
-    WriteTyped<TBase>(out, static_cast<TBase>(std::pow(static_cast<long double>(lhs),
-                                                       static_cast<long double>(rhs))));
+    WriteTyped<TBase>(out, std::pow(lhs, static_cast<TBase>(rhs)));
   }
 }
 
@@ -441,6 +504,13 @@ template <typename T> void ComputeBitShiftRight(const void *left, const void *ri
   WriteTyped<T>(out, static_cast<T>(ReadTyped<T>(left) >> static_cast<unsigned>(shift)));
 }
 
+template <typename T, bool Left>
+void ComputeBitShiftUnchecked(const void *left, const void *right, void *out) {
+  const T value = ReadTyped<T>(left);
+  const unsigned shift = static_cast<unsigned>(ReadTyped<T>(right));
+  WriteTyped<T>(out, Left ? static_cast<T>(value << shift) : static_cast<T>(value >> shift));
+}
+
 template <typename T> void ValidateBitShift(const void *, const void *right) {
   if (ReadTyped<T>(right) >= static_cast<T>(sizeof(T) * 8)) {
     throw std::invalid_argument("onnx_light_cpu::BitShift: shift amount is out of range.");
@@ -450,7 +520,11 @@ template <typename T> void ValidateBitShift(const void *, const void *right) {
 template <typename T> void ComputePRelu(const void *left, const void *right, void *out) {
   const T x = ReadTyped<T>(left);
   const T slope = ReadTyped<T>(right);
-  WriteTyped<T>(out, x < static_cast<T>(0) ? static_cast<T>(x * slope) : x);
+  if constexpr (std::is_integral_v<T>) {
+    WriteTyped<T>(out, x < static_cast<T>(0) ? WrapMul(x, slope) : x);
+  } else {
+    WriteTyped<T>(out, x < static_cast<T>(0) ? static_cast<T>(x * slope) : x);
+  }
 }
 
 void ComputeFloat16Add(const void *left, const void *right, void *out) {
@@ -529,9 +603,82 @@ void ComputeBfloat16PRelu(const void *left, const void *right, void *out) {
   WriteTyped<std::uint16_t>(out, detail::FloatToBFloat16Bits(a < 0.0f ? a * b : a));
 }
 
+struct HalfAdd {
+  float operator()(float a, float b) const { return a + b; }
+};
+struct HalfSub {
+  float operator()(float a, float b) const { return a - b; }
+};
+struct HalfMul {
+  float operator()(float a, float b) const { return a * b; }
+};
+struct HalfDiv {
+  float operator()(float a, float b) const { return a / b; }
+};
+struct HalfPRelu {
+  float operator()(float a, float b) const { return a < 0.0f ? a * b : a; }
+};
+
+template <auto DecodeOne, auto Decode, auto Encode, typename Op>
+void BulkHalf(const void *left, const void *right, void *out, std::size_t count, bool left_scalar,
+              bool right_scalar, Op op) {
+  constexpr std::size_t kBlockSize = 1024;
+  const auto *a = static_cast<const std::uint16_t *>(left);
+  const auto *b = static_cast<const std::uint16_t *>(right);
+  auto *y = static_cast<std::uint16_t *>(out);
+  alignas(32) float af[kBlockSize];
+  alignas(32) float bf[kBlockSize];
+  alignas(32) float yf[kBlockSize];
+  const float scalar_a = left_scalar ? DecodeOne(*a) : 0.0f;
+  const float scalar_b = right_scalar ? DecodeOne(*b) : 0.0f;
+  for (std::size_t offset = 0; offset < count; offset += kBlockSize) {
+    const std::size_t block = std::min(kBlockSize, count - offset);
+    if (!left_scalar) {
+      Decode(a + offset, af, block);
+    }
+    if (!right_scalar) {
+      Decode(b + offset, bf, block);
+    }
+    for (std::size_t i = 0; i < block; ++i) {
+      yf[i] = op(left_scalar ? scalar_a : af[i], right_scalar ? scalar_b : bf[i]);
+    }
+    Encode(yf, y + offset, block);
+  }
+}
+
+#define ONNX_LIGHT_CPU_DEFINE_HALF_BULK(PREFIX, NAME, DECODE_ONE, DECODE, ENCODE, OP)              \
+  void Bulk##PREFIX##NAME(const void *left, const void *right, void *out, std::size_t count) {     \
+    BulkHalf<DECODE_ONE, DECODE, ENCODE>(left, right, out, count, false, false, OP{});             \
+  }                                                                                                \
+  void Bulk##PREFIX##NAME##Left(const void *left, const void *right, void *out,                    \
+                                std::size_t count) {                                               \
+    BulkHalf<DECODE_ONE, DECODE, ENCODE>(left, right, out, count, true, false, OP{});              \
+  }                                                                                                \
+  void Bulk##PREFIX##NAME##Right(const void *left, const void *right, void *out,                   \
+                                 std::size_t count) {                                              \
+    BulkHalf<DECODE_ONE, DECODE, ENCODE>(left, right, out, count, false, true, OP{});              \
+  }
+
+#define ONNX_LIGHT_CPU_DEFINE_HALF_OPERATION(NAME, OP)                                             \
+  ONNX_LIGHT_CPU_DEFINE_HALF_BULK(Float16, NAME, detail::Float16BitsToFloat,                       \
+                                  detail::ConvertFloat16ToFloat32,                                 \
+                                  detail::ConvertFloat32ToFloat16, OP)                             \
+  ONNX_LIGHT_CPU_DEFINE_HALF_BULK(Bfloat16, NAME, detail::Bfloat16BitsToFloat,                     \
+                                  detail::ConvertBFloat16ToFloat32,                                \
+                                  detail::ConvertFloat32ToBFloat16, OP)
+
+ONNX_LIGHT_CPU_DEFINE_HALF_OPERATION(Add, HalfAdd)
+ONNX_LIGHT_CPU_DEFINE_HALF_OPERATION(Sub, HalfSub)
+ONNX_LIGHT_CPU_DEFINE_HALF_OPERATION(Mul, HalfMul)
+ONNX_LIGHT_CPU_DEFINE_HALF_OPERATION(Div, HalfDiv)
+ONNX_LIGHT_CPU_DEFINE_HALF_OPERATION(PRelu, HalfPRelu)
+
+#undef ONNX_LIGHT_CPU_DEFINE_HALF_OPERATION
+#undef ONNX_LIGHT_CPU_DEFINE_HALF_BULK
+
 template <auto Decode, auto Encode, typename Op>
 void BulkHalfContiguous(const void *left, const void *right, void *out, std::size_t count, Op op) {
-  constexpr std::size_t kBlockSize = 256;
+  constexpr std::size_t kBlockSize = 1024;
   const auto *a = static_cast<const std::uint16_t *>(left);
   const auto *b = static_cast<const std::uint16_t *>(right);
   auto *y = static_cast<std::uint16_t *>(out);
@@ -569,21 +716,17 @@ void BulkBfloat16Pow(const void *left, const void *right, void *out, std::size_t
       left, right, out, count, [](float a, float b) { return std::pow(a, b); });
 }
 
-void BulkFloat16PRelu(const void *left, const void *right, void *out, std::size_t count) {
-  BulkHalfContiguous<detail::ConvertFloat16ToFloat32, detail::ConvertFloat32ToFloat16>(
-      left, right, out, count, [](float a, float b) { return a < 0.0f ? a * b : a; });
-}
-
-void BulkBfloat16PRelu(const void *left, const void *right, void *out, std::size_t count) {
-  BulkHalfContiguous<detail::ConvertBFloat16ToFloat32, detail::ConvertFloat32ToBFloat16>(
-      left, right, out, count, [](float a, float b) { return a < 0.0f ? a * b : a; });
-}
-
 template <typename TExp, auto DecodeBase, auto Encode, auto DecodeExponent>
 void ComputeHalfPow(const void *left, const void *right, void *out) {
   const float base = DecodeBase(ReadTyped<std::uint16_t>(left));
   const float exponent = DecodeExponent(ReadTyped<TExp>(right));
   WriteTyped<std::uint16_t>(out, Encode(static_cast<float>(std::pow(base, exponent))));
+}
+
+template <typename TExp, auto DecodeBase, auto Encode>
+void ComputeHalfIntegerPow(const void *left, const void *right, void *out) {
+  const float base = DecodeBase(ReadTyped<std::uint16_t>(left));
+  WriteTyped<std::uint16_t>(out, Encode(PowIntegerExponent(base, ReadTyped<TExp>(right))));
 }
 
 template <typename T> float CastExponent(T value) { return static_cast<float>(value); }
@@ -808,17 +951,17 @@ BinaryKernelDescriptor::Adapter::ScalarFn SelectScalar(BinaryOperator op, DT lef
         return &ComputeHalfPow<std::uint16_t, detail::Float16BitsToFloat,
                                detail::FloatToFloat16Bits, detail::Bfloat16BitsToFloat>;
       case DT::INT32:
-        return &ComputeHalfPow<std::int32_t, detail::Float16BitsToFloat, detail::FloatToFloat16Bits,
-                               CastExponent<std::int32_t>>;
+        return &ComputeHalfIntegerPow<std::int32_t, detail::Float16BitsToFloat,
+                                      detail::FloatToFloat16Bits>;
       case DT::INT64:
-        return &ComputeHalfPow<std::int64_t, detail::Float16BitsToFloat, detail::FloatToFloat16Bits,
-                               CastExponent<std::int64_t>>;
+        return &ComputeHalfIntegerPow<std::int64_t, detail::Float16BitsToFloat,
+                                      detail::FloatToFloat16Bits>;
       case DT::UINT32:
-        return &ComputeHalfPow<std::uint32_t, detail::Float16BitsToFloat,
-                               detail::FloatToFloat16Bits, CastExponent<std::uint32_t>>;
+        return &ComputeHalfIntegerPow<std::uint32_t, detail::Float16BitsToFloat,
+                                      detail::FloatToFloat16Bits>;
       case DT::UINT64:
-        return &ComputeHalfPow<std::uint64_t, detail::Float16BitsToFloat,
-                               detail::FloatToFloat16Bits, CastExponent<std::uint64_t>>;
+        return &ComputeHalfIntegerPow<std::uint64_t, detail::Float16BitsToFloat,
+                                      detail::FloatToFloat16Bits>;
       default:
         break;
       }
@@ -834,17 +977,17 @@ BinaryKernelDescriptor::Adapter::ScalarFn SelectScalar(BinaryOperator op, DT lef
         return &ComputeHalfPow<std::uint16_t, detail::Bfloat16BitsToFloat,
                                detail::FloatToBFloat16Bits, detail::Bfloat16BitsToFloat>;
       case DT::INT32:
-        return &ComputeHalfPow<std::int32_t, detail::Bfloat16BitsToFloat,
-                               detail::FloatToBFloat16Bits, CastExponent<std::int32_t>>;
+        return &ComputeHalfIntegerPow<std::int32_t, detail::Bfloat16BitsToFloat,
+                                      detail::FloatToBFloat16Bits>;
       case DT::INT64:
-        return &ComputeHalfPow<std::int64_t, detail::Bfloat16BitsToFloat,
-                               detail::FloatToBFloat16Bits, CastExponent<std::int64_t>>;
+        return &ComputeHalfIntegerPow<std::int64_t, detail::Bfloat16BitsToFloat,
+                                      detail::FloatToBFloat16Bits>;
       case DT::UINT32:
-        return &ComputeHalfPow<std::uint32_t, detail::Bfloat16BitsToFloat,
-                               detail::FloatToBFloat16Bits, CastExponent<std::uint32_t>>;
+        return &ComputeHalfIntegerPow<std::uint32_t, detail::Bfloat16BitsToFloat,
+                                      detail::FloatToBFloat16Bits>;
       case DT::UINT64:
-        return &ComputeHalfPow<std::uint64_t, detail::Bfloat16BitsToFloat,
-                               detail::FloatToBFloat16Bits, CastExponent<std::uint64_t>>;
+        return &ComputeHalfIntegerPow<std::uint64_t, detail::Bfloat16BitsToFloat,
+                                      detail::FloatToBFloat16Bits>;
       default:
         break;
       }
@@ -1178,6 +1321,280 @@ BinaryKernelDescriptor::Adapter::ValidateFn SelectValidator(BinaryOperator op, D
 #undef ONNX_LIGHT_CPU_INTEGER_VALIDATOR
 }
 
+void SelectAdditionalBulk(BinaryOperator op, DT left, DT right, const Attrs &attributes,
+                          BinaryKernelDescriptor::Adapter &adapter) {
+#define ONNX_LIGHT_CPU_BIND_TYPED_BULK(TLEFT, TRIGHT, TOUT, ...)                                   \
+  adapter.bulk_contiguous = &BulkComputeContiguous<TLEFT, TRIGHT, TOUT, &__VA_ARGS__>;             \
+  adapter.bulk_left_scalar = &BulkComputeLeftScalar<TLEFT, TRIGHT, TOUT, &__VA_ARGS__>;            \
+  adapter.bulk_right_scalar = &BulkComputeRightScalar<TLEFT, TRIGHT, TOUT, &__VA_ARGS__>;
+#define ONNX_LIGHT_CPU_BIND_SAME_TYPE_CASE(TYPE, CPP_TYPE, COMPUTE)                                \
+  case DT::TYPE:                                                                                   \
+    ONNX_LIGHT_CPU_BIND_TYPED_BULK(CPP_TYPE, CPP_TYPE, CPP_TYPE, COMPUTE<CPP_TYPE>)                \
+    break;
+#define ONNX_LIGHT_CPU_BIND_INTEGER_TYPES(COMPUTE)                                                 \
+  switch (left) {                                                                                  \
+    ONNX_LIGHT_CPU_BIND_SAME_TYPE_CASE(INT8, std::int8_t, COMPUTE)                                 \
+    ONNX_LIGHT_CPU_BIND_SAME_TYPE_CASE(INT16, std::int16_t, COMPUTE)                               \
+    ONNX_LIGHT_CPU_BIND_SAME_TYPE_CASE(INT32, std::int32_t, COMPUTE)                               \
+    ONNX_LIGHT_CPU_BIND_SAME_TYPE_CASE(INT64, std::int64_t, COMPUTE)                               \
+    ONNX_LIGHT_CPU_BIND_SAME_TYPE_CASE(UINT8, std::uint8_t, COMPUTE)                               \
+    ONNX_LIGHT_CPU_BIND_SAME_TYPE_CASE(UINT16, std::uint16_t, COMPUTE)                             \
+    ONNX_LIGHT_CPU_BIND_SAME_TYPE_CASE(UINT32, std::uint32_t, COMPUTE)                             \
+    ONNX_LIGHT_CPU_BIND_SAME_TYPE_CASE(UINT64, std::uint64_t, COMPUTE)                             \
+  default:                                                                                         \
+    break;                                                                                         \
+  }
+#define ONNX_LIGHT_CPU_BIND_COMPARE_CASE(TYPE, CPP_TYPE, COMPUTE)                                  \
+  case DT::TYPE:                                                                                   \
+    ONNX_LIGHT_CPU_BIND_TYPED_BULK(CPP_TYPE, CPP_TYPE, std::uint8_t, COMPUTE<CPP_TYPE>)            \
+    break;
+#define ONNX_LIGHT_CPU_BIND_COMPARE_TYPES(COMPUTE)                                                 \
+  switch (left) {                                                                                  \
+  case DT::FLOAT:                                                                                  \
+    ONNX_LIGHT_CPU_BIND_TYPED_BULK(float, float, std::uint8_t, COMPUTE<float>)                     \
+    break;                                                                                         \
+  case DT::DOUBLE:                                                                                 \
+    ONNX_LIGHT_CPU_BIND_TYPED_BULK(double, double, std::uint8_t, COMPUTE<double>)                  \
+    break;                                                                                         \
+    ONNX_LIGHT_CPU_BIND_COMPARE_CASE(INT8, std::int8_t, COMPUTE)                                   \
+    ONNX_LIGHT_CPU_BIND_COMPARE_CASE(INT16, std::int16_t, COMPUTE)                                 \
+    ONNX_LIGHT_CPU_BIND_COMPARE_CASE(INT32, std::int32_t, COMPUTE)                                 \
+    ONNX_LIGHT_CPU_BIND_COMPARE_CASE(INT64, std::int64_t, COMPUTE)                                 \
+    ONNX_LIGHT_CPU_BIND_COMPARE_CASE(UINT8, std::uint8_t, COMPUTE)                                 \
+    ONNX_LIGHT_CPU_BIND_COMPARE_CASE(UINT16, std::uint16_t, COMPUTE)                               \
+    ONNX_LIGHT_CPU_BIND_COMPARE_CASE(UINT32, std::uint32_t, COMPUTE)                               \
+    ONNX_LIGHT_CPU_BIND_COMPARE_CASE(UINT64, std::uint64_t, COMPUTE)                               \
+  default:                                                                                         \
+    break;                                                                                         \
+  }
+
+  if (op == BinaryOperator::kPow && left != right) {
+#define ONNX_LIGHT_CPU_BIND_POW_RIGHT_CASE(TYPE, RIGHT_CPP, BASE_CPP)                              \
+  case DT::TYPE:                                                                                   \
+    ONNX_LIGHT_CPU_BIND_TYPED_BULK(BASE_CPP, RIGHT_CPP, BASE_CPP, ComputePow<BASE_CPP, RIGHT_CPP>) \
+    break;
+    if (left == DT::FLOAT) {
+      switch (right) {
+        ONNX_LIGHT_CPU_BIND_POW_RIGHT_CASE(INT32, std::int32_t, float)
+        ONNX_LIGHT_CPU_BIND_POW_RIGHT_CASE(INT64, std::int64_t, float)
+        ONNX_LIGHT_CPU_BIND_POW_RIGHT_CASE(UINT32, std::uint32_t, float)
+        ONNX_LIGHT_CPU_BIND_POW_RIGHT_CASE(UINT64, std::uint64_t, float)
+      default:
+        break;
+      }
+    } else if (left == DT::INT32) {
+      switch (right) {
+        ONNX_LIGHT_CPU_BIND_POW_RIGHT_CASE(FLOAT, float, std::int32_t)
+        ONNX_LIGHT_CPU_BIND_POW_RIGHT_CASE(INT64, std::int64_t, std::int32_t)
+        ONNX_LIGHT_CPU_BIND_POW_RIGHT_CASE(UINT32, std::uint32_t, std::int32_t)
+        ONNX_LIGHT_CPU_BIND_POW_RIGHT_CASE(UINT64, std::uint64_t, std::int32_t)
+      default:
+        break;
+      }
+    } else if (left == DT::INT64) {
+      switch (right) {
+        ONNX_LIGHT_CPU_BIND_POW_RIGHT_CASE(FLOAT, float, std::int64_t)
+        ONNX_LIGHT_CPU_BIND_POW_RIGHT_CASE(INT32, std::int32_t, std::int64_t)
+        ONNX_LIGHT_CPU_BIND_POW_RIGHT_CASE(UINT32, std::uint32_t, std::int64_t)
+        ONNX_LIGHT_CPU_BIND_POW_RIGHT_CASE(UINT64, std::uint64_t, std::int64_t)
+      default:
+        break;
+      }
+    }
+#undef ONNX_LIGHT_CPU_BIND_POW_RIGHT_CASE
+    return;
+  }
+  if (left != right) {
+    return;
+  }
+  switch (op) {
+  case BinaryOperator::kDiv:
+    ONNX_LIGHT_CPU_BIND_INTEGER_TYPES(ComputeDivUnchecked)
+    break;
+  case BinaryOperator::kMod:
+#define ONNX_LIGHT_CPU_BIND_MOD_CASE(TYPE, CPP_TYPE)                                               \
+  case DT::TYPE:                                                                                   \
+    if (attributes.mod_fmod == 0) {                                                                \
+      ONNX_LIGHT_CPU_BIND_TYPED_BULK(CPP_TYPE, CPP_TYPE, CPP_TYPE,                                 \
+                                     ComputeModIntUnchecked<CPP_TYPE, false>)                      \
+    } else {                                                                                       \
+      ONNX_LIGHT_CPU_BIND_TYPED_BULK(CPP_TYPE, CPP_TYPE, CPP_TYPE,                                 \
+                                     ComputeModIntUnchecked<CPP_TYPE, true>)                       \
+    }                                                                                              \
+    break;
+    switch (left) {
+      ONNX_LIGHT_CPU_BIND_MOD_CASE(INT8, std::int8_t)
+      ONNX_LIGHT_CPU_BIND_MOD_CASE(INT16, std::int16_t)
+      ONNX_LIGHT_CPU_BIND_MOD_CASE(INT32, std::int32_t)
+      ONNX_LIGHT_CPU_BIND_MOD_CASE(INT64, std::int64_t)
+      ONNX_LIGHT_CPU_BIND_MOD_CASE(UINT8, std::uint8_t)
+      ONNX_LIGHT_CPU_BIND_MOD_CASE(UINT16, std::uint16_t)
+      ONNX_LIGHT_CPU_BIND_MOD_CASE(UINT32, std::uint32_t)
+      ONNX_LIGHT_CPU_BIND_MOD_CASE(UINT64, std::uint64_t)
+    case DT::FLOAT:
+      ONNX_LIGHT_CPU_BIND_TYPED_BULK(float, float, float, ComputeModFloat<float>)
+      break;
+    case DT::DOUBLE:
+      ONNX_LIGHT_CPU_BIND_TYPED_BULK(double, double, double, ComputeModFloat<double>)
+      break;
+    case DT::FLOAT16:
+      adapter.bulk_left_scalar =
+          &BulkComputeLeftScalar<std::uint16_t, std::uint16_t, std::uint16_t, &ComputeFloat16Mod>;
+      adapter.bulk_right_scalar =
+          &BulkComputeRightScalar<std::uint16_t, std::uint16_t, std::uint16_t, &ComputeFloat16Mod>;
+      break;
+    case DT::BFLOAT16:
+      adapter.bulk_left_scalar =
+          &BulkComputeLeftScalar<std::uint16_t, std::uint16_t, std::uint16_t, &ComputeBfloat16Mod>;
+      adapter.bulk_right_scalar =
+          &BulkComputeRightScalar<std::uint16_t, std::uint16_t, std::uint16_t, &ComputeBfloat16Mod>;
+      break;
+    default:
+      break;
+    }
+#undef ONNX_LIGHT_CPU_BIND_MOD_CASE
+    break;
+  case BinaryOperator::kPow:
+    if (left == DT::FLOAT) {
+      ONNX_LIGHT_CPU_BIND_TYPED_BULK(float, float, float, ComputePow<float, float>)
+    } else if (left == DT::DOUBLE) {
+      ONNX_LIGHT_CPU_BIND_TYPED_BULK(double, double, double, ComputePow<double, double>)
+    } else if (left == DT::INT32) {
+      ONNX_LIGHT_CPU_BIND_TYPED_BULK(std::int32_t, std::int32_t, std::int32_t,
+                                     ComputePow<std::int32_t, std::int32_t>)
+    } else if (left == DT::INT64) {
+      ONNX_LIGHT_CPU_BIND_TYPED_BULK(std::int64_t, std::int64_t, std::int64_t,
+                                     ComputePow<std::int64_t, std::int64_t>)
+    } else if (left == DT::FLOAT16) {
+      adapter.bulk_left_scalar = &BulkComputeLeftScalar<
+          std::uint16_t, std::uint16_t, std::uint16_t,
+          &ComputeHalfPow<std::uint16_t, detail::Float16BitsToFloat, detail::FloatToFloat16Bits,
+                          detail::Float16BitsToFloat>>;
+      adapter.bulk_right_scalar = &BulkComputeRightScalar<
+          std::uint16_t, std::uint16_t, std::uint16_t,
+          &ComputeHalfPow<std::uint16_t, detail::Float16BitsToFloat, detail::FloatToFloat16Bits,
+                          detail::Float16BitsToFloat>>;
+    } else if (left == DT::BFLOAT16) {
+      adapter.bulk_left_scalar = &BulkComputeLeftScalar<
+          std::uint16_t, std::uint16_t, std::uint16_t,
+          &ComputeHalfPow<std::uint16_t, detail::Bfloat16BitsToFloat, detail::FloatToBFloat16Bits,
+                          detail::Bfloat16BitsToFloat>>;
+      adapter.bulk_right_scalar = &BulkComputeRightScalar<
+          std::uint16_t, std::uint16_t, std::uint16_t,
+          &ComputeHalfPow<std::uint16_t, detail::Bfloat16BitsToFloat, detail::FloatToBFloat16Bits,
+                          detail::Bfloat16BitsToFloat>>;
+    }
+    break;
+  case BinaryOperator::kEqual:
+    ONNX_LIGHT_CPU_BIND_COMPARE_TYPES(ComputeEqual)
+    if (left == DT::BOOL) {
+      ONNX_LIGHT_CPU_BIND_TYPED_BULK(std::uint8_t, std::uint8_t, std::uint8_t,
+                                     ComputeEqual<std::uint8_t>)
+    } else if (left == DT::FLOAT16) {
+      ONNX_LIGHT_CPU_BIND_TYPED_BULK(std::uint16_t, std::uint16_t, std::uint8_t,
+                                     ComputeFloat16EqualBool)
+    } else if (left == DT::BFLOAT16) {
+      ONNX_LIGHT_CPU_BIND_TYPED_BULK(std::uint16_t, std::uint16_t, std::uint8_t,
+                                     ComputeBfloat16EqualBool)
+    }
+    break;
+  case BinaryOperator::kGreater:
+    ONNX_LIGHT_CPU_BIND_COMPARE_TYPES(ComputeGreater)
+    if (left == DT::FLOAT16) {
+      ONNX_LIGHT_CPU_BIND_TYPED_BULK(std::uint16_t, std::uint16_t, std::uint8_t,
+                                     ComputeFloat16Greater)
+    } else if (left == DT::BFLOAT16) {
+      ONNX_LIGHT_CPU_BIND_TYPED_BULK(std::uint16_t, std::uint16_t, std::uint8_t,
+                                     ComputeBfloat16Greater)
+    }
+    break;
+  case BinaryOperator::kGreaterOrEqual:
+    ONNX_LIGHT_CPU_BIND_COMPARE_TYPES(ComputeGreaterOrEqual)
+    if (left == DT::FLOAT16) {
+      ONNX_LIGHT_CPU_BIND_TYPED_BULK(std::uint16_t, std::uint16_t, std::uint8_t,
+                                     ComputeFloat16GreaterOrEqual)
+    } else if (left == DT::BFLOAT16) {
+      ONNX_LIGHT_CPU_BIND_TYPED_BULK(std::uint16_t, std::uint16_t, std::uint8_t,
+                                     ComputeBfloat16GreaterOrEqual)
+    }
+    break;
+  case BinaryOperator::kLess:
+    ONNX_LIGHT_CPU_BIND_COMPARE_TYPES(ComputeLess)
+    if (left == DT::FLOAT16) {
+      ONNX_LIGHT_CPU_BIND_TYPED_BULK(std::uint16_t, std::uint16_t, std::uint8_t, ComputeFloat16Less)
+    } else if (left == DT::BFLOAT16) {
+      ONNX_LIGHT_CPU_BIND_TYPED_BULK(std::uint16_t, std::uint16_t, std::uint8_t,
+                                     ComputeBfloat16Less)
+    }
+    break;
+  case BinaryOperator::kLessOrEqual:
+    ONNX_LIGHT_CPU_BIND_COMPARE_TYPES(ComputeLessOrEqual)
+    if (left == DT::FLOAT16) {
+      ONNX_LIGHT_CPU_BIND_TYPED_BULK(std::uint16_t, std::uint16_t, std::uint8_t,
+                                     ComputeFloat16LessOrEqual)
+    } else if (left == DT::BFLOAT16) {
+      ONNX_LIGHT_CPU_BIND_TYPED_BULK(std::uint16_t, std::uint16_t, std::uint8_t,
+                                     ComputeBfloat16LessOrEqual)
+    }
+    break;
+  case BinaryOperator::kAnd:
+    ONNX_LIGHT_CPU_BIND_TYPED_BULK(std::uint8_t, std::uint8_t, std::uint8_t, ComputeAnd)
+    break;
+  case BinaryOperator::kOr:
+    ONNX_LIGHT_CPU_BIND_TYPED_BULK(std::uint8_t, std::uint8_t, std::uint8_t, ComputeOr)
+    break;
+  case BinaryOperator::kXor:
+    ONNX_LIGHT_CPU_BIND_TYPED_BULK(std::uint8_t, std::uint8_t, std::uint8_t, ComputeXor)
+    break;
+  case BinaryOperator::kBitwiseAnd:
+    ONNX_LIGHT_CPU_BIND_INTEGER_TYPES(ComputeBitwiseAnd)
+    break;
+  case BinaryOperator::kBitwiseOr:
+    ONNX_LIGHT_CPU_BIND_INTEGER_TYPES(ComputeBitwiseOr)
+    break;
+  case BinaryOperator::kBitwiseXor:
+    ONNX_LIGHT_CPU_BIND_INTEGER_TYPES(ComputeBitwiseXor)
+    break;
+  case BinaryOperator::kBitShift:
+#define ONNX_LIGHT_CPU_BIND_SHIFT_CASE(TYPE, CPP_TYPE)                                             \
+  case DT::TYPE:                                                                                   \
+    if (attributes.bitshift_direction == Attrs::BitShiftDirection::kLeft) {                        \
+      ONNX_LIGHT_CPU_BIND_TYPED_BULK(CPP_TYPE, CPP_TYPE, CPP_TYPE,                                 \
+                                     ComputeBitShiftUnchecked<CPP_TYPE, true>)                     \
+    } else {                                                                                       \
+      ONNX_LIGHT_CPU_BIND_TYPED_BULK(CPP_TYPE, CPP_TYPE, CPP_TYPE,                                 \
+                                     ComputeBitShiftUnchecked<CPP_TYPE, false>)                    \
+    }                                                                                              \
+    break;
+    switch (left) {
+      ONNX_LIGHT_CPU_BIND_SHIFT_CASE(UINT8, std::uint8_t)
+      ONNX_LIGHT_CPU_BIND_SHIFT_CASE(UINT16, std::uint16_t)
+      ONNX_LIGHT_CPU_BIND_SHIFT_CASE(UINT32, std::uint32_t)
+      ONNX_LIGHT_CPU_BIND_SHIFT_CASE(UINT64, std::uint64_t)
+    default:
+      break;
+    }
+#undef ONNX_LIGHT_CPU_BIND_SHIFT_CASE
+    break;
+  case BinaryOperator::kPRelu:
+    if (left == DT::FLOAT) {
+      ONNX_LIGHT_CPU_BIND_TYPED_BULK(float, float, float, ComputePRelu<float>)
+    } else if (left == DT::DOUBLE) {
+      ONNX_LIGHT_CPU_BIND_TYPED_BULK(double, double, double, ComputePRelu<double>)
+    } else {
+      ONNX_LIGHT_CPU_BIND_INTEGER_TYPES(ComputePRelu)
+    }
+    break;
+  default:
+    break;
+  }
+#undef ONNX_LIGHT_CPU_BIND_COMPARE_TYPES
+#undef ONNX_LIGHT_CPU_BIND_COMPARE_CASE
+#undef ONNX_LIGHT_CPU_BIND_INTEGER_TYPES
+#undef ONNX_LIGHT_CPU_BIND_SAME_TYPE_CASE
+#undef ONNX_LIGHT_CPU_BIND_TYPED_BULK
+}
+
 } // namespace
 
 BinaryKernelDescriptor::BinaryKernelDescriptor(std::string op_type, std::int64_t opset_version,
@@ -1211,6 +1628,7 @@ BinaryKernelDescriptor::BinaryKernelDescriptor(std::string op_type, std::int64_t
     if (signature.left == signature.right && signature.left == signature.output) {
       SelectBulk(manifest_.op, signature.left, adapter);
     }
+    SelectAdditionalBulk(manifest_.op, signature.left, signature.right, attributes_, adapter);
     adapters_.push_back(adapter);
   }
 }

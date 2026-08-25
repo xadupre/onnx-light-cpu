@@ -52,7 +52,7 @@ independent output range to a session worker, and that worker invokes the bulk
 SIMD loop for its range. Small inputs remain serial SIMD to avoid executor
 overhead.
 
-Binary kernels now register tuning ABI 1 under exact operator and left-input
+Binary kernels now register tuning ABI 2 under exact operator and left-input
 element-type keys with ``library="onnx_light_cpu"`` and
 ``implementation="broadcast_plan"``. The immutable per-session parameters are:
 
@@ -60,11 +60,21 @@ element-type keys with ``library="onnx_light_cpu"`` and
 * ``parallel.block_threshold_bytes`` (portable default: 1 MiB);
 * ``parallel.scalar_threshold_bytes`` (portable default: 256 KiB);
 * ``parallel.target_block_bytes`` (portable default: 1 MiB).
+* ``parallel.max_participants`` (portable default: 0, meaning the complete
+  effective session executor).
 
 The registry validates and resolves these parameters before execution. The hot
 path reads only the configured typed values; it performs no registry lookup,
-string lookup, allocation, or lock. All loop families may use the executor's
-full effective thread count when enough target-sized blocks exist.
+string lookup, allocation, or lock. The participant ceiling is applied to both
+flat and multidimensional schedules.
+
+A targeted 1,176-case pass covering ``Add``, ``Sub``, ``Mul``, ``Div``,
+``Mod``, ``Pow``, ``PRelu``, ``Equal``, ``Less``, ``And`` and
+``BitwiseAnd`` improved the aggregate median from ``0.394x`` to ``0.669x``
+ONNX Runtime. The fraction below parity fell from 50.8% to 37.5%.
+Comparison and bitwise median gains in onnx-light-cpu time were ``3.0x`` to
+``4.4x``. These figures remain diagnostic: repeated large arithmetic runs
+show enough host dispersion that they do not satisfy the final gate.
 
 Remaining bottlenecks
 ---------------------
@@ -72,9 +82,10 @@ Remaining bottlenecks
 True low-precision SIMD
 ~~~~~~~~~~~~~~~~~~~~~~~
 
-FP16/BF16 ``Add``, ``Sub``, and ``Mul`` currently use typed bulk loops, but
-they still widen and narrow individual values. ``Sub`` FP16 remained the only
-measured type with a median regression after the first pass. Add dedicated
+FP16/BF16 ``Add``, ``Sub``, ``Mul``, ``Div`` and ``PRelu`` now widen and
+narrow vectorized blocks through the shared half-conversion kernels for
+contiguous and scalar-broadcast loops. ``Mod`` and ``Pow`` use the same
+block-conversion approach for contiguous loops. Add dedicated
 AVX-512FP16, AVX-512BF16 where applicable, F16C/AVX2 conversion-vector, NEON
 FP16, and SVE/SVE2 implementations. Unsupported instruction sets must retain
 the portable bulk loop.
@@ -82,26 +93,26 @@ the portable bulk loop.
 Integer and predicate bulk coverage
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Only ``Add``, ``Sub``, and ``Mul`` gained typed integer bulk loops.
 ``Div``, ``Mod``, comparisons, logical operators, bitwise operators, shifts,
-and integer ``PRelu`` still rely on per-element type-erased callbacks in at
-least one important loop family.
-
-Add typed contiguous and scalar-broadcast loops for every supported signature.
-Integer ``Div``/``Mod`` and ``BitShift`` must validate invalid inputs once
-before entering an unchecked bulk loop rather than repeating validation in
-each element callback. Comparisons must emit canonical byte ``BOOL`` without
-materializing wider masks. Signed overflow behavior must remain bit-exact and
-free of C++ undefined behavior.
+and integer ``PRelu`` now have typed contiguous and scalar-broadcast loops for
+every same-type signature. Comparisons emit canonical byte ``BOOL``.
+Integer ``Div``/``Mod`` and ``BitShift`` validate the complete input first and
+then enter unchecked typed compute loops. The remaining work in this area is
+ISA-specific predicate packing and validation bulk loops; validation still
+uses the prepared strided traversal.
 
 Expensive arithmetic
 ~~~~~~~~~~~~~~~~~~~~
 
-``Pow``, floating ``Mod``, and mixed-type signatures need separate treatment
+FP32 ``Pow`` now stays in FP32 rather than promoting every operation to
+``long double``, and float/integer mixed signatures have typed bulk loops.
+The targeted ``Pow`` median improved from ``0.060x`` to ``0.440x``, but large
+cases remain below parity. ``Pow``, floating ``Mod``, and the remaining
+low-precision mixed-type signatures need separate treatment
 from bandwidth-bound arithmetic. Their compute cost may justify parallelism
 below the current byte thresholds, while integer exponent validation and
 mixed input widths change profitable block sizes. Calibration must determine
-whether tuning ABI 2 needs a right-input-type discriminator; ABI 1 deliberately
+whether a later tuning ABI needs a right-input-type discriminator; ABI 2 deliberately
 shares one profile across signatures with the same operator and left type.
 
 General broadcast traversal
@@ -161,8 +172,8 @@ callback must:
 Portable defaults remain available when no exact processor profile exists.
 Existing sessions retain their resolved immutable configuration when a later
 calibration publishes a new generation. Python and CLI inspection must show
-the exact key, source profile, four configured byte values, and effective
-session thread count.
+the exact key, source profile, four configured byte values, participant
+ceiling, and effective session thread count.
 
 Benchmark and acceptance matrix
 -------------------------------
@@ -201,20 +212,20 @@ Pull-request sequence
        participants, and separate preallocated/end-to-end timings. Results are
        grouped by operator, complete signature, loop family, and size.
      - Completed Binary roadmap
-     - In progress
+     - Completed
    * - Binary Perf PR02
      - Arithmetic and low-precision bulk kernels.
      - Dedicated FP16/BF16 SIMD and complete typed ``Add/Sub/Mul/Div/Mod``
        paths improve or retain every arithmetic priority group with exact
        invalid-input and overflow semantics.
      - PR01
-     - Planned
+     - Implemented; native half ISA paths remain
    * - Binary Perf PR03
      - Comparison, logical, bitwise, shift, and PRelu bulk kernels.
      - Every supported width has contiguous and scalar-broadcast bulk paths;
        comparisons emit canonical byte ``BOOL`` and no priority group regresses.
      - PR01
-     - Planned
+     - Implemented; predicate ISA paths remain
    * - Binary Perf PR04
      - Prepared broadcast specializations.
      - Priority rank 2-4 strided patterns avoid per-element type-erased calls
@@ -224,7 +235,7 @@ Pull-request sequence
      - Planned
    * - Binary Perf PR05
      - Processor calibration and persistence.
-     - Correctness-gated callbacks jointly tune all four exposed parameters;
+     - Correctness-gated callbacks jointly tune all five exposed parameters;
        cache lifecycle, overrides, inspection, and immutable-session behavior
        pass onnx-light integration tests.
      - PR01, PR04

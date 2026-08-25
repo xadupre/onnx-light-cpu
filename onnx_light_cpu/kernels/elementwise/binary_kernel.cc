@@ -32,6 +32,7 @@ constexpr const char *kBulkThresholdBytes = "parallel.bulk_threshold_bytes";
 constexpr const char *kBlockThresholdBytes = "parallel.block_threshold_bytes";
 constexpr const char *kScalarThresholdBytes = "parallel.scalar_threshold_bytes";
 constexpr const char *kTargetBlockBytes = "parallel.target_block_bytes";
+constexpr const char *kMaxParticipants = "parallel.max_participants";
 
 std::string KernelName(std::string_view op_type) {
   return std::string("onnx_light_cpu::") + std::string(op_type);
@@ -54,18 +55,22 @@ void ValidateTuning(const rt_ns::KernelTuningParameters &parameters) {
   if (parameters.Get<int64_t>(kTargetBlockBytes) == 0) {
     throw std::invalid_argument("Binary parallel.target_block_bytes must be positive.");
   }
+  if (parameters.Get<int64_t>(kMaxParticipants) < 0) {
+    throw std::invalid_argument("Binary parallel.max_participants must be non-negative.");
+  }
 }
 
 rt_ns::KernelTuningParameters MakeTuningDefaults(std::string_view op_type, int32_t element_type) {
-  return {MakeTuningKey(op_type, element_type),
-          {{kBulkThresholdBytes,
-            static_cast<int64_t>(kDefaultBinaryExecutionTuning.bulk_parallel_threshold_bytes)},
-           {kBlockThresholdBytes,
-            static_cast<int64_t>(kDefaultBinaryExecutionTuning.block_parallel_threshold_bytes)},
-           {kScalarThresholdBytes,
-            static_cast<int64_t>(kDefaultBinaryExecutionTuning.scalar_parallel_threshold_bytes)},
-           {kTargetBlockBytes,
-            static_cast<int64_t>(kDefaultBinaryExecutionTuning.target_block_bytes)}}};
+  return {
+      MakeTuningKey(op_type, element_type),
+      {{kBulkThresholdBytes,
+        static_cast<int64_t>(kDefaultBinaryExecutionTuning.bulk_parallel_threshold_bytes)},
+       {kBlockThresholdBytes,
+        static_cast<int64_t>(kDefaultBinaryExecutionTuning.block_parallel_threshold_bytes)},
+       {kScalarThresholdBytes,
+        static_cast<int64_t>(kDefaultBinaryExecutionTuning.scalar_parallel_threshold_bytes)},
+       {kTargetBlockBytes, static_cast<int64_t>(kDefaultBinaryExecutionTuning.target_block_bytes)},
+       {kMaxParticipants, int64_t{0}}}};
 }
 
 bool SupportsElementType(const BinaryManifestEntry &entry, int32_t element_type) {
@@ -134,6 +139,8 @@ void BinaryElementwiseKernel::Configure(const rt_ns::KernelTuningParameters &par
       static_cast<std::size_t>(parameters.Get<int64_t>(kBlockThresholdBytes)),
       static_cast<std::size_t>(parameters.Get<int64_t>(kScalarThresholdBytes)),
       static_cast<std::size_t>(parameters.Get<int64_t>(kTargetBlockBytes)),
+      parameters.Get<int64_t>(kMaxParticipants) == 0 ? std::numeric_limits<std::int64_t>::max()
+                                                     : parameters.Get<int64_t>(kMaxParticipants),
   };
 }
 
