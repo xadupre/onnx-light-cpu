@@ -6,6 +6,7 @@
 
 #include "onnx_light_cpu/impl/arm_simd_level.h"
 
+#include <algorithm>
 #include <cstddef>
 
 #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
@@ -56,6 +57,29 @@ ONNX_LIGHT_CPU_BIN_SCALAR(BinaryMulFloat64, double, *)
 ONNX_LIGHT_CPU_BIN_SCALAR(BinaryDivFloat64, double, /)
 
 #undef ONNX_LIGHT_CPU_BIN_SCALAR
+
+void BinaryPReluFloat32_Scalar(const float *left, const float *right, float *out,
+                               std::size_t count) {
+  for (std::size_t i = 0; i < count; ++i) {
+    out[i] = left[i] < 0.0f ? left[i] * right[i] : left[i];
+  }
+}
+
+void BinaryPReluFloat32Left_Scalar(float left, const float *right, float *out, std::size_t count) {
+  if (!(left < 0.0f)) {
+    std::fill_n(out, count, left);
+    return;
+  }
+  for (std::size_t i = 0; i < count; ++i) {
+    out[i] = left * right[i];
+  }
+}
+
+void BinaryPReluFloat32Right_Scalar(const float *left, float right, float *out, std::size_t count) {
+  for (std::size_t i = 0; i < count; ++i) {
+    out[i] = left[i] < 0.0f ? left[i] * right : left[i];
+  }
+}
 
 #if ONNX_LIGHT_CPU_BINARY_X86
 
@@ -218,6 +242,62 @@ ONNX_LIGHT_CPU_BIN_AVX2_F64(BinaryAddFloat64, _mm256_add_pd, +)
 ONNX_LIGHT_CPU_BIN_AVX2_F64(BinarySubFloat64, _mm256_sub_pd, -)
 ONNX_LIGHT_CPU_BIN_AVX2_F64(BinaryMulFloat64, _mm256_mul_pd, *)
 ONNX_LIGHT_CPU_BIN_AVX2_F64(BinaryDivFloat64, _mm256_div_pd, /)
+
+#define ONNX_LIGHT_CPU_PRELU_X86(SUFFIX, VECTOR, LANES, LOAD, STORE, SET1, ZERO, CMP, MUL, AND,    \
+                                 ANDNOT, OR)                                                       \
+  void BinaryPReluFloat32##SUFFIX(const float *left, const float *right, float *out,               \
+                                  std::size_t count) {                                             \
+    std::size_t i = 0;                                                                             \
+    const std::size_t aligned = count - count % LANES;                                             \
+    const VECTOR zero = ZERO();                                                                    \
+    for (; i < aligned; i += LANES) {                                                              \
+      const VECTOR x = LOAD(left + i);                                                             \
+      const VECTOR mask = CMP(x, zero);                                                            \
+      const VECTOR scaled = MUL(x, LOAD(right + i));                                               \
+      STORE(out + i, OR(AND(mask, scaled), ANDNOT(mask, x)));                                      \
+    }                                                                                              \
+    BinaryPReluFloat32_Scalar(left + i, right + i, out + i, count - i);                            \
+  }                                                                                                \
+  void BinaryPReluFloat32Left##SUFFIX(float left, const float *right, float *out,                  \
+                                      std::size_t count) {                                         \
+    if (!(left < 0.0f)) {                                                                          \
+      std::fill_n(out, count, left);                                                               \
+      return;                                                                                      \
+    }                                                                                              \
+    std::size_t i = 0;                                                                             \
+    const std::size_t aligned = count - count % LANES;                                             \
+    const VECTOR x = SET1(left);                                                                   \
+    for (; i < aligned; i += LANES) {                                                              \
+      STORE(out + i, MUL(x, LOAD(right + i)));                                                     \
+    }                                                                                              \
+    BinaryPReluFloat32Left_Scalar(left, right + i, out + i, count - i);                            \
+  }                                                                                                \
+  void BinaryPReluFloat32Right##SUFFIX(const float *left, float right, float *out,                 \
+                                       std::size_t count) {                                        \
+    std::size_t i = 0;                                                                             \
+    const std::size_t aligned = count - count % LANES;                                             \
+    const VECTOR zero = ZERO();                                                                    \
+    const VECTOR slope = SET1(right);                                                              \
+    for (; i < aligned; i += LANES) {                                                              \
+      const VECTOR x = LOAD(left + i);                                                             \
+      const VECTOR mask = CMP(x, zero);                                                            \
+      const VECTOR scaled = MUL(x, slope);                                                         \
+      STORE(out + i, OR(AND(mask, scaled), ANDNOT(mask, x)));                                      \
+    }                                                                                              \
+    BinaryPReluFloat32Right_Scalar(left + i, right, out + i, count - i);                           \
+  }
+
+__m128 CompareLessThan(__m128 left, __m128 right) { return _mm_cmplt_ps(left, right); }
+
+__m256 CompareLessThan(__m256 left, __m256 right) { return _mm256_cmp_ps(left, right, _CMP_LT_OQ); }
+
+ONNX_LIGHT_CPU_PRELU_X86(_SSE2, __m128, 4, _mm_loadu_ps, _mm_storeu_ps, _mm_set1_ps, _mm_setzero_ps,
+                         CompareLessThan, _mm_mul_ps, _mm_and_ps, _mm_andnot_ps, _mm_or_ps)
+ONNX_LIGHT_CPU_PRELU_X86(_AVX2, __m256, 8, _mm256_loadu_ps, _mm256_storeu_ps, _mm256_set1_ps,
+                         _mm256_setzero_ps, CompareLessThan, _mm256_mul_ps, _mm256_and_ps,
+                         _mm256_andnot_ps, _mm256_or_ps)
+
+#undef ONNX_LIGHT_CPU_PRELU_X86
 
 #undef ONNX_LIGHT_CPU_BIN_SSE2_F32
 #undef ONNX_LIGHT_CPU_BIN_SSE2_F64
@@ -465,5 +545,33 @@ ONNX_LIGHT_CPU_BIN_DISPATCH(BinaryAddFloat64, BinaryAddFloat64, double)
 ONNX_LIGHT_CPU_BIN_DISPATCH(BinarySubFloat64, BinarySubFloat64, double)
 ONNX_LIGHT_CPU_BIN_DISPATCH(BinaryMulFloat64, BinaryMulFloat64, double)
 ONNX_LIGHT_CPU_BIN_DISPATCH(BinaryDivFloat64, BinaryDivFloat64, double)
+
+void BinaryPReluFloat32Contiguous(const float *left, const float *right, float *out,
+                                  std::size_t count) {
+  using Fn = void (*)(const float *, const float *, float *, std::size_t);
+  static const Fn fn =
+      PickImpl<Fn>(&BinaryPReluFloat32_Scalar, ONNX_LIGHT_CPU_BIN_SSE2_PTR(BinaryPReluFloat32),
+                   ONNX_LIGHT_CPU_BIN_AVX2_PTR(BinaryPReluFloat32), nullptr,
+                   &BinaryPReluFloat32_Scalar, &BinaryPReluFloat32_Scalar);
+  fn(left, right, out, count);
+}
+
+void BinaryPReluFloat32LeftScalar(float left, const float *right, float *out, std::size_t count) {
+  using Fn = void (*)(float, const float *, float *, std::size_t);
+  static const Fn fn = PickImpl<Fn>(&BinaryPReluFloat32Left_Scalar,
+                                    ONNX_LIGHT_CPU_BIN_SSE2_LEFT_PTR(BinaryPReluFloat32),
+                                    ONNX_LIGHT_CPU_BIN_AVX2_LEFT_PTR(BinaryPReluFloat32), nullptr,
+                                    &BinaryPReluFloat32Left_Scalar, &BinaryPReluFloat32Left_Scalar);
+  fn(left, right, out, count);
+}
+
+void BinaryPReluFloat32RightScalar(const float *left, float right, float *out, std::size_t count) {
+  using Fn = void (*)(const float *, float, float *, std::size_t);
+  static const Fn fn = PickImpl<Fn>(
+      &BinaryPReluFloat32Right_Scalar, ONNX_LIGHT_CPU_BIN_SSE2_RIGHT_PTR(BinaryPReluFloat32),
+      ONNX_LIGHT_CPU_BIN_AVX2_RIGHT_PTR(BinaryPReluFloat32), nullptr,
+      &BinaryPReluFloat32Right_Scalar, &BinaryPReluFloat32Right_Scalar);
+  fn(left, right, out, count);
+}
 
 } // namespace onnx_light_cpu

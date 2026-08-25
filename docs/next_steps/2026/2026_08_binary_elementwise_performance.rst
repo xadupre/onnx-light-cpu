@@ -195,11 +195,34 @@ The benchmark matrix crosses:
 * portable scalar, available SIMD levels, portable tuning defaults, and exact
   calibrated profiles.
 
-Published comparisons use ONNX Runtime's normal CPU execution provider. Each
-row records the backend case name, operator, complete type signature, loop
-family, shapes, byte traffic model, selected tuning values, actual
-participants, SIMD level, affinity, warmups, raw samples, median, dispersion,
-and correctness tolerance.
+Published comparisons use ONNX Runtime's normal CPU execution provider. The
+tool publishes in-memory calibrated Binary profiles before creating benchmark
+sessions and records those calibration reports with the backend case name,
+operator, complete type signature, loop family, shapes, byte traffic model,
+SIMD level, affinity, warmups, raw samples, median, dispersion, and correctness
+tolerance. ONNX Runtime CPU signatures that are not implemented, currently the
+priority BF16 arithmetic and PRelu cases on the measured build, are reported as
+not comparable rather than silently dropped or substituted with FP32.
+
+The final implementation pass also replaced callback-per-element bulk loops
+for logical operators and FP32 PRelu with direct vectorizable/SIMD loops.
+FP32 Pow scalar exponents 0 through 5 use multiplication/copy/fill kernels
+instead of libm. At 65,536 elements on the development host this improved:
+
+* logical And by 4.1x to 12.5x in onnx-light-cpu time, reaching 1.46x to 2.62x
+  ONNX Runtime across the measured families;
+* the previously slow PRelu families by about 5x, while the explicit FP32 SIMD
+  contiguous and scalar paths reached 4.5x to 5.5x ONNX Runtime;
+* Pow right-scalar by 33x to 35x and integer-valued per-channel exponents to
+  about 9.75x ONNX Runtime.
+
+A complete 1,008-cell development-host pass found all comparable matrix cells
+and classified 280 BF16 cells as unsupported by ONNX Runtime CPU. Its aggregate
+median was 1.41x and every operator/type/loop-family group except contiguous
+FP32 Div (0.983x) reached a 1.0x median. The run did not pass the per-case or
+small-p90 gates: the shared 96-core host showed severe large-case executor
+dispersion. These results are diagnostic and do not replace the required
+pinned dedicated-machine acceptance run.
 
 Pull-request sequence
 ---------------------
@@ -253,6 +276,7 @@ Pull-request sequence
        below ``0.9x``, small p90 stays within 2%, and any residual runtime cost
        is assigned to a measured component rather than hidden by kernel timing.
      - PR05
-     - Planned
+     - Implemented; dedicated-machine acceptance pending
 
-Binary Perf PR06 completes this follow-up.
+Binary Perf PR06 implements the final gate; the follow-up closes only after a
+pinned dedicated-machine run satisfies it.

@@ -439,11 +439,13 @@ Run the final one-thread and physical-core matrix on a pinned dedicated machine:
 
 The JSON report preserves alternating raw samples and order, medians, p10/p90,
 interquartile dispersion, throughput, the selected loop family and ISA,
-submitted tasks, admitted workers, operation identity, both byte models, and
-the exact affinity, thread policies, package/compiler versions, CPU, OS, power
-governor, NUMA nodes, ISA flags, and git revision. ``--enforce`` exits nonzero
-unless the complete priority matrix is present, its median is at least
-``1.0x``, and every case is at least ``0.9x`` ONNX Runtime.
+operation identity, both byte models, in-memory calibration reports, and the
+exact affinity, thread policies, package/compiler versions, CPU, OS, power
+governor, NUMA nodes, ISA flags, and git revision. Unsupported ONNX Runtime CPU
+signatures are listed explicitly. ``--enforce`` exits nonzero unless every
+comparable priority cell is present, every operator/type/loop-family median is
+at least ``1.0x``, every case is at least ``0.9x``, and the small-tensor p90
+gate passes.
 
 Backend test corpus
 -------------------

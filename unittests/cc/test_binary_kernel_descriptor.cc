@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <bit>
+#include <cmath>
 #include <cstdint>
 #include <limits>
 #include <string>
@@ -161,6 +162,17 @@ TEST(BinaryKernelDescriptor, PowMixedTypesExecuteWithBaseOutputType) {
   pow.ResolveAdapter(BinaryDataType::FLOAT16, BinaryDataType::INT64, BinaryDataType::FLOAT16)
       .scalar(&half_negative_one, &large_odd_exponent, &half_parity_output);
   EXPECT_FLOAT_EQ(onnx_light_cpu::detail::Float16BitsToFloat(half_parity_output), -1.0f);
+}
+
+TEST(BinaryKernelDescriptor, PowIntegerFastPathPreservesFiniteBoundaryResults) {
+  const BinaryKernelDescriptor pow("Pow", 15, {});
+  const auto &adapter =
+      pow.ResolveAdapter(BinaryDataType::FLOAT, BinaryDataType::FLOAT, BinaryDataType::FLOAT);
+  const float input = 6981463572480.0f;
+  const float exponent = 3.0f;
+  float output = 0.0f;
+  adapter.bulk_right_scalar(&input, &exponent, &output, 1);
+  EXPECT_EQ(output, std::pow(input, exponent));
 }
 
 TEST(BinaryKernelDescriptor, IntegerPReluWrapsSignedMultiplication) {
