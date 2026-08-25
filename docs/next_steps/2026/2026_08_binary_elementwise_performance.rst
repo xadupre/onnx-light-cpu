@@ -162,18 +162,19 @@ compute loop.
 Calibration and persistence
 ---------------------------
 
-Register deterministic calibration callbacks for every priority key. A
-callback must:
+Deterministic calibration callbacks are registered for every Binary tuning
+key. Each callback jointly evaluates seven complete profiles spanning serial,
+coarse, balanced, fine-grained, compute-heavy and participant-limited
+schedules in addition to the portable profile. Calibration uses equal-shape,
+scalar-broadcast and prepared rank-4 cases and:
 
-#. create fixed inputs and caller-preallocated outputs for each relevant loop
-   family;
-#. compare every candidate against the forced-serial result before timing it;
-#. warm up each candidate and retain raw samples, median, and dispersion;
-#. jointly select thresholds and target block size;
-#. reject a candidate that improves throughput but regresses small-tensor p90
-   by more than 2%;
-#. obey explicit duration and memory limits;
-#. publish through onnx-light's atomic persistent tuning cache.
+* creates deterministic inputs and caller-preallocated outputs;
+* compares every candidate byte-for-byte against forced-serial output;
+* records repeated samples and scores candidates relative to serial execution;
+* jointly selects all four byte parameters and the participant ceiling;
+* rejects profiles that regress small-tensor p90 by more than 2%;
+* obeys explicit duration and cumulative live-memory limits;
+* publishes atomically through onnx-light's execution-specific registry.
 
 Portable defaults remain available when no exact processor profile exists.
 Existing sessions retain their resolved immutable configuration when a later
@@ -245,7 +246,7 @@ Pull-request sequence
        cache lifecycle, overrides, inspection, and immutable-session behavior
        pass onnx-light integration tests.
      - PR01, PR04
-     - Planned
+     - Implemented
    * - Binary Perf PR06
      - Final parity and runtime-overhead gate.
      - Every priority group reaches median ``1.0x`` ONNX Runtime, no case is
