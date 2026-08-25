@@ -374,6 +374,33 @@ TEST(GemmFloat32, PlannedGridCoversRowAndColumnPanels) {
   }
 }
 
+TEST(GemmFloat32, FusedPackingMatchesTransposedBAndBias) {
+  constexpr std::size_t M = 12;
+  constexpr std::size_t N = 2048;
+  constexpr std::size_t K = 64;
+  const auto A = RandomVector(M * K, 34);
+  const auto B = RandomVector(N * K, 35);
+  const auto C = RandomVector(M * N, 36);
+  const auto expected = ReferenceGemm<float>(false, true, M, N, K, 0.75f, A, B, 1.25f, &C);
+  std::vector<float> Y(M * N);
+  const onnx_light_cpu::GemmBlocking blocking{6, 1024, 64, 6, 16};
+  onnx_light_cpu::ExecutionExecutorView executor{
+      nullptr, 32,
+      [](void *, int64_t num_blocks, void *task_context, onnx_light_cpu::ExecutionBlockFn task) {
+        for (int64_t block = 0; block < num_blocks; ++block) {
+          task(task_context, block);
+        }
+      }};
+  onnx_light_cpu::ExecutionExecutorScope scope(&executor);
+
+  onnx_light_cpu::detail::GemmFloat32Planned<onnx_light_cpu::GemmAlgorithm::kGeneral>(
+      false, true, M, N, K, 0.75f, A.data(), B.data(), 1.25f, C.data(), Y.data(), &blocking);
+
+  for (std::size_t i = 0; i < M * N; ++i) {
+    EXPECT_NEAR(Y[i], expected[i], 2e-2f) << "i=" << i;
+  }
+}
+
 // Forces the six-row register tile that the AMD Zen AVX2+FMA profile selects
 // (Roadmap PR06.5) so the mr == 6 micro-kernel path is exercised for
 // correctness, including a row tail (M not a multiple of six) and a column tail.
@@ -918,6 +945,28 @@ struct ThreadedExecutor {
   }
 };
 
+TEST(GemmFloat32, RawLargeKSplitBoundsParticipants) {
+  constexpr std::size_t M = 32;
+  constexpr std::size_t N = 32;
+  constexpr std::size_t K = 16384;
+  ThreadedExecutor executor;
+  onnx_light_cpu::ExecutionExecutorView view{&executor, 64, &ThreadedExecutor::Run};
+  const std::vector<float> A(M * K, 1.0f);
+  const std::vector<float> B(K * N, 1.0f);
+  std::vector<float> Y(M * N);
+
+  {
+    onnx_light_cpu::ExecutionExecutorScope scope(&view);
+    onnx_light_cpu::GemmFloat32(false, false, M, N, K, 1.0f, A.data(), B.data(), 0.0f, nullptr,
+                                Y.data());
+  }
+
+  EXPECT_EQ(executor.maximum_blocks.load(std::memory_order_relaxed), 8u);
+  for (float value : Y) {
+    EXPECT_FLOAT_EQ(value, static_cast<float>(K));
+  }
+}
+
 // Runs the native FLOAT16 general driver (Roadmap PR07.3) with an injected
 // micro-kernel and compares ``alpha * op(A) @ B`` against the equivalent
 // widen-then-float32 reference. The driver, FLOAT16 A packing (including
@@ -949,7 +998,7 @@ void CheckGemmFp16NativeDriver(bool trans_a, std::size_t M, std::size_t N, std::
 
 } // namespace
 
-TEST(GemmFloat32, LargeBPanelPackingUsesExecutor) {
+TEST(GemmFloat32, LargeBPanelPackingFusesWithCompute) {
   constexpr std::size_t M = 16;
   constexpr std::size_t N = 1024;
   constexpr std::size_t K = 512;
@@ -971,7 +1020,7 @@ TEST(GemmFloat32, LargeBPanelPackingUsesExecutor) {
       EXPECT_NEAR(Y[i], expected[i], 2e-2f) << "trans_b=" << trans_b << " i=" << i;
     }
   }
-  EXPECT_GE(executor.dispatches.load(std::memory_order_relaxed), 4u);
+  EXPECT_EQ(executor.dispatches.load(std::memory_order_relaxed), 2u);
   EXPECT_GT(executor.maximum_active.load(std::memory_order_relaxed), 1u);
 }
 

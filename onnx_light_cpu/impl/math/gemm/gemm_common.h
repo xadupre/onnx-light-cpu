@@ -44,12 +44,15 @@ GemmAlgorithm SelectGemmAlgorithm(bool trans_a, bool trans_b, std::size_t m, std
                                   std::size_t k, std::size_t vector_lanes,
                                   std::size_t register_rows);
 
+inline constexpr std::size_t kSplitKTargetFmasPerParticipant = 2 * 1024 * 1024;
+
 GemmBlocking SelectGemmBlocking(std::size_t element_size, std::size_t vector_lanes,
                                 std::size_t register_rows);
 
 GemmBlocking ConstrainGemmBlockingForTasks(GemmBlocking blocking, std::size_t m, std::size_t n,
                                            std::size_t k, std::size_t thread_count,
-                                           std::size_t element_size = sizeof(float));
+                                           std::size_t element_size = sizeof(float),
+                                           std::size_t target_fmas_per_participant = 0);
 
 std::size_t SelectGemmParticipantCount(std::size_t m, std::size_t n, std::size_t k,
                                        std::size_t available_threads,

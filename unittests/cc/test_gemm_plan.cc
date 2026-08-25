@@ -98,11 +98,48 @@ TEST(GemmPlan, SelectsShapeSpecificAlgorithms) {
   const GemmPlan<float> skinny_m(GemmPlanOptions<float>{false, false, 1, 1024, 1024});
   const GemmPlan<float> skinny_n(GemmPlanOptions<float>{false, false, 128, 1, 1024});
   const GemmPlan<float> split_k(GemmPlanOptions<float>{false, false, 2, 2, 4096});
+  const GemmPlan<float> large_k(GemmPlanOptions<float>{false, false, 32, 32, 16384});
+  const GemmPlan<float> shorter_k(GemmPlanOptions<float>{false, false, 32, 32, 4096});
 
   EXPECT_EQ(general.algorithm(), GemmAlgorithm::kGeneral);
   EXPECT_EQ(skinny_m.algorithm(), GemmAlgorithm::kSkinnyM);
   EXPECT_EQ(skinny_n.algorithm(), GemmAlgorithm::kSkinnyN);
   EXPECT_EQ(split_k.algorithm(), GemmAlgorithm::kSplitK);
+  EXPECT_EQ(large_k.algorithm(), GemmAlgorithm::kSplitK);
+  EXPECT_EQ(shorter_k.algorithm(), GemmAlgorithm::kGeneral);
+}
+
+TEST(GemmPlan, LargeKSplitUsesReductionParallelism) {
+  onnx_light_cpu::ExecutionExecutorView executor;
+  executor.effective_threads = 8;
+  onnx_light_cpu::ExecutionExecutorScope scope(&executor);
+
+  const GemmPlan<float> plan(GemmPlanOptions<float>{false, false, 32, 32, 16384});
+
+  EXPECT_EQ(plan.algorithm(), GemmAlgorithm::kSplitK);
+  EXPECT_EQ(plan.useful_threads(), 8u);
+}
+
+TEST(GemmPlan, WideProjectionUsesSingleKBlock) {
+  const GemmPlan<float> plan(GemmPlanOptions<float>{false, false, 128, 3072, 768});
+
+  EXPECT_EQ(plan.algorithm(), GemmAlgorithm::kGeneral);
+  EXPECT_EQ(plan.blocking().kc, 768u);
+  EXPECT_EQ(plan.useful_threads(), 48u);
+}
+
+TEST(GemmHalfPlan, Float16SplitReportsSkinnyMParallelism) {
+  onnx_light_cpu::ExecutionExecutorView executor;
+  executor.effective_threads = 8;
+  onnx_light_cpu::ExecutionExecutorScope scope(&executor);
+
+  const GemmHalfPlan plan(GemmHalfPlanOptions{false, false, false, 2, 2, 16384});
+
+  EXPECT_EQ(plan.algorithm(), GemmAlgorithm::kSplitK);
+  if (onnx_light_cpu::DetectSimdLevel() >= onnx_light_cpu::SimdLevel::kAVX2 &&
+      onnx_light_cpu::CpuSupportsFma() && onnx_light_cpu::CpuSupportsF16C()) {
+    EXPECT_EQ(plan.useful_threads(), 1u);
+  }
 }
 
 TEST(GemmPlan, AppliesConfiguredBlockingAndParticipantLimit) {
@@ -262,7 +299,7 @@ TEST(GemmPlan, SelectsWorkLimitedParticipantCounts) {
 
   EXPECT_EQ(skinny_m.useful_threads(), 4u);
   EXPECT_EQ(square_512.useful_threads(), 16u);
-  EXPECT_EQ(transformer.useful_threads(), 36u);
+  EXPECT_EQ(transformer.useful_threads(), 48u);
 }
 
 TEST(GemmPlan, UsesExecutionTimeThreadsWhenConstructedWithoutExecutor) {

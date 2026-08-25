@@ -166,12 +166,13 @@ GemmBlocking SelectGemmBlocking(std::size_t element_size, std::size_t vector_lan
 
 GemmBlocking ConstrainGemmBlockingForTasks(GemmBlocking blocking, std::size_t m, std::size_t n,
                                            std::size_t k, std::size_t thread_count,
-                                           std::size_t element_size) {
+                                           std::size_t element_size,
+                                           std::size_t target_fmas_per_participant) {
   if (m == 0 || n == 0 || k == 0 || thread_count <= 1) {
     return blocking;
   }
 
-  thread_count = SelectGemmParticipantCount(m, n, k, thread_count);
+  thread_count = SelectGemmParticipantCount(m, n, k, thread_count, target_fmas_per_participant);
 
   const std::size_t max_row_tasks = CeilDiv(m, blocking.mr);
   const std::size_t scheduling_column_block = SelectGemmColumnBlock(blocking, element_size);

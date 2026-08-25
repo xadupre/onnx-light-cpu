@@ -1314,9 +1314,6 @@ void GemmFiveLoopRange(bool trans_a, bool trans_b, std::size_t M, std::size_t N,
                       : GemmAccumMode::kAccumulate;
     for (std::size_t first_panel = 0; first_panel < column_panels; first_panel += panels_per_wave) {
       const std::size_t wave_panels = std::min(panels_per_wave, column_panels - first_panel);
-      PackBPanelWave(trans_b, B, K, N, k0, kc, first_panel, wave_panels, blocking.nc, column_block,
-                     panel_capacity, bpack.data());
-
       const std::size_t wave_micro_panels = wave_panels * micro_panels_per_panel;
       const std::size_t task_count = row_panels * wave_micro_panels;
       const std::size_t first_n = first_panel * blocking.nc;
@@ -1329,6 +1326,61 @@ void GemmFiveLoopRange(bool trans_a, bool trans_b, std::size_t M, std::size_t N,
       const std::size_t equal_block_count = (task_count + equal_block_size - 1) / equal_block_size;
       const bool loses_participants = equal_block_count < requested_blocks;
       const std::size_t participant_count = loses_participants ? requested_blocks : task_count;
+
+      constexpr bool kCanFusePacking = std::is_same_v<T, SrcT>;
+      if (kCanFusePacking && row_panels <= 2 && wave_micro_panels >= 16) {
+        ExecuteRanges(
+            static_cast<std::int64_t>(participant_count),
+            cost * static_cast<double>(task_count) / static_cast<double>(participant_count),
+            [&](std::int64_t begin, std::int64_t end) {
+              AlignedBuffer<T> apack(row_capacity * kc);
+              AlignedBuffer<T> micro_b(kc * column_block);
+              std::size_t packed_row_panel = row_panels;
+              for (std::int64_t participant = begin; participant < end; ++participant) {
+                const std::size_t participant_index = static_cast<std::size_t>(participant);
+                const std::size_t tasks_per_participant = task_count / participant_count;
+                const std::size_t extra_tasks = task_count % participant_count;
+                const std::size_t first_task = participant_index * tasks_per_participant +
+                                               std::min(participant_index, extra_tasks);
+                const std::size_t last_task =
+                    first_task + tasks_per_participant +
+                    static_cast<std::size_t>(participant_index < extra_tasks);
+                for (std::size_t task = first_task; task < last_task; ++task) {
+                  const std::size_t row_panel = task / wave_micro_panels;
+                  const std::size_t wave_micro_panel = task % wave_micro_panels;
+                  const std::size_t wave_panel = wave_micro_panel / micro_panels_per_panel;
+                  const std::size_t micro_panel = wave_micro_panel % micro_panels_per_panel;
+                  const std::size_t m0 = row_panel * blocking.mc;
+                  const std::size_t panel_n0 = (first_panel + wave_panel) * blocking.nc;
+                  const std::size_t nb = std::min(blocking.nc, N - panel_n0);
+                  const std::size_t jr = micro_panel * column_block;
+                  if (jr >= nb) {
+                    continue;
+                  }
+                  const std::size_t micro_n0 = panel_n0 + jr;
+                  const std::size_t jb = std::min(column_block, nb - jr);
+                  const std::size_t mc = std::min(blocking.mc, M - m0);
+                  PackBMicroPanel(trans_b, B, K, N, k0, kc, micro_n0, jb, 0, column_block,
+                                  micro_b.data());
+                  if (packed_row_panel != row_panel) {
+                    PackAPanel(trans_a, A, M, K, m0, mc, k0, kc, apack.data());
+                    packed_row_panel = row_panel;
+                  }
+                  for (std::size_t ir = 0; ir < mc; ir += blocking.mr) {
+                    const std::size_t mr = std::min(blocking.mr, mc - ir);
+                    tile(kind, mr, jb, kc, alpha, beta, micro_b.data(), jb,
+                         has_bias ? C + (m0 + ir) * N + micro_n0 : nullptr, N,
+                         Y + (m0 + ir) * N + micro_n0, N, 0, mode, apack.data() + ir * kc);
+                  }
+                }
+              }
+            });
+        continue;
+      }
+
+      PackBPanelWave(trans_b, B, K, N, k0, kc, first_panel, wave_panels, blocking.nc, column_block,
+                     panel_capacity, bpack.data());
+
       // Equal-size blocks can admit fewer workers when task_count is just above
       // the requested block count. Balanced intervals are used only in that case.
       ExecuteRanges(static_cast<std::int64_t>(participant_count),
@@ -1395,7 +1447,8 @@ void GemmSplitK(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::s
   }
 
   const std::size_t part_count = std::min<std::size_t>(
-      detail::SelectGemmParticipantCount(M, N, K, static_cast<std::size_t>(ExecutionThreadCount())),
+      detail::SelectGemmParticipantCount(M, N, K, static_cast<std::size_t>(ExecutionThreadCount()),
+                                         detail::kSplitKTargetFmasPerParticipant),
       (K + blocking.kc - 1) / blocking.kc);
   if (part_count <= 1) {
     GemmFiveLoop(trans_a, trans_b, M, N, K, alpha, A, B, beta, C, Y, kind, tile, blocking);

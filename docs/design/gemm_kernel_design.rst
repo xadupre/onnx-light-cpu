@@ -156,6 +156,18 @@ bounded by the configured and available threads, so a large machine does not
 fragment small and medium matrices into cache-inefficient panels merely to
 occupy every worker.
 
+For wide projections with at most two row panels and at least sixteen column
+micro-panels, each compute task packs its own B micro-panel immediately before
+consuming it. This fuses packing and computation into one executor region,
+trading at most one duplicate B pack for the second row panel against an
+otherwise global packing barrier. Wide projections with ``M <= 256``,
+``N >= 2048``, and ``512 <= K <= 1024`` also use one complete K block; the
+packed A and B micro-panels remain L2-sized while the second K barrier
+disappears. These shapes budget one participant per 6 million FMAs instead of
+the general 8-million-FMA target, exposing enough row-panel work to use up to
+48 participants without fragmenting the panels as aggressively as a smaller
+global budget.
+
 The scheduler chooses the outermost useful dimension in this order:
 
 1. independent small batch items;
@@ -175,6 +187,11 @@ and combines their partial outputs:
 When a product is already running inside a parallel batch region, nested
 split-K is disabled: the product executes its M x N grid directly, avoiding
 serial split-K partitions, temporary partial buffers, and a redundant
+reduction. Very deep reductions (``K >= 8192``) may use split-K for outputs up
+to 1,024 elements when the M x N grid exposes too little parallelism. The plan
+budgets one partition per 2 million FMAs and bounds the count by both the
+available participants and the number of ``KC`` slices. This replaces repeated
+barriers between ``KC`` slices with one parallel region and one final
 reduction.
 
 Thread runtime and affinity
@@ -229,8 +246,8 @@ accumulators in a small ``M x nb`` buffer. The axpy is unit-stride for
 non-transposed ``B``, so it vectorizes over ``N`` -- the useful dimension when
 ``M`` is tiny -- while work is parallelized over cache-sized groups of column
 micro-panels. Its lower per-participant work budget reflects the memory-streaming
-kernel, while oversized runtime pools fall back to one participant instead of
-waking many idle spinning workers for a handful of panels.
+kernel. An oversized runtime pool falls back to serial execution when at most
+four useful panel groups would otherwise wake dozens of idle workers.
 
 ``detail::SelectGemmAlgorithm()`` (``gemm_plan.cc``) picks one of these five
 strategies from ``m``, ``n``, ``k``, ``trans_a``/``trans_b``, and the
