@@ -89,6 +89,7 @@ _REGISTERED_KERNELS = {
     "PRelu": "onnx_light_cpu::PRelu",
     "Pow": "onnx_light_cpu::Pow",
     "QLinearMatMul": "onnx_light_cpu::QLinearMatMul",
+    "RMSNormalization": "onnx_light_cpu::RMSNormalization",
     "Sub": "onnx_light_cpu::Sub",
     "Sum": "onnx_light_cpu::Sum",
     "SwiGLU": "onnx_light_cpu::SwiGLU",
@@ -250,7 +251,7 @@ class TestBackendCases:
             }:
                 assert isinstance(record.since_version, int)
                 assert record.since_version >= 1
-            elif record.op_type == "Attention":
+            elif record.op_type in {"Attention", "RMSNormalization"}:
                 assert record.since_version == 23
             elif record.op_type == "SwiGLU":
                 assert record.since_version == 28
