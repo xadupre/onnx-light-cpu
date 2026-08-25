@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 from tools.benchmark_tree_ensemble_parity import (
     BENCHMARK_GRID_CASES,
     PRIORITY_CASES,
@@ -5,6 +7,7 @@ from tools.benchmark_tree_ensemble_parity import (
     TREE_ENSEMBLE_GRID_FEATURES,
     TREE_ENSEMBLE_GRID_TREES,
     TreeEnsembleCase,
+    measure_one,
     render_comparison_table,
     repeat_count,
     summarize,
@@ -70,6 +73,23 @@ def test_repeat_count_is_bounded():
     assert repeat_count(case, 7, 31) == 31
     large = TreeEnsembleCase("large", "regression", "float32", 1024, 1024, 10, 1, 1)
     assert repeat_count(large, 7, 31) == 7
+
+
+def test_measure_one_stops_after_duration_excluding_warmup():
+    calls = []
+
+    def measured():
+        calls.append(None)
+
+    clock = iter((0, 1_100_000_000))
+    with patch(
+        "tools.benchmark_tree_ensemble_parity.time.perf_counter_ns",
+        side_effect=clock,
+    ):
+        samples = measure_one(measured, repeat=5, warmup=1, max_duration=1.0)
+
+    assert samples == [1.1]
+    assert len(calls) == 2
 
 
 def test_summary_enforces_both_tasks_dtypes_and_single_row_baseline():

@@ -57,6 +57,7 @@ created and first run after registration.
 # Report which SIMD level the current CPU provides. The mapping is ``0=None``,
 # ``1=SSE2``, ``2=AVX``, ``3=AVX2`` and ``4=AVX512``.
 
+import gc
 import os
 import time
 
@@ -132,14 +133,22 @@ def make_session(tensor_proto_dtype):
 # times (at least seven) and the median wall-clock time is retained.
 
 
-def measure(func, repeat, warmup=3):
+MAX_MEASURE_DURATION = 2.0
+
+
+def measure(func, repeat, warmup=3, max_duration=MAX_MEASURE_DURATION):
     for _ in range(warmup):
         func()
     timings = []
+    total_duration = 0.0
     for _ in range(repeat):
         start = time.perf_counter()
         func()
-        timings.append(time.perf_counter() - start)
+        duration = time.perf_counter() - start
+        timings.append(duration)
+        total_duration += duration
+        if total_duration >= max_duration:
+            break
     return float(np.median(timings))
 
 
@@ -256,6 +265,30 @@ for shape_label, _M, _N, _K, a32, b32, _, repeat in benchmark_inputs:
         f"| {elapsed * 1e6:10.2f} us"
     )
 
+for shape_label, _, _, _, a32, b32, inputs, _ in benchmark_inputs:
+    expected = a32 @ b32
+    if shape_label in ALONE_SHAPE_LABELS:
+        np.testing.assert_allclose(
+            alone_session.run(None, {"A": a32, "B": b32})[0],
+            expected,
+            rtol=1e-3,
+            atol=1e-3,
+        )
+    for label, session in sessions.items():
+        a, b = inputs[label]
+        tolerance = 1e-3 if label == "float32" else (5e-2 if label == "float16" else 5e-1)
+        output = session.run(None, {"A": a, "B": b})[0]
+        np.testing.assert_allclose(
+            output.astype(np.float32),
+            expected,
+            rtol=tolerance,
+            atol=tolerance,
+        )
+
+sessions = None
+alone_session = None
+gc.collect()
+
 ort_sessions = {
     label: onnxruntime.InferenceSession(
         make_model(DTYPES[label][0]).SerializeToString(),
@@ -277,31 +310,21 @@ for shape_label, _, _, _, _, _, inputs, repeat in benchmark_inputs:
             f"onnxruntime={elapsed * 1e6:10.2f} us"
         )
 
-for shape_label, _, _, _, a32, b32, inputs, _ in benchmark_inputs:
+for _shape_label, _, _, _, a32, b32, inputs, _ in benchmark_inputs:
     expected = a32 @ b32
-    if shape_label in ALONE_SHAPE_LABELS:
-        np.testing.assert_allclose(
-            alone_session.run(None, {"A": a32, "B": b32})[0],
-            expected,
-            rtol=1e-3,
-            atol=1e-3,
-        )
-    for label in DTYPES:
+    for label in ort_sessions:
         a, b = inputs[label]
-        tol = 1e-3 if label == "float32" else (5e-2 if label == "float16" else 5e-1)
-        output = sessions[label].run(None, {"A": a, "B": b})[0]
-        np.testing.assert_allclose(output.astype(np.float32), expected, rtol=tol, atol=tol)
-
-        if label in ort_sessions:
-            ort_output = ort_sessions[label].run(None, {"A": a, "B": b})[0]
-            # onnxruntime's ``float16`` Gemm accumulates in ``float16``, whereas
-            # onnx-light-cpu widens to ``float32`` (see the module docstring), so
-            # onnxruntime's rounding error grows with the reduction length ``K``
-            # and needs a wider tolerance than the onnx-light-cpu comparison.
-            ort_tol = 5e-1 if label == "float16" else tol
-            np.testing.assert_allclose(
-                ort_output.astype(np.float32), expected, rtol=ort_tol, atol=ort_tol
-            )
+        ort_output = ort_sessions[label].run(None, {"A": a, "B": b})[0]
+        # onnxruntime's ``float16`` Gemm accumulates in ``float16``, whereas
+        # onnx-light-cpu widens to ``float32`` (see the module docstring), so
+        # onnxruntime's rounding error grows with the reduction length ``K``.
+        ort_tolerance = 5e-1 if label == "float16" else 1e-3
+        np.testing.assert_allclose(
+            ort_output.astype(np.float32),
+            expected,
+            rtol=ort_tolerance,
+            atol=ort_tolerance,
+        )
 
 print(f"verified {accelerated_kernel_name} for every benchmark shape and dtype")
 set_kernel_usage_recording(True)

@@ -44,6 +44,7 @@ to 4096.
 # Report which SIMD level the current CPU provides. The mapping is ``0=None``,
 # ``1=SSE2``, ``2=AVX``, ``3=AVX2`` and ``4=AVX512``.
 
+import gc
 import os
 import time
 
@@ -115,14 +116,22 @@ model_bytes = model.SerializeToString()
 # shrinks as the matrices grow but never below seven.
 
 
-def measure(func, repeat, warmup=3):
+MAX_MEASURE_DURATION = 2.0
+
+
+def measure(func, repeat, warmup=3, max_duration=MAX_MEASURE_DURATION):
     for _ in range(warmup):
         func()
     timings = []
+    total_duration = 0.0
     for _ in range(repeat):
         start = time.perf_counter()
         func()
-        timings.append(time.perf_counter() - start)
+        duration = time.perf_counter() - start
+        timings.append(duration)
+        total_duration += duration
+        if total_duration >= max_duration:
+            break
     return float(np.median(timings))
 
 
@@ -214,6 +223,22 @@ for size, a, b in inputs():
     )
 
 for size, a, b in inputs():
+    expected = a @ b
+    np.testing.assert_allclose(run_light(a, b), expected, rtol=1e-2, atol=1e-2)
+    if size in alone_sizes:
+        np.testing.assert_allclose(
+            alone_session.run(None, {"A": a, "B": b})[0],
+            expected,
+            rtol=1e-2,
+            atol=1e-2,
+        )
+
+plot_light_results = light_session is not None
+light_session = None
+alone_session = None
+gc.collect()
+
+for size, a, b in inputs():
     repeat = max(7, min(100, 20_000_000 // (size * size * size)))
     rows_by_size[size][1] = measure(lambda a=a, b=b: a @ b, repeat)
 
@@ -222,19 +247,11 @@ for size, a, b in inputs():
     repeat = max(7, min(100, 20_000_000 // (size * size * size)))
     rows_by_size[size][3] = measure(lambda a=a, b=b: session.run(None, {"A": a, "B": b}), repeat)
 
-for size, a, b in inputs():
+for _size, a, b in inputs():
     expected = a @ b
-    np.testing.assert_allclose(run_light(a, b), expected, rtol=1e-2, atol=1e-2)
     np.testing.assert_allclose(
         session.run(None, {"A": a, "B": b})[0], expected, rtol=1e-2, atol=1e-2
     )
-    if size in alone_sizes:
-        np.testing.assert_allclose(
-            alone_session.run(None, {"A": a, "B": b})[0],
-            expected,
-            rtol=1e-2,
-            atol=1e-2,
-        )
 
 rows = [tuple(rows_by_size[size]) for size in size_grid]
 for size, numpy_time, cpu_time, ort_time in rows:
@@ -290,7 +307,7 @@ ax_time.plot(
     markeredgewidth=2,
     zorder=2,
 )
-if light_session is not None:
+if plot_light_results:
     ax_time.plot(
         sizes,
         cpu_times * 1e6,
@@ -326,7 +343,7 @@ ax_speedup.plot(
     markeredgewidth=2,
     zorder=2,
 )
-if light_session is not None:
+if plot_light_results:
     cpu_speedup = ort_times / cpu_times
     ax_speedup.plot(
         sizes,

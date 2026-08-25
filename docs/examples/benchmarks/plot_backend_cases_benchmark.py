@@ -30,6 +30,7 @@ way :mod:`unittests.python.test_kernels_e2e` verifies these backend cases.
 # is of interest.
 
 import argparse
+import gc
 import os
 import re
 import time
@@ -89,7 +90,7 @@ def _collect_cases():
     """
     register_backend_test_cases()
     max_per_case_group = (
-        2 if os.environ.get("UNITTEST_GOING", "0") in ("1", "true", "True") else None
+        10 if os.environ.get("UNITTEST_GOING", "0") in ("1", "true", "True") else None
     )
     cases = []
     for tc in collect_test_cases_by_name("^test_cpu_.*_benchmark$", mode=TestMode.BENCHMARK):
@@ -107,24 +108,33 @@ _no_cases_message = (
     f"no onnx-light-cpu BENCHMARK backend test cases were collected (filter={args.filter!r})"
 )
 assert _CASES, _no_cases_message
+print(f"-- collected {len(_CASES)} cases")
 
 # %%
 # Timing helper
 # -------------
 #
 # Each candidate gets three untimed warm-up calls, then is called ``repeat``
-# times and the median wall-clock time is retained. ``repeat`` shrinks as the
-# case's inputs grow but never below three.
+# times at most and the median wall-clock time is retained. Measurement stops
+# earlier when its cumulative duration reaches two seconds. ``repeat`` shrinks
+# as the case's inputs grow but never below three.
+
+MAX_MEASURE_DURATION = 2.0
 
 
-def measure(func, repeat, warmup=3):
+def measure(func, repeat, warmup=3, max_duration=MAX_MEASURE_DURATION):
     for _ in range(warmup):
         func()
     timings = []
+    total_duration = 0.0
     for _ in range(repeat):
         start = time.perf_counter()
         func()
-        timings.append(time.perf_counter() - start)
+        duration = time.perf_counter() - start
+        timings.append(duration)
+        total_duration += duration
+        if total_duration >= max_duration:
+            break
     return float(np.median(timings))
 
 
@@ -150,16 +160,6 @@ def _case_element_count(tc):
 print("-- register_kernels")
 register_kernels()
 
-# Both runtimes normally spin briefly before parking idle workers. Measuring
-# them consecutively in one process then lets the runtime measured first steal
-# CPU cycles from the runtime measured second. Disable spinning on both sides
-# so idle workers block immediately without changing either runtime's thread
-# count.
-_LIGHT_CPU_EXECUTION = {"spin_policy": "park_immediately"}
-_ORT_SESSION_OPTIONS = onnxruntime.SessionOptions()
-_ORT_SESSION_OPTIONS.add_session_config_entry("session.intra_op.allow_spinning", "0")
-_ORT_SESSION_OPTIONS.add_session_config_entry("session.inter_op.allow_spinning", "0")
-
 # Some onnx-light-cpu Attention benchmark cases (e.g. streaming past_key/
 # past_value without materializing present_key/present_value, or FLOAT16/
 # BFLOAT16 inputs) are rejected by ONNX Runtime -- either at session-creation
@@ -167,8 +167,12 @@ _ORT_SESSION_OPTIONS.add_session_config_entry("session.inter_op.allow_spinning",
 # fine. Rather than special-case those by name, any ONNX Runtime failure is
 # caught here and the case is still timed/reported for onnx-light-cpu alone,
 # with "n/a" standing in for the ONNX Runtime side.
-print("-- start benchmark")
-rows = []
+#
+# All onnx-light-cpu cases are measured before any ONNX Runtime session is
+# created. Both runtimes therefore keep their default spinning behavior
+# without leaving one runtime's live pool to perturb the other's measurements.
+print("-- benchmark onnx-light-cpu")
+measurements = []
 _progress = tqdm(_CASES, desc="benchmarking backend cases", unit="case")
 for tc in _progress:
     _progress.set_postfix_str(tc.name)
@@ -180,49 +184,79 @@ for tc in _progress:
     initializer_names = {init.name for init in tc.model.graph.initializer}
     input_names = [vi.name for vi in tc.model.graph.input if vi.name not in initializer_names]
 
-    light_session = ReferenceEvaluator(tc.model, cpu_execution=_LIGHT_CPU_EXECUTION)
-    ort_error = None
-    model_bytes = tc.model.SerializeToString()
-    try:
-        ort_session = onnxruntime.InferenceSession(
-            model_bytes, sess_options=_ORT_SESSION_OPTIONS, providers=["CPUExecutionProvider"]
-        )
-    except Exception as exc:  # noqa: BLE001 -- reported as "n/a", not raised.
-        ort_session = None
-        ort_error = str(exc).splitlines()[0][:40]
-
     ds = tc.data_sets[0]
     feeds = {name: _to_numpy(t) for name, t in zip(input_names, ds.inputs, strict=True)}
-    # The case's own rtol/atol are tuned for comparing against its shipped
-    # reference output (computed by the very same accelerated kernel used
-    # here); onnxruntime is an independent implementation whose reductions
-    # (e.g. Gemm's dot products, Exp/Log's large-input rounding) accumulate in
-    # a different order, so a looser, fixed tolerance is used instead.
-    rtol, atol = 1e-2, 1e-3
-
+    light_session = ReferenceEvaluator(tc.model)
     clear_used_kernel_names()
-    light_out = light_session.run(None, feeds)
+    light_out = [np.array(output, copy=True) for output in light_session.run(None, feeds)]
     assert expected_kernel in used_kernel_names(), used_kernel_names()
-    ort_time = None
-    if ort_session is not None:
-        try:
-            ort_out = ort_session.run(None, feeds)
-        except Exception as exc:  # noqa: BLE001 -- reported as "n/a", not raised.
-            ort_session = None
-            ort_error = str(exc).splitlines()[0][:40]
-
-    # Aim for roughly a constant total element budget per case (~2e7 elements
-    # processed across all repeats) so large cases are not re-run too many
-    # times, but always repeat at least 3 times and never more than 30.
     repeat = max(3, min(30, 20_000_000 // _case_element_count(tc)))
     light_time = measure(lambda feeds=feeds, sess=light_session: sess.run(None, feeds), repeat)
-    if ort_session is not None:
-        ort_time = measure(lambda feeds=feeds, sess=ort_session: sess.run(None, feeds), repeat)
     shapes = ",".join(
         "x".join(str(d) for d in array.shape) or "scalar" for array in feeds.values()
     )
     dtypes = ",".join(str(array.dtype) for array in feeds.values())
-    rows.append((op_type, tc.name, shapes, dtypes, light_time, ort_time, ort_error))
+    measurements.append(
+        {
+            "op_type": op_type,
+            "name": tc.name,
+            "model_bytes": tc.model.SerializeToString(),
+            "feeds": feeds,
+            "light_out": light_out,
+            "light_time": light_time,
+            "repeat": repeat,
+            "shapes": shapes,
+            "dtypes": dtypes,
+        }
+    )
+
+del light_session
+gc.collect()
+
+print("-- benchmark ONNX Runtime")
+rows = []
+_progress = tqdm(measurements, desc="benchmarking backend cases", unit="case")
+for measurement in _progress:
+    _progress.set_postfix_str(measurement["name"])
+    ort_error = None
+    ort_time = None
+    try:
+        ort_session = onnxruntime.InferenceSession(
+            measurement["model_bytes"], providers=["CPUExecutionProvider"]
+        )
+        ort_out = ort_session.run(None, measurement["feeds"])
+    except Exception as exc:  # noqa: BLE001 -- unsupported cases are reported as "n/a".
+        ort_error = str(exc).splitlines()[0][:40]
+    else:
+        # The case's own tolerance compares against output generated by the
+        # accelerated kernel. ONNX Runtime may accumulate reductions in a
+        # different order, so the cross-runtime check uses a fixed tolerance.
+        for actual, expected in zip(measurement["light_out"], ort_out, strict=True):
+            if expected.dtype == np.bool_:
+                np.testing.assert_array_equal(actual, expected)
+            else:
+                np.testing.assert_allclose(
+                    actual.astype(np.float64),
+                    expected.astype(np.float64),
+                    rtol=1e-2,
+                    atol=1e-3,
+                    equal_nan=True,
+                )
+        ort_time = measure(
+            lambda feeds=measurement["feeds"], sess=ort_session: sess.run(None, feeds),
+            measurement["repeat"],
+        )
+    rows.append(
+        (
+            measurement["op_type"],
+            measurement["name"],
+            measurement["shapes"],
+            measurement["dtypes"],
+            measurement["light_time"],
+            ort_time,
+            ort_error,
+        )
+    )
 
 # Print an aligned table once every case has run, since column widths (name,
 # input shapes, dtypes) are not known ahead of time. Cases ONNX Runtime could

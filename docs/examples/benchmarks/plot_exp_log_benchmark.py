@@ -8,6 +8,7 @@ Exp and Log CPU kernels. Each runtime is measured in a separate phase so that
 persistent worker pools do not perturb measurements of another candidate.
 """
 
+import gc
 import os
 import statistics
 import time
@@ -48,16 +49,24 @@ def make_ort_session(model, threads):
     )
 
 
-def measure(run, arrays, repeat):
+MAX_MEASURE_DURATION = 2.0
+
+
+def measure(run, arrays, repeat, max_duration=MAX_MEASURE_DURATION):
     """Measures median inference times for all arrays."""
     run(arrays[0])
     results = []
     for array in arrays:
         samples = []
+        total_duration = 0.0
         for _ in range(repeat):
             begin = time.perf_counter()
             run(array)
-            samples.append(time.perf_counter() - begin)
+            duration = time.perf_counter() - begin
+            samples.append(duration)
+            total_duration += duration
+            if total_duration >= max_duration:
+                break
         results.append(statistics.median(samples))
     return np.array(results)
 
@@ -91,35 +100,51 @@ cpu_sessions = {
     )
     for op_type, model in models.items()
 }
-ort_sessions = {op_type: make_ort_session(model, threads) for op_type, model in models.items()}
 
-all_times = {}
+all_times = {op_type: {} for op_type in models}
 for op_type, arrays in (("Exp", exp_arrays), ("Log", log_arrays)):
     builtin = builtin_sessions[op_type]
     cpu = cpu_sessions[op_type]
-    ort = ort_sessions[op_type]
-    expected = builtin.run(None, {"X": arrays[-1]})[0]
+    numpy_op = np.exp if op_type == "Exp" else np.log
+    expected = numpy_op(arrays[-1])
+    np.testing.assert_allclose(
+        builtin.run(None, {"X": arrays[-1]})[0], expected, rtol=2e-5, atol=2e-6
+    )
     np.testing.assert_allclose(
         cpu.run(None, {"X": arrays[-1]})[0], expected, rtol=2e-5, atol=2e-6
     )
-    np.testing.assert_allclose(
-        ort.run(None, {"X": arrays[-1]})[0], expected, rtol=2e-5, atol=2e-6
+    all_times[op_type]["onnx-light"] = measure(
+        lambda array, current=builtin: current.run(None, {"X": array}), arrays, repeat
     )
+    all_times[op_type]["onnx-light-cpu"] = measure(
+        lambda array, current=cpu: current.run(None, {"X": array}), arrays, repeat
+    )
+
+del builtin
+del cpu
+del builtin_sessions
+del cpu_sessions
+gc.collect()
+
+for op_type, arrays in (("Exp", exp_arrays), ("Log", log_arrays)):
     numpy_op = np.exp if op_type == "Exp" else np.log
+    all_times[op_type]["NumPy"] = measure(numpy_op, arrays, repeat)
 
-    all_times[op_type] = {
-        "onnx-light": measure(
-            lambda array, current=builtin: current.run(None, {"X": array}), arrays, repeat
-        ),
-        "onnx-light-cpu": measure(
-            lambda array, current=cpu: current.run(None, {"X": array}), arrays, repeat
-        ),
-        "ONNX Runtime": measure(
-            lambda array, current=ort: current.run(None, {"X": array}), arrays, repeat
-        ),
-        "NumPy": measure(numpy_op, arrays, repeat),
-    }
+ort_sessions = {op_type: make_ort_session(model, threads) for op_type, model in models.items()}
+for op_type, arrays in (("Exp", exp_arrays), ("Log", log_arrays)):
+    ort = ort_sessions[op_type]
+    numpy_op = np.exp if op_type == "Exp" else np.log
+    np.testing.assert_allclose(
+        ort.run(None, {"X": arrays[-1]})[0],
+        numpy_op(arrays[-1]),
+        rtol=2e-5,
+        atol=2e-6,
+    )
+    all_times[op_type]["ONNX Runtime"] = measure(
+        lambda array, current=ort: current.run(None, {"X": array}), arrays, repeat
+    )
 
+for op_type in ("Exp", "Log"):
     print(f"\n{op_type}:")
     for size, numpy_time, light_time, cpu_time, ort_time in zip(
         sizes,
