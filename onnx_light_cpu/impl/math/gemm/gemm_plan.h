@@ -87,9 +87,9 @@ private:
   T alpha_;
   T beta_;
   GemmAlgorithm algorithm_;
+  std::size_t participant_limit_;
   GemmBlocking blocking_;
   std::size_t useful_threads_;
-  std::size_t maximum_participants_;
   bool has_constant_b_;
   std::vector<T> constant_b_;
   KernelFn kernel_;
@@ -150,10 +150,10 @@ private:
   std::size_t k_;
   float alpha_;
   GemmAlgorithm algorithm_;
+  std::size_t participant_limit_;
   GemmBlocking blocking_;
   GemmBlocking compact_blocking_;
   std::size_t useful_threads_;
-  std::size_t maximum_participants_;
   KernelFn kernel_;
 };
 

@@ -1363,7 +1363,8 @@ void GemmSplitK(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::s
   }
 
   const std::size_t part_count = std::min<std::size_t>(
-      static_cast<std::size_t>(ExecutionThreadCount()), (K + blocking.kc - 1) / blocking.kc);
+      detail::SelectGemmParticipantCount(M, N, K, static_cast<std::size_t>(ExecutionThreadCount())),
+      (K + blocking.kc - 1) / blocking.kc);
   if (part_count <= 1) {
     GemmFiveLoop(trans_a, trans_b, M, N, K, alpha, A, B, beta, C, Y, kind, tile, blocking);
     return;
@@ -1538,7 +1539,7 @@ void GemmFloat32Planned(bool trans_a, bool trans_b, std::size_t M, std::size_t N
   static const GemmBlocking default_blocking = SelectGemmBlocking(
       sizeof(float), GemmVectorLanes<float>(default_kind), GemmRegisterRows(default_kind));
   const GemmBlocking selected =
-      ConstrainGemmBlockingForTasks(blocking == nullptr ? default_blocking : *blocking, M, N,
+      ConstrainGemmBlockingForTasks(blocking == nullptr ? default_blocking : *blocking, M, N, K,
                                     static_cast<std::size_t>(ExecutionThreadCount()));
   GemmImpl<Algorithm, float>(trans_a, trans_b, M, N, K, alpha, A, B, beta, C, Y,
                              SelectGemmKernelKind<float>(), tile, selected);
@@ -1560,7 +1561,7 @@ void GemmFloat64Planned(bool trans_a, bool trans_b, std::size_t M, std::size_t N
   static const GemmBlocking default_blocking = SelectGemmBlocking(
       sizeof(double), GemmVectorLanes<double>(default_kind), GemmRegisterRows(default_kind));
   const GemmBlocking selected =
-      ConstrainGemmBlockingForTasks(blocking == nullptr ? default_blocking : *blocking, M, N,
+      ConstrainGemmBlockingForTasks(blocking == nullptr ? default_blocking : *blocking, M, N, K,
                                     static_cast<std::size_t>(ExecutionThreadCount()));
   GemmImpl<Algorithm, double>(trans_a, trans_b, M, N, K, alpha, A, B, beta, C, Y,
                               SelectGemmKernelKind<double>(), tile, selected);
@@ -1606,10 +1607,10 @@ void GemmHalfPlanned(bool is_bfloat16, bool trans_a, bool trans_b, std::size_t M
   static const GemmBlocking default_compact_blocking = SelectGemmBlocking(
       sizeof(std::uint16_t), GemmVectorLanes<float>(default_kind), GemmRegisterRows(default_kind));
   const GemmBlocking selected =
-      ConstrainGemmBlockingForTasks(blocking == nullptr ? default_blocking : *blocking, M, N,
+      ConstrainGemmBlockingForTasks(blocking == nullptr ? default_blocking : *blocking, M, N, K,
                                     static_cast<std::size_t>(ExecutionThreadCount()));
   const GemmBlocking compact_selected = ConstrainGemmBlockingForTasks(
-      compact_blocking == nullptr ? default_compact_blocking : *compact_blocking, M, N,
+      compact_blocking == nullptr ? default_compact_blocking : *compact_blocking, M, N, K,
       static_cast<std::size_t>(ExecutionThreadCount()));
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
   static const bool use_avx2 = DetectSimdLevel() >= SimdLevel::kAVX2 && CpuSupportsFma();
@@ -1845,7 +1846,7 @@ void GemmFloat8PlannedTyped(bool trans_a, bool trans_b, std::size_t M, std::size
   static const GemmBlocking default_blocking = SelectGemmBlocking(
       sizeof(float), GemmVectorLanes<float>(default_kind), GemmRegisterRows(default_kind));
   const GemmBlocking selected =
-      ConstrainGemmBlockingForTasks(blocking == nullptr ? default_blocking : *blocking, M, N,
+      ConstrainGemmBlockingForTasks(blocking == nullptr ? default_blocking : *blocking, M, N, K,
                                     static_cast<std::size_t>(ExecutionThreadCount()));
   const auto *a = reinterpret_cast<const Float8Source<Format> *>(A);
   const auto *b = reinterpret_cast<const Float8Source<Format> *>(B);

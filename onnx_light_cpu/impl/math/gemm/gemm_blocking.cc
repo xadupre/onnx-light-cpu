@@ -3,9 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "onnx_light_cpu/impl/cpu_cache_topology.h"
+#include "onnx_light_cpu/impl/execution.h"
 #include "onnx_light_cpu/impl/math/gemm/gemm_common.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <limits>
 
@@ -23,6 +25,8 @@
 namespace onnx_light_cpu::detail {
 
 namespace {
+
+constexpr std::size_t kTargetFmasPerSchedulingTask = 16 * 1024 * 1024;
 
 // Portable defaults used whenever the reusable cache topology (see
 // cpu_cache_topology.h) reports no detected data or unified cache at a
@@ -157,10 +161,12 @@ GemmBlocking SelectGemmBlocking(std::size_t element_size, std::size_t vector_lan
 }
 
 GemmBlocking ConstrainGemmBlockingForTasks(GemmBlocking blocking, std::size_t m, std::size_t n,
-                                           std::size_t thread_count) {
-  if (m == 0 || n == 0 || thread_count <= 1) {
+                                           std::size_t k, std::size_t thread_count) {
+  if (m == 0 || n == 0 || k == 0 || thread_count <= 1) {
     return blocking;
   }
+
+  thread_count = SelectGemmParticipantCount(m, n, k, thread_count);
 
   const std::size_t max_row_tasks = CeilDiv(m, blocking.mr);
   const std::size_t max_column_tasks = CeilDiv(n, blocking.nr);
@@ -186,6 +192,25 @@ GemmBlocking ConstrainGemmBlockingForTasks(GemmBlocking blocking, std::size_t m,
     blocking.nc = std::max(blocking.nr, AlignUp(CeilDiv(n, desired_column_tasks), blocking.nr));
   }
   return blocking;
+}
+
+std::size_t SelectGemmParticipantCount(std::size_t m, std::size_t n, std::size_t k,
+                                       std::size_t available_threads) {
+  if (m == 0 || n == 0 || available_threads <= 1) {
+    return 1;
+  }
+  const long double total_work =
+      k == 0
+          ? static_cast<long double>(m) * static_cast<long double>(n)
+          : static_cast<long double>(m) * static_cast<long double>(n) * static_cast<long double>(k);
+  const std::size_t target_work =
+      k == 0 ? static_cast<std::size_t>(kExecutionGrainSize) : kTargetFmasPerSchedulingTask;
+  const long double work_tasks = std::ceil(total_work / static_cast<long double>(target_work));
+  const std::size_t work_limited_threads =
+      work_tasks >= static_cast<long double>(std::numeric_limits<std::size_t>::max())
+          ? available_threads
+          : std::max<std::size_t>(1, static_cast<std::size_t>(work_tasks));
+  return std::min(available_threads, work_limited_threads);
 }
 
 std::size_t SelectGemmColumnBlock(const GemmBlocking &blocking, std::size_t element_size) {

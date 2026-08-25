@@ -149,8 +149,11 @@ For every K chunk, ``B0`` and ``B1`` are each packed once before the first
 wave. Their packed buffers remain read-only while the six tasks reuse them.
 Each task packs the required A row panel and accumulates into its own zone of
 ``Y``. Shape-aware constraints reduce cache-derived ``MC`` and ``NC`` only
-when the original values would expose fewer useful tasks than available
-threads.
+when the original values would expose fewer useful tasks than the work can
+amortize. The prepared plan budgets one participant per 16 million FMAs,
+bounded by the configured and available threads, so a large machine does not
+fragment small and medium matrices into cache-inefficient panels merely to
+occupy every worker.
 
 The scheduler chooses the outermost useful dimension in this order:
 
