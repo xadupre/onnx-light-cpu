@@ -15,6 +15,7 @@ extensions = [
     "sphinx_copybutton",
     "sphinxcontrib.jquery",
     "sphinx_datatables",
+    "sphinx_design",
     "sphinx_gallery.gen_gallery",
     "sphinx_reredirects",
     "kernel_pages",

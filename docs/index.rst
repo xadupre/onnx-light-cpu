@@ -19,6 +19,57 @@ optimized kernel when evaluated through a ``ReferenceEvaluator``. See
 gallery for performance comparisons against other back-ends, and the
 :ref:`processor-performance-gallery` for a profile of the current host.
 
+Registering the optimized kernels
+---------------------------------
+
+Registration installs every shipped ``onnx-light-cpu`` kernel into
+``onnx-light``'s shared CPU dispatch table. It is process-wide, so call it once
+before creating the evaluators or runtime sessions that should use the
+accelerated implementations.
+
+.. tab-set::
+
+   .. tab-item:: Python
+
+      Build with the ``onnx-light`` integration enabled, then call
+      ``onnx_light_cpu.register_kernels()`` before constructing the evaluator:
+
+      .. code-block:: python
+
+         from onnx_light.onnx.reference import ReferenceEvaluator
+         from onnx_light_cpu import register_kernels
+
+         register_kernels()
+         session = ReferenceEvaluator(model)
+         outputs = session.run(None, feeds)
+
+      The Python entry point is available in builds configured with
+      ``ONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON``.
+
+   .. tab-item:: C++
+
+      Link ``onnx_light_cpu::lib_onnx_light_cpu_kernels`` and register the
+      kernels before constructing an ``onnx-light`` runtime session:
+
+      .. code-block:: cpp
+
+         #include <onnx_light_cpu/kernels/register_kernels.h>
+
+         int main() {
+           onnx_light_cpu::RegisterAllKernels();
+
+           // RuntimeSession and ReferenceEvaluator now resolve supported
+           // CPU operators to the onnx-light-cpu implementations.
+         }
+
+      The native integration is built with
+      ``-DONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON``.
+
+Both entry points update the same shared C++ ``KernelDispatchTable``. See
+:doc:`design/registering_kernels` for per-session overrides, kernel-usage
+inspection, custom registrations, and troubleshooting when two builds link
+different copies of ``lib_onnx_core``.
+
 .. toctree::
    :maxdepth: 1
    :caption: Contents
