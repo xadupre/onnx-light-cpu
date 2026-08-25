@@ -90,7 +90,7 @@ def _collect_cases():
     """
     register_backend_test_cases()
     max_per_case_group = (
-        2 if os.environ.get("UNITTEST_GOING", "0") in ("1", "true", "True") else None
+        10 if os.environ.get("UNITTEST_GOING", "0") in ("1", "true", "True") else None
     )
     cases = []
     for tc in collect_test_cases_by_name("^test_cpu_.*_benchmark$", mode=TestMode.BENCHMARK):
@@ -108,6 +108,7 @@ _no_cases_message = (
     f"no onnx-light-cpu BENCHMARK backend test cases were collected (filter={args.filter!r})"
 )
 assert _CASES, _no_cases_message
+print(f"-- collected {len(_CASES)} cases")
 
 # %%
 # Timing helper

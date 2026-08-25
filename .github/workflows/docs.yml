@@ -79,4 +79,5 @@ jobs:
       - name: Build documentation
         env:
           PYTHONPATH: ${{ github.workspace }}
+          UNITTEST_GOING: 1
         run: sphinx-build -W -b html docs dist/html
