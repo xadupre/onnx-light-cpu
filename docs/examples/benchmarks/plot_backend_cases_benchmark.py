@@ -90,7 +90,7 @@ def _collect_cases():
     """
     register_backend_test_cases()
     max_per_case_group = (
-        10 if os.environ.get("UNITTEST_GOING", "0") in ("1", "true", "True") else None
+        10 if os.environ.get("UNITTEST_GOING", "0") in ("1", "true", "True") else 1000
     )
     cases = []
     for tc in collect_test_cases_by_name("^test_cpu_.*_benchmark$", mode=TestMode.BENCHMARK):

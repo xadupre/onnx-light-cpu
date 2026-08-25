@@ -5,6 +5,10 @@ Binary Elementwise and Broadcasting Performance Roadmap
 
 **complete** (Binary PR08 correctness and reproducible parity gate)
 
+Remaining performance work is tracked separately in
+:doc:`Binary Elementwise Performance Follow-up
+<2026_08_binary_elementwise_performance>`.
+
 The generated backend corpus covers every manifest signature and the fixed
 priority shapes. ``tools/benchmark_binary_parity.py`` validates each timed case
 against ONNX Runtime and retains the raw samples, execution diagnostics, byte
@@ -303,6 +307,16 @@ Thresholds should depend on element size, operation cost, loop family, and
 hardware. ``Pow`` may benefit from threads much earlier than ``Add`` because it
 is compute-bound.
 
+Every exact Binary operator/input-type tuning key uses
+``library="onnx_light_cpu"``, ``implementation="broadcast_plan"`` and tuning
+ABI 1. Four non-negative byte parameters are exposed through onnx-light's
+kernel tuning registry (``parallel.target_block_bytes`` must be positive):
+
+* ``parallel.bulk_threshold_bytes`` (portable default: 1 MiB);
+* ``parallel.block_threshold_bytes`` (portable default: 1 MiB);
+* ``parallel.scalar_threshold_bytes`` (portable default: 256 KiB);
+* ``parallel.target_block_bytes`` (portable default: 1 MiB).
+
 Binary PR03 measures byte thresholds from ``0``, ``4 KiB``, ``16 KiB``,
 ``64 KiB``, ``256 KiB`` and ``1 MiB`` for every priority
 operation/loop-family/type group. It selects the smallest threshold whose
@@ -494,9 +508,9 @@ Remaining pull-request sequence
    * - Binary PR02
      - FP32/FP64 arithmetic SIMD.
      - ``Add``, ``Sub``, ``Mul``, and ``Div`` provide contiguous, left/right
-     scalar, SSE2/AVX2/AVX-512, NEON, and SVE/SVE2 FP32/FP64 kernels.
-     ``Add``, ``Sub``, and ``Mul`` also provide bulk integer and half-precision
-     loops with exact operand order, special values, and tails.
+       scalar, SSE2/AVX2/AVX-512, NEON, and SVE/SVE2 FP32/FP64 kernels.
+       ``Add``, ``Sub``, and ``Mul`` also provide bulk integer and half-precision
+       loops with exact operand order, special values, and tails.
      - PR01
      - Pending
    * - Binary PR03

@@ -46,4 +46,15 @@ inline constexpr std::size_t kBinaryScalarParallelThresholdBytes = 256 * 1024;
 
 inline constexpr std::size_t kBinaryTargetBlockBytes = 1024 * 1024;
 
+struct BinaryExecutionTuning {
+  std::size_t bulk_parallel_threshold_bytes = kBinaryBulkParallelThresholdBytes;
+  std::size_t block_parallel_threshold_bytes = kBinaryBlockParallelThresholdBytes;
+  std::size_t scalar_parallel_threshold_bytes = kBinaryScalarParallelThresholdBytes;
+  std::size_t target_block_bytes = kBinaryTargetBlockBytes;
+
+  bool operator==(const BinaryExecutionTuning &) const = default;
+};
+
+inline constexpr BinaryExecutionTuning kDefaultBinaryExecutionTuning{};
+
 } // namespace onnx_light_cpu

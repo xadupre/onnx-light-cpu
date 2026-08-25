@@ -25,6 +25,7 @@ roadmap is not implementation-ready and no implementation is active.
     2026/2026_08_conv
     2026/2026_08_unary_elementwise
     2026/2026_08_binary_elementwise
+    2026/2026_08_binary_elementwise_performance
     2026/2026_08_elementwise_kernel_tuning
     2026/2026_08_tree_ensemble
     2026/2026_08_svm
@@ -76,6 +77,14 @@ roadmap is not implementation-ready and no implementation is active.
       - Start the generated schema/type manifest and lazy backend corpus, then
         add the prepared SIMD broadcast engine and bounded fusion.
       - Generic rank-aware offset computation is too expensive per element.
+    * - In progress
+      - :doc:`Binary elementwise performance
+        <2026/2026_08_binary_elementwise_performance>`
+      - Complete low-precision and predicate bulk kernels, specialize priority
+        broadcasts, calibrate the exposed scheduling parameters, and close the
+        large-tensor parity gap.
+      - The first tuning pass reaches a ``1.533x`` median on ``Sub``, but FP16
+        and million-element cases remain below the final parity gate.
     * - Discussed
       - :doc:`Processor-aware tuning <2026/2026_08_elementwise_kernel_tuning>`
       - Calibrate and persist processor-specific elementwise thresholds.
