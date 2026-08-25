@@ -186,11 +186,11 @@ for tc in _progress:
     _progress.set_postfix_str(tc.name)
     op_type = tc.model.graph.node[0].op_type
     expected_kernel = f"onnx_light_cpu::{op_type}"
-    # Some Gemm benchmark cases turn "B" into a graph initializer to exercise
-    # the constant-B code path; its value is baked into the model rather than
-    # fed at run time, so it must be excluded from the runtime feeds below.
-    initializer_names = {init.name for init in tc.model.graph.initializer}
-    input_names = [vi.name for vi in tc.model.graph.input if vi.name not in initializer_names]
+    if tc.model.graph.initializer:
+        raise AssertionError(
+            f"{tc.name} contains an initializer; backend benchmarks must time runtime inputs"
+        )
+    input_names = [vi.name for vi in tc.model.graph.input]
 
     ds = tc.data_sets[0]
     feeds = {name: _to_numpy(t) for name, t in zip(input_names, ds.inputs, strict=True)}
@@ -344,6 +344,9 @@ ax.barh(positions, speedups, color=colors)
 ax.axvline(1.0, color="grey", linewidth=0.8, linestyle=":")
 ax.set_xscale("log")
 ax.set_yticks(positions, labels, fontsize=7)
+for tick_label, speedup in zip(ax.get_yticklabels(), speedups, strict=True):
+    if speedup <= 0.5:
+        tick_label.set_color("red")
 ax.set_xlabel("speed-up vs onnxruntime")
 ax.set_title("onnx-light-cpu speed-up over onnxruntime on backend cases")
 

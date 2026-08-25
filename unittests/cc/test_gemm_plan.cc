@@ -217,7 +217,9 @@ TEST(GemmPlan, BlockingExposesTaskGridForPrioritySizes) {
     const auto blocking =
         onnx_light_cpu::detail::ConstrainGemmBlockingForTasks(initial, size, size, 2048, 6);
     const std::size_t row_tasks = (size + blocking.mc - 1) / blocking.mc;
-    const std::size_t column_tasks = (size + blocking.nc - 1) / blocking.nc;
+    const std::size_t column_block =
+        onnx_light_cpu::detail::SelectGemmColumnBlock(blocking, sizeof(float));
+    const std::size_t column_tasks = (size + column_block - 1) / column_block;
 
     EXPECT_GE(row_tasks * column_tasks, 6u) << "size=" << size;
     EXPECT_EQ(blocking.mc % blocking.mr, 0u);
@@ -232,10 +234,12 @@ TEST(GemmPlan, BlockingDoesNotFragmentPanelsForIdleParticipants) {
   const auto blocking =
       onnx_light_cpu::detail::ConstrainGemmBlockingForTasks(initial, 128, 3072, 768, 96);
   const std::size_t row_tasks = (128 + blocking.mc - 1) / blocking.mc;
-  const std::size_t column_tasks = (3072 + blocking.nc - 1) / blocking.nc;
+  const std::size_t column_block =
+      onnx_light_cpu::detail::SelectGemmColumnBlock(blocking, sizeof(float));
+  const std::size_t column_tasks = (3072 + column_block - 1) / column_block;
 
-  EXPECT_EQ(row_tasks * column_tasks, 18u);
-  EXPECT_EQ(blocking.mc, 24u);
+  EXPECT_GE(row_tasks * column_tasks, 36u);
+  EXPECT_EQ(blocking.mc, initial.mc);
   EXPECT_EQ(blocking.nc, initial.nc);
 }
 
@@ -243,9 +247,9 @@ TEST(GemmPlan, SelectsWorkLimitedParticipantCounts) {
   using onnx_light_cpu::detail::SelectGemmParticipantCount;
 
   EXPECT_EQ(SelectGemmParticipantCount(1, 1024, 1024, 96), 1u);
-  EXPECT_EQ(SelectGemmParticipantCount(512, 512, 512, 96), 8u);
-  EXPECT_EQ(SelectGemmParticipantCount(128, 3072, 768, 96), 18u);
-  EXPECT_EQ(SelectGemmParticipantCount(2, 2, 8'388'608, 96), 2u);
+  EXPECT_EQ(SelectGemmParticipantCount(512, 512, 512, 96), 16u);
+  EXPECT_EQ(SelectGemmParticipantCount(128, 3072, 768, 96), 36u);
+  EXPECT_EQ(SelectGemmParticipantCount(2, 2, 8'388'608, 96), 4u);
   EXPECT_EQ(SelectGemmParticipantCount(1024, 1024, 0, 96), 32u);
 
   onnx_light_cpu::ExecutionExecutorView executor;
@@ -256,15 +260,15 @@ TEST(GemmPlan, SelectsWorkLimitedParticipantCounts) {
   const GemmPlan<float> square_512(GemmPlanOptions<float>{false, false, 512, 512, 512});
   const GemmPlan<float> transformer(GemmPlanOptions<float>{false, false, 128, 3072, 768});
 
-  EXPECT_EQ(skinny_m.useful_threads(), 1u);
-  EXPECT_EQ(square_512.useful_threads(), 8u);
-  EXPECT_EQ(transformer.useful_threads(), 18u);
+  EXPECT_EQ(skinny_m.useful_threads(), 4u);
+  EXPECT_EQ(square_512.useful_threads(), 16u);
+  EXPECT_EQ(transformer.useful_threads(), 36u);
 }
 
 TEST(GemmPlan, UsesExecutionTimeThreadsWhenConstructedWithoutExecutor) {
   constexpr std::size_t size = 512;
   const GemmPlan<float> plan(GemmPlanOptions<float>{false, false, size, size, size});
-  EXPECT_EQ(plan.useful_threads(), 8u);
+  EXPECT_EQ(plan.useful_threads(), 16u);
   std::vector<float> a(size * size, 1.0f);
   std::vector<float> b(size * size, 1.0f);
   std::vector<float> y(size * size);

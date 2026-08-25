@@ -58,11 +58,24 @@ std::size_t ConfiguredParticipantLimit(std::size_t configured) {
   return configured == 0 ? std::numeric_limits<std::size_t>::max() : configured;
 }
 
+constexpr std::size_t kSkinnyMTargetFmasPerParticipant = 256 * 1024;
+
+std::size_t RuntimeParticipantLimit(GemmAlgorithm algorithm, std::size_t selected_limit,
+                                    std::size_t useful_threads) {
+  const std::size_t available_threads = static_cast<std::size_t>(ExecutionThreadCount());
+  if (algorithm == GemmAlgorithm::kSkinnyM && useful_threads > 1 &&
+      available_threads / useful_threads > 4) {
+    return 1;
+  }
+  return algorithm == GemmAlgorithm::kSkinnyM ? useful_threads : selected_limit;
+}
+
 GemmBlocking ResolveBlocking(GemmBlocking configured, std::size_t element_size,
                              std::size_t vector_lanes, std::size_t register_rows, std::size_t m,
                              std::size_t n, std::size_t k, std::size_t participants) {
   GemmBlocking resolved = detail::ConstrainGemmBlockingForTasks(
-      detail::SelectGemmBlocking(element_size, vector_lanes, register_rows), m, n, k, participants);
+      detail::SelectGemmBlocking(element_size, vector_lanes, register_rows), m, n, k, participants,
+      element_size);
   if (configured.mc != 0) {
     resolved.mc = configured.mc;
   }
@@ -199,14 +212,21 @@ std::size_t CeilDiv(std::size_t value, std::size_t divisor) {
   return value / divisor + static_cast<std::size_t>(value % divisor != 0);
 }
 
-std::size_t UsefulThreads(std::size_t m, std::size_t n, std::size_t k, const GemmBlocking &blocking,
-                          std::size_t available_threads) {
+std::size_t UsefulThreads(GemmAlgorithm algorithm, std::size_t m, std::size_t n, std::size_t k,
+                          const GemmBlocking &blocking, std::size_t available_threads,
+                          std::size_t element_size) {
   const std::size_t row_tasks = CeilDiv(m, blocking.mc);
-  const std::size_t column_tasks = CeilDiv(n, blocking.nc);
+  const std::size_t column_block = detail::SelectGemmColumnBlock(blocking, element_size);
+  const std::size_t task_column_block =
+      algorithm == GemmAlgorithm::kSkinnyM ? std::min(blocking.nc, 4 * column_block) : column_block;
+  const std::size_t column_tasks = CeilDiv(n, task_column_block);
   if (row_tasks == 0 || column_tasks == 0) {
     return 1;
   }
   const std::size_t task_count = CheckedProduct(row_tasks, column_tasks, "scheduler task");
+  if (algorithm == GemmAlgorithm::kSkinnyM) {
+    return std::min(task_count, available_threads);
+  }
   const double cost = static_cast<double>(std::min(m, blocking.mc)) * std::min(n, blocking.nc) *
                       std::min(k, blocking.kc) / kGemmFmasPerParallelWorkUnit;
   const double total_work = static_cast<double>(task_count) * cost;
@@ -357,12 +377,12 @@ GemmPlan<T>::GemmPlan(const GemmPlanOptions<T> &options)
       algorithm_(detail::SelectGemmAlgorithm(options.trans_a, options.trans_b, options.m, options.n,
                                              options.k, VectorLanes<T>(), RegisterRows())),
       participant_limit_(detail::SelectGemmParticipantCount(
-          options.m, options.n, options.k,
-          ConfiguredParticipantLimit(options.maximum_participants))),
+          options.m, options.n, options.k, ConfiguredParticipantLimit(options.maximum_participants),
+          algorithm_ == GemmAlgorithm::kSkinnyM ? kSkinnyMTargetFmasPerParticipant : 0)),
       blocking_(ResolveBlocking(options.blocking, sizeof(T), VectorLanes<T>(), RegisterRows(),
                                 options.m, options.n, options.k, participant_limit_)),
-      useful_threads_(
-          UsefulThreads(options.m, options.n, options.k, blocking_, participant_limit_)),
+      useful_threads_(UsefulThreads(algorithm_, options.m, options.n, options.k, blocking_,
+                                    participant_limit_, sizeof(T))),
       has_constant_b_(!options.constant_b.empty()),
       constant_b_(options.constant_b.begin(), options.constant_b.end()),
       kernel_(SelectKernel<T>(algorithm_)) {
@@ -375,7 +395,8 @@ GemmPlan<T>::GemmPlan(const GemmPlanOptions<T> &options)
 }
 
 template <typename T> void GemmPlan<T>::Execute(const T *a, const T *b, const T *c, T *y) const {
-  ParticipantLimitScope participant_limit(participant_limit_);
+  ParticipantLimitScope participant_limit(
+      RuntimeParticipantLimit(algorithm_, participant_limit_, useful_threads_));
   if (m_ == 0 || n_ == 0) {
     return;
   }
@@ -402,7 +423,8 @@ template <typename T> void GemmPlan<T>::Execute(const T *a, const T *c, T *y) co
 
 template <typename T>
 void GemmPlan<T>::Execute(const T *a, const T *b, const GemmEpilogue<T> &epilogue, T *y) const {
-  ParticipantLimitScope participant_limit(participant_limit_);
+  ParticipantLimitScope participant_limit(
+      RuntimeParticipantLimit(algorithm_, participant_limit_, useful_threads_));
   if (m_ == 0 || n_ == 0) {
     return;
   }
@@ -458,17 +480,19 @@ GemmHalfPlan::GemmHalfPlan(const GemmHalfPlanOptions &options)
       algorithm_(detail::SelectGemmAlgorithm(options.trans_a, options.trans_b, options.m, options.n,
                                              options.k, VectorLanes<float>(), RegisterRows())),
       participant_limit_(detail::SelectGemmParticipantCount(
-          options.m, options.n, options.k,
-          ConfiguredParticipantLimit(options.maximum_participants))),
+          options.m, options.n, options.k, ConfiguredParticipantLimit(options.maximum_participants),
+          algorithm_ == GemmAlgorithm::kSkinnyM ? kSkinnyMTargetFmasPerParticipant : 0)),
       blocking_(ResolveBlocking(options.blocking, sizeof(float), VectorLanes<float>(),
                                 RegisterRows(), options.m, options.n, options.k,
                                 participant_limit_)),
       compact_blocking_(ResolveBlocking(options.compact_blocking, sizeof(std::uint16_t),
                                         VectorLanes<float>(), RegisterRows(), options.m, options.n,
                                         options.k, participant_limit_)),
-      useful_threads_(std::max(
-          UsefulThreads(options.m, options.n, options.k, blocking_, participant_limit_),
-          UsefulThreads(options.m, options.n, options.k, compact_blocking_, participant_limit_))),
+      useful_threads_(
+          std::max(UsefulThreads(algorithm_, options.m, options.n, options.k, blocking_,
+                                 participant_limit_, sizeof(float)),
+                   UsefulThreads(algorithm_, options.m, options.n, options.k, compact_blocking_,
+                                 participant_limit_, sizeof(std::uint16_t)))),
       kernel_(SelectHalfKernel(algorithm_)) {
   CheckedProduct(m_, k_, "A");
   CheckedProduct(k_, n_, "B");
@@ -477,7 +501,8 @@ GemmHalfPlan::GemmHalfPlan(const GemmHalfPlanOptions &options)
 
 void GemmHalfPlan::Execute(const std::uint16_t *a, const std::uint16_t *b,
                            const GemmEpilogue<float> &epilogue, float *y) const {
-  ParticipantLimitScope participant_limit(participant_limit_);
+  ParticipantLimitScope participant_limit(
+      RuntimeParticipantLimit(algorithm_, participant_limit_, useful_threads_));
   if (m_ == 0 || n_ == 0) {
     return;
   }
