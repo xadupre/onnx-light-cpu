@@ -254,6 +254,118 @@ void BulkComputeRightScalar(const void *left, const void *right, void *out, std:
   }
 }
 
+template <char Operation>
+void BulkLogicalContiguous(const void *left, const void *right, void *out, std::size_t count) {
+  const auto *typed_left = static_cast<const std::uint8_t *>(left);
+  const auto *typed_right = static_cast<const std::uint8_t *>(right);
+  auto *typed_out = static_cast<std::uint8_t *>(out);
+  for (std::size_t i = 0; i < count; ++i) {
+    const bool lhs = typed_left[i] != 0;
+    const bool rhs = typed_right[i] != 0;
+    if constexpr (Operation == '&') {
+      typed_out[i] = static_cast<std::uint8_t>(lhs & rhs);
+    } else if constexpr (Operation == '|') {
+      typed_out[i] = static_cast<std::uint8_t>(lhs | rhs);
+    } else {
+      typed_out[i] = static_cast<std::uint8_t>(lhs != rhs);
+    }
+  }
+}
+
+template <char Operation>
+void BulkLogicalLeftScalar(const void *left, const void *right, void *out, std::size_t count) {
+  const bool lhs = *static_cast<const std::uint8_t *>(left) != 0;
+  const auto *typed_right = static_cast<const std::uint8_t *>(right);
+  auto *typed_out = static_cast<std::uint8_t *>(out);
+  for (std::size_t i = 0; i < count; ++i) {
+    const bool rhs = typed_right[i] != 0;
+    if constexpr (Operation == '&') {
+      typed_out[i] = static_cast<std::uint8_t>(lhs & rhs);
+    } else if constexpr (Operation == '|') {
+      typed_out[i] = static_cast<std::uint8_t>(lhs | rhs);
+    } else {
+      typed_out[i] = static_cast<std::uint8_t>(lhs != rhs);
+    }
+  }
+}
+
+template <char Operation>
+void BulkLogicalRightScalar(const void *left, const void *right, void *out, std::size_t count) {
+  const auto *typed_left = static_cast<const std::uint8_t *>(left);
+  const bool rhs = *static_cast<const std::uint8_t *>(right) != 0;
+  auto *typed_out = static_cast<std::uint8_t *>(out);
+  for (std::size_t i = 0; i < count; ++i) {
+    const bool lhs = typed_left[i] != 0;
+    if constexpr (Operation == '&') {
+      typed_out[i] = static_cast<std::uint8_t>(lhs & rhs);
+    } else if constexpr (Operation == '|') {
+      typed_out[i] = static_cast<std::uint8_t>(lhs | rhs);
+    } else {
+      typed_out[i] = static_cast<std::uint8_t>(lhs != rhs);
+    }
+  }
+}
+
+template <int Exponent> float FastFloatIntegerPower(float value) {
+  float result;
+  if constexpr (Exponent == 2) {
+    result = value * value;
+  } else if constexpr (Exponent == 3) {
+    result = value * value * value;
+  } else if constexpr (Exponent == 4) {
+    const float squared = value * value;
+    result = squared * squared;
+  } else {
+    const float squared = value * value;
+    result = squared * squared * value;
+  }
+  if (std::isfinite(value) && std::isfinite(result) && (result != 0.0f || value == 0.0f)) {
+    return result;
+  }
+  return std::pow(value, static_cast<float>(Exponent));
+}
+
+void BulkFloatPowRightScalar(const void *left, const void *right, void *out, std::size_t count) {
+  const auto *typed_left = static_cast<const float *>(left);
+  const float exponent = *static_cast<const float *>(right);
+  auto *typed_out = static_cast<float *>(out);
+  if (exponent == 2.0f) {
+    for (std::size_t i = 0; i < count; ++i) {
+      typed_out[i] = FastFloatIntegerPower<2>(typed_left[i]);
+    }
+    return;
+  }
+  if (exponent == 3.0f) {
+    for (std::size_t i = 0; i < count; ++i) {
+      typed_out[i] = FastFloatIntegerPower<3>(typed_left[i]);
+    }
+    return;
+  }
+  if (exponent == 4.0f) {
+    for (std::size_t i = 0; i < count; ++i) {
+      typed_out[i] = FastFloatIntegerPower<4>(typed_left[i]);
+    }
+    return;
+  }
+  if (exponent == 5.0f) {
+    for (std::size_t i = 0; i < count; ++i) {
+      typed_out[i] = FastFloatIntegerPower<5>(typed_left[i]);
+    }
+    return;
+  }
+  if (exponent == 1.0f) {
+    std::copy_n(typed_left, count, typed_out);
+    return;
+  }
+  if (exponent == 0.0f) {
+    std::fill_n(typed_out, count, 1.0f);
+    return;
+  }
+  for (std::size_t i = 0; i < count; ++i) {
+    typed_out[i] = std::pow(typed_left[i], exponent);
+  }
+}
+
 void ComputeFloat16Add(const void *, const void *, void *);
 void ComputeBfloat16Add(const void *, const void *, void *);
 void ComputeFloat16Sub(const void *, const void *, void *);
@@ -1457,6 +1569,7 @@ void SelectAdditionalBulk(BinaryOperator op, DT left, DT right, const Attrs &att
   case BinaryOperator::kPow:
     if (left == DT::FLOAT) {
       ONNX_LIGHT_CPU_BIND_TYPED_BULK(float, float, float, ComputePow<float, float>)
+      adapter.bulk_right_scalar = &BulkFloatPowRightScalar;
     } else if (left == DT::DOUBLE) {
       ONNX_LIGHT_CPU_BIND_TYPED_BULK(double, double, double, ComputePow<double, double>)
     } else if (left == DT::INT32) {
@@ -1538,13 +1651,19 @@ void SelectAdditionalBulk(BinaryOperator op, DT left, DT right, const Attrs &att
     }
     break;
   case BinaryOperator::kAnd:
-    ONNX_LIGHT_CPU_BIND_TYPED_BULK(std::uint8_t, std::uint8_t, std::uint8_t, ComputeAnd)
+    adapter.bulk_contiguous = &BulkLogicalContiguous<'&'>;
+    adapter.bulk_left_scalar = &BulkLogicalLeftScalar<'&'>;
+    adapter.bulk_right_scalar = &BulkLogicalRightScalar<'&'>;
     break;
   case BinaryOperator::kOr:
-    ONNX_LIGHT_CPU_BIND_TYPED_BULK(std::uint8_t, std::uint8_t, std::uint8_t, ComputeOr)
+    adapter.bulk_contiguous = &BulkLogicalContiguous<'|'>;
+    adapter.bulk_left_scalar = &BulkLogicalLeftScalar<'|'>;
+    adapter.bulk_right_scalar = &BulkLogicalRightScalar<'|'>;
     break;
   case BinaryOperator::kXor:
-    ONNX_LIGHT_CPU_BIND_TYPED_BULK(std::uint8_t, std::uint8_t, std::uint8_t, ComputeXor)
+    adapter.bulk_contiguous = &BulkLogicalContiguous<'^'>;
+    adapter.bulk_left_scalar = &BulkLogicalLeftScalar<'^'>;
+    adapter.bulk_right_scalar = &BulkLogicalRightScalar<'^'>;
     break;
   case BinaryOperator::kBitwiseAnd:
     ONNX_LIGHT_CPU_BIND_INTEGER_TYPES(ComputeBitwiseAnd)
@@ -1578,7 +1697,9 @@ void SelectAdditionalBulk(BinaryOperator op, DT left, DT right, const Attrs &att
     break;
   case BinaryOperator::kPRelu:
     if (left == DT::FLOAT) {
-      ONNX_LIGHT_CPU_BIND_TYPED_BULK(float, float, float, ComputePRelu<float>)
+      adapter.bulk_contiguous = &BulkContiguousWrapper<float, &BinaryPReluFloat32Contiguous>;
+      adapter.bulk_left_scalar = &BulkLeftScalarWrapper<float, &BinaryPReluFloat32LeftScalar>;
+      adapter.bulk_right_scalar = &BulkRightScalarWrapper<float, &BinaryPReluFloat32RightScalar>;
     } else if (left == DT::DOUBLE) {
       ONNX_LIGHT_CPU_BIND_TYPED_BULK(double, double, double, ComputePRelu<double>)
     } else {

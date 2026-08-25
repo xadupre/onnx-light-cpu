@@ -45,6 +45,11 @@ ONNX_LIGHT_CPU_DECLARE_BINARY_ARITH(BinaryDivFloat64, double)
 
 #undef ONNX_LIGHT_CPU_DECLARE_BINARY_ARITH
 
+void BinaryPReluFloat32Contiguous(const float *left, const float *right, float *out,
+                                  std::size_t count);
+void BinaryPReluFloat32LeftScalar(float left, const float *right, float *out, std::size_t count);
+void BinaryPReluFloat32RightScalar(const float *left, float right, float *out, std::size_t count);
+
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512
 // Raw AVX-512F implementations, defined in a translation unit compiled with
 // ``-mavx512f``/``/arch:AVX512``. Declared here so the baseline dispatcher

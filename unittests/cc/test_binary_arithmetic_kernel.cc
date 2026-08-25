@@ -181,6 +181,38 @@ TEST(BinaryArithmeticKernel, Float32MatchesScalarReferenceAcrossTailSizes) {
   RunAllShapesAndSizes<float>();
 }
 
+TEST(BinaryArithmeticKernel, Float32PReluMatchesScalarReferenceAcrossTailSizes) {
+  const auto reference = [](float x, float slope) { return x < 0.0f ? x * slope : x; };
+  const std::vector<float> special = SpecialValues<float>();
+  for (const std::size_t count : kTailSizes) {
+    std::vector<float> left(count);
+    std::vector<float> right(count);
+    std::vector<float> actual(count);
+    for (std::size_t i = 0; i < count; ++i) {
+      left[i] = special[i % special.size()];
+      right[i] = special[(i + 3) % special.size()];
+    }
+
+    onnx_light_cpu::BinaryPReluFloat32Contiguous(left.data(), right.data(), actual.data(), count);
+    for (std::size_t i = 0; i < count; ++i) {
+      ExpectBitwiseOrNaNEqual(actual[i], reference(left[i], right[i]), i);
+    }
+
+    for (const float left_scalar : special) {
+      onnx_light_cpu::BinaryPReluFloat32LeftScalar(left_scalar, right.data(), actual.data(), count);
+      for (std::size_t i = 0; i < count; ++i) {
+        ExpectBitwiseOrNaNEqual(actual[i], reference(left_scalar, right[i]), i);
+      }
+    }
+
+    const float right_scalar = 3.5f;
+    onnx_light_cpu::BinaryPReluFloat32RightScalar(left.data(), right_scalar, actual.data(), count);
+    for (std::size_t i = 0; i < count; ++i) {
+      ExpectBitwiseOrNaNEqual(actual[i], reference(left[i], right_scalar), i);
+    }
+  }
+}
+
 TEST(BinaryArithmeticKernel, Float64MatchesScalarReferenceAcrossTailSizes) {
   RunAllShapesAndSizes<double>();
 }

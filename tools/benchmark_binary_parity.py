@@ -7,6 +7,7 @@ import argparse
 import gc
 import importlib.metadata
 import json
+import math
 import os
 import platform
 import re
@@ -50,6 +51,13 @@ PRIORITY_SIGNATURES = {
     ("Pow", "float32"),
     ("Mod", "float32"),
 }
+ORT_UNSUPPORTED_SIGNATURES = {
+    ("Add", "bfloat16"),
+    ("Sub", "bfloat16"),
+    ("Mul", "bfloat16"),
+    ("Div", "bfloat16"),
+    ("PRelu", "bfloat16"),
+}
 _CASE_PATTERN = re.compile(
     r"^test_cpu_(?P<operator>[a-z]+)_v(?P<opset>\d+)_"
     r"(?P<shape_family>contiguous|left_scalar|right_scalar|row|per_channel|outer|general)_"
@@ -72,6 +80,7 @@ _DTYPE_SIZES = {
     "uint32": 4,
     "uint64": 8,
 }
+_GROUP_FIELDS = ("operator", "left_type", "shape_family")
 
 
 def parse_case_name(name: str) -> dict[str, Any]:
@@ -120,7 +129,10 @@ def _percentile(values: Sequence[float], fraction: float) -> float:
     return ordered[lower] * (1.0 - weight) + ordered[upper] * weight
 
 
-def summarize(results: Sequence[dict[str, Any]]) -> dict[str, Any]:
+def summarize(
+    results: Sequence[dict[str, Any]],
+    unsupported_cases: Sequence[dict[str, Any]] = (),
+) -> dict[str, Any]:
     speedups = [float(result["speedup"]) for result in results]
     actual_cases = {
         (
@@ -139,17 +151,108 @@ def summarize(results: Sequence[dict[str, Any]]) -> dict[str, Any]:
         for count in ELEMENT_COUNTS
         for policy in THREAD_POLICIES
     }
-    complete = actual_cases == expected_cases
+    unsupported_gate_cases = {
+        (
+            str(row["operator"]),
+            str(row["left_type"]),
+            str(row["shape_family"]),
+            int(row["element_count"]),
+            str(row["thread_policy"]),
+        )
+        for row in unsupported_cases
+    }
+    unexpected_unsupported_cases = sorted(
+        case for case in unsupported_gate_cases if case[:2] not in ORT_UNSUPPORTED_SIGNATURES
+    )
+    complete = actual_cases | unsupported_gate_cases == expected_cases
+    comparable_complete = actual_cases == expected_cases - unsupported_gate_cases
     median = statistics.median(speedups) if speedups else 0.0
     minimum = min(speedups, default=0.0)
+    groups: dict[tuple[str, str, str], list[float]] = {}
+    for result in results:
+        key = tuple(str(result[field]) for field in _GROUP_FIELDS)
+        groups.setdefault(key, []).append(float(result["speedup"]))
+    group_results = [
+        {
+            **dict(zip(_GROUP_FIELDS, key, strict=True)),
+            "median_speedup": statistics.median(values),
+            "minimum_speedup": min(values),
+            "case_count": len(values),
+            "passed": statistics.median(values) >= 1.0,
+        }
+        for key, values in sorted(groups.items())
+    ]
+    groups_passed = bool(group_results) and all(group["passed"] for group in group_results)
+
+    serial_p90 = {
+        _comparison_key(row): float(row["cpu_p90_seconds"])
+        for row in results
+        if row["thread_policy"] == "1" and "cpu_p90_seconds" in row
+    }
+    small_physical = [
+        row
+        for row in results
+        if row["thread_policy"] == "physical" and int(row["element_count"]) <= 65_536
+    ]
+    small_p90_complete = bool(small_physical) and all(
+        _comparison_key(row) in serial_p90 and "cpu_p90_seconds" in row for row in small_physical
+    )
+    small_p90_regressions = [
+        {
+            "backend_case_name": row.get("backend_case_name", ""),
+            "serial_p90_seconds": serial_p90[_comparison_key(row)],
+            "physical_p90_seconds": float(row["cpu_p90_seconds"]),
+            "regression": float(row["cpu_p90_seconds"]) / serial_p90[_comparison_key(row)] - 1.0,
+        }
+        for row in small_physical
+        if _comparison_key(row) in serial_p90
+        and "cpu_p90_seconds" in row
+        and float(row["cpu_p90_seconds"]) > serial_p90[_comparison_key(row)] * 1.02
+    ]
     return {
-        "passed": complete and median >= 1.0 and minimum >= 0.9,
+        "passed": (
+            complete
+            and comparable_complete
+            and not unexpected_unsupported_cases
+            and groups_passed
+            and minimum >= 0.9
+            and small_p90_complete
+            and not small_p90_regressions
+        ),
         "matrix_complete": complete,
-        "thresholds": {"median": 1.0, "minimum": 0.9},
+        "comparable_matrix_complete": comparable_complete,
+        "thresholds": {
+            "group_median": 1.0,
+            "minimum": 0.9,
+            "small_p90_maximum_regression": 0.02,
+        },
         "median_speedup": median,
         "minimum_speedup": minimum,
         "case_count": len(results),
+        "groups_passed": groups_passed,
+        "groups": group_results,
+        "small_p90_complete": small_p90_complete,
+        "small_p90_passed": small_p90_complete and not small_p90_regressions,
+        "small_p90_regressions": small_p90_regressions,
+        "unsupported_case_count": len(unsupported_cases),
+        "unexpected_unsupported_cases": unexpected_unsupported_cases,
     }
+
+
+def _comparison_key(row: dict[str, Any]) -> tuple[Any, ...]:
+    return (
+        row["operator"],
+        row["left_type"],
+        row.get("right_type", row["left_type"]),
+        row.get("output_type", row["left_type"]),
+        row.get("attributes", ""),
+        row["shape_family"],
+        int(row["element_count"]),
+    )
+
+
+def _tensor_element_count(tensor: Any) -> int:
+    return math.prod(int(dimension) for dimension in tensor.shape)
 
 
 def _physical_threads() -> int:
@@ -224,42 +327,6 @@ def _shape_metrics(case: dict[str, Any]) -> tuple[str, int, int]:
     return "general_strided", 64 * scale, 64
 
 
-def _task_metrics(
-    case: dict[str, Any], left_elements: int, right_elements: int, threads: int
-) -> tuple[int, int]:
-    loop_family, units, inner = _shape_metrics(case)
-    left_size = _DTYPE_SIZES[str(case["left_type"])]
-    right_size = _DTYPE_SIZES[str(case["right_type"])]
-    output_size = _DTYPE_SIZES[str(case["output_type"])]
-    operator = str(case["operator"])
-    contiguous_bulk = operator in {"Add", "Sub", "Mul", "Div"} and case["left_type"] == "float32"
-    if operator == "PRelu":
-        has_bulk = case["left_type"] == "bfloat16" and case["shape_family"] in {
-            "contiguous",
-            "row",
-        }
-    else:
-        has_bulk = contiguous_bulk and loop_family != "general_strided"
-    if loop_family in {"contiguous", "left_scalar", "right_scalar"}:
-        bytes_per_unit = (
-            (left_size if left_elements != 1 else 0)
-            + (right_size if right_elements != 1 else 0)
-            + output_size
-        )
-        threshold = 64 * 1024 if has_bulk else 16 * 1024
-        maximum = min(threads, 4) if has_bulk else threads
-        minimum = max(1, (threshold + bytes_per_unit - 1) // bytes_per_unit)
-        useful = units // max(minimum // 4, 1) if units >= minimum else 1
-    else:
-        bytes_per_block = inner * (left_size + right_size + output_size)
-        threshold = 256 * 1024 if has_bulk else 16 * 1024
-        maximum = min(threads, 4) if has_bulk else threads
-        minimum = max(1, (threshold + bytes_per_block - 1) // bytes_per_block)
-        useful = units if units >= minimum else 1
-    tasks = max(1, min(maximum, useful))
-    return tasks, min(tasks, threads)
-
-
 def _selected_isa(case: dict[str, Any], flags: Sequence[str]) -> str:
     if case["left_type"] != "float32" or case["operator"] not in {"Add", "Sub", "Mul", "Div"}:
         return "scalar"
@@ -316,8 +383,18 @@ def _read_text(path: Path) -> str:
 def run(args: argparse.Namespace) -> dict[str, Any]:
     import numpy as np
     import onnxruntime
+    from onnxruntime.capi.onnxruntime_pybind11_state import (
+        NotImplemented as OrtNotImplemented,
+    )
     from onnx_light.onnx.reference import ReferenceEvaluator
-    from onnx_light_cpu import clear_used_kernel_names, register_kernels, used_kernel_names
+    from onnx_light.onnx_py._onnxpykernels.runtime import CpuExecutionPolicy
+    from onnx_light.kernel_tuning import calibrate_kernel_tuning
+    from onnx_light_cpu import (
+        clear_used_kernel_names,
+        register_kernels,
+        used_kernel_names,
+    )
+    from onnx_light_cpu.onnx_py._cpuregister import set_kernel_usage_recording
 
     if args.cpus:
         if not hasattr(os, "sched_setaffinity"):
@@ -326,8 +403,37 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     cases = _collect_cases(args.case)
     register_kernels()
     physical_threads = _physical_threads()
+    calibration_reports = []
+    if args.calibrate:
+        from onnx_light.onnx import TensorProto
+
+        element_types = {
+            "bool": int(TensorProto.BOOL),
+            "float32": int(TensorProto.FLOAT),
+            "bfloat16": int(TensorProto.BFLOAT16),
+            "int32": int(TensorProto.INT32),
+        }
+        policy = CpuExecutionPolicy()
+        policy.num_threads = physical_threads
+        for operator, dtype in sorted(PRIORITY_SIGNATURES):
+            calibration_report = calibrate_kernel_tuning(
+                operator,
+                element_types=[element_types[dtype]],
+                library="onnx_light_cpu",
+                implementation="broadcast_plan",
+                maximum_duration_ms=args.calibration_duration_ms,
+                maximum_memory_bytes=args.calibration_memory_bytes,
+                save=False,
+                cpu_execution=policy,
+            )
+            if not calibration_report.get("calibrated"):
+                raise RuntimeError(
+                    f"Calibration failed for {operator}/{dtype}: {calibration_report!r}."
+                )
+            calibration_reports.append(calibration_report)
     cpu_model, flags = _cpu_model_and_flags()
     rows = []
+    unsupported_cases = []
     for policy in args.threads:
         requested_threads = 1 if policy == "1" else physical_threads
         for test_case in cases:
@@ -348,9 +454,20 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             options.intra_op_num_threads = requested_threads
             options.inter_op_num_threads = 1
             options.execution_mode = onnxruntime.ExecutionMode.ORT_SEQUENTIAL
-            ort = onnxruntime.InferenceSession(
-                model_bytes, sess_options=options, providers=["CPUExecutionProvider"]
-            )
+            try:
+                ort = onnxruntime.InferenceSession(
+                    model_bytes, sess_options=options, providers=["CPUExecutionProvider"]
+                )
+            except OrtNotImplemented as exc:
+                unsupported_cases.append(
+                    {
+                        **case,
+                        "backend_case_name": test_case.name,
+                        "thread_policy": policy,
+                        "reason": str(exc),
+                    }
+                )
+                continue
 
             def cpu_run(session=cpu, current_feeds=feeds):
                 return session.run(None, current_feeds)
@@ -358,11 +475,15 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             def ort_run(session=ort, current_feeds=feeds):
                 return session.run(None, current_feeds)
 
-            clear_used_kernel_names()
-            cpu_outputs = cpu_run()
-            operation_identity = f"onnx_light_cpu::{case['operator']}"
-            if operation_identity not in used_kernel_names():
-                raise RuntimeError(f"{test_case.name} dispatched {used_kernel_names()}.")
+            set_kernel_usage_recording(True)
+            try:
+                clear_used_kernel_names()
+                cpu_outputs = cpu_run()
+                operation_identity = f"onnx_light_cpu::{case['operator']}"
+                if operation_identity not in used_kernel_names():
+                    raise RuntimeError(f"{test_case.name} dispatched {used_kernel_names()}.")
+            finally:
+                set_kernel_usage_recording(False)
             ort_outputs = ort_run()
             for actual, expected in zip(cpu_outputs, ort_outputs, strict=True):
                 np.testing.assert_allclose(
@@ -378,11 +499,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             cpu_median = statistics.median(cpu_samples)
             ort_median = statistics.median(ort_samples)
             left_elements, right_elements = (
-                int(test_case.declared_input_element_counts[0]),
-                int(test_case.declared_input_element_counts[1]),
+                _tensor_element_count(data_set.inputs[0]),
+                _tensor_element_count(data_set.inputs[1]),
             )
-            output_elements = int(test_case.declared_output_element_counts[0])
-            tasks, workers = _task_metrics(case, left_elements, right_elements, effective_threads)
+            output_elements = _tensor_element_count(data_set.outputs[0])
             rows.append(
                 {
                     **case,
@@ -393,8 +513,6 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     "operation_identity": operation_identity,
                     "loop_family": _shape_metrics(case)[0],
                     "isa": _selected_isa(case, flags),
-                    "submitted_tasks": tasks,
-                    "admitted_workers": workers,
                     "unique_tensor_bytes": (
                         left_elements * _DTYPE_SIZES[case["left_type"]]
                         + right_elements * _DTYPE_SIZES[case["right_type"]]
@@ -453,11 +571,14 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "ort_execution_mode": "sequential",
             "ort_inter_op_threads": 1,
             "sample_order": "alternating",
+            "calibration_enabled": args.calibrate,
+            "calibration_reports": calibration_reports,
             "byte_model_note": "Byte models are logical counts, not measured DRAM traffic.",
         },
         "results": rows,
+        "unsupported_cases": unsupported_cases,
     }
-    report["summary"] = summarize(rows)
+    report["summary"] = summarize(rows, unsupported_cases)
     return report
 
 
@@ -483,12 +604,27 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--cpus", default="", help="Linux CPU affinity, for example 0-3,8.")
     parser.add_argument("--repeat", type=int, default=7)
     parser.add_argument("--warmup", type=int, default=3)
+    parser.add_argument(
+        "--calibrate",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Publish in-memory Binary profiles before creating benchmark sessions.",
+    )
+    parser.add_argument("--calibration-duration-ms", type=int, default=250)
+    parser.add_argument("--calibration-memory-bytes", type=int, default=64 << 20)
     parser.add_argument("--output", type=Path, default=Path("binary_parity_results.json"))
     parser.add_argument("--enforce", action="store_true")
     args = parser.parse_args(argv)
     args.threads = tuple(args.threads or THREAD_POLICIES)
-    if args.repeat < 1 or args.warmup < 0:
-        parser.error("repeat must be positive and warmup must be non-negative")
+    if (
+        args.repeat < 1
+        or args.warmup < 0
+        or args.calibration_duration_ms < 0
+        or args.calibration_memory_bytes < 0
+    ):
+        parser.error(
+            "repeat must be positive; warmup and calibration budgets must be non-negative"
+        )
     return args
 
 
