@@ -258,21 +258,16 @@ void BinaryBroadcastPlan::ExecuteFlat(const std::byte *left, const std::byte *ri
   const std::size_t threshold_bytes =
       bulk != nullptr ? kBinaryBulkParallelThresholdBytes : kBinaryScalarParallelThresholdBytes;
   const std::size_t min_units = ByteThresholdToUnits(threshold_bytes, bytes_per_unit);
-  const std::int64_t max_participants =
-      bulk != nullptr ? kBinaryBulkMaxParticipants : kBinaryUnboundedParticipants;
+  const std::int64_t max_participants = kBinaryUnboundedParticipants;
   const std::size_t element_size = std::max<std::size_t>(adapter_.output_size, 1);
   const std::int64_t block_multiple =
       std::max<std::int64_t>(static_cast<std::int64_t>(kExecutionSimdWidthBytes / element_size), 1);
 
-  // ``min_block_size`` is deliberately a fraction of ``min_parallel_size``:
-  // ``ExecuteRanges`` only submits work to the executor once it can form at
-  // least two blocks, so keeping them equal would silently double the
-  // effective crossover threshold.
+  // Keep each submitted range large enough to amortize executor dispatch.
+  // ``ExecuteRanges`` stays serial until it can form at least two such ranges.
   const std::size_t min_units_bound = std::max<std::size_t>(min_units, 1);
-  const std::int64_t block_divisor =
-      max_participants == kBinaryUnboundedParticipants ? 4 : max_participants;
-  const std::int64_t min_block_size =
-      std::max<std::int64_t>(static_cast<std::int64_t>(min_units_bound) / block_divisor, 1);
+  const std::int64_t min_block_size = static_cast<std::int64_t>(
+      std::max<std::size_t>(ByteThresholdToUnits(kBinaryTargetBlockBytes, bytes_per_unit), 1));
   const ExecutionSchedule schedule{static_cast<std::int64_t>(min_units_bound), min_block_size,
                                    max_participants};
   ExecuteRanges(static_cast<std::int64_t>(count), schedule, block_multiple,
@@ -393,11 +388,12 @@ void BinaryBroadcastPlan::ExecuteMultiDimensional(const std::byte *left, const s
   const std::size_t threshold_bytes =
       has_bulk_inner ? kBinaryBlockParallelThresholdBytes : kBinaryScalarParallelThresholdBytes;
   const std::size_t min_units = ByteThresholdToUnits(threshold_bytes, bytes_per_block);
-  const std::int64_t max_participants =
-      has_bulk_inner ? kBinaryBlockMaxParticipants : kBinaryUnboundedParticipants;
-
-  const ExecutionSchedule schedule{static_cast<std::int64_t>(std::max<std::size_t>(min_units, 1)),
-                                   1, max_participants};
+  const std::size_t min_block_units =
+      ByteThresholdToUnits(kBinaryTargetBlockBytes, bytes_per_block);
+  const ExecutionSchedule schedule{
+      static_cast<std::int64_t>(std::max<std::size_t>(min_units, 1)),
+      static_cast<std::int64_t>(std::max<std::size_t>(min_block_units, 1)),
+      kBinaryUnboundedParticipants};
   ExecuteRanges(static_cast<std::int64_t>(outer_block_count_), schedule,
                 [&](std::int64_t begin, std::int64_t end) {
                   ExecuteOuterRange(left, right, output, static_cast<std::size_t>(begin),

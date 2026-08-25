@@ -361,6 +361,33 @@ TEST(BinaryBroadcastPlan, ArithmeticFastPathMatchesScalarReferenceAcrossOpsTypes
   }
 }
 
+TEST(BinaryBroadcastPlan, IntegerAndHalfArithmeticAdaptersProvideBulkPaths) {
+  const std::array<std::string_view, 3> ops = {"Add", "Sub", "Mul"};
+  const std::array<BinaryDataType, 10> types = {
+      BinaryDataType::FLOAT16, BinaryDataType::BFLOAT16, BinaryDataType::INT8,
+      BinaryDataType::INT16,   BinaryDataType::INT32,    BinaryDataType::INT64,
+      BinaryDataType::UINT8,   BinaryDataType::UINT16,   BinaryDataType::UINT32,
+      BinaryDataType::UINT64,
+  };
+  const std::array<std::int64_t, 1> shape{263};
+  for (std::string_view op : ops) {
+    for (BinaryDataType type : types) {
+      const BinaryKernelDescriptor descriptor(std::string(op), 14, {});
+      const auto &adapter = descriptor.ResolveAdapter(type, type, type);
+      ASSERT_NE(adapter.bulk_contiguous, nullptr) << op;
+      ASSERT_NE(adapter.bulk_left_scalar, nullptr) << op;
+      ASSERT_NE(adapter.bulk_right_scalar, nullptr) << op;
+
+      const auto left = MakeBuffer(type, shape, true, op);
+      const auto right = MakeBuffer(type, shape, false, op);
+      const auto expected = ReferenceExecute(adapter, shape, shape, shape, left, right);
+      std::vector<std::byte> actual(expected.size());
+      adapter.bulk_contiguous(left.data(), right.data(), actual.data(), shape[0]);
+      EXPECT_EQ(actual, expected) << "op=" << op << " type=" << static_cast<int>(type);
+    }
+  }
+}
+
 TEST(BinaryBroadcastPlan, HalfPrecisionAdaptersUseBulkConversionAndMatchScalarReference) {
   const std::array<std::string_view, 3> ops = {"Mod", "Pow", "PRelu"};
   const std::array<BinaryDataType, 2> types = {BinaryDataType::FLOAT16, BinaryDataType::BFLOAT16};
@@ -412,7 +439,7 @@ TEST(BinaryBroadcastPlan, MultiDimensionalFamiliesMatchNaiveReferenceSerialAndPa
   const BinaryKernelDescriptor descriptor("Add", 14, {});
   const std::array<std::pair<std::vector<std::int64_t>, std::vector<std::int64_t>>, 5> shapes{{
       // kRepeatedContiguousBlock: row broadcast, large enough to cross the
-      // 256 KiB block-parallel threshold (400*8192*4 bytes >> 256 KiB).
+      // 1 MiB block-parallel threshold (400*8192*4 bytes >> 1 MiB).
       {std::vector<std::int64_t>{400, 8192}, std::vector<std::int64_t>{8192}},
       // kOuterBroadcast: both inner strides contiguous, broadcast outer dim.
       {std::vector<std::int64_t>{300, 2, 4096}, std::vector<std::int64_t>{1, 2, 4096}},
@@ -466,26 +493,65 @@ TEST(BinaryBroadcastPlan, FlatPathDispatchesToExecutorAboveThreshold) {
   onnx_light_cpu::ExecutionExecutorView view{&executor, 8, &InlineExecutor::Run};
   onnx_light_cpu::ExecutionExecutorScope scope(&view);
 
-  // The 64 KiB calibrated contiguous bulk threshold (see
+  // The 1 MiB calibrated contiguous bulk threshold (see
   // binary_execution_schedule.h) covers left + right + output traffic
-  // (4 + 4 + 4 bytes per FP32 element), i.e. ceil(65536 / 12) = 5462
+  // (4 + 4 + 4 bytes per FP32 element), i.e. ceil(1048576 / 12) = 87382
   // elements.
-  constexpr std::size_t kThresholdElements = 5462;
+  constexpr std::size_t kThresholdElements = 87382;
   const std::vector<std::int64_t> below_shape{static_cast<std::int64_t>(kThresholdElements - 1)};
-  const std::vector<std::int64_t> at_shape{static_cast<std::int64_t>(kThresholdElements)};
+  const std::vector<std::int64_t> threshold_shape{static_cast<std::int64_t>(kThresholdElements)};
+  const std::vector<std::int64_t> split_shape{static_cast<std::int64_t>(kThresholdElements * 2)};
   const BinaryBroadcastPlan below(descriptor, BinaryDataType::FLOAT, BinaryDataType::FLOAT,
                                   BinaryDataType::FLOAT, below_shape, below_shape);
-  const BinaryBroadcastPlan at(descriptor, BinaryDataType::FLOAT, BinaryDataType::FLOAT,
-                               BinaryDataType::FLOAT, at_shape, at_shape);
-  std::vector<float> left(kThresholdElements, 1.0f);
-  std::vector<float> right(kThresholdElements, 2.0f);
-  std::vector<float> output(kThresholdElements);
+  const BinaryBroadcastPlan threshold(descriptor, BinaryDataType::FLOAT, BinaryDataType::FLOAT,
+                                      BinaryDataType::FLOAT, threshold_shape, threshold_shape);
+  const BinaryBroadcastPlan split(descriptor, BinaryDataType::FLOAT, BinaryDataType::FLOAT,
+                                  BinaryDataType::FLOAT, split_shape, split_shape);
+  std::vector<float> left(kThresholdElements * 2, 1.0f);
+  std::vector<float> right(kThresholdElements * 2, 2.0f);
+  std::vector<float> output(kThresholdElements * 2);
 
   below.Execute(left.data(), right.data(), output.data());
   EXPECT_EQ(executor.dispatches, 0);
 
-  at.Execute(left.data(), right.data(), output.data());
+  threshold.Execute(left.data(), right.data(), output.data());
+  EXPECT_EQ(executor.dispatches, 0);
+
+  split.Execute(left.data(), right.data(), output.data());
   EXPECT_EQ(executor.dispatches, 1);
+  EXPECT_EQ(executor.blocks, 2);
+
+  const std::vector<std::int64_t> large_shape{static_cast<std::int64_t>(kThresholdElements * 8)};
+  const BinaryBroadcastPlan large(descriptor, BinaryDataType::FLOAT, BinaryDataType::FLOAT,
+                                  BinaryDataType::FLOAT, large_shape, large_shape);
+  left.resize(kThresholdElements * 8, 1.0f);
+  right.resize(kThresholdElements * 8, 2.0f);
+  output.resize(kThresholdElements * 8);
+  large.Execute(left.data(), right.data(), output.data());
+  EXPECT_EQ(executor.dispatches, 2);
+  EXPECT_EQ(executor.blocks, 8);
+  for (float value : output) {
+    EXPECT_FLOAT_EQ(value, 3.0f);
+  }
+}
+
+TEST(BinaryBroadcastPlan, MultiDimensionalBulkPathUsesAllAvailableParticipants) {
+  const BinaryKernelDescriptor descriptor("Add", 14, {});
+  const std::vector<std::int64_t> left_shape{88, 8192};
+  const std::vector<std::int64_t> right_shape{8192};
+  const BinaryBroadcastPlan plan(descriptor, BinaryDataType::FLOAT, BinaryDataType::FLOAT,
+                                 BinaryDataType::FLOAT, left_shape, right_shape);
+  std::vector<float> left(ElementCount(left_shape), 1.0f);
+  std::vector<float> right(ElementCount(right_shape), 2.0f);
+  std::vector<float> output(ElementCount(plan.output_shape()));
+
+  InlineExecutor executor;
+  onnx_light_cpu::ExecutionExecutorView view{&executor, 8, &InlineExecutor::Run};
+  onnx_light_cpu::ExecutionExecutorScope scope(&view);
+  plan.Execute(left.data(), right.data(), output.data());
+
+  EXPECT_EQ(executor.dispatches, 1);
+  EXPECT_EQ(executor.blocks, 8);
   for (float value : output) {
     EXPECT_FLOAT_EQ(value, 3.0f);
   }

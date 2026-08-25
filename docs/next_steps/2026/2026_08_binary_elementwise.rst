@@ -295,7 +295,7 @@ scheduler:
 * remain single-threaded below a measured byte-count threshold;
 * split contiguous output ranges into cache-line-aligned chunks;
 * split only at inner-block boundaries for broadcast patterns;
-* cap threads when aggregate memory bandwidth is saturated;
+* let the session executor use all effective threads when enough work exists;
 * avoid assigning adjacent partial cache lines to different threads;
 * keep scalar or small broadcast operands hot in shared cache.
 
@@ -304,14 +304,15 @@ hardware. ``Pow`` may benefit from threads much earlier than ``Add`` because it
 is compute-bound.
 
 Binary PR03 measures byte thresholds from ``0``, ``4 KiB``, ``16 KiB``,
-``64 KiB``, ``256 KiB`` and ``1 MiB`` and participant caps from ``1``, ``2``,
-``4`` and physical cores for every priority operation/loop-family/type group.
-It selects the smallest threshold and smallest cap whose median is within 2%
-of that group's best result and whose small-tensor p90 does not regress the
-serial baseline by more than 2%. The selected values and raw samples are
-stored respectively in the existing tuning registry and benchmark artifact.
-Untested processors use the portable conservative profile and are marked for
-later tuning rather than silently inheriting reference-machine results.
+``64 KiB``, ``256 KiB`` and ``1 MiB`` for every priority
+operation/loop-family/type group. It selects the smallest threshold whose
+small-tensor p90 does not regress the serial baseline by more than 2%. Above
+that threshold, the session executor determines the participant count from
+its effective thread count and the available work. The selected values and
+raw samples are stored respectively in the existing tuning registry and
+benchmark artifact. Untested processors use the portable conservative
+profile and are marked for later tuning rather than silently inheriting
+reference-machine results.
 
 Prepared plans and dynamic shapes
 ---------------------------------
@@ -493,17 +494,18 @@ Remaining pull-request sequence
    * - Binary PR02
      - FP32/FP64 arithmetic SIMD.
      - ``Add``, ``Sub``, ``Mul``, and ``Div`` provide contiguous, left/right
-       scalar, SSE2/AVX2/AVX-512, NEON, and SVE/SVE2 kernels with exact operand
-       order, special values, and tails.
+     scalar, SSE2/AVX2/AVX-512, NEON, and SVE/SVE2 FP32/FP64 kernels.
+     ``Add``, ``Sub``, and ``Mul`` also provide bulk integer and half-precision
+     loops with exact operand order, special values, and tails.
      - PR01
      - Pending
    * - Binary PR03
      - Vector broadcast families and executor decisions.
      - Repeated block, inner-vector, outer, and general strided patterns use
        vector inner loops. Per-invocation processor-aware decisions submit
-       independent tasks to the session executor, scale expensive operations,
-       cap bandwidth-bound operations, and do not store a thread count or
-       introduce another scheduler.
+       independent tasks to the session executor, scale across its effective
+       thread count when enough work exists, and do not store a thread count
+       or introduce another scheduler.
      - PR01, PR02; completed runtime foundation
      - Pending
    * - Binary PR04
