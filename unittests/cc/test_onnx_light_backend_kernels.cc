@@ -736,7 +736,7 @@ TEST(OnnxLightBackendKernels, MatMulBenchmarksRunThroughRuntime) {
 
 TEST(OnnxLightBackendKernels, GemmBenchmarkRunsThroughRuntime) {
   // Execute one bounded representative case through the real multithreaded
-  // runtime. The metadata test below validates the complete 72-case benchmark
+  // runtime. The metadata test below validates the complete 106-case benchmark
   // corpus without materializing and executing every large timing workload as
   // part of the unit-test suite.
   const std::vector<std::string> failures =
@@ -784,6 +784,10 @@ TEST(OnnxLightBackendKernels, GemmBenchmarkCorpusIsLazyAndCoversPriorityShapes) 
     }
     ++cpu_cases;
     EXPECT_TRUE(names.insert(test_case.name).second) << test_case.name;
+    EXPECT_NE(test_case.name,
+              "test_cpu_gemm_square_2048_float16_transA_0_transB_0_bias_none_benchmark");
+    EXPECT_NE(test_case.name,
+              "test_cpu_gemm_square_4096_float16_transA_0_transB_0_bias_none_benchmark");
     EXPECT_TRUE(test_case.is_lazy());
     EXPECT_FALSE(test_case.materialized());
     EXPECT_TRUE(test_case.name.ends_with("_benchmark"));
@@ -834,9 +838,9 @@ TEST(OnnxLightBackendKernels, GemmBenchmarkCorpusIsLazyAndCoversPriorityShapes) 
     has_transformer_decode |=
         test_case.name.find("transformer_projection_decode") != std::string::npos;
   }
-  // 27 prepared shapes, each registered for float32, float64, float16 and
-  // bfloat16.
-  EXPECT_EQ(cpu_cases, 108u);
+  // 27 prepared shapes registered for four dtypes, excluding the two largest
+  // square float16 cases.
+  EXPECT_EQ(cpu_cases, 106u);
   EXPECT_TRUE(has_constant_b);
   EXPECT_TRUE(has_direct);
   EXPECT_TRUE(has_skinny_m);
