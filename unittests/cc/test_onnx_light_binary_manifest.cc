@@ -153,6 +153,7 @@ TEST(OnnxLightBinaryManifest, RegistersValidatedTuningSchemaForEveryOperatorAndI
       EXPECT_EQ(parameters.Get<int64_t>("parallel.block_threshold_bytes"), 1024 * 1024);
       EXPECT_EQ(parameters.Get<int64_t>("parallel.scalar_threshold_bytes"), 256 * 1024);
       EXPECT_EQ(parameters.Get<int64_t>("parallel.target_block_bytes"), 1024 * 1024);
+      EXPECT_EQ(parameters.Get<int64_t>("parallel.max_participants"), 0);
       EXPECT_NO_THROW(schema->Validate(parameters));
     }
   }
@@ -209,11 +210,12 @@ TEST(OnnxLightBinaryManifest, ConfiguredTuningControlsExecutionAndRejectsInvalid
   parameters.values["parallel.block_threshold_bytes"] = int64_t{0};
   parameters.values["parallel.scalar_threshold_bytes"] = int64_t{0};
   parameters.values["parallel.target_block_bytes"] = int64_t{12};
+  parameters.values["parallel.max_participants"] = int64_t{2};
   EXPECT_NO_THROW(schema->Validate(parameters));
   EXPECT_NO_THROW(kernel.Configure(parameters));
   kernel(left, right, output);
   EXPECT_EQ(executor.dispatches, 1);
-  EXPECT_EQ(executor.blocks, 4);
+  EXPECT_EQ(executor.blocks, 2);
   for (float value : std::span(output.AsFloat(), count)) {
     EXPECT_FLOAT_EQ(value, 3.0f);
   }
@@ -223,6 +225,10 @@ TEST(OnnxLightBinaryManifest, ConfiguredTuningControlsExecutionAndRejectsInvalid
   EXPECT_THROW(kernel.Configure(parameters), std::invalid_argument);
   parameters = schema->portable_defaults();
   parameters.values["parallel.bulk_threshold_bytes"] = int64_t{-1};
+  EXPECT_THROW(schema->Validate(parameters), std::invalid_argument);
+  EXPECT_THROW(kernel.Configure(parameters), std::invalid_argument);
+  parameters = schema->portable_defaults();
+  parameters.values["parallel.max_participants"] = int64_t{-1};
   EXPECT_THROW(schema->Validate(parameters), std::invalid_argument);
   EXPECT_THROW(kernel.Configure(parameters), std::invalid_argument);
 

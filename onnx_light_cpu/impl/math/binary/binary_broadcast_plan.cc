@@ -259,7 +259,6 @@ void BinaryBroadcastPlan::ExecuteFlat(const std::byte *left, const std::byte *ri
   const std::size_t threshold_bytes = bulk != nullptr ? tuning.bulk_parallel_threshold_bytes
                                                       : tuning.scalar_parallel_threshold_bytes;
   const std::size_t min_units = ByteThresholdToUnits(threshold_bytes, bytes_per_unit);
-  const std::int64_t max_participants = kBinaryUnboundedParticipants;
   const std::size_t element_size = std::max<std::size_t>(adapter_.output_size, 1);
   const std::int64_t block_multiple =
       std::max<std::int64_t>(static_cast<std::int64_t>(kExecutionSimdWidthBytes / element_size), 1);
@@ -270,7 +269,7 @@ void BinaryBroadcastPlan::ExecuteFlat(const std::byte *left, const std::byte *ri
   const std::int64_t min_block_size = static_cast<std::int64_t>(
       std::max<std::size_t>(ByteThresholdToUnits(tuning.target_block_bytes, bytes_per_unit), 1));
   const ExecutionSchedule schedule{static_cast<std::int64_t>(min_units_bound), min_block_size,
-                                   max_participants};
+                                   tuning.max_participants};
   ExecuteRanges(static_cast<std::int64_t>(count), schedule, block_multiple,
                 [&](std::int64_t begin, std::int64_t end) {
                   const std::size_t sub_count = static_cast<std::size_t>(end - begin);
@@ -395,7 +394,7 @@ void BinaryBroadcastPlan::ExecuteMultiDimensional(const std::byte *left, const s
   const ExecutionSchedule schedule{
       static_cast<std::int64_t>(std::max<std::size_t>(min_units, 1)),
       static_cast<std::int64_t>(std::max<std::size_t>(min_block_units, 1)),
-      kBinaryUnboundedParticipants};
+      tuning.max_participants};
   ExecuteRanges(static_cast<std::int64_t>(outer_block_count_), schedule,
                 [&](std::int64_t begin, std::int64_t end) {
                   ExecuteOuterRange(left, right, output, static_cast<std::size_t>(begin),

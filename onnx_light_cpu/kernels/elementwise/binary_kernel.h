@@ -20,7 +20,7 @@ namespace onnx_light_cpu {
 
 class BinaryElementwiseKernel : public ONNX_LIGHT_NAMESPACE::core::runtime::KernelBase {
 public:
-  static constexpr std::uint32_t kTuningAbi = 1;
+  static constexpr std::uint32_t kTuningAbi = 2;
 
   BinaryElementwiseKernel(const ONNX_LIGHT_NAMESPACE::NodeProto &node,
                           const ONNX_LIGHT_NAMESPACE::core::runtime::KernelContext &ctx);

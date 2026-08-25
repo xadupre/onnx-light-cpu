@@ -31,13 +31,8 @@ namespace onnx_light_cpu {
 // * General-strided (and any scalar-fallback) loops pay per-element gather
 //   addressing and are latency, not bandwidth, bound, so they split earlier
 //   at 256 KiB.
-// All loop families use the session executor's full effective thread count
-// once enough independent work is available.
-// Sentinel meaning "no additional cap beyond the executor's own effective
-// thread count" (the "physical cores" candidate).
-inline constexpr std::int64_t kBinaryUnboundedParticipants =
-    std::numeric_limits<std::int64_t>::max();
-
+// ABI 2 additionally exposes a participant ceiling. Registry value zero is
+// resolved to the unbounded portable default before execution.
 inline constexpr std::size_t kBinaryBulkParallelThresholdBytes = 1024 * 1024;
 
 inline constexpr std::size_t kBinaryBlockParallelThresholdBytes = 1024 * 1024;
@@ -46,11 +41,14 @@ inline constexpr std::size_t kBinaryScalarParallelThresholdBytes = 256 * 1024;
 
 inline constexpr std::size_t kBinaryTargetBlockBytes = 1024 * 1024;
 
+inline constexpr std::int64_t kBinaryMaxParticipants = std::numeric_limits<std::int64_t>::max();
+
 struct BinaryExecutionTuning {
   std::size_t bulk_parallel_threshold_bytes = kBinaryBulkParallelThresholdBytes;
   std::size_t block_parallel_threshold_bytes = kBinaryBlockParallelThresholdBytes;
   std::size_t scalar_parallel_threshold_bytes = kBinaryScalarParallelThresholdBytes;
   std::size_t target_block_bytes = kBinaryTargetBlockBytes;
+  std::int64_t max_participants = kBinaryMaxParticipants;
 
   bool operator==(const BinaryExecutionTuning &) const = default;
 };

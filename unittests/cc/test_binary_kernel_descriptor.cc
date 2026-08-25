@@ -9,7 +9,9 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <bit>
 #include <cstdint>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -93,6 +95,25 @@ TEST(BinaryKernelDescriptor, AssignsStableDistinctCacheIdentities) {
   EXPECT_NE(first.cache_identity(), second.cache_identity());
 }
 
+TEST(BinaryKernelDescriptor, SameTypeSignaturesProvideAllBulkLoopFamilies) {
+  for (const auto &entry : GetBinaryManifest()) {
+    BinaryKernelDescriptor::Attributes attributes;
+    if (entry.op == BinaryOperator::kMod) {
+      attributes.mod_fmod = 1;
+    }
+    const BinaryKernelDescriptor descriptor(std::string(entry.op_type), entry.since_version,
+                                            attributes);
+    for (const auto &adapter : descriptor.adapters()) {
+      if (adapter.signature.left != adapter.signature.right) {
+        continue;
+      }
+      EXPECT_NE(adapter.bulk_contiguous, nullptr) << entry.op_type;
+      EXPECT_NE(adapter.bulk_left_scalar, nullptr) << entry.op_type;
+      EXPECT_NE(adapter.bulk_right_scalar, nullptr) << entry.op_type;
+    }
+  }
+}
+
 TEST(BinaryKernelDescriptor, PowMixedTypesExecuteWithBaseOutputType) {
   const BinaryKernelDescriptor pow("Pow", 15, {});
 
@@ -116,6 +137,41 @@ TEST(BinaryKernelDescriptor, PowMixedTypesExecuteWithBaseOutputType) {
   pow.ResolveAdapter(BinaryDataType::FLOAT16, BinaryDataType::BFLOAT16, BinaryDataType::FLOAT16)
       .scalar(&half_base, &bfloat_exponent, &half_output);
   EXPECT_FLOAT_EQ(onnx_light_cpu::detail::Float16BitsToFloat(half_output), 2.0f);
+
+  const auto &float_mixed =
+      pow.ResolveAdapter(BinaryDataType::FLOAT, BinaryDataType::INT64, BinaryDataType::FLOAT);
+  EXPECT_NE(float_mixed.bulk_contiguous, nullptr);
+  EXPECT_NE(float_mixed.bulk_left_scalar, nullptr);
+  EXPECT_NE(float_mixed.bulk_right_scalar, nullptr);
+
+  const float negative_one = -1.0f;
+  const std::int32_t odd_exponent = 16777217;
+  float parity_output = 0.0f;
+  pow.ResolveAdapter(BinaryDataType::FLOAT, BinaryDataType::INT32, BinaryDataType::FLOAT)
+      .scalar(&negative_one, &odd_exponent, &parity_output);
+  EXPECT_FLOAT_EQ(parity_output, -1.0f);
+
+  const std::uint16_t half_negative_one = onnx_light_cpu::detail::FloatToFloat16Bits(-1.0f);
+  std::uint16_t half_parity_output = 0;
+  pow.ResolveAdapter(BinaryDataType::FLOAT16, BinaryDataType::INT32, BinaryDataType::FLOAT16)
+      .scalar(&half_negative_one, &odd_exponent, &half_parity_output);
+  EXPECT_FLOAT_EQ(onnx_light_cpu::detail::Float16BitsToFloat(half_parity_output), -1.0f);
+
+  const std::int64_t large_odd_exponent = (std::int64_t{1} << 53) + 1;
+  pow.ResolveAdapter(BinaryDataType::FLOAT16, BinaryDataType::INT64, BinaryDataType::FLOAT16)
+      .scalar(&half_negative_one, &large_odd_exponent, &half_parity_output);
+  EXPECT_FLOAT_EQ(onnx_light_cpu::detail::Float16BitsToFloat(half_parity_output), -1.0f);
+}
+
+TEST(BinaryKernelDescriptor, IntegerPReluWrapsSignedMultiplication) {
+  const BinaryKernelDescriptor prelu("PRelu", 16, {});
+  const auto &adapter =
+      prelu.ResolveAdapter(BinaryDataType::INT32, BinaryDataType::INT32, BinaryDataType::INT32);
+  const std::int32_t input = std::numeric_limits<std::int32_t>::min();
+  const std::int32_t slope = -1;
+  std::int32_t output = 0;
+  adapter.bulk_contiguous(&input, &slope, &output, 1);
+  EXPECT_EQ(std::bit_cast<std::uint32_t>(output), std::bit_cast<std::uint32_t>(input));
 }
 
 } // namespace
