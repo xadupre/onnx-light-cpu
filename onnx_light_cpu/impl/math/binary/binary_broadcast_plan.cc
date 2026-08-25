@@ -8,6 +8,7 @@
 #include "onnx_light_cpu/impl/math/binary/binary_execution_schedule.h"
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <stdexcept>
@@ -125,6 +126,9 @@ BinaryBroadcastPlan::BinaryBroadcastPlan(const BinaryKernelDescriptor &descripto
   outer_block_count_ = 1;
   for (std::size_t i = 0; i + 1 < dimensions_.size(); ++i) {
     outer_block_count_ *= dimensions_[i].extent;
+  }
+  if (dimensions_.size() >= 2 && dimensions_.size() <= 4) {
+    prepared_outer_rank_ = dimensions_.size() - 1;
   }
   left_output_alias_safe_ =
       std::vector<std::int64_t>(left_shape.begin(), left_shape.end()) == output_shape_ &&
@@ -336,6 +340,19 @@ void BinaryBroadcastPlan::ExecuteOuterRange(const std::byte *left, const std::by
   if (outer_begin >= outer_end) {
     return;
   }
+  switch (prepared_outer_rank_) {
+  case 1:
+    ExecuteOuterRangeFixed<1>(left, right, output, outer_begin, outer_end);
+    return;
+  case 2:
+    ExecuteOuterRangeFixed<2>(left, right, output, outer_begin, outer_end);
+    return;
+  case 3:
+    ExecuteOuterRangeFixed<3>(left, right, output, outer_begin, outer_end);
+    return;
+  default:
+    break;
+  }
   const std::size_t outer_dims = dimensions_.size() - 1;
   std::vector<std::size_t> indices(outer_dims, 0);
   std::ptrdiff_t left_offset = 0;
@@ -344,31 +361,76 @@ void BinaryBroadcastPlan::ExecuteOuterRange(const std::byte *left, const std::by
   ComputeOuterOffsets(outer_begin, indices, left_offset, right_offset, output_offset);
   const Dimension &inner = dimensions_.back();
   for (std::size_t block = outer_begin; block < outer_end; ++block) {
-    // Vectorize the inner extent whenever the plan's inner dimension leaves
-    // one side contiguous (repeated block / inner-vector broadcast), both
-    // sides contiguous (outer broadcast), or by falling back to the
-    // per-element scalar loop (general strided).
-    if (inner.left_stride == 0 && inner.right_stride == 1 && adapter_.bulk_left_scalar != nullptr) {
-      adapter_.bulk_left_scalar(
-          left + left_offset * adapter_.left_size, right + right_offset * adapter_.right_size,
-          output + output_offset * adapter_.output_size, inner_loop_elements_);
-    } else if (inner.right_stride == 0 && inner.left_stride == 1 &&
-               adapter_.bulk_right_scalar != nullptr) {
-      adapter_.bulk_right_scalar(
-          left + left_offset * adapter_.left_size, right + right_offset * adapter_.right_size,
-          output + output_offset * adapter_.output_size, inner_loop_elements_);
-    } else if (inner.left_stride == 1 && inner.right_stride == 1 &&
-               adapter_.bulk_contiguous != nullptr) {
-      adapter_.bulk_contiguous(left + left_offset * adapter_.left_size,
-                               right + right_offset * adapter_.right_size,
-                               output + output_offset * adapter_.output_size, inner_loop_elements_);
-    } else {
-      ExecuteInner(left, right, output, left_offset, right_offset, output_offset);
-    }
+    ExecuteInnerBlock(left, right, output, left_offset, right_offset, output_offset);
     if (block + 1 == outer_end) {
       break;
     }
     AdvanceOuterIndices(indices, left_offset, right_offset, output_offset);
+  }
+}
+
+void BinaryBroadcastPlan::ExecuteInnerBlock(const std::byte *left, const std::byte *right,
+                                            std::byte *output, std::ptrdiff_t left_offset,
+                                            std::ptrdiff_t right_offset,
+                                            std::ptrdiff_t output_offset) const {
+  const Dimension &inner = dimensions_.back();
+  if (inner.left_stride == 0 && inner.right_stride == 1 && adapter_.bulk_left_scalar != nullptr) {
+    adapter_.bulk_left_scalar(left + left_offset * adapter_.left_size,
+                              right + right_offset * adapter_.right_size,
+                              output + output_offset * adapter_.output_size, inner_loop_elements_);
+  } else if (inner.right_stride == 0 && inner.left_stride == 1 &&
+             adapter_.bulk_right_scalar != nullptr) {
+    adapter_.bulk_right_scalar(left + left_offset * adapter_.left_size,
+                               right + right_offset * adapter_.right_size,
+                               output + output_offset * adapter_.output_size, inner_loop_elements_);
+  } else if (inner.left_stride == 1 && inner.right_stride == 1 &&
+             adapter_.bulk_contiguous != nullptr) {
+    adapter_.bulk_contiguous(left + left_offset * adapter_.left_size,
+                             right + right_offset * adapter_.right_size,
+                             output + output_offset * adapter_.output_size, inner_loop_elements_);
+  } else {
+    ExecuteInner(left, right, output, left_offset, right_offset, output_offset);
+  }
+}
+
+template <std::size_t OuterRank>
+void BinaryBroadcastPlan::ExecuteOuterRangeFixed(const std::byte *left, const std::byte *right,
+                                                 std::byte *output, std::size_t outer_begin,
+                                                 std::size_t outer_end) const {
+  std::array<std::size_t, OuterRank> indices{};
+  std::ptrdiff_t left_offset = 0;
+  std::ptrdiff_t right_offset = 0;
+  std::ptrdiff_t output_offset = 0;
+  std::size_t remaining = outer_begin;
+  for (std::size_t d = OuterRank; d-- > 0;) {
+    const Dimension &dimension = dimensions_[d];
+    const std::size_t index = remaining % dimension.extent;
+    remaining /= dimension.extent;
+    indices[d] = index;
+    left_offset += static_cast<std::ptrdiff_t>(index) * dimension.left_stride;
+    right_offset += static_cast<std::ptrdiff_t>(index) * dimension.right_stride;
+    output_offset += static_cast<std::ptrdiff_t>(index) * dimension.output_stride;
+  }
+
+  for (std::size_t block = outer_begin; block < outer_end; ++block) {
+    ExecuteInnerBlock(left, right, output, left_offset, right_offset, output_offset);
+    if (block + 1 == outer_end) {
+      break;
+    }
+    for (std::size_t d = OuterRank; d-- > 0;) {
+      const Dimension &dimension = dimensions_[d];
+      ++indices[d];
+      left_offset += dimension.left_stride;
+      right_offset += dimension.right_stride;
+      output_offset += dimension.output_stride;
+      if (indices[d] < dimension.extent) {
+        break;
+      }
+      left_offset -= static_cast<std::ptrdiff_t>(indices[d]) * dimension.left_stride;
+      right_offset -= static_cast<std::ptrdiff_t>(indices[d]) * dimension.right_stride;
+      output_offset -= static_cast<std::ptrdiff_t>(indices[d]) * dimension.output_stride;
+      indices[d] = 0;
+    }
   }
 }
 
