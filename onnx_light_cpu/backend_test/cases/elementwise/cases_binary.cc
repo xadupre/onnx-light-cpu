@@ -301,15 +301,20 @@ IoData MakeBinaryIoData(const BinaryManifestEntry &entry, const BinaryTypeSignat
 std::string CaseName(const BinaryManifestEntry &entry, const BinaryTypeSignature &signature,
                      const ShapePair &shape_pair,
                      const BinaryKernelDescriptor::Attributes &attributes, bool swap_operands,
-                     bool benchmark, std::int64_t size_override = -1) {
+                     bool benchmark, std::int64_t size_override = -1,
+                     std::string_view profile = "") {
   std::string op = std::string(entry.op_type);
   for (char &c : op) {
     if (c >= 'A' && c <= 'Z')
       c = static_cast<char>(c - 'A' + 'a');
   }
-  std::string name = "test_cpu_" + op + "_v" + std::to_string(entry.since_version) + "_" +
-                     shape_pair.tag + "_" + DataTypeSuffix(signature.left) + "x" +
-                     DataTypeSuffix(signature.right) + "_to_" + DataTypeSuffix(signature.output);
+  std::string name = "test_cpu_" + op + "_";
+  if (!profile.empty()) {
+    name += std::string(profile) + "_";
+  }
+  name += "v" + std::to_string(entry.since_version) + "_" + shape_pair.tag + "_" +
+          DataTypeSuffix(signature.left) + "x" + DataTypeSuffix(signature.right) + "_to_" +
+          DataTypeSuffix(signature.output);
   if (entry.op == BinaryOperator::kMod) {
     name += attributes.mod_fmod == 0 ? "_fmod0" : "_fmod1";
   }
@@ -325,6 +330,23 @@ std::string CaseName(const BinaryManifestEntry &entry, const BinaryTypeSignature
     name += "_n" + std::to_string(size_override) + "_benchmark";
   }
   return name;
+}
+
+void RegisterLlmBenchmark(std::vector<TestCase> &registry, const BinaryManifestEntry &entry,
+                          const BinaryTypeSignature &signature, const ShapePair &shape_pair) {
+  const std::int64_t left_count = static_cast<std::int64_t>(ElementCount(shape_pair.left));
+  const std::int64_t right_count = static_cast<std::int64_t>(ElementCount(shape_pair.right));
+  const std::int64_t output_count =
+      static_cast<std::int64_t>(BroadcastElementCount(shape_pair.left, shape_pair.right));
+  const BinaryKernelDescriptor::Attributes attributes = DefaultAttributes(entry, signature.left);
+  const NodeProto node = MakeNode(entry.op_type, attributes);
+  const OpsetId opset(std::string(), entry.since_version);
+  const std::string name =
+      CaseName(entry, signature, shape_pair, attributes, false, true, output_count, "llm_qwen3_8b");
+  Expect(registry, node, name, {opset}, {left_count, right_count}, {output_count},
+         [entry, signature, shape_pair, attributes]() -> IoData {
+           return MakeBinaryIoData(entry, signature, shape_pair, attributes, false);
+         });
 }
 
 void RegisterBenchmarksForSignature(std::vector<TestCase> &registry,
@@ -374,6 +396,21 @@ void RegisterCpuBinaryCases(std::vector<TestCase> &registry, const std::string &
   if (mode == TestMode::BENCHMARK) {
     for (const BinaryTypeSignature &signature : entry.signatures) {
       RegisterBenchmarksForSignature(registry, entry, signature);
+      if (entry.op == BinaryOperator::kMul && signature.left == BinaryDataType::FLOAT16 &&
+          signature.right == BinaryDataType::FLOAT16 &&
+          signature.output == BinaryDataType::FLOAT16) {
+        for (std::int64_t sequence_length :
+             {std::int64_t{1}, std::int64_t{128}, std::int64_t{512}}) {
+          RegisterLlmBenchmark(registry, entry, signature,
+                               {"contiguous_s" + std::to_string(sequence_length) + "_h12288",
+                                {1, sequence_length, 12288},
+                                {1, sequence_length, 12288}});
+        }
+      } else if (entry.op == BinaryOperator::kSub && signature.left == BinaryDataType::INT64 &&
+                 signature.right == BinaryDataType::INT64 &&
+                 signature.output == BinaryDataType::INT64) {
+        RegisterLlmBenchmark(registry, entry, signature, {"right_scalar_batch1", {1}, {}});
+      }
     }
     return;
   }

@@ -14,6 +14,7 @@
 #include "onnx_light_cpu/kernels/math/gemm_kernel.h"
 #include "onnx_light_cpu/kernels/math/integer_matmul_kernel.h"
 #include "onnx_light_cpu/kernels/math/matmul_kernel.h"
+#include "onnx_light_cpu/kernels/math/rms_normalization_kernel.h"
 #include "onnx_light_cpu/kernels/math/swiglu_kernel.h"
 #include "onnx_light_cpu/kernels/traditionalml/tree_ensemble_kernel.h"
 
@@ -34,6 +35,7 @@ void RegisterAllKernels() {
   RegisterMatMulKernel();
   RegisterIntegerMatMulKernels();
   RegisterNotKernel();
+  RegisterRmsNormalizationKernel();
   RegisterSwiGLUKernel();
   RegisterTreeEnsembleKernel();
   RegisterVariadicElementwiseKernels();

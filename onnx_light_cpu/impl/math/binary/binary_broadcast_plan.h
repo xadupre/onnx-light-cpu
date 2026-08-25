@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "onnx_light_cpu/impl/math/binary/binary_execution_schedule.h"
 #include "onnx_light_cpu/impl/math/binary/binary_kernel_descriptor.h"
 
 #include <cstddef>
@@ -50,6 +51,8 @@ public:
   bool right_output_alias_safe() const noexcept { return right_output_alias_safe_; }
 
   void Execute(const void *left, const void *right, void *output) const;
+  void Execute(const void *left, const void *right, void *output,
+               const BinaryExecutionTuning &tuning) const;
 
 private:
   void ClassifyLoopFamily();
@@ -61,9 +64,10 @@ private:
   // multi-dimensional (repeated block/inner-vector/outer/general-strided)
   // dispatch, each submitting independent, per-invocation work to the
   // session executor via ``ExecuteRanges`` instead of a private scheduler.
-  void ExecuteFlat(const std::byte *left, const std::byte *right, std::byte *output) const;
-  void ExecuteMultiDimensional(const std::byte *left, const std::byte *right,
-                               std::byte *output) const;
+  void ExecuteFlat(const std::byte *left, const std::byte *right, std::byte *output,
+                   const BinaryExecutionTuning &tuning) const;
+  void ExecuteMultiDimensional(const std::byte *left, const std::byte *right, std::byte *output,
+                               const BinaryExecutionTuning &tuning) const;
   void ExecuteOuterRange(const std::byte *left, const std::byte *right, std::byte *output,
                          std::size_t outer_begin, std::size_t outer_end) const;
   void ComputeOuterOffsets(std::size_t outer_index, std::vector<std::size_t> &indices,

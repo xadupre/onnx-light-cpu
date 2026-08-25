@@ -13,41 +13,48 @@ namespace onnx_light_cpu {
 
 // Binary PR03: per-invocation executor decisions for BinaryBroadcastPlan.
 //
-// Thresholds and participant caps were calibrated from the candidate grid
-// required by the roadmap: byte thresholds {0, 4 KiB, 16 KiB, 64 KiB,
-// 256 KiB, 1 MiB} and participant caps {1, 2, 4, physical cores}. Values
-// below are the smallest candidates whose median stayed within 2% of the
-// best candidate for their loop family without regressing small-tensor p90
-// versus the serial baseline, following the same convention already used by
-// ``kExpExecutionSchedule``/``kLogExecutionSchedule``
+// Byte thresholds were calibrated from the candidate grid required by the
+// roadmap: {0, 4 KiB, 16 KiB, 64 KiB, 256 KiB, 1 MiB}. Values below avoid
+// regressing small-tensor p90 versus the serial baseline, following the same
+// convention already used by ``kExpExecutionSchedule``/``kLogExecutionSchedule``
 // (onnx_light_cpu/impl/math/exp_log_schedule.h) and the ``Abs``/``Not``
 // kernels. ``min_parallel_size``/``min_block_size`` are expressed in the same
 // units passed to ``ExecuteRanges`` (elements for the flat contiguous/scalar
 // path, outer-block counts for multi-dimensional broadcast families).
 //
-// * Contiguous/left-scalar/right-scalar loops call one bulk SIMD kernel over
-//   the whole extent (Binary PR02): they are bandwidth bound and the
-//   smallest profitable threshold across the grid is 64 KiB. A four-way
-//   participant cap keeps them within 2% of the physical-core median once
-//   split; a wider cap only saturates memory bandwidth further.
+// * Contiguous/left-scalar/right-scalar loops call one bulk kernel over the
+//   whole extent (Binary PR02): they are bandwidth bound and stay serial
+//   below 1 MiB to avoid executor overhead on medium tensors.
 // * Repeated-block/outer-broadcast/inner-vector-broadcast loops still call a
 //   bulk kernel per outer block, but per-block dispatch overhead makes the
-//   smallest safe threshold 256 KiB; the same four-way cap applies.
+//   smallest safe threshold 1 MiB.
 // * General-strided (and any scalar-fallback) loops pay per-element gather
-//   addressing and are latency, not bandwidth, bound: they profit from
-//   splitting earlier (16 KiB) and from the full session thread count once
-//   split, so no additional cap below the executor's own limit is applied.
+//   addressing and are latency, not bandwidth, bound, so they split earlier
+//   at 256 KiB.
+// All loop families use the session executor's full effective thread count
+// once enough independent work is available.
 // Sentinel meaning "no additional cap beyond the executor's own effective
 // thread count" (the "physical cores" candidate).
 inline constexpr std::int64_t kBinaryUnboundedParticipants =
     std::numeric_limits<std::int64_t>::max();
 
-inline constexpr std::size_t kBinaryBulkParallelThresholdBytes = 64 * 1024;
-inline constexpr std::int64_t kBinaryBulkMaxParticipants = 4;
+inline constexpr std::size_t kBinaryBulkParallelThresholdBytes = 1024 * 1024;
 
-inline constexpr std::size_t kBinaryBlockParallelThresholdBytes = 256 * 1024;
-inline constexpr std::int64_t kBinaryBlockMaxParticipants = 4;
+inline constexpr std::size_t kBinaryBlockParallelThresholdBytes = 1024 * 1024;
 
-inline constexpr std::size_t kBinaryScalarParallelThresholdBytes = 16 * 1024;
+inline constexpr std::size_t kBinaryScalarParallelThresholdBytes = 256 * 1024;
+
+inline constexpr std::size_t kBinaryTargetBlockBytes = 1024 * 1024;
+
+struct BinaryExecutionTuning {
+  std::size_t bulk_parallel_threshold_bytes = kBinaryBulkParallelThresholdBytes;
+  std::size_t block_parallel_threshold_bytes = kBinaryBlockParallelThresholdBytes;
+  std::size_t scalar_parallel_threshold_bytes = kBinaryScalarParallelThresholdBytes;
+  std::size_t target_block_bytes = kBinaryTargetBlockBytes;
+
+  bool operator==(const BinaryExecutionTuning &) const = default;
+};
+
+inline constexpr BinaryExecutionTuning kDefaultBinaryExecutionTuning{};
 
 } // namespace onnx_light_cpu

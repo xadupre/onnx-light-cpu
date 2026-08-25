@@ -6,7 +6,9 @@
 
 #include "onnx_light_cpu/impl/execution.h"
 
+#include <algorithm>
 #include <cstdint>
+#include <limits>
 
 #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
 #define ONNX_LIGHT_CPU_X86 1
@@ -16,11 +18,6 @@
 #endif
 
 namespace onnx_light_cpu {
-
-// Relative per-element cost passed to ExecuteRanges for the Not kernel. Not is a
-// single byte comparison per element and is therefore memory-bandwidth bound,
-// like Abs, so a trivial cost of 1 keeps its parallel threshold high.
-inline constexpr double kNotCostPerElement = 1.0;
 
 // ---------------------------------------------------------------------------
 // NotBool implementations
@@ -106,13 +103,30 @@ void NotBool_Dispatch(const uint8_t *input, uint8_t *output, std::size_t count) 
 } // namespace
 
 void NotBool(const uint8_t *input, uint8_t *output, std::size_t count) {
+  NotBoolWithTuning(input, output, count, NotExecutionTuning{});
+}
+
+void NotBoolWithTuning(const uint8_t *input, uint8_t *output, std::size_t count,
+                       const NotExecutionTuning &tuning) {
   if (count == 0)
     return;
-  ExecuteRanges(
-      static_cast<std::int64_t>(count), kNotCostPerElement, ExecutionSimdLanes<std::uint8_t>(),
-      [input, output](std::int64_t begin, std::int64_t end) {
-        NotBool_Dispatch(input + begin, output + begin, static_cast<std::size_t>(end - begin));
-      });
+  if (tuning.parallel_threshold_bytes == 0 || count < tuning.parallel_threshold_bytes) {
+    NotBool_Dispatch(input, output, count);
+    return;
+  }
+  const ExecutionSchedule schedule{
+      static_cast<std::int64_t>(std::min<std::size_t>(
+          tuning.parallel_threshold_bytes,
+          static_cast<std::size_t>(std::numeric_limits<std::int64_t>::max()))),
+      static_cast<std::int64_t>(std::min<std::size_t>(
+          std::max<std::size_t>(tuning.target_block_bytes, 1),
+          static_cast<std::size_t>(std::numeric_limits<std::int64_t>::max()))),
+      std::numeric_limits<std::int64_t>::max()};
+  ExecuteRanges(static_cast<std::int64_t>(count), schedule, ExecutionSimdLanes<std::uint8_t>(),
+                [input, output](std::int64_t begin, std::int64_t end) {
+                  NotBool_Dispatch(input + begin, output + begin,
+                                   static_cast<std::size_t>(end - begin));
+                });
 }
 
 } // namespace onnx_light_cpu

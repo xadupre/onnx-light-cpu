@@ -35,12 +35,10 @@ public:
     std::size_t right_size = 0;
     std::size_t output_size = 0;
 
-    // Optional bulk SIMD entry points, populated only for the FP32/FP64
-    // Add/Sub/Mul/Div signatures (Binary PR02). ``BinaryBroadcastPlan::Execute``
-    // uses these instead of the per-element ``scalar`` callback whenever the
-    // loop family is ``kContiguous``/``kLeftScalar``/``kRightScalar`` and a
-    // bulk function is available; other operators/types leave these null and
-    // fall back to the element-by-element ``scalar`` path.
+    // Optional bulk entry points. FP32/FP64 Add/Sub/Mul/Div use explicitly
+    // dispatched SIMD kernels; integer and half-precision Add/Sub/Mul use
+    // compiler-vectorizable typed loops. ``BinaryBroadcastPlan::Execute`` uses
+    // these instead of the per-element ``scalar`` callback whenever possible.
     using BulkContiguousFn = void (*)(const void *left, const void *right, void *out,
                                       std::size_t count);
     using BulkLeftScalarFn = void (*)(const void *left, const void *right, void *out,

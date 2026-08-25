@@ -300,6 +300,12 @@ TEST(OnnxLightBackendKernels, MatMulIntegerRunsThroughRuntime) {
   EXPECT_TRUE(failures.empty()) << Describe(failures);
 }
 
+TEST(OnnxLightBackendKernels, RmsNormalizationRunsThroughRuntime) {
+  const std::vector<std::string> failures =
+      RunCpuBackendCases("RMSNormalization", core::backend_test::TestMode::TEST);
+  EXPECT_TRUE(failures.empty()) << Describe(failures);
+}
+
 TEST(OnnxLightBackendKernels, AttentionRunsThroughRuntime) {
   const std::vector<std::string> failures =
       RunCpuBackendCases("Attention", core::backend_test::TestMode::TEST);
@@ -314,7 +320,9 @@ TEST(OnnxLightBackendKernels, AttentionPriorityBenchmarksRunThroughRuntime) {
         "test_cpu_attention_opset23_rank3_mha_q128_kv128_hd64_none_stateless_float32_benchmark",
         "test_cpu_attention_opset23_rank4_mha_q1_kv1024_hd64_none_internal_cache_bfloat16_"
         "benchmark",
-        "test_cpu_attention_opset24_rank4_mha_q8_kv1024_hd64_causal_nonpad_float32_benchmark"}) {
+        "test_cpu_attention_opset24_rank4_mha_q8_kv1024_hd64_causal_nonpad_float32_benchmark",
+        "test_cpu_attention_llm_qwen3_8b_opset23_rank3_gqa_q1_kv128_hd128_qh32_kvh8_causal_"
+        "internal_cache_float16_benchmark"}) {
     const std::vector<std::string> case_failures =
         RunCpuBackendCases("Attention", core::backend_test::TestMode::BENCHMARK, name);
     failures.insert(failures.end(), case_failures.begin(), case_failures.end());
@@ -425,11 +433,19 @@ TEST(OnnxLightBackendKernels, AttentionBenchmarkCoversPriorityCorpus) {
       EXPECT_TRUE(names.insert(test_case.name).second) << test_case.name;
     }
   }
-  EXPECT_EQ(names.size(), 57U);
+  EXPECT_EQ(names.size(), 61U);
   for (std::string_view name :
        {"test_cpu_attention_opset23_rank4_mha_q1_kv128_hd64_none_stateless_float16_benchmark",
         "test_cpu_attention_opset23_rank4_gqa_q128_kv128_hd64_causal_stateless_bfloat16_benchmark",
-        "test_cpu_attention_opset23_rank3_mha_q128_kv128_hd64_none_stateless_float32_benchmark"}) {
+        "test_cpu_attention_opset23_rank3_mha_q128_kv128_hd64_none_stateless_float32_benchmark",
+        "test_cpu_attention_llm_qwen3_8b_opset23_rank3_gqa_q128_kv128_hd128_qh32_kvh8_causal_"
+        "stateless_float16_benchmark",
+        "test_cpu_attention_llm_qwen3_8b_opset23_rank3_gqa_q1_kv128_hd128_qh32_kvh8_causal_"
+        "internal_cache_float16_benchmark",
+        "test_cpu_attention_llm_qwen3_8b_opset23_rank3_gqa_q1_kv1024_hd128_qh32_kvh8_causal_"
+        "internal_cache_float16_benchmark",
+        "test_cpu_attention_llm_qwen3_8b_opset23_rank3_gqa_q1_kv4096_hd128_qh32_kvh8_causal_"
+        "internal_cache_float16_benchmark"}) {
     EXPECT_TRUE(names.contains(std::string(name))) << name;
   }
   for (std::string_view tag :
@@ -604,6 +620,9 @@ TEST(OnnxLightBackendKernels, BinaryBenchmarkCorporaCoverEverySignatureAndPriori
     std::set<std::string> shape_tags;
     std::set<int64_t> output_sizes;
     for (const TestCase &test_case : cases) {
+      if (test_case.name.find("_llm_") != std::string::npos) {
+        continue;
+      }
       for (const std::string &shape_tag : expected_shape_tags) {
         if (test_case.name.find("_" + shape_tag + "_") != std::string::npos) {
           shape_tags.insert(shape_tag);
@@ -630,11 +649,41 @@ TEST(OnnxLightBackendKernels, BinaryBenchmarkCorporaCoverEverySignatureAndPriori
   }
 }
 
+TEST(OnnxLightBackendKernels, BinaryBenchmarkCorporaCoverQwen3LlmWorkloads) {
+  const std::vector<std::string> mul_names = {
+      "test_cpu_mul_llm_qwen3_8b_v14_contiguous_s1_h12288_float16xfloat16_to_float16_n12288_"
+      "benchmark",
+      "test_cpu_mul_llm_qwen3_8b_v14_contiguous_s128_h12288_float16xfloat16_to_float16_n1572864_"
+      "benchmark",
+      "test_cpu_mul_llm_qwen3_8b_v14_contiguous_s512_h12288_float16xfloat16_to_float16_n6291456_"
+      "benchmark",
+  };
+  const std::vector<std::string> sub_names = {
+      "test_cpu_sub_llm_qwen3_8b_v14_right_scalar_batch1_int64xint64_to_int64_n1_benchmark",
+  };
+  for (const auto &[op_type, expected_names] :
+       {std::pair<std::string_view, const std::vector<std::string> &>{"Mul", mul_names},
+        {"Sub", sub_names}}) {
+    const std::vector<TestCase> cases =
+        CollectCpuCases(std::string(op_type), core::backend_test::TestMode::BENCHMARK);
+    for (const std::string &name : expected_names) {
+      const auto found =
+          std::find_if(cases.begin(), cases.end(),
+                       [&name](const TestCase &test_case) { return test_case.name == name; });
+      ASSERT_NE(found, cases.end()) << name;
+      EXPECT_TRUE(found->is_lazy()) << name;
+      EXPECT_FALSE(found->materialized()) << name;
+    }
+    const std::vector<std::string> failures = RunCpuBackendCases(
+        std::string(op_type), core::backend_test::TestMode::BENCHMARK, expected_names.front());
+    EXPECT_TRUE(failures.empty()) << Describe(failures);
+  }
+}
+
 TEST(OnnxLightBackendKernels, UnaryBenchmarkCorporaCoverParallelThresholds) {
   onnx_light_cpu::backend_test::RegisterCpuKernelBackendTestCases();
   std::set<int64_t> exp_sizes;
-  std::set<int64_t> not_sizes;
-  for (const std::string &op : {"Abs", "Exp", "Log", "Not"}) {
+  for (const std::string &op : {"Abs", "Exp", "Log"}) {
     std::vector<TestCase> cases =
         CollectTestCases(op, /*include_big=*/false, core::backend_test::TestMode::BENCHMARK);
     std::set<int64_t> sizes;
@@ -652,11 +701,8 @@ TEST(OnnxLightBackendKernels, UnaryBenchmarkCorporaCoverParallelThresholds) {
     EXPECT_TRUE(sizes.contains(threshold)) << op;
     if (op == "Exp") {
       exp_sizes = sizes;
-    } else if (op == "Not") {
-      not_sizes = sizes;
     }
   }
-  EXPECT_EQ(not_sizes, exp_sizes);
 }
 
 TEST(OnnxLightBackendKernels, UnaryBenchmarkCorporaCoverEverySupportedType) {
@@ -694,7 +740,7 @@ TEST(OnnxLightBackendKernels, MatMulBenchmarkCorporaCoverTypesAndPriorityShapes)
   EXPECT_EQ(
       std::count_if(matmul.begin(), matmul.end(),
                     [](const TestCase &tc) { return tc.name.rfind("test_cpu_matmul_", 0) == 0; }),
-      28);
+      33);
   for (const std::string &type : {"float32", "float64", "float16", "bfloat16"}) {
     for (const std::string &shape :
          {"square_64", "square_1024", "skinny_m", "skinny_n", "large_k"}) {
@@ -703,6 +749,19 @@ TEST(OnnxLightBackendKernels, MatMulBenchmarkCorporaCoverTypesAndPriorityShapes)
         return test_case.name == expected;
       })) << expected;
     }
+  }
+  for (const std::string &name :
+       {"test_cpu_matmul_llm_qwen3_8b_qkv_m1_k4096_n6144_float16_benchmark",
+        "test_cpu_matmul_llm_qwen3_8b_o_proj_m1_k4096_n4096_float16_benchmark",
+        "test_cpu_matmul_llm_qwen3_8b_gate_up_m1_k4096_n12288_float16_benchmark",
+        "test_cpu_matmul_llm_qwen3_8b_down_m1_k12288_n4096_float16_benchmark",
+        "test_cpu_matmul_llm_qwen3_8b_lm_head_m1_k4096_n151936_float16_benchmark"}) {
+    const auto found =
+        std::find_if(matmul.begin(), matmul.end(),
+                     [&name](const TestCase &test_case) { return test_case.name == name; });
+    ASSERT_NE(found, matmul.end()) << name;
+    EXPECT_TRUE(found->is_lazy()) << name;
+    EXPECT_FALSE(found->materialized()) << name;
   }
 
   const std::vector<TestCase> integer = CollectTestCases("MatMulInteger", /*include_big=*/false,
@@ -723,10 +782,39 @@ TEST(OnnxLightBackendKernels, MatMulBenchmarkCorporaCoverTypesAndPriorityShapes)
   }
 }
 
+TEST(OnnxLightBackendKernels, RmsNormalizationBenchmarksCoverQwen3LlmWorkloads) {
+  onnx_light_cpu::backend_test::RegisterCpuKernelBackendTestCases();
+  const std::vector<TestCase> cases = CollectTestCases("RMSNormalization", /*include_big=*/false,
+                                                       core::backend_test::TestMode::BENCHMARK);
+  const std::vector<std::string> expected_names = {
+      "test_cpu_rmsnormalization_llm_qwen3_8b_hidden4096_s1_float16_benchmark",
+      "test_cpu_rmsnormalization_llm_qwen3_8b_hidden4096_s128_float16_benchmark",
+      "test_cpu_rmsnormalization_llm_qwen3_8b_q_norm_hd128_s1_qh32_float16_benchmark",
+      "test_cpu_rmsnormalization_llm_qwen3_8b_q_norm_hd128_s128_qh32_float16_benchmark",
+      "test_cpu_rmsnormalization_llm_qwen3_8b_k_norm_hd128_s1_kvh8_float16_benchmark",
+      "test_cpu_rmsnormalization_llm_qwen3_8b_k_norm_hd128_s128_kvh8_float16_benchmark",
+  };
+  for (const std::string &name : expected_names) {
+    const auto found = std::find_if(cases.begin(), cases.end(), [&name](const TestCase &test_case) {
+      return test_case.name == name;
+    });
+    ASSERT_NE(found, cases.end()) << name;
+    EXPECT_TRUE(found->is_lazy()) << name;
+    EXPECT_FALSE(found->materialized()) << name;
+  }
+  const std::vector<std::string> failures = RunCpuBackendCases(
+      "RMSNormalization", core::backend_test::TestMode::BENCHMARK, expected_names.front());
+  EXPECT_TRUE(failures.empty()) << Describe(failures);
+}
+
 TEST(OnnxLightBackendKernels, MatMulBenchmarksRunThroughRuntime) {
   std::vector<std::string> failures =
       RunCpuBackendCases("MatMul", core::backend_test::TestMode::BENCHMARK,
                          "test_cpu_matmul_square_64_float32_benchmark");
+  const std::vector<std::string> llm_failures =
+      RunCpuBackendCases("MatMul", core::backend_test::TestMode::BENCHMARK,
+                         "test_cpu_matmul_llm_qwen3_8b_qkv_m1_k4096_n6144_float16_benchmark");
+  failures.insert(failures.end(), llm_failures.begin(), llm_failures.end());
   const std::vector<std::string> integer_failures =
       RunCpuBackendCases("MatMulInteger", core::backend_test::TestMode::BENCHMARK,
                          "test_cpu_matmulinteger_square_64_int8xuint8_benchmark");
@@ -736,7 +824,7 @@ TEST(OnnxLightBackendKernels, MatMulBenchmarksRunThroughRuntime) {
 
 TEST(OnnxLightBackendKernels, GemmBenchmarkRunsThroughRuntime) {
   // Execute one bounded representative case through the real multithreaded
-  // runtime. The metadata test below validates the complete 72-case benchmark
+  // runtime. The metadata test below validates the complete 106-case benchmark
   // corpus without materializing and executing every large timing workload as
   // part of the unit-test suite.
   const std::vector<std::string> failures =
@@ -784,6 +872,10 @@ TEST(OnnxLightBackendKernels, GemmBenchmarkCorpusIsLazyAndCoversPriorityShapes) 
     }
     ++cpu_cases;
     EXPECT_TRUE(names.insert(test_case.name).second) << test_case.name;
+    EXPECT_NE(test_case.name,
+              "test_cpu_gemm_square_2048_float16_transA_0_transB_0_bias_none_benchmark");
+    EXPECT_NE(test_case.name,
+              "test_cpu_gemm_square_4096_float16_transA_0_transB_0_bias_none_benchmark");
     EXPECT_TRUE(test_case.is_lazy());
     EXPECT_FALSE(test_case.materialized());
     EXPECT_TRUE(test_case.name.ends_with("_benchmark"));
@@ -834,9 +926,9 @@ TEST(OnnxLightBackendKernels, GemmBenchmarkCorpusIsLazyAndCoversPriorityShapes) 
     has_transformer_decode |=
         test_case.name.find("transformer_projection_decode") != std::string::npos;
   }
-  // 27 prepared shapes, each registered for float32, float64, float16 and
-  // bfloat16.
-  EXPECT_EQ(cpu_cases, 108u);
+  // 27 prepared shapes registered for four dtypes, excluding the two largest
+  // square float16 cases.
+  EXPECT_EQ(cpu_cases, 106u);
   EXPECT_TRUE(has_constant_b);
   EXPECT_TRUE(has_direct);
   EXPECT_TRUE(has_skinny_m);

@@ -140,6 +140,14 @@ TEST(KernelRegistration, CollectionReportsEveryActualRegistration) {
        std::nullopt,
        std::nullopt},
       {"ai.onnx",
+       "RMSNormalization",
+       sym_ns::Device::kCPU,
+       "onnx_light_cpu::RMSNormalization",
+       {rt_ns::DataType::FLOAT, rt_ns::DataType::DOUBLE, rt_ns::DataType::FLOAT16,
+        rt_ns::DataType::BFLOAT16},
+       23,
+       std::nullopt},
+      {"ai.onnx",
        "SwiGLU",
        sym_ns::Device::kCPU,
        "onnx_light_cpu::SwiGLU",
@@ -316,7 +324,8 @@ TEST(KernelRegistration, NormalModeStillInstallsKernelsIntoDispatchTable) {
   for (const std::string &key :
        {"ai.onnx:Abs", "ai.onnx:Exp", "ai.onnx:Log", "ai.onnx:Gemm", "ai.onnx:MatMul",
         "ai.onnx:MatMulInteger", "ai.onnx:Max", "ai.onnx:Mean", "ai.onnx:Min",
-        "ai.onnx:QLinearMatMul", "ai.onnx:Not", "ai.onnx:Sum", "ai.onnx:SwiGLU"}) {
+        "ai.onnx:QLinearMatMul", "ai.onnx:Not", "ai.onnx:RMSNormalization", "ai.onnx:Sum",
+        "ai.onnx:SwiGLU"}) {
     EXPECT_NE(table.find(key), table.end()) << key;
   }
 }

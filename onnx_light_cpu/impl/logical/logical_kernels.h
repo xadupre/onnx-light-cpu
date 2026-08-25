@@ -16,11 +16,19 @@ namespace onnx_light_cpu {
 
 /// Computes the elementwise logical negation: out[i] = (input[i] == 0) for
 /// ``bool``. ONNX ``bool`` tensors are stored as one byte per element, so the
+struct NotExecutionTuning {
+  // Zero disables executor dispatch.
+  std::size_t parallel_threshold_bytes = 0;
+  std::size_t target_block_bytes = 4 * 1024 * 1024;
+};
+
 /// input and output are the raw byte patterns (as ``uint8_t``): every zero byte
 /// maps to ``1`` and every non-zero byte maps to ``0``, matching
 /// ``numpy.logical_not``. Dispatches to the best available SIMD path at
 /// runtime.
 void NotBool(const uint8_t *input, uint8_t *output, std::size_t count);
+void NotBoolWithTuning(const uint8_t *input, uint8_t *output, std::size_t count,
+                       const NotExecutionTuning &tuning);
 
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512BW
 void NotBool_AVX512(const uint8_t *input, uint8_t *output, std::size_t count);

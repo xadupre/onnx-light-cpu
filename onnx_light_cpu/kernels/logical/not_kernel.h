@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "onnx_light_cpu/impl/logical/logical_kernels.h"
+
 #include "onnx_core/runtime/kernels/kernel_context.h"
 #include "onnx_core/runtime/memory/simple_tensor.h"
 #include "onnx_core/runtime/runtime_context.h"
@@ -27,6 +29,16 @@ namespace onnx_light_cpu {
 class NotKernel : public ONNX_LIGHT_NAMESPACE::core::runtime::KernelBase {
 public:
   using ONNX_LIGHT_NAMESPACE::core::runtime::KernelBase::KernelBase;
+  static constexpr std::uint32_t kTuningAbi = 1;
+
+  NotKernel(const ONNX_LIGHT_NAMESPACE::NodeProto &node,
+            const ONNX_LIGHT_NAMESPACE::core::runtime::KernelContext &ctx);
+
+  static void RegisterTuningSchemas();
+  ONNX_LIGHT_NAMESPACE::core::runtime::KernelTuningKey
+  TuningKey(int32_t element_type) const override;
+  void
+  Configure(const ONNX_LIGHT_NAMESPACE::core::runtime::KernelTuningParameters &parameters) override;
 
   /// Library-qualified name identifying this kernel, recorded through
   /// :cpp:func:`RecordKernelUsage` on every :cpp:func:`Run` so callers can
@@ -47,6 +59,9 @@ public:
   /// ``data_type``, ``shape`` and buffer size must already match ``x``.
   void operator()(const ONNX_LIGHT_NAMESPACE::core::runtime::Tensor &x,
                   ONNX_LIGHT_NAMESPACE::core::runtime::Tensor &output) const;
+
+private:
+  NotExecutionTuning tuning_;
 };
 
 /// Registers the onnx-light-cpu ``Not`` kernel into onnx-light's shared

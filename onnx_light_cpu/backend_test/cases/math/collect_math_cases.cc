@@ -12,9 +12,13 @@ void CollectCpuMathTestCases(std::vector<TestCase> &registry, const std::string 
   using ONNX_LIGHT_NAMESPACE::core::backend_test::OpRegisterModeMap;
 
   static const OpRegisterModeMap kEntries = {
-      {"Abs", &RegisterCpuAbsCases},       {"Exp", &RegisterCpuExpCases},
-      {"Gemm", &RegisterCpuGemmCases},     {"Log", &RegisterCpuLogCases},
-      {"MatMul", &RegisterCpuMatMulCases}, {"MatMulInteger", &RegisterCpuMatMulIntegerCases},
+      {"Abs", &RegisterCpuAbsCases},
+      {"Exp", &RegisterCpuExpCases},
+      {"Gemm", &RegisterCpuGemmCases},
+      {"Log", &RegisterCpuLogCases},
+      {"MatMul", &RegisterCpuMatMulCases},
+      {"MatMulInteger", &RegisterCpuMatMulIntegerCases},
+      {"RMSNormalization", &RegisterCpuRmsNormalizationCases},
       {"SwiGLU", &RegisterCpuSwiGLUCases},
   };
   DispatchRegisterByOpType(registry, op_type, kEntries, mode);

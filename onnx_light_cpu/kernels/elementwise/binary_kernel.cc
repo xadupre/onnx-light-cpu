@@ -9,10 +9,17 @@
 
 #include "onnx_core/runtime/kernels/kernel_dispatch_table.h"
 #include "onnx_core/runtime/kernels/node_helpers.h"
+#include "onnx_core/runtime/tuning/kernel_tuning.h"
 #include "onnx_core/symbolic/sym_tensor.h"
 
 #include <algorithm>
+#include <array>
+#include <cstdint>
+#include <limits>
 #include <memory>
+#include <mutex>
+#include <set>
+#include <stdexcept>
 #include <string>
 
 namespace onnx_light_cpu {
@@ -21,8 +28,51 @@ namespace {
 namespace rt_ns = ONNX_LIGHT_NAMESPACE::core::runtime;
 namespace sym_ns = ONNX_LIGHT_NAMESPACE::core::symbolic;
 
+constexpr const char *kBulkThresholdBytes = "parallel.bulk_threshold_bytes";
+constexpr const char *kBlockThresholdBytes = "parallel.block_threshold_bytes";
+constexpr const char *kScalarThresholdBytes = "parallel.scalar_threshold_bytes";
+constexpr const char *kTargetBlockBytes = "parallel.target_block_bytes";
+
 std::string KernelName(std::string_view op_type) {
   return std::string("onnx_light_cpu::") + std::string(op_type);
+}
+
+rt_ns::KernelTuningKey MakeTuningKey(std::string_view op_type, int32_t element_type) {
+  return {"onnx_light_cpu", std::string(op_type), "broadcast_plan",
+          element_type,     sym_ns::Device::kCPU, BinaryElementwiseKernel::kTuningAbi};
+}
+
+void ValidateTuning(const rt_ns::KernelTuningParameters &parameters) {
+  for (const char *name :
+       {kBulkThresholdBytes, kBlockThresholdBytes, kScalarThresholdBytes, kTargetBlockBytes}) {
+    const int64_t value = parameters.Get<int64_t>(name);
+    if (value < 0 || static_cast<uint64_t>(value) > std::numeric_limits<std::size_t>::max()) {
+      throw std::invalid_argument(std::string("Binary ") + name +
+                                  " must be zero or a positive value representable by size_t.");
+    }
+  }
+  if (parameters.Get<int64_t>(kTargetBlockBytes) == 0) {
+    throw std::invalid_argument("Binary parallel.target_block_bytes must be positive.");
+  }
+}
+
+rt_ns::KernelTuningParameters MakeTuningDefaults(std::string_view op_type, int32_t element_type) {
+  return {MakeTuningKey(op_type, element_type),
+          {{kBulkThresholdBytes,
+            static_cast<int64_t>(kDefaultBinaryExecutionTuning.bulk_parallel_threshold_bytes)},
+           {kBlockThresholdBytes,
+            static_cast<int64_t>(kDefaultBinaryExecutionTuning.block_parallel_threshold_bytes)},
+           {kScalarThresholdBytes,
+            static_cast<int64_t>(kDefaultBinaryExecutionTuning.scalar_parallel_threshold_bytes)},
+           {kTargetBlockBytes,
+            static_cast<int64_t>(kDefaultBinaryExecutionTuning.target_block_bytes)}}};
+}
+
+bool SupportsElementType(const BinaryManifestEntry &entry, int32_t element_type) {
+  return std::any_of(entry.signatures.begin(), entry.signatures.end(),
+                     [element_type](const BinaryTypeSignature &signature) {
+                       return static_cast<int32_t>(signature.left) == element_type;
+                     });
 }
 
 BinaryKernelDescriptor::Attributes
@@ -49,6 +99,42 @@ BinaryElementwiseKernel::BinaryElementwiseKernel(const ONNX_LIGHT_NAMESPACE::Nod
     : rt_ns::KernelBase(ctx),
       descriptor_(node.op_type(), ctx.opset.version, ParseBinaryAttributes(node)) {
   set_node(node);
+}
+
+void BinaryElementwiseKernel::RegisterTuningSchemas() {
+  static std::once_flag once;
+  std::call_once(once, [] {
+    for (const BinaryManifestEntry &entry : GetBinaryManifest()) {
+      std::set<int32_t> registered_types;
+      for (const BinaryTypeSignature &signature : entry.signatures) {
+        const int32_t element_type = static_cast<int32_t>(signature.left);
+        if (registered_types.insert(element_type).second) {
+          rt_ns::RegisterKernelTuningSchema(rt_ns::KernelTuningSchema(
+              MakeTuningDefaults(entry.op_type, element_type), ValidateTuning));
+        }
+      }
+    }
+  });
+}
+
+rt_ns::KernelTuningKey BinaryElementwiseKernel::TuningKey(int32_t element_type) const {
+  return SupportsElementType(descriptor_.manifest_entry(), element_type)
+             ? MakeTuningKey(descriptor_.op_type(), element_type)
+             : rt_ns::KernelTuningKey{};
+}
+
+void BinaryElementwiseKernel::Configure(const rt_ns::KernelTuningParameters &parameters) {
+  if (!SupportsElementType(descriptor_.manifest_entry(), parameters.key.element_type) ||
+      parameters.key != MakeTuningKey(descriptor_.op_type(), parameters.key.element_type)) {
+    throw std::invalid_argument("Binary tuning parameters have an incompatible key.");
+  }
+  ValidateTuning(parameters);
+  tuning_ = {
+      static_cast<std::size_t>(parameters.Get<int64_t>(kBulkThresholdBytes)),
+      static_cast<std::size_t>(parameters.Get<int64_t>(kBlockThresholdBytes)),
+      static_cast<std::size_t>(parameters.Get<int64_t>(kScalarThresholdBytes)),
+      static_cast<std::size_t>(parameters.Get<int64_t>(kTargetBlockBytes)),
+  };
 }
 
 rt_ns::Tensor BinaryElementwiseKernel::operator()(const rt_ns::Tensor &left,
@@ -85,7 +171,7 @@ void BinaryElementwiseKernel::operator()(const rt_ns::Tensor &left, const rt_ns:
     throw std::invalid_argument(
         "onnx_light_cpu::BinaryElementwiseKernel: output tensor metadata mismatch.");
   }
-  plan->Execute(left.bytes(), right.bytes(), output.mutable_bytes());
+  plan->Execute(left.bytes(), right.bytes(), output.mutable_bytes(), tuning_);
 }
 
 void BinaryElementwiseKernel::Run(rt_ns::RuntimeContext &rt) {
@@ -99,6 +185,7 @@ void BinaryElementwiseKernel::Run(rt_ns::RuntimeContext &rt) {
 }
 
 void RegisterBinaryKernels() {
+  BinaryElementwiseKernel::RegisterTuningSchemas();
   for (const BinaryManifestEntry &entry : GetBinaryManifest()) {
     rt_ns::NodeKernelFn factory =
         [](const ONNX_LIGHT_NAMESPACE::NodeProto &node,

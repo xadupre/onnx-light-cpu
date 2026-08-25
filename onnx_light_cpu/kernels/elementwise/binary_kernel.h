@@ -10,6 +10,8 @@
 #include "onnx_core/runtime/memory/simple_tensor.h"
 #include "onnx_core/runtime/runtime_context.h"
 
+#include <cstdint>
+
 #ifndef ONNX_LIGHT_NAMESPACE
 #define ONNX_LIGHT_NAMESPACE onnx_light
 #endif
@@ -18,8 +20,16 @@ namespace onnx_light_cpu {
 
 class BinaryElementwiseKernel : public ONNX_LIGHT_NAMESPACE::core::runtime::KernelBase {
 public:
+  static constexpr std::uint32_t kTuningAbi = 1;
+
   BinaryElementwiseKernel(const ONNX_LIGHT_NAMESPACE::NodeProto &node,
                           const ONNX_LIGHT_NAMESPACE::core::runtime::KernelContext &ctx);
+
+  static void RegisterTuningSchemas();
+  ONNX_LIGHT_NAMESPACE::core::runtime::KernelTuningKey
+  TuningKey(int32_t element_type) const override;
+  void
+  Configure(const ONNX_LIGHT_NAMESPACE::core::runtime::KernelTuningParameters &parameters) override;
 
   void Run(ONNX_LIGHT_NAMESPACE::core::runtime::RuntimeContext &rt) override;
 
@@ -36,6 +46,7 @@ public:
 
 private:
   BinaryKernelDescriptor descriptor_;
+  BinaryExecutionTuning tuning_;
   mutable BinaryBroadcastPlanCache plan_cache_;
 };
 

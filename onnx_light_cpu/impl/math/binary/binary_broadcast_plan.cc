@@ -239,7 +239,8 @@ std::size_t ByteThresholdToUnits(std::size_t threshold_bytes, std::size_t bytes_
 } // namespace
 
 void BinaryBroadcastPlan::ExecuteFlat(const std::byte *left, const std::byte *right,
-                                      std::byte *output) const {
+                                      std::byte *output,
+                                      const BinaryExecutionTuning &tuning) const {
   const std::size_t count = dimensions_[0].extent;
   const std::ptrdiff_t left_stride = dimensions_[0].left_stride;
   const std::ptrdiff_t right_stride = dimensions_[0].right_stride;
@@ -255,24 +256,19 @@ void BinaryBroadcastPlan::ExecuteFlat(const std::byte *left, const std::byte *ri
   const std::size_t bytes_per_unit = (left_stride != 0 ? adapter_.left_size : 0) +
                                      (right_stride != 0 ? adapter_.right_size : 0) +
                                      adapter_.output_size;
-  const std::size_t threshold_bytes =
-      bulk != nullptr ? kBinaryBulkParallelThresholdBytes : kBinaryScalarParallelThresholdBytes;
+  const std::size_t threshold_bytes = bulk != nullptr ? tuning.bulk_parallel_threshold_bytes
+                                                      : tuning.scalar_parallel_threshold_bytes;
   const std::size_t min_units = ByteThresholdToUnits(threshold_bytes, bytes_per_unit);
-  const std::int64_t max_participants =
-      bulk != nullptr ? kBinaryBulkMaxParticipants : kBinaryUnboundedParticipants;
+  const std::int64_t max_participants = kBinaryUnboundedParticipants;
   const std::size_t element_size = std::max<std::size_t>(adapter_.output_size, 1);
   const std::int64_t block_multiple =
       std::max<std::int64_t>(static_cast<std::int64_t>(kExecutionSimdWidthBytes / element_size), 1);
 
-  // ``min_block_size`` is deliberately a fraction of ``min_parallel_size``:
-  // ``ExecuteRanges`` only submits work to the executor once it can form at
-  // least two blocks, so keeping them equal would silently double the
-  // effective crossover threshold.
+  // Keep each submitted range large enough to amortize executor dispatch.
+  // ``ExecuteRanges`` stays serial until it can form at least two such ranges.
   const std::size_t min_units_bound = std::max<std::size_t>(min_units, 1);
-  const std::int64_t block_divisor =
-      max_participants == kBinaryUnboundedParticipants ? 4 : max_participants;
-  const std::int64_t min_block_size =
-      std::max<std::int64_t>(static_cast<std::int64_t>(min_units_bound) / block_divisor, 1);
+  const std::int64_t min_block_size = static_cast<std::int64_t>(
+      std::max<std::size_t>(ByteThresholdToUnits(tuning.target_block_bytes, bytes_per_unit), 1));
   const ExecutionSchedule schedule{static_cast<std::int64_t>(min_units_bound), min_block_size,
                                    max_participants};
   ExecuteRanges(static_cast<std::int64_t>(count), schedule, block_multiple,
@@ -378,7 +374,8 @@ void BinaryBroadcastPlan::ExecuteOuterRange(const std::byte *left, const std::by
 }
 
 void BinaryBroadcastPlan::ExecuteMultiDimensional(const std::byte *left, const std::byte *right,
-                                                  std::byte *output) const {
+                                                  std::byte *output,
+                                                  const BinaryExecutionTuning &tuning) const {
   const Dimension &inner = dimensions_.back();
   const bool has_bulk_inner =
       (inner.left_stride == 0 && inner.right_stride == 1 && adapter_.bulk_left_scalar != nullptr) ||
@@ -390,14 +387,15 @@ void BinaryBroadcastPlan::ExecuteMultiDimensional(const std::byte *left, const s
       inner_loop_elements_ *
       ((inner.left_stride != 0 ? adapter_.left_size : 0) +
        (inner.right_stride != 0 ? adapter_.right_size : 0) + adapter_.output_size);
-  const std::size_t threshold_bytes =
-      has_bulk_inner ? kBinaryBlockParallelThresholdBytes : kBinaryScalarParallelThresholdBytes;
+  const std::size_t threshold_bytes = has_bulk_inner ? tuning.block_parallel_threshold_bytes
+                                                     : tuning.scalar_parallel_threshold_bytes;
   const std::size_t min_units = ByteThresholdToUnits(threshold_bytes, bytes_per_block);
-  const std::int64_t max_participants =
-      has_bulk_inner ? kBinaryBlockMaxParticipants : kBinaryUnboundedParticipants;
-
-  const ExecutionSchedule schedule{static_cast<std::int64_t>(std::max<std::size_t>(min_units, 1)),
-                                   1, max_participants};
+  const std::size_t min_block_units =
+      ByteThresholdToUnits(tuning.target_block_bytes, bytes_per_block);
+  const ExecutionSchedule schedule{
+      static_cast<std::int64_t>(std::max<std::size_t>(min_units, 1)),
+      static_cast<std::int64_t>(std::max<std::size_t>(min_block_units, 1)),
+      kBinaryUnboundedParticipants};
   ExecuteRanges(static_cast<std::int64_t>(outer_block_count_), schedule,
                 [&](std::int64_t begin, std::int64_t end) {
                   ExecuteOuterRange(left, right, output, static_cast<std::size_t>(begin),
@@ -406,6 +404,11 @@ void BinaryBroadcastPlan::ExecuteMultiDimensional(const std::byte *left, const s
 }
 
 void BinaryBroadcastPlan::Execute(const void *left, const void *right, void *output) const {
+  Execute(left, right, output, kDefaultBinaryExecutionTuning);
+}
+
+void BinaryBroadcastPlan::Execute(const void *left, const void *right, void *output,
+                                  const BinaryExecutionTuning &tuning) const {
   if (element_count_ == 0) {
     return;
   }
@@ -421,10 +424,10 @@ void BinaryBroadcastPlan::Execute(const void *left, const void *right, void *out
   // bulk SIMD kernel, and submits independent per-invocation work to the
   // existing session executor instead of looping element-by-element serially.
   if (dimensions_.size() == 1) {
-    ExecuteFlat(left_bytes, right_bytes, output_bytes);
+    ExecuteFlat(left_bytes, right_bytes, output_bytes, tuning);
     return;
   }
-  ExecuteMultiDimensional(left_bytes, right_bytes, output_bytes);
+  ExecuteMultiDimensional(left_bytes, right_bytes, output_bytes, tuning);
 }
 
 bool BinaryBroadcastPlanCache::Key::operator==(const Key &other) const noexcept {

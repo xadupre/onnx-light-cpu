@@ -240,9 +240,9 @@ void RegisterCpuGemmCases(std::vector<TestCase> &registry, TestMode mode) {
 
   if (mode == TestMode::BENCHMARK) {
     // Every prepared code path is exercised for each element type the
-    // ``GemmKernel`` implements (float32, float64, float16, bfloat16) so the
-    // benchmark corpus measures the fp16/bf16 widen/round-trip overhead and
-    // the float64 (double-pumped, no dedicated SIMD width) path too.
+    // ``GemmKernel`` implements (float32, float64, float16, bfloat16), except
+    // for the largest square float16 cases, which are prohibitively slow in
+    // the onnxruntime comparison.
     for (const DataType dtype :
          {DataType::FLOAT, DataType::DOUBLE, DataType::FLOAT16, DataType::BFLOAT16}) {
       RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_direct", dtype, 32, 128,
@@ -261,10 +261,12 @@ void RegisterCpuGemmCases(std::vector<TestCase> &registry, TestMode mode) {
                             512, 512);
       RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_square_1024", dtype, 1024,
                             1024, 1024);
-      RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_square_2048", dtype, 2048,
-                            2048, 2048);
-      RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_square_4096", dtype, 4096,
-                            4096, 4096);
+      if (dtype != DataType::FLOAT16) {
+        RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_square_2048", dtype,
+                              2048, 2048, 2048);
+        RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_square_4096", dtype,
+                              4096, 4096, 4096);
+      }
       RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_square_256", dtype, 256,
                             256, 256, false, false, false, BiasShape::kScalar);
       RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_square_256", dtype, 256,
