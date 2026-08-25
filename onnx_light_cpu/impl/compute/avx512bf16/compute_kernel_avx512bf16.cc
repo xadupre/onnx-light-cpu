@@ -15,7 +15,7 @@
 
 #include "onnx_light_cpu/impl/compute_arithmetic_profile.h"
 
-#include <cstring>
+#include <bit>
 
 #include <immintrin.h>
 
@@ -32,9 +32,7 @@ namespace {
 constexpr int kRegisters = 4;
 
 std::uint16_t Float32ToBf16(float value) {
-  std::uint32_t bits;
-  std::memcpy(&bits, &value, sizeof(bits));
-  return static_cast<std::uint16_t>(bits >> 16);
+  return static_cast<std::uint16_t>(std::bit_cast<std::uint32_t>(value) >> 16);
 }
 
 // Packs two BFLOAT16 halves (each broadcast to every lane) into the
