@@ -350,6 +350,29 @@ void CheckArithmeticFastPathMatchesScalarReference(std::string_view op_type, std
   }
 }
 
+TEST(BinaryBroadcastPlan, PreparesFixedRankTraversalAndKeepsArbitraryRankFallback) {
+  const BinaryKernelDescriptor descriptor("Add", 14, {});
+  const std::array cases = {
+      std::pair{std::pair<std::vector<std::int64_t>, std::vector<std::int64_t>>{{64, 1}, {1, 64}},
+                std::size_t{1}},
+      std::pair{
+          std::pair<std::vector<std::int64_t>, std::vector<std::int64_t>>{{2, 64, 32}, {64, 1}},
+          std::size_t{2}},
+      std::pair{std::pair<std::vector<std::int64_t>, std::vector<std::int64_t>>{{2, 1, 8, 1},
+                                                                                {1, 4, 1, 64}},
+                std::size_t{3}},
+      std::pair{std::pair<std::vector<std::int64_t>, std::vector<std::int64_t>>{{2, 1, 4, 1, 8, 1},
+                                                                                {1, 3, 1, 5, 1, 7}},
+                std::size_t{0}},
+  };
+
+  for (const auto &[shapes, expected_rank] : cases) {
+    const BinaryBroadcastPlan plan(descriptor, BinaryDataType::FLOAT, BinaryDataType::FLOAT,
+                                   BinaryDataType::FLOAT, shapes.first, shapes.second);
+    EXPECT_EQ(plan.prepared_outer_rank(), expected_rank);
+  }
+}
+
 TEST(BinaryBroadcastPlan, ArithmeticFastPathMatchesScalarReferenceAcrossOpsTypesAndTailSizes) {
   const std::array<std::string_view, 4> ops = {"Add", "Sub", "Mul", "Div"};
   const std::array<std::size_t, 13> sizes = {0, 1, 3, 4, 5, 7, 8, 9, 15, 16, 17, 31, 32};

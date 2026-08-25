@@ -47,6 +47,7 @@ public:
   LoopFamily loop_family() const noexcept { return loop_family_; }
   std::size_t inner_loop_elements() const noexcept { return inner_loop_elements_; }
   std::size_t outer_block_count() const noexcept { return outer_block_count_; }
+  std::size_t prepared_outer_rank() const noexcept { return prepared_outer_rank_; }
   bool left_output_alias_safe() const noexcept { return left_output_alias_safe_; }
   bool right_output_alias_safe() const noexcept { return right_output_alias_safe_; }
 
@@ -70,6 +71,12 @@ private:
                                const BinaryExecutionTuning &tuning) const;
   void ExecuteOuterRange(const std::byte *left, const std::byte *right, std::byte *output,
                          std::size_t outer_begin, std::size_t outer_end) const;
+  void ExecuteInnerBlock(const std::byte *left, const std::byte *right, std::byte *output,
+                         std::ptrdiff_t left_offset, std::ptrdiff_t right_offset,
+                         std::ptrdiff_t output_offset) const;
+  template <std::size_t OuterRank>
+  void ExecuteOuterRangeFixed(const std::byte *left, const std::byte *right, std::byte *output,
+                              std::size_t outer_begin, std::size_t outer_end) const;
   void ComputeOuterOffsets(std::size_t outer_index, std::vector<std::size_t> &indices,
                            std::ptrdiff_t &left_offset, std::ptrdiff_t &right_offset,
                            std::ptrdiff_t &output_offset) const;
@@ -83,6 +90,7 @@ private:
   std::size_t element_count_ = 0;
   std::size_t inner_loop_elements_ = 0;
   std::size_t outer_block_count_ = 0;
+  std::size_t prepared_outer_rank_ = 0;
   LoopFamily loop_family_ = LoopFamily::kContiguous;
   bool left_output_alias_safe_ = false;
   bool right_output_alias_safe_ = false;

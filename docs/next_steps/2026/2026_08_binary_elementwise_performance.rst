@@ -119,11 +119,17 @@ General broadcast traversal
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Contiguous, scalar, repeated-block, and vector-inner families can call bulk
-loops. General strided traversal still advances offsets and invokes a
-type-erased scalar callback in its inner loop. Add prepared specializations
-for rank 2-4 column/channel broadcasts, collapse invariant dimensions, seed
-offsets once per worker range, and keep division/modulo out of per-element
-indexing.
+loops. Rank 2-4 prepared plans now use fixed-size traversal state. They seed offsets
+once per worker range, avoid heap allocation in workers, and dispatch their
+typed inner bulk loop without the arbitrary-rank counter. The generic
+strided traversal remains the correctness fallback for higher ranks and for
+adapters without a compatible inner bulk loop.
+
+On the targeted 116-case ``general`` corpus, median onnx-light-cpu time for
+``n=1048576`` fell from 2.28 ms to 0.31 ms and ``n=4194304`` from 2.43 ms to
+0.36 ms. Small cases were retained (3.83 to 3.64 us at ``n=4096``). ONNX
+Runtime timings varied substantially on the largest group, so these are
+implementation-time comparisons rather than parity claims.
 
 Do not add an unbounded template matrix for arbitrary ranks. Retain the
 current prepared general loop as the correctness fallback and specialize only
@@ -232,7 +238,7 @@ Pull-request sequence
        and repeated index arithmetic while the arbitrary-rank fallback remains
        correct.
      - PR02, PR03
-     - Planned
+     - Implemented
    * - Binary Perf PR05
      - Processor calibration and persistence.
      - Correctness-gated callbacks jointly tune all five exposed parameters;
