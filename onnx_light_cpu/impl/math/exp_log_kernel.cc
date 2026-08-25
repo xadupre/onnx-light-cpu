@@ -17,7 +17,6 @@
 #include "onnx_light_cpu/impl/math/math_kernels.h"
 
 #include "onnx_light_cpu/impl/execution.h"
-#include "onnx_light_cpu/impl/math/exp_log_schedule.h"
 #include "onnx_light_cpu/impl/math/half_conversion.h"
 
 #include <cmath>
@@ -32,11 +31,6 @@
 #endif
 
 namespace onnx_light_cpu {
-
-// Retain the established cost model for float64 and the scalar conversion paths.
-inline constexpr double kExpLogCostPerElement = 20.0;
-// Float16 conversion plus scalar libm work benefits from earlier dispatch.
-inline constexpr double kExpLogHalfCostPerElement = 40.0;
 
 namespace {
 
@@ -683,13 +677,14 @@ void ExpFloat32_Dispatch(const float *input, float *output, std::size_t count) {
 } // namespace
 
 void ExpFloat32(const float *input, float *output, std::size_t count) {
-  if (count == 0)
-    return;
-  ExecuteRanges(static_cast<std::int64_t>(count), kExpExecutionSchedule,
-                ExecutionSimdLanes<float>(), [input, output](std::int64_t begin, std::int64_t end) {
-                  ExpFloat32_Dispatch(input + begin, output + begin,
-                                      static_cast<std::size_t>(end - begin));
-                });
+  ExpFloat32WithTuning(input, output, count, kDefaultExpLogExecutionTuning);
+}
+
+void ExpFloat32WithTuning(const float *input, float *output, std::size_t count,
+                          const UnaryExecutionTuning &tuning) {
+  ExecuteUnaryRanges<float>(count, tuning, [input, output](std::int64_t begin, std::int64_t end) {
+    ExpFloat32_Dispatch(input + begin, output + begin, static_cast<std::size_t>(end - begin));
+  });
 }
 
 namespace {
@@ -725,13 +720,14 @@ void LogFloat32_Dispatch(const float *input, float *output, std::size_t count) {
 } // namespace
 
 void LogFloat32(const float *input, float *output, std::size_t count) {
-  if (count == 0)
-    return;
-  ExecuteRanges(static_cast<std::int64_t>(count), kLogExecutionSchedule,
-                ExecutionSimdLanes<float>(), [input, output](std::int64_t begin, std::int64_t end) {
-                  LogFloat32_Dispatch(input + begin, output + begin,
-                                      static_cast<std::size_t>(end - begin));
-                });
+  LogFloat32WithTuning(input, output, count, kDefaultExpLogExecutionTuning);
+}
+
+void LogFloat32WithTuning(const float *input, float *output, std::size_t count,
+                          const UnaryExecutionTuning &tuning) {
+  ExecuteUnaryRanges<float>(count, tuning, [input, output](std::int64_t begin, std::int64_t end) {
+    LogFloat32_Dispatch(input + begin, output + begin, static_cast<std::size_t>(end - begin));
+  });
 }
 
 namespace {
@@ -758,13 +754,14 @@ void ExpFloat64_Dispatch(const double *input, double *output, std::size_t count)
 } // namespace
 
 void ExpFloat64(const double *input, double *output, std::size_t count) {
-  if (count == 0)
-    return;
-  ExecuteRanges(
-      static_cast<std::int64_t>(count), kExpLogCostPerElement, ExecutionSimdLanes<double>(),
-      [input, output](std::int64_t begin, std::int64_t end) {
-        ExpFloat64_Dispatch(input + begin, output + begin, static_cast<std::size_t>(end - begin));
-      });
+  ExpFloat64WithTuning(input, output, count, kDefaultExpLogExecutionTuning);
+}
+
+void ExpFloat64WithTuning(const double *input, double *output, std::size_t count,
+                          const UnaryExecutionTuning &tuning) {
+  ExecuteUnaryRanges<double>(count, tuning, [input, output](std::int64_t begin, std::int64_t end) {
+    ExpFloat64_Dispatch(input + begin, output + begin, static_cast<std::size_t>(end - begin));
+  });
 }
 
 namespace {
@@ -791,37 +788,107 @@ void LogFloat64_Dispatch(const double *input, double *output, std::size_t count)
 } // namespace
 
 void LogFloat64(const double *input, double *output, std::size_t count) {
-  if (count == 0)
-    return;
-  ExecuteRanges(
-      static_cast<std::int64_t>(count), kExpLogCostPerElement, ExecutionSimdLanes<double>(),
-      [input, output](std::int64_t begin, std::int64_t end) {
-        LogFloat64_Dispatch(input + begin, output + begin, static_cast<std::size_t>(end - begin));
+  LogFloat64WithTuning(input, output, count, kDefaultExpLogExecutionTuning);
+}
+
+void LogFloat64WithTuning(const double *input, double *output, std::size_t count,
+                          const UnaryExecutionTuning &tuning) {
+  ExecuteUnaryRanges<double>(count, tuning, [input, output](std::int64_t begin, std::int64_t end) {
+    LogFloat64_Dispatch(input + begin, output + begin, static_cast<std::size_t>(end - begin));
+  });
+}
+
+namespace {
+
+constexpr std::size_t kHalfConversionBlock = 4096;
+
+template <bool BFloat16, bool MaskLogNaN>
+void TransformHalfRange(const std::uint16_t *input, std::uint16_t *output, std::int64_t begin,
+                        std::int64_t end, void (*dispatch)(const float *, float *, std::size_t)) {
+  alignas(64) float values[kHalfConversionBlock];
+  alignas(64) std::uint8_t nan_lanes[kHalfConversionBlock];
+  while (begin < end) {
+    const std::size_t block = static_cast<std::size_t>(
+        std::min<std::int64_t>(end - begin, static_cast<std::int64_t>(kHalfConversionBlock)));
+    if constexpr (BFloat16) {
+      detail::ConvertBFloat16ToFloat32(input + begin, values, block);
+    } else {
+      detail::ConvertFloat16ToFloat32(input + begin, values, block);
+    }
+    if constexpr (MaskLogNaN) {
+      constexpr std::uint16_t magnitude_mask = 0x7FFFu;
+      constexpr std::uint16_t infinity = BFloat16 ? 0x7F80u : 0x7C00u;
+      for (std::size_t i = 0; i < block; ++i) {
+        const std::uint16_t bits = input[begin + i];
+        const std::uint16_t magnitude = bits & magnitude_mask;
+        nan_lanes[i] = static_cast<std::uint8_t>((((bits & 0x8000u) != 0) && magnitude != 0) ||
+                                                 magnitude > infinity);
+        if (nan_lanes[i] != 0) {
+          values[i] = 1.0f;
+        }
+      }
+    }
+    dispatch(values, values, block);
+    if constexpr (BFloat16) {
+      detail::ConvertFloat32ToBFloat16(values, output + begin, block);
+    } else {
+      detail::ConvertFloat32ToFloat16(values, output + begin, block);
+    }
+    if constexpr (MaskLogNaN) {
+      constexpr std::uint16_t quiet_nan = BFloat16 ? 0x7FC0u : 0x7E00u;
+      for (std::size_t i = 0; i < block; ++i) {
+        if (nan_lanes[i] != 0) {
+          output[begin + i] = quiet_nan;
+        }
+      }
+    }
+    begin += static_cast<std::int64_t>(block);
+  }
+}
+
+template <bool BFloat16, bool MaskLogNaN = false>
+void TransformHalf(const std::uint16_t *input, std::uint16_t *output, std::size_t count,
+                   const UnaryExecutionTuning &tuning,
+                   void (*dispatch)(const float *, float *, std::size_t)) {
+  ExecuteUnaryRanges<std::uint16_t>(
+      count, tuning, [input, output, dispatch](std::int64_t begin, std::int64_t end) {
+        TransformHalfRange<BFloat16, MaskLogNaN>(input, output, begin, end, dispatch);
       });
 }
 
+} // namespace
+
 void ExpFloat16(const uint16_t *input, uint16_t *output, std::size_t count) {
-  if (count == 0)
-    return;
-  ExecuteRanges(static_cast<std::int64_t>(count), kExpLogHalfCostPerElement,
-                [input, output](std::int64_t begin, std::int64_t end) {
-                  for (std::int64_t i = begin; i < end; ++i) {
-                    output[i] =
-                        detail::FloatToFloat16Bits(std::exp(detail::Float16BitsToFloat(input[i])));
-                  }
-                });
+  ExpFloat16WithTuning(input, output, count, kDefaultExpLogHalfExecutionTuning);
+}
+
+void ExpFloat16WithTuning(const uint16_t *input, uint16_t *output, std::size_t count,
+                          const UnaryExecutionTuning &tuning) {
+  TransformHalf<false>(input, output, count, tuning, &ExpFloat32_Dispatch);
+}
+
+void ExpBFloat16WithTuning(const uint16_t *input, uint16_t *output, std::size_t count,
+                           const UnaryExecutionTuning &tuning) {
+  TransformHalf<true>(input, output, count, tuning, &ExpFloat32_Dispatch);
 }
 
 void LogFloat16(const uint16_t *input, uint16_t *output, std::size_t count) {
-  if (count == 0)
-    return;
-  ExecuteRanges(static_cast<std::int64_t>(count), kExpLogHalfCostPerElement,
-                [input, output](std::int64_t begin, std::int64_t end) {
-                  for (std::int64_t i = begin; i < end; ++i) {
-                    output[i] =
-                        detail::FloatToFloat16Bits(std::log(detail::Float16BitsToFloat(input[i])));
-                  }
-                });
+  LogFloat16WithTuning(input, output, count, kDefaultLogFloat16ExecutionTuning);
+}
+
+void LogFloat16WithTuning(const uint16_t *input, uint16_t *output, std::size_t count,
+                          const UnaryExecutionTuning &tuning) {
+  ExecuteUnaryRanges<std::uint16_t>(
+      count, tuning, [input, output](std::int64_t begin, std::int64_t end) {
+        for (std::int64_t i = begin; i < end; ++i) {
+          output[i] = detail::FloatToFloat16Bits(std::log(detail::Float16BitsToFloat(input[i])));
+        }
+      });
+}
+
+void LogBFloat16WithTuning(const uint16_t *input, uint16_t *output, std::size_t count,
+                           const UnaryExecutionTuning &tuning) {
+  TransformHalf<true, true>(input, output, count, tuning, &LogFloat32_Dispatch);
 }
 
 } // namespace onnx_light_cpu

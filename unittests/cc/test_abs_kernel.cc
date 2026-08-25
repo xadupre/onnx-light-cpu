@@ -154,6 +154,7 @@ TEST(AbsFloat16, LargeArray) {
     for (std::size_t i = 0; i < size; ++i) {
       in[i] = static_cast<std::uint16_t>((i * 2654435761u) & 0xFFFFu);
     }
+
     std::vector<std::uint16_t> out(size, 0);
     onnx_light_cpu::AbsFloat16(in.data(), out.data(), size);
     for (std::size_t i = 0; i < size; ++i) {
@@ -161,6 +162,16 @@ TEST(AbsFloat16, LargeArray) {
           << "at index " << i << " size=" << size;
     }
   }
+}
+
+TEST(AbsInt16, MixedValues) {
+  const std::vector<std::int16_t> input = {
+      std::numeric_limits<std::int16_t>::min(), -123, -1, 0, 1, 123,
+      std::numeric_limits<std::int16_t>::max()};
+  std::vector<std::int16_t> output(input.size());
+  onnx_light_cpu::AbsInt16(input.data(), output.data(), input.size());
+  EXPECT_EQ(output, (std::vector<std::int16_t>{std::numeric_limits<std::int16_t>::min(), 123, 1, 0,
+                                               1, 123, std::numeric_limits<std::int16_t>::max()}));
 }
 
 // ---------------------------------------------------------------------------

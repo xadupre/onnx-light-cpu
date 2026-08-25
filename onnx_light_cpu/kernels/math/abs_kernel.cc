@@ -11,13 +11,15 @@
 #include "onnx_core/runtime/kernels/cast_helper.h"
 #include "onnx_core/runtime/kernels/kernel_dispatch_table.h"
 #include "onnx_core/runtime/kernels/node_helpers.h"
-#include "onnx_core/runtime/kernels/parallel_for.h"
+#include "onnx_core/runtime/tuning/kernel_tuning.h"
 #include "onnx_core/symbolic/sym_tensor.h"
 
-#include <cmath>
+#include <array>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 
@@ -34,15 +36,97 @@ using rt_ns::Tensor;
 
 namespace {
 
-// Runs the elementwise SIMD kernel ``Fn`` over ``[0, n)``. When onnx-light has
-// installed a session ``CpuExecutor`` on the calling thread, the implementation
-// can split the work without owning another scheduler.
-template <typename T, void (*Fn)(const T *, T *, std::size_t)>
-void RunParallel(const T *input, T *output, std::int64_t n) {
-  Fn(input, output, static_cast<std::size_t>(n));
+constexpr const char *kParallelThresholdBytes = "parallel.threshold_bytes";
+constexpr const char *kTargetBlockBytes = "parallel.target_block_bytes";
+constexpr const char *kMaxParticipants = "parallel.max_participants";
+constexpr std::array<DataType, 8> kSupportedTypes = {
+    DataType::FLOAT,   DataType::DOUBLE,   DataType::INT32, DataType::INT64,
+    DataType::FLOAT16, DataType::BFLOAT16, DataType::INT8,  DataType::INT16};
+
+bool SupportsElementType(int32_t element_type) {
+  for (DataType type : kSupportedTypes) {
+    if (element_type == static_cast<int32_t>(type)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+rt_ns::KernelTuningKey MakeTuningKey(int32_t element_type) {
+  return {"onnx_light_cpu",     "Abs", "simd_dispatch", element_type, sym_ns::Device::kCPU,
+          AbsKernel::kTuningAbi};
+}
+
+void ValidateTuning(const rt_ns::KernelTuningParameters &parameters) {
+  for (const char *name : {kParallelThresholdBytes, kTargetBlockBytes, kMaxParticipants}) {
+    const int64_t value = parameters.Get<int64_t>(name);
+    if (value < 0 || static_cast<uint64_t>(value) > std::numeric_limits<std::size_t>::max()) {
+      throw std::invalid_argument(std::string("Abs ") + name +
+                                  " must be zero or a positive value representable by size_t.");
+    }
+  }
+  if (parameters.Get<int64_t>(kTargetBlockBytes) == 0) {
+    throw std::invalid_argument("Abs parallel.target_block_bytes must be positive.");
+  }
+}
+
+const UnaryExecutionTuning &DefaultTuning(int32_t element_type) {
+  switch (static_cast<DataType>(element_type)) {
+  case DataType::DOUBLE:
+  case DataType::INT64:
+    return kDefaultAbs64ExecutionTuning;
+  case DataType::FLOAT16:
+  case DataType::BFLOAT16:
+  case DataType::INT16:
+    return kDefaultAbs16ExecutionTuning;
+  case DataType::INT8:
+    return kDefaultAbs8ExecutionTuning;
+  default:
+    return kDefaultAbs32ExecutionTuning;
+  }
+}
+
+rt_ns::KernelTuningParameters MakeTuningDefaults(int32_t element_type) {
+  const UnaryExecutionTuning &defaults = DefaultTuning(element_type);
+  return {MakeTuningKey(element_type),
+          {{kParallelThresholdBytes, static_cast<int64_t>(defaults.parallel_threshold_bytes)},
+           {kTargetBlockBytes, static_cast<int64_t>(defaults.target_block_bytes)},
+           {kMaxParticipants, static_cast<int64_t>(defaults.max_participants)}}};
 }
 
 } // namespace
+
+AbsKernel::AbsKernel(const NodeProto &node, const rt_ns::KernelContext &ctx) : KernelBase(ctx) {
+  set_node(node);
+}
+
+void AbsKernel::RegisterTuningSchemas() {
+  static std::once_flag once;
+  std::call_once(once, [] {
+    for (DataType type : kSupportedTypes) {
+      rt_ns::RegisterKernelTuningSchema(rt_ns::KernelTuningSchema(
+          MakeTuningDefaults(static_cast<int32_t>(type)), ValidateTuning));
+    }
+  });
+}
+
+rt_ns::KernelTuningKey AbsKernel::TuningKey(int32_t element_type) const {
+  return SupportsElementType(element_type) ? MakeTuningKey(element_type) : rt_ns::KernelTuningKey{};
+}
+
+void AbsKernel::Configure(const rt_ns::KernelTuningParameters &parameters) {
+  if (!SupportsElementType(parameters.key.element_type) ||
+      parameters.key != MakeTuningKey(parameters.key.element_type)) {
+    throw std::invalid_argument("Abs tuning parameters have an incompatible key.");
+  }
+  ValidateTuning(parameters);
+  tuning_ = {
+      static_cast<std::size_t>(parameters.Get<int64_t>(kParallelThresholdBytes)),
+      static_cast<std::size_t>(parameters.Get<int64_t>(kTargetBlockBytes)),
+      static_cast<std::size_t>(parameters.Get<int64_t>(kMaxParticipants)),
+  };
+  tuning_configured_ = true;
+}
 
 rt_ns::Tensor AbsKernel::operator()(const Tensor &x, RuntimeContext *rt) const {
   const std::size_t y_n_bytes = static_cast<std::size_t>(x.element_count()) * x.element_size();
@@ -63,47 +147,37 @@ void AbsKernel::operator()(const Tensor &x, Tensor &output) const {
     throw std::invalid_argument("onnx_light_cpu::AbsKernel: output buffer size mismatch.");
   }
   const std::int64_t n = x.element_count();
+  const UnaryExecutionTuning &tuning = tuning_configured_ ? tuning_ : DefaultTuning(x.data_type);
   switch (static_cast<DataType>(x.data_type)) {
   case DataType::FLOAT:
-    RunParallel<float, AbsFloat32>(x.AsFloat(), output.AsFloat(), n);
+    AbsFloat32WithTuning(x.AsFloat(), output.AsFloat(), static_cast<std::size_t>(n), tuning);
     return;
   case DataType::DOUBLE:
-    RunParallel<double, AbsFloat64>(x.AsDouble(), output.AsDouble(), n);
+    AbsFloat64WithTuning(x.AsDouble(), output.AsDouble(), static_cast<std::size_t>(n), tuning);
     return;
   case DataType::INT32:
-    RunParallel<std::int32_t, AbsInt32>(x.AsInt32(), output.AsInt32(), n);
+    AbsInt32WithTuning(x.AsInt32(), output.AsInt32(), static_cast<std::size_t>(n), tuning);
     return;
   case DataType::INT64:
-    RunParallel<std::int64_t, AbsInt64>(x.AsInt64(), output.AsInt64(), n);
+    AbsInt64WithTuning(x.AsInt64(), output.AsInt64(), static_cast<std::size_t>(n), tuning);
     return;
   case DataType::FLOAT16: {
     const std::uint16_t *px = reinterpret_cast<const std::uint16_t *>(x.bytes());
     std::uint16_t *py = reinterpret_cast<std::uint16_t *>(output.mutable_bytes());
-    RunParallel<std::uint16_t, AbsFloat16>(px, py, n);
+    AbsFloat16WithTuning(px, py, static_cast<std::size_t>(n), tuning);
     return;
   }
   case DataType::BFLOAT16: {
     const std::uint16_t *px = reinterpret_cast<const std::uint16_t *>(x.bytes());
     std::uint16_t *py = reinterpret_cast<std::uint16_t *>(output.mutable_bytes());
-    rt_ns::ParallelFor(n, [px, py](std::int64_t begin, std::int64_t end) {
-      for (std::int64_t i = begin; i < end; ++i) {
-        py[i] = rt_ns::FloatToBfloat16Bits(std::fabs(rt_ns::Bfloat16BitsToFloat(px[i])));
-      }
-    });
+    AbsFloat16WithTuning(px, py, static_cast<std::size_t>(n), tuning);
     return;
   }
   case DataType::INT8:
-    RunParallel<std::int8_t, AbsInt8>(x.AsInt8(), output.AsInt8(), n);
+    AbsInt8WithTuning(x.AsInt8(), output.AsInt8(), static_cast<std::size_t>(n), tuning);
     return;
   case DataType::INT16: {
-    const std::int16_t *px = x.AsInt16();
-    std::int16_t *py = output.AsInt16();
-    rt_ns::ParallelFor(n, [px, py](std::int64_t begin, std::int64_t end) {
-      for (std::int64_t i = begin; i < end; ++i) {
-        const std::int32_t v = static_cast<std::int32_t>(px[i]);
-        py[i] = static_cast<std::int16_t>(v < 0 ? -v : v);
-      }
-    });
+    AbsInt16WithTuning(x.AsInt16(), output.AsInt16(), static_cast<std::size_t>(n), tuning);
     return;
   }
   default:
@@ -123,11 +197,10 @@ void AbsKernel::Run(RuntimeContext &rt) {
 }
 
 void RegisterAbsKernel() {
+  AbsKernel::RegisterTuningSchemas();
   NodeKernelFn factory = [](const NodeProto &node,
                             RuntimeContext &rt) -> std::unique_ptr<rt_ns::KernelBase> {
-    auto kernel = std::make_unique<AbsKernel>(rt.kernel_ctx());
-    kernel->set_node(node);
-    return kernel;
+    return std::make_unique<AbsKernel>(node, rt.kernel_ctx());
   };
   // Empty domain -> normalised to the default ONNX domain, overriding the
   // built-in Abs entry with the SIMD-accelerated kernel for the CPU device.
