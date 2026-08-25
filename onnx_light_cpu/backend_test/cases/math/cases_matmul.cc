@@ -38,6 +38,7 @@ struct MatMulShape {
   std::int64_t m;
   std::int64_t n;
   std::int64_t k;
+  bool rank3 = false;
 };
 
 NodeProto MakeMatMulNode() {
@@ -59,7 +60,9 @@ void RegisterMatMulCase(std::vector<TestCase> &registry, const onnx_light_cpu::M
   const std::int64_t y_count = shape.m * shape.n;
   Expect(registry, MakeMatMulNode(), name, {opset}, {a_count, b_count}, {y_count},
          [kernel, shape, data_type]() -> IoData {
-           Tensor a = MakeBenchmarkTensor(data_type, {shape.m, shape.k}, 433);
+           const rt_ns::Shape a_shape =
+               shape.rank3 ? rt_ns::Shape{1, shape.m, shape.k} : rt_ns::Shape{shape.m, shape.k};
+           Tensor a = MakeBenchmarkTensor(data_type, a_shape, 433);
            Tensor b = MakeBenchmarkTensor(data_type, {shape.k, shape.n}, 434);
            Tensor y = kernel(a, b);
            return IoData{{std::move(a), std::move(b)}, {std::move(y)}};
@@ -84,6 +87,14 @@ void RegisterCpuMatMulCases(std::vector<TestCase> &registry, TestMode mode) {
       for (DataType data_type : data_types) {
         RegisterMatMulCase(registry, kernel, opset, shape, data_type, true);
       }
+    }
+    for (const MatMulShape &shape :
+         {MatMulShape{"llm_qwen3_8b_qkv_m1_k4096_n6144", 1, 6144, 4096, true},
+          MatMulShape{"llm_qwen3_8b_o_proj_m1_k4096_n4096", 1, 4096, 4096, true},
+          MatMulShape{"llm_qwen3_8b_gate_up_m1_k4096_n12288", 1, 12288, 4096, true},
+          MatMulShape{"llm_qwen3_8b_down_m1_k12288_n4096", 1, 4096, 12288, true},
+          MatMulShape{"llm_qwen3_8b_lm_head_m1_k4096_n151936", 1, 151936, 4096, true}}) {
+      RegisterMatMulCase(registry, kernel, opset, shape, DataType::FLOAT16, true);
     }
     return;
   }

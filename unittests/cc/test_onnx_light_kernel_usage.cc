@@ -12,6 +12,7 @@
 #include "onnx_light_cpu/kernels/math/gemm_kernel.h"
 #include "onnx_light_cpu/kernels/math/integer_matmul_kernel.h"
 #include "onnx_light_cpu/kernels/math/matmul_kernel.h"
+#include "onnx_light_cpu/kernels/math/rms_normalization_kernel.h"
 #include "onnx_light_cpu/kernels/math/swiglu_kernel.h"
 #include "onnx_light_cpu/kernels/traditionalml/tree_ensemble_kernel.h"
 
@@ -36,6 +37,7 @@ TEST(OnnxLightKernelUsage, KernelNamesAreLibraryQualified) {
   EXPECT_STREQ(onnx_light_cpu::MatMulIntegerKernel::kName, "onnx_light_cpu::MatMulInteger");
   EXPECT_STREQ(onnx_light_cpu::QLinearMatMulKernel::kName, "onnx_light_cpu::QLinearMatMul");
   EXPECT_STREQ(onnx_light_cpu::NotKernel::kName, "onnx_light_cpu::Not");
+  EXPECT_STREQ(onnx_light_cpu::RmsNormalizationKernel::kName, "onnx_light_cpu::RMSNormalization");
   EXPECT_STREQ(onnx_light_cpu::SwiGLUKernel::kName, "onnx_light_cpu::SwiGLU");
   EXPECT_STREQ(onnx_light_cpu::TreeEnsembleKernel::kName, "onnx_light_cpu::TreeEnsemble");
 }
@@ -58,6 +60,7 @@ TEST(OnnxLightKernelUsage, RegisteredKernelNames) {
       {"Min", "onnx_light_cpu::Min"},
       {"Not", "onnx_light_cpu::Not"},
       {"QLinearMatMul", "onnx_light_cpu::QLinearMatMul"},
+      {"RMSNormalization", "onnx_light_cpu::RMSNormalization"},
       {"Sum", "onnx_light_cpu::Sum"},
       {"SwiGLU", "onnx_light_cpu::SwiGLU"},
   };

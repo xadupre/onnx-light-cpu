@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -102,8 +103,16 @@ void AddIntAttribute(NodeProto &node, const char *name, std::int64_t value) {
   attribute->set_i(value);
 }
 
+void AddFloatAttribute(NodeProto &node, const char *name, float value) {
+  auto *attribute = node.add_attribute();
+  attribute->set_name(name);
+  attribute->set_type(ONNX_LIGHT_NAMESPACE::AttributeProto::AttributeType::FLOAT);
+  attribute->set_f(value);
+}
+
 NodeProto MakeAttentionNode(bool rank3, std::int64_t q_num_heads, std::int64_t kv_num_heads,
-                            bool is_causal, bool has_mask, Cache cache) {
+                            bool is_causal, bool has_mask, Cache cache,
+                            std::optional<float> scale = std::nullopt) {
   NodeProto node;
   node.set_op_type("Attention");
   node.add_input("Q");
@@ -132,6 +141,9 @@ NodeProto MakeAttentionNode(bool rank3, std::int64_t q_num_heads, std::int64_t k
   if (is_causal) {
     AddIntAttribute(node, "is_causal", 1);
   }
+  if (scale.has_value()) {
+    AddFloatAttribute(node, "scale", *scale);
+  }
   return node;
 }
 
@@ -151,19 +163,32 @@ std::vector<std::int64_t> QkvShape(bool rank3, std::int64_t batch, std::int64_t 
 void RegisterAttentionCase(std::vector<TestCase> &registry, const OpsetId &opset,
                            std::int64_t opset_version, bool rank3, Geometry geometry, Mask mask,
                            std::int64_t batch, std::int64_t q_len, std::int64_t kv_len,
-                           std::int64_t head_dim, DataType data_type, Cache cache, bool benchmark) {
-  const auto [q_heads, kv_heads] = HeadCounts(geometry, benchmark);
+                           std::int64_t head_dim, DataType data_type, Cache cache, bool benchmark,
+                           std::int64_t explicit_q_heads = 0, std::int64_t explicit_kv_heads = 0,
+                           std::string_view profile = "",
+                           std::optional<float> scale = std::nullopt) {
+  const auto [default_q_heads, default_kv_heads] = HeadCounts(geometry, benchmark);
+  const std::int64_t q_heads = explicit_q_heads > 0 ? explicit_q_heads : default_q_heads;
+  const std::int64_t kv_heads = explicit_kv_heads > 0 ? explicit_kv_heads : default_kv_heads;
   const bool is_causal = mask == Mask::kCausal;
   const bool has_mask = mask == Mask::kBoolean || mask == Mask::kAdditive;
 
-  const std::string name = "test_cpu_attention_opset" + std::to_string(opset_version) + "_" +
-                           (rank3 ? std::string("rank3") : std::string("rank4")) + "_" +
-                           GeometryName(geometry) + "_q" + std::to_string(q_len) + "_kv" +
-                           std::to_string(kv_len) + "_hd" + std::to_string(head_dim) + "_" +
-                           MaskName(mask) + "_" + CacheName(cache) + "_" +
-                           DataTypeSuffix(data_type) + (benchmark ? "_benchmark" : "");
+  std::string name = "test_cpu_attention_";
+  if (!profile.empty()) {
+    name += std::string(profile) + "_";
+  }
+  name += "opset" + std::to_string(opset_version) + "_" +
+          (rank3 ? std::string("rank3") : std::string("rank4")) + "_" + GeometryName(geometry) +
+          "_q" + std::to_string(q_len) + "_kv" + std::to_string(kv_len) + "_hd" +
+          std::to_string(head_dim);
+  if (!profile.empty()) {
+    name += "_qh" + std::to_string(q_heads) + "_kvh" + std::to_string(kv_heads);
+  }
+  name += "_" + std::string(MaskName(mask)) + "_" + CacheName(cache) + "_" +
+          DataTypeSuffix(data_type) + (benchmark ? "_benchmark" : "");
 
-  const NodeProto node = MakeAttentionNode(rank3, q_heads, kv_heads, is_causal, has_mask, cache);
+  const NodeProto node =
+      MakeAttentionNode(rank3, q_heads, kv_heads, is_causal, has_mask, cache, scale);
   const std::int64_t current_kv_len = cache == Cache::kInternal ? 1 : kv_len;
   const std::int64_t past_len = cache == Cache::kInternal ? kv_len - current_kv_len : 0;
   const std::vector<std::int64_t> q_shape = QkvShape(rank3, batch, q_heads, q_len, head_dim);
@@ -274,6 +299,15 @@ void RegisterCpuAttentionCases(std::vector<TestCase> &registry, TestMode mode) {
                             kHeadDim, data_type, Cache::kInternal, true);
       RegisterAttentionCase(registry, opset24, 24, false, Geometry::kMha, Mask::kCausal, 1, 8, 1024,
                             kHeadDim, data_type, Cache::kNonpad, true);
+    }
+    constexpr float kQwen3Scale = 0.0883883461356163f;
+    RegisterAttentionCase(registry, opset23, 23, true, Geometry::kGqa, Mask::kCausal, 1, 128, 128,
+                          128, DataType::FLOAT16, Cache::kStateless, true, 32, 8, "llm_qwen3_8b",
+                          kQwen3Scale);
+    for (std::int64_t total_kv_len : {std::int64_t{128}, std::int64_t{1024}, std::int64_t{4096}}) {
+      RegisterAttentionCase(registry, opset23, 23, true, Geometry::kGqa, Mask::kCausal, 1, 1,
+                            total_kv_len, 128, DataType::FLOAT16, Cache::kInternal, true, 32, 8,
+                            "llm_qwen3_8b", kQwen3Scale);
     }
     return;
   }
