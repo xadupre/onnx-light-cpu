@@ -25,15 +25,6 @@
 
 namespace onnx_light_cpu {
 
-// Relative per-element cost passed to ExecuteRanges for the Abs kernels. The SIMD
-// loop clears many sign bits per instruction and is memory-bandwidth bound, so
-// dispatching workers at the generic 32768-element grain is substantially
-// slower than staying inline. One half of a work unit keeps small arrays serial
-// while allowing million-element session tensors to use the runtime executor.
-inline constexpr double kAbsCostPerElement = 1.0 / 2.0;
-inline constexpr std::size_t kAbsParallelThreshold =
-    static_cast<std::size_t>(kExecutionGrainSize) * 2;
-
 // ---------------------------------------------------------------------------
 // AbsFloat32 implementations
 // ---------------------------------------------------------------------------
@@ -109,18 +100,14 @@ void AbsFloat32_Dispatch(const float *input, float *output, std::size_t count) {
 } // namespace
 
 void AbsFloat32(const float *input, float *output, std::size_t count) {
-  if (count == 0)
-    return;
-  if (count < kAbsParallelThreshold) {
-    // ExecuteRanges would keep this range inline; avoid its cost-model overhead.
-    AbsFloat32_Dispatch(input, output, count);
-    return;
-  }
-  ExecuteRanges(static_cast<std::int64_t>(count), kAbsCostPerElement, ExecutionSimdLanes<float>(),
-                [input, output](std::int64_t begin, std::int64_t end) {
-                  AbsFloat32_Dispatch(input + begin, output + begin,
-                                      static_cast<std::size_t>(end - begin));
-                });
+  AbsFloat32WithTuning(input, output, count, kDefaultAbs32ExecutionTuning);
+}
+
+void AbsFloat32WithTuning(const float *input, float *output, std::size_t count,
+                          const UnaryExecutionTuning &tuning) {
+  ExecuteUnaryRanges<float>(count, tuning, [input, output](std::int64_t begin, std::int64_t end) {
+    AbsFloat32_Dispatch(input + begin, output + begin, static_cast<std::size_t>(end - begin));
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -213,13 +200,14 @@ void AbsFloat64_Dispatch(const double *input, double *output, std::size_t count)
 } // namespace
 
 void AbsFloat64(const double *input, double *output, std::size_t count) {
-  if (count == 0)
-    return;
-  ExecuteRanges(static_cast<std::int64_t>(count), kAbsCostPerElement, ExecutionSimdLanes<double>(),
-                [input, output](std::int64_t begin, std::int64_t end) {
-                  AbsFloat64_Dispatch(input + begin, output + begin,
-                                      static_cast<std::size_t>(end - begin));
-                });
+  AbsFloat64WithTuning(input, output, count, kDefaultAbs64ExecutionTuning);
+}
+
+void AbsFloat64WithTuning(const double *input, double *output, std::size_t count,
+                          const UnaryExecutionTuning &tuning) {
+  ExecuteUnaryRanges<double>(count, tuning, [input, output](std::int64_t begin, std::int64_t end) {
+    AbsFloat64_Dispatch(input + begin, output + begin, static_cast<std::size_t>(end - begin));
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -318,11 +306,13 @@ void AbsFloat16_Dispatch(const uint16_t *input, uint16_t *output, std::size_t co
 } // namespace
 
 void AbsFloat16(const uint16_t *input, uint16_t *output, std::size_t count) {
-  if (count == 0)
-    return;
-  ExecuteRanges(
-      static_cast<std::int64_t>(count), kAbsCostPerElement, ExecutionSimdLanes<std::uint16_t>(),
-      [input, output](std::int64_t begin, std::int64_t end) {
+  AbsFloat16WithTuning(input, output, count, kDefaultAbs16ExecutionTuning);
+}
+
+void AbsFloat16WithTuning(const uint16_t *input, uint16_t *output, std::size_t count,
+                          const UnaryExecutionTuning &tuning) {
+  ExecuteUnaryRanges<std::uint16_t>(
+      count, tuning, [input, output](std::int64_t begin, std::int64_t end) {
         AbsFloat16_Dispatch(input + begin, output + begin, static_cast<std::size_t>(end - begin));
       });
 }
@@ -421,12 +411,103 @@ void AbsInt8_Dispatch(const int8_t *input, int8_t *output, std::size_t count) {
 } // namespace
 
 void AbsInt8(const int8_t *input, int8_t *output, std::size_t count) {
-  if (count == 0)
-    return;
-  ExecuteRanges(
-      static_cast<std::int64_t>(count), kAbsCostPerElement, ExecutionSimdLanes<std::int8_t>(),
-      [input, output](std::int64_t begin, std::int64_t end) {
+  AbsInt8WithTuning(input, output, count, kDefaultAbs8ExecutionTuning);
+}
+
+void AbsInt8WithTuning(const int8_t *input, int8_t *output, std::size_t count,
+                       const UnaryExecutionTuning &tuning) {
+  ExecuteUnaryRanges<std::int8_t>(
+      count, tuning, [input, output](std::int64_t begin, std::int64_t end) {
         AbsInt8_Dispatch(input + begin, output + begin, static_cast<std::size_t>(end - begin));
+      });
+}
+
+// ---------------------------------------------------------------------------
+// AbsInt16 implementations
+// ---------------------------------------------------------------------------
+
+namespace {
+
+void AbsInt16_Scalar(const int16_t *input, int16_t *output, std::size_t count) {
+  for (std::size_t i = 0; i < count; ++i) {
+    const int32_t value = static_cast<int32_t>(input[i]);
+    output[i] = static_cast<int16_t>(value < 0 ? -value : value);
+  }
+}
+
+#if ONNX_LIGHT_CPU_X86
+
+void AbsInt16_SSE2(const int16_t *input, int16_t *output, std::size_t count) {
+  std::size_t i = 0;
+  constexpr std::size_t stride = 8;
+  const std::size_t aligned_count = count - (count % stride);
+  for (; i < aligned_count; i += stride) {
+    const __m128i value = _mm_loadu_si128(reinterpret_cast<const __m128i *>(input + i));
+    const __m128i sign = _mm_srai_epi16(value, 15);
+    const __m128i result = _mm_sub_epi16(_mm_xor_si128(value, sign), sign);
+    _mm_storeu_si128(reinterpret_cast<__m128i *>(output + i), result);
+  }
+  AbsInt16_Scalar(input + i, output + i, count - i);
+}
+
+void AbsInt16_AVX2(const int16_t *input, int16_t *output, std::size_t count) {
+  std::size_t i = 0;
+  constexpr std::size_t stride = 16;
+  const std::size_t aligned_count = count - (count % stride);
+  for (; i < aligned_count; i += stride) {
+    const __m256i value = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(input + i));
+    _mm256_storeu_si256(reinterpret_cast<__m256i *>(output + i), _mm256_abs_epi16(value));
+  }
+  AbsInt16_SSE2(input + i, output + i, count - i);
+}
+
+#ifdef __AVX512BW__
+void AbsInt16_AVX512(const int16_t *input, int16_t *output, std::size_t count) {
+  std::size_t i = 0;
+  constexpr std::size_t stride = 32;
+  const std::size_t aligned_count = count - (count % stride);
+  for (; i < aligned_count; i += stride) {
+    const __m512i value = _mm512_loadu_si512(reinterpret_cast<const __m512i *>(input + i));
+    _mm512_storeu_si512(reinterpret_cast<__m512i *>(output + i), _mm512_abs_epi16(value));
+  }
+  AbsInt16_AVX2(input + i, output + i, count - i);
+}
+#endif
+
+#endif
+
+void AbsInt16_Dispatch(const int16_t *input, int16_t *output, std::size_t count) {
+#if ONNX_LIGHT_CPU_X86
+  static const SimdLevel level = DetectSimdLevel();
+#ifdef __AVX512BW__
+  if (level >= SimdLevel::kAVX512) {
+    AbsInt16_AVX512(input, output, count);
+    return;
+  }
+#endif
+  if (level >= SimdLevel::kAVX2) {
+    AbsInt16_AVX2(input, output, count);
+    return;
+  }
+  if (level >= SimdLevel::kSSE2) {
+    AbsInt16_SSE2(input, output, count);
+    return;
+  }
+#endif
+  AbsInt16_Scalar(input, output, count);
+}
+
+} // namespace
+
+void AbsInt16(const int16_t *input, int16_t *output, std::size_t count) {
+  AbsInt16WithTuning(input, output, count, kDefaultAbs16ExecutionTuning);
+}
+
+void AbsInt16WithTuning(const int16_t *input, int16_t *output, std::size_t count,
+                        const UnaryExecutionTuning &tuning) {
+  ExecuteUnaryRanges<std::int16_t>(
+      count, tuning, [input, output](std::int64_t begin, std::int64_t end) {
+        AbsInt16_Dispatch(input + begin, output + begin, static_cast<std::size_t>(end - begin));
       });
 }
 
@@ -518,11 +599,13 @@ void AbsInt32_Dispatch(const int32_t *input, int32_t *output, std::size_t count)
 } // namespace
 
 void AbsInt32(const int32_t *input, int32_t *output, std::size_t count) {
-  if (count == 0)
-    return;
-  ExecuteRanges(
-      static_cast<std::int64_t>(count), kAbsCostPerElement, ExecutionSimdLanes<std::int32_t>(),
-      [input, output](std::int64_t begin, std::int64_t end) {
+  AbsInt32WithTuning(input, output, count, kDefaultAbs32ExecutionTuning);
+}
+
+void AbsInt32WithTuning(const int32_t *input, int32_t *output, std::size_t count,
+                        const UnaryExecutionTuning &tuning) {
+  ExecuteUnaryRanges<std::int32_t>(
+      count, tuning, [input, output](std::int64_t begin, std::int64_t end) {
         AbsInt32_Dispatch(input + begin, output + begin, static_cast<std::size_t>(end - begin));
       });
 }
@@ -622,11 +705,13 @@ void AbsInt64_Dispatch(const int64_t *input, int64_t *output, std::size_t count)
 } // namespace
 
 void AbsInt64(const int64_t *input, int64_t *output, std::size_t count) {
-  if (count == 0)
-    return;
-  ExecuteRanges(
-      static_cast<std::int64_t>(count), kAbsCostPerElement, ExecutionSimdLanes<std::int64_t>(),
-      [input, output](std::int64_t begin, std::int64_t end) {
+  AbsInt64WithTuning(input, output, count, kDefaultAbs64ExecutionTuning);
+}
+
+void AbsInt64WithTuning(const int64_t *input, int64_t *output, std::size_t count,
+                        const UnaryExecutionTuning &tuning) {
+  ExecuteUnaryRanges<std::int64_t>(
+      count, tuning, [input, output](std::int64_t begin, std::int64_t end) {
         AbsInt64_Dispatch(input + begin, output + begin, static_cast<std::size_t>(end - begin));
       });
 }

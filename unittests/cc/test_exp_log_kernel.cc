@@ -459,11 +459,23 @@ TEST(LogFloat16, MatchesReference) {
   for (std::size_t i = 0; i < values.size(); ++i) {
     in[i] = FloatToHalf(values[i]);
   }
+
   onnx_light_cpu::LogFloat16(in.data(), out.data(), in.size());
   for (std::size_t i = 0; i < values.size(); ++i) {
     const std::uint16_t ref = FloatToHalf(std::log(HalfToFloat(in[i])));
     EXPECT_EQ(out[i], ref) << "at index " << i;
   }
+}
+
+TEST(LogFloat16, SpecialValues) {
+  const std::vector<std::uint16_t> input = {FloatToHalf(-1.0f), FloatToHalf(-0.0f),
+                                            FloatToHalf(0.0f), 0x7E01u};
+  std::vector<std::uint16_t> output(input.size());
+  onnx_light_cpu::LogFloat16(input.data(), output.data(), input.size());
+  EXPECT_TRUE(std::isnan(HalfToFloat(output[0])));
+  EXPECT_EQ(output[1], FloatToHalf(-std::numeric_limits<float>::infinity()));
+  EXPECT_EQ(output[2], FloatToHalf(-std::numeric_limits<float>::infinity()));
+  EXPECT_TRUE(std::isnan(HalfToFloat(output[3])));
 }
 
 TEST(ExpLogParallel, LargeArrayMatchesStd) {
@@ -494,34 +506,33 @@ TEST(ExpLogParallel, LargeArrayMatchesStd) {
   }
 }
 
-TEST(ExpLogParallel, OperatorSpecificParticipantPolicy) {
+TEST(ExpLogParallel, ByteBasedParticipantPolicy) {
   InlineExecutor executor;
   onnx_light_cpu::ExecutionExecutorView view{&executor, 8, &InlineExecutor::Run};
   onnx_light_cpu::ExecutionExecutorScope scope(&view);
-  std::vector<float> input(524288, 1.0f);
+  std::vector<float> input(1048576, 1.0f);
   std::vector<float> output(input.size());
 
-  onnx_light_cpu::ExpFloat32(input.data(), output.data(), 32767);
+  onnx_light_cpu::ExpFloat32(input.data(), output.data(), 262144);
   EXPECT_EQ(executor.dispatches, 0);
-  onnx_light_cpu::ExpFloat32(input.data(), output.data(), 32768);
+  onnx_light_cpu::ExpFloat32(input.data(), output.data(), 524287);
+  EXPECT_EQ(executor.dispatches, 0);
+  onnx_light_cpu::ExpFloat32(input.data(), output.data(), 524288);
   EXPECT_EQ(executor.dispatches, 1);
-  EXPECT_EQ(executor.blocks, 2);
-  onnx_light_cpu::ExpFloat32(input.data(), output.data(), 65535);
-  EXPECT_EQ(executor.dispatches, 2);
-  EXPECT_EQ(executor.blocks, 2);
-  onnx_light_cpu::ExpFloat32(input.data(), output.data(), 65536);
-  EXPECT_EQ(executor.dispatches, 3);
-  EXPECT_EQ(executor.blocks, 2);
+  EXPECT_EQ(executor.blocks, 8);
 
   executor = {};
-  onnx_light_cpu::LogFloat32(input.data(), output.data(), 131071);
+  onnx_light_cpu::LogFloat32(input.data(), output.data(), 524287);
   EXPECT_EQ(executor.dispatches, 0);
-  onnx_light_cpu::LogFloat32(input.data(), output.data(), 131072);
+  onnx_light_cpu::LogFloat32(input.data(), output.data(), 524288);
   EXPECT_EQ(executor.dispatches, 1);
-  EXPECT_EQ(executor.blocks, 2);
-  onnx_light_cpu::LogFloat32(input.data(), output.data(), 262144);
-  EXPECT_EQ(executor.dispatches, 2);
-  EXPECT_EQ(executor.blocks, 4);
+  EXPECT_EQ(executor.blocks, 8);
+
+  executor = {};
+  const onnx_light_cpu::UnaryExecutionTuning tuned{1, 64 * 1024, 3};
+  onnx_light_cpu::ExpFloat32WithTuning(input.data(), output.data(), input.size(), tuned);
+  EXPECT_EQ(executor.dispatches, 1);
+  EXPECT_EQ(executor.blocks, 3);
 }
 
 } // namespace

@@ -7,6 +7,8 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "onnx_light_cpu/impl/math/unary_execution_tuning.h"
+
 // The math kernels dispatch on the runtime SIMD level shared across all kernel
 // families; pull in the neutral ``SimdLevel`` enum and ``DetectSimdLevel``.
 #include "onnx_light_cpu/impl/simd_level.h"
@@ -57,6 +59,8 @@ template <typename T> struct GemmEpilogue {
 /// Computes elementwise absolute value: out[i] = |input[i]| for float32.
 /// Dispatches to the best available SIMD path at runtime.
 void AbsFloat32(const float *input, float *output, std::size_t count);
+void AbsFloat32WithTuning(const float *input, float *output, std::size_t count,
+                          const UnaryExecutionTuning &tuning);
 
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512
 void AbsFloat32_AVX512(const float *input, float *output, std::size_t count);
@@ -65,24 +69,39 @@ void AbsFloat32_AVX512(const float *input, float *output, std::size_t count);
 /// Computes elementwise absolute value: out[i] = |input[i]| for float64.
 /// Dispatches to the best available SIMD path at runtime.
 void AbsFloat64(const double *input, double *output, std::size_t count);
+void AbsFloat64WithTuning(const double *input, double *output, std::size_t count,
+                          const UnaryExecutionTuning &tuning);
 
 /// Computes elementwise absolute value: out[i] = |input[i]| for float16.
 /// The input and output are the raw IEEE 754 half-precision bit patterns
 /// (as ``uint16_t``); the absolute value simply clears the sign bit.
 /// Dispatches to the best available SIMD path at runtime.
 void AbsFloat16(const uint16_t *input, uint16_t *output, std::size_t count);
+void AbsFloat16WithTuning(const uint16_t *input, uint16_t *output, std::size_t count,
+                          const UnaryExecutionTuning &tuning);
 
 /// Computes elementwise absolute value: out[i] = |input[i]| for int8.
 /// Dispatches to the best available SIMD path at runtime.
 void AbsInt8(const int8_t *input, int8_t *output, std::size_t count);
+void AbsInt8WithTuning(const int8_t *input, int8_t *output, std::size_t count,
+                       const UnaryExecutionTuning &tuning);
+
+/// Computes elementwise absolute value for int16.
+void AbsInt16(const int16_t *input, int16_t *output, std::size_t count);
+void AbsInt16WithTuning(const int16_t *input, int16_t *output, std::size_t count,
+                        const UnaryExecutionTuning &tuning);
 
 /// Computes elementwise absolute value: out[i] = |input[i]| for int32.
 /// Dispatches to the best available SIMD path at runtime.
 void AbsInt32(const int32_t *input, int32_t *output, std::size_t count);
+void AbsInt32WithTuning(const int32_t *input, int32_t *output, std::size_t count,
+                        const UnaryExecutionTuning &tuning);
 
 /// Computes elementwise absolute value: out[i] = |input[i]| for int64.
 /// Dispatches to the best available SIMD path at runtime.
 void AbsInt64(const int64_t *input, int64_t *output, std::size_t count);
+void AbsInt64WithTuning(const int64_t *input, int64_t *output, std::size_t count,
+                        const UnaryExecutionTuning &tuning);
 
 /// Computes elementwise natural exponential: out[i] = exp(input[i]) for float32.
 /// Uses a vectorized minimax polynomial approximation with runtime AVX-512/
@@ -90,6 +109,8 @@ void AbsInt64(const int64_t *input, int64_t *output, std::size_t count);
 /// to within a few ULPs and special values (+/-inf, NaN, overflow, underflow)
 /// match ``std::exp``.
 void ExpFloat32(const float *input, float *output, std::size_t count);
+void ExpFloat32WithTuning(const float *input, float *output, std::size_t count,
+                          const UnaryExecutionTuning &tuning);
 
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512
 void ExpFloat32_AVX512(const float *input, float *output, std::size_t count);
@@ -102,6 +123,8 @@ void ExpFloat32_AVX2_FMA(const float *input, float *output, std::size_t count);
 /// Computes elementwise natural exponential: out[i] = exp(input[i]) for float64.
 /// Dispatches to the best available SIMD path at runtime.
 void ExpFloat64(const double *input, double *output, std::size_t count);
+void ExpFloat64WithTuning(const double *input, double *output, std::size_t count,
+                          const UnaryExecutionTuning &tuning);
 
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512
 void ExpFloat64_AVX512(const double *input, double *output, std::size_t count);
@@ -109,9 +132,13 @@ void ExpFloat64_AVX512(const double *input, double *output, std::size_t count);
 
 /// Computes elementwise natural exponential: out[i] = exp(input[i]) for float16.
 /// The input and output are the raw IEEE 754 half-precision bit patterns (as
-/// ``uint16_t``); each value is widened to float32, exponentiated and rounded
-/// back to float16.
+/// ``uint16_t``); blocks are widened with vector conversion, evaluated by the
+/// float32 SIMD approximation and narrowed once.
 void ExpFloat16(const uint16_t *input, uint16_t *output, std::size_t count);
+void ExpFloat16WithTuning(const uint16_t *input, uint16_t *output, std::size_t count,
+                          const UnaryExecutionTuning &tuning);
+void ExpBFloat16WithTuning(const uint16_t *input, uint16_t *output, std::size_t count,
+                           const UnaryExecutionTuning &tuning);
 
 void SwiGLUFloat32(const float *gate, const float *value, float *output, std::size_t count,
                    float alpha);
@@ -128,6 +155,8 @@ void SwiGLUBFloat16(const std::uint16_t *gate, const std::uint16_t *value, std::
 /// to within a few ULPs and special values (0 -> -inf, negative -> NaN, +inf,
 /// NaN) match ``std::log``.
 void LogFloat32(const float *input, float *output, std::size_t count);
+void LogFloat32WithTuning(const float *input, float *output, std::size_t count,
+                          const UnaryExecutionTuning &tuning);
 
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
 void LogFloat32_AVX2_FMA(const float *input, float *output, std::size_t count);
@@ -140,6 +169,8 @@ void LogFloat32_AVX512(const float *input, float *output, std::size_t count);
 /// Computes elementwise natural logarithm: out[i] = log(input[i]) for float64.
 /// Dispatches to the best available SIMD path at runtime.
 void LogFloat64(const double *input, double *output, std::size_t count);
+void LogFloat64WithTuning(const double *input, double *output, std::size_t count,
+                          const UnaryExecutionTuning &tuning);
 
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512
 void LogFloat64_AVX512(const double *input, double *output, std::size_t count);
@@ -147,9 +178,13 @@ void LogFloat64_AVX512(const double *input, double *output, std::size_t count);
 
 /// Computes elementwise natural logarithm: out[i] = log(input[i]) for float16.
 /// The input and output are the raw IEEE 754 half-precision bit patterns (as
-/// ``uint16_t``); each value is widened to float32, its logarithm computed and
-/// rounded back to float16.
+/// ``uint16_t``); each value is widened, evaluated with the standard library
+/// and narrowed with exact half-precision rounding.
 void LogFloat16(const uint16_t *input, uint16_t *output, std::size_t count);
+void LogFloat16WithTuning(const uint16_t *input, uint16_t *output, std::size_t count,
+                          const UnaryExecutionTuning &tuning);
+void LogBFloat16WithTuning(const uint16_t *input, uint16_t *output, std::size_t count,
+                           const UnaryExecutionTuning &tuning);
 
 /// Computes the ONNX ``Gemm`` general matrix multiplication for float32:
 ///

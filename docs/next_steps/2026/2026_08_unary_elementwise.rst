@@ -195,6 +195,67 @@ executor by operator family, type, processor profile, and ISA:
 * thread count is capped when memory bandwidth or available blocks saturate;
 * caller-owned pools and the internal pool must not oversubscribe each other.
 
+Current tuning contract
+~~~~~~~~~~~~~~~~~~~~~~~
+
+``Abs``, ``Exp``, and ``Log`` register tuning ABI 1 for every supported exact
+operator/input-type key with ``implementation="simd_dispatch"``. The shared
+parameters are:
+
+* ``parallel.threshold_bytes``: minimum input bytes before executor dispatch;
+  zero disables dispatch;
+* ``parallel.target_block_bytes``: target input bytes per task and always
+  positive;
+* ``parallel.max_participants``: executor participant ceiling; zero uses every
+  participant exposed by the session.
+
+The portable defaults retain SIMD execution inline through the measured
+small/medium-tensor region:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 28 24 24 24
+
+   * - Operator and input types
+     - Threshold
+     - Target block
+     - Maximum participants
+   * - ``Abs`` FP32/INT32
+     - 2 MiB
+     - 256 KiB
+     - executor maximum
+   * - ``Abs`` FP64/INT64
+     - 2 MiB
+     - 512 KiB
+     - executor maximum
+   * - ``Abs`` FP16/BF16/INT16
+     - 4 MiB
+     - 128 KiB
+     - executor maximum
+   * - ``Abs`` INT8
+     - 8 MiB
+     - 64 KiB
+     - executor maximum
+   * - ``Exp``/``Log`` FP32/FP64
+     - 2 MiB
+     - 256 KiB
+     - 32
+   * - ``Exp`` FP16/BF16
+     - 1 MiB
+     - 128 KiB
+     - 32
+   * - ``Log`` FP16
+     - 64 KiB
+     - 1,600 bytes
+     - executor maximum
+   * - ``Log`` BF16
+     - 512 KiB
+     - 64 KiB
+     - 32
+
+Processor profiles may override all three values without changing kernel code
+or introducing process-global mutable scheduling state.
+
 Fusion
 ------
 

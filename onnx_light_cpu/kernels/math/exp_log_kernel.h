@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "onnx_light_cpu/impl/math/math_kernels.h"
+
 #include "onnx_core/runtime/kernels/kernel_context.h"
 #include "onnx_core/runtime/memory/simple_tensor.h"
 #include "onnx_core/runtime/runtime_context.h"
@@ -22,12 +24,21 @@ namespace onnx_light_cpu {
 /// once per node and calls :cpp:func:`Run` on every execution. The computation
 /// is delegated to the SIMD ``ExpFloat*`` routines declared in
 /// ``onnx_light_cpu/impl/math/math_kernels.h`` (runtime AVX2/SSE2 dispatch) for
-/// ``float32``/``float64``/``float16``; ``bfloat16`` falls back to a scalar
-/// implementation so the kernel is a full drop-in replacement for the built-in
-/// one.
+/// ``float32``/``float64`` directly; ``float16`` and ``bfloat16`` use vector
+/// conversion blocks around the same float32 approximation.
 class ExpKernel : public ONNX_LIGHT_NAMESPACE::core::runtime::KernelBase {
 public:
   using ONNX_LIGHT_NAMESPACE::core::runtime::KernelBase::KernelBase;
+  static constexpr std::uint32_t kTuningAbi = 1;
+
+  ExpKernel(const ONNX_LIGHT_NAMESPACE::NodeProto &node,
+            const ONNX_LIGHT_NAMESPACE::core::runtime::KernelContext &ctx);
+
+  static void RegisterTuningSchemas();
+  ONNX_LIGHT_NAMESPACE::core::runtime::KernelTuningKey
+  TuningKey(int32_t element_type) const override;
+  void
+  Configure(const ONNX_LIGHT_NAMESPACE::core::runtime::KernelTuningParameters &parameters) override;
 
   /// Library-qualified name identifying this kernel, recorded through
   /// :cpp:func:`RecordKernelUsage` on every :cpp:func:`Run` so callers can
@@ -48,16 +59,30 @@ public:
   /// ``data_type``, ``shape`` and buffer size must already match ``x``.
   void operator()(const ONNX_LIGHT_NAMESPACE::core::runtime::Tensor &x,
                   ONNX_LIGHT_NAMESPACE::core::runtime::Tensor &output) const;
+
+private:
+  UnaryExecutionTuning tuning_ = kDefaultExpLogExecutionTuning;
+  bool tuning_configured_ = false;
 };
 
 /// SIMD-accelerated onnx-light kernel for the ONNX ``Log`` operator.
 ///
 /// ``LogKernel`` mirrors :cpp:class:`ExpKernel`, delegating to the SIMD
-/// ``LogFloat*`` routines for ``float32``/``float64``/``float16`` and using a
-/// scalar fallback for ``bfloat16``.
+/// ``LogFloat*`` routines for ``float32``/``float64``, a scalar exact FP16
+/// path, and vector conversion blocks for ``bfloat16``.
 class LogKernel : public ONNX_LIGHT_NAMESPACE::core::runtime::KernelBase {
 public:
   using ONNX_LIGHT_NAMESPACE::core::runtime::KernelBase::KernelBase;
+  static constexpr std::uint32_t kTuningAbi = 1;
+
+  LogKernel(const ONNX_LIGHT_NAMESPACE::NodeProto &node,
+            const ONNX_LIGHT_NAMESPACE::core::runtime::KernelContext &ctx);
+
+  static void RegisterTuningSchemas();
+  ONNX_LIGHT_NAMESPACE::core::runtime::KernelTuningKey
+  TuningKey(int32_t element_type) const override;
+  void
+  Configure(const ONNX_LIGHT_NAMESPACE::core::runtime::KernelTuningParameters &parameters) override;
 
   /// Library-qualified name identifying this kernel, recorded through
   /// :cpp:func:`RecordKernelUsage` on every :cpp:func:`Run` so callers can
@@ -78,6 +103,10 @@ public:
   /// ``data_type``, ``shape`` and buffer size must already match ``x``.
   void operator()(const ONNX_LIGHT_NAMESPACE::core::runtime::Tensor &x,
                   ONNX_LIGHT_NAMESPACE::core::runtime::Tensor &output) const;
+
+private:
+  UnaryExecutionTuning tuning_ = kDefaultExpLogExecutionTuning;
+  bool tuning_configured_ = false;
 };
 
 /// Registers the onnx-light-cpu ``Exp`` kernel into onnx-light's shared

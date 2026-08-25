@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "onnx_light_cpu/impl/math/math_kernels.h"
+
 #include "onnx_core/runtime/kernels/kernel_context.h"
 #include "onnx_core/runtime/memory/simple_tensor.h"
 #include "onnx_core/runtime/runtime_context.h"
@@ -22,13 +24,22 @@ namespace onnx_light_cpu {
 /// once per node and calls :cpp:func:`Run` on every execution. The
 /// computation is delegated to the SIMD ``Abs*`` routines declared in
 /// ``onnx_light_cpu/impl/math/math_kernels.h`` (runtime AVX-512/AVX2/AVX/SSE2 dispatch)
-/// for ``float32``/``float64``/``float16``/``int8``/``int32``/``int64``; the
-/// remaining element types supported by ONNX ``Abs`` (``bfloat16`` and
-/// ``int16``) fall back to a scalar implementation so the kernel is a full
-/// drop-in replacement for the built-in one.
+/// for every supported numeric type. Float16 and bfloat16 share the exact sign
+/// bit clearing path, while signed integers use width-specific SIMD absolute
+/// value operations.
 class AbsKernel : public ONNX_LIGHT_NAMESPACE::core::runtime::KernelBase {
 public:
   using ONNX_LIGHT_NAMESPACE::core::runtime::KernelBase::KernelBase;
+  static constexpr std::uint32_t kTuningAbi = 1;
+
+  AbsKernel(const ONNX_LIGHT_NAMESPACE::NodeProto &node,
+            const ONNX_LIGHT_NAMESPACE::core::runtime::KernelContext &ctx);
+
+  static void RegisterTuningSchemas();
+  ONNX_LIGHT_NAMESPACE::core::runtime::KernelTuningKey
+  TuningKey(int32_t element_type) const override;
+  void
+  Configure(const ONNX_LIGHT_NAMESPACE::core::runtime::KernelTuningParameters &parameters) override;
 
   /// Library-qualified name identifying this kernel, recorded through
   /// :cpp:func:`RecordKernelUsage` on every :cpp:func:`Run` so callers can
@@ -49,6 +60,10 @@ public:
   /// ``data_type``, ``shape`` and buffer size must already match ``x``.
   void operator()(const ONNX_LIGHT_NAMESPACE::core::runtime::Tensor &x,
                   ONNX_LIGHT_NAMESPACE::core::runtime::Tensor &output) const;
+
+private:
+  UnaryExecutionTuning tuning_ = kDefaultAbs32ExecutionTuning;
+  bool tuning_configured_ = false;
 };
 
 /// Registers the onnx-light-cpu ``Abs`` kernel into onnx-light's shared

@@ -11,16 +11,22 @@
 #include "onnx_core/runtime/memory/simple_tensor.h"
 #include "onnx_core/runtime/runtime_context.h"
 #include "onnx_core/runtime/tuning/cpu_executor.h"
+#include "onnx_core/runtime/tuning/kernel_tuning.h"
+#include "onnx_core/symbolic/sym_tensor.h"
+#include "onnx_light_cpu/impl/execution.h"
 
 #include <gtest/gtest.h>
 
 #include <cmath>
 #include <cstdint>
+#include <span>
+#include <stdexcept>
 #include <vector>
 
 namespace {
 
 namespace rt_ns = ONNX_LIGHT_NAMESPACE::core::runtime;
+namespace sym_ns = ONNX_LIGHT_NAMESPACE::core::symbolic;
 
 rt_ns::KernelContext MakeCtx() { return rt_ns::KernelContext(rt_ns::OpsetId(std::string(), 18)); }
 
@@ -60,6 +66,76 @@ TEST(OnnxLightAbsKernel, Int64) {
   }
 }
 
+struct InlineExecutor {
+  std::int64_t dispatches = 0;
+  std::int64_t blocks = 0;
+
+  static void Run(void *context, std::int64_t num_blocks, void *task_context,
+                  onnx_light_cpu::ExecutionBlockFn task) {
+    auto &self = *static_cast<InlineExecutor *>(context);
+    ++self.dispatches;
+    self.blocks = num_blocks;
+    for (std::int64_t block = 0; block < num_blocks; ++block) {
+      task(task_context, block);
+    }
+  }
+};
+
+TEST(OnnxLightAbsKernel, RegistersAndAppliesValidatedTuning) {
+  ONNX_LIGHT_NAMESPACE::NodeProto node;
+  node.set_op_type("Abs");
+  node.add_input("x");
+  node.add_output("y");
+  onnx_light_cpu::AbsKernel kernel(node, MakeCtx());
+  onnx_light_cpu::AbsKernel::RegisterTuningSchemas();
+
+  for (rt_ns::DataType type :
+       {rt_ns::DataType::FLOAT, rt_ns::DataType::DOUBLE, rt_ns::DataType::FLOAT16,
+        rt_ns::DataType::BFLOAT16, rt_ns::DataType::INT8, rt_ns::DataType::INT16,
+        rt_ns::DataType::INT32, rt_ns::DataType::INT64}) {
+    const auto key = kernel.TuningKey(static_cast<int32_t>(type));
+    EXPECT_EQ(key.library, "onnx_light_cpu");
+    EXPECT_EQ(key.kernel, "Abs");
+    EXPECT_EQ(key.implementation, "simd_dispatch");
+    EXPECT_EQ(key.tuning_abi, onnx_light_cpu::AbsKernel::kTuningAbi);
+    EXPECT_NE(rt_ns::GetKernelTuningRegistry().FindSchema(key), nullptr);
+  }
+
+  const auto key = kernel.TuningKey(static_cast<int32_t>(rt_ns::DataType::FLOAT));
+  const auto schema = rt_ns::GetKernelTuningRegistry().FindSchema(key);
+  ASSERT_NE(schema, nullptr);
+  auto parameters = schema->portable_defaults();
+  EXPECT_EQ(parameters.Get<int64_t>("parallel.threshold_bytes"), 2 * 1024 * 1024);
+  EXPECT_EQ(parameters.Get<int64_t>("parallel.target_block_bytes"), 256 * 1024);
+  EXPECT_EQ(parameters.Get<int64_t>("parallel.max_participants"), 0);
+
+  parameters.values["parallel.threshold_bytes"] = int64_t{1};
+  parameters.values["parallel.target_block_bytes"] = int64_t{64};
+  parameters.values["parallel.max_participants"] = int64_t{2};
+  EXPECT_NO_THROW(kernel.Configure(parameters));
+
+  constexpr std::size_t count = 256;
+  const rt_ns::Tensor x = rt_ns::Tensor::FromFloat("x", {count}, std::vector<float>(count, -3.0f));
+  InlineExecutor executor;
+  onnx_light_cpu::ExecutionExecutorView view{&executor, 8, &InlineExecutor::Run};
+  onnx_light_cpu::ExecutionExecutorScope scope(&view);
+  const rt_ns::Tensor y = kernel(x);
+  EXPECT_EQ(executor.dispatches, 1);
+  EXPECT_EQ(executor.blocks, 2);
+  for (float value : std::span(y.AsFloat(), count)) {
+    EXPECT_EQ(value, 3.0f);
+  }
+
+  parameters.values["parallel.max_participants"] = int64_t{-1};
+  EXPECT_THROW(schema->Validate(parameters), std::invalid_argument);
+  EXPECT_THROW(kernel.Configure(parameters), std::invalid_argument);
+  parameters = schema->portable_defaults();
+  parameters.values["parallel.target_block_bytes"] = int64_t{0};
+  EXPECT_THROW(schema->Validate(parameters), std::invalid_argument);
+  EXPECT_EQ(kernel.TuningKey(static_cast<int32_t>(rt_ns::DataType::STRING)).device,
+            sym_ns::Device::kUndefined);
+}
+
 TEST(OnnxLightAbsKernel, OutputUsesSlotAllocator) {
   onnx_light_cpu::AbsKernel kernel(MakeCtx());
   const rt_ns::Tensor x = rt_ns::Tensor::FromFloat("x", {2}, {-1.0f, 3.0f});
@@ -91,7 +167,7 @@ TEST(OnnxLightAbsKernel, OutputUsesSlotAllocator) {
 // registered session installs its executor.
 TEST(OnnxLightAbsKernel, Float32LargeParallel) {
   onnx_light_cpu::AbsKernel kernel(MakeCtx());
-  const int64_t n = 2000003; // Above Abs's discounted parallel grain.
+  const int64_t n = 2097152;
   std::vector<float> values(static_cast<std::size_t>(n));
   for (int64_t i = 0; i < n; ++i) {
     values[static_cast<std::size_t>(i)] = static_cast<float>((i % 2 == 0 ? -1 : 1) * (i % 97));
@@ -128,7 +204,7 @@ TEST(OnnxLightAbsKernel, RegisteredKernelUsesSessionExecutorWithoutPrivatePool) 
   node.add_output("y");
   rt_ns::RuntimeContext runtime(rt_ns::KernelContext(rt_ns::DefaultOpset(18)));
   runtime.set_cpu_executor(executor.get());
-  const int64_t n = 2000003;
+  const int64_t n = 2097152;
   std::vector<float> values(static_cast<std::size_t>(n), -3.0f);
   runtime.Set("x", rt_ns::Tensor::FromFloat("x", {n}, values));
   std::unique_ptr<rt_ns::KernelBase> kernel = factory->second(node, runtime);
