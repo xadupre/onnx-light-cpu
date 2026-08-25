@@ -9,6 +9,7 @@
 #include "onnx_core/runtime/kernels/kernel_context.h"
 #include "onnx_core/runtime/memory/simple_tensor.h"
 #include "onnx_core/runtime/tuning/kernel_tuning.h"
+#include "onnx_core/runtime/tuning/kernel_tuning_cache.h"
 #include "onnx_op/operator_sets_logical.h"
 #include "onnx_op/operator_sets_math.h"
 
@@ -16,6 +17,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <filesystem>
 #include <optional>
 #include <set>
 #include <string>
@@ -148,6 +150,7 @@ TEST(OnnxLightBinaryManifest, RegistersValidatedTuningSchemaForEveryOperatorAndI
           sym_ns::Device::kCPU, onnx_light_cpu::BinaryElementwiseKernel::kTuningAbi};
       const auto schema = rt_ns::GetKernelTuningRegistry().FindSchema(key);
       ASSERT_NE(schema, nullptr) << entry.op_type;
+      EXPECT_TRUE(rt_ns::GetKernelTuningRegistry().FindCalibrationFunction(key)) << entry.op_type;
       const auto &parameters = schema->portable_defaults();
       EXPECT_EQ(parameters.Get<int64_t>("parallel.bulk_threshold_bytes"), 1024 * 1024);
       EXPECT_EQ(parameters.Get<int64_t>("parallel.block_threshold_bytes"), 1024 * 1024);
@@ -173,6 +176,161 @@ struct InlineExecutor {
     }
   }
 };
+
+TEST(OnnxLightBinaryManifest, CalibrationIsBoundedCorrectnessGatedAndReturnsCompleteProfile) {
+  onnx_light_cpu::BinaryElementwiseKernel::RegisterTuningSchemas();
+  const rt_ns::KernelTuningKey key{
+      "onnx_light_cpu",     "Add",
+      "broadcast_plan",     static_cast<int32_t>(rt_ns::DataType::FLOAT),
+      sym_ns::Device::kCPU, onnx_light_cpu::BinaryElementwiseKernel::kTuningAbi};
+  const auto schema = rt_ns::GetKernelTuningRegistry().FindSchema(key);
+  ASSERT_NE(schema, nullptr);
+  const auto calibrate = rt_ns::GetKernelTuningRegistry().FindCalibrationFunction(key);
+  ASSERT_TRUE(calibrate);
+
+  rt_ns::CalibrationOptions tiny_options;
+  tiny_options.maximum_memory_bytes = 1;
+  rt_ns::CalibrationReporter tiny_reporter(tiny_options);
+  rt_ns::CpuExecutionDescriptor serial_execution;
+  serial_execution.effective_threads = 1;
+  const auto fallback = calibrate(key, serial_execution, tiny_options, tiny_reporter);
+  EXPECT_EQ(fallback.values, schema->portable_defaults().values);
+  EXPECT_EQ(tiny_reporter.benchmark_cases(), 0u);
+  ASSERT_FALSE(tiny_reporter.diagnostics().empty());
+  rt_ns::KernelCalibrationSelection selection;
+  selection.library = "onnx_light_cpu";
+  selection.kernels = {"Add"};
+  selection.implementations = {"broadcast_plan"};
+  selection.element_types = {static_cast<int32_t>(rt_ns::DataType::FLOAT)};
+  selection.device = sym_ns::Device::kCPU;
+  const auto published = rt_ns::CalibrateRegisteredKernels(selection, tiny_options);
+  ASSERT_EQ(published.calibrated.size(), 1u);
+  EXPECT_GT(published.published_generation, 0u);
+
+  InlineExecutor executor;
+  onnx_light_cpu::ExecutionExecutorView view{&executor, 8, &InlineExecutor::Run};
+  onnx_light_cpu::ExecutionExecutorScope scope(&view);
+  rt_ns::CalibrationOptions options;
+  options.maximum_duration_ms = 100;
+  options.maximum_memory_bytes = uint64_t{64} << 20;
+  rt_ns::CalibrationReporter reporter(options);
+  rt_ns::CpuExecutionDescriptor execution;
+  execution.effective_threads = 8;
+  const auto calibrated = calibrate(key, execution, options, reporter);
+  EXPECT_NO_THROW(schema->Validate(calibrated));
+  EXPECT_EQ(calibrated.values.size(), 5u);
+  EXPECT_GT(reporter.benchmark_cases(), 0u);
+  EXPECT_LE(reporter.peak_memory_bytes(), options.maximum_memory_bytes);
+  ASSERT_FALSE(reporter.diagnostics().empty());
+
+  rt_ns::KernelTuningKey pow_key = key;
+  pow_key.kernel = "Pow";
+  const auto pow_schema = rt_ns::GetKernelTuningRegistry().FindSchema(pow_key);
+  ASSERT_NE(pow_schema, nullptr);
+  const auto calibrate_pow = rt_ns::GetKernelTuningRegistry().FindCalibrationFunction(pow_key);
+  ASSERT_TRUE(calibrate_pow);
+  rt_ns::CalibrationOptions constrained_pow_options;
+  constrained_pow_options.maximum_memory_bytes = uint64_t{6} << 20;
+  rt_ns::CalibrationReporter constrained_pow_reporter(constrained_pow_options);
+  const auto constrained_pow =
+      calibrate_pow(pow_key, execution, constrained_pow_options, constrained_pow_reporter);
+  EXPECT_EQ(constrained_pow.values, pow_schema->portable_defaults().values);
+  EXPECT_EQ(constrained_pow_reporter.benchmark_cases(), 0u);
+
+  rt_ns::CalibrationOptions pow_options;
+  pow_options.maximum_duration_ms = 250;
+  pow_options.maximum_memory_bytes = uint64_t{64} << 20;
+  rt_ns::CalibrationReporter pow_reporter(pow_options);
+  const auto calibrated_pow = calibrate_pow(pow_key, execution, pow_options, pow_reporter);
+  EXPECT_NO_THROW(pow_schema->Validate(calibrated_pow));
+  EXPECT_GT(pow_reporter.benchmark_cases(), 0u);
+  EXPECT_LE(pow_reporter.peak_memory_bytes(), pow_options.maximum_memory_bytes);
+
+  for (const auto integer_type : {rt_ns::DataType::INT32, rt_ns::DataType::INT64}) {
+    rt_ns::KernelTuningKey integer_pow_key = pow_key;
+    integer_pow_key.element_type = static_cast<int32_t>(integer_type);
+    const auto integer_pow_schema = rt_ns::GetKernelTuningRegistry().FindSchema(integer_pow_key);
+    ASSERT_NE(integer_pow_schema, nullptr);
+    const auto calibrate_integer_pow =
+        rt_ns::GetKernelTuningRegistry().FindCalibrationFunction(integer_pow_key);
+    ASSERT_TRUE(calibrate_integer_pow);
+    rt_ns::CalibrationReporter integer_pow_reporter(pow_options);
+    rt_ns::KernelTuningParameters integer_pow;
+    EXPECT_NO_THROW(integer_pow = calibrate_integer_pow(integer_pow_key, execution, pow_options,
+                                                        integer_pow_reporter));
+    EXPECT_NO_THROW(integer_pow_schema->Validate(integer_pow));
+    EXPECT_GT(integer_pow_reporter.benchmark_cases(), 0u);
+    EXPECT_LE(integer_pow_reporter.peak_memory_bytes(), pow_options.maximum_memory_bytes);
+  }
+}
+
+TEST(OnnxLightBinaryManifest, CalibratedProfilesPersistAndOldConfigurationsStayImmutable) {
+  onnx_light_cpu::BinaryElementwiseKernel::RegisterTuningSchemas();
+  ONNX_LIGHT_NAMESPACE::NodeProto node;
+  node.set_op_type("Add");
+  node.add_input("left");
+  node.add_input("right");
+  node.add_output("output");
+  const rt_ns::KernelContext context(rt_ns::OpsetId(std::string(), 14));
+  onnx_light_cpu::BinaryElementwiseKernel old_kernel(node, context);
+  onnx_light_cpu::BinaryElementwiseKernel new_kernel(node, context);
+  const auto key = old_kernel.TuningKey(static_cast<int32_t>(rt_ns::DataType::FLOAT));
+  const auto schema = rt_ns::GetKernelTuningRegistry().FindSchema(key);
+  ASSERT_NE(schema, nullptr);
+
+  rt_ns::CpuExecutionDescriptor execution;
+  execution.processor = ONNX_LIGHT_NAMESPACE::core::platform::GetCpuDescriptor();
+  execution.effective_threads = 8;
+  const auto before = rt_ns::GetKernelTuningRegistry().Snapshot();
+  const auto *portable = before.Resolve(key, execution);
+  ASSERT_NE(portable, nullptr);
+  old_kernel.Configure(*portable);
+
+  auto calibrated = schema->portable_defaults();
+  calibrated.values["parallel.bulk_threshold_bytes"] = int64_t{0};
+  calibrated.values["parallel.block_threshold_bytes"] = int64_t{0};
+  calibrated.values["parallel.scalar_threshold_bytes"] = int64_t{0};
+  calibrated.values["parallel.target_block_bytes"] = int64_t{12};
+  calibrated.values["parallel.max_participants"] = int64_t{2};
+  rt_ns::GetKernelTuningRegistry().PublishCalibratedProfiles(
+      std::span<const rt_ns::KernelTuningParameters>(&calibrated, 1), execution);
+  const auto after = rt_ns::GetKernelTuningRegistry().Snapshot();
+  new_kernel.Configure(*after.Resolve(key, execution));
+  EXPECT_EQ(before.Resolve(key, execution)->Get<int64_t>("parallel.bulk_threshold_bytes"),
+            1024 * 1024);
+  EXPECT_EQ(after.Resolve(key, execution)->Get<int64_t>("parallel.bulk_threshold_bytes"), 0);
+
+  constexpr std::size_t count = 64;
+  const rt_ns::Tensor left =
+      rt_ns::Tensor::FromFloat("left", {count}, std::vector<float>(count, 1));
+  const rt_ns::Tensor right =
+      rt_ns::Tensor::FromFloat("right", {count}, std::vector<float>(count, 2));
+  rt_ns::Tensor output = rt_ns::Tensor::FromFloat("output", {count}, std::vector<float>(count, 0));
+  InlineExecutor executor;
+  onnx_light_cpu::ExecutionExecutorView view{&executor, 8, &InlineExecutor::Run};
+  onnx_light_cpu::ExecutionExecutorScope scope(&view);
+  old_kernel(left, right, output);
+  EXPECT_EQ(executor.dispatches, 0);
+  new_kernel(left, right, output);
+  EXPECT_EQ(executor.dispatches, 1);
+  EXPECT_EQ(executor.blocks, 2);
+
+  const std::filesystem::path cache_path =
+      std::filesystem::temp_directory_path() / "onnx_light_cpu_binary_tuning_cache_test.txt";
+  std::error_code error;
+  std::filesystem::remove(cache_path, error);
+  rt_ns::KernelTuningCacheOptions cache_options;
+  cache_options.path = cache_path;
+  cache_options.execution = execution;
+  const std::array profiles = {calibrated};
+  const auto update = rt_ns::UpdateKernelTuningCache(profiles, cache_options);
+  EXPECT_EQ(update.status, rt_ns::KernelTuningCacheUpdateStatus::kUpdated);
+  const auto inspection = rt_ns::InspectKernelTuningCache(cache_options);
+  EXPECT_EQ(inspection.status, rt_ns::KernelTuningCacheLoadStatus::kLoaded);
+  ASSERT_EQ(inspection.profiles.size(), 1u);
+  EXPECT_EQ(inspection.profiles[0].parameters.key, key);
+  std::filesystem::remove(cache_path, error);
+}
 
 TEST(OnnxLightBinaryManifest, ConfiguredTuningControlsExecutionAndRejectsInvalidValues) {
   ONNX_LIGHT_NAMESPACE::NodeProto node;
