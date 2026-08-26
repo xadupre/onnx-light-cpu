@@ -118,8 +118,13 @@ def measure(
     number=1,
     max_duration=1.0,
 ):
+    warmup_duration = 0.0
     for _ in range(warmup):
+        start = time.perf_counter()
         func()
+        warmup_duration += time.perf_counter() - start
+        if warmup_duration >= max_duration:
+            break
     timings = []
     total_duration = 0.0
     for _ in range(repeat):

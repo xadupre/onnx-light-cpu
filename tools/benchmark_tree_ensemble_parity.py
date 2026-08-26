@@ -162,8 +162,13 @@ def measure_one(
     warmup: int,
     max_duration: float = MAX_MEASURE_DURATION,
 ) -> list[float]:
+    warmup_duration = 0.0
     for _ in range(warmup):
+        start = time.perf_counter_ns()
         function()
+        warmup_duration += (time.perf_counter_ns() - start) / 1e9
+        if warmup_duration >= max_duration:
+            break
     timings = []
     total_duration = 0.0
     gc_enabled = gc.isenabled()

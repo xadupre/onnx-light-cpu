@@ -66,8 +66,13 @@ def measure(run, arrays, repeat, warmup, max_duration):
     """Measures median inference times for all arrays."""
     results = []
     for array in arrays:
+        warmup_duration = 0.0
         for _ in range(warmup):
+            begin = time.perf_counter()
             run(array)
+            warmup_duration += time.perf_counter() - begin
+            if warmup_duration >= max_duration:
+                break
         samples = []
         total_duration = 0.0
         for _ in range(repeat):

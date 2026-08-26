@@ -152,14 +152,19 @@ print(f"-- collected {len(_CASES)} cases")
 # Timing helper
 # -------------
 #
-# Each candidate gets ``--warmup`` untimed calls, then up to ``--repeat``
-# measured calls. Measurement stops once ``--max-repeat-time`` cumulative
+# Each candidate gets up to ``--warmup`` untimed calls, then up to ``--repeat``
+# measured calls. Both phases stop once ``--max-repeat-time`` cumulative
 # seconds have elapsed, and the median wall-clock time is retained.
 
 
 def measure(func, repeat, warmup, max_duration):
+    warmup_duration = 0.0
     for _ in range(warmup):
+        start = time.perf_counter()
         func()
+        warmup_duration += time.perf_counter() - start
+        if warmup_duration >= max_duration:
+            break
     timings = []
     total_duration = 0.0
     for _ in range(repeat):

@@ -147,8 +147,13 @@ def make_session(tensor_proto_dtype):
 
 
 def measure(func, repeat, warmup, max_duration):
+    warmup_duration = 0.0
     for _ in range(warmup):
+        start = time.perf_counter()
         func()
+        warmup_duration += time.perf_counter() - start
+        if warmup_duration >= max_duration:
+            break
     timings = []
     total_duration = 0.0
     for _ in range(repeat):

@@ -48,10 +48,18 @@ def measure_alternating(
     warmup: int,
     max_repeat_time: float = 1.0,
 ) -> tuple[tuple[list[float], ...], list[list[str]]]:
+    warmup_durations = [0.0] * len(functions)
     labels = ("onnx-light-cpu", "onnxruntime")
     for iteration in range(warmup):
         for offset in range(len(functions)):
-            functions[(iteration + offset) % len(functions)]()
+            index = (iteration + offset) % len(functions)
+            if warmup_durations[index] >= max_repeat_time:
+                continue
+            start = time.perf_counter_ns()
+            functions[index]()
+            warmup_durations[index] += (time.perf_counter_ns() - start) / 1e9
+        if all(duration >= max_repeat_time for duration in warmup_durations):
+            break
     samples: tuple[list[float], ...] = tuple([] for _ in functions)
     total_durations = [0.0] * len(functions)
     orders: list[list[str]] = []

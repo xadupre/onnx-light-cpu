@@ -75,13 +75,13 @@ def test_repeat_count_is_bounded():
     assert repeat_count(large, 7, 31) == 7
 
 
-def test_measure_one_stops_after_duration_excluding_warmup():
+def test_measure_one_bounds_warmup_and_measurement_separately():
     calls = []
 
     def measured():
         calls.append(None)
 
-    clock = iter((0, 1_100_000_000))
+    clock = iter((0, 1_100_000_000, 2_000_000_000, 3_100_000_000))
     with patch(
         "tools.benchmark_tree_ensemble_parity.time.perf_counter_ns",
         side_effect=clock,
@@ -89,6 +89,7 @@ def test_measure_one_stops_after_duration_excluding_warmup():
         samples = measure_one(measured, repeat=5, warmup=1, max_duration=1.0)
 
     assert samples == [1.1]
+    assert len(calls) == 2
     assert len(calls) == 2
 
 
