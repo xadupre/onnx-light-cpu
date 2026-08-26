@@ -122,14 +122,12 @@ std::vector<TreeBranchMode> ReadNodeModes(const NodeProto &node) {
   return modes;
 }
 
-onnx_light_cpu::DataType ValueType(onnx_light_cpu::DataType data_type) {
+void ValidateValueType(onnx_light_cpu::DataType data_type) {
   switch (data_type) {
   case DataType::FLOAT:
-    return onnx_light_cpu::DataType::FLOAT;
   case DataType::DOUBLE:
-    return onnx_light_cpu::DataType::DOUBLE;
   case DataType::FLOAT16:
-    return onnx_light_cpu::DataType::FLOAT16;
+    return;
   default:
     throw std::invalid_argument(
         "onnx_light_cpu::TreeEnsemble: only FLOAT, DOUBLE and FLOAT16 inputs are supported.");
@@ -138,9 +136,11 @@ onnx_light_cpu::DataType ValueType(onnx_light_cpu::DataType data_type) {
 
 TreeEnsembleAttributes BuildAttributes(const NodeProto &node, const Tensor &input) {
   TreeEnsembleAttributes attributes;
+  const auto value_type = static_cast<onnx_light_cpu::DataType>(input.data_type);
+  ValidateValueType(value_type);
   attributes.n_features = input.shape[1];
   attributes.n_targets = rt_ns::GetAttributeIntOrDefault(node, "n_targets", 1);
-  attributes.value_type = ValueType(static_cast<onnx_light_cpu::DataType>(input.data_type));
+  attributes.value_type = value_type;
   attributes.aggregate =
       static_cast<TreeAggregate>(rt_ns::GetAttributeIntOrDefault(node, "aggregate_function", 1));
   attributes.post_transform =
