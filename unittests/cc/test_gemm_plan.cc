@@ -300,10 +300,15 @@ TEST(GemmPlan, SelectsWorkLimitedParticipantCounts) {
   const GemmPlan<float> square_1024(GemmPlanOptions<float>{false, false, 1024, 1024, 1024});
   const GemmPlan<float> transformer(GemmPlanOptions<float>{false, false, 128, 3072, 768});
 
+  // A general 1024^3 GEMM is work limited to 128 participants, except on
+  // AVX-512 where the general algorithm caps its participant count.
+  const std::size_t square_1024_threads =
+      onnx_light_cpu::DetectSimdLevel() >= onnx_light_cpu::SimdLevel::kAVX512 ? 32u : 128u;
+
   EXPECT_EQ(skinny_m.useful_threads(), 8u);
   EXPECT_EQ(skinny_n.useful_threads(), 16u);
   EXPECT_EQ(square_512.useful_threads(), 32u);
-  EXPECT_EQ(square_1024.useful_threads(), 32u);
+  EXPECT_EQ(square_1024.useful_threads(), square_1024_threads);
   EXPECT_GT(transformer.useful_threads(), 32u);
   EXPECT_LE(transformer.useful_threads(), 51u);
 }
