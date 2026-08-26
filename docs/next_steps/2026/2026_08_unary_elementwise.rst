@@ -198,16 +198,26 @@ executor by operator family, type, processor profile, and ISA:
 Current tuning contract
 ~~~~~~~~~~~~~~~~~~~~~~~
 
-``Abs``, ``Exp``, and ``Log`` register tuning ABI 1 for every supported exact
-operator/input-type key with ``implementation="simd_dispatch"``. The shared
-parameters are:
+``Abs`` registers tuning ABI 4, while ``Exp``/``Log`` and ``Not`` register
+tuning ABI 2 for every supported exact operator/input-type key with
+``implementation="simd_dispatch"``. The shared parameters are:
 
 * ``parallel.threshold_bytes``: minimum input bytes before executor dispatch;
   zero disables dispatch;
 * ``parallel.target_block_bytes``: target input bytes per task and always
   positive;
 * ``parallel.max_participants``: executor participant ceiling; zero uses every
-  participant exposed by the session.
+  participant exposed by the session;
+* ``parallel.cost_model``: one delegates grain and participant selection to the
+  session executor, while zero retains the fixed calibrated thresholds.
+
+``Abs`` and ``Not`` additionally accept ``parallel.preferred_participants``.
+Zero leaves the participant count automatic. A positive value requests that
+exact count once parallel execution is worthwhile, but the executor still
+clamps it to ``parallel.max_participants`` and the session limit.
+``Abs`` also accepts ``memory.streaming_store_threshold_bytes``; zero disables
+non-temporal stores, while a positive value enables them for FP32 tensors at
+or above that total input size.
 
 The portable defaults retain SIMD execution inline through the measured
 small/medium-tensor region:
@@ -220,7 +230,11 @@ small/medium-tensor region:
      - Threshold
      - Target block
      - Maximum participants
-   * - ``Abs`` FP32/INT32
+   * - ``Abs`` FP32
+     - 2 MiB
+     - 256 KiB
+     - 32
+   * - ``Abs`` INT32
      - 2 MiB
      - 256 KiB
      - executor maximum
@@ -252,8 +266,12 @@ small/medium-tensor region:
      - 512 KiB
      - 64 KiB
      - 32
+   * - ``Not`` BOOL
+     - 2 MiB
+     - 256 KiB
+     - 32
 
-Processor profiles may override all three values without changing kernel code
+Processor profiles may override these values without changing kernel code
 or introducing process-global mutable scheduling state.
 
 Fusion

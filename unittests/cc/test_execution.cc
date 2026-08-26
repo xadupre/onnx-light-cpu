@@ -19,7 +19,9 @@ using onnx_light_cpu::ExecutionBlockFn;
 using onnx_light_cpu::ExecutionExecutorScope;
 using onnx_light_cpu::ExecutionExecutorView;
 using onnx_light_cpu::ExecutionInParallelRegion;
+using onnx_light_cpu::ExecutionParallelPlan;
 using onnx_light_cpu::ExecutionThreadCount;
+using onnx_light_cpu::ExecutionWorkCost;
 
 struct InlineExecutor {
   int64_t dispatches = 0;
@@ -32,6 +34,21 @@ struct InlineExecutor {
     for (int64_t block = num_blocks; block > 0; --block) {
       task(task_context, block - 1);
     }
+  }
+};
+
+struct CostExecutor : InlineExecutor {
+  ExecutionWorkCost observed_cost;
+  int64_t observed_maximum = 0;
+  int64_t observed_preferred = 0;
+
+  static ExecutionParallelPlan Plan(void *context, int64_t, const ExecutionWorkCost &cost,
+                                    int64_t maximum_participants, int64_t preferred_participants) {
+    auto &self = *static_cast<CostExecutor *>(context);
+    self.observed_cost = cost;
+    self.observed_maximum = maximum_participants;
+    self.observed_preferred = preferred_participants;
+    return {100, 3};
   }
 };
 
@@ -110,6 +127,32 @@ TEST(Execution, NestedRangesDoNotDispatchAgain) {
                   });
   }
   EXPECT_EQ(executor.dispatches, 1);
+}
+
+TEST(Execution, CostedRangesUseExecutorPlan) {
+  CostExecutor executor;
+  ExecutionExecutorView view{&executor, 8, &CostExecutor::Run, &CostExecutor::Plan};
+  std::vector<std::atomic<int>> hits(1000);
+  {
+    ExecutionExecutorScope scope(&view);
+    onnx_light_cpu::ExecuteCostedRanges(
+        static_cast<int64_t>(hits.size()), ExecutionWorkCost{4.0, 4.0, 3.0},
+        onnx_light_cpu::ExecutionSchedule{1, 1, 5, 3}, 16, [&hits](int64_t begin, int64_t end) {
+          for (int64_t i = begin; i < end; ++i) {
+            hits[static_cast<std::size_t>(i)].fetch_add(1, std::memory_order_relaxed);
+          }
+        });
+  }
+
+  EXPECT_EQ(executor.observed_cost.bytes_read, 4.0);
+  EXPECT_EQ(executor.observed_cost.bytes_written, 4.0);
+  EXPECT_EQ(executor.observed_cost.compute_cycles, 3.0);
+  EXPECT_EQ(executor.observed_maximum, 5);
+  EXPECT_EQ(executor.observed_preferred, 3);
+  EXPECT_EQ(executor.blocks, 3);
+  for (const auto &hit : hits) {
+    EXPECT_EQ(hit.load(std::memory_order_relaxed), 1);
+  }
 }
 
 } // namespace

@@ -106,14 +106,18 @@ Expensive arithmetic
 
 FP32 ``Pow`` now stays in FP32 rather than promoting every operation to
 ``long double``, and float/integer mixed signatures have typed bulk loops.
-The targeted ``Pow`` median improved from ``0.060x`` to ``0.440x``, but large
-cases remain below parity. ``Pow``, floating ``Mod``, and the remaining
-low-precision mixed-type signatures need separate treatment
-from bandwidth-bound arithmetic. Their compute cost may justify parallelism
-below the current byte thresholds, while integer exponent validation and
-mixed input widths change profitable block sizes. Calibration must determine
-whether a later tuning ABI needs a right-input-type discriminator; ABI 2 deliberately
-shares one profile across signatures with the same operator and left type.
+On AVX-512, exponents 0 through 5 use exact multiplications, positive finite
+bases with finite exponents use the shared vector ``Log``/``Exp`` primitives,
+and exceptional values fall back to ``std::pow``. Contiguous and left-scalar
+loops have dedicated vector paths; small repeated blocks avoid the large-loop
+dispatch overhead. The approximation is checked against ``std::pow`` with a
+``3e-5`` relative tolerance.
+
+At 4,194,304 FP32 elements on the development host, all measured contiguous,
+scalar, row, per-channel, outer, and general-strided orientations reached
+parity with ONNX Runtime. The narrowest result was the row broadcast at
+``1.03x``; the other broadcast families reached ``1.21x`` to ``2.85x``, scalar
+cases ``3.81x`` to ``4.17x``, and contiguous ``2.56x``.
 
 General broadcast traversal
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~

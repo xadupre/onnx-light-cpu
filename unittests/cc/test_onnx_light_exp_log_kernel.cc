@@ -133,6 +133,7 @@ template <typename Kernel> void CheckTuningSchema(const char *op_type) {
                                                                              : half ? 128 * 1024
                                                                                     : 256 * 1024);
     EXPECT_EQ(defaults.template Get<int64_t>("parallel.max_participants"), log_float16 ? 0 : 32);
+    EXPECT_EQ(defaults.template Get<int64_t>("parallel.cost_model"), 1);
   }
   EXPECT_EQ(kernel.TuningKey(static_cast<int32_t>(rt_ns::DataType::INT32)).device,
             sym_ns::Device::kUndefined);
@@ -143,6 +144,7 @@ template <typename Kernel> void CheckTuningSchema(const char *op_type) {
   parameters.values["parallel.threshold_bytes"] = int64_t{1};
   parameters.values["parallel.target_block_bytes"] = int64_t{64};
   parameters.values["parallel.max_participants"] = int64_t{3};
+  parameters.values["parallel.cost_model"] = int64_t{0};
   EXPECT_NO_THROW(kernel.Configure(parameters));
 
   constexpr std::size_t count = 256;
@@ -157,6 +159,9 @@ template <typename Kernel> void CheckTuningSchema(const char *op_type) {
   parameters.values["parallel.max_participants"] = int64_t{-1};
   EXPECT_THROW(schema->Validate(parameters), std::invalid_argument);
   EXPECT_THROW(kernel.Configure(parameters), std::invalid_argument);
+  parameters = schema->portable_defaults();
+  parameters.values["parallel.cost_model"] = int64_t{2};
+  EXPECT_THROW(schema->Validate(parameters), std::invalid_argument);
   parameters = schema->portable_defaults();
   parameters.values["parallel.target_block_bytes"] = int64_t{0};
   EXPECT_THROW(schema->Validate(parameters), std::invalid_argument);

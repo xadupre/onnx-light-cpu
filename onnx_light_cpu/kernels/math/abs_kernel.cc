@@ -39,6 +39,9 @@ namespace {
 constexpr const char *kParallelThresholdBytes = "parallel.threshold_bytes";
 constexpr const char *kTargetBlockBytes = "parallel.target_block_bytes";
 constexpr const char *kMaxParticipants = "parallel.max_participants";
+constexpr const char *kPreferredParticipants = "parallel.preferred_participants";
+constexpr const char *kCostModel = "parallel.cost_model";
+constexpr const char *kStreamingStoreThresholdBytes = "memory.streaming_store_threshold_bytes";
 constexpr std::array<DataType, 8> kSupportedTypes = {
     DataType::FLOAT,   DataType::DOUBLE,   DataType::INT32, DataType::INT64,
     DataType::FLOAT16, DataType::BFLOAT16, DataType::INT8,  DataType::INT16};
@@ -58,7 +61,8 @@ rt_ns::KernelTuningKey MakeTuningKey(int32_t element_type) {
 }
 
 void ValidateTuning(const rt_ns::KernelTuningParameters &parameters) {
-  for (const char *name : {kParallelThresholdBytes, kTargetBlockBytes, kMaxParticipants}) {
+  for (const char *name : {kParallelThresholdBytes, kTargetBlockBytes, kMaxParticipants,
+                           kPreferredParticipants, kStreamingStoreThresholdBytes}) {
     const int64_t value = parameters.Get<int64_t>(name);
     if (value < 0 || static_cast<uint64_t>(value) > std::numeric_limits<std::size_t>::max()) {
       throw std::invalid_argument(std::string("Abs ") + name +
@@ -68,10 +72,16 @@ void ValidateTuning(const rt_ns::KernelTuningParameters &parameters) {
   if (parameters.Get<int64_t>(kTargetBlockBytes) == 0) {
     throw std::invalid_argument("Abs parallel.target_block_bytes must be positive.");
   }
+  const int64_t cost_model = parameters.Get<int64_t>(kCostModel);
+  if (cost_model != 0 && cost_model != 1) {
+    throw std::invalid_argument("Abs parallel.cost_model must be 0 or 1.");
+  }
 }
 
 const UnaryExecutionTuning &DefaultTuning(int32_t element_type) {
   switch (static_cast<DataType>(element_type)) {
+  case DataType::FLOAT:
+    return kDefaultAbsFloat32ExecutionTuning;
   case DataType::DOUBLE:
   case DataType::INT64:
     return kDefaultAbs64ExecutionTuning;
@@ -91,7 +101,11 @@ rt_ns::KernelTuningParameters MakeTuningDefaults(int32_t element_type) {
   return {MakeTuningKey(element_type),
           {{kParallelThresholdBytes, static_cast<int64_t>(defaults.parallel_threshold_bytes)},
            {kTargetBlockBytes, static_cast<int64_t>(defaults.target_block_bytes)},
-           {kMaxParticipants, static_cast<int64_t>(defaults.max_participants)}}};
+           {kMaxParticipants, static_cast<int64_t>(defaults.max_participants)},
+           {kPreferredParticipants, static_cast<int64_t>(defaults.preferred_participants)},
+           {kStreamingStoreThresholdBytes,
+            static_cast<int64_t>(defaults.streaming_store_threshold_bytes)},
+           {kCostModel, defaults.use_cost_model ? int64_t{1} : int64_t{0}}}};
 }
 
 } // namespace
@@ -124,6 +138,9 @@ void AbsKernel::Configure(const rt_ns::KernelTuningParameters &parameters) {
       static_cast<std::size_t>(parameters.Get<int64_t>(kParallelThresholdBytes)),
       static_cast<std::size_t>(parameters.Get<int64_t>(kTargetBlockBytes)),
       static_cast<std::size_t>(parameters.Get<int64_t>(kMaxParticipants)),
+      parameters.Get<int64_t>(kCostModel) != 0,
+      static_cast<std::size_t>(parameters.Get<int64_t>(kPreferredParticipants)),
+      static_cast<std::size_t>(parameters.Get<int64_t>(kStreamingStoreThresholdBytes)),
   };
   tuning_configured_ = true;
 }

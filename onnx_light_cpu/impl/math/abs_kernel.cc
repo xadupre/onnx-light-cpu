@@ -77,12 +77,17 @@ void AbsFloat32_AVX(const float *input, float *output, std::size_t count) {
 } // namespace
 
 namespace {
-void AbsFloat32_Dispatch(const float *input, float *output, std::size_t count) {
+void AbsFloat32_Dispatch(const float *input, float *output, std::size_t count,
+                         bool streaming_store) {
 #if ONNX_LIGHT_CPU_X86
   static const SimdLevel level = DetectSimdLevel();
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512
   if (level >= SimdLevel::kAVX512) {
-    AbsFloat32_AVX512(input, output, count);
+    if (streaming_store) {
+      AbsFloat32_AVX512Streaming(input, output, count);
+    } else {
+      AbsFloat32_AVX512(input, output, count);
+    }
     return;
   }
 #endif
@@ -100,14 +105,23 @@ void AbsFloat32_Dispatch(const float *input, float *output, std::size_t count) {
 } // namespace
 
 void AbsFloat32(const float *input, float *output, std::size_t count) {
-  AbsFloat32WithTuning(input, output, count, kDefaultAbs32ExecutionTuning);
+  AbsFloat32WithTuning(input, output, count, kDefaultAbsFloat32ExecutionTuning);
 }
 
 void AbsFloat32WithTuning(const float *input, float *output, std::size_t count,
                           const UnaryExecutionTuning &tuning) {
-  ExecuteUnaryRanges<float>(count, tuning, [input, output](std::int64_t begin, std::int64_t end) {
-    AbsFloat32_Dispatch(input + begin, output + begin, static_cast<std::size_t>(end - begin));
-  });
+  const bool streaming_store =
+      tuning.streaming_store_threshold_bytes != 0 &&
+      count >= UnaryBytesToElements(tuning.streaming_store_threshold_bytes, sizeof(float));
+  auto execute = [input, output, streaming_store](std::int64_t begin, std::int64_t end) {
+    AbsFloat32_Dispatch(input + begin, output + begin, static_cast<std::size_t>(end - begin),
+                        streaming_store);
+  };
+  if (tuning.use_cost_model) {
+    ExecuteCostedUnaryRanges<float>(count, tuning, 1.0, std::move(execute));
+  } else {
+    ExecuteUnaryRanges<float>(count, tuning, std::move(execute));
+  }
 }
 
 // ---------------------------------------------------------------------------

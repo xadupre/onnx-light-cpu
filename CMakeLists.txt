@@ -1102,6 +1102,17 @@ if(ONNX_LIGHT_CPU_BUILD_BENCHMARKS)
   endif()
   onnx_light_apply_hardening(exp_log_throughput)
 
+  add_executable(abs_throughput
+      "${CMAKE_CURRENT_SOURCE_DIR}/tools/abs_throughput.cc")
+  target_link_libraries(abs_throughput PRIVATE lib_onnx_light_cpu)
+  if(ONNX_LIGHT_CPU_SIMD_FLAGS)
+    target_compile_options(abs_throughput PRIVATE ${_simd_flags})
+  endif()
+  if(ONNX_LIGHT_CPU_HAVE_AVX512F_FLAG)
+    target_compile_definitions(abs_throughput PRIVATE ONNX_LIGHT_CPU_HAVE_AVX512=1)
+  endif()
+  onnx_light_apply_hardening(abs_throughput)
+
   add_executable(tree_ensemble_throughput
       "${CMAKE_CURRENT_SOURCE_DIR}/tools/tree_ensemble_throughput.cc")
   target_link_libraries(tree_ensemble_throughput PRIVATE lib_onnx_light_cpu)

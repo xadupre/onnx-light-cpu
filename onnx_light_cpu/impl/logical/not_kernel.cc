@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <limits>
+#include <utility>
 
 #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
 #define ONNX_LIGHT_CPU_X86 1
@@ -108,25 +109,29 @@ void NotBool(const uint8_t *input, uint8_t *output, std::size_t count) {
 
 void NotBoolWithTuning(const uint8_t *input, uint8_t *output, std::size_t count,
                        const NotExecutionTuning &tuning) {
-  if (count == 0)
-    return;
-  if (tuning.parallel_threshold_bytes == 0 || count < tuning.parallel_threshold_bytes) {
-    NotBool_Dispatch(input, output, count);
+  if (count == 0) {
     return;
   }
-  const ExecutionSchedule schedule{
-      static_cast<std::int64_t>(std::min<std::size_t>(
-          tuning.parallel_threshold_bytes,
-          static_cast<std::size_t>(std::numeric_limits<std::int64_t>::max()))),
-      static_cast<std::int64_t>(std::min<std::size_t>(
-          std::max<std::size_t>(tuning.target_block_bytes, 1),
-          static_cast<std::size_t>(std::numeric_limits<std::int64_t>::max()))),
-      std::numeric_limits<std::int64_t>::max()};
-  ExecuteRanges(static_cast<std::int64_t>(count), schedule, ExecutionSimdLanes<std::uint8_t>(),
-                [input, output](std::int64_t begin, std::int64_t end) {
-                  NotBool_Dispatch(input + begin, output + begin,
-                                   static_cast<std::size_t>(end - begin));
-                });
+  const auto bounded = [](std::size_t value) {
+    return static_cast<std::int64_t>(
+        std::min(value, static_cast<std::size_t>(std::numeric_limits<std::int64_t>::max())));
+  };
+  const ExecutionSchedule schedule{bounded(tuning.parallel_threshold_bytes),
+                                   bounded(std::max<std::size_t>(tuning.target_block_bytes, 1)),
+                                   tuning.max_participants == 0
+                                       ? std::numeric_limits<std::int64_t>::max()
+                                       : bounded(tuning.max_participants),
+                                   bounded(tuning.preferred_participants)};
+  auto execute = [input, output](std::int64_t begin, std::int64_t end) {
+    NotBool_Dispatch(input + begin, output + begin, static_cast<std::size_t>(end - begin));
+  };
+  if (tuning.use_cost_model) {
+    ExecuteCostedRanges(static_cast<std::int64_t>(count), ExecutionWorkCost{1.0, 1.0, 2.0},
+                        schedule, ExecutionSimdLanes<std::uint8_t>(), std::move(execute));
+  } else {
+    ExecuteRanges(static_cast<std::int64_t>(count), schedule, ExecutionSimdLanes<std::uint8_t>(),
+                  std::move(execute));
+  }
 }
 
 } // namespace onnx_light_cpu

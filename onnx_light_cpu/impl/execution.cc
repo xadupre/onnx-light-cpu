@@ -40,12 +40,25 @@ void RunCpuExecutorBlocks(void *context, int64_t num_blocks, void *task_context,
       static_cast<uint32_t>(num_blocks));
 }
 
+ExecutionParallelPlan PlanCpuExecutor(void *context, int64_t total, const ExecutionWorkCost &cost,
+                                      int64_t maximum_participants,
+                                      int64_t preferred_participants) {
+  auto *executor = static_cast<rt_ns::CpuExecutor *>(context);
+  const rt_ns::CpuParallelPlan plan = executor->PlanParallelFor(
+      total, rt_ns::CpuLoopCost{cost.bytes_read, cost.bytes_written, cost.compute_cycles},
+      rt_ns::CpuParallelConstraints{
+          static_cast<uint32_t>(std::max<int64_t>(maximum_participants, 1)),
+          static_cast<uint32_t>(std::max<int64_t>(preferred_participants, 0))});
+  return {plan.grain_size, static_cast<int64_t>(plan.participants)};
+}
+
 const ExecutionExecutorView *CurrentRuntimeExecutor() noexcept {
   if (rt_ns::CpuExecutor *executor = rt_ns::CurrentCpuExecutor(); executor != nullptr) {
     thread_local ExecutionExecutorView view;
     view.context = executor;
     view.effective_threads = static_cast<int64_t>(executor->effective_threads());
     view.run_blocks = &RunCpuExecutorBlocks;
+    view.plan_parallel = &PlanCpuExecutor;
     return &view;
   }
   return nullptr;

@@ -106,6 +106,21 @@ TEST(AbsFloat32, InPlace) {
   EXPECT_FLOAT_EQ(data[3], 4.0f);
 }
 
+TEST(AbsFloat32, StreamingStoreTuningHandlesMisalignedOutputAndTail) {
+  constexpr std::size_t size = 1025;
+  std::vector<float> input(size);
+  std::iota(input.begin(), input.end(), -512.0f);
+  std::vector<float> storage(size + 1, -1.0f);
+  auto tuning = onnx_light_cpu::kDefaultAbsFloat32ExecutionTuning;
+  tuning.streaming_store_threshold_bytes = 1;
+
+  onnx_light_cpu::AbsFloat32WithTuning(input.data(), storage.data() + 1, size, tuning);
+
+  for (std::size_t i = 0; i < size; ++i) {
+    EXPECT_FLOAT_EQ(storage[i + 1], std::fabs(input[i]));
+  }
+}
+
 // ---------------------------------------------------------------------------
 // AbsFloat64
 // ---------------------------------------------------------------------------

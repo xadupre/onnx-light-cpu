@@ -175,6 +175,65 @@ TEST(BinaryKernelDescriptor, PowIntegerFastPathPreservesFiniteBoundaryResults) {
   EXPECT_EQ(output, std::pow(input, exponent));
 }
 
+TEST(BinaryKernelDescriptor, PowBulkMatchesPositiveFractionalAndSpecialValues) {
+  const BinaryKernelDescriptor pow("Pow", 15, {});
+  const auto &adapter =
+      pow.ResolveAdapter(BinaryDataType::FLOAT, BinaryDataType::FLOAT, BinaryDataType::FLOAT);
+  std::vector<float> bases(35);
+  std::vector<float> exponents(35);
+  for (std::size_t i = 0; i < bases.size(); ++i) {
+    bases[i] = 0.125f + static_cast<float>(i) * 0.25f;
+    exponents[i] = -2.75f + static_cast<float>(i % 13) * 0.375f;
+  }
+  bases[0] = -2.0f;
+  exponents[0] = 3.0f;
+  bases[1] = 0.0f;
+  exponents[1] = -1.0f;
+  bases[2] = std::numeric_limits<float>::infinity();
+  exponents[2] = 0.0f;
+  std::vector<float> output(bases.size());
+
+  adapter.bulk_contiguous(bases.data(), exponents.data(), output.data(), output.size());
+
+  for (std::size_t i = 0; i < output.size(); ++i) {
+    const float expected = std::pow(bases[i], exponents[i]);
+    if (std::isfinite(expected)) {
+      EXPECT_NEAR(output[i], expected, std::max(std::fabs(expected) * 3e-5f, 1e-6f)) << i;
+    } else if (std::isnan(expected)) {
+      EXPECT_TRUE(std::isnan(output[i])) << i;
+    } else {
+      EXPECT_EQ(output[i], expected) << i;
+    }
+  }
+}
+
+TEST(BinaryKernelDescriptor, PowLeftScalarBulkMatchesFractionalAndSpecialValues) {
+  const BinaryKernelDescriptor pow("Pow", 15, {});
+  const auto &adapter =
+      pow.ResolveAdapter(BinaryDataType::FLOAT, BinaryDataType::FLOAT, BinaryDataType::FLOAT);
+  const float base = 1.75f;
+  std::vector<float> exponents(35);
+  for (std::size_t i = 0; i < exponents.size(); ++i) {
+    exponents[i] = -2.75f + static_cast<float>(i % 13) * 0.375f;
+  }
+  exponents[0] = std::numeric_limits<float>::infinity();
+  exponents[1] = std::numeric_limits<float>::quiet_NaN();
+  std::vector<float> output(exponents.size());
+
+  adapter.bulk_left_scalar(&base, exponents.data(), output.data(), output.size());
+
+  for (std::size_t i = 0; i < output.size(); ++i) {
+    const float expected = std::pow(base, exponents[i]);
+    if (std::isfinite(expected)) {
+      EXPECT_NEAR(output[i], expected, std::max(std::fabs(expected) * 3e-5f, 1e-6f)) << i;
+    } else if (std::isnan(expected)) {
+      EXPECT_TRUE(std::isnan(output[i])) << i;
+    } else {
+      EXPECT_EQ(output[i], expected) << i;
+    }
+  }
+}
+
 TEST(BinaryKernelDescriptor, IntegerPReluWrapsSignedMultiplication) {
   const BinaryKernelDescriptor prelu("PRelu", 16, {});
   const auto &adapter =

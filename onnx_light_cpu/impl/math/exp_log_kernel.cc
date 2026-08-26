@@ -682,9 +682,14 @@ void ExpFloat32(const float *input, float *output, std::size_t count) {
 
 void ExpFloat32WithTuning(const float *input, float *output, std::size_t count,
                           const UnaryExecutionTuning &tuning) {
-  ExecuteUnaryRanges<float>(count, tuning, [input, output](std::int64_t begin, std::int64_t end) {
+  auto execute = [input, output](std::int64_t begin, std::int64_t end) {
     ExpFloat32_Dispatch(input + begin, output + begin, static_cast<std::size_t>(end - begin));
-  });
+  };
+  if (tuning.use_cost_model) {
+    ExecuteCostedUnaryRanges<float>(count, tuning, 1.5, std::move(execute));
+  } else {
+    ExecuteUnaryRanges<float>(count, tuning, std::move(execute));
+  }
 }
 
 namespace {
@@ -725,9 +730,14 @@ void LogFloat32(const float *input, float *output, std::size_t count) {
 
 void LogFloat32WithTuning(const float *input, float *output, std::size_t count,
                           const UnaryExecutionTuning &tuning) {
-  ExecuteUnaryRanges<float>(count, tuning, [input, output](std::int64_t begin, std::int64_t end) {
+  auto execute = [input, output](std::int64_t begin, std::int64_t end) {
     LogFloat32_Dispatch(input + begin, output + begin, static_cast<std::size_t>(end - begin));
-  });
+  };
+  if (tuning.use_cost_model) {
+    ExecuteCostedUnaryRanges<float>(count, tuning, 3.0, std::move(execute));
+  } else {
+    ExecuteUnaryRanges<float>(count, tuning, std::move(execute));
+  }
 }
 
 namespace {

@@ -6,6 +6,7 @@
 
 #include "onnx_light_cpu/impl/math/binary/binary_arithmetic_kernel.h"
 #include "onnx_light_cpu/impl/math/half_conversion.h"
+#include "onnx_light_cpu/impl/math/math_kernels.h"
 
 #include <algorithm>
 #include <atomic>
@@ -325,6 +326,28 @@ template <int Exponent> float FastFloatIntegerPower(float value) {
   return std::pow(value, static_cast<float>(Exponent));
 }
 
+float FastFloatPower(float base, float exponent) {
+  if (exponent == 0.0f) {
+    return 1.0f;
+  }
+  if (exponent == 1.0f) {
+    return base;
+  }
+  if (exponent == 2.0f) {
+    return FastFloatIntegerPower<2>(base);
+  }
+  if (exponent == 3.0f) {
+    return FastFloatIntegerPower<3>(base);
+  }
+  if (exponent == 4.0f) {
+    return FastFloatIntegerPower<4>(base);
+  }
+  if (exponent == 5.0f) {
+    return FastFloatIntegerPower<5>(base);
+  }
+  return std::pow(base, exponent);
+}
+
 void BulkFloatPowRightScalar(const void *left, const void *right, void *out, std::size_t count) {
   const auto *typed_left = static_cast<const float *>(left);
   const float exponent = *static_cast<const float *>(right);
@@ -363,6 +386,38 @@ void BulkFloatPowRightScalar(const void *left, const void *right, void *out, std
   }
   for (std::size_t i = 0; i < count; ++i) {
     typed_out[i] = std::pow(typed_left[i], exponent);
+  }
+}
+
+void BulkFloatPow(const void *left, const void *right, void *out, std::size_t count) {
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
+  if (count >= 1024 && DetectSimdLevel() >= SimdLevel::kAVX512) {
+    PowFloat32_AVX512(static_cast<const float *>(left), static_cast<const float *>(right),
+                      static_cast<float *>(out), count);
+    return;
+  }
+#endif
+  const auto *typed_left = static_cast<const float *>(left);
+  const auto *typed_right = static_cast<const float *>(right);
+  auto *typed_out = static_cast<float *>(out);
+  for (std::size_t i = 0; i < count; ++i) {
+    typed_out[i] = FastFloatPower(typed_left[i], typed_right[i]);
+  }
+}
+
+void BulkFloatPowLeftScalar(const void *left, const void *right, void *out, std::size_t count) {
+  const float base = *static_cast<const float *>(left);
+  const auto *typed_right = static_cast<const float *>(right);
+  auto *typed_out = static_cast<float *>(out);
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
+  static const bool use_avx512 = DetectSimdLevel() >= SimdLevel::kAVX512;
+  if (count >= 16 && use_avx512) {
+    PowFloat32LeftScalar_AVX512(base, typed_right, typed_out, count);
+    return;
+  }
+#endif
+  for (std::size_t i = 0; i < count; ++i) {
+    typed_out[i] = FastFloatPower(base, typed_right[i]);
   }
 }
 
@@ -1569,6 +1624,8 @@ void SelectAdditionalBulk(BinaryOperator op, DT left, DT right, const Attrs &att
   case BinaryOperator::kPow:
     if (left == DT::FLOAT) {
       ONNX_LIGHT_CPU_BIND_TYPED_BULK(float, float, float, ComputePow<float, float>)
+      adapter.bulk_contiguous = &BulkFloatPow;
+      adapter.bulk_left_scalar = &BulkFloatPowLeftScalar;
       adapter.bulk_right_scalar = &BulkFloatPowRightScalar;
     } else if (left == DT::DOUBLE) {
       ONNX_LIGHT_CPU_BIND_TYPED_BULK(double, double, double, ComputePow<double, double>)

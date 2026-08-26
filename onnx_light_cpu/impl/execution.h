@@ -12,11 +12,26 @@ namespace onnx_light_cpu {
 
 using ExecutionBlockFn = void (*)(void *, int64_t);
 
+struct ExecutionWorkCost {
+  double bytes_read = 0.0;
+  double bytes_written = 0.0;
+  double compute_cycles = 0.0;
+};
+
+struct ExecutionParallelPlan {
+  int64_t grain_size = 1;
+  int64_t participants = 1;
+};
+
 struct ExecutionExecutorView {
   void *context = nullptr;
   int64_t effective_threads = 1;
   void (*run_blocks)(void *context, int64_t num_blocks, void *task_context,
                      ExecutionBlockFn task) = nullptr;
+  ExecutionParallelPlan (*plan_parallel)(void *context, int64_t total,
+                                         const ExecutionWorkCost &cost,
+                                         int64_t maximum_participants,
+                                         int64_t preferred_participants) = nullptr;
 };
 
 struct ExecutionSchedule {
@@ -24,6 +39,8 @@ struct ExecutionSchedule {
   int64_t min_parallel_size = 1;
   int64_t min_block_size = 1;
   int64_t max_participants = 1;
+  // Zero leaves the participant count to the executor cost model.
+  int64_t preferred_participants = 0;
 };
 
 const ExecutionExecutorView *CurrentExecutionExecutor() noexcept;
@@ -141,6 +158,50 @@ void ExecuteRanges(int64_t total, const ExecutionSchedule &schedule, int64_t blo
 
 template <typename Fn> void ExecuteRanges(int64_t total, const ExecutionSchedule &schedule, Fn fn) {
   ExecuteRanges(total, schedule, int64_t{1}, std::move(fn));
+}
+
+template <typename Fn>
+void ExecuteCostedRanges(int64_t total, const ExecutionWorkCost &cost,
+                         const ExecutionSchedule &fallback, int64_t block_multiple, Fn fn) {
+  if (total <= 0) {
+    return;
+  }
+  const ExecutionExecutorView *executor = CurrentExecutionExecutor();
+  if (executor == nullptr || executor->run_blocks == nullptr ||
+      executor->plan_parallel == nullptr || ExecutionInParallelRegion()) {
+    ExecuteRanges(total, fallback, block_multiple, std::move(fn));
+    return;
+  }
+  const int64_t participant_limit = std::min(std::max<int64_t>(fallback.max_participants, 1),
+                                             std::max<int64_t>(executor->effective_threads, 1));
+  const ExecutionParallelPlan plan =
+      executor->plan_parallel(executor->context, total, cost, participant_limit,
+                              std::max<int64_t>(fallback.preferred_participants, 0));
+  const int64_t grain = std::max<int64_t>(plan.grain_size, 1);
+  const int64_t participants = std::min(participant_limit, std::max<int64_t>(plan.participants, 1));
+  const int64_t num_blocks = std::min(participants, total / grain);
+  if (num_blocks <= 1) {
+    detail::ExecutionRegionScope region;
+    fn(0, total);
+    return;
+  }
+
+  block_multiple = std::max<int64_t>(block_multiple, 1);
+  int64_t block = total / num_blocks + (total % num_blocks != 0);
+  block += (block_multiple - block % block_multiple) % block_multiple;
+  const int64_t aligned_blocks = total / block + (total % block != 0);
+  auto run_block = [&fn, block, total](int64_t index) {
+    const int64_t begin = index * block;
+    if (begin >= total) {
+      return;
+    }
+    detail::ExecutionRegionScope region;
+    fn(begin, std::min(begin + block, total));
+  };
+  using Callable = decltype(run_block);
+  executor->run_blocks(
+      executor->context, aligned_blocks, static_cast<void *>(&run_block),
+      [](void *context, int64_t block_index) { (*static_cast<Callable *>(context))(block_index); });
 }
 
 template <typename Fn>
