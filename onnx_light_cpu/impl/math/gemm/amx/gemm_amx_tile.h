@@ -66,8 +66,9 @@ bool AmxTileStateAvailable();
 ///
 /// Tile configuration is thread-local hardware state, so each worker that runs
 /// AMX tile operations constructs its own scope. When AMX tile state is
-/// available the constructor runs ``LDTILECFG`` with ``config`` and the
-/// destructor runs ``TILERELEASE``; otherwise it is a no-op and
+/// available the constructor loads ``config`` only when it differs from the
+/// current configuration. The state remains configured for reuse by the next
+/// AMX operation on that worker; otherwise this is a no-op and
 /// :cpp:func:`configured` reports ``false`` so callers can take the fallback
 /// path. The guard is neither copyable nor movable.
 class AmxTileScope {

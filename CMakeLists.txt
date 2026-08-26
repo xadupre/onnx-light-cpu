@@ -548,7 +548,7 @@ if(ONNX_LIGHT_CPU_HAVE_AMX_INT8_FLAG)
   # -mamx-int8 for the tdpbuud dot-product; dispatch additionally checks the ISA
   # and OS-enabled tile state at runtime.
   set_source_files_properties("${_gemm_amx_int8_source}" PROPERTIES
-      COMPILE_OPTIONS "-mamx-tile;-mamx-int8")
+      COMPILE_OPTIONS "-mamx-tile;-mamx-int8;-mavx512f;-mavx512bw;-mavx512vnni")
   target_compile_definitions(lib_onnx_light_cpu PRIVATE
       ONNX_LIGHT_CPU_HAVE_AMX_INT8=1)
 endif()

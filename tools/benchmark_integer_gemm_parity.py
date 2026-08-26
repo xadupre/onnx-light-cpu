@@ -98,16 +98,13 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         if not hasattr(os, "sched_setaffinity"):
             raise RuntimeError("--cpus is only supported on platforms with sched_setaffinity().")
         os.sched_setaffinity(0, _parse_cpu_list(args.cpus))
-    import numpy
-    import onnxruntime
-    from onnx_light.onnx.reference import ReferenceEvaluator
     from onnx_light_cpu import register_kernels
 
     register_kernels()
-    from onnx_light_cpu.onnx_py._cpukernels import detect_simd_level
-    from onnx_light_cpu.onnx_py._cpuregister import set_kernel_usage_recording
+    import numpy
+    import onnxruntime
+    from onnx_light.onnx.reference import ReferenceEvaluator
 
-    set_kernel_usage_recording(False)
     session_options = onnxruntime.SessionOptions()
     session_options.intra_op_num_threads = args.threads
     session_options.inter_op_num_threads = 1
@@ -178,7 +175,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     if actual_threads is None:
         raise RuntimeError("No benchmark cases were selected.")
     return {
-        "metadata": _metadata(args.threads, actual_threads, detect_simd_level()),
+        "metadata": _metadata(args.threads, actual_threads, "none", -1),
         "results": results,
         "summary": summarize(results),
     }

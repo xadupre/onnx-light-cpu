@@ -12,6 +12,8 @@
 
 #include "onnx_light_cpu/impl/simd_level.h"
 
+#include <cstring>
+
 #if defined(ONNX_LIGHT_CPU_HAVE_AMX_TILE)
 #include <immintrin.h>
 #endif
@@ -78,7 +80,13 @@ bool AmxTileStateAvailable() {
 AmxTileScope::AmxTileScope(const AmxTileConfig &config) : configured_(false) {
 #if defined(ONNX_LIGHT_CPU_HAVE_AMX_TILE)
   if (AmxTileStateAvailable()) {
-    _tile_loadconfig(&config);
+    AmxTileConfig current;
+    _tile_storeconfig(&current);
+    if (current.palette_id != config.palette_id ||
+        std::memcmp(current.colsb, config.colsb, sizeof(config.colsb)) != 0 ||
+        std::memcmp(current.rows, config.rows, sizeof(config.rows)) != 0) {
+      _tile_loadconfig(&config);
+    }
     configured_ = true;
   }
 #else
@@ -86,12 +94,6 @@ AmxTileScope::AmxTileScope(const AmxTileConfig &config) : configured_(false) {
 #endif
 }
 
-AmxTileScope::~AmxTileScope() {
-#if defined(ONNX_LIGHT_CPU_HAVE_AMX_TILE)
-  if (configured_) {
-    _tile_release();
-  }
-#endif
-}
+AmxTileScope::~AmxTileScope() = default;
 
 } // namespace onnx_light_cpu

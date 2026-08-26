@@ -325,6 +325,12 @@ Tensor MatMulIntegerKernel::operator()(const Tensor &a, const Tensor &b, const T
     const auto *b_bytes = reinterpret_cast<const std::uint8_t *>(b.bytes());
     const bool a_signed = a.data_type == static_cast<int32_t>(DataType::INT8);
     const bool b_signed = b.data_type == static_cast<int32_t>(DataType::INT8);
+    if (layout.batch_count == 1) {
+      IntegerMatMul2D(a_bytes, a_signed, b_bytes, b_signed, values, layout.m, layout.n, layout.k,
+                      a_zp.data(), static_cast<int64_t>(a_zp.size()), b_zp.data(),
+                      static_cast<int64_t>(b_zp.size()));
+      return output;
+    }
     const std::vector<BatchWorkItem> work_items = BuildBatchWorkItems(layout);
     const double cost = static_cast<double>(layout.m) * static_cast<double>(layout.n) *
                         static_cast<double>(std::max<int64_t>(layout.k, 1));
