@@ -124,9 +124,9 @@ std::vector<TreeBranchMode> ReadNodeModes(const NodeProto &node) {
 
 void ValidateValueType(onnx_light_cpu::DataType data_type) {
   switch (data_type) {
-  case DataType::FLOAT:
-  case DataType::DOUBLE:
-  case DataType::FLOAT16:
+  case onnx_light_cpu::DataType::FLOAT:
+  case onnx_light_cpu::DataType::DOUBLE:
+  case onnx_light_cpu::DataType::FLOAT16:
     return;
   default:
     throw std::invalid_argument(
@@ -266,7 +266,7 @@ void RegisterTreeEnsembleKernel() {
   info.op_type = "TreeEnsemble";
   info.device = sym_ns::Device::kCPU;
   info.kernel_name = TreeEnsembleKernel::kName;
-  info.types = {DataType::FLOAT, DataType::DOUBLE, DataType::FLOAT16};
+  info.types = {rt_ns::DataType::FLOAT, rt_ns::DataType::DOUBLE, rt_ns::DataType::FLOAT16};
   info.since_version = 5;
   RegisterKernel(std::move(info), std::move(factory));
 }
