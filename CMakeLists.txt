@@ -284,6 +284,8 @@ file(GLOB CPU_KERNEL_SOURCES CONFIGURE_DEPENDS
 
 set(_gemm_avx512_source
     "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/gemm/avx512/gemm_kernel_avx512.cc")
+set(_attention_avx512_source
+    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/attention/avx512/attention_kernel_avx512.cc")
 set(_gemm_avx512fp16_source
     "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/gemm/avx512fp16/gemm_kernel_avx512fp16.cc")
 set(_gemm_avx512bf16_source
@@ -331,6 +333,7 @@ set(_compute_neon_dotprod_source
 if(NOT ONNX_LIGHT_CPU_HAVE_AVX512F_FLAG)
   # Exclude AVX-512F translation units rather than fail on unsupported targets.
   list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_gemm_avx512_source}")
+  list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_attention_avx512_source}")
   list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_abs_avx512_source}")
   list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_exp_log_avx512_source}")
   list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_compute_avx512_source}")
@@ -427,6 +430,8 @@ if(ONNX_LIGHT_CPU_HAVE_AVX512F_FLAG)
   if(NOT MSVC)
     set_source_files_properties("${_gemm_avx512_source}" PROPERTIES
         COMPILE_OPTIONS "-mavx512f")
+    set_source_files_properties("${_attention_avx512_source}" PROPERTIES
+        COMPILE_OPTIONS "-mavx512f")
     set_source_files_properties("${_abs_avx512_source}" PROPERTIES
         COMPILE_OPTIONS "-mavx512f")
     set_source_files_properties("${_exp_log_avx512_source}" PROPERTIES
@@ -437,6 +442,8 @@ if(ONNX_LIGHT_CPU_HAVE_AVX512F_FLAG)
         COMPILE_OPTIONS "-mavx512f")
   else()
     set_source_files_properties("${_gemm_avx512_source}" PROPERTIES
+        COMPILE_OPTIONS "/arch:AVX512")
+    set_source_files_properties("${_attention_avx512_source}" PROPERTIES
         COMPILE_OPTIONS "/arch:AVX512")
     set_source_files_properties("${_abs_avx512_source}" PROPERTIES
         COMPILE_OPTIONS "/arch:AVX512")

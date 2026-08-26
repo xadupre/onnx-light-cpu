@@ -1775,9 +1775,11 @@ void GemmFloat32Planned(bool trans_a, bool trans_b, std::size_t M, std::size_t N
   static const GemmKernelKind default_kind = SelectGemmKernelKind<float>();
   static const GemmBlocking default_blocking = SelectGemmBlocking(
       sizeof(float), GemmVectorLanes<float>(default_kind), GemmRegisterRows<float>(default_kind));
-  const GemmBlocking selected = ConstrainGemmBlockingForTasks(
-      blocking == nullptr ? default_blocking : *blocking, M, N, K,
-      static_cast<std::size_t>(ExecutionThreadCount()), sizeof(float));
+  const std::size_t effective_threads =
+      ExecutionInParallelRegion() ? 1 : static_cast<std::size_t>(ExecutionThreadCount());
+  const GemmBlocking selected =
+      ConstrainGemmBlockingForTasks(blocking == nullptr ? default_blocking : *blocking, M, N, K,
+                                    effective_threads, sizeof(float));
   GemmImpl<Algorithm, float>(trans_a, trans_b, M, N, K, alpha, A, B, beta, C, Y,
                              SelectGemmKernelKind<float>(), tile, selected);
 }
@@ -1798,9 +1800,11 @@ void GemmFloat64Planned(bool trans_a, bool trans_b, std::size_t M, std::size_t N
   static const GemmBlocking default_blocking =
       SelectGemmBlocking(sizeof(double), GemmVectorLanes<double>(default_kind),
                          GemmRegisterRows<double>(default_kind));
-  const GemmBlocking selected = ConstrainGemmBlockingForTasks(
-      blocking == nullptr ? default_blocking : *blocking, M, N, K,
-      static_cast<std::size_t>(ExecutionThreadCount()), sizeof(double));
+  const std::size_t effective_threads =
+      ExecutionInParallelRegion() ? 1 : static_cast<std::size_t>(ExecutionThreadCount());
+  const GemmBlocking selected =
+      ConstrainGemmBlockingForTasks(blocking == nullptr ? default_blocking : *blocking, M, N, K,
+                                    effective_threads, sizeof(double));
   GemmImpl<Algorithm, double>(trans_a, trans_b, M, N, K, alpha, A, B, beta, C, Y,
                               SelectGemmKernelKind<double>(), tile, selected);
 }

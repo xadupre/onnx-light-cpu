@@ -665,6 +665,55 @@ TEST(ComputeAttentionFloat32Streaming, NonpadKvSeqlenMatchesMaterialized) {
   ExpectClose(streaming_y, materialized_y);
 }
 
+TEST(ComputeAttentionFloat32Streaming, TiledCausalAdditiveMaskMatchesMaterialized) {
+  AttentionDescriptor descriptor;
+  descriptor.is_causal = true;
+  constexpr std::size_t batch = 1, heads = 2, q_len = 16, kv_len = 17, head_dim = 8, v_head_dim = 8;
+  const std::int64_t q_shape[] = {batch, heads, q_len, head_dim};
+  const std::int64_t k_shape[] = {batch, heads, kv_len, head_dim};
+  const std::int64_t v_shape[] = {batch, heads, kv_len, v_head_dim};
+  const std::int64_t mask_shape[] = {q_len, kv_len};
+  AttentionPlan plan(descriptor, AttentionLayout::kRank4, q_shape, k_shape, v_shape, mask_shape,
+                     AttentionMaskKind::kAdditive);
+
+  const auto q = RandomTensor(batch * heads * q_len * head_dim, 614);
+  const auto k = RandomTensor(batch * heads * kv_len * head_dim, 615);
+  const auto v = RandomTensor(batch * heads * kv_len * v_head_dim, 616);
+  const auto mask = RandomTensor(q_len * kv_len, 617);
+  std::vector<float> streaming_y(batch * heads * q_len * v_head_dim);
+  std::vector<float> materialized_y(streaming_y.size());
+
+  ComputeAttentionFloat32Streaming(plan, q.data(), k.data(), v.data(), mask.data(),
+                                   streaming_y.data());
+  onnx_light_cpu::ComputeAttentionFloat32Materialized(plan, q.data(), k.data(), v.data(),
+                                                      mask.data(), materialized_y.data());
+
+  ExpectClose(streaming_y, materialized_y);
+}
+
+TEST(ComputeAttentionFloat32Streaming, TiledCausalFastPathMatchesMaterialized) {
+  AttentionDescriptor descriptor;
+  descriptor.is_causal = true;
+  constexpr std::size_t batch = 1, heads = 2, q_len = 16, kv_len = 17, head_dim = 8;
+  const std::int64_t q_shape[] = {batch, heads, q_len, head_dim};
+  const std::int64_t k_shape[] = {batch, heads, kv_len, head_dim};
+  const std::int64_t v_shape[] = {batch, heads, kv_len, head_dim};
+  AttentionPlan plan(descriptor, AttentionLayout::kRank4, q_shape, k_shape, v_shape, {},
+                     AttentionMaskKind::kNone);
+
+  const auto q = RandomTensor(batch * heads * q_len * head_dim, 618);
+  const auto k = RandomTensor(batch * heads * kv_len * head_dim, 619);
+  const auto v = RandomTensor(batch * heads * kv_len * head_dim, 620);
+  std::vector<float> streaming_y(batch * heads * q_len * head_dim);
+  std::vector<float> materialized_y(streaming_y.size());
+
+  ComputeAttentionFloat32Streaming(plan, q.data(), k.data(), v.data(), nullptr, streaming_y.data());
+  onnx_light_cpu::ComputeAttentionFloat32Materialized(plan, q.data(), k.data(), v.data(), nullptr,
+                                                      materialized_y.data());
+
+  ExpectClose(streaming_y, materialized_y);
+}
+
 // Roadmap PR14: a boolean attn_mask carves out a fully-disallowed block in
 // the middle of the KV axis (a sliding-window-like shape spanning more than
 // one `kStreamingKvBlock`-sized tile): the streaming path must infer the
