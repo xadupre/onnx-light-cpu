@@ -474,12 +474,12 @@ const char *ComputeImplementationName(ComputeImplementation implementation) {
 
 namespace detail {
 
-ComputeDispatchDecision SelectComputeImplementation(ComputeElementType element_type,
+ComputeDispatchDecision SelectComputeImplementation(DataType element_type,
                                                     const ComputeDispatchInputs &inputs) {
   ComputeDispatchDecision decision;
   switch (element_type) {
-  case ComputeElementType::kFloat32:
-  case ComputeElementType::kFloat64: {
+  case DataType::FLOAT:
+  case DataType::DOUBLE: {
     // Always available: register-resident FP32/FP64 FMA has a portable
     // scalar fallback on every platform.
     decision.available = true;
@@ -499,21 +499,21 @@ ComputeDispatchDecision SelectComputeImplementation(ComputeElementType element_t
     }
     return decision;
   }
-  case ComputeElementType::kFloat16: {
+  case DataType::FLOAT16: {
     if (inputs.avx512fp16_compiled && inputs.avx512fp16_runtime) {
       decision.available = true;
       decision.implementation = ComputeImplementation::kAVX512;
     }
     return decision;
   }
-  case ComputeElementType::kBFloat16: {
+  case DataType::BFLOAT16: {
     if (inputs.avx512bf16_compiled && inputs.avx512bf16_runtime) {
       decision.available = true;
       decision.implementation = ComputeImplementation::kAVX512;
     }
     return decision;
   }
-  case ComputeElementType::kInt8: {
+  case DataType::INT8: {
     if (inputs.avx512vnni_compiled && inputs.avx512vnni_runtime) {
       decision.available = true;
       decision.implementation = ComputeImplementation::kAVX512;
@@ -529,7 +529,7 @@ ComputeDispatchDecision SelectComputeImplementation(ComputeElementType element_t
 
 } // namespace detail
 
-ComputeThroughputResult MeasureComputeArithmeticThroughput(ComputeElementType element_type,
+ComputeThroughputResult MeasureComputeArithmeticThroughput(DataType element_type,
                                                            ComputeParticipantPolicy policy,
                                                            const ComputeProfileOptions &options) {
   ComputeThroughputResult result;
@@ -582,7 +582,7 @@ ComputeThroughputResult MeasureComputeArithmeticThroughput(ComputeElementType el
   ComputeRoundFn kernel;
 
   switch (element_type) {
-  case ComputeElementType::kFloat32: {
+  case DataType::FLOAT: {
     switch (decision.implementation) {
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512
     case ComputeImplementation::kAVX512:
@@ -618,7 +618,7 @@ ComputeThroughputResult MeasureComputeArithmeticThroughput(ComputeElementType el
     }
     break;
   }
-  case ComputeElementType::kFloat64: {
+  case DataType::DOUBLE: {
     switch (decision.implementation) {
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512
     case ComputeImplementation::kAVX512:
@@ -655,7 +655,7 @@ ComputeThroughputResult MeasureComputeArithmeticThroughput(ComputeElementType el
     break;
   }
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512FP16
-  case ComputeElementType::kFloat16: {
+  case DataType::FLOAT16: {
     accounting =
         ComputeFmaOperationAccounting(kComputeAvx512Fp16AccumulatorCount, kComputeChainLength);
     kernel = &ComputeArithmeticAvx512Fp16Round;
@@ -663,7 +663,7 @@ ComputeThroughputResult MeasureComputeArithmeticThroughput(ComputeElementType el
   }
 #endif
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512BF16
-  case ComputeElementType::kBFloat16: {
+  case DataType::BFLOAT16: {
     accounting = ComputeDotProductOperationAccounting(kComputeAvx512Bf16AccumulatorCount,
                                                       kComputeChainLength,
                                                       kComputeAvx512Bf16DotProductLength);
@@ -671,7 +671,7 @@ ComputeThroughputResult MeasureComputeArithmeticThroughput(ComputeElementType el
     break;
   }
 #endif
-  case ComputeElementType::kInt8: {
+  case DataType::INT8: {
     switch (decision.implementation) {
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512VNNI
     case ComputeImplementation::kAVX512:

@@ -14,8 +14,8 @@
 namespace {
 
 using onnx_light_cpu::BenchmarkProcessorPerformance;
-using onnx_light_cpu::ComputeElementType;
 using onnx_light_cpu::CpuAffinity;
+using onnx_light_cpu::DataType;
 using onnx_light_cpu::DeriveRooflineEntries;
 using onnx_light_cpu::kProcessorPerformanceProfileSchemaVersion;
 using onnx_light_cpu::MemoryProfileLevel;
@@ -141,7 +141,7 @@ TEST(ProcessorPerformanceProfile, BoundedSinglePolicyProfileIsCoherent) {
   // Float32 is always available.
   const bool has_float32_entry =
       std::any_of(profile.compute.begin(), profile.compute.end(), [](const auto &entry) {
-        return entry.element_type == ComputeElementType::kFloat32 &&
+        return entry.element_type == DataType::FLOAT &&
                entry.policy == ProcessorThreadPolicy::kSingle;
       });
   EXPECT_TRUE(has_float32_entry);
@@ -216,8 +216,8 @@ TEST(ProcessorPerformanceProfile, RepeatedRunsProduceIndependentImmutableValues)
 // read bandwidth, independent of any live measurement.
 // ---------------------------------------------------------------------------
 
-ProcessorProfileComputeEntry MakeComputeEntry(ComputeElementType element_type,
-                                              ProcessorThreadPolicy policy, double median_gops) {
+ProcessorProfileComputeEntry MakeComputeEntry(DataType element_type, ProcessorThreadPolicy policy,
+                                              double median_gops) {
   ProcessorProfileComputeEntry entry;
   entry.element_type = element_type;
   entry.policy = policy;
@@ -241,13 +241,13 @@ ProcessorProfileMemoryEntry MakeMemoryEntryWithRead(MemoryProfileLevel level,
 
 TEST(ProcessorPerformanceProfileRoofline, CrossoverMatchesComputeOverBandwidth) {
   const std::vector<ProcessorProfileComputeEntry> compute{
-      MakeComputeEntry(ComputeElementType::kFloat32, ProcessorThreadPolicy::kSingle, 100.0)};
+      MakeComputeEntry(DataType::FLOAT, ProcessorThreadPolicy::kSingle, 100.0)};
   const std::vector<ProcessorProfileMemoryEntry> memory{
       MakeMemoryEntryWithRead(MemoryProfileLevel::kL1, ProcessorThreadPolicy::kSingle, 40.0)};
 
   const auto roofline = DeriveRooflineEntries(compute, memory);
   ASSERT_EQ(roofline.size(), 1u);
-  EXPECT_EQ(roofline[0].element_type, ComputeElementType::kFloat32);
+  EXPECT_EQ(roofline[0].element_type, DataType::FLOAT);
   EXPECT_EQ(roofline[0].policy, ProcessorThreadPolicy::kSingle);
   EXPECT_EQ(roofline[0].level, MemoryProfileLevel::kL1);
   EXPECT_DOUBLE_EQ(roofline[0].compute_gops, 100.0);
@@ -257,8 +257,8 @@ TEST(ProcessorPerformanceProfileRoofline, CrossoverMatchesComputeOverBandwidth) 
 
 TEST(ProcessorPerformanceProfileRoofline, PairsEveryComputeEntryWithMatchingPolicyLevels) {
   const std::vector<ProcessorProfileComputeEntry> compute{
-      MakeComputeEntry(ComputeElementType::kFloat32, ProcessorThreadPolicy::kSingle, 100.0),
-      MakeComputeEntry(ComputeElementType::kFloat32, ProcessorThreadPolicy::kPhysical, 200.0)};
+      MakeComputeEntry(DataType::FLOAT, ProcessorThreadPolicy::kSingle, 100.0),
+      MakeComputeEntry(DataType::FLOAT, ProcessorThreadPolicy::kPhysical, 200.0)};
   const std::vector<ProcessorProfileMemoryEntry> memory{
       MakeMemoryEntryWithRead(MemoryProfileLevel::kL1, ProcessorThreadPolicy::kSingle, 50.0),
       MakeMemoryEntryWithRead(MemoryProfileLevel::kL2, ProcessorThreadPolicy::kSingle, 25.0),
@@ -290,7 +290,7 @@ TEST(ProcessorPerformanceProfileRoofline, MissingOrZeroReadBandwidthYieldsNoEntr
   // ``read`` left unset (unavailable).
 
   const std::vector<ProcessorProfileComputeEntry> compute{
-      MakeComputeEntry(ComputeElementType::kFloat32, ProcessorThreadPolicy::kSingle, 100.0)};
+      MakeComputeEntry(DataType::FLOAT, ProcessorThreadPolicy::kSingle, 100.0)};
 
   EXPECT_TRUE(DeriveRooflineEntries(compute, {no_read}).empty());
   EXPECT_TRUE(
@@ -301,7 +301,7 @@ TEST(ProcessorPerformanceProfileRoofline, MissingOrZeroReadBandwidthYieldsNoEntr
 
 TEST(ProcessorPerformanceProfileRoofline, EmptyComputeOrMemoryYieldsEmptyRoofline) {
   const std::vector<ProcessorProfileComputeEntry> compute{
-      MakeComputeEntry(ComputeElementType::kFloat32, ProcessorThreadPolicy::kSingle, 100.0)};
+      MakeComputeEntry(DataType::FLOAT, ProcessorThreadPolicy::kSingle, 100.0)};
   const std::vector<ProcessorProfileMemoryEntry> memory{
       MakeMemoryEntryWithRead(MemoryProfileLevel::kL1, ProcessorThreadPolicy::kSingle, 40.0)};
 

@@ -22,11 +22,11 @@ namespace {
 
 using onnx_light_cpu::BinaryBroadcastPlan;
 using onnx_light_cpu::BinaryBroadcastPlanCache;
-namespace BinaryDataType = onnx_light_cpu::BinaryDataType;
+using BinaryDataType = onnx_light_cpu::DataType;
 using onnx_light_cpu::BinaryKernelDescriptor;
 using LoopFamily = BinaryBroadcastPlan::LoopFamily;
 
-std::size_t ElementSize(std::int32_t type) {
+std::size_t ElementSize(BinaryDataType type) {
   switch (type) {
   case BinaryDataType::BOOL:
   case BinaryDataType::INT8:
@@ -92,7 +92,7 @@ std::size_t OffsetFor(std::span<const std::int64_t> shape, std::span<const std::
   return offset;
 }
 
-void StoreScalar(std::int32_t type, std::byte *dst, std::size_t index, std::size_t count,
+void StoreScalar(BinaryDataType type, std::byte *dst, std::size_t index, std::size_t count,
                  bool is_left, std::string_view op_type) {
   const auto write = [&](auto value) {
     using T = decltype(value);
@@ -168,7 +168,7 @@ void StoreScalar(std::int32_t type, std::byte *dst, std::size_t index, std::size
   }
 }
 
-std::vector<std::byte> MakeBuffer(std::int32_t type, std::span<const std::int64_t> shape,
+std::vector<std::byte> MakeBuffer(BinaryDataType type, std::span<const std::int64_t> shape,
                                   bool is_left, std::string_view op_type) {
   const std::size_t count = ElementCount(shape);
   std::vector<std::byte> data(count * ElementSize(type));
@@ -203,7 +203,8 @@ std::vector<std::byte> ReferenceExecute(const BinaryKernelDescriptor::Adapter &a
   return output;
 }
 
-BinaryKernelDescriptor::Attributes DefaultAttributes(std::string_view op_type, std::int32_t left) {
+BinaryKernelDescriptor::Attributes DefaultAttributes(std::string_view op_type,
+                                                     BinaryDataType left) {
   BinaryKernelDescriptor::Attributes attrs;
   if (op_type == "Mod") {
     attrs.mod_fmod = (left == BinaryDataType::FLOAT || left == BinaryDataType::DOUBLE ||
@@ -308,13 +309,13 @@ TEST(BinaryBroadcastPlan, ExecutesRepresentativeBroadcastLoops) {
 // every arithmetic op, FP32 and FP64, across SIMD tail sizes, and checks the
 // bulk result against the same adapter's per-element scalar reference
 // (ReferenceExecute), which never uses a bulk kernel.
-template <typename T> std::int32_t TypeOf();
-template <> std::int32_t TypeOf<float>() { return BinaryDataType::FLOAT; }
-template <> std::int32_t TypeOf<double>() { return BinaryDataType::DOUBLE; }
+template <typename T> BinaryDataType TypeOf();
+template <> BinaryDataType TypeOf<float>() { return BinaryDataType::FLOAT; }
+template <> BinaryDataType TypeOf<double>() { return BinaryDataType::DOUBLE; }
 
 template <typename T>
 void CheckArithmeticFastPathMatchesScalarReference(std::string_view op_type, std::size_t count) {
-  const std::int32_t type = TypeOf<T>();
+  const BinaryDataType type = TypeOf<T>();
   const BinaryKernelDescriptor descriptor(std::string(op_type), 14, {});
   const std::array<std::pair<std::vector<std::int64_t>, std::vector<std::int64_t>>, 3> shapes{{
       {std::vector<std::int64_t>{static_cast<std::int64_t>(count)},
@@ -385,7 +386,7 @@ TEST(BinaryBroadcastPlan, ArithmeticFastPathMatchesScalarReferenceAcrossOpsTypes
 
 TEST(BinaryBroadcastPlan, IntegerAndHalfArithmeticAdaptersProvideBulkPaths) {
   const std::array<std::string_view, 3> ops = {"Add", "Sub", "Mul"};
-  const std::array<std::int32_t, 10> types = {
+  const std::array<BinaryDataType, 10> types = {
       BinaryDataType::FLOAT16, BinaryDataType::BFLOAT16, BinaryDataType::INT8,
       BinaryDataType::INT16,   BinaryDataType::INT32,    BinaryDataType::INT64,
       BinaryDataType::UINT8,   BinaryDataType::UINT16,   BinaryDataType::UINT32,
@@ -393,7 +394,7 @@ TEST(BinaryBroadcastPlan, IntegerAndHalfArithmeticAdaptersProvideBulkPaths) {
   };
   const std::array<std::int64_t, 1> shape{263};
   for (std::string_view op : ops) {
-    for (std::int32_t type : types) {
+    for (BinaryDataType type : types) {
       const BinaryKernelDescriptor descriptor(std::string(op), 14, {});
       const auto &adapter = descriptor.ResolveAdapter(type, type, type);
       ASSERT_NE(adapter.bulk_contiguous, nullptr) << op;
@@ -412,10 +413,10 @@ TEST(BinaryBroadcastPlan, IntegerAndHalfArithmeticAdaptersProvideBulkPaths) {
 
 TEST(BinaryBroadcastPlan, HalfPrecisionAdaptersUseBulkConversionAndMatchScalarReference) {
   const std::array<std::string_view, 3> ops = {"Mod", "Pow", "PRelu"};
-  const std::array<std::int32_t, 2> types = {BinaryDataType::FLOAT16, BinaryDataType::BFLOAT16};
+  const std::array<BinaryDataType, 2> types = {BinaryDataType::FLOAT16, BinaryDataType::BFLOAT16};
   const std::array<std::size_t, 7> sizes = {0, 1, 7, 8, 15, 256, 263};
   for (std::string_view op : ops) {
-    for (std::int32_t type : types) {
+    for (BinaryDataType type : types) {
       const BinaryKernelDescriptor descriptor(std::string(op), op == "Pow" ? 15 : 16,
                                               DefaultAttributes(op, type));
       const auto &adapter = descriptor.ResolveAdapter(type, type, type);

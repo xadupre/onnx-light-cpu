@@ -10,6 +10,8 @@
 
 #pragma once
 
+#include "onnx_light_cpu/impl/data_type.h"
+
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -27,15 +29,6 @@ namespace onnx_light_cpu {
 /// every scalar and SIMD implementation so operation accounting matches the
 /// exact work each one executes.
 constexpr std::size_t kComputeChainLength = 64;
-
-/// Element type measured by one arithmetic throughput kernel.
-enum class ComputeElementType {
-  kFloat32,
-  kFloat64,
-  kFloat16,
-  kBFloat16,
-  kInt8,
-};
 
 /// Number and placement of participants used by one measurement.
 enum class ComputeParticipantPolicy {
@@ -128,7 +121,7 @@ struct ComputeThroughputResult {
   ComputeProfileUnavailableReason unavailable_reason = ComputeProfileUnavailableReason::kNone;
   std::string diagnostic;
 
-  ComputeElementType element_type = ComputeElementType::kFloat32;
+  DataType element_type = DataType::FLOAT;
   ComputeParticipantPolicy policy = ComputeParticipantPolicy::kSingle;
   ComputeImplementation implementation = ComputeImplementation::kScalar;
   std::string implementation_name;
@@ -156,7 +149,7 @@ struct ComputeThroughputResult {
 /// using ``policy`` participants. Participant creation, synchronization, and
 /// the final checksum reduction happen outside every timed sample.
 ComputeThroughputResult
-MeasureComputeArithmeticThroughput(ComputeElementType element_type, ComputeParticipantPolicy policy,
+MeasureComputeArithmeticThroughput(DataType element_type, ComputeParticipantPolicy policy,
                                    const ComputeProfileOptions &options = {});
 
 namespace detail {
@@ -203,7 +196,7 @@ struct ComputeDispatchDecision {
   ComputeImplementation implementation = ComputeImplementation::kScalar;
 };
 
-ComputeDispatchDecision SelectComputeImplementation(ComputeElementType element_type,
+ComputeDispatchDecision SelectComputeImplementation(DataType element_type,
                                                     const ComputeDispatchInputs &inputs);
 
 } // namespace detail

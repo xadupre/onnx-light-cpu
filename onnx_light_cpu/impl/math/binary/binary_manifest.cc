@@ -11,7 +11,7 @@
 namespace onnx_light_cpu {
 namespace {
 
-namespace DT = BinaryDataType;
+using DT = DataType;
 using Signature = BinaryTypeSignature;
 
 constexpr std::array<Signature, 12> kArithmeticSignatures = {

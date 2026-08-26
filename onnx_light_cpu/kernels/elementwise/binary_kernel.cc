@@ -186,9 +186,10 @@ ONNX_LIGHT_NAMESPACE::NodeProto MakeCalibrationNode(const BinaryManifestEntry &e
   node.add_input("right");
   node.add_output("output");
   if (entry.op == BinaryOperator::kMod) {
-    const auto type = element_type;
-    const bool floating = type == BinaryDataType::FLOAT || type == BinaryDataType::DOUBLE ||
-                          type == BinaryDataType::FLOAT16 || type == BinaryDataType::BFLOAT16;
+    const auto type = static_cast<onnx_light_cpu::DataType>(element_type);
+    const bool floating =
+        type == onnx_light_cpu::DataType::FLOAT || type == onnx_light_cpu::DataType::DOUBLE ||
+        type == onnx_light_cpu::DataType::FLOAT16 || type == onnx_light_cpu::DataType::BFLOAT16;
     auto *attribute = node.add_attribute();
     attribute->set_name("fmod");
     attribute->set_i(floating ? 1 : 0);
@@ -225,42 +226,42 @@ struct BinaryCalibrationCaseData {
 
 struct BinaryCalibrationCaseSpec {
   std::string name;
-  std::int32_t left_type;
-  std::int32_t right_type;
-  std::int32_t output_type;
+  onnx_light_cpu::DataType left_type;
+  onnx_light_cpu::DataType right_type;
+  onnx_light_cpu::DataType output_type;
   rt_ns::Shape left_shape;
   rt_ns::Shape right_shape;
   uint64_t output_elements;
 };
 
-std::size_t CalibrationElementSize(std::int32_t type) {
+std::size_t CalibrationElementSize(onnx_light_cpu::DataType type) {
   switch (type) {
-  case BinaryDataType::BOOL:
-  case BinaryDataType::INT8:
-  case BinaryDataType::UINT8:
+  case onnx_light_cpu::DataType::BOOL:
+  case onnx_light_cpu::DataType::INT8:
+  case onnx_light_cpu::DataType::UINT8:
     return 1;
-  case BinaryDataType::FLOAT16:
-  case BinaryDataType::BFLOAT16:
-  case BinaryDataType::INT16:
-  case BinaryDataType::UINT16:
+  case onnx_light_cpu::DataType::FLOAT16:
+  case onnx_light_cpu::DataType::BFLOAT16:
+  case onnx_light_cpu::DataType::INT16:
+  case onnx_light_cpu::DataType::UINT16:
     return 2;
-  case BinaryDataType::FLOAT:
-  case BinaryDataType::INT32:
-  case BinaryDataType::UINT32:
+  case onnx_light_cpu::DataType::FLOAT:
+  case onnx_light_cpu::DataType::INT32:
+  case onnx_light_cpu::DataType::UINT32:
     return 4;
-  case BinaryDataType::DOUBLE:
-  case BinaryDataType::INT64:
-  case BinaryDataType::UINT64:
+  case onnx_light_cpu::DataType::DOUBLE:
+  case onnx_light_cpu::DataType::INT64:
+  case onnx_light_cpu::DataType::UINT64:
     return 8;
   default:
     throw std::invalid_argument("Binary calibration received an unsupported element type.");
   }
 }
 
-uint64_t CalibrationConstructionBytes(std::int32_t type, const rt_ns::Shape &shape) {
+uint64_t CalibrationConstructionBytes(onnx_light_cpu::DataType type, const rt_ns::Shape &shape) {
   const uint64_t elements = static_cast<uint64_t>(shape.product());
   const uint64_t temporary_size =
-      type == BinaryDataType::FLOAT16 || type == BinaryDataType::BFLOAT16
+      type == onnx_light_cpu::DataType::FLOAT16 || type == onnx_light_cpu::DataType::BFLOAT16
           ? sizeof(float)
           : CalibrationElementSize(type);
   return elements * temporary_size;
@@ -286,7 +287,7 @@ rt_ns::KernelTuningParameters CalibrateBinary(const rt_ns::KernelTuningKey &key,
   BinaryElementwiseKernel candidate(node, context);
   reference.Configure(CalibrationParameters(key, kBinaryCalibrationProfiles[1]));
 
-  const std::int32_t input_type = key.element_type;
+  const auto input_type = static_cast<onnx_light_cpu::DataType>(key.element_type);
   const auto same_type_signature = std::find_if(
       entry.signatures.begin(), entry.signatures.end(), [input_type](const auto &candidate) {
         return candidate.left == input_type && candidate.right == input_type;
@@ -351,8 +352,8 @@ rt_ns::KernelTuningParameters CalibrateBinary(const rt_ns::KernelTuningKey &key,
     rt_ns::Tensor left =
         MakeCalibrationTensor(static_cast<int32_t>(spec.left_type), spec.left_shape, 17 + index);
     const bool integral_pow_exponents =
-        key.kernel == "Pow" &&
-        (spec.left_type == BinaryDataType::INT32 || spec.left_type == BinaryDataType::INT64);
+        key.kernel == "Pow" && (spec.left_type == onnx_light_cpu::DataType::INT32 ||
+                                spec.left_type == onnx_light_cpu::DataType::INT64);
     rt_ns::Tensor right =
         MakeCalibrationTensor(static_cast<int32_t>(spec.right_type), spec.right_shape, 29 + index,
                               integral_pow_exponents);
@@ -536,11 +537,13 @@ void BinaryElementwiseKernel::Configure(const rt_ns::KernelTuningParameters &par
 rt_ns::Tensor BinaryElementwiseKernel::operator()(const rt_ns::Tensor &left,
                                                   const rt_ns::Tensor &right,
                                                   rt_ns::RuntimeContext *rt) const {
-  const auto output_type =
-      static_cast<rt_ns::DataType>(descriptor_.ResolveOutputType(left.data_type, right.data_type));
-  const std::shared_ptr<const BinaryBroadcastPlan> plan =
-      plan_cache_.GetOrCreate(descriptor_, left.data_type, right.data_type,
-                              static_cast<std::int32_t>(output_type), left.shape, right.shape);
+  const auto output_type = static_cast<rt_ns::DataType>(
+      descriptor_.ResolveOutputType(static_cast<onnx_light_cpu::DataType>(left.data_type),
+                                    static_cast<onnx_light_cpu::DataType>(right.data_type)));
+  const std::shared_ptr<const BinaryBroadcastPlan> plan = plan_cache_.GetOrCreate(
+      descriptor_, static_cast<onnx_light_cpu::DataType>(left.data_type),
+      static_cast<onnx_light_cpu::DataType>(right.data_type),
+      static_cast<onnx_light_cpu::DataType>(output_type), left.shape, right.shape);
   const rt_ns::Shape output_shape(
       std::vector<std::int64_t>(plan->output_shape().begin(), plan->output_shape().end()));
   const std::size_t out_bytes =
@@ -554,11 +557,13 @@ rt_ns::Tensor BinaryElementwiseKernel::operator()(const rt_ns::Tensor &left,
 
 void BinaryElementwiseKernel::operator()(const rt_ns::Tensor &left, const rt_ns::Tensor &right,
                                          rt_ns::Tensor &output) const {
-  const auto output_type =
-      static_cast<rt_ns::DataType>(descriptor_.ResolveOutputType(left.data_type, right.data_type));
-  const std::shared_ptr<const BinaryBroadcastPlan> plan =
-      plan_cache_.GetOrCreate(descriptor_, left.data_type, right.data_type,
-                              static_cast<std::int32_t>(output_type), left.shape, right.shape);
+  const auto output_type = static_cast<rt_ns::DataType>(
+      descriptor_.ResolveOutputType(static_cast<onnx_light_cpu::DataType>(left.data_type),
+                                    static_cast<onnx_light_cpu::DataType>(right.data_type)));
+  const std::shared_ptr<const BinaryBroadcastPlan> plan = plan_cache_.GetOrCreate(
+      descriptor_, static_cast<onnx_light_cpu::DataType>(left.data_type),
+      static_cast<onnx_light_cpu::DataType>(right.data_type),
+      static_cast<onnx_light_cpu::DataType>(output_type), left.shape, right.shape);
   const rt_ns::Shape output_shape(
       std::vector<std::int64_t>(plan->output_shape().begin(), plan->output_shape().end()));
   if (output.data_type != static_cast<int32_t>(output_type) || output.shape != output_shape) {

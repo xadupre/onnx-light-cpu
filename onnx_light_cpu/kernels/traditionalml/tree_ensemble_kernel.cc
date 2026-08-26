@@ -122,14 +122,14 @@ std::vector<TreeBranchMode> ReadNodeModes(const NodeProto &node) {
   return modes;
 }
 
-TreeValueType ValueType(std::int32_t data_type) {
+onnx_light_cpu::DataType ValueType(std::int32_t data_type) {
   switch (static_cast<DataType>(data_type)) {
   case DataType::FLOAT:
-    return TreeValueType::kFloat32;
+    return onnx_light_cpu::DataType::FLOAT;
   case DataType::DOUBLE:
-    return TreeValueType::kFloat64;
+    return onnx_light_cpu::DataType::DOUBLE;
   case DataType::FLOAT16:
-    return TreeValueType::kFloat16;
+    return onnx_light_cpu::DataType::FLOAT16;
   default:
     throw std::invalid_argument(
         "onnx_light_cpu::TreeEnsemble: only FLOAT, DOUBLE and FLOAT16 inputs are supported.");
