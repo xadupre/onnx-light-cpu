@@ -65,6 +65,10 @@ struct MemoryProfileOptions {
   /// which continues to select its own affinities from the process-visible
   /// topology.
   std::optional<CpuAffinity> explicit_single_affinity;
+  /// Number of pinned physical-core participants for a bandwidth measurement.
+  /// Zero (the default) uses every process-visible physical core. Ignored by
+  /// ``kSingle`` and by latency measurements.
+  std::size_t bandwidth_participant_count = 0;
 };
 
 /// Deterministic, pure working-set selection for one memory level. Exposed
@@ -138,6 +142,17 @@ struct MemoryBandwidthResult {
 MemoryBandwidthResult MeasureMemoryBandwidth(MemoryProfileLevel level, MemoryTrafficMode mode,
                                              MemoryParticipantPolicy policy,
                                              const MemoryProfileOptions &options = {});
+
+/// Returns the participant counts used for a scaling curve: powers of two from
+/// one through ``maximum``, followed by ``maximum`` when it is not a power of
+/// two. ``maximum`` is treated as at least one.
+std::vector<std::size_t> MemoryBandwidthScalingParticipantCounts(std::size_t maximum);
+
+/// Measures aggregate bandwidth at 1, 2, 4, ... physical cores, including the
+/// process-visible maximum when it is not a power of two.
+std::vector<MemoryBandwidthResult>
+MeasureMemoryBandwidthScaling(MemoryProfileLevel level, MemoryTrafficMode mode,
+                              const MemoryProfileOptions &options = {});
 
 /// Result of one dependent pointer-chase latency measurement.
 struct MemoryLatencyResult {

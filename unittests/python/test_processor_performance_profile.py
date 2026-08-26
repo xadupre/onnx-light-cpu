@@ -90,7 +90,7 @@ class TestBoundedSinglePolicyProfile:
         profile = benchmark_processor_performance(**_bounded_kwargs())
 
         assert isinstance(profile, ProcessorPerformanceProfile)
-        assert profile.metadata.schema_version == 1
+        assert profile.metadata.schema_version == 2
         assert profile.metadata.platform
         assert profile.metadata.compiler
         assert profile.topology.logical_thread_count >= 1
@@ -115,6 +115,9 @@ class TestBoundedSinglePolicyProfile:
             **_bounded_kwargs(thread_policies=("physical",))
         )
         assert "physical" in profile.compute["float32"]
+        scaling = profile.memory["L1"]["physical"].read_scaling
+        assert scaling[0].participant_count == 1
+        assert scaling[-1].participant_count == profile.topology.physical_core_count
 
     def test_include_latency_false_omits_every_latency_measurement(self):
         profile = benchmark_processor_performance(**_bounded_kwargs(include_latency=False))
@@ -144,7 +147,7 @@ class TestBoundedSinglePolicyProfile:
 
 def _raw_profile_stub():
     metadata = (
-        1,
+        2,
         1_700_000_000_000_000_000,
         "linux",
         "gcc",
@@ -155,7 +158,7 @@ def _raw_profile_stub():
     topology = (4, 2, 0, 0, [(1, "data", 32768, 64, 2, "detected")], True)
     bandwidth = (16384, 1, False, "std::chrono::steady_clock", 16384, [10.0, 11.0], 10.5, 0.5)
     latency = (16384, 1, False, "std::chrono::steady_clock", [1.0, 1.1], 1.05, 0.05)
-    memory = [("L1", "single", bandwidth, bandwidth, bandwidth, bandwidth, latency)]
+    memory = [("L1", "single", bandwidth, bandwidth, bandwidth, bandwidth, latency, [bandwidth])]
     compute = [
         (
             "float32",
@@ -194,6 +197,7 @@ class TestPythonWrapping:
             )
 
         assert profile.memory["L1"]["single"].read.median_gbps == 10.5
+        assert profile.memory["L1"]["single"].read_scaling[0].participant_count == 1
         assert profile.compute["float32"]["single"].median_gops == 100.5
         assert (
             profile.roofline["float32"]["single"]["L1"].arithmetic_intensity_crossover == 9.5714
@@ -220,8 +224,9 @@ class TestPythonWrapping:
         as_dict = profile.to_dict()
         serialized = json.dumps(as_dict)
         assert json.loads(serialized) == as_dict
-        assert as_dict["metadata"]["schema_version"] == 1
+        assert as_dict["metadata"]["schema_version"] == 2
         assert as_dict["memory"]["L1"]["single"]["read"]["median_gbps"] == 10.5
+        assert as_dict["memory"]["L1"]["single"]["read_scaling"][0]["median_gbps"] == 10.5
         assert as_dict["compute"]["float32"]["single"]["median_gops"] == 100.5
         assert as_dict["warnings"] == [
             "compute float16 (single): no compiled and runtime-detected native arithmetic path"

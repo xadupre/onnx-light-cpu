@@ -28,7 +28,7 @@ from typing import Any, Mapping, NamedTuple
 #: Schema version of the ``to_dict()`` shape returned by
 #: :class:`ProcessorPerformanceProfile`. Mirrors
 #: ``onnx_light_cpu::kProcessorPerformanceProfileSchemaVersion``.
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 class ExplicitAffinity(NamedTuple):
@@ -201,6 +201,7 @@ class MemoryLevelMeasurement:
     copy: BandwidthMeasurement | None
     read_modify_write: BandwidthMeasurement | None
     latency: LatencyMeasurement | None
+    read_scaling: tuple[BandwidthMeasurement, ...]
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -213,6 +214,7 @@ class MemoryLevelMeasurement:
                 self.read_modify_write.to_dict() if self.read_modify_write is not None else None
             ),
             "latency": self.latency.to_dict() if self.latency is not None else None,
+            "read_scaling": [point.to_dict() for point in self.read_scaling],
         }
 
 
@@ -502,7 +504,12 @@ def benchmark_processor_performance(
         )
 
     memory: dict[str, dict[str, MemoryLevelMeasurement]] = {}
-    for level, policy, read, write, copy, read_modify_write, latency in raw_memory:
+    for level, policy, read, write, copy, read_modify_write, latency, read_scaling in raw_memory:
+        scaling_points = []
+        for raw_point in read_scaling:
+            point = _bandwidth(raw_point)
+            assert point is not None
+            scaling_points.append(point)
         memory_entry = MemoryLevelMeasurement(
             level=level,
             policy=policy,
@@ -511,6 +518,7 @@ def benchmark_processor_performance(
             copy=_bandwidth(copy),
             read_modify_write=_bandwidth(read_modify_write),
             latency=_latency(latency),
+            read_scaling=tuple(scaling_points),
         )
         memory.setdefault(level, {})[policy] = memory_entry
 

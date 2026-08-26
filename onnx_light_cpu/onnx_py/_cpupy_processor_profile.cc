@@ -82,7 +82,8 @@ using LatencyTuple = std::tuple<std::uint64_t, std::uint64_t, bool, std::string,
                                 std::vector<double>, double, double>;
 using MemoryEntryTuple = std::tuple<std::string, std::string, std::optional<BandwidthTuple>,
                                     std::optional<BandwidthTuple>, std::optional<BandwidthTuple>,
-                                    std::optional<BandwidthTuple>, std::optional<LatencyTuple>>;
+                                    std::optional<BandwidthTuple>, std::optional<LatencyTuple>,
+                                    std::vector<BandwidthTuple>>;
 using ComputeEntryTuple =
     std::tuple<std::string, std::string, std::string, std::uint64_t, bool, std::string,
                std::uint64_t, std::size_t, std::vector<double>, double, double>;
@@ -157,12 +158,18 @@ ProfileTuple ToProfileTuple(const ProcessorPerformanceProfile &profile) {
   std::vector<MemoryEntryTuple> memory;
   memory.reserve(profile.memory.size());
   for (const ProcessorProfileMemoryEntry &entry : profile.memory) {
+    std::vector<BandwidthTuple> read_scaling;
+    read_scaling.reserve(entry.read_scaling.size());
+    for (const MemoryBandwidthResult &point : entry.read_scaling) {
+      read_scaling.push_back(ToBandwidthTuple(point));
+    }
     memory.emplace_back(
         MemoryLevelName(entry.level), ProcessorThreadPolicyName(entry.policy),
         ToOptionalBandwidthTuple(entry.read), ToOptionalBandwidthTuple(entry.write),
         ToOptionalBandwidthTuple(entry.copy), ToOptionalBandwidthTuple(entry.read_modify_write),
         entry.latency.has_value() ? std::optional<LatencyTuple>(ToLatencyTuple(*entry.latency))
-                                  : std::nullopt);
+                                  : std::nullopt,
+        std::move(read_scaling));
   }
 
   std::vector<ComputeEntryTuple> compute;

@@ -241,8 +241,26 @@ ProcessorPerformanceProfile BenchmarkProcessorPerformance(const ProcessorProfile
       bool any_available = false;
 
       for (const MemoryTrafficMode mode : kMemoryModes) {
-        const MemoryBandwidthResult result =
-            MeasureMemoryBandwidth(level, mode, memory_policy, memory_options);
+        MemoryBandwidthResult result;
+        if (policy == ProcessorThreadPolicy::kPhysical && mode == MemoryTrafficMode::kRead &&
+            level != MemoryProfileLevel::kRam) {
+          const std::vector<MemoryBandwidthResult> scaling =
+              MeasureMemoryBandwidthScaling(level, mode, memory_options);
+          if (!scaling.empty()) {
+            result = scaling.back();
+          }
+          for (const MemoryBandwidthResult &point : scaling) {
+            if (point.available) {
+              entry.read_scaling.push_back(point);
+            } else {
+              profile.warnings.push_back(
+                  std::string("memory ") + MemoryLevelName(level) + " read scaling (" +
+                  std::to_string(point.participant_count) + " participants): " + point.diagnostic);
+            }
+          }
+        } else {
+          result = MeasureMemoryBandwidth(level, mode, memory_policy, memory_options);
+        }
         if (result.available) {
           any_available = true;
           SelectBandwidthSlot(entry, mode) = result;

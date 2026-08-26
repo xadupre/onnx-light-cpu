@@ -29,7 +29,7 @@ namespace onnx_light_cpu {
 /// ``BenchmarkProcessorPerformance``. Bump whenever a field is added,
 /// removed, renamed, or reinterpreted so downstream serialization consumers
 /// can detect incompatible changes.
-constexpr int kProcessorPerformanceProfileSchemaVersion = 1;
+constexpr int kProcessorPerformanceProfileSchemaVersion = 2;
 
 /// Participant policy requested for one profile section. Kept distinct from
 /// ``MemoryParticipantPolicy``/``ComputeParticipantPolicy`` so the public
@@ -130,6 +130,9 @@ struct ProcessorProfileMemoryEntry {
   std::optional<MemoryBandwidthResult> copy;
   std::optional<MemoryBandwidthResult> read_modify_write;
   std::optional<MemoryLatencyResult> latency;
+  /// Aggregate read bandwidth at 1, 2, 4, ... physical cores. Populated on
+  /// ``kPhysical`` entries; the final point always uses every visible core.
+  std::vector<MemoryBandwidthResult> read_scaling;
 };
 
 /// One element-type, one-policy compute entry, present only when the
