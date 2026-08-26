@@ -91,7 +91,7 @@ bool IsNonCommutative(BinaryOperator op) {
   }
 }
 
-const char *DataTypeSuffix(BinaryDataType data_type) {
+const char *DataTypeSuffix(std::int32_t data_type) {
   switch (data_type) {
   case BinaryDataType::BOOL:
     return "bool";
@@ -189,7 +189,7 @@ std::vector<float> MakeFloatValues(std::size_t count, bool positive_only, bool n
   return values;
 }
 
-Tensor MakeTypedTensor(BinaryDataType type, const rt_ns::Shape &shape,
+Tensor MakeTypedTensor(std::int32_t type, const rt_ns::Shape &shape,
                        const std::vector<float> &values, bool positive_only, bool nonzero_only,
                        bool small_values) {
   const std::size_t count = ElementCount(shape);
@@ -266,7 +266,7 @@ Tensor MakeTypedTensor(BinaryDataType type, const rt_ns::Shape &shape,
 }
 
 BinaryKernelDescriptor::Attributes DefaultAttributes(const BinaryManifestEntry &entry,
-                                                     BinaryDataType left_type) {
+                                                     std::int32_t left_type) {
   BinaryKernelDescriptor::Attributes attributes;
   if (entry.op == BinaryOperator::kMod) {
     const bool is_float =

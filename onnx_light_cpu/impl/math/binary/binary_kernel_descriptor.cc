@@ -20,10 +20,10 @@
 namespace onnx_light_cpu {
 namespace {
 
-using DT = BinaryDataType;
+namespace DT = BinaryDataType;
 using Attrs = BinaryKernelDescriptor::Attributes;
 
-std::size_t ElementSize(DT type) {
+std::size_t ElementSize(std::int32_t type) {
   switch (type) {
   case DT::BOOL:
   case DT::INT8:
@@ -392,7 +392,7 @@ void BulkBfloat16Pow(const void *, const void *, void *, std::size_t);
 void BulkFloat16PRelu(const void *, const void *, void *, std::size_t);
 void BulkBfloat16PRelu(const void *, const void *, void *, std::size_t);
 
-void SelectBulk(BinaryOperator op, DT left, BinaryKernelDescriptor::Adapter &adapter) {
+void SelectBulk(BinaryOperator op, std::int32_t left, BinaryKernelDescriptor::Adapter &adapter) {
 #define ONNX_LIGHT_CPU_BIND_BULK(STEM, T)                                                          \
   adapter.bulk_contiguous = &BulkContiguousWrapper<T, &STEM##Contiguous>;                          \
   adapter.bulk_left_scalar = &BulkLeftScalarWrapper<T, &STEM##LeftScalar>;                         \
@@ -850,8 +850,8 @@ void ComputeHalfCompareEq(const void *left, const void *right, void *out) {
       Decode(ReadTyped<std::uint16_t>(left)) == Decode(ReadTyped<std::uint16_t>(right)) ? 1U : 0U);
 }
 
-BinaryKernelDescriptor::Adapter::ScalarFn SelectScalar(BinaryOperator op, DT left, DT right,
-                                                       const Attrs &attributes) {
+BinaryKernelDescriptor::Adapter::ScalarFn
+SelectScalar(BinaryOperator op, std::int32_t left, std::int32_t right, const Attrs &attributes) {
   switch (op) {
   case BinaryOperator::kAdd:
     switch (left) {
@@ -1407,7 +1407,7 @@ BinaryKernelDescriptor::Adapter::ScalarFn SelectScalar(BinaryOperator op, DT lef
       "onnx_light_cpu::BinaryKernelDescriptor: unsupported type signature.");
 }
 
-BinaryKernelDescriptor::Adapter::ValidateFn SelectValidator(BinaryOperator op, DT left) {
+BinaryKernelDescriptor::Adapter::ValidateFn SelectValidator(BinaryOperator op, std::int32_t left) {
   if (op != BinaryOperator::kDiv && op != BinaryOperator::kMod && op != BinaryOperator::kBitShift) {
     return nullptr;
   }
@@ -1433,8 +1433,8 @@ BinaryKernelDescriptor::Adapter::ValidateFn SelectValidator(BinaryOperator op, D
 #undef ONNX_LIGHT_CPU_INTEGER_VALIDATOR
 }
 
-void SelectAdditionalBulk(BinaryOperator op, DT left, DT right, const Attrs &attributes,
-                          BinaryKernelDescriptor::Adapter &adapter) {
+void SelectAdditionalBulk(BinaryOperator op, std::int32_t left, std::int32_t right,
+                          const Attrs &attributes, BinaryKernelDescriptor::Adapter &adapter) {
 #define ONNX_LIGHT_CPU_BIND_TYPED_BULK(TLEFT, TRIGHT, TOUT, ...)                                   \
   adapter.bulk_contiguous = &BulkComputeContiguous<TLEFT, TRIGHT, TOUT, &__VA_ARGS__>;             \
   adapter.bulk_left_scalar = &BulkComputeLeftScalar<TLEFT, TRIGHT, TOUT, &__VA_ARGS__>;            \
@@ -1759,8 +1759,8 @@ std::uint64_t BinaryKernelDescriptor::NextCacheIdentity() {
   return next.fetch_add(1, std::memory_order_relaxed);
 }
 
-BinaryDataType BinaryKernelDescriptor::ResolveOutputType(BinaryDataType left,
-                                                         BinaryDataType right) const {
+std::int32_t BinaryKernelDescriptor::ResolveOutputType(std::int32_t left,
+                                                       std::int32_t right) const {
   for (const Adapter &adapter : adapters_) {
     if (adapter.signature.left == left && adapter.signature.right == right) {
       return adapter.signature.output;
@@ -1772,8 +1772,8 @@ BinaryDataType BinaryKernelDescriptor::ResolveOutputType(BinaryDataType left,
 }
 
 const BinaryKernelDescriptor::Adapter &
-BinaryKernelDescriptor::ResolveAdapter(BinaryDataType left, BinaryDataType right,
-                                       BinaryDataType output) const {
+BinaryKernelDescriptor::ResolveAdapter(std::int32_t left, std::int32_t right,
+                                       std::int32_t output) const {
   for (const Adapter &adapter : adapters_) {
     if (adapter.signature.left == left && adapter.signature.right == right &&
         adapter.signature.output == output) {

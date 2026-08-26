@@ -14,13 +14,15 @@
 #include <cstdint>
 #include <limits>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 namespace {
 
-using onnx_light_cpu::BinaryDataType;
+namespace BinaryDataType = onnx_light_cpu::BinaryDataType;
 using onnx_light_cpu::BinaryKernelDescriptor;
 using onnx_light_cpu::BinaryOperator;
+using onnx_light_cpu::BinaryTypeSignature;
 using onnx_light_cpu::GetBinaryManifest;
 using onnx_light_cpu::GetBinaryManifestEntry;
 
@@ -34,10 +36,16 @@ TEST(BinaryManifest, CoversRoadmapScopeExactlyOnce) {
     EXPECT_FALSE(entry.signatures.empty());
     names.emplace_back(entry.op_type);
   }
+
   std::sort(names.begin(), names.end());
   EXPECT_EQ(std::unique(names.begin(), names.end()), names.end());
   EXPECT_EQ(GetBinaryManifestEntry("Add").op, BinaryOperator::kAdd);
   EXPECT_EQ(GetBinaryManifestEntry("PRelu").op, BinaryOperator::kPRelu);
+}
+
+TEST(BinaryManifest, UsesStandardIntegerTypeIds) {
+  EXPECT_TRUE((std::is_same_v<decltype(BinaryTypeSignature{}.left), std::int32_t>));
+  EXPECT_TRUE((std::is_same_v<decltype(BinaryDataType::FLOAT), const std::int32_t>));
 }
 
 TEST(BinaryKernelDescriptor, ValidatesOpsetAndAttributes) {

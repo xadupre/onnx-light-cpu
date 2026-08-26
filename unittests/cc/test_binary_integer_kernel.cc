@@ -19,18 +19,18 @@
 namespace {
 
 using onnx_light_cpu::BinaryBroadcastPlan;
-using onnx_light_cpu::BinaryDataType;
+namespace BinaryDataType = onnx_light_cpu::BinaryDataType;
 using onnx_light_cpu::BinaryKernelDescriptor;
 
-template <typename T> constexpr BinaryDataType DataTypeOf();
-template <> constexpr BinaryDataType DataTypeOf<std::int8_t>() { return BinaryDataType::INT8; }
-template <> constexpr BinaryDataType DataTypeOf<std::int16_t>() { return BinaryDataType::INT16; }
-template <> constexpr BinaryDataType DataTypeOf<std::int32_t>() { return BinaryDataType::INT32; }
-template <> constexpr BinaryDataType DataTypeOf<std::int64_t>() { return BinaryDataType::INT64; }
-template <> constexpr BinaryDataType DataTypeOf<std::uint8_t>() { return BinaryDataType::UINT8; }
-template <> constexpr BinaryDataType DataTypeOf<std::uint16_t>() { return BinaryDataType::UINT16; }
-template <> constexpr BinaryDataType DataTypeOf<std::uint32_t>() { return BinaryDataType::UINT32; }
-template <> constexpr BinaryDataType DataTypeOf<std::uint64_t>() { return BinaryDataType::UINT64; }
+template <typename T> constexpr std::int32_t DataTypeOf();
+template <> constexpr std::int32_t DataTypeOf<std::int8_t>() { return BinaryDataType::INT8; }
+template <> constexpr std::int32_t DataTypeOf<std::int16_t>() { return BinaryDataType::INT16; }
+template <> constexpr std::int32_t DataTypeOf<std::int32_t>() { return BinaryDataType::INT32; }
+template <> constexpr std::int32_t DataTypeOf<std::int64_t>() { return BinaryDataType::INT64; }
+template <> constexpr std::int32_t DataTypeOf<std::uint8_t>() { return BinaryDataType::UINT8; }
+template <> constexpr std::int32_t DataTypeOf<std::uint16_t>() { return BinaryDataType::UINT16; }
+template <> constexpr std::int32_t DataTypeOf<std::uint32_t>() { return BinaryDataType::UINT32; }
+template <> constexpr std::int32_t DataTypeOf<std::uint64_t>() { return BinaryDataType::UINT64; }
 
 std::int64_t Opset(std::string_view op) {
   if (op == "And" || op == "Or" || op == "Xor")
@@ -57,9 +57,8 @@ std::vector<Out> Execute(std::string_view op, const std::vector<T> &left,
   const bool logical = op == "And" || op == "Or" || op == "Xor";
   const bool comparison = op == "Equal" || op == "Greater" || op == "GreaterOrEqual" ||
                           op == "Less" || op == "LessOrEqual";
-  const BinaryDataType input_type = logical ? BinaryDataType::BOOL : DataTypeOf<T>();
-  const BinaryDataType output_type =
-      logical || comparison ? BinaryDataType::BOOL : DataTypeOf<Out>();
+  const std::int32_t input_type = logical ? BinaryDataType::BOOL : DataTypeOf<T>();
+  const std::int32_t output_type = logical || comparison ? BinaryDataType::BOOL : DataTypeOf<Out>();
   const BinaryBroadcastPlan plan(descriptor, input_type, input_type, output_type, shape, shape);
   std::vector<Out> output(left.size());
   plan.Execute(left.data(), right.data(), output.data());
@@ -178,7 +177,7 @@ template <typename T> void CheckIntegerKernels() {
 }
 
 template <typename T> void CheckValidationFailures() {
-  const BinaryDataType type = DataTypeOf<T>();
+  const std::int32_t type = DataTypeOf<T>();
   const std::vector<std::int64_t> left_shape{2, 1};
   const std::vector<std::int64_t> right_shape{1, 3};
   const auto expect_unchanged = [&](std::string_view op, const std::vector<T> &left,

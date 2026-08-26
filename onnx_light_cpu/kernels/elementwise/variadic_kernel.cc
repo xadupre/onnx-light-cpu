@@ -41,12 +41,12 @@ VariadicOperator ParseOperator(std::string_view op_type) {
 }
 
 VariadicElementwisePlan MakePlan(VariadicOperator op, const rt_ns::Tensors &inputs) {
-  std::vector<BinaryDataType> types;
+  std::vector<std::int32_t> types;
   std::vector<std::vector<std::int64_t>> shapes;
   types.reserve(inputs.size());
   shapes.reserve(inputs.size());
   for (const rt_ns::Tensor &input : inputs) {
-    types.push_back(static_cast<BinaryDataType>(input.data_type));
+    types.push_back(input.data_type);
     shapes.emplace_back(input.shape.begin(), input.shape.end());
   }
   return VariadicElementwisePlan(op, types, shapes);

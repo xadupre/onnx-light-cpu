@@ -15,15 +15,15 @@
 
 namespace {
 
-using onnx_light_cpu::BinaryDataType;
+namespace BinaryDataType = onnx_light_cpu::BinaryDataType;
 using onnx_light_cpu::VariadicElementwisePlan;
 using onnx_light_cpu::VariadicOperator;
 
 template <typename T>
-std::vector<T> Execute(VariadicOperator op, BinaryDataType type,
+std::vector<T> Execute(VariadicOperator op, std::int32_t type,
                        const std::vector<std::vector<std::int64_t>> &shapes,
                        const std::vector<std::vector<T>> &values) {
-  std::vector<BinaryDataType> types(shapes.size(), type);
+  std::vector<std::int32_t> types(shapes.size(), type);
   VariadicElementwisePlan plan(op, types, shapes);
   std::vector<const void *> inputs;
   for (const auto &value : values) {
@@ -35,17 +35,17 @@ std::vector<T> Execute(VariadicOperator op, BinaryDataType type,
 }
 
 TEST(VariadicElementwisePlan, ValidatesEveryInput) {
-  const std::vector<BinaryDataType> no_types;
+  const std::vector<std::int32_t> no_types;
   const std::vector<std::vector<std::int64_t>> no_shapes;
   EXPECT_THROW(VariadicElementwisePlan(VariadicOperator::kSum, no_types, no_shapes),
                std::invalid_argument);
 
-  const std::vector<BinaryDataType> mixed_types = {BinaryDataType::FLOAT, BinaryDataType::DOUBLE};
+  const std::vector<std::int32_t> mixed_types = {BinaryDataType::FLOAT, BinaryDataType::DOUBLE};
   const std::vector<std::vector<std::int64_t>> shapes = {{2}, {2}};
   EXPECT_THROW(VariadicElementwisePlan(VariadicOperator::kSum, mixed_types, shapes),
                std::invalid_argument);
 
-  const std::vector<BinaryDataType> types(2, BinaryDataType::FLOAT);
+  const std::vector<std::int32_t> types(2, BinaryDataType::FLOAT);
   const std::vector<std::vector<std::int64_t>> incompatible = {{2, 3}, {2, 2}};
   EXPECT_THROW(VariadicElementwisePlan(VariadicOperator::kSum, types, incompatible),
                std::invalid_argument);
@@ -59,7 +59,7 @@ TEST(VariadicElementwisePlan, TraversesOneCommonMultidirectionalBroadcastSpace) 
 }
 
 TEST(VariadicElementwisePlan, PreservesOneInputAndEmptyTensorsWithoutWorkspace) {
-  const std::vector<BinaryDataType> types = {BinaryDataType::FLOAT};
+  const std::vector<std::int32_t> types = {BinaryDataType::FLOAT};
   const std::vector<std::vector<std::int64_t>> shape = {{0, 3}};
   VariadicElementwisePlan empty(VariadicOperator::kSum, types, shape);
   EXPECT_EQ(empty.element_count(), 0u);

@@ -106,7 +106,7 @@ void ExecuteSwiGLUBFloat16(const std::uint16_t *gate, const std::uint16_t *up,
 } // namespace
 
 ElementwiseFusionPlan::ElementwiseFusionPlan(ElementwiseFusionTemplate fusion_template,
-                                             BinaryDataType data_type,
+                                             std::int32_t data_type,
                                              std::span<const std::int64_t> output_shape)
     : fusion_template_(fusion_template), data_type_(data_type),
       output_shape_(output_shape.begin(), output_shape.end()), element_count_(1),
@@ -120,7 +120,7 @@ ElementwiseFusionPlan::ElementwiseFusionPlan(ElementwiseFusionTemplate fusion_te
 }
 
 std::optional<ElementwiseFusionPlan> ElementwiseFusionPlan::TryCreateSwiGLUGate(
-    BinaryDataType data_type, std::span<const std::int64_t> gate_shape,
+    std::int32_t data_type, std::span<const std::int64_t> gate_shape,
     std::span<const std::int64_t> sigmoid_shape, std::span<const std::int64_t> inner_mul_shape,
     std::span<const std::int64_t> up_shape, std::span<const std::int64_t> output_shape,
     const ElementwiseFusionGuards &guards) {
@@ -134,7 +134,7 @@ std::optional<ElementwiseFusionPlan> ElementwiseFusionPlan::TryCreateSwiGLUGate(
 }
 
 std::optional<ElementwiseFusionPlan> ElementwiseFusionPlan::TryCreateScaledMaskedScores(
-    BinaryDataType data_type, std::span<const std::int64_t> scores_shape,
+    std::int32_t data_type, std::span<const std::int64_t> scores_shape,
     std::span<const std::int64_t> scale_shape, std::span<const std::int64_t> mask_shape,
     std::span<const std::int64_t> mul_shape, std::span<const std::int64_t> output_shape,
     const ElementwiseFusionGuards &guards) {

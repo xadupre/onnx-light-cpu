@@ -18,7 +18,7 @@
 
 namespace {
 
-using onnx_light_cpu::BinaryDataType;
+namespace BinaryDataType = onnx_light_cpu::BinaryDataType;
 using onnx_light_cpu::ElementwiseFusionGuards;
 using onnx_light_cpu::ElementwiseFusionPlan;
 using onnx_light_cpu::ExecutionBlockFn;

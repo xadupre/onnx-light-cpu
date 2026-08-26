@@ -10,23 +10,23 @@
 
 namespace onnx_light_cpu {
 
-enum class BinaryDataType : std::int32_t {
-  UNDEFINED = 0,
-  FLOAT = 1,
-  UINT8 = 2,
-  INT8 = 3,
-  UINT16 = 4,
-  INT16 = 5,
-  INT32 = 6,
-  INT64 = 7,
-  STRING = 8,
-  BOOL = 9,
-  FLOAT16 = 10,
-  DOUBLE = 11,
-  UINT32 = 12,
-  UINT64 = 13,
-  BFLOAT16 = 16,
-};
+namespace BinaryDataType {
+inline constexpr std::int32_t UNDEFINED = 0;
+inline constexpr std::int32_t FLOAT = 1;
+inline constexpr std::int32_t UINT8 = 2;
+inline constexpr std::int32_t INT8 = 3;
+inline constexpr std::int32_t UINT16 = 4;
+inline constexpr std::int32_t INT16 = 5;
+inline constexpr std::int32_t INT32 = 6;
+inline constexpr std::int32_t INT64 = 7;
+inline constexpr std::int32_t STRING = 8;
+inline constexpr std::int32_t BOOL = 9;
+inline constexpr std::int32_t FLOAT16 = 10;
+inline constexpr std::int32_t DOUBLE = 11;
+inline constexpr std::int32_t UINT32 = 12;
+inline constexpr std::int32_t UINT64 = 13;
+inline constexpr std::int32_t BFLOAT16 = 16;
+} // namespace BinaryDataType
 
 /// In-scope binary elementwise operators covered by Binary PR01.
 enum class BinaryOperator : std::uint8_t {
@@ -53,9 +53,9 @@ enum class BinaryOperator : std::uint8_t {
 
 /// One concrete input/output type triple advertised by the prepared binary engine.
 struct BinaryTypeSignature {
-  BinaryDataType left = BinaryDataType::UNDEFINED;
-  BinaryDataType right = BinaryDataType::UNDEFINED;
-  BinaryDataType output = BinaryDataType::UNDEFINED;
+  std::int32_t left = BinaryDataType::UNDEFINED;
+  std::int32_t right = BinaryDataType::UNDEFINED;
+  std::int32_t output = BinaryDataType::UNDEFINED;
 };
 
 /// Explicit manifest entry for one optimized binary operator.

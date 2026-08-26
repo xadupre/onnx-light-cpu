@@ -75,8 +75,8 @@ bool CanMerge(const BinaryBroadcastPlan::Dimension &outer,
 } // namespace
 
 BinaryBroadcastPlan::BinaryBroadcastPlan(const BinaryKernelDescriptor &descriptor,
-                                         BinaryDataType left_type, BinaryDataType right_type,
-                                         BinaryDataType output_type,
+                                         std::int32_t left_type, std::int32_t right_type,
+                                         std::int32_t output_type,
                                          std::span<const std::int64_t> left_shape,
                                          std::span<const std::int64_t> right_shape)
     : descriptor_(descriptor),
@@ -498,8 +498,8 @@ bool BinaryBroadcastPlanCache::Key::operator==(const Key &other) const noexcept 
 }
 
 BinaryBroadcastPlanCache::PlanPtr BinaryBroadcastPlanCache::GetOrCreate(
-    const BinaryKernelDescriptor &descriptor, BinaryDataType left_type, BinaryDataType right_type,
-    BinaryDataType output_type, std::span<const std::int64_t> left_shape,
+    const BinaryKernelDescriptor &descriptor, std::int32_t left_type, std::int32_t right_type,
+    std::int32_t output_type, std::span<const std::int64_t> left_shape,
     std::span<const std::int64_t> right_shape) {
   Key key{descriptor.cache_identity(),
           left_type,

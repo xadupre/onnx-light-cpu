@@ -75,7 +75,7 @@ std::string Lowercase(std::string value) {
   return value;
 }
 
-std::string BinaryTypeSuffix(onnx_light_cpu::BinaryDataType type) {
+std::string BinaryTypeSuffix(std::int32_t type) {
   switch (type) {
   case onnx_light_cpu::BinaryDataType::BOOL:
     return "bool";

@@ -17,7 +17,7 @@
 namespace onnx_light_cpu {
 namespace {
 
-std::size_t ElementSize(BinaryDataType type) {
+std::size_t ElementSize(std::int32_t type) {
   switch (type) {
   case BinaryDataType::INT8:
   case BinaryDataType::UINT8:
@@ -40,7 +40,7 @@ std::size_t ElementSize(BinaryDataType type) {
   }
 }
 
-bool Supports(VariadicOperator op, BinaryDataType type) {
+bool Supports(VariadicOperator op, std::int32_t type) {
   if (op == VariadicOperator::kMean) {
     return type == BinaryDataType::FLOAT || type == BinaryDataType::DOUBLE;
   }
@@ -138,7 +138,7 @@ void ExecuteHalf(VariadicOperator op, std::span<const void *const> inputs,
 } // namespace
 
 VariadicElementwisePlan::VariadicElementwisePlan(
-    VariadicOperator op, std::span<const BinaryDataType> input_types,
+    VariadicOperator op, std::span<const std::int32_t> input_types,
     std::span<const std::vector<std::int64_t>> input_shapes)
     : op_(op), data_type_(BinaryDataType::UNDEFINED), input_count_(input_types.size()),
       element_size_(0), element_count_(1) {
@@ -151,7 +151,7 @@ VariadicElementwisePlan::VariadicElementwisePlan(
     throw std::invalid_argument("onnx_light_cpu::" + std::string(ToString(op)) +
                                 ": unsupported data type.");
   }
-  for (BinaryDataType type : input_types) {
+  for (std::int32_t type : input_types) {
     if (type != data_type_) {
       throw std::invalid_argument("onnx_light_cpu::" + std::string(ToString(op)) +
                                   ": all inputs must have the same data type.");
