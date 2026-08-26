@@ -61,8 +61,12 @@ def test_documentation_example(example):
     # unit tests while still exercising every code path.
     env["UNITTEST_GOING"] = "1"
 
+    command = [sys.executable, "-u", str(example)]
+    if _requires_onnx_light_integration(example):
+        command.extend(["-r", "2", "-w", "1", "-t", "0.1"])
+
     proc = subprocess.run(
-        [sys.executable, "-u", str(example)],
+        command,
         cwd=_ROOT,
         env=env,
         capture_output=True,

@@ -29,6 +29,7 @@ elements.
 # Report which SIMD level the current CPU provides. The mapping is ``0=None``,
 # ``1=SSE2``, ``2=AVX``, ``3=AVX2`` and ``4=AVX512``.
 
+import argparse
 import gc
 import os
 import time
@@ -39,6 +40,18 @@ import onnxruntime
 # ``UNITTEST_GOING=1`` shrinks the benchmark (fewer/smaller sizes) so the example
 # runs quickly as a unit test while still exercising every code path.
 unit_test_going = os.environ.get("UNITTEST_GOING", "0") in ("1", "true", "True")
+
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("-r", "--repeat", type=int, default=10 * (os.cpu_count() or 1))
+parser.add_argument("-w", "--warmup", type=int, default=2 * (os.cpu_count() or 1))
+parser.add_argument("-t", "--max-repeat-time", type=float, default=1.0)
+args, _ = parser.parse_known_args()
+if args.repeat <= 0:
+    parser.error("--repeat must be greater than 0")
+if args.warmup < 0:
+    parser.error("--warmup must be greater than or equal to 0")
+if args.max_repeat_time <= 0:
+    parser.error("--max-repeat-time must be greater than 0")
 
 # ``onnx-light`` ships ``onnx_light.onnx`` as a drop-in replacement for the
 # ``onnx`` package; use it to build the model so the example depends on
@@ -98,15 +111,12 @@ model_bytes = model.SerializeToString()
 size_grid = [100, 1000] if unit_test_going else [10**k for k in range(2, 9)]
 
 
-MAX_MEASURE_DURATION = 2.0
-
-
 def measure(
     func,
     repeat,
-    warmup=3,
+    warmup,
     number=1,
-    max_duration=MAX_MEASURE_DURATION,
+    max_duration=1.0,
 ):
     for _ in range(warmup):
         func()
@@ -243,9 +253,14 @@ def benchmark_phase(run, column, validate=True):
     rng = np.random.default_rng(0)
     for size in size_grid:
         inp = rng.uniform(-100.0, 100.0, size=size).astype(np.float32)
-        repeat = max(7, min(200, 2_000_000 // size))
         number = max(1, min(20, 10_000_000 // size))
-        rows_by_size[size][column] = measure(lambda inp=inp: run(inp), repeat, number=number)
+        rows_by_size[size][column] = measure(
+            lambda inp=inp: run(inp),
+            args.repeat,
+            args.warmup,
+            number=number,
+            max_duration=args.max_repeat_time,
+        )
         if validate:
             assert np.array_equal(run(inp), np.abs(inp)), size
 

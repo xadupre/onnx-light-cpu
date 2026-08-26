@@ -77,26 +77,37 @@ parser.add_argument(
     help="maximum number of matching cases to run (default: 1000; 0 disables the limit)",
 )
 parser.add_argument(
+    "-r",
     "--repeat",
     type=int,
-    default=None,
-    help="measured calls per runtime and case; defaults to an input-size-dependent count",
+    default=10 * (os.cpu_count() or 1),
+    help="maximum measured calls per runtime and case (default: 10 per CPU)",
 )
 parser.add_argument(
+    "-w",
     "--warmup",
     type=int,
-    default=3,
-    help="untimed warm-up calls per runtime and case (default: 3)",
+    default=2 * (os.cpu_count() or 1),
+    help="untimed warm-up calls per runtime and case (default: 2 per CPU)",
+)
+parser.add_argument(
+    "-t",
+    "--max-repeat-time",
+    type=float,
+    default=1.0,
+    help="maximum cumulative measurement time per runtime and case in seconds (default: 1)",
 )
 args, unknown_args = parser.parse_known_args()
 if args.max_cases < 0:
     parser.error("--max-cases must be greater than or equal to 0")
-if args.repeat is not None and args.repeat <= 0:
+if args.repeat <= 0:
     parser.error("--repeat must be greater than 0")
 if args.warmup < 0:
     parser.error("--warmup must be greater than or equal to 0")
+if args.max_repeat_time <= 0:
+    parser.error("--max-repeat-time must be greater than 0")
 for unknown_arg in unknown_args:
-    if unknown_arg.startswith(("--repeat", "--warm")):
+    if unknown_arg.startswith(("--repeat", "--warm", "--max-repeat-time")):
         parser.error(f"unrecognized timing option: {unknown_arg}")
 _name_filter = re.compile(args.filter) if args.filter else None
 
@@ -141,16 +152,12 @@ print(f"-- collected {len(_CASES)} cases")
 # Timing helper
 # -------------
 #
-# Each candidate gets ``--warmup`` untimed calls, then the median wall-clock
-# time is retained. By default, the measured repeat count shrinks as the case's
-# inputs grow, never falls below three, and may stop after two cumulative
-# seconds. An explicit ``--repeat`` runs exactly that many measured calls so
-# longer runs can reduce noise predictably.
-
-MAX_MEASURE_DURATION = 2.0
+# Each candidate gets ``--warmup`` untimed calls, then up to ``--repeat``
+# measured calls. Measurement stops once ``--max-repeat-time`` cumulative
+# seconds have elapsed, and the median wall-clock time is retained.
 
 
-def measure(func, repeat, warmup=3, max_duration=MAX_MEASURE_DURATION):
+def measure(func, repeat, warmup, max_duration):
     for _ in range(warmup):
         func()
     timings = []
@@ -164,17 +171,6 @@ def measure(func, repeat, warmup=3, max_duration=MAX_MEASURE_DURATION):
         if max_duration is not None and total_duration >= max_duration:
             break
     return float(np.median(timings))
-
-
-def _case_element_count(tc):
-    return max(
-        (
-            int(np.prod([int(d) for d in tensor.shape]))
-            for ds in tc.data_sets
-            for tensor in (*ds.inputs, *ds.outputs)
-        ),
-        default=1,
-    )
 
 
 # %%
@@ -200,8 +196,10 @@ register_kernels()
 # created. Both runtimes therefore keep their default spinning behavior
 # without leaving one runtime's live pool to perturb the other's measurements.
 print("-- benchmark onnx-light-cpu")
-repeat_description = args.repeat if args.repeat is not None else "adaptive"
-print(f"-- timing warmup={args.warmup} repeat={repeat_description}")
+print(
+    f"-- timing warmup={args.warmup} repeat={args.repeat} "
+    f"max_repeat_time={args.max_repeat_time:g}s"
+)
 measurements = []
 _progress = tqdm(_CASES, desc="benchmarking backend cases", unit="case")
 for tc in _progress:
@@ -220,17 +218,11 @@ for tc in _progress:
     clear_used_kernel_names()
     light_out = [np.array(output, copy=True) for output in light_session.run(None, feeds)]
     assert expected_kernel in used_kernel_names(), used_kernel_names()
-    repeat = (
-        args.repeat
-        if args.repeat is not None
-        else max(3, min(30, 20_000_000 // _case_element_count(tc)))
-    )
-    max_duration = None if args.repeat is not None else MAX_MEASURE_DURATION
     light_time = measure(
         lambda feeds=feeds, sess=light_session: sess.run(None, feeds),
-        repeat,
+        args.repeat,
         warmup=args.warmup,
-        max_duration=max_duration,
+        max_duration=args.max_repeat_time,
     )
     shapes = ",".join(
         "x".join(str(d) for d in array.shape) or "scalar" for array in feeds.values()
@@ -244,7 +236,6 @@ for tc in _progress:
             "feeds": feeds,
             "light_out": light_out,
             "light_time": light_time,
-            "repeat": repeat,
             "shapes": shapes,
             "dtypes": dtypes,
         }
@@ -284,9 +275,9 @@ for measurement in _progress:
                 )
         ort_time = measure(
             lambda feeds=measurement["feeds"], sess=ort_session: sess.run(None, feeds),
-            measurement["repeat"],
+            args.repeat,
             warmup=args.warmup,
-            max_duration=None if args.repeat is not None else MAX_MEASURE_DURATION,
+            max_duration=args.max_repeat_time,
         )
     rows.append(
         (

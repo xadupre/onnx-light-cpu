@@ -149,7 +149,7 @@ PARITY_DTYPES = ("float32", "float64")
 MEDIAN_GATE = 1.0
 MINIMUM_GATE = 0.9
 SINGLE_ROW_REGRESSION_GATE = 1.1
-MAX_MEASURE_DURATION = 2.0
+MAX_MEASURE_DURATION = 1.0
 
 
 def repeat_count(case: TreeEnsembleCase, minimum: int, maximum: int) -> int:
@@ -532,8 +532,13 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             return session.run(None, current_feeds)
 
         cpu_output = cpu_run()
-        repeat = repeat_count(case, args.minimum_repeats, args.maximum_repeats)
-        cpu_samples = measure_one(cpu_run, repeat=repeat, warmup=args.warmup)
+        repeat = args.repeat
+        cpu_samples = measure_one(
+            cpu_run,
+            repeat=repeat,
+            warmup=args.warmup,
+            max_duration=args.max_repeat_time,
+        )
         cpu_records[case.name] = {
             "output": cpu_output,
             "samples": cpu_samples,
@@ -578,6 +583,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             ort_run,
             repeat=cpu_record["repeat"],
             warmup=args.warmup,
+            max_duration=args.max_repeat_time,
         )
         cpu_samples = cpu_record["samples"]
         cpu_median = statistics.median(cpu_samples)
@@ -663,9 +669,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--cpus", default="", help="Linux CPU affinity, for example 0-3 or 0,2,4."
     )
     parser.add_argument("--case", action="append", default=[])
-    parser.add_argument("--warmup", type=int, default=3)
-    parser.add_argument("--minimum-repeats", type=int, default=7)
-    parser.add_argument("--maximum-repeats", type=int, default=31)
+    parser.add_argument("-r", "--repeat", type=int, default=10 * (os.cpu_count() or 1))
+    parser.add_argument("-w", "--warmup", type=int, default=2 * (os.cpu_count() or 1))
+    parser.add_argument("-t", "--max-repeat-time", type=float, default=MAX_MEASURE_DURATION)
     parser.add_argument("--preparation-repeats", type=int, default=3)
     parser.add_argument("--max-preparation-ratio", type=float, default=2.0)
     parser.add_argument("--workspace-budget-bytes", type=int, default=64 * 1024 * 1024)
@@ -675,8 +681,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     args = parser.parse_args(argv)
     if args.threads < 1:
         parser.error("--threads must be positive.")
-    if args.minimum_repeats < 1 or args.maximum_repeats < args.minimum_repeats:
-        parser.error("repeat bounds must be positive and ordered.")
+    if args.repeat < 1 or args.warmup < 0 or args.max_repeat_time <= 0:
+        parser.error("repeat and max-repeat-time must be positive and warmup non-negative.")
     if args.preparation_repeats < 1 or args.max_preparation_ratio <= 0:
         parser.error("preparation repeats and ratio must be positive.")
     if args.workspace_budget_bytes < 0:
