@@ -171,6 +171,15 @@ TEST(ProcessorPerformanceProfile, PhysicalPolicyProducesAtLeastOneParticipant) {
         return entry.policy == ProcessorThreadPolicy::kPhysical;
       });
   EXPECT_TRUE(has_physical_compute);
+
+  const auto l1 = std::find_if(profile.memory.begin(), profile.memory.end(), [](const auto &entry) {
+    return entry.level == MemoryProfileLevel::kL1 &&
+           entry.policy == ProcessorThreadPolicy::kPhysical;
+  });
+  ASSERT_NE(l1, profile.memory.end());
+  ASSERT_FALSE(l1->read_scaling.empty());
+  EXPECT_EQ(l1->read_scaling.front().participant_count, 1u);
+  EXPECT_EQ(l1->read_scaling.back().participant_count, profile.topology.physical_core_count);
 }
 
 TEST(ProcessorPerformanceProfile, LatencyOptedOutLeavesEveryLatencySlotAbsent) {

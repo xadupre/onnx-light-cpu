@@ -529,7 +529,10 @@ MemoryBandwidthResult MeasureMemoryBandwidth(MemoryProfileLevel level, MemoryTra
   bool affinity_pinned = false;
   if (policy == MemoryParticipantPolicy::kPhysical) {
     const CpuTopology &cpu_topology = GetCpuTopology();
-    participant_count = std::max<std::size_t>(cpu_topology.physical_core_count, 1);
+    participant_count = options.bandwidth_participant_count == 0
+                            ? std::max<std::size_t>(cpu_topology.physical_core_count, 1)
+                            : std::min(options.bandwidth_participant_count,
+                                       std::max<std::size_t>(cpu_topology.physical_core_count, 1));
     affinities = SelectCpuAffinities(cpu_topology, participant_count);
     if (!affinities.empty()) {
       participant_count = affinities.size();
@@ -541,6 +544,8 @@ MemoryBandwidthResult MeasureMemoryBandwidth(MemoryProfileLevel level, MemoryTra
     affinity_pinned = SetCurrentThreadAffinity(*options.explicit_single_affinity);
   }
 
+  result.participant_count = participant_count;
+  result.affinity_pinned = affinity_pinned;
   const MemoryWorkingSet working_set = SelectMemoryWorkingSet(
       GetCpuCacheTopology(), level, participant_count, options.memory_budget_bytes);
   if (!working_set.available) {
@@ -549,8 +554,6 @@ MemoryBandwidthResult MeasureMemoryBandwidth(MemoryProfileLevel level, MemoryTra
     return result;
   }
   result.working_set_bytes = working_set.working_set_bytes;
-  result.participant_count = participant_count;
-  result.affinity_pinned = affinity_pinned;
 
   constexpr std::size_t kElementBytes = sizeof(std::uint64_t);
   const MemoryTrafficAccounting accounting =
@@ -603,6 +606,36 @@ MemoryBandwidthResult MeasureMemoryBandwidth(MemoryProfileLevel level, MemoryTra
   result.dispersion_gbps = InterquartileRange(result.raw_gbps_samples);
   result.available = true;
   return result;
+}
+
+std::vector<std::size_t> MemoryBandwidthScalingParticipantCounts(std::size_t maximum) {
+  maximum = std::max<std::size_t>(maximum, 1);
+  std::vector<std::size_t> counts;
+  for (std::size_t count = 1; count <= maximum;) {
+    counts.push_back(count);
+    if (count > maximum / 2) {
+      break;
+    }
+    count *= 2;
+  }
+  if (counts.back() != maximum) {
+    counts.push_back(maximum);
+  }
+  return counts;
+}
+
+std::vector<MemoryBandwidthResult>
+MeasureMemoryBandwidthScaling(MemoryProfileLevel level, MemoryTrafficMode mode,
+                              const MemoryProfileOptions &options) {
+  const std::size_t maximum = std::max<std::size_t>(GetCpuTopology().physical_core_count, 1);
+  std::vector<MemoryBandwidthResult> results;
+  for (const std::size_t count : MemoryBandwidthScalingParticipantCounts(maximum)) {
+    MemoryProfileOptions point_options = options;
+    point_options.bandwidth_participant_count = count;
+    results.push_back(
+        MeasureMemoryBandwidth(level, mode, MemoryParticipantPolicy::kPhysical, point_options));
+  }
+  return results;
 }
 
 MemoryLatencyResult MeasureMemoryLatency(MemoryProfileLevel level, MemoryParticipantPolicy policy,
