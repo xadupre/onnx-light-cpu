@@ -45,16 +45,19 @@ roadmap is not implementation-ready and no implementation is active.
       - Why
     * - In progress
       - :doc:`Gemm and MatMul <2026/2026_08_gemm_matmul>`
-      - Restore float32 default-policy scaling and correct the parity gate while
-        retaining the shared matrix engine and low-precision paths.
-      - The expanded corpus exposed a multi-core scaling gap that the original
-        controlled-thread validation did not cover.
-    * - Planned
+      - Close the remaining transformer down-projection GEMM gap, then rerun
+        stable-affinity ``MatMulInteger`` AMX/VNNI parity and the complete
+        chained-GEMM gate.
+      - Up-projection and most integer shapes are near parity, but
+        down-projection remains around ``0.5x`` and noisy integer runs still
+        need a reproducible minimum-speedup result.
+    * - In progress
       - :doc:`Attention <2026/2026_08_attention>`
-      - Start the v23/v24 adapter and runtime-shaped materialized FP32 baseline,
-        then add complete semantics and bounded-memory streaming.
-      - Transformer inference needs bounded-memory attention without avoidable
-        score and head materialization.
+      - Retain the completed bounded-memory MHA path and close the remaining
+        FP32 GQA/MQA and rank-3 gaps after profiling the ONNX Runtime kernels
+        actually selected for those shapes.
+      - MHA priority cases reach parity, while grouped-query, multi-query, and
+        rank-3 execution still leave avoidable scheduling and traversal cost.
     * - Completed
       - :doc:`Exp and Log parity <2026/2026_08_exp_log_parity>`
       - Reach the published ONNX Runtime parity and numerical gates.
@@ -91,8 +94,11 @@ roadmap is not implementation-ready and no implementation is active.
       - Fixed worker limits and crossovers do not transfer across processors.
     * - Completed
       - :doc:`TreeEnsemble <2026/2026_08_tree_ensemble>`
-      - Deliver the prepared v5 engine, tuning, and final parity gate.
-      - ONNX-ML forests require predictable low-latency traversal and batching.
+      - Keep the typed in-place v5 engine, 24-byte runtime nodes, compact
+        post-preparation storage, and final parity/memory gate validated against
+        the merged ``onnx-light`` executor.
+      - The complete corpus, backend suite, and stable-memory rerun pass against
+        ``onnx-light`` commit ``002ec2d4``.
     * - Discussed
       - :doc:`SVM <2026/2026_08_svm>`
       - Add prepared SVM classification and regression kernels.
