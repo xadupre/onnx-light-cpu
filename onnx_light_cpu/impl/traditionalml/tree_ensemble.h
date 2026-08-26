@@ -411,13 +411,13 @@ struct TreeEnsembleLeaf {
 
 struct TreeEnsembleCompactNode {
   double split = 0.0;
-  float half_split = 0.0F;
   std::uint32_t feature_id = 0;
   std::uint32_t true_child = 0;
   std::uint32_t false_child = 0;
   std::uint8_t mode = 0;
   std::uint8_t flags = 0;
 };
+static_assert(sizeof(TreeEnsembleCompactNode) == 24);
 
 /// Immutable prepared representation for the ai.onnx.ml TreeEnsemble-5 schema.
 class TreeEnsemblePlan {

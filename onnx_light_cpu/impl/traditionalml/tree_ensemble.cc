@@ -1251,10 +1251,9 @@ TreeEnsemblePlan::TreeEnsemblePlan(TreeEnsembleAttributes attributes,
         (nodes_[index].true_is_leaf ? 1U : 0U) | (nodes_[index].false_is_leaf ? 2U : 0U) |
         (nodes_[index].missing_value_tracks_true ? 4U : 0U));
     if (!compact_nodes_.empty()) {
-      compact_nodes_[index] = {prepared_splits_[index],  prepared_half_splits_[index],
-                               feature_ids32_[index],    true_children32_[index],
-                               false_children32_[index], prepared_modes_[index],
-                               prepared_flags_[index]};
+      compact_nodes_[index] = {prepared_splits_[index], feature_ids32_[index],
+                               true_children32_[index], false_children32_[index],
+                               prepared_modes_[index],  prepared_flags_[index]};
     }
     if (nodes_[index].mode == TreeBranchMode::kMember) {
       std::vector<double> set;
@@ -1905,7 +1904,7 @@ void TreeEnsemblePlan::EvaluateIntoImpl(const T *input, std::size_t input_size, 
               : RoundValue(input_data[row * features + feature], attributes_.value_type);
       const double split = tuning_policy_.optimized_float16
                                ? static_cast<double>(hot       ? hot_half_splits_[node]
-                                                     : compact ? compact_nodes_[node].half_split
+                                                     : compact ? compact_nodes_[node].split
                                                                : prepared_half_splits_[node])
                                : (hot       ? hot_splits_[node]
                                   : compact ? compact_nodes_[node].split
