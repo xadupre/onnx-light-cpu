@@ -210,6 +210,20 @@ TEST(TreeEnsembleOracle, CanonicalPlanLowersAndEvaluatesDeterministically) {
   EXPECT_EQ(plan.Evaluate({-1.0, 3.0}, 2), (std::vector<double>{1.0, -1.0}));
 }
 
+TEST(TreeEnsembleOracle, RuntimeCompactionRetainsTypedEvaluationAndReleasesConstructionData) {
+  TreeEnsemblePlan plan(StumpForest(1024, 1));
+  const std::size_t prepared_bytes = plan.prepared_storage_bytes();
+  const std::vector<float> input{-1.0F, 1.0F};
+  std::vector<float> output(2);
+
+  plan.CompactRuntimeStorage();
+  plan.EvaluateInto(input.data(), input.size(), input.size(), output.data());
+
+  EXPECT_EQ(output, (std::vector<float>{256.5F, -255.5F}));
+  EXPECT_TRUE(plan.nodes().empty());
+  EXPECT_LT(plan.prepared_storage_bytes(), prepared_bytes / 2);
+}
+
 TEST(TreeEnsembleOracle, CanonicalPlanAppliesBaseValues) {
   TreeEnsembleAttributes attributes = Stump();
   attributes.value_type = TreeValueType::kFloat32;

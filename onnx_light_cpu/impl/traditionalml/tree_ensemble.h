@@ -34,8 +34,8 @@ enum class TreeAggregate : std::int64_t {
 
 enum class TreePostTransform : std::int64_t {
   kNone = 0,
-  kSoftmax = 1,
-  kLogistic = 2,
+  kLogistic = 1,
+  kSoftmax = 2,
   kSoftmaxZero = 3,
   kProbit = 4,
 };
@@ -429,6 +429,11 @@ public:
   explicit TreeEnsemblePlan(const TreeEnsembleClassifierAttributes &attributes);
 
   std::vector<double> Evaluate(const std::vector<double> &input, std::size_t rows) const;
+  void EvaluateInto(const float *input, std::size_t input_size, std::size_t rows,
+                    float *output) const;
+  void EvaluateInto(const double *input, std::size_t input_size, std::size_t rows,
+                    double *output) const;
+  void CompactRuntimeStorage();
   TreeEnsembleExecutionDecision SelectExecution(std::size_t rows,
                                                 std::size_t effective_threads = 0) const noexcept;
 
@@ -464,6 +469,9 @@ public:
   std::vector<TreeEnsembleCalibrationCandidate> GenerateCalibrationCandidates() const;
 
 private:
+  template <typename T>
+  void EvaluateIntoImpl(const T *input, std::size_t input_size, std::size_t rows, T *output) const;
+
   static std::string MakeModelSignature(const TreeEnsembleAttributes &attributes,
                                         const TreeEnsembleStructuralBuckets &buckets);
 

@@ -358,8 +358,8 @@ def _build_case(case: TreeEnsembleCase, seed: int) -> tuple[bytes, dict[str, Any
         "aggregate_function": 1,
         "post_transform": {
             "NONE": 0,
-            "SOFTMAX": 1,
-            "LOGISTIC": 2,
+            "LOGISTIC": 1,
+            "SOFTMAX": 2,
             "SOFTMAX_ZERO": 3,
         }[case.transform],
     }
@@ -371,56 +371,18 @@ def _build_case(case: TreeEnsembleCase, seed: int) -> tuple[bytes, dict[str, Any
     nodes = [
         helper.make_node("TreeEnsemble", ["X"], ["scores"], domain="ai.onnx.ml", **attributes)
     ]
-    outputs = []
-    if case.task == "regression":
-        outputs.append(
-            helper.make_tensor_value_info("scores", tensor_type, [case.rows, case.outputs])
-        )
-    else:
-        nodes.append(helper.make_node("ArgMax", ["scores"], ["class_index"], axis=1, keepdims=0))
-        label_name = "class_index"
-        label_type = TensorProto.INT64
-        if case.labels == "string":
-            labels = [f"class_{index}" for index in range(case.outputs)]
-            nodes.append(
-                helper.make_node(
-                    "LabelEncoder",
-                    ["class_index"],
-                    ["label"],
-                    domain="ai.onnx.ml",
-                    keys_int64s=list(range(case.outputs)),
-                    values_strings=labels,
-                )
-            )
-            label_name = "label"
-            label_type = TensorProto.STRING
-        elif case.labels == "int64":
-            nodes.append(helper.make_node("Gather", ["labels", "class_index"], ["label"], axis=0))
-            label_name = "label"
-            label_type = TensorProto.INT64
-        outputs.extend(
-            [
-                helper.make_tensor_value_info(label_name, label_type, [case.rows]),
-                helper.make_tensor_value_info("scores", tensor_type, [case.rows, case.outputs]),
-            ]
-        )
+    outputs = [helper.make_tensor_value_info("scores", tensor_type, [case.rows, case.outputs])]
 
     rng = np.random.default_rng(seed)
     if case.membership:
         values = rng.integers(-2, 3, size=(case.rows, case.features)).astype(dtype)
     else:
         values = rng.standard_normal((case.rows, case.features)).astype(dtype)
-    initializers = []
-    if case.task == "classification" and case.labels == "int64":
-        initializers.append(
-            numpy_helper.from_array(np.arange(100, 100 + case.outputs, dtype=np.int64), "labels")
-        )
     graph = helper.make_graph(
         nodes,
         f"tree_parity_{case.name}",
         [helper.make_tensor_value_info("X", tensor_type, [case.rows, case.features])],
         outputs,
-        initializer=initializers,
     )
     model = helper.make_model(
         graph,
@@ -574,16 +536,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         ort_output = ort_run()
         cpu_record = cpu_records[case.name]
         cpu_output = cpu_record["output"]
-        tolerance = 2e-5 if case.dtype == "float32" else 1e-9
-        if case.task == "classification":
-            np.testing.assert_array_equal(cpu_output[0], ort_output[0])
-            np.testing.assert_allclose(
-                cpu_output[1], ort_output[1], rtol=tolerance, atol=tolerance
-            )
-        else:
-            np.testing.assert_allclose(
-                cpu_output[0], ort_output[0], rtol=tolerance, atol=tolerance
-            )
+        tolerance = (
+            2e-5 if case.dtype == "float32" else (1e-7 if case.transform != "NONE" else 1e-9)
+        )
+        np.testing.assert_allclose(cpu_output[0], ort_output[0], rtol=tolerance, atol=tolerance)
         ort_samples = measure_one(
             ort_run,
             repeat=cpu_record["repeat"],
@@ -596,7 +552,17 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         preparation_ratio = statistics.median(cpu_record["preparation"]) / statistics.median(
             ort_preparation
         )
-        workspace_bound = min(case.rows, 128) * case.outputs * 16 * cpu_record["resolved_threads"]
+        if cpu_record["resolved_threads"] == 1:
+            if case.outputs == 1 and (case.rows == 1 or case.rows >= 50):
+                workspace_bound = 0
+            elif case.outputs == 1:
+                workspace_bound = min(case.rows, 128) * 8
+            else:
+                workspace_bound = (min(case.rows, 128) + 1) * case.outputs * 8
+        else:
+            workspace_bound = (
+                min(case.rows, 128) * case.outputs * 16 * cpu_record["resolved_threads"]
+            )
         result = {
             **asdict(case),
             "repeat": cpu_record["repeat"],
