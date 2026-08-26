@@ -9,6 +9,7 @@ case. The largest forest contains 10,000 trees and the widest input contains
 4,096 features, both representative of production models.
 """
 
+import argparse
 import json
 import os
 from pathlib import Path
@@ -19,6 +20,18 @@ import tempfile
 import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm, TwoSlopeNorm
 import numpy as np
+
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("-r", "--repeat", type=int, default=10 * (os.cpu_count() or 1))
+parser.add_argument("-w", "--warmup", type=int, default=2 * (os.cpu_count() or 1))
+parser.add_argument("-t", "--max-repeat-time", type=float, default=1.0)
+args, _ = parser.parse_known_args()
+if args.repeat <= 0:
+    parser.error("--repeat must be greater than 0")
+if args.warmup < 0:
+    parser.error("--warmup must be greater than or equal to 0")
+if args.max_repeat_time <= 0:
+    parser.error("--max-repeat-time must be greater than 0")
 
 runner_name = Path("tools") / "benchmark_tree_ensemble_parity.py"
 root = None
@@ -41,13 +54,10 @@ if os.environ.get("UNITTEST_GOING"):
     tree_counts = (10, 100)
     feature_counts = (4, 64)
     batch_sizes = (1, 32)
-    minimum_repeats = maximum_repeats = "2"
 else:
     tree_counts = (10, 100, 1000, 10000)
     feature_counts = (4, 16, 64, 256, 1024, 4096)
     batch_sizes = (1, 8, 32, 128)
-    minimum_repeats = "2"
-    maximum_repeats = "7"
 cases = [
     f"reg_grid_t{trees}_f{features}_b{batch}_f32"
     for trees in tree_counts
@@ -63,11 +73,11 @@ with tempfile.TemporaryDirectory() as temporary:
         "--threads",
         str(min(4, os.cpu_count() or 1)),
         "--warmup",
-        "1",
-        "--minimum-repeats",
-        minimum_repeats,
-        "--maximum-repeats",
-        maximum_repeats,
+        str(args.warmup),
+        "--repeat",
+        str(args.repeat),
+        "--max-repeat-time",
+        str(args.max_repeat_time),
         "--preparation-repeats",
         "1",
         "--output",

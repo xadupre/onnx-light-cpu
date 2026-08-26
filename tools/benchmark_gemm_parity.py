@@ -151,22 +151,40 @@ def render_comparison_table(results: Sequence[dict[str, Any]]) -> str:
 
 
 def measure_alternating(
-    functions: Sequence[Callable[[], Any]], repeat: int, warmup: int
+    functions: Sequence[Callable[[], Any]],
+    repeat: int,
+    warmup: int,
+    max_repeat_time: float = 1.0,
 ) -> tuple[list[float], ...]:
+    warmup_durations = [0.0] * len(functions)
     for iteration in range(warmup):
         for offset in range(len(functions)):
-            functions[(iteration + offset) % len(functions)]()
+            index = (iteration + offset) % len(functions)
+            if warmup_durations[index] >= max_repeat_time:
+                continue
+            start = time.perf_counter_ns()
+            functions[index]()
+            warmup_durations[index] += (time.perf_counter_ns() - start) / 1e9
+        if all(duration >= max_repeat_time for duration in warmup_durations):
+            break
 
     timings: tuple[list[float], ...] = tuple([] for _ in functions)
+    total_durations = [0.0] * len(functions)
     gc_enabled = gc.isenabled()
     gc.disable()
     try:
         for iteration in range(repeat):
             for offset in range(len(functions)):
                 index = (iteration + offset) % len(functions)
+                if total_durations[index] >= max_repeat_time:
+                    continue
                 start = time.perf_counter_ns()
                 functions[index]()
-                timings[index].append((time.perf_counter_ns() - start) / 1e9)
+                duration = (time.perf_counter_ns() - start) / 1e9
+                timings[index].append(duration)
+                total_durations[index] += duration
+            if all(duration >= max_repeat_time for duration in total_durations):
+                break
     finally:
         if gc_enabled:
             gc.enable()
@@ -396,7 +414,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             return session.run(None, feeds)[0]
 
         output = execute()
-        samples = measure_alternating((execute,), repeat=repeat, warmup=args.warmup)[0]
+        samples = measure_alternating((execute,), repeat, args.warmup, args.max_repeat_time)[0]
         return (
             output,
             samples,
@@ -415,14 +433,14 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             return session.run(None, feeds)[0]
 
         output = execute()
-        samples = measure_alternating((execute,), repeat=repeat, warmup=args.warmup)[0]
+        samples = measure_alternating((execute,), repeat, args.warmup, args.max_repeat_time)[0]
         return output, samples
 
     for dtype_index, dtype_name in enumerate(dtype_names):
         for case_index, case in enumerate(selected_cases):
             rng = np.random.default_rng(1000 * dtype_index + case_index)
             model_bytes, feeds = _build_case(case, dtype_name, rng)
-            repeat = repeat_count(case, args.minimum_repeats, args.maximum_repeats)
+            repeat = args.repeat
             if (dtype_index + case_index) % 2 == 0:
                 cpu_output, cpu_samples, session_threads, session_affinity = measure_cpu(
                     model_bytes, feeds, repeat
@@ -496,7 +514,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--cpus", default="", help="Linux CPU affinity, for example 0-3 or 0,2,4."
     )
-    parser.add_argument("--warmup", type=int, default=3)
+    parser.add_argument("-r", "--repeat", type=int, default=10 * (os.cpu_count() or 1))
+    parser.add_argument("-w", "--warmup", type=int, default=2 * (os.cpu_count() or 1))
+    parser.add_argument("-t", "--max-repeat-time", type=float, default=1.0)
     parser.add_argument("--dtype", choices=("all", *PARITY_DTYPES), default="all")
     parser.add_argument("--operator", choices=("all", "gemm", "matmul"), default="all")
     parser.add_argument(
@@ -505,8 +525,6 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         default=[],
         help="Run only this named case; may be repeated.",
     )
-    parser.add_argument("--minimum-repeats", type=int, default=7)
-    parser.add_argument("--maximum-repeats", type=int, default=31)
     parser.add_argument("--output", type=Path, default=Path("gemm_fp_parity_results.json"))
     parser.add_argument(
         "--enforce", action="store_true", help="Exit nonzero when the gate fails."
@@ -514,8 +532,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     args = parser.parse_args(argv)
     if args.threads is not None and args.threads < 1:
         parser.error("--threads must be positive.")
-    if args.minimum_repeats < 1 or args.maximum_repeats < args.minimum_repeats:
-        parser.error("repeat bounds must be positive and ordered.")
+    if args.repeat < 1 or args.warmup < 0 or args.max_repeat_time <= 0:
+        parser.error("repeat and max-repeat-time must be positive and warmup non-negative.")
     return args
 
 

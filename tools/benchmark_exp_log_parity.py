@@ -23,21 +23,39 @@ THREAD_COUNTS = ("1", "2", "4", "physical")
 
 
 def measure_alternating(
-    functions: Sequence[Callable[[], Any]], repeat: int, warmup: int
+    functions: Sequence[Callable[[], Any]],
+    repeat: int,
+    warmup: int,
+    max_repeat_time: float = 1.0,
 ) -> tuple[list[float], ...]:
+    warmup_durations = [0.0] * len(functions)
     for iteration in range(warmup):
         for offset in range(len(functions)):
-            functions[(iteration + offset) % len(functions)]()
+            index = (iteration + offset) % len(functions)
+            if warmup_durations[index] >= max_repeat_time:
+                continue
+            start = time.perf_counter_ns()
+            functions[index]()
+            warmup_durations[index] += (time.perf_counter_ns() - start) / 1e9
+        if all(duration >= max_repeat_time for duration in warmup_durations):
+            break
     samples: tuple[list[float], ...] = tuple([] for _ in functions)
+    total_durations = [0.0] * len(functions)
     enabled = gc.isenabled()
     gc.disable()
     try:
         for iteration in range(repeat):
             for offset in range(len(functions)):
                 index = (iteration + offset) % len(functions)
+                if total_durations[index] >= max_repeat_time:
+                    continue
                 start = time.perf_counter_ns()
                 functions[index]()
-                samples[index].append((time.perf_counter_ns() - start) / 1e9)
+                duration = (time.perf_counter_ns() - start) / 1e9
+                samples[index].append(duration)
+                total_durations[index] += duration
+            if all(duration >= max_repeat_time for duration in total_durations):
+                break
     finally:
         if enabled:
             gc.enable()
@@ -182,7 +200,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
             np.testing.assert_allclose(cpu_run(), ort_run(), rtol=2e-5, atol=2e-6)
             cpu_samples, ort_samples = measure_alternating(
-                (cpu_run, ort_run), args.repeat, args.warmup
+                (cpu_run, ort_run), args.repeat, args.warmup, args.max_repeat_time
             )
             cpu_median = statistics.median(cpu_samples)
             ort_median = statistics.median(ort_samples)
@@ -240,16 +258,17 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--cpus", default="", help="Linux CPU affinity, for example 0-3 or 0,2,4."
     )
     parser.add_argument("--size", dest="sizes", action="append", type=int, default=None)
-    parser.add_argument("--repeat", type=int, default=7)
-    parser.add_argument("--warmup", type=int, default=3)
+    parser.add_argument("-r", "--repeat", type=int, default=10 * (os.cpu_count() or 1))
+    parser.add_argument("-w", "--warmup", type=int, default=2 * (os.cpu_count() or 1))
+    parser.add_argument("-t", "--max-repeat-time", type=float, default=1.0)
     parser.add_argument("--output", type=Path, default=Path("exp_log_parity_results.json"))
     parser.add_argument(
         "--enforce", action="store_true", help="Exit nonzero when the parity gate fails."
     )
     args = parser.parse_args(argv)
     args.sizes = tuple(args.sizes or SIZES)
-    if args.repeat < 1 or args.warmup < 0:
-        parser.error("repeat must be positive and warmup must be non-negative")
+    if args.repeat < 1 or args.warmup < 0 or args.max_repeat_time <= 0:
+        parser.error("repeat and max-repeat-time must be positive and warmup non-negative")
     return args
 
 

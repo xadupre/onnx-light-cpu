@@ -8,6 +8,7 @@ Exp and Log CPU kernels. Each runtime is measured in a separate phase so that
 persistent worker pools do not perturb measurements of another candidate.
 """
 
+import argparse
 import gc
 import os
 import statistics
@@ -20,6 +21,18 @@ import onnxruntime
 from onnx_light.onnx import TensorProto, helper
 from onnx_light.onnx.reference import ReferenceEvaluator
 from onnx_light_cpu import register_kernels
+
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("-r", "--repeat", type=int, default=10 * (os.cpu_count() or 1))
+parser.add_argument("-w", "--warmup", type=int, default=2 * (os.cpu_count() or 1))
+parser.add_argument("-t", "--max-repeat-time", type=float, default=1.0)
+args, _ = parser.parse_known_args()
+if args.repeat <= 0:
+    parser.error("--repeat must be greater than 0")
+if args.warmup < 0:
+    parser.error("--warmup must be greater than or equal to 0")
+if args.max_repeat_time <= 0:
+    parser.error("--max-repeat-time must be greater than 0")
 
 
 def make_model(op_type):
@@ -49,14 +62,17 @@ def make_ort_session(model, threads):
     )
 
 
-MAX_MEASURE_DURATION = 2.0
-
-
-def measure(run, arrays, repeat, max_duration=MAX_MEASURE_DURATION):
+def measure(run, arrays, repeat, warmup, max_duration):
     """Measures median inference times for all arrays."""
-    run(arrays[0])
     results = []
     for array in arrays:
+        warmup_duration = 0.0
+        for _ in range(warmup):
+            begin = time.perf_counter()
+            run(array)
+            warmup_duration += time.perf_counter() - begin
+            if warmup_duration >= max_duration:
+                break
         samples = []
         total_duration = 0.0
         for _ in range(repeat):
@@ -74,13 +90,11 @@ def measure(run, arrays, repeat, max_duration=MAX_MEASURE_DURATION):
 threads = min(4, os.cpu_count() or 1)
 if os.environ.get("UNITTEST_GOING"):
     sizes = np.array([1024, 65536, 131072], dtype=np.int64)
-    repeat = 2
 else:
     sizes = np.array(
         [1024, 32768, 65535, 65536, 131071, 131072, 262144, 1048576, 4194304],
         dtype=np.int64,
     )
-    repeat = 10
 
 rng = np.random.default_rng(42)
 exp_arrays = [rng.uniform(-4, 4, int(size)).astype(np.float32) for size in sizes]
@@ -114,10 +128,18 @@ for op_type, arrays in (("Exp", exp_arrays), ("Log", log_arrays)):
         cpu.run(None, {"X": arrays[-1]})[0], expected, rtol=2e-5, atol=2e-6
     )
     all_times[op_type]["onnx-light"] = measure(
-        lambda array, current=builtin: current.run(None, {"X": array}), arrays, repeat
+        lambda array, current=builtin: current.run(None, {"X": array}),
+        arrays,
+        args.repeat,
+        args.warmup,
+        args.max_repeat_time,
     )
     all_times[op_type]["onnx-light-cpu"] = measure(
-        lambda array, current=cpu: current.run(None, {"X": array}), arrays, repeat
+        lambda array, current=cpu: current.run(None, {"X": array}),
+        arrays,
+        args.repeat,
+        args.warmup,
+        args.max_repeat_time,
     )
 
 del builtin
@@ -128,7 +150,9 @@ gc.collect()
 
 for op_type, arrays in (("Exp", exp_arrays), ("Log", log_arrays)):
     numpy_op = np.exp if op_type == "Exp" else np.log
-    all_times[op_type]["NumPy"] = measure(numpy_op, arrays, repeat)
+    all_times[op_type]["NumPy"] = measure(
+        numpy_op, arrays, args.repeat, args.warmup, args.max_repeat_time
+    )
 
 ort_sessions = {op_type: make_ort_session(model, threads) for op_type, model in models.items()}
 for op_type, arrays in (("Exp", exp_arrays), ("Log", log_arrays)):
@@ -141,7 +165,11 @@ for op_type, arrays in (("Exp", exp_arrays), ("Log", log_arrays)):
         atol=2e-6,
     )
     all_times[op_type]["ONNX Runtime"] = measure(
-        lambda array, current=ort: current.run(None, {"X": array}), arrays, repeat
+        lambda array, current=ort: current.run(None, {"X": array}),
+        arrays,
+        args.repeat,
+        args.warmup,
+        args.max_repeat_time,
     )
 
 for op_type in ("Exp", "Log"):

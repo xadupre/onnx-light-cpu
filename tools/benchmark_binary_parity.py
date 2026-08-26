@@ -96,24 +96,41 @@ def parse_case_name(name: str) -> dict[str, Any]:
 
 
 def measure_alternating(
-    functions: Sequence[Callable[[], Any]], repeat: int, warmup: int
+    functions: Sequence[Callable[[], Any]],
+    repeat: int,
+    warmup: int,
+    max_repeat_time: float = 1.0,
 ) -> tuple[tuple[list[float], ...], list[list[str]]]:
+    warmup_durations = [0.0] * len(functions)
     labels = ("onnx-light-cpu", "onnxruntime")
     for iteration in range(warmup):
         for offset in range(len(functions)):
-            functions[(iteration + offset) % len(functions)]()
+            index = (iteration + offset) % len(functions)
+            if warmup_durations[index] >= max_repeat_time:
+                continue
+            start = time.perf_counter_ns()
+            functions[index]()
+            warmup_durations[index] += (time.perf_counter_ns() - start) / 1e9
+        if all(duration >= max_repeat_time for duration in warmup_durations):
+            break
     samples: tuple[list[float], ...] = tuple([] for _ in functions)
+    total_durations = [0.0] * len(functions)
     orders: list[list[str]] = []
     enabled = gc.isenabled()
     gc.disable()
     try:
         for iteration in range(repeat):
             order = [(iteration + offset) % len(functions) for offset in range(len(functions))]
+            order = [index for index in order if total_durations[index] < max_repeat_time]
+            if not order:
+                break
             orders.append([labels[index] for index in order])
             for index in order:
                 start = time.perf_counter_ns()
                 functions[index]()
-                samples[index].append((time.perf_counter_ns() - start) / 1e9)
+                duration = (time.perf_counter_ns() - start) / 1e9
+                samples[index].append(duration)
+                total_durations[index] += duration
     finally:
         if enabled:
             gc.enable()
@@ -494,7 +511,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     equal_nan=True,
                 )
             (cpu_samples, ort_samples), orders = measure_alternating(
-                (cpu_run, ort_run), args.repeat, args.warmup
+                (cpu_run, ort_run), args.repeat, args.warmup, args.max_repeat_time
             )
             cpu_median = statistics.median(cpu_samples)
             ort_median = statistics.median(ort_samples)
@@ -602,8 +619,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--case", action="append", default=[], help="Case-name regex.")
     parser.add_argument("--threads", action="append", choices=THREAD_POLICIES, default=None)
     parser.add_argument("--cpus", default="", help="Linux CPU affinity, for example 0-3,8.")
-    parser.add_argument("--repeat", type=int, default=7)
-    parser.add_argument("--warmup", type=int, default=3)
+    parser.add_argument("-r", "--repeat", type=int, default=10 * (os.cpu_count() or 1))
+    parser.add_argument("-w", "--warmup", type=int, default=2 * (os.cpu_count() or 1))
+    parser.add_argument("-t", "--max-repeat-time", type=float, default=1.0)
     parser.add_argument(
         "--calibrate",
         action=argparse.BooleanOptionalAction,
@@ -619,6 +637,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     if (
         args.repeat < 1
         or args.warmup < 0
+        or args.max_repeat_time <= 0
         or args.calibration_duration_ms < 0
         or args.calibration_memory_bytes < 0
     ):

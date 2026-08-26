@@ -148,15 +148,17 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             return session.run(None, current_feeds)[0]
 
         numpy.testing.assert_array_equal(cpu_run(), ort_run())
-        repeat = repeat_count(case, args.minimum_repeats, args.maximum_repeats)
         cpu_samples, ort_samples = measure_alternating(
-            (cpu_run, ort_run), repeat=repeat, warmup=args.warmup
+            (cpu_run, ort_run),
+            args.repeat,
+            args.warmup,
+            args.max_repeat_time,
         )
         cpu_median = statistics.median(cpu_samples)
         ort_median = statistics.median(ort_samples)
         result = {
             **asdict(case),
-            "repeat": repeat,
+            "repeat": args.repeat,
             "cpu_samples_seconds": cpu_samples,
             "ort_samples_seconds": ort_samples,
             "cpu_median_seconds": cpu_median,
@@ -188,13 +190,16 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--cpus", default="", help="Linux CPU affinity, for example 0-3 or 0,2,4."
     )
-    parser.add_argument("--warmup", type=int, default=3)
+    parser.add_argument("-r", "--repeat", type=int, default=10 * (os.cpu_count() or 1))
+    parser.add_argument("-w", "--warmup", type=int, default=2 * (os.cpu_count() or 1))
+    parser.add_argument("-t", "--max-repeat-time", type=float, default=1.0)
     parser.add_argument("--case", action="append", default=[])
-    parser.add_argument("--minimum-repeats", type=int, default=7)
-    parser.add_argument("--maximum-repeats", type=int, default=31)
     parser.add_argument("--output", type=Path, default=Path("integer_gemm_parity_results.json"))
     parser.add_argument("--enforce", action="store_true")
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.repeat < 1 or args.warmup < 0 or args.max_repeat_time <= 0:
+        parser.error("repeat and max-repeat-time must be positive and warmup non-negative.")
+    return args
 
 
 def main(argv: Sequence[str] | None = None) -> int:
