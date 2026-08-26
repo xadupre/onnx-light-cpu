@@ -122,8 +122,8 @@ std::vector<TreeBranchMode> ReadNodeModes(const NodeProto &node) {
   return modes;
 }
 
-onnx_light_cpu::DataType ValueType(std::int32_t data_type) {
-  switch (static_cast<DataType>(data_type)) {
+onnx_light_cpu::DataType ValueType(onnx_light_cpu::DataType data_type) {
+  switch (data_type) {
   case DataType::FLOAT:
     return onnx_light_cpu::DataType::FLOAT;
   case DataType::DOUBLE:
@@ -140,7 +140,7 @@ TreeEnsembleAttributes BuildAttributes(const NodeProto &node, const Tensor &inpu
   TreeEnsembleAttributes attributes;
   attributes.n_features = input.shape[1];
   attributes.n_targets = rt_ns::GetAttributeIntOrDefault(node, "n_targets", 1);
-  attributes.value_type = ValueType(input.data_type);
+  attributes.value_type = ValueType(static_cast<onnx_light_cpu::DataType>(input.data_type));
   attributes.aggregate =
       static_cast<TreeAggregate>(rt_ns::GetAttributeIntOrDefault(node, "aggregate_function", 1));
   attributes.post_transform =
