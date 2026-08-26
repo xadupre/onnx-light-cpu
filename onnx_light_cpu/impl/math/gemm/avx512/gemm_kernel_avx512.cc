@@ -13,7 +13,7 @@
 //
 // Mirrors the AVX (256-bit) micro-kernels in gemm_kernel.cc one register
 // width up: a 512-bit vector holds 16 floats / 8 doubles, and every
-// micro-kernel call processes up to ``kGemmAVX512MR`` (6) rows at once,
+// micro-kernel call processes up to ``kGemmAVX512MR`` (12) rows at once,
 // register blocked over the whole (chunked) K reduction. Like the AVX/SSE2
 // kernels, the main loop processes two vectors of columns per step (``NR = 2``)
 // so each broadcast A element is reused across twice the column width,
@@ -44,8 +44,10 @@ template <std::size_t MR>
 void GemmMicroKernel_AVX512_F32Impl(std::size_t nb, std::size_t K, float alpha, float beta,
                                     const float *Bmat, std::size_t N, const float *Crow_base,
                                     std::size_t Cstride, float *Yrow_base, std::size_t Ystride,
-                                    std::size_t n0, GemmAccumMode mode, const float *Apack) {
+                                    std::size_t n0, GemmAccumMode mode, const float *Apack,
+                                    std::size_t AStride = 0) {
   static_assert(MR >= 1 && MR <= kGemmAVX512MR);
+  AStride = AStride == 0 ? K : AStride;
   const __m512 valpha = _mm512_set1_ps(alpha);
   const __m512 vbeta = _mm512_set1_ps(beta);
   const bool alpha_is_one = alpha == 1.0f;
@@ -67,7 +69,7 @@ void GemmMicroKernel_AVX512_F32Impl(std::size_t nb, std::size_t K, float alpha, 
         PrefetchT0(Brow + kGemmPrefetchDistanceK * N);
       }
       for (std::size_t r = 0; r < MR; ++r) {
-        const __m512 va = _mm512_set1_ps(Apack[r * K + k]);
+        const __m512 va = _mm512_set1_ps(Apack[r * AStride + k]);
         acc0[r] = MulAdd(va, vb0, acc0[r]);
         acc1[r] = MulAdd(va, vb1, acc1[r]);
       }
@@ -109,7 +111,7 @@ void GemmMicroKernel_AVX512_F32Impl(std::size_t nb, std::size_t K, float alpha, 
     const auto accumulate_k = [&](std::size_t k) {
       const __m512 vb = _mm512_loadu_ps(Bmat + k * N + n0 + n);
       for (std::size_t r = 0; r < MR; ++r) {
-        const __m512 va = _mm512_set1_ps(Apack[r * K + k]);
+        const __m512 va = _mm512_set1_ps(Apack[r * AStride + k]);
         acc[r] = MulAdd(va, vb, acc[r]);
       }
     };
@@ -246,6 +248,277 @@ void GemmMicroKernel_AVX512_F64Impl(std::size_t nb, std::size_t K, double alpha,
   }
 }
 
+void GemmMicroKernel_AVX512_F32_MR12(std::size_t nb, std::size_t K, float alpha, float beta,
+                                     const float *Bmat, std::size_t N, const float *Crow_base,
+                                     std::size_t Cstride, float *Yrow_base, std::size_t Ystride,
+                                     std::size_t n0, GemmAccumMode mode, const float *Apack,
+                                     std::size_t AStride) {
+  if (nb != 32) {
+    return GemmMicroKernel_AVX512_F32Impl<12>(nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
+                                              Yrow_base, Ystride, n0, mode, Apack, AStride);
+  }
+
+#define DECLARE_ACCUMULATORS(R)                                                                    \
+  __m512 acc0_##R = _mm512_setzero_ps();                                                           \
+  __m512 acc1_##R = _mm512_setzero_ps()
+  DECLARE_ACCUMULATORS(0);
+  DECLARE_ACCUMULATORS(1);
+  DECLARE_ACCUMULATORS(2);
+  DECLARE_ACCUMULATORS(3);
+  DECLARE_ACCUMULATORS(4);
+  DECLARE_ACCUMULATORS(5);
+  DECLARE_ACCUMULATORS(6);
+  DECLARE_ACCUMULATORS(7);
+  DECLARE_ACCUMULATORS(8);
+  DECLARE_ACCUMULATORS(9);
+  DECLARE_ACCUMULATORS(10);
+  DECLARE_ACCUMULATORS(11);
+#undef DECLARE_ACCUMULATORS
+
+  for (std::size_t k = 0; k < K; ++k) {
+    const float *b_row = Bmat + k * N + n0;
+    const __m512 vb0 = _mm512_loadu_ps(b_row);
+    const __m512 vb1 = _mm512_loadu_ps(b_row + 16);
+    if (k + kGemmPrefetchDistanceK < K) {
+      PrefetchT0(b_row + kGemmPrefetchDistanceK * N);
+    }
+#define ACCUMULATE_ROW(R)                                                                          \
+  do {                                                                                             \
+    const __m512 va = _mm512_set1_ps(Apack[(R) * AStride + k]);                                    \
+    acc0_##R = MulAdd(va, vb0, acc0_##R);                                                          \
+    acc1_##R = MulAdd(va, vb1, acc1_##R);                                                          \
+  } while (false)
+    ACCUMULATE_ROW(0);
+    ACCUMULATE_ROW(1);
+    ACCUMULATE_ROW(2);
+    ACCUMULATE_ROW(3);
+    ACCUMULATE_ROW(4);
+    ACCUMULATE_ROW(5);
+    ACCUMULATE_ROW(6);
+    ACCUMULATE_ROW(7);
+    ACCUMULATE_ROW(8);
+    ACCUMULATE_ROW(9);
+    ACCUMULATE_ROW(10);
+    ACCUMULATE_ROW(11);
+#undef ACCUMULATE_ROW
+  }
+
+  const __m512 valpha = _mm512_set1_ps(alpha);
+  const __m512 vbeta = _mm512_set1_ps(beta);
+  const bool alpha_is_one = alpha == 1.0f;
+  const bool beta_is_one = beta == 1.0f;
+#define STORE_ROW(R)                                                                               \
+  do {                                                                                             \
+    float *y_row = Yrow_base + (R) * Ystride + n0;                                                 \
+    __m512 result0 = alpha_is_one ? acc0_##R : _mm512_mul_ps(valpha, acc0_##R);                    \
+    __m512 result1 = alpha_is_one ? acc1_##R : _mm512_mul_ps(valpha, acc1_##R);                    \
+    if (mode == GemmAccumMode::kInitBias) {                                                        \
+      const float *c_row = Crow_base + (R) * Cstride + n0;                                         \
+      const __m512 bias0 = _mm512_loadu_ps(c_row);                                                 \
+      const __m512 bias1 = _mm512_loadu_ps(c_row + 16);                                            \
+      result0 = _mm512_add_ps(result0, beta_is_one ? bias0 : _mm512_mul_ps(vbeta, bias0));         \
+      result1 = _mm512_add_ps(result1, beta_is_one ? bias1 : _mm512_mul_ps(vbeta, bias1));         \
+    } else if (mode == GemmAccumMode::kAccumulate) {                                               \
+      result0 = _mm512_add_ps(result0, _mm512_loadu_ps(y_row));                                    \
+      result1 = _mm512_add_ps(result1, _mm512_loadu_ps(y_row + 16));                               \
+    }                                                                                              \
+    _mm512_storeu_ps(y_row, result0);                                                              \
+    _mm512_storeu_ps(y_row + 16, result1);                                                         \
+  } while (false)
+  STORE_ROW(0);
+  STORE_ROW(1);
+  STORE_ROW(2);
+  STORE_ROW(3);
+  STORE_ROW(4);
+  STORE_ROW(5);
+  STORE_ROW(6);
+  STORE_ROW(7);
+  STORE_ROW(8);
+  STORE_ROW(9);
+  STORE_ROW(10);
+  STORE_ROW(11);
+#undef STORE_ROW
+}
+
+void GemmMicroKernel_AVX512_F32_MR12_NR16(std::size_t K, float alpha, float beta, const float *Bmat,
+                                          std::size_t N, const float *Crow_base,
+                                          std::size_t Cstride, float *Yrow_base,
+                                          std::size_t Ystride, std::size_t n0, GemmAccumMode mode,
+                                          const float *A, std::size_t AStride) {
+#define DECLARE_ACCUMULATOR(R) __m512 acc_##R = _mm512_setzero_ps()
+  DECLARE_ACCUMULATOR(0);
+  DECLARE_ACCUMULATOR(1);
+  DECLARE_ACCUMULATOR(2);
+  DECLARE_ACCUMULATOR(3);
+  DECLARE_ACCUMULATOR(4);
+  DECLARE_ACCUMULATOR(5);
+  DECLARE_ACCUMULATOR(6);
+  DECLARE_ACCUMULATOR(7);
+  DECLARE_ACCUMULATOR(8);
+  DECLARE_ACCUMULATOR(9);
+  DECLARE_ACCUMULATOR(10);
+  DECLARE_ACCUMULATOR(11);
+#undef DECLARE_ACCUMULATOR
+
+  for (std::size_t k = 0; k < K; ++k) {
+    const float *b_row = Bmat + k * N + n0;
+    const __m512 vb = _mm512_loadu_ps(b_row);
+    if (k + kGemmPrefetchDistanceK < K) {
+      PrefetchT0(b_row + kGemmPrefetchDistanceK * N);
+    }
+#define ACCUMULATE_ROW(R) acc_##R = MulAdd(_mm512_set1_ps(A[(R) * AStride + k]), vb, acc_##R)
+    ACCUMULATE_ROW(0);
+    ACCUMULATE_ROW(1);
+    ACCUMULATE_ROW(2);
+    ACCUMULATE_ROW(3);
+    ACCUMULATE_ROW(4);
+    ACCUMULATE_ROW(5);
+    ACCUMULATE_ROW(6);
+    ACCUMULATE_ROW(7);
+    ACCUMULATE_ROW(8);
+    ACCUMULATE_ROW(9);
+    ACCUMULATE_ROW(10);
+    ACCUMULATE_ROW(11);
+#undef ACCUMULATE_ROW
+  }
+
+  const __m512 valpha = _mm512_set1_ps(alpha);
+  const __m512 vbeta = _mm512_set1_ps(beta);
+  const bool alpha_is_one = alpha == 1.0f;
+  const bool beta_is_one = beta == 1.0f;
+#define STORE_ROW(R)                                                                               \
+  do {                                                                                             \
+    float *y_row = Yrow_base + (R) * Ystride + n0;                                                 \
+    __m512 result = alpha_is_one ? acc_##R : _mm512_mul_ps(valpha, acc_##R);                       \
+    if (mode == GemmAccumMode::kInitBias) {                                                        \
+      const __m512 bias = _mm512_loadu_ps(Crow_base + (R) * Cstride + n0);                         \
+      result = _mm512_add_ps(result, beta_is_one ? bias : _mm512_mul_ps(vbeta, bias));             \
+    } else if (mode == GemmAccumMode::kAccumulate) {                                               \
+      result = _mm512_add_ps(result, _mm512_loadu_ps(y_row));                                      \
+    }                                                                                              \
+    _mm512_storeu_ps(y_row, result);                                                               \
+  } while (false)
+  STORE_ROW(0);
+  STORE_ROW(1);
+  STORE_ROW(2);
+  STORE_ROW(3);
+  STORE_ROW(4);
+  STORE_ROW(5);
+  STORE_ROW(6);
+  STORE_ROW(7);
+  STORE_ROW(8);
+  STORE_ROW(9);
+  STORE_ROW(10);
+  STORE_ROW(11);
+#undef STORE_ROW
+}
+
+void GemmMicroKernel_AVX512_F32_MR24_NR16(std::size_t K, float alpha, float beta, const float *Bmat,
+                                          std::size_t N, const float *Crow_base,
+                                          std::size_t Cstride, float *Yrow_base,
+                                          std::size_t Ystride, std::size_t n0, GemmAccumMode mode,
+                                          const float *A, std::size_t AStride) {
+#define DECLARE_ACCUMULATOR(R) __m512 acc_##R = _mm512_setzero_ps()
+  DECLARE_ACCUMULATOR(0);
+  DECLARE_ACCUMULATOR(1);
+  DECLARE_ACCUMULATOR(2);
+  DECLARE_ACCUMULATOR(3);
+  DECLARE_ACCUMULATOR(4);
+  DECLARE_ACCUMULATOR(5);
+  DECLARE_ACCUMULATOR(6);
+  DECLARE_ACCUMULATOR(7);
+  DECLARE_ACCUMULATOR(8);
+  DECLARE_ACCUMULATOR(9);
+  DECLARE_ACCUMULATOR(10);
+  DECLARE_ACCUMULATOR(11);
+  DECLARE_ACCUMULATOR(12);
+  DECLARE_ACCUMULATOR(13);
+  DECLARE_ACCUMULATOR(14);
+  DECLARE_ACCUMULATOR(15);
+  DECLARE_ACCUMULATOR(16);
+  DECLARE_ACCUMULATOR(17);
+  DECLARE_ACCUMULATOR(18);
+  DECLARE_ACCUMULATOR(19);
+  DECLARE_ACCUMULATOR(20);
+  DECLARE_ACCUMULATOR(21);
+  DECLARE_ACCUMULATOR(22);
+  DECLARE_ACCUMULATOR(23);
+#undef DECLARE_ACCUMULATOR
+
+  for (std::size_t k = 0; k < K; ++k) {
+    const float *b_row = Bmat + k * N + n0;
+    const __m512 vb = _mm512_loadu_ps(b_row);
+#define ACCUMULATE_ROW(R) acc_##R = MulAdd(_mm512_set1_ps(A[(R) * AStride + k]), vb, acc_##R)
+    ACCUMULATE_ROW(0);
+    ACCUMULATE_ROW(1);
+    ACCUMULATE_ROW(2);
+    ACCUMULATE_ROW(3);
+    ACCUMULATE_ROW(4);
+    ACCUMULATE_ROW(5);
+    ACCUMULATE_ROW(6);
+    ACCUMULATE_ROW(7);
+    ACCUMULATE_ROW(8);
+    ACCUMULATE_ROW(9);
+    ACCUMULATE_ROW(10);
+    ACCUMULATE_ROW(11);
+    ACCUMULATE_ROW(12);
+    ACCUMULATE_ROW(13);
+    ACCUMULATE_ROW(14);
+    ACCUMULATE_ROW(15);
+    ACCUMULATE_ROW(16);
+    ACCUMULATE_ROW(17);
+    ACCUMULATE_ROW(18);
+    ACCUMULATE_ROW(19);
+    ACCUMULATE_ROW(20);
+    ACCUMULATE_ROW(21);
+    ACCUMULATE_ROW(22);
+    ACCUMULATE_ROW(23);
+#undef ACCUMULATE_ROW
+  }
+
+  const __m512 valpha = _mm512_set1_ps(alpha);
+  const __m512 vbeta = _mm512_set1_ps(beta);
+  const bool alpha_is_one = alpha == 1.0f;
+  const bool beta_is_one = beta == 1.0f;
+#define STORE_ROW(R)                                                                               \
+  do {                                                                                             \
+    float *y_row = Yrow_base + (R) * Ystride + n0;                                                 \
+    __m512 result = alpha_is_one ? acc_##R : _mm512_mul_ps(valpha, acc_##R);                       \
+    if (mode == GemmAccumMode::kInitBias) {                                                        \
+      const __m512 bias = _mm512_loadu_ps(Crow_base + (R) * Cstride + n0);                         \
+      result = _mm512_add_ps(result, beta_is_one ? bias : _mm512_mul_ps(vbeta, bias));             \
+    } else if (mode == GemmAccumMode::kAccumulate) {                                               \
+      result = _mm512_add_ps(result, _mm512_loadu_ps(y_row));                                      \
+    }                                                                                              \
+    _mm512_storeu_ps(y_row, result);                                                               \
+  } while (false)
+  STORE_ROW(0);
+  STORE_ROW(1);
+  STORE_ROW(2);
+  STORE_ROW(3);
+  STORE_ROW(4);
+  STORE_ROW(5);
+  STORE_ROW(6);
+  STORE_ROW(7);
+  STORE_ROW(8);
+  STORE_ROW(9);
+  STORE_ROW(10);
+  STORE_ROW(11);
+  STORE_ROW(12);
+  STORE_ROW(13);
+  STORE_ROW(14);
+  STORE_ROW(15);
+  STORE_ROW(16);
+  STORE_ROW(17);
+  STORE_ROW(18);
+  STORE_ROW(19);
+  STORE_ROW(20);
+  STORE_ROW(21);
+  STORE_ROW(22);
+  STORE_ROW(23);
+#undef STORE_ROW
+}
+
 void GemmMicroKernel_AVX512_F32(std::size_t mr, std::size_t nb, std::size_t K, float alpha,
                                 float beta, const float *Bmat, std::size_t N,
                                 const float *Crow_base, std::size_t Cstride, float *Yrow_base,
@@ -276,9 +549,59 @@ void GemmMicroKernel_AVX512_F32(std::size_t mr, std::size_t nb, std::size_t K, f
   case 8:
     return GemmMicroKernel_AVX512_F32Impl<8>(nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
                                              Yrow_base, Ystride, n0, mode, Apack);
+  case 12:
+    if (nb == 16) {
+      return GemmMicroKernel_AVX512_F32_MR12_NR16(K, alpha, beta, Bmat, N, Crow_base, Cstride,
+                                                  Yrow_base, Ystride, n0, mode, Apack, K);
+    }
+    return GemmMicroKernel_AVX512_F32_MR12(nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
+                                           Yrow_base, Ystride, n0, mode, Apack, K);
   default:
     return GemmMicroKernel_Scalar_F32(mr, nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
                                       Yrow_base, Ystride, n0, mode, Apack);
+  }
+}
+
+void GemmMicroKernel_AVX512_F32_StridedA(std::size_t mr, std::size_t nb, std::size_t K, float alpha,
+                                         float beta, const float *Bmat, std::size_t N,
+                                         const float *Crow_base, std::size_t Cstride,
+                                         float *Yrow_base, std::size_t Ystride, std::size_t n0,
+                                         GemmAccumMode mode, const float *A, std::size_t AStride) {
+  switch (mr) {
+  case 1:
+    return GemmMicroKernel_AVX512_F32Impl<1>(nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
+                                             Yrow_base, Ystride, n0, mode, A, AStride);
+  case 2:
+    return GemmMicroKernel_AVX512_F32Impl<2>(nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
+                                             Yrow_base, Ystride, n0, mode, A, AStride);
+  case 3:
+    return GemmMicroKernel_AVX512_F32Impl<3>(nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
+                                             Yrow_base, Ystride, n0, mode, A, AStride);
+  case 4:
+    return GemmMicroKernel_AVX512_F32Impl<4>(nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
+                                             Yrow_base, Ystride, n0, mode, A, AStride);
+  case 5:
+    return GemmMicroKernel_AVX512_F32Impl<5>(nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
+                                             Yrow_base, Ystride, n0, mode, A, AStride);
+  case 6:
+    return GemmMicroKernel_AVX512_F32Impl<6>(nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
+                                             Yrow_base, Ystride, n0, mode, A, AStride);
+  case 7:
+    return GemmMicroKernel_AVX512_F32Impl<7>(nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
+                                             Yrow_base, Ystride, n0, mode, A, AStride);
+  case 8:
+    return GemmMicroKernel_AVX512_F32Impl<8>(nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
+                                             Yrow_base, Ystride, n0, mode, A, AStride);
+  case 12:
+    if (nb == 16) {
+      return GemmMicroKernel_AVX512_F32_MR12_NR16(K, alpha, beta, Bmat, N, Crow_base, Cstride,
+                                                  Yrow_base, Ystride, n0, mode, A, AStride);
+    }
+    return GemmMicroKernel_AVX512_F32_MR12(nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
+                                           Yrow_base, Ystride, n0, mode, A, AStride);
+  default:
+    return GemmMicroKernel_Scalar_F32(mr, nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
+                                      Yrow_base, Ystride, n0, mode, A);
   }
 }
 

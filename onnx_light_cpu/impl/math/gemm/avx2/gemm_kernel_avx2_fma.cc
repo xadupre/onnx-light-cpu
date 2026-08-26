@@ -78,6 +78,19 @@ inline void Transpose8x8U16(const std::uint16_t *src, std::size_t src_stride, st
   _mm_storeu_si128(reinterpret_cast<__m128i *>(dst + 56), _mm_unpackhi_epi64(b3, b7));
 }
 
+inline void Transpose4x4Float(const float *src, std::size_t src_stride, float *dst,
+                              std::size_t dst_stride) {
+  __m128 row0 = _mm_loadu_ps(src);
+  __m128 row1 = _mm_loadu_ps(src + src_stride);
+  __m128 row2 = _mm_loadu_ps(src + 2 * src_stride);
+  __m128 row3 = _mm_loadu_ps(src + 3 * src_stride);
+  _MM_TRANSPOSE4_PS(row0, row1, row2, row3);
+  _mm_storeu_ps(dst, row0);
+  _mm_storeu_ps(dst + dst_stride, row1);
+  _mm_storeu_ps(dst + 2 * dst_stride, row2);
+  _mm_storeu_ps(dst + 3 * dst_stride, row3);
+}
+
 template <bool Bfloat16>
 void PackTransposeHalfToFloat32(const std::uint16_t *src, std::size_t src_stride, float *dst,
                                 std::size_t dst_rows, std::size_t dst_cols) {
@@ -570,6 +583,28 @@ void GemmConvertBFloat16ToFloat32_AVX2(const std::uint16_t *src, float *dst, std
   }
   for (; i < n; ++i) {
     dst[i] = detail::Bfloat16BitsToFloat(src[i]);
+  }
+}
+
+void GemmPackTransposeFloat32_AVX2(const float *src, std::size_t src_stride, float *dst,
+                                   std::size_t dst_rows, std::size_t dst_cols) {
+  std::size_t row = 0;
+  for (; row + 4 <= dst_rows; row += 4) {
+    std::size_t column = 0;
+    for (; column + 4 <= dst_cols; column += 4) {
+      Transpose4x4Float(src + column * src_stride + row, src_stride, dst + row * dst_cols + column,
+                        dst_cols);
+    }
+    for (; column < dst_cols; ++column) {
+      for (std::size_t tile_row = 0; tile_row < 4; ++tile_row) {
+        dst[(row + tile_row) * dst_cols + column] = src[column * src_stride + row + tile_row];
+      }
+    }
+  }
+  for (; row < dst_rows; ++row) {
+    for (std::size_t column = 0; column < dst_cols; ++column) {
+      dst[row * dst_cols + column] = src[column * src_stride + row];
+    }
   }
 }
 

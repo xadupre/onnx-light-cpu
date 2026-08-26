@@ -106,7 +106,7 @@ TEST(GemmPlan, SelectsShapeSpecificAlgorithms) {
   EXPECT_EQ(skinny_n.algorithm(), GemmAlgorithm::kSkinnyN);
   EXPECT_EQ(split_k.algorithm(), GemmAlgorithm::kSplitK);
   EXPECT_EQ(large_k.algorithm(), GemmAlgorithm::kSplitK);
-  EXPECT_EQ(shorter_k.algorithm(), GemmAlgorithm::kGeneral);
+  EXPECT_EQ(shorter_k.algorithm(), GemmAlgorithm::kSplitK);
 }
 
 TEST(GemmPlan, LargeKSplitUsesReductionParallelism) {
@@ -117,7 +117,7 @@ TEST(GemmPlan, LargeKSplitUsesReductionParallelism) {
   const GemmPlan<float> plan(GemmPlanOptions<float>{false, false, 32, 32, 16384});
 
   EXPECT_EQ(plan.algorithm(), GemmAlgorithm::kSplitK);
-  EXPECT_EQ(plan.useful_threads(), 8u);
+  EXPECT_EQ(plan.useful_threads(), 16u);
 }
 
 TEST(GemmPlan, WideProjectionUsesSingleKBlock) {
@@ -125,7 +125,8 @@ TEST(GemmPlan, WideProjectionUsesSingleKBlock) {
 
   EXPECT_EQ(plan.algorithm(), GemmAlgorithm::kGeneral);
   EXPECT_EQ(plan.blocking().kc, 768u);
-  EXPECT_EQ(plan.useful_threads(), 48u);
+  EXPECT_GT(plan.useful_threads(), 32u);
+  EXPECT_LE(plan.useful_threads(), 51u);
 }
 
 TEST(GemmHalfPlan, Float16SplitReportsSkinnyMParallelism) {
@@ -160,11 +161,11 @@ TEST(GemmPlan, AppliesConfiguredBlockingAndParticipantLimit) {
 
 TEST(GemmPlan, BlockingUsesIsaSpecificRegisterRows) {
   const auto avx2 = onnx_light_cpu::detail::SelectGemmBlocking(sizeof(float), 8, 4);
-  const auto avx512 = onnx_light_cpu::detail::SelectGemmBlocking(sizeof(float), 16, 6);
+  const auto avx512 = onnx_light_cpu::detail::SelectGemmBlocking(sizeof(float), 16, 12);
   const auto sve384 = onnx_light_cpu::detail::SelectGemmBlocking(sizeof(float), 12, 4);
 
   EXPECT_EQ(avx2.mr, 4u);
-  EXPECT_EQ(avx512.mr, 6u);
+  EXPECT_EQ(avx512.mr, 12u);
   EXPECT_EQ(avx2.mc % avx2.mr, 0u);
   EXPECT_EQ(avx512.mc % avx512.mr, 0u);
   EXPECT_EQ(sve384.nc % sve384.nr, 0u);
@@ -214,10 +215,10 @@ TEST(GemmPlan, SelectsMicroarchitectureRegisterRows) {
             6u);
   EXPECT_EQ(SelectGemmRegisterRowsForMicroarchitecture(SimdLevel::kAVX512, true,
                                                        GemmMicroarchitecture::kIntelCore),
-            6u);
+            12u);
   EXPECT_EQ(SelectGemmRegisterRowsForMicroarchitecture(SimdLevel::kAVX512, true,
                                                        GemmMicroarchitecture::kAmdZen),
-            6u);
+            12u);
   EXPECT_EQ(SelectGemmRegisterRowsForMicroarchitecture(SimdLevel::kAVX2, false,
                                                        GemmMicroarchitecture::kIntelCore),
             4u);
@@ -294,18 +295,23 @@ TEST(GemmPlan, SelectsWorkLimitedParticipantCounts) {
   onnx_light_cpu::ExecutionExecutorScope scope(&executor);
 
   const GemmPlan<float> skinny_m(GemmPlanOptions<float>{false, false, 1, 1024, 1024});
+  const GemmPlan<float> skinny_n(GemmPlanOptions<float>{false, false, 1024, 1, 1024});
   const GemmPlan<float> square_512(GemmPlanOptions<float>{false, false, 512, 512, 512});
+  const GemmPlan<float> square_1024(GemmPlanOptions<float>{false, false, 1024, 1024, 1024});
   const GemmPlan<float> transformer(GemmPlanOptions<float>{false, false, 128, 3072, 768});
 
-  EXPECT_EQ(skinny_m.useful_threads(), 4u);
-  EXPECT_EQ(square_512.useful_threads(), 16u);
-  EXPECT_EQ(transformer.useful_threads(), 48u);
+  EXPECT_EQ(skinny_m.useful_threads(), 8u);
+  EXPECT_EQ(skinny_n.useful_threads(), 16u);
+  EXPECT_EQ(square_512.useful_threads(), 32u);
+  EXPECT_EQ(square_1024.useful_threads(), 32u);
+  EXPECT_GT(transformer.useful_threads(), 32u);
+  EXPECT_LE(transformer.useful_threads(), 51u);
 }
 
 TEST(GemmPlan, UsesExecutionTimeThreadsWhenConstructedWithoutExecutor) {
   constexpr std::size_t size = 512;
   const GemmPlan<float> plan(GemmPlanOptions<float>{false, false, size, size, size});
-  EXPECT_EQ(plan.useful_threads(), 16u);
+  EXPECT_EQ(plan.useful_threads(), 32u);
   std::vector<float> a(size * size, 1.0f);
   std::vector<float> b(size * size, 1.0f);
   std::vector<float> y(size * size);

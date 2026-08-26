@@ -57,8 +57,8 @@ import onnxruntime
 unit_test_going = os.environ.get("UNITTEST_GOING", "0") in ("1", "true", "True")
 
 parser = argparse.ArgumentParser(description=__doc__)
-parser.add_argument("-r", "--repeat", type=int, default=10 * (os.cpu_count() or 1))
-parser.add_argument("-w", "--warmup", type=int, default=2 * (os.cpu_count() or 1))
+parser.add_argument("-r", "--repeat", type=int, default=100 * (os.cpu_count() or 1))
+parser.add_argument("-w", "--warmup", type=int, default=100 * 20)
 parser.add_argument("-t", "--max-repeat-time", type=float, default=1.0)
 args, _ = parser.parse_known_args()
 if args.repeat <= 0:

@@ -102,10 +102,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     import onnxruntime
     from onnx_light.onnx.reference import ReferenceEvaluator
     from onnx_light_cpu import register_kernels
+
+    register_kernels()
     from onnx_light_cpu.onnx_py._cpukernels import detect_simd_level
     from onnx_light_cpu.onnx_py._cpuregister import set_kernel_usage_recording
 
-    register_kernels()
     set_kernel_usage_recording(False)
     session_options = onnxruntime.SessionOptions()
     session_options.intra_op_num_threads = args.threads
@@ -190,8 +191,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--cpus", default="", help="Linux CPU affinity, for example 0-3 or 0,2,4."
     )
-    parser.add_argument("-r", "--repeat", type=int, default=10 * (os.cpu_count() or 1))
-    parser.add_argument("-w", "--warmup", type=int, default=2 * (os.cpu_count() or 1))
+    parser.add_argument("-r", "--repeat", type=int, default=100 * (os.cpu_count() or 1))
+    parser.add_argument("-w", "--warmup", type=int, default=100 * 20)
     parser.add_argument("-t", "--max-repeat-time", type=float, default=1.0)
     parser.add_argument("--case", action="append", default=[])
     parser.add_argument("--output", type=Path, default=Path("integer_gemm_parity_results.json"))

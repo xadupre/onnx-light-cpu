@@ -44,7 +44,7 @@ GemmAlgorithm SelectGemmAlgorithm(bool trans_a, bool trans_b, std::size_t m, std
                                   std::size_t k, std::size_t vector_lanes,
                                   std::size_t register_rows);
 
-inline constexpr std::size_t kSplitKTargetFmasPerParticipant = 2 * 1024 * 1024;
+inline constexpr std::size_t kSplitKTargetFmasPerParticipant = 1024 * 1024;
 
 GemmBlocking SelectGemmBlocking(std::size_t element_size, std::size_t vector_lanes,
                                 std::size_t register_rows);
@@ -114,7 +114,7 @@ enum class GemmAccumMode {
 // larger than the matching ISA-specific maximum.
 constexpr std::size_t kGemmMR = 4;
 constexpr std::size_t kGemmAVX2MR = 6;
-constexpr std::size_t kGemmAVX512MR = 8;
+constexpr std::size_t kGemmAVX512MR = 12;
 constexpr std::size_t kGemmIntelAVX2MR = 5;
 constexpr std::size_t kGemmZenAVX2MR = 6;
 constexpr std::size_t kGemmNeonMR = 6;
@@ -135,6 +135,7 @@ constexpr std::size_t kGemmColumnPanelBytes = 256;
 // A scalar FMA is a fraction of one element-wise work unit once the inner loop
 // is vectorized and register-blocked.
 constexpr double kGemmFmasPerParallelWorkUnit = 64.0;
+constexpr double kGemmSkinnyNFmasPerParallelWorkUnit = 2.0;
 
 // Scalar micro-kernels: also the tail handler for every vectorized flavor
 // (AVX-512, AVX, SSE2) and the fallback for non-x86 builds. Defined (with

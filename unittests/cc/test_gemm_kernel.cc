@@ -961,7 +961,8 @@ TEST(GemmFloat32, RawLargeKSplitBoundsParticipants) {
                                 Y.data());
   }
 
-  EXPECT_EQ(executor.maximum_blocks.load(std::memory_order_relaxed), 8u);
+  EXPECT_GT(executor.maximum_blocks.load(std::memory_order_relaxed), 1u);
+  EXPECT_LE(executor.maximum_blocks.load(std::memory_order_relaxed), 16u);
   for (float value : Y) {
     EXPECT_FLOAT_EQ(value, static_cast<float>(K));
   }

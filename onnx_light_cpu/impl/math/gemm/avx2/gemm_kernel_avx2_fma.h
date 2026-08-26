@@ -30,6 +30,9 @@ void GemmMicroKernel_AVX2FMA_F64(std::size_t mr, std::size_t nb, std::size_t K, 
 // this translation unit.
 void GemmConvertBFloat16ToFloat32_AVX2(const std::uint16_t *src, float *dst, std::size_t n);
 
+void GemmPackTransposeFloat32_AVX2(const float *src, std::size_t src_stride, float *dst,
+                                   std::size_t dst_rows, std::size_t dst_cols);
+
 // Transposes and widens a ``dst_rows x dst_cols`` BFLOAT16 panel from a
 // column-major source view. Full 8 x 8 tiles use an in-register transpose.
 void GemmPackTransposeBFloat16ToFloat32_AVX2(const std::uint16_t *src, std::size_t src_stride,

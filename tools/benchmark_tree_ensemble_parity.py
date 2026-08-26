@@ -674,8 +674,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--cpus", default="", help="Linux CPU affinity, for example 0-3 or 0,2,4."
     )
     parser.add_argument("--case", action="append", default=[])
-    parser.add_argument("-r", "--repeat", type=int, default=10 * (os.cpu_count() or 1))
-    parser.add_argument("-w", "--warmup", type=int, default=2 * (os.cpu_count() or 1))
+    parser.add_argument("-r", "--repeat", type=int, default=100 * (os.cpu_count() or 1))
+    parser.add_argument("-w", "--warmup", type=int, default=100 * 20)
     parser.add_argument("-t", "--max-repeat-time", type=float, default=MAX_MEASURE_DURATION)
     parser.add_argument("--preparation-repeats", type=int, default=3)
     parser.add_argument("--max-preparation-ratio", type=float, default=2.0)

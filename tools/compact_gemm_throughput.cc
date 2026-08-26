@@ -250,7 +250,7 @@ std::string Compiler() {
 
 std::string Platform() {
 #if defined(__linux__)
-  struct utsname name{};
+  struct utsname name {};
   if (uname(&name) == 0) {
     return std::string(name.sysname) + " " + name.release + " " + name.machine;
   }

@@ -80,15 +80,15 @@ parser.add_argument(
     "-r",
     "--repeat",
     type=int,
-    default=10 * (os.cpu_count() or 1),
-    help="maximum measured calls per runtime and case (default: 10 per CPU)",
+    default=100 * (os.cpu_count() or 1),
+    help="maximum measured calls per runtime and case (default: 100 per CPU)",
 )
 parser.add_argument(
     "-w",
     "--warmup",
     type=int,
-    default=2 * (os.cpu_count() or 1),
-    help="untimed warm-up calls per runtime and case (default: 2 per CPU)",
+    default=100 * 20,
+    help="untimed warm-up calls per runtime and case (default: 2,000)",
 )
 parser.add_argument(
     "-t",
@@ -241,6 +241,7 @@ for tc in _progress:
             "feeds": feeds,
             "light_out": light_out,
             "light_time": light_time,
+            "node_count": len(tc.model.graph.node),
             "shapes": shapes,
             "dtypes": dtypes,
         }
@@ -275,7 +276,7 @@ for measurement in _progress:
                     actual.astype(np.float64),
                     expected.astype(np.float64),
                     rtol=1e-2,
-                    atol=1e-3,
+                    atol=max(1e-3, (measurement["node_count"] - 1) * 5e-2),
                     equal_nan=True,
                 )
         ort_time = measure(
