@@ -8,6 +8,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -27,6 +28,19 @@ using onnx_light_cpu::GroupedGemm;
 using onnx_light_cpu::GroupedGemmProblem;
 using onnx_light_cpu::MatMulPlan;
 using onnx_light_cpu::StridedBatchedGemm;
+
+struct InlineExecutor {
+  std::int64_t maximum_blocks = 0;
+
+  static void Run(void *context, std::int64_t num_blocks, void *task_context,
+                  onnx_light_cpu::ExecutionBlockFn task) {
+    auto &self = *static_cast<InlineExecutor *>(context);
+    self.maximum_blocks = std::max(self.maximum_blocks, num_blocks);
+    for (std::int64_t block = 0; block < num_blocks; ++block) {
+      task(task_context, block);
+    }
+  }
+};
 
 // Encodes an integer-valued float as bfloat16, which is exact because the low 16
 // mantissa bits are zero for these small operands.
@@ -84,11 +98,48 @@ TEST(GemmPlan, SelectsShapeSpecificAlgorithms) {
   const GemmPlan<float> skinny_m(GemmPlanOptions<float>{false, false, 1, 1024, 1024});
   const GemmPlan<float> skinny_n(GemmPlanOptions<float>{false, false, 128, 1, 1024});
   const GemmPlan<float> split_k(GemmPlanOptions<float>{false, false, 2, 2, 4096});
+  const GemmPlan<float> large_k(GemmPlanOptions<float>{false, false, 32, 32, 16384});
+  const GemmPlan<float> shorter_k(GemmPlanOptions<float>{false, false, 32, 32, 4096});
 
   EXPECT_EQ(general.algorithm(), GemmAlgorithm::kGeneral);
   EXPECT_EQ(skinny_m.algorithm(), GemmAlgorithm::kSkinnyM);
   EXPECT_EQ(skinny_n.algorithm(), GemmAlgorithm::kSkinnyN);
   EXPECT_EQ(split_k.algorithm(), GemmAlgorithm::kSplitK);
+  EXPECT_EQ(large_k.algorithm(), GemmAlgorithm::kSplitK);
+  EXPECT_EQ(shorter_k.algorithm(), GemmAlgorithm::kGeneral);
+}
+
+TEST(GemmPlan, LargeKSplitUsesReductionParallelism) {
+  onnx_light_cpu::ExecutionExecutorView executor;
+  executor.effective_threads = 8;
+  onnx_light_cpu::ExecutionExecutorScope scope(&executor);
+
+  const GemmPlan<float> plan(GemmPlanOptions<float>{false, false, 32, 32, 16384});
+
+  EXPECT_EQ(plan.algorithm(), GemmAlgorithm::kSplitK);
+  EXPECT_EQ(plan.useful_threads(), 8u);
+}
+
+TEST(GemmPlan, WideProjectionUsesSingleKBlock) {
+  const GemmPlan<float> plan(GemmPlanOptions<float>{false, false, 128, 3072, 768});
+
+  EXPECT_EQ(plan.algorithm(), GemmAlgorithm::kGeneral);
+  EXPECT_EQ(plan.blocking().kc, 768u);
+  EXPECT_EQ(plan.useful_threads(), 48u);
+}
+
+TEST(GemmHalfPlan, Float16SplitReportsSkinnyMParallelism) {
+  onnx_light_cpu::ExecutionExecutorView executor;
+  executor.effective_threads = 8;
+  onnx_light_cpu::ExecutionExecutorScope scope(&executor);
+
+  const GemmHalfPlan plan(GemmHalfPlanOptions{false, false, false, 2, 2, 16384});
+
+  EXPECT_EQ(plan.algorithm(), GemmAlgorithm::kSplitK);
+  if (onnx_light_cpu::DetectSimdLevel() >= onnx_light_cpu::SimdLevel::kAVX2 &&
+      onnx_light_cpu::CpuSupportsFma() && onnx_light_cpu::CpuSupportsF16C()) {
+    EXPECT_EQ(plan.useful_threads(), 1u);
+  }
 }
 
 TEST(GemmPlan, AppliesConfiguredBlockingAndParticipantLimit) {
@@ -201,9 +252,11 @@ TEST(GemmPlan, BlockingExposesTaskGridForPrioritySizes) {
   const onnx_light_cpu::GemmBlocking initial{256, 1024, 448, 4, 16};
   for (const std::size_t size : {256u, 512u, 1024u}) {
     const auto blocking =
-        onnx_light_cpu::detail::ConstrainGemmBlockingForTasks(initial, size, size, 6);
+        onnx_light_cpu::detail::ConstrainGemmBlockingForTasks(initial, size, size, 2048, 6);
     const std::size_t row_tasks = (size + blocking.mc - 1) / blocking.mc;
-    const std::size_t column_tasks = (size + blocking.nc - 1) / blocking.nc;
+    const std::size_t column_block =
+        onnx_light_cpu::detail::SelectGemmColumnBlock(blocking, sizeof(float));
+    const std::size_t column_tasks = (size + column_block - 1) / column_block;
 
     EXPECT_GE(row_tasks * column_tasks, 6u) << "size=" << size;
     EXPECT_EQ(blocking.mc % blocking.mr, 0u);
@@ -211,6 +264,61 @@ TEST(GemmPlan, BlockingExposesTaskGridForPrioritySizes) {
     EXPECT_LE(blocking.mc, initial.mc);
     EXPECT_LE(blocking.nc, initial.nc);
   }
+}
+
+TEST(GemmPlan, BlockingDoesNotFragmentPanelsForIdleParticipants) {
+  const onnx_light_cpu::GemmBlocking initial{256, 1024, 448, 4, 16};
+  const auto blocking =
+      onnx_light_cpu::detail::ConstrainGemmBlockingForTasks(initial, 128, 3072, 768, 96);
+  const std::size_t row_tasks = (128 + blocking.mc - 1) / blocking.mc;
+  const std::size_t column_block =
+      onnx_light_cpu::detail::SelectGemmColumnBlock(blocking, sizeof(float));
+  const std::size_t column_tasks = (3072 + column_block - 1) / column_block;
+
+  EXPECT_GE(row_tasks * column_tasks, 36u);
+  EXPECT_EQ(blocking.mc, initial.mc);
+  EXPECT_EQ(blocking.nc, initial.nc);
+}
+
+TEST(GemmPlan, SelectsWorkLimitedParticipantCounts) {
+  using onnx_light_cpu::detail::SelectGemmParticipantCount;
+
+  EXPECT_EQ(SelectGemmParticipantCount(1, 1024, 1024, 96), 1u);
+  EXPECT_EQ(SelectGemmParticipantCount(512, 512, 512, 96), 16u);
+  EXPECT_EQ(SelectGemmParticipantCount(128, 3072, 768, 96), 36u);
+  EXPECT_EQ(SelectGemmParticipantCount(2, 2, 8'388'608, 96), 4u);
+  EXPECT_EQ(SelectGemmParticipantCount(1024, 1024, 0, 96), 32u);
+
+  onnx_light_cpu::ExecutionExecutorView executor;
+  executor.effective_threads = 96;
+  onnx_light_cpu::ExecutionExecutorScope scope(&executor);
+
+  const GemmPlan<float> skinny_m(GemmPlanOptions<float>{false, false, 1, 1024, 1024});
+  const GemmPlan<float> square_512(GemmPlanOptions<float>{false, false, 512, 512, 512});
+  const GemmPlan<float> transformer(GemmPlanOptions<float>{false, false, 128, 3072, 768});
+
+  EXPECT_EQ(skinny_m.useful_threads(), 4u);
+  EXPECT_EQ(square_512.useful_threads(), 16u);
+  EXPECT_EQ(transformer.useful_threads(), 48u);
+}
+
+TEST(GemmPlan, UsesExecutionTimeThreadsWhenConstructedWithoutExecutor) {
+  constexpr std::size_t size = 512;
+  const GemmPlan<float> plan(GemmPlanOptions<float>{false, false, size, size, size});
+  EXPECT_EQ(plan.useful_threads(), 16u);
+  std::vector<float> a(size * size, 1.0f);
+  std::vector<float> b(size * size, 1.0f);
+  std::vector<float> y(size * size);
+  InlineExecutor executor;
+  onnx_light_cpu::ExecutionExecutorView view{&executor, 8, &InlineExecutor::Run};
+
+  {
+    onnx_light_cpu::ExecutionExecutorScope scope(&view);
+    plan.Execute(a.data(), b.data(), nullptr, y.data());
+  }
+
+  EXPECT_GT(executor.maximum_blocks, 1);
+  EXPECT_LE(executor.maximum_blocks, 8);
 }
 
 TEST(GemmPlan, ExecutesEveryPreparedAlgorithm) {

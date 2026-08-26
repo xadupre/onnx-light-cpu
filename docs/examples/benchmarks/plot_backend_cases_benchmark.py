@@ -76,9 +76,28 @@ parser.add_argument(
     default=1000,
     help="maximum number of matching cases to run (default: 1000; 0 disables the limit)",
 )
-args, _ = parser.parse_known_args()
+parser.add_argument(
+    "--repeat",
+    type=int,
+    default=None,
+    help="measured calls per runtime and case; defaults to an input-size-dependent count",
+)
+parser.add_argument(
+    "--warmup",
+    type=int,
+    default=3,
+    help="untimed warm-up calls per runtime and case (default: 3)",
+)
+args, unknown_args = parser.parse_known_args()
 if args.max_cases < 0:
     parser.error("--max-cases must be greater than or equal to 0")
+if args.repeat is not None and args.repeat <= 0:
+    parser.error("--repeat must be greater than 0")
+if args.warmup < 0:
+    parser.error("--warmup must be greater than or equal to 0")
+for unknown_arg in unknown_args:
+    if unknown_arg.startswith(("--repeat", "--warm")):
+        parser.error(f"unrecognized timing option: {unknown_arg}")
 _name_filter = re.compile(args.filter) if args.filter else None
 
 
@@ -122,10 +141,11 @@ print(f"-- collected {len(_CASES)} cases")
 # Timing helper
 # -------------
 #
-# Each candidate gets three untimed warm-up calls, then is called ``repeat``
-# times at most and the median wall-clock time is retained. Measurement stops
-# earlier when its cumulative duration reaches two seconds. ``repeat`` shrinks
-# as the case's inputs grow but never below three.
+# Each candidate gets ``--warmup`` untimed calls, then the median wall-clock
+# time is retained. By default, the measured repeat count shrinks as the case's
+# inputs grow, never falls below three, and may stop after two cumulative
+# seconds. An explicit ``--repeat`` runs exactly that many measured calls so
+# longer runs can reduce noise predictably.
 
 MAX_MEASURE_DURATION = 2.0
 
@@ -141,7 +161,7 @@ def measure(func, repeat, warmup=3, max_duration=MAX_MEASURE_DURATION):
         duration = time.perf_counter() - start
         timings.append(duration)
         total_duration += duration
-        if total_duration >= max_duration:
+        if max_duration is not None and total_duration >= max_duration:
             break
     return float(np.median(timings))
 
@@ -180,17 +200,19 @@ register_kernels()
 # created. Both runtimes therefore keep their default spinning behavior
 # without leaving one runtime's live pool to perturb the other's measurements.
 print("-- benchmark onnx-light-cpu")
+repeat_description = args.repeat if args.repeat is not None else "adaptive"
+print(f"-- timing warmup={args.warmup} repeat={repeat_description}")
 measurements = []
 _progress = tqdm(_CASES, desc="benchmarking backend cases", unit="case")
 for tc in _progress:
     _progress.set_postfix_str(tc.name)
     op_type = tc.model.graph.node[0].op_type
     expected_kernel = f"onnx_light_cpu::{op_type}"
-    # Some Gemm benchmark cases turn "B" into a graph initializer to exercise
-    # the constant-B code path; its value is baked into the model rather than
-    # fed at run time, so it must be excluded from the runtime feeds below.
-    initializer_names = {init.name for init in tc.model.graph.initializer}
-    input_names = [vi.name for vi in tc.model.graph.input if vi.name not in initializer_names]
+    if tc.model.graph.initializer:
+        raise AssertionError(
+            f"{tc.name} contains an initializer; backend benchmarks must time runtime inputs"
+        )
+    input_names = [vi.name for vi in tc.model.graph.input]
 
     ds = tc.data_sets[0]
     feeds = {name: _to_numpy(t) for name, t in zip(input_names, ds.inputs, strict=True)}
@@ -198,8 +220,18 @@ for tc in _progress:
     clear_used_kernel_names()
     light_out = [np.array(output, copy=True) for output in light_session.run(None, feeds)]
     assert expected_kernel in used_kernel_names(), used_kernel_names()
-    repeat = max(3, min(30, 20_000_000 // _case_element_count(tc)))
-    light_time = measure(lambda feeds=feeds, sess=light_session: sess.run(None, feeds), repeat)
+    repeat = (
+        args.repeat
+        if args.repeat is not None
+        else max(3, min(30, 20_000_000 // _case_element_count(tc)))
+    )
+    max_duration = None if args.repeat is not None else MAX_MEASURE_DURATION
+    light_time = measure(
+        lambda feeds=feeds, sess=light_session: sess.run(None, feeds),
+        repeat,
+        warmup=args.warmup,
+        max_duration=max_duration,
+    )
     shapes = ",".join(
         "x".join(str(d) for d in array.shape) or "scalar" for array in feeds.values()
     )
@@ -253,6 +285,8 @@ for measurement in _progress:
         ort_time = measure(
             lambda feeds=measurement["feeds"], sess=ort_session: sess.run(None, feeds),
             measurement["repeat"],
+            warmup=args.warmup,
+            max_duration=None if args.repeat is not None else MAX_MEASURE_DURATION,
         )
     rows.append(
         (
@@ -344,6 +378,9 @@ ax.barh(positions, speedups, color=colors)
 ax.axvline(1.0, color="grey", linewidth=0.8, linestyle=":")
 ax.set_xscale("log")
 ax.set_yticks(positions, labels, fontsize=7)
+for tick_label, speedup in zip(ax.get_yticklabels(), speedups, strict=True):
+    if speedup <= 0.5:
+        tick_label.set_color("red")
 ax.set_xlabel("speed-up vs onnxruntime")
 ax.set_title("onnx-light-cpu speed-up over onnxruntime on backend cases")
 

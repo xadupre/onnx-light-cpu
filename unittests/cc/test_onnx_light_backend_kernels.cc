@@ -839,7 +839,7 @@ TEST(OnnxLightBackendKernels, GemmBenchmarkCorpusIsLazyAndCoversPriorityShapes) 
       CollectTestCases("Gemm", /*include_big=*/false, core::backend_test::TestMode::BENCHMARK);
 
   size_t cpu_cases = 0;
-  bool has_constant_b = false;
+  bool checked_runtime_inputs = false;
   bool has_direct = false;
   bool has_skinny_m = false;
   bool has_skinny_n = false;
@@ -879,9 +879,16 @@ TEST(OnnxLightBackendKernels, GemmBenchmarkCorpusIsLazyAndCoversPriorityShapes) 
     EXPECT_TRUE(test_case.is_lazy());
     EXPECT_FALSE(test_case.materialized());
     EXPECT_TRUE(test_case.name.ends_with("_benchmark"));
-    if (test_case.name.find("constant_b") != std::string::npos) {
-      has_constant_b = true;
-      EXPECT_EQ(test_case.declared_input_element_counts.size(), 1u);
+    if (test_case.name.find("tiny_dynamic_float32") != std::string::npos) {
+      checked_runtime_inputs = true;
+      const GraphProto &graph = test_case.model().ref_graph();
+      EXPECT_EQ(graph.initializer_size(), 0);
+      EXPECT_EQ(graph.input_size(), 2);
+      ASSERT_EQ(test_case.data_sets().size(), 1u);
+      EXPECT_EQ(test_case.data_sets()[0].inputs.size(), 2u);
+    }
+    if (test_case.name.find("_bias_none_") != std::string::npos) {
+      EXPECT_EQ(test_case.declared_input_element_counts.size(), 2u);
     }
     has_direct |= test_case.name.find("_direct_") != std::string::npos;
     has_skinny_m |= test_case.name.find("skinny_m") != std::string::npos;
@@ -926,10 +933,10 @@ TEST(OnnxLightBackendKernels, GemmBenchmarkCorpusIsLazyAndCoversPriorityShapes) 
     has_transformer_decode |=
         test_case.name.find("transformer_projection_decode") != std::string::npos;
   }
-  // 27 prepared shapes registered for four dtypes, excluding the two largest
+  // 26 prepared shapes registered for four dtypes, excluding the two largest
   // square float16 cases.
-  EXPECT_EQ(cpu_cases, 106u);
-  EXPECT_TRUE(has_constant_b);
+  EXPECT_EQ(cpu_cases, 102u);
+  EXPECT_TRUE(checked_runtime_inputs);
   EXPECT_TRUE(has_direct);
   EXPECT_TRUE(has_skinny_m);
   EXPECT_TRUE(has_skinny_n);

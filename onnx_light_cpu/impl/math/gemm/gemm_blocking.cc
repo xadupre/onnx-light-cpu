@@ -3,9 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "onnx_light_cpu/impl/cpu_cache_topology.h"
+#include "onnx_light_cpu/impl/execution.h"
 #include "onnx_light_cpu/impl/math/gemm/gemm_common.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <limits>
 
@@ -23,6 +25,9 @@
 namespace onnx_light_cpu::detail {
 
 namespace {
+
+constexpr std::size_t kTargetFmasPerSchedulingTask = 8 * 1024 * 1024;
+constexpr std::size_t kKcL1CapacityMultiplier = 3;
 
 // Portable defaults used whenever the reusable cache topology (see
 // cpu_cache_topology.h) reports no detected data or unified cache at a
@@ -136,9 +141,12 @@ GemmBlocking SelectGemmBlocking(std::size_t element_size, std::size_t vector_lan
   const std::size_t mr = register_rows;
   const std::size_t nr = std::max<std::size_t>(2, 2 * vector_lanes);
 
-  // Keep one A micro-panel and one B micro-panel within roughly 75% of L1.
+  // A larger KC amortizes packing, workspace setup, and executor barriers
+  // across fewer K chunks. The micro-kernel still walks cache-sized column
+  // slices, so measured transformer and square workloads tolerate several
+  // times the strict one-A-plus-one-B-micro-panel L1 capacity.
   const std::size_t kc_capacity = (caches.l1 * 3 / 4) / (element_size * (mr + nr));
-  const std::size_t kc = BoundedAligned(kc_capacity, 64, 512, 16);
+  const std::size_t kc = BoundedAligned(kc_capacity * kKcL1CapacityMultiplier, 64, 512, 16);
 
   // Reserve half of L2 for the packed A panel and competing working data.
   const std::size_t mc_capacity = (caches.l2 / 2) / (element_size * kc);
@@ -157,20 +165,23 @@ GemmBlocking SelectGemmBlocking(std::size_t element_size, std::size_t vector_lan
 }
 
 GemmBlocking ConstrainGemmBlockingForTasks(GemmBlocking blocking, std::size_t m, std::size_t n,
-                                           std::size_t thread_count) {
-  if (m == 0 || n == 0 || thread_count <= 1) {
+                                           std::size_t k, std::size_t thread_count,
+                                           std::size_t element_size,
+                                           std::size_t target_fmas_per_participant) {
+  if (m == 0 || n == 0 || k == 0 || thread_count <= 1) {
     return blocking;
   }
 
+  thread_count = SelectGemmParticipantCount(m, n, k, thread_count, target_fmas_per_participant);
+
   const std::size_t max_row_tasks = CeilDiv(m, blocking.mr);
-  const std::size_t max_column_tasks = CeilDiv(n, blocking.nr);
-  const std::size_t max_tasks = max_row_tasks > thread_count / max_column_tasks
-                                    ? thread_count
-                                    : max_row_tasks * max_column_tasks;
+  const std::size_t scheduling_column_block = SelectGemmColumnBlock(blocking, element_size);
+  const std::size_t column_tasks = CeilDiv(n, scheduling_column_block);
+  const std::size_t max_tasks =
+      max_row_tasks > thread_count / column_tasks ? thread_count : max_row_tasks * column_tasks;
   const std::size_t target_tasks = std::min(thread_count, max_tasks);
 
-  std::size_t row_tasks = CeilDiv(m, blocking.mc);
-  std::size_t column_tasks = CeilDiv(n, blocking.nc);
+  const std::size_t row_tasks = CeilDiv(m, blocking.mc);
   if (row_tasks * column_tasks >= target_tasks) {
     return blocking;
   }
@@ -178,14 +189,30 @@ GemmBlocking ConstrainGemmBlockingForTasks(GemmBlocking blocking, std::size_t m,
   const std::size_t desired_row_tasks =
       std::min(max_row_tasks, CeilDiv(target_tasks, column_tasks));
   blocking.mc = std::max(blocking.mr, AlignUp(CeilDiv(m, desired_row_tasks), blocking.mr));
-  row_tasks = CeilDiv(m, blocking.mc);
 
-  if (row_tasks * column_tasks < target_tasks) {
-    const std::size_t desired_column_tasks =
-        std::min(max_column_tasks, CeilDiv(target_tasks, row_tasks));
-    blocking.nc = std::max(blocking.nr, AlignUp(CeilDiv(n, desired_column_tasks), blocking.nr));
-  }
   return blocking;
+}
+
+std::size_t SelectGemmParticipantCount(std::size_t m, std::size_t n, std::size_t k,
+                                       std::size_t available_threads,
+                                       std::size_t target_fmas_per_participant) {
+  if (m == 0 || n == 0 || available_threads <= 1) {
+    return 1;
+  }
+  const long double total_work =
+      k == 0
+          ? static_cast<long double>(m) * static_cast<long double>(n)
+          : static_cast<long double>(m) * static_cast<long double>(n) * static_cast<long double>(k);
+  const std::size_t target_work =
+      k == 0 ? static_cast<std::size_t>(kExecutionGrainSize)
+             : (target_fmas_per_participant == 0 ? kTargetFmasPerSchedulingTask
+                                                 : target_fmas_per_participant);
+  const long double work_tasks = std::ceil(total_work / static_cast<long double>(target_work));
+  const std::size_t work_limited_threads =
+      work_tasks >= static_cast<long double>(std::numeric_limits<std::size_t>::max())
+          ? available_threads
+          : std::max<std::size_t>(1, static_cast<std::size_t>(work_tasks));
+  return std::min(available_threads, work_limited_threads);
 }
 
 std::size_t SelectGemmColumnBlock(const GemmBlocking &blocking, std::size_t element_size) {
