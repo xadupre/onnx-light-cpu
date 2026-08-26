@@ -150,10 +150,20 @@ MatMulLayout ResolveLayout(const Tensor &a, const Tensor &b) {
   return layout;
 }
 
-std::vector<int32_t> ReadZeroPoints(const Tensor *tensor, int32_t expected_type,
-                                    int64_t expected_size, const char *name) {
+struct IntegerZeroPoints {
+  int32_t scalar = 0;
+  std::vector<int32_t> per_axis;
+
+  const int32_t *data() const { return per_axis.empty() ? &scalar : per_axis.data(); }
+  std::size_t size() const { return per_axis.empty() ? 1 : per_axis.size(); }
+  int32_t operator[](std::size_t index) const { return data()[index]; }
+};
+
+IntegerZeroPoints ReadZeroPoints(const Tensor *tensor, int32_t expected_type, int64_t expected_size,
+                                 const char *name) {
+  IntegerZeroPoints values;
   if (tensor == nullptr) {
-    return {0};
+    return values;
   }
   if (tensor->data_type != expected_type) {
     throw std::invalid_argument(std::string(name) + " dtype must match its data input.");
@@ -166,9 +176,13 @@ std::vector<int32_t> ReadZeroPoints(const Tensor *tensor, int32_t expected_type,
     throw std::invalid_argument(std::string(name) +
                                 " must contain one value or one value per matrix axis.");
   }
-  std::vector<int32_t> values(static_cast<std::size_t>(count));
-  for (int64_t index = 0; index < count; ++index) {
-    values[static_cast<std::size_t>(index)] = ReadInteger(*tensor, index);
+  if (count == 1) {
+    values.scalar = ReadInteger(*tensor, 0);
+  } else {
+    values.per_axis.resize(static_cast<std::size_t>(count));
+    for (int64_t index = 0; index < count; ++index) {
+      values.per_axis[static_cast<std::size_t>(index)] = ReadInteger(*tensor, index);
+    }
   }
   return values;
 }
@@ -301,9 +315,9 @@ Tensor MatMulIntegerKernel::operator()(const Tensor &a, const Tensor &b, const T
     throw std::invalid_argument("MatMulInteger inputs must have INT8 or UINT8 dtype.");
   }
   const MatMulLayout layout = ResolveLayout(a, b);
-  const std::vector<int32_t> a_zp =
+  const IntegerZeroPoints a_zp =
       ReadZeroPoints(a_zero_point, a.data_type, layout.m, "a_zero_point");
-  const std::vector<int32_t> b_zp =
+  const IntegerZeroPoints b_zp =
       ReadZeroPoints(b_zero_point, b.data_type, layout.n, "b_zero_point");
   const std::size_t output_bytes =
       static_cast<std::size_t>(ElementCount(layout.output_shape)) * sizeof(int32_t);

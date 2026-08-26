@@ -315,7 +315,7 @@ void GemmMatMulIntegerAmxInt8(const std::uint8_t *a, bool a_signed, const std::u
       _mm512_storeu_si512(reinterpret_cast<void *>(b_sum.data() + col0),
                           _mm512_add_epi32(column_sums[block], tail_sums));
     }
-  }
+  };
 
   alignas(64) std::uint32_t c_tile[kTileRows * kTileCols];
   const std::uint32_t k_wrapped = static_cast<std::uint32_t>(k);
@@ -379,76 +379,82 @@ void GemmMatMulIntegerAmxInt8(const std::uint8_t *a, bool a_signed, const std::u
     }
     _tile_stored(ONNX_LIGHT_CPU_AMX_INT8_TILE_C00, c_tile, kInt32TileStride);
     for (std::size_t row = 0; row < rows; ++row) {
-      correct_row(c_tile + row * kTileCols, c + (row0 + row) * n + col0, row0 + row, col0, cols);
+      std::int32_t *output = c + (row0 + row) * n + col0;
+      correct_row(c_tile + row * kTileCols, output, row0 + row, col0, cols);
     }
   };
 
-  for (std::size_t row0 = 0; row0 < m;) {
-    const bool full_rows = row0 + 2 * kTileRows <= m;
-    for (std::size_t col0 = 0; col0 < n;) {
-      if (!full_rows || col0 + 2 * kTileCols > n) {
-        compute_16x16(row0, col0);
-        if (full_rows) {
-          compute_16x16(row0 + kTileRows, col0);
+  constexpr std::size_t kComputePanelCols = 128;
+  for (std::size_t panel_col0 = 0; panel_col0 < n; panel_col0 += kComputePanelCols) {
+    const std::size_t panel_col_end = std::min(n, panel_col0 + kComputePanelCols);
+    for (std::size_t row0 = 0; row0 < m;) {
+      const bool full_rows = row0 + 2 * kTileRows <= m;
+      for (std::size_t col0 = panel_col0; col0 < panel_col_end;) {
+        if (!full_rows || col0 + 2 * kTileCols > panel_col_end) {
+          compute_16x16(row0, col0);
+          if (full_rows) {
+            compute_16x16(row0 + kTileRows, col0);
+          }
+          col0 += kTileCols;
+          continue;
         }
-        col0 += kTileCols;
-        continue;
-      }
 
-      _tile_zero(ONNX_LIGHT_CPU_AMX_INT8_TILE_C00);
-      _tile_zero(ONNX_LIGHT_CPU_AMX_INT8_TILE_C01);
-      _tile_zero(ONNX_LIGHT_CPU_AMX_INT8_TILE_C10);
-      _tile_zero(ONNX_LIGHT_CPU_AMX_INT8_TILE_C11);
-      for (std::size_t depth0 = 0; depth0 < k; depth0 += kTileK) {
-        const std::size_t depth_block = depth0 / kTileK;
-        const std::uint8_t *packed_a0 = packed_a + row0 * padded_k + depth0;
-        const std::uint8_t *packed_a1 = packed_a0 + kTileRows * padded_k;
-        const std::uint8_t *packed_b0 =
-            packed_b + ((col0 / kTileCols) * depth_block_count + depth_block) * kTileRows * kTileK;
-        const std::uint8_t *packed_b1 = packed_b0 + depth_block_count * kTileRows * kTileK;
-        _tile_loadd(ONNX_LIGHT_CPU_AMX_INT8_TILE_A0, packed_a0, static_cast<int>(padded_k));
-        _tile_loadd(ONNX_LIGHT_CPU_AMX_INT8_TILE_A1, packed_a1, static_cast<int>(padded_k));
-        _tile_loadd(ONNX_LIGHT_CPU_AMX_INT8_TILE_B0, packed_b0, kTileStride);
-        _tile_loadd(ONNX_LIGHT_CPU_AMX_INT8_TILE_B1, packed_b1, kTileStride);
-        if (use_u8s8) {
-          _tile_dpbusd(ONNX_LIGHT_CPU_AMX_INT8_TILE_C00, ONNX_LIGHT_CPU_AMX_INT8_TILE_A0,
-                       ONNX_LIGHT_CPU_AMX_INT8_TILE_B0);
-          _tile_dpbusd(ONNX_LIGHT_CPU_AMX_INT8_TILE_C01, ONNX_LIGHT_CPU_AMX_INT8_TILE_A0,
-                       ONNX_LIGHT_CPU_AMX_INT8_TILE_B1);
-          _tile_dpbusd(ONNX_LIGHT_CPU_AMX_INT8_TILE_C10, ONNX_LIGHT_CPU_AMX_INT8_TILE_A1,
-                       ONNX_LIGHT_CPU_AMX_INT8_TILE_B0);
-          _tile_dpbusd(ONNX_LIGHT_CPU_AMX_INT8_TILE_C11, ONNX_LIGHT_CPU_AMX_INT8_TILE_A1,
-                       ONNX_LIGHT_CPU_AMX_INT8_TILE_B1);
-        } else {
-          _tile_dpbuud(ONNX_LIGHT_CPU_AMX_INT8_TILE_C00, ONNX_LIGHT_CPU_AMX_INT8_TILE_A0,
-                       ONNX_LIGHT_CPU_AMX_INT8_TILE_B0);
-          _tile_dpbuud(ONNX_LIGHT_CPU_AMX_INT8_TILE_C01, ONNX_LIGHT_CPU_AMX_INT8_TILE_A0,
-                       ONNX_LIGHT_CPU_AMX_INT8_TILE_B1);
-          _tile_dpbuud(ONNX_LIGHT_CPU_AMX_INT8_TILE_C10, ONNX_LIGHT_CPU_AMX_INT8_TILE_A1,
-                       ONNX_LIGHT_CPU_AMX_INT8_TILE_B0);
-          _tile_dpbuud(ONNX_LIGHT_CPU_AMX_INT8_TILE_C11, ONNX_LIGHT_CPU_AMX_INT8_TILE_A1,
-                       ONNX_LIGHT_CPU_AMX_INT8_TILE_B1);
+        _tile_zero(ONNX_LIGHT_CPU_AMX_INT8_TILE_C00);
+        _tile_zero(ONNX_LIGHT_CPU_AMX_INT8_TILE_C01);
+        _tile_zero(ONNX_LIGHT_CPU_AMX_INT8_TILE_C10);
+        _tile_zero(ONNX_LIGHT_CPU_AMX_INT8_TILE_C11);
+        for (std::size_t depth0 = 0; depth0 < k; depth0 += kTileK) {
+          const std::size_t depth_block = depth0 / kTileK;
+          const std::uint8_t *packed_a0 = packed_a + row0 * padded_k + depth0;
+          const std::uint8_t *packed_a1 = packed_a0 + kTileRows * padded_k;
+          const std::uint8_t *packed_b0 =
+              packed_b +
+              ((col0 / kTileCols) * depth_block_count + depth_block) * kTileRows * kTileK;
+          const std::uint8_t *packed_b1 = packed_b0 + depth_block_count * kTileRows * kTileK;
+          _tile_loadd(ONNX_LIGHT_CPU_AMX_INT8_TILE_A0, packed_a0, static_cast<int>(padded_k));
+          _tile_loadd(ONNX_LIGHT_CPU_AMX_INT8_TILE_A1, packed_a1, static_cast<int>(padded_k));
+          _tile_loadd(ONNX_LIGHT_CPU_AMX_INT8_TILE_B0, packed_b0, kTileStride);
+          _tile_loadd(ONNX_LIGHT_CPU_AMX_INT8_TILE_B1, packed_b1, kTileStride);
+          if (use_u8s8) {
+            _tile_dpbusd(ONNX_LIGHT_CPU_AMX_INT8_TILE_C00, ONNX_LIGHT_CPU_AMX_INT8_TILE_A0,
+                         ONNX_LIGHT_CPU_AMX_INT8_TILE_B0);
+            _tile_dpbusd(ONNX_LIGHT_CPU_AMX_INT8_TILE_C01, ONNX_LIGHT_CPU_AMX_INT8_TILE_A0,
+                         ONNX_LIGHT_CPU_AMX_INT8_TILE_B1);
+            _tile_dpbusd(ONNX_LIGHT_CPU_AMX_INT8_TILE_C10, ONNX_LIGHT_CPU_AMX_INT8_TILE_A1,
+                         ONNX_LIGHT_CPU_AMX_INT8_TILE_B0);
+            _tile_dpbusd(ONNX_LIGHT_CPU_AMX_INT8_TILE_C11, ONNX_LIGHT_CPU_AMX_INT8_TILE_A1,
+                         ONNX_LIGHT_CPU_AMX_INT8_TILE_B1);
+          } else {
+            _tile_dpbuud(ONNX_LIGHT_CPU_AMX_INT8_TILE_C00, ONNX_LIGHT_CPU_AMX_INT8_TILE_A0,
+                         ONNX_LIGHT_CPU_AMX_INT8_TILE_B0);
+            _tile_dpbuud(ONNX_LIGHT_CPU_AMX_INT8_TILE_C01, ONNX_LIGHT_CPU_AMX_INT8_TILE_A0,
+                         ONNX_LIGHT_CPU_AMX_INT8_TILE_B1);
+            _tile_dpbuud(ONNX_LIGHT_CPU_AMX_INT8_TILE_C10, ONNX_LIGHT_CPU_AMX_INT8_TILE_A1,
+                         ONNX_LIGHT_CPU_AMX_INT8_TILE_B0);
+            _tile_dpbuud(ONNX_LIGHT_CPU_AMX_INT8_TILE_C11, ONNX_LIGHT_CPU_AMX_INT8_TILE_A1,
+                         ONNX_LIGHT_CPU_AMX_INT8_TILE_B1);
+          }
         }
+        std::int32_t *c00 = c + row0 * n + col0;
+        std::int32_t *c01 = c00 + kTileCols;
+        std::int32_t *c10 = c00 + kTileRows * n;
+        std::int32_t *c11 = c10 + kTileCols;
+        const int output_stride = static_cast<int>(n * sizeof(std::int32_t));
+        _tile_stored(ONNX_LIGHT_CPU_AMX_INT8_TILE_C00, c00, output_stride);
+        _tile_stored(ONNX_LIGHT_CPU_AMX_INT8_TILE_C01, c01, output_stride);
+        _tile_stored(ONNX_LIGHT_CPU_AMX_INT8_TILE_C10, c10, output_stride);
+        _tile_stored(ONNX_LIGHT_CPU_AMX_INT8_TILE_C11, c11, output_stride);
+        for (std::size_t row = 0; row < 2 * kTileRows; ++row) {
+          std::int32_t *output = c + (row0 + row) * n + col0;
+          correct_row(reinterpret_cast<const std::uint32_t *>(output), output, row0 + row, col0,
+                      kTileCols);
+          correct_row(reinterpret_cast<const std::uint32_t *>(output + kTileCols),
+                      output + kTileCols, row0 + row, col0 + kTileCols, kTileCols);
+        }
+        col0 += 2 * kTileCols;
       }
-      std::int32_t *c00 = c + row0 * n + col0;
-      std::int32_t *c01 = c00 + kTileCols;
-      std::int32_t *c10 = c00 + kTileRows * n;
-      std::int32_t *c11 = c10 + kTileCols;
-      const int output_stride = static_cast<int>(n * sizeof(std::int32_t));
-      _tile_stored(ONNX_LIGHT_CPU_AMX_INT8_TILE_C00, c00, output_stride);
-      _tile_stored(ONNX_LIGHT_CPU_AMX_INT8_TILE_C01, c01, output_stride);
-      _tile_stored(ONNX_LIGHT_CPU_AMX_INT8_TILE_C10, c10, output_stride);
-      _tile_stored(ONNX_LIGHT_CPU_AMX_INT8_TILE_C11, c11, output_stride);
-      for (std::size_t row = 0; row < 2 * kTileRows; ++row) {
-        std::int32_t *output = c + (row0 + row) * n + col0;
-        correct_row(reinterpret_cast<const std::uint32_t *>(output), output, row0 + row, col0,
-                    kTileCols);
-        correct_row(reinterpret_cast<const std::uint32_t *>(output + kTileCols), output + kTileCols,
-                    row0 + row, col0 + kTileCols, kTileCols);
-      }
-      col0 += 2 * kTileCols;
+      row0 += full_rows ? 2 * kTileRows : kTileRows;
     }
-    row0 += full_rows ? 2 * kTileRows : kTileRows;
   }
 }
 
