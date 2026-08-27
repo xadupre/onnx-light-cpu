@@ -60,6 +60,7 @@ PRIORITY_CASES = (
     GemmCase("trans_b", 128, 128, 128, trans_b=True),
     GemmCase("trans_ab", 128, 128, 128, trans_a=True, trans_b=True),
     GemmCase("transformer_projection_dynamic", 128, 3072, 768),
+    GemmCase("transformer_projection", 128, 3072, 768, constant_b=True),
     GemmCase("transformer_down_projection_dynamic", 128, 768, 3072),
 )
 
