@@ -11,7 +11,8 @@ namespace onnx_light_cpu::detail {
 
 void ConvertFloat16ToFloat32(const std::uint16_t *src, float *dst, std::size_t count) {
 #ifdef ONNX_LIGHT_CPU_HAVE_F16C
-  if (CpuSupportsF16C()) {
+  static const bool use_f16c = CpuSupportsF16C();
+  if (use_f16c) {
     GemmConvertFloat16ToFloat32_F16C(src, dst, count);
     return;
   }
@@ -23,7 +24,8 @@ void ConvertFloat16ToFloat32(const std::uint16_t *src, float *dst, std::size_t c
 
 void ConvertBFloat16ToFloat32(const std::uint16_t *src, float *dst, std::size_t count) {
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
-  if (DetectSimdLevel() >= SimdLevel::kAVX2) {
+  static const bool use_avx2 = DetectSimdLevel() >= SimdLevel::kAVX2;
+  if (use_avx2) {
     GemmConvertBFloat16ToFloat32_AVX2(src, dst, count);
     return;
   }
@@ -35,7 +37,8 @@ void ConvertBFloat16ToFloat32(const std::uint16_t *src, float *dst, std::size_t 
 
 void ConvertFloat32ToFloat16(const float *src, std::uint16_t *dst, std::size_t count) {
 #ifdef ONNX_LIGHT_CPU_HAVE_F16C
-  if (CpuSupportsF16C()) {
+  static const bool use_f16c = CpuSupportsF16C();
+  if (use_f16c) {
     GemmConvertFloat32ToFloat16_F16C(src, dst, count);
     return;
   }
@@ -47,7 +50,8 @@ void ConvertFloat32ToFloat16(const float *src, std::uint16_t *dst, std::size_t c
 
 void ConvertFloat32ToBFloat16(const float *src, std::uint16_t *dst, std::size_t count) {
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
-  if (DetectSimdLevel() >= SimdLevel::kAVX2) {
+  static const bool use_avx2 = DetectSimdLevel() >= SimdLevel::kAVX2;
+  if (use_avx2) {
     GemmConvertFloat32ToBFloat16_AVX2(src, dst, count);
     return;
   }

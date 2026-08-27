@@ -832,6 +832,38 @@ TEST(ComputeAttentionFloat16Streaming, MatchesFloat32ReferenceWithinHalfPrecisio
   ExpectClose(y, expected, 5e-3f);
 }
 
+TEST(ComputeAttentionFloat16Streaming, Rank3GqaMatchesFloat32Reference) {
+  AttentionDescriptor descriptor;
+  descriptor.is_causal = true;
+  constexpr std::size_t batch = 2, q_heads = 4, kv_heads = 2, q_len = 17, kv_len = 19, head_dim = 8,
+                        v_head_dim = 6;
+  descriptor.q_num_heads = q_heads;
+  descriptor.kv_num_heads = kv_heads;
+  const std::int64_t q_shape[] = {batch, q_len, q_heads * head_dim};
+  const std::int64_t k_shape[] = {batch, kv_len, kv_heads * head_dim};
+  const std::int64_t v_shape[] = {batch, kv_len, kv_heads * v_head_dim};
+  AttentionPlan plan(descriptor, AttentionLayout::kRank3, q_shape, k_shape, v_shape, {},
+                     AttentionMaskKind::kNone);
+
+  const auto q32 = half_precision::FromFloat16(
+      half_precision::ToFloat16(RandomTensor(batch * q_len * q_shape[2], 634)));
+  const auto k32 = half_precision::FromFloat16(
+      half_precision::ToFloat16(RandomTensor(batch * kv_len * k_shape[2], 635)));
+  const auto v32 = half_precision::FromFloat16(
+      half_precision::ToFloat16(RandomTensor(batch * kv_len * v_shape[2], 636)));
+  const auto q16 = half_precision::ToFloat16(q32);
+  const auto k16 = half_precision::ToFloat16(k32);
+  const auto v16 = half_precision::ToFloat16(v32);
+
+  std::vector<std::uint16_t> y16(batch * q_len * q_heads * v_head_dim);
+  ComputeAttentionFloat16Streaming(plan, q16.data(), k16.data(), v16.data(), nullptr, y16.data());
+  const auto y = half_precision::FromFloat16(y16);
+
+  std::vector<float> expected(y.size());
+  ComputeAttentionFloat32(plan, q32.data(), k32.data(), v32.data(), nullptr, expected.data());
+  ExpectClose(y, expected, 5e-3f);
+}
+
 // Roadmap PR14: same contract as the FP16 test above, for BF16.
 TEST(ComputeAttentionBFloat16Streaming, MatchesFloat32ReferenceWithinHalfPrecisionTolerance) {
   AttentionDescriptor descriptor;
