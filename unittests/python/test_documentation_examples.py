@@ -19,6 +19,7 @@ without that integration). Skip that whole directory rather than each
 individual example when the extension is unavailable.
 """
 
+import ast
 import importlib.util
 import os
 import subprocess
@@ -28,6 +29,7 @@ from unittest import TestCase
 
 _ROOT = Path(__file__).resolve().parents[2]
 _EXAMPLES_DIR = _ROOT / "docs" / "examples"
+_BACKEND_CASES_EXAMPLE = _EXAMPLES_DIR / "benchmarks" / "plot_backend_cases_benchmark.py"
 
 
 def _example_files():
@@ -42,7 +44,41 @@ def _onnx_light_integration_available():
     return importlib.util.find_spec("onnx_light_cpu.onnx_py._cpuregister") is not None
 
 
+def _argument_default(path, option):
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+            continue
+        if node.func.attr != "add_argument":
+            continue
+        if option not in [arg.value for arg in node.args if isinstance(arg, ast.Constant)]:
+            continue
+        default = next(keyword.value for keyword in node.keywords if keyword.arg == "default")
+        return ast.literal_eval(default)
+    raise AssertionError(f"Unable to find {option!r} in {path}")
+
+
+def _load_function(path, name):
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    function = next(
+        node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == name
+    )
+    namespace = {}
+    exec(compile(ast.Module(body=[function], type_ignores=[]), path, "exec"), namespace)
+    return namespace[name]
+
+
 class TestDocumentationExamples(TestCase):
+    def test_backend_case_benchmark_defaults_bound_aggregate_runtime(self):
+        assert _argument_default(_BACKEND_CASES_EXAMPLE, "--repeat") is None
+        assert _argument_default(_BACKEND_CASES_EXAMPLE, "--warmup") == 3
+        repeat_for_element_count = _load_function(
+            _BACKEND_CASES_EXAMPLE, "_repeat_for_element_count"
+        )
+        assert repeat_for_element_count(1) == 30
+        assert repeat_for_element_count(1_000_000) == 20
+        assert repeat_for_element_count(20_000_000) == 3
+
     def test_documentation_examples(self):
         for example in _example_files():
             with self.subTest(example=example.name):
