@@ -73,10 +73,10 @@ def custom_op_schemas(op_type: str = "", init_doc: bool = True) -> tuple[Any, ..
 
 def operator_schema_lookup(op_type: str) -> list[Any]:
     """Returns standard ONNX schemas plus this package's custom schemas."""
-    from onnx_light.onnx_op import GetAllOnnxOpSchemasWithHistory
+    onnx_op = import_module("onnx_light.onnx_op")
 
     return [
-        *GetAllOnnxOpSchemasWithHistory(op_type),
+        *onnx_op.GetAllOnnxOpSchemasWithHistory(op_type),
         *custom_op_schemas(op_type),
     ]
 
