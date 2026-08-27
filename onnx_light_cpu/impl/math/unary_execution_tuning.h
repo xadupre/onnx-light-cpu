@@ -40,7 +40,8 @@ inline constexpr UnaryExecutionTuning kDefaultExpLogExecutionTuning{2 * 1024 * 1
                                                                     32};
 inline constexpr UnaryExecutionTuning kDefaultExpLogHalfExecutionTuning{1024 * 1024, 128 * 1024,
                                                                         32};
-inline constexpr UnaryExecutionTuning kDefaultLogFloat16ExecutionTuning{64 * 1024, 1600, 0};
+inline constexpr UnaryExecutionTuning kDefaultLogFloat16ExecutionTuning{1024 * 1024, 128 * 1024,
+                                                                        32};
 inline constexpr UnaryExecutionTuning kDefaultLogBFloat16ExecutionTuning{512 * 1024, 64 * 1024, 32};
 
 inline std::int64_t UnaryBytesToElements(std::size_t bytes, std::size_t element_size) {
