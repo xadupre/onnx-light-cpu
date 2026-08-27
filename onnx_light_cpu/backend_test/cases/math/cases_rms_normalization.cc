@@ -61,7 +61,7 @@ NodeProto MakeRmsNormalizationNode() {
 void RegisterRmsNormalizationCase(std::vector<TestCase> &registry, const OpsetId &opset,
                                   const RmsNormalizationShape &shape, DataType data_type,
                                   bool benchmark) {
-  const std::string name = "test_cpu_rmsnormalization_" + std::string(shape.name) + "_" +
+  const std::string name = "test_cpu_rms_normalisation_" + std::string(shape.name) + "_" +
                            DataTypeSuffix(data_type) + (benchmark ? "_benchmark" : "");
   const std::int64_t x_count = shape.rows * shape.width;
   const NodeProto node = MakeRmsNormalizationNode();
