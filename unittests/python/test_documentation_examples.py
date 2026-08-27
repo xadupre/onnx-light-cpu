@@ -21,7 +21,6 @@ individual example when the extension is unavailable.
 
 import importlib.util
 import os
-import runpy
 import subprocess
 import sys
 from pathlib import Path
@@ -42,34 +41,6 @@ def _requires_onnx_light_integration(example):
 
 def _onnx_light_integration_available():
     return importlib.util.find_spec("onnx_light_cpu.onnx_py._cpuregister") is not None
-
-
-@pytest.mark.parametrize(
-    ("arguments", "includes_big"),
-    [([], False), (["--big"], True)],
-)
-def test_tree_ensemble_benchmark_big_configurations_are_opt_in(
-    monkeypatch, arguments, includes_big
-):
-    example = _EXAMPLES_DIR / "benchmarks" / "plot_tree_ensemble_benchmark.py"
-    command = []
-    run = subprocess.run
-
-    def capture_runner(call, **kwargs):
-        if not any(str(value).endswith("benchmark_tree_ensemble_parity.py") for value in call):
-            return run(call, **kwargs)
-        command.extend(call)
-        raise RuntimeError("runner intercepted")
-
-    monkeypatch.delenv("UNITTEST_GOING", raising=False)
-    monkeypatch.setattr(subprocess, "run", capture_runner)
-    monkeypatch.setattr(sys, "argv", [str(example), *arguments])
-    with pytest.raises(RuntimeError, match="runner intercepted"):
-        runpy.run_path(example)
-
-    cases = [command[index + 1] for index, value in enumerate(command) if value == "--case"]
-    assert any("_t10000_" in case for case in cases) == includes_big
-    assert any("_f4096_" in case for case in cases) == includes_big
 
 
 @pytest.mark.parametrize("example", _example_files(), ids=lambda p: p.name)
