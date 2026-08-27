@@ -27,71 +27,6 @@ def _set_cmake_default_define(cmake_args, name, value):
     return [*cmake_args, f"{prefix}{value}"]
 
 
-def _editable_install_onnx_py_dir(root):
-    """Returns the ``onnx_py`` directory of a *separate* editable install of
-    this project in site-packages, if any, or ``None`` otherwise.
-
-    ``pip install -e .`` (scikit-build-core) hard-wires the compiled
-    extension modules (``_cpukernels*``, ``liblib_onnx_light_cpu*``) to the
-    copy it placed under site-packages at install time; unlike the pure
-    Python sources, that copy is *not* redirected back to this source tree.
-    If that copy exists but this in-place build is not itself running from
-    it, it silently shadows the fresh in-place build for any module it
-    contains (same file name resolved first), which can undefined-symbol at
-    import time once the two builds drift apart. Keep it in sync instead of
-    just relying on a separate ``pip install -e .`` step.
-    """
-    import contextlib
-    import site
-
-    site_dirs = []
-    with contextlib.suppress(AttributeError):  # not available in venvs on some platforms
-        site_dirs.extend(site.getsitepackages())
-    with contextlib.suppress(AttributeError):
-        site_dirs.append(site.getusersitepackages())
-
-    for site_dir in site_dirs:
-        candidate = Path(site_dir) / "onnx_light_cpu" / "onnx_py"
-        try:
-            if candidate.resolve() == (root / "onnx_light_cpu" / "onnx_py").resolve():
-                continue  # this *is* the in-place tree (e.g. an inplace-only editable dir)
-        except OSError:
-            continue
-        if candidate.is_dir():
-            return candidate
-    return None
-
-
-def _sync_editable_install(root, install_prefix):
-    """Copies freshly built binary artifacts into a stale editable install.
-
-    Only overwrites files that already exist in the site-packages copy, so a
-    plain (non ``--onnx-light-source``) editable install never gains
-    dev-only artifacts (e.g. ``_cpuregister*``) it never shipped.
-    """
-    built_onnx_py = install_prefix / "onnx_light_cpu" / "onnx_py"
-    if not built_onnx_py.is_dir():
-        return
-    editable_onnx_py = _editable_install_onnx_py_dir(root)
-    if editable_onnx_py is None:
-        return
-    for built_file in built_onnx_py.iterdir():
-        if built_file.suffix not in {".so", ".pyd", ".dll"}:
-            continue
-        target = editable_onnx_py / built_file.name
-        if not target.exists():
-            continue  # never introduce files a plain editable install never had
-        print(f"copying {built_file} -> {target}")
-        _copy_file(built_file, target)
-
-
-def _copy_file(src, dst):
-    """Copies ``src`` onto ``dst``, replacing it (``shutil.copy2`` mirror)."""
-    import shutil
-
-    shutil.copy2(src, dst)
-
-
 def _default_parallel_jobs():
     """Returns default parallel jobs for CMake builds."""
     cmake_parallel = os.environ.get("CMAKE_BUILD_PARALLEL_LEVEL")
@@ -139,24 +74,54 @@ def _onnx_light_cmake_dir():
 
 
 def _onnx_light_source_build_info():
-    """Returns paths for the C++ runtime loaded by a local onnx-light.
+    """Returns paths for the C++ runtime built in the local onnx-light tree."""
+    header = Path("onnx_core/runtime/kernels/kernel_dispatch_table.h")
+    configured_source = os.environ.get("ONNX_LIGHT_CPU_ONNX_LIGHT_SOURCE_DIR")
+    if configured_source:
+        configured_dir = Path(configured_source).resolve()
+        include_dir = (
+            configured_dir / "onnx_light"
+            if (configured_dir / "onnx_light" / header).is_file()
+            else configured_dir
+        )
+        if not (include_dir / header).is_file():
+            raise FileNotFoundError(
+                "ONNX_LIGHT_CPU_ONNX_LIGHT_SOURCE_DIR does not contain the "
+                f"onnx-light headers: {configured_dir}"
+            )
+    else:
+        sibling_dir = Path(__file__).resolve().parent.parent / "onnx-light" / "onnx_light"
+        if (sibling_dir / header).is_file():
+            include_dir = sibling_dir
+        else:
+            import onnx_light
 
-    The shared library must be the exact copy loaded by onnx-light's Python
-    extensions. Linking another copy would create a separate global kernel
-    dispatch table, so registrations made by onnx-light-cpu would be invisible
-    to ``ReferenceEvaluator``.
-    """
-    from onnx_light import get_cpp_build_info
+            include_dir = Path(onnx_light.__file__).resolve().parent
 
-    info = dict(get_cpp_build_info())
-    include_dir = Path(info["include_dir"])
-    if not (
-        include_dir / "onnx_core" / "runtime" / "kernels" / "kernel_dispatch_table.h"
-    ).is_file():
+    if not (include_dir / header).is_file():
         raise FileNotFoundError(
             f"Could not find the onnx-light C++ headers under {include_dir}. Build "
-            "onnx-light from a local checkout before using --onnx-light-source."
+            "onnx-light from a sibling checkout, add it to PYTHONPATH, or set "
+            "ONNX_LIGHT_CPU_ONNX_LIGHT_SOURCE_DIR before using --onnx-light-source."
         )
+    runtime_dir = include_dir / "onnx_py"
+
+    def find_runtime_library(name):
+        for pattern in (f"lib{name}.so", f"lib{name}.dylib", f"{name}.dll"):
+            matches = sorted(runtime_dir.glob(pattern))
+            if matches:
+                return str(matches[0].resolve())
+        raise FileNotFoundError(
+            f"Could not find the locally built {name} runtime under {runtime_dir}. "
+            "Run onnx-light's 'python setup.py build_ext --inplace' first."
+        )
+
+    info = {
+        "include_dir": str(include_dir),
+        "library_dir": str(runtime_dir),
+        "core_library": find_runtime_library("lib_onnx_core"),
+        "proto_library": find_runtime_library("lib_onnx_proto"),
+    }
     import_library_dir = os.environ.get("ONNX_LIGHT_CPU_ONNX_LIGHT_IMPLIB_DIR")
     if import_library_dir:
         root = Path(import_library_dir)
@@ -365,8 +330,6 @@ except ModuleNotFoundError:
         )
         if cpp_tests:
             _spawn(_ctest_command(build_temp_path), dry_run)
-        if inplace and not dry_run:
-            _sync_editable_install(root, install_prefix)
         return True
 
     if _run_build_ext_without_packaging(sys.argv[1:]):
@@ -519,8 +482,6 @@ class BuildExt(Command):
         )
         if self.cpp_tests:
             self._spawn(_ctest_command(build_temp))
-        if self.inplace and not self.dry_run:
-            _sync_editable_install(root, install_prefix)
 
 
 setup(
