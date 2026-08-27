@@ -193,7 +193,6 @@ struct TreeEnsembleCalibrationOptions {
   std::size_t required_wins = 2;
   double minimum_improvement = 0.0;
   double maximum_distribution_shift_regression = 0.1;
-  std::string evidence_path;
 };
 
 struct TreeEnsembleCalibrationEvidence {
@@ -218,7 +217,6 @@ struct TreeEnsembleCalibrationReport {
   std::vector<TreeEnsembleCalibrationEvidence> evidence;
   bool changed = false;
   bool budget_exhausted = false;
-  bool persisted = false;
 };
 
 using TreeEnsembleCalibrationMeasure = std::function<TreeEnsembleCalibrationMeasurement(
@@ -241,6 +239,20 @@ struct TreeEnsembleExecutionDecision {
   std::size_t tree_chunk = 1;
   std::size_t workspace_bytes = 0;
 };
+
+struct TreeEnsembleCacheBlocking {
+  /// Number of consecutive prepared trees assigned to one L1-sized block.
+  std::size_t trees_per_l1_block = 1;
+  /// A forest at or below this count stays serial over trees.
+  std::size_t parallel_tree_threshold = 1;
+
+  bool operator==(const TreeEnsembleCacheBlocking &) const = default;
+};
+
+TreeEnsembleCacheBlocking
+SelectTreeEnsembleCacheBlocking(std::size_t tree_count, std::size_t node_count,
+                                std::size_t leaf_count, std::size_t node_bytes,
+                                std::size_t leaf_bytes, std::size_t l1_bytes);
 
 /// Thread-safe profile store. Plans resolve it once during construction and
 /// capture the selected policy and generation.
@@ -415,6 +427,14 @@ struct TreeEnsembleCompactNode {
 };
 static_assert(sizeof(TreeEnsembleCompactNode) == 24);
 
+struct TreeEnsembleCompactFloatNode {
+  float split = 0.0F;
+  std::uint32_t feature_id = 0;
+  std::uint32_t true_child = 0;
+  std::uint32_t false_child = 0;
+};
+static_assert(sizeof(TreeEnsembleCompactFloatNode) == 16);
+
 /// Immutable prepared representation for the ai.onnx.ml TreeEnsemble-5 schema.
 class TreeEnsemblePlan {
 public:
@@ -455,6 +475,7 @@ public:
     return structural_buckets_;
   }
   const TreeEnsembleTuningPolicy &tuning_policy() const noexcept { return tuning_policy_; }
+  const TreeEnsembleCacheBlocking &cache_blocking() const noexcept { return cache_blocking_; }
   TreeEnsembleProfileSource profile_source() const noexcept { return profile_source_; }
   std::uint64_t profile_generation() const noexcept { return profile_generation_; }
   std::size_t workspace_bytes() const noexcept { return workspace_bytes_; }
@@ -462,6 +483,7 @@ public:
   bool uses_64bit_indices() const noexcept { return uses_64_bit_indices_; }
   bool all_trees_are_stumps() const noexcept { return all_trees_are_stumps_; }
   bool all_trees_are_symmetric() const noexcept { return all_trees_are_symmetric_; }
+  bool all_trees_are_balanced() const noexcept { return all_trees_are_balanced_; }
   std::vector<TreeEnsembleCalibrationCandidate> GenerateCalibrationCandidates() const;
 
 private:
@@ -483,6 +505,7 @@ private:
   TreeEnsembleModelKey model_key_;
   TreeEnsembleStructuralBuckets structural_buckets_;
   TreeEnsembleTuningPolicy tuning_policy_;
+  TreeEnsembleCacheBlocking cache_blocking_;
   TreeEnsembleProfileSource profile_source_ = TreeEnsembleProfileSource::kSafeFallback;
   std::uint64_t profile_generation_ = 0;
   std::size_t workspace_bytes_ = 0;
@@ -490,6 +513,7 @@ private:
   bool uses_dynamic_safe_policy_ = false;
   bool all_trees_are_stumps_ = false;
   bool all_trees_are_symmetric_ = false;
+  bool all_trees_are_balanced_ = false;
   std::vector<std::uint32_t> feature_ids32_;
   std::vector<std::uint32_t> true_children32_;
   std::vector<std::uint32_t> false_children32_;
@@ -498,6 +522,8 @@ private:
   std::vector<std::uint8_t> prepared_modes_;
   std::vector<std::uint8_t> prepared_flags_;
   std::vector<TreeEnsembleCompactNode> compact_nodes_;
+  std::vector<TreeEnsembleCompactFloatNode> compact_float_nodes_;
+  std::vector<float> leaf_weights_float_;
   std::vector<std::uint32_t> hot_tree_roots_;
   std::vector<std::uint32_t> hot_feature_ids_;
   std::vector<std::uint32_t> hot_true_children_;
