@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "onnx_light_cpu/impl/data_type.h"
+
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -38,12 +40,6 @@ enum class TreePostTransform : std::int64_t {
   kSoftmax = 2,
   kSoftmaxZero = 3,
   kProbit = 4,
-};
-
-enum class TreeValueType {
-  kFloat16,
-  kFloat32,
-  kFloat64,
 };
 
 enum class TreeEnsembleExecutionStrategy {
@@ -115,8 +111,8 @@ struct TreeEnsembleModelKey {
   std::string domain = "ai.onnx.ml";
   std::int64_t opset = 5;
   std::string implementation = "prepared_tree_ensemble";
-  TreeValueType input_type = TreeValueType::kFloat32;
-  TreeValueType accumulator_type = TreeValueType::kFloat64;
+  DataType input_type = DataType::FLOAT;
+  DataType accumulator_type = DataType::DOUBLE;
   std::string processor = "portable";
   std::size_t threads = 1;
   std::string model_digest;
@@ -293,7 +289,7 @@ struct TreeEnsembleClassifierAttributes;
 struct TreeEnsembleAttributes {
   std::int64_t n_features = 0;
   std::int64_t n_targets = 0;
-  TreeValueType value_type = TreeValueType::kFloat32;
+  DataType value_type = DataType::FLOAT;
   TreeAggregate aggregate = TreeAggregate::kSum;
   TreePostTransform post_transform = TreePostTransform::kNone;
 

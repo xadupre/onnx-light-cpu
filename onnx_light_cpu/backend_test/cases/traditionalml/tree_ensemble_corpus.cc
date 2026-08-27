@@ -15,7 +15,7 @@
 namespace onnx_light_cpu::backend_test {
 namespace {
 
-TreeEnsembleAttributes MakeStump(TreeBranchMode mode, TreeValueType type) {
+TreeEnsembleAttributes MakeStump(TreeBranchMode mode, DataType type) {
   TreeEnsembleAttributes attributes;
   attributes.n_features = 1;
   attributes.n_targets = 1;
@@ -152,21 +152,19 @@ std::vector<TreeEnsembleCorpusCase> GenerateTreeEnsembleV5Corpus() {
   for (TreeBranchMode mode :
        {TreeBranchMode::kLeq, TreeBranchMode::kLt, TreeBranchMode::kGte, TreeBranchMode::kGt,
         TreeBranchMode::kEq, TreeBranchMode::kNeq, TreeBranchMode::kMember}) {
-    TreeEnsembleAttributes attributes = MakeStump(mode, TreeValueType::kFloat64);
+    TreeEnsembleAttributes attributes = MakeStump(mode, DataType::DOUBLE);
     attributes.nodes_missing_value_tracks_true = {
         static_cast<std::int64_t>(static_cast<std::uint8_t>(mode) % 2)};
     AddCase(cases, std::string("mode_") + ModeName(mode), std::move(attributes),
             {-infinity, -1.0, -0.0, 0.0, 1.0, infinity, nan}, 7);
   }
 
-  for (TreeValueType type :
-       {TreeValueType::kFloat16, TreeValueType::kFloat32, TreeValueType::kFloat64}) {
+  for (DataType type : {DataType::FLOAT16, DataType::FLOAT, DataType::DOUBLE}) {
     TreeEnsembleAttributes attributes = MakeStump(TreeBranchMode::kLeq, type);
     attributes.nodes_splits = {1.00048828125};
-    const char *name =
-        type == TreeValueType::kFloat16
-            ? "float16_boundary"
-            : (type == TreeValueType::kFloat32 ? "float32_boundary" : "float64_boundary");
+    const char *name = type == DataType::FLOAT16
+                           ? "float16_boundary"
+                           : (type == DataType::FLOAT ? "float32_boundary" : "float64_boundary");
     AddCase(cases, name, std::move(attributes),
             {1.0, 1.00048828125, std::nextafter(1.00048828125, 2.0)}, 3);
   }
@@ -182,15 +180,14 @@ std::vector<TreeEnsembleCorpusCase> GenerateTreeEnsembleV5Corpus() {
     }
   }
 
-  TreeEnsembleAttributes missing_false = MakeStump(TreeBranchMode::kNeq, TreeValueType::kFloat32);
+  TreeEnsembleAttributes missing_false = MakeStump(TreeBranchMode::kNeq, DataType::FLOAT);
   missing_false.nodes_missing_value_tracks_true = {0};
   AddCase(cases, "missing_tracks_false", std::move(missing_false), {nan}, 1);
-  TreeEnsembleAttributes missing_true = MakeStump(TreeBranchMode::kEq, TreeValueType::kFloat32);
+  TreeEnsembleAttributes missing_true = MakeStump(TreeBranchMode::kEq, DataType::FLOAT);
   missing_true.nodes_missing_value_tracks_true = {1};
   AddCase(cases, "missing_tracks_true", std::move(missing_true), {nan}, 1);
 
-  TreeEnsembleAttributes large_members =
-      MakeStump(TreeBranchMode::kMember, TreeValueType::kFloat32);
+  TreeEnsembleAttributes large_members = MakeStump(TreeBranchMode::kMember, DataType::FLOAT);
   large_members.membership_values.clear();
   for (int value = 0; value < 1024; ++value) {
     large_members.membership_values.push_back(static_cast<double>(value));
@@ -203,7 +200,7 @@ std::vector<TreeEnsembleCorpusCase> GenerateTreeEnsembleV5Corpus() {
       MakeAggregateModel(TreeAggregate::kSum, TreePostTransform::kNone);
   AddCase(cases, "multiple_roots_targets", std::move(multi_target), {-1.0, 2.0}, 2);
 
-  TreeEnsembleAttributes empty = MakeStump(TreeBranchMode::kLeq, TreeValueType::kFloat32);
+  TreeEnsembleAttributes empty = MakeStump(TreeBranchMode::kLeq, DataType::FLOAT);
   AddCase(cases, "empty_batch", std::move(empty), {}, 0);
 
   std::vector<double> deep_input(4096, 0.0);

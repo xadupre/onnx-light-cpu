@@ -29,7 +29,7 @@ namespace onnx_light_cpu {
 /// ``BenchmarkProcessorPerformance``. Bump whenever a field is added,
 /// removed, renamed, or reinterpreted so downstream serialization consumers
 /// can detect incompatible changes.
-constexpr int kProcessorPerformanceProfileSchemaVersion = 1;
+constexpr int kProcessorPerformanceProfileSchemaVersion = 2;
 
 /// Participant policy requested for one profile section. Kept distinct from
 /// ``MemoryParticipantPolicy``/``ComputeParticipantPolicy`` so the public
@@ -57,7 +57,7 @@ const char *MemoryLevelName(MemoryProfileLevel level);
 /// ``"float64"``, ``"float16"``, ``"bfloat16"``, or ``"int8"``). Shared
 /// between the C++ aggregator and the Python binding so both report the same
 /// names.
-const char *ComputeElementTypeName(ComputeElementType element_type);
+const char *ComputeElementTypeName(DataType element_type);
 
 /// Options accepted by ``BenchmarkProcessorPerformance``. Every field is
 /// validated by ``ValidateProcessorProfileOptions`` before any allocation or
@@ -130,12 +130,15 @@ struct ProcessorProfileMemoryEntry {
   std::optional<MemoryBandwidthResult> copy;
   std::optional<MemoryBandwidthResult> read_modify_write;
   std::optional<MemoryLatencyResult> latency;
+  /// Aggregate read bandwidth at 1, 2, 4, ... physical cores. Populated on
+  /// ``kPhysical`` entries; the final point always uses every visible core.
+  std::vector<MemoryBandwidthResult> read_scaling;
 };
 
 /// One element-type, one-policy compute entry, present only when the
 /// underlying engine reported the measurement as available.
 struct ProcessorProfileComputeEntry {
-  ComputeElementType element_type = ComputeElementType::kFloat32;
+  DataType element_type = DataType::FLOAT;
   ProcessorThreadPolicy policy = ProcessorThreadPolicy::kSingle;
   ComputeThroughputResult result;
 };
@@ -146,7 +149,7 @@ struct ProcessorProfileComputeEntry {
 /// arithmetic intensity (operations per useful byte) at which the compute
 /// ceiling and the memory bandwidth ceiling are equal.
 struct ProcessorProfileRooflineEntry {
-  ComputeElementType element_type = ComputeElementType::kFloat32;
+  DataType element_type = DataType::FLOAT;
   ProcessorThreadPolicy policy = ProcessorThreadPolicy::kSingle;
   MemoryProfileLevel level = MemoryProfileLevel::kL1;
 

@@ -19,7 +19,7 @@
 namespace {
 
 using onnx_light_cpu::BinaryBroadcastPlan;
-using onnx_light_cpu::BinaryDataType;
+using BinaryDataType = onnx_light_cpu::DataType;
 using onnx_light_cpu::BinaryKernelDescriptor;
 
 template <typename T> constexpr BinaryDataType DataTypeOf();

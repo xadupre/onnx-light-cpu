@@ -106,7 +106,7 @@ void ExecuteSwiGLUBFloat16(const std::uint16_t *gate, const std::uint16_t *up,
 } // namespace
 
 ElementwiseFusionPlan::ElementwiseFusionPlan(ElementwiseFusionTemplate fusion_template,
-                                             BinaryDataType data_type,
+                                             DataType data_type,
                                              std::span<const std::int64_t> output_shape)
     : fusion_template_(fusion_template), data_type_(data_type),
       output_shape_(output_shape.begin(), output_shape.end()), element_count_(1),
@@ -120,11 +120,11 @@ ElementwiseFusionPlan::ElementwiseFusionPlan(ElementwiseFusionTemplate fusion_te
 }
 
 std::optional<ElementwiseFusionPlan> ElementwiseFusionPlan::TryCreateSwiGLUGate(
-    BinaryDataType data_type, std::span<const std::int64_t> gate_shape,
+    DataType data_type, std::span<const std::int64_t> gate_shape,
     std::span<const std::int64_t> sigmoid_shape, std::span<const std::int64_t> inner_mul_shape,
     std::span<const std::int64_t> up_shape, std::span<const std::int64_t> output_shape,
     const ElementwiseFusionGuards &guards) {
-  if ((data_type != BinaryDataType::FLOAT && data_type != BinaryDataType::BFLOAT16) ||
+  if ((data_type != DataType::FLOAT && data_type != DataType::BFLOAT16) ||
       !HasExclusiveIntermediates(guards, 2) || !SupportedSwiGLUShape(gate_shape) ||
       !SameShape(gate_shape, sigmoid_shape) || !SameShape(gate_shape, inner_mul_shape) ||
       !SameShape(gate_shape, up_shape) || !SameShape(gate_shape, output_shape)) {
@@ -134,11 +134,11 @@ std::optional<ElementwiseFusionPlan> ElementwiseFusionPlan::TryCreateSwiGLUGate(
 }
 
 std::optional<ElementwiseFusionPlan> ElementwiseFusionPlan::TryCreateScaledMaskedScores(
-    BinaryDataType data_type, std::span<const std::int64_t> scores_shape,
+    DataType data_type, std::span<const std::int64_t> scores_shape,
     std::span<const std::int64_t> scale_shape, std::span<const std::int64_t> mask_shape,
     std::span<const std::int64_t> mul_shape, std::span<const std::int64_t> output_shape,
     const ElementwiseFusionGuards &guards) {
-  if (data_type != BinaryDataType::FLOAT || !HasExclusiveIntermediates(guards, 1) ||
+  if (data_type != DataType::FLOAT || !HasExclusiveIntermediates(guards, 1) ||
       !SupportedScoresShape(scores_shape) || !scale_shape.empty() ||
       !SameShape(scores_shape, mul_shape) || !SameShape(scores_shape, output_shape) ||
       !IsShape(mask_shape, {1, 1, scores_shape[2], scores_shape[3]})) {
@@ -156,7 +156,7 @@ void ElementwiseFusionPlan::Execute(const void *first, const void *second, const
     ExecuteRanges(
         static_cast<std::int64_t>(element_count_), kFusionSchedule, ExecutionSimdLanes<float>(),
         [&](std::int64_t begin, std::int64_t end) {
-          if (data_type_ == BinaryDataType::FLOAT) {
+          if (data_type_ == DataType::FLOAT) {
             ExecuteSwiGLUFloat(static_cast<const float *>(first),
                                static_cast<const float *>(second), static_cast<float *>(output),
                                static_cast<std::size_t>(begin), static_cast<std::size_t>(end));

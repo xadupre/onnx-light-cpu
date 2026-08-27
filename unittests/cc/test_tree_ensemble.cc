@@ -27,6 +27,7 @@
 namespace {
 
 using onnx_light_cpu::ClassLabels;
+using onnx_light_cpu::DataType;
 using onnx_light_cpu::LegacyTreeAttributes;
 using onnx_light_cpu::TreeAggregate;
 using onnx_light_cpu::TreeBranchMode;
@@ -47,7 +48,6 @@ using onnx_light_cpu::TreeEnsembleTuningContext;
 using onnx_light_cpu::TreeEnsembleTuningPolicy;
 using onnx_light_cpu::TreeEnsembleTuningRegistry;
 using onnx_light_cpu::TreePostTransform;
-using onnx_light_cpu::TreeValueType;
 using onnx_light_cpu::backend_test::GenerateTreeEnsembleV5Corpus;
 
 TreeEnsembleAttributes Stump() {
@@ -71,7 +71,7 @@ TreeEnsembleAttributes StumpForest(std::size_t trees, std::size_t targets = 2) {
   TreeEnsembleAttributes attributes;
   attributes.n_features = 1;
   attributes.n_targets = static_cast<std::int64_t>(targets);
-  attributes.value_type = TreeValueType::kFloat32;
+  attributes.value_type = DataType::FLOAT;
   attributes.base_values.resize(targets, 0.5);
   for (std::size_t tree = 0; tree < trees; ++tree) {
     const std::int64_t node = static_cast<std::int64_t>(tree);
@@ -166,7 +166,7 @@ TEST(TreeEnsembleOracle, CorpusCoversV5ContractAndIsDeterministic) {
   std::set<TreeBranchMode> modes;
   std::set<TreeAggregate> aggregates;
   std::set<TreePostTransform> transforms;
-  std::set<TreeValueType> types;
+  std::set<DataType> types;
   bool has_empty = false;
   bool has_multi_target = false;
   bool has_large_membership = false;
@@ -200,7 +200,7 @@ TEST(TreeEnsembleOracle, CorpusCoversV5ContractAndIsDeterministic) {
 
 TEST(TreeEnsembleOracle, CanonicalPlanLowersAndEvaluatesDeterministically) {
   TreeEnsembleAttributes attributes = Stump();
-  attributes.value_type = TreeValueType::kFloat32;
+  attributes.value_type = DataType::FLOAT;
   const TreeEnsemblePlan plan(attributes);
   EXPECT_EQ(plan.model_signature().find("tree_ensemble_v5"), 0U);
   EXPECT_EQ(plan.tree_roots().size(), 1U);
@@ -226,7 +226,7 @@ TEST(TreeEnsembleOracle, RuntimeCompactionRetainsTypedEvaluationAndReleasesConst
 
 TEST(TreeEnsembleOracle, CanonicalPlanAppliesBaseValues) {
   TreeEnsembleAttributes attributes = Stump();
-  attributes.value_type = TreeValueType::kFloat32;
+  attributes.value_type = DataType::FLOAT;
   attributes.base_values = {0.5};
   const TreeEnsemblePlan plan(attributes);
   EXPECT_EQ(plan.base_values(), (std::vector<double>{0.5}));
@@ -538,7 +538,7 @@ TEST(TreeEnsembleOracle, CalibrationBudgetFailurePreservesActiveProfileAndCanBeD
 
 TEST(TreeEnsembleOracle, AdvancedCandidatesAreStructuralAndDeterministic) {
   TreeEnsembleAttributes attributes = StumpForest(3, 64);
-  attributes.value_type = TreeValueType::kFloat16;
+  attributes.value_type = DataType::FLOAT16;
   attributes.nodes_hitrates = {0.9, 0.5, 0.1};
   const TreeEnsemblePlan plan(attributes, TreeEnsembleTuningContext{"candidate-cpu", 1}, nullptr);
   EXPECT_TRUE(plan.all_trees_are_stumps());
@@ -688,7 +688,7 @@ TEST(TreeEnsembleOracle, CalibrationComposesStagesAndEnforcesAdvancedGates) {
 TEST(TreeEnsembleOracle, OptimizedFloat16MatchesCompleteV5Corpus) {
   const TreeEnsembleTuningContext context{"float16-cpu", 1};
   for (const auto &test_case : GenerateTreeEnsembleV5Corpus()) {
-    if (test_case.attributes.value_type != TreeValueType::kFloat16) {
+    if (test_case.attributes.value_type != DataType::FLOAT16) {
       continue;
     }
     const TreeEnsemblePlan key_plan(test_case.attributes, context, nullptr);
@@ -772,7 +772,7 @@ TEST(TreeEnsembleOracle, EverySchedulingStrategyMatchesScalarAcrossThreadCounts)
 
 TEST(TreeEnsembleOracle, ThresholdsSignedZeroInfinityAndMissingRouting) {
   TreeEnsembleAttributes attributes = Stump();
-  attributes.value_type = TreeValueType::kFloat64;
+  attributes.value_type = DataType::DOUBLE;
   attributes.nodes_splits = {-0.0};
   attributes.nodes_modes = {TreeBranchMode::kEq};
   attributes.nodes_missing_value_tracks_true = {1};
@@ -785,7 +785,7 @@ TEST(TreeEnsembleOracle, ThresholdsSignedZeroInfinityAndMissingRouting) {
 
 TEST(TreeEnsembleOracle, Float16RoundsAtTieToEvenBoundary) {
   TreeEnsembleAttributes attributes = Stump();
-  attributes.value_type = TreeValueType::kFloat16;
+  attributes.value_type = DataType::FLOAT16;
   attributes.nodes_splits = {1.00048828125};
   const std::vector<double> actual =
       TreeEnsembleOracle(std::move(attributes)).Evaluate({1.0, 1.00048828125, 1.0009765625}, 3);

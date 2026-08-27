@@ -29,19 +29,19 @@ struct ElementwiseFusionGuards {
 class ElementwiseFusionPlan {
 public:
   static std::optional<ElementwiseFusionPlan> TryCreateSwiGLUGate(
-      BinaryDataType data_type, std::span<const std::int64_t> gate_shape,
+      DataType data_type, std::span<const std::int64_t> gate_shape,
       std::span<const std::int64_t> sigmoid_shape, std::span<const std::int64_t> inner_mul_shape,
       std::span<const std::int64_t> up_shape, std::span<const std::int64_t> output_shape,
       const ElementwiseFusionGuards &guards);
 
   static std::optional<ElementwiseFusionPlan> TryCreateScaledMaskedScores(
-      BinaryDataType data_type, std::span<const std::int64_t> scores_shape,
+      DataType data_type, std::span<const std::int64_t> scores_shape,
       std::span<const std::int64_t> scale_shape, std::span<const std::int64_t> mask_shape,
       std::span<const std::int64_t> mul_shape, std::span<const std::int64_t> output_shape,
       const ElementwiseFusionGuards &guards);
 
   ElementwiseFusionTemplate fusion_template() const noexcept { return fusion_template_; }
-  BinaryDataType data_type() const noexcept { return data_type_; }
+  DataType data_type() const noexcept { return data_type_; }
   std::span<const std::int64_t> output_shape() const noexcept { return output_shape_; }
   std::size_t element_count() const noexcept { return element_count_; }
   std::size_t workspace_bytes() const noexcept { return 0; }
@@ -49,11 +49,11 @@ public:
   void Execute(const void *first, const void *second, const void *third, void *output) const;
 
 private:
-  ElementwiseFusionPlan(ElementwiseFusionTemplate fusion_template, BinaryDataType data_type,
+  ElementwiseFusionPlan(ElementwiseFusionTemplate fusion_template, DataType data_type,
                         std::span<const std::int64_t> output_shape);
 
   ElementwiseFusionTemplate fusion_template_;
-  BinaryDataType data_type_;
+  DataType data_type_;
   std::vector<std::int64_t> output_shape_;
   std::size_t element_count_;
   std::size_t inner_elements_;

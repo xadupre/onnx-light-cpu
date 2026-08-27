@@ -294,7 +294,34 @@ fig.tight_layout()
 fig.savefig("plot_processor_performance_bandwidth.png")
 
 # %%
-# Plot 3: dependent-load latency by memory level
+# Plot 3: aggregate read bandwidth scaling by core count
+# -------------------------------------------------------
+#
+# The physical-core measurement also records intermediate powers of two, making
+# cache and memory-bandwidth saturation visible instead of reporting only the
+# one-core and all-core endpoints.
+
+fig_scaling, ax_scaling = plt.subplots(1, 1, figsize=(6, 4.2))
+for level in ("L1", "L2", "L3"):
+    entry = profile.memory.get(level, {}).get("physical")
+    if entry is None or not entry.read_scaling:
+        continue
+    ax_scaling.plot(
+        [point.participant_count for point in entry.read_scaling],
+        [point.median_gbps for point in entry.read_scaling],
+        marker="o",
+        label=level,
+    )
+ax_scaling.set_xscale("log", base=2)
+ax_scaling.set_xlabel("physical cores")
+ax_scaling.set_ylabel("aggregate effective GB/s")
+ax_scaling.set_title("read bandwidth scaling by physical-core count")
+ax_scaling.legend(fontsize=8)
+fig_scaling.tight_layout()
+fig_scaling.savefig("plot_processor_performance_bandwidth_scaling.png")
+
+# %%
+# Plot 4: dependent-load latency by memory level
 # ------------------------------------------------
 #
 # Latency uses a randomized single-cycle pointer permutation built before
@@ -321,7 +348,7 @@ fig_lat.tight_layout()
 fig_lat.savefig("plot_processor_performance_latency.png")
 
 # %%
-# Plot 4: arithmetic throughput by element type and thread policy
+# Plot 5: arithmetic throughput by element type and thread policy
 # -------------------------------------------------------------------
 #
 # Small native kernels keep independent operands and accumulators in registers,
@@ -352,7 +379,7 @@ fig_compute.tight_layout()
 fig_compute.savefig("plot_processor_performance_compute.png")
 
 # %%
-# Plot 5: Roofline
+# Plot 6: Roofline
 # ----------------
 #
 # Every point below is read from ``profile.roofline``: a horizontal ceiling at

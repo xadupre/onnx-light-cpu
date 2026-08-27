@@ -35,8 +35,8 @@ public:
     std::ptrdiff_t output_stride = 0;
   };
 
-  BinaryBroadcastPlan(const BinaryKernelDescriptor &descriptor, BinaryDataType left_type,
-                      BinaryDataType right_type, BinaryDataType output_type,
+  BinaryBroadcastPlan(const BinaryKernelDescriptor &descriptor, DataType left_type,
+                      DataType right_type, DataType output_type,
                       std::span<const std::int64_t> left_shape,
                       std::span<const std::int64_t> right_shape);
 
@@ -100,8 +100,8 @@ class BinaryBroadcastPlanCache {
 public:
   using PlanPtr = std::shared_ptr<const BinaryBroadcastPlan>;
 
-  PlanPtr GetOrCreate(const BinaryKernelDescriptor &descriptor, BinaryDataType left_type,
-                      BinaryDataType right_type, BinaryDataType output_type,
+  PlanPtr GetOrCreate(const BinaryKernelDescriptor &descriptor, DataType left_type,
+                      DataType right_type, DataType output_type,
                       std::span<const std::int64_t> left_shape,
                       std::span<const std::int64_t> right_shape);
 
@@ -110,9 +110,9 @@ public:
 private:
   struct Key {
     std::uint64_t descriptor_identity = 0;
-    BinaryDataType left_type = BinaryDataType::UNDEFINED;
-    BinaryDataType right_type = BinaryDataType::UNDEFINED;
-    BinaryDataType output_type = BinaryDataType::UNDEFINED;
+    DataType left_type = DataType::UNDEFINED;
+    DataType right_type = DataType::UNDEFINED;
+    DataType output_type = DataType::UNDEFINED;
     std::vector<std::int64_t> left_shape;
     std::vector<std::int64_t> right_shape;
 

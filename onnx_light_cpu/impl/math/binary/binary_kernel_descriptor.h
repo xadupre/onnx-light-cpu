@@ -61,9 +61,8 @@ public:
   const BinaryManifestEntry &manifest_entry() const noexcept { return manifest_; }
   std::span<const Adapter> adapters() const noexcept { return adapters_; }
 
-  BinaryDataType ResolveOutputType(BinaryDataType left, BinaryDataType right) const;
-  const Adapter &ResolveAdapter(BinaryDataType left, BinaryDataType right,
-                                BinaryDataType output) const;
+  DataType ResolveOutputType(DataType left, DataType right) const;
+  const Adapter &ResolveAdapter(DataType left, DataType right, DataType output) const;
 
 private:
   static std::uint64_t NextCacheIdentity();

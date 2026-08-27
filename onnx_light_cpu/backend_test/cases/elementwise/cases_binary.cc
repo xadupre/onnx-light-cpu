@@ -33,6 +33,7 @@ using bt_ns::IoData;
 using bt_ns::TestCase;
 using bt_ns::TestMode;
 using ONNX_LIGHT_NAMESPACE::NodeProto;
+using CpuDataType = onnx_light_cpu::DataType;
 using rt_ns::DataType;
 using rt_ns::KernelContext;
 using rt_ns::OpsetId;
@@ -91,33 +92,33 @@ bool IsNonCommutative(BinaryOperator op) {
   }
 }
 
-const char *DataTypeSuffix(BinaryDataType data_type) {
+const char *DataTypeSuffix(CpuDataType data_type) {
   switch (data_type) {
-  case BinaryDataType::BOOL:
+  case CpuDataType::BOOL:
     return "bool";
-  case BinaryDataType::FLOAT:
+  case CpuDataType::FLOAT:
     return "float32";
-  case BinaryDataType::DOUBLE:
+  case CpuDataType::DOUBLE:
     return "float64";
-  case BinaryDataType::FLOAT16:
+  case CpuDataType::FLOAT16:
     return "float16";
-  case BinaryDataType::BFLOAT16:
+  case CpuDataType::BFLOAT16:
     return "bfloat16";
-  case BinaryDataType::INT8:
+  case CpuDataType::INT8:
     return "int8";
-  case BinaryDataType::INT16:
+  case CpuDataType::INT16:
     return "int16";
-  case BinaryDataType::INT32:
+  case CpuDataType::INT32:
     return "int32";
-  case BinaryDataType::INT64:
+  case CpuDataType::INT64:
     return "int64";
-  case BinaryDataType::UINT8:
+  case CpuDataType::UINT8:
     return "uint8";
-  case BinaryDataType::UINT16:
+  case CpuDataType::UINT16:
     return "uint16";
-  case BinaryDataType::UINT32:
+  case CpuDataType::UINT32:
     return "uint32";
-  case BinaryDataType::UINT64:
+  case CpuDataType::UINT64:
     return "uint64";
   default:
     throw std::invalid_argument("Unsupported binary benchmark type.");
@@ -189,7 +190,7 @@ std::vector<float> MakeFloatValues(std::size_t count, bool positive_only, bool n
   return values;
 }
 
-Tensor MakeTypedTensor(BinaryDataType type, const rt_ns::Shape &shape,
+Tensor MakeTypedTensor(CpuDataType type, const rt_ns::Shape &shape,
                        const std::vector<float> &values, bool positive_only, bool nonzero_only,
                        bool small_values) {
   const std::size_t count = ElementCount(shape);
@@ -198,63 +199,63 @@ Tensor MakeTypedTensor(BinaryDataType type, const rt_ns::Shape &shape,
     generated = MakeFloatValues(count, positive_only, nonzero_only, small_values);
   }
   switch (type) {
-  case BinaryDataType::BOOL: {
+  case CpuDataType::BOOL: {
     std::vector<std::uint8_t> raw(count);
     for (std::size_t i = 0; i < count; ++i)
       raw[i] = static_cast<std::uint8_t>((i + 1) & 1U);
     return Tensor::FromBool("", shape, raw);
   }
-  case BinaryDataType::FLOAT:
+  case CpuDataType::FLOAT:
     return Tensor::FromFloat("", shape, generated);
-  case BinaryDataType::DOUBLE:
+  case CpuDataType::DOUBLE:
     return Tensor::FromDouble("", shape, std::vector<double>(generated.begin(), generated.end()));
-  case BinaryDataType::FLOAT16:
+  case CpuDataType::FLOAT16:
     return rt_ns::MakeFloat16Tensor("", shape, generated);
-  case BinaryDataType::BFLOAT16:
+  case CpuDataType::BFLOAT16:
     return rt_ns::MakeBfloat16Tensor("", shape, generated);
-  case BinaryDataType::INT8: {
+  case CpuDataType::INT8: {
     std::vector<std::int8_t> raw(count);
     for (std::size_t i = 0; i < count; ++i)
       raw[i] = static_cast<std::int8_t>(generated[i]);
     return Tensor::FromInt8("", shape, raw);
   }
-  case BinaryDataType::INT16: {
+  case CpuDataType::INT16: {
     std::vector<std::int16_t> raw(count);
     for (std::size_t i = 0; i < count; ++i)
       raw[i] = static_cast<std::int16_t>(generated[i]);
     return Tensor::FromInt16("", shape, raw);
   }
-  case BinaryDataType::INT32: {
+  case CpuDataType::INT32: {
     std::vector<std::int32_t> raw(count);
     for (std::size_t i = 0; i < count; ++i)
       raw[i] = static_cast<std::int32_t>(generated[i]);
     return Tensor::FromInt32("", shape, raw);
   }
-  case BinaryDataType::INT64: {
+  case CpuDataType::INT64: {
     std::vector<std::int64_t> raw(count);
     for (std::size_t i = 0; i < count; ++i)
       raw[i] = static_cast<std::int64_t>(generated[i]);
     return Tensor::FromInt64("", shape, raw);
   }
-  case BinaryDataType::UINT8: {
+  case CpuDataType::UINT8: {
     std::vector<std::uint8_t> raw(count);
     for (std::size_t i = 0; i < count; ++i)
       raw[i] = static_cast<std::uint8_t>(std::max(1.0f, std::fabs(generated[i])));
     return Tensor::FromUint8("", shape, raw);
   }
-  case BinaryDataType::UINT16: {
+  case CpuDataType::UINT16: {
     std::vector<std::uint16_t> raw(count);
     for (std::size_t i = 0; i < count; ++i)
       raw[i] = static_cast<std::uint16_t>(std::max(1.0f, std::fabs(generated[i])));
     return Tensor::FromUint16("", shape, raw);
   }
-  case BinaryDataType::UINT32: {
+  case CpuDataType::UINT32: {
     std::vector<std::uint32_t> raw(count);
     for (std::size_t i = 0; i < count; ++i)
       raw[i] = static_cast<std::uint32_t>(std::max(1.0f, std::fabs(generated[i])));
     return Tensor::FromUint32("", shape, raw);
   }
-  case BinaryDataType::UINT64: {
+  case CpuDataType::UINT64: {
     std::vector<std::uint64_t> raw(count);
     for (std::size_t i = 0; i < count; ++i)
       raw[i] = static_cast<std::uint64_t>(std::max(1.0f, std::fabs(generated[i])));
@@ -266,12 +267,11 @@ Tensor MakeTypedTensor(BinaryDataType type, const rt_ns::Shape &shape,
 }
 
 BinaryKernelDescriptor::Attributes DefaultAttributes(const BinaryManifestEntry &entry,
-                                                     BinaryDataType left_type) {
+                                                     CpuDataType left_type) {
   BinaryKernelDescriptor::Attributes attributes;
   if (entry.op == BinaryOperator::kMod) {
-    const bool is_float =
-        left_type == BinaryDataType::FLOAT || left_type == BinaryDataType::DOUBLE ||
-        left_type == BinaryDataType::FLOAT16 || left_type == BinaryDataType::BFLOAT16;
+    const bool is_float = left_type == CpuDataType::FLOAT || left_type == CpuDataType::DOUBLE ||
+                          left_type == CpuDataType::FLOAT16 || left_type == CpuDataType::BFLOAT16;
     attributes.mod_fmod = is_float ? 1 : 0;
   } else if (entry.op == BinaryOperator::kBitShift) {
     attributes.bitshift_direction = BinaryKernelDescriptor::Attributes::BitShiftDirection::kLeft;
@@ -396,9 +396,8 @@ void RegisterCpuBinaryCases(std::vector<TestCase> &registry, const std::string &
   if (mode == TestMode::BENCHMARK) {
     for (const BinaryTypeSignature &signature : entry.signatures) {
       RegisterBenchmarksForSignature(registry, entry, signature);
-      if (entry.op == BinaryOperator::kMul && signature.left == BinaryDataType::FLOAT16 &&
-          signature.right == BinaryDataType::FLOAT16 &&
-          signature.output == BinaryDataType::FLOAT16) {
+      if (entry.op == BinaryOperator::kMul && signature.left == CpuDataType::FLOAT16 &&
+          signature.right == CpuDataType::FLOAT16 && signature.output == CpuDataType::FLOAT16) {
         for (std::int64_t sequence_length :
              {std::int64_t{1}, std::int64_t{128}, std::int64_t{512}}) {
           RegisterLlmBenchmark(registry, entry, signature,
@@ -406,9 +405,8 @@ void RegisterCpuBinaryCases(std::vector<TestCase> &registry, const std::string &
                                 {1, sequence_length, 12288},
                                 {1, sequence_length, 12288}});
         }
-      } else if (entry.op == BinaryOperator::kSub && signature.left == BinaryDataType::INT64 &&
-                 signature.right == BinaryDataType::INT64 &&
-                 signature.output == BinaryDataType::INT64) {
+      } else if (entry.op == BinaryOperator::kSub && signature.left == CpuDataType::INT64 &&
+                 signature.right == CpuDataType::INT64 && signature.output == CpuDataType::INT64) {
         RegisterLlmBenchmark(registry, entry, signature, {"right_scalar_batch1", {1}, {}});
       }
     }
@@ -444,9 +442,8 @@ void RegisterCpuBinaryCases(std::vector<TestCase> &registry, const std::string &
                });
       }
       if (entry.op == BinaryOperator::kMod &&
-          !(signature.left == BinaryDataType::FLOAT || signature.left == BinaryDataType::DOUBLE ||
-            signature.left == BinaryDataType::FLOAT16 ||
-            signature.left == BinaryDataType::BFLOAT16)) {
+          !(signature.left == CpuDataType::FLOAT || signature.left == CpuDataType::DOUBLE ||
+            signature.left == CpuDataType::FLOAT16 || signature.left == CpuDataType::BFLOAT16)) {
         attributes.mod_fmod = 1;
         const NodeProto fmod_node = MakeNode(entry.op_type, attributes);
         const std::string fmod_name =

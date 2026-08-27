@@ -18,7 +18,7 @@
 
 namespace {
 
-using onnx_light_cpu::BinaryDataType;
+using BinaryDataType = onnx_light_cpu::DataType;
 using onnx_light_cpu::BinaryKernelDescriptor;
 using onnx_light_cpu::BinaryOperator;
 using onnx_light_cpu::GetBinaryManifest;

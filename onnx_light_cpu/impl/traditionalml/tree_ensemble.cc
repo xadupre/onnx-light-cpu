@@ -184,7 +184,7 @@ TreeEnsembleTuningPolicy MakeSafePolicy(std::size_t trees, std::size_t targets,
 }
 
 bool PolicyCompatible(const TreeEnsembleTuningPolicy &policy, std::size_t targets,
-                      std::size_t threads, TreeValueType value_type, bool uses_64_bit_indices,
+                      std::size_t threads, DataType value_type, bool uses_64_bit_indices,
                       bool all_stumps, bool all_symmetric, bool has_hit_rates,
                       std::size_t active_targets) noexcept {
   if (uses_64_bit_indices && policy.layout != TreeEnsembleNodeLayout::kOrtCompactAosPointer) {
@@ -199,7 +199,7 @@ bool PolicyCompatible(const TreeEnsembleTuningPolicy &policy, std::size_t target
   if (policy.traversal == TreeEnsembleTraversal::kSymmetric && !all_symmetric) {
     return false;
   }
-  if (policy.optimized_float16 && value_type != TreeValueType::kFloat16) {
+  if (policy.optimized_float16 && value_type != DataType::FLOAT16) {
     return false;
   }
   const std::size_t accumulator_targets =
@@ -282,13 +282,13 @@ float HalfBitsToFloat(std::uint16_t value) {
   return std::bit_cast<float>(bits);
 }
 
-double RoundValue(double value, TreeValueType type) {
+double RoundValue(double value, DataType type) {
   switch (type) {
-  case TreeValueType::kFloat16:
+  case DataType::FLOAT16:
     return HalfBitsToFloat(FloatToHalfBits(static_cast<float>(value)));
-  case TreeValueType::kFloat32:
+  case DataType::FLOAT:
     return static_cast<float>(value);
-  case TreeValueType::kFloat64:
+  case DataType::DOUBLE:
     return value;
   }
   Invalid("unknown value type");
@@ -1664,7 +1664,7 @@ TreeEnsemblePlan::GenerateCalibrationCandidates() const {
     }
     add("sparse_target", TreeEnsembleCalibrationStage::kTraversal, std::move(sparse));
   }
-  if (attributes_.value_type == TreeValueType::kFloat16) {
+  if (attributes_.value_type == DataType::FLOAT16) {
     TreeEnsembleTuningPolicy half = tuning_policy_;
     half.optimized_float16 = true;
     add("optimized_float16", TreeEnsembleCalibrationStage::kTraversal, std::move(half));
@@ -2252,7 +2252,7 @@ LowerTreeEnsembleRegressor(const TreeEnsembleRegressorAttributes &attributes) {
   TreeEnsembleAttributes lowered;
   lowered.n_features = attributes.tree.n_features;
   lowered.n_targets = attributes.n_targets;
-  lowered.value_type = TreeValueType::kFloat64;
+  lowered.value_type = DataType::DOUBLE;
   lowered.aggregate = attributes.aggregate;
   lowered.post_transform = attributes.post_transform;
   lowered.base_values = attributes.base_values;
@@ -2340,7 +2340,7 @@ LowerTreeEnsembleClassifier(const TreeEnsembleClassifierAttributes &attributes) 
   TreeEnsembleAttributes lowered;
   lowered.n_features = attributes.tree.n_features;
   lowered.n_targets = static_cast<std::int64_t>(class_count);
-  lowered.value_type = TreeValueType::kFloat64;
+  lowered.value_type = DataType::DOUBLE;
   lowered.aggregate = TreeAggregate::kSum;
   lowered.post_transform = attributes.post_transform;
   lowered.base_values = attributes.base_values;

@@ -18,8 +18,10 @@ using onnx_light_cpu::CpuCacheConfidence;
 using onnx_light_cpu::CpuCacheKind;
 using onnx_light_cpu::CpuCacheTopology;
 using onnx_light_cpu::MeasureMemoryBandwidth;
+using onnx_light_cpu::MeasureMemoryBandwidthScaling;
 using onnx_light_cpu::MeasureMemoryLatency;
 using onnx_light_cpu::MemoryBandwidthResult;
+using onnx_light_cpu::MemoryBandwidthScalingParticipantCounts;
 using onnx_light_cpu::MemoryLatencyResult;
 using onnx_light_cpu::MemoryParticipantPolicy;
 using onnx_light_cpu::MemoryProfileLevel;
@@ -199,6 +201,12 @@ TEST(MemoryTrafficProfile, ZeroElementBytesAccountsForNothing) {
   EXPECT_EQ(accounting.useful_bytes_per_pass, 0u);
 }
 
+TEST(MemoryTrafficProfile, ScalingCountsUsePowersOfTwoAndIncludeMaximum) {
+  EXPECT_EQ(MemoryBandwidthScalingParticipantCounts(1), (std::vector<std::size_t>{1}));
+  EXPECT_EQ(MemoryBandwidthScalingParticipantCounts(8), (std::vector<std::size_t>{1, 2, 4, 8}));
+  EXPECT_EQ(MemoryBandwidthScalingParticipantCounts(6), (std::vector<std::size_t>{1, 2, 4, 6}));
+}
+
 // ---------------------------------------------------------------------------
 // Pointer-chase permutation: deterministic and exhaustive, no timing.
 // ---------------------------------------------------------------------------
@@ -282,6 +290,21 @@ TEST(MemoryTrafficProfile, PhysicalParticipantPolicyReportsAtLeastOneParticipant
   EXPECT_GE(result.participant_count, 1u);
   EXPECT_GT(result.median_gbps, 0.0);
   EXPECT_TRUE(std::isfinite(result.median_gbps));
+}
+
+TEST(MemoryTrafficProfile, BandwidthScalingReportsIncreasingParticipantCounts) {
+  const std::vector<MemoryBandwidthResult> curve = MeasureMemoryBandwidthScaling(
+      MemoryProfileLevel::kL1, MemoryTrafficMode::kRead, BoundedOptions());
+
+  ASSERT_FALSE(curve.empty());
+  EXPECT_EQ(curve.front().participant_count, 1u);
+  for (std::size_t index = 0; index < curve.size(); ++index) {
+    ASSERT_TRUE(curve[index].available) << curve[index].diagnostic;
+    EXPECT_EQ(curve[index].participant_count,
+              MemoryBandwidthScalingParticipantCounts(
+                  onnx_light_cpu::GetCpuTopology().physical_core_count)[index]);
+    EXPECT_GT(curve[index].median_gbps, 0.0);
+  }
 }
 
 TEST(MemoryTrafficProfile, RamUnavailableWhenBudgetCannotExceedTwiceLastLevelCache) {

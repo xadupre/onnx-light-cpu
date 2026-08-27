@@ -21,7 +21,7 @@
 namespace onnx_light_cpu {
 namespace {
 
-using DT = BinaryDataType;
+using DT = DataType;
 using Attrs = BinaryKernelDescriptor::Attributes;
 
 std::size_t ElementSize(DT type) {
@@ -1816,8 +1816,7 @@ std::uint64_t BinaryKernelDescriptor::NextCacheIdentity() {
   return next.fetch_add(1, std::memory_order_relaxed);
 }
 
-BinaryDataType BinaryKernelDescriptor::ResolveOutputType(BinaryDataType left,
-                                                         BinaryDataType right) const {
+DataType BinaryKernelDescriptor::ResolveOutputType(DataType left, DataType right) const {
   for (const Adapter &adapter : adapters_) {
     if (adapter.signature.left == left && adapter.signature.right == right) {
       return adapter.signature.output;
@@ -1829,8 +1828,7 @@ BinaryDataType BinaryKernelDescriptor::ResolveOutputType(BinaryDataType left,
 }
 
 const BinaryKernelDescriptor::Adapter &
-BinaryKernelDescriptor::ResolveAdapter(BinaryDataType left, BinaryDataType right,
-                                       BinaryDataType output) const {
+BinaryKernelDescriptor::ResolveAdapter(DataType left, DataType right, DataType output) const {
   for (const Adapter &adapter : adapters_) {
     if (adapter.signature.left == left && adapter.signature.right == right &&
         adapter.signature.output == output) {
