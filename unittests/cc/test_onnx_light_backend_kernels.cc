@@ -787,12 +787,12 @@ TEST(OnnxLightBackendKernels, RmsNormalizationBenchmarksCoverQwen3LlmWorkloads) 
   const std::vector<TestCase> cases = CollectTestCases("RMSNormalization", /*include_big=*/false,
                                                        core::backend_test::TestMode::BENCHMARK);
   const std::vector<std::string> expected_names = {
-      "test_cpu_rmsnormalization_llm_qwen3_8b_hidden4096_s1_float16_benchmark",
-      "test_cpu_rmsnormalization_llm_qwen3_8b_hidden4096_s128_float16_benchmark",
-      "test_cpu_rmsnormalization_llm_qwen3_8b_q_norm_hd128_s1_qh32_float16_benchmark",
-      "test_cpu_rmsnormalization_llm_qwen3_8b_q_norm_hd128_s128_qh32_float16_benchmark",
-      "test_cpu_rmsnormalization_llm_qwen3_8b_k_norm_hd128_s1_kvh8_float16_benchmark",
-      "test_cpu_rmsnormalization_llm_qwen3_8b_k_norm_hd128_s128_kvh8_float16_benchmark",
+      "test_cpu_rms_normalisation_llm_qwen3_8b_hidden4096_s1_float16_benchmark",
+      "test_cpu_rms_normalisation_llm_qwen3_8b_hidden4096_s128_float16_benchmark",
+      "test_cpu_rms_normalisation_llm_qwen3_8b_q_norm_hd128_s1_qh32_float16_benchmark",
+      "test_cpu_rms_normalisation_llm_qwen3_8b_q_norm_hd128_s128_qh32_float16_benchmark",
+      "test_cpu_rms_normalisation_llm_qwen3_8b_k_norm_hd128_s1_kvh8_float16_benchmark",
+      "test_cpu_rms_normalisation_llm_qwen3_8b_k_norm_hd128_s128_kvh8_float16_benchmark",
   };
   for (const std::string &name : expected_names) {
     const auto found = std::find_if(cases.begin(), cases.end(), [&name](const TestCase &test_case) {
@@ -873,6 +873,7 @@ TEST(OnnxLightBackendKernels, GemmBenchmarkCorpusIsLazyAndCoversPriorityShapes) 
     }
     if (test_case.tag == "gemm_chain") {
       ++chained_cases;
+      EXPECT_NE(test_case.name.find("_float32"), std::string::npos) << test_case.name;
       EXPECT_TRUE(test_case.is_lazy()) << test_case.name;
       EXPECT_FALSE(test_case.materialized()) << test_case.name;
       EXPECT_EQ(test_case.declared_input_element_counts.size(), 4u);

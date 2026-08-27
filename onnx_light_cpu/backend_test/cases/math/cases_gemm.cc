@@ -251,12 +251,13 @@ void RegisterCpuGemmCases(std::vector<TestCase> &registry, TestMode mode) {
   const auto gemm_kernel = std::make_shared<onnx_light_cpu::GemmKernel>(KernelContext{opset});
 
   if (mode == TestMode::BENCHMARK) {
-    RegisterChainedGemmCase(registry, opset, "test_cpu_gemm_chain_square_projection_benchmark", 512,
-                            512, 1024, 256, 512);
-    RegisterChainedGemmCase(registry, opset, "test_cpu_gemm_chain_transformer_benchmark", 128, 768,
-                            3072, 768, 3072);
-    RegisterChainedGemmCase(registry, opset, "test_cpu_gemm_chain_alternating_benchmark", 256, 1024,
-                            256, 2048, 128);
+    RegisterChainedGemmCase(registry, opset,
+                            "test_cpu_gemm_chain_square_projection_float32_benchmark", 512, 512,
+                            1024, 256, 512);
+    RegisterChainedGemmCase(registry, opset, "test_cpu_gemm_chain_transformer_float32_benchmark",
+                            128, 768, 3072, 768, 3072);
+    RegisterChainedGemmCase(registry, opset, "test_cpu_gemm_chain_alternating_float32_benchmark",
+                            256, 1024, 256, 2048, 128);
     // Every prepared code path is exercised for each element type the
     // ``GemmKernel`` implements (float32, float64, float16, bfloat16), except
     // for the largest square float16 cases, which are prohibitively slow in
@@ -333,9 +334,12 @@ void RegisterCpuGemmCases(std::vector<TestCase> &registry, TestMode mode) {
     return;
   }
 
-  RegisterChainedGemmCase(registry, opset, "test_cpu_gemm_chain_rectangular", 8, 16, 12, 20, 6);
-  RegisterChainedGemmCase(registry, opset, "test_cpu_gemm_chain_widen_narrow", 16, 8, 32, 4, 16);
-  RegisterChainedGemmCase(registry, opset, "test_cpu_gemm_chain_alternating", 4, 24, 8, 32, 12);
+  RegisterChainedGemmCase(registry, opset, "test_cpu_gemm_chain_rectangular_float32", 8, 16, 12, 20,
+                          6);
+  RegisterChainedGemmCase(registry, opset, "test_cpu_gemm_chain_widen_narrow_float32", 16, 8, 32, 4,
+                          16);
+  RegisterChainedGemmCase(registry, opset, "test_cpu_gemm_chain_alternating_float32", 4, 24, 8, 32,
+                          12);
 
   const std::vector<int64_t> a_shape = {2, 3};
   const std::vector<int64_t> b_shape = {3, 4};

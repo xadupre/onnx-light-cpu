@@ -262,11 +262,14 @@ class TestBackendCases:
             assert record.until_version is None
 
     def test_every_cpu_benchmark_has_a_registered_kernel(self):
+        # Benchmark models are not necessarily single-node: the GEMM corpus
+        # also chains several nodes in one model.
         benchmark_ops = {
-            _single_node_op_type(tc)
+            node.op_type
             for tc in collect_test_cases_by_name(
                 _BENCHMARK_NAME_PATTERN, include_big=True, mode=TestMode.BENCHMARK
             )
+            for node in tc.model.graph.node
         }
         assert benchmark_ops
         assert benchmark_ops <= set(_REGISTERED_KERNELS)
