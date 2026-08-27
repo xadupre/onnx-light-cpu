@@ -25,6 +25,11 @@ parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("-r", "--repeat", type=int, default=100 * (os.cpu_count() or 1))
 parser.add_argument("-w", "--warmup", type=int, default=100 * 20)
 parser.add_argument("-t", "--max-repeat-time", type=float, default=1.0)
+parser.add_argument(
+    "--big",
+    action="store_true",
+    help="include configurations with 10,000 trees or 4,096 features",
+)
 args, _ = parser.parse_known_args()
 if args.repeat <= 0:
     parser.error("--repeat must be greater than 0")
@@ -55,8 +60,8 @@ if os.environ.get("UNITTEST_GOING"):
     feature_counts = (4, 64)
     batch_sizes = (1, 32)
 else:
-    tree_counts = (10, 100, 1000, 10000)
-    feature_counts = (4, 16, 64, 256, 1024, 4096)
+    tree_counts = (10, 100, 1000, 10000) if args.big else (10, 100, 1000)
+    feature_counts = (4, 16, 64, 256, 1024, 4096) if args.big else (4, 16, 64, 256, 1024)
     batch_sizes = (1, 8, 32, 128)
 cases = [
     f"reg_grid_t{trees}_f{features}_b{batch}_f32"
