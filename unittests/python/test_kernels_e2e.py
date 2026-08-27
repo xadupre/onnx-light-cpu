@@ -33,8 +33,9 @@ NumPy; ``BFLOAT16`` cases are excluded.
 
 from __future__ import annotations
 
+from unittest import TestCase
+
 import numpy as np
-import pytest
 
 from onnx_light.onnx import TensorProto, helper
 from onnx_light.onnx.backend import TestMode, collect_test_cases, collect_test_cases_by_name
@@ -188,8 +189,8 @@ def _assert_close(actual, expected, rtol, atol):
         )
 
 
-class TestBackendCases:
-    def setup_method(self):
+class TestBackendCases(TestCase):
+    def setUp(self):
         register_kernels()
 
     def test_registered_kernel_names(self):
@@ -217,7 +218,7 @@ class TestBackendCases:
         records = registered_kernels()
         assert records, "expected at least one registered kernel record"
         for record in records:
-            with pytest.raises(AttributeError):
+            with self.assertRaises(AttributeError):
                 record.op_type = "Other"  # type: ignore[misc]
             expected_domain = "ai.onnx.ml" if record.op_type == "TreeEnsemble" else "ai.onnx"
             assert record.domain == expected_domain
@@ -282,12 +283,16 @@ class TestBackendCases:
         for op_type, count in counts.items():
             assert count > 0, f"no onnx-light-cpu backend test cases collected for {op_type}"
 
-    @pytest.mark.parametrize("tc", _CASES, ids=lambda tc: tc.name)
-    def test_backend_case(self, tc):
+    def test_backend_cases(self):
         """Runs one onnx-light-cpu backend test case through the accelerated
         kernels and checks the outputs match the reference and the accelerated
         kernel ran.
         """
+        for tc in _CASES:
+            with self.subTest(tc=tc.name):
+                self._run_backend_case(tc)
+
+    def _run_backend_case(self, tc):
         op_type = _single_node_op_type(tc)
         expected_kernel = _TARGET_KERNELS[op_type]
 
@@ -308,35 +313,36 @@ class TestBackendCases:
             for actual, expected in zip(got, ds.outputs, strict=True):
                 _assert_close(actual, _to_numpy(expected), rtol, atol)
 
-    @pytest.mark.parametrize("size", [16, 64, 128])
-    def test_gemm_uses_accelerated_kernel_benchmark_sizes(self, size):
+    def test_gemm_uses_accelerated_kernel_benchmark_sizes(self):
         # Backs docs/examples/benchmarks/plot_gemm_benchmark.py: the timed ``Gemm`` curve
         # must dispatch to onnx-light-cpu (not onnx-light's built-in kernel) for
         # the same square shapes the benchmark measures, otherwise its timings
         # would be indistinguishable from the built-in baseline. The benchmark
         # verifies dispatch the same way, via onnx-light's per-session
         # ``ReferenceEvaluator.used_kernels()``.
-        register_kernels()
-        rng = np.random.default_rng(0)
-        a = rng.standard_normal((size, size)).astype(np.float32)
-        b = rng.standard_normal((size, size)).astype(np.float32)
-        graph = helper.make_graph(
-            [helper.make_node("Gemm", ["A", "B"], ["Y"], alpha=1.0, beta=1.0)],
-            "gemm",
-            [
-                helper.make_tensor_value_info("A", TensorProto.FLOAT, [size, size]),
-                helper.make_tensor_value_info("B", TensorProto.FLOAT, [size, size]),
-            ],
-            [helper.make_tensor_value_info("Y", TensorProto.FLOAT, None)],
-        )
-        model = helper.make_model(
-            graph, opset_imports=[helper.make_opsetid("", 18)], ir_version=13
-        )
-        sess = ReferenceEvaluator(model)
-        (y,) = sess.run(None, {"A": a, "B": b})
-        # onnx-light-cpu overrides "Gemm" in onnx-light's dispatch table, so the
-        # session's resolved kernels (reported as "<domain>:<op_type>") must
-        # include the "Gemm" op onnx-light-cpu installed a kernel for.
-        used_ops = {key.rsplit(":", 1)[-1] for key in sess.used_kernels()}
-        assert "Gemm" in used_ops & set(registered_kernel_names()), sess.used_kernels()
-        np.testing.assert_allclose(y, a @ b, rtol=1e-2, atol=1e-2)
+        for size in (16, 64, 128):
+            with self.subTest(size=size):
+                register_kernels()
+                rng = np.random.default_rng(0)
+                a = rng.standard_normal((size, size)).astype(np.float32)
+                b = rng.standard_normal((size, size)).astype(np.float32)
+                graph = helper.make_graph(
+                    [helper.make_node("Gemm", ["A", "B"], ["Y"], alpha=1.0, beta=1.0)],
+                    "gemm",
+                    [
+                        helper.make_tensor_value_info("A", TensorProto.FLOAT, [size, size]),
+                        helper.make_tensor_value_info("B", TensorProto.FLOAT, [size, size]),
+                    ],
+                    [helper.make_tensor_value_info("Y", TensorProto.FLOAT, None)],
+                )
+                model = helper.make_model(
+                    graph, opset_imports=[helper.make_opsetid("", 18)], ir_version=13
+                )
+                sess = ReferenceEvaluator(model)
+                (y,) = sess.run(None, {"A": a, "B": b})
+                # onnx-light-cpu overrides "Gemm" in onnx-light's dispatch table, so the
+                # session's resolved kernels (reported as "<domain>:<op_type>") must
+                # include the "Gemm" op onnx-light-cpu installed a kernel for.
+                used_ops = {key.rsplit(":", 1)[-1] for key in sess.used_kernels()}
+                assert "Gemm" in used_ops & set(registered_kernel_names()), sess.used_kernels()
+                np.testing.assert_allclose(y, a @ b, rtol=1e-2, atol=1e-2)

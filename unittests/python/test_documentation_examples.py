@@ -24,8 +24,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-
-import pytest
+from unittest import TestCase
 
 _ROOT = Path(__file__).resolve().parents[2]
 _EXAMPLES_DIR = _ROOT / "docs" / "examples"
@@ -43,37 +42,44 @@ def _onnx_light_integration_available():
     return importlib.util.find_spec("onnx_light_cpu.onnx_py._cpuregister") is not None
 
 
-@pytest.mark.parametrize("example", _example_files(), ids=lambda p: p.name)
-def test_documentation_example(example):
-    if _requires_onnx_light_integration(example) and not _onnx_light_integration_available():
-        pytest.skip(
-            "onnx-light-cpu was built without onnx-light integration "
-            "(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT/--onnx-light-source)"
-        )
+class TestDocumentationExamples(TestCase):
+    def test_documentation_examples(self):
+        for example in _example_files():
+            with self.subTest(example=example.name):
+                if (
+                    _requires_onnx_light_integration(example)
+                    and not _onnx_light_integration_available()
+                ):
+                    self.skipTest(
+                        "onnx-light-cpu was built without onnx-light integration "
+                        "(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT/--onnx-light-source)"
+                    )
 
-    env = dict(os.environ)
-    python_path = env.get("PYTHONPATH")
-    env["PYTHONPATH"] = str(_ROOT) if not python_path else str(_ROOT) + os.pathsep + python_path
-    # Use a non-interactive backend so ``plt.show()`` does not block or need a
-    # display.
-    env["MPLBACKEND"] = "Agg"
-    # Shrink the benchmark examples (fewer/smaller sizes) so they run quickly as
-    # unit tests while still exercising every code path.
-    env["UNITTEST_GOING"] = "1"
+                env = dict(os.environ)
+                python_path = env.get("PYTHONPATH")
+                env["PYTHONPATH"] = (
+                    str(_ROOT) if not python_path else str(_ROOT) + os.pathsep + python_path
+                )
+                # Use a non-interactive backend so ``plt.show()`` does not block or need a
+                # display.
+                env["MPLBACKEND"] = "Agg"
+                # Shrink the benchmark examples (fewer/smaller sizes) so they run quickly as
+                # unit tests while still exercising every code path.
+                env["UNITTEST_GOING"] = "1"
 
-    command = [sys.executable, "-u", str(example)]
-    if _requires_onnx_light_integration(example):
-        command.extend(["-r", "2", "-w", "1", "-t", "0.1"])
+                command = [sys.executable, "-u", str(example)]
+                if _requires_onnx_light_integration(example):
+                    command.extend(["-r", "2", "-w", "1", "-t", "0.1"])
 
-    proc = subprocess.run(
-        command,
-        cwd=_ROOT,
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=600,
-    )
-    assert proc.returncode == 0, (
-        f"Example {example.name!r} failed with return code {proc.returncode}\n"
-        f"--- stdout ---\n{proc.stdout}\n--- stderr ---\n{proc.stderr}"
-    )
+                proc = subprocess.run(
+                    command,
+                    cwd=_ROOT,
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    timeout=600,
+                )
+                assert proc.returncode == 0, (
+                    f"Example {example.name!r} failed with return code {proc.returncode}\n"
+                    f"--- stdout ---\n{proc.stdout}\n--- stderr ---\n{proc.stderr}"
+                )

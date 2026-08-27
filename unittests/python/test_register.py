@@ -13,9 +13,7 @@ tests patch it to exercise the wrapper without requiring that build.
 
 import sys
 from types import ModuleType
-from unittest import mock
-
-import pytest
+from unittest import TestCase, mock
 
 import onnx_light_cpu._register as reg
 from onnx_light_cpu import (
@@ -26,7 +24,7 @@ from onnx_light_cpu import (
 )
 
 
-class TestRegisterKernels:
+class TestRegisterKernels(TestCase):
     def test_loads_runtime_before_registration_extension(self):
         extension = ModuleType("onnx_light_cpu.onnx_py._cpuregister")
         extension.register_all_kernels = mock.Mock()
@@ -60,7 +58,7 @@ class TestRegisterKernels:
             assert register_kernels() is None
 
 
-class TestRegisteredKernels:
+class TestRegisteredKernels(TestCase):
     """Tests for :func:`onnx_light_cpu.registered_kernels`.
 
     The underlying binding (``_cpuregister.registered_kernels``) requires the
@@ -108,5 +106,5 @@ class TestRegisteredKernels:
         record = RegisteredKernel(
             "ai.onnx", "Abs", "CPU", "onnx_light_cpu::Abs", ("FLOAT",), None, None
         )
-        with pytest.raises(AttributeError):
+        with self.assertRaises(AttributeError):
             record.op_type = "Other"
