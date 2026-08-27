@@ -223,16 +223,16 @@ void TreeEnsembleKernel::Run(RuntimeContext &rt) {
       static_cast<std::size_t>(rows) * static_cast<std::size_t>(targets);
   const std::size_t output_bytes = output_size * input.element_size();
   Tensor output = rt.MakeOutputTensor(0, input.data_type, {rows, targets}, output_bytes);
-  switch (static_cast<DataType>(input.data_type)) {
-  case DataType::FLOAT:
+  switch (static_cast<rt_ns::DataType>(input.data_type)) {
+  case rt_ns::DataType::FLOAT:
     plan_->EvaluateInto(input.AsFloat(), static_cast<std::size_t>(input.element_count()),
                         static_cast<std::size_t>(rows), output.AsFloat());
     break;
-  case DataType::DOUBLE:
+  case rt_ns::DataType::DOUBLE:
     plan_->EvaluateInto(input.AsDouble(), static_cast<std::size_t>(input.element_count()),
                         static_cast<std::size_t>(rows), output.AsDouble());
     break;
-  case DataType::FLOAT16: {
+  case rt_ns::DataType::FLOAT16: {
     std::vector<double> values = plan_->Evaluate(ReadInput(input), static_cast<std::size_t>(rows));
     auto *destination = reinterpret_cast<std::uint16_t *>(output.mutable_bytes());
     std::transform(values.begin(), values.end(), destination,
