@@ -415,6 +415,14 @@ struct TreeEnsembleCompactNode {
 };
 static_assert(sizeof(TreeEnsembleCompactNode) == 24);
 
+struct TreeEnsembleCompactFloatNode {
+  float split = 0.0F;
+  std::uint32_t feature_id = 0;
+  std::uint32_t true_child = 0;
+  std::uint32_t false_child = 0;
+};
+static_assert(sizeof(TreeEnsembleCompactFloatNode) == 16);
+
 /// Immutable prepared representation for the ai.onnx.ml TreeEnsemble-5 schema.
 class TreeEnsemblePlan {
 public:
@@ -462,6 +470,7 @@ public:
   bool uses_64bit_indices() const noexcept { return uses_64_bit_indices_; }
   bool all_trees_are_stumps() const noexcept { return all_trees_are_stumps_; }
   bool all_trees_are_symmetric() const noexcept { return all_trees_are_symmetric_; }
+  bool all_trees_are_balanced() const noexcept { return all_trees_are_balanced_; }
   std::vector<TreeEnsembleCalibrationCandidate> GenerateCalibrationCandidates() const;
 
 private:
@@ -490,6 +499,7 @@ private:
   bool uses_dynamic_safe_policy_ = false;
   bool all_trees_are_stumps_ = false;
   bool all_trees_are_symmetric_ = false;
+  bool all_trees_are_balanced_ = false;
   std::vector<std::uint32_t> feature_ids32_;
   std::vector<std::uint32_t> true_children32_;
   std::vector<std::uint32_t> false_children32_;
@@ -498,6 +508,8 @@ private:
   std::vector<std::uint8_t> prepared_modes_;
   std::vector<std::uint8_t> prepared_flags_;
   std::vector<TreeEnsembleCompactNode> compact_nodes_;
+  std::vector<TreeEnsembleCompactFloatNode> compact_float_nodes_;
+  std::vector<float> leaf_weights_float_;
   std::vector<std::uint32_t> hot_tree_roots_;
   std::vector<std::uint32_t> hot_feature_ids_;
   std::vector<std::uint32_t> hot_true_children_;

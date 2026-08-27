@@ -109,6 +109,43 @@ TreeEnsembleAttributes SymmetricTree() {
   return attributes;
 }
 
+TreeEnsembleAttributes BalancedForest(std::size_t trees) {
+  constexpr std::size_t kDepth = 4;
+  constexpr std::size_t kInternalNodes = (1U << kDepth) - 1;
+  constexpr std::size_t kLeaves = 1U << kDepth;
+  TreeEnsembleAttributes attributes;
+  attributes.n_features = 8;
+  attributes.n_targets = 1;
+  attributes.value_type = DataType::FLOAT;
+  attributes.base_values = {0.1};
+  for (std::size_t tree = 0; tree < trees; ++tree) {
+    const std::size_t node_offset = tree * kInternalNodes;
+    const std::size_t leaf_offset = tree * kLeaves;
+    attributes.tree_roots.push_back(static_cast<std::int64_t>(node_offset));
+    for (std::size_t node = 0; node < kInternalNodes; ++node) {
+      attributes.nodes_featureids.push_back(static_cast<std::int64_t>((tree + node) % 8));
+      attributes.nodes_splits.push_back(static_cast<double>(static_cast<int>(node % 3) - 1) * 0.5);
+      attributes.nodes_modes.push_back(TreeBranchMode::kLeq);
+      for (const bool true_branch : {true, false}) {
+        const std::size_t child = 2 * node + (true_branch ? 1 : 2);
+        const bool leaf = child >= kInternalNodes;
+        const std::int64_t child_id = static_cast<std::int64_t>(
+            leaf ? leaf_offset + child - kInternalNodes : node_offset + child);
+        (true_branch ? attributes.nodes_truenodeids : attributes.nodes_falsenodeids)
+            .push_back(child_id);
+        (true_branch ? attributes.nodes_trueleafs : attributes.nodes_falseleafs)
+            .push_back(leaf ? 1 : 0);
+      }
+    }
+    for (std::size_t leaf = 0; leaf < kLeaves; ++leaf) {
+      attributes.leaf_targetids.push_back(0);
+      attributes.leaf_weights.push_back(
+          static_cast<double>(static_cast<int>((leaf + tree) % 9) - 4) / 32.0);
+    }
+  }
+  return attributes;
+}
+
 TreeEnsembleTuningPolicy OneRegionPolicy(TreeEnsembleExecutionStrategy strategy,
                                          std::size_t threads, std::size_t targets,
                                          std::size_t batch_rows = 1) {
@@ -768,6 +805,37 @@ TEST(TreeEnsembleOracle, EverySchedulingStrategyMatchesScalarAcrossThreadCounts)
   EXPECT_EQ(row_plan.SelectExecution(input.size()).strategy,
             TreeEnsembleExecutionStrategy::kRowParallel);
   EXPECT_EQ(row_plan.Evaluate(input, input.size()), row_oracle.Evaluate(input, input.size()));
+}
+
+TEST(TreeEnsembleOracle, BalancedFloatForestUsesExactFixedDepthTraversal) {
+  const TreeEnsembleAttributes attributes = BalancedForest(81);
+  const TreeEnsemblePlan plan(attributes);
+  EXPECT_TRUE(plan.all_trees_are_balanced());
+  EXPECT_FALSE(plan.all_trees_are_symmetric());
+
+  constexpr std::size_t kRows = 70;
+  std::vector<float> input(kRows * 8);
+  for (std::size_t index = 0; index < input.size(); ++index) {
+    input[index] = static_cast<float>(static_cast<int>(index % 11) - 5) * 0.25F;
+  }
+  const std::vector<double> oracle_input(input.begin(), input.end());
+  const std::vector<double> expected = TreeEnsembleOracle(attributes).Evaluate(oracle_input, kRows);
+  std::vector<float> sequential(kRows);
+  plan.EvaluateInto(input.data(), input.size(), kRows, sequential.data());
+  for (std::size_t row = 0; row < kRows; ++row) {
+    EXPECT_FLOAT_EQ(sequential[row], static_cast<float>(expected[row])) << "row=" << row;
+  }
+
+  std::vector<float> actual(kRows);
+  ThreadedExecutor executor;
+  onnx_light_cpu::ExecutionExecutorView view{&executor, 4, &ThreadedExecutor::Run};
+  onnx_light_cpu::ExecutionExecutorScope scope(&view);
+  plan.EvaluateInto(input.data(), input.size(), kRows, actual.data());
+
+  EXPECT_GT(executor.dispatches.load(std::memory_order_relaxed), 0U);
+  for (std::size_t row = 0; row < kRows; ++row) {
+    EXPECT_NEAR(actual[row], expected[row], 1e-5) << "row=" << row;
+  }
 }
 
 TEST(TreeEnsembleOracle, ThresholdsSignedZeroInfinityAndMissingRouting) {
