@@ -478,6 +478,19 @@ TEST(LogFloat16, SpecialValues) {
   EXPECT_TRUE(std::isnan(HalfToFloat(output[3])));
 }
 
+TEST(LogFloat16, AllBitPatternsMatchReference) {
+  std::vector<std::uint16_t> input(65536);
+  std::vector<std::uint16_t> output(input.size());
+  for (std::size_t i = 0; i < input.size(); ++i) {
+    input[i] = static_cast<std::uint16_t>(i);
+  }
+
+  onnx_light_cpu::LogFloat16(input.data(), output.data(), input.size());
+  for (std::size_t i = 0; i < input.size(); ++i) {
+    EXPECT_EQ(output[i], FloatToHalf(std::log(HalfToFloat(input[i])))) << "at bits " << i;
+  }
+}
+
 TEST(ExpLogParallel, LargeArrayMatchesStd) {
   // Large enough to cross the session dispatch threshold for the compute-bound
   // Exp/Log kernels; results must match std within the same tolerance used by

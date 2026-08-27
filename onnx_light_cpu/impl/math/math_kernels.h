@@ -182,8 +182,8 @@ void LogFloat64_AVX512(const double *input, double *output, std::size_t count);
 
 /// Computes elementwise natural logarithm: out[i] = log(input[i]) for float16.
 /// The input and output are the raw IEEE 754 half-precision bit patterns (as
-/// ``uint16_t``); each value is widened, evaluated with the standard library
-/// and narrowed with exact half-precision rounding.
+/// ``uint16_t``); a cached table maps every possible input to the exactly
+/// rounded half-precision result.
 void LogFloat16(const uint16_t *input, uint16_t *output, std::size_t count);
 void LogFloat16WithTuning(const uint16_t *input, uint16_t *output, std::size_t count,
                           const UnaryExecutionTuning &tuning);

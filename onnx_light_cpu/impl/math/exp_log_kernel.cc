@@ -19,6 +19,7 @@
 #include "onnx_light_cpu/impl/execution.h"
 #include "onnx_light_cpu/impl/math/half_conversion.h"
 
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -56,6 +57,18 @@ void LogFloat64_Scalar(const double *input, double *output, std::size_t count) {
   for (std::size_t i = 0; i < count; ++i) {
     output[i] = std::log(input[i]);
   }
+}
+
+const std::array<std::uint16_t, 65536> &LogFloat16Table() {
+  static const std::array<std::uint16_t, 65536> table = [] {
+    std::array<std::uint16_t, 65536> values{};
+    for (std::size_t i = 0; i < values.size(); ++i) {
+      const auto bits = static_cast<std::uint16_t>(i);
+      values[i] = detail::FloatToFloat16Bits(std::log(detail::Float16BitsToFloat(bits)));
+    }
+    return values;
+  }();
+  return table;
 }
 
 #if ONNX_LIGHT_CPU_X86
@@ -734,7 +747,7 @@ void LogFloat32WithTuning(const float *input, float *output, std::size_t count,
     LogFloat32_Dispatch(input + begin, output + begin, static_cast<std::size_t>(end - begin));
   };
   if (tuning.use_cost_model) {
-    ExecuteCostedUnaryRanges<float>(count, tuning, 3.0, std::move(execute));
+    ExecuteCostedUnaryRanges<float>(count, tuning, 100.0, std::move(execute));
   } else {
     ExecuteUnaryRanges<float>(count, tuning, std::move(execute));
   }
@@ -803,9 +816,14 @@ void LogFloat64(const double *input, double *output, std::size_t count) {
 
 void LogFloat64WithTuning(const double *input, double *output, std::size_t count,
                           const UnaryExecutionTuning &tuning) {
-  ExecuteUnaryRanges<double>(count, tuning, [input, output](std::int64_t begin, std::int64_t end) {
+  auto execute = [input, output](std::int64_t begin, std::int64_t end) {
     LogFloat64_Dispatch(input + begin, output + begin, static_cast<std::size_t>(end - begin));
-  });
+  };
+  if (tuning.use_cost_model) {
+    ExecuteCostedUnaryRanges<double>(count, tuning, 100.0, std::move(execute));
+  } else {
+    ExecuteUnaryRanges<double>(count, tuning, std::move(execute));
+  }
 }
 
 namespace {
@@ -859,11 +877,16 @@ void TransformHalfRange(const std::uint16_t *input, std::uint16_t *output, std::
 template <bool BFloat16, bool MaskLogNaN = false>
 void TransformHalf(const std::uint16_t *input, std::uint16_t *output, std::size_t count,
                    const UnaryExecutionTuning &tuning,
-                   void (*dispatch)(const float *, float *, std::size_t)) {
-  ExecuteUnaryRanges<std::uint16_t>(
-      count, tuning, [input, output, dispatch](std::int64_t begin, std::int64_t end) {
-        TransformHalfRange<BFloat16, MaskLogNaN>(input, output, begin, end, dispatch);
-      });
+                   void (*dispatch)(const float *, float *, std::size_t),
+                   double compute_cycles = 0.0) {
+  auto execute = [input, output, dispatch](std::int64_t begin, std::int64_t end) {
+    TransformHalfRange<BFloat16, MaskLogNaN>(input, output, begin, end, dispatch);
+  };
+  if (tuning.use_cost_model && compute_cycles > 0.0) {
+    ExecuteCostedUnaryRanges<std::uint16_t>(count, tuning, compute_cycles, std::move(execute));
+  } else {
+    ExecuteUnaryRanges<std::uint16_t>(count, tuning, std::move(execute));
+  }
 }
 
 } // namespace
@@ -888,17 +911,22 @@ void LogFloat16(const uint16_t *input, uint16_t *output, std::size_t count) {
 
 void LogFloat16WithTuning(const uint16_t *input, uint16_t *output, std::size_t count,
                           const UnaryExecutionTuning &tuning) {
-  ExecuteUnaryRanges<std::uint16_t>(
-      count, tuning, [input, output](std::int64_t begin, std::int64_t end) {
-        for (std::int64_t i = begin; i < end; ++i) {
-          output[i] = detail::FloatToFloat16Bits(std::log(detail::Float16BitsToFloat(input[i])));
-        }
-      });
+  const auto &table = LogFloat16Table();
+  auto execute = [input, output, &table](std::int64_t begin, std::int64_t end) {
+    for (std::int64_t i = begin; i < end; ++i) {
+      output[i] = table[input[i]];
+    }
+  };
+  if (tuning.use_cost_model) {
+    ExecuteCostedUnaryRanges<std::uint16_t>(count, tuning, 25.0, std::move(execute));
+  } else {
+    ExecuteUnaryRanges<std::uint16_t>(count, tuning, std::move(execute));
+  }
 }
 
 void LogBFloat16WithTuning(const uint16_t *input, uint16_t *output, std::size_t count,
                            const UnaryExecutionTuning &tuning) {
-  TransformHalf<true, true>(input, output, count, tuning, &LogFloat32_Dispatch);
+  TransformHalf<true, true>(input, output, count, tuning, &LogFloat32_Dispatch, 20.0);
 }
 
 } // namespace onnx_light_cpu

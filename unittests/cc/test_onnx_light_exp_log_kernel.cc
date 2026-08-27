@@ -119,20 +119,16 @@ template <typename Kernel> void CheckTuningSchema(const char *op_type) {
     ASSERT_NE(schema, nullptr);
     const auto defaults = schema->portable_defaults();
     const bool half = type == rt_ns::DataType::FLOAT16 || type == rt_ns::DataType::BFLOAT16;
-    const bool log_float16 = std::string_view(op_type) == "Log" && type == rt_ns::DataType::FLOAT16;
     const bool log_bfloat16 =
         std::string_view(op_type) == "Log" && type == rt_ns::DataType::BFLOAT16;
-    EXPECT_EQ(defaults.template Get<int64_t>("parallel.threshold_bytes"), log_float16 ? 64 * 1024
-                                                                          : log_bfloat16
-                                                                              ? 512 * 1024
+    EXPECT_EQ(defaults.template Get<int64_t>("parallel.threshold_bytes"), log_bfloat16 ? 512 * 1024
                                                                           : half ? 1024 * 1024
                                                                                  : 2 * 1024 * 1024);
-    EXPECT_EQ(defaults.template Get<int64_t>("parallel.target_block_bytes"), log_float16 ? 1600
-                                                                             : log_bfloat16
+    EXPECT_EQ(defaults.template Get<int64_t>("parallel.target_block_bytes"), log_bfloat16
                                                                                  ? 64 * 1024
                                                                              : half ? 128 * 1024
                                                                                     : 256 * 1024);
-    EXPECT_EQ(defaults.template Get<int64_t>("parallel.max_participants"), log_float16 ? 0 : 32);
+    EXPECT_EQ(defaults.template Get<int64_t>("parallel.max_participants"), 32);
     EXPECT_EQ(defaults.template Get<int64_t>("parallel.cost_model"), 1);
   }
   EXPECT_EQ(kernel.TuningKey(static_cast<int32_t>(rt_ns::DataType::INT32)).device,
