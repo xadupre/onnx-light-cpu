@@ -620,6 +620,10 @@ if(ONNX_LIGHT_CPU_HAVE_AVX512BW_FLAG)
   if(NOT MSVC)
     set_source_files_properties("${_not_avx512_source}" PROPERTIES
         COMPILE_OPTIONS "-mavx512f;-mavx512bw")
+    if(ONNX_LIGHT_CPU_HAVE_AVX512VNNI_FLAG)
+      set_property(SOURCE "${_gemm_avx512vnni_source}" APPEND PROPERTY
+          COMPILE_OPTIONS "-mavx512bw")
+    endif()
   else()
     set_source_files_properties("${_not_avx512_source}" PROPERTIES
         COMPILE_OPTIONS "/arch:AVX512")

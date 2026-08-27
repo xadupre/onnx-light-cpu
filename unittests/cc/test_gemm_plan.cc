@@ -673,6 +673,30 @@ TEST(MatMulPlan, BroadcastsBatchesFromEitherInput) {
                std::array<float, 12>{3, 7, 4, 10, 7, 15, 11, 15, 16, 22, 23, 31});
 }
 
+TEST(MatMulPlan, ExecutesBroadcastHalfPlan) {
+  const std::array<std::size_t, 4> a_shape = {2, 1, 2, 2};
+  const std::array<std::size_t, 4> b_shape = {1, 3, 2, 1};
+  const MatMulPlan<float> plan(a_shape, b_shape);
+  const std::array<float, 8> a_values = {1, 2, 3, 4, 5, 6, 7, 8};
+  const std::array<float, 6> b_values = {1, 1, 2, 1, 1, 3};
+  std::array<std::uint16_t, 8> a;
+  std::array<std::uint16_t, 6> b;
+  std::transform(a_values.begin(), a_values.end(), a.begin(), EncodeBFloat16);
+  std::transform(b_values.begin(), b_values.end(), b.begin(), EncodeBFloat16);
+
+  const GemmHalfPlan half_plan(GemmHalfPlanOptions{true, false, false, 2, 1, 2});
+  std::array<float, 12> workspace = {};
+  std::array<std::uint16_t, 12> converted = {};
+  onnx_light_cpu::GemmEpilogue<float> epilogue;
+  epilogue.output_conversion = onnx_light_cpu::GemmOutputConversion::kBFloat16;
+  epilogue.converted_output = converted.data();
+  plan.ExecuteHalf(half_plan, a.data(), b.data(), epilogue, workspace.data());
+
+  std::vector<float> actual(converted.size());
+  std::transform(converted.begin(), converted.end(), actual.begin(), DecodeBFloat16);
+  ExpectValues(actual, std::array<float, 12>{3, 7, 4, 10, 7, 15, 11, 15, 16, 22, 23, 31});
+}
+
 TEST(MatMulPlan, BatchSchedulingTakesPriorityOverSplitK) {
   constexpr std::size_t batch_count = 128;
   constexpr std::size_t m = 2;

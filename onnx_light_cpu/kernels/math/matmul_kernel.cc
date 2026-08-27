@@ -5,12 +5,14 @@
 #include "onnx_light_cpu/kernels/math/matmul_kernel.h"
 
 #include "onnx_light_cpu/impl/math/gemm/gemm_plan.h"
+#include "onnx_light_cpu/impl/math/half_conversion.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
 #include "onnx_light_cpu/kernels/kernel_usage.h"
 
 #include "onnx_core/runtime/kernels/cast_helper.h"
 #include "onnx_core/runtime/kernels/kernel_dispatch_table.h"
 #include "onnx_core/runtime/kernels/node_helpers.h"
+#include "onnx_core/runtime/memory/temporary_buffer.h"
 
 #include <cstdint>
 #include <memory>
@@ -81,18 +83,8 @@ Tensor ComputeHalf(const Tensor &a, const Tensor &b, RuntimeContext *rt, bool bf
   const auto a_shape = ShapeAsSize(a.shape);
   const auto b_shape = ShapeAsSize(b.shape);
   const MatMulPlan<float> plan(a_shape, b_shape);
-  std::vector<float> a_f32(a.element_count());
-  std::vector<float> b_f32(b.element_count());
   const auto *a_bits = reinterpret_cast<const std::uint16_t *>(a.bytes());
   const auto *b_bits = reinterpret_cast<const std::uint16_t *>(b.bytes());
-  for (std::size_t i = 0; i < a_f32.size(); ++i) {
-    a_f32[i] =
-        bfloat16 ? rt_ns::Bfloat16BitsToFloat(a_bits[i]) : rt_ns::Float16BitsToFloat(a_bits[i]);
-  }
-  for (std::size_t i = 0; i < b_f32.size(); ++i) {
-    b_f32[i] =
-        bfloat16 ? rt_ns::Bfloat16BitsToFloat(b_bits[i]) : rt_ns::Float16BitsToFloat(b_bits[i]);
-  }
   const Shape output_shape = OutputShape(plan.output_shape());
   const std::size_t output_elements = ElementCount(plan.output_shape());
   Tensor y = rt != nullptr
@@ -100,13 +92,30 @@ Tensor ComputeHalf(const Tensor &a, const Tensor &b, RuntimeContext *rt, bool bf
                                         output_elements * sizeof(std::uint16_t))
                  : rt_ns::MakeOutputTensor(a.data_type, output_shape,
                                            output_elements * sizeof(std::uint16_t), nullptr);
-  std::vector<float> output(output_elements);
-  plan.Execute(a_f32.data(), b_f32.data(), output.data());
-  auto *y_bits = reinterpret_cast<std::uint16_t *>(y.mutable_bytes());
-  for (std::size_t i = 0; i < output.size(); ++i) {
-    y_bits[i] =
-        bfloat16 ? rt_ns::FloatToBfloat16Bits(output[i]) : rt_ns::FloatToFloat16Bits(output[i]);
+  const GemmPlan<float> &float_plan = plan.gemm_plan();
+  if (bfloat16 && (float_plan.algorithm() == GemmAlgorithm::kGeneral ||
+                   float_plan.algorithm() == GemmAlgorithm::kDirect)) {
+    std::vector<float> a_f32(a.element_count());
+    std::vector<float> b_f32(b.element_count());
+    std::vector<float> output(output_elements);
+    detail::ConvertBFloat16ToFloat32(a_bits, a_f32.data(), a_f32.size());
+    detail::ConvertBFloat16ToFloat32(b_bits, b_f32.data(), b_f32.size());
+    plan.Execute(a_f32.data(), b_f32.data(), output.data());
+    detail::ConvertFloat32ToBFloat16(
+        output.data(), reinterpret_cast<std::uint16_t *>(y.mutable_bytes()), output.size());
+    return y;
   }
+  const GemmHalfPlan half_plan(
+      GemmHalfPlanOptions{bfloat16, float_plan.trans_a(), float_plan.trans_b(), float_plan.m(),
+                          float_plan.n(), float_plan.k(), float_plan.alpha()});
+  GemmEpilogue<float> epilogue;
+  epilogue.output_conversion =
+      bfloat16 ? GemmOutputConversion::kBFloat16 : GemmOutputConversion::kFloat16;
+  epilogue.converted_output = reinterpret_cast<std::uint16_t *>(y.mutable_bytes());
+  rt_ns::detail::TemporaryTypedBuffer<float> output(
+      output_elements, rt != nullptr ? rt->execution_allocator() : nullptr,
+      "MatMul FP32 workspace");
+  plan.ExecuteHalf(half_plan, a_bits, b_bits, epilogue, output.data());
   return y;
 }
 

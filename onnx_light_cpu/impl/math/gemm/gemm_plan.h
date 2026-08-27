@@ -170,6 +170,8 @@ public:
 
   void Execute(const T *a, const T *b, T *y) const;
   void Execute(const T *a, T *y) const;
+  void ExecuteHalf(const GemmHalfPlan &half_plan, const std::uint16_t *a, const std::uint16_t *b,
+                   const GemmEpilogue<float> &epilogue, float *y) const;
 
   std::span<const std::size_t> output_shape() const noexcept { return output_shape_; }
   std::span<const std::size_t> batch_shape() const noexcept { return batch_shape_; }

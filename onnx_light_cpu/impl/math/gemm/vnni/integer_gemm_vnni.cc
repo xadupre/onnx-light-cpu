@@ -237,6 +237,20 @@ void IntegerMatMul2D(const std::uint8_t *a, bool a_signed, const std::uint8_t *b
                      std::int32_t *c, std::int64_t rows, std::int64_t cols, std::int64_t depth,
                      const std::int32_t *a_zero_point, std::int64_t a_zero_point_count,
                      const std::int32_t *b_zero_point, std::int64_t b_zero_point_count) {
+#if defined(ONNX_LIGHT_CPU_HAVE_AVX512VNNI) && defined(ONNX_LIGHT_CPU_HAVE_AVX512BW)
+  if (rows == 1 && CpuSupportsAvx512Vnni() && CpuSupportsAvx512BW()) {
+    detail::IntegerMatMulSkinnyMAvx512(a, a_signed, b, b_signed, c, cols, depth, a_zero_point[0],
+                                       b_zero_point, b_zero_point_count);
+    return;
+  }
+#endif
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_INTEGER
+  if (rows == 1 && DetectSimdLevel() >= SimdLevel::kAVX2) {
+    detail::IntegerMatMulSkinnyMAvx2(a, a_signed, b, b_signed, c, cols, depth, a_zero_point[0],
+                                     b_zero_point, b_zero_point_count);
+    return;
+  }
+#endif
 #ifdef ONNX_LIGHT_CPU_HAVE_AMX_INT8
   if (AmxTileStateAvailable() && CpuSupportsAmxInt8()) {
     GemmMatMulIntegerAmxInt8(a, a_signed, b, b_signed, c, static_cast<std::size_t>(rows),

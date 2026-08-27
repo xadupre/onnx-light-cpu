@@ -81,6 +81,13 @@ std::int32_t IntegerDotU8S8Avx2(const std::uint8_t *ua, const std::int8_t *sb, s
 void IntegerMatMulU8S8Avx2(const std::uint8_t *a, const std::int8_t *b, std::int32_t *c,
                            std::int64_t rows, std::int64_t cols, std::int64_t depth);
 
+// Matrix-vector specialization that consumes row-major B directly instead of
+// allocating and filling a transposed B panel.
+void IntegerMatMulSkinnyMAvx2(const std::uint8_t *a, bool a_signed, const std::uint8_t *b,
+                              bool b_signed, std::int32_t *c, std::int64_t cols, std::int64_t depth,
+                              std::int32_t a_zero_point, const std::int32_t *b_zero_point,
+                              std::int64_t b_zero_point_count);
+
 // AVX2 requantization epilogues for contiguous INT32 accumulators.
 void RequantizeInt32ToInt8Avx2(const std::int32_t *src, std::int8_t *dst, std::int64_t count,
                                float scale, std::int32_t zero_point);
@@ -93,6 +100,13 @@ void RequantizeInt32ToUint8Avx2(const std::int32_t *src, std::uint8_t *dst, std:
 // with a scalar tail for depths that are not a multiple of the 64-byte vector.
 std::int32_t IntegerDotU8S8Avx512Vnni(const std::uint8_t *ua, const std::int8_t *sb,
                                       std::int64_t depth);
+
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512BW
+void IntegerMatMulSkinnyMAvx512(const std::uint8_t *a, bool a_signed, const std::uint8_t *b,
+                                bool b_signed, std::int32_t *c, std::int64_t cols,
+                                std::int64_t depth, std::int32_t a_zero_point,
+                                const std::int32_t *b_zero_point, std::int64_t b_zero_point_count);
+#endif
 #endif
 
 // Shared driver behind ``IntegerMatMul2D``, parameterised by the per-column

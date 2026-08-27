@@ -696,6 +696,47 @@ template <typename T> void MatMulPlan<T>::Execute(const T *a, T *y) const {
 }
 
 template <typename T>
+void MatMulPlan<T>::ExecuteHalf(const GemmHalfPlan &half_plan, const std::uint16_t *a,
+                                const std::uint16_t *b, const GemmEpilogue<float> &epilogue,
+                                float *y) const {
+  if (half_plan.m() != gemm_plan_.m() || half_plan.n() != gemm_plan_.n() ||
+      half_plan.k() != gemm_plan_.k() || half_plan.trans_a() != gemm_plan_.trans_a() ||
+      half_plan.trans_b() != gemm_plan_.trans_b()) {
+    throw std::invalid_argument(
+        "onnx_light_cpu::MatMulPlan: half GEMM plan dimensions do not match.");
+  }
+  if (batch_count_ == 0 || output_matrix_elements_ == 0) {
+    return;
+  }
+  if (y == nullptr || epilogue.converted_output == nullptr) {
+    throw std::invalid_argument(
+        "onnx_light_cpu::MatMulPlan: half Y workspace and converted output must not be null.");
+  }
+  if (half_plan.k() != 0 && (a == nullptr || b == nullptr)) {
+    throw std::invalid_argument(
+        "onnx_light_cpu::MatMulPlan: half A and B must not be null when K is nonzero.");
+  }
+
+  const auto execute = [&](std::int64_t begin, std::int64_t end) {
+    for (std::int64_t offset = begin; offset < end; ++offset) {
+      const std::size_t batch = static_cast<std::size_t>(offset);
+      const std::uint16_t *batch_a =
+          a == nullptr ? nullptr : a + BatchOffset(batch, a_batch_strides_);
+      const std::uint16_t *batch_b =
+          b == nullptr ? nullptr : b + BatchOffset(batch, b_batch_strides_);
+      GemmEpilogue<float> batch_epilogue = epilogue;
+      batch_epilogue.converted_output += batch * output_matrix_elements_;
+      half_plan.Execute(batch_a, batch_b, batch_epilogue, y + batch * output_matrix_elements_);
+    }
+  };
+  if (half_plan.useful_threads() == 1) {
+    ExecuteRanges(static_cast<std::int64_t>(batch_count_), GemmWork(gemm_plan_), execute);
+  } else {
+    execute(0, static_cast<std::int64_t>(batch_count_));
+  }
+}
+
+template <typename T>
 void StridedBatchedGemm(const GemmPlan<T> &plan, std::size_t batch_count, const T *a,
                         std::ptrdiff_t stride_a, const T *b, std::ptrdiff_t stride_b, const T *c,
                         std::ptrdiff_t stride_c, T *y, std::ptrdiff_t stride_y) {
