@@ -104,7 +104,7 @@ std::int32_t IntegerDotU8S8Avx2(const std::uint8_t *ua, const std::int8_t *sb, s
 
 namespace {
 
-template <bool ASigned, bool BSigned>
+template <bool AIsSigned, bool BSigned>
 void IntegerMatMulSkinnyMAvx2Impl(const std::uint8_t *a, const std::uint8_t *b, std::int32_t *c,
                                   std::int64_t cols, std::int64_t depth, std::int32_t a_zero_point,
                                   const std::int32_t *b_zero_point,
@@ -119,7 +119,7 @@ void IntegerMatMulSkinnyMAvx2Impl(const std::uint8_t *a, const std::uint8_t *b, 
                   ? _mm256_set1_epi32(b_zero_point[0])
                   : _mm256_loadu_si256(reinterpret_cast<const __m256i *>(b_zero_point + column));
           for (std::int64_t inner = 0; inner < depth; ++inner) {
-            const std::int32_t av = ASigned ? static_cast<std::int8_t>(a[inner]) : a[inner];
+            const std::int32_t av = AIsSigned ? static_cast<std::int8_t>(a[inner]) : a[inner];
             const __m128i packed_b =
                 _mm_loadl_epi64(reinterpret_cast<const __m128i *>(b + inner * cols + column));
             const __m256i bv =
@@ -134,7 +134,7 @@ void IntegerMatMulSkinnyMAvx2Impl(const std::uint8_t *a, const std::uint8_t *b, 
           std::uint32_t accumulator = 0;
           const std::int32_t bz = b_zero_point_count == 1 ? b_zero_point[0] : b_zero_point[column];
           for (std::int64_t inner = 0; inner < depth; ++inner) {
-            const std::int32_t av = ASigned ? static_cast<std::int8_t>(a[inner]) : a[inner];
+            const std::int32_t av = AIsSigned ? static_cast<std::int8_t>(a[inner]) : a[inner];
             const std::uint8_t raw_b = b[inner * cols + column];
             const std::int32_t bv = BSigned ? static_cast<std::int8_t>(raw_b) : raw_b;
             accumulator += static_cast<std::uint32_t>((av - a_zero_point) * (bv - bz));
