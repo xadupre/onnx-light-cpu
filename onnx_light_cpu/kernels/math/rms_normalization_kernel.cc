@@ -7,10 +7,13 @@
 #include "onnx_light_cpu/kernels/kernel_registration.h"
 #include "onnx_light_cpu/kernels/kernel_usage.h"
 
+#include "onnx_light_cpu/impl/execution.h"
+#include "onnx_light_cpu/impl/math/half_conversion.h"
+#include "onnx_light_cpu/impl/math/rms_normalization.h"
+
 #include "onnx_core/runtime/kernels/cast_helper.h"
 #include "onnx_core/runtime/kernels/kernel_dispatch_table.h"
 #include "onnx_core/runtime/kernels/node_helpers.h"
-#include "onnx_core/runtime/kernels/parallel_for.h"
 #include "onnx_core/symbolic/sym_tensor.h"
 
 #include <cmath>
@@ -44,18 +47,6 @@ template <> struct FloatCodec<double> {
   static double Store(float value) noexcept { return static_cast<double>(value); }
 };
 
-struct Float16Codec {
-  using Storage = std::uint16_t;
-  static float Load(Storage value) noexcept { return rt_ns::Float16BitsToFloat(value); }
-  static Storage Store(float value) noexcept { return rt_ns::FloatToFloat16Bits(value); }
-};
-
-struct BFloat16Codec {
-  using Storage = std::uint16_t;
-  static float Load(Storage value) noexcept { return rt_ns::Bfloat16BitsToFloat(value); }
-  static Storage Store(float value) noexcept { return rt_ns::FloatToBfloat16Bits(value); }
-};
-
 template <typename T> struct NativeCodec {
   using Storage = T;
   static float Load(Storage value) noexcept { return FloatCodec<Storage>::Load(value); }
@@ -69,24 +60,68 @@ void NormalizeRows(const Tensor &x, const Tensor &scale, Tensor &output, std::si
   const auto *x_data = reinterpret_cast<const Storage *>(x.bytes());
   const auto *scale_data = reinterpret_cast<const Storage *>(scale.bytes());
   auto *output_data = reinterpret_cast<Storage *>(output.mutable_bytes());
-  rt_ns::ParallelFor(static_cast<std::int64_t>(outer), [x_data, scale_data, output_data, inner,
-                                                        epsilon](std::int64_t begin,
-                                                                 std::int64_t end) {
-    for (std::int64_t row = begin; row < end; ++row) {
-      const std::size_t offset = static_cast<std::size_t>(row) * inner;
-      float sum_squares = 0.0f;
-      for (std::size_t column = 0; column < inner; ++column) {
-        const float value = Codec::Load(x_data[offset + column]);
-        sum_squares += value * value;
-      }
-      const float inverse_rms = 1.0f / std::sqrt(sum_squares / static_cast<float>(inner) + epsilon);
-      for (std::size_t column = 0; column < inner; ++column) {
-        const float normalized =
-            Codec::Load(x_data[offset + column]) * inverse_rms * Codec::Load(scale_data[column]);
-        output_data[offset + column] = Codec::Store(normalized);
-      }
-    }
-  });
+  ExecuteRanges(
+      static_cast<std::int64_t>(outer), static_cast<double>(inner),
+      [x_data, scale_data, output_data, inner, epsilon](std::int64_t begin, std::int64_t end) {
+        for (std::int64_t row = begin; row < end; ++row) {
+          const std::size_t offset = static_cast<std::size_t>(row) * inner;
+          float sum_squares = 0.0f;
+          for (std::size_t column = 0; column < inner; ++column) {
+            const float value = Codec::Load(x_data[offset + column]);
+            sum_squares += value * value;
+          }
+          const float inverse_rms =
+              1.0f / std::sqrt(sum_squares / static_cast<float>(inner) + epsilon);
+          for (std::size_t column = 0; column < inner; ++column) {
+            const float normalized = Codec::Load(x_data[offset + column]) * inverse_rms *
+                                     Codec::Load(scale_data[column]);
+            output_data[offset + column] = Codec::Store(normalized);
+          }
+        }
+      });
+}
+
+template <bool BFloat16>
+void NormalizeHalfRows(const Tensor &x, const Tensor &scale, Tensor &output, std::size_t outer,
+                       std::size_t inner, float epsilon) {
+  const auto *x_data = reinterpret_cast<const std::uint16_t *>(x.bytes());
+  const auto *scale_data = reinterpret_cast<const std::uint16_t *>(scale.bytes());
+  auto *output_data = reinterpret_cast<std::uint16_t *>(output.mutable_bytes());
+  std::vector<float> scale_values(inner);
+  if constexpr (BFloat16) {
+    detail::ConvertBFloat16ToFloat32(scale_data, scale_values.data(), inner);
+  } else {
+    detail::ConvertFloat16ToFloat32(scale_data, scale_values.data(), inner);
+  }
+
+  ExecuteRanges(
+      static_cast<std::int64_t>(outer), static_cast<double>(inner),
+      [x_data, output_data, scale_values = std::move(scale_values), inner,
+       epsilon](std::int64_t begin, std::int64_t end) {
+        std::vector<float> row_values(inner);
+        for (std::int64_t row = begin; row < end; ++row) {
+          const std::size_t offset = static_cast<std::size_t>(row) * inner;
+          if constexpr (BFloat16) {
+            detail::ConvertBFloat16ToFloat32(x_data + offset, row_values.data(), inner);
+          } else {
+            detail::ConvertFloat16ToFloat32(x_data + offset, row_values.data(), inner);
+          }
+          float sum_squares = 0.0f;
+          for (float value : row_values) {
+            sum_squares += value * value;
+          }
+          const float inverse_rms =
+              1.0f / std::sqrt(sum_squares / static_cast<float>(inner) + epsilon);
+          for (std::size_t column = 0; column < inner; ++column) {
+            row_values[column] = row_values[column] * inverse_rms * scale_values[column];
+          }
+          if constexpr (BFloat16) {
+            detail::ConvertFloat32ToBFloat16(row_values.data(), output_data + offset, inner);
+          } else {
+            detail::ConvertFloat32ToFloat16(row_values.data(), output_data + offset, inner);
+          }
+        }
+      });
 }
 
 void DispatchNormalize(const Tensor &x, const Tensor &scale, Tensor &output, std::size_t outer,
@@ -99,10 +134,13 @@ void DispatchNormalize(const Tensor &x, const Tensor &scale, Tensor &output, std
     NormalizeRows<NativeCodec<double>>(x, scale, output, outer, inner, epsilon);
     return;
   case DataType::FLOAT16:
-    NormalizeRows<Float16Codec>(x, scale, output, outer, inner, epsilon);
+    RmsNormalizationFloat16(reinterpret_cast<const std::uint16_t *>(x.bytes()),
+                            reinterpret_cast<const std::uint16_t *>(scale.bytes()),
+                            reinterpret_cast<std::uint16_t *>(output.mutable_bytes()), outer, inner,
+                            epsilon);
     return;
   case DataType::BFLOAT16:
-    NormalizeRows<BFloat16Codec>(x, scale, output, outer, inner, epsilon);
+    NormalizeHalfRows<true>(x, scale, output, outer, inner, epsilon);
     return;
   default:
     throw std::invalid_argument("onnx_light_cpu::RMSNormalization: unsupported input data type.");

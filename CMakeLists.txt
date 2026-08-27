@@ -221,7 +221,7 @@ if(NOT ONNX_LIGHT_CPU_X86)
   set(ONNX_LIGHT_CPU_HAVE_AMX_INT8_FLAG FALSE)
 elseif(NOT MSVC)
   check_cxx_compiler_flag("-mavx2 -mfma" ONNX_LIGHT_CPU_HAVE_AVX2_FMA_FLAG)
-  check_cxx_compiler_flag("-mavx2 -mfma -mf16c" ONNX_LIGHT_CPU_HAVE_F16C_FLAG)
+  check_cxx_compiler_flag("-mavx -mf16c" ONNX_LIGHT_CPU_HAVE_F16C_FLAG)
   check_cxx_compiler_flag("-mavx512f" ONNX_LIGHT_CPU_HAVE_AVX512F_FLAG)
   check_cxx_compiler_flag("-mavx512f -mavx512bw"
       ONNX_LIGHT_CPU_HAVE_AVX512BW_FLAG)
@@ -241,8 +241,7 @@ elseif(NOT MSVC)
   check_cxx_compiler_flag("-mamx-tile -mamx-int8" ONNX_LIGHT_CPU_HAVE_AMX_INT8_FLAG)
 else()
   check_cxx_compiler_flag("/arch:AVX2" ONNX_LIGHT_CPU_HAVE_AVX2_FMA_FLAG)
-  # /arch:AVX2 already enables the F16C intrinsics on MSVC.
-  set(ONNX_LIGHT_CPU_HAVE_F16C_FLAG ${ONNX_LIGHT_CPU_HAVE_AVX2_FMA_FLAG})
+  check_cxx_compiler_flag("/arch:AVX" ONNX_LIGHT_CPU_HAVE_F16C_FLAG)
   check_cxx_compiler_flag("/arch:AVX512" ONNX_LIGHT_CPU_HAVE_AVX512F_FLAG)
   set(ONNX_LIGHT_CPU_HAVE_AVX512BW_FLAG
       ${ONNX_LIGHT_CPU_HAVE_AVX512F_FLAG})
@@ -318,6 +317,8 @@ set(_exp_log_avx512_source
     "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/avx512/exp_log_kernel_avx512.cc")
 set(_exp_log_avx2_fma_source
     "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/avx2/exp_log_kernel_avx2_fma.cc")
+set(_rms_normalization_avx2_f16c_source
+    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/avx2/rms_normalization_kernel_avx2_f16c.cc")
 set(_not_avx512_source
     "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/logical/avx512/not_kernel_avx512.cc")
 set(_compute_avx512_source
@@ -343,6 +344,9 @@ if(NOT ONNX_LIGHT_CPU_HAVE_AVX2_FMA_FLAG)
   list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_gemm_avx2_fma_source}")
   list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_gemm_avx2_integer_source}")
   list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_exp_log_avx2_fma_source}")
+endif()
+if(NOT ONNX_LIGHT_CPU_HAVE_F16C_FLAG)
+  list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_rms_normalization_avx2_f16c_source}")
 endif()
 if(NOT ONNX_LIGHT_CPU_HAVE_AVX512BW_FLAG)
   list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_not_avx512_source}")
@@ -575,6 +579,18 @@ if(ONNX_LIGHT_CPU_HAVE_AVX2_FMA_FLAG)
     target_compile_definitions(lib_onnx_light_cpu PRIVATE
         ONNX_LIGHT_CPU_HAVE_F16C=1)
   endif()
+endif()
+
+if(ONNX_LIGHT_CPU_HAVE_F16C_FLAG)
+  if(NOT MSVC)
+    set_source_files_properties("${_rms_normalization_avx2_f16c_source}" PROPERTIES
+        COMPILE_OPTIONS "-mavx;-mf16c")
+  else()
+    set_source_files_properties("${_rms_normalization_avx2_f16c_source}" PROPERTIES
+        COMPILE_OPTIONS "/arch:AVX")
+  endif()
+  target_compile_definitions(lib_onnx_light_cpu PRIVATE
+      ONNX_LIGHT_CPU_HAVE_RMS_F16C=1)
 endif()
 
 if(ONNX_LIGHT_CPU_HAVE_NEON_INTRINSICS)
