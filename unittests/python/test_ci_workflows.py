@@ -40,5 +40,5 @@ def test_onnx_light_main_integration_runs_on_every_supported_os():
     assert "0.1.19" not in source_job
 
 
-def test_cpp_coverage_is_carried_forward_between_weekly_runs():
-    assert "cpp:\n    carryforward: true" in _CODECOV_CONFIG
+def test_cpp_coverage_is_not_carried_forward_between_weekly_runs():
+    assert "cpp:\n    carryforward: false" in _CODECOV_CONFIG
