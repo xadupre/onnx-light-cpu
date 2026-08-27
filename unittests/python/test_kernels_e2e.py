@@ -65,10 +65,12 @@ _REGISTERED_KERNELS = {
     "Add": "onnx_light_cpu::Add",
     "And": "onnx_light_cpu::And",
     "Attention": "onnx_light_cpu::Attention",
+    "BiasGelu": "onnx_light_cpu::BiasGelu",
     "BitShift": "onnx_light_cpu::BitShift",
     "BitwiseAnd": "onnx_light_cpu::BitwiseAnd",
     "BitwiseOr": "onnx_light_cpu::BitwiseOr",
     "BitwiseXor": "onnx_light_cpu::BitwiseXor",
+    "CDist": "onnx_light_cpu::CDist",
     "Div": "onnx_light_cpu::Div",
     "Equal": "onnx_light_cpu::Equal",
     "Exp": "onnx_light_cpu::Exp",
@@ -220,7 +222,12 @@ class TestBackendCases(TestCase):
         for record in records:
             with self.assertRaises(AttributeError):
                 record.op_type = "Other"  # type: ignore[misc]
-            expected_domain = "ai.onnx.ml" if record.op_type == "TreeEnsemble" else "ai.onnx"
+            if record.op_type == "TreeEnsemble":
+                expected_domain = "ai.onnx.ml"
+            elif record.op_type in {"BiasGelu", "CDist"}:
+                expected_domain = "com.microsoft"
+            else:
+                expected_domain = "ai.onnx"
             assert record.domain == expected_domain
             assert record.device == "CPU"
             assert isinstance(record.types, tuple)
@@ -228,10 +235,12 @@ class TestBackendCases(TestCase):
             if record.op_type in {
                 "Add",
                 "And",
+                "BiasGelu",
                 "BitShift",
                 "BitwiseAnd",
                 "BitwiseOr",
                 "BitwiseXor",
+                "CDist",
                 "Div",
                 "Equal",
                 "Greater",

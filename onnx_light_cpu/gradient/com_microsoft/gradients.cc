@@ -110,7 +110,7 @@ bool GradBiasGelu(const NodeProto &node, const std::string &output_grad,
   const std::string &bias = node.input(1);
   const std::string z = Binary(func, counter, "Add", a, bias, "z");
   const std::string inv_sqrt_two =
-      CastConstantLike(func, counter, z, "inv_sqrt_two", static_cast<float>(M_SQRT1_2));
+      CastConstantLike(func, counter, z, "inv_sqrt_two", 0.70710678118654752440f);
   const std::string scaled = Binary(func, counter, "Mul", z, inv_sqrt_two, "scaled");
   const std::string erf = Unary(func, counter, "Erf", scaled, "erf");
   const std::string one = CastConstantLike(func, counter, z, "one", 1.0f);
