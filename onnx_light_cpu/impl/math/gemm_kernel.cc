@@ -998,6 +998,13 @@ void PackBMicroPanel(bool trans_b, const SrcT *B, std::size_t K, std::size_t N, 
     return;
   }
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
+  if constexpr (std::is_same_v<T, double> && std::is_same_v<SrcT, double>) {
+    static const bool use_avx2 = DetectSimdLevel() >= SimdLevel::kAVX2;
+    if (use_avx2) {
+      GemmPackTransposeFloat64_AVX2(B + (n0 + j) * K + k0, K, dst, kc, jb);
+      return;
+    }
+  }
   if constexpr (std::is_same_v<T, float> && std::is_same_v<SrcT, float>) {
     static const bool use_avx2 = DetectSimdLevel() >= SimdLevel::kAVX2;
     if (use_avx2) {
@@ -1315,10 +1322,13 @@ void GemmFiveLoopRange(bool trans_a, bool trans_b, std::size_t M, std::size_t N,
   // row tile, and that traffic caps large-matrix throughput well below the
   // micro-kernel rate.
   const std::size_t selected_column_block = detail::SelectGemmColumnBlock(blocking, sizeof(T));
-  const std::size_t column_block = sizeof(T) == sizeof(float) && blocking.nr == 32 && M <= 256 &&
-                                           N >= 512 && N < 2048 && K >= 512
-                                       ? 16
-                                       : selected_column_block;
+  const std::size_t column_block =
+      sizeof(T) == sizeof(double) && kind == GemmKernelKind::kAVX512 && M >= 512
+          ? std::min<std::size_t>(blocking.nc, 32)
+      : sizeof(T) == sizeof(float) && blocking.nr == 32 && M <= 256 && N >= 512 && N < 2048 &&
+              K >= 512
+          ? 16
+          : selected_column_block;
   const std::size_t micro_panels_per_panel = (blocking.nc + column_block - 1) / column_block;
   const std::size_t tasks_per_panel = row_panels * micro_panels_per_panel;
   constexpr bool kCanFusePacking = std::is_same_v<T, SrcT>;
@@ -1346,12 +1356,14 @@ void GemmFiveLoopRange(bool trans_a, bool trans_b, std::size_t M, std::size_t N,
     const std::size_t participant_count =
         equal_block_count < requested_blocks ? requested_blocks : task_count;
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512
-    const bool use_strided_a = !trans_a && std::is_same_v<T, float> &&
-                               std::is_same_v<SrcT, float> && kind == GemmKernelKind::kAVX512;
+    const std::size_t max_kc = std::min(blocking.kc, k_end - k_begin);
+    const bool use_strided_a =
+        !trans_a && std::is_same_v<T, SrcT> && kind == GemmKernelKind::kAVX512 &&
+        (std::is_same_v<T, float> || (std::is_same_v<T, double> && max_kc == K));
 #else
     constexpr bool use_strided_a = false;
-#endif
     const std::size_t max_kc = std::min(blocking.kc, k_end - k_begin);
+#endif
 
     ExecuteRanges(
         static_cast<std::int64_t>(participant_count),

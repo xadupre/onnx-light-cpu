@@ -62,6 +62,7 @@ constexpr std::size_t kSkinnyMTargetFmasPerParticipant = 64 * 1024;
 constexpr std::size_t kSkinnyNTargetFmasPerParticipant = 64 * 1024;
 constexpr std::size_t kWideProjectionTargetFmasPerParticipant = 6 * 1024 * 1024;
 constexpr std::size_t kGeneralOutputElementsPerParticipant = 8 * 1024;
+constexpr std::size_t kFloat64GeneralOutputElementsPerParticipant = 2 * 1024;
 constexpr std::size_t kAvx512GeneralParticipantLimit = 32;
 
 bool IsTransformerProjection(std::size_t m, std::size_t n, std::size_t k) {
@@ -69,7 +70,7 @@ bool IsTransformerProjection(std::size_t m, std::size_t n, std::size_t k) {
 }
 
 std::size_t TargetFmasPerParticipant(GemmAlgorithm algorithm, std::size_t m, std::size_t n,
-                                     std::size_t k) {
+                                     std::size_t k, std::size_t element_size) {
   if (algorithm == GemmAlgorithm::kSkinnyM) {
     return kSkinnyMTargetFmasPerParticipant;
   }
@@ -83,9 +84,13 @@ std::size_t TargetFmasPerParticipant(GemmAlgorithm algorithm, std::size_t m, std
     return kWideProjectionTargetFmasPerParticipant;
   }
   if (algorithm == GemmAlgorithm::kGeneral) {
-    return k > std::numeric_limits<std::size_t>::max() / kGeneralOutputElementsPerParticipant
+    const std::size_t output_elements_per_participant =
+        element_size == sizeof(double) && m >= 256 && n >= 256
+            ? kFloat64GeneralOutputElementsPerParticipant
+            : kGeneralOutputElementsPerParticipant;
+    return k > std::numeric_limits<std::size_t>::max() / output_elements_per_participant
                ? std::numeric_limits<std::size_t>::max()
-               : k * kGeneralOutputElementsPerParticipant;
+               : k * output_elements_per_participant;
   }
   return 0;
 }
@@ -453,7 +458,7 @@ GemmPlan<T>::GemmPlan(const GemmPlanOptions<T> &options)
           options.m, options.n, options.k,
           AlgorithmParticipantLimit(algorithm_, options.m, options.n, options.k,
                                     ConfiguredParticipantLimit(options.maximum_participants)),
-          TargetFmasPerParticipant(algorithm_, options.m, options.n, options.k))),
+          TargetFmasPerParticipant(algorithm_, options.m, options.n, options.k, sizeof(T)))),
       blocking_(ResolveBlocking(options.blocking, sizeof(T), VectorLanes<T>(), RegisterRows<T>(),
                                 options.m, options.n, options.k, participant_limit_, true)),
       useful_threads_(UsefulThreads(algorithm_, options.m, options.n, options.k, blocking_,
@@ -559,7 +564,8 @@ GemmHalfPlan::GemmHalfPlan(const GemmHalfPlanOptions &options)
           options.m, options.n, options.k, ConfiguredParticipantLimit(options.maximum_participants),
           algorithm_ == GemmAlgorithm::kGeneral
               ? 0
-              : TargetFmasPerParticipant(algorithm_, options.m, options.n, options.k))),
+              : TargetFmasPerParticipant(algorithm_, options.m, options.n, options.k,
+                                         sizeof(float)))),
       blocking_(ResolveBlocking(options.blocking, sizeof(float), VectorLanes<float>(),
                                 RegisterRows<float>(), options.m, options.n, options.k,
                                 participant_limit_, false)),
