@@ -394,6 +394,8 @@ ax.set_yticks(positions, labels, fontsize=7)
 for tick_label, speedup in zip(ax.get_yticklabels(), speedups, strict=True):
     if speedup <= 0.5:
         tick_label.set_color("red")
+    elif speedup < 0.95:
+        tick_label.set_color("orange")
 ax.set_xlabel("speed-up vs onnxruntime")
 ax.set_title("onnx-light-cpu speed-up over onnxruntime on backend cases")
 
