@@ -425,7 +425,7 @@ void AbsInt8_Dispatch(const int8_t *input, int8_t *output, std::size_t count) {
 } // namespace
 
 void AbsInt8(const int8_t *input, int8_t *output, std::size_t count) {
-  AbsInt8WithTuning(input, output, count, kDefaultAbs8ExecutionTuning);
+  AbsInt8WithTuning(input, output, count, kDefaultAbsInt8ExecutionTuning);
 }
 
 void AbsInt8WithTuning(const int8_t *input, int8_t *output, std::size_t count,
@@ -514,7 +514,7 @@ void AbsInt16_Dispatch(const int16_t *input, int16_t *output, std::size_t count)
 } // namespace
 
 void AbsInt16(const int16_t *input, int16_t *output, std::size_t count) {
-  AbsInt16WithTuning(input, output, count, kDefaultAbs16ExecutionTuning);
+  AbsInt16WithTuning(input, output, count, kDefaultAbsInt16ExecutionTuning);
 }
 
 void AbsInt16WithTuning(const int16_t *input, int16_t *output, std::size_t count,
@@ -613,7 +613,7 @@ void AbsInt32_Dispatch(const int32_t *input, int32_t *output, std::size_t count)
 } // namespace
 
 void AbsInt32(const int32_t *input, int32_t *output, std::size_t count) {
-  AbsInt32WithTuning(input, output, count, kDefaultAbs32ExecutionTuning);
+  AbsInt32WithTuning(input, output, count, kDefaultAbsInt32ExecutionTuning);
 }
 
 void AbsInt32WithTuning(const int32_t *input, int32_t *output, std::size_t count,
@@ -719,7 +719,7 @@ void AbsInt64_Dispatch(const int64_t *input, int64_t *output, std::size_t count)
 } // namespace
 
 void AbsInt64(const int64_t *input, int64_t *output, std::size_t count) {
-  AbsInt64WithTuning(input, output, count, kDefaultAbs64ExecutionTuning);
+  AbsInt64WithTuning(input, output, count, kDefaultAbsInt64ExecutionTuning);
 }
 
 void AbsInt64WithTuning(const int64_t *input, int64_t *output, std::size_t count,
