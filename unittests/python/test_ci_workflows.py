@@ -9,9 +9,6 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parents[2]
 _CORE_WORKFLOW = (_ROOT / ".github" / "workflows" / "ci_core.yml").read_text(encoding="utf-8")
 _DOCS_WORKFLOW = (_ROOT / ".github" / "workflows" / "docs.yml").read_text(encoding="utf-8")
-_COVERAGE_WORKFLOW = (
-    _ROOT / ".github" / "workflows" / "cpp_coverage_weekly.yml"
-).read_text(encoding="utf-8")
 _CODECOV_CONFIG = (_ROOT / ".codecov.yml").read_text(encoding="utf-8")
 
 
@@ -43,9 +40,5 @@ def test_onnx_light_main_integration_runs_on_every_supported_os():
     assert "0.1.19" not in source_job
 
 
-def test_cpp_coverage_is_carried_forward_between_weekly_runs():
-    assert "cpp:\n    carryforward: true" in _CODECOV_CONFIG
-
-
-def test_cpp_coverage_updates_after_main_pushes():
-    assert "push:\n    branches: [main]" in _COVERAGE_WORKFLOW
+def test_cpp_coverage_is_not_carried_forward_between_weekly_runs():
+    assert "cpp:\n    carryforward: false" in _CODECOV_CONFIG
