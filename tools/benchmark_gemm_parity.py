@@ -61,6 +61,7 @@ PRIORITY_CASES = (
     GemmCase("trans_ab", 128, 128, 128, trans_a=True, trans_b=True),
     GemmCase("transformer_projection_dynamic", 128, 3072, 768),
     GemmCase("transformer_projection", 128, 3072, 768, constant_b=True),
+    GemmCase("transformer_down_projection_dynamic", 128, 768, 3072),
 )
 
 MATMUL_PRIORITY_CASES = (
@@ -373,10 +374,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     import onnxruntime
     from onnx_light.onnx.reference import ReferenceEvaluator
     from onnx_light_cpu import register_kernels
+
+    register_kernels()
     from onnx_light_cpu.onnx_py._cpukernels import detect_simd_level
     from onnx_light_cpu.onnx_py._cpuregister import set_kernel_usage_recording
 
-    register_kernels()
     set_kernel_usage_recording(False)
     session_options = None
     cpu_execution = None
@@ -413,7 +415,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         def execute():
             return session.run(None, feeds)[0]
 
-        output = execute()
+        output = execute().copy()
         samples = measure_alternating((execute,), repeat, args.warmup, args.max_repeat_time)[0]
         return (
             output,
@@ -432,7 +434,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         def execute():
             return session.run(None, feeds)[0]
 
-        output = execute()
+        output = execute().copy()
         samples = measure_alternating((execute,), repeat, args.warmup, args.max_repeat_time)[0]
         return output, samples
 
@@ -514,8 +516,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--cpus", default="", help="Linux CPU affinity, for example 0-3 or 0,2,4."
     )
-    parser.add_argument("-r", "--repeat", type=int, default=10 * (os.cpu_count() or 1))
-    parser.add_argument("-w", "--warmup", type=int, default=2 * (os.cpu_count() or 1))
+    parser.add_argument("-r", "--repeat", type=int, default=100 * (os.cpu_count() or 1))
+    parser.add_argument("-w", "--warmup", type=int, default=100 * 20)
     parser.add_argument("-t", "--max-repeat-time", type=float, default=1.0)
     parser.add_argument("--dtype", choices=("all", *PARITY_DTYPES), default="all")
     parser.add_argument("--operator", choices=("all", "gemm", "matmul"), default="all")

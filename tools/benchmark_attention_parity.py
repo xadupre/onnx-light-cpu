@@ -22,9 +22,10 @@ from typing import Any, Callable, Sequence
 KV_BLOCK = 128
 DTYPES = ("float32", "float16", "bfloat16")
 _CASE_PATTERN = re.compile(
-    r"^test_cpu_attention_opset(?P<opset>23|24)_"
+    r"^test_cpu_attention_(?:(?P<family>llm_qwen3_8b)_)?opset(?P<opset>23|24)_"
     r"(?P<layout>rank3|rank4)_(?P<geometry>mha|gqa|mqa)_"
     r"q(?P<q_length>\d+)_kv(?P<kv_length>\d+)_hd(?P<head_dim>\d+)_"
+    r"(?:qh(?P<q_heads>\d+)_kvh(?P<kv_heads>\d+)_)?"
     r"(?P<mask>none|causal|bool|additive)_"
     r"(?P<cache>stateless|internal_cache|nonpad)_"
     r"(?P<dtype>float32|float16|bfloat16)_benchmark$"
@@ -37,8 +38,9 @@ def parse_case_name(name: str) -> dict[str, Any]:
     if match is None:
         raise ValueError(f"Invalid Attention benchmark case name: {name!r}")
     case: dict[str, Any] = match.groupdict()
-    for field in ("opset", "q_length", "kv_length", "head_dim"):
-        case[field] = int(case[field])
+    for field in ("opset", "q_length", "kv_length", "head_dim", "q_heads", "kv_heads"):
+        if case.get(field) is not None:
+            case[field] = int(case[field])
     return case
 
 
@@ -385,8 +387,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--large", action="store_true", help="Include opt-in KV=8192 cases.")
     parser.add_argument("--threads", type=int, default=None, help="Equal-thread diagnostic.")
     parser.add_argument("--cpus", default="", help="Linux CPU affinity, for example 0-3,8.")
-    parser.add_argument("-r", "--repeat", type=int, default=10 * (os.cpu_count() or 1))
-    parser.add_argument("-w", "--warmup", type=int, default=2 * (os.cpu_count() or 1))
+    parser.add_argument("-r", "--repeat", type=int, default=100 * (os.cpu_count() or 1))
+    parser.add_argument("-w", "--warmup", type=int, default=100 * 20)
     parser.add_argument("-t", "--max-repeat-time", type=float, default=1.0)
     parser.add_argument("--output", type=Path, default=Path("attention_parity_results.json"))
     parser.add_argument("--enforce", action="store_true")

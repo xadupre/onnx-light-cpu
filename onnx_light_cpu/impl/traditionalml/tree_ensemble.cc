@@ -1251,10 +1251,9 @@ TreeEnsemblePlan::TreeEnsemblePlan(TreeEnsembleAttributes attributes,
         (nodes_[index].true_is_leaf ? 1U : 0U) | (nodes_[index].false_is_leaf ? 2U : 0U) |
         (nodes_[index].missing_value_tracks_true ? 4U : 0U));
     if (!compact_nodes_.empty()) {
-      compact_nodes_[index] = {prepared_splits_[index],  prepared_half_splits_[index],
-                               feature_ids32_[index],    true_children32_[index],
-                               false_children32_[index], prepared_modes_[index],
-                               prepared_flags_[index]};
+      compact_nodes_[index] = {prepared_splits_[index], feature_ids32_[index],
+                               true_children32_[index], false_children32_[index],
+                               prepared_modes_[index],  prepared_flags_[index]};
     }
     if (nodes_[index].mode == TreeBranchMode::kMember) {
       std::vector<double> set;
@@ -1573,6 +1572,50 @@ std::size_t TreeEnsemblePlan::prepared_storage_bytes() const noexcept {
   return bytes;
 }
 
+void TreeEnsemblePlan::CompactRuntimeStorage() {
+  if (uses_64_bit_indices_ || compact_nodes_.empty()) {
+    return;
+  }
+  const auto release = [](auto &values) {
+    using Vector = std::remove_cvref_t<decltype(values)>;
+    Vector().swap(values);
+  };
+
+  release(attributes_.tree_roots);
+  release(attributes_.nodes_featureids);
+  release(attributes_.nodes_splits);
+  release(attributes_.nodes_modes);
+  release(attributes_.nodes_truenodeids);
+  release(attributes_.nodes_falsenodeids);
+  release(attributes_.nodes_trueleafs);
+  release(attributes_.nodes_falseleafs);
+  release(attributes_.nodes_missing_value_tracks_true);
+  release(attributes_.nodes_hitrates);
+  release(attributes_.membership_values);
+  release(attributes_.leaf_targetids);
+  release(attributes_.leaf_weights);
+  release(nodes_);
+  release(feature_ids32_);
+  release(true_children32_);
+  release(false_children32_);
+  release(prepared_splits_);
+  release(prepared_half_splits_);
+  release(prepared_modes_);
+  release(prepared_flags_);
+  release(hot_tree_roots_);
+  release(hot_feature_ids_);
+  release(hot_true_children_);
+  release(hot_false_children_);
+  release(hot_splits_);
+  release(hot_half_splits_);
+  release(hot_modes_);
+  release(hot_flags_);
+  release(hot_membership_indices_);
+  if (structural_buckets_.membership_density == TreeEnsembleMembershipDensity::kNone) {
+    release(membership_sets_);
+  }
+}
+
 std::vector<TreeEnsembleCalibrationCandidate>
 TreeEnsemblePlan::GenerateCalibrationCandidates() const {
   std::vector<TreeEnsembleCalibrationCandidate> candidates;
@@ -1645,6 +1688,19 @@ TreeEnsemblePlan::SelectExecution(std::size_t rows, std::size_t effective_thread
   if (rows == 0) {
     return {};
   }
+  const auto accumulator_bytes = [&](TreeEnsembleExecutionStrategy strategy) {
+    if (attributes_.n_targets == 1 && attributes_.aggregate == TreeAggregate::kSum &&
+        attributes_.post_transform == TreePostTransform::kNone &&
+        (rows == 1 || rows >= kRowParallelThreshold) &&
+        strategy != TreeEnsembleExecutionStrategy::kTreeParallel) {
+      return std::size_t{0};
+    }
+    const bool values_only = (strategy == TreeEnsembleExecutionStrategy::kTreeMajorBatch ||
+                              strategy == TreeEnsembleExecutionStrategy::kInterleavedRows) &&
+                             (attributes_.aggregate == TreeAggregate::kSum ||
+                              attributes_.aggregate == TreeAggregate::kAverage);
+    return sizeof(double) + (values_only ? 0U : sizeof(std::size_t));
+  };
   if (uses_dynamic_safe_policy_) {
     TreeEnsembleExecutionDecision fallback;
     if (effective_threads == 1) {
@@ -1673,7 +1729,7 @@ TreeEnsemblePlan::SelectExecution(std::size_t rows, std::size_t effective_thread
     fallback.workspace_bytes = SaturatingMultiply(
         SaturatingMultiply(SaturatingMultiply(fallback.participants, fallback.batch_rows),
                            static_cast<std::size_t>(attributes_.n_targets)),
-        sizeof(double) + sizeof(std::size_t));
+        accumulator_bytes(fallback.strategy));
     return fallback;
   }
   if (effective_threads == 1) {
@@ -1686,7 +1742,7 @@ TreeEnsemblePlan::SelectExecution(std::size_t rows, std::size_t effective_thread
                            tuning_policy_.target_layout == TreeEnsembleTargetLayout::kSparse
                                ? active_targets_.size()
                                : static_cast<std::size_t>(attributes_.n_targets)),
-        sizeof(double) + sizeof(std::size_t));
+        accumulator_bytes(serial.strategy));
     return serial;
   }
 
@@ -1718,41 +1774,100 @@ TreeEnsemblePlan::SelectExecution(std::size_t rows, std::size_t effective_thread
                          tuning_policy_.target_layout == TreeEnsembleTargetLayout::kSparse
                              ? active_targets_.size()
                              : static_cast<std::size_t>(attributes_.n_targets)),
-      sizeof(double) + sizeof(std::size_t));
+      accumulator_bytes(decision.strategy));
   return decision;
 }
 
-std::vector<double> TreeEnsemblePlan::Evaluate(const std::vector<double> &input,
-                                               std::size_t rows) const {
+template <typename T>
+void TreeEnsemblePlan::EvaluateIntoImpl(const T *input, std::size_t input_size, std::size_t rows,
+                                        T *output) const {
+#if defined(__GNUC__) || defined(__clang__)
+  const T *__restrict input_data = input;
+  T *__restrict output_data = output;
+#else
+  const T *input_data = input;
+  T *output_data = output;
+#endif
   const std::size_t features = static_cast<std::size_t>(attributes_.n_features);
   const std::size_t targets = static_cast<std::size_t>(attributes_.n_targets);
-  if (input.size() != rows * features) {
+  if (input_size != rows * features) {
     Invalid("input shape does not match n_features");
   }
-  std::vector<double> output(rows * targets);
   if (rows == 0) {
-    return output;
+    return;
   }
   const bool sparse_targets = tuning_policy_.target_layout == TreeEnsembleTargetLayout::kSparse;
   const std::size_t accumulator_targets = sparse_targets ? active_targets_.size() : targets;
+  const bool homogeneous_leq =
+      structural_buckets_.branch_mode_mix == TreeEnsembleBranchMix::kHomogeneous &&
+      !tuning_policy_.optimized_float16 && !compact_nodes_.empty() &&
+      static_cast<TreeBranchMode>(compact_nodes_[0].mode) == TreeBranchMode::kLeq;
+  const bool homogeneous_member =
+      structural_buckets_.branch_mode_mix == TreeEnsembleBranchMix::kHomogeneous &&
+      !tuning_policy_.optimized_float16 && !compact_nodes_.empty() &&
+      static_cast<TreeBranchMode>(compact_nodes_[0].mode) == TreeBranchMode::kMember;
 
   const auto find_leaf = [&](std::size_t row, std::size_t tree) {
+    if (homogeneous_leq && !uses_64_bit_indices_) {
+      std::size_t node = static_cast<std::size_t>(tree_roots_[tree]);
+      if (all_trees_are_symmetric_) {
+        for (std::size_t level = 0; level < max_depth_; ++level) {
+          const TreeEnsembleCompactNode &current = compact_nodes_[node];
+          const double value =
+              input_data[row * features + static_cast<std::size_t>(current.feature_id)];
+          const bool go_true = value <= current.split;
+          node = static_cast<std::size_t>(go_true ? current.true_child : current.false_child);
+        }
+        return node;
+      }
+      for (;;) {
+        const TreeEnsembleCompactNode &current = compact_nodes_[node];
+        const double value =
+            input_data[row * features + static_cast<std::size_t>(current.feature_id)];
+        const bool go_true = value <= current.split;
+        const bool is_leaf = (current.flags & (go_true ? 1U : 2U)) != 0;
+        const std::uint32_t next = go_true ? current.true_child : current.false_child;
+        if (is_leaf) {
+          return static_cast<std::size_t>(next);
+        }
+        node = static_cast<std::size_t>(next);
+      }
+    }
+    if (homogeneous_member && !uses_64_bit_indices_) {
+      std::size_t node = static_cast<std::size_t>(tree_roots_[tree]);
+      for (;;) {
+        const TreeEnsembleCompactNode &current = compact_nodes_[node];
+        const double value =
+            input_data[row * features + static_cast<std::size_t>(current.feature_id)];
+        const std::vector<double> &members = membership_sets_[node];
+        const bool go_true = std::find(members.begin(), members.end(), value) != members.end();
+        const bool is_leaf = (current.flags & (go_true ? 1U : 2U)) != 0;
+        const std::uint32_t next = go_true ? current.true_child : current.false_child;
+        if (is_leaf) {
+          return static_cast<std::size_t>(next);
+        }
+        node = static_cast<std::size_t>(next);
+      }
+    }
     if (tuning_policy_.layout == TreeEnsembleNodeLayout::kOrtCompactAosPointer &&
         tuning_policy_.traversal == TreeEnsembleTraversal::kGeneral &&
-        !tuning_policy_.optimized_float16 && tuning_policy_.traversal_prefetch_distance == 0) {
+        !tuning_policy_.optimized_float16 && tuning_policy_.traversal_prefetch_distance == 0 &&
+        !uses_64_bit_indices_) {
       std::size_t portable_node = static_cast<std::size_t>(tree_roots_[tree]);
       for (;;) {
-        const TreeEnsembleNode &current = nodes_[portable_node];
+        const TreeEnsembleCompactNode &current = compact_nodes_[portable_node];
         const double portable_value =
-            RoundValue(input[row * features + static_cast<std::size_t>(current.feature_id)],
-                       attributes_.value_type);
-        const bool portable_true =
-            std::isnan(portable_value)
-                ? current.missing_value_tracks_true
-                : Compare(current.mode, portable_value, prepared_splits_[portable_node],
-                          membership_sets_[portable_node]);
-        const bool portable_leaf = portable_true ? current.true_is_leaf : current.false_is_leaf;
-        const std::int64_t portable_next = portable_true ? current.true_child : current.false_child;
+            input_data[row * features + static_cast<std::size_t>(current.feature_id)];
+        static const std::vector<double> empty_members;
+        const std::vector<double> &members =
+            membership_sets_.empty() ? empty_members : membership_sets_[portable_node];
+        const bool portable_true = std::isnan(portable_value)
+                                       ? (current.flags & 4U) != 0
+                                       : Compare(static_cast<TreeBranchMode>(current.mode),
+                                                 portable_value, current.split, members);
+        const bool portable_leaf = (current.flags & (portable_true ? 1U : 2U)) != 0;
+        const std::uint32_t portable_next =
+            portable_true ? current.true_child : current.false_child;
         if (portable_leaf) {
           return static_cast<std::size_t>(portable_next);
         }
@@ -1785,11 +1900,11 @@ std::vector<double> TreeEnsemblePlan::Evaluate(const std::vector<double> &input,
       const double value =
           tuning_policy_.optimized_float16
               ? static_cast<double>(HalfBitsToFloat(
-                    FloatToHalfBits(static_cast<float>(input[row * features + feature]))))
-              : RoundValue(input[row * features + feature], attributes_.value_type);
+                    FloatToHalfBits(static_cast<float>(input_data[row * features + feature]))))
+              : RoundValue(input_data[row * features + feature], attributes_.value_type);
       const double split = tuning_policy_.optimized_float16
                                ? static_cast<double>(hot       ? hot_half_splits_[node]
-                                                     : compact ? compact_nodes_[node].half_split
+                                                     : compact ? compact_nodes_[node].split
                                                                : prepared_half_splits_[node])
                                : (hot       ? hot_splits_[node]
                                   : compact ? compact_nodes_[node].split
@@ -1857,15 +1972,20 @@ std::vector<double> TreeEnsemblePlan::Evaluate(const std::vector<double> &input,
     const std::size_t slot = sparse_targets ? target_to_active_[target] : target;
     const std::size_t index = offset * accumulator_targets + slot;
     const double weight = leaves_[leaf].weight;
+    if (attributes_.aggregate == TreeAggregate::kSum ||
+        attributes_.aggregate == TreeAggregate::kAverage) {
+      values[index] = attributes_.value_type == DataType::FLOAT
+                          ? static_cast<float>(values[index] + weight)
+                          : values[index] + weight;
+      ++counts[index];
+      return;
+    }
     const double bias =
         target < attributes_.base_values.size() ? attributes_.base_values[target] : 0.0;
     const double contribution = RoundValue(bias + weight, attributes_.value_type);
     if (counts[index] == 0 && (attributes_.aggregate == TreeAggregate::kMin ||
                                attributes_.aggregate == TreeAggregate::kMax)) {
       values[index] = contribution;
-    } else if (attributes_.aggregate == TreeAggregate::kSum ||
-               attributes_.aggregate == TreeAggregate::kAverage) {
-      values[index] = RoundValue(values[index] + weight, attributes_.value_type);
     } else if (attributes_.aggregate == TreeAggregate::kMin) {
       values[index] = std::min(values[index], contribution);
     } else {
@@ -1882,7 +2002,8 @@ std::vector<double> TreeEnsemblePlan::Evaluate(const std::vector<double> &input,
     }
     ApplyPostTransform(values, attributes_.post_transform);
     for (std::size_t target = 0; target < targets; ++target) {
-      output[output_row * targets + target] = RoundValue(values[target], attributes_.value_type);
+      output_data[output_row * targets + target] =
+          static_cast<T>(RoundValue(values[target], attributes_.value_type));
     }
   };
 
@@ -1904,6 +2025,90 @@ std::vector<double> TreeEnsemblePlan::Evaluate(const std::vector<double> &input,
   };
 
   const TreeEnsembleExecutionDecision decision = SelectExecution(rows);
+  if (rows == 1 && decision.strategy != TreeEnsembleExecutionStrategy::kTreeParallel &&
+      targets == 1 && !sparse_targets && attributes_.aggregate == TreeAggregate::kSum &&
+      attributes_.post_transform == TreePostTransform::kNone) {
+    double value = attributes_.base_values.empty() ? 0.0 : attributes_.base_values[0];
+    for (std::size_t tree = 0; tree < tree_roots_.size(); ++tree) {
+      value += leaves_[find_leaf(0, tree)].weight;
+      if (attributes_.value_type == DataType::FLOAT) {
+        value = static_cast<float>(value);
+      }
+    }
+    output_data[0] = static_cast<T>(value);
+    return;
+  }
+  if ((decision.strategy == TreeEnsembleExecutionStrategy::kTreeMajorBatch ||
+       decision.strategy == TreeEnsembleExecutionStrategy::kInterleavedRows) &&
+      targets == 1 && !sparse_targets && attributes_.aggregate == TreeAggregate::kSum &&
+      attributes_.post_transform == TreePostTransform::kNone) {
+    if (rows >= kRowParallelThreshold) {
+      const double base = attributes_.base_values.empty() ? 0.0 : attributes_.base_values[0];
+      for (std::size_t row = 0; row < rows; ++row) {
+        double value = base;
+        for (std::size_t tree = 0; tree < tree_roots_.size(); ++tree) {
+          value += leaves_[find_leaf(row, tree)].weight;
+          if (attributes_.value_type == DataType::FLOAT) {
+            value = static_cast<float>(value);
+          }
+        }
+        output_data[row] = static_cast<T>(value);
+      }
+      return;
+    }
+    std::vector<double> values(decision.batch_rows);
+    const double base = attributes_.base_values.empty() ? 0.0 : attributes_.base_values[0];
+    for (std::size_t batch = 0; batch < rows; batch += decision.batch_rows) {
+      const std::size_t active_rows = std::min(decision.batch_rows, rows - batch);
+      std::fill_n(values.begin(), active_rows, base);
+      for (std::size_t tree = 0; tree < tree_roots_.size(); ++tree) {
+        for (std::size_t row = 0; row < active_rows; ++row) {
+          const double weight = leaves_[find_leaf(batch + row, tree)].weight;
+          values[row] = attributes_.value_type == DataType::FLOAT
+                            ? static_cast<float>(values[row] + weight)
+                            : values[row] + weight;
+        }
+      }
+      std::transform(values.begin(), values.begin() + static_cast<std::ptrdiff_t>(active_rows),
+                     output_data + batch, [](double value) { return static_cast<T>(value); });
+    }
+    return;
+  }
+  if ((decision.strategy == TreeEnsembleExecutionStrategy::kTreeMajorBatch ||
+       decision.strategy == TreeEnsembleExecutionStrategy::kInterleavedRows) &&
+      (attributes_.aggregate == TreeAggregate::kSum ||
+       attributes_.aggregate == TreeAggregate::kAverage)) {
+    std::vector<double> values(decision.batch_rows * accumulator_targets);
+    std::vector<double> row_values(targets);
+    for (std::size_t batch = 0; batch < rows; batch += decision.batch_rows) {
+      const std::size_t active_rows = std::min(decision.batch_rows, rows - batch);
+      std::fill_n(values.begin(), active_rows * accumulator_targets, 0.0);
+      for (std::size_t row = 0; row < active_rows; ++row) {
+        for (std::size_t slot = 0; slot < accumulator_targets; ++slot) {
+          const std::size_t target = sparse_targets ? active_targets_[slot] : slot;
+          if (target < attributes_.base_values.size()) {
+            values[row * accumulator_targets + slot] = attributes_.base_values[target];
+          }
+        }
+      }
+      for (std::size_t tree = 0; tree < tree_roots_.size(); ++tree) {
+        for (std::size_t row = 0; row < active_rows; ++row) {
+          const TreeEnsembleLeaf &leaf = leaves_[find_leaf(batch + row, tree)];
+          const std::size_t target = static_cast<std::size_t>(leaf.target_id);
+          const std::size_t slot = sparse_targets ? target_to_active_[target] : target;
+          const std::size_t index = row * accumulator_targets + slot;
+          values[index] = attributes_.value_type == DataType::FLOAT
+                              ? static_cast<float>(values[index] + leaf.weight)
+                              : values[index] + leaf.weight;
+        }
+      }
+      for (std::size_t row = 0; row < active_rows; ++row) {
+        dense_row(values, row, row_values);
+        finish(row_values, batch + row);
+      }
+    }
+    return;
+  }
   if (decision.strategy == TreeEnsembleExecutionStrategy::kRowParallel) {
     ExecuteRanges(static_cast<std::int64_t>(rows), static_cast<double>(kExecutionGrainSize),
                   [&](std::int64_t begin, std::int64_t end) {
@@ -1924,7 +2129,7 @@ std::vector<double> TreeEnsemblePlan::Evaluate(const std::vector<double> &input,
                       }
                     }
                   });
-    return output;
+    return;
   }
 
   if (decision.strategy == TreeEnsembleExecutionStrategy::kTreeMajorBatch ||
@@ -1951,7 +2156,7 @@ std::vector<double> TreeEnsemblePlan::Evaluate(const std::vector<double> &input,
         finish(row_values, batch + row);
       }
     }
-    return output;
+    return;
   }
 
   const std::size_t participants = decision.participants;
@@ -2010,7 +2215,23 @@ std::vector<double> TreeEnsemblePlan::Evaluate(const std::vector<double> &input,
       }
     }
   }
+}
+
+std::vector<double> TreeEnsemblePlan::Evaluate(const std::vector<double> &input,
+                                               std::size_t rows) const {
+  std::vector<double> output(rows * static_cast<std::size_t>(attributes_.n_targets));
+  EvaluateIntoImpl(input.data(), input.size(), rows, output.data());
   return output;
+}
+
+void TreeEnsemblePlan::EvaluateInto(const float *input, std::size_t input_size, std::size_t rows,
+                                    float *output) const {
+  EvaluateIntoImpl(input, input_size, rows, output);
+}
+
+void TreeEnsemblePlan::EvaluateInto(const double *input, std::size_t input_size, std::size_t rows,
+                                    double *output) const {
+  EvaluateIntoImpl(input, input_size, rows, output);
 }
 
 TreeEnsembleAttributes

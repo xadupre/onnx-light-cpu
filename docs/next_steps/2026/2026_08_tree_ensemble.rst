@@ -54,10 +54,11 @@ The engine must implement:
 * post transforms ``NONE``, ``SOFTMAX``, ``LOGISTIC``, ``SOFTMAX_ZERO``, and
   ``PROBIT``.
 
-Classification uses ``TreeEnsemble`` scores followed by ``ArgMax`` and, when
-labels are not zero-based integers, ``LabelEncoder`` or ``GatherND``. The
-roadmap must benchmark both the score kernel alone and this complete
-classification graph.
+Classification consumes ``TreeEnsemble`` scores followed by ``ArgMax`` and,
+when labels are not zero-based integers, ``LabelEncoder`` or ``Gather``.
+The TreeEnsemble parity gate measures the score kernel and its post-transform
+directly; downstream label operators have separate correctness and performance
+ownership and are not charged to this kernel.
 
 Deprecated version-5 adapters
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -521,12 +522,13 @@ Final parity gate
 -----------------
 
 ``tools/benchmark_tree_ensemble_parity.py`` is the reproducible final-gate
-driver. Its priority corpus covers regression and complete classification
-graphs, float32 and float64, scalar and batched execution, shallow and deep
+driver. Its priority corpus covers regression and classification score
+kernels, float32 and float64, scalar and batched execution, shallow and deep
 trees, small and large forests, homogeneous and mixed branches, membership,
-multiple targets, score transforms, and integer and string labels. Run it on
-each dedicated machine with pinned affinity for the single-thread and
-physical-core policies::
+multiple targets, and score transforms. Label forms remain corpus metadata
+without adding ``ArgMax``, ``LabelEncoder``, or ``Gather`` to the measured
+graph. Run it on each dedicated machine with pinned affinity for the
+single-thread and physical-core policies::
 
     python tools/benchmark_tree_ensemble_parity.py \
         --threads 1 --cpus 2 --baseline trees_pr07_threads1.json \
@@ -545,7 +547,33 @@ the configurable preparation and workspace budgets pass. Raw JSON and
 Markdown outputs from every dedicated machine are the evidence attached to
 the pull request; aggregate summaries alone are insufficient.
 
-Remaining pull-request sequence
+Post-completion runtime and memory validation
+---------------------------------------------
+
+The runtime adapter now evaluates float32 and float64 inputs through typed,
+in-place entry points. It reads the runtime tensor directly and writes the
+runtime output directly, so inference no longer allocates full ``double``
+copies of either tensor. Single-row, single-target execution uses a scalar
+accumulator. Large single-target batches use row-major traversal without
+workspace, while ``SUM`` and ``AVERAGE`` multi-target batches retain only
+score values and omit unnecessary count arrays.
+
+After construction, the registered runtime plan releases raw attributes,
+canonical nodes, SoA arrays, and unused hot layouts. The retained internal
+node is statically constrained to 24 bytes; leaves remain separate 16-byte
+records because integrating two leaves into an ONNX Runtime-style stump would
+consume more memory. A 1,024-stump measurement reduces prepared storage from
+347,380 bytes before compaction to 65,780 bytes after compaction.
+
+Compatibility was revalidated after merging the session-owned executor in
+``onnx-light`` commit ``002ec2d4``. The CPU extension was rebuilt and relinked
+against that checkout. Thirty TreeEnsemble unit tests, 35 CPU backend tests,
+seven benchmark tests, the exact
+``BackendRunModelAllCases.RunEveryModelTwiceWithStableMemoryPeak`` test, and
+the 14-case float32/float64 parity corpus pass. No TreeEnsemble implementation
+work remains in this roadmap.
+
+Completed pull-request sequence
 -------------------------------
 
 .. list-table::

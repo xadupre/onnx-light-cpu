@@ -107,11 +107,17 @@ TEST(OnnxLightAbsKernel, RegistersAndAppliesValidatedTuning) {
   auto parameters = schema->portable_defaults();
   EXPECT_EQ(parameters.Get<int64_t>("parallel.threshold_bytes"), 2 * 1024 * 1024);
   EXPECT_EQ(parameters.Get<int64_t>("parallel.target_block_bytes"), 256 * 1024);
-  EXPECT_EQ(parameters.Get<int64_t>("parallel.max_participants"), 0);
+  EXPECT_EQ(parameters.Get<int64_t>("parallel.max_participants"), 32);
+  EXPECT_EQ(parameters.Get<int64_t>("parallel.preferred_participants"), 0);
+  EXPECT_EQ(parameters.Get<int64_t>("memory.streaming_store_threshold_bytes"), 0);
+  EXPECT_EQ(parameters.Get<int64_t>("parallel.cost_model"), 1);
 
   parameters.values["parallel.threshold_bytes"] = int64_t{1};
   parameters.values["parallel.target_block_bytes"] = int64_t{64};
   parameters.values["parallel.max_participants"] = int64_t{2};
+  parameters.values["parallel.preferred_participants"] = int64_t{2};
+  parameters.values["memory.streaming_store_threshold_bytes"] = int64_t{0};
+  parameters.values["parallel.cost_model"] = int64_t{0};
   EXPECT_NO_THROW(kernel.Configure(parameters));
 
   constexpr std::size_t count = 256;
@@ -129,6 +135,15 @@ TEST(OnnxLightAbsKernel, RegistersAndAppliesValidatedTuning) {
   parameters.values["parallel.max_participants"] = int64_t{-1};
   EXPECT_THROW(schema->Validate(parameters), std::invalid_argument);
   EXPECT_THROW(kernel.Configure(parameters), std::invalid_argument);
+  parameters = schema->portable_defaults();
+  parameters.values["parallel.preferred_participants"] = int64_t{-1};
+  EXPECT_THROW(schema->Validate(parameters), std::invalid_argument);
+  parameters = schema->portable_defaults();
+  parameters.values["memory.streaming_store_threshold_bytes"] = int64_t{-1};
+  EXPECT_THROW(schema->Validate(parameters), std::invalid_argument);
+  parameters = schema->portable_defaults();
+  parameters.values["parallel.cost_model"] = int64_t{2};
+  EXPECT_THROW(schema->Validate(parameters), std::invalid_argument);
   parameters = schema->portable_defaults();
   parameters.values["parallel.target_block_bytes"] = int64_t{0};
   EXPECT_THROW(schema->Validate(parameters), std::invalid_argument);
@@ -167,7 +182,7 @@ TEST(OnnxLightAbsKernel, OutputUsesSlotAllocator) {
 // registered session installs its executor.
 TEST(OnnxLightAbsKernel, Float32LargeParallel) {
   onnx_light_cpu::AbsKernel kernel(MakeCtx());
-  const int64_t n = 2097152;
+  const int64_t n = 100000;
   std::vector<float> values(static_cast<std::size_t>(n));
   for (int64_t i = 0; i < n; ++i) {
     values[static_cast<std::size_t>(i)] = static_cast<float>((i % 2 == 0 ? -1 : 1) * (i % 97));

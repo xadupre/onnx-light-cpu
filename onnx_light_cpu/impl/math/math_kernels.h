@@ -64,6 +64,7 @@ void AbsFloat32WithTuning(const float *input, float *output, std::size_t count,
 
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512
 void AbsFloat32_AVX512(const float *input, float *output, std::size_t count);
+void AbsFloat32_AVX512Streaming(const float *input, float *output, std::size_t count);
 #endif
 
 /// Computes elementwise absolute value: out[i] = |input[i]| for float64.
@@ -164,6 +165,9 @@ void LogFloat32_AVX2_FMA(const float *input, float *output, std::size_t count);
 
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512
 void LogFloat32_AVX512(const float *input, float *output, std::size_t count);
+void PowFloat32_AVX512(const float *base, const float *exponent, float *output, std::size_t count);
+void PowFloat32LeftScalar_AVX512(float base, const float *exponent, float *output,
+                                 std::size_t count);
 #endif
 
 /// Computes elementwise natural logarithm: out[i] = log(input[i]) for float64.

@@ -4,6 +4,7 @@
 
 #include "onnx_light_cpu/impl/math/math_kernels.h"
 
+#include <cmath>
 #include <cstddef>
 #include <immintrin.h>
 #include <limits>
@@ -309,6 +310,104 @@ void LogFloat32_AVX512(const float *input, float *output, std::size_t count) {
     const __mmask16 tail = static_cast<__mmask16>((1u << (count - i)) - 1u);
     const __m512 result = LogPs(_mm512_maskz_loadu_ps(tail, input + i));
     _mm512_mask_storeu_ps(output + i, tail, result);
+  }
+}
+
+void PowFloat32_AVX512(const float *base, const float *exponent, float *output, std::size_t count) {
+  const __m512 zero = _mm512_setzero_ps();
+  const __m512 one = _mm512_set1_ps(1.0f);
+  const __m512 maximum = _mm512_set1_ps(std::numeric_limits<float>::max());
+  std::size_t i = 0;
+  for (; i + 16 <= count; i += 16) {
+    const __m512 x = _mm512_loadu_ps(base + i);
+    const __m512 y = _mm512_loadu_ps(exponent + i);
+    const __m512 x2 = _mm512_mul_ps(x, x);
+    const __m512 x3 = _mm512_mul_ps(x2, x);
+    const __m512 x4 = _mm512_mul_ps(x2, x2);
+    const __m512 x5 = _mm512_mul_ps(x4, x);
+    const __mmask16 exponent0 = _mm512_cmp_ps_mask(y, zero, _CMP_EQ_OQ);
+    const __mmask16 exponent1 = _mm512_cmp_ps_mask(y, one, _CMP_EQ_OQ);
+    const __mmask16 exponent2 = _mm512_cmp_ps_mask(y, _mm512_set1_ps(2.0f), _CMP_EQ_OQ);
+    const __mmask16 exponent3 = _mm512_cmp_ps_mask(y, _mm512_set1_ps(3.0f), _CMP_EQ_OQ);
+    const __mmask16 exponent4 = _mm512_cmp_ps_mask(y, _mm512_set1_ps(4.0f), _CMP_EQ_OQ);
+    const __mmask16 exponent5 = _mm512_cmp_ps_mask(y, _mm512_set1_ps(5.0f), _CMP_EQ_OQ);
+    const __mmask16 small_integer =
+        exponent0 | exponent1 | exponent2 | exponent3 | exponent4 | exponent5;
+    __m512 result = _mm512_mask_mov_ps(zero, exponent0, one);
+    result = _mm512_mask_mov_ps(result, exponent1, x);
+    result = _mm512_mask_mov_ps(result, exponent2, x2);
+    result = _mm512_mask_mov_ps(result, exponent3, x3);
+    result = _mm512_mask_mov_ps(result, exponent4, x4);
+    result = _mm512_mask_mov_ps(result, exponent5, x5);
+
+    const __m512 abs_x = _mm512_castsi512_ps(
+        _mm512_and_epi32(_mm512_castps_si512(x), _mm512_set1_epi32(0x7fffffff)));
+    const __m512 abs_y = _mm512_castsi512_ps(
+        _mm512_and_epi32(_mm512_castps_si512(y), _mm512_set1_epi32(0x7fffffff)));
+    const __mmask16 positive_finite = _mm512_cmp_ps_mask(x, zero, _CMP_GT_OQ) &
+                                      _mm512_cmp_ps_mask(abs_x, maximum, _CMP_LE_OQ) &
+                                      _mm512_cmp_ps_mask(abs_y, maximum, _CMP_LE_OQ);
+    const __mmask16 approximate = positive_finite & ~small_integer;
+    result = _mm512_mask_mov_ps(result, approximate, ExpPs(_mm512_mul_ps(LogPs(x), y)));
+    _mm512_storeu_ps(output + i, result);
+
+    const __mmask16 scalar = ~(small_integer | approximate);
+    for (std::size_t lane = 0; scalar != 0 && lane < 16; ++lane) {
+      if ((scalar & (static_cast<__mmask16>(1u) << lane)) != 0) {
+        output[i + lane] = std::pow(base[i + lane], exponent[i + lane]);
+      }
+    }
+  }
+  for (; i < count; ++i) {
+    output[i] = std::pow(base[i], exponent[i]);
+  }
+}
+
+void PowFloat32LeftScalar_AVX512(float base, const float *exponent, float *output,
+                                 std::size_t count) {
+  const __m512 zero = _mm512_setzero_ps();
+  const __m512 one = _mm512_set1_ps(1.0f);
+  const __m512 x = _mm512_set1_ps(base);
+  const __m512 x2 = _mm512_mul_ps(x, x);
+  const __m512 x3 = _mm512_mul_ps(x2, x);
+  const __m512 x4 = _mm512_mul_ps(x2, x2);
+  const __m512 x5 = _mm512_mul_ps(x4, x);
+  const bool positive_finite = base > 0.0f && std::isfinite(base);
+  const __m512 log_x = positive_finite ? LogPs(x) : zero;
+  std::size_t i = 0;
+  for (; i + 16 <= count; i += 16) {
+    const __m512 y = _mm512_loadu_ps(exponent + i);
+    const __mmask16 exponent0 = _mm512_cmp_ps_mask(y, zero, _CMP_EQ_OQ);
+    const __mmask16 exponent1 = _mm512_cmp_ps_mask(y, one, _CMP_EQ_OQ);
+    const __mmask16 exponent2 = _mm512_cmp_ps_mask(y, _mm512_set1_ps(2.0f), _CMP_EQ_OQ);
+    const __mmask16 exponent3 = _mm512_cmp_ps_mask(y, _mm512_set1_ps(3.0f), _CMP_EQ_OQ);
+    const __mmask16 exponent4 = _mm512_cmp_ps_mask(y, _mm512_set1_ps(4.0f), _CMP_EQ_OQ);
+    const __mmask16 exponent5 = _mm512_cmp_ps_mask(y, _mm512_set1_ps(5.0f), _CMP_EQ_OQ);
+    const __mmask16 small_integer =
+        exponent0 | exponent1 | exponent2 | exponent3 | exponent4 | exponent5;
+    __m512 result = _mm512_mask_mov_ps(zero, exponent0, one);
+    result = _mm512_mask_mov_ps(result, exponent1, x);
+    result = _mm512_mask_mov_ps(result, exponent2, x2);
+    result = _mm512_mask_mov_ps(result, exponent3, x3);
+    result = _mm512_mask_mov_ps(result, exponent4, x4);
+    result = _mm512_mask_mov_ps(result, exponent5, x5);
+    const __m512 abs_y = _mm512_castsi512_ps(
+        _mm512_and_epi32(_mm512_castps_si512(y), _mm512_set1_epi32(0x7fffffff)));
+    const __mmask16 finite_exponent =
+        _mm512_cmp_ps_mask(abs_y, _mm512_set1_ps(std::numeric_limits<float>::max()), _CMP_LE_OQ);
+    const __mmask16 approximate =
+        positive_finite ? static_cast<__mmask16>(finite_exponent & ~small_integer) : 0;
+    result = _mm512_mask_mov_ps(result, approximate, ExpPs(_mm512_mul_ps(log_x, y)));
+    _mm512_storeu_ps(output + i, result);
+    const __mmask16 scalar = ~(small_integer | approximate);
+    for (std::size_t lane = 0; scalar != 0 && lane < 16; ++lane) {
+      if ((scalar & (static_cast<__mmask16>(1u) << lane)) != 0) {
+        output[i + lane] = std::pow(base, exponent[i + lane]);
+      }
+    }
+  }
+  for (; i < count; ++i) {
+    output[i] = std::pow(base, exponent[i]);
   }
 }
 

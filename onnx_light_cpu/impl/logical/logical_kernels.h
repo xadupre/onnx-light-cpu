@@ -18,8 +18,13 @@ namespace onnx_light_cpu {
 /// ``bool``. ONNX ``bool`` tensors are stored as one byte per element, so the
 struct NotExecutionTuning {
   // Zero disables executor dispatch.
-  std::size_t parallel_threshold_bytes = 0;
-  std::size_t target_block_bytes = 4 * 1024 * 1024;
+  std::size_t parallel_threshold_bytes = 2 * 1024 * 1024;
+  std::size_t target_block_bytes = 256 * 1024;
+  // Zero uses every participant made available by the session executor.
+  std::size_t max_participants = 32;
+  bool use_cost_model = true;
+  // Zero leaves the participant count to the executor cost model.
+  std::size_t preferred_participants = 0;
 };
 
 /// input and output are the raw byte patterns (as ``uint8_t``): every zero byte

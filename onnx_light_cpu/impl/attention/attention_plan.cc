@@ -4,8 +4,12 @@
 
 #include "onnx_light_cpu/impl/attention/attention_plan.h"
 
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
+#include "onnx_light_cpu/impl/attention/avx512/attention_kernel_avx512.h"
+#endif
 #include "onnx_light_cpu/impl/execution.h"
 #include "onnx_light_cpu/impl/math/half_conversion.h"
+#include "onnx_light_cpu/impl/math/math_kernels.h"
 
 #include <algorithm>
 #include <array>
@@ -13,6 +17,7 @@
 #include <cstdint>
 #include <limits>
 #include <stdexcept>
+#include <type_traits>
 #include <vector>
 
 namespace onnx_light_cpu {
@@ -452,9 +457,34 @@ constexpr std::size_t kStreamingKvBlock = 128;
 // attend to (`head_dim` for the QK dot product plus `v_head_dim` for the
 // P @ V accumulation): only used to size the runtime-owned outer schedule
 // (`ExecuteRanges`) below; it never changes the numeric result.
-double StreamingRowCost(const AttentionPlan &plan) {
-  return static_cast<double>(plan.head_dim + plan.v_head_dim) *
-         static_cast<double>(std::max<std::size_t>(plan.total_kv_length, std::size_t{1}));
+std::size_t StreamingParticipantCount(const AttentionPlan &plan, std::size_t total_rows) {
+  constexpr std::size_t kTargetFmasPerParticipant = 2'000'000;
+  constexpr std::size_t kMaximumParticipants = 16;
+  const std::size_t fmas_per_row =
+      (plan.head_dim + plan.v_head_dim) * std::max<std::size_t>(plan.total_kv_length, 1);
+  const std::size_t total_fmas = total_rows * fmas_per_row;
+  const std::size_t participants =
+      (total_fmas + kTargetFmasPerParticipant - 1) / kTargetFmasPerParticipant;
+  return std::clamp<std::size_t>(participants, 1, kMaximumParticipants);
+}
+
+void AttentionExp(float *values, std::size_t count) {
+  static const SimdLevel simd = DetectSimdLevel();
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
+  if (simd == SimdLevel::kAVX512) {
+    ExpFloat32_AVX512(values, values, count);
+    return;
+  }
+#endif
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
+  if (simd >= SimdLevel::kAVX2) {
+    ExpFloat32_AVX2_FMA(values, values, count);
+    return;
+  }
+#endif
+  for (std::size_t index = 0; index < count; ++index) {
+    values[index] = std::exp(values[index]);
+  }
 }
 
 // FP32-storage codec: streaming Q/K/V/Y elements are already FP32, so
@@ -507,6 +537,10 @@ void ComputeAttentionStreamingGeneric(const AttentionPlan &plan, const typename 
       total_kv_length == 0 ? std::size_t{0} : std::min(total_kv_length, kStreamingKvBlock);
   const std::size_t rows_per_batch = plan.q_num_heads * plan.q_length;
   const std::size_t total_rows = plan.batch * rows_per_batch;
+  const std::size_t participants = StreamingParticipantCount(plan, total_rows);
+  const ExecutionSchedule schedule{
+      1, static_cast<std::int64_t>((total_rows + participants - 1) / participants),
+      static_cast<std::int64_t>(participants), static_cast<std::int64_t>(participants)};
 
   // Runtime-owned outer schedule: one task per (batch, head, query-row)
   // triple. `ExecuteRanges` decides how many workers to admit from the total
@@ -515,8 +549,7 @@ void ComputeAttentionStreamingGeneric(const AttentionPlan &plan, const typename 
   // case for short-query/decode invocations -- while a prefill invocation
   // (many rows) exposes enough independent outer work to scale.
   ExecuteRanges(
-      static_cast<std::int64_t>(total_rows), StreamingRowCost(plan),
-      [&](std::int64_t begin, std::int64_t end) {
+      static_cast<std::int64_t>(total_rows), schedule, [&](std::int64_t begin, std::int64_t end) {
         // Peak temporary storage: one `Bc`-sized score tile, one
         // `head_dim`-sized FP32 query cache, and one `v_head_dim`
         // accumulator per worker (`Br == 1`); never the full
@@ -559,7 +592,6 @@ void ComputeAttentionStreamingGeneric(const AttentionPlan &plan, const typename 
                   ? nonpad_kv_seqlen[b] - static_cast<std::int64_t>(plan.q_length)
                   : plan.causal_offset;
           const std::int64_t nonpad_length = nonpad_kv_seqlen != nullptr ? nonpad_kv_seqlen[b] : -1;
-
           const typename Codec::Storage *q_row = q_head + i * plan.q_strides.sequence;
           const std::ptrdiff_t mask_row =
               mask_base + static_cast<std::ptrdiff_t>(i) * plan.mask_strides.q;
@@ -636,8 +668,24 @@ void ComputeAttentionStreamingGeneric(const AttentionPlan &plan, const typename 
                 k_row = k_head + (j - plan.past_length) * plan.k_strides.sequence;
               }
               float dot = 0.0f;
-              for (std::size_t d = 0; d < plan.head_dim; ++d) {
-                dot += q_fp32[d] * Codec::Load(k_row[d]);
+              if constexpr (std::is_same_v<Codec, Float32Codec>) {
+                constexpr std::size_t kDotLanes = 8;
+                float partial[kDotLanes] = {};
+                std::size_t d = 0;
+                for (; d + kDotLanes <= plan.head_dim; d += kDotLanes) {
+                  for (std::size_t lane = 0; lane < kDotLanes; ++lane) {
+                    partial[lane] += q_fp32[d + lane] * k_row[d + lane];
+                  }
+                }
+                dot = ((partial[0] + partial[1]) + (partial[2] + partial[3])) +
+                      ((partial[4] + partial[5]) + (partial[6] + partial[7]));
+                for (; d < plan.head_dim; ++d) {
+                  dot += q_fp32[d] * k_row[d];
+                }
+              } else {
+                for (std::size_t d = 0; d < plan.head_dim; ++d) {
+                  dot += q_fp32[d] * Codec::Load(k_row[d]);
+                }
               }
               const float raw = plan.scale * dot;
               const float capped = has_softcap ? plan.softcap * std::tanh(raw / plan.softcap) : raw;
@@ -662,9 +710,16 @@ void ComputeAttentionStreamingGeneric(const AttentionPlan &plan, const typename 
               accumulator[d] *= correction;
             }
 
+            if (m_new == kNegativeInfinity) {
+              std::fill_n(scores.begin(), count, 0.0f);
+            } else {
+              for (std::size_t jj = 0; jj < count; ++jj) {
+                const float score = scores[jj];
+                scores[jj] = score == kNegativeInfinity ? 0.0f : std::exp(score - m_new);
+              }
+            }
             for (std::size_t jj = 0; jj < count; ++jj) {
-              const float score = scores[jj];
-              const float p = score == kNegativeInfinity ? 0.0f : std::exp(score - m_new);
+              const float p = scores[jj];
               if (p == 0.0f) {
                 continue;
               }
@@ -699,12 +754,197 @@ void ComputeAttentionStreamingGeneric(const AttentionPlan &plan, const typename 
       });
 }
 
+void ComputeAttentionFloat32Tiled(const AttentionPlan &plan, const float *q, const float *k,
+                                  const float *v, const void *mask, float *y,
+                                  const std::int64_t *nonpad_kv_seqlen) {
+  constexpr std::size_t kQueryBlock = 16;
+  const std::size_t kv_block = std::min(plan.total_kv_length, kStreamingKvBlock);
+  const std::size_t query_block = std::min(plan.q_length, kQueryBlock);
+  const std::size_t query_blocks = (plan.q_length + query_block - 1) / query_block;
+  const std::size_t tasks_per_batch = plan.q_num_heads * query_blocks;
+  const std::size_t total_tasks = plan.batch * tasks_per_batch;
+  const auto *mask_bool = static_cast<const std::uint8_t *>(mask);
+  const auto *mask_float = static_cast<const float *>(mask);
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
+  const bool use_bounded_avx512 = DetectSimdLevel() == SimdLevel::kAVX512 &&
+                                  plan.mask_kind == AttentionMaskKind::kNone &&
+                                  plan.softcap == 0.0f;
+#endif
+  const std::size_t participants =
+      plan.q_length <= kQueryBlock
+          ? 1
+          : StreamingParticipantCount(plan, plan.batch * plan.q_num_heads * plan.q_length);
+  const ExecutionSchedule schedule{
+      1, static_cast<std::int64_t>((total_tasks + participants - 1) / participants),
+      static_cast<std::int64_t>(participants), static_cast<std::int64_t>(participants)};
+  ExecuteRanges(
+      static_cast<std::int64_t>(total_tasks), schedule, [&](std::int64_t begin, std::int64_t end) {
+        std::vector<float> scores(query_block * kv_block);
+        std::vector<float> accumulator(query_block * plan.v_head_dim);
+        std::vector<float> product(query_block * plan.v_head_dim);
+        std::vector<float> maxima(query_block);
+        std::vector<float> denominators(query_block);
+        std::vector<std::uint8_t> valid(query_block);
+
+        for (std::int64_t task = begin; task < end; ++task) {
+          const std::size_t b = static_cast<std::size_t>(task) / tasks_per_batch;
+          const std::size_t rem = static_cast<std::size_t>(task) % tasks_per_batch;
+          const std::size_t h = rem / query_blocks;
+          const std::size_t qb = rem % query_blocks;
+          const std::size_t q0 = qb * query_block;
+          const std::size_t rows = std::min(query_block, plan.q_length - q0);
+          const std::size_t kv_h = h / plan.group_size;
+          const float *q_block =
+              q + b * plan.q_strides.batch + h * plan.q_strides.head + q0 * plan.q_strides.sequence;
+          const float *k_head = k + b * plan.k_strides.batch + kv_h * plan.k_strides.head;
+          const float *v_head = v + b * plan.v_strides.batch + kv_h * plan.v_strides.head;
+          float *y_block =
+              y + b * plan.y_strides.batch + h * plan.y_strides.head + q0 * plan.y_strides.sequence;
+          const std::ptrdiff_t mask_base =
+              b * plan.mask_strides.batch + static_cast<std::ptrdiff_t>(h) * plan.mask_strides.head;
+          const std::int64_t causal_offset =
+              nonpad_kv_seqlen != nullptr
+                  ? nonpad_kv_seqlen[b] - static_cast<std::int64_t>(plan.q_length)
+                  : plan.causal_offset;
+          const std::int64_t nonpad_length = nonpad_kv_seqlen != nullptr ? nonpad_kv_seqlen[b] : -1;
+          std::int64_t task_bound = static_cast<std::int64_t>(plan.total_kv_length) - 1;
+          if (plan.causal) {
+            task_bound =
+                std::min(task_bound, static_cast<std::int64_t>(q0 + rows - 1) + causal_offset);
+          }
+          if (nonpad_length >= 0) {
+            task_bound = std::min(task_bound, nonpad_length - 1);
+          }
+          const std::size_t task_kv_limit =
+              task_bound < 0
+                  ? 0
+                  : std::min(plan.total_kv_length, static_cast<std::size_t>(task_bound) + 1);
+
+          std::fill_n(accumulator.begin(), rows * plan.v_head_dim, 0.0f);
+          std::fill_n(maxima.begin(), rows, kNegativeInfinity);
+          std::fill_n(denominators.begin(), rows, 0.0f);
+          std::fill_n(valid.begin(), rows, std::uint8_t{0});
+
+          for (std::size_t j0 = 0; j0 < task_kv_limit; j0 += kv_block) {
+            const std::size_t columns = std::min(kv_block, task_kv_limit - j0);
+            GemmFloat32(false, true, rows, columns, plan.head_dim, plan.scale, q_block,
+                        k_head + j0 * plan.k_strides.sequence, 0.0f, nullptr, scores.data());
+
+            for (std::size_t i = 0; i < rows; ++i) {
+              float *score_row = scores.data() + i * columns;
+              const std::size_t query = q0 + i;
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
+              if (use_bounded_avx512) {
+                std::int64_t bound = static_cast<std::int64_t>(plan.total_kv_length) - 1;
+                if (plan.causal) {
+                  bound = std::min(bound, static_cast<std::int64_t>(query) + causal_offset);
+                }
+                if (nonpad_length >= 0) {
+                  bound = std::min(bound, nonpad_length - 1);
+                }
+                const std::size_t valid_columns =
+                    bound < static_cast<std::int64_t>(j0)
+                        ? 0
+                        : std::min(columns, static_cast<std::size_t>(bound) - j0 + 1);
+                if (valid_columns == 0) {
+                  std::fill_n(score_row, columns, 0.0f);
+                  continue;
+                }
+                std::fill(score_row + valid_columns, score_row + columns, kNegativeInfinity);
+                const AttentionSoftmaxBlockResult result = AttentionSoftmaxBlockFloat32_AVX512(
+                    score_row, columns, maxima[i], denominators[i]);
+                maxima[i] = result.maximum;
+                valid[i] = 1;
+                float *accumulator_row = accumulator.data() + i * plan.v_head_dim;
+                for (std::size_t d = 0; d < plan.v_head_dim; ++d) {
+                  accumulator_row[d] *= result.correction;
+                }
+                continue;
+              }
+#endif
+              const std::ptrdiff_t mask_row =
+                  mask_base + static_cast<std::ptrdiff_t>(query) * plan.mask_strides.q;
+              float block_max = kNegativeInfinity;
+              for (std::size_t jj = 0; jj < columns; ++jj) {
+                const std::size_t j = j0 + jj;
+                bool allowed =
+                    (!plan.causal || static_cast<std::int64_t>(j) <=
+                                         static_cast<std::int64_t>(query) + causal_offset) &&
+                    (nonpad_length < 0 || static_cast<std::int64_t>(j) < nonpad_length);
+                float additive_bias = 0.0f;
+                if (plan.mask_kind == AttentionMaskKind::kBoolean) {
+                  const std::ptrdiff_t index =
+                      mask_row + static_cast<std::ptrdiff_t>(j) * plan.mask_strides.kv;
+                  allowed = allowed && mask_bool[index] != 0;
+                } else if (plan.mask_kind == AttentionMaskKind::kAdditive) {
+                  const std::ptrdiff_t index =
+                      mask_row + static_cast<std::ptrdiff_t>(j) * plan.mask_strides.kv;
+                  additive_bias = mask_float[index];
+                }
+                float score = score_row[jj];
+                if (plan.softcap != 0.0f) {
+                  score = plan.softcap * std::tanh(score / plan.softcap);
+                }
+                score = allowed ? score + additive_bias : kNegativeInfinity;
+                score_row[jj] = score;
+                block_max = std::max(block_max, score);
+              }
+
+              const float new_max = std::max(maxima[i], block_max);
+              const float correction =
+                  new_max == kNegativeInfinity
+                      ? 0.0f
+                      : (maxima[i] == kNegativeInfinity ? 0.0f : std::exp(maxima[i] - new_max));
+              denominators[i] *= correction;
+              float *accumulator_row = accumulator.data() + i * plan.v_head_dim;
+              for (std::size_t d = 0; d < plan.v_head_dim; ++d) {
+                accumulator_row[d] *= correction;
+              }
+              if (new_max == kNegativeInfinity) {
+                std::fill_n(score_row, columns, 0.0f);
+              } else {
+                for (std::size_t jj = 0; jj < columns; ++jj) {
+                  score_row[jj] -= new_max;
+                }
+                AttentionExp(score_row, columns);
+                for (std::size_t jj = 0; jj < columns; ++jj) {
+                  denominators[i] += score_row[jj];
+                  valid[i] |= static_cast<std::uint8_t>(score_row[jj] != 0.0f);
+                }
+              }
+              maxima[i] = new_max;
+            }
+
+            GemmFloat32(false, false, rows, plan.v_head_dim, columns, 1.0f, scores.data(),
+                        v_head + j0 * plan.v_strides.sequence, 0.0f, nullptr, product.data());
+            for (std::size_t index = 0; index < rows * plan.v_head_dim; ++index) {
+              accumulator[index] += product[index];
+            }
+          }
+
+          for (std::size_t i = 0; i < rows; ++i) {
+            float *y_row = y_block + i * plan.y_strides.sequence;
+            const float scale = valid[i] && denominators[i] != 0.0f ? 1.0f / denominators[i] : 0.0f;
+            const float *accumulator_row = accumulator.data() + i * plan.v_head_dim;
+            for (std::size_t d = 0; d < plan.v_head_dim; ++d) {
+              y_row[d] = accumulator_row[d] * scale;
+            }
+          }
+        }
+      });
+}
+
 } // namespace
 
 void ComputeAttentionFloat32Streaming(const AttentionPlan &plan, const float *q, const float *k,
                                       const float *v, const void *mask, float *y,
                                       const float *past_k, const float *past_v,
                                       const std::int64_t *nonpad_kv_seqlen) {
+  if (plan.layout == AttentionLayout::kRank4 && plan.past_length == 0 && plan.q_length > 8 &&
+      plan.total_kv_length != 0) {
+    ComputeAttentionFloat32Tiled(plan, q, k, v, mask, y, nonpad_kv_seqlen);
+    return;
+  }
   ComputeAttentionStreamingGeneric<Float32Codec>(plan, q, k, v, mask, y, past_k, past_v,
                                                  nonpad_kv_seqlen);
 }

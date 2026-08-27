@@ -30,7 +30,7 @@ namespace onnx_light_cpu {
 class AbsKernel : public ONNX_LIGHT_NAMESPACE::core::runtime::KernelBase {
 public:
   using ONNX_LIGHT_NAMESPACE::core::runtime::KernelBase::KernelBase;
-  static constexpr std::uint32_t kTuningAbi = 1;
+  static constexpr std::uint32_t kTuningAbi = 4;
 
   AbsKernel(const ONNX_LIGHT_NAMESPACE::NodeProto &node,
             const ONNX_LIGHT_NAMESPACE::core::runtime::KernelContext &ctx);

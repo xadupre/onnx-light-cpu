@@ -37,6 +37,9 @@ namespace {
 
 constexpr const char *kParallelThresholdBytes = "parallel.threshold_bytes";
 constexpr const char *kTargetBlockBytes = "parallel.target_block_bytes";
+constexpr const char *kMaxParticipants = "parallel.max_participants";
+constexpr const char *kPreferredParticipants = "parallel.preferred_participants";
+constexpr const char *kCostModel = "parallel.cost_model";
 
 rt_ns::KernelTuningKey MakeTuningKey() {
   return {"onnx_light_cpu",     "Not",
@@ -45,7 +48,8 @@ rt_ns::KernelTuningKey MakeTuningKey() {
 }
 
 void ValidateTuning(const rt_ns::KernelTuningParameters &parameters) {
-  for (const char *name : {kParallelThresholdBytes, kTargetBlockBytes}) {
+  for (const char *name :
+       {kParallelThresholdBytes, kTargetBlockBytes, kMaxParticipants, kPreferredParticipants}) {
     const int64_t value = parameters.Get<int64_t>(name);
     if (value < 0 || static_cast<uint64_t>(value) > std::numeric_limits<std::size_t>::max()) {
       throw std::invalid_argument(std::string("Not ") + name +
@@ -55,13 +59,20 @@ void ValidateTuning(const rt_ns::KernelTuningParameters &parameters) {
   if (parameters.Get<int64_t>(kTargetBlockBytes) == 0) {
     throw std::invalid_argument("Not parallel.target_block_bytes must be positive.");
   }
+  const int64_t cost_model = parameters.Get<int64_t>(kCostModel);
+  if (cost_model != 0 && cost_model != 1) {
+    throw std::invalid_argument("Not parallel.cost_model must be 0 or 1.");
+  }
 }
 
 rt_ns::KernelTuningParameters MakeTuningDefaults() {
   const NotExecutionTuning defaults;
   return {MakeTuningKey(),
           {{kParallelThresholdBytes, static_cast<int64_t>(defaults.parallel_threshold_bytes)},
-           {kTargetBlockBytes, static_cast<int64_t>(defaults.target_block_bytes)}}};
+           {kTargetBlockBytes, static_cast<int64_t>(defaults.target_block_bytes)},
+           {kMaxParticipants, static_cast<int64_t>(defaults.max_participants)},
+           {kPreferredParticipants, static_cast<int64_t>(defaults.preferred_participants)},
+           {kCostModel, defaults.use_cost_model ? int64_t{1} : int64_t{0}}}};
 }
 
 } // namespace
@@ -91,6 +102,9 @@ void NotKernel::Configure(const rt_ns::KernelTuningParameters &parameters) {
   tuning_ = {
       static_cast<std::size_t>(parameters.Get<int64_t>(kParallelThresholdBytes)),
       static_cast<std::size_t>(parameters.Get<int64_t>(kTargetBlockBytes)),
+      static_cast<std::size_t>(parameters.Get<int64_t>(kMaxParticipants)),
+      parameters.Get<int64_t>(kCostModel) != 0,
+      static_cast<std::size_t>(parameters.Get<int64_t>(kPreferredParticipants)),
   };
 }
 

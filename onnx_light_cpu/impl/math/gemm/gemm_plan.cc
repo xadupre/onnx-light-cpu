@@ -58,11 +58,14 @@ std::size_t ConfiguredParticipantLimit(std::size_t configured) {
   return configured == 0 ? std::numeric_limits<std::size_t>::max() : configured;
 }
 
-constexpr std::size_t kSkinnyMTargetFmasPerParticipant = 256 * 1024;
+constexpr std::size_t kSkinnyMTargetFmasPerParticipant = 64 * 1024;
+constexpr std::size_t kSkinnyNTargetFmasPerParticipant = 64 * 1024;
 constexpr std::size_t kWideProjectionTargetFmasPerParticipant = 6 * 1024 * 1024;
+constexpr std::size_t kGeneralOutputElementsPerParticipant = 8 * 1024;
+constexpr std::size_t kAvx512GeneralParticipantLimit = 32;
 
-bool IsWideProjection(std::size_t m, std::size_t n, std::size_t k) {
-  return m <= 256 && n >= 2048 && k >= 512 && k <= 1024;
+bool IsTransformerProjection(std::size_t m, std::size_t n, std::size_t k) {
+  return m <= 256 && n >= 512 && k >= 512;
 }
 
 std::size_t TargetFmasPerParticipant(GemmAlgorithm algorithm, std::size_t m, std::size_t n,
@@ -70,36 +73,51 @@ std::size_t TargetFmasPerParticipant(GemmAlgorithm algorithm, std::size_t m, std
   if (algorithm == GemmAlgorithm::kSkinnyM) {
     return kSkinnyMTargetFmasPerParticipant;
   }
+  if (algorithm == GemmAlgorithm::kSkinnyN) {
+    return kSkinnyNTargetFmasPerParticipant;
+  }
   if (algorithm == GemmAlgorithm::kSplitK) {
     return detail::kSplitKTargetFmasPerParticipant;
   }
-  if (algorithm == GemmAlgorithm::kGeneral && IsWideProjection(m, n, k)) {
+  if (algorithm == GemmAlgorithm::kGeneral && IsTransformerProjection(m, n, k)) {
     return kWideProjectionTargetFmasPerParticipant;
+  }
+  if (algorithm == GemmAlgorithm::kGeneral) {
+    return k > std::numeric_limits<std::size_t>::max() / kGeneralOutputElementsPerParticipant
+               ? std::numeric_limits<std::size_t>::max()
+               : k * kGeneralOutputElementsPerParticipant;
   }
   return 0;
 }
 
 std::size_t RuntimeParticipantLimit(GemmAlgorithm algorithm, std::size_t selected_limit,
                                     std::size_t useful_threads) {
-  const std::size_t available_threads = static_cast<std::size_t>(ExecutionThreadCount());
-  const std::size_t pool_to_work_ratio =
-      useful_threads == 0 ? available_threads : available_threads / useful_threads;
-  if (algorithm != GemmAlgorithm::kSplitK && useful_threads <= 4 && pool_to_work_ratio > 8) {
-    return 1;
-  }
   return algorithm == GemmAlgorithm::kSkinnyM ? useful_threads : selected_limit;
+}
+
+std::size_t AlgorithmParticipantLimit(GemmAlgorithm algorithm, std::size_t m, std::size_t n,
+                                      std::size_t k, std::size_t configured) {
+  if (algorithm == GemmAlgorithm::kGeneral && !IsTransformerProjection(m, n, k) &&
+      DetectSimdLevel() >= SimdLevel::kAVX512) {
+    return std::min(configured, kAvx512GeneralParticipantLimit);
+  }
+  return configured;
 }
 
 GemmBlocking ResolveBlocking(GemmBlocking configured, std::size_t element_size,
                              std::size_t vector_lanes, std::size_t register_rows, std::size_t m,
                              std::size_t n, std::size_t k, std::size_t participants,
                              bool tune_wide_projection) {
-  const bool wide_projection = tune_wide_projection && IsWideProjection(m, n, k);
+  const bool wide_projection = tune_wide_projection && IsTransformerProjection(m, n, k);
   GemmBlocking resolved = detail::ConstrainGemmBlockingForTasks(
       detail::SelectGemmBlocking(element_size, vector_lanes, register_rows), m, n, k, participants,
       element_size, wide_projection ? kWideProjectionTargetFmasPerParticipant : 0);
   if (element_size >= sizeof(float) && wide_projection) {
-    resolved.kc = k;
+    if (m > resolved.mc * 2) {
+      const std::size_t half_rows = m / 2 + static_cast<std::size_t>(m % 2 != 0);
+      resolved.mc = ((half_rows + register_rows - 1) / register_rows) * register_rows;
+    }
+    resolved.kc = k > 1024 ? 1024 : k;
   }
   if (configured.mc != 0) {
     resolved.mc = configured.mc;
@@ -158,7 +176,7 @@ template <typename T> std::size_t VectorLanes() {
   }
 }
 
-std::size_t RegisterRows() {
+template <typename T> std::size_t RegisterRows() {
 #ifdef ONNX_LIGHT_CPU_HAVE_NEON
   const ArmGemmProfile arm_profile = DetectArmGemmProfile();
   if (arm_profile.kind != ArmGemmKernelKind::kScalar) {
@@ -168,6 +186,9 @@ std::size_t RegisterRows() {
   const SimdLevel level = DetectSimdLevel();
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512
   if (level >= SimdLevel::kAVX512) {
+    if constexpr (std::is_same_v<T, double>) {
+      return 6;
+    }
     return detail::SelectGemmRegisterRows(SimdLevel::kAVX512, true);
   }
 #endif
@@ -248,6 +269,17 @@ std::size_t UsefulThreads(GemmAlgorithm algorithm, std::size_t m, std::size_t n,
   }
   if (algorithm == GemmAlgorithm::kSplitK) {
     return std::min(available_threads, CeilDiv(k, blocking.kc));
+  }
+  if (algorithm == GemmAlgorithm::kSkinnyN) {
+    const long double total_work = static_cast<long double>(m) * static_cast<long double>(n) *
+                                   static_cast<long double>(k) /
+                                   kGemmSkinnyNFmasPerParallelWorkUnit;
+    const std::size_t work_blocks =
+        total_work >= static_cast<long double>(std::numeric_limits<std::size_t>::max()) *
+                          static_cast<long double>(kExecutionGrainSize)
+            ? std::numeric_limits<std::size_t>::max()
+            : static_cast<std::size_t>(total_work / static_cast<long double>(kExecutionGrainSize));
+    return std::min({m, available_threads, std::max<std::size_t>(1, work_blocks)});
   }
   const std::size_t task_count = CheckedProduct(row_tasks, column_tasks, "scheduler task");
   if (algorithm == GemmAlgorithm::kSkinnyM) {
@@ -386,7 +418,7 @@ GemmAlgorithm SelectGemmAlgorithm(bool trans_a, bool trans_b, std::size_t m, std
   // M rows, so its partitioning and reduction overhead never dominates the
   // useful work: keep it on the skinny-N path.
   const bool tiny_output = m != 0 && m <= 64 && n >= 2;
-  if (k >= 4096 && tiny_output && (n <= 64 / m || (k >= 8192 && n <= 1024 / m))) {
+  if (k >= 4096 && tiny_output && n <= 1024 / m) {
     return GemmAlgorithm::kSplitK;
   }
   if (!trans_a && !trans_b && k <= 32) {
@@ -416,11 +448,13 @@ GemmPlan<T>::GemmPlan(const GemmPlanOptions<T> &options)
     : trans_a_(options.trans_a), trans_b_(options.trans_b), m_(options.m), n_(options.n),
       k_(options.k), alpha_(options.alpha), beta_(options.beta),
       algorithm_(detail::SelectGemmAlgorithm(options.trans_a, options.trans_b, options.m, options.n,
-                                             options.k, VectorLanes<T>(), RegisterRows())),
+                                             options.k, VectorLanes<T>(), RegisterRows<T>())),
       participant_limit_(detail::SelectGemmParticipantCount(
-          options.m, options.n, options.k, ConfiguredParticipantLimit(options.maximum_participants),
+          options.m, options.n, options.k,
+          AlgorithmParticipantLimit(algorithm_, options.m, options.n, options.k,
+                                    ConfiguredParticipantLimit(options.maximum_participants)),
           TargetFmasPerParticipant(algorithm_, options.m, options.n, options.k))),
-      blocking_(ResolveBlocking(options.blocking, sizeof(T), VectorLanes<T>(), RegisterRows(),
+      blocking_(ResolveBlocking(options.blocking, sizeof(T), VectorLanes<T>(), RegisterRows<T>(),
                                 options.m, options.n, options.k, participant_limit_, true)),
       useful_threads_(UsefulThreads(algorithm_, options.m, options.n, options.k, blocking_,
                                     participant_limit_, sizeof(T))),
@@ -519,18 +553,19 @@ GemmHalfPlan::GemmHalfPlan(const GemmHalfPlanOptions &options)
     : is_bfloat16_(options.is_bfloat16), trans_a_(options.trans_a), trans_b_(options.trans_b),
       m_(options.m), n_(options.n), k_(options.k), alpha_(options.alpha),
       algorithm_(detail::SelectGemmAlgorithm(options.trans_a, options.trans_b, options.m, options.n,
-                                             options.k, VectorLanes<float>(), RegisterRows())),
+                                             options.k, VectorLanes<float>(),
+                                             RegisterRows<float>())),
       participant_limit_(detail::SelectGemmParticipantCount(
           options.m, options.n, options.k, ConfiguredParticipantLimit(options.maximum_participants),
           algorithm_ == GemmAlgorithm::kGeneral
               ? 0
               : TargetFmasPerParticipant(algorithm_, options.m, options.n, options.k))),
       blocking_(ResolveBlocking(options.blocking, sizeof(float), VectorLanes<float>(),
-                                RegisterRows(), options.m, options.n, options.k, participant_limit_,
-                                false)),
+                                RegisterRows<float>(), options.m, options.n, options.k,
+                                participant_limit_, false)),
       compact_blocking_(ResolveBlocking(options.compact_blocking, sizeof(std::uint16_t),
-                                        VectorLanes<float>(), RegisterRows(), options.m, options.n,
-                                        options.k, participant_limit_, false)),
+                                        VectorLanes<float>(), RegisterRows<float>(), options.m,
+                                        options.n, options.k, participant_limit_, false)),
       useful_threads_(std::max(HalfUsefulThreads(options.is_bfloat16, options.trans_b, algorithm_,
                                                  options.m, options.n, options.k, blocking_,
                                                  participant_limit_, sizeof(float)),

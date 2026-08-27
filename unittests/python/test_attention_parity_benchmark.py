@@ -17,15 +17,40 @@ def test_backend_case_name_is_traceable_and_complete():
     )
 
     assert case == {
+        "family": None,
         "opset": 24,
         "layout": "rank3",
         "geometry": "gqa",
         "q_length": 8,
         "kv_length": 1024,
         "head_dim": 128,
+        "q_heads": None,
+        "kv_heads": None,
         "mask": "causal",
         "cache": "nonpad",
         "dtype": "bfloat16",
+    }
+
+
+def test_backend_case_name_decodes_named_model_families_and_head_counts():
+    case = parse_case_name(
+        "test_cpu_attention_llm_qwen3_8b_opset24_rank4_gqa_q1_kv4096_hd128"
+        "_qh32_kvh8_causal_internal_cache_float16_benchmark"
+    )
+
+    assert case == {
+        "family": "llm_qwen3_8b",
+        "opset": 24,
+        "layout": "rank4",
+        "geometry": "gqa",
+        "q_length": 1,
+        "kv_length": 4096,
+        "head_dim": 128,
+        "q_heads": 32,
+        "kv_heads": 8,
+        "mask": "causal",
+        "cache": "internal_cache",
+        "dtype": "float16",
     }
 
 

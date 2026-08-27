@@ -181,7 +181,16 @@ GemmBlocking ConstrainGemmBlockingForTasks(GemmBlocking blocking, std::size_t m,
       max_row_tasks > thread_count / column_tasks ? thread_count : max_row_tasks * column_tasks;
   const std::size_t target_tasks = std::min(thread_count, max_tasks);
 
-  const std::size_t row_tasks = CeilDiv(m, blocking.mc);
+  std::size_t row_tasks = CeilDiv(m, blocking.mc);
+  if (row_tasks > 1) {
+    const std::size_t coalesced_mc = AlignUp(CeilDiv(m, row_tasks - 1), blocking.mr);
+    const std::size_t coalesced_row_tasks = CeilDiv(m, coalesced_mc);
+    if (coalesced_mc <= blocking.mc + blocking.mr &&
+        coalesced_row_tasks * column_tasks >= target_tasks) {
+      blocking.mc = coalesced_mc;
+      row_tasks = coalesced_row_tasks;
+    }
+  }
   if (row_tasks * column_tasks >= target_tasks) {
     return blocking;
   }
@@ -224,6 +233,9 @@ std::size_t SelectGemmColumnBlock(const GemmBlocking &blocking, std::size_t elem
   // small enough to be reused from cache by every row tile of the packed A
   // panel.
   std::size_t block = std::max(nr, AlignDown(kGemmColumnPanelBytes / bytes, nr));
+  if (kc >= 256) {
+    block = std::max(nr, block / 2);
+  }
   // Never let the kc x block slice crowd the packed A panel out of L2:
   // SelectGemmBlocking already reserves half of L2 for that panel, so the B
   // micro-panel gets a quarter and the rest absorbs the output tile and the
@@ -245,7 +257,7 @@ GemmMicroarchitecture DetectGemmMicroarchitecture() {
 std::size_t SelectGemmRegisterRowsForMicroarchitecture(SimdLevel level, bool has_fma,
                                                        GemmMicroarchitecture microarchitecture) {
   if (level >= SimdLevel::kAVX512) {
-    return 6;
+    return 12;
   }
   if (level >= SimdLevel::kAVX2 && has_fma) {
     // AMD Zen's two FMA pipelines need a wider register tile than the

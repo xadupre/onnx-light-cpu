@@ -619,8 +619,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--case", action="append", default=[], help="Case-name regex.")
     parser.add_argument("--threads", action="append", choices=THREAD_POLICIES, default=None)
     parser.add_argument("--cpus", default="", help="Linux CPU affinity, for example 0-3,8.")
-    parser.add_argument("-r", "--repeat", type=int, default=10 * (os.cpu_count() or 1))
-    parser.add_argument("-w", "--warmup", type=int, default=2 * (os.cpu_count() or 1))
+    parser.add_argument("-r", "--repeat", type=int, default=100 * (os.cpu_count() or 1))
+    parser.add_argument("-w", "--warmup", type=int, default=100 * 20)
     parser.add_argument("-t", "--max-repeat-time", type=float, default=1.0)
     parser.add_argument(
         "--calibrate",

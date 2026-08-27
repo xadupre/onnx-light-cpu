@@ -44,6 +44,7 @@ using Float16Fn = void (*)(const std::uint16_t *, std::uint16_t *, std::size_t,
 constexpr const char *kParallelThresholdBytes = "parallel.threshold_bytes";
 constexpr const char *kTargetBlockBytes = "parallel.target_block_bytes";
 constexpr const char *kMaxParticipants = "parallel.max_participants";
+constexpr const char *kCostModel = "parallel.cost_model";
 constexpr std::array<DataType, 4> kSupportedTypes = {DataType::FLOAT, DataType::DOUBLE,
                                                      DataType::FLOAT16, DataType::BFLOAT16};
 
@@ -86,6 +87,10 @@ void ValidateTuning(const rt_ns::KernelTuningParameters &parameters) {
   if (parameters.Get<int64_t>(kTargetBlockBytes) == 0) {
     throw std::invalid_argument("Unary parallel.target_block_bytes must be positive.");
   }
+  const int64_t cost_model = parameters.Get<int64_t>(kCostModel);
+  if (cost_model != 0 && cost_model != 1) {
+    throw std::invalid_argument("Unary parallel.cost_model must be 0 or 1.");
+  }
 }
 
 rt_ns::KernelTuningParameters MakeTuningDefaults(const char *op_type, int32_t element_type,
@@ -94,7 +99,8 @@ rt_ns::KernelTuningParameters MakeTuningDefaults(const char *op_type, int32_t el
   return {MakeTuningKey(op_type, element_type, tuning_abi),
           {{kParallelThresholdBytes, static_cast<int64_t>(defaults.parallel_threshold_bytes)},
            {kTargetBlockBytes, static_cast<int64_t>(defaults.target_block_bytes)},
-           {kMaxParticipants, static_cast<int64_t>(defaults.max_participants)}}};
+           {kMaxParticipants, static_cast<int64_t>(defaults.max_participants)},
+           {kCostModel, defaults.use_cost_model ? int64_t{1} : int64_t{0}}}};
 }
 
 UnaryExecutionTuning ReadTuning(const rt_ns::KernelTuningParameters &parameters) {
@@ -102,6 +108,7 @@ UnaryExecutionTuning ReadTuning(const rt_ns::KernelTuningParameters &parameters)
       static_cast<std::size_t>(parameters.Get<int64_t>(kParallelThresholdBytes)),
       static_cast<std::size_t>(parameters.Get<int64_t>(kTargetBlockBytes)),
       static_cast<std::size_t>(parameters.Get<int64_t>(kMaxParticipants)),
+      parameters.Get<int64_t>(kCostModel) != 0,
   };
 }
 

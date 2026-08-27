@@ -865,9 +865,18 @@ TEST(OnnxLightBackendKernels, GemmBenchmarkCorpusIsLazyAndCoversPriorityShapes) 
   bool has_large_k_16384 = false;
   bool has_split_k_16384 = false;
   bool has_transformer_decode = false;
+  size_t chained_cases = 0;
   std::set<std::string> names;
   for (const TestCase &test_case : cases) {
     if (test_case.name.rfind("test_cpu_gemm_", 0) != 0) {
+      continue;
+    }
+    if (test_case.tag == "gemm_chain") {
+      ++chained_cases;
+      EXPECT_TRUE(test_case.is_lazy()) << test_case.name;
+      EXPECT_FALSE(test_case.materialized()) << test_case.name;
+      EXPECT_EQ(test_case.declared_input_element_counts.size(), 4u);
+      EXPECT_EQ(test_case.declared_output_element_counts.size(), 1u);
       continue;
     }
     ++cpu_cases;
@@ -936,6 +945,7 @@ TEST(OnnxLightBackendKernels, GemmBenchmarkCorpusIsLazyAndCoversPriorityShapes) 
   // 26 prepared shapes registered for four dtypes, excluding the two largest
   // square float16 cases.
   EXPECT_EQ(cpu_cases, 102u);
+  EXPECT_EQ(chained_cases, 3u);
   EXPECT_TRUE(checked_runtime_inputs);
   EXPECT_TRUE(has_direct);
   EXPECT_TRUE(has_skinny_m);

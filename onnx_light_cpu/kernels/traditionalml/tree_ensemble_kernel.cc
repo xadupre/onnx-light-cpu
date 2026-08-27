@@ -191,38 +191,6 @@ std::vector<double> ReadInput(const Tensor &input) {
   }
 }
 
-Tensor MakeOutput(const Tensor &input, std::int64_t rows, std::int64_t targets,
-                  const std::vector<double> &values, RuntimeContext &rt) {
-  const std::size_t size = values.size();
-  const std::size_t element_size = static_cast<DataType>(input.data_type) == DataType::DOUBLE
-                                       ? sizeof(double)
-                                       : sizeof(std::uint16_t);
-  const std::size_t bytes = static_cast<DataType>(input.data_type) == DataType::FLOAT
-                                ? size * sizeof(float)
-                                : size * element_size;
-  Tensor output = rt.MakeOutputTensor(0, input.data_type, {rows, targets}, bytes);
-  switch (static_cast<DataType>(input.data_type)) {
-  case DataType::FLOAT: {
-    float *destination = output.AsFloat();
-    std::transform(values.begin(), values.end(), destination,
-                   [](double value) { return static_cast<float>(value); });
-    return output;
-  }
-  case DataType::DOUBLE:
-    std::copy(values.begin(), values.end(), output.AsDouble());
-    return output;
-  case DataType::FLOAT16: {
-    auto *destination = reinterpret_cast<std::uint16_t *>(output.mutable_bytes());
-    std::transform(values.begin(), values.end(), destination,
-                   [](double value) { return rt_ns::FloatToFloat16Bits(value); });
-    return output;
-  }
-  default:
-    throw std::invalid_argument(
-        "onnx_light_cpu::TreeEnsemble: only FLOAT, DOUBLE and FLOAT16 inputs are supported.");
-  }
-}
-
 } // namespace
 
 TreeEnsembleKernel::TreeEnsembleKernel(const rt_ns::KernelContext &ctx) : KernelBase(ctx) {}
@@ -241,6 +209,7 @@ void TreeEnsembleKernel::Run(RuntimeContext &rt) {
     auto plan = std::make_unique<TreeEnsemblePlan>(BuildAttributes(node, input));
     input_data_type_ = input.data_type;
     feature_count_ = input.shape[1];
+    plan->CompactRuntimeStorage();
     plan_ = std::move(plan);
   });
   if (input.data_type != input_data_type_ || input.shape[1] != feature_count_) {
@@ -250,8 +219,31 @@ void TreeEnsembleKernel::Run(RuntimeContext &rt) {
 
   const std::int64_t rows = input.shape[0];
   const std::int64_t targets = plan_->attributes().n_targets;
-  std::vector<double> output = plan_->Evaluate(ReadInput(input), static_cast<std::size_t>(rows));
-  rt_ns::SetOutput(node, 0, MakeOutput(input, rows, targets, output, rt), rt);
+  const std::size_t output_size =
+      static_cast<std::size_t>(rows) * static_cast<std::size_t>(targets);
+  const std::size_t output_bytes = output_size * input.element_size();
+  Tensor output = rt.MakeOutputTensor(0, input.data_type, {rows, targets}, output_bytes);
+  switch (static_cast<rt_ns::DataType>(input.data_type)) {
+  case rt_ns::DataType::FLOAT:
+    plan_->EvaluateInto(input.AsFloat(), static_cast<std::size_t>(input.element_count()),
+                        static_cast<std::size_t>(rows), output.AsFloat());
+    break;
+  case rt_ns::DataType::DOUBLE:
+    plan_->EvaluateInto(input.AsDouble(), static_cast<std::size_t>(input.element_count()),
+                        static_cast<std::size_t>(rows), output.AsDouble());
+    break;
+  case rt_ns::DataType::FLOAT16: {
+    std::vector<double> values = plan_->Evaluate(ReadInput(input), static_cast<std::size_t>(rows));
+    auto *destination = reinterpret_cast<std::uint16_t *>(output.mutable_bytes());
+    std::transform(values.begin(), values.end(), destination,
+                   [](double value) { return rt_ns::FloatToFloat16Bits(value); });
+    break;
+  }
+  default:
+    throw std::invalid_argument(
+        "onnx_light_cpu::TreeEnsemble: only FLOAT, DOUBLE and FLOAT16 inputs are supported.");
+  }
+  rt_ns::SetOutput(node, 0, std::move(output), rt);
 }
 
 void RegisterTreeEnsembleKernel() {

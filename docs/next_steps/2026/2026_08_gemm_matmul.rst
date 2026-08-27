@@ -72,6 +72,21 @@ untuned Zen/generic-x86 blocking still prevent parity. The remaining roadmap
 work first closes those measured FP32/FP64 gaps, then covers low-precision
 kernels and the final ONNX Runtime parity gates.
 
+Default-policy profiling on the 96-core development host showed that square
+FP32 GEMM is limited by excessive participation rather than single-core
+compute: the 1024-square case reaches parity with a 32-thread executor but
+regresses when all 96 participants are admitted. General GEMM plans therefore
+size participation from the output tile count (about 32K output elements per
+participant); the existing wide-projection profile remains separate because
+its larger N dimension scales profitably to more workers.
+
+The backend corpus also includes three-node GEMM graphs, not only isolated
+operators. Correctness cases cover rectangular, widen-then-narrow, and
+alternating dimensions. Benchmark cases cover square/projection,
+transformer-projection, and alternating large shapes so changes to executor
+pool reuse are measured across consecutive GEMMs with different participant
+limits.
+
 Related roadmap
 ---------------
 
