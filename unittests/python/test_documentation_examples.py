@@ -66,7 +66,7 @@ class TestDocumentationExamples(TestCase):
         )
         assert (
             _argument_default_expression(_BACKEND_CASES_EXAMPLE, "--warmup")
-            == "os.cpu_count() or 1"
+            == "2 * (os.cpu_count() or 1)"
         )
 
     def test_documentation_examples(self):

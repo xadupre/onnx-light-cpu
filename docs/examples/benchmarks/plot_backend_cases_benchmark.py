@@ -87,8 +87,8 @@ parser.add_argument(
     "-w",
     "--warmup",
     type=int,
-    default=os.cpu_count() or 1,
-    help="untimed warm-up calls per runtime and case (default: one per CPU)",
+    default=2 * (os.cpu_count() or 1),
+    help="untimed warm-up calls per runtime and case (default: 2 per CPU)",
 )
 parser.add_argument(
     "-t",
