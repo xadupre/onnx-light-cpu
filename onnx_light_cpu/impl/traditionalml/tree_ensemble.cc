@@ -8,42 +8,35 @@
 
 #include "onnx_light_cpu/impl/traditionalml/tree_ensemble.h"
 
+#include "onnx_light_cpu/impl/cpu_cache_topology.h"
 #include "onnx_light_cpu/impl/execution.h"
 
 #include <algorithm>
 #include <array>
-#include <atomic>
 #include <bit>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <filesystem>
-#include <fstream>
 #include <functional>
-#include <iomanip>
 #include <limits>
 #include <numbers>
 #include <sstream>
 #include <stdexcept>
 #include <string>
-#include <system_error>
 #include <type_traits>
 #include <unordered_map>
 #include <utility>
 #include <vector>
 
-#if defined(_WIN32)
-#include <windows.h>
-#endif
-
 namespace onnx_light_cpu {
 namespace {
 
-constexpr std::size_t kTreeParallelThreshold = 80;
 constexpr std::size_t kTreeMajorBatchRows = 128;
 constexpr std::size_t kRowParallelThreshold = 50;
 constexpr std::size_t kMaximumBalancedFloatTreeParticipants = 32;
+constexpr std::size_t kFallbackL1DataCacheBytes = 32 * 1024;
+constexpr std::size_t kMinimumTreesPerCacheBlock = 4;
 constexpr std::size_t kMaximumExecutionRegions = 4;
 
 std::size_t SaturatingMultiply(std::size_t left, std::size_t right) noexcept {
@@ -142,20 +135,27 @@ TreeEnsembleDepthBucket DepthBucket(std::size_t depth) noexcept {
 TreeEnsembleExecutionRegion MakeRegion(std::optional<std::size_t> maximum_rows,
                                        TreeEnsembleExecutionStrategy strategy,
                                        std::size_t batch_rows, std::size_t maximum_threads,
-                                       std::size_t trees, std::size_t targets) {
+                                       std::size_t trees, std::size_t targets,
+                                       std::size_t trees_per_l1_block = 1) {
   TreeEnsembleExecutionRegion region;
   region.maximum_rows = maximum_rows;
   region.strategy = strategy;
   region.batch_rows = batch_rows;
   region.maximum_threads = maximum_threads;
   region.row_chunk = 1;
-  region.tree_chunk = std::max<std::size_t>(1, (trees + maximum_threads - 1) / maximum_threads);
+  if (strategy == TreeEnsembleExecutionStrategy::kTreeParallel) {
+    const std::size_t blocks = (trees + trees_per_l1_block - 1) / trees_per_l1_block;
+    region.tree_chunk = std::max<std::size_t>(1, (blocks + maximum_threads - 1) / maximum_threads) *
+                        trees_per_l1_block;
+  } else {
+    region.tree_chunk = std::max<std::size_t>(1, (trees + maximum_threads - 1) / maximum_threads);
+  }
   region.workspace_bytes = RegionWorkspaceBytes(region, targets);
   return region;
 }
 
-TreeEnsembleTuningPolicy MakeSafePolicy(std::size_t trees, std::size_t targets,
-                                        std::size_t threads) {
+TreeEnsembleTuningPolicy MakeSafePolicy(std::size_t trees, std::size_t targets, std::size_t threads,
+                                        const TreeEnsembleCacheBlocking &cache_blocking) {
   TreeEnsembleTuningPolicy policy;
   if (threads == 1) {
     policy.regions.push_back(MakeRegion(std::nullopt,
@@ -163,25 +163,27 @@ TreeEnsembleTuningPolicy MakeSafePolicy(std::size_t trees, std::size_t targets,
                                         kTreeMajorBatchRows, 1, trees, targets));
     return policy;
   }
-  if (trees > kTreeParallelThreshold) {
+  const bool use_tree_parallel = trees > cache_blocking.parallel_tree_threshold;
+  const std::size_t tree_blocks =
+      (trees + cache_blocking.trees_per_l1_block - 1) / cache_blocking.trees_per_l1_block;
+  const std::size_t tree_threads = std::min(threads, std::max<std::size_t>(tree_blocks, 1));
+  if (use_tree_parallel) {
     policy.regions.push_back(MakeRegion(1, TreeEnsembleExecutionStrategy::kTreeParallel,
-                                        kTreeMajorBatchRows, threads, trees, targets));
+                                        kTreeMajorBatchRows, tree_threads, trees, targets,
+                                        cache_blocking.trees_per_l1_block));
     policy.regions.push_back(MakeRegion(kRowParallelThreshold,
                                         TreeEnsembleExecutionStrategy::kTreeMajorBatch,
                                         kTreeMajorBatchRows, 1, trees, targets));
     policy.regions.push_back(MakeRegion(std::nullopt, TreeEnsembleExecutionStrategy::kTreeParallel,
-                                        kTreeMajorBatchRows, threads, trees, targets));
+                                        kTreeMajorBatchRows, tree_threads, trees, targets,
+                                        cache_blocking.trees_per_l1_block));
     return policy;
   }
   policy.regions.push_back(MakeRegion(kRowParallelThreshold,
                                       TreeEnsembleExecutionStrategy::kTreeMajorBatch,
                                       kTreeMajorBatchRows, 1, trees, targets));
-  const bool use_tree_parallel = trees > threads || (targets > 1 && trees == threads);
-  policy.regions.push_back(
-      MakeRegion(std::nullopt,
-                 use_tree_parallel ? TreeEnsembleExecutionStrategy::kTreeParallel
-                                   : TreeEnsembleExecutionStrategy::kRowParallel,
-                 use_tree_parallel ? kTreeMajorBatchRows : 1, threads, trees, targets));
+  policy.regions.push_back(MakeRegion(std::nullopt, TreeEnsembleExecutionStrategy::kRowParallel, 1,
+                                      threads, trees, targets));
   return policy;
 }
 
@@ -692,95 +694,29 @@ TreeEnsembleTuningPolicy ComposeCandidatePolicy(const TreeEnsembleTuningPolicy &
   return composed;
 }
 
-void WritePolicy(std::ostream &stream, const TreeEnsembleTuningPolicy &policy) {
-  stream << static_cast<int>(policy.layout) << ' ' << static_cast<int>(policy.traversal) << ' '
-         << static_cast<int>(policy.target_layout) << ' ' << policy.optimized_float16 << ' '
-         << policy.membership_linear_limit << ' ' << policy.membership_bitset_range_limit << ' '
-         << policy.traversal_prefetch_distance << ' ' << policy.regions.size() << '\n';
-  for (const TreeEnsembleExecutionRegion &region : policy.regions) {
-    stream << (region.maximum_rows.has_value() ? 1 : 0) << ' ' << region.maximum_rows.value_or(0)
-           << ' ' << static_cast<int>(region.strategy) << ' ' << region.batch_rows << ' '
-           << region.maximum_threads << ' ' << region.row_chunk << ' ' << region.tree_chunk << ' '
-           << region.workspace_bytes << '\n';
-  }
-}
-
-class TemporaryFile {
-public:
-  explicit TemporaryFile(std::filesystem::path path) : path_(std::move(path)) {}
-
-  ~TemporaryFile() {
-    if (!released_) {
-      std::error_code ignored;
-      std::filesystem::remove(path_, ignored);
-    }
-  }
-
-  const std::filesystem::path &path() const noexcept { return path_; }
-  void Release() noexcept { released_ = true; }
-
-private:
-  std::filesystem::path path_;
-  bool released_{false};
-};
-
-void ReplaceFileAtomically(const std::filesystem::path &source,
-                           const std::filesystem::path &destination) {
-#if defined(_WIN32)
-  if (!MoveFileExW(source.c_str(), destination.c_str(),
-                   MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
-    throw std::filesystem::filesystem_error(
-        "unable to replace calibration evidence", source, destination,
-        std::error_code(static_cast<int>(GetLastError()), std::system_category()));
-  }
-#else
-  std::filesystem::rename(source, destination);
-#endif
-}
-
-void PersistCalibrationEvidence(const TreeEnsembleCalibrationReport &report,
-                                const std::string &path) {
-  static std::atomic<std::uint64_t> sequence{0};
-  const std::filesystem::path destination(path);
-  TemporaryFile temporary(path + ".tmp." + std::to_string(sequence.fetch_add(1)));
-  if (!destination.parent_path().empty()) {
-    std::filesystem::create_directories(destination.parent_path());
-  }
-  std::ofstream stream(temporary.path(), std::ios::binary | std::ios::trunc);
-  if (!stream) {
-    throw std::runtime_error("unable to open temporary evidence file");
-  }
-  stream << "onnx_light_cpu_tree_calibration_v1\n"
-         << std::quoted(report.key.processor) << ' ' << report.key.threads << ' '
-         << std::quoted(report.key.model_digest) << '\n';
-  WritePolicy(stream, report.selected_policy);
-  stream << report.evidence.size() << '\n' << std::setprecision(17);
-  for (const TreeEnsembleCalibrationEvidence &evidence : report.evidence) {
-    stream << std::quoted(evidence.candidate) << ' ' << static_cast<int>(evidence.stage) << ' '
-           << evidence.correct << ' ' << evidence.selected << ' ' << evidence.median_ns << ' '
-           << evidence.dispersion_ns << ' ' << std::quoted(evidence.rejected_reason) << ' '
-           << evidence.distribution_shift_correct << ' ' << evidence.peak_memory_bytes << ' '
-           << evidence.distribution_shift_median_ns << ' ' << evidence.samples_ns.size();
-    for (double sample : evidence.samples_ns) {
-      stream << ' ' << sample;
-    }
-    stream << ' ' << evidence.distribution_shift_samples_ns.size();
-    for (double sample : evidence.distribution_shift_samples_ns) {
-      stream << ' ' << sample;
-    }
-    stream << '\n';
-    WritePolicy(stream, evidence.policy);
-  }
-  stream.flush();
-  if (!stream) {
-    throw std::runtime_error("unable to write calibration evidence");
-  }
-  stream.close();
-  ReplaceFileAtomically(temporary.path(), destination);
-  temporary.Release();
-}
-
 } // namespace
+
+TreeEnsembleCacheBlocking
+SelectTreeEnsembleCacheBlocking(std::size_t tree_count, std::size_t node_count,
+                                std::size_t leaf_count, std::size_t node_bytes,
+                                std::size_t leaf_bytes, std::size_t l1_bytes) {
+  if (tree_count == 0) {
+    return {};
+  }
+  const std::size_t prepared_bytes = SaturatingAdd(SaturatingMultiply(node_count, node_bytes),
+                                                   SaturatingMultiply(leaf_count, leaf_bytes));
+  const std::size_t bytes_per_tree = std::max<std::size_t>(
+      1, prepared_bytes / tree_count + static_cast<std::size_t>(prepared_bytes % tree_count != 0));
+  const std::size_t effective_l1_bytes = l1_bytes == 0 ? kFallbackL1DataCacheBytes : l1_bytes;
+  const std::size_t l1_budget =
+      std::max<std::size_t>(1, effective_l1_bytes - effective_l1_bytes / 4);
+  const std::size_t l1_capacity = std::max<std::size_t>(1, l1_budget / bytes_per_tree);
+  std::size_t trees_per_block = std::min(l1_capacity, tree_count);
+  if (trees_per_block < tree_count && trees_per_block >= kMinimumTreesPerCacheBlock) {
+    trees_per_block = trees_per_block / kMinimumTreesPerCacheBlock * kMinimumTreesPerCacheBlock;
+  }
+  return {trees_per_block, trees_per_block};
+}
 
 void TreeEnsembleTuningRegistry::PutExact(TreeEnsembleModelKey key,
                                           TreeEnsembleTuningPolicy policy) {
@@ -1046,11 +982,6 @@ TreeEnsembleCalibrationReport TreeEnsembleTuningRegistry::CalibrateExact(
     }
   }
   report.changed = !(report.selected_policy == fallback);
-
-  if (!options.evidence_path.empty()) {
-    PersistCalibrationEvidence(report, options.evidence_path);
-    report.persisted = true;
-  }
 
   {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -1482,8 +1413,19 @@ TreeEnsemblePlan::TreeEnsemblePlan(TreeEnsembleAttributes attributes,
   model_key_.processor = std::move(context.processor);
   model_key_.threads = context.threads;
   model_key_.model_digest = model_signature_;
-  tuning_policy_ = MakeSafePolicy(tree_roots_.size(),
-                                  static_cast<std::size_t>(attributes_.n_targets), context.threads);
+  const bool compact_float_layout = !compact_float_nodes_.empty();
+  const std::size_t node_bytes =
+      compact_float_layout
+          ? sizeof(TreeEnsembleCompactFloatNode)
+          : (!compact_nodes_.empty() ? sizeof(TreeEnsembleCompactNode) : sizeof(TreeEnsembleNode));
+  const std::size_t leaf_bytes = compact_float_layout ? sizeof(float) : sizeof(TreeEnsembleLeaf);
+  const std::size_t l1_bytes =
+      CpuCacheSizeBytesOrFallback(GetCpuCacheTopology(), 1, kFallbackL1DataCacheBytes);
+  cache_blocking_ = SelectTreeEnsembleCacheBlocking(
+      tree_roots_.size(), nodes_.size(), leaves_.size(), node_bytes, leaf_bytes, l1_bytes);
+  tuning_policy_ =
+      MakeSafePolicy(tree_roots_.size(), static_cast<std::size_t>(attributes_.n_targets),
+                     context.threads, cache_blocking_);
 
   if (registry != nullptr) {
     std::lock_guard<std::mutex> lock(registry->mutex_);
@@ -1718,6 +1660,11 @@ TreeEnsemblePlan::SelectExecution(std::size_t rows, std::size_t effective_thread
   if (rows == 0) {
     return {};
   }
+  const std::size_t tree_blocks =
+      (trees + cache_blocking_.trees_per_l1_block - 1) / cache_blocking_.trees_per_l1_block;
+  const bool tree_parallel_worthwhile = trees > cache_blocking_.parallel_tree_threshold;
+  const std::size_t useful_tree_participants =
+      std::min(effective_threads, std::max<std::size_t>(tree_blocks, 1));
   const auto accumulator_bytes = [&](TreeEnsembleExecutionStrategy strategy) {
     if (attributes_.n_targets == 1 && attributes_.aggregate == TreeAggregate::kSum &&
         attributes_.post_transform == TreePostTransform::kNone &&
@@ -1735,18 +1682,17 @@ TreeEnsemblePlan::SelectExecution(std::size_t rows, std::size_t effective_thread
     TreeEnsembleExecutionDecision fallback;
     if (effective_threads == 1) {
       fallback.strategy = TreeEnsembleExecutionStrategy::kTreeMajorBatch;
-    } else if (rows == 1 && trees > kTreeParallelThreshold) {
+    } else if (rows == 1 && tree_parallel_worthwhile) {
       fallback.strategy = TreeEnsembleExecutionStrategy::kTreeParallel;
     } else if (rows <= kRowParallelThreshold) {
       fallback.strategy = TreeEnsembleExecutionStrategy::kTreeMajorBatch;
-    } else if (trees > effective_threads ||
-               (attributes_.n_targets > 1 && trees == effective_threads)) {
+    } else if (tree_parallel_worthwhile) {
       fallback.strategy = TreeEnsembleExecutionStrategy::kTreeParallel;
     } else {
       fallback.strategy = TreeEnsembleExecutionStrategy::kRowParallel;
     }
     if (fallback.strategy == TreeEnsembleExecutionStrategy::kTreeParallel) {
-      fallback.participants = std::min(effective_threads, trees);
+      fallback.participants = useful_tree_participants;
       fallback.batch_rows = std::min(rows, kTreeMajorBatchRows);
     } else if (fallback.strategy == TreeEnsembleExecutionStrategy::kRowParallel) {
       fallback.participants = std::min(effective_threads, rows);
@@ -1755,7 +1701,11 @@ TreeEnsemblePlan::SelectExecution(std::size_t rows, std::size_t effective_thread
       fallback.batch_rows = std::min(rows, kTreeMajorBatchRows);
     }
     fallback.row_chunk = (rows + fallback.participants - 1) / fallback.participants;
-    fallback.tree_chunk = (trees + fallback.participants - 1) / fallback.participants;
+    fallback.tree_chunk =
+        fallback.strategy == TreeEnsembleExecutionStrategy::kTreeParallel
+            ? ((tree_blocks + fallback.participants - 1) / fallback.participants) *
+                  cache_blocking_.trees_per_l1_block
+            : (trees + fallback.participants - 1) / fallback.participants;
     fallback.workspace_bytes = SaturatingMultiply(
         SaturatingMultiply(SaturatingMultiply(fallback.participants, fallback.batch_rows),
                            static_cast<std::size_t>(attributes_.n_targets)),
@@ -2055,6 +2005,10 @@ void TreeEnsemblePlan::EvaluateIntoImpl(const T *input, std::size_t input_size, 
   };
 
   const TreeEnsembleExecutionDecision decision = SelectExecution(rows);
+  const auto tree_range = [&](std::size_t participant, std::size_t participants) {
+    return std::pair{tree_roots_.size() * participant / participants,
+                     tree_roots_.size() * (participant + 1) / participants};
+  };
   if constexpr (std::is_same_v<T, float>) {
     if ((decision.strategy == TreeEnsembleExecutionStrategy::kTreeParallel ||
          decision.strategy == TreeEnsembleExecutionStrategy::kTreeMajorBatch) &&
@@ -2078,8 +2032,7 @@ void TreeEnsemblePlan::EvaluateIntoImpl(const T *input, std::size_t input_size, 
             for (std::size_t participant = static_cast<std::size_t>(begin);
                  participant < static_cast<std::size_t>(end); ++participant) {
               float *participant_values = partial_values.data() + participant * rows;
-              const std::size_t tree_begin = tree_roots_.size() * participant / participants;
-              const std::size_t tree_end = tree_roots_.size() * (participant + 1) / participants;
+              const auto [tree_begin, tree_end] = tree_range(participant, participants);
               for (std::size_t tree = tree_begin; tree < tree_end; ++tree) {
                 const std::uint32_t root = static_cast<std::uint32_t>(tree_roots_[tree]);
                 std::size_t row = 0;
@@ -2284,10 +2237,7 @@ void TreeEnsemblePlan::EvaluateIntoImpl(const T *input, std::size_t input_size, 
                   [&](std::int64_t begin, std::int64_t end) {
                     for (std::size_t participant = static_cast<std::size_t>(begin);
                          participant < static_cast<std::size_t>(end); ++participant) {
-                      const std::size_t tree_begin =
-                          tree_roots_.size() * participant / participants;
-                      const std::size_t tree_end =
-                          tree_roots_.size() * (participant + 1) / participants;
+                      const auto [tree_begin, tree_end] = tree_range(participant, participants);
                       for (std::size_t tree = tree_begin; tree < tree_end; ++tree) {
                         for (std::size_t row = 0; row < active_rows; ++row) {
                           accumulate(partial_values, partial_counts,

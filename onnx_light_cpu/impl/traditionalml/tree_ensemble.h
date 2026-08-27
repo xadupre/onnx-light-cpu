@@ -193,7 +193,6 @@ struct TreeEnsembleCalibrationOptions {
   std::size_t required_wins = 2;
   double minimum_improvement = 0.0;
   double maximum_distribution_shift_regression = 0.1;
-  std::string evidence_path;
 };
 
 struct TreeEnsembleCalibrationEvidence {
@@ -218,7 +217,6 @@ struct TreeEnsembleCalibrationReport {
   std::vector<TreeEnsembleCalibrationEvidence> evidence;
   bool changed = false;
   bool budget_exhausted = false;
-  bool persisted = false;
 };
 
 using TreeEnsembleCalibrationMeasure = std::function<TreeEnsembleCalibrationMeasurement(
@@ -241,6 +239,20 @@ struct TreeEnsembleExecutionDecision {
   std::size_t tree_chunk = 1;
   std::size_t workspace_bytes = 0;
 };
+
+struct TreeEnsembleCacheBlocking {
+  /// Number of consecutive prepared trees assigned to one L1-sized block.
+  std::size_t trees_per_l1_block = 1;
+  /// A forest at or below this count stays serial over trees.
+  std::size_t parallel_tree_threshold = 1;
+
+  bool operator==(const TreeEnsembleCacheBlocking &) const = default;
+};
+
+TreeEnsembleCacheBlocking
+SelectTreeEnsembleCacheBlocking(std::size_t tree_count, std::size_t node_count,
+                                std::size_t leaf_count, std::size_t node_bytes,
+                                std::size_t leaf_bytes, std::size_t l1_bytes);
 
 /// Thread-safe profile store. Plans resolve it once during construction and
 /// capture the selected policy and generation.
@@ -463,6 +475,7 @@ public:
     return structural_buckets_;
   }
   const TreeEnsembleTuningPolicy &tuning_policy() const noexcept { return tuning_policy_; }
+  const TreeEnsembleCacheBlocking &cache_blocking() const noexcept { return cache_blocking_; }
   TreeEnsembleProfileSource profile_source() const noexcept { return profile_source_; }
   std::uint64_t profile_generation() const noexcept { return profile_generation_; }
   std::size_t workspace_bytes() const noexcept { return workspace_bytes_; }
@@ -492,6 +505,7 @@ private:
   TreeEnsembleModelKey model_key_;
   TreeEnsembleStructuralBuckets structural_buckets_;
   TreeEnsembleTuningPolicy tuning_policy_;
+  TreeEnsembleCacheBlocking cache_blocking_;
   TreeEnsembleProfileSource profile_source_ = TreeEnsembleProfileSource::kSafeFallback;
   std::uint64_t profile_generation_ = 0;
   std::size_t workspace_bytes_ = 0;
