@@ -9,9 +9,13 @@
 #include <nanobind/stl/tuple.h>
 #include <nanobind/stl/vector.h>
 
+#include "onnx_light_cpu/gradient/com_microsoft/gradients.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
 #include "onnx_light_cpu/kernels/kernel_usage.h"
 #include "onnx_light_cpu/kernels/register_kernels.h"
+#include "onnx_light_cpu/patterns/com_microsoft/patterns.h"
+#include "onnx_light_cpu/schemas/com_microsoft/op_schema.h"
+#include "onnx_light_cpu/shapes/com_microsoft/shape_inference.h"
 
 #include "onnx_proto/onnx_helper.h"
 
@@ -65,10 +69,31 @@ NB_MODULE(_cpuregister, m) {
             "onnx-light's C++ KernelDispatchTable for the CPU device.";
 
   m.def(
-      "register_all_kernels", []() { onnx_light_cpu::RegisterAllKernels(); },
+      "register_all_kernels",
+      []() {
+        onnx_light_cpu::RegisterMicrosoftShapeAndMemoryFunctions();
+        onnx_light_cpu::RegisterCustomOperatorPatterns();
+        onnx_light_cpu::RegisterAllKernels();
+      },
       "Registers every onnx-light-cpu kernel class (Abs, Exp, Log, Gemm, Not) into "
       "onnx-light's shared KernelDispatchTable for the CPU device, replacing "
       "the corresponding built-in entries for the default ONNX domain.");
+
+  m.def("microsoft_op_schemas", &onnx_light_cpu::GetMicrosoftOpSchemasWithHistory,
+        nb::arg("op_type") = std::string(), nb::arg("init_doc") = true,
+        "Returns the LightOpSchema history provided for com.microsoft operators.");
+
+  m.def(
+      "register_custom_operator_support",
+      []() {
+        onnx_light_cpu::RegisterMicrosoftShapeAndMemoryFunctions();
+        onnx_light_cpu::RegisterCustomOperatorPatterns();
+      },
+      "Registers com.microsoft shape inference, peak-memory functions, and fusion patterns.");
+
+  m.def("register_custom_gradients", &onnx_light_cpu::RegisterCustomOperatorGradients,
+        nb::arg("registry"),
+        "Adds the com.microsoft CDist and BiasGelu backward rules to a GradRegistry.");
 
   m.def(
       "registered_kernel_names", []() { return onnx_light_cpu::RegisteredKernelNames(); },

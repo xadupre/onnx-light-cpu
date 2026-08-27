@@ -5,6 +5,8 @@
 #include "onnx_light_cpu/kernels/register_kernels.h"
 
 #include "onnx_light_cpu/kernels/attention/attention_kernel.h"
+#include "onnx_light_cpu/kernels/com_microsoft/bias_gelu_kernel.h"
+#include "onnx_light_cpu/kernels/com_microsoft/cdist_kernel.h"
 #include "onnx_light_cpu/kernels/elementwise/binary_kernel.h"
 #include "onnx_light_cpu/kernels/elementwise/variadic_kernel.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
@@ -28,7 +30,9 @@ void RegisterAllKernels() {
   KernelRegistrationScope scope;
   RegisterAbsKernel();
   RegisterAttentionKernel();
+  RegisterBiasGeluKernel();
   RegisterBinaryKernels();
+  RegisterCDistKernel();
   RegisterExpKernel();
   RegisterLogKernel();
   RegisterGemmKernel();
