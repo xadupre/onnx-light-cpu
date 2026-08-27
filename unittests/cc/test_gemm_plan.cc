@@ -118,6 +118,12 @@ TEST(GemmPlan, LargeKSplitUsesReductionParallelism) {
 
   EXPECT_EQ(plan.algorithm(), GemmAlgorithm::kSplitK);
   EXPECT_EQ(plan.useful_threads(), 16u);
+
+  const GemmPlan<double> double_plan(GemmPlanOptions<double>{false, false, 32, 32, 4096});
+  EXPECT_EQ(double_plan.algorithm(), GemmAlgorithm::kSplitK);
+  const std::size_t expected_double_reduction_tasks =
+      (4096u + double_plan.blocking().kc - 1) / double_plan.blocking().kc;
+  EXPECT_EQ(double_plan.useful_threads(), expected_double_reduction_tasks);
 }
 
 TEST(GemmPlan, WideProjectionUsesSingleKBlock) {

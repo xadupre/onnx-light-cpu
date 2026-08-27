@@ -78,7 +78,8 @@ std::size_t TargetFmasPerParticipant(GemmAlgorithm algorithm, std::size_t m, std
     return kSkinnyNTargetFmasPerParticipant;
   }
   if (algorithm == GemmAlgorithm::kSplitK) {
-    return detail::kSplitKTargetFmasPerParticipant;
+    return element_size == sizeof(double) ? detail::kSplitKTargetFmasPerParticipant / 4
+                                          : detail::kSplitKTargetFmasPerParticipant;
   }
   if (algorithm == GemmAlgorithm::kGeneral && IsTransformerProjection(m, n, k)) {
     return kWideProjectionTargetFmasPerParticipant;

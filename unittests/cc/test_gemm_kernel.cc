@@ -644,6 +644,25 @@ TEST(GemmFloat64, LargeKSpansMultipleChunks) {
   }
 }
 
+TEST(GemmFloat64, LargeKSquareOutputMatchesReference) {
+  constexpr std::size_t M = 32;
+  constexpr std::size_t N = 32;
+  for (const std::size_t K : {1024, 4096}) {
+    const auto A = RandomVectorD(M * K, 79 + K);
+    const auto B = RandomVectorD(K * N, 80 + K);
+    const auto C = RandomVectorD(M * N, 81 + K);
+    const auto expected = ReferenceGemm<double>(false, false, M, N, K, 0.75, A, B, 1.25, &C);
+    std::vector<double> Y(M * N);
+
+    onnx_light_cpu::GemmFloat64(false, false, M, N, K, 0.75, A.data(), B.data(), 1.25, C.data(),
+                                Y.data());
+
+    for (std::size_t i = 0; i < M * N; ++i) {
+      EXPECT_NEAR(Y[i], expected[i], 1e-9) << "K=" << K << " i=" << i;
+    }
+  }
+}
+
 TEST(GemmFloat64, PlannedSixRowRegisterTileMatchesReference) {
   const std::size_t M = 41, N = 53, K = 130;
   const auto A = RandomVectorD(M * K, 76);
