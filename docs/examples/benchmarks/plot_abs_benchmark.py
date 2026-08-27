@@ -62,13 +62,13 @@ from onnx_light.onnx.reference import ReferenceEvaluator
 from onnx_light_cpu import (
     clear_used_kernel_names,
     register_kernels,
+    set_kernel_usage_recording,
     used_kernel_names,
 )
 from onnx_light_cpu.onnx_py._cpukernels import (
     detect_simd_level,
     has_cpu_kernels,
 )
-from onnx_light_cpu.onnx_py._cpuregister import set_kernel_usage_recording
 
 _SIMD_NAMES = {0: "scalar", 1: "SSE2", 2: "AVX", 3: "AVX2", 4: "AVX-512"}
 

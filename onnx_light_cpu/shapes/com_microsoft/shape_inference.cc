@@ -47,9 +47,24 @@ void ConstrainEqual(ShapesContext &ctx, const sym_ns::SymDim &left, const sym_ns
   }
 }
 
-int64_t NoScratchMemory(sym_ns::Device, const std::vector<SymShape> &) { return 0; }
-
 } // namespace
+
+std::vector<OperatorSupportRegistration> CollectOperatorSupport() {
+  return {
+      {kMicrosoftDomain,
+       "BiasGelu",
+       "onnx_light_cpu::ComputeShapeBiasGelu",
+       "onnx_light_cpu::ComputePeakMemoryBiasGelu",
+       {"onnx_light_cpu::BiasGeluFusionPattern"},
+       true},
+      {kMicrosoftDomain,
+       "CDist",
+       "onnx_light_cpu::ComputeShapeCDist",
+       "onnx_light_cpu::ComputePeakMemoryCDist",
+       {"onnx_light_cpu::CDistFusionPattern"},
+       true},
+  };
+}
 
 void ComputeShapeCDist(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE::NodeProto &node) {
   RequireInputs(ctx, node, "CDist");
@@ -85,15 +100,19 @@ void ComputeShapeBiasGelu(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE::NodePr
   ctx.Set(node.output(0), SymTensor(nullptr, a.Dtype(), a.Shape()));
 }
 
+int64_t ComputePeakMemoryCDist(sym_ns::Device, const std::vector<SymShape> &) { return 0; }
+
+int64_t ComputePeakMemoryBiasGelu(sym_ns::Device, const std::vector<SymShape> &) { return 0; }
+
 void RegisterMicrosoftShapeAndMemoryFunctions() {
   static std::once_flag once;
   std::call_once(once, [] {
     shapes_ns::RegisterComputeShapeFn(kMicrosoftDomain, "CDist", ComputeShapeCDist);
     shapes_ns::RegisterComputeShapeFn(kMicrosoftDomain, "BiasGelu", ComputeShapeBiasGelu);
     shapes_ns::RegisterComputePeakMemoryFn(kMicrosoftDomain, "CDist", sym_ns::Device::kCPU,
-                                           NoScratchMemory);
+                                           ComputePeakMemoryCDist);
     shapes_ns::RegisterComputePeakMemoryFn(kMicrosoftDomain, "BiasGelu", sym_ns::Device::kCPU,
-                                           NoScratchMemory);
+                                           ComputePeakMemoryBiasGelu);
   });
 }
 

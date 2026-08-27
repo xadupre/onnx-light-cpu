@@ -41,6 +41,8 @@ namespace {
 using RegisteredKernelTuple =
     std::tuple<std::string, std::string, std::string, std::string, std::vector<std::string>,
                std::optional<std::int64_t>, std::optional<std::int64_t>>;
+using OperatorSupportTuple =
+    std::tuple<std::string, std::string, std::string, std::string, std::vector<std::string>, bool>;
 
 std::vector<RegisteredKernelTuple> RegisteredKernelsForPython() {
   std::vector<RegisteredKernelTuple> result;
@@ -61,12 +63,20 @@ std::vector<RegisteredKernelTuple> RegisteredKernelsForPython() {
   return result;
 }
 
+std::vector<OperatorSupportTuple> OperatorSupportForPython() {
+  std::vector<OperatorSupportTuple> result;
+  for (const auto &record : onnx_light_cpu::CollectOperatorSupport()) {
+    result.emplace_back(record.domain, record.op_type, record.shape_inference_function,
+                        record.peak_memory_function, record.fusion_patterns, record.has_gradient);
+  }
+  return result;
+}
+
 } // namespace
 
 NB_MODULE(_cpuregister, m) {
-  m.doc() = "Python bindings for onnx-light-cpu kernel registration: registers "
-            "the SIMD-accelerated Abs/Exp/Log/Gemm/Not kernel classes into "
-            "onnx-light's C++ KernelDispatchTable for the CPU device.";
+  m.doc() = "Python bindings for registering and inspecting onnx-light-cpu "
+            "kernels and custom operator support.";
 
   m.def(
       "register_all_kernels",
@@ -75,9 +85,8 @@ NB_MODULE(_cpuregister, m) {
         onnx_light_cpu::RegisterCustomOperatorPatterns();
         onnx_light_cpu::RegisterAllKernels();
       },
-      "Registers every onnx-light-cpu kernel class (Abs, Exp, Log, Gemm, Not) into "
-      "onnx-light's shared KernelDispatchTable for the CPU device, replacing "
-      "the corresponding built-in entries for the default ONNX domain.");
+      "Registers every onnx-light-cpu kernel class into onnx-light's shared "
+      "KernelDispatchTable for the CPU device.");
 
   m.def("microsoft_op_schemas", &onnx_light_cpu::GetMicrosoftOpSchemasWithHistory,
         nb::arg("op_type") = std::string(), nb::arg("init_doc") = true,
@@ -108,6 +117,11 @@ NB_MODULE(_cpuregister, m) {
         "(domain, op_type, device, kernel_name). Collected from "
         "CollectRegisteredKernels() without mutating onnx-light's shared "
         "KernelDispatchTable.");
+
+  m.def("operator_support", &OperatorSupportForPython,
+        "Returns one (domain, op_type, shape_inference_function, "
+        "peak_memory_function, fusion_patterns, has_gradient) tuple per custom "
+        "operator supported by onnx-light-cpu, without mutating any registry.");
 
   m.def(
       "used_kernel_names", []() { return onnx_light_cpu::UsedKernelNames(); },

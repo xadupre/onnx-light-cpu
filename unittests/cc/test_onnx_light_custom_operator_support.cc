@@ -57,6 +57,18 @@ TEST(CustomOperatorSupport, ProvidesLightSchemas) {
   EXPECT_TRUE(without_docs[0].doc().empty());
 }
 
+TEST(CustomOperatorSupport, ProvidesReadOnlyInventory) {
+  const auto support = onnx_light_cpu::CollectOperatorSupport();
+  ASSERT_EQ(support.size(), 2U);
+  EXPECT_EQ(support[0].op_type, "BiasGelu");
+  EXPECT_EQ(support[0].shape_inference_function, "onnx_light_cpu::ComputeShapeBiasGelu");
+  EXPECT_EQ(support[0].peak_memory_function, "onnx_light_cpu::ComputePeakMemoryBiasGelu");
+  EXPECT_EQ(support[0].fusion_patterns,
+            std::vector<std::string>{"onnx_light_cpu::BiasGeluFusionPattern"});
+  EXPECT_TRUE(support[0].has_gradient);
+  EXPECT_EQ(support[1].op_type, "CDist");
+}
+
 TEST(CustomOperatorSupport, InfersCDistShapeAndConstraint) {
   shapes_ns::ShapesContext ctx;
   ctx.Set("A", SymTensor(nullptr, TensorType::kFloat, {SymDim("M"), SymDim("N")}));

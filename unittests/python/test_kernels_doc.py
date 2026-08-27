@@ -4,6 +4,7 @@
 
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 _EXT_DIR = Path(__file__).resolve().parents[2] / "docs" / "_ext"
 if str(_EXT_DIR) not in sys.path:
@@ -11,10 +12,12 @@ if str(_EXT_DIR) not in sys.path:
 
 from kernel_pages import (  # noqa: E402
     KernelRecord,
+    SupportRecord,
     assign_stems,
     generate_kernel_pages,
     render_index,
     render_kernel_page,
+    render_light_op_schema,
     stem_for_record,
 )
 
@@ -68,6 +71,7 @@ class TestRenderKernelPage:
         assert "onnx_light_cpu::Gemm" in text
         assert "``FLOAT``, ``DOUBLE``" in text
         assert "none" in text  # opset bounds
+        assert "No additional shape" in text
 
     def test_reports_opset_bounds(self):
         record = KernelRecord(
@@ -83,13 +87,76 @@ class TestRenderKernelPage:
         assert "since opset 9" in text
         assert "until opset 13" in text
 
+    def test_includes_custom_operator_support_and_schema(self):
+        record = _record("CDist", domain="com.microsoft")
+        support = SupportRecord(
+            "com.microsoft",
+            "CDist",
+            "onnx_light_cpu::ComputeShapeCDist",
+            "onnx_light_cpu::ComputePeakMemoryCDist",
+            ("onnx_light_cpu::CDistFusionPattern",),
+            True,
+        )
+        schema = SimpleNamespace(
+            domain="com.microsoft",
+            name="CDist",
+            since_version=1,
+            doc="Computes distances.",
+            inputs=[SimpleNamespace(name="A", type_str="T", description="Left input.")],
+            outputs=[SimpleNamespace(name="C", type_str="T", description="Distances.")],
+            attributes={},
+            type_constraints=[],
+        )
+
+        text = render_kernel_page(record, schemas=[schema], support=support)
+
+        assert ":cpp:func:`onnx_light_cpu::ComputeShapeCDist`" in text
+        assert ":cpp:func:`onnx_light_cpu::ComputePeakMemoryCDist`" in text
+        assert ":cpp:class:`onnx_light_cpu::CDistFusionPattern`" in text
+        assert "LightOpSchema" in text
+        assert "**A** (``T``): Left input." in text
+
+    def test_schema_renderer_includes_attributes_and_constraints(self):
+        schema = SimpleNamespace(
+            since_version=1,
+            doc="Schema documentation.",
+            inputs=[],
+            outputs=[],
+            attributes={
+                "metric": SimpleNamespace(
+                    name="metric",
+                    type=SimpleNamespace(name="STRING"),
+                    description="Distance metric.",
+                    required=False,
+                    default_value_repr="sqeuclidean",
+                )
+            },
+            type_constraints=[
+                SimpleNamespace(
+                    type_param_str="T",
+                    description="Floating point.",
+                    allowed_type_strs=["tensor(double)", "tensor(float)"],
+                )
+            ],
+        )
+
+        text = render_light_op_schema(schema)
+
+        assert (
+            "**metric** (``STRING``): Distance metric. "
+            "(optional, default: ``sqeuclidean``)" in text
+        )
+        assert "Allowed types: tensor(double), tensor(float)." in text
+
 
 class TestRenderIndex:
     def test_lists_every_stem_in_a_toctree(self):
-        text = render_index(["ai_onnx_abs_cpu", "ai_onnx_gemm_cpu"])
+        text = render_index(assign_stems([_record("Abs"), _record("Gemm")]))
+        assert "Kernels" in text
+        assert ":doc:`Abs <kernels_generated/ai_onnx_abs_cpu>`" in text
         assert ".. toctree::" in text
-        assert "   ai_onnx_abs_cpu" in text
-        assert "   ai_onnx_gemm_cpu" in text
+        assert "   kernels_generated/ai_onnx_abs_cpu" in text
+        assert "   kernels_generated/ai_onnx_gemm_cpu" in text
 
 
 class TestGenerateKernelPages:
@@ -145,3 +212,23 @@ class TestGenerateKernelPages:
         generate_kernel_pages([_record("Abs")], tmp_path / "kernels_generated")
 
         assert sibling.read_text(encoding="utf-8") == "keep me"
+
+    def test_support_is_matched_by_domain_and_operator(self, tmp_path):
+        output_dir = tmp_path / "kernels_generated"
+        support = SupportRecord(
+            "com.microsoft",
+            "CDist",
+            "onnx_light_cpu::ComputeShapeCDist",
+            "onnx_light_cpu::ComputePeakMemoryCDist",
+            (),
+            True,
+        )
+
+        generate_kernel_pages(
+            [_record("CDist", domain="com.microsoft")],
+            output_dir,
+            support_records=[support],
+        )
+
+        text = (output_dir / "com_microsoft_cdist_cpu.rst").read_text(encoding="utf-8")
+        assert "ComputeShapeCDist" in text

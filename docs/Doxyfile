@@ -14,7 +14,12 @@ GENERATE_XML           = YES
 XML_OUTPUT             = xml
 
 # Only the public C++ headers make up the documented API surface.
-INPUT                  = ../onnx_light_cpu/impl ../onnx_light_cpu/kernels
+INPUT                  = ../onnx_light_cpu/impl \
+                         ../onnx_light_cpu/kernels \
+                         ../onnx_light_cpu/gradient \
+                         ../onnx_light_cpu/patterns \
+                         ../onnx_light_cpu/schemas \
+                         ../onnx_light_cpu/shapes
 FILE_PATTERNS          = *.h
 RECURSIVE              = YES
 

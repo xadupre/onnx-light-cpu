@@ -4,8 +4,8 @@ API
 C++ API
 -------
 
-The public C++ API is declared in ``onnx_light_cpu/impl/math/math_kernels.h``
-and ``onnx_light_cpu/impl/logical/logical_kernels.h``. The shared SIMD
+The public C++ API is declared throughout ``onnx_light_cpu/impl`` and
+``onnx_light_cpu/kernels``. The shared SIMD
 dispatch primitives (``SimdLevel`` and ``DetectSimdLevel``) live in the
 ``onnx_light_cpu/impl/simd_level.h`` header, which both kernel families
 include. Every kernel dispatches at runtime to the best available SIMD path.
@@ -90,10 +90,9 @@ onnx-light kernel class
 
 When onnx-light-cpu is built with ``-DONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON`` (which
 requires the `onnx-light <https://github.com/xadupre/onnx-light>`_ C++ package),
-an additional library ``lib_onnx_light_cpu_kernels`` is produced. It declares
-the ``KernelBase`` subclasses (``AbsKernel``, ``ExpKernel``, ``LogKernel``,
-``GemmKernel`` and ``NotKernel``) and their per-operator ``Register*`` functions,
-plus the ``RegisterAllKernels`` convenience wrapper:
+an additional library ``lib_onnx_light_cpu_kernels`` is produced. Its complete
+runtime inventory is exposed by :cpp:func:`CollectRegisteredKernels` and by the
+generated :ref:`ByOp catalogue <l-cpu-by-op>`.
 
 .. doxygenclass:: onnx_light_cpu::AbsKernel
    :project: onnx_light_cpu
@@ -133,11 +132,34 @@ plus the ``RegisterAllKernels`` convenience wrapper:
 .. doxygenfunction:: onnx_light_cpu::RegisterAllKernels
    :project: onnx_light_cpu
 
-``AbsKernel``, ``ExpKernel``, ``LogKernel``, ``GemmKernel`` and ``NotKernel`` are
-full ``KernelBase`` subclasses, so once the matching ``Register*`` function (or
-``RegisterAllKernels``) has run every ``Abs``/``Exp``/``Log``/``Gemm``/``Not``
-node executed by onnx-light's runtime (and therefore any model run through
-``ReferenceEvaluator``) resolves to the SIMD-accelerated kernel.
+The custom operator support inventory and its implementations are also public:
+
+.. doxygenfunction:: onnx_light_cpu::CollectOperatorSupport
+   :project: onnx_light_cpu
+
+.. doxygenfunction:: onnx_light_cpu::ComputeShapeCDist
+   :project: onnx_light_cpu
+
+.. doxygenfunction:: onnx_light_cpu::ComputeShapeBiasGelu
+   :project: onnx_light_cpu
+
+.. doxygenfunction:: onnx_light_cpu::ComputePeakMemoryCDist
+   :project: onnx_light_cpu
+
+.. doxygenfunction:: onnx_light_cpu::ComputePeakMemoryBiasGelu
+   :project: onnx_light_cpu
+
+.. doxygenfunction:: onnx_light_cpu::RegisterMicrosoftShapeAndMemoryFunctions
+   :project: onnx_light_cpu
+
+.. doxygenfunction:: onnx_light_cpu::RegisterCustomOperatorGradients
+   :project: onnx_light_cpu
+
+.. doxygenclass:: onnx_light_cpu::BiasGeluFusionPattern
+   :project: onnx_light_cpu
+
+.. doxygenclass:: onnx_light_cpu::CDistFusionPattern
+   :project: onnx_light_cpu
 
 Python API
 ----------
@@ -197,6 +219,27 @@ onnx-light's runtime after registration (see :func:`register_all_kernels` and
    :func:`onnx_light_cpu.registered_kernels`, which converts each tuple into an
    immutable :class:`onnx_light_cpu.RegisteredKernel` record.
 
+.. py:function:: operator_support() -> list[tuple[str, str, str, str, list[str], bool]]
+
+   Returns the read-only custom operator support inventory: domain, operator,
+   shape-inference function, peak-memory function, fusion patterns, and
+   gradient availability. This is the raw binding wrapped by
+   :func:`onnx_light_cpu.operator_support`.
+
+.. py:function:: microsoft_op_schemas(op_type="", init_doc=True)
+
+   Returns the ``LightOpSchema`` history supplied for ``com.microsoft``
+   operators.
+
+.. py:function:: register_custom_operator_support() -> None
+
+   Registers the ``com.microsoft`` shape-inference, peak-memory, and fusion
+   pattern implementations.
+
+.. py:function:: register_custom_gradients(registry) -> None
+
+   Registers the ``com.microsoft`` gradient implementations in ``registry``.
+
 .. py:function:: used_kernel_names() -> list[str]
 
    Returns the library-qualified names of the onnx-light-cpu kernels that ran
@@ -205,6 +248,10 @@ onnx-light's runtime after registration (see :func:`register_all_kernels` and
 .. py:function:: clear_used_kernel_names() -> None
 
    Clears the record of onnx-light-cpu kernels that have run.
+
+.. py:function:: set_kernel_usage_recording(enabled) -> None
+
+   Enables or disables per-invocation kernel usage recording.
 
 
 Registering kernels with onnx-light
@@ -244,6 +291,20 @@ Registering kernels with onnx-light
 
    Returns the standard ONNX schemas and this package's custom schemas. Pass it
    as ``GraphBuilder(..., schema_lookup=operator_schema_lookup)``.
+
+.. py:class:: OperatorSupport
+
+   Immutable ``NamedTuple`` describing shape inference, peak memory, fusion
+   patterns, and gradient availability for one custom operator.
+
+.. py:function:: operator_support() -> tuple[OperatorSupport, ...]
+
+   Returns the read-only custom operator support inventory without registering
+   or executing any implementation.
+
+.. py:function:: register_operator_support() -> None
+
+   Registers custom shape-inference, peak-memory, and fusion-pattern support.
 
 .. py:function:: register_custom_gradients(registry=None)
 
@@ -325,6 +386,10 @@ Registering kernels with onnx-light
    Clears the record of onnx-light-cpu kernels that have run, so a subsequent
    :func:`used_kernel_names` call only reports the kernels used after this call.
    Wraps :func:`onnx_light_cpu.onnx_py._cpuregister.clear_used_kernel_names`.
+
+.. py:function:: set_kernel_usage_recording(enabled) -> None
+
+   Enables or disables per-invocation kernel usage recording.
 
 .. py:function:: register_backend_test_cases() -> None
 

@@ -24,7 +24,7 @@ from __future__ import annotations
 import re
 from collections import OrderedDict
 from pathlib import Path
-from typing import Iterable, List, NamedTuple, Sequence, Tuple
+from typing import Any, Iterable, List, NamedTuple, Sequence, Tuple
 
 #: Name of the directory (relative to the Sphinx source directory) that holds
 #: the generated index and per-kernel pages. Entirely build-generated: every
@@ -44,6 +44,17 @@ class KernelRecord(NamedTuple):
     types: Tuple[str, ...]
     since_version: int | None
     until_version: int | None
+
+
+class SupportRecord(NamedTuple):
+    """Documentation-side mirror of ``onnx_light_cpu.OperatorSupport``."""
+
+    domain: str
+    op_type: str
+    shape_inference_function: str
+    peak_memory_function: str
+    fusion_patterns: Tuple[str, ...]
+    has_gradient: bool
 
 
 def load_registered_kernels() -> List[KernelRecord]:
@@ -66,6 +77,30 @@ def load_registered_kernels() -> List[KernelRecord]:
         )
         for record in registered_kernels()
     ]
+
+
+def load_operator_support() -> List[SupportRecord]:
+    """Returns the custom operator support without mutating any registry."""
+    from onnx_light_cpu import operator_support
+
+    return [
+        SupportRecord(
+            domain=record.domain,
+            op_type=record.op_type,
+            shape_inference_function=record.shape_inference_function,
+            peak_memory_function=record.peak_memory_function,
+            fusion_patterns=tuple(record.fusion_patterns),
+            has_gradient=record.has_gradient,
+        )
+        for record in operator_support()
+    ]
+
+
+def load_custom_schemas() -> List[Any]:
+    """Returns the non-standard ``LightOpSchema`` records."""
+    from onnx_light_cpu import custom_op_schemas
+
+    return list(custom_op_schemas())
 
 
 def _slugify(*parts: str) -> str:
@@ -112,7 +147,110 @@ def _format_opset_bounds(record: KernelRecord) -> str:
     return ", ".join(bounds) if bounds else "none"
 
 
-def render_kernel_page(record: KernelRecord) -> str:
+def _cpp_role(kind: str, qualified_name: str) -> str:
+    return f":cpp:{kind}:`{qualified_name}`"
+
+
+def _schema_type_name(value: object) -> str:
+    name = getattr(value, "name", None)
+    type_name = str(name or value).rsplit(".", maxsplit=1)[-1]
+    if type_name.startswith("k") and len(type_name) > 1 and type_name[1].isupper():
+        return f"tensor({type_name[1:].lower()})"
+    return type_name
+
+
+def render_light_op_schema(schema: Any) -> str:
+    """Returns the RST source for one non-standard ``LightOpSchema``."""
+    lines = [
+        "LightOpSchema",
+        "~~~~~~~~~~~~~",
+        "",
+        f"**Version:** {schema.since_version}",
+        "",
+    ]
+    if schema.doc:
+        lines.extend([schema.doc.strip(), ""])
+    for title, values in (("Inputs", schema.inputs), ("Outputs", schema.outputs)):
+        lines.extend([f"**{title}**", ""])
+        for value in values:
+            type_name = getattr(value, "type_str", getattr(value, "type", ""))
+            lines.append(f"- **{value.name}** (``{type_name}``): {value.description}")
+        lines.append("")
+    if schema.attributes:
+        lines.extend(["**Attributes**", ""])
+        attributes = (
+            schema.attributes.values()
+            if hasattr(schema.attributes, "values")
+            else schema.attributes
+        )
+        for attribute in sorted(attributes, key=lambda value: value.name):
+            qualifiers = ["required" if getattr(attribute, "required", False) else "optional"]
+            default_value = getattr(attribute, "default_value_repr", None)
+            if default_value is not None:
+                qualifiers.append(f"default: ``{default_value}``")
+            lines.append(
+                f"- **{attribute.name}** (``{_schema_type_name(attribute.type)}``): "
+                f"{attribute.description} ({', '.join(qualifiers)})"
+            )
+        lines.append("")
+    if schema.type_constraints:
+        lines.extend(["**Type constraints**", ""])
+        for constraint in schema.type_constraints:
+            allowed = ", ".join(
+                sorted(_schema_type_name(value) for value in constraint.allowed_type_strs)
+            )
+            lines.append(
+                f"- **{constraint.type_param_str}**: {constraint.description} "
+                f"Allowed types: {allowed}."
+            )
+        lines.append("")
+    return "\n".join(lines)
+
+
+def _operator_support_lines(support: SupportRecord | None) -> List[str]:
+    lines = ["Operator support", "----------------", ""]
+    if support is None:
+        return [
+            *lines,
+            (
+                "The standard ONNX schema and any standard shape inference come from "
+                "onnx-light. No additional shape, peak-memory, fusion-pattern, or gradient "
+                "implementation is registered by onnx-light-cpu for this operator."
+            ),
+            "",
+        ]
+
+    patterns = ", ".join(_cpp_role("class", pattern) for pattern in support.fusion_patterns)
+    gradient = (
+        _cpp_role("func", "onnx_light_cpu::RegisterCustomOperatorGradients")
+        if support.has_gradient
+        else "Not provided"
+    )
+    return [
+        *lines,
+        ".. list-table::",
+        "   :header-rows: 1",
+        "   :widths: 30 70",
+        "",
+        "   * - Capability",
+        "     - Implementation",
+        "   * - Shape inference",
+        f"     - {_cpp_role('func', support.shape_inference_function)}",
+        "   * - Peak memory",
+        f"     - {_cpp_role('func', support.peak_memory_function)}",
+        "   * - Fusion patterns",
+        f"     - {patterns or 'None'}",
+        "   * - Gradient",
+        f"     - {gradient}",
+        "",
+    ]
+
+
+def render_kernel_page(
+    record: KernelRecord,
+    schemas: Iterable[Any] = (),
+    support: SupportRecord | None = None,
+) -> str:
     """Returns the RST source of the page documenting one registration."""
     title = f"{record.op_type} ({record.device})"
     types = ", ".join(f"``{t}``" for t in record.types) if record.types else "none declared"
@@ -126,29 +264,62 @@ def render_kernel_page(record: KernelRecord) -> str:
         f"* Supported types: {types}",
         f"* Opset bounds: {_format_opset_bounds(record)}",
         "",
+        *_operator_support_lines(support),
     ]
+    matching_schemas = [
+        schema
+        for schema in schemas
+        if schema.domain == record.domain and schema.name == record.op_type
+    ]
+    for schema in sorted(matching_schemas, key=lambda value: value.since_version):
+        lines.append(render_light_op_schema(schema))
     return "\n".join(lines)
 
 
-def render_index(stems: Iterable[str]) -> str:
-    """Returns the RST source of the generated index toctree page."""
+def render_index(stems: OrderedDict[str, KernelRecord]) -> str:
+    """Returns the RST source of the generated ByOp index."""
     lines = [
-        "Registered kernels",
-        "===================",
+        "Kernels",
+        "-------",
         "",
         (
-            "This page is generated automatically from"
-            " ``onnx_light_cpu.registered_kernels()``. It lists every kernel"
-            " registration this repository's runtime provides, one page per"
-            " registration."
+            "This catalogue is generated from ``onnx_light_cpu.registered_kernels()``. "
+            "Each row links to one kernel registration and its available operator support."
         ),
         "",
-        ".. toctree::",
-        "   :maxdepth: 1",
+        ".. list-table::",
+        "   :header-rows: 1",
+        "   :widths: 22 22 12 30 14",
+        "   :class: sphinx-datatable",
         "",
+        "   * - Operator",
+        "     - Domain",
+        "     - Device",
+        "     - Types",
+        "     - Opset",
     ]
+    for stem, record in stems.items():
+        types = ", ".join(record.types) if record.types else "All"
+        lines.extend(
+            [
+                f"   * - :doc:`{record.op_type} <kernels_generated/{stem}>`",
+                f"     - ``{record.domain}``",
+                f"     - ``{record.device}``",
+                f"     - {types}",
+                f"     - {_format_opset_bounds(record)}",
+            ]
+        )
+    lines.extend(
+        [
+            "",
+            ".. toctree::",
+            "   :hidden:",
+            "   :maxdepth: 1",
+            "",
+        ]
+    )
     for stem in stems:
-        lines.append(f"   {stem}")
+        lines.append(f"   kernels_generated/{stem}")
     lines.append("")
     return "\n".join(lines)
 
@@ -166,7 +337,12 @@ def _write_if_changed(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8")
 
 
-def generate_kernel_pages(records: Sequence[KernelRecord], output_dir: Path) -> None:
+def generate_kernel_pages(
+    records: Sequence[KernelRecord],
+    output_dir: Path,
+    schemas: Iterable[Any] = (),
+    support_records: Iterable[SupportRecord] = (),
+) -> None:
     """Writes the index and per-kernel pages for ``records`` under ``output_dir``.
 
     Also removes any ``*.rst`` file already present under ``output_dir`` that
@@ -175,13 +351,22 @@ def generate_kernel_pages(records: Sequence[KernelRecord], output_dir: Path) -> 
     """
     output_dir.mkdir(parents=True, exist_ok=True)
     stems = assign_stems(records)
+    schemas = tuple(schemas)
+    support_by_operator = {(record.domain, record.op_type): record for record in support_records}
 
     expected = {"index.rst"}
     for stem, record in stems.items():
         filename = f"{stem}.rst"
         expected.add(filename)
-        _write_if_changed(output_dir / filename, render_kernel_page(record))
-    _write_if_changed(output_dir / "index.rst", render_index(stems.keys()))
+        _write_if_changed(
+            output_dir / filename,
+            render_kernel_page(
+                record,
+                schemas=schemas,
+                support=support_by_operator.get((record.domain, record.op_type)),
+            ),
+        )
+    _write_if_changed(output_dir / "index.rst", render_index(stems))
 
     for existing in output_dir.glob("*.rst"):
         if existing.name not in expected:
@@ -192,7 +377,12 @@ def _generate(app) -> None:
     """``builder-inited`` callback: (re)generates the kernel pages in-place."""
     records = load_registered_kernels()
     output_dir = Path(app.srcdir) / GENERATED_DIR_NAME
-    generate_kernel_pages(records, output_dir)
+    generate_kernel_pages(
+        records,
+        output_dir,
+        schemas=load_custom_schemas(),
+        support_records=load_operator_support(),
+    )
 
 
 def setup(app):
