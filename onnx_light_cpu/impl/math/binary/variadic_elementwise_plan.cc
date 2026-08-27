@@ -17,46 +17,46 @@
 namespace onnx_light_cpu {
 namespace {
 
-std::size_t ElementSize(BinaryDataType type) {
+std::size_t ElementSize(DataType type) {
   switch (type) {
-  case BinaryDataType::INT8:
-  case BinaryDataType::UINT8:
+  case DataType::INT8:
+  case DataType::UINT8:
     return 1;
-  case BinaryDataType::INT16:
-  case BinaryDataType::UINT16:
-  case BinaryDataType::FLOAT16:
-  case BinaryDataType::BFLOAT16:
+  case DataType::INT16:
+  case DataType::UINT16:
+  case DataType::FLOAT16:
+  case DataType::BFLOAT16:
     return 2;
-  case BinaryDataType::INT32:
-  case BinaryDataType::UINT32:
-  case BinaryDataType::FLOAT:
+  case DataType::INT32:
+  case DataType::UINT32:
+  case DataType::FLOAT:
     return 4;
-  case BinaryDataType::INT64:
-  case BinaryDataType::UINT64:
-  case BinaryDataType::DOUBLE:
+  case DataType::INT64:
+  case DataType::UINT64:
+  case DataType::DOUBLE:
     return 8;
   default:
     throw std::invalid_argument("onnx_light_cpu::VariadicElementwisePlan: unsupported data type.");
   }
 }
 
-bool Supports(VariadicOperator op, BinaryDataType type) {
+bool Supports(VariadicOperator op, DataType type) {
   if (op == VariadicOperator::kMean) {
-    return type == BinaryDataType::FLOAT || type == BinaryDataType::DOUBLE;
+    return type == DataType::FLOAT || type == DataType::DOUBLE;
   }
   switch (type) {
-  case BinaryDataType::FLOAT:
-  case BinaryDataType::DOUBLE:
-  case BinaryDataType::FLOAT16:
-  case BinaryDataType::BFLOAT16:
-  case BinaryDataType::INT8:
-  case BinaryDataType::INT16:
-  case BinaryDataType::INT32:
-  case BinaryDataType::INT64:
-  case BinaryDataType::UINT8:
-  case BinaryDataType::UINT16:
-  case BinaryDataType::UINT32:
-  case BinaryDataType::UINT64:
+  case DataType::FLOAT:
+  case DataType::DOUBLE:
+  case DataType::FLOAT16:
+  case DataType::BFLOAT16:
+  case DataType::INT8:
+  case DataType::INT16:
+  case DataType::INT32:
+  case DataType::INT64:
+  case DataType::UINT8:
+  case DataType::UINT16:
+  case DataType::UINT32:
+  case DataType::UINT64:
     return true;
   default:
     return false;
@@ -138,10 +138,10 @@ void ExecuteHalf(VariadicOperator op, std::span<const void *const> inputs,
 } // namespace
 
 VariadicElementwisePlan::VariadicElementwisePlan(
-    VariadicOperator op, std::span<const BinaryDataType> input_types,
+    VariadicOperator op, std::span<const DataType> input_types,
     std::span<const std::vector<std::int64_t>> input_shapes)
-    : op_(op), data_type_(BinaryDataType::UNDEFINED), input_count_(input_types.size()),
-      element_size_(0), element_count_(1) {
+    : op_(op), data_type_(DataType::UNDEFINED), input_count_(input_types.size()), element_size_(0),
+      element_count_(1) {
   if (input_types.empty() || input_types.size() != input_shapes.size()) {
     throw std::invalid_argument(
         "onnx_light_cpu::VariadicElementwisePlan: inputs must be non-empty and have shapes.");
@@ -151,7 +151,7 @@ VariadicElementwisePlan::VariadicElementwisePlan(
     throw std::invalid_argument("onnx_light_cpu::" + std::string(ToString(op)) +
                                 ": unsupported data type.");
   }
-  for (BinaryDataType type : input_types) {
+  for (DataType type : input_types) {
     if (type != data_type_) {
       throw std::invalid_argument("onnx_light_cpu::" + std::string(ToString(op)) +
                                   ": all inputs must have the same data type.");
@@ -255,20 +255,20 @@ void VariadicElementwisePlan::Execute(std::span<const void *const> inputs, void 
     }
   };
   switch (data_type_) {
-  case BinaryDataType::FLOAT:
+  case DataType::FLOAT:
     execute([&](std::byte *element) { ExecuteTyped<float>(op_, inputs, offsets, element); });
     break;
-  case BinaryDataType::DOUBLE:
+  case DataType::DOUBLE:
     execute([&](std::byte *element) { ExecuteTyped<double>(op_, inputs, offsets, element); });
     break;
-  case BinaryDataType::FLOAT16:
+  case DataType::FLOAT16:
     execute([&](std::byte *element) { ExecuteHalf<false>(op_, inputs, offsets, element); });
     break;
-  case BinaryDataType::BFLOAT16:
+  case DataType::BFLOAT16:
     execute([&](std::byte *element) { ExecuteHalf<true>(op_, inputs, offsets, element); });
     break;
 #define ONNX_LIGHT_CPU_VARIADIC_INTEGER_CASE(TYPE, CPP_TYPE)                                       \
-  case BinaryDataType::TYPE:                                                                       \
+  case DataType::TYPE:                                                                             \
     execute([&](std::byte *element) { ExecuteTyped<CPP_TYPE>(op_, inputs, offsets, element); });   \
     break
     ONNX_LIGHT_CPU_VARIADIC_INTEGER_CASE(INT8, std::int8_t);

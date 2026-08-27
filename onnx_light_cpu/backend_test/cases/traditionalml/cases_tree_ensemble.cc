@@ -90,14 +90,14 @@ void AddTensor(NodeProto &node, const char *name, TensorProto::DataType data_typ
   tensor->set_raw_data(ONNX_LIGHT_NAMESPACE::utils::ByteSpan(raw));
 }
 
-void AddTypedTensor(NodeProto &node, const char *name, TreeValueType type,
+void AddTypedTensor(NodeProto &node, const char *name, onnx_light_cpu::DataType type,
                     const std::vector<double> &values) {
-  if (type == TreeValueType::kFloat64) {
+  if (type == onnx_light_cpu::DataType::DOUBLE) {
     AddTensor(node, name, TensorProto::DOUBLE, values);
     return;
   }
   std::vector<float> floats(values.begin(), values.end());
-  if (type == TreeValueType::kFloat32) {
+  if (type == onnx_light_cpu::DataType::FLOAT) {
     AddTensor(node, name, TensorProto::FLOAT, floats);
     return;
   }
@@ -154,12 +154,12 @@ std::vector<float> ToFloat(const std::vector<double> &values) {
 }
 
 Tensor MakeTypedTensor(const std::vector<double> &values, const std::vector<std::int64_t> &shape,
-                       TreeValueType type) {
-  if (type == TreeValueType::kFloat64) {
+                       onnx_light_cpu::DataType type) {
+  if (type == onnx_light_cpu::DataType::DOUBLE) {
     return Tensor::FromDouble("", shape, values);
   }
   const std::vector<float> floats = ToFloat(values);
-  if (type == TreeValueType::kFloat16) {
+  if (type == onnx_light_cpu::DataType::FLOAT16) {
     return rt_ns::MakeFloat16Tensor("", shape, floats);
   }
   return Tensor::FromFloat("", shape, floats);
@@ -211,7 +211,7 @@ TreeEnsembleAttributes MakeBenchmarkForest(std::size_t trees, std::int64_t featu
   TreeEnsembleAttributes attributes;
   attributes.n_features = features;
   attributes.n_targets = 1;
-  attributes.value_type = TreeValueType::kFloat32;
+  attributes.value_type = onnx_light_cpu::DataType::FLOAT;
   for (std::size_t tree = 0; tree < trees; ++tree) {
     const std::size_t node_offset = tree * kInternalNodes;
     const std::size_t leaf_offset = tree * kLeaves;

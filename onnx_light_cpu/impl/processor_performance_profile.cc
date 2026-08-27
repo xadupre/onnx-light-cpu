@@ -53,17 +53,17 @@ const char *MemoryLevelName(MemoryProfileLevel level) {
   return "unknown";
 }
 
-const char *ComputeElementTypeName(ComputeElementType element_type) {
+const char *ComputeElementTypeName(DataType element_type) {
   switch (element_type) {
-  case ComputeElementType::kFloat32:
+  case DataType::FLOAT:
     return "float32";
-  case ComputeElementType::kFloat64:
+  case DataType::DOUBLE:
     return "float64";
-  case ComputeElementType::kFloat16:
+  case DataType::FLOAT16:
     return "float16";
-  case ComputeElementType::kBFloat16:
+  case DataType::BFLOAT16:
     return "bfloat16";
-  case ComputeElementType::kInt8:
+  case DataType::INT8:
     return "int8";
   }
   return "unknown";
@@ -96,9 +96,8 @@ constexpr std::array<MemoryTrafficMode, 4> kMemoryModes{
     MemoryTrafficMode::kRead, MemoryTrafficMode::kWrite, MemoryTrafficMode::kCopy,
     MemoryTrafficMode::kReadModifyWrite};
 
-constexpr std::array<ComputeElementType, 5> kComputeElementTypes{
-    ComputeElementType::kFloat32, ComputeElementType::kFloat64, ComputeElementType::kFloat16,
-    ComputeElementType::kBFloat16, ComputeElementType::kInt8};
+constexpr std::array<DataType, 5> kComputeElementTypes{
+    DataType::FLOAT, DataType::DOUBLE, DataType::FLOAT16, DataType::BFLOAT16, DataType::INT8};
 
 std::optional<MemoryBandwidthResult> &SelectBandwidthSlot(ProcessorProfileMemoryEntry &entry,
                                                           MemoryTrafficMode mode) {
@@ -293,7 +292,7 @@ ProcessorPerformanceProfile BenchmarkProcessorPerformance(const ProcessorProfile
   // Register-resident compute throughput, one entry per policy/element type.
   for (const ProcessorThreadPolicy policy : options.thread_policies) {
     const ComputeParticipantPolicy compute_policy = ToComputePolicy(policy);
-    for (const ComputeElementType element_type : kComputeElementTypes) {
+    for (const DataType element_type : kComputeElementTypes) {
       const ComputeThroughputResult result =
           MeasureComputeArithmeticThroughput(element_type, compute_policy, compute_options);
       if (result.available) {

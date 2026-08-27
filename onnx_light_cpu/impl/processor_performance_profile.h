@@ -57,7 +57,7 @@ const char *MemoryLevelName(MemoryProfileLevel level);
 /// ``"float64"``, ``"float16"``, ``"bfloat16"``, or ``"int8"``). Shared
 /// between the C++ aggregator and the Python binding so both report the same
 /// names.
-const char *ComputeElementTypeName(ComputeElementType element_type);
+const char *ComputeElementTypeName(DataType element_type);
 
 /// Options accepted by ``BenchmarkProcessorPerformance``. Every field is
 /// validated by ``ValidateProcessorProfileOptions`` before any allocation or
@@ -138,7 +138,7 @@ struct ProcessorProfileMemoryEntry {
 /// One element-type, one-policy compute entry, present only when the
 /// underlying engine reported the measurement as available.
 struct ProcessorProfileComputeEntry {
-  ComputeElementType element_type = ComputeElementType::kFloat32;
+  DataType element_type = DataType::FLOAT;
   ProcessorThreadPolicy policy = ProcessorThreadPolicy::kSingle;
   ComputeThroughputResult result;
 };
@@ -149,7 +149,7 @@ struct ProcessorProfileComputeEntry {
 /// arithmetic intensity (operations per useful byte) at which the compute
 /// ceiling and the memory bandwidth ceiling are equal.
 struct ProcessorProfileRooflineEntry {
-  ComputeElementType element_type = ComputeElementType::kFloat32;
+  DataType element_type = DataType::FLOAT;
   ProcessorThreadPolicy policy = ProcessorThreadPolicy::kSingle;
   MemoryProfileLevel level = MemoryProfileLevel::kL1;
 

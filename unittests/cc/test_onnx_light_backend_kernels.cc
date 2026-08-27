@@ -75,33 +75,33 @@ std::string Lowercase(std::string value) {
   return value;
 }
 
-std::string BinaryTypeSuffix(onnx_light_cpu::BinaryDataType type) {
+std::string BinaryTypeSuffix(onnx_light_cpu::DataType type) {
   switch (type) {
-  case onnx_light_cpu::BinaryDataType::BOOL:
+  case onnx_light_cpu::DataType::BOOL:
     return "bool";
-  case onnx_light_cpu::BinaryDataType::FLOAT:
+  case onnx_light_cpu::DataType::FLOAT:
     return "float32";
-  case onnx_light_cpu::BinaryDataType::DOUBLE:
+  case onnx_light_cpu::DataType::DOUBLE:
     return "float64";
-  case onnx_light_cpu::BinaryDataType::FLOAT16:
+  case onnx_light_cpu::DataType::FLOAT16:
     return "float16";
-  case onnx_light_cpu::BinaryDataType::BFLOAT16:
+  case onnx_light_cpu::DataType::BFLOAT16:
     return "bfloat16";
-  case onnx_light_cpu::BinaryDataType::INT8:
+  case onnx_light_cpu::DataType::INT8:
     return "int8";
-  case onnx_light_cpu::BinaryDataType::INT16:
+  case onnx_light_cpu::DataType::INT16:
     return "int16";
-  case onnx_light_cpu::BinaryDataType::INT32:
+  case onnx_light_cpu::DataType::INT32:
     return "int32";
-  case onnx_light_cpu::BinaryDataType::INT64:
+  case onnx_light_cpu::DataType::INT64:
     return "int64";
-  case onnx_light_cpu::BinaryDataType::UINT8:
+  case onnx_light_cpu::DataType::UINT8:
     return "uint8";
-  case onnx_light_cpu::BinaryDataType::UINT16:
+  case onnx_light_cpu::DataType::UINT16:
     return "uint16";
-  case onnx_light_cpu::BinaryDataType::UINT32:
+  case onnx_light_cpu::DataType::UINT32:
     return "uint32";
-  case onnx_light_cpu::BinaryDataType::UINT64:
+  case onnx_light_cpu::DataType::UINT64:
     return "uint64";
   default:
     throw std::invalid_argument("unsupported binary type");

@@ -4,29 +4,13 @@
 
 #pragma once
 
+#include "onnx_light_cpu/impl/data_type.h"
+
 #include <cstdint>
 #include <span>
 #include <string_view>
 
 namespace onnx_light_cpu {
-
-enum class BinaryDataType : std::int32_t {
-  UNDEFINED = 0,
-  FLOAT = 1,
-  UINT8 = 2,
-  INT8 = 3,
-  UINT16 = 4,
-  INT16 = 5,
-  INT32 = 6,
-  INT64 = 7,
-  STRING = 8,
-  BOOL = 9,
-  FLOAT16 = 10,
-  DOUBLE = 11,
-  UINT32 = 12,
-  UINT64 = 13,
-  BFLOAT16 = 16,
-};
 
 /// In-scope binary elementwise operators covered by Binary PR01.
 enum class BinaryOperator : std::uint8_t {
@@ -53,9 +37,9 @@ enum class BinaryOperator : std::uint8_t {
 
 /// One concrete input/output type triple advertised by the prepared binary engine.
 struct BinaryTypeSignature {
-  BinaryDataType left = BinaryDataType::UNDEFINED;
-  BinaryDataType right = BinaryDataType::UNDEFINED;
-  BinaryDataType output = BinaryDataType::UNDEFINED;
+  DataType left = DataType::UNDEFINED;
+  DataType right = DataType::UNDEFINED;
+  DataType output = DataType::UNDEFINED;
 };
 
 /// Explicit manifest entry for one optimized binary operator.

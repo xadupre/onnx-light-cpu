@@ -32,8 +32,8 @@ namespace math_ns = ONNX_LIGHT_NAMESPACE::onnx_op::math;
 namespace rt_ns = ONNX_LIGHT_NAMESPACE::core::runtime;
 namespace sym_ns = ONNX_LIGHT_NAMESPACE::core::symbolic;
 
-schema_ns::TensorType ToTensorType(onnx_light_cpu::BinaryDataType type) {
-  using DT = onnx_light_cpu::BinaryDataType;
+schema_ns::TensorType ToTensorType(onnx_light_cpu::DataType type) {
+  using DT = onnx_light_cpu::DataType;
   using TT = schema_ns::TensorType;
   switch (type) {
   case DT::FLOAT:

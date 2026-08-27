@@ -14,7 +14,6 @@ namespace {
 
 using onnx_light_cpu::ArmSimdLevel;
 using onnx_light_cpu::ComputeDotProductOperationAccounting;
-using onnx_light_cpu::ComputeElementType;
 using onnx_light_cpu::ComputeFmaOperationAccounting;
 using onnx_light_cpu::ComputeImplementation;
 using onnx_light_cpu::ComputeImplementationName;
@@ -24,6 +23,7 @@ using onnx_light_cpu::ComputeProfileOptions;
 using onnx_light_cpu::ComputeProfileTimerName;
 using onnx_light_cpu::ComputeProfileUnavailableReason;
 using onnx_light_cpu::ComputeThroughputResult;
+using onnx_light_cpu::DataType;
 using onnx_light_cpu::MeasureComputeArithmeticThroughput;
 using onnx_light_cpu::SimdLevel;
 using onnx_light_cpu::detail::ComputeDispatchDecision;
@@ -69,16 +69,14 @@ TEST(ComputeArithmeticProfile, TimerNameIsStable) {
 
 TEST(ComputeArithmeticProfile, Float32IsAlwaysAvailableAndFallsBackToScalar) {
   ComputeDispatchInputs inputs;
-  const ComputeDispatchDecision decision =
-      SelectComputeImplementation(ComputeElementType::kFloat32, inputs);
+  const ComputeDispatchDecision decision = SelectComputeImplementation(DataType::FLOAT, inputs);
   EXPECT_TRUE(decision.available);
   EXPECT_EQ(decision.implementation, ComputeImplementation::kScalar);
 }
 
 TEST(ComputeArithmeticProfile, Float64IsAlwaysAvailableAndFallsBackToScalar) {
   ComputeDispatchInputs inputs;
-  const ComputeDispatchDecision decision =
-      SelectComputeImplementation(ComputeElementType::kFloat64, inputs);
+  const ComputeDispatchDecision decision = SelectComputeImplementation(DataType::DOUBLE, inputs);
   EXPECT_TRUE(decision.available);
   EXPECT_EQ(decision.implementation, ComputeImplementation::kScalar);
 }
@@ -86,8 +84,7 @@ TEST(ComputeArithmeticProfile, Float64IsAlwaysAvailableAndFallsBackToScalar) {
 TEST(ComputeArithmeticProfile, Float32PrefersSse2OverScalarWhenDetected) {
   ComputeDispatchInputs inputs;
   inputs.simd_level = SimdLevel::kSSE2;
-  const ComputeDispatchDecision decision =
-      SelectComputeImplementation(ComputeElementType::kFloat32, inputs);
+  const ComputeDispatchDecision decision = SelectComputeImplementation(DataType::FLOAT, inputs);
   EXPECT_TRUE(decision.available);
   EXPECT_EQ(decision.implementation, ComputeImplementation::kSSE2);
 }
@@ -96,8 +93,7 @@ TEST(ComputeArithmeticProfile, Float32PrefersAvx2OverSse2WhenFmaDetected) {
   ComputeDispatchInputs inputs;
   inputs.simd_level = SimdLevel::kAVX2;
   inputs.has_fma = true;
-  const ComputeDispatchDecision decision =
-      SelectComputeImplementation(ComputeElementType::kFloat32, inputs);
+  const ComputeDispatchDecision decision = SelectComputeImplementation(DataType::FLOAT, inputs);
   EXPECT_TRUE(decision.available);
   EXPECT_EQ(decision.implementation, ComputeImplementation::kAVX2);
 }
@@ -106,8 +102,7 @@ TEST(ComputeArithmeticProfile, Float32DoesNotSelectAvx2WithoutFma) {
   ComputeDispatchInputs inputs;
   inputs.simd_level = SimdLevel::kAVX2;
   inputs.has_fma = false;
-  const ComputeDispatchDecision decision =
-      SelectComputeImplementation(ComputeElementType::kFloat32, inputs);
+  const ComputeDispatchDecision decision = SelectComputeImplementation(DataType::FLOAT, inputs);
   EXPECT_TRUE(decision.available);
   EXPECT_EQ(decision.implementation, ComputeImplementation::kSSE2);
 }
@@ -118,13 +113,13 @@ TEST(ComputeArithmeticProfile, Float32SelectsAvx512OnlyWhenCompiledAndDetected) 
   inputs.has_fma = true;
   inputs.avx512_compiled = false;
   const ComputeDispatchDecision without_compiled =
-      SelectComputeImplementation(ComputeElementType::kFloat32, inputs);
+      SelectComputeImplementation(DataType::FLOAT, inputs);
   EXPECT_TRUE(without_compiled.available);
   EXPECT_EQ(without_compiled.implementation, ComputeImplementation::kAVX2);
 
   inputs.avx512_compiled = true;
   const ComputeDispatchDecision with_compiled =
-      SelectComputeImplementation(ComputeElementType::kFloat32, inputs);
+      SelectComputeImplementation(DataType::FLOAT, inputs);
   EXPECT_TRUE(with_compiled.available);
   EXPECT_EQ(with_compiled.implementation, ComputeImplementation::kAVX512);
 }
@@ -132,8 +127,7 @@ TEST(ComputeArithmeticProfile, Float32SelectsAvx512OnlyWhenCompiledAndDetected) 
 TEST(ComputeArithmeticProfile, Float32SelectsNeonOnArmRegardlessOfX86Fields) {
   ComputeDispatchInputs inputs;
   inputs.arm_simd_level = ArmSimdLevel::kNeon;
-  const ComputeDispatchDecision decision =
-      SelectComputeImplementation(ComputeElementType::kFloat32, inputs);
+  const ComputeDispatchDecision decision = SelectComputeImplementation(DataType::FLOAT, inputs);
   EXPECT_TRUE(decision.available);
   EXPECT_EQ(decision.implementation, ComputeImplementation::kNeon);
 }
@@ -142,16 +136,15 @@ TEST(ComputeArithmeticProfile, Float16IsUnavailableWithoutNativeCompiledAndDetec
   ComputeDispatchInputs inputs;
   inputs.avx512fp16_compiled = false;
   inputs.avx512fp16_runtime = true;
-  EXPECT_FALSE(SelectComputeImplementation(ComputeElementType::kFloat16, inputs).available);
+  EXPECT_FALSE(SelectComputeImplementation(DataType::FLOAT16, inputs).available);
 
   inputs.avx512fp16_compiled = true;
   inputs.avx512fp16_runtime = false;
-  EXPECT_FALSE(SelectComputeImplementation(ComputeElementType::kFloat16, inputs).available);
+  EXPECT_FALSE(SelectComputeImplementation(DataType::FLOAT16, inputs).available);
 
   inputs.avx512fp16_compiled = true;
   inputs.avx512fp16_runtime = true;
-  const ComputeDispatchDecision decision =
-      SelectComputeImplementation(ComputeElementType::kFloat16, inputs);
+  const ComputeDispatchDecision decision = SelectComputeImplementation(DataType::FLOAT16, inputs);
   EXPECT_TRUE(decision.available);
   EXPECT_EQ(decision.implementation, ComputeImplementation::kAVX512);
 }
@@ -160,16 +153,15 @@ TEST(ComputeArithmeticProfile, BFloat16IsUnavailableWithoutNativeCompiledAndDete
   ComputeDispatchInputs inputs;
   inputs.avx512bf16_compiled = false;
   inputs.avx512bf16_runtime = true;
-  EXPECT_FALSE(SelectComputeImplementation(ComputeElementType::kBFloat16, inputs).available);
+  EXPECT_FALSE(SelectComputeImplementation(DataType::BFLOAT16, inputs).available);
 
   inputs.avx512bf16_compiled = true;
   inputs.avx512bf16_runtime = false;
-  EXPECT_FALSE(SelectComputeImplementation(ComputeElementType::kBFloat16, inputs).available);
+  EXPECT_FALSE(SelectComputeImplementation(DataType::BFLOAT16, inputs).available);
 
   inputs.avx512bf16_compiled = true;
   inputs.avx512bf16_runtime = true;
-  const ComputeDispatchDecision decision =
-      SelectComputeImplementation(ComputeElementType::kBFloat16, inputs);
+  const ComputeDispatchDecision decision = SelectComputeImplementation(DataType::BFLOAT16, inputs);
   EXPECT_TRUE(decision.available);
   EXPECT_EQ(decision.implementation, ComputeImplementation::kAVX512);
 }
@@ -180,8 +172,7 @@ TEST(ComputeArithmeticProfile, Int8PrefersAvx512VnniOverNeonWhenBothCompiledAndD
   inputs.avx512vnni_runtime = true;
   inputs.neon_dotprod_compiled = true;
   inputs.neon_dotprod_runtime = true;
-  const ComputeDispatchDecision decision =
-      SelectComputeImplementation(ComputeElementType::kInt8, inputs);
+  const ComputeDispatchDecision decision = SelectComputeImplementation(DataType::INT8, inputs);
   EXPECT_TRUE(decision.available);
   EXPECT_EQ(decision.implementation, ComputeImplementation::kAVX512);
 }
@@ -192,8 +183,7 @@ TEST(ComputeArithmeticProfile, Int8FallsBackToNeonWhenVnniNotCompiled) {
   inputs.avx512vnni_runtime = true;
   inputs.neon_dotprod_compiled = true;
   inputs.neon_dotprod_runtime = true;
-  const ComputeDispatchDecision decision =
-      SelectComputeImplementation(ComputeElementType::kInt8, inputs);
+  const ComputeDispatchDecision decision = SelectComputeImplementation(DataType::INT8, inputs);
   EXPECT_TRUE(decision.available);
   EXPECT_EQ(decision.implementation, ComputeImplementation::kNeon);
 }
@@ -204,11 +194,11 @@ TEST(ComputeArithmeticProfile, Int8IsUnavailableWithoutAnyNativeCompiledAndDetec
   inputs.avx512vnni_runtime = false;
   inputs.neon_dotprod_compiled = true;
   inputs.neon_dotprod_runtime = false;
-  EXPECT_FALSE(SelectComputeImplementation(ComputeElementType::kInt8, inputs).available);
+  EXPECT_FALSE(SelectComputeImplementation(DataType::INT8, inputs).available);
 
   inputs.avx512vnni_compiled = false;
   inputs.neon_dotprod_compiled = false;
-  EXPECT_FALSE(SelectComputeImplementation(ComputeElementType::kInt8, inputs).available);
+  EXPECT_FALSE(SelectComputeImplementation(DataType::INT8, inputs).available);
 }
 
 // ---------------------------------------------------------------------------
@@ -219,7 +209,7 @@ TEST(ComputeArithmeticProfile, ZeroRepeatsIsInvalidOptions) {
   ComputeProfileOptions options;
   options.repeats = 0;
   const ComputeThroughputResult result = MeasureComputeArithmeticThroughput(
-      ComputeElementType::kFloat32, ComputeParticipantPolicy::kSingle, options);
+      DataType::FLOAT, ComputeParticipantPolicy::kSingle, options);
   EXPECT_FALSE(result.available);
   EXPECT_EQ(result.unavailable_reason, ComputeProfileUnavailableReason::kInvalidOptions);
   EXPECT_FALSE(result.diagnostic.empty());
@@ -229,7 +219,7 @@ TEST(ComputeArithmeticProfile, NonPositiveMinimumDurationIsInvalidOptions) {
   ComputeProfileOptions options;
   options.minimum_duration_ms = 0.0;
   const ComputeThroughputResult result = MeasureComputeArithmeticThroughput(
-      ComputeElementType::kFloat64, ComputeParticipantPolicy::kSingle, options);
+      DataType::DOUBLE, ComputeParticipantPolicy::kSingle, options);
   EXPECT_FALSE(result.available);
   EXPECT_EQ(result.unavailable_reason, ComputeProfileUnavailableReason::kInvalidOptions);
 }
@@ -266,7 +256,7 @@ void ExpectFiniteSuccessfulResult(const ComputeThroughputResult &result) {
 
 TEST(ComputeArithmeticProfile, Float32SingleParticipantIsFiniteAndPositive) {
   const ComputeThroughputResult result = MeasureComputeArithmeticThroughput(
-      ComputeElementType::kFloat32, ComputeParticipantPolicy::kSingle, FastOptions());
+      DataType::FLOAT, ComputeParticipantPolicy::kSingle, FastOptions());
   ExpectFiniteSuccessfulResult(result);
   EXPECT_EQ(result.participant_count, 1u);
   EXPECT_EQ(result.dot_product_length, 0u);
@@ -274,20 +264,20 @@ TEST(ComputeArithmeticProfile, Float32SingleParticipantIsFiniteAndPositive) {
 
 TEST(ComputeArithmeticProfile, Float64SingleParticipantIsFiniteAndPositive) {
   const ComputeThroughputResult result = MeasureComputeArithmeticThroughput(
-      ComputeElementType::kFloat64, ComputeParticipantPolicy::kSingle, FastOptions());
+      DataType::DOUBLE, ComputeParticipantPolicy::kSingle, FastOptions());
   ExpectFiniteSuccessfulResult(result);
   EXPECT_EQ(result.participant_count, 1u);
 }
 
 TEST(ComputeArithmeticProfile, Float32PhysicalParticipantsIsFiniteAndPositive) {
   const ComputeThroughputResult result = MeasureComputeArithmeticThroughput(
-      ComputeElementType::kFloat32, ComputeParticipantPolicy::kPhysical, FastOptions());
+      DataType::FLOAT, ComputeParticipantPolicy::kPhysical, FastOptions());
   ExpectFiniteSuccessfulResult(result);
 }
 
 TEST(ComputeArithmeticProfile, Float64PhysicalParticipantsIsFiniteAndPositive) {
   const ComputeThroughputResult result = MeasureComputeArithmeticThroughput(
-      ComputeElementType::kFloat64, ComputeParticipantPolicy::kPhysical, FastOptions());
+      DataType::DOUBLE, ComputeParticipantPolicy::kPhysical, FastOptions());
   ExpectFiniteSuccessfulResult(result);
 }
 
@@ -299,7 +289,7 @@ TEST(ComputeArithmeticProfile, Float64PhysicalParticipantsIsFiniteAndPositive) {
 
 TEST(ComputeArithmeticProfile, Float16IsFiniteWhenAvailableOtherwiseExplicitlyAbsent) {
   const ComputeThroughputResult result = MeasureComputeArithmeticThroughput(
-      ComputeElementType::kFloat16, ComputeParticipantPolicy::kSingle, FastOptions());
+      DataType::FLOAT16, ComputeParticipantPolicy::kSingle, FastOptions());
   if (result.available) {
     ExpectFiniteSuccessfulResult(result);
   } else {
@@ -310,7 +300,7 @@ TEST(ComputeArithmeticProfile, Float16IsFiniteWhenAvailableOtherwiseExplicitlyAb
 
 TEST(ComputeArithmeticProfile, BFloat16IsFiniteWhenAvailableOtherwiseExplicitlyAbsent) {
   const ComputeThroughputResult result = MeasureComputeArithmeticThroughput(
-      ComputeElementType::kBFloat16, ComputeParticipantPolicy::kSingle, FastOptions());
+      DataType::BFLOAT16, ComputeParticipantPolicy::kSingle, FastOptions());
   if (result.available) {
     ExpectFiniteSuccessfulResult(result);
     EXPECT_GT(result.dot_product_length, 0u);
@@ -322,7 +312,7 @@ TEST(ComputeArithmeticProfile, BFloat16IsFiniteWhenAvailableOtherwiseExplicitlyA
 
 TEST(ComputeArithmeticProfile, Int8IsFiniteWhenAvailableOtherwiseExplicitlyAbsent) {
   const ComputeThroughputResult result = MeasureComputeArithmeticThroughput(
-      ComputeElementType::kInt8, ComputeParticipantPolicy::kSingle, FastOptions());
+      DataType::INT8, ComputeParticipantPolicy::kSingle, FastOptions());
   if (result.available) {
     ExpectFiniteSuccessfulResult(result);
     EXPECT_GT(result.dot_product_length, 0u);
