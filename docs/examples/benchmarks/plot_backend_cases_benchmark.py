@@ -273,7 +273,11 @@ for measurement in _progress:
         # element that cancels down to nearly zero still carries the noise of
         # the whole sum. ``rtol`` cannot see that, and a constant ``atol``
         # would have to be sized for the largest case, so the floor is derived
-        # from the tensor's own scale and the length of the reductions.
+        # from the tensor's own scale and the length of the reductions. The
+        # largest input dimension is a deliberate upper bound on any
+        # contraction length in the model, since the exact one is per-operator;
+        # over-estimating only widens the floor, which stays orders of
+        # magnitude below ``rtol`` for every case registered here.
         reduction = max(
             (max(array.shape) for array in measurement["feeds"].values() if array.ndim > 0),
             default=1,
