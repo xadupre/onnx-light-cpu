@@ -276,6 +276,10 @@ endif()
 # of matching files changes.
 file(GLOB_RECURSE CPU_KERNEL_SOURCES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/*.cc")
+file(GLOB_RECURSE CPU_BACKEND_TEST_SOURCES CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/*.cc")
+set(CPU_BACKEND_CORPUS_SOURCES ${CPU_BACKEND_TEST_SOURCES})
+list(FILTER CPU_BACKEND_CORPUS_SOURCES INCLUDE REGEX "_corpus[.]cc$")
 
 # ISA-specific translation units are grouped by directory or filename family.
 # New implementations following these conventions automatically inherit the
@@ -795,28 +799,7 @@ if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
   # --onnx-light-source path).
   if(TARGET onnx_light::lib_onnx_backend_test)
     add_library(lib_onnx_light_cpu_backend_test ${_cpu_lib_type}
-        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/collect_test_cases.cc"
-        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/cases/elementwise/collect_elementwise_cases.cc"
-        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/cases/elementwise/cases_binary.cc"
-        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/cases/math/collect_math_cases.cc"
-        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/cases/math/cases_abs.cc"
-        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/cases/math/cases_exp.cc"
-        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/cases/math/cases_log.cc"
-        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/cases/math/cases_gemm.cc"
-        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/cases/math/cases_matmul.cc"
-        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/cases/math/cases_matmul_integer.cc"
-        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/cases/math/cases_rms_normalization.cc"
-        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/cases/math/cases_swiglu.cc"
-        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/com_microsoft/collect_com_microsoft_cases.cc"
-        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/com_microsoft/cases_bias_gelu.cc"
-        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/com_microsoft/cases_cdist.cc"
-        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/cases/logical/collect_logical_cases.cc"
-        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/cases/logical/cases_not.cc"
-        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/cases/traditionalml/collect_traditionalml_cases.cc"
-        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/cases/traditionalml/cases_tree_ensemble.cc"
-        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/cases/traditionalml/tree_ensemble_corpus.cc"
-        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/cases/attention/collect_attention_cases.cc"
-        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/cases/attention/cases_attention.cc")
+        ${CPU_BACKEND_TEST_SOURCES})
     target_include_directories(lib_onnx_light_cpu_backend_test PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
@@ -1082,45 +1065,20 @@ endif()
 # Isolated C++ throughput benchmarks (opt-in, not run by ctest)
 # ---------------------------------------------------------------------------
 if(ONNX_LIGHT_CPU_BUILD_BENCHMARKS)
-  add_executable(gemm_throughput
-      "${CMAKE_CURRENT_SOURCE_DIR}/tools/gemm_throughput.cc")
-  target_link_libraries(gemm_throughput PRIVATE lib_onnx_light_cpu)
-  if(ONNX_LIGHT_CPU_SIMD_FLAGS)
-    target_compile_options(gemm_throughput PRIVATE ${_simd_flags})
-  endif()
-  onnx_light_apply_hardening(gemm_throughput)
-
-  add_executable(compact_gemm_throughput
-      "${CMAKE_CURRENT_SOURCE_DIR}/tools/compact_gemm_throughput.cc")
-  target_link_libraries(compact_gemm_throughput PRIVATE lib_onnx_light_cpu)
-  if(ONNX_LIGHT_CPU_SIMD_FLAGS)
-    target_compile_options(compact_gemm_throughput PRIVATE ${_simd_flags})
-  endif()
-  onnx_light_apply_hardening(compact_gemm_throughput)
-
-  add_executable(exp_log_throughput
-      "${CMAKE_CURRENT_SOURCE_DIR}/tools/exp_log_throughput.cc")
-  target_link_libraries(exp_log_throughput PRIVATE lib_onnx_light_cpu)
-  if(ONNX_LIGHT_CPU_SIMD_FLAGS)
-    target_compile_options(exp_log_throughput PRIVATE ${_simd_flags})
-  endif()
-  onnx_light_apply_hardening(exp_log_throughput)
-
-  add_executable(abs_throughput
-      "${CMAKE_CURRENT_SOURCE_DIR}/tools/abs_throughput.cc")
-  target_link_libraries(abs_throughput PRIVATE lib_onnx_light_cpu)
-  if(ONNX_LIGHT_CPU_SIMD_FLAGS)
-    target_compile_options(abs_throughput PRIVATE ${_simd_flags})
-  endif()
-  if(ONNX_LIGHT_CPU_HAVE_AVX512F_FLAG)
-    target_compile_definitions(abs_throughput PRIVATE ONNX_LIGHT_CPU_HAVE_AVX512=1)
-  endif()
-  onnx_light_apply_hardening(abs_throughput)
-
-  add_executable(tree_ensemble_throughput
-      "${CMAKE_CURRENT_SOURCE_DIR}/tools/tree_ensemble_throughput.cc")
-  target_link_libraries(tree_ensemble_throughput PRIVATE lib_onnx_light_cpu)
-  onnx_light_apply_hardening(tree_ensemble_throughput)
+  file(GLOB _throughput_sources CONFIGURE_DEPENDS
+      "${CMAKE_CURRENT_SOURCE_DIR}/tools/*_throughput.cc")
+  foreach(_source IN LISTS _throughput_sources)
+    get_filename_component(_target "${_source}" NAME_WE)
+    add_executable(${_target} "${_source}")
+    target_link_libraries(${_target} PRIVATE lib_onnx_light_cpu)
+    if(ONNX_LIGHT_CPU_SIMD_FLAGS)
+      target_compile_options(${_target} PRIVATE ${_simd_flags})
+    endif()
+    if(_target STREQUAL "abs_throughput" AND ONNX_LIGHT_CPU_HAVE_AVX512F_FLAG)
+      target_compile_definitions(${_target} PRIVATE ONNX_LIGHT_CPU_HAVE_AVX512=1)
+    endif()
+    onnx_light_apply_hardening(${_target})
+  endforeach()
 endif()
 
 # ---------------------------------------------------------------------------
@@ -1153,10 +1111,13 @@ if(ONNX_LIGHT_CPU_BUILD_TESTS)
   function(onnx_light_cpu_add_test _src _link_lib)
     get_filename_component(_name "${_src}" NAME_WE)
     add_executable(${_name} "${_src}")
-    if(_name STREQUAL "test_tree_ensemble")
-      target_sources(${_name} PRIVATE
-          "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/cases/traditionalml/tree_ensemble_corpus.cc")
-    endif()
+    foreach(_corpus_source IN LISTS CPU_BACKEND_CORPUS_SOURCES)
+      get_filename_component(_corpus_name "${_corpus_source}" NAME_WE)
+      string(REGEX REPLACE "_corpus$" "" _corpus_subject "${_corpus_name}")
+      if(_name STREQUAL "test_${_corpus_subject}")
+        target_sources(${_name} PRIVATE "${_corpus_source}")
+      endif()
+    endforeach()
     target_link_libraries(${_name} PRIVATE ${_link_lib} GTest::gtest_main)
     target_include_directories(${_name} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
     if(_name STREQUAL "test_integer_gemm_vnni")
