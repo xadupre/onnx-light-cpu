@@ -9,6 +9,7 @@
 #include "onnx_light_cpu/backend_test/cases/logical/include_logical_cases.h"
 #include "onnx_light_cpu/backend_test/cases/math/include_math_cases.h"
 #include "onnx_light_cpu/backend_test/cases/traditionalml/include_traditionalml_cases.h"
+#include "onnx_light_cpu/backend_test/com_microsoft/include_com_microsoft_cases.h"
 
 #include "onnx_core/backend_test/test_case_registry.h"
 
@@ -29,6 +30,7 @@ using bt_ns::TestMode;
 void CollectCpuKernelTestCases(std::vector<TestCase> &registry, const std::string &op_type,
                                TestMode mode) {
   CollectCpuMathTestCases(registry, op_type, mode);
+  CollectCpuMicrosoftTestCases(registry, op_type, mode);
   CollectCpuElementwiseTestCases(registry, op_type, mode);
   CollectCpuLogicalTestCases(registry, op_type, mode);
   CollectCpuTraditionalMlTestCases(registry, op_type, mode);

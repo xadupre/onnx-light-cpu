@@ -134,10 +134,11 @@ print(f"SIMD level: {level}")
 
 ### Running an ONNX model with onnx-light
 
-`register_kernels` installs the SIMD-accelerated kernels into
+`register_kernels` installs the optimized kernels into
 [onnx-light](https://github.com/xadupre/onnx-light)'s shared C++ kernel
-dispatch table so any ONNX model using `Abs`, `Exp`, `Log`, `Gemm` or `Not`
-runs the optimized kernel when evaluated through a `ReferenceEvaluator`:
+dispatch table. This includes the portable `com.microsoft::CDist` and
+`com.microsoft::BiasGelu` kernels, their shape and peak-memory functions, and
+their safe fusion patterns:
 
 ```python
 import numpy as np
@@ -158,6 +159,17 @@ integration (`-DONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON`); it wraps the compiled
 `ReferenceEvaluator` created afterwards uses them. To override an operator for a
 single session only, use onnx-light's per-session
 `sess.register_custom_kernel("", "Abs", my_abs)` hook instead.
+
+Custom-domain graph construction and differentiation use the matching schema
+and gradient helpers:
+
+```python
+from onnx_light.onnx_core.graph_builder import GraphBuilder
+from onnx_light_cpu import operator_schema_lookup, register_custom_gradients
+
+builder = GraphBuilder("custom", schema_lookup=operator_schema_lookup)
+gradient_registry = register_custom_gradients()
+```
 
 > **Registration seems ignored?** The kernels only take effect when
 > `onnx-light-cpu` links the *same* `lib_onnx_core` that the running

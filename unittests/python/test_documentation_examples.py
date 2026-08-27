@@ -37,7 +37,7 @@ def _example_files():
 
 
 def _requires_onnx_light_integration(example):
-    return example.parent.name == "benchmarks"
+    return example.parent.name == "benchmarks" or example.name == "plot_custom_operators.py"
 
 
 def _onnx_light_integration_available():

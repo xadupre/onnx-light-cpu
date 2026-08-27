@@ -276,6 +276,18 @@ TEST(OnnxLightBackendKernels, SwiGLURunsThroughRuntime) {
   EXPECT_TRUE(failures.empty()) << Describe(failures);
 }
 
+TEST(OnnxLightBackendKernels, BiasGeluRunsThroughRuntime) {
+  const std::vector<std::string> failures =
+      RunCpuBackendCases("BiasGelu", core::backend_test::TestMode::TEST);
+  EXPECT_TRUE(failures.empty()) << Describe(failures);
+}
+
+TEST(OnnxLightBackendKernels, CDistRunsThroughRuntime) {
+  const std::vector<std::string> failures =
+      RunCpuBackendCases("CDist", core::backend_test::TestMode::TEST);
+  EXPECT_TRUE(failures.empty()) << Describe(failures);
+}
+
 TEST(OnnxLightBackendKernels, NotRunsThroughRuntime) {
   const std::vector<std::string> failures =
       RunCpuBackendCases("Not", core::backend_test::TestMode::TEST);
@@ -578,6 +590,20 @@ TEST(OnnxLightBackendKernels, LogBenchmarkRunsThroughRuntime) {
 TEST(OnnxLightBackendKernels, SwiGLUBenchmarkRunsThroughRuntime) {
   const std::vector<std::string> failures = RunCpuBackendCases(
       "SwiGLU", core::backend_test::TestMode::BENCHMARK, "test_cpu_swiglu_n1024_float32_benchmark");
+  EXPECT_TRUE(failures.empty()) << Describe(failures);
+}
+
+TEST(OnnxLightBackendKernels, BiasGeluBenchmarkRunsThroughRuntime) {
+  const std::vector<std::string> failures =
+      RunCpuBackendCases("BiasGelu", core::backend_test::TestMode::BENCHMARK,
+                         "test_cpu_biasgelu_o4096_i256_float32_benchmark");
+  EXPECT_TRUE(failures.empty()) << Describe(failures);
+}
+
+TEST(OnnxLightBackendKernels, CDistBenchmarkRunsThroughRuntime) {
+  const std::vector<std::string> failures =
+      RunCpuBackendCases("CDist", core::backend_test::TestMode::BENCHMARK,
+                         "test_cpu_cdist_m64_k64_n64_sqeuclidean_float32_benchmark");
   EXPECT_TRUE(failures.empty()) << Describe(failures);
 }
 

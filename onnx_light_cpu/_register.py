@@ -52,12 +52,46 @@ def _register_all_kernels() -> None:
     # kernels, this loads lib_onnx_proto next to lib_onnx_core before the
     # registration extension links to that exact runtime.
     import_module("onnx_light.onnx.reference")
+    import_module("onnx_light.onnx_op")
 
     from .onnx_py._cpuregister import (  # pyrefly: ignore[missing-import]
         register_all_kernels,
     )
 
     register_all_kernels()
+
+
+def custom_op_schemas(op_type: str = "", init_doc: bool = True) -> tuple[Any, ...]:
+    """Returns the ``com.microsoft`` light schemas shipped by this package."""
+    import_module("onnx_light.onnx_op")
+    from .onnx_py._cpuregister import (  # pyrefly: ignore[missing-import]
+        microsoft_op_schemas,
+    )
+
+    return tuple(microsoft_op_schemas(op_type, init_doc))
+
+
+def operator_schema_lookup(op_type: str) -> list[Any]:
+    """Returns standard ONNX schemas plus this package's custom schemas."""
+    from onnx_light.onnx_op import GetAllOnnxOpSchemasWithHistory
+
+    return [
+        *GetAllOnnxOpSchemasWithHistory(op_type),
+        *custom_op_schemas(op_type),
+    ]
+
+
+def register_custom_gradients(registry: Any = None) -> Any:
+    """Adds the ``CDist`` and ``BiasGelu`` backward rules to a gradient registry."""
+    gradient_module = import_module("onnx_light.onnx_core.gradient")
+    if registry is None:
+        registry = gradient_module.GradRegistry.default()
+    from .onnx_py._cpuregister import (  # pyrefly: ignore[missing-import]
+        register_custom_gradients as _register_custom_gradients,
+    )
+
+    _register_custom_gradients(registry)
+    return registry
 
 
 def register_kernels(sess: Any = None) -> Any:

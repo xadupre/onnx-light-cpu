@@ -38,7 +38,10 @@ class TestRegisterKernels(TestCase):
         ):
             reg._register_all_kernels()
 
-        import_runtime.assert_called_once_with("onnx_light.onnx.reference")
+        assert import_runtime.call_args_list == [
+            mock.call("onnx_light.onnx.reference"),
+            mock.call("onnx_light.onnx_op"),
+        ]
         extension.register_all_kernels.assert_called_once_with()
 
     def test_calls_register_all_kernels(self):

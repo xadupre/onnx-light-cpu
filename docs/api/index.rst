@@ -219,7 +219,9 @@ Registering kernels with onnx-light
    :func:`register_all_kernels`. After this call, every ``Abs``, ``Exp``,
    ``Log``, ``Gemm`` and ``Not`` node executed by onnx-light's runtime (and
    therefore any model run through ``ReferenceEvaluator``) dispatches to the
-   SIMD-accelerated onnx-light-cpu kernel instead of the built-in one. The
+   optimized onnx-light-cpu kernel instead of the built-in one. It also
+   installs the ``com.microsoft`` ``CDist`` and ``BiasGelu`` kernels, their
+   symbolic shape and peak-memory functions, and their fusion patterns. The
    registration is global, so ``sess`` is optional and only returned unchanged
    so calls can be chained.
 
@@ -232,6 +234,21 @@ Registering kernels with onnx-light
       register_kernels()
       sess = ReferenceEvaluator(model)
       (y,) = sess.run(None, {"x": np.array([-1.0, 2.0], dtype=np.float32)})
+
+.. py:function:: custom_op_schemas(op_type="", init_doc=True)
+
+   Returns the :class:`LightOpSchema` records for the supported
+   ``com.microsoft`` operators.
+
+.. py:function:: operator_schema_lookup(op_type)
+
+   Returns the standard ONNX schemas and this package's custom schemas. Pass it
+   as ``GraphBuilder(..., schema_lookup=operator_schema_lookup)``.
+
+.. py:function:: register_custom_gradients(registry=None)
+
+   Adds the ``CDist`` and ``BiasGelu`` backward rules to an independent
+   ``GradRegistry`` and returns that registry.
 
 .. py:function:: registered_kernel_names() -> dict[str, str]
 
