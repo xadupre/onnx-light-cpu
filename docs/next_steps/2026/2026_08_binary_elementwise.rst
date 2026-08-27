@@ -506,7 +506,7 @@ Remaining pull-request sequence
        cache, selects scalar loops, advances offsets per inner block, and
        proves safe alias decisions.
      - Existing onnx-light broadcast validation and traversal
-     - Pending
+     - Complete
    * - Binary PR02
      - FP32/FP64 arithmetic SIMD.
      - ``Add``, ``Sub``, ``Mul``, and ``Div`` provide contiguous, left/right
@@ -514,7 +514,7 @@ Remaining pull-request sequence
        ``Add``, ``Sub``, and ``Mul`` also provide bulk integer and half-precision
        loops with exact operand order, special values, and tails.
      - PR01
-     - Pending
+     - Complete
    * - Binary PR03
      - Vector broadcast families and executor decisions.
      - Repeated block, inner-vector, outer, and general strided patterns use
@@ -523,7 +523,7 @@ Remaining pull-request sequence
        thread count when enough work exists, and do not store a thread count
        or introduce another scheduler.
      - PR01, PR02; completed runtime foundation
-     - Pending
+     - Complete
    * - Binary PR04
      - Comparison, logical, bitwise, shift, and integer arithmetic.
      - Comparisons emit byte ``BOOL``; logical and bitwise kernels cover every
@@ -531,7 +531,7 @@ Remaining pull-request sequence
        overflow boundaries are implemented without C++ undefined behavior;
        unsupported string ``Equal`` remains an explicit portable fallback.
      - PR03
-     - Pending
+     - Complete
    * - Binary PR05
      - Specialized arithmetic and low precision.
      - ``Pow``, ``Mod`` and ``PRelu`` preserve attributes, mixed types and
@@ -540,7 +540,7 @@ Remaining pull-request sequence
        broadcasting. Applicable FP16/BF16 paths use native arithmetic or
        vector conversion without a full-tensor conversion.
      - PR03, PR04; completed ExpLog foundation
-     - Pending
+     - Complete
    * - Binary PR06
      - Variadic ``Sum``/``Mean``/``Min``/``Max`` adapter.
      - ``VariadicElementwisePlan`` validates all inputs, derives one common
@@ -549,7 +549,7 @@ Remaining pull-request sequence
        evaluation order, integer overflow, and Min/Max NaN semantics match the
        portable kernels.
      - PR03-PR05
-     - Pending
+     - Complete
    * - Binary PR07
      - Shared ``ElementwisePlan`` fusion.
      - The ``swiglu_gate`` and ``scaled_masked_scores`` templates retain
@@ -558,7 +558,7 @@ Remaining pull-request sequence
        and the session executor, and each reaches at least 1.20x ONNX Runtime
        median with no case below 1.10x.
      - PR01 through PR06; completed ExpLog foundation
-     - Pending
+     - Complete
    * - Binary PR08
      - Final correctness and parity gate.
      - Every in-scope operator/type/broadcast case passes differential tests;
