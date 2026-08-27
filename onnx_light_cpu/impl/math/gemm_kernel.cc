@@ -1312,6 +1312,22 @@ void GemmFiveLoopRange(bool trans_a, bool trans_b, std::size_t M, std::size_t N,
                        const SrcT *B, T beta, const T *C, T *Y, GemmKernelKind kind, TileFn tile,
                        const GemmBlocking &blocking) {
   const bool has_bias = C != nullptr && beta != T(0);
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
+  if constexpr (std::is_same_v<T, double> && std::is_same_v<SrcT, double>) {
+    if (!trans_a && !trans_b && M == 32 && N == 32 && K >= 1024 &&
+        kind == GemmKernelKind::kAVX512) {
+      const std::size_t kc = k_end - k_begin;
+      const GemmAccumMode mode = has_bias ? GemmAccumMode::kInitBias : GemmAccumMode::kInitZero;
+      for (std::size_t m0 = 0; m0 < M; m0 += blocking.mr) {
+        const std::size_t mr = std::min(blocking.mr, M - m0);
+        GemmMicroKernel_AVX512_F64_StridedA(mr, N, kc, alpha, beta, B + k_begin * N, N,
+                                            has_bias ? C + m0 * N : nullptr, N, Y + m0 * N, N, 0,
+                                            mode, A + m0 * K + k_begin, K);
+      }
+      return;
+    }
+  }
+#endif
   const std::size_t column_panels = (N + blocking.nc - 1) / blocking.nc;
   const std::size_t row_panels = (M + blocking.mc - 1) / blocking.mc;
   const std::size_t thread_count = static_cast<std::size_t>(ExecutionThreadCount());
@@ -1598,9 +1614,12 @@ void GemmSplitK(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::s
     return;
   }
 
+  constexpr std::size_t target_fmas_per_participant =
+      std::is_same_v<T, double> ? detail::kSplitKTargetFmasPerParticipant / 4
+                                : detail::kSplitKTargetFmasPerParticipant;
   const std::size_t part_count = std::min<std::size_t>(
       detail::SelectGemmParticipantCount(M, N, K, static_cast<std::size_t>(ExecutionThreadCount()),
-                                         detail::kSplitKTargetFmasPerParticipant),
+                                         target_fmas_per_participant),
       (K + blocking.kc - 1) / blocking.kc);
   if (part_count <= 1) {
     GemmFiveLoop(trans_a, trans_b, M, N, K, alpha, A, B, beta, C, Y, kind, tile, blocking);

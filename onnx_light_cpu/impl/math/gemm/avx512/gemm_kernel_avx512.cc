@@ -149,8 +149,10 @@ template <std::size_t MR>
 void GemmMicroKernel_AVX512_F64Impl(std::size_t nb, std::size_t K, double alpha, double beta,
                                     const double *Bmat, std::size_t N, const double *Crow_base,
                                     std::size_t Cstride, double *Yrow_base, std::size_t Ystride,
-                                    std::size_t n0, GemmAccumMode mode, const double *Apack) {
+                                    std::size_t n0, GemmAccumMode mode, const double *Apack,
+                                    std::size_t AStride = 0) {
   static_assert(MR >= 1 && MR <= kGemmAVX512MR);
+  AStride = AStride == 0 ? K : AStride;
   const __m512d valpha = _mm512_set1_pd(alpha);
   const __m512d vbeta = _mm512_set1_pd(beta);
   const bool alpha_is_one = alpha == 1.0;
@@ -172,7 +174,7 @@ void GemmMicroKernel_AVX512_F64Impl(std::size_t nb, std::size_t K, double alpha,
         PrefetchT0(Brow + kGemmPrefetchDistanceK * N);
       }
       for (std::size_t r = 0; r < MR; ++r) {
-        const __m512d va = _mm512_set1_pd(Apack[r * K + k]);
+        const __m512d va = _mm512_set1_pd(Apack[r * AStride + k]);
         acc0[r] = MulAdd(va, vb0, acc0[r]);
         acc1[r] = MulAdd(va, vb1, acc1[r]);
       }
@@ -214,7 +216,7 @@ void GemmMicroKernel_AVX512_F64Impl(std::size_t nb, std::size_t K, double alpha,
     const auto accumulate_k = [&](std::size_t k) {
       const __m512d vb = _mm512_loadu_pd(Bmat + k * N + n0 + n);
       for (std::size_t r = 0; r < MR; ++r) {
-        const __m512d va = _mm512_set1_pd(Apack[r * K + k]);
+        const __m512d va = _mm512_set1_pd(Apack[r * AStride + k]);
         acc[r] = MulAdd(va, vb, acc[r]);
       }
     };
@@ -344,10 +346,10 @@ void GemmMicroKernel_AVX512_F64_MR6_NR32(std::size_t nb, std::size_t K, double a
                                          const double *Bmat, std::size_t N, const double *Crow_base,
                                          std::size_t Cstride, double *Yrow_base,
                                          std::size_t Ystride, std::size_t n0, GemmAccumMode mode,
-                                         const double *Apack) {
+                                         const double *Apack, std::size_t AStride) {
   if (nb != 32) {
     return GemmMicroKernel_AVX512_F64Impl<6>(nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
-                                             Yrow_base, Ystride, n0, mode, Apack);
+                                             Yrow_base, Ystride, n0, mode, Apack, AStride);
   }
 
 #define DECLARE_ACCUMULATORS(R)                                                                    \
@@ -374,7 +376,7 @@ void GemmMicroKernel_AVX512_F64_MR6_NR32(std::size_t nb, std::size_t K, double a
     }
 #define ACCUMULATE_ROW(R)                                                                          \
   do {                                                                                             \
-    const __m512d va = _mm512_set1_pd(Apack[(R) * K + k]);                                         \
+    const __m512d va = _mm512_set1_pd(Apack[(R) * AStride + k]);                                   \
     acc0_##R = MulAdd(va, vb0, acc0_##R);                                                          \
     acc1_##R = MulAdd(va, vb1, acc1_##R);                                                          \
     acc2_##R = MulAdd(va, vb2, acc2_##R);                                                          \
@@ -719,7 +721,7 @@ void GemmMicroKernel_AVX512_F64(std::size_t mr, std::size_t nb, std::size_t K, d
   case 6:
     if (nb == 32) {
       return GemmMicroKernel_AVX512_F64_MR6_NR32(nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
-                                                 Yrow_base, Ystride, n0, mode, Apack);
+                                                 Yrow_base, Ystride, n0, mode, Apack, K);
     }
     return GemmMicroKernel_AVX512_F64Impl<6>(nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
                                              Yrow_base, Ystride, n0, mode, Apack);
@@ -732,6 +734,38 @@ void GemmMicroKernel_AVX512_F64(std::size_t mr, std::size_t nb, std::size_t K, d
   default:
     return GemmMicroKernel_Scalar_F64(mr, nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
                                       Yrow_base, Ystride, n0, mode, Apack);
+  }
+}
+
+void GemmMicroKernel_AVX512_F64_StridedA(std::size_t mr, std::size_t nb, std::size_t K,
+                                         double alpha, double beta, const double *Bmat,
+                                         std::size_t N, const double *Crow_base,
+                                         std::size_t Cstride, double *Yrow_base,
+                                         std::size_t Ystride, std::size_t n0, GemmAccumMode mode,
+                                         const double *A, std::size_t AStride) {
+  switch (mr) {
+#define STRIDED_A_CASE(MR)                                                                         \
+  case MR:                                                                                         \
+    return GemmMicroKernel_AVX512_F64Impl<MR>(nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,     \
+                                              Yrow_base, Ystride, n0, mode, A, AStride)
+    STRIDED_A_CASE(1);
+    STRIDED_A_CASE(2);
+    STRIDED_A_CASE(3);
+    STRIDED_A_CASE(4);
+    STRIDED_A_CASE(5);
+  case 6:
+    if (nb == 32) {
+      return GemmMicroKernel_AVX512_F64_MR6_NR32(nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
+                                                 Yrow_base, Ystride, n0, mode, A, AStride);
+    }
+    return GemmMicroKernel_AVX512_F64Impl<6>(nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
+                                             Yrow_base, Ystride, n0, mode, A, AStride);
+    STRIDED_A_CASE(7);
+    STRIDED_A_CASE(8);
+#undef STRIDED_A_CASE
+  default:
+    return GemmMicroKernel_Scalar_F64(mr, nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
+                                      Yrow_base, Ystride, n0, mode, A);
   }
 }
 

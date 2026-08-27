@@ -39,4 +39,11 @@ void GemmMicroKernel_AVX512_F64(std::size_t mr, std::size_t nb, std::size_t K, d
                                 std::size_t Ystride, std::size_t n0, GemmAccumMode mode,
                                 const double *Apack);
 
+void GemmMicroKernel_AVX512_F64_StridedA(std::size_t mr, std::size_t nb, std::size_t K,
+                                         double alpha, double beta, const double *Bmat,
+                                         std::size_t N, const double *Crow_base,
+                                         std::size_t Cstride, double *Yrow_base,
+                                         std::size_t Ystride, std::size_t n0, GemmAccumMode mode,
+                                         const double *A, std::size_t AStride);
+
 } // namespace onnx_light_cpu

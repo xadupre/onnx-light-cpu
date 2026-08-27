@@ -78,7 +78,8 @@ std::size_t TargetFmasPerParticipant(GemmAlgorithm algorithm, std::size_t m, std
     return kSkinnyNTargetFmasPerParticipant;
   }
   if (algorithm == GemmAlgorithm::kSplitK) {
-    return detail::kSplitKTargetFmasPerParticipant;
+    return element_size == sizeof(double) ? detail::kSplitKTargetFmasPerParticipant / 4
+                                          : detail::kSplitKTargetFmasPerParticipant;
   }
   if (algorithm == GemmAlgorithm::kGeneral && IsTransformerProjection(m, n, k)) {
     return kWideProjectionTargetFmasPerParticipant;
@@ -220,9 +221,9 @@ void ExecuteFloatKernel(bool trans_a, bool trans_b, std::size_t m, std::size_t n
 }
 
 template <typename T>
-auto SelectKernel(GemmAlgorithm algorithm)
-    -> void (*)(bool, bool, std::size_t, std::size_t, std::size_t, T, const T *, const T *, T,
-                const T *, T *, const GemmBlocking *) {
+auto SelectKernel(GemmAlgorithm algorithm) -> void (*)(bool, bool, std::size_t, std::size_t,
+                                                       std::size_t, T, const T *, const T *, T,
+                                                       const T *, T *, const GemmBlocking *) {
   switch (algorithm) {
   case GemmAlgorithm::kDirect:
     return &ExecuteFloatKernel<T, GemmAlgorithm::kDirect>;
@@ -238,10 +239,12 @@ auto SelectKernel(GemmAlgorithm algorithm)
   throw std::logic_error("onnx_light_cpu::GemmPlan: unsupported Gemm algorithm.");
 }
 
-auto SelectHalfKernel(GemmAlgorithm algorithm)
-    -> void (*)(bool, bool, bool, std::size_t, std::size_t, std::size_t, float,
-                const std::uint16_t *, const std::uint16_t *, float *, const GemmBlocking *,
-                const GemmBlocking *) {
+auto SelectHalfKernel(GemmAlgorithm algorithm) -> void (*)(bool, bool, bool, std::size_t,
+                                                           std::size_t, std::size_t, float,
+                                                           const std::uint16_t *,
+                                                           const std::uint16_t *, float *,
+                                                           const GemmBlocking *,
+                                                           const GemmBlocking *) {
   switch (algorithm) {
   case GemmAlgorithm::kDirect:
     return &detail::GemmHalfPlanned<GemmAlgorithm::kDirect>;
