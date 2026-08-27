@@ -18,9 +18,7 @@ from __future__ import annotations
 import json
 import sys
 from types import ModuleType
-from unittest import mock
-
-import pytest
+from unittest import TestCase, mock
 
 import onnx_light_cpu
 from onnx_light_cpu import (
@@ -42,7 +40,7 @@ def _bounded_kwargs(**overrides):
     return kwargs
 
 
-class TestImportTimeInactivity:
+class TestImportTimeInactivity(TestCase):
     def test_import_does_not_touch_the_extension(self):
         extension = ModuleType("onnx_light_cpu.onnx_py._cpukernels")
         extension.benchmark_processor_performance_raw = mock.Mock()
@@ -55,35 +53,35 @@ class TestImportTimeInactivity:
         extension.benchmark_processor_performance_raw.assert_not_called()
 
 
-class TestValidation:
+class TestValidation(TestCase):
     def test_empty_thread_policies_raises_before_measuring(self):
-        with pytest.raises(ValueError):
+        with self.assertRaises(ValueError):
             benchmark_processor_performance(**_bounded_kwargs(thread_policies=()))
 
     def test_zero_repeats_raises_before_measuring(self):
-        with pytest.raises(ValueError):
+        with self.assertRaises(ValueError):
             benchmark_processor_performance(**_bounded_kwargs(repeats=0))
 
     def test_non_positive_duration_raises_before_measuring(self):
-        with pytest.raises(ValueError):
+        with self.assertRaises(ValueError):
             benchmark_processor_performance(**_bounded_kwargs(minimum_duration_ms=0.0))
 
     def test_zero_memory_budget_raises_before_measuring(self):
-        with pytest.raises(ValueError):
+        with self.assertRaises(ValueError):
             benchmark_processor_performance(**_bounded_kwargs(memory_budget_bytes=0))
 
     def test_unknown_thread_policy_raises(self):
-        with pytest.raises(ValueError):
+        with self.assertRaises(ValueError):
             benchmark_processor_performance(**_bounded_kwargs(thread_policies=("both",)))
 
     def test_implausible_explicit_affinity_raises(self):
-        with pytest.raises(ValueError):
+        with self.assertRaises(ValueError):
             benchmark_processor_performance(
                 **_bounded_kwargs(explicit_single_affinity=(0xFFFF, 0xFFFF))
             )
 
 
-class TestBoundedSinglePolicyProfile:
+class TestBoundedSinglePolicyProfile(TestCase):
     """Exercises the real extension with small bounded options."""
 
     def test_returns_coherent_profile(self):
@@ -181,7 +179,7 @@ def _raw_profile_stub():
     return metadata, topology, memory, compute, roofline, warnings
 
 
-class TestPythonWrapping:
+class TestPythonWrapping(TestCase):
     def _patch_binding(self, raw_profile):
         extension = ModuleType("onnx_light_cpu.onnx_py._cpukernels")
         extension.benchmark_processor_performance_raw = mock.Mock(return_value=raw_profile)
@@ -203,13 +201,13 @@ class TestPythonWrapping:
             profile.roofline["float32"]["single"]["L1"].arithmetic_intensity_crossover == 9.5714
         )
 
-        with pytest.raises(AttributeError):
+        with self.assertRaises(AttributeError):
             profile.metadata.schema_version = 2  # frozen dataclass
 
-        with pytest.raises(TypeError):
+        with self.assertRaises(TypeError):
             profile.memory["L1"]["single"] = profile.memory["L1"]["single"]  # read-only mapping
 
-        with pytest.raises(TypeError):
+        with self.assertRaises(TypeError):
             profile.memory["L1"]["extra"] = profile.memory["L1"]["single"]  # read-only mapping
 
     def test_to_dict_is_json_serializable_and_stable(self):
