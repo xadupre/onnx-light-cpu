@@ -159,6 +159,17 @@ TEST(GemmPlan, AppliesConfiguredBlockingAndParticipantLimit) {
   EXPECT_EQ(plan.useful_threads(), 2u);
 }
 
+TEST(GemmPlan, Float64SquareUsesFinerParallelWork) {
+  onnx_light_cpu::ExecutionExecutorView executor;
+  executor.effective_threads = 32;
+  onnx_light_cpu::ExecutionExecutorScope scope(&executor);
+
+  const GemmPlan<float> float_plan(GemmPlanOptions<float>{false, false, 256, 256, 256});
+  const GemmPlan<double> double_plan(GemmPlanOptions<double>{false, false, 256, 256, 256});
+
+  EXPECT_GT(double_plan.useful_threads(), float_plan.useful_threads());
+}
+
 TEST(GemmPlan, BlockingUsesIsaSpecificRegisterRows) {
   const auto avx2 = onnx_light_cpu::detail::SelectGemmBlocking(sizeof(float), 8, 4);
   const auto avx512 = onnx_light_cpu::detail::SelectGemmBlocking(sizeof(float), 16, 12);

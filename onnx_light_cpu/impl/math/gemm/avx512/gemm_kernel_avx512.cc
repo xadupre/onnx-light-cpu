@@ -340,6 +340,96 @@ void GemmMicroKernel_AVX512_F32_MR12(std::size_t nb, std::size_t K, float alpha,
 #undef STORE_ROW
 }
 
+void GemmMicroKernel_AVX512_F64_MR6_NR32(std::size_t nb, std::size_t K, double alpha, double beta,
+                                         const double *Bmat, std::size_t N, const double *Crow_base,
+                                         std::size_t Cstride, double *Yrow_base,
+                                         std::size_t Ystride, std::size_t n0, GemmAccumMode mode,
+                                         const double *Apack) {
+  if (nb != 32) {
+    return GemmMicroKernel_AVX512_F64Impl<6>(nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
+                                             Yrow_base, Ystride, n0, mode, Apack);
+  }
+
+#define DECLARE_ACCUMULATORS(R)                                                                    \
+  __m512d acc0_##R = _mm512_setzero_pd();                                                          \
+  __m512d acc1_##R = _mm512_setzero_pd();                                                          \
+  __m512d acc2_##R = _mm512_setzero_pd();                                                          \
+  __m512d acc3_##R = _mm512_setzero_pd()
+  DECLARE_ACCUMULATORS(0);
+  DECLARE_ACCUMULATORS(1);
+  DECLARE_ACCUMULATORS(2);
+  DECLARE_ACCUMULATORS(3);
+  DECLARE_ACCUMULATORS(4);
+  DECLARE_ACCUMULATORS(5);
+#undef DECLARE_ACCUMULATORS
+
+  for (std::size_t k = 0; k < K; ++k) {
+    const double *b_row = Bmat + k * N + n0;
+    const __m512d vb0 = _mm512_loadu_pd(b_row);
+    const __m512d vb1 = _mm512_loadu_pd(b_row + 8);
+    const __m512d vb2 = _mm512_loadu_pd(b_row + 16);
+    const __m512d vb3 = _mm512_loadu_pd(b_row + 24);
+    if (k + kGemmPrefetchDistanceK < K) {
+      PrefetchT0(b_row + kGemmPrefetchDistanceK * N);
+    }
+#define ACCUMULATE_ROW(R)                                                                          \
+  do {                                                                                             \
+    const __m512d va = _mm512_set1_pd(Apack[(R) * K + k]);                                         \
+    acc0_##R = MulAdd(va, vb0, acc0_##R);                                                          \
+    acc1_##R = MulAdd(va, vb1, acc1_##R);                                                          \
+    acc2_##R = MulAdd(va, vb2, acc2_##R);                                                          \
+    acc3_##R = MulAdd(va, vb3, acc3_##R);                                                          \
+  } while (false)
+    ACCUMULATE_ROW(0);
+    ACCUMULATE_ROW(1);
+    ACCUMULATE_ROW(2);
+    ACCUMULATE_ROW(3);
+    ACCUMULATE_ROW(4);
+    ACCUMULATE_ROW(5);
+#undef ACCUMULATE_ROW
+  }
+
+  const __m512d valpha = _mm512_set1_pd(alpha);
+  const __m512d vbeta = _mm512_set1_pd(beta);
+  const bool alpha_is_one = alpha == 1.0;
+  const bool beta_is_one = beta == 1.0;
+#define STORE_ROW(R)                                                                               \
+  do {                                                                                             \
+    double *y_row = Yrow_base + (R) * Ystride + n0;                                                \
+    __m512d result0 = alpha_is_one ? acc0_##R : _mm512_mul_pd(valpha, acc0_##R);                   \
+    __m512d result1 = alpha_is_one ? acc1_##R : _mm512_mul_pd(valpha, acc1_##R);                   \
+    __m512d result2 = alpha_is_one ? acc2_##R : _mm512_mul_pd(valpha, acc2_##R);                   \
+    __m512d result3 = alpha_is_one ? acc3_##R : _mm512_mul_pd(valpha, acc3_##R);                   \
+    if (mode == GemmAccumMode::kInitBias) {                                                        \
+      const double *c_row = Crow_base + (R) * Cstride + n0;                                        \
+      const __m512d bias0 = _mm512_loadu_pd(c_row);                                                \
+      const __m512d bias1 = _mm512_loadu_pd(c_row + 8);                                            \
+      const __m512d bias2 = _mm512_loadu_pd(c_row + 16);                                           \
+      const __m512d bias3 = _mm512_loadu_pd(c_row + 24);                                           \
+      result0 = _mm512_add_pd(result0, beta_is_one ? bias0 : _mm512_mul_pd(vbeta, bias0));         \
+      result1 = _mm512_add_pd(result1, beta_is_one ? bias1 : _mm512_mul_pd(vbeta, bias1));         \
+      result2 = _mm512_add_pd(result2, beta_is_one ? bias2 : _mm512_mul_pd(vbeta, bias2));         \
+      result3 = _mm512_add_pd(result3, beta_is_one ? bias3 : _mm512_mul_pd(vbeta, bias3));         \
+    } else if (mode == GemmAccumMode::kAccumulate) {                                               \
+      result0 = _mm512_add_pd(result0, _mm512_loadu_pd(y_row));                                    \
+      result1 = _mm512_add_pd(result1, _mm512_loadu_pd(y_row + 8));                                \
+      result2 = _mm512_add_pd(result2, _mm512_loadu_pd(y_row + 16));                               \
+      result3 = _mm512_add_pd(result3, _mm512_loadu_pd(y_row + 24));                               \
+    }                                                                                              \
+    _mm512_storeu_pd(y_row, result0);                                                              \
+    _mm512_storeu_pd(y_row + 8, result1);                                                          \
+    _mm512_storeu_pd(y_row + 16, result2);                                                         \
+    _mm512_storeu_pd(y_row + 24, result3);                                                         \
+  } while (false)
+  STORE_ROW(0);
+  STORE_ROW(1);
+  STORE_ROW(2);
+  STORE_ROW(3);
+  STORE_ROW(4);
+  STORE_ROW(5);
+#undef STORE_ROW
+}
+
 void GemmMicroKernel_AVX512_F32_MR12_NR16(std::size_t K, float alpha, float beta, const float *Bmat,
                                           std::size_t N, const float *Crow_base,
                                           std::size_t Cstride, float *Yrow_base,
@@ -627,6 +717,10 @@ void GemmMicroKernel_AVX512_F64(std::size_t mr, std::size_t nb, std::size_t K, d
     return GemmMicroKernel_AVX512_F64Impl<5>(nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
                                              Yrow_base, Ystride, n0, mode, Apack);
   case 6:
+    if (nb == 32) {
+      return GemmMicroKernel_AVX512_F64_MR6_NR32(nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
+                                                 Yrow_base, Ystride, n0, mode, Apack);
+    }
     return GemmMicroKernel_AVX512_F64Impl<6>(nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
                                              Yrow_base, Ystride, n0, mode, Apack);
   case 7:

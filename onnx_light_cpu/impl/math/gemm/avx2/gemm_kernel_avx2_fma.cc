@@ -91,6 +91,22 @@ inline void Transpose4x4Float(const float *src, std::size_t src_stride, float *d
   _mm_storeu_ps(dst + 3 * dst_stride, row3);
 }
 
+inline void Transpose4x4Double(const double *src, std::size_t src_stride, double *dst,
+                               std::size_t dst_stride) {
+  const __m256d row0 = _mm256_loadu_pd(src);
+  const __m256d row1 = _mm256_loadu_pd(src + src_stride);
+  const __m256d row2 = _mm256_loadu_pd(src + 2 * src_stride);
+  const __m256d row3 = _mm256_loadu_pd(src + 3 * src_stride);
+  const __m256d low01 = _mm256_unpacklo_pd(row0, row1);
+  const __m256d high01 = _mm256_unpackhi_pd(row0, row1);
+  const __m256d low23 = _mm256_unpacklo_pd(row2, row3);
+  const __m256d high23 = _mm256_unpackhi_pd(row2, row3);
+  _mm256_storeu_pd(dst, _mm256_permute2f128_pd(low01, low23, 0x20));
+  _mm256_storeu_pd(dst + dst_stride, _mm256_permute2f128_pd(high01, high23, 0x20));
+  _mm256_storeu_pd(dst + 2 * dst_stride, _mm256_permute2f128_pd(low01, low23, 0x31));
+  _mm256_storeu_pd(dst + 3 * dst_stride, _mm256_permute2f128_pd(high01, high23, 0x31));
+}
+
 template <bool Bfloat16>
 void PackTransposeHalfToFloat32(const std::uint16_t *src, std::size_t src_stride, float *dst,
                                 std::size_t dst_rows, std::size_t dst_cols) {
@@ -594,6 +610,28 @@ void GemmPackTransposeFloat32_AVX2(const float *src, std::size_t src_stride, flo
     for (; column + 4 <= dst_cols; column += 4) {
       Transpose4x4Float(src + column * src_stride + row, src_stride, dst + row * dst_cols + column,
                         dst_cols);
+    }
+    for (; column < dst_cols; ++column) {
+      for (std::size_t tile_row = 0; tile_row < 4; ++tile_row) {
+        dst[(row + tile_row) * dst_cols + column] = src[column * src_stride + row + tile_row];
+      }
+    }
+  }
+  for (; row < dst_rows; ++row) {
+    for (std::size_t column = 0; column < dst_cols; ++column) {
+      dst[row * dst_cols + column] = src[column * src_stride + row];
+    }
+  }
+}
+
+void GemmPackTransposeFloat64_AVX2(const double *src, std::size_t src_stride, double *dst,
+                                   std::size_t dst_rows, std::size_t dst_cols) {
+  std::size_t row = 0;
+  for (; row + 4 <= dst_rows; row += 4) {
+    std::size_t column = 0;
+    for (; column + 4 <= dst_cols; column += 4) {
+      Transpose4x4Double(src + column * src_stride + row, src_stride, dst + row * dst_cols + column,
+                         dst_cols);
     }
     for (; column < dst_cols; ++column) {
       for (std::size_t tile_row = 0; tile_row < 4; ++tile_row) {
