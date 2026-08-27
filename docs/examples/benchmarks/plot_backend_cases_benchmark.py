@@ -73,7 +73,7 @@ parser.add_argument(
 parser.add_argument(
     "--max-cases",
     type=int,
-    default=1000,
+    default=20,
     help="maximum number of matching cases to run (default: 1000; 0 disables the limit)",
 )
 parser.add_argument(
