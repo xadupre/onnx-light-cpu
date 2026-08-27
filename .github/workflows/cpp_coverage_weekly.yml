@@ -1,6 +1,8 @@
 name: cpp-coverage-weekly
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
   schedule:
     # Every Monday at 05:00 UTC.
