@@ -394,11 +394,12 @@ endif()
 file(GLOB PY_KERNELS_SOURCES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/onnx_py/*.cc"
 )
-# The kernel-registration binding (_cpuregister) links onnx-light and is built
-# as a separate module below; keep it out of the _cpukernels module, which only
-# exposes the SIMD detection helpers.
-list(REMOVE_ITEM PY_KERNELS_SOURCES
-    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/onnx_py/_cpuregister.cc")
+file(GLOB PY_REGISTER_SOURCES CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/onnx_py/_cpuregister*.cc"
+)
+# Registration sources link onnx-light and form a separate extension below;
+# keep the whole family out of the standalone _cpukernels module.
+list(REMOVE_ITEM PY_KERNELS_SOURCES ${PY_REGISTER_SOURCES})
 
 # ---------------------------------------------------------------------------
 # C++ library: lib_onnx_light_cpu
@@ -962,13 +963,11 @@ if(ONNX_LIGHT_CPU_BUILD_PYTHON)
   # -------------------------------------------------------------------------
   # Kernel-registration Python extension: _cpuregister
   # -------------------------------------------------------------------------
-  # Exposes ``register_all_kernels()``, which installs the onnx-light ``Abs``,
-  # ``Exp``, ``Log`` and ``Not`` kernel classes into onnx-light's shared
-  # ``KernelDispatchTable``. It links the onnx-light kernel-registration
-  # library and is therefore only built when the integration is enabled.
+  # Exposes registration and inventory APIs. It links the onnx-light
+  # kernel-registration library and is therefore only built when the
+  # integration is enabled.
   if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
-    nanobind_add_module(_cpuregister STABLE_ABI
-        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/onnx_py/_cpuregister.cc")
+    nanobind_add_module(_cpuregister STABLE_ABI ${PY_REGISTER_SOURCES})
     target_include_directories(_cpuregister PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}")
     target_link_libraries(_cpuregister PRIVATE lib_onnx_light_cpu_kernels)
