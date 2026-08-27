@@ -122,7 +122,7 @@ template <typename Kernel> void CheckTuningSchema(const char *op_type) {
     const bool log_bfloat16 =
         std::string_view(op_type) == "Log" && type == rt_ns::DataType::BFLOAT16;
     EXPECT_EQ(defaults.template Get<int64_t>("parallel.threshold_bytes"), log_bfloat16 ? 512 * 1024
-                                                                          : half       ? 1024 * 1024
+                                                                          : half ? 1024 * 1024
                                                                                  : 2 * 1024 * 1024);
     EXPECT_EQ(defaults.template Get<int64_t>("parallel.target_block_bytes"), log_bfloat16
                                                                                  ? 64 * 1024
