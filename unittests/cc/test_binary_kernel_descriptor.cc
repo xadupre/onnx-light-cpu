@@ -9,6 +9,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <cmath>
 #include <cstdint>
@@ -162,6 +163,36 @@ TEST(BinaryKernelDescriptor, PowMixedTypesExecuteWithBaseOutputType) {
   pow.ResolveAdapter(BinaryDataType::FLOAT16, BinaryDataType::INT64, BinaryDataType::FLOAT16)
       .scalar(&half_negative_one, &large_odd_exponent, &half_parity_output);
   EXPECT_FLOAT_EQ(onnx_light_cpu::detail::Float16BitsToFloat(half_parity_output), -1.0f);
+
+  const auto &half_integer =
+      pow.ResolveAdapter(BinaryDataType::FLOAT16, BinaryDataType::INT32, BinaryDataType::FLOAT16);
+  ASSERT_NE(half_integer.bulk_contiguous, nullptr);
+  ASSERT_NE(half_integer.bulk_left_scalar, nullptr);
+  ASSERT_NE(half_integer.bulk_right_scalar, nullptr);
+  const std::array<std::uint16_t, 5> half_bases = {
+      onnx_light_cpu::detail::FloatToFloat16Bits(2.0f),
+      onnx_light_cpu::detail::FloatToFloat16Bits(-2.0f),
+      onnx_light_cpu::detail::FloatToFloat16Bits(3.0f),
+      onnx_light_cpu::detail::FloatToFloat16Bits(0.5f), half_negative_one};
+  const std::array<std::int32_t, 5> integer_exponents = {2, 3, 4, -2, odd_exponent};
+  std::array<std::uint16_t, 5> half_outputs = {};
+  half_integer.bulk_contiguous(half_bases.data(), integer_exponents.data(), half_outputs.data(),
+                               half_outputs.size());
+  const std::array<float, 5> expected_half_outputs = {4.0f, -8.0f, 81.0f, 4.0f, -1.0f};
+  for (std::size_t i = 0; i < half_outputs.size(); ++i) {
+    EXPECT_FLOAT_EQ(onnx_light_cpu::detail::Float16BitsToFloat(half_outputs[i]),
+                    expected_half_outputs[i]);
+  }
+
+  for (const BinaryDataType exponent_type :
+       {BinaryDataType::FLOAT, BinaryDataType::FLOAT16, BinaryDataType::INT32,
+        BinaryDataType::INT64, BinaryDataType::UINT32, BinaryDataType::UINT64}) {
+    const auto &bfloat_mixed =
+        pow.ResolveAdapter(BinaryDataType::BFLOAT16, exponent_type, BinaryDataType::BFLOAT16);
+    EXPECT_NE(bfloat_mixed.bulk_contiguous, nullptr);
+    EXPECT_NE(bfloat_mixed.bulk_left_scalar, nullptr);
+    EXPECT_NE(bfloat_mixed.bulk_right_scalar, nullptr);
+  }
 }
 
 TEST(BinaryKernelDescriptor, PowIntegerFastPathPreservesFiniteBoundaryResults) {

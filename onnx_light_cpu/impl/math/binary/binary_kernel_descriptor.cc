@@ -348,6 +348,77 @@ float FastFloatPower(float base, float exponent) {
   return std::pow(base, exponent);
 }
 
+void EvaluateFloatPowBlock(const float *base, const float *exponent, float *output,
+                           std::size_t count) {
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
+  static const bool use_avx512 = DetectSimdLevel() >= SimdLevel::kAVX512;
+  if (count >= 16 && use_avx512) {
+    PowFloat32_AVX512(base, exponent, output, count);
+    return;
+  }
+#endif
+  for (std::size_t i = 0; i < count; ++i) {
+    output[i] = FastFloatPower(base[i], exponent[i]);
+  }
+}
+
+void EvaluateFloatPowLeftScalarBlock(float base, const float *exponent, float *output,
+                                     std::size_t count) {
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
+  static const bool use_avx512 = DetectSimdLevel() >= SimdLevel::kAVX512;
+  if (count >= 16 && use_avx512) {
+    PowFloat32LeftScalar_AVX512(base, exponent, output, count);
+    return;
+  }
+#endif
+  for (std::size_t i = 0; i < count; ++i) {
+    output[i] = FastFloatPower(base, exponent[i]);
+  }
+}
+
+void EvaluateFloatPowRightScalarBlock(const float *base, float exponent, float *output,
+                                      std::size_t count) {
+  if (exponent == 0.0f) {
+    std::fill_n(output, count, 1.0f);
+    return;
+  }
+  if (exponent == 1.0f) {
+    std::copy_n(base, count, output);
+    return;
+  }
+  if (exponent == 2.0f) {
+    for (std::size_t i = 0; i < count; ++i) {
+      output[i] = FastFloatIntegerPower<2>(base[i]);
+    }
+    return;
+  }
+  if (exponent == 3.0f) {
+    for (std::size_t i = 0; i < count; ++i) {
+      output[i] = FastFloatIntegerPower<3>(base[i]);
+    }
+    return;
+  }
+  if (exponent == 4.0f) {
+    for (std::size_t i = 0; i < count; ++i) {
+      output[i] = FastFloatIntegerPower<4>(base[i]);
+    }
+    return;
+  }
+  if (exponent == 5.0f) {
+    for (std::size_t i = 0; i < count; ++i) {
+      output[i] = FastFloatIntegerPower<5>(base[i]);
+    }
+    return;
+  }
+  constexpr std::size_t kBlockSize = 1024;
+  alignas(32) float exponent_f32[kBlockSize];
+  for (std::size_t offset = 0; offset < count; offset += kBlockSize) {
+    const std::size_t block = std::min(kBlockSize, count - offset);
+    std::fill_n(exponent_f32, block, exponent);
+    EvaluateFloatPowBlock(base + offset, exponent_f32, output + offset, block);
+  }
+}
+
 void BulkFloatPowRightScalar(const void *left, const void *right, void *out, std::size_t count) {
   const auto *typed_left = static_cast<const float *>(left);
   const float exponent = *static_cast<const float *>(right);
@@ -409,16 +480,7 @@ void BulkFloatPowLeftScalar(const void *left, const void *right, void *out, std:
   const float base = *static_cast<const float *>(left);
   const auto *typed_right = static_cast<const float *>(right);
   auto *typed_out = static_cast<float *>(out);
-#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
-  static const bool use_avx512 = DetectSimdLevel() >= SimdLevel::kAVX512;
-  if (count >= 16 && use_avx512) {
-    PowFloat32LeftScalar_AVX512(base, typed_right, typed_out, count);
-    return;
-  }
-#endif
-  for (std::size_t i = 0; i < count; ++i) {
-    typed_out[i] = FastFloatPower(base, typed_right[i]);
-  }
+  EvaluateFloatPowLeftScalarBlock(base, typed_right, typed_out, count);
 }
 
 void ComputeFloat16Add(const void *, const void *, void *);
@@ -443,7 +505,11 @@ ONNX_LIGHT_CPU_DECLARE_HALF_BULK(PRelu)
 void BulkFloat16Mod(const void *, const void *, void *, std::size_t);
 void BulkBfloat16Mod(const void *, const void *, void *, std::size_t);
 void BulkFloat16Pow(const void *, const void *, void *, std::size_t);
+void BulkFloat16PowLeft(const void *, const void *, void *, std::size_t);
+void BulkFloat16PowRight(const void *, const void *, void *, std::size_t);
 void BulkBfloat16Pow(const void *, const void *, void *, std::size_t);
+void BulkBfloat16PowLeft(const void *, const void *, void *, std::size_t);
+void BulkBfloat16PowRight(const void *, const void *, void *, std::size_t);
 void BulkFloat16PRelu(const void *, const void *, void *, std::size_t);
 void BulkBfloat16PRelu(const void *, const void *, void *, std::size_t);
 
@@ -874,13 +940,211 @@ void BulkBfloat16Mod(const void *left, const void *right, void *out, std::size_t
 }
 
 void BulkFloat16Pow(const void *left, const void *right, void *out, std::size_t count) {
-  BulkHalfContiguous<detail::ConvertFloat16ToFloat32, detail::ConvertFloat32ToFloat16>(
-      left, right, out, count, [](float a, float b) { return std::pow(a, b); });
+  constexpr std::size_t kBlockSize = 1024;
+  const auto *bases = static_cast<const std::uint16_t *>(left);
+  const auto *exponents = static_cast<const std::uint16_t *>(right);
+  auto *output = static_cast<std::uint16_t *>(out);
+  alignas(32) float base_f32[kBlockSize];
+  alignas(32) float exponent_f32[kBlockSize];
+  alignas(32) float output_f32[kBlockSize];
+  for (std::size_t offset = 0; offset < count; offset += kBlockSize) {
+    const std::size_t block = std::min(kBlockSize, count - offset);
+    detail::ConvertFloat16ToFloat32(bases + offset, base_f32, block);
+    detail::ConvertFloat16ToFloat32(exponents + offset, exponent_f32, block);
+    EvaluateFloatPowBlock(base_f32, exponent_f32, output_f32, block);
+    detail::ConvertFloat32ToFloat16(output_f32, output + offset, block);
+  }
 }
 
 void BulkBfloat16Pow(const void *left, const void *right, void *out, std::size_t count) {
   BulkHalfContiguous<detail::ConvertBFloat16ToFloat32, detail::ConvertFloat32ToBFloat16>(
-      left, right, out, count, [](float a, float b) { return std::pow(a, b); });
+      left, right, out, count, [](float a, float b) { return FastFloatPower(a, b); });
+}
+
+template <auto DecodeOne, auto Decode, auto Encode>
+void BulkHalfPowLeft(const void *left, const void *right, void *out, std::size_t count) {
+  constexpr std::size_t kBlockSize = 1024;
+  const float base = DecodeOne(*static_cast<const std::uint16_t *>(left));
+  const auto *exponents = static_cast<const std::uint16_t *>(right);
+  auto *output = static_cast<std::uint16_t *>(out);
+  alignas(32) float exponent_f32[kBlockSize];
+  alignas(32) float output_f32[kBlockSize];
+  for (std::size_t offset = 0; offset < count; offset += kBlockSize) {
+    const std::size_t block = std::min(kBlockSize, count - offset);
+    Decode(exponents + offset, exponent_f32, block);
+    EvaluateFloatPowLeftScalarBlock(base, exponent_f32, output_f32, block);
+    Encode(output_f32, output + offset, block);
+  }
+}
+
+template <auto DecodeOne, auto Decode, auto Encode>
+void BulkHalfPowRight(const void *left, const void *right, void *out, std::size_t count) {
+  constexpr std::size_t kBlockSize = 1024;
+  const auto *bases = static_cast<const std::uint16_t *>(left);
+  const float exponent = DecodeOne(*static_cast<const std::uint16_t *>(right));
+  auto *output = static_cast<std::uint16_t *>(out);
+  if (exponent == 1.0f) {
+    std::copy_n(bases, count, output);
+    return;
+  }
+  alignas(32) float base_f32[kBlockSize];
+  alignas(32) float output_f32[kBlockSize];
+  for (std::size_t offset = 0; offset < count; offset += kBlockSize) {
+    const std::size_t block = std::min(kBlockSize, count - offset);
+    Decode(bases + offset, base_f32, block);
+    EvaluateFloatPowRightScalarBlock(base_f32, exponent, output_f32, block);
+    Encode(output_f32, output + offset, block);
+  }
+}
+
+void BulkFloat16PowLeft(const void *left, const void *right, void *out, std::size_t count) {
+  BulkHalfPowLeft<detail::Float16BitsToFloat, detail::ConvertFloat16ToFloat32,
+                  detail::ConvertFloat32ToFloat16>(left, right, out, count);
+}
+
+void BulkFloat16PowRight(const void *left, const void *right, void *out, std::size_t count) {
+  BulkHalfPowRight<detail::Float16BitsToFloat, detail::ConvertFloat16ToFloat32,
+                   detail::ConvertFloat32ToFloat16>(left, right, out, count);
+}
+
+void BulkBfloat16PowLeft(const void *left, const void *right, void *out, std::size_t count) {
+  BulkHalfPowLeft<detail::Bfloat16BitsToFloat, detail::ConvertBFloat16ToFloat32,
+                  detail::ConvertFloat32ToBFloat16>(left, right, out, count);
+}
+
+void BulkBfloat16PowRight(const void *left, const void *right, void *out, std::size_t count) {
+  BulkHalfPowRight<detail::Bfloat16BitsToFloat, detail::ConvertBFloat16ToFloat32,
+                   detail::ConvertFloat32ToBFloat16>(left, right, out, count);
+}
+
+template <typename TExp, auto DecodeExponent, bool IntegerExponent>
+float EvaluateHalfPow(float base, TExp exponent) {
+  if constexpr (IntegerExponent) {
+    if (exponent == static_cast<TExp>(0)) {
+      return 1.0f;
+    }
+    if (exponent == static_cast<TExp>(1)) {
+      return base;
+    }
+    if (exponent == static_cast<TExp>(2)) {
+      return FastFloatIntegerPower<2>(base);
+    }
+    if (exponent == static_cast<TExp>(3)) {
+      return FastFloatIntegerPower<3>(base);
+    }
+    if (exponent == static_cast<TExp>(4)) {
+      return FastFloatIntegerPower<4>(base);
+    }
+    if (exponent == static_cast<TExp>(5)) {
+      return FastFloatIntegerPower<5>(base);
+    }
+    return PowIntegerExponent(base, exponent);
+  } else {
+    return FastFloatPower(base, DecodeExponent(exponent));
+  }
+}
+
+template <int Exponent>
+void EvaluateFixedIntegerPowBlock(const float *base, float *output, std::size_t count) {
+  for (std::size_t i = 0; i < count; ++i) {
+    output[i] = FastFloatIntegerPower<Exponent>(base[i]);
+  }
+}
+
+template <typename TExp, auto DecodeBase, auto DecodeBaseBlock, auto Encode, auto DecodeExponent,
+          bool IntegerExponent>
+void BulkMixedHalfPow(const void *left, const void *right, void *out, std::size_t count,
+                      bool left_scalar, bool right_scalar) {
+  constexpr std::size_t kBlockSize = 1024;
+  const auto *bases = static_cast<const std::uint16_t *>(left);
+  const auto *exponents = static_cast<const TExp *>(right);
+  auto *output = static_cast<std::uint16_t *>(out);
+  const float scalar_base = left_scalar ? DecodeBase(*bases) : 0.0f;
+  const TExp scalar_exponent = right_scalar ? *exponents : TExp{};
+  if constexpr (IntegerExponent) {
+    if (right_scalar && scalar_exponent == static_cast<TExp>(1)) {
+      std::copy_n(bases, count, output);
+      return;
+    }
+  }
+  alignas(32) float base_f32[kBlockSize];
+  alignas(32) float output_f32[kBlockSize];
+  for (std::size_t offset = 0; offset < count; offset += kBlockSize) {
+    const std::size_t block = std::min(kBlockSize, count - offset);
+    if (!left_scalar) {
+      DecodeBaseBlock(bases + offset, base_f32, block);
+    }
+    if constexpr (!IntegerExponent && std::is_same_v<TExp, float>) {
+      if (!right_scalar) {
+        if (left_scalar) {
+          EvaluateFloatPowLeftScalarBlock(scalar_base, exponents + offset, output_f32, block);
+        } else {
+          EvaluateFloatPowBlock(base_f32, exponents + offset, output_f32, block);
+        }
+        Encode(output_f32, output + offset, block);
+        continue;
+      }
+    }
+    if constexpr (!IntegerExponent) {
+      if (right_scalar && !left_scalar) {
+        EvaluateFloatPowRightScalarBlock(base_f32, DecodeExponent(scalar_exponent), output_f32,
+                                         block);
+        Encode(output_f32, output + offset, block);
+        continue;
+      }
+    }
+    if constexpr (IntegerExponent) {
+      if (right_scalar && !left_scalar) {
+        if (scalar_exponent == static_cast<TExp>(2)) {
+          EvaluateFixedIntegerPowBlock<2>(base_f32, output_f32, block);
+          Encode(output_f32, output + offset, block);
+          continue;
+        }
+        if (scalar_exponent == static_cast<TExp>(3)) {
+          EvaluateFixedIntegerPowBlock<3>(base_f32, output_f32, block);
+          Encode(output_f32, output + offset, block);
+          continue;
+        }
+        if (scalar_exponent == static_cast<TExp>(4)) {
+          EvaluateFixedIntegerPowBlock<4>(base_f32, output_f32, block);
+          Encode(output_f32, output + offset, block);
+          continue;
+        }
+        if (scalar_exponent == static_cast<TExp>(5)) {
+          EvaluateFixedIntegerPowBlock<5>(base_f32, output_f32, block);
+          Encode(output_f32, output + offset, block);
+          continue;
+        }
+      }
+    }
+    for (std::size_t i = 0; i < block; ++i) {
+      output_f32[i] = EvaluateHalfPow<TExp, DecodeExponent, IntegerExponent>(
+          left_scalar ? scalar_base : base_f32[i],
+          right_scalar ? scalar_exponent : exponents[offset + i]);
+    }
+    Encode(output_f32, output + offset, block);
+  }
+}
+
+template <typename TExp, auto DecodeBase, auto DecodeBaseBlock, auto Encode, auto DecodeExponent,
+          bool IntegerExponent>
+void BulkMixedHalfPowContiguous(const void *left, const void *right, void *out, std::size_t count) {
+  BulkMixedHalfPow<TExp, DecodeBase, DecodeBaseBlock, Encode, DecodeExponent, IntegerExponent>(
+      left, right, out, count, false, false);
+}
+
+template <typename TExp, auto DecodeBase, auto DecodeBaseBlock, auto Encode, auto DecodeExponent,
+          bool IntegerExponent>
+void BulkMixedHalfPowLeft(const void *left, const void *right, void *out, std::size_t count) {
+  BulkMixedHalfPow<TExp, DecodeBase, DecodeBaseBlock, Encode, DecodeExponent, IntegerExponent>(
+      left, right, out, count, true, false);
+}
+
+template <typename TExp, auto DecodeBase, auto DecodeBaseBlock, auto Encode, auto DecodeExponent,
+          bool IntegerExponent>
+void BulkMixedHalfPowRight(const void *left, const void *right, void *out, std::size_t count) {
+  BulkMixedHalfPow<TExp, DecodeBase, DecodeBaseBlock, Encode, DecodeExponent, IntegerExponent>(
+      left, right, out, count, false, true);
 }
 
 template <typename TExp, auto DecodeBase, auto Encode, auto DecodeExponent>
@@ -1536,6 +1800,15 @@ void SelectAdditionalBulk(BinaryOperator op, DT left, DT right, const Attrs &att
   }
 
   if (op == BinaryOperator::kPow && left != right) {
+#define ONNX_LIGHT_CPU_BIND_MIXED_HALF_POW(TEXP, DECODE_BASE, DECODE_BASE_BLOCK, ENCODE,           \
+                                           DECODE_EXPONENT, INTEGER_EXPONENT)                      \
+  adapter.bulk_contiguous =                                                                        \
+      &BulkMixedHalfPowContiguous<TEXP, DECODE_BASE, DECODE_BASE_BLOCK, ENCODE, DECODE_EXPONENT,   \
+                                  INTEGER_EXPONENT>;                                               \
+  adapter.bulk_left_scalar = &BulkMixedHalfPowLeft<TEXP, DECODE_BASE, DECODE_BASE_BLOCK, ENCODE,   \
+                                                   DECODE_EXPONENT, INTEGER_EXPONENT>;             \
+  adapter.bulk_right_scalar = &BulkMixedHalfPowRight<TEXP, DECODE_BASE, DECODE_BASE_BLOCK, ENCODE, \
+                                                     DECODE_EXPONENT, INTEGER_EXPONENT>;
 #define ONNX_LIGHT_CPU_BIND_POW_RIGHT_CASE(TYPE, RIGHT_CPP, BASE_CPP)                              \
   case DT::TYPE:                                                                                   \
     ONNX_LIGHT_CPU_BIND_TYPED_BULK(BASE_CPP, RIGHT_CPP, BASE_CPP, ComputePow<BASE_CPP, RIGHT_CPP>) \
@@ -1546,6 +1819,76 @@ void SelectAdditionalBulk(BinaryOperator op, DT left, DT right, const Attrs &att
         ONNX_LIGHT_CPU_BIND_POW_RIGHT_CASE(INT64, std::int64_t, float)
         ONNX_LIGHT_CPU_BIND_POW_RIGHT_CASE(UINT32, std::uint32_t, float)
         ONNX_LIGHT_CPU_BIND_POW_RIGHT_CASE(UINT64, std::uint64_t, float)
+      default:
+        break;
+      }
+    } else if (left == DT::FLOAT16) {
+      switch (right) {
+      case DT::FLOAT:
+        ONNX_LIGHT_CPU_BIND_MIXED_HALF_POW(
+            float, detail::Float16BitsToFloat, detail::ConvertFloat16ToFloat32,
+            detail::ConvertFloat32ToFloat16, CastExponent<float>, false)
+        break;
+      case DT::BFLOAT16:
+        ONNX_LIGHT_CPU_BIND_MIXED_HALF_POW(
+            std::uint16_t, detail::Float16BitsToFloat, detail::ConvertFloat16ToFloat32,
+            detail::ConvertFloat32ToFloat16, detail::Bfloat16BitsToFloat, false)
+        break;
+      case DT::INT32:
+        ONNX_LIGHT_CPU_BIND_MIXED_HALF_POW(
+            std::int32_t, detail::Float16BitsToFloat, detail::ConvertFloat16ToFloat32,
+            detail::ConvertFloat32ToFloat16, CastExponent<std::int32_t>, true)
+        break;
+      case DT::INT64:
+        ONNX_LIGHT_CPU_BIND_MIXED_HALF_POW(
+            std::int64_t, detail::Float16BitsToFloat, detail::ConvertFloat16ToFloat32,
+            detail::ConvertFloat32ToFloat16, CastExponent<std::int64_t>, true)
+        break;
+      case DT::UINT32:
+        ONNX_LIGHT_CPU_BIND_MIXED_HALF_POW(
+            std::uint32_t, detail::Float16BitsToFloat, detail::ConvertFloat16ToFloat32,
+            detail::ConvertFloat32ToFloat16, CastExponent<std::uint32_t>, true)
+        break;
+      case DT::UINT64:
+        ONNX_LIGHT_CPU_BIND_MIXED_HALF_POW(
+            std::uint64_t, detail::Float16BitsToFloat, detail::ConvertFloat16ToFloat32,
+            detail::ConvertFloat32ToFloat16, CastExponent<std::uint64_t>, true)
+        break;
+      default:
+        break;
+      }
+    } else if (left == DT::BFLOAT16) {
+      switch (right) {
+      case DT::FLOAT:
+        ONNX_LIGHT_CPU_BIND_MIXED_HALF_POW(
+            float, detail::Bfloat16BitsToFloat, detail::ConvertBFloat16ToFloat32,
+            detail::ConvertFloat32ToBFloat16, CastExponent<float>, false)
+        break;
+      case DT::FLOAT16:
+        ONNX_LIGHT_CPU_BIND_MIXED_HALF_POW(
+            std::uint16_t, detail::Bfloat16BitsToFloat, detail::ConvertBFloat16ToFloat32,
+            detail::ConvertFloat32ToBFloat16, detail::Float16BitsToFloat, false)
+        break;
+      case DT::INT32:
+        ONNX_LIGHT_CPU_BIND_MIXED_HALF_POW(
+            std::int32_t, detail::Bfloat16BitsToFloat, detail::ConvertBFloat16ToFloat32,
+            detail::ConvertFloat32ToBFloat16, CastExponent<std::int32_t>, true)
+        break;
+      case DT::INT64:
+        ONNX_LIGHT_CPU_BIND_MIXED_HALF_POW(
+            std::int64_t, detail::Bfloat16BitsToFloat, detail::ConvertBFloat16ToFloat32,
+            detail::ConvertFloat32ToBFloat16, CastExponent<std::int64_t>, true)
+        break;
+      case DT::UINT32:
+        ONNX_LIGHT_CPU_BIND_MIXED_HALF_POW(
+            std::uint32_t, detail::Bfloat16BitsToFloat, detail::ConvertBFloat16ToFloat32,
+            detail::ConvertFloat32ToBFloat16, CastExponent<std::uint32_t>, true)
+        break;
+      case DT::UINT64:
+        ONNX_LIGHT_CPU_BIND_MIXED_HALF_POW(
+            std::uint64_t, detail::Bfloat16BitsToFloat, detail::ConvertBFloat16ToFloat32,
+            detail::ConvertFloat32ToBFloat16, CastExponent<std::uint64_t>, true)
+        break;
       default:
         break;
       }
@@ -1569,6 +1912,7 @@ void SelectAdditionalBulk(BinaryOperator op, DT left, DT right, const Attrs &att
       }
     }
 #undef ONNX_LIGHT_CPU_BIND_POW_RIGHT_CASE
+#undef ONNX_LIGHT_CPU_BIND_MIXED_HALF_POW
     return;
   }
   if (left != right) {
@@ -1636,23 +1980,11 @@ void SelectAdditionalBulk(BinaryOperator op, DT left, DT right, const Attrs &att
       ONNX_LIGHT_CPU_BIND_TYPED_BULK(std::int64_t, std::int64_t, std::int64_t,
                                      ComputePow<std::int64_t, std::int64_t>)
     } else if (left == DT::FLOAT16) {
-      adapter.bulk_left_scalar = &BulkComputeLeftScalar<
-          std::uint16_t, std::uint16_t, std::uint16_t,
-          &ComputeHalfPow<std::uint16_t, detail::Float16BitsToFloat, detail::FloatToFloat16Bits,
-                          detail::Float16BitsToFloat>>;
-      adapter.bulk_right_scalar = &BulkComputeRightScalar<
-          std::uint16_t, std::uint16_t, std::uint16_t,
-          &ComputeHalfPow<std::uint16_t, detail::Float16BitsToFloat, detail::FloatToFloat16Bits,
-                          detail::Float16BitsToFloat>>;
+      adapter.bulk_left_scalar = &BulkFloat16PowLeft;
+      adapter.bulk_right_scalar = &BulkFloat16PowRight;
     } else if (left == DT::BFLOAT16) {
-      adapter.bulk_left_scalar = &BulkComputeLeftScalar<
-          std::uint16_t, std::uint16_t, std::uint16_t,
-          &ComputeHalfPow<std::uint16_t, detail::Bfloat16BitsToFloat, detail::FloatToBFloat16Bits,
-                          detail::Bfloat16BitsToFloat>>;
-      adapter.bulk_right_scalar = &BulkComputeRightScalar<
-          std::uint16_t, std::uint16_t, std::uint16_t,
-          &ComputeHalfPow<std::uint16_t, detail::Bfloat16BitsToFloat, detail::FloatToBFloat16Bits,
-                          detail::Bfloat16BitsToFloat>>;
+      adapter.bulk_left_scalar = &BulkBfloat16PowLeft;
+      adapter.bulk_right_scalar = &BulkBfloat16PowRight;
     }
     break;
   case BinaryOperator::kEqual:
