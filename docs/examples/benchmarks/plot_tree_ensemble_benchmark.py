@@ -6,29 +6,48 @@ This example measures TreeEnsemble-5 regression forests while varying the
 number of trees, input features, and batch size. Batch size 1 is represented
 explicitly because ONNX Runtime uses a specialized execution path for that
 case. The largest forest contains 10,000 trees and the widest input contains
-4,096 features, both representative of production models.
+4,096 features, both representative of production models. Those largest
+configurations are enabled by ``--big``, which defaults to ``True`` on machines
+with more than 64 cores and can be disabled with ``--no-big``.
+
+The example is standalone: it builds every model, runs ONNX Runtime and
+onnx-light + onnx-light-cpu, and measures both without relying on any script
+from the repository.
 """
 
 import argparse
-import json
+import gc
 import os
-from pathlib import Path
-import subprocess
-import sys
-import tempfile
+import statistics
+import time
 
 import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm, TwoSlopeNorm
 import numpy as np
+import onnxruntime
+
+# ``onnx-light`` ships ``onnx_light.onnx`` as a drop-in replacement for the
+# ``onnx`` package; use it to build the models so the example depends on
+# onnx-light rather than onnx.
+from onnx_light.onnx import TensorProto, checker, helper, numpy_helper
+from onnx_light.onnx.reference import ReferenceEvaluator
+
+from onnx_light_cpu import register_kernels
+
+cpu_count = os.cpu_count() or 1
 
 parser = argparse.ArgumentParser(description=__doc__)
-parser.add_argument("-r", "--repeat", type=int, default=100 * (os.cpu_count() or 1))
-parser.add_argument("-w", "--warmup", type=int, default=100 * 20)
+parser.add_argument("-r", "--repeat", type=int, default=10 * cpu_count)
+parser.add_argument("-w", "--warmup", type=int, default=2 * cpu_count)
 parser.add_argument("-t", "--max-repeat-time", type=float, default=1.0)
 parser.add_argument(
     "--big",
-    action="store_true",
-    help="include configurations with 10,000 trees or 4,096 features",
+    action=argparse.BooleanOptionalAction,
+    default=cpu_count > 64,
+    help=(
+        "include configurations with 10,000 trees or 4,096 features, "
+        "enabled by default on machines with more than 64 cores"
+    ),
 )
 args, _ = parser.parse_known_args()
 if args.repeat <= 0:
@@ -38,23 +57,6 @@ if args.warmup < 0:
 if args.max_repeat_time <= 0:
     parser.error("--max-repeat-time must be greater than 0")
 
-runner_name = Path("tools") / "benchmark_tree_ensemble_parity.py"
-root = None
-file_name = globals().get("__file__")
-if file_name is not None:
-    candidate = Path(file_name).resolve().parents[3]
-    if (candidate / runner_name).exists() and (candidate / "CMakeLists.txt").exists():
-        root = candidate
-
-if root is None:
-    candidate = Path.cwd()
-    for parent in [candidate, *candidate.parents]:
-        if (parent / runner_name).exists() and (parent / "CMakeLists.txt").exists():
-            root = parent
-            break
-if root is None:
-    raise RuntimeError(f"Unable to locate repository root containing {runner_name}.")
-runner = root / runner_name
 if os.environ.get("UNITTEST_GOING"):
     tree_counts = (10, 100)
     feature_counts = (4, 64)
@@ -63,37 +65,170 @@ else:
     tree_counts = (10, 100, 1000, 10000) if args.big else (10, 100, 1000)
     feature_counts = (4, 16, 64, 256, 1024, 4096) if args.big else (4, 16, 64, 256, 1024)
     batch_sizes = (1, 8, 32, 128)
-cases = [
-    f"reg_grid_t{trees}_f{features}_b{batch}_f32"
+
+# %%
+# Build one model per configuration
+# ---------------------------------
+#
+# Every configuration is a ``TreeEnsemble`` regression forest of depth 4 with a
+# single output, built directly here so the example runs on its own.
+
+DEPTH = 4
+
+
+def make_case(trees, features, rows, seed):
+    internal_count = (1 << DEPTH) - 1
+    leaf_count = 1 << DEPTH
+    nodes_featureids = []
+    nodes_splits = []
+    true_ids = []
+    false_ids = []
+    true_leafs = []
+    false_leafs = []
+    leaf_weights = []
+    for tree in range(trees):
+        node_offset = tree * internal_count
+        leaf_offset = tree * leaf_count
+        for local_node in range(internal_count):
+            nodes_featureids.append((tree + local_node) % features)
+            nodes_splits.append(((local_node % 7) - 3) * 0.25)
+            for child, ids, leafs in (
+                (2 * local_node + 1, true_ids, true_leafs),
+                (2 * local_node + 2, false_ids, false_leafs),
+            ):
+                if child >= internal_count:
+                    ids.append(leaf_offset + child - internal_count)
+                    leafs.append(1)
+                else:
+                    ids.append(node_offset + child)
+                    leafs.append(0)
+        for leaf in range(leaf_count):
+            leaf_weights.append(((leaf + tree) % 11 - 5) / (max(trees, 1) * 8.0))
+
+    node = helper.make_node(
+        "TreeEnsemble",
+        ["X"],
+        ["scores"],
+        domain="ai.onnx.ml",
+        tree_roots=[tree * internal_count for tree in range(trees)],
+        nodes_featureids=nodes_featureids,
+        nodes_splits=numpy_helper.from_array(np.asarray(nodes_splits, dtype=np.float32)),
+        nodes_modes=numpy_helper.from_array(np.zeros(len(nodes_splits), dtype=np.uint8)),
+        nodes_truenodeids=true_ids,
+        nodes_falsenodeids=false_ids,
+        nodes_trueleafs=true_leafs,
+        nodes_falseleafs=false_leafs,
+        leaf_targetids=[0] * len(leaf_weights),
+        leaf_weights=numpy_helper.from_array(np.asarray(leaf_weights, dtype=np.float32)),
+        n_targets=1,
+        aggregate_function=1,
+        post_transform=0,
+    )
+    graph = helper.make_graph(
+        [node],
+        f"tree_grid_t{trees}_f{features}_b{rows}",
+        [helper.make_tensor_value_info("X", TensorProto.FLOAT, [rows, features])],
+        [helper.make_tensor_value_info("scores", TensorProto.FLOAT, [rows, 1])],
+    )
+    model = helper.make_model(
+        graph,
+        opset_imports=[helper.make_opsetid("", 18), helper.make_opsetid("ai.onnx.ml", 5)],
+        ir_version=13,
+    )
+    checker.check_model(model)
+    rng = np.random.default_rng(seed)
+    feeds = {"X": rng.standard_normal((rows, features)).astype(np.float32)}
+    return model.SerializeToString(), feeds
+
+
+# %%
+# Measure both runtimes
+# ---------------------
+#
+# ``measure`` returns the median duration of a callable, stopping early once
+# ``--max-repeat-time`` seconds have been spent.
+
+
+def measure(function, repeat, warmup, max_duration):
+    spent = 0.0
+    for _ in range(warmup):
+        start = time.perf_counter_ns()
+        function()
+        spent += (time.perf_counter_ns() - start) / 1e9
+        if spent >= max_duration:
+            break
+    timings = []
+    spent = 0.0
+    gc_enabled = gc.isenabled()
+    gc.disable()
+    try:
+        for _ in range(repeat):
+            start = time.perf_counter_ns()
+            function()
+            duration = (time.perf_counter_ns() - start) / 1e9
+            timings.append(duration)
+            spent += duration
+            if spent >= max_duration:
+                break
+    finally:
+        if gc_enabled:
+            gc.enable()
+    return statistics.median(timings)
+
+
+register_kernels()
+threads = min(4, cpu_count)
+options = onnxruntime.SessionOptions()
+options.intra_op_num_threads = threads
+options.inter_op_num_threads = 1
+options.execution_mode = onnxruntime.ExecutionMode.ORT_SEQUENTIAL
+
+records = []
+for seed, (trees, features, batch) in enumerate(
+    (trees, features, batch)
     for trees in tree_counts
     for features in feature_counts
     for batch in batch_sizes
-]
+):
+    model, feeds = make_case(trees, features, batch, seed)
+    cpu_session = ReferenceEvaluator(
+        model, cpu_execution={"num_threads": threads, "affinity_policy": "none"}
+    )
+    ort_session = onnxruntime.InferenceSession(
+        model, sess_options=options, providers=["CPUExecutionProvider"]
+    )
 
-with tempfile.TemporaryDirectory() as temporary:
-    output = Path(temporary) / "tree_ensemble.json"
-    command = [
-        sys.executable,
-        str(runner),
-        "--threads",
-        str(min(4, os.cpu_count() or 1)),
-        "--warmup",
-        str(args.warmup),
-        "--repeat",
-        str(args.repeat),
-        "--max-repeat-time",
-        str(args.max_repeat_time),
-        "--preparation-repeats",
-        "1",
-        "--output",
-        str(output),
-    ]
-    for case in cases:
-        command.extend(["--case", case])
-    subprocess.run(command, check=True, cwd=root)
-    rows = json.loads(output.read_text(encoding="utf-8"))["inference"]
+    def cpu_run(session=cpu_session, current_feeds=feeds):
+        return session.run(None, current_feeds)
 
-by_dimensions = {(row["trees"], row["rows"], row["features"]): row for row in rows}
+    def ort_run(session=ort_session, current_feeds=feeds):
+        return session.run(None, current_feeds)
+
+    np.testing.assert_allclose(cpu_run()[0], ort_run()[0], rtol=2e-5, atol=2e-5)
+    cpu_median = measure(cpu_run, args.repeat, args.warmup, args.max_repeat_time)
+    ort_median = measure(ort_run, args.repeat, args.warmup, args.max_repeat_time)
+    records.append(
+        {
+            "trees": trees,
+            "features": features,
+            "rows": batch,
+            "cpu_median_seconds": cpu_median,
+            "ort_median_seconds": ort_median,
+            "speedup": ort_median / cpu_median,
+        }
+    )
+    print(
+        f"trees={trees:6d} features={features:5d} batch={batch:4d} "
+        f"onnx-light-cpu={cpu_median * 1e6:10.2f}us "
+        f"onnxruntime={ort_median * 1e6:10.2f}us "
+        f"speedup={ort_median / cpu_median:.2f}x"
+    )
+
+# %%
+# Plot the timings and the speedups
+# ---------------------------------
+
+by_dimensions = {(row["trees"], row["rows"], row["features"]): row for row in records}
 timings = {
     trees: np.array(
         [
