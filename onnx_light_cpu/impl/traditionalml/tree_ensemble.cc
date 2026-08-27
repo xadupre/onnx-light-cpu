@@ -1974,7 +1974,7 @@ void TreeEnsemblePlan::EvaluateIntoImpl(const T *input, std::size_t input_size, 
     const double weight = leaves_[leaf].weight;
     if (attributes_.aggregate == TreeAggregate::kSum ||
         attributes_.aggregate == TreeAggregate::kAverage) {
-      values[index] = attributes_.value_type == TreeValueType::kFloat32
+      values[index] = attributes_.value_type == DataType::FLOAT
                           ? static_cast<float>(values[index] + weight)
                           : values[index] + weight;
       ++counts[index];
@@ -2031,7 +2031,7 @@ void TreeEnsemblePlan::EvaluateIntoImpl(const T *input, std::size_t input_size, 
     double value = attributes_.base_values.empty() ? 0.0 : attributes_.base_values[0];
     for (std::size_t tree = 0; tree < tree_roots_.size(); ++tree) {
       value += leaves_[find_leaf(0, tree)].weight;
-      if (attributes_.value_type == TreeValueType::kFloat32) {
+      if (attributes_.value_type == DataType::FLOAT) {
         value = static_cast<float>(value);
       }
     }
@@ -2048,7 +2048,7 @@ void TreeEnsemblePlan::EvaluateIntoImpl(const T *input, std::size_t input_size, 
         double value = base;
         for (std::size_t tree = 0; tree < tree_roots_.size(); ++tree) {
           value += leaves_[find_leaf(row, tree)].weight;
-          if (attributes_.value_type == TreeValueType::kFloat32) {
+          if (attributes_.value_type == DataType::FLOAT) {
             value = static_cast<float>(value);
           }
         }
@@ -2064,7 +2064,7 @@ void TreeEnsemblePlan::EvaluateIntoImpl(const T *input, std::size_t input_size, 
       for (std::size_t tree = 0; tree < tree_roots_.size(); ++tree) {
         for (std::size_t row = 0; row < active_rows; ++row) {
           const double weight = leaves_[find_leaf(batch + row, tree)].weight;
-          values[row] = attributes_.value_type == TreeValueType::kFloat32
+          values[row] = attributes_.value_type == DataType::FLOAT
                             ? static_cast<float>(values[row] + weight)
                             : values[row] + weight;
         }
@@ -2097,7 +2097,7 @@ void TreeEnsemblePlan::EvaluateIntoImpl(const T *input, std::size_t input_size, 
           const std::size_t target = static_cast<std::size_t>(leaf.target_id);
           const std::size_t slot = sparse_targets ? target_to_active_[target] : target;
           const std::size_t index = row * accumulator_targets + slot;
-          values[index] = attributes_.value_type == TreeValueType::kFloat32
+          values[index] = attributes_.value_type == DataType::FLOAT
                               ? static_cast<float>(values[index] + leaf.weight)
                               : values[index] + leaf.weight;
         }
