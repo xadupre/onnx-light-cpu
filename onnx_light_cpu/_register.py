@@ -5,12 +5,10 @@
 """Register onnx-light-cpu kernels into onnx-light's C++ dispatch table.
 
 ``onnx-light`` evaluates every node against its C++ ``KernelDispatchTable``.
-``onnx-light-cpu`` ships the SIMD-accelerated ``Abs``, ``Exp``, ``Log``,
-``Gemm`` and ``Not`` kernels as full C++ ``KernelBase`` subclasses and exposes a
-single ``register_all_kernels`` binding that installs those classes into that
-shared table for the CPU device. This module wraps that binding so that *any*
-ONNX model containing those nodes runs the optimized kernels instead of the
-built-in ones.
+``onnx-light-cpu`` ships SIMD-accelerated C++ ``KernelBase`` subclasses and
+exposes a single ``register_all_kernels`` binding that installs every available
+class into that shared table for the CPU device. This module wraps the binding
+and exposes read-only kernel and operator-support inventories.
 """
 
 from __future__ import annotations
@@ -38,6 +36,17 @@ class RegisteredKernel(NamedTuple):
     types: tuple[str, ...]
     since_version: int | None
     until_version: int | None
+
+
+class OperatorSupport(NamedTuple):
+    """Describes the additional runtime support for one custom operator."""
+
+    domain: str
+    op_type: str
+    shape_inference_function: str
+    peak_memory_function: str
+    fusion_patterns: tuple[str, ...]
+    has_gradient: bool
 
 
 def _register_all_kernels() -> None:
@@ -79,6 +88,43 @@ def operator_schema_lookup(op_type: str) -> list[Any]:
         *onnx_op.GetAllOnnxOpSchemasWithHistory(op_type),
         *custom_op_schemas(op_type),
     ]
+
+
+def operator_support() -> tuple[OperatorSupport, ...]:
+    """Returns the custom operator support available from onnx-light-cpu."""
+    import_module("onnx_light.onnx_op")
+    from .onnx_py._cpuregister import (  # pyrefly: ignore[missing-import]
+        operator_support as _operator_support,
+    )
+
+    return tuple(
+        OperatorSupport(
+            domain=domain,
+            op_type=op_type,
+            shape_inference_function=shape_inference_function,
+            peak_memory_function=peak_memory_function,
+            fusion_patterns=tuple(fusion_patterns),
+            has_gradient=has_gradient,
+        )
+        for (
+            domain,
+            op_type,
+            shape_inference_function,
+            peak_memory_function,
+            fusion_patterns,
+            has_gradient,
+        ) in _operator_support()
+    )
+
+
+def register_operator_support() -> None:
+    """Registers custom shape, peak-memory, and fusion-pattern support."""
+    import_module("onnx_light.onnx_op")
+    from .onnx_py._cpuregister import (  # pyrefly: ignore[missing-import]
+        register_custom_operator_support,
+    )
+
+    register_custom_operator_support()
 
 
 def register_custom_gradients(registry: Any = None) -> Any:
@@ -211,6 +257,15 @@ def clear_used_kernel_names() -> None:
     )
 
     _clear_used_kernel_names()
+
+
+def set_kernel_usage_recording(enabled: bool) -> None:
+    """Enables or disables per-invocation kernel usage recording."""
+    from .onnx_py._cpuregister import (  # pyrefly: ignore[missing-import]
+        set_kernel_usage_recording as _set_kernel_usage_recording,
+    )
+
+    _set_kernel_usage_recording(enabled)
 
 
 def register_backend_test_cases() -> None:

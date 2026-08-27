@@ -409,9 +409,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     from onnx_light_cpu import (
         clear_used_kernel_names,
         register_kernels,
+        set_kernel_usage_recording,
         used_kernel_names,
     )
-    from onnx_light_cpu.onnx_py._cpuregister import set_kernel_usage_recording
 
     if args.cpus:
         if not hasattr(os, "sched_setaffinity"):

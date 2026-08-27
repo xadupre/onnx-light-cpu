@@ -14,7 +14,7 @@ The kernels can be used directly from C++ or installed into onnx-light's shared
 C++ kernel dispatch table so any ONNX model using a supported operator runs the
 optimized kernel when evaluated through a ``ReferenceEvaluator``. See
 :doc:`getting_started` to install the package and run your first model, the
-:doc:`kernels` page for the list of operators provided by this repository, the
+:doc:`byop` page for the list of operators provided by this repository, the
 :doc:`examples` gallery for runnable examples, the :ref:`benchmarks-gallery`
 gallery for performance comparisons against other back-ends, and the
 :ref:`processor-performance-gallery` for a profile of the current host.
@@ -75,7 +75,7 @@ different copies of ``lib_onnx_core``.
    :caption: Contents
 
    getting_started
-   kernels
+   byop
    design/index
    api/index
    examples

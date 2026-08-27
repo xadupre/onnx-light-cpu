@@ -22,7 +22,7 @@ extensions = [
 ]
 
 templates_path = ["_templates"]
-exclude_patterns = ["_build"]
+exclude_patterns = ["_build", "kernels_generated/index.rst"]
 html_last_updated_fmt = "%b %d, %Y"
 
 sphinx_gallery_conf = {
@@ -58,6 +58,7 @@ html_theme = "pydata_sphinx_theme"
 html_static_path = ["_static"]
 
 redirects = {
+    "kernels": "byop.html",
     "next_steps/2026_08_attention": "2026/2026_08_attention.html",
     "next_steps/2026_08_binary_elementwise": "2026/2026_08_binary_elementwise.html",
     "next_steps/2026_08_conv": "2026/2026_08_conv.html",

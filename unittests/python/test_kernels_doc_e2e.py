@@ -22,6 +22,8 @@ if str(_EXT_DIR) not in sys.path:
 from kernel_pages import (  # noqa: E402
     assign_stems,
     generate_kernel_pages,
+    load_custom_schemas,
+    load_operator_support,
     load_registered_kernels,
 )
 
@@ -42,7 +44,12 @@ class TestGenerationParityWithLiveInventory:
         assert records, "expected at least one live registered kernel record"
 
         output_dir = tmp_path / "kernels_generated"
-        generate_kernel_pages(records, output_dir)
+        generate_kernel_pages(
+            records,
+            output_dir,
+            schemas=load_custom_schemas(),
+            support_records=load_operator_support(),
+        )
 
         stems = assign_stems(records)
         # One generated page per record (no collisions silently dropped),
@@ -55,21 +62,34 @@ class TestGenerationParityWithLiveInventory:
         index_text = (output_dir / "index.rst").read_text(encoding="utf-8")
         for stem, record in stems.items():
             # The index toctree references every generated page...
-            assert f"   {stem}" in index_text
+            assert f"   kernels_generated/{stem}" in index_text
             # ...and each page's content matches the record it documents.
             page_text = (output_dir / f"{stem}.rst").read_text(encoding="utf-8")
             assert f"{record.op_type} ({record.device})" in page_text
             assert f"``{record.domain}``" in page_text
             assert f"``{record.kernel_name}``" in page_text
+            assert "Operator support" in page_text
+            if record.domain == "com.microsoft":
+                assert "LightOpSchema" in page_text
 
     def test_regenerating_from_the_live_inventory_is_byte_identical(self, tmp_path):
         records = load_registered_kernels()
         output_dir = tmp_path / "kernels_generated"
 
-        generate_kernel_pages(records, output_dir)
+        generate_kernel_pages(
+            records,
+            output_dir,
+            schemas=load_custom_schemas(),
+            support_records=load_operator_support(),
+        )
         first = {p.name: p.read_bytes() for p in sorted(output_dir.glob("*.rst"))}
 
-        generate_kernel_pages(records, output_dir)
+        generate_kernel_pages(
+            records,
+            output_dir,
+            schemas=load_custom_schemas(),
+            support_records=load_operator_support(),
+        )
         second = {p.name: p.read_bytes() for p in sorted(output_dir.glob("*.rst"))}
 
         assert first == second

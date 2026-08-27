@@ -373,11 +373,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     import numpy as np
     import onnxruntime
     from onnx_light.onnx.reference import ReferenceEvaluator
-    from onnx_light_cpu import register_kernels
+    from onnx_light_cpu import register_kernels, set_kernel_usage_recording
 
     register_kernels()
     from onnx_light_cpu.onnx_py._cpukernels import detect_simd_level
-    from onnx_light_cpu.onnx_py._cpuregister import set_kernel_usage_recording
 
     set_kernel_usage_recording(False)
     session_options = None

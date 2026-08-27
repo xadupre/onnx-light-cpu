@@ -17,7 +17,10 @@ from unittest import TestCase, mock
 
 import onnx_light_cpu._register as reg
 from onnx_light_cpu import (
+    OperatorSupport,
     RegisteredKernel,
+    operator_support,
+    register_operator_support,
     register_kernels,
     registered_kernel_names,
     registered_kernels,
@@ -111,3 +114,43 @@ class TestRegisteredKernels(TestCase):
         )
         with self.assertRaises(AttributeError):
             record.op_type = "Other"
+
+
+class TestOperatorSupport(TestCase):
+    def test_wraps_raw_tuples(self):
+        extension = ModuleType("onnx_light_cpu.onnx_py._cpuregister")
+        extension.operator_support = mock.Mock(
+            return_value=[
+                (
+                    "com.microsoft",
+                    "CDist",
+                    "onnx_light_cpu::ComputeShapeCDist",
+                    "onnx_light_cpu::ComputePeakMemoryCDist",
+                    ["onnx_light_cpu::CDistFusionPattern"],
+                    True,
+                )
+            ]
+        )
+        with mock.patch.dict(sys.modules, {"onnx_light_cpu.onnx_py._cpuregister": extension}):
+            assert operator_support() == (
+                OperatorSupport(
+                    "com.microsoft",
+                    "CDist",
+                    "onnx_light_cpu::ComputeShapeCDist",
+                    "onnx_light_cpu::ComputePeakMemoryCDist",
+                    ("onnx_light_cpu::CDistFusionPattern",),
+                    True,
+                ),
+            )
+
+    def test_registers_operator_support(self):
+        extension = ModuleType("onnx_light_cpu.onnx_py._cpuregister")
+        extension.register_custom_operator_support = mock.Mock()
+        with (
+            mock.patch.object(reg, "import_module") as import_runtime,
+            mock.patch.dict(sys.modules, {"onnx_light_cpu.onnx_py._cpuregister": extension}),
+        ):
+            register_operator_support()
+
+        import_runtime.assert_called_once_with("onnx_light.onnx_op")
+        extension.register_custom_operator_support.assert_called_once_with()

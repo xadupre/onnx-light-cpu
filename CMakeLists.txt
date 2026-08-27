@@ -274,131 +274,127 @@ endif()
 # Discover the kernel and binding sources with globbing so new files are picked
 # up without editing this list. CONFIGURE_DEPENDS re-runs the glob when the set
 # of matching files changes.
-file(GLOB CPU_KERNEL_SOURCES CONFIGURE_DEPENDS
-    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/*.cc"
-    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/*/*.cc"
-    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/*/*/*.cc"
-    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/*/*/*/*.cc"
-)
+file(GLOB_RECURSE CPU_KERNEL_SOURCES CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/*.cc")
+file(GLOB_RECURSE CPU_BACKEND_TEST_SOURCES CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/*.cc")
+set(CPU_BACKEND_CORPUS_SOURCES ${CPU_BACKEND_TEST_SOURCES})
+list(FILTER CPU_BACKEND_CORPUS_SOURCES INCLUDE REGEX "_corpus[.]cc$")
 
-set(_gemm_avx512_source
-    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/gemm/avx512/gemm_kernel_avx512.cc")
-set(_attention_avx512_source
-    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/attention/avx512/attention_kernel_avx512.cc")
-set(_gemm_avx512fp16_source
-    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/gemm/avx512fp16/gemm_kernel_avx512fp16.cc")
-set(_gemm_avx512bf16_source
-    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/gemm/avx512bf16/gemm_kernel_avx512bf16.cc")
-set(_gemm_avx512vnni_source
-    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/gemm/vnni/integer_gemm_avx512vnni.cc")
-set(_gemm_avx2_integer_source
-    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/gemm/vnni/integer_gemm_avx2.cc")
-set(_gemm_amx_source
-    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/gemm/amx/gemm_amx_tile.cc")
-set(_gemm_amx_bf16_source
-    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/gemm/amx/gemm_amx_bf16.cc")
-set(_gemm_amx_int8_source
-    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/gemm/amx/gemm_amx_int8.cc")
-set(_gemm_avx2_fma_source
-    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/gemm/avx2/gemm_kernel_avx2_fma.cc")
-set(_gemm_neon_source
-    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/gemm/arm/gemm_kernel_neon.cc")
-set(_gemm_sve_source
-    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/gemm/arm/gemm_kernel_sve.cc")
-set(_gemm_neon_dotprod_source
-    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/gemm/arm/gemm_kernel_neon_dotprod.cc")
-set(_abs_avx512_source
-    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/avx512/abs_kernel_avx512.cc")
-set(_binary_arithmetic_avx512_source
-    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/avx512/binary_arithmetic_kernel_avx512.cc")
-set(_binary_arithmetic_sve_source
-    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/binary/arm/binary_arithmetic_kernel_sve.cc")
-set(_exp_log_avx512_source
-    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/avx512/exp_log_kernel_avx512.cc")
-set(_exp_log_avx2_fma_source
-    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/avx2/exp_log_kernel_avx2_fma.cc")
-set(_rms_normalization_avx2_f16c_source
-    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/avx2/rms_normalization_kernel_avx2_f16c.cc")
-set(_not_avx512_source
-    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/logical/avx512/not_kernel_avx512.cc")
-set(_compute_avx512_source
-    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/compute/avx512/compute_kernel_avx512.cc")
-set(_compute_avx512fp16_source
-    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/compute/avx512fp16/compute_kernel_avx512fp16.cc")
-set(_compute_avx512bf16_source
-    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/compute/avx512bf16/compute_kernel_avx512bf16.cc")
-set(_compute_avx512vnni_source
-    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/compute/avx512vnni/compute_kernel_avx512vnni.cc")
-set(_compute_neon_dotprod_source
-    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/compute/arm/compute_kernel_neon_dotprod.cc")
+# ISA-specific translation units are grouped by directory or filename family.
+# New implementations following these conventions automatically inherit the
+# corresponding compiler feature checks and flags.
+foreach(_source IN LISTS CPU_KERNEL_SOURCES)
+  if(_source MATCHES "/avx512/")
+    list(APPEND _avx512f_sources "${_source}")
+  endif()
+  if(_source MATCHES "/logical/avx512/")
+    list(APPEND _avx512bw_sources "${_source}")
+  endif()
+  if(_source MATCHES "/avx512fp16/")
+    list(APPEND _avx512fp16_sources "${_source}")
+  endif()
+  if(_source MATCHES "/avx512bf16/")
+    list(APPEND _avx512bf16_sources "${_source}")
+  endif()
+  if(_source MATCHES "avx512vnni")
+    list(APPEND _avx512vnni_sources "${_source}")
+    if(_source MATCHES "/math/gemm/")
+      list(APPEND _gemm_avx512vnni_sources "${_source}")
+    endif()
+  endif()
+  if(_source MATCHES "avx2_fma[.]cc$")
+    list(APPEND _avx2_fma_sources "${_source}")
+  endif()
+  if(_source MATCHES "/math/gemm/avx2/")
+    list(APPEND _gemm_avx2_fma_sources "${_source}")
+  endif()
+  if(_source MATCHES "integer_gemm_avx2[.]cc$")
+    list(APPEND _avx2_integer_sources "${_source}")
+  endif()
+  if(_source MATCHES "f16c[.]cc$")
+    list(APPEND _avx_f16c_sources "${_source}")
+  endif()
+  if(_source MATCHES "/amx/.*tile[.]cc$")
+    list(APPEND _amx_tile_sources "${_source}")
+  endif()
+  if(_source MATCHES "/amx/.*bf16[.]cc$")
+    list(APPEND _amx_bf16_sources "${_source}")
+  endif()
+  if(_source MATCHES "/amx/.*int8[.]cc$")
+    list(APPEND _amx_int8_sources "${_source}")
+  endif()
+  if(_source MATCHES "/arm/.*neon[.]cc$")
+    list(APPEND _neon_sources "${_source}")
+  endif()
+  if(_source MATCHES "/arm/.*sve[.]cc$")
+    list(APPEND _sve_sources "${_source}")
+  endif()
+  if(_source MATCHES "/arm/.*neon_dotprod[.]cc$")
+    list(APPEND _neon_dotprod_sources "${_source}")
+  endif()
+endforeach()
+
 if(NOT ONNX_LIGHT_CPU_HAVE_AVX512F_FLAG)
   # Exclude AVX-512F translation units rather than fail on unsupported targets.
-  list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_gemm_avx512_source}")
-  list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_attention_avx512_source}")
-  list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_abs_avx512_source}")
-  list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_exp_log_avx512_source}")
-  list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_compute_avx512_source}")
-  list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_binary_arithmetic_avx512_source}")
+  list(REMOVE_ITEM CPU_KERNEL_SOURCES ${_avx512f_sources})
 endif()
 if(NOT ONNX_LIGHT_CPU_HAVE_AVX2_FMA_FLAG)
-  list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_gemm_avx2_fma_source}")
-  list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_gemm_avx2_integer_source}")
-  list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_exp_log_avx2_fma_source}")
+  list(REMOVE_ITEM CPU_KERNEL_SOURCES
+      ${_avx2_fma_sources}
+      ${_gemm_avx2_fma_sources}
+      ${_avx2_integer_sources})
 endif()
 if(NOT ONNX_LIGHT_CPU_HAVE_F16C_FLAG)
-  list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_rms_normalization_avx2_f16c_source}")
+  list(REMOVE_ITEM CPU_KERNEL_SOURCES ${_avx_f16c_sources})
 endif()
 if(NOT ONNX_LIGHT_CPU_HAVE_AVX512BW_FLAG)
-  list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_not_avx512_source}")
+  list(REMOVE_ITEM CPU_KERNEL_SOURCES ${_avx512bw_sources})
 endif()
 if(NOT ONNX_LIGHT_CPU_HAVE_AVX512FP16_FLAG)
   # Exclude the native AVX-512FP16 GEMM kernel when the compiler cannot target
   # the ISA; the FLOAT16 path keeps its converting float32 fallback.
-  list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_gemm_avx512fp16_source}")
-  list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_compute_avx512fp16_source}")
+  list(REMOVE_ITEM CPU_KERNEL_SOURCES ${_avx512fp16_sources})
 endif()
 if(NOT ONNX_LIGHT_CPU_HAVE_AVX512BF16_FLAG)
   # Exclude the native AVX-512BF16 GEMM kernel when the compiler cannot target
   # the ISA; the BFLOAT16 path keeps its converting float32 fallback.
-  list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_gemm_avx512bf16_source}")
-  list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_compute_avx512bf16_source}")
+  list(REMOVE_ITEM CPU_KERNEL_SOURCES ${_avx512bf16_sources})
 endif()
 if(NOT ONNX_LIGHT_CPU_HAVE_AVX512VNNI_FLAG)
   # Exclude the native AVX-512 VNNI INT8 dot-product when the compiler cannot
   # target the ISA; the integer matmul keeps its AVX2/scalar fallbacks.
-  list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_gemm_avx512vnni_source}")
-  list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_compute_avx512vnni_source}")
+  list(REMOVE_ITEM CPU_KERNEL_SOURCES ${_avx512vnni_sources})
 endif()
 if(NOT ONNX_LIGHT_CPU_HAVE_AMX_BF16_FLAG)
   # Exclude the native AMX-BF16 GEMM kernel when the compiler cannot target the
   # ISA; the BFLOAT16 path keeps its AVX-512BF16 / converting float32 fallback.
-  list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_gemm_amx_bf16_source}")
+  list(REMOVE_ITEM CPU_KERNEL_SOURCES ${_amx_bf16_sources})
 endif()
 if(NOT ONNX_LIGHT_CPU_HAVE_AMX_INT8_FLAG)
   # Exclude the native AMX-INT8 GEMM kernel when the compiler cannot target the
   # ISA; the integer matmul keeps its AVX-512 VNNI / AVX2 / scalar fallbacks.
-  list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_gemm_amx_int8_source}")
+  list(REMOVE_ITEM CPU_KERNEL_SOURCES ${_amx_int8_sources})
 endif()
 if(NOT ONNX_LIGHT_CPU_HAVE_NEON_INTRINSICS)
-  list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_gemm_neon_source}")
+  list(REMOVE_ITEM CPU_KERNEL_SOURCES ${_neon_sources})
 endif()
 if(NOT ONNX_LIGHT_CPU_HAVE_SVE_INTRINSICS)
-  list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_gemm_sve_source}")
-  list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_binary_arithmetic_sve_source}")
+  list(REMOVE_ITEM CPU_KERNEL_SOURCES ${_sve_sources})
 endif()
 if(NOT ONNX_LIGHT_CPU_HAVE_NEON_DOTPROD_INTRINSICS)
-  list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_gemm_neon_dotprod_source}")
-  list(REMOVE_ITEM CPU_KERNEL_SOURCES "${_compute_neon_dotprod_source}")
+  list(REMOVE_ITEM CPU_KERNEL_SOURCES ${_neon_dotprod_sources})
 endif()
 
 file(GLOB PY_KERNELS_SOURCES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/onnx_py/*.cc"
 )
-# The kernel-registration binding (_cpuregister) links onnx-light and is built
-# as a separate module below; keep it out of the _cpukernels module, which only
-# exposes the SIMD detection helpers.
-list(REMOVE_ITEM PY_KERNELS_SOURCES
-    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/onnx_py/_cpuregister.cc")
+file(GLOB PY_REGISTER_SOURCES CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/onnx_py/_cpuregister*.cc"
+)
+# Registration sources link onnx-light and form a separate extension below;
+# keep the whole family out of the standalone _cpukernels module.
+list(REMOVE_ITEM PY_KERNELS_SOURCES ${PY_REGISTER_SOURCES})
 
 # ---------------------------------------------------------------------------
 # C++ library: lib_onnx_light_cpu
@@ -432,30 +428,10 @@ endif()
 
 if(ONNX_LIGHT_CPU_HAVE_AVX512F_FLAG)
   if(NOT MSVC)
-    set_source_files_properties("${_gemm_avx512_source}" PROPERTIES
-        COMPILE_OPTIONS "-mavx512f")
-    set_source_files_properties("${_attention_avx512_source}" PROPERTIES
-        COMPILE_OPTIONS "-mavx512f")
-    set_source_files_properties("${_abs_avx512_source}" PROPERTIES
-        COMPILE_OPTIONS "-mavx512f")
-    set_source_files_properties("${_exp_log_avx512_source}" PROPERTIES
-        COMPILE_OPTIONS "-mavx512f")
-    set_source_files_properties("${_compute_avx512_source}" PROPERTIES
-        COMPILE_OPTIONS "-mavx512f")
-    set_source_files_properties("${_binary_arithmetic_avx512_source}" PROPERTIES
+    set_source_files_properties(${_avx512f_sources} PROPERTIES
         COMPILE_OPTIONS "-mavx512f")
   else()
-    set_source_files_properties("${_gemm_avx512_source}" PROPERTIES
-        COMPILE_OPTIONS "/arch:AVX512")
-    set_source_files_properties("${_attention_avx512_source}" PROPERTIES
-        COMPILE_OPTIONS "/arch:AVX512")
-    set_source_files_properties("${_abs_avx512_source}" PROPERTIES
-        COMPILE_OPTIONS "/arch:AVX512")
-    set_source_files_properties("${_exp_log_avx512_source}" PROPERTIES
-        COMPILE_OPTIONS "/arch:AVX512")
-    set_source_files_properties("${_compute_avx512_source}" PROPERTIES
-        COMPILE_OPTIONS "/arch:AVX512")
-    set_source_files_properties("${_binary_arithmetic_avx512_source}" PROPERTIES
+    set_source_files_properties(${_avx512f_sources} PROPERTIES
         COMPILE_OPTIONS "/arch:AVX512")
   endif()
   # Told gemm_kernel.cc (compiled at the baseline ONNX_LIGHT_CPU_SIMD_FLAGS)
@@ -472,7 +448,7 @@ if(ONNX_LIGHT_CPU_HAVE_AVX512FP16_FLAG)
   # and only dispatches here once CpuSupportsAvx512Fp16() reports the ISA. The
   # register-resident compute-profile FP16 throughput kernel (Processor
   # Profile PR03) needs the same flag for native ``vfmadd*ph`` arithmetic.
-  set_source_files_properties("${_gemm_avx512fp16_source}" "${_compute_avx512fp16_source}"
+  set_source_files_properties(${_avx512fp16_sources}
       PROPERTIES COMPILE_OPTIONS "-mavx512fp16")
   target_compile_definitions(lib_onnx_light_cpu PRIVATE
       ONNX_LIGHT_CPU_HAVE_AVX512FP16=1)
@@ -485,7 +461,7 @@ if(ONNX_LIGHT_CPU_HAVE_AVX512BF16_FLAG)
   # and only dispatches here once CpuSupportsAvx512Bf16() reports the ISA. The
   # register-resident compute-profile BFLOAT16 dot-product kernel (Processor
   # Profile PR03) needs the same flags.
-  set_source_files_properties("${_gemm_avx512bf16_source}" "${_compute_avx512bf16_source}"
+  set_source_files_properties(${_avx512bf16_sources}
       PROPERTIES COMPILE_OPTIONS "-mavx512f;-mavx512bw;-mavx512bf16")
   target_compile_definitions(lib_onnx_light_cpu PRIVATE
       ONNX_LIGHT_CPU_HAVE_AVX512BF16=1)
@@ -493,20 +469,20 @@ endif()
 
 if(ONNX_LIGHT_CPU_HAVE_AVX2_FMA_FLAG)
   if(NOT MSVC)
-    set_source_files_properties("${_exp_log_avx2_fma_source}"
+    set_source_files_properties(${_avx2_fma_sources}
         PROPERTIES COMPILE_OPTIONS "-mavx2;-mfma")
   else()
-    set_source_files_properties("${_exp_log_avx2_fma_source}"
+    set_source_files_properties(${_avx2_fma_sources}
         PROPERTIES COMPILE_OPTIONS "/arch:AVX2")
   endif()
   target_compile_definitions(lib_onnx_light_cpu PRIVATE
       ONNX_LIGHT_CPU_HAVE_AVX2_FMA=1)
 
   if(NOT MSVC)
-    set_source_files_properties("${_gemm_avx2_integer_source}" PROPERTIES
+    set_source_files_properties(${_avx2_integer_sources} PROPERTIES
         COMPILE_OPTIONS "-mavx2")
   else()
-    set_source_files_properties("${_gemm_avx2_integer_source}" PROPERTIES
+    set_source_files_properties(${_avx2_integer_sources} PROPERTIES
         COMPILE_OPTIONS "/arch:AVX2")
   endif()
   target_compile_definitions(lib_onnx_light_cpu PRIVATE
@@ -520,7 +496,7 @@ if(ONNX_LIGHT_CPU_HAVE_AVX512VNNI_FLAG)
   # CpuSupportsAvx512Vnni() reports the ISA. The register-resident
   # compute-profile INT8 dot-product kernel (Processor Profile PR03) needs the
   # same flags.
-  set_source_files_properties("${_gemm_avx512vnni_source}" "${_compute_avx512vnni_source}"
+  set_source_files_properties(${_avx512vnni_sources}
       PROPERTIES COMPILE_OPTIONS "-mavx512f;-mavx512vnni")
   target_compile_definitions(lib_onnx_light_cpu PRIVATE
       ONNX_LIGHT_CPU_HAVE_AVX512VNNI=1)
@@ -530,7 +506,7 @@ if(ONNX_LIGHT_CPU_HAVE_AMX_TILE_FLAG)
   # The AMX tile-state lifecycle needs -mamx-tile for the LDTILECFG/TILERELEASE
   # tile intrinsics; the rest of the library keeps the baseline flags and the
   # module only touches the tiles once AmxTileStateAvailable() reports the ISA.
-  set_source_files_properties("${_gemm_amx_source}" PROPERTIES
+  set_source_files_properties(${_amx_tile_sources} PROPERTIES
       COMPILE_OPTIONS "-mamx-tile")
   target_compile_definitions(lib_onnx_light_cpu PRIVATE
       ONNX_LIGHT_CPU_HAVE_AMX_TILE=1)
@@ -541,7 +517,7 @@ if(ONNX_LIGHT_CPU_HAVE_AMX_BF16_FLAG)
   # -mamx-bf16 for the tdpbf16ps dot-product; the rest of the library keeps the
   # baseline flags and only dispatches here once CpuSupportsAmxBf16() and
   # AmxTileStateAvailable() report the ISA and OS-enabled tile state.
-  set_source_files_properties("${_gemm_amx_bf16_source}" PROPERTIES
+  set_source_files_properties(${_amx_bf16_sources} PROPERTIES
       COMPILE_OPTIONS "-mamx-tile;-mamx-bf16")
   target_compile_definitions(lib_onnx_light_cpu PRIVATE
       ONNX_LIGHT_CPU_HAVE_AMX_BF16=1)
@@ -551,7 +527,7 @@ if(ONNX_LIGHT_CPU_HAVE_AMX_INT8_FLAG)
   # The native AMX-INT8 GEMM kernel needs -mamx-tile for the tile load/store and
   # -mamx-int8 for the tdpbuud dot-product; dispatch additionally checks the ISA
   # and OS-enabled tile state at runtime.
-  set_source_files_properties("${_gemm_amx_int8_source}" PROPERTIES
+  set_source_files_properties(${_amx_int8_sources} PROPERTIES
       COMPILE_OPTIONS "-mamx-tile;-mamx-int8;-mavx512f;-mavx512bw;-mavx512vnni")
   target_compile_definitions(lib_onnx_light_cpu PRIVATE
       ONNX_LIGHT_CPU_HAVE_AMX_INT8=1)
@@ -562,14 +538,14 @@ if(ONNX_LIGHT_CPU_HAVE_AVX2_FMA_FLAG)
     # Add -mf16c when supported so the packing loops can use the F16C
     # ``vcvtph2ps`` conversion; the AVX2/FMA micro-kernels only require -mavx2.
     if(ONNX_LIGHT_CPU_HAVE_F16C_FLAG)
-      set_source_files_properties("${_gemm_avx2_fma_source}" PROPERTIES
+      set_source_files_properties(${_gemm_avx2_fma_sources} PROPERTIES
           COMPILE_OPTIONS "-mavx2;-mfma;-mf16c")
     else()
-      set_source_files_properties("${_gemm_avx2_fma_source}" PROPERTIES
+      set_source_files_properties(${_gemm_avx2_fma_sources} PROPERTIES
           COMPILE_OPTIONS "-mavx2;-mfma")
     endif()
   else()
-    set_source_files_properties("${_gemm_avx2_fma_source}" PROPERTIES
+    set_source_files_properties(${_gemm_avx2_fma_sources} PROPERTIES
         COMPILE_OPTIONS "/arch:AVX2")
   endif()
 
@@ -583,10 +559,10 @@ endif()
 
 if(ONNX_LIGHT_CPU_HAVE_F16C_FLAG)
   if(NOT MSVC)
-    set_source_files_properties("${_rms_normalization_avx2_f16c_source}" PROPERTIES
+    set_source_files_properties(${_avx_f16c_sources} PROPERTIES
         COMPILE_OPTIONS "-mavx;-mf16c")
   else()
-    set_source_files_properties("${_rms_normalization_avx2_f16c_source}" PROPERTIES
+    set_source_files_properties(${_avx_f16c_sources} PROPERTIES
         COMPILE_OPTIONS "/arch:AVX")
   endif()
   target_compile_definitions(lib_onnx_light_cpu PRIVATE
@@ -603,14 +579,14 @@ if(ONNX_LIGHT_CPU_HAVE_NEON_INTRINSICS)
 endif()
 
 if(ONNX_LIGHT_CPU_HAVE_SVE_INTRINSICS)
-  set_source_files_properties("${_gemm_sve_source}" "${_binary_arithmetic_sve_source}" PROPERTIES
+  set_source_files_properties(${_sve_sources} PROPERTIES
       COMPILE_OPTIONS "-march=armv8-a+sve")
   target_compile_definitions(lib_onnx_light_cpu PRIVATE
       ONNX_LIGHT_CPU_HAVE_SVE=1)
 endif()
 
 if(ONNX_LIGHT_CPU_HAVE_NEON_DOTPROD_INTRINSICS)
-  set_source_files_properties("${_gemm_neon_dotprod_source}" "${_compute_neon_dotprod_source}"
+  set_source_files_properties(${_neon_dotprod_sources}
       PROPERTIES COMPILE_OPTIONS "-march=armv8.2-a+dotprod")
   target_compile_definitions(lib_onnx_light_cpu PRIVATE
       ONNX_LIGHT_CPU_HAVE_NEON_DOTPROD=1)
@@ -618,14 +594,14 @@ endif()
 
 if(ONNX_LIGHT_CPU_HAVE_AVX512BW_FLAG)
   if(NOT MSVC)
-    set_source_files_properties("${_not_avx512_source}" PROPERTIES
+    set_source_files_properties(${_avx512bw_sources} PROPERTIES
         COMPILE_OPTIONS "-mavx512f;-mavx512bw")
     if(ONNX_LIGHT_CPU_HAVE_AVX512VNNI_FLAG)
-      set_property(SOURCE "${_gemm_avx512vnni_source}" APPEND PROPERTY
+      set_property(SOURCE ${_gemm_avx512vnni_sources} APPEND PROPERTY
           COMPILE_OPTIONS "-mavx512bw")
     endif()
   else()
-    set_source_files_properties("${_not_avx512_source}" PROPERTIES
+    set_source_files_properties(${_avx512bw_sources} PROPERTIES
         COMPILE_OPTIONS "/arch:AVX512")
   endif()
   target_compile_definitions(lib_onnx_light_cpu PRIVATE
@@ -823,28 +799,7 @@ if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
   # --onnx-light-source path).
   if(TARGET onnx_light::lib_onnx_backend_test)
     add_library(lib_onnx_light_cpu_backend_test ${_cpu_lib_type}
-        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/collect_test_cases.cc"
-        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/cases/elementwise/collect_elementwise_cases.cc"
-        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/cases/elementwise/cases_binary.cc"
-        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/cases/math/collect_math_cases.cc"
-        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/cases/math/cases_abs.cc"
-        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/cases/math/cases_exp.cc"
-        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/cases/math/cases_log.cc"
-        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/cases/math/cases_gemm.cc"
-        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/cases/math/cases_matmul.cc"
-        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/cases/math/cases_matmul_integer.cc"
-        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/cases/math/cases_rms_normalization.cc"
-        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/cases/math/cases_swiglu.cc"
-        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/com_microsoft/collect_com_microsoft_cases.cc"
-        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/com_microsoft/cases_bias_gelu.cc"
-        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/com_microsoft/cases_cdist.cc"
-        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/cases/logical/collect_logical_cases.cc"
-        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/cases/logical/cases_not.cc"
-        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/cases/traditionalml/collect_traditionalml_cases.cc"
-        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/cases/traditionalml/cases_tree_ensemble.cc"
-        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/cases/traditionalml/tree_ensemble_corpus.cc"
-        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/cases/attention/collect_attention_cases.cc"
-        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/cases/attention/cases_attention.cc")
+        ${CPU_BACKEND_TEST_SOURCES})
     target_include_directories(lib_onnx_light_cpu_backend_test PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
@@ -962,13 +917,11 @@ if(ONNX_LIGHT_CPU_BUILD_PYTHON)
   # -------------------------------------------------------------------------
   # Kernel-registration Python extension: _cpuregister
   # -------------------------------------------------------------------------
-  # Exposes ``register_all_kernels()``, which installs the onnx-light ``Abs``,
-  # ``Exp``, ``Log`` and ``Not`` kernel classes into onnx-light's shared
-  # ``KernelDispatchTable``. It links the onnx-light kernel-registration
-  # library and is therefore only built when the integration is enabled.
+  # Exposes registration and inventory APIs. It links the onnx-light
+  # kernel-registration library and is therefore only built when the
+  # integration is enabled.
   if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
-    nanobind_add_module(_cpuregister STABLE_ABI
-        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/onnx_py/_cpuregister.cc")
+    nanobind_add_module(_cpuregister STABLE_ABI ${PY_REGISTER_SOURCES})
     target_include_directories(_cpuregister PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}")
     target_link_libraries(_cpuregister PRIVATE lib_onnx_light_cpu_kernels)
@@ -1040,29 +993,22 @@ if(ONNX_LIGHT_CPU_INSTALL)
       LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
       RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 
-  install(FILES
-      "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/simd_level.h"
-      DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/onnx_light_cpu/impl")
-
-  install(FILES
-      "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/execution.h"
-      "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/thread_topology.h"
-      "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/cpu_cache_topology.h"
-      "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/memory_traffic_profile.h"
-      "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/compute_arithmetic_profile.h"
-      DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/onnx_light_cpu/impl")
-
-  install(FILES
-      "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/math_kernels.h"
-      DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/onnx_light_cpu/impl/math")
-
-  install(FILES
-      "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/gemm/gemm_plan.h"
-      DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/onnx_light_cpu/impl/math/gemm")
-
-  install(FILES
-      "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/logical/logical_kernels.h"
-      DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/onnx_light_cpu/impl/logical")
+  set(_header_install_excludes
+      PATTERN "backend_test" EXCLUDE
+      PATTERN "onnx_py" EXCLUDE)
+  if(NOT ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
+    list(APPEND _header_install_excludes
+        PATTERN "gradient" EXCLUDE
+        PATTERN "kernels" EXCLUDE
+        PATTERN "patterns" EXCLUDE
+        PATTERN "schemas" EXCLUDE
+        PATTERN "shapes" EXCLUDE)
+  endif()
+  install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/"
+      DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/onnx_light_cpu"
+      FILES_MATCHING
+      PATTERN "*.h"
+      ${_header_install_excludes})
 
   if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
     install(TARGETS lib_onnx_light_cpu_kernels
@@ -1071,21 +1017,6 @@ if(ONNX_LIGHT_CPU_INSTALL)
         LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 
-    install(FILES
-        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/kernels/kernel_registration.h"
-        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/kernels/register_kernels.h"
-        DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/onnx_light_cpu/kernels")
-
-    install(FILES
-        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/kernels/math/abs_kernel.h"
-        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/kernels/math/exp_log_kernel.h"
-        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/kernels/math/gemm_kernel.h"
-        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/kernels/math/matmul_kernel.h"
-        DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/onnx_light_cpu/kernels/math")
-
-    install(FILES
-        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/kernels/logical/not_kernel.h"
-        DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/onnx_light_cpu/kernels/logical")
   endif()
 
   include(CMakePackageConfigHelpers)
@@ -1112,45 +1043,20 @@ endif()
 # Isolated C++ throughput benchmarks (opt-in, not run by ctest)
 # ---------------------------------------------------------------------------
 if(ONNX_LIGHT_CPU_BUILD_BENCHMARKS)
-  add_executable(gemm_throughput
-      "${CMAKE_CURRENT_SOURCE_DIR}/tools/gemm_throughput.cc")
-  target_link_libraries(gemm_throughput PRIVATE lib_onnx_light_cpu)
-  if(ONNX_LIGHT_CPU_SIMD_FLAGS)
-    target_compile_options(gemm_throughput PRIVATE ${_simd_flags})
-  endif()
-  onnx_light_apply_hardening(gemm_throughput)
-
-  add_executable(compact_gemm_throughput
-      "${CMAKE_CURRENT_SOURCE_DIR}/tools/compact_gemm_throughput.cc")
-  target_link_libraries(compact_gemm_throughput PRIVATE lib_onnx_light_cpu)
-  if(ONNX_LIGHT_CPU_SIMD_FLAGS)
-    target_compile_options(compact_gemm_throughput PRIVATE ${_simd_flags})
-  endif()
-  onnx_light_apply_hardening(compact_gemm_throughput)
-
-  add_executable(exp_log_throughput
-      "${CMAKE_CURRENT_SOURCE_DIR}/tools/exp_log_throughput.cc")
-  target_link_libraries(exp_log_throughput PRIVATE lib_onnx_light_cpu)
-  if(ONNX_LIGHT_CPU_SIMD_FLAGS)
-    target_compile_options(exp_log_throughput PRIVATE ${_simd_flags})
-  endif()
-  onnx_light_apply_hardening(exp_log_throughput)
-
-  add_executable(abs_throughput
-      "${CMAKE_CURRENT_SOURCE_DIR}/tools/abs_throughput.cc")
-  target_link_libraries(abs_throughput PRIVATE lib_onnx_light_cpu)
-  if(ONNX_LIGHT_CPU_SIMD_FLAGS)
-    target_compile_options(abs_throughput PRIVATE ${_simd_flags})
-  endif()
-  if(ONNX_LIGHT_CPU_HAVE_AVX512F_FLAG)
-    target_compile_definitions(abs_throughput PRIVATE ONNX_LIGHT_CPU_HAVE_AVX512=1)
-  endif()
-  onnx_light_apply_hardening(abs_throughput)
-
-  add_executable(tree_ensemble_throughput
-      "${CMAKE_CURRENT_SOURCE_DIR}/tools/tree_ensemble_throughput.cc")
-  target_link_libraries(tree_ensemble_throughput PRIVATE lib_onnx_light_cpu)
-  onnx_light_apply_hardening(tree_ensemble_throughput)
+  file(GLOB _throughput_sources CONFIGURE_DEPENDS
+      "${CMAKE_CURRENT_SOURCE_DIR}/tools/*_throughput.cc")
+  foreach(_source IN LISTS _throughput_sources)
+    get_filename_component(_target "${_source}" NAME_WE)
+    add_executable(${_target} "${_source}")
+    target_link_libraries(${_target} PRIVATE lib_onnx_light_cpu)
+    if(ONNX_LIGHT_CPU_SIMD_FLAGS)
+      target_compile_options(${_target} PRIVATE ${_simd_flags})
+    endif()
+    if(_target STREQUAL "abs_throughput" AND ONNX_LIGHT_CPU_HAVE_AVX512F_FLAG)
+      target_compile_definitions(${_target} PRIVATE ONNX_LIGHT_CPU_HAVE_AVX512=1)
+    endif()
+    onnx_light_apply_hardening(${_target})
+  endforeach()
 endif()
 
 # ---------------------------------------------------------------------------
@@ -1183,10 +1089,13 @@ if(ONNX_LIGHT_CPU_BUILD_TESTS)
   function(onnx_light_cpu_add_test _src _link_lib)
     get_filename_component(_name "${_src}" NAME_WE)
     add_executable(${_name} "${_src}")
-    if(_name STREQUAL "test_tree_ensemble")
-      target_sources(${_name} PRIVATE
-          "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/backend_test/cases/traditionalml/tree_ensemble_corpus.cc")
-    endif()
+    foreach(_corpus_source IN LISTS CPU_BACKEND_CORPUS_SOURCES)
+      get_filename_component(_corpus_name "${_corpus_source}" NAME_WE)
+      string(REGEX REPLACE "_corpus$" "" _corpus_subject "${_corpus_name}")
+      if(_name STREQUAL "test_${_corpus_subject}")
+        target_sources(${_name} PRIVATE "${_corpus_source}")
+      endif()
+    endforeach()
     target_link_libraries(${_name} PRIVATE ${_link_lib} GTest::gtest_main)
     target_include_directories(${_name} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
     if(_name STREQUAL "test_integer_gemm_vnni")

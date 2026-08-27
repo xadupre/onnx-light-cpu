@@ -1,14 +1,13 @@
 """
 onnx-light-cpu provides highly optimized CPU kernels for onnx-light.
 
-Supported operations: Abs (float16, float32, float64, int8, int32, int64),
-Exp and Log (float16, float32, float64), and Not (bool).
-Uses AVX/AVX2/AVX-512 when available, with SSE2 and scalar fallbacks.
+The available operators and data types are exposed by
+:func:`registered_kernels`. Kernels use AVX/AVX2/AVX-512 when available, with
+SSE2 and scalar fallbacks.
 
 The :func:`register_kernels` helper installs these kernels into ``onnx-light``'s
-C++ dispatch table so any ONNX model using ``Abs``, ``Exp``, ``Log``, ``Gemm``
-or ``Not`` runs the optimized kernel when evaluated through a
-``ReferenceEvaluator``.
+C++ dispatch table so supported ONNX nodes run the optimized kernels when
+evaluated through a ``ReferenceEvaluator``.
 """
 
 from ._processor_profile import (
@@ -26,16 +25,20 @@ from ._processor_profile import (
     benchmark_processor_performance,
 )
 from ._register import (
+    OperatorSupport,
     RegisteredKernel,
     clear_used_kernel_names,
     custom_op_schemas,
     has_backend_test_cases,
+    operator_support,
     operator_schema_lookup,
     register_backend_test_cases,
     register_custom_gradients,
     register_kernels,
+    register_operator_support,
     registered_kernel_names,
     registered_kernels,
+    set_kernel_usage_recording,
     used_kernel_names,
 )
 
@@ -48,6 +51,7 @@ __all__ = [
     "ExplicitAffinity",
     "LatencyMeasurement",
     "MemoryLevelMeasurement",
+    "OperatorSupport",
     "ProcessorPerformanceProfile",
     "ProcessorProfileMetadata",
     "ProcessorProfileOptionsEcho",
@@ -59,10 +63,13 @@ __all__ = [
     "custom_op_schemas",
     "has_backend_test_cases",
     "operator_schema_lookup",
+    "operator_support",
     "register_backend_test_cases",
     "register_custom_gradients",
     "register_kernels",
+    "register_operator_support",
     "registered_kernel_names",
     "registered_kernels",
+    "set_kernel_usage_recording",
     "used_kernel_names",
 ]

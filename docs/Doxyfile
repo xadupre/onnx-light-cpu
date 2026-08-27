@@ -13,8 +13,8 @@ GENERATE_LATEX         = NO
 GENERATE_XML           = YES
 XML_OUTPUT             = xml
 
-# Only the public C++ headers make up the documented API surface.
-INPUT                  = ../onnx_light_cpu/impl ../onnx_light_cpu/kernels
+# Discover headers recursively so new documented components need no Doxyfile update.
+INPUT                  = ../onnx_light_cpu
 FILE_PATTERNS          = *.h
 RECURSIVE              = YES
 
