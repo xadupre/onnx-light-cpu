@@ -51,13 +51,11 @@ roadmap is not implementation-ready and no implementation is active.
       - Up-projection and most integer shapes are near parity, but
         down-projection remains around ``0.5x`` and noisy integer runs still
         need a reproducible minimum-speedup result.
-    * - In progress
+    * - Completed
       - :doc:`Attention <2026/2026_08_attention>`
-      - Retain the completed bounded-memory MHA path and close the remaining
-        FP32 GQA/MQA and rank-3 gaps after profiling the ONNX Runtime kernels
-        actually selected for those shapes.
-      - MHA priority cases reach parity, while grouped-query, multi-query, and
-        rank-3 execution still leave avoidable scheduling and traversal cost.
+      - Use the delivered materialized and bounded-memory paths with the
+        reproducible ONNX Runtime parity gate.
+      - Attention PR15 delivers MHA, GQA/MQA, and rank-3 execution.
     * - Completed
       - :doc:`Exp and Log parity <2026/2026_08_exp_log_parity>`
       - Reach the published ONNX Runtime parity and numerical gates.
@@ -75,11 +73,12 @@ roadmap is not implementation-ready and no implementation is active.
       - :doc:`Unary elementwise <2026/2026_08_unary_elementwise>`
       - Unify scalar, SIMD, traversal, and scheduling for unary operators.
       - Individual kernels duplicate dispatch logic and leave broad gaps.
-    * - Planned
+    * - Completed
       - :doc:`Binary elementwise <2026/2026_08_binary_elementwise>`
-      - Start the generated schema/type manifest and lazy backend corpus, then
-        add the prepared SIMD broadcast engine and bounded fusion.
-      - Generic rank-aware offset computation is too expensive per element.
+      - Use the shared prepared broadcast engine for all 19 registered binary
+        operators.
+      - Binary PR08 delivers its generated correctness corpus and reproducible
+        ONNX Runtime parity gate.
     * - In progress
       - :doc:`Binary elementwise performance
         <2026/2026_08_binary_elementwise_performance>`
