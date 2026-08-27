@@ -80,15 +80,15 @@ parser.add_argument(
     "-r",
     "--repeat",
     type=int,
-    default=None,
-    help="maximum measured calls per runtime and case (default: adaptive to input size)",
+    default=10 * (os.cpu_count() or 1),
+    help="maximum measured calls per runtime and case (default: 10 per CPU)",
 )
 parser.add_argument(
     "-w",
     "--warmup",
     type=int,
-    default=3,
-    help="untimed warm-up calls per runtime and case (default: 3)",
+    default=os.cpu_count() or 1,
+    help="untimed warm-up calls per runtime and case (default: one per CPU)",
 )
 parser.add_argument(
     "-t",
@@ -100,7 +100,7 @@ parser.add_argument(
 args, unknown_args = parser.parse_known_args()
 if args.max_cases < 0:
     parser.error("--max-cases must be greater than or equal to 0")
-if args.repeat is not None and args.repeat <= 0:
+if args.repeat <= 0:
     parser.error("--repeat must be greater than 0")
 if args.warmup < 0:
     parser.error("--warmup must be greater than or equal to 0")
@@ -153,10 +153,8 @@ print(f"-- collected {len(_CASES)} cases")
 # -------------
 #
 # Each candidate gets up to ``--warmup`` untimed calls, then up to ``--repeat``
-# measured calls. By default, the repeat count shrinks with the case's input
-# size because this aggregate example covers hundreds of cases. Both phases
-# stop once ``--max-repeat-time`` cumulative seconds have elapsed, and the
-# median wall-clock time is retained.
+# measured calls. Both phases stop once ``--max-repeat-time`` cumulative
+# seconds have elapsed, and the median wall-clock time is retained.
 
 
 def measure(func, repeat, warmup, max_duration):
@@ -178,21 +176,6 @@ def measure(func, repeat, warmup, max_duration):
         if max_duration is not None and total_duration >= max_duration:
             break
     return float(np.median(timings))
-
-
-def _case_element_count(tc):
-    return max(
-        (
-            int(np.prod([int(d) for d in tensor.shape]))
-            for ds in tc.data_sets
-            for tensor in (*ds.inputs, *ds.outputs)
-        ),
-        default=1,
-    )
-
-
-def _repeat_for_element_count(element_count):
-    return max(3, min(30, 20_000_000 // element_count))
 
 
 # %%
@@ -218,9 +201,8 @@ register_kernels()
 # created. Both runtimes therefore keep their default spinning behavior
 # without leaving one runtime's live pool to perturb the other's measurements.
 print("-- benchmark onnx-light-cpu")
-repeat_description = args.repeat if args.repeat is not None else "adaptive"
 print(
-    f"-- timing warmup={args.warmup} repeat={repeat_description} "
+    f"-- timing warmup={args.warmup} repeat={args.repeat} "
     f"max_repeat_time={args.max_repeat_time:g}s"
 )
 measurements = []
@@ -241,14 +223,9 @@ for tc in _progress:
     clear_used_kernel_names()
     light_out = [np.array(output, copy=True) for output in light_session.run(None, feeds)]
     assert expected_kernel in used_kernel_names(), used_kernel_names()
-    repeat = (
-        args.repeat
-        if args.repeat is not None
-        else _repeat_for_element_count(_case_element_count(tc))
-    )
     light_time = measure(
         lambda feeds=feeds, sess=light_session: sess.run(None, feeds),
-        repeat,
+        args.repeat,
         warmup=args.warmup,
         max_duration=args.max_repeat_time,
     )
@@ -264,7 +241,6 @@ for tc in _progress:
             "feeds": feeds,
             "light_out": light_out,
             "light_time": light_time,
-            "repeat": repeat,
             "node_count": len(tc.model.graph.node),
             "shapes": shapes,
             "dtypes": dtypes,
@@ -321,7 +297,7 @@ for measurement in _progress:
                 )
         ort_time = measure(
             lambda feeds=measurement["feeds"], sess=ort_session: sess.run(None, feeds),
-            measurement["repeat"],
+            args.repeat,
             warmup=args.warmup,
             max_duration=args.max_repeat_time,
         )
