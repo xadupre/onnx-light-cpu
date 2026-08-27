@@ -9,7 +9,7 @@
 
 #include "onnx_light_cpu/impl/math/gemm/vnni/integer_gemm_vnni.h"
 
-#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_INTEGER
+#if defined(ONNX_LIGHT_CPU_HAVE_AVX2_INTEGER) || defined(ONNX_LIGHT_CPU_HAVE_AVX512VNNI)
 #include "onnx_light_cpu/impl/simd_level.h"
 #endif
 
@@ -89,6 +89,13 @@ void CheckAllPaths(const std::vector<std::uint8_t> &a, bool a_signed,
         native.data(), rows, cols, depth, azp.data(), static_cast<std::int64_t>(azp.size()),
         bzp.data(), static_cast<std::int64_t>(bzp.size()));
     EXPECT_EQ(native, expected);
+    if (rows == 1) {
+      std::fill(native.begin(), native.end(), 0);
+      onnx_light_cpu::detail::IntegerMatMulSkinnyMAvx2(
+          a.data(), a_signed, b.data(), b_signed, native.data(), cols, depth, azp[0], bzp.data(),
+          static_cast<std::int64_t>(bzp.size()));
+      EXPECT_EQ(native, expected);
+    }
   }
 #endif
 
@@ -99,6 +106,17 @@ void CheckAllPaths(const std::vector<std::uint8_t> &a, bool a_signed,
         &onnx_light_cpu::detail::IntegerDotU8S8Avx512Vnni, a.data(), a_signed, b.data(), b_signed,
         native.data(), rows, cols, depth, azp.data(), static_cast<std::int64_t>(azp.size()),
         bzp.data(), static_cast<std::int64_t>(bzp.size()));
+    EXPECT_EQ(native, expected);
+  }
+#endif
+
+#if defined(ONNX_LIGHT_CPU_HAVE_AVX512VNNI) && defined(ONNX_LIGHT_CPU_HAVE_AVX512BW)
+  if (rows == 1 && onnx_light_cpu::CpuSupportsAvx512Vnni() &&
+      onnx_light_cpu::CpuSupportsAvx512BW()) {
+    std::vector<std::int32_t> native(expected.size(), 0);
+    onnx_light_cpu::detail::IntegerMatMulSkinnyMAvx512(
+        a.data(), a_signed, b.data(), b_signed, native.data(), cols, depth, azp[0], bzp.data(),
+        static_cast<std::int64_t>(bzp.size()));
     EXPECT_EQ(native, expected);
   }
 #endif

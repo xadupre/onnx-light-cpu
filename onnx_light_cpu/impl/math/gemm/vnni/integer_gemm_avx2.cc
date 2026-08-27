@@ -6,6 +6,8 @@
 
 #include "onnx_light_cpu/impl/math/gemm/vnni/integer_gemm_vnni.h"
 
+#include "onnx_light_cpu/impl/execution.h"
+
 #include <algorithm>
 #include <bit>
 #include <cmath>
@@ -98,6 +100,71 @@ std::int32_t IntegerDotU8S8Avx2(const std::uint8_t *ua, const std::int8_t *sb, s
                                         static_cast<std::int32_t>(sb[index]));
   }
   return std::bit_cast<std::int32_t>(total);
+}
+
+namespace {
+
+template <bool ASigned, bool BSigned>
+void IntegerMatMulSkinnyMAvx2Impl(const std::uint8_t *a, const std::uint8_t *b, std::int32_t *c,
+                                  std::int64_t cols, std::int64_t depth, std::int32_t a_zero_point,
+                                  const std::int32_t *b_zero_point,
+                                  std::int64_t b_zero_point_count) {
+  ExecuteRanges(
+      cols, static_cast<double>(depth) / 16.0, 8, [&](std::int64_t begin, std::int64_t end) {
+        std::int64_t column = begin;
+        for (; column + 8 <= end; column += 8) {
+          __m256i accumulator = _mm256_setzero_si256();
+          const __m256i bz =
+              b_zero_point_count == 1
+                  ? _mm256_set1_epi32(b_zero_point[0])
+                  : _mm256_loadu_si256(reinterpret_cast<const __m256i *>(b_zero_point + column));
+          for (std::int64_t inner = 0; inner < depth; ++inner) {
+            const std::int32_t av = ASigned ? static_cast<std::int8_t>(a[inner]) : a[inner];
+            const __m128i packed_b =
+                _mm_loadl_epi64(reinterpret_cast<const __m128i *>(b + inner * cols + column));
+            const __m256i bv =
+                BSigned ? _mm256_cvtepi8_epi32(packed_b) : _mm256_cvtepu8_epi32(packed_b);
+            const __m256i adjusted_b = _mm256_sub_epi32(bv, bz);
+            const __m256i adjusted_a = _mm256_set1_epi32(av - a_zero_point);
+            accumulator = _mm256_add_epi32(accumulator, _mm256_mullo_epi32(adjusted_a, adjusted_b));
+          }
+          _mm256_storeu_si256(reinterpret_cast<__m256i *>(c + column), accumulator);
+        }
+        for (; column < end; ++column) {
+          std::uint32_t accumulator = 0;
+          const std::int32_t bz = b_zero_point_count == 1 ? b_zero_point[0] : b_zero_point[column];
+          for (std::int64_t inner = 0; inner < depth; ++inner) {
+            const std::int32_t av = ASigned ? static_cast<std::int8_t>(a[inner]) : a[inner];
+            const std::uint8_t raw_b = b[inner * cols + column];
+            const std::int32_t bv = BSigned ? static_cast<std::int8_t>(raw_b) : raw_b;
+            accumulator += static_cast<std::uint32_t>((av - a_zero_point) * (bv - bz));
+          }
+          c[column] = std::bit_cast<std::int32_t>(accumulator);
+        }
+      });
+}
+
+} // namespace
+
+void IntegerMatMulSkinnyMAvx2(const std::uint8_t *a, bool a_signed, const std::uint8_t *b,
+                              bool b_signed, std::int32_t *c, std::int64_t cols, std::int64_t depth,
+                              std::int32_t a_zero_point, const std::int32_t *b_zero_point,
+                              std::int64_t b_zero_point_count) {
+  if (a_signed) {
+    if (b_signed) {
+      IntegerMatMulSkinnyMAvx2Impl<true, true>(a, b, c, cols, depth, a_zero_point, b_zero_point,
+                                               b_zero_point_count);
+    } else {
+      IntegerMatMulSkinnyMAvx2Impl<true, false>(a, b, c, cols, depth, a_zero_point, b_zero_point,
+                                                b_zero_point_count);
+    }
+  } else if (b_signed) {
+    IntegerMatMulSkinnyMAvx2Impl<false, true>(a, b, c, cols, depth, a_zero_point, b_zero_point,
+                                              b_zero_point_count);
+  } else {
+    IntegerMatMulSkinnyMAvx2Impl<false, false>(a, b, c, cols, depth, a_zero_point, b_zero_point,
+                                               b_zero_point_count);
+  }
 }
 
 void IntegerMatMulU8S8Avx2(const std::uint8_t *a, const std::int8_t *b, std::int32_t *c,
