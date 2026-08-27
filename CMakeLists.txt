@@ -993,29 +993,22 @@ if(ONNX_LIGHT_CPU_INSTALL)
       LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
       RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 
-  install(FILES
-      "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/simd_level.h"
-      DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/onnx_light_cpu/impl")
-
-  install(FILES
-      "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/execution.h"
-      "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/thread_topology.h"
-      "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/cpu_cache_topology.h"
-      "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/memory_traffic_profile.h"
-      "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/compute_arithmetic_profile.h"
-      DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/onnx_light_cpu/impl")
-
-  install(FILES
-      "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/math_kernels.h"
-      DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/onnx_light_cpu/impl/math")
-
-  install(FILES
-      "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/gemm/gemm_plan.h"
-      DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/onnx_light_cpu/impl/math/gemm")
-
-  install(FILES
-      "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/logical/logical_kernels.h"
-      DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/onnx_light_cpu/impl/logical")
+  set(_header_install_excludes
+      PATTERN "backend_test" EXCLUDE
+      PATTERN "onnx_py" EXCLUDE)
+  if(NOT ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
+    list(APPEND _header_install_excludes
+        PATTERN "gradient" EXCLUDE
+        PATTERN "kernels" EXCLUDE
+        PATTERN "patterns" EXCLUDE
+        PATTERN "schemas" EXCLUDE
+        PATTERN "shapes" EXCLUDE)
+  endif()
+  install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/"
+      DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/onnx_light_cpu"
+      FILES_MATCHING
+      PATTERN "*.h"
+      ${_header_install_excludes})
 
   if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
     install(TARGETS lib_onnx_light_cpu_kernels
@@ -1024,21 +1017,6 @@ if(ONNX_LIGHT_CPU_INSTALL)
         LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 
-    install(FILES
-        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/kernels/kernel_registration.h"
-        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/kernels/register_kernels.h"
-        DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/onnx_light_cpu/kernels")
-
-    install(FILES
-        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/kernels/math/abs_kernel.h"
-        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/kernels/math/exp_log_kernel.h"
-        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/kernels/math/gemm_kernel.h"
-        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/kernels/math/matmul_kernel.h"
-        DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/onnx_light_cpu/kernels/math")
-
-    install(FILES
-        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/kernels/logical/not_kernel.h"
-        DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/onnx_light_cpu/kernels/logical")
   endif()
 
   include(CMakePackageConfigHelpers)
