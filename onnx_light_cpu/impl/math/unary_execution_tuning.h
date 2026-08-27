@@ -36,6 +36,10 @@ inline constexpr UnaryExecutionTuning kDefaultAbs32ExecutionTuning{2 * 1024 * 10
 inline constexpr UnaryExecutionTuning kDefaultAbs64ExecutionTuning{2 * 1024 * 1024, 512 * 1024, 0};
 inline constexpr UnaryExecutionTuning kDefaultAbs16ExecutionTuning{4 * 1024 * 1024, 128 * 1024, 0};
 inline constexpr UnaryExecutionTuning kDefaultAbs8ExecutionTuning{8 * 1024 * 1024, 64 * 1024, 0};
+inline constexpr UnaryExecutionTuning kDefaultAbsInt8ExecutionTuning{1024 * 1024, 64 * 1024, 0};
+inline constexpr UnaryExecutionTuning kDefaultAbsInt16ExecutionTuning{1024 * 1024, 128 * 1024, 0};
+inline constexpr UnaryExecutionTuning kDefaultAbsInt32ExecutionTuning{512 * 1024, 256 * 1024, 0};
+inline constexpr UnaryExecutionTuning kDefaultAbsInt64ExecutionTuning{256 * 1024, 128 * 1024, 64};
 inline constexpr UnaryExecutionTuning kDefaultExpLogExecutionTuning{2 * 1024 * 1024, 256 * 1024,
                                                                     32};
 inline constexpr UnaryExecutionTuning kDefaultExpLogHalfExecutionTuning{1024 * 1024, 128 * 1024,

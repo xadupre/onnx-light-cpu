@@ -98,7 +98,22 @@ TEST(OnnxLightAbsKernel, RegistersAndAppliesValidatedTuning) {
     EXPECT_EQ(key.kernel, "Abs");
     EXPECT_EQ(key.implementation, "simd_dispatch");
     EXPECT_EQ(key.tuning_abi, onnx_light_cpu::AbsKernel::kTuningAbi);
-    EXPECT_NE(rt_ns::GetKernelTuningRegistry().FindSchema(key), nullptr);
+    const auto type_schema = rt_ns::GetKernelTuningRegistry().FindSchema(key);
+    ASSERT_NE(type_schema, nullptr);
+    if (type == rt_ns::DataType::INT8 || type == rt_ns::DataType::INT16 ||
+        type == rt_ns::DataType::INT32 || type == rt_ns::DataType::INT64) {
+      const auto defaults = type_schema->portable_defaults();
+      const int64_t threshold = type == rt_ns::DataType::INT64   ? 256 * 1024
+                                : type == rt_ns::DataType::INT32 ? 512 * 1024
+                                                                 : 1024 * 1024;
+      const int64_t block = type == rt_ns::DataType::INT8    ? 64 * 1024
+                            : type == rt_ns::DataType::INT32 ? 256 * 1024
+                                                             : 128 * 1024;
+      EXPECT_EQ(defaults.Get<int64_t>("parallel.threshold_bytes"), threshold);
+      EXPECT_EQ(defaults.Get<int64_t>("parallel.target_block_bytes"), block);
+      EXPECT_EQ(defaults.Get<int64_t>("parallel.max_participants"),
+                type == rt_ns::DataType::INT64 ? 64 : 0);
+    }
   }
 
   const auto key = kernel.TuningKey(static_cast<int32_t>(rt_ns::DataType::FLOAT));

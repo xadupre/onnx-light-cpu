@@ -83,14 +83,18 @@ const UnaryExecutionTuning &DefaultTuning(int32_t element_type) {
   case DataType::FLOAT:
     return kDefaultAbsFloat32ExecutionTuning;
   case DataType::DOUBLE:
-  case DataType::INT64:
     return kDefaultAbs64ExecutionTuning;
   case DataType::FLOAT16:
   case DataType::BFLOAT16:
-  case DataType::INT16:
     return kDefaultAbs16ExecutionTuning;
   case DataType::INT8:
-    return kDefaultAbs8ExecutionTuning;
+    return kDefaultAbsInt8ExecutionTuning;
+  case DataType::INT16:
+    return kDefaultAbsInt16ExecutionTuning;
+  case DataType::INT32:
+    return kDefaultAbsInt32ExecutionTuning;
+  case DataType::INT64:
+    return kDefaultAbsInt64ExecutionTuning;
   default:
     return kDefaultAbs32ExecutionTuning;
   }
