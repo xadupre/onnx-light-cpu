@@ -575,6 +575,12 @@ TEST(OnnxLightBackendKernels, LogBenchmarkRunsThroughRuntime) {
   EXPECT_TRUE(failures.empty()) << Describe(failures);
 }
 
+TEST(OnnxLightBackendKernels, SwiGLUBenchmarkRunsThroughRuntime) {
+  const std::vector<std::string> failures = RunCpuBackendCases(
+      "SwiGLU", core::backend_test::TestMode::BENCHMARK, "test_cpu_swiglu_n1024_float32_benchmark");
+  EXPECT_TRUE(failures.empty()) << Describe(failures);
+}
+
 TEST(OnnxLightBackendKernels, NotBenchmarkRunsThroughRuntime) {
   const std::vector<std::string> failures = RunCpuBackendCases(
       "Not", core::backend_test::TestMode::BENCHMARK, "test_cpu_not_n1024_bool_benchmark");
