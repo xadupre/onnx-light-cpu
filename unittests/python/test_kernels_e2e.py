@@ -210,116 +210,176 @@ def _assert_close(actual, expected, rtol, atol):
         )
 
 
-def _normalization_function_reference_model(onnx, model, op_type, dtype):
-    """Expands low-precision normalization while preserving every graph type."""
-    node = model.graph.node[0]
-    attributes = {
-        attribute.name: onnx.helper.get_attribute_value(attribute) for attribute in node.attribute
-    }
-    inputs = list(model.graph.input)
-    outputs = list(model.graph.output)
-    nodes = []
-    x_name = node.input[0]
-    y_name = node.output[0]
+def _node_attributes(node):
+    return {attribute.name: helper.get_attribute_value(attribute) for attribute in node.attribute}
 
-    def constant(name, value, elem_type):
-        tensor = onnx.TensorProto()
-        tensor.name = name
-        tensor.data_type = elem_type
-        constant_dtype = np.float32 if elem_type == int(onnx.TensorProto.FLOAT) else dtype
-        tensor.raw_data = np.asarray(value, dtype=constant_dtype).tobytes()
-        nodes.append(onnx.helper.make_node("Constant", [], [name], value=tensor))
 
-    def axes_input(axes):
-        tensor = onnx.numpy_helper.from_array(np.asarray(axes, dtype=np.int64), "AxesValue")
-        nodes.append(onnx.helper.make_node("Constant", [], ["Axes"], value=tensor))
+def _batch_normalization_reference(feeds, input_names, attributes):
+    """Ports the ONNX ``BatchNormalization`` reference math (no stash_type)."""
+    x, scale, bias, mean, var = (feeds[name] for name in input_names[:5])
+    epsilon = float(attributes.get("epsilon", 1.0e-5))
+    dim_ones = (1,) * (x.ndim - 2)
 
-    x_type = int(inputs[0].type.tensor_type.elem_type)
-    if op_type == "MeanVarianceNormalization":
-        axes = attributes.get("axes", [0, 2, 3])
-        axes_input(axes)
-        constant("Epsilon", 1.0e-9, int(onnx.TensorProto.FLOAT))
-        nodes.extend(
-            [
-                onnx.helper.make_node(
-                    "Cast", [x_name], ["XFloat"], to=int(onnx.TensorProto.FLOAT)
-                ),
-                onnx.helper.make_node("ReduceMean", ["XFloat", "Axes"], ["Mean"], keepdims=1),
-                onnx.helper.make_node("Mul", ["XFloat", "XFloat"], ["Squared"]),
-                onnx.helper.make_node(
-                    "ReduceMean", ["Squared", "Axes"], ["MeanSquared"], keepdims=1
-                ),
-                onnx.helper.make_node("Mul", ["Mean", "Mean"], ["SquaredMean"]),
-                onnx.helper.make_node("Sub", ["MeanSquared", "SquaredMean"], ["Variance"]),
-                onnx.helper.make_node("Sqrt", ["Variance"], ["StdDev"]),
-                onnx.helper.make_node("Add", ["StdDev", "Epsilon"], ["Denominator"]),
-                onnx.helper.make_node("Sub", ["XFloat", "Mean"], ["Centered"]),
-                onnx.helper.make_node("Div", ["Centered", "Denominator"], ["YFloat"]),
-                onnx.helper.make_node("Cast", ["YFloat"], [y_name], to=x_type),
-            ]
-        )
+    def test_mode(m, v):
+        s = scale.reshape(-1, *dim_ones)
+        b = bias.reshape(-1, *dim_ones)
+        m = m.reshape(-1, *dim_ones)
+        v = v.reshape(-1, *dim_ones)
+        return (s * (x - m) / np.sqrt(v + epsilon) + b).astype(x.dtype)
+
+    if not int(attributes.get("training_mode", 0)):
+        return [test_mode(mean, var)]
+
+    reduce_axes = tuple(np.delete(np.arange(x.ndim), 1))
+    saved_mean = x.mean(axis=reduce_axes)
+    saved_var = x.var(axis=reduce_axes)
+    momentum = float(attributes.get("momentum", 0.9))
+    output_mean = mean * momentum + saved_mean * (1 - momentum)
+    output_var = var * momentum + saved_var * (1 - momentum)
+    y = test_mode(saved_mean, saved_var)
+    return [y, output_mean.astype(x.dtype), output_var.astype(x.dtype)]
+
+
+def _group_normalization_reference(feeds, input_names, attributes, version):
+    """Ports the ONNX ``GroupNormalization`` function body (v18 or v21)."""
+    x, scale, bias = (feeds[name] for name in input_names[:3])
+    num_groups = int(attributes["num_groups"])
+    epsilon = float(attributes.get("epsilon", 1.0e-5))
+    n = x.shape[0]
+    x_dtype = x.dtype
+    # Stage one (mean/variance/normalization) always runs at FLOAT precision
+    # for opset 21+ (default stash_type); opset 18 has no stash_type and
+    # computes stage one directly at the input's own precision.
+    stage_one = x.astype(np.float32) if version >= 21 else x
+    x3d = stage_one.reshape(n, num_groups, -1)
+    mean = x3d.mean(axis=2, keepdims=True)
+    mean_of_square = (x3d * x3d).mean(axis=2, keepdims=True)
+    variance = mean_of_square - mean * mean
+    stddev = np.sqrt(variance + np.asarray(epsilon, dtype=stage_one.dtype))
+    normalized = (x3d - mean) / stddev
+    if version >= 21:
+        # Stage two applies scale/bias per channel (shape (C,)), independent
+        # of stash_type.
+        normalized = normalized.reshape(x.shape).astype(x_dtype)
+        affine_shape = (1, x.shape[1]) + (1,) * (x.ndim - 2)
     else:
-        rank = len(inputs[0].type.tensor_type.shape.dim)
-        axis = int(attributes.get("axis", -1))
-        if axis < 0:
-            axis += rank
-        axes_input(range(axis, rank))
-        epsilon = float(attributes.get("epsilon", 1.0e-5))
-        constant("Epsilon", epsilon, int(onnx.TensorProto.FLOAT))
-        nodes.append(
-            onnx.helper.make_node("Cast", [x_name], ["XFloat"], to=int(onnx.TensorProto.FLOAT))
-        )
-        if op_type == "LayerNormalization":
-            nodes.extend(
-                [
-                    onnx.helper.make_node("ReduceMean", ["XFloat", "Axes"], ["Mean"], keepdims=1),
-                    onnx.helper.make_node("Sub", ["XFloat", "Mean"], ["Centered"]),
-                    onnx.helper.make_node("Mul", ["Centered", "Centered"], ["Squared"]),
-                    onnx.helper.make_node(
-                        "ReduceMean", ["Squared", "Axes"], ["Variance"], keepdims=1
-                    ),
-                ]
-            )
-        else:
-            nodes.extend(
-                [
-                    onnx.helper.make_node("Mul", ["XFloat", "XFloat"], ["Squared"]),
-                    onnx.helper.make_node(
-                        "ReduceMean", ["Squared", "Axes"], ["Variance"], keepdims=1
-                    ),
-                ]
-            )
-        nodes.extend(
-            [
-                onnx.helper.make_node("Add", ["Variance", "Epsilon"], ["Adjusted"]),
-                onnx.helper.make_node("Sqrt", ["Adjusted"], ["Denominator"]),
-                onnx.helper.make_node(
-                    "Div",
-                    ["Centered" if op_type == "LayerNormalization" else "XFloat", "Denominator"],
-                    ["NormalizedFloat"],
-                ),
-                onnx.helper.make_node("Cast", ["NormalizedFloat"], ["NormalizedX"], to=x_type),
-            ]
-        )
-        scale_type = int(inputs[1].type.tensor_type.elem_type)
-        normalized = "NormalizedX"
-        if scale_type != x_type:
-            nodes.append(
-                onnx.helper.make_node("Cast", [normalized], ["NormalizedScale"], to=scale_type)
-            )
-            normalized = "NormalizedScale"
-        nodes.append(onnx.helper.make_node("Mul", [normalized, node.input[1]], ["Scaled"]))
-        if op_type == "LayerNormalization" and len(inputs) == 3:
-            nodes.append(onnx.helper.make_node("Add", ["Scaled", node.input[2]], [y_name]))
-        else:
-            nodes.append(onnx.helper.make_node("Identity", ["Scaled"], [y_name]))
+        # Opset 18 applies scale/bias per group (shape (num_groups,)) before
+        # reshaping back to the original channel layout.
+        affine_shape = (1, num_groups, 1)
+    y = normalized * scale.reshape(affine_shape) + bias.reshape(affine_shape)
+    return [y.reshape(x.shape).astype(x_dtype)]
 
-    graph = onnx.helper.make_graph(nodes, f"{op_type}Reference", inputs, outputs)
-    reference_model = onnx.helper.make_model(
-        graph, opset_imports=[onnx.helper.make_opsetid("", 23)]
-    )
-    reference_model.ir_version = model.ir_version
-    return reference_model
+
+def _instance_normalization_reference(feeds, input_names, attributes):
+    """Ports the ONNX ``InstanceNormalization`` reference math (no stash_type)."""
+    x, scale, bias = (feeds[name] for name in input_names[:3])
+    epsilon = float(attributes.get("epsilon", 1.0e-5))
+    axes = tuple(range(2, x.ndim))
+    mean = np.mean(x, axis=axes, keepdims=True)
+    var = np.var(x, axis=axes, keepdims=True)
+    dim_ones = (1,) * (x.ndim - 2)
+    s = scale.reshape(-1, *dim_ones)
+    b = bias.reshape(-1, *dim_ones)
+    y = s * (x - mean) / np.sqrt(var + epsilon) + b
+    return [y.astype(x.dtype)]
+
+
+def _layer_normalization_reference(feeds, input_names, attributes):
+    """Ports ``LayerNormalization``'s stash_type=FLOAT default semantics."""
+    x = feeds[input_names[0]]
+    scale = feeds[input_names[1]]
+    bias = feeds[input_names[2]] if len(input_names) > 2 else None
+    axis = int(attributes.get("axis", -1))
+    epsilon = float(attributes.get("epsilon", 1.0e-5))
+    if axis < 0:
+        axis += x.ndim
+    axes = tuple(range(axis, x.ndim))
+    x_dtype = x.dtype
+    x32 = x.astype(np.float32)
+    mean = x32.mean(axis=axes, keepdims=True)
+    centered = x32 - mean
+    variance = (centered * centered).mean(axis=axes, keepdims=True)
+    denominator = np.sqrt(variance + np.float32(epsilon))
+    normalized = (centered / denominator).astype(x_dtype)
+    if scale.dtype != x_dtype:
+        normalized = normalized.astype(scale.dtype)
+    y = normalized * scale
+    if bias is not None:
+        y = y + bias
+    return [y]
+
+
+def _rms_normalization_reference(feeds, input_names, attributes):
+    """Ports ``RMSNormalization``'s stash_type=FLOAT default semantics."""
+    x = feeds[input_names[0]]
+    scale = feeds[input_names[1]]
+    axis = int(attributes.get("axis", -1))
+    epsilon = float(attributes.get("epsilon", 1.0e-5))
+    if axis < 0:
+        axis += x.ndim
+    axes = tuple(range(axis, x.ndim))
+    x_dtype = x.dtype
+    x32 = x.astype(np.float32)
+    variance = (x32 * x32).mean(axis=axes, keepdims=True)
+    denominator = np.sqrt(variance + np.float32(epsilon))
+    normalized = (x32 / denominator).astype(x_dtype)
+    if scale.dtype != x_dtype:
+        normalized = normalized.astype(scale.dtype)
+    return [normalized * scale]
+
+
+def _lp_normalization_reference(feeds, input_names, attributes):
+    """Ports the ONNX ``LpNormalization`` reference math."""
+    x = feeds[input_names[0]]
+    axis = int(attributes.get("axis", -1))
+    p = int(attributes.get("p", 2))
+    norm = np.power(np.power(x, p).sum(axis=axis), 1.0 / p)
+    norm = np.expand_dims(norm, axis)
+    y = np.where(norm == 0, 0, x / norm)
+    return [y.astype(x.dtype)]
+
+
+def _mean_variance_normalization_reference(feeds, input_names, attributes):
+    """Ports the ONNX ``MeanVarianceNormalization`` function body (FLOAT stage)."""
+    x = feeds[input_names[0]]
+    axes = tuple(int(axis) for axis in attributes.get("axes", (0, 2, 3)))
+    x_dtype = x.dtype
+    x32 = x.astype(np.float32)
+    mean = x32.mean(axis=axes, keepdims=True)
+    mean_of_square = (x32 * x32).mean(axis=axes, keepdims=True)
+    variance = mean_of_square - mean * mean
+    std_dev = np.sqrt(variance)
+    y = (x32 - mean) / (std_dev + np.float32(1.0e-9))
+    return [y.astype(x_dtype)]
+
+
+_NORMALIZATION_REFERENCES = {
+    "BatchNormalization": _batch_normalization_reference,
+    "InstanceNormalization": _instance_normalization_reference,
+    "LayerNormalization": _layer_normalization_reference,
+    "LpNormalization": _lp_normalization_reference,
+    "MeanVarianceNormalization": _mean_variance_normalization_reference,
+    "RMSNormalization": _rms_normalization_reference,
+}
+
+
+def _normalization_reference(op_type, node, feeds, group_normalization_version=21):
+    """Computes the standard ONNX reference outputs for one normalization node.
+
+    This mirrors the exact math from ONNX's native reference kernels (for ops
+    with one, such as ``BatchNormalization``/``InstanceNormalization``) or from
+    their ``FunctionBody``/``SetContextDependentFunctionBodyBuilder``
+    decomposition (for ops expanded from an ONNX function, such as
+    ``GroupNormalization``/``MeanVarianceNormalization``), computed directly
+    with NumPy instead of building and running an ONNX graph.
+    """
+    attributes = _node_attributes(node)
+    input_names = list(node.input)
+    if op_type == "GroupNormalization":
+        return _group_normalization_reference(
+            feeds, input_names, attributes, group_normalization_version
+        )
+    return _NORMALIZATION_REFERENCES[op_type](feeds, input_names, attributes)
 
 
 class TestBackendCases(TestCase):
@@ -427,9 +487,6 @@ class TestBackendCases(TestCase):
         assert benchmark_ops <= set(_REGISTERED_KERNELS)
 
     def test_normalization_benchmarks_match_onnx_references(self):
-        import onnx
-        from onnx.reference import ReferenceEvaluator as OnnxReferenceEvaluator
-
         try:
             import onnxruntime as ort
         except ImportError:
@@ -489,7 +546,7 @@ class TestBackendCases(TestCase):
                             if "Type Error:" not in str(exc):
                                 raise
                             ort_session = None
-                    reference_session = None
+                    node = tc.model.graph.node[0]
                     for data_set in tc.data_sets:
                         feeds = {
                             name: _to_numpy(tensor)
@@ -507,24 +564,7 @@ class TestBackendCases(TestCase):
                                     raise
                                 ort_session = None
                         if expected is None:
-                            if reference_session is None:
-                                reference_model = onnx.load_from_string(model_bytes)
-                                if (
-                                    op_type == "MeanVarianceNormalization" and dtype != "float32"
-                                ) or (
-                                    op_type in {"LayerNormalization", "RMSNormalization"}
-                                    and dtype == "bfloat16"
-                                ):
-                                    # The stock evaluator's MVN function has FLOAT
-                                    # constants incompatible with low-precision X, and
-                                    # its BF16 Layer/RMS implementations do not honor
-                                    # FLOAT stash arithmetic. Expand the schema
-                                    # computation without changing graph element types.
-                                    reference_model = _normalization_function_reference_model(
-                                        onnx, reference_model, op_type, feeds["X"].dtype
-                                    )
-                                reference_session = OnnxReferenceEvaluator(reference_model)
-                            expected = reference_session.run(None, feeds)
+                            expected = _normalization_reference(op_type, node, feeds)
                         assert len(got) == len(expected)
                         tolerance = 2e-5
                         if dtype in {"float16", "bfloat16"}:
@@ -535,9 +575,6 @@ class TestBackendCases(TestCase):
             assert dtypes == {"float32", "float16", "bfloat16"}, (op_type, dtypes)
 
     def test_low_precision_affine_rounding_matches_onnx_functions(self):
-        import onnx
-        from onnx.reference import ReferenceEvaluator as OnnxReferenceEvaluator
-
         for op_type, version, x_shape, parameter_shape, attributes in (
             ("GroupNormalization", 21, [1, 1, 4], [1], {"num_groups": 1}),
             ("LayerNormalization", 17, [1, 4], [4], {}),
@@ -567,20 +604,14 @@ class TestBackendCases(TestCase):
                         "B": np.full(parameter_shape, -0.25, dtype=dtype),
                     }
                     actual = ReferenceEvaluator(model).run(None, feeds)[0]
-                    reference_model = onnx.load_from_string(model.SerializeToString())
-                    if op_type == "LayerNormalization":
-                        reference_model = _normalization_function_reference_model(
-                            onnx, reference_model, op_type, dtype
-                        )
-                    expected = OnnxReferenceEvaluator(reference_model).run(None, feeds)[0]
+                    expected = _normalization_reference(
+                        op_type, node, feeds, group_normalization_version=version
+                    )[0]
                     np.testing.assert_array_equal(
                         actual.view(np.uint16), expected.view(np.uint16)
                     )
 
     def test_group_normalization_opset18_double_matches_onnx_reference(self):
-        import onnx
-        from onnx.reference import ReferenceEvaluator as OnnxReferenceEvaluator
-
         node = helper.make_node(
             "GroupNormalization",
             ["X", "scale", "bias"],
@@ -608,8 +639,8 @@ class TestBackendCases(TestCase):
             "bias": np.asarray([0.0], dtype=np.float64),
         }
         actual = ReferenceEvaluator(model).run(None, feeds)[0]
-        expected = OnnxReferenceEvaluator(onnx.load_from_string(model.SerializeToString())).run(
-            None, feeds
+        expected = _normalization_reference(
+            "GroupNormalization", node, feeds, group_normalization_version=18
         )[0]
         np.testing.assert_allclose(actual, expected, rtol=0.0, atol=3.0e-4)
         assert np.any(actual != 0.0)
