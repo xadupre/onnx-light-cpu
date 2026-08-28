@@ -28,6 +28,9 @@ way :mod:`unittests.python.test_kernels_e2e` verifies these backend cases.
 # (which accepts an ECMAScript regular expression), regardless of operator or
 # element type; ``--filter`` further narrows that set down when only a subset
 # is of interest and ``--max-cases`` controls how many matching cases run.
+# ``--threads`` applies the same explicit thread count to both runtimes.
+# onnx-light uses unpinned workers, matching ONNX Runtime when its thread count
+# is explicit, so the comparison does not mix different affinity policies.
 
 import argparse
 import gc
@@ -74,7 +77,13 @@ parser.add_argument(
     "--max-cases",
     type=int,
     default=20,
-    help="maximum number of matching cases to run (default: 1000; 0 disables the limit)",
+    help="maximum number of matching cases to run (default: 20; 0 disables the limit)",
+)
+parser.add_argument(
+    "--threads",
+    type=int,
+    default=min(4, os.cpu_count() or 1),
+    help="threads used by both runtimes (default: min(4, available CPUs))",
 )
 parser.add_argument(
     "-r",
@@ -100,6 +109,8 @@ parser.add_argument(
 args, unknown_args = parser.parse_known_args()
 if args.max_cases < 0:
     parser.error("--max-cases must be greater than or equal to 0")
+if args.threads <= 0:
+    parser.error("--threads must be greater than 0")
 if args.repeat <= 0:
     parser.error("--repeat must be greater than 0")
 if args.warmup < 0:
@@ -219,7 +230,9 @@ for tc in _progress:
 
     ds = tc.data_sets[0]
     feeds = {name: _to_numpy(t) for name, t in zip(input_names, ds.inputs, strict=True)}
-    light_session = ReferenceEvaluator(tc.model)
+    light_session = ReferenceEvaluator(
+        tc.model, cpu_execution={"num_threads": args.threads, "affinity_policy": "none"}
+    )
     clear_used_kernel_names()
     light_out = [np.array(output, copy=True) for output in light_session.run(None, feeds)]
     assert expected_kernel in used_kernel_names(), used_kernel_names()
@@ -258,8 +271,14 @@ for measurement in _progress:
     ort_error = None
     ort_time = None
     try:
+        session_options = onnxruntime.SessionOptions()
+        session_options.intra_op_num_threads = args.threads
+        session_options.inter_op_num_threads = 1
+        session_options.execution_mode = onnxruntime.ExecutionMode.ORT_SEQUENTIAL
         ort_session = onnxruntime.InferenceSession(
-            measurement["model_bytes"], providers=["CPUExecutionProvider"]
+            measurement["model_bytes"],
+            sess_options=session_options,
+            providers=["CPUExecutionProvider"],
         )
         ort_out = ort_session.run(None, measurement["feeds"])
     except Exception as exc:  # noqa: BLE001 -- unsupported cases are reported as "n/a".

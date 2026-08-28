@@ -15,6 +15,24 @@
 
 namespace {
 
+std::size_t SelectedAbsFloat32Lanes() {
+#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+  const auto level = onnx_light_cpu::DetectSimdLevel();
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
+  if (level >= onnx_light_cpu::SimdLevel::kAVX512) {
+    return 16;
+  }
+#endif
+  if (level >= onnx_light_cpu::SimdLevel::kAVX) {
+    return 8;
+  }
+  if (level >= onnx_light_cpu::SimdLevel::kSSE2) {
+    return 4;
+  }
+#endif
+  return 1;
+}
+
 // ---------------------------------------------------------------------------
 // DetectSimdLevel
 // ---------------------------------------------------------------------------
@@ -37,6 +55,32 @@ TEST(SimdDetection, FmaRequiresAvx2OrAvx) {
 TEST(AbsFloat32, EmptyInput) {
   float dummy = 1.0f;
   onnx_light_cpu::AbsFloat32(&dummy, &dummy, 0);
+}
+
+TEST(AbsFloat32, CostModelUsesDispatchComputeCost) {
+  struct PlanningExecutor {
+    onnx_light_cpu::ExecutionWorkCost observed_cost{};
+
+    static onnx_light_cpu::ExecutionParallelPlan Plan(void *context, std::int64_t,
+                                                      const onnx_light_cpu::ExecutionWorkCost &cost,
+                                                      std::int64_t, std::int64_t) {
+      static_cast<PlanningExecutor *>(context)->observed_cost = cost;
+      return {1, 1};
+    }
+
+    static void Run(void *, std::int64_t, void *, onnx_light_cpu::ExecutionBlockFn) {}
+  };
+
+  std::vector<float> input(16, -1.0f);
+  std::vector<float> output(input.size());
+  auto tuning = onnx_light_cpu::kDefaultAbsFloat32ExecutionTuning;
+  PlanningExecutor executor;
+  onnx_light_cpu::ExecutionExecutorView view{&executor, 4, &PlanningExecutor::Run,
+                                             &PlanningExecutor::Plan};
+  onnx_light_cpu::ExecutionExecutorScope scope(&view);
+  onnx_light_cpu::AbsFloat32WithTuning(input.data(), output.data(), input.size(), tuning);
+  EXPECT_DOUBLE_EQ(executor.observed_cost.compute_cycles,
+                   8.0 / static_cast<double>(SelectedAbsFloat32Lanes()));
 }
 
 TEST(AbsFloat32, SingleElement) {

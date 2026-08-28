@@ -64,10 +64,8 @@ void RegisterCpuLogCases(std::vector<TestCase> &registry, TestMode mode) {
   const std::vector<float> f = {0.5f, 1.0f, 1.5f, 2.0f, 3.0f, 4.0f};
 
   if (mode == TestMode::BENCHMARK) {
-    // Timing-only case: the benchmark helper draws normally-distributed inputs
-    // (matching onnx-light's own ``Log`` benchmark), so some values are negative
-    // and map to NaN. That is fine for a *timing* case, which is not compared
-    // for numeric correctness.
+    // Positive inputs exercise the finite logarithm path rather than measuring
+    // a data set dominated by invalid negative values and NaN outputs.
     for (const int64_t size : {1024, 65536, 131071, 131072, 262144, 1048576, 4194304}) {
       for (const DataType data_type :
            {DataType::FLOAT, DataType::DOUBLE, DataType::FLOAT16, DataType::BFLOAT16}) {
