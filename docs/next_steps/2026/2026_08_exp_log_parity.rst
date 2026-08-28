@@ -115,7 +115,7 @@ agree.
 Existing tests cover ordinary ranges and special values; the differential
 subnormal corpus added in ExpLog PR01/PR02 (``ExpFloat32.VectorSubnormalRange``
 and ``LogFloat32.PositiveSubnormalCorpus`` in
-``unittests/cc/test_exp_log_kernel.cc``) now passes and is the regression gate
+``unittests/cc/math/test_exp_log_kernel.cc``) now passes and is the regression gate
 before comparing alternative approximations.
 
 Uncalibrated shared scheduling cost
@@ -175,7 +175,7 @@ Build the isolated runner with
 ``cmake -DONNX_LIGHT_CPU_BUILD_BENCHMARKS=ON`` and select a session thread
 count with ``--threads 1``, ``--threads 2``, ``--threads 4``, or
 ``--threads physical`` in the end-to-end runner. The subnormal tests in
-``unittests/cc/test_exp_log_kernel.cc`` (``ExpFloat32.VectorSubnormalRange``
+``unittests/cc/math/test_exp_log_kernel.cc`` (``ExpFloat32.VectorSubnormalRange``
 and ``LogFloat32.PositiveSubnormalCorpus``) are the PR02 numerical gate and
 now pass against the corrected production code.
 

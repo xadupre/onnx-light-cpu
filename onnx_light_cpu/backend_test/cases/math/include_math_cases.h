@@ -16,11 +16,17 @@ using ONNX_LIGHT_NAMESPACE::core::backend_test::TestCase;
 using ONNX_LIGHT_NAMESPACE::core::backend_test::TestMode;
 
 void RegisterCpuAbsCases(std::vector<TestCase> &registry, TestMode mode);
+void RegisterCpuBatchNormalizationCases(std::vector<TestCase> &registry, TestMode mode);
 void RegisterCpuExpCases(std::vector<TestCase> &registry, TestMode mode);
 void RegisterCpuGemmCases(std::vector<TestCase> &registry, TestMode mode);
+void RegisterCpuGroupNormalizationCases(std::vector<TestCase> &registry, TestMode mode);
+void RegisterCpuInstanceNormalizationCases(std::vector<TestCase> &registry, TestMode mode);
+void RegisterCpuLayerNormalizationCases(std::vector<TestCase> &registry, TestMode mode);
 void RegisterCpuLogCases(std::vector<TestCase> &registry, TestMode mode);
+void RegisterCpuLpNormalizationCases(std::vector<TestCase> &registry, TestMode mode);
 void RegisterCpuMatMulCases(std::vector<TestCase> &registry, TestMode mode);
 void RegisterCpuMatMulIntegerCases(std::vector<TestCase> &registry, TestMode mode);
+void RegisterCpuMeanVarianceNormalizationCases(std::vector<TestCase> &registry, TestMode mode);
 void RegisterCpuRmsNormalizationCases(std::vector<TestCase> &registry, TestMode mode);
 void RegisterCpuSwiGLUCases(std::vector<TestCase> &registry, TestMode mode);
 

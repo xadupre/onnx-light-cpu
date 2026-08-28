@@ -28,16 +28,17 @@ onnx-light, its backend-test extension (exposed via the ``_cpuregister``
 extension's ``register_backend_test_cases`` binding, built with
 ``ONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON`` and onnx-light's ``lib_onnx_backend_test``
 available) are required. The selected backend cases use dtypes supported by
-NumPy; ``BFLOAT16`` cases are excluded.
+NumPy or ``ml_dtypes``, including ``BFLOAT16``.
 """
 
 from __future__ import annotations
 
 from unittest import TestCase
 
+import ml_dtypes
 import numpy as np
 
-from onnx_light.onnx import TensorProto, helper
+from onnx_light.onnx import TensorProto, helper, inliner
 from onnx_light.onnx.backend import TestMode, collect_test_cases, collect_test_cases_by_name
 from onnx_light.onnx.reference import ReferenceEvaluator
 
@@ -65,6 +66,7 @@ _REGISTERED_KERNELS = {
     "Add": "onnx_light_cpu::Add",
     "And": "onnx_light_cpu::And",
     "Attention": "onnx_light_cpu::Attention",
+    "BatchNormalization": "onnx_light_cpu::BatchNormalization",
     "BiasGelu": "onnx_light_cpu::BiasGelu",
     "BitShift": "onnx_light_cpu::BitShift",
     "BitwiseAnd": "onnx_light_cpu::BitwiseAnd",
@@ -75,16 +77,21 @@ _REGISTERED_KERNELS = {
     "Equal": "onnx_light_cpu::Equal",
     "Exp": "onnx_light_cpu::Exp",
     "Gemm": "onnx_light_cpu::Gemm",
+    "GroupNormalization": "onnx_light_cpu::GroupNormalization",
     "GroupQueryAttention": "onnx_light_cpu::GroupQueryAttention",
     "Greater": "onnx_light_cpu::Greater",
     "GreaterOrEqual": "onnx_light_cpu::GreaterOrEqual",
+    "InstanceNormalization": "onnx_light_cpu::InstanceNormalization",
+    "LayerNormalization": "onnx_light_cpu::LayerNormalization",
     "Less": "onnx_light_cpu::Less",
     "LessOrEqual": "onnx_light_cpu::LessOrEqual",
     "Log": "onnx_light_cpu::Log",
+    "LpNormalization": "onnx_light_cpu::LpNormalization",
     "MatMul": "onnx_light_cpu::MatMul",
     "MatMulInteger": "onnx_light_cpu::MatMulInteger",
     "Max": "onnx_light_cpu::Max",
     "Mean": "onnx_light_cpu::Mean",
+    "MeanVarianceNormalization": "onnx_light_cpu::MeanVarianceNormalization",
     "Min": "onnx_light_cpu::Min",
     "Mod": "onnx_light_cpu::Mod",
     "Mul": "onnx_light_cpu::Mul",
@@ -113,10 +120,22 @@ for _op_type in ("And", "Not", "Or", "Xor"):
 for _op_type in ("BitwiseAnd", "BitwiseOr", "BitwiseXor", "MatMulInteger"):
     _BENCHMARK_TYPE_SUFFIXES[_op_type] = "int8"
 _BENCHMARK_TYPE_SUFFIXES["BitShift"] = "uint8"
+for _op_type in {
+    "BatchNormalization",
+    "GroupNormalization",
+    "InstanceNormalization",
+    "LayerNormalization",
+    "LpNormalization",
+    "MeanVarianceNormalization",
+    "RMSNormalization",
+}:
+    _BENCHMARK_TYPE_SUFFIXES[_op_type] = "(?:float32|float16|bfloat16)"
+_BENCHMARK_OP_TAGS = {"RMSNormalization": "rms_normalization"}
 _BENCHMARK_NAME_PATTERN = (
     "^test_cpu_(?:"
     + "|".join(
-        f"{op_type.lower()}_.*_{suffix}" for op_type, suffix in _BENCHMARK_TYPE_SUFFIXES.items()
+        f"{_BENCHMARK_OP_TAGS.get(op_type, op_type.lower())}_.*_{suffix}"
+        for op_type, suffix in _BENCHMARK_TYPE_SUFFIXES.items()
     )
     + ").*_benchmark$"
 )
@@ -136,6 +155,7 @@ _TP_TO_NP = {
     int(TensorProto.UINT64): np.uint64,
     int(TensorProto.BOOL): np.bool_,
     int(TensorProto.FLOAT16): np.float16,
+    int(TensorProto.BFLOAT16): ml_dtypes.bfloat16,
 }
 
 
@@ -188,6 +208,179 @@ def _assert_close(actual, expected, rtol, atol):
         np.testing.assert_allclose(
             actual.astype(np.float64), expected.astype(np.float64), rtol=rtol, atol=atol
         )
+
+
+def _warm_builtin_session(model, feeds):
+    """Builds a ``ReferenceEvaluator`` for ``model`` and runs it once on ``feeds``.
+
+    ``onnx_light_cpu.register_kernels()`` permanently overrides onnx-light's
+    process-wide ``KernelDispatchTable`` entries, but a session only resolves
+    and caches which kernel it dispatches to on its *first* run (see
+    ``docs/examples/benchmarks/plot_abs_benchmark.py``, which uses this same
+    technique to compare onnx-light-cpu's accelerated kernels against
+    onnx-light's own built-in ones). This module fully imports -- running this
+    function at module scope -- before any test's ``setUp`` calls
+    :func:`onnx_light_cpu.register_kernels`, so the returned session stays
+    resolved to onnx-light's built-in reference kernel forever, regardless of
+    later registrations. That built-in kernel is the oracle these tests
+    compare onnx-light-cpu's accelerated kernels against; no kernel math is
+    reimplemented here.
+    """
+    session = ReferenceEvaluator(model)
+    session.run(None, feeds)
+    return session
+
+
+def _make_float_oracle_model(model):
+    """Clones a single-node model with FLOAT inputs and outputs."""
+    float_model = type(model)()
+    float_model.ParseFromString(model.SerializeToString())
+    for value_info in (*float_model.graph.input, *float_model.graph.output):
+        value_info.type.tensor_type.elem_type = TensorProto.FLOAT
+    return float_model
+
+
+def _collect_normalization_benchmark_builtin_sessions():
+    """Pre-warms a built-in FLOAT oracle per normalization benchmark case."""
+    normalization_ops = {
+        "BatchNormalization",
+        "GroupNormalization",
+        "InstanceNormalization",
+        "LayerNormalization",
+        "LpNormalization",
+        "MeanVarianceNormalization",
+        "RMSNormalization",
+    }
+    sessions = {}
+    covered_dtypes = {op_type: set() for op_type in normalization_ops}
+    for op_type in sorted(normalization_ops):
+        for tc in collect_test_cases(op_type, include_big=False, mode=TestMode.BENCHMARK):
+            dtype = next(
+                (
+                    candidate
+                    for candidate in ("float32", "float16", "bfloat16")
+                    if tc.name.endswith(f"_{candidate}_benchmark")
+                ),
+                None,
+            )
+            if not tc.name.startswith("test_cpu_") or dtype is None:
+                continue
+            covered_dtypes[op_type].add(dtype)
+            input_names = [vi.name for vi in tc.model.graph.input]
+            feeds = {
+                name: _to_numpy(tensor)
+                for name, tensor in zip(input_names, tc.data_sets[0].inputs, strict=True)
+            }
+            use_float_oracle = dtype != "float32"
+            oracle_model = _make_float_oracle_model(tc.model) if use_float_oracle else tc.model
+            oracle_feeds = (
+                {name: value.astype(np.float32) for name, value in feeds.items()}
+                if use_float_oracle
+                else feeds
+            )
+            sessions[tc.name] = (
+                _warm_builtin_session(oracle_model, oracle_feeds),
+                use_float_oracle,
+            )
+    return sessions, covered_dtypes
+
+
+(
+    _NORMALIZATION_BENCHMARK_BUILTIN_SESSIONS,
+    _NORMALIZATION_BENCHMARK_COVERED_DTYPES,
+) = _collect_normalization_benchmark_builtin_sessions()
+
+
+_LOW_PRECISION_AFFINE_CASES = (
+    ("GroupNormalization", 21, [1, 1, 4], [1], {"num_groups": 1}),
+    ("LayerNormalization", 17, [1, 4], [4], {}),
+)
+_LOW_PRECISION_AFFINE_DTYPES = (
+    (TensorProto.FLOAT16, np.float16),
+    (TensorProto.BFLOAT16, ml_dtypes.bfloat16),
+)
+
+
+def _make_low_precision_affine_model_and_feeds(
+    op_type, version, x_shape, parameter_shape, attributes, tensor_type, dtype
+):
+    node = helper.make_node(op_type, ["X", "Scale", "B"], ["Y"], **attributes)
+    graph = helper.make_graph(
+        [node],
+        "low_precision_affine_rounding",
+        [
+            helper.make_tensor_value_info("X", tensor_type, x_shape),
+            helper.make_tensor_value_info("Scale", tensor_type, parameter_shape),
+            helper.make_tensor_value_info("B", tensor_type, parameter_shape),
+        ],
+        [helper.make_tensor_value_info("Y", tensor_type, x_shape)],
+    )
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", version)])
+    feeds = {
+        "X": np.asarray([-3.0, -2.0, -1.0, -0.5], dtype=dtype).reshape(x_shape),
+        "Scale": np.full(parameter_shape, 0.05, dtype=dtype),
+        "B": np.full(parameter_shape, -0.25, dtype=dtype),
+    }
+    return model, feeds
+
+
+def _collect_low_precision_affine_builtin_sessions():
+    sessions = {}
+    for op_type, version, x_shape, parameter_shape, attributes in _LOW_PRECISION_AFFINE_CASES:
+        for tensor_type, dtype in _LOW_PRECISION_AFFINE_DTYPES:
+            model, feeds = _make_low_precision_affine_model_and_feeds(
+                op_type, version, x_shape, parameter_shape, attributes, tensor_type, dtype
+            )
+            function_model = inliner.inline_selected_functions(
+                model, [("", op_type)], inline_schema_functions=True
+            )
+            sessions[op_type, dtype] = _warm_builtin_session(function_model, feeds)
+    return sessions
+
+
+_LOW_PRECISION_AFFINE_BUILTIN_SESSIONS = _collect_low_precision_affine_builtin_sessions()
+
+
+def _make_group_normalization_opset18_double_model_and_feeds():
+    node = helper.make_node(
+        "GroupNormalization",
+        ["X", "scale", "bias"],
+        ["Y"],
+        num_groups=1,
+        epsilon=1.0,
+    )
+    graph = helper.make_graph(
+        [node],
+        "group_normalization_opset18_double",
+        [
+            helper.make_tensor_value_info("X", TensorProto.DOUBLE, [1, 1, 4]),
+            helper.make_tensor_value_info("scale", TensorProto.DOUBLE, [1]),
+            helper.make_tensor_value_info("bias", TensorProto.DOUBLE, [1]),
+        ],
+        [helper.make_tensor_value_info("Y", TensorProto.DOUBLE, [1, 1, 4])],
+    )
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 18)])
+    feeds = {
+        "X": np.asarray(
+            [10000000.1, 10000000.2, 10000000.3, 10000000.4],
+            dtype=np.float64,
+        ).reshape(1, 1, 4),
+        "scale": np.asarray([1.0], dtype=np.float64),
+        "bias": np.asarray([0.0], dtype=np.float64),
+    }
+    return model, feeds
+
+
+(
+    _GROUP_NORMALIZATION_OPSET18_DOUBLE_MODEL,
+    _GROUP_NORMALIZATION_OPSET18_DOUBLE_FEEDS,
+) = _make_group_normalization_opset18_double_model_and_feeds()
+_GROUP_NORMALIZATION_OPSET18_DOUBLE_FUNCTION_MODEL = inliner.inline_selected_functions(
+    _GROUP_NORMALIZATION_OPSET18_DOUBLE_MODEL,
+    [("", "GroupNormalization")],
+    inline_schema_functions=True,
+)
+_GROUP_NORMALIZATION_OPSET18_DOUBLE_FUNCTION_MODEL.ir_version = 13
 
 
 class TestBackendCases(TestCase):
@@ -263,6 +456,16 @@ class TestBackendCases(TestCase):
                 assert record.since_version >= 1
             elif record.op_type in {"Attention", "RMSNormalization"}:
                 assert record.since_version == 23
+            elif record.op_type == "BatchNormalization":
+                assert record.since_version == 15
+            elif record.op_type == "GroupNormalization":
+                assert record.since_version == 18
+            elif record.op_type in {"InstanceNormalization", "LpNormalization"}:
+                assert record.since_version == 22
+            elif record.op_type == "LayerNormalization":
+                assert record.since_version == 17
+            elif record.op_type == "MeanVarianceNormalization":
+                assert record.since_version == 13
             elif record.op_type == "SwiGLU":
                 assert record.since_version == 28
             elif record.op_type == "TreeEnsemble":
@@ -283,6 +486,127 @@ class TestBackendCases(TestCase):
         }
         assert benchmark_ops
         assert benchmark_ops <= set(_REGISTERED_KERNELS)
+
+    def test_normalization_benchmarks_match_onnx_references(self):
+        try:
+            import onnxruntime as ort
+        except ImportError:
+            ort = None
+
+        options = None
+        if ort is not None:
+            from onnxruntime.capi.onnxruntime_pybind11_state import (
+                Fail as OrtFail,
+                NotImplemented as OrtNotImplemented,
+            )
+
+            options = ort.SessionOptions()
+            options.intra_op_num_threads = 1
+            options.inter_op_num_threads = 1
+        for op_type in sorted(_NORMALIZATION_BENCHMARK_COVERED_DTYPES):
+            cases = collect_test_cases(op_type, include_big=False, mode=TestMode.BENCHMARK)
+            for tc in cases:
+                dtype = next(
+                    (
+                        candidate
+                        for candidate in ("float32", "float16", "bfloat16")
+                        if tc.name.endswith(f"_{candidate}_benchmark")
+                    ),
+                    None,
+                )
+                if not tc.name.startswith("test_cpu_") or dtype is None:
+                    continue
+                with self.subTest(tc=tc.name):
+                    assert len(tc.model.graph.initializer) == 0
+                    input_names = [vi.name for vi in tc.model.graph.input]
+                    light_session = ReferenceEvaluator(tc.model)
+                    model_bytes = tc.model.SerializeToString()
+                    ort_session = None
+                    if ort is not None:
+                        try:
+                            # GroupNormalization may be expanded from its ONNX function.
+                            ort_session = ort.InferenceSession(
+                                model_bytes,
+                                sess_options=options,
+                                providers=["CPUExecutionProvider"],
+                            )
+                        except OrtNotImplemented:
+                            ort_session = None
+                        except OrtFail as exc:
+                            if "Type Error:" not in str(exc):
+                                raise
+                            ort_session = None
+                    (
+                        builtin_session,
+                        builtin_uses_float,
+                    ) = _NORMALIZATION_BENCHMARK_BUILTIN_SESSIONS[tc.name]
+                    for data_set in tc.data_sets:
+                        feeds = {
+                            name: _to_numpy(tensor)
+                            for name, tensor in zip(input_names, data_set.inputs, strict=True)
+                        }
+                        got = light_session.run(None, feeds)
+                        expected = None
+                        if ort_session is not None:
+                            try:
+                                expected = ort_session.run(None, feeds)
+                            except OrtNotImplemented:
+                                ort_session = None
+                            except OrtFail as exc:
+                                if "Type Error:" not in str(exc):
+                                    raise
+                                ort_session = None
+                        if expected is None:
+                            # Fall back to onnx-light's own built-in (un-accelerated)
+                            # kernel, resolved and cached before onnx-light-cpu's
+                            # kernels were ever registered (see
+                            # ``_warm_builtin_session``).
+                            builtin_feeds = (
+                                {name: value.astype(np.float32) for name, value in feeds.items()}
+                                if builtin_uses_float
+                                else feeds
+                            )
+                            expected = builtin_session.run(None, builtin_feeds)
+                        assert len(got) == len(expected)
+                        tolerance = 2e-5
+                        if dtype in {"float16", "bfloat16"}:
+                            tolerance = 2e-2
+                        for actual, reference in zip(got, expected, strict=True):
+                            _assert_close(actual, reference, rtol=tolerance, atol=tolerance)
+        for op_type, dtypes in _NORMALIZATION_BENCHMARK_COVERED_DTYPES.items():
+            assert dtypes == {"float32", "float16", "bfloat16"}, (op_type, dtypes)
+
+    def test_low_precision_affine_rounding_matches_onnx_functions(self):
+        for op_type, version, x_shape, parameter_shape, attributes in _LOW_PRECISION_AFFINE_CASES:
+            for tensor_type, dtype in _LOW_PRECISION_AFFINE_DTYPES:
+                with self.subTest(op_type=op_type, dtype=dtype):
+                    model, feeds = _make_low_precision_affine_model_and_feeds(
+                        op_type, version, x_shape, parameter_shape, attributes, tensor_type, dtype
+                    )
+                    actual = ReferenceEvaluator(model).run(None, feeds)[0]
+                    # Reference: onnx-light's own built-in (un-accelerated) kernel,
+                    # resolved and cached before onnx-light-cpu's kernels were ever
+                    # registered (see ``_warm_builtin_session``).
+                    builtin_session = _LOW_PRECISION_AFFINE_BUILTIN_SESSIONS[op_type, dtype]
+                    expected = builtin_session.run(None, feeds)[0]
+                    np.testing.assert_array_equal(
+                        actual.view(np.uint16), expected.view(np.uint16)
+                    )
+
+    def test_group_normalization_opset18_double_matches_onnx_reference(self):
+        model = _GROUP_NORMALIZATION_OPSET18_DOUBLE_MODEL
+        feeds = _GROUP_NORMALIZATION_OPSET18_DOUBLE_FEEDS
+        actual = ReferenceEvaluator(model).run(None, feeds)[0]
+        try:
+            import onnxruntime as ort
+        except ImportError:
+            self.skipTest("onnxruntime is unavailable")
+        expected = ort.InferenceSession(
+            _GROUP_NORMALIZATION_OPSET18_DOUBLE_FUNCTION_MODEL.SerializeToString(),
+            providers=["CPUExecutionProvider"],
+        ).run(None, feeds)[0]
+        np.testing.assert_allclose(actual, expected, rtol=0.0, atol=3.0e-4)
+        assert np.any(actual != 0.0)
 
     def test_log_benchmark_inputs_are_positive(self):
         cases = collect_test_cases_by_name(
