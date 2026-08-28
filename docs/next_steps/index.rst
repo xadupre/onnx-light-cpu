@@ -25,6 +25,8 @@ optimize next.
     2026/2026_08_processor_performance_profile
     2026/2026_08_kv_cache
     2026/2026_08_registered_kernel_documentation
+    2026/2026_08_kernel_performance_improvements
+    2026/2026_08_com_microsoft_domain
 
 Started
 -------
@@ -86,6 +88,14 @@ Completed
         <2026/2026_08_registered_kernel_documentation>`
       - Derives the Python inventory and generated reference directly from the
         actual C++ registrations.
+    * - :doc:`Recent kernel performance improvements
+        <2026/2026_08_kernel_performance_improvements>`
+      - Consolidates the August optimization sprint across unary, binary,
+        matrix, Attention, normalization, and TreeEnsemble kernels.
+    * - :doc:`com.microsoft domain support
+        <2026/2026_08_com_microsoft_domain>`
+      - Introduces ``CDist`` and ``BiasGelu`` end to end, including schemas,
+        runtime kernels, gradients, fusion patterns, tests, and documentation.
 
 Discussion
 ----------
