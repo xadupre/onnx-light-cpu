@@ -69,15 +69,29 @@ const std::array<std::string_view, 7> kBinaryShapeTags = {
     "inner_vector", "outer_broadcast", "general",
 };
 
-const std::array<std::string_view, 14> kDataTypeNameTags = {
-    "bool",  "float",  "double", "int8",   "uint8",  "int16",   "uint16",
-    "int32", "uint32", "int64",  "uint64", "string", "complex", "float8",
+const std::array<std::string_view, 21> kDataTypeNameTags = {
+    "bool",   "float",  "float16", "bfloat16", "float32", "float64", "double",
+    "int8",   "uint8",  "int16",   "uint16",   "int32",   "uint32",  "int64",
+    "uint64", "string", "strings", "complex",  "float8",  "int4",    "uint4",
 };
 
+bool IsDataTypeNameTag(std::string_view name, std::string_view tag) {
+  size_t position = name.find(tag);
+  while (position != std::string_view::npos) {
+    const size_t end = position + tag.size();
+    const bool starts_tag = position == 0 || name[position - 1] == '_' || name[position - 1] == 'x';
+    const bool ends_tag = end == name.size() || name[end] == '_' || name[end] == 'x';
+    if (starts_tag && ends_tag) {
+      return true;
+    }
+    position = name.find(tag, position + 1);
+  }
+  return false;
+}
+
 bool ContainsDataTypeName(std::string_view name) {
-  return std::any_of(
-      kDataTypeNameTags.begin(), kDataTypeNameTags.end(),
-      [name](std::string_view tag) { return name.find(tag) != std::string_view::npos; });
+  return std::any_of(kDataTypeNameTags.begin(), kDataTypeNameTags.end(),
+                     [name](std::string_view tag) { return IsDataTypeNameTag(name, tag); });
 }
 
 std::string Lowercase(std::string value) {
