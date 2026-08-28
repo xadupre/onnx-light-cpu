@@ -298,8 +298,24 @@ TEST(ExpFloat32, Avx2FmaMatchesStd) {
       !onnx_light_cpu::CpuSupportsFma()) {
     GTEST_SKIP() << "AVX2+FMA is unavailable";
   }
-  const std::vector<float> values = {-103.0f, -100.0f, -90.0f, -1.0f, 0.0f,
-                                     1.0f,    20.0f,   88.0f,  90.0f, 100.0f};
+  std::vector<float> values = {-std::numeric_limits<float>::infinity(),
+                               -103.0f,
+                               -100.0f,
+                               -90.0f,
+                               -1.0f,
+                               -0.0f,
+                               0.0f,
+                               1.0f,
+                               20.0f,
+                               88.0f,
+                               90.0f,
+                               100.0f,
+                               std::numeric_limits<float>::infinity(),
+                               std::numeric_limits<float>::quiet_NaN()};
+  constexpr std::size_t samples = 4093;
+  for (std::size_t i = 0; i < samples; ++i) {
+    values.push_back(-104.0f + 193.0f * static_cast<float>(i) / static_cast<float>(samples - 1));
+  }
   std::vector<float> input(2 * values.size() + 1);
   std::copy(values.begin(), values.end(), input.begin() + 1);
   std::copy(values.begin(), values.end(), input.begin() + values.size() + 1);
@@ -314,7 +330,11 @@ TEST(ExpFloat32, Avx2FmaMatchesStd) {
       EXPECT_NEAR(output[i + 1], reference, std::fabs(reference) * 2e-5f + 1e-7f)
           << "at index " << i;
     }
-    EXPECT_FLOAT_EQ(output[i + values.size() + 1], output[i + 1]);
+    if (std::isnan(output[i + 1])) {
+      EXPECT_TRUE(std::isnan(output[i + values.size() + 1]));
+    } else {
+      EXPECT_FLOAT_EQ(output[i + values.size() + 1], output[i + 1]);
+    }
   }
 }
 #endif
