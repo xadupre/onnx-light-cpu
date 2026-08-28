@@ -112,8 +112,8 @@ are byte-identical; any page left over from a renamed or removed registration
 is deleted so the directory always matches the current inventory exactly.
 
 Step 4 (this PR) adds the final parity coverage across the whole pipeline,
-on top of the C++ (``unittests/cc/test_onnx_light_kernel_registration.cc``,
-``unittests/cc/test_onnx_light_kernel_usage.cc``) and Python
+on top of the C++ (``unittests/cc/core/test_onnx_light_kernel_registration.cc``,
+``unittests/cc/core/test_onnx_light_kernel_usage.cc``) and Python
 (``unittests/python/test_kernels_doc.py``, ``unittests/python/test_kernels_e2e.py``,
 ``unittests/python/test_api_doc.py``) suites steps 1 through 3 already added.
 This PR extends ``test_onnx_light_kernel_registration.cc`` with a test proving

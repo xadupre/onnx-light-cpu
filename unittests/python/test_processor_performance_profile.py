@@ -7,7 +7,7 @@
 The compiled ``_cpukernels`` extension (``benchmark_processor_performance_raw``)
 links neither onnx-light nor any kernel dispatch table, so most tests here
 exercise the real binding directly with small bounded options (mirroring the
-bounded C++ tests in ``unittests/cc/test_processor_performance_profile.cc``).
+bounded C++ tests in ``unittests/cc/core/test_processor_performance_profile.cc``).
 A few tests patch the raw binding to deterministically exercise Python-side
 wrapping (immutability, serialization, and partial-platform handling) without
 depending on the host's actual topology.
