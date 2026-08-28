@@ -60,6 +60,11 @@ bool IsFloating(sym_ns::TensorType type) {
          type == sym_ns::TensorType::kDouble || type == sym_ns::TensorType::kBfloat16;
 }
 
+int64_t GetIntAttributeOrDefault(const NodeProto &node, const char *name, int64_t default_value) {
+  const AttributeProto *attribute = FindAttribute(node, name);
+  return attribute == nullptr ? default_value : attribute->i();
+}
+
 bool ReadSingleInt64(const TensorProto &tensor, int64_t &value) {
   bool single_element = true;
   for (int64_t dimension : tensor.dims()) {
@@ -295,8 +300,8 @@ GroupQueryAttentionFusionPattern::Apply(GraphGraph &graph,
                                      FindAttribute(attention, "q_num_heads")->i());
   ONNX_LIGHT_NAMESPACE::AddAttribute(gqa, "kv_num_heads",
                                      FindAttribute(attention, "kv_num_heads")->i());
-  ONNX_LIGHT_NAMESPACE::AddAttribute(
-      gqa, "causal", ONNX_LIGHT_NAMESPACE::GetAttributeIntOrDefault(attention, "is_causal", 0));
+  ONNX_LIGHT_NAMESPACE::AddAttribute(gqa, "causal",
+                                     GetIntAttributeOrDefault(attention, "is_causal", 0));
   if (const AttributeProto *scale = FindAttribute(attention, "scale"); scale != nullptr) {
     ONNX_LIGHT_NAMESPACE::AddAttribute(gqa, "scale", scale->f());
   }

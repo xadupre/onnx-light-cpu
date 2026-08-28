@@ -123,6 +123,16 @@ std::string ReduceSumKeepDims(FunctionProto &func, int &counter, const std::stri
   return output;
 }
 
+int64_t GetIntAttributeOrDefault(const NodeProto &node, const char *name, int64_t default_value) {
+  const AttributeProto *attribute = FindAttribute(node, name);
+  return attribute == nullptr ? default_value : attribute->i();
+}
+
+float GetFloatAttributeOrDefault(const NodeProto &node, const char *name, float default_value) {
+  const AttributeProto *attribute = FindAttribute(node, name);
+  return attribute == nullptr ? default_value : attribute->f();
+}
+
 bool IsSupportedGroupQueryAttention(const NodeProto &node, int64_t &num_heads,
                                     int64_t &kv_num_heads) {
   if (node.input_size() < 7 || node.output_size() != 1 || !node.input(3).empty() ||
@@ -132,15 +142,15 @@ bool IsSupportedGroupQueryAttention(const NodeProto &node, int64_t &num_heads,
       (node.input_size() > 10 && !node.input(10).empty())) {
     return false;
   }
-  num_heads = ONNX_LIGHT_NAMESPACE::GetAttributeIntOrDefault(node, "num_heads", 0);
-  kv_num_heads = ONNX_LIGHT_NAMESPACE::GetAttributeIntOrDefault(node, "kv_num_heads", 0);
+  num_heads = GetIntAttributeOrDefault(node, "num_heads", 0);
+  kv_num_heads = GetIntAttributeOrDefault(node, "kv_num_heads", 0);
   return num_heads > 0 && kv_num_heads > 0 && num_heads % kv_num_heads == 0 &&
-         ONNX_LIGHT_NAMESPACE::GetAttributeIntOrDefault(node, "do_rotary", 0) == 0 &&
-         ONNX_LIGHT_NAMESPACE::GetAttributeIntOrDefault(node, "sliding_window_cache", 0) == 0 &&
-         ONNX_LIGHT_NAMESPACE::GetAttributeIntOrDefault(node, "smooth_softmax", 0) == 0 &&
-         ONNX_LIGHT_NAMESPACE::GetAttributeIntOrDefault(node, "kv_cache_bit_width", 0) == 0 &&
+         GetIntAttributeOrDefault(node, "do_rotary", 0) == 0 &&
+         GetIntAttributeOrDefault(node, "sliding_window_cache", 0) == 0 &&
+         GetIntAttributeOrDefault(node, "smooth_softmax", 0) == 0 &&
+         GetIntAttributeOrDefault(node, "kv_cache_bit_width", 0) == 0 &&
          FindAttribute(node, "scale") != nullptr &&
-         ONNX_LIGHT_NAMESPACE::GetAttributeFloatOrDefault(node, "softcap", 0.0f) == 0.0f;
+         GetFloatAttributeOrDefault(node, "softcap", 0.0f) == 0.0f;
 }
 
 bool GradGroupQueryAttention(const NodeProto &node, const std::string &output_grad,
@@ -162,8 +172,8 @@ bool GradGroupQueryAttention(const NodeProto &node, const std::string &output_gr
       func.add_node("Attention", {query, key, value}, {ignored, "", "", probabilities});
   ONNX_LIGHT_NAMESPACE::AddAttribute(attention, "q_num_heads", num_heads);
   ONNX_LIGHT_NAMESPACE::AddAttribute(attention, "kv_num_heads", kv_num_heads);
-  ONNX_LIGHT_NAMESPACE::AddAttribute(
-      attention, "is_causal", ONNX_LIGHT_NAMESPACE::GetAttributeIntOrDefault(node, "causal", 1));
+  ONNX_LIGHT_NAMESPACE::AddAttribute(attention, "is_causal",
+                                     GetIntAttributeOrDefault(node, "causal", 1));
   ONNX_LIGHT_NAMESPACE::AddAttribute(attention, "qk_matmul_output_mode", int64_t{3});
   if (const AttributeProto *scale = FindAttribute(node, "scale"); scale != nullptr) {
     ONNX_LIGHT_NAMESPACE::AddAttribute(attention, "scale", scale->f());
