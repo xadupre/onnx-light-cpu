@@ -14,6 +14,7 @@
 #include "onnx_light_cpu/kernels/math/gemm_kernel.h"
 #include "onnx_light_cpu/kernels/math/integer_matmul_kernel.h"
 #include "onnx_light_cpu/kernels/math/matmul_kernel.h"
+#include "onnx_light_cpu/kernels/math/normalization_kernel.h"
 #include "onnx_light_cpu/kernels/math/rms_normalization_kernel.h"
 #include "onnx_light_cpu/kernels/math/swiglu_kernel.h"
 #include "onnx_light_cpu/kernels/traditionalml/tree_ensemble_kernel.h"
@@ -32,15 +33,26 @@ namespace {
 TEST(OnnxLightKernelUsage, KernelNamesAreLibraryQualified) {
   EXPECT_STREQ(onnx_light_cpu::AbsKernel::kName, "onnx_light_cpu::Abs");
   EXPECT_STREQ(onnx_light_cpu::AttentionKernel::kName, "onnx_light_cpu::Attention");
+  EXPECT_STREQ(onnx_light_cpu::BatchNormalizationKernel::kName,
+               "onnx_light_cpu::BatchNormalization");
   EXPECT_STREQ(onnx_light_cpu::BiasGeluKernel::kName, "onnx_light_cpu::BiasGelu");
   EXPECT_STREQ(onnx_light_cpu::CDistKernel::kName, "onnx_light_cpu::CDist");
   EXPECT_STREQ(onnx_light_cpu::ExpKernel::kName, "onnx_light_cpu::Exp");
   EXPECT_STREQ(onnx_light_cpu::LogKernel::kName, "onnx_light_cpu::Log");
   EXPECT_STREQ(onnx_light_cpu::GemmKernel::kName, "onnx_light_cpu::Gemm");
+  EXPECT_STREQ(onnx_light_cpu::GroupNormalizationKernel::kName,
+               "onnx_light_cpu::GroupNormalization");
+  EXPECT_STREQ(onnx_light_cpu::InstanceNormalizationKernel::kName,
+               "onnx_light_cpu::InstanceNormalization");
+  EXPECT_STREQ(onnx_light_cpu::LayerNormalizationKernel::kName,
+               "onnx_light_cpu::LayerNormalization");
+  EXPECT_STREQ(onnx_light_cpu::LpNormalizationKernel::kName, "onnx_light_cpu::LpNormalization");
   EXPECT_STREQ(onnx_light_cpu::MatMulKernel::kName, "onnx_light_cpu::MatMul");
   EXPECT_STREQ(onnx_light_cpu::MatMulIntegerKernel::kName, "onnx_light_cpu::MatMulInteger");
   EXPECT_STREQ(onnx_light_cpu::QLinearMatMulKernel::kName, "onnx_light_cpu::QLinearMatMul");
   EXPECT_STREQ(onnx_light_cpu::NotKernel::kName, "onnx_light_cpu::Not");
+  EXPECT_STREQ(onnx_light_cpu::MeanVarianceNormalizationKernel::kName,
+               "onnx_light_cpu::MeanVarianceNormalization");
   EXPECT_STREQ(onnx_light_cpu::RmsNormalizationKernel::kName, "onnx_light_cpu::RMSNormalization");
   EXPECT_STREQ(onnx_light_cpu::SwiGLUKernel::kName, "onnx_light_cpu::SwiGLU");
   EXPECT_STREQ(onnx_light_cpu::TreeEnsembleKernel::kName, "onnx_light_cpu::TreeEnsemble");
@@ -54,13 +66,19 @@ TEST(OnnxLightKernelUsage, RegisteredKernelNames) {
   std::vector<std::pair<std::string, std::string>> expected = {
       {"Abs", "onnx_light_cpu::Abs"},
       {"Attention", "onnx_light_cpu::Attention"},
+      {"BatchNormalization", "onnx_light_cpu::BatchNormalization"},
       {"Exp", "onnx_light_cpu::Exp"},
       {"Gemm", "onnx_light_cpu::Gemm"},
+      {"GroupNormalization", "onnx_light_cpu::GroupNormalization"},
+      {"InstanceNormalization", "onnx_light_cpu::InstanceNormalization"},
+      {"LayerNormalization", "onnx_light_cpu::LayerNormalization"},
       {"Log", "onnx_light_cpu::Log"},
+      {"LpNormalization", "onnx_light_cpu::LpNormalization"},
       {"MatMul", "onnx_light_cpu::MatMul"},
       {"MatMulInteger", "onnx_light_cpu::MatMulInteger"},
       {"Max", "onnx_light_cpu::Max"},
       {"Mean", "onnx_light_cpu::Mean"},
+      {"MeanVarianceNormalization", "onnx_light_cpu::MeanVarianceNormalization"},
       {"Min", "onnx_light_cpu::Min"},
       {"Not", "onnx_light_cpu::Not"},
       {"QLinearMatMul", "onnx_light_cpu::QLinearMatMul"},

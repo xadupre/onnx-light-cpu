@@ -8,18 +8,20 @@
 #include "onnx_light_cpu/kernels/kernel_usage.h"
 
 #include "onnx_light_cpu/impl/execution.h"
-#include "onnx_light_cpu/impl/math/half_conversion.h"
 #include "onnx_light_cpu/impl/math/rms_normalization.h"
+#include "onnx_light_cpu/kernels/math/normalization_helpers.h"
 
-#include "onnx_core/runtime/kernels/cast_helper.h"
 #include "onnx_core/runtime/kernels/kernel_dispatch_table.h"
 #include "onnx_core/runtime/kernels/node_helpers.h"
 #include "onnx_core/symbolic/sym_tensor.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -35,116 +37,98 @@ using rt_ns::DataType;
 using rt_ns::RuntimeContext;
 using rt_ns::Tensor;
 
-template <typename Storage> struct FloatCodec;
-
-template <> struct FloatCodec<float> {
-  static float Load(float value) noexcept { return value; }
-  static float Store(float value) noexcept { return value; }
-};
-
-template <> struct FloatCodec<double> {
-  static float Load(double value) noexcept { return static_cast<float>(value); }
-  static double Store(float value) noexcept { return static_cast<double>(value); }
-};
-
-template <typename T> struct NativeCodec {
-  using Storage = T;
-  static float Load(Storage value) noexcept { return FloatCodec<Storage>::Load(value); }
-  static Storage Store(float value) noexcept { return FloatCodec<Storage>::Store(value); }
-};
-
-template <typename Codec>
-void NormalizeRows(const Tensor &x, const Tensor &scale, Tensor &output, std::size_t outer,
-                   std::size_t inner, float epsilon) {
-  using Storage = typename Codec::Storage;
-  const auto *x_data = reinterpret_cast<const Storage *>(x.bytes());
-  const auto *scale_data = reinterpret_cast<const Storage *>(scale.bytes());
-  auto *output_data = reinterpret_cast<Storage *>(output.mutable_bytes());
-  ExecuteRanges(
-      static_cast<std::int64_t>(outer), static_cast<double>(inner),
-      [x_data, scale_data, output_data, inner, epsilon](std::int64_t begin, std::int64_t end) {
-        for (std::int64_t row = begin; row < end; ++row) {
-          const std::size_t offset = static_cast<std::size_t>(row) * inner;
-          float sum_squares = 0.0f;
-          for (std::size_t column = 0; column < inner; ++column) {
-            const float value = Codec::Load(x_data[offset + column]);
-            sum_squares += value * value;
-          }
-          const float inverse_rms =
-              1.0f / std::sqrt(sum_squares / static_cast<float>(inner) + epsilon);
-          for (std::size_t column = 0; column < inner; ++column) {
-            const float normalized = Codec::Load(x_data[offset + column]) * inverse_rms *
-                                     Codec::Load(scale_data[column]);
-            output_data[offset + column] = Codec::Store(normalized);
-          }
-        }
-      });
+template <typename Fn> void ExecuteRows(std::size_t rows, std::size_t inner, Fn &&fn) {
+  if (rows > static_cast<std::size_t>(std::numeric_limits<std::int64_t>::max())) {
+    throw std::invalid_argument("onnx_light_cpu::RMSNormalization: row count exceeds int64_t.");
+  }
+  ExecuteRanges(static_cast<std::int64_t>(rows), static_cast<double>(inner) * 0.625,
+                [&](std::int64_t begin, std::int64_t end) {
+                  fn(static_cast<std::size_t>(begin), static_cast<std::size_t>(end));
+                });
 }
 
-template <bool BFloat16>
-void NormalizeHalfRows(const Tensor &x, const Tensor &scale, Tensor &output, std::size_t outer,
-                       std::size_t inner, float epsilon) {
-  const auto *x_data = reinterpret_cast<const std::uint16_t *>(x.bytes());
-  const auto *scale_data = reinterpret_cast<const std::uint16_t *>(scale.bytes());
-  auto *output_data = reinterpret_cast<std::uint16_t *>(output.mutable_bytes());
-  std::vector<float> scale_values(inner);
-  if constexpr (BFloat16) {
-    detail::ConvertBFloat16ToFloat32(scale_data, scale_values.data(), inner);
-  } else {
-    detail::ConvertFloat16ToFloat32(scale_data, scale_values.data(), inner);
-  }
-
-  ExecuteRanges(
-      static_cast<std::int64_t>(outer), static_cast<double>(inner),
-      [x_data, output_data, scale_values = std::move(scale_values), inner,
-       epsilon](std::int64_t begin, std::int64_t end) {
-        std::vector<float> row_values(inner);
-        for (std::int64_t row = begin; row < end; ++row) {
-          const std::size_t offset = static_cast<std::size_t>(row) * inner;
-          if constexpr (BFloat16) {
-            detail::ConvertBFloat16ToFloat32(x_data + offset, row_values.data(), inner);
+template <DataType XType, DataType VType>
+void NormalizeTyped(const Tensor &x, const Tensor &scale, Tensor &output,
+                    const normalization::BroadcastIndexer &scale_index, std::size_t outer,
+                    std::size_t inner, float epsilon, bool scale_by_inner) {
+  using XTraits = normalization::TypeTraits<XType>;
+  using VTraits = normalization::TypeTraits<VType>;
+  const auto *input = normalization::Data<XType>(x);
+  const auto *scale_data = normalization::Data<VType>(scale);
+  auto *result = normalization::MutableData<VType>(output);
+  ExecuteRows(outer, inner, [&](std::size_t begin, std::size_t end) {
+    for (std::size_t row = begin; row < end; ++row) {
+      const std::size_t base = row * inner;
+      const float mean_square =
+          normalization::ComputeContiguousFloatMeanSquare<XType>(input + base, inner);
+      const float inverse_rms = 1.0F / std::sqrt(mean_square + epsilon);
+      if (scale_by_inner) {
+        for (std::size_t i = 0; i < inner; ++i) {
+          const float normalized = static_cast<float>(XTraits::Load(input, base + i)) * inverse_rms;
+          const auto rounded_x = normalization::RoundFloatToType<XType>(normalized);
+          const auto normalized_v =
+              normalization::RoundFloatToType<VType>(static_cast<float>(rounded_x));
+          if constexpr (VType == DataType::DOUBLE) {
+            VTraits::Store(result, base + i, normalized_v * VTraits::Load(scale_data, i));
           } else {
-            detail::ConvertFloat16ToFloat32(x_data + offset, row_values.data(), inner);
-          }
-          float sum_squares = 0.0f;
-          for (float value : row_values) {
-            sum_squares += value * value;
-          }
-          const float inverse_rms =
-              1.0f / std::sqrt(sum_squares / static_cast<float>(inner) + epsilon);
-          for (std::size_t column = 0; column < inner; ++column) {
-            row_values[column] = row_values[column] * inverse_rms * scale_values[column];
-          }
-          if constexpr (BFloat16) {
-            detail::ConvertFloat32ToBFloat16(row_values.data(), output_data + offset, inner);
-          } else {
-            detail::ConvertFloat32ToFloat16(row_values.data(), output_data + offset, inner);
+            VTraits::Store(result, base + i,
+                           normalized_v * static_cast<float>(VTraits::Load(scale_data, i)));
           }
         }
-      });
+      } else if (scale_index.identity()) {
+        for (std::size_t i = 0; i < inner; ++i) {
+          const float normalized = static_cast<float>(XTraits::Load(input, base + i)) * inverse_rms;
+          const auto rounded_x = normalization::RoundFloatToType<XType>(normalized);
+          const auto normalized_v =
+              normalization::RoundFloatToType<VType>(static_cast<float>(rounded_x));
+          if constexpr (VType == DataType::DOUBLE) {
+            VTraits::Store(result, base + i, normalized_v * VTraits::Load(scale_data, base + i));
+          } else {
+            VTraits::Store(result, base + i,
+                           normalized_v * static_cast<float>(VTraits::Load(scale_data, base + i)));
+          }
+        }
+      } else {
+        for (std::size_t i = 0; i < inner; ++i) {
+          const float normalized = static_cast<float>(XTraits::Load(input, base + i)) * inverse_rms;
+          const auto rounded_x = normalization::RoundFloatToType<XType>(normalized);
+          const auto normalized_v =
+              normalization::RoundFloatToType<VType>(static_cast<float>(rounded_x));
+          const std::size_t scale_position = scale_index.Index(base + i);
+          if constexpr (VType == DataType::DOUBLE) {
+            VTraits::Store(result, base + i,
+                           normalized_v * VTraits::Load(scale_data, scale_position));
+          } else {
+            VTraits::Store(result, base + i,
+                           normalized_v *
+                               static_cast<float>(VTraits::Load(scale_data, scale_position)));
+          }
+        }
+      }
+    }
+  });
 }
 
-void DispatchNormalize(const Tensor &x, const Tensor &scale, Tensor &output, std::size_t outer,
-                       std::size_t inner, float epsilon) {
-  switch (static_cast<DataType>(x.data_type)) {
-  case DataType::FLOAT:
-    NormalizeRows<NativeCodec<float>>(x, scale, output, outer, inner, epsilon);
+void Normalize(const Tensor &x, const Tensor &scale, Tensor &output,
+               const normalization::BroadcastIndexer &scale_index, std::size_t outer,
+               std::size_t inner, float epsilon, bool scale_by_inner) {
+  if (static_cast<DataType>(x.data_type) == DataType::FLOAT16 &&
+      static_cast<DataType>(scale.data_type) == DataType::FLOAT16 && scale_by_inner) {
+    const auto *input = reinterpret_cast<const std::uint16_t *>(x.bytes());
+    const auto *scale_data = reinterpret_cast<const std::uint16_t *>(scale.bytes());
+    auto *result = reinterpret_cast<std::uint16_t *>(output.mutable_bytes());
+    ExecuteRows(outer, inner, [&](std::size_t begin, std::size_t end) {
+      RmsNormalizationFloat16(input + begin * inner, scale_data, result + begin * inner,
+                              end - begin, inner, epsilon);
+    });
     return;
-  case DataType::DOUBLE:
-    NormalizeRows<NativeCodec<double>>(x, scale, output, outer, inner, epsilon);
-    return;
-  case DataType::FLOAT16:
-    RmsNormalizationFloat16(reinterpret_cast<const std::uint16_t *>(x.bytes()),
-                            reinterpret_cast<const std::uint16_t *>(scale.bytes()),
-                            reinterpret_cast<std::uint16_t *>(output.mutable_bytes()), outer, inner,
-                            epsilon);
-    return;
-  case DataType::BFLOAT16:
-    NormalizeHalfRows<true>(x, scale, output, outer, inner, epsilon);
-    return;
-  default:
-    throw std::invalid_argument("onnx_light_cpu::RMSNormalization: unsupported input data type.");
   }
+  normalization::DispatchFloatType(x.data_type, [&]<DataType XType>() {
+    normalization::DispatchFloatType(scale.data_type, [&]<DataType VType>() {
+      NormalizeTyped<XType, VType>(x, scale, output, scale_index, outer, inner, epsilon,
+                                   scale_by_inner);
+    });
+  });
 }
 
 } // namespace
@@ -152,46 +136,36 @@ void DispatchNormalize(const Tensor &x, const Tensor &scale, Tensor &output, std
 Tensor RmsNormalizationKernel::operator()(const Tensor &x, const Tensor &scale, std::int64_t axis,
                                           float epsilon, std::int64_t stash_type,
                                           RuntimeContext *rt) const {
-  if (x.data_type != scale.data_type) {
-    throw std::invalid_argument(
-        "onnx_light_cpu::RMSNormalization: X and scale data types must match.");
-  }
+  normalization::RequireSupportedFloatType(x, kName, "X");
+  normalization::RequireSupportedFloatType(scale, kName, "scale");
   if (stash_type != 1) {
     throw std::invalid_argument(
         "onnx_light_cpu::RMSNormalization: only stash_type=1 is supported.");
   }
-  if (epsilon < 0.0f) {
-    throw std::invalid_argument("onnx_light_cpu::RMSNormalization: epsilon must be non-negative.");
+  if (!std::isfinite(epsilon) || epsilon < 0.0f) {
+    throw std::invalid_argument(
+        "onnx_light_cpu::RMSNormalization: epsilon must be finite and non-negative.");
   }
   const std::int64_t rank = static_cast<std::int64_t>(x.shape.size());
-  if (rank == 0 || axis < -rank || axis >= rank) {
-    throw std::invalid_argument("onnx_light_cpu::RMSNormalization: axis is out of range.");
+  if (rank == 0) {
+    throw std::invalid_argument("onnx_light_cpu::RMSNormalization: X must have rank at least 1.");
   }
-  const std::size_t normalized_axis = static_cast<std::size_t>(axis < 0 ? axis + rank : axis);
-  const std::vector<std::int64_t> expected_scale_dims(
-      x.shape.begin() + static_cast<std::ptrdiff_t>(normalized_axis), x.shape.end());
-  const rt_ns::Shape expected_scale_shape(expected_scale_dims);
-  if (scale.shape != expected_scale_shape) {
+  normalization::Product(x.shape, 0, x.shape.size(), kName);
+  const std::size_t normalized_axis = static_cast<std::size_t>(
+      normalization::NormalizeAxis(axis, x.shape.size(), RmsNormalizationKernel::kName));
+  const normalization::BroadcastIndexer scale_index(x.shape, scale.shape, kName, "scale");
+  const bool scale_by_inner =
+      scale.shape.size() == x.shape.size() - normalized_axis &&
+      std::equal(scale.shape.begin(), scale.shape.end(),
+                 x.shape.begin() + static_cast<std::ptrdiff_t>(normalized_axis));
+  const std::size_t outer = normalization::Product(x.shape, 0, normalized_axis, kName);
+  const std::size_t inner = normalization::Product(x.shape, normalized_axis, x.shape.size(), kName);
+  if (inner == 0) {
     throw std::invalid_argument(
-        "onnx_light_cpu::RMSNormalization: scale shape must match the normalized dimensions.");
+        "onnx_light_cpu::RMSNormalization: normalized dimensions must contain elements.");
   }
-
-  std::size_t outer = 1;
-  std::size_t inner = 1;
-  for (std::size_t i = 0; i < x.shape.size(); ++i) {
-    if (x.shape[i] <= 0) {
-      throw std::invalid_argument("onnx_light_cpu::RMSNormalization: dimensions must be positive.");
-    }
-    if (i < normalized_axis) {
-      outer *= static_cast<std::size_t>(x.shape[i]);
-    } else {
-      inner *= static_cast<std::size_t>(x.shape[i]);
-    }
-  }
-  const std::size_t bytes = static_cast<std::size_t>(x.element_count()) * x.element_size();
-  Tensor output = rt != nullptr ? rt->MakeOutputTensor(0, x.data_type, x.shape, bytes)
-                                : rt_ns::MakeOutputTensor(x.data_type, x.shape, bytes, nullptr);
-  DispatchNormalize(x, scale, output, outer, inner, epsilon);
+  Tensor output = normalization::AllocateOutput(scale.data_type, x.shape, 0, rt);
+  Normalize(x, scale, output, scale_index, outer, inner, epsilon, scale_by_inner);
   return output;
 }
 

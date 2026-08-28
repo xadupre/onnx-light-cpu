@@ -41,8 +41,9 @@ void RmsNormalizationFloat16(const std::uint16_t *input, const std::uint16_t *sc
                     for (std::size_t column = 0; column < width; ++column) {
                       const float value = detail::Float16BitsToFloat(input[offset + column]);
                       const float weight = detail::Float16BitsToFloat(scale[column]);
-                      output[offset + column] =
-                          detail::FloatToFloat16Bits(value * inverse_rms * weight);
+                      const float normalized = detail::Float16BitsToFloat(
+                          detail::FloatToFloat16Bits(value * inverse_rms));
+                      output[offset + column] = detail::FloatToFloat16Bits(normalized * weight);
                     }
                   }
                 });

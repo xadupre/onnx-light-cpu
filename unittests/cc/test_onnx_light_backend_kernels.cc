@@ -43,6 +43,7 @@
 #include <cctype>
 #include <cstdint>
 #include <set>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -169,11 +170,14 @@ std::vector<TestCase> CollectCpuCases(const std::string &op_type,
   return filtered;
 }
 
-// onnx-light resolves kernels by (domain, op_type) only — never by opset
-// version — so the concrete default opset used to build the runtime context
-// does not affect which kernel a node dispatches to. A fixed recent version is
-// therefore sufficient to drive every registered case.
-constexpr int64_t kRuntimeDefaultOpsetVersion = 20;
+std::int64_t DefaultModelOpsetVersion(const ModelProto &model) {
+  for (const OperatorSetIdProto &opset : model.opset_import()) {
+    if (opset.domain().empty() || opset.domain() == "ai.onnx") {
+      return opset.version();
+    }
+  }
+  throw std::invalid_argument("backend test model has no default-domain opset import");
+}
 
 // Compares a runtime output tensor against the reference output of a backend
 // test case using onnx-light's public ``CompareTensors`` helper
@@ -196,7 +200,7 @@ void RunCaseThroughRuntime(const TestCase &tc, bool compare, std::vector<std::st
   const ModelProto &model = tc.model();
   const GraphProto &graph = model.ref_graph();
   for (const DataSet &ds : tc.data_sets()) {
-    RuntimeContext rt(KernelContext(DefaultOpset(kRuntimeDefaultOpsetVersion)));
+    RuntimeContext rt(KernelContext(DefaultOpset(DefaultModelOpsetVersion(model))));
     RegisterModelFunctions(model, rt);
 
     std::vector<std::pair<std::string, Tensor>> bindings;
@@ -346,6 +350,18 @@ TEST(OnnxLightBackendKernels, MatMulIntegerRunsThroughRuntime) {
 TEST(OnnxLightBackendKernels, RmsNormalizationRunsThroughRuntime) {
   const std::vector<std::string> failures =
       RunCpuBackendCases("RMSNormalization", core::backend_test::TestMode::TEST);
+  EXPECT_TRUE(failures.empty()) << Describe(failures);
+}
+
+TEST(OnnxLightBackendKernels, StandardNormalizationKernelsRunThroughRuntime) {
+  std::vector<std::string> failures;
+  for (const char *op_type :
+       {"BatchNormalization", "GroupNormalization", "InstanceNormalization", "LayerNormalization",
+        "LpNormalization", "MeanVarianceNormalization"}) {
+    const std::vector<std::string> op_failures =
+        RunCpuBackendCases(op_type, core::backend_test::TestMode::TEST);
+    failures.insert(failures.end(), op_failures.begin(), op_failures.end());
+  }
   EXPECT_TRUE(failures.empty()) << Describe(failures);
 }
 
@@ -864,12 +880,12 @@ TEST(OnnxLightBackendKernels, RmsNormalizationBenchmarksCoverQwen3LlmWorkloads) 
   const std::vector<TestCase> cases = CollectTestCases("RMSNormalization", /*include_big=*/false,
                                                        core::backend_test::TestMode::BENCHMARK);
   const std::vector<std::string> expected_names = {
-      "test_cpu_rms_normalisation_llm_qwen3_8b_hidden4096_s1_float16_benchmark",
-      "test_cpu_rms_normalisation_llm_qwen3_8b_hidden4096_s128_float16_benchmark",
-      "test_cpu_rms_normalisation_llm_qwen3_8b_q_norm_hd128_s1_qh32_float16_benchmark",
-      "test_cpu_rms_normalisation_llm_qwen3_8b_q_norm_hd128_s128_qh32_float16_benchmark",
-      "test_cpu_rms_normalisation_llm_qwen3_8b_k_norm_hd128_s1_kvh8_float16_benchmark",
-      "test_cpu_rms_normalisation_llm_qwen3_8b_k_norm_hd128_s128_kvh8_float16_benchmark",
+      "test_cpu_rms_normalization_llm_qwen3_8b_hidden4096_s1_float16_benchmark",
+      "test_cpu_rms_normalization_llm_qwen3_8b_hidden4096_s128_float16_benchmark",
+      "test_cpu_rms_normalization_llm_qwen3_8b_q_norm_hd128_s1_qh32_float16_benchmark",
+      "test_cpu_rms_normalization_llm_qwen3_8b_q_norm_hd128_s128_qh32_float16_benchmark",
+      "test_cpu_rms_normalization_llm_qwen3_8b_k_norm_hd128_s1_kvh8_float16_benchmark",
+      "test_cpu_rms_normalization_llm_qwen3_8b_k_norm_hd128_s128_kvh8_float16_benchmark",
   };
   for (const std::string &name : expected_names) {
     const auto found = std::find_if(cases.begin(), cases.end(), [&name](const TestCase &test_case) {
@@ -882,6 +898,150 @@ TEST(OnnxLightBackendKernels, RmsNormalizationBenchmarksCoverQwen3LlmWorkloads) 
   const std::vector<std::string> failures = RunCpuBackendCases(
       "RMSNormalization", core::backend_test::TestMode::BENCHMARK, expected_names.front());
   EXPECT_TRUE(failures.empty()) << Describe(failures);
+}
+
+TEST(OnnxLightBackendKernels, NormalizationBenchmarksAreLazyAndRunThroughRuntime) {
+  onnx_light_cpu::backend_test::RegisterCpuKernelBackendTestCases();
+  struct ExpectedCorpus {
+    const char *op_type;
+    std::vector<std::string> names;
+  };
+  const std::vector<ExpectedCorpus> expected = {
+      {"BatchNormalization",
+       {"test_cpu_batchnormalization_n32_c128_rank2_float32_benchmark",
+        "test_cpu_batchnormalization_n8_c16_l64_rank3_float32_benchmark",
+        "test_cpu_batchnormalization_n4_c32_h16_w16_rank4_float32_benchmark",
+        "test_cpu_batchnormalization_n8_c64_h8_w8_rank4_float32_benchmark",
+        "test_cpu_batchnormalization_n2_c16_d4_h8_w8_rank5_float32_benchmark",
+        "test_cpu_batchnormalization_training_n4_c32_h8_w8_rank4_float32_benchmark"}},
+      {"GroupNormalization",
+       {"test_cpu_groupnormalization_n2_c16_g4_l64_rank3_float32_benchmark",
+        "test_cpu_groupnormalization_n4_c32_g8_h16_w16_rank4_float32_benchmark",
+        "test_cpu_groupnormalization_n1_c64_g32_h8_w8_rank4_float32_benchmark",
+        "test_cpu_groupnormalization_n2_c24_g6_d4_h8_w8_rank5_float32_benchmark"}},
+      {"InstanceNormalization",
+       {"test_cpu_instancenormalization_n8_c16_l128_rank3_float32_benchmark",
+        "test_cpu_instancenormalization_n4_c32_h16_w16_rank4_float32_benchmark",
+        "test_cpu_instancenormalization_n2_c8_h64_w8_rank4_float32_benchmark",
+        "test_cpu_instancenormalization_n2_c16_d4_h8_w8_rank5_float32_benchmark"}},
+      {"LayerNormalization",
+       {"test_cpu_layernormalization_small_r256_w128_axis1_float32_benchmark",
+        "test_cpu_layernormalization_wide_r1_w4096_axis1_float32_benchmark",
+        "test_cpu_layernormalization_llm_r128_w4096_axis1_float32_benchmark",
+        "test_cpu_layernormalization_tall_r4096_w128_axis1_float32_benchmark",
+        "test_cpu_layernormalization_rank3_n8_s16_w512_axis2_float32_benchmark",
+        "test_cpu_layernormalization_rank3_n4_d8_w64_axis1_float32_benchmark"}},
+      {"LpNormalization",
+       {"test_cpu_lpnormalization_r256_w128_axis1_p2_float32_benchmark",
+        "test_cpu_lpnormalization_b16_r32_w128_axis2_p2_float32_benchmark",
+        "test_cpu_lpnormalization_b8_r64_w32_axis1_p2_float32_benchmark",
+        "test_cpu_lpnormalization_n4_c8_h16_w16_axis1_p1_float32_benchmark",
+        "test_cpu_lpnormalization_wide_r16_w4096_axis1_p1_float32_benchmark"}},
+      {"MeanVarianceNormalization",
+       {"test_cpu_meanvariancenormalization_r256_w128_axes1_rank2_float32_benchmark",
+        "test_cpu_meanvariancenormalization_r64_w32_axes0_1_rank2_float32_benchmark",
+        "test_cpu_meanvariancenormalization_n8_c32_l128_axes0_2_rank3_float32_benchmark",
+        "test_cpu_meanvariancenormalization_n8_c32_h16_w16_default_rank4_float32_benchmark",
+        "test_cpu_meanvariancenormalization_n4_c16_h32_w8_axes2_3_rank4_float32_benchmark",
+        "test_cpu_meanvariancenormalization_n2_c8_d4_h8_w8_axes0_2_3_4_rank5_float32_benchmark"}},
+      {"RMSNormalization",
+       {"test_cpu_rms_normalization_small_r8_w32_axis1_float32_benchmark",
+        "test_cpu_rms_normalization_r64_w512_float32_benchmark",
+        "test_cpu_rms_normalization_wide_r1_w4096_axis1_float32_benchmark",
+        "test_cpu_rms_normalization_llm_r128_w4096_axis1_float32_benchmark",
+        "test_cpu_rms_normalization_tall_r4096_w128_axis1_float32_benchmark",
+        "test_cpu_rms_normalization_rank3_n4_r16_w512_axis2_float32_benchmark",
+        "test_cpu_rms_normalization_rank3_n2_h8_w16_axis1_float32_benchmark",
+        "test_cpu_rms_normalization_rank4_n2_c4_h8_w16_axis2_float32_benchmark"}},
+  };
+  std::vector<std::string> failures;
+  for (const ExpectedCorpus &corpus : expected) {
+    const std::vector<TestCase> cases = CollectTestCases(corpus.op_type, /*include_big=*/false,
+                                                         core::backend_test::TestMode::BENCHMARK);
+    std::set<std::string> actual_names;
+    for (const TestCase &test_case : cases) {
+      if (test_case.name.rfind("test_cpu_", 0) != 0 ||
+          !test_case.name.ends_with("_float32_benchmark")) {
+        continue;
+      }
+      actual_names.insert(test_case.name);
+      EXPECT_TRUE(test_case.is_lazy()) << test_case.name;
+      EXPECT_FALSE(test_case.materialized()) << test_case.name;
+      const GraphProto &graph = test_case.model().ref_graph();
+      EXPECT_EQ(graph.initializer_size(), 0) << test_case.name;
+      ASSERT_EQ(test_case.data_sets().size(), 1u) << test_case.name;
+      EXPECT_EQ(graph.input_size(), test_case.data_sets()[0].inputs.size()) << test_case.name;
+    }
+    EXPECT_EQ(actual_names, std::set<std::string>(corpus.names.begin(), corpus.names.end()))
+        << corpus.op_type;
+    const std::vector<std::string> op_failures = RunCpuBackendCases(
+        corpus.op_type, core::backend_test::TestMode::BENCHMARK, corpus.names.front());
+    failures.insert(failures.end(), op_failures.begin(), op_failures.end());
+  }
+  EXPECT_TRUE(failures.empty()) << Describe(failures);
+}
+
+TEST(OnnxLightBackendKernels, NormalizationCasesCoverRequiredFloatingPointTypes) {
+  onnx_light_cpu::backend_test::RegisterCpuKernelBackendTestCases();
+  struct ExpectedTypes {
+    const char *op_type;
+    const char *test_prefix;
+    const char *float16_benchmark;
+    const char *bfloat16_benchmark;
+  };
+  const std::vector<ExpectedTypes> expected = {
+      {"BatchNormalization", "test_cpu_batchnormalization_small_",
+       "test_cpu_batchnormalization_n4_c16_h8_w8_rank4_float16_benchmark",
+       "test_cpu_batchnormalization_n4_c16_h8_w8_rank4_bfloat16_benchmark"},
+      {"GroupNormalization", "test_cpu_groupnormalization_small_",
+       "test_cpu_groupnormalization_n2_c16_g4_h8_w8_rank4_float16_benchmark",
+       "test_cpu_groupnormalization_n2_c16_g4_h8_w8_rank4_bfloat16_benchmark"},
+      {"InstanceNormalization", "test_cpu_instancenormalization_small_",
+       "test_cpu_instancenormalization_n2_c16_h8_w8_rank4_float16_benchmark",
+       "test_cpu_instancenormalization_n2_c16_h8_w8_rank4_bfloat16_benchmark"},
+      {"LayerNormalization", "test_cpu_layernormalization_axis1_",
+       "test_cpu_layernormalization_r64_w512_axis1_float16_benchmark",
+       "test_cpu_layernormalization_r64_w512_axis1_bfloat16_benchmark"},
+      {"LpNormalization", "test_cpu_lpnormalization_axis0_p1_",
+       "test_cpu_lpnormalization_b8_r16_w128_axis2_p2_float16_benchmark",
+       "test_cpu_lpnormalization_b8_r16_w128_axis2_p2_bfloat16_benchmark"},
+      {"MeanVarianceNormalization", "test_cpu_meanvariancenormalization_axis1_",
+       "test_cpu_meanvariancenormalization_n4_c16_h8_w8_default_rank4_float16_benchmark",
+       "test_cpu_meanvariancenormalization_n4_c16_h8_w8_default_rank4_bfloat16_benchmark"},
+      {"RMSNormalization", "test_cpu_rms_normalization_small_",
+       "test_cpu_rms_normalization_llm_qwen3_8b_hidden4096_s1_float16_benchmark",
+       "test_cpu_rms_normalization_r64_w512_bfloat16_benchmark"},
+  };
+  for (const ExpectedTypes &entry : expected) {
+    const std::vector<TestCase> tests =
+        CollectTestCases(entry.op_type, /*include_big=*/false, core::backend_test::TestMode::TEST);
+    const std::set<std::string> test_names = [&]() {
+      std::set<std::string> names;
+      for (const TestCase &test_case : tests) {
+        names.insert(test_case.name);
+      }
+      return names;
+    }();
+    for (const char *suffix : {"float32", "float16", "bfloat16"}) {
+      EXPECT_TRUE(test_names.contains(std::string(entry.test_prefix) + suffix))
+          << entry.op_type << " " << suffix;
+    }
+    if (std::string_view(entry.op_type) == "RMSNormalization") {
+      EXPECT_TRUE(test_names.contains("test_cpu_rms_normalization_mixed_x_float16_scale_float32"));
+      EXPECT_TRUE(test_names.contains("test_cpu_rms_normalization_mixed_x_float32_scale_float16"));
+    } else if (std::string_view(entry.op_type) == "GroupNormalization") {
+      EXPECT_TRUE(test_names.contains("test_cpu_groupnormalization_opset18_group_affine_float32"));
+    }
+
+    const std::vector<TestCase> benchmarks = CollectTestCases(
+        entry.op_type, /*include_big=*/false, core::backend_test::TestMode::BENCHMARK);
+    const auto has_benchmark = [&](const char *name) {
+      return std::any_of(benchmarks.begin(), benchmarks.end(),
+                         [&](const TestCase &test_case) { return test_case.name == name; });
+    };
+    EXPECT_TRUE(has_benchmark(entry.float16_benchmark)) << entry.float16_benchmark;
+    EXPECT_TRUE(has_benchmark(entry.bfloat16_benchmark)) << entry.bfloat16_benchmark;
+  }
 }
 
 TEST(OnnxLightBackendKernels, MatMulBenchmarksRunThroughRuntime) {

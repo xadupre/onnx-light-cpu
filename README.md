@@ -137,8 +137,12 @@ print(f"SIMD level: {level}")
 `register_kernels` installs the optimized kernels into
 [onnx-light](https://github.com/xadupre/onnx-light)'s shared C++ kernel
 dispatch table. This includes the portable `com.microsoft::CDist` and
-`com.microsoft::BiasGelu` kernels, their shape and peak-memory functions, and
-their safe fusion patterns:
+`com.microsoft::BiasGelu` kernels, the standard numeric normalization family
+(`BatchNormalization` through `RMSNormalization`), and their related runtime
+metadata:
+
+`BatchNormalization` implements the opset-15 inference and training contracts;
+training produces `Y`, `running_mean`, and `running_var`.
 
 ```python
 import numpy as np
@@ -182,30 +186,24 @@ gradient_registry = register_custom_gradients()
 
 For a native C++ integration, build with `-DONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON`
 (requires the [onnx-light](https://github.com/xadupre/onnx-light) C++ package).
-This builds `lib_onnx_light_cpu_kernels`, which exposes `onnx_light_cpu::AbsKernel`,
-`onnx_light_cpu::ExpKernel`, `onnx_light_cpu::LogKernel` and
-`onnx_light_cpu::NotKernel` classes deriving from
+This builds `lib_onnx_light_cpu_kernels`, whose adapters derive from
 onnx-light's `KernelBase`. Calling `onnx_light_cpu::RegisterAllKernels()`
-installs all of them into onnx-light's shared kernel dispatch table (or call the
-per-operator `RegisterAbsKernel()`, `RegisterExpKernel()`, `RegisterLogKernel()`
-and `RegisterNotKernel()` functions individually) so every
-`Abs`/`Exp`/`Log`/`Not` node runs the SIMD kernel:
+installs the complete inventory into onnx-light's shared kernel dispatch table;
+families can also be registered directly, for example with
+`RegisterNormalizationKernels()`:
 
 ```cpp
 #include <onnx_light_cpu/kernels/register_kernels.h>
 
-onnx_light_cpu::RegisterAllKernels();  // Abs/Exp/Log/Not now use the SIMD kernels
+onnx_light_cpu::RegisterAllKernels();  // Install every onnx-light-cpu kernel.
 ```
 
 The same registration is exposed to Python (in builds compiled with the
 onnx-light integration) as `onnx_light_cpu.onnx_py._cpuregister.register_all_kernels()`.
 
-When running through onnx-light, these kernels combine SIMD with
-multithreading: each kernel splits its work across onnx-light's shared
-`ParallelFor` thread pool. The pool sizes itself to the number of hardware
-threads, and its grain-size threshold keeps small tensors on a single thread
-(SIMD only), so large arrays are parallelized while small ones avoid
-thread-dispatch overhead.
+Performance-oriented kernels use the available SIMD paths and, where
+applicable, onnx-light's shared CPU executor. Portable kernels retain scalar
+fallbacks for every supported platform and data type.
 
 ## Testing
 

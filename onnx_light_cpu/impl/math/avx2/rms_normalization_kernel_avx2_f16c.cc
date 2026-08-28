@@ -51,14 +51,18 @@ void RmsNormalizationFloat16_F16C(const std::uint16_t *input, const std::uint16_
           _mm_loadu_si128(reinterpret_cast<const __m128i *>(scale + column));
       const __m256 value = _mm256_cvtph_ps(packed_input);
       const __m256 weight = _mm256_cvtph_ps(packed_scale);
-      const __m256 normalized = _mm256_mul_ps(_mm256_mul_ps(value, inverse_rms), weight);
-      const __m128i packed_output =
+      const __m256 normalized = _mm256_mul_ps(value, inverse_rms);
+      const __m128i packed_normalized =
           _mm256_cvtps_ph(normalized, _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC);
+      const __m256 rounded_normalized = _mm256_cvtph_ps(packed_normalized);
+      const __m256 scaled = _mm256_mul_ps(rounded_normalized, weight);
+      const __m128i packed_output =
+          _mm256_cvtps_ph(scaled, _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC);
       _mm_storeu_si128(reinterpret_cast<__m128i *>(output + offset + column), packed_output);
-      const int nan_mask = _mm256_movemask_ps(_mm256_cmp_ps(normalized, normalized, _CMP_UNORD_Q));
+      const int nan_mask = _mm256_movemask_ps(_mm256_cmp_ps(scaled, scaled, _CMP_UNORD_Q));
       if (nan_mask != 0) {
         alignas(32) float lanes[8];
-        _mm256_store_ps(lanes, normalized);
+        _mm256_store_ps(lanes, scaled);
         for (int lane = 0; lane < 8; ++lane) {
           if ((nan_mask & (1 << lane)) != 0) {
             output[offset + column + static_cast<std::size_t>(lane)] =
@@ -71,7 +75,9 @@ void RmsNormalizationFloat16_F16C(const std::uint16_t *input, const std::uint16_
     for (; column < width; ++column) {
       const float value = detail::Float16BitsToFloat(input[offset + column]);
       const float weight = detail::Float16BitsToFloat(scale[column]);
-      output[offset + column] = detail::FloatToFloat16Bits(value * scalar_inverse_rms * weight);
+      const float normalized =
+          detail::Float16BitsToFloat(detail::FloatToFloat16Bits(value * scalar_inverse_rms));
+      output[offset + column] = detail::FloatToFloat16Bits(normalized * weight);
     }
   }
 }
