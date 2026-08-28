@@ -77,30 +77,40 @@ void AbsFloat32_AVX(const float *input, float *output, std::size_t count) {
 } // namespace
 
 namespace {
-void AbsFloat32_Dispatch(const float *input, float *output, std::size_t count,
-                         bool streaming_store) {
+using AbsFloat32Fn = void (*)(const float *, float *, std::size_t);
+
+struct AbsFloat32Dispatch {
+  AbsFloat32Fn function;
+  AbsFloat32Fn streaming_function;
+  double compute_cycles;
+};
+
+constexpr double AbsComputeCycles(std::size_t simd_lanes) {
+  constexpr double kAvx2ComputeCycles = 1.0;
+  constexpr std::size_t kAvx2Lanes = 8;
+  return kAvx2ComputeCycles * static_cast<double>(kAvx2Lanes) / static_cast<double>(simd_lanes);
+}
+
+const AbsFloat32Dispatch &GetAbsFloat32Dispatch() {
+  static const AbsFloat32Dispatch dispatch = [] {
 #if ONNX_LIGHT_CPU_X86
-  static const SimdLevel level = DetectSimdLevel();
+    const SimdLevel level = DetectSimdLevel();
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512
-  if (level >= SimdLevel::kAVX512) {
-    if (streaming_store) {
-      AbsFloat32_AVX512Streaming(input, output, count);
-    } else {
-      AbsFloat32_AVX512(input, output, count);
+    if (level >= SimdLevel::kAVX512) {
+      return AbsFloat32Dispatch{&AbsFloat32_AVX512, &AbsFloat32_AVX512Streaming,
+                                AbsComputeCycles(16)};
     }
-    return;
-  }
 #endif
-  if (level >= SimdLevel::kAVX) {
-    AbsFloat32_AVX(input, output, count);
-    return;
-  }
-  if (level >= SimdLevel::kSSE2) {
-    AbsFloat32_SSE2(input, output, count);
-    return;
-  }
+    if (level >= SimdLevel::kAVX) {
+      return AbsFloat32Dispatch{&AbsFloat32_AVX, nullptr, AbsComputeCycles(8)};
+    }
+    if (level >= SimdLevel::kSSE2) {
+      return AbsFloat32Dispatch{&AbsFloat32_SSE2, nullptr, AbsComputeCycles(4)};
+    }
 #endif
-  AbsFloat32_Scalar(input, output, count);
+    return AbsFloat32Dispatch{&AbsFloat32_Scalar, nullptr, AbsComputeCycles(1)};
+  }();
+  return dispatch;
 }
 } // namespace
 
@@ -113,12 +123,15 @@ void AbsFloat32WithTuning(const float *input, float *output, std::size_t count,
   const bool streaming_store =
       tuning.streaming_store_threshold_bytes != 0 &&
       count >= UnaryBytesToElements(tuning.streaming_store_threshold_bytes, sizeof(float));
-  auto execute = [input, output, streaming_store](std::int64_t begin, std::int64_t end) {
-    AbsFloat32_Dispatch(input + begin, output + begin, static_cast<std::size_t>(end - begin),
-                        streaming_store);
+  const AbsFloat32Dispatch &dispatch = GetAbsFloat32Dispatch();
+  auto execute = [input, output, streaming_store, &dispatch](std::int64_t begin, std::int64_t end) {
+    const AbsFloat32Fn function = streaming_store && dispatch.streaming_function != nullptr
+                                      ? dispatch.streaming_function
+                                      : dispatch.function;
+    function(input + begin, output + begin, static_cast<std::size_t>(end - begin));
   };
   if (tuning.use_cost_model) {
-    ExecuteCostedUnaryRanges<float>(count, tuning, 1.0, std::move(execute));
+    ExecuteCostedUnaryRanges<float>(count, tuning, dispatch.compute_cycles, std::move(execute));
   } else {
     ExecuteUnaryRanges<float>(count, tuning, std::move(execute));
   }

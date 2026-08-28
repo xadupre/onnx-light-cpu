@@ -9,6 +9,7 @@
 #include "onnx_core/runtime/kernels/random.h"
 #include "onnx_core/runtime/memory/simple_tensor.h"
 
+#include <cmath>
 #include <cstdint>
 #include <stdexcept>
 #include <string>
@@ -44,8 +45,13 @@ inline const char *DataTypeSuffix(rt_ns::DataType data_type) {
 }
 
 inline rt_ns::Tensor MakeBenchmarkTensor(rt_ns::DataType data_type, const rt_ns::Shape &shape,
-                                         std::uint64_t seed) {
-  const std::vector<float> values = rt_ns::Randn<float>(shape, seed);
+                                         std::uint64_t seed, bool positive = false) {
+  std::vector<float> values = rt_ns::Randn<float>(shape, seed);
+  if (positive) {
+    for (float &value : values) {
+      value = std::abs(value) + 0.01f;
+    }
+  }
   switch (data_type) {
   case rt_ns::DataType::FLOAT:
     return rt_ns::Tensor::FromFloat("", shape, values);
@@ -114,8 +120,9 @@ void RegisterUnaryBenchmark(
   const std::string name = "test_cpu_" + op_tag + "_n" + std::to_string(size) + "_" +
                            DataTypeSuffix(data_type) + "_benchmark";
   bt_ns::Expect(registry, std::move(node), name, {opset}, {size}, {size},
-                [kernel, data_type, size]() -> bt_ns::IoData {
-                  rt_ns::Tensor x = MakeBenchmarkTensor(data_type, {size}, 987654321ULL);
+                [kernel, op_type, data_type, size]() -> bt_ns::IoData {
+                  rt_ns::Tensor x =
+                      MakeBenchmarkTensor(data_type, {size}, 987654321ULL, op_type == "Log");
                   rt_ns::Tensor y = kernel(x);
                   return bt_ns::IoData{{std::move(x)}, {std::move(y)}};
                 });

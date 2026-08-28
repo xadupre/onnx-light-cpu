@@ -661,31 +661,46 @@ void LogFloat64_AVX2(const double *input, double *output, std::size_t count) {
 // ---------------------------------------------------------------------------
 
 namespace {
-void ExpFloat32_Dispatch(const float *input, float *output, std::size_t count) {
+using Float32UnaryFn = void (*)(const float *, float *, std::size_t);
+
+struct Float32UnaryDispatch {
+  Float32UnaryFn function;
+  double compute_cycles;
+};
+
+constexpr double SimdComputeCycles(double avx2_cycles, std::size_t simd_lanes) {
+  constexpr std::size_t kAvx2Lanes = 8;
+  return avx2_cycles * static_cast<double>(kAvx2Lanes) / static_cast<double>(simd_lanes);
+}
+
+const Float32UnaryDispatch &GetExpFloat32Dispatch() {
+  static const Float32UnaryDispatch dispatch = [] {
 #if ONNX_LIGHT_CPU_X86
-  static const SimdLevel level = DetectSimdLevel();
+    const SimdLevel level = DetectSimdLevel();
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512
-  if (level >= SimdLevel::kAVX512) {
-    ExpFloat32_AVX512(input, output, count);
-    return;
-  }
+    if (level >= SimdLevel::kAVX512) {
+      return Float32UnaryDispatch{&ExpFloat32_AVX512, SimdComputeCycles(1.5, 16)};
+    }
 #endif
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
-  if (level >= SimdLevel::kAVX2 && CpuSupportsFma()) {
-    ExpFloat32_AVX2_FMA(input, output, count);
-    return;
-  }
+    if (level >= SimdLevel::kAVX2 && CpuSupportsFma()) {
+      return Float32UnaryDispatch{&ExpFloat32_AVX2_FMA, SimdComputeCycles(1.5, 8)};
+    }
 #endif
-  if (level >= SimdLevel::kAVX2) {
-    ExpFloat32_AVX2(input, output, count);
-    return;
-  }
-  if (level >= SimdLevel::kSSE2) {
-    ExpFloat32_SSE2(input, output, count);
-    return;
-  }
+    if (level >= SimdLevel::kAVX2) {
+      return Float32UnaryDispatch{&ExpFloat32_AVX2, SimdComputeCycles(1.5, 8)};
+    }
+    if (level >= SimdLevel::kSSE2) {
+      return Float32UnaryDispatch{&ExpFloat32_SSE2, SimdComputeCycles(1.5, 4)};
+    }
 #endif
-  ExpFloat32_Scalar(input, output, count);
+    return Float32UnaryDispatch{&ExpFloat32_Scalar, SimdComputeCycles(1.5, 1)};
+  }();
+  return dispatch;
+}
+
+void ExpFloat32_Dispatch(const float *input, float *output, std::size_t count) {
+  GetExpFloat32Dispatch().function(input, output, count);
 }
 } // namespace
 
@@ -695,45 +710,49 @@ void ExpFloat32(const float *input, float *output, std::size_t count) {
 
 void ExpFloat32WithTuning(const float *input, float *output, std::size_t count,
                           const UnaryExecutionTuning &tuning) {
-  auto execute = [input, output](std::int64_t begin, std::int64_t end) {
-    ExpFloat32_Dispatch(input + begin, output + begin, static_cast<std::size_t>(end - begin));
+  const Float32UnaryDispatch &dispatch = GetExpFloat32Dispatch();
+  auto execute = [input, output, &dispatch](std::int64_t begin, std::int64_t end) {
+    dispatch.function(input + begin, output + begin, static_cast<std::size_t>(end - begin));
   };
   if (tuning.use_cost_model) {
-    ExecuteCostedUnaryRanges<float>(count, tuning, 1.5, std::move(execute));
+    ExecuteCostedUnaryRanges<float>(count, tuning, dispatch.compute_cycles, std::move(execute));
   } else {
     ExecuteUnaryRanges<float>(count, tuning, std::move(execute));
   }
 }
 
 namespace {
-void LogFloat32_Dispatch(const float *input, float *output, std::size_t count) {
+const Float32UnaryDispatch &GetLogFloat32Dispatch() {
+  static const Float32UnaryDispatch dispatch = [] {
 #if ONNX_LIGHT_CPU_X86
-  static const SimdLevel level = DetectSimdLevel();
+    const SimdLevel level = DetectSimdLevel();
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
-  static const bool use_avx2_fma = level >= SimdLevel::kAVX2 && CpuSupportsFma();
+    const bool use_avx2_fma = level >= SimdLevel::kAVX2 && CpuSupportsFma();
 #endif
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512
-  if (level >= SimdLevel::kAVX512) {
-    LogFloat32_AVX512(input, output, count);
-    return;
-  }
+    if (level >= SimdLevel::kAVX512) {
+      return Float32UnaryDispatch{&LogFloat32_AVX512, SimdComputeCycles(100.0, 16)};
+    }
 #endif
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
-  if (use_avx2_fma) {
-    LogFloat32_AVX2_FMA(input, output, count);
-    return;
-  }
+    if (use_avx2_fma) {
+      return Float32UnaryDispatch{&LogFloat32_AVX2_FMA, SimdComputeCycles(100.0, 8)};
+    }
 #endif
-  if (level >= SimdLevel::kAVX2) {
-    LogFloat32_AVX2(input, output, count);
-    return;
-  }
-  if (level >= SimdLevel::kSSE2) {
-    LogFloat32_SSE2(input, output, count);
-    return;
-  }
+    if (level >= SimdLevel::kAVX2) {
+      return Float32UnaryDispatch{&LogFloat32_AVX2, SimdComputeCycles(100.0, 8)};
+    }
+    if (level >= SimdLevel::kSSE2) {
+      return Float32UnaryDispatch{&LogFloat32_SSE2, SimdComputeCycles(100.0, 4)};
+    }
 #endif
-  LogFloat32_Scalar(input, output, count);
+    return Float32UnaryDispatch{&LogFloat32_Scalar, SimdComputeCycles(100.0, 1)};
+  }();
+  return dispatch;
+}
+
+void LogFloat32_Dispatch(const float *input, float *output, std::size_t count) {
+  GetLogFloat32Dispatch().function(input, output, count);
 }
 } // namespace
 
@@ -743,11 +762,12 @@ void LogFloat32(const float *input, float *output, std::size_t count) {
 
 void LogFloat32WithTuning(const float *input, float *output, std::size_t count,
                           const UnaryExecutionTuning &tuning) {
-  auto execute = [input, output](std::int64_t begin, std::int64_t end) {
-    LogFloat32_Dispatch(input + begin, output + begin, static_cast<std::size_t>(end - begin));
+  const Float32UnaryDispatch &dispatch = GetLogFloat32Dispatch();
+  auto execute = [input, output, &dispatch](std::int64_t begin, std::int64_t end) {
+    dispatch.function(input + begin, output + begin, static_cast<std::size_t>(end - begin));
   };
   if (tuning.use_cost_model) {
-    ExecuteCostedUnaryRanges<float>(count, tuning, 100.0, std::move(execute));
+    ExecuteCostedUnaryRanges<float>(count, tuning, dispatch.compute_cycles, std::move(execute));
   } else {
     ExecuteUnaryRanges<float>(count, tuning, std::move(execute));
   }
