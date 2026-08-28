@@ -178,24 +178,24 @@ TEST(CustomOperatorSupport, BiasGeluGradientUsesOnlyStandardOnnxOperators) {
       const auto *noop = ONNX_LIGHT_NAMESPACE::FindAttribute(node, "noop_with_empty_axes");
       has_safe_reduce = has_safe_reduce || (noop != nullptr && noop->i() == 1);
     }
-
-    TEST(CustomOperatorSupport, GroupQueryAttentionGradientUsesStandardAttention) {
-      grad_ns::GradRegistry gradients = grad_ns::DefaultGradRegistry();
-      onnx_light_cpu::RegisterCustomOperatorGradients(gradients);
-      const std::vector<NodeProto> nodes = {MakeGroupQueryAttentionNode()};
-      const std::vector<std::string> inputs = {"Q", "K", "V", "seqlens_k", "total_sequence_length"};
-      const std::vector<std::string> xs = {"Q", "K", "V"};
-      const std::vector<std::string> zs;
-      const std::vector<ONNX_LIGHT_NAMESPACE::TensorProto> initializers;
-      const auto gradient =
-          grad_ns::GradientOfNodes(nodes, inputs, initializers, xs, "Y", zs, gradients);
-      EXPECT_NE(std::find_if(gradient.node().begin(), gradient.node().end(),
-                             [](const NodeProto &node) { return node.op_type() == "Attention"; }),
-                gradient.node().end());
-    }
   }
   EXPECT_TRUE(has_range);
   EXPECT_TRUE(has_safe_reduce);
+}
+
+TEST(CustomOperatorSupport, GroupQueryAttentionGradientUsesStandardAttention) {
+  grad_ns::GradRegistry gradients = grad_ns::DefaultGradRegistry();
+  onnx_light_cpu::RegisterCustomOperatorGradients(gradients);
+  const std::vector<NodeProto> nodes = {MakeGroupQueryAttentionNode()};
+  const std::vector<std::string> inputs = {"Q", "K", "V", "seqlens_k", "total_sequence_length"};
+  const std::vector<std::string> xs = {"Q", "K", "V"};
+  const std::vector<std::string> zs;
+  const std::vector<ONNX_LIGHT_NAMESPACE::TensorProto> initializers;
+  const auto gradient =
+      grad_ns::GradientOfNodes(nodes, inputs, initializers, xs, "Y", zs, gradients);
+  EXPECT_NE(std::find_if(gradient.node().begin(), gradient.node().end(),
+                         [](const NodeProto &node) { return node.op_type() == "Attention"; }),
+            gradient.node().end());
 }
 
 } // namespace

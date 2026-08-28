@@ -127,6 +127,13 @@ NodeProto MakeInt64Constant(const std::string &name, int64_t value) {
   return node;
 }
 
+NodeProto MakeCast(const std::string &input, const std::string &output, const std::string &name) {
+  NodeProto node = MakeNode("Cast", {input}, {output}, "", name.c_str());
+  ONNX_LIGHT_NAMESPACE::AddAttribute(node, "to",
+                                     static_cast<int64_t>(TensorProto::DataType::INT32));
+  return node;
+}
+
 } // namespace
 
 std::set<std::string> BiasGeluFusionPattern::FastOpType() const { return {"Gelu"}; }
@@ -255,6 +262,8 @@ GroupQueryAttentionFusionPattern::Apply(GraphGraph &graph,
   const std::string axes = prefix + "-axes";
   const std::string batch_dims = prefix + "-batch-dims";
   const std::string seqlen_value = prefix + "-seqlen-value";
+  const std::string seqlen_value_int32 = prefix + "-seqlen-value-int32";
+  const std::string sequence_length_int32 = prefix + "-sequence-length-int32";
   const std::string seqlens_k = prefix + "-seqlens-k";
   ONNX_LIGHT_NAMESPACE::utils::RepeatedProtoField<NodeProto> replacements;
   replacements.push_back(MakeInt64Constant(zero, 0));
@@ -272,11 +281,15 @@ GroupQueryAttentionFusionPattern::Apply(GraphGraph &graph,
                                   (prefix + "-UnsqueezeBatch").c_str()));
   replacements.push_back(MakeNode("Sub", {sequence_length, one}, {seqlen_value}, "",
                                   (prefix + "-SubtractOne").c_str()));
-  replacements.push_back(MakeNode("Expand", {seqlen_value, batch_dims}, {seqlens_k}, "",
+  replacements.push_back(
+      MakeCast(seqlen_value, seqlen_value_int32, prefix + "-CastSequenceMinusOne"));
+  replacements.push_back(
+      MakeCast(sequence_length, sequence_length_int32, prefix + "-CastSequenceLength"));
+  replacements.push_back(MakeNode("Expand", {seqlen_value_int32, batch_dims}, {seqlens_k}, "",
                                   (prefix + "-ExpandSequence").c_str()));
   NodeProto gqa = MakeNode("GroupQueryAttention",
                            {attention.input(0), attention.input(1), attention.input(2), "", "",
-                            seqlens_k, sequence_length},
+                            seqlens_k, sequence_length_int32},
                            {attention.output(0)}, kMicrosoftDomain, prefix.c_str());
   ONNX_LIGHT_NAMESPACE::AddAttribute(gqa, "num_heads",
                                      FindAttribute(attention, "q_num_heads")->i());
