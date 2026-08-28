@@ -1154,7 +1154,7 @@ if(ONNX_LIGHT_CPU_BUILD_TESTS)
   endfunction()
 
   file(GLOB _test_sources CONFIGURE_DEPENDS
-      "${CMAKE_CURRENT_SOURCE_DIR}/unittests/cc/test_*.cc")
+      "${CMAKE_CURRENT_SOURCE_DIR}/unittests/cc/*/test_*.cc")
   foreach(_test_src IN LISTS _test_sources)
     get_filename_component(_test_name "${_test_src}" NAME_WE)
     if(_test_name MATCHES "^test_onnx_light_")
