@@ -286,6 +286,21 @@ TEST(TreeEnsembleOracle, SchedulingDecisionUsesCacheCapacity) {
   EXPECT_EQ(large_forest.SelectExecution(51, 4).strategy,
             TreeEnsembleExecutionStrategy::kRowParallel);
 
+  const TreeEnsemblePlan very_large_forest(StumpForest(10000));
+  EXPECT_EQ(very_large_forest.SelectExecution(51, 4).strategy,
+            TreeEnsembleExecutionStrategy::kTreeParallel);
+  EXPECT_EQ(very_large_forest.SelectExecution(127, 4).strategy,
+            TreeEnsembleExecutionStrategy::kTreeParallel);
+  EXPECT_EQ(very_large_forest.SelectExecution(128, 4).strategy,
+            TreeEnsembleExecutionStrategy::kRowParallel);
+
+  const TreeEnsemblePlan prepared_very_large_forest(
+      StumpForest(10000), TreeEnsembleTuningContext{"test-cpu", 4}, nullptr);
+  EXPECT_EQ(prepared_very_large_forest.SelectExecution(127, 4).strategy,
+            TreeEnsembleExecutionStrategy::kTreeParallel);
+  EXPECT_EQ(prepared_very_large_forest.SelectExecution(128, 4).strategy,
+            TreeEnsembleExecutionStrategy::kRowParallel);
+
   const TreeEnsemblePlan few_trees(StumpForest(3));
   EXPECT_EQ(few_trees.SelectExecution(51, 4).strategy, TreeEnsembleExecutionStrategy::kRowParallel);
   EXPECT_EQ(few_trees.SelectExecution(1000, 1).strategy,
