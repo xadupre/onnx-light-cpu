@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "onnx_light_cpu/backend_test/com_microsoft/include_com_microsoft_cases.h"
+#include "onnx_light_cpu/backend_test/cases/com_microsoft/include_com_microsoft_cases.h"
 
 #include "onnx_light_cpu/kernels/attention/attention_kernel.h"
 #include "onnx_light_cpu/schemas/com_microsoft/op_schema.h"

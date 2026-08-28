@@ -5,11 +5,11 @@
 #include "onnx_light_cpu/backend_test/collect_test_cases.h"
 
 #include "onnx_light_cpu/backend_test/cases/attention/include_attention_cases.h"
+#include "onnx_light_cpu/backend_test/cases/com_microsoft/include_com_microsoft_cases.h"
 #include "onnx_light_cpu/backend_test/cases/elementwise/include_elementwise_cases.h"
 #include "onnx_light_cpu/backend_test/cases/logical/include_logical_cases.h"
 #include "onnx_light_cpu/backend_test/cases/math/include_math_cases.h"
 #include "onnx_light_cpu/backend_test/cases/traditionalml/include_traditionalml_cases.h"
-#include "onnx_light_cpu/backend_test/com_microsoft/include_com_microsoft_cases.h"
 
 #include "onnx_core/backend_test/test_case_registry.h"
 
