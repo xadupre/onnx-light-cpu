@@ -102,7 +102,8 @@ NB_MODULE(_cpuregister, m) {
 
   m.def("register_custom_gradients", &onnx_light_cpu::RegisterCustomOperatorGradients,
         nb::arg("registry"),
-        "Adds the com.microsoft CDist and BiasGelu backward rules to a GradRegistry.");
+        "Adds the com.microsoft BiasGelu, CDist, and GroupQueryAttention backward rules to a "
+        "GradRegistry.");
 
   m.def(
       "registered_kernel_names", []() { return onnx_light_cpu::RegisteredKernelNames(); },

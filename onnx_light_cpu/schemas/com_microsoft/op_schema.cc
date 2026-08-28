@@ -46,6 +46,35 @@ LightOpSchema MakeBiasGeluSchema() {
       false, true);
 }
 
+LightOpSchema MakeGroupQueryAttentionSchema() {
+  return LightOpSchema(
+      "GroupQueryAttention", kMicrosoftDomain, 1,
+      "Grouped-query attention over rank-3 Q/K/V tensors.",
+      {{"query", "Query tensor with shape (batch, sequence, num_heads * head_size).", "T"},
+       {"key", "Key tensor with shape (batch, sequence, kv_num_heads * head_size).", "T"},
+       {"value", "Value tensor with shape (batch, sequence, kv_num_heads * value_head_size).", "T"},
+       {"past_key", "Optional KV cache key tensor.", "T_CACHE"},
+       {"past_value", "Optional KV cache value tensor.", "T_CACHE"},
+       {"seqlens_k", "INT32 tensor containing one total sequence length minus one per batch.", "M"},
+       {"total_sequence_length", "INT32 scalar total sequence length.", "M"}},
+      {{"output", "Output tensor with the same shape and type as query.", "T"}},
+      {{"T",
+        {TensorType::kFloat16, TensorType::kFloat, TensorType::kBfloat16},
+        "Constrain query, key, value, and output to floating-point tensors."},
+       {"T_CACHE",
+        {TensorType::kFloat16, TensorType::kFloat, TensorType::kBfloat16},
+        "Constrain the supported non-quantized KV cache tensors."},
+       {"M", {TensorType::kInt32}, "Constrain sequence-length inputs to INT32."}},
+      {AttributeParam{"num_heads", "Number of query heads.", AttributeType::INT, true},
+       AttributeParam{"kv_num_heads", "Number of key/value heads.", AttributeType::INT, true},
+       AttributeParam{"causal", "Whether to apply causal masking.", AttributeType::INT, false,
+                      int64_t{1}},
+       AttributeParam{"scale", "Optional attention-score scale.", AttributeType::FLOAT, false},
+       AttributeParam{"softcap", "Optional attention-score softcap.", AttributeType::FLOAT, false,
+                      0.0f}},
+      false, true);
+}
+
 } // namespace
 
 std::vector<LightOpSchema> GetMicrosoftOpSchemasWithHistory(const std::string &op_type,
@@ -53,6 +82,8 @@ std::vector<LightOpSchema> GetMicrosoftOpSchemasWithHistory(const std::string &o
   static const std::map<std::string, SchemaBuilder> builders = {
       {"BiasGelu", [] { return std::vector<LightOpSchema>{MakeBiasGeluSchema()}; }},
       {"CDist", [] { return std::vector<LightOpSchema>{MakeCDistSchema()}; }},
+      {"GroupQueryAttention",
+       [] { return std::vector<LightOpSchema>{MakeGroupQueryAttentionSchema()}; }},
   };
   return schema_ns::CollectSchemasFromBuilders(builders, op_type, init_doc);
 }

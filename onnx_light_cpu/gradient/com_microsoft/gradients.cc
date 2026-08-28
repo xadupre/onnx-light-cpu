@@ -100,6 +100,151 @@ std::string ReduceSum(FunctionProto &func, int &counter, const std::string &inpu
   return output;
 }
 
+std::string Reshape(FunctionProto &func, int &counter, const std::string &input,
+                    std::vector<int64_t> shape, const char *prefix) {
+  return Binary(func, counter, "Reshape", input, AddAxes(func, counter, "shape", std::move(shape)),
+                prefix);
+}
+
+std::string Transpose(FunctionProto &func, int &counter, const std::string &input,
+                      std::vector<int64_t> perm, const char *prefix) {
+  const std::string output = grad_ns::NewGradName(prefix, counter);
+  NodeProto &node = func.add_node("Transpose", {input}, {output});
+  ONNX_LIGHT_NAMESPACE::AddAttribute(node, "perm", std::move(perm));
+  return output;
+}
+
+std::string ReduceSumKeepDims(FunctionProto &func, int &counter, const std::string &input,
+                              int64_t axis, const char *prefix) {
+  const std::string axes = AddAxes(func, counter, "axes", {axis});
+  const std::string output = grad_ns::NewGradName(prefix, counter);
+  NodeProto &node = func.add_node("ReduceSum", {input, axes}, {output});
+  ONNX_LIGHT_NAMESPACE::AddAttribute(node, "keepdims", int64_t{1});
+  return output;
+}
+
+bool IsSupportedGroupQueryAttention(const NodeProto &node, int64_t &num_heads,
+                                    int64_t &kv_num_heads) {
+  if (node.input_size() < 7 || node.output_size() != 1 || !node.input(3).empty() ||
+      !node.input(4).empty() || (node.input_size() > 7 && !node.input(7).empty()) ||
+      (node.input_size() > 8 && !node.input(8).empty()) ||
+      (node.input_size() > 9 && !node.input(9).empty()) ||
+      (node.input_size() > 10 && !node.input(10).empty())) {
+    return false;
+  }
+  num_heads = ONNX_LIGHT_NAMESPACE::GetAttributeIntOrDefault(node, "num_heads", 0);
+  kv_num_heads = ONNX_LIGHT_NAMESPACE::GetAttributeIntOrDefault(node, "kv_num_heads", 0);
+  return num_heads > 0 && kv_num_heads > 0 && num_heads % kv_num_heads == 0 &&
+         ONNX_LIGHT_NAMESPACE::GetAttributeIntOrDefault(node, "do_rotary", 0) == 0 &&
+         ONNX_LIGHT_NAMESPACE::GetAttributeIntOrDefault(node, "sliding_window_cache", 0) == 0 &&
+         ONNX_LIGHT_NAMESPACE::GetAttributeIntOrDefault(node, "smooth_softmax", 0) == 0 &&
+         ONNX_LIGHT_NAMESPACE::GetAttributeIntOrDefault(node, "kv_cache_bit_width", 0) == 0 &&
+         FindAttribute(node, "scale") != nullptr &&
+         ONNX_LIGHT_NAMESPACE::GetAttributeFloatOrDefault(node, "softcap", 0.0f) == 0.0f;
+}
+
+bool GradGroupQueryAttention(const NodeProto &node, const std::string &output_grad,
+                             std::unordered_map<std::string, std::string> &grad_accum, int &counter,
+                             FunctionProto &func) {
+  int64_t num_heads = 0;
+  int64_t kv_num_heads = 0;
+  if (!IsSupportedGroupQueryAttention(node, num_heads, kv_num_heads)) {
+    return false;
+  }
+  const int64_t group_size = num_heads / kv_num_heads;
+  const std::string &query = node.input(0);
+  const std::string &key = node.input(1);
+  const std::string &value = node.input(2);
+
+  const std::string probabilities = grad_ns::NewGradName("attention_probabilities", counter);
+  const std::string ignored = grad_ns::NewGradName("attention_output", counter);
+  NodeProto &attention =
+      func.add_node("Attention", {query, key, value}, {ignored, "", "", probabilities});
+  ONNX_LIGHT_NAMESPACE::AddAttribute(attention, "q_num_heads", num_heads);
+  ONNX_LIGHT_NAMESPACE::AddAttribute(attention, "kv_num_heads", kv_num_heads);
+  ONNX_LIGHT_NAMESPACE::AddAttribute(
+      attention, "is_causal", ONNX_LIGHT_NAMESPACE::GetAttributeIntOrDefault(node, "causal", 1));
+  ONNX_LIGHT_NAMESPACE::AddAttribute(attention, "qk_matmul_output_mode", int64_t{3});
+  if (const AttributeProto *scale = FindAttribute(node, "scale"); scale != nullptr) {
+    ONNX_LIGHT_NAMESPACE::AddAttribute(attention, "scale", scale->f());
+  }
+  if (const AttributeProto *softcap = FindAttribute(node, "softcap"); softcap != nullptr) {
+    ONNX_LIGHT_NAMESPACE::AddAttribute(attention, "softcap", softcap->f());
+  }
+
+  const std::string dy = Transpose(
+      func, counter, Reshape(func, counter, output_grad, {0, 0, num_heads, -1}, "reshape_dy"),
+      {0, 2, 1, 3}, "transpose_dy");
+  const std::string key_heads =
+      Reshape(func, counter, key, {0, 0, kv_num_heads, -1}, "reshape_key");
+  const std::string value_heads =
+      Reshape(func, counter, value, {0, 0, kv_num_heads, -1}, "reshape_value");
+  const std::string group_repeats =
+      AddAxes(func, counter, "group_repeats", {1, 1, group_size, 1, 1});
+  const auto expand_heads = [&](const std::string &input, const char *prefix) {
+    const std::string unsqueezed =
+        Unsqueeze(func, counter, input, 2, (std::string(prefix) + "_unsqueeze").c_str());
+    const std::string tiled = Binary(func, counter, "Tile", unsqueezed, group_repeats,
+                                     (std::string(prefix) + "_tile").c_str());
+    return Transpose(func, counter,
+                     Reshape(func, counter, tiled, {0, 0, num_heads, -1},
+                             (std::string(prefix) + "_reshape").c_str()),
+                     {0, 2, 1, 3}, (std::string(prefix) + "_transpose").c_str());
+  };
+  const std::string expanded_key = expand_heads(key_heads, "expanded_key");
+  const std::string expanded_value = expand_heads(value_heads, "expanded_value");
+
+  const std::string dvalue_heads =
+      Binary(func, counter, "MatMul",
+             Transpose(func, counter, probabilities, {0, 1, 3, 2}, "transpose_probabilities"), dy,
+             "dvalue_heads");
+  const std::string dprobabilities = Binary(
+      func, counter, "MatMul", dy,
+      Transpose(func, counter, expanded_value, {0, 1, 3, 2}, "transpose_value"), "dprobabilities");
+  const std::string dscore =
+      Binary(func, counter, "Mul", probabilities,
+             Binary(func, counter, "Sub", dprobabilities,
+                    ReduceSumKeepDims(func, counter,
+                                      Binary(func, counter, "Mul", dprobabilities, probabilities,
+                                             "weighted_probabilities"),
+                                      -1, "sum_weighted_probabilities"),
+                    "centered_probabilities"),
+             "dscore");
+  const std::string scale =
+      CastConstantLike(func, counter, dscore, "scale", FindAttribute(node, "scale")->f());
+  const std::string dquery = Binary(
+      func, counter, "Mul", Binary(func, counter, "MatMul", dscore, expanded_key, "dquery_heads"),
+      scale, "scaled_dquery");
+  const std::string dkey_heads =
+      Binary(func, counter, "Mul",
+             Binary(func, counter, "MatMul",
+                    Transpose(func, counter, dscore, {0, 1, 3, 2}, "transpose_dscore"),
+                    Transpose(func, counter,
+                              Reshape(func, counter, query, {0, 0, num_heads, -1}, "reshape_query"),
+                              {0, 2, 1, 3}, "transpose_query"),
+                    "dkey_heads"),
+             scale, "scaled_dkey");
+  const auto reduce_groups = [&](const std::string &input, const char *prefix) {
+    return Reshape(func, counter,
+                   ReduceSum(func, counter,
+                             Reshape(func, counter,
+                                     Transpose(func, counter, input, {0, 2, 1, 3},
+                                               (std::string(prefix) + "_transpose").c_str()),
+                                     {0, 0, kv_num_heads, group_size, -1},
+                                     (std::string(prefix) + "_grouped").c_str()),
+                             3, (std::string(prefix) + "_reduce").c_str()),
+                   {0, 0, -1}, prefix);
+  };
+  grad_ns::AccumulateGrad(
+      Reshape(func, counter, Transpose(func, counter, dquery, {0, 2, 1, 3}, "transpose_dquery"),
+              {0, 0, -1}, "dquery_output"),
+      grad_accum[query], counter, func);
+  grad_ns::AccumulateGrad(reduce_groups(dkey_heads, "dkey_output"), grad_accum[key], counter, func);
+  grad_ns::AccumulateGrad(reduce_groups(dvalue_heads, "dvalue_output"), grad_accum[value], counter,
+                          func);
+  return true;
+}
+
 bool GradBiasGelu(const NodeProto &node, const std::string &output_grad,
                   std::unordered_map<std::string, std::string> &grad_accum, int &counter,
                   FunctionProto &func) {
@@ -190,6 +335,8 @@ bool GradCDist(const NodeProto &node, const std::string &output_grad,
 void RegisterCustomOperatorGradients(grad_ns::GradRegistry &registry) {
   grad_ns::RegisterGradientFunction(kMicrosoftDomain, "BiasGelu", GradBiasGelu, registry);
   grad_ns::RegisterGradientFunction(kMicrosoftDomain, "CDist", GradCDist, registry);
+  grad_ns::RegisterGradientFunction(kMicrosoftDomain, "GroupQueryAttention",
+                                    GradGroupQueryAttention, registry);
 }
 
 } // namespace onnx_light_cpu

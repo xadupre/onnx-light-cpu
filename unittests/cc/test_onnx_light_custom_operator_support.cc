@@ -41,11 +41,30 @@ NodeProto MakeNode(const char *op_type, const char *left, const char *right, con
   return node;
 }
 
+NodeProto MakeGroupQueryAttentionNode() {
+  NodeProto node;
+  node.set_domain(onnx_light_cpu::kMicrosoftDomain);
+  node.set_op_type("GroupQueryAttention");
+  node.add_input("Q");
+  node.add_input("K");
+  node.add_input("V");
+  node.add_input("");
+  node.add_input("");
+  node.add_input("seqlens_k");
+  node.add_input("total_sequence_length");
+  node.add_output("Y");
+  ONNX_LIGHT_NAMESPACE::AddAttribute(node, "num_heads", int64_t{4});
+  ONNX_LIGHT_NAMESPACE::AddAttribute(node, "kv_num_heads", int64_t{2});
+  ONNX_LIGHT_NAMESPACE::AddAttribute(node, "scale", 0.5f);
+  return node;
+}
+
 TEST(CustomOperatorSupport, ProvidesLightSchemas) {
   const auto schemas = onnx_light_cpu::GetMicrosoftOpSchemasWithHistory();
-  ASSERT_EQ(schemas.size(), 2U);
+  ASSERT_EQ(schemas.size(), 3U);
   EXPECT_EQ(schemas[0].name(), "BiasGelu");
   EXPECT_EQ(schemas[1].name(), "CDist");
+  EXPECT_EQ(schemas[2].name(), "GroupQueryAttention");
   for (const auto &schema : schemas) {
     EXPECT_EQ(schema.domain(), onnx_light_cpu::kMicrosoftDomain);
     EXPECT_EQ(schema.since_version(), 1);
@@ -59,7 +78,7 @@ TEST(CustomOperatorSupport, ProvidesLightSchemas) {
 
 TEST(CustomOperatorSupport, ProvidesReadOnlyInventory) {
   const auto support = onnx_light_cpu::CollectOperatorSupport();
-  ASSERT_EQ(support.size(), 2U);
+  ASSERT_EQ(support.size(), 3U);
   EXPECT_EQ(support[0].op_type, "BiasGelu");
   EXPECT_EQ(support[0].shape_inference_function, "onnx_light_cpu::ComputeShapeBiasGelu");
   EXPECT_EQ(support[0].peak_memory_function, "onnx_light_cpu::ComputePeakMemoryBiasGelu");
@@ -67,6 +86,13 @@ TEST(CustomOperatorSupport, ProvidesReadOnlyInventory) {
             std::vector<std::string>{"onnx_light_cpu::BiasGeluFusionPattern"});
   EXPECT_TRUE(support[0].has_gradient);
   EXPECT_EQ(support[1].op_type, "CDist");
+  EXPECT_EQ(support[2].op_type, "GroupQueryAttention");
+  EXPECT_EQ(support[2].shape_inference_function, "onnx_light_cpu::ComputeShapeGroupQueryAttention");
+  EXPECT_EQ(support[2].peak_memory_function,
+            "onnx_light_cpu::ComputePeakMemoryGroupQueryAttention");
+  EXPECT_EQ(support[2].fusion_patterns,
+            std::vector<std::string>{"onnx_light_cpu::GroupQueryAttentionFusionPattern"});
+  EXPECT_TRUE(support[2].has_gradient);
 }
 
 TEST(CustomOperatorSupport, InfersCDistShapeAndConstraint) {
@@ -96,6 +122,15 @@ TEST(CustomOperatorSupport, InfersBiasGeluShapeAndRejectsWrongBias) {
   EXPECT_THROW(onnx_light_cpu::ComputeShapeBiasGelu(invalid, node), std::invalid_argument);
 }
 
+TEST(CustomOperatorSupport, InfersGroupQueryAttentionShape) {
+  shapes_ns::ShapesContext ctx;
+  ctx.Set("Q", SymTensor(nullptr, TensorType::kFloat, {SymDim("B"), SymDim("S"), SymDim(32)}));
+  ctx.Set("K", SymTensor(nullptr, TensorType::kFloat, {SymDim("B"), SymDim("S"), SymDim(16)}));
+  ctx.Set("V", SymTensor(nullptr, TensorType::kFloat, {SymDim("B"), SymDim("S"), SymDim(16)}));
+  onnx_light_cpu::ComputeShapeGroupQueryAttention(ctx, MakeGroupQueryAttentionNode());
+  EXPECT_EQ(ctx.Get("Y").Shape(), ctx.Get("Q").Shape());
+}
+
 TEST(CustomOperatorSupport, RegistersShapeMemoryGradientAndPatternHooks) {
   onnx_light_cpu::RegisterMicrosoftShapeAndMemoryFunctions();
   EXPECT_NE(shapes_ns::DispatchTable().find("com.microsoft:CDist"),
@@ -103,16 +138,23 @@ TEST(CustomOperatorSupport, RegistersShapeMemoryGradientAndPatternHooks) {
   EXPECT_EQ(shapes_ns::ComputePeakMemory(onnx_light_cpu::kMicrosoftDomain, "BiasGelu",
                                          sym_ns::Device::kCPU, {}),
             0);
+  EXPECT_EQ(shapes_ns::ComputePeakMemory(onnx_light_cpu::kMicrosoftDomain, "GroupQueryAttention",
+                                         sym_ns::Device::kCPU, {}),
+            0);
 
   grad_ns::GradRegistry gradients;
   onnx_light_cpu::RegisterCustomOperatorGradients(gradients);
   EXPECT_NE(gradients.find({onnx_light_cpu::kMicrosoftDomain, "CDist"}), gradients.end());
   EXPECT_NE(gradients.find({onnx_light_cpu::kMicrosoftDomain, "BiasGelu"}), gradients.end());
+  EXPECT_NE(gradients.find({onnx_light_cpu::kMicrosoftDomain, "GroupQueryAttention"}),
+            gradients.end());
 
   onnx_light_cpu::RegisterCustomOperatorPatterns();
   const std::vector<std::string> patterns = builder_ns::RegisteredPatternNames();
   EXPECT_NE(std::find(patterns.begin(), patterns.end(), "MicrosoftCDist"), patterns.end());
   EXPECT_NE(std::find(patterns.begin(), patterns.end(), "MicrosoftBiasGelu"), patterns.end());
+  EXPECT_NE(std::find(patterns.begin(), patterns.end(), "MicrosoftGroupQueryAttention"),
+            patterns.end());
 }
 
 TEST(CustomOperatorSupport, BiasGeluGradientUsesOnlyStandardOnnxOperators) {
@@ -135,6 +177,21 @@ TEST(CustomOperatorSupport, BiasGeluGradientUsesOnlyStandardOnnxOperators) {
     if (node.op_type() == "ReduceSum") {
       const auto *noop = ONNX_LIGHT_NAMESPACE::FindAttribute(node, "noop_with_empty_axes");
       has_safe_reduce = has_safe_reduce || (noop != nullptr && noop->i() == 1);
+    }
+
+    TEST(CustomOperatorSupport, GroupQueryAttentionGradientUsesStandardAttention) {
+      grad_ns::GradRegistry gradients = grad_ns::DefaultGradRegistry();
+      onnx_light_cpu::RegisterCustomOperatorGradients(gradients);
+      const std::vector<NodeProto> nodes = {MakeGroupQueryAttentionNode()};
+      const std::vector<std::string> inputs = {"Q", "K", "V", "seqlens_k", "total_sequence_length"};
+      const std::vector<std::string> xs = {"Q", "K", "V"};
+      const std::vector<std::string> zs;
+      const std::vector<ONNX_LIGHT_NAMESPACE::TensorProto> initializers;
+      const auto gradient =
+          grad_ns::GradientOfNodes(nodes, inputs, initializers, xs, "Y", zs, gradients);
+      EXPECT_NE(std::find_if(gradient.node().begin(), gradient.node().end(),
+                             [](const NodeProto &node) { return node.op_type() == "Attention"; }),
+                gradient.node().end());
     }
   }
   EXPECT_TRUE(has_range);
