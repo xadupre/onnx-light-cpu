@@ -85,6 +85,15 @@ std::string CastConstantLike(FunctionProto &func, int &counter, const std::strin
                 "cast_constant");
 }
 
+std::string CastToFloat(FunctionProto &func, int &counter, const std::string &input,
+                        const char *prefix) {
+  const std::string output = grad_ns::NewGradName(prefix, counter);
+  NodeProto &node = func.add_node("Cast", {input}, {output});
+  ONNX_LIGHT_NAMESPACE::AddAttribute(node, "to",
+                                     static_cast<int64_t>(TensorProto::DataType::FLOAT));
+  return output;
+}
+
 std::string Unsqueeze(FunctionProto &func, int &counter, const std::string &input, int64_t axis,
                       const char *prefix) {
   const std::string axes = AddAxes(func, counter, "axes", {axis});
@@ -133,14 +142,27 @@ float GetFloatAttributeOrDefault(const NodeProto &node, const char *name, float 
   return attribute == nullptr ? default_value : attribute->f();
 }
 
+std::string GetStringAttributeOrDefault(const NodeProto &node, const char *name,
+                                        const char *default_value) {
+  const AttributeProto *attribute = FindAttribute(node, name);
+  return attribute == nullptr ? default_value : std::string(attribute->s());
+}
+
+bool HasInput(const NodeProto &node, int index) {
+  return node.input_size() > index && !node.input(index).empty();
+}
+
 bool IsSupportedGroupQueryAttention(const NodeProto &node, int64_t &num_heads,
                                     int64_t &kv_num_heads) {
-  if (node.input_size() < 7 || node.output_size() != 1 || !node.input(3).empty() ||
-      !node.input(4).empty() || (node.input_size() > 7 && !node.input(7).empty()) ||
-      (node.input_size() > 8 && !node.input(8).empty()) ||
-      (node.input_size() > 9 && !node.input(9).empty()) ||
-      (node.input_size() > 10 && !node.input(10).empty())) {
+  if (node.input_size() < 7 || node.input_size() > 16 || node.output_size() != 1 ||
+      node.output(0).empty() || !HasInput(node, 0) || !HasInput(node, 1) || !HasInput(node, 2) ||
+      !HasInput(node, 5) || !HasInput(node, 6) || HasInput(node, 3) || HasInput(node, 4)) {
     return false;
+  }
+  for (int index = 7; index < node.input_size(); ++index) {
+    if (HasInput(node, index)) {
+      return false;
+    }
   }
   num_heads = GetIntAttributeOrDefault(node, "num_heads", 0);
   kv_num_heads = GetIntAttributeOrDefault(node, "kv_num_heads", 0);
@@ -148,8 +170,11 @@ bool IsSupportedGroupQueryAttention(const NodeProto &node, int64_t &num_heads,
          GetIntAttributeOrDefault(node, "do_rotary", 0) == 0 &&
          GetIntAttributeOrDefault(node, "sliding_window_cache", 0) == 0 &&
          GetIntAttributeOrDefault(node, "smooth_softmax", 0) == 0 &&
+         GetIntAttributeOrDefault(node, "qk_output", 0) == 0 &&
          GetIntAttributeOrDefault(node, "kv_cache_bit_width", 0) == 0 &&
-         FindAttribute(node, "scale") != nullptr &&
+         GetIntAttributeOrDefault(node, "local_window_size", -1) == -1 &&
+         GetStringAttributeOrDefault(node, "k_quant_type", "NONE") == "NONE" &&
+         GetStringAttributeOrDefault(node, "v_quant_type", "NONE") == "NONE" &&
          GetFloatAttributeOrDefault(node, "softcap", 0.0f) == 0.0f;
 }
 
@@ -165,11 +190,16 @@ bool GradGroupQueryAttention(const NodeProto &node, const std::string &output_gr
   const std::string &query = node.input(0);
   const std::string &key = node.input(1);
   const std::string &value = node.input(2);
+  const std::string float_query = CastToFloat(func, counter, query, "float_query");
+  const std::string float_key = CastToFloat(func, counter, key, "float_key");
+  const std::string float_value = CastToFloat(func, counter, value, "float_value");
+  const std::string float_output_grad =
+      CastToFloat(func, counter, output_grad, "float_output_grad");
 
   const std::string probabilities = grad_ns::NewGradName("attention_probabilities", counter);
   const std::string ignored = grad_ns::NewGradName("attention_output", counter);
-  NodeProto &attention =
-      func.add_node("Attention", {query, key, value}, {ignored, "", "", probabilities});
+  NodeProto &attention = func.add_node("Attention", {float_query, float_key, float_value},
+                                       {ignored, "", "", probabilities});
   ONNX_LIGHT_NAMESPACE::AddAttribute(attention, "q_num_heads", num_heads);
   ONNX_LIGHT_NAMESPACE::AddAttribute(attention, "kv_num_heads", kv_num_heads);
   ONNX_LIGHT_NAMESPACE::AddAttribute(attention, "is_causal",
@@ -183,12 +213,12 @@ bool GradGroupQueryAttention(const NodeProto &node, const std::string &output_gr
   }
 
   const std::string dy = Transpose(
-      func, counter, Reshape(func, counter, output_grad, {0, 0, num_heads, -1}, "reshape_dy"),
+      func, counter, Reshape(func, counter, float_output_grad, {0, 0, num_heads, -1}, "reshape_dy"),
       {0, 2, 1, 3}, "transpose_dy");
   const std::string key_heads =
-      Reshape(func, counter, key, {0, 0, kv_num_heads, -1}, "reshape_key");
+      Reshape(func, counter, float_key, {0, 0, kv_num_heads, -1}, "reshape_key");
   const std::string value_heads =
-      Reshape(func, counter, value, {0, 0, kv_num_heads, -1}, "reshape_value");
+      Reshape(func, counter, float_value, {0, 0, kv_num_heads, -1}, "reshape_value");
   const std::string group_repeats =
       AddAxes(func, counter, "group_repeats", {1, 1, 1, group_size, 1});
   const auto expand_heads = [&](const std::string &input, const char *prefix) {
@@ -220,20 +250,35 @@ bool GradGroupQueryAttention(const NodeProto &node, const std::string &output_gr
                                       -1, "sum_weighted_probabilities"),
                     "centered_probabilities"),
              "dscore");
-  const std::string scale =
-      CastConstantLike(func, counter, dscore, "scale", FindAttribute(node, "scale")->f());
+  std::string scale;
+  if (const AttributeProto *scale_attribute = FindAttribute(node, "scale");
+      scale_attribute != nullptr) {
+    scale = AddConstant(func, counter, "scale", scale_attribute->f());
+  } else {
+    const std::string query_shape = Unary(func, counter, "Shape", query, "query_shape");
+    const std::string hidden_size =
+        Binary(func, counter, "Gather", query_shape,
+               AddInt64Constant(func, counter, "hidden_axis", 2), "hidden_size");
+    const std::string head_dim =
+        Binary(func, counter, "Div", hidden_size,
+               AddInt64Constant(func, counter, "num_heads", num_heads), "head_dim");
+    scale = Unary(func, counter, "Reciprocal",
+                  Unary(func, counter, "Sqrt",
+                        CastToFloat(func, counter, head_dim, "float_head_dim"), "sqrt_head_dim"),
+                  "scale");
+  }
   const std::string dquery = Binary(
       func, counter, "Mul", Binary(func, counter, "MatMul", dscore, expanded_key, "dquery_heads"),
       scale, "scaled_dquery");
-  const std::string dkey_heads =
-      Binary(func, counter, "Mul",
-             Binary(func, counter, "MatMul",
-                    Transpose(func, counter, dscore, {0, 1, 3, 2}, "transpose_dscore"),
-                    Transpose(func, counter,
-                              Reshape(func, counter, query, {0, 0, num_heads, -1}, "reshape_query"),
-                              {0, 2, 1, 3}, "transpose_query"),
-                    "dkey_heads"),
-             scale, "scaled_dkey");
+  const std::string dkey_heads = Binary(
+      func, counter, "Mul",
+      Binary(func, counter, "MatMul",
+             Transpose(func, counter, dscore, {0, 1, 3, 2}, "transpose_dscore"),
+             Transpose(func, counter,
+                       Reshape(func, counter, float_query, {0, 0, num_heads, -1}, "reshape_query"),
+                       {0, 2, 1, 3}, "transpose_query"),
+             "dkey_heads"),
+      scale, "scaled_dkey");
   const auto reduce_groups = [&](const std::string &input, const char *prefix) {
     return Reshape(func, counter,
                    ReduceSum(func, counter,
@@ -245,13 +290,18 @@ bool GradGroupQueryAttention(const NodeProto &node, const std::string &output_gr
                              3, (std::string(prefix) + "_reduce").c_str()),
                    {0, 0, -1}, prefix);
   };
-  grad_ns::AccumulateGrad(
+  const std::string dquery_output =
       Reshape(func, counter, Transpose(func, counter, dquery, {0, 2, 1, 3}, "transpose_dquery"),
-              {0, 0, -1}, "dquery_output"),
-      grad_accum[query], counter, func);
-  grad_ns::AccumulateGrad(reduce_groups(dkey_heads, "dkey_output"), grad_accum[key], counter, func);
-  grad_ns::AccumulateGrad(reduce_groups(dvalue_heads, "dvalue_output"), grad_accum[value], counter,
-                          func);
+              {0, 0, -1}, "dquery_output");
+  grad_ns::AccumulateGrad(Binary(func, counter, "CastLike", dquery_output, query, "typed_dquery"),
+                          grad_accum[query], counter, func);
+  grad_ns::AccumulateGrad(Binary(func, counter, "CastLike",
+                                 reduce_groups(dkey_heads, "dkey_output"), key, "typed_dkey"),
+                          grad_accum[key], counter, func);
+  grad_ns::AccumulateGrad(Binary(func, counter, "CastLike",
+                                 reduce_groups(dvalue_heads, "dvalue_output"), value,
+                                 "typed_dvalue"),
+                          grad_accum[value], counter, func);
   return true;
 }
 

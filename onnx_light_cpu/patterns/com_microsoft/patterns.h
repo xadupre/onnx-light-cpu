@@ -107,6 +107,36 @@ public:
 /**
  * Rewrites the rank-3 grouped-query subset of ``ai.onnx::Attention`` to
  * ``com.microsoft::GroupQueryAttention``.
+ *
+ * @code
+ * Before:
+ *                    +-------------------------+
+ *   query, key, ----> | Attention               | ----> output
+ *   value             | q_heads != kv_heads     |
+ *                     +-------------------------+
+ *
+ * After:
+ *   key ----------------> +-------+ --> +--------+ --> sequence length
+ *                         | Shape |     | Gather |
+ *                         +-------+     +--------+
+ *                                             |
+ *                                             +--> +-----+ --> +------+ --+
+ *                                                  | Sub |     | Cast |   |
+ *                                                  +-----+     +------+   |
+ *                                                                         v
+ *   query --------------> +-------+ --> +--------+ --> +-----------+ --> +--------+
+ *                         | Shape |     | Gather |     | Unsqueeze |     | Expand |
+ *                         +-------+     +--------+     +-----------+     +--------+
+ *                                                                         |
+ *                                                                         v
+ *                    +---------------------------------------------+   seqlens_k
+ *   query, key, ----> | com.microsoft::GroupQueryAttention         | <-----+
+ *   value             | num_heads, kv_num_heads, causal, scale     | ----> output
+ *                    +---------------------------------------------+
+ * @endcode
+ *
+ * The generated shape subgraph derives the cache-free sequence metadata
+ * required by GroupQueryAttention without changing the Attention result.
  */
 class GroupQueryAttentionFusionPattern final
     : public ONNX_LIGHT_NAMESPACE::core::builder::PatternOptimization {

@@ -86,7 +86,7 @@ AttentionDescriptor BuildDescriptor(const NodeProto &node) {
 
 Tensor Compute(const Tensor &q, const Tensor &k, const Tensor &v, const Tensor *mask,
                const Tensor *past_k, const Tensor *past_v, const Tensor *nonpad_kv_seqlen,
-               const AttentionDescriptor &descriptor, RuntimeContext *rt) {
+               const AttentionDescriptor &descriptor, RuntimeContext *rt, Tensor *qk_output) {
   const DataType data_type = static_cast<DataType>(q.data_type);
   if (k.data_type != q.data_type || v.data_type != q.data_type ||
       (data_type != DataType::FLOAT && data_type != DataType::FLOAT16 &&
@@ -143,6 +143,20 @@ Tensor Compute(const Tensor &q, const Tensor &k, const Tensor &v, const Tensor *
   const std::size_t bytes = element_count * element_bytes;
   Tensor y = rt != nullptr ? rt->MakeOutputTensor(0, q.data_type, output_shape, bytes)
                            : rt_ns::MakeOutputTensor(q.data_type, output_shape, bytes, nullptr);
+  Tensor qk;
+  float *qk_data = nullptr;
+  if (plan.has_qk_matmul_output) {
+    const std::vector<std::int64_t> plan_qk_shape = plan.qk_matmul_output_shape();
+    Shape qk_shape(plan_qk_shape);
+    const std::size_t qk_bytes = static_cast<std::size_t>(plan.batch * plan.q_num_heads *
+                                                          plan.q_length * plan.total_kv_length) *
+                                 sizeof(float);
+    qk = rt != nullptr
+             ? rt->MakeOutputTensor(3, static_cast<int32_t>(DataType::FLOAT), qk_shape, qk_bytes)
+             : rt_ns::MakeOutputTensor(static_cast<int32_t>(DataType::FLOAT), qk_shape, qk_bytes,
+                                       nullptr);
+    qk_data = reinterpret_cast<float *>(qk.mutable_bytes());
+  }
 
   const void *mask_data = nullptr;
   if (mask != nullptr) {
@@ -159,7 +173,8 @@ Tensor Compute(const Tensor &q, const Tensor &k, const Tensor &v, const Tensor *
         reinterpret_cast<const float *>(k.bytes()), reinterpret_cast<const float *>(v.bytes()),
         mask_data, reinterpret_cast<float *>(y.mutable_bytes()),
         past_k != nullptr ? reinterpret_cast<const float *>(past_k->bytes()) : nullptr,
-        past_v != nullptr ? reinterpret_cast<const float *>(past_v->bytes()) : nullptr, nonpad);
+        past_v != nullptr ? reinterpret_cast<const float *>(past_v->bytes()) : nullptr, nonpad,
+        qk_data);
   } else if (data_type == DataType::FLOAT16) {
     ComputeAttentionFloat16Streaming(
         plan, reinterpret_cast<const std::uint16_t *>(q.bytes()),
@@ -179,6 +194,9 @@ Tensor Compute(const Tensor &q, const Tensor &k, const Tensor &v, const Tensor *
         past_v != nullptr ? reinterpret_cast<const std::uint16_t *>(past_v->bytes()) : nullptr,
         nonpad);
   }
+  if (qk_output != nullptr && plan.has_qk_matmul_output) {
+    *qk_output = std::move(qk);
+  }
   return y;
 }
 
@@ -191,7 +209,8 @@ Tensor AttentionKernel::operator()(const NodeProto &node, const Tensor &q, const
                                    const Tensor *past_k, const Tensor *past_v,
                                    const Tensor *nonpad_kv_seqlen) const {
   const AttentionDescriptor descriptor = BuildDescriptor(node);
-  return Compute(q, k, v, mask, past_k, past_v, nonpad_kv_seqlen, descriptor, rt);
+  Tensor qk_output;
+  return Compute(q, k, v, mask, past_k, past_v, nonpad_kv_seqlen, descriptor, rt, &qk_output);
 }
 
 void AttentionKernel::Run(RuntimeContext &rt) {
@@ -209,8 +228,12 @@ void AttentionKernel::Run(RuntimeContext &rt) {
       descriptor.has_past_value ? rt_ns::GetOptionalInput(node, 5, rt.tensors()) : nullptr;
   const Tensor *nonpad =
       descriptor.has_nonpad_kv_seqlen ? rt_ns::GetOptionalInput(node, 6, rt.tensors()) : nullptr;
-  Tensor y = Compute(q, k, v, mask, past_k, past_v, nonpad, descriptor, &rt);
+  Tensor qk_output;
+  Tensor y = Compute(q, k, v, mask, past_k, past_v, nonpad, descriptor, &rt, &qk_output);
   rt_ns::SetOutput(node, 0, std::move(y), rt);
+  if (descriptor.has_qk_matmul_output) {
+    rt_ns::SetOutput(node, 3, std::move(qk_output), rt);
+  }
 }
 
 void RegisterAttentionKernel() {
