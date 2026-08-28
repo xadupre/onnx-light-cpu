@@ -9,7 +9,7 @@
 namespace onnx_light_cpu {
 
 /**
- * Registers standard-ONNX gradient graphs for ``com.microsoft`` operators.
+ * Registers standard-ONNX gradient graphs for `com.microsoft` operators.
  *
  * BiasGelu gradient:
  * \verbatim
