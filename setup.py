@@ -273,23 +273,7 @@ except ModuleNotFoundError:
             else:
                 cmake_args = _add_onnx_light_defines(cmake_args)
         if onnx_light_source:
-            if dry_run:
-                cmake_args = _add_onnx_light_source_defines(
-                    cmake_args,
-                    {
-                        "include_dir": "/onnx-light/include",
-                        "core_library": "/onnx-light/lib/lib_onnx_core",
-                        "proto_library": "/onnx-light/lib/lib_onnx_proto",
-                        "core_import_library": "/onnx-light/lib/lib_onnx_core.lib",
-                        "proto_import_library": "/onnx-light/lib/lib_onnx_proto.lib",
-                        "kernels_import_library": "/onnx-light/lib/lib_onnx_kernels.lib",
-                        "backend_test_import_library": (
-                            "/onnx-light/lib/lib_onnx_backend_test.lib"
-                        ),
-                    },
-                )
-            else:
-                cmake_args = _add_onnx_light_source_defines(cmake_args)
+            cmake_args = _add_onnx_light_source_defines(cmake_args)
         _spawn(
             [
                 "cmake",
@@ -426,23 +410,7 @@ class BuildExt(Command):
             else:
                 cmake_args = _add_onnx_light_defines(cmake_args)
         if self.onnx_light_source:
-            if self.dry_run:
-                cmake_args = _add_onnx_light_source_defines(
-                    cmake_args,
-                    {
-                        "include_dir": "/onnx-light/include",
-                        "core_library": "/onnx-light/lib/lib_onnx_core",
-                        "proto_library": "/onnx-light/lib/lib_onnx_proto",
-                        "core_import_library": "/onnx-light/lib/lib_onnx_core.lib",
-                        "proto_import_library": "/onnx-light/lib/lib_onnx_proto.lib",
-                        "kernels_import_library": "/onnx-light/lib/lib_onnx_kernels.lib",
-                        "backend_test_import_library": (
-                            "/onnx-light/lib/lib_onnx_backend_test.lib"
-                        ),
-                    },
-                )
-            else:
-                cmake_args = _add_onnx_light_source_defines(cmake_args)
+            cmake_args = _add_onnx_light_source_defines(cmake_args)
 
         self._spawn(
             [
