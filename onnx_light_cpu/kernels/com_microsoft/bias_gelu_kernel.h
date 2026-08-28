@@ -29,16 +29,16 @@ namespace onnx_light_cpu {
 /// ``A``'s last dimension, it broadcasts ``B`` over that last dimension and
 /// applies the exact (erf-based) Gaussian Error Linear Unit
 /// ``Gelu(z) = 0.5 * z * (1 + erf(z / sqrt(2)))`` to ``A + B``. The
-/// computation is delegated to the scalar ``BiasGelu*`` routines declared in
-/// ``onnx_light_cpu/impl/com_microsoft/bias_gelu.h``, scheduled row-by-row through
-/// ``ExecuteRanges``/``ExecuteCostedRanges`` (no explicit SIMD). Float16 and
-/// bfloat16 values are decoded to float32 scalar-by-scalar and re-encoded
-/// without temporary allocations.
+/// computation is delegated to the ``BiasGelu*`` routines declared in
+/// ``onnx_light_cpu/impl/com_microsoft/bias_gelu.h`` and scheduled row-by-row.
+/// Float32 uses runtime-dispatched AVX2/FMA or AVX-512 kernels when available;
+/// float16 and bfloat16 values are decoded to float32 scalar-by-scalar and
+/// re-encoded without temporary allocations.
 class BiasGeluKernel : public ONNX_LIGHT_NAMESPACE::core::runtime::KernelBase {
 public:
   using ONNX_LIGHT_NAMESPACE::core::runtime::KernelBase::KernelBase;
   static constexpr const char *kName = "onnx_light_cpu::BiasGelu";
-  static constexpr std::uint32_t kTuningAbi = 1;
+  static constexpr std::uint32_t kTuningAbi = 2;
 
   BiasGeluKernel(const ONNX_LIGHT_NAMESPACE::NodeProto &node,
                  const ONNX_LIGHT_NAMESPACE::core::runtime::KernelContext &ctx);

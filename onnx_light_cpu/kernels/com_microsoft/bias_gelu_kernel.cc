@@ -55,7 +55,7 @@ bool SupportsElementType(int32_t element_type) {
 }
 
 rt_ns::KernelTuningKey MakeTuningKey(int32_t element_type) {
-  return {"onnx_light_cpu", "BiasGelu",           "scalar_row_dispatch",
+  return {"onnx_light_cpu", "BiasGelu",           "row_dispatch",
           element_type,     sym_ns::Device::kCPU, BiasGeluKernel::kTuningAbi};
 }
 
