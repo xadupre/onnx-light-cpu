@@ -89,8 +89,8 @@ different copies of ``lib_onnx_core``.
    :caption: Contents
 
    getting_started
-   byop
    design/index
+   byop
    api/index
    examples
    next_steps/index
