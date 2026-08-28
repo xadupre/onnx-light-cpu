@@ -79,6 +79,9 @@ const std::array<std::string_view, 21> kDataTypeNameTags = {
 
 // Case names use 'x' to delimit paired input types, such as "int8xuint8".
 bool IsDataTypeNameTag(std::string_view name, std::string_view tag) {
+  if (tag.empty() || tag.size() > name.size()) {
+    return false;
+  }
   size_t position = name.find(tag);
   while (position != std::string_view::npos) {
     const size_t end = position + tag.size();
