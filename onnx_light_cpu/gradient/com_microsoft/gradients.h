@@ -27,9 +27,9 @@ namespace onnx_light_cpu {
  *                              [Sub] --> diff --\
  *           B --> [Unsq(0)] --/                  [Mul] --> weighted --+--> [ReduceSum(1)] --> dA
  * C -----------------\                            ^                 |
+ * dC -----------------/ (output gradient)
  *                     [metric gradient] --> [Unsq(2)] --/
  *                                                        \--> [ReduceSum(0)] --> [Neg] --> dB
- * dC -----------------/ (output gradient)
  * \endverbatim
  */
 void RegisterCustomOperatorGradients(ONNX_LIGHT_NAMESPACE::core::gradient::GradRegistry &registry);
