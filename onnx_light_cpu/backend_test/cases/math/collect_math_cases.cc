@@ -13,11 +13,17 @@ void CollectCpuMathTestCases(std::vector<TestCase> &registry, const std::string 
 
   static const OpRegisterModeMap kEntries = {
       {"Abs", &RegisterCpuAbsCases},
+      {"BatchNormalization", &RegisterCpuBatchNormalizationCases},
       {"Exp", &RegisterCpuExpCases},
       {"Gemm", &RegisterCpuGemmCases},
+      {"GroupNormalization", &RegisterCpuGroupNormalizationCases},
+      {"InstanceNormalization", &RegisterCpuInstanceNormalizationCases},
+      {"LayerNormalization", &RegisterCpuLayerNormalizationCases},
       {"Log", &RegisterCpuLogCases},
+      {"LpNormalization", &RegisterCpuLpNormalizationCases},
       {"MatMul", &RegisterCpuMatMulCases},
       {"MatMulInteger", &RegisterCpuMatMulIntegerCases},
+      {"MeanVarianceNormalization", &RegisterCpuMeanVarianceNormalizationCases},
       {"RMSNormalization", &RegisterCpuRmsNormalizationCases},
       {"SwiGLU", &RegisterCpuSwiGLUCases},
   };
