@@ -33,6 +33,9 @@ template <typename T> T GeluExact(T z) {
 }
 
 float GeluFloat32Approx(float z) {
+  if (z == 0.0f) {
+    return z;
+  }
   if (z >= 6.0f) {
     return z;
   }

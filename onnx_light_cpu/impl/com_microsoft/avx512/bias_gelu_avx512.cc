@@ -34,6 +34,7 @@ __m512 GeluFloat32(__m512 z) {
   result = _mm512_mask_mov_ps(result, _mm512_cmp_ps_mask(z, _mm512_set1_ps(6.0f), _CMP_GE_OQ), z);
   result = _mm512_mask_mov_ps(result, _mm512_cmp_ps_mask(z, _mm512_set1_ps(-6.0f), _CMP_LE_OQ),
                               _mm512_setzero_ps());
+  result = _mm512_mask_mov_ps(result, _mm512_cmp_ps_mask(z, _mm512_setzero_ps(), _CMP_EQ_OQ), z);
   return _mm512_mask_mov_ps(
       result,
       _mm512_cmp_ps_mask(z, _mm512_set1_ps(-std::numeric_limits<float>::infinity()), _CMP_EQ_OQ),

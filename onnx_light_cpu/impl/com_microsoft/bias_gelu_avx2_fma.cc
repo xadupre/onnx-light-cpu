@@ -36,6 +36,8 @@ __m256 GeluFloat32(__m256 z) {
   const __m256 negative = _mm256_cmp_ps(z, _mm256_set1_ps(-6.0f), _CMP_LE_OQ);
   result = _mm256_blendv_ps(result, z, positive);
   result = _mm256_blendv_ps(result, _mm256_setzero_ps(), negative);
+  const __m256 zero = _mm256_cmp_ps(z, _mm256_setzero_ps(), _CMP_EQ_OQ);
+  result = _mm256_blendv_ps(result, z, zero);
   const __m256 negative_infinity =
       _mm256_cmp_ps(z, _mm256_set1_ps(-std::numeric_limits<float>::infinity()), _CMP_EQ_OQ);
   return _mm256_blendv_ps(result, _mm256_set1_ps(std::numeric_limits<float>::quiet_NaN()),
