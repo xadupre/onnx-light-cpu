@@ -87,6 +87,51 @@ namespace onnx_light_cpu {
  *
  * The metric derivative is ``dC / C`` for Euclidean distance (zero where
  * ``C == 0``), and ``2 * dC`` for squared Euclidean distance.
+ *
+ * GroupQueryAttention gradient:
+ * @code
+ *   Q, K, V ---> +------------+ ---> +--------------------+ ---> probabilities
+ *                | Cast FLOAT |      | Attention (mode 3) |
+ *                +------------+      +--------------------+
+ *
+ *   dY --------> +------------+ ---> float dY
+ *                | Cast FLOAT |
+ *                +------------+
+ *
+ *   probabilities, float dY, expanded V
+ *                |
+ *                v
+ *          +------------------+
+ *          | Softmax backward |
+ *          +------------------+
+ *                |
+ *                v
+ *          +---------------+
+ *          | scale dScores |
+ *          +---------------+
+ *             |         |
+ *             v         v
+ *       +-----------+ +-----------+
+ *       | MatMul K  | | MatMul Q  |
+ *       +-----------+ +-----------+
+ *             |         |
+ *             v         v
+ *       +------------+ +---------------+
+ *       | reshape dQ | | reduce groups |
+ *       +------------+ +---------------+
+ *             |          |          |
+ *             v          v          v
+ *       +-------------+ +-------------+ +-------------+
+ *       | CastLike(Q) | | CastLike(K) | | CastLike(V) |
+ *       +-------------+ +-------------+ +-------------+
+ *             |              |               |
+ *             v              v               v
+ *            dQ             dK              dV
+ * @endcode
+ *
+ * The score scale is replayed from the forward attribute. When omitted, the
+ * graph computes ``1 / sqrt(Shape(Q)[2] / num_heads)`` dynamically. Grouped
+ * K/V head gradients are summed back to their original head count.
  */
 void RegisterCustomOperatorGradients(ONNX_LIGHT_NAMESPACE::core::gradient::GradRegistry &registry);
 

@@ -608,6 +608,14 @@ class TestBackendCases(TestCase):
         np.testing.assert_allclose(actual, expected, rtol=0.0, atol=3.0e-4)
         assert np.any(actual != 0.0)
 
+    def test_log_benchmark_inputs_are_positive(self):
+        cases = collect_test_cases_by_name(
+            "^test_cpu_log_n65536_float32_benchmark$", mode=TestMode.BENCHMARK
+        )
+        assert len(cases) == 1
+        values = _to_numpy(cases[0].data_sets[0].inputs[0])
+        assert np.all(values > 0)
+
     def test_every_target_op_has_backend_cases(self):
         """Guards against the parametrized test silently collecting nothing."""
         counts = dict.fromkeys(_TARGET_KERNELS, 0)

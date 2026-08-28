@@ -211,6 +211,12 @@ tuning ABI 2 for every supported exact operator/input-type key with
 * ``parallel.cost_model``: one delegates grain and participant selection to the
   session executor, while zero retains the fixed calibrated thresholds.
 
+For FP32 ``Abs``, ``Exp``, and ``Log``, the executor cost follows the SIMD
+implementation selected at runtime. The existing AVX2-calibrated costs remain
+unchanged; narrower or wider implementations scale them by
+``8 / SIMD lanes``. Processor profiles can continue to refine thresholds,
+block sizes, and participant limits without changing this portable fallback.
+
 ``Abs`` and ``Not`` additionally accept ``parallel.preferred_participants``.
 Zero leaves the participant count automatic. A positive value requests that
 exact count once parallel execution is worthwhile, but the executor still

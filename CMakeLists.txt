@@ -1129,6 +1129,9 @@ if(ONNX_LIGHT_CPU_BUILD_TESTS)
     if(_name STREQUAL "test_exp_log_kernel" AND ONNX_LIGHT_CPU_HAVE_AVX512F_FLAG)
       target_compile_definitions(${_name} PRIVATE ONNX_LIGHT_CPU_HAVE_AVX512=1)
     endif()
+    if(_name STREQUAL "test_abs_kernel" AND ONNX_LIGHT_CPU_HAVE_AVX512F_FLAG)
+      target_compile_definitions(${_name} PRIVATE ONNX_LIGHT_CPU_HAVE_AVX512=1)
+    endif()
     if("lib_onnx_light_cpu_kernels" IN_LIST _link_lib AND
        ONNX_LIGHT_CPU_ONNX_LIGHT_PY_LIBDIR)
       set_target_properties(${_name} PROPERTIES
@@ -1173,6 +1176,11 @@ if(ONNX_LIGHT_CPU_BUILD_TESTS)
           if(TARGET onnx_light::lib_onnx_op)
             onnx_light_cpu_add_test("${_test_src}"
                 "lib_onnx_light_cpu_kernels;onnx_light::lib_onnx_op")
+          endif()
+        elseif(_test_name STREQUAL "test_onnx_light_custom_operator_support")
+          if(TARGET onnx_light::lib_onnx_kernels)
+            onnx_light_cpu_add_test("${_test_src}"
+                "lib_onnx_light_cpu_kernels;onnx_light::lib_onnx_kernels")
           endif()
         else()
           onnx_light_cpu_add_test("${_test_src}" lib_onnx_light_cpu_kernels)

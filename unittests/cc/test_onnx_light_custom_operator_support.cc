@@ -3,30 +3,47 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "onnx_light_cpu/gradient/com_microsoft/gradients.h"
+#include "onnx_light_cpu/impl/math/half_conversion.h"
+#include "onnx_light_cpu/kernels/register_kernels.h"
 #include "onnx_light_cpu/patterns/com_microsoft/patterns.h"
 #include "onnx_light_cpu/schemas/com_microsoft/op_schema.h"
 #include "onnx_light_cpu/shapes/com_microsoft/shape_inference.h"
 
 #include "onnx_core/builder/pattern_registry.h"
 #include "onnx_core/gradient/gradient.h"
+#include "onnx_core/runtime/kernels/cast_helper.h"
+#include "onnx_core/runtime/kernels/kernel_context.h"
+#include "onnx_core/runtime/kernels/run_nodes.h"
+#include "onnx_core/runtime/memory/simple_tensor.h"
+#include "onnx_core/runtime/runtime_context.h"
 #include "onnx_core/shapes/dispatch_table.h"
 #include "onnx_core/symbolic/sym_tensor.h"
+#include "onnx_extensions/kernels/kernel_dispatch_table.h"
 #include "onnx_proto/onnx_helper.h"
 
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <cmath>
+#include <cstdint>
+#include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
 
 namespace builder_ns = ONNX_LIGHT_NAMESPACE::core::builder;
 namespace grad_ns = ONNX_LIGHT_NAMESPACE::core::gradient;
+namespace rt_ns = ONNX_LIGHT_NAMESPACE::core::runtime;
 namespace shapes_ns = ONNX_LIGHT_NAMESPACE::core::shapes;
 namespace sym_ns = ONNX_LIGHT_NAMESPACE::core::symbolic;
 
+using ONNX_LIGHT_NAMESPACE::FunctionProto;
+using ONNX_LIGHT_NAMESPACE::GraphProto;
 using ONNX_LIGHT_NAMESPACE::NodeProto;
+using rt_ns::Tensor;
+using rt_ns::Tensors;
 using sym_ns::SymDim;
 using sym_ns::SymTensor;
 using sym_ns::TensorType;
@@ -41,7 +58,8 @@ NodeProto MakeNode(const char *op_type, const char *left, const char *right, con
   return node;
 }
 
-NodeProto MakeGroupQueryAttentionNode() {
+NodeProto MakeGroupQueryAttentionNode(int64_t num_heads = 4, int64_t kv_num_heads = 2,
+                                      int64_t causal = 1, std::optional<float> scale = 0.5f) {
   NodeProto node;
   node.set_domain(onnx_light_cpu::kMicrosoftDomain);
   node.set_op_type("GroupQueryAttention");
@@ -53,10 +71,91 @@ NodeProto MakeGroupQueryAttentionNode() {
   node.add_input("seqlens_k");
   node.add_input("total_sequence_length");
   node.add_output("Y");
-  ONNX_LIGHT_NAMESPACE::AddAttribute(node, "num_heads", int64_t{4});
-  ONNX_LIGHT_NAMESPACE::AddAttribute(node, "kv_num_heads", int64_t{2});
-  ONNX_LIGHT_NAMESPACE::AddAttribute(node, "scale", 0.5f);
+  ONNX_LIGHT_NAMESPACE::AddAttribute(node, "num_heads", num_heads);
+  ONNX_LIGHT_NAMESPACE::AddAttribute(node, "kv_num_heads", kv_num_heads);
+  ONNX_LIGHT_NAMESPACE::AddAttribute(node, "causal", causal);
+  if (scale.has_value()) {
+    ONNX_LIGHT_NAMESPACE::AddAttribute(node, "scale", *scale);
+  }
   return node;
+}
+
+FunctionProto MakeGroupQueryAttentionGradient(const NodeProto &node) {
+  grad_ns::GradRegistry gradients = grad_ns::DefaultGradRegistry();
+  onnx_light_cpu::RegisterCustomOperatorGradients(gradients);
+  const std::vector<NodeProto> nodes = {node};
+  const std::vector<std::string> inputs = {"Q", "K", "V", "seqlens_k", "total_sequence_length"};
+  const std::vector<std::string> xs = {"Q", "K", "V"};
+  const std::vector<std::string> zs;
+  const std::vector<ONNX_LIGHT_NAMESPACE::TensorProto> initializers;
+  return grad_ns::GradientOfNodes(nodes, inputs, initializers, xs, "Y", zs, gradients);
+}
+
+GraphProto MakeGraph(const FunctionProto &function) {
+  GraphProto graph;
+  graph.set_name("group_query_attention_gradient");
+  for (const std::string &input : function.input()) {
+    graph.add_input()->set_name(input);
+  }
+  for (const NodeProto &node : function.node()) {
+    graph.ref_node().push_back(node);
+  }
+  for (const std::string &output : function.output()) {
+    graph.add_output()->set_name(output);
+  }
+  return graph;
+}
+
+void RegisterExecutionKernels() {
+  static const bool registered = [] {
+    ONNX_LIGHT_NAMESPACE::onnx_kernels::RegisterKernelFunctions();
+    onnx_light_cpu::RegisterAllKernels();
+    return true;
+  }();
+  (void)registered;
+}
+
+Tensors RunGradient(const NodeProto &node, Tensor query, Tensor key, Tensor value,
+                    Tensor output_grad) {
+  RegisterExecutionKernels();
+  const FunctionProto gradient = MakeGroupQueryAttentionGradient(node);
+  const GraphProto graph = MakeGraph(gradient);
+  rt_ns::RuntimeContext rt(rt_ns::KernelContext(rt_ns::DefaultOpset(23)));
+  rt_ns::SubgraphSession session(rt, graph);
+  return session.Run({{"Q", std::move(query)},
+                      {"K", std::move(key)},
+                      {"V", std::move(value)},
+                      {"dy", std::move(output_grad)}},
+                     rt);
+}
+
+float RunForwardObjective(const NodeProto &node, const std::vector<float> &query,
+                          const std::vector<float> &key, const std::vector<float> &value,
+                          const std::vector<float> &output_grad) {
+  RegisterExecutionKernels();
+  GraphProto graph;
+  graph.set_name("group_query_attention_forward");
+  for (const char *input : {"Q", "K", "V", "seqlens_k", "total_sequence_length"}) {
+    graph.add_input()->set_name(input);
+  }
+  graph.ref_node().push_back(node);
+  graph.add_output()->set_name("Y");
+
+  rt_ns::RuntimeContext rt(rt_ns::KernelContext(rt_ns::DefaultOpset(23)));
+  rt_ns::SubgraphSession session(rt, graph);
+  Tensors outputs = session.Run(
+      {{"Q", Tensor::FromFloat("Q", {1, 2, 4}, query)},
+       {"K", Tensor::FromFloat("K", {1, 2, 2}, key)},
+       {"V", Tensor::FromFloat("V", {1, 2, 2}, value)},
+       {"seqlens_k", rt_ns::Tensor::FromInt32("seqlens_k", {1}, {1})},
+       {"total_sequence_length", rt_ns::Tensor::FromInt32("total_sequence_length", {}, {2})}},
+      rt);
+  const float *output = outputs[0].AsFloat();
+  float objective = 0.0f;
+  for (size_t i = 0; i < output_grad.size(); ++i) {
+    objective += output[i] * output_grad[i];
+  }
+  return objective;
 }
 
 TEST(CustomOperatorSupport, ProvidesLightSchemas) {
@@ -184,18 +283,113 @@ TEST(CustomOperatorSupport, BiasGeluGradientUsesOnlyStandardOnnxOperators) {
 }
 
 TEST(CustomOperatorSupport, GroupQueryAttentionGradientUsesStandardAttention) {
-  grad_ns::GradRegistry gradients = grad_ns::DefaultGradRegistry();
-  onnx_light_cpu::RegisterCustomOperatorGradients(gradients);
-  const std::vector<NodeProto> nodes = {MakeGroupQueryAttentionNode()};
-  const std::vector<std::string> inputs = {"Q", "K", "V", "seqlens_k", "total_sequence_length"};
-  const std::vector<std::string> xs = {"Q", "K", "V"};
-  const std::vector<std::string> zs;
-  const std::vector<ONNX_LIGHT_NAMESPACE::TensorProto> initializers;
-  const auto gradient =
-      grad_ns::GradientOfNodes(nodes, inputs, initializers, xs, "Y", zs, gradients);
-  EXPECT_NE(std::find_if(gradient.node().begin(), gradient.node().end(),
-                         [](const NodeProto &node) { return node.op_type() == "Attention"; }),
-            gradient.node().end());
+  const std::vector<std::optional<float>> scales = {0.5f, std::nullopt};
+  for (const std::optional<float> scale : scales) {
+    const FunctionProto gradient =
+        MakeGroupQueryAttentionGradient(MakeGroupQueryAttentionNode(4, 2, 1, scale));
+    bool has_attention = false;
+    bool has_dynamic_scale = false;
+    for (const NodeProto &node : gradient.node()) {
+      EXPECT_TRUE(node.domain().empty() || node.domain() == "ai.onnx");
+      has_attention = has_attention || node.op_type() == "Attention";
+      has_dynamic_scale = has_dynamic_scale || node.op_type() == "Reciprocal";
+    }
+    EXPECT_TRUE(has_attention);
+    EXPECT_EQ(has_dynamic_scale, !scale.has_value());
+  }
+}
+
+TEST(CustomOperatorSupport, GroupQueryAttentionGradientMatchesFiniteDifferences) {
+  const std::vector<float> base_query = {0.2f, -0.1f, 0.4f, 0.3f, -0.2f, 0.5f, 0.1f, -0.4f};
+  const std::vector<float> base_key = {0.3f, -0.2f, -0.1f, 0.4f};
+  const std::vector<float> base_value = {0.5f, -0.3f, 0.2f, 0.7f};
+  const std::vector<float> output_grad = {0.2f, -0.4f, 0.3f, 0.1f, -0.2f, 0.5f, -0.1f, 0.4f};
+  constexpr float epsilon = 1e-3f;
+  const std::vector<std::optional<float>> scales = {0.6f, std::nullopt};
+
+  for (const int64_t causal : {int64_t{0}, int64_t{1}}) {
+    for (const std::optional<float> scale : scales) {
+      SCOPED_TRACE(::testing::Message() << "causal=" << causal << ", scale="
+                                        << (scale.has_value() ? "explicit" : "implicit"));
+      const NodeProto node = MakeGroupQueryAttentionNode(2, 1, causal, scale);
+      const Tensors gradients = RunGradient(node, Tensor::FromFloat("Q", {1, 2, 4}, base_query),
+                                            Tensor::FromFloat("K", {1, 2, 2}, base_key),
+                                            Tensor::FromFloat("V", {1, 2, 2}, base_value),
+                                            Tensor::FromFloat("dy", {1, 2, 4}, output_grad));
+      ASSERT_EQ(gradients.size(), 3U);
+
+      const std::vector<std::vector<float>> bases = {base_query, base_key, base_value};
+      for (size_t input_index = 0; input_index < bases.size(); ++input_index) {
+        ASSERT_EQ(gradients[input_index].element_count(), bases[input_index].size());
+        const float *actual = gradients[input_index].AsFloat();
+        for (size_t element = 0; element < bases[input_index].size(); ++element) {
+          std::vector<float> query = base_query;
+          std::vector<float> key = base_key;
+          std::vector<float> value = base_value;
+          std::vector<float> *perturbed[] = {&query, &key, &value};
+          (*perturbed[input_index])[element] += epsilon;
+          const float plus = RunForwardObjective(node, query, key, value, output_grad);
+          (*perturbed[input_index])[element] -= 2.0f * epsilon;
+          const float minus = RunForwardObjective(node, query, key, value, output_grad);
+          const float expected = (plus - minus) / (2.0f * epsilon);
+          EXPECT_NEAR(actual[element], expected, 3e-3f)
+              << "input=" << input_index << ", element=" << element;
+        }
+      }
+    }
+  }
+}
+
+TEST(CustomOperatorSupport, GroupQueryAttentionGradientRunsForFloat16AndBFloat16) {
+  const std::vector<float> query = {0.2f, -0.1f, 0.4f, 0.3f, -0.2f, 0.5f, 0.1f, -0.4f};
+  const std::vector<float> key = {0.3f, -0.2f, -0.1f, 0.4f};
+  const std::vector<float> value = {0.5f, -0.3f, 0.2f, 0.7f};
+  const std::vector<float> output_grad = {0.2f, -0.4f, 0.3f, 0.1f, -0.2f, 0.5f, -0.1f, 0.4f};
+
+  for (const rt_ns::DataType type : {rt_ns::DataType::FLOAT16, rt_ns::DataType::BFLOAT16}) {
+    SCOPED_TRACE(static_cast<int>(type));
+    const auto make_tensor = [&](const char *name, std::vector<int64_t> shape,
+                                 const std::vector<float> &values) {
+      return type == rt_ns::DataType::FLOAT16
+                 ? rt_ns::MakeFloat16Tensor(name, std::move(shape), values)
+                 : rt_ns::MakeBfloat16Tensor(name, std::move(shape), values);
+    };
+    const Tensors gradients =
+        RunGradient(MakeGroupQueryAttentionNode(2, 1, 1, std::nullopt),
+                    make_tensor("Q", {1, 2, 4}, query), make_tensor("K", {1, 2, 2}, key),
+                    make_tensor("V", {1, 2, 2}, value), make_tensor("dy", {1, 2, 4}, output_grad));
+    ASSERT_EQ(gradients.size(), 3U);
+    for (size_t index = 0; index < gradients.size(); ++index) {
+      EXPECT_EQ(gradients[index].data_type, static_cast<int32_t>(type));
+      EXPECT_EQ(gradients[index].element_count(), index == 0 ? 8U : 4U);
+      const auto *bits = reinterpret_cast<const uint16_t *>(gradients[index].bytes());
+      for (size_t element = 0; element < gradients[index].element_count(); ++element) {
+        const float value = type == rt_ns::DataType::FLOAT16
+                                ? onnx_light_cpu::detail::Float16BitsToFloat(bits[element])
+                                : onnx_light_cpu::detail::Bfloat16BitsToFloat(bits[element]);
+        EXPECT_TRUE(std::isfinite(value));
+      }
+    }
+  }
+}
+
+TEST(CustomOperatorSupport, GroupQueryAttentionGradientRejectsUnsupportedVariants) {
+  NodeProto attention_bias = MakeGroupQueryAttentionNode();
+  while (attention_bias.input_size() <= 10) {
+    attention_bias.add_input("");
+  }
+  attention_bias.ref_input()[10] = "attention_bias";
+
+  NodeProto softcap = MakeGroupQueryAttentionNode();
+  ONNX_LIGHT_NAMESPACE::AddAttribute(softcap, "softcap", 1.0f);
+
+  NodeProto cached = MakeGroupQueryAttentionNode();
+  cached.ref_input()[3] = "past_key";
+
+  for (const NodeProto &node :
+       {attention_bias, softcap, cached, MakeGroupQueryAttentionNode(3, 2)}) {
+    EXPECT_ANY_THROW((void)MakeGroupQueryAttentionGradient(node));
+  }
 }
 
 } // namespace

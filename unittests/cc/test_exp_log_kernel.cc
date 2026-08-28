@@ -31,6 +31,40 @@ struct InlineExecutor {
   }
 };
 
+struct PlanningExecutor {
+  onnx_light_cpu::ExecutionWorkCost observed_cost{};
+  std::int64_t plans = 0;
+
+  static onnx_light_cpu::ExecutionParallelPlan Plan(void *context, std::int64_t,
+                                                    const onnx_light_cpu::ExecutionWorkCost &cost,
+                                                    std::int64_t, std::int64_t) {
+    auto &self = *static_cast<PlanningExecutor *>(context);
+    self.observed_cost = cost;
+    ++self.plans;
+    return {1, 1};
+  }
+
+  static void Run(void *, std::int64_t, void *, onnx_light_cpu::ExecutionBlockFn) {}
+};
+
+std::size_t SelectedExpLogFloat32Lanes() {
+#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+  const auto level = onnx_light_cpu::DetectSimdLevel();
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
+  if (level >= onnx_light_cpu::SimdLevel::kAVX512) {
+    return 16;
+  }
+#endif
+  if (level >= onnx_light_cpu::SimdLevel::kAVX2) {
+    return 8;
+  }
+  if (level >= onnx_light_cpu::SimdLevel::kSSE2) {
+    return 4;
+  }
+#endif
+  return 1;
+}
+
 // float16 <-> float32 helpers mirroring the reference implementation, used so
 // the tests can express expectations in float and compare the rounded result.
 float HalfToFloat(std::uint16_t h) {
@@ -104,6 +138,27 @@ std::uint16_t FloatToHalf(float value) {
 TEST(ExpFloat32, EmptyInput) {
   float dummy = 1.0f;
   onnx_light_cpu::ExpFloat32(&dummy, &dummy, 0);
+}
+
+TEST(ExpLogFloat32, CostModelUsesDispatchCosts) {
+  constexpr std::size_t count = 16;
+  std::vector<float> input(count, 1.0f);
+  std::vector<float> output(count);
+  PlanningExecutor executor;
+  onnx_light_cpu::ExecutionExecutorView view{&executor, 4, &PlanningExecutor::Run,
+                                             &PlanningExecutor::Plan};
+  onnx_light_cpu::ExecutionExecutorScope scope(&view);
+
+  auto tuning = onnx_light_cpu::kDefaultExpLogExecutionTuning;
+  onnx_light_cpu::ExpFloat32WithTuning(input.data(), output.data(), count, tuning);
+  const double exp_cycles = executor.observed_cost.compute_cycles;
+  onnx_light_cpu::LogFloat32WithTuning(input.data(), output.data(), count, tuning);
+  const double log_cycles = executor.observed_cost.compute_cycles;
+  const double scale = 8.0 / static_cast<double>(SelectedExpLogFloat32Lanes());
+  EXPECT_DOUBLE_EQ(exp_cycles, 1.5 * scale);
+  EXPECT_DOUBLE_EQ(log_cycles, 100.0 * scale);
+
+  EXPECT_EQ(executor.plans, 2);
 }
 
 TEST(ExpFloat32, MatchesStdOverRange) {
