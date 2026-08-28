@@ -299,6 +299,8 @@ _LOW_PRECISION_AFFINE_CASES = (
     ("GroupNormalization", 21, [1, 1, 4], [1], {"num_groups": 1}),
     ("LayerNormalization", 17, [1, 4], [4], {}),
 )
+_ORT_MAX_RELEASED_ONNX_OPSET = 26
+_ORT_MODEL_IR_VERSION = 13
 _LOW_PRECISION_AFFINE_DTYPES = (
     (TensorProto.FLOAT16, np.float16),
     (TensorProto.BFLOAT16, ml_dtypes.bfloat16),
@@ -326,6 +328,17 @@ def _make_low_precision_affine_model_and_feeds(
         "B": np.full(parameter_shape, -0.25, dtype=dtype),
     }
     return model, feeds
+
+
+def _make_ort_compatible_model(model):
+    ort_model = type(model)()
+    ort_model.CopyFrom(model)
+    if ort_model.ir_version > _ORT_MODEL_IR_VERSION:
+        ort_model.ir_version = _ORT_MODEL_IR_VERSION
+    for opset in ort_model.opset_import:
+        if opset.domain in {"", "ai.onnx"} and opset.version > _ORT_MAX_RELEASED_ONNX_OPSET:
+            opset.version = _ORT_MAX_RELEASED_ONNX_OPSET
+    return ort_model
 
 
 def _collect_low_precision_affine_builtin_sessions():
@@ -553,7 +566,7 @@ class TestBackendCases(TestCase):
                 input_names = [vi.name for vi in tc.model.graph.input]
                 light_session = ReferenceEvaluator(tc.model)
                 ort_session = ort.InferenceSession(
-                    tc.model.SerializeToString(),
+                    _make_ort_compatible_model(tc.model).SerializeToString(),
                     sess_options=options,
                     providers=["CPUExecutionProvider"],
                 )
