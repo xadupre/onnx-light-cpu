@@ -14,6 +14,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -163,6 +164,20 @@ Tensor MakeTypedTensor(const std::vector<double> &values, const std::vector<std:
     return rt_ns::MakeFloat16Tensor("", shape, floats);
   }
   return Tensor::FromFloat("", shape, floats);
+}
+
+const char *DataTypeSuffix(onnx_light_cpu::DataType type) {
+  if (type == onnx_light_cpu::DataType::DOUBLE) {
+    return "float64";
+  }
+  if (type == onnx_light_cpu::DataType::FLOAT16) {
+    return "float16";
+  }
+  if (type == onnx_light_cpu::DataType::FLOAT) {
+    return "float32";
+  }
+  throw std::invalid_argument("unsupported TreeEnsemble value type: " +
+                              std::to_string(static_cast<int>(type)));
 }
 
 void AddLegacyTree(NodeProto &node, const LegacyTreeAttributes &tree) {
@@ -323,7 +338,7 @@ void RegisterCpuTreeEnsembleCases(std::vector<TestCase> &registry, TestMode mode
       NodeProto node = MakeTreeEnsembleNode(attributes);
       const std::string name = "test_cpu_treeensemble_t" + std::to_string(spec.trees) + "_f" +
                                std::to_string(spec.features) + "_b" + std::to_string(spec.rows) +
-                               "_benchmark";
+                               "_float32_benchmark";
       Expect(registry, std::move(node), name, {DefaultOpset(13), ml_opset},
              [attributes = std::move(attributes), spec]() mutable -> IoData {
                std::vector<double> values(spec.rows * static_cast<std::size_t>(spec.features));
@@ -346,7 +361,8 @@ void RegisterCpuTreeEnsembleCases(std::vector<TestCase> &registry, TestMode mode
   }
   for (TreeEnsembleCorpusCase test_case : GenerateTreeEnsembleV5Corpus()) {
     NodeProto node = MakeTreeEnsembleNode(test_case.attributes);
-    const std::string name = "test_cpu_treeensemble_v5_" + test_case.name;
+    const std::string name = "test_cpu_treeensemble_v5_" + test_case.name + "_" +
+                             DataTypeSuffix(test_case.attributes.value_type);
     Expect(registry, std::move(node), name, {DefaultOpset(13), ml_opset},
            [test_case = std::move(test_case)]() mutable -> IoData {
              const std::vector<std::int64_t> input_shape = {

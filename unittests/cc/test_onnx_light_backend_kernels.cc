@@ -69,6 +69,37 @@ const std::array<std::string_view, 7> kBinaryShapeTags = {
     "inner_vector", "outer_broadcast", "general",
 };
 
+// TreeEnsemble's pre-existing v5 corpus names use the legacy "float" and
+// "double" type tags.
+const std::array<std::string_view, 21> kDataTypeNameTags = {
+    "bool",   "float",  "float16", "bfloat16", "float32", "float64", "double",
+    "int8",   "uint8",  "int16",   "uint16",   "int32",   "uint32",  "int64",
+    "uint64", "string", "strings", "complex",  "float8",  "int4",    "uint4",
+};
+
+// Case names use 'x' to delimit paired input types, such as "int8xuint8".
+bool IsDataTypeNameTag(std::string_view name, std::string_view tag) {
+  if (tag.empty() || tag.size() > name.size()) {
+    return false;
+  }
+  size_t position = name.find(tag);
+  while (position != std::string_view::npos) {
+    const size_t end = position + tag.size();
+    const bool starts_tag = position == 0 || name[position - 1] == '_' || name[position - 1] == 'x';
+    const bool ends_tag = end == name.size() || name[end] == '_' || name[end] == 'x';
+    if (starts_tag && ends_tag) {
+      return true;
+    }
+    position = name.find(tag, position + 1);
+  }
+  return false;
+}
+
+bool ContainsDataTypeName(std::string_view name) {
+  return std::any_of(kDataTypeNameTags.begin(), kDataTypeNameTags.end(),
+                     [name](std::string_view tag) { return IsDataTypeNameTag(name, tag); });
+}
+
 std::string Lowercase(std::string value) {
   std::transform(value.begin(), value.end(), value.begin(),
                  [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
@@ -413,7 +444,7 @@ TEST(OnnxLightBackendKernels, TreeEnsembleRunsThroughRuntime) {
 TEST(OnnxLightBackendKernels, TreeEnsembleBenchmarkRunsThroughRuntime) {
   const std::vector<std::string> failures =
       RunCpuBackendCases("TreeEnsemble", core::backend_test::TestMode::BENCHMARK,
-                         "test_cpu_treeensemble_t10_f4_b1_benchmark");
+                         "test_cpu_treeensemble_t10_f4_b1_float32_benchmark");
   EXPECT_TRUE(failures.empty()) << Describe(failures);
 }
 
@@ -428,11 +459,11 @@ TEST(OnnxLightBackendKernels, TreeEnsembleBenchmarkCoversPriorityDimensions) {
     }
   }
   EXPECT_EQ(names.size(), 5U);
-  EXPECT_TRUE(names.contains("test_cpu_treeensemble_t10_f4_b1_benchmark"));
-  EXPECT_TRUE(names.contains("test_cpu_treeensemble_t100_f64_b8_benchmark"));
-  EXPECT_TRUE(names.contains("test_cpu_treeensemble_t1000_f1024_b32_benchmark"));
-  EXPECT_TRUE(names.contains("test_cpu_treeensemble_t10000_f4096_b1_benchmark"));
-  EXPECT_TRUE(names.contains("test_cpu_treeensemble_t10000_f4096_b128_benchmark"));
+  EXPECT_TRUE(names.contains("test_cpu_treeensemble_t10_f4_b1_float32_benchmark"));
+  EXPECT_TRUE(names.contains("test_cpu_treeensemble_t100_f64_b8_float32_benchmark"));
+  EXPECT_TRUE(names.contains("test_cpu_treeensemble_t1000_f1024_b32_float32_benchmark"));
+  EXPECT_TRUE(names.contains("test_cpu_treeensemble_t10000_f4096_b1_float32_benchmark"));
+  EXPECT_TRUE(names.contains("test_cpu_treeensemble_t10000_f4096_b128_float32_benchmark"));
 }
 
 TEST(OnnxLightBackendKernels, AttentionBenchmarkCoversPriorityCorpus) {
@@ -560,6 +591,20 @@ TEST(OnnxLightBackendKernels, AllCpuBackendCaseNamesAreGloballyUnique) {
       std::set<std::string> seen;
       for (const std::string &name : cpu_case_names) {
         EXPECT_TRUE(seen.insert(name).second) << name;
+      }
+    }
+  }
+}
+
+TEST(OnnxLightBackendKernels, AllCpuBackendCaseNamesContainDataTypeName) {
+  onnx_light_cpu::backend_test::RegisterCpuKernelBackendTestCases();
+  for (core::backend_test::TestMode mode :
+       {core::backend_test::TestMode::TEST, core::backend_test::TestMode::BENCHMARK}) {
+    const std::vector<TestCase> cases =
+        CollectTestCases(/*op_type=*/"", /*include_big=*/false, mode);
+    for (const TestCase &test_case : cases) {
+      if (test_case.name.starts_with("test_cpu_")) {
+        EXPECT_TRUE(ContainsDataTypeName(test_case.name)) << test_case.name;
       }
     }
   }
