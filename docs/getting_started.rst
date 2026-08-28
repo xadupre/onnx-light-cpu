@@ -22,23 +22,46 @@ Or build with CMake (C++ only):
 .. code-block:: bash
 
    cmake -S . -B build -DONNX_LIGHT_CPU_BUILD_TESTS=ON \
-         -DONNX_LIGHT_CPU_BUILD_PYTHON=OFF
+         -DONNX_LIGHT_CPU_BUILD_PYTHON=OFF \
+         -DONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON
    cmake --build build
+
+The C++ quick start requires the onnx-light C++ package to be installed so
+``find_package(onnx_light)`` can locate it.
 
 Quick Start (C++)
 -----------------
 
-Include the public header and call one of the kernel functions; the best
-available SIMD path is selected automatically at runtime:
+Register the optimized kernels, then execute the graph through onnx-light's
+runtime. Runtime dispatch selects the registered onnx-light-cpu kernel and its
+best available SIMD path:
 
 .. code-block:: cpp
 
-   #include <onnx_light_cpu/impl/math/math_kernels.h>
+   #include <onnx_light_cpu/kernels/register_kernels.h>
+
+   #include <onnx_core/runtime/kernels/kernel_context.h>
+   #include <onnx_core/runtime/memory/simple_tensor.h>
+   #include <onnx_core/runtime/runtime_context.h>
+   #include <onnx_core/runtime/runtime_session.h>
+   #include <onnx_proto/onnx_helper.h>
 
    int main() {
-       float input[] = {-1.0f, 2.0f, -3.0f, 4.0f};
-       float output[4];
-       onnx_light_cpu::AbsFloat32(input, output, 4);
+       namespace rt = ONNX_LIGHT_NAMESPACE::core::runtime;
+
+       onnx_light_cpu::RegisterAllKernels();
+
+       ONNX_LIGHT_NAMESPACE::GraphProto graph;
+       graph.ref_node().push_back(
+           ONNX_LIGHT_NAMESPACE::MakeNode("Abs", {"x"}, {"y"}));
+
+       rt::RuntimeContext context(rt::KernelContext(rt::DefaultOpset(18)));
+       context.Set(
+           "x", rt::Tensor::FromFloat("x", {4}, {-1.0f, 2.0f, -3.0f, 4.0f}));
+       rt::RuntimeSession session(context.GetExecutionPlan(graph));
+       session.Run(context);
+
+       const float *output = context.Get("y").AsFloat();
        // output = {1.0f, 2.0f, 3.0f, 4.0f}
    }
 

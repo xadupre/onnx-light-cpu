@@ -8,6 +8,32 @@
 
 namespace onnx_light_cpu {
 
+/**
+ * Fuses an exact Gelu applied to an Add with a rank-one bias.
+ *
+ * @code
+ * Before:
+ *                 +-----+
+ *   A, bias ----> | Add |
+ *                 +-----+
+ *                    |
+ *                    v
+ *                    z
+ *                    |
+ *                    v
+ *                 +------+
+ *                 | Gelu | ----> Y
+ *                 +------+
+ *
+ * After:
+ *                 +----------+
+ *   A, bias ----> | BiasGelu | ----> Y
+ *                 +----------+
+ * @endcode
+ *
+ * The bias must broadcast over the last dimension of a floating-point input,
+ * and the Add output must be consumed exclusively by the exact Gelu.
+ */
 class BiasGeluFusionPattern final
     : public ONNX_LIGHT_NAMESPACE::core::builder::PatternOptimization {
 public:
@@ -22,6 +48,49 @@ public:
         const std::vector<const ONNX_LIGHT_NAMESPACE::NodeProto *> &nodes) const override;
 };
 
+/**
+ * Fuses the squared-Euclidean distance expansion into CDist.
+ *
+ * @code
+ * Before:
+ *          +--------------+
+ *   A ---> | Unsqueeze(1) | ---+
+ *          +--------------+    |
+ *                              v
+ *                           +-----+
+ *                           | Sub |
+ *                           +-----+
+ *                              ^
+ *          +--------------+    |
+ *   B ---> | Unsqueeze(0) | ---+
+ *          +--------------+
+ *                              |
+ *                              v
+ *                         difference
+ *                              |
+ *                              v
+ *                           +----------+
+ *                           | Mul self |
+ *                           +----------+
+ *                              |
+ *                              v
+ *                     squared difference
+ *                              |
+ *                              v
+ *                       +---------------+
+ *                       | ReduceSum(-1) | ----> Y
+ *                       +---------------+
+ *
+ * After:
+ *              +--------------------------+
+ *   A, B ----> | CDist metric=sqeuclidean | ----> Y
+ *              +--------------------------+
+ * @endcode
+ *
+ * Both inputs must have rank two. The difference must be squared by an
+ * exclusively consumed self-Mul and reduced over the last axis without keeping
+ * the reduced dimension.
+ */
 class CDistFusionPattern final : public ONNX_LIGHT_NAMESPACE::core::builder::PatternOptimization {
 public:
   CDistFusionPattern() : PatternOptimization(0, "MicrosoftCDist") {}
