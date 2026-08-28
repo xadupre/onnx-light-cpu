@@ -35,6 +35,7 @@ namespace {
 
 constexpr std::size_t kTreeMajorBatchRows = 128;
 constexpr std::size_t kRowParallelThreshold = 50;
+constexpr std::size_t kTreeParallelRowLimit = 128;
 constexpr std::size_t kMaximumBalancedFloatTreeParticipants = 32;
 constexpr std::size_t kFallbackL1DataCacheBytes = 32 * 1024;
 constexpr std::size_t kMinimumTreesPerCacheBlock = 4;
@@ -175,9 +176,11 @@ TreeEnsembleTuningPolicy MakeSafePolicy(std::size_t trees, std::size_t targets, 
     policy.regions.push_back(MakeRegion(kRowParallelThreshold,
                                         TreeEnsembleExecutionStrategy::kTreeMajorBatch,
                                         kTreeMajorBatchRows, 1, trees, targets));
-    policy.regions.push_back(MakeRegion(std::nullopt, TreeEnsembleExecutionStrategy::kTreeParallel,
-                                        kTreeMajorBatchRows, tree_threads, trees, targets,
-                                        cache_blocking.trees_per_l1_block));
+    policy.regions.push_back(MakeRegion(
+        kTreeParallelRowLimit - 1, TreeEnsembleExecutionStrategy::kTreeParallel,
+        kTreeMajorBatchRows, tree_threads, trees, targets, cache_blocking.trees_per_l1_block));
+    policy.regions.push_back(MakeRegion(std::nullopt, TreeEnsembleExecutionStrategy::kRowParallel,
+                                        1, threads, trees, targets));
     return policy;
   }
   policy.regions.push_back(MakeRegion(kRowParallelThreshold,
@@ -1687,7 +1690,7 @@ TreeEnsemblePlan::SelectExecution(std::size_t rows, std::size_t effective_thread
       fallback.strategy = TreeEnsembleExecutionStrategy::kTreeParallel;
     } else if (rows <= kRowParallelThreshold) {
       fallback.strategy = TreeEnsembleExecutionStrategy::kTreeMajorBatch;
-    } else if (tree_parallel_worthwhile) {
+    } else if (tree_parallel_worthwhile && rows < kTreeParallelRowLimit) {
       fallback.strategy = TreeEnsembleExecutionStrategy::kTreeParallel;
     } else {
       fallback.strategy = TreeEnsembleExecutionStrategy::kRowParallel;
