@@ -18,8 +18,10 @@ generic operator roadmap first. Work is ordered by its effect on:
 * steady-state single-token decode latency;
 * copied KV-cache bytes per generated token.
 
-The first functional target is Qwen3-0.6B because it keeps iteration and
-correctness tests short. Qwen3-4B is the first performance and memory target.
+The first functional target is the concrete 28-layer INT4 artifact inventoried
+below because it keeps the graph contract fixed and exposes every immediate
+execution blocker. Qwen3-0.6B remains the short correctness reference and
+Qwen3-4B remains the first performance and memory target.
 The initial scope excludes Qwen3 MoE, VL, hybrid recurrent/attention variants,
 continuous batching, beam search, and speculative decoding. Those extensions
 must not delay the dense decoder.
@@ -86,6 +88,141 @@ The existing four-layer Qwen3-like fixture in ``onnx-light`` remains useful
 for shape and memory planning, but it is not an executable or numerical Qwen
 baseline and does not satisfy Qwen PR01.
 
+Audited ORT INT4 artifact
+-------------------------
+
+The first executable target is the local artifact
+``/home/xadupre/examples/models/qwen3-8b-cpu-int4/model.onnx``. The absolute
+path is a development input, not a portable model identity. Qwen PR01 must
+copy the graph and external data into the external model cache under immutable
+artifact metadata before CI or published benchmarks use it.
+
+The audited graph has SHA-256
+``f6745c77935bc5640751b3a961246e77a9bc515055dc8cba08d0f2ca5ba183a3``.
+It uses IR version 10, ``ai.onnx`` opset 26 and ``com.microsoft`` opset 1,
+contains 519 nodes and 398 initializers, and references
+``model.onnx.data`` with 1,016,070,144 physical bytes and SHA-256
+``43ea4a553800251cd2f74505a7a4140f4e19be78bad27e343425ab9dd420608c``.
+Its graph dimensions identify 28 decoder layers, hidden size 1,024,
+intermediate size 3,072, 16 query heads, 8 KV heads, head size 128, and
+vocabulary size 151,936. These dimensions do not describe an 8B model despite
+the development directory name; model metadata and tokenizer revision must
+determine the final published artifact name.
+
+The public contract is FP32: ``input_ids`` and ``attention_mask`` are INT64,
+56 past K/V inputs and 56 present K/V outputs use FP32, and ``logits`` uses
+FP32. Rotary caches have shape ``[40960,64]``. The embedding initializer is an
+unquantized FP32 ``[151936,1024]`` matrix; only the 141 projection nodes use
+INT4 ``MatMulNBits``. This means the audited artifact is not equivalent to the
+fully quantized tied-embedding QDQ contract described below.
+
+Exact kernel inventory
+~~~~~~~~~~~~~~~~~~~~~~
+
+The table is exhaustive for this graph. ``Registered`` means a kernel is present
+in the current ``onnx-light-cpu`` registration inventory, not merely that an
+ONNX reference implementation may exist. All twelve rows marked ``Missing``
+must receive either a CPU kernel or an explicit, tested ``onnx-light`` core
+execution path before the artifact can run without an untracked fallback.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 26 8 15 51
+
+   * - Operator
+     - Nodes
+     - Current status
+     - Exact required contract
+   * - ``ai.onnx::Mul``
+     - 56
+     - Registered
+     - FP32 tensor multiplication for SiLU and gated MLP products.
+   * - ``ai.onnx::Sub``
+     - 1
+     - Registered
+     - INT64 scalar/vector subtraction in the attention-mask prelude; verify
+       opset-26 dispatch against the registered v14+ kernel.
+   * - ``ai.onnx::Constant``
+     - 6
+     - Missing CPU registration
+     - Materialize the six INT64 shape/axis constants. This should normally be
+       a prepared graph value in ``onnx-light`` core rather than a timed CPU
+       compute kernel, but its execution ownership must be explicit.
+   * - ``ai.onnx::Cast``
+     - 2
+     - Missing
+     - INT64 to INT32 conversion for ``seqlens_k`` and
+       ``total_sequence_length`` consumed by GQA.
+   * - ``ai.onnx::Gather``
+     - 2
+     - Missing
+     - FP32 embedding lookup with INT64 token ids on axis 0, plus one INT64
+       scalar gather from the attention-mask shape.
+   * - ``ai.onnx::ReduceSum``
+     - 1
+     - Missing
+     - INT64 reduction over an axes tensor input with ``keepdims=0`` for the
+       attention-mask sequence length.
+   * - ``ai.onnx::Reshape``
+     - 112
+     - Missing
+     - FP32 reshape from an INT64 shape tensor, including ``0`` and ``-1``
+       semantics; use a metadata view whenever the input is contiguous.
+   * - ``ai.onnx::Shape``
+     - 1
+     - Missing
+     - Produce the INT64 shape of the rank-2 ``attention_mask`` input.
+   * - ``ai.onnx::Sigmoid``
+     - 28
+     - Missing
+     - FP32 sigmoid for ``x * sigmoid(x)``. Reuse the existing Exp primitives
+       and retain an unfused kernel before adding a SiLU/gate fusion.
+   * - ``ai.onnx::SimplifiedLayerNormalization``
+     - 57
+     - Missing compatibility adapter
+     - FP32 RMS-style normalization with ``axis=-1``, ``epsilon=1e-6`` and
+       ``stash_type=1``. Lower to the existing ``RMSNormalization`` engine
+       only after proving identical output and accumulation semantics.
+   * - ``ai.onnx::Split``
+     - 28
+     - Missing
+     - Split FP32 QKV projections on ``axis=-1`` using the INT64 input
+       ``[2048,1024,1024]`` and produce three views where legal.
+   * - ``com.microsoft::MatMulNBits`` v1
+     - 141
+     - Missing and blocking
+     - FP32 activation, packed UINT8 storage containing 4-bit weights, FP32
+       scales, ``block_size=32`` and ``accuracy_level=4``. Required shapes are
+       ``1024x3072`` (56), ``1024x4096`` (28), ``2048x1024`` (28),
+       ``3072x1024`` (28), and ``1024x151936`` (1). The implementation must
+       keep weights compressed and cover GEMV decode plus GEMM prefill.
+   * - ``com.microsoft::GroupQueryAttention`` v1
+     - 28
+     - Missing and blocking
+     - FP32 causal GQA with 16 query heads, 8 KV heads, head size 128,
+       ``scale=1/sqrt(128)``, integrated half-split RoPE, external FP32
+       cos/sin caches, tensor past/present K/V, and three outputs. Adapt this
+       contract to the shared Attention planner instead of creating a second
+       attention engine.
+   * - ``com.microsoft::SkipSimplifiedLayerNormalization`` v1
+     - 56
+     - Missing and blocking
+     - Fused FP32 residual addition and RMS-style normalization with
+       ``epsilon=1e-6``. Fifty-five nodes expose the normalized value and the
+       residual through sparse optional outputs; the final node exposes only
+       the normalized value. Lower to Add plus the shared normalization engine
+       first, then add a measured fused traversal.
+
+The minimum functional implementation order for this exact artifact is:
+prepared ``Constant``/``Shape`` plus ``Gather``/``Cast``/``ReduceSum`` for
+inputs; ``MatMulNBits``; ``Split``/``Reshape``;
+``SimplifiedLayerNormalization``; ``GroupQueryAttention``;
+``Sigmoid``; and ``SkipSimplifiedLayerNormalization``. ``Mul`` and ``Sub``
+need model-level coverage but no new kernel. ``GroupQueryAttention`` already
+owns rotary embedding, softmax, mask handling, and tensor KV concatenation in
+this graph, so separate ``RotaryEmbedding``, ``Softmax``, ``Concat`` and
+``Slice`` kernels are not execution prerequisites for this artifact.
+
 Plans to execute first
 ----------------------
 
@@ -107,18 +244,21 @@ Qwen-critical slices in this order:
      - All kernel changes until the baseline is reproducible.
    * - 2
      - Completed Gemm/MatMul PR09.6 plus Qwen PR02-PR03
-     - Standard QDQ INT4 recognition, packed decode GEMV, small-M, then prefill
-       GEMM for exact Qwen shapes.
+     - Direct ``MatMulNBits`` v1 adapter for the audited artifact, shared
+       packed decode GEMV, small-M, then prefill GEMM; retain standard QDQ as
+       the portable serialization.
      - Float8, full integer parity, float64, and generic PR10.5.
    * - 3
      - Completed ExpLog PR01-PR03 plus Qwen PR04
-     - Correct/fast Exp, RMSNorm, RoPE, Gather, SiLU gate, Softmax, and layout
-       operations needed by one block.
+     - The exact standard-operator inventory above: Gather, Cast, ReduceSum,
+       Shape, Reshape, Split, Sigmoid, SimplifiedLayerNormalization, and the
+       SkipSimplifiedLayerNormalization adapter.
      - Non-Qwen unary/binary operator matrices and graph fusions.
    * - 4
      - Attention PR11-PR14 plus Qwen PR05 integration
-     - Reuse the shared materialized and online Attention engines for batch-1
-       causal GQA, prefill, and single-token decode.
+     - Adapt the audited ``GroupQueryAttention`` contract to the shared
+       materialized and online Attention engines for batch-1 causal GQA,
+       integrated RoPE, tensor-cache prefill, and single-token decode.
      - The generic Attention PR15 performance gate.
    * - 5
      - Corrected KV-cache C0-C2 plus Qwen PR06a-PR06b
@@ -136,7 +276,17 @@ Qwen-critical slices in this order:
 Export contract
 ---------------
 
-Two equivalent standard-ONNX graphs are retained:
+Three graph contracts are retained. The audited native graph is executable
+first; the two standard-ONNX graphs provide portability and differential
+correctness:
+
+``qwen3-ort-int4``
+    The audited opset-26 graph described above. It is the immediate execution
+    target and uses ``MatMulNBits``, ``GroupQueryAttention`` and
+    ``SkipSimplifiedLayerNormalization`` from ``com.microsoft`` plus
+    experimental ``ai.onnx::SimplifiedLayerNormalization``. Each adapter must
+    lower to the same internal compute plans as the standard contracts so
+    native and portable support do not fork into separate engines.
 
 ``qwen3-float``
     The primary correctness graph with ordinary constant BF16 weights and
@@ -376,9 +526,11 @@ Phase Q1: INT4 projections and LM head
 
 Extend the completed packed-integer INT4 work in the
 :doc:`Gemm and MatMul roadmap <2026_08_gemm_matmul>` into a complete standard
-QDQ weight-only contract:
+QDQ weight-only contract and a direct adapter for the audited graph:
 
-#. constant ``DequantizeLinear -> MatMul`` recognition;
+#. ``com.microsoft::MatMulNBits`` v1 validation and lowering for the exact
+   three-input, four-bit, block-32 contract;
+#. constant ``DequantizeLinear -> MatMul`` recognition into the same plan;
 #. ``int4_gemv`` for Qwen decode shapes;
 #. plan-owned packed weights reused by every token;
 #. tied quantized ``Gather`` and transposed LM-head access without duplication;
@@ -401,12 +553,19 @@ Phase Q2: one complete Qwen block
 
 Implement the minimum standard-operator slice needed to run one decoder block:
 
-* ``RMSNormalization`` v23 plus recognition of its decomposed pattern;
-* ``RotaryEmbedding`` v23 plus a decomposed RoPE matcher;
-* ``Gather`` embedding;
-* SIMD Add/Mul/Sigmoid and fused SiLU-gate traversal;
-* stable Softmax for the materialized reference;
-* zero-copy Reshape/Slice views and measured Transpose/Concat copies.
+* ``Gather`` for FP32 embeddings and the INT64 shape scalar;
+* INT64 ``Shape``, ``ReduceSum``, ``Sub`` and INT64-to-INT32 ``Cast`` for the
+  attention-mask prelude;
+* ``SimplifiedLayerNormalization`` lowered to the RMSNormalization engine;
+* zero-copy FP32 ``Reshape`` and ``Split`` views where legal;
+* SIMD FP32 Mul/Sigmoid and fused SiLU-gate traversal;
+* ``SkipSimplifiedLayerNormalization`` lowered to Add plus the shared
+  normalization engine, including sparse optional outputs.
+
+Standard ``RMSNormalization`` v23, ``RotaryEmbedding`` v23, stable Softmax,
+Slice, Transpose and Concat remain required by the portable graph contract,
+but they are not blockers for the audited native graph because GQA contains
+RoPE, attention softmax, and tensor-cache concatenation.
 
 This phase reuses only the Qwen-relevant portions of the unary and binary
 elementwise roadmaps. It does not wait for their complete operator matrices.
@@ -427,7 +586,9 @@ Phase Q3: narrow causal GQA
 ---------------------------
 
 Qwen PR05 does not create a second attention descriptor, planner, graph
-matcher, or compute engine. It integrates the frozen graph with the shared
+matcher, or compute engine. It first adapts the audited
+``com.microsoft::GroupQueryAttention`` node, then integrates the portable
+standard graph with the shared
 ``AttentionDescriptor``, per-invocation ``AttentionPlan``, materialized
 fallback, and online engine delivered by Attention PR11 through PR14. The
 Qwen priority subset is:
@@ -443,9 +604,10 @@ Qwen priority subset is:
 The existing ``onnx-light`` graph optimizer recognizes the standard
 ``MatMul -> scale/mask -> Softmax -> MatMul`` attention pattern and emits
 standard ``ai.onnx::Attention``. ``onnx-light-cpu`` dispatches that node to the
-shared engine; Qwen code does not lower it to a private GQA operator. It does
-not expose a ``com.microsoft`` operator from this repository. GQA maps
-query-head groups onto shared K/V heads without physically repeating K or V.
+shared engine. The native compatibility layer validates
+``GroupQueryAttention`` attributes and inputs and builds the same descriptor;
+it is not a private GQA compute engine. GQA maps query-head groups onto shared
+K/V heads without physically repeating K or V.
 
 The optimized path uses blocked online softmax and never materializes the
 complete attention-score matrix. Prefill uses query blocks; decode uses a
@@ -543,10 +705,14 @@ corresponding functionality is needed.
 ``com.microsoft`` operator inventory
 ------------------------------------
 
-These operators are implemented in the separate repository requested for
-Microsoft-domain compatibility. They are listed here so the export and
-integration contract is complete; none is registered by
-``onnx-light-cpu``.
+No Microsoft-domain operator in this table is currently registered by
+``onnx-light-cpu``. The audited artifact makes ``MatMulNBits``,
+``GroupQueryAttention`` and ``SkipSimplifiedLayerNormalization`` immediate
+execution dependencies rather than optional comparator formats. Their
+compatibility registrations may remain in the dedicated Microsoft-domain
+repository, but they must lower to the shared packed MatMul, Attention, Add,
+and RMSNormalization plans owned here. The remaining rows stay conditional
+until a frozen graph contains them.
 
 .. list-table::
    :header-rows: 1
@@ -619,7 +785,7 @@ integration contract is complete; none is registered by
 ONNX Runtime also carries experimental ``SimplifiedLayerNormalization`` in the
 default ONNX domain at version 1. It is not the standard ONNX
 ``RMSNormalization`` v23 schema and should be treated as another compatibility
-adapter by the separate repository.
+adapter that lowers to the shared normalization engine.
 
 Benchmark gates
 ---------------
@@ -669,15 +835,17 @@ Pull-request sequence
      - Status
    * - Qwen PR01
      - Frozen graphs and generation benchmark.
-     - Pinned model/exporter/tokenizer revisions, the canonical QDQ contract,
-       graph digests, lazy backend cases, correctness rules, both comparator
-       contracts, TTFT, decode, memory, and per-node profiles are reproducible.
+     - The audited native artifact and portable graphs have pinned
+       model/exporter/tokenizer revisions, external-data digests, exhaustive
+       kernel inventories, lazy backend cases, correctness rules, comparator
+       contracts, TTFT, decode, memory, and per-node profiles.
      - None
      - Pending
    * - Qwen PR02
-     - Standard QDQ INT4 plan and decode GEMV.
-     - Constant QDQ is captured once; every decode projection keeps weights
-       compressed and passes exact packing/tail plus model-logit tests.
+     - Native MatMulNBits and standard QDQ INT4 plan plus decode GEMV.
+     - ``MatMulNBits`` and constant QDQ lower to one prepared plan; every
+       decode projection keeps weights compressed and passes exact
+       packing/tail plus model-logit tests.
      - Qwen PR01; reuses completed Gemm PR09.6 primitives
      - Pending
    * - Qwen PR03
@@ -688,15 +856,18 @@ Pull-request sequence
      - Pending
    * - Qwen PR04
      - Qwen block operator slice.
-     - Standard RMSNorm, RoPE, Gather, SiLU gate, Softmax, and layout paths run
-       one complete float and INT4 block without avoidable intermediates.
+     - Every missing standard-domain row in the audited inventory plus the
+       Simplified/SkipSimplified normalization adapters runs one complete
+       native INT4 block; the portable RMSNorm, RoPE, Gather, SiLU, Softmax,
+       and layout paths remain differential coverage.
      - Qwen PR02; completed ExpLog PR01-PR03
      - Pending
    * - Qwen PR05
      - Frozen-graph integration with shared Attention.
-     - Standard ``Attention`` dispatches to the shared descriptor, planner,
-       materialized fallback, and online engine. Batch-1 causal prefill/decode
-       use zero-copy query/KV-head grouping; no Qwen-only engine is introduced.
+     - Native ``GroupQueryAttention`` and standard ``Attention`` dispatch to
+       the shared descriptor, planner, materialized fallback, and online
+       engine. Batch-1 causal prefill/decode use zero-copy query/KV-head
+       grouping; no Qwen-only compute engine is introduced.
      - Qwen PR04; Attention PR14 / #391
      - Pending
    * - Qwen PR06a
