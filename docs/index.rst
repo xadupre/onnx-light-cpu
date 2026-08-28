@@ -43,6 +43,20 @@ accelerated implementations.
          session = ReferenceEvaluator(model)
          outputs = session.run(None, feeds)
 
+      To override an operator for one evaluator only, leave the shared table
+      unchanged and register a Python kernel on that session:
+
+      .. code-block:: python
+
+         import numpy as np
+         from onnx_light.onnx.reference import ReferenceEvaluator
+
+         session = ReferenceEvaluator(model)
+         session.register_custom_kernel("", "Abs", lambda node, x: np.abs(x))
+         outputs = session.run(None, feeds)
+
+      Other evaluators keep their existing ``Abs`` implementation.
+
       The Python entry point is available in builds configured with
       ``ONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON``.
 

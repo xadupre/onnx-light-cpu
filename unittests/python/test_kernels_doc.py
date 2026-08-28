@@ -158,6 +158,23 @@ class TestRenderIndex:
         assert "   kernels_generated/ai_onnx_abs_cpu" in text
         assert "   kernels_generated/ai_onnx_gemm_cpu" in text
 
+    def test_configures_operator_and_domain_filters_with_pagination(self):
+        text = render_index(
+            assign_stems(
+                [
+                    _record("Abs"),
+                    _record("CDist", domain="com.microsoft"),
+                ]
+            )
+        )
+
+        assert ".. datatables-js:: table.byop-kernel-table" in text
+        assert "pageLength: 10" in text
+        assert "lengthMenu: [10, 100]" in text
+        assert "addFilter(0, 'Operator', 'All operators')" in text
+        assert "addFilter(1, 'Domain', 'All domains')" in text
+        assert ":class: byop-kernel-table" in text
+
 
 class TestGenerateKernelPages:
     def test_generation_is_byte_identical_across_two_runs(self, tmp_path):
