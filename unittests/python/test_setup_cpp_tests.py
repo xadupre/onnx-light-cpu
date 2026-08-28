@@ -12,9 +12,11 @@ onnx-light instead of compiling a second copy. These tests exercise the dry-run
 wiring (which prints the commands without executing them).
 """
 
+import importlib.util
 import subprocess
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 _ROOT = Path(__file__).resolve().parents[2]
 _SETUP_PY = _ROOT / "setup.py"
@@ -37,6 +39,15 @@ def _dry_run(*extra_args):
         check=True,
     )
     return result.stdout + result.stderr
+
+
+def _load_setup_module():
+    spec = importlib.util.spec_from_file_location("onnx_light_cpu_setup", _SETUP_PY)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    with patch("setuptools.setup"):
+        spec.loader.exec_module(module)
+    return module
 
 
 class TestSetupCppTests:
@@ -116,6 +127,15 @@ class TestSetupOnnxLight:
         assert "ONNX_LIGHT_CPU_ONNX_LIGHT_PROTO_IMPLIB=" in output
         assert "ONNX_LIGHT_CPU_ONNX_LIGHT_KERNELS_IMPLIB=" in output
         assert "ONNX_LIGHT_CPU_ONNX_LIGHT_BACKEND_TEST_IMPLIB=" in output
+
+    def test_source_runtime_uses_loaded_onnx_light_libraries(self):
+        from onnx_light import get_cpp_build_info
+
+        setup_module = _load_setup_module()
+        source_info = setup_module._onnx_light_source_build_info()
+        loaded_info = get_cpp_build_info()
+        assert source_info["core_library"] == loaded_info["core_library"]
+        assert source_info["proto_library"] == loaded_info["proto_library"]
 
     def test_source_runtime_keeps_proto_as_a_direct_dependency(self):
         contents = _CMAKELISTS.read_text(encoding="utf-8")

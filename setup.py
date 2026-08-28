@@ -75,6 +75,8 @@ def _onnx_light_cmake_dir():
 
 def _onnx_light_source_build_info():
     """Returns paths for the C++ runtime built in the local onnx-light tree."""
+    import onnx_light
+
     header = Path("onnx_core/runtime/kernels/kernel_dispatch_table.h")
     configured_source = os.environ.get("ONNX_LIGHT_CPU_ONNX_LIGHT_SOURCE_DIR")
     if configured_source:
@@ -94,8 +96,6 @@ def _onnx_light_source_build_info():
         if (sibling_dir / header).is_file():
             include_dir = sibling_dir
         else:
-            import onnx_light
-
             include_dir = Path(onnx_light.__file__).resolve().parent
 
     if not (include_dir / header).is_file():
@@ -104,24 +104,14 @@ def _onnx_light_source_build_info():
             "onnx-light from a sibling checkout, add it to PYTHONPATH, or set "
             "ONNX_LIGHT_CPU_ONNX_LIGHT_SOURCE_DIR before using --onnx-light-source."
         )
-    runtime_dir = include_dir / "onnx_py"
-
-    def find_runtime_library(name):
-        for pattern in (f"lib{name}.so", f"lib{name}.dylib", f"{name}.dll"):
-            matches = sorted(runtime_dir.glob(pattern))
-            if matches:
-                return str(matches[0].resolve())
-        raise FileNotFoundError(
-            f"Could not find the locally built {name} runtime under {runtime_dir}. "
-            "Run onnx-light's 'python setup.py build_ext --inplace' first."
-        )
-
-    info = {
-        "include_dir": str(include_dir),
-        "library_dir": str(runtime_dir),
-        "core_library": find_runtime_library("lib_onnx_core"),
-        "proto_library": find_runtime_library("lib_onnx_proto"),
-    }
+    info = dict(onnx_light.get_cpp_build_info())
+    info["include_dir"] = str(include_dir)
+    for key in ("core_library", "proto_library"):
+        if key not in info or not Path(info[key]).is_file():
+            raise FileNotFoundError(
+                f"onnx-light did not report a usable {key!r}. Build and install "
+                "onnx-light before using --onnx-light-source."
+            )
     import_library_dir = os.environ.get("ONNX_LIGHT_CPU_ONNX_LIGHT_IMPLIB_DIR")
     if import_library_dir:
         root = Path(import_library_dir)
