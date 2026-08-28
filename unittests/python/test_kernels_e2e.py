@@ -38,7 +38,7 @@ from unittest import TestCase
 import ml_dtypes
 import numpy as np
 
-from onnx_light.onnx import TensorProto, helper
+from onnx_light.onnx import TensorProto, helper, inliner
 from onnx_light.onnx.backend import TestMode, collect_test_cases, collect_test_cases_by_name
 from onnx_light.onnx.reference import ReferenceEvaluator
 
@@ -231,8 +231,17 @@ def _warm_builtin_session(model, feeds):
     return session
 
 
+def _make_float_oracle_model(model):
+    """Clones a single-node model with FLOAT inputs and outputs."""
+    float_model = type(model)()
+    float_model.ParseFromString(model.SerializeToString())
+    for value_info in (*float_model.graph.input, *float_model.graph.output):
+        value_info.type.tensor_type.elem_type = TensorProto.FLOAT
+    return float_model
+
+
 def _collect_normalization_benchmark_builtin_sessions():
-    """Pre-warms one built-in session per ``test_cpu_*_benchmark`` case."""
+    """Pre-warms a built-in FLOAT oracle per normalization benchmark case."""
     normalization_ops = {
         "BatchNormalization",
         "GroupNormalization",
@@ -262,7 +271,17 @@ def _collect_normalization_benchmark_builtin_sessions():
                 name: _to_numpy(tensor)
                 for name, tensor in zip(input_names, tc.data_sets[0].inputs, strict=True)
             }
-            sessions[tc.name] = _warm_builtin_session(tc.model, feeds)
+            use_float_oracle = dtype != "float32"
+            oracle_model = _make_float_oracle_model(tc.model) if use_float_oracle else tc.model
+            oracle_feeds = (
+                {name: value.astype(np.float32) for name, value in feeds.items()}
+                if use_float_oracle
+                else feeds
+            )
+            sessions[tc.name] = (
+                _warm_builtin_session(oracle_model, oracle_feeds),
+                use_float_oracle,
+            )
     return sessions, covered_dtypes
 
 
@@ -312,7 +331,10 @@ def _collect_low_precision_affine_builtin_sessions():
             model, feeds = _make_low_precision_affine_model_and_feeds(
                 op_type, version, x_shape, parameter_shape, attributes, tensor_type, dtype
             )
-            sessions[op_type, dtype] = _warm_builtin_session(model, feeds)
+            function_model = inliner.inline_selected_functions(
+                model, [("", op_type)], inline_schema_functions=True
+            )
+            sessions[op_type, dtype] = _warm_builtin_session(function_model, feeds)
     return sessions
 
 
@@ -353,9 +375,12 @@ def _make_group_normalization_opset18_double_model_and_feeds():
     _GROUP_NORMALIZATION_OPSET18_DOUBLE_MODEL,
     _GROUP_NORMALIZATION_OPSET18_DOUBLE_FEEDS,
 ) = _make_group_normalization_opset18_double_model_and_feeds()
-_GROUP_NORMALIZATION_OPSET18_DOUBLE_BUILTIN_SESSION = _warm_builtin_session(
-    _GROUP_NORMALIZATION_OPSET18_DOUBLE_MODEL, _GROUP_NORMALIZATION_OPSET18_DOUBLE_FEEDS
+_GROUP_NORMALIZATION_OPSET18_DOUBLE_FUNCTION_MODEL = inliner.inline_selected_functions(
+    _GROUP_NORMALIZATION_OPSET18_DOUBLE_MODEL,
+    [("", "GroupNormalization")],
+    inline_schema_functions=True,
 )
+_GROUP_NORMALIZATION_OPSET18_DOUBLE_FUNCTION_MODEL.ir_version = 13
 
 
 class TestBackendCases(TestCase):
@@ -511,7 +536,10 @@ class TestBackendCases(TestCase):
                             if "Type Error:" not in str(exc):
                                 raise
                             ort_session = None
-                    builtin_session = _NORMALIZATION_BENCHMARK_BUILTIN_SESSIONS[tc.name]
+                    (
+                        builtin_session,
+                        builtin_uses_float,
+                    ) = _NORMALIZATION_BENCHMARK_BUILTIN_SESSIONS[tc.name]
                     for data_set in tc.data_sets:
                         feeds = {
                             name: _to_numpy(tensor)
@@ -533,7 +561,12 @@ class TestBackendCases(TestCase):
                             # kernel, resolved and cached before onnx-light-cpu's
                             # kernels were ever registered (see
                             # ``_warm_builtin_session``).
-                            expected = builtin_session.run(None, feeds)
+                            builtin_feeds = (
+                                {name: value.astype(np.float32) for name, value in feeds.items()}
+                                if builtin_uses_float
+                                else feeds
+                            )
+                            expected = builtin_session.run(None, builtin_feeds)
                         assert len(got) == len(expected)
                         tolerance = 2e-5
                         if dtype in {"float16", "bfloat16"}:
@@ -564,10 +597,14 @@ class TestBackendCases(TestCase):
         model = _GROUP_NORMALIZATION_OPSET18_DOUBLE_MODEL
         feeds = _GROUP_NORMALIZATION_OPSET18_DOUBLE_FEEDS
         actual = ReferenceEvaluator(model).run(None, feeds)[0]
-        # Reference: onnx-light's own built-in (un-accelerated) kernel, resolved
-        # and cached before onnx-light-cpu's kernels were ever registered (see
-        # ``_warm_builtin_session``).
-        expected = _GROUP_NORMALIZATION_OPSET18_DOUBLE_BUILTIN_SESSION.run(None, feeds)[0]
+        try:
+            import onnxruntime as ort
+        except ImportError:
+            self.skipTest("onnxruntime is unavailable")
+        expected = ort.InferenceSession(
+            _GROUP_NORMALIZATION_OPSET18_DOUBLE_FUNCTION_MODEL.SerializeToString(),
+            providers=["CPUExecutionProvider"],
+        ).run(None, feeds)[0]
         np.testing.assert_allclose(actual, expected, rtol=0.0, atol=3.0e-4)
         assert np.any(actual != 0.0)
 
