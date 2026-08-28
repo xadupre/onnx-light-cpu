@@ -128,7 +128,7 @@ TEST(OnnxLightCDistKernel, RegistersAndAppliesValidatedTuning) {
     const auto key = kernel.TuningKey(static_cast<int32_t>(type));
     EXPECT_EQ(key.library, "onnx_light_cpu");
     EXPECT_EQ(key.kernel, "CDist");
-    EXPECT_EQ(key.implementation, "scalar_row_dispatch");
+    EXPECT_EQ(key.implementation, "row_dispatch");
     EXPECT_EQ(key.tuning_abi, onnx_light_cpu::CDistKernel::kTuningAbi);
     const auto schema = rt_ns::GetKernelTuningRegistry().FindSchema(key);
     ASSERT_NE(schema, nullptr);
@@ -140,7 +140,7 @@ TEST(OnnxLightCDistKernel, RegistersAndAppliesValidatedTuning) {
   auto parameters = schema->portable_defaults();
   EXPECT_EQ(parameters.Get<int64_t>("parallel.threshold_bytes"), 128 * 1024);
   EXPECT_EQ(parameters.Get<int64_t>("parallel.target_block_bytes"), 16 * 1024);
-  EXPECT_EQ(parameters.Get<int64_t>("parallel.max_participants"), 0);
+  EXPECT_EQ(parameters.Get<int64_t>("parallel.max_participants"), 16);
   EXPECT_EQ(parameters.Get<int64_t>("parallel.preferred_participants"), 0);
   EXPECT_EQ(parameters.Get<int64_t>("parallel.cost_model"), 1);
 

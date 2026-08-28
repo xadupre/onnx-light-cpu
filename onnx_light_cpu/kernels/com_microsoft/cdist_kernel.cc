@@ -54,9 +54,8 @@ bool SupportsElementType(int32_t element_type) {
 }
 
 rt_ns::KernelTuningKey MakeTuningKey(int32_t element_type) {
-  return {"onnx_light_cpu",      "CDist",
-          "scalar_row_dispatch", element_type,
-          sym_ns::Device::kCPU,  CDistKernel::kTuningAbi};
+  return {"onnx_light_cpu",       "CDist", "row_dispatch", element_type, sym_ns::Device::kCPU,
+          CDistKernel::kTuningAbi};
 }
 
 void ValidateTuning(const rt_ns::KernelTuningParameters &parameters) {
