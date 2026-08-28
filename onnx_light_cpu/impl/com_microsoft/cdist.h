@@ -40,9 +40,9 @@ struct CDistExecutionTuning {
   bool operator==(const CDistExecutionTuning &) const = default;
 };
 
-inline constexpr CDistExecutionTuning kDefaultCDistFloat32ExecutionTuning{128 * 1024, 16 * 1024, 0,
+inline constexpr CDistExecutionTuning kDefaultCDistFloat32ExecutionTuning{128 * 1024, 16 * 1024, 16,
                                                                           true, 0};
-inline constexpr CDistExecutionTuning kDefaultCDistFloat64ExecutionTuning{256 * 1024, 32 * 1024, 0,
+inline constexpr CDistExecutionTuning kDefaultCDistFloat64ExecutionTuning{256 * 1024, 32 * 1024, 16,
                                                                           true, 0};
 
 /// Computes the pairwise distance matrix between the rows of ``a`` (``m x n``)

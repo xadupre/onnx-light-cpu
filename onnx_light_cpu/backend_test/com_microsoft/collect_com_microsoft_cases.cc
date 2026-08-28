@@ -14,6 +14,7 @@ void CollectCpuMicrosoftTestCases(std::vector<TestCase> &registry, const std::st
   static const OpRegisterModeMap kEntries = {
       {"BiasGelu", &RegisterCpuBiasGeluCases},
       {"CDist", &RegisterCpuCDistCases},
+      {"GroupQueryAttention", &RegisterCpuGroupQueryAttentionCases},
   };
   DispatchRegisterByOpType(registry, op_type, kEntries, mode);
 }

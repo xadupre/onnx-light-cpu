@@ -7,6 +7,7 @@
 #include "onnx_light_cpu/kernels/attention/attention_kernel.h"
 #include "onnx_light_cpu/kernels/com_microsoft/bias_gelu_kernel.h"
 #include "onnx_light_cpu/kernels/com_microsoft/cdist_kernel.h"
+#include "onnx_light_cpu/kernels/com_microsoft/group_query_attention_kernel.h"
 #include "onnx_light_cpu/kernels/elementwise/binary_kernel.h"
 #include "onnx_light_cpu/kernels/elementwise/variadic_kernel.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
@@ -34,6 +35,7 @@ void RegisterAllKernels() {
   RegisterBiasGeluKernel();
   RegisterBinaryKernels();
   RegisterCDistKernel();
+  RegisterGroupQueryAttentionKernel();
   RegisterExpKernel();
   RegisterLogKernel();
   RegisterGemmKernel();

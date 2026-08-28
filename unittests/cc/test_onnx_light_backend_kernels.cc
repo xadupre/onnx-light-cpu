@@ -323,6 +323,12 @@ TEST(OnnxLightBackendKernels, CDistRunsThroughRuntime) {
   EXPECT_TRUE(failures.empty()) << Describe(failures);
 }
 
+TEST(OnnxLightBackendKernels, GroupQueryAttentionRunsThroughRuntime) {
+  const std::vector<std::string> failures =
+      RunCpuBackendCases("GroupQueryAttention", core::backend_test::TestMode::TEST);
+  EXPECT_TRUE(failures.empty()) << Describe(failures);
+}
+
 TEST(OnnxLightBackendKernels, NotRunsThroughRuntime) {
   const std::vector<std::string> failures =
       RunCpuBackendCases("Not", core::backend_test::TestMode::TEST);

@@ -63,6 +63,12 @@ std::vector<OperatorSupportRegistration> CollectOperatorSupport() {
        "onnx_light_cpu::ComputePeakMemoryCDist",
        {"onnx_light_cpu::CDistFusionPattern"},
        true},
+      {kMicrosoftDomain,
+       "GroupQueryAttention",
+       "onnx_light_cpu::ComputeShapeGroupQueryAttention",
+       "onnx_light_cpu::ComputePeakMemoryGroupQueryAttention",
+       {"onnx_light_cpu::GroupQueryAttentionFusionPattern"},
+       true},
   };
 }
 
@@ -100,19 +106,57 @@ void ComputeShapeBiasGelu(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE::NodePr
   ctx.Set(node.output(0), SymTensor(nullptr, a.Dtype(), a.Shape()));
 }
 
+void ComputeShapeGroupQueryAttention(ShapesContext &ctx,
+                                     const ONNX_LIGHT_NAMESPACE::NodeProto &node) {
+  if (node.input_size() < 7 || node.output_size() != 1 || !ctx.Has(node.input(0)) ||
+      !ctx.Has(node.input(1)) || !ctx.Has(node.input(2))) {
+    throw std::invalid_argument("ComputeShapeGroupQueryAttention: expected known Q/K/V inputs and "
+                                "one output.");
+  }
+  const SymTensor &query = ctx.Get(node.input(0));
+  const SymTensor &key = ctx.Get(node.input(1));
+  const SymTensor &value = ctx.Get(node.input(2));
+  if (query.Dtype() != key.Dtype() || query.Dtype() != value.Dtype()) {
+    throw std::invalid_argument(
+        "ComputeShapeGroupQueryAttention: query, key, and value types must match.");
+  }
+  if (query.Shape().Rank() != 3 || key.Shape().Rank() != 3 || value.Shape().Rank() != 3) {
+    throw std::invalid_argument(
+        "ComputeShapeGroupQueryAttention: query, key, and value must have rank 3.");
+  }
+  ConstrainEqual(ctx, query.Shape()[0], key.Shape()[0],
+                 "ComputeShapeGroupQueryAttention: query and key batch dimensions must match.");
+  ConstrainEqual(ctx, query.Shape()[0], value.Shape()[0],
+                 "ComputeShapeGroupQueryAttention: query and value batch dimensions must match.");
+  ConstrainEqual(ctx, key.Shape()[1], value.Shape()[1],
+                 "ComputeShapeGroupQueryAttention: key and value sequence dimensions must match.");
+  ctx.Set(node.output(0), SymTensor(nullptr, query.Dtype(), query.Shape()));
+}
+
 int64_t ComputePeakMemoryCDist(sym_ns::Device, const std::vector<SymShape> &) { return 0; }
 
 int64_t ComputePeakMemoryBiasGelu(sym_ns::Device, const std::vector<SymShape> &) { return 0; }
+
+int64_t ComputePeakMemoryGroupQueryAttention(sym_ns::Device, const std::vector<SymShape> &) {
+  // The supported GroupQueryAttention path delegates to Attention's online-softmax
+  // implementation, which does not materialize a full attention-score tensor.
+  return 0;
+}
 
 void RegisterMicrosoftShapeAndMemoryFunctions() {
   static std::once_flag once;
   std::call_once(once, [] {
     shapes_ns::RegisterComputeShapeFn(kMicrosoftDomain, "CDist", ComputeShapeCDist);
     shapes_ns::RegisterComputeShapeFn(kMicrosoftDomain, "BiasGelu", ComputeShapeBiasGelu);
+    shapes_ns::RegisterComputeShapeFn(kMicrosoftDomain, "GroupQueryAttention",
+                                      ComputeShapeGroupQueryAttention);
     shapes_ns::RegisterComputePeakMemoryFn(kMicrosoftDomain, "CDist", sym_ns::Device::kCPU,
                                            ComputePeakMemoryCDist);
     shapes_ns::RegisterComputePeakMemoryFn(kMicrosoftDomain, "BiasGelu", sym_ns::Device::kCPU,
                                            ComputePeakMemoryBiasGelu);
+    shapes_ns::RegisterComputePeakMemoryFn(kMicrosoftDomain, "GroupQueryAttention",
+                                           sym_ns::Device::kCPU,
+                                           ComputePeakMemoryGroupQueryAttention);
   });
 }
 

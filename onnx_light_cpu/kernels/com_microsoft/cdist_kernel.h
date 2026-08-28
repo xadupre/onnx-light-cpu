@@ -19,8 +19,7 @@
 
 namespace onnx_light_cpu {
 
-/// Scalar onnx-light-cpu kernel for the ``com.microsoft`` ``CDist`` contrib
-/// operator.
+/// onnx-light-cpu kernel for the ``com.microsoft`` ``CDist`` contrib operator.
 ///
 /// ``CDistKernel`` derives from onnx-light's
 /// :cpp:class:`onnx_light::core::runtime::KernelBase` so it plugs into the
@@ -32,14 +31,14 @@ namespace onnx_light_cpu {
 /// ``euclidean`` ``metric`` attribute; every other ``scipy.spatial.distance``
 /// metric name accepted by the ONNX Runtime contract is rejected since
 /// onnx-light-cpu only implements these two. The computation is delegated to
-/// the scalar, cache-friendly ``CDist*`` routines declared in
-/// ``onnx_light_cpu/impl/com_microsoft/cdist.h``, scheduled row-by-row through
-/// ``ExecuteRanges``/``ExecuteCostedRanges`` (no explicit SIMD).
+/// the cache-friendly ``CDist*`` routines declared in
+/// ``onnx_light_cpu/impl/com_microsoft/cdist.h``, scheduled row-by-row and
+/// runtime-dispatched to AVX2/FMA or AVX-512 when available.
 class CDistKernel : public ONNX_LIGHT_NAMESPACE::core::runtime::KernelBase {
 public:
   using ONNX_LIGHT_NAMESPACE::core::runtime::KernelBase::KernelBase;
   static constexpr const char *kName = "onnx_light_cpu::CDist";
-  static constexpr std::uint32_t kTuningAbi = 1;
+  static constexpr std::uint32_t kTuningAbi = 2;
 
   CDistKernel(const ONNX_LIGHT_NAMESPACE::NodeProto &node,
               const ONNX_LIGHT_NAMESPACE::core::runtime::KernelContext &ctx);

@@ -160,7 +160,7 @@ TEST(OnnxLightBiasGeluKernel, RegistersAndAppliesValidatedTuning) {
     const auto key = kernel.TuningKey(static_cast<int32_t>(type));
     EXPECT_EQ(key.library, "onnx_light_cpu");
     EXPECT_EQ(key.kernel, "BiasGelu");
-    EXPECT_EQ(key.implementation, "scalar_row_dispatch");
+    EXPECT_EQ(key.implementation, "row_dispatch");
     EXPECT_EQ(key.tuning_abi, onnx_light_cpu::BiasGeluKernel::kTuningAbi);
     const auto schema = rt_ns::GetKernelTuningRegistry().FindSchema(key);
     ASSERT_NE(schema, nullptr);
@@ -171,10 +171,10 @@ TEST(OnnxLightBiasGeluKernel, RegistersAndAppliesValidatedTuning) {
   ASSERT_NE(schema, nullptr);
   auto parameters = schema->portable_defaults();
   EXPECT_EQ(parameters.Get<int64_t>("parallel.threshold_bytes"), 256 * 1024);
-  EXPECT_EQ(parameters.Get<int64_t>("parallel.target_block_bytes"), 64 * 1024);
+  EXPECT_EQ(parameters.Get<int64_t>("parallel.target_block_bytes"), 256 * 1024);
   EXPECT_EQ(parameters.Get<int64_t>("parallel.max_participants"), 0);
   EXPECT_EQ(parameters.Get<int64_t>("parallel.preferred_participants"), 0);
-  EXPECT_EQ(parameters.Get<int64_t>("parallel.cost_model"), 1);
+  EXPECT_EQ(parameters.Get<int64_t>("parallel.cost_model"), 0);
 
   parameters.values["parallel.threshold_bytes"] = int64_t{1};
   parameters.values["parallel.target_block_bytes"] = int64_t{1};

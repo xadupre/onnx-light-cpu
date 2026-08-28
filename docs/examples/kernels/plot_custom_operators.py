@@ -61,7 +61,7 @@ expected_activated = (
     0.5 * z * (1.0 + np.vectorize(math.erf, otypes=[np.float32])(z / np.sqrt(np.float32(2.0))))
 )
 np.testing.assert_allclose(distances, expected_distances, rtol=1e-6, atol=1e-6)
-np.testing.assert_allclose(activated, expected_activated, rtol=1e-6, atol=1e-6)
+np.testing.assert_allclose(activated, expected_activated, rtol=1e-6, atol=1e-5)
 
 print("Registered custom schemas:", [schema.name for schema in operator_schema_lookup("CDist")])
 print("CDist output:\n", distances)

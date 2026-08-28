@@ -148,6 +148,26 @@ class TestRenderKernelPage:
         )
         assert "Allowed types: tensor(double), tensor(float)." in text
 
+    def test_schema_renderer_omits_empty_default(self):
+        schema = SimpleNamespace(
+            since_version=1,
+            doc="",
+            inputs=[],
+            outputs=[],
+            attributes={
+                "heads": SimpleNamespace(
+                    name="heads",
+                    type=SimpleNamespace(name="INT"),
+                    description="Number of heads.",
+                    required=True,
+                    default_value_repr="",
+                )
+            },
+            type_constraints=[],
+        )
+
+        assert "default:" not in render_light_op_schema(schema)
+
 
 class TestRenderIndex:
     def test_lists_every_stem_in_a_toctree(self):

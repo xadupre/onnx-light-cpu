@@ -494,10 +494,10 @@ TEST(BinaryBroadcastPlan, MultiDimensionalFamiliesMatchNaiveReferenceSerialAndPa
       EXPECT_FLOAT_EQ(serial[i], expected[i]) << "serial index=" << i;
     }
 
+    std::vector<float> parallel(expected.size(), -1.0f);
     InlineExecutor executor;
     onnx_light_cpu::ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run};
     onnx_light_cpu::ExecutionExecutorScope scope(&view);
-    std::vector<float> parallel(expected.size(), -1.0f);
     plan.Execute(left.data(), right.data(), parallel.data());
     ASSERT_EQ(parallel.size(), expected.size());
     for (std::size_t i = 0; i < parallel.size(); ++i) {

@@ -8,6 +8,7 @@
 #include "onnx_light_cpu/kernels/attention/attention_kernel.h"
 #include "onnx_light_cpu/kernels/com_microsoft/bias_gelu_kernel.h"
 #include "onnx_light_cpu/kernels/com_microsoft/cdist_kernel.h"
+#include "onnx_light_cpu/kernels/com_microsoft/group_query_attention_kernel.h"
 #include "onnx_light_cpu/kernels/logical/not_kernel.h"
 #include "onnx_light_cpu/kernels/math/abs_kernel.h"
 #include "onnx_light_cpu/kernels/math/exp_log_kernel.h"
@@ -37,6 +38,8 @@ TEST(OnnxLightKernelUsage, KernelNamesAreLibraryQualified) {
                "onnx_light_cpu::BatchNormalization");
   EXPECT_STREQ(onnx_light_cpu::BiasGeluKernel::kName, "onnx_light_cpu::BiasGelu");
   EXPECT_STREQ(onnx_light_cpu::CDistKernel::kName, "onnx_light_cpu::CDist");
+  EXPECT_STREQ(onnx_light_cpu::GroupQueryAttentionKernel::kName,
+               "onnx_light_cpu::GroupQueryAttention");
   EXPECT_STREQ(onnx_light_cpu::ExpKernel::kName, "onnx_light_cpu::Exp");
   EXPECT_STREQ(onnx_light_cpu::LogKernel::kName, "onnx_light_cpu::Log");
   EXPECT_STREQ(onnx_light_cpu::GemmKernel::kName, "onnx_light_cpu::Gemm");
@@ -94,6 +97,7 @@ TEST(OnnxLightKernelUsage, RegisteredKernelNames) {
   expected.emplace_back("TreeEnsemble", "onnx_light_cpu::TreeEnsemble");
   expected.emplace_back("BiasGelu", "onnx_light_cpu::BiasGelu");
   expected.emplace_back("CDist", "onnx_light_cpu::CDist");
+  expected.emplace_back("GroupQueryAttention", "onnx_light_cpu::GroupQueryAttention");
   EXPECT_EQ(onnx_light_cpu::RegisteredKernelNames(), expected);
 }
 

@@ -90,6 +90,28 @@ TEST(CDist, Float64MatchesDirectReferenceForBothMetrics) {
   }
 }
 
+TEST(CDist, VectorizedFeatureTailMatchesDirectReference) {
+  constexpr std::size_t m = 3;
+  constexpr std::size_t k = 5;
+  constexpr std::size_t n = 131;
+  std::vector<float> a(m * n);
+  std::vector<float> b(k * n);
+  for (std::size_t i = 0; i < a.size(); ++i) {
+    a[i] = static_cast<float>(static_cast<int>(i % 29) - 14) * 0.0625f;
+  }
+  for (std::size_t i = 0; i < b.size(); ++i) {
+    b[i] = static_cast<float>(static_cast<int>(i % 23) - 11) * 0.03125f;
+  }
+  for (CDistMetric metric : {CDistMetric::kSqEuclidean, CDistMetric::kEuclidean}) {
+    std::vector<float> output(m * k);
+    CDistFloat32(a.data(), b.data(), output.data(), m, k, n, metric);
+    const std::vector<float> expected = Reference(a, b, m, k, n, metric);
+    for (std::size_t i = 0; i < output.size(); ++i) {
+      EXPECT_NEAR(output[i], expected[i], 1e-4f) << i;
+    }
+  }
+}
+
 TEST(CDist, ZeroRowsOrColumnsProduceNoWrites) {
   std::vector<float> sentinel(1, -42.0f);
   CDistFloat32(nullptr, nullptr, sentinel.data(), 0, 0, 3, CDistMetric::kSqEuclidean);

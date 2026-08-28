@@ -40,6 +40,33 @@ TEST(BiasGelu, Float32MatchesExactErfReference) {
   }
 }
 
+TEST(BiasGelu, Float32ApproximationStaysCloseToExactGeluAcrossVectorizedRange) {
+  constexpr std::size_t count = 12001;
+  std::vector<float> a(count);
+  const std::vector<float> bias(count, 0.0f);
+  for (std::size_t i = 0; i < count; ++i) {
+    a[i] = -6.0f + 12.0f * static_cast<float>(i) / static_cast<float>(count - 1);
+  }
+  std::vector<float> output(count);
+  BiasGeluFloat32(a.data(), bias.data(), output.data(), 1, count);
+  for (std::size_t i = 0; i < count; ++i) {
+    EXPECT_NEAR(output[i], ReferenceGelu(a[i]), 9e-6) << i << "," << a[i];
+  }
+}
+
+TEST(BiasGelu, Float32PreservesSpecialValues) {
+  std::vector<float> a(16, 0.0f);
+  a[0] = std::numeric_limits<float>::infinity();
+  a[1] = -std::numeric_limits<float>::infinity();
+  a[2] = std::numeric_limits<float>::quiet_NaN();
+  const std::vector<float> bias(a.size(), 0.0f);
+  std::vector<float> output(a.size());
+  BiasGeluFloat32(a.data(), bias.data(), output.data(), 1, a.size());
+  EXPECT_EQ(output[0], std::numeric_limits<float>::infinity());
+  EXPECT_TRUE(std::isnan(output[1]));
+  EXPECT_TRUE(std::isnan(output[2]));
+}
+
 TEST(BiasGelu, Float64MatchesExactErfReference) {
   constexpr std::size_t outer = 3;
   constexpr std::size_t inner = 3;

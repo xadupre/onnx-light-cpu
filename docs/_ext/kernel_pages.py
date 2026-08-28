@@ -186,7 +186,7 @@ def render_light_op_schema(schema: Any) -> str:
         for attribute in sorted(attributes, key=lambda value: value.name):
             qualifiers = ["required" if getattr(attribute, "required", False) else "optional"]
             default_value = getattr(attribute, "default_value_repr", None)
-            if default_value is not None:
+            if default_value:
                 qualifiers.append(f"default: ``{default_value}``")
             lines.append(
                 f"- **{attribute.name}** (``{_schema_type_name(attribute.type)}``): "
