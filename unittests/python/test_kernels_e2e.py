@@ -288,7 +288,7 @@ def _layer_normalization_reference(feeds, input_names, attributes):
     """Ports ``LayerNormalization``'s stash_type=FLOAT default semantics."""
     x = feeds[input_names[0]]
     scale = feeds[input_names[1]]
-    bias = feeds[input_names[2]] if len(input_names) > 2 else None
+    bias = feeds[input_names[2]] if len(input_names) > 2 and input_names[2] else None
     axis = int(attributes.get("axis", -1))
     epsilon = float(attributes.get("epsilon", 1.0e-5))
     if axis < 0:
@@ -333,7 +333,7 @@ def _lp_normalization_reference(feeds, input_names, attributes):
     x = feeds[input_names[0]]
     axis = int(attributes.get("axis", -1))
     p = int(attributes.get("p", 2))
-    norm = np.power(np.power(x, p).sum(axis=axis), 1.0 / p)
+    norm = np.power(np.power(np.abs(x), p).sum(axis=axis), 1.0 / p)
     norm = np.expand_dims(norm, axis)
     y = np.where(norm == 0, 0, x / norm)
     return [y.astype(x.dtype)]
