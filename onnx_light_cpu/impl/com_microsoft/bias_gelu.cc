@@ -7,13 +7,24 @@
 #include "onnx_light_cpu/impl/execution.h"
 #include "onnx_light_cpu/impl/math/half_conversion.h"
 #include "onnx_light_cpu/impl/math/unary_execution_tuning.h"
+#include "onnx_light_cpu/impl/simd_level.h"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <iterator>
 #include <limits>
+#include <type_traits>
 
 namespace onnx_light_cpu {
+
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
+void BiasGeluFloat32_AVX2_FMA(const float *a, const float *bias, float *output, std::size_t count);
+#endif
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
+void BiasGeluFloat32_AVX512(const float *a, const float *bias, float *output, std::size_t count);
+#endif
+
 namespace {
 
 template <typename T> T GeluExact(T z) {
@@ -21,7 +32,65 @@ template <typename T> T GeluExact(T z) {
   return static_cast<T>(0.5) * z * (static_cast<T>(1) + std::erf(z * kInvSqrtTwo));
 }
 
-float GeluExactFloat(float z) { return GeluExact<float>(z); }
+float GeluFloat32Approx(float z) {
+  if (z == 0.0f) {
+    return z;
+  }
+  if (z >= 6.0f) {
+    return z;
+  }
+  if (z <= -6.0f) {
+    return z == -std::numeric_limits<float>::infinity() ? std::numeric_limits<float>::quiet_NaN()
+                                                        : 0.0f;
+  }
+
+  // On [-6, 6], approximate the even part of GELU as a degree-14 Chebyshev
+  // polynomial in z^2. The maximum float32 error is 9e-6, while the
+  // branch-free recurrence lets compilers vectorize the inner broadcast loop.
+  constexpr float coefficients[] = {
+      1.8827368f,       1.32283127f,     -0.29206121f,   0.131107315f,    -0.0683164895f,
+      0.0358457267f,    -0.0179936364f,  0.00847151037f, -0.00371518102f, 0.0015147439f,
+      -0.000575297687f, 0.000203221469f, -6.7434863e-5f, 2.01439125e-5f,  -5.92767856e-6f,
+  };
+  const float x = z * z / 18.0f - 1.0f;
+  float next = 0.0f;
+  float next_next = 0.0f;
+  for (std::size_t index = std::size(coefficients) - 1; index > 0; --index) {
+    const float current = 2.0f * x * next - next_next + coefficients[index];
+    next_next = next;
+    next = current;
+  }
+  return 0.5f * z + (x * next - next_next + coefficients[0]);
+}
+
+using BiasGeluFloat32RangeFn = void (*)(const float *, const float *, float *, std::size_t);
+
+void BiasGeluFloat32Scalar(const float *a, const float *bias, float *output, std::size_t count) {
+  for (std::size_t column = 0; column < count; ++column) {
+    output[column] = GeluFloat32Approx(a[column] + bias[column]);
+  }
+}
+
+BiasGeluFloat32RangeFn SelectBiasGeluFloat32Range() {
+  static const BiasGeluFloat32RangeFn selected = []() -> BiasGeluFloat32RangeFn {
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
+    if (DetectSimdLevel() >= SimdLevel::kAVX512) {
+      return &BiasGeluFloat32_AVX512;
+    }
+#endif
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
+    if (DetectSimdLevel() >= SimdLevel::kAVX2 && CpuSupportsFma()) {
+      return &BiasGeluFloat32_AVX2_FMA;
+    }
+#endif
+    return &BiasGeluFloat32Scalar;
+  }();
+  return selected;
+}
+
+void BiasGeluFloat32Range(const float *a, const float *bias, float *output, std::size_t count) {
+  SelectBiasGeluFloat32Range()(a, bias, output, count);
+}
 
 // Builds the ``ExecutionSchedule`` shared by every dtype: thresholds are
 // expressed in bytes of one broadcast row (``inner`` elements, matching the
@@ -77,8 +146,12 @@ void BiasGeluDispatch(const T *a, const T *bias, T *output, std::size_t outer, s
   DispatchRows(outer, row_bytes, tuning, [=](std::int64_t begin, std::int64_t end) {
     for (std::int64_t row = begin; row < end; ++row) {
       const std::size_t offset = static_cast<std::size_t>(row) * inner;
-      for (std::size_t column = 0; column < inner; ++column) {
-        output[offset + column] = GeluExact<T>(a[offset + column] + bias[column]);
+      if constexpr (std::is_same_v<T, float>) {
+        BiasGeluFloat32Range(a + offset, bias, output + offset, inner);
+      } else {
+        for (std::size_t column = 0; column < inner; ++column) {
+          output[offset + column] = GeluExact<T>(a[offset + column] + bias[column]);
+        }
       }
     }
   });
@@ -100,7 +173,7 @@ void BiasGeluHalfDispatch(const std::uint16_t *a, const std::uint16_t *bias, std
                                        : detail::Float16BitsToFloat(a[offset + column]);
         const float bias_value = BFloat16 ? detail::Bfloat16BitsToFloat(bias[column])
                                           : detail::Float16BitsToFloat(bias[column]);
-        const float value = GeluExactFloat(a_value + bias_value);
+        const float value = GeluExact<float>(a_value + bias_value);
         output[offset + column] =
             BFloat16 ? detail::FloatToBFloat16Bits(value) : detail::FloatToFloat16Bits(value);
       }

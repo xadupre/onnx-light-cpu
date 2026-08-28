@@ -30,7 +30,7 @@ struct BiasGeluExecutionTuning {
 };
 
 inline constexpr BiasGeluExecutionTuning kDefaultBiasGeluFloat32ExecutionTuning{
-    256 * 1024, 64 * 1024, 0, true, 0};
+    256 * 1024, 256 * 1024, 0, false, 0};
 inline constexpr BiasGeluExecutionTuning kDefaultBiasGeluFloat64ExecutionTuning{
     512 * 1024, 64 * 1024, 0, true, 0};
 inline constexpr BiasGeluExecutionTuning kDefaultBiasGeluHalfExecutionTuning{128 * 1024, 32 * 1024,
