@@ -210,176 +210,152 @@ def _assert_close(actual, expected, rtol, atol):
         )
 
 
-def _node_attributes(node):
-    return {attribute.name: helper.get_attribute_value(attribute) for attribute in node.attribute}
+def _warm_builtin_session(model, feeds):
+    """Builds a ``ReferenceEvaluator`` for ``model`` and runs it once on ``feeds``.
 
-
-def _batch_normalization_reference(feeds, input_names, attributes):
-    """Ports the ONNX ``BatchNormalization`` reference math (no stash_type)."""
-    x, scale, bias, mean, var = (feeds[name] for name in input_names[:5])
-    epsilon = float(attributes.get("epsilon", 1.0e-5))
-    dim_ones = (1,) * (x.ndim - 2)
-
-    def test_mode(m, v):
-        s = scale.reshape(-1, *dim_ones)
-        b = bias.reshape(-1, *dim_ones)
-        m = m.reshape(-1, *dim_ones)
-        v = v.reshape(-1, *dim_ones)
-        return (s * (x - m) / np.sqrt(v + epsilon) + b).astype(x.dtype)
-
-    if not int(attributes.get("training_mode", 0)):
-        return [test_mode(mean, var)]
-
-    reduce_axes = tuple(np.delete(np.arange(x.ndim), 1))
-    saved_mean = x.mean(axis=reduce_axes)
-    saved_var = x.var(axis=reduce_axes)
-    momentum = float(attributes.get("momentum", 0.9))
-    output_mean = mean * momentum + saved_mean * (1 - momentum)
-    output_var = var * momentum + saved_var * (1 - momentum)
-    y = test_mode(saved_mean, saved_var)
-    return [y, output_mean.astype(x.dtype), output_var.astype(x.dtype)]
-
-
-def _group_normalization_reference(feeds, input_names, attributes, version):
-    """Ports the ONNX ``GroupNormalization`` function body (v18 or v21)."""
-    x, scale, bias = (feeds[name] for name in input_names[:3])
-    num_groups = int(attributes["num_groups"])
-    epsilon = float(attributes.get("epsilon", 1.0e-5))
-    n = x.shape[0]
-    x_dtype = x.dtype
-    # Stage one (mean/variance/normalization) always runs at FLOAT precision
-    # for opset 21+ (default stash_type); opset 18 has no stash_type and
-    # computes stage one directly at the input's own precision.
-    stage_one = x.astype(np.float32) if version >= 21 else x
-    x3d = stage_one.reshape(n, num_groups, -1)
-    mean = x3d.mean(axis=2, keepdims=True)
-    mean_of_square = (x3d * x3d).mean(axis=2, keepdims=True)
-    variance = mean_of_square - mean * mean
-    stddev = np.sqrt(variance + np.asarray(epsilon, dtype=stage_one.dtype))
-    normalized = (x3d - mean) / stddev
-    if version >= 21:
-        # Stage two applies scale/bias per channel (shape (C,)), independent
-        # of stash_type.
-        normalized = normalized.reshape(x.shape).astype(x_dtype)
-        affine_shape = (1, x.shape[1]) + (1,) * (x.ndim - 2)
-    else:
-        # Opset 18 applies scale/bias per group (shape (num_groups,)) before
-        # reshaping back to the original channel layout.
-        affine_shape = (1, num_groups, 1)
-    y = normalized * scale.reshape(affine_shape) + bias.reshape(affine_shape)
-    return [y.reshape(x.shape).astype(x_dtype)]
-
-
-def _instance_normalization_reference(feeds, input_names, attributes):
-    """Ports the ONNX ``InstanceNormalization`` reference math (no stash_type)."""
-    x, scale, bias = (feeds[name] for name in input_names[:3])
-    epsilon = float(attributes.get("epsilon", 1.0e-5))
-    axes = tuple(range(2, x.ndim))
-    mean = np.mean(x, axis=axes, keepdims=True)
-    var = np.var(x, axis=axes, keepdims=True)
-    dim_ones = (1,) * (x.ndim - 2)
-    s = scale.reshape(-1, *dim_ones)
-    b = bias.reshape(-1, *dim_ones)
-    y = s * (x - mean) / np.sqrt(var + epsilon) + b
-    return [y.astype(x.dtype)]
-
-
-def _layer_normalization_reference(feeds, input_names, attributes):
-    """Ports ``LayerNormalization``'s stash_type=FLOAT default semantics."""
-    x = feeds[input_names[0]]
-    scale = feeds[input_names[1]]
-    bias = feeds[input_names[2]] if len(input_names) > 2 and input_names[2] else None
-    axis = int(attributes.get("axis", -1))
-    epsilon = float(attributes.get("epsilon", 1.0e-5))
-    if axis < 0:
-        axis += x.ndim
-    axes = tuple(range(axis, x.ndim))
-    x_dtype = x.dtype
-    x32 = x.astype(np.float32)
-    mean = x32.mean(axis=axes, keepdims=True)
-    centered = x32 - mean
-    variance = (centered * centered).mean(axis=axes, keepdims=True)
-    denominator = np.sqrt(variance + np.float32(epsilon))
-    normalized = (centered / denominator).astype(x_dtype)
-    if scale.dtype != x_dtype:
-        normalized = normalized.astype(scale.dtype)
-    y = normalized * scale
-    if bias is not None:
-        y = y + bias
-    return [y]
-
-
-def _rms_normalization_reference(feeds, input_names, attributes):
-    """Ports ``RMSNormalization``'s stash_type=FLOAT default semantics."""
-    x = feeds[input_names[0]]
-    scale = feeds[input_names[1]]
-    axis = int(attributes.get("axis", -1))
-    epsilon = float(attributes.get("epsilon", 1.0e-5))
-    if axis < 0:
-        axis += x.ndim
-    axes = tuple(range(axis, x.ndim))
-    x_dtype = x.dtype
-    x32 = x.astype(np.float32)
-    variance = (x32 * x32).mean(axis=axes, keepdims=True)
-    denominator = np.sqrt(variance + np.float32(epsilon))
-    normalized = (x32 / denominator).astype(x_dtype)
-    if scale.dtype != x_dtype:
-        normalized = normalized.astype(scale.dtype)
-    return [normalized * scale]
-
-
-def _lp_normalization_reference(feeds, input_names, attributes):
-    """Ports the ONNX ``LpNormalization`` reference math."""
-    x = feeds[input_names[0]]
-    axis = int(attributes.get("axis", -1))
-    p = int(attributes.get("p", 2))
-    norm = np.power(np.power(np.abs(x), p).sum(axis=axis), 1.0 / p)
-    norm = np.expand_dims(norm, axis)
-    y = np.where(norm == 0, 0, x / norm)
-    return [y.astype(x.dtype)]
-
-
-def _mean_variance_normalization_reference(feeds, input_names, attributes):
-    """Ports the ONNX ``MeanVarianceNormalization`` function body (FLOAT stage)."""
-    x = feeds[input_names[0]]
-    axes = tuple(int(axis) for axis in attributes.get("axes", (0, 2, 3)))
-    x_dtype = x.dtype
-    x32 = x.astype(np.float32)
-    mean = x32.mean(axis=axes, keepdims=True)
-    mean_of_square = (x32 * x32).mean(axis=axes, keepdims=True)
-    variance = mean_of_square - mean * mean
-    std_dev = np.sqrt(variance)
-    y = (x32 - mean) / (std_dev + np.float32(1.0e-9))
-    return [y.astype(x_dtype)]
-
-
-_NORMALIZATION_REFERENCES = {
-    "BatchNormalization": _batch_normalization_reference,
-    "InstanceNormalization": _instance_normalization_reference,
-    "LayerNormalization": _layer_normalization_reference,
-    "LpNormalization": _lp_normalization_reference,
-    "MeanVarianceNormalization": _mean_variance_normalization_reference,
-    "RMSNormalization": _rms_normalization_reference,
-}
-
-
-def _normalization_reference(op_type, node, feeds, group_normalization_version=21):
-    """Computes the standard ONNX reference outputs for one normalization node.
-
-    This mirrors the exact math from ONNX's native reference kernels (for ops
-    with one, such as ``BatchNormalization``/``InstanceNormalization``) or from
-    their ``FunctionBody``/``SetContextDependentFunctionBodyBuilder``
-    decomposition (for ops expanded from an ONNX function, such as
-    ``GroupNormalization``/``MeanVarianceNormalization``), computed directly
-    with NumPy instead of building and running an ONNX graph.
+    ``onnx_light_cpu.register_kernels()`` permanently overrides onnx-light's
+    process-wide ``KernelDispatchTable`` entries, but a session only resolves
+    and caches which kernel it dispatches to on its *first* run (see
+    ``docs/examples/benchmarks/plot_abs_benchmark.py``, which uses this same
+    technique to compare onnx-light-cpu's accelerated kernels against
+    onnx-light's own built-in ones). This module fully imports -- running this
+    function at module scope -- before any test's ``setUp`` calls
+    :func:`onnx_light_cpu.register_kernels`, so the returned session stays
+    resolved to onnx-light's built-in reference kernel forever, regardless of
+    later registrations. That built-in kernel is the oracle these tests
+    compare onnx-light-cpu's accelerated kernels against; no kernel math is
+    reimplemented here.
     """
-    attributes = _node_attributes(node)
-    input_names = list(node.input)
-    if op_type == "GroupNormalization":
-        return _group_normalization_reference(
-            feeds, input_names, attributes, group_normalization_version
-        )
-    return _NORMALIZATION_REFERENCES[op_type](feeds, input_names, attributes)
+    session = ReferenceEvaluator(model)
+    session.run(None, feeds)
+    return session
+
+
+def _collect_normalization_benchmark_builtin_sessions():
+    """Pre-warms one built-in session per ``test_cpu_*_benchmark`` case."""
+    normalization_ops = {
+        "BatchNormalization",
+        "GroupNormalization",
+        "InstanceNormalization",
+        "LayerNormalization",
+        "LpNormalization",
+        "MeanVarianceNormalization",
+        "RMSNormalization",
+    }
+    sessions = {}
+    covered_dtypes = {op_type: set() for op_type in normalization_ops}
+    for op_type in sorted(normalization_ops):
+        for tc in collect_test_cases(op_type, include_big=False, mode=TestMode.BENCHMARK):
+            dtype = next(
+                (
+                    candidate
+                    for candidate in ("float32", "float16", "bfloat16")
+                    if tc.name.endswith(f"_{candidate}_benchmark")
+                ),
+                None,
+            )
+            if not tc.name.startswith("test_cpu_") or dtype is None:
+                continue
+            covered_dtypes[op_type].add(dtype)
+            input_names = [vi.name for vi in tc.model.graph.input]
+            feeds = {
+                name: _to_numpy(tensor)
+                for name, tensor in zip(input_names, tc.data_sets[0].inputs, strict=True)
+            }
+            sessions[tc.name] = _warm_builtin_session(tc.model, feeds)
+    return sessions, covered_dtypes
+
+
+(
+    _NORMALIZATION_BENCHMARK_BUILTIN_SESSIONS,
+    _NORMALIZATION_BENCHMARK_COVERED_DTYPES,
+) = _collect_normalization_benchmark_builtin_sessions()
+
+
+_LOW_PRECISION_AFFINE_CASES = (
+    ("GroupNormalization", 21, [1, 1, 4], [1], {"num_groups": 1}),
+    ("LayerNormalization", 17, [1, 4], [4], {}),
+)
+_LOW_PRECISION_AFFINE_DTYPES = (
+    (TensorProto.FLOAT16, np.float16),
+    (TensorProto.BFLOAT16, ml_dtypes.bfloat16),
+)
+
+
+def _make_low_precision_affine_model_and_feeds(
+    op_type, version, x_shape, parameter_shape, attributes, tensor_type, dtype
+):
+    node = helper.make_node(op_type, ["X", "Scale", "B"], ["Y"], **attributes)
+    graph = helper.make_graph(
+        [node],
+        "low_precision_affine_rounding",
+        [
+            helper.make_tensor_value_info("X", tensor_type, x_shape),
+            helper.make_tensor_value_info("Scale", tensor_type, parameter_shape),
+            helper.make_tensor_value_info("B", tensor_type, parameter_shape),
+        ],
+        [helper.make_tensor_value_info("Y", tensor_type, x_shape)],
+    )
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", version)])
+    feeds = {
+        "X": np.asarray([-3.0, -2.0, -1.0, -0.5], dtype=dtype).reshape(x_shape),
+        "Scale": np.full(parameter_shape, 0.05, dtype=dtype),
+        "B": np.full(parameter_shape, -0.25, dtype=dtype),
+    }
+    return model, feeds
+
+
+def _collect_low_precision_affine_builtin_sessions():
+    sessions = {}
+    for op_type, version, x_shape, parameter_shape, attributes in _LOW_PRECISION_AFFINE_CASES:
+        for tensor_type, dtype in _LOW_PRECISION_AFFINE_DTYPES:
+            model, feeds = _make_low_precision_affine_model_and_feeds(
+                op_type, version, x_shape, parameter_shape, attributes, tensor_type, dtype
+            )
+            sessions[op_type, dtype] = _warm_builtin_session(model, feeds)
+    return sessions
+
+
+_LOW_PRECISION_AFFINE_BUILTIN_SESSIONS = _collect_low_precision_affine_builtin_sessions()
+
+
+def _make_group_normalization_opset18_double_model_and_feeds():
+    node = helper.make_node(
+        "GroupNormalization",
+        ["X", "scale", "bias"],
+        ["Y"],
+        num_groups=1,
+        epsilon=1.0,
+    )
+    graph = helper.make_graph(
+        [node],
+        "group_normalization_opset18_double",
+        [
+            helper.make_tensor_value_info("X", TensorProto.DOUBLE, [1, 1, 4]),
+            helper.make_tensor_value_info("scale", TensorProto.DOUBLE, [1]),
+            helper.make_tensor_value_info("bias", TensorProto.DOUBLE, [1]),
+        ],
+        [helper.make_tensor_value_info("Y", TensorProto.DOUBLE, [1, 1, 4])],
+    )
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 18)])
+    feeds = {
+        "X": np.asarray(
+            [10000000.1, 10000000.2, 10000000.3, 10000000.4],
+            dtype=np.float64,
+        ).reshape(1, 1, 4),
+        "scale": np.asarray([1.0], dtype=np.float64),
+        "bias": np.asarray([0.0], dtype=np.float64),
+    }
+    return model, feeds
+
+
+(
+    _GROUP_NORMALIZATION_OPSET18_DOUBLE_MODEL,
+    _GROUP_NORMALIZATION_OPSET18_DOUBLE_FEEDS,
+) = _make_group_normalization_opset18_double_model_and_feeds()
+_GROUP_NORMALIZATION_OPSET18_DOUBLE_BUILTIN_SESSION = _warm_builtin_session(
+    _GROUP_NORMALIZATION_OPSET18_DOUBLE_MODEL, _GROUP_NORMALIZATION_OPSET18_DOUBLE_FEEDS
+)
 
 
 class TestBackendCases(TestCase):
@@ -492,15 +468,6 @@ class TestBackendCases(TestCase):
         except ImportError:
             ort = None
 
-        normalization_ops = {
-            "BatchNormalization",
-            "GroupNormalization",
-            "InstanceNormalization",
-            "LayerNormalization",
-            "LpNormalization",
-            "MeanVarianceNormalization",
-            "RMSNormalization",
-        }
         options = None
         if ort is not None:
             from onnxruntime.capi.onnxruntime_pybind11_state import (
@@ -511,8 +478,7 @@ class TestBackendCases(TestCase):
             options = ort.SessionOptions()
             options.intra_op_num_threads = 1
             options.inter_op_num_threads = 1
-        covered_dtypes = {op_type: set() for op_type in normalization_ops}
-        for op_type in sorted(normalization_ops):
+        for op_type in sorted(_NORMALIZATION_BENCHMARK_COVERED_DTYPES):
             cases = collect_test_cases(op_type, include_big=False, mode=TestMode.BENCHMARK)
             for tc in cases:
                 dtype = next(
@@ -526,7 +492,6 @@ class TestBackendCases(TestCase):
                 if not tc.name.startswith("test_cpu_") or dtype is None:
                     continue
                 with self.subTest(tc=tc.name):
-                    covered_dtypes[op_type].add(dtype)
                     assert len(tc.model.graph.initializer) == 0
                     input_names = [vi.name for vi in tc.model.graph.input]
                     light_session = ReferenceEvaluator(tc.model)
@@ -546,7 +511,7 @@ class TestBackendCases(TestCase):
                             if "Type Error:" not in str(exc):
                                 raise
                             ort_session = None
-                    node = tc.model.graph.node[0]
+                    builtin_session = _NORMALIZATION_BENCHMARK_BUILTIN_SESSIONS[tc.name]
                     for data_set in tc.data_sets:
                         feeds = {
                             name: _to_numpy(tensor)
@@ -564,84 +529,45 @@ class TestBackendCases(TestCase):
                                     raise
                                 ort_session = None
                         if expected is None:
-                            expected = _normalization_reference(op_type, node, feeds)
+                            # Fall back to onnx-light's own built-in (un-accelerated)
+                            # kernel, resolved and cached before onnx-light-cpu's
+                            # kernels were ever registered (see
+                            # ``_warm_builtin_session``).
+                            expected = builtin_session.run(None, feeds)
                         assert len(got) == len(expected)
                         tolerance = 2e-5
                         if dtype in {"float16", "bfloat16"}:
                             tolerance = 2e-2
                         for actual, reference in zip(got, expected, strict=True):
                             _assert_close(actual, reference, rtol=tolerance, atol=tolerance)
-        for op_type, dtypes in covered_dtypes.items():
+        for op_type, dtypes in _NORMALIZATION_BENCHMARK_COVERED_DTYPES.items():
             assert dtypes == {"float32", "float16", "bfloat16"}, (op_type, dtypes)
 
     def test_low_precision_affine_rounding_matches_onnx_functions(self):
-        for op_type, version, x_shape, parameter_shape, attributes in (
-            ("GroupNormalization", 21, [1, 1, 4], [1], {"num_groups": 1}),
-            ("LayerNormalization", 17, [1, 4], [4], {}),
-        ):
-            for tensor_type, dtype in (
-                (TensorProto.FLOAT16, np.float16),
-                (TensorProto.BFLOAT16, ml_dtypes.bfloat16),
-            ):
+        for op_type, version, x_shape, parameter_shape, attributes in _LOW_PRECISION_AFFINE_CASES:
+            for tensor_type, dtype in _LOW_PRECISION_AFFINE_DTYPES:
                 with self.subTest(op_type=op_type, dtype=dtype):
-                    node = helper.make_node(op_type, ["X", "Scale", "B"], ["Y"], **attributes)
-                    graph = helper.make_graph(
-                        [node],
-                        "low_precision_affine_rounding",
-                        [
-                            helper.make_tensor_value_info("X", tensor_type, x_shape),
-                            helper.make_tensor_value_info("Scale", tensor_type, parameter_shape),
-                            helper.make_tensor_value_info("B", tensor_type, parameter_shape),
-                        ],
-                        [helper.make_tensor_value_info("Y", tensor_type, x_shape)],
+                    model, feeds = _make_low_precision_affine_model_and_feeds(
+                        op_type, version, x_shape, parameter_shape, attributes, tensor_type, dtype
                     )
-                    model = helper.make_model(
-                        graph, opset_imports=[helper.make_opsetid("", version)]
-                    )
-                    feeds = {
-                        "X": np.asarray([-3.0, -2.0, -1.0, -0.5], dtype=dtype).reshape(x_shape),
-                        "Scale": np.full(parameter_shape, 0.05, dtype=dtype),
-                        "B": np.full(parameter_shape, -0.25, dtype=dtype),
-                    }
                     actual = ReferenceEvaluator(model).run(None, feeds)[0]
-                    expected = _normalization_reference(
-                        op_type, node, feeds, group_normalization_version=version
-                    )[0]
+                    # Reference: onnx-light's own built-in (un-accelerated) kernel,
+                    # resolved and cached before onnx-light-cpu's kernels were ever
+                    # registered (see ``_warm_builtin_session``).
+                    builtin_session = _LOW_PRECISION_AFFINE_BUILTIN_SESSIONS[op_type, dtype]
+                    expected = builtin_session.run(None, feeds)[0]
                     np.testing.assert_array_equal(
                         actual.view(np.uint16), expected.view(np.uint16)
                     )
 
     def test_group_normalization_opset18_double_matches_onnx_reference(self):
-        node = helper.make_node(
-            "GroupNormalization",
-            ["X", "scale", "bias"],
-            ["Y"],
-            num_groups=1,
-            epsilon=1.0,
-        )
-        graph = helper.make_graph(
-            [node],
-            "group_normalization_opset18_double",
-            [
-                helper.make_tensor_value_info("X", TensorProto.DOUBLE, [1, 1, 4]),
-                helper.make_tensor_value_info("scale", TensorProto.DOUBLE, [1]),
-                helper.make_tensor_value_info("bias", TensorProto.DOUBLE, [1]),
-            ],
-            [helper.make_tensor_value_info("Y", TensorProto.DOUBLE, [1, 1, 4])],
-        )
-        model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 18)])
-        feeds = {
-            "X": np.asarray(
-                [10000000.1, 10000000.2, 10000000.3, 10000000.4],
-                dtype=np.float64,
-            ).reshape(1, 1, 4),
-            "scale": np.asarray([1.0], dtype=np.float64),
-            "bias": np.asarray([0.0], dtype=np.float64),
-        }
+        model = _GROUP_NORMALIZATION_OPSET18_DOUBLE_MODEL
+        feeds = _GROUP_NORMALIZATION_OPSET18_DOUBLE_FEEDS
         actual = ReferenceEvaluator(model).run(None, feeds)[0]
-        expected = _normalization_reference(
-            "GroupNormalization", node, feeds, group_normalization_version=18
-        )[0]
+        # Reference: onnx-light's own built-in (un-accelerated) kernel, resolved
+        # and cached before onnx-light-cpu's kernels were ever registered (see
+        # ``_warm_builtin_session``).
+        expected = _GROUP_NORMALIZATION_OPSET18_DOUBLE_BUILTIN_SESSION.run(None, feeds)[0]
         np.testing.assert_allclose(actual, expected, rtol=0.0, atol=3.0e-4)
         assert np.any(actual != 0.0)
 
