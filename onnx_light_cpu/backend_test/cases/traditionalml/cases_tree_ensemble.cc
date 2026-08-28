@@ -176,7 +176,8 @@ const char *DataTypeSuffix(onnx_light_cpu::DataType type) {
   if (type == onnx_light_cpu::DataType::FLOAT) {
     return "float32";
   }
-  throw std::invalid_argument("unsupported TreeEnsemble value type");
+  throw std::invalid_argument("unsupported TreeEnsemble value type: " +
+                              std::to_string(static_cast<int>(type)));
 }
 
 void AddLegacyTree(NodeProto &node, const LegacyTreeAttributes &tree) {
