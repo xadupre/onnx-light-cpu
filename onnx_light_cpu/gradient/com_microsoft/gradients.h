@@ -21,12 +21,12 @@ namespace onnx_light_cpu {
  *
  * CDist gradient:
  * \verbatim
- * A --> [Unsq(1)] --\
- *                    [Sub] --> difference --\
- * B --> [Unsq(0)] --/                        [Mul] --> weighted --+--> [ReduceSum(1)] --> dA
- *                                                               \--> [Reduce(0)] --> [Neg] --> dB
+ * A --> [U1] --\
+ *              [Sub] --> diff --\
+ * B --> [U0] --/                +--> [Mul] --> weighted --+--> [ReduceSum(1)] --> dA
+ * [metric gradient] --> [U2] --/                           \--> [ReduceSum(0)] --> [Neg] --> dB
  * A -----\ [CDist] --> C --\
- * B -----/                  [metric gradient] --> [Unsq(2)] --/
+ * B -----/                  +--> [metric gradient]
  * dC (output gradient) -----/
  * \endverbatim
  */
