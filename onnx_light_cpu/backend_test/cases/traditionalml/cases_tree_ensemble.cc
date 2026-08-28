@@ -323,7 +323,7 @@ void RegisterCpuTreeEnsembleCases(std::vector<TestCase> &registry, TestMode mode
       NodeProto node = MakeTreeEnsembleNode(attributes);
       const std::string name = "test_cpu_treeensemble_t" + std::to_string(spec.trees) + "_f" +
                                std::to_string(spec.features) + "_b" + std::to_string(spec.rows) +
-                               "_benchmark";
+                               "_float32_benchmark";
       Expect(registry, std::move(node), name, {DefaultOpset(13), ml_opset},
              [attributes = std::move(attributes), spec]() mutable -> IoData {
                std::vector<double> values(spec.rows * static_cast<std::size_t>(spec.features));

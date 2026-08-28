@@ -115,11 +115,9 @@ _BENCHMARK_TYPE_SUFFIXES["BitShift"] = "uint8"
 _BENCHMARK_NAME_PATTERN = (
     "^test_cpu_(?:"
     + "|".join(
-        f"{op_type.lower()}_.*_{suffix}"
-        for op_type, suffix in _BENCHMARK_TYPE_SUFFIXES.items()
-        if op_type != "TreeEnsemble"
+        f"{op_type.lower()}_.*_{suffix}" for op_type, suffix in _BENCHMARK_TYPE_SUFFIXES.items()
     )
-    + "|treeensemble_.*).*_benchmark$"
+    + ").*_benchmark$"
 )
 
 # ``TensorProto`` element type -> numpy dtype used to decode a backend test

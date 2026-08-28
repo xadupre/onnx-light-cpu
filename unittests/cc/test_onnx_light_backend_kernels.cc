@@ -69,6 +69,17 @@ const std::array<std::string_view, 7> kBinaryShapeTags = {
     "inner_vector", "outer_broadcast", "general",
 };
 
+const std::array<std::string_view, 14> kDataTypeNameTags = {
+    "bool",  "float",  "double", "int8",   "uint8",  "int16",   "uint16",
+    "int32", "uint32", "int64",  "uint64", "string", "complex", "float8",
+};
+
+bool ContainsDataTypeName(std::string_view name) {
+  return std::any_of(
+      kDataTypeNameTags.begin(), kDataTypeNameTags.end(),
+      [name](std::string_view tag) { return name.find(tag) != std::string_view::npos; });
+}
+
 std::string Lowercase(std::string value) {
   std::transform(value.begin(), value.end(), value.begin(),
                  [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
@@ -560,6 +571,20 @@ TEST(OnnxLightBackendKernels, AllCpuBackendCaseNamesAreGloballyUnique) {
       std::set<std::string> seen;
       for (const std::string &name : cpu_case_names) {
         EXPECT_TRUE(seen.insert(name).second) << name;
+      }
+    }
+  }
+}
+
+TEST(OnnxLightBackendKernels, AllCpuBackendCaseNamesContainDataTypeName) {
+  onnx_light_cpu::backend_test::RegisterCpuKernelBackendTestCases();
+  for (core::backend_test::TestMode mode :
+       {core::backend_test::TestMode::TEST, core::backend_test::TestMode::BENCHMARK}) {
+    const std::vector<TestCase> cases =
+        CollectTestCases(/*op_type=*/"", /*include_big=*/false, mode);
+    for (const TestCase &test_case : cases) {
+      if (test_case.name.rfind("test_cpu_", 0) == 0) {
+        EXPECT_TRUE(ContainsDataTypeName(test_case.name)) << test_case.name;
       }
     }
   }
