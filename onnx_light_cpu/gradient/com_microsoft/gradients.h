@@ -24,7 +24,7 @@ namespace onnx_light_cpu {
  * A --> [Unsq(1)] --\
  *                    [Sub] --> difference --\
  * B --> [Unsq(0)] --/                        [Mul] --> weighted --+--> [ReduceSum(1)] --> dA
- *                                                               \--> [ReduceSum(0)] --> [Neg] -> dB
+ *                                                               \--> [Reduce(0)] --> [Neg] --> dB
  * A -----\ [CDist] --> C --\
  * B -----/                  [metric gradient] --> [Unsq(2)] --/
  * dC (output gradient) -----/
