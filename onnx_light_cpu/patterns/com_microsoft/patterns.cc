@@ -60,6 +60,11 @@ bool IsFloating(sym_ns::TensorType type) {
          type == sym_ns::TensorType::kDouble || type == sym_ns::TensorType::kBfloat16;
 }
 
+int64_t GetIntAttributeOrDefault(const NodeProto &node, const char *name, int64_t default_value) {
+  const AttributeProto *attribute = FindAttribute(node, name);
+  return attribute == nullptr ? default_value : attribute->i();
+}
+
 bool ReadSingleInt64(const TensorProto &tensor, int64_t &value) {
   bool single_element = true;
   for (int64_t dimension : tensor.dims()) {
@@ -100,6 +105,43 @@ bool KeepDims(const NodeProto &node, int64_t expected) {
   return keepdims == nullptr
              ? expected == 1
              : keepdims->type() == AttributeProto::AttributeType::INT && keepdims->i() == expected;
+}
+
+bool IsRank3GroupedAttention(GraphGraph &graph, const NodeProto &node) {
+  if (!IsDefaultNode(&node, "Attention", 3) || !graph.HasShape(node.input(0)) ||
+      !graph.HasShape(node.input(1)) || !graph.HasShape(node.input(2)) ||
+      graph.GetShape(node.input(0)).Shape().Rank() != 3 ||
+      graph.GetShape(node.input(1)).Shape().Rank() != 3 ||
+      graph.GetShape(node.input(2)).Shape().Rank() != 3) {
+    return false;
+  }
+  const auto &query_shape = graph.GetShape(node.input(0)).Shape();
+  const auto &key_shape = graph.GetShape(node.input(1)).Shape();
+  const auto &value_shape = graph.GetShape(node.input(2)).Shape();
+  const AttributeProto *q_heads = FindAttribute(node, "q_num_heads");
+  const AttributeProto *kv_heads = FindAttribute(node, "kv_num_heads");
+  return query_shape[0] == key_shape[0] && key_shape[0] == value_shape[0] &&
+         query_shape[1] == key_shape[1] && key_shape[1] == value_shape[1] && q_heads != nullptr &&
+         kv_heads != nullptr && q_heads->i() > 0 && kv_heads->i() > 0 &&
+         q_heads->i() != kv_heads->i() && q_heads->i() % kv_heads->i() == 0;
+}
+
+NodeProto MakeInt64Constant(const std::string &name, int64_t value) {
+  NodeProto node = MakeNode("Constant", {}, {name});
+  AttributeProto *attribute = node.add_attribute();
+  attribute->set_name("value");
+  attribute->set_type(AttributeProto::AttributeType::TENSOR);
+  TensorProto &tensor = attribute->ref_t();
+  tensor.set_data_type(TensorProto::DataType::INT64);
+  tensor.ref_int64_data().push_back(value);
+  return node;
+}
+
+NodeProto MakeCast(const std::string &input, const std::string &output, const std::string &name) {
+  NodeProto node = MakeNode("Cast", {input}, {output}, "", name.c_str());
+  ONNX_LIGHT_NAMESPACE::AddAttribute(node, "to",
+                                     static_cast<int64_t>(TensorProto::DataType::INT32));
+  return node;
 }
 
 } // namespace
@@ -203,6 +245,79 @@ CDistFusionPattern::Apply(GraphGraph &graph, const std::vector<const NodeProto *
   return replacements;
 }
 
+std::set<std::string> GroupQueryAttentionFusionPattern::FastOpType() const { return {"Attention"}; }
+
+MatchResult GroupQueryAttentionFusionPattern::Match(GraphGraph &graph,
+                                                    const NodeProto &candidate) const {
+  if (!IsRank3GroupedAttention(graph, candidate)) {
+    return NoMatch(candidate, "candidate is not a rank-3 grouped ai.onnx::Attention");
+  }
+  return MatchResult{this, {&candidate}, nullptr};
+}
+
+ONNX_LIGHT_NAMESPACE::utils::RepeatedProtoField<NodeProto>
+GroupQueryAttentionFusionPattern::Apply(GraphGraph &graph,
+                                        const std::vector<const NodeProto *> &nodes) const {
+  if (nodes.size() != 1 || nodes[0] == nullptr || Match(graph, *nodes[0]).pattern == nullptr) {
+    throw BuilderError("GroupQueryAttentionFusionPattern::Apply received an invalid match.");
+  }
+  const NodeProto &attention = *nodes[0];
+  const std::string prefix = "GroupQueryAttentionFusion--" + attention.output(0);
+  const std::string key_shape = prefix + "-key-shape";
+  const std::string sequence_length = prefix + "-sequence-length";
+  const std::string batch_shape = prefix + "-batch-shape";
+  const std::string batch_size = prefix + "-batch-size";
+  const std::string one = prefix + "-one";
+  const std::string zero = prefix + "-zero";
+  const std::string axes = prefix + "-axes";
+  const std::string batch_dims = prefix + "-batch-dims";
+  const std::string seqlen_value = prefix + "-seqlen-value";
+  const std::string seqlen_value_int32 = prefix + "-seqlen-value-int32";
+  const std::string sequence_length_int32 = prefix + "-sequence-length-int32";
+  const std::string seqlens_k = prefix + "-seqlens-k";
+  ONNX_LIGHT_NAMESPACE::utils::RepeatedProtoField<NodeProto> replacements;
+  replacements.push_back(MakeInt64Constant(zero, 0));
+  replacements.push_back(MakeInt64Constant(one, 1));
+  replacements.push_back(MakeInt64Constant(axes, 0));
+  replacements.push_back(
+      MakeNode("Shape", {attention.input(1)}, {key_shape}, "", (prefix + "-ShapeKey").c_str()));
+  replacements.push_back(MakeNode("Gather", {key_shape, one}, {sequence_length}, "",
+                                  (prefix + "-GatherSequence").c_str()));
+  replacements.push_back(
+      MakeNode("Shape", {attention.input(0)}, {batch_shape}, "", (prefix + "-ShapeQuery").c_str()));
+  replacements.push_back(
+      MakeNode("Gather", {batch_shape, zero}, {batch_size}, "", (prefix + "-GatherBatch").c_str()));
+  replacements.push_back(MakeNode("Unsqueeze", {batch_size, axes}, {batch_dims}, "",
+                                  (prefix + "-UnsqueezeBatch").c_str()));
+  replacements.push_back(MakeNode("Sub", {sequence_length, one}, {seqlen_value}, "",
+                                  (prefix + "-SubtractOne").c_str()));
+  replacements.push_back(
+      MakeCast(seqlen_value, seqlen_value_int32, prefix + "-CastSequenceMinusOne"));
+  replacements.push_back(
+      MakeCast(sequence_length, sequence_length_int32, prefix + "-CastSequenceLength"));
+  replacements.push_back(MakeNode("Expand", {seqlen_value_int32, batch_dims}, {seqlens_k}, "",
+                                  (prefix + "-ExpandSequence").c_str()));
+  NodeProto gqa = MakeNode("GroupQueryAttention",
+                           {attention.input(0), attention.input(1), attention.input(2), "", "",
+                            seqlens_k, sequence_length_int32},
+                           {attention.output(0)}, kMicrosoftDomain, prefix.c_str());
+  ONNX_LIGHT_NAMESPACE::AddAttribute(gqa, "num_heads",
+                                     FindAttribute(attention, "q_num_heads")->i());
+  ONNX_LIGHT_NAMESPACE::AddAttribute(gqa, "kv_num_heads",
+                                     FindAttribute(attention, "kv_num_heads")->i());
+  ONNX_LIGHT_NAMESPACE::AddAttribute(gqa, "causal",
+                                     GetIntAttributeOrDefault(attention, "is_causal", 0));
+  if (const AttributeProto *scale = FindAttribute(attention, "scale"); scale != nullptr) {
+    ONNX_LIGHT_NAMESPACE::AddAttribute(gqa, "scale", scale->f());
+  }
+  if (const AttributeProto *softcap = FindAttribute(attention, "softcap"); softcap != nullptr) {
+    ONNX_LIGHT_NAMESPACE::AddAttribute(gqa, "softcap", softcap->f());
+  }
+  replacements.push_back(std::move(gqa));
+  graph.Builder().SetOpsetVersion(kMicrosoftDomain, 1);
+  return replacements;
+}
+
 void RegisterCustomOperatorPatterns() {
   static std::once_flag once;
   std::call_once(once, [] {
@@ -210,6 +325,9 @@ void RegisterCustomOperatorPatterns() {
                                 [] { return std::make_unique<BiasGeluFusionPattern>(); });
     builder_ns::RegisterPattern("MicrosoftCDist",
                                 [] { return std::make_unique<CDistFusionPattern>(); });
+    builder_ns::RegisterPattern("MicrosoftGroupQueryAttention", [] {
+      return std::make_unique<GroupQueryAttentionFusionPattern>();
+    });
   });
 }
 
