@@ -69,6 +69,8 @@ const std::array<std::string_view, 7> kBinaryShapeTags = {
     "inner_vector", "outer_broadcast", "general",
 };
 
+// TreeEnsemble's pre-existing v5 corpus names use the legacy "float" and
+// "double" type tags.
 const std::array<std::string_view, 21> kDataTypeNameTags = {
     "bool",   "float",  "float16", "bfloat16", "float32", "float64", "double",
     "int8",   "uint8",  "int16",   "uint16",   "int32",   "uint32",  "int64",
@@ -598,7 +600,7 @@ TEST(OnnxLightBackendKernels, AllCpuBackendCaseNamesContainDataTypeName) {
     const std::vector<TestCase> cases =
         CollectTestCases(/*op_type=*/"", /*include_big=*/false, mode);
     for (const TestCase &test_case : cases) {
-      if (test_case.name.rfind("test_cpu_", 0) == 0) {
+      if (test_case.name.starts_with("test_cpu_")) {
         EXPECT_TRUE(ContainsDataTypeName(test_case.name)) << test_case.name;
       }
     }
