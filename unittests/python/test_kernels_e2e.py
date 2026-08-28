@@ -75,6 +75,7 @@ _REGISTERED_KERNELS = {
     "Equal": "onnx_light_cpu::Equal",
     "Exp": "onnx_light_cpu::Exp",
     "Gemm": "onnx_light_cpu::Gemm",
+    "GroupQueryAttention": "onnx_light_cpu::GroupQueryAttention",
     "Greater": "onnx_light_cpu::Greater",
     "GreaterOrEqual": "onnx_light_cpu::GreaterOrEqual",
     "Less": "onnx_light_cpu::Less",
@@ -222,7 +223,7 @@ class TestBackendCases(TestCase):
                 record.op_type = "Other"  # type: ignore[misc]
             if record.op_type == "TreeEnsemble":
                 expected_domain = "ai.onnx.ml"
-            elif record.op_type in {"BiasGelu", "CDist"}:
+            elif record.op_type in {"BiasGelu", "CDist", "GroupQueryAttention"}:
                 expected_domain = "com.microsoft"
             else:
                 expected_domain = "ai.onnx"
