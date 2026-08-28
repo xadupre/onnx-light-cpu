@@ -444,7 +444,7 @@ TEST(OnnxLightBackendKernels, TreeEnsembleRunsThroughRuntime) {
 TEST(OnnxLightBackendKernels, TreeEnsembleBenchmarkRunsThroughRuntime) {
   const std::vector<std::string> failures =
       RunCpuBackendCases("TreeEnsemble", core::backend_test::TestMode::BENCHMARK,
-                         "test_cpu_treeensemble_t10_f4_b1_benchmark");
+                         "test_cpu_treeensemble_t10_f4_b1_float32_benchmark");
   EXPECT_TRUE(failures.empty()) << Describe(failures);
 }
 
@@ -459,11 +459,11 @@ TEST(OnnxLightBackendKernels, TreeEnsembleBenchmarkCoversPriorityDimensions) {
     }
   }
   EXPECT_EQ(names.size(), 5U);
-  EXPECT_TRUE(names.contains("test_cpu_treeensemble_t10_f4_b1_benchmark"));
-  EXPECT_TRUE(names.contains("test_cpu_treeensemble_t100_f64_b8_benchmark"));
-  EXPECT_TRUE(names.contains("test_cpu_treeensemble_t1000_f1024_b32_benchmark"));
-  EXPECT_TRUE(names.contains("test_cpu_treeensemble_t10000_f4096_b1_benchmark"));
-  EXPECT_TRUE(names.contains("test_cpu_treeensemble_t10000_f4096_b128_benchmark"));
+  EXPECT_TRUE(names.contains("test_cpu_treeensemble_t10_f4_b1_float32_benchmark"));
+  EXPECT_TRUE(names.contains("test_cpu_treeensemble_t100_f64_b8_float32_benchmark"));
+  EXPECT_TRUE(names.contains("test_cpu_treeensemble_t1000_f1024_b32_float32_benchmark"));
+  EXPECT_TRUE(names.contains("test_cpu_treeensemble_t10000_f4096_b1_float32_benchmark"));
+  EXPECT_TRUE(names.contains("test_cpu_treeensemble_t10000_f4096_b128_float32_benchmark"));
 }
 
 TEST(OnnxLightBackendKernels, AttentionBenchmarkCoversPriorityCorpus) {
