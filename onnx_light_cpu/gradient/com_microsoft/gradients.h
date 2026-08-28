@@ -21,13 +21,15 @@ namespace onnx_light_cpu {
  *
  * CDist gradient:
  * \verbatim
- * A --> [U1] --\
- *              [Sub] --> diff --\
- * B --> [U0] --/                +--> [Mul] --> weighted --+--> [ReduceSum(1)] --> dA
- * [metric gradient] --> [U2] --/                           \--> [ReduceSum(0)] --> [Neg] --> dB
- * A -----\ [CDist] --> C --\
- * B -----/                  +--> [metric gradient]
- * dC (output gradient) -----/
+ * Forward: A -----\ [CDist] --> C
+ *          B -----/
+ * Backward: A --> [Unsq(1)] --\
+ *                              [Sub] --> diff --\
+ *           B --> [Unsq(0)] --/                  [Mul] --> weighted --+--> [ReduceSum(1)] --> dA
+ * C -----------------\                            ^                 |
+ *                     [metric gradient] --> [Unsq(2)] --/
+ *                                                        \--> [ReduceSum(0)] --> [Neg] --> dB
+ * dC (output gradient) --/
  * \endverbatim
  */
 void RegisterCustomOperatorGradients(ONNX_LIGHT_NAMESPACE::core::gradient::GradRegistry &registry);
