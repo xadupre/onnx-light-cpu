@@ -14,6 +14,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -172,7 +173,10 @@ const char *DataTypeSuffix(onnx_light_cpu::DataType type) {
   if (type == onnx_light_cpu::DataType::FLOAT16) {
     return "float16";
   }
-  return "float32";
+  if (type == onnx_light_cpu::DataType::FLOAT) {
+    return "float32";
+  }
+  throw std::invalid_argument("unsupported TreeEnsemble value type");
 }
 
 void AddLegacyTree(NodeProto &node, const LegacyTreeAttributes &tree) {
