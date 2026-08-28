@@ -244,6 +244,7 @@ class TestBackendCases(TestCase):
                 "Equal",
                 "Greater",
                 "GreaterOrEqual",
+                "GroupQueryAttention",
                 "Less",
                 "LessOrEqual",
                 "Max",

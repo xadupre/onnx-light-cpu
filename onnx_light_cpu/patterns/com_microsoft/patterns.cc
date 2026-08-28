@@ -115,9 +115,14 @@ bool IsRank3GroupedAttention(GraphGraph &graph, const NodeProto &node) {
       graph.GetShape(node.input(2)).Shape().Rank() != 3) {
     return false;
   }
+  const auto &query_shape = graph.GetShape(node.input(0)).Shape();
+  const auto &key_shape = graph.GetShape(node.input(1)).Shape();
+  const auto &value_shape = graph.GetShape(node.input(2)).Shape();
   const AttributeProto *q_heads = FindAttribute(node, "q_num_heads");
   const AttributeProto *kv_heads = FindAttribute(node, "kv_num_heads");
-  return q_heads != nullptr && kv_heads != nullptr && q_heads->i() > 0 && kv_heads->i() > 0 &&
+  return query_shape[0] == key_shape[0] && key_shape[0] == value_shape[0] &&
+         query_shape[1] == key_shape[1] && key_shape[1] == value_shape[1] && q_heads != nullptr &&
+         kv_heads != nullptr && q_heads->i() > 0 && kv_heads->i() > 0 &&
          q_heads->i() != kv_heads->i() && q_heads->i() % kv_heads->i() == 0;
 }
 
@@ -257,7 +262,7 @@ GroupQueryAttentionFusionPattern::Apply(GraphGraph &graph,
     throw BuilderError("GroupQueryAttentionFusionPattern::Apply received an invalid match.");
   }
   const NodeProto &attention = *nodes[0];
-  const std::string prefix = "GroupQueryAttentionFusion--" + attention.name();
+  const std::string prefix = "GroupQueryAttentionFusion--" + attention.output(0);
   const std::string key_shape = prefix + "-key-shape";
   const std::string sequence_length = prefix + "-sequence-length";
   const std::string batch_shape = prefix + "-batch-shape";

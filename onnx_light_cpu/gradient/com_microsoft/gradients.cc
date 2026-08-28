@@ -190,10 +190,10 @@ bool GradGroupQueryAttention(const NodeProto &node, const std::string &output_gr
   const std::string value_heads =
       Reshape(func, counter, value, {0, 0, kv_num_heads, -1}, "reshape_value");
   const std::string group_repeats =
-      AddAxes(func, counter, "group_repeats", {1, 1, group_size, 1, 1});
+      AddAxes(func, counter, "group_repeats", {1, 1, 1, group_size, 1});
   const auto expand_heads = [&](const std::string &input, const char *prefix) {
     const std::string unsqueezed =
-        Unsqueeze(func, counter, input, 2, (std::string(prefix) + "_unsqueeze").c_str());
+        Unsqueeze(func, counter, input, 3, (std::string(prefix) + "_unsqueeze").c_str());
     const std::string tiled = Binary(func, counter, "Tile", unsqueezed, group_repeats,
                                      (std::string(prefix) + "_tile").c_str());
     return Transpose(func, counter,
