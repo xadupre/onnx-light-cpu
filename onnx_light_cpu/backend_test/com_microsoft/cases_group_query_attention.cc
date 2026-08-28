@@ -75,7 +75,7 @@ void RegisterCpuGroupQueryAttentionCases(std::vector<TestCase> &registry, TestMo
     return;
   }
   const OpsetId microsoft_opset(kMicrosoftDomain, 1);
-  Expect(registry, MakeGroupQueryAttentionNode(), "test_cpu_group_query_attention_gqa_causal",
+  Expect(registry, MakeGroupQueryAttentionNode(), "test_cpu_group_query_attention_float_gqa_causal",
          {DefaultOpset(23), microsoft_opset}, [=]() -> IoData {
            Tensor query = Tensor::FromFloat("", {2, 3, 32}, rt_ns::Randn<float>({2, 3, 32}, 41));
            Tensor key = Tensor::FromFloat("", {2, 3, 16}, rt_ns::Randn<float>({2, 3, 16}, 42));
