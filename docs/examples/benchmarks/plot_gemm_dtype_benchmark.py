@@ -3,8 +3,8 @@ Benchmark Gemm: float32 vs float16 vs bfloat16 across kernel code paths
 ========================================================================
 
 ``onnx-light-cpu``'s ``Gemm`` kernel picks between several internal code paths
-depending on the shape of ``A``/``B`` (see :doc:`../../design/gemm_kernel_design` for the
-full decision tree):
+depending on the shape of ``A``/``B`` (see
+:doc:`../../design/kernels/gemm_kernel_design` for the full decision tree):
 
 * a **single-tile** path when ``M``, ``N`` and ``K`` all fit in one
   ``kGemmTileM x kGemmTileN`` output tile and one ``kGemmTileK`` reduction

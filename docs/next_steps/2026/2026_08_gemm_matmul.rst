@@ -62,7 +62,7 @@ with standard ONNX tensors and semantics.
 The current implementation is a correctness-first, register-blocked kernel
 with AVX2/AVX-512 paths, K blocking, A/B packing, a task-aware M x N scheduler,
 batch scheduling, packed SIMD split-K, and typed broadcast/fused epilogues; see
-:doc:`the current design <../../design/gemm_kernel_design>`. Roadmap PR01 closed
+:doc:`the current design <../../design/kernels/gemm_kernel_design>`. Roadmap PR01 closed
 the scheduler under-utilization identified on multi-panel shapes, and Roadmap
 PR02 removed expanded bias temporaries. The FP32 investigation in
 `onnx-light-cpu #162
