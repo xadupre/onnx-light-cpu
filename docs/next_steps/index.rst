@@ -42,14 +42,25 @@ Started
       - Closes the remaining transformer down-projection GEMM gap, then reruns
         stable-affinity ``MatMulInteger`` AMX/VNNI parity and the complete
         chained-GEMM gate.
-    * - :doc:`Qwen3 inference <2026/2026_08_qwen3_inference>`
-      - Establishes a frozen end-to-end model benchmark, then builds the
-        canonical batch-1 QDQ INT4, shared GQA, and persistent-decode path.
     * - :doc:`Binary elementwise performance
         <2026/2026_08_binary_elementwise_performance>`
       - Completes low-precision and predicate bulk kernels, specializes
         priority broadcasts, calibrates scheduling, and closes the
         large-tensor parity gap.
+
+Planned
+-------
+
+.. list-table::
+    :header-rows: 1
+    :widths: 35 65
+    :class: sphinx-datatable
+
+    * - Plan
+      - Contribution
+    * - :doc:`Qwen3 inference <2026/2026_08_qwen3_inference>`
+      - Freezes the audited end-to-end model benchmark, then builds the
+        canonical batch-1 INT4, shared GQA, and persistent-decode path.
 
 Completed
 ---------
