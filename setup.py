@@ -2,6 +2,7 @@ import os
 import shlex
 import subprocess
 import sys
+from importlib.util import find_spec
 from pathlib import Path
 
 
@@ -67,17 +68,32 @@ def _onnx_light_cmake_dir():
     if not matches:
         raise FileNotFoundError(
             f"Could not find 'onnx_lightConfig.cmake' under {search_root}. Build "
-            "onnx-light locally (for example 'pip install --no-build-isolation "
-            "-e .' in the onnx-light checkout) before using --onnx-light."
+            "onnx-light locally before using --onnx-light."
         )
     return matches[0].parent
 
 
+def _onnx_light_from_pythonpath(header):
+    """Returns the first onnx-light package explicitly selected by PYTHONPATH."""
+    for entry in os.environ.get("PYTHONPATH", "").split(os.pathsep):
+        if not entry:
+            continue
+        package_dir = Path(entry).resolve() / "onnx_light"
+        if (package_dir / header).is_file():
+            return package_dir
+    return None
+
+
 def _onnx_light_source_build_info():
     """Returns paths for the C++ runtime built in the local onnx-light tree."""
+    import onnx_light
+
     header = Path("onnx_core/runtime/kernels/kernel_dispatch_table.h")
+    pythonpath_dir = _onnx_light_from_pythonpath(header)
     configured_source = os.environ.get("ONNX_LIGHT_CPU_ONNX_LIGHT_SOURCE_DIR")
-    if configured_source:
+    if pythonpath_dir is not None:
+        include_dir = pythonpath_dir
+    elif configured_source:
         configured_dir = Path(configured_source).resolve()
         include_dir = (
             configured_dir / "onnx_light"
@@ -94,8 +110,6 @@ def _onnx_light_source_build_info():
         if (sibling_dir / header).is_file():
             include_dir = sibling_dir
         else:
-            import onnx_light
-
             include_dir = Path(onnx_light.__file__).resolve().parent
 
     if not (include_dir / header).is_file():
@@ -104,24 +118,53 @@ def _onnx_light_source_build_info():
             "onnx-light from a sibling checkout, add it to PYTHONPATH, or set "
             "ONNX_LIGHT_CPU_ONNX_LIGHT_SOURCE_DIR before using --onnx-light-source."
         )
-    runtime_dir = include_dir / "onnx_py"
 
-    def find_runtime_library(name):
-        for pattern in (f"lib{name}.so", f"lib{name}.dylib", f"{name}.dll"):
-            matches = sorted(runtime_dir.glob(pattern))
-            if matches:
-                return str(matches[0].resolve())
-        raise FileNotFoundError(
-            f"Could not find the locally built {name} runtime under {runtime_dir}. "
-            "Run onnx-light's 'python setup.py build_ext --inplace' first."
+    if pythonpath_dir is not None:
+        imported_dir = Path(onnx_light.__file__).resolve().parent
+        if imported_dir != include_dir:
+            raise RuntimeError(
+                f"PYTHONPATH selects onnx-light from {include_dir}, but Python imported "
+                f"it from {imported_dir}."
+            )
+        extension_spec = find_spec("onnx_light.onnx_py._onnxpyprotoop")
+        extension_path = (
+            Path(extension_spec.origin).resolve()
+            if extension_spec is not None and extension_spec.origin is not None
+            else None
         )
+        runtime_dir = include_dir / "onnx_py"
+        if extension_path is None or extension_path.parent != runtime_dir:
+            raise RuntimeError(
+                f"PYTHONPATH selects onnx-light from {include_dir}, but its native "
+                f"extension resolves to {extension_path}. Remove the conflicting "
+                "onnx-light installation; mixing runtimes is not supported."
+            )
 
-    info = {
-        "include_dir": str(include_dir),
-        "library_dir": str(runtime_dir),
-        "core_library": find_runtime_library("lib_onnx_core"),
-        "proto_library": find_runtime_library("lib_onnx_proto"),
-    }
+        def find_runtime_library(name):
+            for pattern in (f"lib{name}.so", f"lib{name}.dylib", f"{name}.dll"):
+                matches = sorted(runtime_dir.glob(pattern))
+                if matches:
+                    return str(matches[0].resolve())
+            raise FileNotFoundError(
+                f"Could not find {name} next to the PYTHONPATH runtime in {runtime_dir}."
+            )
+
+        info = {
+            "include_dir": str(include_dir),
+            "library_dir": str(runtime_dir),
+            "core_library": find_runtime_library("lib_onnx_core"),
+            "proto_library": find_runtime_library("lib_onnx_proto"),
+        }
+    else:
+        info = dict(onnx_light.get_cpp_build_info())
+        info["include_dir"] = str(include_dir)
+
+    for key in ("core_library", "proto_library"):
+        if key not in info or not Path(info[key]).is_file():
+            raise FileNotFoundError(
+                f"onnx-light did not report a usable {key!r}. Build and install "
+                "onnx-light before using --onnx-light-source."
+            )
     import_library_dir = os.environ.get("ONNX_LIGHT_CPU_ONNX_LIGHT_IMPLIB_DIR")
     if import_library_dir:
         root = Path(import_library_dir)
@@ -201,11 +244,10 @@ try:
     from setuptools import Command, Distribution, setup
 except ModuleNotFoundError:
 
-    def _spawn(command, dry_run):
-        """Prints and executes a command unless dry-run mode is enabled."""
+    def _spawn(command):
+        """Prints and executes a command."""
         print(" ".join(shlex.quote(cmd_part) for cmd_part in command))
-        if not dry_run:
-            subprocess.run(command, check=True)
+        subprocess.run(command, check=True)
 
     def _run_build_ext_without_packaging(args):
         """Executes build_ext without setuptools or distutils support."""
@@ -216,7 +258,6 @@ except ModuleNotFoundError:
         cpp_tests = False
         onnx_light = False
         onnx_light_source = False
-        dry_run = False
         build_temp = "build/temp"
         build_lib = "build/lib"
         parallel = None
@@ -232,8 +273,6 @@ except ModuleNotFoundError:
                 onnx_light = True
             elif arg == "--onnx-light-source":
                 onnx_light_source = True
-            elif arg in {"--dry-run", "-n"}:
-                dry_run = True
             elif arg.startswith("--build-temp="):
                 build_temp = arg.split("=", 1)[1]
             elif arg.startswith("--build-lib="):
@@ -278,28 +317,9 @@ except ModuleNotFoundError:
         if cpp_tests:
             cmake_args = _set_cmake_define(cmake_args, "ONNX_LIGHT_CPU_BUILD_TESTS", "ON")
         if onnx_light:
-            if dry_run:
-                cmake_args = _set_cmake_define(cmake_args, "ONNX_LIGHT_CPU_WITH_ONNX_LIGHT", "ON")
-            else:
-                cmake_args = _add_onnx_light_defines(cmake_args)
+            cmake_args = _add_onnx_light_defines(cmake_args)
         if onnx_light_source:
-            if dry_run:
-                cmake_args = _add_onnx_light_source_defines(
-                    cmake_args,
-                    {
-                        "include_dir": "/onnx-light/include",
-                        "core_library": "/onnx-light/lib/lib_onnx_core",
-                        "proto_library": "/onnx-light/lib/lib_onnx_proto",
-                        "core_import_library": "/onnx-light/lib/lib_onnx_core.lib",
-                        "proto_import_library": "/onnx-light/lib/lib_onnx_proto.lib",
-                        "kernels_import_library": "/onnx-light/lib/lib_onnx_kernels.lib",
-                        "backend_test_import_library": (
-                            "/onnx-light/lib/lib_onnx_backend_test.lib"
-                        ),
-                    },
-                )
-            else:
-                cmake_args = _add_onnx_light_source_defines(cmake_args)
+            cmake_args = _add_onnx_light_source_defines(cmake_args)
         _spawn(
             [
                 "cmake",
@@ -309,13 +329,12 @@ except ModuleNotFoundError:
                 str(build_temp_path),
                 f"-DPython_EXECUTABLE={sys.executable}",
                 *cmake_args,
-            ],
-            dry_run,
+            ]
         )
         build_cmd = ["cmake", "--build", str(build_temp_path), "--config", "Release"]
         if parallel is not None:
             build_cmd += ["--parallel", str(parallel)]
-        _spawn(build_cmd, dry_run)
+        _spawn(build_cmd)
         _spawn(
             [
                 "cmake",
@@ -325,11 +344,10 @@ except ModuleNotFoundError:
                 "Release",
                 "--prefix",
                 str(install_prefix),
-            ],
-            dry_run,
+            ]
         )
         if cpp_tests:
-            _spawn(_ctest_command(build_temp_path), dry_run)
+            _spawn(_ctest_command(build_temp_path))
         return True
 
     if _run_build_ext_without_packaging(sys.argv[1:]):
@@ -371,18 +389,12 @@ class BuildExt(Command):
             ),
         ),
         ("parallel=", "j", "number of parallel build jobs"),
-        (
-            "dry-run",
-            "n",
-            "print the cmake/ctest commands without executing them",
-        ),
     ]
     boolean_options = [
         "inplace",
         "cpp-tests",
         "onnx-light",
         "onnx-light-source",
-        "dry-run",
     ]
 
     def initialize_options(self):
@@ -394,11 +406,6 @@ class BuildExt(Command):
         self.onnx_light = False
         self.onnx_light_source = False
         self.parallel = _default_parallel_jobs()
-        # Newer setuptools/distutils no longer expose a global --dry-run
-        # option (nor does Command.spawn() honor one), so --dry-run/-n is
-        # declared as a plain option of this command instead and handled
-        # explicitly in run() via _spawn_or_print().
-        self.dry_run = False
 
     def finalize_options(self):
         """Finalizes build directory paths for unspecified options."""
@@ -409,15 +416,9 @@ class BuildExt(Command):
             self.build_lib = os.path.join(build_base, "lib")
 
     def _spawn(self, cmd):
-        """Prints a command and executes it unless --dry-run was requested.
-
-        Command.spawn() delegates to distutils' own dry-run handling, which
-        newer setuptools/distutils versions no longer wire up to a global
-        --dry-run flag, so --dry-run is handled directly here instead.
-        """
+        """Prints and executes a command."""
         print(" ".join(shlex.quote(str(part)) for part in cmd))
-        if not self.dry_run:
-            subprocess.run(cmd, check=True)
+        subprocess.run(cmd, check=True)
 
     def run(self):
         """Runs CMake configure, build, and install commands."""
@@ -431,28 +432,9 @@ class BuildExt(Command):
         if self.cpp_tests:
             cmake_args = _set_cmake_define(cmake_args, "ONNX_LIGHT_CPU_BUILD_TESTS", "ON")
         if self.onnx_light:
-            if self.dry_run:
-                cmake_args = _set_cmake_define(cmake_args, "ONNX_LIGHT_CPU_WITH_ONNX_LIGHT", "ON")
-            else:
-                cmake_args = _add_onnx_light_defines(cmake_args)
+            cmake_args = _add_onnx_light_defines(cmake_args)
         if self.onnx_light_source:
-            if self.dry_run:
-                cmake_args = _add_onnx_light_source_defines(
-                    cmake_args,
-                    {
-                        "include_dir": "/onnx-light/include",
-                        "core_library": "/onnx-light/lib/lib_onnx_core",
-                        "proto_library": "/onnx-light/lib/lib_onnx_proto",
-                        "core_import_library": "/onnx-light/lib/lib_onnx_core.lib",
-                        "proto_import_library": "/onnx-light/lib/lib_onnx_proto.lib",
-                        "kernels_import_library": "/onnx-light/lib/lib_onnx_kernels.lib",
-                        "backend_test_import_library": (
-                            "/onnx-light/lib/lib_onnx_backend_test.lib"
-                        ),
-                    },
-                )
-            else:
-                cmake_args = _add_onnx_light_source_defines(cmake_args)
+            cmake_args = _add_onnx_light_source_defines(cmake_args)
 
         self._spawn(
             [
