@@ -230,6 +230,30 @@ TEST(CustomOperatorSupport, InfersGroupQueryAttentionShape) {
   EXPECT_EQ(ctx.Get("Y").Shape(), ctx.Get("Q").Shape());
 }
 
+TEST(CustomOperatorSupport, InfersGroupQueryAttentionSymbolicPresentCacheShape) {
+  shapes_ns::ShapesContext ctx;
+  ctx.Set("Q", SymTensor(nullptr, TensorType::kFloat, {SymDim("B"), SymDim("S"), SymDim(32)}));
+  ctx.Set("K", SymTensor(nullptr, TensorType::kFloat, {SymDim("BK"), SymDim("SK"), SymDim(16)}));
+  ctx.Set("V", SymTensor(nullptr, TensorType::kFloat, {SymDim("BV"), SymDim("SV"), SymDim(16)}));
+  ctx.Set("past_key", SymTensor(nullptr, TensorType::kFloat,
+                                {SymDim("BP"), SymDim(2), SymDim("P"), SymDim(8)}));
+  ctx.Set("past_value", SymTensor(nullptr, TensorType::kFloat,
+                                  {SymDim("BPV"), SymDim(2), SymDim("PV"), SymDim(8)}));
+
+  NodeProto node = MakeGroupQueryAttentionNode();
+  node.ref_input()[3] = "past_key";
+  node.ref_input()[4] = "past_value";
+  node.add_output("present_key");
+  node.add_output("present_value");
+  onnx_light_cpu::ComputeShapeGroupQueryAttention(ctx, node);
+
+  EXPECT_EQ(ctx.Get("Y").Shape(), sym_ns::SymShape({SymDim("B"), SymDim("S"), SymDim(32)}));
+  EXPECT_EQ(ctx.Get("present_key").Shape(),
+            sym_ns::SymShape({SymDim("B"), SymDim(2), SymDim("(SK)+(P)"), SymDim(8)}));
+  EXPECT_EQ(ctx.Get("present_value").Shape(), ctx.Get("present_key").Shape());
+  EXPECT_GE(ctx.Constraints().size(), 7U);
+}
+
 TEST(CustomOperatorSupport, RegistersShapeMemoryGradientAndPatternHooks) {
   onnx_light_cpu::RegisterMicrosoftShapeAndMemoryFunctions();
   EXPECT_NE(shapes_ns::DispatchTable().find("com.microsoft:CDist"),
