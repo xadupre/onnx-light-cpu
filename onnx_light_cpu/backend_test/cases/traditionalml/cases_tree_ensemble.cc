@@ -165,6 +165,16 @@ Tensor MakeTypedTensor(const std::vector<double> &values, const std::vector<std:
   return Tensor::FromFloat("", shape, floats);
 }
 
+const char *DataTypeSuffix(onnx_light_cpu::DataType type) {
+  if (type == onnx_light_cpu::DataType::DOUBLE) {
+    return "float64";
+  }
+  if (type == onnx_light_cpu::DataType::FLOAT16) {
+    return "float16";
+  }
+  return "float32";
+}
+
 void AddLegacyTree(NodeProto &node, const LegacyTreeAttributes &tree) {
   AddInts(node, "nodes_treeids", tree.nodes_treeids);
   AddInts(node, "nodes_nodeids", tree.nodes_nodeids);
@@ -346,7 +356,8 @@ void RegisterCpuTreeEnsembleCases(std::vector<TestCase> &registry, TestMode mode
   }
   for (TreeEnsembleCorpusCase test_case : GenerateTreeEnsembleV5Corpus()) {
     NodeProto node = MakeTreeEnsembleNode(test_case.attributes);
-    const std::string name = "test_cpu_treeensemble_v5_" + test_case.name;
+    const std::string name = "test_cpu_treeensemble_v5_" + test_case.name + "_" +
+                             DataTypeSuffix(test_case.attributes.value_type);
     Expect(registry, std::move(node), name, {DefaultOpset(13), ml_opset},
            [test_case = std::move(test_case)]() mutable -> IoData {
              const std::vector<std::int64_t> input_shape = {
