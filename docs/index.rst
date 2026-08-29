@@ -79,6 +79,50 @@ accelerated implementations.
       The native integration is built with
       ``-DONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON``.
 
+      To override an operator for one C++ runtime context only, register its
+      callback on that context before the session's first ``Run``:
+
+      .. code-block:: cpp
+
+         #include <onnx_core/runtime/kernels/kernel_context.h>
+         #include <onnx_core/runtime/memory/simple_tensor.h>
+         #include <onnx_core/runtime/runtime_context.h>
+         #include <onnx_core/runtime/runtime_session.h>
+
+         #include <cstddef>
+         #include <cstdint>
+         #include <cmath>
+         #include <stdexcept>
+         #include <vector>
+
+         namespace rt = ONNX_LIGHT_NAMESPACE::core::runtime;
+
+         void RegisterAbsForSession(rt::RuntimeContext &context) {
+           context.RegisterCustomKernel(
+               "", "Abs", [](const ONNX_LIGHT_NAMESPACE::NodeProto &node,
+                              rt::RuntimeContext &context) {
+                 const rt::Tensor &input = context.Get(node.input(0));
+                 if (input.data_type != static_cast<int32_t>(rt::DataType::FLOAT)) {
+                   throw std::invalid_argument("This example Abs kernel requires FLOAT input.");
+                 }
+                 std::vector<float> output(static_cast<size_t>(input.element_count()));
+                 for (size_t i = 0; i < output.size(); ++i) {
+                   output[i] = std::fabs(input.AsFloat()[i]);
+                 }
+                 context.Set(node.output(0),
+                             rt::Tensor::FromFloat(node.output(0), input.shape, output));
+               });
+         }
+
+         rt::RuntimeContext context(rt::KernelContext(rt::DefaultOpset(18)));
+         RegisterAbsForSession(context);
+         rt::RuntimeSession session(context.GetExecutionPlan(graph));
+         session.Run(context);
+
+      ``RuntimeSession`` caches resolved kernels on its first run, so register
+      the callback before then. Other contexts continue to use their existing
+      ``Abs`` implementation.
+
 Both entry points update the same shared C++ ``KernelDispatchTable``. See
 :doc:`design/registering_kernels` for per-session overrides, kernel-usage
 inspection, custom registrations, and troubleshooting when two builds link
