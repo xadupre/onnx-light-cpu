@@ -436,7 +436,8 @@ fig_lat.savefig("plot_processor_performance_latency.png")
 # load**. Unlike the bandwidth figure, **lower is better** here.
 #
 # The measurement is a pointer chase. Before timing, the working set is
-# arranged as a randomized single-cycle permutation of pointers; the timed loop
+# arranged as a random cyclic permutation of pointers -- one chain visiting
+# every element exactly once before closing on itself; the timed loop
 # then follows that chain, so the address of load *n+1* is the value returned
 # by load *n*. Neither the out-of-order engine nor the hardware prefetcher can
 # overlap the accesses or guess the next address, which is why the result is a
@@ -575,7 +576,8 @@ plt.show()
 # The marker sits at ``arithmetic_intensity_crossover``, where the two ceilings
 # meet. Left of it a kernel is **memory bound** -- the fix is fewer bytes
 # (blocking, fusion, a smaller element type), not faster arithmetic. Right of
-# it it is **compute bound** -- the fix is better vectorization or more cores.
+# it, a kernel is **compute bound** -- the fix is better vectorization or more
+# cores.
 #
 # Both ceilings come from the measurements taken in this run, not from
 # published hardware peaks, so a kernel plotted against these curves is
