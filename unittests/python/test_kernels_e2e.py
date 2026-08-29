@@ -528,6 +528,29 @@ class TestBackendCases(TestCase):
         assert benchmark_ops
         assert benchmark_ops <= set(_REGISTERED_KERNELS)
 
+    def test_benchmark_expected_outputs_are_opt_in(self):
+        kwargs = {
+            "mode": TestMode.BENCHMARK,
+        }
+        input_only = collect_test_cases_by_name("^test_cpu_not_", **kwargs)
+        requested = collect_test_cases_by_name(
+            "^test_cpu_not_", generate_benchmark_expected_outputs=True, **kwargs
+        )
+        assert input_only
+        assert len(input_only) == len(requested)
+        for case in input_only:
+            assert not case.has_expected_outputs
+            assert all(
+                not data_set.expected_outputs_generated and not data_set.outputs
+                for data_set in case.data_sets
+            )
+        for case in requested:
+            assert case.has_expected_outputs
+            assert all(
+                data_set.expected_outputs_generated and data_set.outputs
+                for data_set in case.data_sets
+            )
+
     def test_group_query_attention_backend_case_matrix(self):
         supported_types = {
             int(TensorProto.FLOAT),

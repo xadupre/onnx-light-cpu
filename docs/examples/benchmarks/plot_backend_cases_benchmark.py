@@ -191,7 +191,11 @@ def _collect_cases():
         10 if os.environ.get("UNITTEST_GOING", "0") in ("1", "true", "True") else args.max_cases
     )
     cases_by_group = {}
-    for tc in collect_test_cases_by_name("^test_cpu_.*_benchmark$", mode=TestMode.BENCHMARK):
+    for tc in collect_test_cases_by_name(
+        "^test_cpu_.*_benchmark$",
+        mode=TestMode.BENCHMARK,
+        generate_benchmark_expected_outputs=False,
+    ):
         if _name_filter is not None and not _name_filter.search(tc.name):
             continue
         cases_by_group.setdefault(_case_group_key(tc.name), []).append(tc)

@@ -340,19 +340,28 @@ void RegisterCpuTreeEnsembleCases(std::vector<TestCase> &registry, TestMode mode
                                std::to_string(spec.features) + "_b" + std::to_string(spec.rows) +
                                "_float32_benchmark";
       Expect(registry, std::move(node), name, {DefaultOpset(13), ml_opset},
-             [attributes = std::move(attributes), spec]() mutable -> IoData {
+             {static_cast<std::int64_t>(spec.rows) * spec.features},
+             {static_cast<std::int64_t>(spec.rows)},
+             [attributes = std::move(attributes),
+              spec](bool generate_expected_outputs) mutable -> IoData {
                std::vector<double> values(spec.rows * static_cast<std::size_t>(spec.features));
                for (std::size_t index = 0; index < values.size(); ++index) {
                  values[index] = static_cast<double>(static_cast<int>(index % 17) - 8) * 0.25;
                }
-               TreeEnsembleOracle oracle(attributes);
-               std::vector<double> expected = oracle.Evaluate(values, spec.rows);
                Tensor input = Tensor::FromFloat(
                    "", {static_cast<std::int64_t>(spec.rows), spec.features}, ToFloat(values));
+               if (!generate_expected_outputs) {
+                 return IoData{{std::move(input)}, {}, {}, false};
+               }
+               TreeEnsembleOracle oracle(attributes);
+               std::vector<double> expected = oracle.Evaluate(values, spec.rows);
                Tensor output = Tensor::FromFloat("", {static_cast<std::int64_t>(spec.rows), 1},
                                                  ToFloat(expected));
                return IoData{{std::move(input)}, {std::move(output)}};
-             });
+             },
+             "backend-test", "",
+             {bt_ns::TensorTypeSpec(static_cast<std::int32_t>(DataType::FLOAT),
+                                    {static_cast<std::int64_t>(spec.rows), 1})});
     }
     return;
   }

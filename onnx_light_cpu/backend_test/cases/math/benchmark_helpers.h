@@ -101,10 +101,10 @@ inline rt_ns::Tensor MakeBenchmarkTensor(rt_ns::DataType data_type, const rt_ns:
   }
 }
 
-template <typename Kernel>
+template <typename KernelFactory>
 void RegisterUnaryBenchmark(
     std::vector<ONNX_LIGHT_NAMESPACE::core::backend_test::TestCase> &registry,
-    const std::string &op_type, const Kernel &kernel, const rt_ns::OpsetId &opset,
+    const std::string &op_type, KernelFactory kernel_factory, const rt_ns::OpsetId &opset,
     rt_ns::DataType data_type, std::int64_t size) {
   namespace bt_ns = ONNX_LIGHT_NAMESPACE::core::backend_test;
   ONNX_LIGHT_NAMESPACE::NodeProto node;
@@ -119,13 +119,17 @@ void RegisterUnaryBenchmark(
   }
   const std::string name = "test_cpu_" + op_tag + "_n" + std::to_string(size) + "_" +
                            DataTypeSuffix(data_type) + "_benchmark";
-  bt_ns::Expect(registry, std::move(node), name, {opset}, {size}, {size},
-                [kernel, op_type, data_type, size]() -> bt_ns::IoData {
-                  rt_ns::Tensor x =
-                      MakeBenchmarkTensor(data_type, {size}, 987654321ULL, op_type == "Log");
-                  rt_ns::Tensor y = kernel(x);
-                  return bt_ns::IoData{{std::move(x)}, {std::move(y)}};
-                });
+  bt_ns::Expect(
+      registry, std::move(node), name, {opset}, {size}, {size},
+      [kernel_factory, op_type, data_type, size](bool generate_expected_outputs) -> bt_ns::IoData {
+        rt_ns::Tensor x = MakeBenchmarkTensor(data_type, {size}, 987654321ULL, op_type == "Log");
+        if (!generate_expected_outputs) {
+          return bt_ns::IoData{{std::move(x)}, {}, {}, false};
+        }
+        rt_ns::Tensor y = kernel_factory()(x);
+        return bt_ns::IoData{{std::move(x)}, {std::move(y)}};
+      },
+      "backend-test", "", {bt_ns::TensorTypeSpec(static_cast<std::int32_t>(data_type), {size})});
 }
 
 } // namespace onnx_light_cpu::backend_test

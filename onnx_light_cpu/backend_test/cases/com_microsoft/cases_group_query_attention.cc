@@ -205,7 +205,7 @@ void RegisterQwen3GroupQueryAttentionBenchmarkCase(std::vector<TestCase> &regist
        kBatch, 1, kMaxPosition * kHalfHeadDim, kMaxPosition * kHalfHeadDim},
       {kBatch * sequence * query_width, kBatch * kKvNumHeads * total_length * kHeadDim,
        kBatch * kKvNumHeads * total_length * kHeadDim},
-      [=]() -> IoData {
+      [=](bool generate_expected_outputs) -> IoData {
         Tensor query =
             MakeBenchmarkTensor(DataType::FLOAT, {kBatch, sequence, query_width}, 987654321ULL);
         Tensor key =
@@ -225,6 +225,15 @@ void RegisterQwen3GroupQueryAttentionBenchmarkCase(std::vector<TestCase> &regist
         Tensor sin_cache =
             MakeBenchmarkTensor(DataType::FLOAT, {kMaxPosition, kHalfHeadDim}, 444444444ULL);
 
+        if (!generate_expected_outputs) {
+          return IoData{{std::move(query), std::move(key), std::move(value), std::move(past_key),
+                         std::move(past_value), std::move(seqlens_k),
+                         std::move(total_sequence_length), std::move(cos_cache),
+                         std::move(sin_cache)},
+                        {},
+                        {},
+                        false};
+        }
         const GroupQueryAttentionKernel kernel{node, KernelContext{OpsetId(kMicrosoftDomain, 1)}};
         Tensor present_key;
         Tensor present_value;
@@ -237,7 +246,14 @@ void RegisterQwen3GroupQueryAttentionBenchmarkCase(std::vector<TestCase> &regist
                        std::move(total_sequence_length), std::move(cos_cache),
                        std::move(sin_cache)},
                       {std::move(output), std::move(present_key), std::move(present_value)}};
-      });
+      },
+      "backend-test", "",
+      {bt_ns::TensorTypeSpec(static_cast<std::int32_t>(DataType::FLOAT),
+                             {kBatch, sequence, query_width}),
+       bt_ns::TensorTypeSpec(static_cast<std::int32_t>(DataType::FLOAT),
+                             {kBatch, kKvNumHeads, total_length, kHeadDim}),
+       bt_ns::TensorTypeSpec(static_cast<std::int32_t>(DataType::FLOAT),
+                             {kBatch, kKvNumHeads, total_length, kHeadDim})});
 }
 
 // Registers a positive correctness case for the exact cached/rotary contract.

@@ -77,14 +77,30 @@ void RegisterRmsNormalizationCase(std::vector<TestCase> &registry, const OpsetId
   const std::int64_t x_count = ElementCount(shape.input_shape);
   const std::int64_t scale_count = ElementCount(shape.scale_shape);
   const NodeProto node = MakeRmsNormalizationNode(shape.axis);
-  Expect(registry, node, name, {opset}, {x_count, scale_count}, {x_count},
-         [shape, data_type]() -> IoData {
-           const RmsNormalizationKernel kernel{KernelContext{DefaultOpset(23)}};
-           Tensor x = MakeBenchmarkTensor(data_type, shape.input_shape, shape.seed);
-           Tensor scale = MakeBenchmarkTensor(data_type, shape.scale_shape, shape.seed + 1);
-           Tensor y = kernel(x, scale, shape.axis, 1.0e-6f, 1);
-           return IoData{{std::move(x), std::move(scale)}, {std::move(y)}};
-         });
+  if (benchmark) {
+    Expect(registry, node, name, {opset}, {x_count, scale_count}, {x_count},
+           [shape, data_type](bool generate_expected_outputs) -> IoData {
+             Tensor x = MakeBenchmarkTensor(data_type, shape.input_shape, shape.seed);
+             Tensor scale = MakeBenchmarkTensor(data_type, shape.scale_shape, shape.seed + 1);
+             if (!generate_expected_outputs) {
+               return IoData{{std::move(x), std::move(scale)}, {}, {}, false};
+             }
+             const RmsNormalizationKernel kernel{KernelContext{DefaultOpset(23)}};
+             Tensor y = kernel(x, scale, shape.axis, 1.0e-6f, 1);
+             return IoData{{std::move(x), std::move(scale)}, {std::move(y)}};
+           },
+           "backend-test", "",
+           {bt_ns::TensorTypeSpec(static_cast<std::int32_t>(data_type), shape.input_shape)});
+  } else {
+    Expect(registry, node, name, {opset}, {x_count, scale_count}, {x_count},
+           [shape, data_type]() -> IoData {
+             const RmsNormalizationKernel kernel{KernelContext{DefaultOpset(23)}};
+             Tensor x = MakeBenchmarkTensor(data_type, shape.input_shape, shape.seed);
+             Tensor scale = MakeBenchmarkTensor(data_type, shape.scale_shape, shape.seed + 1);
+             Tensor y = kernel(x, scale, shape.axis, 1.0e-6f, 1);
+             return IoData{{std::move(x), std::move(scale)}, {std::move(y)}};
+           });
+  }
   if (data_type == DataType::FLOAT16 || data_type == DataType::BFLOAT16) {
     registry.back().rtol = 2.0e-2;
     registry.back().atol = 2.0e-2;

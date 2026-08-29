@@ -58,8 +58,6 @@ NodeProto MakeCDistNode(const std::string &metric) {
 // metrics (the implicit "sqeuclidean" default and explicit "euclidean").
 void RegisterCpuCDistCases(std::vector<TestCase> &registry, TestMode mode) {
   const OpsetId microsoft_opset(kMicrosoftDomain, 1);
-  const CDistKernel kernel{KernelContext{microsoft_opset}};
-
   if (mode == TestMode::BENCHMARK) {
     struct Shape {
       std::int64_t m;
@@ -73,18 +71,26 @@ void RegisterCpuCDistCases(std::vector<TestCase> &registry, TestMode mode) {
                                    std::to_string(shape.k) + "_n" + std::to_string(shape.n) + "_" +
                                    metric + "_" + DataTypeSuffix(data_type) + "_benchmark";
           Expect(registry, MakeCDistNode(metric), name, {DefaultOpset(13), microsoft_opset},
-                 {shape.m * shape.n, shape.k * shape.n}, {shape.m * shape.k}, [=]() -> IoData {
+                 {shape.m * shape.n, shape.k * shape.n}, {shape.m * shape.k},
+                 [=](bool generate_expected_outputs) -> IoData {
                    Tensor a = MakeBenchmarkTensor(data_type, {shape.m, shape.n}, 987654321ULL);
                    Tensor b = MakeBenchmarkTensor(data_type, {shape.k, shape.n}, 246813579ULL);
+                   if (!generate_expected_outputs) {
+                     return IoData{{std::move(a), std::move(b)}, {}, {}, false};
+                   }
+                   const CDistKernel kernel{KernelContext{microsoft_opset}};
                    Tensor c = kernel(a, b, metric);
                    return IoData{{std::move(a), std::move(b)}, {std::move(c)}};
-                 });
+                 },
+                 "backend-test", "",
+                 {bt_ns::TensorTypeSpec(static_cast<std::int32_t>(data_type), {shape.m, shape.k})});
         }
       }
     }
     return;
   }
 
+  const CDistKernel kernel{KernelContext{microsoft_opset}};
   // Default metric ("sqeuclidean" applies when the attribute is omitted).
   Expect(registry, MakeCDistNode(""), "test_cpu_cdist_default_metric_float32",
          {DefaultOpset(13), microsoft_opset}, [=]() -> IoData {

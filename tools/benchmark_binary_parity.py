@@ -309,7 +309,9 @@ def _collect_cases(patterns: Sequence[str]) -> list[Any]:
 
     register_backend_test_cases()
     cases = []
-    for test_case in collect_test_cases_by_name("^test_cpu_", mode=TestMode.BENCHMARK):
+    for test_case in collect_test_cases_by_name(
+        "^test_cpu_", mode=TestMode.BENCHMARK, generate_benchmark_expected_outputs=False
+    ):
         if "_benchmark" not in test_case.name or "_swapped_" in test_case.name:
             continue
         try:
