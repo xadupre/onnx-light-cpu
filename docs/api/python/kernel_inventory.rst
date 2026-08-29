@@ -4,7 +4,9 @@ Kernel inventory and usage
 .. py:function:: registered_kernel_names() -> dict[str, str]
 
    Returns a ``{op_type: kernel name}`` mapping for accelerated registered
-   kernels.
+   kernels, for example ``{"Abs": "onnx_light_cpu::Abs"}``. Use it to confirm
+   that accelerated rather than built-in kernels are registered. The mapping is
+   derived from :func:`registered_kernels` rather than a separate operator list.
 
 .. py:class:: RegisteredKernel
 

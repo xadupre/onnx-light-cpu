@@ -11,6 +11,7 @@ Python API
 .. py:function:: detect_simd_level() -> SimdLevel
 
    Returns the highest SIMD instruction-set level available to this process.
+   The result remains compatible with integer comparisons.
 
 .. py:function:: has_cpu_kernels() -> bool
 

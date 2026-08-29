@@ -4,8 +4,11 @@ Registering kernels
 .. py:function:: register_kernels(sess=None)
 
    Registers onnx-light-cpu kernels in onnx-light's shared C++
-   ``KernelDispatchTable`` for the CPU device. The registration is global;
-   ``sess`` is optional and returned unchanged so calls can be chained.
+   ``KernelDispatchTable`` for the CPU device. It installs the ``Abs``, ``Exp``,
+   ``Log``, ``Gemm``, and ``Not`` kernels, plus the ``com.microsoft`` ``CDist``
+   and ``BiasGelu`` kernels, their symbolic shape and peak-memory functions,
+   and their fusion patterns. The registration is global; ``sess`` is optional
+   and returned unchanged so calls can be chained.
 
    .. code-block:: python
 
