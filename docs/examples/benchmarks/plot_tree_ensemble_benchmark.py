@@ -22,7 +22,7 @@ import statistics
 import time
 
 import matplotlib.pyplot as plt
-from matplotlib.colors import LogNorm, TwoSlopeNorm
+from matplotlib.colors import LinearSegmentedColormap, LogNorm, TwoSlopeNorm
 import numpy as np
 import onnxruntime
 
@@ -258,6 +258,20 @@ speedup_norm = TwoSlopeNorm(
     vcenter=1.0,
     vmax=max(1.5, float(all_speedups.max())),
 )
+speedup_cmap = LinearSegmentedColormap.from_list(
+    "slower_neutral_faster", ["#b2182b", "#f7f7f7", "#1b7837"]
+)
+
+
+def speedup_annotation_color(speedup):
+    red, green, blue, _ = speedup_cmap(speedup_norm(speedup))
+    red, green, blue = (
+        channel / 12.92 if channel <= 0.04045 else ((channel + 0.055) / 1.055) ** 2.4
+        for channel in (red, green, blue)
+    )
+    luminance = 0.2126 * red + 0.7152 * green + 0.0722 * blue
+    return "black" if luminance > 0.5 else "white"
+
 
 fig, axes = plt.subplots(
     len(tree_counts),
@@ -271,7 +285,7 @@ for row, trees in enumerate(tree_counts):
         timings[trees], aspect="auto", cmap="viridis", norm=timing_norm
     )
     speedup_image = axes[row, 1].imshow(
-        speedups[trees], aspect="auto", cmap="coolwarm", norm=speedup_norm
+        speedups[trees], aspect="auto", cmap=speedup_cmap, norm=speedup_norm
     )
     for row_index in range(len(batch_sizes)):
         for feature_index in range(len(feature_counts)):
@@ -289,7 +303,7 @@ for row, trees in enumerate(tree_counts):
                 f"{speedups[trees][row_index, feature_index]:.2f}x",
                 ha="center",
                 va="center",
-                color="black",
+                color=speedup_annotation_color(speedups[trees][row_index, feature_index]),
             )
     axes[row, 0].set_title(f"{trees:,} trees — CPU median time")
     axes[row, 1].set_title(f"{trees:,} trees — speedup")
@@ -300,7 +314,11 @@ for axis in axes.flat:
     axis.set_xlabel("number of features")
     axis.set_ylabel("batch size")
 fig.colorbar(timing_image, ax=axes[:, 0], label="onnx-light CPU median time (us)")
-fig.colorbar(speedup_image, ax=axes[:, 1], label="speedup over ONNX Runtime")
+fig.colorbar(
+    speedup_image,
+    ax=axes[:, 1],
+    label="speedup versus ONNX Runtime (red: slower, green: faster)",
+)
 fig.suptitle("TreeEnsemble: depth 4, float32, one output")
 fig.savefig("plot_tree_ensemble_benchmark.png")
 plt.show()
