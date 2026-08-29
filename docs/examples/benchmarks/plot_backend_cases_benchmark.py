@@ -131,6 +131,46 @@ def _to_numpy(tensor):
     return np.frombuffer(tensor.raw_data(), dtype=dtype).reshape(shape)
 
 
+_CASE_GROUP_SUFFIXES = (
+    "bfloat16",
+    "float16",
+    "float32",
+    "float64",
+    "int8",
+    "int16",
+    "int32",
+    "int64",
+    "uint8",
+    "uint16",
+    "uint32",
+    "uint64",
+    "bool",
+    "benchmark",
+)
+
+
+def _case_group_key(name):
+    """Derives a cheap, name-only grouping key used to spread ``--max-cases``
+    truncation across operators.
+
+    This must not touch ``tc.model``: building the ONNX model (and the
+    tensors it references) for every collected case -- rather than only for
+    the small subset that ``--max-cases`` keeps -- can exhaust memory on CI
+    runners once the backend test corpus grows. The real ``op_type`` for
+    each *selected* case is still derived from its model later, once, when
+    it is actually measured.
+    """
+    stem = name
+    if stem.startswith("test_cpu_"):
+        stem = stem[len("test_cpu_") :]
+    tokens = stem.split("_")
+    while tokens and (
+        tokens[-1] in _CASE_GROUP_SUFFIXES or re.fullmatch(r"[a-z]?\d+", tokens[-1])
+    ):
+        tokens.pop()
+    return "_".join(tokens) or stem
+
+
 def _collect_cases():
     """Registers and collects every "test_cpu_*_benchmark" backend test case.
 
@@ -150,20 +190,19 @@ def _collect_cases():
     max_cases = (
         10 if os.environ.get("UNITTEST_GOING", "0") in ("1", "true", "True") else args.max_cases
     )
-    cases_by_op_type = {}
+    cases_by_group = {}
     for tc in collect_test_cases_by_name("^test_cpu_.*_benchmark$", mode=TestMode.BENCHMARK):
         if _name_filter is not None and not _name_filter.search(tc.name):
             continue
-        op_type = tc.model.graph.node[0].op_type
-        cases_by_op_type.setdefault(op_type, []).append(tc)
+        cases_by_group.setdefault(_case_group_key(tc.name), []).append(tc)
     if not max_cases:
-        return [tc for group in cases_by_op_type.values() for tc in group]
+        return [tc for group in cases_by_group.values() for tc in group]
     cases = []
-    while len(cases) < max_cases and any(cases_by_op_type.values()):
-        for op_type in list(cases_by_op_type):
-            group = cases_by_op_type[op_type]
+    while len(cases) < max_cases and any(cases_by_group.values()):
+        for group_key in list(cases_by_group):
+            group = cases_by_group[group_key]
             if not group:
-                del cases_by_op_type[op_type]
+                del cases_by_group[group_key]
                 continue
             cases.append(group.pop(0))
             if len(cases) >= max_cases:
