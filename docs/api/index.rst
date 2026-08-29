@@ -4,71 +4,13 @@ API
 C++ API
 -------
 
-The public C++ API is declared throughout ``onnx_light_cpu/impl`` and
-``onnx_light_cpu/kernels``. The shared SIMD
-dispatch primitives (``SimdLevel`` and ``DetectSimdLevel``) live in the
-``onnx_light_cpu/impl/simd_level.h`` header, which both kernel families
-include. Every kernel dispatches at runtime to the best available SIMD path.
+The public C++ API is declared in ``onnx_light_cpu/kernels``. Every kernel
+dispatches at runtime to the best available SIMD path; the dispatch
+implementation is private.
 
 The signatures below are extracted from the header comments by Doxygen (see
 ``docs/Doxyfile``) and rendered through the Breathe extension, so they always
 reflect the current state of the project.
-
-.. doxygenenum:: onnx_light_cpu::SimdLevel
-   :project: onnx_light_cpu
-
-.. doxygenfunction:: onnx_light_cpu::DetectSimdLevel
-   :project: onnx_light_cpu
-
-.. doxygenfunction:: onnx_light_cpu::AbsFloat32
-   :project: onnx_light_cpu
-
-.. doxygenfunction:: onnx_light_cpu::AbsFloat64
-   :project: onnx_light_cpu
-
-.. doxygenfunction:: onnx_light_cpu::AbsFloat16
-   :project: onnx_light_cpu
-
-.. doxygenfunction:: onnx_light_cpu::AbsInt8
-   :project: onnx_light_cpu
-
-.. doxygenfunction:: onnx_light_cpu::AbsInt32
-   :project: onnx_light_cpu
-
-.. doxygenfunction:: onnx_light_cpu::AbsInt64
-   :project: onnx_light_cpu
-
-.. doxygenfunction:: onnx_light_cpu::ExpFloat32
-   :project: onnx_light_cpu
-
-.. doxygenfunction:: onnx_light_cpu::ExpFloat64
-   :project: onnx_light_cpu
-
-.. doxygenfunction:: onnx_light_cpu::ExpFloat16
-   :project: onnx_light_cpu
-
-.. doxygenfunction:: onnx_light_cpu::LogFloat32
-   :project: onnx_light_cpu
-
-.. doxygenfunction:: onnx_light_cpu::LogFloat64
-   :project: onnx_light_cpu
-
-.. doxygenfunction:: onnx_light_cpu::LogFloat16
-   :project: onnx_light_cpu
-
-.. doxygenfunction:: onnx_light_cpu::GemmFloat32
-   :project: onnx_light_cpu
-
-.. doxygenfunction:: onnx_light_cpu::GemmFloat64
-   :project: onnx_light_cpu
-
-The ``onnx_light_cpu/impl/logical/logical_kernels.h`` header declares the
-logical family, currently the elementwise logical negation used by the ``Not``
-operator (ONNX ``bool`` tensors are stored one byte per element, so the buffers
-are the raw ``uint8_t`` byte patterns):
-
-.. doxygenfunction:: onnx_light_cpu::NotBool
-   :project: onnx_light_cpu
 
 Execution ownership
 ~~~~~~~~~~~~~~~~~~~

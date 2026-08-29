@@ -4,11 +4,11 @@
 
 #pragma once
 
-#include "onnx_light_cpu/impl/math/math_kernels.h"
-
 #include "onnx_core/runtime/kernels/kernel_context.h"
 #include "onnx_core/runtime/memory/simple_tensor.h"
 #include "onnx_core/runtime/runtime_context.h"
+
+#include <memory>
 
 #ifndef ONNX_LIGHT_NAMESPACE
 #define ONNX_LIGHT_NAMESPACE onnx_light
@@ -22,10 +22,9 @@ namespace onnx_light_cpu {
 /// :cpp:class:`onnx_light::core::runtime::KernelBase` so it plugs into the
 /// runtime exactly like a built-in kernel: the dispatch table constructs it
 /// once per node and calls :cpp:func:`Run` on every execution. The computation
-/// is delegated to the SIMD ``ExpFloat*`` routines declared in
-/// ``onnx_light_cpu/impl/math/math_kernels.h`` (runtime AVX2/SSE2 dispatch) for
-/// ``float32``/``float64`` directly; ``float16`` and ``bfloat16`` use vector
-/// conversion blocks around the same float32 approximation.
+/// uses private SIMD dispatch for ``float32``/``float64`` directly;
+/// ``float16`` and ``bfloat16`` use vector conversion blocks around the same
+/// float32 approximation.
 class ExpKernel : public ONNX_LIGHT_NAMESPACE::core::runtime::KernelBase {
 public:
   using ONNX_LIGHT_NAMESPACE::core::runtime::KernelBase::KernelBase;
@@ -33,6 +32,7 @@ public:
 
   ExpKernel(const ONNX_LIGHT_NAMESPACE::NodeProto &node,
             const ONNX_LIGHT_NAMESPACE::core::runtime::KernelContext &ctx);
+  ~ExpKernel() override;
 
   static void RegisterTuningSchemas();
   ONNX_LIGHT_NAMESPACE::core::runtime::KernelTuningKey
@@ -61,15 +61,16 @@ public:
                   ONNX_LIGHT_NAMESPACE::core::runtime::Tensor &output) const;
 
 private:
-  UnaryExecutionTuning tuning_ = kDefaultExpLogExecutionTuning;
+  struct Tuning;
+  std::shared_ptr<Tuning> tuning_;
   bool tuning_configured_ = false;
 };
 
 /// SIMD-accelerated onnx-light kernel for the ONNX ``Log`` operator.
 ///
-/// ``LogKernel`` mirrors :cpp:class:`ExpKernel`, delegating to the SIMD
-/// ``LogFloat*`` routines for ``float32``/``float64``, a scalar exact FP16
-/// path, and vector conversion blocks for ``bfloat16``.
+/// ``LogKernel`` mirrors :cpp:class:`ExpKernel`, using private SIMD dispatch
+/// for ``float32``/``float64``, a scalar exact FP16 path, and vector
+/// conversion blocks for ``bfloat16``.
 class LogKernel : public ONNX_LIGHT_NAMESPACE::core::runtime::KernelBase {
 public:
   using ONNX_LIGHT_NAMESPACE::core::runtime::KernelBase::KernelBase;
@@ -77,6 +78,7 @@ public:
 
   LogKernel(const ONNX_LIGHT_NAMESPACE::NodeProto &node,
             const ONNX_LIGHT_NAMESPACE::core::runtime::KernelContext &ctx);
+  ~LogKernel() override;
 
   static void RegisterTuningSchemas();
   ONNX_LIGHT_NAMESPACE::core::runtime::KernelTuningKey
@@ -105,7 +107,8 @@ public:
                   ONNX_LIGHT_NAMESPACE::core::runtime::Tensor &output) const;
 
 private:
-  UnaryExecutionTuning tuning_ = kDefaultExpLogExecutionTuning;
+  struct Tuning;
+  std::shared_ptr<Tuning> tuning_;
   bool tuning_configured_ = false;
 };
 

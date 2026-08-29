@@ -114,9 +114,15 @@ rt_ns::KernelTuningParameters MakeTuningDefaults(int32_t element_type) {
 
 } // namespace
 
+struct AbsKernel::Tuning {
+  UnaryExecutionTuning value;
+};
+
 AbsKernel::AbsKernel(const NodeProto &node, const rt_ns::KernelContext &ctx) : KernelBase(ctx) {
   set_node(node);
 }
+
+AbsKernel::~AbsKernel() = default;
 
 void AbsKernel::RegisterTuningSchemas() {
   static std::once_flag once;
@@ -138,14 +144,14 @@ void AbsKernel::Configure(const rt_ns::KernelTuningParameters &parameters) {
     throw std::invalid_argument("Abs tuning parameters have an incompatible key.");
   }
   ValidateTuning(parameters);
-  tuning_ = {
+  tuning_ = std::make_shared<Tuning>(Tuning{{
       static_cast<std::size_t>(parameters.Get<int64_t>(kParallelThresholdBytes)),
       static_cast<std::size_t>(parameters.Get<int64_t>(kTargetBlockBytes)),
       static_cast<std::size_t>(parameters.Get<int64_t>(kMaxParticipants)),
       parameters.Get<int64_t>(kCostModel) != 0,
       static_cast<std::size_t>(parameters.Get<int64_t>(kPreferredParticipants)),
       static_cast<std::size_t>(parameters.Get<int64_t>(kStreamingStoreThresholdBytes)),
-  };
+  }});
   tuning_configured_ = true;
 }
 
@@ -168,7 +174,8 @@ void AbsKernel::operator()(const Tensor &x, Tensor &output) const {
     throw std::invalid_argument("onnx_light_cpu::AbsKernel: output buffer size mismatch.");
   }
   const std::int64_t n = x.element_count();
-  const UnaryExecutionTuning &tuning = tuning_configured_ ? tuning_ : DefaultTuning(x.data_type);
+  const UnaryExecutionTuning &tuning =
+      tuning_configured_ ? tuning_->value : DefaultTuning(x.data_type);
   switch (static_cast<DataType>(x.data_type)) {
   case DataType::FLOAT:
     AbsFloat32WithTuning(x.AsFloat(), output.AsFloat(), static_cast<std::size_t>(n), tuning);
