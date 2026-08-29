@@ -1271,8 +1271,6 @@ TEST(OnnxLightBackendKernels, GemmBigBenchmarkCorpusCovers8192And16384OnEveryAxi
   EXPECT_TRUE(has_bfloat16);
 }
 
-} // namespace
-
 TEST(OnnxLightBackendKernels, BenchmarksOmitExpectedOutputsByDefault) {
   onnx_light_cpu::backend_test::RegisterCpuKernelBackendTestCases();
   const std::vector<TestCase> cases =
@@ -1301,43 +1299,45 @@ TEST(OnnxLightBackendKernels, BenchmarksGenerateExpectedOutputsWhenRequested) {
       EXPECT_FALSE(test_case.data_sets()[0].outputs.empty()) << test_case.name;
     }
   }
-
-  TEST(OnnxLightBackendKernels, BenchmarkOutputCallbackRunsOnlyWhenRequested) {
-    int input_only_output_calls = 0;
-    TestCase input_only("input_only");
-    input_only.build = [&input_only_output_calls](bool generate_expected_outputs) {
-      core::backend_test::BuiltCase built;
-      if (generate_expected_outputs) {
-        ++input_only_output_calls;
-      }
-      built.data_sets.push_back(
-          DataSet{{Tensor::FromBool("x", {1}, {1})}, {}, generate_expected_outputs});
-      return built;
-    };
-    input_only.set_expected_outputs_generated(false);
-    EXPECT_FALSE(input_only.data_sets()[0].expected_outputs_generated);
-    EXPECT_TRUE(input_only.data_sets()[0].outputs.empty());
-    EXPECT_EQ(input_only_output_calls, 0);
-    EXPECT_EQ(input_only.data_sets().size(), 1u);
-    EXPECT_EQ(input_only_output_calls, 0);
-
-    int requested_output_calls = 0;
-    TestCase requested("requested");
-    requested.build = [&requested_output_calls](bool generate_expected_outputs) {
-      core::backend_test::BuiltCase built;
-      std::vector<Tensor> outputs;
-      if (generate_expected_outputs) {
-        ++requested_output_calls;
-        outputs.emplace_back(Tensor::FromBool("y", {1}, {1}));
-      }
-      built.data_sets.push_back(DataSet{
-          {Tensor::FromBool("x", {1}, {1})}, std::move(outputs), generate_expected_outputs});
-      return built;
-    };
-    EXPECT_TRUE(requested.data_sets()[0].expected_outputs_generated);
-    EXPECT_EQ(requested.data_sets()[0].outputs.size(), 1u);
-    EXPECT_EQ(requested_output_calls, 1);
-    EXPECT_EQ(requested.data_sets().size(), 1u);
-    EXPECT_EQ(requested_output_calls, 1);
-  }
 }
+
+TEST(OnnxLightBackendKernels, BenchmarkOutputCallbackRunsOnlyWhenRequested) {
+  int input_only_output_calls = 0;
+  TestCase input_only("input_only");
+  input_only.build = [&input_only_output_calls](bool generate_expected_outputs) {
+    core::backend_test::BuiltCase built;
+    if (generate_expected_outputs) {
+      ++input_only_output_calls;
+    }
+    built.data_sets.push_back(
+        DataSet{{Tensor::FromBool("x", {1}, {1})}, {}, generate_expected_outputs});
+    return built;
+  };
+  input_only.set_expected_outputs_generated(false);
+  EXPECT_FALSE(input_only.data_sets()[0].expected_outputs_generated);
+  EXPECT_TRUE(input_only.data_sets()[0].outputs.empty());
+  EXPECT_EQ(input_only_output_calls, 0);
+  EXPECT_EQ(input_only.data_sets().size(), 1u);
+  EXPECT_EQ(input_only_output_calls, 0);
+
+  int requested_output_calls = 0;
+  TestCase requested("requested");
+  requested.build = [&requested_output_calls](bool generate_expected_outputs) {
+    core::backend_test::BuiltCase built;
+    std::vector<Tensor> outputs;
+    if (generate_expected_outputs) {
+      ++requested_output_calls;
+      outputs.emplace_back(Tensor::FromBool("y", {1}, {1}));
+    }
+    built.data_sets.push_back(
+        DataSet{{Tensor::FromBool("x", {1}, {1})}, std::move(outputs), generate_expected_outputs});
+    return built;
+  };
+  EXPECT_TRUE(requested.data_sets()[0].expected_outputs_generated);
+  EXPECT_EQ(requested.data_sets()[0].outputs.size(), 1u);
+  EXPECT_EQ(requested_output_calls, 1);
+  EXPECT_EQ(requested.data_sets().size(), 1u);
+  EXPECT_EQ(requested_output_calls, 1);
+}
+
+} // namespace

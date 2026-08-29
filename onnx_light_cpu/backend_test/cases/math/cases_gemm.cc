@@ -135,12 +135,10 @@ const char *GemmBiasSuffix(BiasShape bias_shape) {
   return "none";
 }
 
-void RegisterGemmBenchmark(std::vector<TestCase> &registry,
-                           const std::shared_ptr<onnx_light_cpu::GemmKernel> &kernel,
-                           const OpsetId &opset, const std::string &base_name, DataType dtype,
-                           int64_t m, int64_t n, int64_t k, bool trans_a = false,
-                           bool trans_b = false, BiasShape bias_shape = BiasShape::kNone) {
-  (void)kernel;
+void RegisterGemmBenchmark(std::vector<TestCase> &registry, const OpsetId &opset,
+                           const std::string &base_name, DataType dtype, int64_t m, int64_t n,
+                           int64_t k, bool trans_a = false, bool trans_b = false,
+                           BiasShape bias_shape = BiasShape::kNone) {
   const std::string name = base_name + "_" + GemmDtypeSuffix(dtype) + "_transA_" +
                            (trans_a ? "1" : "0") + "_transB_" + (trans_b ? "1" : "0") + "_bias_" +
                            GemmBiasSuffix(bias_shape) + "_benchmark";
@@ -283,72 +281,56 @@ void RegisterCpuGemmCases(std::vector<TestCase> &registry, TestMode mode) {
     // the onnxruntime comparison.
     for (const DataType dtype :
          {DataType::FLOAT, DataType::DOUBLE, DataType::FLOAT16, DataType::BFLOAT16}) {
-      RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_direct", dtype, 32, 128,
-                            16);
-      RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_direct_k32", dtype, 64,
-                            256, 32);
-      RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_tiny_dynamic", dtype, 1,
-                            64, 64);
-      RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_square_128", dtype, 128,
-                            128, 128);
-      RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_square_256", dtype, 256,
-                            256, 256);
-      RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_square_512", dtype, 512,
-                            512, 512);
-      RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_square_1024", dtype, 1024,
-                            1024, 1024);
+      RegisterGemmBenchmark(registry, opset, "test_cpu_gemm_direct", dtype, 32, 128, 16);
+      RegisterGemmBenchmark(registry, opset, "test_cpu_gemm_direct_k32", dtype, 64, 256, 32);
+      RegisterGemmBenchmark(registry, opset, "test_cpu_gemm_tiny_dynamic", dtype, 1, 64, 64);
+      RegisterGemmBenchmark(registry, opset, "test_cpu_gemm_square_128", dtype, 128, 128, 128);
+      RegisterGemmBenchmark(registry, opset, "test_cpu_gemm_square_256", dtype, 256, 256, 256);
+      RegisterGemmBenchmark(registry, opset, "test_cpu_gemm_square_512", dtype, 512, 512, 512);
+      RegisterGemmBenchmark(registry, opset, "test_cpu_gemm_square_1024", dtype, 1024, 1024, 1024);
       if (dtype != DataType::FLOAT16) {
-        RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_square_2048", dtype,
-                              2048, 2048, 2048);
-        RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_square_4096", dtype,
-                              4096, 4096, 4096);
+        RegisterGemmBenchmark(registry, opset, "test_cpu_gemm_square_2048", dtype, 2048, 2048,
+                              2048);
+        RegisterGemmBenchmark(registry, opset, "test_cpu_gemm_square_4096", dtype, 4096, 4096,
+                              4096);
       }
-      RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_square_256", dtype, 256,
-                            256, 256, false, false, BiasShape::kScalar);
-      RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_square_256", dtype, 256,
-                            256, 256, false, false, BiasShape::kRow);
-      RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_square_256", dtype, 256,
-                            256, 256, false, false, BiasShape::kColumn);
-      RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_square_256", dtype, 256,
-                            256, 256, false, false, BiasShape::kMatrix);
-      RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_skinny_m", dtype, 1, 1024,
-                            1024);
-      RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_skinny_m_small", dtype, 1,
-                            256, 256);
-      RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_skinny_n", dtype, 1024, 1,
-                            1024);
-      RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_skinny_n_small", dtype,
-                            256, 1, 256);
-      RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_large_k", dtype, 32, 32,
-                            4096);
-      RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_large_k_1024", dtype, 32,
-                            32, 1024);
-      RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_large_k_16384", dtype, 32,
-                            32, 16384);
-      RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_split_k", dtype, 2, 2,
-                            4096);
-      RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_split_k_16384", dtype, 2,
-                            2, 16384);
-      RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_big_m8192_n128_k128",
-                            dtype, 8192, 128, 128);
-      RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_big_m128_n8192_k128",
-                            dtype, 128, 8192, 128);
-      RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_big_m128_n128_k8192",
-                            dtype, 128, 128, 8192);
-      RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_big_m16384_n128_k128",
-                            dtype, 16384, 128, 128);
-      RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_big_m128_n16384_k128",
-                            dtype, 128, 16384, 128);
-      RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_big_m128_n128_k16384",
-                            dtype, 128, 128, 16384);
-      RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_square_128", dtype, 128,
-                            128, 128, true);
-      RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_square_128", dtype, 128,
-                            128, 128, false, true);
-      RegisterGemmBenchmark(registry, gemm_kernel, opset, "test_cpu_gemm_transformer_projection",
-                            dtype, 128, 3072, 768);
-      RegisterGemmBenchmark(registry, gemm_kernel, opset,
-                            "test_cpu_gemm_transformer_projection_decode", dtype, 1, 3072, 768);
+      RegisterGemmBenchmark(registry, opset, "test_cpu_gemm_square_256", dtype, 256, 256, 256,
+                            false, false, BiasShape::kScalar);
+      RegisterGemmBenchmark(registry, opset, "test_cpu_gemm_square_256", dtype, 256, 256, 256,
+                            false, false, BiasShape::kRow);
+      RegisterGemmBenchmark(registry, opset, "test_cpu_gemm_square_256", dtype, 256, 256, 256,
+                            false, false, BiasShape::kColumn);
+      RegisterGemmBenchmark(registry, opset, "test_cpu_gemm_square_256", dtype, 256, 256, 256,
+                            false, false, BiasShape::kMatrix);
+      RegisterGemmBenchmark(registry, opset, "test_cpu_gemm_skinny_m", dtype, 1, 1024, 1024);
+      RegisterGemmBenchmark(registry, opset, "test_cpu_gemm_skinny_m_small", dtype, 1, 256, 256);
+      RegisterGemmBenchmark(registry, opset, "test_cpu_gemm_skinny_n", dtype, 1024, 1, 1024);
+      RegisterGemmBenchmark(registry, opset, "test_cpu_gemm_skinny_n_small", dtype, 256, 1, 256);
+      RegisterGemmBenchmark(registry, opset, "test_cpu_gemm_large_k", dtype, 32, 32, 4096);
+      RegisterGemmBenchmark(registry, opset, "test_cpu_gemm_large_k_1024", dtype, 32, 32, 1024);
+      RegisterGemmBenchmark(registry, opset, "test_cpu_gemm_large_k_16384", dtype, 32, 32, 16384);
+      RegisterGemmBenchmark(registry, opset, "test_cpu_gemm_split_k", dtype, 2, 2, 4096);
+      RegisterGemmBenchmark(registry, opset, "test_cpu_gemm_split_k_16384", dtype, 2, 2, 16384);
+      RegisterGemmBenchmark(registry, opset, "test_cpu_gemm_big_m8192_n128_k128", dtype, 8192, 128,
+                            128);
+      RegisterGemmBenchmark(registry, opset, "test_cpu_gemm_big_m128_n8192_k128", dtype, 128, 8192,
+                            128);
+      RegisterGemmBenchmark(registry, opset, "test_cpu_gemm_big_m128_n128_k8192", dtype, 128, 128,
+                            8192);
+      RegisterGemmBenchmark(registry, opset, "test_cpu_gemm_big_m16384_n128_k128", dtype, 16384,
+                            128, 128);
+      RegisterGemmBenchmark(registry, opset, "test_cpu_gemm_big_m128_n16384_k128", dtype, 128,
+                            16384, 128);
+      RegisterGemmBenchmark(registry, opset, "test_cpu_gemm_big_m128_n128_k16384", dtype, 128, 128,
+                            16384);
+      RegisterGemmBenchmark(registry, opset, "test_cpu_gemm_square_128", dtype, 128, 128, 128,
+                            true);
+      RegisterGemmBenchmark(registry, opset, "test_cpu_gemm_square_128", dtype, 128, 128, 128,
+                            false, true);
+      RegisterGemmBenchmark(registry, opset, "test_cpu_gemm_transformer_projection", dtype, 128,
+                            3072, 768);
+      RegisterGemmBenchmark(registry, opset, "test_cpu_gemm_transformer_projection_decode", dtype,
+                            1, 3072, 768);
     }
     return;
   }
