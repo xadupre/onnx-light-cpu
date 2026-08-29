@@ -225,6 +225,36 @@ fig_hierarchy.tight_layout()
 fig_hierarchy.savefig("plot_processor_performance_hierarchy.png")
 
 # %%
+# How to read this figure
+# ^^^^^^^^^^^^^^^^^^^^^^^
+#
+# One group of bars per memory level (``L1``, ``L2``, ``L3``, ``RAM``), on a
+# logarithmic byte scale. The two bars measure different things and are *not*
+# two estimates of the same quantity:
+#
+# * **detected cache** (left bar) is the capacity of the cache instance
+#   reported by the CPU topology for that level (``cache.size_bytes``). Its
+#   annotation adds the sharing scope read from ``sharing_thread_count``:
+#   either private to one logical processor, or shared by *N* logical
+#   processors. It is a hardware property, not something measured here.
+# * **measured working set** (right bar) is the amount of data *one benchmark
+#   participant* deliberately walks during the measurement
+#   (``working_set_bytes``). It is a benchmark input size chosen so the traffic
+#   lands in the intended level, not a second estimate of the cache capacity.
+#
+# "Per participant" matters because each worker owns disjoint storage: with the
+# ``physical`` policy, the total footprint is this working set multiplied by
+# the number of participants.
+#
+# The two values differ on purpose. For ``L1``/``L2``/``L3`` the working set is
+# chosen comfortably *below* the detected capacity so the data stays resident
+# in that level once warmed (leaving room for the other data structures and for
+# a cache shared with sibling threads). For ``RAM`` the working set is chosen
+# *above* the last-level cache so the traffic really reaches memory; RAM has no
+# detected capacity, so only the working-set bar is drawn. A missing left bar
+# therefore means "no cache descriptor at this level", never "capacity zero".
+
+# %%
 # Compact measurement table
 # -------------------------
 #
@@ -294,6 +324,34 @@ fig.tight_layout()
 fig.savefig("plot_processor_performance_bandwidth.png")
 
 # %%
+# How to read this figure
+# ^^^^^^^^^^^^^^^^^^^^^^^
+#
+# One panel per thread policy, one group of bars per memory level, three series
+# per group:
+#
+# * **read** streams the working set with loads only;
+# * **write** streams it with cached stores only;
+# * **copy** streams one source *and* one destination, so it touches twice as
+#   many bytes per element as read or write.
+#
+# The vertical axis is **effective GB/s**: useful bytes divided by the elapsed
+# wall-clock time of the timed region, then the median over the recorded
+# samples (``median_gbps``). "Effective" means it is what this host actually
+# delivered for that access pattern, including any hardware prefetching and
+# coherence traffic -- it is not a datasheet peak, and it can legitimately be
+# lower than a theoretical bus rate. Higher is better.
+#
+# The two panels are not comparable one-to-one. The ``single`` panel is the
+# throughput of a single worker (pinned when affinity is available). The
+# ``physical`` panel is **aggregate** throughput summed over one worker per
+# process-visible physical core, each on its own disjoint buffer; it typically
+# scales with core count in the private caches (``L1``, ``L2``) and flattens in
+# ``L3``/``RAM`` where the resource is shared. A zero-height bar means that
+# traffic mode was unavailable for that level/policy; ``profile.warnings``
+# printed above says why.
+
+# %%
 # Plot 3: aggregate read bandwidth scaling by core count
 # -------------------------------------------------------
 #
@@ -321,6 +379,28 @@ fig_scaling.tight_layout()
 fig_scaling.savefig("plot_processor_performance_bandwidth_scaling.png")
 
 # %%
+# How to read this figure
+# ^^^^^^^^^^^^^^^^^^^^^^^
+#
+# One curve per cache level, taken from ``entry.read_scaling`` of the
+# ``physical`` policy. The horizontal axis (log base 2) is the number of
+# concurrent participants, i.e. physical cores actually running the read
+# stream, from one up to the process-visible physical core count; the vertical
+# axis is the **aggregate** effective read bandwidth of all those participants
+# combined, each on its own disjoint working set of the size shown in the first
+# figure.
+#
+# Read the *shape*, not only the endpoint. A curve that keeps following a
+# straight line of slope one on this log axis means the level scales: each
+# added core contributes roughly the same bandwidth, so the resource is
+# private. A curve that bends and flattens marks **saturation**: past that
+# participant count the shared resource (a shared last-level cache, the ring or
+# mesh interconnect, the memory controllers) is the limit, and adding cores
+# buys nothing. The knee is the practical parallelism budget for a kernel whose
+# traffic lives at that level. A missing curve means no scaling series was
+# recorded for that level.
+
+# %%
 # Plot 4: dependent-load latency by memory level
 # ------------------------------------------------
 #
@@ -346,6 +426,31 @@ ax_lat.set_title("dependent-load latency by memory level")
 ax_lat.legend(fontsize=8)
 fig_lat.tight_layout()
 fig_lat.savefig("plot_processor_performance_latency.png")
+
+# %%
+# How to read this figure
+# ^^^^^^^^^^^^^^^^^^^^^^^
+#
+# One group of bars per memory level, one bar per thread policy. The value is
+# ``latency.median_ns_per_load``: the median **nanoseconds spent per dependent
+# load**. Unlike the bandwidth figure, **lower is better** here.
+#
+# The measurement is a pointer chase. Before timing, the working set is
+# arranged as a random cyclic permutation of pointers -- one chain visiting
+# every element exactly once before closing on itself; the timed loop
+# then follows that chain, so the address of load *n+1* is the value returned
+# by load *n*. Neither the out-of-order engine nor the hardware prefetcher can
+# overlap the accesses or guess the next address, which is why the result is a
+# **serialized** latency -- the full time to resolve one access at that level
+# -- and not a throughput divided by a queue depth.
+#
+# Values grow with the level (a few nanoseconds in ``L1``, tens of nanoseconds
+# in ``RAM``), and the jumps between groups show where each level of the
+# hierarchy starts. Comparing the two policies shows contention: ``physical``
+# runs one independent chain per core, so a value visibly above the ``single``
+# one means concurrent traffic is slowing individual accesses down. A
+# zero-height bar means no latency measurement was available for that
+# level/policy.
 
 # %%
 # Plot 5: arithmetic throughput by element type and thread policy
@@ -377,6 +482,33 @@ ax_compute.set_title("register-resident arithmetic throughput")
 ax_compute.legend(fontsize=8)
 fig_compute.tight_layout()
 fig_compute.savefig("plot_processor_performance_compute.png")
+
+# %%
+# How to read this figure
+# ^^^^^^^^^^^^^^^^^^^^^^^
+#
+# One group of bars per element type actually available on this host (the keys
+# of ``profile.compute``, e.g. ``float32``, ``float64``, and the reduced
+# precisions when supported), one bar per thread policy. The table printed
+# above names, for each element type, the ``implementation_name`` -- the kernel
+# variant the dispatcher selected, which is what makes wider vector types look
+# faster.
+#
+# The vertical axis is **effective GOP/s**: the number of arithmetic operations
+# issued divided by the elapsed wall-clock time, median over the recorded
+# samples (``median_gops``). Higher is better. The counting convention is the
+# usual one: a fused multiply-add counts as **two** operations (one multiply,
+# one add), so an FMA-based kernel reports twice the operation count of a
+# plain-add kernel doing the same number of instructions.
+#
+# The kernel keeps independent operands and accumulators in registers, so the
+# figure isolates arithmetic capability from memory traffic: it is a compute
+# ceiling for this host, again measured rather than derived from a clock
+# frequency times a vector width. ``single`` is one worker; ``physical`` is the
+# **aggregate** over one worker per physical core, so it is expected to be
+# several times higher, and the ratio between the two bars shows how well
+# arithmetic scales before shared front-end or power limits kick in. A missing
+# bar means that element type was not measured for that policy.
 
 # %%
 # Plot 6: Roofline
@@ -419,6 +551,38 @@ fig_roof.tight_layout()
 fig_roof.savefig("plot_processor_performance_roofline.png")
 
 plt.show()
+
+# %%
+# How to read this figure
+# ^^^^^^^^^^^^^^^^^^^^^^^
+#
+# Both axes are logarithmic. The horizontal axis is **arithmetic intensity**:
+# how many arithmetic operations a kernel performs per byte it moves from the
+# given memory level. A kernel that reads a lot and computes little sits on the
+# left; a kernel that reuses data heavily in registers and caches sits on the
+# right.
+#
+# Each curve is one ``element type / policy / level`` combination from
+# ``profile.roofline`` and has two parts:
+#
+# * the **diagonal**, ``memory_read_gbps * intensity``, is the memory ceiling:
+#   at that intensity, the read bandwidth measured for that level physically
+#   cannot feed more operations per second;
+# * the **plateau**, ``compute_gops``, is the compute ceiling: the arithmetic
+#   throughput measured for that element type and policy in the previous
+#   figure.
+#
+# The attainable rate is the lower of the two, so the curve is their minimum.
+# The marker sits at ``arithmetic_intensity_crossover``, where the two ceilings
+# meet. Left of it a kernel is **memory bound** -- the fix is fewer bytes
+# (blocking, fusion, a smaller element type), not faster arithmetic. Right of
+# it, a kernel is **compute bound** -- the fix is better vectorization or more
+# cores.
+#
+# Both ceilings come from the measurements taken in this run, not from
+# published hardware peaks, so a kernel plotted against these curves is
+# compared to what this host actually delivered under this benchmark's access
+# patterns.
 
 # %%
 # Serialization
