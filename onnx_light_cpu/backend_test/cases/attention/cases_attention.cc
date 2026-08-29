@@ -261,8 +261,8 @@ void RegisterAttentionCase(std::vector<TestCase> &registry, const OpsetId &opset
     }
     const onnx_light_cpu::AttentionKernel kernel{KernelContext{DefaultOpset(23)}};
     Tensor y = kernel(node, inputs[0], inputs[1], inputs[2], has_mask ? &inputs[3] : nullptr,
-                      nullptr, past_shape[2] > 0 ? &inputs[has_mask ? 4 : 3] : nullptr,
-                      past_shape[2] > 0 ? &inputs[has_mask ? 5 : 4] : nullptr,
+                      nullptr, cache == Cache::kInternal ? &inputs[has_mask ? 4 : 3] : nullptr,
+                      cache == Cache::kInternal ? &inputs[has_mask ? 5 : 4] : nullptr,
                       cache == Cache::kNonpad ? &inputs.back() : nullptr);
     return IoData{std::move(inputs), {std::move(y)}};
   };
