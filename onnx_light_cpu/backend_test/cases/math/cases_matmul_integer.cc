@@ -78,8 +78,8 @@ void RegisterMatMulIntegerCase(std::vector<TestCase> &registry, const OpsetId &o
          [opset, shape, a_type, b_type]() -> IoData {
            Tensor a = MakeBenchmarkTensor(a_type, {shape.m, shape.k}, 433);
            Tensor b = MakeBenchmarkTensor(b_type, {shape.k, shape.n}, 434);
-           const onnx_light_cpu::MatMulIntegerKernel kernel{KernelContext{opset}};
-           return IoData{{std::move(a), std::move(b)}, {kernel(a, b)}};
+           Tensor y = onnx_light_cpu::MatMulIntegerKernel{KernelContext{opset}}(a, b);
+           return IoData{{std::move(a), std::move(b)}, {std::move(y)}};
          });
 }
 

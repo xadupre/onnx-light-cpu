@@ -83,8 +83,8 @@ void RegisterMatMulCase(std::vector<TestCase> &registry, const OpsetId &opset,
                shape.rank3 ? rt_ns::Shape{1, shape.m, shape.k} : rt_ns::Shape{shape.m, shape.k};
            Tensor a = MakeBenchmarkTensor(data_type, a_shape, 433);
            Tensor b = MakeBenchmarkTensor(data_type, {shape.k, shape.n}, 434);
-           const onnx_light_cpu::MatMulKernel kernel{KernelContext{opset}};
-           return IoData{{std::move(a), std::move(b)}, {kernel(a, b)}};
+           Tensor y = onnx_light_cpu::MatMulKernel{KernelContext{opset}}(a, b);
+           return IoData{{std::move(a), std::move(b)}, {std::move(y)}};
          });
 }
 

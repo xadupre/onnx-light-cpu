@@ -1280,9 +1280,7 @@ TEST(OnnxLightBackendKernels, BenchmarksOmitExpectedOutputsByDefault) {
     if (test_case.name.rfind("test_cpu_", 0) != 0) {
       continue;
     }
-    ASSERT_EQ(test_case.data_sets().size(), 1u) << test_case.name;
-    EXPECT_FALSE(test_case.data_sets()[0].expected_outputs_generated) << test_case.name;
-    EXPECT_TRUE(test_case.data_sets()[0].outputs.empty()) << test_case.name;
+    EXPECT_FALSE(test_case.has_expected_outputs()) << test_case.name;
   }
 }
 
