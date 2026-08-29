@@ -18,18 +18,25 @@ _PYTHON_API_DIR = Path(__file__).resolve().parents[2] / "docs" / "api" / "python
 
 class TestApiDocReflectsPublicApi:
     def test_every_public_symbol_is_documented(self):
-        texts = {path: path.read_text(encoding="utf-8") for path in _PYTHON_API_DIR.glob("*.rst")}
+        assert _PYTHON_API_DIR.is_dir(), "docs/api/python is missing"
+        python_index_path = _PYTHON_API_DIR / "index.rst"
+        assert python_index_path.is_file(), "docs/api/python/index.rst is missing"
+        texts = {
+            path: path.read_text(encoding="utf-8")
+            for path in _PYTHON_API_DIR.glob("*.rst")
+            if path != python_index_path
+        }
         # Restrict the search to the top-level ``onnx_light_cpu`` package section
         # so a function documented only for one of the compiled extension
         # modules does not count as documenting the top-level re-export.
         marker = ".. py:module:: onnx_light_cpu\n"
-        python_index = texts[_PYTHON_API_DIR / "index.rst"]
+        python_index = python_index_path.read_text(encoding="utf-8")
         assert marker in python_index, "Python API module directive is missing"
-        text = "\n".join(texts.values())
+        section = "\n".join([python_index.split(marker, 1)[1], *texts.values()])
         for name in onnx_light_cpu.__all__:
             # Functions are documented with ``.. py:function::``; classes (e.g.
             # the ``RegisteredKernel`` NamedTuple) with ``.. py:class::``.
-            assert f".. py:function:: {name}" in text or f".. py:class:: {name}" in text, (
+            assert f".. py:function:: {name}" in section or f".. py:class:: {name}" in section, (
                 f"docs/api/python does not document the public symbol {name!r} "
                 "in the onnx_light_cpu package section"
             )
