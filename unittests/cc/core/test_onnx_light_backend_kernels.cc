@@ -135,6 +135,8 @@ std::string BinaryTypeSuffix(onnx_light_cpu::DataType type) {
     return "uint32";
   case onnx_light_cpu::DataType::UINT64:
     return "uint64";
+  case onnx_light_cpu::DataType::STRING:
+    return "string";
   default:
     throw std::invalid_argument("unsupported binary type");
   }
@@ -733,6 +735,9 @@ TEST(OnnxLightBackendKernels, BinaryBenchmarkCorporaCoverEverySignatureAndPriori
     EXPECT_EQ(shape_tags, expected_shape_tags) << entry.op_type;
     EXPECT_EQ(output_sizes, expected_output_sizes) << entry.op_type;
     for (const auto &signature : entry.signatures) {
+      if (signature.left == onnx_light_cpu::DataType::STRING) {
+        continue;
+      }
       const std::string signature_tag = "_" + BinaryTypeSuffix(signature.left) + "x" +
                                         BinaryTypeSuffix(signature.right) + "_to_" +
                                         BinaryTypeSuffix(signature.output);

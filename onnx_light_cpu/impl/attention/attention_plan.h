@@ -57,6 +57,10 @@ struct AttentionDescriptor {
   std::optional<int64_t> q_num_heads;
   /// ``kv_num_heads`` attribute; required for :cpp:enumerator:`AttentionLayout::kRank3`.
   std::optional<int64_t> kv_num_heads;
+  /// ``left_window_size`` attribute (opset >= 25); ``-1`` means unlimited.
+  std::int64_t left_window_size = -1;
+  /// ``right_window_size`` attribute (opset >= 25); ``-1`` means unlimited.
+  std::int64_t right_window_size = -1;
 
   /// Whether the optional ``attn_mask`` input is wired.
   bool has_attn_mask = false;
@@ -86,8 +90,8 @@ struct AttentionDescriptor {
   /// implements tensor ``past``/``present`` cache, ``nonpad_kv_seqlen``,
   /// ``softcap``, every ``qk_matmul_output_mode``, and the observable
   /// ``qk_matmul_output`` for equal-type FP32/FP16/BF16 Q/K/V. Only the
-  /// default (input-precision) or explicit FP32 ``softmax_precision`` are
-  /// supported; any other value is rejected here.
+  /// default (input-precision), explicit FP32, and explicit FP64
+  /// ``softmax_precision`` are supported; any other value is rejected here.
   void ValidateSupportedByMaterializedPath() const;
 };
 
@@ -158,6 +162,8 @@ struct AttentionPlan {
   AttentionMaskKind mask_kind = AttentionMaskKind::kNone;
   /// ``softcap`` attribute, copied from the descriptor; ``0`` disables it.
   float softcap = 0.0f;
+  /// Whether softmax exponentiation and normalization use FP64 arithmetic.
+  bool softmax_fp64 = false;
   /// ``qk_matmul_output_mode`` attribute, copied from the descriptor.
   std::int64_t qk_matmul_output_mode = 0;
   /// Whether the optional ``qk_matmul_output`` output is wired.
@@ -169,6 +175,12 @@ struct AttentionPlan {
   /// necessarily materializes a full observable tensor, so streaming
   /// dispatch must not be selected when this is set.
   bool has_present_output = false;
+  /// Local-window sizes (opset >= 25); ``-1`` means unlimited (no window
+  /// restriction on that side). ``left_window_size >= 0`` restricts each
+  /// query to attend only keys with ``i + offset - j <= left_window_size``;
+  /// analogously for ``right_window_size``.
+  std::int64_t left_window_size = -1;
+  std::int64_t right_window_size = -1;
 
   TensorStrides q_strides;
   TensorStrides k_strides;

@@ -120,6 +120,8 @@ const char *DataTypeSuffix(CpuDataType data_type) {
     return "uint32";
   case CpuDataType::UINT64:
     return "uint64";
+  case CpuDataType::STRING:
+    return "string";
   default:
     throw std::invalid_argument("Unsupported binary benchmark type.");
   }
@@ -261,6 +263,12 @@ Tensor MakeTypedTensor(CpuDataType type, const rt_ns::Shape &shape,
       raw[i] = static_cast<std::uint64_t>(std::max(1.0f, std::fabs(generated[i])));
     return Tensor::FromUint64("", shape, raw);
   }
+  case CpuDataType::STRING: {
+    std::vector<std::string> raw(count);
+    for (std::size_t i = 0; i < count; ++i)
+      raw[i] = std::to_string((i + 1) % 3);
+    return Tensor::FromStrings("", shape, raw);
+  }
   default:
     throw std::invalid_argument("Unsupported binary tensor type.");
   }
@@ -395,6 +403,9 @@ void RegisterCpuBinaryCases(std::vector<TestCase> &registry, const std::string &
   const BinaryManifestEntry &entry = GetBinaryManifestEntry(op_type);
   if (mode == TestMode::BENCHMARK) {
     for (const BinaryTypeSignature &signature : entry.signatures) {
+      if (signature.left == CpuDataType::STRING) {
+        continue;
+      }
       RegisterBenchmarksForSignature(registry, entry, signature);
       if (entry.op == BinaryOperator::kMul && signature.left == CpuDataType::FLOAT16 &&
           signature.right == CpuDataType::FLOAT16 && signature.output == CpuDataType::FLOAT16) {

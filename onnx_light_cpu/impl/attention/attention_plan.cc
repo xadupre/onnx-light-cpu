@@ -35,14 +35,31 @@ std::size_t ToSize(std::int64_t dimension, const char *what) {
   return static_cast<std::size_t>(dimension);
 }
 
+std::int64_t SaturatingAdd(std::int64_t left, std::int64_t right) noexcept {
+  if (right > 0 && left > std::numeric_limits<std::int64_t>::max() - right) {
+    return std::numeric_limits<std::int64_t>::max();
+  }
+  if (right < 0 && left < std::numeric_limits<std::int64_t>::min() - right) {
+    return std::numeric_limits<std::int64_t>::min();
+  }
+  return left + right;
+}
+
+std::int64_t WindowCenter(std::size_t query, std::int64_t causal_offset) noexcept {
+  return SaturatingAdd(static_cast<std::int64_t>(query), causal_offset);
+}
+
 } // namespace
 
 void AttentionDescriptor::Validate() const {
-  if (opset != 23 && opset != 24) {
-    Fail("AttentionDescriptor: only opset 23 and 24 are recognized.");
+  if (opset != 23 && opset != 24 && opset != 25) {
+    Fail("AttentionDescriptor: only opset 23, 24, and 25 are recognized.");
   }
   if (opset < 24 && has_nonpad_kv_seqlen) {
     Fail("AttentionDescriptor: nonpad_kv_seqlen requires opset >= 24.");
+  }
+  if (opset < 25 && (left_window_size >= 0 || right_window_size >= 0)) {
+    Fail("AttentionDescriptor: left_window_size / right_window_size require opset >= 25.");
   }
   if (qk_matmul_output_mode < 0 || qk_matmul_output_mode > 3) {
     Fail("AttentionDescriptor: qk_matmul_output_mode must be in [0, 3].");
@@ -62,12 +79,15 @@ void AttentionDescriptor::Validate() const {
 void AttentionDescriptor::ValidateSupportedByMaterializedPath() const {
   Validate();
   if (softmax_precision.has_value()) {
-    // FLOAT == 1 in onnx::TensorProto::DataType; only the default (input)
-    // precision or an explicit FP32 accumulation are supported.
+    // FLOAT == 1 and DOUBLE == 11 in onnx::TensorProto::DataType;
+    // UNDEFINED == 0 means "use input precision" (the default).
+    constexpr std::int64_t kUndefined = 0;
     constexpr std::int64_t kFloat = 1;
-    if (*softmax_precision != kFloat) {
-      Fail("AttentionDescriptor: only the default or explicit FP32 softmax_precision is "
-           "supported by the CPU materialized path.");
+    constexpr std::int64_t kDouble = 11;
+    if (*softmax_precision != kFloat && *softmax_precision != kDouble &&
+        *softmax_precision != kUndefined) {
+      Fail("AttentionDescriptor: only the default, FP32, or FP64 softmax_precision is supported "
+           "by the CPU materialized path.");
     }
   }
 }
@@ -232,9 +252,12 @@ AttentionPlan::AttentionPlan(const AttentionDescriptor &descriptor, AttentionLay
   causal = descriptor.is_causal;
   causal_offset = static_cast<std::int64_t>(past_length);
   softcap = descriptor.softcap;
+  softmax_fp64 = descriptor.softmax_precision == 11;
   qk_matmul_output_mode = descriptor.qk_matmul_output_mode;
   has_qk_matmul_output = descriptor.has_qk_matmul_output;
   has_present_output = descriptor.has_present_key || descriptor.has_present_value;
+  left_window_size = descriptor.left_window_size;
+  right_window_size = descriptor.right_window_size;
 
   if (mask_kind != AttentionMaskKind::kNone) {
     // Right-justify mask_shape to (batch, q_num_heads, q_length,
@@ -311,6 +334,7 @@ void ComputeAttentionFloat32Materialized(const AttentionPlan &plan, const float 
 
   std::vector<float> scores(total_kv_length);
   std::vector<float> qk_row(plan.has_qk_matmul_output ? total_kv_length : 0);
+  std::vector<double> softmax_fp64(plan.softmax_fp64 ? total_kv_length : 0);
   for (std::size_t b = 0; b < plan.batch; ++b) {
     // Bottom-right, offset-aware causal frontier: `nonpad_kv_seqlen`, when
     // supplied, overrides the plan's scalar `causal_offset` with a per-batch
@@ -350,12 +374,25 @@ void ComputeAttentionFloat32Materialized(const AttentionPlan &plan, const float 
         // score), matching the spec's fully-masked-row guard.
         float row_bias_max = kNegativeInfinity;
         for (std::size_t j = 0; j < total_kv_length; ++j) {
+          const std::int64_t window_center = WindowCenter(i, causal_offset);
           bool allowed = true;
           if (plan.causal) {
-            allowed = static_cast<std::int64_t>(j) <= static_cast<std::int64_t>(i) + causal_offset;
+            allowed = static_cast<std::int64_t>(j) <= window_center;
           }
           if (nonpad_length >= 0) {
             allowed = allowed && static_cast<std::int64_t>(j) < nonpad_length;
+          }
+          if (allowed) {
+            if (plan.left_window_size >= 0 &&
+                static_cast<std::int64_t>(j) <
+                    SaturatingAdd(window_center, -plan.left_window_size)) {
+              allowed = false;
+            }
+            if (plan.right_window_size >= 0 &&
+                static_cast<std::int64_t>(j) >
+                    SaturatingAdd(window_center, plan.right_window_size)) {
+              allowed = false;
+            }
           }
           float additive_bias = 0.0f;
           if (plan.mask_kind == AttentionMaskKind::kBoolean) {
@@ -418,16 +455,31 @@ void ComputeAttentionFloat32Materialized(const AttentionPlan &plan, const float 
           }
           continue;
         }
-        float sum = 0.0f;
+        double sum_fp64 = 0.0;
+        float sum_fp32 = 0.0f;
         for (std::size_t j = 0; j < total_kv_length; ++j) {
-          const float p = scores[j] == kNegativeInfinity ? 0.0f : std::exp(scores[j] - row_max);
-          scores[j] = p;
-          sum += p;
+          const double shifted = static_cast<double>(scores[j]) - static_cast<double>(row_max);
+          const double probability =
+              scores[j] == kNegativeInfinity
+                  ? 0.0
+                  : (plan.softmax_fp64
+                         ? std::exp(shifted)
+                         : static_cast<double>(std::exp(static_cast<float>(shifted))));
+          if (plan.softmax_fp64) {
+            softmax_fp64[j] = probability;
+            sum_fp64 += probability;
+          } else {
+            scores[j] = static_cast<float>(probability);
+            sum_fp32 += scores[j];
+          }
         }
-        const float inv_sum = 1.0f / sum;
+        const double inv_sum =
+            plan.softmax_fp64 ? 1.0 / sum_fp64 : static_cast<double>(1.0f / sum_fp32);
         std::fill(y_row, y_row + plan.v_head_dim, 0.0f);
         for (std::size_t j = 0; j < total_kv_length; ++j) {
-          const float p = scores[j] * inv_sum;
+          const double probability =
+              plan.softmax_fp64 ? softmax_fp64[j] : static_cast<double>(scores[j]);
+          const float p = static_cast<float>(probability * inv_sum);
           if (plan.has_qk_matmul_output) {
             qk_out_row[j] = plan.qk_matmul_output_mode == 3 ? p : qk_row[j];
           }
@@ -649,21 +701,39 @@ void ComputeAttentionStreamingGeneric(const AttentionPlan &plan, const typename 
           // are contiguous suffixes of the KV axis.
           std::int64_t bound = static_cast<std::int64_t>(total_kv_length) - 1;
           if (plan.causal) {
-            bound = std::min(bound, static_cast<std::int64_t>(i) + causal_offset);
+            bound = std::min(bound, WindowCenter(i, causal_offset));
           }
           if (nonpad_length >= 0) {
             bound = std::min(bound, nonpad_length - 1);
           }
+          // Window upper bound: right_window_size limits how far *ahead*
+          // each query can look (diff = i + offset - j, disallow -diff > right_window_size,
+          // i.e. j > i + offset + right_window_size).
+          if (plan.right_window_size >= 0) {
+            bound = std::min(bound,
+                             SaturatingAdd(WindowCenter(i, causal_offset), plan.right_window_size));
+          }
           const std::size_t kv_limit =
               bound < 0 ? std::size_t{0}
                         : std::min(total_kv_length, static_cast<std::size_t>(bound) + 1);
+
+          // Window lower bound: left_window_size limits how far *back* each
+          // query can look (diff > left_window_size ↔ j < i + offset - left_window_size).
+          std::size_t kv_start = 0;
+          if (plan.left_window_size >= 0) {
+            const std::int64_t lo =
+                SaturatingAdd(WindowCenter(i, causal_offset), -plan.left_window_size);
+            if (lo > 0) {
+              kv_start = static_cast<std::size_t>(lo);
+            }
+          }
 
           float m = kNegativeInfinity;
           float l = 0.0f;
           std::fill(accumulator.begin(), accumulator.end(), 0.0f);
           bool any_valid = false;
 
-          for (std::size_t j0 = 0; j0 < kv_limit; j0 += block) {
+          for (std::size_t j0 = kv_start; j0 < kv_limit; j0 += block) {
             const std::size_t j1 = std::min(j0 + block, kv_limit);
             const std::size_t count = j1 - j0;
 
@@ -807,9 +877,9 @@ void ComputeAttentionFloat32Tiled(const AttentionPlan &plan, const float *q, con
   const auto *mask_bool = static_cast<const std::uint8_t *>(mask);
   const auto *mask_float = static_cast<const float *>(mask);
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512
-  const bool use_bounded_avx512 = DetectSimdLevel() == SimdLevel::kAVX512 &&
-                                  plan.mask_kind == AttentionMaskKind::kNone &&
-                                  plan.softcap == 0.0f;
+  const bool use_bounded_avx512 =
+      DetectSimdLevel() == SimdLevel::kAVX512 && plan.mask_kind == AttentionMaskKind::kNone &&
+      plan.softcap == 0.0f && plan.left_window_size < 0 && plan.right_window_size < 0;
 #endif
   const std::size_t participants =
       plan.q_length <= kQueryBlock
@@ -850,23 +920,37 @@ void ComputeAttentionFloat32Tiled(const AttentionPlan &plan, const float *q, con
           const std::int64_t nonpad_length = nonpad_kv_seqlen != nullptr ? nonpad_kv_seqlen[b] : -1;
           std::int64_t task_bound = static_cast<std::int64_t>(plan.total_kv_length) - 1;
           if (plan.causal) {
-            task_bound =
-                std::min(task_bound, static_cast<std::int64_t>(q0 + rows - 1) + causal_offset);
+            task_bound = std::min(task_bound, WindowCenter(q0 + rows - 1, causal_offset));
           }
           if (nonpad_length >= 0) {
             task_bound = std::min(task_bound, nonpad_length - 1);
+          }
+          if (plan.right_window_size >= 0) {
+            task_bound =
+                std::min(task_bound, SaturatingAdd(WindowCenter(q0 + rows - 1, causal_offset),
+                                                   plan.right_window_size));
           }
           const std::size_t task_kv_limit =
               task_bound < 0
                   ? 0
                   : std::min(plan.total_kv_length, static_cast<std::size_t>(task_bound) + 1);
+          // Left-window lower bound for the entire query block: the most
+          // restrictive (earliest query's) left window start.
+          std::size_t task_kv_start = 0;
+          if (plan.left_window_size >= 0) {
+            const std::int64_t lo =
+                SaturatingAdd(WindowCenter(q0, causal_offset), -plan.left_window_size);
+            if (lo > 0) {
+              task_kv_start = static_cast<std::size_t>(lo);
+            }
+          }
 
           std::fill_n(accumulator.begin(), rows * plan.v_head_dim, 0.0f);
           std::fill_n(maxima.begin(), rows, kNegativeInfinity);
           std::fill_n(denominators.begin(), rows, 0.0f);
           std::fill_n(valid.begin(), rows, std::uint8_t{0});
 
-          for (std::size_t j0 = 0; j0 < task_kv_limit; j0 += kv_block) {
+          for (std::size_t j0 = task_kv_start; j0 < task_kv_limit; j0 += kv_block) {
             const std::size_t columns = std::min(kv_block, task_kv_limit - j0);
             GemmFloat32(false, true, rows, columns, plan.head_dim, plan.scale, q_block,
                         k_head + j0 * plan.k_strides.sequence, 0.0f, nullptr, scores.data());
@@ -878,7 +962,7 @@ void ComputeAttentionFloat32Tiled(const AttentionPlan &plan, const float *q, con
               if (use_bounded_avx512) {
                 std::int64_t bound = static_cast<std::int64_t>(plan.total_kv_length) - 1;
                 if (plan.causal) {
-                  bound = std::min(bound, static_cast<std::int64_t>(query) + causal_offset);
+                  bound = std::min(bound, WindowCenter(query, causal_offset));
                 }
                 if (nonpad_length >= 0) {
                   bound = std::min(bound, nonpad_length - 1);
@@ -908,10 +992,21 @@ void ComputeAttentionFloat32Tiled(const AttentionPlan &plan, const float *q, con
               float block_max = kNegativeInfinity;
               for (std::size_t jj = 0; jj < columns; ++jj) {
                 const std::size_t j = j0 + jj;
-                bool allowed =
-                    (!plan.causal || static_cast<std::int64_t>(j) <=
-                                         static_cast<std::int64_t>(query) + causal_offset) &&
-                    (nonpad_length < 0 || static_cast<std::int64_t>(j) < nonpad_length);
+                const std::int64_t window_center = WindowCenter(query, causal_offset);
+                bool allowed = (!plan.causal || static_cast<std::int64_t>(j) <= window_center) &&
+                               (nonpad_length < 0 || static_cast<std::int64_t>(j) < nonpad_length);
+                if (allowed) {
+                  if (plan.left_window_size >= 0 &&
+                      static_cast<std::int64_t>(j) <
+                          SaturatingAdd(window_center, -plan.left_window_size)) {
+                    allowed = false;
+                  }
+                  if (plan.right_window_size >= 0 &&
+                      static_cast<std::int64_t>(j) >
+                          SaturatingAdd(window_center, plan.right_window_size)) {
+                    allowed = false;
+                  }
+                }
                 float additive_bias = 0.0f;
                 if (plan.mask_kind == AttentionMaskKind::kBoolean) {
                   const std::ptrdiff_t index =
@@ -1113,8 +1208,8 @@ void ComputeAttentionFloat32(const AttentionPlan &plan, const float *q, const fl
   // internal tensor `past_key`/`past_value` cache and `nonpad_kv_seqlen` are
   // consumed block by block by the streaming path itself, so neither
   // excludes it.
-  const bool can_stream =
-      qk_matmul_output == nullptr && !plan.has_qk_matmul_output && !plan.has_present_output;
+  const bool can_stream = qk_matmul_output == nullptr && !plan.has_qk_matmul_output &&
+                          !plan.has_present_output && !plan.softmax_fp64;
   if (can_stream) {
     ComputeAttentionFloat32Streaming(plan, q, k, v, mask, y, past_k, past_v, nonpad_kv_seqlen);
     return;

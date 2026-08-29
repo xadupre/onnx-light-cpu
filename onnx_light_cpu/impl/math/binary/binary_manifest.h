@@ -40,6 +40,9 @@ struct BinaryTypeSignature {
   DataType left = DataType::UNDEFINED;
   DataType right = DataType::UNDEFINED;
   DataType output = DataType::UNDEFINED;
+  /// Earliest operator schema version that permits this type signature.
+  /// Zero inherits :cpp:member:`BinaryManifestEntry::minimum_version`.
+  std::int64_t minimum_version = 0;
 };
 
 /// Explicit manifest entry for one optimized binary operator.
@@ -51,7 +54,10 @@ struct BinaryTypeSignature {
 struct BinaryManifestEntry {
   BinaryOperator op = BinaryOperator::kAdd;
   std::string_view op_type;
+  /// Latest ONNX schema version whose type constraints this manifest mirrors.
   std::int64_t since_version = 0;
+  /// Earliest schema version with semantics compatible with this kernel.
+  std::int64_t minimum_version = 0;
   std::span<const BinaryTypeSignature> signatures;
 };
 

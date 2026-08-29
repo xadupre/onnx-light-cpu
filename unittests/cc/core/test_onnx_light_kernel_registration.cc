@@ -24,15 +24,36 @@ namespace sym_ns = ONNX_LIGHT_NAMESPACE::core::symbolic;
 
 using onnx_light_cpu::KernelRegistration;
 
-std::vector<rt_ns::DataType> UniqueLeftTypes(const onnx_light_cpu::BinaryManifestEntry &entry) {
-  std::vector<rt_ns::DataType> types;
+std::vector<KernelRegistration>
+BinaryRegistrations(const onnx_light_cpu::BinaryManifestEntry &entry) {
+  std::vector<std::int64_t> versions = {entry.minimum_version};
   for (const auto &signature : entry.signatures) {
-    const auto type = static_cast<rt_ns::DataType>(signature.left);
-    if (std::find(types.begin(), types.end(), type) == types.end()) {
-      types.push_back(type);
+    if (signature.minimum_version > entry.minimum_version &&
+        std::find(versions.begin(), versions.end(), signature.minimum_version) == versions.end()) {
+      versions.push_back(signature.minimum_version);
     }
   }
-  return types;
+  std::sort(versions.begin(), versions.end());
+  std::vector<KernelRegistration> records;
+  for (std::size_t index = 0; index < versions.size(); ++index) {
+    std::vector<rt_ns::DataType> types;
+    for (const auto &signature : entry.signatures) {
+      const std::int64_t minimum =
+          signature.minimum_version == 0 ? entry.minimum_version : signature.minimum_version;
+      const auto type = static_cast<rt_ns::DataType>(signature.left);
+      if (minimum <= versions[index] &&
+          std::find(types.begin(), types.end(), type) == types.end()) {
+        types.push_back(type);
+      }
+    }
+    records.push_back({"ai.onnx", std::string(entry.op_type), sym_ns::Device::kCPU,
+                       std::string("onnx_light_cpu::") + std::string(entry.op_type),
+                       std::move(types), versions[index],
+                       index + 1 < versions.size()
+                           ? std::optional<std::int64_t>(versions[index + 1] - 1)
+                           : std::nullopt});
+  }
+  return records;
 }
 
 // ``CollectRegisteredKernels`` must report one record for every ``op_type``
@@ -242,16 +263,18 @@ TEST(KernelRegistration, CollectionReportsEveryActualRegistration) {
   };
   std::vector<KernelRegistration> all_expected = expected;
   for (const auto &entry : onnx_light_cpu::GetBinaryManifest()) {
-    all_expected.push_back({"ai.onnx", std::string(entry.op_type), sym_ns::Device::kCPU,
-                            std::string("onnx_light_cpu::") + std::string(entry.op_type),
-                            UniqueLeftTypes(entry), entry.since_version, std::nullopt});
+    std::vector<KernelRegistration> binary_records = BinaryRegistrations(entry);
+    all_expected.insert(all_expected.end(), std::make_move_iterator(binary_records.begin()),
+                        std::make_move_iterator(binary_records.end()));
   }
   ASSERT_EQ(records.size(), all_expected.size());
   for (const KernelRegistration &expected_record : all_expected) {
-    const auto actual = std::find_if(records.begin(), records.end(),
-                                     [&expected_record](const KernelRegistration &record) {
-                                       return record.op_type == expected_record.op_type;
-                                     });
+    const auto actual = std::find_if(
+        records.begin(), records.end(), [&expected_record](const KernelRegistration &record) {
+          return record.op_type == expected_record.op_type &&
+                 record.since_version == expected_record.since_version &&
+                 record.until_version == expected_record.until_version;
+        });
     ASSERT_NE(actual, records.end()) << expected_record.op_type;
     EXPECT_EQ(actual->domain, expected_record.domain);
     EXPECT_EQ(actual->op_type, expected_record.op_type);

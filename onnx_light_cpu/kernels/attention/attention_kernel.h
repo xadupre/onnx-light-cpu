@@ -18,12 +18,13 @@ class NodeProto;
 
 namespace onnx_light_cpu {
 
-/// CPU kernel for the ``ai.onnx::Attention`` operator (opset 23 and 24).
+/// CPU kernel for the ``ai.onnx::Attention`` operator (opset 23 through 25).
 ///
 /// Supports rank-3/rank-4 FP32, FP16, and BF16 MHA/GQA/MQA. Streaming
 /// invocations may consume tensor ``past`` inputs and v24
 /// ``nonpad_kv_seqlen`` directly; observable ``present`` and
-/// ``qk_matmul_output`` outputs use the materialized FP32 path.
+/// ``qk_matmul_output`` outputs use a materialized path and preserve the
+/// Q/K/V element type.
 class AttentionKernel : public ONNX_LIGHT_NAMESPACE::core::runtime::KernelBase {
 public:
   explicit AttentionKernel(const ONNX_LIGHT_NAMESPACE::core::runtime::KernelContext &ctx);

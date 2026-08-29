@@ -468,6 +468,11 @@ bool SupportsElementType(const BinaryManifestEntry &entry, int32_t element_type)
                      });
 }
 
+bool SupportsTuning(const BinaryManifestEntry &entry, int32_t element_type) {
+  return static_cast<rt_ns::DataType>(element_type) != rt_ns::DataType::STRING &&
+         SupportsElementType(entry, element_type);
+}
+
 BinaryKernelDescriptor::Attributes
 ParseBinaryAttributes(const ONNX_LIGHT_NAMESPACE::NodeProto &node) {
   BinaryKernelDescriptor::Attributes attributes;
@@ -501,7 +506,7 @@ void BinaryElementwiseKernel::RegisterTuningSchemas() {
       std::set<int32_t> registered_types;
       for (const BinaryTypeSignature &signature : entry.signatures) {
         const int32_t element_type = static_cast<int32_t>(signature.left);
-        if (registered_types.insert(element_type).second) {
+        if (SupportsTuning(entry, element_type) && registered_types.insert(element_type).second) {
           const rt_ns::KernelTuningKey key = MakeTuningKey(entry.op_type, element_type);
           rt_ns::RegisterKernelTuningSchema(rt_ns::KernelTuningSchema(
               MakeTuningDefaults(entry.op_type, element_type), ValidateTuning));
@@ -513,7 +518,7 @@ void BinaryElementwiseKernel::RegisterTuningSchemas() {
 }
 
 rt_ns::KernelTuningKey BinaryElementwiseKernel::TuningKey(int32_t element_type) const {
-  return SupportsElementType(descriptor_.manifest_entry(), element_type)
+  return SupportsTuning(descriptor_.manifest_entry(), element_type)
              ? MakeTuningKey(descriptor_.op_type(), element_type)
              : rt_ns::KernelTuningKey{};
 }
@@ -570,7 +575,13 @@ void BinaryElementwiseKernel::operator()(const rt_ns::Tensor &left, const rt_ns:
     throw std::invalid_argument(
         "onnx_light_cpu::BinaryElementwiseKernel: output tensor metadata mismatch.");
   }
-  plan->Execute(left.bytes(), right.bytes(), output.mutable_bytes(), tuning_);
+  const void *left_data = static_cast<rt_ns::DataType>(left.data_type) == rt_ns::DataType::STRING
+                              ? static_cast<const void *>(left.AsStrings().data())
+                              : static_cast<const void *>(left.bytes());
+  const void *right_data = static_cast<rt_ns::DataType>(right.data_type) == rt_ns::DataType::STRING
+                               ? static_cast<const void *>(right.AsStrings().data())
+                               : static_cast<const void *>(right.bytes());
+  plan->Execute(left_data, right_data, output.mutable_bytes(), tuning_);
 }
 
 void BinaryElementwiseKernel::Run(rt_ns::RuntimeContext &rt) {
@@ -586,24 +597,42 @@ void BinaryElementwiseKernel::Run(rt_ns::RuntimeContext &rt) {
 void RegisterBinaryKernels() {
   BinaryElementwiseKernel::RegisterTuningSchemas();
   for (const BinaryManifestEntry &entry : GetBinaryManifest()) {
-    rt_ns::NodeKernelFn factory =
-        [](const ONNX_LIGHT_NAMESPACE::NodeProto &node,
-           rt_ns::RuntimeContext &rt) -> std::unique_ptr<rt_ns::KernelBase> {
-      return std::make_unique<BinaryElementwiseKernel>(node, rt.kernel_ctx());
-    };
-    KernelRegistration info;
-    info.domain = "";
-    info.op_type = std::string(entry.op_type);
-    info.device = sym_ns::Device::kCPU;
-    info.kernel_name = KernelName(entry.op_type);
+    std::vector<std::int64_t> version_starts = {entry.minimum_version};
     for (const BinaryTypeSignature &signature : entry.signatures) {
-      const auto type = static_cast<rt_ns::DataType>(signature.left);
-      if (std::find(info.types.begin(), info.types.end(), type) == info.types.end()) {
-        info.types.push_back(type);
+      if (signature.minimum_version > entry.minimum_version &&
+          std::find(version_starts.begin(), version_starts.end(), signature.minimum_version) ==
+              version_starts.end()) {
+        version_starts.push_back(signature.minimum_version);
       }
     }
-    info.since_version = entry.since_version;
-    RegisterKernel(std::move(info), std::move(factory));
+    std::sort(version_starts.begin(), version_starts.end());
+    for (std::size_t version_index = 0; version_index < version_starts.size(); ++version_index) {
+      const std::int64_t version = version_starts[version_index];
+      KernelRegistration info;
+      info.domain = "";
+      info.op_type = std::string(entry.op_type);
+      info.device = sym_ns::Device::kCPU;
+      info.kernel_name = KernelName(entry.op_type);
+      for (const BinaryTypeSignature &signature : entry.signatures) {
+        const std::int64_t signature_version =
+            signature.minimum_version == 0 ? entry.minimum_version : signature.minimum_version;
+        const auto type = static_cast<rt_ns::DataType>(signature.left);
+        if (signature_version <= version &&
+            std::find(info.types.begin(), info.types.end(), type) == info.types.end()) {
+          info.types.push_back(type);
+        }
+      }
+      info.since_version = version;
+      if (version_index + 1 < version_starts.size()) {
+        info.until_version = version_starts[version_index + 1] - 1;
+      }
+      rt_ns::NodeKernelFn factory =
+          [](const ONNX_LIGHT_NAMESPACE::NodeProto &node,
+             rt_ns::RuntimeContext &rt) -> std::unique_ptr<rt_ns::KernelBase> {
+        return std::make_unique<BinaryElementwiseKernel>(node, rt.kernel_ctx());
+      };
+      RegisterKernel(std::move(info), std::move(factory));
+    }
   }
 }
 
