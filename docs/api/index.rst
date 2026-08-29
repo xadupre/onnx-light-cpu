@@ -173,100 +173,28 @@ The custom operator support inventory and its implementations are also public:
 Python API
 ----------
 
-.. py:module:: onnx_light_cpu.onnx_py._cpukernels
+.. py:module:: onnx_light_cpu
 
-.. py:function:: detect_simd_level() -> int
+SIMD introspection
+~~~~~~~~~~~~~~~~~~
 
-   Returns the detected SIMD level: ``0=None``, ``1=SSE2``, ``2=AVX``,
-   ``3=AVX2``, ``4=AVX512``.
+.. py:class:: SimdLevel
+
+   An ``IntEnum`` naming the instruction-set levels used for CPU kernel
+   dispatch: ``NONE``, ``SSE2``, ``AVX``, ``AVX2``, and ``AVX512``.
+
+.. py:function:: detect_simd_level() -> SimdLevel
+
+   Returns the highest SIMD instruction-set level available to this process.
+   The result is a :class:`SimdLevel` and remains compatible with integer
+   comparisons.
 
 .. py:function:: has_cpu_kernels() -> bool
 
-   Returns ``True`` when the CPU kernel extension is available.
-
-The compiled kernels themselves (``Abs``, ``Exp``, ``Log``, ``Gemm``, ``Not``)
-are not exposed as numpy-like Python functions; they are reachable through
-onnx-light's runtime after registration (see :func:`register_all_kernels` and
-:func:`onnx_light_cpu.register_kernels`).
-
-.. py:function:: benchmark_processor_performance_raw(thread_policies, repeats, minimum_duration_ms, memory_budget_bytes, include_latency, explicit_single_affinity=None)
-
-   Runs the versioned processor performance profile (effective memory
-   bandwidth/latency plus register-resident compute throughput) and returns it
-   as a plain nested-tuple structure. Raises ``ValueError`` before allocating
-   or timing anything when an option is invalid. This binding links neither
-   onnx-light nor any kernel dispatch table. It is wrapped by
-   :func:`onnx_light_cpu.benchmark_processor_performance`, which converts the
-   raw tuples into immutable, documented result objects.
-
-.. py:module:: onnx_light_cpu.onnx_py._cpuregister
-
-.. py:function:: register_all_kernels() -> None
-
-   Registers every onnx-light-cpu kernel class (``Abs``, ``Exp``, ``Log``,
-   ``Gemm`` and ``Not``) into onnx-light's C++ ``KernelDispatchTable`` for the
-   CPU device, replacing the corresponding built-in entries for the default
-   ONNX domain.
-   This is the Python binding for the C++ :cpp:func:`RegisterAllKernels`
-   function and is only available in builds compiled with the onnx-light
-   integration enabled (``ONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON``).
-
-.. py:function:: registered_kernel_names() -> list[tuple[str, str]]
-
-   Returns the ``(op_type, kernel name)`` pairs of every onnx-light-cpu kernel,
-   for example ``("Abs", "onnx_light_cpu::Abs")``. The kernel name is the
-   library-qualified name each kernel records when it runs, so callers can check
-   that the accelerated kernels are the ones actually used.
-
-.. py:function:: registered_kernels() -> list[tuple[str, str, str, str, list[str], int | None, int | None]]
-
-   Returns one ``(domain, op_type, device, kernel_name, types, since_version,
-   until_version)`` tuple per onnx-light-cpu kernel registration, collected
-   from the C++ :cpp:func:`CollectRegisteredKernels` inventory without
-   installing, replacing, or executing any kernel. Sorted by ``(domain,
-   op_type, device, kernel_name)``. This is the raw binding wrapped by
-   :func:`onnx_light_cpu.registered_kernels`, which converts each tuple into an
-   immutable :class:`onnx_light_cpu.RegisteredKernel` record.
-
-.. py:function:: operator_support() -> list[tuple[str, str, str, str, list[str], bool]]
-
-   Returns the read-only custom operator support inventory: domain, operator,
-   shape-inference function, peak-memory function, fusion patterns, and
-   gradient availability. This is the raw binding wrapped by
-   :func:`onnx_light_cpu.operator_support`.
-
-.. py:function:: microsoft_op_schemas(op_type="", init_doc=True)
-
-   Returns the ``LightOpSchema`` history supplied for ``com.microsoft``
-   operators.
-
-.. py:function:: register_custom_operator_support() -> None
-
-   Registers the ``com.microsoft`` shape-inference, peak-memory, and fusion
-   pattern implementations.
-
-.. py:function:: register_custom_gradients(registry) -> None
-
-   Registers the ``com.microsoft`` gradient implementations in ``registry``.
-
-.. py:function:: used_kernel_names() -> list[str]
-
-   Returns the library-qualified names of the onnx-light-cpu kernels that ran
-   since the last :func:`clear_used_kernel_names` call, in invocation order.
-
-.. py:function:: clear_used_kernel_names() -> None
-
-   Clears the record of onnx-light-cpu kernels that have run.
-
-.. py:function:: set_kernel_usage_recording(enabled) -> None
-
-   Enables or disables per-invocation kernel usage recording.
-
+   Returns whether the compiled onnx-light-cpu kernel extension is available.
 
 Registering kernels with onnx-light
 -----------------------------------
-
-.. py:module:: onnx_light_cpu
 
 .. py:function:: register_kernels(sess=None)
 
@@ -378,8 +306,7 @@ Registering kernels with onnx-light
    replacing, or executing any kernel. Records are sorted deterministically by
    ``(domain, op_type, device, kernel_name)``, and
    :func:`registered_kernel_names` derives its ``{op_type: kernel name}``
-   mapping from this same inventory. Wraps
-   :func:`onnx_light_cpu.onnx_py._cpuregister.registered_kernels`.
+   mapping from this same inventory.
 
 .. py:function:: used_kernel_names() -> list[str]
 
@@ -387,14 +314,12 @@ Registering kernels with onnx-light
    onnx-light-cpu kernels that have run since the last
    :func:`clear_used_kernel_names` call. After running a model through a
    ``ReferenceEvaluator`` this reports which accelerated kernels the runtime
-   actually dispatched to. Wraps
-   :func:`onnx_light_cpu.onnx_py._cpuregister.used_kernel_names`.
+   actually dispatched to.
 
 .. py:function:: clear_used_kernel_names() -> None
 
    Clears the record of onnx-light-cpu kernels that have run, so a subsequent
    :func:`used_kernel_names` call only reports the kernels used after this call.
-   Wraps :func:`onnx_light_cpu.onnx_py._cpuregister.clear_used_kernel_names`.
 
 .. py:function:: set_kernel_usage_recording(enabled) -> None
 
