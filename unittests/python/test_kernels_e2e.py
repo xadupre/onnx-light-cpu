@@ -428,6 +428,27 @@ class TestBackendCases(TestCase):
     def test_registered_kernels_are_immutable_and_complete(self):
         records = registered_kernels()
         assert records, "expected at least one registered kernel record"
+        versioned_binary_ops = {
+            "Add",
+            "And",
+            "BitShift",
+            "BitwiseAnd",
+            "BitwiseOr",
+            "BitwiseXor",
+            "Div",
+            "Equal",
+            "Greater",
+            "GreaterOrEqual",
+            "Less",
+            "LessOrEqual",
+            "Mod",
+            "Mul",
+            "Or",
+            "PRelu",
+            "Pow",
+            "Sub",
+            "Xor",
+        }
         for record in records:
             with self.assertRaises(AttributeError):
                 record.op_type = "Other"  # type: ignore[misc]
@@ -489,7 +510,10 @@ class TestBackendCases(TestCase):
                 assert record.since_version == 5
             else:
                 assert record.since_version is None
-            assert record.until_version is None
+            if record.until_version is not None:
+                assert record.op_type in versioned_binary_ops
+                assert isinstance(record.until_version, int)
+                assert record.until_version >= record.since_version
 
     def test_every_cpu_benchmark_has_a_registered_kernel(self):
         # Benchmark models are not necessarily single-node: the GEMM corpus
