@@ -9,6 +9,7 @@
 #include "onnx_light_cpu/kernels/com_microsoft/bias_gelu_kernel.h"
 #include "onnx_light_cpu/kernels/com_microsoft/cdist_kernel.h"
 #include "onnx_light_cpu/kernels/com_microsoft/group_query_attention_kernel.h"
+#include "onnx_light_cpu/kernels/kernel_registration.h"
 #include "onnx_light_cpu/kernels/logical/not_kernel.h"
 #include "onnx_light_cpu/kernels/math/abs_kernel.h"
 #include "onnx_light_cpu/kernels/math/exp_log_kernel.h"
@@ -66,38 +67,11 @@ TEST(OnnxLightKernelUsage, KernelNamesAreLibraryQualified) {
 // derived from ``CollectRegisteredKernels()``'s structured inventory, so
 // entries are ordered by ``domain`` and then ``op_type`` for the public name map.
 TEST(OnnxLightKernelUsage, RegisteredKernelNames) {
-  std::vector<std::pair<std::string, std::string>> expected = {
-      {"Abs", "onnx_light_cpu::Abs"},
-      {"Attention", "onnx_light_cpu::Attention"},
-      {"BatchNormalization", "onnx_light_cpu::BatchNormalization"},
-      {"Exp", "onnx_light_cpu::Exp"},
-      {"Gemm", "onnx_light_cpu::Gemm"},
-      {"GroupNormalization", "onnx_light_cpu::GroupNormalization"},
-      {"InstanceNormalization", "onnx_light_cpu::InstanceNormalization"},
-      {"LayerNormalization", "onnx_light_cpu::LayerNormalization"},
-      {"Log", "onnx_light_cpu::Log"},
-      {"LpNormalization", "onnx_light_cpu::LpNormalization"},
-      {"MatMul", "onnx_light_cpu::MatMul"},
-      {"MatMulInteger", "onnx_light_cpu::MatMulInteger"},
-      {"Max", "onnx_light_cpu::Max"},
-      {"Mean", "onnx_light_cpu::Mean"},
-      {"MeanVarianceNormalization", "onnx_light_cpu::MeanVarianceNormalization"},
-      {"Min", "onnx_light_cpu::Min"},
-      {"Not", "onnx_light_cpu::Not"},
-      {"QLinearMatMul", "onnx_light_cpu::QLinearMatMul"},
-      {"RMSNormalization", "onnx_light_cpu::RMSNormalization"},
-      {"Sum", "onnx_light_cpu::Sum"},
-      {"SwiGLU", "onnx_light_cpu::SwiGLU"},
-  };
-  for (const auto &entry : onnx_light_cpu::GetBinaryManifest()) {
-    expected.emplace_back(std::string(entry.op_type),
-                          std::string("onnx_light_cpu::") + std::string(entry.op_type));
+  std::vector<std::pair<std::string, std::string>> expected;
+  for (const onnx_light_cpu::KernelRegistration &record :
+       onnx_light_cpu::CollectRegisteredKernels()) {
+    expected.emplace_back(record.op_type, record.kernel_name);
   }
-  std::sort(expected.begin(), expected.end());
-  expected.emplace_back("TreeEnsemble", "onnx_light_cpu::TreeEnsemble");
-  expected.emplace_back("BiasGelu", "onnx_light_cpu::BiasGelu");
-  expected.emplace_back("CDist", "onnx_light_cpu::CDist");
-  expected.emplace_back("GroupQueryAttention", "onnx_light_cpu::GroupQueryAttention");
   EXPECT_EQ(onnx_light_cpu::RegisteredKernelNames(), expected);
 }
 

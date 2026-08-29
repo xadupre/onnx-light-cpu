@@ -703,10 +703,10 @@ void RegisterCpuAttentionCases(std::vector<TestCase> &registry, TestMode mode) {
 
   // Window attention cases (opset 25): local window and bidirectional window.
   const OpsetId opset25 = DefaultOpset(25);
-  RegisterAttentionWindowCase(registry, opset25, "test_cpu_attention_local_window_causal", 2, 3, 3,
-                              4, 6, 8, true, 2, -1);
-  RegisterAttentionWindowCase(registry, opset25, "test_cpu_attention_bidirectional_window", 1, 1, 1,
-                              5, 5, 1, false, 1, 2);
+  RegisterAttentionWindowCase(registry, opset25, "test_cpu_attention_local_window_causal_float32",
+                              2, 3, 3, 4, 6, 8, true, 2, -1);
+  RegisterAttentionWindowCase(registry, opset25, "test_cpu_attention_bidirectional_window_float32",
+                              1, 1, 1, 5, 5, 1, false, 1, 2);
 }
 
 } // namespace onnx_light_cpu::backend_test
