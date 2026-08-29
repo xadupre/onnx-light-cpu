@@ -995,6 +995,8 @@ if(ONNX_LIGHT_CPU_INSTALL)
 
   set(_header_install_excludes
       PATTERN "backend_test" EXCLUDE
+      PATTERN "logical_kernels.h" EXCLUDE
+      PATTERN "math_kernels.h" EXCLUDE
       PATTERN "onnx_py" EXCLUDE)
   if(NOT ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
     list(APPEND _header_install_excludes

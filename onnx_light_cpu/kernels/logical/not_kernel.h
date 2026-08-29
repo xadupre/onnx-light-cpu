@@ -4,11 +4,11 @@
 
 #pragma once
 
-#include "onnx_light_cpu/impl/logical/logical_kernels.h"
-
 #include "onnx_core/runtime/kernels/kernel_context.h"
 #include "onnx_core/runtime/memory/simple_tensor.h"
 #include "onnx_core/runtime/runtime_context.h"
+
+#include <memory>
 
 #ifndef ONNX_LIGHT_NAMESPACE
 #define ONNX_LIGHT_NAMESPACE onnx_light
@@ -33,6 +33,7 @@ public:
 
   NotKernel(const ONNX_LIGHT_NAMESPACE::NodeProto &node,
             const ONNX_LIGHT_NAMESPACE::core::runtime::KernelContext &ctx);
+  ~NotKernel() override;
 
   static void RegisterTuningSchemas();
   ONNX_LIGHT_NAMESPACE::core::runtime::KernelTuningKey
@@ -61,7 +62,8 @@ public:
                   ONNX_LIGHT_NAMESPACE::core::runtime::Tensor &output) const;
 
 private:
-  NotExecutionTuning tuning_;
+  struct Tuning;
+  std::unique_ptr<Tuning> tuning_;
 };
 
 /// Registers the onnx-light-cpu ``Not`` kernel into onnx-light's shared

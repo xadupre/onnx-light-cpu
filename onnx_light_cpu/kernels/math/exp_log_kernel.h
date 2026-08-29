@@ -4,11 +4,11 @@
 
 #pragma once
 
-#include "onnx_light_cpu/impl/math/math_kernels.h"
-
 #include "onnx_core/runtime/kernels/kernel_context.h"
 #include "onnx_core/runtime/memory/simple_tensor.h"
 #include "onnx_core/runtime/runtime_context.h"
+
+#include <memory>
 
 #ifndef ONNX_LIGHT_NAMESPACE
 #define ONNX_LIGHT_NAMESPACE onnx_light
@@ -33,6 +33,7 @@ public:
 
   ExpKernel(const ONNX_LIGHT_NAMESPACE::NodeProto &node,
             const ONNX_LIGHT_NAMESPACE::core::runtime::KernelContext &ctx);
+  ~ExpKernel() override;
 
   static void RegisterTuningSchemas();
   ONNX_LIGHT_NAMESPACE::core::runtime::KernelTuningKey
@@ -61,7 +62,8 @@ public:
                   ONNX_LIGHT_NAMESPACE::core::runtime::Tensor &output) const;
 
 private:
-  UnaryExecutionTuning tuning_ = kDefaultExpLogExecutionTuning;
+  struct Tuning;
+  std::unique_ptr<Tuning> tuning_;
   bool tuning_configured_ = false;
 };
 
@@ -77,6 +79,7 @@ public:
 
   LogKernel(const ONNX_LIGHT_NAMESPACE::NodeProto &node,
             const ONNX_LIGHT_NAMESPACE::core::runtime::KernelContext &ctx);
+  ~LogKernel() override;
 
   static void RegisterTuningSchemas();
   ONNX_LIGHT_NAMESPACE::core::runtime::KernelTuningKey
@@ -105,7 +108,8 @@ public:
                   ONNX_LIGHT_NAMESPACE::core::runtime::Tensor &output) const;
 
 private:
-  UnaryExecutionTuning tuning_ = kDefaultExpLogExecutionTuning;
+  struct Tuning;
+  std::unique_ptr<Tuning> tuning_;
   bool tuning_configured_ = false;
 };
 

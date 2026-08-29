@@ -77,9 +77,15 @@ rt_ns::KernelTuningParameters MakeTuningDefaults() {
 
 } // namespace
 
+struct NotKernel::Tuning {
+  NotExecutionTuning value;
+};
+
 NotKernel::NotKernel(const NodeProto &node, const rt_ns::KernelContext &ctx) : KernelBase(ctx) {
   set_node(node);
 }
+
+NotKernel::~NotKernel() = default;
 
 void NotKernel::RegisterTuningSchemas() {
   static std::once_flag once;
@@ -99,13 +105,13 @@ void NotKernel::Configure(const rt_ns::KernelTuningParameters &parameters) {
     throw std::invalid_argument("Not tuning parameters have an incompatible key.");
   }
   ValidateTuning(parameters);
-  tuning_ = {
+  tuning_ = std::make_unique<Tuning>(Tuning{{
       static_cast<std::size_t>(parameters.Get<int64_t>(kParallelThresholdBytes)),
       static_cast<std::size_t>(parameters.Get<int64_t>(kTargetBlockBytes)),
       static_cast<std::size_t>(parameters.Get<int64_t>(kMaxParticipants)),
       parameters.Get<int64_t>(kCostModel) != 0,
       static_cast<std::size_t>(parameters.Get<int64_t>(kPreferredParticipants)),
-  };
+  }});
 }
 
 Tensor NotKernel::operator()(const Tensor &x, RuntimeContext *rt) const {
@@ -133,10 +139,9 @@ void NotKernel::operator()(const Tensor &x, Tensor &output) const {
   const std::int64_t n = x.element_count();
   const std::uint8_t *px = x.AsBool();
   std::uint8_t *py = output.AsBool();
-  // When onnx-light has installed a session ``CpuExecutor`` on the calling
-  // thread, ``NotBool`` can split this range through it without an
-  // onnx-light-cpu scheduler.
-  NotBoolWithTuning(px, py, static_cast<std::size_t>(n), tuning_);
+  const NotExecutionTuning default_tuning;
+  const NotExecutionTuning &tuning = tuning_ != nullptr ? tuning_->value : default_tuning;
+  NotBoolWithTuning(px, py, static_cast<std::size_t>(n), tuning);
 }
 
 void NotKernel::Run(RuntimeContext &rt) {
