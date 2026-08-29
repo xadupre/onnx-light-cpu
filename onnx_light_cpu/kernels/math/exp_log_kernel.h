@@ -62,7 +62,7 @@ public:
 
 private:
   struct Tuning;
-  std::unique_ptr<Tuning> tuning_;
+  std::shared_ptr<Tuning> tuning_;
   bool tuning_configured_ = false;
 };
 
@@ -108,7 +108,7 @@ public:
 
 private:
   struct Tuning;
-  std::unique_ptr<Tuning> tuning_;
+  std::shared_ptr<Tuning> tuning_;
   bool tuning_configured_ = false;
 };
 

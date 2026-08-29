@@ -209,7 +209,7 @@ void ExpKernel::Configure(const rt_ns::KernelTuningParameters &parameters) {
     throw std::invalid_argument("Exp tuning parameters have an incompatible key.");
   }
   ValidateTuning(parameters);
-  tuning_ = std::make_unique<Tuning>(Tuning{ReadTuning(parameters)});
+  tuning_ = std::make_shared<Tuning>(Tuning{ReadTuning(parameters)});
   tuning_configured_ = true;
 }
 
@@ -268,7 +268,7 @@ void LogKernel::Configure(const rt_ns::KernelTuningParameters &parameters) {
     throw std::invalid_argument("Log tuning parameters have an incompatible key.");
   }
   ValidateTuning(parameters);
-  tuning_ = std::make_unique<Tuning>(Tuning{ReadTuning(parameters)});
+  tuning_ = std::make_shared<Tuning>(Tuning{ReadTuning(parameters)});
   tuning_configured_ = true;
 }
 

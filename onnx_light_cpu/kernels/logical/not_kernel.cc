@@ -105,7 +105,7 @@ void NotKernel::Configure(const rt_ns::KernelTuningParameters &parameters) {
     throw std::invalid_argument("Not tuning parameters have an incompatible key.");
   }
   ValidateTuning(parameters);
-  tuning_ = std::make_unique<Tuning>(Tuning{{
+  tuning_ = std::make_shared<Tuning>(Tuning{{
       static_cast<std::size_t>(parameters.Get<int64_t>(kParallelThresholdBytes)),
       static_cast<std::size_t>(parameters.Get<int64_t>(kTargetBlockBytes)),
       static_cast<std::size_t>(parameters.Get<int64_t>(kMaxParticipants)),

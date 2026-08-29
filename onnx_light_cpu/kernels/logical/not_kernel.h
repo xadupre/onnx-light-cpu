@@ -61,7 +61,7 @@ public:
 
 private:
   struct Tuning;
-  std::unique_ptr<Tuning> tuning_;
+  std::shared_ptr<Tuning> tuning_;
 };
 
 /// Registers the onnx-light-cpu ``Not`` kernel into onnx-light's shared
