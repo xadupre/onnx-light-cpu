@@ -123,6 +123,7 @@ _BENCHMARK_TYPE_SUFFIXES["BitShift"] = "uint8"
 for _op_type in {
     "BatchNormalization",
     "GroupNormalization",
+    "GroupQueryAttention",
     "InstanceNormalization",
     "LayerNormalization",
     "LpNormalization",
@@ -130,7 +131,10 @@ for _op_type in {
     "RMSNormalization",
 }:
     _BENCHMARK_TYPE_SUFFIXES[_op_type] = "(?:float32|float16|bfloat16)"
-_BENCHMARK_OP_TAGS = {"RMSNormalization": "rms_normalization"}
+_BENCHMARK_OP_TAGS = {
+    "GroupQueryAttention": "group_query_attention",
+    "RMSNormalization": "rms_normalization",
+}
 _BENCHMARK_NAME_PATTERN = (
     "^test_cpu_(?:"
     + "|".join(
@@ -295,6 +299,8 @@ _LOW_PRECISION_AFFINE_CASES = (
     ("GroupNormalization", 21, [1, 1, 4], [1], {"num_groups": 1}),
     ("LayerNormalization", 17, [1, 4], [4], {}),
 )
+_ORT_MAX_RELEASED_ONNX_OPSET = 26
+_ORT_MODEL_IR_VERSION = 13
 _LOW_PRECISION_AFFINE_DTYPES = (
     (TensorProto.FLOAT16, np.float16),
     (TensorProto.BFLOAT16, ml_dtypes.bfloat16),
@@ -322,6 +328,17 @@ def _make_low_precision_affine_model_and_feeds(
         "B": np.full(parameter_shape, -0.25, dtype=dtype),
     }
     return model, feeds
+
+
+def _make_ort_compatible_model(model):
+    ort_model = type(model)()
+    ort_model.CopyFrom(model)
+    if ort_model.ir_version > _ORT_MODEL_IR_VERSION:
+        ort_model.ir_version = _ORT_MODEL_IR_VERSION
+    for opset in ort_model.opset_import:
+        if opset.domain in {"", "ai.onnx"} and opset.version > _ORT_MAX_RELEASED_ONNX_OPSET:
+            opset.version = _ORT_MAX_RELEASED_ONNX_OPSET
+    return ort_model
 
 
 def _collect_low_precision_affine_builtin_sessions():
@@ -486,6 +503,83 @@ class TestBackendCases(TestCase):
         }
         assert benchmark_ops
         assert benchmark_ops <= set(_REGISTERED_KERNELS)
+
+    def test_group_query_attention_backend_case_matrix(self):
+        supported_types = {
+            int(TensorProto.FLOAT),
+            int(TensorProto.FLOAT16),
+            int(TensorProto.BFLOAT16),
+        }
+        for mode, expected_count in ((TestMode.TEST, 4), (TestMode.BENCHMARK, 15)):
+            cases = [
+                tc
+                for tc in collect_test_cases("GroupQueryAttention", mode=mode)
+                if tc.name.startswith("test_cpu_group_query_attention_")
+            ]
+            assert len(cases) == expected_count
+            assert {int(tc.model.graph.input[0].type.tensor_type.elem_type) for tc in cases} == (
+                supported_types
+            )
+            if mode == TestMode.BENCHMARK:
+                names = {tc.name for tc in cases}
+                for sequence in (1, 16, 128):
+                    assert (
+                        "test_cpu_group_query_attention_model_qwen3_8b_int4_mb_prefill_"
+                        f"b1_s{sequence}_qh32_kvh8_hd128_pastlen0_causal_float32_benchmark"
+                    ) in names
+                for past_length in (16, 128, 1024):
+                    assert (
+                        "test_cpu_group_query_attention_model_qwen3_8b_int4_mb_decode_"
+                        f"b1_s1_qh32_kvh8_hd128_pastlen{past_length}_causal_float32_benchmark"
+                    ) in names
+            else:
+                names = {tc.name for tc in cases}
+                assert "test_cpu_group_query_attention_cached_rotary_float32" in names
+                cached_case = next(
+                    tc
+                    for tc in cases
+                    if tc.name == "test_cpu_group_query_attention_cached_rotary_float32"
+                )
+                # The exact model contract: query/key/value, past_key/past_value,
+                # seqlens_k/total_sequence_length, cos_cache/sin_cache wired, and
+                # output/present_key/present_value all produced.
+                assert len(cached_case.model.graph.input) == 9
+                assert len(cached_case.model.graph.output) == 3
+
+    def test_group_query_attention_benchmarks_match_onnx_runtime(self):
+        try:
+            import onnxruntime as ort
+        except ImportError:
+            self.skipTest("onnxruntime is unavailable")
+
+        options = ort.SessionOptions()
+        options.intra_op_num_threads = 1
+        options.inter_op_num_threads = 1
+        cases = [
+            tc
+            for tc in collect_test_cases("GroupQueryAttention", mode=TestMode.BENCHMARK)
+            if tc.name.startswith("test_cpu_group_query_attention_model_qwen3_8b_int4_mb_")
+        ]
+        assert len(cases) == 6
+        for tc in cases:
+            with self.subTest(tc=tc.name):
+                input_names = [vi.name for vi in tc.model.graph.input]
+                light_session = ReferenceEvaluator(tc.model)
+                ort_session = ort.InferenceSession(
+                    _make_ort_compatible_model(tc.model).SerializeToString(),
+                    sess_options=options,
+                    providers=["CPUExecutionProvider"],
+                )
+                for data_set in tc.data_sets:
+                    feeds = {
+                        name: _to_numpy(tensor)
+                        for name, tensor in zip(input_names, data_set.inputs, strict=True)
+                    }
+                    got = light_session.run(None, feeds)
+                    expected = ort_session.run(None, feeds)
+                    assert len(got) == len(expected) == 3
+                    for actual, reference in zip(got, expected, strict=True):
+                        _assert_close(actual, reference, rtol=2e-4, atol=2e-4)
 
     def test_normalization_benchmarks_match_onnx_references(self):
         try:
