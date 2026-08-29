@@ -32,6 +32,8 @@ TEST(BinaryManifest, CoversRoadmapScopeExactlyOnce) {
   for (const auto &entry : manifest) {
     EXPECT_FALSE(entry.op_type.empty());
     EXPECT_GT(entry.since_version, 0);
+    EXPECT_GT(entry.minimum_version, 0);
+    EXPECT_LE(entry.minimum_version, entry.since_version);
     EXPECT_FALSE(entry.signatures.empty());
     names.emplace_back(entry.op_type);
   }
@@ -42,7 +44,16 @@ TEST(BinaryManifest, CoversRoadmapScopeExactlyOnce) {
 }
 
 TEST(BinaryKernelDescriptor, ValidatesOpsetAndAttributes) {
-  EXPECT_THROW((BinaryKernelDescriptor{"Add", 13, {}}), std::invalid_argument);
+  EXPECT_THROW((BinaryKernelDescriptor{"Add", 6, {}}), std::invalid_argument);
+  EXPECT_NO_THROW((BinaryKernelDescriptor{"Add", 7, {}}));
+  EXPECT_NO_THROW((BinaryKernelDescriptor{"Pow", 14, {}}));
+  EXPECT_NO_THROW((BinaryKernelDescriptor{"GreaterOrEqual", 13, {}}));
+  EXPECT_THROW((BinaryKernelDescriptor{"Equal", 7, {}}.ResolveOutputType(BinaryDataType::STRING,
+                                                                         BinaryDataType::STRING)),
+               std::invalid_argument);
+  EXPECT_EQ(BinaryKernelDescriptor("Equal", 19, {})
+                .ResolveOutputType(BinaryDataType::STRING, BinaryDataType::STRING),
+            BinaryDataType::BOOL);
 
   BinaryKernelDescriptor::Attributes invalid_mod;
   invalid_mod.mod_fmod = 2;
@@ -106,7 +117,8 @@ TEST(BinaryKernelDescriptor, SameTypeSignaturesProvideAllBulkLoopFamilies) {
     const BinaryKernelDescriptor descriptor(std::string(entry.op_type), entry.since_version,
                                             attributes);
     for (const auto &adapter : descriptor.adapters()) {
-      if (adapter.signature.left != adapter.signature.right) {
+      if (adapter.signature.left != adapter.signature.right ||
+          adapter.signature.left == BinaryDataType::STRING) {
         continue;
       }
       EXPECT_NE(adapter.bulk_contiguous, nullptr) << entry.op_type;

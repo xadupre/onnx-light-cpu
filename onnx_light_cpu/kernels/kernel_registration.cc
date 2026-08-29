@@ -68,7 +68,9 @@ void RegisterKernel(KernelRegistration info, rt_ns::NodeKernelFn fn) {
   }
   KernelRegistrationScope *scope = CurrentScope();
 
-  const auto key = std::make_tuple(info.domain, info.op_type, info.device);
+  const auto dispatch_key = std::make_tuple(info.domain, info.op_type, info.device);
+  const auto key = std::make_tuple(info.domain, info.op_type, info.device, info.since_version,
+                                   info.until_version);
   if (!scope->seen_.insert(key).second) {
     throw std::invalid_argument("onnx_light_cpu::RegisterKernel: duplicate registration for "
                                 "domain '" +
@@ -81,7 +83,9 @@ void RegisterKernel(KernelRegistration info, rt_ns::NodeKernelFn fn) {
     return;
   }
 
-  rt_ns::RegisterKernelFn(info.domain, info.op_type, info.device, std::move(fn));
+  if (scope->installed_.insert(dispatch_key).second) {
+    rt_ns::RegisterKernelFn(info.domain, info.op_type, info.device, std::move(fn));
+  }
 }
 
 std::vector<KernelRegistration> CollectRegisteredKernels() {
@@ -93,8 +97,10 @@ std::vector<KernelRegistration> CollectRegisteredKernels() {
 
   std::sort(inventory.begin(), inventory.end(),
             [](const KernelRegistration &a, const KernelRegistration &b) {
-              return std::tie(a.domain, a.op_type, a.device, a.kernel_name) <
-                     std::tie(b.domain, b.op_type, b.device, b.kernel_name);
+              return std::tie(a.domain, a.op_type, a.device, a.kernel_name, a.since_version,
+                              a.until_version) < std::tie(b.domain, b.op_type, b.device,
+                                                          b.kernel_name, b.since_version,
+                                                          b.until_version);
             });
   return inventory;
 }

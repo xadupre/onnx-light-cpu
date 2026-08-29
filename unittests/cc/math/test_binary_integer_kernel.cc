@@ -276,13 +276,19 @@ TEST(BinaryComparisonKernel, BroadcastsBothOperandOrdersToByteBool) {
   EXPECT_EQ(output, (std::vector<std::uint8_t>{0, 0, 1, 1, 0, 1}));
 }
 
-TEST(BinaryEqualKernel, KeepsStringAsPortableFallback) {
+TEST(BinaryEqualKernel, BroadcastsStringsToByteBool) {
   const BinaryKernelDescriptor descriptor("Equal", 19, {});
-  EXPECT_THROW(descriptor.ResolveOutputType(BinaryDataType::STRING, BinaryDataType::STRING),
-               std::invalid_argument);
-  EXPECT_TRUE(std::none_of(
-      descriptor.manifest_entry().signatures.begin(), descriptor.manifest_entry().signatures.end(),
-      [](const auto &signature) { return signature.left == BinaryDataType::STRING; }));
+  EXPECT_EQ(descriptor.ResolveOutputType(BinaryDataType::STRING, BinaryDataType::STRING),
+            BinaryDataType::BOOL);
+  const std::vector<std::int64_t> left_shape{2, 1};
+  const std::vector<std::int64_t> right_shape{1, 3};
+  const BinaryBroadcastPlan plan(descriptor, BinaryDataType::STRING, BinaryDataType::STRING,
+                                 BinaryDataType::BOOL, left_shape, right_shape);
+  const std::vector<std::string> left{"a", "b"};
+  const std::vector<std::string> right{"a", "b", "c"};
+  std::vector<std::uint8_t> output(6);
+  plan.Execute(left.data(), right.data(), output.data());
+  EXPECT_EQ(output, (std::vector<std::uint8_t>{1, 0, 0, 0, 1, 0}));
 }
 
 } // namespace

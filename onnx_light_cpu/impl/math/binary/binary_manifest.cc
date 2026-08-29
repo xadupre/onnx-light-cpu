@@ -41,19 +41,20 @@ constexpr std::array<Signature, 11> kComparisonSignatures = {
      {DT::UINT32, DT::UINT32, DT::BOOL},
      {DT::UINT64, DT::UINT64, DT::BOOL}}};
 
-constexpr std::array<Signature, 13> kEqualSignatures = {{{DT::BOOL, DT::BOOL, DT::BOOL},
-                                                         {DT::FLOAT, DT::FLOAT, DT::BOOL},
-                                                         {DT::DOUBLE, DT::DOUBLE, DT::BOOL},
-                                                         {DT::FLOAT16, DT::FLOAT16, DT::BOOL},
-                                                         {DT::BFLOAT16, DT::BFLOAT16, DT::BOOL},
-                                                         {DT::INT8, DT::INT8, DT::BOOL},
-                                                         {DT::INT16, DT::INT16, DT::BOOL},
-                                                         {DT::INT32, DT::INT32, DT::BOOL},
-                                                         {DT::INT64, DT::INT64, DT::BOOL},
-                                                         {DT::UINT8, DT::UINT8, DT::BOOL},
-                                                         {DT::UINT16, DT::UINT16, DT::BOOL},
-                                                         {DT::UINT32, DT::UINT32, DT::BOOL},
-                                                         {DT::UINT64, DT::UINT64, DT::BOOL}}};
+constexpr std::array<Signature, 14> kEqualSignatures = {{{DT::BOOL, DT::BOOL, DT::BOOL, 7},
+                                                         {DT::FLOAT, DT::FLOAT, DT::BOOL, 11},
+                                                         {DT::DOUBLE, DT::DOUBLE, DT::BOOL, 11},
+                                                         {DT::FLOAT16, DT::FLOAT16, DT::BOOL, 11},
+                                                         {DT::BFLOAT16, DT::BFLOAT16, DT::BOOL, 13},
+                                                         {DT::INT8, DT::INT8, DT::BOOL, 11},
+                                                         {DT::INT16, DT::INT16, DT::BOOL, 11},
+                                                         {DT::INT32, DT::INT32, DT::BOOL, 7},
+                                                         {DT::INT64, DT::INT64, DT::BOOL, 7},
+                                                         {DT::UINT8, DT::UINT8, DT::BOOL, 11},
+                                                         {DT::UINT16, DT::UINT16, DT::BOOL, 11},
+                                                         {DT::UINT32, DT::UINT32, DT::BOOL, 11},
+                                                         {DT::UINT64, DT::UINT64, DT::BOOL, 11},
+                                                         {DT::STRING, DT::STRING, DT::BOOL, 19}}};
 
 constexpr std::array<Signature, 1> kLogicalSignatures = {{{DT::BOOL, DT::BOOL, DT::BOOL}}};
 
@@ -99,25 +100,25 @@ constexpr std::array<Signature, 29> kPowSignatures = {{
 }};
 
 constexpr std::array<BinaryManifestEntry, 19> kManifest = {{
-    {BinaryOperator::kAdd, "Add", 14, kArithmeticSignatures},
-    {BinaryOperator::kSub, "Sub", 14, kArithmeticSignatures},
-    {BinaryOperator::kMul, "Mul", 14, kArithmeticSignatures},
-    {BinaryOperator::kDiv, "Div", 14, kArithmeticSignatures},
-    {BinaryOperator::kMod, "Mod", 13, kArithmeticSignatures},
-    {BinaryOperator::kPow, "Pow", 15, kPowSignatures},
-    {BinaryOperator::kEqual, "Equal", 19, kEqualSignatures},
-    {BinaryOperator::kGreater, "Greater", 13, kComparisonSignatures},
-    {BinaryOperator::kGreaterOrEqual, "GreaterOrEqual", 16, kComparisonSignatures},
-    {BinaryOperator::kLess, "Less", 13, kComparisonSignatures},
-    {BinaryOperator::kLessOrEqual, "LessOrEqual", 16, kComparisonSignatures},
-    {BinaryOperator::kAnd, "And", 7, kLogicalSignatures},
-    {BinaryOperator::kOr, "Or", 7, kLogicalSignatures},
-    {BinaryOperator::kXor, "Xor", 7, kLogicalSignatures},
-    {BinaryOperator::kBitwiseAnd, "BitwiseAnd", 18, kBitwiseSignatures},
-    {BinaryOperator::kBitwiseOr, "BitwiseOr", 18, kBitwiseSignatures},
-    {BinaryOperator::kBitwiseXor, "BitwiseXor", 18, kBitwiseSignatures},
-    {BinaryOperator::kBitShift, "BitShift", 11, kBitShiftSignatures},
-    {BinaryOperator::kPRelu, "PRelu", 16, kPReluSignatures},
+    {BinaryOperator::kAdd, "Add", 14, 7, kArithmeticSignatures},
+    {BinaryOperator::kSub, "Sub", 14, 7, kArithmeticSignatures},
+    {BinaryOperator::kMul, "Mul", 14, 7, kArithmeticSignatures},
+    {BinaryOperator::kDiv, "Div", 14, 7, kArithmeticSignatures},
+    {BinaryOperator::kMod, "Mod", 13, 10, kArithmeticSignatures},
+    {BinaryOperator::kPow, "Pow", 15, 7, kPowSignatures},
+    {BinaryOperator::kEqual, "Equal", 19, 7, kEqualSignatures},
+    {BinaryOperator::kGreater, "Greater", 13, 7, kComparisonSignatures},
+    {BinaryOperator::kGreaterOrEqual, "GreaterOrEqual", 16, 12, kComparisonSignatures},
+    {BinaryOperator::kLess, "Less", 13, 7, kComparisonSignatures},
+    {BinaryOperator::kLessOrEqual, "LessOrEqual", 16, 12, kComparisonSignatures},
+    {BinaryOperator::kAnd, "And", 7, 7, kLogicalSignatures},
+    {BinaryOperator::kOr, "Or", 7, 7, kLogicalSignatures},
+    {BinaryOperator::kXor, "Xor", 7, 7, kLogicalSignatures},
+    {BinaryOperator::kBitwiseAnd, "BitwiseAnd", 18, 18, kBitwiseSignatures},
+    {BinaryOperator::kBitwiseOr, "BitwiseOr", 18, 18, kBitwiseSignatures},
+    {BinaryOperator::kBitwiseXor, "BitwiseXor", 18, 18, kBitwiseSignatures},
+    {BinaryOperator::kBitShift, "BitShift", 11, 11, kBitShiftSignatures},
+    {BinaryOperator::kPRelu, "PRelu", 16, 7, kPReluSignatures},
 }};
 
 } // namespace

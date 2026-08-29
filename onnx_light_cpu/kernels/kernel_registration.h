@@ -84,8 +84,13 @@ private:
   friend void RegisterKernel(KernelRegistration info,
                              ONNX_LIGHT_NAMESPACE::core::runtime::NodeKernelFn fn);
 
-  std::set<std::tuple<std::string, std::string, ONNX_LIGHT_NAMESPACE::core::symbolic::Device>>
-      seen_;
+  using DispatchKey =
+      std::tuple<std::string, std::string, ONNX_LIGHT_NAMESPACE::core::symbolic::Device>;
+  using MetadataKey =
+      std::tuple<std::string, std::string, ONNX_LIGHT_NAMESPACE::core::symbolic::Device,
+                 std::optional<std::int64_t>, std::optional<std::int64_t>>;
+  std::set<MetadataKey> seen_;
+  std::set<DispatchKey> installed_;
   std::vector<KernelRegistration> *inventory_ = nullptr;
   bool owns_ = false;
 };
@@ -96,7 +101,9 @@ private:
 /// itself), installs `fn` into
 /// :cpp:func:`onnx_light::core::runtime::RegisterKernelFn` for
 /// ``(info.domain, info.op_type, info.device)`` exactly as a direct call
-/// would, so runtime dispatch is unchanged.
+/// would. Multiple metadata records for disjoint opset ranges may describe
+/// one runtime kernel; only the first record for a domain/operator/device
+/// installs ``fn`` into the unversioned C++ dispatch table.
 ///
 /// While an inventory collection started by
 /// :cpp:func:`CollectRegisteredKernels` is in progress on the calling thread,

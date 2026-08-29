@@ -43,6 +43,8 @@ std::size_t ElementSize(DT type) {
   case DT::UINT64:
   case DT::DOUBLE:
     return 8;
+  case DT::STRING:
+    return sizeof(std::string);
   default:
     throw std::invalid_argument("onnx_light_cpu::BinaryKernelDescriptor: unsupported data type.");
   }
@@ -1482,6 +1484,8 @@ BinaryKernelDescriptor::Adapter::ScalarFn SelectScalar(BinaryOperator op, DT lef
       return &ComputeEqual<std::uint32_t>;
     case DT::UINT64:
       return &ComputeEqual<std::uint64_t>;
+    case DT::STRING:
+      return &ComputeEqual<std::string>;
     default:
       break;
     }
@@ -2111,7 +2115,7 @@ BinaryKernelDescriptor::BinaryKernelDescriptor(std::string op_type, std::int64_t
                                                const Attributes &attributes)
     : manifest_(GetBinaryManifestEntry(op_type)), opset_version_(opset_version),
       attributes_(attributes), cache_identity_(NextCacheIdentity()) {
-  if (opset_version_ < manifest_.since_version) {
+  if (opset_version_ < manifest_.minimum_version) {
     throw std::invalid_argument("onnx_light_cpu::BinaryKernelDescriptor: opset " +
                                 std::to_string(opset_version_) + " is too old for operator '" +
                                 std::string(manifest_.op_type) + "'.");
@@ -2123,6 +2127,9 @@ BinaryKernelDescriptor::BinaryKernelDescriptor(std::string op_type, std::int64_t
   }
   adapters_.reserve(manifest_.signatures.size());
   for (const BinaryTypeSignature &signature : manifest_.signatures) {
+    if (signature.minimum_version != 0 && opset_version_ < signature.minimum_version) {
+      continue;
+    }
     if ((manifest_.op == BinaryOperator::kMod) && attributes_.mod_fmod == 0 &&
         (signature.left == DT::FLOAT || signature.left == DT::DOUBLE ||
          signature.left == DT::FLOAT16 || signature.left == DT::BFLOAT16)) {

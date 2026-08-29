@@ -11,7 +11,11 @@
 #include "onnx_core/runtime/kernels/kernel_dispatch_table.h"
 #include "onnx_core/runtime/kernels/node_helpers.h"
 
+#include "onnx_light_cpu/impl/math/half_conversion.h"
+
+#include <algorithm>
 #include <cstdint>
+#include <cstring>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -48,10 +52,14 @@ AttentionDescriptor BuildDescriptor(const NodeProto &node) {
   AttentionDescriptor descriptor;
   // The kernel does not have direct access to the node's opset from here;
   // `nonpad_kv_seqlen` (opset >= 24 only) is only wired when a 7th input is
-  // present, so infer the minimum opset consistent with the wiring. This is
-  // conservative: the materialized path rejects `nonpad_kv_seqlen` outright
-  // regardless of the inferred opset.
-  descriptor.opset = node.input_size() > 6 ? 24 : 23;
+  // present, so infer the minimum opset consistent with the wiring. Window
+  // attributes (opset >= 25) further raise the inferred opset.
+  int inferred_opset = node.input_size() > 6 ? 24 : 23;
+  if (rt_ns::GetAttributeIntOrDefault(node, "left_window_size", -1) >= 0 ||
+      rt_ns::GetAttributeIntOrDefault(node, "right_window_size", -1) >= 0) {
+    inferred_opset = std::max(inferred_opset, 25);
+  }
+  descriptor.opset = inferred_opset;
 
   if (const auto *attribute = FindAttribute(node, "scale"); attribute != nullptr) {
     descriptor.scale = attribute->f();
@@ -70,6 +78,10 @@ AttentionDescriptor BuildDescriptor(const NodeProto &node) {
   descriptor.qk_matmul_output_mode =
       rt_ns::GetAttributeIntOrDefault(node, "qk_matmul_output_mode", 0);
 
+  // Window attributes (opset >= 25).
+  descriptor.left_window_size = rt_ns::GetAttributeIntOrDefault(node, "left_window_size", -1);
+  descriptor.right_window_size = rt_ns::GetAttributeIntOrDefault(node, "right_window_size", -1);
+
   descriptor.has_attn_mask = node.input_size() > 3 && !node.input(3).empty();
   descriptor.has_past_key = node.input_size() > 4 && !node.input(4).empty();
   descriptor.has_past_value = node.input_size() > 5 && !node.input(5).empty();
@@ -84,9 +96,74 @@ AttentionDescriptor BuildDescriptor(const NodeProto &node) {
   return descriptor;
 }
 
+void ComputeHalfAttentionMaterialized(const AttentionPlan &plan, DataType data_type,
+                                      const std::uint16_t *q, const std::uint16_t *k,
+                                      const std::uint16_t *v, const void *mask, std::uint16_t *y,
+                                      const std::uint16_t *past_k, const std::uint16_t *past_v,
+                                      const std::int64_t *nonpad_kv_seqlen,
+                                      std::uint16_t *qk_matmul_output) {
+  const std::size_t q_count = plan.batch * plan.q_num_heads * plan.q_length * plan.head_dim;
+  const std::size_t k_count = plan.batch * plan.kv_num_heads * plan.kv_length * plan.head_dim;
+  const std::size_t v_count = plan.batch * plan.kv_num_heads * plan.kv_length * plan.v_head_dim;
+  const std::size_t y_count = plan.batch * plan.q_num_heads * plan.q_length * plan.v_head_dim;
+  const std::size_t past_k_count =
+      plan.batch * plan.kv_num_heads * plan.past_length * plan.head_dim;
+  const std::size_t past_v_count =
+      plan.batch * plan.kv_num_heads * plan.past_length * plan.v_head_dim;
+  const std::size_t qk_count =
+      qk_matmul_output != nullptr
+          ? plan.batch * plan.q_num_heads * plan.q_length * plan.total_kv_length
+          : 0;
+  std::vector<float> q_fp32(q_count);
+  std::vector<float> k_fp32(k_count);
+  std::vector<float> v_fp32(v_count);
+  std::vector<float> y_fp32(y_count);
+  std::vector<float> past_k_fp32(past_k_count);
+  std::vector<float> past_v_fp32(past_v_count);
+  std::vector<float> qk_fp32(qk_count);
+
+  auto convert_to_float = [data_type](const std::uint16_t *source, float *destination,
+                                      std::size_t count) {
+    if (data_type == DataType::FLOAT16) {
+      detail::ConvertFloat16ToFloat32(source, destination, count);
+    } else {
+      for (std::size_t index = 0; index < count; ++index) {
+        destination[index] = detail::Bfloat16BitsToFloat(source[index]);
+      }
+    }
+  };
+  auto convert_from_float = [data_type](const float *source, std::uint16_t *destination,
+                                        std::size_t count) {
+    if (data_type == DataType::FLOAT16) {
+      detail::ConvertFloat32ToFloat16(source, destination, count);
+    } else {
+      for (std::size_t index = 0; index < count; ++index) {
+        destination[index] = detail::FloatToBFloat16Bits(source[index]);
+      }
+    }
+  };
+
+  convert_to_float(q, q_fp32.data(), q_count);
+  convert_to_float(k, k_fp32.data(), k_count);
+  convert_to_float(v, v_fp32.data(), v_count);
+  if (past_k_count != 0) {
+    convert_to_float(past_k, past_k_fp32.data(), past_k_count);
+    convert_to_float(past_v, past_v_fp32.data(), past_v_count);
+  }
+  ComputeAttentionFloat32(plan, q_fp32.data(), k_fp32.data(), v_fp32.data(), mask, y_fp32.data(),
+                          past_k_count != 0 ? past_k_fp32.data() : nullptr,
+                          past_v_count != 0 ? past_v_fp32.data() : nullptr, nonpad_kv_seqlen,
+                          qk_count != 0 ? qk_fp32.data() : nullptr);
+  convert_from_float(y_fp32.data(), y, y_count);
+  if (qk_count != 0) {
+    convert_from_float(qk_fp32.data(), qk_matmul_output, qk_count);
+  }
+}
+
 Tensor Compute(const Tensor &q, const Tensor &k, const Tensor &v, const Tensor *mask,
                const Tensor *past_k, const Tensor *past_v, const Tensor *nonpad_kv_seqlen,
-               const AttentionDescriptor &descriptor, RuntimeContext *rt, Tensor *qk_output) {
+               const AttentionDescriptor &descriptor, RuntimeContext *rt, Tensor *qk_output,
+               Tensor *present_key_output, Tensor *present_value_output) {
   const DataType data_type = static_cast<DataType>(q.data_type);
   if (k.data_type != q.data_type || v.data_type != q.data_type ||
       (data_type != DataType::FLOAT && data_type != DataType::FLOAT16 &&
@@ -104,23 +181,29 @@ Tensor Compute(const Tensor &q, const Tensor &k, const Tensor &v, const Tensor *
     throw std::invalid_argument(
         "onnx_light_cpu::AttentionKernel: nonpad_kv_seqlen must have type INT64.");
   }
-  if (data_type != DataType::FLOAT &&
-      (descriptor.has_present_key || descriptor.has_qk_matmul_output)) {
-    throw std::invalid_argument("onnx_light_cpu::AttentionKernel: observable present and "
-                                "qk_matmul_output tensors currently require FLOAT Q/K/V.");
-  }
   const AttentionLayout layout =
       q.shape.size() == 3 ? AttentionLayout::kRank3 : AttentionLayout::kRank4;
 
+  // --- Mask handling: convert FLOAT16 additive mask to FP32 on the fly ---
   AttentionMaskKind mask_kind = AttentionMaskKind::kNone;
+  std::vector<float> mask_fp32_buffer;
   if (mask != nullptr) {
     if (static_cast<DataType>(mask->data_type) == DataType::BOOL) {
       mask_kind = AttentionMaskKind::kBoolean;
     } else if (static_cast<DataType>(mask->data_type) == DataType::FLOAT) {
       mask_kind = AttentionMaskKind::kAdditive;
+    } else if (static_cast<DataType>(mask->data_type) == DataType::FLOAT16) {
+      mask_kind = AttentionMaskKind::kAdditive;
+      std::size_t mask_count = 1;
+      for (const auto &d : mask->shape) {
+        mask_count *= static_cast<std::size_t>(d);
+      }
+      mask_fp32_buffer.resize(mask_count);
+      detail::ConvertFloat16ToFloat32(reinterpret_cast<const std::uint16_t *>(mask->bytes()),
+                                      mask_fp32_buffer.data(), mask_count);
     } else {
       throw std::invalid_argument("onnx_light_cpu::AttentionKernel: unsupported attn_mask data "
-                                  "type; only BOOL and FLOAT are supported so far.");
+                                  "type; only BOOL, FLOAT, and FLOAT16 are supported.");
     }
   }
 
@@ -145,23 +228,34 @@ Tensor Compute(const Tensor &q, const Tensor &k, const Tensor &v, const Tensor *
                            : rt_ns::MakeOutputTensor(q.data_type, output_shape, bytes, nullptr);
   Tensor qk;
   float *qk_data = nullptr;
-  if (plan.has_qk_matmul_output) {
+  std::uint16_t *qk_half_data = nullptr;
+  if (plan.has_qk_matmul_output || plan.softmax_fp64) {
     const std::vector<std::int64_t> plan_qk_shape = plan.qk_matmul_output_shape();
     Shape qk_shape(plan_qk_shape);
     const std::size_t qk_bytes = static_cast<std::size_t>(plan.batch * plan.q_num_heads *
                                                           plan.q_length * plan.total_kv_length) *
-                                 sizeof(float);
-    qk = rt != nullptr
-             ? rt->MakeOutputTensor(3, static_cast<int32_t>(DataType::FLOAT), qk_shape, qk_bytes)
-             : rt_ns::MakeOutputTensor(static_cast<int32_t>(DataType::FLOAT), qk_shape, qk_bytes,
-                                       nullptr);
-    qk_data = reinterpret_cast<float *>(qk.mutable_bytes());
+                                 element_bytes;
+    qk = rt != nullptr ? rt->MakeOutputTensor(3, q.data_type, qk_shape, qk_bytes)
+                       : rt_ns::MakeOutputTensor(q.data_type, qk_shape, qk_bytes, nullptr);
+    if (data_type == DataType::FLOAT) {
+      qk_data = reinterpret_cast<float *>(qk.mutable_bytes());
+    } else {
+      qk_half_data = reinterpret_cast<std::uint16_t *>(qk.mutable_bytes());
+    }
   }
 
+  // Resolve the mask data pointer: use the converted FP32 buffer when the
+  // original mask was FLOAT16, the boolean bytes for BOOL, or the raw FLOAT
+  // bytes otherwise.
   const void *mask_data = nullptr;
   if (mask != nullptr) {
-    mask_data = mask_kind == AttentionMaskKind::kBoolean ? static_cast<const void *>(mask->AsBool())
-                                                         : static_cast<const void *>(mask->bytes());
+    if (!mask_fp32_buffer.empty()) {
+      mask_data = static_cast<const void *>(mask_fp32_buffer.data());
+    } else if (mask_kind == AttentionMaskKind::kBoolean) {
+      mask_data = static_cast<const void *>(mask->AsBool());
+    } else {
+      mask_data = static_cast<const void *>(mask->bytes());
+    }
   }
   const std::int64_t *nonpad =
       nonpad_kv_seqlen != nullptr
@@ -176,27 +270,113 @@ Tensor Compute(const Tensor &q, const Tensor &k, const Tensor &v, const Tensor *
         past_v != nullptr ? reinterpret_cast<const float *>(past_v->bytes()) : nullptr, nonpad,
         qk_data);
   } else if (data_type == DataType::FLOAT16) {
-    ComputeAttentionFloat16Streaming(
-        plan, reinterpret_cast<const std::uint16_t *>(q.bytes()),
-        reinterpret_cast<const std::uint16_t *>(k.bytes()),
-        reinterpret_cast<const std::uint16_t *>(v.bytes()), mask_data,
-        reinterpret_cast<std::uint16_t *>(y.mutable_bytes()),
-        past_k != nullptr ? reinterpret_cast<const std::uint16_t *>(past_k->bytes()) : nullptr,
-        past_v != nullptr ? reinterpret_cast<const std::uint16_t *>(past_v->bytes()) : nullptr,
-        nonpad);
+    if (plan.has_qk_matmul_output || plan.softmax_fp64) {
+      ComputeHalfAttentionMaterialized(
+          plan, data_type, reinterpret_cast<const std::uint16_t *>(q.bytes()),
+          reinterpret_cast<const std::uint16_t *>(k.bytes()),
+          reinterpret_cast<const std::uint16_t *>(v.bytes()), mask_data,
+          reinterpret_cast<std::uint16_t *>(y.mutable_bytes()),
+          past_k != nullptr ? reinterpret_cast<const std::uint16_t *>(past_k->bytes()) : nullptr,
+          past_v != nullptr ? reinterpret_cast<const std::uint16_t *>(past_v->bytes()) : nullptr,
+          nonpad, qk_half_data);
+    } else {
+      ComputeAttentionFloat16Streaming(
+          plan, reinterpret_cast<const std::uint16_t *>(q.bytes()),
+          reinterpret_cast<const std::uint16_t *>(k.bytes()),
+          reinterpret_cast<const std::uint16_t *>(v.bytes()), mask_data,
+          reinterpret_cast<std::uint16_t *>(y.mutable_bytes()),
+          past_k != nullptr ? reinterpret_cast<const std::uint16_t *>(past_k->bytes()) : nullptr,
+          past_v != nullptr ? reinterpret_cast<const std::uint16_t *>(past_v->bytes()) : nullptr,
+          nonpad);
+    }
   } else {
-    ComputeAttentionBFloat16Streaming(
-        plan, reinterpret_cast<const std::uint16_t *>(q.bytes()),
-        reinterpret_cast<const std::uint16_t *>(k.bytes()),
-        reinterpret_cast<const std::uint16_t *>(v.bytes()), mask_data,
-        reinterpret_cast<std::uint16_t *>(y.mutable_bytes()),
-        past_k != nullptr ? reinterpret_cast<const std::uint16_t *>(past_k->bytes()) : nullptr,
-        past_v != nullptr ? reinterpret_cast<const std::uint16_t *>(past_v->bytes()) : nullptr,
-        nonpad);
+    if (plan.has_qk_matmul_output || plan.softmax_fp64) {
+      ComputeHalfAttentionMaterialized(
+          plan, data_type, reinterpret_cast<const std::uint16_t *>(q.bytes()),
+          reinterpret_cast<const std::uint16_t *>(k.bytes()),
+          reinterpret_cast<const std::uint16_t *>(v.bytes()), mask_data,
+          reinterpret_cast<std::uint16_t *>(y.mutable_bytes()),
+          past_k != nullptr ? reinterpret_cast<const std::uint16_t *>(past_k->bytes()) : nullptr,
+          past_v != nullptr ? reinterpret_cast<const std::uint16_t *>(past_v->bytes()) : nullptr,
+          nonpad, qk_half_data);
+    } else {
+      ComputeAttentionBFloat16Streaming(
+          plan, reinterpret_cast<const std::uint16_t *>(q.bytes()),
+          reinterpret_cast<const std::uint16_t *>(k.bytes()),
+          reinterpret_cast<const std::uint16_t *>(v.bytes()), mask_data,
+          reinterpret_cast<std::uint16_t *>(y.mutable_bytes()),
+          past_k != nullptr ? reinterpret_cast<const std::uint16_t *>(past_k->bytes()) : nullptr,
+          past_v != nullptr ? reinterpret_cast<const std::uint16_t *>(past_v->bytes()) : nullptr,
+          nonpad);
+    }
   }
   if (qk_output != nullptr && plan.has_qk_matmul_output) {
     *qk_output = std::move(qk);
   }
+
+  // --- Construct present_key / present_value outputs ---
+  // These are data copies (concat(past, current) along the sequence axis),
+  // always rank-4 (batch, kv_num_heads, total_kv_length, head_dim), in the
+  // original Q/K/V data type.
+  if (plan.has_present_output) {
+    auto build_present = [&](int output_slot, const Tensor *past_tensor,
+                             const Tensor &current_tensor,
+                             const AttentionPlan::TensorStrides &past_strides,
+                             const AttentionPlan::TensorStrides &current_strides, std::size_t dim,
+                             Tensor *out) {
+      const std::vector<std::int64_t> present_shape = {
+          static_cast<std::int64_t>(plan.batch), static_cast<std::int64_t>(plan.kv_num_heads),
+          static_cast<std::int64_t>(plan.total_kv_length), static_cast<std::int64_t>(dim)};
+      Shape shape_s(present_shape);
+      const std::size_t total_elements =
+          plan.batch * plan.kv_num_heads * plan.total_kv_length * dim;
+      const std::size_t total_bytes = total_elements * element_bytes;
+      Tensor present = rt != nullptr
+                           ? rt->MakeOutputTensor(output_slot, q.data_type, shape_s, total_bytes)
+                           : rt_ns::MakeOutputTensor(q.data_type, shape_s, total_bytes, nullptr);
+      // present is contiguous rank-4: (batch, kv_num_heads, total_kv_length, dim)
+      for (std::size_t b = 0; b < plan.batch; ++b) {
+        for (std::size_t h = 0; h < plan.kv_num_heads; ++h) {
+          const std::size_t dst_offset = (b * plan.kv_num_heads + h) * plan.total_kv_length * dim;
+          // Past segment
+          if (past_tensor != nullptr && plan.past_length > 0) {
+            const std::size_t src_offset =
+                static_cast<std::size_t>(b * past_strides.batch + h * past_strides.head);
+            for (std::size_t s = 0; s < plan.past_length; ++s) {
+              const std::size_t from =
+                  src_offset + s * static_cast<std::size_t>(past_strides.sequence);
+              const std::size_t to = dst_offset + s * dim;
+              std::memcpy(reinterpret_cast<char *>(present.mutable_bytes()) + to * element_bytes,
+                          reinterpret_cast<const char *>(past_tensor->bytes()) +
+                              from * element_bytes,
+                          dim * element_bytes);
+            }
+          }
+          // Current segment
+          const std::size_t cur_offset =
+              static_cast<std::size_t>(b * current_strides.batch + h * current_strides.head);
+          for (std::size_t s = 0; s < plan.kv_length; ++s) {
+            const std::size_t from =
+                cur_offset + s * static_cast<std::size_t>(current_strides.sequence);
+            const std::size_t to = dst_offset + (plan.past_length + s) * dim;
+            std::memcpy(reinterpret_cast<char *>(present.mutable_bytes()) + to * element_bytes,
+                        reinterpret_cast<const char *>(current_tensor.bytes()) +
+                            from * element_bytes,
+                        dim * element_bytes);
+          }
+        }
+      }
+      if (out != nullptr) {
+        *out = std::move(present);
+      }
+    };
+
+    build_present(1, past_k, k, plan.past_k_strides, plan.k_strides, plan.head_dim,
+                  present_key_output);
+    build_present(2, past_v, v, plan.past_v_strides, plan.v_strides, plan.v_head_dim,
+                  present_value_output);
+  }
+
   return y;
 }
 
@@ -209,8 +389,9 @@ Tensor AttentionKernel::operator()(const NodeProto &node, const Tensor &q, const
                                    const Tensor *past_k, const Tensor *past_v,
                                    const Tensor *nonpad_kv_seqlen) const {
   const AttentionDescriptor descriptor = BuildDescriptor(node);
-  Tensor qk_output;
-  return Compute(q, k, v, mask, past_k, past_v, nonpad_kv_seqlen, descriptor, rt, &qk_output);
+  Tensor qk_output, present_key, present_value;
+  return Compute(q, k, v, mask, past_k, past_v, nonpad_kv_seqlen, descriptor, rt, &qk_output,
+                 &present_key, &present_value);
 }
 
 void AttentionKernel::Run(RuntimeContext &rt) {
@@ -228,9 +409,16 @@ void AttentionKernel::Run(RuntimeContext &rt) {
       descriptor.has_past_value ? rt_ns::GetOptionalInput(node, 5, rt.tensors()) : nullptr;
   const Tensor *nonpad =
       descriptor.has_nonpad_kv_seqlen ? rt_ns::GetOptionalInput(node, 6, rt.tensors()) : nullptr;
-  Tensor qk_output;
-  Tensor y = Compute(q, k, v, mask, past_k, past_v, nonpad, descriptor, &rt, &qk_output);
+  Tensor qk_output, present_key, present_value;
+  Tensor y = Compute(q, k, v, mask, past_k, past_v, nonpad, descriptor, &rt, &qk_output,
+                     &present_key, &present_value);
   rt_ns::SetOutput(node, 0, std::move(y), rt);
+  if (descriptor.has_present_key) {
+    rt_ns::SetOutput(node, 1, std::move(present_key), rt);
+  }
+  if (descriptor.has_present_value) {
+    rt_ns::SetOutput(node, 2, std::move(present_value), rt);
+  }
   if (descriptor.has_qk_matmul_output) {
     rt_ns::SetOutput(node, 3, std::move(qk_output), rt);
   }

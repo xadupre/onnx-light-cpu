@@ -62,6 +62,8 @@ schema_ns::TensorType ToTensorType(onnx_light_cpu::DataType type) {
     return TT::kUint64;
   case DT::BFLOAT16:
     return TT::kBfloat16;
+  case DT::STRING:
+    return TT::kString;
   default:
     throw std::invalid_argument("unsupported binary manifest type");
   }
@@ -141,6 +143,9 @@ TEST(OnnxLightBinaryManifest, RegistersValidatedTuningSchemaForEveryOperatorAndI
   for (const auto &entry : onnx_light_cpu::GetBinaryManifest()) {
     std::set<int32_t> element_types;
     for (const auto &signature : entry.signatures) {
+      if (signature.left == onnx_light_cpu::DataType::STRING) {
+        continue;
+      }
       if (!element_types.insert(static_cast<int32_t>(signature.left)).second) {
         continue;
       }
