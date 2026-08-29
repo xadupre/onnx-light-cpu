@@ -36,7 +36,9 @@ import argparse
 import gc
 import os
 import re
+import sys
 import time
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -55,6 +57,13 @@ from onnx_light_cpu import (
     register_kernels,
     used_kernel_names,
 )
+
+# ``_bench_case_plot_data`` lives next to this script rather than in an
+# importable package, so its directory is added to ``sys.path`` explicitly
+# (instead of relying on how sphinx-gallery or pytest happen to invoke this
+# file) before importing it.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _bench_case_plot_data import prepare_plot_data  # noqa: E402
 
 assert has_backend_test_cases(), (
     "onnx-light-cpu must be built with onnx-light's backend test registry "
@@ -135,19 +144,38 @@ def _collect_cases():
 
     Every operator and element type onnx-light-cpu ships a BENCHMARK variant
     for is included; ``--filter`` and ``--max-cases`` are the only further
-    restrictions applied here.
+    restrictions applied here. When ``--max-cases`` truncates the collected
+    cases, the truncation round-robins across operators (instead of taking a
+    contiguous prefix of whatever order they were collected in) so a small
+    ``--max-cases`` still yields a representative, multi-operator sample
+    rather than being dominated by whichever operator happens to sort first
+    or have the most benchmark variants -- e.g. Attention, which ONNX Runtime
+    rejects for several onnx-light-cpu benchmark cases (see below), would
+    otherwise fill the whole default selection and leave nothing comparable
+    to plot.
     """
     register_backend_test_cases()
     max_cases = (
         10 if os.environ.get("UNITTEST_GOING", "0") in ("1", "true", "True") else args.max_cases
     )
-    cases = []
+    cases_by_op_type = {}
     for tc in collect_test_cases_by_name("^test_cpu_.*_benchmark$", mode=TestMode.BENCHMARK):
         if _name_filter is not None and not _name_filter.search(tc.name):
             continue
-        cases.append(tc)
-    if max_cases:
-        cases = cases[:max_cases]
+        op_type = tc.model.graph.node[0].op_type
+        cases_by_op_type.setdefault(op_type, []).append(tc)
+    if not max_cases:
+        return [tc for group in cases_by_op_type.values() for tc in group]
+    cases = []
+    while len(cases) < max_cases and any(cases_by_op_type.values()):
+        for op_type in list(cases_by_op_type):
+            group = cases_by_op_type[op_type]
+            if not group:
+                del cases_by_op_type[op_type]
+                continue
+            cases.append(group.pop(0))
+            if len(cases) >= max_cases:
+                break
     return cases
 
 
@@ -384,33 +412,22 @@ results_frame.to_excel("plot_backend_cases_benchmark.xlsx", index=False)
 # speed-up over ONNX Runtime (values above 1 mean onnx-light-cpu is faster).
 # The x-axis is logarithmic so a speed-up and its reciprocal are equidistant
 # from the ``1`` baseline. Cases ONNX Runtime failed to run (ort_time is
-# None, see the try/except above) are left out of the plot since they have no
-# speed-up to show.
+# None, see the try/except above) are left out of the plot -- they have no
+# speed-up to show -- but not out of the table/xlsx output above, where their
+# error is still reported. If every case was rejected or failed, there is
+# nothing to plot: :func:`prepare_plot_data` raises rather than silently
+# rendering an empty chart, since that would look identical to a build that
+# ran fine.
 
-_plotted_rows = [row for row in rows if row[5] is not None]
-_unique_op_types = sorted({op_type for op_type, *_ in _plotted_rows})
-_COLOR_MAP = plt.get_cmap("turbo", len(_unique_op_types))
-_COLORS = {op_type: _COLOR_MAP(index) for index, op_type in enumerate(_unique_op_types)}
+_plot_data = prepare_plot_data(rows)
 
-
-def _short_label(name):
-    label = name.removeprefix("test_cpu_")
-    return label.removesuffix("_benchmark")
-
-
-labels = [_short_label(name) for _, name, *_ in _plotted_rows]
-speedups = np.array(
-    [ort_time / light_time for _, _, _, _, light_time, ort_time, _ in _plotted_rows]
-)
-colors = [_COLORS[op_type] for op_type, *_ in _plotted_rows]
-
-fig, ax = plt.subplots(figsize=(8, max(5, 0.4 * len(_plotted_rows))))
-positions = np.arange(len(_plotted_rows))
-ax.barh(positions, speedups, color=colors)
+fig, ax = plt.subplots(figsize=(8, max(5, 0.4 * len(_plot_data.plotted_rows))))
+positions = np.arange(len(_plot_data.plotted_rows))
+ax.barh(positions, _plot_data.speedups, color=_plot_data.colors)
 ax.axvline(1.0, color="grey", linewidth=0.8, linestyle=":")
 ax.set_xscale("log")
-ax.set_yticks(positions, labels, fontsize=7)
-for tick_label, speedup in zip(ax.get_yticklabels(), speedups, strict=True):
+ax.set_yticks(positions, _plot_data.labels, fontsize=7)
+for tick_label, speedup in zip(ax.get_yticklabels(), _plot_data.speedups, strict=True):
     if speedup <= 0.5:
         tick_label.set_color("red")
     elif speedup < 0.95:
@@ -418,8 +435,17 @@ for tick_label, speedup in zip(ax.get_yticklabels(), speedups, strict=True):
 ax.set_xlabel("speed-up vs onnxruntime")
 ax.set_title("onnx-light-cpu speed-up over onnxruntime on backend cases")
 
-handles = [plt.Rectangle((0, 0), 1, 1, color=color) for color in _COLORS.values()]
-ax.legend(handles, _COLORS.keys(), title="operator", loc="upper left", fontsize=8, ncols=3)
+handles = [
+    plt.Rectangle((0, 0), 1, 1, color=color) for color in _plot_data.colors_by_op_type.values()
+]
+ax.legend(
+    handles,
+    _plot_data.colors_by_op_type.keys(),
+    title="operator",
+    loc="upper left",
+    fontsize=8,
+    ncols=3,
+)
 
 fig.tight_layout()
 fig.savefig("plot_backend_cases_benchmark.png")
