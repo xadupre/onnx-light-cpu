@@ -281,7 +281,8 @@ BinaryKernelDescriptor::Attributes DefaultAttributes(const BinaryManifestEntry &
 
 IoData MakeBinaryIoData(const BinaryManifestEntry &entry, const BinaryTypeSignature &signature,
                         const ShapePair &shape_pair,
-                        const BinaryKernelDescriptor::Attributes &attributes, bool swap_operands) {
+                        const BinaryKernelDescriptor::Attributes &attributes, bool swap_operands,
+                        bool generate_expected_outputs = true) {
   const bool division_like = entry.op == BinaryOperator::kDiv || entry.op == BinaryOperator::kMod;
   const bool pow_like = entry.op == BinaryOperator::kPow;
   const bool shift_like = entry.op == BinaryOperator::kBitShift;
@@ -291,6 +292,9 @@ IoData MakeBinaryIoData(const BinaryManifestEntry &entry, const BinaryTypeSignat
   Tensor right =
       MakeTypedTensor(signature.right, swap_operands ? shape_pair.left : shape_pair.right, {}, true,
                       division_like || shift_like, true);
+  if (!generate_expected_outputs) {
+    return IoData{{std::move(left), std::move(right)}, {}, false};
+  }
   const OpsetId opset(std::string(), entry.since_version);
   const NodeProto node = MakeNode(entry.op_type, attributes);
   const BinaryElementwiseKernel kernel(node, KernelContext{opset});
@@ -344,8 +348,9 @@ void RegisterLlmBenchmark(std::vector<TestCase> &registry, const BinaryManifestE
   const std::string name =
       CaseName(entry, signature, shape_pair, attributes, false, true, output_count, "llm_qwen3_8b");
   Expect(registry, node, name, {opset}, {left_count, right_count}, {output_count},
-         [entry, signature, shape_pair, attributes]() -> IoData {
-           return MakeBinaryIoData(entry, signature, shape_pair, attributes, false);
+         [entry, signature, shape_pair, attributes](bool generate_expected_outputs) -> IoData {
+           return MakeBinaryIoData(entry, signature, shape_pair, attributes, false,
+                                   generate_expected_outputs);
          });
 }
 
@@ -364,15 +369,17 @@ void RegisterBenchmarksForSignature(std::vector<TestCase> &registry,
     const std::string name =
         CaseName(entry, signature, shape_pair, attributes, false, true, output_count);
     Expect(registry, node, name, {opset}, {left_count, right_count}, {output_count},
-           [entry, signature, shape_pair, attributes]() -> IoData {
-             return MakeBinaryIoData(entry, signature, shape_pair, attributes, false);
+           [entry, signature, shape_pair, attributes](bool generate_expected_outputs) -> IoData {
+             return MakeBinaryIoData(entry, signature, shape_pair, attributes, false,
+                                     generate_expected_outputs);
            });
     if (IsNonCommutative(entry.op)) {
       const std::string swapped_name =
           CaseName(entry, signature, shape_pair, attributes, true, true, output_count);
       Expect(registry, node, swapped_name, {opset}, {right_count, left_count}, {output_count},
-             [entry, signature, shape_pair, attributes]() -> IoData {
-               return MakeBinaryIoData(entry, signature, shape_pair, attributes, true);
+             [entry, signature, shape_pair, attributes](bool generate_expected_outputs) -> IoData {
+               return MakeBinaryIoData(entry, signature, shape_pair, attributes, true,
+                                       generate_expected_outputs);
              });
     }
     if (entry.op == BinaryOperator::kBitShift) {
@@ -381,8 +388,9 @@ void RegisterBenchmarksForSignature(std::vector<TestCase> &registry,
       const std::string right_name =
           CaseName(entry, signature, shape_pair, attributes, false, true, output_count);
       Expect(registry, right_node, right_name, {opset}, {left_count, right_count}, {output_count},
-             [entry, signature, shape_pair, attributes]() -> IoData {
-               return MakeBinaryIoData(entry, signature, shape_pair, attributes, false);
+             [entry, signature, shape_pair, attributes](bool generate_expected_outputs) -> IoData {
+               return MakeBinaryIoData(entry, signature, shape_pair, attributes, false,
+                                       generate_expected_outputs);
              });
     }
   }

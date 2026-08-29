@@ -215,53 +215,63 @@ void RegisterAttentionCase(std::vector<TestCase> &registry, const OpsetId &opset
     input_counts.push_back(batch);
   }
 
-  Expect(registry, node, name, {opset}, input_counts, {y_count},
-         [q_shape, k_shape, v_shape, past_shape, has_mask, mask, cache, data_type, node, q_len,
-          kv_len, batch]() -> IoData {
-           const onnx_light_cpu::AttentionKernel kernel{KernelContext{DefaultOpset(23)}};
-           Tensor q = MakeBenchmarkTensor(data_type, q_shape, 501);
-           Tensor k = MakeBenchmarkTensor(data_type, k_shape, 502);
-           Tensor v = MakeBenchmarkTensor(data_type, v_shape, 503);
-           std::optional<Tensor> mask_tensor;
-           const Tensor *mask_ptr = nullptr;
-           if (has_mask) {
-             if (mask == Mask::kBoolean) {
-               const std::vector<float> random = rt_ns::Randn<float>({q_len, kv_len}, 504);
-               std::vector<std::uint8_t> values(random.size());
-               for (std::size_t i = 0; i < values.size(); ++i) {
-                 values[i] = random[i] > 0.0f ? 1 : 0;
-               }
-               mask_tensor.emplace(Tensor("", DataType::BOOL, {q_len, kv_len}, std::move(values)));
-             } else {
-               mask_tensor.emplace(MakeBenchmarkTensor(DataType::FLOAT, {q_len, kv_len}, 505));
-             }
-             mask_ptr = &(*mask_tensor);
-           }
-           std::optional<Tensor> past_k;
-           std::optional<Tensor> past_v;
-           std::optional<Tensor> nonpad;
-           if (cache == Cache::kInternal) {
-             past_k.emplace(MakeBenchmarkTensor(data_type, past_shape, 506));
-             past_v.emplace(MakeBenchmarkTensor(data_type, past_shape, 507));
-           } else if (cache == Cache::kNonpad) {
-             const std::int64_t nonpad_length = std::max<std::int64_t>(1, kv_len - 17);
-             nonpad.emplace(
-                 Tensor::FromInt64("", {batch}, std::vector<std::int64_t>(batch, nonpad_length)));
-           }
-           Tensor y = kernel(node, q, k, v, mask_ptr, nullptr, past_k ? &*past_k : nullptr,
-                             past_v ? &*past_v : nullptr, nonpad ? &*nonpad : nullptr);
-           std::vector<Tensor> inputs{std::move(q), std::move(k), std::move(v)};
-           if (mask_tensor) {
-             inputs.push_back(std::move(*mask_tensor));
-           }
-           if (past_k) {
-             inputs.push_back(std::move(*past_k));
-             inputs.push_back(std::move(*past_v));
-           } else if (nonpad) {
-             inputs.push_back(std::move(*nonpad));
-           }
-           return IoData{std::move(inputs), {std::move(y)}};
-         });
+  auto build_data = [q_shape, k_shape, v_shape, past_shape, has_mask, mask, cache, data_type, node,
+                     q_len, kv_len, batch](bool generate_expected_outputs) -> IoData {
+    Tensor q = MakeBenchmarkTensor(data_type, q_shape, 501);
+    Tensor k = MakeBenchmarkTensor(data_type, k_shape, 502);
+    Tensor v = MakeBenchmarkTensor(data_type, v_shape, 503);
+    std::optional<Tensor> mask_tensor;
+    const Tensor *mask_ptr = nullptr;
+    if (has_mask) {
+      if (mask == Mask::kBoolean) {
+        const std::vector<float> random = rt_ns::Randn<float>({q_len, kv_len}, 504);
+        std::vector<std::uint8_t> values(random.size());
+        for (std::size_t i = 0; i < values.size(); ++i) {
+          values[i] = random[i] > 0.0f ? 1 : 0;
+        }
+        mask_tensor.emplace(Tensor("", DataType::BOOL, {q_len, kv_len}, std::move(values)));
+      } else {
+        mask_tensor.emplace(MakeBenchmarkTensor(DataType::FLOAT, {q_len, kv_len}, 505));
+      }
+      mask_ptr = &(*mask_tensor);
+    }
+    std::optional<Tensor> past_k;
+    std::optional<Tensor> past_v;
+    std::optional<Tensor> nonpad;
+    if (cache == Cache::kInternal) {
+      past_k.emplace(MakeBenchmarkTensor(data_type, past_shape, 506));
+      past_v.emplace(MakeBenchmarkTensor(data_type, past_shape, 507));
+    } else if (cache == Cache::kNonpad) {
+      const std::int64_t nonpad_length = std::max<std::int64_t>(1, kv_len - 17);
+      nonpad.emplace(
+          Tensor::FromInt64("", {batch}, std::vector<std::int64_t>(batch, nonpad_length)));
+    }
+    std::vector<Tensor> inputs{std::move(q), std::move(k), std::move(v)};
+    if (mask_tensor) {
+      inputs.push_back(std::move(*mask_tensor));
+    }
+    if (past_k) {
+      inputs.push_back(std::move(*past_k));
+      inputs.push_back(std::move(*past_v));
+    } else if (nonpad) {
+      inputs.push_back(std::move(*nonpad));
+    }
+    if (!generate_expected_outputs) {
+      return IoData{std::move(inputs), {}, false};
+    }
+    const onnx_light_cpu::AttentionKernel kernel{KernelContext{DefaultOpset(23)}};
+    Tensor y = kernel(node, inputs[0], inputs[1], inputs[2], has_mask ? &inputs[3] : nullptr,
+                      nullptr, past_shape[2] > 0 ? &inputs[has_mask ? 4 : 3] : nullptr,
+                      past_shape[2] > 0 ? &inputs[has_mask ? 5 : 4] : nullptr,
+                      cache == Cache::kNonpad ? &inputs.back() : nullptr);
+    return IoData{std::move(inputs), {std::move(y)}};
+  };
+  if (benchmark) {
+    Expect(registry, node, name, {opset}, input_counts, {y_count}, std::move(build_data));
+  } else {
+    Expect(registry, node, name, {opset}, input_counts, {y_count},
+           [build_data = std::move(build_data)]() mutable { return build_data(true); });
+  }
 }
 
 } // namespace

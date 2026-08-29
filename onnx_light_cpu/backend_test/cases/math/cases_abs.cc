@@ -60,7 +60,6 @@ Tensor MakeBfloat16Tensor(const std::vector<int64_t> &shape, const std::vector<f
 // float32, float64, int8, int16, int32, int64, float16, bfloat16.
 void RegisterCpuAbsCases(std::vector<TestCase> &registry, TestMode mode) {
   const OpsetId opset = DefaultOpset(13);
-  const onnx_light_cpu::AbsKernel abs_kernel{KernelContext{opset}};
   const std::vector<int64_t> shape = {2, 3};
   const std::vector<float> f = {-1.0f, 0.0f, 1.5f, -2.25f, 3.5f, -4.75f};
 
@@ -69,12 +68,15 @@ void RegisterCpuAbsCases(std::vector<TestCase> &registry, TestMode mode) {
       for (const DataType data_type :
            {DataType::FLOAT, DataType::DOUBLE, DataType::INT8, DataType::INT16, DataType::INT32,
             DataType::INT64, DataType::FLOAT16, DataType::BFLOAT16}) {
-        RegisterUnaryBenchmark(registry, "Abs", abs_kernel, opset, data_type, size);
+        RegisterUnaryBenchmark(
+            registry, "Abs", [opset] { return onnx_light_cpu::AbsKernel{KernelContext{opset}}; },
+            opset, data_type, size);
       }
     }
     return;
   }
 
+  const onnx_light_cpu::AbsKernel abs_kernel{KernelContext{opset}};
   Expect(registry, MakeAbsNode(), "test_cpu_abs_float32", {opset}, [=]() -> IoData {
     Tensor x = Tensor::FromFloat("", shape, f);
     return IoData{{x}, {abs_kernel(x)}};

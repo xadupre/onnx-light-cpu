@@ -58,14 +58,29 @@ void RegisterMatMulCase(std::vector<TestCase> &registry, const onnx_light_cpu::M
   const std::int64_t a_count = shape.m * shape.k;
   const std::int64_t b_count = shape.k * shape.n;
   const std::int64_t y_count = shape.m * shape.n;
+  if (benchmark) {
+    Expect(registry, MakeMatMulNode(), name, {opset}, {a_count, b_count}, {y_count},
+           [opset, shape, data_type](bool generate_expected_outputs) -> IoData {
+             const rt_ns::Shape a_shape =
+                 shape.rank3 ? rt_ns::Shape{1, shape.m, shape.k} : rt_ns::Shape{shape.m, shape.k};
+             Tensor a = MakeBenchmarkTensor(data_type, a_shape, 433);
+             Tensor b = MakeBenchmarkTensor(data_type, {shape.k, shape.n}, 434);
+             if (!generate_expected_outputs) {
+               return IoData{{std::move(a), std::move(b)}, {}, false};
+             }
+             const onnx_light_cpu::MatMulKernel benchmark_kernel{KernelContext{opset}};
+             Tensor y = benchmark_kernel(a, b);
+             return IoData{{std::move(a), std::move(b)}, {std::move(y)}};
+           });
+    return;
+  }
   Expect(registry, MakeMatMulNode(), name, {opset}, {a_count, b_count}, {y_count},
          [kernel, shape, data_type]() -> IoData {
            const rt_ns::Shape a_shape =
                shape.rank3 ? rt_ns::Shape{1, shape.m, shape.k} : rt_ns::Shape{shape.m, shape.k};
            Tensor a = MakeBenchmarkTensor(data_type, a_shape, 433);
            Tensor b = MakeBenchmarkTensor(data_type, {shape.k, shape.n}, 434);
-           Tensor y = kernel(a, b);
-           return IoData{{std::move(a), std::move(b)}, {std::move(y)}};
+           return IoData{{std::move(a), std::move(b)}, {kernel(a, b)}};
          });
 }
 
@@ -73,7 +88,6 @@ void RegisterMatMulCase(std::vector<TestCase> &registry, const onnx_light_cpu::M
 
 void RegisterCpuMatMulCases(std::vector<TestCase> &registry, TestMode mode) {
   const OpsetId opset = DefaultOpset(13);
-  const onnx_light_cpu::MatMulKernel kernel{KernelContext{opset}};
   const std::array<DataType, 4> data_types = {DataType::FLOAT, DataType::DOUBLE, DataType::FLOAT16,
                                               DataType::BFLOAT16};
   if (mode == TestMode::BENCHMARK) {
@@ -98,6 +112,7 @@ void RegisterCpuMatMulCases(std::vector<TestCase> &registry, TestMode mode) {
     }
     return;
   }
+  const onnx_light_cpu::MatMulKernel kernel{KernelContext{opset}};
   for (DataType data_type : data_types) {
     RegisterMatMulCase(registry, kernel, opset, {"small", 2, 3, 4}, data_type, false);
   }

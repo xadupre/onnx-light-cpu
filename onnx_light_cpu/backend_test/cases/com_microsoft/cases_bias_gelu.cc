@@ -54,8 +54,6 @@ NodeProto MakeBiasGeluNode() {
 // float32, float64, float16, bfloat16.
 void RegisterCpuBiasGeluCases(std::vector<TestCase> &registry, TestMode mode) {
   const OpsetId microsoft_opset(kMicrosoftDomain, 1);
-  const BiasGeluKernel kernel{KernelContext{microsoft_opset}};
-
   if (mode == TestMode::BENCHMARK) {
     struct Shape {
       std::int64_t outer;
@@ -69,10 +67,14 @@ void RegisterCpuBiasGeluCases(std::vector<TestCase> &registry, TestMode mode) {
                                  std::to_string(shape.inner) + "_" + DataTypeSuffix(data_type) +
                                  "_benchmark";
         Expect(registry, MakeBiasGeluNode(), name, {DefaultOpset(13), microsoft_opset},
-               {size, shape.inner}, {size}, [=]() -> IoData {
+               {size, shape.inner}, {size}, [=](bool generate_expected_outputs) -> IoData {
                  Tensor a =
                      MakeBenchmarkTensor(data_type, {shape.outer, shape.inner}, 987654321ULL);
                  Tensor b = MakeBenchmarkTensor(data_type, {shape.inner}, 135792468ULL);
+                 if (!generate_expected_outputs) {
+                   return IoData{{std::move(a), std::move(b)}, {}, false};
+                 }
+                 const BiasGeluKernel kernel{KernelContext{microsoft_opset}};
                  Tensor c = kernel(a, b);
                  return IoData{{std::move(a), std::move(b)}, {std::move(c)}};
                });
@@ -81,6 +83,7 @@ void RegisterCpuBiasGeluCases(std::vector<TestCase> &registry, TestMode mode) {
     return;
   }
 
+  const BiasGeluKernel kernel{KernelContext{microsoft_opset}};
   const OpsetId opset = microsoft_opset;
 
   Expect(registry, MakeBiasGeluNode(), "test_cpu_biasgelu_float32", {DefaultOpset(13), opset},

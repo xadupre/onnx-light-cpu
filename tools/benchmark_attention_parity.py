@@ -190,7 +190,9 @@ def _collect_cases(include_large: bool, patterns: Sequence[str]) -> list[Any]:
 
     register_backend_test_cases()
     cases = []
-    for test_case in collect_test_cases_by_name("^test_cpu_attention_", mode=TestMode.BENCHMARK):
+    for test_case in collect_test_cases_by_name(
+        "^test_cpu_attention_", mode=TestMode.BENCHMARK, generate_benchmark_expected_outputs=False
+    ):
         metadata = parse_case_name(test_case.name)
         if metadata["kv_length"] == 8192 and not include_large:
             continue

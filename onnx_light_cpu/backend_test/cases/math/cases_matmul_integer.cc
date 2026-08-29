@@ -59,12 +59,25 @@ void RegisterMatMulIntegerCase(std::vector<TestCase> &registry,
   const std::int64_t a_count = shape.m * shape.k;
   const std::int64_t b_count = shape.k * shape.n;
   const std::int64_t y_count = shape.m * shape.n;
+  if (benchmark) {
+    Expect(registry, MakeMatMulIntegerNode(), name, {opset}, {a_count, b_count}, {y_count},
+           [opset, shape, a_type, b_type](bool generate_expected_outputs) -> IoData {
+             Tensor a = MakeBenchmarkTensor(a_type, {shape.m, shape.k}, 433);
+             Tensor b = MakeBenchmarkTensor(b_type, {shape.k, shape.n}, 434);
+             if (!generate_expected_outputs) {
+               return IoData{{std::move(a), std::move(b)}, {}, false};
+             }
+             const onnx_light_cpu::MatMulIntegerKernel kernel{KernelContext{opset}};
+             Tensor y = kernel(a, b);
+             return IoData{{std::move(a), std::move(b)}, {std::move(y)}};
+           });
+    return;
+  }
   Expect(registry, MakeMatMulIntegerNode(), name, {opset}, {a_count, b_count}, {y_count},
          [kernel, shape, a_type, b_type]() -> IoData {
            Tensor a = MakeBenchmarkTensor(a_type, {shape.m, shape.k}, 433);
            Tensor b = MakeBenchmarkTensor(b_type, {shape.k, shape.n}, 434);
-           Tensor y = kernel(a, b);
-           return IoData{{std::move(a), std::move(b)}, {std::move(y)}};
+           return IoData{{std::move(a), std::move(b)}, {kernel(a, b)}};
          });
 }
 
@@ -72,7 +85,6 @@ void RegisterMatMulIntegerCase(std::vector<TestCase> &registry,
 
 void RegisterCpuMatMulIntegerCases(std::vector<TestCase> &registry, TestMode mode) {
   const OpsetId opset = DefaultOpset(10);
-  const onnx_light_cpu::MatMulIntegerKernel kernel{KernelContext{opset}};
   constexpr std::array<DataType, 2> data_types = {DataType::INT8, DataType::UINT8};
   if (mode == TestMode::BENCHMARK) {
     constexpr std::array<MatMulShape, 5> shapes = {
@@ -89,6 +101,7 @@ void RegisterCpuMatMulIntegerCases(std::vector<TestCase> &registry, TestMode mod
     }
     return;
   }
+  const onnx_light_cpu::MatMulIntegerKernel kernel{KernelContext{opset}};
   for (DataType a_type : data_types) {
     for (DataType b_type : data_types) {
       RegisterMatMulIntegerCase(registry, kernel, opset, {"small", 2, 3, 4}, a_type, b_type, false);
