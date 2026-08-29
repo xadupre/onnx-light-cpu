@@ -89,9 +89,9 @@ accelerated implementations.
          #include <onnx_core/runtime/runtime_context.h>
          #include <onnx_core/runtime/runtime_session.h>
 
+         #include <cmath>
          #include <cstddef>
          #include <cstdint>
-         #include <cmath>
          #include <stdexcept>
          #include <vector>
 
@@ -123,10 +123,10 @@ accelerated implementations.
       the callback before then. Other contexts continue to use their existing
       ``Abs`` implementation.
 
-Both entry points update the same shared C++ ``KernelDispatchTable``. See
-:doc:`design/registering_kernels` for per-session overrides, kernel-usage
-inspection, custom registrations, and troubleshooting when two builds link
-different copies of ``lib_onnx_core``.
+The shipped-kernel Python and C++ entry points above update the same shared C++
+``KernelDispatchTable``. See :doc:`design/registering_kernels` for per-session
+overrides, kernel-usage inspection, custom registrations, and troubleshooting
+when two builds link different copies of ``lib_onnx_core``.
 
 .. toctree::
    :maxdepth: 1
