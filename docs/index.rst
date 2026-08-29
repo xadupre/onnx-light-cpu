@@ -102,11 +102,11 @@ accelerated implementations.
                "", "Abs", [](const ONNX_LIGHT_NAMESPACE::NodeProto &node,
                               rt::RuntimeContext &context) {
                  const rt::Tensor &input = context.Get(node.input(0));
-                 if (input.data_type != static_cast<int32_t>(rt::DataType::FLOAT)) {
+                 if (input.data_type != static_cast<std::int32_t>(rt::DataType::FLOAT)) {
                    throw std::invalid_argument("This example Abs kernel requires FLOAT input.");
                  }
-                 std::vector<float> output(static_cast<size_t>(input.element_count()));
-                 for (size_t i = 0; i < output.size(); ++i) {
+                 std::vector<float> output(static_cast<std::size_t>(input.element_count()));
+                 for (std::size_t i = 0; i < output.size(); ++i) {
                    output[i] = std::fabs(input.AsFloat()[i]);
                  }
                  context.Set(node.output(0),
