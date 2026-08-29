@@ -36,9 +36,8 @@ import argparse
 import gc
 import os
 import re
-import sys
 import time
-from pathlib import Path
+from dataclasses import dataclass
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -57,13 +56,6 @@ from onnx_light_cpu import (
     register_kernels,
     used_kernel_names,
 )
-
-# ``_bench_case_plot_data`` lives next to this script rather than in an
-# importable package, so its directory is added to ``sys.path`` explicitly
-# (instead of relying on how sphinx-gallery or pytest happen to invoke this
-# file) before importing it.
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _bench_case_plot_data import prepare_plot_data  # noqa: E402
 
 assert has_backend_test_cases(), (
     "onnx-light-cpu must be built with onnx-light's backend test registry "
@@ -418,6 +410,71 @@ results_frame.to_excel("plot_backend_cases_benchmark.xlsx", index=False)
 # nothing to plot: :func:`prepare_plot_data` raises rather than silently
 # rendering an empty chart, since that would look identical to a build that
 # ran fine.
+
+
+class NoPlottableCasesError(RuntimeError):
+    """Raised when no collected row has a comparable ONNX Runtime timing.
+
+    A chart with zero bars is not a useful (nor a correct) rendering of "no
+    comparable case was found": it looks identical to "the build silently
+    produced an empty page". Raising here instead turns that situation into a
+    build failure with the offending case names/errors attached.
+    """
+
+
+@dataclass
+class PlotData:
+    """Everything the chart needs, derived once from the plottable rows."""
+
+    plotted_rows: list
+    labels: list
+    speedups: np.ndarray
+    colors: list
+    colors_by_op_type: dict
+
+
+def _short_label(name):
+    """Strips the common ``test_cpu_*_benchmark`` case-name affixes."""
+    label = name.removeprefix("test_cpu_")
+    return label.removesuffix("_benchmark")
+
+
+def prepare_plot_data(rows):
+    """Turns collected benchmark ``rows`` into the values the chart plots.
+
+    Each row is ``(op_type, name, shapes, dtypes, light_time, ort_time,
+    ort_error)`` -- the same tuples appended to ``rows`` above. Rows whose
+    ``ort_time`` (index 5) is ``None`` are excluded from the returned plot
+    data. Raises :class:`NoPlottableCasesError` -- naming every rejected case
+    and its error -- when that leaves nothing to plot, rather than letting
+    the caller render an empty chart.
+    """
+    plotted_rows = [row for row in rows if row[5] is not None]
+    if not plotted_rows:
+        if rows:
+            details = "; ".join(f"{row[1]} ({row[6] or 'no error message'})" for row in rows)
+        else:
+            details = "no benchmark case was collected"
+        raise NoPlottableCasesError(
+            "no benchmark case produced a comparable ONNX Runtime timing; every "
+            f"collected case was rejected or failed: {details}"
+        )
+    unique_op_types = sorted({row[0] for row in plotted_rows})
+    color_map = plt.get_cmap("turbo", len(unique_op_types))
+    colors_by_op_type = {
+        op_type: color_map(index) for index, op_type in enumerate(unique_op_types)
+    }
+    labels = [_short_label(row[1]) for row in plotted_rows]
+    speedups = np.array([row[5] / row[4] for row in plotted_rows])
+    colors = [colors_by_op_type[row[0]] for row in plotted_rows]
+    return PlotData(
+        plotted_rows=plotted_rows,
+        labels=labels,
+        speedups=speedups,
+        colors=colors,
+        colors_by_op_type=colors_by_op_type,
+    )
+
 
 _plot_data = prepare_plot_data(rows)
 
