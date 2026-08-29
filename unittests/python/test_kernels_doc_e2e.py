@@ -93,3 +93,29 @@ class TestGenerationParityWithLiveInventory:
         second = {p.name: p.read_bytes() for p in sorted(output_dir.glob("*.rst"))}
 
         assert first == second
+
+    def test_group_query_attention_page_links_to_all_registered_support(self, tmp_path):
+        records = load_registered_kernels()
+        output_dir = tmp_path / "kernels_generated"
+        generate_kernel_pages(
+            records,
+            output_dir,
+            schemas=load_custom_schemas(),
+            support_records=load_operator_support(),
+        )
+
+        group_query_attention = next(
+            record
+            for record in records
+            if record.domain == "com.microsoft" and record.op_type == "GroupQueryAttention"
+        )
+        stem = next(
+            stem
+            for stem, record in assign_stems(records).items()
+            if record == group_query_attention
+        )
+        page = output_dir / f"{stem}.rst"
+        text = page.read_text(encoding="utf-8")
+        assert ":cpp:class:`onnx_light_cpu::GroupQueryAttentionFusionPattern`" in text
+        assert ":cpp:func:`onnx_light_cpu::ComputeShapeGroupQueryAttention`" in text
+        assert ":cpp:func:`onnx_light_cpu::ComputePeakMemoryGroupQueryAttention`" in text

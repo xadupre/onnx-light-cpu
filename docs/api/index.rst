@@ -143,10 +143,16 @@ The custom operator support inventory and its implementations are also public:
 .. doxygenfunction:: onnx_light_cpu::ComputeShapeBiasGelu
    :project: onnx_light_cpu
 
+.. doxygenfunction:: onnx_light_cpu::ComputeShapeGroupQueryAttention
+   :project: onnx_light_cpu
+
 .. doxygenfunction:: onnx_light_cpu::ComputePeakMemoryCDist
    :project: onnx_light_cpu
 
 .. doxygenfunction:: onnx_light_cpu::ComputePeakMemoryBiasGelu
+   :project: onnx_light_cpu
+
+.. doxygenfunction:: onnx_light_cpu::ComputePeakMemoryGroupQueryAttention
    :project: onnx_light_cpu
 
 .. doxygenfunction:: onnx_light_cpu::RegisterMicrosoftShapeAndMemoryFunctions
@@ -159,6 +165,9 @@ The custom operator support inventory and its implementations are also public:
    :project: onnx_light_cpu
 
 .. doxygenclass:: onnx_light_cpu::CDistFusionPattern
+   :project: onnx_light_cpu
+
+.. doxygenclass:: onnx_light_cpu::GroupQueryAttentionFusionPattern
    :project: onnx_light_cpu
 
 Python API
