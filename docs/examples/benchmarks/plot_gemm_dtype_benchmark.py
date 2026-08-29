@@ -94,11 +94,18 @@ from onnx_light_cpu import (
     has_cpu_kernels,
     register_kernels,
     registered_kernel_names,
+    SimdLevel,
     set_kernel_usage_recording,
     used_kernel_names,
 )
 
-_SIMD_NAMES = {0: "scalar", 1: "SSE2", 2: "AVX", 3: "AVX2", 4: "AVX-512"}
+_SIMD_NAMES = {
+    SimdLevel.NONE: "scalar",
+    SimdLevel.SSE2: "SSE2",
+    SimdLevel.AVX: "AVX",
+    SimdLevel.AVX2: "AVX2",
+    SimdLevel.AVX512: "AVX-512",
+}
 
 assert has_cpu_kernels()
 level = detect_simd_level()
