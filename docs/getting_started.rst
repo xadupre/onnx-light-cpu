@@ -42,11 +42,9 @@ best available SIMD path:
 
       .. code-block:: python
 
-         from onnx_light_cpu import register_kernels
-         from onnx_light_cpu.onnx_py._cpukernels import detect_simd_level, has_cpu_kernels
+         from onnx_light_cpu import detect_simd_level, has_cpu_kernels, register_kernels
 
          # Check what SIMD level is available:
-         # 0=None, 1=SSE2, 2=AVX, 3=AVX2, 4=AVX512
          print("CPU kernels available:", has_cpu_kernels())
          print("SIMD level:", detect_simd_level())
 
