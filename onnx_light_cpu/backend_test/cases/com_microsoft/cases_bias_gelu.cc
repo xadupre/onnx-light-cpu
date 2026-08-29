@@ -67,17 +67,21 @@ void RegisterCpuBiasGeluCases(std::vector<TestCase> &registry, TestMode mode) {
                                  std::to_string(shape.inner) + "_" + DataTypeSuffix(data_type) +
                                  "_benchmark";
         Expect(registry, MakeBiasGeluNode(), name, {DefaultOpset(13), microsoft_opset},
-               {size, shape.inner}, {size}, [=](bool generate_expected_outputs) -> IoData {
+               {size, shape.inner}, {size},
+               [=](bool generate_expected_outputs) -> IoData {
                  Tensor a =
                      MakeBenchmarkTensor(data_type, {shape.outer, shape.inner}, 987654321ULL);
                  Tensor b = MakeBenchmarkTensor(data_type, {shape.inner}, 135792468ULL);
                  if (!generate_expected_outputs) {
-                   return IoData{{std::move(a), std::move(b)}, {}, false};
+                   return IoData{{std::move(a), std::move(b)}, {}, {}, false};
                  }
                  const BiasGeluKernel kernel{KernelContext{microsoft_opset}};
                  Tensor c = kernel(a, b);
                  return IoData{{std::move(a), std::move(b)}, {std::move(c)}};
-               });
+               },
+               "backend-test", "",
+               {bt_ns::TensorTypeSpec(static_cast<std::int32_t>(data_type),
+                                      {shape.outer, shape.inner})});
       }
     }
     return;

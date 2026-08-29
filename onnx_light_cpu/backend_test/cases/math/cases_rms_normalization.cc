@@ -83,12 +83,14 @@ void RegisterRmsNormalizationCase(std::vector<TestCase> &registry, const OpsetId
              Tensor x = MakeBenchmarkTensor(data_type, shape.input_shape, shape.seed);
              Tensor scale = MakeBenchmarkTensor(data_type, shape.scale_shape, shape.seed + 1);
              if (!generate_expected_outputs) {
-               return IoData{{std::move(x), std::move(scale)}, {}, false};
+               return IoData{{std::move(x), std::move(scale)}, {}, {}, false};
              }
              const RmsNormalizationKernel kernel{KernelContext{DefaultOpset(23)}};
              Tensor y = kernel(x, scale, shape.axis, 1.0e-6f, 1);
              return IoData{{std::move(x), std::move(scale)}, {std::move(y)}};
-           });
+           },
+           "backend-test", "",
+           {bt_ns::TensorTypeSpec(static_cast<std::int32_t>(data_type), shape.input_shape)});
   } else {
     Expect(registry, node, name, {opset}, {x_count, scale_count}, {x_count},
            [shape, data_type]() -> IoData {

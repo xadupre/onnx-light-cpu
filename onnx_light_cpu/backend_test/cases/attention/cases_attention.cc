@@ -257,7 +257,7 @@ void RegisterAttentionCase(std::vector<TestCase> &registry, const OpsetId &opset
       inputs.push_back(std::move(*nonpad));
     }
     if (!generate_expected_outputs) {
-      return IoData{std::move(inputs), {}, false};
+      return IoData{std::move(inputs), {}, {}, false};
     }
     const onnx_light_cpu::AttentionKernel kernel{KernelContext{DefaultOpset(23)}};
     Tensor y = kernel(node, inputs[0], inputs[1], inputs[2], has_mask ? &inputs[3] : nullptr,
@@ -267,7 +267,9 @@ void RegisterAttentionCase(std::vector<TestCase> &registry, const OpsetId &opset
     return IoData{std::move(inputs), {std::move(y)}};
   };
   if (benchmark) {
-    Expect(registry, node, name, {opset}, input_counts, {y_count}, std::move(build_data));
+    Expect(registry, node, name, {opset}, input_counts, {y_count}, std::move(build_data),
+           "backend-test", "",
+           {bt_ns::TensorTypeSpec(static_cast<std::int32_t>(data_type), q_shape)});
   } else {
     Expect(registry, node, name, {opset}, input_counts, {y_count},
            [build_data = std::move(build_data)]() mutable { return build_data(true); });

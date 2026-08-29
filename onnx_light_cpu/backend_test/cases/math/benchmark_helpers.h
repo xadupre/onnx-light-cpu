@@ -124,11 +124,12 @@ void RegisterUnaryBenchmark(
       [kernel_factory, op_type, data_type, size](bool generate_expected_outputs) -> bt_ns::IoData {
         rt_ns::Tensor x = MakeBenchmarkTensor(data_type, {size}, 987654321ULL, op_type == "Log");
         if (!generate_expected_outputs) {
-          return bt_ns::IoData{{std::move(x)}, {}, false};
+          return bt_ns::IoData{{std::move(x)}, {}, {}, false};
         }
         rt_ns::Tensor y = kernel_factory()(x);
         return bt_ns::IoData{{std::move(x)}, {std::move(y)}};
-      });
+      },
+      "backend-test", "", {bt_ns::TensorTypeSpec(static_cast<std::int32_t>(data_type), {size})});
 }
 
 } // namespace onnx_light_cpu::backend_test

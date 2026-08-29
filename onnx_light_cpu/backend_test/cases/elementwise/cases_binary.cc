@@ -133,9 +133,9 @@ std::size_t ElementCount(const rt_ns::Shape &shape) {
   return value;
 }
 
-std::size_t BroadcastElementCount(const rt_ns::Shape &left, const rt_ns::Shape &right) {
+rt_ns::Shape BroadcastShape(const rt_ns::Shape &left, const rt_ns::Shape &right) {
   const std::size_t rank = std::max(left.size(), right.size());
-  std::size_t value = 1;
+  std::vector<std::int64_t> shape(rank);
   for (std::size_t axis = 0; axis < rank; ++axis) {
     const std::int64_t left_dim = axis < rank - left.size() ? 1 : left[axis - (rank - left.size())];
     const std::int64_t right_dim =
@@ -143,9 +143,13 @@ std::size_t BroadcastElementCount(const rt_ns::Shape &left, const rt_ns::Shape &
     if (left_dim != right_dim && left_dim != 1 && right_dim != 1) {
       throw std::invalid_argument("Incompatible binary benchmark shapes.");
     }
-    value *= static_cast<std::size_t>(std::max(left_dim, right_dim));
+    shape[axis] = std::max(left_dim, right_dim);
   }
-  return value;
+  return rt_ns::Shape(std::move(shape));
+}
+
+std::size_t BroadcastElementCount(const rt_ns::Shape &left, const rt_ns::Shape &right) {
+  return ElementCount(BroadcastShape(left, right));
 }
 
 NodeProto MakeNode(std::string_view op_type, const BinaryKernelDescriptor::Attributes &attributes) {
@@ -293,7 +297,7 @@ IoData MakeBinaryIoData(const BinaryManifestEntry &entry, const BinaryTypeSignat
       MakeTypedTensor(signature.right, swap_operands ? shape_pair.left : shape_pair.right, {}, true,
                       division_like || shift_like, true);
   if (!generate_expected_outputs) {
-    return IoData{{std::move(left), std::move(right)}, {}, false};
+    return IoData{{std::move(left), std::move(right)}, {}, {}, false};
   }
   const OpsetId opset(std::string(), entry.since_version);
   const NodeProto node = MakeNode(entry.op_type, attributes);
@@ -351,7 +355,10 @@ void RegisterLlmBenchmark(std::vector<TestCase> &registry, const BinaryManifestE
          [entry, signature, shape_pair, attributes](bool generate_expected_outputs) -> IoData {
            return MakeBinaryIoData(entry, signature, shape_pair, attributes, false,
                                    generate_expected_outputs);
-         });
+         },
+         "backend-test", "",
+         {bt_ns::TensorTypeSpec(static_cast<std::int32_t>(signature.output),
+                                BroadcastShape(shape_pair.left, shape_pair.right))});
 }
 
 void RegisterBenchmarksForSignature(std::vector<TestCase> &registry,
@@ -372,7 +379,10 @@ void RegisterBenchmarksForSignature(std::vector<TestCase> &registry,
            [entry, signature, shape_pair, attributes](bool generate_expected_outputs) -> IoData {
              return MakeBinaryIoData(entry, signature, shape_pair, attributes, false,
                                      generate_expected_outputs);
-           });
+           },
+           "backend-test", "",
+           {bt_ns::TensorTypeSpec(static_cast<std::int32_t>(signature.output),
+                                  BroadcastShape(shape_pair.left, shape_pair.right))});
     if (IsNonCommutative(entry.op)) {
       const std::string swapped_name =
           CaseName(entry, signature, shape_pair, attributes, true, true, output_count);
@@ -380,7 +390,10 @@ void RegisterBenchmarksForSignature(std::vector<TestCase> &registry,
              [entry, signature, shape_pair, attributes](bool generate_expected_outputs) -> IoData {
                return MakeBinaryIoData(entry, signature, shape_pair, attributes, true,
                                        generate_expected_outputs);
-             });
+             },
+             "backend-test", "",
+             {bt_ns::TensorTypeSpec(static_cast<std::int32_t>(signature.output),
+                                    BroadcastShape(shape_pair.left, shape_pair.right))});
     }
     if (entry.op == BinaryOperator::kBitShift) {
       attributes.bitshift_direction = BinaryKernelDescriptor::Attributes::BitShiftDirection::kRight;
@@ -391,7 +404,10 @@ void RegisterBenchmarksForSignature(std::vector<TestCase> &registry,
              [entry, signature, shape_pair, attributes](bool generate_expected_outputs) -> IoData {
                return MakeBinaryIoData(entry, signature, shape_pair, attributes, false,
                                        generate_expected_outputs);
-             });
+             },
+             "backend-test", "",
+             {bt_ns::TensorTypeSpec(static_cast<std::int32_t>(signature.output),
+                                    BroadcastShape(shape_pair.left, shape_pair.right))});
     }
   }
 }

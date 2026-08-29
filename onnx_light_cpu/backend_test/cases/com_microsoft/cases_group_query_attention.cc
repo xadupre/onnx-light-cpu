@@ -231,6 +231,7 @@ void RegisterQwen3GroupQueryAttentionBenchmarkCase(std::vector<TestCase> &regist
                          std::move(total_sequence_length), std::move(cos_cache),
                          std::move(sin_cache)},
                         {},
+                        {},
                         false};
         }
         const GroupQueryAttentionKernel kernel{node, KernelContext{OpsetId(kMicrosoftDomain, 1)}};
@@ -245,7 +246,14 @@ void RegisterQwen3GroupQueryAttentionBenchmarkCase(std::vector<TestCase> &regist
                        std::move(total_sequence_length), std::move(cos_cache),
                        std::move(sin_cache)},
                       {std::move(output), std::move(present_key), std::move(present_value)}};
-      });
+      },
+      "backend-test", "",
+      {bt_ns::TensorTypeSpec(static_cast<std::int32_t>(DataType::FLOAT),
+                             {kBatch, sequence, query_width}),
+       bt_ns::TensorTypeSpec(static_cast<std::int32_t>(DataType::FLOAT),
+                             {kBatch, kKvNumHeads, total_length, kHeadDim}),
+       bt_ns::TensorTypeSpec(static_cast<std::int32_t>(DataType::FLOAT),
+                             {kBatch, kKvNumHeads, total_length, kHeadDim})});
 }
 
 // Registers a positive correctness case for the exact cached/rotary contract.

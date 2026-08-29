@@ -76,12 +76,14 @@ void RegisterCpuCDistCases(std::vector<TestCase> &registry, TestMode mode) {
                    Tensor a = MakeBenchmarkTensor(data_type, {shape.m, shape.n}, 987654321ULL);
                    Tensor b = MakeBenchmarkTensor(data_type, {shape.k, shape.n}, 246813579ULL);
                    if (!generate_expected_outputs) {
-                     return IoData{{std::move(a), std::move(b)}, {}, false};
+                     return IoData{{std::move(a), std::move(b)}, {}, {}, false};
                    }
                    const CDistKernel kernel{KernelContext{microsoft_opset}};
                    Tensor c = kernel(a, b, metric);
                    return IoData{{std::move(a), std::move(b)}, {std::move(c)}};
-                 });
+                 },
+                 "backend-test", "",
+                 {bt_ns::TensorTypeSpec(static_cast<std::int32_t>(data_type), {shape.m, shape.k})});
         }
       }
     }

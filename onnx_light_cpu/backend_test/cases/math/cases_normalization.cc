@@ -128,32 +128,48 @@ void RegisterBatchBenchmark(std::vector<TestCase> &registry, const OpsetId &opse
   const std::vector<std::int64_t> output_counts =
       benchmark.training ? std::vector<std::int64_t>{count, channels, channels}
                          : std::vector<std::int64_t>{count};
-  Expect(registry, std::move(node), name, {opset}, {count, channels, channels, channels, channels},
-         output_counts, [benchmark, channels](bool generate_expected_outputs) -> IoData {
-           Tensor x = MakeBenchmarkTensor(benchmark.data_type, benchmark.shape, benchmark.seed);
-           Tensor scale = MakeBenchmarkTensor(benchmark.data_type, {channels}, benchmark.seed + 1);
-           Tensor bias = MakeBenchmarkTensor(benchmark.data_type, {channels}, benchmark.seed + 2);
-           Tensor mean = MakeBenchmarkTensor(benchmark.data_type, {channels}, benchmark.seed + 3);
-           Tensor variance = MakeConstantTensor(benchmark.data_type, {channels}, 1.0F);
-           if (!generate_expected_outputs) {
-             return IoData{{std::move(x), std::move(scale), std::move(bias), std::move(mean),
-                            std::move(variance)},
-                           {},
-                           false};
-           }
-           const BatchNormalizationKernel kernel{KernelContext{DefaultOpset(15)}};
-           if (benchmark.training) {
-             BatchNormalizationResult result = kernel.Compute(x, scale, bias, mean, variance, true);
-             return IoData{{std::move(x), std::move(scale), std::move(bias), std::move(mean),
-                            std::move(variance)},
-                           {std::move(result.y), std::move(*result.running_mean),
-                            std::move(*result.running_variance)}};
-           }
-           Tensor y = kernel(x, scale, bias, mean, variance);
-           return IoData{{std::move(x), std::move(scale), std::move(bias), std::move(mean),
-                          std::move(variance)},
-                         {std::move(y)}};
-         });
+  Expect(
+      registry, std::move(node), name, {opset}, {count, channels, channels, channels, channels},
+      output_counts,
+      [benchmark, channels](bool generate_expected_outputs) -> IoData {
+        Tensor x = MakeBenchmarkTensor(benchmark.data_type, benchmark.shape, benchmark.seed);
+        Tensor scale = MakeBenchmarkTensor(benchmark.data_type, {channels}, benchmark.seed + 1);
+        Tensor bias = MakeBenchmarkTensor(benchmark.data_type, {channels}, benchmark.seed + 2);
+        Tensor mean = MakeBenchmarkTensor(benchmark.data_type, {channels}, benchmark.seed + 3);
+        Tensor variance = MakeConstantTensor(benchmark.data_type, {channels}, 1.0F);
+        if (!generate_expected_outputs) {
+          return IoData{{std::move(x), std::move(scale), std::move(bias), std::move(mean),
+                         std::move(variance)},
+                        {},
+                        {},
+                        false};
+        }
+        const BatchNormalizationKernel kernel{KernelContext{DefaultOpset(15)}};
+        if (benchmark.training) {
+          BatchNormalizationResult result = kernel.Compute(x, scale, bias, mean, variance, true);
+          return IoData{{std::move(x), std::move(scale), std::move(bias), std::move(mean),
+                         std::move(variance)},
+                        {std::move(result.y), std::move(*result.running_mean),
+                         std::move(*result.running_variance)}};
+        }
+        Tensor y = kernel(x, scale, bias, mean, variance);
+        return IoData{
+            {std::move(x), std::move(scale), std::move(bias), std::move(mean), std::move(variance)},
+            {std::move(y)}};
+      },
+      "backend-test", "",
+      benchmark.training
+          ? std::vector<bt_ns::TypeSpec>{bt_ns::TensorTypeSpec(
+                                             static_cast<std::int32_t>(benchmark.data_type),
+                                             benchmark.shape),
+                                         bt_ns::TensorTypeSpec(
+                                             static_cast<std::int32_t>(benchmark.data_type),
+                                             {channels}),
+                                         bt_ns::TensorTypeSpec(
+                                             static_cast<std::int32_t>(benchmark.data_type),
+                                             {channels})}
+          : std::vector<bt_ns::TypeSpec>{bt_ns::TensorTypeSpec(
+                static_cast<std::int32_t>(benchmark.data_type), benchmark.shape)});
   SetNormalizationTolerance(registry, benchmark.data_type);
 }
 
@@ -179,12 +195,14 @@ void RegisterGroupBenchmark(std::vector<TestCase> &registry, const OpsetId &opse
            Tensor scale = MakeBenchmarkTensor(benchmark.data_type, {channels}, benchmark.seed + 1);
            Tensor bias = MakeBenchmarkTensor(benchmark.data_type, {channels}, benchmark.seed + 2);
            if (!generate_expected_outputs) {
-             return IoData{{std::move(x), std::move(scale), std::move(bias)}, {}, false};
+             return IoData{{std::move(x), std::move(scale), std::move(bias)}, {}, {}, false};
            }
            const GroupNormalizationKernel kernel{KernelContext{DefaultOpset(21)}};
            Tensor y = kernel(x, scale, bias, benchmark.groups);
            return IoData{{std::move(x), std::move(scale), std::move(bias)}, {std::move(y)}};
-         });
+         },
+         "backend-test", "",
+         {bt_ns::TensorTypeSpec(static_cast<std::int32_t>(benchmark.data_type), benchmark.shape)});
   SetNormalizationTolerance(registry, benchmark.data_type);
 }
 
@@ -208,12 +226,14 @@ void RegisterInstanceBenchmark(std::vector<TestCase> &registry, const OpsetId &o
            Tensor scale = MakeBenchmarkTensor(benchmark.data_type, {channels}, benchmark.seed + 1);
            Tensor bias = MakeBenchmarkTensor(benchmark.data_type, {channels}, benchmark.seed + 2);
            if (!generate_expected_outputs) {
-             return IoData{{std::move(x), std::move(scale), std::move(bias)}, {}, false};
+             return IoData{{std::move(x), std::move(scale), std::move(bias)}, {}, {}, false};
            }
            const InstanceNormalizationKernel kernel{KernelContext{DefaultOpset(22)}};
            Tensor y = kernel(x, scale, bias);
            return IoData{{std::move(x), std::move(scale), std::move(bias)}, {std::move(y)}};
-         });
+         },
+         "backend-test", "",
+         {bt_ns::TensorTypeSpec(static_cast<std::int32_t>(benchmark.data_type), benchmark.shape)});
   SetNormalizationTolerance(registry, benchmark.data_type);
 }
 
@@ -249,19 +269,21 @@ void RegisterLayerBenchmark(std::vector<TestCase> &registry, const OpsetId &opse
           Tensor bias =
               MakeBenchmarkTensor(benchmark.data_type, benchmark.affine_shape, benchmark.seed + 2);
           if (!generate_expected_outputs) {
-            return IoData{{std::move(x), std::move(scale), std::move(bias)}, {}, false};
+            return IoData{{std::move(x), std::move(scale), std::move(bias)}, {}, {}, false};
           }
           const LayerNormalizationKernel kernel{KernelContext{DefaultOpset(17)}};
           LayerNormalizationResult result = kernel(x, scale, &bias, benchmark.axis);
           return IoData{{std::move(x), std::move(scale), std::move(bias)}, {std::move(result.y)}};
         }
         if (!generate_expected_outputs) {
-          return IoData{{std::move(x), std::move(scale)}, {}, false};
+          return IoData{{std::move(x), std::move(scale)}, {}, {}, false};
         }
         const LayerNormalizationKernel kernel{KernelContext{DefaultOpset(17)}};
         LayerNormalizationResult result = kernel(x, scale, nullptr, benchmark.axis);
         return IoData{{std::move(x), std::move(scale)}, {std::move(result.y)}};
-      });
+      },
+      "backend-test", "",
+      {bt_ns::TensorTypeSpec(static_cast<std::int32_t>(benchmark.data_type), benchmark.shape)});
   SetNormalizationTolerance(registry, benchmark.data_type);
 }
 
@@ -286,12 +308,14 @@ void RegisterLpBenchmark(std::vector<TestCase> &registry, const OpsetId &opset,
          [benchmark](bool generate_expected_outputs) -> IoData {
            Tensor x = MakeBenchmarkTensor(benchmark.data_type, benchmark.shape, benchmark.seed);
            if (!generate_expected_outputs) {
-             return IoData{{std::move(x)}, {}, false};
+             return IoData{{std::move(x)}, {}, {}, false};
            }
            const LpNormalizationKernel kernel{KernelContext{DefaultOpset(22)}};
            Tensor y = kernel(x, benchmark.axis, benchmark.p);
            return IoData{{std::move(x)}, {std::move(y)}};
-         });
+         },
+         "backend-test", "",
+         {bt_ns::TensorTypeSpec(static_cast<std::int32_t>(benchmark.data_type), benchmark.shape)});
   SetNormalizationTolerance(registry, benchmark.data_type);
 }
 
@@ -317,12 +341,14 @@ void RegisterMvnBenchmark(std::vector<TestCase> &registry, const OpsetId &opset,
          [benchmark](bool generate_expected_outputs) -> IoData {
            Tensor x = MakeBenchmarkTensor(benchmark.data_type, benchmark.shape, benchmark.seed);
            if (!generate_expected_outputs) {
-             return IoData{{std::move(x)}, {}, false};
+             return IoData{{std::move(x)}, {}, {}, false};
            }
            const MeanVarianceNormalizationKernel kernel{KernelContext{DefaultOpset(13)}};
            Tensor y = kernel(x, benchmark.axes);
            return IoData{{std::move(x)}, {std::move(y)}};
-         });
+         },
+         "backend-test", "",
+         {bt_ns::TensorTypeSpec(static_cast<std::int32_t>(benchmark.data_type), benchmark.shape)});
   SetNormalizationTolerance(registry, benchmark.data_type);
 }
 

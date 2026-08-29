@@ -49,19 +49,22 @@ void RegisterCpuNotCases(std::vector<TestCase> &registry, TestMode mode) {
   if (mode == TestMode::BENCHMARK) {
     for (const std::int64_t size : {1024, 32768, 65535, 65536, 131072, 1048576, 4194304}) {
       Expect(registry, MakeNotNode(), "test_cpu_not_n" + std::to_string(size) + "_bool_benchmark",
-             {opset}, {size}, {size}, [opset, size](bool generate_expected_outputs) -> IoData {
+             {opset}, {size}, {size},
+             [opset, size](bool generate_expected_outputs) -> IoData {
                std::vector<std::uint8_t> raw(static_cast<std::size_t>(size));
                for (std::size_t i = 0; i < raw.size(); ++i) {
                  raw[i] = static_cast<std::uint8_t>(i & 1U);
                }
                Tensor x("", static_cast<std::int32_t>(DataType::BOOL), {size}, std::move(raw));
                if (!generate_expected_outputs) {
-                 return IoData{{std::move(x)}, {}, false};
+                 return IoData{{std::move(x)}, {}, {}, false};
                }
                const onnx_light_cpu::NotKernel not_kernel{KernelContext{opset}};
                Tensor y = not_kernel(x);
                return IoData{{std::move(x)}, {std::move(y)}};
-             });
+             },
+             "backend-test", "",
+             {bt_ns::TensorTypeSpec(static_cast<std::int32_t>(DataType::BOOL), {size})});
     }
     return;
   }

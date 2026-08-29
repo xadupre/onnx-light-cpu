@@ -37,13 +37,15 @@ void RegisterCpuSwiGLUCases(std::vector<TestCase> &registry, TestMode mode) {
                         rt_ns::Tensor gate = MakeBenchmarkTensor(data_type, {size}, 987654321ULL);
                         rt_ns::Tensor value = MakeBenchmarkTensor(data_type, {size}, 987654322ULL);
                         if (!generate_expected_outputs) {
-                          return bt_ns::IoData{{std::move(gate), std::move(value)}, {}, false};
+                          return bt_ns::IoData{{std::move(gate), std::move(value)}, {}, {}, false};
                         }
                         const SwiGLUKernel kernel(rt_ns::KernelContext{opset});
                         rt_ns::Tensor output = kernel(gate, value, 0.5f);
                         return bt_ns::IoData{{std::move(gate), std::move(value)},
                                              {std::move(output)}};
-                      });
+                      },
+                      "backend-test", "",
+                      {bt_ns::TensorTypeSpec(static_cast<std::int32_t>(data_type), {size})});
       }
     }
     return;

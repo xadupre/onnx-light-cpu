@@ -186,12 +186,13 @@ void RegisterGemmBenchmark(std::vector<TestCase> &registry, const OpsetId &opset
              Tensor b = MakeGemmTensor(dtype, b_shape, Randn<float>(b_shape, 434 + b_count));
              Tensor c = MakeGemmTensor(dtype, c_shape, Randn<float>(c_shape, 435 + c_count));
              if (!generate_expected_outputs) {
-               return IoData{{std::move(a), std::move(b), std::move(c)}, {}, false};
+               return IoData{{std::move(a), std::move(b), std::move(c)}, {}, {}, false};
              }
              const onnx_light_cpu::GemmKernel kernel{KernelContext{opset}};
              Tensor y = kernel(a, b, c, 1.0f, 1.0f, trans_a, trans_b);
              return IoData{{std::move(a), std::move(b), std::move(c)}, {std::move(y)}};
-           });
+           },
+           "backend-test", "", {bt_ns::TensorTypeSpec(static_cast<std::int32_t>(dtype), {m, n})});
     return;
   }
 
@@ -201,17 +202,18 @@ void RegisterGemmBenchmark(std::vector<TestCase> &registry, const OpsetId &opset
            Tensor a = MakeGemmTensor(dtype, a_shape, Randn<float>(a_shape, 433 + a_count));
            Tensor b = MakeGemmTensor(dtype, b_shape, Randn<float>(b_shape, 434 + b_count));
            if (!generate_expected_outputs) {
-             return IoData{{std::move(a), std::move(b)}, {}, false};
+             return IoData{{std::move(a), std::move(b)}, {}, {}, false};
            }
            const onnx_light_cpu::GemmKernel kernel{KernelContext{opset}};
            Tensor y = kernel(a, b, 1.0f, trans_a, trans_b);
            return IoData{{std::move(a), std::move(b)}, {std::move(y)}};
-         });
+         },
+         "backend-test", "", {bt_ns::TensorTypeSpec(static_cast<std::int32_t>(dtype), {m, n})});
 }
 
 void RegisterChainedGemmCase(std::vector<TestCase> &registry, const OpsetId &opset,
                              const std::string &name, int64_t m, int64_t k, int64_t n1, int64_t n2,
-                             int64_t n3, bool benchmark = false) {
+                             int64_t n3) {
   TestCase test_case(name, name, "model", "gemm_chain");
   test_case.declared_input_element_counts = {m * k, k * n1, n1 * n2, n2 * n3};
   test_case.declared_output_element_counts = {m * n3};
@@ -252,11 +254,7 @@ void RegisterChainedGemmCase(std::vector<TestCase> &registry, const OpsetId &ops
         DataSet{{std::move(a), std::move(b1), std::move(b2), std::move(b3)}, {std::move(y)}});
     return built;
   };
-  if (benchmark) {
-    test_case.build = std::move(build);
-  } else {
-    test_case.build = [build = std::move(build)]() mutable { return build(true); };
-  }
+  test_case.build = std::move(build);
   registry.emplace_back(std::move(test_case));
 }
 
@@ -270,11 +268,11 @@ void RegisterCpuGemmCases(std::vector<TestCase> &registry, TestMode mode) {
   if (mode == TestMode::BENCHMARK) {
     RegisterChainedGemmCase(registry, opset,
                             "test_cpu_gemm_chain_square_projection_float32_benchmark", 512, 512,
-                            1024, 256, 512, true);
+                            1024, 256, 512);
     RegisterChainedGemmCase(registry, opset, "test_cpu_gemm_chain_transformer_float32_benchmark",
-                            128, 768, 3072, 768, 3072, true);
+                            128, 768, 3072, 768, 3072);
     RegisterChainedGemmCase(registry, opset, "test_cpu_gemm_chain_alternating_float32_benchmark",
-                            256, 1024, 256, 2048, 128, true);
+                            256, 1024, 256, 2048, 128);
     // Every prepared code path is exercised for each element type the
     // ``GemmKernel`` implements (float32, float64, float16, bfloat16), except
     // for the largest square float16 cases, which are prohibitively slow in
