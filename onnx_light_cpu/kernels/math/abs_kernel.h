@@ -22,11 +22,9 @@ namespace onnx_light_cpu {
 /// :cpp:class:`onnx_light::core::runtime::KernelBase` so it plugs into the
 /// runtime exactly like a built-in kernel: the dispatch table constructs it
 /// once per node and calls :cpp:func:`Run` on every execution. The
-/// computation is delegated to the SIMD ``Abs*`` routines declared in
-/// ``onnx_light_cpu/impl/math/math_kernels.h`` (runtime AVX-512/AVX2/AVX/SSE2 dispatch)
-/// for every supported numeric type. Float16 and bfloat16 share the exact sign
-/// bit clearing path, while signed integers use width-specific SIMD absolute
-/// value operations.
+/// computation uses private SIMD dispatch for every supported numeric type.
+/// Float16 and bfloat16 share the exact sign bit clearing path, while signed
+/// integers use width-specific SIMD absolute value operations.
 class AbsKernel : public ONNX_LIGHT_NAMESPACE::core::runtime::KernelBase {
 public:
   using ONNX_LIGHT_NAMESPACE::core::runtime::KernelBase::KernelBase;

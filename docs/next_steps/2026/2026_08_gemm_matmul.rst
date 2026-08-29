@@ -1309,8 +1309,8 @@ fallbacks are ordered. Completed rows remain visible so scope is not lost.
        ``GemmDecodeFloat8ToFloat32_AVX2`` (exact scalar tail, scalar fallback off
        x86) while the transposed strided gathers keep the per-element decode.
        The reduction accumulates in float32, reusing every tuned FP32 algorithm
-       through ``GemmFloat8Planned`` / ``GemmFloat8ToFloat`` and the new public
-       ``GemmFloat8WithEpilogue`` entry point. New ``GemmFloat8`` differential
+       through private Float8 planning/conversion helpers and the public
+       ``GemmKernel`` interface. New ``GemmFloat8`` differential
        tests in ``test_gemm_kernel`` cover the decode tables, all four formats,
        transpose combinations, column and K tails, and the skinny-N / skinny-M /
        split-K / direct / empty-K algorithm variants against a reference computed

@@ -28,16 +28,13 @@ namespace onnx_light_cpu {
 ///     Y = alpha * op(A) @ op(B) + beta * C
 ///
 /// (where ``op(X)`` transposes ``X`` when the corresponding ``transA`` /
-/// ``transB`` attribute is set) is delegated to the register-blocked SIMD
-/// ``Gemm*`` routines declared in
-/// ``onnx_light_cpu/impl/math/math_kernels.h`` (runtime AVX/SSE2 dispatch) for
-/// ``float32`` and ``float64``. ``float16`` and ``bfloat16`` inputs are widened
-/// to ``float32``, computed through the same SIMD ``GemmFloat32`` routine, and
-/// rounded back down for the output (the reduction happens in ``float32``
-/// precision, matching common fp16/bf16 GEMM backend conventions). The
-/// optional bias ``C`` is consumed directly as a scalar, row, column, or
-/// matrix view without materializing an expanded ``M x N`` tensor. FP16/BF16
-/// narrowing is combined with the bias epilogue.
+/// ``transB`` attribute is set) uses private register-blocked SIMD dispatch
+/// for ``float32`` and ``float64``. ``float16`` and ``bfloat16`` inputs are
+/// accumulated in ``float32`` and rounded back down for the output, matching
+/// common fp16/bf16 GEMM backend conventions. The optional bias ``C`` is
+/// consumed directly as a scalar, row, column, or matrix view without
+/// materializing an expanded ``M x N`` tensor. FP16/BF16 narrowing is combined
+/// with the bias epilogue.
 class GemmKernel : public ONNX_LIGHT_NAMESPACE::core::runtime::KernelBase {
 public:
   /// Constructs the kernel and eagerly allocates the immutable-plan cache so no

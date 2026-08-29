@@ -22,10 +22,9 @@ namespace onnx_light_cpu {
 /// :cpp:class:`onnx_light::core::runtime::KernelBase` so it plugs into the
 /// runtime exactly like a built-in kernel: the dispatch table constructs it
 /// once per node and calls :cpp:func:`Run` on every execution. The computation
-/// is delegated to the SIMD ``ExpFloat*`` routines declared in
-/// ``onnx_light_cpu/impl/math/math_kernels.h`` (runtime AVX2/SSE2 dispatch) for
-/// ``float32``/``float64`` directly; ``float16`` and ``bfloat16`` use vector
-/// conversion blocks around the same float32 approximation.
+/// uses private SIMD dispatch for ``float32``/``float64`` directly;
+/// ``float16`` and ``bfloat16`` use vector conversion blocks around the same
+/// float32 approximation.
 class ExpKernel : public ONNX_LIGHT_NAMESPACE::core::runtime::KernelBase {
 public:
   using ONNX_LIGHT_NAMESPACE::core::runtime::KernelBase::KernelBase;
@@ -69,9 +68,9 @@ private:
 
 /// SIMD-accelerated onnx-light kernel for the ONNX ``Log`` operator.
 ///
-/// ``LogKernel`` mirrors :cpp:class:`ExpKernel`, delegating to the SIMD
-/// ``LogFloat*`` routines for ``float32``/``float64``, a scalar exact FP16
-/// path, and vector conversion blocks for ``bfloat16``.
+/// ``LogKernel`` mirrors :cpp:class:`ExpKernel`, using private SIMD dispatch
+/// for ``float32``/``float64``, a scalar exact FP16 path, and vector
+/// conversion blocks for ``bfloat16``.
 class LogKernel : public ONNX_LIGHT_NAMESPACE::core::runtime::KernelBase {
 public:
   using ONNX_LIGHT_NAMESPACE::core::runtime::KernelBase::KernelBase;
