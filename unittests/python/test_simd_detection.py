@@ -2,17 +2,10 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests the SIMD helpers exposed by the Python bindings.
+"""Tests the public SIMD inspection API."""
 
-The Python extension ``onnx_light_cpu.onnx_py._cpukernels`` intentionally
-exposes only detection helpers; the kernels themselves are reachable through
-onnx-light's runtime after registration, not as numpy-like Python functions.
-"""
-
-from onnx_light_cpu.onnx_py._cpukernels import (
-    detect_simd_level,
-    has_cpu_kernels,
-)
+import onnx_light_cpu
+from onnx_light_cpu import SimdLevel, detect_simd_level, has_cpu_kernels
 
 
 class TestDetection:
@@ -21,5 +14,10 @@ class TestDetection:
 
     def test_detect_simd_level(self):
         level = detect_simd_level()
-        assert isinstance(level, int)
-        assert 0 <= level <= 4
+        assert isinstance(level, SimdLevel)
+        assert level in SimdLevel
+
+    def test_public_api_exports_simd_helpers(self):
+        assert "SimdLevel" in onnx_light_cpu.__all__
+        assert "detect_simd_level" in onnx_light_cpu.__all__
+        assert "has_cpu_kernels" in onnx_light_cpu.__all__

@@ -36,7 +36,7 @@ From Python:
 
 ``register_kernels`` is only available in builds compiled with the onnx-light
 integration (``-DONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON``); it wraps the compiled
-``onnx_light_cpu.onnx_py._cpuregister.register_all_kernels()`` binding.
+internal registration binding.
 
 ``register_kernels()`` installs the kernels **process-wide**: it populates
 onnx-light's shared dispatch table, so every ``ReferenceEvaluator`` created in

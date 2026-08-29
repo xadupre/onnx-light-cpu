@@ -4,11 +4,11 @@
 
 #pragma once
 
-#include "onnx_light_cpu/impl/logical/logical_kernels.h"
-
 #include "onnx_core/runtime/kernels/kernel_context.h"
 #include "onnx_core/runtime/memory/simple_tensor.h"
 #include "onnx_core/runtime/runtime_context.h"
+
+#include <memory>
 
 #ifndef ONNX_LIGHT_NAMESPACE
 #define ONNX_LIGHT_NAMESPACE onnx_light
@@ -22,10 +22,8 @@ namespace onnx_light_cpu {
 /// :cpp:class:`onnx_light::core::runtime::KernelBase` so it plugs into the
 /// runtime exactly like a built-in kernel: the dispatch table constructs it
 /// once per node and calls :cpp:func:`Run` on every execution. The computation
-/// is delegated to the SIMD ``NotBool`` routine declared in
-/// ``onnx_light_cpu/impl/logical/logical_kernels.h`` (runtime AVX-512/AVX2/SSE2 dispatch). ONNX
-/// ``Not`` only accepts ``bool`` inputs, so the kernel is a full drop-in
-/// replacement for the built-in one.
+/// uses private SIMD dispatch. ONNX ``Not`` only accepts ``bool`` inputs, so
+/// the kernel is a full drop-in replacement for the built-in one.
 class NotKernel : public ONNX_LIGHT_NAMESPACE::core::runtime::KernelBase {
 public:
   using ONNX_LIGHT_NAMESPACE::core::runtime::KernelBase::KernelBase;
@@ -33,6 +31,7 @@ public:
 
   NotKernel(const ONNX_LIGHT_NAMESPACE::NodeProto &node,
             const ONNX_LIGHT_NAMESPACE::core::runtime::KernelContext &ctx);
+  ~NotKernel() override;
 
   static void RegisterTuningSchemas();
   ONNX_LIGHT_NAMESPACE::core::runtime::KernelTuningKey
@@ -61,7 +60,8 @@ public:
                   ONNX_LIGHT_NAMESPACE::core::runtime::Tensor &output) const;
 
 private:
-  NotExecutionTuning tuning_;
+  struct Tuning;
+  std::shared_ptr<Tuning> tuning_;
 };
 
 /// Registers the onnx-light-cpu ``Not`` kernel into onnx-light's shared

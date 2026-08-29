@@ -4,11 +4,11 @@
 
 #pragma once
 
-#include "onnx_light_cpu/impl/math/math_kernels.h"
-
 #include "onnx_core/runtime/kernels/kernel_context.h"
 #include "onnx_core/runtime/memory/simple_tensor.h"
 #include "onnx_core/runtime/runtime_context.h"
+
+#include <memory>
 
 #ifndef ONNX_LIGHT_NAMESPACE
 #define ONNX_LIGHT_NAMESPACE onnx_light
@@ -22,11 +22,9 @@ namespace onnx_light_cpu {
 /// :cpp:class:`onnx_light::core::runtime::KernelBase` so it plugs into the
 /// runtime exactly like a built-in kernel: the dispatch table constructs it
 /// once per node and calls :cpp:func:`Run` on every execution. The
-/// computation is delegated to the SIMD ``Abs*`` routines declared in
-/// ``onnx_light_cpu/impl/math/math_kernels.h`` (runtime AVX-512/AVX2/AVX/SSE2 dispatch)
-/// for every supported numeric type. Float16 and bfloat16 share the exact sign
-/// bit clearing path, while signed integers use width-specific SIMD absolute
-/// value operations.
+/// computation uses private SIMD dispatch for every supported numeric type.
+/// Float16 and bfloat16 share the exact sign bit clearing path, while signed
+/// integers use width-specific SIMD absolute value operations.
 class AbsKernel : public ONNX_LIGHT_NAMESPACE::core::runtime::KernelBase {
 public:
   using ONNX_LIGHT_NAMESPACE::core::runtime::KernelBase::KernelBase;
@@ -34,6 +32,7 @@ public:
 
   AbsKernel(const ONNX_LIGHT_NAMESPACE::NodeProto &node,
             const ONNX_LIGHT_NAMESPACE::core::runtime::KernelContext &ctx);
+  ~AbsKernel() override;
 
   static void RegisterTuningSchemas();
   ONNX_LIGHT_NAMESPACE::core::runtime::KernelTuningKey
@@ -62,7 +61,8 @@ public:
                   ONNX_LIGHT_NAMESPACE::core::runtime::Tensor &output) const;
 
 private:
-  UnaryExecutionTuning tuning_ = kDefaultAbs32ExecutionTuning;
+  struct Tuning;
+  std::shared_ptr<Tuning> tuning_;
   bool tuning_configured_ = false;
 };
 

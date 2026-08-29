@@ -41,6 +41,7 @@ from ._register import (
     set_kernel_usage_recording,
     used_kernel_names,
 )
+from ._simd import SimdLevel, detect_simd_level, has_cpu_kernels
 
 __version__ = "0.1.16"
 
@@ -58,10 +59,13 @@ __all__ = [
     "ProcessorProfileTopology",
     "RegisteredKernel",
     "RooflineMeasurement",
+    "SimdLevel",
     "benchmark_processor_performance",
     "clear_used_kernel_names",
     "custom_op_schemas",
+    "detect_simd_level",
     "has_backend_test_cases",
+    "has_cpu_kernels",
     "operator_schema_lookup",
     "operator_support",
     "register_backend_test_cases",

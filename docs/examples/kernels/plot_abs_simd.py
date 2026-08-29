@@ -16,9 +16,15 @@ through onnx-light registration in integration builds.
 
 import numpy as np
 
-from onnx_light_cpu.onnx_py._cpukernels import detect_simd_level, has_cpu_kernels
+from onnx_light_cpu import SimdLevel, detect_simd_level, has_cpu_kernels
 
-_SIMD_NAMES = {0: "scalar", 1: "SSE2", 2: "AVX", 3: "AVX2", 4: "AVX-512"}
+_SIMD_NAMES = {
+    SimdLevel.NONE: "scalar",
+    SimdLevel.SSE2: "SSE2",
+    SimdLevel.AVX: "AVX",
+    SimdLevel.AVX2: "AVX2",
+    SimdLevel.AVX512: "AVX-512",
+}
 
 assert has_cpu_kernels()
 level = detect_simd_level()

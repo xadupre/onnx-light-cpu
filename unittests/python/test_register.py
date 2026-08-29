@@ -20,6 +20,7 @@ from onnx_light_cpu import (
     OperatorSupport,
     RegisteredKernel,
     operator_support,
+    has_backend_test_cases,
     register_operator_support,
     register_kernels,
     registered_kernel_names,
@@ -62,6 +63,18 @@ class TestRegisterKernels(TestCase):
     def test_returns_none_without_sess(self):
         with mock.patch.object(reg, "_register_all_kernels"):
             assert register_kernels() is None
+
+
+class TestBackendTestRegistration(TestCase):
+    def test_reports_backend_test_binding_availability(self):
+        extension = ModuleType("onnx_light_cpu.onnx_py._cpuregister")
+        extension.has_backend_test_cases = False
+        with mock.patch.dict(sys.modules, {"onnx_light_cpu.onnx_py._cpuregister": extension}):
+            assert has_backend_test_cases() is False
+
+        extension.has_backend_test_cases = True
+        with mock.patch.dict(sys.modules, {"onnx_light_cpu.onnx_py._cpuregister": extension}):
+            assert has_backend_test_cases() is True
 
 
 class TestRegisteredKernels(TestCase):

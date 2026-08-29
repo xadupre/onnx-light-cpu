@@ -174,9 +174,19 @@ Tensor MakeLike(const Tensor &x, RuntimeContext *rt) {
 
 } // namespace
 
+struct ExpKernel::Tuning {
+  UnaryExecutionTuning value;
+};
+
+struct LogKernel::Tuning {
+  UnaryExecutionTuning value;
+};
+
 ExpKernel::ExpKernel(const NodeProto &node, const rt_ns::KernelContext &ctx) : KernelBase(ctx) {
   set_node(node);
 }
+
+ExpKernel::~ExpKernel() = default;
 
 void ExpKernel::RegisterTuningSchemas() {
   static std::once_flag once;
@@ -199,7 +209,7 @@ void ExpKernel::Configure(const rt_ns::KernelTuningParameters &parameters) {
     throw std::invalid_argument("Exp tuning parameters have an incompatible key.");
   }
   ValidateTuning(parameters);
-  tuning_ = ReadTuning(parameters);
+  tuning_ = std::make_shared<Tuning>(Tuning{ReadTuning(parameters)});
   tuning_configured_ = true;
 }
 
@@ -211,7 +221,7 @@ Tensor ExpKernel::operator()(const Tensor &x, RuntimeContext *rt) const {
 
 void ExpKernel::operator()(const Tensor &x, Tensor &output) const {
   const UnaryExecutionTuning &tuning =
-      tuning_configured_ ? tuning_ : DefaultTuning("Exp", x.data_type);
+      tuning_configured_ ? tuning_->value : DefaultTuning("Exp", x.data_type);
   ComputeUnary(x, output, "ExpKernel", &ExpFloat32WithTuning, &ExpFloat64WithTuning,
                &ExpFloat16WithTuning, &ExpBFloat16WithTuning, tuning);
 }
@@ -235,6 +245,8 @@ LogKernel::LogKernel(const NodeProto &node, const rt_ns::KernelContext &ctx) : K
   set_node(node);
 }
 
+LogKernel::~LogKernel() = default;
+
 void LogKernel::RegisterTuningSchemas() {
   static std::once_flag once;
   std::call_once(once, [] {
@@ -256,13 +268,13 @@ void LogKernel::Configure(const rt_ns::KernelTuningParameters &parameters) {
     throw std::invalid_argument("Log tuning parameters have an incompatible key.");
   }
   ValidateTuning(parameters);
-  tuning_ = ReadTuning(parameters);
+  tuning_ = std::make_shared<Tuning>(Tuning{ReadTuning(parameters)});
   tuning_configured_ = true;
 }
 
 void LogKernel::operator()(const Tensor &x, Tensor &output) const {
   const UnaryExecutionTuning &tuning =
-      tuning_configured_ ? tuning_ : DefaultTuning("Log", x.data_type);
+      tuning_configured_ ? tuning_->value : DefaultTuning("Log", x.data_type);
   ComputeUnary(x, output, "LogKernel", &LogFloat32WithTuning, &LogFloat64WithTuning,
                &LogFloat16WithTuning, &LogBFloat16WithTuning, tuning);
 }
