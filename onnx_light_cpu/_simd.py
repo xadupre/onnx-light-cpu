@@ -28,8 +28,13 @@ def detect_simd_level() -> SimdLevel:
 
 def has_cpu_kernels() -> bool:
     """Returns whether the compiled onnx-light-cpu kernel extension is available."""
-    from .onnx_py._cpukernels import (  # pyrefly: ignore[missing-import]
-        has_cpu_kernels as _has_cpu_kernels,
-    )
+    try:
+        from .onnx_py._cpukernels import (  # pyrefly: ignore[missing-import]
+            has_cpu_kernels as _has_cpu_kernels,
+        )
+    except ModuleNotFoundError as exc:
+        if exc.name == "onnx_light_cpu.onnx_py._cpukernels":
+            return False
+        raise
 
     return bool(_has_cpu_kernels())
