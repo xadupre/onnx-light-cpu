@@ -207,7 +207,7 @@ void RegisterChainedGemmCase(std::vector<TestCase> &registry, const OpsetId &ops
   TestCase test_case(name, name, "model", "gemm_chain");
   test_case.declared_input_element_counts = {m * k, k * n1, n1 * n2, n2 * n3};
   test_case.declared_output_element_counts = {m * n3};
-  test_case.build = [opset, name, m, k, n1, n2, n3]() {
+  test_case.build = [opset, name, m, k, n1, n2, n3](bool generate_outputs) {
     BuiltCase built;
     InitModel(built.model, kDefaultIrVersion, {opset});
     GraphProto *graph = built.model.add_graph();
@@ -228,15 +228,20 @@ void RegisterChainedGemmCase(std::vector<TestCase> &registry, const OpsetId &ops
     Tensor b1 = Tensor::FromFloat("B1", {k, n1}, Randn<float>({k, n1}, 702));
     Tensor b2 = Tensor::FromFloat("B2", {n1, n2}, Randn<float>({n1, n2}, 703));
     Tensor b3 = Tensor::FromFloat("B3", {n2, n3}, Randn<float>({n2, n3}, 704));
-    GemmKernel first(KernelContext{opset});
-    GemmKernel second(KernelContext{opset});
-    GemmKernel third(KernelContext{opset});
-    Tensor y1 = first(a, b1, 1.0f, false, false);
-    Tensor y2 = second(y1, b2, 1.0f, false, false);
-    Tensor y = third(y2, b3, 1.0f, false, false);
-    y.name = "Y";
-    built.data_sets.push_back(
-        DataSet{{std::move(a), std::move(b1), std::move(b2), std::move(b3)}, {std::move(y)}});
+    rt_ns::Tensors outputs;
+    if (generate_outputs) {
+      GemmKernel first(KernelContext{opset});
+      GemmKernel second(KernelContext{opset});
+      GemmKernel third(KernelContext{opset});
+      Tensor y1 = first(a, b1, 1.0f, false, false);
+      Tensor y2 = second(y1, b2, 1.0f, false, false);
+      Tensor y = third(y2, b3, 1.0f, false, false);
+      y.name = "Y";
+      outputs.push_back(std::move(y));
+    }
+    built.data_sets.push_back(DataSet{{std::move(a), std::move(b1), std::move(b2), std::move(b3)},
+                                      std::move(outputs),
+                                      generate_outputs});
     return built;
   };
   registry.emplace_back(std::move(test_case));
