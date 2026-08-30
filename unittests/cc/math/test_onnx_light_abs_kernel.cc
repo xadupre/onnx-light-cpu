@@ -124,7 +124,7 @@ TEST(OnnxLightAbsKernel, RegistersAndAppliesValidatedTuning) {
   EXPECT_EQ(parameters.Get<int64_t>("parallel.target_block_bytes"), 256 * 1024);
   EXPECT_EQ(parameters.Get<int64_t>("parallel.max_participants"), 32);
   EXPECT_EQ(parameters.Get<int64_t>("parallel.preferred_participants"), 0);
-  EXPECT_EQ(parameters.Get<int64_t>("memory.streaming_store_threshold_bytes"), 0);
+  EXPECT_EQ(parameters.Get<int64_t>("memory.streaming_store_threshold_bytes"), 2 * 1024 * 1024);
   EXPECT_EQ(parameters.Get<int64_t>("parallel.cost_model"), 1);
 
   parameters.values["parallel.threshold_bytes"] = int64_t{1};

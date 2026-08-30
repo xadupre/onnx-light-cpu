@@ -31,7 +31,7 @@ struct UnaryExecutionTuning {
 };
 
 inline constexpr UnaryExecutionTuning kDefaultAbsFloat32ExecutionTuning{
-    2 * 1024 * 1024, 256 * 1024, 32, true, 0, 0};
+    2 * 1024 * 1024, 256 * 1024, 32, true, 0, 2 * 1024 * 1024};
 inline constexpr UnaryExecutionTuning kDefaultAbs32ExecutionTuning{2 * 1024 * 1024, 256 * 1024, 0};
 inline constexpr UnaryExecutionTuning kDefaultAbs64ExecutionTuning{2 * 1024 * 1024, 512 * 1024, 0};
 inline constexpr UnaryExecutionTuning kDefaultAbs16ExecutionTuning{4 * 1024 * 1024, 128 * 1024, 0};
