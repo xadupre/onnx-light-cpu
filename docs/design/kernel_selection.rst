@@ -16,6 +16,14 @@ Each function provides a node factory and a ``KernelRegistration`` record to
 ``RegisterKernel``. The record is normalized and installed in onnx-light's
 shared table under its ``(domain, op_type, CPU device)`` key.
 
+``com.microsoft`` operators have an additional family-level choice.
+``MicrosoftKernelImplementation::NAIVE`` selects independent scalar reference
+kernels, while ``OPTIMIZED`` selects the production implementations.
+``RegisterAllKernels()`` defaults to ``OPTIMIZED``; its typed overload and
+``RegisterMicrosoftKernels`` make the alternative explicit. Inventory and
+usage names include ``Naive`` for reference variants, so callers can verify
+the selected family.
+
 An empty domain in source is normalized to ``ai.onnx``, the standard ONNX
 domain. Custom kernels explicitly register ``com.microsoft`` entries (and
 some traditional machine-learning operators use ``ai.onnx.ml``). The runtime

@@ -1,7 +1,13 @@
 Registering kernels
 -------------------
 
-.. py:function:: register_kernels(sess=None)
+.. py:class:: MicrosoftKernelImplementation
+
+   Selects the complete ``com.microsoft`` implementation family. ``NAIVE``
+   uses independent scalar correctness oracles; ``OPTIMIZED`` uses production
+   kernels.
+
+.. py:function:: register_kernels(sess=None, *, microsoft_implementation=MicrosoftKernelImplementation.OPTIMIZED)
 
    Registers onnx-light-cpu kernels in onnx-light's shared C++
    ``KernelDispatchTable`` for the CPU device. It installs the ``Abs``, ``Exp``,
@@ -9,6 +15,9 @@ Registering kernels
    and ``BiasGelu`` kernels, their symbolic shape and peak-memory functions,
    and their fusion patterns. The registration is global; ``sess`` is optional
    and returned unchanged so calls can be chained.
+
+   ``microsoft_implementation`` explicitly selects one complete
+   ``com.microsoft`` family. The default is optimized.
 
    .. code-block:: python
 

@@ -25,6 +25,7 @@ from ._processor_profile import (
     benchmark_processor_performance,
 )
 from ._register import (
+    MicrosoftKernelImplementation,
     OperatorSupport,
     RegisteredKernel,
     clear_used_kernel_names,
@@ -52,6 +53,7 @@ __all__ = [
     "ExplicitAffinity",
     "LatencyMeasurement",
     "MemoryLevelMeasurement",
+    "MicrosoftKernelImplementation",
     "OperatorSupport",
     "ProcessorPerformanceProfile",
     "ProcessorProfileMetadata",

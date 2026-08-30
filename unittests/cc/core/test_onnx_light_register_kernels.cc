@@ -7,6 +7,7 @@
 #include "onnx_core/runtime/kernels/kernel_dispatch_table.h"
 #include "onnx_core/runtime/memory/simple_tensor.h"
 #include "onnx_core/runtime/runtime_context.h"
+#include "onnx_light_cpu/kernels/com_microsoft/naive_bias_gelu_kernel.h"
 
 #include <gtest/gtest.h>
 
@@ -21,6 +22,29 @@ namespace {
 TEST(OnnxLightRegisterKernels, RegisterAllKernels) {
   EXPECT_NO_THROW(onnx_light_cpu::RegisterAllKernels());
   EXPECT_NO_THROW(onnx_light_cpu::RegisterAllKernels());
+}
+
+TEST(OnnxLightRegisterKernels, NaivePolicyInstallsNaiveMicrosoftFactories) {
+  namespace rt_ns = ONNX_LIGHT_NAMESPACE::core::runtime;
+  onnx_light_cpu::RegisterAllKernels(onnx_light_cpu::MicrosoftKernelImplementation::NAIVE);
+  const auto &table = rt_ns::KernelDispatchTable();
+  const auto factory = table.find("com.microsoft:BiasGelu");
+  ASSERT_NE(factory, table.end());
+
+  ONNX_LIGHT_NAMESPACE::NodeProto node;
+  node.set_domain("com.microsoft");
+  node.set_op_type("BiasGelu");
+  node.add_input("a");
+  node.add_input("b");
+  node.add_output("c");
+  rt_ns::RuntimeContext runtime(rt_ns::KernelContext(rt_ns::OpsetId("com.microsoft", 1)));
+  runtime.Set("a", rt_ns::Tensor::FromFloat("a", {1, 2}, {-1.0f, 2.0f}));
+  runtime.Set("b", rt_ns::Tensor::FromFloat("b", {2}, {0.25f, -0.5f}));
+
+  std::unique_ptr<rt_ns::KernelBase> kernel = factory->second(node, runtime);
+  EXPECT_NE(dynamic_cast<onnx_light_cpu::NaiveBiasGeluKernel *>(kernel.get()), nullptr);
+
+  onnx_light_cpu::RegisterAllKernels();
 }
 
 TEST(OnnxLightRegisterKernels, RegisteredFactoriesConstructWithoutSessionExecutor) {

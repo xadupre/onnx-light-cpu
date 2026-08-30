@@ -6,6 +6,17 @@
 
 namespace onnx_light_cpu {
 
+/// Selects the complete ``com.microsoft`` kernel implementation family.
+enum class MicrosoftKernelImplementation {
+  /// Readable scalar correctness-oracle implementations.
+  NAIVE,
+  /// Production implementations with tuning, SIMD, and parallel execution.
+  OPTIMIZED,
+};
+
+/// Registers exactly one implementation for every ``com.microsoft`` operator.
+void RegisterMicrosoftKernels(MicrosoftKernelImplementation implementation);
+
 /// Registers every onnx-light-cpu kernel class into onnx-light's shared
 /// ``KernelDispatchTable`` for the CPU device.
 ///
@@ -26,5 +37,9 @@ namespace onnx_light_cpu {
 /// through ``ReferenceEvaluator``) resolves to the onnx-light-cpu kernel,
 /// replacing the corresponding built-in entries for the default ONNX domain.
 void RegisterAllKernels();
+
+/// Registers all kernels, selecting the complete ``com.microsoft`` family
+/// explicitly. The no-argument overload is equivalent to ``OPTIMIZED``.
+void RegisterAllKernels(MicrosoftKernelImplementation implementation);
 
 } // namespace onnx_light_cpu

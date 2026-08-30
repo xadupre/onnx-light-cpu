@@ -25,7 +25,7 @@ From Python:
     import numpy as np
     from onnx_light.onnx.reference import ReferenceEvaluator
 
-    from onnx_light_cpu import register_kernels
+    from onnx_light_cpu import MicrosoftKernelImplementation, register_kernels
 
     # Install the SIMD kernels into onnx-light's dispatch table. Import
     # onnx-light *before* calling this so its built-in kernels are already
@@ -50,13 +50,30 @@ hook instead:
     sess = ReferenceEvaluator(model)
     sess.register_custom_kernel("", "Abs", my_abs)  # this session only
 
+The default installs the optimized ``com.microsoft`` family. Tests and
+diagnostic callers can explicitly install the complete scalar reference
+family instead:
+
+.. code-block:: python
+
+    register_kernels(
+        microsoft_implementation=MicrosoftKernelImplementation.NAIVE
+    )
+
 From C++:
 
 .. code-block:: cpp
 
     #include <onnx_light_cpu/kernels/register_kernels.h>
 
-    onnx_light_cpu::RegisterAllKernels();  // the shipped kernels now use the SIMD implementations
+    onnx_light_cpu::RegisterAllKernels();  // optimized by default
+    onnx_light_cpu::RegisterAllKernels(
+        onnx_light_cpu::MicrosoftKernelImplementation::NAIVE);
+
+``RegisterMicrosoftKernels`` installs exactly one complete implementation
+family for the ``com.microsoft`` domain. Mixing families in one registration
+pass is intentionally unsupported, so one operator cannot silently replace a
+different variant registered earlier in that pass.
 
 The registration overrides the built-in entry for the default ONNX domain, and
 it wins **regardless of the order** in which the built-in and the onnx-light-cpu
@@ -147,6 +164,13 @@ The three steps are:
 Then add ``RegisterMyKernel()`` to ``RegisterAllKernels`` in
 ``onnx_light_cpu/kernels/register_kernels.cc`` so it is installed together with
 the other kernels.
+
+Every new ``com.microsoft`` operator must instead provide two independent
+``KernelBase`` adapters: a readable scalar ``Naive*Kernel`` correctness oracle
+and a production optimized kernel. Add both registrars to the corresponding
+branch of ``RegisterMicrosoftKernels`` and add differential tests covering
+their complete shared contract. Backend ``TEST`` cases generate expectations
+with the naive implementation; ``BENCHMARK`` cases use the optimized one.
 
 For a kernel that only needs to run from Python — for example a quick,
 model-specific override written in NumPy — use ``onnx-light``'s per-evaluator

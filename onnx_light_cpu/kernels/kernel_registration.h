@@ -21,6 +21,8 @@
 
 namespace onnx_light_cpu {
 
+enum class MicrosoftKernelImplementation;
+
 /// Structured metadata describing one onnx-light-cpu kernel registration.
 ///
 /// Every ``Register*Kernel[s]`` function builds one (or more) of these and
@@ -128,5 +130,10 @@ void RegisterKernel(KernelRegistration info, ONNX_LIGHT_NAMESPACE::core::runtime
 /// every :cpp:func:`RegisterKernel` call made while collecting only appends
 /// to the returned vector.
 std::vector<KernelRegistration> CollectRegisteredKernels();
+
+/// Collects the inventory for an explicit ``com.microsoft`` implementation
+/// family without mutating the dispatch table.
+std::vector<KernelRegistration>
+CollectRegisteredKernels(MicrosoftKernelImplementation implementation);
 
 } // namespace onnx_light_cpu

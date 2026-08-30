@@ -184,7 +184,7 @@ Tensor Compute(const Tensor &q, const Tensor &k, const Tensor &v, const Tensor *
   const AttentionLayout layout =
       q.shape.size() == 3 ? AttentionLayout::kRank3 : AttentionLayout::kRank4;
 
-  // --- Mask handling: convert FLOAT16 additive mask to FP32 on the fly ---
+  // --- Mask handling: convert 16-bit additive masks to FP32 on the fly ---
   AttentionMaskKind mask_kind = AttentionMaskKind::kNone;
   std::vector<float> mask_fp32_buffer;
   if (mask != nullptr) {
@@ -201,9 +201,18 @@ Tensor Compute(const Tensor &q, const Tensor &k, const Tensor &v, const Tensor *
       mask_fp32_buffer.resize(mask_count);
       detail::ConvertFloat16ToFloat32(reinterpret_cast<const std::uint16_t *>(mask->bytes()),
                                       mask_fp32_buffer.data(), mask_count);
+    } else if (static_cast<DataType>(mask->data_type) == DataType::BFLOAT16) {
+      mask_kind = AttentionMaskKind::kAdditive;
+      std::size_t mask_count = 1;
+      for (const auto &d : mask->shape) {
+        mask_count *= static_cast<std::size_t>(d);
+      }
+      mask_fp32_buffer.resize(mask_count);
+      detail::ConvertBFloat16ToFloat32(reinterpret_cast<const std::uint16_t *>(mask->bytes()),
+                                       mask_fp32_buffer.data(), mask_count);
     } else {
       throw std::invalid_argument("onnx_light_cpu::AttentionKernel: unsupported attn_mask data "
-                                  "type; only BOOL, FLOAT, and FLOAT16 are supported.");
+                                  "type; only BOOL, FLOAT, FLOAT16, and BFLOAT16 are supported.");
     }
   }
 

@@ -309,6 +309,36 @@ TEST(KernelRegistration, CollectionIsDeterministicallyOrdered) {
   EXPECT_TRUE(std::is_sorted(sort_keys.begin(), sort_keys.end()));
 }
 
+TEST(KernelRegistration, MicrosoftImplementationPolicySelectsOneCompleteFamily) {
+  const auto optimized = onnx_light_cpu::CollectRegisteredKernels(
+      onnx_light_cpu::MicrosoftKernelImplementation::OPTIMIZED);
+  const auto naive = onnx_light_cpu::CollectRegisteredKernels(
+      onnx_light_cpu::MicrosoftKernelImplementation::NAIVE);
+
+  auto microsoft_names = [](const std::vector<KernelRegistration> &records) {
+    std::vector<std::pair<std::string, std::string>> names;
+    for (const auto &record : records) {
+      if (record.domain == "com.microsoft") {
+        names.emplace_back(record.op_type, record.kernel_name);
+      }
+    }
+    return names;
+  };
+
+  EXPECT_EQ(microsoft_names(optimized),
+            (std::vector<std::pair<std::string, std::string>>{
+                {"BiasGelu", "onnx_light_cpu::BiasGelu"},
+                {"CDist", "onnx_light_cpu::CDist"},
+                {"GroupQueryAttention", "onnx_light_cpu::GroupQueryAttention"}}));
+  EXPECT_EQ(microsoft_names(naive),
+            (std::vector<std::pair<std::string, std::string>>{
+                {"BiasGelu", "onnx_light_cpu::NaiveBiasGelu"},
+                {"CDist", "onnx_light_cpu::NaiveCDist"},
+                {"GroupQueryAttention", "onnx_light_cpu::NaiveGroupQueryAttention"}}));
+  EXPECT_EQ(microsoft_names(onnx_light_cpu::CollectRegisteredKernels()),
+            microsoft_names(optimized));
+}
+
 // Collecting the inventory must never install, replace, or execute a kernel:
 // it must not mutate onnx-light's shared ``KernelDispatchTable`` at all.
 TEST(KernelRegistration, CollectionDoesNotMutateDispatchTable) {

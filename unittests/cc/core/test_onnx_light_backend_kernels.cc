@@ -256,11 +256,13 @@ void RunCaseThroughRuntime(const TestCase &tc, bool compare, std::vector<std::st
 // ``test_cpu_*`` case for ``op_type`` (in the given ``mode``) through the
 // runtime, collecting failures. Correctness (``TEST``) cases have their outputs
 // compared; benchmark (``BENCHMARK``) cases are only executed.
-std::vector<std::string> RunCpuBackendCases(const std::string &op_type,
-                                            core::backend_test::TestMode mode,
-                                            const std::string &case_name = {}) {
+std::vector<std::string>
+RunCpuBackendCases(const std::string &op_type, core::backend_test::TestMode mode,
+                   const std::string &case_name = {},
+                   onnx_light_cpu::MicrosoftKernelImplementation microsoft_implementation =
+                       onnx_light_cpu::MicrosoftKernelImplementation::OPTIMIZED) {
   onnx_light_cpu::backend_test::RegisterCpuKernelBackendTestCases();
-  onnx_light_cpu::RegisterAllKernels();
+  onnx_light_cpu::RegisterAllKernels(microsoft_implementation);
 
   const bool compare = mode == core::backend_test::TestMode::TEST;
   std::vector<std::string> failures;
@@ -356,6 +358,15 @@ TEST(OnnxLightBackendKernels, GroupQueryAttentionRunsThroughRuntime) {
   const std::vector<std::string> failures =
       RunCpuBackendCases("GroupQueryAttention", core::backend_test::TestMode::TEST);
   EXPECT_TRUE(failures.empty()) << Describe(failures);
+}
+
+TEST(OnnxLightBackendKernels, MicrosoftCorrectnessCasesRunWithNaiveRegistration) {
+  for (const std::string &op_type : {"BiasGelu", "CDist", "GroupQueryAttention"}) {
+    const auto failures = RunCpuBackendCases(op_type, core::backend_test::TestMode::TEST, {},
+                                             onnx_light_cpu::MicrosoftKernelImplementation::NAIVE);
+    EXPECT_TRUE(failures.empty()) << Describe(failures);
+  }
+  onnx_light_cpu::RegisterAllKernels();
 }
 
 TEST(OnnxLightBackendKernels, NotRunsThroughRuntime) {

@@ -44,10 +44,11 @@ using RegisteredKernelTuple =
 using OperatorSupportTuple =
     std::tuple<std::string, std::string, std::string, std::string, std::vector<std::string>, bool>;
 
-std::vector<RegisteredKernelTuple> RegisteredKernelsForPython() {
+std::vector<RegisteredKernelTuple>
+RegisteredKernelsForPython(onnx_light_cpu::MicrosoftKernelImplementation implementation) {
   std::vector<RegisteredKernelTuple> result;
   const std::vector<onnx_light_cpu::KernelRegistration> records =
-      onnx_light_cpu::CollectRegisteredKernels();
+      onnx_light_cpu::CollectRegisteredKernels(implementation);
   result.reserve(records.size());
   for (const onnx_light_cpu::KernelRegistration &record : records) {
     std::vector<std::string> type_names;
@@ -78,13 +79,19 @@ NB_MODULE(_cpuregister, m) {
   m.doc() = "Python bindings for registering and inspecting onnx-light-cpu "
             "kernels and custom operator support.";
 
+  nb::enum_<onnx_light_cpu::MicrosoftKernelImplementation>(m, "MicrosoftKernelImplementation")
+      .value("NAIVE", onnx_light_cpu::MicrosoftKernelImplementation::NAIVE)
+      .value("OPTIMIZED", onnx_light_cpu::MicrosoftKernelImplementation::OPTIMIZED);
+
   m.def(
       "register_all_kernels",
-      []() {
+      [](onnx_light_cpu::MicrosoftKernelImplementation implementation) {
         onnx_light_cpu::RegisterMicrosoftShapeAndMemoryFunctions();
         onnx_light_cpu::RegisterCustomOperatorPatterns();
-        onnx_light_cpu::RegisterAllKernels();
+        onnx_light_cpu::RegisterAllKernels(implementation);
       },
+      nb::arg("microsoft_implementation") =
+          onnx_light_cpu::MicrosoftKernelImplementation::OPTIMIZED,
       "Registers every onnx-light-cpu kernel class into onnx-light's shared "
       "KernelDispatchTable for the CPU device.");
 
@@ -113,6 +120,8 @@ NB_MODULE(_cpuregister, m) {
       "check the accelerated kernels are the ones actually used.");
 
   m.def("registered_kernels", &RegisteredKernelsForPython,
+        nb::arg("microsoft_implementation") =
+            onnx_light_cpu::MicrosoftKernelImplementation::OPTIMIZED,
         "Returns one (domain, op_type, device, kernel_name, types, since_version, "
         "until_version) tuple per onnx-light-cpu kernel registration, sorted by "
         "(domain, op_type, device, kernel_name). Collected from "
