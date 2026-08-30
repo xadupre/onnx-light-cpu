@@ -55,6 +55,7 @@ from onnx_light_cpu import (
     register_kernels,
     registered_kernel_names,
     registered_kernels,
+    run_backend_correctness_tests,
     used_kernel_names,
 )
 
@@ -400,6 +401,11 @@ class TestBackendCases(ExtTestCase):
 
     def test_registered_kernel_names(self):
         assert registered_kernel_names() == _REGISTERED_KERNELS
+
+    def test_all_registered_kernels_pass_regular_backend_correctness_corpus(self):
+        report = run_backend_correctness_tests()
+        assert report.executed == report.passed
+        assert not report.failed, report
 
     def test_registered_kernels_parity_with_names(self):
         records = registered_kernels()

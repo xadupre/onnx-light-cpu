@@ -42,11 +42,18 @@ from ._register import (
     set_kernel_usage_recording,
     used_kernel_names,
 )
+from ._backend_correctness import (
+    BackendCaseResult,
+    BackendCorrectnessReport,
+    run_backend_correctness_tests,
+)
 from ._simd import SimdLevel, detect_simd_level, has_cpu_kernels
 
 __version__ = "0.1.16"
 
 __all__ = [
+    "BackendCaseResult",
+    "BackendCorrectnessReport",
     "BandwidthMeasurement",
     "CacheDescriptor",
     "ComputeMeasurement",
@@ -76,6 +83,7 @@ __all__ = [
     "register_operator_support",
     "registered_kernel_names",
     "registered_kernels",
+    "run_backend_correctness_tests",
     "set_kernel_usage_recording",
     "used_kernel_names",
 ]
