@@ -69,10 +69,10 @@ void RegisterCpuNotCases(std::vector<TestCase> &registry, TestMode mode) {
     return;
   }
 
-  const onnx_light_cpu::NotKernel not_kernel{KernelContext{opset}};
-  Expect(registry, MakeNotNode(), "test_cpu_not_bool", {opset}, [=]() -> IoData {
+  Expect(registry, MakeNotNode(), "test_cpu_not_bool", {opset}, [opset]() -> IoData {
     Tensor x("", DataType::BOOL, {2, 2}, {1, 0, 1, 0});
-    return IoData{{x}, {not_kernel(x)}};
+    const onnx_light_cpu::NotKernel kernel{KernelContext{opset}};
+    return IoData{{x}, {kernel(x)}};
   });
 }
 

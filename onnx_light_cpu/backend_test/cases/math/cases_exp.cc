@@ -74,22 +74,25 @@ void RegisterCpuExpCases(std::vector<TestCase> &registry, TestMode mode) {
     return;
   }
 
-  const onnx_light_cpu::ExpKernel exp_kernel{KernelContext{opset}};
   Expect(registry, MakeExpNode(), "test_cpu_exp_float32", {opset}, [=]() -> IoData {
     Tensor x = Tensor::FromFloat("", shape, f);
-    return IoData{{x}, {exp_kernel(x)}};
+    const onnx_light_cpu::ExpKernel kernel{KernelContext{opset}};
+    return IoData{{x}, {kernel(x)}};
   });
   Expect(registry, MakeExpNode(), "test_cpu_exp_float64", {opset}, [=]() -> IoData {
     Tensor x = Tensor::FromDouble("", shape, {-2.0, -1.0, 0.0, 0.5, 1.0, 2.0});
-    return IoData{{x}, {exp_kernel(x)}};
+    const onnx_light_cpu::ExpKernel kernel{KernelContext{opset}};
+    return IoData{{x}, {kernel(x)}};
   });
   Expect(registry, MakeExpNode(), "test_cpu_exp_float16", {opset}, [=]() -> IoData {
     Tensor x = rt_ns::MakeFloat16Tensor("", shape, f);
-    return IoData{{x}, {exp_kernel(x)}};
+    const onnx_light_cpu::ExpKernel kernel{KernelContext{opset}};
+    return IoData{{x}, {kernel(x)}};
   });
   Expect(registry, MakeExpNode(), "test_cpu_exp_bfloat16", {opset}, [=]() -> IoData {
     Tensor x = MakeBfloat16Tensor(shape, f);
-    return IoData{{x}, {exp_kernel(x)}};
+    const onnx_light_cpu::ExpKernel kernel{KernelContext{opset}};
+    return IoData{{x}, {kernel(x)}};
   });
 }
 

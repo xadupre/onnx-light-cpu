@@ -356,7 +356,6 @@ void RegisterMvnBenchmark(std::vector<TestCase> &registry, const OpsetId &opset,
 
 void RegisterCpuBatchNormalizationCases(std::vector<TestCase> &registry, TestMode mode) {
   const auto opset = DefaultOpset(15);
-  const BatchNormalizationKernel kernel{KernelContext{opset}};
   NodeProto node = MakeNode("BatchNormalization", {"X", "scale", "B", "mean", "variance"}, {"Y"});
   if (mode == TestMode::BENCHMARK) {
     for (const BatchBenchmark &benchmark :
@@ -377,12 +376,13 @@ void RegisterCpuBatchNormalizationCases(std::vector<TestCase> &registry, TestMod
         MakeNode("BatchNormalization", {"X", "scale", "B", "mean", "variance"}, {"Y"});
     const std::string name =
         "test_cpu_batchnormalization_small_" + std::string(DataTypeSuffix(data_type));
-    Expect(registry, std::move(inference_node), name, {opset}, [kernel, data_type]() -> IoData {
+    Expect(registry, std::move(inference_node), name, {opset}, [opset, data_type]() -> IoData {
       Tensor x = MakeTypedTensor(data_type, {1, 2, 1, 3}, {-1.0F, 0.0F, 1.0F, 2.0F, 3.0F, 4.0F});
       Tensor scale = MakeTypedTensor(data_type, {2}, {1.0F, 1.5F});
       Tensor bias = MakeTypedTensor(data_type, {2}, {0.0F, 1.0F});
       Tensor mean = MakeTypedTensor(data_type, {2}, {0.0F, 3.0F});
       Tensor variance = MakeTypedTensor(data_type, {2}, {1.0F, 1.5F});
+      const BatchNormalizationKernel kernel{KernelContext{opset}};
       Tensor y = kernel(x, scale, bias, mean, variance);
       return IoData{
           {std::move(x), std::move(scale), std::move(bias), std::move(mean), std::move(variance)},
@@ -397,13 +397,14 @@ void RegisterCpuBatchNormalizationCases(std::vector<TestCase> &registry, TestMod
   AddFloatAttribute(training_node, "epsilon", 0.0F);
   AddFloatAttribute(training_node, "momentum", 0.75F);
   Expect(registry, std::move(training_node), "test_cpu_batchnormalization_training_float32",
-         {opset}, [kernel]() -> IoData {
+         {opset}, [opset]() -> IoData {
            Tensor x =
                Tensor::FromFloat("", {2, 2, 2}, {1.0F, 3.0F, 2.0F, 6.0F, 5.0F, 7.0F, 4.0F, 8.0F});
            Tensor scale = Tensor::FromFloat("", {2}, {2.0F, 0.5F});
            Tensor bias = Tensor::FromFloat("", {2}, {1.0F, -1.0F});
            Tensor mean = Tensor::FromFloat("", {2}, {10.0F, 20.0F});
            Tensor variance = Tensor::FromFloat("", {2}, {9.0F, 13.0F});
+           const BatchNormalizationKernel kernel{KernelContext{opset}};
            BatchNormalizationResult result =
                kernel.Compute(x, scale, bias, mean, variance, true, 0.0F, 0.75F);
            return IoData{{std::move(x), std::move(scale), std::move(bias), std::move(mean),
@@ -415,7 +416,6 @@ void RegisterCpuBatchNormalizationCases(std::vector<TestCase> &registry, TestMod
 
 void RegisterCpuGroupNormalizationCases(std::vector<TestCase> &registry, TestMode mode) {
   const auto opset = DefaultOpset(21);
-  const GroupNormalizationKernel kernel{KernelContext{opset}};
   NodeProto node = MakeNode("GroupNormalization", {"X", "scale", "bias"}, {"Y"});
   AddIntAttribute(node, "num_groups", mode == TestMode::BENCHMARK ? 8 : 2);
   if (mode == TestMode::BENCHMARK) {
@@ -435,11 +435,12 @@ void RegisterCpuGroupNormalizationCases(std::vector<TestCase> &registry, TestMod
     AddIntAttribute(test_node, "num_groups", 2);
     const std::string name =
         "test_cpu_groupnormalization_small_" + std::string(DataTypeSuffix(data_type));
-    Expect(registry, std::move(test_node), name, {opset}, [kernel, data_type]() -> IoData {
+    Expect(registry, std::move(test_node), name, {opset}, [opset, data_type]() -> IoData {
       Tensor x =
           MakeTypedTensor(data_type, {1, 4, 2}, {-2.0F, -1.0F, 0.0F, 1.0F, 2.0F, 3.0F, 4.0F, 5.0F});
       Tensor scale = MakeTypedTensor(data_type, {4}, {0.5F, 1.0F, 1.5F, 2.0F});
       Tensor bias = MakeTypedTensor(data_type, {4}, {-0.25F, 0.0F, 0.25F, 0.5F});
+      const GroupNormalizationKernel kernel{KernelContext{opset}};
       Tensor y = kernel(x, scale, bias, 2);
       return IoData{{std::move(x), std::move(scale), std::move(bias)}, {std::move(y)}};
     });
@@ -464,7 +465,6 @@ void RegisterCpuGroupNormalizationCases(std::vector<TestCase> &registry, TestMod
 
 void RegisterCpuInstanceNormalizationCases(std::vector<TestCase> &registry, TestMode mode) {
   const auto opset = DefaultOpset(22);
-  const InstanceNormalizationKernel kernel{KernelContext{opset}};
   NodeProto node = MakeNode("InstanceNormalization", {"X", "scale", "B"}, {"Y"});
   if (mode == TestMode::BENCHMARK) {
     for (const InstanceBenchmark &benchmark :
@@ -482,10 +482,11 @@ void RegisterCpuInstanceNormalizationCases(std::vector<TestCase> &registry, Test
     NodeProto test_node = MakeNode("InstanceNormalization", {"X", "scale", "B"}, {"Y"});
     const std::string name =
         "test_cpu_instancenormalization_small_" + std::string(DataTypeSuffix(data_type));
-    Expect(registry, std::move(test_node), name, {opset}, [kernel, data_type]() -> IoData {
+    Expect(registry, std::move(test_node), name, {opset}, [opset, data_type]() -> IoData {
       Tensor x = MakeTypedTensor(data_type, {1, 2, 3}, {-1.0F, 0.0F, 1.0F, 2.0F, 3.0F, 4.0F});
       Tensor scale = MakeTypedTensor(data_type, {2}, {1.0F, 1.5F});
       Tensor bias = MakeTypedTensor(data_type, {2}, {0.0F, 1.0F});
+      const InstanceNormalizationKernel kernel{KernelContext{opset}};
       Tensor y = kernel(x, scale, bias);
       return IoData{{std::move(x), std::move(scale), std::move(bias)}, {std::move(y)}};
     });
@@ -495,7 +496,6 @@ void RegisterCpuInstanceNormalizationCases(std::vector<TestCase> &registry, Test
 
 void RegisterCpuLayerNormalizationCases(std::vector<TestCase> &registry, TestMode mode) {
   const auto opset = DefaultOpset(17);
-  const LayerNormalizationKernel kernel{KernelContext{opset}};
   NodeProto node = MakeNode("LayerNormalization", {"X", "Scale"}, {"Y"});
   AddIntAttribute(node, "axis", -1);
   if (mode == TestMode::BENCHMARK) {
@@ -524,10 +524,11 @@ void RegisterCpuLayerNormalizationCases(std::vector<TestCase> &registry, TestMod
     AddIntAttribute(test_node, "axis", -1);
     const std::string name =
         "test_cpu_layernormalization_axis1_" + std::string(DataTypeSuffix(data_type));
-    Expect(registry, std::move(test_node), name, {opset}, [kernel, data_type]() -> IoData {
+    Expect(registry, std::move(test_node), name, {opset}, [opset, data_type]() -> IoData {
       Tensor x = MakeTypedTensor(data_type, {2, 3}, {-1.0F, 0.0F, 1.0F, 2.0F, 4.0F, 8.0F});
       Tensor scale = MakeTypedTensor(data_type, {3}, {0.5F, 1.0F, 1.5F});
       Tensor bias = MakeTypedTensor(data_type, {3}, {-0.25F, 0.0F, 0.25F});
+      const LayerNormalizationKernel kernel{KernelContext{opset}};
       LayerNormalizationResult result = kernel(x, scale, &bias, -1, 1.0e-5F, 1, true, true);
       return IoData{{std::move(x), std::move(scale), std::move(bias)},
                     {std::move(result.y), std::move(*result.mean), std::move(*result.inv_std_dev)}};
@@ -538,7 +539,6 @@ void RegisterCpuLayerNormalizationCases(std::vector<TestCase> &registry, TestMod
 
 void RegisterCpuLpNormalizationCases(std::vector<TestCase> &registry, TestMode mode) {
   const auto opset = DefaultOpset(22);
-  const LpNormalizationKernel kernel{KernelContext{opset}};
   NodeProto node = MakeNode("LpNormalization", {"X"}, {"Y"});
   if (mode == TestMode::BENCHMARK) {
     for (const LpBenchmark &benchmark :
@@ -559,8 +559,9 @@ void RegisterCpuLpNormalizationCases(std::vector<TestCase> &registry, TestMode m
     AddIntAttribute(test_node, "p", 1);
     const std::string name =
         "test_cpu_lpnormalization_axis0_p1_" + std::string(DataTypeSuffix(data_type));
-    Expect(registry, std::move(test_node), name, {opset}, [kernel, data_type]() -> IoData {
+    Expect(registry, std::move(test_node), name, {opset}, [opset, data_type]() -> IoData {
       Tensor x = MakeTypedTensor(data_type, {2, 3}, {1.0F, -2.0F, 3.0F, 4.0F, 5.0F, -6.0F});
+      const LpNormalizationKernel kernel{KernelContext{opset}};
       Tensor y = kernel(x, 0, 1);
       return IoData{{std::move(x)}, {std::move(y)}};
     });
@@ -570,7 +571,6 @@ void RegisterCpuLpNormalizationCases(std::vector<TestCase> &registry, TestMode m
 
 void RegisterCpuMeanVarianceNormalizationCases(std::vector<TestCase> &registry, TestMode mode) {
   const auto opset = DefaultOpset(13);
-  const MeanVarianceNormalizationKernel kernel{KernelContext{opset}};
   NodeProto node = MakeNode("MeanVarianceNormalization", {"X"}, {"Y"});
   if (mode == TestMode::BENCHMARK) {
     for (const MvnBenchmark &benchmark :
@@ -613,8 +613,9 @@ void RegisterCpuMeanVarianceNormalizationCases(std::vector<TestCase> &registry, 
     AddIntsAttribute(test_node, "axes", {1});
     const std::string name =
         "test_cpu_meanvariancenormalization_axis1_" + std::string(DataTypeSuffix(data_type));
-    Expect(registry, std::move(test_node), name, {opset}, [kernel, data_type]() -> IoData {
+    Expect(registry, std::move(test_node), name, {opset}, [opset, data_type]() -> IoData {
       Tensor x = MakeTypedTensor(data_type, {2, 3}, {1.0F, 3.0F, 5.0F, 2.0F, 4.0F, 8.0F});
+      const MeanVarianceNormalizationKernel kernel{KernelContext{opset}};
       Tensor y = kernel(x, {1});
       return IoData{{std::move(x)}, {std::move(y)}};
     });

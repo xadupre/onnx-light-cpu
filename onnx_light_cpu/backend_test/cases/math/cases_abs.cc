@@ -76,38 +76,45 @@ void RegisterCpuAbsCases(std::vector<TestCase> &registry, TestMode mode) {
     return;
   }
 
-  const onnx_light_cpu::AbsKernel abs_kernel{KernelContext{opset}};
   Expect(registry, MakeAbsNode(), "test_cpu_abs_float32", {opset}, [=]() -> IoData {
     Tensor x = Tensor::FromFloat("", shape, f);
-    return IoData{{x}, {abs_kernel(x)}};
+    const onnx_light_cpu::AbsKernel kernel{KernelContext{opset}};
+    return IoData{{x}, {kernel(x)}};
   });
   Expect(registry, MakeAbsNode(), "test_cpu_abs_float64", {opset}, [=]() -> IoData {
     Tensor x = Tensor::FromDouble("", shape, {-1.0, 0.0, 1.5, -2.25, 3.5, -4.75});
-    return IoData{{x}, {abs_kernel(x)}};
+    const onnx_light_cpu::AbsKernel kernel{KernelContext{opset}};
+    return IoData{{x}, {kernel(x)}};
   });
   Expect(registry, MakeAbsNode(), "test_cpu_abs_int8", {opset}, [=]() -> IoData {
     Tensor x = Tensor::FromInt8("", shape, {-1, 0, 2, -127, 3, -5});
-    return IoData{{x}, {abs_kernel(x)}};
+    const onnx_light_cpu::AbsKernel kernel{KernelContext{opset}};
+    return IoData{{x}, {kernel(x)}};
   });
   Expect(registry, MakeAbsNode(), "test_cpu_abs_int16", {opset}, [=]() -> IoData {
     Tensor x = Tensor::FromInt16("", shape, {-1, 0, 2, -1000, 3, -5});
-    return IoData{{x}, {abs_kernel(x)}};
+    const onnx_light_cpu::AbsKernel kernel{KernelContext{opset}};
+    return IoData{{x}, {kernel(x)}};
   });
   Expect(registry, MakeAbsNode(), "test_cpu_abs_int32", {opset}, [=]() -> IoData {
     Tensor x = Tensor::FromInt32("", shape, {-1, 0, 2, -100000, 3, -5});
-    return IoData{{x}, {abs_kernel(x)}};
+    const onnx_light_cpu::AbsKernel kernel{KernelContext{opset}};
+    return IoData{{x}, {kernel(x)}};
   });
   Expect(registry, MakeAbsNode(), "test_cpu_abs_int64", {opset}, [=]() -> IoData {
     Tensor x = Tensor::FromInt64("", shape, {-1, 0, 2, -1000000000000LL, 3, -5});
-    return IoData{{x}, {abs_kernel(x)}};
+    const onnx_light_cpu::AbsKernel kernel{KernelContext{opset}};
+    return IoData{{x}, {kernel(x)}};
   });
   Expect(registry, MakeAbsNode(), "test_cpu_abs_float16", {opset}, [=]() -> IoData {
     Tensor x = rt_ns::MakeFloat16Tensor("", shape, f);
-    return IoData{{x}, {abs_kernel(x)}};
+    const onnx_light_cpu::AbsKernel kernel{KernelContext{opset}};
+    return IoData{{x}, {kernel(x)}};
   });
   Expect(registry, MakeAbsNode(), "test_cpu_abs_bfloat16", {opset}, [=]() -> IoData {
     Tensor x = MakeBfloat16Tensor(shape, f);
-    return IoData{{x}, {abs_kernel(x)}};
+    const onnx_light_cpu::AbsKernel kernel{KernelContext{opset}};
+    return IoData{{x}, {kernel(x)}};
   });
 }
 

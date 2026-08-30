@@ -50,7 +50,6 @@ void RegisterCpuSwiGLUCases(std::vector<TestCase> &registry, TestMode mode) {
     }
     return;
   }
-  const SwiGLUKernel kernel(rt_ns::KernelContext{opset});
   ONNX_LIGHT_NAMESPACE::NodeProto node;
   node.set_op_type("SwiGLU");
   node.add_input("gate");
@@ -61,11 +60,12 @@ void RegisterCpuSwiGLUCases(std::vector<TestCase> &registry, TestMode mode) {
   alpha->set_type(ONNX_LIGHT_NAMESPACE::AttributeProto::FLOAT);
   alpha->set_f(0.5f);
   bt_ns::Expect(registry, std::move(node), "test_cpu_swiglu_alpha_float32", {opset},
-                [=]() -> bt_ns::IoData {
+                [opset]() -> bt_ns::IoData {
                   rt_ns::Tensor gate =
                       rt_ns::Tensor::FromFloat("", {2, 3}, {-2.0f, -1.0f, 0.0f, 0.5f, 1.0f, 3.0f});
                   rt_ns::Tensor value =
                       rt_ns::Tensor::FromFloat("", {2, 3}, {0.5f, -2.0f, 3.0f, 1.0f, -1.0f, 2.0f});
+                  const SwiGLUKernel kernel(rt_ns::KernelContext{opset});
                   return bt_ns::IoData{{gate, value}, {kernel(gate, value, 0.5f)}};
                 });
 }

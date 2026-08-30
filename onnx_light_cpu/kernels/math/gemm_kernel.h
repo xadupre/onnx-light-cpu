@@ -54,6 +54,10 @@ public:
   static constexpr const char *kName = "onnx_light_cpu::Gemm";
   static constexpr std::uint32_t kTuningAbi = 1;
 
+  /// Returns the number of live instances in this library. Intended for
+  /// lifecycle regression tests that verify lazy backend-test registration.
+  static std::int64_t ActiveInstanceCountForTesting() noexcept;
+
   static void RegisterTuningSchemas();
   ONNX_LIGHT_NAMESPACE::core::runtime::KernelTuningKey
   TuningKey(int32_t element_type) const override;
