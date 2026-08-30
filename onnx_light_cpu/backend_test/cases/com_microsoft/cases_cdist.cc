@@ -6,6 +6,7 @@
 #include "onnx_light_cpu/backend_test/cases/math/benchmark_helpers.h"
 
 #include "onnx_light_cpu/kernels/com_microsoft/cdist_kernel.h"
+#include "onnx_light_cpu/kernels/com_microsoft/naive_cdist_kernel.h"
 #include "onnx_light_cpu/schemas/com_microsoft/op_schema.h"
 
 #include "onnx_core/backend_test/expect.h"
@@ -97,7 +98,7 @@ void RegisterCpuCDistCases(std::vector<TestCase> &registry, TestMode mode) {
       [=]() -> IoData {
         Tensor a = Tensor::FromFloat("", {3, 2}, {0.0f, 0.0f, 1.0f, 1.0f, 2.0f, 2.0f});
         Tensor b = Tensor::FromFloat("", {2, 2}, {0.0f, 0.0f, 1.0f, 0.0f});
-        const CDistKernel kernel{KernelContext{microsoft_opset}};
+        const NaiveCDistKernel kernel{KernelContext{microsoft_opset}};
         return IoData{{a, b}, {kernel(a, b, "sqeuclidean")}};
       },
       "backend-test", bt_ns::TestCaseTag::AI_RT);
@@ -108,7 +109,7 @@ void RegisterCpuCDistCases(std::vector<TestCase> &registry, TestMode mode) {
       [=]() -> IoData {
         Tensor a = Tensor::FromDouble("", {3, 2}, {0.0, 0.0, 1.0, 1.0, 2.0, 2.0});
         Tensor b = Tensor::FromDouble("", {2, 2}, {0.0, 0.0, 1.0, 0.0});
-        const CDistKernel kernel{KernelContext{microsoft_opset}};
+        const NaiveCDistKernel kernel{KernelContext{microsoft_opset}};
         return IoData{{a, b}, {kernel(a, b, "sqeuclidean")}};
       },
       "backend-test", bt_ns::TestCaseTag::AI_RT);
@@ -119,7 +120,7 @@ void RegisterCpuCDistCases(std::vector<TestCase> &registry, TestMode mode) {
       [=]() -> IoData {
         Tensor a = Tensor::FromFloat("", {3, 2}, {0.0f, 0.0f, 1.0f, 1.0f, 2.0f, 2.0f});
         Tensor b = Tensor::FromFloat("", {2, 2}, {0.0f, 0.0f, 1.0f, 0.0f});
-        const CDistKernel kernel{KernelContext{microsoft_opset}};
+        const NaiveCDistKernel kernel{KernelContext{microsoft_opset}};
         return IoData{{a, b}, {kernel(a, b, "euclidean")}};
       },
       "backend-test", bt_ns::TestCaseTag::AI_RT);
@@ -131,7 +132,7 @@ void RegisterCpuCDistCases(std::vector<TestCase> &registry, TestMode mode) {
         Tensor a = Tensor::FromDouble(
             "", {4, 3}, {1.0, 2.0, 3.0, -1.0, 0.5, 2.5, 0.0, 0.0, 0.0, 3.0, 3.0, 3.0});
         Tensor b = Tensor::FromDouble("", {2, 3}, {0.0, 0.0, 0.0, 1.0, 1.0, 1.0});
-        const CDistKernel kernel{KernelContext{microsoft_opset}};
+        const NaiveCDistKernel kernel{KernelContext{microsoft_opset}};
         return IoData{{a, b}, {kernel(a, b, "euclidean")}};
       },
       "backend-test", bt_ns::TestCaseTag::AI_RT);

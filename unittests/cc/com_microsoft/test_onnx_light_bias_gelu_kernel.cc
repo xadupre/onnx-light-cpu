@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "onnx_light_cpu/kernels/com_microsoft/bias_gelu_kernel.h"
+#include "onnx_light_cpu/kernels/com_microsoft/naive_bias_gelu_kernel.h"
 #include "onnx_light_cpu/kernels/register_kernels.h"
 
 #include "onnx_core/compute/raw_buffer_allocator.h"
@@ -20,7 +21,6 @@
 
 #include <cmath>
 #include <cstdint>
-#include <span>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -40,6 +40,7 @@ TEST(OnnxLightBiasGeluKernel, Float32BroadcastsBiasOverLastDimension) {
       rt_ns::Tensor::FromFloat("A", {2, 3}, {-2.0f, -1.0f, 0.0f, 0.5f, 1.0f, 3.0f});
   const rt_ns::Tensor b = rt_ns::Tensor::FromFloat("B", {3}, {0.1f, -0.2f, 0.3f});
   const rt_ns::Tensor c = kernel(a, b);
+  const rt_ns::Tensor reference = onnx_light_cpu::NaiveBiasGeluKernel(MakeCtx())(a, b);
   ASSERT_EQ(c.shape.size(), 2u);
   EXPECT_EQ(c.shape[0], 2);
   EXPECT_EQ(c.shape[1], 3);
@@ -50,6 +51,7 @@ TEST(OnnxLightBiasGeluKernel, Float32BroadcastsBiasOverLastDimension) {
     for (std::size_t col = 0; col < 3; ++col) {
       const double z = static_cast<double>(values_a[row * 3 + col]) + values_b[col];
       EXPECT_NEAR(pc[row * 3 + col], ReferenceGelu(z), 1e-5) << row << "," << col;
+      EXPECT_NEAR(pc[row * 3 + col], reference.AsFloat()[row * 3 + col], 1e-5) << row << "," << col;
     }
   }
 }
@@ -59,12 +61,14 @@ TEST(OnnxLightBiasGeluKernel, Float64Works) {
   const rt_ns::Tensor a = rt_ns::Tensor::FromDouble("A", {1, 4}, {-3.0, -1.0, 1.0, 4.0});
   const rt_ns::Tensor b = rt_ns::Tensor::FromDouble("B", {4}, {0.5, -0.5, 0.25, -0.25});
   const rt_ns::Tensor c = kernel(a, b);
+  const rt_ns::Tensor reference = onnx_light_cpu::NaiveBiasGeluKernel(MakeCtx())(a, b);
   ASSERT_EQ(c.element_count(), 4);
   const double *pc = c.AsDouble();
   const double *values_a = a.AsDouble();
   const double *values_b = b.AsDouble();
   for (std::size_t i = 0; i < 4; ++i) {
     EXPECT_NEAR(pc[i], ReferenceGelu(values_a[i] + values_b[i]), 1e-9) << i;
+    EXPECT_NEAR(pc[i], reference.AsDouble()[i], 1e-9) << i;
   }
 }
 
@@ -73,6 +77,7 @@ TEST(OnnxLightBiasGeluKernel, Float16Works) {
   const rt_ns::Tensor a = rt_ns::MakeFloat16Tensor("A", {1, 3}, {-2.0f, 0.5f, 3.0f});
   const rt_ns::Tensor b = rt_ns::MakeFloat16Tensor("B", {3}, {0.1f, -0.2f, 0.3f});
   const rt_ns::Tensor c = kernel(a, b);
+  const rt_ns::Tensor reference = onnx_light_cpu::NaiveBiasGeluKernel(MakeCtx())(a, b);
   ASSERT_EQ(c.element_count(), 3);
   const auto *pa = reinterpret_cast<const std::uint16_t *>(a.bytes());
   const auto *pb = reinterpret_cast<const std::uint16_t *>(b.bytes());
@@ -81,6 +86,8 @@ TEST(OnnxLightBiasGeluKernel, Float16Works) {
     const float rounded_a = onnx_light_cpu::detail::Float16BitsToFloat(pa[i]);
     const float rounded_b = onnx_light_cpu::detail::Float16BitsToFloat(pb[i]);
     const float actual = onnx_light_cpu::detail::Float16BitsToFloat(pc[i]);
+    const auto *reference_bits = reinterpret_cast<const std::uint16_t *>(reference.bytes());
+    EXPECT_NEAR(actual, onnx_light_cpu::detail::Float16BitsToFloat(reference_bits[i]), 5e-3) << i;
     EXPECT_NEAR(actual, ReferenceGelu(rounded_a + rounded_b), 5e-3) << i;
   }
 }
@@ -90,6 +97,7 @@ TEST(OnnxLightBiasGeluKernel, BFloat16Works) {
   const rt_ns::Tensor a = rt_ns::MakeBfloat16Tensor("A", {1, 3}, {-2.0f, 0.5f, 3.0f});
   const rt_ns::Tensor b = rt_ns::MakeBfloat16Tensor("B", {3}, {0.1f, -0.2f, 0.3f});
   const rt_ns::Tensor c = kernel(a, b);
+  const rt_ns::Tensor reference = onnx_light_cpu::NaiveBiasGeluKernel(MakeCtx())(a, b);
   ASSERT_EQ(c.element_count(), 3);
   const auto *pa = reinterpret_cast<const std::uint16_t *>(a.bytes());
   const auto *pb = reinterpret_cast<const std::uint16_t *>(b.bytes());
@@ -98,6 +106,8 @@ TEST(OnnxLightBiasGeluKernel, BFloat16Works) {
     const float rounded_a = onnx_light_cpu::detail::Bfloat16BitsToFloat(pa[i]);
     const float rounded_b = onnx_light_cpu::detail::Bfloat16BitsToFloat(pb[i]);
     const float actual = onnx_light_cpu::detail::Bfloat16BitsToFloat(pc[i]);
+    const auto *reference_bits = reinterpret_cast<const std::uint16_t *>(reference.bytes());
+    EXPECT_NEAR(actual, onnx_light_cpu::detail::Bfloat16BitsToFloat(reference_bits[i]), 5e-2) << i;
     EXPECT_NEAR(actual, ReferenceGelu(rounded_a + rounded_b), 5e-2) << i;
   }
 }
@@ -183,21 +193,28 @@ TEST(OnnxLightBiasGeluKernel, RegistersAndAppliesValidatedTuning) {
   parameters.values["parallel.cost_model"] = int64_t{0};
   EXPECT_NO_THROW(kernel.Configure(parameters));
 
-  constexpr std::size_t outer = 32;
-  constexpr std::size_t inner = 4;
-  const rt_ns::Tensor a =
-      rt_ns::Tensor::FromFloat("A", {static_cast<int64_t>(outer), static_cast<int64_t>(inner)},
-                               std::vector<float>(outer * inner, 0.0f));
-  const rt_ns::Tensor b =
-      rt_ns::Tensor::FromFloat("B", {static_cast<int64_t>(inner)}, std::vector<float>(inner, 0.0f));
+  constexpr std::size_t outer = 33;
+  constexpr std::size_t inner = 17;
+  std::vector<float> a_values(outer * inner);
+  std::vector<float> b_values(inner);
+  for (std::size_t i = 0; i < a_values.size(); ++i) {
+    a_values[i] = static_cast<float>(static_cast<int>(i % 23) - 11) / 7.0f;
+  }
+  for (std::size_t i = 0; i < b_values.size(); ++i) {
+    b_values[i] = static_cast<float>(static_cast<int>(i % 7) - 3) / 5.0f;
+  }
+  const rt_ns::Tensor a = rt_ns::Tensor::FromFloat(
+      "A", {static_cast<int64_t>(outer), static_cast<int64_t>(inner)}, a_values);
+  const rt_ns::Tensor b = rt_ns::Tensor::FromFloat("B", {static_cast<int64_t>(inner)}, b_values);
   InlineExecutor executor;
   onnx_light_cpu::ExecutionExecutorView view{&executor, 8, &InlineExecutor::Run};
   onnx_light_cpu::ExecutionExecutorScope scope(&view);
   const rt_ns::Tensor c = kernel(a, b);
+  const rt_ns::Tensor reference = onnx_light_cpu::NaiveBiasGeluKernel(MakeCtx())(a, b);
   EXPECT_EQ(executor.dispatches, 1);
   EXPECT_GT(executor.blocks, 0);
-  for (float value : std::span(c.AsFloat(), outer * inner)) {
-    EXPECT_NEAR(value, 0.0f, 1e-6f);
+  for (std::size_t i = 0; i < outer * inner; ++i) {
+    EXPECT_NEAR(c.AsFloat()[i], reference.AsFloat()[i], 1e-5f) << i;
   }
 
   parameters.values["parallel.max_participants"] = int64_t{-1};

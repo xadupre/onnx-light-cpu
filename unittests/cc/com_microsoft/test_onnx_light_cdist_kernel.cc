@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "onnx_light_cpu/kernels/com_microsoft/cdist_kernel.h"
+#include "onnx_light_cpu/kernels/com_microsoft/naive_cdist_kernel.h"
 #include "onnx_light_cpu/kernels/register_kernels.h"
 
 #include "onnx_core/compute/raw_buffer_allocator.h"
@@ -18,7 +19,6 @@
 
 #include <cmath>
 #include <cstdint>
-#include <span>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -36,6 +36,7 @@ TEST(OnnxLightCDistKernel, Float32DefaultMetricIsSqEuclidean) {
       rt_ns::Tensor::FromFloat("A", {3, 2}, {0.0f, 0.0f, 1.0f, 1.0f, 2.0f, 2.0f});
   const rt_ns::Tensor b = rt_ns::Tensor::FromFloat("B", {2, 2}, {0.0f, 0.0f, 1.0f, 0.0f});
   const rt_ns::Tensor c = kernel(a, b);
+  const rt_ns::Tensor reference = onnx_light_cpu::NaiveCDistKernel(MakeCtx())(a, b);
   ASSERT_EQ(c.shape.size(), 2u);
   EXPECT_EQ(c.shape[0], 3);
   EXPECT_EQ(c.shape[1], 2);
@@ -43,6 +44,7 @@ TEST(OnnxLightCDistKernel, Float32DefaultMetricIsSqEuclidean) {
   const std::vector<float> expected = {0.0f, 1.0f, 2.0f, 1.0f, 8.0f, 5.0f};
   for (std::size_t i = 0; i < expected.size(); ++i) {
     EXPECT_NEAR(pc[i], expected[i], 1e-5f) << i;
+    EXPECT_NEAR(pc[i], reference.AsFloat()[i], 1e-5f) << i;
   }
 }
 
@@ -52,11 +54,13 @@ TEST(OnnxLightCDistKernel, Float32EuclideanTakesSquareRoot) {
       rt_ns::Tensor::FromFloat("A", {3, 2}, {0.0f, 0.0f, 1.0f, 1.0f, 2.0f, 2.0f});
   const rt_ns::Tensor b = rt_ns::Tensor::FromFloat("B", {2, 2}, {0.0f, 0.0f, 1.0f, 0.0f});
   const rt_ns::Tensor c = kernel(a, b, "euclidean");
+  const rt_ns::Tensor reference = onnx_light_cpu::NaiveCDistKernel(MakeCtx())(a, b, "euclidean");
   const float *pc = c.AsFloat();
   const std::vector<float> expected = {0.0f,           1.0f, std::sqrt(2.0f), 1.0f, std::sqrt(8.0f),
                                        std::sqrt(5.0f)};
   for (std::size_t i = 0; i < expected.size(); ++i) {
     EXPECT_NEAR(pc[i], expected[i], 1e-5f) << i;
+    EXPECT_NEAR(pc[i], reference.AsFloat()[i], 1e-5f) << i;
   }
 }
 
@@ -65,10 +69,13 @@ TEST(OnnxLightCDistKernel, Float64Works) {
   const rt_ns::Tensor a = rt_ns::Tensor::FromDouble("A", {2, 3}, {1.0, 2.0, 3.0, -1.0, 0.0, 1.0});
   const rt_ns::Tensor b = rt_ns::Tensor::FromDouble("B", {1, 3}, {0.0, 0.0, 0.0});
   const rt_ns::Tensor c = kernel(a, b, "sqeuclidean");
+  const rt_ns::Tensor reference = onnx_light_cpu::NaiveCDistKernel(MakeCtx())(a, b, "sqeuclidean");
   ASSERT_EQ(c.element_count(), 2);
   const double *pc = c.AsDouble();
   EXPECT_NEAR(pc[0], 14.0, 1e-9);
   EXPECT_NEAR(pc[1], 2.0, 1e-9);
+  EXPECT_NEAR(pc[0], reference.AsDouble()[0], 1e-9);
+  EXPECT_NEAR(pc[1], reference.AsDouble()[1], 1e-9);
 }
 
 TEST(OnnxLightCDistKernel, RejectsInvalidMetric) {
@@ -151,21 +158,30 @@ TEST(OnnxLightCDistKernel, RegistersAndAppliesValidatedTuning) {
   parameters.values["parallel.cost_model"] = int64_t{0};
   EXPECT_NO_THROW(kernel.Configure(parameters));
 
-  constexpr std::size_t m = 32;
-  constexpr std::size_t k = 2;
-  constexpr std::size_t n = 2;
-  const rt_ns::Tensor a = rt_ns::Tensor::FromFloat(
-      "A", {static_cast<int64_t>(m), static_cast<int64_t>(n)}, std::vector<float>(m * n, 1.0f));
-  const rt_ns::Tensor b = rt_ns::Tensor::FromFloat(
-      "B", {static_cast<int64_t>(k), static_cast<int64_t>(n)}, std::vector<float>(k * n, 0.0f));
+  constexpr std::size_t m = 33;
+  constexpr std::size_t k = 7;
+  constexpr std::size_t n = 19;
+  std::vector<float> a_values(m * n);
+  std::vector<float> b_values(k * n);
+  for (std::size_t i = 0; i < a_values.size(); ++i) {
+    a_values[i] = static_cast<float>(static_cast<int>(i % 29) - 14) / 9.0f;
+  }
+  for (std::size_t i = 0; i < b_values.size(); ++i) {
+    b_values[i] = static_cast<float>(static_cast<int>(i % 17) - 8) / 11.0f;
+  }
+  const rt_ns::Tensor a =
+      rt_ns::Tensor::FromFloat("A", {static_cast<int64_t>(m), static_cast<int64_t>(n)}, a_values);
+  const rt_ns::Tensor b =
+      rt_ns::Tensor::FromFloat("B", {static_cast<int64_t>(k), static_cast<int64_t>(n)}, b_values);
   InlineExecutor executor;
   onnx_light_cpu::ExecutionExecutorView view{&executor, 8, &InlineExecutor::Run};
   onnx_light_cpu::ExecutionExecutorScope scope(&view);
   const rt_ns::Tensor c = kernel(a, b);
+  const rt_ns::Tensor reference = onnx_light_cpu::NaiveCDistKernel(MakeCtx())(a, b);
   EXPECT_EQ(executor.dispatches, 1);
   EXPECT_GT(executor.blocks, 0);
-  for (float value : std::span(c.AsFloat(), m * k)) {
-    EXPECT_NEAR(value, 2.0f, 1e-5f);
+  for (std::size_t i = 0; i < m * k; ++i) {
+    EXPECT_NEAR(c.AsFloat()[i], reference.AsFloat()[i], 2e-5f) << i;
   }
 
   parameters.values["parallel.max_participants"] = int64_t{-1};

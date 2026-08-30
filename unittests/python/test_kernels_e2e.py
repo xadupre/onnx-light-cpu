@@ -551,7 +551,7 @@ class TestBackendCases(ExtTestCase):
             int(TensorProto.FLOAT16),
             int(TensorProto.BFLOAT16),
         }
-        for mode, expected_count in ((TestMode.TEST, 4), (TestMode.BENCHMARK, 15)):
+        for mode, expected_count in ((TestMode.TEST, 5), (TestMode.BENCHMARK, 15)):
             cases = [
                 tc
                 for tc in collect_test_cases("GroupQueryAttention", mode=mode)

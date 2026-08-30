@@ -148,9 +148,11 @@ training produces `Y`, `running_mean`, and `running_var`.
 import numpy as np
 from onnx_light.onnx.reference import ReferenceEvaluator
 
-from onnx_light_cpu import register_kernels
+from onnx_light_cpu import MicrosoftKernelImplementation, register_kernels
 
 register_kernels()  # installs the kernels into onnx-light's dispatch table
+# Explicit scalar correctness-oracle family for com.microsoft:
+register_kernels(microsoft_implementation=MicrosoftKernelImplementation.NAIVE)
 sess = ReferenceEvaluator(model)  # any model containing an Abs node
 (y,) = sess.run(None, {"x": np.array([-1.0, 2.0, -3.0], dtype=np.float32)})
 ```
@@ -195,7 +197,9 @@ families can also be registered directly, for example with
 ```cpp
 #include <onnx_light_cpu/kernels/register_kernels.h>
 
-onnx_light_cpu::RegisterAllKernels();  // Install every onnx-light-cpu kernel.
+onnx_light_cpu::RegisterAllKernels();  // Optimized com.microsoft kernels by default.
+onnx_light_cpu::RegisterAllKernels(
+    onnx_light_cpu::MicrosoftKernelImplementation::NAIVE);
 ```
 
 The same registration is exposed to Python (in builds compiled with the

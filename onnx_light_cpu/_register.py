@@ -13,6 +13,7 @@ and exposes read-only kernel and operator-support inventories.
 
 from __future__ import annotations
 
+from enum import Enum
 from importlib import import_module
 from typing import Any, NamedTuple
 
@@ -38,6 +39,13 @@ class RegisteredKernel(NamedTuple):
     until_version: int | None
 
 
+class MicrosoftKernelImplementation(Enum):
+    """Selects the complete ``com.microsoft`` kernel implementation family."""
+
+    NAIVE = "naive"
+    OPTIMIZED = "optimized"
+
+
 class OperatorSupport(NamedTuple):
     """Describes the additional runtime support for one custom operator."""
 
@@ -49,7 +57,21 @@ class OperatorSupport(NamedTuple):
     has_gradient: bool
 
 
-def _register_all_kernels() -> None:
+def _cpp_microsoft_implementation(implementation: MicrosoftKernelImplementation) -> Any:
+    if not isinstance(implementation, MicrosoftKernelImplementation):
+        raise TypeError("microsoft_implementation must be a MicrosoftKernelImplementation")
+    from .onnx_py._cpuregister import (  # pyrefly: ignore[missing-import]
+        MicrosoftKernelImplementation as CppMicrosoftKernelImplementation,
+    )
+
+    return getattr(CppMicrosoftKernelImplementation, implementation.name)
+
+
+def _register_all_kernels(
+    microsoft_implementation: MicrosoftKernelImplementation = (
+        MicrosoftKernelImplementation.OPTIMIZED
+    ),
+) -> None:
     """Imports and calls the compiled ``register_all_kernels`` binding.
 
     The binding lives in the ``_cpuregister`` extension, which links onnx-light
@@ -67,7 +89,7 @@ def _register_all_kernels() -> None:
         register_all_kernels,
     )
 
-    register_all_kernels()
+    register_all_kernels(_cpp_microsoft_implementation(microsoft_implementation))
 
 
 def custom_op_schemas(op_type: str = "", init_doc: bool = True) -> tuple[Any, ...]:
@@ -140,7 +162,13 @@ def register_custom_gradients(registry: Any = None) -> Any:
     return registry
 
 
-def register_kernels(sess: Any = None) -> Any:
+def register_kernels(
+    sess: Any = None,
+    *,
+    microsoft_implementation: MicrosoftKernelImplementation = (
+        MicrosoftKernelImplementation.OPTIMIZED
+    ),
+) -> Any:
     """Registers the onnx-light-cpu kernels into onnx-light's dispatch table.
 
     This installs the SIMD-accelerated ``Abs``, ``Exp``, ``Log``, ``Gemm`` and
@@ -162,6 +190,9 @@ def register_kernels(sess: Any = None) -> Any:
         object). The registration is global to onnx-light's dispatch table, so
         this argument is only used as a convenience return value. When provided
         it is returned unchanged so calls can be chained.
+    microsoft_implementation:
+        Complete ``com.microsoft`` implementation family to install. The
+        default is :attr:`MicrosoftKernelImplementation.OPTIMIZED`.
 
     Returns
     -------
@@ -179,11 +210,15 @@ def register_kernels(sess: Any = None) -> Any:
         sess = ReferenceEvaluator(model)
         (y,) = sess.run(None, {"x": np.array([-1.0, 2.0], dtype=np.float32)})
     """
-    _register_all_kernels()
+    _register_all_kernels(microsoft_implementation)
     return sess
 
 
-def registered_kernels() -> tuple[RegisteredKernel, ...]:
+def registered_kernels(
+    microsoft_implementation: MicrosoftKernelImplementation = (
+        MicrosoftKernelImplementation.OPTIMIZED
+    ),
+) -> tuple[RegisteredKernel, ...]:
     """Returns one immutable record per onnx-light-cpu kernel registration.
 
     Each :class:`RegisteredKernel` mirrors exactly one C++ registration
@@ -214,12 +249,16 @@ def registered_kernels() -> tuple[RegisteredKernel, ...]:
             until_version=until_version,
         )
         for domain, op_type, device, kernel_name, types, since_version, until_version in (
-            _registered_kernels()
+            _registered_kernels(_cpp_microsoft_implementation(microsoft_implementation))
         )
     )
 
 
-def registered_kernel_names() -> dict[str, str]:
+def registered_kernel_names(
+    microsoft_implementation: MicrosoftKernelImplementation = (
+        MicrosoftKernelImplementation.OPTIMIZED
+    ),
+) -> dict[str, str]:
     """Returns ``{op_type: kernel name}`` for every onnx-light-cpu kernel.
 
     The kernel name is the library-qualified name (for example
@@ -231,7 +270,10 @@ def registered_kernel_names() -> dict[str, str]:
     Derived from :func:`registered_kernels` instead of maintaining a second
     operator list, so it always stays in sync with the structured inventory.
     """
-    return {record.op_type: record.kernel_name for record in registered_kernels()}
+    return {
+        record.op_type: record.kernel_name
+        for record in registered_kernels(microsoft_implementation)
+    }
 
 
 def used_kernel_names() -> list[str]:

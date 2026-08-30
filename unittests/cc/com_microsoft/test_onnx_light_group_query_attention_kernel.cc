@@ -4,6 +4,7 @@
 
 #include "onnx_light_cpu/kernels/attention/attention_kernel.h"
 #include "onnx_light_cpu/kernels/com_microsoft/group_query_attention_kernel.h"
+#include "onnx_light_cpu/kernels/com_microsoft/naive_group_query_attention_kernel.h"
 #include "onnx_light_cpu/kernels/register_kernels.h"
 
 #include "onnx_core/runtime/kernels/kernel_context.h"
@@ -68,12 +69,10 @@ NodeProto MakeGqaNode(std::int64_t num_heads, std::int64_t kv_num_heads, bool wi
   return node;
 }
 
-TEST(OnnxLightGroupQueryAttentionKernel, ExactModelWiringMatchesPrecomputedReference) {
+TEST(OnnxLightGroupQueryAttentionKernel, ExactModelWiringMatchesNaiveReference) {
   // batch=1, current sequence=2, past_sequence=3, num_heads=4, kv_num_heads=2,
-  // head_size=8; expected values were computed independently in Python from
-  // the split-half RoPE and bottom-right causal attention formulas and cross
-  // checked against onnxruntime's com.microsoft::GroupQueryAttention CPU
-  // kernel for this exact input (see the skill/session notes for the script).
+  // head_size=8. The scalar implementation independently generates all
+  // expected outputs for this full cached/rotary contract.
   const Tensor query = Tensor::FromFloat(
       "", {1, 2, 32},
       {-0.42714751f, 0.37911853f,  -0.26119852f, -0.07775197f, -0.02260299f, -0.22226539f,
@@ -142,67 +141,30 @@ TEST(OnnxLightGroupQueryAttentionKernel, ExactModelWiringMatchesPrecomputedRefer
   const Tensor seqlens_k = Tensor::FromInt32("", {1}, {4});
   const Tensor total_sequence_length = Tensor::FromInt32("", {}, {5});
 
-  const std::vector<float> expected_output = {
-      0.04011499f,  -0.03126945f, -0.04358935f, 0.26507425f,  0.10958266f,  -0.14726005f,
-      -0.07057313f, -0.04284225f, 0.03882301f,  -0.03573211f, -0.03132916f, 0.25424054f,
-      0.11318220f,  -0.14877345f, -0.05795662f, -0.05642154f, -0.17373003f, -0.20582926f,
-      0.07062818f,  0.21520983f,  -0.06191964f, -0.26419181f, 0.16492207f,  0.18360150f,
-      -0.16291133f, -0.20999458f, 0.06578688f,  0.21747601f,  -0.06145441f, -0.26491684f,
-      0.16516756f,  0.18983750f,  0.02755510f,  0.03034053f,  -0.00752039f, 0.26124233f,
-      0.17477928f,  -0.06389167f, -0.04567275f, -0.07897687f, 0.02505292f,  0.01972749f,
-      -0.00815785f, 0.25487310f,  0.18327484f,  -0.06359573f, -0.05554926f, -0.07603817f,
-      -0.18106356f, -0.16718511f, 0.12602295f,  0.18929057f,  -0.04455392f, -0.19862808f,
-      0.12827682f,  0.18395641f,  -0.17697665f, -0.17044286f, 0.12171482f,  0.19194539f,
-      -0.04540814f, -0.19714347f, 0.13347986f,  0.18642747f};
-  const std::vector<float> expected_present_key = {
-      -0.33688846f, -0.59257430f, -0.12754501f, -0.34472215f, 0.48454142f,  -0.04754306f,
-      -0.07586201f, -0.46144620f, 0.08462581f,  -0.18708365f, 0.33654669f,  0.25236630f,
-      -0.23276883f, 0.12321493f,  -0.81672484f, -0.20199144f, 0.37386647f,  0.23706241f,
-      0.05260227f,  -0.00878838f, -0.42585427f, -0.40798989f, 0.06702347f,  0.52853382f,
-      0.16242711f,  0.05473594f,  0.07513405f,  -0.10039598f, -0.09697731f, -0.04675076f,
-      0.10960934f,  -0.25972548f, -0.04636227f, -0.07470004f, 0.01740841f,  0.36462468f,
-      -0.03287452f, -0.08925761f, -0.26220834f, 0.17467251f,  -0.65126693f, 0.18854645f,
-      0.18035896f,  0.28522736f,  -0.26077399f, -0.15870212f, 0.01370523f,  -0.30826554f,
-      -0.36878678f, -0.26500756f, -0.02126804f, 0.11221600f,  -0.00737812f, 0.02317820f,
-      -0.20517397f, -0.21625130f, 0.33618686f,  -0.01644425f, -0.02472412f, 0.28079596f,
-      0.37156114f,  0.38183865f,  0.12176766f,  -0.01509757f, -0.02858622f, 0.01744637f,
-      0.12956183f,  -0.05766945f, -0.17151114f, 0.02115188f,  -0.08798119f, 0.04750893f,
-      0.10323020f,  -0.02597076f, -0.04137215f, 0.09537472f,  0.03098156f,  0.23364860f,
-      0.00535407f,  -0.07941843f};
-  const std::vector<float> expected_present_value = {
-      0.08679526f,  0.05379170f,  0.41924417f,  0.08761404f,  0.19152170f,  -0.00836631f,
-      0.41131556f,  -0.61584228f, 0.11415272f,  0.22661720f,  -0.34773776f, 0.64509302f,
-      -0.04508106f, -0.04834928f, -0.32383275f, 0.26338986f,  0.06734022f,  -0.17747803f,
-      0.06787884f,  0.20585476f,  0.36450139f,  0.06481783f,  -0.28944707f, -0.16698234f,
-      -0.10784389f, -0.22459319f, -0.28964368f, 0.10801040f,  -0.07336576f, -0.59875697f,
-      -0.04657428f, 0.31914926f,  -0.02952751f, 0.24403363f,  0.11774832f,  0.23443288f,
-      0.43598145f,  0.24605581f,  0.02631160f,  -0.19605170f, -0.68951631f, -0.21962464f,
-      0.22094072f,  0.13971502f,  -0.03236281f, -0.10243089f, 0.47536013f,  0.08467236f,
-      0.27286392f,  0.11852147f,  -0.20081295f, 0.46661070f,  -0.37144172f, -0.35885203f,
-      -0.12874486f, -0.21889797f, -0.16724066f, -0.17998593f, 0.29604816f,  0.01625840f,
-      0.10557223f,  -0.47639084f, -0.25408539f, 0.32537109f,  -0.08255147f, -0.55600077f,
-      -0.03730258f, 0.23549236f,  0.06059958f,  -0.12842233f, 0.55448669f,  0.56998587f,
-      -0.24356607f, -0.00766145f, 0.34745535f,  0.09015626f,  0.01591699f,  0.07718146f,
-      0.01072286f,  0.16417101f};
-
   const NodeProto node = MakeGqaNode(4, 2, /*with_cache=*/true, /*with_rotary=*/true,
                                      /*with_present=*/true);
   onnx_light_cpu::GroupQueryAttentionKernel kernel(node, MakeCtx());
+  onnx_light_cpu::NaiveGroupQueryAttentionKernel reference_kernel(node, MakeCtx());
   Tensor present_key;
   Tensor present_value;
+  Tensor expected_present_key;
+  Tensor expected_present_value;
   const Tensor output = kernel(node, query, key, value, seqlens_k, total_sequence_length, &past_key,
                                &past_value, &cos_cache, &sin_cache,
                                /*position_ids=*/nullptr, /*attention_bias=*/nullptr,
                                /*rt=*/nullptr, &present_key, &present_value);
+  const Tensor expected_output = reference_kernel(
+      node, query, key, value, seqlens_k, total_sequence_length, &past_key, &past_value, &cos_cache,
+      &sin_cache, nullptr, nullptr, nullptr, &expected_present_key, &expected_present_value);
 
   ASSERT_EQ(output.shape.size(), 3u);
   EXPECT_EQ(output.shape[0], 1);
   EXPECT_EQ(output.shape[1], 2);
   EXPECT_EQ(output.shape[2], 32);
-  ASSERT_EQ(output.element_count(), static_cast<std::int64_t>(expected_output.size()));
+  ASSERT_EQ(output.element_count(), expected_output.element_count());
   const float *actual_output = output.AsFloat();
-  for (std::size_t i = 0; i < expected_output.size(); ++i) {
-    EXPECT_NEAR(actual_output[i], expected_output[i], 1e-4f) << i;
+  for (std::int64_t i = 0; i < expected_output.element_count(); ++i) {
+    EXPECT_NEAR(actual_output[i], expected_output.AsFloat()[i], 1e-4f) << i;
   }
 
   ASSERT_EQ(present_key.shape.size(), 4u);
@@ -210,18 +172,17 @@ TEST(OnnxLightGroupQueryAttentionKernel, ExactModelWiringMatchesPrecomputedRefer
   EXPECT_EQ(present_key.shape[1], 2);
   EXPECT_EQ(present_key.shape[2], 5);
   EXPECT_EQ(present_key.shape[3], 8);
-  ASSERT_EQ(present_key.element_count(), static_cast<std::int64_t>(expected_present_key.size()));
+  ASSERT_EQ(present_key.element_count(), expected_present_key.element_count());
   const float *actual_present_key = present_key.AsFloat();
-  for (std::size_t i = 0; i < expected_present_key.size(); ++i) {
-    EXPECT_NEAR(actual_present_key[i], expected_present_key[i], 1e-4f) << i;
+  for (std::int64_t i = 0; i < expected_present_key.element_count(); ++i) {
+    EXPECT_NEAR(actual_present_key[i], expected_present_key.AsFloat()[i], 1e-4f) << i;
   }
 
   ASSERT_EQ(present_value.shape, present_key.shape);
-  ASSERT_EQ(present_value.element_count(),
-            static_cast<std::int64_t>(expected_present_value.size()));
+  ASSERT_EQ(present_value.element_count(), expected_present_value.element_count());
   const float *actual_present_value = present_value.AsFloat();
-  for (std::size_t i = 0; i < expected_present_value.size(); ++i) {
-    EXPECT_NEAR(actual_present_value[i], expected_present_value[i], 1e-4f) << i;
+  for (std::int64_t i = 0; i < expected_present_value.element_count(); ++i) {
+    EXPECT_NEAR(actual_present_value[i], expected_present_value.AsFloat()[i], 1e-4f) << i;
   }
 }
 

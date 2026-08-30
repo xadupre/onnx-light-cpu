@@ -89,10 +89,15 @@ void RegisterKernel(KernelRegistration info, rt_ns::NodeKernelFn fn) {
 }
 
 std::vector<KernelRegistration> CollectRegisteredKernels() {
+  return CollectRegisteredKernels(MicrosoftKernelImplementation::OPTIMIZED);
+}
+
+std::vector<KernelRegistration>
+CollectRegisteredKernels(MicrosoftKernelImplementation implementation) {
   std::vector<KernelRegistration> inventory;
   {
     KernelRegistrationScope scope(&inventory);
-    RegisterAllKernels();
+    RegisterAllKernels(implementation);
   }
 
   std::sort(inventory.begin(), inventory.end(),

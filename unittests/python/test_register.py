@@ -18,6 +18,7 @@ from unittest import mock
 from onnx_light.ext_test_case import ExtTestCase
 import onnx_light_cpu._register as reg
 from onnx_light_cpu import (
+    MicrosoftKernelImplementation,
     OperatorSupport,
     RegisteredKernel,
     operator_support,
@@ -33,6 +34,7 @@ class TestRegisterKernels(ExtTestCase):
     def test_loads_runtime_before_registration_extension(self):
         extension = ModuleType("onnx_light_cpu.onnx_py._cpuregister")
         extension.register_all_kernels = mock.Mock()
+        extension.MicrosoftKernelImplementation = MicrosoftKernelImplementation
 
         with (
             mock.patch.object(reg, "import_module") as import_runtime,
@@ -47,19 +49,26 @@ class TestRegisterKernels(ExtTestCase):
             mock.call("onnx_light.onnx.reference"),
             mock.call("onnx_light.onnx_op"),
         ]
-        extension.register_all_kernels.assert_called_once_with()
+        extension.register_all_kernels.assert_called_once_with(
+            MicrosoftKernelImplementation.OPTIMIZED
+        )
 
     def test_calls_register_all_kernels(self):
         with mock.patch.object(reg, "_register_all_kernels") as m:
             register_kernels()
-            m.assert_called_once_with()
+            m.assert_called_once_with(MicrosoftKernelImplementation.OPTIMIZED)
 
     def test_returns_sess_unchanged(self):
         sentinel = object()
         with mock.patch.object(reg, "_register_all_kernels") as m:
             result = register_kernels(sentinel)
-            m.assert_called_once_with()
+            m.assert_called_once_with(MicrosoftKernelImplementation.OPTIMIZED)
             assert result is sentinel
+
+    def test_selects_naive_microsoft_kernels(self):
+        with mock.patch.object(reg, "_register_all_kernels") as m:
+            register_kernels(microsoft_implementation=MicrosoftKernelImplementation.NAIVE)
+            m.assert_called_once_with(MicrosoftKernelImplementation.NAIVE)
 
     def test_returns_none_without_sess(self):
         with mock.patch.object(reg, "_register_all_kernels"):
@@ -90,6 +99,7 @@ class TestRegisteredKernels(ExtTestCase):
     def _patch_binding(self, raw_records):
         extension = ModuleType("onnx_light_cpu.onnx_py._cpuregister")
         extension.registered_kernels = mock.Mock(return_value=raw_records)
+        extension.MicrosoftKernelImplementation = MicrosoftKernelImplementation
         return mock.patch.dict(sys.modules, {"onnx_light_cpu.onnx_py._cpuregister": extension})
 
     def test_wraps_raw_tuples_into_registered_kernel_records(self):
