@@ -24,6 +24,8 @@ def test_measurement_order_alternates_candidates():
 
 def test_summary_applies_complete_parity_gate():
     results = [
+        {"operator": "Abs", "size": 100, "speedup": 1.0},
+        {"operator": "Abs", "size": 4_194_304, "speedup": 1.0},
         {"operator": "Exp", "size": 100, "speedup": 0.9},
         {"operator": "Exp", "size": 4_194_304, "speedup": 0.95},
         {"operator": "Log", "size": 100, "speedup": 1.1},
@@ -33,12 +35,14 @@ def test_summary_applies_complete_parity_gate():
     summary = summarize(results)
 
     assert summary["passed"]
-    assert math.isclose(summary["median_speedup"], 1.025)
+    assert math.isclose(summary["median_speedup"], 1.0)
     assert summary["minimum_speedup"] == 0.9
 
 
 def test_summary_rejects_large_model_below_threshold():
     results = [
+        {"operator": "Abs", "size": 100, "speedup": 1.2},
+        {"operator": "Abs", "size": 4_194_304, "speedup": 1.2},
         {"operator": "Exp", "size": 100, "speedup": 1.2},
         {"operator": "Exp", "size": 4_194_304, "speedup": 0.94},
         {"operator": "Log", "size": 100, "speedup": 1.2},
