@@ -22,7 +22,10 @@ available from :cpp:func:`CollectRegisteredKernels` and the generated
 .. doxygenfunction:: onnx_light_cpu::RegisterNotKernel
    :project: onnx_light_cpu
 
-.. doxygenfunction:: onnx_light_cpu::RegisterAllKernels
+.. doxygenfunction:: onnx_light_cpu::RegisterAllKernels()
+   :project: onnx_light_cpu
+
+.. doxygenfunction:: onnx_light_cpu::RegisterAllKernels(MicrosoftKernelImplementation)
    :project: onnx_light_cpu
 
 .. doxygenfunction:: onnx_light_cpu::RegisterMicrosoftKernels
