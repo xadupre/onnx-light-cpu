@@ -14,6 +14,7 @@
 #include "onnx_core/runtime/kernels/run_nodes.h"
 #include "onnx_core/runtime/kernels/tensor_compare.h"
 #include "onnx_core/runtime/runtime_context.h"
+#include "onnx_proto/onnx_helper.h"
 
 #include <algorithm>
 #include <cstdint>
