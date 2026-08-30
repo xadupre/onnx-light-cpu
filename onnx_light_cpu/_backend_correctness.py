@@ -67,7 +67,7 @@ def _case_is_applicable(case: Any, kernel: Any, tensor_proto: Any) -> tuple[bool
 
 
 def _run_case(kernel_name: str):
-    from onnx_light.onnx.reference import ReferenceEvaluator
+    from onnx_light.onnx.reference import ReferenceEvaluator  # pyrefly: ignore[missing-import]
 
     def run(model, *inputs):
         session = ReferenceEvaluator(model)
@@ -90,18 +90,22 @@ def run_backend_correctness_tests(
     The report records unsupported cases as skips and execution or comparison errors as
     failures. A kernel without an applicable correctness case is reported as a failure.
     """
-    from onnx_light.onnx import TensorProto
-    from onnx_light.onnx.backend import TestMode, collect_test_cases, make_test_class
+    from onnx_light.onnx import TensorProto  # pyrefly: ignore[missing-import]
+    from onnx_light.onnx.backend import (  # pyrefly: ignore[missing-import]
+        TestMode,
+        collect_test_cases,
+        make_test_class,
+    )
 
     register_backend_test_cases()
     register_kernels(microsoft_implementation=microsoft_implementation)
     skipped = []
     failed = []
     executed = passed = 0
-    covered = set()
+    covered_kernel_names = set()
     seen_cases = set()
     kernels = registered_kernels(microsoft_implementation)
-    for kernel_index, kernel in enumerate(kernels):
+    for kernel in kernels:
         case_names = []
         for case in collect_test_cases(kernel.op_type, include_big=False, mode=TestMode.TEST):
             key = (kernel.domain, case.name)
@@ -125,11 +129,11 @@ def run_backend_correctness_tests(
             try:
                 case_test.debug()
                 passed += 1
-                covered.add(kernel_index)
+                covered_kernel_names.add(kernel.kernel_name)
             except Exception as exc:
                 failed.append(BackendCaseResult(kernel.op_type, case_name, str(exc)))
-    for kernel_index, kernel in enumerate(kernels):
-        if kernel_index not in covered:
+    for kernel in kernels:
+        if kernel.kernel_name not in covered_kernel_names:
             failed.append(
                 BackendCaseResult(
                     kernel.op_type, "", "no applicable TEST backend correctness case"

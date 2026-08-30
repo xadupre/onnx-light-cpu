@@ -37,3 +37,19 @@ Registering kernels
 .. py:function:: has_backend_test_cases() -> bool
 
    Returns whether the ``register_backend_test_cases`` binding is available.
+
+.. py:class:: BackendCaseResult
+
+   A skipped or failed backend correctness case, including its operator, case
+   name, and reason.
+
+.. py:class:: BackendCorrectnessReport
+
+   The executed and passed case counts and skipped and failed case results.
+
+.. py:function:: run_backend_correctness_tests(microsoft_implementation=MicrosoftKernelImplementation.OPTIMIZED) -> BackendCorrectnessReport
+
+   Registers onnx-light-cpu kernels and runs applicable onnx-light
+   ``TestMode.TEST`` backend cases. Cases use onnx-light's standard
+   ``ReferenceEvaluator`` comparison with their declared tolerances; the
+   report records unsupported cases and failures.

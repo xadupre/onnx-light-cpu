@@ -158,7 +158,7 @@ BackendCorrectnessReport RunBackendCorrectnessTests(MicrosoftKernelImplementatio
   BackendCorrectnessReport report;
   std::set<std::pair<std::string, std::string>> seen_cases;
   const std::vector<KernelRegistration> kernels = CollectRegisteredKernels(implementation);
-  std::vector<bool> covered_kernels(kernels.size());
+  std::set<std::string> covered_kernel_names;
   for (size_t kernel_index = 0; kernel_index < kernels.size(); ++kernel_index) {
     const KernelRegistration &kernel = kernels[kernel_index];
     for (TestCase &test_case :
@@ -178,7 +178,7 @@ BackendCorrectnessReport RunBackendCorrectnessTests(MicrosoftKernelImplementatio
       try {
         RunCase(test_case, kernel);
         ++report.passed;
-        covered_kernels[kernel_index] = true;
+        covered_kernel_names.insert(kernel.kernel_name);
       } catch (const std::exception &error) {
         report.failed.push_back({kernel.op_type, test_case.name, error.what()});
       }
@@ -186,7 +186,7 @@ BackendCorrectnessReport RunBackendCorrectnessTests(MicrosoftKernelImplementatio
   }
   for (size_t kernel_index = 0; kernel_index < kernels.size(); ++kernel_index) {
     const KernelRegistration &kernel = kernels[kernel_index];
-    if (!covered_kernels[kernel_index]) {
+    if (!covered_kernel_names.contains(kernel.kernel_name)) {
       report.failed.push_back(
           {kernel.op_type, "",
            "no applicable TEST backend correctness case for " + kernel.kernel_name});
