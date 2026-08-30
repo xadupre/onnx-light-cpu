@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Measure float32 Exp/Log end-to-end parity against ONNX Runtime."""
+"""Measure float32 Abs/Exp/Log end-to-end parity against ONNX Runtime."""
 
 from __future__ import annotations
 
@@ -121,7 +121,8 @@ def summarize(results: Sequence[dict[str, Any]]) -> dict[str, Any]:
     median = statistics.median(speedups)
     minimum = min(speedups)
     large_models_passed = (
-        set(large_model_speedups) == {"Exp", "Log"} and min(large_model_speedups.values()) >= 0.95
+        set(large_model_speedups) == {"Abs", "Exp", "Log"}
+        and min(large_model_speedups.values()) >= 0.95
     )
     return {
         "passed": median >= 1.0 and minimum >= 0.9 and large_models_passed,
@@ -150,7 +151,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     rows: list[dict[str, Any]] = []
     actual_threads = None
     affinity_policy = None
-    for operator in ("Exp", "Log"):
+    for operator in ("Abs", "Exp", "Log"):
         for size in args.sizes:
             values = np.linspace(-8, 8, size, dtype=np.float32)
             if operator == "Log":
