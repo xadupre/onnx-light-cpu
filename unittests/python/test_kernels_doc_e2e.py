@@ -14,6 +14,7 @@ exercised where that build is available.
 
 import sys
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from onnx_light.ext_test_case import ExtTestCase
 
@@ -41,11 +42,20 @@ class TestGenerationParityWithLiveInventory(ExtTestCase):
     compiled extension reports.
     """
 
-    def test_generated_pages_and_index_match_registered_kernels_exactly(self, tmp_path):
+    def setUp(self):
+        super().setUp()
+        self._temporary_directory = TemporaryDirectory()
+        self._tmp_path = Path(self._temporary_directory.name)
+
+    def tearDown(self):
+        self._temporary_directory.cleanup()
+        super().tearDown()
+
+    def test_generated_pages_and_index_match_registered_kernels_exactly(self):
         records = load_registered_kernels()
         assert records, "expected at least one live registered kernel record"
 
-        output_dir = tmp_path / "kernels_generated"
+        output_dir = self._tmp_path / "kernels_generated"
         generate_kernel_pages(
             records,
             output_dir,
@@ -74,9 +84,9 @@ class TestGenerationParityWithLiveInventory(ExtTestCase):
             if record.domain == "com.microsoft":
                 assert "LightOpSchema" in page_text
 
-    def test_regenerating_from_the_live_inventory_is_byte_identical(self, tmp_path):
+    def test_regenerating_from_the_live_inventory_is_byte_identical(self):
         records = load_registered_kernels()
-        output_dir = tmp_path / "kernels_generated"
+        output_dir = self._tmp_path / "kernels_generated"
 
         generate_kernel_pages(
             records,
@@ -96,9 +106,9 @@ class TestGenerationParityWithLiveInventory(ExtTestCase):
 
         assert first == second
 
-    def test_group_query_attention_page_links_to_all_registered_support(self, tmp_path):
+    def test_group_query_attention_page_links_to_all_registered_support(self):
         records = load_registered_kernels()
-        output_dir = tmp_path / "kernels_generated"
+        output_dir = self._tmp_path / "kernels_generated"
         generate_kernel_pages(
             records,
             output_dir,
