@@ -52,7 +52,9 @@ def test_python_test_classes_inherit_from_ext_test_case():
         for node in ast.walk(tree):
             if isinstance(node, ast.ClassDef) and node.name.startswith("Test"):
                 if not any(
-                    isinstance(base, ast.Name) and base.id == "ExtTestCase" for base in node.bases
+                    (isinstance(base, ast.Name) and base.id == "ExtTestCase")
+                    or (isinstance(base, ast.Attribute) and base.attr == "ExtTestCase")
+                    for base in node.bases
                 ):
                     missing_bases.append(f"{path.relative_to(_ROOT)}:{node.name}")
     assert not missing_bases, f"Test classes must inherit from ExtTestCase: {missing_bases}"
