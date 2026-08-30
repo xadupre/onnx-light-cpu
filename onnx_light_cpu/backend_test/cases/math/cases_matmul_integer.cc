@@ -70,7 +70,7 @@ void RegisterMatMulIntegerCase(std::vector<TestCase> &registry, const OpsetId &o
              Tensor y = kernel(a, b);
              return IoData{{std::move(a), std::move(b)}, {std::move(y)}};
            },
-           "backend-test", "",
+           "backend-test", bt_ns::TestCaseTag::NONE,
            {bt_ns::TensorTypeSpec(static_cast<std::int32_t>(DataType::INT32), {shape.m, shape.n})});
     return;
   }

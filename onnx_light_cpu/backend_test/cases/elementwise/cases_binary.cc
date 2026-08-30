@@ -364,7 +364,7 @@ void RegisterLlmBenchmark(std::vector<TestCase> &registry, const BinaryManifestE
            return MakeBinaryIoData(entry, signature, shape_pair, attributes, false,
                                    generate_expected_outputs);
          },
-         "backend-test", "",
+         "backend-test", bt_ns::TestCaseTag::NONE,
          {bt_ns::TensorTypeSpec(static_cast<std::int32_t>(signature.output),
                                 BroadcastShape(shape_pair.left, shape_pair.right))});
 }
@@ -388,7 +388,7 @@ void RegisterBenchmarksForSignature(std::vector<TestCase> &registry,
              return MakeBinaryIoData(entry, signature, shape_pair, attributes, false,
                                      generate_expected_outputs);
            },
-           "backend-test", "",
+           "backend-test", bt_ns::TestCaseTag::NONE,
            {bt_ns::TensorTypeSpec(static_cast<std::int32_t>(signature.output),
                                   BroadcastShape(shape_pair.left, shape_pair.right))});
     if (IsNonCommutative(entry.op)) {
@@ -399,7 +399,7 @@ void RegisterBenchmarksForSignature(std::vector<TestCase> &registry,
                return MakeBinaryIoData(entry, signature, shape_pair, attributes, true,
                                        generate_expected_outputs);
              },
-             "backend-test", "",
+             "backend-test", bt_ns::TestCaseTag::NONE,
              {bt_ns::TensorTypeSpec(static_cast<std::int32_t>(signature.output),
                                     BroadcastShape(shape_pair.left, shape_pair.right))});
     }
@@ -413,7 +413,7 @@ void RegisterBenchmarksForSignature(std::vector<TestCase> &registry,
                return MakeBinaryIoData(entry, signature, shape_pair, attributes, false,
                                        generate_expected_outputs);
              },
-             "backend-test", "",
+             "backend-test", bt_ns::TestCaseTag::NONE,
              {bt_ns::TensorTypeSpec(static_cast<std::int32_t>(signature.output),
                                     BroadcastShape(shape_pair.left, shape_pair.right))});
     }

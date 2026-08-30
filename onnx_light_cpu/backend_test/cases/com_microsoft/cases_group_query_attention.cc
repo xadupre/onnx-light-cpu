@@ -115,26 +115,28 @@ void RegisterGroupQueryAttentionCase(
   const NodeProto node =
       MakeGroupQueryAttentionNode(num_heads, kv_num_heads, causal, scale, softcap);
 
-  Expect(registry, node, name, {DefaultOpset(standard_opset_version), microsoft_opset},
-         {query_count, kv_count, kv_count, batch, 1}, {query_count}, [=]() -> IoData {
-           Tensor query =
-               MakeBenchmarkTensor(data_type, {batch, sequence, query_width}, 987654321ULL);
-           Tensor key = MakeBenchmarkTensor(data_type, {batch, sequence, kv_width}, 246813579ULL);
-           Tensor value = MakeBenchmarkTensor(data_type, {batch, sequence, kv_width}, 135792468ULL);
-           Tensor seqlens_k = Tensor::FromInt32(
-               "", {batch},
-               std::vector<std::int32_t>(static_cast<std::size_t>(batch),
-                                         static_cast<std::int32_t>(sequence - 1)));
-           Tensor total_sequence_length =
-               Tensor::FromInt32("", {}, {static_cast<std::int32_t>(sequence)});
-           const AttentionKernel attention{KernelContext{DefaultOpset(standard_opset_version)}};
-           Tensor output = attention(
-               MakeAttentionNode(num_heads, kv_num_heads, causal.value_or(1) != 0, scale, softcap),
-               query, key, value, nullptr);
-           return IoData{{std::move(query), std::move(key), std::move(value), std::move(seqlens_k),
-                          std::move(total_sequence_length)},
-                         {std::move(output)}};
-         });
+  Expect(
+      registry, node, name, {DefaultOpset(standard_opset_version), microsoft_opset},
+      {query_count, kv_count, kv_count, batch, 1}, {query_count},
+      [=]() -> IoData {
+        Tensor query = MakeBenchmarkTensor(data_type, {batch, sequence, query_width}, 987654321ULL);
+        Tensor key = MakeBenchmarkTensor(data_type, {batch, sequence, kv_width}, 246813579ULL);
+        Tensor value = MakeBenchmarkTensor(data_type, {batch, sequence, kv_width}, 135792468ULL);
+        Tensor seqlens_k =
+            Tensor::FromInt32("", {batch},
+                              std::vector<std::int32_t>(static_cast<std::size_t>(batch),
+                                                        static_cast<std::int32_t>(sequence - 1)));
+        Tensor total_sequence_length =
+            Tensor::FromInt32("", {}, {static_cast<std::int32_t>(sequence)});
+        const AttentionKernel attention{KernelContext{DefaultOpset(standard_opset_version)}};
+        Tensor output = attention(
+            MakeAttentionNode(num_heads, kv_num_heads, causal.value_or(1) != 0, scale, softcap),
+            query, key, value, nullptr);
+        return IoData{{std::move(query), std::move(key), std::move(value), std::move(seqlens_k),
+                       std::move(total_sequence_length)},
+                      {std::move(output)}};
+      },
+      "backend-test", bt_ns::TestCaseTag::AI_RT);
 }
 
 // The Qwen3-8B-int4 model's 36 GroupQueryAttention nodes all share this exact
@@ -247,7 +249,7 @@ void RegisterQwen3GroupQueryAttentionBenchmarkCase(std::vector<TestCase> &regist
                        std::move(sin_cache)},
                       {std::move(output), std::move(present_key), std::move(present_value)}};
       },
-      "backend-test", "",
+      "backend-test", bt_ns::TestCaseTag::AI_RT,
       {bt_ns::TensorTypeSpec(static_cast<std::int32_t>(DataType::FLOAT),
                              {kBatch, sequence, query_width}),
        bt_ns::TensorTypeSpec(static_cast<std::int32_t>(DataType::FLOAT),
@@ -288,7 +290,8 @@ void RegisterCachedRotaryCorrectnessCase(std::vector<TestCase> &registry,
 
   Expect(
       registry, node, "test_cpu_group_query_attention_cached_rotary_float32",
-      {DefaultOpset(27), microsoft_opset}, [=]() -> IoData {
+      {DefaultOpset(27), microsoft_opset},
+      [=]() -> IoData {
         Tensor query = Tensor::FromFloat(
             "", {1, 2, 32},
             {-0.42714751f, 0.37911853f,  -0.26119852f, -0.07775197f, -0.02260299f, -0.22226539f,
@@ -408,7 +411,8 @@ void RegisterCachedRotaryCorrectnessCase(std::vector<TestCase> &registry,
                        std::move(total_sequence_length), std::move(cos_cache),
                        std::move(sin_cache)},
                       {std::move(output), std::move(present_key), std::move(present_value)}};
-      });
+      },
+      "backend-test", bt_ns::TestCaseTag::AI_RT);
 }
 
 } // namespace

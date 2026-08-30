@@ -359,7 +359,7 @@ void RegisterCpuTreeEnsembleCases(std::vector<TestCase> &registry, TestMode mode
                                                  ToFloat(expected));
                return IoData{{std::move(input)}, {std::move(output)}};
              },
-             "backend-test", "",
+             "backend-test", bt_ns::TestCaseTag::NONE,
              {bt_ns::TensorTypeSpec(static_cast<std::int32_t>(DataType::FLOAT),
                                     {static_cast<std::int64_t>(spec.rows), 1})});
     }

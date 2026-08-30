@@ -192,7 +192,8 @@ void RegisterGemmBenchmark(std::vector<TestCase> &registry, const OpsetId &opset
              Tensor y = kernel(a, b, c, 1.0f, 1.0f, trans_a, trans_b);
              return IoData{{std::move(a), std::move(b), std::move(c)}, {std::move(y)}};
            },
-           "backend-test", "", {bt_ns::TensorTypeSpec(static_cast<std::int32_t>(dtype), {m, n})});
+           "backend-test", bt_ns::TestCaseTag::NONE,
+           {bt_ns::TensorTypeSpec(static_cast<std::int32_t>(dtype), {m, n})});
     return;
   }
 
@@ -208,13 +209,14 @@ void RegisterGemmBenchmark(std::vector<TestCase> &registry, const OpsetId &opset
            Tensor y = kernel(a, b, 1.0f, trans_a, trans_b);
            return IoData{{std::move(a), std::move(b)}, {std::move(y)}};
          },
-         "backend-test", "", {bt_ns::TensorTypeSpec(static_cast<std::int32_t>(dtype), {m, n})});
+         "backend-test", bt_ns::TestCaseTag::NONE,
+         {bt_ns::TensorTypeSpec(static_cast<std::int32_t>(dtype), {m, n})});
 }
 
 void RegisterChainedGemmCase(std::vector<TestCase> &registry, const OpsetId &opset,
                              const std::string &name, int64_t m, int64_t k, int64_t n1, int64_t n2,
                              int64_t n3) {
-  TestCase test_case(name, name, "model", "gemm_chain");
+  TestCase test_case(name, name, bt_ns::TestCaseKind::MODEL, bt_ns::TestCaseTag::NONE);
   test_case.declared_input_element_counts = {m * k, k * n1, n1 * n2, n2 * n3};
   test_case.declared_output_element_counts = {m * n3};
   auto build = [opset, name, m, k, n1, n2, n3](bool generate_expected_outputs) {

@@ -1141,7 +1141,7 @@ TEST(OnnxLightBackendKernels, GemmBenchmarkCorpusIsUnmaterializedAndCoversPriori
       continue;
     }
     TestCaseUnloadGuard unload_guard(test_case);
-    if (test_case.tag == "gemm_chain") {
+    if (test_case.name.find("_gemm_chain_") != std::string::npos) {
       ++chained_cases;
       EXPECT_NE(test_case.name.find("_float32"), std::string::npos) << test_case.name;
       EXPECT_FALSE(test_case.materialized()) << test_case.name;

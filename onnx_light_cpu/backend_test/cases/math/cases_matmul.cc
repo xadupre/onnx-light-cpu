@@ -71,7 +71,7 @@ void RegisterMatMulCase(std::vector<TestCase> &registry, const OpsetId &opset,
              Tensor y = benchmark_kernel(a, b);
              return IoData{{std::move(a), std::move(b)}, {std::move(y)}};
            },
-           "backend-test", "",
+           "backend-test", bt_ns::TestCaseTag::NONE,
            {bt_ns::TensorTypeSpec(static_cast<std::int32_t>(data_type),
                                   shape.rank3 ? rt_ns::Shape{1, shape.m, shape.n}
                                               : rt_ns::Shape{shape.m, shape.n})});

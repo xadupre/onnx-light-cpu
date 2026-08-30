@@ -44,7 +44,7 @@ void RegisterCpuSwiGLUCases(std::vector<TestCase> &registry, TestMode mode) {
                         return bt_ns::IoData{{std::move(gate), std::move(value)},
                                              {std::move(output)}};
                       },
-                      "backend-test", "",
+                      "backend-test", bt_ns::TestCaseTag::NONE,
                       {bt_ns::TensorTypeSpec(static_cast<std::int32_t>(data_type), {size})});
       }
     }

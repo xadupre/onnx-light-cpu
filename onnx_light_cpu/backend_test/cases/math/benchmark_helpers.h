@@ -129,7 +129,8 @@ void RegisterUnaryBenchmark(
         rt_ns::Tensor y = kernel_factory()(x);
         return bt_ns::IoData{{std::move(x)}, {std::move(y)}};
       },
-      "backend-test", "", {bt_ns::TensorTypeSpec(static_cast<std::int32_t>(data_type), {size})});
+      "backend-test", bt_ns::TestCaseTag::NONE,
+      {bt_ns::TensorTypeSpec(static_cast<std::int32_t>(data_type), {size})});
 }
 
 } // namespace onnx_light_cpu::backend_test
