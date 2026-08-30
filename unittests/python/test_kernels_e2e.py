@@ -501,6 +501,14 @@ class TestBackendCases(ExtTestCase):
                             else:
                                 tolerance = _unary_ort_tolerance(op_type, dtype)
                                 _assert_close(actual, expected, rtol=tolerance, atol=tolerance)
+                            if op_type == "Abs" and dtype in {
+                                np.float32,
+                                np.float64,
+                                np.float16,
+                                ml_dtypes.bfloat16,
+                            }:
+                                negative_zero = np.signbit(feeds["X"]) & (feeds["X"] == 0)
+                                assert not np.any(np.signbit(actual[negative_zero]))
 
         for op_type in ("Abs", "Exp", "Log"):
             with self.subTest(op_type=op_type, execution="parallel"):
