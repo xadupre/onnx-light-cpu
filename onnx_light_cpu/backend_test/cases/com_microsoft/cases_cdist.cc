@@ -82,7 +82,7 @@ void RegisterCpuCDistCases(std::vector<TestCase> &registry, TestMode mode) {
                    Tensor c = kernel(a, b, metric);
                    return IoData{{std::move(a), std::move(b)}, {std::move(c)}};
                  },
-                 "backend-test", "",
+                 "backend-test", bt_ns::TestCaseTag::AI_RT,
                  {bt_ns::TensorTypeSpec(static_cast<std::int32_t>(data_type), {shape.m, shape.k})});
         }
       }
@@ -92,34 +92,46 @@ void RegisterCpuCDistCases(std::vector<TestCase> &registry, TestMode mode) {
 
   const CDistKernel kernel{KernelContext{microsoft_opset}};
   // Default metric ("sqeuclidean" applies when the attribute is omitted).
-  Expect(registry, MakeCDistNode(""), "test_cpu_cdist_default_metric_float32",
-         {DefaultOpset(13), microsoft_opset}, [=]() -> IoData {
-           Tensor a = Tensor::FromFloat("", {3, 2}, {0.0f, 0.0f, 1.0f, 1.0f, 2.0f, 2.0f});
-           Tensor b = Tensor::FromFloat("", {2, 2}, {0.0f, 0.0f, 1.0f, 0.0f});
-           return IoData{{a, b}, {kernel(a, b, "sqeuclidean")}};
-         });
+  Expect(
+      registry, MakeCDistNode(""), "test_cpu_cdist_default_metric_float32",
+      {DefaultOpset(13), microsoft_opset},
+      [=]() -> IoData {
+        Tensor a = Tensor::FromFloat("", {3, 2}, {0.0f, 0.0f, 1.0f, 1.0f, 2.0f, 2.0f});
+        Tensor b = Tensor::FromFloat("", {2, 2}, {0.0f, 0.0f, 1.0f, 0.0f});
+        return IoData{{a, b}, {kernel(a, b, "sqeuclidean")}};
+      },
+      "backend-test", bt_ns::TestCaseTag::AI_RT);
 
-  Expect(registry, MakeCDistNode("sqeuclidean"), "test_cpu_cdist_sqeuclidean_float64",
-         {DefaultOpset(13), microsoft_opset}, [=]() -> IoData {
-           Tensor a = Tensor::FromDouble("", {3, 2}, {0.0, 0.0, 1.0, 1.0, 2.0, 2.0});
-           Tensor b = Tensor::FromDouble("", {2, 2}, {0.0, 0.0, 1.0, 0.0});
-           return IoData{{a, b}, {kernel(a, b, "sqeuclidean")}};
-         });
+  Expect(
+      registry, MakeCDistNode("sqeuclidean"), "test_cpu_cdist_sqeuclidean_float64",
+      {DefaultOpset(13), microsoft_opset},
+      [=]() -> IoData {
+        Tensor a = Tensor::FromDouble("", {3, 2}, {0.0, 0.0, 1.0, 1.0, 2.0, 2.0});
+        Tensor b = Tensor::FromDouble("", {2, 2}, {0.0, 0.0, 1.0, 0.0});
+        return IoData{{a, b}, {kernel(a, b, "sqeuclidean")}};
+      },
+      "backend-test", bt_ns::TestCaseTag::AI_RT);
 
-  Expect(registry, MakeCDistNode("euclidean"), "test_cpu_cdist_euclidean_float32",
-         {DefaultOpset(13), microsoft_opset}, [=]() -> IoData {
-           Tensor a = Tensor::FromFloat("", {3, 2}, {0.0f, 0.0f, 1.0f, 1.0f, 2.0f, 2.0f});
-           Tensor b = Tensor::FromFloat("", {2, 2}, {0.0f, 0.0f, 1.0f, 0.0f});
-           return IoData{{a, b}, {kernel(a, b, "euclidean")}};
-         });
+  Expect(
+      registry, MakeCDistNode("euclidean"), "test_cpu_cdist_euclidean_float32",
+      {DefaultOpset(13), microsoft_opset},
+      [=]() -> IoData {
+        Tensor a = Tensor::FromFloat("", {3, 2}, {0.0f, 0.0f, 1.0f, 1.0f, 2.0f, 2.0f});
+        Tensor b = Tensor::FromFloat("", {2, 2}, {0.0f, 0.0f, 1.0f, 0.0f});
+        return IoData{{a, b}, {kernel(a, b, "euclidean")}};
+      },
+      "backend-test", bt_ns::TestCaseTag::AI_RT);
 
-  Expect(registry, MakeCDistNode("euclidean"), "test_cpu_cdist_euclidean_float64",
-         {DefaultOpset(13), microsoft_opset}, [=]() -> IoData {
-           Tensor a = Tensor::FromDouble(
-               "", {4, 3}, {1.0, 2.0, 3.0, -1.0, 0.5, 2.5, 0.0, 0.0, 0.0, 3.0, 3.0, 3.0});
-           Tensor b = Tensor::FromDouble("", {2, 3}, {0.0, 0.0, 0.0, 1.0, 1.0, 1.0});
-           return IoData{{a, b}, {kernel(a, b, "euclidean")}};
-         });
+  Expect(
+      registry, MakeCDistNode("euclidean"), "test_cpu_cdist_euclidean_float64",
+      {DefaultOpset(13), microsoft_opset},
+      [=]() -> IoData {
+        Tensor a = Tensor::FromDouble(
+            "", {4, 3}, {1.0, 2.0, 3.0, -1.0, 0.5, 2.5, 0.0, 0.0, 0.0, 3.0, 3.0, 3.0});
+        Tensor b = Tensor::FromDouble("", {2, 3}, {0.0, 0.0, 0.0, 1.0, 1.0, 1.0});
+        return IoData{{a, b}, {kernel(a, b, "euclidean")}};
+      },
+      "backend-test", bt_ns::TestCaseTag::AI_RT);
 }
 
 } // namespace onnx_light_cpu::backend_test

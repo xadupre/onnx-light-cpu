@@ -79,7 +79,7 @@ void RegisterCpuBiasGeluCases(std::vector<TestCase> &registry, TestMode mode) {
                  Tensor c = kernel(a, b);
                  return IoData{{std::move(a), std::move(b)}, {std::move(c)}};
                },
-               "backend-test", "",
+               "backend-test", bt_ns::TestCaseTag::AI_RT,
                {bt_ns::TensorTypeSpec(static_cast<std::int32_t>(data_type),
                                       {shape.outer, shape.inner})});
       }
@@ -90,33 +90,41 @@ void RegisterCpuBiasGeluCases(std::vector<TestCase> &registry, TestMode mode) {
   const BiasGeluKernel kernel{KernelContext{microsoft_opset}};
   const OpsetId opset = microsoft_opset;
 
-  Expect(registry, MakeBiasGeluNode(), "test_cpu_biasgelu_float32", {DefaultOpset(13), opset},
-         [=]() -> IoData {
-           Tensor a = Tensor::FromFloat("", {2, 3}, {-2.0f, -1.0f, 0.0f, 0.5f, 1.0f, 3.0f});
-           Tensor b = Tensor::FromFloat("", {3}, {0.1f, -0.2f, 0.3f});
-           return IoData{{a, b}, {kernel(a, b)}};
-         });
+  Expect(
+      registry, MakeBiasGeluNode(), "test_cpu_biasgelu_float32", {DefaultOpset(13), opset},
+      [=]() -> IoData {
+        Tensor a = Tensor::FromFloat("", {2, 3}, {-2.0f, -1.0f, 0.0f, 0.5f, 1.0f, 3.0f});
+        Tensor b = Tensor::FromFloat("", {3}, {0.1f, -0.2f, 0.3f});
+        return IoData{{a, b}, {kernel(a, b)}};
+      },
+      "backend-test", bt_ns::TestCaseTag::AI_RT);
 
-  Expect(registry, MakeBiasGeluNode(), "test_cpu_biasgelu_float64", {DefaultOpset(13), opset},
-         [=]() -> IoData {
-           Tensor a = Tensor::FromDouble("", {2, 4}, {-3.0, -1.5, 0.25, 1.0, 2.0, -0.5, 0.75, 4.0});
-           Tensor b = Tensor::FromDouble("", {4}, {0.5, -0.5, 0.25, -0.25});
-           return IoData{{a, b}, {kernel(a, b)}};
-         });
+  Expect(
+      registry, MakeBiasGeluNode(), "test_cpu_biasgelu_float64", {DefaultOpset(13), opset},
+      [=]() -> IoData {
+        Tensor a = Tensor::FromDouble("", {2, 4}, {-3.0, -1.5, 0.25, 1.0, 2.0, -0.5, 0.75, 4.0});
+        Tensor b = Tensor::FromDouble("", {4}, {0.5, -0.5, 0.25, -0.25});
+        return IoData{{a, b}, {kernel(a, b)}};
+      },
+      "backend-test", bt_ns::TestCaseTag::AI_RT);
 
-  Expect(registry, MakeBiasGeluNode(), "test_cpu_biasgelu_float16", {DefaultOpset(13), opset},
-         [=]() -> IoData {
-           Tensor a = MakeFloat16Tensor("", {2, 3}, {-2.0f, -1.0f, 0.0f, 0.5f, 1.0f, 3.0f});
-           Tensor b = MakeFloat16Tensor("", {3}, {0.1f, -0.2f, 0.3f});
-           return IoData{{a, b}, {kernel(a, b)}};
-         });
+  Expect(
+      registry, MakeBiasGeluNode(), "test_cpu_biasgelu_float16", {DefaultOpset(13), opset},
+      [=]() -> IoData {
+        Tensor a = MakeFloat16Tensor("", {2, 3}, {-2.0f, -1.0f, 0.0f, 0.5f, 1.0f, 3.0f});
+        Tensor b = MakeFloat16Tensor("", {3}, {0.1f, -0.2f, 0.3f});
+        return IoData{{a, b}, {kernel(a, b)}};
+      },
+      "backend-test", bt_ns::TestCaseTag::AI_RT);
 
-  Expect(registry, MakeBiasGeluNode(), "test_cpu_biasgelu_bfloat16", {DefaultOpset(13), opset},
-         [=]() -> IoData {
-           Tensor a = MakeBfloat16Tensor("", {2, 3}, {-2.0f, -1.0f, 0.0f, 0.5f, 1.0f, 3.0f});
-           Tensor b = MakeBfloat16Tensor("", {3}, {0.1f, -0.2f, 0.3f});
-           return IoData{{a, b}, {kernel(a, b)}};
-         });
+  Expect(
+      registry, MakeBiasGeluNode(), "test_cpu_biasgelu_bfloat16", {DefaultOpset(13), opset},
+      [=]() -> IoData {
+        Tensor a = MakeBfloat16Tensor("", {2, 3}, {-2.0f, -1.0f, 0.0f, 0.5f, 1.0f, 3.0f});
+        Tensor b = MakeBfloat16Tensor("", {3}, {0.1f, -0.2f, 0.3f});
+        return IoData{{a, b}, {kernel(a, b)}};
+      },
+      "backend-test", bt_ns::TestCaseTag::AI_RT);
 }
 
 } // namespace onnx_light_cpu::backend_test

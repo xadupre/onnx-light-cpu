@@ -63,7 +63,7 @@ void RegisterCpuNotCases(std::vector<TestCase> &registry, TestMode mode) {
                Tensor y = not_kernel(x);
                return IoData{{std::move(x)}, {std::move(y)}};
              },
-             "backend-test", "",
+             "backend-test", bt_ns::TestCaseTag::NONE,
              {bt_ns::TensorTypeSpec(static_cast<std::int32_t>(DataType::BOOL), {size})});
     }
     return;

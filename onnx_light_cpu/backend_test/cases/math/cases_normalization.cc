@@ -157,7 +157,7 @@ void RegisterBatchBenchmark(std::vector<TestCase> &registry, const OpsetId &opse
             {std::move(x), std::move(scale), std::move(bias), std::move(mean), std::move(variance)},
             {std::move(y)}};
       },
-      "backend-test", "",
+      "backend-test", bt_ns::TestCaseTag::NONE,
       benchmark.training
           ? std::vector<bt_ns::TypeSpec>{bt_ns::TensorTypeSpec(
                                              static_cast<std::int32_t>(benchmark.data_type),
@@ -201,7 +201,7 @@ void RegisterGroupBenchmark(std::vector<TestCase> &registry, const OpsetId &opse
            Tensor y = kernel(x, scale, bias, benchmark.groups);
            return IoData{{std::move(x), std::move(scale), std::move(bias)}, {std::move(y)}};
          },
-         "backend-test", "",
+         "backend-test", bt_ns::TestCaseTag::NONE,
          {bt_ns::TensorTypeSpec(static_cast<std::int32_t>(benchmark.data_type), benchmark.shape)});
   SetNormalizationTolerance(registry, benchmark.data_type);
 }
@@ -232,7 +232,7 @@ void RegisterInstanceBenchmark(std::vector<TestCase> &registry, const OpsetId &o
            Tensor y = kernel(x, scale, bias);
            return IoData{{std::move(x), std::move(scale), std::move(bias)}, {std::move(y)}};
          },
-         "backend-test", "",
+         "backend-test", bt_ns::TestCaseTag::NONE,
          {bt_ns::TensorTypeSpec(static_cast<std::int32_t>(benchmark.data_type), benchmark.shape)});
   SetNormalizationTolerance(registry, benchmark.data_type);
 }
@@ -282,7 +282,7 @@ void RegisterLayerBenchmark(std::vector<TestCase> &registry, const OpsetId &opse
         LayerNormalizationResult result = kernel(x, scale, nullptr, benchmark.axis);
         return IoData{{std::move(x), std::move(scale)}, {std::move(result.y)}};
       },
-      "backend-test", "",
+      "backend-test", bt_ns::TestCaseTag::NONE,
       {bt_ns::TensorTypeSpec(static_cast<std::int32_t>(benchmark.data_type), benchmark.shape)});
   SetNormalizationTolerance(registry, benchmark.data_type);
 }
@@ -314,7 +314,7 @@ void RegisterLpBenchmark(std::vector<TestCase> &registry, const OpsetId &opset,
            Tensor y = kernel(x, benchmark.axis, benchmark.p);
            return IoData{{std::move(x)}, {std::move(y)}};
          },
-         "backend-test", "",
+         "backend-test", bt_ns::TestCaseTag::NONE,
          {bt_ns::TensorTypeSpec(static_cast<std::int32_t>(benchmark.data_type), benchmark.shape)});
   SetNormalizationTolerance(registry, benchmark.data_type);
 }
@@ -347,7 +347,7 @@ void RegisterMvnBenchmark(std::vector<TestCase> &registry, const OpsetId &opset,
            Tensor y = kernel(x, benchmark.axes);
            return IoData{{std::move(x)}, {std::move(y)}};
          },
-         "backend-test", "",
+         "backend-test", bt_ns::TestCaseTag::NONE,
          {bt_ns::TensorTypeSpec(static_cast<std::int32_t>(benchmark.data_type), benchmark.shape)});
   SetNormalizationTolerance(registry, benchmark.data_type);
 }

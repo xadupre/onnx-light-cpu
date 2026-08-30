@@ -283,7 +283,7 @@ void RegisterAttentionCase(std::vector<TestCase> &registry, const OpsetId &opset
   };
   if (benchmark) {
     Expect(registry, node, name, {opset}, input_counts, {y_count}, std::move(build_data),
-           "backend-test", "",
+           "backend-test", bt_ns::TestCaseTag::NONE,
            {bt_ns::TensorTypeSpec(static_cast<std::int32_t>(data_type), q_shape)});
   } else {
     Expect(registry, node, name, {opset}, input_counts, {y_count},
