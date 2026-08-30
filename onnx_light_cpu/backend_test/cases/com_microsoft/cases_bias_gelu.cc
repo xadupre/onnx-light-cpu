@@ -87,7 +87,6 @@ void RegisterCpuBiasGeluCases(std::vector<TestCase> &registry, TestMode mode) {
     return;
   }
 
-  const BiasGeluKernel kernel{KernelContext{microsoft_opset}};
   const OpsetId opset = microsoft_opset;
 
   Expect(
@@ -95,6 +94,7 @@ void RegisterCpuBiasGeluCases(std::vector<TestCase> &registry, TestMode mode) {
       [=]() -> IoData {
         Tensor a = Tensor::FromFloat("", {2, 3}, {-2.0f, -1.0f, 0.0f, 0.5f, 1.0f, 3.0f});
         Tensor b = Tensor::FromFloat("", {3}, {0.1f, -0.2f, 0.3f});
+        const BiasGeluKernel kernel{KernelContext{opset}};
         return IoData{{a, b}, {kernel(a, b)}};
       },
       "backend-test", bt_ns::TestCaseTag::AI_RT);
@@ -104,6 +104,7 @@ void RegisterCpuBiasGeluCases(std::vector<TestCase> &registry, TestMode mode) {
       [=]() -> IoData {
         Tensor a = Tensor::FromDouble("", {2, 4}, {-3.0, -1.5, 0.25, 1.0, 2.0, -0.5, 0.75, 4.0});
         Tensor b = Tensor::FromDouble("", {4}, {0.5, -0.5, 0.25, -0.25});
+        const BiasGeluKernel kernel{KernelContext{opset}};
         return IoData{{a, b}, {kernel(a, b)}};
       },
       "backend-test", bt_ns::TestCaseTag::AI_RT);
@@ -113,6 +114,7 @@ void RegisterCpuBiasGeluCases(std::vector<TestCase> &registry, TestMode mode) {
       [=]() -> IoData {
         Tensor a = MakeFloat16Tensor("", {2, 3}, {-2.0f, -1.0f, 0.0f, 0.5f, 1.0f, 3.0f});
         Tensor b = MakeFloat16Tensor("", {3}, {0.1f, -0.2f, 0.3f});
+        const BiasGeluKernel kernel{KernelContext{opset}};
         return IoData{{a, b}, {kernel(a, b)}};
       },
       "backend-test", bt_ns::TestCaseTag::AI_RT);
@@ -122,6 +124,7 @@ void RegisterCpuBiasGeluCases(std::vector<TestCase> &registry, TestMode mode) {
       [=]() -> IoData {
         Tensor a = MakeBfloat16Tensor("", {2, 3}, {-2.0f, -1.0f, 0.0f, 0.5f, 1.0f, 3.0f});
         Tensor b = MakeBfloat16Tensor("", {3}, {0.1f, -0.2f, 0.3f});
+        const BiasGeluKernel kernel{KernelContext{opset}};
         return IoData{{a, b}, {kernel(a, b)}};
       },
       "backend-test", bt_ns::TestCaseTag::AI_RT);

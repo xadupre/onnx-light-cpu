@@ -27,6 +27,8 @@
 
 #include "onnx_light_cpu/backend_test/collect_test_cases.h"
 #include "onnx_light_cpu/impl/math/binary/binary_manifest.h"
+#include "onnx_light_cpu/kernels/kernel_usage.h"
+#include "onnx_light_cpu/kernels/math/gemm_kernel.h"
 #include "onnx_light_cpu/kernels/register_kernels.h"
 
 #include "onnx_core/backend_test/test_case.h"
@@ -366,6 +368,33 @@ TEST(OnnxLightBackendKernels, GemmRunsThroughRuntime) {
   const std::vector<std::string> failures =
       RunCpuBackendCases("Gemm", core::backend_test::TestMode::TEST);
   EXPECT_TRUE(failures.empty()) << Describe(failures);
+}
+
+TEST(OnnxLightBackendKernels, GemmCaseCollectionRetainsNoKernels) {
+  const std::int64_t baseline = onnx_light_cpu::GemmKernel::ActiveInstanceCountForTesting();
+  onnx_light_cpu::SetKernelUsageRecording(true);
+
+  for (const core::backend_test::TestMode mode :
+       {core::backend_test::TestMode::TEST, core::backend_test::TestMode::BENCHMARK}) {
+    onnx_light_cpu::ClearUsedKernelNames();
+    std::vector<TestCase> cases = CollectCpuCases("Gemm", mode);
+    ASSERT_FALSE(cases.empty());
+    EXPECT_EQ(onnx_light_cpu::GemmKernel::ActiveInstanceCountForTesting(), baseline);
+    EXPECT_TRUE(onnx_light_cpu::UsedKernelNames().empty());
+    for (const TestCase &test_case : cases) {
+      EXPECT_FALSE(test_case.materialized()) << test_case.name;
+    }
+  }
+
+  std::vector<TestCase> cases = CollectCpuCases("Gemm", core::backend_test::TestMode::TEST);
+  const auto found = std::find_if(cases.begin(), cases.end(), [](const TestCase &test_case) {
+    return test_case.name == "test_cpu_gemm_float32";
+  });
+  ASSERT_NE(found, cases.end());
+  found->Materialize();
+  EXPECT_EQ(onnx_light_cpu::GemmKernel::ActiveInstanceCountForTesting(), baseline);
+  found->unload();
+  EXPECT_EQ(onnx_light_cpu::GemmKernel::ActiveInstanceCountForTesting(), baseline);
 }
 
 TEST(OnnxLightBackendKernels, MatMulRunsThroughRuntime) {

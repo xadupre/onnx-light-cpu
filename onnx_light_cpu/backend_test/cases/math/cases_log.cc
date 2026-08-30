@@ -76,22 +76,25 @@ void RegisterCpuLogCases(std::vector<TestCase> &registry, TestMode mode) {
     return;
   }
 
-  const onnx_light_cpu::LogKernel log_kernel{KernelContext{opset}};
   Expect(registry, MakeLogNode(), "test_cpu_log_float32", {opset}, [=]() -> IoData {
     Tensor x = Tensor::FromFloat("", shape, f);
-    return IoData{{x}, {log_kernel(x)}};
+    const onnx_light_cpu::LogKernel kernel{KernelContext{opset}};
+    return IoData{{x}, {kernel(x)}};
   });
   Expect(registry, MakeLogNode(), "test_cpu_log_float64", {opset}, [=]() -> IoData {
     Tensor x = Tensor::FromDouble("", shape, {0.5, 1.0, 1.5, 2.0, 3.0, 4.0});
-    return IoData{{x}, {log_kernel(x)}};
+    const onnx_light_cpu::LogKernel kernel{KernelContext{opset}};
+    return IoData{{x}, {kernel(x)}};
   });
   Expect(registry, MakeLogNode(), "test_cpu_log_float16", {opset}, [=]() -> IoData {
     Tensor x = rt_ns::MakeFloat16Tensor("", shape, f);
-    return IoData{{x}, {log_kernel(x)}};
+    const onnx_light_cpu::LogKernel kernel{KernelContext{opset}};
+    return IoData{{x}, {kernel(x)}};
   });
   Expect(registry, MakeLogNode(), "test_cpu_log_bfloat16", {opset}, [=]() -> IoData {
     Tensor x = MakeBfloat16Tensor(shape, f);
-    return IoData{{x}, {log_kernel(x)}};
+    const onnx_light_cpu::LogKernel kernel{KernelContext{opset}};
+    return IoData{{x}, {kernel(x)}};
   });
 }
 

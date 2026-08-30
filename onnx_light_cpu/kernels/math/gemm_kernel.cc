@@ -19,6 +19,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -56,6 +57,11 @@ constexpr const char *kMaximumParticipants = "parallel.maximum_threads";
 constexpr std::array<int32_t, 4> kSupportedElementTypes = {
     static_cast<int32_t>(DataType::FLOAT), static_cast<int32_t>(DataType::DOUBLE),
     static_cast<int32_t>(DataType::FLOAT16), static_cast<int32_t>(DataType::BFLOAT16)};
+
+std::atomic<std::int64_t> &ActiveGemmInstances() {
+  static std::atomic<std::int64_t> count{0};
+  return count;
+}
 
 rt_ns::KernelTuningKey MakeTuningKey(int32_t element_type) {
   return {"onnx_light_cpu",      "Gemm", "simd_dispatch", element_type, sym_ns::Device::kCPU,
@@ -184,9 +190,15 @@ private:
 };
 
 GemmKernel::GemmKernel(const rt_ns::KernelContext &ctx)
-    : rt_ns::KernelBase(ctx), plan_cache_(std::make_unique<GemmPlanCache>()) {}
+    : rt_ns::KernelBase(ctx), plan_cache_(std::make_unique<GemmPlanCache>()) {
+  ActiveGemmInstances().fetch_add(1, std::memory_order_relaxed);
+}
 
-GemmKernel::~GemmKernel() = default;
+GemmKernel::~GemmKernel() { ActiveGemmInstances().fetch_sub(1, std::memory_order_relaxed); }
+
+std::int64_t GemmKernel::ActiveInstanceCountForTesting() noexcept {
+  return ActiveGemmInstances().load(std::memory_order_relaxed);
+}
 
 void GemmKernel::RegisterTuningSchemas() {
   static std::once_flag once;
