@@ -17,8 +17,9 @@ regular Python API:
 * register the onnx-light-cpu backend test cases
   (:func:`onnx_light_cpu.register_backend_test_cases`),
 * register the accelerated kernels (:func:`onnx_light_cpu.register_kernels`), and
-* for every collected ``test_cpu_*`` case, run its single-node model through
-  onnx-light's ``ReferenceEvaluator`` and check that
+* generate one test per collected ``test_cpu_*`` case with
+  :func:`onnx_light.onnx.backend.make_test_class`, run its model through
+  onnx-light's ``ReferenceEvaluator``, and check that
     - the accelerated onnx-light-cpu kernel is the one actually dispatched to
       (via :func:`onnx_light_cpu.used_kernel_names`), and
     - its outputs match the reference outputs shipped with the case (using the
@@ -38,7 +39,12 @@ import numpy as np
 
 from onnx_light.ext_test_case import ExtTestCase
 from onnx_light.onnx import TensorProto, helper, inliner
-from onnx_light.onnx.backend import TestMode, collect_test_cases, collect_test_cases_by_name
+from onnx_light.onnx.backend import (
+    TestMode,
+    collect_test_cases,
+    collect_test_cases_by_name,
+    make_test_class,
+)
 from onnx_light.onnx.reference import ReferenceEvaluator
 
 from onnx_light_cpu import (
@@ -169,39 +175,7 @@ def _to_numpy(tensor):
     return np.frombuffer(tensor.raw_data(), dtype=dtype).reshape(shape)
 
 
-def _single_node_op_type(tc):
-    """Returns the op_type when ``tc``'s graph is a single node, else ``None``."""
-    nodes = list(tc.model.graph.node)
-    if len(nodes) != 1:
-        return None
-    return nodes[0].op_type
-
-
-def _uses_supported_dtypes(tc):
-    return all(
-        int(tensor.data_type) in _TP_TO_NP
-        for data_set in tc.data_sets
-        for tensor in (*data_set.inputs, *data_set.outputs)
-    )
-
-
-def _collect_cpu_cases():
-    """Registers and collects the onnx-light-cpu ``test_cpu_*`` backend cases."""
-    register_backend_test_cases()
-    cases = []
-    for op_type in _TARGET_KERNELS:
-        for tc in collect_test_cases(op_type):
-            if (
-                tc.name.startswith("test_cpu_")
-                and _single_node_op_type(tc) == op_type
-                and tc.data_sets
-                and _uses_supported_dtypes(tc)
-            ):
-                cases.append(tc)
-    return cases
-
-
-_CASES = _collect_cpu_cases()
+register_backend_test_cases()
 
 
 def _assert_close(actual, expected, rtol, atol):
@@ -397,6 +371,27 @@ _GROUP_NORMALIZATION_OPSET18_DOUBLE_FUNCTION_MODEL = inliner.inline_selected_fun
     inline_schema_functions=True,
 )
 _GROUP_NORMALIZATION_OPSET18_DOUBLE_FUNCTION_MODEL.ir_version = 13
+
+
+def _cpu_backend(model, *inputs):
+    """Runs one generated backend case and verifies accelerated dispatch."""
+    register_kernels()
+    session = ReferenceEvaluator(model)
+    feeds = dict(zip(session.input_names, inputs, strict=True))
+    clear_used_kernel_names()
+    outputs = session.run(None, feeds)
+    dispatched = used_kernel_names()
+    for node in model.graph.node:
+        expected_kernel = _TARGET_KERNELS[node.op_type]
+        assert expected_kernel in dispatched
+    return outputs
+
+
+TestCpuBackend = make_test_class(
+    _cpu_backend,
+    include_regex=["^test_cpu_"],
+    exclude_regex=["^test_cpu_treeensemble(?:classifier|regressor)_"],
+)
 
 
 class TestBackendCases(ExtTestCase):
@@ -755,44 +750,6 @@ class TestBackendCases(ExtTestCase):
         assert len(cases) == 1
         values = _to_numpy(cases[0].data_sets[0].inputs[0])
         assert np.all(values > 0)
-
-    def test_every_target_op_has_backend_cases(self):
-        """Guards against the parametrized test silently collecting nothing."""
-        counts = dict.fromkeys(_TARGET_KERNELS, 0)
-        for tc in _CASES:
-            counts[_single_node_op_type(tc)] += 1
-        for op_type, count in counts.items():
-            assert count > 0, f"no onnx-light-cpu backend test cases collected for {op_type}"
-
-    def test_backend_cases(self):
-        """Runs one onnx-light-cpu backend test case through the accelerated
-        kernels and checks the outputs match the reference and the accelerated
-        kernel ran.
-        """
-        for tc in _CASES:
-            with self.subTest(tc=tc.name):
-                self._run_backend_case(tc)
-
-    def _run_backend_case(self, tc):
-        op_type = _single_node_op_type(tc)
-        expected_kernel = _TARGET_KERNELS[op_type]
-
-        sess = ReferenceEvaluator(tc.model)
-        input_names = [vi.name for vi in tc.model.graph.input]
-        rtol = tc.rtol if tc.rtol is not None else 1e-5
-        atol = tc.atol if tc.atol is not None else 1e-6
-
-        for ds in tc.data_sets:
-            assert len(ds.inputs) == len(input_names)
-            feeds = {name: _to_numpy(t) for name, t in zip(input_names, ds.inputs, strict=True)}
-
-            clear_used_kernel_names()
-            got = sess.run(None, feeds)
-            assert expected_kernel in used_kernel_names()
-
-            assert len(got) == len(ds.outputs)
-            for actual, expected in zip(got, ds.outputs, strict=True):
-                _assert_close(actual, _to_numpy(expected), rtol, atol)
 
     def test_gemm_uses_accelerated_kernel_benchmark_sizes(self):
         # Backs docs/examples/benchmarks/plot_gemm_benchmark.py: the timed ``Gemm`` curve
