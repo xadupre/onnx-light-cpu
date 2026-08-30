@@ -57,11 +57,12 @@ def _case_is_applicable(case: Any, kernel: Any, tensor_proto: Any) -> tuple[bool
     if kernel.until_version is not None and opset > kernel.until_version:
         return False, f"opset {opset} is above supported version {kernel.until_version}"
     input_types = {
-        tensor_proto.DataType.Name(value.type.tensor_type.elem_type)
+        value.type.tensor_type.elem_type
         for value in case.model.graph.input
         if value.type.HasField("tensor_type")
     }
-    if not input_types & set(kernel.types):
+    supported_types = {getattr(tensor_proto, name) for name in kernel.types}
+    if not input_types & supported_types:
         return False, f"input types {sorted(input_types)} are unsupported"
     return True, ""
 
