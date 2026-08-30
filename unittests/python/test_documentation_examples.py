@@ -25,7 +25,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from unittest import TestCase
+from onnx_light.ext_test_case import ExtTestCase
 
 _ROOT = Path(__file__).resolve().parents[2]
 _EXAMPLES_DIR = _ROOT / "docs" / "examples"
@@ -58,7 +58,7 @@ def _argument_default_expression(path, option):
     raise AssertionError(f"Unable to find {option!r} in {path}")
 
 
-class TestDocumentationExamples(TestCase):
+class TestDocumentationExamples(ExtTestCase):
     def test_backend_case_benchmark_defaults_bound_aggregate_runtime(self):
         assert (
             _argument_default_expression(_BACKEND_CASES_EXAMPLE, "--repeat")

@@ -14,6 +14,9 @@ exercised where that build is available.
 
 import sys
 from pathlib import Path
+from tempfile import TemporaryDirectory
+
+from onnx_light.ext_test_case import ExtTestCase
 
 _EXT_DIR = Path(__file__).resolve().parents[2] / "docs" / "_ext"
 if str(_EXT_DIR) not in sys.path:
@@ -28,7 +31,7 @@ from kernel_pages import (  # noqa: E402
 )
 
 
-class TestGenerationParityWithLiveInventory:
+class TestGenerationParityWithLiveInventory(ExtTestCase):
     """End-to-end parity between the runtime C++ registrations (through
     ``onnx_light_cpu.registered_kernels()``) and what ``kernel_pages`` would
     generate for the real Sphinx build: exactly one page per record, an
@@ -39,11 +42,17 @@ class TestGenerationParityWithLiveInventory:
     compiled extension reports.
     """
 
-    def test_generated_pages_and_index_match_registered_kernels_exactly(self, tmp_path):
+    def setUp(self):
+        super().setUp()
+        temporary_directory = TemporaryDirectory()
+        self.addCleanup(temporary_directory.cleanup)
+        self._tmp_path = Path(temporary_directory.name)
+
+    def test_generated_pages_and_index_match_registered_kernels_exactly(self):
         records = load_registered_kernels()
         assert records, "expected at least one live registered kernel record"
 
-        output_dir = tmp_path / "kernels_generated"
+        output_dir = self._tmp_path / "kernels_generated"
         generate_kernel_pages(
             records,
             output_dir,
@@ -72,9 +81,9 @@ class TestGenerationParityWithLiveInventory:
             if record.domain == "com.microsoft":
                 assert "LightOpSchema" in page_text
 
-    def test_regenerating_from_the_live_inventory_is_byte_identical(self, tmp_path):
+    def test_regenerating_from_the_live_inventory_is_byte_identical(self):
         records = load_registered_kernels()
-        output_dir = tmp_path / "kernels_generated"
+        output_dir = self._tmp_path / "kernels_generated"
 
         generate_kernel_pages(
             records,
@@ -94,9 +103,9 @@ class TestGenerationParityWithLiveInventory:
 
         assert first == second
 
-    def test_group_query_attention_page_links_to_all_registered_support(self, tmp_path):
+    def test_group_query_attention_page_links_to_all_registered_support(self):
         records = load_registered_kernels()
-        output_dir = tmp_path / "kernels_generated"
+        output_dir = self._tmp_path / "kernels_generated"
         generate_kernel_pages(
             records,
             output_dir,

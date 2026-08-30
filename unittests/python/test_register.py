@@ -13,8 +13,9 @@ tests patch it to exercise the wrapper without requiring that build.
 
 import sys
 from types import ModuleType
-from unittest import TestCase, mock
+from unittest import mock
 
+from onnx_light.ext_test_case import ExtTestCase
 import onnx_light_cpu._register as reg
 from onnx_light_cpu import (
     OperatorSupport,
@@ -28,7 +29,7 @@ from onnx_light_cpu import (
 )
 
 
-class TestRegisterKernels(TestCase):
+class TestRegisterKernels(ExtTestCase):
     def test_loads_runtime_before_registration_extension(self):
         extension = ModuleType("onnx_light_cpu.onnx_py._cpuregister")
         extension.register_all_kernels = mock.Mock()
@@ -65,7 +66,7 @@ class TestRegisterKernels(TestCase):
             assert register_kernels() is None
 
 
-class TestBackendTestRegistration(TestCase):
+class TestBackendTestRegistration(ExtTestCase):
     def test_reports_backend_test_binding_availability(self):
         extension = ModuleType("onnx_light_cpu.onnx_py._cpuregister")
         extension.has_backend_test_cases = False
@@ -77,7 +78,7 @@ class TestBackendTestRegistration(TestCase):
             assert has_backend_test_cases() is True
 
 
-class TestRegisteredKernels(TestCase):
+class TestRegisteredKernels(ExtTestCase):
     """Tests for :func:`onnx_light_cpu.registered_kernels`.
 
     The underlying binding (``_cpuregister.registered_kernels``) requires the
@@ -129,7 +130,7 @@ class TestRegisteredKernels(TestCase):
             record.op_type = "Other"
 
 
-class TestOperatorSupport(TestCase):
+class TestOperatorSupport(ExtTestCase):
     def test_wraps_raw_tuples(self):
         extension = ModuleType("onnx_light_cpu.onnx_py._cpuregister")
         extension.operator_support = mock.Mock(

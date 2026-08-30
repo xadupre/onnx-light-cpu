@@ -18,7 +18,7 @@ needing onnx-light or ONNX Runtime.
 import ast
 import re
 from pathlib import Path
-from unittest import TestCase
+from onnx_light.ext_test_case import ExtTestCase
 
 _ROOT = Path(__file__).resolve().parents[2]
 _EXAMPLE_PATH = _ROOT / "docs" / "examples" / "benchmarks" / "plot_backend_cases_benchmark.py"
@@ -91,7 +91,7 @@ def _row(op_type, name, light_time=1.0, ort_time=None, ort_error=None):
     return (op_type, name, "1x1", "float32", light_time, ort_time, ort_error)
 
 
-class TestPrepareBackendCasesPlotData(TestCase):
+class TestPrepareBackendCasesPlotData(ExtTestCase):
     def test_mixed_supported_and_unsupported_cases(self):
         rows = [
             _row("Abs", "test_cpu_abs_float32_benchmark", light_time=1.0, ort_time=2.0),
@@ -142,7 +142,7 @@ class TestPrepareBackendCasesPlotData(TestCase):
         self.assertEqual(list(plot_data.colors_by_op_type), ["Abs"])
 
 
-class TestCaseGroupKey(TestCase):
+class TestCaseGroupKey(ExtTestCase):
     """``_case_group_key`` must stay name-only: it is used to spread
     ``--max-cases`` truncation across operators *before* any case's ONNX
     model (and the tensors it references) is built, so it must not need

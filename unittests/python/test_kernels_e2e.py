@@ -34,11 +34,10 @@ NumPy or ``ml_dtypes``, including ``BFLOAT16``.
 
 from __future__ import annotations
 
-from unittest import TestCase
-
 import ml_dtypes
 import numpy as np
 
+from onnx_light.ext_test_case import ExtTestCase
 from onnx_light.onnx import TensorProto, helper, inliner
 from onnx_light.onnx.backend import (
     TestMode,
@@ -395,7 +394,7 @@ TestCpuBackend = make_test_class(
 )
 
 
-class TestBackendCases(TestCase):
+class TestBackendCases(ExtTestCase):
     def setUp(self):
         register_kernels()
 
