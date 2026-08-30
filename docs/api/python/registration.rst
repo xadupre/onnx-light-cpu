@@ -51,5 +51,7 @@ Registering kernels
 
    Registers onnx-light-cpu kernels and runs applicable onnx-light
    ``TestMode.TEST`` backend cases. Cases use onnx-light's standard
-   ``ReferenceEvaluator`` comparison with their declared tolerances; the
-   report records unsupported cases and failures.
+   ``ReferenceEvaluator`` comparison with their declared tolerances. The
+   report records unsupported cases as skips and execution or comparison
+   errors as failures; a kernel without an applicable correctness case is a
+   failure.
