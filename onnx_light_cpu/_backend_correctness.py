@@ -142,7 +142,7 @@ def run_backend_correctness_tests(
     seen_cases = set()
     for kernel in registered_kernels(microsoft_implementation):
         for case in collect_test_cases(kernel.op_type, include_big=False, mode=TestMode.TEST):
-            key = (kernel.domain, kernel.op_type, case.name)
+            key = (kernel.domain, case.name)
             if key in seen_cases:
                 continue
             applicable, reason = _case_is_applicable(case, kernel, TensorProto)
