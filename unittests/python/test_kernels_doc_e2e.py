@@ -44,12 +44,9 @@ class TestGenerationParityWithLiveInventory(ExtTestCase):
 
     def setUp(self):
         super().setUp()
-        self._temporary_directory = TemporaryDirectory()
-        self._tmp_path = Path(self._temporary_directory.name)
-
-    def tearDown(self):
-        self._temporary_directory.cleanup()
-        super().tearDown()
+        temporary_directory = TemporaryDirectory()
+        self.addCleanup(temporary_directory.cleanup)
+        self._tmp_path = Path(temporary_directory.name)
 
     def test_generated_pages_and_index_match_registered_kernels_exactly(self):
         records = load_registered_kernels()

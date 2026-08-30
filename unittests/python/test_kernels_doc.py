@@ -202,12 +202,9 @@ class TestRenderIndex(ExtTestCase):
 class TestGenerateKernelPages(ExtTestCase):
     def setUp(self):
         super().setUp()
-        self._temporary_directory = TemporaryDirectory()
-        self._tmp_path = Path(self._temporary_directory.name)
-
-    def tearDown(self):
-        self._temporary_directory.cleanup()
-        super().tearDown()
+        temporary_directory = TemporaryDirectory()
+        self.addCleanup(temporary_directory.cleanup)
+        self._tmp_path = Path(temporary_directory.name)
 
     def test_generation_is_byte_identical_across_two_runs(self):
         records = [_record("Abs"), _record("Gemm")]
