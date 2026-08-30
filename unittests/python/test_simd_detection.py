@@ -5,10 +5,11 @@
 """Tests the public SIMD inspection API."""
 
 import onnx_light_cpu
+from onnx_light.ext_test_case import ExtTestCase
 from onnx_light_cpu import SimdLevel, detect_simd_level, has_cpu_kernels
 
 
-class TestDetection:
+class TestDetection(ExtTestCase):
     def test_has_cpu_kernels(self):
         assert has_cpu_kernels() is True
 

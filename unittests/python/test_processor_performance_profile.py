@@ -18,8 +18,9 @@ from __future__ import annotations
 import json
 import sys
 from types import ModuleType
-from unittest import TestCase, mock
+from unittest import mock
 
+from onnx_light.ext_test_case import ExtTestCase
 import onnx_light_cpu
 from onnx_light_cpu import (
     ExplicitAffinity,
@@ -40,7 +41,7 @@ def _bounded_kwargs(**overrides):
     return kwargs
 
 
-class TestImportTimeInactivity(TestCase):
+class TestImportTimeInactivity(ExtTestCase):
     def test_import_does_not_touch_the_extension(self):
         extension = ModuleType("onnx_light_cpu.onnx_py._cpukernels")
         extension.benchmark_processor_performance_raw = mock.Mock()
@@ -53,7 +54,7 @@ class TestImportTimeInactivity(TestCase):
         extension.benchmark_processor_performance_raw.assert_not_called()
 
 
-class TestValidation(TestCase):
+class TestValidation(ExtTestCase):
     def test_empty_thread_policies_raises_before_measuring(self):
         with self.assertRaises(ValueError):
             benchmark_processor_performance(**_bounded_kwargs(thread_policies=()))
@@ -81,7 +82,7 @@ class TestValidation(TestCase):
             )
 
 
-class TestBoundedSinglePolicyProfile(TestCase):
+class TestBoundedSinglePolicyProfile(ExtTestCase):
     """Exercises the real extension with small bounded options."""
 
     def test_returns_coherent_profile(self):
@@ -179,7 +180,7 @@ def _raw_profile_stub():
     return metadata, topology, memory, compute, roofline, warnings
 
 
-class TestPythonWrapping(TestCase):
+class TestPythonWrapping(ExtTestCase):
     def _patch_binding(self, raw_profile):
         extension = ModuleType("onnx_light_cpu.onnx_py._cpukernels")
         extension.benchmark_processor_performance_raw = mock.Mock(return_value=raw_profile)

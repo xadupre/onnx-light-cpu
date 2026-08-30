@@ -12,6 +12,7 @@ documentation reflects the current status of the project.
 from pathlib import Path
 
 import onnx_light_cpu
+from onnx_light.ext_test_case import ExtTestCase
 
 _PYTHON_API_DIR = Path(__file__).resolve().parents[2] / "docs" / "api" / "python"
 _PYTHON_API_TOPICS = (
@@ -22,7 +23,7 @@ _PYTHON_API_TOPICS = (
 )
 
 
-class TestApiDocReflectsPublicApi:
+class TestApiDocReflectsPublicApi(ExtTestCase):
     def test_every_public_symbol_is_documented(self):
         assert _PYTHON_API_DIR.is_dir(), "docs/api/python is missing"
         python_index_path = _PYTHON_API_DIR / "index.rst"

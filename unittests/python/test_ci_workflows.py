@@ -4,6 +4,7 @@
 
 """Tests the cross-repository CI ownership contract."""
 
+import ast
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[2]
@@ -42,3 +43,16 @@ def test_onnx_light_main_integration_runs_on_every_supported_os():
 
 def test_cpp_coverage_is_not_carried_forward_between_weekly_runs():
     assert "cpp:\n    carryforward: false" in _CODECOV_CONFIG
+
+
+def test_python_test_classes_inherit_from_ext_test_case():
+    missing_bases = []
+    for path in (_ROOT / "unittests" / "python").rglob("test_*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ClassDef) and node.name.startswith("Test"):
+                if not any(
+                    isinstance(base, ast.Name) and base.id == "ExtTestCase" for base in node.bases
+                ):
+                    missing_bases.append(f"{path.relative_to(_ROOT)}:{node.name}")
+    assert not missing_bases, f"Test classes must inherit from ExtTestCase: {missing_bases}"

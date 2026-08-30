@@ -15,6 +15,8 @@ exercised where that build is available.
 import sys
 from pathlib import Path
 
+from onnx_light.ext_test_case import ExtTestCase
+
 _EXT_DIR = Path(__file__).resolve().parents[2] / "docs" / "_ext"
 if str(_EXT_DIR) not in sys.path:
     sys.path.insert(0, str(_EXT_DIR))
@@ -28,7 +30,7 @@ from kernel_pages import (  # noqa: E402
 )
 
 
-class TestGenerationParityWithLiveInventory:
+class TestGenerationParityWithLiveInventory(ExtTestCase):
     """End-to-end parity between the runtime C++ registrations (through
     ``onnx_light_cpu.registered_kernels()``) and what ``kernel_pages`` would
     generate for the real Sphinx build: exactly one page per record, an

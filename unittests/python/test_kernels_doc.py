@@ -6,6 +6,8 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+from onnx_light.ext_test_case import ExtTestCase
+
 _EXT_DIR = Path(__file__).resolve().parents[2] / "docs" / "_ext"
 if str(_EXT_DIR) not in sys.path:
     sys.path.insert(0, str(_EXT_DIR))
@@ -34,7 +36,7 @@ def _record(op_type, device="cpu", domain="ai.onnx", kernel_name=None, types=("F
     )
 
 
-class TestStemForRecord:
+class TestStemForRecord(ExtTestCase):
     def test_slugifies_domain_op_and_device(self):
         record = _record("Abs")
         assert stem_for_record(record) == "ai_onnx_abs_cpu"
@@ -44,7 +46,7 @@ class TestStemForRecord:
         assert stem_for_record(record) == stem_for_record(record)
 
 
-class TestAssignStems:
+class TestAssignStems(ExtTestCase):
     def test_one_stem_per_record_preserves_order(self):
         records = [_record("Abs"), _record("Gemm"), _record("Not")]
         stems = assign_stems(records)
@@ -62,7 +64,7 @@ class TestAssignStems:
         assert stems["ai_onnx_abs_cpu_2"] is second
 
 
-class TestRenderKernelPage:
+class TestRenderKernelPage(ExtTestCase):
     def test_includes_metadata(self):
         record = _record("Gemm", types=("FLOAT", "DOUBLE"))
         text = render_kernel_page(record)
@@ -169,7 +171,7 @@ class TestRenderKernelPage:
         assert "default:" not in render_light_op_schema(schema)
 
 
-class TestRenderIndex:
+class TestRenderIndex(ExtTestCase):
     def test_lists_every_stem_in_a_toctree(self):
         text = render_index(assign_stems([_record("Abs"), _record("Gemm")]))
         assert "Kernels" in text
@@ -196,7 +198,7 @@ class TestRenderIndex:
         assert ":class: byop-kernel-table" in text
 
 
-class TestGenerateKernelPages:
+class TestGenerateKernelPages(ExtTestCase):
     def test_generation_is_byte_identical_across_two_runs(self, tmp_path):
         records = [_record("Abs"), _record("Gemm")]
         output_dir = tmp_path / "kernels_generated"

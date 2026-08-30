@@ -33,11 +33,10 @@ NumPy or ``ml_dtypes``, including ``BFLOAT16``.
 
 from __future__ import annotations
 
-from unittest import TestCase
-
 import ml_dtypes
 import numpy as np
 
+from onnx_light.ext_test_case import ExtTestCase
 from onnx_light.onnx import TensorProto, helper, inliner
 from onnx_light.onnx.backend import TestMode, collect_test_cases, collect_test_cases_by_name
 from onnx_light.onnx.reference import ReferenceEvaluator
@@ -400,7 +399,7 @@ _GROUP_NORMALIZATION_OPSET18_DOUBLE_FUNCTION_MODEL = inliner.inline_selected_fun
 _GROUP_NORMALIZATION_OPSET18_DOUBLE_FUNCTION_MODEL.ir_version = 13
 
 
-class TestBackendCases(TestCase):
+class TestBackendCases(ExtTestCase):
     def setUp(self):
         register_kernels()
 
