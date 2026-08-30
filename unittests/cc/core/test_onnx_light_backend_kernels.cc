@@ -65,6 +65,23 @@ using core::runtime::Tensor;
 using core::runtime::TensorComparison;
 using core::runtime::Tensors;
 
+class TestCaseUnloadGuard {
+public:
+  explicit TestCaseUnloadGuard(TestCase &test_case) : test_case_(test_case) {}
+
+  ~TestCaseUnloadGuard() {
+    if (test_case_.materialized()) {
+      test_case_.unload();
+    }
+  }
+
+  TestCaseUnloadGuard(const TestCaseUnloadGuard &) = delete;
+  TestCaseUnloadGuard &operator=(const TestCaseUnloadGuard &) = delete;
+
+private:
+  TestCase &test_case_;
+};
+
 const std::array<std::string_view, 7> kBinaryShapeTags = {
     "contiguous",   "left_scalar",     "right_scalar", "repeated_block",
     "inner_vector", "outer_broadcast", "general",
@@ -247,10 +264,11 @@ std::vector<std::string> RunCpuBackendCases(const std::string &op_type,
   std::vector<std::string> failures;
   std::vector<TestCase> cases = CollectTestCases(op_type, /*include_big=*/false, mode);
   size_t cpu_cases = 0;
-  for (const TestCase &tc : cases) {
+  for (TestCase &tc : cases) {
     if (tc.name.rfind("test_cpu_", 0) != 0 || (!case_name.empty() && tc.name != case_name)) {
       continue;
     }
+    TestCaseUnloadGuard unload_guard(tc);
     ++cpu_cases;
     try {
       RunCaseThroughRuntime(tc, compare, failures);
@@ -275,13 +293,14 @@ std::string Describe(const std::vector<std::string> &failures) {
 
 size_t CountCpuCasesAtMlOpset5(const std::string &op_type) {
   onnx_light_cpu::backend_test::RegisterCpuKernelBackendTestCases();
-  const std::vector<TestCase> cases =
+  std::vector<TestCase> cases =
       CollectTestCases(op_type, /*include_big=*/false, core::backend_test::TestMode::TEST);
   size_t count = 0;
-  for (const TestCase &test_case : cases) {
+  for (TestCase &test_case : cases) {
     if (test_case.name.rfind("test_cpu_", 0) != 0) {
       continue;
     }
+    TestCaseUnloadGuard unload_guard(test_case);
     ++count;
     bool found_ml = false;
     for (const OperatorSetIdProto &opset : test_case.model().opset_import()) {
@@ -688,14 +707,13 @@ TEST(OnnxLightBackendKernels, NotBenchmarkRunsThroughRuntime) {
   EXPECT_TRUE(failures.empty()) << Describe(failures);
 }
 
-TEST(OnnxLightBackendKernels, BinaryBenchmarkCorporaAreLazyAndRunThroughRuntime) {
+TEST(OnnxLightBackendKernels, BinaryBenchmarkCorporaAreUnmaterializedAndRunThroughRuntime) {
   std::vector<std::string> failures;
   for (const auto &entry : onnx_light_cpu::GetBinaryManifest()) {
     const std::vector<TestCase> cases =
         CollectCpuCases(std::string(entry.op_type), core::backend_test::TestMode::BENCHMARK);
     ASSERT_FALSE(cases.empty()) << entry.op_type;
     for (const TestCase &test_case : cases) {
-      EXPECT_TRUE(test_case.is_lazy()) << test_case.name;
       EXPECT_FALSE(test_case.materialized()) << test_case.name;
       EXPECT_TRUE(test_case.name.ends_with("_benchmark")) << test_case.name;
     }
@@ -781,7 +799,6 @@ TEST(OnnxLightBackendKernels, BinaryBenchmarkCorporaCoverQwen3LlmWorkloads) {
           std::find_if(cases.begin(), cases.end(),
                        [&name](const TestCase &test_case) { return test_case.name == name; });
       ASSERT_NE(found, cases.end()) << name;
-      EXPECT_TRUE(found->is_lazy()) << name;
       EXPECT_FALSE(found->materialized()) << name;
     }
     const std::vector<std::string> failures = RunCpuBackendCases(
@@ -870,7 +887,6 @@ TEST(OnnxLightBackendKernels, MatMulBenchmarkCorporaCoverTypesAndPriorityShapes)
         std::find_if(matmul.begin(), matmul.end(),
                      [&name](const TestCase &test_case) { return test_case.name == name; });
     ASSERT_NE(found, matmul.end()) << name;
-    EXPECT_TRUE(found->is_lazy()) << name;
     EXPECT_FALSE(found->materialized()) << name;
   }
 
@@ -909,7 +925,6 @@ TEST(OnnxLightBackendKernels, RmsNormalizationBenchmarksCoverQwen3LlmWorkloads) 
       return test_case.name == name;
     });
     ASSERT_NE(found, cases.end()) << name;
-    EXPECT_TRUE(found->is_lazy()) << name;
     EXPECT_FALSE(found->materialized()) << name;
   }
   const std::vector<std::string> failures = RunCpuBackendCases(
@@ -917,7 +932,7 @@ TEST(OnnxLightBackendKernels, RmsNormalizationBenchmarksCoverQwen3LlmWorkloads) 
   EXPECT_TRUE(failures.empty()) << Describe(failures);
 }
 
-TEST(OnnxLightBackendKernels, NormalizationBenchmarksAreLazyAndRunThroughRuntime) {
+TEST(OnnxLightBackendKernels, NormalizationBenchmarksAreUnmaterializedAndRunThroughRuntime) {
   onnx_light_cpu::backend_test::RegisterCpuKernelBackendTestCases();
   struct ExpectedCorpus {
     const char *op_type;
@@ -973,16 +988,16 @@ TEST(OnnxLightBackendKernels, NormalizationBenchmarksAreLazyAndRunThroughRuntime
   };
   std::vector<std::string> failures;
   for (const ExpectedCorpus &corpus : expected) {
-    const std::vector<TestCase> cases = CollectTestCases(corpus.op_type, /*include_big=*/false,
-                                                         core::backend_test::TestMode::BENCHMARK);
+    std::vector<TestCase> cases = CollectTestCases(corpus.op_type, /*include_big=*/false,
+                                                   core::backend_test::TestMode::BENCHMARK);
     std::set<std::string> actual_names;
-    for (const TestCase &test_case : cases) {
+    for (TestCase &test_case : cases) {
       if (test_case.name.rfind("test_cpu_", 0) != 0 ||
           !test_case.name.ends_with("_float32_benchmark")) {
         continue;
       }
+      TestCaseUnloadGuard unload_guard(test_case);
       actual_names.insert(test_case.name);
-      EXPECT_TRUE(test_case.is_lazy()) << test_case.name;
       EXPECT_FALSE(test_case.materialized()) << test_case.name;
       const GraphProto &graph = test_case.model().ref_graph();
       EXPECT_EQ(graph.initializer_size(), 0) << test_case.name;
@@ -1087,7 +1102,7 @@ TEST(OnnxLightBackendKernels, GemmBenchmarkRunsThroughRuntime) {
   EXPECT_TRUE(failures.empty()) << Describe(failures);
 }
 
-TEST(OnnxLightBackendKernels, GemmBenchmarkCorpusIsLazyAndCoversPriorityShapes) {
+TEST(OnnxLightBackendKernels, GemmBenchmarkCorpusIsUnmaterializedAndCoversPriorityShapes) {
   onnx_light_cpu::backend_test::RegisterCpuKernelBackendTestCases();
   std::vector<TestCase> cases =
       CollectTestCases("Gemm", /*include_big=*/false, core::backend_test::TestMode::BENCHMARK);
@@ -1121,14 +1136,14 @@ TEST(OnnxLightBackendKernels, GemmBenchmarkCorpusIsLazyAndCoversPriorityShapes) 
   bool has_transformer_decode = false;
   size_t chained_cases = 0;
   std::set<std::string> names;
-  for (const TestCase &test_case : cases) {
+  for (TestCase &test_case : cases) {
     if (test_case.name.rfind("test_cpu_gemm_", 0) != 0) {
       continue;
     }
+    TestCaseUnloadGuard unload_guard(test_case);
     if (test_case.tag == "gemm_chain") {
       ++chained_cases;
       EXPECT_NE(test_case.name.find("_float32"), std::string::npos) << test_case.name;
-      EXPECT_TRUE(test_case.is_lazy()) << test_case.name;
       EXPECT_FALSE(test_case.materialized()) << test_case.name;
       EXPECT_EQ(test_case.declared_input_element_counts.size(), 4u);
       EXPECT_EQ(test_case.declared_output_element_counts.size(), 1u);
@@ -1140,7 +1155,6 @@ TEST(OnnxLightBackendKernels, GemmBenchmarkCorpusIsLazyAndCoversPriorityShapes) 
               "test_cpu_gemm_square_2048_float16_transA_0_transB_0_bias_none_benchmark");
     EXPECT_NE(test_case.name,
               "test_cpu_gemm_square_4096_float16_transA_0_transB_0_bias_none_benchmark");
-    EXPECT_TRUE(test_case.is_lazy());
     EXPECT_FALSE(test_case.materialized());
     EXPECT_TRUE(test_case.name.ends_with("_benchmark"));
     if (test_case.name.find("tiny_dynamic_float32") != std::string::npos) {
@@ -1250,7 +1264,6 @@ TEST(OnnxLightBackendKernels, GemmBigBenchmarkCorpusCovers8192And16384OnEveryAxi
       continue;
     }
     ++big_cases;
-    EXPECT_TRUE(test_case.is_lazy());
     EXPECT_FALSE(test_case.materialized());
     has_large_m |= test_case.name.find("_m8192_n128_k128_") != std::string::npos;
     has_large_n |= test_case.name.find("_m128_n8192_k128_") != std::string::npos;
@@ -1291,12 +1304,13 @@ TEST(OnnxLightBackendKernels, BenchmarksOmitExpectedOutputsByDefault) {
 
 TEST(OnnxLightBackendKernels, BenchmarksGenerateExpectedOutputsWhenRequested) {
   onnx_light_cpu::backend_test::RegisterCpuKernelBackendTestCases();
-  const std::vector<TestCase> cases =
+  std::vector<TestCase> cases =
       CollectTestCases("Not", /*include_big=*/false, core::backend_test::TestMode::BENCHMARK,
                        /*generate_benchmark_expected_outputs=*/true);
   ASSERT_FALSE(cases.empty());
-  for (const TestCase &test_case : cases) {
+  for (TestCase &test_case : cases) {
     if (test_case.name.rfind("test_cpu_", 0) == 0) {
+      TestCaseUnloadGuard unload_guard(test_case);
       ASSERT_EQ(test_case.data_sets().size(), 1u) << test_case.name;
       EXPECT_TRUE(test_case.data_sets()[0].expected_outputs_generated) << test_case.name;
       EXPECT_FALSE(test_case.data_sets()[0].outputs.empty()) << test_case.name;
