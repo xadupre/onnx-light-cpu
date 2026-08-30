@@ -16,13 +16,12 @@ performance work.
 Current status
 --------------
 
-The original roadmap did not validate the primary end-to-end configuration.
-``tools/benchmark_gemm_parity.py`` defaulted to one thread and passed the same
-explicit count to both runtimes. Those controlled measurements remain useful
-diagnostics, but they did not test the autonomous execution policies used by
-the published dashboard. The larger corpus revealed that float32 is close to
-ONNX Runtime on one thread but scales substantially less on representative
-multi-core shapes.
+The primary end-to-end configuration uses one thread by default and passes
+that same explicit count to both runtimes. This makes its reported median and
+95th-percentile latency directly comparable; controlled multi-thread runs are
+available through ``--threads``. The larger corpus revealed that float32 is
+close to ONNX Runtime on one thread but scales substantially less on
+representative multi-core shapes.
 
 .. list-table::
    :header-rows: 1
@@ -161,13 +160,13 @@ must both be retained.
 
 * Use identical tensors, transposition flags, and correctness tolerances for
   MLAS and ``onnx-light-cpu``.
-* The primary end-to-end parity run leaves thread selection and affinity to
-  each runtime. Record resolved information only when the runtime exposes it;
-  do not infer an ONNX Runtime thread count.
+* The primary end-to-end parity run uses the same explicit thread count and
+  process affinity for both runtimes. Record the resolved onnx-light policy
+  and the requested ONNX Runtime count.
 * Explicit 1-, 2-, 4-, physical-core, and logical-core runs are controlled
   scaling diagnostics, not substitutes for the default-policy parity gate.
-* Isolate backend session lifetimes so an idle thread pool cannot perturb the
-  other runtime. Warm up every candidate, alternate backend order between
+* Construct independent backend sessions for each case. Warm up every
+  candidate, then alternate backend execution order between
   cases, and report median and dispersion rather than the best observation.
 * Run on an otherwise idle, pinned machine with a fixed power policy. Record
   CPU model, cache sizes, ISA features, compiler, and build flags.

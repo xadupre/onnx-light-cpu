@@ -12,7 +12,7 @@ from tools.benchmark_gemm_parity import (
 
 
 def test_default_thread_policy_is_not_overridden():
-    assert parse_args([]).threads is None
+    assert parse_args([]).threads == 1
     assert parse_args(["--threads", "4"]).threads == 4
 
 
@@ -58,6 +58,8 @@ def test_comparison_table_reports_both_engines_side_by_side():
                 "k": 1024,
                 "cpu_median_seconds": 2 * 1024**3 / 1e9 / 100.0,
                 "ort_median_seconds": 2 * 1024**3 / 1e9 / 200.0,
+                "cpu_p95_seconds": 2 * 1024**3 / 1e9 / 90.0,
+                "ort_p95_seconds": 2 * 1024**3 / 1e9 / 180.0,
                 "speedup": 0.5,
             }
         ]
@@ -66,6 +68,8 @@ def test_comparison_table_reports_both_engines_side_by_side():
     lines = table.splitlines()
     assert "onnx-light-cpu (GFLOP/s)" in lines[0]
     assert "onnxruntime (GFLOP/s)" in lines[0]
+    assert "onnx-light-cpu p95 (us)" in lines[0]
+    assert "onnxruntime p95 (us)" in lines[0]
     data = lines[2]
     assert "square_1024" in data
     assert "100.00" in data
