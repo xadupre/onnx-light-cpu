@@ -6,14 +6,7 @@
 
 from __future__ import annotations
 
-from typing import NamedTuple
-
-import ml_dtypes
-import numpy as np
-
-from onnx_light.onnx import TensorProto
-from onnx_light.onnx.backend import TestMode, collect_test_cases
-from onnx_light.onnx.reference import ReferenceEvaluator
+from typing import Any, NamedTuple
 
 from ._register import (
     MicrosoftKernelImplementation,
@@ -42,29 +35,12 @@ class BackendCorrectnessReport(NamedTuple):
     failed: tuple[BackendCaseResult, ...]
 
 
-_TENSOR_DTYPES = {
-    int(TensorProto.FLOAT): np.float32,
-    int(TensorProto.DOUBLE): np.float64,
-    int(TensorProto.INT8): np.int8,
-    int(TensorProto.INT16): np.int16,
-    int(TensorProto.INT32): np.int32,
-    int(TensorProto.INT64): np.int64,
-    int(TensorProto.UINT8): np.uint8,
-    int(TensorProto.UINT16): np.uint16,
-    int(TensorProto.UINT32): np.uint32,
-    int(TensorProto.UINT64): np.uint64,
-    int(TensorProto.BOOL): np.bool_,
-    int(TensorProto.FLOAT16): np.float16,
-    int(TensorProto.BFLOAT16): ml_dtypes.bfloat16,
-    int(TensorProto.COMPLEX64): np.complex64,
-    int(TensorProto.COMPLEX128): np.complex128,
-}
+def _to_numpy(tensor: Any, tensor_proto: Any, tensor_dtypes: dict[int, Any]):
+    import numpy as np
 
-
-def _to_numpy(tensor):
-    if int(tensor.data_type) == int(TensorProto.STRING):
+    if int(tensor.data_type) == int(tensor_proto.STRING):
         return np.asarray(tensor.string_data()).reshape(tuple(int(d) for d in tensor.shape))
-    return np.frombuffer(tensor.raw_data(), dtype=_TENSOR_DTYPES[int(tensor.data_type)]).reshape(
+    return np.frombuffer(tensor.raw_data(), dtype=tensor_dtypes[int(tensor.data_type)]).reshape(
         tuple(int(d) for d in tensor.shape)
     )
 
@@ -76,7 +52,7 @@ def _model_opset(model, domain):
     return None
 
 
-def _case_is_applicable(case, kernel):
+def _case_is_applicable(case: Any, kernel: Any, tensor_proto: Any):
     matching_nodes = [
         node
         for node in case.model.graph.node
@@ -92,7 +68,7 @@ def _case_is_applicable(case, kernel):
     if kernel.until_version is not None and opset > kernel.until_version:
         return False, f"opset {opset} is above supported version {kernel.until_version}"
     input_types = {
-        TensorProto.DataType.Name(value.type.tensor_type.elem_type)
+        tensor_proto.DataType.Name(value.type.tensor_type.elem_type)
         for value in case.model.graph.input
         if value.type.HasField("tensor_type")
     }
@@ -102,6 +78,8 @@ def _case_is_applicable(case, kernel):
 
 
 def _assert_outputs(actual, expected, rtol, atol):
+    import numpy as np
+
     if len(actual) != len(expected):
         raise AssertionError(
             f"output count mismatch: got {len(actual)}, expected {len(expected)}"
@@ -131,6 +109,30 @@ def run_backend_correctness_tests(
     The report records unsupported cases as skips and execution or comparison errors as
     failures. A kernel without an applicable correctness case is reported as a failure.
     """
+    import ml_dtypes
+    import numpy as np
+
+    from onnx_light.onnx import TensorProto
+    from onnx_light.onnx.backend import TestMode, collect_test_cases
+    from onnx_light.onnx.reference import ReferenceEvaluator
+
+    tensor_dtypes = {
+        int(TensorProto.FLOAT): np.float32,
+        int(TensorProto.DOUBLE): np.float64,
+        int(TensorProto.INT8): np.int8,
+        int(TensorProto.INT16): np.int16,
+        int(TensorProto.INT32): np.int32,
+        int(TensorProto.INT64): np.int64,
+        int(TensorProto.UINT8): np.uint8,
+        int(TensorProto.UINT16): np.uint16,
+        int(TensorProto.UINT32): np.uint32,
+        int(TensorProto.UINT64): np.uint64,
+        int(TensorProto.BOOL): np.bool_,
+        int(TensorProto.FLOAT16): np.float16,
+        int(TensorProto.BFLOAT16): ml_dtypes.bfloat16,
+        int(TensorProto.COMPLEX64): np.complex64,
+        int(TensorProto.COMPLEX128): np.complex128,
+    }
     register_backend_test_cases()
     register_kernels(microsoft_implementation=microsoft_implementation)
     skipped = []
@@ -143,7 +145,7 @@ def run_backend_correctness_tests(
             key = (kernel.domain, kernel.op_type, case.name)
             if key in seen_cases:
                 continue
-            applicable, reason = _case_is_applicable(case, kernel)
+            applicable, reason = _case_is_applicable(case, kernel, TensorProto)
             if not applicable:
                 skipped.append(BackendCaseResult(kernel.op_type, case.name, reason))
                 continue
@@ -155,14 +157,17 @@ def run_backend_correctness_tests(
                     if not data_set.expected_outputs_generated:
                         raise AssertionError("TEST case omitted expected outputs")
                     feeds = {
-                        name: _to_numpy(tensor)
+                        name: _to_numpy(tensor, TensorProto, tensor_dtypes)
                         for name, tensor in zip(input_names, data_set.inputs, strict=True)
                     }
                     clear_used_kernel_names()
                     actual = session.run(None, feeds)
                     _assert_outputs(
                         actual,
-                        [_to_numpy(tensor) for tensor in data_set.outputs],
+                        [
+                            _to_numpy(tensor, TensorProto, tensor_dtypes)
+                            for tensor in data_set.outputs
+                        ],
                         case.rtol,
                         case.atol,
                     )
