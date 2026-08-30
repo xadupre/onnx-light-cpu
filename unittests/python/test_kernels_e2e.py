@@ -508,7 +508,11 @@ class TestBackendCases(ExtTestCase):
                                 ml_dtypes.bfloat16,
                             }:
                                 negative_zero = np.signbit(feeds["X"]) & (feeds["X"] == 0)
-                                assert not np.any(np.signbit(actual[negative_zero]))
+                                assert not np.any(
+                                    np.signbit(
+                                        np.asarray(actual).reshape(-1)[negative_zero.reshape(-1)]
+                                    )
+                                )
 
         for op_type in ("Abs", "Exp", "Log"):
             with self.subTest(op_type=op_type, execution="parallel"):
