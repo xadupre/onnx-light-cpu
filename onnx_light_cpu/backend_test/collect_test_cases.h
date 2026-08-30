@@ -26,10 +26,10 @@
 // correctness (``TestMode::TEST``) and benchmark (``TestMode::BENCHMARK``)
 // cases.
 //
-// It does **not** run or check anything itself: the cases are executed and
-// validated by the unit tests, which register them, register the kernels and
-// then drive them through onnx-light's regular API (``CollectTestCases`` + the
-// runtime in C++, ``collect_test_cases`` + ``ReferenceEvaluator`` in Python).
+// The reusable ``backend_correctness_runner.h`` API registers the kernels and
+// drives applicable correctness cases through onnx-light's regular C++ runtime.
+// Python callers can use ``onnx_light_cpu.run_backend_correctness_tests`` for
+// the corresponding ``collect_test_cases`` + ``ReferenceEvaluator`` path.
 
 #include "onnx_core/backend_test/test_case.h"
 

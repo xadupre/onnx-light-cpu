@@ -25,6 +25,7 @@
 // exercise the accelerated kernels end to end, exactly like a model run through
 // onnx-light itself.
 
+#include "onnx_light_cpu/backend_test/backend_correctness_runner.h"
 #include "onnx_light_cpu/backend_test/collect_test_cases.h"
 #include "onnx_light_cpu/impl/math/binary/binary_manifest.h"
 #include "onnx_light_cpu/kernels/kernel_usage.h"
@@ -322,6 +323,13 @@ TEST(OnnxLightBackendKernels, AbsRunsThroughRuntime) {
   const std::vector<std::string> failures =
       RunCpuBackendCases("Abs", core::backend_test::TestMode::TEST);
   EXPECT_TRUE(failures.empty()) << Describe(failures);
+}
+
+TEST(OnnxLightBackendKernels, AllRegisteredKernelsPassRegularBackendCorrectnessCorpus) {
+  const onnx_light_cpu::backend_test::BackendCorrectnessReport report =
+      onnx_light_cpu::backend_test::RunBackendCorrectnessTests();
+  EXPECT_EQ(report.executed, report.passed) << report.Describe();
+  EXPECT_TRUE(report.failed.empty()) << report.Describe();
 }
 
 TEST(OnnxLightBackendKernels, ExpRunsThroughRuntime) {
