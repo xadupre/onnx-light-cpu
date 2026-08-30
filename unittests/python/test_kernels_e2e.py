@@ -515,7 +515,8 @@ class TestBackendCases(ExtTestCase):
                     providers=["CPUExecutionProvider"],
                 ).run(None, feeds)[0]
                 assert _REGISTERED_KERNELS[op_type] in used_kernel_names()
-                _assert_close(actual, expected, rtol=3e-5 if op_type != "Abs" else 0.0, atol=3e-5)
+                tolerance = _unary_ort_tolerance(op_type, np.float32)
+                _assert_close(actual, expected, rtol=tolerance, atol=tolerance)
 
     def test_registered_kernel_names(self):
         assert registered_kernel_names() == _REGISTERED_KERNELS
