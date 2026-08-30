@@ -121,6 +121,56 @@ void RegisterGroupQueryAttentionCase(
       "backend-test", bt_ns::TestCaseTag::AI_RT);
 }
 
+void RegisterExplicitPositionIdsCase(std::vector<TestCase> &registry,
+                                     const OpsetId &microsoft_opset) {
+  NodeProto node;
+  node.set_op_type("GroupQueryAttention");
+  node.set_domain(kMicrosoftDomain);
+  node.add_input("query");
+  node.add_input("key");
+  node.add_input("value");
+  node.add_input("");
+  node.add_input("");
+  node.add_input("seqlens_k");
+  node.add_input("total_sequence_length");
+  node.add_input("cos_cache");
+  node.add_input("sin_cache");
+  node.add_input("position_ids");
+  node.add_input("");
+  node.add_input("");
+  node.add_output("output");
+  node.add_output("present_key");
+  node.add_output("present_value");
+  AddIntAttribute(node, "num_heads", 1);
+  AddIntAttribute(node, "kv_num_heads", 1);
+  AddIntAttribute(node, "causal", 1);
+  AddIntAttribute(node, "do_rotary", 1);
+  AddIntAttribute(node, "rotary_interleaved", 0);
+
+  Expect(
+      registry, node, "test_cpu_group_query_attention_nonconsecutive_position_ids_float32",
+      {DefaultOpset(27), microsoft_opset},
+      []() -> IoData {
+        Tensor query = Tensor::FromFloat("", {1, 2, 2}, {1.0f, 0.0f, 1.0f, 0.0f});
+        Tensor key = Tensor::FromFloat("", {1, 2, 2}, {1.0f, 0.0f, 1.0f, 0.0f});
+        Tensor value = Tensor::FromFloat("", {1, 2, 2}, {1.0f, 2.0f, 1.0f, 2.0f});
+        Tensor seqlens_k = Tensor::FromInt32("", {1}, {1});
+        Tensor total_sequence_length = Tensor::FromInt32("", {}, {2});
+        Tensor cos_cache = Tensor::FromFloat("", {3, 1}, {1.0f, 0.0f, -1.0f});
+        Tensor sin_cache = Tensor::FromFloat("", {3, 1}, {0.0f, 1.0f, 0.0f});
+        Tensor position_ids = Tensor::FromInt64("", {1, 2}, {2, 0});
+
+        Tensor output = Tensor::FromFloat("", {1, 2, 2}, {1.0f, 2.0f, 1.0f, 2.0f});
+        Tensor present_key = Tensor::FromFloat("", {1, 1, 2, 2}, {-1.0f, 0.0f, 1.0f, 0.0f});
+        Tensor present_value = Tensor::FromFloat("", {1, 1, 2, 2}, {1.0f, 2.0f, 1.0f, 2.0f});
+        return IoData{{std::move(query), std::move(key), std::move(value), std::move(seqlens_k),
+                       std::move(total_sequence_length), std::move(cos_cache), std::move(sin_cache),
+                       std::move(position_ids)},
+                      {std::move(output), std::move(present_key), std::move(present_value)}};
+      },
+      "backend-test", bt_ns::TestCaseTag::AI_RT);
+}
+
 // The Qwen3-8B-int4 model's 36 GroupQueryAttention nodes all share this exact
 // contract: FLOAT activations, 32 query heads, 8 KV heads, head_size 128,
 // this explicit scale, softcap disabled, do_rotary=1 with rotary_interleaved=0
@@ -413,6 +463,7 @@ void RegisterCpuGroupQueryAttentionCases(std::vector<TestCase> &registry, TestMo
   RegisterGroupQueryAttentionCase(registry, microsoft_opset,
                                   "test_cpu_group_query_attention_mha_causal_softcap_bfloat16", 1,
                                   4, 4, 4, 8, DataType::BFLOAT16, 1, std::nullopt, 2.0f);
+  RegisterExplicitPositionIdsCase(registry, microsoft_opset);
   RegisterCachedRotaryCorrectnessCase(registry, microsoft_opset);
 }
 
