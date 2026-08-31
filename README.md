@@ -148,12 +148,19 @@ training produces `Y`, `running_mean`, and `running_var`.
 import numpy as np
 from onnx_light.onnx.reference import ReferenceEvaluator
 
-from onnx_light_cpu import MicrosoftKernelImplementation, register_kernels
+from onnx_light_cpu import (
+    MicrosoftKernelImplementation,
+    register_kernel_for_session,
+    register_kernel_global,
+    register_kernels_global,
+)
 
-register_kernels()  # installs the kernels into onnx-light's dispatch table
+register_kernels_global()  # installs every kernel process-wide
+register_kernel_global("", "Abs")  # installs one selected kernel process-wide
 # Explicit scalar correctness-oracle family for com.microsoft:
-register_kernels(microsoft_implementation=MicrosoftKernelImplementation.NAIVE)
+register_kernels_global(microsoft_implementation=MicrosoftKernelImplementation.NAIVE)
 sess = ReferenceEvaluator(model)  # any model containing an Abs node
+register_kernel_for_session(sess, "", "Abs")  # affects only sess
 (y,) = sess.run(None, {"x": np.array([-1.0, 2.0, -3.0], dtype=np.float32)})
 ```
 
@@ -161,10 +168,11 @@ sess = ReferenceEvaluator(model)  # any model containing an Abs node
 integration (`-DONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON`); it wraps the compiled
 `onnx_light_cpu.onnx_py._cpuregister.register_all_kernels()` binding.
 
-`register_kernels()` registers the kernels *process-wide*, so every
-`ReferenceEvaluator` created afterwards uses them. To override an operator for a
-single session only, use onnx-light's per-session
-`sess.register_custom_kernel("", "Abs", my_abs)` hook instead.
+Global registrations are owned by the process-wide dispatch table and are
+observed by sessions that resolve their nodes afterwards. Session registrations
+are owned by one evaluator and do not modify another evaluator or the global
+table. Repeating either operation replaces the same kernel by default; pass
+`replace=False` to retain an existing registration.
 
 Custom-domain graph construction and differentiation use the matching schema
 and gradient helpers:
@@ -197,9 +205,10 @@ families can also be registered directly, for example with
 ```cpp
 #include <onnx_light_cpu/kernels/register_kernels.h>
 
-onnx_light_cpu::RegisterAllKernels();  // Optimized com.microsoft kernels by default.
-onnx_light_cpu::RegisterAllKernels(
-    onnx_light_cpu::MicrosoftKernelImplementation::NAIVE);
+onnx_light_cpu::RegisterKernelGlobal("", "Abs");
+onnx_light_cpu::RegisterAllKernelsGlobal();
+onnx_light_cpu::RegisterKernelForSession(runtime_context, "", "Abs");
+onnx_light_cpu::RegisterAllKernelsForSession(runtime_context);
 ```
 
 The same registration is exposed to Python (in builds compiled with the

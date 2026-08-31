@@ -95,6 +95,59 @@ NB_MODULE(_cpuregister, m) {
       "Registers every onnx-light-cpu kernel class into onnx-light's shared "
       "KernelDispatchTable for the CPU device.");
 
+  m.def(
+      "register_kernel_global",
+      [](const std::string &domain, const std::string &op_type, bool replace,
+         onnx_light_cpu::MicrosoftKernelImplementation implementation) {
+        onnx_light_cpu::RegisterMicrosoftShapeAndMemoryFunctions();
+        onnx_light_cpu::RegisterCustomOperatorPatterns();
+        return onnx_light_cpu::RegisterKernelGlobal(domain, op_type, replace, implementation);
+      },
+      nb::arg("domain"), nb::arg("op_type"), nb::arg("replace") = true,
+      nb::arg("microsoft_implementation") =
+          onnx_light_cpu::MicrosoftKernelImplementation::OPTIMIZED,
+      "Registers one native onnx-light-cpu kernel in the process-wide dispatch table.");
+
+  m.def(
+      "register_all_kernels_global",
+      [](bool replace, onnx_light_cpu::MicrosoftKernelImplementation implementation) {
+        onnx_light_cpu::RegisterMicrosoftShapeAndMemoryFunctions();
+        onnx_light_cpu::RegisterCustomOperatorPatterns();
+        return onnx_light_cpu::RegisterAllKernelsGlobal(replace, implementation);
+      },
+      nb::arg("replace") = true,
+      nb::arg("microsoft_implementation") =
+          onnx_light_cpu::MicrosoftKernelImplementation::OPTIMIZED,
+      "Registers all native onnx-light-cpu kernels in the process-wide dispatch table.");
+
+  m.def(
+      "register_kernel_for_session",
+      [](ONNX_LIGHT_NAMESPACE::core::runtime::RuntimeContext &session, const std::string &domain,
+         const std::string &op_type, bool replace,
+         onnx_light_cpu::MicrosoftKernelImplementation implementation) {
+        onnx_light_cpu::RegisterMicrosoftShapeAndMemoryFunctions();
+        onnx_light_cpu::RegisterCustomOperatorPatterns();
+        return onnx_light_cpu::RegisterKernelForSession(session, domain, op_type, replace,
+                                                        implementation);
+      },
+      nb::arg("session"), nb::arg("domain"), nb::arg("op_type"), nb::arg("replace") = true,
+      nb::arg("microsoft_implementation") =
+          onnx_light_cpu::MicrosoftKernelImplementation::OPTIMIZED,
+      "Registers one native onnx-light-cpu kernel on one RuntimeContext.");
+
+  m.def(
+      "register_all_kernels_for_session",
+      [](ONNX_LIGHT_NAMESPACE::core::runtime::RuntimeContext &session, bool replace,
+         onnx_light_cpu::MicrosoftKernelImplementation implementation) {
+        onnx_light_cpu::RegisterMicrosoftShapeAndMemoryFunctions();
+        onnx_light_cpu::RegisterCustomOperatorPatterns();
+        return onnx_light_cpu::RegisterAllKernelsForSession(session, replace, implementation);
+      },
+      nb::arg("session"), nb::arg("replace") = true,
+      nb::arg("microsoft_implementation") =
+          onnx_light_cpu::MicrosoftKernelImplementation::OPTIMIZED,
+      "Registers all native onnx-light-cpu kernels on one RuntimeContext.");
+
   m.def("microsoft_op_schemas", &onnx_light_cpu::GetMicrosoftOpSchemasWithHistory,
         nb::arg("op_type") = std::string(), nb::arg("init_doc") = true,
         "Returns the LightOpSchema history provided for com.microsoft operators.");

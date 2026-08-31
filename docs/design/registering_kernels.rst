@@ -25,12 +25,17 @@ From Python:
     import numpy as np
     from onnx_light.onnx.reference import ReferenceEvaluator
 
-    from onnx_light_cpu import MicrosoftKernelImplementation, register_kernels
+    from onnx_light_cpu import (
+        MicrosoftKernelImplementation,
+        register_kernel_for_session,
+        register_kernel_global,
+        register_kernels_global,
+    )
 
     # Install the SIMD kernels into onnx-light's dispatch table. Import
     # onnx-light *before* calling this so its built-in kernels are already
     # registered; the onnx-light-cpu kernels then override them.
-    register_kernels()
+    register_kernels_global()
     sess = ReferenceEvaluator(model)  # any model containing an Abs node
     (y,) = sess.run(None, {"x": np.array([-1.0, 2.0, -3.0], dtype=np.float32)})
 
@@ -38,17 +43,23 @@ From Python:
 integration (``-DONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON``); it wraps the compiled
 internal registration binding.
 
-``register_kernels()`` installs the kernels **process-wide**: it populates
+``register_kernels_global()`` installs the kernels **process-wide**: it populates
 onnx-light's shared dispatch table, so every ``ReferenceEvaluator`` created in
-the process afterwards uses them. To override an operator for a single session
-only — without touching the shared table — use onnx-light's per-session
-:py:meth:`~onnx_light.onnx.reference.ReferenceEvaluator.register_custom_kernel`
-hook instead:
+the process afterwards uses them. Existing sessions that have already resolved
+their nodes retain the cached factories. Register only one global kernel with
+``register_kernel_global(domain, op_type)``.
+
+To install the same native compiled implementation for a single session only,
+without touching the shared table, use ``register_kernel_for_session``:
 
 .. code-block:: python
 
     sess = ReferenceEvaluator(model)
-    sess.register_custom_kernel("", "Abs", my_abs)  # this session only
+    register_kernel_for_session(sess, "", "Abs")  # this session only
+
+The evaluator's runtime context owns that registration and releases it with the
+evaluator. Other evaluators are unchanged. ``register_kernels_for_session``
+provides the equivalent all-kernels operation.
 
 The default installs the optimized ``com.microsoft`` family. Tests and
 diagnostic callers can explicitly install the complete scalar reference
@@ -56,7 +67,7 @@ family instead:
 
 .. code-block:: python
 
-    register_kernels(
+    register_kernels_global(
         microsoft_implementation=MicrosoftKernelImplementation.NAIVE
     )
 
@@ -66,9 +77,19 @@ From C++:
 
     #include <onnx_light_cpu/kernels/register_kernels.h>
 
-    onnx_light_cpu::RegisterAllKernels();  // optimized by default
-    onnx_light_cpu::RegisterAllKernels(
-        onnx_light_cpu::MicrosoftKernelImplementation::NAIVE);
+    onnx_light_cpu::RegisterKernelGlobal("", "Abs");
+    onnx_light_cpu::RegisterAllKernelsGlobal();
+
+    onnx_light::core::runtime::RuntimeContext session(kernel_context);
+    onnx_light_cpu::RegisterKernelForSession(session, "", "Abs");
+    onnx_light_cpu::RegisterAllKernelsForSession(session);
+
+Global registration replaces an existing entry by default and is owned by the
+process-wide dispatch table. Session registration replaces an entry on that
+``RuntimeContext`` by default and must occur before a runtime session resolves
+its nodes. Pass ``replace=false`` to either scope to keep an existing entry;
+the function then reports no installation. Repeated calls are therefore
+idempotent in state, whether they replace the same implementation or retain it.
 
 ``RegisterMicrosoftKernels`` installs exactly one complete implementation
 family for the ``com.microsoft`` domain. Mixing families in one registration
