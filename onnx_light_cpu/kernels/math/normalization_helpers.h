@@ -205,8 +205,19 @@ template <typename T> struct Moments {
 template <typename Acc>
 Acc RawMomentsCancellationFloor(Acc second_moment, std::size_t count) noexcept {
   const std::size_t accumulation_steps = count / 4 + (count % 4 != 0);
-  return second_moment * std::numeric_limits<Acc>::epsilon() *
-         static_cast<Acc>(accumulation_steps) * static_cast<Acc>(8);
+  const Acc accumulation_epsilon = std::numeric_limits<Acc>::epsilon() *
+                                   static_cast<Acc>(accumulation_steps) * static_cast<Acc>(8);
+  // Beyond the running-sum round-off above, the final subtraction of two
+  // nearly-equal values (second_moment and mean*mean) sheds roughly half the
+  // mantissa's significant digits once the true variance is only a small
+  // fraction of second_moment, independent of how many elements were
+  // reduced. Guard against that with the conventional sqrt(epsilon)
+  // cancellation threshold so short, ill-conditioned reductions (small
+  // variance relative to a large mean) still fall back to the stable
+  // centered formula.
+  const Acc subtraction_epsilon =
+      std::sqrt(std::numeric_limits<Acc>::epsilon()) * static_cast<Acc>(4);
+  return second_moment * (accumulation_epsilon + subtraction_epsilon);
 }
 
 template <rt_ns::DataType Type>
