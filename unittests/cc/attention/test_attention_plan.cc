@@ -293,7 +293,8 @@ TEST(ComputeAttentionFloat32, Rank3AdditiveMaskMatchesReference) {
   AttentionDescriptor descriptor;
   descriptor.q_num_heads = 2;
   descriptor.kv_num_heads = 2;
-  constexpr std::size_t batch = 2, heads = 2, q_len = 3, kv_len = 4, head_dim = 4, v_head_dim = 4;
+  constexpr std::size_t batch = 2, heads = 2, q_len = 17, kv_len = 19, head_dim = 9,
+                        v_head_dim = 11;
   const std::int64_t q_shape[] = {batch, q_len, heads * head_dim};
   const std::int64_t k_shape[] = {batch, kv_len, heads * head_dim};
   const std::int64_t v_shape[] = {batch, kv_len, heads * v_head_dim};
@@ -356,7 +357,8 @@ TEST(ComputeAttentionFloat32, Rank3AdditiveMaskMatchesReference) {
 
 TEST(ComputeAttentionFloat32, FullyMaskedRowProducesZeroOutput) {
   AttentionDescriptor descriptor;
-  constexpr std::size_t batch = 1, heads = 1, q_len = 2, kv_len = 3, head_dim = 4, v_head_dim = 4;
+  constexpr std::size_t batch = 1, heads = 1, q_len = 16, kv_len = 17, head_dim = 9,
+                        v_head_dim = 11;
   const std::int64_t q_shape[] = {batch, heads, q_len, head_dim};
   const std::int64_t k_shape[] = {batch, heads, kv_len, head_dim};
   const std::int64_t v_shape[] = {batch, heads, kv_len, v_head_dim};
@@ -397,7 +399,10 @@ TEST(ComputeAttentionFloat32, AdditiveMaskFilterValueProducesZeroForEveryExecuti
     const auto q = RandomTensor(batch * heads * q_len * head_dim, 44);
     const auto k = RandomTensor(batch * heads * kv_len * head_dim, 45);
     const auto v = RandomTensor(batch * heads * kv_len * head_dim, 46);
-    const std::vector<float> mask(q_len * kv_len, std::numeric_limits<float>::lowest());
+    std::vector<float> mask(q_len * kv_len, std::numeric_limits<float>::lowest());
+    for (std::size_t index = 1; index < mask.size(); index += 2) {
+      mask[index] = -std::numeric_limits<float>::infinity();
+    }
     std::vector<float> streaming_y(q_len * head_dim, std::numeric_limits<float>::quiet_NaN());
     std::vector<float> materialized_y = streaming_y;
 
