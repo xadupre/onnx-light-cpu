@@ -24,7 +24,11 @@ from onnx_light_cpu import (
     operator_support,
     has_backend_test_cases,
     register_operator_support,
+    register_kernel_for_session,
+    register_kernel_global,
     register_kernels,
+    register_kernels_for_session,
+    register_kernels_global,
     registered_kernel_names,
     registered_kernels,
 )
@@ -58,12 +62,9 @@ class TestRegisterKernels(ExtTestCase):
             register_kernels()
             m.assert_called_once_with(MicrosoftKernelImplementation.OPTIMIZED)
 
-    def test_returns_sess_unchanged(self):
-        sentinel = object()
-        with mock.patch.object(reg, "_register_all_kernels") as m:
-            result = register_kernels(sentinel)
-            m.assert_called_once_with(MicrosoftKernelImplementation.OPTIMIZED)
-            assert result is sentinel
+    def test_rejects_obsolete_session_argument(self):
+        with self.assertRaises(TypeError):
+            register_kernels(object())
 
     def test_selects_naive_microsoft_kernels(self):
         with mock.patch.object(reg, "_register_all_kernels") as m:
@@ -73,6 +74,62 @@ class TestRegisterKernels(ExtTestCase):
     def test_returns_none_without_sess(self):
         with mock.patch.object(reg, "_register_all_kernels"):
             assert register_kernels() is None
+
+    def test_registers_one_kernel_global(self):
+        binding = mock.Mock(return_value=True)
+        implementation = object()
+        with (
+            mock.patch.object(reg, "_registration_binding", return_value=binding),
+            mock.patch.object(reg, "_cpp_microsoft_implementation", return_value=implementation),
+        ):
+            assert register_kernel_global("", "Abs", replace=False)
+        binding.assert_called_once_with("", "Abs", False, implementation)
+
+    def test_registers_all_kernels_global(self):
+        binding = mock.Mock(return_value=17)
+        implementation = object()
+        with (
+            mock.patch.object(reg, "_registration_binding", return_value=binding),
+            mock.patch.object(reg, "_cpp_microsoft_implementation", return_value=implementation),
+        ):
+            assert register_kernels_global() == 17
+        binding.assert_called_once_with(True, implementation)
+
+    def test_registers_one_kernel_for_session_and_resets_runner(self):
+        binding = mock.Mock(return_value=True)
+        implementation = object()
+        sess = mock.Mock()
+        with (
+            mock.patch.object(reg, "_registration_binding", return_value=binding),
+            mock.patch.object(reg, "_cpp_microsoft_implementation", return_value=implementation),
+        ):
+            assert register_kernel_for_session(sess, "", "Abs")
+        binding.assert_called_once_with(sess._ctx, "", "Abs", True, implementation)
+        sess._runner.reset.assert_called_once_with()
+
+    def test_kept_session_kernel_does_not_reset_runner(self):
+        binding = mock.Mock(return_value=False)
+        sess = mock.Mock()
+        with (
+            mock.patch.object(reg, "_registration_binding", return_value=binding),
+            mock.patch.object(reg, "_cpp_microsoft_implementation", return_value=object()),
+        ):
+            assert not register_kernel_for_session(sess, "", "Abs", replace=False)
+        sess._runner.reset.assert_not_called()
+
+    def test_registers_all_kernels_for_session(self):
+        binding = mock.Mock(return_value=17)
+        sess = mock.Mock()
+        with (
+            mock.patch.object(reg, "_registration_binding", return_value=binding),
+            mock.patch.object(reg, "_cpp_microsoft_implementation", return_value=object()),
+        ):
+            assert register_kernels_for_session(sess) == 17
+        sess._runner.reset.assert_called_once_with()
+
+    def test_session_registration_requires_reference_evaluator(self):
+        with self.assertRaisesRegex(TypeError, "ReferenceEvaluator"):
+            register_kernel_for_session(object(), "", "Abs")
 
 
 class TestBackendTestRegistration(ExtTestCase):

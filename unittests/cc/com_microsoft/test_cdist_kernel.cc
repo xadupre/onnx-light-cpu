@@ -8,6 +8,7 @@
 
 #include <cmath>
 #include <cstddef>
+#include <limits>
 #include <vector>
 
 namespace {
@@ -116,6 +117,45 @@ TEST(CDist, ZeroRowsOrColumnsProduceNoWrites) {
   std::vector<float> sentinel(1, -42.0f);
   CDistFloat32(nullptr, nullptr, sentinel.data(), 0, 0, 3, CDistMetric::kSqEuclidean);
   EXPECT_EQ(sentinel[0], -42.0f);
+}
+
+TEST(CDist, ZeroFeatureDimensionProducesPositiveZero) {
+  std::vector<double> output(6, -1.0);
+  CDistFloat64(nullptr, nullptr, output.data(), 2, 3, 0, CDistMetric::kEuclidean);
+  for (double value : output) {
+    EXPECT_EQ(value, 0.0);
+    EXPECT_FALSE(std::signbit(value));
+  }
+}
+
+TEST(CDist, NearIdenticalLargePointsRemainFiniteAndNonNegative) {
+  constexpr std::size_t n = 65;
+  std::vector<float> a(n, 1024.0f);
+  std::vector<float> b = a;
+  b.back() = std::nextafter(b.back(), std::numeric_limits<float>::infinity());
+  float squared = -1.0f;
+  float euclidean = -1.0f;
+  CDistFloat32(a.data(), b.data(), &squared, 1, 1, n, CDistMetric::kSqEuclidean);
+  CDistFloat32(a.data(), b.data(), &euclidean, 1, 1, n, CDistMetric::kEuclidean);
+  EXPECT_TRUE(std::isfinite(squared));
+  EXPECT_GE(squared, 0.0f);
+  EXPECT_FLOAT_EQ(euclidean, std::sqrt(squared));
+}
+
+TEST(CDist, NonFiniteAndSignedZeroBehavior) {
+  const float infinity = std::numeric_limits<float>::infinity();
+  const std::vector<float> a = {infinity, 0.0f, -0.0f};
+  const std::vector<float> b = {infinity, 0.0f, 1.0f, 0.0f, -0.0f, 0.0f};
+  std::vector<float> output(2);
+  CDistFloat32(a.data(), b.data(), output.data(), 1, 2, 3, CDistMetric::kSqEuclidean);
+  EXPECT_TRUE(std::isnan(output[0]));
+  EXPECT_TRUE(std::isinf(output[1]));
+
+  const std::vector<float> zeros = {0.0f, -0.0f};
+  float zero_distance = -1.0f;
+  CDistFloat32(zeros.data(), zeros.data(), &zero_distance, 1, 1, 2, CDistMetric::kSqEuclidean);
+  EXPECT_EQ(zero_distance, 0.0f);
+  EXPECT_FALSE(std::signbit(zero_distance));
 }
 
 TEST(CDist, TunedDispatchWithParallelThresholdMatchesUntuned) {

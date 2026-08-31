@@ -57,6 +57,11 @@ struct KernelRegistration {
   std::optional<std::int64_t> until_version;
 };
 
+struct KernelFactoryRegistration {
+  KernelRegistration info;
+  ONNX_LIGHT_NAMESPACE::core::runtime::NodeKernelFn factory;
+};
+
 /// RAII scope bounding one kernel-registration pass.
 ///
 /// :cpp:func:`RegisterAllKernels` opens one of these around its body so every
@@ -77,6 +82,7 @@ public:
   /// this object records its metadata into `*inventory` instead of
   /// installing a kernel.
   explicit KernelRegistrationScope(std::vector<KernelRegistration> *inventory = nullptr);
+  explicit KernelRegistrationScope(std::vector<KernelFactoryRegistration> *factories);
   ~KernelRegistrationScope();
 
   KernelRegistrationScope(const KernelRegistrationScope &) = delete;
@@ -94,6 +100,7 @@ private:
   std::set<MetadataKey> seen_;
   std::set<DispatchKey> installed_;
   std::vector<KernelRegistration> *inventory_ = nullptr;
+  std::vector<KernelFactoryRegistration> *factories_ = nullptr;
   bool owns_ = false;
 };
 
@@ -135,5 +142,8 @@ std::vector<KernelRegistration> CollectRegisteredKernels();
 /// family without mutating the dispatch table.
 std::vector<KernelRegistration>
 CollectRegisteredKernels(MicrosoftKernelImplementation implementation);
+
+std::vector<KernelFactoryRegistration>
+CollectKernelFactories(MicrosoftKernelImplementation implementation);
 
 } // namespace onnx_light_cpu

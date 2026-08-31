@@ -47,6 +47,17 @@ KernelRegistrationScope::KernelRegistrationScope(std::vector<KernelRegistration>
   CurrentScope() = this;
 }
 
+KernelRegistrationScope::KernelRegistrationScope(
+    std::vector<KernelFactoryRegistration> *factories) {
+  if (CurrentScope() != nullptr) {
+    owns_ = false;
+    return;
+  }
+  owns_ = true;
+  factories_ = factories;
+  CurrentScope() = this;
+}
+
 KernelRegistrationScope::~KernelRegistrationScope() {
   if (owns_) {
     CurrentScope() = nullptr;
@@ -82,6 +93,10 @@ void RegisterKernel(KernelRegistration info, rt_ns::NodeKernelFn fn) {
     scope->inventory_->push_back(std::move(info));
     return;
   }
+  if (scope->factories_ != nullptr) {
+    scope->factories_->push_back({std::move(info), std::move(fn)});
+    return;
+  }
 
   if (scope->installed_.insert(dispatch_key).second) {
     rt_ns::RegisterKernelFn(info.domain, info.op_type, info.device, std::move(fn));
@@ -108,6 +123,16 @@ CollectRegisteredKernels(MicrosoftKernelImplementation implementation) {
                                                           b.until_version);
             });
   return inventory;
+}
+
+std::vector<KernelFactoryRegistration>
+CollectKernelFactories(MicrosoftKernelImplementation implementation) {
+  std::vector<KernelFactoryRegistration> factories;
+  {
+    KernelRegistrationScope scope(&factories);
+    RegisterAllKernels(implementation);
+  }
+  return factories;
 }
 
 } // namespace onnx_light_cpu

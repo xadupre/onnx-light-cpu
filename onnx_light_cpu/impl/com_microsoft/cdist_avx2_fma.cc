@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstddef>
 #include <immintrin.h>
+#include <type_traits>
 
 namespace onnx_light_cpu {
 namespace {
@@ -36,6 +37,29 @@ void CDistRows(const T *a, const T *b, T *c, std::size_t k, std::size_t n, CDist
     const T *a_row = a + row * n;
     T *c_row = c + row * k;
     std::size_t col = 0;
+    if constexpr (std::is_same_v<T, float>) {
+      for (; col + 8 <= k; col += 8) {
+        Vector sums[8] = {zero, zero, zero, zero, zero, zero, zero, zero};
+        std::size_t feature = 0;
+        for (; feature + Lanes <= n; feature += Lanes) {
+          const Vector a_values = load(a_row + feature);
+          for (std::size_t block_col = 0; block_col < 8; ++block_col) {
+            const Vector difference = subtract(a_values, load(b + (col + block_col) * n + feature));
+            sums[block_col] = multiply_add(difference, difference, sums[block_col]);
+          }
+        }
+        for (std::size_t block_col = 0; block_col < 8; ++block_col) {
+          T sum_squares = Reduce(sums[block_col]);
+          const T *b_row = b + (col + block_col) * n;
+          for (std::size_t tail = feature; tail < n; ++tail) {
+            const T difference = a_row[tail] - b_row[tail];
+            sum_squares += difference * difference;
+          }
+          c_row[col + block_col] =
+              metric == CDistMetric::kEuclidean ? std::sqrt(sum_squares) : sum_squares;
+        }
+      }
+    }
     for (; col + 4 <= k; col += 4) {
       Vector sums[4] = {zero, zero, zero, zero};
       std::size_t feature = 0;

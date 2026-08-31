@@ -28,6 +28,46 @@ Operator contract
     supports ``FLOAT16``, ``FLOAT``, ``DOUBLE``, and ``BFLOAT16`` while
     preserving the input shape and type.
 
+CDist latency parity
+--------------------
+
+``tools/benchmark_cdist_parity.py`` compares the optimized kernel directly
+with ONNX Runtime's CPU execution provider for both metrics and both supported
+types.  The matrix reproduces the ONNX Runtime FLOAT and DOUBLE vectors and
+includes empty rows, singleton and rectangular inputs, feature counts around
+SIMD boundaries, repeated and near-identical points, a large feature tail,
+representative model shapes, and sizes immediately around each type's
+parallel threshold.
+
+Both runtimes reuse the same inputs and receive the same thread count,
+affinity, warm-up, alternating sample order, output-allocation policy, and
+sequential execution mode.  Every JSON row retains raw samples, median, p90,
+interquartile range, candidate order, maximum numerical difference, and
+median/tail speed-up.  Run the benchmark on an idle pinned host, once at the
+base revision and once at the candidate revision:
+
+.. code-block:: bash
+
+   python tools/benchmark_cdist_parity.py --cpus 0 --threads 1 \
+       --profile-runs 100 --output cdist_parity_results.json --enforce
+
+Profiling calls are excluded from the timed samples.  ``--profile-runs`` adds
+the onnx-light-cpu Python/runtime call breakdown and ONNX Runtime's native
+per-node trace, allowing setup and dispatch overhead to be separated from node
+computation.  The report records the revision, build flags, package versions,
+affinity, allocator policy, and effective execution policy.
+
+ONNX Runtime expands squared distance as
+``-2 * A @ transpose(B) + sum(A**2) + sum(B**2)`` and applies ``abs`` before
+returning it or taking ``sqrt``.  The optimized onnx-light-cpu kernel
+deliberately retains direct squared-difference accumulation: it cannot produce
+a small negative distance and is more accurate for near-identical,
+large-magnitude points.  Ordinary cases use the command-line parity tolerance;
+only repeated and near-identical cases use a reported cancellation bound
+``8 * eps * N * scale**2`` (or its square root for ``euclidean``).  Non-finite
+values follow IEEE propagation, and the generic kernel rejects a zero feature
+dimension like ONNX Runtime while permitting empty row dimensions.
+
 BiasGelu latency parity
 -----------------------
 
