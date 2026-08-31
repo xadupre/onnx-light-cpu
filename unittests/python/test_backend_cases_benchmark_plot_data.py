@@ -129,10 +129,10 @@ class TestPrepareBackendCasesPlotData(ExtTestCase):
                 "test_cpu_abs_float32_benchmark",
                 light_time=1.0,
                 ort_time=2.0,
-                light_p10=0.8,
-                ort_p10=1.2,
+                light_p10=0.5,
+                ort_p10=0.75,
                 light_p90=1.5,
-                ort_p90=3.6,
+                ort_p90=3.75,
             ),
             _row(
                 "Attention",
@@ -148,9 +148,9 @@ class TestPrepareBackendCasesPlotData(ExtTestCase):
         self.assertEqual(len(plot_data.plotted_rows), 2)
         self.assertEqual(plot_data.labels, ["abs_float32", "gemm_float64"])
         self.assertEqual(list(plot_data.speedups), [2.0, 0.5])
-        self.assertAlmostEqual(plot_data.p10_speedups[0], 1.5)
+        self.assertEqual(plot_data.p10_speedups[0], 1.5)
         self.assertEqual(plot_data.p10_speedups[1], 0.5)
-        self.assertAlmostEqual(plot_data.p90_speedups[0], 2.4)
+        self.assertEqual(plot_data.p90_speedups[0], 2.5)
         self.assertEqual(plot_data.p90_speedups[1], 0.5)
         self.assertEqual(sorted(plot_data.colors_by_op_type), ["Abs", "Gemm"])
         # ... but it is not lost: callers keep the full ``rows`` list (with its
