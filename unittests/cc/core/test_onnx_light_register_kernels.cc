@@ -158,19 +158,12 @@ TEST(OnnxLightRegisterKernels, SessionRegistrationIsIsolatedAndReplaceable) {
   EXPECT_EQ(rt_ns::KernelDispatchTable().size(), global_size);
   EXPECT_EQ(rt_ns::KernelDispatchTable().at("ai.onnx:Abs")(node, other), nullptr);
 
-  ONNX_LIGHT_NAMESPACE::GraphProto graph;
-  graph.set_name("session_local_abs");
-  graph.add_input()->set_name("x");
-  graph.ref_node().push_back(node);
-  graph.add_output()->set_name("y");
+  selected.Set("x", rt_ns::Tensor::FromFloat("x", {2}, {-4.0f, 5.0f}));
   onnx_light_cpu::ClearUsedKernelNames();
-  rt_ns::SubgraphSession session(selected, graph);
-  const rt_ns::Tensors outputs =
-      session.Run({{"x", rt_ns::Tensor::FromFloat("x", {2}, {-4.0f, 5.0f})}}, selected);
+  rt_ns::RunNode(node, selected);
   EXPECT_EQ(onnx_light_cpu::UsedKernelNames(), (std::vector<std::string>{"onnx_light_cpu::Abs"}));
-  ASSERT_EQ(outputs.size(), 1u);
-  EXPECT_FLOAT_EQ(outputs[0].AsFloat()[0], 4.0f);
-  EXPECT_FLOAT_EQ(outputs[0].AsFloat()[1], 5.0f);
+  EXPECT_FLOAT_EQ(selected.Get("y").AsFloat()[0], 4.0f);
+  EXPECT_FLOAT_EQ(selected.Get("y").AsFloat()[1], 5.0f);
 
   EXPECT_TRUE(onnx_light_cpu::RegisterKernelGlobal("", "Abs"));
 }
