@@ -516,13 +516,19 @@ constexpr std::size_t kStreamingKvBlock = 128;
 // P @ V accumulation): only used to size the runtime-owned outer schedule
 // (`ExecuteRanges`) below; it never changes the numeric result.
 std::size_t StreamingParticipantCount(const AttentionPlan &plan, std::size_t total_rows) {
-  constexpr std::size_t kTargetFmasPerParticipant = 2'000'000;
+  constexpr std::size_t kDefaultTargetFmasPerParticipant = 2'000'000;
+  constexpr std::size_t kShortQueryTargetFmasPerParticipant = 250'000;
   constexpr std::size_t kMaximumParticipants = 16;
+  const bool is_short_stateless_query = plan.past_length == 0 && plan.q_length > 1 &&
+                                        plan.q_length <= 16 && plan.total_kv_length <= 256;
+  const std::size_t target_fmas_per_participant = is_short_stateless_query
+                                                      ? kShortQueryTargetFmasPerParticipant
+                                                      : kDefaultTargetFmasPerParticipant;
   const std::size_t fmas_per_row =
       (plan.head_dim + plan.v_head_dim) * std::max<std::size_t>(plan.total_kv_length, 1);
   const std::size_t total_fmas = total_rows * fmas_per_row;
   const std::size_t participants =
-      (total_fmas + kTargetFmasPerParticipant - 1) / kTargetFmasPerParticipant;
+      (total_fmas + target_fmas_per_participant - 1) / target_fmas_per_participant;
   return std::clamp<std::size_t>(participants, 1, kMaximumParticipants);
 }
 
@@ -604,6 +610,40 @@ void ConvertFloat32Rank4ToFloat16Rank3(const float *source, std::uint16_t *desti
                         destination + ((b * length + sequence) * heads + h) * dimension;
                     detail::ConvertFloat32ToFloat16(source + row * dimension, destination_row,
                                                     dimension);
+                  }
+                });
+}
+
+void ConvertFloat32Rank3ToRank4(const float *source, float *destination, std::size_t batch,
+                                std::size_t heads, std::size_t length, std::size_t dimension) {
+  const std::size_t rows = batch * heads * length;
+  ExecuteRanges(static_cast<std::int64_t>(rows), static_cast<double>(dimension),
+                [&](std::int64_t begin, std::int64_t end) {
+                  for (std::size_t row = static_cast<std::size_t>(begin);
+                       row < static_cast<std::size_t>(end); ++row) {
+                    const std::size_t b = row / (heads * length);
+                    const std::size_t remainder = row % (heads * length);
+                    const std::size_t h = remainder / length;
+                    const std::size_t s = remainder % length;
+                    const float *input = source + ((b * length + s) * heads + h) * dimension;
+                    std::copy_n(input, dimension, destination + row * dimension);
+                  }
+                });
+}
+
+void ConvertFloat32Rank4ToRank3(const float *source, float *destination, std::size_t batch,
+                                std::size_t heads, std::size_t length, std::size_t dimension) {
+  const std::size_t rows = batch * heads * length;
+  ExecuteRanges(static_cast<std::int64_t>(rows), static_cast<double>(dimension),
+                [&](std::int64_t begin, std::int64_t end) {
+                  for (std::size_t row = static_cast<std::size_t>(begin);
+                       row < static_cast<std::size_t>(end); ++row) {
+                    const std::size_t b = row / (heads * length);
+                    const std::size_t remainder = row % (heads * length);
+                    const std::size_t h = remainder / length;
+                    const std::size_t s = remainder % length;
+                    float *output = destination + ((b * length + s) * heads + h) * dimension;
+                    std::copy_n(source + row * dimension, dimension, output);
                   }
                 });
 }
@@ -887,11 +927,13 @@ void ComputeAttentionFloat32Tiled(const AttentionPlan &plan, const float *q, con
   const bool use_bounded_avx512 =
       DetectSimdLevel() == SimdLevel::kAVX512 && plan.mask_kind == AttentionMaskKind::kNone &&
       plan.softcap == 0.0f && plan.left_window_size < 0 && plan.right_window_size < 0;
+  const bool use_masked_avx512 =
+      DetectSimdLevel() == SimdLevel::kAVX512 && plan.mask_kind != AttentionMaskKind::kNone &&
+      plan.mask_strides.kv == 1 && !plan.causal && plan.softcap == 0.0f &&
+      plan.left_window_size < 0 && plan.right_window_size < 0;
 #endif
   const std::size_t participants =
-      plan.q_length <= kQueryBlock
-          ? 1
-          : StreamingParticipantCount(plan, plan.batch * plan.q_num_heads * plan.q_length);
+      StreamingParticipantCount(plan, plan.batch * plan.q_num_heads * plan.q_length);
   const ExecutionSchedule schedule{
       1, static_cast<std::int64_t>((total_tasks + participants - 1) / participants),
       static_cast<std::int64_t>(participants), static_cast<std::int64_t>(participants)};
@@ -1002,6 +1044,31 @@ void ComputeAttentionFloat32Tiled(const AttentionPlan &plan, const float *q, con
 #endif
               const std::ptrdiff_t mask_row =
                   mask_base + static_cast<std::ptrdiff_t>(query) * plan.mask_strides.q;
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
+              if (use_masked_avx512 && nonpad_kv_seqlen == nullptr) {
+                bool any_valid = false;
+                if (plan.mask_kind == AttentionMaskKind::kBoolean) {
+                  any_valid = AttentionApplyBooleanMaskFloat32_AVX512(
+                      score_row, mask_bool + mask_row + static_cast<std::ptrdiff_t>(j0), columns);
+                } else {
+                  any_valid = AttentionApplyAdditiveMaskFloat32_AVX512(
+                      score_row, mask_float + mask_row + static_cast<std::ptrdiff_t>(j0), columns);
+                }
+                if (!any_valid) {
+                  std::fill_n(score_row, columns, 0.0f);
+                  continue;
+                }
+                const AttentionSoftmaxBlockResult result = AttentionSoftmaxBlockFloat32_AVX512(
+                    score_row, columns, maxima[i], denominators[i]);
+                maxima[i] = result.maximum;
+                valid[i] = 1;
+                float *accumulator_row = accumulator.data() + i * plan.v_head_dim;
+                for (std::size_t d = 0; d < plan.v_head_dim; ++d) {
+                  accumulator_row[d] *= result.correction;
+                }
+                continue;
+              }
+#endif
               float block_max = kNegativeInfinity;
               for (std::size_t jj = 0; jj < columns; ++jj) {
                 const std::size_t j = j0 + jj;
@@ -1083,12 +1150,73 @@ void ComputeAttentionFloat32Tiled(const AttentionPlan &plan, const float *q, con
       });
 }
 
+void ComputeAttentionFloat32Rank3Tiled(const AttentionPlan &plan, const float *q, const float *k,
+                                       const float *v, const void *mask, float *y,
+                                       const std::int64_t *nonpad_kv_seqlen) {
+  const std::size_t q_count = plan.batch * plan.q_num_heads * plan.q_length * plan.head_dim;
+  const std::size_t k_count = plan.batch * plan.kv_num_heads * plan.kv_length * plan.head_dim;
+  const std::size_t v_count = plan.batch * plan.kv_num_heads * plan.kv_length * plan.v_head_dim;
+  const std::size_t y_count = plan.batch * plan.q_num_heads * plan.q_length * plan.v_head_dim;
+  const std::size_t workspace_count = q_count + k_count + v_count + y_count;
+  constexpr std::size_t kMaxRetainedWorkspaceElements = 16 * 1024 * 1024;
+  thread_local std::vector<float> retained_workspace;
+  std::unique_ptr<float[]> oversized_workspace;
+  float *workspace;
+  if (workspace_count <= kMaxRetainedWorkspaceElements) {
+    retained_workspace.resize(workspace_count);
+    workspace = retained_workspace.data();
+  } else {
+    oversized_workspace = std::make_unique_for_overwrite<float[]>(workspace_count);
+    workspace = oversized_workspace.get();
+  }
+  float *packed_q = workspace;
+  float *packed_k = packed_q + q_count;
+  float *packed_v = packed_k + k_count;
+  float *packed_y = packed_v + v_count;
+
+  ConvertFloat32Rank3ToRank4(q, packed_q, plan.batch, plan.q_num_heads, plan.q_length,
+                             plan.head_dim);
+  ConvertFloat32Rank3ToRank4(k, packed_k, plan.batch, plan.kv_num_heads, plan.kv_length,
+                             plan.head_dim);
+  ConvertFloat32Rank3ToRank4(v, packed_v, plan.batch, plan.kv_num_heads, plan.kv_length,
+                             plan.v_head_dim);
+
+  AttentionPlan packed_plan = plan;
+  packed_plan.layout = AttentionLayout::kRank4;
+  packed_plan.q_strides = {
+      static_cast<std::ptrdiff_t>(plan.q_num_heads * plan.q_length * plan.head_dim),
+      static_cast<std::ptrdiff_t>(plan.q_length * plan.head_dim),
+      static_cast<std::ptrdiff_t>(plan.head_dim)};
+  packed_plan.k_strides = {
+      static_cast<std::ptrdiff_t>(plan.kv_num_heads * plan.kv_length * plan.head_dim),
+      static_cast<std::ptrdiff_t>(plan.kv_length * plan.head_dim),
+      static_cast<std::ptrdiff_t>(plan.head_dim)};
+  packed_plan.v_strides = {
+      static_cast<std::ptrdiff_t>(plan.kv_num_heads * plan.kv_length * plan.v_head_dim),
+      static_cast<std::ptrdiff_t>(plan.kv_length * plan.v_head_dim),
+      static_cast<std::ptrdiff_t>(plan.v_head_dim)};
+  packed_plan.y_strides = {
+      static_cast<std::ptrdiff_t>(plan.q_num_heads * plan.q_length * plan.v_head_dim),
+      static_cast<std::ptrdiff_t>(plan.q_length * plan.v_head_dim),
+      static_cast<std::ptrdiff_t>(plan.v_head_dim)};
+
+  ComputeAttentionFloat32Tiled(packed_plan, packed_q, packed_k, packed_v, mask, packed_y,
+                               nonpad_kv_seqlen);
+  ConvertFloat32Rank4ToRank3(packed_y, y, plan.batch, plan.q_num_heads, plan.q_length,
+                             plan.v_head_dim);
+}
+
 } // namespace
 
 void ComputeAttentionFloat32Streaming(const AttentionPlan &plan, const float *q, const float *k,
                                       const float *v, const void *mask, float *y,
                                       const float *past_k, const float *past_v,
                                       const std::int64_t *nonpad_kv_seqlen) {
+  if (plan.layout == AttentionLayout::kRank3 && plan.past_length == 0 && plan.q_length > 8 &&
+      plan.total_kv_length != 0) {
+    ComputeAttentionFloat32Rank3Tiled(plan, q, k, v, mask, y, nonpad_kv_seqlen);
+    return;
+  }
   if (plan.layout == AttentionLayout::kRank4 && plan.past_length == 0 && plan.q_length > 8 &&
       plan.total_kv_length != 0) {
     ComputeAttentionFloat32Tiled(plan, q, k, v, mask, y, nonpad_kv_seqlen);
