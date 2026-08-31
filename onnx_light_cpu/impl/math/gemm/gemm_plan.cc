@@ -251,9 +251,9 @@ void ExecuteFloatKernel(bool trans_a, bool trans_b, std::size_t m, std::size_t n
 }
 
 template <typename T>
-auto SelectKernel(GemmAlgorithm algorithm) -> void (*)(bool, bool, std::size_t, std::size_t,
-                                                       std::size_t, T, const T *, const T *, T,
-                                                       const T *, T *, const GemmBlocking *) {
+auto SelectKernel(GemmAlgorithm algorithm)
+    -> void (*)(bool, bool, std::size_t, std::size_t, std::size_t, T, const T *, const T *, T,
+                const T *, T *, const GemmBlocking *) {
   switch (algorithm) {
   case GemmAlgorithm::kDirect:
     return &ExecuteFloatKernel<T, GemmAlgorithm::kDirect>;
@@ -269,12 +269,10 @@ auto SelectKernel(GemmAlgorithm algorithm) -> void (*)(bool, bool, std::size_t, 
   throw std::logic_error("onnx_light_cpu::GemmPlan: unsupported Gemm algorithm.");
 }
 
-auto SelectHalfKernel(GemmAlgorithm algorithm) -> void (*)(bool, bool, bool, std::size_t,
-                                                           std::size_t, std::size_t, float,
-                                                           const std::uint16_t *,
-                                                           const std::uint16_t *, float *,
-                                                           const GemmBlocking *,
-                                                           const GemmBlocking *) {
+auto SelectHalfKernel(GemmAlgorithm algorithm)
+    -> void (*)(bool, bool, bool, std::size_t, std::size_t, std::size_t, float,
+                const std::uint16_t *, const std::uint16_t *, float *, const GemmBlocking *,
+                const GemmBlocking *) {
   switch (algorithm) {
   case GemmAlgorithm::kDirect:
     return &detail::GemmHalfPlanned<GemmAlgorithm::kDirect>;
@@ -584,6 +582,33 @@ void GemmPlan<T>::Execute(const T *a, const T *b, const GemmEpilogue<T> &epilogu
     kernel_(trans_a_, trans_b_, m_, n_, k_, alpha_, a, resolved_b, epilogue.beta, epilogue.bias, y,
             &blocking_);
     return;
+  }
+  if constexpr (std::is_same_v<T, float>) {
+    bool medium_avx512_square = false;
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
+    medium_avx512_square = algorithm_ == GemmAlgorithm::kGeneral &&
+                           DetectSimdLevel() >= SimdLevel::kAVX512 && !trans_a_ && !trans_b_ &&
+                           m_ >= 128 && m_ <= 512 && n_ >= 128 && n_ <= 512 && k_ <= 512;
+#endif
+    const bool direct_broadcast_bias =
+        has_bias && !has_residual && !has_activation && !converts_output;
+    if (medium_avx512_square && direct_broadcast_bias &&
+        epilogue.bias_layout != GemmBroadcast::kMatrix) {
+      const float *row_bias = epilogue.bias;
+      if (epilogue.bias_layout == GemmBroadcast::kScalar) {
+        thread_local std::vector<float> scalar_row;
+        scalar_row.assign(n_, epilogue.bias[0]);
+        row_bias = scalar_row.data();
+      }
+      if (epilogue.bias_layout == GemmBroadcast::kColumn) {
+        detail::GemmFloat32PlannedColumnBias(m_, n_, k_, alpha_, a, resolved_b, epilogue.beta,
+                                             row_bias, y, &blocking_);
+      } else {
+        detail::GemmFloat32PlannedRowBias(m_, n_, k_, alpha_, a, resolved_b, epilogue.beta,
+                                          row_bias, y, &blocking_);
+      }
+      return;
+    }
   }
   // Fusing changes the reduction rounding order relative to a separate
   // epilogue, just like the existing full-matrix bias path. Keep the temporary

@@ -76,6 +76,14 @@ void GemmFloat32Planned(bool trans_a, bool trans_b, std::size_t M, std::size_t N
                         float alpha, const float *A, const float *B, float beta, const float *C,
                         float *Y, const GemmBlocking *blocking = nullptr);
 
+void GemmFloat32PlannedRowBias(std::size_t M, std::size_t N, std::size_t K, float alpha,
+                               const float *A, const float *B, float beta, const float *C, float *Y,
+                               const GemmBlocking *blocking);
+
+void GemmFloat32PlannedColumnBias(std::size_t M, std::size_t N, std::size_t K, float alpha,
+                                  const float *A, const float *B, float beta, const float *C,
+                                  float *Y, const GemmBlocking *blocking);
+
 template <GemmAlgorithm Algorithm>
 void GemmFloat64Planned(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::size_t K,
                         double alpha, const double *A, const double *B, double beta,
@@ -105,9 +113,10 @@ void GemmHalfPlanned(bool is_bfloat16, bool trans_a, bool trans_b, std::size_t M
 // after the first simply adds its scaled partial result to ``Y`` instead of
 // overwriting it.
 enum class GemmAccumMode {
-  kInitZero,   ///< First chunk, no bias: ``Y = alpha * acc``.
-  kInitBias,   ///< First chunk, with bias: ``Y = alpha * acc + beta * C``.
-  kAccumulate, ///< Later chunk: ``Y += alpha * acc``.
+  kInitZero,       ///< First chunk, no bias: ``Y = alpha * acc``.
+  kInitBias,       ///< First chunk, with bias: ``Y = alpha * acc + beta * C``.
+  kInitColumnBias, ///< First chunk, broadcasting one bias value per output row.
+  kAccumulate,     ///< Later chunk: ``Y += alpha * acc``.
 };
 
 // Maximum register-blocking factors on M. Runtime profiles select a value no

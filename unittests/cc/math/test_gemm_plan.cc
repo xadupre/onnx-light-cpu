@@ -693,6 +693,51 @@ TEST(GemmPlan, ExecutesFusedRowBroadcastBiasEpilogue) {
   ExpectValues({y.begin(), y.end()}, std::array<float, 4>{6, 12, 8, 14});
 }
 
+TEST(GemmPlan, MediumAvx512SquareReadsBroadcastBiasDirectly) {
+  if (onnx_light_cpu::DetectSimdLevel() < onnx_light_cpu::SimdLevel::kAVX512) {
+    GTEST_SKIP() << "direct broadcast bias is specific to medium AVX-512 GEMMs";
+  }
+  constexpr std::size_t size = 130;
+  const GemmPlan<float> plan(GemmPlanOptions<float>{false, false, size, size, size});
+  std::vector<float> a(size * size, 1.0f);
+  std::vector<float> b(size * size, 0.0f);
+  for (std::size_t index = 0; index < size; ++index) {
+    b[index * size + index] = 1.0f;
+  }
+  std::vector<float> row_bias(size);
+  std::vector<float> column_bias(size);
+  for (std::size_t index = 0; index < size; ++index) {
+    row_bias[index] = static_cast<float>(index);
+    column_bias[index] = static_cast<float>(2 * index);
+  }
+  const float scalar_bias = 2.0f;
+  std::vector<float> y(size * size);
+
+  for (const auto &[bias, layout] :
+       std::array<std::pair<const float *, onnx_light_cpu::GemmBroadcast>, 3>{
+           std::pair{&scalar_bias, onnx_light_cpu::GemmBroadcast::kScalar},
+           std::pair{row_bias.data(), onnx_light_cpu::GemmBroadcast::kRow},
+           std::pair{column_bias.data(), onnx_light_cpu::GemmBroadcast::kColumn}}) {
+    onnx_light_cpu::GemmEpilogue<float> epilogue;
+    epilogue.bias = bias;
+    epilogue.bias_layout = layout;
+    epilogue.beta = 0.5f;
+
+    plan.Execute(a.data(), b.data(), epilogue, y.data());
+
+    for (std::size_t row = 0; row < size; ++row) {
+      for (std::size_t column = 0; column < size; ++column) {
+        const float bias_value =
+            layout == onnx_light_cpu::GemmBroadcast::kScalar
+                ? scalar_bias
+                : (layout == onnx_light_cpu::GemmBroadcast::kRow ? row_bias[column]
+                                                                 : column_bias[row]);
+        EXPECT_FLOAT_EQ(y[row * size + column], 1.0f + 0.5f * bias_value);
+      }
+    }
+  }
+}
+
 TEST(MatMulPlan, ExecutesRankTwoFoundation) {
   const MatMulPlan<double> plan(2, 2, 2);
   const std::array<double, 4> a = {1, 2, 3, 4};
