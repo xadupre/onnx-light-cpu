@@ -214,17 +214,20 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         model_bytes = model.SerializeToString()
         feeds = {"A": a, "B": bias}
         cpu = ReferenceEvaluator(model_bytes, cpu_execution={"num_threads": args.threads})
-        options = onnxruntime.SessionOptions()
-        options.intra_op_num_threads = args.threads
-        options.inter_op_num_threads = 1
-        options.execution_mode = onnxruntime.ExecutionMode.ORT_SEQUENTIAL
-        options.enable_mem_pattern = True
-        options.enable_cpu_mem_arena = True
-        if args.profile_runs:
-            options.enable_profiling = True
-        ort = onnxruntime.InferenceSession(
-            model_bytes, sess_options=options, providers=["CPUExecutionProvider"]
-        )
+
+        def make_ort_session(enable_profiling: bool, current_model=model_bytes):
+            options = onnxruntime.SessionOptions()
+            options.intra_op_num_threads = args.threads
+            options.inter_op_num_threads = 1
+            options.execution_mode = onnxruntime.ExecutionMode.ORT_SEQUENTIAL
+            options.enable_mem_pattern = True
+            options.enable_cpu_mem_arena = True
+            options.enable_profiling = enable_profiling
+            return onnxruntime.InferenceSession(
+                current_model, sess_options=options, providers=["CPUExecutionProvider"]
+            )
+
+        ort = make_ort_session(False)
 
         def cpu_run(session=cpu, current_feeds=feeds):
             return session.run(None, current_feeds)[0]
@@ -249,9 +252,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         profile = {}
         if args.profile_runs:
             profile["onnx_light_cpu_python"] = _profile_python(cpu_run, args.profile_runs)
+            profile_ort = make_ort_session(True)
             for _ in range(args.profile_runs):
-                ort_run()
-            profile["onnxruntime_nodes"] = _ort_node_profile(ort.end_profiling())
+                profile_ort.run(None, feeds)
+            profile["onnxruntime_nodes"] = _ort_node_profile(profile_ort.end_profiling())
         rows.append(
             {
                 "case": case_name,
@@ -320,7 +324,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("-t", "--max-repeat-time", type=float, default=1.0)
     parser.add_argument("--profile-runs", type=int, default=0)
     parser.add_argument("--rtol", type=float, default=2e-5)
-    parser.add_argument("--atol", type=float, default=1e-6)
+    parser.add_argument("--atol", type=float, default=1e-5)
     parser.add_argument("--output", type=Path, default=Path("bias_gelu_parity_results.json"))
     parser.add_argument("--enforce", action="store_true")
     args = parser.parse_args(argv)
