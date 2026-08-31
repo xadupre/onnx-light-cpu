@@ -99,6 +99,13 @@ TEST(OnnxLightCDistKernel, RejectsMismatchedFeatureDimension) {
   EXPECT_THROW((void)kernel(a, b), std::invalid_argument);
 }
 
+TEST(OnnxLightCDistKernel, RejectsZeroFeatureDimensionLikeOnnxRuntime) {
+  onnx_light_cpu::CDistKernel kernel(MakeCtx());
+  const rt_ns::Tensor a = rt_ns::Tensor::FromFloat("A", {2, 0}, std::vector<float>{});
+  const rt_ns::Tensor b = rt_ns::Tensor::FromFloat("B", {3, 0}, std::vector<float>{});
+  EXPECT_THROW((void)kernel(a, b), std::invalid_argument);
+}
+
 TEST(OnnxLightCDistKernel, RejectsMismatchedDataTypes) {
   onnx_light_cpu::CDistKernel kernel(MakeCtx());
   const rt_ns::Tensor a = rt_ns::Tensor::FromFloat("A", {2, 2}, std::vector<float>(4, 1.0f));

@@ -119,6 +119,10 @@ void ValidateTensors(const Tensor &a, const Tensor &b, const Tensor &output) {
     throw std::invalid_argument(
         "onnx_light_cpu::CDist: A and B must share the same feature dimension (N).");
   }
+  if (a.shape[1] <= 0) {
+    throw std::invalid_argument(
+        "onnx_light_cpu::CDist: A and B must have a positive feature dimension (N).");
+  }
   if (output.shape.size() != 2 || output.shape[0] != a.shape[0] || output.shape[1] != b.shape[0]) {
     throw std::invalid_argument("onnx_light_cpu::CDist: output shape must be (M, K).");
   }
