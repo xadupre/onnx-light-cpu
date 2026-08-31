@@ -382,6 +382,24 @@ TEST(GemmPlan, UsesExecutionTimeThreadsWhenConstructedWithoutExecutor) {
   EXPECT_LE(executor.maximum_blocks, 8);
 }
 
+TEST(GemmPlan, SmallTransposedAExecutesSerially) {
+  constexpr std::size_t size = 128;
+  const GemmPlan<float> plan(GemmPlanOptions<float>{true, false, size, size, size});
+  std::vector<float> a(size * size, 1.0f);
+  std::vector<float> b(size * size, 1.0f);
+  std::vector<float> y(size * size);
+  InlineExecutor executor;
+  onnx_light_cpu::ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run};
+
+  {
+    onnx_light_cpu::ExecutionExecutorScope scope(&view);
+    plan.Execute(a.data(), b.data(), nullptr, y.data());
+  }
+
+  EXPECT_LE(executor.maximum_blocks, 1);
+  EXPECT_EQ(y.front(), static_cast<float>(size));
+}
+
 TEST(GemmPlan, ExecutesEveryPreparedAlgorithm) {
   const auto check = [](std::size_t m, std::size_t n, std::size_t k,
                         GemmAlgorithm expected_algorithm) {

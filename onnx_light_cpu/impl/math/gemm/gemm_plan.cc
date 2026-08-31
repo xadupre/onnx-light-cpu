@@ -251,9 +251,9 @@ void ExecuteFloatKernel(bool trans_a, bool trans_b, std::size_t m, std::size_t n
 }
 
 template <typename T>
-auto SelectKernel(GemmAlgorithm algorithm)
-    -> void (*)(bool, bool, std::size_t, std::size_t, std::size_t, T, const T *, const T *, T,
-                const T *, T *, const GemmBlocking *) {
+auto SelectKernel(GemmAlgorithm algorithm) -> void (*)(bool, bool, std::size_t, std::size_t,
+                                                       std::size_t, T, const T *, const T *, T,
+                                                       const T *, T *, const GemmBlocking *) {
   switch (algorithm) {
   case GemmAlgorithm::kDirect:
     return &ExecuteFloatKernel<T, GemmAlgorithm::kDirect>;
@@ -269,10 +269,12 @@ auto SelectKernel(GemmAlgorithm algorithm)
   throw std::logic_error("onnx_light_cpu::GemmPlan: unsupported Gemm algorithm.");
 }
 
-auto SelectHalfKernel(GemmAlgorithm algorithm)
-    -> void (*)(bool, bool, bool, std::size_t, std::size_t, std::size_t, float,
-                const std::uint16_t *, const std::uint16_t *, float *, const GemmBlocking *,
-                const GemmBlocking *) {
+auto SelectHalfKernel(GemmAlgorithm algorithm) -> void (*)(bool, bool, bool, std::size_t,
+                                                           std::size_t, std::size_t, float,
+                                                           const std::uint16_t *,
+                                                           const std::uint16_t *, float *,
+                                                           const GemmBlocking *,
+                                                           const GemmBlocking *) {
   switch (algorithm) {
   case GemmAlgorithm::kDirect:
     return &detail::GemmHalfPlanned<GemmAlgorithm::kDirect>;
@@ -348,6 +350,18 @@ std::size_t HalfUsefulThreads(bool is_bfloat16, bool trans_b, GemmAlgorithm algo
 
 template <typename T> double GemmWork(const GemmPlan<T> &plan) {
   return static_cast<double>(plan.m()) * plan.n() * plan.k() / kGemmFmasPerParallelWorkUnit;
+}
+
+template <typename T>
+std::size_t PlanRuntimeParticipantLimit(GemmAlgorithm algorithm, std::size_t selected_limit,
+                                        std::size_t useful_threads, bool trans_a, bool trans_b,
+                                        std::size_t m, std::size_t n, std::size_t k) {
+  if constexpr (std::is_same_v<T, float>) {
+    if (trans_a && !trans_b && m <= 128 && n <= 128 && k <= 128) {
+      return 1;
+    }
+  }
+  return RuntimeParticipantLimit(algorithm, selected_limit, useful_threads);
 }
 
 template <typename T> bool PreferBatchParallelism(std::span<const GroupedGemmProblem<T>> problems) {
@@ -506,8 +520,8 @@ GemmPlan<T>::GemmPlan(const GemmPlanOptions<T> &options)
 }
 
 template <typename T> void GemmPlan<T>::Execute(const T *a, const T *b, const T *c, T *y) const {
-  ParticipantLimitScope participant_limit(
-      RuntimeParticipantLimit(algorithm_, participant_limit_, useful_threads_));
+  ParticipantLimitScope participant_limit(PlanRuntimeParticipantLimit<T>(
+      algorithm_, participant_limit_, useful_threads_, trans_a_, trans_b_, m_, n_, k_));
   if (m_ == 0 || n_ == 0) {
     return;
   }
@@ -534,8 +548,8 @@ template <typename T> void GemmPlan<T>::Execute(const T *a, const T *c, T *y) co
 
 template <typename T>
 void GemmPlan<T>::Execute(const T *a, const T *b, const GemmEpilogue<T> &epilogue, T *y) const {
-  ParticipantLimitScope participant_limit(
-      RuntimeParticipantLimit(algorithm_, participant_limit_, useful_threads_));
+  ParticipantLimitScope participant_limit(PlanRuntimeParticipantLimit<T>(
+      algorithm_, participant_limit_, useful_threads_, trans_a_, trans_b_, m_, n_, k_));
   if (m_ == 0 || n_ == 0) {
     return;
   }
