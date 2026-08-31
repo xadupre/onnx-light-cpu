@@ -376,7 +376,7 @@ void ComputeAttentionFloat32Materialized(const AttentionPlan &plan, const float 
         // Tracks whether every KV position of this row is disallowed by the
         // combined causal/padding/attn_mask bias (independent of the raw QK
         // score), matching the spec's fully-masked-row guard.
-        float row_bias_max = kNegativeInfinity;
+        bool row_has_unmasked_key = false;
         for (std::size_t j = 0; j < total_kv_length; ++j) {
           const std::int64_t window_center = WindowCenter(i, causal_offset);
           bool allowed = true;
@@ -409,7 +409,7 @@ void ComputeAttentionFloat32Materialized(const AttentionPlan &plan, const float 
             additive_bias = mask_float[index];
           }
           const float bias = (allowed ? 0.0f : kNegativeInfinity) + additive_bias;
-          row_bias_max = std::max(row_bias_max, bias);
+          row_has_unmasked_key |= !IsMaskFilterValue(bias);
 
           const float *k_row;
           if (j < plan.past_length) {
@@ -443,7 +443,7 @@ void ComputeAttentionFloat32Materialized(const AttentionPlan &plan, const float 
 
         float *y_row = y_head + i * plan.y_strides.sequence;
         float *qk_out_row = plan.has_qk_matmul_output ? qk_head + i * total_kv_length : nullptr;
-        const bool row_all_masked = IsMaskFilterValue(row_bias_max);
+        const bool row_all_masked = !row_has_unmasked_key;
         if (row_all_masked) {
           // Fully-masked query row: zero output, not NaN, for both Y and the
           // mode-3 qk_matmul_output. Decided on the additive bias (not the
