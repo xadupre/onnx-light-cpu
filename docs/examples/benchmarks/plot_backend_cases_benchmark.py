@@ -116,10 +116,10 @@ parser.add_argument(
     help="target minimum duration of one batched timing sample in seconds (default: 0.005)",
 )
 parser.add_argument(
-    "--runtime-order",
-    choices=("onnx-light-cpu-first", "onnxruntime-first"),
-    default="onnx-light-cpu-first",
-    help="runtime measurement order (default: onnx-light-cpu-first)",
+    "--run-first",
+    choices=("ol", "ort"),
+    default="ol",
+    help="runtime measured first: ol for onnx-light-cpu or ort for ONNX Runtime (default: ol)",
 )
 parser.add_argument(
     "--disable-spin",
@@ -318,14 +318,14 @@ register_kernels()
 # caught here and the case is still timed/reported for onnx-light-cpu alone,
 # with "n/a" standing in for the ONNX Runtime side.
 #
-# The runtimes are measured in separate phases. ``--runtime-order`` selects
-# which phase runs first, making order sensitivity observable. Spin-wait stays
+# The runtimes are measured in separate phases. ``--run-first`` selects which
+# phase runs first, making order sensitivity observable. Spin-wait stays
 # enabled as part of normal runtime behavior unless ``--disable-spin`` is set.
 print(
     f"-- timing warmup={args.warmup} repeat={args.repeat} "
     f"max_repeat_time={args.max_repeat_time:g}s "
     f"min_sample_time={args.min_sample_time:g}s "
-    f"runtime_order={args.runtime_order} disable_spin={args.disable_spin}"
+    f"run_first={args.run_first} disable_spin={args.disable_spin}"
 )
 measurements = []
 for tc in _CASES:
@@ -441,7 +441,7 @@ def benchmark_ort():
 
 runtime_phases = (
     (benchmark_light, benchmark_ort)
-    if args.runtime_order == "onnx-light-cpu-first"
+    if args.run_first == "ol"
     else (benchmark_ort, benchmark_light)
 )
 for phase in runtime_phases:
