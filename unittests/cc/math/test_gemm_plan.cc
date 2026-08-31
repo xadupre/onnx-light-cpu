@@ -382,6 +382,24 @@ TEST(GemmPlan, UsesExecutionTimeThreadsWhenConstructedWithoutExecutor) {
   EXPECT_LE(executor.maximum_blocks, 8);
 }
 
+TEST(GemmPlan, SmallTransposedAExecutesSerially) {
+  constexpr std::size_t size = 128;
+  const GemmPlan<float> plan(GemmPlanOptions<float>{true, false, size, size, size});
+  std::vector<float> a(size * size, 1.0f);
+  std::vector<float> b(size * size, 1.0f);
+  std::vector<float> y(size * size);
+  InlineExecutor executor;
+  onnx_light_cpu::ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run};
+
+  {
+    onnx_light_cpu::ExecutionExecutorScope scope(&view);
+    plan.Execute(a.data(), b.data(), nullptr, y.data());
+  }
+
+  EXPECT_LE(executor.maximum_blocks, 1);
+  EXPECT_EQ(y.front(), static_cast<float>(size));
+}
+
 TEST(GemmPlan, ExecutesEveryPreparedAlgorithm) {
   const auto check = [](std::size_t m, std::size_t n, std::size_t k,
                         GemmAlgorithm expected_algorithm) {
@@ -673,6 +691,51 @@ TEST(GemmPlan, ExecutesFusedRowBroadcastBiasEpilogue) {
   plan.Execute(a.data(), b.data(), epilogue, y.data());
 
   ExpectValues({y.begin(), y.end()}, std::array<float, 4>{6, 12, 8, 14});
+}
+
+TEST(GemmPlan, MediumAvx512SquareReadsBroadcastBiasDirectly) {
+  if (onnx_light_cpu::DetectSimdLevel() < onnx_light_cpu::SimdLevel::kAVX512) {
+    GTEST_SKIP() << "direct broadcast bias is specific to medium AVX-512 GEMMs";
+  }
+  constexpr std::size_t size = 130;
+  const GemmPlan<float> plan(GemmPlanOptions<float>{false, false, size, size, size});
+  std::vector<float> a(size * size, 1.0f);
+  std::vector<float> b(size * size, 0.0f);
+  for (std::size_t index = 0; index < size; ++index) {
+    b[index * size + index] = 1.0f;
+  }
+  std::vector<float> row_bias(size);
+  std::vector<float> column_bias(size);
+  for (std::size_t index = 0; index < size; ++index) {
+    row_bias[index] = static_cast<float>(index);
+    column_bias[index] = static_cast<float>(2 * index);
+  }
+  const float scalar_bias = 2.0f;
+  std::vector<float> y(size * size);
+
+  for (const auto &[bias, layout] :
+       std::array<std::pair<const float *, onnx_light_cpu::GemmBroadcast>, 3>{
+           std::pair{&scalar_bias, onnx_light_cpu::GemmBroadcast::kScalar},
+           std::pair{row_bias.data(), onnx_light_cpu::GemmBroadcast::kRow},
+           std::pair{column_bias.data(), onnx_light_cpu::GemmBroadcast::kColumn}}) {
+    onnx_light_cpu::GemmEpilogue<float> epilogue;
+    epilogue.bias = bias;
+    epilogue.bias_layout = layout;
+    epilogue.beta = 0.5f;
+
+    plan.Execute(a.data(), b.data(), epilogue, y.data());
+
+    for (std::size_t row = 0; row < size; ++row) {
+      for (std::size_t column = 0; column < size; ++column) {
+        const float bias_value =
+            layout == onnx_light_cpu::GemmBroadcast::kScalar
+                ? scalar_bias
+                : (layout == onnx_light_cpu::GemmBroadcast::kRow ? row_bias[column]
+                                                                 : column_bias[row]);
+        EXPECT_FLOAT_EQ(y[row * size + column], 1.0f + 0.5f * bias_value);
+      }
+    }
+  }
 }
 
 TEST(MatMulPlan, ExecutesRankTwoFoundation) {

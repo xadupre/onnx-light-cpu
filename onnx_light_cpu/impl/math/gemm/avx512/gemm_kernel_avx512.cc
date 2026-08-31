@@ -90,10 +90,13 @@ void GemmMicroKernel_AVX512_F32Impl(std::size_t nb, std::size_t K, float alpha, 
       float *Yrow = Yrow_base + r * Ystride + n0 + n;
       __m512 res0 = alpha_is_one ? acc0[r] : _mm512_mul_ps(valpha, acc0[r]);
       __m512 res1 = alpha_is_one ? acc1[r] : _mm512_mul_ps(valpha, acc1[r]);
-      if (mode == GemmAccumMode::kInitBias) {
-        const float *Crow = Crow_base + r * Cstride + n0 + n;
-        const __m512 vc0 = _mm512_loadu_ps(Crow);
-        const __m512 vc1 = _mm512_loadu_ps(Crow + 16);
+      if (mode == GemmAccumMode::kInitBias || mode == GemmAccumMode::kInitColumnBias) {
+        const __m512 vc0 = mode == GemmAccumMode::kInitColumnBias
+                               ? _mm512_set1_ps(Crow_base[r * Cstride])
+                               : _mm512_loadu_ps(Crow_base + r * Cstride + n0 + n);
+        const __m512 vc1 = mode == GemmAccumMode::kInitColumnBias
+                               ? vc0
+                               : _mm512_loadu_ps(Crow_base + r * Cstride + n0 + n + 16);
         res0 = _mm512_add_ps(res0, beta_is_one ? vc0 : _mm512_mul_ps(vbeta, vc0));
         res1 = _mm512_add_ps(res1, beta_is_one ? vc1 : _mm512_mul_ps(vbeta, vc1));
       } else if (mode == GemmAccumMode::kAccumulate) {
@@ -130,8 +133,10 @@ void GemmMicroKernel_AVX512_F32Impl(std::size_t nb, std::size_t K, float alpha, 
     for (std::size_t r = 0; r < MR; ++r) {
       float *Yrow = Yrow_base + r * Ystride + n0 + n;
       __m512 res = alpha_is_one ? acc[r] : _mm512_mul_ps(valpha, acc[r]);
-      if (mode == GemmAccumMode::kInitBias) {
-        const __m512 vc = _mm512_loadu_ps(Crow_base + r * Cstride + n0 + n);
+      if (mode == GemmAccumMode::kInitBias || mode == GemmAccumMode::kInitColumnBias) {
+        const __m512 vc = mode == GemmAccumMode::kInitColumnBias
+                              ? _mm512_set1_ps(Crow_base[r * Cstride])
+                              : _mm512_loadu_ps(Crow_base + r * Cstride + n0 + n);
         res = _mm512_add_ps(res, beta_is_one ? vc : _mm512_mul_ps(vbeta, vc));
       } else if (mode == GemmAccumMode::kAccumulate) {
         res = _mm512_add_ps(res, _mm512_loadu_ps(Yrow));
@@ -316,10 +321,13 @@ void GemmMicroKernel_AVX512_F32_MR12(std::size_t nb, std::size_t K, float alpha,
     float *y_row = Yrow_base + (R) * Ystride + n0;                                                 \
     __m512 result0 = alpha_is_one ? acc0_##R : _mm512_mul_ps(valpha, acc0_##R);                    \
     __m512 result1 = alpha_is_one ? acc1_##R : _mm512_mul_ps(valpha, acc1_##R);                    \
-    if (mode == GemmAccumMode::kInitBias) {                                                        \
-      const float *c_row = Crow_base + (R) * Cstride + n0;                                         \
-      const __m512 bias0 = _mm512_loadu_ps(c_row);                                                 \
-      const __m512 bias1 = _mm512_loadu_ps(c_row + 16);                                            \
+    if (mode == GemmAccumMode::kInitBias || mode == GemmAccumMode::kInitColumnBias) {              \
+      const __m512 bias0 = mode == GemmAccumMode::kInitColumnBias                                  \
+                               ? _mm512_set1_ps(Crow_base[(R) * Cstride])                          \
+                               : _mm512_loadu_ps(Crow_base + (R) * Cstride + n0);                  \
+      const __m512 bias1 = mode == GemmAccumMode::kInitColumnBias                                  \
+                               ? bias0                                                             \
+                               : _mm512_loadu_ps(Crow_base + (R) * Cstride + n0 + 16);             \
       result0 = _mm512_add_ps(result0, beta_is_one ? bias0 : _mm512_mul_ps(vbeta, bias0));         \
       result1 = _mm512_add_ps(result1, beta_is_one ? bias1 : _mm512_mul_ps(vbeta, bias1));         \
     } else if (mode == GemmAccumMode::kAccumulate) {                                               \
@@ -484,8 +492,10 @@ void GemmMicroKernel_AVX512_F32_MR12_NR16(std::size_t K, float alpha, float beta
   do {                                                                                             \
     float *y_row = Yrow_base + (R) * Ystride + n0;                                                 \
     __m512 result = alpha_is_one ? acc_##R : _mm512_mul_ps(valpha, acc_##R);                       \
-    if (mode == GemmAccumMode::kInitBias) {                                                        \
-      const __m512 bias = _mm512_loadu_ps(Crow_base + (R) * Cstride + n0);                         \
+    if (mode == GemmAccumMode::kInitBias || mode == GemmAccumMode::kInitColumnBias) {              \
+      const __m512 bias = mode == GemmAccumMode::kInitColumnBias                                   \
+                              ? _mm512_set1_ps(Crow_base[(R) * Cstride])                           \
+                              : _mm512_loadu_ps(Crow_base + (R) * Cstride + n0);                   \
       result = _mm512_add_ps(result, beta_is_one ? bias : _mm512_mul_ps(vbeta, bias));             \
     } else if (mode == GemmAccumMode::kAccumulate) {                                               \
       result = _mm512_add_ps(result, _mm512_loadu_ps(y_row));                                      \
@@ -581,8 +591,10 @@ void GemmMicroKernel_AVX512_F32_MR24_NR16(std::size_t K, float alpha, float beta
   do {                                                                                             \
     float *y_row = Yrow_base + (R) * Ystride + n0;                                                 \
     __m512 result = alpha_is_one ? acc_##R : _mm512_mul_ps(valpha, acc_##R);                       \
-    if (mode == GemmAccumMode::kInitBias) {                                                        \
-      const __m512 bias = _mm512_loadu_ps(Crow_base + (R) * Cstride + n0);                         \
+    if (mode == GemmAccumMode::kInitBias || mode == GemmAccumMode::kInitColumnBias) {              \
+      const __m512 bias = mode == GemmAccumMode::kInitColumnBias                                   \
+                              ? _mm512_set1_ps(Crow_base[(R) * Cstride])                           \
+                              : _mm512_loadu_ps(Crow_base + (R) * Cstride + n0);                   \
       result = _mm512_add_ps(result, beta_is_one ? bias : _mm512_mul_ps(vbeta, bias));             \
     } else if (mode == GemmAccumMode::kAccumulate) {                                               \
       result = _mm512_add_ps(result, _mm512_loadu_ps(y_row));                                      \

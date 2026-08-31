@@ -187,7 +187,11 @@ void GemmMicroKernel_ScalarImpl(std::size_t mr, std::size_t nb, std::size_t K, T
     // chunk (kAccumulate) leaves ``Y`` as-is and only adds to it below. This
     // path only runs for the scalar fallback and the (small) SIMD column tail,
     // so it avoids any temporary allocation.
-    if (mode == GemmAccumMode::kInitBias) {
+    if (mode == GemmAccumMode::kInitColumnBias) {
+      const T bias = Crow_base[r * Cstride];
+      const T scaled_bias = beta_is_one ? bias : beta * bias;
+      std::fill(Yrow, Yrow + nb, scaled_bias);
+    } else if (mode == GemmAccumMode::kInitBias) {
       const T *Crow = Crow_base + r * Cstride + n0;
       for (std::size_t n = 0; n < nb; ++n) {
         Yrow[n] = beta_is_one ? Crow[n] : beta * Crow[n];
@@ -1147,8 +1151,12 @@ void InitializeOutput(std::size_t M, std::size_t N, T beta, const T *C, T *Y) {
 template <typename T, typename TileFn>
 void GemmDirect(std::size_t M, std::size_t N, std::size_t K, T alpha, const T *A, const T *B,
                 T beta, const T *C, T *Y, GemmKernelKind kind, TileFn tile,
-                const GemmBlocking &blocking) {
+                const GemmBlocking &blocking,
+                std::size_t bias_stride = std::numeric_limits<std::size_t>::max(),
+                GemmAccumMode bias_mode = GemmAccumMode::kInitBias) {
   const bool has_bias = C != nullptr && beta != T(0);
+  const std::size_t c_stride =
+      bias_stride == std::numeric_limits<std::size_t>::max() ? N : bias_stride;
   const std::size_t row_blocks = (M + blocking.mr - 1) / blocking.mr;
   const std::size_t column_panels = (N + blocking.nc - 1) / blocking.nc;
   const std::size_t task_count = row_blocks * column_panels;
@@ -1164,8 +1172,8 @@ void GemmDirect(std::size_t M, std::size_t N, std::size_t K, T alpha, const T *A
           const std::size_t n0 = panel * blocking.nc;
           const std::size_t mr = std::min(blocking.mr, M - m);
           const std::size_t nb = std::min(blocking.nc, N - n0);
-          tile(kind, mr, nb, K, alpha, beta, B, N, has_bias ? C + m * N : nullptr, N, Y + m * N, N,
-               n0, has_bias ? GemmAccumMode::kInitBias : GemmAccumMode::kInitZero, A + m * K);
+          tile(kind, mr, nb, K, alpha, beta, B, N, has_bias ? C + m * c_stride : nullptr, c_stride,
+               Y + m * N, N, n0, has_bias ? bias_mode : GemmAccumMode::kInitZero, A + m * K);
         }
       });
 }
@@ -1679,7 +1687,9 @@ void GemmSplitK(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::s
 template <GemmAlgorithm Algorithm, typename T, typename TileFn, typename SrcT = T>
 void GemmImpl(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::size_t K, T alpha,
               const SrcT *A, const SrcT *B, T beta, const T *C, T *Y, GemmKernelKind kind,
-              TileFn tile, const GemmBlocking &blocking) {
+              TileFn tile, const GemmBlocking &blocking,
+              std::size_t bias_stride = std::numeric_limits<std::size_t>::max(),
+              GemmAccumMode bias_mode = GemmAccumMode::kInitBias) {
   if (M == 0 || N == 0) {
     return;
   }
@@ -1711,7 +1721,8 @@ void GemmImpl(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::siz
       GemmFiveLoop(trans_a, trans_b, M, N, K, alpha, A, B, beta, C, Y, kind, tile,
                    runtime_blocking);
     } else {
-      GemmDirect(M, N, K, alpha, A, B, beta, C, Y, kind, tile, runtime_blocking);
+      GemmDirect(M, N, K, alpha, A, B, beta, C, Y, kind, tile, runtime_blocking, bias_stride,
+                 bias_mode);
     }
   } else if constexpr (Algorithm == GemmAlgorithm::kSkinnyM) {
     if (M > runtime_blocking.mr) {
@@ -1736,7 +1747,8 @@ void GemmImpl(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::siz
                                  !trans_a && !trans_b && M >= 128 && M <= 512 && N >= 128 &&
                                  N <= 512 && K <= 512;
       if ((!trans_a && !trans_b && K <= 128) || medium_square) {
-        GemmDirect(M, N, K, alpha, A, B, beta, C, Y, kind, tile, runtime_blocking);
+        GemmDirect(M, N, K, alpha, A, B, beta, C, Y, kind, tile, runtime_blocking, bias_stride,
+                   bias_mode);
         return;
       }
       if (trans_a && !trans_b && K <= 128) {
@@ -1747,7 +1759,8 @@ void GemmImpl(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::siz
             M <= kMaxRetainedPackedAElements / K ? retained_packed_a : oversized_packed_a;
         packed_a.resize(M * K);
         PackAPanel(true, A, M, K, 0, M, 0, K, packed_a.data());
-        GemmDirect(M, N, K, alpha, packed_a.data(), B, beta, C, Y, kind, tile, runtime_blocking);
+        GemmDirect(M, N, K, alpha, packed_a.data(), B, beta, C, Y, kind, tile, runtime_blocking,
+                   bias_stride, bias_mode);
         return;
       }
     }
@@ -1838,9 +1851,10 @@ void GemmHalfNativeGeneral(bool trans_a, std::size_t M, std::size_t N, std::size
 namespace detail {
 
 template <GemmAlgorithm Algorithm>
-void GemmFloat32Planned(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::size_t K,
-                        float alpha, const float *A, const float *B, float beta, const float *C,
-                        float *Y, const GemmBlocking *blocking) {
+void GemmFloat32PlannedImpl(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::size_t K,
+                            float alpha, const float *A, const float *B, float beta, const float *C,
+                            float *Y, const GemmBlocking *blocking, std::size_t bias_stride,
+                            GemmAccumMode bias_mode) {
   const auto tile = [](GemmKernelKind kind, std::size_t mr, std::size_t nb, std::size_t K,
                        float alpha, float beta, const float *Bmat, std::size_t N,
                        const float *Crow_base, std::size_t Cstride, float *Yrow_base,
@@ -1858,7 +1872,30 @@ void GemmFloat32Planned(bool trans_a, bool trans_b, std::size_t M, std::size_t N
       ConstrainGemmBlockingForTasks(blocking == nullptr ? default_blocking : *blocking, M, N, K,
                                     effective_threads, sizeof(float));
   GemmImpl<Algorithm, float>(trans_a, trans_b, M, N, K, alpha, A, B, beta, C, Y,
-                             SelectGemmKernelKind<float>(), tile, selected);
+                             SelectGemmKernelKind<float>(), tile, selected, bias_stride, bias_mode);
+}
+
+template <GemmAlgorithm Algorithm>
+void GemmFloat32Planned(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::size_t K,
+                        float alpha, const float *A, const float *B, float beta, const float *C,
+                        float *Y, const GemmBlocking *blocking) {
+  GemmFloat32PlannedImpl<Algorithm>(trans_a, trans_b, M, N, K, alpha, A, B, beta, C, Y, blocking,
+                                    std::numeric_limits<std::size_t>::max(),
+                                    GemmAccumMode::kInitBias);
+}
+
+void GemmFloat32PlannedRowBias(std::size_t M, std::size_t N, std::size_t K, float alpha,
+                               const float *A, const float *B, float beta, const float *C, float *Y,
+                               const GemmBlocking *blocking) {
+  GemmFloat32PlannedImpl<GemmAlgorithm::kGeneral>(false, false, M, N, K, alpha, A, B, beta, C, Y,
+                                                  blocking, 0, GemmAccumMode::kInitBias);
+}
+
+void GemmFloat32PlannedColumnBias(std::size_t M, std::size_t N, std::size_t K, float alpha,
+                                  const float *A, const float *B, float beta, const float *C,
+                                  float *Y, const GemmBlocking *blocking) {
+  GemmFloat32PlannedImpl<GemmAlgorithm::kGeneral>(false, false, M, N, K, alpha, A, B, beta, C, Y,
+                                                  blocking, 1, GemmAccumMode::kInitColumnBias);
 }
 
 template <GemmAlgorithm Algorithm>
