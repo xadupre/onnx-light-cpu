@@ -176,6 +176,21 @@ TEST(GemmPlan, Float64SquareUsesFinerParallelWork) {
   EXPECT_GT(double_plan.useful_threads(), float_plan.useful_threads());
 }
 
+TEST(GemmPlan, MediumFloatSquareSplitsRowsAcrossParticipants) {
+  if (onnx_light_cpu::DetectSimdLevel() < onnx_light_cpu::SimdLevel::kAVX512) {
+    GTEST_SKIP() << "medium-square row splitting is specific to AVX-512";
+  }
+  onnx_light_cpu::ExecutionExecutorView executor;
+  executor.effective_threads = 4;
+  onnx_light_cpu::ExecutionExecutorScope scope(&executor);
+
+  const GemmPlan<float> plan(GemmPlanOptions<float>{false, false, 256, 256, 256});
+  const std::size_t row_tasks = (plan.m() + plan.blocking().mc - 1) / plan.blocking().mc;
+
+  EXPECT_EQ(row_tasks, 4u);
+  EXPECT_GE(plan.useful_threads(), row_tasks);
+}
+
 TEST(GemmPlan, BlockingUsesIsaSpecificRegisterRows) {
   const auto avx2 = onnx_light_cpu::detail::SelectGemmBlocking(sizeof(float), 8, 4);
   const auto avx512 = onnx_light_cpu::detail::SelectGemmBlocking(sizeof(float), 16, 12);

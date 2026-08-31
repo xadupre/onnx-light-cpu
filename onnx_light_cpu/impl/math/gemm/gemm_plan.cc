@@ -125,6 +125,15 @@ GemmBlocking ResolveBlocking(GemmBlocking configured, std::size_t element_size,
     }
     resolved.kc = k > 1024 ? 1024 : k;
   }
+  // Medium AVX-512 GEMMs otherwise expose only one row panel and leave the
+  // executor with fine-grained column tasks. Four row panels amortize
+  // scheduling while allowing workers to reuse the shared packed B panel.
+  if (element_size == sizeof(float) && vector_lanes == 16 && register_rows == 12 &&
+      participants > 1 && m >= 128 && m <= 512 && n >= 128 && n <= 512) {
+    const std::size_t row_tasks = std::min({participants, m / register_rows, std::size_t{4}});
+    const std::size_t rows_per_task = m / row_tasks + static_cast<std::size_t>(m % row_tasks != 0);
+    resolved.mc = ((rows_per_task + register_rows - 1) / register_rows) * register_rows;
+  }
   if (configured.mc != 0) {
     resolved.mc = configured.mc;
   }

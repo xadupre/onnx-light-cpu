@@ -1694,7 +1694,13 @@ void GemmImpl(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::siz
   } else {
     static_assert(Algorithm == GemmAlgorithm::kGeneral);
     if constexpr (std::is_same_v<T, SrcT>) {
-      if (!trans_a && !trans_b && K <= 128) {
+      // Keeping a medium AVX-512 square unpacked avoids setup that is not
+      // amortized until larger matrices while retaining the cache-blocked path
+      // for wide projections and other ISAs.
+      const bool medium_square = std::is_same_v<T, float> && kind == GemmKernelKind::kAVX512 &&
+                                 !trans_a && !trans_b && M >= 128 && M <= 512 && N >= 128 &&
+                                 N <= 512 && K <= 512;
+      if ((!trans_a && !trans_b && K <= 128) || medium_square) {
         GemmDirect(M, N, K, alpha, A, B, beta, C, Y, kind, tile, blocking);
         return;
       }
