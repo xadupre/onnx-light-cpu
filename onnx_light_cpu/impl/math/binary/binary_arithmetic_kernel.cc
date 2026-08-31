@@ -551,8 +551,9 @@ void BinaryPReluFloat32Contiguous(const float *left, const float *right, float *
   using Fn = void (*)(const float *, const float *, float *, std::size_t);
   static const Fn fn =
       PickImpl<Fn>(&BinaryPReluFloat32_Scalar, ONNX_LIGHT_CPU_BIN_SSE2_PTR(BinaryPReluFloat32),
-                   ONNX_LIGHT_CPU_BIN_AVX2_PTR(BinaryPReluFloat32), nullptr,
-                   &BinaryPReluFloat32_Scalar, &BinaryPReluFloat32_Scalar);
+                   ONNX_LIGHT_CPU_BIN_AVX2_PTR(BinaryPReluFloat32),
+                   ONNX_LIGHT_CPU_BIN_AVX512_PTR(BinaryPReluFloat32), &BinaryPReluFloat32_Scalar,
+                   &BinaryPReluFloat32_Scalar);
   fn(left, right, out, count);
 }
 
@@ -560,7 +561,8 @@ void BinaryPReluFloat32LeftScalar(float left, const float *right, float *out, st
   using Fn = void (*)(float, const float *, float *, std::size_t);
   static const Fn fn = PickImpl<Fn>(&BinaryPReluFloat32Left_Scalar,
                                     ONNX_LIGHT_CPU_BIN_SSE2_LEFT_PTR(BinaryPReluFloat32),
-                                    ONNX_LIGHT_CPU_BIN_AVX2_LEFT_PTR(BinaryPReluFloat32), nullptr,
+                                    ONNX_LIGHT_CPU_BIN_AVX2_LEFT_PTR(BinaryPReluFloat32),
+                                    ONNX_LIGHT_CPU_BIN_AVX512_LEFT_PTR(BinaryPReluFloat32),
                                     &BinaryPReluFloat32Left_Scalar, &BinaryPReluFloat32Left_Scalar);
   fn(left, right, out, count);
 }
@@ -569,8 +571,9 @@ void BinaryPReluFloat32RightScalar(const float *left, float right, float *out, s
   using Fn = void (*)(const float *, float, float *, std::size_t);
   static const Fn fn = PickImpl<Fn>(
       &BinaryPReluFloat32Right_Scalar, ONNX_LIGHT_CPU_BIN_SSE2_RIGHT_PTR(BinaryPReluFloat32),
-      ONNX_LIGHT_CPU_BIN_AVX2_RIGHT_PTR(BinaryPReluFloat32), nullptr,
-      &BinaryPReluFloat32Right_Scalar, &BinaryPReluFloat32Right_Scalar);
+      ONNX_LIGHT_CPU_BIN_AVX2_RIGHT_PTR(BinaryPReluFloat32),
+      ONNX_LIGHT_CPU_BIN_AVX512_RIGHT_PTR(BinaryPReluFloat32), &BinaryPReluFloat32Right_Scalar,
+      &BinaryPReluFloat32Right_Scalar);
   fn(left, right, out, count);
 }
 

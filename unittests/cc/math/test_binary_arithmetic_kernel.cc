@@ -164,8 +164,9 @@ template <typename T> void RunRightScalar(const BinaryArithSpec<T> &op, std::siz
 // used by SSE2 (4x float/2x double), AVX2 (8x/4x), AVX-512 (16x/8x), NEON
 // (4x/2x), and SVE (variable width, generally <= 16x float/8x double on
 // current hardware).
-constexpr std::array<std::size_t, 15> kTailSizes = {0, 1,  2,  3,  4,  5,  7, 8,
-                                                    9, 15, 16, 17, 31, 32, 33};
+constexpr std::array<std::size_t, 18> kTailSizes = {
+    0, 1, 2, 3, 4, 5, 7, 8, 9, 15, 16, 17, 31, 32, 33, 63, 64, 65,
+};
 
 template <typename T> void RunAllShapesAndSizes() {
   for (const BinaryArithSpec<T> &op : AllOps<T>()) {
