@@ -4,6 +4,11 @@
 
 #pragma once
 
+#include "onnx_core/runtime/runtime_context.h"
+
+#include <cstddef>
+#include <string>
+
 namespace onnx_light_cpu {
 
 /// Selects the complete ``com.microsoft`` kernel implementation family.
@@ -41,5 +46,40 @@ void RegisterAllKernels();
 /// Registers all kernels, selecting the complete ``com.microsoft`` family
 /// explicitly. The no-argument overload is equivalent to ``OPTIMIZED``.
 void RegisterAllKernels(MicrosoftKernelImplementation implementation);
+
+/// Registers one shipped kernel in the process-wide dispatch table.
+///
+/// The empty domain and ``"ai.onnx"`` are equivalent. If `replace` is false,
+/// an existing registration is retained and this function returns false.
+/// Unknown domain/operator pairs throw ``std::invalid_argument``.
+bool RegisterKernelGlobal(
+    const std::string &domain, const std::string &op_type, bool replace = true,
+    MicrosoftKernelImplementation implementation = MicrosoftKernelImplementation::OPTIMIZED);
+
+/// Registers every shipped kernel in the process-wide dispatch table.
+///
+/// Returns the number of factories installed. With `replace` false, repeated
+/// calls are idempotent and return zero once all entries exist.
+std::size_t RegisterAllKernelsGlobal(
+    bool replace = true,
+    MicrosoftKernelImplementation implementation = MicrosoftKernelImplementation::OPTIMIZED);
+
+/// Registers one shipped kernel only on `session`.
+///
+/// The session's ``RuntimeContext`` owns the registration. It takes precedence
+/// over global and built-in kernels for that session and is destroyed with the
+/// context. If `replace` is false, an existing session-local registration is
+/// retained and this function returns false.
+bool RegisterKernelForSession(
+    ONNX_LIGHT_NAMESPACE::core::runtime::RuntimeContext &session, const std::string &domain,
+    const std::string &op_type, bool replace = true,
+    MicrosoftKernelImplementation implementation = MicrosoftKernelImplementation::OPTIMIZED);
+
+/// Registers every shipped kernel only on `session`.
+///
+/// Returns the number of session-local registrations installed.
+std::size_t RegisterAllKernelsForSession(
+    ONNX_LIGHT_NAMESPACE::core::runtime::RuntimeContext &session, bool replace = true,
+    MicrosoftKernelImplementation implementation = MicrosoftKernelImplementation::OPTIMIZED);
 
 } // namespace onnx_light_cpu

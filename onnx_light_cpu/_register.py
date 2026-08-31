@@ -6,9 +6,9 @@
 
 ``onnx-light`` evaluates every node against its C++ ``KernelDispatchTable``.
 ``onnx-light-cpu`` ships SIMD-accelerated C++ ``KernelBase`` subclasses and
-exposes a single ``register_all_kernels`` binding that installs every available
-class into that shared table for the CPU device. This module wraps the binding
-and exposes read-only kernel and operator-support inventories.
+exposes bindings that install one or all of them globally or on one runtime
+session. This module wraps those bindings and exposes read-only kernel and
+operator-support inventories.
 """
 
 from __future__ import annotations
@@ -163,12 +163,11 @@ def register_custom_gradients(registry: Any = None) -> Any:
 
 
 def register_kernels(
-    sess: Any = None,
     *,
     microsoft_implementation: MicrosoftKernelImplementation = (
         MicrosoftKernelImplementation.OPTIMIZED
     ),
-) -> Any:
+) -> None:
     """Registers the onnx-light-cpu kernels into onnx-light's dispatch table.
 
     This installs the SIMD-accelerated ``Abs``, ``Exp``, ``Log``, ``Gemm`` and
@@ -178,25 +177,15 @@ def register_kernels(
     onnx-light's runtime (and therefore any model run through
     ``ReferenceEvaluator``) resolves to the onnx-light-cpu kernel.
 
-    The registration is process-wide: it affects every ``ReferenceEvaluator``
-    created afterwards, not just one session. To override an operator for a
-    single session only, use onnx-light's per-session
-    ``ReferenceEvaluator.register_custom_kernel`` hook instead.
+    This backward-compatible all-kernels operation is process-wide. Prefer
+    :func:`register_kernels_global` in new code when the scope should be
+    immediately visible at the call site.
 
     Parameters
     ----------
-    sess:
-        Optional ``onnx_light.onnx.reference.ReferenceEvaluator`` (or any
-        object). The registration is global to onnx-light's dispatch table, so
-        this argument is only used as a convenience return value. When provided
-        it is returned unchanged so calls can be chained.
     microsoft_implementation:
         Complete ``com.microsoft`` implementation family to install. The
         default is :attr:`MicrosoftKernelImplementation.OPTIMIZED`.
-
-    Returns
-    -------
-    The ``sess`` argument, so calls can be chained.
 
     Examples
     --------
@@ -211,7 +200,131 @@ def register_kernels(
         (y,) = sess.run(None, {"x": np.array([-1.0, 2.0], dtype=np.float32)})
     """
     _register_all_kernels(microsoft_implementation)
-    return sess
+
+
+def _registration_binding(name: str) -> Any:
+    import_module("onnx_light.onnx.reference")
+    import_module("onnx_light.onnx_op")
+    extension = import_module("onnx_light_cpu.onnx_py._cpuregister")
+    return getattr(extension, name)
+
+
+def register_kernel_global(
+    domain: str,
+    op_type: str,
+    *,
+    replace: bool = True,
+    microsoft_implementation: MicrosoftKernelImplementation = (
+        MicrosoftKernelImplementation.OPTIMIZED
+    ),
+) -> bool:
+    """Registers one native kernel in onnx-light's process-wide dispatch table.
+
+    Existing registrations are replaced by default. With ``replace=False`` the
+    existing factory is retained and ``False`` is returned. The registration
+    is observed by sessions that resolve the operator afterwards; already
+    prepared sessions keep their cached kernel. Unknown pairs raise
+    :class:`ValueError`.
+    """
+    binding = _registration_binding("register_kernel_global")
+    return bool(
+        binding(
+            domain,
+            op_type,
+            replace,
+            _cpp_microsoft_implementation(microsoft_implementation),
+        )
+    )
+
+
+def register_kernels_global(
+    *,
+    replace: bool = True,
+    microsoft_implementation: MicrosoftKernelImplementation = (
+        MicrosoftKernelImplementation.OPTIMIZED
+    ),
+) -> int:
+    """Registers every native kernel in the process-wide dispatch table.
+
+    Returns the number of factories installed. Repeated calls have the same
+    resulting state; with ``replace=False`` existing entries are retained.
+    """
+    binding = _registration_binding("register_all_kernels_global")
+    return int(
+        binding(
+            replace,
+            _cpp_microsoft_implementation(microsoft_implementation),
+        )
+    )
+
+
+def _validate_session(sess: Any) -> None:
+    if not hasattr(sess, "_ctx") or not hasattr(sess, "_runner"):
+        raise TypeError("sess must be an onnx-light ReferenceEvaluator")
+
+
+def _session_registration(sess: Any, binding_name: str, *args: Any) -> int | bool:
+    binding = _registration_binding(binding_name)
+    result = binding(sess._ctx, *args)
+    if result:
+        sess._runner.reset()
+    return result
+
+
+def register_kernel_for_session(
+    sess: Any,
+    domain: str,
+    op_type: str,
+    *,
+    replace: bool = True,
+    microsoft_implementation: MicrosoftKernelImplementation = (
+        MicrosoftKernelImplementation.OPTIMIZED
+    ),
+) -> bool:
+    """Registers one native kernel only on ``sess``.
+
+    The evaluator's runtime context owns the registration, which neither
+    changes the process-wide table nor affects any other evaluator. Existing
+    local registrations are replaced by default. With ``replace=False`` they
+    are retained and ``False`` is returned. Unknown pairs raise
+    :class:`ValueError`.
+    """
+    _validate_session(sess)
+    return bool(
+        _session_registration(
+            sess,
+            "register_kernel_for_session",
+            domain,
+            op_type,
+            replace,
+            _cpp_microsoft_implementation(microsoft_implementation),
+        )
+    )
+
+
+def register_kernels_for_session(
+    sess: Any,
+    *,
+    replace: bool = True,
+    microsoft_implementation: MicrosoftKernelImplementation = (
+        MicrosoftKernelImplementation.OPTIMIZED
+    ),
+) -> int:
+    """Registers every native kernel only on ``sess``.
+
+    Returns the number of session-owned registrations installed. Repeated calls
+    have the same resulting state; with ``replace=False`` existing local
+    entries are retained.
+    """
+    _validate_session(sess)
+    return int(
+        _session_registration(
+            sess,
+            "register_all_kernels_for_session",
+            replace,
+            _cpp_microsoft_implementation(microsoft_implementation),
+        )
+    )
 
 
 def registered_kernels(

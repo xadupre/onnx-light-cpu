@@ -7,10 +7,15 @@
 #include "onnx_core/runtime/kernels/kernel_dispatch_table.h"
 #include "onnx_core/runtime/memory/simple_tensor.h"
 #include "onnx_core/runtime/runtime_context.h"
+#include "onnx_core/runtime/runtime_session.h"
 #include "onnx_light_cpu/kernels/com_microsoft/naive_bias_gelu_kernel.h"
+#include "onnx_light_cpu/kernels/kernel_usage.h"
 
 #include <gtest/gtest.h>
 
+#include <set>
+#include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -95,6 +100,101 @@ TEST(OnnxLightRegisterKernels, VariadicFactoryUsesOneCommonBroadcastPlan) {
   const float *values = output.AsFloat();
   EXPECT_EQ(std::vector<float>(values, values + 6),
             (std::vector<float>{111.0f, 121.0f, 131.0f, 112.0f, 122.0f, 132.0f}));
+}
+
+TEST(OnnxLightRegisterKernels, RegisterSelectedKernelGlobalRunsNativeKernel) {
+  namespace rt_ns = ONNX_LIGHT_NAMESPACE::core::runtime;
+  namespace sym_ns = ONNX_LIGHT_NAMESPACE::core::symbolic;
+  rt_ns::RegisterKernelFn("", "Abs", sym_ns::Device::kCPU,
+                          [](const ONNX_LIGHT_NAMESPACE::NodeProto &, rt_ns::RuntimeContext &)
+                              -> std::unique_ptr<rt_ns::KernelBase> { return nullptr; });
+
+  EXPECT_FALSE(onnx_light_cpu::RegisterKernelGlobal("", "Abs", false));
+  ONNX_LIGHT_NAMESPACE::NodeProto node;
+  node.set_op_type("Abs");
+  node.add_input("x");
+  node.add_output("y");
+  rt_ns::RuntimeContext runtime(rt_ns::KernelContext(rt_ns::DefaultOpset(18)));
+  runtime.Set("x", rt_ns::Tensor::FromFloat("x", {2}, {-2.0f, 3.0f}));
+  EXPECT_EQ(rt_ns::KernelDispatchTable().at("ai.onnx:Abs")(node, runtime), nullptr);
+
+  ASSERT_TRUE(onnx_light_cpu::RegisterKernelGlobal("ai.onnx", "Abs"));
+  std::unique_ptr<rt_ns::KernelBase> kernel =
+      rt_ns::KernelDispatchTable().at("ai.onnx:Abs")(node, runtime);
+  ASSERT_NE(kernel, nullptr);
+  onnx_light_cpu::ClearUsedKernelNames();
+  kernel->Run(runtime);
+  EXPECT_EQ(onnx_light_cpu::UsedKernelNames(), (std::vector<std::string>{"onnx_light_cpu::Abs"}));
+  EXPECT_FLOAT_EQ(runtime.Get("y").AsFloat()[0], 2.0f);
+  EXPECT_FLOAT_EQ(runtime.Get("y").AsFloat()[1], 3.0f);
+}
+
+TEST(OnnxLightRegisterKernels, SessionRegistrationIsIsolatedAndReplaceable) {
+  namespace rt_ns = ONNX_LIGHT_NAMESPACE::core::runtime;
+  namespace sym_ns = ONNX_LIGHT_NAMESPACE::core::symbolic;
+  rt_ns::RegisterKernelFn("", "Abs", sym_ns::Device::kCPU,
+                          [](const ONNX_LIGHT_NAMESPACE::NodeProto &, rt_ns::RuntimeContext &)
+                              -> std::unique_ptr<rt_ns::KernelBase> { return nullptr; });
+  const std::size_t global_size = rt_ns::KernelDispatchTable().size();
+
+  rt_ns::RuntimeContext selected(rt_ns::KernelContext(rt_ns::DefaultOpset(18)));
+  rt_ns::RuntimeContext other(rt_ns::KernelContext(rt_ns::DefaultOpset(18)));
+  bool sentinel_ran = false;
+  selected.RegisterCustomKernel("", "Abs",
+                                [&sentinel_ran](const ONNX_LIGHT_NAMESPACE::NodeProto &,
+                                                rt_ns::RuntimeContext &) { sentinel_ran = true; });
+  EXPECT_FALSE(onnx_light_cpu::RegisterKernelForSession(selected, "", "Abs", false));
+
+  ONNX_LIGHT_NAMESPACE::NodeProto node;
+  node.set_op_type("Abs");
+  node.add_input("x");
+  node.add_output("y");
+  selected.custom_kernels().at("ai.onnx:Abs")(node, selected);
+  EXPECT_TRUE(sentinel_ran);
+
+  ASSERT_TRUE(onnx_light_cpu::RegisterKernelForSession(selected, "", "Abs"));
+  EXPECT_EQ(other.custom_kernels().find("ai.onnx:Abs"), other.custom_kernels().end());
+  EXPECT_EQ(rt_ns::KernelDispatchTable().size(), global_size);
+  EXPECT_EQ(rt_ns::KernelDispatchTable().at("ai.onnx:Abs")(node, other), nullptr);
+
+  ONNX_LIGHT_NAMESPACE::GraphProto graph;
+  graph.set_name("session_local_abs");
+  graph.add_input()->set_name("x");
+  graph.ref_node().push_back(node);
+  graph.add_output()->set_name("y");
+  onnx_light_cpu::ClearUsedKernelNames();
+  rt_ns::SubgraphSession session(selected, graph);
+  const rt_ns::Tensors outputs =
+      session.Run({{"x", rt_ns::Tensor::FromFloat("x", {2}, {-4.0f, 5.0f})}}, selected);
+  EXPECT_EQ(onnx_light_cpu::UsedKernelNames(), (std::vector<std::string>{"onnx_light_cpu::Abs"}));
+  ASSERT_EQ(outputs.size(), 1u);
+  EXPECT_FLOAT_EQ(outputs[0].AsFloat()[0], 4.0f);
+  EXPECT_FLOAT_EQ(outputs[0].AsFloat()[1], 5.0f);
+
+  EXPECT_TRUE(onnx_light_cpu::RegisterKernelGlobal("", "Abs"));
+}
+
+TEST(OnnxLightRegisterKernels, RegisterAllForSessionIsIdempotentWithoutReplacement) {
+  namespace rt_ns = ONNX_LIGHT_NAMESPACE::core::runtime;
+  rt_ns::RuntimeContext selected(rt_ns::KernelContext(rt_ns::DefaultOpset(18)));
+  std::set<std::pair<std::string, std::string>> expected;
+  for (const auto &entry : onnx_light_cpu::CollectRegisteredKernels()) {
+    expected.emplace(entry.domain, entry.op_type);
+  }
+
+  EXPECT_EQ(onnx_light_cpu::RegisterAllKernelsForSession(selected, false), expected.size());
+  EXPECT_EQ(onnx_light_cpu::RegisterAllKernelsForSession(selected, false), 0u);
+  EXPECT_EQ(selected.custom_kernels().size(), expected.size());
+}
+
+TEST(OnnxLightRegisterKernels, UnknownKernelFailsClearly) {
+  namespace rt_ns = ONNX_LIGHT_NAMESPACE::core::runtime;
+  rt_ns::RuntimeContext selected(rt_ns::KernelContext(rt_ns::DefaultOpset(18)));
+  EXPECT_THROW(onnx_light_cpu::RegisterKernelGlobal("unknown.domain", "Abs"),
+               std::invalid_argument);
+  EXPECT_THROW(onnx_light_cpu::RegisterKernelGlobal("", "UnknownOperator"), std::invalid_argument);
+  EXPECT_THROW(onnx_light_cpu::RegisterKernelForSession(selected, "", "UnknownOperator"),
+               std::invalid_argument);
 }
 
 } // namespace

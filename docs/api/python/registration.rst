@@ -7,27 +7,44 @@ Registering kernels
    uses independent scalar correctness oracles; ``OPTIMIZED`` uses production
    kernels.
 
-.. py:function:: register_kernels(sess=None, *, microsoft_implementation=MicrosoftKernelImplementation.OPTIMIZED)
+.. py:function:: register_kernels(*, microsoft_implementation=MicrosoftKernelImplementation.OPTIMIZED)
 
-   Registers onnx-light-cpu kernels in onnx-light's shared C++
-   ``KernelDispatchTable`` for the CPU device. It installs the ``Abs``, ``Exp``,
-   ``Log``, ``Gemm``, and ``Not`` kernels, plus the ``com.microsoft`` ``CDist``
-   and ``BiasGelu`` kernels, their symbolic shape and peak-memory functions,
-   and their fusion patterns. The registration is global; ``sess`` is optional
-   and returned unchanged so calls can be chained.
+   Backward-compatible alias that registers all kernels process-wide. New code
+   can use :func:`register_kernels_global` to make the scope explicit.
 
-   ``microsoft_implementation`` explicitly selects one complete
-   ``com.microsoft`` family. The default is optimized.
+.. py:function:: register_kernel_global(domain, op_type, *, replace=True, microsoft_implementation=MicrosoftKernelImplementation.OPTIMIZED) -> bool
+
+   Registers one native kernel in the process-wide dispatch table. Future
+   sessions, and existing sessions that have not resolved the node yet, observe
+   it. Already prepared sessions keep their cached kernel. ``replace=True``
+   replaces an existing factory; ``replace=False`` keeps it and returns
+   ``False``. Unknown domain/operator pairs raise ``ValueError``.
+
+.. py:function:: register_kernels_global(*, replace=True, microsoft_implementation=MicrosoftKernelImplementation.OPTIMIZED) -> int
+
+   Registers all shipped kernels globally and returns the number installed.
+
+.. py:function:: register_kernel_for_session(sess, domain, op_type, *, replace=True, microsoft_implementation=MicrosoftKernelImplementation.OPTIMIZED) -> bool
+
+   Registers one native compiled kernel on one ``ReferenceEvaluator``. The
+   evaluator owns the registration for its lifetime; no other evaluator or the
+   process-wide table is modified. The evaluator's cached runtime session is
+   reset so its next run observes the change.
+
+.. py:function:: register_kernels_for_session(sess, *, replace=True, microsoft_implementation=MicrosoftKernelImplementation.OPTIMIZED) -> int
+
+   Registers all shipped native kernels on one evaluator and returns the number
+   installed. All four explicit APIs are idempotent in resulting state;
+   ``replace=False`` also makes duplicate calls no-ops.
 
    .. code-block:: python
 
-      import numpy as np
       from onnx_light.onnx.reference import ReferenceEvaluator
-      from onnx_light_cpu import register_kernels
+      from onnx_light_cpu import register_kernel_for_session, register_kernel_global
 
-      register_kernels()
-      sess = ReferenceEvaluator(model)
-      (y,) = sess.run(None, {"x": np.array([-1.0, 2.0], dtype=np.float32)})
+      register_kernel_global("", "Abs")
+      local_sess = ReferenceEvaluator(model)
+      register_kernel_for_session(local_sess, "", "Gemm")
 
 .. py:function:: register_backend_test_cases() -> None
 
