@@ -25,6 +25,8 @@
 #include "onnx_light_cpu/kernels/math/swiglu_kernel.h"
 #include "onnx_light_cpu/kernels/traditionalml/tree_ensemble_kernel.h"
 
+#include "onnx_proto/onnx_helper.h"
+
 #include <set>
 #include <stdexcept>
 #include <string>
