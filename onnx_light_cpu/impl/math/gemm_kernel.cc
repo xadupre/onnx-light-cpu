@@ -1667,6 +1667,16 @@ void GemmImpl(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::siz
     return;
   }
 
+  GemmBlocking runtime_blocking = blocking;
+  if constexpr (std::is_same_v<T, float> && std::is_same_v<SrcT, float>) {
+    const std::size_t runtime_threads =
+        ExecutionInParallelRegion() ? 1 : static_cast<std::size_t>(ExecutionThreadCount());
+    if (kind == GemmKernelKind::kAVX512 && runtime_blocking.mr == 24 &&
+        (trans_b || (M > 128 && runtime_threads > 1))) {
+      runtime_blocking.mr = 12;
+    }
+  }
+
   if constexpr (Algorithm == GemmAlgorithm::kDirect) {
     // The direct small-K path hands raw A/B pointers to the SIMD micro-kernel,
     // which only consumes packed ``T`` panels. For FP16/BF16 inputs (``SrcT !=
@@ -1674,17 +1684,20 @@ void GemmImpl(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::siz
     // five-loop engine, which materializes ``T`` panels from the typed source
     // without a full-tensor widening buffer.
     if constexpr (!std::is_same_v<SrcT, T>) {
-      GemmFiveLoop(trans_a, trans_b, M, N, K, alpha, A, B, beta, C, Y, kind, tile, blocking);
+      GemmFiveLoop(trans_a, trans_b, M, N, K, alpha, A, B, beta, C, Y, kind, tile,
+                   runtime_blocking);
     } else if (trans_a || trans_b || K > 32) {
-      GemmFiveLoop(trans_a, trans_b, M, N, K, alpha, A, B, beta, C, Y, kind, tile, blocking);
+      GemmFiveLoop(trans_a, trans_b, M, N, K, alpha, A, B, beta, C, Y, kind, tile,
+                   runtime_blocking);
     } else {
-      GemmDirect(M, N, K, alpha, A, B, beta, C, Y, kind, tile, blocking);
+      GemmDirect(M, N, K, alpha, A, B, beta, C, Y, kind, tile, runtime_blocking);
     }
   } else if constexpr (Algorithm == GemmAlgorithm::kSkinnyM) {
-    if (M > blocking.mr) {
-      GemmFiveLoop(trans_a, trans_b, M, N, K, alpha, A, B, beta, C, Y, kind, tile, blocking);
+    if (M > runtime_blocking.mr) {
+      GemmFiveLoop(trans_a, trans_b, M, N, K, alpha, A, B, beta, C, Y, kind, tile,
+                   runtime_blocking);
     } else {
-      GemmSkinnyM<T, SrcT>(trans_a, trans_b, M, N, K, alpha, A, B, beta, C, Y, blocking);
+      GemmSkinnyM<T, SrcT>(trans_a, trans_b, M, N, K, alpha, A, B, beta, C, Y, runtime_blocking);
     }
   } else if constexpr (Algorithm == GemmAlgorithm::kSkinnyN) {
     GemmSkinnyN<T, SrcT>(trans_a, trans_b, M, N, K, alpha, A, B, beta, C, Y);
@@ -1701,17 +1714,22 @@ void GemmImpl(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::siz
                                  !trans_a && !trans_b && M >= 128 && M <= 512 && N >= 128 &&
                                  N <= 512 && K <= 512;
       if ((!trans_a && !trans_b && K <= 128) || medium_square) {
-        GemmDirect(M, N, K, alpha, A, B, beta, C, Y, kind, tile, blocking);
+        GemmDirect(M, N, K, alpha, A, B, beta, C, Y, kind, tile, runtime_blocking);
         return;
       }
       if (trans_a && !trans_b && K <= 128) {
-        AlignedBuffer<T> packed_a(M * K);
+        constexpr std::size_t kMaxRetainedPackedAElements = 1024 * 1024;
+        thread_local AlignedVector<T> retained_packed_a;
+        AlignedVector<T> oversized_packed_a;
+        AlignedVector<T> &packed_a =
+            M <= kMaxRetainedPackedAElements / K ? retained_packed_a : oversized_packed_a;
+        packed_a.resize(M * K);
         PackAPanel(true, A, M, K, 0, M, 0, K, packed_a.data());
-        GemmDirect(M, N, K, alpha, packed_a.data(), B, beta, C, Y, kind, tile, blocking);
+        GemmDirect(M, N, K, alpha, packed_a.data(), B, beta, C, Y, kind, tile, runtime_blocking);
         return;
       }
     }
-    GemmFiveLoop(trans_a, trans_b, M, N, K, alpha, A, B, beta, C, Y, kind, tile, blocking);
+    GemmFiveLoop(trans_a, trans_b, M, N, K, alpha, A, B, beta, C, Y, kind, tile, runtime_blocking);
   }
 }
 
