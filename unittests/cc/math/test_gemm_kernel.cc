@@ -421,6 +421,23 @@ TEST(GemmFloat32, PlannedSixRowRegisterTileMatchesReference) {
   }
 }
 
+TEST(GemmFloat32, PlannedTwentyFourRowRegisterTileMatchesReference) {
+  const std::size_t M = 40, N = 37, K = 45;
+  const auto A = RandomVector(M * K, 64);
+  const auto B = RandomVector(K * N, 65);
+  const auto C = RandomVector(M * N, 66);
+  const auto expected = ReferenceGemm<float>(false, false, M, N, K, 0.75f, A, B, 1.25f, &C);
+  std::vector<float> Y(M * N);
+  const onnx_light_cpu::GemmBlocking blocking{48, 48, 64, 24, 16};
+
+  onnx_light_cpu::detail::GemmFloat32Planned<onnx_light_cpu::GemmAlgorithm::kGeneral>(
+      false, false, M, N, K, 0.75f, A.data(), B.data(), 1.25f, C.data(), Y.data(), &blocking);
+
+  for (std::size_t i = 0; i < M * N; ++i) {
+    EXPECT_NEAR(Y[i], expected[i], 2e-2f) << "i=" << i;
+  }
+}
+
 // The tile loops walk one packed column micro-panel at a time, so a column
 // panel wider than that micro-panel is split into several contiguous slices
 // with a narrower trailing one. This covers those slices together with a

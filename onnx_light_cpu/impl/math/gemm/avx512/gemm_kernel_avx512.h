@@ -17,10 +17,11 @@
 
 namespace onnx_light_cpu {
 
-// AVX-512 micro-kernel processing ``mr`` (<= kGemmAVX512MR) rows by ``nb`` columns.
-// ``Apack`` is a packed, contiguous ``mr x K`` row-major panel (see
-// ``PackARowBlock`` in gemm_kernel.cc): ``Apack[r * K + k]`` is
-// ``A(m + r, k0 + k)``, already resolved for ``trans_a``.
+// AVX-512 micro-kernel processing up to ``kGemmAVX512MR`` general rows, or the
+// specialized 24-row float32 tile, by ``nb`` columns. ``Apack`` is a packed,
+// contiguous ``mr x K`` row-major panel (see ``PackARowBlock`` in
+// gemm_kernel.cc): ``Apack[r * K + k]`` is ``A(m + r, k0 + k)``, already
+// resolved for ``trans_a``.
 void GemmMicroKernel_AVX512_F32(std::size_t mr, std::size_t nb, std::size_t K, float alpha,
                                 float beta, const float *Bmat, std::size_t N,
                                 const float *Crow_base, std::size_t Cstride, float *Yrow_base,

@@ -191,6 +191,19 @@ TEST(GemmPlan, MediumFloatSquareSplitsRowsAcrossParticipants) {
   EXPECT_GE(plan.useful_threads(), row_tasks);
 }
 
+TEST(GemmPlan, SingleThreadMediumFloatUsesWideRegisterTile) {
+  if (onnx_light_cpu::DetectSimdLevel() < onnx_light_cpu::SimdLevel::kAVX512) {
+    GTEST_SKIP() << "wide register tiling is specific to AVX-512";
+  }
+  onnx_light_cpu::ExecutionExecutorView executor;
+  executor.effective_threads = 1;
+  onnx_light_cpu::ExecutionExecutorScope scope(&executor);
+
+  const GemmPlan<float> plan(GemmPlanOptions<float>{false, false, 512, 512, 512});
+
+  EXPECT_EQ(plan.blocking().mr, 24u);
+}
+
 TEST(GemmPlan, BlockingUsesIsaSpecificRegisterRows) {
   const auto avx2 = onnx_light_cpu::detail::SelectGemmBlocking(sizeof(float), 8, 4);
   const auto avx512 = onnx_light_cpu::detail::SelectGemmBlocking(sizeof(float), 16, 12);
@@ -626,6 +639,40 @@ TEST(GemmPlan, ExecutesConstantBEpilogue) {
   plan.Execute(a.data(), epilogue, y.data());
 
   ExpectValues(y, std::array<float, 4>{27, 33, 54, 69});
+}
+
+TEST(GemmPlan, ExecutesColumnBroadcastBiasEpilogue) {
+  const GemmPlan<float> plan(GemmPlanOptions<float>{false, false, 2, 2, 2});
+  const std::array<float, 4> a = {1, 2, 3, 4};
+  const std::array<float, 4> b = {1, 0, 0, 1};
+  const std::array<float, 2> bias = {10, 20};
+  std::array<float, 4> y = {};
+
+  onnx_light_cpu::GemmEpilogue<float> epilogue;
+  epilogue.bias = bias.data();
+  epilogue.bias_layout = onnx_light_cpu::GemmBroadcast::kColumn;
+  epilogue.beta = 0.5f;
+
+  plan.Execute(a.data(), b.data(), epilogue, y.data());
+
+  ExpectValues({y.begin(), y.end()}, std::array<float, 4>{6, 7, 13, 14});
+}
+
+TEST(GemmPlan, ExecutesFusedRowBroadcastBiasEpilogue) {
+  const GemmPlan<float> plan(GemmPlanOptions<float>{false, false, 2, 2, 2});
+  const std::array<float, 4> a = {1, 2, 3, 4};
+  const std::array<float, 4> b = {1, 0, 0, 1};
+  const std::array<float, 2> bias = {10, 20};
+  std::array<float, 4> y = {};
+
+  onnx_light_cpu::GemmEpilogue<float> epilogue;
+  epilogue.bias = bias.data();
+  epilogue.bias_layout = onnx_light_cpu::GemmBroadcast::kRow;
+  epilogue.beta = 0.5f;
+
+  plan.Execute(a.data(), b.data(), epilogue, y.data());
+
+  ExpectValues({y.begin(), y.end()}, std::array<float, 4>{6, 12, 8, 14});
 }
 
 TEST(MatMulPlan, ExecutesRankTwoFoundation) {
