@@ -122,8 +122,6 @@ def render_comparison_table(results: Sequence[dict[str, Any]]) -> str:
         "K",
         "onnx-light-cpu (GFLOP/s)",
         "onnxruntime (GFLOP/s)",
-        "onnx-light-cpu p95 (us)",
-        "onnxruntime p95 (us)",
         "speedup",
     )
     rows: list[tuple[str, ...]] = [header]
@@ -138,8 +136,6 @@ def render_comparison_table(results: Sequence[dict[str, Any]]) -> str:
                 str(result["k"]),
                 f"{_gflops(operations, float(result['cpu_median_seconds'])):.2f}",
                 f"{_gflops(operations, float(result['ort_median_seconds'])):.2f}",
-                f"{float(result['cpu_p95_seconds']) * 1e6:.2f}",
-                f"{float(result['ort_p95_seconds']) * 1e6:.2f}",
                 f"{float(result['speedup']):.3f}x",
             )
         )
@@ -410,20 +406,23 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     actual_threads = None
     affinity_policy = None
 
-    def make_cpu_execution(model_bytes, feeds):
+    def measure_cpu(model_bytes, feeds, repeat):
         session = ReferenceEvaluator(model_bytes, cpu_execution=cpu_execution)
         resolution = session.cpu_execution_resolution
 
         def execute():
             return session.run(None, feeds)[0]
 
+        output = execute().copy()
+        samples = measure_alternating((execute,), repeat, args.warmup, args.max_repeat_time)[0]
         return (
-            execute,
+            output,
+            samples,
             resolution.effective_threads,
             resolution.request.affinity_policy.name.lower(),
         )
 
-    def make_ort_execution(model_bytes, feeds):
+    def measure_ort(model_bytes, feeds, repeat):
         session = onnxruntime.InferenceSession(
             model_bytes,
             sess_options=session_options,
@@ -433,28 +432,26 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         def execute():
             return session.run(None, feeds)[0]
 
-        return execute
+        output = execute().copy()
+        samples = measure_alternating((execute,), repeat, args.warmup, args.max_repeat_time)[0]
+        return output, samples
 
     for dtype_index, dtype_name in enumerate(dtype_names):
         for case_index, case in enumerate(selected_cases):
             rng = np.random.default_rng(1000 * dtype_index + case_index)
             model_bytes, feeds = _build_case(case, dtype_name, rng)
             repeat = args.repeat
-            cpu_execute, session_threads, session_affinity = make_cpu_execution(
-                model_bytes, feeds
-            )
-            ort_execute = make_ort_execution(model_bytes, feeds)
             if (dtype_index + case_index) % 2 == 0:
-                cpu_output = cpu_execute().copy()
-                ort_output = ort_execute().copy()
-                cpu_samples, ort_samples = measure_alternating(
-                    (cpu_execute, ort_execute), repeat, args.warmup, args.max_repeat_time
+                cpu_output, cpu_samples, session_threads, session_affinity = measure_cpu(
+                    model_bytes, feeds, repeat
                 )
+                gc.collect()
+                ort_output, ort_samples = measure_ort(model_bytes, feeds, repeat)
             else:
-                ort_output = ort_execute().copy()
-                cpu_output = cpu_execute().copy()
-                ort_samples, cpu_samples = measure_alternating(
-                    (ort_execute, cpu_execute), repeat, args.warmup, args.max_repeat_time
+                ort_output, ort_samples = measure_ort(model_bytes, feeds, repeat)
+                gc.collect()
+                cpu_output, cpu_samples, session_threads, session_affinity = measure_cpu(
+                    model_bytes, feeds, repeat
                 )
             gc.collect()
             if actual_threads is None:
@@ -485,8 +482,6 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 - _percentile(cpu_samples, 0.25),
                 "ort_iqr_seconds": _percentile(ort_samples, 0.75)
                 - _percentile(ort_samples, 0.25),
-                "cpu_p95_seconds": _percentile(cpu_samples, 0.95),
-                "ort_p95_seconds": _percentile(ort_samples, 0.95),
                 "speedup": ort_median / cpu_median,
             }
             results.append(result)
@@ -494,8 +489,6 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 f"{dtype_name:>7} {case.name:<24} "
                 f"cpu={cpu_median * 1e6:10.2f} us "
                 f"ort={ort_median * 1e6:10.2f} us "
-                f"cpu_p95={result['cpu_p95_seconds'] * 1e6:10.2f} us "
-                f"ort_p95={result['ort_p95_seconds'] * 1e6:10.2f} us "
                 f"speedup={result['speedup']:.3f}x",
                 flush=True,
             )
@@ -515,8 +508,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--threads",
         type=int,
-        default=1,
-        help="Thread count shared by both runtimes (default: 1).",
+        default=None,
+        help="Explicit thread count for controlled diagnostics; defaults to each runtime policy.",
     )
     parser.add_argument(
         "--cpus", default="", help="Linux CPU affinity, for example 0-3 or 0,2,4."
