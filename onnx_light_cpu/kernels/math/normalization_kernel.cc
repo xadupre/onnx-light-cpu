@@ -439,27 +439,36 @@ void MvnRetainedAxis(const Tensor &x, Tensor &y, std::size_t outer, std::size_t 
   ExecuteItems(lanes, static_cast<double>(count) * 6.0, [&](std::size_t begin, std::size_t end) {
     for (std::size_t lane = begin; lane < end; ++lane) {
       Acc sums[4] = {};
+      Acc square_sums[4] = {};
       std::size_t position = 0;
       for (std::size_t prefix = 0; prefix < outer; ++prefix) {
         const auto *run = input + (prefix * lanes + lane) * inner;
         for (std::size_t i = 0; i < inner; ++i, ++position) {
-          sums[position & 3] += Traits::Load(run, i);
+          const Acc value = Traits::Load(run, i);
+          sums[position & 3] += value;
+          square_sums[position & 3] += value * value;
         }
       }
       const Acc mean = (sums[0] + sums[1] + sums[2] + sums[3]) / static_cast<Acc>(count);
-      Acc squared_sums[4] = {};
-      position = 0;
-      for (std::size_t prefix = 0; prefix < outer; ++prefix) {
-        const auto *run = input + (prefix * lanes + lane) * inner;
-        for (std::size_t i = 0; i < inner; ++i, ++position) {
-          const Acc delta = Traits::Load(run, i) - mean;
-          squared_sums[position & 3] += delta * delta;
+      const Acc second_moment =
+          (square_sums[0] + square_sums[1] + square_sums[2] + square_sums[3]) /
+          static_cast<Acc>(count);
+      Acc variance = second_moment - mean * mean;
+      const Acc cancellation_floor = norm::RawMomentsCancellationFloor(second_moment, count);
+      if (!(variance > cancellation_floor)) {
+        Acc centered_sums[4] = {};
+        position = 0;
+        for (std::size_t prefix = 0; prefix < outer; ++prefix) {
+          const auto *run = input + (prefix * lanes + lane) * inner;
+          for (std::size_t i = 0; i < inner; ++i, ++position) {
+            const Acc delta = Traits::Load(run, i) - mean;
+            centered_sums[position & 3] += delta * delta;
+          }
         }
+        variance = (centered_sums[0] + centered_sums[1] + centered_sums[2] + centered_sums[3]) /
+                   static_cast<Acc>(count);
       }
-      const Acc stddev =
-          std::sqrt((squared_sums[0] + squared_sums[1] + squared_sums[2] + squared_sums[3]) /
-                    static_cast<Acc>(count));
-      const Acc denominator = stddev + static_cast<Acc>(1.0e-9F);
+      const Acc denominator = std::sqrt(variance) + static_cast<Acc>(1.0e-9F);
       for (std::size_t prefix = 0; prefix < outer; ++prefix) {
         const std::size_t base = (prefix * lanes + lane) * inner;
         for (std::size_t i = 0; i < inner; ++i) {

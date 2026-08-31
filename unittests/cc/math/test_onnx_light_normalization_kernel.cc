@@ -344,6 +344,22 @@ TEST(OnnxLightNormalizationKernel, InstanceNormalizationSupportsEveryFloatType) 
   }
 }
 
+TEST(OnnxLightNormalizationKernel, ContiguousMomentsRemainStableForLargeOffsets) {
+  std::vector<float> values(10000);
+  for (std::size_t i = 0; i < values.size(); ++i) {
+    values[i] = i % 4 == 0 ? 99.0F : (i % 4 == 2 ? 101.0F : 100.0F);
+  }
+  const norm::Moments<float> moments =
+      norm::ComputeContiguousMoments<rt_ns::DataType::FLOAT>(values.data(), values.size());
+  const norm::Moments<float> stashed =
+      norm::ComputeContiguousFloatMoments<rt_ns::DataType::FLOAT>(values.data(), values.size());
+
+  EXPECT_FLOAT_EQ(moments.mean, 100.0F);
+  EXPECT_FLOAT_EQ(moments.variance, 0.5F);
+  EXPECT_FLOAT_EQ(stashed.mean, 100.0F);
+  EXPECT_FLOAT_EQ(stashed.variance, 0.5F);
+}
+
 TEST(OnnxLightNormalizationKernel, LayerNormalizationBroadcastsAndReturnsFloatStats) {
   const onnx_light_cpu::LayerNormalizationKernel kernel(MakeContext(17));
   const rt_ns::Tensor x = rt_ns::MakeBfloat16Tensor("", {2, 2, 2}, {1, 2, 3, 4, 2, 4, 6, 8});
@@ -478,6 +494,15 @@ TEST(OnnxLightNormalizationKernel, MeanVarianceNormalizationUsesRequestedAxes) {
   EXPECT_NEAR(Value(y, 2), -1.0, 2.0e-3);
   EXPECT_NEAR(Value(y, 3), 1.0, 2.0e-3);
   EXPECT_THROW(kernel(x, {2}), std::invalid_argument);
+}
+
+TEST(OnnxLightNormalizationKernel, MeanVarianceNormalizationHandlesOverflowingRawMoments) {
+  const onnx_light_cpu::MeanVarianceNormalizationKernel kernel(MakeContext(13));
+  const rt_ns::Tensor x = rt_ns::Tensor::FromFloat("", {2, 1}, {2.0e20F, 2.0e20F});
+  const rt_ns::Tensor y = kernel(x, {0});
+
+  EXPECT_FLOAT_EQ(Value(y, 0), 0.0F);
+  EXPECT_FLOAT_EQ(Value(y, 1), 0.0F);
 }
 
 TEST(OnnxLightNormalizationKernel, MeanVarianceNormalizationKeepsGenericMaskFallback) {

@@ -202,6 +202,13 @@ template <typename T> struct Moments {
   T variance;
 };
 
+template <typename Acc>
+Acc RawMomentsCancellationFloor(Acc second_moment, std::size_t count) noexcept {
+  const std::size_t accumulation_steps = count / 4 + (count % 4 != 0);
+  return second_moment * std::numeric_limits<Acc>::epsilon() *
+         static_cast<Acc>(accumulation_steps) * static_cast<Acc>(8);
+}
+
 template <rt_ns::DataType Type>
 Moments<AccumulatorType<Type>> ComputeContiguousMoments(const StorageType<Type> *data,
                                                         std::size_t count) {
@@ -211,17 +218,39 @@ Moments<AccumulatorType<Type>> ComputeContiguousMoments(const StorageType<Type> 
     throw std::invalid_argument("normalization reduction size must be positive.");
   }
   Acc sums[4] = {};
+  Acc square_sums[4] = {};
   std::size_t i = 0;
   for (; i + 4 <= count; i += 4) {
-    sums[0] += Traits::Load(data, i);
-    sums[1] += Traits::Load(data, i + 1);
-    sums[2] += Traits::Load(data, i + 2);
-    sums[3] += Traits::Load(data, i + 3);
+    const Acc v0 = Traits::Load(data, i);
+    const Acc v1 = Traits::Load(data, i + 1);
+    const Acc v2 = Traits::Load(data, i + 2);
+    const Acc v3 = Traits::Load(data, i + 3);
+    sums[0] += v0;
+    sums[1] += v1;
+    sums[2] += v2;
+    sums[3] += v3;
+    square_sums[0] += v0 * v0;
+    square_sums[1] += v1 * v1;
+    square_sums[2] += v2 * v2;
+    square_sums[3] += v3 * v3;
   }
   for (; i < count; ++i) {
-    sums[i & 3] += Traits::Load(data, i);
+    const Acc value = Traits::Load(data, i);
+    sums[i & 3] += value;
+    square_sums[i & 3] += value * value;
   }
   const Acc mean = (sums[0] + sums[1] + sums[2] + sums[3]) / static_cast<Acc>(count);
+  const Acc second_moment =
+      (square_sums[0] + square_sums[1] + square_sums[2] + square_sums[3]) / static_cast<Acc>(count);
+  const Acc raw_variance = second_moment - mean * mean;
+  const Acc cancellation_floor = RawMomentsCancellationFloor(second_moment, count);
+  if (raw_variance > cancellation_floor) {
+    return {mean, raw_variance};
+  }
+
+  // The one-pass identity loses precision when the variance is tiny compared
+  // with the input magnitude. Recompute only those uncommon slices with the
+  // stable centered formula.
   Acc squared_sums[4] = {};
   i = 0;
   for (; i + 4 <= count; i += 4) {
@@ -250,17 +279,36 @@ Moments<float> ComputeContiguousFloatMoments(const StorageType<Type> *data, std:
     throw std::invalid_argument("normalization reduction size must be positive.");
   }
   float sums[4] = {};
+  float square_sums[4] = {};
   std::size_t i = 0;
   for (; i + 4 <= count; i += 4) {
-    sums[0] += static_cast<float>(Traits::Load(data, i));
-    sums[1] += static_cast<float>(Traits::Load(data, i + 1));
-    sums[2] += static_cast<float>(Traits::Load(data, i + 2));
-    sums[3] += static_cast<float>(Traits::Load(data, i + 3));
+    const float v0 = static_cast<float>(Traits::Load(data, i));
+    const float v1 = static_cast<float>(Traits::Load(data, i + 1));
+    const float v2 = static_cast<float>(Traits::Load(data, i + 2));
+    const float v3 = static_cast<float>(Traits::Load(data, i + 3));
+    sums[0] += v0;
+    sums[1] += v1;
+    sums[2] += v2;
+    sums[3] += v3;
+    square_sums[0] += v0 * v0;
+    square_sums[1] += v1 * v1;
+    square_sums[2] += v2 * v2;
+    square_sums[3] += v3 * v3;
   }
   for (; i < count; ++i) {
-    sums[i & 3] += static_cast<float>(Traits::Load(data, i));
+    const float value = static_cast<float>(Traits::Load(data, i));
+    sums[i & 3] += value;
+    square_sums[i & 3] += value * value;
   }
   const float mean = (sums[0] + sums[1] + sums[2] + sums[3]) / static_cast<float>(count);
+  const float second_moment = (square_sums[0] + square_sums[1] + square_sums[2] + square_sums[3]) /
+                              static_cast<float>(count);
+  const float raw_variance = second_moment - mean * mean;
+  const float cancellation_floor = RawMomentsCancellationFloor(second_moment, count);
+  if (raw_variance > cancellation_floor) {
+    return {mean, raw_variance};
+  }
+
   float squared_sums[4] = {};
   i = 0;
   for (; i + 4 <= count; i += 4) {

@@ -75,7 +75,9 @@ parser.add_argument(
     help="regular expression a case name must additionally match, e.g. '^test_cpu_gemm_'",
 )
 parser.add_argument(
+    "--max-case",
     "--max-cases",
+    dest="max_cases",
     type=int,
     default=20,
     help="maximum number of matching cases to run (default: 20; 0 disables the limit)",
