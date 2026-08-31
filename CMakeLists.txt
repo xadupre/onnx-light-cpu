@@ -1148,7 +1148,7 @@ if(ONNX_LIGHT_CPU_BUILD_TESTS)
     # flaky on macOS (a just-written, ad-hoc signed executable is sometimes
     # killed by the kernel), and a failed discovery run aborts the whole build.
     if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.18)
-      gtest_discover_tests(${_name} DISCOVERY_MODE PRE_TEST)
+      gtest_discover_tests(${_name} DISCOVERY_MODE PRE_TEST DISCOVERY_TIMEOUT 60)
     else()
       gtest_discover_tests(${_name})
     endif()
