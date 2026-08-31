@@ -177,8 +177,10 @@ def register_kernels(
     onnx-light's runtime (and therefore any model run through
     ``ReferenceEvaluator``) resolves to the onnx-light-cpu kernel.
 
-    This backward-compatible all-kernels operation is process-wide. Prefer
-    :func:`register_kernels_global` in new code when the scope should be
+    This legacy all-kernels name remains process-wide, but its former ignored
+    ``sess`` argument was removed. Use :func:`register_kernel_for_session` or
+    :func:`register_kernels_for_session` for session-local registration, and
+    prefer :func:`register_kernels_global` when the global scope should be
     immediately visible at the call site.
 
     Parameters

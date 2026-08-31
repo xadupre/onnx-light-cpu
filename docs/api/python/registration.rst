@@ -9,8 +9,10 @@ Registering kernels
 
 .. py:function:: register_kernels(*, microsoft_implementation=MicrosoftKernelImplementation.OPTIMIZED)
 
-   Backward-compatible alias that registers all kernels process-wide. New code
-   can use :func:`register_kernels_global` to make the scope explicit.
+   Legacy name that registers all kernels process-wide. The former ignored
+   ``sess`` argument was removed; use :func:`register_kernels_for_session` for
+   local registration. New global code can use :func:`register_kernels_global`
+   to make the scope explicit.
 
 .. py:function:: register_kernel_global(domain, op_type, *, replace=True, microsoft_implementation=MicrosoftKernelImplementation.OPTIMIZED) -> bool
 
