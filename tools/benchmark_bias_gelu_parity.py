@@ -54,6 +54,8 @@ def measure_alternating(
 ) -> tuple[tuple[list[float], ...], list[list[str]]]:
     """Warm equally and alternate candidates to limit ordering bias."""
     labels = ("onnx-light-cpu", "onnxruntime")
+    if len(functions) != len(labels):
+        raise ValueError("BiasGelu parity measurement requires exactly two candidates.")
     for iteration in range(warmup):
         for offset in range(len(functions)):
             functions[(iteration + offset) % len(functions)]()

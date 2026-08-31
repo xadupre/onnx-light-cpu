@@ -42,6 +42,8 @@ def test_candidate_order_samples_and_tail_are_retained():
     assert tuple(map(len, samples)) == (3, 3)
     assert candidate_order[1] == ["onnxruntime", "onnx-light-cpu"]
     assert math.isclose(percentile([1.0, 2.0, 3.0], 0.9), 2.8)
+    with TestCase().assertRaises(ValueError):
+        measure_alternating((cpu,), repeat=1, warmup=0, max_repeat_time=1.0)
 
 
 def test_summary_requires_median_and_per_case_tail_parity():
