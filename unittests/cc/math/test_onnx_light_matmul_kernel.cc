@@ -36,4 +36,34 @@ TEST(MatMulKernel, SupportsVectorDot) {
   EXPECT_FLOAT_EQ(dot.AsFloat()[0], 23.0f);
 }
 
+TEST(MatMulKernel, RuntimeCacheReusesShapesAndInvalidatesOnShapeChange) {
+  ONNX_LIGHT_NAMESPACE::NodeProto node;
+  node.set_op_type("MatMul");
+  node.add_input("A");
+  node.add_input("B");
+  node.add_output("Y");
+  rt_ns::RuntimeContext runtime(MakeCtx());
+  runtime.Set("A", rt_ns::Tensor::From<float>("A", {2, 2}, {1, 2, 3, 4}));
+  runtime.Set("B", rt_ns::Tensor::From<float>("B", {2, 2}, {1, 0, 0, 1}));
+
+  onnx_light_cpu::MatMulKernel kernel(MakeCtx());
+  kernel.set_node(node);
+  kernel.Run(runtime);
+  EXPECT_FLOAT_EQ(runtime.Get("Y").AsFloat()[3], 4.0f);
+
+  rt_ns::RuntimeContext same_shape_runtime(MakeCtx());
+  same_shape_runtime.Set("A", rt_ns::Tensor::From<float>("A", {2, 2}, {5, 6, 7, 8}));
+  same_shape_runtime.Set("B", rt_ns::Tensor::From<float>("B", {2, 2}, {1, 0, 0, 1}));
+  kernel.Run(same_shape_runtime);
+  EXPECT_FLOAT_EQ(same_shape_runtime.Get("Y").AsFloat()[0], 5.0f);
+  EXPECT_FLOAT_EQ(same_shape_runtime.Get("Y").AsFloat()[3], 8.0f);
+
+  rt_ns::RuntimeContext changed_shape_runtime(MakeCtx());
+  changed_shape_runtime.Set("A", rt_ns::Tensor::From<float>("A", {1, 2}, {2, 3}));
+  changed_shape_runtime.Set("B", rt_ns::Tensor::From<float>("B", {2, 1}, {4, 5}));
+  kernel.Run(changed_shape_runtime);
+  EXPECT_EQ(changed_shape_runtime.Get("Y").shape, (rt_ns::Shape{1, 1}));
+  EXPECT_FLOAT_EQ(changed_shape_runtime.Get("Y").AsFloat()[0], 23.0f);
+}
+
 } // namespace

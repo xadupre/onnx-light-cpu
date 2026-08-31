@@ -14,9 +14,12 @@
 #include "onnx_core/runtime/kernels/node_helpers.h"
 #include "onnx_core/runtime/memory/temporary_buffer.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <stdexcept>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -63,10 +66,9 @@ std::size_t ElementCount(std::span<const std::size_t> shape) {
   return count;
 }
 
-template <typename T> Tensor ComputeFloating(const Tensor &a, const Tensor &b, RuntimeContext *rt) {
-  const auto a_shape = ShapeAsSize(a.shape);
-  const auto b_shape = ShapeAsSize(b.shape);
-  const MatMulPlan<T> plan(a_shape, b_shape);
+template <typename T>
+Tensor ComputeFloating(const Tensor &a, const Tensor &b, RuntimeContext *rt,
+                       const MatMulPlan<T> &plan) {
   const Shape output_shape = OutputShape(plan.output_shape());
   const std::size_t output_elements = ElementCount(plan.output_shape());
   const std::size_t bytes = output_elements * sizeof(T);
@@ -79,10 +81,8 @@ template <typename T> Tensor ComputeFloating(const Tensor &a, const Tensor &b, R
   return y;
 }
 
-Tensor ComputeHalf(const Tensor &a, const Tensor &b, RuntimeContext *rt, bool bfloat16) {
-  const auto a_shape = ShapeAsSize(a.shape);
-  const auto b_shape = ShapeAsSize(b.shape);
-  const MatMulPlan<float> plan(a_shape, b_shape);
+Tensor ComputeHalf(const Tensor &a, const Tensor &b, RuntimeContext *rt, bool bfloat16,
+                   const MatMulPlan<float> &plan) {
   const auto *a_bits = reinterpret_cast<const std::uint16_t *>(a.bytes());
   const auto *b_bits = reinterpret_cast<const std::uint16_t *>(b.bytes());
   const Shape output_shape = OutputShape(plan.output_shape());
@@ -121,25 +121,97 @@ Tensor ComputeHalf(const Tensor &a, const Tensor &b, RuntimeContext *rt, bool bf
 
 } // namespace
 
-MatMulKernel::MatMulKernel(const rt_ns::KernelContext &ctx) : KernelBase(ctx) {}
+struct MatMulKernel::MatMulPlanCache {
+  int data_type = 0;
+  std::vector<std::size_t> a_shape;
+  std::vector<std::size_t> b_shape;
+  std::unique_ptr<MatMulPlan<float>> plan_f32;
+  std::unique_ptr<MatMulPlan<double>> plan_f64;
 
-Tensor MatMulKernel::operator()(const Tensor &a, const Tensor &b, RuntimeContext *rt) const {
+  template <typename T>
+  const MatMulPlan<T> &GetOrBuild(int type, std::span<const std::size_t> current_a_shape,
+                                  std::span<const std::size_t> current_b_shape) {
+    std::unique_ptr<MatMulPlan<T>> &slot = Slot<T>();
+    const bool shapes_match = a_shape.size() == current_a_shape.size() &&
+                              b_shape.size() == current_b_shape.size() &&
+                              std::equal(a_shape.begin(), a_shape.end(), current_a_shape.begin()) &&
+                              std::equal(b_shape.begin(), b_shape.end(), current_b_shape.begin());
+    if (slot == nullptr || data_type != type || !shapes_match) {
+      slot = std::make_unique<MatMulPlan<T>>(current_a_shape, current_b_shape);
+      data_type = type;
+      a_shape.assign(current_a_shape.begin(), current_a_shape.end());
+      b_shape.assign(current_b_shape.begin(), current_b_shape.end());
+    }
+    return *slot;
+  }
+
+private:
+  template <typename T> std::unique_ptr<MatMulPlan<T>> &Slot() {
+    if constexpr (std::is_same_v<T, float>) {
+      return plan_f32;
+    } else {
+      static_assert(std::is_same_v<T, double>);
+      return plan_f64;
+    }
+  }
+};
+
+MatMulKernel::MatMulKernel(const rt_ns::KernelContext &ctx)
+    : KernelBase(ctx), plan_cache_(std::make_unique<MatMulPlanCache>()) {}
+
+MatMulKernel::~MatMulKernel() = default;
+
+Tensor MatMulKernel::Compute(const Tensor &a, const Tensor &b, RuntimeContext *rt,
+                             MatMulPlanCache *cache) {
   if (a.data_type != b.data_type) {
     throw std::invalid_argument("onnx_light_cpu::MatMulKernel: inputs must share the same dtype.");
   }
+  const auto a_shape = ShapeAsSize(a.shape);
+  const auto b_shape = ShapeAsSize(b.shape);
   switch (static_cast<DataType>(a.data_type)) {
-  case DataType::FLOAT:
-    return ComputeFloating<float>(a, b, rt);
-  case DataType::DOUBLE:
-    return ComputeFloating<double>(a, b, rt);
+  case DataType::FLOAT: {
+    std::optional<MatMulPlan<float>> transient;
+    const MatMulPlan<float> *plan;
+    if (cache == nullptr) {
+      transient.emplace(a_shape, b_shape);
+      plan = &*transient;
+    } else {
+      plan = &cache->GetOrBuild<float>(a.data_type, a_shape, b_shape);
+    }
+    return ComputeFloating<float>(a, b, rt, *plan);
+  }
+  case DataType::DOUBLE: {
+    std::optional<MatMulPlan<double>> transient;
+    const MatMulPlan<double> *plan;
+    if (cache == nullptr) {
+      transient.emplace(a_shape, b_shape);
+      plan = &*transient;
+    } else {
+      plan = &cache->GetOrBuild<double>(a.data_type, a_shape, b_shape);
+    }
+    return ComputeFloating<double>(a, b, rt, *plan);
+  }
   case DataType::FLOAT16:
-  case DataType::BFLOAT16:
-    return ComputeHalf(a, b, rt, static_cast<DataType>(a.data_type) == DataType::BFLOAT16);
+  case DataType::BFLOAT16: {
+    std::optional<MatMulPlan<float>> transient;
+    const MatMulPlan<float> *plan;
+    if (cache == nullptr) {
+      transient.emplace(a_shape, b_shape);
+      plan = &*transient;
+    } else {
+      plan = &cache->GetOrBuild<float>(a.data_type, a_shape, b_shape);
+    }
+    return ComputeHalf(a, b, rt, static_cast<DataType>(a.data_type) == DataType::BFLOAT16, *plan);
+  }
   default:
     throw std::invalid_argument(
         "onnx_light_cpu::MatMulKernel: unsupported data type; expected FLOAT, DOUBLE, FLOAT16 or "
         "BFLOAT16.");
   }
+}
+
+Tensor MatMulKernel::operator()(const Tensor &a, const Tensor &b, RuntimeContext *rt) const {
+  return Compute(a, b, rt, nullptr);
 }
 
 void MatMulKernel::Run(RuntimeContext &rt) {
@@ -148,7 +220,7 @@ void MatMulKernel::Run(RuntimeContext &rt) {
   rt_ns::RequireOutputCount(node, 1);
   const Tensor &a = rt_ns::GetInput(node, 0, rt.tensors());
   const Tensor &b = rt_ns::GetInput(node, 1, rt.tensors());
-  rt_ns::SetOutput(node, 0, (*this)(a, b, &rt), rt);
+  rt_ns::SetOutput(node, 0, Compute(a, b, &rt, plan_cache_.get()), rt);
 }
 
 void RegisterMatMulKernel() {
