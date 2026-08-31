@@ -71,11 +71,6 @@ ONNX_LIGHT_CPU_DECLARE_BINARY_ARITH_AVX512(BinaryMulFloat64, double)
 ONNX_LIGHT_CPU_DECLARE_BINARY_ARITH_AVX512(BinaryDivFloat64, double)
 
 #undef ONNX_LIGHT_CPU_DECLARE_BINARY_ARITH_AVX512
-
-void BinaryPReluFloat32_AVX512(const float *left, const float *right, float *out,
-                               std::size_t count);
-void BinaryPReluFloat32Left_AVX512(float left, const float *right, float *out, std::size_t count);
-void BinaryPReluFloat32Right_AVX512(const float *left, float right, float *out, std::size_t count);
 #endif // ONNX_LIGHT_CPU_HAVE_AVX512
 
 #ifdef ONNX_LIGHT_CPU_HAVE_SVE

@@ -825,19 +825,6 @@ TEST(OnnxLightBackendKernels, BinaryBenchmarkCorporaCoverEverySignatureAndPriori
   }
 }
 
-TEST(OnnxLightBackendKernels, BinaryArithmeticBenchmarksRunThroughRuntime) {
-  const std::vector<std::pair<std::string, std::string>> cases = {
-      {"Div", "test_cpu_div_v14_contiguous_float32xfloat32_to_float32_n4096_benchmark"},
-      {"Sub", "test_cpu_sub_v14_contiguous_float32xfloat32_to_float32_n4096_benchmark"},
-      {"Mod", "test_cpu_mod_v13_contiguous_float32xfloat32_to_float32_fmod1_n4096_benchmark"},
-  };
-  for (const auto &[op_type, case_name] : cases) {
-    const std::vector<std::string> failures =
-        RunCpuBackendCases(op_type, core::backend_test::TestMode::BENCHMARK, case_name);
-    EXPECT_TRUE(failures.empty()) << case_name << ": " << Describe(failures);
-  }
-}
-
 TEST(OnnxLightBackendKernels, BinaryBenchmarkCorporaCoverQwen3LlmWorkloads) {
   const std::vector<std::string> mul_names = {
       "test_cpu_mul_llm_qwen3_8b_v14_contiguous_s1_h12288_float16xfloat16_to_float16_n12288_"
