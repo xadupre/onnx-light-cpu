@@ -88,10 +88,6 @@ BiasGeluFloat32RangeFn SelectBiasGeluFloat32Range() {
   return selected;
 }
 
-void BiasGeluFloat32Range(const float *a, const float *bias, float *output, std::size_t count) {
-  SelectBiasGeluFloat32Range()(a, bias, output, count);
-}
-
 // Builds the ``ExecutionSchedule`` shared by every dtype: thresholds are
 // expressed in bytes of one broadcast row (``inner`` elements, matching the
 // bias broadcast boundary) via ``UnaryBytesToElements``.
@@ -143,11 +139,13 @@ void BiasGeluDispatch(const T *a, const T *bias, T *output, std::size_t outer, s
     return;
   }
   const std::size_t row_bytes = inner * sizeof(T);
+  const BiasGeluFloat32RangeFn float32_range =
+      std::is_same_v<T, float> ? SelectBiasGeluFloat32Range() : nullptr;
   DispatchRows(outer, row_bytes, tuning, [=](std::int64_t begin, std::int64_t end) {
     for (std::int64_t row = begin; row < end; ++row) {
       const std::size_t offset = static_cast<std::size_t>(row) * inner;
       if constexpr (std::is_same_v<T, float>) {
-        BiasGeluFloat32Range(a + offset, bias, output + offset, inner);
+        float32_range(a + offset, bias, output + offset, inner);
       } else {
         for (std::size_t column = 0; column < inner; ++column) {
           output[offset + column] = GeluExact<T>(a[offset + column] + bias[column]);

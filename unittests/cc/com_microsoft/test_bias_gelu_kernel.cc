@@ -54,6 +54,23 @@ TEST(BiasGelu, Float32ApproximationStaysCloseToExactGeluAcrossVectorizedRange) {
   }
 }
 
+TEST(BiasGelu, Float32VectorBoundariesUseTheSameApproximation) {
+  for (const std::size_t count : {1u, 7u, 8u, 9u, 15u, 16u, 17u, 31u}) {
+    std::vector<float> a(count);
+    std::vector<float> bias(count);
+    for (std::size_t i = 0; i < count; ++i) {
+      a[i] = -5.75f + static_cast<float>(i) * 11.5f / static_cast<float>(count);
+      bias[i] = static_cast<float>(static_cast<int>(i % 3) - 1) * 0.03125f;
+    }
+    std::vector<float> output(count + 1, -42.0f);
+    BiasGeluFloat32(a.data(), bias.data(), output.data(), 1, count);
+    for (std::size_t i = 0; i < count; ++i) {
+      EXPECT_NEAR(output[i], ReferenceGelu(a[i] + bias[i]), 9e-6f) << count << "," << i;
+    }
+    EXPECT_EQ(output[count], -42.0f);
+  }
+}
+
 TEST(BiasGelu, Float32PreservesSpecialValues) {
   std::vector<float> a(16, 0.0f);
   a[0] = std::numeric_limits<float>::infinity();

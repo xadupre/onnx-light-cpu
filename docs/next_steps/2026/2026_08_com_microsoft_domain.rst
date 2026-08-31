@@ -28,6 +28,42 @@ Operator contract
     supports ``FLOAT16``, ``FLOAT``, ``DOUBLE``, and ``BFLOAT16`` while
     preserving the input shape and type.
 
+BiasGelu latency parity
+-----------------------
+
+``tools/benchmark_bias_gelu_parity.py`` compares the optimized FLOAT kernel
+directly with ONNX Runtime's CPU execution provider.  Its matrix includes
+empty and singleton tensors, sizes immediately around AVX2 and AVX-512 vector
+boundaries, transformer dimensions, a large outer dimension, and sizes around
+the 256 KiB parallel threshold.  Both runtimes receive the same input buffers,
+thread count, process affinity, warm-up count, alternating sample order, and
+default arena/memory-pattern allocation policy.  Each JSON row retains raw
+samples, median, p90, interquartile range, and median/tail speed-up.
+
+Use an idle pinned host and the same release build for published comparisons:
+
+.. code-block:: bash
+
+   python tools/benchmark_bias_gelu_parity.py --cpus 0 --threads 1 \
+       --profile-runs 100 --output bias_gelu_parity_results.json --enforce
+
+``--profile-runs`` adds a separate cProfile call breakdown for onnx-light-cpu
+and ONNX Runtime's native per-node trace to the report; these diagnostic calls
+are excluded from latency samples.  This distinguishes Python/runtime setup
+and dispatch from node computation instead of attributing a wall-clock gap to
+the kernel without evidence.  The report also records the revision, affinity,
+compiler flags, package versions, allocator policy, seed, and effective
+execution policy.  Shared CI validates the runner and direct numerical parity;
+latency enforcement belongs on a dedicated machine.
+
+FLOAT uses one runtime-selected scalar, AVX2/FMA, or AVX-512 implementation.
+SIMD remainders stay in vector registers and use the same polynomial and
+operation ordering as full vectors; dispatch selection is hoisted out of the
+row loop.  FLOAT16 and BFLOAT16 are intentional extensions beyond ONNX
+Runtime's FLOAT CPU registration and remain checked against the independent
+naive kernel with dtype-specific tolerances.  DOUBLE is likewise validated
+independently rather than included in the ONNX Runtime latency gate.
+
 Delivered integration
 ---------------------
 
