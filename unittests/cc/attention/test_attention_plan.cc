@@ -385,6 +385,32 @@ TEST(ComputeAttentionFloat32, FullyMaskedRowProducesZeroOutput) {
   EXPECT_TRUE(any_nonzero);
 }
 
+TEST(ComputeAttentionFloat32, AdditiveMaskFilterValueProducesZeroForEveryExecutionPath) {
+  AttentionDescriptor descriptor;
+  constexpr std::size_t batch = 1, heads = 1, kv_len = 17, head_dim = 9;
+  for (const std::int64_t q_len : {2, 16}) {
+    const std::vector<std::int64_t> q_shape = {batch, heads, q_len, head_dim};
+    const std::vector<std::int64_t> kv_shape = {batch, heads, kv_len, head_dim};
+    const std::vector<std::int64_t> mask_shape = {q_len, kv_len};
+    AttentionPlan plan(descriptor, AttentionLayout::kRank4, q_shape, kv_shape, kv_shape, mask_shape,
+                       AttentionMaskKind::kAdditive);
+    const auto q = RandomTensor(batch * heads * q_len * head_dim, 44);
+    const auto k = RandomTensor(batch * heads * kv_len * head_dim, 45);
+    const auto v = RandomTensor(batch * heads * kv_len * head_dim, 46);
+    const std::vector<float> mask(q_len * kv_len, std::numeric_limits<float>::lowest());
+    std::vector<float> streaming_y(q_len * head_dim, std::numeric_limits<float>::quiet_NaN());
+    std::vector<float> materialized_y = streaming_y;
+
+    ComputeAttentionFloat32Streaming(plan, q.data(), k.data(), v.data(), mask.data(),
+                                     streaming_y.data());
+    onnx_light_cpu::ComputeAttentionFloat32Materialized(plan, q.data(), k.data(), v.data(),
+                                                        mask.data(), materialized_y.data());
+
+    EXPECT_EQ(streaming_y, std::vector<float>(streaming_y.size(), 0.0f));
+    EXPECT_EQ(materialized_y, std::vector<float>(materialized_y.size(), 0.0f));
+  }
+}
+
 TEST(ComputeAttentionFloat32, SoftcapMatchesManualTanhFormula) {
   AttentionDescriptor descriptor;
   descriptor.softcap = 2.0f;

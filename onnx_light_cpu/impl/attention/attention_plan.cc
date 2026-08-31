@@ -320,7 +320,11 @@ namespace {
 
 constexpr float kNegativeInfinity = -std::numeric_limits<float>::infinity();
 
+bool IsMaskFilterValue(float value) noexcept {
+  return value == kNegativeInfinity || value == std::numeric_limits<float>::lowest();
 }
+
+} // namespace
 
 void ComputeAttentionFloat32Materialized(const AttentionPlan &plan, const float *q, const float *k,
                                          const float *v, const void *mask, float *y,
@@ -372,7 +376,7 @@ void ComputeAttentionFloat32Materialized(const AttentionPlan &plan, const float 
         // Tracks whether every KV position of this row is disallowed by the
         // combined causal/padding/attn_mask bias (independent of the raw QK
         // score), matching the spec's fully-masked-row guard.
-        float row_bias_max = kNegativeInfinity;
+        bool row_has_unmasked_key = false;
         for (std::size_t j = 0; j < total_kv_length; ++j) {
           const std::int64_t window_center = WindowCenter(i, causal_offset);
           bool allowed = true;
@@ -405,7 +409,7 @@ void ComputeAttentionFloat32Materialized(const AttentionPlan &plan, const float 
             additive_bias = mask_float[index];
           }
           const float bias = (allowed ? 0.0f : kNegativeInfinity) + additive_bias;
-          row_bias_max = std::max(row_bias_max, bias);
+          row_has_unmasked_key |= !IsMaskFilterValue(bias);
 
           const float *k_row;
           if (j < plan.past_length) {
@@ -439,7 +443,7 @@ void ComputeAttentionFloat32Materialized(const AttentionPlan &plan, const float 
 
         float *y_row = y_head + i * plan.y_strides.sequence;
         float *qk_out_row = plan.has_qk_matmul_output ? qk_head + i * total_kv_length : nullptr;
-        const bool row_all_masked = row_bias_max == kNegativeInfinity;
+        const bool row_all_masked = !row_has_unmasked_key;
         if (row_all_masked) {
           // Fully-masked query row: zero output, not NaN, for both Y and the
           // mode-3 qk_matmul_output. Decided on the additive bias (not the
@@ -647,9 +651,12 @@ void ComputeAttentionStreamingGeneric(const AttentionPlan &plan, const typename 
         // `head_dim`-sized FP32 query cache, and one `v_head_dim`
         // accumulator per worker (`Br == 1`); never the full
         // `[q_length, total_kv_length]` score or probability tensor.
-        std::vector<float> scores(block);
-        std::vector<float> q_fp32(plan.head_dim);
-        std::vector<float> accumulator(plan.v_head_dim);
+        thread_local std::vector<float> scores;
+        thread_local std::vector<float> q_fp32;
+        thread_local std::vector<float> accumulator;
+        scores.resize(block);
+        q_fp32.resize(plan.head_dim);
+        accumulator.resize(plan.v_head_dim);
 
         for (std::int64_t row = begin; row < end; ++row) {
           const std::size_t b = static_cast<std::size_t>(row) / rows_per_batch;
@@ -802,7 +809,7 @@ void ComputeAttentionStreamingGeneric(const AttentionPlan &plan, const typename 
               const float capped = has_softcap ? plan.softcap * std::tanh(raw / plan.softcap) : raw;
               const float with_bias = capped + bias;
               scores[jj] = with_bias;
-              if (with_bias != kNegativeInfinity) {
+              if (!IsMaskFilterValue(bias)) {
                 any_valid = true;
               }
               block_max = std::max(block_max, with_bias);
@@ -890,12 +897,18 @@ void ComputeAttentionFloat32Tiled(const AttentionPlan &plan, const float *q, con
       static_cast<std::int64_t>(participants), static_cast<std::int64_t>(participants)};
   ExecuteRanges(
       static_cast<std::int64_t>(total_tasks), schedule, [&](std::int64_t begin, std::int64_t end) {
-        std::vector<float> scores(query_block * kv_block);
-        std::vector<float> accumulator(query_block * plan.v_head_dim);
-        std::vector<float> product(query_block * plan.v_head_dim);
-        std::vector<float> maxima(query_block);
-        std::vector<float> denominators(query_block);
-        std::vector<std::uint8_t> valid(query_block);
+        thread_local std::vector<float> scores;
+        thread_local std::vector<float> accumulator;
+        thread_local std::vector<float> product;
+        thread_local std::vector<float> maxima;
+        thread_local std::vector<float> denominators;
+        thread_local std::vector<std::uint8_t> valid;
+        scores.resize(query_block * kv_block);
+        accumulator.resize(query_block * plan.v_head_dim);
+        product.resize(query_block * plan.v_head_dim);
+        maxima.resize(query_block);
+        denominators.resize(query_block);
+        valid.resize(query_block);
 
         for (std::int64_t task = begin; task < end; ++task) {
           const std::size_t b = static_cast<std::size_t>(task) / tasks_per_batch;
@@ -1017,6 +1030,7 @@ void ComputeAttentionFloat32Tiled(const AttentionPlan &plan, const float *q, con
                       mask_row + static_cast<std::ptrdiff_t>(j) * plan.mask_strides.kv;
                   additive_bias = mask_float[index];
                 }
+                valid[i] |= static_cast<std::uint8_t>(allowed && !IsMaskFilterValue(additive_bias));
                 float score = score_row[jj];
                 if (plan.softcap != 0.0f) {
                   score = plan.softcap * std::tanh(score / plan.softcap);
@@ -1045,7 +1059,6 @@ void ComputeAttentionFloat32Tiled(const AttentionPlan &plan, const float *q, con
                 AttentionExp(score_row, columns);
                 for (std::size_t jj = 0; jj < columns; ++jj) {
                   denominators[i] += score_row[jj];
-                  valid[i] |= static_cast<std::uint8_t>(score_row[jj] != 0.0f);
                 }
               }
               maxima[i] = new_max;

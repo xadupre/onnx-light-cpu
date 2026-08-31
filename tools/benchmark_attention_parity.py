@@ -55,8 +55,6 @@ def measure_alternating(
     for iteration in range(warmup):
         for offset in range(len(functions)):
             index = (iteration + offset) % len(functions)
-            if warmup_durations[index] >= max_repeat_time:
-                continue
             start = time.perf_counter_ns()
             functions[index]()
             warmup_durations[index] += (time.perf_counter_ns() - start) / 1e9
@@ -69,10 +67,9 @@ def measure_alternating(
     gc.disable()
     try:
         for iteration in range(repeat):
-            order = [(iteration + offset) % len(functions) for offset in range(len(functions))]
-            order = [index for index in order if total_durations[index] < max_repeat_time]
-            if not order:
+            if any(duration >= max_repeat_time for duration in total_durations):
                 break
+            order = [(iteration + offset) % len(functions) for offset in range(len(functions))]
             orders.append([labels[index] for index in order])
             for index in order:
                 start = time.perf_counter_ns()
@@ -101,20 +98,25 @@ def summarize(results: Sequence[dict[str, Any]]) -> dict[str, Any]:
     for dtype in sorted({str(result["dtype"]) for result in results}):
         selected = [result for result in results if result["dtype"] == dtype]
         speedups = [float(result["speedup"]) for result in selected]
+        tail_speedups = [
+            float(result.get("tail_speedup", result["speedup"])) for result in selected
+        ]
         memory_passed = all(bool(result["memory_gate_passed"]) for result in selected)
         median = statistics.median(speedups)
         minimum = min(speedups)
-        dtype_passed = median >= 1.0 and minimum >= 0.9 and memory_passed
+        minimum_tail = min(tail_speedups)
+        dtype_passed = median >= 1.0 and minimum >= 0.9 and minimum_tail >= 0.9 and memory_passed
         passed = passed and dtype_passed
         by_dtype[dtype] = {
             "median_speedup": median,
             "minimum_speedup": minimum,
+            "minimum_tail_speedup": minimum_tail,
             "memory_gate_passed": memory_passed,
             "passed": dtype_passed,
         }
     return {
         "passed": passed and set(by_dtype) == set(DTYPES),
-        "thresholds": {"median": 1.0, "minimum": 0.9},
+        "thresholds": {"median": 1.0, "minimum": 0.9, "minimum_tail": 0.9},
         "by_dtype": by_dtype,
     }
 
@@ -245,11 +247,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             for name, tensor in zip(input_names, data_set.inputs, strict=True)
         }
 
-        cpu = (
-            ReferenceEvaluator(test_case.model)
-            if args.threads is None
-            else ReferenceEvaluator(test_case.model, cpu_execution={"num_threads": args.threads})
-        )
+        cpu = ReferenceEvaluator(test_case.model, cpu_execution={"num_threads": args.threads})
         resolution = cpu.cpu_execution_resolution
         current_threads = int(resolution.effective_threads)
         if resolved_threads is None:
@@ -257,16 +255,13 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         elif resolved_threads != current_threads:
             raise RuntimeError("onnx-light resolved inconsistent thread counts.")
 
-        if args.threads is None:
-            ort = onnxruntime.InferenceSession(model_bytes, providers=["CPUExecutionProvider"])
-        else:
-            options = onnxruntime.SessionOptions()
-            options.intra_op_num_threads = args.threads
-            options.inter_op_num_threads = 1
-            options.execution_mode = onnxruntime.ExecutionMode.ORT_SEQUENTIAL
-            ort = onnxruntime.InferenceSession(
-                model_bytes, sess_options=options, providers=["CPUExecutionProvider"]
-            )
+        options = onnxruntime.SessionOptions()
+        options.intra_op_num_threads = args.threads
+        options.inter_op_num_threads = 1
+        options.execution_mode = onnxruntime.ExecutionMode.ORT_SEQUENTIAL
+        ort = onnxruntime.InferenceSession(
+            model_bytes, sess_options=options, providers=["CPUExecutionProvider"]
+        )
 
         def cpu_run(session=cpu, current_feeds=feeds):
             return session.run(None, current_feeds)
@@ -298,6 +293,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         )
         cpu_median = statistics.median(cpu_samples)
         ort_median = statistics.median(ort_samples)
+        cpu_p90 = _percentile(cpu_samples, 0.9)
+        ort_p90 = _percentile(ort_samples, 0.9)
         workers = current_threads
         score_tile_bytes = workers * min(case["kv_length"], KV_BLOCK) * 4
         peak_temporary_bytes = score_tile_bytes + workers * case["head_dim"] * 8
@@ -317,12 +314,15 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 "ort_samples_seconds": ort_samples,
                 "candidate_order": orders,
                 "cpu_median_seconds": cpu_median,
+                "cpu_p90_seconds": cpu_p90,
                 "ort_median_seconds": ort_median,
+                "ort_p90_seconds": ort_p90,
                 "cpu_iqr_seconds": _percentile(cpu_samples, 0.75)
                 - _percentile(cpu_samples, 0.25),
                 "ort_iqr_seconds": _percentile(ort_samples, 0.75)
                 - _percentile(ort_samples, 0.25),
                 "speedup": ort_median / cpu_median,
+                "tail_speedup": ort_p90 / cpu_p90,
                 "peak_temporary_bytes": peak_temporary_bytes,
                 "peak_score_tile_bytes": score_tile_bytes,
                 "temporary_memory_accounting": (
@@ -344,7 +344,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     report = {
         "metadata": {
             "timestamp_utc": datetime.now(UTC).isoformat(),
-            "policy": "default" if args.threads is None else "equal-thread diagnostic",
+            "policy": "equal-thread",
             "requested_threads": args.threads,
             "effective_threads": resolved_threads,
             "affinity": (
@@ -387,7 +387,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--case", action="append", default=[], help="Case-name regular expression."
     )
     parser.add_argument("--large", action="store_true", help="Include opt-in KV=8192 cases.")
-    parser.add_argument("--threads", type=int, default=None, help="Equal-thread diagnostic.")
+    parser.add_argument("--threads", type=int, default=1, help="Thread count for both runtimes.")
     parser.add_argument("--cpus", default="", help="Linux CPU affinity, for example 0-3,8.")
     parser.add_argument("-r", "--repeat", type=int, default=100 * (os.cpu_count() or 1))
     parser.add_argument("-w", "--warmup", type=int, default=100 * 20)
@@ -397,10 +397,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     args = parser.parse_args(argv)
     if args.repeat < 1 or args.warmup < 0 or args.max_repeat_time <= 0:
         parser.error("repeat and max-repeat-time must be positive and warmup non-negative")
-    if args.threads is not None and args.threads < 1:
+    if args.threads < 1:
         parser.error("threads must be positive")
-    if args.enforce and args.threads is not None:
-        parser.error("--enforce applies only to the default-policy corpus")
     return args
 
 
@@ -411,7 +409,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     for row in report["results"]:
         print(
             f"{row['backend_case_name']} cpu={row['cpu_median_seconds'] * 1e3:.3f}ms "
-            f"ort={row['ort_median_seconds'] * 1e3:.3f}ms speedup={row['speedup']:.3f}x"
+            f"ort={row['ort_median_seconds'] * 1e3:.3f}ms speedup={row['speedup']:.3f}x "
+            f"p90={row['cpu_p90_seconds'] * 1e3:.3f}/{row['ort_p90_seconds'] * 1e3:.3f}ms"
         )
     print(f"raw results: {args.output}")
     print(json.dumps(report["summary"], indent=2))

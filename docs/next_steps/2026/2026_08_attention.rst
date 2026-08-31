@@ -8,7 +8,7 @@ Attention Performance Roadmap
 ``onnx-light-cpu`` provides materialized and bounded-memory streaming Attention
 for the roadmap types and cache modes. The registered backend corpus and
 ``tools/benchmark_attention_parity.py`` provide the final reproducible
-default-policy gate against ONNX Runtime. Dedicated-machine reports, rather
+equal-thread gate against ONNX Runtime. Dedicated-machine reports, rather
 than shared CI timings, decide the narrow performance thresholds.
 
 Objective
@@ -81,11 +81,10 @@ stages.
 
 * Use identical tensors, masks, layouts, CPU affinity, and correctness
   tolerances.
-* The primary comparison leaves thread selection unset so ONNX Runtime and
-  onnx-light choose their own default execution policies. Explicit equal-thread
-  runs are separate scaling diagnostics and never replace the primary result.
-* Warm up every candidate, alternate candidate order, and report median and
-  dispersion rather than the best observation.
+* The primary comparison sets both runtimes to one thread. ``--threads N``
+  applies the same explicit count to both runtimes for scaling diagnostics.
+* Warm up every candidate equally, alternate candidate order, and report median,
+  p90 tail latency, and dispersion rather than the best observation.
 * Run on an idle, pinned machine with a fixed power policy and record CPU,
   cache, ISA, compiler, and build metadata.
 * Cover query lengths 1, 2, 8, 16, 128, and 512; KV lengths 1, 128, 1024,
@@ -134,7 +133,7 @@ model.
 Final parity gate
 -----------------
 
-The default-policy corpus is run on a pinned dedicated machine with:
+The equal-thread corpus is run on a pinned dedicated machine with:
 
 .. code-block:: bash
 
@@ -143,19 +142,19 @@ The default-policy corpus is run on a pinned dedicated machine with:
 
 The default excludes the memory-intensive KV-length 8192 cases; add ``--large``
 when machine memory permits. ``--threads N`` produces a separate equal-thread
-diagnostic and cannot be combined with ``--enforce``.
+scaling run.
 
 Every JSON row retains the globally unique backend case name, raw alternating
-samples and candidate order, median and interquartile dispersion, effective
-worker count, conservative peak streaming scratch and score-tile bytes from the
-kernel's allocation model, tensor-cache bytes copied, and effective KV
-bandwidth. Report metadata includes affinity, CPU and cache topology, ISA flags,
-compiler and flags, package versions, platform, and the exact git revision. The
-summary applies the ``1.0x`` median and ``0.9x`` minimum thresholds
-independently to FP32, FP16, and BF16 and also requires the streaming-memory
-bound. Shared CI checks the corpus structure, globally unique names, gate
-arithmetic, dispatch correctness, and bounded streaming implementation; it does
-not run ``--enforce``.
+samples and candidate order, median, p90 tail latency, interquartile dispersion,
+effective worker count, conservative peak streaming scratch and score-tile
+bytes from the kernel's allocation model, tensor-cache bytes copied, and
+effective KV bandwidth. Report metadata includes affinity, CPU and cache
+topology, ISA flags, compiler and flags, package versions, platform, and the
+exact git revision. The summary applies the ``1.0x`` median and ``0.9x``
+per-case median and p90 thresholds independently to FP32, FP16, and BF16 and
+also requires the streaming-memory bound. Shared CI checks the corpus
+structure, globally unique names, gate arithmetic, dispatch correctness, and
+bounded streaming implementation; it does not run ``--enforce``.
 
 Phase 1: plan and materialized correctness path
 -----------------------------------------------
@@ -338,7 +337,7 @@ Pull-request sequence
      - Final parity and memory gate.
      - Every priority platform/type corpus has bounded temporary memory,
        reaches at least ``1.0x`` median speed-up over ONNX Runtime, and has no
-       priority case below ``0.9x``. Raw default-policy samples and environment
+       priority case below ``0.9x``. Raw equal-thread samples and environment
        metadata are published; controlled-thread runs remain diagnostic.
      - PR14 / #391
      - Complete
