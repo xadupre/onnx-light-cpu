@@ -1266,9 +1266,30 @@ void GemmSkinnyN(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::
 // once per output element. Work is parallelized over ``N`` column panels.
 template <typename T, typename SrcT = T>
 void GemmSkinnyM(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::size_t K, T alpha,
-                 const SrcT *A, const SrcT *B, T beta, const T *C, T *Y,
+                 const SrcT *A, const SrcT *B, T beta, const T *C, T *Y, GemmKernelKind kind,
                  const GemmBlocking &blocking) {
   const bool has_bias = C != nullptr && beta != T(0);
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
+  if constexpr (std::is_same_v<T, float> && std::is_same_v<SrcT, float>) {
+    constexpr std::size_t kRegisterPanel = 256;
+    if (!trans_a && !trans_b && M == 1 && N % kRegisterPanel == 0 &&
+        kind == GemmKernelKind::kAVX512) {
+      const std::size_t panel_count = N / kRegisterPanel;
+      const ExecutionSchedule schedule{2, 1, ExecutionThreadCount()};
+      ExecuteRanges(static_cast<std::int64_t>(panel_count), schedule,
+                    [&](std::int64_t begin, std::int64_t end) {
+                      for (std::int64_t panel = begin; panel < end; ++panel) {
+                        GemmSkinnyM1Kernel_AVX512_F32(K, alpha, A, B, N, beta, C, Y,
+                                                      static_cast<std::size_t>(panel) *
+                                                          kRegisterPanel);
+                      }
+                    });
+      return;
+    }
+  }
+#else
+  (void)kind;
+#endif
   // ``B(k, n)`` reduces to unit-stride column reads for the common inference
   // layout (non-transposed weights), which lets the axpy vectorize over N.
   const std::size_t b_col_stride = trans_b ? K : 1;
@@ -1697,7 +1718,8 @@ void GemmImpl(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::siz
       GemmFiveLoop(trans_a, trans_b, M, N, K, alpha, A, B, beta, C, Y, kind, tile,
                    runtime_blocking);
     } else {
-      GemmSkinnyM<T, SrcT>(trans_a, trans_b, M, N, K, alpha, A, B, beta, C, Y, runtime_blocking);
+      GemmSkinnyM<T, SrcT>(trans_a, trans_b, M, N, K, alpha, A, B, beta, C, Y, kind,
+                           runtime_blocking);
     }
   } else if constexpr (Algorithm == GemmAlgorithm::kSkinnyN) {
     GemmSkinnyN<T, SrcT>(trans_a, trans_b, M, N, K, alpha, A, B, beta, C, Y);

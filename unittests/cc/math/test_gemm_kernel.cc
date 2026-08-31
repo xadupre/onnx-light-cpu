@@ -526,6 +526,22 @@ TEST(GemmFloat32, SkinnyMWideNMultipleColumnPanels) {
   }
 }
 
+TEST(GemmFloat32, SkinnyMSingleRowRegisterPanelsMatchReference) {
+  constexpr std::size_t M = 1;
+  constexpr std::size_t N = 512;
+  constexpr std::size_t K = 73;
+  const auto A = RandomVector(M * K, 46);
+  const auto B = RandomVector(K * N, 47);
+  const auto C = RandomVector(M * N, 48);
+  const auto expected = ReferenceGemm<float>(false, false, M, N, K, 0.75f, A, B, 1.25f, &C);
+  std::vector<float> Y(M * N, 0.0f);
+  onnx_light_cpu::GemmFloat32(false, false, M, N, K, 0.75f, A.data(), B.data(), 1.25f, C.data(),
+                              Y.data());
+  for (std::size_t i = 0; i < M * N; ++i) {
+    EXPECT_NEAR(Y[i], expected[i], 1e-2f) << "i=" << i;
+  }
+}
+
 // A single output column (N == 1) with many rows and a long reduction hits the
 // skinny-N path, whose unit-stride dot product carries sixteen partial sums for
 // full-width AVX. K == 1000 is not a multiple of that unroll, so the scalar tail
