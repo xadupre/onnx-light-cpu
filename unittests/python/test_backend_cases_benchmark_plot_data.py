@@ -17,6 +17,7 @@ needing onnx-light or ONNX Runtime.
 
 import ast
 import re
+import time
 from pathlib import Path
 from onnx_light.ext_test_case import ExtTestCase
 
@@ -29,6 +30,8 @@ _PLOT_DATA_NAMES = {
     "prepare_plot_data",
     "_case_group_key",
     "_CASE_GROUP_SUFFIXES",
+    "measure",
+    "timing_summary",
 }
 
 
@@ -74,6 +77,7 @@ def _load_plot_data_helpers():
         "np": np,
         "plt": plt,
         "re": re,
+        "time": time,
     }
     exec(  # noqa: S102 -- extracting the example's own plot-data helpers, not user input.
         compile(module, str(_EXAMPLE_PATH), "exec"), namespace
@@ -85,16 +89,51 @@ _helpers = _load_plot_data_helpers()
 NoPlottableCasesError = _helpers["NoPlottableCasesError"]
 prepare_plot_data = _helpers["prepare_plot_data"]
 _case_group_key = _helpers["_case_group_key"]
+measure = _helpers["measure"]
+timing_summary = _helpers["timing_summary"]
 
 
-def _row(op_type, name, light_time=1.0, ort_time=None, ort_error=None):
-    return (op_type, name, "1x1", "float32", light_time, ort_time, ort_error)
+def _row(
+    op_type,
+    name,
+    light_time=1.0,
+    ort_time=None,
+    ort_error=None,
+    light_p10=None,
+    ort_p10=None,
+    light_p90=None,
+    ort_p90=None,
+):
+    return (
+        op_type,
+        name,
+        "1x1",
+        "float32",
+        light_time,
+        ort_time,
+        ort_error,
+        light_time if light_p10 is None else light_p10,
+        light_time if light_p90 is None else light_p90,
+        ort_time if ort_p10 is None else ort_p10,
+        ort_time if ort_p90 is None else ort_p90,
+        1,
+        1 if ort_time is not None else None,
+    )
 
 
 class TestPrepareBackendCasesPlotData(ExtTestCase):
     def test_mixed_supported_and_unsupported_cases(self):
         rows = [
-            _row("Abs", "test_cpu_abs_float32_benchmark", light_time=1.0, ort_time=2.0),
+            _row(
+                "Abs",
+                "test_cpu_abs_float32_benchmark",
+                light_time=1.0,
+                ort_time=2.0,
+                light_p10=0.8,
+                ort_p10=1.2,
+                light_p90=1.5,
+                ort_p90=3.6,
+            ),
             _row(
                 "Attention",
                 "test_cpu_attention_streaming_benchmark",
@@ -109,6 +148,10 @@ class TestPrepareBackendCasesPlotData(ExtTestCase):
         self.assertEqual(len(plot_data.plotted_rows), 2)
         self.assertEqual(plot_data.labels, ["abs_float32", "gemm_float64"])
         self.assertEqual(list(plot_data.speedups), [2.0, 0.5])
+        self.assertAlmostEqual(plot_data.p10_speedups[0], 1.5)
+        self.assertEqual(plot_data.p10_speedups[1], 0.5)
+        self.assertAlmostEqual(plot_data.p90_speedups[0], 2.4)
+        self.assertEqual(plot_data.p90_speedups[1], 0.5)
         self.assertEqual(sorted(plot_data.colors_by_op_type), ["Abs", "Gemm"])
         # ... but it is not lost: callers keep the full ``rows`` list (with its
         # error) for the textual/table output.
@@ -176,3 +219,30 @@ class TestCaseGroupKey(ExtTestCase):
         # A plain string in, string out call: nothing here should ever touch
         # a ``TestCase`` object or its ``.model`` property.
         self.assertIsInstance(_case_group_key("test_cpu_abs_float32_benchmark"), str)
+
+
+class TestStableTiming(ExtTestCase):
+    def test_batches_short_calls(self):
+        calls = []
+
+        def run():
+            calls.append(None)
+
+        samples, calls_per_sample = measure(
+            run,
+            repeat=3,
+            warmup=1,
+            max_duration=1.0,
+            min_sample_duration=1e-9,
+        )
+
+        self.assertEqual(calls_per_sample, 1)
+        self.assertEqual(len(samples), 3)
+        self.assertEqual(len(calls), 7)
+
+    def test_timing_summary_reports_median_and_percentiles(self):
+        median, p10, p90 = timing_summary([1.0, 2.0, 3.0])
+
+        self.assertEqual(median, 2.0)
+        self.assertEqual(p10, 1.2)
+        self.assertEqual(p90, 2.8)
