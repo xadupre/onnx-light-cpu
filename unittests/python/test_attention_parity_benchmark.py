@@ -93,7 +93,11 @@ def test_summary_applies_per_type_parity_and_memory_gates():
 
 
 def test_summary_rejects_a_priority_regression():
-    for field, value in (("speedup", 0.89), ("memory_gate_passed", False)):
+    for field, value in (
+        ("speedup", 0.89),
+        ("tail_speedup", 0.89),
+        ("memory_gate_passed", False),
+    ):
         results = [
             {"dtype": dtype, "speedup": 1.0, "memory_gate_passed": True}
             for dtype in ("float32", "float16", "bfloat16")
@@ -103,9 +107,10 @@ def test_summary_rejects_a_priority_regression():
         assert not summarize(results)["passed"]
 
 
-def test_equal_thread_runs_cannot_enforce_default_policy_gate():
-    with TestCase().assertRaises(SystemExit):
-        parse_args(["--threads", "2", "--enforce"])
+def test_benchmark_defaults_to_identical_single_thread_execution():
+    args = parse_args(["--enforce"])
+    assert args.threads == 1
+    assert args.enforce
 
 
 def test_cpu_ranges_are_validated():
