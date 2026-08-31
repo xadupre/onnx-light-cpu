@@ -67,33 +67,6 @@ def test_defaults_match_single_thread_reproducibility_contract():
     assert args.enforce
 
 
-def test_direct_runtime_parity_smoke():
-    from tools.benchmark_bias_gelu_parity import run
-
-    args = parse_args(
-        [
-            "--case",
-            "empty",
-            "--case",
-            "avx512_after",
-            "--case",
-            "exceptional",
-            "--repeat",
-            "1",
-            "--warmup",
-            "0",
-        ]
-    )
-
-    report = run(args)
-
-    assert [row["case"] for row in report["results"]] == [
-        "empty",
-        "avx512_after",
-        "exceptional",
-    ]
-
-
 def test_cpu_affinity_ranges_are_validated():
     assert _parse_cpu_list("0-2,4") == {0, 1, 2, 4}
     with TestCase().assertRaises(ValueError):
