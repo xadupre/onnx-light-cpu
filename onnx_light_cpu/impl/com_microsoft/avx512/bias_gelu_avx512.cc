@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <cmath>
 #include <cstddef>
 #include <immintrin.h>
 #include <iterator>
@@ -41,11 +40,6 @@ __m512 GeluFloat32(__m512 z) {
       _mm512_set1_ps(std::numeric_limits<float>::quiet_NaN()));
 }
 
-float GeluFloat32Scalar(float z) {
-  constexpr float kInvSqrtTwo = 0.7071067811865475244f;
-  return 0.5f * z * (1.0f + std::erf(z * kInvSqrtTwo));
-}
-
 } // namespace
 
 void BiasGeluFloat32_AVX512(const float *a, const float *bias, float *output, std::size_t count) {
@@ -54,8 +48,11 @@ void BiasGeluFloat32_AVX512(const float *a, const float *bias, float *output, st
     const __m512 z = _mm512_add_ps(_mm512_loadu_ps(a + index), _mm512_loadu_ps(bias + index));
     _mm512_storeu_ps(output + index, GeluFloat32(z));
   }
-  for (; index < count; ++index) {
-    output[index] = GeluFloat32Scalar(a[index] + bias[index]);
+  if (index < count) {
+    const __mmask16 mask = static_cast<__mmask16>((1u << (count - index)) - 1u);
+    const __m512 z = _mm512_add_ps(_mm512_maskz_loadu_ps(mask, a + index),
+                                   _mm512_maskz_loadu_ps(mask, bias + index));
+    _mm512_mask_storeu_ps(output + index, mask, GeluFloat32(z));
   }
 }
 

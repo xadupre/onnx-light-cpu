@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <immintrin.h>
 #include <iterator>
 #include <limits>
@@ -44,11 +44,6 @@ __m256 GeluFloat32(__m256 z) {
                           negative_infinity);
 }
 
-float GeluFloat32Scalar(float z) {
-  constexpr float kInvSqrtTwo = 0.7071067811865475244f;
-  return 0.5f * z * (1.0f + std::erf(z * kInvSqrtTwo));
-}
-
 } // namespace
 
 void BiasGeluFloat32_AVX2_FMA(const float *a, const float *bias, float *output, std::size_t count) {
@@ -57,8 +52,18 @@ void BiasGeluFloat32_AVX2_FMA(const float *a, const float *bias, float *output, 
     const __m256 z = _mm256_add_ps(_mm256_loadu_ps(a + index), _mm256_loadu_ps(bias + index));
     _mm256_storeu_ps(output + index, GeluFloat32(z));
   }
-  for (; index < count; ++index) {
-    output[index] = GeluFloat32Scalar(a[index] + bias[index]);
+  if (index < count) {
+    alignas(32) static constexpr std::int32_t masks[8][8] = {
+        {-1, 0, 0, 0, 0, 0, 0, 0},       {-1, -1, 0, 0, 0, 0, 0, 0},
+        {-1, -1, -1, 0, 0, 0, 0, 0},     {-1, -1, -1, -1, 0, 0, 0, 0},
+        {-1, -1, -1, -1, -1, 0, 0, 0},   {-1, -1, -1, -1, -1, -1, 0, 0},
+        {-1, -1, -1, -1, -1, -1, -1, 0}, {-1, -1, -1, -1, -1, -1, -1, -1},
+    };
+    const __m256i mask =
+        _mm256_load_si256(reinterpret_cast<const __m256i *>(masks[count - index - 1]));
+    const __m256 z =
+        _mm256_add_ps(_mm256_maskload_ps(a + index, mask), _mm256_maskload_ps(bias + index, mask));
+    _mm256_maskstore_ps(output + index, mask, GeluFloat32(z));
   }
 }
 

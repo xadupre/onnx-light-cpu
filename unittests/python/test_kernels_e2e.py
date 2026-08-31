@@ -399,6 +399,32 @@ class TestBackendCases(ExtTestCase):
     def setUp(self):
         register_kernels()
 
+    def test_bias_gelu_benchmark_matches_onnx_runtime(self):
+        from tools.benchmark_bias_gelu_parity import parse_args, run
+
+        args = parse_args(
+            [
+                "--case",
+                "empty",
+                "--case",
+                "avx512_after",
+                "--case",
+                "exceptional",
+                "--repeat",
+                "1",
+                "--warmup",
+                "0",
+            ]
+        )
+
+        report = run(args)
+
+        assert [row["case"] for row in report["results"]] == [
+            "empty",
+            "avx512_after",
+            "exceptional",
+        ]
+
     def test_registered_kernel_names(self):
         assert registered_kernel_names() == _REGISTERED_KERNELS
 
