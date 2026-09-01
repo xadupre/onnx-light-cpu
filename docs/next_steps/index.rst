@@ -42,6 +42,9 @@ Started
       - Closes the remaining transformer down-projection GEMM gap, then reruns
         stable-affinity ``MatMulInteger`` AMX/VNNI parity and the complete
         chained-GEMM gate.
+    * - :doc:`Attention <2026/2026_08_attention>`
+      - Optimizes single-key decode, short-query and FP16 tiled execution, then
+        reruns the dedicated-machine ONNX Runtime parity gate.
     * - :doc:`Binary elementwise performance
         <2026/2026_08_binary_elementwise_performance>`
       - Completes low-precision and predicate bulk kernels, specializes
@@ -75,9 +78,6 @@ Completed
 
     * - Plan
       - Contribution
-    * - :doc:`Attention <2026/2026_08_attention>`
-      - Delivers materialized and bounded-memory MHA, GQA/MQA, and rank-3
-        execution with a reproducible ONNX Runtime parity gate.
     * - :doc:`Exp and Log parity <2026/2026_08_exp_log_parity>`
       - Brings the transcendental kernels to their published ONNX Runtime
         parity and numerical gates.
