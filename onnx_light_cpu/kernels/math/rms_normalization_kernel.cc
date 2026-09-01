@@ -112,15 +112,27 @@ void NormalizeTyped(const Tensor &x, const Tensor &scale, Tensor &output,
 void Normalize(const Tensor &x, const Tensor &scale, Tensor &output,
                const normalization::BroadcastIndexer &scale_index, std::size_t outer,
                std::size_t inner, float epsilon, bool scale_by_inner) {
+  if (static_cast<DataType>(x.data_type) == DataType::FLOAT &&
+      static_cast<DataType>(scale.data_type) == DataType::FLOAT && scale_by_inner) {
+    RmsNormalizationFloat32(x.AsFloat(), scale.AsFloat(),
+                            reinterpret_cast<float *>(output.mutable_bytes()), outer, inner,
+                            epsilon);
+    return;
+  }
   if (static_cast<DataType>(x.data_type) == DataType::FLOAT16 &&
       static_cast<DataType>(scale.data_type) == DataType::FLOAT16 && scale_by_inner) {
     const auto *input = reinterpret_cast<const std::uint16_t *>(x.bytes());
     const auto *scale_data = reinterpret_cast<const std::uint16_t *>(scale.bytes());
     auto *result = reinterpret_cast<std::uint16_t *>(output.mutable_bytes());
-    ExecuteRows(outer, inner, [&](std::size_t begin, std::size_t end) {
-      RmsNormalizationFloat16(input + begin * inner, scale_data, result + begin * inner,
-                              end - begin, inner, epsilon);
-    });
+    RmsNormalizationFloat16(input, scale_data, result, outer, inner, epsilon);
+    return;
+  }
+  if (static_cast<DataType>(x.data_type) == DataType::BFLOAT16 &&
+      static_cast<DataType>(scale.data_type) == DataType::BFLOAT16 && scale_by_inner) {
+    const auto *input = reinterpret_cast<const std::uint16_t *>(x.bytes());
+    const auto *scale_data = reinterpret_cast<const std::uint16_t *>(scale.bytes());
+    auto *result = reinterpret_cast<std::uint16_t *>(output.mutable_bytes());
+    RmsNormalizationBFloat16(input, scale_data, result, outer, inner, epsilon);
     return;
   }
   normalization::DispatchFloatType(x.data_type, [&]<DataType XType>() {
