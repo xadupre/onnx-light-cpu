@@ -1,6 +1,6 @@
 flags:
   cpp:
-    carryforward: false
+    carryforward: true
 
 coverage:
   status:
