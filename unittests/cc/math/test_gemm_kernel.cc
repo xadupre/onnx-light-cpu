@@ -1508,7 +1508,7 @@ TEST(GemmFloat32, DynamicBUsesBoundedWorkerLocalPacking) {
         false, false, M, N, K, 1.0f, A.data(), B.data(), 0.0f, nullptr, Y.data(), &blocking);
   });
 
-  EXPECT_LT(peak_allocation, K * N * sizeof(float));
+  EXPECT_LE(peak_allocation, K * 64 * sizeof(float));
   EXPECT_GT(executor.maximum_active.load(std::memory_order_relaxed), 1u);
   for (float value : Y) {
     EXPECT_FLOAT_EQ(value, static_cast<float>(K));
