@@ -6,6 +6,7 @@
 
 #include "onnx_light_cpu/impl/execution.h"
 #include "onnx_light_cpu/impl/math/half_conversion.h"
+#include "onnx_light_cpu/impl/math/normalization_kernel.h"
 #include "onnx_light_cpu/impl/simd_level.h"
 
 #include <cmath>
@@ -26,47 +27,18 @@ std::int64_t ToRowCount(std::size_t rows) {
 
 void RmsNormalizationFloat32(const float *input, const float *scale, float *output,
                              std::size_t rows, std::size_t width, float epsilon) {
-  const SimdLevel simd = DetectSimdLevel();
-  ExecuteRanges(
-      ToRowCount(rows), static_cast<double>(width) * 0.625,
-      [=](std::int64_t begin, std::int64_t end) {
-#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
-        if (simd == SimdLevel::kAVX512) {
-          RmsNormalizationFloat32_AVX512(input, scale, output, static_cast<std::size_t>(begin),
-                                         static_cast<std::size_t>(end), width, epsilon);
-          return;
-        }
-#endif
-#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
-        if (simd >= SimdLevel::kAVX2 && CpuSupportsFma()) {
-          RmsNormalizationFloat32_AVX2(input, scale, output, static_cast<std::size_t>(begin),
-                                       static_cast<std::size_t>(end), width, epsilon);
-          return;
-        }
-#endif
-        for (std::size_t row = static_cast<std::size_t>(begin); row < static_cast<std::size_t>(end);
-             ++row) {
-          const std::size_t offset = row * width;
-          float sums[4] = {};
-          std::size_t column = 0;
-          for (; column + 4 <= width; column += 4) {
-            for (std::size_t lane = 0; lane < 4; ++lane) {
-              const float value = input[offset + column + lane];
-              sums[lane] += value * value;
-            }
-          }
-          for (; column < width; ++column) {
-            const float value = input[offset + column];
-            sums[column & 3] += value * value;
-          }
-          const float inverse_rms =
-              1.0F / std::sqrt((sums[0] + sums[1] + sums[2] + sums[3]) / static_cast<float>(width) +
-                               epsilon);
-          for (column = 0; column < width; ++column) {
-            output[offset + column] = input[offset + column] * inverse_rms * scale[column];
-          }
-        }
-      });
+  ExecuteRanges(ToRowCount(rows), static_cast<double>(width) * 0.625,
+                [=](std::int64_t begin, std::int64_t end) {
+                  for (std::size_t row = static_cast<std::size_t>(begin);
+                       row < static_cast<std::size_t>(end); ++row) {
+                    const std::size_t offset = row * width;
+                    const float mean_square =
+                        ComputeNormalizationMeanSquareFloat32(input + offset, width);
+                    const float inverse_rms = 1.0F / std::sqrt(mean_square + epsilon);
+                    ApplyNormalizationAffineFloat32(input + offset, scale, nullptr, output + offset,
+                                                    width, 0.0F, inverse_rms);
+                  }
+                });
 }
 
 void RmsNormalizationFloat16(const std::uint16_t *input, const std::uint16_t *scale,
