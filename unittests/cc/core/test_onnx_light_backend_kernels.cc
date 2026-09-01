@@ -462,7 +462,11 @@ TEST(OnnxLightBackendKernels, AttentionPriorityBenchmarksRunThroughRuntime) {
         "benchmark",
         "test_cpu_attention_opset24_rank4_mha_q8_kv1024_hd64_causal_nonpad_float32_benchmark",
         "test_cpu_attention_llm_qwen3_8b_opset23_rank3_gqa_q1_kv128_hd128_qh32_kvh8_causal_"
-        "internal_cache_float16_benchmark"}) {
+        "internal_cache_float16_benchmark",
+        "test_cpu_attention_llm_qwen3_6_27b_opset23_rank3_gqa_q1_kv128_hd256_qh24_kvh4_causal_"
+        "internal_cache_float16_benchmark",
+        "test_cpu_attention_llm_qwen3_6_35b_a3b_opset23_rank3_gqa_q128_kv128_hd256_qh16_kvh2_"
+        "causal_stateless_float16_benchmark"}) {
     const std::vector<std::string> case_failures =
         RunCpuBackendCases("Attention", core::backend_test::TestMode::BENCHMARK, name);
     failures.insert(failures.end(), case_failures.begin(), case_failures.end());
@@ -573,7 +577,7 @@ TEST(OnnxLightBackendKernels, AttentionBenchmarkCoversPriorityCorpus) {
       EXPECT_TRUE(names.insert(test_case.name).second) << test_case.name;
     }
   }
-  EXPECT_EQ(names.size(), 61U);
+  EXPECT_EQ(names.size(), 69U);
   for (std::string_view name :
        {"test_cpu_attention_opset23_rank4_mha_q1_kv128_hd64_none_stateless_float16_benchmark",
         "test_cpu_attention_opset23_rank4_gqa_q128_kv128_hd64_causal_stateless_bfloat16_benchmark",
@@ -585,13 +589,22 @@ TEST(OnnxLightBackendKernels, AttentionBenchmarkCoversPriorityCorpus) {
         "test_cpu_attention_llm_qwen3_8b_opset23_rank3_gqa_q1_kv1024_hd128_qh32_kvh8_causal_"
         "internal_cache_float16_benchmark",
         "test_cpu_attention_llm_qwen3_8b_opset23_rank3_gqa_q1_kv4096_hd128_qh32_kvh8_causal_"
-        "internal_cache_float16_benchmark"}) {
+        "internal_cache_float16_benchmark",
+        "test_cpu_attention_llm_qwen3_6_27b_opset23_rank3_gqa_q128_kv128_hd256_qh24_kvh4_causal_"
+        "stateless_float16_benchmark",
+        "test_cpu_attention_llm_qwen3_6_27b_opset23_rank3_gqa_q1_kv4096_hd256_qh24_kvh4_causal_"
+        "internal_cache_float16_benchmark",
+        "test_cpu_attention_llm_qwen3_6_35b_a3b_opset23_rank3_gqa_q128_kv128_hd256_qh16_kvh2_"
+        "causal_stateless_float16_benchmark",
+        "test_cpu_attention_llm_qwen3_6_35b_a3b_opset23_rank3_gqa_q1_kv4096_hd256_qh16_kvh2_"
+        "causal_internal_cache_float16_benchmark"}) {
     EXPECT_TRUE(names.contains(std::string(name))) << name;
   }
   for (std::string_view tag :
        {"_float32_benchmark", "_float16_benchmark", "_bfloat16_benchmark", "_rank3_", "_rank4_",
         "_mha_", "_gqa_", "_mqa_", "_hd64_", "_hd128_", "_none_", "_causal_", "_bool_",
-        "_additive_", "_internal_cache_", "_nonpad_"}) {
+        "_additive_", "_internal_cache_", "_nonpad_", "_hd256_", "_llm_qwen3_6_27b_",
+        "_llm_qwen3_6_35b_a3b_"}) {
     EXPECT_TRUE(std::any_of(names.begin(), names.end(), [tag](const std::string &name) {
       return name.find(tag) != std::string::npos;
     })) << tag;

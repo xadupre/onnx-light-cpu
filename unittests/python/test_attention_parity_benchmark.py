@@ -1,8 +1,10 @@
 import math
+from types import SimpleNamespace
 from unittest import TestCase
 
 from tools.benchmark_attention_parity import (
     _expand_cpu_part,
+    estimate_temporary_memory,
     measure_alternating,
     parse_args,
     parse_case_name,
@@ -51,6 +53,40 @@ def test_backend_case_name_decodes_named_model_families_and_head_counts():
         "cache": "internal_cache",
         "dtype": "float16",
     }
+
+    qwen36_case = parse_case_name(
+        "test_cpu_attention_llm_qwen3_6_35b_a3b_opset23_rank3_gqa_q128_kv128_hd256"
+        "_qh16_kvh2_causal_stateless_float16_benchmark"
+    )
+    assert qwen36_case["family"] == "llm_qwen3_6_35b_a3b"
+    assert qwen36_case["q_heads"] == 16
+    assert qwen36_case["kv_heads"] == 2
+    assert qwen36_case["head_dim"] == 256
+
+
+def test_temporary_memory_matches_single_key_and_streaming_dispatch():
+    single_key = parse_case_name(
+        "test_cpu_attention_opset23_rank4_mha_q128_kv1_hd64_none_stateless_float16_benchmark"
+    )
+    feeds = {
+        "Q": SimpleNamespace(shape=(1, 12, 128, 64), size=12 * 128 * 64),
+        "K": SimpleNamespace(shape=(1, 12, 1, 64), size=12 * 64),
+        "V": SimpleNamespace(shape=(1, 12, 1, 64), size=12 * 64),
+    }
+    assert estimate_temporary_memory(single_key, feeds, workers=4) == {
+        "peak_temporary_bytes": 0,
+        "peak_score_tile_bytes": 0,
+        "score_block": {"Br": 0, "Bc": 0},
+        "memory_gate_passed": True,
+    }
+
+    streaming = parse_case_name(
+        "test_cpu_attention_opset23_rank4_mha_q1_kv128_hd64_none_stateless_bfloat16_benchmark"
+    )
+    memory = estimate_temporary_memory(streaming, feeds, workers=4)
+    assert memory["peak_score_tile_bytes"] == 4 * 128 * 4
+    assert memory["peak_temporary_bytes"] == 4 * (128 + 2 * 64) * 4
+    assert memory["score_block"] == {"Br": 1, "Bc": 128}
 
 
 def test_candidate_order_and_raw_samples_are_retained():
