@@ -72,6 +72,7 @@ class TestDocumentationExamples(ExtTestCase):
             _argument_default_expression(_BACKEND_CASES_EXAMPLE, "--threads")
             == "min(4, os.cpu_count() or 1)"
         )
+        assert _argument_default_expression(_BACKEND_CASES_EXAMPLE, "--run-first") == "'ol'"
 
     def test_documentation_examples(self):
         for example in _example_files():

@@ -93,7 +93,7 @@ parser.add_argument(
     "--repeat",
     type=int,
     default=10 * (os.cpu_count() or 1),
-    help="maximum measured calls per runtime and case (default: 10 per CPU)",
+    help="maximum measured batches per runtime and case (default: 10 per CPU)",
 )
 parser.add_argument(
     "-w",
@@ -109,6 +109,23 @@ parser.add_argument(
     default=1.0,
     help="maximum cumulative measurement time per runtime and case in seconds (default: 1)",
 )
+parser.add_argument(
+    "--min-sample-time",
+    type=float,
+    default=5e-3,
+    help="target minimum duration of one batched timing sample in seconds (default: 0.005)",
+)
+parser.add_argument(
+    "--run-first",
+    choices=("ol", "ort"),
+    default="ol",
+    help="runtime measured first: ol for onnx-light-cpu or ort for ONNX Runtime (default: ol)",
+)
+parser.add_argument(
+    "--disable-spin",
+    action="store_true",
+    help="disable worker spin-wait in both runtimes (spin is enabled by default)",
+)
 args, unknown_args = parser.parse_known_args()
 if args.max_cases < 0:
     parser.error("--max-cases must be greater than or equal to 0")
@@ -120,8 +137,10 @@ if args.warmup < 0:
     parser.error("--warmup must be greater than or equal to 0")
 if args.max_repeat_time <= 0:
     parser.error("--max-repeat-time must be greater than 0")
+if args.min_sample_time <= 0:
+    parser.error("--min-sample-time must be greater than 0")
 for unknown_arg in unknown_args:
-    if unknown_arg.startswith(("--repeat", "--warm", "--max-repeat-time")):
+    if unknown_arg.startswith(("--repeat", "--warm", "--max-repeat-time", "--min-sample-time")):
         parser.error(f"unrecognized timing option: {unknown_arg}")
 _name_filter = re.compile(args.filter) if args.filter else None
 
@@ -228,30 +247,56 @@ print(f"-- collected {len(_CASES)} cases")
 # Timing helper
 # -------------
 #
-# Each candidate gets up to ``--warmup`` untimed calls, then up to ``--repeat``
-# measured calls. Both phases stop once ``--max-repeat-time`` cumulative
-# seconds have elapsed, and the median wall-clock time is retained.
+# Each runtime is measured in its own phase, so its spinning worker pool cannot
+# perturb the other runtime. Short calls are grouped into batches so a sample
+# takes at least ``--min-sample-time`` when practical. The median plus the
+# 10th/90th percentiles are retained. For batched calls, these percentiles
+# describe normalized batch averages rather than individual-call latency.
 
 
-def measure(func, repeat, warmup, max_duration):
+def measure(func, repeat, warmup, max_duration, min_sample_duration):
     warmup_duration = 0.0
     for _ in range(warmup):
-        start = time.perf_counter()
+        start = time.perf_counter_ns()
         func()
-        warmup_duration += time.perf_counter() - start
+        warmup_duration += (time.perf_counter_ns() - start) / 1e9
         if warmup_duration >= max_duration:
             break
-    timings = []
+
+    calibration_samples = []
+    for _ in range(3):
+        start = time.perf_counter_ns()
+        func()
+        calibration_samples.append((time.perf_counter_ns() - start) / 1e9)
+    calibration = max(float(np.median(calibration_samples)), 1e-9)
+    target = min(min_sample_duration, max_duration)
+    max_batch_duration = min(max_duration, target * 10)
+    calls_per_sample = min(
+        max(1, int(np.ceil(target / calibration))),
+        max(1, int(max_batch_duration / calibration)),
+        10000,
+    )
+
+    samples = []
     total_duration = 0.0
     for _ in range(repeat):
-        start = time.perf_counter()
-        func()
-        duration = time.perf_counter() - start
-        timings.append(duration)
+        start = time.perf_counter_ns()
+        for _ in range(calls_per_sample):
+            func()
+        duration = (time.perf_counter_ns() - start) / 1e9
+        samples.append(duration / calls_per_sample)
         total_duration += duration
-        if max_duration is not None and total_duration >= max_duration:
+        if total_duration >= max_duration:
             break
-    return float(np.median(timings))
+    return samples, calls_per_sample
+
+
+def timing_summary(samples):
+    return (
+        float(np.median(samples)),
+        float(np.percentile(samples, 10)),
+        float(np.percentile(samples, 90)),
+    )
 
 
 # %%
@@ -273,20 +318,18 @@ register_kernels()
 # caught here and the case is still timed/reported for onnx-light-cpu alone,
 # with "n/a" standing in for the ONNX Runtime side.
 #
-# All onnx-light-cpu cases are measured before any ONNX Runtime session is
-# created. Both runtimes therefore keep their default spinning behavior
-# without leaving one runtime's live pool to perturb the other's measurements.
-print("-- benchmark onnx-light-cpu")
+# The runtimes are measured in separate phases. ``--run-first`` selects which
+# phase runs first, making order sensitivity observable. Spin-wait stays
+# enabled as part of normal runtime behavior unless ``--disable-spin`` is set.
 print(
     f"-- timing warmup={args.warmup} repeat={args.repeat} "
-    f"max_repeat_time={args.max_repeat_time:g}s"
+    f"max_repeat_time={args.max_repeat_time:g}s "
+    f"min_sample_time={args.min_sample_time:g}s "
+    f"run_first={args.run_first} disable_spin={args.disable_spin}"
 )
 measurements = []
-_progress = tqdm(_CASES, desc="benchmarking backend cases", unit="case")
-for tc in _progress:
-    _progress.set_postfix_str(tc.name)
+for tc in _CASES:
     op_type = tc.model.graph.node[0].op_type
-    expected_kernel = f"onnx_light_cpu::{op_type}"
     if tc.model.graph.initializer:
         raise AssertionError(
             f"{tc.name} contains an initializer; backend benchmarks must time runtime inputs"
@@ -295,78 +338,129 @@ for tc in _progress:
 
     ds = tc.data_sets[0]
     feeds = {name: _to_numpy(t) for name, t in zip(input_names, ds.inputs, strict=True)}
-    light_session = ReferenceEvaluator(
-        tc.model, cpu_execution={"num_threads": args.threads, "affinity_policy": "none"}
-    )
-    clear_used_kernel_names()
-    light_out = [np.array(output, copy=True) for output in light_session.run(None, feeds)]
-    assert expected_kernel in used_kernel_names(), used_kernel_names()
-    light_time = measure(
-        lambda feeds=feeds, sess=light_session: sess.run(None, feeds),
-        args.repeat,
-        warmup=args.warmup,
-        max_duration=args.max_repeat_time,
-    )
-    shapes = ",".join(
-        "x".join(str(d) for d in array.shape) or "scalar" for array in feeds.values()
-    )
-    dtypes = ",".join(str(array.dtype) for array in feeds.values())
     measurements.append(
         {
             "op_type": op_type,
             "name": tc.name,
+            "model": tc.model,
             "model_bytes": tc.model.SerializeToString(),
             "feeds": feeds,
-            "light_out": light_out,
-            "light_time": light_time,
             "node_count": len(tc.model.graph.node),
-            "shapes": shapes,
-            "dtypes": dtypes,
+            "shapes": ",".join(
+                "x".join(str(d) for d in array.shape) or "scalar" for array in feeds.values()
+            ),
+            "dtypes": ",".join(str(array.dtype) for array in feeds.values()),
         }
     )
 
-del light_session
-gc.collect()
 
-print("-- benchmark ONNX Runtime")
-rows = []
-_progress = tqdm(measurements, desc="benchmarking backend cases", unit="case")
-for measurement in _progress:
-    _progress.set_postfix_str(measurement["name"])
-    ort_error = None
-    ort_time = None
-    try:
-        session_options = onnxruntime.SessionOptions()
-        session_options.intra_op_num_threads = args.threads
-        session_options.inter_op_num_threads = 1
-        session_options.execution_mode = onnxruntime.ExecutionMode.ORT_SEQUENTIAL
-        ort_session = onnxruntime.InferenceSession(
-            measurement["model_bytes"],
-            sess_options=session_options,
-            providers=["CPUExecutionProvider"],
+def benchmark_light():
+    print("-- benchmark onnx-light-cpu")
+    cpu_execution = {"num_threads": args.threads, "affinity_policy": "none"}
+    if args.disable_spin:
+        cpu_execution["spin_policy"] = "park_immediately"
+    progress = tqdm(measurements, desc="benchmarking onnx-light-cpu", unit="case")
+    for measurement in progress:
+        progress.set_postfix_str(measurement["name"])
+        session = ReferenceEvaluator(
+            measurement["model"],
+            cpu_execution=cpu_execution,
         )
-        ort_out = ort_session.run(None, measurement["feeds"])
-    except Exception as exc:  # noqa: BLE001 -- unsupported cases are reported as "n/a".
-        ort_error = str(exc).splitlines()[0][:40]
-    else:
-        # The case's own tolerance compares against output generated by the
-        # accelerated kernel. ONNX Runtime may accumulate reductions in a
-        # different order, so the cross-runtime check uses its own tolerance.
-        # The rounding noise of a reduction is set by the magnitude of the
-        # terms being accumulated, not by the magnitude of the result: an
-        # element that cancels down to nearly zero still carries the noise of
-        # the whole sum. ``rtol`` cannot see that, and a constant ``atol``
-        # would have to be sized for the largest case, so the floor is derived
-        # from the tensor's own scale and the length of the reductions. The
-        # largest input dimension is a deliberate upper bound on any
-        # contraction length in the model, since the exact one is per-operator;
-        # over-estimating only widens the floor, which stays orders of
-        # magnitude below ``rtol`` for every case registered here.
+        clear_used_kernel_names()
+        measurement["light_out"] = [
+            np.array(output, copy=True) for output in session.run(None, measurement["feeds"])
+        ]
+        expected_kernel = f"onnx_light_cpu::{measurement['op_type']}"
+        assert expected_kernel in used_kernel_names(), used_kernel_names()
+
+        def run(current=session, feeds=measurement["feeds"]):
+            return current.run(None, feeds)
+
+        samples, calls_per_sample = measure(
+            run,
+            args.repeat,
+            args.warmup,
+            args.max_repeat_time,
+            args.min_sample_time,
+        )
+        measurement["light_time"], measurement["light_p10"], measurement["light_p90"] = (
+            timing_summary(samples)
+        )
+        measurement["light_calls_per_sample"] = calls_per_sample
+        del run
+        del session
+
+
+def benchmark_ort():
+    print("-- benchmark ONNX Runtime")
+    progress = tqdm(measurements, desc="benchmarking ONNX Runtime", unit="case")
+    for measurement in progress:
+        progress.set_postfix_str(measurement["name"])
+        measurement["ort_error"] = None
+        session = None
+        run = None
+        try:
+            session_options = onnxruntime.SessionOptions()
+            session_options.intra_op_num_threads = args.threads
+            session_options.inter_op_num_threads = 1
+            session_options.execution_mode = onnxruntime.ExecutionMode.ORT_SEQUENTIAL
+            if args.disable_spin:
+                session_options.add_session_config_entry("session.intra_op.allow_spinning", "0")
+            session = onnxruntime.InferenceSession(
+                measurement["model_bytes"],
+                sess_options=session_options,
+                providers=["CPUExecutionProvider"],
+            )
+            measurement["ort_out"] = session.run(None, measurement["feeds"])
+
+            def run(current=session, feeds=measurement["feeds"]):
+                return current.run(None, feeds)
+
+            samples, calls_per_sample = measure(
+                run,
+                args.repeat,
+                args.warmup,
+                args.max_repeat_time,
+                args.min_sample_time,
+            )
+        except Exception as exc:  # noqa: BLE001 -- unsupported cases are reported as "n/a".
+            measurement["ort_error"] = str(exc).splitlines()[0][:40]
+            measurement["ort_time"] = None
+            measurement["ort_p10"] = None
+            measurement["ort_p90"] = None
+            measurement["ort_calls_per_sample"] = None
+        else:
+            measurement["ort_time"], measurement["ort_p10"], measurement["ort_p90"] = (
+                timing_summary(samples)
+            )
+            measurement["ort_calls_per_sample"] = calls_per_sample
+        finally:
+            del run
+            del session
+
+
+runtime_phases = (
+    (benchmark_light, benchmark_ort)
+    if args.run_first == "ol"
+    else (benchmark_ort, benchmark_light)
+)
+for phase in runtime_phases:
+    phase()
+    gc.collect()
+
+# The case's own tolerance compares against output generated by the accelerated
+# kernel. ONNX Runtime may accumulate reductions in a different order, so the
+# cross-runtime check uses its own scale-aware tolerance.
+rows = []
+for measurement in measurements:
+    if measurement["ort_time"] is not None:
         reduction = max(
             (max(array.shape) for array in measurement["feeds"].values() if array.ndim > 0),
             default=1,
         )
-        for actual, expected in zip(measurement["light_out"], ort_out, strict=True):
+        for actual, expected in zip(
+            measurement["light_out"], measurement["ort_out"], strict=True
+        ):
             if expected.dtype == np.bool_:
                 np.testing.assert_array_equal(actual, expected)
             elif expected.dtype == np.float32 or expected.dtype == np.float64:
@@ -379,12 +473,6 @@ for measurement in _progress:
                     atol=max(1e-3, (measurement["node_count"] - 1) * 5e-2, noise),
                     equal_nan=True,
                 )
-        ort_time = measure(
-            lambda feeds=measurement["feeds"], sess=ort_session: sess.run(None, feeds),
-            args.repeat,
-            warmup=args.warmup,
-            max_duration=args.max_repeat_time,
-        )
     rows.append(
         (
             measurement["op_type"],
@@ -392,8 +480,14 @@ for measurement in _progress:
             measurement["shapes"],
             measurement["dtypes"],
             measurement["light_time"],
-            ort_time,
-            ort_error,
+            measurement["ort_time"],
+            measurement["ort_error"],
+            measurement["light_p10"],
+            measurement["light_p90"],
+            measurement["ort_p10"],
+            measurement["ort_p90"],
+            measurement["light_calls_per_sample"],
+            measurement["ort_calls_per_sample"],
         )
     )
 
@@ -401,18 +495,40 @@ for measurement in _progress:
 # input shapes, dtypes) are not known ahead of time. Cases ONNX Runtime could
 # not run (ort_time is None) show its error message instead of a timing/
 # speed-up.
-op_width = max(len(op_type) for op_type, *_ in rows)
-name_width = max(len(name) for _, name, *_ in rows)
-shapes_width = max(len(shapes) for _, _, shapes, _, _, _, _ in rows)
-dtypes_width = max(len(dtypes) for _, _, _, dtypes, _, _, _ in rows)
-for op_type, name, shapes, dtypes, light_time, ort_time, ort_error in rows:
+op_width = max(len(row[0]) for row in rows)
+name_width = max(len(row[1]) for row in rows)
+shapes_width = max(len(row[2]) for row in rows)
+dtypes_width = max(len(row[3]) for row in rows)
+for (
+    op_type,
+    name,
+    shapes,
+    dtypes,
+    light_time,
+    ort_time,
+    ort_error,
+    light_p10,
+    light_p90,
+    ort_p10,
+    ort_p90,
+    light_calls_per_sample,
+    ort_calls_per_sample,
+) in rows:
     ort_str = f"{ort_time * 1e6:10.2f} us" if ort_time is not None else f"{'error':>13}"
     speedup_str = f"{ort_time / light_time:6.2f}x" if ort_time is not None else f"{'n/a':>7}"
+    ort_spread = (
+        f"{ort_p10 * 1e6:.2f}, {ort_p90 * 1e6:.2f}"
+        if ort_p10 is not None and ort_p90 is not None
+        else "n/a"
+    )
     print(
         f"{op_type:>{op_width}} | {name:<{name_width}} | shapes={shapes:<{shapes_width}} | "
         f"dtype={dtypes:<{dtypes_width}} | "
-        f"onnx-light-cpu={light_time * 1e6:10.2f} us | "
-        f"onnxruntime={ort_str} | speed-up={speedup_str}"
+        f"onnx-light-cpu={light_time * 1e6:10.2f} us "
+        f"[{light_p10 * 1e6:.2f}, {light_p90 * 1e6:.2f}] "
+        f"({light_calls_per_sample} calls/sample) | "
+        f"onnxruntime={ort_str} [{ort_spread}] "
+        f"({ort_calls_per_sample or 'n/a'} calls/sample) | speed-up={speedup_str}"
         + (f" | onnxruntime_error={ort_error}" if ort_error is not None else "")
     )
 
@@ -432,11 +548,31 @@ results_frame = pd.DataFrame(
             "input_shapes": shapes,
             "input_dtypes": dtypes,
             "onnx_light_cpu_us": light_time * 1e6,
+            "onnx_light_cpu_p10_us": light_p10 * 1e6,
+            "onnx_light_cpu_p90_us": light_p90 * 1e6,
             "onnxruntime_us": ort_time * 1e6 if ort_time is not None else None,
+            "onnxruntime_p10_us": ort_p10 * 1e6 if ort_p10 is not None else None,
+            "onnxruntime_p90_us": ort_p90 * 1e6 if ort_p90 is not None else None,
             "speed_up": ort_time / light_time if ort_time is not None else None,
+            "onnx_light_cpu_calls_per_sample": light_calls_per_sample,
+            "onnxruntime_calls_per_sample": ort_calls_per_sample,
             "onnxruntime_error": ort_error,
         }
-        for op_type, name, shapes, dtypes, light_time, ort_time, ort_error in rows
+        for (
+            op_type,
+            name,
+            shapes,
+            dtypes,
+            light_time,
+            ort_time,
+            ort_error,
+            light_p10,
+            light_p90,
+            ort_p10,
+            ort_p90,
+            light_calls_per_sample,
+            ort_calls_per_sample,
+        ) in rows
     ]
 )
 results_frame.to_excel("plot_backend_cases_benchmark.xlsx", index=False)
@@ -445,8 +581,13 @@ results_frame.to_excel("plot_backend_cases_benchmark.xlsx", index=False)
 # Plot the speed-ups
 # -------------------
 #
-# One bar per case, grouped and colored by operator, showing onnx-light-cpu's
-# speed-up over ONNX Runtime (values above 1 mean onnx-light-cpu is faster).
+# One bar per case, grouped and colored by operator, starts at the 1x baseline
+# and ends at onnx-light-cpu's speed-up over ONNX Runtime. Bars extend right
+# when onnx-light-cpu is faster and left when it is slower.
+# A circle and diamond show the ratios between the runtimes' p10 and p90
+# latencies for the same case. These are ratios of independently measured
+# latency percentiles, not percentiles of paired speed-up samples. Vertical
+# reference lines at 0.5x, 0.9x, 1.1x, and 2x remain in view.
 # The x-axis is logarithmic so a speed-up and its reciprocal are equidistant
 # from the ``1`` baseline. Cases ONNX Runtime failed to run (ort_time is
 # None, see the try/except above) are left out of the plot -- they have no
@@ -474,6 +615,8 @@ class PlotData:
     plotted_rows: list
     labels: list
     speedups: np.ndarray
+    p10_speedups: np.ndarray
+    p90_speedups: np.ndarray
     colors: list
     colors_by_op_type: dict
 
@@ -487,12 +630,13 @@ def _short_label(name):
 def prepare_plot_data(rows):
     """Turns collected benchmark ``rows`` into the values the chart plots.
 
-    Each row is ``(op_type, name, shapes, dtypes, light_time, ort_time,
-    ort_error)`` -- the same tuples appended to ``rows`` above. Rows whose
-    ``ort_time`` (index 5) is ``None`` are excluded from the returned plot
-    data. Raises :class:`NoPlottableCasesError` -- naming every rejected case
-    and its error -- when that leaves nothing to plot, rather than letting
-    the caller render an empty chart.
+    The first seven row fields are ``(op_type, name, shapes, dtypes,
+    light_time, ort_time, ort_error)``; timing percentiles and batching
+    metadata follow them. Rows whose ``ort_time`` (index 5) is ``None`` are
+    excluded from the returned plot data. Raises
+    :class:`NoPlottableCasesError` -- naming every rejected case and its error
+    -- when that leaves nothing to plot, rather than letting the caller render
+    an empty chart.
     """
     plotted_rows = [row for row in rows if row[5] is not None]
     if not plotted_rows:
@@ -511,11 +655,15 @@ def prepare_plot_data(rows):
     }
     labels = [_short_label(row[1]) for row in plotted_rows]
     speedups = np.array([row[5] / row[4] for row in plotted_rows])
+    p10_speedups = np.array([row[9] / row[7] for row in plotted_rows])
+    p90_speedups = np.array([row[10] / row[8] for row in plotted_rows])
     colors = [colors_by_op_type[row[0]] for row in plotted_rows]
     return PlotData(
         plotted_rows=plotted_rows,
         labels=labels,
         speedups=speedups,
+        p10_speedups=p10_speedups,
+        p90_speedups=p90_speedups,
         colors=colors,
         colors_by_op_type=colors_by_op_type,
     )
@@ -525,9 +673,42 @@ _plot_data = prepare_plot_data(rows)
 
 fig, ax = plt.subplots(figsize=(8, max(5, 0.4 * len(_plot_data.plotted_rows))))
 positions = np.arange(len(_plot_data.plotted_rows))
-ax.barh(positions, _plot_data.speedups, color=_plot_data.colors)
-ax.axvline(1.0, color="grey", linewidth=0.8, linestyle=":")
+ax.barh(
+    positions,
+    _plot_data.speedups - 1.0,
+    left=1.0,
+    color=_plot_data.colors,
+)
+half_line = ax.axvline(0.5, color="red", linewidth=1.2, linestyle="--", zorder=4)
+slow_margin_line = ax.axvline(0.9, color="darkorange", linewidth=1.0, linestyle="--", zorder=4)
+ax.axvline(1.0, color="grey", linewidth=0.8, linestyle=":", zorder=4)
+fast_margin_line = ax.axvline(1.1, color="royalblue", linewidth=1.0, linestyle="--", zorder=4)
+double_line = ax.axvline(2.0, color="green", linewidth=1.2, linestyle="--", zorder=4)
+p10_handle = ax.scatter(
+    _plot_data.p10_speedups,
+    positions,
+    marker="o",
+    s=20,
+    facecolors="white",
+    edgecolors="black",
+    linewidths=0.8,
+    zorder=5,
+)
+p90_handle = ax.scatter(
+    _plot_data.p90_speedups,
+    positions,
+    marker="D",
+    s=20,
+    facecolors="white",
+    edgecolors="black",
+    linewidths=0.8,
+    zorder=5,
+)
 ax.set_xscale("log")
+all_speedups = np.concatenate(
+    (_plot_data.speedups, _plot_data.p10_speedups, _plot_data.p90_speedups)
+)
+ax.set_xlim(min(0.45, float(all_speedups.min()) / 1.1), max(2.2, float(all_speedups.max()) * 1.1))
 ax.set_yticks(positions, _plot_data.labels, fontsize=7)
 for tick_label, speedup in zip(ax.get_yticklabels(), _plot_data.speedups, strict=True):
     if speedup <= 0.5:
@@ -540,10 +721,29 @@ ax.set_title("onnx-light-cpu speed-up over onnxruntime on backend cases")
 handles = [
     plt.Rectangle((0, 0), 1, 1, color=color) for color in _plot_data.colors_by_op_type.values()
 ]
+handles.extend(
+    (
+        p10_handle,
+        p90_handle,
+        half_line,
+        slow_margin_line,
+        fast_margin_line,
+        double_line,
+    )
+)
+legend_labels = [
+    *_plot_data.colors_by_op_type.keys(),
+    "p10 latency ratio",
+    "p90 latency ratio",
+    "0.5x",
+    "0.9x",
+    "1.1x",
+    "2x",
+]
 ax.legend(
     handles,
-    _plot_data.colors_by_op_type.keys(),
-    title="operator",
+    legend_labels,
+    title="operator / reference",
     loc="upper left",
     fontsize=8,
     ncols=3,
