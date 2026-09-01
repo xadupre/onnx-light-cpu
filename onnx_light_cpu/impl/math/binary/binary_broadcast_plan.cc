@@ -114,6 +114,10 @@ BinaryBroadcastPlan::BinaryBroadcastPlan(const BinaryKernelDescriptor &descripto
   for (std::int64_t dim : output_shape_) {
     element_count_ *= static_cast<std::size_t>(std::max<std::int64_t>(dim, 0));
   }
+  right_element_count_ = 1;
+  for (std::int64_t dim : right_shape) {
+    right_element_count_ *= static_cast<std::size_t>(std::max<std::int64_t>(dim, 0));
+  }
   if (element_count_ == 0) {
     inner_loop_elements_ = 0;
     outer_block_count_ = 0;
@@ -190,6 +194,10 @@ void BinaryBroadcastPlan::ClassifyLoopFamily() {
 }
 
 void BinaryBroadcastPlan::ValidateInputs(const std::byte *left, const std::byte *right) const {
+  if (adapter_.validate_right_bulk != nullptr &&
+      !adapter_.validate_right_bulk(right, right_element_count_)) {
+    return;
+  }
   if (adapter_.validate == nullptr) {
     return;
   }

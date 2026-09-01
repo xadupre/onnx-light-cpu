@@ -29,8 +29,11 @@ public:
     BinaryTypeSignature signature;
     using ScalarFn = void (*)(const void *, const void *, void *);
     using ValidateFn = void (*)(const void *, const void *);
+    // Returns whether validation must continue over broadcasted input pairs.
+    using ValidateRightBulkFn = bool (*)(const void *, std::size_t);
     ScalarFn scalar = nullptr;
     ValidateFn validate = nullptr;
+    ValidateRightBulkFn validate_right_bulk = nullptr;
     std::size_t left_size = 0;
     std::size_t right_size = 0;
     std::size_t output_size = 0;

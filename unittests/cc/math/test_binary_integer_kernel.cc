@@ -250,6 +250,20 @@ TEST(BinaryIntegerKernel, RejectsUndefinedInputsBeforeWritingOutput) {
   CheckValidationFailures<std::uint64_t>();
 }
 
+TEST(BinaryIntegerKernel, ValidatesSignedDivisionOverflowForActualPairsOnly) {
+  const BinaryKernelDescriptor descriptor("Div", 14, {});
+  const std::vector<std::int64_t> left_shape{2, 2};
+  const std::vector<std::int64_t> right_shape{2, 1};
+  const BinaryBroadcastPlan plan(descriptor, BinaryDataType::INT32, BinaryDataType::INT32,
+                                 BinaryDataType::INT32, left_shape, right_shape);
+  const std::vector<std::int32_t> left{std::numeric_limits<std::int32_t>::min(), 4, 1, 2};
+  const std::vector<std::int32_t> right{1, -1};
+  std::vector<std::int32_t> output(left.size());
+  EXPECT_NO_THROW(plan.Execute(left.data(), right.data(), output.data()));
+  EXPECT_EQ(output,
+            (std::vector<std::int32_t>{std::numeric_limits<std::int32_t>::min(), 4, -1, -2}));
+}
+
 TEST(BinaryLogicalKernel, EmitsCanonicalByteBool) {
   const std::vector<std::uint8_t> left{0, 0, 1, 1, 1};
   const std::vector<std::uint8_t> right{0, 1, 0, 1, 1};
