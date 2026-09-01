@@ -997,6 +997,25 @@ struct ThreadedExecutor {
   }
 };
 
+struct ProductiveExecutor {
+  const float *output = nullptr;
+  std::size_t output_size = 0;
+  std::size_t productive_blocks = 0;
+
+  static void Run(void *context, int64_t num_blocks, void *task_context,
+                  onnx_light_cpu::ExecutionBlockFn task) {
+    auto &self = *static_cast<ProductiveExecutor *>(context);
+    for (int64_t block = 0; block < num_blocks; ++block) {
+      const std::size_t before = static_cast<std::size_t>(std::count_if(
+          self.output, self.output + self.output_size, [](float value) { return value != 0.0f; }));
+      task(task_context, block);
+      const std::size_t after = static_cast<std::size_t>(std::count_if(
+          self.output, self.output + self.output_size, [](float value) { return value != 0.0f; }));
+      self.productive_blocks += static_cast<std::size_t>(after > before);
+    }
+  }
+};
+
 TEST(GemmFloat32, RawLargeKSplitBoundsParticipants) {
   constexpr std::size_t M = 32;
   constexpr std::size_t N = 32;
@@ -1470,6 +1489,77 @@ TEST(GemmHalf, BFloat16AlgorithmsDoNotWidenOperands) {
   CheckHalfNoExpandedOperand(true, 1, 512, 256, 551); // skinny-M GEMV
   CheckHalfNoExpandedOperand(true, 8, 2, 49152, 561); // split-K
   CheckHalfNoExpandedOperand(true, 8, 768, 512, 571); // general blocked
+}
+
+TEST(GemmFloat32, DynamicBUsesBoundedWorkerLocalPacking) {
+  constexpr std::size_t M = 128;
+  constexpr std::size_t N = 512;
+  constexpr std::size_t K = 256;
+  const onnx_light_cpu::GemmBlocking blocking{32, 1024, 256, 4, 16};
+  ThreadedExecutor executor;
+  onnx_light_cpu::ExecutionExecutorView view{&executor, 4, &ThreadedExecutor::Run};
+  const std::vector<float> A(M * K, 1.0f);
+  const std::vector<float> B(K * N, 1.0f);
+  std::vector<float> Y(M * N);
+
+  const std::size_t peak_allocation = PeakAllocationBytes([&] {
+    onnx_light_cpu::ExecutionExecutorScope scope(&view);
+    onnx_light_cpu::detail::GemmFloat32Planned<onnx_light_cpu::GemmAlgorithm::kGeneral>(
+        false, false, M, N, K, 1.0f, A.data(), B.data(), 0.0f, nullptr, Y.data(), &blocking);
+  });
+
+  EXPECT_LT(peak_allocation, K * N * sizeof(float));
+  EXPECT_GT(executor.maximum_active.load(std::memory_order_relaxed), 1u);
+  for (float value : Y) {
+    EXPECT_FLOAT_EQ(value, static_cast<float>(K));
+  }
+}
+
+TEST(GemmFloat32, SmallMicroPanelGridKeepsPackingBounded) {
+  constexpr std::size_t M = 300;
+  constexpr std::size_t N = 600;
+  constexpr std::size_t K = 256;
+  const onnx_light_cpu::GemmBlocking blocking{64, 200, 128, 4, 16};
+  ThreadedExecutor executor;
+  onnx_light_cpu::ExecutionExecutorView view{&executor, 4, &ThreadedExecutor::Run};
+  const std::vector<float> A(M * K, 1.0f);
+  const std::vector<float> B(K * N, 1.0f);
+  std::vector<float> Y(M * N);
+
+  const std::size_t peak_allocation = PeakAllocationBytes([&] {
+    onnx_light_cpu::ExecutionExecutorScope scope(&view);
+    onnx_light_cpu::detail::GemmFloat32Planned<onnx_light_cpu::GemmAlgorithm::kGeneral>(
+        false, false, M, N, K, 1.0f, A.data(), B.data(), 0.0f, nullptr, Y.data(), &blocking);
+  });
+
+  EXPECT_LT(peak_allocation, K * N * sizeof(float));
+  EXPECT_GT(executor.maximum_active.load(std::memory_order_relaxed), 1u);
+  for (float value : Y) {
+    EXPECT_FLOAT_EQ(value, static_cast<float>(K));
+  }
+}
+
+TEST(GemmFloat32, DynamicBUsesAllParticipantsWithTrailingNcPanel) {
+  constexpr std::size_t M = 64;
+  constexpr std::size_t N = 600;
+  constexpr std::size_t K = 256;
+  const onnx_light_cpu::GemmBlocking blocking{64, 512, 256, 4, 16};
+  const std::vector<float> A(M * K, 1.0f);
+  const std::vector<float> B(K * N, 1.0f);
+  std::vector<float> Y(M * N);
+  ProductiveExecutor executor{Y.data(), Y.size()};
+  onnx_light_cpu::ExecutionExecutorView view{&executor, 4, &ProductiveExecutor::Run};
+
+  {
+    onnx_light_cpu::ExecutionExecutorScope scope(&view);
+    onnx_light_cpu::detail::GemmFloat32Planned<onnx_light_cpu::GemmAlgorithm::kGeneral>(
+        false, false, M, N, K, 1.0f, A.data(), B.data(), 0.0f, nullptr, Y.data(), &blocking);
+  }
+
+  EXPECT_EQ(executor.productive_blocks, 4u);
+  for (float value : Y) {
+    EXPECT_FLOAT_EQ(value, static_cast<float>(K));
+  }
 }
 
 namespace {

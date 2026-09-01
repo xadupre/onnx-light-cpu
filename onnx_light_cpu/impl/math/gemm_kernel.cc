@@ -1374,12 +1374,20 @@ void GemmFiveLoopRange(bool trans_a, bool trans_b, std::size_t M, std::size_t N,
               K >= 512
           ? 16
           : selected_column_block;
-  const std::size_t micro_panels_per_panel = (blocking.nc + column_block - 1) / column_block;
+  const std::size_t panel_width = std::min(blocking.nc, N);
+  const std::size_t micro_panels_per_panel = (panel_width + column_block - 1) / column_block;
   const std::size_t tasks_per_panel = row_panels * micro_panels_per_panel;
   constexpr bool kCanFusePacking = std::is_same_v<T, SrcT>;
-  const bool fuse_task_packing = kCanFusePacking && row_panels <= 2;
+  constexpr bool kIsFloat32 = std::is_same_v<T, float> && std::is_same_v<SrcT, float>;
+  const bool fuse_task_packing =
+      kCanFusePacking && (row_panels <= 2 || (kIsFloat32 && thread_count > 1));
+  const std::size_t fused_micro_panels = (N + column_block - 1) / column_block;
+  const std::size_t all_tasks = row_panels * fused_micro_panels;
+  const bool fuse_task_grid =
+      fuse_task_packing &&
+      (fused_micro_panels >= 16 || (kIsFloat32 && thread_count > 1 && all_tasks >= 16));
   const std::size_t panels_per_wave =
-      fuse_task_packing
+      fuse_task_grid
           ? column_panels
           : std::min(column_panels, std::max<std::size_t>(1, (thread_count + tasks_per_panel - 1) /
                                                                  tasks_per_panel));
@@ -1388,9 +1396,9 @@ void GemmFiveLoopRange(bool trans_a, bool trans_b, std::size_t M, std::size_t N,
   const std::size_t row_capacity = std::min(blocking.mc, M);
   std::unique_ptr<AlignedBuffer<T>> bpack;
 
-  if (fuse_task_packing && column_panels * micro_panels_per_panel >= 16) {
-    const std::size_t wave_micro_panels = column_panels * micro_panels_per_panel;
-    const std::size_t task_count = row_panels * wave_micro_panels;
+  if (fuse_task_grid) {
+    const std::size_t wave_micro_panels = fused_micro_panels;
+    const std::size_t task_count = all_tasks;
     const std::size_t task_columns = std::min(column_block, N);
     const double cost = static_cast<double>(std::min(blocking.mc, M)) * task_columns *
                         (k_end - k_begin) / kGemmFmasPerParallelWorkUnit;
@@ -1410,68 +1418,64 @@ void GemmFiveLoopRange(bool trans_a, bool trans_b, std::size_t M, std::size_t N,
     const std::size_t max_kc = std::min(blocking.kc, k_end - k_begin);
 #endif
 
-    ExecuteRanges(
-        static_cast<std::int64_t>(participant_count),
-        cost * static_cast<double>(task_count) / static_cast<double>(participant_count),
-        [&](std::int64_t begin, std::int64_t end) {
-          AlignedBuffer<T> apack(use_strided_a ? 0 : row_capacity * max_kc);
-          AlignedBuffer<T> micro_b(max_kc * column_block);
-          for (std::int64_t participant = begin; participant < end; ++participant) {
-            const std::size_t participant_index = static_cast<std::size_t>(participant);
-            const std::size_t tasks_per_participant = task_count / participant_count;
-            const std::size_t extra_tasks = task_count % participant_count;
-            const std::size_t first_task = participant_index * tasks_per_participant +
-                                           std::min(participant_index, extra_tasks);
-            const std::size_t last_task = first_task + tasks_per_participant +
-                                          static_cast<std::size_t>(participant_index < extra_tasks);
-            for (std::size_t task = first_task; task < last_task; ++task) {
-              const std::size_t row_panel = task / wave_micro_panels;
-              const std::size_t wave_micro_panel = task % wave_micro_panels;
-              const std::size_t column_panel = wave_micro_panel / micro_panels_per_panel;
-              const std::size_t micro_panel = wave_micro_panel % micro_panels_per_panel;
-              const std::size_t m0 = row_panel * blocking.mc;
-              const std::size_t panel_n0 = column_panel * blocking.nc;
-              const std::size_t nb = std::min(blocking.nc, N - panel_n0);
-              const std::size_t jr = micro_panel * column_block;
-              if (jr >= nb) {
-                continue;
-              }
-              const std::size_t micro_n0 = panel_n0 + jr;
-              const std::size_t jb = std::min(column_block, nb - jr);
-              const std::size_t mc = std::min(blocking.mc, M - m0);
-              for (std::size_t k0 = k_begin; k0 < k_end; k0 += max_kc) {
-                const std::size_t kc = std::min(max_kc, k_end - k0);
-                const GemmAccumMode mode =
-                    k0 == k_begin ? (has_bias ? GemmAccumMode::kInitBias : GemmAccumMode::kInitZero)
-                                  : GemmAccumMode::kAccumulate;
-                PackBMicroPanel(trans_b, B, K, N, k0, kc, micro_n0, jb, 0, column_block,
-                                micro_b.data());
-                if (!use_strided_a) {
-                  PackAPanel(trans_a, A, M, K, m0, mc, k0, kc, apack.data());
-                }
-                const T *packed_a =
-                    use_strided_a ? reinterpret_cast<const T *>(A) + m0 * K + k0 : apack.data();
-                for (std::size_t ir = 0; ir < mc; ir += blocking.mr) {
-                  const std::size_t mr = std::min(blocking.mr, mc - ir);
-                  if constexpr (std::is_same_v<T, float> && std::is_same_v<SrcT, float>) {
+    ExecuteRanges(static_cast<std::int64_t>(participant_count),
+                  cost * static_cast<double>(task_count) / static_cast<double>(participant_count),
+                  [&](std::int64_t begin, std::int64_t end) {
+                    AlignedBuffer<T> apack(use_strided_a ? 0 : row_capacity * max_kc);
+                    AlignedBuffer<T> micro_b(max_kc * column_block);
+                    for (std::size_t k0 = k_begin; k0 < k_end; k0 += max_kc) {
+                      const std::size_t kc = std::min(max_kc, k_end - k0);
+                      const GemmAccumMode mode =
+                          k0 == k_begin
+                              ? (has_bias ? GemmAccumMode::kInitBias : GemmAccumMode::kInitZero)
+                              : GemmAccumMode::kAccumulate;
+                      std::size_t packed_row_panel = row_panels;
+                      for (std::int64_t participant = begin; participant < end; ++participant) {
+                        const std::size_t participant_index = static_cast<std::size_t>(participant);
+                        const std::size_t tasks_per_participant = task_count / participant_count;
+                        const std::size_t extra_tasks = task_count % participant_count;
+                        const std::size_t first_task = participant_index * tasks_per_participant +
+                                                       std::min(participant_index, extra_tasks);
+                        const std::size_t last_task =
+                            first_task + tasks_per_participant +
+                            static_cast<std::size_t>(participant_index < extra_tasks);
+                        for (std::size_t task = first_task; task < last_task; ++task) {
+                          const std::size_t row_panel = task / wave_micro_panels;
+                          const std::size_t wave_micro_panel = task % wave_micro_panels;
+                          const std::size_t m0 = row_panel * blocking.mc;
+                          const std::size_t micro_n0 = wave_micro_panel * column_block;
+                          const std::size_t jb = std::min(column_block, N - micro_n0);
+                          const std::size_t mc = std::min(blocking.mc, M - m0);
+                          PackBMicroPanel(trans_b, B, K, N, k0, kc, micro_n0, jb, 0, column_block,
+                                          micro_b.data());
+                          if (!use_strided_a && packed_row_panel != row_panel) {
+                            PackAPanel(trans_a, A, M, K, m0, mc, k0, kc, apack.data());
+                            packed_row_panel = row_panel;
+                          }
+                          const T *packed_a = use_strided_a
+                                                  ? reinterpret_cast<const T *>(A) + m0 * K + k0
+                                                  : apack.data();
+                          for (std::size_t ir = 0; ir < mc; ir += blocking.mr) {
+                            const std::size_t mr = std::min(blocking.mr, mc - ir);
+                            if constexpr (std::is_same_v<T, float> && std::is_same_v<SrcT, float>) {
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512
-                    if (use_strided_a) {
-                      GemmMicroKernel_AVX512_F32_StridedA(
-                          mr, jb, kc, alpha, beta, micro_b.data(), jb,
-                          has_bias ? C + (m0 + ir) * N + micro_n0 : nullptr, N,
-                          Y + (m0 + ir) * N + micro_n0, N, 0, mode, packed_a + ir * K, K);
-                      continue;
-                    }
+                              if (use_strided_a) {
+                                GemmMicroKernel_AVX512_F32_StridedA(
+                                    mr, jb, kc, alpha, beta, micro_b.data(), jb,
+                                    has_bias ? C + (m0 + ir) * N + micro_n0 : nullptr, N,
+                                    Y + (m0 + ir) * N + micro_n0, N, 0, mode, packed_a + ir * K, K);
+                                continue;
+                              }
 #endif
-                  }
-                  tile(kind, mr, jb, kc, alpha, beta, micro_b.data(), jb,
-                       has_bias ? C + (m0 + ir) * N + micro_n0 : nullptr, N,
-                       Y + (m0 + ir) * N + micro_n0, N, 0, mode, packed_a + ir * kc);
-                }
-              }
-            }
-          }
-        });
+                            }
+                            tile(kind, mr, jb, kc, alpha, beta, micro_b.data(), jb,
+                                 has_bias ? C + (m0 + ir) * N + micro_n0 : nullptr, N,
+                                 Y + (m0 + ir) * N + micro_n0, N, 0, mode, packed_a + ir * kc);
+                          }
+                        }
+                      }
+                    }
+                  });
     return;
   }
 
