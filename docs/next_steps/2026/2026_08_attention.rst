@@ -3,13 +3,19 @@ Attention Performance Roadmap
 
 :Date: 2026-08
 
-**complete** (Attention PR15 parity, memory, and reproducibility gate)
+**in progress** (the published parity gate is not yet met)
 
 ``onnx-light-cpu`` provides materialized and bounded-memory streaming Attention
-for the roadmap types and cache modes. The registered backend corpus and
-``tools/benchmark_attention_parity.py`` provide the final reproducible
-equal-thread gate against ONNX Runtime. Dedicated-machine reports, rather
-than shared CI timings, decide the narrow performance thresholds.
+for the roadmap types and cache modes. The 2026-09-01 dashboard reopened this
+roadmap: the FP32 and FP16 medians and several priority cases remained below
+the stated parity thresholds. The current optimization pass adds a
+single-key value-copy path, tiled execution starting at query length 8,
+shape-adaptive query/KV blocks, and a tiled FP16 prefill path which converts
+half inputs while packing GEMM panels instead of widening complete Q and K
+tensors. The registered backend corpus and
+``tools/benchmark_attention_parity.py`` remain the reproducible equal-thread
+gate against ONNX Runtime. Dedicated-machine reports, rather than shared CI
+timings, decide the narrow performance thresholds.
 
 Objective
 ---------
@@ -91,6 +97,12 @@ stages.
   4096, and 8192 when machine memory permits; MHA ``12/12``, GQA ``16/4``,
   and MQA ``16/1`` query/KV-head ratios; head dimensions 64 and 128; rank-3
   and rank-4 layouts; and FP32, FP16, and BF16.
+* Include full-attention layers from Qwen3.6-27B (24 query heads, 4 KV heads)
+  and Qwen3.6-35B-A3B (16 query heads, 2 KV heads), both with head dimension
+  256, using rank-3 FP16 prefill and tensor-cache decode cases. These
+  geometries come from the published model configurations; the 128/1024/4096
+  sequence points are serving-oriented benchmark choices rather than model
+  configuration values.
 * Pair the full attribute and mask matrix with small correctness cases. The
   timed priority corpus covers no mask, causal, boolean, additive, v24
   ``nonpad_kv_seqlen``, and internal tensor-cache cases without taking their
@@ -121,6 +133,8 @@ both correctness and ``TestMode::BENCHMARK`` modes. The benchmark cases:
   mask mode, and element type;
 * include the complete timed priority corpus defined above, including KV length
   8192 only in the opt-in large corpus when machine memory permits.
+* include Qwen3-8B and both published Qwen3.6 full-attention geometries, with
+  one 128-token prefill case and decode cache lengths 128, 1024, and 4096.
 
 Unit tests execute bounded representative benchmark cases through the
 registered CPU kernel. Metadata tests cover the complete corpus without
@@ -340,8 +354,11 @@ Pull-request sequence
        priority case below ``0.9x``. Raw equal-thread samples and environment
        metadata are published; controlled-thread runs remain diagnostic.
      - PR14 / #391
-     - Complete
+     - In progress
 
 Roadmap PR15 (`#390
-<https://github.com/xadupre/onnx-light-cpu/issues/390>`_) completed the
-Attention roadmap.
+<https://github.com/xadupre/onnx-light-cpu/issues/390>`_) delivered the
+benchmarking and memory gate, but subsequent published measurements showed
+that its performance thresholds were not sustained. The roadmap remains open
+until a dedicated-machine run satisfies those thresholds for every priority
+type.

@@ -507,9 +507,22 @@ void ComputeAttentionFloat32Materialized(const AttentionPlan &plan, const float 
 
 namespace {
 
-// KV block size for the streaming recurrence: bounds the temporary score
-// buffer to a constant instead of `O(total_kv_length)`.
-constexpr std::size_t kStreamingKvBlock = 128;
+std::size_t AttentionQueryBlock(const AttentionPlan &plan) {
+  constexpr std::size_t kBoundedQueryBlock = 16;
+  constexpr std::size_t kFullQueryBlock = 128;
+  const bool has_query_dependent_bounds =
+      plan.causal || plan.left_window_size >= 0 || plan.right_window_size >= 0;
+  const std::size_t target = has_query_dependent_bounds ? kBoundedQueryBlock : kFullQueryBlock;
+  return std::min(plan.q_length, target);
+}
+
+std::size_t AttentionKvBlock(const AttentionPlan &plan) {
+  constexpr std::size_t kDefaultKvBlock = 256;
+  constexpr std::size_t kLargeHeadKvBlock = 128;
+  const std::size_t target =
+      plan.head_dim + plan.v_head_dim > 256 ? kLargeHeadKvBlock : kDefaultKvBlock;
+  return std::min(plan.total_kv_length, target);
+}
 
 // Estimated FMA cost of one query row visiting every KV position it may
 // attend to (`head_dim` for the QK dot product plus `v_head_dim` for the
@@ -518,12 +531,14 @@ constexpr std::size_t kStreamingKvBlock = 128;
 std::size_t StreamingParticipantCount(const AttentionPlan &plan, std::size_t total_rows) {
   constexpr std::size_t kDefaultTargetFmasPerParticipant = 2'000'000;
   constexpr std::size_t kShortQueryTargetFmasPerParticipant = 250'000;
+  constexpr std::size_t kShortKvTargetFmasPerParticipant = 64'000;
   constexpr std::size_t kMaximumParticipants = 16;
   const bool is_short_stateless_query = plan.past_length == 0 && plan.q_length > 1 &&
                                         plan.q_length <= 16 && plan.total_kv_length <= 256;
-  const std::size_t target_fmas_per_participant = is_short_stateless_query
-                                                      ? kShortQueryTargetFmasPerParticipant
-                                                      : kDefaultTargetFmasPerParticipant;
+  const std::size_t target_fmas_per_participant =
+      plan.total_kv_length <= 16 ? kShortKvTargetFmasPerParticipant
+                                 : (is_short_stateless_query ? kShortQueryTargetFmasPerParticipant
+                                                             : kDefaultTargetFmasPerParticipant);
   const std::size_t fmas_per_row =
       (plan.head_dim + plan.v_head_dim) * std::max<std::size_t>(plan.total_kv_length, 1);
   const std::size_t total_fmas = total_rows * fmas_per_row;
@@ -575,6 +590,87 @@ struct BFloat16Codec {
   static Storage Store(float value) noexcept { return detail::FloatToBFloat16Bits(value); }
 };
 
+template <typename Codec>
+void AttentionQkGemm(std::size_t rows, std::size_t columns, std::size_t head_dim, float scale,
+                     const typename Codec::Storage *q, const typename Codec::Storage *k,
+                     float *scores) {
+  if constexpr (std::is_same_v<Codec, Float32Codec>) {
+    GemmFloat32(false, true, rows, columns, head_dim, scale, q, k, 0.0f, nullptr, scores);
+  } else {
+    const GemmEpilogue<float> epilogue;
+    GemmHalfWithEpilogue(std::is_same_v<Codec, BFloat16Codec>, false, true, rows, columns, head_dim,
+                         scale, q, k, epilogue, scores);
+  }
+}
+
+template <typename Codec>
+void ComputeAttentionSingleKey(const AttentionPlan &plan, const typename Codec::Storage *v,
+                               const void *mask, typename Codec::Storage *y,
+                               const typename Codec::Storage *past_v,
+                               const std::int64_t *nonpad_kv_seqlen) {
+  const auto *mask_bool = static_cast<const std::uint8_t *>(mask);
+  const auto *mask_float = static_cast<const float *>(mask);
+  const std::size_t rows_per_batch = plan.q_num_heads * plan.q_length;
+  const std::size_t total_rows = plan.batch * rows_per_batch;
+  const bool always_allowed = !plan.causal && nonpad_kv_seqlen == nullptr &&
+                              plan.mask_kind == AttentionMaskKind::kNone &&
+                              plan.left_window_size < 0 && plan.right_window_size < 0;
+  const ExecutionSchedule schedule{1, 16, 16, 0};
+  ExecuteRanges(
+      static_cast<std::int64_t>(total_rows), schedule, [&](std::int64_t begin, std::int64_t end) {
+        for (std::int64_t row = begin; row < end; ++row) {
+          const std::size_t b = static_cast<std::size_t>(row) / rows_per_batch;
+          const std::size_t remainder = static_cast<std::size_t>(row) % rows_per_batch;
+          const std::size_t h = remainder / plan.q_length;
+          const std::size_t query = remainder % plan.q_length;
+          const std::size_t kv_h = h / plan.group_size;
+          const typename Codec::Storage *v_row =
+              plan.past_length == 0
+                  ? v + b * plan.v_strides.batch + kv_h * plan.v_strides.head
+                  : past_v + b * plan.past_v_strides.batch + kv_h * plan.past_v_strides.head;
+          typename Codec::Storage *y_row = y + b * plan.y_strides.batch + h * plan.y_strides.head +
+                                           query * plan.y_strides.sequence;
+
+          bool allowed = always_allowed;
+          bool propagate_nan = false;
+          if (!always_allowed) {
+            const std::int64_t causal_offset =
+                nonpad_kv_seqlen != nullptr
+                    ? nonpad_kv_seqlen[b] - static_cast<std::int64_t>(plan.q_length)
+                    : plan.causal_offset;
+            const std::int64_t center = WindowCenter(query, causal_offset);
+            allowed = (!plan.causal || center >= 0) &&
+                      (nonpad_kv_seqlen == nullptr || nonpad_kv_seqlen[b] > 0);
+            if (allowed && plan.left_window_size >= 0) {
+              allowed = center <= plan.left_window_size;
+            }
+            if (allowed && plan.right_window_size >= 0) {
+              allowed = center >= -plan.right_window_size;
+            }
+            const std::ptrdiff_t mask_index =
+                b * plan.mask_strides.batch +
+                static_cast<std::ptrdiff_t>(h) * plan.mask_strides.head +
+                static_cast<std::ptrdiff_t>(query) * plan.mask_strides.q;
+            if (allowed && plan.mask_kind == AttentionMaskKind::kBoolean) {
+              allowed = mask_bool[mask_index] != 0;
+            } else if (allowed && plan.mask_kind == AttentionMaskKind::kAdditive) {
+              const float bias = mask_float[mask_index];
+              propagate_nan = std::isnan(bias);
+              allowed = !IsMaskFilterValue(bias);
+            }
+          }
+          if (propagate_nan) {
+            std::fill_n(y_row, plan.v_head_dim,
+                        Codec::Store(std::numeric_limits<float>::quiet_NaN()));
+          } else if (allowed) {
+            std::copy_n(v_row, plan.v_head_dim, y_row);
+          } else {
+            std::fill_n(y_row, plan.v_head_dim, Codec::Store(0.0f));
+          }
+        }
+      });
+}
+
 void ConvertFloat16Rank3ToRank4(const std::uint16_t *source, float *destination, std::size_t batch,
                                 std::size_t heads, std::size_t length, std::size_t dimension) {
   const std::size_t rows = batch * heads * length;
@@ -590,6 +686,25 @@ void ConvertFloat16Rank3ToRank4(const std::uint16_t *source, float *destination,
                         source + ((b * length + sequence) * heads + h) * dimension;
                     detail::ConvertFloat16ToFloat32(source_row, destination + row * dimension,
                                                     dimension);
+                  }
+                });
+}
+
+void CopyFloat16Rank3ToRank4(const std::uint16_t *source, std::uint16_t *destination,
+                             std::size_t batch, std::size_t heads, std::size_t length,
+                             std::size_t dimension) {
+  const std::size_t rows = batch * heads * length;
+  ExecuteRanges(static_cast<std::int64_t>(rows), static_cast<double>(dimension) * 0.125, 1,
+                [&](std::int64_t begin, std::int64_t end) {
+                  for (std::size_t row = static_cast<std::size_t>(begin);
+                       row < static_cast<std::size_t>(end); ++row) {
+                    const std::size_t b = row / (heads * length);
+                    const std::size_t remainder = row % (heads * length);
+                    const std::size_t h = remainder / length;
+                    const std::size_t sequence = remainder % length;
+                    const std::uint16_t *source_row =
+                        source + ((b * length + sequence) * heads + h) * dimension;
+                    std::copy_n(source_row, dimension, destination + row * dimension);
                   }
                 });
 }
@@ -670,8 +785,7 @@ void ComputeAttentionStreamingGeneric(const AttentionPlan &plan, const typename 
   const auto *mask_float = static_cast<const float *>(mask);
   const std::size_t total_kv_length = plan.total_kv_length;
   const bool has_softcap = plan.softcap != 0.0f;
-  const std::size_t block =
-      total_kv_length == 0 ? std::size_t{0} : std::min(total_kv_length, kStreamingKvBlock);
+  const std::size_t block = total_kv_length == 0 ? std::size_t{0} : AttentionKvBlock(plan);
   const std::size_t rows_per_batch = plan.q_num_heads * plan.q_length;
   const std::size_t total_rows = plan.batch * rows_per_batch;
   const std::size_t participants = StreamingParticipantCount(plan, total_rows);
@@ -912,12 +1026,12 @@ void ComputeAttentionStreamingGeneric(const AttentionPlan &plan, const typename 
       });
 }
 
-void ComputeAttentionFloat32Tiled(const AttentionPlan &plan, const float *q, const float *k,
-                                  const float *v, const void *mask, float *y,
-                                  const std::int64_t *nonpad_kv_seqlen) {
-  constexpr std::size_t kQueryBlock = 16;
-  const std::size_t kv_block = std::min(plan.total_kv_length, kStreamingKvBlock);
-  const std::size_t query_block = std::min(plan.q_length, kQueryBlock);
+template <typename Codec>
+void ComputeAttentionTiled(const AttentionPlan &plan, const typename Codec::Storage *q,
+                           const typename Codec::Storage *k, const float *v, const void *mask,
+                           float *y, const std::int64_t *nonpad_kv_seqlen) {
+  const std::size_t kv_block = AttentionKvBlock(plan);
+  const std::size_t query_block = AttentionQueryBlock(plan);
   const std::size_t query_blocks = (plan.q_length + query_block - 1) / query_block;
   const std::size_t tasks_per_batch = plan.q_num_heads * query_blocks;
   const std::size_t total_tasks = plan.batch * tasks_per_batch;
@@ -960,9 +1074,10 @@ void ComputeAttentionFloat32Tiled(const AttentionPlan &plan, const float *q, con
           const std::size_t q0 = qb * query_block;
           const std::size_t rows = std::min(query_block, plan.q_length - q0);
           const std::size_t kv_h = h / plan.group_size;
-          const float *q_block =
+          const typename Codec::Storage *q_block =
               q + b * plan.q_strides.batch + h * plan.q_strides.head + q0 * plan.q_strides.sequence;
-          const float *k_head = k + b * plan.k_strides.batch + kv_h * plan.k_strides.head;
+          const typename Codec::Storage *k_head =
+              k + b * plan.k_strides.batch + kv_h * plan.k_strides.head;
           const float *v_head = v + b * plan.v_strides.batch + kv_h * plan.v_strides.head;
           float *y_block =
               y + b * plan.y_strides.batch + h * plan.y_strides.head + q0 * plan.y_strides.sequence;
@@ -1007,8 +1122,8 @@ void ComputeAttentionFloat32Tiled(const AttentionPlan &plan, const float *q, con
 
           for (std::size_t j0 = task_kv_start; j0 < task_kv_limit; j0 += kv_block) {
             const std::size_t columns = std::min(kv_block, task_kv_limit - j0);
-            GemmFloat32(false, true, rows, columns, plan.head_dim, plan.scale, q_block,
-                        k_head + j0 * plan.k_strides.sequence, 0.0f, nullptr, scores.data());
+            AttentionQkGemm<Codec>(rows, columns, plan.head_dim, plan.scale, q_block,
+                                   k_head + j0 * plan.k_strides.sequence, scores.data());
 
             for (std::size_t i = 0; i < rows; ++i) {
               float *score_row = scores.data() + i * columns;
@@ -1200,10 +1315,103 @@ void ComputeAttentionFloat32Rank3Tiled(const AttentionPlan &plan, const float *q
       static_cast<std::ptrdiff_t>(plan.q_length * plan.v_head_dim),
       static_cast<std::ptrdiff_t>(plan.v_head_dim)};
 
-  ComputeAttentionFloat32Tiled(packed_plan, packed_q, packed_k, packed_v, mask, packed_y,
-                               nonpad_kv_seqlen);
+  ComputeAttentionTiled<Float32Codec>(packed_plan, packed_q, packed_k, packed_v, mask, packed_y,
+                                      nonpad_kv_seqlen);
   ConvertFloat32Rank4ToRank3(packed_y, y, plan.batch, plan.q_num_heads, plan.q_length,
                              plan.v_head_dim);
+}
+
+void ConvertFloat16Contiguous(const std::uint16_t *source, float *destination, std::size_t count) {
+  ExecuteRanges(static_cast<std::int64_t>(count), 0.25, 8,
+                [&](std::int64_t begin, std::int64_t end) {
+                  detail::ConvertFloat16ToFloat32(source + begin, destination + begin,
+                                                  static_cast<std::size_t>(end - begin));
+                });
+}
+
+void ConvertFloat32ContiguousToFloat16(const float *source, std::uint16_t *destination,
+                                       std::size_t count) {
+  ExecuteRanges(static_cast<std::int64_t>(count), 0.25, 8,
+                [&](std::int64_t begin, std::int64_t end) {
+                  detail::ConvertFloat32ToFloat16(source + begin, destination + begin,
+                                                  static_cast<std::size_t>(end - begin));
+                });
+}
+
+AttentionPlan MakePackedRank4Plan(const AttentionPlan &plan) {
+  AttentionPlan packed_plan = plan;
+  packed_plan.layout = AttentionLayout::kRank4;
+  packed_plan.q_strides = {
+      static_cast<std::ptrdiff_t>(plan.q_num_heads * plan.q_length * plan.head_dim),
+      static_cast<std::ptrdiff_t>(plan.q_length * plan.head_dim),
+      static_cast<std::ptrdiff_t>(plan.head_dim)};
+  packed_plan.k_strides = {
+      static_cast<std::ptrdiff_t>(plan.kv_num_heads * plan.kv_length * plan.head_dim),
+      static_cast<std::ptrdiff_t>(plan.kv_length * plan.head_dim),
+      static_cast<std::ptrdiff_t>(plan.head_dim)};
+  packed_plan.v_strides = {
+      static_cast<std::ptrdiff_t>(plan.kv_num_heads * plan.kv_length * plan.v_head_dim),
+      static_cast<std::ptrdiff_t>(plan.kv_length * plan.v_head_dim),
+      static_cast<std::ptrdiff_t>(plan.v_head_dim)};
+  packed_plan.y_strides = {
+      static_cast<std::ptrdiff_t>(plan.q_num_heads * plan.q_length * plan.v_head_dim),
+      static_cast<std::ptrdiff_t>(plan.q_length * plan.v_head_dim),
+      static_cast<std::ptrdiff_t>(plan.v_head_dim)};
+  return packed_plan;
+}
+
+void ComputeAttentionFloat16Tiled(const AttentionPlan &plan, const std::uint16_t *q,
+                                  const std::uint16_t *k, const std::uint16_t *v, const void *mask,
+                                  std::uint16_t *y, const std::int64_t *nonpad_kv_seqlen) {
+  const std::size_t q_count = plan.batch * plan.q_num_heads * plan.q_length * plan.head_dim;
+  const std::size_t k_count = plan.batch * plan.kv_num_heads * plan.kv_length * plan.head_dim;
+  const std::size_t v_count = plan.batch * plan.kv_num_heads * plan.kv_length * plan.v_head_dim;
+  const std::size_t y_count = plan.batch * plan.q_num_heads * plan.q_length * plan.v_head_dim;
+  constexpr std::size_t kMaxRetainedWorkspaceElements = 16 * 1024 * 1024;
+  thread_local std::vector<float> float_workspace;
+  std::unique_ptr<float[]> oversized_float_workspace;
+  const std::size_t float_workspace_count = v_count + y_count;
+  float *v_fp32;
+  if (float_workspace_count <= kMaxRetainedWorkspaceElements) {
+    float_workspace.resize(float_workspace_count);
+    v_fp32 = float_workspace.data();
+  } else {
+    oversized_float_workspace = std::make_unique_for_overwrite<float[]>(float_workspace_count);
+    v_fp32 = oversized_float_workspace.get();
+  }
+  float *y_fp32 = v_fp32 + v_count;
+
+  if (plan.layout == AttentionLayout::kRank3) {
+    thread_local std::vector<std::uint16_t> half_workspace;
+    std::unique_ptr<std::uint16_t[]> oversized_half_workspace;
+    const std::size_t half_workspace_count = q_count + k_count;
+    std::uint16_t *packed_q;
+    if (half_workspace_count <= kMaxRetainedWorkspaceElements) {
+      half_workspace.resize(half_workspace_count);
+      packed_q = half_workspace.data();
+    } else {
+      oversized_half_workspace =
+          std::make_unique_for_overwrite<std::uint16_t[]>(half_workspace_count);
+      packed_q = oversized_half_workspace.get();
+    }
+    std::uint16_t *packed_k = packed_q + q_count;
+    CopyFloat16Rank3ToRank4(q, packed_q, plan.batch, plan.q_num_heads, plan.q_length,
+                            plan.head_dim);
+    CopyFloat16Rank3ToRank4(k, packed_k, plan.batch, plan.kv_num_heads, plan.kv_length,
+                            plan.head_dim);
+    ConvertFloat16Rank3ToRank4(v, v_fp32, plan.batch, plan.kv_num_heads, plan.kv_length,
+                               plan.v_head_dim);
+    const AttentionPlan packed_plan = MakePackedRank4Plan(plan);
+    ComputeAttentionTiled<Float16Codec>(packed_plan, packed_q, packed_k, v_fp32, mask, y_fp32,
+                                        nonpad_kv_seqlen);
+    ConvertFloat32Rank4ToFloat16Rank3(y_fp32, y, plan.batch, plan.q_num_heads, plan.q_length,
+                                      plan.v_head_dim);
+    return;
+  }
+
+  ConvertFloat16Contiguous(v, v_fp32, v_count);
+  ComputeAttentionTiled<Float16Codec>(plan, q, k, v_fp32, mask, y_fp32, nonpad_kv_seqlen);
+  ConvertFloat32ContiguousToFloat16(y_fp32, y, y_count);
 }
 
 } // namespace
@@ -1212,14 +1420,18 @@ void ComputeAttentionFloat32Streaming(const AttentionPlan &plan, const float *q,
                                       const float *v, const void *mask, float *y,
                                       const float *past_k, const float *past_v,
                                       const std::int64_t *nonpad_kv_seqlen) {
-  if (plan.layout == AttentionLayout::kRank3 && plan.past_length == 0 && plan.q_length > 8 &&
+  if (plan.total_kv_length == 1) {
+    ComputeAttentionSingleKey<Float32Codec>(plan, v, mask, y, past_v, nonpad_kv_seqlen);
+    return;
+  }
+  if (plan.layout == AttentionLayout::kRank3 && plan.past_length == 0 && plan.q_length >= 8 &&
       plan.total_kv_length != 0) {
     ComputeAttentionFloat32Rank3Tiled(plan, q, k, v, mask, y, nonpad_kv_seqlen);
     return;
   }
-  if (plan.layout == AttentionLayout::kRank4 && plan.past_length == 0 && plan.q_length > 8 &&
+  if (plan.layout == AttentionLayout::kRank4 && plan.past_length == 0 && plan.q_length >= 8 &&
       plan.total_kv_length != 0) {
-    ComputeAttentionFloat32Tiled(plan, q, k, v, mask, y, nonpad_kv_seqlen);
+    ComputeAttentionTiled<Float32Codec>(plan, q, k, v, mask, y, nonpad_kv_seqlen);
     return;
   }
   ComputeAttentionStreamingGeneric<Float32Codec>(plan, q, k, v, mask, y, past_k, past_v,
@@ -1231,6 +1443,14 @@ void ComputeAttentionFloat16Streaming(const AttentionPlan &plan, const std::uint
                                       const void *mask, std::uint16_t *y,
                                       const std::uint16_t *past_k, const std::uint16_t *past_v,
                                       const std::int64_t *nonpad_kv_seqlen) {
+  if (plan.total_kv_length == 1) {
+    ComputeAttentionSingleKey<Float16Codec>(plan, v, mask, y, past_v, nonpad_kv_seqlen);
+    return;
+  }
+  if (plan.past_length == 0 && plan.q_length >= 8 && plan.total_kv_length != 0) {
+    ComputeAttentionFloat16Tiled(plan, q, k, v, mask, y, nonpad_kv_seqlen);
+    return;
+  }
   const std::size_t q_count = plan.batch * plan.q_num_heads * plan.q_length * plan.head_dim;
   const std::size_t k_count = plan.batch * plan.kv_num_heads * plan.kv_length * plan.head_dim;
   const std::size_t v_count = plan.batch * plan.kv_num_heads * plan.kv_length * plan.v_head_dim;
@@ -1335,6 +1555,10 @@ void ComputeAttentionBFloat16Streaming(const AttentionPlan &plan, const std::uin
                                        const void *mask, std::uint16_t *y,
                                        const std::uint16_t *past_k, const std::uint16_t *past_v,
                                        const std::int64_t *nonpad_kv_seqlen) {
+  if (plan.total_kv_length == 1) {
+    ComputeAttentionSingleKey<BFloat16Codec>(plan, v, mask, y, past_v, nonpad_kv_seqlen);
+    return;
+  }
   ComputeAttentionStreamingGeneric<BFloat16Codec>(plan, q, k, v, mask, y, past_k, past_v,
                                                   nonpad_kv_seqlen);
 }

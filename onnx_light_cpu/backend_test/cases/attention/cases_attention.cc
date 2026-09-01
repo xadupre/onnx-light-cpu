@@ -19,6 +19,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -671,6 +672,20 @@ void RegisterCpuAttentionCases(std::vector<TestCase> &registry, TestMode mode) {
       RegisterAttentionCase(registry, opset23, 23, true, Geometry::kGqa, Mask::kCausal, 1, 1,
                             total_kv_len, 128, DataType::FLOAT16, Cache::kInternal, true, 32, 8,
                             "llm_qwen3_8b", kQwen3Scale);
+    }
+    constexpr float kQwen36Scale = 0.0625f;
+    for (const auto &[q_heads, kv_heads, family] :
+         {std::tuple<std::int64_t, std::int64_t, std::string_view>{24, 4, "llm_qwen3_6_27b"},
+          std::tuple<std::int64_t, std::int64_t, std::string_view>{16, 2, "llm_qwen3_6_35b_a3b"}}) {
+      RegisterAttentionCase(registry, opset23, 23, true, Geometry::kGqa, Mask::kCausal, 1, 128, 128,
+                            256, DataType::FLOAT16, Cache::kStateless, true, q_heads, kv_heads,
+                            family, kQwen36Scale);
+      for (std::int64_t total_kv_len :
+           {std::int64_t{128}, std::int64_t{1024}, std::int64_t{4096}}) {
+        RegisterAttentionCase(registry, opset23, 23, true, Geometry::kGqa, Mask::kCausal, 1, 1,
+                              total_kv_len, 256, DataType::FLOAT16, Cache::kInternal, true, q_heads,
+                              kv_heads, family, kQwen36Scale);
+      }
     }
     return;
   }

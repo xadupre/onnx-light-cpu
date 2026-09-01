@@ -17,12 +17,14 @@ import sys
 import time
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
-KV_BLOCK = 128
+KV_BLOCK = 256
+QUERY_BLOCK = 128
 DTYPES = ("float32", "float16", "bfloat16")
 _CASE_PATTERN = re.compile(
-    r"^test_cpu_attention_(?:(?P<family>llm_qwen3_8b)_)?opset(?P<opset>23|24)_"
+    r"^test_cpu_attention_(?:(?P<family>llm_qwen3_(?:8b|6_(?:27b|35b_a3b)))_)?"
+    r"opset(?P<opset>23|24)_"
     r"(?P<layout>rank3|rank4)_(?P<geometry>mha|gqa|mqa)_"
     r"q(?P<q_length>\d+)_kv(?P<kv_length>\d+)_hd(?P<head_dim>\d+)_"
     r"(?:qh(?P<q_heads>\d+)_kvh(?P<kv_heads>\d+)_)?"
@@ -42,6 +44,67 @@ def parse_case_name(name: str) -> dict[str, Any]:
         if case.get(field) is not None:
             case[field] = int(case[field])
     return case
+
+
+def estimate_temporary_memory(
+    case: Mapping[str, Any], feeds: Mapping[str, Any], workers: int
+) -> dict[str, Any]:
+    """Mirror the streaming dispatch and report its temporary allocation model."""
+    q_shape = feeds["Q"].shape
+    q_heads = (
+        int(q_shape[1]) if case["layout"] == "rank4" else int(q_shape[2]) // case["head_dim"]
+    )
+    if case["kv_length"] == 1:
+        return {
+            "peak_temporary_bytes": 0,
+            "peak_score_tile_bytes": 0,
+            "score_block": {"Br": 0, "Bc": 0},
+            "memory_gate_passed": True,
+        }
+
+    tiled = (
+        case["dtype"] in {"float32", "float16"}
+        and case["cache"] == "stateless"
+        and case["q_length"] >= 8
+    )
+    kv_block_limit = 128 if case["head_dim"] > 128 else KV_BLOCK
+    if tiled:
+        query_block = min(case["q_length"], 16 if case["mask"] == "causal" else QUERY_BLOCK)
+        kv_block = min(case["kv_length"], kv_block_limit)
+        score_tile_bytes = workers * query_block * kv_block * 4
+        worker_scratch_bytes = workers * (
+            query_block * kv_block * 4 + query_block * case["head_dim"] * 8 + query_block * 9
+        )
+    else:
+        query_block = 1
+        kv_block = min(case["kv_length"], kv_block_limit)
+        score_tile_bytes = workers * kv_block * 4
+        worker_scratch_bytes = workers * (kv_block + 2 * case["head_dim"]) * 4
+
+    y_elements = int(q_shape[0]) * q_heads * case["q_length"] * case["head_dim"]
+    global_workspace_bytes = 0
+    if tiled and case["dtype"] == "float32" and case["layout"] == "rank3":
+        global_workspace_bytes = (
+            feeds["Q"].size + feeds["K"].size + feeds["V"].size + y_elements
+        ) * 4
+    elif tiled and case["dtype"] == "float16":
+        global_workspace_bytes = (feeds["V"].size + y_elements) * 4
+        if case["layout"] == "rank3":
+            global_workspace_bytes += (feeds["Q"].size + feeds["K"].size) * 2
+    elif case["dtype"] == "float16":
+        converted_inputs = sum(
+            feeds[name].size
+            for name in ("Q", "K", "V", "past_key", "past_value")
+            if name in feeds
+        )
+        global_workspace_bytes = (converted_inputs + y_elements) * 4
+
+    return {
+        "peak_temporary_bytes": worker_scratch_bytes + global_workspace_bytes,
+        "peak_score_tile_bytes": score_tile_bytes,
+        "score_block": {"Br": query_block, "Bc": kv_block},
+        "memory_gate_passed": score_tile_bytes <= workers * QUERY_BLOCK * KV_BLOCK * 4,
+    }
 
 
 def measure_alternating(
@@ -296,13 +359,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         cpu_p90 = _percentile(cpu_samples, 0.9)
         ort_p90 = _percentile(ort_samples, 0.9)
         workers = current_threads
-        score_tile_bytes = workers * min(case["kv_length"], KV_BLOCK) * 4
-        peak_temporary_bytes = score_tile_bytes + workers * case["head_dim"] * 8
         element_bytes = 4 if case["dtype"] == "float32" else 2
         q_shape = feeds["Q"].shape
         q_heads = (
             int(q_shape[1]) if case["layout"] == "rank4" else int(q_shape[2]) // case["head_dim"]
         )
+        temporary_memory = estimate_temporary_memory(case, feeds, workers)
         kv_bytes = (
             q_heads * case["q_length"] * case["kv_length"] * case["head_dim"] * 2 * element_bytes
         )
@@ -323,16 +385,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 - _percentile(ort_samples, 0.25),
                 "speedup": ort_median / cpu_median,
                 "tail_speedup": ort_p90 / cpu_p90,
-                "peak_temporary_bytes": peak_temporary_bytes,
-                "peak_score_tile_bytes": score_tile_bytes,
+                **temporary_memory,
                 "temporary_memory_accounting": (
-                    "streaming allocation model: worker_count * "
-                    "(Bc + head_dim + v_head_dim) * sizeof(float)"
+                    "worker-local tiled scratch plus dtype/layout conversion workspace"
                 ),
-                "score_block": {"Br": 1, "Bc": min(case["kv_length"], KV_BLOCK)},
                 "worker_count": workers,
                 "full_score_or_probability_materialized": False,
-                "memory_gate_passed": score_tile_bytes <= workers * KV_BLOCK * 4,
                 "tensor_cache_bytes_copied": 0,
                 "effective_kv_bandwidth_gbps": kv_bytes / cpu_median / 1e9,
                 "tokens_per_second": case["q_length"] / cpu_median,
