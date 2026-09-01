@@ -88,6 +88,7 @@ private:
   std::vector<std::int64_t> output_shape_;
   std::vector<Dimension> dimensions_;
   std::size_t element_count_ = 0;
+  std::size_t right_element_count_ = 0;
   std::size_t inner_loop_elements_ = 0;
   std::size_t outer_block_count_ = 0;
   std::size_t prepared_outer_rank_ = 0;
