@@ -10,6 +10,7 @@
 #include "onnx_core/runtime/memory/simple_tensor.h"
 #include "onnx_core/runtime/runtime_context.h"
 #include "onnx_light_cpu/impl/execution.h"
+#include "onnx_light_cpu/impl/math/normalization_kernel.h"
 
 #include <gtest/gtest.h>
 
@@ -353,11 +354,15 @@ TEST(OnnxLightNormalizationKernel, ContiguousMomentsRemainStableForLargeOffsets)
       norm::ComputeContiguousMoments<rt_ns::DataType::FLOAT>(values.data(), values.size());
   const norm::Moments<float> stashed =
       norm::ComputeContiguousFloatMoments<rt_ns::DataType::FLOAT>(values.data(), values.size());
+  const onnx_light_cpu::Float32NormalizationMoments shared =
+      onnx_light_cpu::ComputeNormalizationMomentsFloat32(values.data(), values.size());
 
   EXPECT_FLOAT_EQ(moments.mean, 100.0F);
   EXPECT_FLOAT_EQ(moments.variance, 0.5F);
   EXPECT_FLOAT_EQ(stashed.mean, 100.0F);
   EXPECT_FLOAT_EQ(stashed.variance, 0.5F);
+  EXPECT_FLOAT_EQ(shared.mean, 100.0F);
+  EXPECT_FLOAT_EQ(shared.variance, 0.5F);
 }
 
 TEST(OnnxLightNormalizationKernel, LayerNormalizationBroadcastsAndReturnsFloatStats) {
@@ -471,6 +476,50 @@ TEST(OnnxLightNormalizationKernel, LayerNormalizationUsesExecutorForLargeRowSets
   }
   EXPECT_EQ(executor.dispatches, 1);
   EXPECT_GT(executor.blocks, 1);
+}
+
+TEST(OnnxLightNormalizationKernel, LayerNormalizationFloat32SimdHandlesVectorTails) {
+  constexpr std::size_t rows = 3;
+  constexpr std::size_t width = 515;
+  std::vector<float> values(rows * width);
+  std::vector<float> scales(width);
+  std::vector<float> biases(width);
+  for (std::size_t i = 0; i < values.size(); ++i) {
+    values[i] = static_cast<float>(static_cast<int>(i % 31) - 15) * 0.125F;
+  }
+  for (std::size_t i = 0; i < width; ++i) {
+    scales[i] = 0.5F + static_cast<float>(i % 7) * 0.125F;
+    biases[i] = static_cast<float>(static_cast<int>(i % 5) - 2) * 0.25F;
+  }
+  const rt_ns::Tensor x = rt_ns::Tensor::FromFloat(
+      "", {static_cast<std::int64_t>(rows), static_cast<std::int64_t>(width)}, values);
+  const rt_ns::Tensor scale =
+      rt_ns::Tensor::FromFloat("", {static_cast<std::int64_t>(width)}, scales);
+  const rt_ns::Tensor bias =
+      rt_ns::Tensor::FromFloat("", {static_cast<std::int64_t>(width)}, biases);
+  const onnx_light_cpu::LayerNormalizationResult result =
+      onnx_light_cpu::LayerNormalizationKernel(MakeContext(17))(x, scale, &bias);
+
+  for (std::size_t row = 0; row < rows; ++row) {
+    double mean = 0.0;
+    double variance = 0.0;
+    for (std::size_t i = 0; i < width; ++i) {
+      mean += values[row * width + i];
+    }
+    mean /= static_cast<double>(width);
+    for (std::size_t i = 0; i < width; ++i) {
+      const double delta = static_cast<double>(values[row * width + i]) - mean;
+      variance += delta * delta;
+    }
+    variance /= static_cast<double>(width);
+    const double inverse_std_dev = 1.0 / std::sqrt(variance + 1.0e-5);
+    for (std::size_t i : {std::size_t{0}, width - 2, width - 1}) {
+      const double expected =
+          (static_cast<double>(values[row * width + i]) - mean) * inverse_std_dev * scales[i] +
+          biases[i];
+      EXPECT_NEAR(Value(result.y, row * width + i), expected, 2.0e-5);
+    }
+  }
 }
 
 TEST(OnnxLightNormalizationKernel, LpNormalizationHandlesStridedAxesAndZeroNorm) {

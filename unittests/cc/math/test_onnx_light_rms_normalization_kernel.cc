@@ -170,15 +170,60 @@ TEST(OnnxLightRmsNormalizationKernel, Float16FusedPathHandlesVectorTails) {
   }
 }
 
+TEST(OnnxLightRmsNormalizationKernel, Float32FusedPathHandlesVectorTails) {
+  constexpr std::size_t rows = 3;
+  constexpr std::size_t width = 19;
+  constexpr float epsilon = 1.0e-5F;
+  std::vector<float> input(rows * width);
+  std::vector<float> scale(width);
+  for (std::size_t index = 0; index < input.size(); ++index) {
+    input[index] = static_cast<float>(index % 23) * 0.125F - 1.0F;
+  }
+  for (std::size_t column = 0; column < width; ++column) {
+    scale[column] = 0.5F + static_cast<float>(column) * 0.03125F;
+  }
+  std::vector<float> output(input.size());
+
+  onnx_light_cpu::RmsNormalizationFloat32(input.data(), scale.data(), output.data(), rows, width,
+                                          epsilon);
+
+  for (std::size_t row = 0; row < rows; ++row) {
+    float sum_squares = 0.0F;
+    for (std::size_t column = 0; column < width; ++column) {
+      const float value = input[row * width + column];
+      sum_squares += value * value;
+    }
+    const float inverse_rms = 1.0F / std::sqrt(sum_squares / static_cast<float>(width) + epsilon);
+    for (std::size_t column = 0; column < width; ++column) {
+      EXPECT_NEAR(output[row * width + column],
+                  input[row * width + column] * inverse_rms * scale[column], 2.0e-6F)
+          << "row=" << row << ", column=" << column;
+    }
+  }
+}
+
 TEST(OnnxLightRmsNormalizationKernel, BFloat16BulkPathMatchesFloatReference) {
   const onnx_light_cpu::RmsNormalizationKernel kernel(MakeContext());
-  const rt_ns::Tensor x = rt_ns::MakeBfloat16Tensor("x", {1, 1, 3}, {1.0F, -2.0F, 3.0F});
-  const rt_ns::Tensor scale = rt_ns::MakeBfloat16Tensor("scale", {3}, {0.5F, 1.0F, 1.5F});
+  constexpr std::size_t width = 13;
+  std::vector<float> input_values(width);
+  std::vector<float> scale_values(width);
+  for (std::size_t index = 0; index < width; ++index) {
+    input_values[index] = static_cast<float>(index) * 0.25F - 1.25F;
+    scale_values[index] = 0.5F + static_cast<float>(index) * 0.0625F;
+  }
+  const rt_ns::Tensor x = rt_ns::MakeBfloat16Tensor("x", {1, 1, width}, input_values);
+  const rt_ns::Tensor scale = rt_ns::MakeBfloat16Tensor("scale", {width}, scale_values);
   const rt_ns::Tensor y = kernel(x, scale, -1, 1.0e-5F, 1);
 
-  const float inverse_rms = 1.0F / std::sqrt(14.0F / 3.0F + 1.0e-5F);
+  float sum_squares = 0.0F;
+  for (std::size_t index = 0; index < width; ++index) {
+    const float input = onnx_light_cpu::detail::Bfloat16BitsToFloat(
+        reinterpret_cast<const std::uint16_t *>(x.bytes())[index]);
+    sum_squares += input * input;
+  }
+  const float inverse_rms = 1.0F / std::sqrt(sum_squares / static_cast<float>(width) + 1.0e-5F);
   const auto *values = reinterpret_cast<const std::uint16_t *>(y.bytes());
-  for (std::size_t index = 0; index < 3; ++index) {
+  for (std::size_t index = 0; index < width; ++index) {
     const float input = onnx_light_cpu::detail::Bfloat16BitsToFloat(
         reinterpret_cast<const std::uint16_t *>(x.bytes())[index]);
     const float weight = onnx_light_cpu::detail::Bfloat16BitsToFloat(

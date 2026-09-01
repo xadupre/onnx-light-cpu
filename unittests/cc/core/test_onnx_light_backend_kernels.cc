@@ -993,6 +993,14 @@ TEST(OnnxLightBackendKernels, RmsNormalizationBenchmarksCoverQwen3LlmWorkloads) 
       "test_cpu_rms_normalization_llm_qwen3_8b_q_norm_hd128_s128_qh32_float16_benchmark",
       "test_cpu_rms_normalization_llm_qwen3_8b_k_norm_hd128_s1_kvh8_float16_benchmark",
       "test_cpu_rms_normalization_llm_qwen3_8b_k_norm_hd128_s128_kvh8_float16_benchmark",
+      "test_cpu_rms_normalization_llm_qwen3_6_27b_hidden5120_s128_bfloat16_benchmark",
+      "test_cpu_rms_normalization_llm_qwen3_6_27b_hidden5120_s512_bfloat16_benchmark",
+      "test_cpu_rms_normalization_llm_qwen3_6_27b_q_norm_hd256_s128_qh24_bfloat16_benchmark",
+      "test_cpu_rms_normalization_llm_qwen3_6_27b_k_norm_hd256_s128_kvh4_bfloat16_benchmark",
+      "test_cpu_rms_normalization_llm_qwen3_6_35b_a3b_hidden2048_s128_bfloat16_benchmark",
+      "test_cpu_rms_normalization_llm_qwen3_6_35b_a3b_hidden2048_s512_bfloat16_benchmark",
+      "test_cpu_rms_normalization_llm_qwen3_6_35b_a3b_q_norm_hd256_s128_qh16_bfloat16_benchmark",
+      "test_cpu_rms_normalization_llm_qwen3_6_35b_a3b_k_norm_hd256_s128_kvh2_bfloat16_benchmark",
   };
   for (const std::string &name : expected_names) {
     const auto found = std::find_if(cases.begin(), cases.end(), [&name](const TestCase &test_case) {
@@ -1001,8 +1009,11 @@ TEST(OnnxLightBackendKernels, RmsNormalizationBenchmarksCoverQwen3LlmWorkloads) 
     ASSERT_NE(found, cases.end()) << name;
     EXPECT_FALSE(found->materialized()) << name;
   }
-  const std::vector<std::string> failures = RunCpuBackendCases(
+  std::vector<std::string> failures = RunCpuBackendCases(
       "RMSNormalization", core::backend_test::TestMode::BENCHMARK, expected_names.front());
+  const std::vector<std::string> qwen36_failures = RunCpuBackendCases(
+      "RMSNormalization", core::backend_test::TestMode::BENCHMARK, expected_names[6]);
+  failures.insert(failures.end(), qwen36_failures.begin(), qwen36_failures.end());
   EXPECT_TRUE(failures.empty()) << Describe(failures);
 }
 

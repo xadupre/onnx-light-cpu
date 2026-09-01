@@ -12,6 +12,7 @@
 #include "onnx_core/runtime/kernels/node_helpers.h"
 #include "onnx_core/symbolic/sym_tensor.h"
 #include "onnx_light_cpu/impl/execution.h"
+#include "onnx_light_cpu/impl/math/normalization_kernel.h"
 
 #include <algorithm>
 #include <cmath>
@@ -336,14 +337,28 @@ void LayerNormalize(const Tensor &x, const Tensor &scale, const Tensor *bias, Te
   ExecuteItems(outer, static_cast<double>(inner) * 7.0, [&](std::size_t begin, std::size_t end) {
     for (std::size_t row = begin; row < end; ++row) {
       const std::size_t base = row * inner;
-      const norm::Moments<float> moments =
-          norm::ComputeContiguousFloatMoments<Type>(input + base, inner);
+      const norm::Moments<float> moments = [&]() {
+        if constexpr (Type == DataType::FLOAT) {
+          const Float32NormalizationMoments shared =
+              ComputeNormalizationMomentsFloat32(input + base, inner);
+          return norm::Moments<float>{shared.mean, shared.variance};
+        } else {
+          return norm::ComputeContiguousFloatMoments<Type>(input + base, inner);
+        }
+      }();
       const float inverse_std_dev = 1.0F / std::sqrt(moments.variance + epsilon);
       if (mean_output != nullptr) {
         mean_output[row] = static_cast<float>(moments.mean);
       }
       if (inv_output != nullptr) {
         inv_output[row] = static_cast<float>(inverse_std_dev);
+      }
+      if constexpr (Type == DataType::FLOAT) {
+        if (scale_by_inner && (bias_data == nullptr || bias_by_inner)) {
+          ApplyNormalizationAffineFloat32(input + base, scale_data, bias_data, output + base, inner,
+                                          moments.mean, inverse_std_dev);
+          continue;
+        }
       }
       for (std::size_t i = 0; i < inner; ++i) {
         const std::size_t flat = base + i;

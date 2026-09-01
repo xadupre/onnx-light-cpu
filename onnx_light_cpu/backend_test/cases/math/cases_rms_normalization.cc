@@ -136,6 +136,33 @@ void RegisterCpuRmsNormalizationCases(std::vector<TestCase> &registry, TestMode 
     }
     RegisterRmsNormalizationCase(registry, opset, {"r64_w512", {1, 64, 512}, {512}, -1, 741},
                                  DataType::BFLOAT16, true);
+    for (const RmsNormalizationShape &shape :
+         {RmsNormalizationShape{"llm_qwen3_6_27b_hidden5120_s1", {1, 1, 5120}, {5120}, -1, 751},
+          RmsNormalizationShape{"llm_qwen3_6_27b_hidden5120_s128", {1, 128, 5120}, {5120}, -1, 761},
+          RmsNormalizationShape{"llm_qwen3_6_27b_hidden5120_s512", {1, 512, 5120}, {5120}, -1, 771},
+          RmsNormalizationShape{
+              "llm_qwen3_6_27b_q_norm_hd256_s1_qh24", {1, 24, 256}, {256}, -1, 781},
+          RmsNormalizationShape{
+              "llm_qwen3_6_27b_q_norm_hd256_s128_qh24", {1, 3072, 256}, {256}, -1, 791},
+          RmsNormalizationShape{
+              "llm_qwen3_6_27b_k_norm_hd256_s1_kvh4", {1, 4, 256}, {256}, -1, 801},
+          RmsNormalizationShape{
+              "llm_qwen3_6_27b_k_norm_hd256_s128_kvh4", {1, 512, 256}, {256}, -1, 811},
+          RmsNormalizationShape{"llm_qwen3_6_35b_a3b_hidden2048_s1", {1, 1, 2048}, {2048}, -1, 821},
+          RmsNormalizationShape{
+              "llm_qwen3_6_35b_a3b_hidden2048_s128", {1, 128, 2048}, {2048}, -1, 831},
+          RmsNormalizationShape{
+              "llm_qwen3_6_35b_a3b_hidden2048_s512", {1, 512, 2048}, {2048}, -1, 841},
+          RmsNormalizationShape{
+              "llm_qwen3_6_35b_a3b_q_norm_hd256_s1_qh16", {1, 16, 256}, {256}, -1, 851},
+          RmsNormalizationShape{
+              "llm_qwen3_6_35b_a3b_q_norm_hd256_s128_qh16", {1, 2048, 256}, {256}, -1, 861},
+          RmsNormalizationShape{
+              "llm_qwen3_6_35b_a3b_k_norm_hd256_s1_kvh2", {1, 2, 256}, {256}, -1, 871},
+          RmsNormalizationShape{
+              "llm_qwen3_6_35b_a3b_k_norm_hd256_s128_kvh2", {1, 256, 256}, {256}, -1, 881}}) {
+      RegisterRmsNormalizationCase(registry, opset, shape, DataType::BFLOAT16, true);
+    }
     return;
   }
   for (DataType data_type : {DataType::FLOAT, DataType::FLOAT16, DataType::BFLOAT16}) {
