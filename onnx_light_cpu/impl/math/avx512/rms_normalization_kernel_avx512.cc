@@ -15,12 +15,21 @@ void RmsNormalizationFloat32_AVX512(const float *input, const float *scale, floa
                                     float epsilon) {
   for (std::size_t row = row_begin; row < row_end; ++row) {
     const std::size_t offset = row * width;
-    __m512 sum_squares = _mm512_setzero_ps();
+    __m512 sums[4] = {_mm512_setzero_ps(), _mm512_setzero_ps(), _mm512_setzero_ps(),
+                      _mm512_setzero_ps()};
     std::size_t column = 0;
+    for (; column + 64 <= width; column += 64) {
+      for (std::size_t lane = 0; lane < 4; ++lane) {
+        const __m512 value = _mm512_loadu_ps(input + offset + column + lane * 16);
+        sums[lane] = _mm512_fmadd_ps(value, value, sums[lane]);
+      }
+    }
     for (; column + 16 <= width; column += 16) {
       const __m512 value = _mm512_loadu_ps(input + offset + column);
-      sum_squares = _mm512_fmadd_ps(value, value, sum_squares);
+      sums[0] = _mm512_fmadd_ps(value, value, sums[0]);
     }
+    const __m512 sum_squares =
+        _mm512_add_ps(_mm512_add_ps(sums[0], sums[1]), _mm512_add_ps(sums[2], sums[3]));
     float sum = _mm512_reduce_add_ps(sum_squares);
     for (; column < width; ++column) {
       const float value = input[offset + column];
