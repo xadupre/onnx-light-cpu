@@ -107,6 +107,8 @@ _REGISTERED_KERNELS = {
     "Pow": "onnx_light_cpu::Pow",
     "QLinearMatMul": "onnx_light_cpu::QLinearMatMul",
     "RMSNormalization": "onnx_light_cpu::RMSNormalization",
+    "Sigmoid": "onnx_light_cpu::Sigmoid",
+    "Softmax": "onnx_light_cpu::Softmax",
     "Sub": "onnx_light_cpu::Sub",
     "Sum": "onnx_light_cpu::Sum",
     "SwiGLU": "onnx_light_cpu::SwiGLU",

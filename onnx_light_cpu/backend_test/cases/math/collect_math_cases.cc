@@ -25,6 +25,8 @@ void CollectCpuMathTestCases(std::vector<TestCase> &registry, const std::string 
       {"MatMulInteger", &RegisterCpuMatMulIntegerCases},
       {"MeanVarianceNormalization", &RegisterCpuMeanVarianceNormalizationCases},
       {"RMSNormalization", &RegisterCpuRmsNormalizationCases},
+      {"Sigmoid", &RegisterCpuSigmoidCases},
+      {"Softmax", &RegisterCpuSoftmaxCases},
       {"SwiGLU", &RegisterCpuSwiGLUCases},
   };
   DispatchRegisterByOpType(registry, op_type, kEntries, mode);

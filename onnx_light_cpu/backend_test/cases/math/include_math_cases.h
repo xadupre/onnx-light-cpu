@@ -28,6 +28,8 @@ void RegisterCpuMatMulCases(std::vector<TestCase> &registry, TestMode mode);
 void RegisterCpuMatMulIntegerCases(std::vector<TestCase> &registry, TestMode mode);
 void RegisterCpuMeanVarianceNormalizationCases(std::vector<TestCase> &registry, TestMode mode);
 void RegisterCpuRmsNormalizationCases(std::vector<TestCase> &registry, TestMode mode);
+void RegisterCpuSigmoidCases(std::vector<TestCase> &registry, TestMode mode);
+void RegisterCpuSoftmaxCases(std::vector<TestCase> &registry, TestMode mode);
 void RegisterCpuSwiGLUCases(std::vector<TestCase> &registry, TestMode mode);
 
 void CollectCpuMathTestCases(std::vector<TestCase> &registry, const std::string &op_type = "",
