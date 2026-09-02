@@ -65,7 +65,7 @@ def estimate_temporary_memory(
     tiled = (
         case["dtype"] in {"float32", "float16"}
         and case["cache"] == "stateless"
-        and case["q_length"] >= 8
+        and case["q_length"] >= 16
     )
     kv_block_limit = 128 if case["head_dim"] > 128 else KV_BLOCK
     if tiled:

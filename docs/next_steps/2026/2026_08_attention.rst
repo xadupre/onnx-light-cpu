@@ -10,7 +10,7 @@ Attention Performance Roadmap
 for the roadmap types and cache modes. The 2026-09-01 dashboard reopened this
 roadmap: the FP32 and FP16 medians and several priority cases remained below
 the stated parity thresholds. The current optimization pass adds a
-single-key value-copy path, tiled execution starting at query length 8,
+single-key value-copy path, tiled execution starting at query length 16,
 shape-adaptive query/KV blocks, and a tiled FP16 prefill path which converts
 half inputs while packing GEMM panels instead of widening complete Q and K
 tensors. These follow-ups were delivered by `#559

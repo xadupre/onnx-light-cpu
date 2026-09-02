@@ -1115,7 +1115,11 @@ void ComputeAttentionTiled(const AttentionPlan &plan, const typename Codec::Stor
             }
           }
 
-          std::fill_n(accumulator.begin(), rows * plan.v_head_dim, 0.0f);
+          const bool single_kv_block =
+              task_kv_start < task_kv_limit && task_kv_limit - task_kv_start <= kv_block;
+          if (!single_kv_block) {
+            std::fill_n(accumulator.begin(), rows * plan.v_head_dim, 0.0f);
+          }
           std::fill_n(maxima.begin(), rows, kNegativeInfinity);
           std::fill_n(denominators.begin(), rows, 0.0f);
           std::fill_n(valid.begin(), rows, std::uint8_t{0});
@@ -1246,6 +1250,20 @@ void ComputeAttentionTiled(const AttentionPlan &plan, const typename Codec::Stor
               maxima[i] = new_max;
             }
 
+            if (single_kv_block) {
+              for (std::size_t i = 0; i < rows; ++i) {
+                const float scale =
+                    valid[i] && denominators[i] != 0.0f ? 1.0f / denominators[i] : 0.0f;
+                float *score_row = scores.data() + i * columns;
+                for (std::size_t jj = 0; jj < columns; ++jj) {
+                  score_row[jj] *= scale;
+                }
+              }
+              GemmFloat32(false, false, rows, plan.v_head_dim, columns, 1.0f, scores.data(),
+                          v_head + j0 * plan.v_strides.sequence, 0.0f, nullptr, y_block);
+              break;
+            }
+
             GemmFloat32(false, false, rows, plan.v_head_dim, columns, 1.0f, scores.data(),
                         v_head + j0 * plan.v_strides.sequence, 0.0f, nullptr, product.data());
             for (std::size_t index = 0; index < rows * plan.v_head_dim; ++index) {
@@ -1253,6 +1271,9 @@ void ComputeAttentionTiled(const AttentionPlan &plan, const typename Codec::Stor
             }
           }
 
+          if (single_kv_block) {
+            continue;
+          }
           for (std::size_t i = 0; i < rows; ++i) {
             float *y_row = y_block + i * plan.y_strides.sequence;
             const float scale = valid[i] && denominators[i] != 0.0f ? 1.0f / denominators[i] : 0.0f;
@@ -1424,12 +1445,12 @@ void ComputeAttentionFloat32Streaming(const AttentionPlan &plan, const float *q,
     ComputeAttentionSingleKey<Float32Codec>(plan, v, mask, y, past_v, nonpad_kv_seqlen);
     return;
   }
-  if (plan.layout == AttentionLayout::kRank3 && plan.past_length == 0 && plan.q_length >= 8 &&
+  if (plan.layout == AttentionLayout::kRank3 && plan.past_length == 0 && plan.q_length >= 16 &&
       plan.total_kv_length != 0) {
     ComputeAttentionFloat32Rank3Tiled(plan, q, k, v, mask, y, nonpad_kv_seqlen);
     return;
   }
-  if (plan.layout == AttentionLayout::kRank4 && plan.past_length == 0 && plan.q_length >= 8 &&
+  if (plan.layout == AttentionLayout::kRank4 && plan.past_length == 0 && plan.q_length >= 16 &&
       plan.total_kv_length != 0) {
     ComputeAttentionTiled<Float32Codec>(plan, q, k, v, mask, y, nonpad_kv_seqlen);
     return;
@@ -1447,7 +1468,7 @@ void ComputeAttentionFloat16Streaming(const AttentionPlan &plan, const std::uint
     ComputeAttentionSingleKey<Float16Codec>(plan, v, mask, y, past_v, nonpad_kv_seqlen);
     return;
   }
-  if (plan.past_length == 0 && plan.q_length >= 8 && plan.total_kv_length != 0) {
+  if (plan.past_length == 0 && plan.q_length >= 16 && plan.total_kv_length != 0) {
     ComputeAttentionFloat16Tiled(plan, q, k, v, mask, y, nonpad_kv_seqlen);
     return;
   }
