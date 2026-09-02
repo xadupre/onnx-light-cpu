@@ -5,6 +5,8 @@
 #include "onnx_light_cpu/kernels/math/sigmoid_softmax_kernel.h"
 
 #include "onnx_light_cpu/impl/math/half_conversion.h"
+#include "onnx_light_cpu/impl/math/math_kernels.h"
+#include "onnx_light_cpu/impl/math/unary_execution_tuning.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
 #include "onnx_light_cpu/kernels/kernel_usage.h"
 
@@ -13,6 +15,8 @@
 #include "onnx_core/symbolic/sym_tensor.h"
 
 #include <algorithm>
+#include <array>
+#include <bit>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -20,6 +24,9 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
+#include <utility>
+#include <vector>
 
 namespace onnx_light_cpu {
 
@@ -46,27 +53,135 @@ Tensor MakeLike(const Tensor &x, RuntimeContext *rt) {
                        : rt_ns::MakeOutputTensor(x.data_type, x.shape, x.size_bytes(), nullptr);
 }
 
-template <typename T> T StableSigmoid(T value) {
-  if (value >= T{0}) {
-    const T exponent = std::exp(-value);
-    return T{1} / (T{1} + exponent);
-  }
-  const T exponent = std::exp(value);
-  return exponent / (T{1} + exponent);
-}
+inline constexpr UnaryExecutionTuning kActivationExecutionTuning{256 * 1024, 256 * 1024, 32, false};
+inline constexpr UnaryExecutionTuning kSerialExecutionTuning{};
 
-template <typename T> void SigmoidScalar(const T *input, T *output, std::size_t count) {
+template <typename T> void SigmoidRange(const T *input, T *output, std::size_t count) {
+  if (input == output) {
+    const std::vector<T> copy(input, input + count);
+    SigmoidRange(copy.data(), output, count);
+    return;
+  }
   for (std::size_t i = 0; i < count; ++i) {
-    output[i] = StableSigmoid(input[i]);
+    output[i] = -std::abs(input[i]);
+  }
+  if constexpr (std::is_same_v<T, float>) {
+    ExpFloat32WithTuning(output, output, count, kSerialExecutionTuning);
+  } else {
+    for (std::size_t i = 0; i < count; ++i) {
+      output[i] = std::exp(output[i]);
+    }
+  }
+  for (std::size_t i = 0; i < count; ++i) {
+    const T denominator = T{1} + output[i];
+    const T negative_result = output[i] / denominator;
+    const T positive_result = T{1} / denominator;
+    using Bits =
+        std::conditional_t<sizeof(T) == sizeof(std::uint32_t), std::uint32_t, std::uint64_t>;
+    constexpr Bits sign_bit = Bits{1} << (sizeof(Bits) * 8 - 1);
+    const Bits negative_mask =
+        Bits{0} - static_cast<Bits>((std::bit_cast<Bits>(input[i]) & sign_bit) != 0);
+    const Bits result_bits = (std::bit_cast<Bits>(negative_result) & negative_mask) |
+                             (std::bit_cast<Bits>(positive_result) & ~negative_mask);
+    output[i] = std::bit_cast<T>(result_bits);
   }
 }
 
-template <typename Decode, typename Encode>
+template <typename T> void Sigmoid(const T *input, T *output, std::size_t count) {
+  ExecuteUnaryRanges<T>(
+      count, kActivationExecutionTuning, [=](std::int64_t begin, std::int64_t end) {
+        SigmoidRange(input + begin, output + begin, static_cast<std::size_t>(end - begin));
+      });
+}
+
+template <typename DecodeBlock, typename EncodeBlock>
 void SigmoidHalf(const std::uint16_t *input, std::uint16_t *output, std::size_t count,
-                 Decode decode, Encode encode) {
-  for (std::size_t i = 0; i < count; ++i) {
-    output[i] = encode(StableSigmoid(decode(input[i])));
+                 DecodeBlock decode, EncodeBlock encode) {
+  ExecuteUnaryRanges<std::uint16_t>(
+      count, kActivationExecutionTuning, [=](std::int64_t begin, std::int64_t end) {
+        constexpr std::size_t block_size = 256;
+        std::array<float, block_size> input_buffer{};
+        std::array<float, block_size> output_buffer{};
+        for (std::size_t offset = static_cast<std::size_t>(begin);
+             offset < static_cast<std::size_t>(end); offset += block_size) {
+          const std::size_t block = std::min(block_size, static_cast<std::size_t>(end) - offset);
+          decode(input + offset, input_buffer.data(), block);
+          SigmoidRange(input_buffer.data(), output_buffer.data(), block);
+          encode(output_buffer.data(), output + offset, block);
+        }
+      });
+}
+
+ExecutionSchedule MakeSoftmaxRowSchedule(std::size_t row_bytes) {
+  constexpr std::size_t threshold_bytes = 128 * 1024;
+  constexpr std::size_t target_block_bytes = 16 * 1024;
+  const auto bytes_to_rows = [row_bytes](std::size_t bytes) {
+    return static_cast<std::int64_t>(std::max<std::size_t>((bytes + row_bytes - 1) / row_bytes, 1));
+  };
+  return ExecutionSchedule{bytes_to_rows(threshold_bytes), bytes_to_rows(target_block_bytes), 48};
+}
+
+template <typename Fn> void DispatchSoftmaxRows(std::int64_t rows, std::size_t row_bytes, Fn fn) {
+  ExecuteRanges(rows, MakeSoftmaxRowSchedule(row_bytes), std::int64_t{1}, std::move(fn));
+}
+
+template <typename T>
+void SoftmaxLastAxis(const T *input, T *output, std::int64_t rows, std::int64_t columns) {
+  if (rows == 0 || columns == 0) {
+    return;
   }
+  const std::size_t row_bytes = static_cast<std::size_t>(columns) * sizeof(T);
+  DispatchSoftmaxRows(rows, row_bytes, [=](std::int64_t begin, std::int64_t end) {
+    for (std::int64_t row = begin; row < end; ++row) {
+      const T *row_input = input + row * columns;
+      T *row_output = output + row * columns;
+      T maximum = -std::numeric_limits<T>::infinity();
+      for (std::int64_t column = 0; column < columns; ++column) {
+        maximum = std::max(maximum, row_input[column]);
+      }
+      for (std::int64_t column = 0; column < columns; ++column) {
+        row_output[column] = row_input[column] - maximum;
+      }
+    }
+    T *range_output = output + begin * columns;
+    const std::size_t range_count = static_cast<std::size_t>((end - begin) * columns);
+    if constexpr (std::is_same_v<T, float>) {
+      ExpFloat32WithTuning(range_output, range_output, range_count, kSerialExecutionTuning);
+    } else {
+      for (std::size_t i = 0; i < range_count; ++i) {
+        range_output[i] = std::exp(range_output[i]);
+      }
+    }
+    for (std::int64_t row = begin; row < end; ++row) {
+      T *row_output = output + row * columns;
+      T sum = T{0};
+      for (std::int64_t column = 0; column < columns; ++column) {
+        sum += row_output[column];
+      }
+      const T inverse_sum = T{1} / sum;
+      for (std::int64_t column = 0; column < columns; ++column) {
+        row_output[column] *= inverse_sum;
+      }
+    }
+  });
+}
+
+template <typename DecodeBlock, typename EncodeBlock>
+void SoftmaxHalfLastAxis(const std::uint16_t *input, std::uint16_t *output, std::int64_t rows,
+                         std::int64_t columns, DecodeBlock decode, EncodeBlock encode) {
+  if (rows == 0 || columns == 0) {
+    return;
+  }
+  const std::size_t row_bytes = static_cast<std::size_t>(columns) * sizeof(std::uint16_t);
+  DispatchSoftmaxRows(rows, row_bytes, [=](std::int64_t begin, std::int64_t end) {
+    std::vector<float> buffer(static_cast<std::size_t>(columns));
+    for (std::int64_t row = begin; row < end; ++row) {
+      const std::size_t offset = static_cast<std::size_t>(row * columns);
+      decode(input + offset, buffer.data(), buffer.size());
+      SoftmaxLastAxis(buffer.data(), buffer.data(), 1, columns);
+      encode(buffer.data(), output + offset, buffer.size());
+    }
+  });
 }
 
 template <typename T>
@@ -137,20 +252,20 @@ void SigmoidKernel::operator()(const Tensor &x, Tensor &output) const {
   const std::size_t count = static_cast<std::size_t>(x.element_count());
   switch (static_cast<DataType>(x.data_type)) {
   case DataType::FLOAT:
-    SigmoidScalar(x.AsFloat(), output.AsFloat(), count);
+    Sigmoid(x.AsFloat(), output.AsFloat(), count);
     return;
   case DataType::DOUBLE:
-    SigmoidScalar(x.AsDouble(), output.AsDouble(), count);
+    Sigmoid(x.AsDouble(), output.AsDouble(), count);
     return;
   case DataType::FLOAT16:
     SigmoidHalf(reinterpret_cast<const std::uint16_t *>(x.bytes()),
                 reinterpret_cast<std::uint16_t *>(output.mutable_bytes()), count,
-                detail::Float16BitsToFloat, detail::FloatToFloat16Bits);
+                detail::ConvertFloat16ToFloat32, detail::ConvertFloat32ToFloat16);
     return;
   case DataType::BFLOAT16:
     SigmoidHalf(reinterpret_cast<const std::uint16_t *>(x.bytes()),
                 reinterpret_cast<std::uint16_t *>(output.mutable_bytes()), count,
-                detail::Bfloat16BitsToFloat, detail::FloatToBFloat16Bits);
+                detail::ConvertBFloat16ToFloat32, detail::ConvertFloat32ToBFloat16);
     return;
   default:
     throw std::invalid_argument(
@@ -196,20 +311,42 @@ void SoftmaxKernel::operator()(const Tensor &x, std::int64_t axis, Tensor &outpu
 
   switch (static_cast<DataType>(x.data_type)) {
   case DataType::FLOAT:
-    Softmax(x.AsFloat(), output.AsFloat(), outer, axis_dim, inner);
+    if (inner == 1) {
+      SoftmaxLastAxis(x.AsFloat(), output.AsFloat(), outer, axis_dim);
+    } else {
+      Softmax(x.AsFloat(), output.AsFloat(), outer, axis_dim, inner);
+    }
     return;
   case DataType::DOUBLE:
-    Softmax(x.AsDouble(), output.AsDouble(), outer, axis_dim, inner);
+    if (inner == 1) {
+      SoftmaxLastAxis(x.AsDouble(), output.AsDouble(), outer, axis_dim);
+    } else {
+      Softmax(x.AsDouble(), output.AsDouble(), outer, axis_dim, inner);
+    }
     return;
   case DataType::FLOAT16:
-    SoftmaxHalf(reinterpret_cast<const std::uint16_t *>(x.bytes()),
-                reinterpret_cast<std::uint16_t *>(output.mutable_bytes()), outer, axis_dim, inner,
-                detail::Float16BitsToFloat, detail::FloatToFloat16Bits);
+    if (inner == 1) {
+      SoftmaxHalfLastAxis(reinterpret_cast<const std::uint16_t *>(x.bytes()),
+                          reinterpret_cast<std::uint16_t *>(output.mutable_bytes()), outer,
+                          axis_dim, detail::ConvertFloat16ToFloat32,
+                          detail::ConvertFloat32ToFloat16);
+    } else {
+      SoftmaxHalf(reinterpret_cast<const std::uint16_t *>(x.bytes()),
+                  reinterpret_cast<std::uint16_t *>(output.mutable_bytes()), outer, axis_dim, inner,
+                  detail::Float16BitsToFloat, detail::FloatToFloat16Bits);
+    }
     return;
   case DataType::BFLOAT16:
-    SoftmaxHalf(reinterpret_cast<const std::uint16_t *>(x.bytes()),
-                reinterpret_cast<std::uint16_t *>(output.mutable_bytes()), outer, axis_dim, inner,
-                detail::Bfloat16BitsToFloat, detail::FloatToBFloat16Bits);
+    if (inner == 1) {
+      SoftmaxHalfLastAxis(reinterpret_cast<const std::uint16_t *>(x.bytes()),
+                          reinterpret_cast<std::uint16_t *>(output.mutable_bytes()), outer,
+                          axis_dim, detail::ConvertBFloat16ToFloat32,
+                          detail::ConvertFloat32ToBFloat16);
+    } else {
+      SoftmaxHalf(reinterpret_cast<const std::uint16_t *>(x.bytes()),
+                  reinterpret_cast<std::uint16_t *>(output.mutable_bytes()), outer, axis_dim, inner,
+                  detail::Bfloat16BitsToFloat, detail::FloatToBFloat16Bits);
+    }
     return;
   default:
     throw std::invalid_argument(

@@ -10,11 +10,13 @@
 #include "onnx_light_cpu/impl/simd_level.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <iterator>
 #include <limits>
 #include <type_traits>
+#include <vector>
 
 namespace onnx_light_cpu {
 
@@ -162,18 +164,34 @@ void BiasGeluHalfDispatch(const std::uint16_t *a, const std::uint16_t *bias, std
   if (outer == 0 || inner == 0) {
     return;
   }
+  std::vector<float> bias_float(inner);
+  if constexpr (BFloat16) {
+    detail::ConvertBFloat16ToFloat32(bias, bias_float.data(), inner);
+  } else {
+    detail::ConvertFloat16ToFloat32(bias, bias_float.data(), inner);
+  }
   const std::size_t row_bytes = inner * sizeof(std::uint16_t);
+  const BiasGeluFloat32RangeFn float32_range = SelectBiasGeluFloat32Range();
+  const float *bias_values = bias_float.data();
   DispatchRows(outer, row_bytes, tuning, [=](std::int64_t begin, std::int64_t end) {
+    constexpr std::size_t block_size = 256;
+    std::array<float, block_size> a_buffer{};
+    std::array<float, block_size> output_buffer{};
     for (std::int64_t row = begin; row < end; ++row) {
       const std::size_t offset = static_cast<std::size_t>(row) * inner;
-      for (std::size_t column = 0; column < inner; ++column) {
-        const float a_value = BFloat16 ? detail::Bfloat16BitsToFloat(a[offset + column])
-                                       : detail::Float16BitsToFloat(a[offset + column]);
-        const float bias_value = BFloat16 ? detail::Bfloat16BitsToFloat(bias[column])
-                                          : detail::Float16BitsToFloat(bias[column]);
-        const float value = GeluExact<float>(a_value + bias_value);
-        output[offset + column] =
-            BFloat16 ? detail::FloatToBFloat16Bits(value) : detail::FloatToFloat16Bits(value);
+      for (std::size_t column = 0; column < inner; column += block_size) {
+        const std::size_t block = std::min(block_size, inner - column);
+        if constexpr (BFloat16) {
+          detail::ConvertBFloat16ToFloat32(a + offset + column, a_buffer.data(), block);
+        } else {
+          detail::ConvertFloat16ToFloat32(a + offset + column, a_buffer.data(), block);
+        }
+        float32_range(a_buffer.data(), bias_values + column, output_buffer.data(), block);
+        if constexpr (BFloat16) {
+          detail::ConvertFloat32ToBFloat16(output_buffer.data(), output + offset + column, block);
+        } else {
+          detail::ConvertFloat32ToFloat16(output_buffer.data(), output + offset + column, block);
+        }
       }
     }
   });
