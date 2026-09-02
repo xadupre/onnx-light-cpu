@@ -344,6 +344,18 @@ TEST(OnnxLightBackendKernels, LogRunsThroughRuntime) {
   EXPECT_TRUE(failures.empty()) << Describe(failures);
 }
 
+TEST(OnnxLightBackendKernels, SigmoidRunsThroughRuntime) {
+  const std::vector<std::string> failures =
+      RunCpuBackendCases("Sigmoid", core::backend_test::TestMode::TEST);
+  EXPECT_TRUE(failures.empty()) << Describe(failures);
+}
+
+TEST(OnnxLightBackendKernels, SoftmaxRunsThroughRuntime) {
+  const std::vector<std::string> failures =
+      RunCpuBackendCases("Softmax", core::backend_test::TestMode::TEST);
+  EXPECT_TRUE(failures.empty()) << Describe(failures);
+}
+
 TEST(OnnxLightBackendKernels, SwiGLURunsThroughRuntime) {
   const std::vector<std::string> failures =
       RunCpuBackendCases("SwiGLU", core::backend_test::TestMode::TEST);
@@ -742,6 +754,20 @@ TEST(OnnxLightBackendKernels, LogBenchmarkRunsThroughRuntime) {
   EXPECT_TRUE(failures.empty()) << Describe(failures);
 }
 
+TEST(OnnxLightBackendKernels, SigmoidBenchmarkRunsThroughRuntime) {
+  const std::vector<std::string> failures =
+      RunCpuBackendCases("Sigmoid", core::backend_test::TestMode::BENCHMARK,
+                         "test_cpu_sigmoid_n1024_float32_benchmark");
+  EXPECT_TRUE(failures.empty()) << Describe(failures);
+}
+
+TEST(OnnxLightBackendKernels, SoftmaxBenchmarkRunsThroughRuntime) {
+  const std::vector<std::string> failures =
+      RunCpuBackendCases("Softmax", core::backend_test::TestMode::BENCHMARK,
+                         "test_cpu_softmax_1x1024_float32_benchmark");
+  EXPECT_TRUE(failures.empty()) << Describe(failures);
+}
+
 TEST(OnnxLightBackendKernels, SwiGLUBenchmarkRunsThroughRuntime) {
   const std::vector<std::string> failures = RunCpuBackendCases(
       "SwiGLU", core::backend_test::TestMode::BENCHMARK, "test_cpu_swiglu_n1024_float32_benchmark");
@@ -884,7 +910,7 @@ TEST(OnnxLightBackendKernels, BinaryBenchmarkCorporaCoverQwen3LlmWorkloads) {
 TEST(OnnxLightBackendKernels, UnaryBenchmarkCorporaCoverParallelThresholds) {
   onnx_light_cpu::backend_test::RegisterCpuKernelBackendTestCases();
   std::set<int64_t> exp_sizes;
-  for (const std::string &op : {"Abs", "Exp", "Log"}) {
+  for (const std::string &op : {"Abs", "Exp", "Log", "Sigmoid"}) {
     std::vector<TestCase> cases =
         CollectTestCases(op, /*include_big=*/false, core::backend_test::TestMode::BENCHMARK);
     std::set<int64_t> sizes;
@@ -912,6 +938,7 @@ TEST(OnnxLightBackendKernels, UnaryBenchmarkCorporaCoverEverySupportedType) {
       {"Abs", {"float32", "float64", "int8", "int16", "int32", "int64", "float16", "bfloat16"}},
       {"Exp", {"float32", "float64", "float16", "bfloat16"}},
       {"Log", {"float32", "float64", "float16", "bfloat16"}},
+      {"Sigmoid", {"float32", "float64", "float16", "bfloat16"}},
       {"Not", {"bool"}},
   };
   for (const auto &[op, suffixes] : expected) {

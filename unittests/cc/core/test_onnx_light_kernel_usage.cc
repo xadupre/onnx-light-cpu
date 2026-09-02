@@ -21,6 +21,7 @@
 #include "onnx_light_cpu/kernels/math/matmul_kernel.h"
 #include "onnx_light_cpu/kernels/math/normalization_kernel.h"
 #include "onnx_light_cpu/kernels/math/rms_normalization_kernel.h"
+#include "onnx_light_cpu/kernels/math/sigmoid_softmax_kernel.h"
 #include "onnx_light_cpu/kernels/math/swiglu_kernel.h"
 #include "onnx_light_cpu/kernels/traditionalml/tree_ensemble_kernel.h"
 
@@ -65,6 +66,8 @@ TEST(OnnxLightKernelUsage, KernelNamesAreLibraryQualified) {
   EXPECT_STREQ(onnx_light_cpu::MeanVarianceNormalizationKernel::kName,
                "onnx_light_cpu::MeanVarianceNormalization");
   EXPECT_STREQ(onnx_light_cpu::RmsNormalizationKernel::kName, "onnx_light_cpu::RMSNormalization");
+  EXPECT_STREQ(onnx_light_cpu::SigmoidKernel::kName, "onnx_light_cpu::Sigmoid");
+  EXPECT_STREQ(onnx_light_cpu::SoftmaxKernel::kName, "onnx_light_cpu::Softmax");
   EXPECT_STREQ(onnx_light_cpu::SwiGLUKernel::kName, "onnx_light_cpu::SwiGLU");
   EXPECT_STREQ(onnx_light_cpu::TreeEnsembleKernel::kName, "onnx_light_cpu::TreeEnsemble");
 }
