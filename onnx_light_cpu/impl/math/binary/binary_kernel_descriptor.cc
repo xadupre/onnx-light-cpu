@@ -5,6 +5,7 @@
 #include "onnx_light_cpu/impl/math/binary/binary_kernel_descriptor.h"
 
 #include "onnx_light_cpu/impl/math/binary/binary_arithmetic_kernel.h"
+#include "onnx_light_cpu/impl/math/binary/binary_comparison_kernel.h"
 #include "onnx_light_cpu/impl/math/half_conversion.h"
 #include "onnx_light_cpu/impl/math/math_kernels.h"
 
@@ -1810,12 +1811,23 @@ BinaryKernelDescriptor::Adapter::ValidateRightBulkFn SelectRightBulkValidator(Bi
 #undef ONNX_LIGHT_CPU_SHIFT_VALIDATOR
 }
 
+template <BinaryComparisonKind Kind, bool LeftScalar, bool RightScalar>
+void BulkFloat16Comparison(const void *left, const void *right, void *out, std::size_t count) {
+  BinaryCompareFloat16(static_cast<const std::uint16_t *>(left),
+                       static_cast<const std::uint16_t *>(right), static_cast<std::uint8_t *>(out),
+                       count, Kind, LeftScalar, RightScalar);
+}
+
 void SelectAdditionalBulk(BinaryOperator op, DT left, DT right, const Attrs &attributes,
                           BinaryKernelDescriptor::Adapter &adapter) {
 #define ONNX_LIGHT_CPU_BIND_TYPED_BULK(TLEFT, TRIGHT, TOUT, ...)                                   \
   adapter.bulk_contiguous = &BulkComputeContiguous<TLEFT, TRIGHT, TOUT, &__VA_ARGS__>;             \
   adapter.bulk_left_scalar = &BulkComputeLeftScalar<TLEFT, TRIGHT, TOUT, &__VA_ARGS__>;            \
   adapter.bulk_right_scalar = &BulkComputeRightScalar<TLEFT, TRIGHT, TOUT, &__VA_ARGS__>;
+#define ONNX_LIGHT_CPU_BIND_FLOAT16_COMPARE(KIND)                                                  \
+  adapter.bulk_contiguous = &BulkFloat16Comparison<KIND, false, false>;                            \
+  adapter.bulk_left_scalar = &BulkFloat16Comparison<KIND, true, false>;                            \
+  adapter.bulk_right_scalar = &BulkFloat16Comparison<KIND, false, true>;
 #define ONNX_LIGHT_CPU_BIND_SAME_TYPE_CASE(TYPE, CPP_TYPE, COMPUTE)                                \
   case DT::TYPE:                                                                                   \
     ONNX_LIGHT_CPU_BIND_TYPED_BULK(CPP_TYPE, CPP_TYPE, CPP_TYPE, COMPUTE<CPP_TYPE>)                \
@@ -2051,8 +2063,7 @@ void SelectAdditionalBulk(BinaryOperator op, DT left, DT right, const Attrs &att
       ONNX_LIGHT_CPU_BIND_TYPED_BULK(std::uint8_t, std::uint8_t, std::uint8_t,
                                      ComputeEqual<std::uint8_t>)
     } else if (left == DT::FLOAT16) {
-      ONNX_LIGHT_CPU_BIND_TYPED_BULK(std::uint16_t, std::uint16_t, std::uint8_t,
-                                     ComputeFloat16EqualBool)
+      ONNX_LIGHT_CPU_BIND_FLOAT16_COMPARE(BinaryComparisonKind::kEqual)
     } else if (left == DT::BFLOAT16) {
       ONNX_LIGHT_CPU_BIND_TYPED_BULK(std::uint16_t, std::uint16_t, std::uint8_t,
                                      ComputeBfloat16EqualBool)
@@ -2061,8 +2072,7 @@ void SelectAdditionalBulk(BinaryOperator op, DT left, DT right, const Attrs &att
   case BinaryOperator::kGreater:
     ONNX_LIGHT_CPU_BIND_COMPARE_TYPES(ComputeGreater)
     if (left == DT::FLOAT16) {
-      ONNX_LIGHT_CPU_BIND_TYPED_BULK(std::uint16_t, std::uint16_t, std::uint8_t,
-                                     ComputeFloat16Greater)
+      ONNX_LIGHT_CPU_BIND_FLOAT16_COMPARE(BinaryComparisonKind::kGreater)
     } else if (left == DT::BFLOAT16) {
       ONNX_LIGHT_CPU_BIND_TYPED_BULK(std::uint16_t, std::uint16_t, std::uint8_t,
                                      ComputeBfloat16Greater)
@@ -2071,8 +2081,7 @@ void SelectAdditionalBulk(BinaryOperator op, DT left, DT right, const Attrs &att
   case BinaryOperator::kGreaterOrEqual:
     ONNX_LIGHT_CPU_BIND_COMPARE_TYPES(ComputeGreaterOrEqual)
     if (left == DT::FLOAT16) {
-      ONNX_LIGHT_CPU_BIND_TYPED_BULK(std::uint16_t, std::uint16_t, std::uint8_t,
-                                     ComputeFloat16GreaterOrEqual)
+      ONNX_LIGHT_CPU_BIND_FLOAT16_COMPARE(BinaryComparisonKind::kGreaterOrEqual)
     } else if (left == DT::BFLOAT16) {
       ONNX_LIGHT_CPU_BIND_TYPED_BULK(std::uint16_t, std::uint16_t, std::uint8_t,
                                      ComputeBfloat16GreaterOrEqual)
@@ -2081,7 +2090,7 @@ void SelectAdditionalBulk(BinaryOperator op, DT left, DT right, const Attrs &att
   case BinaryOperator::kLess:
     ONNX_LIGHT_CPU_BIND_COMPARE_TYPES(ComputeLess)
     if (left == DT::FLOAT16) {
-      ONNX_LIGHT_CPU_BIND_TYPED_BULK(std::uint16_t, std::uint16_t, std::uint8_t, ComputeFloat16Less)
+      ONNX_LIGHT_CPU_BIND_FLOAT16_COMPARE(BinaryComparisonKind::kLess)
     } else if (left == DT::BFLOAT16) {
       ONNX_LIGHT_CPU_BIND_TYPED_BULK(std::uint16_t, std::uint16_t, std::uint8_t,
                                      ComputeBfloat16Less)
@@ -2090,8 +2099,7 @@ void SelectAdditionalBulk(BinaryOperator op, DT left, DT right, const Attrs &att
   case BinaryOperator::kLessOrEqual:
     ONNX_LIGHT_CPU_BIND_COMPARE_TYPES(ComputeLessOrEqual)
     if (left == DT::FLOAT16) {
-      ONNX_LIGHT_CPU_BIND_TYPED_BULK(std::uint16_t, std::uint16_t, std::uint8_t,
-                                     ComputeFloat16LessOrEqual)
+      ONNX_LIGHT_CPU_BIND_FLOAT16_COMPARE(BinaryComparisonKind::kLessOrEqual)
     } else if (left == DT::BFLOAT16) {
       ONNX_LIGHT_CPU_BIND_TYPED_BULK(std::uint16_t, std::uint16_t, std::uint8_t,
                                      ComputeBfloat16LessOrEqual)
@@ -2168,6 +2176,7 @@ void SelectAdditionalBulk(BinaryOperator op, DT left, DT right, const Attrs &att
 #undef ONNX_LIGHT_CPU_BIND_COMPARE_CASE
 #undef ONNX_LIGHT_CPU_BIND_INTEGER_TYPES
 #undef ONNX_LIGHT_CPU_BIND_SAME_TYPE_CASE
+#undef ONNX_LIGHT_CPU_BIND_FLOAT16_COMPARE
 #undef ONNX_LIGHT_CPU_BIND_TYPED_BULK
 }
 
