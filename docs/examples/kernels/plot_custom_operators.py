@@ -6,6 +6,8 @@ This example registers the portable ``CDist`` and ``BiasGelu`` CPU kernels and
 runs one model containing both operators through onnx-light.
 """
 
+# sphinx_gallery_thumbnail_path = "_static/gallery_thumbnails/custom_operators.png"
+
 import math
 
 import numpy as np
