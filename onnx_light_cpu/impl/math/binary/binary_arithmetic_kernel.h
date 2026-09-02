@@ -50,6 +50,17 @@ void BinaryPReluFloat32Contiguous(const float *left, const float *right, float *
 void BinaryPReluFloat32LeftScalar(float left, const float *right, float *out, std::size_t count);
 void BinaryPReluFloat32RightScalar(const float *left, float right, float *out, std::size_t count);
 
+template <typename T, bool Left>
+void BinaryBitShiftContiguous(const T *left, const T *right, T *out, std::size_t count);
+
+template <typename T, bool Left>
+void BinaryBitShiftLeftScalar(T left, const T *right, T *out, std::size_t count);
+
+template <typename T, bool Left>
+void BinaryBitShiftRightScalar(const T *left, T right, T *out, std::size_t count);
+
+template <typename T> bool BinaryBitShiftHasInvalidAmount(const T *shifts, std::size_t count);
+
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512
 // Raw AVX-512F implementations, defined in a translation unit compiled with
 // ``-mavx512f``/``/arch:AVX512``. Declared here so the baseline dispatcher

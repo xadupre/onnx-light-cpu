@@ -216,6 +216,14 @@ template <typename T> bool ValidateDivisors(const void *right, std::size_t count
   return contains_negative_one;
 }
 
+template <typename T> bool ValidateShiftAmounts(const void *right, std::size_t count) {
+  const auto *shifts = static_cast<const T *>(right);
+  if (BinaryBitShiftHasInvalidAmount(shifts, count)) {
+    throw std::invalid_argument("onnx_light_cpu::BitShift: shift amount is out of range.");
+  }
+  return false;
+}
+
 template <typename T> void ValidateDivOverflow(const void *left, const void *right) {
   ValidateSignedDivisionOverflow(ReadTyped<T>(left), ReadTyped<T>(right), "Div");
 }
@@ -753,13 +761,6 @@ template <typename T> void ComputeBitShiftRight(const void *left, const void *ri
     throw std::invalid_argument("onnx_light_cpu::BitShift: shift amount is out of range.");
   }
   WriteTyped<T>(out, static_cast<T>(ReadTyped<T>(left) >> static_cast<unsigned>(shift)));
-}
-
-template <typename T, bool Left>
-void ComputeBitShiftUnchecked(const void *left, const void *right, void *out) {
-  const T value = ReadTyped<T>(left);
-  const unsigned shift = static_cast<unsigned>(ReadTyped<T>(right));
-  WriteTyped<T>(out, Left ? static_cast<T>(value << shift) : static_cast<T>(value >> shift));
 }
 
 template <typename T> void ValidateBitShift(const void *, const void *right) {
@@ -1774,25 +1775,39 @@ BinaryKernelDescriptor::Adapter::ValidateFn SelectValidator(BinaryOperator op, D
 
 BinaryKernelDescriptor::Adapter::ValidateRightBulkFn SelectRightBulkValidator(BinaryOperator op,
                                                                               DT left) {
-  if (op != BinaryOperator::kDiv) {
+  if (op != BinaryOperator::kDiv && op != BinaryOperator::kBitShift) {
     return nullptr;
   }
 #define ONNX_LIGHT_CPU_DIVISOR_VALIDATOR(TYPE, CPP_TYPE)                                           \
   case DT::TYPE:                                                                                   \
     return &ValidateDivisors<CPP_TYPE>;
+  if (op == BinaryOperator::kDiv) {
+    switch (left) {
+      ONNX_LIGHT_CPU_DIVISOR_VALIDATOR(INT8, std::int8_t)
+      ONNX_LIGHT_CPU_DIVISOR_VALIDATOR(INT16, std::int16_t)
+      ONNX_LIGHT_CPU_DIVISOR_VALIDATOR(INT32, std::int32_t)
+      ONNX_LIGHT_CPU_DIVISOR_VALIDATOR(INT64, std::int64_t)
+      ONNX_LIGHT_CPU_DIVISOR_VALIDATOR(UINT8, std::uint8_t)
+      ONNX_LIGHT_CPU_DIVISOR_VALIDATOR(UINT16, std::uint16_t)
+      ONNX_LIGHT_CPU_DIVISOR_VALIDATOR(UINT32, std::uint32_t)
+      ONNX_LIGHT_CPU_DIVISOR_VALIDATOR(UINT64, std::uint64_t)
+    default:
+      return nullptr;
+    }
+  }
+#undef ONNX_LIGHT_CPU_DIVISOR_VALIDATOR
+#define ONNX_LIGHT_CPU_SHIFT_VALIDATOR(TYPE, CPP_TYPE)                                             \
+  case DT::TYPE:                                                                                   \
+    return &ValidateShiftAmounts<CPP_TYPE>;
   switch (left) {
-    ONNX_LIGHT_CPU_DIVISOR_VALIDATOR(INT8, std::int8_t)
-    ONNX_LIGHT_CPU_DIVISOR_VALIDATOR(INT16, std::int16_t)
-    ONNX_LIGHT_CPU_DIVISOR_VALIDATOR(INT32, std::int32_t)
-    ONNX_LIGHT_CPU_DIVISOR_VALIDATOR(INT64, std::int64_t)
-    ONNX_LIGHT_CPU_DIVISOR_VALIDATOR(UINT8, std::uint8_t)
-    ONNX_LIGHT_CPU_DIVISOR_VALIDATOR(UINT16, std::uint16_t)
-    ONNX_LIGHT_CPU_DIVISOR_VALIDATOR(UINT32, std::uint32_t)
-    ONNX_LIGHT_CPU_DIVISOR_VALIDATOR(UINT64, std::uint64_t)
+    ONNX_LIGHT_CPU_SHIFT_VALIDATOR(UINT8, std::uint8_t)
+    ONNX_LIGHT_CPU_SHIFT_VALIDATOR(UINT16, std::uint16_t)
+    ONNX_LIGHT_CPU_SHIFT_VALIDATOR(UINT32, std::uint32_t)
+    ONNX_LIGHT_CPU_SHIFT_VALIDATOR(UINT64, std::uint64_t)
   default:
     return nullptr;
   }
-#undef ONNX_LIGHT_CPU_DIVISOR_VALIDATOR
+#undef ONNX_LIGHT_CPU_SHIFT_VALIDATOR
 }
 
 void SelectAdditionalBulk(BinaryOperator op, DT left, DT right, const Attrs &attributes,
@@ -2110,11 +2125,19 @@ void SelectAdditionalBulk(BinaryOperator op, DT left, DT right, const Attrs &att
 #define ONNX_LIGHT_CPU_BIND_SHIFT_CASE(TYPE, CPP_TYPE)                                             \
   case DT::TYPE:                                                                                   \
     if (attributes.bitshift_direction == Attrs::BitShiftDirection::kLeft) {                        \
-      ONNX_LIGHT_CPU_BIND_TYPED_BULK(CPP_TYPE, CPP_TYPE, CPP_TYPE,                                 \
-                                     ComputeBitShiftUnchecked<CPP_TYPE, true>)                     \
+      adapter.bulk_contiguous =                                                                    \
+          &BulkContiguousWrapper<CPP_TYPE, &BinaryBitShiftContiguous<CPP_TYPE, true>>;             \
+      adapter.bulk_left_scalar =                                                                   \
+          &BulkLeftScalarWrapper<CPP_TYPE, &BinaryBitShiftLeftScalar<CPP_TYPE, true>>;             \
+      adapter.bulk_right_scalar =                                                                  \
+          &BulkRightScalarWrapper<CPP_TYPE, &BinaryBitShiftRightScalar<CPP_TYPE, true>>;           \
     } else {                                                                                       \
-      ONNX_LIGHT_CPU_BIND_TYPED_BULK(CPP_TYPE, CPP_TYPE, CPP_TYPE,                                 \
-                                     ComputeBitShiftUnchecked<CPP_TYPE, false>)                    \
+      adapter.bulk_contiguous =                                                                    \
+          &BulkContiguousWrapper<CPP_TYPE, &BinaryBitShiftContiguous<CPP_TYPE, false>>;            \
+      adapter.bulk_left_scalar =                                                                   \
+          &BulkLeftScalarWrapper<CPP_TYPE, &BinaryBitShiftLeftScalar<CPP_TYPE, false>>;            \
+      adapter.bulk_right_scalar =                                                                  \
+          &BulkRightScalarWrapper<CPP_TYPE, &BinaryBitShiftRightScalar<CPP_TYPE, false>>;          \
     }                                                                                              \
     break;
     switch (left) {
