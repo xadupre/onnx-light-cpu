@@ -118,8 +118,8 @@ NodeProto MakeLinearAttentionNode(const LinearAttentionCase &test_case) {
   return node;
 }
 
-IoData MakeLinearAttentionData(const LinearAttentionCase &test_case,
-                               bool generate_expected_outputs) {
+IoData MakeLinearAttentionData(const LinearAttentionCase &test_case, bool generate_expected_outputs,
+                               const KernelContext &context) {
   const Shape query_shape{test_case.batch, test_case.sequence,
                           test_case.query_heads * test_case.key_head_size};
   const Shape key_shape{test_case.batch, test_case.sequence,
@@ -177,7 +177,6 @@ IoData MakeLinearAttentionData(const LinearAttentionCase &test_case,
   std::size_t optional_index = test_case.with_past ? 4 : 3;
   const Tensor *decay_ptr = UsesDecay(test_case.rule) ? &inputs[optional_index++] : nullptr;
   const Tensor *beta_ptr = UsesBeta(test_case.rule) ? &inputs[optional_index] : nullptr;
-  const KernelContext context{DefaultOpset(27)};
   ONNX_LIGHT_NAMESPACE::onnx_kernels::kernel::LinearAttention::Attributes attributes;
   attributes.update_rule = test_case.rule;
   attributes.has_scale = true;
@@ -222,7 +221,8 @@ void RegisterLinearAttentionCase(std::vector<TestCase> &registry,
   const NodeProto node = MakeLinearAttentionNode(test_case);
   Expect(registry, node, name, {opset}, input_counts, {Count(output_shape), Count(state_shape)},
          [test_case](bool generate_expected_outputs) {
-           return MakeLinearAttentionData(test_case, generate_expected_outputs);
+           const KernelContext context{DefaultOpset(27)};
+           return MakeLinearAttentionData(test_case, generate_expected_outputs, context);
          },
          "backend-test", bt_ns::TestCaseTag::NONE,
          {bt_ns::TensorTypeSpec(static_cast<std::int32_t>(test_case.data_type), output_shape),
