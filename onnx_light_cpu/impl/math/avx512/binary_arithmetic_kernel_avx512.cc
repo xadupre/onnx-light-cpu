@@ -189,6 +189,55 @@ void BinaryPReluFloat32Right_AVX512(const float *left, float right, float *out, 
   }
 }
 
+bool BinarySquareInt32_AVX512(const std::int32_t *input, std::int32_t *output, std::size_t count) {
+  constexpr std::int32_t max_root = 46340;
+  const __m512i maximum = _mm512_set1_epi32(max_root);
+  const __m512i minimum = _mm512_set1_epi32(-max_root);
+  std::size_t i = 0;
+  const std::size_t aligned = count - count % 16;
+  __mmask16 overflow = 0;
+  for (; i < aligned; i += 16) {
+    const __m512i values = _mm512_loadu_si512(input + i);
+    overflow |= _mm512_cmpgt_epi32_mask(values, maximum);
+    overflow |= _mm512_cmpgt_epi32_mask(minimum, values);
+    _mm512_storeu_si512(output + i, _mm512_mullo_epi32(values, values));
+  }
+  for (; i < count; ++i) {
+    const bool element_overflows = input[i] > max_root || input[i] < -max_root;
+    overflow |= static_cast<__mmask16>(element_overflows);
+    if (!element_overflows) {
+      output[i] = input[i] * input[i];
+    }
+  }
+  return overflow == 0;
+}
+
+bool BinarySquareInt64_AVX512(const std::int64_t *input, std::int64_t *output, std::size_t count) {
+  constexpr std::int64_t max_root = 3037000499;
+  const __m512i maximum = _mm512_set1_epi64(max_root);
+  const __m512i minimum = _mm512_set1_epi64(-max_root);
+  std::size_t i = 0;
+  const std::size_t aligned = count - count % 8;
+  __mmask8 overflow = 0;
+  for (; i < aligned; i += 8) {
+    const __m512i values = _mm512_loadu_si512(input + i);
+    overflow |= _mm512_cmpgt_epi64_mask(values, maximum);
+    overflow |= _mm512_cmpgt_epi64_mask(minimum, values);
+    const __m512i low_product = _mm512_mul_epu32(values, values);
+    const __m512i cross_product = _mm512_mul_epu32(values, _mm512_srli_epi64(values, 32));
+    const __m512i square = _mm512_add_epi64(low_product, _mm512_slli_epi64(cross_product, 33));
+    _mm512_storeu_si512(output + i, square);
+  }
+  for (; i < count; ++i) {
+    const bool element_overflows = input[i] > max_root || input[i] < -max_root;
+    overflow |= static_cast<__mmask8>(element_overflows);
+    if (!element_overflows) {
+      output[i] = input[i] * input[i];
+    }
+  }
+  return overflow == 0;
+}
+
 #undef ONNX_LIGHT_CPU_BIN_AVX512_F32
 #undef ONNX_LIGHT_CPU_BIN_AVX512_F64
 

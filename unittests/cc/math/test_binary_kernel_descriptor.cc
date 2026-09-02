@@ -267,6 +267,33 @@ TEST(BinaryKernelDescriptor, PowMixedTypesExecuteWithBaseOutputType) {
   EXPECT_NE(float_mixed.bulk_left_scalar, nullptr);
   EXPECT_NE(float_mixed.bulk_right_scalar, nullptr);
 
+  const auto &integer_mixed =
+      pow.ResolveAdapter(BinaryDataType::INT64, BinaryDataType::FLOAT, BinaryDataType::INT64);
+  ASSERT_NE(integer_mixed.bulk_right_scalar, nullptr);
+  const std::array<std::int64_t, 5> integer_bases = {-4, -1, 0, 2, 3037000499};
+  const float square_exponent = 2.0f;
+  std::array<std::int64_t, 5> integer_outputs = {};
+  integer_mixed.bulk_right_scalar(integer_bases.data(), &square_exponent, integer_outputs.data(),
+                                  integer_outputs.size());
+  EXPECT_EQ(integer_outputs, (std::array<std::int64_t, 5>{16, 1, 0, 4, 9223372030926249001LL}));
+  const std::int64_t overflowing_base = 3037000500;
+  EXPECT_THROW(integer_mixed.bulk_right_scalar(&overflowing_base, &square_exponent,
+                                               integer_outputs.data(), 1),
+               std::invalid_argument);
+  const float fractional_exponent = 1.5f;
+  EXPECT_THROW(integer_mixed.bulk_right_scalar(integer_bases.data(), &fractional_exponent,
+                                               integer_outputs.data(), integer_outputs.size()),
+               std::invalid_argument);
+  const float out_of_range_exponent = 1.0e20f;
+  EXPECT_THROW(integer_mixed.bulk_right_scalar(integer_bases.data(), &out_of_range_exponent,
+                                               integer_outputs.data(), integer_outputs.size()),
+               std::invalid_argument);
+  const float identity_exponent = 1.0f;
+  auto in_place_bases = integer_bases;
+  integer_mixed.bulk_right_scalar(in_place_bases.data(), &identity_exponent, in_place_bases.data(),
+                                  in_place_bases.size());
+  EXPECT_EQ(in_place_bases, integer_bases);
+
   const float negative_one = -1.0f;
   const std::int32_t odd_exponent = 16777217;
   float parity_output = 0.0f;

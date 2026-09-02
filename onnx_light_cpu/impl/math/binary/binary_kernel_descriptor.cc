@@ -93,6 +93,12 @@ TBase CheckedIntegerPow(TBase base, TExp exponent, const char *op_name) {
       throw std::invalid_argument(std::string("onnx_light_cpu::") + op_name +
                                   ": integer Pow requires integral exponents.");
     }
+    constexpr long double int64_exclusive_upper = 9223372036854775808.0L;
+    const long double wide_exponent = static_cast<long double>(exponent);
+    if (wide_exponent < -int64_exclusive_upper || wide_exponent >= int64_exclusive_upper) {
+      throw std::invalid_argument(std::string("onnx_light_cpu::") + op_name +
+                                  ": integer Pow exponent is out of range.");
+    }
     return CheckedIntegerPow<TBase, std::int64_t>(base, static_cast<std::int64_t>(rounded),
                                                   op_name);
   } else {
@@ -279,6 +285,48 @@ void BulkComputeRightScalar(const void *left, const void *right, void *out, std:
   auto *typed_out = static_cast<TOut *>(out);
   for (std::size_t i = 0; i < count; ++i) {
     Compute(typed_left + i, right, typed_out + i);
+  }
+}
+
+template <typename TBase, typename TExp>
+void BulkIntegerPowRightScalar(const void *left, const void *right, void *out, std::size_t count) {
+  const TExp exponent = ReadTyped<TExp>(right);
+  CheckedIntegerPow<TBase, TExp>(TBase{1}, exponent, "Pow");
+
+  const auto *typed_left = static_cast<const TBase *>(left);
+  auto *typed_out = static_cast<TBase *>(out);
+  if (exponent == TExp{0}) {
+    std::fill_n(typed_out, count, TBase{1});
+    return;
+  }
+  if (exponent == TExp{1}) {
+    if (typed_left != typed_out) {
+      std::copy_n(typed_left, count, typed_out);
+    }
+    return;
+  }
+  if (exponent == TExp{2}) {
+    bool valid;
+    if constexpr (std::is_same_v<TBase, std::int32_t>) {
+      valid = BinarySquareInt32(typed_left, typed_out, count);
+    } else {
+      valid = BinarySquareInt64(typed_left, typed_out, count);
+    }
+    if (!valid) {
+      throw std::invalid_argument("onnx_light_cpu::Pow: integer Pow overflow is unsupported.");
+    }
+    return;
+  }
+
+  if constexpr (std::is_floating_point_v<TExp>) {
+    const std::int64_t integer_exponent = static_cast<std::int64_t>(exponent);
+    for (std::size_t i = 0; i < count; ++i) {
+      typed_out[i] = CheckedIntegerPow<TBase, std::int64_t>(typed_left[i], integer_exponent, "Pow");
+    }
+  } else {
+    for (std::size_t i = 0; i < count; ++i) {
+      typed_out[i] = CheckedIntegerPow<TBase, TExp>(typed_left[i], exponent, "Pow");
+    }
   }
 }
 
@@ -1883,6 +1931,11 @@ void SelectAdditionalBulk(BinaryOperator op, DT left, DT right, const Attrs &att
   case DT::TYPE:                                                                                   \
     ONNX_LIGHT_CPU_BIND_TYPED_BULK(BASE_CPP, RIGHT_CPP, BASE_CPP, ComputePow<BASE_CPP, RIGHT_CPP>) \
     break;
+#define ONNX_LIGHT_CPU_BIND_INTEGER_POW_RIGHT_CASE(TYPE, RIGHT_CPP, BASE_CPP)                      \
+  case DT::TYPE:                                                                                   \
+    ONNX_LIGHT_CPU_BIND_TYPED_BULK(BASE_CPP, RIGHT_CPP, BASE_CPP, ComputePow<BASE_CPP, RIGHT_CPP>) \
+    adapter.bulk_right_scalar = &BulkIntegerPowRightScalar<BASE_CPP, RIGHT_CPP>;                   \
+    break;
     if (left == DT::FLOAT) {
       switch (right) {
         ONNX_LIGHT_CPU_BIND_POW_RIGHT_CASE(INT32, std::int32_t, float)
@@ -1964,23 +2017,24 @@ void SelectAdditionalBulk(BinaryOperator op, DT left, DT right, const Attrs &att
       }
     } else if (left == DT::INT32) {
       switch (right) {
-        ONNX_LIGHT_CPU_BIND_POW_RIGHT_CASE(FLOAT, float, std::int32_t)
-        ONNX_LIGHT_CPU_BIND_POW_RIGHT_CASE(INT64, std::int64_t, std::int32_t)
-        ONNX_LIGHT_CPU_BIND_POW_RIGHT_CASE(UINT32, std::uint32_t, std::int32_t)
-        ONNX_LIGHT_CPU_BIND_POW_RIGHT_CASE(UINT64, std::uint64_t, std::int32_t)
+        ONNX_LIGHT_CPU_BIND_INTEGER_POW_RIGHT_CASE(FLOAT, float, std::int32_t)
+        ONNX_LIGHT_CPU_BIND_INTEGER_POW_RIGHT_CASE(INT64, std::int64_t, std::int32_t)
+        ONNX_LIGHT_CPU_BIND_INTEGER_POW_RIGHT_CASE(UINT32, std::uint32_t, std::int32_t)
+        ONNX_LIGHT_CPU_BIND_INTEGER_POW_RIGHT_CASE(UINT64, std::uint64_t, std::int32_t)
       default:
         break;
       }
     } else if (left == DT::INT64) {
       switch (right) {
-        ONNX_LIGHT_CPU_BIND_POW_RIGHT_CASE(FLOAT, float, std::int64_t)
-        ONNX_LIGHT_CPU_BIND_POW_RIGHT_CASE(INT32, std::int32_t, std::int64_t)
-        ONNX_LIGHT_CPU_BIND_POW_RIGHT_CASE(UINT32, std::uint32_t, std::int64_t)
-        ONNX_LIGHT_CPU_BIND_POW_RIGHT_CASE(UINT64, std::uint64_t, std::int64_t)
+        ONNX_LIGHT_CPU_BIND_INTEGER_POW_RIGHT_CASE(FLOAT, float, std::int64_t)
+        ONNX_LIGHT_CPU_BIND_INTEGER_POW_RIGHT_CASE(INT32, std::int32_t, std::int64_t)
+        ONNX_LIGHT_CPU_BIND_INTEGER_POW_RIGHT_CASE(UINT32, std::uint32_t, std::int64_t)
+        ONNX_LIGHT_CPU_BIND_INTEGER_POW_RIGHT_CASE(UINT64, std::uint64_t, std::int64_t)
       default:
         break;
       }
     }
+#undef ONNX_LIGHT_CPU_BIND_INTEGER_POW_RIGHT_CASE
 #undef ONNX_LIGHT_CPU_BIND_POW_RIGHT_CASE
 #undef ONNX_LIGHT_CPU_BIND_MIXED_HALF_POW
     return;
@@ -2046,9 +2100,11 @@ void SelectAdditionalBulk(BinaryOperator op, DT left, DT right, const Attrs &att
     } else if (left == DT::INT32) {
       ONNX_LIGHT_CPU_BIND_TYPED_BULK(std::int32_t, std::int32_t, std::int32_t,
                                      ComputePow<std::int32_t, std::int32_t>)
+      adapter.bulk_right_scalar = &BulkIntegerPowRightScalar<std::int32_t, std::int32_t>;
     } else if (left == DT::INT64) {
       ONNX_LIGHT_CPU_BIND_TYPED_BULK(std::int64_t, std::int64_t, std::int64_t,
                                      ComputePow<std::int64_t, std::int64_t>)
+      adapter.bulk_right_scalar = &BulkIntegerPowRightScalar<std::int64_t, std::int64_t>;
     } else if (left == DT::FLOAT16) {
       adapter.bulk_left_scalar = &BulkFloat16PowLeft;
       adapter.bulk_right_scalar = &BulkFloat16PowRight;
