@@ -435,6 +435,24 @@ struct TreeEnsembleCompactFloatNode {
 };
 static_assert(sizeof(TreeEnsembleCompactFloatNode) == 16);
 
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
+void EvaluateBalancedFloatRows_AVX2(const float *input, std::size_t features,
+                                    const TreeEnsembleCompactFloatNode *nodes,
+                                    const float *leaf_weights, const std::int64_t *tree_roots,
+                                    std::size_t tree_count, std::size_t depth,
+                                    std::size_t row_begin, std::size_t row_end, float base,
+                                    float *output);
+#endif
+
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
+void EvaluateBalancedFloatRows_AVX512(const float *input, std::size_t features,
+                                      const TreeEnsembleCompactFloatNode *nodes,
+                                      const float *leaf_weights, const std::int64_t *tree_roots,
+                                      std::size_t tree_count, std::size_t depth,
+                                      std::size_t row_begin, std::size_t row_end, float base,
+                                      float *output);
+#endif
+
 /// Immutable prepared representation for the ai.onnx.ml TreeEnsemble-5 schema.
 class TreeEnsemblePlan {
 public:

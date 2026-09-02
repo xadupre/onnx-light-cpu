@@ -10,6 +10,7 @@
 
 #include "onnx_light_cpu/impl/cpu_cache_topology.h"
 #include "onnx_light_cpu/impl/execution.h"
+#include "onnx_light_cpu/impl/simd_level.h"
 
 #include <algorithm>
 #include <array>
@@ -2014,72 +2015,123 @@ void TreeEnsemblePlan::EvaluateIntoImpl(const T *input, std::size_t input_size, 
                      tree_roots_.size() * (participant + 1) / participants};
   };
   if constexpr (std::is_same_v<T, float>) {
-    if ((decision.strategy == TreeEnsembleExecutionStrategy::kTreeParallel ||
-         decision.strategy == TreeEnsembleExecutionStrategy::kTreeMajorBatch) &&
-        homogeneous_leq && all_trees_are_balanced_ && targets == 1 && !sparse_targets &&
-        attributes_.value_type == DataType::FLOAT && attributes_.aggregate == TreeAggregate::kSum &&
+    const bool supported_balanced_strategy =
+        decision.strategy == TreeEnsembleExecutionStrategy::kRowParallel ||
+        decision.strategy == TreeEnsembleExecutionStrategy::kTreeParallel ||
+        decision.strategy == TreeEnsembleExecutionStrategy::kTreeMajorBatch;
+    if (supported_balanced_strategy && homogeneous_leq && all_trees_are_balanced_ && targets == 1 &&
+        !sparse_targets && attributes_.value_type == DataType::FLOAT &&
+        attributes_.aggregate == TreeAggregate::kSum &&
         attributes_.post_transform == TreePostTransform::kNone) {
       constexpr std::size_t kInterleavedRows = 8;
+      const auto accumulate_tree = [&](std::size_t tree, std::size_t row_begin, std::size_t row_end,
+                                       float *values) {
+        const std::uint32_t root = static_cast<std::uint32_t>(tree_roots_[tree]);
+        std::size_t row = row_begin;
+        if (max_depth_ == 4 && !compact_float_nodes_.empty() && !leaf_weights_float_.empty()) {
+          for (; row + kInterleavedRows <= row_end; row += kInterleavedRows) {
+            std::array<std::uint32_t, kInterleavedRows> nodes;
+            nodes.fill(root);
+            const auto advance = [&] {
+              for (std::size_t lane = 0; lane < kInterleavedRows; ++lane) {
+                const TreeEnsembleCompactFloatNode &current = compact_float_nodes_[nodes[lane]];
+                nodes[lane] =
+                    input_data[(row + lane) * features + current.feature_id] <= current.split
+                        ? current.true_child
+                        : current.false_child;
+              }
+            };
+            advance();
+            advance();
+            advance();
+            advance();
+            for (std::size_t lane = 0; lane < kInterleavedRows; ++lane) {
+              values[row + lane] += leaf_weights_float_[nodes[lane]];
+            }
+          }
+        }
+        for (; row < row_end; ++row) {
+          std::size_t node = root;
+          for (std::size_t level = 0; level < max_depth_; ++level) {
+            const TreeEnsembleCompactFloatNode &current = compact_float_nodes_[node];
+            node = input_data[row * features + current.feature_id] <= current.split
+                       ? current.true_child
+                       : current.false_child;
+          }
+          values[row] += leaf_weights_float_[node];
+        }
+      };
       const std::size_t participants =
           decision.strategy == TreeEnsembleExecutionStrategy::kTreeParallel
               ? std::min(decision.participants, kMaximumBalancedFloatTreeParticipants)
               : 1;
       const float base =
           attributes_.base_values.empty() ? 0.0F : static_cast<float>(attributes_.base_values[0]);
+#if defined(ONNX_LIGHT_CPU_HAVE_AVX2_FMA) || defined(ONNX_LIGHT_CPU_HAVE_AVX512)
+      const bool simd_indices_fit =
+          features != 0 &&
+          features <= static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max()) &&
+          rows <= static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max()) / features &&
+          compact_float_nodes_.size() <=
+              static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max()) / 4 &&
+          leaf_weights_float_.size() <=
+              static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max());
+      const SimdLevel simd_level = DetectSimdLevel();
+#endif
+      if (decision.strategy == TreeEnsembleExecutionStrategy::kRowParallel) {
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
+        if (simd_level == SimdLevel::kAVX512 && simd_indices_fit) {
+          ExecuteRanges(static_cast<std::int64_t>(rows), static_cast<double>(kExecutionGrainSize),
+                        [&](std::int64_t begin, std::int64_t end) {
+                          EvaluateBalancedFloatRows_AVX512(
+                              input_data, features, compact_float_nodes_.data(),
+                              leaf_weights_float_.data(), tree_roots_.data(), tree_roots_.size(),
+                              max_depth_, static_cast<std::size_t>(begin),
+                              static_cast<std::size_t>(end), base, output_data);
+                        });
+          return;
+        }
+#endif
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
+        if (simd_level >= SimdLevel::kAVX2 && simd_indices_fit) {
+          ExecuteRanges(static_cast<std::int64_t>(rows), static_cast<double>(kExecutionGrainSize),
+                        [&](std::int64_t begin, std::int64_t end) {
+                          EvaluateBalancedFloatRows_AVX2(
+                              input_data, features, compact_float_nodes_.data(),
+                              leaf_weights_float_.data(), tree_roots_.data(), tree_roots_.size(),
+                              max_depth_, static_cast<std::size_t>(begin),
+                              static_cast<std::size_t>(end), base, output_data);
+                        });
+          return;
+        }
+#endif
+        ExecuteRanges(static_cast<std::int64_t>(rows), static_cast<double>(kExecutionGrainSize),
+                      [&](std::int64_t begin, std::int64_t end) {
+                        const std::size_t row_begin = static_cast<std::size_t>(begin);
+                        const std::size_t row_end = static_cast<std::size_t>(end);
+                        std::fill(output_data + row_begin, output_data + row_end, base);
+                        for (std::size_t tree = 0; tree < tree_roots_.size(); ++tree) {
+                          accumulate_tree(tree, row_begin, row_end, output_data);
+                        }
+                      });
+        return;
+      }
       std::vector<float> partial_values(participants * rows);
       if (participants == 1) {
         std::fill(partial_values.begin(), partial_values.end(), base);
       }
-      ExecuteRanges(
-          static_cast<std::int64_t>(participants), static_cast<double>(kExecutionGrainSize),
-          [&](std::int64_t begin, std::int64_t end) {
-            for (std::size_t participant = static_cast<std::size_t>(begin);
-                 participant < static_cast<std::size_t>(end); ++participant) {
-              float *participant_values = partial_values.data() + participant * rows;
-              const auto [tree_begin, tree_end] = tree_range(participant, participants);
-              for (std::size_t tree = tree_begin; tree < tree_end; ++tree) {
-                const std::uint32_t root = static_cast<std::uint32_t>(tree_roots_[tree]);
-                std::size_t row = 0;
-                if (max_depth_ == 4 && !compact_float_nodes_.empty() &&
-                    !leaf_weights_float_.empty()) {
-                  for (; row + kInterleavedRows <= rows; row += kInterleavedRows) {
-                    std::array<std::uint32_t, kInterleavedRows> nodes;
-                    nodes.fill(root);
-                    const auto advance = [&] {
-                      for (std::size_t lane = 0; lane < kInterleavedRows; ++lane) {
-                        const TreeEnsembleCompactFloatNode &current =
-                            compact_float_nodes_[nodes[lane]];
-                        nodes[lane] = input_data[(row + lane) * features + current.feature_id] <=
-                                              current.split
-                                          ? current.true_child
-                                          : current.false_child;
+      ExecuteRanges(static_cast<std::int64_t>(participants),
+                    static_cast<double>(kExecutionGrainSize),
+                    [&](std::int64_t begin, std::int64_t end) {
+                      for (std::size_t participant = static_cast<std::size_t>(begin);
+                           participant < static_cast<std::size_t>(end); ++participant) {
+                        float *participant_values = partial_values.data() + participant * rows;
+                        const auto [tree_begin, tree_end] = tree_range(participant, participants);
+                        for (std::size_t tree = tree_begin; tree < tree_end; ++tree) {
+                          accumulate_tree(tree, 0, rows, participant_values);
+                        }
                       }
-                    };
-                    advance();
-                    advance();
-                    advance();
-                    advance();
-                    for (std::size_t lane = 0; lane < kInterleavedRows; ++lane) {
-                      participant_values[row + lane] += leaf_weights_float_[nodes[lane]];
-                    }
-                  }
-                }
-                for (; row < rows; ++row) {
-                  std::size_t node = root;
-                  for (std::size_t level = 0; level < max_depth_; ++level) {
-                    const TreeEnsembleCompactNode &current = compact_nodes_[node];
-                    node = input_data[row * features + current.feature_id] <=
-                                   static_cast<float>(current.split)
-                               ? current.true_child
-                               : current.false_child;
-                  }
-                  participant_values[row] += leaf_weights_float_.empty()
-                                                 ? static_cast<float>(leaves_[node].weight)
-                                                 : leaf_weights_float_[node];
-                }
-              }
-            }
-          });
+                    });
       for (std::size_t row = 0; row < rows; ++row) {
         if (participants == 1) {
           output_data[row] = partial_values[row];
