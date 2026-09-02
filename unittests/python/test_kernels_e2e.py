@@ -91,6 +91,7 @@ _REGISTERED_KERNELS = {
     "LayerNormalization": "onnx_light_cpu::LayerNormalization",
     "Less": "onnx_light_cpu::Less",
     "LessOrEqual": "onnx_light_cpu::LessOrEqual",
+    "LinearAttention": "onnx_light_cpu::LinearAttention",
     "Log": "onnx_light_cpu::Log",
     "LpNormalization": "onnx_light_cpu::LpNormalization",
     "MatMul": "onnx_light_cpu::MatMul",
@@ -134,6 +135,7 @@ for _op_type in {
     "GroupQueryAttention",
     "InstanceNormalization",
     "LayerNormalization",
+    "LinearAttention",
     "LpNormalization",
     "MeanVarianceNormalization",
     "RMSNormalization",
@@ -522,6 +524,8 @@ class TestBackendCases(ExtTestCase):
                 assert record.since_version >= 1
             elif record.op_type in {"Attention", "RMSNormalization"}:
                 assert record.since_version == 23
+            elif record.op_type == "LinearAttention":
+                assert record.since_version == 27
             elif record.op_type == "BatchNormalization":
                 assert record.since_version == 15
             elif record.op_type == "GroupNormalization":

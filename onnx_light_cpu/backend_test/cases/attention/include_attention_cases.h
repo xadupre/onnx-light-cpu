@@ -22,6 +22,11 @@ using ONNX_LIGHT_NAMESPACE::core::backend_test::TestMode;
 /// ``test_cpu_attention_opset23_rank4_mha_q128_kv128_hd64_none_stateless_float32``.
 void RegisterCpuAttentionCases(std::vector<TestCase> &registry, TestMode mode);
 
+/// Registers ai.onnx ``LinearAttention`` v27 correctness and benchmark cases,
+/// including all four update rules, recurrent state, FP16/BF16, MHA/GQA,
+/// and Qwen3.5 decode/prefill geometries.
+void RegisterCpuLinearAttentionCases(std::vector<TestCase> &registry, TestMode mode);
+
 void CollectCpuAttentionTestCases(std::vector<TestCase> &registry, const std::string &op_type = "",
                                   TestMode mode = TestMode::TEST);
 
