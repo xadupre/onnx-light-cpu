@@ -33,6 +33,10 @@ std::size_t SelectedAbsFloat32Lanes() {
   return 1;
 }
 
+double SelectedAbsFloat32ComputeCycles() {
+  return std::max(1.0, 8.0 / static_cast<double>(SelectedAbsFloat32Lanes()));
+}
+
 // ---------------------------------------------------------------------------
 // DetectSimdLevel
 // ---------------------------------------------------------------------------
@@ -79,8 +83,38 @@ TEST(AbsFloat32, CostModelUsesDispatchComputeCost) {
                                              &PlanningExecutor::Plan};
   onnx_light_cpu::ExecutionExecutorScope scope(&view);
   onnx_light_cpu::AbsFloat32WithTuning(input.data(), output.data(), input.size(), tuning);
-  EXPECT_DOUBLE_EQ(executor.observed_cost.compute_cycles,
-                   8.0 / static_cast<double>(SelectedAbsFloat32Lanes()));
+  EXPECT_DOUBLE_EQ(executor.observed_cost.compute_cycles, SelectedAbsFloat32ComputeCycles());
+}
+
+TEST(AbsInt32, CostModelUsesMemoryBoundCostAndParticipantCap) {
+  struct PlanningExecutor {
+    onnx_light_cpu::ExecutionWorkCost observed_cost{};
+    std::int64_t observed_maximum = 0;
+
+    static onnx_light_cpu::ExecutionParallelPlan Plan(void *context, std::int64_t,
+                                                      const onnx_light_cpu::ExecutionWorkCost &cost,
+                                                      std::int64_t maximum_participants,
+                                                      std::int64_t) {
+      auto &self = *static_cast<PlanningExecutor *>(context);
+      self.observed_cost = cost;
+      self.observed_maximum = maximum_participants;
+      return {1, 1};
+    }
+
+    static void Run(void *, std::int64_t, void *, onnx_light_cpu::ExecutionBlockFn) {}
+  };
+
+  std::vector<std::int32_t> input(16, -1);
+  std::vector<std::int32_t> output(input.size());
+  PlanningExecutor executor;
+  onnx_light_cpu::ExecutionExecutorView view{&executor, 64, &PlanningExecutor::Run,
+                                             &PlanningExecutor::Plan};
+  onnx_light_cpu::ExecutionExecutorScope scope(&view);
+  onnx_light_cpu::AbsInt32(input.data(), output.data(), input.size());
+  EXPECT_DOUBLE_EQ(executor.observed_cost.bytes_read, sizeof(std::int32_t));
+  EXPECT_DOUBLE_EQ(executor.observed_cost.bytes_written, sizeof(std::int32_t));
+  EXPECT_DOUBLE_EQ(executor.observed_cost.compute_cycles, 1.0);
+  EXPECT_EQ(executor.observed_maximum, 32);
 }
 
 TEST(AbsFloat32, SingleElement) {

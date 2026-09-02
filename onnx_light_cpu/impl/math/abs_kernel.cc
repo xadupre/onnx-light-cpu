@@ -88,7 +88,8 @@ struct AbsFloat32Dispatch {
 constexpr double AbsComputeCycles(std::size_t simd_lanes) {
   constexpr double kAvx2ComputeCycles = 1.0;
   constexpr std::size_t kAvx2Lanes = 8;
-  return kAvx2ComputeCycles * static_cast<double>(kAvx2Lanes) / static_cast<double>(simd_lanes);
+  return std::max(kAvx2ComputeCycles, kAvx2ComputeCycles * static_cast<double>(kAvx2Lanes) /
+                                          static_cast<double>(simd_lanes));
 }
 
 const AbsFloat32Dispatch &GetAbsFloat32Dispatch() {
@@ -631,10 +632,14 @@ void AbsInt32(const int32_t *input, int32_t *output, std::size_t count) {
 
 void AbsInt32WithTuning(const int32_t *input, int32_t *output, std::size_t count,
                         const UnaryExecutionTuning &tuning) {
-  ExecuteUnaryRanges<std::int32_t>(
-      count, tuning, [input, output](std::int64_t begin, std::int64_t end) {
-        AbsInt32_Dispatch(input + begin, output + begin, static_cast<std::size_t>(end - begin));
-      });
+  auto execute = [input, output](std::int64_t begin, std::int64_t end) {
+    AbsInt32_Dispatch(input + begin, output + begin, static_cast<std::size_t>(end - begin));
+  };
+  if (tuning.use_cost_model) {
+    ExecuteCostedUnaryRanges<std::int32_t>(count, tuning, 1.0, std::move(execute));
+  } else {
+    ExecuteUnaryRanges<std::int32_t>(count, tuning, std::move(execute));
+  }
 }
 
 // ---------------------------------------------------------------------------
