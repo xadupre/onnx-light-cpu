@@ -152,7 +152,7 @@ void RegisterCpuSoftmaxCases(std::vector<TestCase> &registry, TestMode mode) {
 
   const std::vector<float> axis_zero_expected = {0.88079708F, 0.88079708F, 0.88079708F,
                                                  0.11920292F, 0.11920292F, 0.11920292F};
-  Expect(registry, MakeNode("Softmax", 0, true), "test_cpu_softmax_axis_zero", {opset},
+  Expect(registry, MakeNode("Softmax", 0, true), "test_cpu_softmax_axis_zero_float32", {opset},
          [=]() -> IoData {
            return IoData{{Tensor::FromFloat("", shape, input)},
                          {Tensor::FromFloat("", shape, axis_zero_expected)}};
@@ -164,8 +164,8 @@ void RegisterCpuSoftmaxCases(std::vector<TestCase> &registry, TestMode mode) {
   const std::vector<float> legacy_input = {1.0F, 2.0F, 3.0F, 4.0F, 4.0F, 3.0F, 2.0F, 1.0F};
   const std::vector<float> legacy_expected = {0.03205860F, 0.08714432F, 0.23688282F, 0.64391428F,
                                               0.64391428F, 0.23688282F, 0.08714432F, 0.03205860F};
-  Expect(registry, MakeNode("Softmax", 1, true), "test_cpu_softmax_opset12_axis", {legacy_opset},
-         [=]() -> IoData {
+  Expect(registry, MakeNode("Softmax", 1, true), "test_cpu_softmax_opset12_axis_float32",
+         {legacy_opset}, [=]() -> IoData {
            return IoData{{Tensor::FromFloat("", legacy_shape, legacy_input)},
                          {Tensor::FromFloat("", legacy_shape, legacy_expected)}};
          });
