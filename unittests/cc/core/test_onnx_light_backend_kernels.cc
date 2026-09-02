@@ -26,9 +26,11 @@
 // onnx-light itself.
 
 #include "onnx_light_cpu/backend_test/backend_correctness_runner.h"
+#include "onnx_light_cpu/backend_test/cases/math/benchmark_helpers.h"
 #include "onnx_light_cpu/backend_test/collect_test_cases.h"
 #include "onnx_light_cpu/impl/math/binary/binary_manifest.h"
 #include "onnx_light_cpu/kernels/kernel_usage.h"
+#include "onnx_light_cpu/kernels/math/abs_kernel.h"
 #include "onnx_light_cpu/kernels/math/gemm_kernel.h"
 #include "onnx_light_cpu/kernels/register_kernels.h"
 
@@ -736,6 +738,21 @@ TEST(OnnxLightBackendKernels, AllCpuBackendCaseNamesContainDataTypeName) {
 // cases. The runtime tests execute one bounded representative per corpus; the
 // metadata tests below cover every large timing workload without materializing
 // all of them in the unit-test suite.
+TEST(OnnxLightBackendKernels, UnaryBenchmarkRegistrationSkipsSingleElementTensors) {
+  std::vector<TestCase> cases;
+  const core::runtime::OpsetId opset = DefaultOpset(13);
+  const auto kernel_factory = [opset] { return onnx_light_cpu::AbsKernel{KernelContext{opset}}; };
+
+  onnx_light_cpu::backend_test::RegisterUnaryBenchmark(cases, "Abs", kernel_factory, opset,
+                                                       core::runtime::DataType::FLOAT, 1);
+  EXPECT_TRUE(cases.empty());
+
+  onnx_light_cpu::backend_test::RegisterUnaryBenchmark(cases, "Abs", kernel_factory, opset,
+                                                       core::runtime::DataType::FLOAT, 2);
+  ASSERT_EQ(cases.size(), 1U);
+  EXPECT_EQ(cases.front().name, "test_cpu_abs_n2_float32_benchmark");
+}
+
 TEST(OnnxLightBackendKernels, AbsBenchmarkRunsThroughRuntime) {
   const std::vector<std::string> failures = RunCpuBackendCases(
       "Abs", core::backend_test::TestMode::BENCHMARK, "test_cpu_abs_n1024_float32_benchmark");
