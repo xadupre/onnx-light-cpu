@@ -2,6 +2,7 @@ Gemm and MatMul Performance Roadmap
 ===================================
 
 :Date: 2026-08
+:Updated: 2026-09-02
 
 **in progress**
 
@@ -10,7 +11,7 @@ delivered the shared MatMul kernel and the original parity corpus. The
 correctness foundations are complete, including the FP16/BF16, integer,
 compact-format, and tuning paths. The expanded benchmark corpus has since
 exposed weak float32 scaling under default runtime policies, so issue
-`#374 <https://github.com/xadupre/onnx-light-cpu/issues/374>`_ reopens the
+`#374 <https://github.com/xadupre/onnx-light-cpu/issues/374>`_ reopened the
 performance work.
 
 Current status
@@ -34,7 +35,8 @@ multi-core shapes.
    * - `#374 <https://github.com/xadupre/onnx-light-cpu/issues/374>`_
      - Default-policy float32 profiling, scaling correction, parity-runner
        semantics, and this roadmap correction.
-     - In progress; exactly one implementation PR must close this issue.
+     - Closed by the implementation sequence through #575; dedicated-machine
+       parity remains optional validation.
    * - `#341 <https://github.com/xadupre/onnx-light-cpu/issues/341>`_
      - FP16/BF16 kernels, tuning, correctness coverage, and isolated benchmark
        reports.
@@ -1417,8 +1419,9 @@ fallbacks are ordered. Completed rows remain visible so scope is not lost.
        complete certification command remains available for optional
        cross-machine validation.
 
-Roadmap PR10.5 delivered the original controlled-thread validation tooling. It
-did not complete the default-policy parity gate now tracked by #374.
+Roadmap PR10.5 delivered the original controlled-thread validation tooling.
+The later default-policy corrective work is recorded under the now-closed
+#374.
 
 The reproducible gate command is ``tools/benchmark_gemm_parity.py
 --operator all --dtype all --output gemm_matmul_parity_results.json``.
@@ -1431,10 +1434,19 @@ selection to each runtime. Explicit ``--threads`` runs remain available for
 controlled scaling diagnostics; pass ``--enforce`` only when publishing a
 completed dedicated-machine result.
 
-Issue #374 corrective pass
-~~~~~~~~~~~~~~~~~~~~~~~~~~
+Issue #374 corrective passes
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-The corrective pass keeps dynamic B packing in the invocation, but distributes
+The corrective sequence is implemented by `#560
+<https://github.com/xadupre/onnx-light-cpu/pull/560>`_, `#561
+<https://github.com/xadupre/onnx-light-cpu/pull/561>`_, `#566
+<https://github.com/xadupre/onnx-light-cpu/pull/566>`_, `#567
+<https://github.com/xadupre/onnx-light-cpu/pull/567>`_, and `#575
+<https://github.com/xadupre/onnx-light-cpu/pull/575>`_. It adds medium
+AVX-512 tiles, cached and skinny-M MatMul execution, fused bias, productive
+participant scheduling, and worker-local dynamic-B packing.
+
+The final pass keeps dynamic B packing in the invocation, but distributes
 native float32 panels of at least 131,072 elements across the session executor.
 This provisional threshold is deliberately left for a later dedicated-machine
 tuning pass. All micro-panels in one B-panel wave share one dispatch, and
@@ -1443,12 +1455,12 @@ intervals only when equal-size scheduler blocks would lose participants: for
 example, 12 tiles with 10 requested blocks previously collapsed to only 6
 effective blocks. Otherwise the existing task distribution is retained.
 
-On the local i7-13800H diagnostic, pinned four-thread square-1024 latency drops
-from approximately 14.1 ms on ``main`` to 6.9 ms, while the one-thread
-square-128 path remains approximately 60 us. These are diagnostic A/B results,
-not a completed parity claim. The default-policy float32 corpus still misses
-the 1.0x median / 0.9x minimum gate, especially on skinny-N and constant-weight
-transformer cases, so the roadmap remains open.
+On the local i7-13800H diagnostic, #575 reduces dynamic-B square-512
+four-thread median latency from 2.345 ms to 0.855 ms and improves 1-to-4-thread
+scaling from 1.67x to 3.94x. These are diagnostic A/B results, not a
+cross-machine parity claim. Issue #374 is closed because the identified
+default-policy scheduling and packing defects are implemented; the
+reproducible dedicated-machine gate remains available for validation.
 
 Roadmap PR10.5 final validation pass
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

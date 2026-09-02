@@ -2,6 +2,7 @@ Binary Elementwise Performance Follow-up
 =========================================
 
 :Date: 2026-08
+:Updated: 2026-09-02
 
 **in progress**
 
@@ -75,6 +76,14 @@ ONNX Runtime. The fraction below parity fell from 50.8% to 37.5%.
 Comparison and bitwise median gains in onnx-light-cpu time were ``3.0x`` to
 ``4.4x``. These figures remain diagnostic: repeated large arithmetic runs
 show enough host dispersion that they do not satisfy the final gate.
+
+The latest arithmetic follow-ups are `#563
+<https://github.com/xadupre/onnx-light-cpu/pull/563>`_ and `#577
+<https://github.com/xadupre/onnx-light-cpu/pull/577>`_. #563 unrolls AVX-512
+FP32/FP64 arithmetic, adds the missing FP32 ``PRelu`` vector paths, and extends
+the backend benchmark coverage. #577 validates the physical integer divisor
+tensor once, inspecting expanded broadcast pairs only for the signed
+``INT_MIN / -1`` overflow case.
 
 Remaining bottlenecks
 ---------------------
@@ -253,7 +262,7 @@ Pull-request sequence
        paths improve or retain every arithmetic priority group with exact
        invalid-input and overflow semantics.
      - PR01
-     - Implemented; native half ISA paths remain
+     - Implemented through #563 and #577; native half ISA paths remain
    * - Binary Perf PR03
      - Comparison, logical, bitwise, shift, and PRelu bulk kernels.
      - Every supported width has contiguous and scalar-broadcast bulk paths;
