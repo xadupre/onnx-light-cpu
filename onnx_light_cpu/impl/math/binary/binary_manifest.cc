@@ -117,7 +117,7 @@ constexpr std::array<BinaryManifestEntry, 19> kManifest = {{
     {BinaryOperator::kBitwiseAnd, "BitwiseAnd", 18, 18, kBitwiseSignatures},
     {BinaryOperator::kBitwiseOr, "BitwiseOr", 18, 18, kBitwiseSignatures},
     {BinaryOperator::kBitwiseXor, "BitwiseXor", 18, 18, kBitwiseSignatures},
-    {BinaryOperator::kBitShift, "BitShift", 11, 11, kBitShiftSignatures},
+    {BinaryOperator::kBitShift, "BitShift", 28, 11, kBitShiftSignatures},
     {BinaryOperator::kPRelu, "PRelu", 16, 7, kPReluSignatures},
 }};
 
