@@ -121,7 +121,7 @@ Exact kernel inventory
 
 The table is exhaustive for this graph. ``Registered`` means a kernel is present
 in the current ``onnx-light-cpu`` registration inventory, not merely that an
-ONNX reference implementation may exist. All twelve rows marked ``Missing``
+ONNX reference implementation may exist. Every row still marked ``Missing``
 must receive either a CPU kernel or an explicit, tested ``onnx-light`` core
 execution path before the artifact can run without an untracked fallback.
 
@@ -198,12 +198,11 @@ execution path before the artifact can run without an untracked fallback.
        keep weights compressed and cover GEMV decode plus GEMM prefill.
    * - ``com.microsoft::GroupQueryAttention`` v1
      - 28
-     - Missing and blocking
-     - FP32 causal GQA with 16 query heads, 8 KV heads, head size 128,
-       ``scale=1/sqrt(128)``, integrated half-split RoPE, external FP32
-       cos/sin caches, tensor past/present K/V, and three outputs. Adapt this
-       contract to the shared Attention planner instead of creating a second
-       attention engine.
+     - Registered (#494, #507)
+     - The delivered CPU adapter covers FP32 causal GQA with 16 query heads,
+       8 KV heads, head size 128, ``scale=1/sqrt(128)``, integrated half-split
+       RoPE, external FP32 cos/sin caches, tensor past/present K/V, and three
+       outputs through the shared Attention engine.
    * - ``com.microsoft::SkipSimplifiedLayerNormalization`` v1
      - 56
      - Missing and blocking
@@ -249,16 +248,17 @@ Qwen-critical slices in this order:
        the portable serialization.
      - Float8, full integer parity, float64, and generic PR10.5.
    * - 3
-     - Completed ExpLog PR01-PR03 plus Qwen PR04
+     - Completed ExpLog PR01--PR03 plus :doc:`Qwen3 non-MatMulNBits operators
+       <2026_09_qwen3_operator_slice>` (Qwen PR04)
      - The exact standard-operator inventory above: Gather, Cast, ReduceSum,
        Shape, Reshape, Split, Sigmoid, SimplifiedLayerNormalization, and the
        SkipSimplifiedLayerNormalization adapter.
      - Non-Qwen unary/binary operator matrices and graph fusions.
    * - 4
-     - Attention PR11-PR14 plus Qwen PR05 integration
-     - Adapt the audited ``GroupQueryAttention`` contract to the shared
-       materialized and online Attention engines for batch-1 causal GQA,
-       integrated RoPE, tensor-cache prefill, and single-token decode.
+     - Completed #494/#507 plus Qwen PR05 integration
+     - Integrate the delivered ``GroupQueryAttention`` adapter with the frozen
+       graph and retain shared materialized and online Attention execution for
+       batch-1 causal prefill and decode.
      - The generic Attention PR15 performance gate.
    * - 5
      - Corrected KV-cache C0-C2 plus Qwen PR06a-PR06b
@@ -551,6 +551,10 @@ CPU. Persistent packed storage, including tied-weight plans, stays within
 Phase Q2: one complete Qwen block
 ---------------------------------
 
+The implementation-ready sequence, ownership boundaries, tests and acceptance
+gates for this phase are maintained in
+:doc:`Qwen3 non-MatMulNBits operators <2026_09_qwen3_operator_slice>`.
+
 Implement the minimum standard-operator slice needed to run one decoder block:
 
 * ``Gather`` for FP32 embeddings and the INT64 shape scalar;
@@ -586,12 +590,11 @@ Phase Q3: narrow causal GQA
 ---------------------------
 
 Qwen PR05 does not create a second attention descriptor, planner, graph
-matcher, or compute engine. It first adapts the audited
-``com.microsoft::GroupQueryAttention`` node, then integrates the portable
-standard graph with the shared
+matcher, or compute engine. It integrates the delivered
+``com.microsoft::GroupQueryAttention`` adapter and the portable standard graph
+with the shared
 ``AttentionDescriptor``, per-invocation ``AttentionPlan``, materialized
-fallback, and online engine delivered by Attention PR11 through PR14. The
-Qwen priority subset is:
+fallback, and online engine. The Qwen priority subset is:
 
 * batch 1;
 * Qwen3 query-head/KV-head geometry;
@@ -856,18 +859,17 @@ Pull-request sequence
      - Pending
    * - Qwen PR04
      - Qwen block operator slice.
-     - Every missing standard-domain row in the audited inventory plus the
-       Simplified/SkipSimplified normalization adapters runs one complete
-       native INT4 block; the portable RMSNorm, RoPE, Gather, SiLU, Softmax,
-       and layout paths remain differential coverage.
-     - Qwen PR02; completed ExpLog PR01-PR03
+     - The dedicated :doc:`non-MatMulNBits operator plan
+       <2026_09_qwen3_operator_slice>` is complete and runs one Qwen block;
+       the portable RMSNorm, RoPE, Gather, SiLU, Softmax, and layout paths
+       remain differential coverage.
+     - Qwen PR01; completed ExpLog PR01-PR03
      - Pending
    * - Qwen PR05
      - Frozen-graph integration with shared Attention.
-     - Native ``GroupQueryAttention`` and standard ``Attention`` dispatch to
-       the shared descriptor, planner, materialized fallback, and online
-       engine. Batch-1 causal prefill/decode use zero-copy query/KV-head
-       grouping; no Qwen-only compute engine is introduced.
+     - The delivered native ``GroupQueryAttention`` adapter and standard
+       ``Attention`` execute from the frozen graph through the shared engine.
+       Batch-1 causal prefill/decode retain zero-copy query/KV-head grouping.
      - Qwen PR04; Attention PR14 / #391
      - Pending
    * - Qwen PR06a

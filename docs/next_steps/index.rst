@@ -14,6 +14,7 @@ optimize next.
     2026/2026_08_attention
     2026/2026_08_exp_log_parity
     2026/2026_08_qwen3_inference
+    2026/2026_09_qwen3_operator_slice
     2026/2026_08_conv
     2026/2026_08_unary_elementwise
     2026/2026_08_binary_elementwise
@@ -64,6 +65,11 @@ Planned
     * - :doc:`Qwen3 inference <2026/2026_08_qwen3_inference>`
       - Freezes the audited end-to-end model benchmark, then builds the
         canonical batch-1 INT4, shared GQA, and persistent-decode path.
+    * - :doc:`Qwen3 non-MatMulNBits operators
+        <2026/2026_09_qwen3_operator_slice>`
+      - Implements the metadata, input, layout, activation, and normalization
+        slice required by the audited Qwen3 graph independently of packed
+        INT4 projections.
 
 Completed
 ---------
