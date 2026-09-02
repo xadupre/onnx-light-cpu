@@ -1093,7 +1093,7 @@ TEST(GemmFloat32, LargeBPanelPackingFusesWithCompute) {
     }
   }
   EXPECT_EQ(executor.dispatches.load(std::memory_order_relaxed), 2u);
-  EXPECT_GT(executor.maximum_active.load(std::memory_order_relaxed), 1u);
+  EXPECT_GT(executor.maximum_blocks.load(std::memory_order_relaxed), 1u);
 }
 
 TEST(GemmFloat32, SmallBPanelPackingStaysInline) {
