@@ -13,8 +13,8 @@
 //
 // It is intentionally not a correctness gate and is not run by ctest. Build it
 // with ``-DONNX_LIGHT_CPU_BUILD_BENCHMARKS=ON`` and run the resulting
-// ``gemm_throughput`` executable. This standalone benchmark runs on its calling
-// thread; session-level parallel throughput is measured through onnx-light.
+// ``gemm_throughput [threads]`` executable. Its persistent executor reports the
+// maximum block count used by each prepared FP32/FP64 plan.
 
 #include "onnx_light_cpu/impl/math/gemm/gemm_common.h"
 #include "onnx_light_cpu/impl/math/gemm/gemm_plan.h"
@@ -23,19 +23,130 @@
 #include "onnx_light_cpu/impl/simd_level.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
+#include <mutex>
 #include <random>
 #include <span>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace {
 
 using onnx_light_cpu::GemmPlan;
 using onnx_light_cpu::GemmPlanOptions;
+
+struct ThreadExecutor {
+  explicit ThreadExecutor(std::size_t threads) {
+    workers.reserve(threads - 1);
+    for (std::size_t index = 1; index < threads; ++index) {
+      workers.emplace_back([this] { Worker(); });
+    }
+  }
+
+  ~ThreadExecutor() {
+    {
+      std::lock_guard lock(mutex);
+      stopping = true;
+      ++generation;
+    }
+    start.notify_all();
+    for (std::thread &worker : workers) {
+      worker.join();
+    }
+  }
+
+  static void Run(void *context, std::int64_t num_blocks, void *task_context,
+                  onnx_light_cpu::ExecutionBlockFn task) {
+    auto &self = *static_cast<ThreadExecutor *>(context);
+    self.maximum_blocks = std::max(self.maximum_blocks, num_blocks);
+    {
+      std::lock_guard lock(self.mutex);
+      self.next.store(0, std::memory_order_relaxed);
+      self.pending = num_blocks;
+      self.active_workers = 0;
+      self.arrived_workers = 0;
+      self.num_blocks = num_blocks;
+      self.task_context = task_context;
+      self.task = task;
+      ++self.generation;
+    }
+    self.start.notify_all();
+    for (;;) {
+      const std::int64_t block = self.next.fetch_add(1, std::memory_order_relaxed);
+      if (block >= num_blocks) {
+        break;
+      }
+      task(task_context, block);
+      std::lock_guard lock(self.mutex);
+      --self.pending;
+    }
+    std::unique_lock lock(self.mutex);
+    self.done.wait(lock, [&] {
+      return self.pending == 0 && self.active_workers == 0 &&
+             self.arrived_workers == static_cast<std::int64_t>(self.workers.size());
+    });
+  }
+
+  void ResetMetrics() { maximum_blocks = 1; }
+
+  void Worker() {
+    std::size_t observed_generation = 0;
+    for (;;) {
+      std::int64_t local_num_blocks;
+      void *local_task_context;
+      onnx_light_cpu::ExecutionBlockFn local_task;
+      {
+        std::unique_lock lock(mutex);
+        start.wait(lock, [&] { return stopping || generation != observed_generation; });
+        if (stopping) {
+          return;
+        }
+        observed_generation = generation;
+        local_num_blocks = num_blocks;
+        local_task_context = task_context;
+        local_task = task;
+        ++active_workers;
+        ++arrived_workers;
+      }
+      for (;;) {
+        const std::int64_t block = next.fetch_add(1, std::memory_order_relaxed);
+        if (block >= local_num_blocks) {
+          break;
+        }
+        local_task(local_task_context, block);
+        std::lock_guard lock(mutex);
+        --pending;
+      }
+      {
+        std::lock_guard lock(mutex);
+        --active_workers;
+        done.notify_one();
+      }
+    }
+  }
+
+  std::vector<std::thread> workers;
+  std::mutex mutex;
+  std::condition_variable start;
+  std::condition_variable done;
+  std::atomic<std::int64_t> next{0};
+  std::size_t generation = 0;
+  std::int64_t pending = 0;
+  std::int64_t active_workers = 0;
+  std::int64_t arrived_workers = 0;
+  std::int64_t num_blocks = 0;
+  void *task_context = nullptr;
+  onnx_light_cpu::ExecutionBlockFn task = nullptr;
+  bool stopping = false;
+  std::int64_t maximum_blocks = 1;
+};
 
 struct GemmCase {
   const char *name;
@@ -73,7 +184,9 @@ std::size_t RepeatCount(const GemmCase &c) {
       5, std::min<std::uint64_t>(51, target / std::max<std::uint64_t>(1, operations))));
 }
 
-template <typename T> double MeasureGflops(const GemmCase &c, std::size_t *useful_threads) {
+template <typename T>
+double MeasureGflops(const GemmCase &c, std::size_t *useful_threads, ThreadExecutor *executor,
+                     std::int64_t *actual_blocks) {
   std::mt19937 rng(0x5eed5eedu);
   std::uniform_real_distribution<double> dist(-1.0, 1.0);
   std::vector<T> a(c.m * c.k);
@@ -99,6 +212,7 @@ template <typename T> double MeasureGflops(const GemmCase &c, std::size_t *usefu
   }
   const GemmPlan<T> plan(options);
   *useful_threads = plan.useful_threads();
+  executor->ResetMetrics();
 
   const auto run = [&]() {
     if (c.constant_b) {
@@ -125,6 +239,7 @@ template <typename T> double MeasureGflops(const GemmCase &c, std::size_t *usefu
   const double median = seconds[seconds.size() / 2];
   const double operations =
       2.0 * static_cast<double>(c.m) * static_cast<double>(c.n) * static_cast<double>(c.k);
+  *actual_blocks = executor->maximum_blocks;
   return operations / median / 1e9;
 }
 
@@ -211,7 +326,17 @@ const char *MicroarchitectureName(onnx_light_cpu::GemmMicroarchitecture microarc
 
 } // namespace
 
-int main() {
+int main(int argc, char **argv) {
+  const std::size_t threads =
+      argc > 1 ? static_cast<std::size_t>(std::strtoull(argv[1], nullptr, 10)) : 1;
+  if (threads == 0) {
+    std::fprintf(stderr, "thread count must be positive\n");
+    return 2;
+  }
+  ThreadExecutor executor(threads);
+  onnx_light_cpu::ExecutionExecutorView executor_view{&executor, static_cast<std::int64_t>(threads),
+                                                      &ThreadExecutor::Run};
+  onnx_light_cpu::ExecutionExecutorScope executor_scope(&executor_view);
   const onnx_light_cpu::SimdLevel level = onnx_light_cpu::DetectSimdLevel();
   const bool has_fma = onnx_light_cpu::CpuSupportsFma();
   const onnx_light_cpu::GemmMicroarchitecture microarchitecture =
@@ -220,21 +345,25 @@ int main() {
       onnx_light_cpu::detail::SelectGemmRegisterRowsForMicroarchitecture(level, has_fma,
                                                                          microarchitecture);
 
-  std::printf("SIMD level: %s  FMA: %s  microarchitecture: %s  register rows: %zu\n",
+  std::printf("SIMD level: %s  FMA: %s  microarchitecture: %s  register rows: %zu  threads: %zu\n",
               SimdName(level), has_fma ? "yes" : "no", MicroarchitectureName(microarchitecture),
-              register_rows);
-  std::printf("%-18s %6s %6s %6s %8s %14s %8s %14s %14s %14s\n", "case", "M", "N", "K", "fp32 thr",
-              "fp32 GFLOP/s", "fp64 thr", "fp64 GFLOP/s", "fp16 GFLOP/s", "bf16 GFLOP/s");
+              register_rows, threads);
+  std::printf("%-18s %6s %6s %6s %8s %10s %14s %8s %10s %14s %14s %14s\n", "case", "M", "N", "K",
+              "fp32 thr", "fp32 blocks", "fp32 GFLOP/s", "fp64 thr", "fp64 blocks", "fp64 GFLOP/s",
+              "fp16 GFLOP/s", "bf16 GFLOP/s");
 
   for (const GemmCase &c : kCases) {
     std::size_t fp32_threads = 0;
     std::size_t fp64_threads = 0;
-    const double fp32 = MeasureGflops<float>(c, &fp32_threads);
-    const double fp64 = MeasureGflops<double>(c, &fp64_threads);
+    std::int64_t fp32_blocks = 1;
+    std::int64_t fp64_blocks = 1;
+    const double fp32 = MeasureGflops<float>(c, &fp32_threads, &executor, &fp32_blocks);
+    const double fp64 = MeasureGflops<double>(c, &fp64_threads, &executor, &fp64_blocks);
     const double fp16 = MeasureHalfGflops<false>(c);
     const double bf16 = MeasureHalfGflops<true>(c);
-    std::printf("%-18s %6zu %6zu %6zu %8zu %14.2f %8zu %14.2f %14.2f %14.2f\n", c.name, c.m, c.n,
-                c.k, fp32_threads, fp32, fp64_threads, fp64, fp16, bf16);
+    std::printf("%-18s %6zu %6zu %6zu %8zu %10lld %14.2f %8zu %10lld %14.2f %14.2f %14.2f\n",
+                c.name, c.m, c.n, c.k, fp32_threads, static_cast<long long>(fp32_blocks), fp32,
+                fp64_threads, static_cast<long long>(fp64_blocks), fp64, fp16, bf16);
   }
   return 0;
 }

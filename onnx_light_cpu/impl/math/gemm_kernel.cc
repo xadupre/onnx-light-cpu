@@ -1162,20 +1162,27 @@ void GemmDirect(std::size_t M, std::size_t N, std::size_t K, T alpha, const T *A
   const std::size_t task_count = row_blocks * column_panels;
   const double cost =
       static_cast<double>(K) * blocking.mr * blocking.nc / kGemmFmasPerParallelWorkUnit;
-  ExecuteRanges(
-      static_cast<std::int64_t>(task_count), cost, [&](std::int64_t begin, std::int64_t end) {
-        for (std::int64_t task = begin; task < end; ++task) {
-          const std::size_t index = static_cast<std::size_t>(task);
-          const std::size_t panel = index / row_blocks;
-          const std::size_t block = index % row_blocks;
-          const std::size_t m = block * blocking.mr;
-          const std::size_t n0 = panel * blocking.nc;
-          const std::size_t mr = std::min(blocking.mr, M - m);
-          const std::size_t nb = std::min(blocking.nc, N - n0);
-          tile(kind, mr, nb, K, alpha, beta, B, N, has_bias ? C + m * c_stride : nullptr, c_stride,
-               Y + m * N, N, n0, has_bias ? bias_mode : GemmAccumMode::kInitZero, A + m * K);
-        }
-      });
+  const std::int64_t participants =
+      ExecutionBlockCount(static_cast<std::int64_t>(task_count), cost);
+  const ExecutionSchedule schedule{1, 1, participants};
+  ExecuteRanges(participants, schedule, [&](std::int64_t begin, std::int64_t end) {
+    for (std::int64_t participant = begin; participant < end; ++participant) {
+      const std::size_t first = task_count * static_cast<std::size_t>(participant) /
+                                static_cast<std::size_t>(participants);
+      const std::size_t last = task_count * static_cast<std::size_t>(participant + 1) /
+                               static_cast<std::size_t>(participants);
+      for (std::size_t index = first; index < last; ++index) {
+        const std::size_t panel = index / row_blocks;
+        const std::size_t block = index % row_blocks;
+        const std::size_t m = block * blocking.mr;
+        const std::size_t n0 = panel * blocking.nc;
+        const std::size_t mr = std::min(blocking.mr, M - m);
+        const std::size_t nb = std::min(blocking.nc, N - n0);
+        tile(kind, mr, nb, K, alpha, beta, B, N, has_bias ? C + m * c_stride : nullptr, c_stride,
+             Y + m * N, N, n0, has_bias ? bias_mode : GemmAccumMode::kInitZero, A + m * K);
+      }
+    }
+  });
 }
 
 // Dot product of two ``K``-length sequences read with independent strides,

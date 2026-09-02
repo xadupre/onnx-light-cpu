@@ -6,6 +6,7 @@
 #include "onnx_light_cpu/impl/math/gemm/amx/gemm_amx_tile.h"
 #include "onnx_light_cpu/impl/math/gemm/float8/float8_conversion.h"
 #include "onnx_light_cpu/impl/math/gemm/gemm_common.h"
+#include "onnx_light_cpu/impl/math/gemm/gemm_plan.h"
 #include "onnx_light_cpu/impl/math/gemm/vnni/integer_gemm_vnni.h"
 #include "onnx_light_cpu/impl/math/half_conversion.h"
 #include "onnx_light_cpu/impl/math/math_kernels.h"
@@ -1001,6 +1002,7 @@ struct ProductiveExecutor {
   const float *output = nullptr;
   std::size_t output_size = 0;
   std::size_t productive_blocks = 0;
+  std::vector<std::size_t> writes_per_block;
 
   static void Run(void *context, int64_t num_blocks, void *task_context,
                   onnx_light_cpu::ExecutionBlockFn task) {
@@ -1012,9 +1014,39 @@ struct ProductiveExecutor {
       const std::size_t after = static_cast<std::size_t>(std::count_if(
           self.output, self.output + self.output_size, [](float value) { return value != 0.0f; }));
       self.productive_blocks += static_cast<std::size_t>(after > before);
+      self.writes_per_block.push_back(after - before);
     }
   }
 };
+
+TEST(GemmFloat32, MediumSquareBalancesRowsAcrossParticipants) {
+  if (onnx_light_cpu::DetectSimdLevel() < onnx_light_cpu::SimdLevel::kAVX512) {
+    GTEST_SKIP() << "medium-square direct scheduling is specific to AVX-512";
+  }
+  constexpr std::size_t M = 256;
+  constexpr std::size_t N = 256;
+  constexpr std::size_t K = 256;
+  const std::vector<float> A(M * K, 1.0f);
+  const std::vector<float> B(K * N, 1.0f);
+  std::vector<float> Y(M * N);
+  ProductiveExecutor executor{Y.data(), Y.size()};
+  onnx_light_cpu::ExecutionExecutorView view{&executor, 4, &ProductiveExecutor::Run};
+
+  {
+    onnx_light_cpu::ExecutionExecutorScope scope(&view);
+    const onnx_light_cpu::GemmPlan<float> plan(
+        onnx_light_cpu::GemmPlanOptions<float>{false, false, M, N, K});
+    plan.Execute(A.data(), B.data(), nullptr, Y.data());
+  }
+
+  ASSERT_EQ(executor.writes_per_block.size(), 4u);
+  const auto [minimum, maximum] =
+      std::minmax_element(executor.writes_per_block.begin(), executor.writes_per_block.end());
+  EXPECT_LE(*maximum - *minimum, onnx_light_cpu::kGemmAVX512MR * N);
+  for (float value : Y) {
+    EXPECT_FLOAT_EQ(value, static_cast<float>(K));
+  }
+}
 
 TEST(GemmFloat32, RawLargeKSplitBoundsParticipants) {
   constexpr std::size_t M = 32;
