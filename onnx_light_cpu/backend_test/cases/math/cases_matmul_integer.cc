@@ -26,7 +26,6 @@ using bt_ns::Expect;
 using bt_ns::IoData;
 using bt_ns::TestCase;
 using bt_ns::TestMode;
-using ONNX_LIGHT_NAMESPACE::NodeProto;
 using rt_ns::DataType;
 using rt_ns::DefaultOpset;
 using rt_ns::KernelContext;
@@ -40,15 +39,6 @@ struct MatMulShape {
   std::int64_t k;
 };
 
-NodeProto MakeMatMulIntegerNode() {
-  NodeProto node;
-  node.set_op_type("MatMulInteger");
-  node.add_input("A");
-  node.add_input("B");
-  node.add_output("Y");
-  return node;
-}
-
 void RegisterMatMulIntegerCase(std::vector<TestCase> &registry, const OpsetId &opset,
                                const MatMulShape &shape, DataType a_type, DataType b_type,
                                bool benchmark) {
@@ -59,7 +49,8 @@ void RegisterMatMulIntegerCase(std::vector<TestCase> &registry, const OpsetId &o
   const std::int64_t b_count = shape.k * shape.n;
   const std::int64_t y_count = shape.m * shape.n;
   if (benchmark) {
-    Expect(registry, MakeMatMulIntegerNode(), name, {opset}, {a_count, b_count}, {y_count},
+    Expect(registry, MakeNode("MatMulInteger", {"A", "B"}, {"Y"}), name, {opset},
+           {a_count, b_count}, {y_count},
            [opset, shape, a_type, b_type](bool generate_expected_outputs) -> IoData {
              Tensor a = MakeBenchmarkTensor(a_type, {shape.m, shape.k}, 433);
              Tensor b = MakeBenchmarkTensor(b_type, {shape.k, shape.n}, 434);
@@ -74,8 +65,8 @@ void RegisterMatMulIntegerCase(std::vector<TestCase> &registry, const OpsetId &o
            {bt_ns::TensorTypeSpec(static_cast<std::int32_t>(DataType::INT32), {shape.m, shape.n})});
     return;
   }
-  Expect(registry, MakeMatMulIntegerNode(), name, {opset}, {a_count, b_count}, {y_count},
-         [opset, shape, a_type, b_type]() -> IoData {
+  Expect(registry, MakeNode("MatMulInteger", {"A", "B"}, {"Y"}), name, {opset}, {a_count, b_count},
+         {y_count}, [opset, shape, a_type, b_type]() -> IoData {
            Tensor a = MakeBenchmarkTensor(a_type, {shape.m, shape.k}, 433);
            Tensor b = MakeBenchmarkTensor(b_type, {shape.k, shape.n}, 434);
            Tensor y = onnx_light_cpu::MatMulIntegerKernel{KernelContext{opset}}(a, b);

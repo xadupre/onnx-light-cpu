@@ -4,10 +4,10 @@
 
 #include "onnx_light_cpu/backend_test/cases/math/include_math_cases.h"
 
+#include "onnx_light_cpu/backend_test/cases/math/benchmark_helpers.h"
 #include "onnx_light_cpu/kernels/math/gemm_kernel.h"
 
 #include "onnx_core/backend_test/expect.h"
-#include "onnx_core/runtime/kernels/cast_helper.h"
 #include "onnx_core/runtime/kernels/kernel_context.h"
 #include "onnx_core/runtime/kernels/random.h"
 #include "onnx_core/runtime/memory/simple_tensor.h"
@@ -54,68 +54,11 @@ enum class BiasShape {
   kMatrix,
 };
 
-// Builds a plain (no-attribute) two-input ``Gemm`` NodeProto: Y = A @ B.
-NodeProto MakeGemmNode() {
-  NodeProto node;
-  node.set_op_type("Gemm");
-  node.add_input("A");
-  node.add_input("B");
-  node.add_output("Y");
-  return node;
-}
-
 void AddIntAttribute(NodeProto &node, const char *name, int64_t value) {
   auto *attribute = node.add_attribute();
   attribute->set_name(name);
   attribute->set_type(ONNX_LIGHT_NAMESPACE::AttributeProto::AttributeType::INT);
   attribute->set_i(value);
-}
-
-// Encodes ``values`` as a BFLOAT16 ``Tensor`` (raw 16-bit bit patterns),
-// mirroring how onnx-light's own backend test cases build bfloat16 inputs.
-Tensor MakeBfloat16Tensor(const std::vector<int64_t> &shape, const std::vector<float> &values) {
-  std::vector<std::uint8_t> raw(values.size() * sizeof(std::uint16_t));
-  auto *dst = reinterpret_cast<std::uint16_t *>(raw.data());
-  for (std::size_t i = 0; i < values.size(); ++i) {
-    dst[i] = rt_ns::FloatToBfloat16Bits(values[i]);
-  }
-  return Tensor("", static_cast<std::int32_t>(DataType::BFLOAT16), shape, std::move(raw));
-}
-
-// Builds a ``Tensor`` of the requested element type from ``float`` values so
-// each benchmark shape can be exercised for float32, float16 and bfloat16.
-Tensor MakeGemmTensor(DataType dtype, const std::vector<int64_t> &shape,
-                      const std::vector<float> &values) {
-  switch (dtype) {
-  case DataType::FLOAT:
-    return Tensor::FromFloat("", shape, values);
-  case DataType::DOUBLE: {
-    std::vector<double> doubles(values.begin(), values.end());
-    return Tensor::FromDouble("", shape, doubles);
-  }
-  case DataType::FLOAT16:
-    return rt_ns::MakeFloat16Tensor("", shape, values);
-  case DataType::BFLOAT16:
-    return MakeBfloat16Tensor(shape, values);
-  default:
-    return Tensor::FromFloat("", shape, values);
-  }
-}
-
-// Short element-type tag inserted into benchmark case names.
-const char *GemmDtypeSuffix(DataType dtype) {
-  switch (dtype) {
-  case DataType::FLOAT:
-    return "float32";
-  case DataType::DOUBLE:
-    return "float64";
-  case DataType::FLOAT16:
-    return "float16";
-  case DataType::BFLOAT16:
-    return "bfloat16";
-  default:
-    return "float32";
-  }
 }
 
 const char *GemmBiasSuffix(BiasShape bias_shape) {
@@ -138,10 +81,10 @@ void RegisterGemmBenchmark(std::vector<TestCase> &registry, const OpsetId &opset
                            const std::string &base_name, DataType dtype, int64_t m, int64_t n,
                            int64_t k, bool trans_a = false, bool trans_b = false,
                            BiasShape bias_shape = BiasShape::kNone) {
-  const std::string name = base_name + "_" + GemmDtypeSuffix(dtype) + "_transA_" +
+  const std::string name = base_name + "_" + DataTypeSuffix(dtype) + "_transA_" +
                            (trans_a ? "1" : "0") + "_transB_" + (trans_b ? "1" : "0") + "_bias_" +
                            GemmBiasSuffix(bias_shape) + "_benchmark";
-  NodeProto node = MakeGemmNode();
+  NodeProto node = MakeNode("Gemm", {"A", "B"}, {"Y"});
   if (trans_a) {
     AddIntAttribute(node, "transA", 1);
   }
@@ -181,9 +124,9 @@ void RegisterGemmBenchmark(std::vector<TestCase> &registry, const OpsetId &opset
     Expect(registry, std::move(node), name, {opset}, {a_count, b_count, c_count}, {y_count},
            [dtype, a_shape, b_shape, c_shape, trans_a, trans_b, a_count, b_count, c_count,
             opset](bool generate_expected_outputs) -> IoData {
-             Tensor a = MakeGemmTensor(dtype, a_shape, Randn<float>(a_shape, 433 + a_count));
-             Tensor b = MakeGemmTensor(dtype, b_shape, Randn<float>(b_shape, 434 + b_count));
-             Tensor c = MakeGemmTensor(dtype, c_shape, Randn<float>(c_shape, 435 + c_count));
+             Tensor a = MakeTensor(dtype, a_shape, Randn<float>(a_shape, 433 + a_count));
+             Tensor b = MakeTensor(dtype, b_shape, Randn<float>(b_shape, 434 + b_count));
+             Tensor c = MakeTensor(dtype, c_shape, Randn<float>(c_shape, 435 + c_count));
              if (!generate_expected_outputs) {
                return IoData{{std::move(a), std::move(b), std::move(c)}, {}, {}, false};
              }
@@ -199,8 +142,8 @@ void RegisterGemmBenchmark(std::vector<TestCase> &registry, const OpsetId &opset
   Expect(registry, std::move(node), name, {opset}, {a_count, b_count}, {y_count},
          [dtype, a_shape, b_shape, trans_a, trans_b, a_count, b_count,
           opset](bool generate_expected_outputs) -> IoData {
-           Tensor a = MakeGemmTensor(dtype, a_shape, Randn<float>(a_shape, 433 + a_count));
-           Tensor b = MakeGemmTensor(dtype, b_shape, Randn<float>(b_shape, 434 + b_count));
+           Tensor a = MakeTensor(dtype, a_shape, Randn<float>(a_shape, 433 + a_count));
+           Tensor b = MakeTensor(dtype, b_shape, Randn<float>(b_shape, 434 + b_count));
            if (!generate_expected_outputs) {
              return IoData{{std::move(a), std::move(b)}, {}, {}, false};
            }
@@ -346,31 +289,35 @@ void RegisterCpuGemmCases(std::vector<TestCase> &registry, TestMode mode) {
   const std::vector<float> b = {0.0f, 1.0f, 2.0f, 3.0f, 4.0f,  5.0f,
                                 6.0f, 7.0f, 8.0f, 9.0f, 10.0f, 11.0f};
 
-  Expect(registry, MakeGemmNode(), "test_cpu_gemm_float32", {opset}, [=]() -> IoData {
-    Tensor ta = Tensor::FromFloat("", a_shape, a);
-    Tensor tb = Tensor::FromFloat("", b_shape, b);
-    const onnx_light_cpu::GemmKernel kernel{KernelContext{opset}};
-    return IoData{{ta, tb}, {kernel(ta, tb, 1.0f, false, false)}};
-  });
-  Expect(registry, MakeGemmNode(), "test_cpu_gemm_float64", {opset}, [=]() -> IoData {
-    Tensor ta = Tensor::FromDouble("", a_shape, {0.0, 1.0, 2.0, 3.0, 4.0, 5.0});
-    Tensor tb = Tensor::FromDouble("", b_shape,
-                                   {0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0});
-    const onnx_light_cpu::GemmKernel kernel{KernelContext{opset}};
-    return IoData{{ta, tb}, {kernel(ta, tb, 1.0f, false, false)}};
-  });
-  Expect(registry, MakeGemmNode(), "test_cpu_gemm_float16", {opset}, [=]() -> IoData {
-    Tensor ta = rt_ns::MakeFloat16Tensor("", a_shape, a);
-    Tensor tb = rt_ns::MakeFloat16Tensor("", b_shape, b);
-    const onnx_light_cpu::GemmKernel kernel{KernelContext{opset}};
-    return IoData{{ta, tb}, {kernel(ta, tb, 1.0f, false, false)}};
-  });
-  Expect(registry, MakeGemmNode(), "test_cpu_gemm_bfloat16", {opset}, [=]() -> IoData {
-    Tensor ta = MakeBfloat16Tensor(a_shape, a);
-    Tensor tb = MakeBfloat16Tensor(b_shape, b);
-    const onnx_light_cpu::GemmKernel kernel{KernelContext{opset}};
-    return IoData{{ta, tb}, {kernel(ta, tb, 1.0f, false, false)}};
-  });
+  Expect(registry, MakeNode("Gemm", {"A", "B"}, {"Y"}), "test_cpu_gemm_float32", {opset},
+         [=]() -> IoData {
+           Tensor ta = Tensor::FromFloat("", a_shape, a);
+           Tensor tb = Tensor::FromFloat("", b_shape, b);
+           const onnx_light_cpu::GemmKernel kernel{KernelContext{opset}};
+           return IoData{{ta, tb}, {kernel(ta, tb, 1.0f, false, false)}};
+         });
+  Expect(registry, MakeNode("Gemm", {"A", "B"}, {"Y"}), "test_cpu_gemm_float64", {opset},
+         [=]() -> IoData {
+           Tensor ta = Tensor::FromDouble("", a_shape, {0.0, 1.0, 2.0, 3.0, 4.0, 5.0});
+           Tensor tb = Tensor::FromDouble(
+               "", b_shape, {0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0});
+           const onnx_light_cpu::GemmKernel kernel{KernelContext{opset}};
+           return IoData{{ta, tb}, {kernel(ta, tb, 1.0f, false, false)}};
+         });
+  Expect(registry, MakeNode("Gemm", {"A", "B"}, {"Y"}), "test_cpu_gemm_float16", {opset},
+         [=]() -> IoData {
+           Tensor ta = MakeTensor(DataType::FLOAT16, a_shape, a);
+           Tensor tb = MakeTensor(DataType::FLOAT16, b_shape, b);
+           const onnx_light_cpu::GemmKernel kernel{KernelContext{opset}};
+           return IoData{{ta, tb}, {kernel(ta, tb, 1.0f, false, false)}};
+         });
+  Expect(registry, MakeNode("Gemm", {"A", "B"}, {"Y"}), "test_cpu_gemm_bfloat16", {opset},
+         [=]() -> IoData {
+           Tensor ta = MakeTensor(DataType::BFLOAT16, a_shape, a);
+           Tensor tb = MakeTensor(DataType::BFLOAT16, b_shape, b);
+           const onnx_light_cpu::GemmKernel kernel{KernelContext{opset}};
+           return IoData{{ta, tb}, {kernel(ta, tb, 1.0f, false, false)}};
+         });
 }
 
 } // namespace onnx_light_cpu::backend_test

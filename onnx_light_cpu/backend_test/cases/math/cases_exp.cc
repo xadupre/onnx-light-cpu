@@ -8,7 +8,6 @@
 #include "onnx_light_cpu/kernels/math/exp_log_kernel.h"
 
 #include "onnx_core/backend_test/expect.h"
-#include "onnx_core/runtime/kernels/cast_helper.h"
 #include "onnx_core/runtime/kernels/kernel_context.h"
 #include "onnx_core/runtime/memory/simple_tensor.h"
 
@@ -27,32 +26,11 @@ using bt_ns::Expect;
 using bt_ns::IoData;
 using bt_ns::TestCase;
 using bt_ns::TestMode;
-using ONNX_LIGHT_NAMESPACE::NodeProto;
 using rt_ns::DataType;
 using rt_ns::DefaultOpset;
 using rt_ns::KernelContext;
 using rt_ns::OpsetId;
 using rt_ns::Tensor;
-
-// Builds a single-input / single-output unary ``Exp`` NodeProto.
-NodeProto MakeExpNode() {
-  NodeProto node;
-  node.set_op_type("Exp");
-  node.add_input("x");
-  node.add_output("y");
-  return node;
-}
-
-// Encodes ``values`` as a BFLOAT16 ``Tensor`` (raw 16-bit bit patterns),
-// mirroring how onnx-light's own backend test cases build bfloat16 inputs.
-Tensor MakeBfloat16Tensor(const std::vector<int64_t> &shape, const std::vector<float> &values) {
-  std::vector<std::uint8_t> raw(values.size() * sizeof(std::uint16_t));
-  auto *dst = reinterpret_cast<std::uint16_t *>(raw.data());
-  for (std::size_t i = 0; i < values.size(); ++i) {
-    dst[i] = rt_ns::FloatToBfloat16Bits(values[i]);
-  }
-  return Tensor("", static_cast<std::int32_t>(DataType::BFLOAT16), shape, std::move(raw));
-}
 
 } // namespace
 
@@ -74,26 +52,27 @@ void RegisterCpuExpCases(std::vector<TestCase> &registry, TestMode mode) {
     return;
   }
 
-  Expect(registry, MakeExpNode(), "test_cpu_exp_float32", {opset}, [=]() -> IoData {
-    Tensor x = Tensor::FromFloat("", shape, f);
+  Expect(registry, MakeNode("Exp", {"x"}, {"y"}), "test_cpu_exp_float32", {opset}, [=]() -> IoData {
+    Tensor x = MakeTensor(DataType::FLOAT, shape, f);
     const onnx_light_cpu::ExpKernel kernel{KernelContext{opset}};
     return IoData{{x}, {kernel(x)}};
   });
-  Expect(registry, MakeExpNode(), "test_cpu_exp_float64", {opset}, [=]() -> IoData {
-    Tensor x = Tensor::FromDouble("", shape, {-2.0, -1.0, 0.0, 0.5, 1.0, 2.0});
+  Expect(registry, MakeNode("Exp", {"x"}, {"y"}), "test_cpu_exp_float64", {opset}, [=]() -> IoData {
+    Tensor x = MakeTensor(DataType::DOUBLE, shape, f);
     const onnx_light_cpu::ExpKernel kernel{KernelContext{opset}};
     return IoData{{x}, {kernel(x)}};
   });
-  Expect(registry, MakeExpNode(), "test_cpu_exp_float16", {opset}, [=]() -> IoData {
-    Tensor x = rt_ns::MakeFloat16Tensor("", shape, f);
+  Expect(registry, MakeNode("Exp", {"x"}, {"y"}), "test_cpu_exp_float16", {opset}, [=]() -> IoData {
+    Tensor x = MakeTensor(DataType::FLOAT16, shape, f);
     const onnx_light_cpu::ExpKernel kernel{KernelContext{opset}};
     return IoData{{x}, {kernel(x)}};
   });
-  Expect(registry, MakeExpNode(), "test_cpu_exp_bfloat16", {opset}, [=]() -> IoData {
-    Tensor x = MakeBfloat16Tensor(shape, f);
-    const onnx_light_cpu::ExpKernel kernel{KernelContext{opset}};
-    return IoData{{x}, {kernel(x)}};
-  });
+  Expect(registry, MakeNode("Exp", {"x"}, {"y"}), "test_cpu_exp_bfloat16", {opset},
+         [=]() -> IoData {
+           Tensor x = MakeTensor(DataType::BFLOAT16, shape, f);
+           const onnx_light_cpu::ExpKernel kernel{KernelContext{opset}};
+           return IoData{{x}, {kernel(x)}};
+         });
 }
 
 } // namespace onnx_light_cpu::backend_test

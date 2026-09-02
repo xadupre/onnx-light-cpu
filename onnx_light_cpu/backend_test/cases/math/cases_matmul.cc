@@ -26,7 +26,6 @@ using bt_ns::Expect;
 using bt_ns::IoData;
 using bt_ns::TestCase;
 using bt_ns::TestMode;
-using ONNX_LIGHT_NAMESPACE::NodeProto;
 using rt_ns::DataType;
 using rt_ns::DefaultOpset;
 using rt_ns::KernelContext;
@@ -41,15 +40,6 @@ struct MatMulShape {
   bool rank3 = false;
 };
 
-NodeProto MakeMatMulNode() {
-  NodeProto node;
-  node.set_op_type("MatMul");
-  node.add_input("A");
-  node.add_input("B");
-  node.add_output("Y");
-  return node;
-}
-
 void RegisterMatMulCase(std::vector<TestCase> &registry, const OpsetId &opset,
                         const MatMulShape &shape, DataType data_type, bool benchmark) {
   const std::string name = "test_cpu_matmul_" + std::string(shape.name) + "_" +
@@ -58,7 +48,8 @@ void RegisterMatMulCase(std::vector<TestCase> &registry, const OpsetId &opset,
   const std::int64_t b_count = shape.k * shape.n;
   const std::int64_t y_count = shape.m * shape.n;
   if (benchmark) {
-    Expect(registry, MakeMatMulNode(), name, {opset}, {a_count, b_count}, {y_count},
+    Expect(registry, MakeNode("MatMul", {"A", "B"}, {"Y"}), name, {opset}, {a_count, b_count},
+           {y_count},
            [opset, shape, data_type](bool generate_expected_outputs) -> IoData {
              const rt_ns::Shape a_shape =
                  shape.rank3 ? rt_ns::Shape{1, shape.m, shape.k} : rt_ns::Shape{shape.m, shape.k};
@@ -77,8 +68,8 @@ void RegisterMatMulCase(std::vector<TestCase> &registry, const OpsetId &opset,
                                               : rt_ns::Shape{shape.m, shape.n})});
     return;
   }
-  Expect(registry, MakeMatMulNode(), name, {opset}, {a_count, b_count}, {y_count},
-         [opset, shape, data_type]() -> IoData {
+  Expect(registry, MakeNode("MatMul", {"A", "B"}, {"Y"}), name, {opset}, {a_count, b_count},
+         {y_count}, [opset, shape, data_type]() -> IoData {
            const rt_ns::Shape a_shape =
                shape.rank3 ? rt_ns::Shape{1, shape.m, shape.k} : rt_ns::Shape{shape.m, shape.k};
            Tensor a = MakeBenchmarkTensor(data_type, a_shape, 433);

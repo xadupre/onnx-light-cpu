@@ -11,13 +11,29 @@
 
 #include <cmath>
 #include <cstdint>
+#include <initializer_list>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace onnx_light_cpu::backend_test {
 
 namespace rt_ns = ONNX_LIGHT_NAMESPACE::core::runtime;
+
+inline ONNX_LIGHT_NAMESPACE::NodeProto MakeNode(std::string_view op_type,
+                                                std::initializer_list<const char *> inputs,
+                                                std::initializer_list<const char *> outputs) {
+  ONNX_LIGHT_NAMESPACE::NodeProto node;
+  node.set_op_type(std::string(op_type));
+  for (const char *input : inputs) {
+    node.add_input(input);
+  }
+  for (const char *output : outputs) {
+    node.add_output(output);
+  }
+  return node;
+}
 
 inline const char *DataTypeSuffix(rt_ns::DataType data_type) {
   switch (data_type) {
@@ -44,6 +60,22 @@ inline const char *DataTypeSuffix(rt_ns::DataType data_type) {
   }
 }
 
+inline rt_ns::Tensor MakeTensor(rt_ns::DataType data_type, const rt_ns::Shape &shape,
+                                const std::vector<float> &values) {
+  switch (data_type) {
+  case rt_ns::DataType::FLOAT:
+    return rt_ns::Tensor::FromFloat("", shape, values);
+  case rt_ns::DataType::DOUBLE:
+    return rt_ns::Tensor::FromDouble("", shape, std::vector<double>(values.begin(), values.end()));
+  case rt_ns::DataType::FLOAT16:
+    return rt_ns::MakeFloat16Tensor("", shape, values);
+  case rt_ns::DataType::BFLOAT16:
+    return rt_ns::MakeBfloat16Tensor("", shape, values);
+  default:
+    throw std::invalid_argument("Backend test tensor requires a floating-point data type.");
+  }
+}
+
 inline rt_ns::Tensor MakeBenchmarkTensor(rt_ns::DataType data_type, const rt_ns::Shape &shape,
                                          std::uint64_t seed, bool positive = false) {
   std::vector<float> values = rt_ns::Randn<float>(shape, seed);
@@ -54,9 +86,10 @@ inline rt_ns::Tensor MakeBenchmarkTensor(rt_ns::DataType data_type, const rt_ns:
   }
   switch (data_type) {
   case rt_ns::DataType::FLOAT:
-    return rt_ns::Tensor::FromFloat("", shape, values);
   case rt_ns::DataType::DOUBLE:
-    return rt_ns::Tensor::FromDouble("", shape, std::vector<double>(values.begin(), values.end()));
+  case rt_ns::DataType::FLOAT16:
+  case rt_ns::DataType::BFLOAT16:
+    return MakeTensor(data_type, shape, values);
   case rt_ns::DataType::INT8: {
     std::vector<std::int8_t> converted(values.size());
     for (std::size_t i = 0; i < converted.size(); ++i) {
@@ -92,10 +125,6 @@ inline rt_ns::Tensor MakeBenchmarkTensor(rt_ns::DataType data_type, const rt_ns:
     }
     return rt_ns::Tensor::FromInt64("", shape, converted);
   }
-  case rt_ns::DataType::FLOAT16:
-    return rt_ns::MakeFloat16Tensor("", shape, values);
-  case rt_ns::DataType::BFLOAT16:
-    return rt_ns::MakeBfloat16Tensor("", shape, values);
   default:
     throw std::invalid_argument("Unsupported benchmark tensor data type.");
   }
@@ -107,10 +136,7 @@ void RegisterUnaryBenchmark(
     const std::string &op_type, KernelFactory kernel_factory, const rt_ns::OpsetId &opset,
     rt_ns::DataType data_type, std::int64_t size) {
   namespace bt_ns = ONNX_LIGHT_NAMESPACE::core::backend_test;
-  ONNX_LIGHT_NAMESPACE::NodeProto node;
-  node.set_op_type(op_type);
-  node.add_input("x");
-  node.add_output("y");
+  ONNX_LIGHT_NAMESPACE::NodeProto node = MakeNode(op_type, {"x"}, {"y"});
   std::string op_tag = op_type;
   for (char &character : op_tag) {
     if (character >= 'A' && character <= 'Z') {
