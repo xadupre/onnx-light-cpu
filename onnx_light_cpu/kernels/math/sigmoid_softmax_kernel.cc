@@ -150,7 +150,7 @@ void SigmoidKernel::operator()(const Tensor &x, Tensor &output) const {
   case DataType::BFLOAT16:
     SigmoidHalf(reinterpret_cast<const std::uint16_t *>(x.bytes()),
                 reinterpret_cast<std::uint16_t *>(output.mutable_bytes()), count,
-                detail::Bfloat16BitsToFloat, detail::FloatToBfloat16Bits);
+                detail::Bfloat16BitsToFloat, detail::FloatToBFloat16Bits);
     return;
   default:
     throw std::invalid_argument(
@@ -209,7 +209,7 @@ void SoftmaxKernel::operator()(const Tensor &x, std::int64_t axis, Tensor &outpu
   case DataType::BFLOAT16:
     SoftmaxHalf(reinterpret_cast<const std::uint16_t *>(x.bytes()),
                 reinterpret_cast<std::uint16_t *>(output.mutable_bytes()), outer, axis_dim, inner,
-                detail::Bfloat16BitsToFloat, detail::FloatToBfloat16Bits);
+                detail::Bfloat16BitsToFloat, detail::FloatToBFloat16Bits);
     return;
   default:
     throw std::invalid_argument(
