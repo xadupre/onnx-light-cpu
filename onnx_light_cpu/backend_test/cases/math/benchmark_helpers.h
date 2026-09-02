@@ -34,6 +34,10 @@ void RegisterUnaryBenchmark(
     std::vector<ONNX_LIGHT_NAMESPACE::core::backend_test::TestCase> &registry,
     const std::string &op_type, KernelFactory kernel_factory, const rt_ns::OpsetId &opset,
     rt_ns::DataType data_type, std::int64_t size) {
+  // Single-element timings measure dispatch overhead rather than unary throughput.
+  if (size == 1) {
+    return;
+  }
   namespace bt_ns = ONNX_LIGHT_NAMESPACE::core::backend_test;
   ONNX_LIGHT_NAMESPACE::NodeProto node = MakeNode(op_type, {"x"}, {"y"});
   std::string op_tag = op_type;
