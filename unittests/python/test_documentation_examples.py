@@ -70,7 +70,7 @@ class TestDocumentationExamples(ExtTestCase):
         )
         assert (
             _argument_default_expression(_BACKEND_CASES_EXAMPLE, "--threads")
-            == "min(4, os.cpu_count() or 1)"
+            == "_AVAILABLE_CPU_COUNT"
         )
         assert _argument_default_expression(_BACKEND_CASES_EXAMPLE, "--run-first") == "'ol'"
 

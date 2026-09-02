@@ -902,7 +902,7 @@ TEST(ComputeAttentionFloat16Streaming, MatchesFloat32ReferenceWithinHalfPrecisio
   ExpectClose(y, expected, 5e-3f);
 }
 
-TEST(ComputeAttentionFloat16Streaming, TiledQueryLengthEightMatchesFloat32Reference) {
+TEST(ComputeAttentionFloat16Streaming, ShortQueryLengthEightMatchesFloat32Reference) {
   AttentionDescriptor descriptor;
   constexpr std::size_t batch = 1, heads = 2, q_len = 8, kv_len = 13, head_dim = 8, v_head_dim = 6;
   const std::int64_t q_shape[] = {batch, heads, q_len, head_dim};

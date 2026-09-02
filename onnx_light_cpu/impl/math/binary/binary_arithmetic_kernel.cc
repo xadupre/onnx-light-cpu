@@ -708,10 +708,42 @@ void BinaryPReluFloat32RightScalar(const float *left, float right, float *out, s
   fn(left, right, out, count);
 }
 
+template <typename T, T MaxRoot>
+bool BinarySquare_Scalar(const T *input, T *output, std::size_t count) {
+  bool overflow = false;
+  for (std::size_t i = 0; i < count; ++i) {
+    const bool element_overflows = input[i] > MaxRoot || input[i] < -MaxRoot;
+    overflow |= element_overflows;
+    if (!element_overflows) {
+      output[i] = input[i] * input[i];
+    }
+  }
+  return !overflow;
+}
+
+bool BinarySquareInt32(const std::int32_t *input, std::int32_t *output, std::size_t count) {
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
+  if (DetectSimdLevel() >= SimdLevel::kAVX512) {
+    return BinarySquareInt32_AVX512(input, output, count);
+  }
+#endif
+  return BinarySquare_Scalar<std::int32_t, 46340>(input, output, count);
+}
+
+bool BinarySquareInt64(const std::int64_t *input, std::int64_t *output, std::size_t count) {
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
+  if (DetectSimdLevel() >= SimdLevel::kAVX512) {
+    return BinarySquareInt64_AVX512(input, output, count);
+  }
+#endif
+  return BinarySquare_Scalar<std::int64_t, 3037000499>(input, output, count);
+}
+
 template <typename T, bool Left>
 void BinaryBitShiftContiguous(const T *left, const T *right, T *out, std::size_t count) {
 #if ONNX_LIGHT_CPU_BINARY_X86
-  if (DetectSimdLevel() >= SimdLevel::kAVX2) {
+  static const bool use_avx2 = DetectSimdLevel() >= SimdLevel::kAVX2;
+  if (use_avx2) {
     BinaryBitShift_AVX2<T, Left, ShiftInputMode::kContiguous>(left, right, out, count);
     return;
   }
@@ -722,7 +754,8 @@ void BinaryBitShiftContiguous(const T *left, const T *right, T *out, std::size_t
 template <typename T, bool Left>
 void BinaryBitShiftLeftScalar(T left, const T *right, T *out, std::size_t count) {
 #if ONNX_LIGHT_CPU_BINARY_X86
-  if (DetectSimdLevel() >= SimdLevel::kAVX2) {
+  static const bool use_avx2 = DetectSimdLevel() >= SimdLevel::kAVX2;
+  if (use_avx2) {
     BinaryBitShift_AVX2<T, Left, ShiftInputMode::kLeftScalar>(&left, right, out, count);
     return;
   }
@@ -733,7 +766,8 @@ void BinaryBitShiftLeftScalar(T left, const T *right, T *out, std::size_t count)
 template <typename T, bool Left>
 void BinaryBitShiftRightScalar(const T *left, T right, T *out, std::size_t count) {
 #if ONNX_LIGHT_CPU_BINARY_X86
-  if (DetectSimdLevel() >= SimdLevel::kAVX2) {
+  static const bool use_avx2 = DetectSimdLevel() >= SimdLevel::kAVX2;
+  if (use_avx2) {
     BinaryBitShift_AVX2<T, Left, ShiftInputMode::kRightScalar>(left, &right, out, count);
     return;
   }
@@ -742,6 +776,22 @@ void BinaryBitShiftRightScalar(const T *left, T right, T *out, std::size_t count
 }
 
 template <typename T> bool BinaryBitShiftHasInvalidAmount(const T *shifts, std::size_t count) {
+  constexpr std::size_t kMinParallelBytes = 1024 * 1024;
+  if (count <= kMinParallelBytes / sizeof(T)) {
+#if ONNX_LIGHT_CPU_BINARY_X86
+    if (DetectSimdLevel() >= SimdLevel::kAVX2) {
+      return BinaryBitShiftHasInvalidAmount_AVX2(shifts, count);
+    }
+#endif
+    const T bit_width = static_cast<T>(sizeof(T) * 8);
+    for (std::size_t i = 0; i < count; ++i) {
+      if (shifts[i] >= bit_width) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   std::atomic<bool> invalid{false};
   ExecuteRanges(static_cast<std::int64_t>(count), static_cast<double>(sizeof(T)),
                 [&](std::int64_t begin, std::int64_t end) {

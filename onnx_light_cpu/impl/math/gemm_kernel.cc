@@ -1252,8 +1252,7 @@ void GemmSkinnyN(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::
   // reduction with a serial dependency chain.
   const std::size_t a_stride = trans_a ? M : 1;
   const std::size_t b_stride = trans_b ? 1 : N;
-  const double cost = static_cast<double>(N) * K / kGemmSkinnyNFmasPerParallelWorkUnit;
-  ExecuteRanges(static_cast<std::int64_t>(M), cost, [&](std::int64_t begin, std::int64_t end) {
+  const auto execute = [&](std::int64_t begin, std::int64_t end) {
     for (std::int64_t row = begin; row < end; ++row) {
       const std::size_t m = static_cast<std::size_t>(row);
       const SrcT *a_row = trans_a ? A + m : A + m * K;
@@ -1265,7 +1264,16 @@ void GemmSkinnyN(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::
         y_row[n] = alpha * acc + (has_bias ? beta * c_row[n] : T(0));
       }
     }
-  });
+  };
+  constexpr std::size_t kLargeMatrixElements = 8 * 1024 * 1024;
+  if (K != 0 && M >= kLargeMatrixElements / K) {
+    constexpr std::int64_t kMaximumParticipants = 32;
+    ExecuteRanges(static_cast<std::int64_t>(M), ExecutionSchedule{1, 1, kMaximumParticipants},
+                  execute);
+  } else {
+    const double cost = static_cast<double>(N) * K / kGemmSkinnyNFmasPerParallelWorkUnit;
+    ExecuteRanges(static_cast<std::int64_t>(M), cost, execute);
+  }
 }
 
 // Dedicated GEMV / skinny-M kernel. When ``M`` is small (a single example or a
@@ -1409,8 +1417,14 @@ void GemmFiveLoopRange(bool trans_a, bool trans_b, std::size_t M, std::size_t N,
     const std::size_t task_columns = std::min(column_block, N);
     const double cost = static_cast<double>(std::min(blocking.mc, M)) * task_columns *
                         (k_end - k_begin) / kGemmFmasPerParallelWorkUnit;
-    const std::size_t requested_blocks =
-        static_cast<std::size_t>(ExecutionBlockCount(static_cast<std::int64_t>(task_count), cost));
+    // Large SMT pools oversubscribe compute-bound packed GEMM. Keep all
+    // configured workers on smaller pools and prefer one worker per physical
+    // core on high-thread-count x86 servers.
+    const std::size_t participant_limit =
+        kind == GemmKernelKind::kAVX512 && thread_count >= 64 ? thread_count / 2 : thread_count;
+    const std::size_t requested_blocks = std::min<std::size_t>(
+        static_cast<std::size_t>(ExecutionBlockCount(static_cast<std::int64_t>(task_count), cost)),
+        std::max<std::size_t>(1, participant_limit));
     const std::size_t equal_block_size = (task_count + requested_blocks - 1) / requested_blocks;
     const std::size_t equal_block_count = (task_count + equal_block_size - 1) / equal_block_size;
     const std::size_t participant_count =
@@ -1757,7 +1771,7 @@ void GemmImpl(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::siz
       const bool medium_square = std::is_same_v<T, float> && kind == GemmKernelKind::kAVX512 &&
                                  !trans_a && !trans_b && M >= 128 && M <= 512 && N >= 128 &&
                                  N <= 512 && K <= 512;
-      if ((!trans_a && !trans_b && K <= 128) || medium_square) {
+      if ((!trans_a && !trans_b && K <= 128 && N <= 4096) || medium_square) {
         GemmDirect(M, N, K, alpha, A, B, beta, C, Y, kind, tile, runtime_blocking, bias_stride,
                    bias_mode);
         return;

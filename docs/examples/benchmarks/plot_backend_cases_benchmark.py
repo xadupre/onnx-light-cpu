@@ -57,6 +57,10 @@ from onnx_light_cpu import (
     used_kernel_names,
 )
 
+_AVAILABLE_CPU_COUNT = (
+    len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else os.cpu_count() or 1
+)
+
 assert has_backend_test_cases(), (
     "onnx-light-cpu must be built with onnx-light's backend test registry "
     "(register_backend_test_cases binding unavailable)."
@@ -85,8 +89,8 @@ parser.add_argument(
 parser.add_argument(
     "--threads",
     type=int,
-    default=min(4, os.cpu_count() or 1),
-    help="threads used by both runtimes (default: min(4, available CPUs))",
+    default=_AVAILABLE_CPU_COUNT,
+    help="threads used by both runtimes (default: all available CPUs)",
 )
 parser.add_argument(
     "-r",

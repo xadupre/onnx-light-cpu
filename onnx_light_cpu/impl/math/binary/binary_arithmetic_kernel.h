@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 
 // The binary arithmetic kernels dispatch on the same runtime SIMD levels as
 // the rest of the math kernel family.
@@ -50,6 +51,9 @@ void BinaryPReluFloat32Contiguous(const float *left, const float *right, float *
 void BinaryPReluFloat32LeftScalar(float left, const float *right, float *out, std::size_t count);
 void BinaryPReluFloat32RightScalar(const float *left, float right, float *out, std::size_t count);
 
+bool BinarySquareInt32(const std::int32_t *input, std::int32_t *output, std::size_t count);
+bool BinarySquareInt64(const std::int64_t *input, std::int64_t *output, std::size_t count);
+
 template <typename T, bool Left>
 void BinaryBitShiftContiguous(const T *left, const T *right, T *out, std::size_t count);
 
@@ -87,6 +91,8 @@ void BinaryPReluFloat32_AVX512(const float *left, const float *right, float *out
                                std::size_t count);
 void BinaryPReluFloat32Left_AVX512(float left, const float *right, float *out, std::size_t count);
 void BinaryPReluFloat32Right_AVX512(const float *left, float right, float *out, std::size_t count);
+bool BinarySquareInt32_AVX512(const std::int32_t *input, std::int32_t *output, std::size_t count);
+bool BinarySquareInt64_AVX512(const std::int64_t *input, std::int64_t *output, std::size_t count);
 #endif // ONNX_LIGHT_CPU_HAVE_AVX512
 
 #ifdef ONNX_LIGHT_CPU_HAVE_SVE
