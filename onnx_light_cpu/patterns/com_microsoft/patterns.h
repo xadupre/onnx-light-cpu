@@ -13,22 +13,22 @@ namespace onnx_light_cpu {
  *
  * @code
  * Before:
- *                 +-----+
- *   A, bias ----> | Add |
- *                 +-----+
- *                    |
- *                    v
+ *                 ┌─────┐
+ *   A, bias ─────→│ Add │
+ *                 └─────┘
+ *                    │
+ *                    ↓
  *                    z
- *                    |
- *                    v
- *                 +------+
- *                 | Gelu | ----> Y
- *                 +------+
+ *                    │
+ *                    ↓
+ *                 ┌──────┐
+ *                 │ Gelu │────→ Y
+ *                 └──────┘
  *
  * After:
- *                 +----------+
- *   A, bias ----> | BiasGelu | ----> Y
- *                 +----------+
+ *                 ┌──────────┐
+ *   A, bias ─────→│ BiasGelu │────→ Y
+ *                 └──────────┘
  * @endcode
  *
  * The bias must broadcast over the last dimension of a floating-point input,
@@ -53,38 +53,30 @@ public:
  *
  * @code
  * Before:
- *          +--------------+
- *   A ---> | Unsqueeze(1) | ---+
- *          +--------------+    |
- *                              v
- *                           +-----+
- *                           | Sub |
- *                           +-----+
- *                              ^
- *          +--------------+    |
- *   B ---> | Unsqueeze(0) | ---+
- *          +--------------+
- *                              |
- *                              v
- *                         difference
- *                              |
- *                              v
- *                           +----------+
- *                           | Mul self |
- *                           +----------+
- *                              |
- *                              v
- *                     squared difference
- *                              |
- *                              v
- *                       +---------------+
- *                       | ReduceSum(-1) | ----> Y
- *                       +---------------+
+ *          ┌──────────────┐
+ *   A ────→│ Unsqueeze(1) │───┐
+ *          └──────────────┘   │
+ *                             │
+ *          ┌──────────────┐   │   ┌─────┐
+ *   B ────→│ Unsqueeze(0) │───┴──→│ Sub │────→ difference
+ *          └──────────────┘       └─────┘           │
+ *                                                   ↓
+ *                                               ┌──────────┐
+ *                                               │ Mul self │
+ *                                               └──────────┘
+ *                                                   │
+ *                                                   ↓
+ *                                           squared difference
+ *                                                   │
+ *                                                   ↓
+ *                                            ┌───────────────┐
+ *                                            │ ReduceSum(-1) │────→ Y
+ *                                            └───────────────┘
  *
  * After:
- *              +--------------------------+
- *   A, B ----> | CDist metric=sqeuclidean | ----> Y
- *              +--------------------------+
+ *              ┌──────────────────────────┐
+ *   A, B ─────→│ CDist metric=sqeuclidean │────→ Y
+ *              └──────────────────────────┘
  * @endcode
  *
  * Both inputs must have rank two. The difference must be squared by an
@@ -110,29 +102,29 @@ public:
  *
  * @code
  * Before:
- *                    +-------------------------+
- *   query, key, ----> | Attention               | ----> output
- *   value             | q_heads != kv_heads     |
- *                     +-------------------------+
+ *                    ┌─────────────────────────┐
+ *   query, key, ─────→│ Attention               │────→ output
+ *   value             │ q_heads != kv_heads     │
+ *                    └─────────────────────────┘
  *
  * After:
- *   key ----------------> +-------+ --> +--------+ --> sequence length
- *                         | Shape |     | Gather |
- *                         +-------+     +--------+
- *                                             |
- *                                             +--> +-----+ --> +------+ --+
- *                                                  | Sub |     | Cast |   |
- *                                                  +-----+     +------+   |
- *                                                                         v
- *   query --------------> +-------+ --> +--------+ --> +-----------+ --> +--------+
- *                         | Shape |     | Gather |     | Unsqueeze |     | Expand |
- *                         +-------+     +--------+     +-----------+     +--------+
- *                                                                         |
- *                                                                         v
- *                    +---------------------------------------------+   seqlens_k
- *   query, key, ----> | com.microsoft::GroupQueryAttention         | <-----+
- *   value             | num_heads, kv_num_heads, causal, scale     | ----> output
- *                    +---------------------------------------------+
+ *   key ─────────────────→┌───────┐────→┌────────┐────→ sequence length
+ *                         │ Shape │     │ Gather │
+ *                         └───────┘     └────────┘
+ *                                             │
+ *                                             └──→┌─────┐────→┌──────┐──┐
+ *                                                 │ Sub │     │ Cast │  │
+ *                                                 └─────┘     └──────┘  │
+ *                                                                        ↓
+ *   query ───────────────→┌───────┐────→┌────────┐────→┌───────────┐────→┌────────┐
+ *                         │ Shape │     │ Gather │     │ Unsqueeze │     │ Expand │
+ *                         └───────┘     └────────┘     └───────────┘     └────────┘
+ *                                                                        │
+ *                                                                        ↓
+ *                    ┌─────────────────────────────────────────────┐  seqlens_k
+ *   query, key, ─────→│ com.microsoft::GroupQueryAttention         │←────┘
+ *   value             │ num_heads, kv_num_heads, causal, scale     │────→ output
+ *                    └─────────────────────────────────────────────┘
  * @endcode
  *
  * The generated shape subgraph derives the cache-free sequence metadata
