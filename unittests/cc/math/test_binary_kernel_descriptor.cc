@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "onnx_light_cpu/impl/math/binary/binary_comparison_kernel.h"
 #include "onnx_light_cpu/impl/math/binary/binary_kernel_descriptor.h"
 #include "onnx_light_cpu/impl/math/binary/binary_manifest.h"
 #include "onnx_light_cpu/impl/math/half_conversion.h"
@@ -20,10 +21,27 @@
 namespace {
 
 using BinaryDataType = onnx_light_cpu::DataType;
+using onnx_light_cpu::BinaryComparisonKind;
 using onnx_light_cpu::BinaryKernelDescriptor;
 using onnx_light_cpu::BinaryOperator;
 using onnx_light_cpu::GetBinaryManifest;
 using onnx_light_cpu::GetBinaryManifestEntry;
+
+bool ExpectedComparison(float left, float right, BinaryComparisonKind kind) {
+  switch (kind) {
+  case BinaryComparisonKind::kEqual:
+    return left == right;
+  case BinaryComparisonKind::kGreater:
+    return left > right;
+  case BinaryComparisonKind::kGreaterOrEqual:
+    return left >= right;
+  case BinaryComparisonKind::kLess:
+    return left < right;
+  case BinaryComparisonKind::kLessOrEqual:
+    return left <= right;
+  }
+  return false;
+}
 
 TEST(BinaryManifest, CoversRoadmapScopeExactlyOnce) {
   const auto manifest = GetBinaryManifest();
@@ -124,6 +142,97 @@ TEST(BinaryKernelDescriptor, SameTypeSignaturesProvideAllBulkLoopFamilies) {
       EXPECT_NE(adapter.bulk_contiguous, nullptr) << entry.op_type;
       EXPECT_NE(adapter.bulk_left_scalar, nullptr) << entry.op_type;
       EXPECT_NE(adapter.bulk_right_scalar, nullptr) << entry.op_type;
+    }
+  }
+}
+
+TEST(BinaryKernelDescriptor, Float16ComparisonBulkPreservesIeeeSemanticsAndTails) {
+  struct ComparisonCase {
+    const char *name;
+    int version;
+    BinaryComparisonKind kind;
+  };
+  constexpr std::array<ComparisonCase, 5> cases = {
+      ComparisonCase{"Equal", 19, BinaryComparisonKind::kEqual},
+      ComparisonCase{"Greater", 13, BinaryComparisonKind::kGreater},
+      ComparisonCase{"GreaterOrEqual", 16, BinaryComparisonKind::kGreaterOrEqual},
+      ComparisonCase{"Less", 13, BinaryComparisonKind::kLess},
+      ComparisonCase{"LessOrEqual", 16, BinaryComparisonKind::kLessOrEqual},
+  };
+  constexpr std::array<float, 19> left_values = {
+      0.0f,
+      -0.0f,
+      1.0f,
+      -2.0f,
+      std::numeric_limits<float>::infinity(),
+      -std::numeric_limits<float>::infinity(),
+      std::numeric_limits<float>::quiet_NaN(),
+      0.5f,
+      -0.5f,
+      3.0f,
+      -4.0f,
+      65504.0f,
+      -65504.0f,
+      0.00006103515625f,
+      -0.00006103515625f,
+      7.0f,
+      7.0f,
+      -8.0f,
+      9.0f,
+  };
+  constexpr std::array<float, 19> right_values = {
+      -0.0f,
+      0.0f,
+      2.0f,
+      -2.0f,
+      std::numeric_limits<float>::infinity(),
+      0.0f,
+      1.0f,
+      std::numeric_limits<float>::quiet_NaN(),
+      -1.0f,
+      2.0f,
+      -5.0f,
+      65504.0f,
+      65504.0f,
+      0.00006103515625f,
+      0.0f,
+      8.0f,
+      6.0f,
+      -8.0f,
+      10.0f,
+  };
+  std::array<std::uint16_t, left_values.size()> left{};
+  std::array<std::uint16_t, right_values.size()> right{};
+  for (std::size_t i = 0; i < left.size(); ++i) {
+    left[i] = onnx_light_cpu::detail::FloatToFloat16Bits(left_values[i]);
+    right[i] = onnx_light_cpu::detail::FloatToFloat16Bits(right_values[i]);
+  }
+
+  for (const auto &comparison : cases) {
+    const BinaryKernelDescriptor descriptor(comparison.name, comparison.version, {});
+    const auto &adapter = descriptor.ResolveAdapter(BinaryDataType::FLOAT16,
+                                                    BinaryDataType::FLOAT16, BinaryDataType::BOOL);
+    std::array<std::uint8_t, left.size()> output{};
+
+    adapter.bulk_contiguous(left.data(), right.data(), output.data(), output.size());
+    for (std::size_t i = 0; i < output.size(); ++i) {
+      EXPECT_EQ(output[i],
+                ExpectedComparison(left_values[i], right_values[i], comparison.kind) ? 1U : 0U)
+          << comparison.name << " contiguous lane " << i;
+    }
+
+    adapter.bulk_left_scalar(left.data() + 3, right.data(), output.data(), output.size());
+    for (std::size_t i = 0; i < output.size(); ++i) {
+      EXPECT_EQ(output[i],
+                ExpectedComparison(left_values[3], right_values[i], comparison.kind) ? 1U : 0U)
+          << comparison.name << " left-scalar lane " << i;
+    }
+
+    adapter.bulk_right_scalar(left.data(), right.data() + 5, output.data(), output.size());
+    for (std::size_t i = 0; i < output.size(); ++i) {
+      EXPECT_EQ(output[i],
+                ExpectedComparison(left_values[i], right_values[5], comparison.kind) ? 1U : 0U)
+          << comparison.name << " right-scalar lane " << i;
     }
   }
 }
