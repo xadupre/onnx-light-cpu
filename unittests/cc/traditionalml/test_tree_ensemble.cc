@@ -847,6 +847,30 @@ TEST(TreeEnsembleOracle, BalancedFloatForestUsesExactFixedDepthTraversal) {
   }
 }
 
+TEST(TreeEnsembleOracle, BalancedFloatForestUsesRowParallelFixedDepthTraversal) {
+  const TreeEnsembleAttributes attributes = BalancedForest(1024);
+  const TreeEnsemblePlan plan(attributes);
+  constexpr std::size_t kRows = 131;
+  std::vector<float> input(kRows * 8);
+  for (std::size_t index = 0; index < input.size(); ++index) {
+    input[index] = static_cast<float>(static_cast<int>(index % 11) - 5) * 0.25F;
+  }
+  const std::vector<double> oracle_input(input.begin(), input.end());
+  const std::vector<double> expected = TreeEnsembleOracle(attributes).Evaluate(oracle_input, kRows);
+
+  std::vector<float> actual(kRows);
+  ThreadedExecutor executor;
+  onnx_light_cpu::ExecutionExecutorView view{&executor, 4, &ThreadedExecutor::Run};
+  onnx_light_cpu::ExecutionExecutorScope scope(&view);
+  EXPECT_EQ(plan.SelectExecution(kRows).strategy, TreeEnsembleExecutionStrategy::kRowParallel);
+  plan.EvaluateInto(input.data(), input.size(), kRows, actual.data());
+
+  EXPECT_GT(executor.dispatches.load(std::memory_order_relaxed), 0U);
+  for (std::size_t row = 0; row < kRows; ++row) {
+    EXPECT_NEAR(actual[row], expected[row], 1e-5) << "row=" << row;
+  }
+}
+
 TEST(TreeEnsembleOracle, ThresholdsSignedZeroInfinityAndMissingRouting) {
   TreeEnsembleAttributes attributes = Stump();
   attributes.value_type = DataType::DOUBLE;
