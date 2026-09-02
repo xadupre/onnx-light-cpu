@@ -220,9 +220,12 @@ tuning ABI 2 for every supported exact operator/input-type key with
 
 For FP32 ``Abs``, ``Exp``, and ``Log``, the executor cost follows the SIMD
 implementation selected at runtime. The existing AVX2-calibrated costs remain
-unchanged; narrower or wider implementations scale them by
-``8 / SIMD lanes``. Processor profiles can continue to refine thresholds,
-block sizes, and participant limits without changing this portable fallback.
+unchanged; implementations scale them by ``8 / SIMD lanes``. As the
+memory-bound exception, ``Abs`` is not reduced below 1.0 for AVX-512 because
+doing so causes the shared model to select ranges that are too small. INT32
+``Abs`` uses the same read/write cost and a compute cost of 1.0. Processor
+profiles can continue to refine thresholds, block sizes, and participant
+limits without changing this portable fallback.
 
 ``Abs`` and ``Not`` additionally accept ``parallel.preferred_participants``.
 Zero leaves the participant count automatic. A positive value requests that
@@ -230,7 +233,9 @@ exact count once parallel execution is worthwhile, but the executor still
 clamps it to ``parallel.max_participants`` and the session limit.
 ``Abs`` also accepts ``memory.streaming_store_threshold_bytes``; zero disables
 non-temporal stores, while a positive value enables them for FP32 tensors at
-or above that total input size.
+or above that total input size. The portable default is zero: streaming stores
+remain opt-in because their benefit depends on worker range size and memory
+topology, and every worker must publish them with its own fence.
 
 The portable defaults retain SIMD execution inline through the measured
 small/medium-tensor region:
@@ -248,9 +253,9 @@ small/medium-tensor region:
      - 256 KiB
      - 32
    * - ``Abs`` INT32
-     - 2 MiB
+     - 512 KiB
      - 256 KiB
-     - executor maximum
+     - 32
    * - ``Abs`` FP64/INT64
      - 2 MiB
      - 512 KiB
