@@ -205,6 +205,20 @@ template <typename T> void CheckValidationFailures() {
   }
 }
 
+template <typename T> void CheckPhysicalShiftValidation() {
+  BinaryKernelDescriptor::Attributes attributes;
+  attributes.bitshift_direction = BinaryKernelDescriptor::Attributes::BitShiftDirection::kLeft;
+  const BinaryKernelDescriptor descriptor("BitShift", 11, attributes);
+  const BinaryDataType type = DataTypeOf<T>();
+  const auto &adapter = descriptor.ResolveAdapter(type, type, type);
+  ASSERT_NE(adapter.validate_right_bulk, nullptr);
+
+  const std::vector<T> valid{T(0), static_cast<T>(sizeof(T) * 8 - 1)};
+  EXPECT_FALSE(adapter.validate_right_bulk(valid.data(), valid.size()));
+  const std::vector<T> invalid{T(0), static_cast<T>(sizeof(T) * 8)};
+  EXPECT_THROW(adapter.validate_right_bulk(invalid.data(), invalid.size()), std::invalid_argument);
+}
+
 TEST(BinaryIntegerKernel, CoversEverySignedAndUnsignedWidthWithTail) {
   CheckIntegerKernels<std::int8_t>();
   CheckIntegerKernels<std::int16_t>();
@@ -248,6 +262,13 @@ TEST(BinaryIntegerKernel, RejectsUndefinedInputsBeforeWritingOutput) {
   CheckValidationFailures<std::uint16_t>();
   CheckValidationFailures<std::uint32_t>();
   CheckValidationFailures<std::uint64_t>();
+}
+
+TEST(BinaryIntegerKernel, ValidatesPhysicalShiftTensorWithoutExpandedPairScan) {
+  CheckPhysicalShiftValidation<std::uint8_t>();
+  CheckPhysicalShiftValidation<std::uint16_t>();
+  CheckPhysicalShiftValidation<std::uint32_t>();
+  CheckPhysicalShiftValidation<std::uint64_t>();
 }
 
 TEST(BinaryIntegerKernel, ValidatesSignedDivisionOverflowForActualPairsOnly) {
