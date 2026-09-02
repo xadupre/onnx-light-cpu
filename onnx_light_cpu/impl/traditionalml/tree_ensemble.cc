@@ -178,8 +178,8 @@ TreeEnsembleTuningPolicy MakeSafePolicy(std::size_t trees, std::size_t targets, 
                                         TreeEnsembleExecutionStrategy::kTreeMajorBatch,
                                         kTreeMajorBatchRows, 1, trees, targets));
     policy.regions.push_back(MakeRegion(
-        kTreeParallelRowLimit - 1, TreeEnsembleExecutionStrategy::kTreeParallel,
-        kTreeMajorBatchRows, tree_threads, trees, targets, cache_blocking.trees_per_l1_block));
+        kTreeParallelRowLimit, TreeEnsembleExecutionStrategy::kTreeParallel, kTreeMajorBatchRows,
+        tree_threads, trees, targets, cache_blocking.trees_per_l1_block));
     policy.regions.push_back(MakeRegion(std::nullopt, TreeEnsembleExecutionStrategy::kRowParallel,
                                         1, threads, trees, targets));
     return policy;
@@ -1691,7 +1691,7 @@ TreeEnsemblePlan::SelectExecution(std::size_t rows, std::size_t effective_thread
       fallback.strategy = TreeEnsembleExecutionStrategy::kTreeParallel;
     } else if (rows <= kRowParallelThreshold) {
       fallback.strategy = TreeEnsembleExecutionStrategy::kTreeMajorBatch;
-    } else if (tree_parallel_worthwhile && rows < kTreeParallelRowLimit) {
+    } else if (tree_parallel_worthwhile && rows <= kTreeParallelRowLimit) {
       fallback.strategy = TreeEnsembleExecutionStrategy::kTreeParallel;
     } else {
       fallback.strategy = TreeEnsembleExecutionStrategy::kRowParallel;
@@ -2081,27 +2081,47 @@ void TreeEnsemblePlan::EvaluateIntoImpl(const T *input, std::size_t input_size, 
       if (decision.strategy == TreeEnsembleExecutionStrategy::kRowParallel) {
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512
         if (simd_level == SimdLevel::kAVX512 && simd_indices_fit) {
-          ExecuteRanges(static_cast<std::int64_t>(rows), static_cast<double>(kExecutionGrainSize),
-                        [&](std::int64_t begin, std::int64_t end) {
-                          EvaluateBalancedFloatRows_AVX512(
-                              input_data, features, compact_float_nodes_.data(),
-                              leaf_weights_float_.data(), tree_roots_.data(), tree_roots_.size(),
-                              max_depth_, static_cast<std::size_t>(begin),
-                              static_cast<std::size_t>(end), base, output_data);
-                        });
+          constexpr std::int64_t lanes = 16;
+          const std::int64_t lane_blocks = (static_cast<std::int64_t>(rows) + lanes - 1) / lanes;
+          const std::int64_t row_participants = static_cast<std::int64_t>(
+              std::min(decision.participants, static_cast<std::size_t>(lane_blocks)));
+          const ExecutionSchedule schedule{1, 1, std::max<std::int64_t>(row_participants, 1)};
+          ExecuteRanges(row_participants, schedule, [&](std::int64_t begin, std::int64_t end) {
+            for (std::int64_t participant = begin; participant < end; ++participant) {
+              const std::int64_t row_begin = lane_blocks * participant / row_participants * lanes;
+              const std::int64_t row_end =
+                  std::min(lane_blocks * (participant + 1) / row_participants * lanes,
+                           static_cast<std::int64_t>(rows));
+              EvaluateBalancedFloatRows_AVX512(
+                  input_data, features, compact_float_nodes_.data(), leaf_weights_float_.data(),
+                  tree_roots_.data(), tree_roots_.size(), max_depth_,
+                  static_cast<std::size_t>(row_begin), static_cast<std::size_t>(row_end), base,
+                  output_data);
+            }
+          });
           return;
         }
 #endif
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
         if (simd_level >= SimdLevel::kAVX2 && simd_indices_fit) {
-          ExecuteRanges(static_cast<std::int64_t>(rows), static_cast<double>(kExecutionGrainSize),
-                        [&](std::int64_t begin, std::int64_t end) {
-                          EvaluateBalancedFloatRows_AVX2(
-                              input_data, features, compact_float_nodes_.data(),
-                              leaf_weights_float_.data(), tree_roots_.data(), tree_roots_.size(),
-                              max_depth_, static_cast<std::size_t>(begin),
-                              static_cast<std::size_t>(end), base, output_data);
-                        });
+          constexpr std::int64_t lanes = 8;
+          const std::int64_t lane_blocks = (static_cast<std::int64_t>(rows) + lanes - 1) / lanes;
+          const std::int64_t row_participants = static_cast<std::int64_t>(
+              std::min(decision.participants, static_cast<std::size_t>(lane_blocks)));
+          const ExecutionSchedule schedule{1, 1, std::max<std::int64_t>(row_participants, 1)};
+          ExecuteRanges(row_participants, schedule, [&](std::int64_t begin, std::int64_t end) {
+            for (std::int64_t participant = begin; participant < end; ++participant) {
+              const std::int64_t row_begin = lane_blocks * participant / row_participants * lanes;
+              const std::int64_t row_end =
+                  std::min(lane_blocks * (participant + 1) / row_participants * lanes,
+                           static_cast<std::int64_t>(rows));
+              EvaluateBalancedFloatRows_AVX2(input_data, features, compact_float_nodes_.data(),
+                                             leaf_weights_float_.data(), tree_roots_.data(),
+                                             tree_roots_.size(), max_depth_,
+                                             static_cast<std::size_t>(row_begin),
+                                             static_cast<std::size_t>(row_end), base, output_data);
+            }
+          });
           return;
         }
 #endif

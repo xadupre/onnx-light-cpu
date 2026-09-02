@@ -158,12 +158,14 @@ TreeEnsembleTuningPolicy OneRegionPolicy(TreeEnsembleExecutionStrategy strategy,
 
 struct ThreadedExecutor {
   std::atomic<std::size_t> dispatches{0};
+  std::atomic<std::size_t> dispatched_blocks{0};
   std::atomic<std::size_t> maximum_active{0};
 
   static void Run(void *context, int64_t num_blocks, void *task_context,
                   onnx_light_cpu::ExecutionBlockFn task) {
     auto &self = *static_cast<ThreadedExecutor *>(context);
     self.dispatches.fetch_add(1, std::memory_order_relaxed);
+    self.dispatched_blocks.store(static_cast<std::size_t>(num_blocks), std::memory_order_relaxed);
     std::atomic<std::size_t> active{0};
     std::vector<std::thread> workers;
     workers.reserve(static_cast<std::size_t>(num_blocks));
@@ -292,6 +294,8 @@ TEST(TreeEnsembleOracle, SchedulingDecisionUsesCacheCapacity) {
   EXPECT_EQ(very_large_forest.SelectExecution(127, 4).strategy,
             TreeEnsembleExecutionStrategy::kTreeParallel);
   EXPECT_EQ(very_large_forest.SelectExecution(128, 4).strategy,
+            TreeEnsembleExecutionStrategy::kTreeParallel);
+  EXPECT_EQ(very_large_forest.SelectExecution(129, 4).strategy,
             TreeEnsembleExecutionStrategy::kRowParallel);
 
   const TreeEnsemblePlan prepared_very_large_forest(
@@ -299,6 +303,8 @@ TEST(TreeEnsembleOracle, SchedulingDecisionUsesCacheCapacity) {
   EXPECT_EQ(prepared_very_large_forest.SelectExecution(127, 4).strategy,
             TreeEnsembleExecutionStrategy::kTreeParallel);
   EXPECT_EQ(prepared_very_large_forest.SelectExecution(128, 4).strategy,
+            TreeEnsembleExecutionStrategy::kTreeParallel);
+  EXPECT_EQ(prepared_very_large_forest.SelectExecution(129, 4).strategy,
             TreeEnsembleExecutionStrategy::kRowParallel);
 
   const TreeEnsemblePlan few_trees(StumpForest(3));
@@ -866,6 +872,7 @@ TEST(TreeEnsembleOracle, BalancedFloatForestUsesRowParallelFixedDepthTraversal) 
   plan.EvaluateInto(input.data(), input.size(), kRows, actual.data());
 
   EXPECT_GT(executor.dispatches.load(std::memory_order_relaxed), 0U);
+  EXPECT_EQ(executor.dispatched_blocks.load(std::memory_order_relaxed), 4U);
   for (std::size_t row = 0; row < kRows; ++row) {
     EXPECT_NEAR(actual[row], expected[row], 1e-5) << "row=" << row;
   }
