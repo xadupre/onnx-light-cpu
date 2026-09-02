@@ -2,6 +2,7 @@ Attention Performance Roadmap
 =============================
 
 :Date: 2026-08
+:Updated: 2026-09-02
 
 **in progress** (the published parity gate is not yet met)
 
@@ -12,7 +13,10 @@ the stated parity thresholds. The current optimization pass adds a
 single-key value-copy path, tiled execution starting at query length 8,
 shape-adaptive query/KV blocks, and a tiled FP16 prefill path which converts
 half inputs while packing GEMM panels instead of widening complete Q and K
-tensors. The registered backend corpus and
+tensors. These follow-ups were delivered by `#559
+<https://github.com/xadupre/onnx-light-cpu/pull/559>`_, `#569
+<https://github.com/xadupre/onnx-light-cpu/pull/569>`_, and `#578
+<https://github.com/xadupre/onnx-light-cpu/pull/578>`_. The registered backend corpus and
 ``tools/benchmark_attention_parity.py`` remain the reproducible equal-thread
 gate against ONNX Runtime. Dedicated-machine reports, rather than shared CI
 timings, decide the narrow performance thresholds.
@@ -354,11 +358,12 @@ Pull-request sequence
        priority case below ``0.9x``. Raw equal-thread samples and environment
        metadata are published; controlled-thread runs remain diagnostic.
      - PR14 / #391
-     - In progress
+     - Implementation delivered through #578; dedicated-machine acceptance
+       remains in progress
 
 Roadmap PR15 (`#390
-<https://github.com/xadupre/onnx-light-cpu/issues/390>`_) delivered the
-benchmarking and memory gate, but subsequent published measurements showed
-that its performance thresholds were not sustained. The roadmap remains open
-until a dedicated-machine run satisfies those thresholds for every priority
-type.
+<https://github.com/xadupre/onnx-light-cpu/issues/390>`_) and the #578
+corrective pass delivered the implementation, benchmarking, and memory work.
+Subsequent published measurements showed that the performance thresholds were
+not sustained. The roadmap remains open as a performance gate until a
+dedicated-machine run satisfies those thresholds for every priority type.

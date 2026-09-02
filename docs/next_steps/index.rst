@@ -39,17 +39,17 @@ Started
     * - Plan
       - Contribution
     * - :doc:`Gemm and MatMul <2026/2026_08_gemm_matmul>`
-      - Closes the remaining transformer down-projection GEMM gap, then reruns
-        stable-affinity ``MatMulInteger`` AMX/VNNI parity and the complete
-        chained-GEMM gate.
+      - Incorporates the medium-GEMM, MatMul, bias, and dynamic-packing work
+        delivered through #560, #561, #566, #567, and #575, then reruns the
+        stable-affinity parity gate.
     * - :doc:`Attention <2026/2026_08_attention>`
-      - Optimizes single-key decode, short-query and FP16 tiled execution, then
-        reruns the dedicated-machine ONNX Runtime parity gate.
+      - Tracks the single-key, short-query, tiled FP32, and Qwen3.6 FP16 work
+        delivered through #559, #569, and #578; the dedicated-machine ONNX
+        Runtime parity gate remains.
     * - :doc:`Binary elementwise performance
         <2026/2026_08_binary_elementwise_performance>`
-      - Completes low-precision and predicate bulk kernels, specializes
-        priority broadcasts, calibrates scheduling, and closes the
-        large-tensor parity gap.
+      - Includes the AVX-512 arithmetic and integer ``Div`` validation work
+        from #563 and #577; dedicated-machine acceptance remains.
 
 Planned
 -------
@@ -86,7 +86,8 @@ Completed
         corpus, and parity gate for all 19 registered binary operators.
     * - :doc:`TreeEnsemble <2026/2026_08_tree_ensemble>`
       - Provides the typed in-place v5 engine, compact prepared storage, and
-        final correctness, parity, and memory gates.
+        final correctness, parity, and memory gates, with the large-batch
+        row-parallel follow-up tracked in #580.
     * - :doc:`Runtime execution controls
         <2026/2026_08_runtime_execution_controls>`
       - Supplies the typed session policy and shared executor used by every
@@ -101,12 +102,14 @@ Completed
         actual C++ registrations.
     * - :doc:`Recent kernel performance improvements
         <2026/2026_08_kernel_performance_improvements>`
-      - Consolidates the August optimization sprint across unary, binary,
-        matrix, Attention, normalization, and TreeEnsemble kernels.
+      - Consolidates the August sprint and the August 30--September 2 follow-up
+        across unary, binary, matrix, Attention, normalization,
+        ``com.microsoft``, and TreeEnsemble kernels.
     * - :doc:`com.microsoft domain support
         <2026/2026_08_com_microsoft_domain>`
       - Introduces ``CDist`` and ``BiasGelu`` end to end, including schemas,
-        runtime kernels, gradients, fusion patterns, tests, and documentation.
+        runtime kernels, gradients, fusion patterns, tests, documentation, and
+        the latency follow-ups in #562 and #564.
 
 Discussion
 ----------

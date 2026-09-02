@@ -2,6 +2,7 @@ Unary Elementwise Performance Roadmap
 =====================================
 
 :Date: 2026-08
+:Updated: 2026-09-02
 
 **discussion**
 
@@ -21,6 +22,12 @@ shared architecture and adds the remaining operators rather than replacing
 their working entry points. The common unary plan should retain their kernels
 while moving selection, traversal, type conversion, accuracy policy, and
 scheduling policy into shared preparation.
+
+`#556 <https://github.com/xadupre/onnx-light-cpu/pull/556>`_ added the direct
+ONNX Runtime differential matrix for the existing optimized unary kernels,
+including boundary semantics, vector tails, and exact execution-path checks.
+It strengthens the acceptance baseline but does not implement the pending
+operator families below, so this roadmap remains in discussion.
 
 Scope
 -----

@@ -2,8 +2,10 @@ Tree Ensemble Classification and Regression Roadmap
 ===================================================
 
 :Date: 2026-08
+:Updated: 2026-09-02
 
-**complete**
+**complete** (large-batch performance follow-up in `#580
+<https://github.com/xadupre/onnx-light-cpu/pull/580>`_)
 
 Objective
 ---------
@@ -662,4 +664,8 @@ The TreeEnsemble roadmap is complete, including the
 ``ai.onnx.ml::TreeEnsemble`` runtime adapter. Integration tests execute both
 the correctness corpus and a benchmark case through the registered
 onnx-light-cpu kernel, and reject any CPU benchmark family without a matching
-kernel registration.
+kernel registration. The later #580 follow-up extends the balanced FP32 fast
+path to the row-parallel strategy and adds AVX2/AVX-512 traversal across 8 or
+16 rows. Its four-thread 10,000-tree, 4,096-feature, 128-row diagnostic reduced
+median latency from 5.423 ms to 4.774 ms without reopening the completed
+functional roadmap.

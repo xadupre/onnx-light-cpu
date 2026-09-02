@@ -2,8 +2,12 @@ com.microsoft Domain Support
 ============================
 
 :Date: 2026-08
+:Updated: 2026-09-02
 
-**complete** (`#479 <https://github.com/xadupre/onnx-light-cpu/pull/479>`_)
+**complete** (`#479 <https://github.com/xadupre/onnx-light-cpu/pull/479>`_,
+performance follow-ups `#562
+<https://github.com/xadupre/onnx-light-cpu/pull/562>`_ and `#564
+<https://github.com/xadupre/onnx-light-cpu/pull/564>`_)
 
 Objective
 ---------
@@ -13,6 +17,10 @@ end to end by ``onnx-light-cpu``. The implementation introduces
 ``com.microsoft::CDist`` and ``com.microsoft::BiasGelu`` through the same
 schema, graph-building, runtime, differentiation, optimization, testing, and
 documentation surfaces used by standard operators.
+
+The later #562 and #564 passes reduce ``BiasGelu`` and ``CDist`` latency and
+add focused ONNX Runtime parity benchmarks. They preserve the completed
+operator, schema, gradient, and fusion contracts.
 
 Operator contract
 -----------------
