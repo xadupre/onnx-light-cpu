@@ -48,6 +48,15 @@ set(ONNX_LIGHT_CPU_ONNX_LIGHT_BACKEND_TEST_IMPLIB "" CACHE FILEPATH
     "Windows import library for the onnx-light backend-test runtime.")
 option(ONNX_LIGHT_CPU_ENABLE_COVERAGE
        "Instrument the C++ targets for code coverage (GCC/Clang only)." OFF)
+set(ONNX_LIGHT_CPU_MAX_SIMD_LEVEL "AUTO" CACHE STRING
+    "Maximum x86 SIMD level compiled and reported at runtime: AUTO, AVX2, or AVX512.")
+set_property(CACHE ONNX_LIGHT_CPU_MAX_SIMD_LEVEL PROPERTY STRINGS AUTO AVX2 AVX512)
+string(TOUPPER "${ONNX_LIGHT_CPU_MAX_SIMD_LEVEL}" _onnx_light_cpu_max_simd_level)
+if(NOT _onnx_light_cpu_max_simd_level MATCHES "^(AUTO|AVX2|AVX512)$")
+  message(FATAL_ERROR
+      "ONNX_LIGHT_CPU_MAX_SIMD_LEVEL must be AUTO, AVX2, or AVX512; "
+      "got '${ONNX_LIGHT_CPU_MAX_SIMD_LEVEL}'.")
+endif()
 
 # A local onnx-light runtime target is not part of an export set, so
 # lib_onnx_light_cpu_kernels cannot be installed as part of onnx_light_cpuTargets
@@ -133,6 +142,29 @@ else()
       "SIMD compiler flags for kernel sources (e.g. /arch:AVX2, /arch:AVX512).")
 endif()
 
+if(ONNX_LIGHT_CPU_X86 AND _onnx_light_cpu_max_simd_level STREQUAL "AVX2")
+  if(NOT MSVC)
+    check_cxx_compiler_flag("-march=x86-64-v3"
+        ONNX_LIGHT_CPU_HAVE_X86_64_V3_FLAG)
+    if(NOT ONNX_LIGHT_CPU_HAVE_X86_64_V3_FLAG)
+      message(FATAL_ERROR
+          "ONNX_LIGHT_CPU_MAX_SIMD_LEVEL=AVX2 requires compiler support for "
+          "-march=x86-64-v3.")
+    endif()
+    set(ONNX_LIGHT_CPU_SIMD_FLAGS "-march=x86-64-v3")
+  else()
+    set(ONNX_LIGHT_CPU_SIMD_FLAGS "/arch:AVX2")
+  endif()
+  if(CMAKE_CXX_FLAGS MATCHES "[Aa][Vv][Xx]512|[Aa][Mm][Xx]")
+    message(FATAL_ERROR
+        "ONNX_LIGHT_CPU_MAX_SIMD_LEVEL=AVX2 is incompatible with explicit "
+        "AVX-512 or AMX options in CMAKE_CXX_FLAGS.")
+  endif()
+  set(_onnx_light_cpu_max_simd_level_value 3)
+else()
+  set(_onnx_light_cpu_max_simd_level_value 4)
+endif()
+
 if(ONNX_LIGHT_CPU_ARM64)
   if(MSVC)
     set(_arm_neon_header "arm64_neon.h")
@@ -211,6 +243,22 @@ if(NOT ONNX_LIGHT_CPU_X86)
   # excluded and let the scalar fallbacks handle every operator.
   set(ONNX_LIGHT_CPU_HAVE_AVX2_FMA_FLAG FALSE)
   set(ONNX_LIGHT_CPU_HAVE_F16C_FLAG FALSE)
+  set(ONNX_LIGHT_CPU_HAVE_AVX512F_FLAG FALSE)
+  set(ONNX_LIGHT_CPU_HAVE_AVX512BW_FLAG FALSE)
+  set(ONNX_LIGHT_CPU_HAVE_AVX512FP16_FLAG FALSE)
+  set(ONNX_LIGHT_CPU_HAVE_AVX512BF16_FLAG FALSE)
+  set(ONNX_LIGHT_CPU_HAVE_AVX512VNNI_FLAG FALSE)
+  set(ONNX_LIGHT_CPU_HAVE_AMX_TILE_FLAG FALSE)
+  set(ONNX_LIGHT_CPU_HAVE_AMX_BF16_FLAG FALSE)
+  set(ONNX_LIGHT_CPU_HAVE_AMX_INT8_FLAG FALSE)
+elseif(_onnx_light_cpu_max_simd_level STREQUAL "AVX2")
+  if(NOT MSVC)
+    check_cxx_compiler_flag("-mavx2 -mfma" ONNX_LIGHT_CPU_HAVE_AVX2_FMA_FLAG)
+    check_cxx_compiler_flag("-mavx -mf16c" ONNX_LIGHT_CPU_HAVE_F16C_FLAG)
+  else()
+    check_cxx_compiler_flag("/arch:AVX2" ONNX_LIGHT_CPU_HAVE_AVX2_FMA_FLAG)
+    check_cxx_compiler_flag("/arch:AVX" ONNX_LIGHT_CPU_HAVE_F16C_FLAG)
+  endif()
   set(ONNX_LIGHT_CPU_HAVE_AVX512F_FLAG FALSE)
   set(ONNX_LIGHT_CPU_HAVE_AVX512BW_FLAG FALSE)
   set(ONNX_LIGHT_CPU_HAVE_AVX512FP16_FLAG FALSE)
@@ -412,6 +460,8 @@ target_include_directories(lib_onnx_light_cpu PUBLIC
 )
 set_property(TARGET lib_onnx_light_cpu PROPERTY POSITION_INDEPENDENT_CODE ON)
 target_compile_features(lib_onnx_light_cpu PUBLIC cxx_std_20)
+target_compile_definitions(lib_onnx_light_cpu PRIVATE
+    ONNX_LIGHT_CPU_MAX_SIMD_LEVEL=${_onnx_light_cpu_max_simd_level_value})
 if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
   target_compile_definitions(lib_onnx_light_cpu PRIVATE ONNX_LIGHT_CPU_WITH_ONNX_LIGHT=1)
 endif()
@@ -1091,6 +1141,8 @@ if(ONNX_LIGHT_CPU_BUILD_TESTS)
   function(onnx_light_cpu_add_test _src _link_lib)
     get_filename_component(_name "${_src}" NAME_WE)
     add_executable(${_name} "${_src}")
+    target_compile_definitions(${_name} PRIVATE
+        ONNX_LIGHT_CPU_MAX_SIMD_LEVEL=${_onnx_light_cpu_max_simd_level_value})
     foreach(_corpus_source IN LISTS CPU_BACKEND_CORPUS_SOURCES)
       get_filename_component(_corpus_name "${_corpus_source}" NAME_WE)
       string(REGEX REPLACE "_corpus$" "" _corpus_subject "${_corpus_name}")

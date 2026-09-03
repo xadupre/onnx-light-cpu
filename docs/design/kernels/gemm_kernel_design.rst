@@ -98,6 +98,14 @@ Two independent axes are worth calling out:
   single binary built on an AVX-512-capable machine still run correctly (via
   automatic fallback to AVX2/SSE2/scalar) on a CPU that lacks it.
 
+For deployment and cross-machine benchmark comparisons,
+``ONNX_LIGHT_CPU_MAX_SIMD_LEVEL=AVX2`` applies a build-time ceiling to both
+axes. It pins the generic x86-64-v3 compiler baseline, excludes AVX-512 and
+AMX translation units, and caps ``DetectSimdLevel()`` at AVX2, even when CPUID
+reports a newer ISA. This keeps the selected micro-kernel, register dimensions,
+blocking, and participant limits consistent with a native AVX2 host; it never
+raises the detected level above the hardware capability.
+
 Independently of the branch selected above, every micro-kernel call also goes
 through two cache-blocking / packing steps in ``GemmImpl`` before the
 micro-kernel is invoked (see the file-level comment in ``gemm_kernel.cc`` for
