@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import platform
 import re
 import statistics
 import sys
@@ -47,6 +48,7 @@ _METADATA_COLUMNS = (
     "repeat",
     "warmup",
     "threads",
+    "processor",
     "input_shapes",
     "max_repeat_time",
 )
@@ -169,6 +171,7 @@ def _measure_case(
         "repeat": repeat,
         "warmup": warmup,
         "threads": threads,
+        "processor": platform.processor() or platform.machine(),
         "input_shapes": input_shapes,
         "max_repeat_time": max_repeat_time,
     }
@@ -336,3 +339,21 @@ def write_benchmark_workbook(
     for row in aggregated_rows:
         aggregate_sheet.append([row[column] for column in _AGGREGATED_COLUMNS])
     workbook.save(output)
+
+
+def write_benchmark_markdown(
+    path: str | os.PathLike[str], aggregated_rows: Sequence[dict[str, Any]]
+) -> None:
+    """Writes aggregated benchmark data as a Markdown table."""
+    output = Path(path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    columns = _AGGREGATED_COLUMNS
+    lines = [
+        f"| {' | '.join(columns)} |",
+        f"| {' | '.join('---' for _ in columns)} |",
+    ]
+    lines.extend(
+        f"| {' | '.join(str(row[column]).replace('|', r'\\|') for column in columns)} |"
+        for row in aggregated_rows
+    )
+    output.write_text("\n".join(lines) + "\n", encoding="utf-8")
