@@ -176,7 +176,7 @@ both individual measurements and per-case statistics to the `raw` and
 
 ```bash
 onnx-light-cpu benchmark \
-    --tests "test_cpu_abs_*" "test_cpu_gemm_*" \
+    --tests "^test_cpu_(abs|gemm)_" \
     --dtypes float32 float64 \
     --output benchmark.xlsx
 ```

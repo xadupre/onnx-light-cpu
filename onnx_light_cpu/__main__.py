@@ -44,7 +44,7 @@ def _build_parser() -> argparse.ArgumentParser:
         action="extend",
         nargs="+",
         default=[],
-        help="backend case name or shell pattern; may be repeated (default: test_cpu_*)",
+        help="backend case name regular expression; may be repeated (default: ^test_cpu_)",
     )
     benchmark.add_argument(
         "--dtype",
@@ -100,7 +100,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
     if args.command == "benchmark":
-        tests = args.tests or ["test_cpu_*"]
+        tests = args.tests or ["^test_cpu_"]
         dtypes = args.dtypes or ["all"]
         raw_rows, aggregated_rows = run_backend_benchmark(
             tests=tests,

@@ -4,6 +4,7 @@
 
 """Tests for ``python -m onnx_light_cpu benchmark``."""
 
+import re
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -23,14 +24,14 @@ class TestBenchmarkCli(ExtTestCase):
             [
                 "benchmark",
                 "--test",
-                "test_cpu_abs_*",
-                "test_cpu_gemm_*",
+                "^test_cpu_abs_",
+                "^test_cpu_gemm_",
                 "--dtype",
                 "float32,float64",
                 "int64",
             ]
         )
-        self.assertEqual(args.tests, ["test_cpu_abs_*", "test_cpu_gemm_*"])
+        self.assertEqual(args.tests, ["^test_cpu_abs_", "^test_cpu_gemm_"])
         self.assertEqual(args.dtypes, ["float32,float64", "int64"])
         self.assertEqual(
             normalize_dtypes(args.dtypes),
@@ -40,6 +41,17 @@ class TestBenchmarkCli(ExtTestCase):
     def test_rejects_unknown_dtype(self):
         with self.assertRaisesRegex(ValueError, "unknown dtype"):
             normalize_dtypes(["complex128"])
+
+    def test_rejects_invalid_test_regular_expression(self):
+        with self.assertRaisesRegex(re.PatternError, "unterminated"):
+            _benchmark.run_backend_benchmark(
+                tests=["("],
+                dtypes=["all"],
+                repeat=1,
+                warmup=0,
+                max_repeat_time=1.0,
+                threads=1,
+            )
 
     def test_selects_backend_tests_and_dtypes(self):
         cases = [
@@ -63,7 +75,7 @@ class TestBenchmarkCli(ExtTestCase):
             ) as measure,
         ):
             raw, aggregated = _benchmark.run_backend_benchmark(
-                tests=["test_cpu_abs_*"],
+                tests=[r"^test_cpu_(abs|log)_"],
                 dtypes=["float32"],
                 repeat=1,
                 warmup=0,
@@ -121,7 +133,7 @@ class TestBenchmarkCli(ExtTestCase):
                 [
                     "benchmark",
                     "--tests",
-                    "test_cpu_abs_*",
+                    r"^test_cpu_(abs|log)_",
                     "--dtypes",
                     "float32",
                     "--repeat",
@@ -136,7 +148,7 @@ class TestBenchmarkCli(ExtTestCase):
             )
         self.assertEqual(result, 0)
         run.assert_called_once_with(
-            tests=["test_cpu_abs_*"],
+            tests=[r"^test_cpu_(abs|log)_"],
             dtypes=["float32"],
             repeat=2,
             warmup=0,

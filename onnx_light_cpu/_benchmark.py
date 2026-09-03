@@ -6,8 +6,8 @@
 
 from __future__ import annotations
 
-import fnmatch
 import os
+import re
 import statistics
 import time
 from pathlib import Path
@@ -72,8 +72,8 @@ def _case_dtype(name: str) -> str | None:
     return next((dtype for dtype in _DTYPES if dtype in tokens), None)
 
 
-def _matches_case(name: str, patterns: Sequence[str]) -> bool:
-    return any(fnmatch.fnmatchcase(name, pattern) for pattern in patterns)
+def _matches_case(name: str, expressions: Sequence[re.Pattern[str]]) -> bool:
+    return any(expression.search(name) for expression in expressions)
 
 
 def _to_numpy(tensor: Any) -> np.ndarray:
@@ -185,6 +185,7 @@ def run_backend_benchmark(
         raise ValueError("threads must be greater than 0")
 
     selected_dtypes = set(normalize_dtypes(dtypes))
+    test_expressions = [re.compile(expression) for expression in tests]
     register_backend_test_cases()
     register_kernels()
     cases = [
@@ -194,7 +195,10 @@ def run_backend_benchmark(
             mode=TestMode.BENCHMARK,
             generate_benchmark_expected_outputs=False,  # pyrefly: ignore[unexpected-keyword]
         )
-        if _matches_case(case.name, tests) and _case_dtype(case.name) in selected_dtypes
+        if (
+            _matches_case(case.name, test_expressions)
+            and _case_dtype(case.name) in selected_dtypes
+        )
     ]
     if not cases:
         raise ValueError(
