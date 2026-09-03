@@ -87,14 +87,27 @@ on the calling thread. Kernels registered with `onnx-light` use the session
 affinity, spin policy, nesting, and inspection all come from the session
 execution policy.
 
-### AVX-512 support
+### SIMD targeting
 
-To enable AVX-512 codepaths (compiled and usable on AVX-512 CPUs):
+AVX-512 kernels are compiled when the toolchain supports them and selected
+automatically when the host CPU and operating system expose AVX-512. To build
+an AVX2-only binary for deployment or comparable benchmarking on a newer CPU:
 
 ```bash
-cmake -S . -B build -DONNX_LIGHT_CPU_SIMD_FLAGS="-mavx512f" \
+cmake -S . -B build -DONNX_LIGHT_CPU_MAX_SIMD_LEVEL=AVX2 \
       -DONNX_LIGHT_CPU_BUILD_TESTS=ON -DONNX_LIGHT_CPU_BUILD_PYTHON=OFF
 cmake --build build
+```
+
+The ceiling uses the generic x86-64-v3 baseline, excludes AVX-512 and AMX
+kernels, and makes runtime SIMD detection report at most AVX2, so kernel
+dispatch and shape-dependent planning use the same AVX2 profile. It never
+enables instructions unsupported by the host.
+For an in-place Python build, pass the same definition through `CMAKE_ARGS`:
+
+```bash
+CMAKE_ARGS="-DONNX_LIGHT_CPU_MAX_SIMD_LEVEL=AVX2" \
+    python setup.py build_ext --inplace --onnx-light-source
 ```
 
 ## C++ usage

@@ -26,6 +26,14 @@ namespace onnx_light_cpu {
 
 namespace {
 
+#ifndef ONNX_LIGHT_CPU_MAX_SIMD_LEVEL
+#define ONNX_LIGHT_CPU_MAX_SIMD_LEVEL 4
+#endif
+
+static_assert(ONNX_LIGHT_CPU_MAX_SIMD_LEVEL >= static_cast<int>(SimdLevel::kAVX2) &&
+              ONNX_LIGHT_CPU_MAX_SIMD_LEVEL <= static_cast<int>(SimdLevel::kAVX512));
+constexpr SimdLevel kMaximumSimdLevel = static_cast<SimdLevel>(ONNX_LIGHT_CPU_MAX_SIMD_LEVEL);
+
 struct CpuidResult {
   unsigned int eax, ebx, ecx, edx;
 };
@@ -109,7 +117,7 @@ SimdLevel DetectSimdLevel() {
   bool has_avx2 = (info7.ebx & (1u << 5)) != 0;
   bool has_avx512f = (info7.ebx & (1u << 16)) != 0;
 
-  if (has_avx512f && OsSupportsAvx512())
+  if (kMaximumSimdLevel >= SimdLevel::kAVX512 && has_avx512f && OsSupportsAvx512())
     return SimdLevel::kAVX512;
   if (has_avx2 && OsSupportsAvx())
     return SimdLevel::kAVX2;
@@ -121,6 +129,8 @@ SimdLevel DetectSimdLevel() {
 }
 
 bool CpuSupportsAvx512BW() {
+  if constexpr (kMaximumSimdLevel < SimdLevel::kAVX512)
+    return false;
   const auto info7 = Cpuid(7);
   const bool has_avx512bw = (info7.ebx & (1u << 30)) != 0;
   return has_avx512bw && OsSupportsAvx512();
@@ -139,6 +149,8 @@ bool CpuSupportsF16C() {
 }
 
 bool CpuSupportsAvx512Fp16() {
+  if constexpr (kMaximumSimdLevel < SimdLevel::kAVX512)
+    return false;
   // AVX512_FP16 is reported by CPUID.(EAX=7,ECX=0):EDX[23]. Native FP16
   // instructions load their operands into ZMM registers, so the OS must also
   // save AVX-512 state (checked by ``OsSupportsAvx512``).
@@ -148,6 +160,8 @@ bool CpuSupportsAvx512Fp16() {
 }
 
 bool CpuSupportsAvx512Bf16() {
+  if constexpr (kMaximumSimdLevel < SimdLevel::kAVX512)
+    return false;
   // AVX512_BF16 is reported by CPUID.(EAX=7,ECX=1):EAX[5]. The native
   // ``vdpbf16ps`` dot-product reads its operands from ZMM registers, so the OS
   // must also save AVX-512 state (checked by ``OsSupportsAvx512``).
@@ -157,6 +171,8 @@ bool CpuSupportsAvx512Bf16() {
 }
 
 bool CpuSupportsAvx512Vnni() {
+  if constexpr (kMaximumSimdLevel < SimdLevel::kAVX512)
+    return false;
   // AVX512_VNNI is reported by CPUID.(EAX=7,ECX=0):ECX[11]. The native
   // ``vpdpbusd`` dot-product reads its operands from ZMM registers, so the OS
   // must also save AVX-512 state (checked by ``OsSupportsAvx512``).
@@ -166,6 +182,8 @@ bool CpuSupportsAvx512Vnni() {
 }
 
 bool CpuSupportsAmxTile() {
+  if constexpr (kMaximumSimdLevel < SimdLevel::kAVX512)
+    return false;
   // AMX-TILE is reported by CPUID.(EAX=7,ECX=0):EDX[24]. Tile registers live in
   // the AMX XSAVE components, so the OS must also enable tile state (checked by
   // ``OsSupportsAmxTileState``).
@@ -175,6 +193,8 @@ bool CpuSupportsAmxTile() {
 }
 
 bool CpuSupportsAmxBf16() {
+  if constexpr (kMaximumSimdLevel < SimdLevel::kAVX512)
+    return false;
   // AMX-BF16 (EDX[22]) relies on the same OS-enabled tile state as AMX-TILE
   // (EDX[24]). Both bits and the OS check are read from a single CPUID leaf.
   const auto info7 = Cpuid(7);
@@ -184,6 +204,8 @@ bool CpuSupportsAmxBf16() {
 }
 
 bool CpuSupportsAmxInt8() {
+  if constexpr (kMaximumSimdLevel < SimdLevel::kAVX512)
+    return false;
   // AMX-INT8 (EDX[25]) relies on the same OS-enabled tile state as AMX-TILE
   // (EDX[24]). Both bits and the OS check are read from a single CPUID leaf.
   const auto info7 = Cpuid(7);
