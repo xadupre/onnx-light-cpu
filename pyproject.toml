@@ -12,7 +12,11 @@ license-files = ["LICENSE"]
 requires-python = ">=3.12"
 dependencies = [
     "numpy>=2.1",
+    "openpyxl>=3.1.5",
 ]
+
+[project.scripts]
+onnx-light-cpu = "onnx_light_cpu.__main__:main"
 
 [project.optional-dependencies]
 dev = [
