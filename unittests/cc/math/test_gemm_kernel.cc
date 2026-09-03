@@ -604,6 +604,11 @@ TEST(GemmFloat32, SingleRowColumnTail) {
 }
 
 TEST(GemmFloat32, Avx2ColumnTailsMatchReference) {
+  if (onnx_light_cpu::DetectSimdLevel() != onnx_light_cpu::SimdLevel::kAVX2 ||
+      !onnx_light_cpu::CpuSupportsFma()) {
+    GTEST_SKIP() << "masked column tails are specific to AVX2/FMA";
+  }
+
   constexpr std::size_t M = 7;
   constexpr std::size_t K = 600;
   const float alpha = 0.75f;
