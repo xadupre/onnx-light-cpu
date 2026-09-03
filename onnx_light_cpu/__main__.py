@@ -7,7 +7,11 @@ import math
 import os
 from collections.abc import Sequence
 
-from ._benchmark import run_backend_benchmark, write_benchmark_workbook
+from ._benchmark import (
+    run_backend_benchmark,
+    write_benchmark_markdown,
+    write_benchmark_workbook,
+)
 
 
 def _positive_int(value: str) -> int:
@@ -69,6 +73,10 @@ def _build_parser() -> argparse.ArgumentParser:
         help="maximum measured iterations per case",
     )
     benchmark.add_argument(
+        "--markdown",
+        help="path of an optional Markdown file with the aggregated figures",
+    )
+    benchmark.add_argument(
         "-w",
         "--warmup",
         type=_non_negative_int,
@@ -117,6 +125,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             with_onnxruntime=args.onnxruntime,
         )
         write_benchmark_workbook(args.output, raw_rows, aggregated_rows)
+        if args.markdown:
+            write_benchmark_markdown(args.markdown, aggregated_rows)
         print(
             f"Wrote {len(raw_rows)} measurements for {len(aggregated_rows)} cases "
             f"to {args.output}"

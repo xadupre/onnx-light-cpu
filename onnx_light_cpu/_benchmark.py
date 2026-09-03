@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import platform
 import re
 import statistics
 import sys
@@ -47,23 +48,24 @@ _METADATA_COLUMNS = (
     "repeat",
     "warmup",
     "threads",
+    "processor",
     "input_shapes",
     "max_repeat_time",
 )
-_RAW_COLUMNS = (*_METADATA_COLUMNS, "duration_us")
+_RAW_COLUMNS = (*_METADATA_COLUMNS, "run", "runtime", "duration_s")
 _AGGREGATED_COLUMNS = (
     *_METADATA_COLUMNS,
     "samples",
-    "mean_us",
-    "stdev_us",
-    "min_repeat_us",
-    "p10_us",
-    "median_us",
-    "p90_us",
-    "max_repeat_us",
+    "mean_s",
+    "stdev_s",
+    "min_repeat_s",
+    "p10_s",
+    "median_s",
+    "p90_s",
+    "max_repeat_s",
     "onnxruntime_samples",
-    "onnxruntime_mean_us",
-    "onnxruntime_median_us",
+    "onnxruntime_mean_s",
+    "onnxruntime_median_s",
     "onnxruntime_error",
     "speedup",
 )
@@ -156,8 +158,8 @@ def _measure_case(
         start = time.perf_counter_ns()
         for feed in feeds:
             evaluator.run(None, feed)
-        duration_us = (time.perf_counter_ns() - start) / 1000
-        durations.append(duration_us)
+        duration_s = (time.perf_counter_ns() - start) / 1_000_000_000
+        durations.append(duration_s)
         if time.perf_counter() - repeat_start >= max_repeat_time:
             break
 
@@ -169,29 +171,32 @@ def _measure_case(
         "repeat": repeat,
         "warmup": warmup,
         "threads": threads,
+        "processor": platform.processor() or platform.machine(),
         "input_shapes": input_shapes,
         "max_repeat_time": max_repeat_time,
     }
     raw = [
         {
             **metadata,
-            "duration_us": duration,
+            "run": run,
+            "runtime": "onnx-light-cpu",
+            "duration_s": duration,
         }
-        for duration in durations
+        for run, duration in enumerate(durations, start=1)
     ]
     aggregate: dict[str, Any] = {
         **metadata,
         "samples": len(durations),
-        "mean_us": statistics.fmean(durations),
-        "stdev_us": statistics.stdev(durations) if len(durations) > 1 else 0.0,
-        "min_repeat_us": min(durations),
-        "p10_us": float(np.percentile(durations, 10)),
-        "median_us": statistics.median(durations),
-        "p90_us": float(np.percentile(durations, 90)),
-        "max_repeat_us": max(durations),
+        "mean_s": statistics.fmean(durations),
+        "stdev_s": statistics.stdev(durations) if len(durations) > 1 else 0.0,
+        "min_repeat_s": min(durations),
+        "p10_s": float(np.percentile(durations, 10)),
+        "median_s": statistics.median(durations),
+        "p90_s": float(np.percentile(durations, 90)),
+        "max_repeat_s": max(durations),
         "onnxruntime_samples": None,
-        "onnxruntime_mean_us": None,
-        "onnxruntime_median_us": None,
+        "onnxruntime_mean_s": None,
+        "onnxruntime_median_s": None,
         "onnxruntime_error": None,
         "speedup": None,
     }
@@ -222,18 +227,27 @@ def _measure_case(
                 start = time.perf_counter_ns()
                 for feed in feeds:
                     ort_session.run(None, feed)
-                ort_durations.append((time.perf_counter_ns() - start) / 1000)
+                ort_durations.append((time.perf_counter_ns() - start) / 1_000_000_000)
                 if time.perf_counter() - ort_start >= max_repeat_time:
                     break
         except Exception as exc:  # noqa: BLE001 -- unsupported cases remain in the report.
             aggregate["onnxruntime_error"] = str(exc)
         else:
+            raw.extend(
+                {
+                    **metadata,
+                    "run": run,
+                    "runtime": "onnxruntime",
+                    "duration_s": duration,
+                }
+                for run, duration in enumerate(ort_durations, start=1)
+            )
             aggregate["onnxruntime_samples"] = len(ort_durations)
-            aggregate["onnxruntime_mean_us"] = statistics.fmean(ort_durations)
-            aggregate["onnxruntime_median_us"] = statistics.median(ort_durations)
+            aggregate["onnxruntime_mean_s"] = statistics.fmean(ort_durations)
+            aggregate["onnxruntime_median_s"] = statistics.median(ort_durations)
             aggregate["speedup"] = (
-                aggregate["onnxruntime_median_us"] / aggregate["median_us"]
-                if aggregate["median_us"]
+                aggregate["onnxruntime_median_s"] / aggregate["median_s"]
+                if aggregate["median_s"]
                 else float("inf")
             )
     return raw, aggregate
@@ -325,3 +339,21 @@ def write_benchmark_workbook(
     for row in aggregated_rows:
         aggregate_sheet.append([row[column] for column in _AGGREGATED_COLUMNS])
     workbook.save(output)
+
+
+def write_benchmark_markdown(
+    path: str | os.PathLike[str], aggregated_rows: Sequence[dict[str, Any]]
+) -> None:
+    """Writes aggregated benchmark data as a Markdown table."""
+    output = Path(path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    columns = _AGGREGATED_COLUMNS
+    lines = [
+        f"| {' | '.join(columns)} |",
+        f"| {' | '.join('---' for _ in columns)} |",
+    ]
+    lines.extend(
+        f"| {' | '.join(str(row[column]).replace('|', r'\|') for column in columns)} |"
+        for row in aggregated_rows
+    )
+    output.write_text("\n".join(lines) + "\n", encoding="utf-8")
