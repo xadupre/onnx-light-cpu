@@ -7,6 +7,9 @@
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512
 #include "onnx_light_cpu/impl/attention/avx512/attention_kernel_avx512.h"
 #endif
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
+#include "onnx_light_cpu/impl/attention/avx2/attention_kernel_avx2_fma.h"
+#endif
 #include "onnx_light_cpu/impl/execution.h"
 #include "onnx_light_cpu/impl/math/half_conversion.h"
 #include "onnx_light_cpu/impl/math/math_kernels.h"
@@ -765,6 +768,80 @@ void ConvertFloat32Rank4ToRank3(const float *source, float *destination, std::si
                 });
 }
 
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
+// AVX2+FMA decode fast path for one query row of `ComputeAttentionStreamingGeneric`
+// (FP32 only, `plan.q_length == 1`). Computes exactly the same online-softmax
+// recurrence as that function's scalar `[kv_start, kv_limit)` kv loop -- same
+// per-column past/current pointer choice, same mask semantics, same block
+// stepping -- but with the dot product, block max/exp/sum reduction, the
+// accumulator rescale, and the weighted `P @ V` accumulation all expressed as
+// AVX2 8-wide FMA intrinsics (see `attention/avx2/attention_kernel_avx2_fma.h`).
+// Only called when eligible (see `use_avx2_decode_row` below); the caller
+// still runs its own scalar loop whenever this function is not invoked, so no
+// existing semantics are altered.
+void ComputeAttentionDecodeRowAVX2FMA(const AttentionPlan &plan, const float *q_fp32,
+                                      const float *k_head, const float *v_head,
+                                      const float *past_k_head, const float *past_v_head,
+                                      const std::uint8_t *mask_bool, const float *mask_float,
+                                      std::ptrdiff_t mask_row, bool has_softcap,
+                                      std::size_t kv_start, std::size_t kv_limit, std::size_t block,
+                                      float *scores, float *accumulator, float &m, float &l,
+                                      bool &any_valid) {
+  for (std::size_t j0 = kv_start; j0 < kv_limit; j0 += block) {
+    const std::size_t j1 = std::min(j0 + block, kv_limit);
+    const std::size_t count = j1 - j0;
+
+    for (std::size_t jj = 0; jj < count; ++jj) {
+      const std::size_t j = j0 + jj;
+      const float *k_row = j < plan.past_length
+                               ? past_k_head + j * plan.past_k_strides.sequence
+                               : k_head + (j - plan.past_length) * plan.k_strides.sequence;
+      const float dot = AttentionDotFloat32_AVX2_FMA(q_fp32, k_row, plan.head_dim);
+      const float raw = plan.scale * dot;
+      scores[jj] = has_softcap ? plan.softcap * std::tanh(raw / plan.softcap) : raw;
+    }
+
+    // Only a contiguous (`mask_strides.kv == 1`) attn_mask is handled here
+    // (guaranteed by `use_avx2_decode_row`'s eligibility check); a fully
+    // masked block contributes nothing and is skipped outright, exactly like
+    // the scalar path's boolean-mask tile skip.
+    bool block_valid = true;
+    if (plan.mask_kind == AttentionMaskKind::kBoolean) {
+      const std::ptrdiff_t index =
+          mask_row + static_cast<std::ptrdiff_t>(j0) * plan.mask_strides.kv;
+      block_valid = AttentionApplyBooleanMaskFloat32_AVX2_FMA(scores, mask_bool + index, count);
+    } else if (plan.mask_kind == AttentionMaskKind::kAdditive) {
+      const std::ptrdiff_t index =
+          mask_row + static_cast<std::ptrdiff_t>(j0) * plan.mask_strides.kv;
+      block_valid = AttentionApplyAdditiveMaskFloat32_AVX2_FMA(scores, mask_float + index, count);
+    }
+    if (!block_valid) {
+      continue;
+    }
+    any_valid = true;
+
+    const AttentionSoftmaxBlockResultAVX2 result =
+        AttentionSoftmaxBlockFloat32_AVX2_FMA(scores, count, m, l);
+    m = result.maximum;
+    if (result.correction != 1.0f) {
+      AttentionScaleFloat32_AVX2_FMA(accumulator, result.correction, plan.v_head_dim);
+    }
+
+    for (std::size_t jj = 0; jj < count; ++jj) {
+      const float p = scores[jj];
+      if (p == 0.0f) {
+        continue;
+      }
+      const std::size_t j = j0 + jj;
+      const float *v_row = j < plan.past_length
+                               ? past_v_head + j * plan.past_v_strides.sequence
+                               : v_head + (j - plan.past_length) * plan.v_strides.sequence;
+      AttentionAccumulateFloat32_AVX2_FMA(accumulator, p, v_row, plan.v_head_dim);
+    }
+  }
+}
+#endif
+
 // Shared streaming online-softmax recurrence, templated on `Codec` so FP32,
 // FP16, and BF16 Q/K/V/Y share one implementation while every intermediate
 // (score, softmax denominator, and P @ V accumulator) stays FP32. Consumes an
@@ -794,6 +871,20 @@ void ComputeAttentionStreamingGeneric(const AttentionPlan &plan, const typename 
   const ExecutionSchedule schedule{
       1, static_cast<std::int64_t>((total_rows + participants - 1) / participants),
       static_cast<std::int64_t>(participants), static_cast<std::int64_t>(participants)};
+
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
+  // Dedicated AVX2+FMA decode fast path: eligible only for FP32 `Q == 1`
+  // (the token-at-a-time decode shape) on AVX2 hardware without AVX-512
+  // (AVX-512 keeps its own dispatch in `ComputeAttentionTiled` and is left
+  // untouched here). A boolean/additive `attn_mask` is only handled by the
+  // fast path when its KV stride is `1` (contiguous), matching
+  // `ComputeAttentionTiled`'s own AVX-512 masked dispatch gate; any other
+  // mask layout (e.g. broadcast) falls back to the scalar path unchanged.
+  const bool use_avx2_decode_row =
+      std::is_same_v<Codec, Float32Codec> && plan.q_length == 1 &&
+      DetectSimdLevel() == SimdLevel::kAVX2 && CpuSupportsFma() &&
+      (plan.mask_kind == AttentionMaskKind::kNone || plan.mask_strides.kv == 1);
+#endif
 
   // Runtime-owned outer schedule: one task per (batch, head, query-row)
   // triple. `ExecuteRanges` decides how many workers to admit from the total
@@ -896,7 +987,24 @@ void ComputeAttentionStreamingGeneric(const AttentionPlan &plan, const typename 
           std::fill(accumulator.begin(), accumulator.end(), 0.0f);
           bool any_valid = false;
 
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
+          // Fully handles the row's kv loop itself when eligible, so the
+          // scalar loop below is skipped via its own condition (its body is
+          // otherwise untouched).
+          bool handled_by_avx2_decode = false;
+          if constexpr (std::is_same_v<Codec, Float32Codec>) {
+            if (use_avx2_decode_row) {
+              ComputeAttentionDecodeRowAVX2FMA(plan, q_fp32.data(), k_head, v_head, past_k_head,
+                                               past_v_head, mask_bool, mask_float, mask_row,
+                                               has_softcap, kv_start, kv_limit, block,
+                                               scores.data(), accumulator.data(), m, l, any_valid);
+              handled_by_avx2_decode = true;
+            }
+          }
+          for (std::size_t j0 = kv_start; !handled_by_avx2_decode && j0 < kv_limit; j0 += block) {
+#else
           for (std::size_t j0 = kv_start; j0 < kv_limit; j0 += block) {
+#endif
             const std::size_t j1 = std::min(j0 + block, kv_limit);
             const std::size_t count = j1 - j0;
 

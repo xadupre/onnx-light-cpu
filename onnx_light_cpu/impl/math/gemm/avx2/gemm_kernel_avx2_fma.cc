@@ -376,10 +376,13 @@ void GemmMicroKernel_AVX2FMA_F32Impl(std::size_t nb, std::size_t K, float alpha,
       float *Yrow = Yrow_base + r * Ystride + n0 + n;
       __m256 res0 = alpha_is_one ? acc0[r] : _mm256_mul_ps(valpha, acc0[r]);
       __m256 res1 = alpha_is_one ? acc1[r] : _mm256_mul_ps(valpha, acc1[r]);
-      if (mode == GemmAccumMode::kInitBias) {
-        const float *Crow = Crow_base + r * Cstride + n0 + n;
-        const __m256 vc0 = _mm256_loadu_ps(Crow);
-        const __m256 vc1 = _mm256_loadu_ps(Crow + 8);
+      if (mode == GemmAccumMode::kInitBias || mode == GemmAccumMode::kInitColumnBias) {
+        const __m256 vc0 = mode == GemmAccumMode::kInitColumnBias
+                               ? _mm256_set1_ps(Crow_base[r * Cstride])
+                               : _mm256_loadu_ps(Crow_base + r * Cstride + n0 + n);
+        const __m256 vc1 = mode == GemmAccumMode::kInitColumnBias
+                               ? vc0
+                               : _mm256_loadu_ps(Crow_base + r * Cstride + n0 + n + 8);
         res0 = _mm256_add_ps(res0, beta_is_one ? vc0 : _mm256_mul_ps(vbeta, vc0));
         res1 = _mm256_add_ps(res1, beta_is_one ? vc1 : _mm256_mul_ps(vbeta, vc1));
       } else if (mode == GemmAccumMode::kAccumulate) {
@@ -419,8 +422,10 @@ void GemmMicroKernel_AVX2FMA_F32Impl(std::size_t nb, std::size_t K, float alpha,
     for (std::size_t r = 0; r < MR; ++r) {
       float *Yrow = Yrow_base + r * Ystride + n0 + n;
       __m256 res = alpha_is_one ? acc[r] : _mm256_mul_ps(valpha, acc[r]);
-      if (mode == GemmAccumMode::kInitBias) {
-        const __m256 vc = _mm256_loadu_ps(Crow_base + r * Cstride + n0 + n);
+      if (mode == GemmAccumMode::kInitBias || mode == GemmAccumMode::kInitColumnBias) {
+        const __m256 vc = mode == GemmAccumMode::kInitColumnBias
+                              ? _mm256_set1_ps(Crow_base[r * Cstride])
+                              : _mm256_loadu_ps(Crow_base + r * Cstride + n0 + n);
         res = _mm256_add_ps(res, beta_is_one ? vc : _mm256_mul_ps(vbeta, vc));
       } else if (mode == GemmAccumMode::kAccumulate) {
         res = _mm256_add_ps(res, _mm256_loadu_ps(Yrow));
@@ -429,8 +434,31 @@ void GemmMicroKernel_AVX2FMA_F32Impl(std::size_t nb, std::size_t K, float alpha,
     }
   }
   if (n < nb) {
-    GemmMicroKernel_Scalar_F32(MR, nb - n, K, alpha, beta, Bmat, N, Crow_base, Cstride, Yrow_base,
-                               Ystride, n0 + n, mode, Apack);
+    const __m256i tail = _mm256_cmpgt_epi32(_mm256_set1_epi32(static_cast<int>(nb - n)),
+                                            _mm256_setr_epi32(0, 1, 2, 3, 4, 5, 6, 7));
+    __m256 acc[MR];
+    for (std::size_t r = 0; r < MR; ++r) {
+      acc[r] = _mm256_setzero_ps();
+    }
+    for (std::size_t k = 0; k < K; ++k) {
+      const __m256 vb = _mm256_maskload_ps(Bmat + k * N + n0 + n, tail);
+      for (std::size_t r = 0; r < MR; ++r) {
+        acc[r] = _mm256_fmadd_ps(_mm256_set1_ps(Apack[r * K + k]), vb, acc[r]);
+      }
+    }
+    for (std::size_t r = 0; r < MR; ++r) {
+      float *Yrow = Yrow_base + r * Ystride + n0 + n;
+      __m256 res = alpha_is_one ? acc[r] : _mm256_mul_ps(valpha, acc[r]);
+      if (mode == GemmAccumMode::kInitBias || mode == GemmAccumMode::kInitColumnBias) {
+        const __m256 vc = mode == GemmAccumMode::kInitColumnBias
+                              ? _mm256_set1_ps(Crow_base[r * Cstride])
+                              : _mm256_maskload_ps(Crow_base + r * Cstride + n0 + n, tail);
+        res = _mm256_add_ps(res, beta_is_one ? vc : _mm256_mul_ps(vbeta, vc));
+      } else if (mode == GemmAccumMode::kAccumulate) {
+        res = _mm256_add_ps(res, _mm256_maskload_ps(Yrow, tail));
+      }
+      _mm256_maskstore_ps(Yrow, tail, res);
+    }
   }
 }
 

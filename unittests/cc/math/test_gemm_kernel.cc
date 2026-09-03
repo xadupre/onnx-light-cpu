@@ -603,6 +603,55 @@ TEST(GemmFloat32, SingleRowColumnTail) {
   }
 }
 
+TEST(GemmFloat32, Avx2ColumnTailsMatchReference) {
+  if (onnx_light_cpu::DetectSimdLevel() != onnx_light_cpu::SimdLevel::kAVX2 ||
+      !onnx_light_cpu::CpuSupportsFma()) {
+    GTEST_SKIP() << "masked column tails are specific to AVX2/FMA";
+  }
+
+  constexpr std::size_t M = 7;
+  constexpr std::size_t K = 600;
+  const float alpha = 0.75f;
+  const float beta = 1.25f;
+  const onnx_light_cpu::GemmBlocking blocking{6, 16, 256, 6, 16};
+
+  for (std::size_t tail = 1; tail <= 7; ++tail) {
+    const std::size_t N = 8 + tail;
+    const auto A = RandomVector(M * K, static_cast<unsigned>(80 + tail));
+    const auto B = RandomVector(K * N, static_cast<unsigned>(90 + tail));
+    const auto C = RandomVector(M * N, static_cast<unsigned>(100 + tail));
+    const auto expected = ReferenceGemm<float>(false, false, M, N, K, alpha, A, B, beta, &C);
+    std::vector<float> Y(M * N);
+
+    onnx_light_cpu::detail::GemmFloat32Planned<onnx_light_cpu::GemmAlgorithm::kGeneral>(
+        false, false, M, N, K, alpha, A.data(), B.data(), beta, C.data(), Y.data(), &blocking);
+
+    for (std::size_t i = 0; i < M * N; ++i) {
+      EXPECT_NEAR(Y[i], expected[i], 2e-2f) << "tail=" << tail << " i=" << i;
+    }
+
+    constexpr std::size_t column_bias_k = 41;
+    const auto column_bias_a = RandomVector(M * column_bias_k, static_cast<unsigned>(110 + tail));
+    const auto column_bias_b = RandomVector(column_bias_k * N, static_cast<unsigned>(120 + tail));
+    const auto column_bias = RandomVector(M, static_cast<unsigned>(130 + tail));
+    std::vector<float> expanded_bias(M * N);
+    for (std::size_t row = 0; row < M; ++row) {
+      std::fill_n(expanded_bias.data() + row * N, N, column_bias[row]);
+    }
+    const auto column_bias_expected =
+        ReferenceGemm<float>(false, false, M, N, column_bias_k, alpha, column_bias_a, column_bias_b,
+                             beta, &expanded_bias);
+    onnx_light_cpu::detail::GemmFloat32PlannedColumnBias(
+        M, N, column_bias_k, alpha, column_bias_a.data(), column_bias_b.data(), beta,
+        column_bias.data(), Y.data(), &blocking);
+
+    for (std::size_t i = 0; i < M * N; ++i) {
+      EXPECT_NEAR(Y[i], column_bias_expected[i], 2e-2f)
+          << "column bias tail=" << tail << " i=" << i;
+    }
+  }
+}
+
 TEST(GemmFloat64, MatmulMatchesReference) {
   const std::size_t M = 5, N = 7, K = 9;
   const auto A = RandomVectorD(M * K, 21);
