@@ -66,8 +66,8 @@ class TestBenchmarkCli(ExtTestCase):
             SimpleNamespace(name="test_cpu_gemm_float32_benchmark", unload=mock.Mock()),
         ]
         measured = (
-            [{"case": cases[0].name, "duration_us": 1.0}],
-            {"case": cases[0].name, "mean_us": 1.0},
+            [{"case": cases[0].name, "duration_s": 1.0}],
+            {"case": cases[0].name, "mean_s": 1.0},
         )
         with (
             mock.patch("onnx_light_cpu._benchmark.register_backend_test_cases"),
@@ -114,11 +114,14 @@ class TestBenchmarkCli(ExtTestCase):
                 return_value=("onnx_light_cpu::Abs",),
             ),
         ):
-            _benchmark._measure_case(case, 1, 0, 1.0, 3)
+            raw, _ = _benchmark._measure_case(case, 1, 0, 1.0, 3)
         evaluator.assert_called_once_with(
             case.model,
             cpu_execution={"num_threads": 3, "affinity_policy": "none"},
         )
+        self.assertEqual(raw[0]["run"], 1)
+        self.assertEqual(raw[0]["runtime"], "onnx-light-cpu")
+        self.assertIn("duration_s", raw[0])
 
     def test_onnxruntime_unsupported_case_is_reported(self):
         model = SimpleNamespace(
@@ -147,10 +150,54 @@ class TestBenchmarkCli(ExtTestCase):
                 return_value=("onnx_light_cpu::Abs",),
             ),
         ):
-            _, aggregated = _benchmark._measure_case(case, 1, 0, 1.0, 1, True)
+            raw, aggregated = _benchmark._measure_case(case, 1, 0, 1.0, 1, True)
         self.assertEqual(aggregated["onnxruntime_error"], "unsupported model")
-        self.assertIsNone(aggregated["onnxruntime_median_us"])
+        self.assertIsNone(aggregated["onnxruntime_median_s"])
         self.assertIsNone(aggregated["speedup"])
+        self.assertEqual([row["runtime"] for row in raw], ["onnx-light-cpu"])
+
+    def test_raw_rows_identify_run_and_runtime(self):
+        model = SimpleNamespace(
+            graph=SimpleNamespace(
+                node=[SimpleNamespace(op_type="Abs")],
+                input=[],
+            ),
+            SerializeToString=mock.Mock(return_value=b"model"),
+        )
+        case = SimpleNamespace(
+            name="test_cpu_abs_float32_benchmark",
+            model=model,
+            data_sets=[],
+        )
+        ort_session = SimpleNamespace(run=mock.Mock())
+        onnxruntime = SimpleNamespace(
+            SessionOptions=lambda: SimpleNamespace(),
+            ExecutionMode=SimpleNamespace(ORT_SEQUENTIAL=0),
+            InferenceSession=mock.Mock(return_value=ort_session),
+        )
+        with (
+            mock.patch.dict(sys.modules, {"onnxruntime": onnxruntime}),
+            mock.patch("onnx_light.onnx.reference.ReferenceEvaluator"),
+            mock.patch("onnx_light_cpu._benchmark.clear_used_kernel_names"),
+            mock.patch(
+                "onnx_light_cpu._benchmark.used_kernel_names",
+                return_value=("onnx_light_cpu::Abs",),
+            ),
+        ):
+            raw, aggregated = _benchmark._measure_case(case, 2, 0, 1.0, 1, True)
+
+        self.assertEqual(
+            [(row["run"], row["runtime"]) for row in raw],
+            [
+                (1, "onnx-light-cpu"),
+                (2, "onnx-light-cpu"),
+                (1, "onnxruntime"),
+                (2, "onnxruntime"),
+            ],
+        )
+        self.assertTrue(all(row["duration_s"] >= 0.0 for row in raw))
+        self.assertEqual(aggregated["samples"], 2)
+        self.assertEqual(aggregated["onnxruntime_samples"], 2)
 
     def test_writes_raw_and_aggregated_sheets(self):
         raw = [
@@ -163,7 +210,9 @@ class TestBenchmarkCli(ExtTestCase):
                 "threads": 3,
                 "input_shapes": '[{"x": [2, 3]}]',
                 "max_repeat_time": 1.0,
-                "duration_us": 12.5,
+                "run": 1,
+                "runtime": "onnx-light-cpu",
+                "duration_s": 0.0000125,
             }
         ]
         aggregated = [
@@ -177,16 +226,16 @@ class TestBenchmarkCli(ExtTestCase):
                 "input_shapes": '[{"x": [2, 3]}]',
                 "max_repeat_time": 1.0,
                 "samples": 1,
-                "mean_us": 12.5,
-                "stdev_us": 0.0,
-                "min_repeat_us": 12.5,
-                "p10_us": 12.5,
-                "median_us": 12.5,
-                "p90_us": 12.5,
-                "max_repeat_us": 12.5,
+                "mean_s": 0.0000125,
+                "stdev_s": 0.0,
+                "min_repeat_s": 0.0000125,
+                "p10_s": 0.0000125,
+                "median_s": 0.0000125,
+                "p90_s": 0.0000125,
+                "max_repeat_s": 0.0000125,
                 "onnxruntime_samples": None,
-                "onnxruntime_mean_us": None,
-                "onnxruntime_median_us": None,
+                "onnxruntime_mean_s": None,
+                "onnxruntime_median_s": None,
                 "onnxruntime_error": None,
                 "speedup": None,
             }
@@ -197,12 +246,15 @@ class TestBenchmarkCli(ExtTestCase):
             workbook = load_workbook(output, read_only=True)
             self.assertEqual(workbook.sheetnames, ["raw", "aggregated"])
             self.assertEqual(workbook["raw"]["A2"].value, raw[0]["case"])
-            self.assertNotIn("iteration", [cell.value for cell in workbook["raw"][1]])
+            raw_headers = [cell.value for cell in workbook["raw"][1]]
+            self.assertIn("run", raw_headers)
+            self.assertIn("runtime", raw_headers)
+            self.assertNotIn("duration_us", raw_headers)
             self.assertEqual(workbook["aggregated"]["I2"].value, 1)
             workbook.close()
 
     def test_main_runs_benchmark_and_writes_output(self):
-        rows = ([{"duration_us": 1.0}], [{"case": "one"}])
+        rows = ([{"duration_s": 1.0}], [{"case": "one"}])
         with (
             mock.patch(
                 "onnx_light_cpu.__main__.run_backend_benchmark",
