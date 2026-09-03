@@ -535,10 +535,12 @@ std::size_t StreamingParticipantCount(const AttentionPlan &plan, std::size_t tot
   constexpr std::size_t kMaximumParticipants = 16;
   const bool is_short_stateless_query = plan.past_length == 0 && plan.q_length > 1 &&
                                         plan.q_length <= 16 && plan.total_kv_length <= 256;
+  const bool is_decode_query = plan.q_length == 1 && plan.total_kv_length >= 512;
   const std::size_t target_fmas_per_participant =
-      plan.total_kv_length <= 16 ? kShortKvTargetFmasPerParticipant
-                                 : (is_short_stateless_query ? kShortQueryTargetFmasPerParticipant
-                                                             : kDefaultTargetFmasPerParticipant);
+      plan.total_kv_length <= 16
+          ? kShortKvTargetFmasPerParticipant
+          : (is_short_stateless_query || is_decode_query ? kShortQueryTargetFmasPerParticipant
+                                                         : kDefaultTargetFmasPerParticipant);
   const std::size_t fmas_per_row =
       (plan.head_dim + plan.v_head_dim) * std::max<std::size_t>(plan.total_kv_length, 1);
   const std::size_t total_fmas = total_rows * fmas_per_row;
