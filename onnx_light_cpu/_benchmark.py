@@ -6,9 +6,11 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import statistics
+import sys
 import time
 from pathlib import Path
 from typing import Any, Sequence
@@ -38,19 +40,32 @@ _DTYPES = (
     "bool",
 )
 
-_RAW_COLUMNS = ("case", "operator", "dtype", "iteration", "duration_us")
-_AGGREGATED_COLUMNS = (
+_METADATA_COLUMNS = (
     "case",
     "operator",
     "dtype",
+    "repeat",
+    "warmup",
+    "threads",
+    "input_shapes",
+    "max_repeat_time",
+)
+_RAW_COLUMNS = (*_METADATA_COLUMNS, "duration_us")
+_AGGREGATED_COLUMNS = (
+    *_METADATA_COLUMNS,
     "samples",
     "mean_us",
     "stdev_us",
-    "min_us",
+    "min_repeat_us",
     "p10_us",
     "median_us",
     "p90_us",
-    "max_us",
+    "max_repeat_us",
+    "onnxruntime_samples",
+    "onnxruntime_mean_us",
+    "onnxruntime_median_us",
+    "onnxruntime_error",
+    "speedup",
 )
 
 
@@ -92,6 +107,7 @@ def _measure_case(
     warmup: int,
     max_repeat_time: float,
     threads: int,
+    with_onnxruntime: bool = False,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     from onnx_light.onnx.reference import (  # pyrefly: ignore[missing-import]
         ReferenceEvaluator,
@@ -108,6 +124,9 @@ def _measure_case(
                 for name, tensor in zip(input_names, data_set.inputs, strict=True)
             }
         )
+    input_shapes = json.dumps(
+        [{name: list(array.shape) for name, array in feed.items()} for feed in feeds]
+    )
 
     evaluator = ReferenceEvaluator(
         model,
@@ -143,29 +162,80 @@ def _measure_case(
             break
 
     dtype = _case_dtype(case.name) or "unknown"
-    raw = [
-        {
-            "case": case.name,
-            "operator": operator,
-            "dtype": dtype,
-            "iteration": iteration,
-            "duration_us": duration,
-        }
-        for iteration, duration in enumerate(durations, start=1)
-    ]
-    aggregate = {
+    metadata = {
         "case": case.name,
         "operator": operator,
         "dtype": dtype,
+        "repeat": repeat,
+        "warmup": warmup,
+        "threads": threads,
+        "input_shapes": input_shapes,
+        "max_repeat_time": max_repeat_time,
+    }
+    raw = [
+        {
+            **metadata,
+            "duration_us": duration,
+        }
+        for duration in durations
+    ]
+    aggregate = {
+        **metadata,
         "samples": len(durations),
         "mean_us": statistics.fmean(durations),
         "stdev_us": statistics.stdev(durations) if len(durations) > 1 else 0.0,
-        "min_us": min(durations),
+        "min_repeat_us": min(durations),
         "p10_us": float(np.percentile(durations, 10)),
         "median_us": statistics.median(durations),
         "p90_us": float(np.percentile(durations, 90)),
-        "max_us": max(durations),
+        "max_repeat_us": max(durations),
+        "onnxruntime_samples": None,
+        "onnxruntime_mean_us": None,
+        "onnxruntime_median_us": None,
+        "onnxruntime_error": None,
+        "speedup": None,
     }
+    if with_onnxruntime:
+        import onnxruntime  # pyrefly: ignore[missing-import]
+
+        try:
+            session_options = onnxruntime.SessionOptions()
+            session_options.intra_op_num_threads = threads
+            session_options.inter_op_num_threads = 1
+            session_options.execution_mode = onnxruntime.ExecutionMode.ORT_SEQUENTIAL
+            ort_session = onnxruntime.InferenceSession(
+                model.SerializeToString(),
+                sess_options=session_options,
+                providers=["CPUExecutionProvider"],
+            )
+            for feed in feeds:
+                ort_session.run(None, feed)
+            ort_warmup_start = time.perf_counter()
+            for _ in range(warmup):
+                for feed in feeds:
+                    ort_session.run(None, feed)
+                if time.perf_counter() - ort_warmup_start >= max_repeat_time:
+                    break
+            ort_durations = []
+            ort_start = time.perf_counter()
+            for _ in range(repeat):
+                start = time.perf_counter_ns()
+                for feed in feeds:
+                    ort_session.run(None, feed)
+                ort_durations.append((time.perf_counter_ns() - start) / 1000)
+                if time.perf_counter() - ort_start >= max_repeat_time:
+                    break
+        except Exception as exc:  # noqa: BLE001 -- unsupported cases remain in the report.
+            aggregate["onnxruntime_error"] = str(exc)
+        else:
+            aggregate["onnxruntime_samples"] = len(ort_durations)
+            aggregate["onnxruntime_mean_us"] = statistics.fmean(ort_durations)
+            aggregate["onnxruntime_median_us"] = statistics.median(ort_durations)
+            aggregate["speedup"] = (
+                aggregate["onnxruntime_median_us"] / aggregate["median_us"]
+                if aggregate["median_us"]
+                else float("inf")
+            )
     return raw, aggregate
 
 
@@ -176,6 +246,7 @@ def run_backend_benchmark(
     warmup: int,
     max_repeat_time: float,
     threads: int,
+    with_onnxruntime: bool = False,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Runs selected BENCHMARK backend cases and returns raw and aggregate rows."""
     from onnx_light.onnx.backend import (  # pyrefly: ignore[missing-import]
@@ -191,6 +262,8 @@ def run_backend_benchmark(
         raise ValueError("max_repeat_time must be greater than 0")
     if threads <= 0:
         raise ValueError("threads must be greater than 0")
+    if with_onnxruntime:
+        import onnxruntime  # noqa: F401  # pyrefly: ignore[missing-import]
 
     selected_dtypes = set(normalize_dtypes(dtypes))
     test_expressions = [re.compile(expression) for expression in tests]
@@ -215,8 +288,11 @@ def run_backend_benchmark(
 
     raw_rows = []
     aggregated_rows = []
-    for case in cases:
-        raw, aggregate = _measure_case(case, repeat, warmup, max_repeat_time, threads)
+    for index, case in enumerate(cases, start=1):
+        print(f"[{index}/{len(cases)}] {case.name}", file=sys.stderr, flush=True)
+        raw, aggregate = _measure_case(
+            case, repeat, warmup, max_repeat_time, threads, with_onnxruntime
+        )
         raw_rows.extend(raw)
         aggregated_rows.append(aggregate)
         case.unload()

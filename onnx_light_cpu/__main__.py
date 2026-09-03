@@ -92,6 +92,11 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
         help="number of onnx-light-cpu worker threads",
     )
+    benchmark.add_argument(
+        "--onnxruntime",
+        action="store_true",
+        help="also benchmark ONNX Runtime and report the speedup",
+    )
     return parser
 
 
@@ -109,6 +114,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             warmup=args.warmup,
             max_repeat_time=args.max_repeat_time,
             threads=args.threads,
+            with_onnxruntime=args.onnxruntime,
         )
         write_benchmark_workbook(args.output, raw_rows, aggregated_rows)
         print(

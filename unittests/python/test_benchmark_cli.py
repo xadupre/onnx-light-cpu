@@ -4,8 +4,11 @@
 
 """Tests for ``python -m onnx_light_cpu benchmark``."""
 
+import io
 import re
+import sys
 import tempfile
+from contextlib import redirect_stderr
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -29,10 +32,12 @@ class TestBenchmarkCli(ExtTestCase):
                 "--dtype",
                 "float32,float64",
                 "int64",
+                "--onnxruntime",
             ]
         )
         self.assertEqual(args.tests, ["^test_cpu_abs_", "^test_cpu_gemm_"])
         self.assertEqual(args.dtypes, ["float32,float64", "int64"])
+        self.assertTrue(args.onnxruntime)
         self.assertEqual(
             normalize_dtypes(args.dtypes),
             ("float32", "float64", "int64"),
@@ -51,6 +56,7 @@ class TestBenchmarkCli(ExtTestCase):
                 warmup=0,
                 max_repeat_time=1.0,
                 threads=1,
+                with_onnxruntime=False,
             )
 
     def test_selects_backend_tests_and_dtypes(self):
@@ -74,17 +80,20 @@ class TestBenchmarkCli(ExtTestCase):
                 "onnx_light_cpu._benchmark._measure_case", return_value=measured
             ) as measure,
         ):
-            raw, aggregated = _benchmark.run_backend_benchmark(
-                tests=[r"^test_cpu_(abs|log)_"],
-                dtypes=["float32"],
-                repeat=1,
-                warmup=0,
-                max_repeat_time=1.0,
-                threads=1,
-            )
+            progress = io.StringIO()
+            with redirect_stderr(progress):
+                raw, aggregated = _benchmark.run_backend_benchmark(
+                    tests=[r"^test_cpu_(abs|log)_"],
+                    dtypes=["float32"],
+                    repeat=1,
+                    warmup=0,
+                    max_repeat_time=1.0,
+                    threads=1,
+                )
         self.assertEqual(raw, measured[0])
         self.assertEqual(aggregated, [measured[1]])
-        measure.assert_called_once_with(cases[0], 1, 0, 1.0, 1)
+        self.assertIn("[1/1] test_cpu_abs_float32_benchmark", progress.getvalue())
+        measure.assert_called_once_with(cases[0], 1, 0, 1.0, 1, False)
 
     def test_explicit_threads_use_onnxruntime_affinity_default(self):
         case = SimpleNamespace(
@@ -111,13 +120,49 @@ class TestBenchmarkCli(ExtTestCase):
             cpu_execution={"num_threads": 3, "affinity_policy": "none"},
         )
 
+    def test_onnxruntime_unsupported_case_is_reported(self):
+        model = SimpleNamespace(
+            graph=SimpleNamespace(
+                node=[SimpleNamespace(op_type="Abs")],
+                input=[],
+            ),
+            SerializeToString=mock.Mock(return_value=b"model"),
+        )
+        case = SimpleNamespace(
+            name="test_cpu_abs_float32_benchmark",
+            model=model,
+            data_sets=[],
+        )
+        onnxruntime = SimpleNamespace(
+            SessionOptions=lambda: SimpleNamespace(),
+            ExecutionMode=SimpleNamespace(ORT_SEQUENTIAL=0),
+            InferenceSession=mock.Mock(side_effect=RuntimeError("unsupported model")),
+        )
+        with (
+            mock.patch.dict(sys.modules, {"onnxruntime": onnxruntime}),
+            mock.patch("onnx_light.onnx.reference.ReferenceEvaluator"),
+            mock.patch("onnx_light_cpu._benchmark.clear_used_kernel_names"),
+            mock.patch(
+                "onnx_light_cpu._benchmark.used_kernel_names",
+                return_value=("onnx_light_cpu::Abs",),
+            ),
+        ):
+            _, aggregated = _benchmark._measure_case(case, 1, 0, 1.0, 1, True)
+        self.assertEqual(aggregated["onnxruntime_error"], "unsupported model")
+        self.assertIsNone(aggregated["onnxruntime_median_us"])
+        self.assertIsNone(aggregated["speedup"])
+
     def test_writes_raw_and_aggregated_sheets(self):
         raw = [
             {
                 "case": "test_cpu_abs_float32_benchmark",
                 "operator": "Abs",
                 "dtype": "float32",
-                "iteration": 1,
+                "repeat": 2,
+                "warmup": 1,
+                "threads": 3,
+                "input_shapes": '[{"x": [2, 3]}]',
+                "max_repeat_time": 1.0,
                 "duration_us": 12.5,
             }
         ]
@@ -126,14 +171,24 @@ class TestBenchmarkCli(ExtTestCase):
                 "case": "test_cpu_abs_float32_benchmark",
                 "operator": "Abs",
                 "dtype": "float32",
+                "repeat": 2,
+                "warmup": 1,
+                "threads": 3,
+                "input_shapes": '[{"x": [2, 3]}]',
+                "max_repeat_time": 1.0,
                 "samples": 1,
                 "mean_us": 12.5,
                 "stdev_us": 0.0,
-                "min_us": 12.5,
+                "min_repeat_us": 12.5,
                 "p10_us": 12.5,
                 "median_us": 12.5,
                 "p90_us": 12.5,
-                "max_us": 12.5,
+                "max_repeat_us": 12.5,
+                "onnxruntime_samples": None,
+                "onnxruntime_mean_us": None,
+                "onnxruntime_median_us": None,
+                "onnxruntime_error": None,
+                "speedup": None,
             }
         ]
         with tempfile.TemporaryDirectory() as temporary:
@@ -142,7 +197,8 @@ class TestBenchmarkCli(ExtTestCase):
             workbook = load_workbook(output, read_only=True)
             self.assertEqual(workbook.sheetnames, ["raw", "aggregated"])
             self.assertEqual(workbook["raw"]["A2"].value, raw[0]["case"])
-            self.assertEqual(workbook["aggregated"]["E2"].value, 12.5)
+            self.assertNotIn("iteration", [cell.value for cell in workbook["raw"][1]])
+            self.assertEqual(workbook["aggregated"]["I2"].value, 1)
             workbook.close()
 
     def test_main_runs_benchmark_and_writes_output(self):
@@ -179,6 +235,7 @@ class TestBenchmarkCli(ExtTestCase):
             warmup=0,
             max_repeat_time=1.0,
             threads=1,
+            with_onnxruntime=False,
         )
         write.assert_called_once_with("results.xlsx", *rows)
 

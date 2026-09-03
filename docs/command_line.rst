@@ -25,6 +25,7 @@ workbook:
        --warmup 10 \
        --max-repeat-time 2 \
        --threads 4 \
+       --onnxruntime \
        --output benchmark.xlsx
 
 ``--test`` (or ``--tests``)
@@ -55,11 +56,17 @@ workbook:
    available to the process. Workers are unpinned, matching ONNX Runtime when
    ``intra_op_num_threads`` is set explicitly.
 
+``--onnxruntime``
+   Also measures ONNX Runtime with the same number of threads and reports its
+   latency and the speedup of onnx-light-cpu over ONNX Runtime.
+
 ``-o``, ``--output``
    Output workbook path. It must end in ``.xlsx`` and defaults to
    ``onnx_light_cpu_benchmark.xlsx``. Parent directories are created when
    needed.
 
-The ``raw`` sheet contains each measured iteration. The ``aggregated`` sheet
-contains the sample count, mean, standard deviation, minimum, 10th percentile,
-median, 90th percentile, and maximum latency for every selected case.
+The ``raw`` sheet contains each measured duration. The ``aggregated`` sheet
+contains the requested repeat, warm-up, thread count, input shapes, maximum
+repeat time, sample count, mean, standard deviation, minimum, 10th percentile,
+median, 90th percentile, and maximum latency for every selected case. When
+``--onnxruntime`` is enabled, it also contains ONNX Runtime latency and speedup.
