@@ -864,6 +864,136 @@ TEST(ComputeAttentionFloat32Streaming, BooleanMaskTileSkipMatchesReference) {
   ExpectClose(y, materialized_y);
 }
 
+// -----------------------------------------------------------------------
+// AVX2+FMA `Q == 1` decode fast path (onnx_light_cpu/impl/attention/avx2):
+// on AVX2 hardware without AVX-512 these cases exercise
+// `ComputeAttentionDecodeRowAVX2FMA` and its AVX2 primitives directly; on
+// any other hardware they still validate the (unconditionally correct)
+// scalar fallback, so the suite stays portable. Compared against
+// `ComputeAttentionFloat32Materialized`, which never takes this fast path.
+// -----------------------------------------------------------------------
+
+// Exact production benchmark shape: B1/H12/Q1/KV1024/D64, MHA, internal past
+// cache, no mask (the shape the AVX2+FMA decode fast path targets).
+TEST(ComputeAttentionFloat32Streaming, Avx2DecodeBenchmarkShapeMatchesMaterialized) {
+  AttentionDescriptor descriptor;
+  constexpr std::size_t batch = 1, heads = 12, q_len = 1, head_dim = 64, total_kv_length = 1024,
+                        past_len = total_kv_length - 1;
+  const std::int64_t q_shape[] = {batch, heads, q_len, head_dim};
+  const std::int64_t k_shape[] = {batch, heads, 1, head_dim};
+  const std::int64_t past_shape[] = {batch, heads, past_len, head_dim};
+  AttentionPlan plan(descriptor, AttentionLayout::kRank4, q_shape, k_shape, k_shape, {},
+                     AttentionMaskKind::kNone, past_shape, past_shape);
+  ASSERT_EQ(plan.q_length, 1u);
+  ASSERT_EQ(plan.total_kv_length, total_kv_length);
+
+  const auto q = RandomTensor(batch * heads * q_len * head_dim, 1301);
+  const auto k = RandomTensor(batch * heads * 1 * head_dim, 1302);
+  const auto v = RandomTensor(batch * heads * 1 * head_dim, 1303);
+  const auto past_k = RandomTensor(batch * heads * past_len * head_dim, 1304);
+  const auto past_v = RandomTensor(batch * heads * past_len * head_dim, 1305);
+
+  std::vector<float> streaming_y(batch * heads * q_len * head_dim);
+  ComputeAttentionFloat32Streaming(plan, q.data(), k.data(), v.data(), nullptr, streaming_y.data(),
+                                   past_k.data(), past_v.data());
+  std::vector<float> materialized_y(streaming_y.size());
+  onnx_light_cpu::ComputeAttentionFloat32Materialized(plan, q.data(), k.data(), v.data(), nullptr,
+                                                      materialized_y.data(), past_k.data(),
+                                                      past_v.data());
+  ExpectClose(streaming_y, materialized_y);
+
+  std::vector<float> extreme_q(q.size(), std::numeric_limits<float>::max());
+  std::vector<float> extreme_k(k.size(), -std::numeric_limits<float>::max());
+  std::vector<float> extreme_past_k(past_k.size(), -std::numeric_limits<float>::max());
+  ComputeAttentionFloat32Streaming(plan, extreme_q.data(), extreme_k.data(), v.data(), nullptr,
+                                   streaming_y.data(), extreme_past_k.data(), past_v.data());
+  for (float value : streaming_y) {
+    EXPECT_FLOAT_EQ(value, 0.0f);
+  }
+}
+
+// Vector-tail coverage: `head_dim` is not a multiple of the AVX2 8-wide
+// lane width, exercising the masked remainder path of
+// `AttentionDotFloat32_AVX2_FMA`/`AttentionAccumulateFloat32_AVX2_FMA`, with
+// an internal past cache (so the block loop reads from two buffers).
+TEST(ComputeAttentionFloat32Streaming, Avx2DecodeHeadDimTailMatchesMaterialized) {
+  AttentionDescriptor descriptor;
+  descriptor.is_causal = true;
+  constexpr std::size_t batch = 1, heads = 2, q_len = 1, head_dim = 13, past_len = 37;
+  const std::int64_t q_shape[] = {batch, heads, q_len, head_dim};
+  const std::int64_t k_shape[] = {batch, heads, 1, head_dim};
+  const std::int64_t past_shape[] = {batch, heads, past_len, head_dim};
+  AttentionPlan plan(descriptor, AttentionLayout::kRank4, q_shape, k_shape, k_shape, {},
+                     AttentionMaskKind::kNone, past_shape, past_shape);
+  ASSERT_EQ(plan.q_length, 1u);
+  ASSERT_EQ(plan.total_kv_length, past_len + 1);
+
+  const auto q = RandomTensor(batch * heads * q_len * head_dim, 1401);
+  const auto k = RandomTensor(batch * heads * 1 * head_dim, 1402);
+  const auto v = RandomTensor(batch * heads * 1 * head_dim, 1403);
+  const auto past_k = RandomTensor(batch * heads * past_len * head_dim, 1404);
+  const auto past_v = RandomTensor(batch * heads * past_len * head_dim, 1405);
+
+  std::vector<float> streaming_y(batch * heads * q_len * head_dim);
+  ComputeAttentionFloat32Streaming(plan, q.data(), k.data(), v.data(), nullptr, streaming_y.data(),
+                                   past_k.data(), past_v.data());
+  std::vector<float> materialized_y(streaming_y.size());
+  onnx_light_cpu::ComputeAttentionFloat32Materialized(plan, q.data(), k.data(), v.data(), nullptr,
+                                                      materialized_y.data(), past_k.data(),
+                                                      past_v.data());
+  ExpectClose(streaming_y, materialized_y);
+}
+
+// Boolean mask decode with `q_length == 1` (so the AVX2 decode path is
+// actually exercised, unlike the existing `kv_len == 1` mask tests): a
+// scattered allowed set spanning an AVX2 tail `kv_len`, checked against the
+// independent oracle and the materialized path, plus a fully-disallowed mask
+// that must zero the output rather than produce NaN.
+TEST(ComputeAttentionFloat32Streaming, Avx2DecodeBooleanMaskMatchesReferenceAndZerosFullyMasked) {
+  AttentionDescriptor descriptor;
+  constexpr std::size_t batch = 1, heads = 2, q_len = 1, kv_len = 21, head_dim = 8, v_head_dim = 8;
+  const std::int64_t q_shape[] = {batch, heads, q_len, head_dim};
+  const std::int64_t k_shape[] = {batch, heads, kv_len, head_dim};
+  const std::int64_t v_shape[] = {batch, heads, kv_len, v_head_dim};
+  const std::int64_t mask_shape[] = {batch, heads, q_len, kv_len};
+
+  const auto q = RandomTensor(batch * heads * q_len * head_dim, 1001);
+  const auto k = RandomTensor(batch * heads * kv_len * head_dim, 1002);
+  const auto v = RandomTensor(batch * heads * kv_len * v_head_dim, 1003);
+
+  // Scattered allowed keys, identical across every (batch, head) row,
+  // including the very last (tail) element.
+  std::vector<std::uint8_t> bool_mask(batch * heads * q_len * kv_len, 0);
+  for (std::size_t h = 0; h < heads; ++h) {
+    for (std::size_t j : {std::size_t{0}, std::size_t{3}, std::size_t{8}, std::size_t{20}}) {
+      bool_mask[h * kv_len + j] = 1;
+    }
+  }
+
+  AttentionPlan plan(descriptor, AttentionLayout::kRank4, q_shape, k_shape, v_shape, mask_shape,
+                     AttentionMaskKind::kBoolean);
+  ASSERT_EQ(plan.q_length, 1u);
+  ASSERT_EQ(plan.mask_strides.kv, 1);
+  std::vector<float> y(batch * heads * q_len * v_head_dim);
+  ComputeAttentionFloat32Streaming(plan, q.data(), k.data(), v.data(), bool_mask.data(), y.data());
+
+  const auto expected = ReferenceAttention(batch, heads, heads, q_len, kv_len, head_dim, v_head_dim,
+                                           q, k, v, plan.scale, false, nullptr, &bool_mask);
+  ExpectClose(y, expected);
+
+  std::vector<float> materialized_y(y.size());
+  onnx_light_cpu::ComputeAttentionFloat32Materialized(plan, q.data(), k.data(), v.data(),
+                                                      bool_mask.data(), materialized_y.data());
+  ExpectClose(y, materialized_y);
+
+  // A fully-disallowed mask must zero the output rather than produce NaN.
+  const std::vector<std::uint8_t> fully_masked(bool_mask.size(), 0);
+  std::vector<float> zeroed_y(y.size(), std::numeric_limits<float>::quiet_NaN());
+  ComputeAttentionFloat32Streaming(plan, q.data(), k.data(), v.data(), fully_masked.data(),
+                                   zeroed_y.data());
+  EXPECT_EQ(zeroed_y, std::vector<float>(zeroed_y.size(), 0.0f));
+}
+
 namespace half_precision {
 
 std::vector<std::uint16_t> ToFloat16(const std::vector<float> &values) {
