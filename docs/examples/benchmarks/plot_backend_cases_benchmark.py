@@ -241,9 +241,20 @@ def _collect_cases():
 
 print("-- _collect_cases")
 _CASES = _collect_cases()
-_no_cases_message = (
-    f"no onnx-light-cpu BENCHMARK backend test cases were collected (filter={args.filter!r})"
-)
+
+
+def _format_no_cases_message(pattern):
+    message = (
+        f"no onnx-light-cpu BENCHMARK backend test cases were collected (filter={pattern!r})"
+    )
+    if pattern and any(character.isupper() for character in pattern):
+        message += (
+            "; backend test case names are usually lowercase and filters are case-sensitive"
+        )
+    return message
+
+
+_no_cases_message = _format_no_cases_message(args.filter)
 assert _CASES, _no_cases_message
 print(f"-- collected {len(_CASES)} cases")
 

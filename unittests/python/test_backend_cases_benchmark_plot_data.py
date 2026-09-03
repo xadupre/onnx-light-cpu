@@ -29,6 +29,7 @@ _PLOT_DATA_NAMES = {
     "_short_label",
     "prepare_plot_data",
     "_case_group_key",
+    "_format_no_cases_message",
     "_CASE_GROUP_SUFFIXES",
     "measure",
     "timing_summary",
@@ -89,6 +90,7 @@ _helpers = _load_plot_data_helpers()
 NoPlottableCasesError = _helpers["NoPlottableCasesError"]
 prepare_plot_data = _helpers["prepare_plot_data"]
 _case_group_key = _helpers["_case_group_key"]
+_format_no_cases_message = _helpers["_format_no_cases_message"]
 measure = _helpers["measure"]
 timing_summary = _helpers["timing_summary"]
 
@@ -219,6 +221,19 @@ class TestCaseGroupKey(ExtTestCase):
         # A plain string in, string out call: nothing here should ever touch
         # a ``TestCase`` object or its ``.model`` property.
         self.assertIsInstance(_case_group_key("test_cpu_abs_float32_benchmark"), str)
+
+
+class TestNoCasesMessage(ExtTestCase):
+    def test_uppercase_filter_suggests_lowercase(self):
+        message = _format_no_cases_message(".*L.*")
+
+        self.assertIn("usually lowercase", message)
+        self.assertIn("case-sensitive", message)
+
+    def test_lowercase_filter_has_no_case_hint(self):
+        message = _format_no_cases_message(".*log.*")
+
+        self.assertNotIn("usually lowercase", message)
 
 
 class TestStableTiming(ExtTestCase):
