@@ -142,11 +142,14 @@ GemmBlocking ResolveBlocking(GemmBlocking configured, std::size_t element_size,
     }
     resolved.kc = k > 1024 ? 1024 : k;
   }
-  // Medium AVX-512 GEMMs otherwise expose only one row panel and leave the
+  // Medium AVX-512 and AVX2 AMD Zen GEMMs otherwise expose only one row panel and leave the
   // executor with fine-grained column tasks. Four row panels amortize
   // scheduling while allowing workers to reuse the shared packed B panel.
-  if (element_size == sizeof(float) && vector_lanes == 16 && register_rows == 12 &&
-      participants > 1 && m >= 128 && m <= 512 && n >= 128 && n <= 512) {
+  const bool optimized_x86_float = (vector_lanes == 16 && register_rows == 12) ||
+                                   (vector_lanes == 8 && register_rows == 6 &&
+                                    DetectSimdLevel() == SimdLevel::kAVX2 && CpuSupportsFma());
+  if (element_size == sizeof(float) && optimized_x86_float && participants > 1 && m >= 128 &&
+      m <= 512 && n >= 128 && n <= 512) {
     const std::size_t row_tasks = std::min({participants, m / register_rows, std::size_t{4}});
     const std::size_t rows_per_task = m / row_tasks + static_cast<std::size_t>(m % row_tasks != 0);
     resolved.mc = ((rows_per_task + register_rows - 1) / register_rows) * register_rows;
@@ -366,6 +369,17 @@ template <typename T> bool PreferBatchParallelism(std::span<const GroupedGemmPro
   return std::all_of(problems.begin(), problems.end(), [](const GroupedGemmProblem<T> &problem) {
     return problem.plan->useful_threads() == 1;
   });
+}
+
+bool PreferMatMulBatchParallelism(std::size_t batch_count, std::size_t gemm_threads) {
+  if (gemm_threads == 1) {
+    return true;
+  }
+  const ExecutionExecutorView *executor = CurrentExecutionExecutor();
+  const std::size_t available_threads = executor == nullptr || executor->effective_threads <= 1
+                                            ? 1
+                                            : static_cast<std::size_t>(executor->effective_threads);
+  return available_threads > 1 && batch_count >= std::min(available_threads, gemm_threads);
 }
 
 detail::MatMulDimensions PrepareMatMulDimensions(std::span<const std::size_t> a_shape,
@@ -761,8 +775,12 @@ template <typename T> void MatMulPlan<T>::Execute(const T *a, const T *b, T *y) 
       gemm_plan_.Execute(batch_a, batch_b, nullptr, y + batch * output_matrix_elements_);
     }
   };
-  if (gemm_plan_.useful_threads() == 1) {
-    ExecuteRanges(static_cast<std::int64_t>(batch_count_), GemmWork(gemm_plan_), execute);
+  if (PreferMatMulBatchParallelism(batch_count_, gemm_plan_.useful_threads())) {
+    const auto execute_batches = [&](std::int64_t begin, std::int64_t end) {
+      ParticipantLimitScope serial_gemm(1);
+      execute(begin, end);
+    };
+    ExecuteRanges(static_cast<std::int64_t>(batch_count_), GemmWork(gemm_plan_), execute_batches);
   } else {
     execute(0, static_cast<std::int64_t>(batch_count_));
   }
@@ -811,8 +829,12 @@ void MatMulPlan<T>::ExecuteHalf(const GemmHalfPlan &half_plan, const std::uint16
       half_plan.Execute(batch_a, batch_b, batch_epilogue, y + batch * output_matrix_elements_);
     }
   };
-  if (half_plan.useful_threads() == 1) {
-    ExecuteRanges(static_cast<std::int64_t>(batch_count_), GemmWork(gemm_plan_), execute);
+  if (PreferMatMulBatchParallelism(batch_count_, half_plan.useful_threads())) {
+    const auto execute_batches = [&](std::int64_t begin, std::int64_t end) {
+      ParticipantLimitScope serial_gemm(1);
+      execute(begin, end);
+    };
+    ExecuteRanges(static_cast<std::int64_t>(batch_count_), GemmWork(gemm_plan_), execute_batches);
   } else {
     execute(0, static_cast<std::int64_t>(batch_count_));
   }

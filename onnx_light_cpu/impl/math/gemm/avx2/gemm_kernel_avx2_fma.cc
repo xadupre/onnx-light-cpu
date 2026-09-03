@@ -396,7 +396,11 @@ void GemmMicroKernel_AVX2FMA_F32Impl(std::size_t nb, std::size_t K, float alpha,
       acc[r] = _mm256_setzero_ps();
     }
     const auto accumulate_k = [&](std::size_t k) {
-      const __m256 vb = _mm256_loadu_ps(Bmat + k * N + n0 + n);
+      const float *Brow = Bmat + k * N + n0 + n;
+      const __m256 vb = _mm256_loadu_ps(Brow);
+      if (k + kGemmPrefetchDistanceK < K) {
+        PrefetchT0(Brow + kGemmPrefetchDistanceK * N);
+      }
       for (std::size_t r = 0; r < MR; ++r) {
         const __m256 va = _mm256_set1_ps(Apack[r * K + k]);
         acc[r] = _mm256_fmadd_ps(va, vb, acc[r]);

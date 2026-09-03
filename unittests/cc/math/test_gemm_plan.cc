@@ -31,11 +31,13 @@ using onnx_light_cpu::StridedBatchedGemm;
 
 struct InlineExecutor {
   std::int64_t maximum_blocks = 0;
+  std::int64_t multi_block_dispatches = 0;
 
   static void Run(void *context, std::int64_t num_blocks, void *task_context,
                   onnx_light_cpu::ExecutionBlockFn task) {
     auto &self = *static_cast<InlineExecutor *>(context);
     self.maximum_blocks = std::max(self.maximum_blocks, num_blocks);
+    self.multi_block_dispatches += static_cast<std::int64_t>(num_blocks > 1);
     for (std::int64_t block = 0; block < num_blocks; ++block) {
       task(task_context, block);
     }
@@ -177,8 +179,13 @@ TEST(GemmPlan, Float64SquareUsesFinerParallelWork) {
 }
 
 TEST(GemmPlan, MediumFloatSquareSplitsRowsAcrossParticipants) {
-  if (onnx_light_cpu::DetectSimdLevel() < onnx_light_cpu::SimdLevel::kAVX512) {
-    GTEST_SKIP() << "medium-square row splitting is specific to AVX-512";
+  const bool supported_profile =
+      onnx_light_cpu::DetectSimdLevel() >= onnx_light_cpu::SimdLevel::kAVX512 ||
+      (onnx_light_cpu::DetectSimdLevel() >= onnx_light_cpu::SimdLevel::kAVX2 &&
+       onnx_light_cpu::CpuSupportsFma() &&
+       onnx_light_cpu::detail::SelectGemmRegisterRows(onnx_light_cpu::SimdLevel::kAVX2, true) == 6);
+  if (!supported_profile) {
+    GTEST_SKIP() << "medium-square row splitting requires AVX-512 or AVX2 on AMD Zen";
   }
   onnx_light_cpu::ExecutionExecutorView executor;
   executor.effective_threads = 4;
@@ -824,8 +831,8 @@ TEST(MatMulPlan, ExecutesBroadcastHalfPlan) {
 
 TEST(MatMulPlan, BatchSchedulingTakesPriorityOverSplitK) {
   constexpr std::size_t batch_count = 128;
-  constexpr std::size_t m = 2;
-  constexpr std::size_t n = 2;
+  constexpr std::size_t m = 4;
+  constexpr std::size_t n = 4;
   constexpr std::size_t k = 4096;
   const std::array<std::size_t, 3> a_shape = {batch_count, m, k};
   const std::array<std::size_t, 2> b_shape = {k, n};
@@ -833,10 +840,17 @@ TEST(MatMulPlan, BatchSchedulingTakesPriorityOverSplitK) {
   std::vector<float> a(batch_count * m * k, 1.0f);
   std::vector<float> b(k * n, 1.0f);
   std::vector<float> y(batch_count * m * n);
+  InlineExecutor executor;
+  onnx_light_cpu::ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run};
 
-  plan.Execute(a.data(), b.data(), y.data());
+  {
+    onnx_light_cpu::ExecutionExecutorScope scope(&view);
+    plan.Execute(a.data(), b.data(), y.data());
+  }
 
   EXPECT_EQ(plan.gemm_plan().algorithm(), GemmAlgorithm::kSplitK);
+  EXPECT_EQ(executor.maximum_blocks, 4);
+  EXPECT_EQ(executor.multi_block_dispatches, 1);
   for (float value : y) {
     EXPECT_FLOAT_EQ(value, static_cast<float>(k));
   }

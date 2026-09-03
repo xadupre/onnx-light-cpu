@@ -4,6 +4,7 @@
 
 #include "onnx_light_cpu/impl/attention/attention_plan.h"
 
+#include "onnx_light_cpu/impl/execution.h"
 #include "onnx_light_cpu/impl/math/half_conversion.h"
 
 #include <gtest/gtest.h>
@@ -19,6 +20,19 @@
 #include <vector>
 
 namespace {
+
+struct InlineExecutor {
+  std::int64_t maximum_blocks = 0;
+
+  static void Run(void *context, std::int64_t num_blocks, void *task_context,
+                  onnx_light_cpu::ExecutionBlockFn task) {
+    auto &self = *static_cast<InlineExecutor *>(context);
+    self.maximum_blocks = std::max(self.maximum_blocks, num_blocks);
+    for (std::int64_t block = 0; block < num_blocks; ++block) {
+      task(task_context, block);
+    }
+  }
+};
 
 using onnx_light_cpu::AttentionDescriptor;
 using onnx_light_cpu::AttentionLayout;
@@ -224,6 +238,28 @@ TEST(ComputeAttentionFloat32, Rank4MhaNoMaskMatchesReference) {
   const auto expected = ReferenceAttention(batch, heads, heads, q_len, kv_len, head_dim, v_head_dim,
                                            q, k, v, plan.scale, false, nullptr, nullptr);
   ExpectClose(y, expected);
+}
+
+TEST(ComputeAttentionFloat32Streaming, DecodeDistributesHeadsAcrossWorkers) {
+  AttentionDescriptor descriptor;
+  constexpr std::size_t batch = 1, heads = 12, q_len = 1, kv_len = 1024, head_dim = 64;
+  const std::int64_t q_shape[] = {batch, heads, q_len, head_dim};
+  const std::int64_t kv_shape[] = {batch, heads, kv_len, head_dim};
+  AttentionPlan plan(descriptor, AttentionLayout::kRank4, q_shape, kv_shape, kv_shape, {},
+                     AttentionMaskKind::kNone);
+  const auto q = RandomTensor(batch * heads * q_len * head_dim, 101);
+  const auto k = RandomTensor(batch * heads * kv_len * head_dim, 102);
+  const auto v = RandomTensor(batch * heads * kv_len * head_dim, 103);
+  std::vector<float> y(batch * heads * q_len * head_dim);
+  InlineExecutor executor;
+  onnx_light_cpu::ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run};
+
+  {
+    onnx_light_cpu::ExecutionExecutorScope scope(&view);
+    ComputeAttentionFloat32(plan, q.data(), k.data(), v.data(), nullptr, y.data());
+  }
+
+  EXPECT_EQ(executor.maximum_blocks, 4);
 }
 
 // GQA, rank-4, causal.
