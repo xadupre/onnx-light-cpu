@@ -86,6 +86,31 @@ class TestBenchmarkCli(ExtTestCase):
         self.assertEqual(aggregated, [measured[1]])
         measure.assert_called_once_with(cases[0], 1, 0, 1.0, 1)
 
+    def test_explicit_threads_use_onnxruntime_affinity_default(self):
+        case = SimpleNamespace(
+            name="test_cpu_abs_float32_benchmark",
+            model=SimpleNamespace(
+                graph=SimpleNamespace(
+                    node=[SimpleNamespace(op_type="Abs")],
+                    input=[],
+                )
+            ),
+            data_sets=[],
+        )
+        with (
+            mock.patch("onnx_light.onnx.reference.ReferenceEvaluator") as evaluator,
+            mock.patch("onnx_light_cpu._benchmark.clear_used_kernel_names"),
+            mock.patch(
+                "onnx_light_cpu._benchmark.used_kernel_names",
+                return_value=("onnx_light_cpu::Abs",),
+            ),
+        ):
+            _benchmark._measure_case(case, 1, 0, 1.0, 3)
+        evaluator.assert_called_once_with(
+            case.model,
+            cpu_execution={"num_threads": 3, "affinity_policy": "none"},
+        )
+
     def test_writes_raw_and_aggregated_sheets(self):
         raw = [
             {

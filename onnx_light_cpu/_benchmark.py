@@ -77,7 +77,9 @@ def _matches_case(name: str, expressions: Sequence[re.Pattern[str]]) -> bool:
 
 
 def _to_numpy(tensor: Any) -> np.ndarray:
-    from onnx_light.onnx.helper import tensor_dtype_to_np_dtype
+    from onnx_light.onnx.helper import (  # pyrefly: ignore[missing-import]
+        tensor_dtype_to_np_dtype,
+    )
 
     dtype = tensor_dtype_to_np_dtype(int(tensor.data_type))
     shape = tuple(int(dimension) for dimension in tensor.shape)
@@ -91,7 +93,9 @@ def _measure_case(
     max_repeat_time: float,
     threads: int,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    from onnx_light.onnx.reference import ReferenceEvaluator
+    from onnx_light.onnx.reference import (  # pyrefly: ignore[missing-import]
+        ReferenceEvaluator,
+    )
 
     model = case.model
     operator = model.graph.node[0].op_type
@@ -109,6 +113,7 @@ def _measure_case(
         model,
         cpu_execution={  # pyrefly: ignore[unexpected-keyword]
             "num_threads": threads,
+            # ORT does not pin workers when intra_op_num_threads is explicit.
             "affinity_policy": "none",
         },
     )
@@ -173,7 +178,10 @@ def run_backend_benchmark(
     threads: int,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Runs selected BENCHMARK backend cases and returns raw and aggregate rows."""
-    from onnx_light.onnx.backend import TestMode, collect_test_cases_by_name
+    from onnx_light.onnx.backend import (  # pyrefly: ignore[missing-import]
+        TestMode,
+        collect_test_cases_by_name,
+    )
 
     if repeat <= 0:
         raise ValueError("repeat must be greater than 0")
@@ -221,7 +229,7 @@ def write_benchmark_workbook(
     aggregated_rows: Sequence[dict[str, Any]],
 ) -> None:
     """Writes raw and aggregated benchmark data to an Excel workbook."""
-    from openpyxl import Workbook
+    from openpyxl import Workbook  # pyrefly: ignore[missing-import]
 
     output = Path(path)
     if output.suffix.lower() != ".xlsx":

@@ -182,7 +182,9 @@ onnx-light-cpu benchmark \
 ```
 
 Use `--dtypes all` to include every available dtype. The same command is
-available as `python -m onnx_light_cpu benchmark`.
+available as `python -m onnx_light_cpu benchmark`. The thread count is always
+explicit, so workers are unpinned, matching ONNX Runtime when
+`intra_op_num_threads` is explicitly set.
 
 Global registrations are owned by the process-wide dispatch table and are
 observed by sessions that resolve their nodes afterwards. Session registrations
