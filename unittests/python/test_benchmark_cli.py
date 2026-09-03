@@ -8,7 +8,7 @@ import io
 import re
 import sys
 import tempfile
-from contextlib import redirect_stderr
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -49,6 +49,19 @@ class TestBenchmarkCli(ExtTestCase):
             normalize_dtypes(args.dtypes),
             ("float32", "float64", "int64"),
         )
+
+    def test_parser_specifies_default_thread_count(self):
+        with mock.patch(
+            "onnx_light_cpu.__main__.os.sched_getaffinity",
+            return_value={0, 1, 2},
+            create=True,
+        ):
+            parser = _build_parser()
+        self.assertEqual(parser.parse_args(["benchmark"]).threads, 3)
+        help_output = io.StringIO()
+        with redirect_stdout(help_output), self.assertRaises(SystemExit):
+            parser.parse_args(["benchmark", "--help"])
+        self.assertIn("(default: 3)", help_output.getvalue())
 
     def test_rejects_unknown_dtype(self):
         with self.assertRaisesRegex(ValueError, "unknown dtype"):
