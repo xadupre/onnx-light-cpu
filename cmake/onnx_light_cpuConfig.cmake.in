@@ -1,5 +1,11 @@
 @PACKAGE_INIT@
 
+include(CMakeFindDependencyMacro)
+find_dependency(Threads)
+if(@ONNX_LIGHT_CPU_WITH_ONNX_LIGHT@)
+  find_dependency(onnx_light CONFIG)
+endif()
+
 include("${CMAKE_CURRENT_LIST_DIR}/onnx_light_cpuTargets.cmake")
 
 check_required_components(onnx_light_cpu)

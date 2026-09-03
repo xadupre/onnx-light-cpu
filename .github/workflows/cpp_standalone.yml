@@ -1,0 +1,58 @@
+name: C++ standalone inference
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  standalone_inference:
+    name: standalone inference (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      CMAKE_BUILD_PARALLEL_LEVEL: "2"
+      INSTALL_PREFIX: ${{ github.workspace }}/install
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build and install onnx-light
+        run: |
+          git clone --depth 1 --branch main \
+            https://github.com/xadupre/onnx-light.git \
+            "${RUNNER_TEMP}/onnx-light"
+          cmake -S "${RUNNER_TEMP}/onnx-light" -B "${RUNNER_TEMP}/build-onnx-light" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="${INSTALL_PREFIX}" \
+            -DONNX_LIGHT_BUILD_PYTHON=OFF \
+            -DONNX_LIGHT_BUILD_TESTS=OFF
+          cmake --build "${RUNNER_TEMP}/build-onnx-light"
+          cmake --install "${RUNNER_TEMP}/build-onnx-light"
+
+      - name: Build and install onnx-light-cpu
+        run: |
+          cmake -S . -B build-install \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="${INSTALL_PREFIX}" \
+            -DCMAKE_PREFIX_PATH="${INSTALL_PREFIX}" \
+            -DONNX_LIGHT_CPU_BUILD_PYTHON=OFF \
+            -DONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON
+          cmake --build build-install
+          cmake --install build-install
+
+      - name: Build standalone example
+        run: |
+          cmake -S examples/cpp/standalone_inference -B build-standalone \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="${INSTALL_PREFIX}"
+          cmake --build build-standalone
+
+      - name: Run standalone inference
+        run: ./build-standalone/onnx_light_cpu_inference

@@ -211,6 +211,11 @@ onnx_light_cpu::RegisterKernelForSession(runtime_context, "", "Abs");
 onnx_light_cpu::RegisterAllKernelsForSession(runtime_context);
 ```
 
+See the
+[standalone C++ inference example](examples/cpp/standalone_inference/README.md)
+for a separate CMake project that loads or creates an ONNX model, executes it
+through `onnx-light`, and confirms that an `onnx-light-cpu` kernel was used.
+
 The same registration is exposed to Python (in builds compiled with the
 onnx-light integration) as `onnx_light_cpu.onnx_py._cpuregister.register_all_kernels()`.
 
