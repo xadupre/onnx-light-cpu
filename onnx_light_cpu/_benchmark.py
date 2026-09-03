@@ -353,7 +353,7 @@ def write_benchmark_markdown(
         f"| {' | '.join('---' for _ in columns)} |",
     ]
     lines.extend(
-        f"| {' | '.join(str(row[column]).replace('|', r'\\|') for column in columns)} |"
+        f"| {' | '.join(str(row[column]).replace('|', r'\|') for column in columns)} |"
         for row in aggregated_rows
     )
     output.write_text("\n".join(lines) + "\n", encoding="utf-8")

@@ -74,7 +74,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     benchmark.add_argument(
         "--markdown",
-        help="output aggregated figures as a Markdown table",
+        help="path of an optional Markdown file with the aggregated figures",
     )
     benchmark.add_argument(
         "-w",
