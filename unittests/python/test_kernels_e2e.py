@@ -123,6 +123,13 @@ _TARGET_KERNELS = {
     for op_type, kernel_name in _REGISTERED_KERNELS.items()
     if op_type not in {"Max", "Mean", "Min", "QLinearMatMul", "Sum"}
 }
+_DOMAIN_SPECIFIC_TARGET_KERNELS = {
+    ("ai.onnx", "LinearAttention"): _TARGET_KERNELS["LinearAttention"],
+    (
+        "com.microsoft",
+        "LinearAttention",
+    ): _TARGET_KERNELS["com.microsoft::LinearAttention"],
+}
 
 _BENCHMARK_TYPE_SUFFIXES = dict.fromkeys(_TARGET_KERNELS, "float32")
 for _op_type in ("And", "Not", "Or", "Xor"):
@@ -389,15 +396,15 @@ def _cpu_backend(model, *inputs):
     clear_used_kernel_names()
     outputs = session.run(None, feeds)
     dispatched = used_kernel_names()
+    expected_kernels = []
     for node in model.graph.node:
-        key = (
-            f"{node.domain}::{node.op_type}"
-            if node.domain == "com.microsoft"
-            and f"{node.domain}::{node.op_type}" in _TARGET_KERNELS
-            else node.op_type
+        domain = node.domain or "ai.onnx"
+        expected_kernel = _DOMAIN_SPECIFIC_TARGET_KERNELS.get(
+            (domain, node.op_type), _TARGET_KERNELS.get(node.op_type)
         )
-        expected_kernel = _TARGET_KERNELS[key]
-        assert expected_kernel in dispatched
+        assert expected_kernel is not None, (domain, node.op_type)
+        expected_kernels.append(expected_kernel)
+    assert dispatched == expected_kernels
     return outputs
 
 
