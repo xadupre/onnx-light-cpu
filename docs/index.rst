@@ -14,6 +14,7 @@ The kernels can be used directly from C++ or installed into onnx-light's shared
 C++ kernel dispatch table so any ONNX model using a supported operator runs the
 optimized kernel when evaluated through a ``ReferenceEvaluator``. See
 :doc:`getting_started` to install the package and run your first model, the
+:doc:`standalone_cpp` page for a complete standalone C++ inference program, the
 :doc:`byop` page for the list of operators provided by this repository, the
 :doc:`examples` gallery for runnable examples, the :ref:`benchmarks-gallery`
 gallery for performance comparisons against other back-ends, and the
@@ -133,6 +134,7 @@ when two builds link different copies of ``lib_onnx_core``.
    :caption: Contents
 
    getting_started
+   standalone_cpp
    design/index
    byop
    api/index
