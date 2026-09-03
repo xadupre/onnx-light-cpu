@@ -1,0 +1,66 @@
+Command Line
+============
+
+The package installs the ``onnx-light-cpu`` command. It can also be invoked
+through the Python module:
+
+.. code-block:: bash
+
+   onnx-light-cpu --help
+   python -m onnx_light_cpu --help
+
+Benchmark backend test cases
+----------------------------
+
+The ``benchmark`` command runs selected ``TestMode.BENCHMARK`` backend test
+cases with the onnx-light-cpu kernels and writes the measurements to an Excel
+workbook:
+
+.. code-block:: bash
+
+   onnx-light-cpu benchmark \
+       --tests "^test_cpu_(abs|gemm)_" \
+       --dtypes float32 float64 \
+       --repeat 100 \
+       --warmup 10 \
+       --max-repeat-time 2 \
+       --threads 4 \
+       --output benchmark.xlsx
+
+``--test`` (or ``--tests``)
+   One or more regular expressions matched against backend case names. The
+   option may be repeated. The default is ``^test_cpu_``.
+
+``--dtype`` (or ``--dtypes``)
+   One or more data types, supplied separately or as a comma-separated list.
+   The option may be repeated. Supported values are ``bfloat16``, ``float16``,
+   ``float32``, ``float64``, signed and unsigned 8-, 16-, 32-, and 64-bit
+   integers, and ``bool``. The default, ``all``, selects every supported type
+   and cannot be combined with another type.
+
+``-r``, ``--repeat``
+   Maximum number of measured iterations per case. The default is ten times
+   the number of logical CPUs.
+
+``-w``, ``--warmup``
+   Maximum number of warm-up iterations per case. The default is twice the
+   number of logical CPUs.
+
+``-t``, ``--max-repeat-time``
+   Maximum time in seconds for each of the warm-up and measurement phases of a
+   case. The default is one second.
+
+``--threads``
+   Number of onnx-light-cpu worker threads. The default is the number of CPUs
+   available to the process. Workers are unpinned, matching ONNX Runtime when
+   ``intra_op_num_threads`` is set explicitly.
+
+``-o``, ``--output``
+   Output workbook path. It must end in ``.xlsx`` and defaults to
+   ``onnx_light_cpu_benchmark.xlsx``. Parent directories are created when
+   needed.
+
+The ``raw`` sheet contains each measured iteration. The ``aggregated`` sheet
+contains the sample count, mean, standard deviation, minimum, 10th percentile,
+median, 90th percentile, and maximum latency for every selected case.
+
