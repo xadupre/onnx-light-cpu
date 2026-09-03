@@ -20,6 +20,7 @@ from onnx_light_cpu.__main__ import _build_parser, main
 from onnx_light_cpu import _benchmark
 from onnx_light_cpu._benchmark import (
     normalize_dtypes,
+    post_benchmark_markdown,
     write_benchmark_markdown,
     write_benchmark_workbook,
 )
@@ -39,16 +40,20 @@ class TestBenchmarkCli(ExtTestCase):
                 "--onnxruntime",
                 "--markdown",
                 "results.md",
+                "--pr",
+                "623",
             ]
         )
         self.assertEqual(args.tests, ["^test_cpu_abs_", "^test_cpu_gemm_"])
         self.assertEqual(args.dtypes, ["float32,float64", "int64"])
         self.assertTrue(args.onnxruntime)
         self.assertEqual(args.markdown, "results.md")
+        self.assertEqual(args.pr, "623")
         self.assertEqual(
             normalize_dtypes(args.dtypes),
             ("float32", "float64", "int64"),
         )
+        self.assertEqual(_build_parser().parse_args(["benchmark", "--pr"]).pr, "")
 
     def test_parser_specifies_default_thread_count(self):
         with mock.patch(
@@ -300,6 +305,25 @@ class TestBenchmarkCli(ExtTestCase):
                 " | 1 | 1 | 1 | 1 | 1 | 1 | 1 | 1 |\n",
             )
 
+    def test_posts_aggregated_markdown_to_pull_request(self):
+        aggregated = [
+            {
+                column: "test|value" if column == "case" else 1
+                for column in _benchmark._AGGREGATED_COLUMNS
+            }
+        ]
+        for pull_request, reference in [("623", ["623"]), ("", [])]:
+            with self.subTest(pull_request=pull_request):
+                with mock.patch("onnx_light_cpu._benchmark.subprocess.run") as run:
+                    post_benchmark_markdown(pull_request, aggregated)
+                run.assert_called_once_with(
+                    ["gh", "pr", "comment", *reference, "--body-file", "-"],
+                    input=mock.ANY,
+                    text=True,
+                    check=True,
+                )
+                self.assertIn("| test\\|value |", run.call_args.kwargs["input"])
+
     def test_main_runs_benchmark_and_writes_output(self):
         rows = ([{"duration_s": 1.0}], [{"case": "one"}])
         with (
@@ -309,6 +333,7 @@ class TestBenchmarkCli(ExtTestCase):
             ) as run,
             mock.patch("onnx_light_cpu.__main__.write_benchmark_workbook") as write,
             mock.patch("onnx_light_cpu.__main__.write_benchmark_markdown") as markdown,
+            mock.patch("onnx_light_cpu.__main__.post_benchmark_markdown") as post,
         ):
             result = main(
                 [
@@ -327,6 +352,8 @@ class TestBenchmarkCli(ExtTestCase):
                     "results.xlsx",
                     "--markdown",
                     "results.md",
+                    "--pr",
+                    "623",
                 ]
             )
         self.assertEqual(result, 0)
@@ -341,6 +368,7 @@ class TestBenchmarkCli(ExtTestCase):
         )
         write.assert_called_once_with("results.xlsx", *rows)
         markdown.assert_called_once_with("results.md", rows[1])
+        post.assert_called_once_with("623", rows[1])
 
 
 if __name__ == "__main__":

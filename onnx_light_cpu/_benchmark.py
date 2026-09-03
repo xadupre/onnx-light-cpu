@@ -11,6 +11,7 @@ import os
 import platform
 import re
 import statistics
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -341,12 +342,7 @@ def write_benchmark_workbook(
     workbook.save(output)
 
 
-def write_benchmark_markdown(
-    path: str | os.PathLike[str], aggregated_rows: Sequence[dict[str, Any]]
-) -> None:
-    """Writes aggregated benchmark data as a Markdown table."""
-    output = Path(path)
-    output.parent.mkdir(parents=True, exist_ok=True)
+def _benchmark_markdown(aggregated_rows: Sequence[dict[str, Any]]) -> str:
     columns = _AGGREGATED_COLUMNS
     lines = [
         f"| {' | '.join(columns)} |",
@@ -356,4 +352,27 @@ def write_benchmark_markdown(
         f"| {' | '.join(str(row[column]).replace('|', r'\|') for column in columns)} |"
         for row in aggregated_rows
     )
-    output.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return "\n".join(lines) + "\n"
+
+
+def write_benchmark_markdown(
+    path: str | os.PathLike[str], aggregated_rows: Sequence[dict[str, Any]]
+) -> None:
+    """Writes aggregated benchmark data as a Markdown table."""
+    output = Path(path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(_benchmark_markdown(aggregated_rows), encoding="utf-8")
+
+
+def post_benchmark_markdown(pull_request: str, aggregated_rows: Sequence[dict[str, Any]]) -> None:
+    """Adds aggregated benchmark data to a pull request with GitHub CLI."""
+    command = ["gh", "pr", "comment"]
+    if pull_request:
+        command.append(pull_request)
+    command.extend(["--body-file", "-"])
+    subprocess.run(
+        command,
+        input=_benchmark_markdown(aggregated_rows),
+        text=True,
+        check=True,
+    )

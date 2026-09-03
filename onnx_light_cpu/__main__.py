@@ -8,6 +8,7 @@ import os
 from collections.abc import Sequence
 
 from ._benchmark import (
+    post_benchmark_markdown,
     run_backend_benchmark,
     write_benchmark_markdown,
     write_benchmark_workbook,
@@ -80,6 +81,13 @@ def _build_parser() -> argparse.ArgumentParser:
         help="path of an optional Markdown file with the aggregated figures",
     )
     benchmark.add_argument(
+        "--pr",
+        nargs="?",
+        const="",
+        metavar="NUMBER_OR_URL",
+        help="add the aggregated figures to a pull request (default: current branch's PR)",
+    )
+    benchmark.add_argument(
         "-w",
         "--warmup",
         type=_non_negative_int,
@@ -126,6 +134,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         write_benchmark_workbook(args.output, raw_rows, aggregated_rows)
         if args.markdown:
             write_benchmark_markdown(args.markdown, aggregated_rows)
+        if args.pr is not None:
+            post_benchmark_markdown(args.pr, aggregated_rows)
         print(
             f"Wrote {len(raw_rows)} measurements for {len(aggregated_rows)} cases "
             f"to {args.output}"
