@@ -119,6 +119,9 @@ void ExpFloat32_AVX512(const float *input, float *output, std::size_t count);
 
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
 void ExpFloat32_AVX2_FMA(const float *input, float *output, std::size_t count);
+void SigmoidFloat32_AVX2_FMA(const float *input, float *output, std::size_t count);
+void SoftmaxFloat32_AVX2_FMA(const float *input, float *output, std::size_t rows,
+                             std::size_t columns);
 #endif
 
 /// Computes elementwise natural exponential: out[i] = exp(input[i]) for float64.

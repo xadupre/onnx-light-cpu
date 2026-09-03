@@ -7,6 +7,7 @@
 #include "onnx_light_cpu/impl/math/half_conversion.h"
 #include "onnx_light_cpu/impl/math/math_kernels.h"
 #include "onnx_light_cpu/impl/math/unary_execution_tuning.h"
+#include "onnx_light_cpu/impl/simd_level.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
 #include "onnx_light_cpu/kernels/kernel_usage.h"
 
@@ -57,6 +58,15 @@ inline constexpr UnaryExecutionTuning kActivationExecutionTuning{256 * 1024, 256
 inline constexpr UnaryExecutionTuning kSerialExecutionTuning{};
 
 template <typename T> void SigmoidRange(const T *input, T *output, std::size_t count) {
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
+  if constexpr (std::is_same_v<T, float>) {
+    static const bool use_avx2_fma = DetectSimdLevel() >= SimdLevel::kAVX2 && CpuSupportsFma();
+    if (use_avx2_fma) {
+      SigmoidFloat32_AVX2_FMA(input, output, count);
+      return;
+    }
+  }
+#endif
   if (input == output) {
     const std::vector<T> copy(input, input + count);
     SigmoidRange(copy.data(), output, count);
@@ -130,6 +140,21 @@ void SoftmaxLastAxis(const T *input, T *output, std::int64_t rows, std::int64_t 
   if (rows == 0 || columns == 0) {
     return;
   }
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
+  if constexpr (std::is_same_v<T, float>) {
+    static const bool use_avx2_fma = DetectSimdLevel() >= SimdLevel::kAVX2 && CpuSupportsFma();
+    if (use_avx2_fma) {
+      const std::size_t row_bytes = static_cast<std::size_t>(columns) * sizeof(T);
+      DispatchSoftmaxRows(rows, row_bytes, [=](std::int64_t begin, std::int64_t end) {
+        const std::size_t offset = static_cast<std::size_t>(begin * columns);
+        SoftmaxFloat32_AVX2_FMA(input + offset, output + offset,
+                                static_cast<std::size_t>(end - begin),
+                                static_cast<std::size_t>(columns));
+      });
+      return;
+    }
+  }
+#endif
   const std::size_t row_bytes = static_cast<std::size_t>(columns) * sizeof(T);
   DispatchSoftmaxRows(rows, row_bytes, [=](std::int64_t begin, std::int64_t end) {
     for (std::int64_t row = begin; row < end; ++row) {
