@@ -12,25 +12,29 @@ namespace onnx_light_cpu {
 namespace {
 
 __m256 GeluFloat32(__m256 z) {
-  constexpr float coefficients[] = {
-      1.8827368f,       1.32283127f,     -0.29206121f,   0.131107315f,    -0.0683164895f,
-      0.0358457267f,    -0.0179936364f,  0.00847151037f, -0.00371518102f, 0.0015147439f,
-      -0.000575297687f, 0.000203221469f, -6.7434863e-5f, 2.01439125e-5f,  -5.92767856e-6f,
-  };
   const __m256 x =
       _mm256_fmadd_ps(z, _mm256_mul_ps(z, _mm256_set1_ps(1.0f / 18.0f)), _mm256_set1_ps(-1.0f));
-  __m256 next_vector = _mm256_setzero_ps();
-  __m256 next_next = _mm256_setzero_ps();
-  for (std::size_t index = std::size(coefficients) - 1; index > 0; --index) {
-    const __m256 current =
-        _mm256_add_ps(_mm256_fmsub_ps(_mm256_add_ps(x, x), next_vector, next_next),
-                      _mm256_set1_ps(coefficients[index]));
-    next_next = next_vector;
-    next_vector = current;
-  }
-  __m256 result = _mm256_add_ps(
-      _mm256_mul_ps(_mm256_set1_ps(0.5f), z),
-      _mm256_add_ps(_mm256_fmsub_ps(x, next_vector, next_next), _mm256_set1_ps(coefficients[0])));
+  const __m256 x2 = _mm256_mul_ps(x, x);
+
+  // The same degree-14 Chebyshev approximation as the scalar path, converted
+  // to the power basis. Two independent Horner chains halve the dependency
+  // depth while preserving the approximation and its special-value handling.
+  __m256 even = _mm256_set1_ps(-0.0485595427635f);
+  __m256 odd = _mm256_set1_ps(0.0825094656f);
+  even = _mm256_fmadd_ps(even, x2, _mm256_set1_ps(0.0318518002483f));
+  odd = _mm256_fmadd_ps(odd, x2, _mm256_set1_ps(-0.060056978944f));
+  even = _mm256_fmadd_ps(even, x2, _mm256_set1_ps(-0.113925417021f));
+  odd = _mm256_fmadd_ps(odd, x2, _mm256_set1_ps(0.150697485696f));
+  even = _mm256_fmadd_ps(even, x2, _mm256_set1_ps(-0.0459359045632f));
+  odd = _mm256_fmadd_ps(odd, x2, _mm256_set1_ps(0.040839011584f));
+  even = _mm256_fmadd_ps(even, x2, _mm256_set1_ps(-0.0831244840205f));
+  odd = _mm256_fmadd_ps(odd, x2, _mm256_set1_ps(0.087382053952f));
+  even = _mm256_fmadd_ps(even, x2, _mm256_set1_ps(-0.0944979421379f));
+  odd = _mm256_fmadd_ps(odd, x2, _mm256_set1_ps(0.13752637775f));
+  even = _mm256_fmadd_ps(even, x2, _mm256_set1_ps(-0.267080653273f));
+  odd = _mm256_fmadd_ps(odd, x2, _mm256_set1_ps(1.06109651571f));
+  even = _mm256_fmadd_ps(even, x2, _mm256_set1_ps(2.12127376638f));
+  __m256 result = _mm256_fmadd_ps(x, odd, _mm256_fmadd_ps(_mm256_set1_ps(0.5f), z, even));
 
   const __m256 positive = _mm256_cmp_ps(z, _mm256_set1_ps(6.0f), _CMP_GE_OQ);
   const __m256 negative = _mm256_cmp_ps(z, _mm256_set1_ps(-6.0f), _CMP_LE_OQ);

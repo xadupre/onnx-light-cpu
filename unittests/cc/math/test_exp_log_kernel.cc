@@ -140,6 +140,61 @@ TEST(ExpFloat32, EmptyInput) {
   onnx_light_cpu::ExpFloat32(&dummy, &dummy, 0);
 }
 
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
+TEST(SigmoidFloat32AVX2FMA, HandlesVectorTailAndSpecialValues) {
+  std::vector<float> values = {-10.0f,
+                               -3.0f,
+                               -1.0f,
+                               -0.0f,
+                               0.0f,
+                               0.25f,
+                               1.0f,
+                               3.0f,
+                               10.0f,
+                               -std::numeric_limits<float>::infinity(),
+                               std::numeric_limits<float>::infinity(),
+                               std::numeric_limits<float>::quiet_NaN(),
+                               -2.5f};
+  const std::vector<float> input = values;
+  onnx_light_cpu::SigmoidFloat32_AVX2_FMA(values.data(), values.data(), values.size());
+  for (std::size_t index = 0; index < values.size(); ++index) {
+    const float expected = 1.0f / (1.0f + std::exp(-input[index]));
+    if (std::isnan(expected)) {
+      EXPECT_TRUE(std::isnan(values[index])) << index;
+    } else {
+      EXPECT_NEAR(values[index], expected, 2e-6f) << index;
+    }
+  }
+}
+
+TEST(SoftmaxFloat32AVX2FMA, MatchesStableReferenceAcrossVectorTail) {
+  constexpr std::size_t rows = 3;
+  constexpr std::size_t columns = 13;
+  std::vector<float> input(rows * columns);
+  for (std::size_t index = 0; index < input.size(); ++index) {
+    input[index] = static_cast<float>(static_cast<int>(index % 17) - 8) * 0.375f;
+  }
+  std::vector<float> output(input.size());
+  onnx_light_cpu::SoftmaxFloat32_AVX2_FMA(input.data(), output.data(), rows, columns);
+
+  for (std::size_t row = 0; row < rows; ++row) {
+    const float *row_input = input.data() + row * columns;
+    const float maximum = *std::max_element(row_input, row_input + columns);
+    double sum = 0.0;
+    for (std::size_t column = 0; column < columns; ++column) {
+      sum += std::exp(static_cast<double>(row_input[column] - maximum));
+    }
+    double output_sum = 0.0;
+    for (std::size_t column = 0; column < columns; ++column) {
+      const double expected = std::exp(static_cast<double>(row_input[column] - maximum)) / sum;
+      EXPECT_NEAR(output[row * columns + column], expected, 2e-6) << row << "," << column;
+      output_sum += output[row * columns + column];
+    }
+    EXPECT_NEAR(output_sum, 1.0, 2e-6) << row;
+  }
+}
+#endif
+
 TEST(ExpLogFloat32, CostModelUsesDispatchCosts) {
   constexpr std::size_t count = 16;
   std::vector<float> input(count, 1.0f);
