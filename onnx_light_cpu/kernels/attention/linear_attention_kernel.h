@@ -24,13 +24,7 @@ public:
   using ONNX_LIGHT_NAMESPACE::core::runtime::KernelBase::KernelBase;
   static constexpr const char *kName = "onnx_light_cpu::LinearAttention";
 
-  struct Attributes {
-    std::string update_rule = "gated_delta";
-    std::int64_t query_heads = 0;
-    std::int64_t key_value_heads = 0;
-    float scale = 0.0f;
-  };
-
+  using Attributes = LinearAttentionKernelAttributes;
   using Result = LinearAttentionResult;
 
   void Run(ONNX_LIGHT_NAMESPACE::core::runtime::RuntimeContext &rt) override;

@@ -5,8 +5,10 @@
 #include "onnx_light_cpu/kernels/attention/linear_attention_shared.h"
 
 #include "onnx_light_cpu/impl/math/half_conversion.h"
+#include "onnx_light_cpu/kernels/kernel_usage.h"
 
 #include "onnx_core/runtime/kernels/kernel_dispatch_table.h"
+#include "onnx_core/runtime/kernels/node_helpers.h"
 #include "onnx_core/symbolic/sym_tensor.h"
 
 #include <algorithm>
@@ -411,6 +413,63 @@ LinearAttentionResult ExecuteLinearAttentionPlan(const std::string &kernel_name,
     ConvertLinearAttentionFromFloat(state_data, plan.state_count, plan.state_type, present_state);
   }
   return {std::move(output), std::move(present_state)};
+}
+
+LinearAttentionResult InvokeLinearAttentionKernel(const LinearAttentionKernelConfig &config,
+                                                  const Tensor &query, const Tensor &key,
+                                                  const Tensor &value,
+                                                  const LinearAttentionKernelAttributes &attributes,
+                                                  const Tensor *past_state, const Tensor *decay,
+                                                  const Tensor *beta, RuntimeContext *rt,
+                                                  bool has_state_output) {
+  if (config.maximum_head_count > 0 && (attributes.query_heads > config.maximum_head_count ||
+                                        attributes.key_value_heads > config.maximum_head_count)) {
+    throw std::invalid_argument(std::string(config.kernel_name) +
+                                ": head counts exceed the supported maximum.");
+  }
+  if (config.reject_nonzero_state_window && attributes.state_window != 0) {
+    throw std::invalid_argument(std::string(config.kernel_name) +
+                                ": nonzero state_window is not supported.");
+  }
+  const LinearAttentionPlan plan = PlanLinearAttention(
+      config.kernel_name, query, key, value, past_state, decay, beta, attributes.update_rule,
+      attributes.query_heads, attributes.key_value_heads, attributes.scale, config.grouping,
+      config.supported_types);
+  return ExecuteLinearAttentionPlan(config.kernel_name, plan, query, key, value, past_state, decay,
+                                    beta, rt, has_state_output);
+}
+
+void RunLinearAttentionKernelNode(const LinearAttentionKernelConfig &config,
+                                  const ONNX_LIGHT_NAMESPACE::NodeProto &node, RuntimeContext &rt) {
+  RecordKernelUsage(config.kernel_name);
+  const bool valid_outputs =
+      config.require_present_state
+          ? node.output_size() == 2 && !node.output(0).empty() && !node.output(1).empty()
+          : node.output_size() >= 1 && node.output_size() <= 2 && !node.output(0).empty();
+  if (node.input_size() < 3 || node.input_size() > 6 || !valid_outputs) {
+    throw std::invalid_argument(std::string(config.kernel_name) +
+                                ": invalid LinearAttention input or output count.");
+  }
+  const Tensor &query = rt_ns::GetInput(node, 0, rt.tensors());
+  const Tensor &key = rt_ns::GetInput(node, 1, rt.tensors());
+  const Tensor &value = rt_ns::GetInput(node, 2, rt.tensors());
+  const Tensor *past_state = rt_ns::GetOptionalInput(node, 3, rt.tensors());
+  const Tensor *decay = rt_ns::GetOptionalInput(node, 4, rt.tensors());
+  const Tensor *beta = rt_ns::GetOptionalInput(node, 5, rt.tensors());
+  LinearAttentionKernelAttributes attributes;
+  attributes.update_rule = rt_ns::GetAttributeStringOrDefault(node, "update_rule", "gated_delta");
+  attributes.query_heads = rt_ns::GetAttributeIntOrDefault(node, "q_num_heads", 0);
+  attributes.key_value_heads = rt_ns::GetAttributeIntOrDefault(node, "kv_num_heads", 0);
+  attributes.scale = rt_ns::GetAttributeFloatOrDefault(node, "scale", 0.0f);
+  attributes.chunk_size = rt_ns::GetAttributeIntOrDefault(node, "chunk_size", 64);
+  attributes.state_window = rt_ns::GetAttributeIntOrDefault(node, "state_window", 0);
+  const bool has_state_output = node.output_size() == 2 && !node.output(1).empty();
+  LinearAttentionResult result = InvokeLinearAttentionKernel(
+      config, query, key, value, attributes, past_state, decay, beta, &rt, has_state_output);
+  rt_ns::SetOutput(node, 0, std::move(result.output), rt);
+  if (has_state_output) {
+    rt_ns::SetOutput(node, 1, std::move(result.present_state), rt);
+  }
 }
 
 } // namespace onnx_light_cpu

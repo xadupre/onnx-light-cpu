@@ -71,6 +71,24 @@ struct LinearAttentionResult {
   ONNX_LIGHT_NAMESPACE::core::runtime::Tensor present_state;
 };
 
+struct LinearAttentionKernelAttributes {
+  std::string update_rule = "gated_delta";
+  std::int64_t query_heads = 0;
+  std::int64_t key_value_heads = 0;
+  float scale = 0.0f;
+  std::int64_t chunk_size = 64;
+  std::int64_t state_window = 0;
+};
+
+struct LinearAttentionKernelConfig {
+  const char *kernel_name;
+  LinearAttentionGroupingPolicy grouping;
+  std::vector<ONNX_LIGHT_NAMESPACE::core::runtime::DataType> supported_types;
+  bool require_present_state = false;
+  bool reject_nonzero_state_window = false;
+  std::int64_t maximum_head_count = 0;
+};
+
 /// Parses `rule` into a :cpp:enum:`LinearAttentionRule`, throwing
 /// ``std::invalid_argument`` (prefixed with `kernel_name`) for anything else.
 LinearAttentionRule ParseLinearAttentionRule(const std::string &kernel_name,
@@ -129,5 +147,21 @@ ExecuteLinearAttentionPlan(const std::string &kernel_name, const LinearAttention
                            const ONNX_LIGHT_NAMESPACE::core::runtime::Tensor *beta,
                            ONNX_LIGHT_NAMESPACE::core::runtime::RuntimeContext *rt,
                            bool has_state_output);
+
+LinearAttentionResult
+InvokeLinearAttentionKernel(const LinearAttentionKernelConfig &config,
+                            const ONNX_LIGHT_NAMESPACE::core::runtime::Tensor &query,
+                            const ONNX_LIGHT_NAMESPACE::core::runtime::Tensor &key,
+                            const ONNX_LIGHT_NAMESPACE::core::runtime::Tensor &value,
+                            const LinearAttentionKernelAttributes &attributes,
+                            const ONNX_LIGHT_NAMESPACE::core::runtime::Tensor *past_state = nullptr,
+                            const ONNX_LIGHT_NAMESPACE::core::runtime::Tensor *decay = nullptr,
+                            const ONNX_LIGHT_NAMESPACE::core::runtime::Tensor *beta = nullptr,
+                            ONNX_LIGHT_NAMESPACE::core::runtime::RuntimeContext *rt = nullptr,
+                            bool has_state_output = true);
+
+void RunLinearAttentionKernelNode(const LinearAttentionKernelConfig &config,
+                                  const ONNX_LIGHT_NAMESPACE::NodeProto &node,
+                                  ONNX_LIGHT_NAMESPACE::core::runtime::RuntimeContext &rt);
 
 } // namespace onnx_light_cpu

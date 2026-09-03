@@ -148,6 +148,18 @@ public:
  * Rewrites the FLOAT subset of ``ai.onnx::LinearAttention-27`` to the
  * compatible ``com.microsoft::LinearAttention-1`` contract.
  *
+ * @code
+ * Before:
+ *   query, key, value --->+--------------------------+---> output
+ *   past, decay, beta --->| ai.onnx::LinearAttention |---> present_state
+ *                         +--------------------------+
+ *
+ * After:
+ *   query, key, value --->+----------------------------------+---> output
+ *   past, decay, beta --->| com.microsoft::LinearAttention-1 |---> present_state
+ *                         +----------------------------------+
+ * @endcode
+ *
  * Inputs, optional-input slots, outputs, and all semantic attributes are
  * preserved. The Microsoft-domain import is added to the graph.
  */
