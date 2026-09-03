@@ -436,8 +436,31 @@ int64_t ComputePeakMemoryGroupQueryAttention(sym_ns::Device, const std::vector<S
   return 0;
 }
 
-int64_t ComputePeakMemoryLinearAttention(sym_ns::Device, const std::vector<SymShape> &) {
-  return 0;
+int64_t ComputePeakMemoryLinearAttention(sym_ns::Device,
+                                         const std::vector<SymShape> &input_shapes) {
+  constexpr int64_t kAccumulatorElementBytes = sizeof(float);
+  if (input_shapes.size() < 3 || input_shapes[2].Rank() != 3) {
+    return 0;
+  }
+
+  // ExecuteRanges may process every (batch, KV head) task concurrently. Each
+  // range owns one float32 vector of value_head_size elements, so
+  // batch * packed_value_width is a safe upper bound independent of kv_num_heads.
+  const auto &batch = input_shapes[2][0];
+  const auto &packed_value_width = input_shapes[2][2];
+  if (!batch.IsInt() || !packed_value_width.IsInt()) {
+    return 0;
+  }
+  if (batch.AsInt() < 0 || packed_value_width.AsInt() < 0) {
+    throw std::invalid_argument(
+        "ComputePeakMemoryLinearAttention: value dimensions must be non-negative.");
+  }
+  if (batch.AsInt() != 0 && packed_value_width.AsInt() > std::numeric_limits<int64_t>::max() /
+                                                             kAccumulatorElementBytes /
+                                                             batch.AsInt()) {
+    throw std::overflow_error("ComputePeakMemoryLinearAttention: scratch-memory size overflow.");
+  }
+  return batch.AsInt() * packed_value_width.AsInt() * kAccumulatorElementBytes;
 }
 
 void RegisterMicrosoftShapeAndMemoryFunctions() {
