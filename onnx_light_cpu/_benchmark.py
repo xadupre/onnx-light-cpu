@@ -179,7 +179,7 @@ def _measure_case(
         }
         for duration in durations
     ]
-    aggregate = {
+    aggregate: dict[str, Any] = {
         **metadata,
         "samples": len(durations),
         "mean_us": statistics.fmean(durations),
