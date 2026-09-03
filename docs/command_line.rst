@@ -63,4 +63,3 @@ workbook:
 The ``raw`` sheet contains each measured iteration. The ``aggregated`` sheet
 contains the sample count, mean, standard deviation, minimum, 10th percentile,
 median, 90th percentile, and maximum latency for every selected case.
-
