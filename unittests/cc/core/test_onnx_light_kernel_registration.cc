@@ -117,6 +117,13 @@ TEST(KernelRegistration, CollectionReportsEveryActualRegistration) {
        {rt_ns::DataType::FLOAT, rt_ns::DataType::FLOAT16, rt_ns::DataType::BFLOAT16},
        1,
        std::nullopt},
+      {"com.microsoft",
+       "LinearAttention",
+       sym_ns::Device::kCPU,
+       "onnx_light_cpu::MicrosoftLinearAttention",
+       {rt_ns::DataType::FLOAT},
+       1,
+       std::nullopt},
       {"ai.onnx",
        "Exp",
        sym_ns::Device::kCPU,
@@ -294,7 +301,8 @@ TEST(KernelRegistration, CollectionReportsEveryActualRegistration) {
   for (const KernelRegistration &expected_record : all_expected) {
     const auto actual = std::find_if(
         records.begin(), records.end(), [&expected_record](const KernelRegistration &record) {
-          return record.op_type == expected_record.op_type &&
+          return record.domain == expected_record.domain &&
+                 record.op_type == expected_record.op_type &&
                  record.since_version == expected_record.since_version &&
                  record.until_version == expected_record.until_version;
         });
@@ -352,12 +360,14 @@ TEST(KernelRegistration, MicrosoftImplementationPolicySelectsOneCompleteFamily) 
             (std::vector<std::pair<std::string, std::string>>{
                 {"BiasGelu", "onnx_light_cpu::BiasGelu"},
                 {"CDist", "onnx_light_cpu::CDist"},
-                {"GroupQueryAttention", "onnx_light_cpu::GroupQueryAttention"}}));
+                {"GroupQueryAttention", "onnx_light_cpu::GroupQueryAttention"},
+                {"LinearAttention", "onnx_light_cpu::MicrosoftLinearAttention"}}));
   EXPECT_EQ(microsoft_names(naive),
             (std::vector<std::pair<std::string, std::string>>{
                 {"BiasGelu", "onnx_light_cpu::NaiveBiasGelu"},
                 {"CDist", "onnx_light_cpu::NaiveCDist"},
-                {"GroupQueryAttention", "onnx_light_cpu::NaiveGroupQueryAttention"}}));
+                {"GroupQueryAttention", "onnx_light_cpu::NaiveGroupQueryAttention"},
+                {"LinearAttention", "onnx_light_cpu::MicrosoftLinearAttention"}}));
   EXPECT_EQ(microsoft_names(onnx_light_cpu::CollectRegisteredKernels()),
             microsoft_names(optimized));
 }

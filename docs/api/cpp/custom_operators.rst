@@ -21,3 +21,6 @@ available through these APIs.
 
 .. doxygenclass:: onnx_light_cpu::GroupQueryAttentionFusionPattern
    :project: onnx_light_cpu
+
+.. doxygenclass:: onnx_light_cpu::LinearAttentionFusionPattern
+   :project: onnx_light_cpu

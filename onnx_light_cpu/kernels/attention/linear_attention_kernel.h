@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "onnx_light_cpu/kernels/attention/linear_attention_shared.h"
+
 #include "onnx_core/runtime/kernels/kernel_context.h"
 #include "onnx_core/runtime/memory/simple_tensor.h"
 #include "onnx_core/runtime/runtime_context.h"
@@ -29,10 +31,7 @@ public:
     float scale = 0.0f;
   };
 
-  struct Result {
-    ONNX_LIGHT_NAMESPACE::core::runtime::Tensor output;
-    ONNX_LIGHT_NAMESPACE::core::runtime::Tensor present_state;
-  };
+  using Result = LinearAttentionResult;
 
   void Run(ONNX_LIGHT_NAMESPACE::core::runtime::RuntimeContext &rt) override;
 

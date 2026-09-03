@@ -2,8 +2,9 @@
 Run com.microsoft custom operators
 ==================================
 
-This example registers the portable ``CDist`` and ``BiasGelu`` CPU kernels and
-runs one model containing both operators through onnx-light.
+This example registers the portable ``CDist``, ``BiasGelu``, and
+``LinearAttention`` CPU kernels and runs one model containing the three
+operators through onnx-light.
 """
 
 # sphinx_gallery_thumbnail_path = "_static/gallery_thumbnails/custom_operators.png"
@@ -18,13 +19,23 @@ from onnx_light_cpu import operator_schema_lookup, register_kernels
 
 
 def make_model():
-    """Builds a model containing both custom operators."""
+    """Builds a model containing the custom operators."""
     graph = helper.make_graph(
         [
             helper.make_node(
                 "CDist", ["A", "B"], ["distances"], domain="com.microsoft", metric="euclidean"
             ),
             helper.make_node("BiasGelu", ["X", "bias"], ["activated"], domain="com.microsoft"),
+            helper.make_node(
+                "LinearAttention",
+                ["Q", "K", "V"],
+                ["attention", "state"],
+                domain="com.microsoft",
+                update_rule="linear",
+                q_num_heads=1,
+                kv_num_heads=1,
+                scale=1.0,
+            ),
         ],
         "custom-operators",
         [
@@ -32,10 +43,15 @@ def make_model():
             helper.make_tensor_value_info("B", TensorProto.FLOAT, [None, None]),
             helper.make_tensor_value_info("X", TensorProto.FLOAT, [None, None]),
             helper.make_tensor_value_info("bias", TensorProto.FLOAT, [None]),
+            helper.make_tensor_value_info("Q", TensorProto.FLOAT, [1, 2, 2]),
+            helper.make_tensor_value_info("K", TensorProto.FLOAT, [1, 2, 2]),
+            helper.make_tensor_value_info("V", TensorProto.FLOAT, [1, 2, 1]),
         ],
         [
             helper.make_tensor_value_info("distances", TensorProto.FLOAT, [None, None]),
             helper.make_tensor_value_info("activated", TensorProto.FLOAT, [None, None]),
+            helper.make_tensor_value_info("attention", TensorProto.FLOAT, [1, 2, 1]),
+            helper.make_tensor_value_info("state", TensorProto.FLOAT, [1, 1, 2, 1]),
         ],
     )
     return helper.make_model(
@@ -52,10 +68,15 @@ a = np.array([[0.0, 1.0], [2.0, 3.0]], dtype=np.float32)
 b = np.array([[1.0, 1.0], [-1.0, 2.0], [2.0, 2.0]], dtype=np.float32)
 x = np.array([[-2.0, -1.0, 0.0], [0.5, 1.0, 3.0]], dtype=np.float32)
 bias = np.array([0.25, -0.5, 1.0], dtype=np.float32)
+q = np.array([[[1.0, 2.0], [2.0, 1.0]]], dtype=np.float32)
+k = np.array([[[3.0, 4.0], [1.0, 2.0]]], dtype=np.float32)
+v = np.array([[[2.0], [3.0]]], dtype=np.float32)
 
 register_kernels()
 session = ReferenceEvaluator(make_model())
-distances, activated = session.run(None, {"A": a, "B": b, "X": x, "bias": bias})
+distances, activated, attention, state = session.run(
+    None, {"A": a, "B": b, "X": x, "bias": bias, "Q": q, "K": k, "V": v}
+)
 
 expected_distances = np.sqrt(np.sum((a[:, None, :] - b[None, :, :]) ** 2, axis=2))
 z = x + bias
@@ -64,7 +85,10 @@ expected_activated = (
 )
 np.testing.assert_allclose(distances, expected_distances, rtol=1e-6, atol=1e-6)
 np.testing.assert_allclose(activated, expected_activated, rtol=1e-6, atol=1e-5)
+np.testing.assert_allclose(attention, np.array([[[22.0], [32.0]]], dtype=np.float32))
+np.testing.assert_allclose(state, np.array([[[[9.0], [14.0]]]], dtype=np.float32))
 
 print("Registered custom schemas:", [schema.name for schema in operator_schema_lookup("CDist")])
 print("CDist output:\n", distances)
 print("BiasGelu output:\n", activated)
+print("LinearAttention output:\n", attention)

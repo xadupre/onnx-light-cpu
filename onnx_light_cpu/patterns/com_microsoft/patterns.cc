@@ -318,6 +318,48 @@ GroupQueryAttentionFusionPattern::Apply(GraphGraph &graph,
   return replacements;
 }
 
+std::set<std::string> LinearAttentionFusionPattern::FastOpType() const {
+  return {"LinearAttention"};
+}
+
+MatchResult LinearAttentionFusionPattern::Match(GraphGraph &graph,
+                                                const NodeProto &candidate) const {
+  if ((candidate.domain() != "" && candidate.domain() != "ai.onnx") ||
+      candidate.op_type() != "LinearAttention" || candidate.input_size() < 3 ||
+      candidate.input_size() > 6 || candidate.output_size() != 2 || candidate.output(0).empty() ||
+      candidate.output(1).empty()) {
+    return NoMatch(candidate, "candidate is not an ai.onnx::LinearAttention");
+  }
+  for (const std::string &input : candidate.input()) {
+    if (!input.empty() &&
+        (!graph.HasType(input) || graph.GetType(input) != sym_ns::TensorType::kFloat)) {
+      return NoMatch(candidate, "Microsoft CPU LinearAttention requires FLOAT inputs");
+    }
+  }
+  const AttributeProto *q_heads = FindAttribute(candidate, "q_num_heads");
+  const AttributeProto *kv_heads = FindAttribute(candidate, "kv_num_heads");
+  if (q_heads == nullptr || kv_heads == nullptr || q_heads->i() <= 0 || kv_heads->i() <= 0 ||
+      q_heads->i() % kv_heads->i() != 0) {
+    return NoMatch(candidate, "head-count attributes are not in the compatible ONNX subset");
+  }
+  return MatchResult{this, {&candidate}, nullptr};
+}
+
+ONNX_LIGHT_NAMESPACE::utils::RepeatedProtoField<NodeProto>
+LinearAttentionFusionPattern::Apply(GraphGraph &graph,
+                                    const std::vector<const NodeProto *> &nodes) const {
+  if (nodes.size() != 1 || nodes[0] == nullptr || Match(graph, *nodes[0]).pattern == nullptr) {
+    throw BuilderError("LinearAttentionFusionPattern::Apply received an invalid match.");
+  }
+  NodeProto replacement = *nodes[0];
+  replacement.set_domain(kMicrosoftDomain);
+  replacement.set_name("LinearAttentionFusion--" + nodes[0]->name());
+  graph.Builder().SetOpsetVersion(kMicrosoftDomain, 1);
+  ONNX_LIGHT_NAMESPACE::utils::RepeatedProtoField<NodeProto> replacements;
+  replacements.push_back(std::move(replacement));
+  return replacements;
+}
+
 void RegisterCustomOperatorPatterns() {
   static std::once_flag once;
   std::call_once(once, [] {
@@ -328,6 +370,8 @@ void RegisterCustomOperatorPatterns() {
     builder_ns::RegisterPattern("MicrosoftGroupQueryAttention", [] {
       return std::make_unique<GroupQueryAttentionFusionPattern>();
     });
+    builder_ns::RegisterPattern("MicrosoftLinearAttention",
+                                [] { return std::make_unique<LinearAttentionFusionPattern>(); });
   });
 }
 
