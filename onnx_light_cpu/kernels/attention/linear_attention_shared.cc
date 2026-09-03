@@ -37,20 +37,7 @@ std::string TypeListForMessage(const std::vector<DataType> &types) {
     if (i != 0) {
       joined += ", ";
     }
-    switch (types[i]) {
-    case DataType::FLOAT:
-      joined += "FLOAT";
-      break;
-    case DataType::FLOAT16:
-      joined += "FLOAT16";
-      break;
-    case DataType::BFLOAT16:
-      joined += "BFLOAT16";
-      break;
-    default:
-      joined += "?";
-      break;
-    }
+    joined += ONNX_LIGHT_NAMESPACE::TensorProto::DataType_Name(types[i]);
   }
   return joined;
 }
