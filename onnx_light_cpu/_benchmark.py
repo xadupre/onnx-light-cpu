@@ -85,6 +85,7 @@ _AGGREGATED_COLUMNS = (
     "onnxruntime_error",
     "speedup",
 )
+_PR_COLUMNS = ("speedup", "input_shapes", "test_name")
 
 
 def normalize_dtypes(values: Sequence[str]) -> tuple[str, ...]:
@@ -438,8 +439,10 @@ def write_benchmark_workbook(
     workbook.save(output)
 
 
-def _benchmark_markdown(aggregated_rows: Sequence[dict[str, Any]]) -> str:
-    columns = _AGGREGATED_COLUMNS
+def _benchmark_markdown(
+    aggregated_rows: Sequence[dict[str, Any]],
+    columns: Sequence[str] = _AGGREGATED_COLUMNS,
+) -> str:
     lines = [
         f"| {' | '.join(columns)} |",
         f"| {' | '.join('---' for _ in columns)} |",
@@ -462,13 +465,21 @@ def write_benchmark_markdown(
 
 def post_benchmark_markdown(pull_request: str, aggregated_rows: Sequence[dict[str, Any]]) -> None:
     """Adds aggregated benchmark data to a pull request with GitHub CLI."""
+    pr_rows = [
+        {
+            "speedup": row["speedup"],
+            "input_shapes": row["input_shapes"],
+            "test_name": row["case"],
+        }
+        for row in aggregated_rows
+    ]
     command = ["gh", "pr", "comment"]
     if pull_request:
         command.append(pull_request)
     command.extend(["--edit-last", "--create-if-none", "--body-file", "-"])
     subprocess.run(
         command,
-        input=_benchmark_markdown(aggregated_rows),
+        input=_benchmark_markdown(pr_rows, _PR_COLUMNS),
         text=True,
         check=True,
     )

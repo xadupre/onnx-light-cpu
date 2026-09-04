@@ -385,7 +385,12 @@ class TestBenchmarkCli(ExtTestCase):
                     text=True,
                     check=True,
                 )
-                self.assertIn("| test\\|value |", run.call_args.kwargs["input"])
+                self.assertEqual(
+                    run.call_args.kwargs["input"],
+                    "| speedup | input_shapes | test_name |\n"
+                    "| --- | --- | --- |\n"
+                    "| 1 | 1 | test\\|value |\n",
+                )
 
     def test_main_runs_benchmark_and_writes_output(self):
         rows = ([{"duration_s": 1.0}], [{"case": "one"}])
