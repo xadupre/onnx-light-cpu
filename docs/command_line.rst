@@ -64,9 +64,19 @@ workbook:
 ``--pr [NUMBER_OR_URL]``
    Adds the aggregated Markdown table as a pull request comment using GitHub
    CLI. If the number or URL is omitted, GitHub CLI selects the pull request
-   associated with the current branch. Use ``--tests`` and ``--dtypes`` to run
-   only the cases related to the operator and data type modified by the pull
-   request.
+   associated with the current branch. When neither ``--tests`` nor ``--dtypes``
+   is given, this pull request is also used to infer the modified operator and
+   data type.
+
+``--from-pr [NUMBER_OR_URL]``
+   Inspects the pull request's changed kernel files and diff to infer the
+   operator and data type without posting results. Explicit ``--tests`` and
+   ``--dtypes`` filters override this inference.
+
+The ``PR benchmark`` workflow invokes this command automatically when a pull
+request modifies kernel implementation or backend benchmark case files. It
+updates the latest benchmark comment instead of adding a new comment after
+every push.
 
 ``-o``, ``--output``
    Output workbook path. It must end in ``.xlsx`` and defaults to

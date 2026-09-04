@@ -19,14 +19,20 @@ from openpyxl import load_workbook
 from onnx_light_cpu.__main__ import _build_parser, main
 from onnx_light_cpu import _benchmark
 from onnx_light_cpu._benchmark import (
+    infer_pr_benchmark_selection,
     normalize_dtypes,
     post_benchmark_markdown,
+    pull_request_benchmark_selection,
     write_benchmark_markdown,
     write_benchmark_workbook,
 )
 
 
 class TestBenchmarkCli(ExtTestCase):
+    @staticmethod
+    def _kernel(op_type, types):
+        return SimpleNamespace(op_type=op_type, types=types)
+
     def test_parser_accepts_test_and_dtype_lists(self):
         args = _build_parser().parse_args(
             [
@@ -42,6 +48,8 @@ class TestBenchmarkCli(ExtTestCase):
                 "results.md",
                 "--pr",
                 "623",
+                "--from-pr",
+                "624",
             ]
         )
         self.assertEqual(args.tests, ["^test_cpu_abs_", "^test_cpu_gemm_"])
@@ -49,6 +57,7 @@ class TestBenchmarkCli(ExtTestCase):
         self.assertTrue(args.onnxruntime)
         self.assertEqual(args.markdown, "results.md")
         self.assertEqual(args.pr, "623")
+        self.assertEqual(args.from_pr, "624")
         self.assertEqual(
             normalize_dtypes(args.dtypes),
             ("float32", "float64", "int64"),
@@ -119,6 +128,51 @@ class TestBenchmarkCli(ExtTestCase):
         self.assertEqual(aggregated, [measured[1]])
         self.assertIn("[1/1] test_cpu_abs_float32_benchmark", progress.getvalue())
         measure.assert_called_once_with(cases[0], 1, 0, 1.0, 1, False)
+
+    def test_infers_pull_request_benchmark_selection(self):
+        kernels = [
+            self._kernel("Abs", ("FLOAT", "DOUBLE")),
+            self._kernel("Log", ("FLOAT", "DOUBLE")),
+            self._kernel("GroupQueryAttention", ("FLOAT", "FLOAT16")),
+        ]
+        tests, dtypes = infer_pr_benchmark_selection(
+            [
+                "onnx_light_cpu/impl/math/abs_kernel.cc",
+                "docs/command_line.rst",
+            ],
+            "+  const float value = input[i];",
+            kernels,
+        )
+        self.assertEqual(tests, ["^test_cpu_(abs)_"])
+        self.assertEqual(dtypes, ["float32"])
+
+        tests, dtypes = infer_pr_benchmark_selection(
+            ["onnx_light_cpu/kernels/com_microsoft/group_query_attention_kernel.cc"],
+            "+  RunAttention(input);",
+            kernels,
+        )
+        self.assertEqual(tests, ["^test_cpu_(group_?query_?attention)_"])
+        self.assertEqual(dtypes, ["float16", "float32"])
+
+    def test_reads_pull_request_benchmark_selection(self):
+        completed = [
+            SimpleNamespace(stdout="onnx_light_cpu/impl/math/abs_kernel.cc\n"),
+            SimpleNamespace(stdout="+ DataType::FLOAT\n"),
+        ]
+        kernels = [self._kernel("Abs", ("FLOAT", "DOUBLE"))]
+        with (
+            mock.patch("onnx_light_cpu._benchmark.subprocess.run", side_effect=completed) as run,
+            mock.patch("onnx_light_cpu._register.registered_kernels", return_value=kernels),
+        ):
+            selection = pull_request_benchmark_selection("623")
+        self.assertEqual(selection, (["^test_cpu_(abs)_"], ["float32"]))
+        self.assertEqual(
+            [call.args[0] for call in run.call_args_list],
+            [
+                ["gh", "pr", "diff", "623", "--name-only"],
+                ["gh", "pr", "diff", "623"],
+            ],
+        )
 
     def test_explicit_threads_use_onnxruntime_affinity_default(self):
         case = SimpleNamespace(
@@ -317,7 +371,16 @@ class TestBenchmarkCli(ExtTestCase):
                 with mock.patch("onnx_light_cpu._benchmark.subprocess.run") as run:
                     post_benchmark_markdown(pull_request, aggregated)
                 run.assert_called_once_with(
-                    ["gh", "pr", "comment", *reference, "--body-file", "-"],
+                    [
+                        "gh",
+                        "pr",
+                        "comment",
+                        *reference,
+                        "--edit-last",
+                        "--create-if-none",
+                        "--body-file",
+                        "-",
+                    ],
                     input=mock.ANY,
                     text=True,
                     check=True,
@@ -334,6 +397,10 @@ class TestBenchmarkCli(ExtTestCase):
             mock.patch("onnx_light_cpu.__main__.write_benchmark_workbook") as write,
             mock.patch("onnx_light_cpu.__main__.write_benchmark_markdown") as markdown,
             mock.patch("onnx_light_cpu.__main__.post_benchmark_markdown") as post,
+            mock.patch(
+                "onnx_light_cpu.__main__.pull_request_benchmark_selection",
+                return_value=([r"^test_cpu_(abs)_"], ["float32"]),
+            ) as infer,
         ):
             result = main(
                 [
@@ -369,6 +436,23 @@ class TestBenchmarkCli(ExtTestCase):
         write.assert_called_once_with("results.xlsx", *rows)
         markdown.assert_called_once_with("results.md", rows[1])
         post.assert_called_once_with("623", rows[1])
+        infer.assert_not_called()
+
+    def test_main_infers_filters_from_pull_request(self):
+        rows = ([{"duration_s": 1.0}], [{"case": "one"}])
+        with (
+            mock.patch(
+                "onnx_light_cpu.__main__.pull_request_benchmark_selection",
+                return_value=([r"^test_cpu_(abs)_"], ["float32"]),
+            ) as infer,
+            mock.patch("onnx_light_cpu.__main__.run_backend_benchmark", return_value=rows) as run,
+            mock.patch("onnx_light_cpu.__main__.write_benchmark_workbook"),
+            mock.patch("onnx_light_cpu.__main__.post_benchmark_markdown"),
+        ):
+            main(["benchmark", "--from-pr", "623"])
+        infer.assert_called_once_with("623")
+        self.assertEqual(run.call_args.kwargs["tests"], [r"^test_cpu_(abs)_"])
+        self.assertEqual(run.call_args.kwargs["dtypes"], ["float32"])
 
 
 if __name__ == "__main__":

@@ -41,6 +41,36 @@ _DTYPES = (
     "uint64",
     "bool",
 )
+_ONNX_DTYPE_NAMES = {
+    "BFLOAT16": "bfloat16",
+    "FLOAT16": "float16",
+    "FLOAT": "float32",
+    "DOUBLE": "float64",
+    "INT8": "int8",
+    "INT16": "int16",
+    "INT32": "int32",
+    "INT64": "int64",
+    "UINT8": "uint8",
+    "UINT16": "uint16",
+    "UINT32": "uint32",
+    "UINT64": "uint64",
+    "BOOL": "bool",
+}
+_DTYPE_MARKERS = {
+    "bfloat16": r"\b(?:BFLOAT16|bfloat16|BFloat16)\b",
+    "float16": r"\b(?:FLOAT16|float16|Float16|Half)\b",
+    "float32": r"\b(?:FLOAT|float32|Float32|float)\b",
+    "float64": r"\b(?:DOUBLE|float64|Float64|double)\b",
+    "int8": r"\b(?:INT8|int8|int8_t)\b",
+    "int16": r"\b(?:INT16|int16|int16_t)\b",
+    "int32": r"\b(?:INT32|int32|int32_t)\b",
+    "int64": r"\b(?:INT64|int64|int64_t)\b",
+    "uint8": r"\b(?:UINT8|uint8|uint8_t)\b",
+    "uint16": r"\b(?:UINT16|uint16|uint16_t)\b",
+    "uint32": r"\b(?:UINT32|uint32|uint32_t)\b",
+    "uint64": r"\b(?:UINT64|uint64|uint64_t)\b",
+    "bool": r"\b(?:BOOL|bool)\b",
+}
 
 _METADATA_COLUMNS = (
     "case",
@@ -92,6 +122,81 @@ def _case_dtype(name: str) -> str | None:
 
 def _matches_case(name: str, expressions: Sequence[re.Pattern[str]]) -> bool:
     return any(expression.search(name) for expression in expressions)
+
+
+def _operator_words(op_type: str) -> list[str]:
+    return re.findall(r"[A-Z]+(?=[A-Z][a-z]|\d|\b)|[A-Z]?[a-z]+|\d+", op_type)
+
+
+def _operator_path_pattern(op_type: str) -> re.Pattern[str]:
+    words = _operator_words(op_type)
+    name = r"[_-]?".join(map(str.lower, words))
+    return re.compile(rf"(?:^|[/_.-]){name}(?:[/_.-]|$)")
+
+
+def infer_pr_benchmark_selection(
+    paths: Sequence[str], patch: str, kernels: Sequence[Any]
+) -> tuple[list[str], list[str]]:
+    """Infers benchmark test and dtype filters from changed pull request content."""
+    relevant_paths = [
+        path.lower()
+        for path in paths
+        if path.startswith(
+            (
+                "onnx_light_cpu/backend_test/cases/",
+                "onnx_light_cpu/impl/",
+                "onnx_light_cpu/kernels/",
+            )
+        )
+    ]
+    operators = sorted(
+        {
+            kernel.op_type
+            for kernel in kernels
+            if any(_operator_path_pattern(kernel.op_type).search(path) for path in relevant_paths)
+        }
+    )
+    if not operators:
+        return [], []
+
+    supported_dtypes = {
+        _ONNX_DTYPE_NAMES[type_name]
+        for kernel in kernels
+        if kernel.op_type in operators
+        for type_name in kernel.types
+        if type_name in _ONNX_DTYPE_NAMES
+    }
+    changed_content = "\n".join(paths) + "\n" + patch
+    mentioned_dtypes = {
+        dtype for dtype, pattern in _DTYPE_MARKERS.items() if re.search(pattern, changed_content)
+    }
+    dtypes = sorted(supported_dtypes & mentioned_dtypes or supported_dtypes)
+    test_names = [
+        "^test_cpu_("
+        + "|".join(r"_?".join(map(str.lower, _operator_words(op))) for op in operators)
+        + ")_"
+    ]
+    return test_names, dtypes
+
+
+def pull_request_benchmark_selection(pull_request: str) -> tuple[list[str], list[str]]:
+    """Reads a pull request with GitHub CLI and infers its benchmark filters."""
+    from ._register import registered_kernels
+
+    target = [pull_request] if pull_request else []
+    paths = subprocess.run(
+        ["gh", "pr", "diff", *target, "--name-only"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.splitlines()
+    patch = subprocess.run(
+        ["gh", "pr", "diff", *target],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    return infer_pr_benchmark_selection(paths, patch, registered_kernels())
 
 
 def _to_numpy(tensor: Any) -> np.ndarray:
@@ -369,7 +474,7 @@ def post_benchmark_markdown(pull_request: str, aggregated_rows: Sequence[dict[st
     command = ["gh", "pr", "comment"]
     if pull_request:
         command.append(pull_request)
-    command.extend(["--body-file", "-"])
+    command.extend(["--edit-last", "--create-if-none", "--body-file", "-"])
     subprocess.run(
         command,
         input=_benchmark_markdown(aggregated_rows),

@@ -11,6 +11,9 @@ _ROOT = Path(__file__).resolve().parents[2]
 _CORE_WORKFLOW = (_ROOT / ".github" / "workflows" / "ci_core.yml").read_text(encoding="utf-8")
 _DOCS_WORKFLOW = (_ROOT / ".github" / "workflows" / "docs.yml").read_text(encoding="utf-8")
 _CODECOV_CONFIG = (_ROOT / ".codecov.yml").read_text(encoding="utf-8")
+_PR_BENCHMARK_WORKFLOW = (_ROOT / ".github" / "workflows" / "pr_benchmark.yml").read_text(
+    encoding="utf-8"
+)
 
 
 def test_documentation_build_is_linux_only():
@@ -43,6 +46,15 @@ def test_onnx_light_main_integration_runs_on_every_supported_os():
 
 def test_cpp_coverage_is_carried_forward_between_weekly_runs():
     assert "cpp:\n    carryforward: true" in _CODECOV_CONFIG
+
+
+def test_pr_benchmark_infers_filters_and_updates_comment():
+    assert "pull-requests: write" in _PR_BENCHMARK_WORKFLOW
+    assert "onnx_light_cpu/impl/**" in _PR_BENCHMARK_WORKFLOW
+    assert '--from-pr "${{ github.event.pull_request.html_url }}"' in _PR_BENCHMARK_WORKFLOW
+    assert "actions/upload-artifact@v4" in _PR_BENCHMARK_WORKFLOW
+    assert "needs: benchmark" in _PR_BENCHMARK_WORKFLOW
+    assert "--onnx-light-source" in _PR_BENCHMARK_WORKFLOW
 
 
 def test_python_test_classes_inherit_from_ext_test_case():
