@@ -160,10 +160,11 @@ float RunForwardObjective(const NodeProto &node, const std::vector<float> &query
 
 TEST(CustomOperatorSupport, ProvidesLightSchemas) {
   const auto schemas = onnx_light_cpu::GetMicrosoftOpSchemasWithHistory();
-  ASSERT_EQ(schemas.size(), 3U);
+  ASSERT_EQ(schemas.size(), 4U);
   EXPECT_EQ(schemas[0].name(), "BiasGelu");
   EXPECT_EQ(schemas[1].name(), "CDist");
   EXPECT_EQ(schemas[2].name(), "GroupQueryAttention");
+  EXPECT_EQ(schemas[3].name(), "LinearAttention");
   for (const auto &schema : schemas) {
     EXPECT_EQ(schema.domain(), onnx_light_cpu::kMicrosoftDomain);
     EXPECT_EQ(schema.since_version(), 1);
@@ -177,7 +178,7 @@ TEST(CustomOperatorSupport, ProvidesLightSchemas) {
 
 TEST(CustomOperatorSupport, ProvidesReadOnlyInventory) {
   const auto support = onnx_light_cpu::CollectOperatorSupport();
-  ASSERT_EQ(support.size(), 3U);
+  ASSERT_EQ(support.size(), 4U);
   EXPECT_EQ(support[0].op_type, "BiasGelu");
   EXPECT_EQ(support[0].shape_inference_function, "onnx_light_cpu::ComputeShapeBiasGelu");
   EXPECT_EQ(support[0].peak_memory_function, "onnx_light_cpu::ComputePeakMemoryBiasGelu");
@@ -192,6 +193,12 @@ TEST(CustomOperatorSupport, ProvidesReadOnlyInventory) {
   EXPECT_EQ(support[2].fusion_patterns,
             std::vector<std::string>{"onnx_light_cpu::GroupQueryAttentionFusionPattern"});
   EXPECT_TRUE(support[2].has_gradient);
+  EXPECT_EQ(support[3].op_type, "LinearAttention");
+  EXPECT_EQ(support[3].shape_inference_function, "onnx_light_cpu::ComputeShapeLinearAttention");
+  EXPECT_EQ(support[3].peak_memory_function, "onnx_light_cpu::ComputePeakMemoryLinearAttention");
+  EXPECT_EQ(support[3].fusion_patterns,
+            std::vector<std::string>{"onnx_light_cpu::LinearAttentionFusionPattern"});
+  EXPECT_FALSE(support[3].has_gradient);
 }
 
 TEST(CustomOperatorSupport, InfersCDistShapeAndConstraint) {
@@ -254,6 +261,80 @@ TEST(CustomOperatorSupport, InfersGroupQueryAttentionSymbolicPresentCacheShape) 
   EXPECT_GE(ctx.Constraints().size(), 7U);
 }
 
+TEST(CustomOperatorSupport, InfersLinearAttentionInverseGroupingAndStateShape) {
+  shapes_ns::ShapesContext ctx;
+  ctx.Set("Q", SymTensor(nullptr, TensorType::kFloat, {SymDim("B"), SymDim("S"), SymDim(8)}));
+  ctx.Set("K", SymTensor(nullptr, TensorType::kFloat, {SymDim("BK"), SymDim("SK"), SymDim(8)}));
+  ctx.Set("V", SymTensor(nullptr, TensorType::kFloat, {SymDim("BV"), SymDim("SV"), SymDim(12)}));
+  NodeProto node;
+  node.set_domain(onnx_light_cpu::kMicrosoftDomain);
+  node.set_op_type("LinearAttention");
+  node.add_input("Q");
+  node.add_input("K");
+  node.add_input("V");
+  node.add_output("Y");
+  node.add_output("present_state");
+  ONNX_LIGHT_NAMESPACE::AddAttribute(node, "q_num_heads", int64_t{1});
+  ONNX_LIGHT_NAMESPACE::AddAttribute(node, "kv_num_heads", int64_t{2});
+  ONNX_LIGHT_NAMESPACE::AddAttribute(node, "update_rule", std::string("linear"));
+  onnx_light_cpu::ComputeShapeLinearAttention(ctx, node);
+  EXPECT_EQ(ctx.Get("Y").Shape(), sym_ns::SymShape({SymDim("B"), SymDim("S"), SymDim(12)}));
+  EXPECT_EQ(ctx.Get("present_state").Shape(),
+            sym_ns::SymShape({SymDim("B"), SymDim(2), SymDim(8), SymDim(6)}));
+  EXPECT_GE(ctx.Constraints().size(), 4U);
+}
+
+TEST(CustomOperatorSupport, InfersLinearAttentionOrdinaryGroupingAndStateShape) {
+  // q_num_heads (4) is a multiple of kv_num_heads (2): this ordinary-grouping,
+  // no-shared-key-heads case is delegated to onnx-light's own shape function
+  // when ONNX_LIGHT_CPU_HAS_ONNX_SHAPE is available; the result must match
+  // the bespoke computation regardless of which path is compiled in.
+  shapes_ns::ShapesContext ctx;
+  ctx.Set("Q", SymTensor(nullptr, TensorType::kFloat, {SymDim("B"), SymDim("S"), SymDim(16)}));
+  ctx.Set("K", SymTensor(nullptr, TensorType::kFloat, {SymDim("B"), SymDim("S"), SymDim(8)}));
+  ctx.Set("V", SymTensor(nullptr, TensorType::kFloat, {SymDim("B"), SymDim("S"), SymDim(12)}));
+  NodeProto node;
+  node.set_domain(onnx_light_cpu::kMicrosoftDomain);
+  node.set_op_type("LinearAttention");
+  node.add_input("Q");
+  node.add_input("K");
+  node.add_input("V");
+  node.add_output("Y");
+  node.add_output("present_state");
+  ONNX_LIGHT_NAMESPACE::AddAttribute(node, "q_num_heads", int64_t{4});
+  ONNX_LIGHT_NAMESPACE::AddAttribute(node, "kv_num_heads", int64_t{2});
+  ONNX_LIGHT_NAMESPACE::AddAttribute(node, "update_rule", std::string("linear"));
+  onnx_light_cpu::ComputeShapeLinearAttention(ctx, node);
+  EXPECT_EQ(ctx.Get("Y").Shape(), sym_ns::SymShape({SymDim("B"), SymDim("S"), SymDim(24)}));
+  EXPECT_EQ(ctx.Get("present_state").Shape(),
+            sym_ns::SymShape({SymDim("B"), SymDim(2), SymDim(4), SymDim(6)}));
+}
+
+TEST(CustomOperatorSupport, InfersLinearAttentionSharedKeyHeadsStateShape) {
+  // Only 1 physical key head (kv_num_heads=2), exercised by onnx_light_cpu's
+  // bespoke path since onnx-light's function has no concept of shared key
+  // heads.
+  shapes_ns::ShapesContext ctx;
+  ctx.Set("Q", SymTensor(nullptr, TensorType::kFloat, {SymDim("B"), SymDim("S"), SymDim(16)}));
+  ctx.Set("K", SymTensor(nullptr, TensorType::kFloat, {SymDim("B"), SymDim("S"), SymDim(4)}));
+  ctx.Set("V", SymTensor(nullptr, TensorType::kFloat, {SymDim("B"), SymDim("S"), SymDim(12)}));
+  NodeProto node;
+  node.set_domain(onnx_light_cpu::kMicrosoftDomain);
+  node.set_op_type("LinearAttention");
+  node.add_input("Q");
+  node.add_input("K");
+  node.add_input("V");
+  node.add_output("Y");
+  node.add_output("present_state");
+  ONNX_LIGHT_NAMESPACE::AddAttribute(node, "q_num_heads", int64_t{4});
+  ONNX_LIGHT_NAMESPACE::AddAttribute(node, "kv_num_heads", int64_t{2});
+  ONNX_LIGHT_NAMESPACE::AddAttribute(node, "update_rule", std::string("linear"));
+  onnx_light_cpu::ComputeShapeLinearAttention(ctx, node);
+  EXPECT_EQ(ctx.Get("Y").Shape(), sym_ns::SymShape({SymDim("B"), SymDim("S"), SymDim(24)}));
+  EXPECT_EQ(ctx.Get("present_state").Shape(),
+            sym_ns::SymShape({SymDim("B"), SymDim(2), SymDim(4), SymDim(6)}));
+}
+
 TEST(CustomOperatorSupport, RegistersShapeMemoryGradientAndPatternHooks) {
   onnx_light_cpu::RegisterMicrosoftShapeAndMemoryFunctions();
   EXPECT_NE(shapes_ns::DispatchTable().find("com.microsoft:CDist"),
@@ -264,6 +345,11 @@ TEST(CustomOperatorSupport, RegistersShapeMemoryGradientAndPatternHooks) {
   EXPECT_EQ(shapes_ns::ComputePeakMemory(onnx_light_cpu::kMicrosoftDomain, "GroupQueryAttention",
                                          sym_ns::Device::kCPU, {}),
             0);
+  EXPECT_EQ(shapes_ns::ComputePeakMemory(onnx_light_cpu::kMicrosoftDomain, "LinearAttention",
+                                         sym_ns::Device::kCPU,
+                                         {sym_ns::SymShape({2, 3, 8}), sym_ns::SymShape({2, 3, 8}),
+                                          sym_ns::SymShape({2, 3, 12})}),
+            96);
 
   grad_ns::GradRegistry gradients;
   onnx_light_cpu::RegisterCustomOperatorGradients(gradients);
@@ -271,12 +357,15 @@ TEST(CustomOperatorSupport, RegistersShapeMemoryGradientAndPatternHooks) {
   EXPECT_NE(gradients.find({onnx_light_cpu::kMicrosoftDomain, "BiasGelu"}), gradients.end());
   EXPECT_NE(gradients.find({onnx_light_cpu::kMicrosoftDomain, "GroupQueryAttention"}),
             gradients.end());
+  EXPECT_EQ(gradients.find({onnx_light_cpu::kMicrosoftDomain, "LinearAttention"}), gradients.end());
 
   onnx_light_cpu::RegisterCustomOperatorPatterns();
   const std::vector<std::string> patterns = builder_ns::RegisteredPatternNames();
   EXPECT_NE(std::find(patterns.begin(), patterns.end(), "MicrosoftCDist"), patterns.end());
   EXPECT_NE(std::find(patterns.begin(), patterns.end(), "MicrosoftBiasGelu"), patterns.end());
   EXPECT_NE(std::find(patterns.begin(), patterns.end(), "MicrosoftGroupQueryAttention"),
+            patterns.end());
+  EXPECT_NE(std::find(patterns.begin(), patterns.end(), "MicrosoftLinearAttention"),
             patterns.end());
 }
 

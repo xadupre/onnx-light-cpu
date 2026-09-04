@@ -92,6 +92,7 @@ _REGISTERED_KERNELS = {
     "Less": "onnx_light_cpu::Less",
     "LessOrEqual": "onnx_light_cpu::LessOrEqual",
     "LinearAttention": "onnx_light_cpu::LinearAttention",
+    "com.microsoft::LinearAttention": "onnx_light_cpu::MicrosoftLinearAttention",
     "Log": "onnx_light_cpu::Log",
     "LpNormalization": "onnx_light_cpu::LpNormalization",
     "MatMul": "onnx_light_cpu::MatMul",
@@ -122,6 +123,13 @@ _TARGET_KERNELS = {
     for op_type, kernel_name in _REGISTERED_KERNELS.items()
     if op_type not in {"Max", "Mean", "Min", "QLinearMatMul", "Sum"}
 }
+_DOMAIN_SPECIFIC_TARGET_KERNELS = {
+    ("ai.onnx", "LinearAttention"): _TARGET_KERNELS["LinearAttention"],
+    (
+        "com.microsoft",
+        "LinearAttention",
+    ): _TARGET_KERNELS["com.microsoft::LinearAttention"],
+}
 
 _BENCHMARK_TYPE_SUFFIXES = dict.fromkeys(_TARGET_KERNELS, "float32")
 for _op_type in ("And", "Not", "Or", "Xor"):
@@ -129,6 +137,7 @@ for _op_type in ("And", "Not", "Or", "Xor"):
 for _op_type in ("BitwiseAnd", "BitwiseOr", "BitwiseXor", "MatMulInteger"):
     _BENCHMARK_TYPE_SUFFIXES[_op_type] = "int8"
 _BENCHMARK_TYPE_SUFFIXES["BitShift"] = "uint8"
+_BENCHMARK_TYPE_SUFFIXES["com.microsoft::LinearAttention"] = "float32"
 for _op_type in {
     "BatchNormalization",
     "GroupNormalization",
@@ -142,6 +151,7 @@ for _op_type in {
 }:
     _BENCHMARK_TYPE_SUFFIXES[_op_type] = "(?:float32|float16|bfloat16)"
 _BENCHMARK_OP_TAGS = {
+    "com.microsoft::LinearAttention": "microsoft_linear_attention",
     "GroupQueryAttention": "group_query_attention",
     "RMSNormalization": "rms_normalization",
 }
@@ -386,9 +396,15 @@ def _cpu_backend(model, *inputs):
     clear_used_kernel_names()
     outputs = session.run(None, feeds)
     dispatched = used_kernel_names()
+    expected_kernels = []
     for node in model.graph.node:
-        expected_kernel = _TARGET_KERNELS[node.op_type]
-        assert expected_kernel in dispatched
+        domain = node.domain or "ai.onnx"
+        expected_kernel = _DOMAIN_SPECIFIC_TARGET_KERNELS.get(
+            (domain, node.op_type), _TARGET_KERNELS.get(node.op_type)
+        )
+        assert expected_kernel is not None, (domain, node.op_type)
+        expected_kernels.append(expected_kernel)
+    assert dispatched == expected_kernels
     return outputs
 
 
@@ -442,11 +458,14 @@ class TestBackendCases(ExtTestCase):
         assert isinstance(records, tuple)
         assert all(isinstance(record, RegisteredKernel) for record in records)
 
-        # registered_kernel_names() is derived from registered_kernels(), so
-        # every op_type/kernel_name pair must match exactly.
-        assert {record.op_type: record.kernel_name for record in records} == (
-            registered_kernel_names()
-        )
+        names = registered_kernel_names()
+        for record in records:
+            key = (
+                f"{record.domain}::{record.op_type}"
+                if f"{record.domain}::{record.op_type}" in names
+                else record.op_type
+            )
+            assert names[key] == record.kernel_name
 
     def test_registered_kernels_is_deterministically_ordered(self):
         first = registered_kernels()
@@ -484,7 +503,7 @@ class TestBackendCases(ExtTestCase):
                 record.op_type = "Other"  # type: ignore[misc]
             if record.op_type == "TreeEnsemble":
                 expected_domain = "ai.onnx.ml"
-            elif record.op_type in {"BiasGelu", "CDist", "GroupQueryAttention"}:
+            elif record.domain == "com.microsoft":
                 expected_domain = "com.microsoft"
             else:
                 expected_domain = "ai.onnx"
@@ -492,39 +511,42 @@ class TestBackendCases(ExtTestCase):
             assert record.device == "CPU"
             assert isinstance(record.types, tuple)
             assert record.types, record
-            if record.op_type in {
-                "Add",
-                "And",
-                "BiasGelu",
-                "BitShift",
-                "BitwiseAnd",
-                "BitwiseOr",
-                "BitwiseXor",
-                "CDist",
-                "Div",
-                "Equal",
-                "Greater",
-                "GreaterOrEqual",
-                "GroupQueryAttention",
-                "Less",
-                "LessOrEqual",
-                "Max",
-                "Mean",
-                "Min",
-                "Mod",
-                "Mul",
-                "Or",
-                "PRelu",
-                "Pow",
-                "Sub",
-                "Sum",
-                "Xor",
-            }:
+            if (record.domain == "com.microsoft" and record.op_type == "LinearAttention") or (
+                record.op_type
+                in {
+                    "Add",
+                    "And",
+                    "BiasGelu",
+                    "BitShift",
+                    "BitwiseAnd",
+                    "BitwiseOr",
+                    "BitwiseXor",
+                    "CDist",
+                    "Div",
+                    "Equal",
+                    "Greater",
+                    "GreaterOrEqual",
+                    "GroupQueryAttention",
+                    "Less",
+                    "LessOrEqual",
+                    "Max",
+                    "Mean",
+                    "Min",
+                    "Mod",
+                    "Mul",
+                    "Or",
+                    "PRelu",
+                    "Pow",
+                    "Sub",
+                    "Sum",
+                    "Xor",
+                }
+            ):
                 assert isinstance(record.since_version, int)
                 assert record.since_version >= 1
             elif record.op_type in {"Attention", "RMSNormalization"}:
                 assert record.since_version == 23
-            elif record.op_type == "LinearAttention":
+            elif record.op_type == "LinearAttention" and record.domain != "com.microsoft":
                 assert record.since_version == 27
             elif record.op_type == "BatchNormalization":
                 assert record.since_version == 15

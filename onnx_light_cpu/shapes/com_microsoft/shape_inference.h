@@ -34,6 +34,9 @@ void ComputeShapeBiasGelu(ONNX_LIGHT_NAMESPACE::core::shapes::ShapesContext &ctx
 /// Infers the output shape for ``com.microsoft::GroupQueryAttention``.
 void ComputeShapeGroupQueryAttention(ONNX_LIGHT_NAMESPACE::core::shapes::ShapesContext &ctx,
                                      const ONNX_LIGHT_NAMESPACE::NodeProto &node);
+/// Infers output and state shapes for ``com.microsoft::LinearAttention``.
+void ComputeShapeLinearAttention(ONNX_LIGHT_NAMESPACE::core::shapes::ShapesContext &ctx,
+                                 const ONNX_LIGHT_NAMESPACE::NodeProto &node);
 
 /// Returns the scratch-memory requirement for ``com.microsoft::CDist``.
 int64_t ComputePeakMemoryCDist(
@@ -45,6 +48,10 @@ int64_t ComputePeakMemoryBiasGelu(
     const std::vector<ONNX_LIGHT_NAMESPACE::core::symbolic::SymShape> &input_shapes);
 /// Returns the scratch-memory requirement for ``com.microsoft::GroupQueryAttention``.
 int64_t ComputePeakMemoryGroupQueryAttention(
+    ONNX_LIGHT_NAMESPACE::core::symbolic::Device device,
+    const std::vector<ONNX_LIGHT_NAMESPACE::core::symbolic::SymShape> &input_shapes);
+/// Returns the scratch-memory requirement for ``com.microsoft::LinearAttention``.
+int64_t ComputePeakMemoryLinearAttention(
     ONNX_LIGHT_NAMESPACE::core::symbolic::Device device,
     const std::vector<ONNX_LIGHT_NAMESPACE::core::symbolic::SymShape> &input_shapes);
 

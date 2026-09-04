@@ -118,6 +118,44 @@ LightOpSchema MakeGroupQueryAttentionSchema() {
   return schema;
 }
 
+LightOpSchema MakeLinearAttentionSchema() {
+  LightOpSchema schema(
+      "LinearAttention", kMicrosoftDomain, 1,
+      "Recurrent linear attention with optional decay, delta updates, and persistent state.",
+      {{"query", "Query tensor with shape (batch, sequence, q_num_heads * key_head_size).", "T"},
+       {"key", "Key tensor with shape (batch, sequence, key_heads * key_head_size).", "T"},
+       {"value", "Value tensor with shape (batch, sequence, kv_num_heads * value_head_size).", "T"},
+       {"past_state",
+        "Optional state tensor with shape "
+        "(batch, kv_num_heads, key_head_size, value_head_size).",
+        "T"},
+       {"decay", "Optional log-space decay tensor used by gated update rules.", "T"},
+       {"beta", "Optional update-rate tensor used by delta update rules.", "T"}},
+      {{"output",
+        "Output tensor with shape "
+        "(batch, sequence, max(q_num_heads, kv_num_heads) * value_head_size).",
+        "T"},
+       {"present_state",
+        "Updated state with shape "
+        "(batch, kv_num_heads, key_head_size, value_head_size).",
+        "T"}},
+      {{"T", {TensorType::kFloat}, "Constrain the CPU implementation to FLOAT tensors."}},
+      {AttributeParam{"q_num_heads", "Number of query heads.", AttributeType::INT, true},
+       AttributeParam{"kv_num_heads", "Number of value/state heads.", AttributeType::INT, true},
+       AttributeParam{"update_rule", "linear, gated, delta, or gated_delta.", AttributeType::STRING,
+                      false, std::string("gated_delta")},
+       AttributeParam{"scale", "Query readout scale; zero selects 1/sqrt(key_head_size).",
+                      AttributeType::FLOAT, false, 0.0f},
+       AttributeParam{"chunk_size", "CPU scheduling hint with no semantic effect.",
+                      AttributeType::INT, false, int64_t{64}},
+       AttributeParam{"state_window", "State window; the CPU implementation supports only zero.",
+                      AttributeType::INT, false, int64_t{0}}},
+      false, true);
+  schema.set_min_output(2);
+  schema.set_max_output(2);
+  return schema;
+}
+
 } // namespace
 
 std::vector<LightOpSchema> GetMicrosoftOpSchemasWithHistory(const std::string &op_type,
@@ -127,6 +165,7 @@ std::vector<LightOpSchema> GetMicrosoftOpSchemasWithHistory(const std::string &o
       {"CDist", [] { return std::vector<LightOpSchema>{MakeCDistSchema()}; }},
       {"GroupQueryAttention",
        [] { return std::vector<LightOpSchema>{MakeGroupQueryAttentionSchema()}; }},
+      {"LinearAttention", [] { return std::vector<LightOpSchema>{MakeLinearAttentionSchema()}; }},
   };
   return schema_ns::CollectSchemasFromBuilders(builders, op_type, init_doc);
 }

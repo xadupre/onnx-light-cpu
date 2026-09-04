@@ -374,7 +374,7 @@ def registered_kernel_names(
         MicrosoftKernelImplementation.OPTIMIZED
     ),
 ) -> dict[str, str]:
-    """Returns ``{op_type: kernel name}`` for every onnx-light-cpu kernel.
+    """Returns ``{operator key: kernel name}`` for every onnx-light-cpu kernel.
 
     The kernel name is the library-qualified name (for example
     ``"onnx_light_cpu::Abs"``) that each kernel records when it runs. This maps
@@ -382,13 +382,22 @@ def registered_kernel_names(
     accelerated kernel installed for it, so callers can check the accelerated
     kernels — rather than onnx-light's built-in ones — are the kernels used.
 
-    Derived from :func:`registered_kernels` instead of maintaining a second
-    operator list, so it always stays in sync with the structured inventory.
+    Keys normally use the bare ``op_type``. When another domain registers the
+    same ``op_type``, the later entry uses ``domain::op_type`` so neither
+    kernel is lost. Derived from :func:`registered_kernels` instead of
+    maintaining a second operator list, so it stays in sync with the
+    structured inventory.
     """
-    return {
-        record.op_type: record.kernel_name
-        for record in registered_kernels(microsoft_implementation)
-    }
+    names: dict[str, str] = {}
+    unqualified_domains: dict[str, str] = {}
+    for record in registered_kernels(microsoft_implementation):
+        key = record.op_type
+        if key not in names:
+            unqualified_domains[key] = record.domain
+        elif unqualified_domains[key] != record.domain:
+            key = f"{record.domain or 'ai.onnx'}::{record.op_type}"
+        names[key] = record.kernel_name
+    return names
 
 
 def used_kernel_names() -> list[str]:

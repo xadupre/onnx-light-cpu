@@ -383,7 +383,8 @@ TEST(OnnxLightBackendKernels, GroupQueryAttentionRunsThroughRuntime) {
 }
 
 TEST(OnnxLightBackendKernels, MicrosoftCorrectnessCasesRunWithNaiveRegistration) {
-  for (const std::string &op_type : {"BiasGelu", "CDist", "GroupQueryAttention"}) {
+  for (const std::string &op_type :
+       {"BiasGelu", "CDist", "GroupQueryAttention", "LinearAttention"}) {
     const auto failures = RunCpuBackendCases(op_type, core::backend_test::TestMode::TEST, {},
                                              onnx_light_cpu::MicrosoftKernelImplementation::NAIVE);
     EXPECT_TRUE(failures.empty()) << Describe(failures);

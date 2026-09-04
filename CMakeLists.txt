@@ -46,6 +46,8 @@ set(ONNX_LIGHT_CPU_ONNX_LIGHT_KERNELS_IMPLIB "" CACHE FILEPATH
     "Windows import library for the onnx-light kernels runtime.")
 set(ONNX_LIGHT_CPU_ONNX_LIGHT_BACKEND_TEST_IMPLIB "" CACHE FILEPATH
     "Windows import library for the onnx-light backend-test runtime.")
+set(ONNX_LIGHT_CPU_ONNX_LIGHT_SHAPE_IMPLIB "" CACHE FILEPATH
+    "Windows import library for the onnx-light shape-inference runtime.")
 option(ONNX_LIGHT_CPU_ENABLE_COVERAGE
        "Instrument the C++ targets for code coverage (GCC/Clang only)." OFF)
 set(ONNX_LIGHT_CPU_MAX_SIMD_LEVEL "AUTO" CACHE STRING
@@ -722,6 +724,34 @@ if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
     file(GLOB _onnx_light_op_lib
         "${_onnx_light_libdir}/liblib_onnx_op.*"
         "${_onnx_light_libdir}/lib_onnx_op.*")
+    # lib_onnx_shape hosts onnx-light's own shape-inference functions (e.g.
+    # ``onnx_shapes::shapes::nn::ComputeShapeLinearAttention``), reused below
+    # by ``onnx_light_cpu::ComputeShapeLinearAttention`` for the ordinary
+    # grouping/no-shared-key-heads case. Same best-effort discovery as the
+    # other onnx-light libraries: missing (e.g. statically linked into the
+    # Python extension on this platform) simply means the reuse is skipped
+    # and onnx_light_cpu falls back to its own bespoke shape computation.
+    #
+    # Unlike lib_onnx_op/lib_onnx_kernels (only ever linked into standalone
+    # C++ test executables below), lib_onnx_shape is linked into
+    # lib_onnx_light_cpu_kernels itself, which is loaded by the ``_cpuregister``
+    # Python extension. On Unix that new NEEDED entry is resolved via the
+    # explicit RPATH pointing at onnx-light's Python library directory (see
+    # ONNX_LIGHT_CPU_ONNX_LIGHT_PY_LIBDIR below), verified working in CI. On
+    # Windows there is no RPATH equivalent: lib_onnx_core/lib_onnx_proto
+    # already work there only because some earlier-imported onnx-light Python
+    # extension has already loaded them into the process, and nothing else
+    # yet forces lib_onnx_shape.dll to be loaded before ``_cpuregister`` needs
+    # it, so linking it in makes ``import _cpuregister`` fail with "DLL load
+    # failed ... The specified module could not be found." Restrict the
+    # discovery to non-Windows platforms until Windows DLL search/preload is
+    # addressed; onnx_light_cpu falls back to its bespoke shape computation
+    # there instead.
+    if(NOT WIN32)
+      file(GLOB _onnx_light_shape_lib
+          "${_onnx_light_libdir}/liblib_onnx_shape.*"
+          "${_onnx_light_libdir}/lib_onnx_shape.*")
+    endif()
     file(GLOB _onnx_light_backend_test_lib
         "${_onnx_light_libdir}/liblib_onnx_backend_test.*"
         "${_onnx_light_libdir}/lib_onnx_backend_test.*")
@@ -740,6 +770,23 @@ if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
         endif()
         set_property(TARGET onnx_light::lib_onnx_op PROPERTY
             IMPORTED_IMPLIB "${ONNX_LIGHT_CPU_ONNX_LIGHT_OP_IMPLIB}")
+      endif()
+    endif()
+    if(_onnx_light_shape_lib)
+      list(GET _onnx_light_shape_lib 0 _onnx_light_shape_lib)
+      add_library(onnx_light::lib_onnx_shape
+          ${_onnx_light_imported_library_type} IMPORTED GLOBAL)
+      set_target_properties(onnx_light::lib_onnx_shape PROPERTIES
+          IMPORTED_LOCATION "${_onnx_light_shape_lib}"
+          INTERFACE_LINK_LIBRARIES onnx_light::lib_onnx_core)
+      if(WIN32)
+        if(NOT ONNX_LIGHT_CPU_ONNX_LIGHT_SHAPE_IMPLIB)
+          message(FATAL_ERROR
+              "The onnx-light shape Windows import library is required for "
+              "source-runtime integration.")
+        endif()
+        set_property(TARGET onnx_light::lib_onnx_shape PROPERTY
+            IMPORTED_IMPLIB "${ONNX_LIGHT_CPU_ONNX_LIGHT_SHAPE_IMPLIB}")
       endif()
     endif()
     if(_onnx_light_kernels_lib AND _onnx_light_backend_test_lib)
@@ -819,6 +866,17 @@ if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
   target_link_libraries(lib_onnx_light_cpu_kernels PUBLIC
       lib_onnx_light_cpu
       onnx_light::lib_onnx_core)
+  # Reuse onnx-light's own shape-inference functions (e.g.
+  # ``onnx_shapes::shapes::nn::ComputeShapeLinearAttention``) for the shape
+  # cases they already cover instead of re-deriving them; only available when
+  # ``onnx_light::lib_onnx_shape`` was discovered above (always via
+  # find_package, best-effort for --onnx-light-source).
+  if(TARGET onnx_light::lib_onnx_shape)
+    target_link_libraries(lib_onnx_light_cpu_kernels PUBLIC
+        onnx_light::lib_onnx_shape)
+    target_compile_definitions(lib_onnx_light_cpu_kernels PUBLIC
+        ONNX_LIGHT_CPU_HAS_ONNX_SHAPE=1)
+  endif()
   if(UNIX AND NOT APPLE AND ONNX_LIGHT_CPU_ONNX_LIGHT_SOURCE_DIR)
     # Keep lib_onnx_proto as a direct dependency. The local Python runtime
     # libraries have no transitive RUNPATH, so relying on lib_onnx_core alone

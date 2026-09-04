@@ -144,6 +144,39 @@ public:
         const std::vector<const ONNX_LIGHT_NAMESPACE::NodeProto *> &nodes) const override;
 };
 
+/**
+ * Rewrites the FLOAT subset of ``ai.onnx::LinearAttention-27`` to the
+ * compatible ``com.microsoft::LinearAttention-1`` contract.
+ *
+ * @code
+ * Before:
+ *   query, key, value --->+--------------------------+---> output
+ *   past, decay, beta --->| ai.onnx::LinearAttention |---> present_state
+ *                         +--------------------------+
+ *
+ * After:
+ *   query, key, value --->+----------------------------------+---> output
+ *   past, decay, beta --->| com.microsoft::LinearAttention-1 |---> present_state
+ *                         +----------------------------------+
+ * @endcode
+ *
+ * Inputs, optional-input slots, outputs, and all semantic attributes are
+ * preserved. The Microsoft-domain import is added to the graph.
+ */
+class LinearAttentionFusionPattern final
+    : public ONNX_LIGHT_NAMESPACE::core::builder::PatternOptimization {
+public:
+  LinearAttentionFusionPattern() : PatternOptimization(0, "MicrosoftLinearAttention") {}
+
+  std::set<std::string> FastOpType() const override;
+  ONNX_LIGHT_NAMESPACE::core::builder::MatchResult
+  Match(ONNX_LIGHT_NAMESPACE::core::builder::GraphGraph &graph,
+        const ONNX_LIGHT_NAMESPACE::NodeProto &candidate) const override;
+  ONNX_LIGHT_NAMESPACE::utils::RepeatedProtoField<ONNX_LIGHT_NAMESPACE::NodeProto>
+  Apply(ONNX_LIGHT_NAMESPACE::core::builder::GraphGraph &graph,
+        const std::vector<const ONNX_LIGHT_NAMESPACE::NodeProto *> &nodes) const override;
+};
+
 void RegisterCustomOperatorPatterns();
 
 } // namespace onnx_light_cpu
