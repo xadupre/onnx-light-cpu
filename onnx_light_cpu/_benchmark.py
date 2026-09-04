@@ -41,21 +41,6 @@ _DTYPES = (
     "uint64",
     "bool",
 )
-_ONNX_DTYPE_NAMES = {
-    "BFLOAT16": "bfloat16",
-    "FLOAT16": "float16",
-    "FLOAT": "float32",
-    "DOUBLE": "float64",
-    "INT8": "int8",
-    "INT16": "int16",
-    "INT32": "int32",
-    "INT64": "int64",
-    "UINT8": "uint8",
-    "UINT16": "uint16",
-    "UINT32": "uint32",
-    "UINT64": "uint64",
-    "BOOL": "bool",
-}
 _DTYPE_MARKERS = {
     "bfloat16": r"\b(?:BFLOAT16|bfloat16|BFloat16)\b",
     "float16": r"\b(?:FLOAT16|float16|Float16|Half)\b",
@@ -138,6 +123,11 @@ def infer_pr_benchmark_selection(
     paths: Sequence[str], patch: str, kernels: Sequence[Any]
 ) -> tuple[list[str], list[str]]:
     """Infers benchmark test and dtype filters from changed pull request content."""
+    from onnx_light.onnx import TensorProto  # pyrefly: ignore[missing-import]
+    from onnx_light.onnx.helper import (  # pyrefly: ignore[missing-import]
+        tensor_dtype_to_np_dtype,
+    )
+
     relevant_paths = [
         path.lower()
         for path in paths
@@ -160,12 +150,13 @@ def infer_pr_benchmark_selection(
         return [], []
 
     supported_dtypes = {
-        _ONNX_DTYPE_NAMES[type_name]
+        tensor_dtype_to_np_dtype(getattr(TensorProto, type_name)).name
         for kernel in kernels
         if kernel.op_type in operators
         for type_name in kernel.types
-        if type_name in _ONNX_DTYPE_NAMES
+        if hasattr(TensorProto, type_name)
     }
+    supported_dtypes.intersection_update(_DTYPES)
     changed_content = "\n".join(paths) + "\n" + patch
     mentioned_dtypes = {
         dtype for dtype, pattern in _DTYPE_MARKERS.items() if re.search(pattern, changed_content)
