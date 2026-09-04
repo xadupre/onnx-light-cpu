@@ -9,6 +9,10 @@
 #include "onnx_core/shapes/dispatch_table.h"
 #include "onnx_core/symbolic/sym_tensor.h"
 
+#if defined(ONNX_LIGHT_CPU_HAS_ONNX_SHAPE)
+#include "onnx_extensions/shapes/shapes/nn/shape_nn.h"
+#endif
+
 #include <cstdint>
 #include <limits>
 #include <mutex>
@@ -358,6 +362,7 @@ void ComputeShapeLinearAttention(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE:
   sequence = MergeGqaDim(ctx, sequence, v_shape[1], "sequence_length");
   const sym_ns::SymDim key_head_size = DivideGqaDim(q_shape[2], q_heads, "query hidden size");
   const sym_ns::SymDim value_head_size = DivideGqaDim(v_shape[2], kv_heads, "value hidden size");
+  bool key_heads_ordinary = false;
   if (key_head_size.IsInt() && k_shape[2].IsInt()) {
     const std::int64_t dk = key_head_size.AsInt();
     const std::int64_t key_hidden = k_shape[2].AsInt();
@@ -365,6 +370,7 @@ void ComputeShapeLinearAttention(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE:
       throw std::invalid_argument(
           "ComputeShapeLinearAttention: key heads must divide kv_num_heads.");
     }
+    key_heads_ordinary = (key_hidden / dk) == kv_heads;
   }
 
   if (has_past) {
@@ -410,6 +416,20 @@ void ComputeShapeLinearAttention(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE:
       throw std::invalid_argument("ComputeShapeLinearAttention: beta width must be 1 or H_kv.");
     }
   }
+
+#if defined(ONNX_LIGHT_CPU_HAS_ONNX_SHAPE)
+  // Ordinary grouping (q_num_heads a multiple of kv_num_heads) with no shared
+  // physical key heads matches exactly what onnx-light's own shape function
+  // already computes; reuse it instead of re-deriving the output/state
+  // shapes below. Inverse grouping and shared key heads aren't supported by
+  // onnx-light's function, so those keep the bespoke computation.
+  if (q_heads % kv_heads == 0 && key_heads_ordinary) {
+    ONNX_LIGHT_NAMESPACE::onnx_shapes::shapes::nn::ComputeShapeLinearAttention(
+        ctx, node, node.input(0).c_str(), node.input(1).c_str(), node.input(2).c_str(),
+        has_past ? node.input(3).c_str() : nullptr);
+    return;
+  }
+#endif
 
   SymShape output_shape;
   output_shape.PushBack(batch);

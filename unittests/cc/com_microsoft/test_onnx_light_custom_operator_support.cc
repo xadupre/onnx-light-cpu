@@ -284,6 +284,57 @@ TEST(CustomOperatorSupport, InfersLinearAttentionInverseGroupingAndStateShape) {
   EXPECT_GE(ctx.Constraints().size(), 4U);
 }
 
+TEST(CustomOperatorSupport, InfersLinearAttentionOrdinaryGroupingAndStateShape) {
+  // q_num_heads (4) is a multiple of kv_num_heads (2): this ordinary-grouping,
+  // no-shared-key-heads case is delegated to onnx-light's own shape function
+  // when ONNX_LIGHT_CPU_HAS_ONNX_SHAPE is available; the result must match
+  // the bespoke computation regardless of which path is compiled in.
+  shapes_ns::ShapesContext ctx;
+  ctx.Set("Q", SymTensor(nullptr, TensorType::kFloat, {SymDim("B"), SymDim("S"), SymDim(16)}));
+  ctx.Set("K", SymTensor(nullptr, TensorType::kFloat, {SymDim("B"), SymDim("S"), SymDim(8)}));
+  ctx.Set("V", SymTensor(nullptr, TensorType::kFloat, {SymDim("B"), SymDim("S"), SymDim(12)}));
+  NodeProto node;
+  node.set_domain(onnx_light_cpu::kMicrosoftDomain);
+  node.set_op_type("LinearAttention");
+  node.add_input("Q");
+  node.add_input("K");
+  node.add_input("V");
+  node.add_output("Y");
+  node.add_output("present_state");
+  ONNX_LIGHT_NAMESPACE::AddAttribute(node, "q_num_heads", int64_t{4});
+  ONNX_LIGHT_NAMESPACE::AddAttribute(node, "kv_num_heads", int64_t{2});
+  ONNX_LIGHT_NAMESPACE::AddAttribute(node, "update_rule", std::string("linear"));
+  onnx_light_cpu::ComputeShapeLinearAttention(ctx, node);
+  EXPECT_EQ(ctx.Get("Y").Shape(), sym_ns::SymShape({SymDim("B"), SymDim("S"), SymDim(24)}));
+  EXPECT_EQ(ctx.Get("present_state").Shape(),
+            sym_ns::SymShape({SymDim("B"), SymDim(2), SymDim(4), SymDim(6)}));
+}
+
+TEST(CustomOperatorSupport, InfersLinearAttentionSharedKeyHeadsStateShape) {
+  // Only 1 physical key head (kv_num_heads=2), exercised by onnx_light_cpu's
+  // bespoke path since onnx-light's function has no concept of shared key
+  // heads.
+  shapes_ns::ShapesContext ctx;
+  ctx.Set("Q", SymTensor(nullptr, TensorType::kFloat, {SymDim("B"), SymDim("S"), SymDim(16)}));
+  ctx.Set("K", SymTensor(nullptr, TensorType::kFloat, {SymDim("B"), SymDim("S"), SymDim(4)}));
+  ctx.Set("V", SymTensor(nullptr, TensorType::kFloat, {SymDim("B"), SymDim("S"), SymDim(12)}));
+  NodeProto node;
+  node.set_domain(onnx_light_cpu::kMicrosoftDomain);
+  node.set_op_type("LinearAttention");
+  node.add_input("Q");
+  node.add_input("K");
+  node.add_input("V");
+  node.add_output("Y");
+  node.add_output("present_state");
+  ONNX_LIGHT_NAMESPACE::AddAttribute(node, "q_num_heads", int64_t{4});
+  ONNX_LIGHT_NAMESPACE::AddAttribute(node, "kv_num_heads", int64_t{2});
+  ONNX_LIGHT_NAMESPACE::AddAttribute(node, "update_rule", std::string("linear"));
+  onnx_light_cpu::ComputeShapeLinearAttention(ctx, node);
+  EXPECT_EQ(ctx.Get("Y").Shape(), sym_ns::SymShape({SymDim("B"), SymDim("S"), SymDim(24)}));
+  EXPECT_EQ(ctx.Get("present_state").Shape(),
+            sym_ns::SymShape({SymDim("B"), SymDim(2), SymDim(4), SymDim(6)}));
+}
+
 TEST(CustomOperatorSupport, RegistersShapeMemoryGradientAndPatternHooks) {
   onnx_light_cpu::RegisterMicrosoftShapeAndMemoryFunctions();
   EXPECT_NE(shapes_ns::DispatchTable().find("com.microsoft:CDist"),
