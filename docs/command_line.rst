@@ -26,6 +26,7 @@ workbook:
        --max-repeat-time 2 \
        --threads 4 \
        --onnxruntime \
+       --pr 623 \
        --output benchmark.xlsx
 
 ``--test`` (or ``--tests``)
@@ -59,6 +60,23 @@ workbook:
 ``--onnxruntime``
    Also measures ONNX Runtime with the same number of threads and reports its
    latency and the speedup of onnx-light-cpu over ONNX Runtime.
+
+``--pr [NUMBER_OR_URL]``
+   Adds the aggregated Markdown table as a pull request comment using GitHub
+   CLI. If the number or URL is omitted, GitHub CLI selects the pull request
+   associated with the current branch. When neither ``--tests`` nor ``--dtypes``
+   is given, this pull request is also used to infer the modified operator and
+   data type.
+
+``--from-pr [NUMBER_OR_URL]``
+   Inspects the pull request's changed kernel files and diff to infer the
+   operator and data type without posting results. Explicit ``--tests`` and
+   ``--dtypes`` filters override this inference.
+
+The Linux ``onnx-light main`` job in the ``ci-core`` workflow invokes this
+command after its existing build and tests when a pull request modifies kernel
+implementation or backend benchmark case files. A separate report job updates
+the latest benchmark comment instead of adding a new comment after every push.
 
 ``-o``, ``--output``
    Output workbook path. It must end in ``.xlsx`` and defaults to

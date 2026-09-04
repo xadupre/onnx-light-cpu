@@ -8,6 +8,8 @@ import os
 from collections.abc import Sequence
 
 from ._benchmark import (
+    post_benchmark_markdown,
+    pull_request_benchmark_selection,
     run_backend_benchmark,
     write_benchmark_markdown,
     write_benchmark_workbook,
@@ -80,6 +82,20 @@ def _build_parser() -> argparse.ArgumentParser:
         help="path of an optional Markdown file with the aggregated figures",
     )
     benchmark.add_argument(
+        "--pr",
+        nargs="?",
+        const="",
+        metavar="NUMBER_OR_URL",
+        help="add the aggregated figures to a pull request (default: current branch's PR)",
+    )
+    benchmark.add_argument(
+        "--from-pr",
+        nargs="?",
+        const="",
+        metavar="NUMBER_OR_URL",
+        help="infer test and dtype filters from a pull request without posting results",
+    )
+    benchmark.add_argument(
         "-w",
         "--warmup",
         type=_non_negative_int,
@@ -114,6 +130,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "benchmark":
         tests = args.tests or ["^test_cpu_"]
         dtypes = args.dtypes or ["all"]
+        selection_pr = args.from_pr if args.from_pr is not None else args.pr
+        if selection_pr is not None and not args.tests and not args.dtypes:
+            tests, dtypes = pull_request_benchmark_selection(selection_pr)
+            if not tests:
+                raise ValueError("no benchmark operator could be inferred from the pull request")
         raw_rows, aggregated_rows = run_backend_benchmark(
             tests=tests,
             dtypes=dtypes,
@@ -126,6 +147,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         write_benchmark_workbook(args.output, raw_rows, aggregated_rows)
         if args.markdown:
             write_benchmark_markdown(args.markdown, aggregated_rows)
+        if args.pr is not None:
+            post_benchmark_markdown(args.pr, aggregated_rows)
         print(
             f"Wrote {len(raw_rows)} measurements for {len(aggregated_rows)} cases "
             f"to {args.output}"

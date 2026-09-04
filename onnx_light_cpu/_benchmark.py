@@ -11,6 +11,7 @@ import os
 import platform
 import re
 import statistics
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -40,6 +41,21 @@ _DTYPES = (
     "uint64",
     "bool",
 )
+_DTYPE_MARKERS = {
+    "bfloat16": r"\b(?:BFLOAT16|bfloat16|BFloat16)\b",
+    "float16": r"\b(?:FLOAT16|float16|Float16|Half)\b",
+    "float32": r"\b(?:FLOAT|float32|Float32|float)\b",
+    "float64": r"\b(?:DOUBLE|float64|Float64|double)\b",
+    "int8": r"\b(?:INT8|int8|int8_t)\b",
+    "int16": r"\b(?:INT16|int16|int16_t)\b",
+    "int32": r"\b(?:INT32|int32|int32_t)\b",
+    "int64": r"\b(?:INT64|int64|int64_t)\b",
+    "uint8": r"\b(?:UINT8|uint8|uint8_t)\b",
+    "uint16": r"\b(?:UINT16|uint16|uint16_t)\b",
+    "uint32": r"\b(?:UINT32|uint32|uint32_t)\b",
+    "uint64": r"\b(?:UINT64|uint64|uint64_t)\b",
+    "bool": r"\b(?:BOOL|bool)\b",
+}
 
 _METADATA_COLUMNS = (
     "case",
@@ -91,6 +107,87 @@ def _case_dtype(name: str) -> str | None:
 
 def _matches_case(name: str, expressions: Sequence[re.Pattern[str]]) -> bool:
     return any(expression.search(name) for expression in expressions)
+
+
+def _operator_words(op_type: str) -> list[str]:
+    return re.findall(r"[A-Z]+(?=[A-Z][a-z]|\d|\b)|[A-Z]?[a-z]+|\d+", op_type)
+
+
+def _operator_path_pattern(op_type: str) -> re.Pattern[str]:
+    words = _operator_words(op_type)
+    name = r"[_-]?".join(map(str.lower, words))
+    return re.compile(rf"(?:^|[/_.-]){name}(?:[/_.-]|$)")
+
+
+def infer_pr_benchmark_selection(
+    paths: Sequence[str], patch: str, kernels: Sequence[Any]
+) -> tuple[list[str], list[str]]:
+    """Infers benchmark test and dtype filters from changed pull request content."""
+    from onnx_light.onnx import TensorProto  # pyrefly: ignore[missing-import]
+    from onnx_light.onnx.helper import (  # pyrefly: ignore[missing-import]
+        tensor_dtype_to_np_dtype,
+    )
+
+    relevant_paths = [
+        path.lower()
+        for path in paths
+        if path.startswith(
+            (
+                "onnx_light_cpu/backend_test/cases/",
+                "onnx_light_cpu/impl/",
+                "onnx_light_cpu/kernels/",
+            )
+        )
+    ]
+    operators = sorted(
+        {
+            kernel.op_type
+            for kernel in kernels
+            if any(_operator_path_pattern(kernel.op_type).search(path) for path in relevant_paths)
+        }
+    )
+    if not operators:
+        return [], []
+
+    supported_dtypes = {
+        tensor_dtype_to_np_dtype(getattr(TensorProto, type_name)).name
+        for kernel in kernels
+        if kernel.op_type in operators
+        for type_name in kernel.types
+        if hasattr(TensorProto, type_name)
+    }
+    supported_dtypes.intersection_update(_DTYPES)
+    changed_content = "\n".join(paths) + "\n" + patch
+    mentioned_dtypes = {
+        dtype for dtype, pattern in _DTYPE_MARKERS.items() if re.search(pattern, changed_content)
+    }
+    dtypes = sorted(supported_dtypes & mentioned_dtypes or supported_dtypes)
+    test_names = [
+        "^test_cpu_("
+        + "|".join(r"_?".join(map(str.lower, _operator_words(op))) for op in operators)
+        + ")_"
+    ]
+    return test_names, dtypes
+
+
+def pull_request_benchmark_selection(pull_request: str) -> tuple[list[str], list[str]]:
+    """Reads a pull request with GitHub CLI and infers its benchmark filters."""
+    from ._register import registered_kernels
+
+    target = [pull_request] if pull_request else []
+    paths = subprocess.run(
+        ["gh", "pr", "diff", *target, "--name-only"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.splitlines()
+    patch = subprocess.run(
+        ["gh", "pr", "diff", *target],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    return infer_pr_benchmark_selection(paths, patch, registered_kernels())
 
 
 def _to_numpy(tensor: Any) -> np.ndarray:
@@ -341,12 +438,7 @@ def write_benchmark_workbook(
     workbook.save(output)
 
 
-def write_benchmark_markdown(
-    path: str | os.PathLike[str], aggregated_rows: Sequence[dict[str, Any]]
-) -> None:
-    """Writes aggregated benchmark data as a Markdown table."""
-    output = Path(path)
-    output.parent.mkdir(parents=True, exist_ok=True)
+def _benchmark_markdown(aggregated_rows: Sequence[dict[str, Any]]) -> str:
     columns = _AGGREGATED_COLUMNS
     lines = [
         f"| {' | '.join(columns)} |",
@@ -356,4 +448,27 @@ def write_benchmark_markdown(
         f"| {' | '.join(str(row[column]).replace('|', r'\|') for column in columns)} |"
         for row in aggregated_rows
     )
-    output.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return "\n".join(lines) + "\n"
+
+
+def write_benchmark_markdown(
+    path: str | os.PathLike[str], aggregated_rows: Sequence[dict[str, Any]]
+) -> None:
+    """Writes aggregated benchmark data as a Markdown table."""
+    output = Path(path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(_benchmark_markdown(aggregated_rows), encoding="utf-8")
+
+
+def post_benchmark_markdown(pull_request: str, aggregated_rows: Sequence[dict[str, Any]]) -> None:
+    """Adds aggregated benchmark data to a pull request with GitHub CLI."""
+    command = ["gh", "pr", "comment"]
+    if pull_request:
+        command.append(pull_request)
+    command.extend(["--edit-last", "--create-if-none", "--body-file", "-"])
+    subprocess.run(
+        command,
+        input=_benchmark_markdown(aggregated_rows),
+        text=True,
+        check=True,
+    )
