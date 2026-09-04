@@ -177,6 +177,90 @@ jobs:
       - name: Run onnx-light integration tests
         run: python -m pytest unittests
 
+      - name: Detect benchmark changes
+        id: benchmark_changes
+        if: >-
+          runner.os == 'Linux' &&
+          github.event_name == 'pull_request' &&
+          github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          if gh pr diff "${{ github.event.pull_request.html_url }}" --name-only |
+            grep -Eq '^onnx_light_cpu/(backend_test/cases|impl|kernels)/'; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Benchmark modified operator and data type
+        if: steps.benchmark_changes.outputs.run == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          python -m onnx_light_cpu benchmark \
+            --from-pr "${{ github.event.pull_request.html_url }}" \
+            --markdown benchmark.md \
+            --output "${{ runner.temp }}/benchmark.xlsx"
+
+      - name: Prepare benchmark report artifact
+        if: >-
+          runner.os == 'Linux' &&
+          github.event_name == 'pull_request' &&
+          github.event.pull_request.head.repo.full_name == github.repository
+        shell: bash
+        run: touch benchmark-artifact
+
+      - name: Upload benchmark report
+        if: >-
+          runner.os == 'Linux' &&
+          github.event_name == 'pull_request' &&
+          github.event.pull_request.head.repo.full_name == github.repository
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr-benchmark
+          path: |
+            benchmark-artifact
+            benchmark.md
+
+  report_pr_benchmark:
+    name: PR benchmark report
+    needs: setup_onnx_light_source
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Download benchmark report
+        uses: actions/download-artifact@v4
+        with:
+          name: pr-benchmark
+
+      - name: Check for benchmark results
+        id: benchmark_results
+        shell: bash
+        run: |
+          if [[ -f benchmark.md ]]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Update pull request
+        if: steps.benchmark_results.outputs.available == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr comment "${{ github.event.pull_request.html_url }}" \
+            --edit-last \
+            --create-if-none \
+            --body-file benchmark.md
+
   arm_gemm_native:
     name: ARM64 GEMM (NEON)
     runs-on: ubuntu-24.04-arm
