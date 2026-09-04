@@ -731,9 +731,27 @@ if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
     # other onnx-light libraries: missing (e.g. statically linked into the
     # Python extension on this platform) simply means the reuse is skipped
     # and onnx_light_cpu falls back to its own bespoke shape computation.
-    file(GLOB _onnx_light_shape_lib
-        "${_onnx_light_libdir}/liblib_onnx_shape.*"
-        "${_onnx_light_libdir}/lib_onnx_shape.*")
+    #
+    # Unlike lib_onnx_op/lib_onnx_kernels (only ever linked into standalone
+    # C++ test executables below), lib_onnx_shape is linked into
+    # lib_onnx_light_cpu_kernels itself, which is loaded by the ``_cpuregister``
+    # Python extension. On Unix that new NEEDED entry is resolved via the
+    # explicit RPATH pointing at onnx-light's Python library directory (see
+    # ONNX_LIGHT_CPU_ONNX_LIGHT_PY_LIBDIR below), verified working in CI. On
+    # Windows there is no RPATH equivalent: lib_onnx_core/lib_onnx_proto
+    # already work there only because some earlier-imported onnx-light Python
+    # extension has already loaded them into the process, and nothing else
+    # yet forces lib_onnx_shape.dll to be loaded before ``_cpuregister`` needs
+    # it, so linking it in makes ``import _cpuregister`` fail with "DLL load
+    # failed ... The specified module could not be found." Restrict the
+    # discovery to non-Windows platforms until Windows DLL search/preload is
+    # addressed; onnx_light_cpu falls back to its bespoke shape computation
+    # there instead.
+    if(NOT WIN32)
+      file(GLOB _onnx_light_shape_lib
+          "${_onnx_light_libdir}/liblib_onnx_shape.*"
+          "${_onnx_light_libdir}/lib_onnx_shape.*")
+    endif()
     file(GLOB _onnx_light_backend_test_lib
         "${_onnx_light_libdir}/liblib_onnx_backend_test.*"
         "${_onnx_light_libdir}/lib_onnx_backend_test.*")
