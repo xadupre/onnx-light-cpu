@@ -51,7 +51,7 @@ namespace {
 // FP16/BF16 half-plan tuning knobs through ``--participants``.
 struct ThreadExecutor {
   explicit ThreadExecutor(std::size_t threads) {
-    workers.reserve(threads - 1);
+    workers.reserve(threads > 0 ? threads - 1 : 0);
     for (std::size_t index = 1; index < threads; ++index) {
       workers.emplace_back([this] { Worker(); });
     }

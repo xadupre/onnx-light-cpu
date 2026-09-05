@@ -29,18 +29,16 @@ __m256i Accumulate(__m256i accumulator, __m256i a_low, __m256i a_high, __m256i b
   return _mm256_add_epi32(accumulator, _mm256_madd_epi16(products_high, ones));
 }
 
-std::uint32_t Reduce(__m256i accumulator) {
-  __m128i total128 =
-      _mm_add_epi32(_mm256_castsi256_si128(accumulator), _mm256_extracti128_si256(accumulator, 1));
-  total128 = _mm_add_epi32(total128, _mm_shuffle_epi32(total128, _MM_SHUFFLE(1, 0, 3, 2)));
-  total128 = _mm_add_epi32(total128, _mm_shuffle_epi32(total128, _MM_SHUFFLE(2, 3, 0, 1)));
-  return static_cast<std::uint32_t>(_mm_cvtsi128_si32(total128));
-}
-
 std::uint32_t Reduce128(__m128i accumulator) {
   accumulator = _mm_add_epi32(accumulator, _mm_shuffle_epi32(accumulator, _MM_SHUFFLE(1, 0, 3, 2)));
   accumulator = _mm_add_epi32(accumulator, _mm_shuffle_epi32(accumulator, _MM_SHUFFLE(2, 3, 0, 1)));
   return static_cast<std::uint32_t>(_mm_cvtsi128_si32(accumulator));
+}
+
+std::uint32_t Reduce(__m256i accumulator) {
+  const __m128i total128 =
+      _mm_add_epi32(_mm256_castsi256_si128(accumulator), _mm256_extracti128_si256(accumulator, 1));
+  return Reduce128(total128);
 }
 
 template <typename T>
