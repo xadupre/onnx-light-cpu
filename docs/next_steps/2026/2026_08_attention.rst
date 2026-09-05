@@ -367,3 +367,93 @@ corrective pass delivered the implementation, benchmarking, and memory work.
 Subsequent published measurements showed that the performance thresholds were
 not sustained. The roadmap remains open as a performance gate until a
 dedicated-machine run satisfies those thresholds for every priority type.
+
+AVX2 gap-closing pass (`#635 <https://github.com/xadupre/onnx-light-cpu/issues/635>`_)
+---------------------------------------------------------------------------------------
+
+This pass focuses on the AVX2+FMA ``Q == 1`` decode fast path added by `#605
+<https://github.com/xadupre/onnx-light-cpu/pull/605>`_ and `#608
+<https://github.com/xadupre/onnx-light-cpu/pull/608>`_
+(``ComputeAttentionDecodeRowAVX2FMA`` in ``attention_plan.cc``). Profiling with
+a standalone microbenchmark that drives ``ComputeAttentionFloat32Streaming``
+directly (bypassing ONNX Runtime and onnx-light dependencies, which are not
+available in every build environment) isolated the score dot product
+(``AttentionDotFloat32_AVX2_FMA``) as latency-bound: its single-accumulator
+FMA chain must wait roughly 4-5 cycles for each ``vfmadd231ps`` to retire
+before issuing the next one, even though the core can issue two FMAs per
+cycle.
+
+A first attempt used four independent accumulators (matching the technique
+already used by the online-softmax block reduction). Measured in isolation it
+was faster for every ``head_dim``, but measured through the full decode
+recurrence it regressed the ``head_dim == 128`` case by 3-8% -- consistent,
+reproducible, and attributable purely to the dot product change (confirmed by
+swapping only that one function back to the single-accumulator baseline in an
+otherwise-identical build). This is a case the roadmap's benchmark contract
+exists to catch: an isolated micro-improvement does not guarantee an
+end-to-end one, and the fix was reverted rather than shipped. A second,
+smaller two-accumulator version was measured safe: it improves ``head_dim ==
+64`` without regressing ``head_dim == 128``, and was kept.
+
+A similar two-accumulator restructuring was applied to
+``AttentionSoftmaxBlockFloat32_AVX2_FMA``'s running-maximum and exponential-sum
+reductions (also single-accumulator chains, but over the KV block size --
+up to 256 -- rather than ``head_dim``); it showed the same direction of effect
+in isolation, and was folded into the same kernel file alongside the dot
+product change.
+
+Alternating raw samples (AVX2-ceiling Release build, ``ONNX_LIGHT_CPU_HAVE_AVX2_FMA``,
+single participant, this sandbox's 4-core x86-64 host -- not the dedicated
+machine the final parity gate requires) for
+``ComputeAttentionFloat32Streaming`` with ``batch=1``, ``heads=32``,
+``q_length=1``, no mask, internal ``past_key``/``past_value`` cache, before vs.
+after both the dot-product and softmax-block two-accumulator changes:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 20 20 20 20 20
+
+   * - ``head_dim`` / ``kv_len``
+     - before (median of 8, us/call)
+     - after (median of 8, us/call)
+     - delta
+     - regression gate
+   * - 64 / 1024
+     - 409.42
+     - 396.30
+     - -3.2%
+     - improved
+   * - 64 / 4096
+     - 2290.31
+     - 2279.32
+     - -0.5%
+     - within dispersion
+   * - 128 / 1024
+     - 934.60
+     - 945.57
+     - +1.2%
+     - within dispersion
+   * - 128 / 4096
+     - 4329.93
+     - 4325.45
+     - -0.1%
+     - within dispersion
+
+The combined change was only kept once this full-recurrence benchmark
+confirmed no case regressed beyond the issue's 2% dispersion tolerance.
+
+Both changes are scoped to the existing AVX2 decode kernel file
+(``impl/attention/avx2/attention_kernel_avx2_fma.cc``); no new scheduler,
+descriptor, or dispatch path was added, and the existing differential tests
+(``ComputeAttentionFloat32Streaming`` against
+``ComputeAttentionFloat32Materialized``, including the vector-tail and mask
+regression cases already covering GQA/MQA, causal bounds, and fully masked
+rows) continue to pass unchanged.
+
+Remaining gaps: this pass did not have access to ONNX Runtime, a dedicated
+pinned machine, or hardware performance counters, so it could not produce
+ONNX Runtime ratios or attribute the ``head_dim == 4096``-KV cases (which
+showed no measurable change) to a specific bottleneck; they are most likely
+memory-bandwidth-bound rather than compute-bound at that working-set size.
+Every case below ``0.9x`` ONNX Runtime on the dedicated-machine gate remains
+to be listed once that gate is run against this change.
