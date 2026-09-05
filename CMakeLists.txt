@@ -1244,6 +1244,12 @@ if(ONNX_LIGHT_CPU_BUILD_TESTS)
     if(_name STREQUAL "test_abs_kernel" AND ONNX_LIGHT_CPU_HAVE_AVX512F_FLAG)
       target_compile_definitions(${_name} PRIVATE ONNX_LIGHT_CPU_HAVE_AVX512=1)
     endif()
+    if(_name STREQUAL "test_rms_normalization_kernel" AND ONNX_LIGHT_CPU_HAVE_F16C_FLAG)
+      # This differential test calls the optional F16C RMSNormalization
+      # kernel directly. Mirror the private library definition only when that
+      # translation unit was built.
+      target_compile_definitions(${_name} PRIVATE ONNX_LIGHT_CPU_HAVE_RMS_F16C=1)
+    endif()
     if("lib_onnx_light_cpu_kernels" IN_LIST _link_lib AND
        ONNX_LIGHT_CPU_ONNX_LIGHT_PY_LIBDIR)
       set_target_properties(${_name} PROPERTIES
