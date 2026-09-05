@@ -11,6 +11,7 @@ optimize next.
     :hidden:
 
     2026/2026_08_gemm_matmul
+    2026/2026_09_avx2_gemm_matmul
     2026/2026_08_attention
     2026/2026_08_exp_log_parity
     2026/2026_08_qwen3_inference
@@ -43,6 +44,10 @@ Started
       - Incorporates the medium-GEMM, MatMul, bias, and dynamic-packing work
         delivered through #560, #561, #566, #567, and #575, then reruns the
         stable-affinity parity gate.
+    * - :doc:`AVX2 Gemm and MatMul gap closure <2026/2026_09_avx2_gemm_matmul>`
+      - Measures the AVX2-ceiling FP32/FP64 Gemm/MatMul corpus from #633;
+        dedicated AVX2-only hardware and an onnx-light checkout remain
+        required for a genuine AVX2-vs-AVX2 ONNX Runtime parity gate.
     * - :doc:`Attention <2026/2026_08_attention>`
       - Tracks the single-key, short-query, tiled FP32, and Qwen3.6 FP16 work
         delivered through #559, #569, and #578; the dedicated-machine ONNX
