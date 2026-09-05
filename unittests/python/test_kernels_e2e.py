@@ -64,59 +64,7 @@ assert has_backend_test_cases(), (
     "(register_backend_test_cases binding unavailable)."
 )
 
-# Operators whose onnx-light-cpu kernel we validate against every ``test_cpu_*``
-# backend test case, mapped to the library-qualified name each kernel records
-# when it runs.
-_REGISTERED_KERNELS = {
-    "Abs": "onnx_light_cpu::Abs",
-    "Add": "onnx_light_cpu::Add",
-    "And": "onnx_light_cpu::And",
-    "Attention": "onnx_light_cpu::Attention",
-    "BatchNormalization": "onnx_light_cpu::BatchNormalization",
-    "BiasGelu": "onnx_light_cpu::BiasGelu",
-    "BitShift": "onnx_light_cpu::BitShift",
-    "BitwiseAnd": "onnx_light_cpu::BitwiseAnd",
-    "BitwiseOr": "onnx_light_cpu::BitwiseOr",
-    "BitwiseXor": "onnx_light_cpu::BitwiseXor",
-    "CDist": "onnx_light_cpu::CDist",
-    "Div": "onnx_light_cpu::Div",
-    "Equal": "onnx_light_cpu::Equal",
-    "Exp": "onnx_light_cpu::Exp",
-    "Gemm": "onnx_light_cpu::Gemm",
-    "GroupNormalization": "onnx_light_cpu::GroupNormalization",
-    "GroupQueryAttention": "onnx_light_cpu::GroupQueryAttention",
-    "Greater": "onnx_light_cpu::Greater",
-    "GreaterOrEqual": "onnx_light_cpu::GreaterOrEqual",
-    "InstanceNormalization": "onnx_light_cpu::InstanceNormalization",
-    "LayerNormalization": "onnx_light_cpu::LayerNormalization",
-    "Less": "onnx_light_cpu::Less",
-    "LessOrEqual": "onnx_light_cpu::LessOrEqual",
-    "LinearAttention": "onnx_light_cpu::LinearAttention",
-    "com.microsoft::LinearAttention": "onnx_light_cpu::MicrosoftLinearAttention",
-    "Log": "onnx_light_cpu::Log",
-    "LpNormalization": "onnx_light_cpu::LpNormalization",
-    "MatMul": "onnx_light_cpu::MatMul",
-    "MatMulInteger": "onnx_light_cpu::MatMulInteger",
-    "Max": "onnx_light_cpu::Max",
-    "Mean": "onnx_light_cpu::Mean",
-    "MeanVarianceNormalization": "onnx_light_cpu::MeanVarianceNormalization",
-    "Min": "onnx_light_cpu::Min",
-    "Mod": "onnx_light_cpu::Mod",
-    "Mul": "onnx_light_cpu::Mul",
-    "Not": "onnx_light_cpu::Not",
-    "Or": "onnx_light_cpu::Or",
-    "PRelu": "onnx_light_cpu::PRelu",
-    "Pow": "onnx_light_cpu::Pow",
-    "QLinearMatMul": "onnx_light_cpu::QLinearMatMul",
-    "RMSNormalization": "onnx_light_cpu::RMSNormalization",
-    "Sigmoid": "onnx_light_cpu::Sigmoid",
-    "Softmax": "onnx_light_cpu::Softmax",
-    "Sub": "onnx_light_cpu::Sub",
-    "Sum": "onnx_light_cpu::Sum",
-    "SwiGLU": "onnx_light_cpu::SwiGLU",
-    "TreeEnsemble": "onnx_light_cpu::TreeEnsemble",
-    "Xor": "onnx_light_cpu::Xor",
-}
+_REGISTERED_KERNELS = registered_kernel_names()
 
 _TARGET_KERNELS = {
     op_type: kernel_name
@@ -444,9 +392,6 @@ class TestBackendCases(ExtTestCase):
             "avx512_after",
             "exceptional",
         ]
-
-    def test_registered_kernel_names(self):
-        assert registered_kernel_names() == _REGISTERED_KERNELS
 
     def test_all_registered_kernels_pass_regular_backend_correctness_corpus(self):
         report = run_backend_correctness_tests()

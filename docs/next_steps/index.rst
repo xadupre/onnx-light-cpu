@@ -13,9 +13,9 @@ optimize next.
     2026/2026_08_gemm_matmul
     2026/2026_08_attention
     2026/2026_08_exp_log_parity
-    2026/2026_09_avx2_performance
     2026/2026_08_qwen3_inference
     2026/2026_09_qwen3_operator_slice
+    2026/2026_09_qwen3_missing_kernels
     2026/2026_08_conv
     2026/2026_08_unary_elementwise
     2026/2026_08_binary_elementwise
@@ -29,6 +29,7 @@ optimize next.
     2026/2026_08_registered_kernel_documentation
     2026/2026_08_kernel_performance_improvements
     2026/2026_08_com_microsoft_domain
+    2026/2026_09_avx2_performance
 
 Started
 -------
@@ -40,21 +41,10 @@ Started
 
     * - Plan
       - Contribution
-    * - :doc:`Gemm and MatMul <2026/2026_08_gemm_matmul>`
-      - Incorporates the medium-GEMM, MatMul, bias, and dynamic-packing work
-        delivered through #560, #561, #566, #567, and #575, then reruns the
-        stable-affinity parity gate.
-    * - :doc:`Attention <2026/2026_08_attention>`
-      - Tracks the single-key, short-query, tiled FP32, and Qwen3.6 FP16 work
-        delivered through #559, #569, and #578; the dedicated-machine ONNX
-        Runtime parity gate remains.
-    * - :doc:`AVX2 performance baseline <2026/2026_09_avx2_performance>`
-      - Measures and ranks the fixed AVX2 backend corpus before any new kernel
-        optimization work.
-    * - :doc:`Binary elementwise performance
-        <2026/2026_08_binary_elementwise_performance>`
-      - Includes the AVX-512 arithmetic and integer ``Div`` validation work
-        from #563 and #577; dedicated-machine acceptance remains.
+    * - :doc:`AVX2 performance <2026/2026_09_avx2_performance>`
+      - Uses the explicit AVX2 SIMD ceiling to measure and rank the remaining
+        gaps below the completed AVX-512 paths before optimizing matrix,
+        Attention, activation, normalization, unary, and binary workloads.
 
 Planned
 -------
@@ -68,12 +58,18 @@ Planned
       - Contribution
     * - :doc:`Qwen3 inference <2026/2026_08_qwen3_inference>`
       - Freezes the audited end-to-end model benchmark, then builds the
-        canonical batch-1 INT4, shared GQA, and persistent-decode path.
+        canonical batch-1 INT4 and persistent-decode path on top of the
+        delivered GQA, RMSNormalization, and Sigmoid primitives.
+    * - :doc:`Qwen3 missing kernels <2026/2026_09_qwen3_missing_kernels>`
+      - Splits the remaining INT4 projections, input/layout kernels, and
+        normalization adapters into independent PRs, with runtime metadata
+        and persistent-cache ownership kept in onnx-light.
     * - :doc:`Qwen3 non-MatMulNBits operators
         <2026/2026_09_qwen3_operator_slice>`
       - Implements the metadata, input, layout, activation, and normalization
         slice required by the audited Qwen3 graph independently of packed
-        INT4 projections.
+        INT4 projections; Sigmoid and the shared RMS engine are already
+        available.
 
 Completed
 ---------
@@ -91,6 +87,18 @@ Completed
     * - :doc:`Exp and Log parity <2026/2026_08_exp_log_parity>`
       - Brings the transcendental kernels to their published ONNX Runtime
         parity and numerical gates.
+    * - :doc:`Gemm and MatMul <2026/2026_08_gemm_matmul>`
+      - Delivers the shared matrix engine, typed and compact paths, scheduling,
+        packing, AVX-512 tuning, and the corrective work through #605 and #608.
+    * - :doc:`Attention <2026/2026_08_attention>`
+      - Delivers materialized and bounded-memory streaming Attention, including
+        the AVX-512 optimization pass and the AVX2 decode and scheduling
+        foundations through #599, #605, and #608.
+    * - :doc:`Binary elementwise performance
+        <2026/2026_08_binary_elementwise_performance>`
+      - Delivers prepared traversal, typed bulk execution, AVX-512 arithmetic,
+        low-precision comparison, integer validation, and dispatch
+        optimizations through #599.
     * - :doc:`Binary elementwise <2026/2026_08_binary_elementwise>`
       - Supplies the shared prepared broadcast engine, generated correctness
         corpus, and parity gate for all 19 registered binary operators.
