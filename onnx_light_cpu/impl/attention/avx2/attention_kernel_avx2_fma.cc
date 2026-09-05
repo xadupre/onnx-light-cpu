@@ -46,8 +46,20 @@ inline float ReduceMax(__m256 value) {
 } // namespace
 
 float AttentionDotFloat32_AVX2_FMA(const float *q, const float *k, std::size_t count) {
-  __m256 sum = _mm256_setzero_ps();
+  // Two independent accumulators break the single-`sum` FMA dependency chain
+  // (every `vfmadd` would otherwise wait ~4-5 cycles for the previous one to
+  // retire even though most cores can issue two FMAs per cycle). Measured
+  // against the AVX2 `Q == 1` decode benchmark, two accumulators improve the
+  // common `head_dim == 64` case without the register-pressure regression a
+  // four-accumulator version showed at `head_dim == 128`.
+  __m256 sum0 = _mm256_setzero_ps();
+  __m256 sum1 = _mm256_setzero_ps();
   std::size_t d = 0;
+  for (; d + 16 <= count; d += 16) {
+    sum0 = _mm256_fmadd_ps(_mm256_loadu_ps(q + d), _mm256_loadu_ps(k + d), sum0);
+    sum1 = _mm256_fmadd_ps(_mm256_loadu_ps(q + d + 8), _mm256_loadu_ps(k + d + 8), sum1);
+  }
+  __m256 sum = _mm256_add_ps(sum0, sum1);
   for (; d + 8 <= count; d += 8) {
     sum = _mm256_fmadd_ps(_mm256_loadu_ps(q + d), _mm256_loadu_ps(k + d), sum);
   }
@@ -152,8 +164,18 @@ AttentionSoftmaxBlockResultAVX2 AttentionSoftmaxBlockFloat32_AVX2_FMA(float *sco
                                                                       float previous_maximum,
                                                                       float &denominator) {
   const float negative_infinity = -std::numeric_limits<float>::infinity();
-  __m256 maximum = _mm256_set1_ps(negative_infinity);
+  // Two independent accumulators for the same reason as
+  // `AttentionDotFloat32_AVX2_FMA`: `count` is the KV block size (up to 256),
+  // so a single running `max`/`sum` chain pays its reduction latency on every
+  // 8-wide chunk instead of once per call.
+  __m256 maximum0 = _mm256_set1_ps(negative_infinity);
+  __m256 maximum1 = _mm256_set1_ps(negative_infinity);
   std::size_t index = 0;
+  for (; index + 16 <= count; index += 16) {
+    maximum0 = _mm256_max_ps(maximum0, _mm256_loadu_ps(scores + index));
+    maximum1 = _mm256_max_ps(maximum1, _mm256_loadu_ps(scores + index + 8));
+  }
+  __m256 maximum = _mm256_max_ps(maximum0, maximum1);
   for (; index + 8 <= count; index += 8) {
     maximum = _mm256_max_ps(maximum, _mm256_loadu_ps(scores + index));
   }
@@ -181,8 +203,14 @@ AttentionSoftmaxBlockResultAVX2 AttentionSoftmaxBlockFloat32_AVX2_FMA(float *sco
 
   ExpFloat32_AVX2_FMA(scores, scores, count);
 
-  __m256 sum = _mm256_setzero_ps();
+  __m256 sum0 = _mm256_setzero_ps();
+  __m256 sum1 = _mm256_setzero_ps();
   index = 0;
+  for (; index + 16 <= count; index += 16) {
+    sum0 = _mm256_add_ps(sum0, _mm256_loadu_ps(scores + index));
+    sum1 = _mm256_add_ps(sum1, _mm256_loadu_ps(scores + index + 8));
+  }
+  __m256 sum = _mm256_add_ps(sum0, sum1);
   for (; index + 8 <= count; index += 8) {
     sum = _mm256_add_ps(sum, _mm256_loadu_ps(scores + index));
   }
