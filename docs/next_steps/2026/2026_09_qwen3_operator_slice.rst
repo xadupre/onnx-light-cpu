@@ -2,8 +2,9 @@ Qwen3 Non-MatMulNBits Operator Slice
 ====================================
 
 :Date: 2026-09
+:Updated: 2026-09-05
 
-**planned**
+**planned** (prerequisite compute kernels are partially implemented)
 
 Objective
 ---------
@@ -23,8 +24,8 @@ semantics, and report no untracked fallback for any operator covered here.
 Scope
 -----
 
-This plan covers ten missing execution surfaces and model-level coverage for
-the two operators already registered:
+This plan covers the missing execution surfaces and model-level coverage for
+the operators and shared primitives already registered:
 
 .. list-table::
    :header-rows: 1
@@ -72,8 +73,8 @@ the two operators already registered:
    * - ``ai.onnx::Sigmoid``
      - 28
      - ``onnx-light-cpu``
-     - Provide the FP32 activation used by ``x * sigmoid(x)`` and reuse the
-       completed Exp primitives without creating a private approximation.
+     - Reuse the registered FP32 activation for ``x * sigmoid(x)`` and retain
+       model-level coverage without creating a private approximation.
    * - ``ai.onnx::SimplifiedLayerNormalization``
      - 57
      - ``onnx-light-cpu``
@@ -112,6 +113,28 @@ The audited native graph does not require separate ``RotaryEmbedding``,
 ``Softmax``, ``Concat`` or ``Slice`` kernels because GQA owns those operations.
 The portable standard-ONNX graph retains them as differential coverage, but
 their broad operator roadmaps do not block this plan.
+
+Current implementation status
+-----------------------------
+
+The shared compute foundations are further along than the five-step sequence
+alone suggests:
+
+* ``GroupQueryAttention`` and its fused rotary path are delivered by #494 and
+  #507;
+* the shared ``RMSNormalization`` engine is delivered and optimized by #498
+  and #579;
+* ``Sigmoid`` is registered and subsequently optimized by #585, #600, and
+  #604;
+* ``Mul`` and ``Sub`` already use the registered binary engine and need
+  Qwen-shaped model coverage rather than new kernels.
+
+The operator slice itself is not complete. The deterministic block fixture,
+prepared metadata/view ownership, the audited ``Cast``/``Gather``/
+``ReduceSum``/``Split`` execution contracts, and both normalization
+compatibility adapters remain pending. References to ``Gather``, ``Cast``,
+``Expand``, ``Reshape``, ``Transpose`` or ``Where`` in graph construction and
+gradient code do not establish native execution coverage for this roadmap.
 
 Ownership and architecture
 --------------------------
@@ -183,11 +206,11 @@ portable or scalar oracle.
 Operator PR04: activation and normalization adapters
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Register FP32 ``Sigmoid`` using the shared Exp implementation and cover
-ordinary values, signed zero, infinities, NaN and vector tails. Measure the
-separate ``Sigmoid`` and ``Mul`` traversals before considering a SiLU or gated
-MLP fusion. Reuse the existing registered ``SwiGLU`` kernel when its exact
-two-input contract matches; do not add a duplicate gated activation.
+Reuse the registered FP32 ``Sigmoid`` implementation and extend its coverage
+to the audited Qwen shapes. Measure the separate ``Sigmoid`` and ``Mul``
+traversals before considering a SiLU or gated MLP fusion. Reuse the existing
+registered ``SwiGLU`` kernel when its exact two-input contract matches; do not
+add a duplicate gated activation.
 
 Implement ``SimplifiedLayerNormalization`` and
 ``SkipSimplifiedLayerNormalization`` as schema adapters over the shared
@@ -284,9 +307,10 @@ PR sequence
      - Pending
    * - Operator PR04
      - ``onnx-light-cpu``
-     - Sigmoid and both normalization compatibility adapters.
+     - Qwen Sigmoid integration and both normalization compatibility adapters.
      - Operator PR03; completed ExpLog PR01--PR03, #498 and #579
-     - Pending
+     - Partially implemented: Sigmoid and the RMS engine are delivered; both
+       compatibility adapters remain
    * - Operator PR05
      - ``onnx-light-cpu``
      - Differential complete-block and performance/memory gates.
