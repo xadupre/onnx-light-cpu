@@ -37,6 +37,12 @@ std::uint32_t Reduce(__m256i accumulator) {
   return static_cast<std::uint32_t>(_mm_cvtsi128_si32(total128));
 }
 
+std::uint32_t Reduce128(__m128i accumulator) {
+  accumulator = _mm_add_epi32(accumulator, _mm_shuffle_epi32(accumulator, _MM_SHUFFLE(1, 0, 3, 2)));
+  accumulator = _mm_add_epi32(accumulator, _mm_shuffle_epi32(accumulator, _MM_SHUFFLE(2, 3, 0, 1)));
+  return static_cast<std::uint32_t>(_mm_cvtsi128_si32(accumulator));
+}
+
 template <typename T>
 void RequantizeInt32ImplAvx2(const std::int32_t *src, T *dst, std::int64_t count, float scale,
                              std::int32_t zero_point, double min_value, double max_value) {
@@ -95,6 +101,55 @@ std::int32_t IntegerDotU8S8Avx2(const std::uint8_t *ua, const std::int8_t *sb, s
   }
 
   std::uint32_t total = Reduce(accumulator);
+  for (; index < depth; ++index) {
+    total += static_cast<std::uint32_t>(static_cast<std::int32_t>(ua[index]) *
+                                        static_cast<std::int32_t>(sb[index]));
+  }
+  return std::bit_cast<std::int32_t>(total);
+}
+
+std::int32_t IntegerDotU8S8Avx2ShortTail(const std::uint8_t *ua, const std::int8_t *sb,
+                                         std::int64_t depth) {
+  __m256i accumulator = _mm256_setzero_si256();
+  const __m256i low_mask = _mm256_set1_epi8(0x7f);
+  const __m256i ones = _mm256_set1_epi16(1);
+  std::int64_t index = 0;
+  for (; index + 32 <= depth; index += 32) {
+    const __m256i a = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(ua + index));
+    const __m256i b = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(sb + index));
+    const __m256i a_low = _mm256_and_si256(a, low_mask);
+    const __m256i a_high = _mm256_andnot_si256(low_mask, a);
+    accumulator = Accumulate(accumulator, a_low, a_high, b, ones);
+  }
+
+  std::uint32_t total = Reduce(accumulator);
+
+  // Compact GEMM shapes with a short reduction depth (e.g. the transformer
+  // ``direct`` case at depth 16) never reach the 32-byte main loop above and
+  // used to fall through to a fully scalar tail, which measured far below
+  // the vectorized cases. Cover the common 16..31 remainder with one 128-bit
+  // SSSE3/SSE4.1 step so at least half of a short depth is still vectorized,
+  // then finish any remaining 1..15 elements with the scalar loop below.
+  // This variant is only selected by the dispatcher when ``depth % 32 != 0``
+  // (see ``IntegerMatMul2D``/``IntegerMatMul4Bit2D``), so the depth-multiple
+  // -of-32 shapes that dominate the square/large-K/skinny cases keep calling
+  // the plain ``IntegerDotU8S8Avx2`` above unchanged, instead of paying for
+  // this extra dead branch on every one of their (row, column) pairs.
+  if (index + 16 <= depth) {
+    const __m128i low_mask128 = _mm_set1_epi8(0x7f);
+    const __m128i ones128 = _mm_set1_epi16(1);
+    const __m128i a = _mm_loadu_si128(reinterpret_cast<const __m128i *>(ua + index));
+    const __m128i b = _mm_loadu_si128(reinterpret_cast<const __m128i *>(sb + index));
+    const __m128i a_low = _mm_and_si128(a, low_mask128);
+    const __m128i a_high = _mm_andnot_si128(low_mask128, a);
+    const __m128i products_low = _mm_maddubs_epi16(a_low, b);
+    const __m128i products_high = _mm_maddubs_epi16(a_high, b);
+    __m128i partial = _mm_madd_epi16(products_low, ones128);
+    partial = _mm_add_epi32(partial, _mm_madd_epi16(products_high, ones128));
+    total += Reduce128(partial);
+    index += 16;
+  }
+
   for (; index < depth; ++index) {
     total += static_cast<std::uint32_t>(static_cast<std::int32_t>(ua[index]) *
                                         static_cast<std::int32_t>(sb[index]));
@@ -167,39 +222,49 @@ void IntegerMatMulSkinnyMAvx2(const std::uint8_t *a, bool a_signed, const std::u
   }
 }
 
-void IntegerMatMulU8S8Avx2(const std::uint8_t *a, const std::int8_t *b, std::int32_t *c,
-                           std::int64_t rows, std::int64_t cols, std::int64_t depth) {
-  constexpr std::int64_t row_block = 2;
-  constexpr std::int64_t column_block = 2;
+namespace {
+
+constexpr std::int64_t kU8S8RowBlock = 2;
+constexpr std::int64_t kU8S8ColumnBlock = 2;
+
+// Processes the disjoint row range ``[row_begin, row_end)`` of the bulk
+// depth>=32 microkernel. This is a plain (non-lambda) function so the
+// single-participant fast path in ``IntegerMatMulU8S8Avx2`` below can call it
+// directly with the exact same codegen as the original unparallelized loop,
+// instead of indirecting through ``ExecuteRanges``'s generic closure
+// plumbing, which measurably regressed this SIMD-heavy microkernel even for
+// a single resulting block.
+void ProcessU8S8RowRange(const std::uint8_t *a, const std::int8_t *b, std::int32_t *c,
+                         std::int64_t row_begin, std::int64_t row_end, std::int64_t cols,
+                         std::int64_t depth) {
   const __m256i low_mask = _mm256_set1_epi8(0x7f);
   const __m256i ones = _mm256_set1_epi16(1);
-
-  std::int64_t row = 0;
-  for (; row + row_block <= rows; row += row_block) {
+  std::int64_t row = row_begin;
+  for (; row + kU8S8RowBlock <= row_end; row += kU8S8RowBlock) {
     std::int64_t column = 0;
-    for (; column + column_block <= cols; column += column_block) {
-      __m256i accumulators[row_block][column_block] = {};
+    for (; column + kU8S8ColumnBlock <= cols; column += kU8S8ColumnBlock) {
+      __m256i accumulators[kU8S8RowBlock][kU8S8ColumnBlock] = {};
       std::int64_t inner = 0;
       for (; inner + 32 <= depth; inner += 32) {
-        __m256i a_low[row_block];
-        __m256i a_high[row_block];
-        for (std::int64_t r = 0; r < row_block; ++r) {
+        __m256i a_low[kU8S8RowBlock];
+        __m256i a_high[kU8S8RowBlock];
+        for (std::int64_t r = 0; r < kU8S8RowBlock; ++r) {
           const __m256i values =
               _mm256_loadu_si256(reinterpret_cast<const __m256i *>(a + (row + r) * depth + inner));
           a_low[r] = _mm256_and_si256(values, low_mask);
           a_high[r] = _mm256_andnot_si256(low_mask, values);
         }
-        for (std::int64_t col = 0; col < column_block; ++col) {
+        for (std::int64_t col = 0; col < kU8S8ColumnBlock; ++col) {
           const __m256i values = _mm256_loadu_si256(
               reinterpret_cast<const __m256i *>(b + (column + col) * depth + inner));
-          for (std::int64_t r = 0; r < row_block; ++r) {
+          for (std::int64_t r = 0; r < kU8S8RowBlock; ++r) {
             accumulators[r][col] =
                 Accumulate(accumulators[r][col], a_low[r], a_high[r], values, ones);
           }
         }
       }
-      for (std::int64_t r = 0; r < row_block; ++r) {
-        for (std::int64_t col = 0; col < column_block; ++col) {
+      for (std::int64_t r = 0; r < kU8S8RowBlock; ++r) {
+        for (std::int64_t col = 0; col < kU8S8ColumnBlock; ++col) {
           std::uint32_t total = Reduce(accumulators[r][col]);
           for (std::int64_t tail = inner; tail < depth; ++tail) {
             total += static_cast<std::uint32_t>(
@@ -211,17 +276,41 @@ void IntegerMatMulU8S8Avx2(const std::uint8_t *a, const std::int8_t *b, std::int
       }
     }
     for (; column < cols; ++column) {
-      for (std::int64_t r = 0; r < row_block; ++r) {
+      for (std::int64_t r = 0; r < kU8S8RowBlock; ++r) {
         c[(row + r) * cols + column] =
             IntegerDotU8S8Avx2(a + (row + r) * depth, b + column * depth, depth);
       }
     }
   }
-  for (; row < rows; ++row) {
+  for (; row < row_end; ++row) {
     for (std::int64_t column = 0; column < cols; ++column) {
       c[row * cols + column] = IntegerDotU8S8Avx2(a + row * depth, b + column * depth, depth);
     }
   }
+}
+
+} // namespace
+
+void IntegerMatMulU8S8Avx2(const std::uint8_t *a, const std::int8_t *b, std::int32_t *c,
+                           std::int64_t rows, std::int64_t cols, std::int64_t depth) {
+  // Bypass the executor/lambda plumbing entirely when no parallel executor
+  // is installed: ``ProcessU8S8RowRange`` is then called exactly once for
+  // the whole row range, identical in every respect to the original
+  // unparallelized kernel, so the common single-thread case never regresses.
+  // Only route through ``ExecuteRanges`` when there is a real executor to
+  // hand row ranges to (e.g. the physical-core policy), which is where the
+  // scaling benefit actually applies. Each worker owns a disjoint,
+  // ``kU8S8RowBlock``-aligned row range (the only range that may fall short
+  // of a full pair is the very last one handed out, which the per-range
+  // leftover-row loop already covers).
+  if (CurrentExecutionExecutor() == nullptr) {
+    ProcessU8S8RowRange(a, b, c, 0, rows, cols, depth);
+    return;
+  }
+  ExecuteRanges(rows, static_cast<double>(cols) * static_cast<double>(depth), kU8S8RowBlock,
+                [a, b, c, cols, depth](std::int64_t row_begin, std::int64_t row_end) {
+                  ProcessU8S8RowRange(a, b, c, row_begin, row_end, cols, depth);
+                });
 }
 
 void RequantizeInt32ToInt8Avx2(const std::int32_t *src, std::int8_t *dst, std::int64_t count,

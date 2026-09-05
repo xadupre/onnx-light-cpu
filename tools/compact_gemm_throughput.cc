@@ -11,6 +11,7 @@
 // machine-specific thresholds. Pass ``--json <path>`` to publish every raw
 // sample alongside hardware, affinity, compiler, and ISA metadata.
 
+#include "onnx_light_cpu/impl/execution.h"
 #include "onnx_light_cpu/impl/math/gemm/gemm_plan.h"
 #include "onnx_light_cpu/impl/math/gemm/vnni/integer_gemm_vnni.h"
 #include "onnx_light_cpu/impl/math/half_conversion.h"
@@ -18,7 +19,9 @@
 #include "onnx_light_cpu/impl/simd_level.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -26,9 +29,12 @@
 #include <cstring>
 #include <ctime>
 #include <fstream>
+#include <mutex>
+#include <optional>
 #include <random>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 #if defined(__linux__)
@@ -38,6 +44,112 @@
 #endif
 
 namespace {
+
+// Real multi-thread executor, mirroring ``tools/gemm_throughput.cc``'s
+// ``ThreadExecutor``, so ``--threads N`` exercises genuine ``ExecuteRanges``
+// scaling for the INT8/INT4 vnni kernels instead of only affecting the
+// FP16/BF16 half-plan tuning knobs through ``--participants``.
+struct ThreadExecutor {
+  explicit ThreadExecutor(std::size_t threads) {
+    workers.reserve(threads - 1);
+    for (std::size_t index = 1; index < threads; ++index) {
+      workers.emplace_back([this] { Worker(); });
+    }
+  }
+
+  ~ThreadExecutor() {
+    {
+      std::lock_guard lock(mutex);
+      stopping = true;
+      ++generation;
+    }
+    start.notify_all();
+    for (std::thread &worker : workers) {
+      worker.join();
+    }
+  }
+
+  static void Run(void *context, std::int64_t num_blocks, void *task_context,
+                  onnx_light_cpu::ExecutionBlockFn task) {
+    auto &self = *static_cast<ThreadExecutor *>(context);
+    {
+      std::lock_guard lock(self.mutex);
+      self.next.store(0, std::memory_order_relaxed);
+      self.pending = num_blocks;
+      self.active_workers = 0;
+      self.arrived_workers = 0;
+      self.num_blocks = num_blocks;
+      self.task_context = task_context;
+      self.task = task;
+      ++self.generation;
+    }
+    self.start.notify_all();
+    for (;;) {
+      const std::int64_t block = self.next.fetch_add(1, std::memory_order_relaxed);
+      if (block >= num_blocks) {
+        break;
+      }
+      task(task_context, block);
+      std::lock_guard lock(self.mutex);
+      --self.pending;
+    }
+    std::unique_lock lock(self.mutex);
+    self.done.wait(lock, [&] {
+      return self.pending == 0 && self.active_workers == 0 &&
+             self.arrived_workers == static_cast<std::int64_t>(self.workers.size());
+    });
+  }
+
+  void Worker() {
+    std::size_t observed_generation = 0;
+    for (;;) {
+      std::int64_t local_num_blocks;
+      void *local_task_context;
+      onnx_light_cpu::ExecutionBlockFn local_task;
+      {
+        std::unique_lock lock(mutex);
+        start.wait(lock, [&] { return stopping || generation != observed_generation; });
+        if (stopping) {
+          return;
+        }
+        observed_generation = generation;
+        local_num_blocks = num_blocks;
+        local_task_context = task_context;
+        local_task = task;
+        ++active_workers;
+        ++arrived_workers;
+      }
+      for (;;) {
+        const std::int64_t block = next.fetch_add(1, std::memory_order_relaxed);
+        if (block >= local_num_blocks) {
+          break;
+        }
+        local_task(local_task_context, block);
+        std::lock_guard lock(mutex);
+        --pending;
+      }
+      {
+        std::lock_guard lock(mutex);
+        --active_workers;
+        done.notify_one();
+      }
+    }
+  }
+
+  std::vector<std::thread> workers;
+  std::mutex mutex;
+  std::condition_variable start;
+  std::condition_variable done;
+  std::atomic<std::int64_t> next{0};
+  std::size_t generation = 0;
+  std::int64_t pending = 0;
+  std::int64_t active_workers = 0;
+  std::int64_t arrived_workers = 0;
+  std::int64_t num_blocks = 0;
+  void *task_context = nullptr;
+  onnx_light_cpu::ExecutionBlockFn task = nullptr;
+  bool stopping = false;
+};
 
 struct GemmCase {
   const char *name;
@@ -320,6 +432,11 @@ std::string JsonBlocking(const onnx_light_cpu::GemmBlocking &blocking) {
 struct Options {
   HalfTuning tuning;
   std::string json_path;
+  // Real participant count for a genuine ``ThreadExecutor``, installed for
+  // the whole sweep so the INT8/INT4 vnni kernels' ``ExecuteRanges`` calls
+  // actually scale across threads; independent of ``--participants``, which
+  // only tunes the FP16/BF16 ``GemmHalfPlan``.
+  std::size_t threads = 1;
 };
 
 Options ParseArgs(int argc, char **argv) {
@@ -354,6 +471,12 @@ Options ParseArgs(int argc, char **argv) {
       options.tuning.compact_blocking.kc = require_value(i);
     } else if (arg == "--participants") {
       options.tuning.maximum_participants = require_value(i);
+    } else if (arg == "--threads") {
+      options.threads = require_value(i);
+      if (options.threads == 0) {
+        std::fprintf(stderr, "thread count must be positive\n");
+        std::exit(1);
+      }
     } else if (arg == "--json") {
       if (i + 1 >= argc) {
         std::fprintf(stderr, "Missing value for argument --json\n");
@@ -363,8 +486,8 @@ Options ParseArgs(int argc, char **argv) {
     } else if (arg == "--help" || arg == "-h") {
       std::printf("Usage: compact_gemm_throughput [--mc N] [--nc N] [--kc N] "
                   "[--compact-mc N] [--compact-nc N] [--compact-kc N] "
-                  "[--participants N] [--json PATH]\n"
-                  "Every tuning value defaults to 0 (automatic).\n");
+                  "[--participants N] [--threads N] [--json PATH]\n"
+                  "Every tuning value defaults to 0 (automatic); --threads defaults to 1.\n");
       std::exit(0);
     } else {
       std::fprintf(stderr, "Unknown argument %s\n", argv[i]);
@@ -379,6 +502,18 @@ Options ParseArgs(int argc, char **argv) {
 int main(int argc, char **argv) {
   const Options options = ParseArgs(argc, argv);
 
+  ThreadExecutor executor(options.threads);
+  const onnx_light_cpu::ExecutionExecutorView executor_view{
+      &executor, static_cast<std::int64_t>(options.threads), &ThreadExecutor::Run};
+  // Only install a real executor above one thread: the vnni kernels already
+  // bypass ``ExecuteRanges`` entirely when no executor is installed, and
+  // single-thread runs should keep exercising that exact no-executor path.
+  std::optional<onnx_light_cpu::ExecutionExecutorScope> executor_scope;
+  if (options.threads > 1) {
+    executor_scope.emplace(&executor_view);
+  }
+
+  std::printf("threads: %zu\n", options.threads);
   std::printf("%-14s %6s %6s %6s %13s %13s %13s %13s %13s %13s\n", "case", "M", "N", "K",
               "FP16 GFLOPS", "BF16 GFLOPS", "INT8 GOPS", "INT4 GOPS", "E4M3 GOPS", "E5M2 GOPS");
 
@@ -442,6 +577,7 @@ int main(int argc, char **argv) {
         << "    \"compiler\": \"" << JsonEscape(Compiler()) << "\",\n"
         << "    \"simd_level\": \"" << SimdLevelName(onnx_light_cpu::DetectSimdLevel()) << "\",\n"
         << "    \"requested_participants\": " << options.tuning.maximum_participants << ",\n"
+        << "    \"threads\": " << options.threads << ",\n"
         << "    \"blocking\": " << JsonBlocking(options.tuning.blocking) << ",\n"
         << "    \"compact_blocking\": " << JsonBlocking(options.tuning.compact_blocking) << "\n"
         << "  },\n"
