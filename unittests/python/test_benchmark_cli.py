@@ -127,7 +127,7 @@ class TestBenchmarkCli(ExtTestCase):
         self.assertEqual(raw, measured[0])
         self.assertEqual(aggregated, [measured[1]])
         self.assertIn("[1/1] test_cpu_abs_float32_benchmark", progress.getvalue())
-        measure.assert_called_once_with(cases[0], 1, 0, 1.0, 1, False)
+        measure.assert_called_once_with(cases[0], 1, 0, 1.0, 1, False, onnxruntime_first=False)
 
     def test_infers_pull_request_benchmark_selection(self):
         kernels = [

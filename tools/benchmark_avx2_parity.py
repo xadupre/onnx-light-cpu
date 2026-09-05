@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import importlib.metadata
 import json
+import math
 import os
 import platform
 import shlex
@@ -169,14 +170,14 @@ def build_report(
     unsupported = []
     for aggregate in aggregated_rows:
         key = (str(aggregate["case"]), str(aggregate["thread_policy"]))
-        samples = raw_by_case[key]
+        samples = raw_by_case.get(key, {})
         if set(samples) != {"onnx-light-cpu", "onnxruntime"}:
             unsupported.append(
                 {
                     "case": aggregate["case"],
                     "thread_policy": aggregate["thread_policy"],
                     "threads": aggregate["threads"],
-                    "onnxruntime_error": aggregate["onnxruntime_error"],
+                    "onnxruntime_error": aggregate.get("onnxruntime_error"),
                     "onnx_light_cpu_samples_s": samples.get("onnx-light-cpu", []),
                     "onnxruntime_samples_s": samples.get("onnxruntime", []),
                 }
@@ -186,7 +187,14 @@ def build_report(
         ort_samples = samples["onnxruntime"]
         cpu_median = statistics.median(cpu_samples)
         ort_median = statistics.median(ort_samples)
-        speedup = ort_median / cpu_median if cpu_median else float("inf")
+        if (
+            cpu_median <= 0
+            or ort_median <= 0
+            or not math.isfinite(cpu_median)
+            or not math.isfinite(ort_median)
+        ):
+            raise RuntimeError(f"{aggregate['case']}: timing samples must be finite and positive")
+        speedup = ort_median / cpu_median
         gap = cpu_median - ort_median
         results.append(
             {
@@ -219,8 +227,10 @@ def build_report(
         )
 
     results.sort(
-        key=lambda row: (float(row["absolute_latency_contribution_s"]), -float(row["speedup"])),
-        reverse=True,
+        key=lambda row: (
+            -float(row["absolute_latency_contribution_s"]),
+            float(row["speedup"]),
+        )
     )
     for rank, row in enumerate(results, start=1):
         row["gap_rank"] = rank
@@ -352,8 +362,17 @@ def render_markdown(report: dict[str, Any]) -> str:
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--dtype", action="append", choices=AVX2_DTYPES, default=None)
-    parser.add_argument("--threads", action="append", choices=THREAD_POLICIES, default=None)
+    parser.add_argument(
+        "--dtype", "--dtypes", dest="dtypes", action="append", choices=AVX2_DTYPES, default=None
+    )
+    parser.add_argument(
+        "--thread-policy",
+        "--thread-policies",
+        dest="thread_policies",
+        action="append",
+        choices=THREAD_POLICIES,
+        default=None,
+    )
     parser.add_argument("-r", "--repeat", type=int, default=100 * (os.cpu_count() or 1))
     parser.add_argument("-w", "--warmup", type=int, default=20)
     parser.add_argument("-t", "--max-repeat-time", type=float, default=1.0)
@@ -365,10 +384,14 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--output", type=Path, default=Path("avx2_parity_results.json"))
     args = parser.parse_args(argv)
-    args.dtypes = tuple(args.dtype or AVX2_DTYPES)
-    args.thread_policies = tuple(args.threads or THREAD_POLICIES)
-    if args.repeat < 1 or args.warmup < 0 or args.max_repeat_time <= 0:
-        parser.error("repeat and max-repeat-time must be positive and warmup non-negative")
+    args.dtypes = tuple(args.dtypes or AVX2_DTYPES)
+    args.thread_policies = tuple(args.thread_policies or THREAD_POLICIES)
+    if args.repeat < 1:
+        parser.error("--repeat must be positive")
+    if args.warmup < 0:
+        parser.error("--warmup must be non-negative")
+    if args.max_repeat_time <= 0:
+        parser.error("--max-repeat-time must be positive")
     return args
 
 
@@ -419,7 +442,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     report = run(args)
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    args.output.write_text(json.dumps(report, indent=2, allow_nan=False) + "\n", encoding="utf-8")
     markdown = args.output.with_suffix(".md")
     markdown.write_text(render_markdown(report), encoding="utf-8")
     print(f"raw results: {args.output}")

@@ -397,9 +397,14 @@ def run_backend_benchmark(
     aggregated_rows = []
     for index, case in enumerate(cases, start=1):
         print(f"[{index}/{len(cases)}] {case.name}", file=sys.stderr, flush=True)
-        extra = {"onnxruntime_first": index % 2 == 0} if alternate_runtime_order else {}
         raw, aggregate = _measure_case(
-            case, repeat, warmup, max_repeat_time, threads, with_onnxruntime, **extra
+            case,
+            repeat,
+            warmup,
+            max_repeat_time,
+            threads,
+            with_onnxruntime,
+            onnxruntime_first=alternate_runtime_order and index % 2 == 0,
         )
         raw_rows.extend(raw)
         aggregated_rows.append(aggregate)
