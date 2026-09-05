@@ -320,4 +320,148 @@ void LogFloat32_AVX2_FMA(const float *input, float *output, std::size_t count) {
   }
 }
 
+namespace {
+
+// Shared eight-lane ``x**y`` core: small non-negative integer exponents use
+// exact repeated multiplication (matching ``FastFloatPower``'s scalar
+// contract), while every other positive, finite base/exponent pair uses
+// ``exp(y * log(x))``. Lanes outside that fast domain (negative or
+// non-finite base, non-finite exponent) are left in ``fallback_lanes`` for
+// the caller's scalar ``std::pow`` cleanup, matching the AVX-512 kernel's
+// mixed vector/scalar contract. ``log_x``, when non-null, supplies a
+// precomputed ``log(x)`` (used by the left-scalar entry point, where the
+// base is invariant across the whole call and ``log`` must not be
+// recomputed every eight-lane block).
+__m256 PowPs256Fma(__m256 x, __m256 y, __m256i &fallback_lanes, const __m256 *log_x = nullptr) {
+  const __m256 zero = _mm256_setzero_ps();
+  const __m256 one = _mm256_set1_ps(1.0f);
+  const __m256 maximum = _mm256_set1_ps(std::numeric_limits<float>::max());
+  const __m256 x2 = _mm256_mul_ps(x, x);
+  const __m256 x3 = _mm256_mul_ps(x2, x);
+  const __m256 x4 = _mm256_mul_ps(x2, x2);
+  const __m256 x5 = _mm256_mul_ps(x4, x);
+  const __m256 exponent0 = _mm256_cmp_ps(y, zero, _CMP_EQ_OQ);
+  const __m256 exponent1 = _mm256_cmp_ps(y, one, _CMP_EQ_OQ);
+  const __m256 exponent2 = _mm256_cmp_ps(y, _mm256_set1_ps(2.0f), _CMP_EQ_OQ);
+  const __m256 exponent3 = _mm256_cmp_ps(y, _mm256_set1_ps(3.0f), _CMP_EQ_OQ);
+  const __m256 exponent4 = _mm256_cmp_ps(y, _mm256_set1_ps(4.0f), _CMP_EQ_OQ);
+  const __m256 exponent5 = _mm256_cmp_ps(y, _mm256_set1_ps(5.0f), _CMP_EQ_OQ);
+  const __m256 small_integer = _mm256_or_ps(
+      _mm256_or_ps(_mm256_or_ps(exponent0, exponent1), _mm256_or_ps(exponent2, exponent3)),
+      _mm256_or_ps(exponent4, exponent5));
+
+  __m256 result = Select(exponent0, one, zero);
+  result = Select(exponent1, x, result);
+  result = Select(exponent2, x2, result);
+  result = Select(exponent3, x3, result);
+  result = Select(exponent4, x4, result);
+  result = Select(exponent5, x5, result);
+
+  const __m256 abs_x = _mm256_andnot_ps(_mm256_set1_ps(-0.0f), x);
+  const __m256 abs_y = _mm256_andnot_ps(_mm256_set1_ps(-0.0f), y);
+  const __m256 positive_finite = _mm256_and_ps(
+      _mm256_cmp_ps(x, zero, _CMP_GT_OQ), _mm256_and_ps(_mm256_cmp_ps(abs_x, maximum, _CMP_LE_OQ),
+                                                        _mm256_cmp_ps(abs_y, maximum, _CMP_LE_OQ)));
+  const __m256 approximate = _mm256_andnot_ps(small_integer, positive_finite);
+  if (_mm256_movemask_ps(approximate) != 0) {
+    const __m256 log_value = log_x != nullptr ? *log_x : LogPs256Fma(x);
+    result = Select(approximate, ExpPs256Fma(_mm256_mul_ps(log_value, y)), result);
+  }
+
+  fallback_lanes = _mm256_castps_si256(
+      _mm256_andnot_ps(_mm256_or_ps(small_integer, approximate), _mm256_set1_ps(-1.0f)));
+  return result;
+}
+
+void ApplyPowFallback(const float *base, const float *exponent, float *output, std::size_t offset,
+                      __m256i fallback_lanes) {
+  const int mask = _mm256_movemask_ps(_mm256_castsi256_ps(fallback_lanes));
+  if (mask == 0) {
+    return;
+  }
+  for (std::size_t lane = 0; lane < 8; ++lane) {
+    if ((mask & (1 << lane)) != 0) {
+      output[offset + lane] = std::pow(base[offset + lane], exponent[offset + lane]);
+    }
+  }
+}
+
+void ApplyPowLeftScalarFallback(float base, const float *exponent, float *output,
+                                std::size_t offset, __m256i fallback_lanes) {
+  const int mask = _mm256_movemask_ps(_mm256_castsi256_ps(fallback_lanes));
+  if (mask == 0) {
+    return;
+  }
+  for (std::size_t lane = 0; lane < 8; ++lane) {
+    if ((mask & (1 << lane)) != 0) {
+      output[offset + lane] = std::pow(base, exponent[offset + lane]);
+    }
+  }
+}
+
+void ApplyPowRightScalarFallback(const float *base, float exponent, float *output,
+                                 std::size_t offset, __m256i fallback_lanes) {
+  const int mask = _mm256_movemask_ps(_mm256_castsi256_ps(fallback_lanes));
+  if (mask == 0) {
+    return;
+  }
+  for (std::size_t lane = 0; lane < 8; ++lane) {
+    if ((mask & (1 << lane)) != 0) {
+      output[offset + lane] = std::pow(base[offset + lane], exponent);
+    }
+  }
+}
+
+} // namespace
+
+void PowFloat32_AVX2_FMA(const float *base, const float *exponent, float *output,
+                         std::size_t count) {
+  std::size_t i = 0;
+  for (; i + 8 <= count; i += 8) {
+    const __m256 x = _mm256_loadu_ps(base + i);
+    const __m256 y = _mm256_loadu_ps(exponent + i);
+    __m256i fallback_lanes;
+    const __m256 result = PowPs256Fma(x, y, fallback_lanes);
+    _mm256_storeu_ps(output + i, result);
+    ApplyPowFallback(base, exponent, output, i, fallback_lanes);
+  }
+  for (; i < count; ++i) {
+    output[i] = std::pow(base[i], exponent[i]);
+  }
+}
+
+void PowFloat32LeftScalar_AVX2_FMA(float base, const float *exponent, float *output,
+                                   std::size_t count) {
+  const __m256 x = _mm256_set1_ps(base);
+  const bool positive_finite = base > 0.0f && std::isfinite(base);
+  const __m256 log_x = positive_finite ? LogPs256Fma(x) : _mm256_setzero_ps();
+  std::size_t i = 0;
+  for (; i + 8 <= count; i += 8) {
+    const __m256 y = _mm256_loadu_ps(exponent + i);
+    __m256i fallback_lanes;
+    const __m256 result = PowPs256Fma(x, y, fallback_lanes, &log_x);
+    _mm256_storeu_ps(output + i, result);
+    ApplyPowLeftScalarFallback(base, exponent, output, i, fallback_lanes);
+  }
+  for (; i < count; ++i) {
+    output[i] = std::pow(base, exponent[i]);
+  }
+}
+
+void PowFloat32RightScalar_AVX2_FMA(const float *base, float exponent, float *output,
+                                    std::size_t count) {
+  const __m256 y = _mm256_set1_ps(exponent);
+  std::size_t i = 0;
+  for (; i + 8 <= count; i += 8) {
+    const __m256 x = _mm256_loadu_ps(base + i);
+    __m256i fallback_lanes;
+    const __m256 result = PowPs256Fma(x, y, fallback_lanes);
+    _mm256_storeu_ps(output + i, result);
+    ApplyPowRightScalarFallback(base, exponent, output, i, fallback_lanes);
+  }
+  for (; i < count; ++i) {
+    output[i] = std::pow(base[i], exponent);
+  }
+}
+
 } // namespace onnx_light_cpu

@@ -432,6 +432,13 @@ void EvaluateFloatPowBlock(const float *base, const float *exponent, float *outp
     return;
   }
 #endif
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
+  static const bool use_avx2_fma = DetectSimdLevel() >= SimdLevel::kAVX2 && CpuSupportsFma();
+  if (count >= 8 && use_avx2_fma) {
+    PowFloat32_AVX2_FMA(base, exponent, output, count);
+    return;
+  }
+#endif
   for (std::size_t i = 0; i < count; ++i) {
     output[i] = FastFloatPower(base[i], exponent[i]);
   }
@@ -443,6 +450,13 @@ void EvaluateFloatPowLeftScalarBlock(float base, const float *exponent, float *o
   static const bool use_avx512 = DetectSimdLevel() >= SimdLevel::kAVX512;
   if (count >= 16 && use_avx512) {
     PowFloat32LeftScalar_AVX512(base, exponent, output, count);
+    return;
+  }
+#endif
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
+  static const bool use_avx2_fma = DetectSimdLevel() >= SimdLevel::kAVX2 && CpuSupportsFma();
+  if (count >= 8 && use_avx2_fma) {
+    PowFloat32LeftScalar_AVX2_FMA(base, exponent, output, count);
     return;
   }
 #endif
@@ -530,6 +544,13 @@ void BulkFloatPowRightScalar(const void *left, const void *right, void *out, std
     std::fill_n(typed_out, count, 1.0f);
     return;
   }
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
+  static const bool use_avx2_fma = DetectSimdLevel() >= SimdLevel::kAVX2 && CpuSupportsFma();
+  if (count >= 8 && use_avx2_fma) {
+    PowFloat32RightScalar_AVX2_FMA(typed_left, exponent, typed_out, count);
+    return;
+  }
+#endif
   for (std::size_t i = 0; i < count; ++i) {
     typed_out[i] = std::pow(typed_left[i], exponent);
   }
@@ -541,6 +562,16 @@ void BulkFloatPow(const void *left, const void *right, void *out, std::size_t co
     PowFloat32_AVX512(static_cast<const float *>(left), static_cast<const float *>(right),
                       static_cast<float *>(out), count);
     return;
+  }
+#endif
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
+  {
+    static const bool use_avx2_fma = DetectSimdLevel() >= SimdLevel::kAVX2 && CpuSupportsFma();
+    if (count >= 8 && use_avx2_fma) {
+      PowFloat32_AVX2_FMA(static_cast<const float *>(left), static_cast<const float *>(right),
+                          static_cast<float *>(out), count);
+      return;
+    }
   }
 #endif
   const auto *typed_left = static_cast<const float *>(left);
