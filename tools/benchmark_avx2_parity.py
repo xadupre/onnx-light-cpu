@@ -126,6 +126,7 @@ def _family(operator: str) -> str:
 
 
 def _workload(case: str) -> str:
+    """Labels explicit Qwen phases before using the MatMul M=1 decode heuristic."""
     if "qwen" not in case:
         return "general"
     if "prefill" in case:
@@ -361,10 +362,14 @@ def render_markdown(report: dict[str, Any]) -> str:
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    """Parses AVX2 corpus benchmark arguments."""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--dtype", action="append", choices=AVX2_DTYPES, default=None)
+    parser.add_argument(
+        "--dtype", dest="dtypes", action="append", choices=AVX2_DTYPES, default=None
+    )
     parser.add_argument(
         "--thread-policy",
+        dest="thread_policies",
         action="append",
         choices=THREAD_POLICIES,
         default=None,
@@ -380,8 +385,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--output", type=Path, default=Path("avx2_parity_results.json"))
     args = parser.parse_args(argv)
-    args.dtypes = tuple(args.dtype or AVX2_DTYPES)
-    args.thread_policies = tuple(args.thread_policy or THREAD_POLICIES)
+    args.dtypes = tuple(args.dtypes or AVX2_DTYPES)
+    args.thread_policies = tuple(args.thread_policies or THREAD_POLICIES)
     if args.repeat < 1:
         parser.error("--repeat must be positive")
     if args.warmup < 0:
@@ -394,6 +399,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
+    """Runs the selected thread policies and returns one combined report."""
     from onnx_light_cpu import SimdLevel, detect_simd_level
     from onnx_light_cpu._benchmark import run_backend_benchmark
 
@@ -437,6 +443,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Writes the complete JSON report and concise Markdown summary."""
     args = parse_args(argv)
     report = run(args)
     args.output.parent.mkdir(parents=True, exist_ok=True)

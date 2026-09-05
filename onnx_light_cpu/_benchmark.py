@@ -287,7 +287,7 @@ def _measure_case(
     runners = [("onnx-light-cpu", evaluator.run)]
     if ort_session is not None:
         runners.append(("onnxruntime", ort_session.run))
-    if onnxruntime_first and len(runners) == 2:
+    if onnxruntime_first and ort_session is not None:
         runners.reverse()
     measured_by_runtime = {runtime: measure(run) for runtime, run in runners}
     durations = measured_by_runtime["onnx-light-cpu"]

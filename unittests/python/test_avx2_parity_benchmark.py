@@ -1,4 +1,6 @@
+import io
 import math
+from contextlib import redirect_stderr
 
 from tools.benchmark_avx2_parity import (
     AVX2_CORPUS,
@@ -141,13 +143,14 @@ def test_cli_defaults_to_shared_one_and_physical_core_runs():
 def test_cli_rejects_invalid_measurement_limits_and_output():
     for arguments in (
         ["--repeat", "0"],
-        ["--warmup", "-1"],
+        ["--warmup=-1"],
         ["--max-repeat-time", "0"],
         ["--output", "results.txt"],
     ):
-        try:
-            parse_args(arguments)
-        except SystemExit as exc:
-            assert exc.code == 2
-        else:
-            raise AssertionError(f"expected parse failure for {arguments}")
+        with redirect_stderr(io.StringIO()):
+            try:
+                parse_args(arguments)
+            except SystemExit as exc:
+                assert exc.code == 2
+            else:
+                raise AssertionError(f"expected parse failure for {arguments}")
