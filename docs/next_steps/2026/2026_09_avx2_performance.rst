@@ -74,13 +74,12 @@ Work sequence
      - Depends on
      - Status
    * - AVX2 PR01
-     - Baseline and gap inventory.
-     - The priority backend corpus runs with the AVX2 ceiling and publishes
-       operator, type, shape, thread, and loop-family results. Native AVX2 and
-       AVX2-capped measurements agree closely enough to separate ISA gaps from
-       host-specific scheduling effects.
-     - #614
-     - Pending
+     - Reproducible AVX2 ceiling and baseline mechanism.
+     - The build accepts an AVX2 ceiling, excludes AVX-512 and AMX kernels,
+       reports AVX2 runtime dispatch, and lets the existing backend corpus
+       measure AVX2 paths on wider x86 hosts.
+     - None
+     - Implemented in #614
    * - AVX2 PR02
      - GEMM, MatMul, and compact matrix paths.
      - FP32/FP64 register tiles, masked tails, packing, prefetch, and
