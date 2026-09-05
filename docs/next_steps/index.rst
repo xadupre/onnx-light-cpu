@@ -15,6 +15,7 @@ optimize next.
     2026/2026_08_exp_log_parity
     2026/2026_08_qwen3_inference
     2026/2026_09_qwen3_operator_slice
+    2026/2026_09_qwen3_missing_kernels
     2026/2026_08_conv
     2026/2026_08_unary_elementwise
     2026/2026_08_binary_elementwise
@@ -60,6 +61,10 @@ Planned
       - Freezes the audited end-to-end model benchmark, then builds the
         canonical batch-1 INT4 and persistent-decode path on top of the
         delivered GQA, RMSNormalization, and Sigmoid primitives.
+    * - :doc:`Qwen3 missing kernels <2026/2026_09_qwen3_missing_kernels>`
+      - Splits the remaining INT4 projections, input/layout kernels, and
+        normalization adapters into independent PRs, with runtime metadata
+        and persistent-cache ownership kept in onnx-light.
     * - :doc:`Qwen3 non-MatMulNBits operators
         <2026/2026_09_qwen3_operator_slice>`
       - Implements the metadata, input, layout, activation, and normalization

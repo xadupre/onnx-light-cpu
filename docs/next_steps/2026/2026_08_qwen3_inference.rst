@@ -252,6 +252,12 @@ Qwen PR06a and PR06b.
 Plans to execute first
 ----------------------
 
+The :doc:`missing-kernel implementation plan <2026_09_qwen3_missing_kernels>`
+splits the native portions of Qwen PR02-PR04 into isolated kernel PRs.
+Those PRs can start from deterministic fixtures without waiting for the
+complete model benchmark or persistent-cache API. The frozen graph remains
+required for model-level acceptance.
+
 Do not execute the existing roadmaps from top to bottom. Use only their
 Qwen-critical slices in this order:
 
@@ -267,7 +273,8 @@ Qwen-critical slices in this order:
      - This roadmap, Qwen PR01
      - Frozen graph, operator inventory, generation correctness, TTFT/decode
        benchmark, memory and per-node profile.
-     - All kernel changes until the baseline is reproducible.
+     - Model-level optimization until the baseline is reproducible; isolated
+       missing-kernel development may use deterministic fixtures.
    * - 2
      - Completed Gemm/MatMul PR09.6 plus Qwen PR02-PR03
      - Direct ``MatMulNBits`` v1 adapter for the audited artifact, shared

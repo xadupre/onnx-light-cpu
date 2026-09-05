@@ -16,6 +16,10 @@ separates the small graph-execution and transformer-block slice from the much
 larger ``com.microsoft::MatMulNBits`` project so both can progress and be
 reviewed independently.
 
+The :doc:`missing-kernel implementation plan <2026_09_qwen3_missing_kernels>`
+breaks Operator PR03 and PR04 into smaller input, layout, and normalization
+PRs and coordinates them with the independent INT4 projection work.
+
 The exit condition is stronger than registering kernels by name: one complete
 Qwen decoder block must execute through native ``onnx-light`` and
 ``onnx-light-cpu`` paths, match ONNX Runtime, preserve view and optional-output
@@ -53,8 +57,8 @@ the operators and shared primitives already registered:
    * - ``ai.onnx::Cast``
      - 2
      - ``onnx-light-cpu``
-     - Convert INT64 sequence lengths to INT32 with checked conversion before
-       ``GroupQueryAttention``.
+     - Convert INT64 sequence lengths to INT32 with ONNX Cast semantics;
+       validate legal sequence lengths at the ``GroupQueryAttention`` boundary.
    * - ``ai.onnx::Gather``
      - 2
      - ``onnx-light-cpu``
@@ -139,9 +143,11 @@ gradient code do not establish native execution coverage for this roadmap.
 Ownership and architecture
 --------------------------
 
-Metadata-only work belongs in ``onnx-light``. ``Constant`` and ``Shape`` must
-be resolved before timed execution, and ``Reshape`` must modify tensor
-metadata rather than copy a contiguous payload. Their plans must preserve
+Metadata-only work belongs in ``onnx-light``. Audit existing core support
+before adding implementations. Constants are prepared once; dynamic ``Shape``
+values use the current invocation's dimensions without reading payload bytes.
+``Reshape`` must modify tensor metadata rather than copy a contiguous payload.
+Their plans must preserve
 storage ownership, byte offsets, alignment, liveness and safe output release.
 A view may never outlive its backing allocation.
 
@@ -153,7 +159,14 @@ justifies parallel dispatch and do not create private thread pools.
 ``Split`` crosses the boundary: core runtime ownership determines whether
 outputs may alias disjoint ranges, while the CPU implementation provides the
 materialized fallback. The selected path must be observable through the
-execution diagnostics.
+execution diagnostics. Last-axis splits across multiple rows require strided
+views; use the materialized fallback if the runtime or consumers cannot
+represent those views.
+
+Persistent KV-cache lifecycle belongs to ``onnx-light`` and is outside this
+kernel slice. The first complete block uses GQA's existing tensor-cache
+interface; native CPU append and cache-aware Attention follow the upstream
+persistent-state contract separately.
 
 Experimental and Microsoft-domain normalization nodes are compatibility
 adapters, not independent numerical implementations. They validate their
@@ -181,7 +194,8 @@ test. Record which repository owns each missing surface before adding kernels.
 Operator PR02: metadata and views
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Implement prepared ``Constant`` and ``Shape`` values, followed by checked
+Reuse or complete prepared ``Constant`` and invocation-aware ``Shape`` values,
+followed by checked
 ``Reshape`` semantics. Cover scalar and empty shapes, one inferred ``-1``
 dimension, ``allowzero`` behavior, invalid element counts and integer
 overflow. Add runtime tests proving that legal contiguous reshapes share
@@ -195,9 +209,11 @@ Operator PR03: input and layout kernels
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Implement the exact ``Cast``, ``Gather``, ``ReduceSum`` and ``Split`` contracts
-listed above. Validate axes, negative indices, split totals, integer
-conversion bounds, output shapes and empty dimensions before entering hot
+listed above. Validate axes, negative indices, split totals, output shapes
+and empty dimensions before entering hot
 loops. ``Gather`` must not expand or duplicate the embedding initializer.
+Integer conversion must follow ONNX Cast semantics rather than introducing
+Qwen-specific rejection rules into the generic kernel.
 
 Each kernel first receives direct tests and ONNX Runtime differential cases,
 then executes in the one-block fixture. Optimized paths retain an independent
@@ -243,7 +259,7 @@ Focused tests must cover:
 * exact audited opsets, attributes, types, shapes and optional outputs;
 * scalar, empty, singleton, dynamic and malformed shape cases;
 * negative Gather indices and out-of-range rejection;
-* checked INT64-to-INT32 Cast boundaries;
+* ONNX INT64-to-INT32 Cast boundary semantics and GQA length validation;
 * ReduceSum axes supplied as a tensor, with ``keepdims=0``;
 * Reshape ``0``/``-1`` rules, byte-size overflow and view lifetime;
 * equal and uneven Split sizes, last-axis views and materialized fallback;
@@ -269,7 +285,7 @@ allocation counts are reported alongside the median.
 
 The following structural gates are mandatory:
 
-* prepared ``Constant`` and ``Shape`` perform no timed payload computation;
+* prepared ``Constant`` and dynamic ``Shape`` perform no payload computation;
 * contiguous ``Reshape`` copies zero payload bytes;
 * eligible ``Split`` outputs share storage without violating ownership;
 * embedding ``Gather`` reads only selected rows;
