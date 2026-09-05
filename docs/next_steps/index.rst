@@ -15,6 +15,7 @@ optimize next.
     2026/2026_08_exp_log_parity
     2026/2026_08_qwen3_inference
     2026/2026_09_qwen3_operator_slice
+    2026/2026_09_avx2_activation_normalization
     2026/2026_08_conv
     2026/2026_08_unary_elementwise
     2026/2026_08_binary_elementwise
@@ -51,6 +52,13 @@ Started
         <2026/2026_08_binary_elementwise_performance>`
       - Includes the AVX-512 arithmetic and integer ``Div`` validation work
         from #563 and #577; dedicated-machine acceptance remains.
+    * - :doc:`AVX2 activation and normalization gap closure
+        <2026/2026_09_avx2_activation_normalization>`
+      - Extends the #604 AVX2 activation work: measured ``Sigmoid``,
+        ``Softmax``, ``BiasGelu``, and ``RMSNormalization`` against ONNX
+        Runtime and closed the one found gap, a serialized Float16
+        RMSNormalization reduction; the full onnx-light backend-corpus
+        acceptance run remains.
 
 Planned
 -------
