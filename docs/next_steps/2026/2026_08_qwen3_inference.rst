@@ -2,8 +2,9 @@ Qwen3 CPU Inference Critical Path
 =================================
 
 :Date: 2026-08
+:Updated: 2026-09-05
 
-**planned**
+**planned** (several prerequisite kernels are complete)
 
 Objective
 ---------
@@ -174,9 +175,10 @@ execution path before the artifact can run without an untracked fallback.
      - Produce the INT64 shape of the rank-2 ``attention_mask`` input.
    * - ``ai.onnx::Sigmoid``
      - 28
-     - Missing
-     - FP32 sigmoid for ``x * sigmoid(x)``. Reuse the existing Exp primitives
-       and retain an unfused kernel before adding a SiLU/gate fusion.
+     - Registered (#585)
+     - FP32 sigmoid for ``x * sigmoid(x)``. #600 and #604 optimize the shared
+       implementation; retain model-level coverage before adding a
+       SiLU/gate fusion.
    * - ``ai.onnx::SimplifiedLayerNormalization``
      - 57
      - Missing compatibility adapter
@@ -222,8 +224,39 @@ owns rotary embedding, softmax, mask handling, and tensor KV concatenation in
 this graph, so separate ``RotaryEmbedding``, ``Softmax``, ``Concat`` and
 ``Slice`` kernels are not execution prerequisites for this artifact.
 
+Current implementation status
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Several Qwen-critical primitives are already delivered even though the frozen
+model and end-to-end milestone remain pending:
+
+* `#494 <https://github.com/xadupre/onnx-light-cpu/pull/494>`_ and `#507
+  <https://github.com/xadupre/onnx-light-cpu/pull/507>`_ provide
+  ``com.microsoft::GroupQueryAttention``, including the audited causal GQA
+  geometry, fused half-split rotary embedding, masks, and tensor
+  ``past``/``present`` inputs and outputs;
+* `#498 <https://github.com/xadupre/onnx-light-cpu/pull/498>`_ and `#579
+  <https://github.com/xadupre/onnx-light-cpu/pull/579>`_ provide and optimize
+  the shared ``RMSNormalization`` primitive;
+* `#585 <https://github.com/xadupre/onnx-light-cpu/pull/585>`_, `#600
+  <https://github.com/xadupre/onnx-light-cpu/pull/600>`_, and `#604
+  <https://github.com/xadupre/onnx-light-cpu/pull/604>`_ provide and optimize
+  the FP32 ``Sigmoid`` path required by the audited MLP.
+
+These implementations do not complete Qwen PR04 or PR05 by themselves.
+Standalone ``RotaryEmbedding`` and the two normalization compatibility
+adapters are still missing, and the delivered GQA tensor cache is
+invocation-local: it is not the request-owned persistent cache required by
+Qwen PR06a and PR06b.
+
 Plans to execute first
 ----------------------
+
+The :doc:`missing-kernel implementation plan <2026_09_qwen3_missing_kernels>`
+splits the native portions of Qwen PR02-PR04 into isolated kernel PRs.
+Those PRs can start from deterministic fixtures without waiting for the
+complete model benchmark or persistent-cache API. The frozen graph remains
+required for model-level acceptance.
 
 Do not execute the existing roadmaps from top to bottom. Use only their
 Qwen-critical slices in this order:
@@ -240,7 +273,8 @@ Qwen-critical slices in this order:
      - This roadmap, Qwen PR01
      - Frozen graph, operator inventory, generation correctness, TTFT/decode
        benchmark, memory and per-node profile.
-     - All kernel changes until the baseline is reproducible.
+     - Model-level optimization until the baseline is reproducible; isolated
+       missing-kernel development may use deterministic fixtures.
    * - 2
      - Completed Gemm/MatMul PR09.6 plus Qwen PR02-PR03
      - Direct ``MatMulNBits`` v1 adapter for the audited artifact, shared
@@ -864,14 +898,17 @@ Pull-request sequence
        the portable RMSNorm, RoPE, Gather, SiLU, Softmax, and layout paths
        remain differential coverage.
      - Qwen PR01; completed ExpLog PR01-PR03
-     - Pending
+     - Partially implemented: RMSNormalization, Sigmoid, Mul, and Sub
+       primitives are delivered; adapters, layout/input kernels, and the
+       complete block remain
    * - Qwen PR05
      - Frozen-graph integration with shared Attention.
      - The delivered native ``GroupQueryAttention`` adapter and standard
        ``Attention`` execute from the frozen graph through the shared engine.
        Batch-1 causal prefill/decode retain zero-copy query/KV-head grouping.
      - Qwen PR04; Attention PR14 / #391
-     - Pending
+     - Partially implemented: the GQA adapter and engine are delivered;
+       frozen-graph integration remains
    * - Qwen PR06a
      - Backend-neutral persistent cache in ``onnx-light``.
      - Request-owned state survives invocation cleanup, reset and isolation are

@@ -2,17 +2,17 @@ Gemm and MatMul Performance Roadmap
 ===================================
 
 :Date: 2026-08
-:Updated: 2026-09-02
+:Updated: 2026-09-05
 
-**in progress**
+**complete**
 
 PR `#307 <https://github.com/xadupre/onnx-light-cpu/pull/307>`_
 delivered the shared MatMul kernel and the original parity corpus. The
 correctness foundations are complete, including the FP16/BF16, integer,
-compact-format, and tuning paths. The expanded benchmark corpus has since
-exposed weak float32 scaling under default runtime policies, so issue
-`#374 <https://github.com/xadupre/onnx-light-cpu/issues/374>`_ reopened the
-performance work.
+compact-format, and tuning paths. The default-policy corrective sequence is
+also complete through #575, with the later AVX2 scheduling and masked-tail
+follow-ups delivered by #605 and #608. Further AVX2 parity work is tracked by
+the :doc:`AVX2 performance follow-up <2026_09_avx2_performance>`.
 
 Current status
 --------------
@@ -1620,14 +1620,8 @@ not implement CPU BFLOAT16 Gemm on this host, so BFLOAT16 remains an isolated
 throughput measurement rather than a parity ratio. The existing reports contain
 no ARM results.
 
-Active corrective work is:
+Optional cross-machine validation is:
 
-#. Complete `#374 <https://github.com/xadupre/onnx-light-cpu/issues/374>`_ in
-   one PR. Profile packing, compute, dispatch, and admitted participants before
-   changing the decomposition. Parallel B packing only where an A/B benchmark
-   demonstrates a gain, preserve the serial path for smaller panels, and
-   correct the parity runner so its primary mode does not impose a thread
-   count on either runtime.
 #. Run dedicated x86 and ARM sweeps and publish one-thread and physical-core
    raw samples, dispersion, FP16 parity, and isolated BF16 throughput per ISA.
 

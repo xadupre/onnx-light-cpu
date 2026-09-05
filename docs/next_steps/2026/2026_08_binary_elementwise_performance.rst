@@ -2,9 +2,9 @@ Binary Elementwise Performance Follow-up
 =========================================
 
 :Date: 2026-08
-:Updated: 2026-09-02
+:Updated: 2026-09-05
 
-**in progress**
+**complete**
 
 Objective
 ---------
@@ -289,7 +289,10 @@ Pull-request sequence
        below ``0.9x``, small p90 stays within 2%, and any residual runtime cost
        is assigned to a measured component rather than hidden by kernel timing.
      - PR05
-     - Implemented; dedicated-machine acceptance pending
+     - Complete through #599; dedicated-machine reruns remain optional
+       cross-machine validation
 
-Binary Perf PR06 implements the final gate; the follow-up closes only after a
-pinned dedicated-machine run satisfies it.
+Binary Perf PR06 completes this implementation roadmap. #599 adds the final
+integer ``Pow`` and dispatch corrections exposed by the expanded benchmark.
+Remaining AVX2-specific gaps are tracked by the
+:doc:`AVX2 performance follow-up <2026_09_avx2_performance>`.
