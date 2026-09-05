@@ -203,6 +203,8 @@ jobs:
           python -m onnx_light_cpu benchmark \
             --from-pr "${{ github.event.pull_request.html_url }}" \
             --markdown benchmark.md \
+            --onnxruntime \
+            --pr-markdown benchmark-pr.md \
             --output "${{ runner.temp }}/benchmark.xlsx"
 
       - name: Prepare benchmark report artifact
@@ -224,6 +226,7 @@ jobs:
           path: |
             benchmark-artifact
             benchmark.md
+            benchmark-pr.md
 
   report_pr_benchmark:
     name: PR benchmark report
@@ -245,7 +248,7 @@ jobs:
         id: benchmark_results
         shell: bash
         run: |
-          if [[ -f benchmark.md ]]; then
+          if [[ -f benchmark-pr.md ]]; then
             echo "available=true" >> "$GITHUB_OUTPUT"
           else
             echo "available=false" >> "$GITHUB_OUTPUT"
@@ -259,7 +262,7 @@ jobs:
           gh pr comment "${{ github.event.pull_request.html_url }}" \
             --edit-last \
             --create-if-none \
-            --body-file benchmark.md
+            --body-file benchmark-pr.md
 
   arm_gemm_native:
     name: ARM64 GEMM (NEON)

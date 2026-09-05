@@ -464,8 +464,7 @@ def write_benchmark_markdown(
     output.write_text(_benchmark_markdown(aggregated_rows), encoding="utf-8")
 
 
-def post_benchmark_markdown(pull_request: str, aggregated_rows: Sequence[dict[str, Any]]) -> None:
-    """Adds aggregated benchmark data to a pull request with GitHub CLI."""
+def _pr_benchmark_markdown(aggregated_rows: Sequence[dict[str, Any]]) -> str:
     pr_rows = [
         {
             "speedup": row["speedup"],
@@ -474,13 +473,27 @@ def post_benchmark_markdown(pull_request: str, aggregated_rows: Sequence[dict[st
         }
         for row in aggregated_rows
     ]
+    return _benchmark_markdown(pr_rows, _PR_COLUMNS)
+
+
+def write_pr_benchmark_markdown(
+    path: str | os.PathLike[str], aggregated_rows: Sequence[dict[str, Any]]
+) -> None:
+    """Writes the concise pull request benchmark table."""
+    output = Path(path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(_pr_benchmark_markdown(aggregated_rows), encoding="utf-8")
+
+
+def post_benchmark_markdown(pull_request: str, aggregated_rows: Sequence[dict[str, Any]]) -> None:
+    """Adds aggregated benchmark data to a pull request with GitHub CLI."""
     command = ["gh", "pr", "comment"]
     if pull_request:
         command.append(pull_request)
     command.extend(["--edit-last", "--create-if-none", "--body-file", "-"])
     subprocess.run(
         command,
-        input=_benchmark_markdown(pr_rows, _PR_COLUMNS),
+        input=_pr_benchmark_markdown(aggregated_rows),
         text=True,
         check=True,
     )
