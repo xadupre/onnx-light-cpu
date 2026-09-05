@@ -11,6 +11,7 @@ optimize next.
     :hidden:
 
     2026/2026_08_gemm_matmul
+    2026/2026_09_avx2_gemm_matmul
     2026/2026_08_attention
     2026/2026_08_exp_log_parity
     2026/2026_08_qwen3_inference
@@ -45,6 +46,10 @@ Started
       - Uses the explicit AVX2 SIMD ceiling to measure and rank the remaining
         gaps below the completed AVX-512 paths before optimizing matrix,
         Attention, activation, normalization, unary, and binary workloads.
+    * - :doc:`AVX2 Gemm and MatMul gap closure <2026/2026_09_avx2_gemm_matmul>`
+      - Measures the AVX2-ceiling FP32/FP64 Gemm/MatMul corpus from #633
+        (AVX2 PR02a); dedicated AVX2-only hardware and an onnx-light checkout
+        remain required for a genuine AVX2-vs-AVX2 ONNX Runtime parity gate.
 
 Planned
 -------
