@@ -434,6 +434,9 @@ void PowFloat32LeftScalar_AVX2_FMA(float base, const float *exponent, float *out
                                    std::size_t count) {
   const __m256 x = _mm256_set1_ps(base);
   const bool positive_finite = base > 0.0f && std::isfinite(base);
+  // When the base is not positive-finite, PowPs256Fma() never treats any lane as
+  // "approximate" for this scalar base, so log_x is never read: the zero placeholder
+  // below is only ever a dummy value and is not a meaningful log(base).
   const __m256 log_x = positive_finite ? LogPs256Fma(x) : _mm256_setzero_ps();
   std::size_t i = 0;
   for (; i + 8 <= count; i += 8) {

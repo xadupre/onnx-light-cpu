@@ -401,6 +401,13 @@ template <int Exponent> float FastFloatIntegerPower(float value) {
   return std::pow(value, static_cast<float>(Exponent));
 }
 
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
+bool SupportsAvx2Fma() {
+  static const bool use_avx2_fma = DetectSimdLevel() >= SimdLevel::kAVX2 && CpuSupportsFma();
+  return use_avx2_fma;
+}
+#endif
+
 float FastFloatPower(float base, float exponent) {
   if (exponent == 0.0f) {
     return 1.0f;
@@ -433,7 +440,7 @@ void EvaluateFloatPowBlock(const float *base, const float *exponent, float *outp
   }
 #endif
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
-  static const bool use_avx2_fma = DetectSimdLevel() >= SimdLevel::kAVX2 && CpuSupportsFma();
+  const bool use_avx2_fma = SupportsAvx2Fma();
   if (count >= 8 && use_avx2_fma) {
     PowFloat32_AVX2_FMA(base, exponent, output, count);
     return;
@@ -454,7 +461,7 @@ void EvaluateFloatPowLeftScalarBlock(float base, const float *exponent, float *o
   }
 #endif
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
-  static const bool use_avx2_fma = DetectSimdLevel() >= SimdLevel::kAVX2 && CpuSupportsFma();
+  const bool use_avx2_fma = SupportsAvx2Fma();
   if (count >= 8 && use_avx2_fma) {
     PowFloat32LeftScalar_AVX2_FMA(base, exponent, output, count);
     return;
@@ -545,7 +552,7 @@ void BulkFloatPowRightScalar(const void *left, const void *right, void *out, std
     return;
   }
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
-  static const bool use_avx2_fma = DetectSimdLevel() >= SimdLevel::kAVX2 && CpuSupportsFma();
+  const bool use_avx2_fma = SupportsAvx2Fma();
   if (count >= 8 && use_avx2_fma) {
     PowFloat32RightScalar_AVX2_FMA(typed_left, exponent, typed_out, count);
     return;
@@ -566,7 +573,7 @@ void BulkFloatPow(const void *left, const void *right, void *out, std::size_t co
 #endif
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
   {
-    static const bool use_avx2_fma = DetectSimdLevel() >= SimdLevel::kAVX2 && CpuSupportsFma();
+    const bool use_avx2_fma = SupportsAvx2Fma();
     if (count >= 8 && use_avx2_fma) {
       PowFloat32_AVX2_FMA(static_cast<const float *>(left), static_cast<const float *>(right),
                           static_cast<float *>(out), count);
