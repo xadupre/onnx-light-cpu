@@ -13,6 +13,7 @@ optimize next.
     2026/2026_08_gemm_matmul
     2026/2026_08_attention
     2026/2026_08_exp_log_parity
+    2026/2026_09_avx2_performance
     2026/2026_08_qwen3_inference
     2026/2026_09_qwen3_operator_slice
     2026/2026_08_conv
@@ -47,6 +48,9 @@ Started
       - Tracks the single-key, short-query, tiled FP32, and Qwen3.6 FP16 work
         delivered through #559, #569, and #578; the dedicated-machine ONNX
         Runtime parity gate remains.
+    * - :doc:`AVX2 performance baseline <2026/2026_09_avx2_performance>`
+      - Measures and ranks the fixed AVX2 backend corpus before any new kernel
+        optimization work.
     * - :doc:`Binary elementwise performance
         <2026/2026_08_binary_elementwise_performance>`
       - Includes the AVX-512 arithmetic and integer ``Div`` validation work

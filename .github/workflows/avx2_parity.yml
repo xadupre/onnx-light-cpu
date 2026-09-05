@@ -1,0 +1,115 @@
+name: AVX2 parity baseline
+
+on:
+  workflow_dispatch:
+    inputs:
+      runner:
+        description: Runner label; use a pinned native AVX2 label for final results
+        required: true
+        default: ubuntu-latest
+        type: string
+      environment:
+        description: Result quality
+        required: true
+        default: shared
+        type: choice
+        options:
+          - shared
+          - pinned
+      repeat:
+        description: Maximum measured samples per case and runtime
+        required: true
+        default: "20"
+        type: string
+      max_repeat_time:
+        description: Maximum seconds per timing phase
+        required: true
+        default: "0.1"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  benchmark:
+    name: AVX2 parity (${{ inputs.environment }})
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+
+      - name: Validate result quality
+        if: inputs.environment == 'pinned' && inputs.runner == 'ubuntu-latest'
+        run: |
+          echo "Pinned results require an explicit pinned native AVX2 runner label." >&2
+          exit 1
+
+      - name: Install benchmark dependencies
+        run: |
+          python -m pip install nanobind scikit-build-core setuptools numpy ml_dtypes \
+            onnxruntime openpyxl \
+            "onnx-light @ https://github.com/xadupre/onnx-light/releases/download/0.1.24/onnx_light-0.1.24-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl"
+          python - <<'PY'
+          import os
+          from onnx_light import get_cpp_build_info
+
+          library_dir = get_cpp_build_info()["library_dir"]
+          current = os.environ.get("LD_LIBRARY_PATH", "")
+          value = library_dir if not current else library_dir + os.pathsep + current
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env:
+              env.write(f"LD_LIBRARY_PATH={value}\n")
+          PY
+
+      - name: Build AVX2 Release extension
+        env:
+          CMAKE_ARGS: >-
+            -DCMAKE_BUILD_TYPE=Release
+            -DONNX_LIGHT_CPU_MAX_SIMD_LEVEL=AVX2
+        run: python setup.py build_ext --inplace --onnx-light-source
+
+      - name: Verify AVX2 dispatch
+        run: |
+          python - <<'PY'
+          from onnx_light_cpu import SimdLevel, detect_simd_level
+
+          detected = detect_simd_level()
+          print(f"detected SIMD: {detected.name}")
+          if detected != SimdLevel.AVX2:
+              raise SystemExit(f"expected AVX2 dispatch, got {detected.name}")
+          PY
+
+      - name: Record environment
+        shell: bash
+        run: |
+          {
+            uname -a
+            command -v lscpu >/dev/null && lscpu
+            c++ --version
+            python -m pip freeze
+          } > avx2-environment.txt
+
+      - name: Run AVX2 priority corpus
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          python tools/benchmark_avx2_parity.py \
+            --environment "${{ inputs.environment }}" \
+            --repeat "${{ inputs.repeat }}" \
+            --warmup 5 \
+            --max-repeat-time "${{ inputs.max_repeat_time }}" \
+            --output avx2-parity.json
+
+      - name: Upload complete AVX2 report
+        uses: actions/upload-artifact@v4
+        with:
+          name: avx2-parity-${{ github.sha }}
+          path: |
+            avx2-environment.txt
+            avx2-parity.json
+            avx2-parity.md
+          if-no-files-found: error

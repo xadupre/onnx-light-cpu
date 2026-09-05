@@ -208,6 +208,7 @@ def _measure_case(
     max_repeat_time: float,
     threads: int,
     with_onnxruntime: bool = False,
+    onnxruntime_first: bool = False,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     from onnx_light.onnx.reference import (  # pyrefly: ignore[missing-import]
         ReferenceEvaluator,
@@ -243,23 +244,54 @@ def _measure_case(
     if expected_kernel not in used_kernel_names():
         raise RuntimeError(f"{case.name}: expected kernel {expected_kernel!r} did not run")
 
-    warmup_start = time.perf_counter()
-    for _ in range(warmup):
-        for feed in feeds:
-            evaluator.run(None, feed)
-        if time.perf_counter() - warmup_start >= max_repeat_time:
-            break
+    def measure(run: Any) -> list[float]:
+        warmup_start = time.perf_counter()
+        for _ in range(warmup):
+            for feed in feeds:
+                run(None, feed)
+            if time.perf_counter() - warmup_start >= max_repeat_time:
+                break
 
-    durations = []
-    repeat_start = time.perf_counter()
-    for _ in range(repeat):
-        start = time.perf_counter_ns()
-        for feed in feeds:
-            evaluator.run(None, feed)
-        duration_s = (time.perf_counter_ns() - start) / 1_000_000_000
-        durations.append(duration_s)
-        if time.perf_counter() - repeat_start >= max_repeat_time:
-            break
+        measured = []
+        repeat_start = time.perf_counter()
+        for _ in range(repeat):
+            start = time.perf_counter_ns()
+            for feed in feeds:
+                run(None, feed)
+            measured.append((time.perf_counter_ns() - start) / 1_000_000_000)
+            if time.perf_counter() - repeat_start >= max_repeat_time:
+                break
+        return measured
+
+    ort_session = None
+    onnxruntime_error = None
+    if with_onnxruntime:
+        import onnxruntime  # pyrefly: ignore[missing-import]
+
+        try:
+            session_options = onnxruntime.SessionOptions()
+            session_options.intra_op_num_threads = threads
+            session_options.inter_op_num_threads = 1
+            session_options.execution_mode = onnxruntime.ExecutionMode.ORT_SEQUENTIAL
+            ort_session = onnxruntime.InferenceSession(
+                model.SerializeToString(),
+                sess_options=session_options,
+                providers=["CPUExecutionProvider"],
+            )
+            for feed in feeds:
+                ort_session.run(None, feed)
+        except Exception as exc:  # noqa: BLE001 -- unsupported cases remain in the report.
+            onnxruntime_error = str(exc)
+            ort_session = None
+
+    runners = [("onnx-light-cpu", evaluator.run)]
+    if ort_session is not None:
+        runners.append(("onnxruntime", ort_session.run))
+    if onnxruntime_first and len(runners) == 2:
+        runners.reverse()
+    measured_by_runtime = {runtime: measure(run) for runtime, run in runners}
+    durations = measured_by_runtime["onnx-light-cpu"]
+    runtime_order = ",".join(runtime for runtime, _ in runners)
 
     dtype = _case_dtype(case.name) or "unknown"
     metadata = {
@@ -272,6 +304,7 @@ def _measure_case(
         "processor": platform.processor() or platform.machine(),
         "input_shapes": input_shapes,
         "max_repeat_time": max_repeat_time,
+        "runtime_order": runtime_order,
     }
     raw = [
         {
@@ -295,41 +328,22 @@ def _measure_case(
         "onnxruntime_samples": None,
         "onnxruntime_mean_s": None,
         "onnxruntime_median_s": None,
-        "onnxruntime_error": None,
+        "onnxruntime_error": onnxruntime_error,
         "speedup": None,
     }
-    if with_onnxruntime:
-        import onnxruntime  # pyrefly: ignore[missing-import]
-
-        try:
-            session_options = onnxruntime.SessionOptions()
-            session_options.intra_op_num_threads = threads
-            session_options.inter_op_num_threads = 1
-            session_options.execution_mode = onnxruntime.ExecutionMode.ORT_SEQUENTIAL
-            ort_session = onnxruntime.InferenceSession(
-                model.SerializeToString(),
-                sess_options=session_options,
-                providers=["CPUExecutionProvider"],
+    if ort_session is not None:
+        ort_durations = measured_by_runtime["onnxruntime"]
+        if onnxruntime_first:
+            raw.extend(
+                {
+                    **metadata,
+                    "run": run,
+                    "runtime": "onnxruntime",
+                    "duration_s": duration,
+                }
+                for run, duration in enumerate(ort_durations, start=1)
             )
-            for feed in feeds:
-                ort_session.run(None, feed)
-            ort_warmup_start = time.perf_counter()
-            for _ in range(warmup):
-                for feed in feeds:
-                    ort_session.run(None, feed)
-                if time.perf_counter() - ort_warmup_start >= max_repeat_time:
-                    break
-            ort_durations = []
-            ort_start = time.perf_counter()
-            for _ in range(repeat):
-                start = time.perf_counter_ns()
-                for feed in feeds:
-                    ort_session.run(None, feed)
-                ort_durations.append((time.perf_counter_ns() - start) / 1_000_000_000)
-                if time.perf_counter() - ort_start >= max_repeat_time:
-                    break
-        except Exception as exc:  # noqa: BLE001 -- unsupported cases remain in the report.
-            aggregate["onnxruntime_error"] = str(exc)
+            raw = raw[len(durations) :] + raw[: len(durations)]
         else:
             raw.extend(
                 {
@@ -340,14 +354,14 @@ def _measure_case(
                 }
                 for run, duration in enumerate(ort_durations, start=1)
             )
-            aggregate["onnxruntime_samples"] = len(ort_durations)
-            aggregate["onnxruntime_mean_s"] = statistics.fmean(ort_durations)
-            aggregate["onnxruntime_median_s"] = statistics.median(ort_durations)
-            aggregate["speedup"] = (
-                aggregate["onnxruntime_median_s"] / aggregate["median_s"]
-                if aggregate["median_s"]
-                else float("inf")
-            )
+        aggregate["onnxruntime_samples"] = len(ort_durations)
+        aggregate["onnxruntime_mean_s"] = statistics.fmean(ort_durations)
+        aggregate["onnxruntime_median_s"] = statistics.median(ort_durations)
+        aggregate["speedup"] = (
+            aggregate["onnxruntime_median_s"] / aggregate["median_s"]
+            if aggregate["median_s"]
+            else float("inf")
+        )
     return raw, aggregate
 
 
@@ -359,6 +373,7 @@ def run_backend_benchmark(
     max_repeat_time: float,
     threads: int,
     with_onnxruntime: bool = False,
+    alternate_runtime_order: bool = False,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Runs selected BENCHMARK backend cases and returns raw and aggregate rows."""
     from onnx_light.onnx.backend import (  # pyrefly: ignore[missing-import]
@@ -402,8 +417,9 @@ def run_backend_benchmark(
     aggregated_rows = []
     for index, case in enumerate(cases, start=1):
         print(f"[{index}/{len(cases)}] {case.name}", file=sys.stderr, flush=True)
+        extra = {"onnxruntime_first": index % 2 == 0} if alternate_runtime_order else {}
         raw, aggregate = _measure_case(
-            case, repeat, warmup, max_repeat_time, threads, with_onnxruntime
+            case, repeat, warmup, max_repeat_time, threads, with_onnxruntime, **extra
         )
         raw_rows.extend(raw)
         aggregated_rows.append(aggregate)
