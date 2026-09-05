@@ -45,9 +45,10 @@ for each priority family, with no priority case below ``0.9x``.
 Reproducible baseline
 ---------------------
 
-Issue :issue:`631` establishes the measurement baseline for this roadmap without
-changing kernel implementations. Update the target branch before collecting
-results, then build the Python package in Release mode with the AVX2 ceiling:
+`Issue #631 <https://github.com/xadupre/onnx-light-cpu/issues/631>`_ establishes
+the measurement baseline for this roadmap without changing kernel
+implementations. Update the target branch before collecting results, then build
+the Python package in Release mode with the AVX2 ceiling:
 
 .. code-block:: bash
 
