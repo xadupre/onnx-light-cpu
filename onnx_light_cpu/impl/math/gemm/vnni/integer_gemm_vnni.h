@@ -76,6 +76,15 @@ std::int32_t IntegerDotU8S8Scalar(const std::uint8_t *ua, const std::int8_t *sb,
 // high-bit terms before ``vpmaddubsw``, keeping both pair sums in range.
 std::int32_t IntegerDotU8S8Avx2(const std::uint8_t *ua, const std::int8_t *sb, std::int64_t depth);
 
+// Same exact result as ``IntegerDotU8S8Avx2``, plus an extra 128-bit SSSE3
+// step covering a 16..31-element remainder with one vectorized pass instead
+// of a fully scalar tail. Callers should only select this variant when
+// ``depth % 32 != 0`` (e.g. the short-``K`` "direct" compact GEMM case),
+// since the extra branch/step is otherwise dead weight on every dot-product
+// call for depths that are already an exact multiple of 32.
+std::int32_t IntegerDotU8S8Avx2ShortTail(const std::uint8_t *ua, const std::int8_t *sb,
+                                         std::int64_t depth);
+
 // Computes all raw dot products from packed row-major A and transposed B panels.
 // The 2x2 output micro-kernel reuses loaded A and B vectors across outputs.
 void IntegerMatMulU8S8Avx2(const std::uint8_t *a, const std::int8_t *b, std::int32_t *c,

@@ -43,10 +43,9 @@ Started
     * - Plan
       - Contribution
     * - :doc:`AVX2 performance <2026/2026_09_avx2_performance>`
-      - Uses the explicit AVX2 SIMD ceiling to find and close the remaining
-        gaps below the completed AVX-512 optimization paths, starting with
-        matrix, Attention, activation, normalization, unary, and binary
-        workloads.
+      - Uses the explicit AVX2 SIMD ceiling to measure and rank the remaining
+        gaps below the completed AVX-512 paths before optimizing matrix,
+        Attention, activation, normalization, unary, and binary workloads.
     * - :doc:`AVX2 Gemm and MatMul gap closure <2026/2026_09_avx2_gemm_matmul>`
       - Measures the AVX2-ceiling FP32/FP64 Gemm/MatMul corpus from #633
         (AVX2 PR02a); dedicated AVX2-only hardware and an onnx-light checkout
