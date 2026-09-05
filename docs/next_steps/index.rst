@@ -11,6 +11,7 @@ optimize next.
     :hidden:
 
     2026/2026_08_gemm_matmul
+    2026/2026_09_avx2_gemm_matmul
     2026/2026_08_attention
     2026/2026_08_exp_log_parity
     2026/2026_08_qwen3_inference
@@ -53,6 +54,10 @@ Started
         against ONNX Runtime and closed the one found gap, a serialized
         Float16 RMSNormalization reduction; the full onnx-light
         backend-corpus acceptance run remains.
+    * - :doc:`AVX2 Gemm and MatMul gap closure <2026/2026_09_avx2_gemm_matmul>`
+      - Measures the AVX2-ceiling FP32/FP64 Gemm/MatMul corpus from #633
+        (AVX2 PR02a); dedicated AVX2-only hardware and an onnx-light checkout
+        remain required for a genuine AVX2-vs-AVX2 ONNX Runtime parity gate.
 
 Planned
 -------

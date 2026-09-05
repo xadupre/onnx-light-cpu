@@ -12,6 +12,7 @@ from ._benchmark import (
     pull_request_benchmark_selection,
     run_backend_benchmark,
     write_benchmark_markdown,
+    write_pr_benchmark_markdown,
     write_benchmark_workbook,
 )
 
@@ -82,6 +83,10 @@ def _build_parser() -> argparse.ArgumentParser:
         help="path of an optional Markdown file with the aggregated figures",
     )
     benchmark.add_argument(
+        "--pr-markdown",
+        help="path of an optional concise Markdown file for a pull request comment",
+    )
+    benchmark.add_argument(
         "--pr",
         nargs="?",
         const="",
@@ -147,6 +152,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         write_benchmark_workbook(args.output, raw_rows, aggregated_rows)
         if args.markdown:
             write_benchmark_markdown(args.markdown, aggregated_rows)
+        if args.pr_markdown:
+            write_pr_benchmark_markdown(args.pr_markdown, aggregated_rows)
         if args.pr is not None:
             post_benchmark_markdown(args.pr, aggregated_rows)
         print(
