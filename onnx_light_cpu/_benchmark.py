@@ -310,10 +310,11 @@ def _measure_case(
         {
             **metadata,
             "run": run,
-            "runtime": "onnx-light-cpu",
+            "runtime": runtime,
             "duration_s": duration,
         }
-        for run, duration in enumerate(durations, start=1)
+        for runtime, _ in runners
+        for run, duration in enumerate(measured_by_runtime[runtime], start=1)
     ]
     aggregate: dict[str, Any] = {
         **metadata,
@@ -333,27 +334,6 @@ def _measure_case(
     }
     if ort_session is not None:
         ort_durations = measured_by_runtime["onnxruntime"]
-        if onnxruntime_first:
-            raw.extend(
-                {
-                    **metadata,
-                    "run": run,
-                    "runtime": "onnxruntime",
-                    "duration_s": duration,
-                }
-                for run, duration in enumerate(ort_durations, start=1)
-            )
-            raw = raw[len(durations) :] + raw[: len(durations)]
-        else:
-            raw.extend(
-                {
-                    **metadata,
-                    "run": run,
-                    "runtime": "onnxruntime",
-                    "duration_s": duration,
-                }
-                for run, duration in enumerate(ort_durations, start=1)
-            )
         aggregate["onnxruntime_samples"] = len(ort_durations)
         aggregate["onnxruntime_mean_s"] = statistics.fmean(ort_durations)
         aggregate["onnxruntime_median_s"] = statistics.median(ort_durations)

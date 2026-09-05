@@ -139,7 +139,7 @@ def _loop_family(case: str) -> str:
 
 
 def speedup_group(speedup: float) -> str:
-    """Maps ONNX Runtime / onnx-light-cpu speedup to the published buckets."""
+    """Maps ORT median / onnx-light-cpu median speedup to the published buckets."""
     if speedup < 0.5:
         return "<0.5x"
     if speedup < 0.9:
@@ -166,11 +166,22 @@ def build_report(
         )
 
     results = []
+    unsupported = []
     for aggregate in aggregated_rows:
         key = (str(aggregate["case"]), str(aggregate["thread_policy"]))
         samples = raw_by_case[key]
         if set(samples) != {"onnx-light-cpu", "onnxruntime"}:
-            raise RuntimeError(f"{aggregate['case']}: both runtimes must have raw samples")
+            unsupported.append(
+                {
+                    "case": aggregate["case"],
+                    "thread_policy": aggregate["thread_policy"],
+                    "threads": aggregate["threads"],
+                    "onnxruntime_error": aggregate["onnxruntime_error"],
+                    "onnx_light_cpu_samples_s": samples.get("onnx-light-cpu", []),
+                    "onnxruntime_samples_s": samples.get("onnxruntime", []),
+                }
+            )
+            continue
         cpu_samples = samples["onnx-light-cpu"]
         ort_samples = samples["onnxruntime"]
         cpu_median = statistics.median(cpu_samples)
@@ -253,6 +264,8 @@ def build_report(
             "versions": _package_versions(),
         },
         "groups": groups,
+        "complete": not unsupported,
+        "unsupported": unsupported,
         "follow_up_candidates": follow_ups,
         "raw": list(raw_rows),
         "results": results,
@@ -275,6 +288,11 @@ def render_markdown(report: dict[str, Any]) -> str:
         )
     lines.extend(
         [
+            (
+                "Speedup is ONNX Runtime median latency divided by onnx-light-cpu median "
+                "latency; values at or above 1.0x favor onnx-light-cpu."
+            ),
+            "",
             f"- CPU: `{metadata['cpu_model']}`",
             (
                 f"- SIMD ceiling/detected: `{metadata['simd_ceiling']}` / "
@@ -287,11 +305,21 @@ def render_markdown(report: dict[str, Any]) -> str:
             "",
         ]
     )
+    if report["unsupported"]:
+        lines.extend(
+            [
+                (
+                    "> **Incomplete:** ONNX Runtime did not produce samples for "
+                    f"{len(report['unsupported'])} selected case(s)."
+                ),
+                "",
+            ]
+        )
     by_rank = {row["gap_rank"]: row for row in report["results"]}
     for group in SPEEDUP_GROUPS:
         lines.extend(
             [
-                f"## {group} ONNX Runtime",
+                f"## {group} onnx-light-cpu / ONNX Runtime",
                 "",
                 "| rank | family | workload | case | threads | gap (ms) | speedup |",
                 "| ---: | --- | --- | --- | ---: | ---: | ---: |",
@@ -396,7 +424,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     markdown.write_text(render_markdown(report), encoding="utf-8")
     print(f"raw results: {args.output}")
     print(f"summary: {markdown}")
-    return 0
+    return int(not report["complete"])
 
 
 if __name__ == "__main__":

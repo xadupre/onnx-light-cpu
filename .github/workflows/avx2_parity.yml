@@ -7,7 +7,10 @@ on:
         description: Runner label; use a pinned native AVX2 label for final results
         required: true
         default: ubuntu-latest
-        type: string
+        type: choice
+        options:
+          - ubuntu-latest
+          - self-hosted
       environment:
         description: Result quality
         required: true
@@ -36,18 +39,18 @@ jobs:
     runs-on: ${{ inputs.runner }}
     timeout-minutes: 60
     steps:
+      - name: Validate result quality
+        if: inputs.environment == 'pinned' && inputs.runner != 'self-hosted'
+        run: |
+          echo "Pinned results require the self-hosted runner selection." >&2
+          exit 1
+
       - uses: actions/checkout@v7
 
       - name: Set up Python
         uses: actions/setup-python@v7
         with:
           python-version: "3.13"
-
-      - name: Validate result quality
-        if: inputs.environment == 'pinned' && inputs.runner == 'ubuntu-latest'
-        run: |
-          echo "Pinned results require an explicit pinned native AVX2 runner label." >&2
-          exit 1
 
       - name: Install benchmark dependencies
         run: |
@@ -105,6 +108,7 @@ jobs:
             --output avx2-parity.json
 
       - name: Upload complete AVX2 report
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: avx2-parity-${{ github.sha }}

@@ -85,13 +85,50 @@ def test_report_ranks_gaps_retains_samples_and_marks_shared_results():
     assert math.isclose(first["speedup"], 0.5)
     assert second["workload"] == "Qwen prefill"
     assert report["follow_up_candidates"][0]["case"] == first["case"]
+    assert report["complete"]
     assert not report["metadata"]["final_parity_decision"]
     markdown = render_markdown(report)
     assert "Diagnostic only" in markdown
-    assert "## 0.5x-0.9x ONNX Runtime" in markdown
-    assert "## >=1.0x ONNX Runtime" in markdown
+    assert "## 0.5x-0.9x onnx-light-cpu / ONNX Runtime" in markdown
+    assert "## >=1.0x onnx-light-cpu / ONNX Runtime" in markdown
     assert "Qwen decode" in markdown
     assert "Qwen prefill" in markdown
+
+
+def test_report_retains_unsupported_onnxruntime_case():
+    case = "test_cpu_abs_n1024_float32_benchmark"
+    raw = [
+        {
+            "case": case,
+            "threads": 1,
+            "thread_policy": "1",
+            "runtime": "onnx-light-cpu",
+            "duration_s": 1.0,
+        }
+    ]
+    aggregated = [
+        {
+            "case": case,
+            "operator": "Abs",
+            "dtype": "float32",
+            "thread_policy": "1",
+            "threads": 1,
+            "input_shapes": '[{"x": [1024]}]',
+            "runtime_order": "onnx-light-cpu",
+            "onnxruntime_error": "unsupported",
+        }
+    ]
+    report = build_report(
+        raw,
+        aggregated,
+        environment="shared",
+        command="benchmark",
+        simd_level="AVX2",
+    )
+    assert not report["complete"]
+    assert report["results"] == []
+    assert report["unsupported"][0]["onnxruntime_error"] == "unsupported"
+    assert report["unsupported"][0]["onnx_light_cpu_samples_s"] == [1.0]
 
 
 def test_cli_defaults_to_shared_one_and_physical_core_runs():
