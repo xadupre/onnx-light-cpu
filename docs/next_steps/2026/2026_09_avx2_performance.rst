@@ -80,34 +80,61 @@ Work sequence
        measure AVX2 paths on wider x86 hosts.
      - None
      - Implemented in #614
-   * - AVX2 PR02
-     - GEMM, MatMul, and compact matrix paths.
-     - FP32/FP64 register tiles, masked tails, packing, prefetch, and
-       participant selection are tuned from measured gaps. FP16/BF16
-       conversion and integer/packed paths avoid scalar or full-tensor
-       conversion bottlenecks on the priority shapes.
+   * - AVX2 PR01.1
+     - Baseline and gap inventory.
+     - The priority backend corpus publishes operator, type, shape, thread,
+       and loop-family results under the AVX2 ceiling. The report ranks gaps
+       by absolute latency and ONNX Runtime ratio before further tuning.
      - PR01
-     - Started through #605 and #608
+     - Assigned in `#631
+       <https://github.com/xadupre/onnx-light-cpu/issues/631>`_
+   * - AVX2 PR02a
+     - FP32/FP64 GEMM and MatMul.
+     - FP32/FP64 register tiles, masked tails, packing, prefetch, and
+       participant selection are tuned from measured gaps.
+     - PR01.1
+     - Assigned in `#633
+       <https://github.com/xadupre/onnx-light-cpu/issues/633>`_; foundations
+       delivered through #605 and #608
+   * - AVX2 PR02b
+     - Compact matrix paths.
+     - FP16/BF16 conversion and integer/packed paths avoid scalar or
+       full-tensor conversion bottlenecks on the priority shapes.
+     - PR01.1
+     - Assigned in `#634
+       <https://github.com/xadupre/onnx-light-cpu/issues/634>`_
    * - AVX2 PR03
      - Attention.
      - Decode, short-query, and prefill cases use AVX2 score and value kernels
        with productive head/query scheduling. Masks, causal bounds, GQA/MQA,
        FP16/BF16 conversion, and vector tails retain differential parity.
-     - PR01, PR02
-     - Started through #605 and #608
-   * - AVX2 PR04
-     - Activations, normalization, unary, and binary elementwise kernels.
+     - PR01.1, PR02a
+     - Assigned in `#635
+       <https://github.com/xadupre/onnx-light-cpu/issues/635>`_; foundations
+       delivered through #605 and #608
+   * - AVX2 PR04a
+     - Activations and normalization.
+     - Priority transformer shapes avoid unnecessary memory passes,
+       conversion, scalar tails, and unproductive scheduling while retaining
+       their numerical contracts.
+     - PR01.1
+     - Assigned in `#638
+       <https://github.com/xadupre/onnx-light-cpu/issues/638>`_; foundations
+       delivered through #604
+   * - AVX2 PR04b
+     - Unary and binary elementwise kernels.
      - Priority contiguous and broadcast cases avoid scalar tails and
        unnecessary widening, while expensive arithmetic and conversion paths
        retain their numerical contracts.
-     - PR01
-     - Started through #604
+     - PR01.1
+     - Assigned in `#640
+       <https://github.com/xadupre/onnx-light-cpu/issues/640>`_
    * - AVX2 PR05
      - Final parity and regression gate.
      - Every priority family reaches the median and minimum targets on native
        AVX2 hardware. The same commit passes the AVX2-ceiling and automatic
        AVX-512 correctness suites without an AVX-512 performance regression.
-     - PR02--PR04
+     - PR02a--PR04b
      - Pending
 
 AVX2 PR05 completes this follow-up. Architecture-specific work for AVX-512FP16,
