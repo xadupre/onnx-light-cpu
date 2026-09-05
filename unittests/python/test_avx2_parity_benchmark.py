@@ -40,7 +40,7 @@ def test_report_ranks_gaps_retains_samples_and_marks_shared_results():
         (
             (
                 "test_cpu_group_query_attention_model_qwen3_8b_int4_mb_prefill_"
-                "b1_s128_qh32_kvh8_hd128_pastlen0_causal_float32_benchmark"
+                "m1_b1_s128_qh32_kvh8_hd128_pastlen0_causal_float32_benchmark"
             ),
             1.0,
             1.2,
@@ -89,8 +89,8 @@ def test_report_ranks_gaps_retains_samples_and_marks_shared_results():
     assert not report["metadata"]["final_parity_decision"]
     markdown = render_markdown(report)
     assert "Diagnostic only" in markdown
-    assert "## 0.5x-0.9x onnx-light-cpu / ONNX Runtime" in markdown
-    assert "## >=1.0x onnx-light-cpu / ONNX Runtime" in markdown
+    assert "## 0.5x-0.9x ONNX Runtime / onnx-light-cpu speedup" in markdown
+    assert "## >=1.0x ONNX Runtime / onnx-light-cpu speedup" in markdown
     assert "Qwen decode" in markdown
     assert "Qwen prefill" in markdown
 
@@ -136,3 +136,18 @@ def test_cli_defaults_to_shared_one_and_physical_core_runs():
     assert args.dtypes == AVX2_DTYPES
     assert args.thread_policies == THREAD_POLICIES
     assert args.environment == "shared"
+
+
+def test_cli_rejects_invalid_measurement_limits_and_output():
+    for arguments in (
+        ["--repeat", "0"],
+        ["--warmup", "-1"],
+        ["--max-repeat-time", "0"],
+        ["--output", "results.txt"],
+    ):
+        try:
+            parse_args(arguments)
+        except SystemExit as exc:
+            assert exc.code == 2
+        else:
+            raise AssertionError(f"expected parse failure for {arguments}")

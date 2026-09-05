@@ -128,10 +128,10 @@ def _family(operator: str) -> str:
 def _workload(case: str) -> str:
     if "qwen" not in case:
         return "general"
-    if "decode" in case or "_m1_" in case:
-        return "Qwen decode"
     if "prefill" in case:
         return "Qwen prefill"
+    if "decode" in case or "_m1_" in case:
+        return "Qwen decode"
     return "Qwen"
 
 
@@ -329,7 +329,7 @@ def render_markdown(report: dict[str, Any]) -> str:
     for group in SPEEDUP_GROUPS:
         lines.extend(
             [
-                f"## {group} onnx-light-cpu / ONNX Runtime",
+                f"## {group} ONNX Runtime / onnx-light-cpu speedup",
                 "",
                 "| rank | family | workload | case | threads | gap (ms) | speedup |",
                 "| ---: | --- | --- | --- | ---: | ---: | ---: |",
@@ -362,13 +362,9 @@ def render_markdown(report: dict[str, Any]) -> str:
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--dtype", "--dtypes", dest="dtypes", action="append", choices=AVX2_DTYPES, default=None
-    )
+    parser.add_argument("--dtype", action="append", choices=AVX2_DTYPES, default=None)
     parser.add_argument(
         "--thread-policy",
-        "--thread-policies",
-        dest="thread_policies",
         action="append",
         choices=THREAD_POLICIES,
         default=None,
@@ -384,14 +380,16 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--output", type=Path, default=Path("avx2_parity_results.json"))
     args = parser.parse_args(argv)
-    args.dtypes = tuple(args.dtypes or AVX2_DTYPES)
-    args.thread_policies = tuple(args.thread_policies or THREAD_POLICIES)
+    args.dtypes = tuple(args.dtype or AVX2_DTYPES)
+    args.thread_policies = tuple(args.thread_policy or THREAD_POLICIES)
     if args.repeat < 1:
         parser.error("--repeat must be positive")
     if args.warmup < 0:
         parser.error("--warmup must be non-negative")
     if args.max_repeat_time <= 0:
         parser.error("--max-repeat-time must be positive")
+    if args.output.suffix.lower() != ".json":
+        parser.error("--output must have a .json extension")
     return args
 
 

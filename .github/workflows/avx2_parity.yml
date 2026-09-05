@@ -98,12 +98,13 @@ jobs:
 
       - name: Run AVX2 priority corpus
         env:
+          BENCHMARK_ENVIRONMENT: ${{ inputs.environment }}
           MAX_REPEAT_TIME: ${{ inputs.max_repeat_time }}
           PYTHONPATH: ${{ github.workspace }}
           REPEAT: ${{ inputs.repeat }}
         run: |
           python tools/benchmark_avx2_parity.py \
-            --environment "${{ inputs.environment }}" \
+            --environment "$BENCHMARK_ENVIRONMENT" \
             --repeat "$REPEAT" \
             --warmup 5 \
             --max-repeat-time "$MAX_REPEAT_TIME" \
