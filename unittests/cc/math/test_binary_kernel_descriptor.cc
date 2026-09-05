@@ -413,6 +413,35 @@ TEST(BinaryKernelDescriptor, PowLeftScalarBulkMatchesFractionalAndSpecialValues)
   }
 }
 
+TEST(BinaryKernelDescriptor, PowRightScalarBulkMatchesFractionalAndSpecialValues) {
+  const BinaryKernelDescriptor pow("Pow", 15, {});
+  const auto &adapter =
+      pow.ResolveAdapter(BinaryDataType::FLOAT, BinaryDataType::FLOAT, BinaryDataType::FLOAT);
+  const float exponent = 1.375f;
+  std::vector<float> bases(35);
+  for (std::size_t i = 0; i < bases.size(); ++i) {
+    bases[i] = 0.125f + static_cast<float>(i) * 0.25f;
+  }
+  bases[0] = -2.0f;
+  bases[1] = 0.0f;
+  bases[2] = std::numeric_limits<float>::infinity();
+  bases[3] = std::numeric_limits<float>::quiet_NaN();
+  std::vector<float> output(bases.size());
+
+  adapter.bulk_right_scalar(bases.data(), &exponent, output.data(), output.size());
+
+  for (std::size_t i = 0; i < output.size(); ++i) {
+    const float expected = std::pow(bases[i], exponent);
+    if (std::isfinite(expected)) {
+      EXPECT_NEAR(output[i], expected, std::max(std::fabs(expected) * 3e-5f, 1e-6f)) << i;
+    } else if (std::isnan(expected)) {
+      EXPECT_TRUE(std::isnan(output[i])) << i;
+    } else {
+      EXPECT_EQ(output[i], expected) << i;
+    }
+  }
+}
+
 TEST(BinaryKernelDescriptor, IntegerPReluWrapsSignedMultiplication) {
   const BinaryKernelDescriptor prelu("PRelu", 16, {});
   const auto &adapter =
