@@ -46,8 +46,14 @@ Started
       - Uses the explicit AVX2 SIMD ceiling to find and close the remaining
         gaps below the completed AVX-512 optimization paths, starting with
         matrix, Attention, activation, normalization, unary, and binary
-        workloads. The activation and normalization slice (AVX2 PR04a) is
-        detailed in :doc:`2026/2026_09_avx2_activation_normalization`.
+        workloads.
+    * - :doc:`AVX2 activation and normalization gap closure
+        <2026/2026_09_avx2_activation_normalization>`
+      - Extends the #604 AVX2 activation work (AVX2 PR04a): measured
+        ``Sigmoid``, ``Softmax``, ``BiasGelu``, and ``RMSNormalization``
+        against ONNX Runtime and closed the one found gap, a serialized
+        Float16 RMSNormalization reduction; the full onnx-light
+        backend-corpus acceptance run remains.
 
 Planned
 -------
