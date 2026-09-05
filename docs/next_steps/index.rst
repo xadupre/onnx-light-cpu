@@ -43,10 +43,9 @@ Started
     * - Plan
       - Contribution
     * - :doc:`AVX2 performance <2026/2026_09_avx2_performance>`
-      - Uses the explicit AVX2 SIMD ceiling to find and close the remaining
-        gaps below the completed AVX-512 optimization paths, starting with
-        matrix, Attention, activation, normalization, unary, and binary
-        workloads.
+      - Uses the explicit AVX2 SIMD ceiling to measure and rank the remaining
+        gaps below the completed AVX-512 paths before optimizing matrix,
+        Attention, activation, normalization, unary, and binary workloads.
     * - :doc:`AVX2 activation and normalization gap closure
         <2026/2026_09_avx2_activation_normalization>`
       - Extends the #604 AVX2 activation work (AVX2 PR04a): measured

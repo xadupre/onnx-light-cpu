@@ -9,6 +9,8 @@
 
 #include "onnx_light_cpu/impl/math/gemm/vnni/integer_gemm_vnni.h"
 
+#include "onnx_light_cpu/impl/execution.h"
+
 #if defined(ONNX_LIGHT_CPU_HAVE_AVX2_INTEGER) || defined(ONNX_LIGHT_CPU_HAVE_AVX512VNNI)
 #include "onnx_light_cpu/impl/simd_level.h"
 #endif
@@ -313,6 +315,48 @@ TEST(IntegerVnniKernel, AccumulationWrapsModuloInt32) {
   EXPECT_EQ(std::bit_cast<std::uint32_t>(out[0]), wrapped);
 }
 
+// Splits every ``ExecuteRanges`` call in the packing, bulk AVX2 microkernel,
+// and correction loops across several inline blocks (run synchronously, on
+// the calling thread, in reverse block order) so a real physical-core policy
+// exercises the same disjoint-range writes without needing a live thread
+// pool in this differential test binary.
+struct InlineBlockExecutor {
+  static void Run(void *, std::int64_t num_blocks, void *task_context,
+                  onnx_light_cpu::ExecutionBlockFn task) {
+    for (std::int64_t block = num_blocks; block > 0; --block) {
+      task(task_context, block - 1);
+    }
+  }
+};
+
+TEST(IntegerVnniKernel, ParallelExecutionMatchesSerialReferenceAcrossShapes) {
+  onnx_light_cpu::ExecutionExecutorView view{nullptr, 8, &InlineBlockExecutor::Run, nullptr};
+  onnx_light_cpu::ExecutionExecutorScope scope(&view);
+
+  std::mt19937 rng(4242);
+  std::uniform_int_distribution<int> byte(0, 255);
+  // Large enough on every axis (row-packing, column-packing, and the bulk
+  // depth>=32 microkernel) that ``ExecuteRanges`` splits into more than one
+  // block with the 8 declared participants above.
+  const std::vector<std::array<std::int64_t, 3>> shapes = {
+      {1, 4096, 4096}, {4096, 1, 4096}, {64, 64, 512}, {65, 63, 97}};
+  for (const auto &shape : shapes) {
+    const std::int64_t rows = shape[0];
+    const std::int64_t cols = shape[1];
+    const std::int64_t depth = shape[2];
+    std::vector<std::uint8_t> a(static_cast<std::size_t>(rows * depth));
+    std::vector<std::uint8_t> b(static_cast<std::size_t>(depth * cols));
+    for (auto &value : a) {
+      value = static_cast<std::uint8_t>(byte(rng));
+    }
+    for (auto &value : b) {
+      value = static_cast<std::uint8_t>(byte(rng));
+    }
+    CheckAllPaths(a, /*a_signed=*/true, b, /*b_signed=*/false, rows, cols, depth, {-3}, {2});
+    Check4BitAllPaths(/*a_signed=*/true, /*b_signed=*/false, rows, cols, depth, /*per_axis=*/true);
+  }
+}
+
 TEST(IntegerVnniKernel, HandlesZeroDepth) {
   const std::vector<std::int32_t> zero = {0};
   std::int32_t output = 1;
@@ -326,15 +370,24 @@ TEST(IntegerVnniKernel, Avx2DotAvoidsPairwiseSaturation) {
   if (onnx_light_cpu::DetectSimdLevel() < onnx_light_cpu::SimdLevel::kAVX2) {
     GTEST_SKIP() << "AVX2 is not available on this CPU";
   }
-  for (std::int64_t depth : {31, 32, 33, 255, 256, 257}) {
+  // 15 and below never reach the 128-bit remainder step; 16 through 31 cover
+  // the SSSE3 remainder path added to ``IntegerDotU8S8Avx2ShortTail`` to
+  // close the short-K "direct" GEMM gap, both below and above its own
+  // 16-byte boundary. Every depth is checked against both dot variants: the
+  // plain ``IntegerDotU8S8Avx2`` (selected for depths that are an exact
+  // multiple of 32) and ``IntegerDotU8S8Avx2ShortTail`` (selected otherwise).
+  for (std::int64_t depth : {1, 15, 16, 17, 20, 31, 32, 33, 255, 256, 257}) {
     std::vector<std::uint8_t> a(static_cast<std::size_t>(depth));
     std::vector<std::int8_t> b(static_cast<std::size_t>(depth));
     for (std::int64_t index = 0; index < depth; ++index) {
       a[static_cast<std::size_t>(index)] = index % 3 == 0 ? std::uint8_t{255} : std::uint8_t{128};
       b[static_cast<std::size_t>(index)] = index % 2 == 0 ? std::int8_t{127} : std::int8_t{-128};
     }
-    EXPECT_EQ(onnx_light_cpu::detail::IntegerDotU8S8Avx2(a.data(), b.data(), depth),
-              onnx_light_cpu::detail::IntegerDotU8S8Scalar(a.data(), b.data(), depth));
+    const std::int32_t expected =
+        onnx_light_cpu::detail::IntegerDotU8S8Scalar(a.data(), b.data(), depth);
+    EXPECT_EQ(onnx_light_cpu::detail::IntegerDotU8S8Avx2(a.data(), b.data(), depth), expected);
+    EXPECT_EQ(onnx_light_cpu::detail::IntegerDotU8S8Avx2ShortTail(a.data(), b.data(), depth),
+              expected);
   }
 }
 

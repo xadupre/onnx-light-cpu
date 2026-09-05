@@ -173,6 +173,15 @@ void PowFloat32LeftScalar_AVX512(float base, const float *exponent, float *outpu
                                  std::size_t count);
 #endif
 
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
+void PowFloat32_AVX2_FMA(const float *base, const float *exponent, float *output,
+                         std::size_t count);
+void PowFloat32LeftScalar_AVX2_FMA(float base, const float *exponent, float *output,
+                                   std::size_t count);
+void PowFloat32RightScalar_AVX2_FMA(const float *base, float exponent, float *output,
+                                    std::size_t count);
+#endif
+
 /// Computes elementwise natural logarithm: out[i] = log(input[i]) for float64.
 /// Dispatches to the best available SIMD path at runtime.
 void LogFloat64(const double *input, double *output, std::size_t count);

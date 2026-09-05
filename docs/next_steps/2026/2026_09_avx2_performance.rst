@@ -42,6 +42,44 @@ tests and vector-tail cases, and leave the automatic AVX-512 build unchanged.
 The final corpus target is at least ``1.0x`` ONNX Runtime median performance
 for each priority family, with no priority case below ``0.9x``.
 
+Reproducible baseline
+---------------------
+
+`Issue #631 <https://github.com/xadupre/onnx-light-cpu/issues/631>`_ establishes
+the measurement baseline for this roadmap without changing kernel
+implementations. Update the target branch before collecting results, then build
+the Python package in Release mode with the AVX2 ceiling:
+
+.. code-block:: bash
+
+    CMAKE_ARGS="-DCMAKE_BUILD_TYPE=Release -DONNX_LIGHT_CPU_MAX_SIMD_LEVEL=AVX2" \
+      python setup.py build_ext --inplace --onnx-light-source
+    PYTHONPATH=. python -c \
+      "from onnx_light_cpu import detect_simd_level; print(detect_simd_level().name)"
+    python tools/benchmark_avx2_parity.py \
+      --environment pinned --output avx2-parity.json
+
+The detected level must be ``AVX2``. The fixed float32 and float16 corpus covers
+GEMM/MatMul, Attention, activation and normalization, unary, and binary
+elementwise cases. It runs one-thread and process-visible physical-core policies
+with identical onnx-light-cpu and ONNX Runtime thread counts. Each runtime
+receives a separate timing phase, and the first runtime alternates between
+consecutive cases.
+
+The JSON records every raw sample, medians and dispersion, shapes, data types,
+loop families, CPU and affinity, SIMD ceiling and detected level, compiler,
+package versions, and timing order. Results are ranked by positive absolute
+latency gap and speedup, with Qwen decode and prefill rows labelled explicitly.
+The companion Markdown groups rows into ``<0.5x``, ``0.5x-0.9x``,
+``0.9x-1.0x``, and ``>=1.0x`` ONNX Runtime.
+
+Run the ``AVX2 parity baseline`` workflow to publish the JSON, Markdown, and
+environment capture as one artifact. Generated results are not committed.
+Results from shared runners are diagnostic, especially within 5--10% of parity;
+only ``--environment pinned`` results collected on pinned native AVX2 hardware
+may make a final parity decision. Follow-up issues should be opened only for the
+ranked measured bottlenecks listed by the report.
+
 Current foundation
 ------------------
 
