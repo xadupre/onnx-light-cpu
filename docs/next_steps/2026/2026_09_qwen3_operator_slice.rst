@@ -2,8 +2,9 @@ Qwen3 Non-MatMulNBits Operator Slice
 ====================================
 
 :Date: 2026-09
+:Updated: 2026-09-05
 
-**planned**
+**planned** (prerequisite compute kernels are partially implemented)
 
 Objective
 ---------
@@ -15,6 +16,10 @@ separates the small graph-execution and transformer-block slice from the much
 larger ``com.microsoft::MatMulNBits`` project so both can progress and be
 reviewed independently.
 
+The :doc:`missing-kernel implementation plan <2026_09_qwen3_missing_kernels>`
+breaks Operator PR03 and PR04 into smaller input, layout, and normalization
+PRs and coordinates them with the independent INT4 projection work.
+
 The exit condition is stronger than registering kernels by name: one complete
 Qwen decoder block must execute through native ``onnx-light`` and
 ``onnx-light-cpu`` paths, match ONNX Runtime, preserve view and optional-output
@@ -23,8 +28,8 @@ semantics, and report no untracked fallback for any operator covered here.
 Scope
 -----
 
-This plan covers ten missing execution surfaces and model-level coverage for
-the two operators already registered:
+This plan covers the missing execution surfaces and model-level coverage for
+the operators and shared primitives already registered:
 
 .. list-table::
    :header-rows: 1
@@ -52,8 +57,8 @@ the two operators already registered:
    * - ``ai.onnx::Cast``
      - 2
      - ``onnx-light-cpu``
-     - Convert INT64 sequence lengths to INT32 with checked conversion before
-       ``GroupQueryAttention``.
+     - Convert INT64 sequence lengths to INT32 with ONNX Cast semantics;
+       validate legal sequence lengths at the ``GroupQueryAttention`` boundary.
    * - ``ai.onnx::Gather``
      - 2
      - ``onnx-light-cpu``
@@ -72,8 +77,8 @@ the two operators already registered:
    * - ``ai.onnx::Sigmoid``
      - 28
      - ``onnx-light-cpu``
-     - Provide the FP32 activation used by ``x * sigmoid(x)`` and reuse the
-       completed Exp primitives without creating a private approximation.
+     - Reuse the registered FP32 activation for ``x * sigmoid(x)`` and retain
+       model-level coverage without creating a private approximation.
    * - ``ai.onnx::SimplifiedLayerNormalization``
      - 57
      - ``onnx-light-cpu``
@@ -113,12 +118,36 @@ The audited native graph does not require separate ``RotaryEmbedding``,
 The portable standard-ONNX graph retains them as differential coverage, but
 their broad operator roadmaps do not block this plan.
 
+Current implementation status
+-----------------------------
+
+The shared compute foundations are further along than the five-step sequence
+alone suggests:
+
+* ``GroupQueryAttention`` and its fused rotary path are delivered by #494 and
+  #507;
+* the shared ``RMSNormalization`` engine is delivered and optimized by #498
+  and #579;
+* ``Sigmoid`` is registered and subsequently optimized by #585, #600, and
+  #604;
+* ``Mul`` and ``Sub`` already use the registered binary engine and need
+  Qwen-shaped model coverage rather than new kernels.
+
+The operator slice itself is not complete. The deterministic block fixture,
+prepared metadata/view ownership, the audited ``Cast``/``Gather``/
+``ReduceSum``/``Split`` execution contracts, and both normalization
+compatibility adapters remain pending. References to ``Gather``, ``Cast``,
+``Expand``, ``Reshape``, ``Transpose`` or ``Where`` in graph construction and
+gradient code do not establish native execution coverage for this roadmap.
+
 Ownership and architecture
 --------------------------
 
-Metadata-only work belongs in ``onnx-light``. ``Constant`` and ``Shape`` must
-be resolved before timed execution, and ``Reshape`` must modify tensor
-metadata rather than copy a contiguous payload. Their plans must preserve
+Metadata-only work belongs in ``onnx-light``. Audit existing core support
+before adding implementations. Constants are prepared once; dynamic ``Shape``
+values use the current invocation's dimensions without reading payload bytes.
+``Reshape`` must modify tensor metadata rather than copy a contiguous payload.
+Their plans must preserve
 storage ownership, byte offsets, alignment, liveness and safe output release.
 A view may never outlive its backing allocation.
 
@@ -130,7 +159,14 @@ justifies parallel dispatch and do not create private thread pools.
 ``Split`` crosses the boundary: core runtime ownership determines whether
 outputs may alias disjoint ranges, while the CPU implementation provides the
 materialized fallback. The selected path must be observable through the
-execution diagnostics.
+execution diagnostics. Last-axis splits across multiple rows require strided
+views; use the materialized fallback if the runtime or consumers cannot
+represent those views.
+
+Persistent KV-cache lifecycle belongs to ``onnx-light`` and is outside this
+kernel slice. The first complete block uses GQA's existing tensor-cache
+interface; native CPU append and cache-aware Attention follow the upstream
+persistent-state contract separately.
 
 Experimental and Microsoft-domain normalization nodes are compatibility
 adapters, not independent numerical implementations. They validate their
@@ -158,7 +194,8 @@ test. Record which repository owns each missing surface before adding kernels.
 Operator PR02: metadata and views
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Implement prepared ``Constant`` and ``Shape`` values, followed by checked
+Reuse or complete prepared ``Constant`` and invocation-aware ``Shape`` values,
+followed by checked
 ``Reshape`` semantics. Cover scalar and empty shapes, one inferred ``-1``
 dimension, ``allowzero`` behavior, invalid element counts and integer
 overflow. Add runtime tests proving that legal contiguous reshapes share
@@ -172,9 +209,11 @@ Operator PR03: input and layout kernels
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Implement the exact ``Cast``, ``Gather``, ``ReduceSum`` and ``Split`` contracts
-listed above. Validate axes, negative indices, split totals, integer
-conversion bounds, output shapes and empty dimensions before entering hot
+listed above. Validate axes, negative indices, split totals, output shapes
+and empty dimensions before entering hot
 loops. ``Gather`` must not expand or duplicate the embedding initializer.
+Integer conversion must follow ONNX Cast semantics rather than introducing
+Qwen-specific rejection rules into the generic kernel.
 
 Each kernel first receives direct tests and ONNX Runtime differential cases,
 then executes in the one-block fixture. Optimized paths retain an independent
@@ -183,11 +222,11 @@ portable or scalar oracle.
 Operator PR04: activation and normalization adapters
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Register FP32 ``Sigmoid`` using the shared Exp implementation and cover
-ordinary values, signed zero, infinities, NaN and vector tails. Measure the
-separate ``Sigmoid`` and ``Mul`` traversals before considering a SiLU or gated
-MLP fusion. Reuse the existing registered ``SwiGLU`` kernel when its exact
-two-input contract matches; do not add a duplicate gated activation.
+Reuse the registered FP32 ``Sigmoid`` implementation and extend its coverage
+to the audited Qwen shapes. Measure the separate ``Sigmoid`` and ``Mul``
+traversals before considering a SiLU or gated MLP fusion. Reuse the existing
+registered ``SwiGLU`` kernel when its exact two-input contract matches; do not
+add a duplicate gated activation.
 
 Implement ``SimplifiedLayerNormalization`` and
 ``SkipSimplifiedLayerNormalization`` as schema adapters over the shared
@@ -220,7 +259,7 @@ Focused tests must cover:
 * exact audited opsets, attributes, types, shapes and optional outputs;
 * scalar, empty, singleton, dynamic and malformed shape cases;
 * negative Gather indices and out-of-range rejection;
-* checked INT64-to-INT32 Cast boundaries;
+* ONNX INT64-to-INT32 Cast boundary semantics and GQA length validation;
 * ReduceSum axes supplied as a tensor, with ``keepdims=0``;
 * Reshape ``0``/``-1`` rules, byte-size overflow and view lifetime;
 * equal and uneven Split sizes, last-axis views and materialized fallback;
@@ -246,7 +285,7 @@ allocation counts are reported alongside the median.
 
 The following structural gates are mandatory:
 
-* prepared ``Constant`` and ``Shape`` perform no timed payload computation;
+* prepared ``Constant`` and dynamic ``Shape`` perform no payload computation;
 * contiguous ``Reshape`` copies zero payload bytes;
 * eligible ``Split`` outputs share storage without violating ownership;
 * embedding ``Gather`` reads only selected rows;
@@ -284,9 +323,10 @@ PR sequence
      - Pending
    * - Operator PR04
      - ``onnx-light-cpu``
-     - Sigmoid and both normalization compatibility adapters.
+     - Qwen Sigmoid integration and both normalization compatibility adapters.
      - Operator PR03; completed ExpLog PR01--PR03, #498 and #579
-     - Pending
+     - Partially implemented: Sigmoid and the RMS engine are delivered; both
+       compatibility adapters remain
    * - Operator PR05
      - ``onnx-light-cpu``
      - Differential complete-block and performance/memory gates.

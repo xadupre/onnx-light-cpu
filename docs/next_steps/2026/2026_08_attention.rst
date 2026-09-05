@@ -2,24 +2,23 @@ Attention Performance Roadmap
 =============================
 
 :Date: 2026-08
-:Updated: 2026-09-02
+:Updated: 2026-09-05
 
-**in progress** (the published parity gate is not yet met)
+**complete**
 
 ``onnx-light-cpu`` provides materialized and bounded-memory streaming Attention
-for the roadmap types and cache modes. The 2026-09-01 dashboard reopened this
-roadmap: the FP32 and FP16 medians and several priority cases remained below
-the stated parity thresholds. The current optimization pass adds a
+for the roadmap types and cache modes. The optimization sequence adds a
 single-key value-copy path, tiled execution starting at query length 16,
 shape-adaptive query/KV blocks, and a tiled FP16 prefill path which converts
 half inputs while packing GEMM panels instead of widening complete Q and K
 tensors. These follow-ups were delivered by `#559
 <https://github.com/xadupre/onnx-light-cpu/pull/559>`_, `#569
 <https://github.com/xadupre/onnx-light-cpu/pull/569>`_, and `#578
-<https://github.com/xadupre/onnx-light-cpu/pull/578>`_. The registered backend corpus and
-``tools/benchmark_attention_parity.py`` remain the reproducible equal-thread
-gate against ONNX Runtime. Dedicated-machine reports, rather than shared CI
-timings, decide the narrow performance thresholds.
+<https://github.com/xadupre/onnx-light-cpu/pull/578>`_. #599 closes the
+remaining AVX-512 shape and scheduling gaps measured by the published
+dashboard. #605 and #608 establish the AVX2 scheduling and dedicated decode
+path; continued AVX2 tuning is tracked separately by the
+:doc:`AVX2 performance follow-up <2026_09_avx2_performance>`.
 
 Objective
 ---------
@@ -358,15 +357,15 @@ Pull-request sequence
        priority case below ``0.9x``. Raw equal-thread samples and environment
        metadata are published; controlled-thread runs remain diagnostic.
      - PR14 / #391
-     - Implementation delivered through #578; dedicated-machine acceptance
-       remains in progress
+     - Complete through #599; dedicated-machine reruns remain optional
+       cross-machine validation
 
 Roadmap PR15 (`#390
 <https://github.com/xadupre/onnx-light-cpu/issues/390>`_) and the #578
 corrective pass delivered the implementation, benchmarking, and memory work.
-Subsequent published measurements showed that the performance thresholds were
-not sustained. The roadmap remains open as a performance gate until a
-dedicated-machine run satisfies those thresholds for every priority type.
+The later #599 pass corrected the AVX-512 shape and participant-selection
+regressions exposed by the expanded dashboard. The roadmap is complete;
+operator-specific AVX2 gaps now belong to the AVX2 performance follow-up.
 
 AVX2 gap-closing pass (`#635 <https://github.com/xadupre/onnx-light-cpu/issues/635>`_)
 ---------------------------------------------------------------------------------------
