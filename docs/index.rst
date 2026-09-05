@@ -134,8 +134,6 @@ when two builds link different copies of ``lib_onnx_core``.
    :caption: Contents
 
    getting_started
-   command_line
-   standalone_cpp
    design/index
    byop
    api/index
