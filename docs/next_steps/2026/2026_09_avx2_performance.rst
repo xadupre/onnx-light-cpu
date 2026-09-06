@@ -66,6 +66,16 @@ with identical onnx-light-cpu and ONNX Runtime thread counts. Each runtime
 receives a separate timing phase, and the first runtime alternates between
 consecutive cases.
 
+.. warning::
+
+    Separate timing phases in the current implementation do not isolate the
+    runtimes' thread pools. The :doc:`2026_09_avx2_diagnostic_baseline`
+    demonstrates substantial interference from idle ORT spinning during
+    short multithread measurements. Until the runner isolates the runtimes,
+    its results are diagnostic even when ``--environment pinned`` is set.
+    Report the revision used to compile the binaries, not just HEAD at the
+    end of the run.
+
 The JSON records every raw sample, medians and dispersion, shapes, data types,
 loop families, CPU and affinity, SIMD ceiling and detected level, compiler,
 package versions, and timing order. Results are ranked by positive absolute
@@ -76,9 +86,16 @@ The companion Markdown groups rows into ``<0.5x``, ``0.5x-0.9x``,
 Run the ``AVX2 parity baseline`` workflow to publish the JSON, Markdown, and
 environment capture as one artifact. Generated results are not committed.
 Results from shared runners are diagnostic, especially within 5--10% of parity;
-only ``--environment pinned`` results collected on pinned native AVX2 hardware
-may make a final parity decision. Follow-up issues should be opened only for the
-ranked measured bottlenecks listed by the report.
+only isolated-runtime results collected on pinned native AVX2 hardware and
+labelled ``--environment pinned`` may make a final parity decision. Follow-up
+issues should be opened only for measured bottlenecks confirmed without
+cross-runtime thread-pool interference.
+
+The :doc:`2026_09_avx2_diagnostic_baseline` records the September 6 isolated
+follow-up. FP16 matrix paths, FP32 M=1, compact integer matrices, multithread
+FP64 and long-context Attention remain priorities. Selected RMSNormalization
+and BiasGelu cases are ahead of ORT, but the full isolated corpus and final
+acceptance gate remain pending.
 
 Current foundation
 ------------------
@@ -124,8 +141,9 @@ Work sequence
        and loop-family results under the AVX2 ceiling. The report ranks gaps
        by absolute latency and ONNX Runtime ratio before further tuning.
      - PR01
-     - Assigned in `#631
-       <https://github.com/xadupre/onnx-light-cpu/issues/631>`_
+     - Tooling delivered in `#632
+       <https://github.com/xadupre/onnx-light-cpu/pull/632>`_; process
+       isolation and complete baseline pending
    * - AVX2 PR02a
      - FP32/FP64 GEMM and MatMul.
      - FP32/FP64 register tiles, masked tails, packing, prefetch, and
