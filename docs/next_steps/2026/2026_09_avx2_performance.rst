@@ -156,9 +156,10 @@ Work sequence
        conversion, scalar tails, and unproductive scheduling while retaining
        their numerical contracts.
      - PR01.1
-     - Assigned in `#638
-       <https://github.com/xadupre/onnx-light-cpu/issues/638>`_; foundations
-       delivered through #604
+     - Delivered in `#638
+       <https://github.com/xadupre/onnx-light-cpu/issues/638>`_ (see
+       :doc:`2026_09_avx2_activation_normalization`); foundations delivered
+       through #604
    * - AVX2 PR04b
      - Unary and binary elementwise kernels.
      - Priority contiguous and broadcast cases avoid scalar tails and

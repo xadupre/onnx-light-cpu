@@ -27,15 +27,30 @@ void RmsNormalizationFloat16_F16C(const std::uint16_t *input, const std::uint16_
                                   std::size_t width, float epsilon) {
   for (std::size_t row = row_begin; row < row_end; ++row) {
     const std::size_t offset = row * width;
-    __m256 sum_squares8 = _mm256_setzero_ps();
+    // Four independent accumulators shorten the reduction's dependency chain
+    // (matching the float32 and bfloat16 AVX2 reductions), letting the
+    // out-of-order engine overlap the otherwise serialized multiply-adds.
+    // This translation unit is compiled with only ``-mavx -mf16c`` (no FMA),
+    // so the square is accumulated with a separate multiply and add.
+    __m256 sums[4] = {_mm256_setzero_ps(), _mm256_setzero_ps(), _mm256_setzero_ps(),
+                      _mm256_setzero_ps()};
     std::size_t column = 0;
+    for (; column + 32 <= width; column += 32) {
+      for (std::size_t lane = 0; lane < 4; ++lane) {
+        const __m128i packed =
+            _mm_loadu_si128(reinterpret_cast<const __m128i *>(input + offset + column + lane * 8));
+        const __m256 value = _mm256_cvtph_ps(packed);
+        sums[lane] = _mm256_add_ps(sums[lane], _mm256_mul_ps(value, value));
+      }
+    }
     for (; column + 8 <= width; column += 8) {
       const __m128i packed =
           _mm_loadu_si128(reinterpret_cast<const __m128i *>(input + offset + column));
       const __m256 value = _mm256_cvtph_ps(packed);
-      sum_squares8 = _mm256_add_ps(sum_squares8, _mm256_mul_ps(value, value));
+      sums[0] = _mm256_add_ps(sums[0], _mm256_mul_ps(value, value));
     }
-    float sum_squares = HorizontalSum(sum_squares8);
+    float sum_squares = HorizontalSum(
+        _mm256_add_ps(_mm256_add_ps(sums[0], sums[1]), _mm256_add_ps(sums[2], sums[3])));
     for (; column < width; ++column) {
       const float value = detail::Float16BitsToFloat(input[offset + column]);
       sum_squares += value * value;

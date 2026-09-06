@@ -16,6 +16,7 @@ optimize next.
     2026/2026_08_exp_log_parity
     2026/2026_08_qwen3_inference
     2026/2026_09_qwen3_operator_slice
+    2026/2026_09_avx2_activation_normalization
     2026/2026_09_qwen3_missing_kernels
     2026/2026_08_conv
     2026/2026_08_unary_elementwise
@@ -46,6 +47,13 @@ Started
       - Uses the explicit AVX2 SIMD ceiling to measure and rank the remaining
         gaps below the completed AVX-512 paths before optimizing matrix,
         Attention, activation, normalization, unary, and binary workloads.
+    * - :doc:`AVX2 activation and normalization gap closure
+        <2026/2026_09_avx2_activation_normalization>`
+      - Extends the #604 AVX2 activation work (AVX2 PR04a): measured
+        ``Sigmoid``, ``Softmax``, ``BiasGelu``, and ``RMSNormalization``
+        against ONNX Runtime and closed the one found gap, a serialized
+        Float16 RMSNormalization reduction; the full onnx-light
+        backend-corpus acceptance run remains.
     * - :doc:`AVX2 Gemm and MatMul gap closure <2026/2026_09_avx2_gemm_matmul>`
       - Measures the AVX2-ceiling FP32/FP64 Gemm/MatMul corpus from #633
         (AVX2 PR02a); dedicated AVX2-only hardware and an onnx-light checkout
