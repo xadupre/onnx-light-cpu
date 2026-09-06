@@ -577,6 +577,37 @@ TEST(GemmPlan, VectorizedSkinnyMMatchesReference) {
   }
 }
 
+TEST(GemmPlan, SingleRowColumnRangesRespectExecutorLimits) {
+  for (const std::size_t n : {64, 4097}) {
+    for (const std::int64_t threads : {1, 4}) {
+      InlineExecutor executor;
+      onnx_light_cpu::ExecutionExecutorView view{&executor, threads, &InlineExecutor::Run};
+      onnx_light_cpu::ExecutionExecutorScope scope(&view);
+      constexpr std::size_t k = 129;
+      const std::vector<float> a(k, 1.0f), b(k * n, 2.0f);
+      const std::vector<std::uint16_t> ah(k, 0x3c00), bh(k * n, 0x4000);
+      std::vector<float> y(n, -1.0f);
+      GemmPlan<float> plan(GemmPlanOptions<float>{false, false, 1, n, k});
+      plan.Execute(a.data(), b.data(), nullptr, y.data());
+      for (const float value : y) {
+        EXPECT_EQ(value, 2.0f * k);
+      }
+      GemmHalfPlan half(GemmHalfPlanOptions{false, false, false, 1, n, k});
+      half.Execute(ah.data(), bh.data(), {}, y.data());
+      for (const float value : y) {
+        EXPECT_EQ(value, 2.0f * k);
+      }
+      EXPECT_LE(executor.maximum_blocks, threads);
+      if (n == 4097 && threads > 1) {
+        EXPECT_GT(executor.maximum_blocks, 1);
+      }
+      if (n == 64) {
+        EXPECT_LE(executor.maximum_blocks, 1);
+      }
+    }
+  }
+}
+
 TEST(GemmPlan, PlannedAlgorithmsFallbackOutsideSelectionContract) {
   const std::array<float, 6> transposed_a = {1, 4, 2, 5, 3, 6};
   const std::array<float, 6> b = {1, 2, 3, 4, 5, 6};

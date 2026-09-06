@@ -83,6 +83,11 @@ ranked measured bottlenecks listed by the report.
 Current foundation
 ------------------
 
+The :doc:`2026_09_avx2_matrix_kernel_improvements` adds production AVX2
+FP16/FP32 single-row kernels and bounded FP16 panel widening, with controlled
+before/after measurements against ORT. Selected Qwen FP16 projections are
+ahead of ORT; small and medium matrix gaps and the full parity gate remain.
+
 The first AVX2-specific passes are already merged:
 
 * `#604 <https://github.com/xadupre/onnx-light-cpu/pull/604>`_ adds fused
@@ -139,8 +144,10 @@ Work sequence
      - FP16/BF16 conversion and integer/packed paths avoid scalar or
        full-tensor conversion bottlenecks on the priority shapes.
      - PR01.1
-     - Assigned in `#634
-       <https://github.com/xadupre/onnx-light-cpu/issues/634>`_
+     - Initial work in `#634
+       <https://github.com/xadupre/onnx-light-cpu/issues/634>`_; FP16 follow-up
+       in :doc:`2026_09_avx2_matrix_kernel_improvements`, full compact-type
+       parity still pending
    * - AVX2 PR03
      - Attention.
      - Decode, short-query, and prefill cases use AVX2 score and value kernels

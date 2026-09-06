@@ -543,6 +543,56 @@ TEST(GemmFloat32, SkinnyMSingleRowRegisterPanelsMatchReference) {
   }
 }
 
+TEST(GemmFloat32, SkinnyMSingleRowDepthAndColumnTails) {
+  for (const std::size_t N : {63, 64, 65, 127, 128, 129, 255, 256, 257, 514}) {
+    for (const std::size_t K : {63, 64, 65, 129}) {
+      const auto a = RandomVector(K, 941);
+      const auto b = RandomVector(K * N, 942);
+      const auto c = RandomVector(N, 943);
+      for (const bool trans_a : {false, true}) {
+        for (const bool alias_bias : {false, true}) {
+          SCOPED_TRACE(::testing::Message()
+                       << N << "," << K << "," << trans_a << "," << alias_bias);
+          const auto expected =
+              ReferenceGemm<float>(trans_a, false, 1, N, K, -0.75f, a, b, 1.25f, &c);
+          auto y = c;
+          onnx_light_cpu::GemmFloat32(trans_a, false, 1, N, K, -0.75f, a.data(), b.data(), 1.25f,
+                                      alias_bias ? y.data() : c.data(), y.data());
+          for (std::size_t n = 0; n < N; ++n) {
+            EXPECT_NEAR(y[n], expected[n], 2e-4f) << n;
+          }
+        }
+      }
+    }
+  }
+}
+
+TEST(GemmFloat32, SkinnyMSingleRowSpecialValuesAndEmptyDepth) {
+  constexpr std::size_t N = 73, K = 129;
+  std::vector<float> a(K, 1.0f), b(K * N, 1.0f), y(N);
+  b[0] = std::numeric_limits<float>::infinity();
+  b[64 * N + 1] = -std::numeric_limits<float>::infinity();
+  b[128 * N + 2] = std::numeric_limits<float>::quiet_NaN();
+  for (const float alpha : {1.0f, 0.0f}) {
+    onnx_light_cpu::GemmFloat32(false, false, 1, N, K, alpha, a.data(), b.data(), 0.0f, nullptr,
+                                y.data());
+    if (alpha == 0.0f) {
+      EXPECT_TRUE(std::isnan(y[0]));
+      EXPECT_TRUE(std::isnan(y[1]));
+    } else {
+      EXPECT_EQ(y[0], std::numeric_limits<float>::infinity());
+      EXPECT_EQ(y[1], -std::numeric_limits<float>::infinity());
+    }
+    EXPECT_TRUE(std::isnan(y[2]));
+    EXPECT_EQ(y.back(), alpha * K);
+  }
+  onnx_light_cpu::GemmFloat32(false, false, 1, N, 0, 1.0f, nullptr, nullptr, 0.0f, nullptr,
+                              y.data());
+  for (const float value : y) {
+    EXPECT_EQ(value, 0.0f);
+  }
+}
+
 // A single output column (N == 1) with many rows and a long reduction hits the
 // skinny-N path, whose unit-stride dot product carries sixteen partial sums for
 // full-width AVX. K == 1000 is not a multiple of that unroll, so the scalar tail
@@ -881,6 +931,51 @@ TEST(GemmHalf, Float16VectorizedPackingTails) {
   CheckGemmHalf(false, false, false, 19, 37, 45, false, 141);
   CheckGemmHalf(false, false, false, 33, 70, 66, true, 151);
 }
+
+TEST(GemmHalf, Float16SingleRowDepthAndColumnTails) {
+  for (const std::size_t N : {2, 18, 34, 63, 64, 65, 66, 127, 128, 129, 255, 256, 257, 258}) {
+    for (const std::size_t K : {63, 64, 65, 129}) {
+      for (const bool trans_a : {false, true}) {
+        SCOPED_TRACE(::testing::Message() << N << "," << K << "," << trans_a);
+        CheckGemmHalf(false, trans_a, false, 1, N, K, true, 951);
+      }
+    }
+  }
+}
+
+TEST(GemmHalf, Float16SkinnyMTwoColumnTailUsesPhysicalStride) {
+  for (const std::size_t N : {18, 34, 66}) {
+    for (const std::size_t M : {2, 3}) {
+      CheckGemmHalf(false, false, false, M, N, 129, false, 961);
+    }
+  }
+}
+
+#if defined(ONNX_LIGHT_CPU_HAVE_AVX2_FMA) && defined(ONNX_LIGHT_CPU_HAVE_F16C)
+TEST(GemmHalf, Float16SingleRowAvx2RangePreservesBoundsAndSpecialValues) {
+  if (onnx_light_cpu::DetectSimdLevel() < onnx_light_cpu::SimdLevel::kAVX2 ||
+      !onnx_light_cpu::CpuSupportsFma() || !onnx_light_cpu::CpuSupportsF16C()) {
+    GTEST_SKIP() << "CPU does not support AVX2/FMA/F16C";
+  }
+  constexpr std::size_t N = 73, K = 129;
+  std::vector<std::uint16_t> a(K, 0x3c00), b(K * N, 0x3c00);
+  b[3] = 0x7c00;
+  b[64 * N + 4] = 0xfc00;
+  b[128 * N + 69] = 0x7e00;
+  std::vector<float> y(N, -7.0f);
+  onnx_light_cpu::GemmSkinnyM1Range_AVX2_F16C(N, K, 0.5f, a.data(), b.data(), y.data(), 3, 70);
+  EXPECT_EQ(y[3], std::numeric_limits<float>::infinity());
+  EXPECT_EQ(y[4], -std::numeric_limits<float>::infinity());
+  EXPECT_TRUE(std::isnan(y[69]));
+  for (std::size_t n = 0; n < N; ++n) {
+    if (n < 3 || n >= 70) {
+      EXPECT_EQ(y[n], -7.0f);
+    } else if (n != 3 && n != 4 && n != 69) {
+      EXPECT_EQ(y[n], 0.5f * K);
+    }
+  }
+}
+#endif
 
 TEST(GemmHalf, Float16TransposeVariants) {
   for (bool trans_a : {false, true}) {
