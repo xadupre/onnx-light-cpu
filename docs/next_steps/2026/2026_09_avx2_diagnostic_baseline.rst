@@ -1,5 +1,5 @@
 AVX2 Isolated-Runtime Diagnostic Baseline
-=========================================
+==========================================
 
 :Date: 2026-09-06
 
@@ -13,7 +13,7 @@ passes. It also exposes a measurement bias in the shared-process benchmark.
 No production kernel or benchmark implementation changes accompany this report.
 
 Environment and build provenance
----------------------------------
+--------------------------------
 
 * Intel Core i7-13800H under WSL2, with process affinity
   ``0,2,4,6,8,10,12,14,16,18`` and explicit one-thread and ten-thread policies.
@@ -96,7 +96,7 @@ The original multithread family medians and rankings must therefore not be
 used as final parity evidence.
 
 Isolated measurement protocol
-------------------------------
+-----------------------------
 
 The diagnostic driver collected existing backend cases with
 ``TestMode.BENCHMARK`` and ``generate_benchmark_expected_outputs=False``.
