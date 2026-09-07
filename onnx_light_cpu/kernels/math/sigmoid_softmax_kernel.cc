@@ -122,8 +122,8 @@ void SigmoidHalf(const std::uint16_t *input, std::uint16_t *output, std::size_t 
       });
 }
 
-ExecutionSchedule MakeSoftmaxRowSchedule(std::size_t row_bytes) {
-  constexpr std::size_t threshold_bytes = 128 * 1024;
+ExecutionSchedule MakeSoftmaxRowSchedule(std::size_t row_bytes,
+                                         std::size_t threshold_bytes = 128 * 1024) {
   constexpr std::size_t target_block_bytes = 16 * 1024;
   const auto bytes_to_rows = [row_bytes](std::size_t bytes) {
     return static_cast<std::int64_t>(std::max<std::size_t>((bytes + row_bytes - 1) / row_bytes, 1));
@@ -145,12 +145,15 @@ void SoftmaxLastAxis(const T *input, T *output, std::int64_t rows, std::int64_t 
     static const bool use_avx2_fma = DetectSimdLevel() >= SimdLevel::kAVX2 && CpuSupportsFma();
     if (use_avx2_fma) {
       const std::size_t row_bytes = static_cast<std::size_t>(columns) * sizeof(T);
-      DispatchSoftmaxRows(rows, row_bytes, [=](std::int64_t begin, std::int64_t end) {
-        const std::size_t offset = static_cast<std::size_t>(begin * columns);
-        SoftmaxFloat32_AVX2_FMA(input + offset, output + offset,
-                                static_cast<std::size_t>(end - begin),
-                                static_cast<std::size_t>(columns));
-      });
+      static const std::size_t threshold_bytes =
+          DetectSimdLevel() == SimdLevel::kAVX2 ? 1024 * 1024 : 128 * 1024;
+      ExecuteRanges(rows, MakeSoftmaxRowSchedule(row_bytes, threshold_bytes),
+                    [=](std::int64_t begin, std::int64_t end) {
+                      const std::size_t offset = static_cast<std::size_t>(begin * columns);
+                      SoftmaxFloat32_AVX2_FMA(input + offset, output + offset,
+                                              static_cast<std::size_t>(end - begin),
+                                              static_cast<std::size_t>(columns));
+                    });
       return;
     }
   }

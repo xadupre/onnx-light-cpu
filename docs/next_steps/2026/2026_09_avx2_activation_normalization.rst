@@ -2,7 +2,7 @@ AVX2 Activation and Normalization Gap Closure
 ==============================================
 
 :Date: 2026-09
-:Updated: 2026-09-05
+:Updated: 2026-09-07
 
 **in progress**
 
@@ -19,6 +19,14 @@ extends it only where a fresh measurement shows a remaining bottleneck.
 
 Measured baseline
 ------------------
+
+.. warning::
+
+    This September 5 direct-kernel comparison did not establish registered
+    runtime parity. The later :doc:`2026_09_avx2_performance` follow-up found
+    unreachable fused activation dispatch and end-to-end gaps, including
+    substantial multithread overhead. Use isolated registered-runtime
+    measurements for parity decisions.
 
 A direct AVX2-ceiling Release build (no onnx-light integration required) was
 used to microbenchmark every targeted kernel entry point at small-row,
@@ -114,14 +122,112 @@ Validation
   without the AVX2/FMA compile flags available to the AVX2-ceiling build,
   since this translation unit only requests ``-mavx -mf16c``.
 
+September 7 registered-runtime follow-up
+----------------------------------------
+
+After the dispatch correction in
+`#653 <https://github.com/xadupre/onnx-light-cpu/pull/653>`_, a focused pass
+improves the existing AVX2/FMA activation implementation:
+
+* Sigmoid uses vector division instead of reciprocal approximation,
+  Newton refinement, and a separate zero-exponential correction. Two
+  independent eight-lane groups share the same helper with masked tails.
+  Positive-infinity saturation remains exactly one.
+* The negative exponential helper is explicitly inlined and omits its
+  redundant positive-input comparison: its only callers pass negative
+  absolute values or max-subtracted Softmax values. The polynomial and
+  subnormal/NaN/infinity fallback are unchanged.
+* AVX2 FP32 Softmax keeps inputs below 1 MiB serial instead of dispatching
+  workers from 128 KiB. Larger inputs retain runtime-owned row parallelism.
+  The ISA-dependent threshold is cached, avoiding CPUID on every call.
+  Other ISA/type schedules and Sigmoid scheduling are unchanged.
+
+The baseline was rebuilt from ``66bf6ed`` on a native AVX2 Core i7-13800H,
+Windows/MSVC Release, Python 3.13 and ORT 1.29. Baseline and modified native
+modules were archived separately; worker imports pin and verify their paths
+and hashes. Each existing backend fixture was serialized once and reused
+unchanged. No expanded input or output computation was moved outside timing.
+
+For each case, separate processes ran baseline CPU, modified CPU, ORT,
+modified CPU, then baseline CPU. Each process exited before the next started.
+The table uses the median of the two per-process CPU medians, with 30 warmups,
+up to 1,000 samples and a 0.25 s sampling budget per phase. Affinity masks
+were ``0x10`` for one thread and ``0x555`` for six threads.
+All latencies are milliseconds; **ORT/CPU below one means CPU remains slower**.
+
+.. list-table::
+   :header-rows: 1
+
+   * - FP32 case
+     - Threads
+     - Before
+     - After
+     - Before/after
+     - ORT/CPU
+   * - Sigmoid, 65,536
+     - 1
+     - 0.08065
+     - 0.06195
+     - 1.30x
+     - 0.84x
+   * - Sigmoid, 1,048,576
+     - 1
+     - 1.12288
+     - 1.03160
+     - 1.09x
+     - 0.63x
+   * - Sigmoid, 1,048,576
+     - 6
+     - 0.27802
+     - 0.20438
+     - 1.36x
+     - 0.46x
+   * - Sigmoid, 4,194,304
+     - 6
+     - 2.07120
+     - 1.25253
+     - 1.65x
+     - 1.62x
+   * - Softmax, 32 x 1,024
+     - 6
+     - 0.05205
+     - 0.01845
+     - 2.82x
+     - 0.81x
+   * - Softmax, 1,024 x 1,024
+     - 1
+     - 0.81262
+     - 0.50930
+     - 1.60x
+     - 0.97x
+   * - Softmax, 1,024 x 1,024
+     - 6
+     - 0.34985
+     - 0.34123
+     - 1.03x
+     - 0.46x
+
+These are shared-host diagnostics, not a completed parity gate. Earlier
+whole-corpus-before/after phases showed substantial frequency/load variation;
+the paired protocol reduces but does not eliminate it. In particular,
+the 1.03x large multithread Softmax change is not an established improvement.
+A longer tiny-shape confirmation (1,000 warmups, up to 20,000 samples or 1 s)
+measured Sigmoid/1,024 at 0.00860 ms for both variants and Softmax/1x1,024
+at 0.00880 versus 0.00860 ms, resolving an apparent short-run regression.
+Alternating direct-kernel measurements also support a roughly 1.4x Sigmoid
+compute improvement, but do not replace the registered-runtime results.
+
+Regression coverage includes exact dispatch, aliasing, every short Sigmoid
+tail, subnormal-range inputs, mixed NaN/infinite Softmax rows, and serial
+versus reverse-order executor equivalence on a large tail-bearing tensor.
+It also checks the new serial threshold, bounded participant counts, and
+nested-dispatch suppression.
+
 Remaining priority cases
 -------------------------
 
-No registered ``Sigmoid``, ``Softmax``, ``BiasGelu``, or ``RMSNormalization``
-FP32 case was found below ``0.9x`` ONNX Runtime on the development host using
-the direct-kernel/ONNX-Runtime-single-node comparison described above. A full
-backend-corpus run through ``onnx-light-cpu benchmark --onnxruntime`` (which
-requires the onnx-light Python integration) is needed to confirm this holds
-through the complete registered-kernel dispatch, scheduling, and tensor
-allocation path, and to check the remaining BFloat16 and Float16 ``Softmax``
-low-precision loop-family cases end to end.
+The direct-kernel comparison above must not be interpreted as registered
+``Sigmoid`` or ``Softmax`` parity. The full dispatch, scheduling, and tensor
+allocation path must be measured with isolated runtime processes. Large
+multithread activations and the remaining BFloat16 and Float16 ``Softmax``
+loop families still require end-to-end parity coverage.
