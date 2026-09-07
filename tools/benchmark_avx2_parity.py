@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Measure and rank the AVX2 backend corpus against ONNX Runtime."""
+"""Measure and rank the AVX2 backend corpus against ONNX Runtime.
+
+Each runtime runs in a fresh process, which exits before the next starts.
+Per-case model/input fixtures are shared across runtimes and thread policies;
+scratch files live under the working directory and are removed after each case.
+Native import paths and hashes identify the binaries, not their source revision.
+"""
 
 from __future__ import annotations
 
@@ -9,13 +15,21 @@ import json
 import math
 import os
 import platform
+import re
 import shlex
+import shutil
 import statistics
 import subprocess
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Sequence
+from uuid import uuid4
+
+if __package__:
+    from . import _avx2_parity_worker as isolation
+else:
+    import _avx2_parity_worker as isolation
 
 THREAD_POLICIES = ("1", "physical")
 AVX2_DTYPES = ("float32", "float16")
@@ -270,8 +284,11 @@ def build_report(
                 (*shlex.split(os.environ.get("CXX", "c++")), "--version")
             ),
             "compiler_flags": os.environ.get("CXXFLAGS", ""),
+            "compiler_scope": "current environment, not verified binary build settings",
             "python": platform.python_version(),
             "git_revision": _command_output(("git", "rev-parse", "HEAD")),
+            "git_revision_scope": "checkout HEAD, not the compiled binary source revision",
+            "compiled_source_revision": None,
             "versions": _package_versions(),
         },
         "groups": groups,
@@ -316,6 +333,17 @@ def render_markdown(report: dict[str, Any]) -> str:
             "",
         ]
     )
+    if "runtime_isolation" in metadata:
+        lines.extend(
+            [
+                f"- Runtime isolation: {metadata['runtime_isolation']}.",
+                (
+                    "- Compiled source revision: **unknown**. Checkout HEAD is not binary "
+                    "provenance; native module paths and hashes are recorded in JSON."
+                ),
+                "",
+            ]
+        )
     if report["unsupported"]:
         lines.extend(
             [
@@ -391,8 +419,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         parser.error("--repeat must be positive")
     if args.warmup < 0:
         parser.error("--warmup must be non-negative")
-    if args.max_repeat_time <= 0:
-        parser.error("--max-repeat-time must be positive")
+    if not math.isfinite(args.max_repeat_time) or args.max_repeat_time <= 0:
+        parser.error("--max-repeat-time must be finite and positive")
     if args.output.suffix.lower() != ".json":
         parser.error("--output must have a .json extension")
     return args
@@ -400,8 +428,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
     """Runs the selected thread policies and returns one combined report."""
-    from onnx_light_cpu import SimdLevel, detect_simd_level
-    from onnx_light_cpu._benchmark import run_backend_benchmark
+    from onnx_light.onnx.backend import (  # pyrefly: ignore[missing-import]
+        TestMode,
+        collect_test_cases_by_name,
+    )
+    from onnx_light_cpu import SimdLevel, detect_simd_level, register_backend_test_cases
+    from onnx_light_cpu._benchmark import _case_dtype
 
     simd_level = detect_simd_level()
     if simd_level != SimdLevel.AVX2:
@@ -409,37 +441,79 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             f"AVX2 benchmark requires detected SIMD level AVX2, got {simd_level.name}"
         )
 
+    register_backend_test_cases()
+    modules = isolation.import_snapshot()
+    shared_libraries = isolation.shared_library_snapshot()
     raw_rows = []
     aggregated_rows = []
     physical_threads = physical_core_count()
-    for policy in args.thread_policies:
-        threads = 1 if policy == "1" else physical_threads
-        for pattern, corpus_dtypes in AVX2_CORPUS:
-            selected_dtypes = tuple(dtype for dtype in corpus_dtypes if dtype in args.dtypes)
-            if not selected_dtypes:
-                continue
-            raw, aggregated = run_backend_benchmark(
-                tests=(pattern,),
-                dtypes=selected_dtypes,
-                repeat=args.repeat,
-                warmup=args.warmup,
-                max_repeat_time=args.max_repeat_time,
-                threads=threads,
-                with_onnxruntime=True,
-                alternate_runtime_order=True,
+    for pattern, corpus_dtypes in AVX2_CORPUS:
+        selected_dtypes = tuple(dtype for dtype in corpus_dtypes if dtype in args.dtypes)
+        if not selected_dtypes:
+            continue
+        cases = [
+            case
+            for case in collect_test_cases_by_name(
+                "^test_cpu_.*_benchmark$",
+                mode=TestMode.BENCHMARK,
+                generate_benchmark_expected_outputs=False,
             )
-            for row in (*raw, *aggregated):
-                row["thread_policy"] = policy
-            raw_rows.extend(raw)
-            aggregated_rows.extend(aggregated)
+            if re.search(pattern, case.name) and _case_dtype(case.name) in selected_dtypes
+        ]
+        if not cases:
+            raise ValueError(
+                f"no benchmark backend test matches tests={[pattern]!r}, "
+                f"dtypes={list(selected_dtypes)!r}"
+            )
+        for index, case in enumerate(cases, start=1):
+            print(f"[{index}/{len(cases)}] {case.name}", file=sys.stderr, flush=True)
+            directory = Path(f".avx2-parity-{uuid4().hex}").resolve()
+            directory.mkdir()
+            try:
+                fixture = isolation.write_fixture(case, directory)
+                for policy in args.thread_policies:
+                    request = {
+                        "version": isolation.PROTOCOL_VERSION,
+                        "directory": str(directory),
+                        "fixture": fixture,
+                        "modules": modules,
+                        "shared_libraries": shared_libraries,
+                        "sys_path": [str(Path(path).resolve()) for path in sys.path],
+                        "repeat": args.repeat,
+                        "warmup": args.warmup,
+                        "max_repeat_time": args.max_repeat_time,
+                        "threads": 1 if policy == "1" else physical_threads,
+                    }
+                    raw, aggregate = isolation.measure_isolated(request, ort_first=index % 2 == 0)
+                    for row in (*raw, aggregate):
+                        row["thread_policy"] = policy
+                        row["fixture_sha256"] = fixture["sha256"]
+                    raw_rows.extend(raw)
+                    aggregated_rows.append(aggregate)
+            finally:
+                try:
+                    case.unload()
+                finally:
+                    shutil.rmtree(directory)
 
-    return build_report(
+    report = build_report(
         raw_rows,
         aggregated_rows,
         environment=args.environment,
         command=shlex.join(sys.argv),
         simd_level=simd_level.name,
     )
+    report["metadata"].update(
+        runtime_isolation="sequential subprocesses per case; process exit between runtimes",
+        fixture_protocol=isolation.PROTOCOL_VERSION,
+        native_modules={
+            name: {"path": entry["path"], "sha256": entry["sha256"]}
+            for name, entry in modules.items()
+            if entry["sha256"]
+        },
+        shared_libraries=shared_libraries,
+    )
+    return report
 
 
 def main(argv: Sequence[str] | None = None) -> int:

@@ -145,6 +145,8 @@ def test_cli_rejects_invalid_measurement_limits_and_output():
         ["--repeat", "0"],
         ["--warmup=-1"],
         ["--max-repeat-time", "0"],
+        ["--max-repeat-time", "nan"],
+        ["--max-repeat-time", "inf"],
         ["--output", "results.txt"],
     ):
         with redirect_stderr(io.StringIO()):

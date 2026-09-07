@@ -3,7 +3,9 @@ AVX2 Matrix Kernel Improvements
 
 :Date: 2026-09-06
 
-**Implemented; full ORT parity remains in progress**
+**in progress**
+
+Kernel improvements implemented; full ORT parity remains in progress.
 
 This implementation follows the isolated diagnostic measurements in
 `#645 <https://github.com/xadupre/onnx-light-cpu/pull/645>`_. It changes
