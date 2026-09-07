@@ -126,6 +126,150 @@ TEST(BinaryKernelDescriptor, AssignsStableDistinctCacheIdentities) {
   EXPECT_NE(first.cache_identity(), second.cache_identity());
 }
 
+TEST(BinaryKernelDescriptor, Mod28EnablesFloatingRemainderWithoutChangingOlderOpsets) {
+  const auto &entry = GetBinaryManifestEntry("Mod");
+  EXPECT_EQ(entry.since_version, 28);
+  EXPECT_EQ(entry.minimum_version, 10);
+  for (const auto type : {BinaryDataType::FLOAT, BinaryDataType::DOUBLE, BinaryDataType::FLOAT16,
+                          BinaryDataType::BFLOAT16}) {
+    for (const int version : {10, 13, 27}) {
+      EXPECT_THROW((BinaryKernelDescriptor("Mod", version, {}).ResolveOutputType(type, type)),
+                   std::invalid_argument);
+      BinaryKernelDescriptor::Attributes attrs;
+      attrs.mod_fmod = 1;
+      EXPECT_EQ(BinaryKernelDescriptor("Mod", version, attrs).ResolveOutputType(type, type), type);
+    }
+    EXPECT_EQ(BinaryKernelDescriptor("Mod", 28, {}).ResolveOutputType(type, type), type);
+  }
+}
+
+template <typename T, typename Encode, typename Decode>
+void CheckFloatingModAdapters(BinaryDataType type, Encode encode, Decode decode) {
+  const double inf = std::numeric_limits<double>::infinity();
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  struct Case {
+    double left, right, remainder, fmod;
+  };
+  const Case cases[] = {
+      {5.5, 2, 1.5, 1.5},
+      {-5.5, 2, 0.5, -1.5},
+      {5.5, -2, -0.5, 1.5},
+      {-5.5, -2, -1.5, -1.5},
+      {4, -2, -0.0, 0.0},
+      {-4, 2, 0.0, -0.0},
+      {0.0, -2, -0.0, 0.0},
+      {-0.0, 2, 0.0, -0.0},
+      {0.0, 2, 0.0, 0.0},
+      {-0.0, -2, -0.0, -0.0},
+      {-3, inf, inf, -3},
+      {3, inf, 3, 3},
+      {-1, -inf, -1, -1},
+      {1, -inf, -inf, 1},
+      {inf, 2, nan, nan},
+      {-inf, 2, nan, nan},
+      {inf, -2, nan, nan},
+      {-inf, -2, nan, nan},
+      {1, 0.0, nan, nan},
+      {1, -0.0, nan, nan},
+      {nan, 2, nan, nan},
+      {nan, -2, nan, nan},
+      {1, nan, nan, nan},
+      {inf, inf, nan, nan},
+      {0.0, -inf, -0.0, 0.0},
+      {-0.0, inf, 0.0, -0.0},
+      // The quotient overflows FLOAT16; a quotient-based implementation loses this remainder.
+      {65504, 0.25, 0.0, 0.0},
+      {-65504, 0.25, 0.0, -0.0},
+  };
+  for (const int fmod : {0, 1}) {
+    BinaryKernelDescriptor::Attributes attributes;
+    attributes.mod_fmod = fmod;
+    const BinaryKernelDescriptor descriptor("Mod", 28, attributes);
+    const auto &adapter = descriptor.ResolveAdapter(type, type, type);
+    ASSERT_NE(adapter.bulk_contiguous, nullptr);
+    ASSERT_NE(adapter.bulk_left_scalar, nullptr);
+    ASSERT_NE(adapter.bulk_right_scalar, nullptr);
+    for (const auto &test : cases) {
+      SCOPED_TRACE(::testing::Message() << "type=" << static_cast<int>(type) << " fmod=" << fmod
+                                        << " left=" << test.left << " right=" << test.right);
+      const double expected = decode(encode(fmod == 0 ? test.remainder : test.fmod));
+      const auto check = [&](T value) {
+        const double actual = decode(value);
+        if (std::isnan(expected)) {
+          EXPECT_TRUE(std::isnan(actual));
+        } else {
+          EXPECT_EQ(actual, expected);
+          EXPECT_EQ(std::signbit(actual), std::signbit(expected));
+        }
+      };
+      T left = encode(test.left), right = encode(test.right), output{};
+      adapter.scalar(&left, &right, &output);
+      check(output);
+      for (const std::size_t count : {0, 1, 7, 8, 9, 15, 16, 17, 1023, 1024, 1025}) {
+        SCOPED_TRACE(count);
+        std::vector<T> a(count + 1, left), b(count + 1, right);
+        const T sentinel = encode(42);
+        std::vector<T> result(count + 1, sentinel);
+        for (auto bulk :
+             {adapter.bulk_contiguous, adapter.bulk_left_scalar, adapter.bulk_right_scalar}) {
+          bulk(a.data(), b.data(), result.data(), count);
+          for (std::size_t i = 0; i < count; ++i) {
+            check(result[i]);
+          }
+          EXPECT_EQ(result[count], sentinel);
+        }
+        adapter.bulk_contiguous(a.data(), b.data(), a.data(), count);
+        for (std::size_t i = 0; i < count; ++i) {
+          check(a[i]);
+        }
+      }
+    }
+  }
+}
+
+TEST(BinaryKernelDescriptor, ModFloatingScalarBulkBroadcastAndTailsPreserveSpecialValues) {
+  CheckFloatingModAdapters<float>(
+      BinaryDataType::FLOAT, [](double value) { return static_cast<float>(value); },
+      [](float value) { return value; });
+  CheckFloatingModAdapters<double>(
+      BinaryDataType::DOUBLE, [](double value) { return value; },
+      [](double value) { return value; });
+  CheckFloatingModAdapters<std::uint16_t>(
+      BinaryDataType::FLOAT16,
+      [](double value) {
+        return onnx_light_cpu::detail::FloatToFloat16Bits(static_cast<float>(value));
+      },
+      onnx_light_cpu::detail::Float16BitsToFloat);
+  CheckFloatingModAdapters<std::uint16_t>(
+      BinaryDataType::BFLOAT16,
+      [](double value) {
+        return onnx_light_cpu::detail::FloatToBFloat16Bits(static_cast<float>(value));
+      },
+      onnx_light_cpu::detail::Bfloat16BitsToFloat);
+}
+
+TEST(BinaryKernelDescriptor, ModFloatingRemainderAvoidsOverflowingQuotients) {
+  const auto check = []<typename T>(BinaryDataType type) {
+    const BinaryKernelDescriptor descriptor("Mod", 28, {});
+    const auto &adapter = descriptor.ResolveAdapter(type, type, type);
+    const T large = std::ldexp(T{1}, std::numeric_limits<T>::max_exponent - 1);
+    const T small = std::numeric_limits<T>::min();
+    for (const T left : {large, -large}) {
+      for (const T right : {small, -small}) {
+        T output{};
+        adapter.scalar(&left, &right, &output);
+        EXPECT_EQ(output, T{0});
+        EXPECT_EQ(std::signbit(output), std::signbit(right));
+        adapter.bulk_contiguous(&left, &right, &output, 1);
+        EXPECT_EQ(output, T{0});
+        EXPECT_EQ(std::signbit(output), std::signbit(right));
+      }
+    }
+  };
+  check.operator()<float>(BinaryDataType::FLOAT);
+  check.operator()<double>(BinaryDataType::DOUBLE);
+}
+
 TEST(BinaryKernelDescriptor, SameTypeSignaturesProvideAllBulkLoopFamilies) {
   for (const auto &entry : GetBinaryManifest()) {
     BinaryKernelDescriptor::Attributes attributes;

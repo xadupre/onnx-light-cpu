@@ -55,7 +55,7 @@ Tensor MakeLike(const Tensor &x, RuntimeContext *rt) {
 }
 
 inline constexpr UnaryExecutionTuning kActivationExecutionTuning{256 * 1024, 256 * 1024, 32, false};
-inline constexpr UnaryExecutionTuning kSerialExecutionTuning{};
+inline constexpr UnaryExecutionTuning kSerialExecutionTuning{0, 1, 0, false};
 
 template <typename T> void SigmoidRange(const T *input, T *output, std::size_t count) {
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA

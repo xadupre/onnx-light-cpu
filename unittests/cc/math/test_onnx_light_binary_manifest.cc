@@ -6,7 +6,9 @@
 #include "onnx_light_cpu/impl/math/binary/binary_manifest.h"
 #include "onnx_light_cpu/kernels/elementwise/binary_kernel.h"
 
+#include "onnx_core/runtime/kernels/cast_helper.h"
 #include "onnx_core/runtime/kernels/kernel_context.h"
+#include "onnx_core/runtime/kernels/tensor_compare.h"
 #include "onnx_core/runtime/memory/simple_tensor.h"
 #include "onnx_core/runtime/tuning/kernel_tuning.h"
 #include "onnx_core/runtime/tuning/kernel_tuning_cache.h"
@@ -18,6 +20,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <filesystem>
+#include <limits>
 #include <optional>
 #include <set>
 #include <string>
@@ -163,6 +166,57 @@ TEST(OnnxLightBinaryManifest, RegistersValidatedTuningSchemaForEveryOperatorAndI
       EXPECT_EQ(parameters.Get<int64_t>("parallel.target_block_bytes"), 1024 * 1024);
       EXPECT_EQ(parameters.Get<int64_t>("parallel.max_participants"), 0);
       EXPECT_NO_THROW(schema->Validate(parameters));
+    }
+  }
+}
+
+TEST(OnnxLightBinaryManifest, Mod28FloatingRemainderUsesDefaultAndExplicitAttributes) {
+  const double inf = std::numeric_limits<double>::infinity();
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  const std::vector<double> a = {-5.5, 5.5, -5.5, 5.5,  0.0, -0.0, -3,  3,
+                                 -1,   1,   inf,  -inf, 1,   1,    nan, 1};
+  const std::vector<double> b = {2,    -2,   -2, 2, -2,  2,    inf, inf,
+                                 -inf, -inf, 2,  2, 0.0, -0.0, 2,   nan};
+  const std::vector<double> expected = {0.5, -0.5, -1.5, 1.5, -0.0, 0.0, inf, 3,
+                                        -1,  -inf, nan,  nan, nan,  nan, nan, nan};
+  for (const auto type : {rt_ns::DataType::FLOAT, rt_ns::DataType::DOUBLE, rt_ns::DataType::FLOAT16,
+                          rt_ns::DataType::BFLOAT16}) {
+    const auto tensor = [type](const std::vector<double> &values) {
+      const std::vector<int64_t> shape{static_cast<int64_t>(values.size())};
+      if (type == rt_ns::DataType::DOUBLE) {
+        return rt_ns::Tensor::FromDouble("", shape, values);
+      }
+      std::vector<float> floats;
+      floats.reserve(values.size());
+      for (double value : values) {
+        floats.push_back(static_cast<float>(value));
+      }
+      if (type == rt_ns::DataType::FLOAT16) {
+        return rt_ns::MakeFloat16Tensor("", shape, floats);
+      }
+      if (type == rt_ns::DataType::BFLOAT16) {
+        return rt_ns::MakeBfloat16Tensor("", shape, floats);
+      }
+      return rt_ns::Tensor::FromFloat("", shape, floats);
+    };
+    for (const bool explicit_fmod : {false, true}) {
+      ONNX_LIGHT_NAMESPACE::NodeProto node;
+      node.set_op_type("Mod");
+      node.add_input("left");
+      node.add_input("right");
+      node.add_output("output");
+      if (explicit_fmod) {
+        auto *attribute = node.add_attribute();
+        attribute->set_name("fmod");
+        attribute->set_type(ONNX_LIGHT_NAMESPACE::AttributeProto::INT);
+        attribute->set_i(0);
+      }
+      const rt_ns::KernelContext context(rt_ns::OpsetId(std::string(), 28));
+      onnx_light_cpu::BinaryElementwiseKernel kernel(node, context);
+      auto output = tensor(std::vector<double>(a.size()));
+      kernel(tensor(a), tensor(b), output);
+      const auto comparison = rt_ns::CompareTensors(output, tensor(expected), 0, 0, true);
+      EXPECT_TRUE(comparison.close) << comparison.message;
     }
   }
 }

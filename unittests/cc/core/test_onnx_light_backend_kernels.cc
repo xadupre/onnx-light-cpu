@@ -47,6 +47,7 @@
 #include <array>
 #include <cctype>
 #include <cstdint>
+#include <limits>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -208,7 +209,7 @@ std::int64_t DefaultModelOpsetVersion(const ModelProto &model) {
 // (``onnx_core/runtime/kernels/tensor_compare.h``) with the case's ``rtol``/``atol``.
 void CompareTensor(const std::string &case_name, const Tensor &actual, const Tensor &expected,
                    double rtol, double atol, std::vector<std::string> &failures) {
-  const TensorComparison result = CompareTensors(actual, expected, rtol, atol);
+  const TensorComparison result = CompareTensors(actual, expected, rtol, atol, /*equal_nan=*/true);
   if (!result.close) {
     failures.push_back(case_name + ": " + result.message);
   }
@@ -332,6 +333,18 @@ TEST(OnnxLightBackendKernels, AllRegisteredKernelsPassRegularBackendCorrectnessC
       onnx_light_cpu::backend_test::RunBackendCorrectnessTests();
   EXPECT_EQ(report.executed, report.passed) << report.Describe();
   EXPECT_TRUE(report.failed.empty()) << report.Describe();
+}
+
+TEST(OnnxLightBackendKernels, ComparisonAcceptsMatchingNaNsButRejectsUnexpectedNaNs) {
+  const auto nan = Tensor::FromFloat("", {1}, {std::numeric_limits<float>::quiet_NaN()});
+  const auto finite = Tensor::FromFloat("", {1}, {1.0f});
+  std::vector<std::string> failures;
+  CompareTensor("matching_nan", nan, nan, 0, 0, failures);
+  EXPECT_TRUE(failures.empty());
+  CompareTensor("unexpected_nan", nan, finite, 0, 0, failures);
+  EXPECT_EQ(failures.size(), 1u);
+  CompareTensor("missing_nan", finite, nan, 0, 0, failures);
+  EXPECT_EQ(failures.size(), 2u);
 }
 
 TEST(OnnxLightBackendKernels, ExpRunsThroughRuntime) {
@@ -891,12 +904,12 @@ TEST(OnnxLightBackendKernels, BinaryBenchmarkCorporaCoverEverySignatureAndPriori
 }
 
 TEST(OnnxLightBackendKernels, BinaryArithmeticBenchmarksRunThroughRuntime) {
-  const std::vector<std::pair<std::string, std::string>> cases = {
-      {"Div", "test_cpu_div_v14_contiguous_float32xfloat32_to_float32_n4096_benchmark"},
-      {"Sub", "test_cpu_sub_v14_contiguous_float32xfloat32_to_float32_n4096_benchmark"},
-      {"Mod", "test_cpu_mod_v13_contiguous_float32xfloat32_to_float32_fmod1_n4096_benchmark"},
-  };
-  for (const auto &[op_type, case_name] : cases) {
+  for (const std::string op_type : {"Div", "Sub", "Mod"}) {
+    const auto &entry = onnx_light_cpu::GetBinaryManifestEntry(op_type);
+    const std::string case_name = "test_cpu_" + Lowercase(op_type) + "_v" +
+                                  std::to_string(entry.since_version) +
+                                  "_contiguous_float32xfloat32_to_float32" +
+                                  (op_type == "Mod" ? "_fmod1" : "") + "_n4096_benchmark";
     const std::vector<std::string> failures =
         RunCpuBackendCases(op_type, core::backend_test::TestMode::BENCHMARK, case_name);
     EXPECT_TRUE(failures.empty()) << case_name << ": " << Describe(failures);

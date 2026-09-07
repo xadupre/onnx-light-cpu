@@ -628,6 +628,105 @@ TEST(GemmFloat32, EmptyKGivesBiasOnly) {
   }
 }
 
+TEST(GemmFloat32, SkinnyNStridedReductionTailsAndFallbacks) {
+  constexpr std::size_t M = 7;
+  for (std::size_t N = 1; N <= 9; ++N) {
+    for (std::size_t K : {31, 32, 33, 47, 48, 49}) {
+      const auto A = RandomVector(M * K, 71);
+      const auto B = RandomVector(K * N, 72);
+      const auto C = RandomVector(M * N, 73);
+      for (bool trans_a : {false, true}) {
+        for (bool trans_b : {false, true}) {
+          const auto expected =
+              ReferenceGemm<float>(trans_a, trans_b, M, N, K, 0.75f, A, B, -0.5f, &C);
+          auto Y = C;
+          onnx_light_cpu::GemmFloat32(trans_a, trans_b, M, N, K, 0.75f, A.data(), B.data(), -0.5f,
+                                      Y.data(), Y.data());
+          for (std::size_t i = 0; i < Y.size(); ++i) {
+            EXPECT_NEAR(Y[i], expected[i], 1e-4f)
+                << "N=" << N << " K=" << K << " trans_a=" << trans_a << " trans_b=" << trans_b;
+          }
+        }
+      }
+    }
+  }
+}
+
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
+TEST(GemmFloat32, Avx2SkinnyNRangeAndSpecialValues) {
+  if (onnx_light_cpu::DetectSimdLevel() < onnx_light_cpu::SimdLevel::kAVX2 ||
+      !onnx_light_cpu::CpuSupportsFma()) {
+    GTEST_SKIP() << "AVX2/FMA is required";
+  }
+  constexpr std::size_t M = 4, K = 49;
+  for (std::size_t N = 2; N <= 8; ++N) {
+    const auto A = RandomVector(M * K, 74);
+    auto B = RandomVector(K * N, 75);
+    B[0] = std::numeric_limits<float>::quiet_NaN();
+    B[1] = std::numeric_limits<float>::infinity();
+    const auto expected = ReferenceGemm<float>(false, false, M, N, K, 0.5f, A, B, 0.0f, nullptr);
+    std::vector<float> Y(M * N, 123.0f);
+    const std::vector<float> C(M * N, std::numeric_limits<float>::quiet_NaN());
+    onnx_light_cpu::GemmSkinnyNRange_AVX2(N, K, 0.5f, A.data(), B.data(), 0.0f, C.data(), Y.data(),
+                                          1, 3);
+    for (std::size_t i = 0; i < Y.size(); ++i) {
+      if (i < N || i >= 3 * N) {
+        EXPECT_EQ(Y[i], 123.0f);
+      } else if (std::isnan(expected[i])) {
+        EXPECT_TRUE(std::isnan(Y[i]));
+      } else if (std::isinf(expected[i])) {
+        EXPECT_EQ(Y[i], expected[i]);
+      } else {
+        EXPECT_NEAR(Y[i], expected[i], 1e-4f);
+      }
+    }
+  }
+}
+
+TEST(GemmFloat64, Avx2MaskedTailsAllRowsAndAccumulationModes) {
+  if (onnx_light_cpu::DetectSimdLevel() < onnx_light_cpu::SimdLevel::kAVX2 ||
+      !onnx_light_cpu::CpuSupportsFma()) {
+    GTEST_SKIP() << "AVX2/FMA is required";
+  }
+  using onnx_light_cpu::GemmAccumMode;
+  for (std::size_t M = 1; M <= 6; ++M) {
+    for (std::size_t N = 1; N <= 15; ++N) {
+      for (std::size_t K : {0, 1, 7, 17}) {
+        const std::size_t stride = N + 2;
+        const auto A = RandomVectorD(M * K, 76);
+        const auto B = RandomVectorD(K * stride, 77);
+        const auto C = RandomVectorD(M * stride, 78);
+        for (auto mode :
+             {GemmAccumMode::kInitZero, GemmAccumMode::kInitBias, GemmAccumMode::kAccumulate}) {
+          std::vector<double> Y(M * stride, 123.0);
+          onnx_light_cpu::GemmMicroKernel_AVX2FMA_F64(M, N, K, 0.75, -0.5, B.data(), stride,
+                                                      C.data(), stride, Y.data(), stride, 1, mode,
+                                                      A.data());
+          for (std::size_t m = 0; m < M; ++m) {
+            EXPECT_EQ(Y[m * stride], 123.0);
+            EXPECT_EQ(Y[m * stride + N + 1], 123.0);
+            for (std::size_t n = 0; n < N; ++n) {
+              double expected = 0;
+              for (std::size_t k = 0; k < K; ++k) {
+                expected += A[m * K + k] * B[k * stride + n + 1];
+              }
+              expected *= 0.75;
+              if (mode == GemmAccumMode::kInitBias) {
+                expected -= 0.5 * C[m * stride + n + 1];
+              } else if (mode == GemmAccumMode::kAccumulate) {
+                expected += 123.0;
+              }
+              EXPECT_NEAR(Y[m * stride + n + 1], expected, 1e-11)
+                  << "M=" << M << " N=" << N << " K=" << K;
+            }
+          }
+        }
+      }
+    }
+  }
+}
+#endif
+
 TEST(GemmFloat32, EmptyMOrNReturnsWithoutWriting) {
   // M == 0 and N == 0 both hit the early return in GemmImpl: the output buffer
   // must be left untouched (here it is empty, so the call must simply not crash).

@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -446,6 +447,23 @@ void RegisterCpuBinaryCases(std::vector<TestCase> &registry, const std::string &
       }
     }
     return;
+  }
+
+  if (entry.op == BinaryOperator::kMod) {
+    for (const auto type :
+         {CpuDataType::FLOAT, CpuDataType::DOUBLE, CpuDataType::FLOAT16, CpuDataType::BFLOAT16}) {
+      const NodeProto node = MakeNode(entry.op_type, {});
+      const std::string name = "test_cpu_mod_v28_nan_inf_" + std::string(DataTypeSuffix(type));
+      Expect(registry, node, name, {OpsetId(std::string(), 28)}, [type]() -> IoData {
+        const float nan = std::numeric_limits<float>::quiet_NaN();
+        const float inf = std::numeric_limits<float>::infinity();
+        const auto tensor = [type](const std::vector<float> &values) {
+          return MakeTypedTensor(type, {4}, values, false, false, false);
+        };
+        return IoData{{tensor({-5.5f, 0, inf, nan}), tensor({2, 0, 2, 2})},
+                      {tensor({0.5f, nan, nan, nan})}};
+      });
+    }
   }
 
   for (const BinaryTypeSignature &signature : entry.signatures) {

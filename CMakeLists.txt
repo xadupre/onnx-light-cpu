@@ -866,6 +866,12 @@ if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
   target_link_libraries(lib_onnx_light_cpu_kernels PUBLIC
       lib_onnx_light_cpu
       onnx_light::lib_onnx_core)
+  # Availability definitions on the implementation library are private. The
+  # registered activation dispatchers also need to see the compiled AVX2 path.
+  if(ONNX_LIGHT_CPU_HAVE_AVX2_FMA_FLAG)
+    target_compile_definitions(lib_onnx_light_cpu_kernels PRIVATE
+        ONNX_LIGHT_CPU_HAVE_AVX2_FMA=1)
+  endif()
   # Reuse onnx-light's own shape-inference functions (e.g.
   # ``onnx_shapes::shapes::nn::ComputeShapeLinearAttention``) for the shape
   # cases they already cover instead of re-deriving them; only available when
@@ -1235,7 +1241,9 @@ if(ONNX_LIGHT_CPU_BUILD_TESTS)
         target_compile_definitions(${_name} PRIVATE ONNX_LIGHT_CPU_HAVE_F16C=1)
       endif()
     endif()
-    if(_name STREQUAL "test_exp_log_kernel" AND ONNX_LIGHT_CPU_HAVE_AVX2_FMA_FLAG)
+    if((_name STREQUAL "test_exp_log_kernel" OR
+        _name STREQUAL "test_onnx_light_sigmoid_softmax_kernel") AND
+       ONNX_LIGHT_CPU_HAVE_AVX2_FMA_FLAG)
       target_compile_definitions(${_name} PRIVATE ONNX_LIGHT_CPU_HAVE_AVX2_FMA=1)
     endif()
     if(_name STREQUAL "test_exp_log_kernel" AND ONNX_LIGHT_CPU_HAVE_AVX512F_FLAG)

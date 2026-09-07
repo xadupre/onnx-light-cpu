@@ -994,6 +994,81 @@ TEST(ComputeAttentionFloat32Streaming, Avx2DecodeBooleanMaskMatchesReferenceAndZ
   EXPECT_EQ(zeroed_y, std::vector<float>(zeroed_y.size(), 0.0f));
 }
 
+TEST(ComputeAttentionFloat32Streaming, Avx2ShortAndTiledMaskTailsMatchMaterialized) {
+  for (const std::int64_t q_len : {8, 15, 16, 17}) {
+    for (const std::int64_t tail : {1, 2, 3, 4, 5, 6, 7, 8}) {
+      for (const auto kind :
+           {AttentionMaskKind::kNone, AttentionMaskKind::kBoolean, AttentionMaskKind::kAdditive}) {
+        SCOPED_TRACE(::testing::Message()
+                     << "q=" << q_len << " tail=" << tail << " mask=" << static_cast<int>(kind));
+        AttentionDescriptor descriptor;
+        descriptor.opset = 24;
+        descriptor.is_causal = true;
+        descriptor.has_nonpad_kv_seqlen = true;
+        const std::int64_t kv_len = 256 + tail, head_dim = 56 + tail, v_head_dim = 8 + tail;
+        const std::int64_t q_shape[] = {2, 4, q_len, head_dim};
+        const std::int64_t k_shape[] = {2, 2, kv_len, head_dim};
+        const std::int64_t v_shape[] = {2, 2, kv_len, v_head_dim};
+        const std::int64_t mask_shape[] = {q_len, kv_len};
+        const std::span<const std::int64_t> mask_dims =
+            kind == AttentionMaskKind::kNone ? std::span<const std::int64_t>{} : mask_shape;
+        AttentionPlan plan(descriptor, AttentionLayout::kRank4, q_shape, k_shape, v_shape,
+                           mask_dims, kind);
+        const auto q = RandomTensor(8 * q_len * head_dim, 1501);
+        const auto k = RandomTensor(4 * kv_len * head_dim, 1502);
+        const auto v = RandomTensor(4 * kv_len * v_head_dim, 1503);
+        auto additive = RandomTensor(q_len * kv_len, 1504);
+        std::vector<std::uint8_t> boolean(q_len * kv_len);
+        for (std::int64_t i = 0; i < q_len; ++i) {
+          for (std::int64_t j = 0; j < kv_len; ++j) {
+            const bool allowed = i != 0 && j % 3 != 0 && (i != 1 || j >= 256);
+            boolean[i * kv_len + j] = allowed ? 255 : 0;
+            if (!allowed) {
+              additive[i * kv_len + j] = -std::numeric_limits<float>::infinity();
+            }
+          }
+        }
+        const void *mask = kind == AttentionMaskKind::kBoolean
+                               ? static_cast<const void *>(boolean.data())
+                               : (kind == AttentionMaskKind::kAdditive ? additive.data() : nullptr);
+        const std::int64_t nonpad[] = {kv_len, q_len - 2};
+        std::vector<float> actual(8 * q_len * v_head_dim), expected(actual.size());
+        ComputeAttentionFloat32(plan, q.data(), k.data(), v.data(), mask, actual.data(), nullptr,
+                                nullptr, nonpad);
+        onnx_light_cpu::ComputeAttentionFloat32Materialized(
+            plan, q.data(), k.data(), v.data(), mask, expected.data(), nullptr, nullptr, nonpad);
+        ExpectClose(actual, expected);
+      }
+    }
+  }
+}
+
+TEST(ComputeAttentionFloat32Streaming, Avx2Rank3ShortAndTiledBroadcastMaskMatchesMaterialized) {
+  for (const std::int64_t q_len : {8, 17, 128}) {
+    for (const std::int64_t mask_kv : {1, 263}) {
+      AttentionDescriptor descriptor;
+      descriptor.q_num_heads = 4;
+      descriptor.kv_num_heads = 1;
+      const std::int64_t q_shape[] = {1, q_len, 4 * 65};
+      const std::int64_t k_shape[] = {1, 263, 65};
+      const std::int64_t v_shape[] = {1, 263, 63};
+      const std::int64_t mask_shape[] = {q_len, mask_kv};
+      AttentionPlan plan(descriptor, AttentionLayout::kRank3, q_shape, k_shape, v_shape, mask_shape,
+                         AttentionMaskKind::kAdditive);
+      const auto q = RandomTensor(q_len * 4 * 65, 1601);
+      const auto k = RandomTensor(263 * 65, 1602);
+      const auto v = RandomTensor(263 * 63, 1603);
+      auto mask = RandomTensor(q_len * mask_kv, 1604);
+      std::fill_n(mask.begin(), mask_kv, std::numeric_limits<float>::lowest());
+      std::vector<float> actual(q_len * 4 * 63), expected(actual.size());
+      ComputeAttentionFloat32(plan, q.data(), k.data(), v.data(), mask.data(), actual.data());
+      onnx_light_cpu::ComputeAttentionFloat32Materialized(plan, q.data(), k.data(), v.data(),
+                                                          mask.data(), expected.data());
+      ExpectClose(actual, expected);
+    }
+  }
+}
+
 namespace half_precision {
 
 std::vector<std::uint16_t> ToFloat16(const std::vector<float> &values) {
