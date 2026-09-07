@@ -85,7 +85,7 @@ _AGGREGATED_COLUMNS = (
     "onnxruntime_error",
     "speedup",
 )
-_PR_COLUMNS = ("speedup", "input_shapes", "test_name")
+_PR_COLUMNS = ("speedup", "test_name")
 
 
 def normalize_dtypes(values: Sequence[str]) -> tuple[str, ...]:
@@ -468,13 +468,15 @@ def _pr_benchmark_markdown(aggregated_rows: Sequence[dict[str, Any]]) -> str:
     pr_rows = [
         {
             "speedup": None if row["speedup"] is None else f"{row['speedup']:.2f}",
-            "input_shapes": "; ".join(
-                ",".join("x".join(map(str, shape)) or "scalar" for shape in dataset.values())
-                for dataset in json.loads(row["input_shapes"])
-            ),
             "test_name": row["case"],
         }
-        for row in aggregated_rows
+        for row in sorted(
+            aggregated_rows,
+            key=lambda row: (
+                row["speedup"] is None,
+                row["speedup"] if row["speedup"] is not None else 0.0,
+            ),
+        )
     ]
     return _benchmark_markdown(pr_rows, _PR_COLUMNS)
 

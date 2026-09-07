@@ -433,9 +433,7 @@ class TestBenchmarkCli(ExtTestCase):
                 )
                 self.assertEqual(
                     run.call_args.kwargs["input"],
-                    "| speedup | input_shapes | test_name |\n"
-                    "| --- | --- | --- |\n"
-                    "| 1.23 | 2x3x4,5x6 | test\\|value |\n",
+                    "| speedup | test_name |\n| --- | --- |\n| 1.23 | test\\|value |\n",
                 )
 
     def test_writes_pull_request_markdown(self):
@@ -451,12 +449,10 @@ class TestBenchmarkCli(ExtTestCase):
             write_pr_benchmark_markdown(output, aggregated)
             self.assertEqual(
                 output.read_text(encoding="utf-8"),
-                "| speedup | input_shapes | test_name |\n"
-                "| --- | --- | --- |\n"
-                "| 1.00 | 2x3 | test\\|value |\n",
+                "| speedup | test_name |\n| --- | --- |\n| 1.00 | test\\|value |\n",
             )
 
-    def test_pull_request_formatting_preserves_data_and_dataset_boundaries(self):
+    def test_pull_request_formatting_sorts_by_increasing_speedup(self):
         aggregated = [
             {
                 "case": "multiple_datasets",
@@ -468,11 +464,11 @@ class TestBenchmarkCli(ExtTestCase):
         ]
         self.assertEqual(
             _benchmark._pr_benchmark_markdown(aggregated),
-            "| speedup | input_shapes | test_name |\n"
-            "| --- | --- | --- |\n"
-            "| 1.24 | 2x3,scalar; 0x3,3 | multiple_datasets |\n"
-            "| None | 1 | unsupported |\n"
-            "| 0.00 | 2x3x4 | slow |\n",
+            "| speedup | test_name |\n"
+            "| --- | --- |\n"
+            "| 0.00 | slow |\n"
+            "| 1.24 | multiple_datasets |\n"
+            "| None | unsupported |\n",
         )
         self.assertEqual(aggregated[0]["speedup"], 1.236)
         self.assertEqual(
