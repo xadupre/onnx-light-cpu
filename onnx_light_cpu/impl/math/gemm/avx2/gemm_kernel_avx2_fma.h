@@ -11,6 +11,12 @@
 
 namespace onnx_light_cpu {
 
+// Single-row, non-transposed B ranges. K must be nonzero; C must not alias Y.
+// Depth blocking bounds the live B pages without widening or packing B.
+void GemmSkinnyM1Range_AVX2_F32(std::size_t N, std::size_t K, float alpha, const float *A,
+                                const float *B, float beta, const float *C, float *Y,
+                                std::size_t begin, std::size_t end);
+
 void GemmMicroKernel_AVX2FMA_F32(std::size_t mr, std::size_t nb, std::size_t K, float alpha,
                                  float beta, const float *Bmat, std::size_t N,
                                  const float *Crow_base, std::size_t Cstride, float *Yrow_base,
@@ -64,6 +70,10 @@ void GemmDecodeFloat8ToFloat32_AVX2(const float *table, const std::uint8_t *src,
                                     std::size_t n);
 
 #ifdef ONNX_LIGHT_CPU_HAVE_F16C
+void GemmSkinnyM1Range_AVX2_F16C(std::size_t N, std::size_t K, float alpha, const std::uint16_t *A,
+                                 const std::uint16_t *B, float *Y, std::size_t begin,
+                                 std::size_t end);
+
 // Converts ``n`` contiguous FLOAT16 patterns to float32 with the F16C
 // ``vcvtph2ps`` instruction, eight at a time, with an exact scalar tail. Widens
 // while packing in the GEMM packing loops. Requires the F16C ISA extension, so

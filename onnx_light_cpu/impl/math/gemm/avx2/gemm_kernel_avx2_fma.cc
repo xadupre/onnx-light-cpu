@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <immintrin.h>
+#include <type_traits>
 
 namespace onnx_light_cpu {
 
@@ -144,6 +145,82 @@ inline float HorizontalSum(__m256 value) {
   return _mm_cvtss_f32(sum);
 }
 
+template <typename Source> inline __m256 LoadSkinny8(const Source *values) {
+  if constexpr (std::is_same_v<Source, float>) {
+    return _mm256_loadu_ps(values);
+  } else {
+    return WidenHalf8<false>(values);
+  }
+}
+
+template <typename Source> inline float LoadSkinny1(const Source *value) {
+  if constexpr (std::is_same_v<Source, float>) {
+    return *value;
+  } else {
+    return ReadHalf<false>(value);
+  }
+}
+
+template <typename Source>
+void GemmSkinnyM1Range(std::size_t N, std::size_t K, float alpha, const Source *A, const Source *B,
+                       float beta, const float *C, float *Y, std::size_t begin, std::size_t end) {
+  // Walking all K rows for each narrow column tile repeatedly evicts B's
+  // translations. Reuse a bounded row slab across the worker's column range.
+  constexpr std::size_t kDepthBlock = 32;
+  for (std::size_t k0 = 0; k0 < K; k0 += kDepthBlock) {
+    const std::size_t kend = k0 + std::min(kDepthBlock, K - k0);
+    std::size_t n = begin;
+    for (; n + 64 <= end; n += 64) {
+      __m256 acc[8];
+      for (std::size_t lane = 0; lane < 8; ++lane) {
+        acc[lane] = k0 == 0 ? _mm256_setzero_ps() : _mm256_loadu_ps(Y + n + lane * 8);
+      }
+      for (std::size_t k = k0; k < kend; ++k) {
+        const __m256 a = _mm256_set1_ps(LoadSkinny1(A + k));
+        if (k + 4 < kend) {
+          for (std::size_t offset = 0; offset < 64; offset += 64 / sizeof(Source)) {
+            PrefetchT0(B + (k + 4) * N + n + offset);
+          }
+        }
+        for (std::size_t lane = 0; lane < 8; ++lane) {
+          acc[lane] = _mm256_fmadd_ps(a, LoadSkinny8(B + k * N + n + lane * 8), acc[lane]);
+        }
+      }
+      for (std::size_t lane = 0; lane < 8; ++lane) {
+        _mm256_storeu_ps(Y + n + lane * 8, acc[lane]);
+      }
+    }
+    for (; n + 8 <= end; n += 8) {
+      __m256 acc = k0 == 0 ? _mm256_setzero_ps() : _mm256_loadu_ps(Y + n);
+      for (std::size_t k = k0; k < kend; ++k) {
+        acc = _mm256_fmadd_ps(_mm256_set1_ps(LoadSkinny1(A + k)), LoadSkinny8(B + k * N + n), acc);
+      }
+      _mm256_storeu_ps(Y + n, acc);
+    }
+    for (; n < end; ++n) {
+      float acc = k0 == 0 ? 0.0f : Y[n];
+      for (std::size_t k = k0; k < kend; ++k) {
+        acc += LoadSkinny1(A + k) * LoadSkinny1(B + k * N + n);
+      }
+      Y[n] = acc;
+    }
+  }
+  const bool has_bias = C != nullptr && beta != 0.0f;
+  const __m256 valpha = _mm256_set1_ps(alpha);
+  const __m256 vbeta = _mm256_set1_ps(beta);
+  std::size_t n = begin;
+  for (; n + 8 <= end; n += 8) {
+    __m256 value = _mm256_mul_ps(valpha, _mm256_loadu_ps(Y + n));
+    if (has_bias) {
+      value = _mm256_add_ps(value, _mm256_mul_ps(vbeta, _mm256_loadu_ps(C + n)));
+    }
+    _mm256_storeu_ps(Y + n, value);
+  }
+  for (; n < end; ++n) {
+    Y[n] = alpha * Y[n] + (has_bias ? beta * C[n] : 0.0f);
+  }
+}
+
 template <bool Bfloat16>
 void GemmHalfSkinnyM(bool trans_a, std::size_t M, std::size_t N, std::size_t K, float alpha,
                      const std::uint16_t *A, const std::uint16_t *B, float *Y) {
@@ -177,7 +254,7 @@ void GemmHalfSkinnyM(bool trans_a, std::size_t M, std::size_t N, std::size_t K, 
           _mm256_storeu_ps(Y + row * N + n0 + 8, _mm256_mul_ps(valpha, accumulators1[row]));
         }
       } else if constexpr (!Bfloat16) {
-        if (columns == 2 && !trans_a) {
+        if (N == 2 && !trans_a) {
           const __m256i duplicate_pairs = _mm256_setr_epi32(0, 0, 1, 1, 2, 2, 3, 3);
           for (std::size_t row = 0; row < M; ++row) {
             __m256 accumulator = _mm256_setzero_ps();
@@ -330,6 +407,12 @@ void GemmMicroKernel_AVX2HalfImpl(std::size_t nb, std::size_t K, float alpha, fl
 }
 
 } // namespace
+
+void GemmSkinnyM1Range_AVX2_F32(std::size_t N, std::size_t K, float alpha, const float *A,
+                                const float *B, float beta, const float *C, float *Y,
+                                std::size_t begin, std::size_t end) {
+  GemmSkinnyM1Range(N, K, alpha, A, B, beta, C, Y, begin, end);
+}
 
 template <std::size_t MR>
 void GemmMicroKernel_AVX2FMA_F32Impl(std::size_t nb, std::size_t K, float alpha, float beta,
@@ -825,6 +908,12 @@ void GemmMicroKernel_AVX2F16C(std::size_t mr, std::size_t nb, std::size_t K, flo
 void GemmFloat16SkinnyM_F16C(bool trans_a, std::size_t M, std::size_t N, std::size_t K, float alpha,
                              const std::uint16_t *A, const std::uint16_t *B, float *Y) {
   GemmHalfSkinnyM<false>(trans_a, M, N, K, alpha, A, B, Y);
+}
+
+void GemmSkinnyM1Range_AVX2_F16C(std::size_t N, std::size_t K, float alpha, const std::uint16_t *A,
+                                 const std::uint16_t *B, float *Y, std::size_t begin,
+                                 std::size_t end) {
+  GemmSkinnyM1Range(N, K, alpha, A, B, 0.0f, nullptr, Y, begin, end);
 }
 
 void GemmFloat16SkinnyN_F16C(std::size_t M, std::size_t K, float alpha, const std::uint16_t *A,

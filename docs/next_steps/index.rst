@@ -33,6 +33,7 @@ optimize next.
     2026/2026_08_com_microsoft_domain
     2026/2026_09_avx2_performance
     2026/2026_09_avx2_diagnostic_baseline
+    2026/2026_09_avx2_matrix_kernel_improvements
 
 Started
 -------
@@ -51,6 +52,10 @@ Started
         The :doc:`isolated-runtime diagnostic baseline
         <2026/2026_09_avx2_diagnostic_baseline>` identifies matrix and Attention
         priorities and a thread-pool interference bias in the existing runner.
+        The :doc:`matrix kernel follow-up
+        <2026/2026_09_avx2_matrix_kernel_improvements>` delivers measured
+        FP16 packing and FP16/FP32 single-row improvements; full ORT parity
+        remains open.
     * - :doc:`AVX2 activation and normalization gap closure
         <2026/2026_09_avx2_activation_normalization>`
       - Extends the #604 AVX2 activation work (AVX2 PR04a): measured

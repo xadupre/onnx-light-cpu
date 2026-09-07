@@ -1292,6 +1292,23 @@ void GemmSkinnyM(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::
                  const SrcT *A, const SrcT *B, T beta, const T *C, T *Y, GemmKernelKind kind,
                  const GemmBlocking &blocking) {
   const bool has_bias = C != nullptr && beta != T(0);
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
+  if constexpr (std::is_same_v<T, float> && std::is_same_v<SrcT, float>) {
+    if (!trans_b && M == 1 && K != 0 && N >= 64 && kind == GemmKernelKind::kAVX2FMA &&
+        (!has_bias || C != Y)) {
+      constexpr std::size_t kColumns = 256;
+      const std::size_t panels = (N + kColumns - 1) / kColumns;
+      ExecuteRanges(static_cast<std::int64_t>(panels),
+                    ExecutionSchedule{2, 1, ExecutionThreadCount()},
+                    [&](std::int64_t begin, std::int64_t end) {
+                      GemmSkinnyM1Range_AVX2_F32(
+                          N, K, alpha, A, B, beta, C, Y, static_cast<std::size_t>(begin) * kColumns,
+                          std::min(N, static_cast<std::size_t>(end) * kColumns));
+                    });
+      return;
+    }
+  }
+#endif
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512
   if constexpr (std::is_same_v<T, float> && std::is_same_v<SrcT, float>) {
     constexpr std::size_t kRegisterPanel = 256;
@@ -1394,13 +1411,16 @@ void GemmFiveLoopRange(bool trans_a, bool trans_b, std::size_t M, std::size_t N,
   const std::size_t tasks_per_panel = row_panels * micro_panels_per_panel;
   constexpr bool kCanFusePacking = std::is_same_v<T, SrcT>;
   constexpr bool kIsFloat32 = std::is_same_v<T, float> && std::is_same_v<SrcT, float>;
+  const bool avx2_half_packing =
+      std::is_same_v<SrcT, Float16Source> && kind == GemmKernelKind::kAVX2FMA;
   const bool fuse_task_packing =
-      kCanFusePacking && (row_panels <= 2 || (kIsFloat32 && thread_count > 1));
+      avx2_half_packing ||
+      (kCanFusePacking && (row_panels <= 2 || (kIsFloat32 && thread_count > 1)));
   const std::size_t fused_micro_panels = (N + column_block - 1) / column_block;
   const std::size_t all_tasks = row_panels * fused_micro_panels;
   const bool fuse_task_grid =
-      fuse_task_packing &&
-      (fused_micro_panels >= 16 || (kIsFloat32 && thread_count > 1 && all_tasks >= 16));
+      fuse_task_packing && (avx2_half_packing || fused_micro_panels >= 16 ||
+                            (kIsFloat32 && thread_count > 1 && all_tasks >= 16));
   const std::size_t panels_per_wave =
       fuse_task_grid
           ? column_panels
@@ -2004,6 +2024,18 @@ void GemmHalfPlanned(bool is_bfloat16, bool trans_a, bool trans_b, std::size_t M
         // dominates the arithmetic. Use the same register-resident kernel as
         // skinny-M instead of creating packed float32 partials.
         if (CpuSupportsF16C()) {
+          if (DetectSimdLevel() == SimdLevel::kAVX2 && M == 1 && N >= 64 && K != 0) {
+            constexpr std::size_t kColumns = 256;
+            const std::size_t panels = (N + kColumns - 1) / kColumns;
+            ExecuteRanges(static_cast<std::int64_t>(panels),
+                          ExecutionSchedule{2, 1, ExecutionThreadCount()},
+                          [&](std::int64_t begin, std::int64_t end) {
+                            GemmSkinnyM1Range_AVX2_F16C(
+                                N, K, alpha, A, B, Y, static_cast<std::size_t>(begin) * kColumns,
+                                std::min(N, static_cast<std::size_t>(end) * kColumns));
+                          });
+            return;
+          }
           GemmFloat16SkinnyM_F16C(trans_a, M, N, K, alpha, A, B, Y);
           return;
         }
@@ -2156,11 +2188,11 @@ void GemmHalfPlanned(bool is_bfloat16, bool trans_a, bool trans_b, std::size_t M
     }
 #endif
 #if defined(ONNX_LIGHT_CPU_HAVE_AVX2_FMA) && defined(ONNX_LIGHT_CPU_HAVE_F16C)
-    // Compact B panels make the native general kernel competitive with the
-    // once-widened float32 path while avoiding repeated full-width B traffic.
+    // On AVX2, widen while packing once instead of repeating F16C conversions
+    // in every row micro-tile. Retain the native fallback on wider hosts.
     if constexpr (Algorithm == GemmAlgorithm::kGeneral || Algorithm == GemmAlgorithm::kDirect) {
       static const bool use_avx2_f16c =
-          DetectSimdLevel() >= SimdLevel::kAVX2 && CpuSupportsFma() && CpuSupportsF16C();
+          DetectSimdLevel() > SimdLevel::kAVX2 && CpuSupportsFma() && CpuSupportsF16C();
       if (use_avx2_f16c && !trans_b) {
         const std::size_t mr = std::min<std::size_t>(selected.mr, kGemmAVX2MR);
         GemmFp16NativeGeneral(trans_a, M, N, K, alpha, A, B, Y, &GemmMicroKernel_AVX2F16C, mr,

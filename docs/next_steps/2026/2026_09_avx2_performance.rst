@@ -75,11 +75,13 @@ thread-pool policies remain unchanged.
 
 .. warning::
 
-    The :doc:`2026_09_avx2_diagnostic_baseline` demonstrates substantial
-    interference from idle ORT spinning in the original shared-process runner.
+    The :doc:`isolated-runtime diagnostic baseline
+    <2026_09_avx2_diagnostic_baseline>` demonstrates substantial interference
+    from idle ORT spinning in the original shared-process runner.
     `#647 <https://github.com/xadupre/onnx-light-cpu/pull/647>`_ now isolates
-    the runtimes. Results collected with the older runner remain diagnostic
-    even when ``--environment pinned`` was set.
+    the runtimes. Results collected with the older runner must not be used for
+    parity decisions and remain diagnostic even when ``--environment pinned``
+    was set.
     Report the revision used to compile the binaries, not just HEAD at the
     end of the run.
 
@@ -112,6 +114,11 @@ acceptance gate remain pending.
 
 Current foundation
 ------------------
+
+The :doc:`2026_09_avx2_matrix_kernel_improvements` adds production AVX2
+FP16/FP32 single-row kernels and bounded FP16 panel widening, with controlled
+before/after measurements against ORT. Selected Qwen FP16 projections are
+ahead of ORT; small and medium matrix gaps and the full parity gate remain.
 
 The first AVX2-specific passes are already merged:
 
@@ -170,8 +177,10 @@ Work sequence
      - FP16/BF16 conversion and integer/packed paths avoid scalar or
        full-tensor conversion bottlenecks on the priority shapes.
      - PR01.1
-     - Assigned in `#634
-       <https://github.com/xadupre/onnx-light-cpu/issues/634>`_
+     - Initial work in `#634
+       <https://github.com/xadupre/onnx-light-cpu/issues/634>`_; FP16 follow-up
+       in :doc:`2026_09_avx2_matrix_kernel_improvements`, full compact-type
+       parity still pending
    * - AVX2 PR03
      - Attention.
      - Decode, short-query, and prefill cases use AVX2 score and value kernels

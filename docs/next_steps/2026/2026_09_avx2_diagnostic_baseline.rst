@@ -13,7 +13,7 @@ passes. It also exposes a measurement bias in the shared-process benchmark.
 No production kernel or benchmark implementation changes accompany this report.
 
 Environment and build provenance
----------------------------------
+--------------------------------
 
 * Intel Core i7-13800H under WSL2, with process affinity
   ``0,2,4,6,8,10,12,14,16,18`` and explicit one-thread and ten-thread policies.
@@ -96,7 +96,7 @@ The original multithread family medians and rankings must therefore not be
 used as final parity evidence.
 
 Isolated measurement protocol
-------------------------------
+-----------------------------
 
 The diagnostic driver collected existing backend cases with
 ``TestMode.BENCHMARK`` and ``generate_benchmark_expected_outputs=False``.
@@ -136,9 +136,9 @@ a ratio below 1 means onnx-light-cpu is slower.
 
    * - Workload
      - One thread, CPU / ORT ms
-     - Ratio
+     - Ratio (ORT/CPU)
      - Ten threads, CPU / ORT ms
-     - Ratio
+     - Ratio (ORT/CPU)
    * - MatMul FP16, 512 square
      - 8.264 / 2.974
      - 0.360
@@ -186,9 +186,11 @@ a ratio below 1 means onnx-light-cpu is slower.
      - 0.851
 
 Some multithread results remain noisy: CPU p90/p10 reaches approximately 2.9,
-and the Attention ten-thread ratio varied from 0.465 to 0.720 between passes.
-Qwen gate/up was added only in the confirmation pass; its negative scaling
-needs a dedicated repeatability study. The large LM-head cases from the
+and the Attention ten-thread ratio varied from 0.465 in the first isolated pass
+to the 0.720 confirmation-pass value shown above.
+Qwen gate/up was added only in the confirmation pass; its ten-thread CPU median
+is slower than its one-thread median, so that negative scaling needs a
+dedicated repeatability study. The large LM-head cases from the
 initial short-budget sweep must not be extrapolated from single samples.
 
 The exact confirmation fixtures are:
@@ -208,9 +210,12 @@ The exact confirmation fixtures are:
 Supplemental coverage
 ---------------------
 
-The fixed baseline omits RMSNormalization, BiasGelu, SwiGLU, FP64 matrices
-and compact integer matrix multiplication. Selected instances were added
-to the isolated pass rather than declaring those families covered.
+The fixed case list used by ``benchmark_avx2_parity.py`` omits
+RMSNormalization, BiasGelu, SwiGLU, FP64 matrices and compact integer matrix
+multiplication. Selected instances were added to the isolated pass rather than
+declaring those families covered. These ratios use ORT median divided by CPU
+median: a ratio below 1 means onnx-light-cpu is slower, and a ratio above 1
+means it is faster for the selected fixture.
 
 .. list-table::
    :header-rows: 1
@@ -242,8 +247,9 @@ decode remain outside the isolated follow-up scope.
 Implementation priorities
 -------------------------
 
-1. Use the isolated worker protocol delivered in #647 for the parity gate,
-   without changing normal execution policies. Record the actual compiled
+1. Use the isolated worker protocol delivered in
+   `#647 <https://github.com/xadupre/onnx-light-cpu/pull/647>`_ for the parity
+   gate, without changing normal execution policies. Record the actual compiled
    revision rather than only HEAD.
 2. Investigate AVX2 FP16 matrix paths, especially M=1/Qwen, including packing,
    conversion and scaling costs. Repeat the Qwen case before selecting a fix.
