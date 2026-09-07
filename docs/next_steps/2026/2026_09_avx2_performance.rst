@@ -63,16 +63,23 @@ The detected level must be ``AVX2``. The fixed float32 and float16 corpus covers
 GEMM/MatMul, Attention, activation and normalization, unary, and binary
 elementwise cases. It runs one-thread and process-visible physical-core policies
 with identical onnx-light-cpu and ONNX Runtime thread counts. Each runtime
-receives a separate timing phase, and the first runtime alternates between
-consecutive cases.
+runs in its own process, which exits before the next runtime starts. The first
+runtime alternates between consecutive cases. Merely separating timing phases
+inside one process is insufficient: idle ORT workers can keep spinning while
+the CPU runtime is measured.
+
+Each case's model and input bytes are serialized once, checksummed, and reused
+by both runtimes and both thread policies. Per-case scratch files are removed
+afterwards. The parent does not create a runtime execution pool, and normal ORT
+thread-pool policies remain unchanged.
 
 .. warning::
 
-    Separate timing phases in the current implementation do not isolate the
-    runtimes' thread pools. The :doc:`2026_09_avx2_diagnostic_baseline`
-    demonstrates substantial interference from idle ORT spinning during
-    short multithread measurements. Until the runner isolates the runtimes,
-    its results are diagnostic even when ``--environment pinned`` is set.
+    The :doc:`2026_09_avx2_diagnostic_baseline` demonstrates substantial
+    interference from idle ORT spinning in the original shared-process runner.
+    `#647 <https://github.com/xadupre/onnx-light-cpu/pull/647>`_ now isolates
+    the runtimes. Results collected with the older runner remain diagnostic
+    even when ``--environment pinned`` was set.
     Report the revision used to compile the binaries, not just HEAD at the
     end of the run.
 
@@ -80,6 +87,12 @@ The JSON records every raw sample, medians and dispersion, shapes, data types,
 loop families, CPU and affinity, SIMD ceiling and detected level, compiler,
 package versions, and timing order. Results are ranked by positive absolute
 latency gap and speedup, with Qwen decode and prefill rows labelled explicitly.
+Native Python extension paths and hashes are pinned and verified in CPU workers;
+on Linux, the loaded onnx-light and CPU shared-library paths and hashes are also
+checked. Shared-library discovery is explicitly unavailable on other platforms.
+Checkout HEAD and compiler environment are labelled as such: the tool cannot
+infer the compiled source revision from them. Capture the actual build revision
+alongside the report, and do not rebuild the runtime during measurement.
 The companion Markdown groups rows into ``<0.5x``, ``0.5x-0.9x``,
 ``0.9x-1.0x``, and ``>=1.0x`` ONNX Runtime.
 
@@ -141,9 +154,9 @@ Work sequence
        and loop-family results under the AVX2 ceiling. The report ranks gaps
        by absolute latency and ONNX Runtime ratio before further tuning.
      - PR01
-     - Tooling delivered in `#632
-       <https://github.com/xadupre/onnx-light-cpu/pull/632>`_; process
-       isolation and complete baseline pending
+     - Tooling from `#632
+       <https://github.com/xadupre/onnx-light-cpu/pull/632>`_ now isolates
+       runtime processes; the complete measured inventory remains pending
    * - AVX2 PR02a
      - FP32/FP64 GEMM and MatMul.
      - FP32/FP64 register tiles, masked tails, packing, prefetch, and

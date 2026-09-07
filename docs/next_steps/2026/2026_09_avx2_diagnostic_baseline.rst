@@ -3,7 +3,9 @@ AVX2 Isolated-Runtime Diagnostic Baseline
 
 :Date: 2026-09-06
 
-**Diagnostic measurements; parity gate still pending**
+**in progress**
+
+Diagnostic measurements; parity gate still pending.
 
 This local follow-up to :doc:`2026_09_avx2_performance` identifies matrix and
 Attention workloads that remain behind ONNX Runtime after the first AVX2
@@ -56,10 +58,16 @@ The runner saved its reports and returned status 1 because the comparison
 corpus was incomplete. Unsupported comparisons are not evidence of parity
 and must remain visible.
 
-More importantly, ``_measure_case`` keeps both runtimes' thread pools alive
-at the same time. Separate timing phases and alternating the first runtime
-do not isolate those pools. With the initial 100 ms sampling budget, idle
+More importantly, the original runner called ``_measure_case`` with both
+runtimes' thread pools alive at the same time. Separate timing phases and
+alternating the first runtime do not isolate those pools. With the initial
+100 ms sampling budget, idle
 ORT spinning substantially affected the CPU measurements.
+
+`#647 <https://github.com/xadupre/onnx-light-cpu/pull/647>`_ subsequently
+replaced this protocol with sequential isolated worker processes. The original
+measurements below remain historical diagnostics, not a description of the
+updated runner.
 
 The control experiment retained ten threads, five warmups, at most 100
 samples and a 100 ms sampling budget:
@@ -234,9 +242,9 @@ decode remain outside the isolated follow-up scope.
 Implementation priorities
 -------------------------
 
-1. Repair the shared-process benchmark protocol before using it as a parity
-   gate. Isolate runtime worker pools without changing normal execution
-   policies, and record the actual compiled revision rather than only HEAD.
+1. Use the isolated worker protocol delivered in #647 for the parity gate,
+   without changing normal execution policies. Record the actual compiled
+   revision rather than only HEAD.
 2. Investigate AVX2 FP16 matrix paths, especially M=1/Qwen, including packing,
    conversion and scaling costs. Repeat the Qwen case before selecting a fix.
 3. Investigate MatMulInteger UINT8 x INT8 and UINT8 x UINT8. Separate VNNI
