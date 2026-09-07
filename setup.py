@@ -1,3 +1,4 @@
+import argparse
 import os
 import shlex
 import subprocess
@@ -247,119 +248,84 @@ def _add_onnx_light_source_defines(cmake_args, build_info=None):
     return cmake_args
 
 
-try:
-    from setuptools import Command, Distribution, setup
-except ModuleNotFoundError:
+def _spawn(command):
+    """Prints and executes a command."""
+    print(" ".join(shlex.quote(cmd_part) for cmd_part in command))
+    subprocess.run(command, check=True)
 
-    def _spawn(command):
-        """Prints and executes a command."""
-        print(" ".join(shlex.quote(cmd_part) for cmd_part in command))
-        subprocess.run(command, check=True)
 
-    def _run_build_ext_without_packaging(args):
-        """Executes build_ext without setuptools or distutils support."""
-        if not args or args[0] != "build_ext":
-            return False
+def _build_extension(
+    inplace=False,
+    cpp_tests=False,
+    onnx_light=False,
+    onnx_light_source=False,
+    build_temp="build/temp",
+    build_lib="build/lib",
+    parallel=None,
+):
+    """Configures, builds, and installs the extension directly with CMake."""
+    root = Path(__file__).resolve().parent
+    build_temp_path = Path(build_temp).resolve()
+    build_temp_path.mkdir(parents=True, exist_ok=True)
+    if parallel is None:
+        parallel = _default_parallel_jobs()
 
-        inplace = False
-        cpp_tests = False
-        onnx_light = False
-        onnx_light_source = False
-        build_temp = "build/temp"
-        build_lib = "build/lib"
-        parallel = None
+    install_prefix = root if inplace else Path(build_lib).resolve()
+    cmake_args = _cmake_args_from_env()
+    cmake_args = _set_cmake_default_define(cmake_args, "CMAKE_BUILD_TYPE", "Release")
+    if cpp_tests:
+        cmake_args = _set_cmake_define(cmake_args, "ONNX_LIGHT_CPU_BUILD_TESTS", "ON")
+    if onnx_light:
+        cmake_args = _add_onnx_light_defines(cmake_args)
+    if onnx_light_source:
+        cmake_args = _add_onnx_light_source_defines(cmake_args)
+    _spawn(
+        [
+            "cmake",
+            "-S",
+            str(root),
+            "-B",
+            str(build_temp_path),
+            f"-DPython_EXECUTABLE={sys.executable}",
+            *cmake_args,
+        ]
+    )
+    build_cmd = ["cmake", "--build", str(build_temp_path), "--config", "Release"]
+    if parallel is not None:
+        build_cmd += ["--parallel", str(parallel)]
+    _spawn(build_cmd)
+    _spawn(
+        [
+            "cmake",
+            "--install",
+            str(build_temp_path),
+            "--config",
+            "Release",
+            "--prefix",
+            str(install_prefix),
+        ]
+    )
+    if cpp_tests:
+        _spawn(_ctest_command(build_temp_path))
 
-        i = 1
-        while i < len(args):
-            arg = args[i]
-            if arg in {"--inplace", "-i"}:
-                inplace = True
-            elif arg == "--cpp-tests":
-                cpp_tests = True
-            elif arg == "--onnx-light":
-                onnx_light = True
-            elif arg == "--onnx-light-source":
-                onnx_light_source = True
-            elif arg.startswith("--build-temp="):
-                build_temp = arg.split("=", 1)[1]
-            elif arg.startswith("--build-lib="):
-                build_lib = arg.split("=", 1)[1]
-            elif arg == "--build-temp" and i + 1 < len(args):
-                build_temp = args[i + 1]
-                i += 1
-            elif arg == "--build-lib" and i + 1 < len(args):
-                build_lib = args[i + 1]
-                i += 1
-            elif arg.startswith("--parallel="):
-                value = arg.split("=", 1)[1]
-                try:
-                    parallel = int(value)
-                except ValueError:
-                    raise ValueError(
-                        f"Invalid value for --parallel: expected an integer, got {value!r}."
-                    ) from None
-            elif arg in {"--parallel", "-j"} and i + 1 < len(args):
-                value = args[i + 1]
-                try:
-                    parallel = int(value)
-                except ValueError:
-                    raise ValueError(
-                        f"Invalid value for --parallel: expected an integer, got {value!r}."
-                    ) from None
-                i += 1
-            else:
-                raise ValueError(f"Unsupported argument for build_ext: {arg!r}.")
-            i += 1
 
-        root = Path(__file__).resolve().parent
-        build_temp_path = Path(build_temp).resolve()
-        build_temp_path.mkdir(parents=True, exist_ok=True)
-        if parallel is None:
-            parallel = _default_parallel_jobs()
+if sys.argv[1:2] == ["build_ext"]:
+    # Native builds must not load setuptools plugins, even when setuptools is installed.
+    parser = argparse.ArgumentParser(prog=f"{sys.argv[0]} build_ext")
+    parser.add_argument("--inplace", "-i", action="store_true")
+    parser.add_argument("--cpp-tests", action="store_true")
+    parser.add_argument("--onnx-light", action="store_true")
+    parser.add_argument("--onnx-light-source", action="store_true")
+    parser.add_argument("--build-temp", "-t", default="build/temp")
+    parser.add_argument("--build-lib", "-b", default="build/lib")
+    parser.add_argument("--parallel", "-j", type=int)
+    options = parser.parse_args(sys.argv[2:])
+    print("running build_ext")
+    _build_extension(**vars(options))
+    raise SystemExit(0)
 
-        print("running build_ext")
-        install_prefix = root if inplace else Path(build_lib).resolve()
-        cmake_args = _cmake_args_from_env()
-        cmake_args = _set_cmake_default_define(cmake_args, "CMAKE_BUILD_TYPE", "Release")
-        if cpp_tests:
-            cmake_args = _set_cmake_define(cmake_args, "ONNX_LIGHT_CPU_BUILD_TESTS", "ON")
-        if onnx_light:
-            cmake_args = _add_onnx_light_defines(cmake_args)
-        if onnx_light_source:
-            cmake_args = _add_onnx_light_source_defines(cmake_args)
-        _spawn(
-            [
-                "cmake",
-                "-S",
-                str(root),
-                "-B",
-                str(build_temp_path),
-                f"-DPython_EXECUTABLE={sys.executable}",
-                *cmake_args,
-            ]
-        )
-        build_cmd = ["cmake", "--build", str(build_temp_path), "--config", "Release"]
-        if parallel is not None:
-            build_cmd += ["--parallel", str(parallel)]
-        _spawn(build_cmd)
-        _spawn(
-            [
-                "cmake",
-                "--install",
-                str(build_temp_path),
-                "--config",
-                "Release",
-                "--prefix",
-                str(install_prefix),
-            ]
-        )
-        if cpp_tests:
-            _spawn(_ctest_command(build_temp_path))
-        return True
 
-    if _run_build_ext_without_packaging(sys.argv[1:]):
-        raise SystemExit(0) from None
-    raise
+from setuptools import Command, Distribution, setup  # noqa: E402
 
 
 class NoConfigDistribution(Distribution):
@@ -422,55 +388,17 @@ class BuildExt(Command):
         if self.build_lib is None:
             self.build_lib = os.path.join(build_base, "lib")
 
-    def _spawn(self, cmd):
-        """Prints and executes a command."""
-        print(" ".join(shlex.quote(str(part)) for part in cmd))
-        subprocess.run(cmd, check=True)
-
     def run(self):
         """Runs CMake configure, build, and install commands."""
-        root = Path(__file__).resolve().parent
-        build_temp = Path(self.build_temp).resolve()
-        build_temp.mkdir(parents=True, exist_ok=True)
-
-        install_prefix = root if self.inplace else Path(self.build_lib).resolve()
-        cmake_args = _cmake_args_from_env()
-        cmake_args = _set_cmake_default_define(cmake_args, "CMAKE_BUILD_TYPE", "Release")
-        if self.cpp_tests:
-            cmake_args = _set_cmake_define(cmake_args, "ONNX_LIGHT_CPU_BUILD_TESTS", "ON")
-        if self.onnx_light:
-            cmake_args = _add_onnx_light_defines(cmake_args)
-        if self.onnx_light_source:
-            cmake_args = _add_onnx_light_source_defines(cmake_args)
-
-        self._spawn(
-            [
-                "cmake",
-                "-S",
-                str(root),
-                "-B",
-                str(build_temp),
-                f"-DPython_EXECUTABLE={sys.executable}",
-                *cmake_args,
-            ]
+        _build_extension(
+            inplace=self.inplace,
+            cpp_tests=self.cpp_tests,
+            onnx_light=self.onnx_light,
+            onnx_light_source=self.onnx_light_source,
+            build_temp=self.build_temp,
+            build_lib=self.build_lib,
+            parallel=self.parallel,
         )
-        build_cmd = ["cmake", "--build", str(build_temp), "--config", "Release"]
-        if self.parallel is not None:
-            build_cmd += ["--parallel", str(self.parallel)]
-        self._spawn(build_cmd)
-        self._spawn(
-            [
-                "cmake",
-                "--install",
-                str(build_temp),
-                "--config",
-                "Release",
-                "--prefix",
-                str(install_prefix),
-            ]
-        )
-        if self.cpp_tests:
-            self._spawn(_ctest_command(build_temp))
 
 
 setup(
