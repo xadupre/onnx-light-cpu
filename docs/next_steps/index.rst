@@ -93,6 +93,32 @@ Planned
         INT4 projections; Sigmoid and the shared RMS engine are already
         available.
 
+Discussion
+----------
+
+.. list-table::
+    :header-rows: 1
+    :widths: 35 65
+    :class: sphinx-datatable
+
+    * - Plan
+      - Contribution
+    * - :doc:`Conv <2026/2026_08_conv>`
+      - Defines prepared convolution plans and specialized algorithms that
+        avoid a universal materialized ``im2col`` path.
+    * - :doc:`Unary elementwise <2026/2026_08_unary_elementwise>`
+      - Unifies scalar, SIMD, traversal, and scheduling implementations across
+        unary operators.
+    * - :doc:`Processor-aware tuning
+        <2026/2026_08_elementwise_kernel_tuning>`
+      - Defines calibration and persistence of processor-specific elementwise
+        thresholds.
+    * - :doc:`SVM <2026/2026_08_svm>`
+      - Defines prepared SVM classification and regression kernels.
+    * - :doc:`Persistent KV cache <2026/2026_08_kv_cache>`
+      - Defines mutable, paged, and optionally quantized cache storage that
+        avoids copying complete past K/V tensors during decode.
+
 Completed
 ---------
 
@@ -150,29 +176,3 @@ Completed
       - Introduces ``CDist`` and ``BiasGelu`` end to end, including schemas,
         runtime kernels, gradients, fusion patterns, tests, documentation, and
         the latency follow-ups in #562 and #564.
-
-Discussion
-----------
-
-.. list-table::
-    :header-rows: 1
-    :widths: 35 65
-    :class: sphinx-datatable
-
-    * - Plan
-      - Contribution
-    * - :doc:`Conv <2026/2026_08_conv>`
-      - Defines prepared convolution plans and specialized algorithms that
-        avoid a universal materialized ``im2col`` path.
-    * - :doc:`Unary elementwise <2026/2026_08_unary_elementwise>`
-      - Unifies scalar, SIMD, traversal, and scheduling implementations across
-        unary operators.
-    * - :doc:`Processor-aware tuning
-        <2026/2026_08_elementwise_kernel_tuning>`
-      - Defines calibration and persistence of processor-specific elementwise
-        thresholds.
-    * - :doc:`SVM <2026/2026_08_svm>`
-      - Defines prepared SVM classification and regression kernels.
-    * - :doc:`Persistent KV cache <2026/2026_08_kv_cache>`
-      - Defines mutable, paged, and optionally quantized cache storage that
-        avoids copying complete past K/V tensors during decode.
