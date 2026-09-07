@@ -247,8 +247,9 @@ decode remain outside the isolated follow-up scope.
 Implementation priorities
 -------------------------
 
-1. Use the isolated worker protocol delivered in #647 for the parity gate,
-   without changing normal execution policies. Record the actual compiled
+1. Use the isolated worker protocol delivered in
+   `#647 <https://github.com/xadupre/onnx-light-cpu/pull/647>`_ for the parity
+   gate, without changing normal execution policies. Record the actual compiled
    revision rather than only HEAD.
 2. Investigate AVX2 FP16 matrix paths, especially M=1/Qwen, including packing,
    conversion and scaling costs. Repeat the Qwen case before selecting a fix.
