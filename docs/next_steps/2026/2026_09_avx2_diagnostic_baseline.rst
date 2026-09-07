@@ -1,5 +1,5 @@
 AVX2 Isolated-Runtime Diagnostic Baseline
-==========================================
+=========================================
 
 :Date: 2026-09-06
 
@@ -214,7 +214,8 @@ The fixed case list used by ``benchmark_avx2_parity.py`` omits
 RMSNormalization, BiasGelu, SwiGLU, FP64 matrices and compact integer matrix
 multiplication. Selected instances were added to the isolated pass rather than
 declaring those families covered. These ratios use ORT median divided by CPU
-median: a ratio below 1 means onnx-light-cpu is slower for the selected fixture.
+median: a ratio below 1 means onnx-light-cpu is slower, and a ratio above 1
+means it is faster for the selected fixture.
 
 .. list-table::
    :header-rows: 1
