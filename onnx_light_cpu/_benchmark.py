@@ -467,8 +467,11 @@ def write_benchmark_markdown(
 def _pr_benchmark_markdown(aggregated_rows: Sequence[dict[str, Any]]) -> str:
     pr_rows = [
         {
-            "speedup": row["speedup"],
-            "input_shapes": row["input_shapes"],
+            "speedup": None if row["speedup"] is None else f"{row['speedup']:.2f}",
+            "input_shapes": "; ".join(
+                ",".join("x".join(map(str, shape)) or "scalar" for shape in dataset.values())
+                for dataset in json.loads(row["input_shapes"])
+            ),
             "test_name": row["case"],
         }
         for row in aggregated_rows

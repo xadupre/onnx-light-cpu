@@ -77,6 +77,11 @@ The Linux ``onnx-light main`` job in the ``ci-core`` workflow invokes this
 command after its existing build and tests when a pull request modifies kernel
 implementation or backend benchmark case files. A separate report job updates
 the latest benchmark comment instead of adding a new comment after every push.
+The comment displays speedup with two decimal places and input shapes without
+input names: for example, ``2x3x4,5x6``. A scalar is written as ``scalar``;
+multiple input datasets are separated by ``; ``. This compact presentation also
+applies to ``--pr`` and ``--pr-markdown``. The workbook and full Markdown report
+retain the original precision and named input shapes.
 
 ``-o``, ``--output``
    Output workbook path. It must end in ``.xlsx`` and defaults to
