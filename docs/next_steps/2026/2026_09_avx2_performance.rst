@@ -73,6 +73,16 @@ by both runtimes and both thread policies. Per-case scratch files are removed
 afterwards. The parent does not create a runtime execution pool, and normal ORT
 thread-pool policies remain unchanged.
 
+.. warning::
+
+    The :doc:`2026_09_avx2_diagnostic_baseline` demonstrates substantial
+    interference from idle ORT spinning in the original shared-process runner.
+    `#647 <https://github.com/xadupre/onnx-light-cpu/pull/647>`_ now isolates
+    the runtimes. Results collected with the older runner remain diagnostic
+    even when ``--environment pinned`` was set.
+    Report the revision used to compile the binaries, not just HEAD at the
+    end of the run.
+
 The JSON records every raw sample, medians and dispersion, shapes, data types,
 loop families, CPU and affinity, SIMD ceiling and detected level, compiler,
 package versions, and timing order. Results are ranked by positive absolute
@@ -89,9 +99,16 @@ The companion Markdown groups rows into ``<0.5x``, ``0.5x-0.9x``,
 Run the ``AVX2 parity baseline`` workflow to publish the JSON, Markdown, and
 environment capture as one artifact. Generated results are not committed.
 Results from shared runners are diagnostic, especially within 5--10% of parity;
-only ``--environment pinned`` results collected on pinned native AVX2 hardware
-may make a final parity decision. Follow-up issues should be opened only for the
-ranked measured bottlenecks listed by the report.
+only isolated-runtime results collected on pinned native AVX2 hardware and
+labelled ``--environment pinned`` may make a final parity decision. Follow-up
+issues should be opened only for measured bottlenecks confirmed without
+cross-runtime thread-pool interference.
+
+The :doc:`2026_09_avx2_diagnostic_baseline` records the September 6 isolated
+follow-up. FP16 matrix paths, FP32 M=1, compact integer matrices, multithread
+FP64 and long-context Attention remain priorities. Selected RMSNormalization
+and BiasGelu cases are ahead of ORT, but the full isolated corpus and final
+acceptance gate remain pending.
 
 Current foundation
 ------------------
