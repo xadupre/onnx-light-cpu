@@ -74,11 +74,16 @@ __m256 ExpPs256Fma(__m256 x) {
   return _mm256_mul_ps(polynomial, normal);
 }
 
-__m256 ExpNegativePs256Fma(__m256 x) {
+#if defined(_MSC_VER)
+#define ONNX_LIGHT_CPU_FORCE_INLINE __forceinline
+#else
+#define ONNX_LIGHT_CPU_FORCE_INLINE inline __attribute__((always_inline))
+#endif
+
+ONNX_LIGHT_CPU_FORCE_INLINE __m256 ExpNegativePs256Fma(__m256 x) {
   constexpr float kLogSmallestNormal = -87.3365447505531f;
-  const __m256 in_fast_range =
-      _mm256_and_ps(_mm256_cmp_ps(x, _mm256_set1_ps(kLogSmallestNormal), _CMP_GE_OQ),
-                    _mm256_cmp_ps(x, _mm256_setzero_ps(), _CMP_LE_OQ));
+  // Sigmoid and max-subtracted Softmax only pass non-positive values.
+  const __m256 in_fast_range = _mm256_cmp_ps(x, _mm256_set1_ps(kLogSmallestNormal), _CMP_GE_OQ);
   if (_mm256_movemask_ps(in_fast_range) != 0xff) {
     return ExpPs256Fma(x);
   }
@@ -100,12 +105,6 @@ __m256 ExpNegativePs256Fma(__m256 x) {
   polynomial = _mm256_fmadd_ps(polynomial, reduced, _mm256_set1_ps(1.0f));
   return _mm256_mul_ps(polynomial, scale);
 }
-
-#if defined(_MSC_VER)
-#define ONNX_LIGHT_CPU_FORCE_INLINE __forceinline
-#else
-#define ONNX_LIGHT_CPU_FORCE_INLINE inline __attribute__((always_inline))
-#endif
 
 ONNX_LIGHT_CPU_FORCE_INLINE __m256 LogPs256Fma(__m256 x) {
   const __m256 one = _mm256_set1_ps(1.0f);
@@ -177,6 +176,14 @@ ONNX_LIGHT_CPU_FORCE_INLINE __m256i TailMask(std::size_t count) {
   return _mm256_cmpgt_epi32(_mm256_set1_epi32(static_cast<int>(count)), lanes);
 }
 
+ONNX_LIGHT_CPU_FORCE_INLINE __m256 SigmoidPs256Fma(__m256 value) {
+  const __m256 exponent = ExpNegativePs256Fma(
+      _mm256_sub_ps(_mm256_setzero_ps(), _mm256_andnot_ps(_mm256_set1_ps(-0.0f), value)));
+  const __m256 positive =
+      _mm256_div_ps(_mm256_set1_ps(1.0f), _mm256_add_ps(_mm256_set1_ps(1.0f), exponent));
+  return _mm256_blendv_ps(positive, _mm256_mul_ps(exponent, positive), value);
+}
+
 #undef ONNX_LIGHT_CPU_FORCE_INLINE
 
 } // namespace
@@ -195,35 +202,20 @@ void ExpFloat32_AVX2_FMA(const float *input, float *output, std::size_t count) {
 }
 
 void SigmoidFloat32_AVX2_FMA(const float *input, float *output, std::size_t count) {
-  const __m256 zero = _mm256_setzero_ps();
-  const __m256 one = _mm256_set1_ps(1.0f);
-  const __m256 sign_bit = _mm256_set1_ps(-0.0f);
   std::size_t index = 0;
+  for (; index + 16 <= count; index += 16) {
+    const __m256 result0 = SigmoidPs256Fma(_mm256_loadu_ps(input + index));
+    const __m256 result1 = SigmoidPs256Fma(_mm256_loadu_ps(input + index + 8));
+    _mm256_storeu_ps(output + index, result0);
+    _mm256_storeu_ps(output + index + 8, result1);
+  }
   for (; index + 8 <= count; index += 8) {
-    const __m256 value = _mm256_loadu_ps(input + index);
-    const __m256 exponent =
-        ExpNegativePs256Fma(_mm256_sub_ps(zero, _mm256_andnot_ps(sign_bit, value)));
-    const __m256 denominator = _mm256_add_ps(one, exponent);
-    __m256 positive = _mm256_rcp_ps(denominator);
-    positive =
-        _mm256_mul_ps(positive, _mm256_fnmadd_ps(denominator, positive, _mm256_set1_ps(2.0f)));
-    // A reciprocal refinement is not exactly one at +infinity.
-    positive = Select(_mm256_cmp_ps(exponent, zero, _CMP_EQ_OQ), one, positive);
-    const __m256 negative = _mm256_mul_ps(exponent, positive);
-    _mm256_storeu_ps(output + index, _mm256_blendv_ps(positive, negative, value));
+    _mm256_storeu_ps(output + index, SigmoidPs256Fma(_mm256_loadu_ps(input + index)));
   }
   if (index < count) {
     const __m256i mask = TailMask(count - index);
-    const __m256 value = _mm256_maskload_ps(input + index, mask);
-    const __m256 exponent =
-        ExpNegativePs256Fma(_mm256_sub_ps(zero, _mm256_andnot_ps(sign_bit, value)));
-    const __m256 denominator = _mm256_add_ps(one, exponent);
-    __m256 positive = _mm256_rcp_ps(denominator);
-    positive =
-        _mm256_mul_ps(positive, _mm256_fnmadd_ps(denominator, positive, _mm256_set1_ps(2.0f)));
-    positive = Select(_mm256_cmp_ps(exponent, zero, _CMP_EQ_OQ), one, positive);
-    const __m256 negative = _mm256_mul_ps(exponent, positive);
-    _mm256_maskstore_ps(output + index, mask, _mm256_blendv_ps(positive, negative, value));
+    _mm256_maskstore_ps(output + index, mask,
+                        SigmoidPs256Fma(_mm256_maskload_ps(input + index, mask)));
   }
 }
 
