@@ -407,8 +407,9 @@ class TestBenchmarkCli(ExtTestCase):
     def test_posts_aggregated_markdown_to_pull_request(self):
         aggregated = [
             {
-                column: "test|value" if column == "case" else 1
-                for column in _benchmark._AGGREGATED_COLUMNS
+                "case": "test|value",
+                "speedup": 1.23456,
+                "input_shapes": '[{"z": [2, 3, 4], "a": [5, 6]}]',
             }
         ]
         for pull_request, reference in [("623", ["623"]), ("", [])]:
@@ -434,14 +435,15 @@ class TestBenchmarkCli(ExtTestCase):
                     run.call_args.kwargs["input"],
                     "| speedup | input_shapes | test_name |\n"
                     "| --- | --- | --- |\n"
-                    "| 1 | 1 | test\\|value |\n",
+                    "| 1.23 | 2x3x4,5x6 | test\\|value |\n",
                 )
 
     def test_writes_pull_request_markdown(self):
         aggregated = [
             {
-                column: "test|value" if column == "case" else 1
-                for column in _benchmark._AGGREGATED_COLUMNS
+                "case": "test|value",
+                "speedup": 1,
+                "input_shapes": '[{"x": [2, 3]}]',
             }
         ]
         with tempfile.TemporaryDirectory() as temporary:
@@ -451,8 +453,32 @@ class TestBenchmarkCli(ExtTestCase):
                 output.read_text(encoding="utf-8"),
                 "| speedup | input_shapes | test_name |\n"
                 "| --- | --- | --- |\n"
-                "| 1 | 1 | test\\|value |\n",
+                "| 1.00 | 2x3 | test\\|value |\n",
             )
+
+    def test_pull_request_formatting_preserves_data_and_dataset_boundaries(self):
+        aggregated = [
+            {
+                "case": "multiple_datasets",
+                "speedup": 1.236,
+                "input_shapes": '[{"x": [2, 3], "bias": []}, {"x": [0, 3], "bias": [3]}]',
+            },
+            {"case": "unsupported", "speedup": None, "input_shapes": '[{"x": [1]}]'},
+            {"case": "slow", "speedup": 0.004, "input_shapes": '[{"x": [2, 3, 4]}]'},
+        ]
+        self.assertEqual(
+            _benchmark._pr_benchmark_markdown(aggregated),
+            "| speedup | input_shapes | test_name |\n"
+            "| --- | --- | --- |\n"
+            "| 1.24 | 2x3,scalar; 0x3,3 | multiple_datasets |\n"
+            "| None | 1 | unsupported |\n"
+            "| 0.00 | 2x3x4 | slow |\n",
+        )
+        self.assertEqual(aggregated[0]["speedup"], 1.236)
+        self.assertEqual(
+            aggregated[0]["input_shapes"],
+            '[{"x": [2, 3], "bias": []}, {"x": [0, 3], "bias": [3]}]',
+        )
 
     def test_main_runs_benchmark_and_writes_output(self):
         rows = ([{"duration_s": 1.0}], [{"case": "one"}])
