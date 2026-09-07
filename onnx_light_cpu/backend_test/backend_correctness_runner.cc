@@ -108,7 +108,8 @@ void CompareOutputs(const TestCase &test_case, const DataSet &data_set,
   }
   for (size_t index = 0; index < actual.size(); ++index) {
     const rt_ns::TensorComparison comparison = rt_ns::CompareTensors(
-        actual[index], data_set.outputs[index], test_case.rtol, test_case.atol);
+        actual[index], data_set.outputs[index], test_case.rtol, test_case.atol,
+        /*equal_nan=*/true);
     if (!comparison.close) {
       throw std::runtime_error(comparison.message);
     }
