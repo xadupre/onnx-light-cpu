@@ -136,9 +136,9 @@ a ratio below 1 means onnx-light-cpu is slower.
 
    * - Workload
      - One thread, CPU / ORT ms
-     - Ratio
+     - Ratio (ORT/CPU)
      - Ten threads, CPU / ORT ms
-     - Ratio
+     - Ratio (ORT/CPU)
    * - MatMul FP16, 512 square
      - 8.264 / 2.974
      - 0.360
@@ -210,11 +210,12 @@ The exact confirmation fixtures are:
 Supplemental coverage
 ---------------------
 
-The fixed baseline omits RMSNormalization, BiasGelu, SwiGLU, FP64 matrices
-and compact integer matrix multiplication. Selected instances were added
-to the isolated pass rather than declaring those families covered. These ratios
-also use ORT median divided by CPU median, so values above 1 mean onnx-light-cpu
-is faster for the selected fixture.
+The fixed case list used by ``benchmark_avx2_parity.py`` omits
+RMSNormalization, BiasGelu, SwiGLU, FP64 matrices and compact integer matrix
+multiplication. Selected instances were added to the isolated pass rather than
+declaring those families covered. These ratios also use ORT median divided by
+CPU median, so values above 1 mean onnx-light-cpu is faster for the selected
+fixture.
 
 .. list-table::
    :header-rows: 1
