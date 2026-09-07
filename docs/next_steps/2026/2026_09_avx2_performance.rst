@@ -115,6 +115,102 @@ acceptance gate remain pending.
 Current foundation
 ------------------
 
+September 7 dashboard follow-up
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The registered ``Sigmoid`` and last-axis ``Softmax`` dispatchers could not
+reach their existing fused AVX2/FMA implementations: the implementation
+library's ``ONNX_LIGHT_CPU_HAVE_AVX2_FMA`` definition was private and absent
+from the separate registration library. The registration target now receives
+the availability definition when those kernels are built, without applying
+AVX2 compiler flags to its portable translation units. Runtime dispatch still
+requires both AVX2 and FMA. The scalar activation fallback also explicitly
+disables the exponential cost model so the outer activation scheduler owns
+parallelism.
+
+An integration regression compares registered FP32 output exactly with the
+direct fused implementation, rather than accepting a numerically close scalar
+fallback. It fails before the CMake correction. Reference, aliasing, tail,
+special-value and executor cases cover the newly reachable path, including
+exact sigmoid saturation at positive infinity.
+
+On a native AVX2 Intel Core i7-13800H, Windows/MSVC Release, ORT 1.29,
+one thread and process affinity fixed to logical CPU 4, the isolated-runtime
+backend runner measured the following FP32 medians. Each runtime exits before
+the other starts; each phase uses 50 warmups and up to 500 samples or 0.5 s.
+The baseline is the registration path without the availability fix.
+
+.. list-table::
+   :header-rows: 1
+
+   * - Operator / shape
+     - Before (ms)
+     - After (ms)
+     - ORT (ms)
+     - Before / after
+   * - Sigmoid / 65,536
+     - 0.1792
+     - 0.0424
+     - 0.0314
+     - 4.23x
+   * - Sigmoid / 131,072
+     - 0.4572
+     - 0.0800
+     - 0.0730
+     - 5.71x
+   * - Sigmoid / 1,048,576
+     - 3.0583
+     - 1.2173
+     - 0.4703
+     - 2.51x
+   * - Softmax / 32 x 1,024
+     - 0.1026
+     - 0.0189
+     - 0.0220
+     - 5.43x
+   * - Softmax / 1,024 x 1,024
+     - 3.2041
+     - 0.8593
+     - 0.5074
+     - 3.73x
+
+Attention additionally reuses its AVX2 online-softmax row kernel for short
+query bursts and its vector mask/softmax helpers in the tiled FP32 path.
+Alternating full ``ComputeAttentionFloat32`` measurements, with the matrix
+implementation held constant, improve Q8/KV1024/D64 causal/nonpad from
+7.240 to 1.347 ms and the Q128/KV128/D64 additive case from 1.824 to
+0.911 ms (batch 1, 12 heads, one thread). Unsupported mask layouts,
+softcap/window modes and other ISAs retain their existing paths.
+
+For Gemm/MatMul, non-transposed FP32 skinny-N matrices now reduce strided
+columns with bounded AVX2 gathers and independent FMA accumulators. FP64
+register kernels use masked vectors for their final one to three columns.
+At M1024/N7/K1024, alternating standalone runs improve FP32 from 4.820 to
+1.339 ms (3.60x) and FP64 from 4.978 to 2.203 ms (2.26x). Four-worker
+configurations also improve these cases, but the FP64 plan remains serial:
+these results do not establish a scheduling or scaling improvement.
+Aligned wide FP64 and FP32 M=1 GEMV are unchanged; experiments that regressed
+those paths were discarded.
+
+The existing throughput driver accepts a case substring and FP32/FP64
+selection for reproducing focused matrix measurements:
+
+.. code-block:: console
+
+    gemm_throughput 1 dashboard_skinny_n7 fp32
+    gemm_throughput 1 dashboard_skinny_n7 fp64
+    gemm_throughput 4 dashboard fp32
+
+These are diagnostic development-machine measurements, not completion of the
+parity gate. The registered optimized attention cases still measure about
+0.70--0.84x ORT, and the largest activation cases retain gaps. CPU affinity
+does not eliminate frequency variation or other host activity. In particular,
+the earlier direct-kernel activation measurements did not establish that the
+registered runtime actually reached those kernels.
+A six-participant run also leaves the selected attention and activation
+cases below parity (0.32--0.59x ORT); closing multithread scheduling and
+throughput gaps remains necessary.
+
 The :doc:`2026_09_avx2_matrix_kernel_improvements` adds production AVX2
 FP16/FP32 single-row kernels and bounded FP16 panel widening, with controlled
 before/after measurements against ORT. Selected Qwen FP16 projections are

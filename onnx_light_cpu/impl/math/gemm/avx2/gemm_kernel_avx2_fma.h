@@ -11,6 +11,11 @@
 
 namespace onnx_light_cpu {
 
+// Non-transposed inputs, 2 <= N <= 8. The caller owns row scheduling.
+void GemmSkinnyNRange_AVX2(std::size_t N, std::size_t K, float alpha, const float *A,
+                           const float *B, float beta, const float *C, float *Y, std::size_t begin,
+                           std::size_t end);
+
 // Single-row, non-transposed B ranges. K must be nonzero; C must not alias Y.
 // Depth blocking bounds the live B pages without widening or packing B.
 void GemmSkinnyM1Range_AVX2_F32(std::size_t N, std::size_t K, float alpha, const float *A,

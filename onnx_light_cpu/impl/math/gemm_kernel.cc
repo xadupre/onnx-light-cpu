@@ -1245,7 +1245,7 @@ T SkinnyDotProduct(const SrcT *a, std::size_t a_stride, const SrcT *b, std::size
 
 template <typename T, typename SrcT = T>
 void GemmSkinnyN(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::size_t K, T alpha,
-                 const SrcT *A, const SrcT *B, T beta, const T *C, T *Y) {
+                 const SrcT *A, const SrcT *B, T beta, const T *C, T *Y, GemmKernelKind kind) {
   const bool has_bias = C != nullptr && beta != T(0);
   // ``A(m, k)`` and ``B(k, n)`` reduce to unit-stride reads for the common
   // inference layouts (non-transposed A and transposed weights, or ``N == 1``),
@@ -1254,6 +1254,17 @@ void GemmSkinnyN(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::
   const std::size_t a_stride = trans_a ? M : 1;
   const std::size_t b_stride = trans_b ? 1 : N;
   const auto execute = [&](std::int64_t begin, std::int64_t end) {
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
+    if constexpr (std::is_same_v<T, float> && std::is_same_v<SrcT, float>) {
+      if (!trans_a && !trans_b && N > 1 && N <= 8 && K >= 32 && kind == GemmKernelKind::kAVX2FMA) {
+        GemmSkinnyNRange_AVX2(N, K, alpha, A, B, beta, C, Y, static_cast<std::size_t>(begin),
+                              static_cast<std::size_t>(end));
+        return;
+      }
+    }
+#else
+    (void)kind;
+#endif
     for (std::int64_t row = begin; row < end; ++row) {
       const std::size_t m = static_cast<std::size_t>(row);
       const SrcT *a_row = trans_a ? A + m : A + m * K;
@@ -1779,7 +1790,7 @@ void GemmImpl(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::siz
                            runtime_blocking);
     }
   } else if constexpr (Algorithm == GemmAlgorithm::kSkinnyN) {
-    GemmSkinnyN<T, SrcT>(trans_a, trans_b, M, N, K, alpha, A, B, beta, C, Y);
+    GemmSkinnyN<T, SrcT>(trans_a, trans_b, M, N, K, alpha, A, B, beta, C, Y, kind);
   } else if constexpr (Algorithm == GemmAlgorithm::kSplitK) {
     GemmSplitK<T, TileFn, SrcT>(trans_a, trans_b, M, N, K, alpha, A, B, beta, C, Y, kind, tile,
                                 blocking);

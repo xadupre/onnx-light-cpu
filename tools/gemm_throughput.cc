@@ -13,8 +13,9 @@
 //
 // It is intentionally not a correctness gate and is not run by ctest. Build it
 // with ``-DONNX_LIGHT_CPU_BUILD_BENCHMARKS=ON`` and run the resulting
-// ``gemm_throughput [threads]`` executable. Its persistent executor reports the
-// maximum block count used by each prepared FP32/FP64 plan.
+// ``gemm_throughput [threads] [case substring] [dtype]`` executable. The optional
+// dtype selects fp32 or fp64 and reports median seconds as well as throughput.
+// Its persistent executor reports the maximum block count used by each plan.
 
 #include "onnx_light_cpu/impl/math/gemm/gemm_common.h"
 #include "onnx_light_cpu/impl/math/gemm/gemm_plan.h"
@@ -170,6 +171,14 @@ constexpr GemmCase kCases[] = {
     {"square_1024", 1024, 1024, 1024},
     {"square_2048", 2048, 2048, 2048},
     {"skinny_m_gemv", 1, 1024, 1024},
+    {"dashboard_gemv_4096", 1, 4096, 4096},
+    {"dashboard_wide_8192", 128, 8192, 128},
+    {"dashboard_wide_16384", 128, 16384, 128},
+    {"dashboard_wide_tail", 127, 8193, 129},
+    {"dashboard_skinny_n", 1024, 1, 1024},
+    {"dashboard_skinny_n3", 1024, 3, 1024},
+    {"dashboard_skinny_n7", 1024, 7, 1024},
+    {"dashboard_gemv_1024", 1, 1024, 1024},
     {"skinny_n", 1024, 1, 1024},
     {"large_k", 32, 32, 4096},
     {"trans_a_128", 128, 128, 128, true, false, false},
@@ -348,11 +357,32 @@ int main(int argc, char **argv) {
   std::printf("SIMD level: %s  FMA: %s  microarchitecture: %s  register rows: %zu  threads: %zu\n",
               SimdName(level), has_fma ? "yes" : "no", MicroarchitectureName(microarchitecture),
               register_rows, threads);
-  std::printf("%-18s %6s %6s %6s %8s %10s %14s %8s %10s %14s %14s %14s\n", "case", "M", "N", "K",
-              "fp32 thr", "fp32 blocks", "fp32 GFLOP/s", "fp64 thr", "fp64 blocks", "fp64 GFLOP/s",
-              "fp16 GFLOP/s", "bf16 GFLOP/s");
+  if (argc <= 3) {
+    std::printf("%-18s %6s %6s %6s %8s %10s %14s %8s %10s %14s %14s %14s\n", "case", "M", "N", "K",
+                "fp32 thr", "fp32 blocks", "fp32 GFLOP/s", "fp64 thr", "fp64 blocks",
+                "fp64 GFLOP/s", "fp16 GFLOP/s", "bf16 GFLOP/s");
+  }
 
   for (const GemmCase &c : kCases) {
+    if (argc > 2 && std::string(c.name).find(argv[2]) == std::string::npos) {
+      continue;
+    }
+    if (argc > 3) {
+      std::size_t useful_threads = 0;
+      std::int64_t blocks = 1;
+      const std::string dtype(argv[3]);
+      if (dtype != "fp32" && dtype != "fp64") {
+        std::fprintf(stderr, "dtype must be fp32 or fp64\n");
+        return 2;
+      }
+      const double gflops = dtype == "fp32"
+                                ? MeasureGflops<float>(c, &useful_threads, &executor, &blocks)
+                                : MeasureGflops<double>(c, &useful_threads, &executor, &blocks);
+      const double seconds = 2.0 * c.m * c.n * c.k / (gflops * 1e9);
+      std::printf("%s %s M=%zu N=%zu K=%zu seconds=%.9g GFLOP/s=%.3f blocks=%lld\n", c.name,
+                  dtype.c_str(), c.m, c.n, c.k, seconds, gflops, static_cast<long long>(blocks));
+      continue;
+    }
     std::size_t fp32_threads = 0;
     std::size_t fp64_threads = 0;
     std::int64_t fp32_blocks = 1;

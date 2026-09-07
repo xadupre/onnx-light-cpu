@@ -770,7 +770,7 @@ void ConvertFloat32Rank4ToRank3(const float *source, float *destination, std::si
 
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
 // AVX2+FMA decode fast path for one query row of `ComputeAttentionStreamingGeneric`
-// (FP32 only, `plan.q_length == 1`). Computes exactly the same online-softmax
+// (FP32 only, short-query streaming). Computes exactly the same online-softmax
 // recurrence as that function's scalar `[kv_start, kv_limit)` kv loop -- same
 // per-column past/current pointer choice, same mask semantics, same block
 // stepping -- but with the dot product, block max/exp/sum reduction, the
@@ -873,15 +873,16 @@ void ComputeAttentionStreamingGeneric(const AttentionPlan &plan, const typename 
       static_cast<std::int64_t>(participants), static_cast<std::int64_t>(participants)};
 
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
-  // Dedicated AVX2+FMA decode fast path: eligible only for FP32 `Q == 1`
-  // (the token-at-a-time decode shape) on AVX2 hardware without AVX-512
+  // Reuse the decode row kernel for short query bursts as well as Q == 1.
+  // Each row already resolves its own causal, nonpad and cache bounds.
+  // Eligible only for FP32 on AVX2 hardware without AVX-512
   // (AVX-512 keeps its own dispatch in `ComputeAttentionTiled` and is left
   // untouched here). A boolean/additive `attn_mask` is only handled by the
   // fast path when its KV stride is `1` (contiguous), matching
   // `ComputeAttentionTiled`'s own AVX-512 masked dispatch gate; any other
   // mask layout (e.g. broadcast) falls back to the scalar path unchanged.
   const bool use_avx2_decode_row =
-      std::is_same_v<Codec, Float32Codec> && plan.q_length == 1 &&
+      std::is_same_v<Codec, Float32Codec> && plan.q_length < 16 &&
       DetectSimdLevel() == SimdLevel::kAVX2 && CpuSupportsFma() &&
       (plan.mask_kind == AttentionMaskKind::kNone || plan.mask_strides.kv == 1);
 #endif
@@ -1147,6 +1148,13 @@ void ComputeAttentionTiled(const AttentionPlan &plan, const typename Codec::Stor
   const std::size_t total_tasks = plan.batch * tasks_per_batch;
   const auto *mask_bool = static_cast<const std::uint8_t *>(mask);
   const auto *mask_float = static_cast<const float *>(mask);
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
+  const bool use_avx2_softmax =
+      std::is_same_v<Codec, Float32Codec> && DetectSimdLevel() == SimdLevel::kAVX2 &&
+      CpuSupportsFma() && plan.softcap == 0.0f && plan.left_window_size < 0 &&
+      plan.right_window_size < 0 &&
+      (plan.mask_kind == AttentionMaskKind::kNone || plan.mask_strides.kv == 1);
+#endif
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512
   const bool use_bounded_avx512 =
       DetectSimdLevel() == SimdLevel::kAVX512 && plan.mask_kind == AttentionMaskKind::kNone &&
@@ -1242,6 +1250,47 @@ void ComputeAttentionTiled(const AttentionPlan &plan, const typename Codec::Stor
             for (std::size_t i = 0; i < rows; ++i) {
               float *score_row = scores.data() + i * columns;
               const std::size_t query = q0 + i;
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
+              if (use_avx2_softmax) {
+                std::int64_t bound = static_cast<std::int64_t>(plan.total_kv_length) - 1;
+                if (plan.causal) {
+                  bound = std::min(bound, WindowCenter(query, causal_offset));
+                }
+                if (nonpad_length >= 0) {
+                  bound = std::min(bound, nonpad_length - 1);
+                }
+                const std::size_t valid_columns =
+                    bound < static_cast<std::int64_t>(j0)
+                        ? 0
+                        : std::min(columns, static_cast<std::size_t>(bound) - j0 + 1);
+                bool any_valid = valid_columns != 0;
+                const std::ptrdiff_t mask_offset =
+                    mask_base + static_cast<std::ptrdiff_t>(query) * plan.mask_strides.q +
+                    static_cast<std::ptrdiff_t>(j0);
+                if (any_valid && plan.mask_kind == AttentionMaskKind::kBoolean) {
+                  any_valid = AttentionApplyBooleanMaskFloat32_AVX2_FMA(
+                      score_row, mask_bool + mask_offset, valid_columns);
+                } else if (any_valid && plan.mask_kind == AttentionMaskKind::kAdditive) {
+                  any_valid = AttentionApplyAdditiveMaskFloat32_AVX2_FMA(
+                      score_row, mask_float + mask_offset, valid_columns);
+                }
+                if (!any_valid) {
+                  std::fill_n(score_row, columns, 0.0f);
+                  continue;
+                }
+                std::fill(score_row + valid_columns, score_row + columns, kNegativeInfinity);
+                const AttentionSoftmaxBlockResultAVX2 result =
+                    AttentionSoftmaxBlockFloat32_AVX2_FMA(score_row, columns, maxima[i],
+                                                          denominators[i]);
+                maxima[i] = result.maximum;
+                valid[i] = 1;
+                if (!single_kv_block && result.correction != 1.0f) {
+                  AttentionScaleFloat32_AVX2_FMA(accumulator.data() + i * plan.v_head_dim,
+                                                 result.correction, plan.v_head_dim);
+                }
+                continue;
+              }
+#endif
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512
               if (use_bounded_avx512) {
                 std::int64_t bound = static_cast<std::int64_t>(plan.total_kv_length) - 1;

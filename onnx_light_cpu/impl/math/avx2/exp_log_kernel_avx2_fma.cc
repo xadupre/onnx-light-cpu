@@ -207,6 +207,8 @@ void SigmoidFloat32_AVX2_FMA(const float *input, float *output, std::size_t coun
     __m256 positive = _mm256_rcp_ps(denominator);
     positive =
         _mm256_mul_ps(positive, _mm256_fnmadd_ps(denominator, positive, _mm256_set1_ps(2.0f)));
+    // A reciprocal refinement is not exactly one at +infinity.
+    positive = Select(_mm256_cmp_ps(exponent, zero, _CMP_EQ_OQ), one, positive);
     const __m256 negative = _mm256_mul_ps(exponent, positive);
     _mm256_storeu_ps(output + index, _mm256_blendv_ps(positive, negative, value));
   }
@@ -219,6 +221,7 @@ void SigmoidFloat32_AVX2_FMA(const float *input, float *output, std::size_t coun
     __m256 positive = _mm256_rcp_ps(denominator);
     positive =
         _mm256_mul_ps(positive, _mm256_fnmadd_ps(denominator, positive, _mm256_set1_ps(2.0f)));
+    positive = Select(_mm256_cmp_ps(exponent, zero, _CMP_EQ_OQ), one, positive);
     const __m256 negative = _mm256_mul_ps(exponent, positive);
     _mm256_maskstore_ps(output + index, mask, _mm256_blendv_ps(positive, negative, value));
   }

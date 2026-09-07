@@ -414,6 +414,34 @@ void GemmSkinnyM1Range_AVX2_F32(std::size_t N, std::size_t K, float alpha, const
   GemmSkinnyM1Range(N, K, alpha, A, B, beta, C, Y, begin, end);
 }
 
+void GemmSkinnyNRange_AVX2(std::size_t N, std::size_t K, float alpha, const float *A,
+                           const float *B, float beta, const float *C, float *Y, std::size_t begin,
+                           std::size_t end) {
+  const __m256i offsets = _mm256_mullo_epi32(_mm256_setr_epi32(0, 1, 2, 3, 4, 5, 6, 7),
+                                             _mm256_set1_epi32(static_cast<int>(N)));
+  for (std::size_t m = begin; m < end; ++m) {
+    const float *a = A + m * K;
+    for (std::size_t n = 0; n < N; ++n) {
+      const float *b = B + n;
+      __m256 acc0 = _mm256_setzero_ps();
+      __m256 acc1 = _mm256_setzero_ps();
+      std::size_t k = 0;
+      for (; k + 16 <= K; k += 16) {
+        const __m256 b0 = _mm256_i32gather_ps(b + k * N, offsets, 4);
+        const __m256 b1 = _mm256_i32gather_ps(b + (k + 8) * N, offsets, 4);
+        acc0 = _mm256_fmadd_ps(_mm256_loadu_ps(a + k), b0, acc0);
+        acc1 = _mm256_fmadd_ps(_mm256_loadu_ps(a + k + 8), b1, acc1);
+      }
+      float sum = HorizontalSum(_mm256_add_ps(acc0, acc1));
+      for (; k < K; ++k) {
+        sum += a[k] * b[k * N];
+      }
+      const std::size_t index = m * N + n;
+      Y[index] = alpha * sum + (C != nullptr && beta != 0.0f ? beta * C[index] : 0.0f);
+    }
+  }
+}
+
 template <std::size_t MR>
 void GemmMicroKernel_AVX2FMA_F32Impl(std::size_t nb, std::size_t K, float alpha, float beta,
                                      const float *Bmat, std::size_t N, const float *Crow_base,
@@ -639,8 +667,29 @@ void GemmMicroKernel_AVX2FMA_F64Impl(std::size_t nb, std::size_t K, double alpha
     }
   }
   if (n < nb) {
-    GemmMicroKernel_Scalar_F64(MR, nb - n, K, alpha, beta, Bmat, N, Crow_base, Cstride, Yrow_base,
-                               Ystride, n0 + n, mode, Apack);
+    const __m256i tail = _mm256_cmpgt_epi64(_mm256_set1_epi64x(static_cast<long long>(nb - n)),
+                                            _mm256_setr_epi64x(0, 1, 2, 3));
+    __m256d acc[MR];
+    for (std::size_t r = 0; r < MR; ++r) {
+      acc[r] = _mm256_setzero_pd();
+    }
+    for (std::size_t k = 0; k < K; ++k) {
+      const __m256d vb = _mm256_maskload_pd(Bmat + k * N + n0 + n, tail);
+      for (std::size_t r = 0; r < MR; ++r) {
+        acc[r] = _mm256_fmadd_pd(_mm256_set1_pd(Apack[r * K + k]), vb, acc[r]);
+      }
+    }
+    for (std::size_t r = 0; r < MR; ++r) {
+      double *Yrow = Yrow_base + r * Ystride + n0 + n;
+      __m256d res = alpha_is_one ? acc[r] : _mm256_mul_pd(valpha, acc[r]);
+      if (mode == GemmAccumMode::kInitBias) {
+        const __m256d vc = _mm256_maskload_pd(Crow_base + r * Cstride + n0 + n, tail);
+        res = _mm256_add_pd(res, beta_is_one ? vc : _mm256_mul_pd(vbeta, vc));
+      } else if (mode == GemmAccumMode::kAccumulate) {
+        res = _mm256_add_pd(res, _mm256_maskload_pd(Yrow, tail));
+      }
+      _mm256_maskstore_pd(Yrow, tail, res);
+    }
   }
 }
 
