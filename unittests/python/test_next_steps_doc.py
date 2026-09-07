@@ -31,6 +31,12 @@ def test_next_steps_index_matches_roadmap_statuses():
             flags=re.MULTILINE,
         )
     )
+    assert [match.group(1) for match in section_matches] == [
+        "Started",
+        "Planned",
+        "Discussion",
+        "Completed",
+    ]
     sections = {
         match.group(1): next_steps[
             match.end() : (
