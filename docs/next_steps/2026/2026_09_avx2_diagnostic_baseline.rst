@@ -187,8 +187,9 @@ a ratio below 1 means onnx-light-cpu is slower.
 
 Some multithread results remain noisy: CPU p90/p10 reaches approximately 2.9,
 and the Attention ten-thread ratio varied from 0.465 to 0.720 between passes.
-Qwen gate/up was added only in the confirmation pass; its negative scaling
-needs a dedicated repeatability study. The large LM-head cases from the
+Qwen gate/up was added only in the confirmation pass; its ten-thread CPU median
+is slower than its one-thread median, so that negative scaling needs a
+dedicated repeatability study. The large LM-head cases from the
 initial short-budget sweep must not be extrapolated from single samples.
 
 The exact confirmation fixtures are:
@@ -210,7 +211,9 @@ Supplemental coverage
 
 The fixed baseline omits RMSNormalization, BiasGelu, SwiGLU, FP64 matrices
 and compact integer matrix multiplication. Selected instances were added
-to the isolated pass rather than declaring those families covered.
+to the isolated pass rather than declaring those families covered. These ratios
+also use ORT median divided by CPU median, so values above 1 mean onnx-light-cpu
+is faster for the selected fixture.
 
 .. list-table::
    :header-rows: 1
