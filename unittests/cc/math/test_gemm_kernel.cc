@@ -5,6 +5,7 @@
 #include "onnx_light_cpu/impl/execution.h"
 #include "onnx_light_cpu/impl/math/gemm/amx/gemm_amx_tile.h"
 #include "onnx_light_cpu/impl/math/gemm/float8/float8_conversion.h"
+#include "onnx_light_cpu/impl/math/gemm/gemm_bf16_dispatch.h"
 #include "onnx_light_cpu/impl/math/gemm/gemm_common.h"
 #include "onnx_light_cpu/impl/math/gemm/gemm_plan.h"
 #include "onnx_light_cpu/impl/math/gemm/vnni/integer_gemm_vnni.h"
@@ -1420,6 +1421,40 @@ void CheckGemmBf16NativeDriver(bool trans_a, std::size_t M, std::size_t N, std::
 
 } // namespace
 
+TEST(GemmBf16Dispatch, GeneralPrioritizesAmxThenAvx512ThenAvx2) {
+  using onnx_light_cpu::detail::GemmBf16Capabilities;
+  using Kind = onnx_light_cpu::detail::GemmBf16KernelKind;
+  const Kind expected[] = {Kind::kNone,    Kind::kAVX2,    Kind::kAVX512BF16, Kind::kAVX512BF16,
+                           Kind::kAMXBF16, Kind::kAMXBF16, Kind::kAMXBF16,    Kind::kAMXBF16};
+  for (unsigned mask = 0; mask < 8; ++mask) {
+    SCOPED_TRACE(mask);
+    const GemmBf16Capabilities capabilities{(mask & 1) != 0, (mask & 2) != 0, (mask & 4) != 0};
+    EXPECT_EQ(onnx_light_cpu::detail::SelectGemmBf16KernelKind(
+                  onnx_light_cpu::GemmAlgorithm::kGeneral, false, capabilities),
+              expected[mask]);
+    EXPECT_EQ(onnx_light_cpu::detail::SelectGemmBf16KernelKind(
+                  onnx_light_cpu::GemmAlgorithm::kDirect, false, capabilities),
+              capabilities.avx2_fma ? Kind::kAVX2 : Kind::kNone);
+  }
+}
+
+TEST(GemmBf16Dispatch, PreservesLayoutAndAlgorithmRestrictions) {
+  using onnx_light_cpu::GemmAlgorithm;
+  using onnx_light_cpu::detail::GemmBf16KernelKind;
+  for (const auto algorithm :
+       {GemmAlgorithm::kGeneral, GemmAlgorithm::kDirect, GemmAlgorithm::kSkinnyM,
+        GemmAlgorithm::kSkinnyN, GemmAlgorithm::kSplitK}) {
+    EXPECT_EQ(onnx_light_cpu::detail::SelectGemmBf16KernelKind(algorithm, true, {true, true, true}),
+              GemmBf16KernelKind::kNone);
+  }
+  for (const auto algorithm :
+       {GemmAlgorithm::kSkinnyM, GemmAlgorithm::kSkinnyN, GemmAlgorithm::kSplitK}) {
+    EXPECT_EQ(
+        onnx_light_cpu::detail::SelectGemmBf16KernelKind(algorithm, false, {true, true, true}),
+        GemmBf16KernelKind::kNone);
+  }
+}
+
 TEST(GemmBf16Native, ScalarKernelMatchesReference) {
   // Portable scalar member: several row blocks (M > 6), exact-16 and tail N,
   // even and odd K, an empty K, ``trans_a``, and a non-unit alpha.
@@ -1497,7 +1532,7 @@ TEST(GemmHalf, BFloat16SveNativeGeneralColumnTails) {
 }
 
 TEST(GemmBf16Native, AmxBf16KernelMatchesReferenceWhenSupported) {
-  if (!onnx_light_cpu::CpuSupportsAmxBf16() || !onnx_light_cpu::AmxTileStateAvailable()) {
+  if (!onnx_light_cpu::AmxTileStateAvailable() || !onnx_light_cpu::CpuSupportsAmxBf16()) {
     GTEST_SKIP() << "CPU does not support AMX-BF16 tile state";
   }
   // On capable hardware the public BFLOAT16 GEMM path dispatches these general

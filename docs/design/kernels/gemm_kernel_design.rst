@@ -106,6 +106,12 @@ reports a newer ISA. This keeps the selected micro-kernel, register dimensions,
 blocking, and participant limits consistent with a native AVX2 host; it never
 raises the detected level above the hardware capability.
 
+For general BFLOAT16 GEMM with non-transposed ``B``, native x86 dispatch
+prioritizes AMX-BF16, then AVX-512BF16, then AVX2/FMA. AMX tile-state permission
+is requested before its availability is cached. The direct algorithm retains
+its AVX2/FMA path; transposed ``B``, skinny algorithms, and Split-K retain their
+existing fallbacks. All candidates remain gated by compilation and CPU/OS support.
+
 Independently of the branch selected above, every micro-kernel call also goes
 through two cache-blocking / packing steps in ``GemmImpl`` before the
 micro-kernel is invoked (see the file-level comment in ``gemm_kernel.cc`` for

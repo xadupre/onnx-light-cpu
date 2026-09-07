@@ -46,6 +46,7 @@
 #include "onnx_light_cpu/impl/execution.h"
 #include "onnx_light_cpu/impl/math/gemm/arm/gemm_kernel_arm.h"
 #include "onnx_light_cpu/impl/math/gemm/float8/float8_conversion.h"
+#include "onnx_light_cpu/impl/math/gemm/gemm_bf16_dispatch.h"
 #include "onnx_light_cpu/impl/math/gemm/gemm_common.h"
 #include "onnx_light_cpu/impl/math/half_conversion.h"
 
@@ -2057,49 +2058,49 @@ void GemmHalfPlanned(bool is_bfloat16, bool trans_a, bool trans_b, std::size_t M
   if (is_bfloat16) {
     const auto *a = reinterpret_cast<const BFloat16Source *>(A);
     const auto *b = reinterpret_cast<const BFloat16Source *>(B);
-#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
     if constexpr (Algorithm == GemmAlgorithm::kGeneral || Algorithm == GemmAlgorithm::kDirect) {
-      static const bool use_avx2 = DetectSimdLevel() >= SimdLevel::kAVX2 && CpuSupportsFma();
-      if (use_avx2 && !trans_b) {
-        const std::size_t mr = std::min<std::size_t>(selected.mr, kGemmAVX2MR);
-        GemmBf16NativeGeneral(trans_a, M, N, K, alpha, A, B, Y, &GemmMicroKernel_AVX2BF16, mr,
-                              &compact_selected);
-        return;
-      }
-    }
-#endif
+      static const GemmBf16Capabilities capabilities = [] {
+        GemmBf16Capabilities result;
+        if constexpr (Algorithm == GemmAlgorithm::kGeneral) {
 #ifdef ONNX_LIGHT_CPU_HAVE_AMX_BF16
-    // Roadmap PR07.6: prefer the native AMX-BF16 tile kernel when the CPU
-    // supports AMX-BF16 and the OS has enabled tile state. Like the AVX-512BF16
-    // path it keeps both operands in BFLOAT16 and requires a non-transposed
-    // ``B``; it falls back to the AVX-512BF16 kernel (below) or the converting
-    // path for every other shape or ISA.
-    if constexpr (Algorithm == GemmAlgorithm::kGeneral) {
-      static const bool use_amx_bf16 = CpuSupportsAmxBf16() && AmxTileStateAvailable();
-      if (use_amx_bf16 && !trans_b) {
+          // Request tile-state permission before caching the AMX feature check.
+          result.amx_bf16 = AmxTileStateAvailable() && CpuSupportsAmxBf16();
+#endif
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512BF16
+          result.avx512_bf16 = CpuSupportsAvx512Bf16();
+#endif
+        }
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
+        result.avx2_fma = DetectSimdLevel() >= SimdLevel::kAVX2 && CpuSupportsFma();
+#endif
+        return result;
+      }();
+      [[maybe_unused]] const auto native_kind =
+          SelectGemmBf16KernelKind(Algorithm, trans_b, capabilities);
+#ifdef ONNX_LIGHT_CPU_HAVE_AMX_BF16
+      if (native_kind == GemmBf16KernelKind::kAMXBF16) {
         GemmBf16NativeGeneral(trans_a, M, N, K, alpha, A, B, Y, &GemmMicroKernel_AMXBF16,
                               kGemmAmxBf16MR, &compact_selected);
         return;
       }
-    }
 #endif
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512BF16
-    // Roadmap PR07.4: when the CPU natively supports AVX-512BF16, run the
-    // general BFLOAT16 algorithm through the native ``vdpbf16ps`` micro-kernel,
-    // which keeps both operands in BFLOAT16 (halving the ``B`` traffic) instead
-    // of widening while packing. It requires a non-transposed ``B`` so the
-    // kernel can read it with a plain row stride; every other shape keeps the
-    // converting path.
-    if constexpr (Algorithm == GemmAlgorithm::kGeneral) {
-      static const bool use_avx512bf16 = CpuSupportsAvx512Bf16();
-      if (use_avx512bf16 && !trans_b) {
+      if (native_kind == GemmBf16KernelKind::kAVX512BF16) {
         const std::size_t mr = std::min<std::size_t>(selected.mr, kGemmAVX512MR);
         GemmBf16NativeGeneral(trans_a, M, N, K, alpha, A, B, Y, &GemmMicroKernel_AVX512BF16, mr,
                               &compact_selected);
         return;
       }
-    }
 #endif
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
+      if (native_kind == GemmBf16KernelKind::kAVX2) {
+        const std::size_t mr = std::min<std::size_t>(selected.mr, kGemmAVX2MR);
+        GemmBf16NativeGeneral(trans_a, M, N, K, alpha, A, B, Y, &GemmMicroKernel_AVX2BF16, mr,
+                              &compact_selected);
+        return;
+      }
+#endif
+    }
 #ifdef ONNX_LIGHT_CPU_HAVE_SVE
     // Roadmap PR08.3: on a machine whose runtime ARM profile selects SVE (a
     // vector length of at least 256 bits; shorter vectors keep the better
