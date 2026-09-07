@@ -78,8 +78,9 @@ thread-pool policies remain unchanged.
     The :doc:`2026_09_avx2_diagnostic_baseline` demonstrates substantial
     interference from idle ORT spinning in the original shared-process runner.
     `#647 <https://github.com/xadupre/onnx-light-cpu/pull/647>`_ now isolates
-    the runtimes. Results collected with the older runner remain diagnostic
-    even when ``--environment pinned`` was set.
+    the runtimes. Results collected with the older runner must not be used for
+    parity decisions and remain diagnostic even when ``--environment pinned``
+    was set.
     Report the revision used to compile the binaries, not just HEAD at the
     end of the run.
 

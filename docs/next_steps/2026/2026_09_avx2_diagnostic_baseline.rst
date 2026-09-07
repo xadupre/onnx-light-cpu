@@ -213,9 +213,8 @@ Supplemental coverage
 The fixed case list used by ``benchmark_avx2_parity.py`` omits
 RMSNormalization, BiasGelu, SwiGLU, FP64 matrices and compact integer matrix
 multiplication. Selected instances were added to the isolated pass rather than
-declaring those families covered. These ratios also use ORT median divided by
-CPU median, so values above 1 mean onnx-light-cpu is faster for the selected
-fixture.
+declaring those families covered. These ratios use ORT median divided by CPU
+median: a ratio below 1 means onnx-light-cpu is slower for the selected fixture.
 
 .. list-table::
    :header-rows: 1
