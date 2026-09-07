@@ -116,7 +116,7 @@ Current foundation
 ------------------
 
 September 7 dashboard follow-up
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 The registered ``Sigmoid`` and last-axis ``Softmax`` dispatchers could not
 reach their existing fused AVX2/FMA implementations: the implementation
