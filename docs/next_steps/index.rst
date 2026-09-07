@@ -32,6 +32,7 @@ optimize next.
     2026/2026_08_kernel_performance_improvements
     2026/2026_08_com_microsoft_domain
     2026/2026_09_avx2_performance
+    2026/2026_09_avx2_diagnostic_baseline
     2026/2026_09_avx2_matrix_kernel_improvements
 
 Started
@@ -48,6 +49,9 @@ Started
       - Uses the explicit AVX2 SIMD ceiling to measure and rank the remaining
         gaps below the completed AVX-512 paths before optimizing matrix,
         Attention, activation, normalization, unary, and binary workloads.
+        The :doc:`isolated-runtime diagnostic baseline
+        <2026/2026_09_avx2_diagnostic_baseline>` identifies matrix and Attention
+        priorities and a thread-pool interference bias in the existing runner.
         The :doc:`matrix kernel follow-up
         <2026/2026_09_avx2_matrix_kernel_improvements>` delivers measured
         FP16 packing and FP16/FP32 single-row improvements; full ORT parity
