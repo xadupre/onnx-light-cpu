@@ -773,6 +773,23 @@ template <typename T> void ComputeModFloat(const void *left, const void *right, 
   WriteTyped<T>(out, static_cast<T>(std::fmod(ReadTyped<T>(left), ReadTyped<T>(right))));
 }
 
+template <typename T> T FloatRemainder(T left, T right) {
+  // Adjust the truncated remainder instead of subtracting floor(left / right) * right,
+  // which can overflow or lose precision. Exact zero has the divisor's sign.
+  T value = std::fmod(left, right);
+  if (value == T{0}) {
+    return std::copysign(T{0}, right);
+  }
+  if ((value < T{0}) != (right < T{0})) {
+    value += right;
+  }
+  return value;
+}
+
+template <typename T> void ComputeRemainderFloat(const void *left, const void *right, void *out) {
+  WriteTyped<T>(out, FloatRemainder(ReadTyped<T>(left), ReadTyped<T>(right)));
+}
+
 template <typename TBase, typename TExp>
 void ComputePow(const void *left, const void *right, void *out) {
   const TBase lhs = ReadTyped<TBase>(left);
@@ -899,6 +916,10 @@ ONNX_LIGHT_CPU_HALF_BINARY(ComputeFloat16Mod, detail::Float16BitsToFloat,
                            detail::FloatToFloat16Bits, std::fmod(a, b))
 ONNX_LIGHT_CPU_HALF_BINARY(ComputeBfloat16Mod, detail::Bfloat16BitsToFloat,
                            detail::FloatToBFloat16Bits, std::fmod(a, b))
+ONNX_LIGHT_CPU_HALF_BINARY(ComputeFloat16Remainder, detail::Float16BitsToFloat,
+                           detail::FloatToFloat16Bits, FloatRemainder(a, b))
+ONNX_LIGHT_CPU_HALF_BINARY(ComputeBfloat16Remainder, detail::Bfloat16BitsToFloat,
+                           detail::FloatToBFloat16Bits, FloatRemainder(a, b))
 ONNX_LIGHT_CPU_HALF_BINARY(ComputeFloat16Equal, detail::Float16BitsToFloat,
                            detail::FloatToFloat16Bits, a == b ? 1.0f : 0.0f)
 #undef ONNX_LIGHT_CPU_HALF_BINARY
@@ -1043,6 +1064,16 @@ void BulkFloat16Mod(const void *left, const void *right, void *out, std::size_t 
 void BulkBfloat16Mod(const void *left, const void *right, void *out, std::size_t count) {
   BulkHalfContiguous<detail::ConvertBFloat16ToFloat32, detail::ConvertFloat32ToBFloat16>(
       left, right, out, count, [](float a, float b) { return std::fmod(a, b); });
+}
+
+void BulkFloat16Remainder(const void *left, const void *right, void *out, std::size_t count) {
+  BulkHalfContiguous<detail::ConvertFloat16ToFloat32, detail::ConvertFloat32ToFloat16>(
+      left, right, out, count, FloatRemainder<float>);
+}
+
+void BulkBfloat16Remainder(const void *left, const void *right, void *out, std::size_t count) {
+  BulkHalfContiguous<detail::ConvertBFloat16ToFloat32, detail::ConvertFloat32ToBFloat16>(
+      left, right, out, count, FloatRemainder<float>);
 }
 
 void BulkFloat16Pow(const void *left, const void *right, void *out, std::size_t count) {
@@ -1401,13 +1432,13 @@ BinaryKernelDescriptor::Adapter::ScalarFn SelectScalar(BinaryOperator op, DT lef
   case BinaryOperator::kMod:
     switch (left) {
     case DT::FLOAT:
-      return &ComputeModFloat<float>;
+      return attributes.mod_fmod == 0 ? &ComputeRemainderFloat<float> : &ComputeModFloat<float>;
     case DT::DOUBLE:
-      return &ComputeModFloat<double>;
+      return attributes.mod_fmod == 0 ? &ComputeRemainderFloat<double> : &ComputeModFloat<double>;
     case DT::FLOAT16:
-      return &ComputeFloat16Mod;
+      return attributes.mod_fmod == 0 ? &ComputeFloat16Remainder : &ComputeFloat16Mod;
     case DT::BFLOAT16:
-      return &ComputeBfloat16Mod;
+      return attributes.mod_fmod == 0 ? &ComputeBfloat16Remainder : &ComputeBfloat16Mod;
     case DT::INT8:
       return attributes.mod_fmod == 0 ? [](const void *l, const void *r,
                                            void *o) { ComputeModInt<std::int8_t>(l, r, o, 0); }
@@ -2105,18 +2136,38 @@ void SelectAdditionalBulk(BinaryOperator op, DT left, DT right, const Attrs &att
       ONNX_LIGHT_CPU_BIND_MOD_CASE(UINT32, std::uint32_t)
       ONNX_LIGHT_CPU_BIND_MOD_CASE(UINT64, std::uint64_t)
     case DT::FLOAT:
-      ONNX_LIGHT_CPU_BIND_TYPED_BULK(float, float, float, ComputeModFloat<float>)
+      if (attributes.mod_fmod == 0) {
+        ONNX_LIGHT_CPU_BIND_TYPED_BULK(float, float, float, ComputeRemainderFloat<float>)
+      } else {
+        ONNX_LIGHT_CPU_BIND_TYPED_BULK(float, float, float, ComputeModFloat<float>)
+      }
       break;
     case DT::DOUBLE:
-      ONNX_LIGHT_CPU_BIND_TYPED_BULK(double, double, double, ComputeModFloat<double>)
+      if (attributes.mod_fmod == 0) {
+        ONNX_LIGHT_CPU_BIND_TYPED_BULK(double, double, double, ComputeRemainderFloat<double>)
+      } else {
+        ONNX_LIGHT_CPU_BIND_TYPED_BULK(double, double, double, ComputeModFloat<double>)
+      }
       break;
     case DT::FLOAT16:
+      if (attributes.mod_fmod == 0) {
+        ONNX_LIGHT_CPU_BIND_TYPED_BULK(std::uint16_t, std::uint16_t, std::uint16_t,
+                                       ComputeFloat16Remainder)
+        adapter.bulk_contiguous = &BulkFloat16Remainder;
+        break;
+      }
       adapter.bulk_left_scalar =
           &BulkComputeLeftScalar<std::uint16_t, std::uint16_t, std::uint16_t, &ComputeFloat16Mod>;
       adapter.bulk_right_scalar =
           &BulkComputeRightScalar<std::uint16_t, std::uint16_t, std::uint16_t, &ComputeFloat16Mod>;
       break;
     case DT::BFLOAT16:
+      if (attributes.mod_fmod == 0) {
+        ONNX_LIGHT_CPU_BIND_TYPED_BULK(std::uint16_t, std::uint16_t, std::uint16_t,
+                                       ComputeBfloat16Remainder)
+        adapter.bulk_contiguous = &BulkBfloat16Remainder;
+        break;
+      }
       adapter.bulk_left_scalar =
           &BulkComputeLeftScalar<std::uint16_t, std::uint16_t, std::uint16_t, &ComputeBfloat16Mod>;
       adapter.bulk_right_scalar =
@@ -2295,7 +2346,8 @@ BinaryKernelDescriptor::BinaryKernelDescriptor(std::string op_type, std::int64_t
     if (signature.minimum_version != 0 && opset_version_ < signature.minimum_version) {
       continue;
     }
-    if ((manifest_.op == BinaryOperator::kMod) && attributes_.mod_fmod == 0 &&
+    if ((manifest_.op == BinaryOperator::kMod) && opset_version_ < 28 &&
+        attributes_.mod_fmod == 0 &&
         (signature.left == DT::FLOAT || signature.left == DT::DOUBLE ||
          signature.left == DT::FLOAT16 || signature.left == DT::BFLOAT16)) {
       continue;

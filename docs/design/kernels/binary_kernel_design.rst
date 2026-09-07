@@ -45,6 +45,15 @@ The manifest covers arithmetic (``Add``, ``Sub``, ``Mul``, ``Div``, ``Mod``,
 ``Pow``), comparisons, logical operators, bitwise operators, ``BitShift``, and
 ``PRelu``. It is the source of truth for registered type signatures.
 
+``Mod`` tracks schema version 28 while retaining minimum opset 10 compatibility.
+Starting at opset 28, floating-point ``fmod=0`` uses floor-remainder semantics:
+nonzero results and exact zeros take the divisor's sign. The implementation
+adjusts ``std::fmod`` rather than forming a potentially overflowing quotient.
+``fmod=1`` retains truncated-remainder semantics, including the dividend's
+signed zero. Earlier opsets still require ``fmod=1`` for floating-point inputs.
+FLOAT16 and BFLOAT16 use the same scalar semantics through the existing
+SIMD-capable float conversion adapters.
+
 After right-aligning shapes, the plan assigns zero strides to broadcast
 dimensions, removes unit dimensions, coalesces compatible adjacent dimensions,
 and selects one loop family:
