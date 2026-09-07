@@ -773,16 +773,24 @@ TEST(OnnxLightBackendKernels, LogBenchmarkRunsThroughRuntime) {
 }
 
 TEST(OnnxLightBackendKernels, SigmoidBenchmarkRunsThroughRuntime) {
-  const std::vector<std::string> failures =
-      RunCpuBackendCases("Sigmoid", core::backend_test::TestMode::BENCHMARK,
-                         "test_cpu_sigmoid_n1024_float32_benchmark");
+  std::vector<std::string> failures;
+  for (const char *data_type : {"float32", "float16", "bfloat16"}) {
+    const std::vector<std::string> type_failures =
+        RunCpuBackendCases("Sigmoid", core::backend_test::TestMode::BENCHMARK,
+                           "test_cpu_sigmoid_n1024_" + std::string(data_type) + "_benchmark");
+    failures.insert(failures.end(), type_failures.begin(), type_failures.end());
+  }
   EXPECT_TRUE(failures.empty()) << Describe(failures);
 }
 
 TEST(OnnxLightBackendKernels, SoftmaxBenchmarkRunsThroughRuntime) {
-  const std::vector<std::string> failures =
-      RunCpuBackendCases("Softmax", core::backend_test::TestMode::BENCHMARK,
-                         "test_cpu_softmax_1x1024_float32_benchmark");
+  std::vector<std::string> failures;
+  for (const char *data_type : {"float32", "float16", "bfloat16"}) {
+    const std::vector<std::string> type_failures =
+        RunCpuBackendCases("Softmax", core::backend_test::TestMode::BENCHMARK,
+                           "test_cpu_softmax_1x1024_" + std::string(data_type) + "_benchmark");
+    failures.insert(failures.end(), type_failures.begin(), type_failures.end());
+  }
   EXPECT_TRUE(failures.empty()) << Describe(failures);
 }
 
