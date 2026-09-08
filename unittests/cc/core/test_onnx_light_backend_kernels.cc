@@ -503,6 +503,7 @@ TEST(OnnxLightBackendKernels, SimplifiedLayerNormalizationBenchmarksAreLazyAndCo
   auto cases =
       CollectCpuCases("SimplifiedLayerNormalization", core::backend_test::TestMode::BENCHMARK);
   ASSERT_EQ(cases.size(), 96u);
+  onnx_light_cpu::RegisterAllKernels();
   std::vector<std::string> failures;
   for (auto &test_case : cases) {
     EXPECT_FALSE(test_case.materialized());

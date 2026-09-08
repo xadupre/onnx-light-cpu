@@ -11,11 +11,11 @@ NumPy implementation of the normalization kernel.
 
 import subprocess
 import sys
-import unittest
 
 import ml_dtypes
 import numpy as np
 
+from onnx_light.ext_test_case import ExtTestCase
 from onnx_light.onnx import TensorProto, helper
 from onnx_light.onnx.reference import ReferenceEvaluator
 from onnx_light.onnx_core.graph_builder import GraphBuilder
@@ -109,7 +109,7 @@ def _check_registration_entry(entry):
     assert _shape(model.graph.output[1]) == ["B", 1, 1]
 
 
-class TestSimplifiedLayerNormalization(unittest.TestCase):
+class TestSimplifiedLayerNormalization(ExtTestCase):
     @classmethod
     def setUpClass(cls):
         register_operator_support()
@@ -271,4 +271,6 @@ if __name__ == "__main__":
     if len(sys.argv) == 3 and sys.argv[1] == "--registration-entry":
         _check_registration_entry(sys.argv[2])
     else:
+        import unittest
+
         unittest.main()
