@@ -273,7 +273,7 @@ void InstanceNormalize(const Tensor &x, const Tensor &scale, const Tensor &bias,
             const Acc multiplier = Traits::Load(scale_data, channel) /
                                    std::sqrt(moments.variance + static_cast<Acc>(epsilon));
             const Acc offset = Traits::Load(bias_data, channel) - moments.mean * multiplier;
-            if constexpr (SimdAffine) {
+            if constexpr (SimdAffine && Type == DataType::FLOAT) {
               ApplyNormalizationScaleBiasFloat32(input + base, output + base, spatial, multiplier,
                                                  offset);
             } else {
