@@ -175,6 +175,20 @@ class TestBenchmarkCli(ExtTestCase):
         self.assertEqual(tests, ["^test_cpu_(pow)_"])
         self.assertEqual(dtypes, ["float32"])
 
+    def test_kernel_path_takes_precedence_over_unrelated_symbols(self):
+        kernels = [
+            self._kernel("Add", ("FLOAT",)),
+            self._kernel("And", ("BOOL",)),
+            self._kernel("TreeEnsemble", ("FLOAT",)),
+        ]
+        tests, dtypes = infer_pr_benchmark_selection(
+            ["onnx_light_cpu/impl/traditionalml/tree_ensemble.cc"],
+            "+ partial_stride = SaturatingAdd(rows, lanes);\n+ if (left && right) {}",
+            kernels,
+        )
+        self.assertEqual(tests, ["^test_cpu_(tree_?ensemble)_"])
+        self.assertEqual(dtypes, ["float32"])
+
     def test_reads_pull_request_benchmark_selection(self):
         completed = [
             SimpleNamespace(stdout="onnx_light_cpu/impl/math/abs_kernel.cc\n"),
@@ -461,7 +475,9 @@ class TestBenchmarkCli(ExtTestCase):
                 )
                 self.assertEqual(
                     run.call_args.kwargs["input"],
-                    "| speedup | test_name |\n| --- | --- |\n| 1.23 | test\\|value |\n",
+                    '<div style="max-height: 500px; overflow: auto;">\n\n'
+                    "| speedup | test_name |\n| --- | --- |\n| 1.23 | test\\|value |\n"
+                    "\n</div>\n",
                 )
 
     def test_writes_pull_request_markdown(self):
@@ -477,7 +493,9 @@ class TestBenchmarkCli(ExtTestCase):
             write_pr_benchmark_markdown(output, aggregated)
             self.assertEqual(
                 output.read_text(encoding="utf-8"),
-                "| speedup | test_name |\n| --- | --- |\n| 1.00 | test\\|value |\n",
+                '<div style="max-height: 500px; overflow: auto;">\n\n'
+                "| speedup | test_name |\n| --- | --- |\n| 1.00 | test\\|value |\n"
+                "\n</div>\n",
             )
 
     def test_pull_request_formatting_sorts_by_increasing_speedup(self):
@@ -492,11 +510,13 @@ class TestBenchmarkCli(ExtTestCase):
         ]
         self.assertEqual(
             _benchmark._pr_benchmark_markdown(aggregated),
+            '<div style="max-height: 500px; overflow: auto;">\n\n'
             "| speedup | test_name |\n"
             "| --- | --- |\n"
             "| 0.00 | slow |\n"
             "| 1.24 | multiple_datasets |\n"
-            "| None | unsupported |\n",
+            "| None | unsupported |\n"
+            "\n</div>\n",
         )
         self.assertEqual(aggregated[0]["speedup"], 1.236)
         self.assertEqual(
