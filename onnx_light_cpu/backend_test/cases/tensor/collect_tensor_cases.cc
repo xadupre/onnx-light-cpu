@@ -15,6 +15,7 @@ void CollectCpuTensorTestCases(std::vector<TestCase> &registry, const std::strin
       {"Gather", &RegisterCpuGatherCases},
       {"Slice", &RegisterCpuSliceCases},
       {"Concat", &RegisterCpuConcatCases},
+      {"Cast", &RegisterCpuCastCases},
   };
   DispatchRegisterByOpType(registry, op_type, kEntries, mode);
 }

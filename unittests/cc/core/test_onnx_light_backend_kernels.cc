@@ -431,6 +431,11 @@ TEST(OnnxLightBackendKernels, SliceRunsThroughRuntime) { CheckTensorRegularCases
 
 TEST(OnnxLightBackendKernels, ConcatRunsThroughRuntime) { CheckTensorRegularCases("Concat"); }
 
+TEST(OnnxLightBackendKernels, CastRunsThroughRuntime) {
+  EXPECT_EQ(CollectCpuCases("Cast", core::backend_test::TestMode::TEST).size(), 607u);
+  CheckTensorRegularCases("Cast");
+}
+
 TEST(OnnxLightBackendKernels, GemmRunsThroughRuntime) {
   const std::vector<std::string> failures =
       RunCpuBackendCases("Gemm", core::backend_test::TestMode::TEST);
@@ -853,6 +858,26 @@ TEST(OnnxLightBackendKernels, NotBenchmarkRunsThroughRuntime) {
   EXPECT_TRUE(failures.empty()) << Describe(failures);
 }
 
+void CheckTensorBenchmarkOutputs(std::vector<TestCase> &cases) {
+  onnx_light_cpu::RegisterAllKernels();
+  std::vector<std::string> failures;
+  {
+    TestCase &input_only = cases.front();
+    TestCaseUnloadGuard input_only_guard(input_only);
+    ASSERT_EQ(input_only.data_sets().size(), 1u);
+    EXPECT_FALSE(input_only.data_sets()[0].expected_outputs_generated);
+    EXPECT_TRUE(input_only.data_sets()[0].outputs.empty());
+    EXPECT_EQ(input_only.model().ref_graph().output_size(), 1);
+    RunCaseThroughRuntime(input_only, /*compare=*/false, failures);
+  }
+  for (TestCase &test_case : cases) {
+    test_case.set_expected_outputs_generated(true);
+    TestCaseUnloadGuard unload_guard(test_case);
+    RunCaseThroughRuntime(test_case, /*compare=*/true, failures);
+  }
+  EXPECT_TRUE(failures.empty()) << Describe(failures);
+}
+
 void CheckTensorBenchmarks(const std::string &op_type, const std::vector<std::string> &layouts,
                            const std::vector<std::string> &parameter_tags) {
   std::vector<TestCase> cases = CollectCpuCases(op_type, core::backend_test::TestMode::BENCHMARK);
@@ -874,23 +899,32 @@ void CheckTensorBenchmarks(const std::string &op_type, const std::vector<std::st
       }
     }
   }
-  onnx_light_cpu::RegisterAllKernels();
-  std::vector<std::string> failures;
-  {
-    TestCase &input_only = cases.front();
-    TestCaseUnloadGuard input_only_guard(input_only);
-    ASSERT_EQ(input_only.data_sets().size(), 1u);
-    EXPECT_FALSE(input_only.data_sets()[0].expected_outputs_generated);
-    EXPECT_TRUE(input_only.data_sets()[0].outputs.empty());
-    EXPECT_EQ(input_only.model().ref_graph().output_size(), 1);
-    RunCaseThroughRuntime(input_only, /*compare=*/false, failures);
+  CheckTensorBenchmarkOutputs(cases);
+}
+
+TEST(OnnxLightBackendKernels, CastBenchmarksCoverConversionsShapesAndLazyOutputs) {
+  auto cases = CollectCpuCases("Cast", core::backend_test::TestMode::BENCHMARK);
+  ASSERT_EQ(cases.size(), 132u);
+  std::set<std::string> names;
+  for (const TestCase &test_case : cases) {
+    EXPECT_FALSE(test_case.materialized()) << test_case.name;
+    EXPECT_TRUE(names.insert(test_case.name).second) << test_case.name;
   }
-  for (TestCase &test_case : cases) {
-    test_case.set_expected_outputs_generated(true);
-    TestCaseUnloadGuard unload_guard(test_case);
-    RunCaseThroughRuntime(test_case, /*compare=*/true, failures);
+  for (const std::string &shape : {"scalar", "small", "medium", "tail", "large", "matrix"}) {
+    for (const std::string &pair : {
+             "int64_to_int32",     "int32_to_int64",      "float32_to_float16",
+             "float16_to_float32", "float32_to_bfloat16", "bfloat16_to_float32",
+             "float32_to_float64", "float64_to_float32",  "float32_to_int32",
+             "int32_to_float32",   "float32_to_int64",    "int64_to_float32",
+             "float32_to_int8",    "int8_to_float32",     "float32_to_uint8",
+             "uint8_to_float32",   "float32_to_bool",     "bool_to_float32",
+             "int64_to_int8",      "int16_to_int32",      "float32_to_float32",
+             "int64_to_int64",
+         }) {
+      EXPECT_TRUE(names.contains("test_cpu_cast_" + shape + "_" + pair + "_benchmark"));
+    }
   }
-  EXPECT_TRUE(failures.empty()) << Describe(failures);
+  CheckTensorBenchmarkOutputs(cases);
 }
 
 TEST(OnnxLightBackendKernels, GatherBenchmarksCoverTypesLayoutsAndLazyOutputs) {
