@@ -142,6 +142,10 @@ def _operator_path_pattern(op_type: str) -> re.Pattern[str]:
     return re.compile(rf"(?:^|[/_.-]){name}(?:[/_.-]|$)")
 
 
+def _operator_symbol_pattern(op_type: str) -> re.Pattern[str]:
+    return re.compile(rf"(?:^|[^A-Za-z]|[a-z0-9]){re.escape(op_type)}(?:$|[^a-z])")
+
+
 def infer_pr_benchmark_selection(
     paths: Sequence[str], patch: str, kernels: Sequence[Any]
 ) -> tuple[list[str], list[str]]:
@@ -162,11 +166,17 @@ def infer_pr_benchmark_selection(
             )
         )
     ]
+    added_content = "\n".join(
+        line[1:]
+        for line in patch.splitlines()
+        if line.startswith("+") and not line.startswith("+++")
+    )
     operators = sorted(
         {
             kernel.op_type
             for kernel in kernels
             if any(_operator_path_pattern(kernel.op_type).search(path) for path in relevant_paths)
+            or (relevant_paths and _operator_symbol_pattern(kernel.op_type).search(added_content))
         }
     )
     if not operators:

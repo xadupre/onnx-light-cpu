@@ -162,6 +162,19 @@ class TestBenchmarkCli(ExtTestCase):
         self.assertEqual(tests, ["^test_cpu_(group_?query_?attention)_"])
         self.assertEqual(dtypes, ["float16", "float32"])
 
+    def test_infers_operator_from_generic_kernel_diff(self):
+        kernels = [
+            self._kernel("Add", ("FLOAT",)),
+            self._kernel("Pow", ("FLOAT",)),
+        ]
+        tests, dtypes = infer_pr_benchmark_selection(
+            ["onnx_light_cpu/impl/math/binary/binary_kernel_descriptor.cc"],
+            "+ void BulkFloatIntegerPowRightScalar();\n+ float value;",
+            kernels,
+        )
+        self.assertEqual(tests, ["^test_cpu_(pow)_"])
+        self.assertEqual(dtypes, ["float32"])
+
     def test_reads_pull_request_benchmark_selection(self):
         completed = [
             SimpleNamespace(stdout="onnx_light_cpu/impl/math/abs_kernel.cc\n"),
