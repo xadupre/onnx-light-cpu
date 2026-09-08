@@ -65,8 +65,7 @@ void RegisterGatherCase(std::vector<TestCase> &registry, const GatherShape &shap
   const std::string name = "test_cpu_gather_" + std::string(shape.name) +
                            (index_type == DataType::INT32 ? "_indices32_" : "_indices64_") +
                            DataTypeSuffix(data_type) + (benchmark ? "_benchmark" : "");
-  const auto generate = [shape, axis, data_type, index_type,
-                         opset](bool expected) -> bt_ns::IoData {
+  const auto build = [shape, axis, data_type, index_type, opset](bool expected) -> bt_ns::IoData {
     Tensor data = MakeBenchmarkTensor(data_type, shape.data, 719);
     Tensor indices = MakeIndices(shape.indices, shape.data[axis], index_type);
     if (!expected) {
@@ -79,12 +78,12 @@ void RegisterGatherCase(std::vector<TestCase> &registry, const GatherShape &shap
   const std::vector<std::int64_t> input_sizes = {shape.data.product(), shape.indices.product()};
   const std::vector<std::int64_t> output_sizes = {output_shape.product()};
   if (benchmark) {
-    bt_ns::Expect(registry, std::move(node), name, {opset}, input_sizes, output_sizes, generate,
+    bt_ns::Expect(registry, std::move(node), name, {opset}, input_sizes, output_sizes, build,
                   "backend-test", bt_ns::TestCaseTag::NONE,
                   {bt_ns::TensorTypeSpec(static_cast<std::int32_t>(data_type), output_shape)});
   } else {
     bt_ns::Expect(registry, std::move(node), name, {opset}, input_sizes, output_sizes,
-                  [generate]() { return generate(true); });
+                  [build]() { return build(true); });
   }
 }
 
