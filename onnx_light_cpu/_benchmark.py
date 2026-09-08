@@ -110,6 +110,28 @@ def _matches_case(name: str, expressions: Sequence[re.Pattern[str]]) -> bool:
     return any(expression.search(name) for expression in expressions)
 
 
+def _kernel_names_for_operator(
+    kernels: Sequence[Any], domain: str, operator: str
+) -> tuple[str, ...]:
+    return tuple(
+        kernel.kernel_name
+        for kernel in kernels
+        if kernel.domain == domain and kernel.op_type == operator
+    )
+
+
+def _measure_runtime_phases(
+    cpu_run: Any, create_onnxruntime: Any, measure: Any
+) -> tuple[list[tuple[str, Any]], dict[str, list[float]], str | None]:
+    runners = [("onnx-light-cpu", cpu_run)]
+    measured = {"onnx-light-cpu": measure(cpu_run)}
+    ort_session, onnxruntime_error = create_onnxruntime()
+    if ort_session is not None:
+        runners.append(("onnxruntime", ort_session.run))
+        measured["onnxruntime"] = measure(ort_session.run)
+    return runners, measured, onnxruntime_error
+
+
 def _operator_words(op_type: str) -> list[str]:
     return re.findall(r"[A-Z]+(?=[A-Z][a-z]|\d|\b)|[A-Z]?[a-z]+|\d+", op_type)
 
@@ -242,11 +264,7 @@ def _measure_case(
     for feed in feeds:
         evaluator.run(None, feed)
     node_domain = model.graph.node[0].domain or "ai.onnx"
-    expected_kernels = tuple(
-        kernel.kernel_name
-        for kernel in registered_kernels()
-        if kernel.domain == node_domain and kernel.op_type == operator
-    )
+    expected_kernels = _kernel_names_for_operator(registered_kernels(), node_domain, operator)
     if not expected_kernels:
         raise RuntimeError(f"{case.name}: no registered kernel for {node_domain}::{operator}")
     if not set(expected_kernels).intersection(used_kernel_names()):
@@ -272,12 +290,9 @@ def _measure_case(
                 break
         return measured
 
-    runners = [("onnx-light-cpu", evaluator.run)]
-    measured_by_runtime = {"onnx-light-cpu": measure(evaluator.run)}
-
-    ort_session = None
-    onnxruntime_error = None
-    if with_onnxruntime:
+    def create_onnxruntime() -> tuple[Any | None, str | None]:
+        if not with_onnxruntime:
+            return None, None
         import onnxruntime  # pyrefly: ignore[missing-import]
 
         try:
@@ -292,13 +307,13 @@ def _measure_case(
             )
             for feed in feeds:
                 ort_session.run(None, feed)
+            return ort_session, None
         except Exception as exc:  # noqa: BLE001 -- unsupported cases remain in the report.
-            onnxruntime_error = str(exc)
-            ort_session = None
+            return None, str(exc)
 
-    if ort_session is not None:
-        runners.append(("onnxruntime", ort_session.run))
-        measured_by_runtime["onnxruntime"] = measure(ort_session.run)
+    runners, measured_by_runtime, onnxruntime_error = _measure_runtime_phases(
+        evaluator.run, create_onnxruntime, measure
+    )
     durations = measured_by_runtime["onnx-light-cpu"]
     runtime_order = ",".join(runtime for runtime, _ in runners)
 
@@ -341,7 +356,7 @@ def _measure_case(
         "onnxruntime_error": onnxruntime_error,
         "speedup": None,
     }
-    if ort_session is not None:
+    if "onnxruntime" in measured_by_runtime:
         ort_durations = measured_by_runtime["onnxruntime"]
         aggregate["onnxruntime_samples"] = len(ort_durations)
         aggregate["onnxruntime_mean_s"] = statistics.fmean(ort_durations)
