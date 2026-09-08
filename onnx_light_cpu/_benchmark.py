@@ -110,6 +110,28 @@ def _matches_case(name: str, expressions: Sequence[re.Pattern[str]]) -> bool:
     return any(expression.search(name) for expression in expressions)
 
 
+def _kernel_names_for_operator(
+    kernels: Sequence[Any], domain: str, operator: str
+) -> tuple[str, ...]:
+    return tuple(
+        kernel.kernel_name
+        for kernel in kernels
+        if kernel.domain == domain and kernel.op_type == operator
+    )
+
+
+def _measure_runtime_phases(
+    cpu_run: Any, create_onnxruntime: Any, measure: Any
+) -> tuple[list[tuple[str, Any]], dict[str, list[float]], str | None]:
+    runners = [("onnx-light-cpu", cpu_run)]
+    measured = {"onnx-light-cpu": measure(cpu_run)}
+    ort_session, onnxruntime_error = create_onnxruntime()
+    if ort_session is not None:
+        runners.append(("onnxruntime", ort_session.run))
+        measured["onnxruntime"] = measure(ort_session.run)
+    return runners, measured, onnxruntime_error
+
+
 def _operator_words(op_type: str) -> list[str]:
     return re.findall(r"[A-Z]+(?=[A-Z][a-z]|\d|\b)|[A-Z]?[a-z]+|\d+", op_type)
 
@@ -208,11 +230,12 @@ def _measure_case(
     max_repeat_time: float,
     threads: int,
     with_onnxruntime: bool = False,
-    onnxruntime_first: bool = False,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     from onnx_light.onnx.reference import (  # pyrefly: ignore[missing-import]
         ReferenceEvaluator,
     )
+
+    from ._register import registered_kernels
 
     model = case.model
     operator = model.graph.node[0].op_type
@@ -240,9 +263,13 @@ def _measure_case(
     clear_used_kernel_names()
     for feed in feeds:
         evaluator.run(None, feed)
-    expected_kernel = f"onnx_light_cpu::{operator}"
-    if expected_kernel not in used_kernel_names():
-        raise RuntimeError(f"{case.name}: expected kernel {expected_kernel!r} did not run")
+    node_domain = model.graph.node[0].domain or "ai.onnx"
+    expected_kernels = _kernel_names_for_operator(registered_kernels(), node_domain, operator)
+    if not expected_kernels:
+        raise RuntimeError(f"{case.name}: no registered kernel for {node_domain}::{operator}")
+    if not set(expected_kernels).intersection(used_kernel_names()):
+        expected = " or ".join(repr(kernel) for kernel in expected_kernels)
+        raise RuntimeError(f"{case.name}: expected kernel {expected} did not run")
 
     def measure(run: Any) -> list[float]:
         warmup_start = time.perf_counter()
@@ -263,9 +290,9 @@ def _measure_case(
                 break
         return measured
 
-    ort_session = None
-    onnxruntime_error = None
-    if with_onnxruntime:
+    def create_onnxruntime() -> tuple[Any | None, str | None]:
+        if not with_onnxruntime:
+            return None, None
         import onnxruntime  # pyrefly: ignore[missing-import]
 
         try:
@@ -280,16 +307,13 @@ def _measure_case(
             )
             for feed in feeds:
                 ort_session.run(None, feed)
+            return ort_session, None
         except Exception as exc:  # noqa: BLE001 -- unsupported cases remain in the report.
-            onnxruntime_error = str(exc)
-            ort_session = None
+            return None, str(exc)
 
-    runners = [("onnx-light-cpu", evaluator.run)]
-    if ort_session is not None:
-        runners.append(("onnxruntime", ort_session.run))
-    if onnxruntime_first and ort_session is not None:
-        runners.reverse()
-    measured_by_runtime = {runtime: measure(run) for runtime, run in runners}
+    runners, measured_by_runtime, onnxruntime_error = _measure_runtime_phases(
+        evaluator.run, create_onnxruntime, measure
+    )
     durations = measured_by_runtime["onnx-light-cpu"]
     runtime_order = ",".join(runtime for runtime, _ in runners)
 
@@ -332,7 +356,7 @@ def _measure_case(
         "onnxruntime_error": onnxruntime_error,
         "speedup": None,
     }
-    if ort_session is not None:
+    if "onnxruntime" in measured_by_runtime:
         ort_durations = measured_by_runtime["onnxruntime"]
         aggregate["onnxruntime_samples"] = len(ort_durations)
         aggregate["onnxruntime_mean_s"] = statistics.fmean(ort_durations)
@@ -353,7 +377,6 @@ def run_backend_benchmark(
     max_repeat_time: float,
     threads: int,
     with_onnxruntime: bool = False,
-    alternate_runtime_order: bool = False,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Runs selected BENCHMARK backend cases and returns raw and aggregate rows."""
     from onnx_light.onnx.backend import (  # pyrefly: ignore[missing-import]
@@ -404,7 +427,6 @@ def run_backend_benchmark(
             max_repeat_time,
             threads,
             with_onnxruntime,
-            onnxruntime_first=alternate_runtime_order and index % 2 == 0,
         )
         raw_rows.extend(raw)
         aggregated_rows.append(aggregate)

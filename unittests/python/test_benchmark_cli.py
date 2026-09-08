@@ -34,6 +34,10 @@ class TestBenchmarkCli(ExtTestCase):
     def _kernel(op_type, types):
         return SimpleNamespace(op_type=op_type, types=types)
 
+    @staticmethod
+    def _registration(domain, op_type, kernel_name):
+        return SimpleNamespace(domain=domain, op_type=op_type, kernel_name=kernel_name)
+
     def test_parser_accepts_test_and_dtype_lists(self):
         args = _build_parser().parse_args(
             [
@@ -131,7 +135,7 @@ class TestBenchmarkCli(ExtTestCase):
         self.assertEqual(raw, measured[0])
         self.assertEqual(aggregated, [measured[1]])
         self.assertIn("[1/1] test_cpu_abs_float32_benchmark", progress.getvalue())
-        measure.assert_called_once_with(cases[0], 1, 0, 1.0, 1, False, onnxruntime_first=False)
+        measure.assert_called_once_with(cases[0], 1, 0, 1.0, 1, False)
 
     def test_infers_pull_request_benchmark_selection(self):
         kernels = [
@@ -183,7 +187,7 @@ class TestBenchmarkCli(ExtTestCase):
             name="test_cpu_abs_float32_benchmark",
             model=SimpleNamespace(
                 graph=SimpleNamespace(
-                    node=[SimpleNamespace(op_type="Abs")],
+                    node=[SimpleNamespace(domain="", op_type="Abs")],
                     input=[],
                 )
             ),
@@ -192,6 +196,10 @@ class TestBenchmarkCli(ExtTestCase):
         with (
             mock.patch("onnx_light.onnx.reference.ReferenceEvaluator") as evaluator,
             mock.patch("onnx_light_cpu._benchmark.clear_used_kernel_names"),
+            mock.patch(
+                "onnx_light_cpu._register.registered_kernels",
+                return_value=(self._registration("ai.onnx", "Abs", "onnx_light_cpu::Abs"),),
+            ),
             mock.patch("onnx_light_cpu._benchmark.platform.processor", return_value="test CPU"),
             mock.patch(
                 "onnx_light_cpu._benchmark.used_kernel_names",
@@ -208,10 +216,24 @@ class TestBenchmarkCli(ExtTestCase):
         self.assertEqual(raw[0]["processor"], "test CPU")
         self.assertIn("duration_s", raw[0])
 
+    def test_domain_specific_kernel_name_is_checked(self):
+        kernels = (
+            self._registration("ai.onnx", "LinearAttention", "onnx_light_cpu::LinearAttention"),
+            self._registration(
+                "com.microsoft",
+                "LinearAttention",
+                "onnx_light_cpu::MicrosoftLinearAttention",
+            ),
+        )
+        self.assertEqual(
+            _benchmark._kernel_names_for_operator(kernels, "com.microsoft", "LinearAttention"),
+            ("onnx_light_cpu::MicrosoftLinearAttention",),
+        )
+
     def test_onnxruntime_unsupported_case_is_reported(self):
         model = SimpleNamespace(
             graph=SimpleNamespace(
-                node=[SimpleNamespace(op_type="Abs")],
+                node=[SimpleNamespace(domain="", op_type="Abs")],
                 input=[],
             ),
             SerializeToString=mock.Mock(return_value=b"model"),
@@ -231,6 +253,10 @@ class TestBenchmarkCli(ExtTestCase):
             mock.patch("onnx_light.onnx.reference.ReferenceEvaluator"),
             mock.patch("onnx_light_cpu._benchmark.clear_used_kernel_names"),
             mock.patch(
+                "onnx_light_cpu._register.registered_kernels",
+                return_value=(self._registration("ai.onnx", "Abs", "onnx_light_cpu::Abs"),),
+            ),
+            mock.patch(
                 "onnx_light_cpu._benchmark.used_kernel_names",
                 return_value=("onnx_light_cpu::Abs",),
             ),
@@ -244,7 +270,7 @@ class TestBenchmarkCli(ExtTestCase):
     def test_onnxruntime_run_failure_is_reported(self):
         model = SimpleNamespace(
             graph=SimpleNamespace(
-                node=[SimpleNamespace(op_type="Abs")],
+                node=[SimpleNamespace(domain="", op_type="Abs")],
                 input=[SimpleNamespace(name="x")],
             ),
             SerializeToString=mock.Mock(return_value=b"model"),
@@ -271,6 +297,10 @@ class TestBenchmarkCli(ExtTestCase):
             mock.patch("onnx_light.onnx.reference.ReferenceEvaluator"),
             mock.patch("onnx_light_cpu._benchmark.clear_used_kernel_names"),
             mock.patch(
+                "onnx_light_cpu._register.registered_kernels",
+                return_value=(self._registration("ai.onnx", "Abs", "onnx_light_cpu::Abs"),),
+            ),
+            mock.patch(
                 "onnx_light_cpu._benchmark.used_kernel_names",
                 return_value=("onnx_light_cpu::Abs",),
             ),
@@ -279,51 +309,36 @@ class TestBenchmarkCli(ExtTestCase):
         self.assertEqual(aggregated["onnxruntime_error"], "unsupported input")
         self.assertEqual([row["runtime"] for row in raw], ["onnx-light-cpu"])
 
-    def test_raw_rows_identify_run_and_runtime(self):
-        model = SimpleNamespace(
-            graph=SimpleNamespace(
-                node=[SimpleNamespace(op_type="Abs")],
-                input=[],
-            ),
-            SerializeToString=mock.Mock(return_value=b"model"),
-        )
-        case = SimpleNamespace(
-            name="test_cpu_abs_float32_benchmark",
-            model=model,
-            data_sets=[],
-        )
-        ort_session = SimpleNamespace(run=mock.Mock())
-        onnxruntime = SimpleNamespace(
-            SessionOptions=lambda: SimpleNamespace(),
-            ExecutionMode=SimpleNamespace(ORT_SEQUENTIAL=0),
-            InferenceSession=mock.Mock(return_value=ort_session),
-        )
-        with (
-            mock.patch.dict(sys.modules, {"onnxruntime": onnxruntime}),
-            mock.patch("onnx_light.onnx.reference.ReferenceEvaluator"),
-            mock.patch("onnx_light_cpu._benchmark.clear_used_kernel_names"),
-            mock.patch(
-                "onnx_light_cpu._benchmark.used_kernel_names",
-                return_value=("onnx_light_cpu::Abs",),
-            ),
-        ):
-            raw, aggregated = _benchmark._measure_case(
-                case, 2, 0, 1.0, 1, True, onnxruntime_first=True
-            )
+    def test_cpu_is_measured_before_onnxruntime_is_created(self):
+        events = []
 
-        self.assertEqual(
-            [(row["run"], row["runtime"]) for row in raw],
-            [
-                (1, "onnxruntime"),
-                (2, "onnxruntime"),
-                (1, "onnx-light-cpu"),
-                (2, "onnx-light-cpu"),
-            ],
+        def cpu_run():
+            return None
+
+        def ort_run():
+            return None
+
+        def measure(run):
+            events.append(("measure", run))
+            return [1.0, 2.0]
+
+        def create_onnxruntime():
+            events.append(("create", None))
+            return SimpleNamespace(run=ort_run), None
+
+        runners, measured, error = _benchmark._measure_runtime_phases(
+            cpu_run, create_onnxruntime, measure
         )
-        self.assertEqual(aggregated["runtime_order"], "onnxruntime,onnx-light-cpu")
-        self.assertTrue(all(row["duration_s"] >= 0.0 for row in raw))
-        self.assertEqual(aggregated["samples"], 2)
-        self.assertEqual(aggregated["onnxruntime_samples"], 2)
+        self.assertEqual(
+            events,
+            [("measure", cpu_run), ("create", None), ("measure", ort_run)],
+        )
+        self.assertEqual([runtime for runtime, _ in runners], ["onnx-light-cpu", "onnxruntime"])
+        self.assertEqual(
+            measured,
+            {"onnx-light-cpu": [1.0, 2.0], "onnxruntime": [1.0, 2.0]},
+        )
+        self.assertIsNone(error)
 
     def test_writes_raw_and_aggregated_sheets(self):
         raw = [
