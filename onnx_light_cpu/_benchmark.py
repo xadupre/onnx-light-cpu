@@ -209,7 +209,6 @@ def _measure_case(
     max_repeat_time: float,
     threads: int,
     with_onnxruntime: bool = False,
-    onnxruntime_first: bool = False,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     from onnx_light.onnx.reference import (  # pyrefly: ignore[missing-import]
         ReferenceEvaluator,
@@ -272,6 +271,9 @@ def _measure_case(
                 break
         return measured
 
+    runners = [("onnx-light-cpu", evaluator.run)]
+    measured_by_runtime = {"onnx-light-cpu": measure(evaluator.run)}
+
     ort_session = None
     onnxruntime_error = None
     if with_onnxruntime:
@@ -293,12 +295,9 @@ def _measure_case(
             onnxruntime_error = str(exc)
             ort_session = None
 
-    runners = [("onnx-light-cpu", evaluator.run)]
     if ort_session is not None:
         runners.append(("onnxruntime", ort_session.run))
-    if onnxruntime_first and ort_session is not None:
-        runners.reverse()
-    measured_by_runtime = {runtime: measure(run) for runtime, run in runners}
+        measured_by_runtime["onnxruntime"] = measure(ort_session.run)
     durations = measured_by_runtime["onnx-light-cpu"]
     runtime_order = ",".join(runtime for runtime, _ in runners)
 
@@ -362,7 +361,6 @@ def run_backend_benchmark(
     max_repeat_time: float,
     threads: int,
     with_onnxruntime: bool = False,
-    alternate_runtime_order: bool = False,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Runs selected BENCHMARK backend cases and returns raw and aggregate rows."""
     from onnx_light.onnx.backend import (  # pyrefly: ignore[missing-import]
@@ -413,7 +411,6 @@ def run_backend_benchmark(
             max_repeat_time,
             threads,
             with_onnxruntime,
-            onnxruntime_first=alternate_runtime_order and index % 2 == 0,
         )
         raw_rows.extend(raw)
         aggregated_rows.append(aggregate)

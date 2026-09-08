@@ -59,7 +59,9 @@ workbook:
 
 ``--onnxruntime``
    Also measures ONNX Runtime with the same number of threads and reports its
-   latency and the speedup of onnx-light-cpu over ONNX Runtime.
+   latency and the speedup of onnx-light-cpu over ONNX Runtime. The
+   onnx-light-cpu phase completes before the ONNX Runtime session is created,
+   so idle ONNX Runtime workers cannot interfere with its measurements.
 
 ``--pr [NUMBER_OR_URL]``
    Adds the aggregated Markdown table as a pull request comment using GitHub
