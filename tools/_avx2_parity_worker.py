@@ -15,8 +15,9 @@ import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from uuid import uuid4
 
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 2
 RUNTIMES = ("onnx-light-cpu", "onnxruntime")
 
 
@@ -259,12 +260,12 @@ def execute_worker(request: dict[str, Any]) -> dict[str, Any]:
 def run_worker(request: dict[str, Any]) -> dict[str, Any]:
     """Wait for process exit, including destruction of its runtime's thread pools."""
     directory = Path(request["directory"])
-    request_path = directory / "request.json"
-    result_path = directory / "result.json"
-    result_path.unlink(missing_ok=True)
-    request_path.write_text(json.dumps(request), encoding="utf-8")
+    invocation = uuid4().hex
+    result_path = directory / f"result-{invocation}.json"
+    # Pipe requests: Windows scanners can retain handles to command-line JSON files after exit.
     completed = subprocess.run(
-        [sys.executable, str(Path(__file__).resolve()), str(request_path)],
+        [sys.executable, str(Path(__file__).resolve())],
+        input=json.dumps({**request, "result_path": str(result_path)}),
         capture_output=True,
         text=True,
         check=False,
@@ -357,13 +358,11 @@ def measure_isolated(request: dict[str, Any], *, ort_first: bool) -> tuple[list[
 
 
 def main() -> None:
-    request = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+    request = json.loads(sys.stdin.read())
     sys.path[:] = request["sys_path"]
     sys.meta_path.insert(0, _PinnedImports(request["modules"]))
     result = execute_worker(request)
-    (Path(request["directory"]) / "result.json").write_text(
-        json.dumps(result, allow_nan=False), encoding="utf-8"
-    )
+    Path(request["result_path"]).write_text(json.dumps(result, allow_nan=False), encoding="utf-8")
 
 
 if __name__ == "__main__":

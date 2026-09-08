@@ -115,6 +115,177 @@ acceptance gate remain pending.
 Current foundation
 ------------------
 
+September 8 full activation-corpus audit
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The priority corpus alone was insufficient to establish Sigmoid/Softmax
+parity: it selected only CPU-specific FP32 benchmarks, omitting inherited
+``test_cc_*`` cases, FP16/FP64, and ordinary backend cases. The isolated runner
+now offers a complete activation selection:
+
+.. code-block:: console
+
+    python tools/benchmark_avx2_parity.py --corpus activations \
+      --physical-threads 6 --repeat 10000 --warmup 40 \
+      --max-repeat-time 0.2 --output activations.json
+
+This selects both benchmark and regular cases, including large cases, and
+reads the actual model input type instead of guessing it from the test name.
+All four floating-point types are included unless ``--dtype`` narrows the
+selection. Unsupported ORT types remain explicit errors in the report, not
+parity wins. ``--physical-threads`` only controls the requested participant
+count; it does not pin the process. Pin the parent process to the intended
+cores before invoking the runner, and use the same affinity for both runtimes.
+The default priority corpus and its existing type selection are unchanged.
+
+The baseline at ``aa405a9`` contains 44 benchmark and 22 regular activation
+cases. On a native AVX2 i7-13800H, Windows/MSVC Release, Python 3.13 and
+ORT 1.29, the audit used CPU 4 for one-thread runs and logical CPUs
+0, 2, 4, 6, 8, 10 for six-thread runs. Windows topology identified these as
+six distinct performance cores. Each runtime ran in a separate process,
+with two alternating phases per case/thread policy and identical serialized
+fixtures. The baseline native binaries were preserved before rebuilding.
+
+There were 22 slower supported benchmark/thread combinations: six serial
+and sixteen multithread. Every supported regular case was ahead of ORT.
+Eleven benchmark and three regular BF16 cases were unsupported by ORT.
+The largest residuals were not all exponential-throughput problems:
+
+* FP64 Sigmoid and Softmax still evaluated exponentials with scalar
+  ``std::exp`` despite AVX2 availability.
+* FP16 Sigmoid converted through two stack buffers every 256 elements.
+  The new AVX2/FMA/F16C path converts directly in registers, with independent
+  runtime F16C detection and bounded copies for the final one to seven values.
+* Sigmoid's 256 KiB minimum block left 65,535 FP32 values and 131,072
+  FP16 values serial. FP64 at 65,535 values also remained serial, immediately
+  before a two-participant discontinuity at 65,536.
+* Simply assigning six participants to small activations regressed them:
+  dispatch and coordination cost exceeded the work saved. Bounded small
+  teams are required, not just a lower global parallel threshold.
+* FP32 Sigmoid unnecessarily multiplied the negative exponential by a
+  reciprocal after division. Selecting the numerator before one division
+  removes that operation without changing the stable saturation formula.
+* Normal FP32 Softmax rows repeated the same exponential range check for
+  every vector. A row-level min/max eligibility check allows the normal
+  exponential loop to omit those branches; exceptional and subnormal rows
+  retain the full exponential path.
+
+Near-zero rational Sigmoid approximations and a reordered exponential
+polynomial were also measured and discarded. A narrow rational fast path
+improved small inputs but regressed larger Gaussian inputs through
+unpredictable per-vector branches. Neither small-case improvements nor
+direct preallocated-kernel timings establish end-to-end parity.
+
+The all-case parity gate remains open. In particular, large FP32 multithread
+activations require confirmation through the registered runtime, not an
+inference from serial SIMD throughput. These development-machine results
+remain diagnostic: process affinity does not eliminate frequency variation
+or other host activity.
+
+The final two-phase run covered all 132 case/thread combinations. Of the
+104 supported combinations, eight benchmark combinations remained below
+``1.0x`` ORT, down from 22 in the baseline. All measured FP64 and supported
+regular cases were ahead of ORT. Selected CPU latencies, in microseconds,
+are the median of the two phase medians:
+
+.. list-table::
+   :header-rows: 1
+
+   * - Case
+     - Threads
+     - Before
+     - After
+     - Before / after
+   * - Sigmoid FP64 / 1,048,576
+     - 1
+     - 7916.05
+     - 1394.20
+     - 5.68x
+   * - Sigmoid FP64 / 1,048,576
+     - 6
+     - 2741.52
+     - 440.60
+     - 6.22x
+   * - Softmax FP64 / 1,024 x 1,024
+     - 1
+     - 7714.65
+     - 1718.60
+     - 4.49x
+   * - Sigmoid FP16 / 131,072
+     - 6
+     - 81.95
+     - 35.95
+     - 2.28x
+   * - Sigmoid FP32 / 65,535
+     - 6
+     - 30.90
+     - 18.70
+     - 1.65x
+
+The remaining combinations are listed without excluding inherited cases.
+``cc`` identifies the inherited benchmark rather than the CPU-specific
+case of the same shape:
+
+.. list-table::
+   :header-rows: 1
+
+   * - Case
+     - Threads
+     - CPU (us)
+     - ORT (us)
+     - ORT / CPU
+   * - Softmax FP32 / 1,024 x 1,024
+     - 6
+     - 227.10
+     - 103.80
+     - 0.457x
+   * - Sigmoid FP32 / 1,048,576
+     - 6
+     - 168.78
+     - 83.05
+     - 0.492x
+   * - Softmax FP32 / 2,048 x 2,048 (cc)
+     - 6
+     - 2135.80
+     - 1054.98
+     - 0.494x
+   * - Sigmoid FP32 / 4,194,304 (cc)
+     - 6
+     - 1202.37
+     - 596.50
+     - 0.496x
+   * - Sigmoid FP16 / 1,048,576
+     - 6
+     - 195.02
+     - 145.98
+     - 0.749x
+   * - Sigmoid FP32 / 131,072
+     - 6
+     - 29.60
+     - 22.70
+     - 0.767x
+   * - Sigmoid FP32 / 1,048,576
+     - 1
+     - 407.98
+     - 382.45
+     - 0.937x
+   * - Sigmoid FP32 / 65,536
+     - 6
+     - 19.90
+     - 19.80
+     - 0.995x
+
+Repeat measurements with the preserved baseline confirmed substantial
+large-case variability in both binaries. They do not establish a multithread
+FP16 gain, nor a stable regression for the inherited FP32 cases. No final
+parity claim should be inferred from these development-machine ratios.
+
+The worker protocol also now passes requests through standard input and uses
+unique result files. Reopening a command-line JSON request intermittently
+failed with Windows file-sharing violations after the preceding worker had
+exited. This transport change is outside the timed inference region and
+retains the separate-process and fixture-identity guarantees.
+
 September 7 dashboard follow-up
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
