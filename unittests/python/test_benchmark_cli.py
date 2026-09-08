@@ -34,6 +34,10 @@ class TestBenchmarkCli(ExtTestCase):
     def _kernel(op_type, types):
         return SimpleNamespace(op_type=op_type, types=types)
 
+    @staticmethod
+    def _registration(domain, op_type, kernel_name):
+        return SimpleNamespace(domain=domain, op_type=op_type, kernel_name=kernel_name)
+
     def test_parser_accepts_test_and_dtype_lists(self):
         args = _build_parser().parse_args(
             [
@@ -192,6 +196,10 @@ class TestBenchmarkCli(ExtTestCase):
         with (
             mock.patch("onnx_light.onnx.reference.ReferenceEvaluator") as evaluator,
             mock.patch("onnx_light_cpu._benchmark.clear_used_kernel_names"),
+            mock.patch(
+                "onnx_light_cpu._register.registered_kernels",
+                return_value=(self._registration("ai.onnx", "Abs", "onnx_light_cpu::Abs"),),
+            ),
             mock.patch("onnx_light_cpu._benchmark.platform.processor", return_value="test CPU"),
             mock.patch(
                 "onnx_light_cpu._benchmark.used_kernel_names",
@@ -223,6 +231,19 @@ class TestBenchmarkCli(ExtTestCase):
             mock.patch("onnx_light.onnx.reference.ReferenceEvaluator"),
             mock.patch("onnx_light_cpu._benchmark.clear_used_kernel_names"),
             mock.patch(
+                "onnx_light_cpu._register.registered_kernels",
+                return_value=(
+                    self._registration(
+                        "ai.onnx", "LinearAttention", "onnx_light_cpu::LinearAttention"
+                    ),
+                    self._registration(
+                        "com.microsoft",
+                        "LinearAttention",
+                        "onnx_light_cpu::MicrosoftLinearAttention",
+                    ),
+                ),
+            ),
+            mock.patch(
                 "onnx_light_cpu._benchmark.used_kernel_names",
                 return_value=("onnx_light_cpu::MicrosoftLinearAttention",),
             ),
@@ -252,6 +273,10 @@ class TestBenchmarkCli(ExtTestCase):
             mock.patch.dict(sys.modules, {"onnxruntime": onnxruntime}),
             mock.patch("onnx_light.onnx.reference.ReferenceEvaluator"),
             mock.patch("onnx_light_cpu._benchmark.clear_used_kernel_names"),
+            mock.patch(
+                "onnx_light_cpu._register.registered_kernels",
+                return_value=(self._registration("ai.onnx", "Abs", "onnx_light_cpu::Abs"),),
+            ),
             mock.patch(
                 "onnx_light_cpu._benchmark.used_kernel_names",
                 return_value=("onnx_light_cpu::Abs",),
@@ -292,6 +317,10 @@ class TestBenchmarkCli(ExtTestCase):
             ),
             mock.patch("onnx_light.onnx.reference.ReferenceEvaluator"),
             mock.patch("onnx_light_cpu._benchmark.clear_used_kernel_names"),
+            mock.patch(
+                "onnx_light_cpu._register.registered_kernels",
+                return_value=(self._registration("ai.onnx", "Abs", "onnx_light_cpu::Abs"),),
+            ),
             mock.patch(
                 "onnx_light_cpu._benchmark.used_kernel_names",
                 return_value=("onnx_light_cpu::Abs",),
@@ -334,6 +363,10 @@ class TestBenchmarkCli(ExtTestCase):
                 side_effect=lambda: (events.append("measure"), 0)[1],
             ),
             mock.patch("onnx_light_cpu._benchmark.clear_used_kernel_names"),
+            mock.patch(
+                "onnx_light_cpu._register.registered_kernels",
+                return_value=(self._registration("ai.onnx", "Abs", "onnx_light_cpu::Abs"),),
+            ),
             mock.patch(
                 "onnx_light_cpu._benchmark.used_kernel_names",
                 return_value=("onnx_light_cpu::Abs",),

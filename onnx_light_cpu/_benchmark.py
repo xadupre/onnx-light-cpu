@@ -23,7 +23,6 @@ from ._register import (
     clear_used_kernel_names,
     register_backend_test_cases,
     register_kernels,
-    registered_kernels,
     used_kernel_names,
 )
 
@@ -213,6 +212,8 @@ def _measure_case(
     from onnx_light.onnx.reference import (  # pyrefly: ignore[missing-import]
         ReferenceEvaluator,
     )
+
+    from ._register import registered_kernels
 
     model = case.model
     operator = model.graph.node[0].op_type
