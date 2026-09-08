@@ -9,8 +9,10 @@ reference. These Python checks use exact, fixed expected tensors instead of a
 NumPy implementation of the normalization kernel.
 """
 
+import os
 import subprocess
 import sys
+from pathlib import Path
 
 import ml_dtypes
 import numpy as np
@@ -33,6 +35,7 @@ from onnx_light_cpu import (
 )
 
 _OP = "SimplifiedLayerNormalization"
+_ROOT = Path(__file__).resolve().parents[2]
 _TYPES = (
     (TensorProto.FLOAT, np.float32),
     (TensorProto.FLOAT16, np.float16),
@@ -257,12 +260,18 @@ class TestSimplifiedLayerNormalization(ExtTestCase):
             "all-session",
         ):
             with self.subTest(entry=entry):
+                env = dict(os.environ)
+                python_path = env.get("PYTHONPATH")
+                env["PYTHONPATH"] = (
+                    str(_ROOT) if not python_path else str(_ROOT) + os.pathsep + python_path
+                )
                 result = subprocess.run(
                     [sys.executable, __file__, "--registration-entry", entry],
                     capture_output=True,
                     text=True,
                     timeout=120,
                     check=False,
+                    env=env,
                 )
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 

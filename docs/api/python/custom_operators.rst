@@ -18,7 +18,7 @@ Custom operators
    Microsoft-only :func:`custom_op_schemas` provider.
 
 Experimental SimplifiedLayerNormalization
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 ``SimplifiedLayerNormalization`` is an experimental ONNX Runtime compatibility
 operator in the default domain (``""``, also spelled ``"ai.onnx"``), since
