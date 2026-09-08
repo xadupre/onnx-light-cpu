@@ -50,3 +50,14 @@ Concat accepts one or more equal-rank tensors, including empty inputs and
 negative axes. It preserves fixed-width element bytes and validates matching
 non-axis dimensions, output sizes and non-overlap. Large concatenations use
 runtime-owned byte tiles, including concatenations along axis zero.
+
+.. doxygenclass:: onnx_light_cpu::SplitKernel
+   :project: onnx_light_cpu
+   :members:
+
+Split supports explicit sizes (legacy attributes or an ``INT64`` tensor),
+implicit equal partitions, and the opset-18 ``num_outputs`` form with a
+smaller final partition. Negative axes and zero-length partitions are
+supported for the same fixed-width data types as Gather. Outputs own their
+storage, including last-axis QKV partitions across multiple tokens.
+Large copies use the runtime executor; small splits remain serial.
