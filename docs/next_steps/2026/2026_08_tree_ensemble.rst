@@ -671,7 +671,7 @@ median latency from 5.423 ms to 4.774 ms without reopening the completed
 functional roadmap.
 
 Balanced FP32 latency follow-up
-------------------------------
+-------------------------------
 
 The balanced, single-target ``SUM`` path now caches SIMD detection and writes
 single-row, single-participant results directly, preserving the existing
