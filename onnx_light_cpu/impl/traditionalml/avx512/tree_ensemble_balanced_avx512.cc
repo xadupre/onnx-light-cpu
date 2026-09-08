@@ -47,7 +47,20 @@ void EvaluateBalancedFloatRows_AVX512(const float *input, std::size_t features,
                             static_cast<std::int32_t>((row + 14) * features),
                             static_cast<std::int32_t>((row + 15) * features));
       __m512i node_indices = root;
-      for (std::size_t level = 0; level < depth; ++level) {
+      if (depth != 0) {
+        // Every lane starts at the same root: broadcast its fields instead
+        // of gathering the same node in each lane.
+        const auto &root_node = nodes[static_cast<std::size_t>(tree_roots[tree])];
+        const __m512 values = _mm512_i32gather_ps(
+            _mm512_add_epi32(input_indices, _mm512_set1_epi32(root_node.feature_id)), input,
+            sizeof(float));
+        const __mmask16 go_true =
+            _mm512_cmp_ps_mask(values, _mm512_set1_ps(root_node.split), _CMP_LE_OQ);
+        node_indices = _mm512_mask_blend_epi32(
+            go_true, _mm512_set1_epi32(static_cast<std::int32_t>(root_node.false_child)),
+            _mm512_set1_epi32(static_cast<std::int32_t>(root_node.true_child)));
+      }
+      for (std::size_t level = 1; level < depth; ++level) {
         const __m512i word_indices = _mm512_slli_epi32(node_indices, 2);
         const __m512i feature_ids =
             _mm512_i32gather_epi32(word_indices, node_words + 1, sizeof(std::int32_t));
