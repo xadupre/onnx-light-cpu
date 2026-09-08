@@ -23,10 +23,14 @@ namespace {
 
 struct InlineExecutor {
   std::int64_t maximum_blocks = 0;
+  std::int64_t dispatches = 0;
+  bool nested = false;
 
   static void Run(void *context, std::int64_t num_blocks, void *task_context,
                   onnx_light_cpu::ExecutionBlockFn task) {
     auto &self = *static_cast<InlineExecutor *>(context);
+    ++self.dispatches;
+    self.nested |= onnx_light_cpu::ExecutionInParallelRegion();
     self.maximum_blocks = std::max(self.maximum_blocks, num_blocks);
     for (std::int64_t block = 0; block < num_blocks; ++block) {
       task(task_context, block);
@@ -1064,6 +1068,95 @@ TEST(ComputeAttentionFloat32Streaming, Avx2Rank3ShortAndTiledBroadcastMaskMatche
       ComputeAttentionFloat32(plan, q.data(), k.data(), v.data(), mask.data(), actual.data());
       onnx_light_cpu::ComputeAttentionFloat32Materialized(plan, q.data(), k.data(), v.data(),
                                                           mask.data(), expected.data());
+      ExpectClose(actual, expected);
+    }
+  }
+}
+
+TEST(ComputeAttentionFloat32Streaming, Rank3HeadPackingPreservesMasksGroupsAndNonpadLengths) {
+  constexpr std::int64_t batch = 2, heads = 4, q_len = 17, kv_len = 31, dim = 17, vdim = 19;
+  for (std::int64_t kv_heads : {1, 2, 4}) {
+    for (bool causal : {false, true}) {
+      for (AttentionMaskKind kind : {AttentionMaskKind::kBoolean, AttentionMaskKind::kAdditive}) {
+        SCOPED_TRACE(::testing::Message()
+                     << kv_heads << " causal=" << causal << " mask=" << static_cast<int>(kind));
+        AttentionDescriptor descriptor;
+        descriptor.q_num_heads = heads;
+        descriptor.kv_num_heads = kv_heads;
+        descriptor.is_causal = causal;
+        const std::int64_t q_shape[] = {batch, q_len, heads * dim};
+        const std::int64_t k_shape[] = {batch, kv_len, kv_heads * dim};
+        const std::int64_t v_shape[] = {batch, kv_len, kv_heads * vdim};
+        const std::int64_t mask_shape[] = {batch, heads, q_len, kv_len};
+        AttentionPlan plan(descriptor, AttentionLayout::kRank3, q_shape, k_shape, v_shape,
+                           mask_shape, kind);
+        const auto q = RandomTensor(batch * q_len * heads * dim, 1701);
+        const auto k = RandomTensor(batch * kv_len * kv_heads * dim, 1702);
+        const auto v = RandomTensor(batch * kv_len * kv_heads * vdim, 1703);
+        auto additive = RandomTensor(batch * heads * q_len * kv_len, 1704);
+        std::vector<std::uint8_t> boolean(additive.size());
+        for (std::size_t i = 0; i < boolean.size(); ++i) {
+          boolean[i] = (i % 7 != 0);
+        }
+        std::fill_n(additive.begin(), kv_len, -std::numeric_limits<float>::infinity());
+        std::fill_n(boolean.begin(), kv_len, 0);
+        const void *mask = kind == AttentionMaskKind::kBoolean
+                               ? static_cast<const void *>(boolean.data())
+                               : static_cast<const void *>(additive.data());
+        const std::int64_t nonpad[] = {27, 31};
+        std::vector<float> expected(batch * q_len * heads * vdim), actual(expected.size());
+        onnx_light_cpu::ComputeAttentionFloat32Materialized(
+            plan, q.data(), k.data(), v.data(), mask, expected.data(), nullptr, nullptr, nonpad);
+        InlineExecutor executor;
+        onnx_light_cpu::ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run};
+        {
+          onnx_light_cpu::ExecutionExecutorScope scope(&view);
+          ComputeAttentionFloat32Streaming(plan, q.data(), k.data(), v.data(), mask, actual.data(),
+                                           nullptr, nullptr, nonpad);
+        }
+        ExpectClose(actual, expected);
+        EXPECT_EQ(executor.dispatches, 1);
+        EXPECT_GT(executor.maximum_blocks, 1);
+        EXPECT_LE(executor.maximum_blocks, 4);
+        EXPECT_FALSE(executor.nested);
+        executor = {};
+        {
+          onnx_light_cpu::ExecutionExecutorScope scope(&view);
+          onnx_light_cpu::detail::ExecutionRegionScope region;
+          ComputeAttentionFloat32Streaming(plan, q.data(), k.data(), v.data(), mask, actual.data(),
+                                           nullptr, nullptr, nonpad);
+        }
+        ExpectClose(actual, expected);
+        EXPECT_EQ(executor.dispatches, 0);
+      }
+    }
+  }
+}
+
+TEST(ComputeAttentionFloat32Streaming, Rank3HeadPackingBoundariesMatchMaterialized) {
+  for (const std::int64_t q_len : {16, 128, 129}) {
+    for (const std::int64_t kv_len : {256, 257}) {
+      AttentionDescriptor descriptor;
+      descriptor.q_num_heads = 2;
+      descriptor.kv_num_heads = 1;
+      const std::int64_t q_shape[] = {1, q_len, 2 * 7};
+      const std::int64_t k_shape[] = {1, kv_len, 7};
+      const std::int64_t v_shape[] = {1, kv_len, 9};
+      AttentionPlan plan(descriptor, AttentionLayout::kRank3, q_shape, k_shape, v_shape, {},
+                         AttentionMaskKind::kNone);
+      const auto q = RandomTensor(q_len * 2 * 7, 1711);
+      const auto k = RandomTensor(kv_len * 7, 1712);
+      const auto v = RandomTensor(kv_len * 9, 1713);
+      std::vector<float> expected(q_len * 2 * 9), actual(expected.size());
+      onnx_light_cpu::ComputeAttentionFloat32Materialized(plan, q.data(), k.data(), v.data(),
+                                                          nullptr, expected.data());
+      InlineExecutor executor;
+      onnx_light_cpu::ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run};
+      {
+        onnx_light_cpu::ExecutionExecutorScope scope(&view);
+        ComputeAttentionFloat32Streaming(plan, q.data(), k.data(), v.data(), nullptr,
+                                         actual.data());
+      }
       ExpectClose(actual, expected);
     }
   }

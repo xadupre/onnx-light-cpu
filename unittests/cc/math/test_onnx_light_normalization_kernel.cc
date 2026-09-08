@@ -17,6 +17,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -365,6 +366,109 @@ TEST(OnnxLightNormalizationKernel, ContiguousMomentsRemainStableForLargeOffsets)
   EXPECT_FLOAT_EQ(shared.variance, 0.5F);
 }
 
+TEST(OnnxLightNormalizationKernel, InstanceAndMvnFloat32ContiguousMomentsMatchCenteredReference) {
+  const onnx_light_cpu::InstanceNormalizationKernel instance(MakeContext(22));
+  const onnx_light_cpu::MeanVarianceNormalizationKernel mvn(MakeContext(13));
+  std::vector<rt_ns::Shape> shapes = {{4, 32, 16, 16}, {8, 16, 128}, {4, 16, 32, 8}, {1, 256, 128}};
+  for (std::int64_t width : {1, 7, 8, 9, 15, 16, 17, 31, 63, 64, 65, 127, 129, 255, 257}) {
+    shapes.push_back({2, 3, width});
+  }
+  for (std::int64_t width = 32; width < 48; ++width) {
+    shapes.push_back({2, 3, width});
+  }
+  for (const rt_ns::Shape &shape : shapes) {
+    const std::size_t channels = static_cast<std::size_t>(shape[1]);
+    const std::size_t rows = static_cast<std::size_t>(shape[0]) * channels;
+    std::size_t width = 1;
+    std::vector<std::int64_t> axes;
+    for (std::size_t axis = 2; axis < shape.size(); ++axis) {
+      width *= static_cast<std::size_t>(shape[axis]);
+      axes.push_back(static_cast<std::int64_t>(axis));
+    }
+    SCOPED_TRACE(width);
+    std::vector<float> values(rows * width);
+    std::vector<float> scales(channels);
+    std::vector<float> biases(channels);
+    for (std::size_t channel = 0; channel < channels; ++channel) {
+      scales[channel] = channel % 2 == 0 ? 0.5F : -1.25F;
+      biases[channel] = static_cast<float>(channel % 3) * 0.25F;
+    }
+    for (std::size_t row = 0; row < rows; ++row) {
+      for (std::size_t i = 0; i < width; ++i) {
+        const float variation = static_cast<float>(static_cast<int>((i * 7 + row) % 29) - 14);
+        values[row * width + i] =
+            row % 3 == 0 ? 8.0F : variation * 0.125F + (row % 3 == 1 ? 0.0F : 256.0F);
+      }
+    }
+    const rt_ns::Tensor x = rt_ns::Tensor::FromFloat("", shape, values);
+    const rt_ns::Tensor scale = rt_ns::Tensor::FromFloat("", {shape[1]}, scales);
+    const rt_ns::Tensor bias = rt_ns::Tensor::FromFloat("", {shape[1]}, biases);
+    const rt_ns::Tensor instance_y = instance(x, scale, bias, 1.0e-5F);
+    const rt_ns::Tensor mvn_y = mvn(x, axes);
+    for (std::size_t row = 0; row < rows; ++row) {
+      double mean = 0.0;
+      for (std::size_t i = 0; i < width; ++i) {
+        mean += values[row * width + i];
+      }
+      mean /= static_cast<double>(width);
+      double variance = 0.0;
+      for (std::size_t i = 0; i < width; ++i) {
+        const double delta = static_cast<double>(values[row * width + i]) - mean;
+        variance += delta * delta;
+      }
+      variance /= static_cast<double>(width);
+      for (std::size_t i = 0; i < width; ++i) {
+        const std::size_t index = row * width + i;
+        const double centered = static_cast<double>(values[index]) - mean;
+        const double instance_expected =
+            centered / std::sqrt(variance + 1.0e-5F) * scales[row % channels] +
+            biases[row % channels];
+        EXPECT_NEAR(Value(instance_y, index), instance_expected, 1.1e-3);
+        EXPECT_NEAR(Value(mvn_y, index), centered / (std::sqrt(variance) + 1.0e-9F), 5.0e-5);
+      }
+    }
+  }
+}
+
+TEST(OnnxLightNormalizationKernel, InstanceAndMvnFloat32ContiguousSpecialValues) {
+  const onnx_light_cpu::InstanceNormalizationKernel instance(MakeContext(22));
+  const onnx_light_cpu::MeanVarianceNormalizationKernel mvn(MakeContext(13));
+  const rt_ns::Tensor scale = rt_ns::Tensor::FromFloat("", {1}, {1.0F});
+  const rt_ns::Tensor bias = rt_ns::Tensor::FromFloat("", {1}, {0.0F});
+  for (float special :
+       {std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity(),
+        -std::numeric_limits<float>::infinity()}) {
+    std::vector<float> values(65, 1.0F);
+    values.back() = special;
+    const rt_ns::Tensor x = rt_ns::Tensor::FromFloat("", {1, 1, 65}, values);
+    const rt_ns::Tensor instance_y = instance(x, scale, bias);
+    const rt_ns::Tensor mvn_y = mvn(x, {2});
+    for (std::size_t i = 0; i < values.size(); ++i) {
+      EXPECT_TRUE(std::isnan(Value(instance_y, i)));
+      EXPECT_TRUE(std::isnan(Value(mvn_y, i)));
+    }
+  }
+  const rt_ns::Tensor constant =
+      rt_ns::Tensor::FromFloat("", {1, 1, 64}, std::vector<float>(64, std::ldexp(1.0F, 70)));
+  const rt_ns::Tensor instance_y = instance(constant, scale, bias);
+  const rt_ns::Tensor mvn_y = mvn(constant, {2});
+  for (std::size_t i = 0; i < 64; ++i) {
+    EXPECT_EQ(Value(instance_y, i), 0.0);
+    EXPECT_EQ(Value(mvn_y, i), 0.0);
+  }
+}
+
+TEST(OnnxLightNormalizationKernel, MvnConstantSimdTailPreservesOriginalMean) {
+  const onnx_light_cpu::MeanVarianceNormalizationKernel mvn(MakeContext(13));
+  for (float value : {256.1F, -256.1F}) {
+    const auto x = rt_ns::Tensor::FromFloat("", {1, 1, 34}, std::vector<float>(34, value));
+    const auto y = mvn(x, {2});
+    for (std::size_t i = 0; i < 34; ++i) {
+      EXPECT_EQ(Value(y, i), 0.0);
+    }
+  }
+}
+
 TEST(OnnxLightNormalizationKernel, LayerNormalizationBroadcastsAndReturnsFloatStats) {
   const onnx_light_cpu::LayerNormalizationKernel kernel(MakeContext(17));
   const rt_ns::Tensor x = rt_ns::MakeBfloat16Tensor("", {2, 2, 2}, {1, 2, 3, 4, 2, 4, 6, 8});
@@ -532,6 +636,37 @@ TEST(OnnxLightNormalizationKernel, LpNormalizationHandlesStridedAxesAndZeroNorm)
   EXPECT_DOUBLE_EQ(Value(y, 3), 0.0);
   EXPECT_THROW(kernel(x, 2, 2), std::invalid_argument);
   EXPECT_THROW(kernel(x, 0, 3), std::invalid_argument);
+}
+
+TEST(OnnxLightNormalizationKernel, LpNormalizationFloat32ContiguousPreservesDoubleReduction) {
+  const onnx_light_cpu::LpNormalizationKernel kernel(MakeContext(22));
+  for (std::int64_t width : {1, 3, 4, 5, 7, 8, 9, 15, 16, 17, 127, 128, 129}) {
+    SCOPED_TRACE(width);
+    const std::size_t count = static_cast<std::size_t>(width);
+    std::vector<float> values(4 * count);
+    for (std::size_t i = 0; i < count; ++i) {
+      const float value = static_cast<float>(static_cast<int>(i % 13) - 6);
+      values[count + i] = value;
+      values[2 * count + i] = value * 1.0e20F;
+      values[3 * count + i] = value * 1.0e-30F;
+    }
+    const rt_ns::Tensor x = rt_ns::Tensor::FromFloat("", {2, 2, width}, values);
+    for (std::int64_t p : {1, 2}) {
+      const rt_ns::Tensor y = kernel(x, -1, p);
+      for (std::size_t row = 0; row < 4; ++row) {
+        double sum = 0.0;
+        for (std::size_t i = 0; i < count; ++i) {
+          const double value = values[row * count + i];
+          sum += p == 1 ? std::abs(value) : value * value;
+        }
+        const double norm_value = p == 1 ? sum : std::sqrt(sum);
+        for (std::size_t i = 0; i < count; ++i) {
+          const double expected = norm_value == 0.0 ? 0.0 : values[row * count + i] / norm_value;
+          EXPECT_NEAR(Value(y, row * count + i), expected, 1.0e-7);
+        }
+      }
+    }
+  }
 }
 
 TEST(OnnxLightNormalizationKernel, MeanVarianceNormalizationUsesRequestedAxes) {

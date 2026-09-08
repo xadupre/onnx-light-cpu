@@ -99,6 +99,44 @@ template <typename Acc> Acc ReadParameter(const norm::TensorReader &reader, std:
 }
 
 template <DataType Type>
+norm::Moments<norm::AccumulatorType<Type>> ComputeSliceMoments(const norm::StorageType<Type> *input,
+                                                               std::size_t count) {
+  if constexpr (Type == DataType::FLOAT) {
+    if (count >= 32) {
+      const Float32NormalizationMoments moments = ComputeNormalizationMomentsFloat32(input, count);
+      const float second_moment = moments.variance + moments.mean * moments.mean;
+      if (moments.variance > norm::RawMomentsCancellationFloor(second_moment, count)) {
+        return {moments.mean, moments.variance};
+      }
+      // Preserve the original mean as well as variance for ill-conditioned
+      // slices: a rounded constant mean would make MVN produce +/-1, not zero.
+    }
+  }
+  return norm::ComputeContiguousMoments<Type>(input, count);
+}
+
+double ComputeContiguousSquareSum(const float *input, std::size_t count) {
+  // Keep double accumulation: float squares can overflow even when the L2 norm is finite.
+  double sums[4] = {};
+  std::size_t i = 0;
+  for (; i + 4 <= count; i += 4) {
+    const double v0 = input[i];
+    const double v1 = input[i + 1];
+    const double v2 = input[i + 2];
+    const double v3 = input[i + 3];
+    sums[0] += v0 * v0;
+    sums[1] += v1 * v1;
+    sums[2] += v2 * v2;
+    sums[3] += v3 * v3;
+  }
+  for (; i < count; ++i) {
+    const double value = input[i];
+    sums[i & 3] += value * value;
+  }
+  return sums[0] + sums[1] + sums[2] + sums[3];
+}
+
+template <DataType Type>
 void ApplyAffine(const norm::StorageType<Type> *input, norm::StorageType<Type> *output,
                  std::size_t count, norm::AccumulatorType<Type> multiplier,
                  norm::AccumulatorType<Type> offset) {
@@ -229,8 +267,7 @@ void InstanceNormalize(const Tensor &x, const Tensor &scale, const Tensor &bias,
     for (std::size_t slice = begin; slice < end; ++slice) {
       const std::size_t channel = slice % channels;
       const std::size_t base = slice * spatial;
-      const norm::Moments<Acc> moments =
-          norm::ComputeContiguousMoments<Type>(input + base, spatial);
+      const norm::Moments<Acc> moments = ComputeSliceMoments<Type>(input + base, spatial);
       const Acc multiplier = Traits::Load(scale_data, channel) /
                              std::sqrt(moments.variance + static_cast<Acc>(epsilon));
       const Acc offset = Traits::Load(bias_data, channel) - moments.mean * multiplier;
@@ -404,12 +441,19 @@ void LpNormalize(const Tensor &x, Tensor &y, std::size_t outer, std::size_t dime
           const std::size_t prefix = vector / inner;
           const std::size_t suffix = vector % inner;
           const std::size_t first = prefix * dimension * inner + suffix;
-          double sums[4] = {};
-          for (std::size_t d = 0; d < dimension; ++d) {
-            const double value = static_cast<double>(Traits::Load(input, first + d * inner));
-            sums[d & 3] += p == 1 ? std::abs(value) : value * value;
-          }
-          double norm_value = sums[0] + sums[1] + sums[2] + sums[3];
+          double norm_value = [&]() {
+            if constexpr (Type == DataType::FLOAT) {
+              if (inner == 1 && p == 2) {
+                return ComputeContiguousSquareSum(input + first, dimension);
+              }
+            }
+            double sums[4] = {};
+            for (std::size_t d = 0; d < dimension; ++d) {
+              const double value = static_cast<double>(Traits::Load(input, first + d * inner));
+              sums[d & 3] += p == 1 ? std::abs(value) : value * value;
+            }
+            return sums[0] + sums[1] + sums[2] + sums[3];
+          }();
           if (p == 2) {
             norm_value = std::sqrt(norm_value);
           }
@@ -428,19 +472,18 @@ void MvnContiguous(const Tensor &x, Tensor &y, std::size_t lanes, std::size_t re
   using Acc = norm::AccumulatorType<Type>;
   const auto *input = norm::Data<Type>(x);
   auto *output = norm::MutableData<Type>(y);
-  ExecuteItems(lanes, static_cast<double>(reduced_size) * 6.0,
-               [&](std::size_t begin, std::size_t end) {
-                 for (std::size_t lane = begin; lane < end; ++lane) {
-                   const std::size_t base = lane * reduced_size;
-                   const norm::Moments<Acc> moments =
-                       norm::ComputeContiguousMoments<Type>(input + base, reduced_size);
-                   const Acc denominator = std::sqrt(moments.variance) + static_cast<Acc>(1.0e-9F);
-                   for (std::size_t i = 0; i < reduced_size; ++i) {
-                     Traits::Store(output, base + i,
-                                   (Traits::Load(input, base + i) - moments.mean) / denominator);
-                   }
-                 }
-               });
+  ExecuteItems(
+      lanes, static_cast<double>(reduced_size) * 6.0, [&](std::size_t begin, std::size_t end) {
+        for (std::size_t lane = begin; lane < end; ++lane) {
+          const std::size_t base = lane * reduced_size;
+          const norm::Moments<Acc> moments = ComputeSliceMoments<Type>(input + base, reduced_size);
+          const Acc denominator = std::sqrt(moments.variance) + static_cast<Acc>(1.0e-9F);
+          for (std::size_t i = 0; i < reduced_size; ++i) {
+            Traits::Store(output, base + i,
+                          (Traits::Load(input, base + i) - moments.mean) / denominator);
+          }
+        }
+      });
 }
 
 template <DataType Type>

@@ -84,9 +84,20 @@ def estimate_temporary_memory(
     y_elements = int(q_shape[0]) * q_heads * case["q_length"] * case["head_dim"]
     global_workspace_bytes = 0
     if tiled and case["dtype"] == "float32" and case["layout"] == "rank3":
-        global_workspace_bytes = (
-            feeds["Q"].size + feeds["K"].size + feeds["V"].size + y_elements
-        ) * 4
+        if (
+            workers > 1
+            and q_shape[0] != 0
+            and case["q_length"] <= 128
+            and case["kv_length"] <= 256
+            and case["head_dim"] <= 256
+        ):
+            worker_scratch_bytes += (
+                workers * (case["q_length"] + case["kv_length"]) * case["head_dim"] * 8
+            )
+        else:
+            global_workspace_bytes = (
+                feeds["Q"].size + feeds["K"].size + feeds["V"].size + y_elements
+            ) * 4
     elif tiled and case["dtype"] == "float16":
         global_workspace_bytes = (feeds["V"].size + y_elements) * 4
         if case["layout"] == "rank3":

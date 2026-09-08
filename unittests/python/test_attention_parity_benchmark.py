@@ -109,6 +109,32 @@ def test_candidate_order_and_raw_samples_are_retained():
     ]
 
 
+def test_rank3_packing_memory_is_per_worker_for_cache_sized_heads():
+    for q_length in (64, 128, 129):
+        case = parse_case_name(
+            f"test_cpu_attention_opset23_rank3_gqa_q{q_length}_kv128_hd64"
+            "_none_stateless_float32_benchmark"
+        )
+        feeds = {
+            "Q": SimpleNamespace(shape=(2, q_length, 8 * 64), size=2 * q_length * 8 * 64),
+            "K": SimpleNamespace(shape=(2, 128, 2 * 64), size=2 * 128 * 2 * 64),
+            "V": SimpleNamespace(shape=(2, 128, 2 * 64), size=2 * 128 * 2 * 64),
+        }
+        for workers in (1, 4):
+            query_block = min(q_length, 128)
+            tile_bytes = workers * (
+                query_block * 128 * 4 + query_block * 64 * 8 + query_block * 9
+            )
+            packing_bytes = (
+                workers * (q_length + 128) * 64 * 8
+                if q_length <= 128 and workers > 1
+                else (2 * feeds["Q"].size + feeds["K"].size + feeds["V"].size) * 4
+            )
+            memory = estimate_temporary_memory(case, feeds, workers)
+            assert memory["peak_temporary_bytes"] == tile_bytes + packing_bytes
+            assert memory["memory_gate_passed"]
+
+
 def test_summary_applies_per_type_parity_and_memory_gates():
     results = []
     for dtype in ("float32", "float16", "bfloat16"):

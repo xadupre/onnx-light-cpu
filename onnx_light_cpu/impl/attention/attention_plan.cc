@@ -537,7 +537,7 @@ std::size_t StreamingParticipantCount(const AttentionPlan &plan, std::size_t tot
   constexpr std::size_t kShortKvTargetFmasPerParticipant = 64'000;
   constexpr std::size_t kMaximumParticipants = 16;
   const bool is_short_stateless_query = plan.past_length == 0 && plan.q_length > 1 &&
-                                        plan.q_length <= 16 && plan.total_kv_length <= 256;
+                                        plan.q_length <= 16 && plan.total_kv_length <= 1024;
   const bool is_decode_query = plan.q_length == 1 && plan.total_kv_length >= 512;
   const std::size_t target_fmas_per_participant =
       plan.total_kv_length <= 16
@@ -875,15 +875,14 @@ void ComputeAttentionStreamingGeneric(const AttentionPlan &plan, const typename 
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
   // Reuse the decode row kernel for short query bursts as well as Q == 1.
   // Each row already resolves its own causal, nonpad and cache bounds.
-  // Eligible only for FP32 on AVX2 hardware without AVX-512
-  // (AVX-512 keeps its own dispatch in `ComputeAttentionTiled` and is left
-  // untouched here). A boolean/additive `attn_mask` is only handled by the
+  // The row kernel is also useful on AVX-512 hosts, where short queries do
+  // not enter the tiled implementation. A boolean/additive mask is handled by the
   // fast path when its KV stride is `1` (contiguous), matching
   // `ComputeAttentionTiled`'s own AVX-512 masked dispatch gate; any other
   // mask layout (e.g. broadcast) falls back to the scalar path unchanged.
+  static const bool has_avx2_fma = DetectSimdLevel() >= SimdLevel::kAVX2 && CpuSupportsFma();
   const bool use_avx2_decode_row =
-      std::is_same_v<Codec, Float32Codec> && plan.q_length < 16 &&
-      DetectSimdLevel() == SimdLevel::kAVX2 && CpuSupportsFma() &&
+      std::is_same_v<Codec, Float32Codec> && plan.q_length < 16 && has_avx2_fma &&
       (plan.mask_kind == AttentionMaskKind::kNone || plan.mask_strides.kv == 1);
 #endif
 
@@ -1448,6 +1447,77 @@ void ComputeAttentionTiled(const AttentionPlan &plan, const typename Codec::Stor
 void ComputeAttentionFloat32Rank3Tiled(const AttentionPlan &plan, const float *q, const float *k,
                                        const float *v, const void *mask, float *y,
                                        const std::int64_t *nonpad_kv_seqlen) {
+  if (plan.batch != 0 && plan.q_length <= 128 && plan.kv_length <= 256 && plan.head_dim <= 256 &&
+      plan.v_head_dim <= 256 && ExecutionThreadCount() > 1 && !ExecutionInParallelRegion()) {
+    // Keep packing, attention, and unpacking on the same worker for cache-sized
+    // heads, instead of synchronizing four whole-tensor layout conversions.
+    const std::size_t heads = plan.batch * plan.q_num_heads;
+    const double work = static_cast<double>(heads) * plan.q_length * plan.kv_length *
+                        (plan.head_dim + plan.v_head_dim);
+    const std::size_t participants =
+        std::min(heads, static_cast<std::size_t>(std::clamp(std::ceil(work / 16384.0), 1.0, 16.0)));
+    const ExecutionSchedule schedule{
+        1, static_cast<std::int64_t>((heads + participants - 1) / participants),
+        static_cast<std::int64_t>(participants)};
+    ExecuteRanges(
+        static_cast<std::int64_t>(heads), schedule, [&](std::int64_t begin, std::int64_t end) {
+          const std::size_t q_count = plan.q_length * plan.head_dim;
+          const std::size_t k_count = plan.kv_length * plan.head_dim;
+          const std::size_t v_count = plan.kv_length * plan.v_head_dim;
+          const std::size_t y_count = plan.q_length * plan.v_head_dim;
+          thread_local std::vector<float> workspace;
+          workspace.resize(q_count + k_count + v_count + y_count);
+          float *packed_q = workspace.data();
+          float *packed_k = packed_q + q_count;
+          float *packed_v = packed_k + k_count;
+          float *packed_y = packed_v + v_count;
+          AttentionPlan head_plan = plan;
+          head_plan.layout = AttentionLayout::kRank4;
+          head_plan.batch = 1;
+          head_plan.q_num_heads = 1;
+          head_plan.kv_num_heads = 1;
+          head_plan.group_size = 1;
+          head_plan.q_strides = {0, 0, static_cast<std::ptrdiff_t>(plan.head_dim)};
+          head_plan.k_strides = head_plan.q_strides;
+          head_plan.v_strides = {0, 0, static_cast<std::ptrdiff_t>(plan.v_head_dim)};
+          head_plan.y_strides = head_plan.v_strides;
+          for (std::int64_t head = begin; head < end; ++head) {
+            const std::size_t b = static_cast<std::size_t>(head) / plan.q_num_heads;
+            const std::size_t h = static_cast<std::size_t>(head) % plan.q_num_heads;
+            const std::size_t kv_h = h / plan.group_size;
+            const float *q_head = q + b * plan.q_strides.batch + h * plan.q_strides.head;
+            const float *k_head = k + b * plan.k_strides.batch + kv_h * plan.k_strides.head;
+            const float *v_head = v + b * plan.v_strides.batch + kv_h * plan.v_strides.head;
+            for (std::size_t i = 0; i < plan.q_length; ++i) {
+              std::copy_n(q_head + i * plan.q_strides.sequence, plan.head_dim,
+                          packed_q + i * plan.head_dim);
+            }
+            for (std::size_t i = 0; i < plan.kv_length; ++i) {
+              std::copy_n(k_head + i * plan.k_strides.sequence, plan.head_dim,
+                          packed_k + i * plan.head_dim);
+              std::copy_n(v_head + i * plan.v_strides.sequence, plan.v_head_dim,
+                          packed_v + i * plan.v_head_dim);
+            }
+            const std::ptrdiff_t mask_offset =
+                b * plan.mask_strides.batch + h * plan.mask_strides.head;
+            const void *head_mask = mask;
+            if (plan.mask_kind == AttentionMaskKind::kBoolean) {
+              head_mask = static_cast<const std::uint8_t *>(mask) + mask_offset;
+            } else if (plan.mask_kind == AttentionMaskKind::kAdditive) {
+              head_mask = static_cast<const float *>(mask) + mask_offset;
+            }
+            ComputeAttentionTiled<Float32Codec>(
+                head_plan, packed_q, packed_k, packed_v, head_mask, packed_y,
+                nonpad_kv_seqlen == nullptr ? nullptr : nonpad_kv_seqlen + b);
+            float *y_head = y + b * plan.y_strides.batch + h * plan.y_strides.head;
+            for (std::size_t i = 0; i < plan.q_length; ++i) {
+              std::copy_n(packed_y + i * plan.v_head_dim, plan.v_head_dim,
+                          y_head + i * plan.y_strides.sequence);
+            }
+          }
+        });
+    return;
+  }
   const std::size_t q_count = plan.batch * plan.q_num_heads * plan.q_length * plan.head_dim;
   const std::size_t k_count = plan.batch * plan.kv_num_heads * plan.kv_length * plan.head_dim;
   const std::size_t v_count = plan.batch * plan.kv_num_heads * plan.kv_length * plan.v_head_dim;
