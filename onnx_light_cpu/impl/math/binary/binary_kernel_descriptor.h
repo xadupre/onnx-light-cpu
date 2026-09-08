@@ -51,6 +51,10 @@ public:
     BulkContiguousFn bulk_contiguous = nullptr;
     BulkLeftScalarFn bulk_left_scalar = nullptr;
     BulkRightScalarFn bulk_right_scalar = nullptr;
+    // Zero leaves the caller's general binary scheduling policy unchanged.
+    std::size_t preferred_bulk_parallel_threshold_bytes = 0;
+    std::size_t preferred_target_block_bytes = 0;
+    std::int64_t maximum_participants = 0;
   };
 
   BinaryKernelDescriptor(std::string op_type, std::int64_t opset_version,

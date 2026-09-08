@@ -409,6 +409,23 @@ template <typename TExp> bool IsSmallNonnegativeExponent(TExp exponent) {
   return exponent <= 5;
 }
 
+template <int Exponent>
+void BulkFloatFixedIntegerPower(const float *base, float *out, std::size_t count) {
+  for (std::size_t i = 0; i < count; ++i) {
+    if constexpr (Exponent == 2) {
+      out[i] = base[i] * base[i];
+    } else if constexpr (Exponent == 3) {
+      out[i] = base[i] * (base[i] * base[i]);
+    } else if constexpr (Exponent == 4) {
+      const float squared = base[i] * base[i];
+      out[i] = squared * squared;
+    } else {
+      const float squared = base[i] * base[i];
+      out[i] = base[i] * (squared * squared);
+    }
+  }
+}
+
 template <typename TExp>
 void BulkFloatIntegerPowLeftScalar(const void *left, const void *right, void *out,
                                    std::size_t count) {
@@ -443,6 +460,22 @@ void BulkFloatIntegerPowRightScalar(const void *left, const void *right, void *o
   }
   if (exponent == TExp{1}) {
     std::copy_n(typed_left, count, typed_out);
+    return;
+  }
+  if (exponent == TExp{2}) {
+    BulkFloatFixedIntegerPower<2>(typed_left, typed_out, count);
+    return;
+  }
+  if (exponent == TExp{3}) {
+    BulkFloatFixedIntegerPower<3>(typed_left, typed_out, count);
+    return;
+  }
+  if (exponent == TExp{4}) {
+    BulkFloatFixedIntegerPower<4>(typed_left, typed_out, count);
+    return;
+  }
+  if (exponent == TExp{5}) {
+    BulkFloatFixedIntegerPower<5>(typed_left, typed_out, count);
     return;
   }
   for (std::size_t i = 0; i < count; ++i) {
@@ -2054,6 +2087,9 @@ void SelectAdditionalBulk(BinaryOperator op, DT left, DT right, const Attrs &att
     ONNX_LIGHT_CPU_BIND_TYPED_BULK(float, RIGHT_CPP, float, ComputePow<float, RIGHT_CPP>)          \
     adapter.bulk_left_scalar = &BulkFloatIntegerPowLeftScalar<RIGHT_CPP>;                          \
     adapter.bulk_right_scalar = &BulkFloatIntegerPowRightScalar<RIGHT_CPP>;                        \
+    adapter.preferred_bulk_parallel_threshold_bytes = 256 * 1024;                                  \
+    adapter.preferred_target_block_bytes = 256 * 1024;                                             \
+    adapter.maximum_participants = 32;                                                             \
     break;
 #define ONNX_LIGHT_CPU_BIND_INTEGER_POW_RIGHT_CASE(TYPE, RIGHT_CPP, BASE_CPP)                      \
   case DT::TYPE:                                                                                   \

@@ -268,8 +268,12 @@ void BinaryBroadcastPlan::ExecuteFlat(const std::byte *left, const std::byte *ri
   const std::size_t bytes_per_unit = (left_stride != 0 ? adapter_.left_size : 0) +
                                      (right_stride != 0 ? adapter_.right_size : 0) +
                                      adapter_.output_size;
-  const std::size_t threshold_bytes = bulk != nullptr ? tuning.bulk_parallel_threshold_bytes
-                                                      : tuning.scalar_parallel_threshold_bytes;
+  const bool use_adapter_schedule = tuning == kDefaultBinaryExecutionTuning;
+  const std::size_t threshold_bytes = use_adapter_schedule && bulk != nullptr &&
+                                              adapter_.preferred_bulk_parallel_threshold_bytes != 0
+                                          ? adapter_.preferred_bulk_parallel_threshold_bytes
+                                      : bulk != nullptr ? tuning.bulk_parallel_threshold_bytes
+                                                        : tuning.scalar_parallel_threshold_bytes;
   const std::size_t min_units = ByteThresholdToUnits(threshold_bytes, bytes_per_unit);
   const std::size_t element_size = std::max<std::size_t>(adapter_.output_size, 1);
   const std::int64_t block_multiple =
@@ -278,10 +282,18 @@ void BinaryBroadcastPlan::ExecuteFlat(const std::byte *left, const std::byte *ri
   // Keep each submitted range large enough to amortize executor dispatch.
   // ``ExecuteRanges`` stays serial until it can form at least two such ranges.
   const std::size_t min_units_bound = std::max<std::size_t>(min_units, 1);
+  const std::size_t target_block_bytes =
+      use_adapter_schedule && adapter_.preferred_target_block_bytes != 0
+          ? adapter_.preferred_target_block_bytes
+          : tuning.target_block_bytes;
   const std::int64_t min_block_size = static_cast<std::int64_t>(
-      std::max<std::size_t>(ByteThresholdToUnits(tuning.target_block_bytes, bytes_per_unit), 1));
+      std::max<std::size_t>(ByteThresholdToUnits(target_block_bytes, bytes_per_unit), 1));
+  const std::int64_t max_participants =
+      use_adapter_schedule && adapter_.maximum_participants != 0
+          ? std::min(tuning.max_participants, adapter_.maximum_participants)
+          : tuning.max_participants;
   const ExecutionSchedule schedule{static_cast<std::int64_t>(min_units_bound), min_block_size,
-                                   tuning.max_participants};
+                                   max_participants};
   ExecuteRanges(static_cast<std::int64_t>(count), schedule, block_multiple,
                 [&](std::int64_t begin, std::int64_t end) {
                   const std::size_t sub_count = static_cast<std::size_t>(end - begin);
