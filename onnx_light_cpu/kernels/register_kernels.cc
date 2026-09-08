@@ -27,6 +27,7 @@
 #include "onnx_light_cpu/kernels/math/rms_normalization_kernel.h"
 #include "onnx_light_cpu/kernels/math/sigmoid_softmax_kernel.h"
 #include "onnx_light_cpu/kernels/math/swiglu_kernel.h"
+#include "onnx_light_cpu/kernels/tensor/concat_kernel.h"
 #include "onnx_light_cpu/kernels/tensor/gather_kernel.h"
 #include "onnx_light_cpu/kernels/tensor/slice_kernel.h"
 #include "onnx_light_cpu/kernels/traditionalml/tree_ensemble_kernel.h"
@@ -124,6 +125,7 @@ void RegisterAllKernels(MicrosoftKernelImplementation implementation) {
   RegisterExpKernel();
   RegisterLogKernel();
   RegisterGemmKernel();
+  RegisterConcatKernel();
   RegisterGatherKernel();
   RegisterSliceKernel();
   RegisterMatMulKernel();

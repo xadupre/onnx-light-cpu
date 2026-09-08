@@ -429,6 +429,8 @@ TEST(OnnxLightBackendKernels, GatherRunsThroughRuntime) { CheckTensorRegularCase
 
 TEST(OnnxLightBackendKernels, SliceRunsThroughRuntime) { CheckTensorRegularCases("Slice"); }
 
+TEST(OnnxLightBackendKernels, ConcatRunsThroughRuntime) { CheckTensorRegularCases("Concat"); }
+
 TEST(OnnxLightBackendKernels, GemmRunsThroughRuntime) {
   const std::vector<std::string> failures =
       RunCpuBackendCases("Gemm", core::backend_test::TestMode::TEST);
@@ -852,12 +854,12 @@ TEST(OnnxLightBackendKernels, NotBenchmarkRunsThroughRuntime) {
 }
 
 void CheckTensorBenchmarks(const std::string &op_type, const std::vector<std::string> &layouts,
-                           const std::array<std::string, 2> &parameter_tags) {
+                           const std::vector<std::string> &parameter_tags) {
   std::vector<TestCase> cases = CollectCpuCases(op_type, core::backend_test::TestMode::BENCHMARK);
   const std::array<std::string, 6> types = {
       "float32", "float64", "float16", "bfloat16", "int8", "int64",
   };
-  ASSERT_EQ(cases.size(), layouts.size() * types.size() * 2);
+  ASSERT_EQ(cases.size(), layouts.size() * types.size() * parameter_tags.size());
   std::set<std::string> names;
   for (const TestCase &test_case : cases) {
     EXPECT_FALSE(test_case.materialized()) << test_case.name;
@@ -867,7 +869,7 @@ void CheckTensorBenchmarks(const std::string &op_type, const std::vector<std::st
     for (const std::string &type : types) {
       for (const std::string &parameters : parameter_tags) {
         const std::string name = "test_cpu_" + Lowercase(op_type) + "_" + layout + "_" +
-                                 parameters + "_" + type + "_benchmark";
+                                 (parameters.empty() ? "" : parameters + "_") + type + "_benchmark";
         EXPECT_TRUE(names.contains(name)) << name;
       }
     }
@@ -905,6 +907,13 @@ TEST(OnnxLightBackendKernels, SliceBenchmarksCoverTypesLayoutsAndLazyOutputs) {
                          "outer_stride", "reverse_outer", "multi_axis", "tail", "small",
                          "reverse_vector"},
                         {"params32", "params64"});
+}
+
+TEST(OnnxLightBackendKernels, ConcatBenchmarksCoverTypesLayoutsAndLazyOutputs) {
+  CheckTensorBenchmarks("Concat",
+                        {"axis0", "last_axis", "middle_axis", "tail", "narrow", "many_inputs",
+                         "uneven", "single", "empty_input", "vector"},
+                        {""});
 }
 
 TEST(OnnxLightBackendKernels, BinaryBenchmarkCorporaAreUnmaterializedAndRunThroughRuntime) {
