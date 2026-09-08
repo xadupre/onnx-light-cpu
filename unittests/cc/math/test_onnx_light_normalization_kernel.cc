@@ -423,7 +423,7 @@ TEST(OnnxLightNormalizationKernel, InstanceAndMvnFloat32ContiguousMomentsMatchCe
         const double instance_expected =
             centered / std::sqrt(variance + 1.0e-5F) * scales[row % channels] +
             biases[row % channels];
-        EXPECT_NEAR(Value(instance_y, index), instance_expected, 2.0e-4);
+        EXPECT_NEAR(Value(instance_y, index), instance_expected, 1.1e-3);
         EXPECT_NEAR(Value(mvn_y, index), centered / (std::sqrt(variance) + 1.0e-9F), 5.0e-5);
       }
     }

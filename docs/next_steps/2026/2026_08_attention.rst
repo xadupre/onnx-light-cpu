@@ -21,7 +21,7 @@ path; continued AVX2 tuning is tracked separately by the
 :doc:`AVX2 performance follow-up <2026_09_avx2_performance>`.
 
 Cache-sized FP32 follow-up
--------------------------
+---------------------------
 
 For rank-3 stateless FP32 attention with query length at most 128, KV length
 at most 256, and Q/K and V head dimensions at most 256, parallel packing,
