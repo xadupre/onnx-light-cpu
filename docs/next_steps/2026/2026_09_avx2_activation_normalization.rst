@@ -233,7 +233,7 @@ multithread activations and the remaining BFloat16 and Float16 ``Softmax``
 loop families still require end-to-end parity coverage.
 
 InstanceNormalization affine follow-up
--------------------------------------
+---------------------------------------
 
 After the SIMD moments improvement in `#667
 <https://github.com/xadupre/onnx-light-cpu/pull/667>`_, FP32
