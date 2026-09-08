@@ -22,6 +22,9 @@ available from :cpp:func:`CollectRegisteredKernels` and the generated
 .. doxygenfunction:: onnx_light_cpu::RegisterGatherKernel
    :project: onnx_light_cpu
 
+.. doxygenfunction:: onnx_light_cpu::RegisterSliceKernel
+   :project: onnx_light_cpu
+
 .. doxygenfunction:: onnx_light_cpu::RegisterNotKernel
    :project: onnx_light_cpu
 

@@ -31,3 +31,13 @@ sub-byte types are not supported.
 .. doxygenclass:: onnx_light_cpu::NotKernel
    :project: onnx_light_cpu
    :members:
+
+.. doxygenclass:: onnx_light_cpu::SliceKernel
+   :project: onnx_light_cpu
+   :members:
+
+Slice supports tensor parameters from opset 10 onwards and the legacy
+attribute form. It handles optional axes and steps, clipped bounds, negative
+steps, empty outputs, and the same fixed-width data types as Gather.
+Contiguous trailing dimensions are copied together; strided copies use
+bounded-rank coordinates and the runtime executor for large outputs.
