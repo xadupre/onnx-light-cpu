@@ -2,7 +2,7 @@ Attention Performance Roadmap
 =============================
 
 :Date: 2026-08
-:Updated: 2026-09-05
+:Updated: 2026-09-08
 
 **complete**
 
@@ -19,6 +19,39 @@ remaining AVX-512 shape and scheduling gaps measured by the published
 dashboard. #605 and #608 establish the AVX2 scheduling and dedicated decode
 path; continued AVX2 tuning is tracked separately by the
 :doc:`AVX2 performance follow-up <2026_09_avx2_performance>`.
+
+Cache-sized FP32 follow-up
+-------------------------
+
+For rank-3 stateless FP32 attention with query length at most 128, KV length
+at most 256, and Q/K and V head dimensions at most 256, parallel packing,
+tiled attention, and unpacking now run together for each query head. This removes
+the barriers between whole-tensor layout conversions. Grouped heads still
+map to the original KV head; each worker packs only the head it currently
+uses. Packing scratch is bounded by 196,608 floats per worker, in addition
+to the existing score and accumulation tiles. Larger cases retain the
+whole-tensor packing path, as do serial and already-nested invocations.
+
+Short FP32 queries also use the existing AVX2/FMA row kernel on AVX-512
+hosts, rather than falling back to the generic row loop. The short-query
+outer work budget now includes KV lengths through 1024.
+
+Alternating end-to-end measurements against main at ``6937794`` on the
+96-thread AVX-512 host used 30 iterations, 10 warmups, and a 0.3-second
+per-case time limit. The two full-corpus repetitions measured:
+
+* rank-3 MHA, Q=128/KV=128/D=64: 2.43-2.67x faster;
+* rank-4 causal/nonpad, Q=8/KV=1024/D=64: 2.32-2.57x faster;
+* GroupQueryAttention MQA, B=4/S=32/QH=8/KVH=1/D=64: 2.38-2.51x faster;
+* GroupQueryAttention GQA, B=2/S=64/QH=8/KVH=2/D=64: 2.32-2.44x faster.
+
+These are before/after gains, not claims of universal ONNX Runtime parity.
+The rank-3 MHA and causal/nonpad cases remain below parity in these shared-host
+measurements. Reproduce the affected attention cases with::
+
+    python -m onnx_light_cpu benchmark --dtype float32 --onnxruntime \
+        --threads 96 -r 30 -w 10 -t 0.3 \
+        --test '.*attention.*' -o attention.xlsx
 
 Objective
 ---------

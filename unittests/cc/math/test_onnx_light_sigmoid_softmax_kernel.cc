@@ -551,15 +551,15 @@ TEST(OnnxLightSigmoidSoftmaxKernel, UsesRuntimeExecutorForLargeInputs) {
 
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
 TEST(OnnxLightSigmoidSoftmaxKernel, Avx2SmallSigmoidUsesBoundedTeams) {
-  if (onnx_light_cpu::DetectSimdLevel() != onnx_light_cpu::SimdLevel::kAVX2 ||
+  if (onnx_light_cpu::DetectSimdLevel() < onnx_light_cpu::SimdLevel::kAVX2 ||
       !onnx_light_cpu::CpuSupportsFma()) {
-    GTEST_SKIP() << "AVX2-specific scheduling is unavailable";
+    GTEST_SKIP() << "AVX2/FMA is unavailable";
   }
   InlineExecutor executor;
   onnx_light_cpu::ExecutionExecutorView view{&executor, 32, &InlineExecutor::Run};
   onnx_light_cpu::ExecutionExecutorScope scope(&view);
   const onnx_light_cpu::SigmoidKernel sigmoid(Context());
-  for (std::int64_t count : {32767, 32768, 65535, 65536, 131072}) {
+  for (std::int64_t count : {32767, 32768, 49151, 49152, 65535, 65536, 98303, 98304, 131072}) {
     executor = {};
     const auto input = rt::Tensor::FromFloat("", {count}, Values(count));
     sigmoid(input);
@@ -568,7 +568,12 @@ TEST(OnnxLightSigmoidSoftmaxKernel, Avx2SmallSigmoidUsesBoundedTeams) {
     } else {
       EXPECT_EQ(executor.dispatches, 1);
       EXPECT_GT(executor.blocks, 1);
-      EXPECT_LE(executor.blocks, count < 96 * 1024 ? 2 : 3);
+      const std::int64_t maximum_blocks =
+          onnx_light_cpu::DetectSimdLevel() >= onnx_light_cpu::SimdLevel::kAVX512 &&
+                  count >= 48 * 1024 && count < 96 * 1024
+              ? 4
+              : (count < 96 * 1024 ? 2 : 3);
+      EXPECT_LE(executor.blocks, maximum_blocks);
     }
     EXPECT_FALSE(executor.nested);
   }
@@ -623,9 +628,9 @@ TEST(OnnxLightSigmoidSoftmaxKernel, FusedFloat16SigmoidCoversEveryBitPattern) {
 #endif
 
 TEST(OnnxLightSigmoidSoftmaxKernel, SmallAvx2SoftmaxAvoidsParallelDispatch) {
-  if (onnx_light_cpu::DetectSimdLevel() != onnx_light_cpu::SimdLevel::kAVX2 ||
+  if (onnx_light_cpu::DetectSimdLevel() < onnx_light_cpu::SimdLevel::kAVX2 ||
       !onnx_light_cpu::CpuSupportsFma()) {
-    GTEST_SKIP() << "AVX2-specific scheduling is unavailable";
+    GTEST_SKIP() << "AVX2/FMA is unavailable";
   }
   InlineExecutor executor;
   onnx_light_cpu::ExecutionExecutorView view{&executor, 32, &InlineExecutor::Run};

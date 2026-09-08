@@ -107,11 +107,15 @@ template <typename T> void Sigmoid(const T *input, T *output, std::size_t count)
   UnaryExecutionTuning tuning = kActivationExecutionTuning;
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
   if constexpr (std::is_same_v<T, float>) {
-    static const bool avx2 = DetectSimdLevel() == SimdLevel::kAVX2 && CpuSupportsFma();
-    if (avx2) {
+    static const bool avx512 = DetectSimdLevel() >= SimdLevel::kAVX512;
+    static const bool avx2 = DetectSimdLevel() >= SimdLevel::kAVX2 && CpuSupportsFma();
+    if (avx2 && (!avx512 || count < 256 * 1024)) {
       // Small teams amortize dispatch without waking a full pool for a short vector loop.
       tuning = {128 * 1024, 64 * 1024, count < 96 * 1024 ? 2u : (count < 256 * 1024 ? 3u : 32u),
                 false};
+      if (avx512 && count >= 48 * 1024 && count < 96 * 1024) {
+        tuning.max_participants = 4;
+      }
     }
   }
 #endif
@@ -178,8 +182,7 @@ void SoftmaxLastAxis(const T *input, T *output, std::int64_t rows, std::int64_t 
     static const bool use_avx2_fma = DetectSimdLevel() >= SimdLevel::kAVX2 && CpuSupportsFma();
     if (use_avx2_fma) {
       const std::size_t row_bytes = static_cast<std::size_t>(columns) * sizeof(T);
-      static const std::size_t threshold_bytes =
-          DetectSimdLevel() == SimdLevel::kAVX2 ? 1024 * 1024 : 128 * 1024;
+      constexpr std::size_t threshold_bytes = 1024 * 1024;
       ExecuteRanges(rows, MakeSoftmaxRowSchedule(row_bytes, threshold_bytes),
                     [=](std::int64_t begin, std::int64_t end) {
                       const std::size_t offset = static_cast<std::size_t>(begin * columns);
