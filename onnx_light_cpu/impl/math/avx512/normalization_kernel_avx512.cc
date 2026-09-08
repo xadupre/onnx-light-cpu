@@ -8,6 +8,27 @@
 
 namespace onnx_light_cpu {
 
+// Keep the multiply rounded before adding the offset, including for constant inputs.
+#if defined(__GNUC__) && !defined(__clang__)
+__attribute__((optimize("fp-contract=off")))
+#endif
+void ApplyNormalizationScaleBiasFloat32_AVX512(const float *input, float *output, std::size_t count,
+                                               float multiplier, float offset) {
+#ifdef __clang__
+#pragma clang fp contract(off)
+#endif
+  const __m512 scale = _mm512_set1_ps(multiplier);
+  const __m512 bias = _mm512_set1_ps(offset);
+  std::size_t index = 0;
+  for (; index + 16 <= count; index += 16) {
+    const __m512 value = _mm512_loadu_ps(input + index);
+    _mm512_storeu_ps(output + index, _mm512_add_ps(_mm512_mul_ps(value, scale), bias));
+  }
+  for (; index < count; ++index) {
+    output[index] = input[index] * multiplier + offset;
+  }
+}
+
 float ComputeNormalizationMeanSquareFloat32_AVX512(const float *input, std::size_t count) {
   __m512 sums[4] = {_mm512_setzero_ps(), _mm512_setzero_ps(), _mm512_setzero_ps(),
                     _mm512_setzero_ps()};

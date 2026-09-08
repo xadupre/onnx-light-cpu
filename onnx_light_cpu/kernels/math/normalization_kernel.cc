@@ -263,6 +263,25 @@ void InstanceNormalize(const Tensor &x, const Tensor &scale, const Tensor &bias,
   const auto *bias_data = norm::Data<Type>(bias);
   auto *output = norm::MutableData<Type>(y);
   const std::size_t slices = batch * channels;
+  if constexpr (Type == DataType::FLOAT) {
+    // Keep short tensors on the inline loop without a per-slice dispatch branch.
+    if (spatial >= 32 && slices * spatial >= 16384) {
+      ExecuteItems(
+          slices, static_cast<double>(spatial) * 6.0, [&](std::size_t begin, std::size_t end) {
+            for (std::size_t slice = begin; slice < end; ++slice) {
+              const std::size_t channel = slice % channels;
+              const std::size_t base = slice * spatial;
+              const norm::Moments<Acc> moments = ComputeSliceMoments<Type>(input + base, spatial);
+              const Acc multiplier = Traits::Load(scale_data, channel) /
+                                     std::sqrt(moments.variance + static_cast<Acc>(epsilon));
+              const Acc offset = Traits::Load(bias_data, channel) - moments.mean * multiplier;
+              ApplyNormalizationScaleBiasFloat32(input + base, output + base, spatial, multiplier,
+                                                 offset);
+            }
+          });
+      return;
+    }
+  }
   ExecuteItems(slices, static_cast<double>(spatial) * 6.0, [&](std::size_t begin, std::size_t end) {
     for (std::size_t slice = begin; slice < end; ++slice) {
       const std::size_t channel = slice % channels;
