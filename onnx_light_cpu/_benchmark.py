@@ -23,6 +23,7 @@ from ._register import (
     clear_used_kernel_names,
     register_backend_test_cases,
     register_kernels,
+    registered_kernels,
     used_kernel_names,
 )
 
@@ -240,9 +241,17 @@ def _measure_case(
     clear_used_kernel_names()
     for feed in feeds:
         evaluator.run(None, feed)
-    expected_kernel = f"onnx_light_cpu::{operator}"
-    if expected_kernel not in used_kernel_names():
-        raise RuntimeError(f"{case.name}: expected kernel {expected_kernel!r} did not run")
+    node_domain = model.graph.node[0].domain or "ai.onnx"
+    expected_kernels = tuple(
+        kernel.kernel_name
+        for kernel in registered_kernels()
+        if kernel.domain == node_domain and kernel.op_type == operator
+    )
+    if not expected_kernels:
+        raise RuntimeError(f"{case.name}: no registered kernel for {node_domain}::{operator}")
+    if not set(expected_kernels).intersection(used_kernel_names()):
+        expected = " or ".join(repr(kernel) for kernel in expected_kernels)
+        raise RuntimeError(f"{case.name}: expected kernel {expected} did not run")
 
     def measure(run: Any) -> list[float]:
         warmup_start = time.perf_counter()

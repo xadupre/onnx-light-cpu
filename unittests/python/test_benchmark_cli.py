@@ -183,7 +183,7 @@ class TestBenchmarkCli(ExtTestCase):
             name="test_cpu_abs_float32_benchmark",
             model=SimpleNamespace(
                 graph=SimpleNamespace(
-                    node=[SimpleNamespace(op_type="Abs")],
+                    node=[SimpleNamespace(domain="", op_type="Abs")],
                     input=[],
                 )
             ),
@@ -208,10 +208,32 @@ class TestBenchmarkCli(ExtTestCase):
         self.assertEqual(raw[0]["processor"], "test CPU")
         self.assertIn("duration_s", raw[0])
 
+    def test_domain_specific_kernel_name_is_checked(self):
+        case = SimpleNamespace(
+            name="test_cpu_microsoft_linear_attention_float32_benchmark",
+            model=SimpleNamespace(
+                graph=SimpleNamespace(
+                    node=[SimpleNamespace(domain="com.microsoft", op_type="LinearAttention")],
+                    input=[],
+                )
+            ),
+            data_sets=[],
+        )
+        with (
+            mock.patch("onnx_light.onnx.reference.ReferenceEvaluator"),
+            mock.patch("onnx_light_cpu._benchmark.clear_used_kernel_names"),
+            mock.patch(
+                "onnx_light_cpu._benchmark.used_kernel_names",
+                return_value=("onnx_light_cpu::MicrosoftLinearAttention",),
+            ),
+        ):
+            raw, _ = _benchmark._measure_case(case, 1, 0, 1.0, 1)
+        self.assertEqual(raw[0]["runtime"], "onnx-light-cpu")
+
     def test_onnxruntime_unsupported_case_is_reported(self):
         model = SimpleNamespace(
             graph=SimpleNamespace(
-                node=[SimpleNamespace(op_type="Abs")],
+                node=[SimpleNamespace(domain="", op_type="Abs")],
                 input=[],
             ),
             SerializeToString=mock.Mock(return_value=b"model"),
@@ -244,7 +266,7 @@ class TestBenchmarkCli(ExtTestCase):
     def test_onnxruntime_run_failure_is_reported(self):
         model = SimpleNamespace(
             graph=SimpleNamespace(
-                node=[SimpleNamespace(op_type="Abs")],
+                node=[SimpleNamespace(domain="", op_type="Abs")],
                 input=[SimpleNamespace(name="x")],
             ),
             SerializeToString=mock.Mock(return_value=b"model"),
@@ -282,7 +304,7 @@ class TestBenchmarkCli(ExtTestCase):
     def test_raw_rows_identify_run_and_runtime(self):
         model = SimpleNamespace(
             graph=SimpleNamespace(
-                node=[SimpleNamespace(op_type="Abs")],
+                node=[SimpleNamespace(domain="", op_type="Abs")],
                 input=[],
             ),
             SerializeToString=mock.Mock(return_value=b"model"),
