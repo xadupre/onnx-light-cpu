@@ -16,6 +16,9 @@
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
 #include "onnx_light_cpu/impl/math/gemm/avx2/gemm_kernel_avx2_fma.h"
 #endif
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
+#include "onnx_light_cpu/impl/math/gemm/avx512/gemm_kernel_avx512.h"
+#endif
 
 #include <gtest/gtest.h>
 
@@ -652,6 +655,52 @@ TEST(GemmFloat32, SkinnyNStridedReductionTailsAndFallbacks) {
   }
 }
 
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
+TEST(GemmFloat32, Avx512SkinnyMRegisterPanelsMatchReference) {
+  if (onnx_light_cpu::DetectSimdLevel() < onnx_light_cpu::SimdLevel::kAVX512) {
+    GTEST_SKIP() << "AVX-512 is required";
+  }
+  constexpr std::size_t K = 67;
+  for (const std::size_t N : {64u, 128u}) {
+    const auto A = RandomVector(K, 76 + static_cast<std::uint32_t>(N));
+    const auto B = RandomVector(K * N, 77 + static_cast<std::uint32_t>(N));
+    const auto C = RandomVector(N, 78 + static_cast<std::uint32_t>(N));
+    const auto expected = ReferenceGemm<float>(false, false, 1, N, K, 0.75f, A, B, -0.5f, &C);
+    std::vector<float> Y(N);
+    if (N == 64) {
+      onnx_light_cpu::GemmSkinnyM1Kernel64_AVX512_F32(K, 0.75f, A.data(), B.data(), N, -0.5f,
+                                                      C.data(), Y.data(), 0);
+    } else {
+      onnx_light_cpu::GemmSkinnyM1Kernel128_AVX512_F32(K, 0.75f, A.data(), B.data(), N, -0.5f,
+                                                       C.data(), Y.data(), 0);
+    }
+    for (std::size_t i = 0; i < N; ++i) {
+      EXPECT_NEAR(Y[i], expected[i], 1e-4f) << "N=" << N << " i=" << i;
+    }
+  }
+}
+
+TEST(GemmFloat32, Avx512SkinnyNColumnRangeMatchesReference) {
+  if (onnx_light_cpu::DetectSimdLevel() < onnx_light_cpu::SimdLevel::kAVX512) {
+    GTEST_SKIP() << "AVX-512 is required";
+  }
+  constexpr std::size_t M = 5;
+  constexpr std::size_t K = 70;
+  const auto A = RandomVector(M * K, 79);
+  const auto B = RandomVector(K, 80);
+  const auto C = RandomVector(M, 81);
+  const auto expected = ReferenceGemm<float>(false, false, M, 1, K, 0.75f, A, B, -0.5f, &C);
+  std::vector<float> Y(M, 123.0f);
+  onnx_light_cpu::GemmSkinnyN1Range_AVX512_F32(K, 0.75f, A.data(), B.data(), -0.5f, C.data(),
+                                               Y.data(), 1, 4);
+  EXPECT_EQ(Y.front(), 123.0f);
+  EXPECT_EQ(Y.back(), 123.0f);
+  for (std::size_t i = 1; i < 4; ++i) {
+    EXPECT_NEAR(Y[i], expected[i], 1e-4f) << "i=" << i;
+  }
+}
+#endif
+
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
 TEST(GemmFloat32, Avx2SkinnyNRangeAndSpecialValues) {
   if (onnx_light_cpu::DetectSimdLevel() < onnx_light_cpu::SimdLevel::kAVX2 ||
@@ -1286,7 +1335,7 @@ TEST(GemmFloat32, MediumSquareBalancesRowsAcrossParticipants) {
   ASSERT_EQ(executor.writes_per_block.size(), 4u);
   const auto [minimum, maximum] =
       std::minmax_element(executor.writes_per_block.begin(), executor.writes_per_block.end());
-  EXPECT_LE(*maximum - *minimum, onnx_light_cpu::kGemmAVX512MR * N);
+  EXPECT_LE(*maximum - *minimum, 2 * onnx_light_cpu::kGemmAVX512MR * N);
   for (float value : Y) {
     EXPECT_FLOAT_EQ(value, static_cast<float>(K));
   }

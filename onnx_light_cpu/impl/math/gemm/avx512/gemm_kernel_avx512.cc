@@ -843,6 +843,115 @@ void GemmSkinnyM1Kernel_AVX512_F32(std::size_t K, float alpha, const float *A, c
 #undef ONNX_LIGHT_CPU_STORE_SKINNY_M1
 }
 
+void GemmSkinnyM1Kernel64_AVX512_F32(std::size_t K, float alpha, const float *A, const float *B,
+                                     std::size_t N, float beta, const float *C, float *Y,
+                                     std::size_t n0) {
+  __m512 acc0 = _mm512_setzero_ps();
+  __m512 acc1 = _mm512_setzero_ps();
+  __m512 acc2 = _mm512_setzero_ps();
+  __m512 acc3 = _mm512_setzero_ps();
+  for (std::size_t k = 0; k < K; ++k) {
+    const __m512 va = _mm512_set1_ps(A[k]);
+    const float *b = B + k * N + n0;
+    acc0 = MulAdd(va, _mm512_loadu_ps(b), acc0);
+    acc1 = MulAdd(va, _mm512_loadu_ps(b + 16), acc1);
+    acc2 = MulAdd(va, _mm512_loadu_ps(b + 32), acc2);
+    acc3 = MulAdd(va, _mm512_loadu_ps(b + 48), acc3);
+  }
+
+  const __m512 valpha = _mm512_set1_ps(alpha);
+  const __m512 vbeta = _mm512_set1_ps(beta);
+  const bool has_bias = C != nullptr && beta != 0.0f;
+#define ONNX_LIGHT_CPU_STORE_SKINNY_M1_64(INDEX)                                                   \
+  do {                                                                                             \
+    __m512 value = alpha == 1.0f ? acc##INDEX : _mm512_mul_ps(valpha, acc##INDEX);                 \
+    if (has_bias) {                                                                                \
+      const __m512 bias = _mm512_loadu_ps(C + n0 + 16 * INDEX);                                    \
+      value = _mm512_add_ps(value, beta == 1.0f ? bias : _mm512_mul_ps(vbeta, bias));              \
+    }                                                                                              \
+    _mm512_storeu_ps(Y + n0 + 16 * INDEX, value);                                                  \
+  } while (false)
+  ONNX_LIGHT_CPU_STORE_SKINNY_M1_64(0);
+  ONNX_LIGHT_CPU_STORE_SKINNY_M1_64(1);
+  ONNX_LIGHT_CPU_STORE_SKINNY_M1_64(2);
+  ONNX_LIGHT_CPU_STORE_SKINNY_M1_64(3);
+#undef ONNX_LIGHT_CPU_STORE_SKINNY_M1_64
+}
+
+void GemmSkinnyM1Kernel128_AVX512_F32(std::size_t K, float alpha, const float *A, const float *B,
+                                      std::size_t N, float beta, const float *C, float *Y,
+                                      std::size_t n0) {
+  __m512 acc0 = _mm512_setzero_ps();
+  __m512 acc1 = _mm512_setzero_ps();
+  __m512 acc2 = _mm512_setzero_ps();
+  __m512 acc3 = _mm512_setzero_ps();
+  __m512 acc4 = _mm512_setzero_ps();
+  __m512 acc5 = _mm512_setzero_ps();
+  __m512 acc6 = _mm512_setzero_ps();
+  __m512 acc7 = _mm512_setzero_ps();
+  for (std::size_t k = 0; k < K; ++k) {
+    const __m512 va = _mm512_set1_ps(A[k]);
+    const float *b = B + k * N + n0;
+    acc0 = MulAdd(va, _mm512_loadu_ps(b), acc0);
+    acc1 = MulAdd(va, _mm512_loadu_ps(b + 16), acc1);
+    acc2 = MulAdd(va, _mm512_loadu_ps(b + 32), acc2);
+    acc3 = MulAdd(va, _mm512_loadu_ps(b + 48), acc3);
+    acc4 = MulAdd(va, _mm512_loadu_ps(b + 64), acc4);
+    acc5 = MulAdd(va, _mm512_loadu_ps(b + 80), acc5);
+    acc6 = MulAdd(va, _mm512_loadu_ps(b + 96), acc6);
+    acc7 = MulAdd(va, _mm512_loadu_ps(b + 112), acc7);
+  }
+
+  const __m512 valpha = _mm512_set1_ps(alpha);
+  const __m512 vbeta = _mm512_set1_ps(beta);
+  const bool has_bias = C != nullptr && beta != 0.0f;
+#define ONNX_LIGHT_CPU_STORE_SKINNY_M1_128(INDEX)                                                  \
+  do {                                                                                             \
+    __m512 value = alpha == 1.0f ? acc##INDEX : _mm512_mul_ps(valpha, acc##INDEX);                 \
+    if (has_bias) {                                                                                \
+      const __m512 bias = _mm512_loadu_ps(C + n0 + 16 * INDEX);                                    \
+      value = _mm512_add_ps(value, beta == 1.0f ? bias : _mm512_mul_ps(vbeta, bias));              \
+    }                                                                                              \
+    _mm512_storeu_ps(Y + n0 + 16 * INDEX, value);                                                  \
+  } while (false)
+  ONNX_LIGHT_CPU_STORE_SKINNY_M1_128(0);
+  ONNX_LIGHT_CPU_STORE_SKINNY_M1_128(1);
+  ONNX_LIGHT_CPU_STORE_SKINNY_M1_128(2);
+  ONNX_LIGHT_CPU_STORE_SKINNY_M1_128(3);
+  ONNX_LIGHT_CPU_STORE_SKINNY_M1_128(4);
+  ONNX_LIGHT_CPU_STORE_SKINNY_M1_128(5);
+  ONNX_LIGHT_CPU_STORE_SKINNY_M1_128(6);
+  ONNX_LIGHT_CPU_STORE_SKINNY_M1_128(7);
+#undef ONNX_LIGHT_CPU_STORE_SKINNY_M1_128
+}
+
+void GemmSkinnyN1Range_AVX512_F32(std::size_t K, float alpha, const float *A, const float *B,
+                                  float beta, const float *C, float *Y, std::size_t begin,
+                                  std::size_t end) {
+  const bool has_bias = C != nullptr && beta != 0.0f;
+  for (std::size_t m = begin; m < end; ++m) {
+    const float *a = A + m * K;
+    __m512 acc0 = _mm512_setzero_ps();
+    __m512 acc1 = _mm512_setzero_ps();
+    __m512 acc2 = _mm512_setzero_ps();
+    __m512 acc3 = _mm512_setzero_ps();
+    std::size_t k = 0;
+    for (; k + 64 <= K; k += 64) {
+      acc0 = MulAdd(_mm512_loadu_ps(a + k), _mm512_loadu_ps(B + k), acc0);
+      acc1 = MulAdd(_mm512_loadu_ps(a + k + 16), _mm512_loadu_ps(B + k + 16), acc1);
+      acc2 = MulAdd(_mm512_loadu_ps(a + k + 32), _mm512_loadu_ps(B + k + 32), acc2);
+      acc3 = MulAdd(_mm512_loadu_ps(a + k + 48), _mm512_loadu_ps(B + k + 48), acc3);
+    }
+    const __m512 sum01 = _mm512_add_ps(acc0, acc1);
+    const __m512 sum23 = _mm512_add_ps(acc2, acc3);
+    float sum = _mm512_reduce_add_ps(_mm512_add_ps(sum01, sum23));
+    for (; k < K; ++k) {
+      sum += a[k] * B[k];
+    }
+    Y[m] = alpha * sum + (has_bias ? beta * C[m] : 0.0f);
+  }
+}
+
 void GemmMicroKernel_AVX512_F64(std::size_t mr, std::size_t nb, std::size_t K, double alpha,
                                 double beta, const double *Bmat, std::size_t N,
                                 const double *Crow_base, std::size_t Cstride, double *Yrow_base,

@@ -1259,7 +1259,9 @@ if(ONNX_LIGHT_CPU_BUILD_TESTS)
         target_compile_definitions(${_name} PRIVATE ONNX_LIGHT_CPU_HAVE_F16C=1)
       endif()
     endif()
-    if(_name STREQUAL "test_exp_log_kernel" AND ONNX_LIGHT_CPU_HAVE_AVX512F_FLAG)
+    if((_name STREQUAL "test_exp_log_kernel" OR
+        _name STREQUAL "test_gemm_kernel") AND
+       ONNX_LIGHT_CPU_HAVE_AVX512F_FLAG)
       target_compile_definitions(${_name} PRIVATE ONNX_LIGHT_CPU_HAVE_AVX512=1)
     endif()
     if(_name STREQUAL "test_abs_kernel" AND ONNX_LIGHT_CPU_HAVE_AVX512F_FLAG)

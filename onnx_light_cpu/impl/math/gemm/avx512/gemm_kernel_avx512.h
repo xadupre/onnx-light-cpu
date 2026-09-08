@@ -37,6 +37,15 @@ void GemmMicroKernel_AVX512_F32_StridedA(std::size_t mr, std::size_t nb, std::si
 void GemmSkinnyM1Kernel_AVX512_F32(std::size_t K, float alpha, const float *A, const float *B,
                                    std::size_t N, float beta, const float *C, float *Y,
                                    std::size_t n0);
+void GemmSkinnyM1Kernel64_AVX512_F32(std::size_t K, float alpha, const float *A, const float *B,
+                                     std::size_t N, float beta, const float *C, float *Y,
+                                     std::size_t n0);
+void GemmSkinnyM1Kernel128_AVX512_F32(std::size_t K, float alpha, const float *A, const float *B,
+                                      std::size_t N, float beta, const float *C, float *Y,
+                                      std::size_t n0);
+void GemmSkinnyN1Range_AVX512_F32(std::size_t K, float alpha, const float *A, const float *B,
+                                  float beta, const float *C, float *Y, std::size_t begin,
+                                  std::size_t end);
 
 void GemmMicroKernel_AVX512_F64(std::size_t mr, std::size_t nb, std::size_t K, double alpha,
                                 double beta, const double *Bmat, std::size_t N,
