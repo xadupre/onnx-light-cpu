@@ -38,6 +38,8 @@ set(ONNX_LIGHT_CPU_ONNX_LIGHT_LIBRARY "" CACHE FILEPATH
     "Exact onnx-light core shared library loaded by the Python runtime.")
 set(ONNX_LIGHT_CPU_ONNX_LIGHT_PROTO_LIBRARY "" CACHE FILEPATH
     "Exact onnx-light proto shared library loaded by the Python runtime.")
+set(ONNX_LIGHT_CPU_ONNX_LIGHT_KERNELS_LIBRARY "" CACHE FILEPATH
+    "Exact onnx-light kernels shared library (Cast compatibility dependency).")
 set(ONNX_LIGHT_CPU_ONNX_LIGHT_IMPLIB "" CACHE FILEPATH
     "Windows import library for ONNX_LIGHT_CPU_ONNX_LIGHT_LIBRARY.")
 set(ONNX_LIGHT_CPU_ONNX_LIGHT_PROTO_IMPLIB "" CACHE FILEPATH
@@ -714,18 +716,18 @@ if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
       set_property(TARGET onnx_light::lib_onnx_proto PROPERTY
           IMPORTED_IMPLIB "${ONNX_LIGHT_CPU_ONNX_LIGHT_PROTO_IMPLIB}")
     endif()
-    # The backend-test registry (lib_onnx_backend_test) and its kernel
-    # dependency (lib_onnx_kernels) live in the same directory as the core
-    # runtime library loaded by onnx-light's Python runtime. They are not
-    # reported by get_cpp_build_info(), so locate them next to the core library
-    # and expose them as imported targets when present. This lets the
-    # backend-test-driven C++ test link against CollectTestCases(); editable
-    # builds whose onnx-light predates these libraries simply skip that test.
+    # Cast's STRING/float8/sub-byte compatibility path calls the concrete
+    # builtin Cast. Import its kernels library even without backend tests.
+    # The backend-test registry remains optional.
     get_filename_component(_onnx_light_libdir
         "${ONNX_LIGHT_CPU_ONNX_LIGHT_LIBRARY}" DIRECTORY)
-    file(GLOB _onnx_light_kernels_lib
-        "${_onnx_light_libdir}/liblib_onnx_kernels.*"
-        "${_onnx_light_libdir}/lib_onnx_kernels.*")
+    if(ONNX_LIGHT_CPU_ONNX_LIGHT_KERNELS_LIBRARY)
+      set(_onnx_light_kernels_lib "${ONNX_LIGHT_CPU_ONNX_LIGHT_KERNELS_LIBRARY}")
+    else()
+      file(GLOB _onnx_light_kernels_lib
+          "${_onnx_light_libdir}/liblib_onnx_kernels${CMAKE_SHARED_LIBRARY_SUFFIX}*"
+          "${_onnx_light_libdir}/lib_onnx_kernels${CMAKE_SHARED_LIBRARY_SUFFIX}*")
+    endif()
     file(GLOB _onnx_light_op_lib
         "${_onnx_light_libdir}/liblib_onnx_op.*"
         "${_onnx_light_libdir}/lib_onnx_op.*")
@@ -737,8 +739,7 @@ if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
     # Python extension on this platform) simply means the reuse is skipped
     # and onnx_light_cpu falls back to its own bespoke shape computation.
     #
-    # Unlike lib_onnx_op/lib_onnx_kernels (only ever linked into standalone
-    # C++ test executables below), lib_onnx_shape is linked into
+    # Like lib_onnx_kernels (required by Cast), lib_onnx_shape is linked into
     # lib_onnx_light_cpu_kernels itself, which is loaded by the ``_cpuregister``
     # Python extension. On Unix that new NEEDED entry is resolved via the
     # explicit RPATH pointing at onnx-light's Python library directory (see
@@ -794,14 +795,25 @@ if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
             IMPORTED_IMPLIB "${ONNX_LIGHT_CPU_ONNX_LIGHT_SHAPE_IMPLIB}")
       endif()
     endif()
-    if(_onnx_light_kernels_lib AND _onnx_light_backend_test_lib)
+    if(_onnx_light_kernels_lib)
       list(GET _onnx_light_kernels_lib 0 _onnx_light_kernels_lib)
-      list(GET _onnx_light_backend_test_lib 0 _onnx_light_backend_test_lib)
       add_library(onnx_light::lib_onnx_kernels
           ${_onnx_light_imported_library_type} IMPORTED GLOBAL)
       set_target_properties(onnx_light::lib_onnx_kernels PROPERTIES
           IMPORTED_LOCATION "${_onnx_light_kernels_lib}"
           INTERFACE_LINK_LIBRARIES onnx_light::lib_onnx_core)
+      if(WIN32)
+        if(NOT ONNX_LIGHT_CPU_ONNX_LIGHT_KERNELS_IMPLIB)
+          message(FATAL_ERROR
+              "ONNX_LIGHT_CPU_ONNX_LIGHT_KERNELS_IMPLIB is required for "
+              "Cast's builtin compatibility path on Windows.")
+        endif()
+        set_property(TARGET onnx_light::lib_onnx_kernels PROPERTY
+            IMPORTED_IMPLIB "${ONNX_LIGHT_CPU_ONNX_LIGHT_KERNELS_IMPLIB}")
+      endif()
+    endif()
+    if(TARGET onnx_light::lib_onnx_kernels AND _onnx_light_backend_test_lib)
+      list(GET _onnx_light_backend_test_lib 0 _onnx_light_backend_test_lib)
       add_library(onnx_light::lib_onnx_backend_test
           ${_onnx_light_imported_library_type} IMPORTED GLOBAL)
       set_target_properties(onnx_light::lib_onnx_backend_test PROPERTIES
@@ -809,20 +821,24 @@ if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
           INTERFACE_LINK_LIBRARIES
               "onnx_light::lib_onnx_proto;onnx_light::lib_onnx_kernels")
       if(WIN32)
-        if(NOT ONNX_LIGHT_CPU_ONNX_LIGHT_KERNELS_IMPLIB OR
-           NOT ONNX_LIGHT_CPU_ONNX_LIGHT_BACKEND_TEST_IMPLIB)
+        if(NOT ONNX_LIGHT_CPU_ONNX_LIGHT_BACKEND_TEST_IMPLIB)
           message(FATAL_ERROR
-              "The onnx-light kernels and backend-test Windows import "
-              "libraries are required for source-runtime integration.")
+              "The onnx-light backend-test Windows import library "
+              "is required for source-runtime integration.")
         endif()
-        set_property(TARGET onnx_light::lib_onnx_kernels PROPERTY
-            IMPORTED_IMPLIB "${ONNX_LIGHT_CPU_ONNX_LIGHT_KERNELS_IMPLIB}")
         set_property(TARGET onnx_light::lib_onnx_backend_test PROPERTY
             IMPORTED_IMPLIB "${ONNX_LIGHT_CPU_ONNX_LIGHT_BACKEND_TEST_IMPLIB}")
       endif()
     endif()
   else()
     find_package(onnx_light CONFIG REQUIRED)
+  endif()
+  if(NOT TARGET onnx_light::lib_onnx_kernels)
+    message(FATAL_ERROR
+        "Cast requires onnx_light::lib_onnx_kernels for STRING and extended "
+        "numeric compatibility. Set ONNX_LIGHT_CPU_ONNX_LIGHT_KERNELS_LIBRARY "
+        "for source-runtime integration, or use an onnx-light C++ package "
+        "exporting that target.")
   endif()
 
   # When the optional onnx-light integration is enabled, ``execution.cc`` can
@@ -870,7 +886,11 @@ if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
   target_compile_features(lib_onnx_light_cpu_kernels PUBLIC cxx_std_20)
   target_link_libraries(lib_onnx_light_cpu_kernels PUBLIC
       lib_onnx_light_cpu
-      onnx_light::lib_onnx_core)
+      onnx_light::lib_onnx_core
+      onnx_light::lib_onnx_kernels)
+  # Standalone consumers inherit the concrete Cast link dependency. Linux/macOS
+  # build-tree consumers resolve it via CMake's target RPATH; Windows consumers
+  # must place the onnx-light runtime DLL directory on their loader search path.
   # Availability definitions on the implementation library are private. The
   # registered activation dispatchers also need to see the compiled AVX2 path.
   if(ONNX_LIGHT_CPU_HAVE_AVX2_FMA_FLAG)
@@ -987,8 +1007,8 @@ if(ONNX_LIGHT_CPU_BUILD_PYTHON)
     # installed).
     set(ONNX_LIGHT_CPU_ONNX_LIGHT_PY_LIBDIR "$<TARGET_FILE_DIR:onnx_light::lib_onnx_core>")
     set_target_properties(lib_onnx_light_cpu_kernels PROPERTIES
-        INSTALL_RPATH "$ORIGIN;${ONNX_LIGHT_CPU_ONNX_LIGHT_PY_LIBDIR}"
-        BUILD_RPATH "$ORIGIN;${ONNX_LIGHT_CPU_ONNX_LIGHT_PY_LIBDIR}"
+        INSTALL_RPATH "$ORIGIN;${ONNX_LIGHT_CPU_ONNX_LIGHT_PY_LIBDIR};$<TARGET_FILE_DIR:onnx_light::lib_onnx_kernels>"
+        BUILD_RPATH "$ORIGIN;${ONNX_LIGHT_CPU_ONNX_LIGHT_PY_LIBDIR};$<TARGET_FILE_DIR:onnx_light::lib_onnx_kernels>"
     )
 
     # The backend-test registration library, when linked into _cpuregister, is
@@ -1319,6 +1339,7 @@ if(ONNX_LIGHT_CPU_BUILD_TESTS)
                 "lib_onnx_light_cpu_kernels;onnx_light::lib_onnx_op")
           endif()
         elseif(_test_name STREQUAL "test_onnx_light_custom_operator_support" OR
+               _test_name STREQUAL "test_onnx_light_cast_kernel" OR
                _test_name STREQUAL "test_onnx_light_gather_kernel" OR
                _test_name STREQUAL "test_onnx_light_slice_kernel" OR
                _test_name STREQUAL "test_onnx_light_concat_kernel" OR
