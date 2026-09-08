@@ -23,10 +23,10 @@ std::int64_t ToRowCount(std::size_t rows) {
   return static_cast<std::int64_t>(rows);
 }
 
-} // namespace
-
-void RmsNormalizationFloat32(const float *input, const float *scale, float *output,
-                             std::size_t rows, std::size_t width, float epsilon) {
+template <bool StoreInverse>
+void RmsNormalizationFloat32Impl(const float *input, const float *scale, float *output,
+                                 std::size_t rows, std::size_t width, float epsilon,
+                                 float *inverse_rms_output) {
   ExecuteRanges(ToRowCount(rows), static_cast<double>(width) * 0.625,
                 [=](std::int64_t begin, std::int64_t end) {
                   for (std::size_t row = static_cast<std::size_t>(begin);
@@ -35,10 +35,31 @@ void RmsNormalizationFloat32(const float *input, const float *scale, float *outp
                     const float mean_square =
                         ComputeNormalizationMeanSquareFloat32(input + offset, width);
                     const float inverse_rms = 1.0F / std::sqrt(mean_square + epsilon);
+                    if constexpr (StoreInverse) {
+                      inverse_rms_output[row] = inverse_rms;
+                    }
                     ApplyNormalizationAffineFloat32(input + offset, scale, nullptr, output + offset,
                                                     width, 0.0F, inverse_rms);
                   }
                 });
+}
+
+} // namespace
+
+void RmsNormalizationFloat32(const float *input, const float *scale, float *output,
+                             std::size_t rows, std::size_t width, float epsilon) {
+  RmsNormalizationFloat32Impl<false>(input, scale, output, rows, width, epsilon, nullptr);
+}
+
+void RmsNormalizationFloat32(const float *input, const float *scale, float *output,
+                             std::size_t rows, std::size_t width, float epsilon,
+                             float *inverse_rms_output) {
+  if (inverse_rms_output == nullptr) {
+    RmsNormalizationFloat32(input, scale, output, rows, width, epsilon);
+  } else {
+    RmsNormalizationFloat32Impl<true>(input, scale, output, rows, width, epsilon,
+                                      inverse_rms_output);
+  }
 }
 
 void RmsNormalizationFloat16(const std::uint16_t *input, const std::uint16_t *scale,

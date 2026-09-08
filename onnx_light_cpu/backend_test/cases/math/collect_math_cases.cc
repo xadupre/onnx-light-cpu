@@ -26,6 +26,7 @@ void CollectCpuMathTestCases(std::vector<TestCase> &registry, const std::string 
       {"MeanVarianceNormalization", &RegisterCpuMeanVarianceNormalizationCases},
       {"RMSNormalization", &RegisterCpuRmsNormalizationCases},
       {"Sigmoid", &RegisterCpuSigmoidCases},
+      {"SimplifiedLayerNormalization", &RegisterCpuSimplifiedLayerNormalizationCases},
       {"Softmax", &RegisterCpuSoftmaxCases},
       {"SwiGLU", &RegisterCpuSwiGLUCases},
   };

@@ -163,6 +163,12 @@ std::vector<OperatorSupportRegistration> CollectOperatorSupport() {
        "onnx_light_cpu::ComputePeakMemoryLinearAttention",
        {"onnx_light_cpu::LinearAttentionFusionPattern"},
        false},
+      {"ai.onnx",
+       "SimplifiedLayerNormalization",
+       "onnx_light_cpu::ComputeShapeSimplifiedLayerNormalization",
+       "onnx_light_cpu::ComputePeakMemorySimplifiedLayerNormalization",
+       {},
+       false},
   };
 }
 

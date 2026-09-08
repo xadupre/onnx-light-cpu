@@ -178,7 +178,7 @@ TEST(CustomOperatorSupport, ProvidesLightSchemas) {
 
 TEST(CustomOperatorSupport, ProvidesReadOnlyInventory) {
   const auto support = onnx_light_cpu::CollectOperatorSupport();
-  ASSERT_EQ(support.size(), 4U);
+  ASSERT_EQ(support.size(), 5U);
   EXPECT_EQ(support[0].op_type, "BiasGelu");
   EXPECT_EQ(support[0].shape_inference_function, "onnx_light_cpu::ComputeShapeBiasGelu");
   EXPECT_EQ(support[0].peak_memory_function, "onnx_light_cpu::ComputePeakMemoryBiasGelu");
@@ -199,6 +199,14 @@ TEST(CustomOperatorSupport, ProvidesReadOnlyInventory) {
   EXPECT_EQ(support[3].fusion_patterns,
             std::vector<std::string>{"onnx_light_cpu::LinearAttentionFusionPattern"});
   EXPECT_FALSE(support[3].has_gradient);
+  EXPECT_EQ(support[4].domain, "ai.onnx");
+  EXPECT_EQ(support[4].op_type, "SimplifiedLayerNormalization");
+  EXPECT_EQ(support[4].shape_inference_function,
+            "onnx_light_cpu::ComputeShapeSimplifiedLayerNormalization");
+  EXPECT_EQ(support[4].peak_memory_function,
+            "onnx_light_cpu::ComputePeakMemorySimplifiedLayerNormalization");
+  EXPECT_TRUE(support[4].fusion_patterns.empty());
+  EXPECT_FALSE(support[4].has_gradient);
 }
 
 TEST(CustomOperatorSupport, InfersCDistShapeAndConstraint) {
