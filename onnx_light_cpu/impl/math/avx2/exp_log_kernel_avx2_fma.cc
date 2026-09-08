@@ -6,6 +6,8 @@
 
 #include <immintrin.h>
 
+#include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <limits>
@@ -80,14 +82,7 @@ __m256 ExpPs256Fma(__m256 x) {
 #define ONNX_LIGHT_CPU_FORCE_INLINE inline __attribute__((always_inline))
 #endif
 
-ONNX_LIGHT_CPU_FORCE_INLINE __m256 ExpNegativePs256Fma(__m256 x) {
-  constexpr float kLogSmallestNormal = -87.3365447505531f;
-  // Sigmoid and max-subtracted Softmax only pass non-positive values.
-  const __m256 in_fast_range = _mm256_cmp_ps(x, _mm256_set1_ps(kLogSmallestNormal), _CMP_GE_OQ);
-  if (_mm256_movemask_ps(in_fast_range) != 0xff) {
-    return ExpPs256Fma(x);
-  }
-
+ONNX_LIGHT_CPU_FORCE_INLINE __m256 ExpNormalNegativePs256Fma(__m256 x) {
   const __m256 magic = _mm256_set1_ps(12582912.0f);
   const __m256 biased = _mm256_fmadd_ps(x, _mm256_set1_ps(kLog2ef), magic);
   const __m256 exponent = _mm256_sub_ps(biased, magic);
@@ -104,6 +99,16 @@ ONNX_LIGHT_CPU_FORCE_INLINE __m256 ExpNegativePs256Fma(__m256 x) {
   polynomial = _mm256_fmadd_ps(polynomial, reduced, _mm256_set1_ps(1.0f));
   polynomial = _mm256_fmadd_ps(polynomial, reduced, _mm256_set1_ps(1.0f));
   return _mm256_mul_ps(polynomial, scale);
+}
+
+ONNX_LIGHT_CPU_FORCE_INLINE __m256 ExpNegativePs256Fma(__m256 x) {
+  constexpr float kLogSmallestNormal = -87.3365447505531f;
+  // Sigmoid and max-subtracted Softmax only pass non-positive values.
+  const __m256 in_fast_range = _mm256_cmp_ps(x, _mm256_set1_ps(kLogSmallestNormal), _CMP_GE_OQ);
+  if (_mm256_movemask_ps(in_fast_range) != 0xff) {
+    return ExpPs256Fma(x);
+  }
+  return ExpNormalNegativePs256Fma(x);
 }
 
 ONNX_LIGHT_CPU_FORCE_INLINE __m256 LogPs256Fma(__m256 x) {
@@ -179,9 +184,53 @@ ONNX_LIGHT_CPU_FORCE_INLINE __m256i TailMask(std::size_t count) {
 ONNX_LIGHT_CPU_FORCE_INLINE __m256 SigmoidPs256Fma(__m256 value) {
   const __m256 exponent = ExpNegativePs256Fma(
       _mm256_sub_ps(_mm256_setzero_ps(), _mm256_andnot_ps(_mm256_set1_ps(-0.0f), value)));
-  const __m256 positive =
-      _mm256_div_ps(_mm256_set1_ps(1.0f), _mm256_add_ps(_mm256_set1_ps(1.0f), exponent));
-  return _mm256_blendv_ps(positive, _mm256_mul_ps(exponent, positive), value);
+  const __m256 numerator = _mm256_blendv_ps(_mm256_set1_ps(1.0f), exponent, value);
+  return _mm256_div_ps(numerator, _mm256_add_ps(_mm256_set1_ps(1.0f), exponent));
+}
+
+template <bool normal_range>
+void SoftmaxNormalizeRow(const float *input, float *output, std::size_t columns, __m256 maximum) {
+  const std::size_t vector_columns = columns - columns % 8;
+  const __m256i tail_mask = TailMask(columns - vector_columns);
+  const auto exponential = [](const __m256 value) {
+    if constexpr (normal_range) {
+      return ExpNormalNegativePs256Fma(value);
+    } else {
+      return ExpNegativePs256Fma(value);
+    }
+  };
+  __m256 sum0 = _mm256_setzero_ps();
+  __m256 sum1 = _mm256_setzero_ps();
+  std::size_t column = 0;
+  for (; column + 16 <= vector_columns; column += 16) {
+    const __m256 exponent0 = exponential(_mm256_sub_ps(_mm256_loadu_ps(input + column), maximum));
+    const __m256 exponent1 =
+        exponential(_mm256_sub_ps(_mm256_loadu_ps(input + column + 8), maximum));
+    _mm256_storeu_ps(output + column, exponent0);
+    _mm256_storeu_ps(output + column + 8, exponent1);
+    sum0 = _mm256_add_ps(sum0, exponent0);
+    sum1 = _mm256_add_ps(sum1, exponent1);
+  }
+  for (; column < vector_columns; column += 8) {
+    const __m256 exponent = exponential(_mm256_sub_ps(_mm256_loadu_ps(input + column), maximum));
+    _mm256_storeu_ps(output + column, exponent);
+    sum0 = _mm256_add_ps(sum0, exponent);
+  }
+  if (column < columns) {
+    const __m256 tail = _mm256_blendv_ps(maximum, _mm256_maskload_ps(input + column, tail_mask),
+                                         _mm256_castsi256_ps(tail_mask));
+    const __m256 exponent = exponential(_mm256_sub_ps(tail, maximum));
+    _mm256_maskstore_ps(output + column, tail_mask, exponent);
+    sum0 = _mm256_add_ps(sum0, _mm256_and_ps(exponent, _mm256_castsi256_ps(tail_mask)));
+  }
+  const __m256 inverse_sum = _mm256_set1_ps(1.0f / HorizontalSum(_mm256_add_ps(sum0, sum1)));
+  for (column = 0; column < vector_columns; column += 8) {
+    _mm256_storeu_ps(output + column, _mm256_mul_ps(_mm256_loadu_ps(output + column), inverse_sum));
+  }
+  if (column < columns) {
+    _mm256_maskstore_ps(output + column, tail_mask,
+                        _mm256_mul_ps(_mm256_maskload_ps(output + column, tail_mask), inverse_sum));
+  }
 }
 
 #undef ONNX_LIGHT_CPU_FORCE_INLINE
@@ -219,11 +268,31 @@ void SigmoidFloat32_AVX2_FMA(const float *input, float *output, std::size_t coun
   }
 }
 
+#ifdef ONNX_LIGHT_CPU_HAVE_F16C
+void SigmoidFloat16_AVX2_FMA(const std::uint16_t *input, std::uint16_t *output, std::size_t count) {
+  std::size_t index = 0;
+  for (; index + 8 <= count; index += 8) {
+    const __m256 value =
+        _mm256_cvtph_ps(_mm_loadu_si128(reinterpret_cast<const __m128i *>(input + index)));
+    const __m128i result = _mm256_cvtps_ph(SigmoidPs256Fma(value), _MM_FROUND_TO_NEAREST_INT);
+    _mm_storeu_si128(reinterpret_cast<__m128i *>(output + index), result);
+  }
+  if (index < count) {
+    alignas(16) std::array<std::uint16_t, 8> tail{};
+    std::copy_n(input + index, count - index, tail.data());
+    const __m256 value =
+        _mm256_cvtph_ps(_mm_load_si128(reinterpret_cast<const __m128i *>(tail.data())));
+    const __m128i result = _mm256_cvtps_ph(SigmoidPs256Fma(value), _MM_FROUND_TO_NEAREST_INT);
+    _mm_store_si128(reinterpret_cast<__m128i *>(tail.data()), result);
+    std::copy_n(tail.data(), count - index, output + index);
+  }
+}
+#endif
+
 void SoftmaxFloat32_AVX2_FMA(const float *input, float *output, std::size_t rows,
                              std::size_t columns) {
   const __m256 negative_infinity = _mm256_set1_ps(-std::numeric_limits<float>::infinity());
-  const __m256 zero = _mm256_setzero_ps();
-  const __m256 one = _mm256_set1_ps(1.0f);
+  const __m256 positive_infinity = _mm256_set1_ps(std::numeric_limits<float>::infinity());
   const std::size_t vector_columns = columns - columns % 8;
   const __m256i tail_mask = TailMask(columns - vector_columns);
 
@@ -233,67 +302,37 @@ void SoftmaxFloat32_AVX2_FMA(const float *input, float *output, std::size_t rows
 
     __m256 maximum_vector0 = negative_infinity;
     __m256 maximum_vector1 = negative_infinity;
+    __m256 minimum_vector = positive_infinity;
     std::size_t column = 0;
     for (; column + 16 <= vector_columns; column += 16) {
-      maximum_vector0 = _mm256_max_ps(_mm256_loadu_ps(row_input + column), maximum_vector0);
-      maximum_vector1 = _mm256_max_ps(_mm256_loadu_ps(row_input + column + 8), maximum_vector1);
+      const __m256 value0 = _mm256_loadu_ps(row_input + column);
+      const __m256 value1 = _mm256_loadu_ps(row_input + column + 8);
+      maximum_vector0 = _mm256_max_ps(value0, maximum_vector0);
+      maximum_vector1 = _mm256_max_ps(value1, maximum_vector1);
+      minimum_vector = _mm256_min_ps(_mm256_min_ps(value0, value1), minimum_vector);
     }
     for (; column < vector_columns; column += 8) {
-      maximum_vector0 = _mm256_max_ps(_mm256_loadu_ps(row_input + column), maximum_vector0);
+      const __m256 value = _mm256_loadu_ps(row_input + column);
+      maximum_vector0 = _mm256_max_ps(value, maximum_vector0);
+      minimum_vector = _mm256_min_ps(value, minimum_vector);
     }
     if (column < columns) {
       const __m256 tail =
           _mm256_blendv_ps(negative_infinity, _mm256_maskload_ps(row_input + column, tail_mask),
                            _mm256_castsi256_ps(tail_mask));
       maximum_vector0 = _mm256_max_ps(tail, maximum_vector0);
+      const __m256 minimum_tail =
+          _mm256_blendv_ps(positive_infinity, tail, _mm256_castsi256_ps(tail_mask));
+      minimum_vector = _mm256_min_ps(minimum_tail, minimum_vector);
     }
     const __m256 maximum =
         _mm256_set1_ps(HorizontalMax(_mm256_max_ps(maximum_vector0, maximum_vector1)));
 
-    __m256 sum_vector0 = zero;
-    __m256 sum_vector1 = zero;
-    for (column = 0; column + 16 <= vector_columns; column += 16) {
-      const __m256 exponent0 =
-          ExpNegativePs256Fma(_mm256_sub_ps(_mm256_loadu_ps(row_input + column), maximum));
-      const __m256 exponent1 =
-          ExpNegativePs256Fma(_mm256_sub_ps(_mm256_loadu_ps(row_input + column + 8), maximum));
-      _mm256_storeu_ps(row_output + column, exponent0);
-      _mm256_storeu_ps(row_output + column + 8, exponent1);
-      sum_vector0 = _mm256_add_ps(sum_vector0, exponent0);
-      sum_vector1 = _mm256_add_ps(sum_vector1, exponent1);
-    }
-    for (; column < vector_columns; column += 8) {
-      const __m256 exponent =
-          ExpNegativePs256Fma(_mm256_sub_ps(_mm256_loadu_ps(row_input + column), maximum));
-      _mm256_storeu_ps(row_output + column, exponent);
-      sum_vector0 = _mm256_add_ps(sum_vector0, exponent);
-    }
-    if (column < columns) {
-      const __m256 tail =
-          _mm256_blendv_ps(maximum, _mm256_maskload_ps(row_input + column, tail_mask),
-                           _mm256_castsi256_ps(tail_mask));
-      const __m256 exponent = ExpNegativePs256Fma(_mm256_sub_ps(tail, maximum));
-      _mm256_maskstore_ps(row_output + column, tail_mask, exponent);
-      sum_vector0 =
-          _mm256_add_ps(sum_vector0, _mm256_and_ps(exponent, _mm256_castsi256_ps(tail_mask)));
-    }
-
-    const __m256 inverse_sum =
-        _mm256_div_ps(one, _mm256_set1_ps(HorizontalSum(_mm256_add_ps(sum_vector0, sum_vector1))));
-    for (column = 0; column + 16 <= vector_columns; column += 16) {
-      _mm256_storeu_ps(row_output + column,
-                       _mm256_mul_ps(_mm256_loadu_ps(row_output + column), inverse_sum));
-      _mm256_storeu_ps(row_output + column + 8,
-                       _mm256_mul_ps(_mm256_loadu_ps(row_output + column + 8), inverse_sum));
-    }
-    for (; column < vector_columns; column += 8) {
-      _mm256_storeu_ps(row_output + column,
-                       _mm256_mul_ps(_mm256_loadu_ps(row_output + column), inverse_sum));
-    }
-    if (column < columns) {
-      _mm256_maskstore_ps(
-          row_output + column, tail_mask,
-          _mm256_mul_ps(_mm256_maskload_ps(row_output + column, tail_mask), inverse_sum));
+    const float minimum = -HorizontalMax(_mm256_sub_ps(_mm256_setzero_ps(), minimum_vector));
+    if (_mm256_cvtss_f32(maximum) - minimum <= 87.0f) {
+      SoftmaxNormalizeRow<true>(row_input, row_output, columns, maximum);
+    } else {
+      SoftmaxNormalizeRow<false>(row_input, row_output, columns, maximum);
     }
   }
 }

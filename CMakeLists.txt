@@ -529,6 +529,11 @@ if(ONNX_LIGHT_CPU_HAVE_AVX2_FMA_FLAG)
   endif()
   target_compile_definitions(lib_onnx_light_cpu PRIVATE
       ONNX_LIGHT_CPU_HAVE_AVX2_FMA=1)
+  if(ONNX_LIGHT_CPU_HAVE_F16C_FLAG AND NOT MSVC)
+    set_property(SOURCE
+        "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu/impl/math/avx2/exp_log_kernel_avx2_fma.cc"
+        APPEND PROPERTY COMPILE_OPTIONS "-mf16c")
+  endif()
 
   if(NOT MSVC)
     set_source_files_properties(${_avx2_integer_sources} PROPERTIES
@@ -871,6 +876,10 @@ if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
   if(ONNX_LIGHT_CPU_HAVE_AVX2_FMA_FLAG)
     target_compile_definitions(lib_onnx_light_cpu_kernels PRIVATE
         ONNX_LIGHT_CPU_HAVE_AVX2_FMA=1)
+    if(ONNX_LIGHT_CPU_HAVE_F16C_FLAG)
+      target_compile_definitions(lib_onnx_light_cpu_kernels PRIVATE
+          ONNX_LIGHT_CPU_HAVE_F16C=1)
+    endif()
   endif()
   # Reuse onnx-light's own shape-inference functions (e.g.
   # ``onnx_shapes::shapes::nn::ComputeShapeLinearAttention``) for the shape
@@ -1245,6 +1254,10 @@ if(ONNX_LIGHT_CPU_BUILD_TESTS)
         _name STREQUAL "test_onnx_light_sigmoid_softmax_kernel") AND
        ONNX_LIGHT_CPU_HAVE_AVX2_FMA_FLAG)
       target_compile_definitions(${_name} PRIVATE ONNX_LIGHT_CPU_HAVE_AVX2_FMA=1)
+      if(_name STREQUAL "test_onnx_light_sigmoid_softmax_kernel" AND
+         ONNX_LIGHT_CPU_HAVE_F16C_FLAG)
+        target_compile_definitions(${_name} PRIVATE ONNX_LIGHT_CPU_HAVE_F16C=1)
+      endif()
     endif()
     if(_name STREQUAL "test_exp_log_kernel" AND ONNX_LIGHT_CPU_HAVE_AVX512F_FLAG)
       target_compile_definitions(${_name} PRIVATE ONNX_LIGHT_CPU_HAVE_AVX512=1)

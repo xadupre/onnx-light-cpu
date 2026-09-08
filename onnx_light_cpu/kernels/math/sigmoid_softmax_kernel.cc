@@ -65,6 +65,12 @@ template <typename T> void SigmoidRange(const T *input, T *output, std::size_t c
       SigmoidFloat32_AVX2_FMA(input, output, count);
       return;
     }
+  } else if constexpr (std::is_same_v<T, double>) {
+    static const bool use_avx2_fma = DetectSimdLevel() >= SimdLevel::kAVX2 && CpuSupportsFma();
+    if (use_avx2_fma) {
+      SigmoidFloat64_AVX2_FMA(input, output, count);
+      return;
+    }
   }
 #endif
   if (input == output) {
@@ -98,28 +104,55 @@ template <typename T> void SigmoidRange(const T *input, T *output, std::size_t c
 }
 
 template <typename T> void Sigmoid(const T *input, T *output, std::size_t count) {
-  ExecuteUnaryRanges<T>(
-      count, kActivationExecutionTuning, [=](std::int64_t begin, std::int64_t end) {
-        SigmoidRange(input + begin, output + begin, static_cast<std::size_t>(end - begin));
-      });
+  UnaryExecutionTuning tuning = kActivationExecutionTuning;
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
+  if constexpr (std::is_same_v<T, float>) {
+    static const bool avx2 = DetectSimdLevel() == SimdLevel::kAVX2 && CpuSupportsFma();
+    if (avx2) {
+      // Small teams amortize dispatch without waking a full pool for a short vector loop.
+      tuning = {128 * 1024, 64 * 1024, count < 96 * 1024 ? 2u : (count < 256 * 1024 ? 3u : 32u),
+                false};
+    }
+  }
+#endif
+  ExecuteUnaryRanges<T>(count, tuning, [=](std::int64_t begin, std::int64_t end) {
+    SigmoidRange(input + begin, output + begin, static_cast<std::size_t>(end - begin));
+  });
 }
 
-template <typename DecodeBlock, typename EncodeBlock>
+template <bool float16, typename DecodeBlock, typename EncodeBlock>
 void SigmoidHalf(const std::uint16_t *input, std::uint16_t *output, std::size_t count,
                  DecodeBlock decode, EncodeBlock encode) {
-  ExecuteUnaryRanges<std::uint16_t>(
-      count, kActivationExecutionTuning, [=](std::int64_t begin, std::int64_t end) {
-        constexpr std::size_t block_size = 256;
-        std::array<float, block_size> input_buffer{};
-        std::array<float, block_size> output_buffer{};
-        for (std::size_t offset = static_cast<std::size_t>(begin);
-             offset < static_cast<std::size_t>(end); offset += block_size) {
-          const std::size_t block = std::min(block_size, static_cast<std::size_t>(end) - offset);
-          decode(input + offset, input_buffer.data(), block);
-          SigmoidRange(input_buffer.data(), output_buffer.data(), block);
-          encode(output_buffer.data(), output + offset, block);
-        }
-      });
+  UnaryExecutionTuning tuning = kActivationExecutionTuning;
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
+  static const bool avx2 = DetectSimdLevel() == SimdLevel::kAVX2 && CpuSupportsFma();
+  if (avx2) {
+    tuning = {128 * 1024, 64 * 1024, count < 512 * 1024 ? 2u : 32u, false};
+  }
+#endif
+  ExecuteUnaryRanges<std::uint16_t>(count, tuning, [=](std::int64_t begin, std::int64_t end) {
+#if defined(ONNX_LIGHT_CPU_HAVE_AVX2_FMA) && defined(ONNX_LIGHT_CPU_HAVE_F16C)
+    if constexpr (float16) {
+      static const bool fused =
+          DetectSimdLevel() == SimdLevel::kAVX2 && CpuSupportsFma() && CpuSupportsF16C();
+      if (fused) {
+        SigmoidFloat16_AVX2_FMA(input + begin, output + begin,
+                                static_cast<std::size_t>(end - begin));
+        return;
+      }
+    }
+#endif
+    constexpr std::size_t block_size = 256;
+    std::array<float, block_size> input_buffer;
+    std::array<float, block_size> output_buffer;
+    for (std::size_t offset = static_cast<std::size_t>(begin);
+         offset < static_cast<std::size_t>(end); offset += block_size) {
+      const std::size_t block = std::min(block_size, static_cast<std::size_t>(end) - offset);
+      decode(input + offset, input_buffer.data(), block);
+      SigmoidRange(input_buffer.data(), output_buffer.data(), block);
+      encode(output_buffer.data(), output + offset, block);
+    }
+  });
 }
 
 ExecutionSchedule MakeSoftmaxRowSchedule(std::size_t row_bytes,
@@ -154,6 +187,18 @@ void SoftmaxLastAxis(const T *input, T *output, std::int64_t rows, std::int64_t 
                                               static_cast<std::size_t>(end - begin),
                                               static_cast<std::size_t>(columns));
                     });
+      return;
+    }
+  } else if constexpr (std::is_same_v<T, double>) {
+    static const bool use_avx2_fma = DetectSimdLevel() >= SimdLevel::kAVX2 && CpuSupportsFma();
+    if (use_avx2_fma) {
+      const std::size_t row_bytes = static_cast<std::size_t>(columns) * sizeof(T);
+      DispatchSoftmaxRows(rows, row_bytes, [=](std::int64_t begin, std::int64_t end) {
+        const std::size_t offset = static_cast<std::size_t>(begin * columns);
+        SoftmaxFloat64_AVX2_FMA(input + offset, output + offset,
+                                static_cast<std::size_t>(end - begin),
+                                static_cast<std::size_t>(columns));
+      });
       return;
     }
   }
@@ -286,14 +331,14 @@ void SigmoidKernel::operator()(const Tensor &x, Tensor &output) const {
     Sigmoid(x.AsDouble(), output.AsDouble(), count);
     return;
   case DataType::FLOAT16:
-    SigmoidHalf(reinterpret_cast<const std::uint16_t *>(x.bytes()),
-                reinterpret_cast<std::uint16_t *>(output.mutable_bytes()), count,
-                detail::ConvertFloat16ToFloat32, detail::ConvertFloat32ToFloat16);
+    SigmoidHalf<true>(reinterpret_cast<const std::uint16_t *>(x.bytes()),
+                      reinterpret_cast<std::uint16_t *>(output.mutable_bytes()), count,
+                      detail::ConvertFloat16ToFloat32, detail::ConvertFloat32ToFloat16);
     return;
   case DataType::BFLOAT16:
-    SigmoidHalf(reinterpret_cast<const std::uint16_t *>(x.bytes()),
-                reinterpret_cast<std::uint16_t *>(output.mutable_bytes()), count,
-                detail::ConvertBFloat16ToFloat32, detail::ConvertFloat32ToBFloat16);
+    SigmoidHalf<false>(reinterpret_cast<const std::uint16_t *>(x.bytes()),
+                       reinterpret_cast<std::uint16_t *>(output.mutable_bytes()), count,
+                       detail::ConvertBFloat16ToFloat32, detail::ConvertFloat32ToBFloat16);
     return;
   default:
     throw std::invalid_argument(

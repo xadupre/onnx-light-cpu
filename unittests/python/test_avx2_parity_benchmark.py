@@ -3,6 +3,7 @@ import math
 from contextlib import redirect_stderr
 
 from tools.benchmark_avx2_parity import (
+    ACTIVATION_DTYPES,
     AVX2_CORPUS,
     AVX2_DTYPES,
     AVX2_TESTS,
@@ -138,6 +139,22 @@ def test_cli_defaults_to_shared_one_and_physical_core_runs():
     assert args.dtypes == AVX2_DTYPES
     assert args.thread_policies == THREAD_POLICIES
     assert args.environment == "shared"
+    assert args.corpus == "priority"
+    assert args.physical_threads is None
+
+
+def test_activation_corpus_defaults_to_all_types_with_explicit_physical_count():
+    args = parse_args(["--corpus", "activations", "--physical-threads", "6"])
+    assert args.dtypes == ACTIVATION_DTYPES
+    assert args.physical_threads == 6
+    assert parse_args(["--corpus", "activations", "--dtype", "float64"]).dtypes == ("float64",)
+
+
+def test_missing_optional_compiler_does_not_prevent_report(monkeypatch):
+    from tools import benchmark_avx2_parity as benchmark
+
+    monkeypatch.setattr(benchmark.shutil, "which", lambda command: None)
+    assert benchmark._command_output(["c++", "--version"]) == "unknown"
 
 
 def test_cli_rejects_invalid_measurement_limits_and_output():
@@ -148,6 +165,8 @@ def test_cli_rejects_invalid_measurement_limits_and_output():
         ["--max-repeat-time", "nan"],
         ["--max-repeat-time", "inf"],
         ["--output", "results.txt"],
+        ["--physical-threads", "0"],
+        ["--dtype", "float64"],
     ):
         with redirect_stderr(io.StringIO()):
             try:

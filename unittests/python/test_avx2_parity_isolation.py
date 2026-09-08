@@ -136,10 +136,17 @@ def test_sequential_workers_share_protocol_and_report_aggregation(monkeypatch):
             events = []
 
             def run(command, **kwargs):
+                encoded = kwargs.pop("input")
                 assert kwargs == {"capture_output": True, "text": True, "check": False}
-                received = json.loads(Path(command[-1]).read_text())
+                received = json.loads(encoded)
                 runtime = received["runtime"]
-                assert received == {**request, "runtime": runtime}
+                assert received == {
+                    **request,
+                    "runtime": runtime,
+                    "result_path": received["result_path"],
+                }
+                assert Path(received["result_path"]).parent == path
+                assert not Path(received["result_path"]).exists()
                 assert len(events) % 2 == 0
                 events.append(("start", runtime))
                 payload = (
@@ -147,7 +154,9 @@ def test_sequential_workers_share_protocol_and_report_aggregation(monkeypatch):
                     if runtime == "onnx-light-cpu"
                     else {"durations": [2.0, 4.0], "error": None}
                 )
-                (path / "result.json").write_text(json.dumps(result_envelope(received, payload)))
+                Path(received["result_path"]).write_text(
+                    json.dumps(result_envelope(received, payload))
+                )
                 events.append(("exit", runtime))
                 return subprocess.CompletedProcess(command, 0, stdout="noise", stderr="")
 
@@ -203,7 +212,7 @@ def test_worker_crashes_and_invalid_protocol_fail_without_starting_next(monkeypa
 
             def run(command, **kwargs):
                 calls.append(command)
-                received = json.loads(Path(command[-1]).read_text())
+                received = json.loads(kwargs["input"])
                 result = result_envelope(received, cpu_result(received))
                 if failure == "exit":
                     return subprocess.CompletedProcess(command, 7, "", "native failure")
@@ -214,7 +223,7 @@ def test_worker_crashes_and_invalid_protocol_fail_without_starting_next(monkeypa
                 if failure == "metadata":
                     result["payload"]["aggregate"]["threads"] = 99
                 if failure != "missing":
-                    (path / "result.json").write_text(
+                    Path(received["result_path"]).write_text(
                         "{" if failure == "json" else json.dumps(result)
                     )
                 return subprocess.CompletedProcess(command, 0, "", "")
@@ -375,7 +384,7 @@ def test_real_process_protocol_waits_for_exit_without_running_kernels(monkeypatc
         script.write_text(
             "import atexit, json, os, sys\n"
             "from pathlib import Path\n"
-            "request = json.loads(Path(sys.argv[1]).read_text())\n"
+            "request = json.loads(sys.stdin.read())\n"
             "directory = Path(request['directory'])\n"
             "lock = directory / 'active'\n"
             "lock.mkdir()\n"
@@ -385,7 +394,7 @@ def test_real_process_protocol_waits_for_exit_without_running_kernels(monkeypatc
             "result = {key: request[key] for key in ('version', 'runtime', 'threads')}\n"
             "result.update(case=request['fixture']['case'], "
             "fixture_sha256=request['fixture']['sha256'], payload=payload)\n"
-            "(directory / 'result.json').write_text(json.dumps(result))\n"
+            "Path(request['result_path']).write_text(json.dumps(result))\n"
         )
         request["fake_payloads"] = {
             "onnx-light-cpu": cpu_result(request),
@@ -411,14 +420,12 @@ def test_native_import_snapshot_survives_an_editable_redirect_without_running_ke
         if name.startswith("onnx_light_cpu.") and entry["sha256"]
     }
     assert native
-    with workspace() as path:
-        snapshot = path / "imports.json"
-        snapshot.write_text(json.dumps(modules))
+    with workspace():
         script = (
             "import json, sys\n"
             "from pathlib import Path\n"
             "from tools._avx2_parity_worker import _PinnedImports, verify_native_modules\n"
-            "modules = json.loads(Path(sys.argv[1]).read_text())\n"
+            "modules = json.loads(sys.stdin.read())\n"
             "class StaleRedirect:\n"
             "    def find_spec(self, fullname, path=None, target=None):\n"
             "        if fullname in modules: raise AssertionError('stale redirect used')\n"
@@ -429,7 +436,8 @@ def test_native_import_snapshot_survives_an_editable_redirect_without_running_ke
             "print('native identities match')\n"
         )
         completed = subprocess.run(
-            [sys.executable, "-c", script, str(snapshot)],
+            [sys.executable, "-c", script],
+            input=json.dumps(modules),
             capture_output=True,
             text=True,
             check=True,
@@ -488,3 +496,56 @@ def test_run_selects_both_explicit_thread_policies_and_cleans_fixtures(monkeypat
     expect_error(lambda: benchmark.run(benchmark.parse_args([])), "worker failed")
     assert len(unloaded) == 2
     assert all(not directory.exists() for directory in directories)
+
+
+def test_activation_corpus_includes_inherited_regular_cases_and_model_dtypes(monkeypatch):
+    import onnx_light.onnx.backend as backend
+    import onnx_light_cpu
+    from onnx_light.onnx import TensorProto
+
+    monkeypatch.setattr(
+        onnx_light_cpu, "detect_simd_level", lambda: onnx_light_cpu.SimdLevel.AVX2
+    )
+    monkeypatch.setattr(onnx_light_cpu, "register_backend_test_cases", lambda: None)
+    monkeypatch.setattr(worker, "import_snapshot", dict)
+    selections, requests, unloaded = [], [], []
+
+    def collect(pattern, **kwargs):
+        selections.append((pattern, kwargs))
+        case = fake_case()
+        case.name = (
+            "test_cc_sigmoid_benchmark"
+            if kwargs["mode"] == backend.TestMode.BENCHMARK
+            else "test_cc_sigmoid_double"
+        )
+        case.model.graph.input[0].type = SimpleNamespace(
+            tensor_type=SimpleNamespace(elem_type=TensorProto.DOUBLE)
+        )
+        case.unload = lambda: unloaded.append(case.name)
+        return [case]
+
+    def measure(request, **kwargs):
+        requests.append(request)
+        payload = cpu_result(request)
+        payload["aggregate"]["onnxruntime_error"] = "unsupported"
+        return payload["raw"], payload["aggregate"]
+
+    monkeypatch.setattr(backend, "collect_test_cases_by_name", collect)
+    monkeypatch.setattr(worker, "measure_isolated", measure)
+    report = benchmark.run(
+        benchmark.parse_args(
+            ["--corpus", "activations", "--dtype", "float64", "--physical-threads", "6"]
+        )
+    )
+    assert [request["threads"] for request in requests] == [1, 6, 1, 6]
+    assert len(unloaded) == 2
+    assert {kwargs["mode"] for _, kwargs in selections} == {
+        backend.TestMode.BENCHMARK,
+        backend.TestMode.TEST,
+    }
+    assert all(kwargs["include_big"] for _, kwargs in selections)
+    assert all(not kwargs["generate_benchmark_expected_outputs"] for _, kwargs in selections)
+    assert report["metadata"]["selected_dtypes"] == ["float64"]
+    assert report["metadata"]["physical_policy_threads"] == 6
+    assert len(report["unsupported"]) == 4
+    assert all(not Path(request["directory"]).exists() for request in requests)

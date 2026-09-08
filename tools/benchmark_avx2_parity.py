@@ -33,6 +33,7 @@ else:
 
 THREAD_POLICIES = ("1", "physical")
 AVX2_DTYPES = ("float32", "float16")
+ACTIVATION_DTYPES = ("float32", "float16", "float64", "bfloat16")
 AVX2_CORPUS = (
     (r"^test_cpu_(gemm|matmul)_", ("float32", "float16")),
     (r"^test_cpu_(attention|group_query_attention)_", ("float32", "float16")),
@@ -66,6 +67,8 @@ _LOOP_FAMILIES = (
 
 
 def _command_output(command: Sequence[str]) -> str:
+    if shutil.which(command[0]) is None:
+        return "unknown"
     completed = subprocess.run(command, check=False, capture_output=True, text=True)
     return (
         completed.stdout.splitlines()[0]
@@ -393,7 +396,13 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     """Parses AVX2 corpus benchmark arguments."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--dtype", dest="dtypes", action="append", choices=AVX2_DTYPES, default=None
+        "--corpus",
+        choices=("priority", "activations"),
+        default="priority",
+        help="Activations includes every registered Sigmoid/Softmax benchmark and regular case.",
+    )
+    parser.add_argument(
+        "--dtype", dest="dtypes", action="append", choices=ACTIVATION_DTYPES, default=None
     )
     parser.add_argument(
         "--thread-policy",
@@ -404,6 +413,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("-r", "--repeat", type=int, default=100 * (os.cpu_count() or 1))
     parser.add_argument("-w", "--warmup", type=int, default=20)
+    parser.add_argument(
+        "--physical-threads",
+        type=int,
+        help="Override the physical policy count, e.g. when pinning a subset of hybrid cores.",
+    )
     parser.add_argument("-t", "--max-repeat-time", type=float, default=1.0)
     parser.add_argument(
         "--environment",
@@ -413,17 +427,35 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--output", type=Path, default=Path("avx2_parity_results.json"))
     args = parser.parse_args(argv)
-    args.dtypes = tuple(args.dtypes or AVX2_DTYPES)
+    args.dtypes = tuple(
+        args.dtypes or (ACTIVATION_DTYPES if args.corpus == "activations" else AVX2_DTYPES)
+    )
     args.thread_policies = tuple(args.thread_policies or THREAD_POLICIES)
     if args.repeat < 1:
         parser.error("--repeat must be positive")
     if args.warmup < 0:
         parser.error("--warmup must be non-negative")
+    if args.physical_threads is not None and args.physical_threads < 1:
+        parser.error("--physical-threads must be positive")
+    if args.corpus == "priority" and not set(args.dtypes).issubset(AVX2_DTYPES):
+        parser.error("the priority corpus only contains float32 and float16")
     if not math.isfinite(args.max_repeat_time) or args.max_repeat_time <= 0:
         parser.error("--max-repeat-time must be finite and positive")
     if args.output.suffix.lower() != ".json":
         parser.error("--output must have a .json extension")
     return args
+
+
+def activation_dtype(case: Any) -> str:
+    """Read the model type: inherited cases do not consistently encode it in their names."""
+    from onnx_light.onnx import TensorProto  # pyrefly: ignore[missing-import]
+
+    return {
+        TensorProto.FLOAT: "float32",
+        TensorProto.FLOAT16: "float16",
+        TensorProto.DOUBLE: "float64",
+        TensorProto.BFLOAT16: "bfloat16",
+    }[case.model.graph.input[0].type.tensor_type.elem_type]
 
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
@@ -446,19 +478,30 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     shared_libraries = isolation.shared_library_snapshot()
     raw_rows = []
     aggregated_rows = []
-    physical_threads = physical_core_count()
-    for pattern, corpus_dtypes in AVX2_CORPUS:
+    physical_threads = args.physical_threads or physical_core_count()
+    activations = args.corpus == "activations"
+    corpus = (
+        ((r"^test_(?:cpu|cc)_(?:sigmoid|softmax)(?:_|$)", ACTIVATION_DTYPES),)
+        if activations
+        else AVX2_CORPUS
+    )
+    modes = (TestMode.BENCHMARK, TestMode.TEST) if activations else (TestMode.BENCHMARK,)
+    for pattern, corpus_dtypes in corpus:
         selected_dtypes = tuple(dtype for dtype in corpus_dtypes if dtype in args.dtypes)
         if not selected_dtypes:
             continue
         cases = [
             case
+            for mode in modes
             for case in collect_test_cases_by_name(
-                "^test_cpu_.*_benchmark$",
-                mode=TestMode.BENCHMARK,
+                pattern if activations else "^test_cpu_.*_benchmark$",
+                mode=mode,
+                **({"include_big": True} if activations else {}),
                 generate_benchmark_expected_outputs=False,
             )
-            if re.search(pattern, case.name) and _case_dtype(case.name) in selected_dtypes
+            if re.search(pattern, case.name)
+            and (activation_dtype(case) if activations else _case_dtype(case.name))
+            in selected_dtypes
         ]
         if not cases:
             raise ValueError(
@@ -467,6 +510,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             )
         for index, case in enumerate(cases, start=1):
             print(f"[{index}/{len(cases)}] {case.name}", file=sys.stderr, flush=True)
+            dtype = activation_dtype(case) if activations else _case_dtype(case.name)
             directory = Path(f".avx2-parity-{uuid4().hex}").resolve()
             directory.mkdir()
             try:
@@ -488,6 +532,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     for row in (*raw, aggregate):
                         row["thread_policy"] = policy
                         row["fixture_sha256"] = fixture["sha256"]
+                        if activations:
+                            row["dtype"] = dtype
                     raw_rows.extend(raw)
                     aggregated_rows.append(aggregate)
             finally:
@@ -504,6 +550,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         simd_level=simd_level.name,
     )
     report["metadata"].update(
+        corpus=args.corpus,
+        selected_dtypes=list(args.dtypes),
+        physical_policy_threads=physical_threads,
         runtime_isolation="sequential subprocesses per case; process exit between runtimes",
         fixture_protocol=isolation.PROTOCOL_VERSION,
         native_modules={
