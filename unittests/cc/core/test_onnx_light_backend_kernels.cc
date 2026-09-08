@@ -429,6 +429,8 @@ TEST(OnnxLightBackendKernels, GatherRunsThroughRuntime) { CheckTensorRegularCase
 
 TEST(OnnxLightBackendKernels, SliceRunsThroughRuntime) { CheckTensorRegularCases("Slice"); }
 
+TEST(OnnxLightBackendKernels, ConcatRunsThroughRuntime) { CheckTensorRegularCases("Concat"); }
+
 TEST(OnnxLightBackendKernels, SplitRunsThroughRuntime) {
   EXPECT_EQ(CollectCpuCases("Split", core::backend_test::TestMode::TEST).size(), 177u);
   CheckTensorRegularCases("Split");
@@ -911,6 +913,13 @@ TEST(OnnxLightBackendKernels, SliceBenchmarksCoverTypesLayoutsAndLazyOutputs) {
                          "outer_stride", "reverse_outer", "multi_axis", "tail", "small",
                          "reverse_vector"},
                         {"params32", "params64"});
+}
+
+TEST(OnnxLightBackendKernels, ConcatBenchmarksCoverTypesLayoutsAndLazyOutputs) {
+  CheckTensorBenchmarks("Concat",
+                        {"axis0", "last_axis", "middle_axis", "tail", "narrow", "many_inputs",
+                         "uneven", "single", "empty_input", "vector"},
+                        {""});
 }
 
 TEST(OnnxLightBackendKernels, SplitBenchmarksCoverTypesLayoutsAndLazyOutputs) {
