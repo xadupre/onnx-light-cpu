@@ -411,6 +411,20 @@ TEST(OnnxLightBackendKernels, NotRunsThroughRuntime) {
   EXPECT_TRUE(failures.empty()) << Describe(failures);
 }
 
+TEST(OnnxLightBackendKernels, GatherRunsThroughRuntime) {
+  onnx_light_cpu::backend_test::RegisterCpuKernelBackendTestCases();
+  onnx_light_cpu::RegisterAllKernels();
+  std::vector<TestCase> cases =
+      CollectTestCases("Gather", /*include_big=*/false, core::backend_test::TestMode::TEST);
+  ASSERT_FALSE(cases.empty());
+  std::vector<std::string> failures;
+  for (TestCase &test_case : cases) {
+    TestCaseUnloadGuard unload_guard(test_case);
+    RunCaseThroughRuntime(test_case, /*compare=*/true, failures);
+  }
+  EXPECT_TRUE(failures.empty()) << Describe(failures);
+}
+
 TEST(OnnxLightBackendKernels, GemmRunsThroughRuntime) {
   const std::vector<std::string> failures =
       RunCpuBackendCases("Gemm", core::backend_test::TestMode::TEST);
@@ -830,6 +844,50 @@ TEST(OnnxLightBackendKernels, CDistBenchmarkRunsThroughRuntime) {
 TEST(OnnxLightBackendKernels, NotBenchmarkRunsThroughRuntime) {
   const std::vector<std::string> failures = RunCpuBackendCases(
       "Not", core::backend_test::TestMode::BENCHMARK, "test_cpu_not_n1024_bool_benchmark");
+  EXPECT_TRUE(failures.empty()) << Describe(failures);
+}
+
+TEST(OnnxLightBackendKernels, GatherBenchmarksCoverTypesLayoutsAndLazyOutputs) {
+  std::vector<TestCase> cases = CollectCpuCases("Gather", core::backend_test::TestMode::BENCHMARK);
+  const std::array<std::string, 9> layouts = {
+      "embedding_single", "embedding_small",    "embedding_tail",
+      "embedding_large",  "embedding_multidim", "middle_axis",
+      "last_axis",        "vector_random",      "large_slice",
+  };
+  const std::array<std::string, 6> types = {
+      "float32", "float64", "float16", "bfloat16", "int8", "int64",
+  };
+  ASSERT_EQ(cases.size(), layouts.size() * types.size() * 2);
+  std::set<std::string> names;
+  for (const TestCase &test_case : cases) {
+    EXPECT_FALSE(test_case.materialized()) << test_case.name;
+    EXPECT_TRUE(names.insert(test_case.name).second) << test_case.name;
+  }
+  for (const std::string &layout : layouts) {
+    for (const std::string &type : types) {
+      for (const std::string &indices : {"indices32", "indices64"}) {
+        const std::string name =
+            "test_cpu_gather_" + layout + "_" + indices + "_" + type + "_benchmark";
+        EXPECT_TRUE(names.contains(name)) << name;
+      }
+    }
+  }
+  onnx_light_cpu::RegisterAllKernels();
+  std::vector<std::string> failures;
+  {
+    TestCase &input_only = cases.front();
+    TestCaseUnloadGuard input_only_guard(input_only);
+    ASSERT_EQ(input_only.data_sets().size(), 1u);
+    EXPECT_FALSE(input_only.data_sets()[0].expected_outputs_generated);
+    EXPECT_TRUE(input_only.data_sets()[0].outputs.empty());
+    EXPECT_EQ(input_only.model().ref_graph().output_size(), 1);
+    RunCaseThroughRuntime(input_only, /*compare=*/false, failures);
+  }
+  for (TestCase &test_case : cases) {
+    test_case.set_expected_outputs_generated(true);
+    TestCaseUnloadGuard unload_guard(test_case);
+    RunCaseThroughRuntime(test_case, /*compare=*/true, failures);
+  }
   EXPECT_TRUE(failures.empty()) << Describe(failures);
 }
 

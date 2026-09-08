@@ -75,6 +75,19 @@ workbook:
    operator and data type without posting results. Explicit ``--tests`` and
    ``--dtypes`` filters override this inference.
 
+Gather benchmarks use the ``^test_cpu_gather_`` filter. The corpus covers scalar
+and multidimensional indices, embedding lookups with aligned and tail-sized
+rows, middle- and last-axis gathers, random vector lookups, and large contiguous
+slices. Each layout is available with ``INT32`` and ``INT64`` indices and
+``FLOAT``, ``DOUBLE``, ``FLOAT16``, ``BFLOAT16``, ``INT8``, and ``INT64`` data.
+Indices include negative and repeated values. The case names use
+``indices32``/``indices64`` separately from the data dtype suffix:
+
+.. code-block:: bash
+
+   onnx-light-cpu benchmark --tests "^test_cpu_gather_" --dtypes float32 float16 \
+       --threads 1 --repeat 100 --warmup 10 --onnxruntime --output gather.xlsx
+
 The Linux ``onnx-light main`` job in the ``ci-core`` workflow invokes this
 command after its existing build and tests when a pull request modifies kernel
 implementation or backend benchmark case files. A separate report job updates
