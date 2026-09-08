@@ -19,8 +19,12 @@ Float32NormalizationMoments ComputeNormalizationMomentsFloat32(const float *inpu
 void ApplyNormalizationAffineFloat32(const float *input, const float *scale, const float *bias,
                                      float *output, std::size_t count, float center,
                                      float multiplier);
+void ApplyNormalizationScaleBiasFloat32(const float *input, float *output, std::size_t count,
+                                        float multiplier, float offset);
 
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
+void ApplyNormalizationScaleBiasFloat32_AVX2(const float *input, float *output, std::size_t count,
+                                             float multiplier, float offset);
 float ComputeNormalizationMeanSquareFloat32_AVX2(const float *input, std::size_t count);
 Float32NormalizationMoments ComputeNormalizationMomentsFloat32_AVX2(const float *input,
                                                                     std::size_t count);
@@ -30,6 +34,8 @@ void ApplyNormalizationAffineFloat32_AVX2(const float *input, const float *scale
 #endif
 
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512
+void ApplyNormalizationScaleBiasFloat32_AVX512(const float *input, float *output, std::size_t count,
+                                               float multiplier, float offset);
 float ComputeNormalizationMeanSquareFloat32_AVX512(const float *input, std::size_t count);
 Float32NormalizationMoments ComputeNormalizationMomentsFloat32_AVX512(const float *input,
                                                                       std::size_t count);
