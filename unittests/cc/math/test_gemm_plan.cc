@@ -355,11 +355,6 @@ TEST(GemmPlan, SelectsWorkLimitedParticipantCounts) {
   const GemmPlan<float> square_1024(GemmPlanOptions<float>{false, false, 1024, 1024, 1024});
   const GemmPlan<float> transformer(GemmPlanOptions<float>{false, false, 128, 3072, 768});
 
-  // A general 1024^3 GEMM is work limited to 128 participants, except on
-  // AVX-512 where the general algorithm caps its participant count.
-  const std::size_t square_1024_threads =
-      onnx_light_cpu::DetectSimdLevel() >= onnx_light_cpu::SimdLevel::kAVX512 ? 32u : 128u;
-
   // The skinny-M task count follows the packed column block, whose width tracks
   // the vector length, so scalable SVE widths schedule a different number of
   // tasks. What matters is that participation stays inside the 16 participants
@@ -367,8 +362,12 @@ TEST(GemmPlan, SelectsWorkLimitedParticipantCounts) {
   EXPECT_GT(skinny_m.useful_threads(), 1u);
   EXPECT_LE(skinny_m.useful_threads(), 16u);
   EXPECT_EQ(skinny_n.useful_threads(), 16u);
-  EXPECT_EQ(square_512.useful_threads(), 32u);
-  EXPECT_EQ(square_1024.useful_threads(), square_1024_threads);
+  // General task grids also depend on ISA-specific blocking, so constrain them
+  // by their work budgets rather than pinning one architecture's task count.
+  EXPECT_GT(square_512.useful_threads(), 1u);
+  EXPECT_LE(square_512.useful_threads(), 128u);
+  EXPECT_GE(square_1024.useful_threads(), square_512.useful_threads());
+  EXPECT_LE(square_1024.useful_threads(), 512u);
   EXPECT_GT(transformer.useful_threads(), 32u);
   EXPECT_LE(transformer.useful_threads(), 51u);
 }
@@ -376,7 +375,8 @@ TEST(GemmPlan, SelectsWorkLimitedParticipantCounts) {
 TEST(GemmPlan, UsesExecutionTimeThreadsWhenConstructedWithoutExecutor) {
   constexpr std::size_t size = 512;
   const GemmPlan<float> plan(GemmPlanOptions<float>{false, false, size, size, size});
-  EXPECT_EQ(plan.useful_threads(), 32u);
+  EXPECT_GT(plan.useful_threads(), 1u);
+  EXPECT_LE(plan.useful_threads(), 128u);
   std::vector<float> a(size * size, 1.0f);
   std::vector<float> b(size * size, 1.0f);
   std::vector<float> y(size * size);
