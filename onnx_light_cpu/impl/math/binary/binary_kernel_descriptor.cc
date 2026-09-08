@@ -10,6 +10,7 @@
 #include "onnx_light_cpu/impl/math/math_kernels.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <bit>
 #include <cmath>
@@ -399,6 +400,54 @@ template <int Exponent> float FastFloatIntegerPower(float value) {
     return result;
   }
   return std::pow(value, static_cast<float>(Exponent));
+}
+
+template <typename TExp> bool IsSmallNonnegativeExponent(TExp exponent) {
+  if constexpr (std::is_signed_v<TExp>) {
+    return exponent >= 0 && exponent <= 5;
+  }
+  return exponent <= 5;
+}
+
+template <typename TExp>
+void BulkFloatIntegerPowLeftScalar(const void *left, const void *right, void *out,
+                                   std::size_t count) {
+  const float base = *static_cast<const float *>(left);
+  const auto *typed_right = static_cast<const TExp *>(right);
+  auto *typed_out = static_cast<float *>(out);
+  const std::array<float, 6> small_powers = {
+      1.0f,
+      base,
+      PowIntegerExponent(base, std::uint32_t{2}),
+      PowIntegerExponent(base, std::uint32_t{3}),
+      PowIntegerExponent(base, std::uint32_t{4}),
+      PowIntegerExponent(base, std::uint32_t{5}),
+  };
+  for (std::size_t i = 0; i < count; ++i) {
+    const TExp exponent = typed_right[i];
+    typed_out[i] = IsSmallNonnegativeExponent(exponent)
+                       ? small_powers[static_cast<std::size_t>(exponent)]
+                       : PowIntegerExponent(base, exponent);
+  }
+}
+
+template <typename TExp>
+void BulkFloatIntegerPowRightScalar(const void *left, const void *right, void *out,
+                                    std::size_t count) {
+  const auto *typed_left = static_cast<const float *>(left);
+  const TExp exponent = *static_cast<const TExp *>(right);
+  auto *typed_out = static_cast<float *>(out);
+  if (exponent == TExp{0}) {
+    std::fill_n(typed_out, count, 1.0f);
+    return;
+  }
+  if (exponent == TExp{1}) {
+    std::copy_n(typed_left, count, typed_out);
+    return;
+  }
+  for (std::size_t i = 0; i < count; ++i) {
+    typed_out[i] = PowIntegerExponent(typed_left[i], exponent);
+  }
 }
 
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
@@ -2000,6 +2049,12 @@ void SelectAdditionalBulk(BinaryOperator op, DT left, DT right, const Attrs &att
   case DT::TYPE:                                                                                   \
     ONNX_LIGHT_CPU_BIND_TYPED_BULK(BASE_CPP, RIGHT_CPP, BASE_CPP, ComputePow<BASE_CPP, RIGHT_CPP>) \
     break;
+#define ONNX_LIGHT_CPU_BIND_FLOAT_INTEGER_POW_CASE(TYPE, RIGHT_CPP)                                \
+  case DT::TYPE:                                                                                   \
+    ONNX_LIGHT_CPU_BIND_TYPED_BULK(float, RIGHT_CPP, float, ComputePow<float, RIGHT_CPP>)          \
+    adapter.bulk_left_scalar = &BulkFloatIntegerPowLeftScalar<RIGHT_CPP>;                          \
+    adapter.bulk_right_scalar = &BulkFloatIntegerPowRightScalar<RIGHT_CPP>;                        \
+    break;
 #define ONNX_LIGHT_CPU_BIND_INTEGER_POW_RIGHT_CASE(TYPE, RIGHT_CPP, BASE_CPP)                      \
   case DT::TYPE:                                                                                   \
     ONNX_LIGHT_CPU_BIND_TYPED_BULK(BASE_CPP, RIGHT_CPP, BASE_CPP, ComputePow<BASE_CPP, RIGHT_CPP>) \
@@ -2007,10 +2062,10 @@ void SelectAdditionalBulk(BinaryOperator op, DT left, DT right, const Attrs &att
     break;
     if (left == DT::FLOAT) {
       switch (right) {
-        ONNX_LIGHT_CPU_BIND_POW_RIGHT_CASE(INT32, std::int32_t, float)
-        ONNX_LIGHT_CPU_BIND_POW_RIGHT_CASE(INT64, std::int64_t, float)
-        ONNX_LIGHT_CPU_BIND_POW_RIGHT_CASE(UINT32, std::uint32_t, float)
-        ONNX_LIGHT_CPU_BIND_POW_RIGHT_CASE(UINT64, std::uint64_t, float)
+        ONNX_LIGHT_CPU_BIND_FLOAT_INTEGER_POW_CASE(INT32, std::int32_t)
+        ONNX_LIGHT_CPU_BIND_FLOAT_INTEGER_POW_CASE(INT64, std::int64_t)
+        ONNX_LIGHT_CPU_BIND_FLOAT_INTEGER_POW_CASE(UINT32, std::uint32_t)
+        ONNX_LIGHT_CPU_BIND_FLOAT_INTEGER_POW_CASE(UINT64, std::uint64_t)
       default:
         break;
       }
@@ -2104,6 +2159,7 @@ void SelectAdditionalBulk(BinaryOperator op, DT left, DT right, const Attrs &att
       }
     }
 #undef ONNX_LIGHT_CPU_BIND_INTEGER_POW_RIGHT_CASE
+#undef ONNX_LIGHT_CPU_BIND_FLOAT_INTEGER_POW_CASE
 #undef ONNX_LIGHT_CPU_BIND_POW_RIGHT_CASE
 #undef ONNX_LIGHT_CPU_BIND_MIXED_HALF_POW
     return;

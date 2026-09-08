@@ -410,6 +410,51 @@ TEST(BinaryKernelDescriptor, PowMixedTypesExecuteWithBaseOutputType) {
   EXPECT_NE(float_mixed.bulk_contiguous, nullptr);
   EXPECT_NE(float_mixed.bulk_left_scalar, nullptr);
   EXPECT_NE(float_mixed.bulk_right_scalar, nullptr);
+  const std::array<float, 8> mixed_bases = {-2.0f,
+                                            -1.0f,
+                                            0.0f,
+                                            0.5f,
+                                            2.0f,
+                                            3.0f,
+                                            std::numeric_limits<float>::infinity(),
+                                            std::numeric_limits<float>::quiet_NaN()};
+  const std::array<std::int64_t, 8> mixed_exponents = {0, 1, 2, 3, 4, 5, -2, 7};
+  std::array<float, 8> mixed_outputs = {};
+  float_mixed.bulk_contiguous(mixed_bases.data(), mixed_exponents.data(), mixed_outputs.data(),
+                              mixed_outputs.size());
+  for (std::size_t i = 0; i < mixed_outputs.size(); ++i) {
+    const float expected = std::pow(mixed_bases[i], static_cast<float>(mixed_exponents[i]));
+    if (std::isnan(expected)) {
+      EXPECT_TRUE(std::isnan(mixed_outputs[i])) << i;
+    } else {
+      EXPECT_EQ(mixed_outputs[i], expected) << i;
+    }
+  }
+  const auto check_scalar_paths = [&]<typename TExp>(BinaryDataType exponent_type) {
+    const auto &adapter =
+        pow.ResolveAdapter(BinaryDataType::FLOAT, exponent_type, BinaryDataType::FLOAT);
+    const TExp identity = 1;
+    adapter.bulk_right_scalar(mixed_bases.data(), &identity, mixed_outputs.data(),
+                              mixed_outputs.size());
+    for (std::size_t i = 0; i < mixed_outputs.size(); ++i) {
+      if (std::isnan(mixed_bases[i])) {
+        EXPECT_TRUE(std::isnan(mixed_outputs[i])) << i;
+      } else {
+        EXPECT_EQ(mixed_outputs[i], mixed_bases[i]) << i;
+      }
+    }
+    const std::array<TExp, 6> exponents = {0, 1, 2, 3, 4, 5};
+    const float scalar_base = 2.0f;
+    adapter.bulk_left_scalar(&scalar_base, exponents.data(), mixed_outputs.data(),
+                             exponents.size());
+    for (std::size_t i = 0; i < exponents.size(); ++i) {
+      EXPECT_EQ(mixed_outputs[i], std::pow(scalar_base, static_cast<float>(exponents[i]))) << i;
+    }
+  };
+  check_scalar_paths.template operator()<std::int32_t>(BinaryDataType::INT32);
+  check_scalar_paths.template operator()<std::int64_t>(BinaryDataType::INT64);
+  check_scalar_paths.template operator()<std::uint32_t>(BinaryDataType::UINT32);
+  check_scalar_paths.template operator()<std::uint64_t>(BinaryDataType::UINT64);
 
   const auto &integer_mixed =
       pow.ResolveAdapter(BinaryDataType::INT64, BinaryDataType::FLOAT, BinaryDataType::INT64);
