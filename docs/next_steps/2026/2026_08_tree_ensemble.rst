@@ -2,7 +2,7 @@ Tree Ensemble Classification and Regression Roadmap
 ===================================================
 
 :Date: 2026-08
-:Updated: 2026-09-02
+:Updated: 2026-09-08
 
 **complete** (large-batch performance follow-up in `#580
 <https://github.com/xadupre/onnx-light-cpu/pull/580>`_)
@@ -669,3 +669,82 @@ path to the row-parallel strategy and adds AVX2/AVX-512 traversal across 8 or
 16 rows. Its four-thread 10,000-tree, 4,096-feature, 128-row diagnostic reduced
 median latency from 5.423 ms to 4.774 ms without reopening the completed
 functional roadmap.
+
+Balanced FP32 latency follow-up
+------------------------------
+
+The balanced, single-target ``SUM`` path now caches SIMD detection and writes
+single-row, single-participant results directly, preserving the existing
+base-value accumulation order without allocating a temporary output buffer.
+Other aggregate functions, post-transforms, missing-value routing modes, and
+unbalanced trees keep their existing dispatch.
+
+Tree-parallel partitions reuse the AVX-512 evaluator across 16 rows. The root
+node's fields are broadcast rather than gathered separately in each lane;
+the remaining levels and scalar tails preserve the original traversal.
+Worker output slices are separated by a cache-line-sized gap to avoid false
+sharing even when the allocation is not cache-line aligned. This padding
+fits inside the existing tree-parallel workspace estimate.
+
+For AVX-512 batches of at least 64 rows, the balanced tree-parallel participant
+cap increases from 32 to 64, still bounded by the selected policy and runtime
+executor. Single-row forests retain the 32-participant cap: extending it to
+64 regressed the large single-row case. AVX2 and portable tree-parallel
+traversal remain unchanged, and nested calls do not create additional teams.
+
+End-to-end measurements against main commit ``6937794`` used an Intel Xeon
+Platinum 8480C, the AVX-512 build, and 96 configured runtime threads. The table
+reports the median of two run medians, with 100 measured iterations and 30
+warm-up iterations per run. Baseline and candidate runs alternated in both
+orders; timings include runtime output and workspace allocation.
+
+.. list-table:: Balanced float32 forests, before/after latency in seconds
+   :header-rows: 1
+
+   * - Trees / features / rows
+     - Main
+     - Optimized
+     - Main / optimized
+   * - 10 / 4 / 1
+     - 0.000006272
+     - 0.000002278
+     - 2.75x
+   * - 100 / 64 / 8
+     - 0.000011113
+     - 0.000005511
+     - 2.02x
+   * - 1,000 / 1,024 / 32
+     - 0.000128253
+     - 0.000122892
+     - 1.04x
+   * - 10,000 / 4,096 / 1
+     - 0.000064695
+     - 0.000067686
+     - 0.96x
+   * - 10,000 / 4,096 / 128
+     - 0.000564157
+     - 0.000291215
+     - 1.94x
+
+These gains compare against main, not ONNX Runtime. In the same two candidate
+runs, the 10-tree case was 2.27--2.48x faster than ONNX Runtime and the
+10,000-tree, 128-row case was 1.44--1.59x faster. Without the cache-line gap,
+the latter fluctuated between approximately 0.00031 and 0.00054 seconds;
+isolating worker outputs reduced it consistently to 0.00027--0.00030 seconds.
+The large single-row case remains variable and is about 5% slower in the
+final paired comparison; its traversal and 32-participant cap are unchanged.
+Separate one-thread measurements preserved the other forest timings and
+improved the small single-row case by approximately 3.5x.
+
+Reproduce on both revisions with identically configured builds:
+
+.. code-block:: bash
+
+   python -m onnx_light_cpu benchmark --dtype float32 --onnxruntime \
+       --test '^test_cpu_treeensemble_t' --threads 96 \
+       -r 100 -w 30 -t 0.5 -o treeensemble.xlsx
+
+Use ``--threads 1`` for the serial comparison. Correctness coverage exercises
+depth-one and depth-four forests, every 16-row tail width, nonzero bases,
+NaN/infinity inputs, policy/runtime participant limits, and nested execution
+through both AVX-512 and AVX2-ceiling builds.

@@ -878,6 +878,124 @@ TEST(TreeEnsembleOracle, BalancedFloatForestUsesRowParallelFixedDepthTraversal) 
   }
 }
 
+TEST(TreeEnsembleOracle, SingleRowBalancedFloatKeepsBaseInsideTreeReduction) {
+  auto attributes = StumpForest(2, 1);
+  attributes.base_values = {16777216.0};
+  attributes.leaf_weights = {1.0, 1.0, -1.0, -1.0};
+  const TreeEnsemblePlan plan(attributes);
+  const std::vector<float> input = {0.0F};
+  std::vector<float> actual = {-42.0F, 0.0F, -42.0F};
+  ThreadedExecutor executor;
+  onnx_light_cpu::ExecutionExecutorView view{&executor, 4, &ThreadedExecutor::Run};
+  {
+    onnx_light_cpu::ExecutionExecutorScope scope(&view);
+    plan.EvaluateInto(input.data(), input.size(), 1, actual.data() + 1);
+  }
+  EXPECT_EQ(executor.dispatches.load(std::memory_order_relaxed), 0U);
+  EXPECT_EQ(actual[0], -42.0F);
+  EXPECT_EQ(actual[1], 16777215.0F);
+  EXPECT_EQ(actual[2], -42.0F);
+}
+
+TEST(TreeEnsembleOracle, BalancedFloatPartitionsPreserveTailsBaseAndMissingValues) {
+  const TreeEnsembleTuningContext context{"partition-cpu", 4};
+  for (const auto &attributes : {StumpForest(97, 1), BalancedForest(97)}) {
+    const TreeEnsembleOracle oracle(attributes);
+    const TreeEnsemblePlan key_plan(attributes, context, nullptr);
+    for (const auto strategy :
+         {TreeEnsembleExecutionStrategy::kTreeParallel, TreeEnsembleExecutionStrategy::kRowParallel,
+          TreeEnsembleExecutionStrategy::kTreeMajorBatch}) {
+      TreeEnsembleTuningRegistry registry;
+      registry.PutExact(key_plan.model_key(), OneRegionPolicy(strategy, 4, 1, 128));
+      TreeEnsemblePlan plan(attributes, context, &registry);
+      ASSERT_EQ(plan.profile_source(), TreeEnsembleProfileSource::kExact);
+      plan.CompactRuntimeStorage();
+      std::vector<std::size_t> row_counts = {1, 8, 63, 64, 65, 127, 128};
+      for (std::size_t rows = 15; rows <= 33; ++rows) {
+        row_counts.push_back(rows);
+      }
+      for (const std::size_t rows : row_counts) {
+        SCOPED_TRACE(::testing::Message()
+                     << "rows=" << rows << " strategy=" << static_cast<int>(strategy)
+                     << " features=" << attributes.n_features);
+        std::vector<float> input(rows * static_cast<std::size_t>(attributes.n_features));
+        for (std::size_t i = 0; i < input.size(); ++i) {
+          input[i] = static_cast<float>(static_cast<int>(i % 11) - 5) * 0.25F;
+        }
+        input.front() = std::numeric_limits<float>::quiet_NaN();
+        if (input.size() > 2) {
+          input[1] = std::numeric_limits<float>::infinity();
+          input[2] = -std::numeric_limits<float>::infinity();
+        }
+        const std::vector<double> reference_input(input.begin(), input.end());
+        const auto expected = oracle.Evaluate(reference_input, rows);
+        std::vector<float> actual(rows);
+        ThreadedExecutor executor;
+        onnx_light_cpu::ExecutionExecutorView view{&executor, 4, &ThreadedExecutor::Run};
+        {
+          onnx_light_cpu::ExecutionExecutorScope scope(&view);
+          plan.EvaluateInto(input.data(), input.size(), rows, actual.data());
+        }
+        EXPECT_LE(executor.maximum_active.load(std::memory_order_relaxed), 4U);
+        for (std::size_t row = 0; row < rows; ++row) {
+          EXPECT_NEAR(actual[row], expected[row], 1e-5) << row;
+        }
+      }
+    }
+  }
+}
+
+TEST(TreeEnsembleOracle, BalancedFloatTreePartitionsRespectThreadLimitsAndNesting) {
+  constexpr std::size_t rows = 65;
+  const auto attributes = BalancedForest(97);
+  const TreeEnsembleTuningContext context{"partition-limits-cpu", 80};
+  const TreeEnsemblePlan key_plan(attributes, context, nullptr);
+  const std::vector<float> input(rows * static_cast<std::size_t>(attributes.n_features), -1.0F);
+  const std::vector<double> reference_input(input.begin(), input.end());
+  const auto expected = TreeEnsembleOracle(attributes).Evaluate(reference_input, rows);
+  for (const std::size_t policy_limit : {2U, 80U}) {
+    TreeEnsembleTuningRegistry registry;
+    registry.PutExact(
+        key_plan.model_key(),
+        OneRegionPolicy(TreeEnsembleExecutionStrategy::kTreeParallel, policy_limit, 1, rows));
+    const TreeEnsemblePlan plan(attributes, context, &registry);
+    ASSERT_EQ(plan.profile_source(), TreeEnsembleProfileSource::kExact);
+    for (const int64_t threads : {1, 3, 80}) {
+      for (const bool nested : {false, true}) {
+        SCOPED_TRACE(::testing::Message() << "policy_limit=" << policy_limit
+                                          << " threads=" << threads << " nested=" << nested);
+        ThreadedExecutor executor;
+        onnx_light_cpu::ExecutionExecutorView view{&executor, threads, &ThreadedExecutor::Run};
+        onnx_light_cpu::ExecutionExecutorScope scope(&view);
+        const auto decision = plan.SelectExecution(rows);
+        if (decision.strategy == TreeEnsembleExecutionStrategy::kTreeParallel) {
+          const std::size_t padded_workspace =
+              decision.participants * (rows + onnx_light_cpu::ExecutionSimdLanes<float>()) *
+              sizeof(float);
+          EXPECT_LE(padded_workspace, decision.workspace_bytes);
+        }
+        std::vector<float> actual(rows);
+        if (nested) {
+          onnx_light_cpu::detail::ExecutionRegionScope region;
+          plan.EvaluateInto(input.data(), input.size(), rows, actual.data());
+        } else {
+          plan.EvaluateInto(input.data(), input.size(), rows, actual.data());
+        }
+        EXPECT_LE(executor.dispatched_blocks.load(std::memory_order_relaxed),
+                  std::min({policy_limit, static_cast<std::size_t>(threads), std::size_t{64}}));
+        if (nested || threads == 1) {
+          EXPECT_EQ(executor.dispatches.load(std::memory_order_relaxed), 0U);
+        } else {
+          EXPECT_GT(executor.dispatches.load(std::memory_order_relaxed), 0U);
+        }
+        for (std::size_t row = 0; row < rows; ++row) {
+          EXPECT_NEAR(actual[row], expected[row], 1e-5) << row;
+        }
+      }
+    }
+  }
+}
+
 TEST(TreeEnsembleOracle, ThresholdsSignedZeroInfinityAndMissingRouting) {
   TreeEnsembleAttributes attributes = Stump();
   attributes.value_type = DataType::DOUBLE;

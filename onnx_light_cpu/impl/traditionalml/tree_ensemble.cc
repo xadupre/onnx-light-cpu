@@ -2061,13 +2061,8 @@ void TreeEnsemblePlan::EvaluateIntoImpl(const T *input, std::size_t input_size, 
           values[row] += leaf_weights_float_[node];
         }
       };
-      const std::size_t participants =
-          decision.strategy == TreeEnsembleExecutionStrategy::kTreeParallel
-              ? std::min(decision.participants, kMaximumBalancedFloatTreeParticipants)
-              : 1;
-      const float base =
-          attributes_.base_values.empty() ? 0.0F : static_cast<float>(attributes_.base_values[0]);
 #if defined(ONNX_LIGHT_CPU_HAVE_AVX2_FMA) || defined(ONNX_LIGHT_CPU_HAVE_AVX512)
+      static const SimdLevel simd_level = DetectSimdLevel();
       const bool simd_indices_fit =
           features != 0 &&
           features <= static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max()) &&
@@ -2076,8 +2071,26 @@ void TreeEnsemblePlan::EvaluateIntoImpl(const T *input, std::size_t input_size, 
               static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max()) / 4 &&
           leaf_weights_float_.size() <=
               static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max());
-      const SimdLevel simd_level = DetectSimdLevel();
 #endif
+      std::size_t maximum_participants = kMaximumBalancedFloatTreeParticipants;
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
+      if (simd_level == SimdLevel::kAVX512 && simd_indices_fit && rows >= 64) {
+        maximum_participants = 64;
+      }
+#endif
+      const std::size_t participants =
+          decision.strategy == TreeEnsembleExecutionStrategy::kTreeParallel
+              ? std::min(decision.participants, maximum_participants)
+              : 1;
+      const float base =
+          attributes_.base_values.empty() ? 0.0F : static_cast<float>(attributes_.base_values[0]);
+      if (rows == 1 && participants == 1) {
+        output_data[0] = base;
+        for (std::size_t tree = 0; tree < tree_roots_.size(); ++tree) {
+          accumulate_tree(tree, 0, 1, output_data);
+        }
+        return;
+      }
       if (decision.strategy == TreeEnsembleExecutionStrategy::kRowParallel) {
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512
         if (simd_level == SimdLevel::kAVX512 && simd_indices_fit) {
@@ -2136,22 +2149,41 @@ void TreeEnsemblePlan::EvaluateIntoImpl(const T *input, std::size_t input_size, 
                       });
         return;
       }
-      std::vector<float> partial_values(participants * rows);
+      std::size_t partial_stride = rows;
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
+      const bool vector_tree_partitions =
+          simd_level == SimdLevel::kAVX512 && simd_indices_fit && rows >= 16 && participants > 1;
+      if (vector_tree_partitions) {
+        // Keep adjacent workers' outputs off the same cache line, even when
+        // the allocation itself is not cache-line aligned.
+        partial_stride = SaturatingAdd(rows, static_cast<std::size_t>(ExecutionSimdLanes<float>()));
+      }
+#endif
+      std::vector<float> partial_values(SaturatingMultiply(participants, partial_stride));
       if (participants == 1) {
         std::fill(partial_values.begin(), partial_values.end(), base);
       }
-      ExecuteRanges(static_cast<std::int64_t>(participants),
-                    static_cast<double>(kExecutionGrainSize),
-                    [&](std::int64_t begin, std::int64_t end) {
-                      for (std::size_t participant = static_cast<std::size_t>(begin);
-                           participant < static_cast<std::size_t>(end); ++participant) {
-                        float *participant_values = partial_values.data() + participant * rows;
-                        const auto [tree_begin, tree_end] = tree_range(participant, participants);
-                        for (std::size_t tree = tree_begin; tree < tree_end; ++tree) {
-                          accumulate_tree(tree, 0, rows, participant_values);
-                        }
-                      }
-                    });
+      ExecuteRanges(
+          static_cast<std::int64_t>(participants), static_cast<double>(kExecutionGrainSize),
+          [&](std::int64_t begin, std::int64_t end) {
+            for (std::size_t participant = static_cast<std::size_t>(begin);
+                 participant < static_cast<std::size_t>(end); ++participant) {
+              float *participant_values = partial_values.data() + participant * partial_stride;
+              const auto [tree_begin, tree_end] = tree_range(participant, participants);
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
+              if (vector_tree_partitions) {
+                EvaluateBalancedFloatRows_AVX512(
+                    input_data, features, compact_float_nodes_.data(), leaf_weights_float_.data(),
+                    tree_roots_.data() + tree_begin, tree_end - tree_begin, max_depth_, 0, rows,
+                    0.0F, participant_values);
+                continue;
+              }
+#endif
+              for (std::size_t tree = tree_begin; tree < tree_end; ++tree) {
+                accumulate_tree(tree, 0, rows, participant_values);
+              }
+            }
+          });
       for (std::size_t row = 0; row < rows; ++row) {
         if (participants == 1) {
           output_data[row] = partial_values[row];
@@ -2159,7 +2191,7 @@ void TreeEnsemblePlan::EvaluateIntoImpl(const T *input, std::size_t input_size, 
         }
         float value = base;
         for (std::size_t participant = 0; participant < participants; ++participant) {
-          value += partial_values[participant * rows + row];
+          value += partial_values[participant * partial_stride + row];
         }
         output_data[row] = value;
       }
