@@ -17,6 +17,7 @@ using ONNX_LIGHT_NAMESPACE::core::backend_test::TestMode;
 
 void RegisterCpuGatherCases(std::vector<TestCase> &registry, TestMode mode);
 void RegisterCpuSliceCases(std::vector<TestCase> &registry, TestMode mode);
+void RegisterCpuSplitCases(std::vector<TestCase> &registry, TestMode mode);
 
 void CollectCpuTensorTestCases(std::vector<TestCase> &registry, const std::string &op_type = "",
                                TestMode mode = TestMode::TEST);

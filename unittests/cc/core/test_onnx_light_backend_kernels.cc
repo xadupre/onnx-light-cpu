@@ -429,6 +429,11 @@ TEST(OnnxLightBackendKernels, GatherRunsThroughRuntime) { CheckTensorRegularCase
 
 TEST(OnnxLightBackendKernels, SliceRunsThroughRuntime) { CheckTensorRegularCases("Slice"); }
 
+TEST(OnnxLightBackendKernels, SplitRunsThroughRuntime) {
+  EXPECT_EQ(CollectCpuCases("Split", core::backend_test::TestMode::TEST).size(), 177u);
+  CheckTensorRegularCases("Split");
+}
+
 TEST(OnnxLightBackendKernels, GemmRunsThroughRuntime) {
   const std::vector<std::string> failures =
       RunCpuBackendCases("Gemm", core::backend_test::TestMode::TEST);
@@ -852,12 +857,13 @@ TEST(OnnxLightBackendKernels, NotBenchmarkRunsThroughRuntime) {
 }
 
 void CheckTensorBenchmarks(const std::string &op_type, const std::vector<std::string> &layouts,
-                           const std::array<std::string, 2> &parameter_tags) {
+                           const std::vector<std::string> &parameter_tags,
+                           int first_output_count = 1) {
   std::vector<TestCase> cases = CollectCpuCases(op_type, core::backend_test::TestMode::BENCHMARK);
   const std::array<std::string, 6> types = {
       "float32", "float64", "float16", "bfloat16", "int8", "int64",
   };
-  ASSERT_EQ(cases.size(), layouts.size() * types.size() * 2);
+  ASSERT_EQ(cases.size(), layouts.size() * types.size() * parameter_tags.size());
   std::set<std::string> names;
   for (const TestCase &test_case : cases) {
     EXPECT_FALSE(test_case.materialized()) << test_case.name;
@@ -867,7 +873,7 @@ void CheckTensorBenchmarks(const std::string &op_type, const std::vector<std::st
     for (const std::string &type : types) {
       for (const std::string &parameters : parameter_tags) {
         const std::string name = "test_cpu_" + Lowercase(op_type) + "_" + layout + "_" +
-                                 parameters + "_" + type + "_benchmark";
+                                 (parameters.empty() ? "" : parameters + "_") + type + "_benchmark";
         EXPECT_TRUE(names.contains(name)) << name;
       }
     }
@@ -880,7 +886,7 @@ void CheckTensorBenchmarks(const std::string &op_type, const std::vector<std::st
     ASSERT_EQ(input_only.data_sets().size(), 1u);
     EXPECT_FALSE(input_only.data_sets()[0].expected_outputs_generated);
     EXPECT_TRUE(input_only.data_sets()[0].outputs.empty());
-    EXPECT_EQ(input_only.model().ref_graph().output_size(), 1);
+    EXPECT_EQ(input_only.model().ref_graph().output_size(), first_output_count);
     RunCaseThroughRuntime(input_only, /*compare=*/false, failures);
   }
   for (TestCase &test_case : cases) {
@@ -905,6 +911,14 @@ TEST(OnnxLightBackendKernels, SliceBenchmarksCoverTypesLayoutsAndLazyOutputs) {
                          "outer_stride", "reverse_outer", "multi_axis", "tail", "small",
                          "reverse_vector"},
                         {"params32", "params64"});
+}
+
+TEST(OnnxLightBackendKernels, SplitBenchmarksCoverTypesLayoutsAndLazyOutputs) {
+  CheckTensorBenchmarks("Split",
+                        {"qkv_decode", "qkv_small", "qkv_prefill", "qkv_batched", "first_axis",
+                         "middle_axis", "last_axis", "vector", "narrow", "many_outputs", "tail",
+                         "uneven"},
+                        {""}, 3);
 }
 
 TEST(OnnxLightBackendKernels, BinaryBenchmarkCorporaAreUnmaterializedAndRunThroughRuntime) {
