@@ -443,6 +443,19 @@ TEST(BinaryKernelDescriptor, PowMixedTypesExecuteWithBaseOutputType) {
         EXPECT_EQ(mixed_outputs[i], mixed_bases[i]) << i;
       }
     }
+    for (TExp exponent : {TExp{2}, TExp{3}, TExp{4}, TExp{5}}) {
+      adapter.bulk_right_scalar(mixed_bases.data(), &exponent, mixed_outputs.data(),
+                                mixed_outputs.size());
+      for (std::size_t i = 0; i < mixed_outputs.size(); ++i) {
+        float expected = 0.0f;
+        adapter.scalar(&mixed_bases[i], &exponent, &expected);
+        if (std::isnan(expected)) {
+          EXPECT_TRUE(std::isnan(mixed_outputs[i])) << i << ", exponent=" << exponent;
+        } else {
+          EXPECT_EQ(mixed_outputs[i], expected) << i << ", exponent=" << exponent;
+        }
+      }
+    }
     const std::array<TExp, 6> exponents = {0, 1, 2, 3, 4, 5};
     const float scalar_base = 2.0f;
     adapter.bulk_left_scalar(&scalar_base, exponents.data(), mixed_outputs.data(),

@@ -558,6 +558,38 @@ TEST(BinaryBroadcastPlan, FlatPathDispatchesToExecutorAboveThreshold) {
   }
 }
 
+TEST(BinaryBroadcastPlan, MixedIntegerPowUsesFineGrainedBoundedScheduling) {
+  const BinaryKernelDescriptor descriptor("Pow", 15, {});
+  InlineExecutor executor;
+  onnx_light_cpu::ExecutionExecutorView view{&executor, 64, &InlineExecutor::Run};
+  onnx_light_cpu::ExecutionExecutorScope scope(&view);
+  const std::int32_t exponent = 1;
+
+  const BinaryBroadcastPlan small(descriptor, BinaryDataType::FLOAT, BinaryDataType::INT32,
+                                  BinaryDataType::FLOAT, std::array<std::int64_t, 1>{4096},
+                                  std::array<std::int64_t, 0>{});
+  std::vector<float> small_input(4096, 2.0f);
+  std::vector<float> small_output(small_input.size());
+  small.Execute(small_input.data(), &exponent, small_output.data());
+  EXPECT_EQ(executor.dispatches, 0);
+
+  constexpr std::size_t kCount = 2 * 1024 * 1024;
+  const BinaryBroadcastPlan large(descriptor, BinaryDataType::FLOAT, BinaryDataType::INT32,
+                                  BinaryDataType::FLOAT, std::array<std::int64_t, 1>{kCount},
+                                  std::array<std::int64_t, 0>{});
+  std::vector<float> large_input(kCount, 3.0f);
+  std::vector<float> large_output(kCount);
+  large.Execute(large_input.data(), &exponent, large_output.data());
+  EXPECT_EQ(executor.dispatches, 1);
+  EXPECT_EQ(executor.blocks, 32);
+  EXPECT_EQ(large_output, large_input);
+
+  onnx_light_cpu::BinaryExecutionTuning configured = onnx_light_cpu::kDefaultBinaryExecutionTuning;
+  configured.bulk_parallel_threshold_bytes = 64 * 1024 * 1024;
+  large.Execute(large_input.data(), &exponent, large_output.data(), configured);
+  EXPECT_EQ(executor.dispatches, 1);
+}
+
 TEST(BinaryBroadcastPlan, MultiDimensionalBulkPathUsesAllAvailableParticipants) {
   const BinaryKernelDescriptor descriptor("Add", 14, {});
   const std::vector<std::int64_t> left_shape{88, 8192};
