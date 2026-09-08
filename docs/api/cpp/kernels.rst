@@ -41,3 +41,12 @@ attribute form. It handles optional axes and steps, clipped bounds, negative
 steps, empty outputs, and the same fixed-width data types as Gather.
 Contiguous trailing dimensions are copied together; strided copies use
 bounded-rank coordinates and the runtime executor for large outputs.
+
+.. doxygenclass:: onnx_light_cpu::ConcatKernel
+   :project: onnx_light_cpu
+   :members:
+
+Concat accepts one or more equal-rank tensors, including empty inputs and
+negative axes. It preserves fixed-width element bytes and validates matching
+non-axis dimensions, output sizes and non-overlap. Large concatenations use
+runtime-owned byte tiles, including concatenations along axis zero.
