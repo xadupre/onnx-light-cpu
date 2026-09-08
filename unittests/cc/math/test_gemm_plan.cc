@@ -167,7 +167,7 @@ TEST(GemmPlan, AppliesConfiguredBlockingAndParticipantLimit) {
   EXPECT_EQ(plan.useful_threads(), 2u);
 }
 
-TEST(GemmPlan, Float64SquareUsesFinerParallelWork) {
+TEST(GemmPlan, FloatSquaresUseBoundedParallelWork) {
   onnx_light_cpu::ExecutionExecutorView executor;
   executor.effective_threads = 32;
   onnx_light_cpu::ExecutionExecutorScope scope(&executor);
@@ -175,7 +175,10 @@ TEST(GemmPlan, Float64SquareUsesFinerParallelWork) {
   const GemmPlan<float> float_plan(GemmPlanOptions<float>{false, false, 256, 256, 256});
   const GemmPlan<double> double_plan(GemmPlanOptions<double>{false, false, 256, 256, 256});
 
-  EXPECT_GT(double_plan.useful_threads(), float_plan.useful_threads());
+  EXPECT_GT(float_plan.useful_threads(), 1u);
+  EXPECT_LE(float_plan.useful_threads(), 32u);
+  EXPECT_GT(double_plan.useful_threads(), 1u);
+  EXPECT_LE(double_plan.useful_threads(), 32u);
 }
 
 TEST(GemmPlan, MediumFloatSquareSplitsRowsAcrossParticipants) {
@@ -389,7 +392,7 @@ TEST(GemmPlan, UsesExecutionTimeThreadsWhenConstructedWithoutExecutor) {
   EXPECT_LE(executor.maximum_blocks, 8);
 }
 
-TEST(GemmPlan, SmallTransposedAExecutesSerially) {
+TEST(GemmPlan, SmallTransposedAUsesBoundedParallelism) {
   constexpr std::size_t size = 128;
   const GemmPlan<float> plan(GemmPlanOptions<float>{true, false, size, size, size});
   std::vector<float> a(size * size, 1.0f);
@@ -403,7 +406,8 @@ TEST(GemmPlan, SmallTransposedAExecutesSerially) {
     plan.Execute(a.data(), b.data(), nullptr, y.data());
   }
 
-  EXPECT_LE(executor.maximum_blocks, 1);
+  EXPECT_GT(executor.maximum_blocks, 1);
+  EXPECT_LE(executor.maximum_blocks, 4);
   EXPECT_EQ(y.front(), static_cast<float>(size));
 }
 

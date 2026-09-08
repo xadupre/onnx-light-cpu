@@ -1254,6 +1254,15 @@ void GemmSkinnyN(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::
   const std::size_t a_stride = trans_a ? M : 1;
   const std::size_t b_stride = trans_b ? 1 : N;
   const auto execute = [&](std::int64_t begin, std::int64_t end) {
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
+    if constexpr (std::is_same_v<T, float> && std::is_same_v<SrcT, float>) {
+      if (!trans_a && N == 1 && K >= 64 && kind == GemmKernelKind::kAVX512) {
+        GemmSkinnyN1Range_AVX512_F32(K, alpha, A, B, beta, C, Y, static_cast<std::size_t>(begin),
+                                     static_cast<std::size_t>(end));
+        return;
+      }
+    }
+#endif
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
     if constexpr (std::is_same_v<T, float> && std::is_same_v<SrcT, float>) {
       if (!trans_a && !trans_b && N > 1 && N <= 8 && K >= 32 && kind == GemmKernelKind::kAVX2FMA) {
@@ -1323,17 +1332,20 @@ void GemmSkinnyM(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::
 #endif
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512
   if constexpr (std::is_same_v<T, float> && std::is_same_v<SrcT, float>) {
-    constexpr std::size_t kRegisterPanel = 256;
-    if (!trans_a && !trans_b && M == 1 && N % kRegisterPanel == 0 &&
+    const std::size_t register_panel = N <= 1024 ? 64 : 128;
+    if (!trans_a && !trans_b && M == 1 && N % register_panel == 0 &&
         kind == GemmKernelKind::kAVX512) {
-      const std::size_t panel_count = N / kRegisterPanel;
+      const std::size_t panel_count = N / register_panel;
       const ExecutionSchedule schedule{2, 1, ExecutionThreadCount()};
       ExecuteRanges(static_cast<std::int64_t>(panel_count), schedule,
                     [&](std::int64_t begin, std::int64_t end) {
                       for (std::int64_t panel = begin; panel < end; ++panel) {
-                        GemmSkinnyM1Kernel_AVX512_F32(K, alpha, A, B, N, beta, C, Y,
-                                                      static_cast<std::size_t>(panel) *
-                                                          kRegisterPanel);
+                        const std::size_t n0 = static_cast<std::size_t>(panel) * register_panel;
+                        if (register_panel == 64) {
+                          GemmSkinnyM1Kernel64_AVX512_F32(K, alpha, A, B, N, beta, C, Y, n0);
+                        } else {
+                          GemmSkinnyM1Kernel128_AVX512_F32(K, alpha, A, B, N, beta, C, Y, n0);
+                        }
                       }
                     });
       return;
@@ -1757,10 +1769,7 @@ void GemmImpl(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::siz
 
   GemmBlocking runtime_blocking = blocking;
   if constexpr (std::is_same_v<T, float> && std::is_same_v<SrcT, float>) {
-    const std::size_t runtime_threads =
-        ExecutionInParallelRegion() ? 1 : static_cast<std::size_t>(ExecutionThreadCount());
-    if (kind == GemmKernelKind::kAVX512 && runtime_blocking.mr == 24 &&
-        (trans_b || (M > 128 && runtime_threads > 1))) {
+    if (kind == GemmKernelKind::kAVX512 && runtime_blocking.mr == 24 && trans_b) {
       runtime_blocking.mr = 12;
     }
   }
