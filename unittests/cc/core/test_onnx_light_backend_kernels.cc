@@ -431,6 +431,11 @@ TEST(OnnxLightBackendKernels, SliceRunsThroughRuntime) { CheckTensorRegularCases
 
 TEST(OnnxLightBackendKernels, ConcatRunsThroughRuntime) { CheckTensorRegularCases("Concat"); }
 
+TEST(OnnxLightBackendKernels, SplitRunsThroughRuntime) {
+  EXPECT_EQ(CollectCpuCases("Split", core::backend_test::TestMode::TEST).size(), 177u);
+  CheckTensorRegularCases("Split");
+}
+
 TEST(OnnxLightBackendKernels, CastRunsThroughRuntime) {
   EXPECT_EQ(CollectCpuCases("Cast", core::backend_test::TestMode::TEST).size(), 607u);
   CheckTensorRegularCases("Cast");
@@ -858,7 +863,7 @@ TEST(OnnxLightBackendKernels, NotBenchmarkRunsThroughRuntime) {
   EXPECT_TRUE(failures.empty()) << Describe(failures);
 }
 
-void CheckTensorBenchmarkOutputs(std::vector<TestCase> &cases) {
+void CheckTensorBenchmarkOutputs(std::vector<TestCase> &cases, int first_output_count = 1) {
   onnx_light_cpu::RegisterAllKernels();
   std::vector<std::string> failures;
   {
@@ -867,7 +872,7 @@ void CheckTensorBenchmarkOutputs(std::vector<TestCase> &cases) {
     ASSERT_EQ(input_only.data_sets().size(), 1u);
     EXPECT_FALSE(input_only.data_sets()[0].expected_outputs_generated);
     EXPECT_TRUE(input_only.data_sets()[0].outputs.empty());
-    EXPECT_EQ(input_only.model().ref_graph().output_size(), 1);
+    EXPECT_EQ(input_only.model().ref_graph().output_size(), first_output_count);
     RunCaseThroughRuntime(input_only, /*compare=*/false, failures);
   }
   for (TestCase &test_case : cases) {
@@ -879,7 +884,8 @@ void CheckTensorBenchmarkOutputs(std::vector<TestCase> &cases) {
 }
 
 void CheckTensorBenchmarks(const std::string &op_type, const std::vector<std::string> &layouts,
-                           const std::vector<std::string> &parameter_tags) {
+                           const std::vector<std::string> &parameter_tags,
+                           int first_output_count = 1) {
   std::vector<TestCase> cases = CollectCpuCases(op_type, core::backend_test::TestMode::BENCHMARK);
   const std::array<std::string, 6> types = {
       "float32", "float64", "float16", "bfloat16", "int8", "int64",
@@ -899,7 +905,7 @@ void CheckTensorBenchmarks(const std::string &op_type, const std::vector<std::st
       }
     }
   }
-  CheckTensorBenchmarkOutputs(cases);
+  CheckTensorBenchmarkOutputs(cases, first_output_count);
 }
 
 TEST(OnnxLightBackendKernels, CastBenchmarksCoverConversionsShapesAndLazyOutputs) {
@@ -948,6 +954,14 @@ TEST(OnnxLightBackendKernels, ConcatBenchmarksCoverTypesLayoutsAndLazyOutputs) {
                         {"axis0", "last_axis", "middle_axis", "tail", "narrow", "many_inputs",
                          "uneven", "single", "empty_input", "vector"},
                         {""});
+}
+
+TEST(OnnxLightBackendKernels, SplitBenchmarksCoverTypesLayoutsAndLazyOutputs) {
+  CheckTensorBenchmarks("Split",
+                        {"qkv_decode", "qkv_small", "qkv_prefill", "qkv_batched", "first_axis",
+                         "middle_axis", "last_axis", "vector", "narrow", "many_outputs", "tail",
+                         "uneven"},
+                        {""}, 3);
 }
 
 TEST(OnnxLightBackendKernels, BinaryBenchmarkCorporaAreUnmaterializedAndRunThroughRuntime) {
