@@ -116,7 +116,7 @@ Current foundation
 ------------------
 
 September 8 full activation-corpus audit
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 The priority corpus alone was insufficient to establish Sigmoid/Softmax
 parity: it selected only CPU-specific FP32 benchmarks, omitting inherited

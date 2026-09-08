@@ -113,8 +113,8 @@ template <typename T> void Sigmoid(const T *input, T *output, std::size_t count)
       tuning = {128 * 1024, 64 * 1024, count < 96 * 1024 ? 2u : (count < 256 * 1024 ? 3u : 32u),
                 false};
     }
-#endif
   }
+#endif
   ExecuteUnaryRanges<T>(count, tuning, [=](std::int64_t begin, std::int64_t end) {
     SigmoidRange(input + begin, output + begin, static_cast<std::size_t>(end - begin));
   });
