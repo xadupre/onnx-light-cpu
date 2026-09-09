@@ -601,6 +601,14 @@ void BulkFloatPowRightScalar(const void *left, const void *right, void *out, std
   const auto *typed_left = static_cast<const float *>(left);
   const float exponent = *static_cast<const float *>(right);
   auto *typed_out = static_cast<float *>(out);
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
+  if (count >= 8 &&
+      (exponent == 2.0f || exponent == 3.0f || exponent == 4.0f || exponent == 5.0f) &&
+      SupportsAvx2Fma()) {
+    PowFloat32RightScalar_AVX2_FMA(typed_left, exponent, typed_out, count);
+    return;
+  }
+#endif
   if (exponent == 2.0f) {
     for (std::size_t i = 0; i < count; ++i) {
       typed_out[i] = FastFloatIntegerPower<2>(typed_left[i]);

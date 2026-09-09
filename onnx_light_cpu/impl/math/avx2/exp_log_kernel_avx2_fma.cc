@@ -201,7 +201,26 @@ void SoftmaxNormalizeRow(const float *input, float *output, std::size_t columns,
   };
   __m256 sum0 = _mm256_setzero_ps();
   __m256 sum1 = _mm256_setzero_ps();
+  __m256 sum2 = _mm256_setzero_ps();
+  __m256 sum3 = _mm256_setzero_ps();
   std::size_t column = 0;
+  for (; column + 32 <= vector_columns; column += 32) {
+    const __m256 exponent0 = exponential(_mm256_sub_ps(_mm256_loadu_ps(input + column), maximum));
+    const __m256 exponent1 =
+        exponential(_mm256_sub_ps(_mm256_loadu_ps(input + column + 8), maximum));
+    const __m256 exponent2 =
+        exponential(_mm256_sub_ps(_mm256_loadu_ps(input + column + 16), maximum));
+    const __m256 exponent3 =
+        exponential(_mm256_sub_ps(_mm256_loadu_ps(input + column + 24), maximum));
+    _mm256_storeu_ps(output + column, exponent0);
+    _mm256_storeu_ps(output + column + 8, exponent1);
+    _mm256_storeu_ps(output + column + 16, exponent2);
+    _mm256_storeu_ps(output + column + 24, exponent3);
+    sum0 = _mm256_add_ps(sum0, exponent0);
+    sum1 = _mm256_add_ps(sum1, exponent1);
+    sum2 = _mm256_add_ps(sum2, exponent2);
+    sum3 = _mm256_add_ps(sum3, exponent3);
+  }
   for (; column + 16 <= vector_columns; column += 16) {
     const __m256 exponent0 = exponential(_mm256_sub_ps(_mm256_loadu_ps(input + column), maximum));
     const __m256 exponent1 =
@@ -223,7 +242,8 @@ void SoftmaxNormalizeRow(const float *input, float *output, std::size_t columns,
     _mm256_maskstore_ps(output + column, tail_mask, exponent);
     sum0 = _mm256_add_ps(sum0, _mm256_and_ps(exponent, _mm256_castsi256_ps(tail_mask)));
   }
-  const __m256 inverse_sum = _mm256_set1_ps(1.0f / HorizontalSum(_mm256_add_ps(sum0, sum1)));
+  const __m256 inverse_sum = _mm256_set1_ps(
+      1.0f / HorizontalSum(_mm256_add_ps(_mm256_add_ps(sum0, sum1), _mm256_add_ps(sum2, sum3))));
   for (column = 0; column < vector_columns; column += 8) {
     _mm256_storeu_ps(output + column, _mm256_mul_ps(_mm256_loadu_ps(output + column), inverse_sum));
   }
@@ -302,19 +322,34 @@ void SoftmaxFloat32_AVX2_FMA(const float *input, float *output, std::size_t rows
 
     __m256 maximum_vector0 = negative_infinity;
     __m256 maximum_vector1 = negative_infinity;
-    __m256 minimum_vector = positive_infinity;
+    __m256 maximum_vector2 = negative_infinity;
+    __m256 maximum_vector3 = negative_infinity;
+    __m256 minimum_vector0 = positive_infinity;
+    __m256 minimum_vector1 = positive_infinity;
     std::size_t column = 0;
+    for (; column + 32 <= vector_columns; column += 32) {
+      const __m256 value0 = _mm256_loadu_ps(row_input + column);
+      const __m256 value1 = _mm256_loadu_ps(row_input + column + 8);
+      const __m256 value2 = _mm256_loadu_ps(row_input + column + 16);
+      const __m256 value3 = _mm256_loadu_ps(row_input + column + 24);
+      maximum_vector0 = _mm256_max_ps(value0, maximum_vector0);
+      maximum_vector1 = _mm256_max_ps(value1, maximum_vector1);
+      maximum_vector2 = _mm256_max_ps(value2, maximum_vector2);
+      maximum_vector3 = _mm256_max_ps(value3, maximum_vector3);
+      minimum_vector0 = _mm256_min_ps(_mm256_min_ps(value0, value1), minimum_vector0);
+      minimum_vector1 = _mm256_min_ps(_mm256_min_ps(value2, value3), minimum_vector1);
+    }
     for (; column + 16 <= vector_columns; column += 16) {
       const __m256 value0 = _mm256_loadu_ps(row_input + column);
       const __m256 value1 = _mm256_loadu_ps(row_input + column + 8);
       maximum_vector0 = _mm256_max_ps(value0, maximum_vector0);
       maximum_vector1 = _mm256_max_ps(value1, maximum_vector1);
-      minimum_vector = _mm256_min_ps(_mm256_min_ps(value0, value1), minimum_vector);
+      minimum_vector0 = _mm256_min_ps(_mm256_min_ps(value0, value1), minimum_vector0);
     }
     for (; column < vector_columns; column += 8) {
       const __m256 value = _mm256_loadu_ps(row_input + column);
       maximum_vector0 = _mm256_max_ps(value, maximum_vector0);
-      minimum_vector = _mm256_min_ps(value, minimum_vector);
+      minimum_vector0 = _mm256_min_ps(value, minimum_vector0);
     }
     if (column < columns) {
       const __m256 tail =
@@ -323,12 +358,14 @@ void SoftmaxFloat32_AVX2_FMA(const float *input, float *output, std::size_t rows
       maximum_vector0 = _mm256_max_ps(tail, maximum_vector0);
       const __m256 minimum_tail =
           _mm256_blendv_ps(positive_infinity, tail, _mm256_castsi256_ps(tail_mask));
-      minimum_vector = _mm256_min_ps(minimum_tail, minimum_vector);
+      minimum_vector0 = _mm256_min_ps(minimum_tail, minimum_vector0);
     }
-    const __m256 maximum =
-        _mm256_set1_ps(HorizontalMax(_mm256_max_ps(maximum_vector0, maximum_vector1)));
+    const __m256 maximum = _mm256_set1_ps(
+        HorizontalMax(_mm256_max_ps(_mm256_max_ps(maximum_vector0, maximum_vector1),
+                                    _mm256_max_ps(maximum_vector2, maximum_vector3))));
 
-    const float minimum = -HorizontalMax(_mm256_sub_ps(_mm256_setzero_ps(), minimum_vector));
+    const float minimum = -HorizontalMax(
+        _mm256_sub_ps(_mm256_setzero_ps(), _mm256_min_ps(minimum_vector0, minimum_vector1)));
     if (_mm256_cvtss_f32(maximum) - minimum <= 87.0f) {
       SoftmaxNormalizeRow<true>(row_input, row_output, columns, maximum);
     } else {
@@ -446,6 +483,53 @@ void ApplyPowRightScalarFallback(const float *base, float exponent, float *outpu
   }
 }
 
+template <int Exponent> void PowFixedInteger(const float *base, float *output, std::size_t count) {
+  const __m256 zero = _mm256_setzero_ps();
+  const __m256 maximum = _mm256_set1_ps(std::numeric_limits<float>::max());
+  const __m256 sign = _mm256_set1_ps(-0.0f);
+  std::size_t i = 0;
+  for (; i + 8 <= count; i += 8) {
+    const __m256 x = _mm256_loadu_ps(base + i);
+    __m256 result = _mm256_mul_ps(x, x);
+    if constexpr (Exponent >= 4) {
+      result = _mm256_mul_ps(result, result);
+    }
+    if constexpr (Exponent == 3 || Exponent == 5) {
+      result = _mm256_mul_ps(result, x);
+    }
+    const __m256 finite =
+        _mm256_and_ps(_mm256_cmp_ps(_mm256_andnot_ps(sign, x), maximum, _CMP_LE_OQ),
+                      _mm256_cmp_ps(_mm256_andnot_ps(sign, result), maximum, _CMP_LE_OQ));
+    const __m256 non_underflow =
+        _mm256_or_ps(_mm256_cmp_ps(result, zero, _CMP_NEQ_OQ), _mm256_cmp_ps(x, zero, _CMP_EQ_OQ));
+    const int valid = _mm256_movemask_ps(_mm256_and_ps(finite, non_underflow));
+    _mm256_storeu_ps(output + i, result);
+    if (valid != 0xff) {
+      // Retain original lanes so exceptional-value repair also works in place.
+      alignas(32) float original[8];
+      _mm256_store_ps(original, x);
+      for (std::size_t lane = 0; lane < 8; ++lane) {
+        if ((valid & (1 << lane)) == 0) {
+          output[i + lane] = std::pow(original[lane], static_cast<float>(Exponent));
+        }
+      }
+    }
+  }
+  for (; i < count; ++i) {
+    const float value = base[i];
+    float result = value * value;
+    if constexpr (Exponent >= 4) {
+      result *= result;
+    }
+    if constexpr (Exponent == 3 || Exponent == 5) {
+      result *= value;
+    }
+    output[i] = std::isfinite(value) && std::isfinite(result) && (result != 0.0f || value == 0.0f)
+                    ? result
+                    : std::pow(value, static_cast<float>(Exponent));
+  }
+}
+
 } // namespace
 
 void PowFloat32_AVX2_FMA(const float *base, const float *exponent, float *output,
@@ -487,6 +571,22 @@ void PowFloat32LeftScalar_AVX2_FMA(float base, const float *exponent, float *out
 
 void PowFloat32RightScalar_AVX2_FMA(const float *base, float exponent, float *output,
                                     std::size_t count) {
+  if (exponent == 2.0f) {
+    PowFixedInteger<2>(base, output, count);
+    return;
+  }
+  if (exponent == 3.0f) {
+    PowFixedInteger<3>(base, output, count);
+    return;
+  }
+  if (exponent == 4.0f) {
+    PowFixedInteger<4>(base, output, count);
+    return;
+  }
+  if (exponent == 5.0f) {
+    PowFixedInteger<5>(base, output, count);
+    return;
+  }
   const __m256 y = _mm256_set1_ps(exponent);
   std::size_t i = 0;
   for (; i + 8 <= count; i += 8) {

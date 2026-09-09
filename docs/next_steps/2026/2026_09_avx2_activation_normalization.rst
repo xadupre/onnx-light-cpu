@@ -2,7 +2,7 @@ AVX2 Activation and Normalization Gap Closure
 ==============================================
 
 :Date: 2026-09
-:Updated: 2026-09-08
+:Updated: 2026-09-09
 
 **in progress**
 
@@ -137,10 +137,11 @@ improves the existing AVX2/FMA activation implementation:
   redundant positive-input comparison: its only callers pass negative
   absolute values or max-subtracted Softmax values. The polynomial and
   subnormal/NaN/infinity fallback are unchanged.
-* AVX2 FP32 Softmax keeps inputs below 1 MiB serial instead of dispatching
-  workers from 128 KiB. Larger inputs retain runtime-owned row parallelism.
-  The ISA-dependent threshold is cached, avoiding CPUID on every call.
-  Other ISA/type schedules and Sigmoid scheduling are unchanged.
+* AVX2 FP32 Softmax keeps inputs below 128 KiB serial. Cache-sized inputs from
+  128 KiB to below 1 MiB use at most two workers with 64 KiB blocks; inputs
+  from 1 MiB retain runtime-owned row parallelism. The ISA-dependent threshold
+  is cached, avoiding CPUID on every call. Other ISA/type schedules and
+  Sigmoid scheduling are unchanged.
 
 The baseline was rebuilt from ``66bf6ed`` on a native AVX2 Core i7-13800H,
 Windows/MSVC Release, Python 3.13 and ORT 1.29. Baseline and modified native
@@ -222,6 +223,48 @@ tail, subnormal-range inputs, mixed NaN/infinite Softmax rows, and serial
 versus reverse-order executor equivalence on a large tail-bearing tensor.
 It also checks the new serial threshold, bounded participant counts, and
 nested-dispatch suppression.
+
+FP32 Softmax 32x1024 follow-up
+------------------------------
+
+The 32x1024 FP32 case remained slower than ONNX Runtime after making all
+sub-1-MiB inputs serial. Its row maximum, minimum, and exponential-sum
+reductions now use four independent AVX2 streams for widths of at least 32,
+while shorter widths and all tails retain the existing loops. Cache-sized
+inputs use a bounded two-worker schedule so the 32 independent 4-KiB rows can
+run concurrently without waking a large executor team.
+
+On an Intel Xeon Platinum 8480C with 96 configured threads, the registered
+``test_cpu_softmax_32x1024_float32_benchmark`` median decreased from
+0.000017204 s to 0.000013187 s. ONNX Runtime timing varied across the
+separate shared-host runs, so this measurement establishes the CPU
+before/after improvement but not a stable cross-runtime ratio.
+
+BatchNormalization training follow-up
+-------------------------------------
+
+FP32 training reductions now explicitly unroll the four accumulation
+streams when each contiguous spatial slice has a multiple of four
+elements. This exposes adjacent lanes to compiler vectorization without
+changing the accumulation order, accumulator precision, or the two-pass
+centered-variance algorithm. Non-multiple-of-four slices and other input
+types retain the original loop. Running-statistic updates, mixed parameter
+types, optional outputs, inference mode, and executor scheduling are
+unchanged.
+
+On an Intel Xeon Platinum 8480C with 96 configured threads, the
+``training_n4_c32_h8_w8_rank4_float32`` registered-runtime case improved
+from 0.000019606 s to 0.000011128 s (1.76x against main ``1fc3359``).
+The five FP32 inference controls were also measured without an intended
+path change. Regression coverage compares training output and running
+statistics against onnx-light's built-in ``TrainingForward``, including
+aligned slices, tails, constant channels, and FLOAT/DOUBLE parameters.
+
+.. code-block:: bash
+
+   python -m onnx_light_cpu benchmark --dtype float32 --onnxruntime \
+       --test '^test_cpu_batchnormalization_.*_float32_benchmark$' \
+       --threads 96 -r 200 -w 100 -t 1 -o batch-normalization.xlsx
 
 Remaining priority cases
 -------------------------

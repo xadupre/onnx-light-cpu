@@ -156,6 +156,18 @@ ComputeBatchMoments(const norm::StorageType<Type> *input, std::size_t batch, std
   std::size_t position = 0;
   for (std::size_t n = 0; n < batch; ++n) {
     const auto *run = input + (n * channels + channel) * spatial;
+    if constexpr (Type == DataType::FLOAT) {
+      if (spatial % 4 == 0) {
+        // Preserve the four accumulation streams while exposing contiguous lanes.
+        for (std::size_t i = 0; i < spatial; i += 4) {
+          sums[0] += run[i];
+          sums[1] += run[i + 1];
+          sums[2] += run[i + 2];
+          sums[3] += run[i + 3];
+        }
+        continue;
+      }
+    }
     for (std::size_t i = 0; i < spatial; ++i, ++position) {
       sums[position & 3] += Traits::Load(run, i);
     }
@@ -166,6 +178,21 @@ ComputeBatchMoments(const norm::StorageType<Type> *input, std::size_t batch, std
   position = 0;
   for (std::size_t n = 0; n < batch; ++n) {
     const auto *run = input + (n * channels + channel) * spatial;
+    if constexpr (Type == DataType::FLOAT) {
+      if (spatial % 4 == 0) {
+        for (std::size_t i = 0; i < spatial; i += 4) {
+          const float d0 = run[i] - mean;
+          const float d1 = run[i + 1] - mean;
+          const float d2 = run[i + 2] - mean;
+          const float d3 = run[i + 3] - mean;
+          squared_sums[0] += d0 * d0;
+          squared_sums[1] += d1 * d1;
+          squared_sums[2] += d2 * d2;
+          squared_sums[3] += d3 * d3;
+        }
+        continue;
+      }
+    }
     for (std::size_t i = 0; i < spatial; ++i, ++position) {
       const Acc delta = Traits::Load(run, i) - mean;
       squared_sums[position & 3] += delta * delta;

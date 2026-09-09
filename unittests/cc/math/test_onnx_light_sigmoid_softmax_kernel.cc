@@ -627,7 +627,7 @@ TEST(OnnxLightSigmoidSoftmaxKernel, FusedFloat16SigmoidCoversEveryBitPattern) {
 }
 #endif
 
-TEST(OnnxLightSigmoidSoftmaxKernel, SmallAvx2SoftmaxAvoidsParallelDispatch) {
+TEST(OnnxLightSigmoidSoftmaxKernel, CacheSizedAvx2SoftmaxUsesAtMostTwoWorkers) {
   if (onnx_light_cpu::DetectSimdLevel() < onnx_light_cpu::SimdLevel::kAVX2 ||
       !onnx_light_cpu::CpuSupportsFma()) {
     GTEST_SKIP() << "AVX2/FMA is unavailable";
@@ -636,10 +636,21 @@ TEST(OnnxLightSigmoidSoftmaxKernel, SmallAvx2SoftmaxAvoidsParallelDispatch) {
   onnx_light_cpu::ExecutionExecutorView view{&executor, 32, &InlineExecutor::Run};
   onnx_light_cpu::ExecutionExecutorScope scope(&view);
   const onnx_light_cpu::SoftmaxKernel softmax(Context());
-  for (std::int64_t rows : {1, 32, 64, 128, 255}) {
+  for (std::int64_t rows : {1, 31, 32, 64, 128, 255, 256}) {
+    executor = {};
     const auto input = rt::Tensor::FromFloat("", {rows, 1024}, Values(rows * 1024));
     softmax(input, -1);
-    EXPECT_EQ(executor.dispatches, 0) << rows;
+    if (rows < 32) {
+      EXPECT_EQ(executor.dispatches, 0) << rows;
+    } else if (rows < 256) {
+      EXPECT_EQ(executor.dispatches, 1) << rows;
+      EXPECT_GT(executor.blocks, 1) << rows;
+      EXPECT_LE(executor.blocks, 2) << rows;
+    } else {
+      EXPECT_EQ(executor.dispatches, 1) << rows;
+      EXPECT_GT(executor.blocks, 2) << rows;
+    }
+    EXPECT_FALSE(executor.nested);
   }
 }
 

@@ -23,8 +23,12 @@ Kernel classes
 
 Gather copies fixed-width elements without numerical conversion, accepts
 ``INT32`` or ``INT64`` indices, and handles scalar/multidimensional indices,
-negative axes and indices, and empty outputs. Large gathers use the runtime
-executor to copy independent slices; smaller gathers remain serial.
+negative axes and indices, and empty outputs. Outputs below 192 KiB remain
+serial. Between 192 KiB and 1 MiB, gathers use the runtime executor with
+at least 64 KiB per work block and at most eight participants, bounded by the
+available threads. Larger outputs retain 256 KiB work blocks, and nested
+calls remain serial. In particular, tail-sized outputs just below 1 MiB no
+longer fall back to a single worker.
 As in onnx-light's built-in Gather, strings, complex values, and packed
 sub-byte types are not supported.
 

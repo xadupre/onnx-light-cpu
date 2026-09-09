@@ -2,7 +2,7 @@ Binary Elementwise Performance Follow-up
 =========================================
 
 :Date: 2026-08
-:Updated: 2026-09-05
+:Updated: 2026-09-08
 
 **complete**
 
@@ -44,6 +44,33 @@ operator on one host, and ONNX Runtime timing dispersion was significant for
 some large broadcast cases. The complete unfiltered corpus must be rerun with
 raw samples, affinity, effective thread count, and selected tuning parameters
 recorded before accepting any optimization.
+
+FP32 fixed-exponent broadcast follow-up
+----------------------------------------
+
+The FP32 ``Pow`` scalar-exponent adapter already recognized exponents 2
+through 5, but its per-element finite/underflow checks prevented the
+repeated-multiplication loop from vectorizing. It now uses an AVX2
+fixed-exponent loop with vector validity masks and scalar ``std::pow``
+repair only for exceptional lanes. The multiplication order, signed zeros,
+finite-boundary results, tails, and exact in-place operation match the
+existing scalar adapter. Integer-typed exponents, fractional exponents,
+and broadcast scheduling are unchanged.
+
+Registered-runtime measurements on an Intel Xeon Platinum 8480C, with 96
+configured threads and main ``1fc3359`` as the baseline, reduced the
+1,048,576-element ``float32xfloat32`` per-channel case from 0.000204432 s
+to 0.000097377 s (2.10x) and the swapped outer-broadcast case from
+0.000206468 s to 0.000073306 s (2.82x). These are before/after gains, not
+ONNX Runtime ratios. Routing through the general AVX-512 Pow kernel and a
+two-pass scalar validity scan were both rejected after end-to-end
+measurements showed no improvement.
+
+.. code-block:: bash
+
+   python -m onnx_light_cpu benchmark --dtype float32 --onnxruntime \
+       --test '^test_cpu_pow_v15_(outer_float32xfloat32_to_float32_swapped|per_channel_float32xfloat32_to_float32)_n1048576_benchmark$' \
+       --threads 96 -r 100 -w 30 -t 0.5 -o pow-broadcast.xlsx
 
 Current execution and tuning contract
 -------------------------------------

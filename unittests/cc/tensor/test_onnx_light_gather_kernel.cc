@@ -260,6 +260,79 @@ struct InlineExecutor {
   }
 };
 
+TEST(OnnxLightGatherKernel, CacheSizedLayoutsUseBoundedTeamsAndPreservePayloads) {
+  struct Case {
+    Shape shape;
+    int64_t axis;
+    int64_t count;
+  };
+  for (const auto &test : {Case{{1024, 1024}, 1, 255}, Case{{32, 256, 64}, 1, 127},
+                           Case{{1048576}, 0, 65535}, Case{{32, 256, 3}, 1, 1023}}) {
+    for (const DataType type :
+         {DataType::UINT8, DataType::UINT16, DataType::FLOAT, DataType::DOUBLE}) {
+      const auto data = Payload(type, test.shape);
+      const int64_t axis_size = test.shape[test.axis];
+      std::vector<int64_t> indices64(static_cast<std::size_t>(test.count));
+      std::vector<int32_t> indices32(static_cast<std::size_t>(test.count));
+      for (int64_t i = 0; i < test.count; ++i) {
+        const int64_t positive = (i * 53 + 7) % axis_size;
+        indices64[i] = i % 2 == 0 ? positive : positive - axis_size;
+        indices32[i] = static_cast<int32_t>(indices64[i]);
+      }
+      const std::size_t bytes =
+          static_cast<std::size_t>(test.shape.product() / axis_size * test.count) *
+          rt_ns::ElementSize(type);
+      for (const int64_t threads : {3, 32}) {
+        SCOPED_TRACE(::testing::Message()
+                     << "axis=" << test.axis << " indices=" << test.count
+                     << " type=" << static_cast<int>(type) << " threads=" << threads);
+        InlineExecutor executor;
+        onnx_light_cpu::ExecutionExecutorView view{&executor, threads, &InlineExecutor::Run};
+        onnx_light_cpu::ExecutionExecutorScope scope(&view);
+        Compare(data, Tensor::From<int32_t>("indices", {test.count}, indices32), test.axis);
+        Compare(data, Tensor::From<int64_t>("indices", {test.count}, indices64), test.axis);
+        if (bytes < 192 * 1024) {
+          EXPECT_EQ(executor.dispatches, 0);
+        } else {
+          EXPECT_GT(executor.dispatches, 0);
+          EXPECT_GT(executor.blocks, 1);
+          EXPECT_LE(executor.blocks, threads);
+          if (bytes < 1024 * 1024) {
+            EXPECT_LE(executor.blocks, 8);
+          }
+        }
+      }
+    }
+  }
+}
+
+TEST(OnnxLightGatherKernel, ParallelThresholdAndUnalignedBlockTails) {
+  const auto data = Payload(DataType::FLOAT, {1024});
+  for (const int64_t count : {49151, 49152, 49153, 65535}) {
+    std::vector<int32_t> values(static_cast<std::size_t>(count));
+    for (int64_t i = 0; i < count; ++i) {
+      values[i] = static_cast<int32_t>(i % 1024) - 1024;
+    }
+    const auto indices = Tensor::From<int32_t>("indices", {count}, values);
+    for (const int64_t threads : {1, 3, 32}) {
+      InlineExecutor executor;
+      onnx_light_cpu::ExecutionExecutorView view{&executor, threads, &InlineExecutor::Run};
+      onnx_light_cpu::ExecutionExecutorScope scope(&view);
+      Compare(data, indices, 0);
+      if (count < 49152 || threads == 1) {
+        EXPECT_EQ(executor.dispatches, 0);
+      } else {
+        EXPECT_GT(executor.dispatches, 0);
+        EXPECT_LE(executor.blocks, std::min<int64_t>(threads, 8));
+      }
+      const int64_t calls = executor.dispatches;
+      onnx_light_cpu::detail::ExecutionRegionScope region;
+      Compare(data, indices, 0);
+      EXPECT_EQ(executor.dispatches, calls);
+    }
+  }
+}
+
 TEST(OnnxLightGatherKernel, RuntimeSchedulingSmallLargeAndNested) {
   InlineExecutor executor;
   onnx_light_cpu::ExecutionExecutorView view{&executor, 8, &InlineExecutor::Run};
