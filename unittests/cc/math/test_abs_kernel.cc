@@ -2,15 +2,18 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "onnx_light_cpu/impl/cpu_cache_topology.h"
 #include "onnx_light_cpu/impl/math/math_kernels.h"
 
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <cstdint>
 #include <limits>
 #include <numeric>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -59,6 +62,24 @@ TEST(SimdDetection, FmaRequiresAvx2OrAvx) {
 TEST(AbsFloat32, EmptyInput) {
   float dummy = 1.0f;
   onnx_light_cpu::AbsFloat32(&dummy, &dummy, 0);
+}
+
+TEST(AbsFloat32, DefaultsRespectSelectedIsaAndCacheCapacity) {
+  const auto &tuning = onnx_light_cpu::DefaultAbsFloat32ExecutionTuning();
+  if (SelectedAbsFloat32Lanes() == 8) {
+    EXPECT_EQ(tuning.target_block_bytes, 1024 * 1024);
+    const std::size_t cache =
+        onnx_light_cpu::CpuCacheSizeBytesOrFallback(onnx_light_cpu::GetCpuCacheTopology(), 3, 0);
+    if (cache == 0) {
+      EXPECT_EQ(tuning.streaming_store_threshold_bytes, 0);
+    } else {
+      EXPECT_GE(tuning.streaming_store_threshold_bytes, 16 * 1024 * 1024);
+      EXPECT_GT(tuning.streaming_store_threshold_bytes, cache / 2);
+    }
+  } else {
+    EXPECT_EQ(tuning.target_block_bytes, 256 * 1024);
+    EXPECT_EQ(tuning.streaming_store_threshold_bytes, 0);
+  }
 }
 
 TEST(AbsFloat32, CostModelUsesDispatchComputeCost) {
@@ -196,6 +217,160 @@ TEST(AbsFloat32, StreamingStoreTuningHandlesMisalignedOutputAndTail) {
 
   for (std::size_t i = 0; i < size; ++i) {
     EXPECT_FLOAT_EQ(storage[i + 1], std::fabs(input[i]));
+  }
+}
+
+struct AbsExecutor {
+  std::int64_t plans = 0;
+  std::int64_t dispatches = 0;
+  std::int64_t maximum = 0;
+  std::int64_t blocks = 0;
+  bool concurrent = false;
+
+  static onnx_light_cpu::ExecutionParallelPlan Plan(void *context, std::int64_t,
+                                                    const onnx_light_cpu::ExecutionWorkCost &,
+                                                    std::int64_t maximum, std::int64_t) {
+    auto &self = *static_cast<AbsExecutor *>(context);
+    ++self.plans;
+    self.maximum = maximum;
+    return {1, maximum};
+  }
+
+  static void Run(void *context, std::int64_t blocks, void *task_context,
+                  onnx_light_cpu::ExecutionBlockFn task) {
+    auto &self = *static_cast<AbsExecutor *>(context);
+    ++self.dispatches;
+    self.blocks = blocks;
+    std::vector<std::thread> workers;
+    for (std::int64_t block = 1; block < blocks; ++block) {
+      if (self.concurrent) {
+        workers.emplace_back(task, task_context, block);
+      } else {
+        task(task_context, block);
+      }
+    }
+    task(task_context, 0);
+    for (auto &worker : workers) {
+      worker.join();
+    }
+  }
+};
+
+TEST(AbsFloat32, StreamingPreservesExecutorParticipantLimits) {
+  auto tuning = onnx_light_cpu::DefaultAbsFloat32ExecutionTuning();
+  tuning.streaming_store_threshold_bytes = 1;
+  tuning.target_block_bytes = 16 * 1024;
+  tuning.max_participants = 4;
+  AbsExecutor executor;
+  onnx_light_cpu::ExecutionExecutorView view{&executor, 128, &AbsExecutor::Run, &AbsExecutor::Plan};
+  onnx_light_cpu::ExecutionExecutorScope scope(&view);
+  for (std::size_t count : {0, 65535, 65536, 65537}) {
+    SCOPED_TRACE(count);
+    executor = {};
+    std::vector<float> input(count, -3.0f), output(count, -1.0f);
+    onnx_light_cpu::AbsFloat32WithTuning(input.data(), output.data(), count, tuning);
+    if (count == 0) {
+      EXPECT_EQ(executor.plans, 0);
+      EXPECT_EQ(executor.dispatches, 0);
+    } else {
+      EXPECT_EQ(executor.plans, 1);
+      EXPECT_EQ(executor.maximum, 4);
+      EXPECT_EQ(executor.blocks, 4);
+    }
+    EXPECT_TRUE(std::all_of(output.begin(), output.end(), [](float v) { return v == 3.0f; }));
+  }
+
+  std::vector<float> input(65537, -2.0f), output(input.size());
+  tuning.max_participants = 1;
+  executor = {};
+  onnx_light_cpu::AbsFloat32WithTuning(input.data(), output.data(), input.size(), tuning);
+  EXPECT_EQ(executor.plans, 1);
+  EXPECT_EQ(executor.dispatches, 0);
+  EXPECT_EQ(output, std::vector<float>(input.size(), 2.0f));
+}
+
+TEST(AbsFloat32, StreamingBoundsParticipantsByWorkBudget) {
+  if (SelectedAbsFloat32Lanes() != 8) {
+    GTEST_SKIP() << "AVX/AVX2 streaming scheduling";
+  }
+  auto tuning = onnx_light_cpu::DefaultAbsFloat32ExecutionTuning();
+  tuning.streaming_store_threshold_bytes = 1;
+  AbsExecutor executor;
+  onnx_light_cpu::ExecutionExecutorView view{&executor, 64, &AbsExecutor::Run, &AbsExecutor::Plan};
+  onnx_light_cpu::ExecutionExecutorScope scope(&view);
+  const std::size_t count = 4 * tuning.target_block_bytes / sizeof(float) + 17;
+  std::vector<float> input(count, -2.0f), output(count);
+  onnx_light_cpu::AbsFloat32WithTuning(input.data(), output.data(), count, tuning);
+  EXPECT_EQ(executor.maximum, 4);
+  EXPECT_EQ(executor.blocks, 4);
+  EXPECT_EQ(output, std::vector<float>(count, 2.0f));
+}
+
+TEST(AbsFloat32, NestedExecutionDoesNotPlanOrDispatch) {
+  AbsExecutor executor;
+  onnx_light_cpu::ExecutionExecutorView view{&executor, 8, &AbsExecutor::Run, &AbsExecutor::Plan};
+  onnx_light_cpu::ExecutionExecutorScope scope(&view);
+  onnx_light_cpu::detail::ExecutionRegionScope nested;
+  std::vector<float> input(1048576 + 17, -2.0f), output(input.size());
+  onnx_light_cpu::AbsFloat32(input.data(), output.data(), input.size());
+  EXPECT_EQ(executor.plans, 0);
+  EXPECT_EQ(executor.dispatches, 0);
+  EXPECT_EQ(output, std::vector<float>(input.size(), 2.0f));
+}
+
+TEST(AbsFloat32, DefaultStreamingBoundary) {
+  AbsExecutor executor;
+  executor.concurrent = true;
+  onnx_light_cpu::ExecutionExecutorView view{&executor, 4, &AbsExecutor::Run, &AbsExecutor::Plan};
+  onnx_light_cpu::ExecutionExecutorScope scope(&view);
+  for (std::size_t count : {4194303, 4194304, 4194305}) {
+    std::vector<float> input(count + 2, -2.0f), output(count + 2, -1.0f);
+    onnx_light_cpu::AbsFloat32(input.data() + 1, output.data() + 1, count);
+    EXPECT_EQ(output.front(), -1.0f);
+    EXPECT_EQ(output.back(), -1.0f);
+    EXPECT_TRUE(std::all_of(output.begin() + 1, output.end() - 1,
+                            [](float value) { return value == 2.0f; }));
+  }
+}
+
+TEST(AbsFloat32, ConcurrentTilesPreserveBitsAndGuardUnalignedTails) {
+  constexpr std::uint32_t bits[] = {0x80000000u, 0xbf800000u, 0xff800000u, 0xffc12345u,
+                                    0x80000001u, 0x7f800000u, 0x7fc54321u, 0x3f800000u};
+  constexpr float sentinel = -123.0f;
+  auto tuning = onnx_light_cpu::DefaultAbsFloat32ExecutionTuning();
+  tuning.parallel_threshold_bytes = 1;
+  tuning.target_block_bytes = 64 * 1024;
+  tuning.max_participants = 4;
+  AbsExecutor executor;
+  executor.concurrent = true;
+  onnx_light_cpu::ExecutionExecutorView view{&executor, 4, &AbsExecutor::Run, &AbsExecutor::Plan};
+  onnx_light_cpu::ExecutionExecutorScope scope(&view);
+  for (bool cost_model : {false, true}) {
+    tuning.use_cost_model = cost_model;
+    for (std::size_t streaming : {std::size_t{0}, std::size_t{1}}) {
+      tuning.streaming_store_threshold_bytes = streaming;
+      for (std::size_t tail = 0; tail < 16; ++tail) {
+        const std::size_t count = 65536 + tail;
+        const std::size_t offset = tail + 1;
+        SCOPED_TRACE(::testing::Message()
+                     << "cost=" << cost_model << " streaming=" << streaming << " tail=" << tail);
+        std::vector<float> input(count + offset + 1, sentinel);
+        std::vector<float> output(input.size(), sentinel);
+        for (std::size_t i = 0; i < count; ++i) {
+          input[offset + i] = std::bit_cast<float>(bits[i % std::size(bits)]);
+        }
+        for (bool inplace : {false, true}) {
+          float *destination = inplace ? input.data() + offset : output.data() + offset;
+          onnx_light_cpu::AbsFloat32WithTuning(input.data() + offset, destination, count, tuning);
+          for (std::size_t i = 0; i < count; ++i) {
+            ASSERT_EQ(std::bit_cast<std::uint32_t>(destination[i]),
+                      bits[i % std::size(bits)] & 0x7fffffffu);
+          }
+          EXPECT_EQ(destination[-1], sentinel);
+          EXPECT_EQ(destination[count], sentinel);
+        }
+      }
+    }
   }
 }
 
