@@ -59,22 +59,6 @@ inline std::size_t CheckedProduct(std::initializer_list<std::size_t> factors, co
   return product;
 }
 
-template <typename Shape>
-inline std::size_t CheckedShapeProduct(const Shape &shape, const char *kernel, const char *label) {
-  bool empty = false;
-  for (const std::int64_t dimension : shape) {
-    empty |= CheckedDimension(dimension, kernel, label) == 0;
-  }
-  if (empty) {
-    return 0;
-  }
-  std::size_t product = 1;
-  for (const std::int64_t dimension : shape) {
-    product = CheckedMultiply(product, CheckedDimension(dimension, kernel, label), kernel, label);
-  }
-  return product;
-}
-
 inline std::size_t CheckedByteSize(std::size_t count, std::size_t element_size, const char *kernel,
                                    const char *label) {
   return CheckedMultiply(count, element_size, kernel, label);

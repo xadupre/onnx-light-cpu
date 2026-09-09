@@ -206,14 +206,14 @@ Tensor Compute(const Tensor &q, const Tensor &k, const Tensor &v, const Tensor *
     } else if (static_cast<DataType>(mask->data_type) == DataType::FLOAT16) {
       mask_kind = AttentionMaskKind::kAdditive;
       const std::size_t mask_count =
-          CheckedShapeProduct(mask->shape, "Attention", "mask element count");
+          static_cast<std::size_t>(mask->shape.product(0, mask->shape.size(), "Attention mask"));
       mask_fp32_buffer.resize(mask_count);
       detail::ConvertFloat16ToFloat32(reinterpret_cast<const std::uint16_t *>(mask->bytes()),
                                       mask_fp32_buffer.data(), mask_count);
     } else if (static_cast<DataType>(mask->data_type) == DataType::BFLOAT16) {
       mask_kind = AttentionMaskKind::kAdditive;
       const std::size_t mask_count =
-          CheckedShapeProduct(mask->shape, "Attention", "mask element count");
+          static_cast<std::size_t>(mask->shape.product(0, mask->shape.size(), "Attention mask"));
       mask_fp32_buffer.resize(mask_count);
       detail::ConvertBFloat16ToFloat32(reinterpret_cast<const std::uint16_t *>(mask->bytes()),
                                        mask_fp32_buffer.data(), mask_count);
@@ -236,7 +236,7 @@ Tensor Compute(const Tensor &q, const Tensor &k, const Tensor &v, const Tensor *
     output_shape.push_back(dimension);
   }
   const std::size_t element_count =
-      CheckedShapeProduct(output_shape, "Attention", "output element count");
+      static_cast<std::size_t>(output_shape.product(0, output_shape.size(), "Attention output"));
   const std::size_t element_bytes =
       data_type == DataType::FLOAT ? sizeof(float) : sizeof(std::uint16_t);
   const std::size_t bytes =
@@ -249,9 +249,9 @@ Tensor Compute(const Tensor &q, const Tensor &k, const Tensor &v, const Tensor *
   if (plan.has_qk_matmul_output || plan.softmax_fp64) {
     const std::vector<std::int64_t> plan_qk_shape = plan.qk_matmul_output_shape();
     Shape qk_shape(plan_qk_shape);
-    const std::size_t qk_bytes =
-        CheckedByteSize(CheckedShapeProduct(qk_shape, "Attention", "QK element count"),
-                        element_bytes, "Attention", "QK byte size");
+    const std::size_t qk_bytes = CheckedByteSize(
+        static_cast<std::size_t>(qk_shape.product(0, qk_shape.size(), "Attention QK output")),
+        element_bytes, "Attention", "QK byte size");
     qk = rt != nullptr ? rt->MakeOutputTensor(3, q.data_type, qk_shape, qk_bytes)
                        : rt_ns::MakeOutputTensor(q.data_type, qk_shape, qk_bytes, nullptr);
     if (data_type == DataType::FLOAT) {

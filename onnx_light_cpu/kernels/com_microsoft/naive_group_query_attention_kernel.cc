@@ -478,7 +478,8 @@ Tensor ApplyRotaryHalf(RuntimeContext *rt, const Tensor &input, std::int64_t hea
   const std::int64_t half = head_dim / 2;
   const std::size_t element_bytes = ElementByteWidth(dtype);
   const std::size_t total_bytes =
-      CheckedByteSize(CheckedShapeProduct(input.shape, "NaiveGroupQueryAttention", "rotary shape"),
+      CheckedByteSize(static_cast<std::size_t>(input.shape.product(
+                          0, input.shape.size(), "NaiveGroupQueryAttention rotary")),
                       element_bytes, "NaiveGroupQueryAttention", "rotary byte size");
   Tensor output = rt != nullptr
                       ? rt->MakeTemporaryTensor(input.data_type, input.shape, total_bytes)
@@ -527,7 +528,8 @@ Tensor ConcatenatePastAndCurrent(RuntimeContext *rt, int output_slot, DataType d
   const Shape shape{batch, heads, total_length, dim};
   const std::size_t element_bytes = ElementByteWidth(dtype);
   const std::size_t total_bytes =
-      CheckedByteSize(CheckedShapeProduct(shape, "NaiveGroupQueryAttention", "present cache shape"),
+      CheckedByteSize(static_cast<std::size_t>(
+                          shape.product(0, shape.size(), "NaiveGroupQueryAttention present cache")),
                       element_bytes, "NaiveGroupQueryAttention", "present cache byte size");
   Tensor result;
   if (output_slot >= 0 && rt != nullptr) {
@@ -666,7 +668,8 @@ Tensor ComputeNaiveAttention(const GqaArgs &args, RuntimeContext *rt, const Tens
   const Shape output_shape{batch, sequence_length, out_hidden};
   const std::size_t element_bytes = ElementByteWidth(dtype);
   const std::size_t output_bytes =
-      CheckedByteSize(CheckedShapeProduct(output_shape, "NaiveGroupQueryAttention", "output shape"),
+      CheckedByteSize(static_cast<std::size_t>(output_shape.product(
+                          0, output_shape.size(), "NaiveGroupQueryAttention output")),
                       element_bytes, "NaiveGroupQueryAttention", "output byte size");
   Tensor output = rt != nullptr ? rt->MakeOutputTensor(0, static_cast<std::int32_t>(dtype),
                                                        output_shape, output_bytes)

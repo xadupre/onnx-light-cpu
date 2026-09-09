@@ -88,9 +88,9 @@ NaiveBiasGeluKernel::NaiveBiasGeluKernel(const NodeProto &node, const rt_ns::Ker
 }
 
 Tensor NaiveBiasGeluKernel::operator()(const Tensor &a, const Tensor &b, RuntimeContext *rt) const {
-  const std::size_t bytes =
-      CheckedByteSize(CheckedShapeProduct(a.shape, "NaiveBiasGelu", "A shape"), a.element_size(),
-                      "NaiveBiasGelu", "output byte size");
+  const std::size_t bytes = CheckedByteSize(
+      static_cast<std::size_t>(a.shape.product(0, a.shape.size(), "NaiveBiasGelu A")),
+      a.element_size(), "NaiveBiasGelu", "output byte size");
   Tensor output = rt != nullptr ? rt->MakeOutputTensor(0, a.data_type, a.shape, bytes)
                                 : rt_ns::MakeOutputTensor(a.data_type, a.shape, bytes, nullptr);
   (*this)(a, b, output);

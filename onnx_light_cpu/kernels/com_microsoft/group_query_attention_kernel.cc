@@ -462,7 +462,8 @@ Tensor ApplyRotaryHalf(RuntimeContext *rt, const Tensor &input, std::int64_t hea
   const std::int64_t half = head_dim / 2;
   const std::size_t element_bytes = ElementByteWidth(dtype);
   const std::size_t total_bytes =
-      CheckedByteSize(CheckedShapeProduct(input.shape, "GroupQueryAttention", "rotary shape"),
+      CheckedByteSize(static_cast<std::size_t>(
+                          input.shape.product(0, input.shape.size(), "GroupQueryAttention rotary")),
                       element_bytes, "GroupQueryAttention", "rotary byte size");
   Tensor output = rt != nullptr
                       ? rt->MakeTemporaryTensor(input.data_type, input.shape, total_bytes)
@@ -506,9 +507,9 @@ Tensor MakePresentCache(RuntimeContext *rt, int output_slot, DataType dtype, std
       CheckedIndexAdd(past_length, sequence_length, "GroupQueryAttention", "total sequence length");
   const Shape shape{batch, heads, total_length, dim};
   const std::size_t element_bytes = ElementByteWidth(dtype);
-  const std::size_t total_bytes =
-      CheckedByteSize(CheckedShapeProduct(shape, "GroupQueryAttention", "present cache shape"),
-                      element_bytes, "GroupQueryAttention", "present cache byte size");
+  const std::size_t total_bytes = CheckedByteSize(
+      static_cast<std::size_t>(shape.product(0, shape.size(), "GroupQueryAttention present cache")),
+      element_bytes, "GroupQueryAttention", "present cache byte size");
   Tensor present =
       rt != nullptr
           ? rt->MakeOutputTensor(output_slot, static_cast<std::int32_t>(dtype), shape, total_bytes)

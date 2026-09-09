@@ -86,9 +86,9 @@ Tensor NaiveCDistKernel::operator()(const Tensor &a, const Tensor &b, const std:
     throw std::invalid_argument("onnx_light_cpu::NaiveCDist: A and B must be rank-2 tensors.");
   }
   const rt_ns::Shape output_shape{a.shape[0], b.shape[0]};
-  const std::size_t bytes =
-      CheckedByteSize(CheckedShapeProduct(output_shape, "NaiveCDist", "output shape"),
-                      a.element_size(), "NaiveCDist", "output byte size");
+  const std::size_t bytes = CheckedByteSize(
+      static_cast<std::size_t>(output_shape.product(0, output_shape.size(), "NaiveCDist output")),
+      a.element_size(), "NaiveCDist", "output byte size");
   Tensor output = rt != nullptr
                       ? rt->MakeOutputTensor(0, a.data_type, output_shape, bytes)
                       : rt_ns::MakeOutputTensor(a.data_type, output_shape, bytes, nullptr);

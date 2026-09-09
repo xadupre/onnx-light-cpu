@@ -8,14 +8,10 @@
 
 #include <cstdint>
 #include <limits>
-#include <vector>
-
 namespace {
 
 TEST(CheckedArithmetic, RejectsNegativeDimensions) {
-  EXPECT_THROW(
-      onnx_light_cpu::CheckedShapeProduct(std::vector<std::int64_t>{2, -1}, "Test", "shape"),
-      std::invalid_argument);
+  EXPECT_THROW(onnx_light_cpu::CheckedDimension(-1, "Test", "dimension"), std::invalid_argument);
 }
 
 TEST(CheckedArithmetic, RejectsSizeByteIndexAndOffsetOverflow) {
@@ -23,9 +19,6 @@ TEST(CheckedArithmetic, RejectsSizeByteIndexAndOffsetOverflow) {
   constexpr std::int64_t index_max = std::numeric_limits<std::int64_t>::max();
   EXPECT_THROW(onnx_light_cpu::CheckedMultiply(size_max, 2, "Test", "shape"),
                std::invalid_argument);
-  EXPECT_THROW(
-      onnx_light_cpu::CheckedShapeProduct(std::vector<std::int64_t>{index_max, 3}, "Test", "shape"),
-      std::invalid_argument);
   EXPECT_THROW(onnx_light_cpu::CheckedByteSize(size_max / 2 + 1, 2, "Test", "bytes"),
                std::invalid_argument);
   EXPECT_THROW(onnx_light_cpu::CheckedIndexMultiply(index_max / 2 + 1, 2, "Test", "stride"),
@@ -46,12 +39,6 @@ TEST(CheckedArithmetic, ComputesBoundaryValues) {
   EXPECT_EQ(onnx_light_cpu::CheckedIndexMultiply(index_max / 7, 7, "Test", "stride"),
             index_max - index_max % 7);
   EXPECT_EQ(onnx_light_cpu::CheckedIndexAdd(index_max - 1, 1, "Test", "offset"), index_max);
-  EXPECT_EQ(onnx_light_cpu::CheckedShapeProduct(std::vector<std::int64_t>{index_max, 3, 0}, "Test",
-                                                "empty shape"),
-            0);
-  EXPECT_THROW(
-      onnx_light_cpu::CheckedShapeProduct(std::vector<std::int64_t>{0, -1}, "Test", "empty shape"),
-      std::invalid_argument);
 }
 
 } // namespace

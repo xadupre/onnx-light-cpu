@@ -157,8 +157,9 @@ void AbsKernel::Configure(const rt_ns::KernelTuningParameters &parameters) {
 }
 
 rt_ns::Tensor AbsKernel::operator()(const Tensor &x, RuntimeContext *rt) const {
-  const std::size_t y_n_bytes = CheckedByteSize(CheckedShapeProduct(x.shape, "Abs", "input shape"),
-                                                x.element_size(), "Abs", "output byte size");
+  const std::size_t y_n_bytes =
+      CheckedByteSize(static_cast<std::size_t>(x.shape.product(0, x.shape.size(), "Abs input")),
+                      x.element_size(), "Abs", "output byte size");
   Tensor y = rt != nullptr ? rt->MakeOutputTensor(0, x.data_type, x.shape, y_n_bytes)
                            : rt_ns::MakeOutputTensor(x.data_type, x.shape, y_n_bytes, nullptr);
   (*this)(x, y);

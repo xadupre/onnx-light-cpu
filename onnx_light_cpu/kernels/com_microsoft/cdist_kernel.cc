@@ -110,9 +110,9 @@ CDistMetric ParseMetric(const std::string &metric) {
 }
 
 void ValidateTensors(const Tensor &a, const Tensor &b, const Tensor &output) {
-  CheckedShapeProduct(a.shape, "CDist", "A shape");
-  CheckedShapeProduct(b.shape, "CDist", "B shape");
-  CheckedShapeProduct(output.shape, "CDist", "output shape");
+  a.shape.product(0, a.shape.size(), "CDist A");
+  b.shape.product(0, b.shape.size(), "CDist B");
+  output.shape.product(0, output.shape.size(), "CDist output");
   if (a.data_type != b.data_type || a.data_type != output.data_type) {
     throw std::invalid_argument("onnx_light_cpu::CDist: A, B and output dtypes must match.");
   }
@@ -174,9 +174,9 @@ Tensor CDistKernel::operator()(const Tensor &a, const Tensor &b, const std::stri
     throw std::invalid_argument("onnx_light_cpu::CDist: A and B must be rank-2 tensors.");
   }
   const rt_ns::Shape output_shape{a.shape[0], b.shape[0]};
-  const std::size_t bytes =
-      CheckedByteSize(CheckedShapeProduct(output_shape, "CDist", "output shape"), a.element_size(),
-                      "CDist", "output byte size");
+  const std::size_t bytes = CheckedByteSize(
+      static_cast<std::size_t>(output_shape.product(0, output_shape.size(), "CDist output")),
+      a.element_size(), "CDist", "output byte size");
   Tensor output = rt != nullptr
                       ? rt->MakeOutputTensor(0, a.data_type, output_shape, bytes)
                       : rt_ns::MakeOutputTensor(a.data_type, output_shape, bytes, nullptr);
