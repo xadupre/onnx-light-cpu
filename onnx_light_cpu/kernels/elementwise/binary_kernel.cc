@@ -6,6 +6,7 @@
 
 #include "onnx_light_cpu/kernels/kernel_registration.h"
 #include "onnx_light_cpu/kernels/kernel_usage.h"
+#include "onnx_light_cpu/kernels/tensor_buffer_validation.h"
 
 #include "onnx_core/runtime/kernels/cast_helper.h"
 #include "onnx_core/runtime/kernels/kernel_dispatch_table.h"
@@ -542,6 +543,9 @@ void BinaryElementwiseKernel::Configure(const rt_ns::KernelTuningParameters &par
 rt_ns::Tensor BinaryElementwiseKernel::operator()(const rt_ns::Tensor &left,
                                                   const rt_ns::Tensor &right,
                                                   rt_ns::RuntimeContext *rt) const {
+  tensor_validation::ValidateBufferCapacity(left, KernelName(descriptor_.op_type()), "left input");
+  tensor_validation::ValidateBufferCapacity(right, KernelName(descriptor_.op_type()),
+                                            "right input");
   const auto output_type = static_cast<rt_ns::DataType>(
       descriptor_.ResolveOutputType(static_cast<onnx_light_cpu::DataType>(left.data_type),
                                     static_cast<onnx_light_cpu::DataType>(right.data_type)));
@@ -562,6 +566,9 @@ rt_ns::Tensor BinaryElementwiseKernel::operator()(const rt_ns::Tensor &left,
 
 void BinaryElementwiseKernel::operator()(const rt_ns::Tensor &left, const rt_ns::Tensor &right,
                                          rt_ns::Tensor &output) const {
+  const std::string kernel_name = KernelName(descriptor_.op_type());
+  tensor_validation::ValidateBufferCapacity(left, kernel_name, "left input");
+  tensor_validation::ValidateBufferCapacity(right, kernel_name, "right input");
   const auto output_type = static_cast<rt_ns::DataType>(
       descriptor_.ResolveOutputType(static_cast<onnx_light_cpu::DataType>(left.data_type),
                                     static_cast<onnx_light_cpu::DataType>(right.data_type)));
@@ -575,6 +582,7 @@ void BinaryElementwiseKernel::operator()(const rt_ns::Tensor &left, const rt_ns:
     throw std::invalid_argument(
         "onnx_light_cpu::BinaryElementwiseKernel: output tensor metadata mismatch.");
   }
+  tensor_validation::ValidateBufferCapacity(output, kernel_name, "output");
   const void *left_data = static_cast<rt_ns::DataType>(left.data_type) == rt_ns::DataType::STRING
                               ? static_cast<const void *>(left.AsStrings().data())
                               : static_cast<const void *>(left.bytes());

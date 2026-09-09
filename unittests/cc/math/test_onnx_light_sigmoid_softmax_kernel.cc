@@ -181,6 +181,25 @@ TEST(OnnxLightSigmoidSoftmaxKernel, SigmoidMatchesReferenceIncludingTailsAndAlia
   }
 }
 
+TEST(OnnxLightSigmoidSoftmaxKernel, RejectsUndersizedBorrowedAndPreallocatedBuffers) {
+  const onnx_light_cpu::SigmoidKernel sigmoid(Context());
+  const onnx_light_cpu::SoftmaxKernel softmax(Context());
+  std::vector<float> input_storage = {1.0f, 2.0f};
+  const auto *input_bytes = reinterpret_cast<const std::uint8_t *>(input_storage.data());
+  const auto undersized_input = rt::Tensor::Borrow(
+      "input", rt::DataType::FLOAT, {2, 2}, input_bytes, input_storage.size() * sizeof(float));
+  EXPECT_THROW(sigmoid(undersized_input), std::invalid_argument);
+  EXPECT_THROW(softmax(undersized_input, -1), std::invalid_argument);
+
+  const auto input = rt::Tensor::FromFloat("input", {2}, input_storage);
+  std::vector<float> output_storage(1);
+  auto undersized_output = rt::Tensor::Borrow(
+      "output", rt::DataType::FLOAT, {2},
+      reinterpret_cast<const std::uint8_t *>(output_storage.data()), sizeof(float));
+  EXPECT_THROW(sigmoid(input, undersized_output), std::invalid_argument);
+  EXPECT_THROW(softmax(input, -1, undersized_output), std::invalid_argument);
+}
+
 TEST(OnnxLightSigmoidSoftmaxKernel, SoftmaxMatchesReferenceIncludingTailsAndAliasing) {
   const onnx_light_cpu::SoftmaxKernel kernel(Context());
   for (std::int64_t columns : {1, 2, 3, 4, 5, 6, 7, 8, 9, 15, 16, 17, 31, 32, 33, 1023, 1025}) {

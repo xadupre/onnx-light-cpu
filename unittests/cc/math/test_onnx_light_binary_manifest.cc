@@ -18,6 +18,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <filesystem>
 #include <limits>
@@ -451,6 +452,44 @@ TEST(OnnxLightBinaryManifest, ConfiguredTuningControlsExecutionAndRejectsInvalid
 
   EXPECT_EQ(kernel.TuningKey(static_cast<int32_t>(rt_ns::DataType::STRING)).device,
             sym_ns::Device::kUndefined);
+}
+
+TEST(OnnxLightBinaryManifest, RejectsUndersizedInputAndPreallocatedOutputBuffers) {
+  ONNX_LIGHT_NAMESPACE::NodeProto node;
+  node.set_op_type("Add");
+  node.add_input("left");
+  node.add_input("right");
+  node.add_output("output");
+  const rt_ns::KernelContext context(rt_ns::OpsetId(std::string(), 14));
+  const onnx_light_cpu::BinaryElementwiseKernel kernel(node, context);
+  const rt_ns::Tensor left = rt_ns::Tensor::FromFloat("left", {2}, std::vector<float>{1.0f, 2.0f});
+  const rt_ns::Tensor right =
+      rt_ns::Tensor::FromFloat("right", {2}, std::vector<float>{3.0f, 4.0f});
+
+  std::array<float, 1> storage{};
+  const auto borrowed = [&](const char *name) {
+    return rt_ns::Tensor::Borrow(name, rt_ns::DataType::FLOAT, {2},
+                                 reinterpret_cast<const std::uint8_t *>(storage.data()),
+                                 sizeof(float));
+  };
+  EXPECT_THROW(kernel(borrowed("left"), right), std::invalid_argument);
+  EXPECT_THROW(kernel(left, borrowed("right")), std::invalid_argument);
+  auto output = borrowed("output");
+  EXPECT_THROW(kernel(left, right, output), std::invalid_argument);
+}
+
+TEST(OnnxLightBinaryManifest, RejectsUndersizedBorrowedStringStorage) {
+  ONNX_LIGHT_NAMESPACE::NodeProto node;
+  node.set_op_type("Equal");
+  node.add_input("left");
+  node.add_input("right");
+  node.add_output("output");
+  const rt_ns::KernelContext context(rt_ns::OpsetId(std::string(), 19));
+  const onnx_light_cpu::BinaryElementwiseKernel kernel(node, context);
+  const std::vector<std::string> storage = {"one"};
+  const auto left = rt_ns::Tensor::BorrowStrings("left", {2}, storage);
+  const auto right = rt_ns::Tensor::FromStrings("right", {2}, {"one", "two"});
+  EXPECT_THROW(kernel(left, right), std::invalid_argument);
 }
 
 } // namespace
