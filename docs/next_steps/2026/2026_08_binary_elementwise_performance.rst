@@ -46,7 +46,7 @@ raw samples, affinity, effective thread count, and selected tuning parameters
 recorded before accepting any optimization.
 
 FP32 fixed-exponent broadcast follow-up
---------------------------------------
+----------------------------------------
 
 The FP32 ``Pow`` scalar-exponent adapter already recognized exponents 2
 through 5, but its per-element finite/underflow checks prevented the
