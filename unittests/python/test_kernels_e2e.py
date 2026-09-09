@@ -98,10 +98,14 @@ for _op_type in {
     "RMSNormalization",
 }:
     _BENCHMARK_TYPE_SUFFIXES[_op_type] = "(?:float32|float16|bfloat16)"
+_BENCHMARK_TYPE_SUFFIXES["SimplifiedLayerNormalization"] = "(?:float32|float64|float16|bfloat16)"
+_BENCHMARK_TYPE_SUFFIXES["SkipSimplifiedLayerNormalization"] = "(?:float32|float16|bfloat16)"
 _BENCHMARK_OP_TAGS = {
     "com.microsoft::LinearAttention": "microsoft_linear_attention",
     "GroupQueryAttention": "group_query_attention",
     "RMSNormalization": "rms_normalization",
+    "SimplifiedLayerNormalization": "simplified_layer_normalization",
+    "SkipSimplifiedLayerNormalization": "skip_simplified_layer_normalization",
 }
 _BENCHMARK_NAME_PATTERN = (
     "^test_cpu_(?:"
@@ -482,6 +486,7 @@ class TestBackendCases(ExtTestCase):
                     "Or",
                     "PRelu",
                     "Pow",
+                    "SkipSimplifiedLayerNormalization",
                     "Sub",
                     "Sum",
                     "Xor",
@@ -489,6 +494,8 @@ class TestBackendCases(ExtTestCase):
             ):
                 assert isinstance(record.since_version, int)
                 assert record.since_version >= 1
+            elif record.op_type == "SimplifiedLayerNormalization":
+                assert record.since_version == 1
             elif record.op_type in {"Attention", "RMSNormalization"}:
                 assert record.since_version == 23
             elif record.op_type == "LinearAttention" and record.domain != "com.microsoft":

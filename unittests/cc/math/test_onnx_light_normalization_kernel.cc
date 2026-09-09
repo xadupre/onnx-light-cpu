@@ -389,6 +389,90 @@ TEST(OnnxLightNormalizationKernel, InstanceNormalizationSupportsEveryFloatType) 
   }
 }
 
+TEST(OnnxLightNormalizationKernel, ScaleBiasPreservesRoundingTailsAndInPlaceOutputs) {
+  const std::vector<float> values = {256.1F,
+                                     -256.1F,
+                                     0.0F,
+                                     -0.0F,
+                                     1.0F,
+                                     std::numeric_limits<float>::denorm_min(),
+                                     std::numeric_limits<float>::max(),
+                                     std::numeric_limits<float>::infinity(),
+                                     -std::numeric_limits<float>::infinity(),
+                                     std::numeric_limits<float>::quiet_NaN()};
+  const float multiplier = 316.22778F;
+  const float offset = -(values.front() * multiplier);
+  for (std::size_t count = 0; count <= 81; ++count) {
+    SCOPED_TRACE(count);
+    std::vector<float> input(count + 2, -42.0F);
+    for (std::size_t i = 0; i < count; ++i) {
+      input[i + 1] = values[i % values.size()];
+    }
+    auto in_place = input;
+    std::vector<float> output(count + 2, -42.0F);
+    onnx_light_cpu::ApplyNormalizationScaleBiasFloat32(input.data() + 1, output.data() + 1, count,
+                                                       multiplier, offset);
+    onnx_light_cpu::ApplyNormalizationScaleBiasFloat32(in_place.data() + 1, in_place.data() + 1,
+                                                       count, multiplier, offset);
+    EXPECT_EQ(output.front(), -42.0F);
+    EXPECT_EQ(output.back(), -42.0F);
+    EXPECT_EQ(in_place.front(), -42.0F);
+    EXPECT_EQ(in_place.back(), -42.0F);
+    for (std::size_t i = 0; i < count; ++i) {
+      volatile float product = input[i + 1] * multiplier;
+      const float expected = product + offset;
+      if (std::isnan(expected)) {
+        EXPECT_TRUE(std::isnan(output[i + 1]));
+        EXPECT_TRUE(std::isnan(in_place[i + 1]));
+      } else {
+        EXPECT_EQ(output[i + 1], expected);
+        EXPECT_EQ(in_place[i + 1], expected);
+      }
+    }
+  }
+}
+
+TEST(OnnxLightNormalizationKernel, InstanceSimdAffinePreservesLargeConstantSlices) {
+  const onnx_light_cpu::InstanceNormalizationKernel kernel(MakeContext(22));
+  constexpr std::int64_t channels = 512;
+  const auto scale = rt_ns::Tensor::FromFloat("", {channels}, std::vector<float>(channels, 1.0F));
+  const auto bias = rt_ns::Tensor::FromFloat("", {channels}, std::vector<float>(channels, 0.0F));
+  for (const float value : {256.1F, -256.1F, std::ldexp(1.0F, 70)}) {
+    const auto x =
+        rt_ns::Tensor::FromFloat("", {1, channels, 34}, std::vector<float>(channels * 34, value));
+    const auto y = kernel(x, scale, bias);
+    for (std::size_t i = 0; i < channels * 34; ++i) {
+      EXPECT_EQ(Value(y, i), 0.0) << value << ", " << i;
+    }
+  }
+}
+
+TEST(OnnxLightNormalizationKernel, InstanceSimdAffinePreservesExecutorAndNestedResults) {
+  const onnx_light_cpu::InstanceNormalizationKernel kernel(MakeContext(22));
+  std::vector<float> values(2 * 128 * 513);
+  for (std::size_t i = 0; i < values.size(); ++i) {
+    values[i] = static_cast<float>(static_cast<int>(i % 29) - 14) * 0.125F;
+  }
+  const auto x = rt_ns::Tensor::FromFloat("", {2, 128, 513}, values);
+  const auto scale = rt_ns::Tensor::FromFloat("", {128}, std::vector<float>(128, -1.25F));
+  const auto bias = rt_ns::Tensor::FromFloat("", {128}, std::vector<float>(128, 0.75F));
+  const auto expected = kernel(x, scale, bias);
+  InlineExecutor executor;
+  onnx_light_cpu::ExecutionExecutorView view{&executor, 8, &InlineExecutor::Run};
+  onnx_light_cpu::ExecutionExecutorScope scope(&view);
+  const auto actual = kernel(x, scale, bias);
+  EXPECT_EQ(executor.dispatches, 1);
+  EXPECT_GT(executor.blocks, 1);
+  EXPECT_LE(executor.blocks, 8);
+  onnx_light_cpu::detail::ExecutionRegionScope region;
+  const auto nested = kernel(x, scale, bias);
+  EXPECT_EQ(executor.dispatches, 1);
+  for (std::size_t i = 0; i < values.size(); ++i) {
+    EXPECT_EQ(Value(actual, i), Value(expected, i));
+    EXPECT_EQ(Value(nested, i), Value(expected, i));
+  }
+}
+
 TEST(OnnxLightNormalizationKernel, ContiguousMomentsRemainStableForLargeOffsets) {
   std::vector<float> values(10000);
   for (std::size_t i = 0; i < values.size(); ++i) {

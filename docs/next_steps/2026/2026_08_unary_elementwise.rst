@@ -231,11 +231,24 @@ limits without changing this portable fallback.
 Zero leaves the participant count automatic. A positive value requests that
 exact count once parallel execution is worthwhile, but the executor still
 clamps it to ``parallel.max_participants`` and the session limit.
+For streaming FP32 ``Abs``, the AVX/AVX2 implementation distributes 64 KiB tiles
+among runtime-owned participants, allowing faster workers to finish tiles
+instead of waiting for one slow fixed range. Cached-store, single-threaded,
+and nested calls remain contiguous. Streaming participants are bounded by
+the ``parallel.target_block_bytes`` input-work budget (1 MiB by default for
+AVX/AVX2). Other cost-model decisions remain unchanged.
+
 ``Abs`` also accepts ``memory.streaming_store_threshold_bytes``; zero disables
 non-temporal stores, while a positive value enables them for FP32 tensors at
-or above that total input size. The portable default is zero: streaming stores
-remain opt-in because their benefit depends on worker range size and memory
-topology, and every worker must publish them with its own fence.
+or above that total input size. AVX/AVX2 defaults to at least 16 MiB and requires
+the combined input and output to exceed the detected L3 cache. Unknown cache
+topology keeps streaming opt-in, so a threshold measured on a small-cache host
+is not imposed on a large-cache processor. Streaming writes cover only complete
+aligned cache lines; prefixes and tails use ordinary stores, and each worker
+publishes its streaming writes with its own fence. The AVX-512 portable default
+remains zero (opt-in); scalar and SSE2 retain ordinary stores.
+``DefaultAbsFloat32ExecutionTuning()`` returns the defaults of the selected ISA,
+and the runtime tuning schema uses those same values.
 
 The portable defaults retain SIMD execution inline through the measured
 small/medium-tensor region:
@@ -250,7 +263,7 @@ small/medium-tensor region:
      - Maximum participants
    * - ``Abs`` FP32
      - 2 MiB
-     - 256 KiB
+     - 1 MiB (AVX/AVX2), 256 KiB otherwise
      - 32
    * - ``Abs`` INT32
      - 512 KiB

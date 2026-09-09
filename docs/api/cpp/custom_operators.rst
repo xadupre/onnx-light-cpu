@@ -10,6 +10,24 @@ available through these APIs.
 .. doxygenfunction:: onnx_light_cpu::RegisterMicrosoftShapeAndMemoryFunctions
    :project: onnx_light_cpu
 
+.. doxygenfunction:: onnx_light_cpu::GetExperimentalOpSchemasWithHistory
+   :project: onnx_light_cpu
+
+.. doxygenfunction:: onnx_light_cpu::RegisterExperimentalShapeAndMemoryFunctions
+   :project: onnx_light_cpu
+
+.. doxygenfunction:: onnx_light_cpu::ComputeShapeSimplifiedLayerNormalization
+   :project: onnx_light_cpu
+
+.. doxygenfunction:: onnx_light_cpu::ComputePeakMemorySimplifiedLayerNormalization
+   :project: onnx_light_cpu
+
+.. doxygenfunction:: onnx_light_cpu::ComputeShapeSkipSimplifiedLayerNormalization
+   :project: onnx_light_cpu
+
+.. doxygenfunction:: onnx_light_cpu::ComputePeakMemorySkipSimplifiedLayerNormalization
+   :project: onnx_light_cpu
+
 .. doxygenfunction:: onnx_light_cpu::RegisterCustomOperatorGradients
    :project: onnx_light_cpu
 

@@ -396,13 +396,45 @@ TEST(OnnxLightBackendKernels, GroupQueryAttentionRunsThroughRuntime) {
 }
 
 TEST(OnnxLightBackendKernels, MicrosoftCorrectnessCasesRunWithNaiveRegistration) {
-  for (const std::string &op_type :
-       {"BiasGelu", "CDist", "GroupQueryAttention", "LinearAttention"}) {
+  for (const std::string &op_type : {"BiasGelu", "CDist", "GroupQueryAttention", "LinearAttention",
+                                     "SkipSimplifiedLayerNormalization"}) {
     const auto failures = RunCpuBackendCases(op_type, core::backend_test::TestMode::TEST, {},
                                              onnx_light_cpu::MicrosoftKernelImplementation::NAIVE);
     EXPECT_TRUE(failures.empty()) << Describe(failures);
   }
   onnx_light_cpu::RegisterAllKernels();
+}
+
+TEST(OnnxLightBackendKernels, SkipSimplifiedLayerNormalizationRunsThroughRuntime) {
+  EXPECT_EQ(CollectCpuCases("SkipSimplifiedLayerNormalization", core::backend_test::TestMode::TEST)
+                .size(),
+            15u);
+  const auto failures =
+      RunCpuBackendCases("SkipSimplifiedLayerNormalization", core::backend_test::TestMode::TEST);
+  EXPECT_TRUE(failures.empty()) << Describe(failures);
+}
+
+TEST(OnnxLightBackendKernels, SkipSimplifiedLayerNormalizationBenchmarksDeclareLazyCounts) {
+  auto cases =
+      CollectCpuCases("SkipSimplifiedLayerNormalization", core::backend_test::TestMode::BENCHMARK);
+  ASSERT_EQ(cases.size(), 6u);
+  onnx_light_cpu::RegisterAllKernels();
+  std::vector<std::string> failures;
+  for (auto &test_case : cases) {
+    EXPECT_FALSE(test_case.materialized());
+    const bool prefill = test_case.name.find("prefill") != std::string::npos;
+    const std::int64_t count = (prefill ? 128 : 1) * 4096;
+    std::vector<std::int64_t> input_counts{count, count, 4096};
+    if (prefill) {
+      input_counts.push_back(4096);
+    }
+    EXPECT_EQ(test_case.declared_input_element_counts, input_counts);
+    EXPECT_EQ(test_case.declared_output_element_counts, (std::vector<std::int64_t>{count, count}));
+    TestCaseUnloadGuard unload_guard(test_case);
+    test_case.set_expected_outputs_generated(true);
+    RunCaseThroughRuntime(test_case, true, failures);
+  }
+  EXPECT_TRUE(failures.empty()) << Describe(failures);
 }
 
 TEST(OnnxLightBackendKernels, NotRunsThroughRuntime) {
@@ -430,6 +462,16 @@ TEST(OnnxLightBackendKernels, GatherRunsThroughRuntime) { CheckTensorRegularCase
 TEST(OnnxLightBackendKernels, SliceRunsThroughRuntime) { CheckTensorRegularCases("Slice"); }
 
 TEST(OnnxLightBackendKernels, ConcatRunsThroughRuntime) { CheckTensorRegularCases("Concat"); }
+
+TEST(OnnxLightBackendKernels, SplitRunsThroughRuntime) {
+  EXPECT_EQ(CollectCpuCases("Split", core::backend_test::TestMode::TEST).size(), 177u);
+  CheckTensorRegularCases("Split");
+}
+
+TEST(OnnxLightBackendKernels, CastRunsThroughRuntime) {
+  EXPECT_EQ(CollectCpuCases("Cast", core::backend_test::TestMode::TEST).size(), 607u);
+  CheckTensorRegularCases("Cast");
+}
 
 TEST(OnnxLightBackendKernels, GemmRunsThroughRuntime) {
   const std::vector<std::string> failures =
@@ -479,6 +521,28 @@ TEST(OnnxLightBackendKernels, MatMulIntegerRunsThroughRuntime) {
 TEST(OnnxLightBackendKernels, RmsNormalizationRunsThroughRuntime) {
   const std::vector<std::string> failures =
       RunCpuBackendCases("RMSNormalization", core::backend_test::TestMode::TEST);
+  EXPECT_TRUE(failures.empty()) << Describe(failures);
+}
+
+TEST(OnnxLightBackendKernels, SimplifiedLayerNormalizationRunsThroughRuntime) {
+  EXPECT_EQ(
+      CollectCpuCases("SimplifiedLayerNormalization", core::backend_test::TestMode::TEST).size(),
+      832u);
+  CheckTensorRegularCases("SimplifiedLayerNormalization");
+}
+
+TEST(OnnxLightBackendKernels, SimplifiedLayerNormalizationBenchmarksAreLazyAndCorrect) {
+  auto cases =
+      CollectCpuCases("SimplifiedLayerNormalization", core::backend_test::TestMode::BENCHMARK);
+  ASSERT_EQ(cases.size(), 96u);
+  onnx_light_cpu::RegisterAllKernels();
+  std::vector<std::string> failures;
+  for (auto &test_case : cases) {
+    EXPECT_FALSE(test_case.materialized());
+    TestCaseUnloadGuard unload_guard(test_case);
+    test_case.set_expected_outputs_generated(true);
+    RunCaseThroughRuntime(test_case, true, failures);
+  }
   EXPECT_TRUE(failures.empty()) << Describe(failures);
 }
 
@@ -853,8 +917,29 @@ TEST(OnnxLightBackendKernels, NotBenchmarkRunsThroughRuntime) {
   EXPECT_TRUE(failures.empty()) << Describe(failures);
 }
 
+void CheckTensorBenchmarkOutputs(std::vector<TestCase> &cases, int first_output_count = 1) {
+  onnx_light_cpu::RegisterAllKernels();
+  std::vector<std::string> failures;
+  {
+    TestCase &input_only = cases.front();
+    TestCaseUnloadGuard input_only_guard(input_only);
+    ASSERT_EQ(input_only.data_sets().size(), 1u);
+    EXPECT_FALSE(input_only.data_sets()[0].expected_outputs_generated);
+    EXPECT_TRUE(input_only.data_sets()[0].outputs.empty());
+    EXPECT_EQ(input_only.model().ref_graph().output_size(), first_output_count);
+    RunCaseThroughRuntime(input_only, /*compare=*/false, failures);
+  }
+  for (TestCase &test_case : cases) {
+    test_case.set_expected_outputs_generated(true);
+    TestCaseUnloadGuard unload_guard(test_case);
+    RunCaseThroughRuntime(test_case, /*compare=*/true, failures);
+  }
+  EXPECT_TRUE(failures.empty()) << Describe(failures);
+}
+
 void CheckTensorBenchmarks(const std::string &op_type, const std::vector<std::string> &layouts,
-                           const std::vector<std::string> &parameter_tags) {
+                           const std::vector<std::string> &parameter_tags,
+                           int first_output_count = 1) {
   std::vector<TestCase> cases = CollectCpuCases(op_type, core::backend_test::TestMode::BENCHMARK);
   const std::array<std::string, 6> types = {
       "float32", "float64", "float16", "bfloat16", "int8", "int64",
@@ -874,23 +959,32 @@ void CheckTensorBenchmarks(const std::string &op_type, const std::vector<std::st
       }
     }
   }
-  onnx_light_cpu::RegisterAllKernels();
-  std::vector<std::string> failures;
-  {
-    TestCase &input_only = cases.front();
-    TestCaseUnloadGuard input_only_guard(input_only);
-    ASSERT_EQ(input_only.data_sets().size(), 1u);
-    EXPECT_FALSE(input_only.data_sets()[0].expected_outputs_generated);
-    EXPECT_TRUE(input_only.data_sets()[0].outputs.empty());
-    EXPECT_EQ(input_only.model().ref_graph().output_size(), 1);
-    RunCaseThroughRuntime(input_only, /*compare=*/false, failures);
+  CheckTensorBenchmarkOutputs(cases, first_output_count);
+}
+
+TEST(OnnxLightBackendKernels, CastBenchmarksCoverConversionsShapesAndLazyOutputs) {
+  auto cases = CollectCpuCases("Cast", core::backend_test::TestMode::BENCHMARK);
+  ASSERT_EQ(cases.size(), 132u);
+  std::set<std::string> names;
+  for (const TestCase &test_case : cases) {
+    EXPECT_FALSE(test_case.materialized()) << test_case.name;
+    EXPECT_TRUE(names.insert(test_case.name).second) << test_case.name;
   }
-  for (TestCase &test_case : cases) {
-    test_case.set_expected_outputs_generated(true);
-    TestCaseUnloadGuard unload_guard(test_case);
-    RunCaseThroughRuntime(test_case, /*compare=*/true, failures);
+  for (const std::string &shape : {"scalar", "small", "medium", "tail", "large", "matrix"}) {
+    for (const std::string &pair : {
+             "int64_to_int32",     "int32_to_int64",      "float32_to_float16",
+             "float16_to_float32", "float32_to_bfloat16", "bfloat16_to_float32",
+             "float32_to_float64", "float64_to_float32",  "float32_to_int32",
+             "int32_to_float32",   "float32_to_int64",    "int64_to_float32",
+             "float32_to_int8",    "int8_to_float32",     "float32_to_uint8",
+             "uint8_to_float32",   "float32_to_bool",     "bool_to_float32",
+             "int64_to_int8",      "int16_to_int32",      "float32_to_float32",
+             "int64_to_int64",
+         }) {
+      EXPECT_TRUE(names.contains("test_cpu_cast_" + shape + "_" + pair + "_benchmark"));
+    }
   }
-  EXPECT_TRUE(failures.empty()) << Describe(failures);
+  CheckTensorBenchmarkOutputs(cases);
 }
 
 TEST(OnnxLightBackendKernels, GatherBenchmarksCoverTypesLayoutsAndLazyOutputs) {
@@ -914,6 +1008,14 @@ TEST(OnnxLightBackendKernels, ConcatBenchmarksCoverTypesLayoutsAndLazyOutputs) {
                         {"axis0", "last_axis", "middle_axis", "tail", "narrow", "many_inputs",
                          "uneven", "single", "empty_input", "vector"},
                         {""});
+}
+
+TEST(OnnxLightBackendKernels, SplitBenchmarksCoverTypesLayoutsAndLazyOutputs) {
+  CheckTensorBenchmarks("Split",
+                        {"qkv_decode", "qkv_small", "qkv_prefill", "qkv_batched", "first_axis",
+                         "middle_axis", "last_axis", "vector", "narrow", "many_outputs", "tail",
+                         "uneven"},
+                        {""}, 3);
 }
 
 TEST(OnnxLightBackendKernels, BinaryBenchmarkCorporaAreUnmaterializedAndRunThroughRuntime) {

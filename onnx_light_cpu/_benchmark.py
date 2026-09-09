@@ -176,9 +176,16 @@ def infer_pr_benchmark_selection(
             kernel.op_type
             for kernel in kernels
             if any(_operator_path_pattern(kernel.op_type).search(path) for path in relevant_paths)
-            or (relevant_paths and _operator_symbol_pattern(kernel.op_type).search(added_content))
         }
     )
+    if not operators and relevant_paths:
+        operators = sorted(
+            {
+                kernel.op_type
+                for kernel in kernels
+                if _operator_symbol_pattern(kernel.op_type).search(added_content)
+            }
+        )
     if not operators:
         return [], []
 
@@ -510,7 +517,11 @@ def _pr_benchmark_markdown(aggregated_rows: Sequence[dict[str, Any]]) -> str:
             ),
         )
     ]
-    return _benchmark_markdown(pr_rows, _PR_COLUMNS)
+    return (
+        '<div style="max-height: 500px; overflow-x: auto; overflow-y: auto;">\n\n'
+        + _benchmark_markdown(pr_rows, _PR_COLUMNS)
+        + "\n</div>\n"
+    )
 
 
 def write_pr_benchmark_markdown(

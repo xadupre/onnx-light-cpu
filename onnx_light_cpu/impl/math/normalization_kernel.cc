@@ -17,6 +17,21 @@ using MeanSquareFunction = float (*)(const float *, std::size_t);
 using MomentsFunction = Float32NormalizationMoments (*)(const float *, std::size_t);
 using AffineFunction = void (*)(const float *, const float *, const float *, float *, std::size_t,
                                 float, float);
+using ScaleBiasFunction = void (*)(const float *, float *, std::size_t, float, float);
+
+// Match the SIMD path's separately rounded multiply and add on FMA-capable CPUs.
+#if defined(__GNUC__) && !defined(__clang__)
+__attribute__((optimize("fp-contract=off")))
+#endif
+void ScaleBiasScalar(const float *input, float *output, std::size_t count, float multiplier,
+                     float offset) {
+#ifdef __clang__
+#pragma clang fp contract(off)
+#endif
+  for (std::size_t index = 0; index < count; ++index) {
+    output[index] = input[index] * multiplier + offset;
+  }
+}
 
 float CancellationFloor(float second_moment, std::size_t count) {
   const std::size_t accumulation_steps = count / 4 + (count % 4 != 0);
@@ -72,6 +87,7 @@ struct NormalizationDispatch {
   MeanSquareFunction mean_square;
   MomentsFunction moments;
   AffineFunction affine;
+  ScaleBiasFunction scale_bias;
 };
 
 const NormalizationDispatch &GetNormalizationDispatch() {
@@ -79,19 +95,20 @@ const NormalizationDispatch &GetNormalizationDispatch() {
     const SimdLevel simd = DetectSimdLevel();
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512
     if (simd == SimdLevel::kAVX512) {
-      return NormalizationDispatch{&ComputeNormalizationMeanSquareFloat32_AVX512,
-                                   &ComputeNormalizationMomentsFloat32_AVX512,
-                                   &ApplyNormalizationAffineFloat32_AVX512};
+      return NormalizationDispatch{
+          &ComputeNormalizationMeanSquareFloat32_AVX512, &ComputeNormalizationMomentsFloat32_AVX512,
+          &ApplyNormalizationAffineFloat32_AVX512, &ApplyNormalizationScaleBiasFloat32_AVX512};
     }
 #endif
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
     if (simd >= SimdLevel::kAVX2 && CpuSupportsFma()) {
-      return NormalizationDispatch{&ComputeNormalizationMeanSquareFloat32_AVX2,
-                                   &ComputeNormalizationMomentsFloat32_AVX2,
-                                   &ApplyNormalizationAffineFloat32_AVX2};
+      return NormalizationDispatch{
+          &ComputeNormalizationMeanSquareFloat32_AVX2, &ComputeNormalizationMomentsFloat32_AVX2,
+          &ApplyNormalizationAffineFloat32_AVX2, &ApplyNormalizationScaleBiasFloat32_AVX2};
     }
 #endif
-    return NormalizationDispatch{&MeanSquareScalar, &MomentsScalar, &AffineScalar};
+    return NormalizationDispatch{&MeanSquareScalar, &MomentsScalar, &AffineScalar,
+                                 &ScaleBiasScalar};
   }();
   return dispatch;
 }
@@ -122,6 +139,11 @@ void ApplyNormalizationAffineFloat32(const float *input, const float *scale, con
                                      float *output, std::size_t count, float center,
                                      float multiplier) {
   GetNormalizationDispatch().affine(input, scale, bias, output, count, center, multiplier);
+}
+
+void ApplyNormalizationScaleBiasFloat32(const float *input, float *output, std::size_t count,
+                                        float multiplier, float offset) {
+  GetNormalizationDispatch().scale_bias(input, output, count, multiplier, offset);
 }
 
 } // namespace onnx_light_cpu

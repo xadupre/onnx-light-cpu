@@ -12,6 +12,11 @@ namespace onnx_light_cpu {
 void RmsNormalizationFloat32(const float *input, const float *scale, float *output,
                              std::size_t rows, std::size_t width, float epsilon);
 
+/// Optionally stores one inverse RMS per row without repeating the reduction.
+void RmsNormalizationFloat32(const float *input, const float *scale, float *output,
+                             std::size_t rows, std::size_t width, float epsilon,
+                             float *inverse_rms_output);
+
 void RmsNormalizationFloat16(const std::uint16_t *input, const std::uint16_t *scale,
                              std::uint16_t *output, std::size_t rows, std::size_t width,
                              float epsilon);

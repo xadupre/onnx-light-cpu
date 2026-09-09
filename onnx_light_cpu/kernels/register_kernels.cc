@@ -14,6 +14,8 @@
 #include "onnx_light_cpu/kernels/com_microsoft/naive_cdist_kernel.h"
 #include "onnx_light_cpu/kernels/com_microsoft/naive_group_query_attention_kernel.h"
 #include "onnx_light_cpu/kernels/com_microsoft/naive_linear_attention_kernel.h"
+#include "onnx_light_cpu/kernels/com_microsoft/naive_skip_simplified_layer_normalization_kernel.h"
+#include "onnx_light_cpu/kernels/com_microsoft/skip_simplified_layer_normalization_kernel.h"
 #include "onnx_light_cpu/kernels/elementwise/binary_kernel.h"
 #include "onnx_light_cpu/kernels/elementwise/variadic_kernel.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
@@ -26,10 +28,13 @@
 #include "onnx_light_cpu/kernels/math/normalization_kernel.h"
 #include "onnx_light_cpu/kernels/math/rms_normalization_kernel.h"
 #include "onnx_light_cpu/kernels/math/sigmoid_softmax_kernel.h"
+#include "onnx_light_cpu/kernels/math/simplified_layer_normalization_kernel.h"
 #include "onnx_light_cpu/kernels/math/swiglu_kernel.h"
+#include "onnx_light_cpu/kernels/tensor/cast_kernel.h"
 #include "onnx_light_cpu/kernels/tensor/concat_kernel.h"
 #include "onnx_light_cpu/kernels/tensor/gather_kernel.h"
 #include "onnx_light_cpu/kernels/tensor/slice_kernel.h"
+#include "onnx_light_cpu/kernels/tensor/split_kernel.h"
 #include "onnx_light_cpu/kernels/traditionalml/tree_ensemble_kernel.h"
 
 #include "onnx_proto/onnx_helper.h"
@@ -99,12 +104,14 @@ void RegisterMicrosoftKernels(MicrosoftKernelImplementation implementation) {
     RegisterNaiveCDistKernel();
     RegisterNaiveGroupQueryAttentionKernel();
     RegisterNaiveMicrosoftLinearAttentionKernel();
+    RegisterNaiveSkipSimplifiedLayerNormalizationKernel();
     return;
   case MicrosoftKernelImplementation::OPTIMIZED:
     RegisterBiasGeluKernel();
     RegisterCDistKernel();
     RegisterGroupQueryAttentionKernel();
     RegisterMicrosoftLinearAttentionKernel();
+    RegisterSkipSimplifiedLayerNormalizationKernel();
     return;
   }
   throw std::invalid_argument("unknown MicrosoftKernelImplementation");
@@ -125,15 +132,18 @@ void RegisterAllKernels(MicrosoftKernelImplementation implementation) {
   RegisterExpKernel();
   RegisterLogKernel();
   RegisterGemmKernel();
+  RegisterCastKernel();
   RegisterConcatKernel();
   RegisterGatherKernel();
   RegisterSliceKernel();
+  RegisterSplitKernel();
   RegisterMatMulKernel();
   RegisterIntegerMatMulKernels();
   RegisterNotKernel();
   RegisterNormalizationKernels();
   RegisterRmsNormalizationKernel();
   RegisterSigmoidKernel();
+  RegisterSimplifiedLayerNormalizationKernel();
   RegisterSoftmaxKernel();
   RegisterSwiGLUKernel();
   RegisterTreeEnsembleKernel();

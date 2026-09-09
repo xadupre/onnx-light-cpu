@@ -18,6 +18,27 @@ float HorizontalSum(__m256 value) {
 
 } // namespace
 
+// Keep the multiply rounded before adding the offset, including for constant inputs.
+#if defined(__GNUC__) && !defined(__clang__)
+__attribute__((optimize("fp-contract=off")))
+#endif
+void ApplyNormalizationScaleBiasFloat32_AVX2(const float *input, float *output, std::size_t count,
+                                             float multiplier, float offset) {
+#ifdef __clang__
+#pragma clang fp contract(off)
+#endif
+  const __m256 scale = _mm256_set1_ps(multiplier);
+  const __m256 bias = _mm256_set1_ps(offset);
+  std::size_t index = 0;
+  for (; index + 8 <= count; index += 8) {
+    const __m256 value = _mm256_loadu_ps(input + index);
+    _mm256_storeu_ps(output + index, _mm256_add_ps(_mm256_mul_ps(value, scale), bias));
+  }
+  for (; index < count; ++index) {
+    output[index] = input[index] * multiplier + offset;
+  }
+}
+
 float ComputeNormalizationMeanSquareFloat32_AVX2(const float *input, std::size_t count) {
   __m256 sums[4] = {_mm256_setzero_ps(), _mm256_setzero_ps(), _mm256_setzero_ps(),
                     _mm256_setzero_ps()};

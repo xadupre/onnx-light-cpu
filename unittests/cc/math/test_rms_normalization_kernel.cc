@@ -8,6 +8,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -69,6 +70,7 @@ TEST(RmsNormalizationKernel, Float16MatchesReferenceAcrossWidths) {
       reference_input[i] = Float16BitsToFloat(input[i]);
       reference_scale[i] = Float16BitsToFloat(scale[i]);
     }
+
     std::vector<std::uint16_t> output(width);
     RmsNormalizationFloat16(input.data(), scale.data(), output.data(), 1, width, 1e-6f);
     for (std::size_t column = 0; column < width; ++column) {
@@ -77,6 +79,34 @@ TEST(RmsNormalizationKernel, Float16MatchesReferenceAcrossWidths) {
       EXPECT_NEAR(actual, expected, 5e-2f) << "width=" << width << " column=" << column;
     }
   }
+}
+
+TEST(RmsNormalizationKernel, OptionalInverseRmsPreservesOutput) {
+  for (std::size_t width : {1U, 7U, 8U, 9U, 31U, 32U, 33U, 127U, 128U, 129U}) {
+    constexpr std::size_t rows = 3;
+    std::vector<float> input(rows * width);
+    std::vector<float> scale(width, 1.5F);
+    for (std::size_t row = 0; row < rows; ++row) {
+      std::fill_n(input.data() + row * width, width, static_cast<float>(row + 1));
+    }
+    std::vector<float> expected(input.size()), actual(input.size()), without_inverse(input.size());
+    std::vector<float> inverse(rows + 2, -1.0F);
+    RmsNormalizationFloat32(input.data(), scale.data(), expected.data(), rows, width, 0.0F);
+    RmsNormalizationFloat32(input.data(), scale.data(), actual.data(), rows, width, 0.0F,
+                            inverse.data() + 1);
+    RmsNormalizationFloat32(input.data(), scale.data(), without_inverse.data(), rows, width, 0.0F,
+                            nullptr);
+    EXPECT_EQ(actual, expected);
+    EXPECT_EQ(without_inverse, expected);
+    EXPECT_EQ(inverse.front(), -1.0F);
+    EXPECT_EQ(inverse.back(), -1.0F);
+    for (std::size_t row = 0; row < rows; ++row) {
+      EXPECT_FLOAT_EQ(inverse[row + 1], 1.0F / static_cast<float>(row + 1));
+    }
+  }
+  float inverse = -1.0F;
+  RmsNormalizationFloat32(nullptr, nullptr, nullptr, 0, 8, 1.0e-6F, &inverse);
+  EXPECT_EQ(inverse, -1.0F);
 }
 
 TEST(RmsNormalizationKernel, BFloat16MatchesReferenceAcrossWidths) {

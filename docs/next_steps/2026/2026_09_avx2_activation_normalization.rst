@@ -257,3 +257,78 @@ The direct-kernel comparison above must not be interpreted as registered
 allocation path must be measured with isolated runtime processes. Large
 multithread activations and the remaining BFloat16 and Float16 ``Softmax``
 loop families still require end-to-end parity coverage.
+
+InstanceNormalization affine follow-up
+---------------------------------------
+
+After the SIMD moments improvement in `#667
+<https://github.com/xadupre/onnx-light-cpu/pull/667>`_, FP32
+``InstanceNormalization`` still applied its channel multiplier and offset
+through the baseline inline loop. The affine pass now uses cached AVX2/FMA
+or AVX-512 dispatch for tensors containing at least 16,384 elements and
+spatial slices containing at least 32 elements. Smaller tensors retain the
+inline loop; selection happens once per tensor rather than once per slice.
+Other normalization operators, floating-point types, moments calculations,
+and executor scheduling are unchanged.
+
+The new scalar-parameter affine helper preserves a separately rounded
+multiply and add. FMA contraction is disabled for this helper, not for the
+existing moments or RMS kernels: contraction can turn an exactly cancelling
+constant-input result into a nonzero value. Coverage includes all short
+vector tails, unaligned and in-place buffers, NaN/infinity, large constants,
+and serial, executor, and nested execution.
+
+The following registered-runtime measurements used an Intel Xeon Platinum
+8480C and 96 configured runtime threads, comparing against the normalization
+implementation in main ``4de4b9c`` (including #667). Each value is the median
+of two run medians, with 200 warmups, up to 1,000 samples, and a one-second
+budget per phase. Baseline/candidate order was reversed in the second pair.
+Latencies are seconds and speedups compare against main, not ONNX Runtime.
+
+.. list-table::
+   :header-rows: 1
+
+   * - FP32 shape
+     - ISA ceiling
+     - Before
+     - After
+     - Before/after
+   * - [8, 16, 128]
+     - AVX-512
+     - 0.000008405
+     - 0.000006273
+     - 1.34x
+   * - [4, 32, 16, 16]
+     - AVX-512
+     - 0.000012202
+     - 0.000009424
+     - 1.29x
+   * - [8, 16, 128]
+     - AVX2
+     - 0.000006756
+     - 0.000006186
+     - 1.09x
+   * - [4, 32, 16, 16]
+     - AVX2
+     - 0.000011432
+     - 0.000008970
+     - 1.27x
+
+The two 8,192-element benchmark shapes retain the inline path. Their
+AVX-512 before/after ratios were 0.94x and 0.98x, and their AVX2 ratios
+were 1.00x and 1.02x; no speedup is claimed for those shapes. Single-thread
+comparisons also improved the two target shapes, with the small shapes
+remaining within approximately 4% of baseline. A small-worker-team
+experiment was rejected because it did not improve consistently over the
+SIMD affine change alone.
+
+Reproduce with identically configured builds on both revisions:
+
+.. code-block:: bash
+
+   python -m onnx_light_cpu benchmark --dtype float32 --onnxruntime \
+       --test '^test_cpu_instancenormalization_' --threads 96 \
+       -r 1000 -w 200 -t 1 -o instancenormalization.xlsx
+
+Repeat with an AVX2-ceiling build, and with ``--threads 1`` for the serial
+comparison. ONNX Runtime on this AVX-512 host is not itself capped to AVX2.
