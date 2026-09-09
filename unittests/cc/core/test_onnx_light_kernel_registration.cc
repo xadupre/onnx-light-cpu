@@ -124,6 +124,13 @@ TEST(KernelRegistration, CollectionReportsEveryActualRegistration) {
        {rt_ns::DataType::FLOAT},
        1,
        std::nullopt},
+      {"com.microsoft",
+       "SkipSimplifiedLayerNormalization",
+       sym_ns::Device::kCPU,
+       "onnx_light_cpu::SkipSimplifiedLayerNormalization",
+       {rt_ns::DataType::FLOAT, rt_ns::DataType::FLOAT16, rt_ns::DataType::BFLOAT16},
+       1,
+       std::nullopt},
       {"ai.onnx",
        "Exp",
        sym_ns::Device::kCPU,
@@ -436,13 +443,17 @@ TEST(KernelRegistration, MicrosoftImplementationPolicySelectsOneCompleteFamily) 
                 {"BiasGelu", "onnx_light_cpu::BiasGelu"},
                 {"CDist", "onnx_light_cpu::CDist"},
                 {"GroupQueryAttention", "onnx_light_cpu::GroupQueryAttention"},
-                {"LinearAttention", "onnx_light_cpu::MicrosoftLinearAttention"}}));
+                {"LinearAttention", "onnx_light_cpu::MicrosoftLinearAttention"},
+                {"SkipSimplifiedLayerNormalization",
+                 "onnx_light_cpu::SkipSimplifiedLayerNormalization"}}));
   EXPECT_EQ(microsoft_names(naive),
             (std::vector<std::pair<std::string, std::string>>{
                 {"BiasGelu", "onnx_light_cpu::NaiveBiasGelu"},
                 {"CDist", "onnx_light_cpu::NaiveCDist"},
                 {"GroupQueryAttention", "onnx_light_cpu::NaiveGroupQueryAttention"},
-                {"LinearAttention", "onnx_light_cpu::MicrosoftLinearAttention"}}));
+                {"LinearAttention", "onnx_light_cpu::MicrosoftLinearAttention"},
+                {"SkipSimplifiedLayerNormalization",
+                 "onnx_light_cpu::NaiveSkipSimplifiedLayerNormalization"}}));
   EXPECT_EQ(microsoft_names(onnx_light_cpu::CollectRegisteredKernels()),
             microsoft_names(optimized));
 }

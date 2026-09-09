@@ -160,11 +160,12 @@ float RunForwardObjective(const NodeProto &node, const std::vector<float> &query
 
 TEST(CustomOperatorSupport, ProvidesLightSchemas) {
   const auto schemas = onnx_light_cpu::GetMicrosoftOpSchemasWithHistory();
-  ASSERT_EQ(schemas.size(), 4U);
+  ASSERT_EQ(schemas.size(), 5U);
   EXPECT_EQ(schemas[0].name(), "BiasGelu");
   EXPECT_EQ(schemas[1].name(), "CDist");
   EXPECT_EQ(schemas[2].name(), "GroupQueryAttention");
   EXPECT_EQ(schemas[3].name(), "LinearAttention");
+  EXPECT_EQ(schemas[4].name(), "SkipSimplifiedLayerNormalization");
   for (const auto &schema : schemas) {
     EXPECT_EQ(schema.domain(), onnx_light_cpu::kMicrosoftDomain);
     EXPECT_EQ(schema.since_version(), 1);
@@ -178,7 +179,7 @@ TEST(CustomOperatorSupport, ProvidesLightSchemas) {
 
 TEST(CustomOperatorSupport, ProvidesReadOnlyInventory) {
   const auto support = onnx_light_cpu::CollectOperatorSupport();
-  ASSERT_EQ(support.size(), 5U);
+  ASSERT_EQ(support.size(), 6U);
   EXPECT_EQ(support[0].op_type, "BiasGelu");
   EXPECT_EQ(support[0].shape_inference_function, "onnx_light_cpu::ComputeShapeBiasGelu");
   EXPECT_EQ(support[0].peak_memory_function, "onnx_light_cpu::ComputePeakMemoryBiasGelu");
@@ -207,6 +208,14 @@ TEST(CustomOperatorSupport, ProvidesReadOnlyInventory) {
             "onnx_light_cpu::ComputePeakMemorySimplifiedLayerNormalization");
   EXPECT_TRUE(support[4].fusion_patterns.empty());
   EXPECT_FALSE(support[4].has_gradient);
+  EXPECT_EQ(support[5].domain, onnx_light_cpu::kMicrosoftDomain);
+  EXPECT_EQ(support[5].op_type, "SkipSimplifiedLayerNormalization");
+  EXPECT_EQ(support[5].shape_inference_function,
+            "onnx_light_cpu::ComputeShapeSkipSimplifiedLayerNormalization");
+  EXPECT_EQ(support[5].peak_memory_function,
+            "onnx_light_cpu::ComputePeakMemorySkipSimplifiedLayerNormalization");
+  EXPECT_TRUE(support[5].fusion_patterns.empty());
+  EXPECT_FALSE(support[5].has_gradient);
 }
 
 TEST(CustomOperatorSupport, InfersCDistShapeAndConstraint) {

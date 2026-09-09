@@ -18,4 +18,4 @@ def test_onnx_light_dev_dependency_version():
     ]
 
     assert len(onnx_light) == 3
-    assert all("/0.1.24/onnx_light-0.1.24-" in dependency for dependency in onnx_light)
+    assert all("/0.1.26/onnx_light-0.1.26-" in dependency for dependency in onnx_light)

@@ -13,6 +13,7 @@
 #include "onnx_extensions/shapes/shapes/nn/shape_nn.h"
 #endif
 
+#include <cmath>
 #include <cstdint>
 #include <limits>
 #include <mutex>
@@ -169,6 +170,12 @@ std::vector<OperatorSupportRegistration> CollectOperatorSupport() {
        "onnx_light_cpu::ComputePeakMemorySimplifiedLayerNormalization",
        {},
        false},
+      {kMicrosoftDomain,
+       "SkipSimplifiedLayerNormalization",
+       "onnx_light_cpu::ComputeShapeSkipSimplifiedLayerNormalization",
+       "onnx_light_cpu::ComputePeakMemorySkipSimplifiedLayerNormalization",
+       {},
+       false},
   };
 }
 
@@ -204,6 +211,116 @@ void ComputeShapeBiasGelu(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE::NodePr
   ConstrainEqual(ctx, a.Shape()[a.Shape().Rank() - 1], bias.Shape()[0],
                  "ComputeShapeBiasGelu: bias length must match the last input dimension.");
   ctx.Set(node.output(0), SymTensor(nullptr, a.Dtype(), a.Shape()));
+}
+
+void ComputeShapeSkipSimplifiedLayerNormalization(ShapesContext &ctx,
+                                                  const ONNX_LIGHT_NAMESPACE::NodeProto &node) {
+  if (node.input_size() < 3 || node.input_size() > 4 || node.input(0).empty() ||
+      node.input(1).empty() || node.input(2).empty() || node.output_size() < 1 ||
+      node.output_size() > 4 || node.output(0).empty()) {
+    throw std::invalid_argument(
+        "SkipSimplifiedLayerNormalization: expected input, skip, gamma, optional bias, "
+        "output, and optional statistics and residual outputs.");
+  }
+  for (const auto &attribute : node.attribute()) {
+    if (attribute.name() == "epsilon" && (!std::isfinite(attribute.f()) || attribute.f() < 0.0F)) {
+      throw std::invalid_argument(
+          "SkipSimplifiedLayerNormalization: epsilon must be finite and nonnegative.");
+    }
+  }
+  for (int i = 0; i < node.input_size(); ++i) {
+    if (!node.input(i).empty() && !ctx.Has(node.input(i))) {
+      throw std::invalid_argument(
+          "SkipSimplifiedLayerNormalization: missing descriptor for input slot " +
+          std::to_string(i) + " ('" + node.input(i) + "').");
+    }
+  }
+  const auto &input = ctx.Get(node.input(0));
+  const auto &skip = ctx.Get(node.input(1));
+  const auto &gamma = ctx.Get(node.input(2));
+  const auto &shape = input.Shape();
+  if (shape.Rank() != 2 && shape.Rank() != 3) {
+    throw std::invalid_argument("SkipSimplifiedLayerNormalization: input must have rank 2 or 3.");
+  }
+  const auto &hidden = shape[shape.Rank() - 1];
+  if (hidden.IsInt() && hidden.AsInt() > std::numeric_limits<int>::max()) {
+    throw std::invalid_argument("SkipSimplifiedLayerNormalization: H must fit int.");
+  }
+  if (hidden.IsExpr()) {
+    ctx.AddLessEqualConstraint(hidden.AsExpr(), std::to_string(std::numeric_limits<int>::max()));
+  }
+  for (int i = 0; i < node.input_size(); ++i) {
+    if (node.input(i).empty()) {
+      continue;
+    }
+    const auto &tensor = ctx.Get(node.input(i));
+    if ((tensor.Dtype() != sym_ns::TensorType::kFloat &&
+         tensor.Dtype() != sym_ns::TensorType::kFloat16 &&
+         tensor.Dtype() != sym_ns::TensorType::kBfloat16) ||
+        tensor.Dtype() != input.Dtype()) {
+      throw std::invalid_argument("SkipSimplifiedLayerNormalization: all inputs must have matching "
+                                  "FLOAT, FLOAT16, or BFLOAT16 types.");
+    }
+    for (size_t dim_index = 0; dim_index < tensor.Shape().Rank(); ++dim_index) {
+      const auto &dim = tensor.Shape()[dim_index];
+      const int64_t lower = dim_index + 1 == tensor.Shape().Rank() ? 1 : 0;
+      if (dim.IsInt() && dim.AsInt() < lower) {
+        throw std::invalid_argument(
+            "SkipSimplifiedLayerNormalization: dimensions must be nonnegative and H positive.");
+      }
+      if (dim.IsExpr()) {
+        ctx.AddLessEqualConstraint(std::to_string(lower), dim.AsExpr());
+      }
+    }
+  }
+  if (gamma.Shape().Rank() != 1) {
+    throw std::invalid_argument("SkipSimplifiedLayerNormalization: gamma must have rank 1.");
+  }
+  ConstrainEqual(ctx, shape[shape.Rank() - 1], gamma.Shape()[0],
+                 "SkipSimplifiedLayerNormalization: gamma length must match H.");
+  if (node.input_size() == 4 && !node.input(3).empty()) {
+    const auto &bias = ctx.Get(node.input(3));
+    if (bias.Shape().Rank() != 1) {
+      throw std::invalid_argument("SkipSimplifiedLayerNormalization: bias must have rank 1.");
+    }
+    ConstrainEqual(ctx, shape[shape.Rank() - 1], bias.Shape()[0],
+                   "SkipSimplifiedLayerNormalization: bias length must match H.");
+  }
+  const auto &skip_shape = skip.Shape();
+  if (skip_shape.Rank() != shape.Rank() && !(shape.Rank() == 3 && skip_shape.Rank() == 2)) {
+    throw std::invalid_argument(
+        "SkipSimplifiedLayerNormalization: skip rank must match input or omit its batch axis.");
+  }
+  const size_t offset = shape.Rank() - skip_shape.Rank();
+  for (size_t i = 0; i < skip_shape.Rank(); ++i) {
+    const auto &s = skip_shape[i];
+    const auto &d = shape[offset + i];
+    if (shape.Rank() == 3 && skip_shape.Rank() == 3 && i == 0) {
+      if (s == d || (s.IsInt() && s.AsInt() == 1)) {
+        continue;
+      }
+      if (s.IsExpr() && !(d.IsInt() && d.AsInt() == 1)) {
+        // Batch broadcasting permits either one or the input batch size.
+        ctx.AddConstraint("(" + s.AsExpr() + "-1)*(" + s.AsExpr() + "-(" + d.ToString() + "))",
+                          "0");
+        continue;
+      }
+    }
+    ConstrainEqual(ctx, d, s,
+                   "SkipSimplifiedLayerNormalization: skip dimensions must match input.");
+  }
+  ctx.Set(node.output(0), SymTensor(nullptr, input.Dtype(), shape));
+  for (int slot = 1; slot < node.output_size() && slot < 3; ++slot) {
+    if (!node.output(slot).empty()) {
+      auto statistics_shape = shape;
+      statistics_shape[statistics_shape.Rank() - 1] = sym_ns::SymDim(1);
+      ctx.Set(node.output(slot),
+              SymTensor(nullptr, sym_ns::TensorType::kFloat, std::move(statistics_shape)));
+    }
+  }
+  if (node.output_size() == 4 && !node.output(3).empty()) {
+    ctx.Set(node.output(3), SymTensor(nullptr, input.Dtype(), shape));
+  }
 }
 
 void ComputeShapeGroupQueryAttention(ShapesContext &ctx,
@@ -456,6 +573,11 @@ int64_t ComputePeakMemoryCDist(sym_ns::Device, const std::vector<SymShape> &) { 
 
 int64_t ComputePeakMemoryBiasGelu(sym_ns::Device, const std::vector<SymShape> &) { return 0; }
 
+int64_t ComputePeakMemorySkipSimplifiedLayerNormalization(sym_ns::Device,
+                                                          const std::vector<SymShape> &) {
+  return 0;
+}
+
 int64_t ComputePeakMemoryGroupQueryAttention(sym_ns::Device, const std::vector<SymShape> &) {
   // The supported GroupQueryAttention path delegates to Attention's online-softmax
   // implementation, which does not materialize a full attention-score tensor.
@@ -494,6 +616,8 @@ void RegisterMicrosoftShapeAndMemoryFunctions() {
   std::call_once(once, [] {
     shapes_ns::RegisterComputeShapeFn(kMicrosoftDomain, "CDist", ComputeShapeCDist);
     shapes_ns::RegisterComputeShapeFn(kMicrosoftDomain, "BiasGelu", ComputeShapeBiasGelu);
+    shapes_ns::RegisterComputeShapeFn(kMicrosoftDomain, "SkipSimplifiedLayerNormalization",
+                                      ComputeShapeSkipSimplifiedLayerNormalization);
     shapes_ns::RegisterComputeShapeFn(kMicrosoftDomain, "GroupQueryAttention",
                                       ComputeShapeGroupQueryAttention);
     shapes_ns::RegisterComputeShapeFn(kMicrosoftDomain, "LinearAttention",
@@ -502,6 +626,9 @@ void RegisterMicrosoftShapeAndMemoryFunctions() {
                                            ComputePeakMemoryCDist);
     shapes_ns::RegisterComputePeakMemoryFn(kMicrosoftDomain, "BiasGelu", sym_ns::Device::kCPU,
                                            ComputePeakMemoryBiasGelu);
+    shapes_ns::RegisterComputePeakMemoryFn(kMicrosoftDomain, "SkipSimplifiedLayerNormalization",
+                                           sym_ns::Device::kCPU,
+                                           ComputePeakMemorySkipSimplifiedLayerNormalization);
     shapes_ns::RegisterComputePeakMemoryFn(kMicrosoftDomain, "GroupQueryAttention",
                                            sym_ns::Device::kCPU,
                                            ComputePeakMemoryGroupQueryAttention);

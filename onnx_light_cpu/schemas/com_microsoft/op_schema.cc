@@ -46,6 +46,35 @@ LightOpSchema MakeBiasGeluSchema() {
       false, true);
 }
 
+LightOpSchema MakeSkipSimplifiedLayerNormalizationSchema() {
+  LightOpSchema schema(
+      "SkipSimplifiedLayerNormalization", kMicrosoftDomain, 1,
+      "Adds input, skip, and optional bias, then applies last-axis RMS normalization and gamma "
+      "scaling. Supports rank-2 and rank-3 inputs with matching FLOAT, FLOAT16, or BFLOAT16 types. "
+      "For rank-3 input, skip may also omit the batch dimension or have batch size one. "
+      "Arithmetic uses FLOAT without narrowing the residual before normalization. "
+      "Optional FLOAT statistics contain zero mean and the inverse RMS in slots 1 and 2. "
+      "Optional output slot 3 contains the residual sum in the input type.",
+      {{"input", "Input tensor with shape (S, H) or (B, S, H), with 0 < H <= INT_MAX.", "T"},
+       {"skip", "Residual tensor matching input, or (S, H)/(1, S, H) for rank-3 input.", "T"},
+       {"gamma", "Rank-1 scale tensor with length H.", "T"},
+       {"bias", "Optional rank-1 bias tensor with length H.", "T"}},
+      {{"output", "Normalized result with the input shape and type.", "T"},
+       {"mean", "Optional FLOAT zeros with input shape and final dimension one.", "U"},
+       {"inv_std_var", "Optional FLOAT inverse RMS with input shape and final dimension one.", "U"},
+       {"input_skip_bias_sum", "Optional residual sum with the input shape and type.", "T"}},
+      {{"T",
+        {TensorType::kFloat, TensorType::kFloat16, TensorType::kBfloat16},
+        "Matching FLOAT, FLOAT16, or BFLOAT16 tensors."},
+       {"U", {TensorType::kFloat}, "FLOAT saved-statistics tensors."}},
+      {AttributeParam{"epsilon", "Finite nonnegative value added to the last-axis mean square.",
+                      AttributeType::FLOAT, false, 1.0e-12F}},
+      false, true);
+  schema.set_min_output(1);
+  schema.set_max_output(4);
+  return schema;
+}
+
 LightOpSchema MakeGroupQueryAttentionSchema() {
   LightOpSchema schema(
       "GroupQueryAttention", kMicrosoftDomain, 1,
@@ -166,6 +195,8 @@ std::vector<LightOpSchema> GetMicrosoftOpSchemasWithHistory(const std::string &o
       {"GroupQueryAttention",
        [] { return std::vector<LightOpSchema>{MakeGroupQueryAttentionSchema()}; }},
       {"LinearAttention", [] { return std::vector<LightOpSchema>{MakeLinearAttentionSchema()}; }},
+      {"SkipSimplifiedLayerNormalization",
+       [] { return std::vector<LightOpSchema>{MakeSkipSimplifiedLayerNormalizationSchema()}; }},
   };
   return schema_ns::CollectSchemasFromBuilders(builders, op_type, init_doc);
 }
