@@ -518,7 +518,7 @@ def _pr_benchmark_markdown(aggregated_rows: Sequence[dict[str, Any]]) -> str:
         )
     ]
     return (
-        '<div style="max-height: 500px; overflow: auto;">\n\n'
+        '<div style="max-height: 500px; overflow-x: auto; overflow-y: auto;">\n\n'
         + _benchmark_markdown(pr_rows, _PR_COLUMNS)
         + "\n</div>\n"
     )

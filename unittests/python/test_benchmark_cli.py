@@ -475,7 +475,7 @@ class TestBenchmarkCli(ExtTestCase):
                 )
                 self.assertEqual(
                     run.call_args.kwargs["input"],
-                    '<div style="max-height: 500px; overflow: auto;">\n\n'
+                    '<div style="max-height: 500px; overflow-x: auto; overflow-y: auto;">\n\n'
                     "| speedup | test_name |\n| --- | --- |\n| 1.23 | test\\|value |\n"
                     "\n</div>\n",
                 )
@@ -493,7 +493,7 @@ class TestBenchmarkCli(ExtTestCase):
             write_pr_benchmark_markdown(output, aggregated)
             self.assertEqual(
                 output.read_text(encoding="utf-8"),
-                '<div style="max-height: 500px; overflow: auto;">\n\n'
+                '<div style="max-height: 500px; overflow-x: auto; overflow-y: auto;">\n\n'
                 "| speedup | test_name |\n| --- | --- |\n| 1.00 | test\\|value |\n"
                 "\n</div>\n",
             )
@@ -510,7 +510,7 @@ class TestBenchmarkCli(ExtTestCase):
         ]
         self.assertEqual(
             _benchmark._pr_benchmark_markdown(aggregated),
-            '<div style="max-height: 500px; overflow: auto;">\n\n'
+            '<div style="max-height: 500px; overflow-x: auto; overflow-y: auto;">\n\n'
             "| speedup | test_name |\n"
             "| --- | --- |\n"
             "| 0.00 | slow |\n"
