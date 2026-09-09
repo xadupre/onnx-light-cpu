@@ -2,7 +2,7 @@ AVX2 Activation and Normalization Gap Closure
 ==============================================
 
 :Date: 2026-09
-:Updated: 2026-09-07
+:Updated: 2026-09-08
 
 **in progress**
 
@@ -222,6 +222,32 @@ tail, subnormal-range inputs, mixed NaN/infinite Softmax rows, and serial
 versus reverse-order executor equivalence on a large tail-bearing tensor.
 It also checks the new serial threshold, bounded participant counts, and
 nested-dispatch suppression.
+
+BatchNormalization training follow-up
+-------------------------------------
+
+FP32 training reductions now explicitly unroll the four accumulation
+streams when each contiguous spatial slice has a multiple of four
+elements. This exposes adjacent lanes to compiler vectorization without
+changing the accumulation order, accumulator precision, or the two-pass
+centered-variance algorithm. Non-multiple-of-four slices and other input
+types retain the original loop. Running-statistic updates, mixed parameter
+types, optional outputs, inference mode, and executor scheduling are
+unchanged.
+
+On an Intel Xeon Platinum 8480C with 96 configured threads, the
+``training_n4_c32_h8_w8_rank4_float32`` registered-runtime case improved
+from 0.000019606 s to 0.000011128 s (1.76x against main ``1fc3359``).
+The five FP32 inference controls were also measured without an intended
+path change. Regression coverage compares training output and running
+statistics against onnx-light's built-in ``TrainingForward``, including
+aligned slices, tails, constant channels, and FLOAT/DOUBLE parameters.
+
+.. code-block:: bash
+
+   python -m onnx_light_cpu benchmark --dtype float32 --onnxruntime \
+       --test '^test_cpu_batchnormalization_.*_float32_benchmark$' \
+       --threads 96 -r 200 -w 100 -t 1 -o batch-normalization.xlsx
 
 Remaining priority cases
 -------------------------

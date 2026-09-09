@@ -556,6 +556,66 @@ TEST(BinaryKernelDescriptor, PowIntegerFastPathPreservesFiniteBoundaryResults) {
   EXPECT_EQ(output, std::pow(input, exponent));
 }
 
+TEST(BinaryKernelDescriptor, PowFixedScalarBulkPreservesScalarRoundingAndInPlaceTails) {
+  const BinaryKernelDescriptor pow("Pow", 15, {});
+  const auto &adapter =
+      pow.ResolveAdapter(BinaryDataType::FLOAT, BinaryDataType::FLOAT, BinaryDataType::FLOAT);
+  const std::vector<float> values = {0.0f,
+                                     -0.0f,
+                                     1.0f,
+                                     -1.0f,
+                                     2.0f,
+                                     -2.0f,
+                                     1.25f,
+                                     -1.25f,
+                                     std::numeric_limits<float>::max(),
+                                     std::numeric_limits<float>::lowest(),
+                                     std::numeric_limits<float>::min(),
+                                     -std::numeric_limits<float>::min(),
+                                     std::numeric_limits<float>::denorm_min(),
+                                     -std::numeric_limits<float>::denorm_min(),
+                                     std::numeric_limits<float>::infinity(),
+                                     -std::numeric_limits<float>::infinity(),
+                                     std::numeric_limits<float>::quiet_NaN(),
+                                     6981463572480.0f,
+                                     1.0e-10f,
+                                     -1.0e-10f};
+  std::vector<std::size_t> counts = {63, 64, 65, 1023, 1024, 1025};
+  for (std::size_t count = 0; count <= 33; ++count) {
+    counts.push_back(count);
+  }
+  for (const float exponent : {2.0f, 3.0f, 4.0f, 5.0f}) {
+    for (const std::size_t count : counts) {
+      SCOPED_TRACE(::testing::Message() << "exponent=" << exponent << " count=" << count);
+      std::vector<float> input(count + 2, 73.125f);
+      std::vector<float> expected(count);
+      for (std::size_t i = 0; i < count; ++i) {
+        input[i + 1] = values[i % values.size()];
+        adapter.bulk_right_scalar(&input[i + 1], &exponent, &expected[i], 1);
+      }
+      std::vector<float> output(count + 2, 73.125f);
+      auto in_place = input;
+      adapter.bulk_right_scalar(input.data() + 1, &exponent, output.data() + 1, count);
+      adapter.bulk_right_scalar(in_place.data() + 1, &exponent, in_place.data() + 1, count);
+      EXPECT_EQ(output.front(), 73.125f);
+      EXPECT_EQ(output.back(), 73.125f);
+      EXPECT_EQ(in_place.front(), 73.125f);
+      EXPECT_EQ(in_place.back(), 73.125f);
+      for (std::size_t i = 0; i < count; ++i) {
+        if (std::isnan(expected[i])) {
+          EXPECT_TRUE(std::isnan(output[i + 1])) << i;
+          EXPECT_TRUE(std::isnan(in_place[i + 1])) << i;
+        } else {
+          EXPECT_EQ(output[i + 1], expected[i]) << i;
+          EXPECT_EQ(in_place[i + 1], expected[i]) << i;
+          EXPECT_EQ(std::signbit(output[i + 1]), std::signbit(expected[i])) << i;
+          EXPECT_EQ(std::signbit(in_place[i + 1]), std::signbit(expected[i])) << i;
+        }
+      }
+    }
+  }
+}
+
 TEST(BinaryKernelDescriptor, PowBulkMatchesPositiveFractionalAndSpecialValues) {
   const BinaryKernelDescriptor pow("Pow", 15, {});
   const auto &adapter =

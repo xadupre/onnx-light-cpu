@@ -1319,6 +1319,7 @@ if(ONNX_LIGHT_CPU_BUILD_TESTS)
                 "lib_onnx_light_cpu_kernels;onnx_light::lib_onnx_op")
           endif()
         elseif(_test_name STREQUAL "test_onnx_light_custom_operator_support" OR
+               _test_name STREQUAL "test_onnx_light_normalization_kernel" OR
                _test_name STREQUAL "test_onnx_light_gather_kernel" OR
                _test_name STREQUAL "test_onnx_light_slice_kernel" OR
                _test_name STREQUAL "test_onnx_light_concat_kernel")

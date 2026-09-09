@@ -446,6 +446,53 @@ void ApplyPowRightScalarFallback(const float *base, float exponent, float *outpu
   }
 }
 
+template <int Exponent> void PowFixedInteger(const float *base, float *output, std::size_t count) {
+  const __m256 zero = _mm256_setzero_ps();
+  const __m256 maximum = _mm256_set1_ps(std::numeric_limits<float>::max());
+  const __m256 sign = _mm256_set1_ps(-0.0f);
+  std::size_t i = 0;
+  for (; i + 8 <= count; i += 8) {
+    const __m256 x = _mm256_loadu_ps(base + i);
+    __m256 result = _mm256_mul_ps(x, x);
+    if constexpr (Exponent >= 4) {
+      result = _mm256_mul_ps(result, result);
+    }
+    if constexpr (Exponent == 3 || Exponent == 5) {
+      result = _mm256_mul_ps(result, x);
+    }
+    const __m256 finite =
+        _mm256_and_ps(_mm256_cmp_ps(_mm256_andnot_ps(sign, x), maximum, _CMP_LE_OQ),
+                      _mm256_cmp_ps(_mm256_andnot_ps(sign, result), maximum, _CMP_LE_OQ));
+    const __m256 non_underflow =
+        _mm256_or_ps(_mm256_cmp_ps(result, zero, _CMP_NEQ_OQ), _mm256_cmp_ps(x, zero, _CMP_EQ_OQ));
+    const int valid = _mm256_movemask_ps(_mm256_and_ps(finite, non_underflow));
+    _mm256_storeu_ps(output + i, result);
+    if (valid != 0xff) {
+      // Retain original lanes so exceptional-value repair also works in place.
+      alignas(32) float original[8];
+      _mm256_store_ps(original, x);
+      for (std::size_t lane = 0; lane < 8; ++lane) {
+        if ((valid & (1 << lane)) == 0) {
+          output[i + lane] = std::pow(original[lane], static_cast<float>(Exponent));
+        }
+      }
+    }
+  }
+  for (; i < count; ++i) {
+    const float value = base[i];
+    float result = value * value;
+    if constexpr (Exponent >= 4) {
+      result *= result;
+    }
+    if constexpr (Exponent == 3 || Exponent == 5) {
+      result *= value;
+    }
+    output[i] = std::isfinite(value) && std::isfinite(result) && (result != 0.0f || value == 0.0f)
+                    ? result
+                    : std::pow(value, static_cast<float>(Exponent));
+  }
+}
+
 } // namespace
 
 void PowFloat32_AVX2_FMA(const float *base, const float *exponent, float *output,
@@ -487,6 +534,22 @@ void PowFloat32LeftScalar_AVX2_FMA(float base, const float *exponent, float *out
 
 void PowFloat32RightScalar_AVX2_FMA(const float *base, float exponent, float *output,
                                     std::size_t count) {
+  if (exponent == 2.0f) {
+    PowFixedInteger<2>(base, output, count);
+    return;
+  }
+  if (exponent == 3.0f) {
+    PowFixedInteger<3>(base, output, count);
+    return;
+  }
+  if (exponent == 4.0f) {
+    PowFixedInteger<4>(base, output, count);
+    return;
+  }
+  if (exponent == 5.0f) {
+    PowFixedInteger<5>(base, output, count);
+    return;
+  }
   const __m256 y = _mm256_set1_ps(exponent);
   std::size_t i = 0;
   for (; i + 8 <= count; i += 8) {

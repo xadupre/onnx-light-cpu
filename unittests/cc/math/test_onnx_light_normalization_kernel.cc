@@ -9,6 +9,7 @@
 #include "onnx_core/runtime/kernels/kernel_context.h"
 #include "onnx_core/runtime/memory/simple_tensor.h"
 #include "onnx_core/runtime/runtime_context.h"
+#include "onnx_extensions/kernels/kernels/nn/include_nn_kernels.h"
 #include "onnx_light_cpu/impl/execution.h"
 #include "onnx_light_cpu/impl/math/normalization_kernel.h"
 
@@ -147,6 +148,48 @@ TEST(OnnxLightNormalizationKernel, BatchNormalizationTrainingModeUpdatesRunningS
   EXPECT_NEAR(Value(rt.Get("running_mean"), 1), 16.25, 5.0e-2);
   EXPECT_NEAR(Value(rt.Get("running_var"), 0), 8.0, 5.0e-2);
   EXPECT_NEAR(Value(rt.Get("running_var"), 1), 11.0, 5.0e-2);
+}
+
+TEST(OnnxLightNormalizationKernel, BatchTrainingAlignedAndTailSlicesMatchBuiltin) {
+  const onnx_light_cpu::BatchNormalizationKernel kernel(MakeContext(15));
+  const ONNX_LIGHT_NAMESPACE::onnx_kernels::kernel::BatchNormalization reference(MakeContext(15));
+  for (const std::int64_t spatial : {1, 3, 4, 7, 8, 63, 64, 65, 68}) {
+    const rt_ns::Shape shape{4, 3, spatial};
+    std::vector<float> values(static_cast<std::size_t>(shape.product()));
+    for (std::size_t i = 0; i < values.size(); ++i) {
+      const std::size_t channel = (i / static_cast<std::size_t>(spatial)) % 3;
+      values[i] = channel == 0 ? 8.0F
+                               : static_cast<float>(static_cast<int>(i % 17) - 8) * 0.25F +
+                                     static_cast<float>(channel) * 8.0F;
+    }
+    const auto x = rt_ns::Tensor::FromFloat("", shape, values);
+    const auto [expected_y, expected_mean, expected_variance] = reference.TrainingForward(
+        x, MakeTensor(rt_ns::DataType::FLOAT, {3}, {0.5F, -1.25F, 2.0F}),
+        MakeTensor(rt_ns::DataType::FLOAT, {3}, {1.0F, 0.5F, -0.25F}),
+        MakeTensor(rt_ns::DataType::FLOAT, {3}, {2.0F, 3.0F, 4.0F}),
+        MakeTensor(rt_ns::DataType::FLOAT, {3}, {4.0F, 9.0F, 16.0F}), 1.0e-5F, 0.75F);
+    for (const auto parameter_type : {rt_ns::DataType::FLOAT, rt_ns::DataType::DOUBLE}) {
+      SCOPED_TRACE(::testing::Message() << "spatial=" << spatial
+                                        << " parameter_type=" << static_cast<int>(parameter_type));
+      const auto scale = MakeTensor(parameter_type, {3}, {0.5F, -1.25F, 2.0F});
+      const auto bias = MakeTensor(parameter_type, {3}, {1.0F, 0.5F, -0.25F});
+      const auto mean = MakeTensor(parameter_type, {3}, {2.0F, 3.0F, 4.0F});
+      const auto variance = MakeTensor(parameter_type, {3}, {4.0F, 9.0F, 16.0F});
+      const auto actual = kernel.Compute(x, scale, bias, mean, variance, true, 1.0e-5F, 0.75F);
+      ASSERT_TRUE(actual.running_mean);
+      ASSERT_TRUE(actual.running_variance);
+      EXPECT_EQ(actual.running_mean->data_type, static_cast<std::int32_t>(parameter_type));
+      EXPECT_EQ(actual.running_variance->data_type, static_cast<std::int32_t>(parameter_type));
+      for (std::size_t i = 0; i < values.size(); ++i) {
+        EXPECT_NEAR(Value(actual.y, i), Value(expected_y, i), 1.0e-5) << i;
+      }
+      for (std::size_t channel = 0; channel < 3; ++channel) {
+        EXPECT_NEAR(Value(*actual.running_mean, channel), Value(expected_mean, channel), 1.0e-5);
+        EXPECT_NEAR(Value(*actual.running_variance, channel), Value(expected_variance, channel),
+                    1.0e-5);
+      }
+    }
+  }
 }
 
 TEST(OnnxLightNormalizationKernel, BatchNormalizationTrainingAllowsOptionalStatistics) {

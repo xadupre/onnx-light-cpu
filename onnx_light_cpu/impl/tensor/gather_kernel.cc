@@ -65,20 +65,22 @@ void Gather(const void *data, const Index *indices, void *output, int64_t outer,
       CopyRange<0>(source, indices, destination, axis_size, index_count, slice_bytes, begin, end);
     }
   };
-  constexpr std::size_t kParallelBytes = 1024 * 1024;
-  constexpr std::size_t kBlockBytes = 256 * 1024;
+  constexpr std::size_t kParallelBytes = 192 * 1024;
+  const std::size_t output_bytes = static_cast<std::size_t>(total) * slice_bytes;
+  const bool cache_sized = output_bytes < 1024 * 1024;
+  const std::size_t block_bytes = cache_sized ? 64 * 1024 : 256 * 1024;
   const auto *executor = CurrentExecutionExecutor();
-  if (static_cast<std::size_t>(total) * slice_bytes < kParallelBytes ||
-      ExecutionInParallelRegion() || executor == nullptr || executor->run_blocks == nullptr ||
-      ExecutionThreadCount() <= 1 ||
+  if (output_bytes < kParallelBytes || ExecutionInParallelRegion() || executor == nullptr ||
+      executor->run_blocks == nullptr || ExecutionThreadCount() <= 1 ||
       total > std::numeric_limits<int64_t>::max() - ExecutionThreadCount()) {
     copy(0, total);
     return;
   }
   ExecutionSchedule schedule;
   schedule.min_parallel_size = static_cast<int64_t>(1 + (kParallelBytes - 1) / slice_bytes);
-  schedule.min_block_size = static_cast<int64_t>(1 + (kBlockBytes - 1) / slice_bytes);
-  schedule.max_participants = ExecutionThreadCount();
+  schedule.min_block_size = static_cast<int64_t>(1 + (block_bytes - 1) / slice_bytes);
+  schedule.max_participants =
+      cache_sized ? std::min<int64_t>(ExecutionThreadCount(), 8) : ExecutionThreadCount();
   ExecuteRanges(total, schedule, copy);
 }
 
