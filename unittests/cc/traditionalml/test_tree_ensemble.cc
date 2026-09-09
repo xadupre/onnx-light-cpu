@@ -109,6 +109,29 @@ TreeEnsembleAttributes SymmetricTree() {
   return attributes;
 }
 
+TreeEnsembleAttributes DeepTree(std::size_t depth) {
+  TreeEnsembleAttributes attributes;
+  attributes.n_features = 1;
+  attributes.n_targets = 1;
+  attributes.tree_roots = {0};
+  attributes.nodes_featureids.resize(depth, 0);
+  attributes.nodes_splits.resize(depth, 0.0);
+  attributes.nodes_modes.resize(depth, TreeBranchMode::kLeq);
+  attributes.nodes_truenodeids.resize(depth);
+  attributes.nodes_falsenodeids.resize(depth, 1);
+  attributes.nodes_trueleafs.resize(depth, 0);
+  attributes.nodes_falseleafs.resize(depth, 1);
+  attributes.nodes_hitrates.resize(depth, 1.0);
+  for (std::size_t node = 0; node + 1 < depth; ++node) {
+    attributes.nodes_truenodeids[node] = static_cast<std::int64_t>(node + 1);
+  }
+  attributes.nodes_truenodeids.back() = 0;
+  attributes.nodes_trueleafs.back() = 1;
+  attributes.leaf_targetids = {0, 0};
+  attributes.leaf_weights = {1.0, -1.0};
+  return attributes;
+}
+
 TreeEnsembleAttributes BalancedForest(std::size_t trees) {
   constexpr std::size_t kDepth = 4;
   constexpr std::size_t kInternalNodes = (1U << kDepth) - 1;
@@ -1139,6 +1162,20 @@ TEST(TreeEnsembleOracle, RejectsCyclesSharedAndUnreachableNodes) {
   attributes.nodes_trueleafs.push_back(1);
   attributes.nodes_falseleafs.push_back(1);
   EXPECT_THROW(TreeEnsembleOracle(std::move(attributes)), std::invalid_argument);
+}
+
+TEST(TreeEnsembleOracle, RejectsTopologyBeyondDepthBudget) {
+  EXPECT_THROW(TreeEnsembleOracle(DeepTree((128U << 10) + 1)), std::invalid_argument);
+}
+
+TEST(TreeEnsembleOracle, DeepTopologyPreprocessingIsIterative) {
+  constexpr std::size_t kDepth = 100'000;
+  const TreeEnsemblePlan plan(DeepTree(kDepth));
+  EXPECT_EQ(plan.max_depth(), kDepth);
+  EXPECT_EQ(plan.average_depth(), kDepth);
+  EXPECT_FALSE(plan.all_trees_are_balanced());
+  EXPECT_FALSE(plan.all_trees_are_symmetric());
+  EXPECT_EQ(plan.Evaluate({-1.0}, 1), (std::vector<double>{1.0}));
 }
 
 TEST(TreeEnsembleOracle, RejectsMalformedMembershipDelimiters) {

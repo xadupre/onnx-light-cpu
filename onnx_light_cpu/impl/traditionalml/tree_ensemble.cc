@@ -41,6 +41,8 @@ constexpr std::size_t kMaximumBalancedFloatTreeParticipants = 32;
 constexpr std::size_t kFallbackL1DataCacheBytes = 32 * 1024;
 constexpr std::size_t kMinimumTreesPerCacheBlock = 4;
 constexpr std::size_t kMaximumExecutionRegions = 4;
+constexpr std::size_t kMaximumTopologyNodes = 16 * 1024 * 1024;
+constexpr std::size_t kMaximumTopologyDepth = 128 * 1024;
 
 std::size_t SaturatingMultiply(std::size_t left, std::size_t right) noexcept {
   if (left != 0 && right > std::numeric_limits<std::size_t>::max() / left) {
@@ -1249,7 +1251,14 @@ TreeEnsemblePlan::TreeEnsemblePlan(TreeEnsembleAttributes attributes,
   if (!attributes_.nodes_hitrates.empty() && !feature_ids32_.empty()) {
     std::vector<std::size_t> order;
     order.reserve(size);
-    const auto append_preorder = [&](auto &&self, std::size_t node) -> void {
+    std::vector<std::size_t> stack;
+    stack.reserve(std::min(size, kMaximumTopologyDepth));
+    for (auto root = tree_roots_.rbegin(); root != tree_roots_.rend(); ++root) {
+      stack.push_back(static_cast<std::size_t>(*root));
+    }
+    while (!stack.empty()) {
+      const std::size_t node = stack.back();
+      stack.pop_back();
       order.push_back(node);
       std::vector<std::size_t> children;
       if (!nodes_[node].true_is_leaf) {
@@ -1261,12 +1270,9 @@ TreeEnsemblePlan::TreeEnsemblePlan(TreeEnsembleAttributes attributes,
       std::sort(children.begin(), children.end(), [&](std::size_t left, std::size_t right) {
         return attributes_.nodes_hitrates[left] > attributes_.nodes_hitrates[right];
       });
-      for (std::size_t child : children) {
-        self(self, child);
+      for (auto child = children.rbegin(); child != children.rend(); ++child) {
+        stack.push_back(*child);
       }
-    };
-    for (std::int64_t root : tree_roots_) {
-      append_preorder(append_preorder, static_cast<std::size_t>(root));
     }
     std::vector<std::uint32_t> remap(size);
     for (std::size_t index = 0; index < order.size(); ++index) {
@@ -1299,59 +1305,60 @@ TreeEnsemblePlan::TreeEnsemblePlan(TreeEnsembleAttributes attributes,
       hot_membership_indices_[index] = static_cast<std::uint32_t>(original);
     }
   }
-  const auto depth = [&](auto &&self, std::size_t node) -> std::size_t {
-    if (attributes_.nodes_trueleafs[node] != 0 && attributes_.nodes_falseleafs[node] != 0) {
-      return 1U;
-    }
-    std::size_t best = 1U;
-    if (attributes_.nodes_trueleafs[node] == 0) {
-      best = std::max(
-          best, 1U + self(self, static_cast<std::size_t>(attributes_.nodes_truenodeids[node])));
-    }
-    if (attributes_.nodes_falseleafs[node] == 0) {
-      best = std::max(
-          best, 1U + self(self, static_cast<std::size_t>(attributes_.nodes_falsenodeids[node])));
-    }
-    return best;
-  };
-  std::vector<int> visited(size, 0);
-  const auto calculate_depth = [&](auto &&self, std::size_t node) -> std::size_t {
-    if (visited[node] == 2) {
-      return 0U;
-    }
-    visited[node] = 1;
-    const std::size_t answer = depth(self, node);
-    visited[node] = 2;
-    return answer;
-  };
   std::size_t total_depth = 0;
+  std::vector<std::pair<std::size_t, std::size_t>> topology_stack;
+  topology_stack.reserve(std::min(size, kMaximumTopologyDepth));
   for (std::int64_t root : tree_roots_) {
-    const std::size_t depth_value =
-        calculate_depth(calculate_depth, static_cast<std::size_t>(root));
+    std::size_t depth_value = 0;
+    topology_stack.emplace_back(static_cast<std::size_t>(root), 1U);
+    while (!topology_stack.empty()) {
+      const auto [node, level] = topology_stack.back();
+      topology_stack.pop_back();
+      depth_value = std::max(depth_value, level);
+      if (!nodes_[node].true_is_leaf) {
+        topology_stack.emplace_back(static_cast<std::size_t>(nodes_[node].true_child), level + 1);
+      }
+      if (!nodes_[node].false_is_leaf) {
+        topology_stack.emplace_back(static_cast<std::size_t>(nodes_[node].false_child), level + 1);
+      }
+    }
     total_depth += depth_value;
     max_depth_ = std::max(max_depth_, depth_value);
   }
   average_depth_ = tree_roots_.empty() ? 0U : total_depth / tree_roots_.size();
   all_trees_are_stumps_ = max_depth_ == 1;
-  const auto balanced = [&](auto &&self, std::size_t node, std::size_t level) -> bool {
-    const auto check_child = [&](bool is_leaf, std::int64_t child) {
-      return is_leaf ? level + 1 == max_depth_
-                     : self(self, static_cast<std::size_t>(child), level + 1);
-    };
-    return check_child(nodes_[node].true_is_leaf, nodes_[node].true_child) &&
-           check_child(nodes_[node].false_is_leaf, nodes_[node].false_child);
-  };
-  all_trees_are_balanced_ =
-      std::all_of(tree_roots_.begin(), tree_roots_.end(), [&](std::int64_t root) {
-        return balanced(balanced, static_cast<std::size_t>(root), 0);
-      });
+  all_trees_are_balanced_ = true;
+  for (std::int64_t root : tree_roots_) {
+    topology_stack.emplace_back(static_cast<std::size_t>(root), 0U);
+    while (!topology_stack.empty() && all_trees_are_balanced_) {
+      const auto [node, level] = topology_stack.back();
+      topology_stack.pop_back();
+      for (const auto [is_leaf, child] :
+           {std::pair{nodes_[node].true_is_leaf, nodes_[node].true_child},
+            std::pair{nodes_[node].false_is_leaf, nodes_[node].false_child}}) {
+        if (is_leaf) {
+          all_trees_are_balanced_ = level + 1 == max_depth_;
+        } else {
+          topology_stack.emplace_back(static_cast<std::size_t>(child), level + 1);
+        }
+      }
+    }
+    if (!all_trees_are_balanced_) {
+      break;
+    }
+  }
+  topology_stack.clear();
   all_trees_are_symmetric_ = true;
   for (std::int64_t root : tree_roots_) {
     std::vector<std::int64_t> level_features;
     std::vector<TreeBranchMode> level_modes;
     std::vector<double> level_splits;
     std::optional<std::size_t> leaf_depth;
-    const auto symmetric = [&](auto &&self, std::size_t node, std::size_t level) -> bool {
+    bool symmetric = true;
+    topology_stack.emplace_back(static_cast<std::size_t>(root), 0U);
+    while (!topology_stack.empty() && symmetric) {
+      const auto [node, level] = topology_stack.back();
+      topology_stack.pop_back();
       if (level == level_features.size()) {
         level_features.push_back(nodes_[node].feature_id);
         level_modes.push_back(nodes_[node].mode);
@@ -1359,23 +1366,24 @@ TreeEnsemblePlan::TreeEnsemblePlan(TreeEnsembleAttributes attributes,
       } else if (level_features[level] != nodes_[node].feature_id ||
                  level_modes[level] != nodes_[node].mode ||
                  level_splits[level] != prepared_splits_[node]) {
-        return false;
+        symmetric = false;
+        break;
       }
-      const auto check_child = [&](bool is_leaf, std::int64_t child) {
+      for (const auto [is_leaf, child] :
+           {std::pair{nodes_[node].false_is_leaf, nodes_[node].false_child},
+            std::pair{nodes_[node].true_is_leaf, nodes_[node].true_child}}) {
         if (is_leaf) {
           const std::size_t depth = level + 1;
           if (!leaf_depth.has_value()) {
             leaf_depth = depth;
           }
-          return *leaf_depth == depth;
+          symmetric = *leaf_depth == depth;
+        } else {
+          topology_stack.emplace_back(static_cast<std::size_t>(child), level + 1);
         }
-        return self(self, static_cast<std::size_t>(child), level + 1);
-      };
-      return check_child(nodes_[node].true_is_leaf, nodes_[node].true_child) &&
-             check_child(nodes_[node].false_is_leaf, nodes_[node].false_child);
-    };
-    if (!symmetric(symmetric, static_cast<std::size_t>(root), 0) ||
-        leaf_depth.value_or(0) != max_depth_) {
+      }
+    }
+    if (!symmetric || leaf_depth.value_or(0) != max_depth_) {
       all_trees_are_symmetric_ = false;
       break;
     }
@@ -2594,6 +2602,10 @@ TreeEnsembleOracle::TreeEnsembleOracle(TreeEnsembleAttributes attributes)
   if (size == 0 || attributes_.tree_roots.empty()) {
     Invalid("nodes and tree_roots must not be empty");
   }
+  if (size > kMaximumTopologyNodes || attributes_.tree_roots.size() > kMaximumTopologyNodes ||
+      attributes_.leaf_weights.size() > kMaximumTopologyNodes) {
+    Invalid("topology exceeds the node budget");
+  }
   if (attributes_.nodes_splits.size() != size || attributes_.nodes_modes.size() != size ||
       attributes_.nodes_truenodeids.size() != size ||
       attributes_.nodes_falsenodeids.size() != size || attributes_.nodes_trueleafs.size() != size ||
@@ -2660,32 +2672,61 @@ TreeEnsembleOracle::TreeEnsembleOracle(TreeEnsembleAttributes attributes)
     Invalid("membership_values contains missing or extra delimiters");
   }
 
-  std::vector<int> color(size, 0);
-  std::vector<int> owner(size, -1);
-  const auto visit = [&](auto &&self, std::size_t index, int tree_number) -> void {
-    if (color[index] == 1) {
-      Invalid("tree contains a cycle");
-    }
-    if (color[index] == 2 || (owner[index] != -1 && owner[index] != tree_number)) {
-      Invalid("trees contain a shared internal node");
-    }
-    owner[index] = tree_number;
-    color[index] = 1;
-    for (const auto [child, is_leaf] :
-         {std::pair{attributes_.nodes_truenodeids[index], attributes_.nodes_trueleafs[index]},
-          std::pair{attributes_.nodes_falsenodeids[index], attributes_.nodes_falseleafs[index]}}) {
-      if (is_leaf == 0) {
-        self(self, static_cast<std::size_t>(child), tree_number);
-      }
-    }
-    color[index] = 2;
+  struct TopologyFrame {
+    std::size_t node;
+    std::size_t depth;
+    std::uint8_t next_child;
   };
+  std::vector<std::uint8_t> color(size, 0);
+  std::vector<int> owner(size, -1);
+  std::vector<TopologyFrame> stack;
+  stack.reserve(std::min(size, kMaximumTopologyDepth));
+  std::size_t visited_nodes = 0;
   for (std::size_t tree = 0; tree < attributes_.tree_roots.size(); ++tree) {
     const std::int64_t root = attributes_.tree_roots[tree];
     if (root < 0 || static_cast<std::size_t>(root) >= size) {
       Invalid("tree root is out of range");
     }
-    visit(visit, static_cast<std::size_t>(root), static_cast<int>(tree));
+    const std::size_t root_index = static_cast<std::size_t>(root);
+    if (color[root_index] != 0) {
+      Invalid("trees contain a duplicate internal node");
+    }
+    color[root_index] = 1;
+    owner[root_index] = static_cast<int>(tree);
+    stack.push_back({root_index, 1U, 0U});
+    while (!stack.empty()) {
+      TopologyFrame &frame = stack.back();
+      if (frame.next_child == 2) {
+        color[frame.node] = 2;
+        ++visited_nodes;
+        if (visited_nodes > size) {
+          Invalid("topology exceeds the node budget");
+        }
+        stack.pop_back();
+        continue;
+      }
+      const bool true_child = frame.next_child++ == 0;
+      const std::int64_t child = true_child ? attributes_.nodes_truenodeids[frame.node]
+                                            : attributes_.nodes_falsenodeids[frame.node];
+      const std::int64_t is_leaf = true_child ? attributes_.nodes_trueleafs[frame.node]
+                                              : attributes_.nodes_falseleafs[frame.node];
+      if (is_leaf != 0) {
+        continue;
+      }
+      const std::size_t child_index = static_cast<std::size_t>(child);
+      if (color[child_index] == 1) {
+        Invalid("tree contains a cycle");
+      }
+      if (color[child_index] == 2 || owner[child_index] != -1) {
+        Invalid("trees contain a duplicate internal node");
+      }
+      if (frame.depth >= kMaximumTopologyDepth) {
+        Invalid("topology exceeds the depth budget");
+      }
+      color[child_index] = 1;
+      owner[child_index] = static_cast<int>(tree);
+      stack.push_back({child_index, frame.depth + 1, 0U});
+    }
   }
   if (std::find(owner.begin(), owner.end(), -1) != owner.end()) {
     Invalid("tree contains an unreachable internal node");
