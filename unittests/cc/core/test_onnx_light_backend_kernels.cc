@@ -492,6 +492,28 @@ TEST(OnnxLightBackendKernels, RmsNormalizationRunsThroughRuntime) {
   EXPECT_TRUE(failures.empty()) << Describe(failures);
 }
 
+TEST(OnnxLightBackendKernels, SimplifiedLayerNormalizationRunsThroughRuntime) {
+  EXPECT_EQ(
+      CollectCpuCases("SimplifiedLayerNormalization", core::backend_test::TestMode::TEST).size(),
+      832u);
+  CheckTensorRegularCases("SimplifiedLayerNormalization");
+}
+
+TEST(OnnxLightBackendKernels, SimplifiedLayerNormalizationBenchmarksAreLazyAndCorrect) {
+  auto cases =
+      CollectCpuCases("SimplifiedLayerNormalization", core::backend_test::TestMode::BENCHMARK);
+  ASSERT_EQ(cases.size(), 96u);
+  onnx_light_cpu::RegisterAllKernels();
+  std::vector<std::string> failures;
+  for (auto &test_case : cases) {
+    EXPECT_FALSE(test_case.materialized());
+    TestCaseUnloadGuard unload_guard(test_case);
+    test_case.set_expected_outputs_generated(true);
+    RunCaseThroughRuntime(test_case, true, failures);
+  }
+  EXPECT_TRUE(failures.empty()) << Describe(failures);
+}
+
 TEST(OnnxLightBackendKernels, StandardNormalizationKernelsRunThroughRuntime) {
   std::vector<std::string> failures;
   for (const char *op_type :

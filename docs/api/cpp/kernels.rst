@@ -79,3 +79,19 @@ smaller final partition. Negative axes and zero-length partitions are
 supported for the same fixed-width data types as Gather. Outputs own their
 storage, including last-axis QKV partitions across multiple tokens.
 Large copies use the runtime executor; small splits remain serial.
+
+.. doxygenclass:: onnx_light_cpu::SimplifiedLayerNormalizationKernel
+   :project: onnx_light_cpu
+   :members:
+
+.. doxygenstruct:: onnx_light_cpu::SimplifiedLayerNormalizationResult
+   :project: onnx_light_cpu
+   :members:
+
+The experimental default-domain operator normalizes the suffix beginning at
+``axis`` and broadcasts Scale to the entire input. Input and Scale may have
+independent floating-point types; Y uses Scale's type. Optional inverse
+statistics use ``stash_type`` (FLOAT or DOUBLE). Unlike RMSNormalization,
+low-precision values are rounded only after scaling, and DOUBLE inputs retain
+double arithmetic. The FP32 suffix path reuses the SIMD RMS engine and can
+save statistics without a second reduction.

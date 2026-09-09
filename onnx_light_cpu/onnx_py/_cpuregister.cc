@@ -14,7 +14,9 @@
 #include "onnx_light_cpu/kernels/kernel_usage.h"
 #include "onnx_light_cpu/kernels/register_kernels.h"
 #include "onnx_light_cpu/patterns/com_microsoft/patterns.h"
+#include "onnx_light_cpu/schemas/ai_onnx/op_schema.h"
 #include "onnx_light_cpu/schemas/com_microsoft/op_schema.h"
+#include "onnx_light_cpu/shapes/ai_onnx/shape_inference.h"
 #include "onnx_light_cpu/shapes/com_microsoft/shape_inference.h"
 
 #include "onnx_proto/onnx_helper.h"
@@ -77,7 +79,7 @@ std::vector<OperatorSupportTuple> OperatorSupportForPython() {
 
 NB_MODULE(_cpuregister, m) {
   m.doc() = "Python bindings for registering and inspecting onnx-light-cpu "
-            "kernels and custom operator support.";
+            "kernels and custom/experimental operator support.";
 
   nb::enum_<onnx_light_cpu::MicrosoftKernelImplementation>(m, "MicrosoftKernelImplementation")
       .value("NAIVE", onnx_light_cpu::MicrosoftKernelImplementation::NAIVE)
@@ -87,6 +89,7 @@ NB_MODULE(_cpuregister, m) {
       "register_all_kernels",
       [](onnx_light_cpu::MicrosoftKernelImplementation implementation) {
         onnx_light_cpu::RegisterMicrosoftShapeAndMemoryFunctions();
+        onnx_light_cpu::RegisterExperimentalShapeAndMemoryFunctions();
         onnx_light_cpu::RegisterCustomOperatorPatterns();
         onnx_light_cpu::RegisterAllKernels(implementation);
       },
@@ -100,6 +103,7 @@ NB_MODULE(_cpuregister, m) {
       [](const std::string &domain, const std::string &op_type, bool replace,
          onnx_light_cpu::MicrosoftKernelImplementation implementation) {
         onnx_light_cpu::RegisterMicrosoftShapeAndMemoryFunctions();
+        onnx_light_cpu::RegisterExperimentalShapeAndMemoryFunctions();
         onnx_light_cpu::RegisterCustomOperatorPatterns();
         return onnx_light_cpu::RegisterKernelGlobal(domain, op_type, replace, implementation);
       },
@@ -112,6 +116,7 @@ NB_MODULE(_cpuregister, m) {
       "register_all_kernels_global",
       [](bool replace, onnx_light_cpu::MicrosoftKernelImplementation implementation) {
         onnx_light_cpu::RegisterMicrosoftShapeAndMemoryFunctions();
+        onnx_light_cpu::RegisterExperimentalShapeAndMemoryFunctions();
         onnx_light_cpu::RegisterCustomOperatorPatterns();
         return onnx_light_cpu::RegisterAllKernelsGlobal(replace, implementation);
       },
@@ -126,6 +131,7 @@ NB_MODULE(_cpuregister, m) {
          const std::string &op_type, bool replace,
          onnx_light_cpu::MicrosoftKernelImplementation implementation) {
         onnx_light_cpu::RegisterMicrosoftShapeAndMemoryFunctions();
+        onnx_light_cpu::RegisterExperimentalShapeAndMemoryFunctions();
         onnx_light_cpu::RegisterCustomOperatorPatterns();
         return onnx_light_cpu::RegisterKernelForSession(session, domain, op_type, replace,
                                                         implementation);
@@ -140,6 +146,7 @@ NB_MODULE(_cpuregister, m) {
       [](ONNX_LIGHT_NAMESPACE::core::runtime::RuntimeContext &session, bool replace,
          onnx_light_cpu::MicrosoftKernelImplementation implementation) {
         onnx_light_cpu::RegisterMicrosoftShapeAndMemoryFunctions();
+        onnx_light_cpu::RegisterExperimentalShapeAndMemoryFunctions();
         onnx_light_cpu::RegisterCustomOperatorPatterns();
         return onnx_light_cpu::RegisterAllKernelsForSession(session, replace, implementation);
       },
@@ -152,13 +159,18 @@ NB_MODULE(_cpuregister, m) {
         nb::arg("op_type") = std::string(), nb::arg("init_doc") = true,
         "Returns the LightOpSchema history provided for com.microsoft operators.");
 
+  m.def("experimental_op_schemas", &onnx_light_cpu::GetExperimentalOpSchemasWithHistory,
+        nb::arg("op_type") = std::string(), nb::arg("init_doc") = true,
+        "Returns experimental ai.onnx compatibility LightOpSchema records.");
+
   m.def(
       "register_custom_operator_support",
       []() {
         onnx_light_cpu::RegisterMicrosoftShapeAndMemoryFunctions();
+        onnx_light_cpu::RegisterExperimentalShapeAndMemoryFunctions();
         onnx_light_cpu::RegisterCustomOperatorPatterns();
       },
-      "Registers com.microsoft shape inference, peak-memory functions, and fusion patterns.");
+      "Registers custom/experimental shapes, peak-memory functions, and custom fusion patterns.");
 
   m.def("register_custom_gradients", &onnx_light_cpu::RegisterCustomOperatorGradients,
         nb::arg("registry"),
@@ -183,7 +195,7 @@ NB_MODULE(_cpuregister, m) {
 
   m.def("operator_support", &OperatorSupportForPython,
         "Returns one (domain, op_type, shape_inference_function, "
-        "peak_memory_function, fusion_patterns, has_gradient) tuple per custom "
+        "peak_memory_function, fusion_patterns, has_gradient) tuple per custom or experimental "
         "operator supported by onnx-light-cpu, without mutating any registry.");
 
   m.def(

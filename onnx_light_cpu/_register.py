@@ -47,7 +47,7 @@ class MicrosoftKernelImplementation(Enum):
 
 
 class OperatorSupport(NamedTuple):
-    """Describes the additional runtime support for one custom operator."""
+    """Describes additional runtime support for a custom or experimental operator."""
 
     domain: str
     op_type: str
@@ -103,17 +103,28 @@ def custom_op_schemas(op_type: str = "", init_doc: bool = True) -> tuple[Any, ..
 
 
 def operator_schema_lookup(op_type: str) -> list[Any]:
-    """Returns standard ONNX schemas plus this package's custom schemas."""
+    """Returns standard ONNX, Microsoft, and experimental compatibility schemas."""
     onnx_op = import_module("onnx_light.onnx_op")
 
     return [
         *onnx_op.GetAllOnnxOpSchemasWithHistory(op_type),
         *custom_op_schemas(op_type),
+        *experimental_op_schemas(op_type),
     ]
 
 
+def experimental_op_schemas(op_type: str = "", init_doc: bool = True) -> tuple[Any, ...]:
+    """Returns experimental ``ai.onnx`` compatibility schemas shipped here."""
+    import_module("onnx_light.onnx_op")
+    from .onnx_py._cpuregister import (  # pyrefly: ignore[missing-import]
+        experimental_op_schemas as _experimental_op_schemas,
+    )
+
+    return tuple(_experimental_op_schemas(op_type, init_doc))
+
+
 def operator_support() -> tuple[OperatorSupport, ...]:
-    """Returns the custom operator support available from onnx-light-cpu."""
+    """Returns custom and experimental operator support from onnx-light-cpu."""
     import_module("onnx_light.onnx_op")
     from .onnx_py._cpuregister import (  # pyrefly: ignore[missing-import]
         operator_support as _operator_support,
@@ -140,7 +151,7 @@ def operator_support() -> tuple[OperatorSupport, ...]:
 
 
 def register_operator_support() -> None:
-    """Registers custom shape, peak-memory, and fusion-pattern support."""
+    """Registers custom/experimental shapes, peak memory, and custom fusion patterns."""
     import_module("onnx_light.onnx_op")
     from .onnx_py._cpuregister import (  # pyrefly: ignore[missing-import]
         register_custom_operator_support,

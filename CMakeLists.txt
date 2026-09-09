@@ -1343,7 +1343,9 @@ if(ONNX_LIGHT_CPU_BUILD_TESTS)
                _test_name STREQUAL "test_onnx_light_gather_kernel" OR
                _test_name STREQUAL "test_onnx_light_slice_kernel" OR
                _test_name STREQUAL "test_onnx_light_concat_kernel" OR
-               _test_name STREQUAL "test_onnx_light_split_kernel")
+               _test_name STREQUAL "test_onnx_light_split_kernel" OR
+               _test_name STREQUAL "test_onnx_light_simplified_layer_normalization_kernel" OR
+               _test_name STREQUAL "test_onnx_light_simplified_layer_normalization_support")
           if(TARGET onnx_light::lib_onnx_kernels)
             onnx_light_cpu_add_test("${_test_src}"
                 "lib_onnx_light_cpu_kernels;onnx_light::lib_onnx_kernels")
