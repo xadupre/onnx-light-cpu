@@ -10,6 +10,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Added SIMD-accelerated ONNX CPU kernels with runtime dispatch for x86 and ARM.
 - Added optimized `com.microsoft` kernels for `BiasGelu`, `CDist`, and
   `GroupQueryAttention`.
+- Added `com.microsoft::SkipSimplifiedLayerNormalization` inference support
+  for matching FLOAT/FLOAT16/BFLOAT16 inputs, optional bias, saved statistics,
+  and residual-sum output, symbolic shape inference, native schema lookup,
+  and zero CPU scratch memory.
 - Added global and session-local kernel registration APIs with public kernel and
   SIMD inspection.
 - Added reusable C++ and Python backend correctness and benchmark runners.

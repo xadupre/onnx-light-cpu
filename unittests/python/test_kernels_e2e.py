@@ -99,11 +99,13 @@ for _op_type in {
 }:
     _BENCHMARK_TYPE_SUFFIXES[_op_type] = "(?:float32|float16|bfloat16)"
 _BENCHMARK_TYPE_SUFFIXES["SimplifiedLayerNormalization"] = "(?:float32|float64|float16|bfloat16)"
+_BENCHMARK_TYPE_SUFFIXES["SkipSimplifiedLayerNormalization"] = "(?:float32|float16|bfloat16)"
 _BENCHMARK_OP_TAGS = {
     "com.microsoft::LinearAttention": "microsoft_linear_attention",
     "GroupQueryAttention": "group_query_attention",
     "RMSNormalization": "rms_normalization",
     "SimplifiedLayerNormalization": "simplified_layer_normalization",
+    "SkipSimplifiedLayerNormalization": "skip_simplified_layer_normalization",
 }
 _BENCHMARK_NAME_PATTERN = (
     "^test_cpu_(?:"

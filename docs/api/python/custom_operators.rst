@@ -52,6 +52,53 @@ statistics without repeating the reduction. CPU scratch memory is zero,
 excluding inputs and outputs. This is inference compatibility support: no
 gradient rules or fusion patterns are registered for this operator.
 
+Microsoft SkipSimplifiedLayerNormalization
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``com.microsoft::SkipSimplifiedLayerNormalization`` version 1 adds ``input``,
+``skip``, and optional ``bias``, then normalizes the residual sum by
+``sqrt(mean(sum * sum, axis=-1, keepdims=True) + epsilon)`` and multiplies
+by ``gamma``. All inputs have the same ``FLOAT``, ``FLOAT16``, or ``BFLOAT16`` type.
+``input`` has rank two or three, with shape ``[S, H]`` or ``[B, S, H]``.
+``skip`` matches that shape; for rank-three input only, ``[S, H]`` and
+``[1, S, H]`` also broadcast over the batch dimension. Sequence and hidden
+dimensions do not broadcast. ``gamma`` and optional ``bias`` are rank-one
+tensors of length ``H``. ``0 < H <= INT_MAX``; empty outer dimensions are valid.
+``epsilon`` defaults to ``1e-12`` and must be finite and nonnegative.
+
+Mandatory output slot 0 has the input shape and type. Optional output slot 3,
+``input_skip_bias_sum``, contains the residual sum with the same shape and
+type. Request it with the ONNX output list
+``["Y", "", "", "input_skip_bias_sum"]``. Optional slot 1, ``mean``, contains
+``FLOAT`` zeros; optional slot 2, ``inv_std_var``, contains the ``FLOAT``
+inverse RMS. Both statistics have the input shape with the final dimension
+replaced by one. They are independently optional; for example,
+``["Y", "", "inv_std_var"]`` requests only the inverse RMS.
+The bias may be omitted or represented by an empty input name. Trailing
+optional output slots may likewise be omitted or left empty.
+
+Arithmetic matches the ONNX Runtime CPU contract: the inputs are widened to
+FP32 before residual addition, reduction, normalization, and scaling.
+``FLOAT16`` and ``BFLOAT16`` values are narrowed only when storing the final
+normalized and residual outputs, never before computing the mean square.
+Statistics use this unrounded FP32 residual. The mean output is zero because
+RMS normalization does not subtract a mean. This follows the
+`pinned ONNX Runtime CPU implementation
+<https://github.com/microsoft/onnxruntime/blob/f26e546fe25b04e737ec460f05a7d57f4938f23c/onnxruntime/contrib_ops/cpu/skip_layer_norm.cc>`_;
+older ONNX Runtime versions and GPU implementations may not support these
+statistics or BFLOAT16.
+
+Use :func:`custom_op_schemas` or :func:`operator_schema_lookup` as the native
+``GraphBuilder`` schema lookup callback and :func:`register_operator_support`
+to register shape and memory support. Global and session-local kernel
+registration helpers also register this metadata. Shape inference preserves
+symbolic dimensions and records equality and batch-broadcast constraints.
+CPU scratch memory is zero, excluding inputs and outputs: the FLOAT path uses
+the normalized output buffer for the residual intermediate, while low-precision
+paths recompute the widened residual rather than allocating a temporary buffer.
+Saved statistics do not imply automatic differentiation support: no gradient
+rules or fusion patterns are registered.
+
 Support inventory
 ~~~~~~~~~~~~~~~~~
 

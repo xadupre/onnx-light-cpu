@@ -19,6 +19,8 @@ void RegisterCpuBiasGeluCases(std::vector<TestCase> &registry, TestMode mode);
 void RegisterCpuCDistCases(std::vector<TestCase> &registry, TestMode mode);
 void RegisterCpuGroupQueryAttentionCases(std::vector<TestCase> &registry, TestMode mode);
 void RegisterCpuMicrosoftLinearAttentionCases(std::vector<TestCase> &registry, TestMode mode);
+void RegisterCpuSkipSimplifiedLayerNormalizationCases(std::vector<TestCase> &registry,
+                                                      TestMode mode);
 
 void CollectCpuMicrosoftTestCases(std::vector<TestCase> &registry, const std::string &op_type = "",
                                   TestMode mode = TestMode::TEST);

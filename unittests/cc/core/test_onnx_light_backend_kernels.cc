@@ -396,13 +396,45 @@ TEST(OnnxLightBackendKernels, GroupQueryAttentionRunsThroughRuntime) {
 }
 
 TEST(OnnxLightBackendKernels, MicrosoftCorrectnessCasesRunWithNaiveRegistration) {
-  for (const std::string &op_type :
-       {"BiasGelu", "CDist", "GroupQueryAttention", "LinearAttention"}) {
+  for (const std::string &op_type : {"BiasGelu", "CDist", "GroupQueryAttention", "LinearAttention",
+                                     "SkipSimplifiedLayerNormalization"}) {
     const auto failures = RunCpuBackendCases(op_type, core::backend_test::TestMode::TEST, {},
                                              onnx_light_cpu::MicrosoftKernelImplementation::NAIVE);
     EXPECT_TRUE(failures.empty()) << Describe(failures);
   }
   onnx_light_cpu::RegisterAllKernels();
+}
+
+TEST(OnnxLightBackendKernels, SkipSimplifiedLayerNormalizationRunsThroughRuntime) {
+  EXPECT_EQ(CollectCpuCases("SkipSimplifiedLayerNormalization", core::backend_test::TestMode::TEST)
+                .size(),
+            15u);
+  const auto failures =
+      RunCpuBackendCases("SkipSimplifiedLayerNormalization", core::backend_test::TestMode::TEST);
+  EXPECT_TRUE(failures.empty()) << Describe(failures);
+}
+
+TEST(OnnxLightBackendKernels, SkipSimplifiedLayerNormalizationBenchmarksDeclareLazyCounts) {
+  auto cases =
+      CollectCpuCases("SkipSimplifiedLayerNormalization", core::backend_test::TestMode::BENCHMARK);
+  ASSERT_EQ(cases.size(), 6u);
+  onnx_light_cpu::RegisterAllKernels();
+  std::vector<std::string> failures;
+  for (auto &test_case : cases) {
+    EXPECT_FALSE(test_case.materialized());
+    const bool prefill = test_case.name.find("prefill") != std::string::npos;
+    const std::int64_t count = (prefill ? 128 : 1) * 4096;
+    std::vector<std::int64_t> input_counts{count, count, 4096};
+    if (prefill) {
+      input_counts.push_back(4096);
+    }
+    EXPECT_EQ(test_case.declared_input_element_counts, input_counts);
+    EXPECT_EQ(test_case.declared_output_element_counts, (std::vector<std::int64_t>{count, count}));
+    TestCaseUnloadGuard unload_guard(test_case);
+    test_case.set_expected_outputs_generated(true);
+    RunCaseThroughRuntime(test_case, true, failures);
+  }
+  EXPECT_TRUE(failures.empty()) << Describe(failures);
 }
 
 TEST(OnnxLightBackendKernels, NotRunsThroughRuntime) {
