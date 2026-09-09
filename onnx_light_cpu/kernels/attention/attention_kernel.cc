@@ -5,6 +5,7 @@
 #include "onnx_light_cpu/kernels/attention/attention_kernel.h"
 
 #include "onnx_light_cpu/impl/attention/attention_plan.h"
+#include "onnx_light_cpu/impl/checked_arithmetic.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
 #include "onnx_light_cpu/kernels/kernel_usage.h"
 
@@ -102,17 +103,27 @@ void ComputeHalfAttentionMaterialized(const AttentionPlan &plan, DataType data_t
                                       const std::uint16_t *past_k, const std::uint16_t *past_v,
                                       const std::int64_t *nonpad_kv_seqlen,
                                       std::uint16_t *qk_matmul_output) {
-  const std::size_t q_count = plan.batch * plan.q_num_heads * plan.q_length * plan.head_dim;
-  const std::size_t k_count = plan.batch * plan.kv_num_heads * plan.kv_length * plan.head_dim;
-  const std::size_t v_count = plan.batch * plan.kv_num_heads * plan.kv_length * plan.v_head_dim;
-  const std::size_t y_count = plan.batch * plan.q_num_heads * plan.q_length * plan.v_head_dim;
+  const std::size_t q_count = CheckedProduct(
+      {plan.batch, plan.q_num_heads, plan.q_length, plan.head_dim}, "Attention", "Q element count");
+  const std::size_t k_count =
+      CheckedProduct({plan.batch, plan.kv_num_heads, plan.kv_length, plan.head_dim}, "Attention",
+                     "K element count");
+  const std::size_t v_count =
+      CheckedProduct({plan.batch, plan.kv_num_heads, plan.kv_length, plan.v_head_dim}, "Attention",
+                     "V element count");
+  const std::size_t y_count =
+      CheckedProduct({plan.batch, plan.q_num_heads, plan.q_length, plan.v_head_dim}, "Attention",
+                     "Y element count");
   const std::size_t past_k_count =
-      plan.batch * plan.kv_num_heads * plan.past_length * plan.head_dim;
+      CheckedProduct({plan.batch, plan.kv_num_heads, plan.past_length, plan.head_dim}, "Attention",
+                     "past K element count");
   const std::size_t past_v_count =
-      plan.batch * plan.kv_num_heads * plan.past_length * plan.v_head_dim;
+      CheckedProduct({plan.batch, plan.kv_num_heads, plan.past_length, plan.v_head_dim},
+                     "Attention", "past V element count");
   const std::size_t qk_count =
       qk_matmul_output != nullptr
-          ? plan.batch * plan.q_num_heads * plan.q_length * plan.total_kv_length
+          ? CheckedProduct({plan.batch, plan.q_num_heads, plan.q_length, plan.total_kv_length},
+                           "Attention", "QK element count")
           : 0;
   std::vector<float> q_fp32(q_count);
   std::vector<float> k_fp32(k_count);
@@ -194,19 +205,15 @@ Tensor Compute(const Tensor &q, const Tensor &k, const Tensor &v, const Tensor *
       mask_kind = AttentionMaskKind::kAdditive;
     } else if (static_cast<DataType>(mask->data_type) == DataType::FLOAT16) {
       mask_kind = AttentionMaskKind::kAdditive;
-      std::size_t mask_count = 1;
-      for (const auto &d : mask->shape) {
-        mask_count *= static_cast<std::size_t>(d);
-      }
+      const std::size_t mask_count =
+          CheckedShapeProduct(mask->shape, "Attention", "mask element count");
       mask_fp32_buffer.resize(mask_count);
       detail::ConvertFloat16ToFloat32(reinterpret_cast<const std::uint16_t *>(mask->bytes()),
                                       mask_fp32_buffer.data(), mask_count);
     } else if (static_cast<DataType>(mask->data_type) == DataType::BFLOAT16) {
       mask_kind = AttentionMaskKind::kAdditive;
-      std::size_t mask_count = 1;
-      for (const auto &d : mask->shape) {
-        mask_count *= static_cast<std::size_t>(d);
-      }
+      const std::size_t mask_count =
+          CheckedShapeProduct(mask->shape, "Attention", "mask element count");
       mask_fp32_buffer.resize(mask_count);
       detail::ConvertBFloat16ToFloat32(reinterpret_cast<const std::uint16_t *>(mask->bytes()),
                                        mask_fp32_buffer.data(), mask_count);
@@ -225,14 +232,15 @@ Tensor Compute(const Tensor &q, const Tensor &k, const Tensor &v, const Tensor *
   const std::vector<std::int64_t> plan_output_shape = plan.output_shape();
   Shape output_shape;
   output_shape.reserve(plan_output_shape.size());
-  std::size_t element_count = 1;
   for (const std::int64_t dimension : plan_output_shape) {
     output_shape.push_back(dimension);
-    element_count *= static_cast<std::size_t>(dimension);
   }
+  const std::size_t element_count =
+      CheckedShapeProduct(output_shape, "Attention", "output element count");
   const std::size_t element_bytes =
       data_type == DataType::FLOAT ? sizeof(float) : sizeof(std::uint16_t);
-  const std::size_t bytes = element_count * element_bytes;
+  const std::size_t bytes =
+      CheckedByteSize(element_count, element_bytes, "Attention", "output byte size");
   Tensor y = rt != nullptr ? rt->MakeOutputTensor(0, q.data_type, output_shape, bytes)
                            : rt_ns::MakeOutputTensor(q.data_type, output_shape, bytes, nullptr);
   Tensor qk;
@@ -241,9 +249,9 @@ Tensor Compute(const Tensor &q, const Tensor &k, const Tensor &v, const Tensor *
   if (plan.has_qk_matmul_output || plan.softmax_fp64) {
     const std::vector<std::int64_t> plan_qk_shape = plan.qk_matmul_output_shape();
     Shape qk_shape(plan_qk_shape);
-    const std::size_t qk_bytes = static_cast<std::size_t>(plan.batch * plan.q_num_heads *
-                                                          plan.q_length * plan.total_kv_length) *
-                                 element_bytes;
+    const std::size_t qk_bytes =
+        CheckedByteSize(CheckedShapeProduct(qk_shape, "Attention", "QK element count"),
+                        element_bytes, "Attention", "QK byte size");
     qk = rt != nullptr ? rt->MakeOutputTensor(3, q.data_type, qk_shape, qk_bytes)
                        : rt_ns::MakeOutputTensor(q.data_type, qk_shape, qk_bytes, nullptr);
     if (data_type == DataType::FLOAT) {
@@ -338,8 +346,12 @@ Tensor Compute(const Tensor &q, const Tensor &k, const Tensor &v, const Tensor *
           static_cast<std::int64_t>(plan.total_kv_length), static_cast<std::int64_t>(dim)};
       Shape shape_s(present_shape);
       const std::size_t total_elements =
-          plan.batch * plan.kv_num_heads * plan.total_kv_length * dim;
-      const std::size_t total_bytes = total_elements * element_bytes;
+          CheckedProduct({plan.batch, plan.kv_num_heads, plan.total_kv_length, dim}, "Attention",
+                         "present element count");
+      const std::size_t total_bytes =
+          CheckedByteSize(total_elements, element_bytes, "Attention", "present byte size");
+      const std::size_t row_bytes =
+          CheckedByteSize(dim, element_bytes, "Attention", "present row byte size");
       Tensor present = rt != nullptr
                            ? rt->MakeOutputTensor(output_slot, q.data_type, shape_s, total_bytes)
                            : rt_ns::MakeOutputTensor(q.data_type, shape_s, total_bytes, nullptr);
@@ -358,7 +370,7 @@ Tensor Compute(const Tensor &q, const Tensor &k, const Tensor &v, const Tensor *
               std::memcpy(reinterpret_cast<char *>(present.mutable_bytes()) + to * element_bytes,
                           reinterpret_cast<const char *>(past_tensor->bytes()) +
                               from * element_bytes,
-                          dim * element_bytes);
+                          row_bytes);
             }
           }
           // Current segment
@@ -371,7 +383,7 @@ Tensor Compute(const Tensor &q, const Tensor &k, const Tensor &v, const Tensor *
             std::memcpy(reinterpret_cast<char *>(present.mutable_bytes()) + to * element_bytes,
                         reinterpret_cast<const char *>(current_tensor.bytes()) +
                             from * element_bytes,
-                        dim * element_bytes);
+                        row_bytes);
           }
         }
       }

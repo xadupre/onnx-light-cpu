@@ -212,6 +212,27 @@ TEST(AttentionPlan, RejectsHeadCountNotDivisible) {
                std::invalid_argument);
 }
 
+TEST(AttentionPlan, RejectsElementCountAndTotalLengthOverflow) {
+  AttentionDescriptor desc;
+  constexpr std::int64_t maximum = std::numeric_limits<std::int64_t>::max();
+  EXPECT_THROW(AttentionPlan(desc, AttentionLayout::kRank4,
+                             std::array<std::int64_t, 4>{maximum, 2, 1, 1},
+                             std::array<std::int64_t, 4>{maximum, 1, 1, 1},
+                             std::array<std::int64_t, 4>{maximum, 1, 1, 1},
+                             std::span<const std::int64_t>{}, AttentionMaskKind::kNone),
+               std::invalid_argument);
+
+  desc.has_past_key = true;
+  desc.has_past_value = true;
+  EXPECT_THROW(AttentionPlan(desc, AttentionLayout::kRank4, std::array<std::int64_t, 4>{1, 1, 1, 1},
+                             std::array<std::int64_t, 4>{1, 1, 1, 1},
+                             std::array<std::int64_t, 4>{1, 1, 1, 1},
+                             std::span<const std::int64_t>{}, AttentionMaskKind::kNone,
+                             std::array<std::int64_t, 4>{1, 1, maximum, 1},
+                             std::array<std::int64_t, 4>{1, 1, maximum, 1}),
+               std::invalid_argument);
+}
+
 TEST(AttentionPlan, Rank3RequiresHeadCountAttributes) {
   AttentionDescriptor descriptor;
   const std::int64_t q_shape[] = {1, 4, 32};

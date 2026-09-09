@@ -4,6 +4,7 @@
 
 #include "onnx_light_cpu/kernels/math/gemm_kernel.h"
 
+#include "onnx_light_cpu/impl/checked_arithmetic.h"
 #include "onnx_light_cpu/impl/math/gemm/gemm_plan.h"
 #include "onnx_light_cpu/impl/math/math_kernels.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
@@ -338,6 +339,7 @@ Tensor GemmKernel::Compute(const Tensor &a, const Tensor &b, const Tensor *c, fl
   }
 
   const Shape out_shape{static_cast<std::int64_t>(M), static_cast<std::int64_t>(N)};
+  const std::size_t output_elements = CheckedMultiply(M, N, "GemmKernel", "output element count");
   const bool has_bias = c != nullptr && beta != 0.0f;
 
   switch (static_cast<DataType>(a.data_type)) {
@@ -365,7 +367,8 @@ Tensor GemmKernel::Compute(const Tensor &a, const Tensor &b, const Tensor *c, fl
       epilogue.bias_layout = ResolveBiasLayout(*c, M, N);
       epilogue.beta = beta;
     }
-    const std::size_t n_bytes = M * N * sizeof(float);
+    const std::size_t n_bytes =
+        CheckedByteSize(output_elements, sizeof(float), "GemmKernel", "output byte size");
     Tensor y = rt != nullptr ? rt->MakeOutputTensor(0, a.data_type, out_shape, n_bytes)
                              : rt_ns::MakeOutputTensor(a.data_type, out_shape, n_bytes, nullptr);
     plan->Execute(a.AsFloat(), b.AsFloat(), epilogue, y.AsFloat());
@@ -396,7 +399,8 @@ Tensor GemmKernel::Compute(const Tensor &a, const Tensor &b, const Tensor *c, fl
       epilogue.bias_layout = ResolveBiasLayout(*c, M, N);
       epilogue.beta = static_cast<double>(beta);
     }
-    const std::size_t n_bytes = M * N * sizeof(double);
+    const std::size_t n_bytes =
+        CheckedByteSize(output_elements, sizeof(double), "GemmKernel", "output byte size");
     Tensor y = rt != nullptr ? rt->MakeOutputTensor(0, a.data_type, out_shape, n_bytes)
                              : rt_ns::MakeOutputTensor(a.data_type, out_shape, n_bytes, nullptr);
     plan->Execute(a.AsDouble(), b.AsDouble(), epilogue, y.AsDouble());
@@ -444,14 +448,16 @@ Tensor GemmKernel::Compute(const Tensor &a, const Tensor &b, const Tensor *c, fl
       epilogue.beta = beta;
     }
 
-    const std::size_t n_bytes = M * N * sizeof(std::uint16_t);
+    const std::size_t n_bytes =
+        CheckedByteSize(output_elements, sizeof(std::uint16_t), "GemmKernel", "output byte size");
     Tensor y = rt != nullptr ? rt->MakeOutputTensor(0, a.data_type, out_shape, n_bytes)
                              : rt_ns::MakeOutputTensor(a.data_type, out_shape, n_bytes, nullptr);
     epilogue.output_conversion =
         is_bfloat16 ? GemmOutputConversion::kBFloat16 : GemmOutputConversion::kFloat16;
     epilogue.converted_output = reinterpret_cast<std::uint16_t *>(y.mutable_bytes());
     rt_ns::detail::TemporaryTypedBuffer<float> y_f32(
-        M * N, rt != nullptr ? rt->execution_allocator() : nullptr, "Gemm FP32 workspace");
+        output_elements, rt != nullptr ? rt->execution_allocator() : nullptr,
+        "Gemm FP32 workspace");
     plan->Execute(a_bits, b_bits, epilogue, y_f32.data());
     return y;
   }

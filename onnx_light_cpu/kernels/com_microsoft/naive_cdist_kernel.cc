@@ -4,6 +4,7 @@
 
 #include "onnx_light_cpu/kernels/com_microsoft/naive_cdist_kernel.h"
 
+#include "onnx_light_cpu/impl/checked_arithmetic.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
 #include "onnx_light_cpu/kernels/kernel_usage.h"
 #include "onnx_light_cpu/schemas/com_microsoft/op_schema.h"
@@ -85,8 +86,9 @@ Tensor NaiveCDistKernel::operator()(const Tensor &a, const Tensor &b, const std:
     throw std::invalid_argument("onnx_light_cpu::NaiveCDist: A and B must be rank-2 tensors.");
   }
   const rt_ns::Shape output_shape{a.shape[0], b.shape[0]};
-  const std::size_t bytes = static_cast<std::size_t>(a.shape[0]) *
-                            static_cast<std::size_t>(b.shape[0]) * a.element_size();
+  const std::size_t bytes =
+      CheckedByteSize(CheckedShapeProduct(output_shape, "NaiveCDist", "output shape"),
+                      a.element_size(), "NaiveCDist", "output byte size");
   Tensor output = rt != nullptr
                       ? rt->MakeOutputTensor(0, a.data_type, output_shape, bytes)
                       : rt_ns::MakeOutputTensor(a.data_type, output_shape, bytes, nullptr);

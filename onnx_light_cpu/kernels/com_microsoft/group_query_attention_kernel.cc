@@ -4,6 +4,7 @@
 
 #include "onnx_light_cpu/kernels/com_microsoft/group_query_attention_kernel.h"
 
+#include "onnx_light_cpu/impl/checked_arithmetic.h"
 #include "onnx_light_cpu/impl/math/half_conversion.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
 #include "onnx_light_cpu/kernels/kernel_usage.h"
@@ -290,6 +291,9 @@ template <typename Lookup> GqaArgs ResolveAndValidate(const NodeProto &node, Loo
     throw std::invalid_argument(
         "onnx_light_cpu::GroupQueryAttention: query, key, and value must have rank 3.");
   }
+  CheckedShapeIndexProduct(args.query->shape, "GroupQueryAttention", "query shape");
+  CheckedShapeIndexProduct(args.key->shape, "GroupQueryAttention", "key shape");
+  CheckedShapeIndexProduct(args.value->shape, "GroupQueryAttention", "value shape");
   args.batch = args.query->shape[0];
   args.sequence_length = args.query->shape[1];
   if (args.key->shape[0] != args.batch || args.value->shape[0] != args.batch ||
@@ -323,6 +327,8 @@ template <typename Lookup> GqaArgs ResolveAndValidate(const NodeProto &node, Loo
       throw std::invalid_argument(
           "onnx_light_cpu::GroupQueryAttention: past_key/past_value must have rank 4.");
     }
+    CheckedShapeIndexProduct(args.past_key->shape, "GroupQueryAttention", "past key shape");
+    CheckedShapeIndexProduct(args.past_value->shape, "GroupQueryAttention", "past value shape");
     if (args.past_key->shape[0] != args.batch || args.past_value->shape[0] != args.batch ||
         args.past_key->shape[1] != args.kv_num_heads ||
         args.past_value->shape[1] != args.kv_num_heads) {
@@ -343,7 +349,8 @@ template <typename Lookup> GqaArgs ResolveAndValidate(const NodeProto &node, Loo
     }
     args.past_length = args.past_key->shape[2];
   }
-  args.total_length = args.past_length + args.sequence_length;
+  args.total_length = CheckedIndexAdd(args.past_length, args.sequence_length, "GroupQueryAttention",
+                                      "total sequence length");
 
   if (static_cast<DataType>(args.seqlens_k->data_type) != DataType::INT32 ||
       args.seqlens_k->shape.size() != 1 || args.seqlens_k->shape[0] != args.batch) {
@@ -372,6 +379,8 @@ template <typename Lookup> GqaArgs ResolveAndValidate(const NodeProto &node, Loo
       throw std::invalid_argument(
           "onnx_light_cpu::GroupQueryAttention: cos_cache/sin_cache must have rank 2.");
     }
+    CheckedShapeIndexProduct(args.cos_cache->shape, "GroupQueryAttention", "cos cache shape");
+    CheckedShapeIndexProduct(args.sin_cache->shape, "GroupQueryAttention", "sin cache shape");
     if (args.head_dim % 2 != 0) {
       throw std::invalid_argument(
           "onnx_light_cpu::GroupQueryAttention: rotary embeddings require an even head_size.");
@@ -419,7 +428,9 @@ template <typename Lookup> GqaArgs ResolveAndValidate(const NodeProto &node, Loo
 }
 
 std::vector<std::int64_t> ResolveRotaryPositions(const GqaArgs &args) {
-  std::vector<std::int64_t> positions(static_cast<std::size_t>(args.batch * args.sequence_length));
+  const std::size_t position_count = static_cast<std::size_t>(CheckedIndexMultiply(
+      args.batch, args.sequence_length, "GroupQueryAttention", "position count"));
+  std::vector<std::int64_t> positions(position_count);
   const std::int64_t *position_ids_data =
       args.position_ids != nullptr ? args.position_ids->AsInt64() : nullptr;
   const std::int32_t *seqlens_k_data = args.seqlens_k->AsInt32();
@@ -451,7 +462,8 @@ Tensor ApplyRotaryHalf(RuntimeContext *rt, const Tensor &input, std::int64_t hea
   const std::int64_t half = head_dim / 2;
   const std::size_t element_bytes = ElementByteWidth(dtype);
   const std::size_t total_bytes =
-      static_cast<std::size_t>(batch * sequence_length * hidden) * element_bytes;
+      CheckedByteSize(CheckedShapeProduct(input.shape, "GroupQueryAttention", "rotary shape"),
+                      element_bytes, "GroupQueryAttention", "rotary byte size");
   Tensor output = rt != nullptr
                       ? rt->MakeTemporaryTensor(input.data_type, input.shape, total_bytes)
                       : rt_ns::MakeOutputTensor(input.data_type, input.shape, total_bytes, nullptr);
@@ -490,11 +502,13 @@ Tensor ApplyRotaryHalf(RuntimeContext *rt, const Tensor &input, std::int64_t hea
 Tensor MakePresentCache(RuntimeContext *rt, int output_slot, DataType dtype, std::int64_t batch,
                         std::int64_t heads, std::int64_t past_length, std::int64_t sequence_length,
                         std::int64_t dim, const Tensor *past, const Tensor &current) {
-  const std::int64_t total_length = past_length + sequence_length;
+  const std::int64_t total_length =
+      CheckedIndexAdd(past_length, sequence_length, "GroupQueryAttention", "total sequence length");
   const Shape shape{batch, heads, total_length, dim};
   const std::size_t element_bytes = ElementByteWidth(dtype);
   const std::size_t total_bytes =
-      static_cast<std::size_t>(batch * heads * total_length * dim) * element_bytes;
+      CheckedByteSize(CheckedShapeProduct(shape, "GroupQueryAttention", "present cache shape"),
+                      element_bytes, "GroupQueryAttention", "present cache byte size");
   Tensor present =
       rt != nullptr
           ? rt->MakeOutputTensor(output_slot, static_cast<std::int32_t>(dtype), shape, total_bytes)
@@ -502,28 +516,65 @@ Tensor MakePresentCache(RuntimeContext *rt, int output_slot, DataType dtype, std
   std::uint8_t *dst = present.mutable_bytes();
   if (past_length > 0) {
     const std::uint8_t *past_bytes = past->bytes();
-    const std::size_t row_bytes = static_cast<std::size_t>(past_length * dim) * element_bytes;
+    const std::size_t row_bytes =
+        CheckedByteSize(static_cast<std::size_t>(CheckedIndexMultiply(
+                            past_length, dim, "GroupQueryAttention", "past cache row size")),
+                        element_bytes, "GroupQueryAttention", "past cache row byte size");
     for (std::int64_t b = 0; b < batch; ++b) {
       for (std::int64_t h = 0; h < heads; ++h) {
+        const std::size_t row =
+            CheckedAdd(CheckedMultiply(static_cast<std::size_t>(b), static_cast<std::size_t>(heads),
+                                       "GroupQueryAttention", "past cache row offset"),
+                       static_cast<std::size_t>(h), "GroupQueryAttention", "past cache row offset");
         const std::size_t src_offset =
-            static_cast<std::size_t>((b * heads + h) * past_length * dim) * element_bytes;
-        const std::size_t dst_offset =
-            static_cast<std::size_t>((b * heads + h) * total_length * dim) * element_bytes;
+            CheckedByteSize(CheckedProduct({row, static_cast<std::size_t>(past_length),
+                                            static_cast<std::size_t>(dim)},
+                                           "GroupQueryAttention", "past cache source offset"),
+                            element_bytes, "GroupQueryAttention", "past cache source byte offset");
+        const std::size_t dst_offset = CheckedByteSize(
+            CheckedProduct(
+                {row, static_cast<std::size_t>(total_length), static_cast<std::size_t>(dim)},
+                "GroupQueryAttention", "past cache destination offset"),
+            element_bytes, "GroupQueryAttention", "past cache destination byte offset");
         std::memcpy(dst + dst_offset, past_bytes + src_offset, row_bytes);
       }
     }
   }
   const std::uint8_t *current_bytes = current.bytes();
-  const std::int64_t hidden = heads * dim;
-  const std::size_t element_row_bytes = static_cast<std::size_t>(dim) * element_bytes;
+  const std::int64_t hidden =
+      CheckedIndexMultiply(heads, dim, "GroupQueryAttention", "current hidden size");
+  const std::size_t element_row_bytes =
+      CheckedByteSize(static_cast<std::size_t>(dim), element_bytes, "GroupQueryAttention",
+                      "current cache row byte size");
   for (std::int64_t b = 0; b < batch; ++b) {
     for (std::int64_t s = 0; s < sequence_length; ++s) {
       for (std::int64_t h = 0; h < heads; ++h) {
-        const std::size_t src_offset =
-            static_cast<std::size_t>((b * sequence_length + s) * hidden + h * dim) * element_bytes;
-        const std::size_t dst_offset =
-            static_cast<std::size_t>(((b * heads + h) * total_length + past_length + s) * dim) *
-            element_bytes;
+        const std::size_t current_row = CheckedAdd(
+            CheckedMultiply(static_cast<std::size_t>(b), static_cast<std::size_t>(sequence_length),
+                            "GroupQueryAttention", "current cache row offset"),
+            static_cast<std::size_t>(s), "GroupQueryAttention", "current cache row offset");
+        const std::size_t current_head =
+            CheckedMultiply(static_cast<std::size_t>(h), static_cast<std::size_t>(dim),
+                            "GroupQueryAttention", "current cache head offset");
+        const std::size_t src_offset = CheckedByteSize(
+            CheckedAdd(CheckedMultiply(current_row, static_cast<std::size_t>(hidden),
+                                       "GroupQueryAttention", "current cache source offset"),
+                       current_head, "GroupQueryAttention", "current cache source offset"),
+            element_bytes, "GroupQueryAttention", "current cache source byte offset");
+        const std::size_t cache_row = CheckedAdd(
+            CheckedMultiply(static_cast<std::size_t>(b), static_cast<std::size_t>(heads),
+                            "GroupQueryAttention", "present cache row offset"),
+            static_cast<std::size_t>(h), "GroupQueryAttention", "present cache row offset");
+        const std::size_t cache_sequence = CheckedAdd(
+            CheckedAdd(CheckedMultiply(cache_row, static_cast<std::size_t>(total_length),
+                                       "GroupQueryAttention", "present cache sequence offset"),
+                       static_cast<std::size_t>(past_length), "GroupQueryAttention",
+                       "present cache sequence offset"),
+            static_cast<std::size_t>(s), "GroupQueryAttention", "present cache sequence offset");
+        const std::size_t dst_offset = CheckedByteSize(
+            CheckedMultiply(cache_sequence, static_cast<std::size_t>(dim), "GroupQueryAttention",
+                            "present cache destination offset"),
+            element_bytes, "GroupQueryAttention", "present cache destination byte offset");
         std::memcpy(dst + dst_offset, current_bytes + src_offset, element_row_bytes);
       }
     }

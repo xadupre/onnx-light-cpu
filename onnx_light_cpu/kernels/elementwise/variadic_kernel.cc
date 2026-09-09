@@ -4,6 +4,7 @@
 
 #include "onnx_light_cpu/kernels/elementwise/variadic_kernel.h"
 
+#include "onnx_light_cpu/impl/checked_arithmetic.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
 #include "onnx_light_cpu/kernels/kernel_usage.h"
 
@@ -82,7 +83,8 @@ rt_ns::Tensor VariadicElementwiseKernel::operator()(const rt_ns::Tensors &inputs
   const rt_ns::Shape output_shape(
       std::vector<std::int64_t>(plan.output_shape().begin(), plan.output_shape().end()));
   const auto output_type = static_cast<rt_ns::DataType>(plan.data_type());
-  const std::size_t output_bytes = plan.element_count() * plan.element_size();
+  const std::size_t output_bytes = CheckedByteSize(plan.element_count(), plan.element_size(),
+                                                   "VariadicElementwise", "output byte size");
   rt_ns::Tensor output =
       rt != nullptr ? rt->MakeOutputTensor(0, output_type, output_shape, output_bytes)
                     : rt_ns::MakeOutputTensor(output_type, output_shape, output_bytes, nullptr);

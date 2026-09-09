@@ -4,6 +4,7 @@
 
 #include "onnx_light_cpu/impl/com_microsoft/bias_gelu.h"
 
+#include "onnx_light_cpu/impl/checked_arithmetic.h"
 #include "onnx_light_cpu/impl/execution.h"
 #include "onnx_light_cpu/impl/math/half_conversion.h"
 #include "onnx_light_cpu/impl/math/unary_execution_tuning.h"
@@ -115,6 +116,9 @@ void DispatchRows(std::size_t outer, std::size_t row_bytes, const BiasGeluExecut
   if (outer == 0) {
     return;
   }
+  if (outer > static_cast<std::size_t>(std::numeric_limits<std::int64_t>::max())) {
+    ThrowArithmeticError("BiasGelu", "row count", "overflows int64_t");
+  }
   const std::int64_t total = static_cast<std::int64_t>(outer);
   if (tuning.parallel_threshold_bytes == 0) {
     fn(0, total);
@@ -140,7 +144,8 @@ void BiasGeluDispatch(const T *a, const T *bias, T *output, std::size_t outer, s
   if (outer == 0 || inner == 0) {
     return;
   }
-  const std::size_t row_bytes = inner * sizeof(T);
+  const std::size_t row_bytes =
+      CheckedByteSize(inner, sizeof(T), "BiasGelu", "input row byte size");
   const BiasGeluFloat32RangeFn float32_range =
       std::is_same_v<T, float> ? SelectBiasGeluFloat32Range() : nullptr;
   DispatchRows(outer, row_bytes, tuning, [=](std::int64_t begin, std::int64_t end) {
@@ -170,7 +175,8 @@ void BiasGeluHalfDispatch(const std::uint16_t *a, const std::uint16_t *bias, std
   } else {
     detail::ConvertFloat16ToFloat32(bias, bias_float.data(), inner);
   }
-  const std::size_t row_bytes = inner * sizeof(std::uint16_t);
+  const std::size_t row_bytes =
+      CheckedByteSize(inner, sizeof(std::uint16_t), "BiasGelu", "input row byte size");
   const BiasGeluFloat32RangeFn float32_range = SelectBiasGeluFloat32Range();
   const float *bias_values = bias_float.data();
   DispatchRows(outer, row_bytes, tuning, [=](std::int64_t begin, std::int64_t end) {

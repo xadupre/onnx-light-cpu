@@ -19,6 +19,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -103,6 +104,21 @@ TEST(OnnxLightCDistKernel, RejectsZeroFeatureDimensionLikeOnnxRuntime) {
   onnx_light_cpu::CDistKernel kernel(MakeCtx());
   const rt_ns::Tensor a = rt_ns::Tensor::FromFloat("A", {2, 0}, std::vector<float>{});
   const rt_ns::Tensor b = rt_ns::Tensor::FromFloat("B", {3, 0}, std::vector<float>{});
+  EXPECT_THROW((void)kernel(a, b), std::invalid_argument);
+}
+
+TEST(OnnxLightCDistKernel, RejectsNegativeDimensionsAndOutputByteOverflow) {
+  onnx_light_cpu::CDistKernel kernel(MakeCtx());
+  rt_ns::Tensor a;
+  a.data_type = rt_ns::DataType::FLOAT;
+  a.shape = {std::numeric_limits<std::int64_t>::max(), 1};
+  rt_ns::Tensor b;
+  b.data_type = rt_ns::DataType::FLOAT;
+  b.shape = {2, 1};
+  EXPECT_THROW((void)kernel(a, b), std::invalid_argument);
+
+  a.shape = {-1, 1};
+  b.shape = {1, 1};
   EXPECT_THROW((void)kernel(a, b), std::invalid_argument);
 }
 

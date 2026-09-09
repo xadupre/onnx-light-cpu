@@ -4,6 +4,7 @@
 
 #include "onnx_light_cpu/kernels/traditionalml/tree_ensemble_kernel.h"
 
+#include "onnx_light_cpu/impl/checked_arithmetic.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
 #include "onnx_light_cpu/kernels/kernel_usage.h"
 
@@ -220,8 +221,11 @@ void TreeEnsembleKernel::Run(RuntimeContext &rt) {
   const std::int64_t rows = input.shape[0];
   const std::int64_t targets = plan_->attributes().n_targets;
   const std::size_t output_size =
-      static_cast<std::size_t>(rows) * static_cast<std::size_t>(targets);
-  const std::size_t output_bytes = output_size * input.element_size();
+      CheckedProduct({CheckedDimension(rows, "TreeEnsemble", "row count"),
+                      CheckedDimension(targets, "TreeEnsemble", "target count")},
+                     "TreeEnsemble", "output element count");
+  const std::size_t output_bytes =
+      CheckedByteSize(output_size, input.element_size(), "TreeEnsemble", "output byte size");
   Tensor output = rt.MakeOutputTensor(0, input.data_type, {rows, targets}, output_bytes);
   switch (static_cast<rt_ns::DataType>(input.data_type)) {
   case rt_ns::DataType::FLOAT:

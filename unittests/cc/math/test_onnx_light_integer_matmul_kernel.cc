@@ -83,6 +83,21 @@ TEST(OnnxLightMatMulIntegerKernel, AccumulationWrapsModuloInt32) {
   EXPECT_EQ(static_cast<std::uint32_t>(y.AsInt32()[0]), wrapped);
 }
 
+TEST(OnnxLightMatMulIntegerKernel, RejectsShapeAndOutputByteOverflow) {
+  onnx_light_cpu::MatMulIntegerKernel kernel(MakeCtx());
+  rt_ns::Tensor a;
+  a.data_type = rt_ns::DataType::INT8;
+  a.shape = {std::numeric_limits<std::int64_t>::max(), 1};
+  rt_ns::Tensor b;
+  b.data_type = rt_ns::DataType::INT8;
+  b.shape = {1, 2};
+  EXPECT_THROW((void)kernel(a, b), std::invalid_argument);
+
+  a.shape = {-1, 1};
+  b.shape = {1, 1};
+  EXPECT_THROW((void)kernel(a, b), std::invalid_argument);
+}
+
 TEST(OnnxLightQLinearMatMulKernel, RequantizesRoundToEvenAndSaturates) {
   onnx_light_cpu::QLinearMatMulKernel kernel(MakeCtx());
   const auto a = Tensor<std::int8_t>("a", {1, 1}, {1});
