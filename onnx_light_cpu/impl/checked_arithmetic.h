@@ -18,8 +18,7 @@ namespace onnx_light_cpu {
   throw std::invalid_argument(std::string(kernel) + ": " + label + " " + reason + ".");
 }
 
-inline std::size_t CheckedDimension(std::int64_t dimension, const char *kernel,
-                                    const char *label) {
+inline std::size_t CheckedDimension(std::int64_t dimension, const char *kernel, const char *label) {
   if (dimension < 0) {
     ThrowArithmeticError(kernel, label, "has a negative dimension");
   }
@@ -48,6 +47,11 @@ inline std::size_t CheckedAdd(std::size_t left, std::size_t right, const char *k
 
 inline std::size_t CheckedProduct(std::initializer_list<std::size_t> factors, const char *kernel,
                                   const char *label) {
+  for (const std::size_t factor : factors) {
+    if (factor == 0) {
+      return 0;
+    }
+  }
   std::size_t product = 1;
   for (const std::size_t factor : factors) {
     product = CheckedMultiply(product, factor, kernel, label);
@@ -57,6 +61,13 @@ inline std::size_t CheckedProduct(std::initializer_list<std::size_t> factors, co
 
 template <typename Shape>
 inline std::size_t CheckedShapeProduct(const Shape &shape, const char *kernel, const char *label) {
+  bool empty = false;
+  for (const std::int64_t dimension : shape) {
+    empty |= CheckedDimension(dimension, kernel, label) == 0;
+  }
+  if (empty) {
+    return 0;
+  }
   std::size_t product = 1;
   for (const std::int64_t dimension : shape) {
     product = CheckedMultiply(product, CheckedDimension(dimension, kernel, label), kernel, label);
@@ -64,13 +75,13 @@ inline std::size_t CheckedShapeProduct(const Shape &shape, const char *kernel, c
   return product;
 }
 
-inline std::size_t CheckedByteSize(std::size_t count, std::size_t element_size,
-                                   const char *kernel, const char *label) {
+inline std::size_t CheckedByteSize(std::size_t count, std::size_t element_size, const char *kernel,
+                                   const char *label) {
   return CheckedMultiply(count, element_size, kernel, label);
 }
 
-inline std::int64_t CheckedIndexMultiply(std::int64_t left, std::int64_t right,
-                                        const char *kernel, const char *label) {
+inline std::int64_t CheckedIndexMultiply(std::int64_t left, std::int64_t right, const char *kernel,
+                                         const char *label) {
   if (left < 0 || right < 0) {
     ThrowArithmeticError(kernel, label, "has a negative operand");
   }
@@ -94,6 +105,16 @@ inline std::int64_t CheckedIndexAdd(std::int64_t left, std::int64_t right, const
 template <typename Shape>
 inline std::int64_t CheckedShapeIndexProduct(const Shape &shape, const char *kernel,
                                              const char *label) {
+  bool empty = false;
+  for (const std::int64_t dimension : shape) {
+    if (dimension < 0) {
+      ThrowArithmeticError(kernel, label, "has a negative dimension");
+    }
+    empty |= dimension == 0;
+  }
+  if (empty) {
+    return 0;
+  }
   std::int64_t product = 1;
   for (const std::int64_t dimension : shape) {
     product = CheckedIndexMultiply(product, dimension, kernel, label);

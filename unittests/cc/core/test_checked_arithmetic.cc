@@ -46,6 +46,12 @@ TEST(CheckedArithmetic, ComputesBoundaryValues) {
   EXPECT_EQ(onnx_light_cpu::CheckedIndexMultiply(index_max / 7, 7, "Test", "stride"),
             index_max - index_max % 7);
   EXPECT_EQ(onnx_light_cpu::CheckedIndexAdd(index_max - 1, 1, "Test", "offset"), index_max);
+  EXPECT_EQ(onnx_light_cpu::CheckedShapeProduct(std::vector<std::int64_t>{index_max, 3, 0}, "Test",
+                                                "empty shape"),
+            0);
+  EXPECT_THROW(
+      onnx_light_cpu::CheckedShapeProduct(std::vector<std::int64_t>{0, -1}, "Test", "empty shape"),
+      std::invalid_argument);
 }
 
 } // namespace
