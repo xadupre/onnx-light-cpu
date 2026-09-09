@@ -46,6 +46,21 @@ def test_cpp_coverage_is_carried_forward_between_weekly_runs():
     assert "cpp:\n    carryforward: true" in _CODECOV_CONFIG
 
 
+def test_native_kernel_tests_run_in_source_integration_not_standalone():
+    standalone_job, source_jobs = _CORE_WORKFLOW.split("  setup_onnx_light_source:", 1)
+    source_job = source_jobs.split("  report_pr_benchmark:", 1)[0]
+    for filename in (
+        "test_kernels_e2e.py",
+        "test_kernels_doc_e2e.py",
+        "test_simplified_layer_normalization.py",
+        "test_skip_simplified_layer_normalization.py",
+    ):
+        exclusion = f"--ignore=unittests/python/{filename}"
+        assert exclusion in standalone_job
+        assert exclusion not in source_job
+    assert "run: python -m pytest unittests" in source_job
+
+
 def test_pr_benchmark_infers_filters_and_updates_comment():
     source_job = _CORE_WORKFLOW.split("  setup_onnx_light_source:", 1)[1].split(
         "  report_pr_benchmark:", 1
