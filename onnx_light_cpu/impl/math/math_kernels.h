@@ -59,6 +59,8 @@ template <typename T> struct GemmEpilogue {
 /// Computes elementwise absolute value: out[i] = |input[i]| for float32.
 /// Dispatches to the best available SIMD path at runtime.
 void AbsFloat32(const float *input, float *output, std::size_t count);
+/// ISA-specific defaults; the portable fallback keeps cached stores.
+const UnaryExecutionTuning &DefaultAbsFloat32ExecutionTuning();
 void AbsFloat32WithTuning(const float *input, float *output, std::size_t count,
                           const UnaryExecutionTuning &tuning);
 

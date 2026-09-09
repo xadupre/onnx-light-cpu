@@ -14,6 +14,7 @@
 #include "onnx_core/runtime/tuning/kernel_tuning.h"
 #include "onnx_core/symbolic/sym_tensor.h"
 #include "onnx_light_cpu/impl/execution.h"
+#include "onnx_light_cpu/impl/math/math_kernels.h"
 
 #include <gtest/gtest.h>
 
@@ -123,11 +124,14 @@ TEST(OnnxLightAbsKernel, RegistersAndAppliesValidatedTuning) {
   const auto schema = rt_ns::GetKernelTuningRegistry().FindSchema(key);
   ASSERT_NE(schema, nullptr);
   auto parameters = schema->portable_defaults();
+  const auto &float_defaults = onnx_light_cpu::DefaultAbsFloat32ExecutionTuning();
   EXPECT_EQ(parameters.Get<int64_t>("parallel.threshold_bytes"), 2 * 1024 * 1024);
-  EXPECT_EQ(parameters.Get<int64_t>("parallel.target_block_bytes"), 256 * 1024);
+  EXPECT_EQ(parameters.Get<int64_t>("parallel.target_block_bytes"),
+            static_cast<int64_t>(float_defaults.target_block_bytes));
   EXPECT_EQ(parameters.Get<int64_t>("parallel.max_participants"), 32);
   EXPECT_EQ(parameters.Get<int64_t>("parallel.preferred_participants"), 0);
-  EXPECT_EQ(parameters.Get<int64_t>("memory.streaming_store_threshold_bytes"), 0);
+  EXPECT_EQ(parameters.Get<int64_t>("memory.streaming_store_threshold_bytes"),
+            static_cast<int64_t>(float_defaults.streaming_store_threshold_bytes));
   EXPECT_EQ(parameters.Get<int64_t>("parallel.cost_model"), 1);
 
   parameters.values["parallel.threshold_bytes"] = int64_t{1};

@@ -81,7 +81,7 @@ void ValidateTuning(const rt_ns::KernelTuningParameters &parameters) {
 const UnaryExecutionTuning &DefaultTuning(int32_t element_type) {
   switch (static_cast<DataType>(element_type)) {
   case DataType::FLOAT:
-    return kDefaultAbsFloat32ExecutionTuning;
+    return DefaultAbsFloat32ExecutionTuning();
   case DataType::DOUBLE:
     return kDefaultAbs64ExecutionTuning;
   case DataType::FLOAT16:

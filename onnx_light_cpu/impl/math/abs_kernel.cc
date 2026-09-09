@@ -4,8 +4,10 @@
 
 #include "onnx_light_cpu/impl/math/math_kernels.h"
 
+#include "onnx_light_cpu/impl/cpu_cache_topology.h"
 #include "onnx_light_cpu/impl/execution.h"
 
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -72,6 +74,29 @@ void AbsFloat32_AVX(const float *input, float *output, std::size_t count) {
   }
 }
 
+void AbsFloat32_AVXStreaming(const float *input, float *output, std::size_t count) {
+  std::size_t i = 0;
+  while (i < count && reinterpret_cast<std::uintptr_t>(output + i) % 64 != 0) {
+    output[i] = std::fabs(input[i]);
+    ++i;
+  }
+  const __m256 mask = _mm256_castsi256_ps(_mm256_set1_epi32(0x7FFFFFFF));
+  const std::size_t end = i + (count - i) / 16 * 16;
+  const bool streamed = i < end;
+  for (; i < end; i += 16) {
+    const __m256 v0 = _mm256_and_ps(_mm256_loadu_ps(input + i), mask);
+    const __m256 v1 = _mm256_and_ps(_mm256_loadu_ps(input + i + 8), mask);
+    _mm256_stream_ps(output + i, v0);
+    _mm256_stream_ps(output + i + 8, v1);
+  }
+  for (; i < count; ++i) {
+    output[i] = std::fabs(input[i]);
+  }
+  if (streamed) {
+    _mm_sfence();
+  }
+}
+
 #endif // ONNX_LIGHT_CPU_X86
 
 } // namespace
@@ -83,6 +108,8 @@ struct AbsFloat32Dispatch {
   AbsFloat32Fn function;
   AbsFloat32Fn streaming_function;
   double compute_cycles;
+  UnaryExecutionTuning default_tuning = kDefaultAbsFloat32ExecutionTuning;
+  bool dynamic_ranges = false;
 };
 
 constexpr double AbsComputeCycles(std::size_t simd_lanes) {
@@ -103,7 +130,16 @@ const AbsFloat32Dispatch &GetAbsFloat32Dispatch() {
     }
 #endif
     if (level >= SimdLevel::kAVX) {
-      return AbsFloat32Dispatch{&AbsFloat32_AVX, nullptr, AbsComputeCycles(8)};
+      const std::size_t cache_bytes = CpuCacheSizeBytesOrFallback(GetCpuCacheTopology(), 3, 0);
+      // Keep cached stores when the input and output fit in the last-level
+      // cache. Unknown cache topology retains the opt-in streaming policy.
+      const std::size_t streaming_threshold =
+          cache_bytes == 0 ? 0 : std::max<std::size_t>(16 * 1024 * 1024, cache_bytes / 2 + 1);
+      return AbsFloat32Dispatch{&AbsFloat32_AVX,
+                                &AbsFloat32_AVXStreaming,
+                                AbsComputeCycles(8),
+                                {2 * 1024 * 1024, 1024 * 1024, 32, true, 0, streaming_threshold},
+                                true};
     }
     if (level >= SimdLevel::kSSE2) {
       return AbsFloat32Dispatch{&AbsFloat32_SSE2, nullptr, AbsComputeCycles(4)};
@@ -115,24 +151,53 @@ const AbsFloat32Dispatch &GetAbsFloat32Dispatch() {
 }
 } // namespace
 
+const UnaryExecutionTuning &DefaultAbsFloat32ExecutionTuning() {
+  return GetAbsFloat32Dispatch().default_tuning;
+}
+
 void AbsFloat32(const float *input, float *output, std::size_t count) {
-  AbsFloat32WithTuning(input, output, count, kDefaultAbsFloat32ExecutionTuning);
+  AbsFloat32WithTuning(input, output, count, DefaultAbsFloat32ExecutionTuning());
 }
 
 void AbsFloat32WithTuning(const float *input, float *output, std::size_t count,
                           const UnaryExecutionTuning &tuning) {
+  if (count == 0) {
+    return;
+  }
   const bool streaming_store =
       tuning.streaming_store_threshold_bytes != 0 &&
       count >= UnaryBytesToElements(tuning.streaming_store_threshold_bytes, sizeof(float));
   const AbsFloat32Dispatch &dispatch = GetAbsFloat32Dispatch();
-  auto execute = [input, output, streaming_store, &dispatch](std::int64_t begin, std::int64_t end) {
-    const AbsFloat32Fn function = streaming_store && dispatch.streaming_function != nullptr
-                                      ? dispatch.streaming_function
-                                      : dispatch.function;
-    function(input + begin, output + begin, static_cast<std::size_t>(end - begin));
+  const AbsFloat32Fn function = streaming_store && dispatch.streaming_function != nullptr
+                                    ? dispatch.streaming_function
+                                    : dispatch.function;
+  constexpr std::size_t tile = 16 * 1024;
+  std::atomic<std::size_t> next{0};
+  const bool dynamic = dispatch.dynamic_ranges && streaming_store && count >= 2 * tile &&
+                       tuning.max_participants != 1 && tuning.preferred_participants != 1 &&
+                       ExecutionThreadCount() > 1 && !ExecutionInParallelRegion();
+  auto execute = [input, output, function, &next, dynamic, count, tile](std::int64_t begin,
+                                                                        std::int64_t end) {
+    if (dynamic) {
+      // Workers claim cache-sized tiles so slower workers do not delay fixed ranges.
+      for (std::size_t first = next.fetch_add(tile, std::memory_order_relaxed); first < count;
+           first = next.fetch_add(tile, std::memory_order_relaxed)) {
+        function(input + first, output + first, std::min(tile, count - first));
+      }
+    } else {
+      function(input + begin, output + begin, static_cast<std::size_t>(end - begin));
+    }
   };
   if (tuning.use_cost_model) {
-    ExecuteCostedUnaryRanges<float>(count, tuning, dispatch.compute_cycles, std::move(execute));
+    auto bounded = tuning;
+    if (dynamic) {
+      const std::size_t useful_participants = std::max<std::size_t>(
+          1, count / UnaryBytesToElements(tuning.target_block_bytes, sizeof(float)));
+      bounded.max_participants = tuning.max_participants == 0
+                                     ? useful_participants
+                                     : std::min(tuning.max_participants, useful_participants);
+    }
+    ExecuteCostedUnaryRanges<float>(count, bounded, dispatch.compute_cycles, std::move(execute));
   } else {
     ExecuteUnaryRanges<float>(count, tuning, std::move(execute));
   }
