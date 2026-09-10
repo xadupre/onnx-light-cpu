@@ -101,6 +101,41 @@ class TestBenchmarkCli(ExtTestCase):
                 with_onnxruntime=False,
             )
 
+    def test_no_matching_backend_tests_returns_empty_results(self):
+        with (
+            mock.patch("onnx_light_cpu._benchmark.register_backend_test_cases"),
+            mock.patch("onnx_light_cpu._benchmark.register_kernels"),
+            mock.patch("onnx_light.onnx.backend.collect_test_cases_by_name", return_value=[]),
+        ):
+            rows = _benchmark.run_backend_benchmark(
+                tests=[r"^test_cpu_no_such_operator_"],
+                dtypes=["all"],
+                repeat=1,
+                warmup=0,
+                max_repeat_time=1.0,
+                threads=1,
+                with_onnxruntime=False,
+                allow_empty=True,
+            )
+        self.assertEqual(rows, ([], []))
+
+    def test_no_matching_explicit_backend_tests_raise(self):
+        with (
+            mock.patch("onnx_light_cpu._benchmark.register_backend_test_cases"),
+            mock.patch("onnx_light_cpu._benchmark.register_kernels"),
+            mock.patch("onnx_light.onnx.backend.collect_test_cases_by_name", return_value=[]),
+            self.assertRaisesRegex(ValueError, "no benchmark backend test matches"),
+        ):
+            _benchmark.run_backend_benchmark(
+                tests=[r"^test_cpu_no_such_operator_"],
+                dtypes=["all"],
+                repeat=1,
+                warmup=0,
+                max_repeat_time=1.0,
+                threads=1,
+                with_onnxruntime=False,
+            )
+
     def test_selects_backend_tests_and_dtypes(self):
         cases = [
             SimpleNamespace(name="test_cpu_abs_float32_benchmark", unload=mock.Mock()),
@@ -498,6 +533,16 @@ class TestBenchmarkCli(ExtTestCase):
                 "\n</div>\n",
             )
 
+    def test_writes_no_matching_backend_tests_message(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "benchmark-pr.md"
+            write_pr_benchmark_markdown(output, [], [r"^test_cpu_(tree_?ensemble)_"])
+            self.assertEqual(
+                output.read_text(encoding="utf-8"),
+                "No corresponding backend tests were found for regular expression "
+                "`^test_cpu_(tree_?ensemble)_`.\n",
+            )
+
     def test_pull_request_formatting_sorts_by_increasing_speedup(self):
         aggregated = [
             {
@@ -572,11 +617,12 @@ class TestBenchmarkCli(ExtTestCase):
             max_repeat_time=1.0,
             threads=1,
             with_onnxruntime=False,
+            allow_empty=False,
         )
         write.assert_called_once_with("results.xlsx", *rows)
         markdown.assert_called_once_with("results.md", rows[1])
-        pr_markdown.assert_called_once_with("pr-results.md", rows[1])
-        post.assert_called_once_with("623", rows[1])
+        pr_markdown.assert_called_once_with("pr-results.md", rows[1], [r"^test_cpu_(abs|log)_"])
+        post.assert_called_once_with("623", rows[1], [r"^test_cpu_(abs|log)_"])
         infer.assert_not_called()
 
     def test_main_infers_filters_from_pull_request(self):
@@ -594,6 +640,7 @@ class TestBenchmarkCli(ExtTestCase):
         infer.assert_called_once_with("623")
         self.assertEqual(run.call_args.kwargs["tests"], [r"^test_cpu_(abs)_"])
         self.assertEqual(run.call_args.kwargs["dtypes"], ["float32"])
+        self.assertTrue(run.call_args.kwargs["allow_empty"])
 
 
 if __name__ == "__main__":

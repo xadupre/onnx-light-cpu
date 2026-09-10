@@ -136,10 +136,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         tests = args.tests or ["^test_cpu_"]
         dtypes = args.dtypes or ["all"]
         selection_pr = args.from_pr if args.from_pr is not None else args.pr
+        selection_inferred = False
         if selection_pr is not None and not args.tests and not args.dtypes:
             tests, dtypes = pull_request_benchmark_selection(selection_pr)
             if not tests:
                 raise ValueError("no benchmark operator could be inferred from the pull request")
+            selection_inferred = True
         raw_rows, aggregated_rows = run_backend_benchmark(
             tests=tests,
             dtypes=dtypes,
@@ -148,14 +150,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             max_repeat_time=args.max_repeat_time,
             threads=args.threads,
             with_onnxruntime=args.onnxruntime,
+            allow_empty=selection_inferred,
         )
         write_benchmark_workbook(args.output, raw_rows, aggregated_rows)
         if args.markdown:
             write_benchmark_markdown(args.markdown, aggregated_rows)
         if args.pr_markdown:
-            write_pr_benchmark_markdown(args.pr_markdown, aggregated_rows)
+            write_pr_benchmark_markdown(args.pr_markdown, aggregated_rows, tests)
         if args.pr is not None:
-            post_benchmark_markdown(args.pr, aggregated_rows)
+            post_benchmark_markdown(args.pr, aggregated_rows, tests)
         print(
             f"Wrote {len(raw_rows)} measurements for {len(aggregated_rows)} cases "
             f"to {args.output}"
