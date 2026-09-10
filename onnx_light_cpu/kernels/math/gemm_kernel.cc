@@ -252,8 +252,8 @@ void Require2D(const Tensor &t, const char *name, std::size_t &rows, std::size_t
     throw std::invalid_argument(std::string("onnx_light_cpu::GemmKernel: input ") + name +
                                 " must be a 2-D matrix.");
   }
-  rows = static_cast<std::size_t>(t.shape[0]);
-  cols = static_cast<std::size_t>(t.shape[1]);
+  rows = CheckedDimension(t.shape[0], "GemmKernel", name);
+  cols = CheckedDimension(t.shape[1], "GemmKernel", name);
 }
 
 // Resolves ONNX unidirectional broadcasting without materializing C.

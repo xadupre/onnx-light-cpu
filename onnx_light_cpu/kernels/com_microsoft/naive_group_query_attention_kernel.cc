@@ -380,10 +380,16 @@ template <typename Lookup> GqaArgs ResolveAndValidate(const NodeProto &node, Loo
     }
   }
 
-  if (args.attention_bias != nullptr && args.attention_bias->shape.size() > 4) {
-    throw std::invalid_argument(
-        "onnx_light_cpu::NaiveGroupQueryAttention: attention_bias must have at most 4 "
-        "dimensions.");
+  if (args.attention_bias != nullptr) {
+    if (args.attention_bias->shape.size() > 4) {
+      throw std::invalid_argument(
+          "onnx_light_cpu::NaiveGroupQueryAttention: attention_bias must have at most 4 "
+          "dimensions.");
+    }
+    const std::int64_t attention_bias_count = CheckedShapeIndexProduct(
+        args.attention_bias->shape, "NaiveGroupQueryAttention", "attention_bias shape");
+    CheckedStride(static_cast<std::size_t>(attention_bias_count), "NaiveGroupQueryAttention",
+                  "attention_bias shape");
   }
 
   if (args.do_rotary) {

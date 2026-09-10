@@ -241,7 +241,9 @@ AttentionPlan::AttentionPlan(const AttentionDescriptor &descriptor, AttentionLay
                       Stride({past_length, v_head_dim}, "past V head stride"),
                       Stride({v_head_dim}, "past V stride")};
   }
-  total_kv_length = CheckedAdd(past_length, kv_length, "AttentionPlan", "total KV length");
+  total_kv_length = static_cast<std::size_t>(CheckedIndexAdd(static_cast<std::int64_t>(past_length),
+                                                             static_cast<std::int64_t>(kv_length),
+                                                             "AttentionPlan", "total KV length"));
   CheckedStride(
       CheckedProduct({batch, q_num_heads, q_length, head_dim}, "AttentionPlan", "Q element count"),
       "AttentionPlan", "Q element count");
