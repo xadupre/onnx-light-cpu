@@ -78,6 +78,25 @@ another implementation or fail according to the normal dispatch contract.
 Correctness contract
 --------------------
 
+``SOFTMAX_ZERO`` retains the signed near-zero contributions and normalization
+of the `ONNX reference helper
+<https://github.com/onnx/onnx/blob/27d7d6890cb8bfa7ed5cda2f2656f82b6af0736a/onnx/reference/ops/aionnxml/_common_classifier.py#L15-L30>`_,
+except when the normalization sum is zero (including all-zero scores and
+cancelling near-zero scores). In that case, this engine returns
+``1 / n_targets`` for each target: finite, uniform scores summing to one,
+within output-type rounding. This preserves the two-target result of ``0.5``
+and extends it to every positive target count.
+
+This is an explicit robustness policy for an edge case left unspecified by
+the `TreeEnsemble schema
+<https://github.com/onnx/onnx/blob/27d7d6890cb8bfa7ed5cda2f2656f82b6af0736a/onnx/defs/traditionalml/defs.cc#L943-L949>`_,
+not a claim of degenerate-case runtime parity: the ONNX reference helper
+fills ``0.5`` regardless of target count, while `ONNX Runtime's helper
+<https://github.com/microsoft/onnxruntime/blob/f2c39fe2f838cf35ce7da92824f5a5e3ee6e88a7/onnxruntime/core/providers/cpu/ml/ml_common.h#L307-L328>`_
+excludes near-zero contributions from its denominator and divides without a
+zero-sum guard. Nonzero-sum behavior is unchanged; signed near-zero scores
+are not guaranteed to produce nonnegative probabilities.
+
 Model preparation validates all structural invariants before execution:
 
 * every required attribute has the expected type, rank, and length;
