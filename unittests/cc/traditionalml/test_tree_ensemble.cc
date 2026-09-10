@@ -1175,7 +1175,9 @@ TEST(TreeEnsembleOracle, DeepTopologyPreprocessingIsIterative) {
   EXPECT_EQ(plan.average_depth(), kDepth);
   EXPECT_FALSE(plan.all_trees_are_balanced());
   EXPECT_FALSE(plan.all_trees_are_symmetric());
-  EXPECT_EQ(plan.Evaluate({-1.0}, 1), (std::vector<double>{1.0}));
+  const auto result = plan.Evaluate({-1.0}, 1);
+  ASSERT_EQ(result.size(), 1U);
+  EXPECT_EQ(result[0], 1.0);
 }
 
 TEST(TreeEnsembleOracle, RejectsMalformedMembershipDelimiters) {
