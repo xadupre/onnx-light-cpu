@@ -428,11 +428,6 @@ def run_backend_benchmark(
             and _case_dtype(case.name) in selected_dtypes
         )
     ]
-    if not cases:
-        raise ValueError(
-            f"no benchmark backend test matches tests={list(tests)!r}, dtypes={list(dtypes)!r}"
-        )
-
     raw_rows = []
     aggregated_rows = []
     for index, case in enumerate(cases, start=1):
@@ -503,7 +498,14 @@ def write_benchmark_markdown(
     output.write_text(_benchmark_markdown(aggregated_rows), encoding="utf-8")
 
 
-def _pr_benchmark_markdown(aggregated_rows: Sequence[dict[str, Any]]) -> str:
+def _pr_benchmark_markdown(
+    aggregated_rows: Sequence[dict[str, Any]], tests: Sequence[str] = ()
+) -> str:
+    if not aggregated_rows:
+        expressions = ", ".join(f"`{expression}`" for expression in tests)
+        return (
+            f"No corresponding backend tests were found for regular expression {expressions}.\n"
+        )
     pr_rows = [
         {
             "speedup": None if row["speedup"] is None else f"{row['speedup']:.2f}",
@@ -525,15 +527,21 @@ def _pr_benchmark_markdown(aggregated_rows: Sequence[dict[str, Any]]) -> str:
 
 
 def write_pr_benchmark_markdown(
-    path: str | os.PathLike[str], aggregated_rows: Sequence[dict[str, Any]]
+    path: str | os.PathLike[str],
+    aggregated_rows: Sequence[dict[str, Any]],
+    tests: Sequence[str] = (),
 ) -> None:
     """Writes the concise pull request benchmark table."""
     output = Path(path)
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(_pr_benchmark_markdown(aggregated_rows), encoding="utf-8")
+    output.write_text(_pr_benchmark_markdown(aggregated_rows, tests), encoding="utf-8")
 
 
-def post_benchmark_markdown(pull_request: str, aggregated_rows: Sequence[dict[str, Any]]) -> None:
+def post_benchmark_markdown(
+    pull_request: str,
+    aggregated_rows: Sequence[dict[str, Any]],
+    tests: Sequence[str] = (),
+) -> None:
     """Adds aggregated benchmark data to a pull request with GitHub CLI."""
     command = ["gh", "pr", "comment"]
     if pull_request:
@@ -541,7 +549,7 @@ def post_benchmark_markdown(pull_request: str, aggregated_rows: Sequence[dict[st
     command.extend(["--edit-last", "--create-if-none", "--body-file", "-"])
     subprocess.run(
         command,
-        input=_pr_benchmark_markdown(aggregated_rows),
+        input=_pr_benchmark_markdown(aggregated_rows, tests),
         text=True,
         check=True,
     )

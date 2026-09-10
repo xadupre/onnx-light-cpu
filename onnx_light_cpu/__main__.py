@@ -153,9 +153,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.markdown:
             write_benchmark_markdown(args.markdown, aggregated_rows)
         if args.pr_markdown:
-            write_pr_benchmark_markdown(args.pr_markdown, aggregated_rows)
+            write_pr_benchmark_markdown(args.pr_markdown, aggregated_rows, tests)
         if args.pr is not None:
-            post_benchmark_markdown(args.pr, aggregated_rows)
+            post_benchmark_markdown(args.pr, aggregated_rows, tests)
         print(
             f"Wrote {len(raw_rows)} measurements for {len(aggregated_rows)} cases "
             f"to {args.output}"
