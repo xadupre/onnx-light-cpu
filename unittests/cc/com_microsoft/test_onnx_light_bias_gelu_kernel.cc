@@ -21,6 +21,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -137,6 +138,20 @@ TEST(OnnxLightBiasGeluKernel, RejectsMismatchedDataTypes) {
   onnx_light_cpu::BiasGeluKernel kernel(MakeCtx());
   const rt_ns::Tensor a = rt_ns::Tensor::FromFloat("A", {1, 3}, std::vector<float>(3, 1.0f));
   const rt_ns::Tensor b = rt_ns::Tensor::FromDouble("B", {3}, std::vector<double>(3, 1.0));
+  EXPECT_THROW((void)kernel(a, b), std::invalid_argument);
+}
+
+TEST(OnnxLightBiasGeluKernel, RejectsNegativeDimensionsAndOutputByteOverflow) {
+  onnx_light_cpu::BiasGeluKernel kernel(MakeCtx());
+  rt_ns::Tensor a;
+  a.data_type = rt_ns::DataType::FLOAT;
+  a.shape = {std::numeric_limits<std::int64_t>::max(), 2};
+  rt_ns::Tensor b;
+  b.data_type = rt_ns::DataType::FLOAT;
+  b.shape = {2};
+  EXPECT_THROW((void)kernel(a, b), std::invalid_argument);
+
+  a.shape = {-1, 2};
   EXPECT_THROW((void)kernel(a, b), std::invalid_argument);
 }
 

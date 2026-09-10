@@ -4,6 +4,7 @@
 
 #include "onnx_light_cpu/impl/com_microsoft/cdist.h"
 
+#include "onnx_light_cpu/impl/checked_arithmetic.h"
 #include "onnx_light_cpu/impl/execution.h"
 #include "onnx_light_cpu/impl/math/unary_execution_tuning.h"
 #include "onnx_light_cpu/impl/simd_level.h"
@@ -95,7 +96,11 @@ void CDistDispatch(const T *a, const T *b, T *c, std::size_t m, std::size_t k, s
   if (m == 0) {
     return;
   }
-  const std::size_t row_bytes = std::max<std::size_t>(n, 1) * sizeof(T);
+  const std::size_t row_bytes =
+      CheckedByteSize(std::max<std::size_t>(n, 1), sizeof(T), "CDist", "input row byte size");
+  if (m > static_cast<std::size_t>(std::numeric_limits<std::int64_t>::max())) {
+    ThrowArithmeticError("CDist", "row count", "overflows int64_t");
+  }
   const std::int64_t total = static_cast<std::int64_t>(m);
   const CDistRowsFn<T> rows = SelectCDistRows<T>(n);
   auto execute = [=](std::int64_t begin, std::int64_t end) {
@@ -125,8 +130,10 @@ void CDistDispatch(const T *a, const T *b, T *c, std::size_t m, std::size_t k, s
     // the ``A`` row and the ``k`` outputs are charged as this row's own
     // traffic while the compute cost captures the full ``k * n`` reduction.
     const double compute_cycles = static_cast<double>(k) * static_cast<double>(n);
-    const ExecutionWorkCost cost{static_cast<double>(row_bytes), static_cast<double>(k * sizeof(T)),
-                                 compute_cycles};
+    const ExecutionWorkCost cost{
+        static_cast<double>(row_bytes),
+        static_cast<double>(CheckedByteSize(k, sizeof(T), "CDist", "output row byte size")),
+        compute_cycles};
     ExecuteCostedRanges(total, cost, schedule, std::int64_t{1}, std::move(execute));
   } else {
     ExecuteRanges(total, schedule, std::int64_t{1}, std::move(execute));

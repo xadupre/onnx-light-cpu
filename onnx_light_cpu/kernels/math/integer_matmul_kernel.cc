@@ -4,6 +4,7 @@
 
 #include "onnx_light_cpu/kernels/math/integer_matmul_kernel.h"
 
+#include "onnx_light_cpu/impl/checked_arithmetic.h"
 #include "onnx_light_cpu/impl/execution.h"
 #include "onnx_light_cpu/impl/math/gemm/vnni/integer_gemm_vnni.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
@@ -106,20 +107,14 @@ struct BatchWorkItem {
 Shape ComputeStrides(const Shape &shape) {
   Shape strides(std::vector<int64_t>(shape.size(), 1));
   for (std::size_t index = shape.size(); index > 1; --index) {
-    strides[index - 2] = strides[index - 1] * shape[index - 1];
+    strides[index - 2] = CheckedIndexMultiply(strides[index - 1], shape[index - 1],
+                                              "integer MatMul", "input stride");
   }
   return strides;
 }
 
 int64_t ElementCount(const Shape &shape) {
-  int64_t count = 1;
-  for (int64_t dimension : shape) {
-    if (dimension < 0) {
-      throw std::invalid_argument("integer MatMul requires concrete non-negative dimensions.");
-    }
-    count *= dimension;
-  }
-  return count;
+  return CheckedShapeIndexProduct(shape, "integer MatMul", "shape element count");
 }
 
 MatMulLayout ResolveLayout(const Tensor &a, const Tensor &b) {
@@ -320,7 +315,8 @@ Tensor MatMulIntegerKernel::operator()(const Tensor &a, const Tensor &b, const T
   const IntegerZeroPoints b_zp =
       ReadZeroPoints(b_zero_point, b.data_type, layout.n, "b_zero_point");
   const std::size_t output_bytes =
-      static_cast<std::size_t>(ElementCount(layout.output_shape)) * sizeof(int32_t);
+      CheckedByteSize(static_cast<std::size_t>(ElementCount(layout.output_shape)), sizeof(int32_t),
+                      "MatMulInteger", "output byte size");
   Tensor output = rt != nullptr
                       ? rt->MakeOutputTensor(0, static_cast<int32_t>(DataType::INT32),
                                              layout.output_shape, output_bytes)
@@ -438,7 +434,8 @@ Tensor QLinearMatMulKernel::operator()(const Tensor &a, const Tensor &a_scale,
     const std::int32_t a_zp[1] = {az};
     const std::int32_t b_zp[1] = {bz};
     const std::vector<BatchWorkItem> work_items = BuildBatchWorkItems(layout);
-    const int64_t matrix_size = layout.m * layout.n;
+    const int64_t matrix_size =
+        CheckedIndexMultiply(layout.m, layout.n, "QLinearMatMul", "matrix element count");
     const double cost =
         static_cast<double>(matrix_size) * static_cast<double>(std::max<int64_t>(layout.k, 1));
     ExecuteRanges(static_cast<int64_t>(work_items.size()), cost, [&](int64_t begin, int64_t end) {

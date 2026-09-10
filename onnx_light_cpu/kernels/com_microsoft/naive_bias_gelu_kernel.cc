@@ -4,6 +4,7 @@
 
 #include "onnx_light_cpu/kernels/com_microsoft/naive_bias_gelu_kernel.h"
 
+#include "onnx_light_cpu/impl/checked_arithmetic.h"
 #include "onnx_light_cpu/impl/math/half_conversion.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
 #include "onnx_light_cpu/kernels/kernel_usage.h"
@@ -87,7 +88,9 @@ NaiveBiasGeluKernel::NaiveBiasGeluKernel(const NodeProto &node, const rt_ns::Ker
 }
 
 Tensor NaiveBiasGeluKernel::operator()(const Tensor &a, const Tensor &b, RuntimeContext *rt) const {
-  const std::size_t bytes = static_cast<std::size_t>(a.element_count()) * a.element_size();
+  const std::size_t bytes = CheckedByteSize(
+      static_cast<std::size_t>(a.shape.product(0, a.shape.size(), "NaiveBiasGelu A")),
+      a.element_size(), "NaiveBiasGelu", "output byte size");
   Tensor output = rt != nullptr ? rt->MakeOutputTensor(0, a.data_type, a.shape, bytes)
                                 : rt_ns::MakeOutputTensor(a.data_type, a.shape, bytes, nullptr);
   (*this)(a, b, output);

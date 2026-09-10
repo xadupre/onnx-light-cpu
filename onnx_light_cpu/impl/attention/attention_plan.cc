@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "onnx_light_cpu/impl/attention/attention_plan.h"
+#include "onnx_light_cpu/impl/checked_arithmetic.h"
 
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512
 #include "onnx_light_cpu/impl/attention/avx512/attention_kernel_avx512.h"
@@ -32,10 +33,11 @@ namespace {
 [[noreturn]] void Fail(const char *message) { throw std::invalid_argument(message); }
 
 std::size_t ToSize(std::int64_t dimension, const char *what) {
-  if (dimension < 0) {
-    Fail(what);
-  }
-  return static_cast<std::size_t>(dimension);
+  return CheckedDimension(dimension, "AttentionPlan", what);
+}
+
+std::ptrdiff_t Stride(std::initializer_list<std::size_t> factors, const char *what) {
+  return CheckedStride(CheckedProduct(factors, "AttentionPlan", what), "AttentionPlan", what);
 }
 
 std::int64_t SaturatingAdd(std::int64_t left, std::int64_t right) noexcept {
@@ -135,18 +137,15 @@ AttentionPlan::AttentionPlan(const AttentionDescriptor &descriptor, AttentionLay
     if (k_head_dim != head_dim) {
       Fail("AttentionPlan: Q and K must share the same head_size.");
     }
-    q_strides = {static_cast<std::ptrdiff_t>(q_num_heads * q_length * head_dim),
-                 static_cast<std::ptrdiff_t>(q_length * head_dim),
-                 static_cast<std::ptrdiff_t>(head_dim)};
-    k_strides = {static_cast<std::ptrdiff_t>(kv_num_heads * kv_length * head_dim),
-                 static_cast<std::ptrdiff_t>(kv_length * head_dim),
-                 static_cast<std::ptrdiff_t>(head_dim)};
-    v_strides = {static_cast<std::ptrdiff_t>(kv_num_heads * kv_length * v_head_dim),
-                 static_cast<std::ptrdiff_t>(kv_length * v_head_dim),
-                 static_cast<std::ptrdiff_t>(v_head_dim)};
-    y_strides = {static_cast<std::ptrdiff_t>(q_num_heads * q_length * v_head_dim),
-                 static_cast<std::ptrdiff_t>(q_length * v_head_dim),
-                 static_cast<std::ptrdiff_t>(v_head_dim)};
+    q_strides = {Stride({q_num_heads, q_length, head_dim}, "Q batch stride"),
+                 Stride({q_length, head_dim}, "Q head stride"), Stride({head_dim}, "Q stride")};
+    k_strides = {Stride({kv_num_heads, kv_length, head_dim}, "K batch stride"),
+                 Stride({kv_length, head_dim}, "K head stride"), Stride({head_dim}, "K stride")};
+    v_strides = {Stride({kv_num_heads, kv_length, v_head_dim}, "V batch stride"),
+                 Stride({kv_length, v_head_dim}, "V head stride"),
+                 Stride({v_head_dim}, "V stride")};
+    y_strides = {Stride({q_num_heads, q_length, v_head_dim}, "Y batch stride"),
+                 Stride({q_length, v_head_dim}, "Y head stride"), Stride({v_head_dim}, "Y stride")};
   } else {
     if (q_shape.size() != 3 || k_shape.size() != 3 || v_shape.size() != 3) {
       Fail("AttentionPlan: rank-3 Q/K/V must each have 3 dimensions.");
@@ -192,15 +191,16 @@ AttentionPlan::AttentionPlan(const AttentionDescriptor &descriptor, AttentionLay
       Fail("AttentionPlan: Q and K must share the same head_size.");
     }
     v_head_dim = v_hidden / kv_num_heads;
-    q_strides = {static_cast<std::ptrdiff_t>(q_length * q_hidden),
-                 static_cast<std::ptrdiff_t>(head_dim), static_cast<std::ptrdiff_t>(q_hidden)};
-    k_strides = {static_cast<std::ptrdiff_t>(kv_length * k_hidden),
-                 static_cast<std::ptrdiff_t>(head_dim), static_cast<std::ptrdiff_t>(k_hidden)};
-    v_strides = {static_cast<std::ptrdiff_t>(kv_length * v_hidden),
-                 static_cast<std::ptrdiff_t>(v_head_dim), static_cast<std::ptrdiff_t>(v_hidden)};
-    const std::size_t y_hidden = q_num_heads * v_head_dim;
-    y_strides = {static_cast<std::ptrdiff_t>(q_length * y_hidden),
-                 static_cast<std::ptrdiff_t>(v_head_dim), static_cast<std::ptrdiff_t>(y_hidden)};
+    q_strides = {Stride({q_length, q_hidden}, "Q batch stride"),
+                 Stride({head_dim}, "Q head stride"), Stride({q_hidden}, "Q sequence stride")};
+    k_strides = {Stride({kv_length, k_hidden}, "K batch stride"),
+                 Stride({head_dim}, "K head stride"), Stride({k_hidden}, "K sequence stride")};
+    v_strides = {Stride({kv_length, v_hidden}, "V batch stride"),
+                 Stride({v_head_dim}, "V head stride"), Stride({v_hidden}, "V sequence stride")};
+    const std::size_t y_hidden =
+        CheckedMultiply(q_num_heads, v_head_dim, "AttentionPlan", "Y hidden size");
+    y_strides = {Stride({q_length, y_hidden}, "Y batch stride"),
+                 Stride({v_head_dim}, "Y head stride"), Stride({y_hidden}, "Y sequence stride")};
   }
 
   if (kv_num_heads == 0 || q_num_heads % kv_num_heads != 0) {
@@ -234,14 +234,37 @@ AttentionPlan::AttentionPlan(const AttentionDescriptor &descriptor, AttentionLay
     if (ToSize(past_v_shape[3], "AttentionPlan: v_head_size must be non-negative.") != v_head_dim) {
       Fail("AttentionPlan: past_value must share V's v_head_size.");
     }
-    past_k_strides = {static_cast<std::ptrdiff_t>(kv_num_heads * past_length * head_dim),
-                      static_cast<std::ptrdiff_t>(past_length * head_dim),
-                      static_cast<std::ptrdiff_t>(head_dim)};
-    past_v_strides = {static_cast<std::ptrdiff_t>(kv_num_heads * past_length * v_head_dim),
-                      static_cast<std::ptrdiff_t>(past_length * v_head_dim),
-                      static_cast<std::ptrdiff_t>(v_head_dim)};
+    past_k_strides = {Stride({kv_num_heads, past_length, head_dim}, "past K batch stride"),
+                      Stride({past_length, head_dim}, "past K head stride"),
+                      Stride({head_dim}, "past K stride")};
+    past_v_strides = {Stride({kv_num_heads, past_length, v_head_dim}, "past V batch stride"),
+                      Stride({past_length, v_head_dim}, "past V head stride"),
+                      Stride({v_head_dim}, "past V stride")};
   }
-  total_kv_length = past_length + kv_length;
+  total_kv_length = static_cast<std::size_t>(CheckedIndexAdd(static_cast<std::int64_t>(past_length),
+                                                             static_cast<std::int64_t>(kv_length),
+                                                             "AttentionPlan", "total KV length"));
+  CheckedStride(
+      CheckedProduct({batch, q_num_heads, q_length, head_dim}, "AttentionPlan", "Q element count"),
+      "AttentionPlan", "Q element count");
+  CheckedStride(CheckedProduct({batch, kv_num_heads, kv_length, head_dim}, "AttentionPlan",
+                               "K element count"),
+                "AttentionPlan", "K element count");
+  CheckedStride(CheckedProduct({batch, kv_num_heads, kv_length, v_head_dim}, "AttentionPlan",
+                               "V element count"),
+                "AttentionPlan", "V element count");
+  CheckedStride(CheckedProduct({batch, q_num_heads, q_length, v_head_dim}, "AttentionPlan",
+                               "Y element count"),
+                "AttentionPlan", "Y element count");
+  CheckedStride(CheckedProduct({batch, q_num_heads, q_length, total_kv_length}, "AttentionPlan",
+                               "attention score element count"),
+                "AttentionPlan", "attention score element count");
+  CheckedStride(CheckedProduct({batch, kv_num_heads, past_length, head_dim}, "AttentionPlan",
+                               "past K element count"),
+                "AttentionPlan", "past K element count");
+  CheckedStride(CheckedProduct({batch, kv_num_heads, past_length, v_head_dim}, "AttentionPlan",
+                               "past V element count"),
+                "AttentionPlan", "past V element count");
 
   scale = descriptor.scale.has_value()
               ? *descriptor.scale
@@ -283,10 +306,10 @@ AttentionPlan::AttentionPlan(const AttentionDescriptor &descriptor, AttentionLay
       }
     }
     std::array<std::ptrdiff_t, 4> contiguous_stride = {0, 0, 0, 0};
-    std::ptrdiff_t running = 1;
+    std::size_t running = 1;
     for (std::size_t i = 4; i-- > 0;) {
-      contiguous_stride[i] = running;
-      running *= static_cast<std::ptrdiff_t>(aligned[i]);
+      contiguous_stride[i] = CheckedStride(running, "AttentionPlan", "mask stride");
+      running = CheckedMultiply(running, aligned[i], "AttentionPlan", "mask element count");
     }
     mask_strides.batch = aligned[0] == 1 ? 0 : contiguous_stride[0];
     mask_strides.head = aligned[1] == 1 ? 0 : contiguous_stride[1];

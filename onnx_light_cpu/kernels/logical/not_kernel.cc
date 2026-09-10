@@ -4,6 +4,7 @@
 
 #include "onnx_light_cpu/kernels/logical/not_kernel.h"
 
+#include "onnx_light_cpu/impl/checked_arithmetic.h"
 #include "onnx_light_cpu/impl/logical/logical_kernels.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
 #include "onnx_light_cpu/kernels/kernel_usage.h"
@@ -115,7 +116,9 @@ void NotKernel::Configure(const rt_ns::KernelTuningParameters &parameters) {
 }
 
 Tensor NotKernel::operator()(const Tensor &x, RuntimeContext *rt) const {
-  const std::size_t y_n_bytes = static_cast<std::size_t>(x.element_count()) * x.element_size();
+  const std::size_t y_n_bytes =
+      CheckedByteSize(static_cast<std::size_t>(x.shape.product(0, x.shape.size(), "Not input")),
+                      x.element_size(), "Not", "output byte size");
   Tensor y = rt != nullptr ? rt->MakeOutputTensor(0, x.data_type, x.shape, y_n_bytes)
                            : rt_ns::MakeOutputTensor(x.data_type, x.shape, y_n_bytes, nullptr);
   (*this)(x, y);

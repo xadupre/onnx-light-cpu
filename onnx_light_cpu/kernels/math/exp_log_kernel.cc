@@ -4,6 +4,7 @@
 
 #include "onnx_light_cpu/kernels/math/exp_log_kernel.h"
 
+#include "onnx_light_cpu/impl/checked_arithmetic.h"
 #include "onnx_light_cpu/impl/math/math_kernels.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
 #include "onnx_light_cpu/kernels/kernel_usage.h"
@@ -167,7 +168,9 @@ void ComputeUnary(const Tensor &x, Tensor &output, const char *kernel_name, Floa
 }
 
 Tensor MakeLike(const Tensor &x, RuntimeContext *rt) {
-  const std::size_t y_n_bytes = static_cast<std::size_t>(x.element_count()) * x.element_size();
+  const std::size_t y_n_bytes =
+      CheckedByteSize(static_cast<std::size_t>(x.shape.product(0, x.shape.size(), "Exp/Log input")),
+                      x.element_size(), "Exp/Log", "output byte size");
   return rt != nullptr ? rt->MakeOutputTensor(0, x.data_type, x.shape, y_n_bytes)
                        : rt_ns::MakeOutputTensor(x.data_type, x.shape, y_n_bytes, nullptr);
 }

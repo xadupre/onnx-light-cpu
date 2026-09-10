@@ -4,6 +4,7 @@
 
 #include "onnx_light_cpu/kernels/com_microsoft/cdist_kernel.h"
 
+#include "onnx_light_cpu/impl/checked_arithmetic.h"
 #include "onnx_light_cpu/impl/com_microsoft/cdist.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
 #include "onnx_light_cpu/kernels/kernel_usage.h"
@@ -109,6 +110,9 @@ CDistMetric ParseMetric(const std::string &metric) {
 }
 
 void ValidateTensors(const Tensor &a, const Tensor &b, const Tensor &output) {
+  a.shape.product(0, a.shape.size(), "CDist A");
+  b.shape.product(0, b.shape.size(), "CDist B");
+  output.shape.product(0, output.shape.size(), "CDist output");
   if (a.data_type != b.data_type || a.data_type != output.data_type) {
     throw std::invalid_argument("onnx_light_cpu::CDist: A, B and output dtypes must match.");
   }
@@ -170,8 +174,9 @@ Tensor CDistKernel::operator()(const Tensor &a, const Tensor &b, const std::stri
     throw std::invalid_argument("onnx_light_cpu::CDist: A and B must be rank-2 tensors.");
   }
   const rt_ns::Shape output_shape{a.shape[0], b.shape[0]};
-  const std::size_t bytes = static_cast<std::size_t>(a.shape[0]) *
-                            static_cast<std::size_t>(b.shape[0]) * a.element_size();
+  const std::size_t bytes = CheckedByteSize(
+      static_cast<std::size_t>(output_shape.product(0, output_shape.size(), "CDist output")),
+      a.element_size(), "CDist", "output byte size");
   Tensor output = rt != nullptr
                       ? rt->MakeOutputTensor(0, a.data_type, output_shape, bytes)
                       : rt_ns::MakeOutputTensor(a.data_type, output_shape, bytes, nullptr);
@@ -183,9 +188,9 @@ void CDistKernel::operator()(const Tensor &a, const Tensor &b, const std::string
                              Tensor &output) const {
   ValidateTensors(a, b, output);
   const CDistMetric parsed_metric = ParseMetric(metric);
-  const std::size_t m = static_cast<std::size_t>(a.shape[0]);
-  const std::size_t k = static_cast<std::size_t>(b.shape[0]);
-  const std::size_t n = static_cast<std::size_t>(a.shape[1]);
+  const std::size_t m = CheckedDimension(a.shape[0], "CDist", "A shape");
+  const std::size_t k = CheckedDimension(b.shape[0], "CDist", "B shape");
+  const std::size_t n = CheckedDimension(a.shape[1], "CDist", "A shape");
   const CDistExecutionTuning &tuning = tuning_configured_ ? tuning_ : DefaultTuning(a.data_type);
   switch (static_cast<DataType>(a.data_type)) {
   case DataType::FLOAT:

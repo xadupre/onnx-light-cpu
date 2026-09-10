@@ -4,6 +4,7 @@
 
 #include "onnx_light_cpu/kernels/com_microsoft/bias_gelu_kernel.h"
 
+#include "onnx_light_cpu/impl/checked_arithmetic.h"
 #include "onnx_light_cpu/impl/com_microsoft/bias_gelu.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
 #include "onnx_light_cpu/kernels/kernel_usage.h"
@@ -101,6 +102,9 @@ rt_ns::KernelTuningParameters MakeTuningDefaults(int32_t element_type) {
 }
 
 void ValidateTensors(const Tensor &a, const Tensor &b, const Tensor &output) {
+  a.shape.product(0, a.shape.size(), "BiasGelu A");
+  b.shape.product(0, b.shape.size(), "BiasGelu B");
+  output.shape.product(0, output.shape.size(), "BiasGelu output");
   if (a.data_type != b.data_type || a.data_type != output.data_type) {
     throw std::invalid_argument("onnx_light_cpu::BiasGelu: A, B and output dtypes must match.");
   }
@@ -157,7 +161,9 @@ void BiasGeluKernel::Configure(const rt_ns::KernelTuningParameters &parameters) 
 }
 
 Tensor BiasGeluKernel::operator()(const Tensor &a, const Tensor &b, RuntimeContext *rt) const {
-  const std::size_t bytes = static_cast<std::size_t>(a.element_count()) * a.element_size();
+  const std::size_t bytes =
+      CheckedByteSize(static_cast<std::size_t>(a.shape.product(0, a.shape.size(), "BiasGelu A")),
+                      a.element_size(), "BiasGelu", "output byte size");
   Tensor output = rt != nullptr ? rt->MakeOutputTensor(0, a.data_type, a.shape, bytes)
                                 : rt_ns::MakeOutputTensor(a.data_type, a.shape, bytes, nullptr);
   (*this)(a, b, output);
@@ -166,8 +172,11 @@ Tensor BiasGeluKernel::operator()(const Tensor &a, const Tensor &b, RuntimeConte
 
 void BiasGeluKernel::operator()(const Tensor &a, const Tensor &b, Tensor &output) const {
   ValidateTensors(a, b, output);
-  const std::size_t inner = static_cast<std::size_t>(b.shape[0]);
-  const std::size_t outer = inner == 0 ? 0 : static_cast<std::size_t>(a.element_count()) / inner;
+  const std::size_t inner = CheckedDimension(b.shape[0], "BiasGelu", "B shape");
+  const std::size_t outer =
+      inner == 0
+          ? 0
+          : static_cast<std::size_t>(a.shape.product(0, a.shape.size(), "BiasGelu A")) / inner;
   const BiasGeluExecutionTuning &tuning = tuning_configured_ ? tuning_ : DefaultTuning(a.data_type);
   switch (static_cast<DataType>(a.data_type)) {
   case DataType::FLOAT:
