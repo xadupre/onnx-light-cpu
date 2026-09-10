@@ -27,6 +27,20 @@
 
 namespace onnx_light_cpu {
 
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX
+void AbsFloat32_AVX(const float *input, float *output, std::size_t count);
+void AbsFloat32_AVXStreaming(const float *input, float *output, std::size_t count);
+void AbsFloat64_AVX(const double *input, double *output, std::size_t count);
+#endif
+
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2
+void AbsFloat16_AVX2(const uint16_t *input, uint16_t *output, std::size_t count);
+void AbsInt8_AVX2(const int8_t *input, int8_t *output, std::size_t count);
+void AbsInt16_AVX2(const int16_t *input, int16_t *output, std::size_t count);
+void AbsInt32_AVX2(const int32_t *input, int32_t *output, std::size_t count);
+void AbsInt64_AVX2(const int64_t *input, int64_t *output, std::size_t count);
+#endif
+
 // ---------------------------------------------------------------------------
 // AbsFloat32 implementations
 // ---------------------------------------------------------------------------
@@ -54,46 +68,6 @@ void AbsFloat32_SSE2(const float *input, float *output, std::size_t count) {
   }
   for (; i < count; ++i) {
     output[i] = std::fabs(input[i]);
-  }
-}
-
-void AbsFloat32_AVX(const float *input, float *output, std::size_t count) {
-  // Clear sign bit: AND with 0x7FFFFFFF using 256-bit registers
-  const __m256 sign_mask = _mm256_castsi256_ps(_mm256_set1_epi32(0x7FFFFFFF));
-  std::size_t i = 0;
-  const std::size_t stride = 8;
-  const std::size_t aligned_count = count - (count % stride);
-  for (; i < aligned_count; i += stride) {
-    __m256 v = _mm256_loadu_ps(input + i);
-    v = _mm256_and_ps(v, sign_mask);
-    _mm256_storeu_ps(output + i, v);
-  }
-  // Handle remainder with SSE2
-  for (; i < count; ++i) {
-    output[i] = std::fabs(input[i]);
-  }
-}
-
-void AbsFloat32_AVXStreaming(const float *input, float *output, std::size_t count) {
-  std::size_t i = 0;
-  while (i < count && reinterpret_cast<std::uintptr_t>(output + i) % 64 != 0) {
-    output[i] = std::fabs(input[i]);
-    ++i;
-  }
-  const __m256 mask = _mm256_castsi256_ps(_mm256_set1_epi32(0x7FFFFFFF));
-  const std::size_t end = i + (count - i) / 16 * 16;
-  const bool streamed = i < end;
-  for (; i < end; i += 16) {
-    const __m256 v0 = _mm256_and_ps(_mm256_loadu_ps(input + i), mask);
-    const __m256 v1 = _mm256_and_ps(_mm256_loadu_ps(input + i + 8), mask);
-    _mm256_stream_ps(output + i, v0);
-    _mm256_stream_ps(output + i + 8, v1);
-  }
-  for (; i < count; ++i) {
-    output[i] = std::fabs(input[i]);
-  }
-  if (streamed) {
-    _mm_sfence();
   }
 }
 
@@ -129,6 +103,7 @@ const AbsFloat32Dispatch &GetAbsFloat32Dispatch() {
                                 AbsComputeCycles(16)};
     }
 #endif
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX
     if (level >= SimdLevel::kAVX) {
       const std::size_t cache_bytes = CpuCacheSizeBytesOrFallback(GetCpuCacheTopology(), 3, 0);
       // Keep cached stores when the input and output fit in the last-level
@@ -141,6 +116,7 @@ const AbsFloat32Dispatch &GetAbsFloat32Dispatch() {
                                 {2 * 1024 * 1024, 1024 * 1024, 32, true, 0, streaming_threshold},
                                 true};
     }
+#endif
     if (level >= SimdLevel::kSSE2) {
       return AbsFloat32Dispatch{&AbsFloat32_SSE2, nullptr, AbsComputeCycles(4)};
     }
@@ -233,38 +209,6 @@ void AbsFloat64_SSE2(const double *input, double *output, std::size_t count) {
   }
 }
 
-void AbsFloat64_AVX(const double *input, double *output, std::size_t count) {
-  const __m256d sign_mask = _mm256_castsi256_pd(_mm256_set1_epi64x(0x7FFFFFFFFFFFFFFF));
-  std::size_t i = 0;
-  const std::size_t stride = 4;
-  const std::size_t aligned_count = count - (count % stride);
-  for (; i < aligned_count; i += stride) {
-    __m256d v = _mm256_loadu_pd(input + i);
-    v = _mm256_and_pd(v, sign_mask);
-    _mm256_storeu_pd(output + i, v);
-  }
-  for (; i < count; ++i) {
-    output[i] = std::fabs(input[i]);
-  }
-}
-
-#ifdef __AVX512F__
-void AbsFloat64_AVX512(const double *input, double *output, std::size_t count) {
-  const __m512d sign_mask = _mm512_castsi512_pd(_mm512_set1_epi64(0x7FFFFFFFFFFFFFFF));
-  std::size_t i = 0;
-  const std::size_t stride = 8;
-  const std::size_t aligned_count = count - (count % stride);
-  for (; i < aligned_count; i += stride) {
-    __m512d v = _mm512_loadu_pd(input + i);
-    v = _mm512_and_pd(v, sign_mask);
-    _mm512_storeu_pd(output + i, v);
-  }
-  for (; i < count; ++i) {
-    output[i] = std::fabs(input[i]);
-  }
-}
-#endif // __AVX512F__
-
 #endif // ONNX_LIGHT_CPU_X86
 
 } // namespace
@@ -273,16 +217,12 @@ namespace {
 void AbsFloat64_Dispatch(const double *input, double *output, std::size_t count) {
 #if ONNX_LIGHT_CPU_X86
   static const SimdLevel level = DetectSimdLevel();
-#ifdef __AVX512F__
-  if (level >= SimdLevel::kAVX512) {
-    AbsFloat64_AVX512(input, output, count);
-    return;
-  }
-#endif
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX
   if (level >= SimdLevel::kAVX) {
     AbsFloat64_AVX(input, output, count);
     return;
   }
+#endif
   if (level >= SimdLevel::kSSE2) {
     AbsFloat64_SSE2(input, output, count);
     return;
@@ -339,38 +279,6 @@ void AbsFloat16_SSE2(const uint16_t *input, uint16_t *output, std::size_t count)
   }
 }
 
-void AbsFloat16_AVX2(const uint16_t *input, uint16_t *output, std::size_t count) {
-  const __m256i mask = _mm256_set1_epi16(static_cast<short>(kFloat16AbsMask));
-  std::size_t i = 0;
-  const std::size_t stride = 16;
-  const std::size_t aligned_count = count - (count % stride);
-  for (; i < aligned_count; i += stride) {
-    __m256i v = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(input + i));
-    v = _mm256_and_si256(v, mask);
-    _mm256_storeu_si256(reinterpret_cast<__m256i *>(output + i), v);
-  }
-  for (; i < count; ++i) {
-    output[i] = static_cast<uint16_t>(input[i] & kFloat16AbsMask);
-  }
-}
-
-#ifdef __AVX512F__
-void AbsFloat16_AVX512(const uint16_t *input, uint16_t *output, std::size_t count) {
-  const __m512i mask = _mm512_set1_epi16(static_cast<short>(kFloat16AbsMask));
-  std::size_t i = 0;
-  const std::size_t stride = 32;
-  const std::size_t aligned_count = count - (count % stride);
-  for (; i < aligned_count; i += stride) {
-    __m512i v = _mm512_loadu_si512(reinterpret_cast<const __m512i *>(input + i));
-    v = _mm512_and_si512(v, mask);
-    _mm512_storeu_si512(reinterpret_cast<__m512i *>(output + i), v);
-  }
-  for (; i < count; ++i) {
-    output[i] = static_cast<uint16_t>(input[i] & kFloat16AbsMask);
-  }
-}
-#endif // __AVX512F__
-
 #endif // ONNX_LIGHT_CPU_X86
 
 } // namespace
@@ -379,16 +287,12 @@ namespace {
 void AbsFloat16_Dispatch(const uint16_t *input, uint16_t *output, std::size_t count) {
 #if ONNX_LIGHT_CPU_X86
   static const SimdLevel level = DetectSimdLevel();
-#ifdef __AVX512F__
-  if (level >= SimdLevel::kAVX512) {
-    AbsFloat16_AVX512(input, output, count);
-    return;
-  }
-#endif
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2
   if (level >= SimdLevel::kAVX2) {
     AbsFloat16_AVX2(input, output, count);
     return;
   }
+#endif
   if (level >= SimdLevel::kSSE2) {
     AbsFloat16_SSE2(input, output, count);
     return;
@@ -444,38 +348,6 @@ void AbsInt8_SSE2(const int8_t *input, int8_t *output, std::size_t count) {
   }
 }
 
-void AbsInt8_AVX2(const int8_t *input, int8_t *output, std::size_t count) {
-  std::size_t i = 0;
-  const std::size_t stride = 32;
-  const std::size_t aligned_count = count - (count % stride);
-  for (; i < aligned_count; i += stride) {
-    __m256i v = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(input + i));
-    v = _mm256_abs_epi8(v);
-    _mm256_storeu_si256(reinterpret_cast<__m256i *>(output + i), v);
-  }
-  for (; i < count; ++i) {
-    const int v = static_cast<int>(input[i]);
-    output[i] = static_cast<int8_t>(v < 0 ? -v : v);
-  }
-}
-
-#ifdef __AVX512BW__
-void AbsInt8_AVX512(const int8_t *input, int8_t *output, std::size_t count) {
-  std::size_t i = 0;
-  const std::size_t stride = 64;
-  const std::size_t aligned_count = count - (count % stride);
-  for (; i < aligned_count; i += stride) {
-    __m512i v = _mm512_loadu_si512(reinterpret_cast<const __m512i *>(input + i));
-    v = _mm512_abs_epi8(v);
-    _mm512_storeu_si512(reinterpret_cast<__m512i *>(output + i), v);
-  }
-  for (; i < count; ++i) {
-    const int v = static_cast<int>(input[i]);
-    output[i] = static_cast<int8_t>(v < 0 ? -v : v);
-  }
-}
-#endif // __AVX512BW__
-
 #endif // ONNX_LIGHT_CPU_X86
 
 } // namespace
@@ -484,16 +356,12 @@ namespace {
 void AbsInt8_Dispatch(const int8_t *input, int8_t *output, std::size_t count) {
 #if ONNX_LIGHT_CPU_X86
   static const SimdLevel level = DetectSimdLevel();
-#ifdef __AVX512BW__
-  if (level >= SimdLevel::kAVX512) {
-    AbsInt8_AVX512(input, output, count);
-    return;
-  }
-#endif
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2
   if (level >= SimdLevel::kAVX2) {
     AbsInt8_AVX2(input, output, count);
     return;
   }
+#endif
   if (level >= SimdLevel::kSSE2) {
     AbsInt8_SSE2(input, output, count);
     return;
@@ -543,45 +411,17 @@ void AbsInt16_SSE2(const int16_t *input, int16_t *output, std::size_t count) {
   AbsInt16_Scalar(input + i, output + i, count - i);
 }
 
-void AbsInt16_AVX2(const int16_t *input, int16_t *output, std::size_t count) {
-  std::size_t i = 0;
-  constexpr std::size_t stride = 16;
-  const std::size_t aligned_count = count - (count % stride);
-  for (; i < aligned_count; i += stride) {
-    const __m256i value = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(input + i));
-    _mm256_storeu_si256(reinterpret_cast<__m256i *>(output + i), _mm256_abs_epi16(value));
-  }
-  AbsInt16_SSE2(input + i, output + i, count - i);
-}
-
-#ifdef __AVX512BW__
-void AbsInt16_AVX512(const int16_t *input, int16_t *output, std::size_t count) {
-  std::size_t i = 0;
-  constexpr std::size_t stride = 32;
-  const std::size_t aligned_count = count - (count % stride);
-  for (; i < aligned_count; i += stride) {
-    const __m512i value = _mm512_loadu_si512(reinterpret_cast<const __m512i *>(input + i));
-    _mm512_storeu_si512(reinterpret_cast<__m512i *>(output + i), _mm512_abs_epi16(value));
-  }
-  AbsInt16_AVX2(input + i, output + i, count - i);
-}
-#endif
-
 #endif
 
 void AbsInt16_Dispatch(const int16_t *input, int16_t *output, std::size_t count) {
 #if ONNX_LIGHT_CPU_X86
   static const SimdLevel level = DetectSimdLevel();
-#ifdef __AVX512BW__
-  if (level >= SimdLevel::kAVX512) {
-    AbsInt16_AVX512(input, output, count);
-    return;
-  }
-#endif
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2
   if (level >= SimdLevel::kAVX2) {
     AbsInt16_AVX2(input, output, count);
     return;
   }
+#endif
   if (level >= SimdLevel::kSSE2) {
     AbsInt16_SSE2(input, output, count);
     return;
@@ -634,36 +474,6 @@ void AbsInt32_SSE2(const int32_t *input, int32_t *output, std::size_t count) {
   }
 }
 
-void AbsInt32_AVX2(const int32_t *input, int32_t *output, std::size_t count) {
-  std::size_t i = 0;
-  const std::size_t stride = 8;
-  const std::size_t aligned_count = count - (count % stride);
-  for (; i < aligned_count; i += stride) {
-    __m256i v = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(input + i));
-    v = _mm256_abs_epi32(v);
-    _mm256_storeu_si256(reinterpret_cast<__m256i *>(output + i), v);
-  }
-  for (; i < count; ++i) {
-    output[i] = input[i] < 0 ? -input[i] : input[i];
-  }
-}
-
-#ifdef __AVX512F__
-void AbsInt32_AVX512(const int32_t *input, int32_t *output, std::size_t count) {
-  std::size_t i = 0;
-  const std::size_t stride = 16;
-  const std::size_t aligned_count = count - (count % stride);
-  for (; i < aligned_count; i += stride) {
-    __m512i v = _mm512_loadu_si512(reinterpret_cast<const __m512i *>(input + i));
-    v = _mm512_abs_epi32(v);
-    _mm512_storeu_si512(reinterpret_cast<__m512i *>(output + i), v);
-  }
-  for (; i < count; ++i) {
-    output[i] = input[i] < 0 ? -input[i] : input[i];
-  }
-}
-#endif // __AVX512F__
-
 #endif // ONNX_LIGHT_CPU_X86
 
 } // namespace
@@ -672,16 +482,12 @@ namespace {
 void AbsInt32_Dispatch(const int32_t *input, int32_t *output, std::size_t count) {
 #if ONNX_LIGHT_CPU_X86
   static const SimdLevel level = DetectSimdLevel();
-#ifdef __AVX512F__
-  if (level >= SimdLevel::kAVX512) {
-    AbsInt32_AVX512(input, output, count);
-    return;
-  }
-#endif
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2
   if (level >= SimdLevel::kAVX2) {
     AbsInt32_AVX2(input, output, count);
     return;
   }
+#endif
   if (level >= SimdLevel::kSSE2) {
     AbsInt32_SSE2(input, output, count);
     return;
@@ -740,40 +546,6 @@ void AbsInt64_SSE2(const int64_t *input, int64_t *output, std::size_t count) {
   }
 }
 
-void AbsInt64_AVX2(const int64_t *input, int64_t *output, std::size_t count) {
-  // AVX2 has no _mm256_abs_epi64; emulate with arithmetic shift + xor + sub.
-  std::size_t i = 0;
-  const std::size_t stride = 4;
-  const std::size_t aligned_count = count - (count % stride);
-  for (; i < aligned_count; i += stride) {
-    __m256i v = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(input + i));
-    // Emulate arithmetic right shift by 63 for epi64
-    __m256i sign = _mm256_srai_epi32(v, 31);
-    sign = _mm256_shuffle_epi32(sign, 0xF5);
-    __m256i abs_v = _mm256_sub_epi64(_mm256_xor_si256(v, sign), sign);
-    _mm256_storeu_si256(reinterpret_cast<__m256i *>(output + i), abs_v);
-  }
-  for (; i < count; ++i) {
-    output[i] = input[i] < 0 ? -input[i] : input[i];
-  }
-}
-
-#ifdef __AVX512F__
-void AbsInt64_AVX512(const int64_t *input, int64_t *output, std::size_t count) {
-  std::size_t i = 0;
-  const std::size_t stride = 8;
-  const std::size_t aligned_count = count - (count % stride);
-  for (; i < aligned_count; i += stride) {
-    __m512i v = _mm512_loadu_si512(reinterpret_cast<const __m512i *>(input + i));
-    v = _mm512_abs_epi64(v);
-    _mm512_storeu_si512(reinterpret_cast<__m512i *>(output + i), v);
-  }
-  for (; i < count; ++i) {
-    output[i] = input[i] < 0 ? -input[i] : input[i];
-  }
-}
-#endif // __AVX512F__
-
 #endif // ONNX_LIGHT_CPU_X86
 
 } // namespace
@@ -782,16 +554,12 @@ namespace {
 void AbsInt64_Dispatch(const int64_t *input, int64_t *output, std::size_t count) {
 #if ONNX_LIGHT_CPU_X86
   static const SimdLevel level = DetectSimdLevel();
-#ifdef __AVX512F__
-  if (level >= SimdLevel::kAVX512) {
-    AbsInt64_AVX512(input, output, count);
-    return;
-  }
-#endif
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2
   if (level >= SimdLevel::kAVX2) {
     AbsInt64_AVX2(input, output, count);
     return;
   }
+#endif
   if (level >= SimdLevel::kSSE2) {
     AbsInt64_SSE2(input, output, count);
     return;

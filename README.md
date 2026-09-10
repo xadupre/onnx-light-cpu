@@ -24,6 +24,7 @@ fallback).
 ### Prerequisites
 
 - C++20 compiler with AVX2 support (GCC ≥ 11, Clang ≥ 14, MSVC ≥ 2022)
+- Runtime CPU: x86-64 with SSE2 (AVX/AVX2 are not required), or AArch64.
 - CMake ≥ 3.15
 - Python ≥ 3.12
 - [nanobind](https://github.com/wjakob/nanobind) ≥ 3.0
@@ -89,9 +90,18 @@ execution policy.
 
 ### SIMD targeting
 
+Dispatch, validation, and scalar/SSE2 code use the compiler's baseline ISA.
+AVX, AVX2/FMA, and AVX-512 implementations are compiled in separate translation
+units and entered only after runtime CPU/OS feature checks. On x86-64, default
+builds support the SSE2 baseline; operators without an eligible SIMD kernel use
+their scalar fallback. Do not pass target-wide ISA options such as `-march=native`,
+`-mavx2`, or `/arch:AVX2` through compiler flags when building portable binaries.
+The former `ONNX_LIGHT_CPU_SIMD_FLAGS` cache entry must be removed when upgrading
+an existing build directory.
+
 AVX-512 kernels are compiled when the toolchain supports them and selected
 automatically when the host CPU and operating system expose AVX-512. To build
-an AVX2-only binary for deployment or comparable benchmarking on a newer CPU:
+a binary capped at AVX2 for deployment or comparable benchmarking on a newer CPU:
 
 ```bash
 cmake -S . -B build -DONNX_LIGHT_CPU_MAX_SIMD_LEVEL=AVX2 \
@@ -99,7 +109,7 @@ cmake -S . -B build -DONNX_LIGHT_CPU_MAX_SIMD_LEVEL=AVX2 \
 cmake --build build
 ```
 
-The ceiling uses the generic x86-64-v3 baseline, excludes AVX-512 and AMX
+The ceiling preserves the SSE2 baseline, excludes AVX-512 and AMX
 kernels, and makes runtime SIMD detection report at most AVX2, so kernel
 dispatch and shape-dependent planning use the same AVX2 profile. It never
 enables instructions unsupported by the host.
@@ -109,6 +119,11 @@ For an in-place Python build, pass the same definition through `CMAKE_ARGS`:
 CMAKE_ARGS="-DONNX_LIGHT_CPU_MAX_SIMD_LEVEL=AVX2" \
     python setup.py build_ext --inplace --onnx-light-source
 ```
+
+The C++ standalone CI tests both default and AVX2-ceiling builds under
+`qemu-x86_64 -cpu Opteron_G1` (SSE2, no AVX) and `-cpu SandyBridge` (AVX, no
+AVX2/FMA). It checks the detected level and runs kernel tests on each
+feature-masked CPU, rather than merely limiting dispatch on a modern host.
 
 ## C++ usage
 

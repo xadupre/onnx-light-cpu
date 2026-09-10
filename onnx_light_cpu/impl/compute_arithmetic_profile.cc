@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "onnx_light_cpu/impl/compute_arithmetic_profile.h"
+#include "onnx_light_cpu/impl/compute/compute_kernel_avx.h"
 
 #include <algorithm>
 #include <atomic>
@@ -163,27 +164,8 @@ ONNX_LIGHT_CPU_NOINLINE double RunScalarFloat64Round(std::size_t passes, double 
 #if ONNX_LIGHT_CPU_COMPUTE_X86
 
 constexpr int kComputeSse2Registers = 4;
-constexpr int kComputeAvx2Registers = 4;
 constexpr std::size_t kComputeSse2Float32AccumulatorCount = kComputeSse2Registers * 4;
 constexpr std::size_t kComputeSse2Float64AccumulatorCount = kComputeSse2Registers * 2;
-constexpr std::size_t kComputeAvx2Float32AccumulatorCount = kComputeAvx2Registers * 8;
-constexpr std::size_t kComputeAvx2Float64AccumulatorCount = kComputeAvx2Registers * 4;
-
-inline __m256 ComputeMulAdd(__m256 a, __m256 b, __m256 acc) {
-#ifdef __FMA__
-  return _mm256_fmadd_ps(a, b, acc);
-#else
-  return _mm256_add_ps(acc, _mm256_mul_ps(a, b));
-#endif
-}
-inline __m256d ComputeMulAdd(__m256d a, __m256d b, __m256d acc) {
-#ifdef __FMA__
-  return _mm256_fmadd_pd(a, b, acc);
-#else
-  return _mm256_add_pd(acc, _mm256_mul_pd(a, b));
-#endif
-}
-
 ONNX_LIGHT_CPU_NOINLINE double RunSse2Float32Round(std::size_t passes, double seed) {
   __m128 acc[kComputeSse2Registers];
   __m128 mul[kComputeSse2Registers];
@@ -231,60 +213,6 @@ ONNX_LIGHT_CPU_NOINLINE double RunSse2Float64Round(std::size_t passes, double se
   double sum = 0.0;
   for (int reg = 0; reg < kComputeSse2Registers; ++reg) {
     _mm_store_pd(lanes, acc[reg]);
-    for (double lane : lanes) {
-      sum += lane;
-    }
-  }
-  return sum;
-}
-
-ONNX_LIGHT_CPU_NOINLINE double RunAvx2Float32Round(std::size_t passes, double seed) {
-  __m256 acc[kComputeAvx2Registers];
-  __m256 mul[kComputeAvx2Registers];
-  __m256 add[kComputeAvx2Registers];
-  for (int reg = 0; reg < kComputeAvx2Registers; ++reg) {
-    acc[reg] = _mm256_set1_ps(static_cast<float>(seed) + static_cast<float>(reg));
-    mul[reg] = _mm256_set1_ps(1.0000001f + static_cast<float>(reg) * 1e-7f);
-    add[reg] = _mm256_set1_ps(1.0e-6f * static_cast<float>(reg + 1));
-  }
-  for (std::size_t pass = 0; pass < passes; ++pass) {
-    for (std::size_t chain = 0; chain < kComputeChainLength; ++chain) {
-      for (int reg = 0; reg < kComputeAvx2Registers; ++reg) {
-        acc[reg] = ComputeMulAdd(acc[reg], mul[reg], add[reg]);
-      }
-    }
-  }
-  alignas(32) float lanes[8];
-  double sum = 0.0;
-  for (int reg = 0; reg < kComputeAvx2Registers; ++reg) {
-    _mm256_store_ps(lanes, acc[reg]);
-    for (float lane : lanes) {
-      sum += lane;
-    }
-  }
-  return sum;
-}
-
-ONNX_LIGHT_CPU_NOINLINE double RunAvx2Float64Round(std::size_t passes, double seed) {
-  __m256d acc[kComputeAvx2Registers];
-  __m256d mul[kComputeAvx2Registers];
-  __m256d add[kComputeAvx2Registers];
-  for (int reg = 0; reg < kComputeAvx2Registers; ++reg) {
-    acc[reg] = _mm256_set1_pd(seed + static_cast<double>(reg));
-    mul[reg] = _mm256_set1_pd(1.0000001 + static_cast<double>(reg) * 1e-9);
-    add[reg] = _mm256_set1_pd(1.0e-9 * static_cast<double>(reg + 1));
-  }
-  for (std::size_t pass = 0; pass < passes; ++pass) {
-    for (std::size_t chain = 0; chain < kComputeChainLength; ++chain) {
-      for (int reg = 0; reg < kComputeAvx2Registers; ++reg) {
-        acc[reg] = ComputeMulAdd(acc[reg], mul[reg], add[reg]);
-      }
-    }
-  }
-  alignas(32) double lanes[4];
-  double sum = 0.0;
-  for (int reg = 0; reg < kComputeAvx2Registers; ++reg) {
-    _mm256_store_pd(lanes, acc[reg]);
     for (double lane : lanes) {
       sum += lane;
     }
@@ -545,7 +473,9 @@ ComputeThroughputResult MeasureComputeArithmeticThroughput(DataType element_type
 
   detail::ComputeDispatchInputs inputs;
   inputs.simd_level = DetectSimdLevel();
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX
   inputs.has_fma = CpuSupportsFma();
+#endif
   inputs.arm_simd_level = DetectArmSimdLevel();
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512
   inputs.avx512_compiled = true;
@@ -598,12 +528,14 @@ ComputeThroughputResult MeasureComputeArithmeticThroughput(DataType element_type
       kernel = &RunNeonFloat32Round;
       break;
 #endif
-#if ONNX_LIGHT_CPU_COMPUTE_X86
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX
     case ComputeImplementation::kAVX2:
       accounting =
-          ComputeFmaOperationAccounting(kComputeAvx2Float32AccumulatorCount, kComputeChainLength);
-      kernel = &RunAvx2Float32Round;
+          ComputeFmaOperationAccounting(kComputeAvxFloat32AccumulatorCount, kComputeChainLength);
+      kernel = &ComputeArithmeticAvxFloat32Round;
       break;
+#endif
+#if ONNX_LIGHT_CPU_COMPUTE_X86
     case ComputeImplementation::kSSE2:
       accounting =
           ComputeFmaOperationAccounting(kComputeSse2Float32AccumulatorCount, kComputeChainLength);
@@ -634,12 +566,14 @@ ComputeThroughputResult MeasureComputeArithmeticThroughput(DataType element_type
       kernel = &RunNeonFloat64Round;
       break;
 #endif
-#if ONNX_LIGHT_CPU_COMPUTE_X86
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX
     case ComputeImplementation::kAVX2:
       accounting =
-          ComputeFmaOperationAccounting(kComputeAvx2Float64AccumulatorCount, kComputeChainLength);
-      kernel = &RunAvx2Float64Round;
+          ComputeFmaOperationAccounting(kComputeAvxFloat64AccumulatorCount, kComputeChainLength);
+      kernel = &ComputeArithmeticAvxFloat64Round;
       break;
+#endif
+#if ONNX_LIGHT_CPU_COMPUTE_X86
     case ComputeImplementation::kSSE2:
       accounting =
           ComputeFmaOperationAccounting(kComputeSse2Float64AccumulatorCount, kComputeChainLength);

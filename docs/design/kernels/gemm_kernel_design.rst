@@ -59,8 +59,8 @@ probe)::
        ├─ runtime level >= SimdLevel::kAVX
        │  └─ GemmKernelKind::kAVX
        │     (256-bit vectors without FMA, NR=2: 16 float / 8 double lanes per
-       │      step; always compiled in at the baseline ONNX_LIGHT_CPU_SIMD_FLAGS,
-       │      default -mavx2, so it is present in every build)
+       │      step; compiled in a dedicated -mavx / /arch:AVX translation unit
+       │      when the compiler supports AVX)
        │
        ├─ runtime level >= SimdLevel::kSSE2
        │  └─ GemmKernelKind::kSSE2
@@ -100,7 +100,7 @@ Two independent axes are worth calling out:
 
 For deployment and cross-machine benchmark comparisons,
 ``ONNX_LIGHT_CPU_MAX_SIMD_LEVEL=AVX2`` applies a build-time ceiling to both
-axes. It pins the generic x86-64-v3 compiler baseline, excludes AVX-512 and
+axes. It preserves the x86-64 SSE2 compiler baseline, excludes AVX-512 and
 AMX translation units, and caps ``DetectSimdLevel()`` at AVX2, even when CPUID
 reports a newer ISA. This keeps the selected micro-kernel, register dimensions,
 blocking, and participant limits consistent with a native AVX2 host; it never
@@ -301,8 +301,8 @@ this gate evaluates true and the kernel gets full SIMD acceleration.
      - Notes
    * - Linux x86_64 (Intel)
      - Full support
-     - Reference platform for this work; AVX2 always compiled in
-       (``ONNX_LIGHT_CPU_SIMD_FLAGS`` default ``-mavx2``), AVX-512 compiled in
+     - SSE2 is the minimum runtime ISA. AVX2 is compiled in dedicated
+       translation units, and AVX-512 is compiled in
        when the toolchain accepts ``-mavx512f`` and used automatically when
        ``DetectSimdLevel()`` reports it on the running CPU.
    * - Linux / Windows x86_64 (AMD)

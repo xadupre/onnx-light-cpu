@@ -50,9 +50,10 @@ correctness tests, and reproducible benchmarks in one change.
 
 ## 4. Add AVX and AVX2/FMA kernels safely
 
-1. Guard x86 intrinsics with the repository x86 platform checks. Pure AVX code may live beside the
-   scalar dispatcher when that translation unit already follows the established pattern, as in
-   `impl/math/abs_kernel.cc`.
+1. Keep dispatch and scalar/SSE2 code at the baseline ISA. Put pure AVX implementations in
+   `_avx.cc` files and AVX2 implementations without FMA in `_avx2.cc` files; CMake assigns their
+   per-source flags. Guard declarations and calls with `ONNX_LIGHT_CPU_HAVE_AVX` or
+   `ONNX_LIGHT_CPU_HAVE_AVX2`, respectively, and check the matching runtime SIMD level.
 2. Put AVX2/FMA code in a file ending in `_avx2_fma.cc`; CMake discovers that suffix, compiles it
    with `-mavx2 -mfma` (or `/arch:AVX2`), and defines
    `ONNX_LIGHT_CPU_HAVE_AVX2_FMA`. Guard declarations and calls with that definition.

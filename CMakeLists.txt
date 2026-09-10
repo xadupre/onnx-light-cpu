@@ -131,34 +131,16 @@ else()
   set(ONNX_LIGHT_CPU_ARM64 FALSE)
 endif()
 
-# On x86 platforms, enable AVX2 by default for the kernel sources so the
-# compiler can emit AVX/AVX2 intrinsics. The runtime dispatch still falls
-# back to SSE2/scalar on older CPUs. AVX-512 codepaths are guarded by
-# __AVX512F__ and only compiled when the user explicitly passes -mavx512f.
-if(NOT ONNX_LIGHT_CPU_X86)
-  set(ONNX_LIGHT_CPU_SIMD_FLAGS "" CACHE STRING
-      "SIMD compiler flags for kernel sources (e.g. -mavx2, -mavx512f).")
-elseif(NOT MSVC)
-  set(ONNX_LIGHT_CPU_SIMD_FLAGS "-mavx2" CACHE STRING
-      "SIMD compiler flags for kernel sources (e.g. -mavx2, -mavx512f).")
-else()
-  set(ONNX_LIGHT_CPU_SIMD_FLAGS "/arch:AVX2" CACHE STRING
-      "SIMD compiler flags for kernel sources (e.g. /arch:AVX2, /arch:AVX512).")
+# Dispatch, validation, and scalar code must keep the compiler's baseline ISA.
+# ISA flags belong exclusively to the implementation source groups below.
+if(ONNX_LIGHT_CPU_SIMD_FLAGS)
+  message(FATAL_ERROR
+      "ONNX_LIGHT_CPU_SIMD_FLAGS is no longer supported: target-wide ISA flags "
+      "make runtime fallbacks unsafe. Remove this entry from the CMake cache; "
+      "use ONNX_LIGHT_CPU_MAX_SIMD_LEVEL to limit specialized kernels.")
 endif()
 
 if(ONNX_LIGHT_CPU_X86 AND _onnx_light_cpu_max_simd_level STREQUAL "AVX2")
-  if(NOT MSVC)
-    check_cxx_compiler_flag("-march=x86-64-v3"
-        ONNX_LIGHT_CPU_HAVE_X86_64_V3_FLAG)
-    if(NOT ONNX_LIGHT_CPU_HAVE_X86_64_V3_FLAG)
-      message(FATAL_ERROR
-          "ONNX_LIGHT_CPU_MAX_SIMD_LEVEL=AVX2 requires compiler support for "
-          "-march=x86-64-v3.")
-    endif()
-    set(ONNX_LIGHT_CPU_SIMD_FLAGS "-march=x86-64-v3")
-  else()
-    set(ONNX_LIGHT_CPU_SIMD_FLAGS "/arch:AVX2")
-  endif()
   if(CMAKE_CXX_FLAGS MATCHES "[Aa][Vv][Xx]512|[Aa][Mm][Xx]")
     message(FATAL_ERROR
         "ONNX_LIGHT_CPU_MAX_SIMD_LEVEL=AVX2 is incompatible with explicit "
@@ -237,11 +219,22 @@ else()
   set(ONNX_LIGHT_CPU_HAVE_NEON_DOTPROD_INTRINSICS FALSE)
 endif()
 
-# The dedicated AVX-512 translation units are compiled with feature-specific
-# flags on top of ONNX_LIGHT_CPU_SIMD_FLAGS. This lets a binary built with the
-# default -mavx2 still carry wider kernels selected by DetectSimdLevel() at
-# runtime. Exp, Log, Abs and Gemm only need AVX-512F; Not additionally needs
-# AVX-512BW for byte comparisons. Unsupported sources are excluded below.
+# Dedicated SIMD translation units use feature-specific flags. The remaining
+# sources keep the baseline ISA, including DetectSimdLevel() and all fallbacks.
+# Unsupported sources are excluded below.
+if(ONNX_LIGHT_CPU_X86)
+  if(NOT MSVC)
+    check_cxx_compiler_flag("-mavx" ONNX_LIGHT_CPU_HAVE_AVX_FLAG)
+    check_cxx_compiler_flag("-mavx2" ONNX_LIGHT_CPU_HAVE_AVX2_FLAG)
+  else()
+    check_cxx_compiler_flag("/arch:AVX" ONNX_LIGHT_CPU_HAVE_AVX_FLAG)
+    check_cxx_compiler_flag("/arch:AVX2" ONNX_LIGHT_CPU_HAVE_AVX2_FLAG)
+  endif()
+else()
+  set(ONNX_LIGHT_CPU_HAVE_AVX_FLAG FALSE)
+  set(ONNX_LIGHT_CPU_HAVE_AVX2_FLAG FALSE)
+endif()
+
 if(NOT ONNX_LIGHT_CPU_X86)
   # Non-x86 targets (e.g. arm64) have no AVX support; keep the SIMD sources
   # excluded and let the scalar fallbacks handle every operator.
@@ -337,6 +330,12 @@ list(FILTER CPU_BACKEND_CORPUS_SOURCES INCLUDE REGEX "_corpus[.]cc$")
 # New implementations following these conventions automatically inherit the
 # corresponding compiler feature checks and flags.
 foreach(_source IN LISTS CPU_KERNEL_SOURCES)
+  if(_source MATCHES "_avx[.]cc$")
+    list(APPEND _avx_sources "${_source}")
+  endif()
+  if(_source MATCHES "_avx2[.]cc$" AND NOT _source MATCHES "integer_gemm_avx2[.]cc$")
+    list(APPEND _avx2_sources "${_source}")
+  endif()
   if(_source MATCHES "/avx512/")
     list(APPEND _avx512f_sources "${_source}")
   endif()
@@ -387,6 +386,12 @@ foreach(_source IN LISTS CPU_KERNEL_SOURCES)
   endif()
 endforeach()
 
+if(NOT ONNX_LIGHT_CPU_HAVE_AVX_FLAG)
+  list(REMOVE_ITEM CPU_KERNEL_SOURCES ${_avx_sources})
+endif()
+if(NOT ONNX_LIGHT_CPU_HAVE_AVX2_FLAG)
+  list(REMOVE_ITEM CPU_KERNEL_SOURCES ${_avx2_sources})
+endif()
 if(NOT ONNX_LIGHT_CPU_HAVE_AVX512F_FLAG)
   # Exclude AVX-512F translation units rather than fail on unsupported targets.
   list(REMOVE_ITEM CPU_KERNEL_SOURCES ${_avx512f_sources})
@@ -474,10 +479,22 @@ endif()
 # threading library, but kernel scheduling is owned by onnx-light.
 target_link_libraries(lib_onnx_light_cpu PUBLIC Threads::Threads)
 
-# Apply SIMD flags to the kernel library.
-if(ONNX_LIGHT_CPU_SIMD_FLAGS)
-  separate_arguments(_simd_flags NATIVE_COMMAND "${ONNX_LIGHT_CPU_SIMD_FLAGS}")
-  target_compile_options(lib_onnx_light_cpu PRIVATE ${_simd_flags})
+if(ONNX_LIGHT_CPU_HAVE_AVX_FLAG)
+  if(NOT MSVC)
+    set_source_files_properties(${_avx_sources} PROPERTIES COMPILE_OPTIONS "-mavx")
+  else()
+    set_source_files_properties(${_avx_sources} PROPERTIES COMPILE_OPTIONS "/arch:AVX")
+  endif()
+  target_compile_definitions(lib_onnx_light_cpu PRIVATE ONNX_LIGHT_CPU_HAVE_AVX=1)
+endif()
+
+if(ONNX_LIGHT_CPU_HAVE_AVX2_FLAG)
+  if(NOT MSVC)
+    set_source_files_properties(${_avx2_sources} PROPERTIES COMPILE_OPTIONS "-mavx2")
+  else()
+    set_source_files_properties(${_avx2_sources} PROPERTIES COMPILE_OPTIONS "/arch:AVX2")
+  endif()
+  target_compile_definitions(lib_onnx_light_cpu PRIVATE ONNX_LIGHT_CPU_HAVE_AVX2=1)
 endif()
 
 if(ONNX_LIGHT_CPU_HAVE_AVX512F_FLAG)
@@ -488,7 +505,7 @@ if(ONNX_LIGHT_CPU_HAVE_AVX512F_FLAG)
     set_source_files_properties(${_avx512f_sources} PROPERTIES
         COMPILE_OPTIONS "/arch:AVX512")
   endif()
-  # Told gemm_kernel.cc (compiled at the baseline ONNX_LIGHT_CPU_SIMD_FLAGS)
+  # Tell gemm_kernel.cc (compiled at the baseline ISA)
   # that GemmMicroKernel_AVX512_F32/F64 are available to dispatch to. The
   # register-resident compute-profile FP32/FP64 kernel (Processor Profile
   # PR03) and the binary arithmetic SIMD kernels (Binary PR02) dispatch on the
@@ -953,9 +970,6 @@ if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
     target_link_libraries(lib_onnx_light_cpu_backend_test PUBLIC
         lib_onnx_light_cpu_kernels
         onnx_light::lib_onnx_backend_test)
-    if(ONNX_LIGHT_CPU_SIMD_FLAGS)
-      target_compile_options(lib_onnx_light_cpu_backend_test PRIVATE ${_simd_flags})
-    endif()
     if(ONNX_LIGHT_CPU_ENABLE_COVERAGE)
       target_compile_options(lib_onnx_light_cpu_backend_test PUBLIC --coverage -O0 -g)
       target_link_options(lib_onnx_light_cpu_backend_test PUBLIC --coverage)
@@ -1194,9 +1208,6 @@ if(ONNX_LIGHT_CPU_BUILD_BENCHMARKS)
     get_filename_component(_target "${_source}" NAME_WE)
     add_executable(${_target} "${_source}")
     target_link_libraries(${_target} PRIVATE lib_onnx_light_cpu)
-    if(ONNX_LIGHT_CPU_SIMD_FLAGS)
-      target_compile_options(${_target} PRIVATE ${_simd_flags})
-    endif()
     if(_target STREQUAL "abs_throughput" AND ONNX_LIGHT_CPU_HAVE_AVX512F_FLAG)
       target_compile_definitions(${_target} PRIVATE ONNX_LIGHT_CPU_HAVE_AVX512=1)
     endif()
@@ -1297,10 +1308,6 @@ if(ONNX_LIGHT_CPU_BUILD_TESTS)
        ONNX_LIGHT_CPU_ONNX_LIGHT_PY_LIBDIR)
       set_target_properties(${_name} PROPERTIES
           BUILD_RPATH "${ONNX_LIGHT_CPU_ONNX_LIGHT_PY_LIBDIR}")
-    endif()
-    # Apply SIMD flags to the test target too so it can use intrinsics if needed.
-    if(ONNX_LIGHT_CPU_SIMD_FLAGS)
-      target_compile_options(${_name} PRIVATE ${_simd_flags})
     endif()
     # Discover the test cases when ctest runs instead of at build time. The
     # POST_BUILD discovery run executes the freshly linked binary, which is
