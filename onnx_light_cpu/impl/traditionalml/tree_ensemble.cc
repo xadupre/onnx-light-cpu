@@ -365,7 +365,7 @@ void ApplyPostTransform(std::vector<double> &values, TreePostTransform transform
     sum += value;
   }
   if (sum == 0.0) {
-    std::fill(values.begin(), values.end(), 0.5);
+    std::fill(values.begin(), values.end(), 1.0 / static_cast<double>(values.size()));
   } else {
     for (double &value : values) {
       value /= sum;

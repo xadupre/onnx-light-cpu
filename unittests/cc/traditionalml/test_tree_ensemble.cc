@@ -1073,6 +1073,75 @@ TEST(TreeEnsembleOracle, AggregatesMultipleTargetsAndAppliesTransforms) {
   EXPECT_NEAR(actual[1], 0.3775407, 1e-6);
 }
 
+class TreeEnsembleSoftmaxZero : public ::testing::TestWithParam<std::size_t> {};
+
+TEST_P(TreeEnsembleSoftmaxZero, ZeroSumUsesUniformFallback) {
+  const std::size_t targets = GetParam();
+  std::vector<std::vector<double>> scores = {std::vector<double>(targets, 0.0),
+                                             std::vector<double>(targets, -0.0)};
+  if (targets > 1) {
+    std::vector<double> cancelling(targets, 0.0);
+    cancelling[0] = 5e-8;
+    cancelling[1] = -5e-8;
+    scores.push_back(std::move(cancelling));
+  }
+  for (DataType type : {DataType::FLOAT, DataType::DOUBLE}) {
+    for (const auto &base_values : scores) {
+      SCOPED_TRACE(::testing::PrintToString(base_values));
+      TreeEnsembleAttributes attributes = StumpForest(targets, targets);
+      attributes.value_type = type;
+      attributes.post_transform = TreePostTransform::kSoftmaxZero;
+      attributes.base_values = base_values;
+      std::fill(attributes.leaf_weights.begin(), attributes.leaf_weights.end(), 0.0);
+      for (const auto &actual : {TreeEnsembleOracle(attributes).Evaluate({-1.0, 1.0}, 2),
+                                 TreeEnsemblePlan(attributes).Evaluate({-1.0, 1.0}, 2)}) {
+        ASSERT_EQ(actual.size(), 2 * targets);
+        for (std::size_t row = 0; row < 2; ++row) {
+          double sum = 0.0;
+          for (std::size_t target = 0; target < targets; ++target) {
+            const double value = actual[row * targets + target];
+            EXPECT_TRUE(std::isfinite(value));
+            EXPECT_NEAR(value, 1.0 / static_cast<double>(targets), 1e-6);
+            sum += value;
+          }
+          EXPECT_NEAR(sum, 1.0, 1e-6);
+        }
+      }
+    }
+  }
+}
+
+TEST_P(TreeEnsembleSoftmaxZero, NonzeroSumRetainsNormalization) {
+  const std::size_t targets = GetParam();
+  for (double score : {5e-8, 2.0, -2.0, 1000.0}) {
+    for (bool one_active_target : {false, true}) {
+      SCOPED_TRACE(score);
+      SCOPED_TRACE(one_active_target);
+      TreeEnsembleAttributes attributes = StumpForest(targets, targets);
+      attributes.value_type = DataType::DOUBLE;
+      attributes.post_transform = TreePostTransform::kSoftmaxZero;
+      attributes.base_values.assign(targets, one_active_target ? 0.0 : score);
+      attributes.base_values[0] = score;
+      std::fill(attributes.leaf_weights.begin(), attributes.leaf_weights.end(), 0.0);
+      for (const auto &actual : {TreeEnsembleOracle(attributes).Evaluate({0.0}, 1),
+                                 TreeEnsemblePlan(attributes).Evaluate({0.0}, 1)}) {
+        ASSERT_EQ(actual.size(), targets);
+        double sum = 0.0;
+        for (std::size_t target = 0; target < targets; ++target) {
+          EXPECT_TRUE(std::isfinite(actual[target]));
+          const double expected =
+              one_active_target ? (target == 0 ? 1.0 : 0.0) : 1.0 / static_cast<double>(targets);
+          EXPECT_NEAR(actual[target], expected, 1e-12);
+          sum += actual[target];
+        }
+        EXPECT_NEAR(sum, 1.0, 1e-12);
+      }
+    }
+  }
+}
+
+INSTANTIATE_TEST_SUITE_P(TargetCounts, TreeEnsembleSoftmaxZero, ::testing::Values(1U, 2U, 3U, 5U));
+
 TEST(TreeEnsembleOracle, AggregatesMinMaxWithoutZeroBiasAndRetainsAverageTreeDivisor) {
   TreeEnsembleAttributes average;
   average.n_features = 1;
