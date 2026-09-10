@@ -8,6 +8,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <stdexcept>
 #include <vector>
 
 namespace {
@@ -107,6 +108,40 @@ TEST(Execution, SmallInjectedWorkRemainsInline) {
   EXPECT_EQ(executor.dispatches, 0);
 }
 
+TEST(Execution, NestedScopesRestoreBorrowedViewsAndClampThreads) {
+  InlineExecutor executor;
+  ExecutionExecutorView outer{&executor, 4, &InlineExecutor::Run};
+  ExecutionExecutorView inner{&executor, 0, &InlineExecutor::Run};
+  {
+    ExecutionExecutorScope outer_scope(&outer);
+    EXPECT_EQ(CurrentExecutionExecutor(), &outer);
+    {
+      ExecutionExecutorScope inner_scope(&inner);
+      EXPECT_EQ(CurrentExecutionExecutor(), &inner);
+      EXPECT_EQ(ExecutionThreadCount(), 1);
+      EXPECT_EQ(ExecutionBlockCount(1000000), 1);
+    }
+    EXPECT_EQ(CurrentExecutionExecutor(), &outer);
+    EXPECT_EQ(ExecutionThreadCount(), 4);
+  }
+  EXPECT_EQ(CurrentExecutionExecutor(), nullptr);
+}
+
+TEST(Execution, DispatchFailurePropagatesAndRestoresScope) {
+  ExecutionExecutorView view{nullptr, 4, [](void *, int64_t, void *, ExecutionBlockFn) {
+                               throw std::runtime_error("dispatch failed");
+                             }};
+  int calls = 0;
+  const auto run = [&]() {
+    ExecutionExecutorScope scope(&view);
+    ExecuteRanges(1000000, [&](int64_t, int64_t) { ++calls; });
+  };
+  EXPECT_THROW(run(), std::runtime_error);
+  EXPECT_EQ(calls, 0);
+  EXPECT_EQ(CurrentExecutionExecutor(), nullptr);
+  EXPECT_FALSE(ExecutionInParallelRegion());
+}
+
 TEST(Execution, NestedRangesDoNotDispatchAgain) {
   InlineExecutor executor;
   ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run};
@@ -114,6 +149,8 @@ TEST(Execution, NestedRangesDoNotDispatchAgain) {
     ExecutionExecutorScope scope(&view);
     ExecuteRanges(4, static_cast<double>(onnx_light_cpu::kExecutionGrainSize),
                   [](int64_t begin, int64_t end) {
+                    EXPECT_EQ(ExecutionThreadCount(), 4);
+                    EXPECT_EQ(ExecutionBlockCount(1000000), 1);
                     for (int64_t outer = begin; outer < end; ++outer) {
                       (void)outer;
                       int calls = 0;
