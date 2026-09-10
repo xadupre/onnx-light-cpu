@@ -42,40 +42,36 @@ template <typename T> T Requantize(std::int64_t accumulator, float scale, std::i
   return static_cast<T>(clamped);
 }
 
-template <typename T>
-Tensor MakeIntegerTensor(const rt_ns::Shape &shape, const std::vector<std::int64_t> &values) {
-  std::vector<T> casted(values.size());
-  for (size_t i = 0; i < values.size(); ++i) {
-    casted[i] = static_cast<T>(values[i]);
-  }
-  return Tensor::From<T>("", shape, casted);
-}
-
 template <typename T> std::vector<T> CastValues(const std::vector<std::int64_t> &values) {
   std::vector<T> casted(values.size());
   for (size_t i = 0; i < values.size(); ++i) {
     casted[i] = static_cast<T>(values[i]);
   }
-
-  rt_ns::Shape OutputShape(const rt_ns::Shape &a_shape, const rt_ns::Shape &b_shape) {
-    const size_t rank = std::max(a_shape.size(), b_shape.size());
-    std::vector<std::int64_t> a_norm(rank, 1);
-    std::vector<std::int64_t> b_norm(rank, 1);
-    for (size_t i = 0; i < a_shape.size(); ++i) {
-      a_norm[rank - a_shape.size() + i] = a_shape[i];
-    }
-    for (size_t i = 0; i < b_shape.size(); ++i) {
-      b_norm[rank - b_shape.size() + i] = b_shape[i];
-    }
-    std::vector<std::int64_t> y_shape(rank, 1);
-    for (size_t axis = 0; axis + 2 < rank; ++axis) {
-      y_shape[axis] = std::max(a_norm[axis], b_norm[axis]);
-    }
-    y_shape[rank - 2] = a_norm[rank - 2];
-    y_shape[rank - 1] = b_norm[rank - 1];
-    return rt_ns::Shape(std::move(y_shape));
-  }
   return casted;
+}
+
+template <typename T>
+Tensor MakeIntegerTensor(const rt_ns::Shape &shape, const std::vector<std::int64_t> &values) {
+  return Tensor::From<T>("", shape, CastValues<T>(values));
+}
+
+rt_ns::Shape OutputShape(const rt_ns::Shape &a_shape, const rt_ns::Shape &b_shape) {
+  const size_t rank = std::max(a_shape.size(), b_shape.size());
+  std::vector<std::int64_t> a_norm(rank, 1);
+  std::vector<std::int64_t> b_norm(rank, 1);
+  for (size_t i = 0; i < a_shape.size(); ++i) {
+    a_norm[rank - a_shape.size() + i] = a_shape[i];
+  }
+  for (size_t i = 0; i < b_shape.size(); ++i) {
+    b_norm[rank - b_shape.size() + i] = b_shape[i];
+  }
+  std::vector<std::int64_t> y_shape(rank, 1);
+  for (size_t axis = 0; axis + 2 < rank; ++axis) {
+    y_shape[axis] = std::max(a_norm[axis], b_norm[axis]);
+  }
+  y_shape[rank - 2] = a_norm[rank - 2];
+  y_shape[rank - 1] = b_norm[rank - 1];
+  return rt_ns::Shape(std::move(y_shape));
 }
 
 template <typename T>
