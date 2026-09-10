@@ -35,8 +35,8 @@ TEST(SimdLevel, FeatureMaskedHost) {
   EXPECT_FALSE(CpuSupportsAmxTile());
   EXPECT_FALSE(CpuSupportsAmxBf16());
   EXPECT_FALSE(CpuSupportsAmxInt8());
+  EXPECT_FALSE(CpuSupportsFma());
   if (level == SimdLevel::kSSE2) {
-    EXPECT_FALSE(CpuSupportsFma());
     EXPECT_FALSE(CpuSupportsF16C());
   }
 }
