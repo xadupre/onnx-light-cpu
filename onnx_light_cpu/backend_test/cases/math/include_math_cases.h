@@ -26,6 +26,7 @@ void RegisterCpuLogCases(std::vector<TestCase> &registry, TestMode mode);
 void RegisterCpuLpNormalizationCases(std::vector<TestCase> &registry, TestMode mode);
 void RegisterCpuMatMulCases(std::vector<TestCase> &registry, TestMode mode);
 void RegisterCpuMatMulIntegerCases(std::vector<TestCase> &registry, TestMode mode);
+void RegisterCpuQLinearMatMulCases(std::vector<TestCase> &registry, TestMode mode);
 void RegisterCpuMeanVarianceNormalizationCases(std::vector<TestCase> &registry, TestMode mode);
 void RegisterCpuRmsNormalizationCases(std::vector<TestCase> &registry, TestMode mode);
 void RegisterCpuSigmoidCases(std::vector<TestCase> &registry, TestMode mode);

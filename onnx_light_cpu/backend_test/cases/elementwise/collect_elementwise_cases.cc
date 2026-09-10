@@ -13,6 +13,11 @@ namespace {
     RegisterCpuBinaryCases(registry, #op_name, mode);                                              \
   }
 
+#define ONNX_LIGHT_CPU_VARIADIC_CASE_WRAPPER(op_name)                                              \
+  void RegisterCpu##op_name##Cases(std::vector<TestCase> &registry, TestMode mode) {               \
+    RegisterCpuVariadicCases(registry, #op_name, mode);                                            \
+  }
+
 ONNX_LIGHT_CPU_BINARY_CASE_WRAPPER(Add)
 ONNX_LIGHT_CPU_BINARY_CASE_WRAPPER(Sub)
 ONNX_LIGHT_CPU_BINARY_CASE_WRAPPER(Mul)
@@ -32,8 +37,13 @@ ONNX_LIGHT_CPU_BINARY_CASE_WRAPPER(BitwiseOr)
 ONNX_LIGHT_CPU_BINARY_CASE_WRAPPER(BitwiseXor)
 ONNX_LIGHT_CPU_BINARY_CASE_WRAPPER(BitShift)
 ONNX_LIGHT_CPU_BINARY_CASE_WRAPPER(PRelu)
+ONNX_LIGHT_CPU_VARIADIC_CASE_WRAPPER(Sum)
+ONNX_LIGHT_CPU_VARIADIC_CASE_WRAPPER(Mean)
+ONNX_LIGHT_CPU_VARIADIC_CASE_WRAPPER(Min)
+ONNX_LIGHT_CPU_VARIADIC_CASE_WRAPPER(Max)
 
 #undef ONNX_LIGHT_CPU_BINARY_CASE_WRAPPER
+#undef ONNX_LIGHT_CPU_VARIADIC_CASE_WRAPPER
 
 } // namespace
 
@@ -62,6 +72,10 @@ void CollectCpuElementwiseTestCases(std::vector<TestCase> &registry, const std::
       {"BitwiseXor", &RegisterCpuBitwiseXorCases},
       {"BitShift", &RegisterCpuBitShiftCases},
       {"PRelu", &RegisterCpuPReluCases},
+      {"Sum", &RegisterCpuSumCases},
+      {"Mean", &RegisterCpuMeanCases},
+      {"Min", &RegisterCpuMinCases},
+      {"Max", &RegisterCpuMaxCases},
   };
   DispatchRegisterByOpType(registry, op_type, kEntries, mode);
 }

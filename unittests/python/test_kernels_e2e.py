@@ -66,11 +66,7 @@ assert has_backend_test_cases(), (
 
 _REGISTERED_KERNELS = registered_kernel_names()
 
-_TARGET_KERNELS = {
-    op_type: kernel_name
-    for op_type, kernel_name in _REGISTERED_KERNELS.items()
-    if op_type not in {"Max", "Mean", "Min", "QLinearMatMul", "Sum"}
-}
+_TARGET_KERNELS = dict(_REGISTERED_KERNELS)
 _DOMAIN_SPECIFIC_TARGET_KERNELS = {
     ("ai.onnx", "LinearAttention"): _TARGET_KERNELS["LinearAttention"],
     (
@@ -85,6 +81,9 @@ for _op_type in ("And", "Not", "Or", "Xor"):
 for _op_type in ("BitwiseAnd", "BitwiseOr", "BitwiseXor", "MatMulInteger"):
     _BENCHMARK_TYPE_SUFFIXES[_op_type] = "int8"
 _BENCHMARK_TYPE_SUFFIXES["BitShift"] = "uint8"
+_BENCHMARK_TYPE_SUFFIXES["QLinearMatMul"] = "(?:int8|uint8)"
+_BENCHMARK_TYPE_SUFFIXES["Sum"] = "(?:float32|float64)"
+_BENCHMARK_TYPE_SUFFIXES["Mean"] = "(?:float32|float64)"
 _BENCHMARK_TYPE_SUFFIXES["com.microsoft::LinearAttention"] = "float32"
 for _op_type in {
     "BatchNormalization",
