@@ -91,7 +91,7 @@ std::vector<std::int64_t> UnravelIndex(std::size_t index, const rt_ns::Shape &sh
 }
 
 template <typename T>
-std::vector<T> ComputeVariadicReference(std::string_view op_type,
+std::vector<T> ComputeVariadicReference(const std::string &op_type,
                                         const std::vector<rt_ns::Shape> &shapes,
                                         const std::vector<std::vector<T>> &inputs) {
   const rt_ns::Shape output_shape = BroadcastShape(shapes);
@@ -165,7 +165,7 @@ ONNX_LIGHT_NAMESPACE::NodeProto MakeVariadicNode(std::string_view op_type,
 }
 
 template <typename T>
-void RegisterVariadicCase(std::vector<TestCase> &registry, std::string_view op_type,
+void RegisterVariadicCase(std::vector<TestCase> &registry, const std::string &op_type,
                           const std::string &name_suffix, const OpsetId &opset,
                           const std::vector<rt_ns::Shape> &shapes,
                           const std::vector<std::vector<T>> &values,
@@ -184,7 +184,7 @@ void RegisterVariadicCase(std::vector<TestCase> &registry, std::string_view op_t
   });
 }
 
-void RegisterVariadicBenchmark(std::vector<TestCase> &registry, std::string_view op_type,
+void RegisterVariadicBenchmark(std::vector<TestCase> &registry, const std::string &op_type,
                                const std::string &name_suffix, DataType type,
                                const rt_ns::Shape &shape) {
   const std::int64_t count = static_cast<std::int64_t>(ElementCount(shape));
