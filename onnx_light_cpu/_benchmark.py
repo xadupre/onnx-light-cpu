@@ -394,6 +394,7 @@ def run_backend_benchmark(
     max_repeat_time: float,
     threads: int,
     with_onnxruntime: bool = False,
+    allow_empty: bool = False,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Runs selected BENCHMARK backend cases and returns raw and aggregate rows."""
     from onnx_light.onnx.backend import (  # pyrefly: ignore[missing-import]
@@ -428,6 +429,10 @@ def run_backend_benchmark(
             and _case_dtype(case.name) in selected_dtypes
         )
     ]
+    if not cases and not allow_empty:
+        raise ValueError(
+            f"no benchmark backend test matches tests={list(tests)!r}, dtypes={list(dtypes)!r}"
+        )
     raw_rows = []
     aggregated_rows = []
     for index, case in enumerate(cases, start=1):

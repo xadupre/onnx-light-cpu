@@ -110,8 +110,21 @@ class TestBenchmarkCli(ExtTestCase):
             max_repeat_time=1.0,
             threads=1,
             with_onnxruntime=False,
+            allow_empty=True,
         )
         self.assertEqual(rows, ([], []))
+
+    def test_no_matching_explicit_backend_tests_raise(self):
+        with self.assertRaisesRegex(ValueError, "no benchmark backend test matches"):
+            _benchmark.run_backend_benchmark(
+                tests=[r"^test_cpu_no_such_operator_"],
+                dtypes=["all"],
+                repeat=1,
+                warmup=0,
+                max_repeat_time=1.0,
+                threads=1,
+                with_onnxruntime=False,
+            )
 
     def test_selects_backend_tests_and_dtypes(self):
         cases = [
@@ -594,6 +607,7 @@ class TestBenchmarkCli(ExtTestCase):
             max_repeat_time=1.0,
             threads=1,
             with_onnxruntime=False,
+            allow_empty=False,
         )
         write.assert_called_once_with("results.xlsx", *rows)
         markdown.assert_called_once_with("results.md", rows[1])
@@ -616,6 +630,7 @@ class TestBenchmarkCli(ExtTestCase):
         infer.assert_called_once_with("623")
         self.assertEqual(run.call_args.kwargs["tests"], [r"^test_cpu_(abs)_"])
         self.assertEqual(run.call_args.kwargs["dtypes"], ["float32"])
+        self.assertTrue(run.call_args.kwargs["allow_empty"])
 
 
 if __name__ == "__main__":
