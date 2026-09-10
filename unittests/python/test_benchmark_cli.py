@@ -102,20 +102,30 @@ class TestBenchmarkCli(ExtTestCase):
             )
 
     def test_no_matching_backend_tests_returns_empty_results(self):
-        rows = _benchmark.run_backend_benchmark(
-            tests=[r"^test_cpu_no_such_operator_"],
-            dtypes=["all"],
-            repeat=1,
-            warmup=0,
-            max_repeat_time=1.0,
-            threads=1,
-            with_onnxruntime=False,
-            allow_empty=True,
-        )
+        with (
+            mock.patch("onnx_light_cpu._benchmark.register_backend_test_cases"),
+            mock.patch("onnx_light_cpu._benchmark.register_kernels"),
+            mock.patch("onnx_light.onnx.backend.collect_test_cases_by_name", return_value=[]),
+        ):
+            rows = _benchmark.run_backend_benchmark(
+                tests=[r"^test_cpu_no_such_operator_"],
+                dtypes=["all"],
+                repeat=1,
+                warmup=0,
+                max_repeat_time=1.0,
+                threads=1,
+                with_onnxruntime=False,
+                allow_empty=True,
+            )
         self.assertEqual(rows, ([], []))
 
     def test_no_matching_explicit_backend_tests_raise(self):
-        with self.assertRaisesRegex(ValueError, "no benchmark backend test matches"):
+        with (
+            mock.patch("onnx_light_cpu._benchmark.register_backend_test_cases"),
+            mock.patch("onnx_light_cpu._benchmark.register_kernels"),
+            mock.patch("onnx_light.onnx.backend.collect_test_cases_by_name", return_value=[]),
+            self.assertRaisesRegex(ValueError, "no benchmark backend test matches"),
+        ):
             _benchmark.run_backend_benchmark(
                 tests=[r"^test_cpu_no_such_operator_"],
                 dtypes=["all"],
