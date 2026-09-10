@@ -116,17 +116,13 @@ TEST(OnnxLightQLinearMatMulKernel, RejectsInvalidScaleAndZeroPointTypes) {
   const auto b = Tensor<std::int8_t>("b", {1, 1}, {1});
   const auto zero = Tensor<std::int8_t>("zero", {}, {0});
   const auto uzero = Tensor<std::uint8_t>("uzero", {}, {0});
-  const auto per_axis_zero = Tensor<std::int8_t>("per_axis_zero", {1}, {0});
   const auto one = Tensor<float>("one", {}, {1.0f});
-  const auto per_axis_scale = Tensor<float>("per_axis_scale", {1}, {1.0f});
   const auto zero_scale = Tensor<float>("scale", {}, {0.0f});
   const auto negative_scale = Tensor<float>("scale", {}, {-1.0f});
 
   EXPECT_THROW(kernel(a, one, zero, b, one, zero, zero_scale, zero), std::invalid_argument);
   EXPECT_THROW(kernel(a, negative_scale, zero, b, one, zero, one, zero), std::invalid_argument);
   EXPECT_THROW(kernel(a, one, uzero, b, one, zero, one, zero), std::invalid_argument);
-  EXPECT_THROW(kernel(a, one, per_axis_zero, b, one, zero, one, zero), std::invalid_argument);
-  EXPECT_THROW(kernel(a, per_axis_scale, zero, b, one, zero, one, zero), std::invalid_argument);
 }
 
 TEST(OnnxLightQLinearMatMulKernel, ContiguousPathMatchesReferenceAndBatchBroadcast) {

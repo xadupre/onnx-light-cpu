@@ -264,18 +264,21 @@ void RegisterCpuVariadicCases(std::vector<TestCase> &registry, const std::string
     RegisterVariadicCase<float>(registry, op_type, "broadcast3_float32", opset,
                                 {{2, 1}, {1, 3}, {}}, {{5.0f, 1.0f}, {10.0f, -2.0f, 30.0f}, {3.0f}},
                                 {2, 3});
-    RegisterVariadicCase<std::int8_t>(
-        registry, op_type, "arity4_int8", opset, {{2, 2}, {2, 2}, {2, 2}, {2, 2}},
-        {{5, 100, 7, -2}, {4, 6, 9, 0}, {-8, 40, 3, -7}, {1, 2, 30, -1}}, {2, 2});
+    RegisterVariadicCase<double>(registry, op_type, "arity4_float64", opset,
+                                 {{2, 2}, {2, 2}, {2, 2}, {2, 2}},
+                                 {{5.0, 100.0, 7.0, -2.0},
+                                  {4.0, 6.0, 9.0, 0.0},
+                                  {-8.0, 40.0, 3.0, -7.0},
+                                  {1.0, 2.0, 30.0, -1.0}},
+                                 {2, 2});
     return;
   }
   if (op_type == "Max") {
     RegisterVariadicCase<float>(registry, op_type, "broadcast3_float32", opset,
                                 {{2, 1}, {1, 3}, {}}, {{5.0f, 1.0f}, {10.0f, -2.0f, 30.0f}, {3.0f}},
                                 {2, 3});
-    RegisterVariadicCase<std::uint16_t>(registry, op_type, "arity4_uint16", opset,
-                                        {{2}, {2}, {2}, {2}}, {{5, 100}, {4, 600}, {8, 40}, {1, 2}},
-                                        {2});
+    RegisterVariadicCase<double>(registry, op_type, "arity4_float64", opset, {{2}, {2}, {2}, {2}},
+                                 {{5.0, 100.0}, {4.0, 600.0}, {8.0, 40.0}, {1.0, 2.0}}, {2});
     return;
   }
   throw std::invalid_argument("Unsupported variadic op type for backend registration.");
