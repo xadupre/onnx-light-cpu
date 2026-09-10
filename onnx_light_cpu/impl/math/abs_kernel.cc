@@ -41,6 +41,17 @@ void AbsInt32_AVX2(const int32_t *input, int32_t *output, std::size_t count);
 void AbsInt64_AVX2(const int64_t *input, int64_t *output, std::size_t count);
 #endif
 
+#if defined(ONNX_LIGHT_CPU_HAVE_AVX512) && defined(__AVX512F__)
+void AbsFloat64_AVX512(const double *input, double *output, std::size_t count);
+void AbsFloat16_AVX512(const uint16_t *input, uint16_t *output, std::size_t count);
+void AbsInt32_AVX512(const int32_t *input, int32_t *output, std::size_t count);
+void AbsInt64_AVX512(const int64_t *input, int64_t *output, std::size_t count);
+#endif
+#if defined(ONNX_LIGHT_CPU_HAVE_AVX512) && defined(__AVX512BW__)
+void AbsInt8_AVX512(const int8_t *input, int8_t *output, std::size_t count);
+void AbsInt16_AVX512(const int16_t *input, int16_t *output, std::size_t count);
+#endif
+
 // ---------------------------------------------------------------------------
 // AbsFloat32 implementations
 // ---------------------------------------------------------------------------
@@ -217,6 +228,12 @@ namespace {
 void AbsFloat64_Dispatch(const double *input, double *output, std::size_t count) {
 #if ONNX_LIGHT_CPU_X86
   static const SimdLevel level = DetectSimdLevel();
+#if defined(ONNX_LIGHT_CPU_HAVE_AVX512) && defined(__AVX512F__)
+  if (level >= SimdLevel::kAVX512) {
+    AbsFloat64_AVX512(input, output, count);
+    return;
+  }
+#endif
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX
   if (level >= SimdLevel::kAVX) {
     AbsFloat64_AVX(input, output, count);
@@ -287,6 +304,12 @@ namespace {
 void AbsFloat16_Dispatch(const uint16_t *input, uint16_t *output, std::size_t count) {
 #if ONNX_LIGHT_CPU_X86
   static const SimdLevel level = DetectSimdLevel();
+#if defined(ONNX_LIGHT_CPU_HAVE_AVX512) && defined(__AVX512F__)
+  if (level >= SimdLevel::kAVX512) {
+    AbsFloat16_AVX512(input, output, count);
+    return;
+  }
+#endif
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2
   if (level >= SimdLevel::kAVX2) {
     AbsFloat16_AVX2(input, output, count);
@@ -356,6 +379,12 @@ namespace {
 void AbsInt8_Dispatch(const int8_t *input, int8_t *output, std::size_t count) {
 #if ONNX_LIGHT_CPU_X86
   static const SimdLevel level = DetectSimdLevel();
+#if defined(ONNX_LIGHT_CPU_HAVE_AVX512) && defined(__AVX512BW__)
+  if (level >= SimdLevel::kAVX512) {
+    AbsInt8_AVX512(input, output, count);
+    return;
+  }
+#endif
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2
   if (level >= SimdLevel::kAVX2) {
     AbsInt8_AVX2(input, output, count);
@@ -416,6 +445,12 @@ void AbsInt16_SSE2(const int16_t *input, int16_t *output, std::size_t count) {
 void AbsInt16_Dispatch(const int16_t *input, int16_t *output, std::size_t count) {
 #if ONNX_LIGHT_CPU_X86
   static const SimdLevel level = DetectSimdLevel();
+#if defined(ONNX_LIGHT_CPU_HAVE_AVX512) && defined(__AVX512BW__)
+  if (level >= SimdLevel::kAVX512) {
+    AbsInt16_AVX512(input, output, count);
+    return;
+  }
+#endif
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2
   if (level >= SimdLevel::kAVX2) {
     AbsInt16_AVX2(input, output, count);
@@ -482,6 +517,12 @@ namespace {
 void AbsInt32_Dispatch(const int32_t *input, int32_t *output, std::size_t count) {
 #if ONNX_LIGHT_CPU_X86
   static const SimdLevel level = DetectSimdLevel();
+#if defined(ONNX_LIGHT_CPU_HAVE_AVX512) && defined(__AVX512F__)
+  if (level >= SimdLevel::kAVX512) {
+    AbsInt32_AVX512(input, output, count);
+    return;
+  }
+#endif
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2
   if (level >= SimdLevel::kAVX2) {
     AbsInt32_AVX2(input, output, count);
@@ -554,6 +595,12 @@ namespace {
 void AbsInt64_Dispatch(const int64_t *input, int64_t *output, std::size_t count) {
 #if ONNX_LIGHT_CPU_X86
   static const SimdLevel level = DetectSimdLevel();
+#if defined(ONNX_LIGHT_CPU_HAVE_AVX512) && defined(__AVX512F__)
+  if (level >= SimdLevel::kAVX512) {
+    AbsInt64_AVX512(input, output, count);
+    return;
+  }
+#endif
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2
   if (level >= SimdLevel::kAVX2) {
     AbsInt64_AVX2(input, output, count);

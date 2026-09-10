@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "onnx_light_cpu/impl/compute_arithmetic_profile.h"
-#include "onnx_light_cpu/impl/compute/compute_kernel_avx.h"
+#include "onnx_light_cpu/impl/compute/compute_kernel_avx2_fma.h"
 
 #include <algorithm>
 #include <atomic>
@@ -107,8 +107,8 @@ constexpr double kComputeProfileGiga = 1.0e9;
 constexpr std::size_t kComputeProfileMaxCalibrationPasses = 1u << 20;
 
 // ---------------------------------------------------------------------------
-// Baseline (portable scalar, plus x86 SSE2/AVX2 or AArch64 NEON) FP32/FP64
-// register-resident FMA kernels. Every accumulator lives in a local array
+// Baseline (portable scalar, plus x86 SSE2 or AArch64 NEON) FP32/FP64
+// register-resident multiply-add kernels. Every accumulator lives in a local array
 // small enough to stay in registers; nothing here reads or writes a working
 // set, so this never becomes a memory-bandwidth benchmark.
 // ---------------------------------------------------------------------------
@@ -473,7 +473,7 @@ ComputeThroughputResult MeasureComputeArithmeticThroughput(DataType element_type
 
   detail::ComputeDispatchInputs inputs;
   inputs.simd_level = DetectSimdLevel();
-#ifdef ONNX_LIGHT_CPU_HAVE_AVX
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
   inputs.has_fma = CpuSupportsFma();
 #endif
   inputs.arm_simd_level = DetectArmSimdLevel();
@@ -528,11 +528,11 @@ ComputeThroughputResult MeasureComputeArithmeticThroughput(DataType element_type
       kernel = &RunNeonFloat32Round;
       break;
 #endif
-#ifdef ONNX_LIGHT_CPU_HAVE_AVX
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
     case ComputeImplementation::kAVX2:
       accounting =
-          ComputeFmaOperationAccounting(kComputeAvxFloat32AccumulatorCount, kComputeChainLength);
-      kernel = &ComputeArithmeticAvxFloat32Round;
+          ComputeFmaOperationAccounting(kComputeAvx2Float32AccumulatorCount, kComputeChainLength);
+      kernel = &ComputeArithmeticAvx2Float32Round;
       break;
 #endif
 #if ONNX_LIGHT_CPU_COMPUTE_X86
@@ -566,11 +566,11 @@ ComputeThroughputResult MeasureComputeArithmeticThroughput(DataType element_type
       kernel = &RunNeonFloat64Round;
       break;
 #endif
-#ifdef ONNX_LIGHT_CPU_HAVE_AVX
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
     case ComputeImplementation::kAVX2:
       accounting =
-          ComputeFmaOperationAccounting(kComputeAvxFloat64AccumulatorCount, kComputeChainLength);
-      kernel = &ComputeArithmeticAvxFloat64Round;
+          ComputeFmaOperationAccounting(kComputeAvx2Float64AccumulatorCount, kComputeChainLength);
+      kernel = &ComputeArithmeticAvx2Float64Round;
       break;
 #endif
 #if ONNX_LIGHT_CPU_COMPUTE_X86
