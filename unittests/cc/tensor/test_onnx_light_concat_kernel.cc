@@ -281,7 +281,9 @@ TEST(OnnxLightConcatKernel, NodeRunAcrossOpsetsAndRepeatedNames) {
     runtime.Set("second", inputs[1]);
     onnx_light_cpu::ConcatKernel kernel(node, MakeCtx(opset));
     onnx_light_cpu::ClearUsedKernelNames();
-    kernel.Run(runtime);
+    onnx_light_cpu::SetKernelUsageRecording(true);
+    EXPECT_NO_THROW(kernel.Run(runtime));
+    onnx_light_cpu::SetKernelUsageRecording(false);
     EXPECT_EQ(onnx_light_cpu::UsedKernelNames(),
               std::vector<std::string>{onnx_light_cpu::ConcatKernel::kName});
     EqualBytes(runtime.Get("output"),

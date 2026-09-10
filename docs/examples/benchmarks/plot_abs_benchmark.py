@@ -186,9 +186,13 @@ print(
 # Confirm the model dispatches to the onnx-light-cpu ``Abs`` kernel (identified
 # by the library-qualified name it records when it runs) rather than
 # onnx-light's built-in kernel.
-clear_used_kernel_names()
-light_session.run(None, {"X": np.zeros(1, dtype=np.float32)})
-assert used_kernel_names() == ["onnx_light_cpu::Abs"], used_kernel_names()
+set_kernel_usage_recording(True)
+try:
+    clear_used_kernel_names()
+    light_session.run(None, {"X": np.zeros(1, dtype=np.float32)})
+    assert used_kernel_names() == ["onnx_light_cpu::Abs"], used_kernel_names()
+finally:
+    set_kernel_usage_recording(False)
 
 # Verify the two lifetime domains directly. The NumPy input must remain a
 # zero-copy borrowed tensor and consume no ExecutionArena slot, while the
@@ -279,10 +283,12 @@ benchmark_phase(np.abs, 1, validate=False)
 benchmark_phase(run_light, 3)
 
 set_kernel_usage_recording(True)
-clear_used_kernel_names()
-run_light(np.zeros(1, dtype=np.float32))
-assert used_kernel_names() == ["onnx_light_cpu::Abs"], used_kernel_names()
-set_kernel_usage_recording(False)
+try:
+    clear_used_kernel_names()
+    run_light(np.zeros(1, dtype=np.float32))
+    assert used_kernel_names() == ["onnx_light_cpu::Abs"], used_kernel_names()
+finally:
+    set_kernel_usage_recording(False)
 
 benchmark_phase(lambda inp: alone_session.run(None, {"X": inp})[0], 2)
 
@@ -310,7 +316,6 @@ for size, numpy_time, alone_time, cpu_time, ort_time in rows:
         f"cpu vs onnxruntime={ort_speedup:5.2f}x"
     )
 
-set_kernel_usage_recording(True)
 print("verified onnx-light-cpu Abs dispatch")
 
 sizes = np.array([r[0] for r in rows])

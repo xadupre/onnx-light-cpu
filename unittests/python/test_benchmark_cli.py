@@ -258,6 +258,7 @@ class TestBenchmarkCli(ExtTestCase):
         with (
             mock.patch("onnx_light.onnx.reference.ReferenceEvaluator") as evaluator,
             mock.patch("onnx_light_cpu._benchmark.clear_used_kernel_names"),
+            mock.patch("onnx_light_cpu._benchmark.set_kernel_usage_recording") as recording,
             mock.patch(
                 "onnx_light_cpu._register.registered_kernels",
                 return_value=(self._registration("ai.onnx", "Abs", "onnx_light_cpu::Abs"),),
@@ -277,6 +278,35 @@ class TestBenchmarkCli(ExtTestCase):
         self.assertEqual(raw[0]["runtime"], "onnx-light-cpu")
         self.assertEqual(raw[0]["processor"], "test CPU")
         self.assertIn("duration_s", raw[0])
+        self.assertEqual(recording.call_args_list, [mock.call(True), mock.call(False)])
+
+    def test_recording_is_disabled_when_dispatch_check_fails(self):
+        case = SimpleNamespace(
+            name="test_cpu_abs_float32_benchmark",
+            model=SimpleNamespace(
+                graph=SimpleNamespace(
+                    node=[SimpleNamespace(domain="", op_type="Abs")],
+                    input=[],
+                )
+            ),
+            data_sets=[SimpleNamespace(inputs=[])],
+        )
+        for failure in (None, RuntimeError("execution failed")):
+            with (
+                self.subTest(failure=failure),
+                mock.patch("onnx_light.onnx.reference.ReferenceEvaluator") as evaluator,
+                mock.patch("onnx_light_cpu._benchmark.clear_used_kernel_names"),
+                mock.patch("onnx_light_cpu._benchmark.set_kernel_usage_recording") as recording,
+                mock.patch(
+                    "onnx_light_cpu._register.registered_kernels",
+                    return_value=(self._registration("ai.onnx", "Abs", "onnx_light_cpu::Abs"),),
+                ),
+                mock.patch("onnx_light_cpu._benchmark.used_kernel_names", return_value=()),
+            ):
+                evaluator.return_value.run.side_effect = failure
+                with self.assertRaisesRegex(RuntimeError, "execution failed|did not run"):
+                    _benchmark._measure_case(case, 1, 0, 1.0, 1)
+                self.assertEqual(recording.call_args_list, [mock.call(True), mock.call(False)])
 
     def test_domain_specific_kernel_name_is_checked(self):
         kernels = (
@@ -314,6 +344,7 @@ class TestBenchmarkCli(ExtTestCase):
             mock.patch.dict(sys.modules, {"onnxruntime": onnxruntime}),
             mock.patch("onnx_light.onnx.reference.ReferenceEvaluator"),
             mock.patch("onnx_light_cpu._benchmark.clear_used_kernel_names"),
+            mock.patch("onnx_light_cpu._benchmark.set_kernel_usage_recording"),
             mock.patch(
                 "onnx_light_cpu._register.registered_kernels",
                 return_value=(self._registration("ai.onnx", "Abs", "onnx_light_cpu::Abs"),),
@@ -358,6 +389,7 @@ class TestBenchmarkCli(ExtTestCase):
             ),
             mock.patch("onnx_light.onnx.reference.ReferenceEvaluator"),
             mock.patch("onnx_light_cpu._benchmark.clear_used_kernel_names"),
+            mock.patch("onnx_light_cpu._benchmark.set_kernel_usage_recording"),
             mock.patch(
                 "onnx_light_cpu._register.registered_kernels",
                 return_value=(self._registration("ai.onnx", "Abs", "onnx_light_cpu::Abs"),),

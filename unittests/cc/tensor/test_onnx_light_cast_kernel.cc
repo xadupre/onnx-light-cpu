@@ -408,7 +408,9 @@ TEST(OnnxLightCastKernel, NodeAttributesRuntimeUsageAndArity) {
     rt_ns::RuntimeContext runtime(MakeCtx());
     runtime.Set("data", data);
     onnx_light_cpu::ClearUsedKernelNames();
-    kernel.Run(runtime);
+    onnx_light_cpu::SetKernelUsageRecording(true);
+    EXPECT_NO_THROW(kernel.Run(runtime));
+    onnx_light_cpu::SetKernelUsageRecording(false);
     Equal(runtime.Get("output"), BuiltinCast(MakeCtx())(data, DataType::FLOAT8E5M2, saturate != 0));
     EXPECT_EQ(onnx_light_cpu::UsedKernelNames(),
               std::vector<std::string>{onnx_light_cpu::CastKernel::kName});

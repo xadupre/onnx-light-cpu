@@ -28,7 +28,9 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <barrier>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -85,8 +87,28 @@ TEST(OnnxLightKernelUsage, RegisteredKernelNames) {
   EXPECT_EQ(onnx_light_cpu::RegisteredKernelNames(), expected);
 }
 
+TEST(OnnxLightKernelUsage, RecordingIsDisabledByDefault) {
+  for (std::size_t i = 0; i < 2 * onnx_light_cpu::kMaxKernelUsageRecords; ++i) {
+    onnx_light_cpu::RecordKernelUsage(onnx_light_cpu::AbsKernel::kName);
+  }
+  EXPECT_TRUE(onnx_light_cpu::UsedKernelNames().empty());
+}
+
+class OnnxLightKernelUsageRecording : public ::testing::Test {
+protected:
+  void SetUp() override {
+    onnx_light_cpu::ClearUsedKernelNames();
+    onnx_light_cpu::SetKernelUsageRecording(true);
+  }
+
+  void TearDown() override {
+    onnx_light_cpu::SetKernelUsageRecording(false);
+    onnx_light_cpu::ClearUsedKernelNames();
+  }
+};
+
 // The usage log records names in invocation order and can be cleared.
-TEST(OnnxLightKernelUsage, RecordAndClear) {
+TEST_F(OnnxLightKernelUsageRecording, RecordAndClear) {
   onnx_light_cpu::ClearUsedKernelNames();
   EXPECT_TRUE(onnx_light_cpu::UsedKernelNames().empty());
 
@@ -99,7 +121,7 @@ TEST(OnnxLightKernelUsage, RecordAndClear) {
   EXPECT_TRUE(onnx_light_cpu::UsedKernelNames().empty());
 }
 
-TEST(OnnxLightKernelUsage, RecordingCanBeDisabled) {
+TEST_F(OnnxLightKernelUsageRecording, RecordingCanBeDisabled) {
   onnx_light_cpu::ClearUsedKernelNames();
   onnx_light_cpu::SetKernelUsageRecording(false);
   onnx_light_cpu::RecordKernelUsage(onnx_light_cpu::AbsKernel::kName);
@@ -108,6 +130,131 @@ TEST(OnnxLightKernelUsage, RecordingCanBeDisabled) {
   onnx_light_cpu::SetKernelUsageRecording(true);
   onnx_light_cpu::RecordKernelUsage(onnx_light_cpu::AbsKernel::kName);
   EXPECT_EQ(onnx_light_cpu::UsedKernelNames(), std::vector<std::string>({"onnx_light_cpu::Abs"}));
+
+  onnx_light_cpu::SetKernelUsageRecording(false);
+  for (std::size_t i = 0; i < 2 * onnx_light_cpu::kMaxKernelUsageRecords; ++i) {
+    onnx_light_cpu::RecordKernelUsage(onnx_light_cpu::ExpKernel::kName);
+  }
+  EXPECT_EQ(onnx_light_cpu::UsedKernelNames(), std::vector<std::string>({"onnx_light_cpu::Abs"}));
+  onnx_light_cpu::ClearUsedKernelNames();
+  onnx_light_cpu::RecordKernelUsage(onnx_light_cpu::ExpKernel::kName);
+  EXPECT_TRUE(onnx_light_cpu::UsedKernelNames().empty());
+}
+
+TEST_F(OnnxLightKernelUsageRecording, StorageIsBoundedAndClearRestartsRecording) {
+  std::vector<std::string> expected;
+  for (std::size_t i = 0; i < 2 * onnx_light_cpu::kMaxKernelUsageRecords; ++i) {
+    const std::string name = "kernel_" + std::to_string(i);
+    onnx_light_cpu::RecordKernelUsage(name);
+    if (i < onnx_light_cpu::kMaxKernelUsageRecords) {
+      expected.push_back(name);
+    }
+  }
+  EXPECT_EQ(onnx_light_cpu::UsedKernelNames(), expected);
+  onnx_light_cpu::SetKernelUsageRecording(false);
+  onnx_light_cpu::SetKernelUsageRecording(true);
+  onnx_light_cpu::RecordKernelUsage("dropped");
+  EXPECT_EQ(onnx_light_cpu::UsedKernelNames(), expected);
+
+  onnx_light_cpu::ClearUsedKernelNames();
+  onnx_light_cpu::RecordKernelUsage("after_clear");
+  EXPECT_EQ(onnx_light_cpu::UsedKernelNames(), std::vector<std::string>({"after_clear"}));
+}
+
+TEST_F(OnnxLightKernelUsageRecording, SnapshotOwnsNamesAndDoesNotConsumeLog) {
+  std::string name = "original";
+  onnx_light_cpu::RecordKernelUsage(name);
+  name.assign("changed");
+  auto snapshot = onnx_light_cpu::UsedKernelNames();
+  ASSERT_EQ(snapshot, std::vector<std::string>({"original"}));
+  snapshot[0] = "independent";
+  EXPECT_EQ(onnx_light_cpu::UsedKernelNames(), std::vector<std::string>({"original"}));
+  onnx_light_cpu::ClearUsedKernelNames();
+  EXPECT_EQ(snapshot, std::vector<std::string>({"independent"}));
+}
+
+TEST_F(OnnxLightKernelUsageRecording, ConcurrentRecording) {
+  constexpr int threads = 4;
+  constexpr int invocations = 128;
+  std::barrier start(threads);
+  std::vector<std::thread> workers;
+  for (int thread = 0; thread < threads; ++thread) {
+    workers.emplace_back([&, thread] {
+      start.arrive_and_wait();
+      for (int i = 0; i < invocations; ++i) {
+        onnx_light_cpu::RecordKernelUsage(std::to_string(thread) + ":" + std::to_string(i));
+      }
+    });
+  }
+  for (auto &worker : workers) {
+    worker.join();
+  }
+  const auto names = onnx_light_cpu::UsedKernelNames();
+  ASSERT_EQ(names.size(), threads * invocations);
+  for (int thread = 0; thread < threads; ++thread) {
+    const std::string prefix = std::to_string(thread) + ":";
+    int invocation = 0;
+    for (const auto &name : names) {
+      if (name.starts_with(prefix)) {
+        EXPECT_EQ(name, prefix + std::to_string(invocation++));
+      }
+    }
+    EXPECT_EQ(invocation, invocations);
+  }
+}
+
+TEST_F(OnnxLightKernelUsageRecording, ConcurrentRecordingIsBounded) {
+  constexpr int threads = 4;
+  std::barrier start(threads);
+  std::vector<std::thread> workers;
+  for (int thread = 0; thread < threads; ++thread) {
+    workers.emplace_back([&] {
+      start.arrive_and_wait();
+      for (std::size_t i = 0; i < onnx_light_cpu::kMaxKernelUsageRecords; ++i) {
+        onnx_light_cpu::RecordKernelUsage("kernel");
+      }
+    });
+  }
+  for (auto &worker : workers) {
+    worker.join();
+  }
+  EXPECT_EQ(onnx_light_cpu::UsedKernelNames(),
+            std::vector<std::string>(onnx_light_cpu::kMaxKernelUsageRecords, "kernel"));
+}
+
+TEST_F(OnnxLightKernelUsageRecording, ConcurrentResetRetrievalAndDisable) {
+  constexpr int threads = 4;
+  std::barrier phase(threads + 1);
+  std::vector<std::thread> workers;
+  for (int thread = 0; thread < threads; ++thread) {
+    workers.emplace_back([&] {
+      phase.arrive_and_wait();
+      for (std::size_t i = 0; i < onnx_light_cpu::kMaxKernelUsageRecords; ++i) {
+        onnx_light_cpu::RecordKernelUsage("kernel");
+      }
+      phase.arrive_and_wait();
+      for (int i = 0; i < 128; ++i) {
+        onnx_light_cpu::RecordKernelUsage("disabled");
+      }
+    });
+  }
+  phase.arrive_and_wait();
+  for (int i = 0; i < 128; ++i) {
+    const auto snapshot = onnx_light_cpu::UsedKernelNames();
+    EXPECT_LE(snapshot.size(), onnx_light_cpu::kMaxKernelUsageRecords);
+    EXPECT_TRUE(std::all_of(snapshot.begin(), snapshot.end(),
+                            [](const auto &name) { return name == "kernel"; }));
+    onnx_light_cpu::ClearUsedKernelNames();
+  }
+  onnx_light_cpu::SetKernelUsageRecording(false);
+  const auto stopped = onnx_light_cpu::UsedKernelNames();
+  phase.arrive_and_wait();
+  for (auto &worker : workers) {
+    worker.join();
+  }
+  EXPECT_EQ(onnx_light_cpu::UsedKernelNames(), stopped);
+  onnx_light_cpu::ClearUsedKernelNames();
+  EXPECT_TRUE(onnx_light_cpu::UsedKernelNames().empty());
 }
 
 } // namespace

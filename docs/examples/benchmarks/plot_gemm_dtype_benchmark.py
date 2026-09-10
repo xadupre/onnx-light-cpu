@@ -264,11 +264,13 @@ for shape_label, M, N, K in SHAPES:
             return session.run(None, {"A": a, "B": b})[0]
 
         set_kernel_usage_recording(True)
-        clear_used_kernel_names()
-        run()
-        kernel_names = used_kernel_names()
-        assert accelerated_kernel_name in kernel_names, (label, shape_label, kernel_names)
-        set_kernel_usage_recording(False)
+        try:
+            clear_used_kernel_names()
+            run()
+            kernel_names = used_kernel_names()
+            assert accelerated_kernel_name in kernel_names, (label, shape_label, kernel_names)
+        finally:
+            set_kernel_usage_recording(False)
         elapsed = measure(run, args.repeat, args.warmup, args.max_repeat_time)
         results[label].append(elapsed)
         print(f"  {label:<9} | onnx-light-cpu={elapsed * 1e6:10.2f} us")
@@ -352,7 +354,6 @@ for _shape_label, _, _, _, a32, b32, inputs in benchmark_inputs:
         )
 
 print(f"verified {accelerated_kernel_name} for every benchmark shape and dtype")
-set_kernel_usage_recording(True)
 
 # %%
 # Plot the timings

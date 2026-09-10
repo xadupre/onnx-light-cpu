@@ -291,7 +291,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     import numpy as np
     import onnxruntime
     from onnx_light.onnx.reference import ReferenceEvaluator
-    from onnx_light_cpu import clear_used_kernel_names, register_kernels, used_kernel_names
+    from onnx_light_cpu import (
+        clear_used_kernel_names,
+        register_kernels,
+        set_kernel_usage_recording,
+        used_kernel_names,
+    )
 
     if args.cpus:
         if not hasattr(os, "sched_setaffinity"):
@@ -343,13 +348,17 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         def ort_run(session=ort, current_feeds=feeds):
             return session.run(None, current_feeds)
 
-        clear_used_kernel_names()
-        cpu_outputs = cpu_run()
-        if "onnx_light_cpu::Attention" not in used_kernel_names():
-            raise RuntimeError(
-                f"{test_case.name} did not dispatch onnx_light_cpu::Attention: "
-                f"{used_kernel_names()}"
-            )
+        set_kernel_usage_recording(True)
+        try:
+            clear_used_kernel_names()
+            cpu_outputs = cpu_run()
+            if "onnx_light_cpu::Attention" not in used_kernel_names():
+                raise RuntimeError(
+                    f"{test_case.name} did not dispatch onnx_light_cpu::Attention: "
+                    f"{used_kernel_names()}"
+                )
+        finally:
+            set_kernel_usage_recording(False)
         ort_outputs = ort_run()
         tolerance = {"float32": (2e-4, 2e-5), "float16": (2e-2, 2e-3), "bfloat16": (4e-2, 4e-3)}
         rtol, atol = tolerance[case["dtype"]]

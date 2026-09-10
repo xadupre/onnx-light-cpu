@@ -56,6 +56,7 @@ from onnx_light_cpu import (
     registered_kernel_names,
     registered_kernels,
     run_backend_correctness_tests,
+    set_kernel_usage_recording,
     used_kernel_names,
 )
 
@@ -344,9 +345,13 @@ def _cpu_backend(model, *inputs):
     register_kernels()
     session = ReferenceEvaluator(model)
     feeds = dict(zip(session.input_names, inputs, strict=True))
-    clear_used_kernel_names()
-    outputs = session.run(None, feeds)
-    dispatched = used_kernel_names()
+    set_kernel_usage_recording(True)
+    try:
+        clear_used_kernel_names()
+        outputs = session.run(None, feeds)
+        dispatched = used_kernel_names()
+    finally:
+        set_kernel_usage_recording(False)
     expected_kernels = []
     for node in model.graph.node:
         domain = node.domain or "ai.onnx"

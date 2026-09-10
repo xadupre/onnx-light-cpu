@@ -27,7 +27,7 @@ std::mutex &UsageMutex() {
 }
 
 std::atomic<bool> &UsageRecordingEnabled() {
-  static std::atomic<bool> enabled{true};
+  static std::atomic<bool> enabled{false};
   return enabled;
 }
 
@@ -38,7 +38,10 @@ void RecordKernelUsage(std::string_view name) {
     return;
   }
   std::lock_guard<std::mutex> guard(UsageMutex());
-  UsageLog().emplace_back(name);
+  if (UsageRecordingEnabled().load(std::memory_order_relaxed) &&
+      UsageLog().size() < kMaxKernelUsageRecords) {
+    UsageLog().emplace_back(name);
+  }
 }
 
 std::vector<std::string> UsedKernelNames() {
@@ -52,6 +55,7 @@ void ClearUsedKernelNames() {
 }
 
 void SetKernelUsageRecording(bool enabled) noexcept {
+  std::lock_guard<std::mutex> guard(UsageMutex());
   UsageRecordingEnabled().store(enabled, std::memory_order_relaxed);
 }
 

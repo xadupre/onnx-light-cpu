@@ -181,7 +181,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     import onnxruntime
     from onnx_light.onnx import TensorProto, helper
     from onnx_light.onnx.reference import ReferenceEvaluator
-    from onnx_light_cpu import clear_used_kernel_names, register_kernels, used_kernel_names
+    from onnx_light_cpu import (
+        clear_used_kernel_names,
+        register_kernels,
+        set_kernel_usage_recording,
+        used_kernel_names,
+    )
 
     register_kernels()
     rows = []
@@ -235,10 +240,14 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         def ort_run(session=ort, current_feeds=feeds):
             return session.run(None, current_feeds)[0]
 
-        clear_used_kernel_names()
-        cpu_output = cpu_run()
-        if "onnx_light_cpu::BiasGelu" not in used_kernel_names():
-            raise RuntimeError(f"{case_name} did not dispatch the optimized BiasGelu kernel.")
+        set_kernel_usage_recording(True)
+        try:
+            clear_used_kernel_names()
+            cpu_output = cpu_run()
+            if "onnx_light_cpu::BiasGelu" not in used_kernel_names():
+                raise RuntimeError(f"{case_name} did not dispatch the optimized BiasGelu kernel.")
+        finally:
+            set_kernel_usage_recording(False)
         np.testing.assert_allclose(
             cpu_output, ort_run(), rtol=args.rtol, atol=args.atol, equal_nan=True
         )

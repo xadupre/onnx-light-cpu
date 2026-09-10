@@ -201,15 +201,17 @@ NB_MODULE(_cpuregister, m) {
   m.def(
       "used_kernel_names", []() { return onnx_light_cpu::UsedKernelNames(); },
       "Returns the library-qualified names of the onnx-light-cpu kernels that "
-      "ran since the last clear_used_kernel_names() call, in invocation order.");
+      "were recorded since the last clear_used_kernel_names() call. Returns a "
+      "non-consuming snapshot of at most 4096 entries in mutex acquisition order.");
 
   m.def(
       "clear_used_kernel_names", []() { onnx_light_cpu::ClearUsedKernelNames(); },
-      "Clears the record of onnx-light-cpu kernels that have run.");
+      "Atomically clears the kernel log without changing whether recording is enabled.");
 
   m.def("set_kernel_usage_recording", &onnx_light_cpu::SetKernelUsageRecording, nb::arg("enabled"),
-        "Enables or disables per-invocation kernel usage recording. Disabling it "
-        "removes diagnostic logging overhead from performance measurements.");
+        "Enables or disables process-wide recording (disabled by default). Retains "
+        "the first 4096 invocations until cleared. Disabling waits for active appends "
+        "without clearing the log; disabled kernel calls do not lock or allocate.");
 
 #ifdef ONNX_LIGHT_CPU_HAS_BACKEND_TEST
   m.def(

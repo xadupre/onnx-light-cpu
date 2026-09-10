@@ -39,6 +39,12 @@ using bt_ns::DataSet;
 using bt_ns::TestCase;
 using rt_ns::Tensor;
 
+class KernelUsageRecordingGuard {
+public:
+  KernelUsageRecordingGuard() { SetKernelUsageRecording(true); }
+  ~KernelUsageRecordingGuard() { SetKernelUsageRecording(false); }
+};
+
 class TestCaseUnloadGuard {
 public:
   explicit TestCaseUnloadGuard(TestCase &test_case) : test_case_(test_case) {}
@@ -129,6 +135,7 @@ void RunCase(const TestCase &test_case, const KernelRegistration &kernel) {
       bindings.emplace_back(input.name, input);
     }
     rt_ns::SubgraphSession session(runtime, graph);
+    const KernelUsageRecordingGuard recording;
     ClearUsedKernelNames();
     CompareOutputs(test_case, data_set, session.Run(std::move(bindings), runtime));
     const std::vector<std::string> used = UsedKernelNames();

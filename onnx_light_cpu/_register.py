@@ -414,11 +414,11 @@ def registered_kernel_names(
 def used_kernel_names() -> list[str]:
     """Returns the onnx-light-cpu kernels that ran since the last clear.
 
-    Every onnx-light-cpu kernel records its library-qualified name when it
-    executes, so after running a model through onnx-light's ``ReferenceEvaluator``
-    this returns, in invocation order, the names of the accelerated kernels the
-    runtime actually dispatched to. Use :func:`clear_used_kernel_names` to reset
-    the record before a run.
+    Recording is disabled by default; opt in with
+    :func:`set_kernel_usage_recording`. The process-wide log retains the first
+    4096 invocations after each clear and drops later records until cleared.
+    Returns an independent, non-consuming snapshot in mutex acquisition order.
+    Recording, retrieval, and clearing are serialized by the same mutex.
     """
     from .onnx_py._cpuregister import (  # pyrefly: ignore[missing-import]
         used_kernel_names as _used_kernel_names,
@@ -428,7 +428,10 @@ def used_kernel_names() -> list[str]:
 
 
 def clear_used_kernel_names() -> None:
-    """Clears the record of onnx-light-cpu kernels that have run."""
+    """Clears the log without changing whether recording is enabled.
+
+    Concurrent records fall before or after the clear in mutex acquisition order.
+    """
     from .onnx_py._cpuregister import (  # pyrefly: ignore[missing-import]
         clear_used_kernel_names as _clear_used_kernel_names,
     )
@@ -437,7 +440,12 @@ def clear_used_kernel_names() -> None:
 
 
 def set_kernel_usage_recording(enabled: bool) -> None:
-    """Enables or disables per-invocation kernel usage recording."""
+    """Enables or disables process-wide recording (disabled by default).
+
+    Toggling preserves existing records. Disabling waits for active appends;
+    no more records are appended until enabled again. Disabled kernel calls
+    only load an atomic flag, without locking or allocating log entries.
+    """
     from .onnx_py._cpuregister import (  # pyrefly: ignore[missing-import]
         set_kernel_usage_recording as _set_kernel_usage_recording,
     )

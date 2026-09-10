@@ -117,7 +117,11 @@ Because the onnx-light-cpu kernels are drop-in replacements, a model produces
 the same numbers whether it runs them or ``onnx-light``'s built-in kernels. To
 tell them apart, every onnx-light-cpu kernel carries a unique,
 library-qualified **name** (for example ``"onnx_light_cpu::Abs"``) that it
-records every time it runs. The names can be inspected from Python:
+can record when it runs. Recording is **disabled by default** and must be
+explicitly enabled for diagnostics. The process-wide log retains the first
+4096 invocations after each clear; later records are dropped until cleared.
+Disabled calls only load an atomic flag, without locking or allocating.
+The names can be inspected from Python:
 
 .. code-block:: python
 
@@ -126,6 +130,7 @@ records every time it runs. The names can be inspected from Python:
         register_kernels,
         registered_kernel_names,
         registered_kernels,
+        set_kernel_usage_recording,
         used_kernel_names,
     )
 
@@ -134,11 +139,20 @@ records every time it runs. The names can be inspected from Python:
     registered_kernels()       # (RegisteredKernel(domain='ai.onnx', op_type='Abs', ...), ...)
 
     clear_used_kernel_names()
-    sess.run(None, feeds)      # run a model containing e.g. an Abs node
-    used_kernel_names()        # ['onnx_light_cpu::Abs', ...] in run order
+    set_kernel_usage_recording(True)
+    try:
+        sess.run(None, feeds)  # run a model containing e.g. an Abs node
+    finally:
+        set_kernel_usage_recording(False)
+    used_kernel_names()       # ['onnx_light_cpu::Abs', ...]
 
-If ``used_kernel_names()`` is empty after a run whose operators onnx-light-cpu
-overrides, the registration did not take effect — see
+Retrieval returns an independent snapshot without consuming the log. Recording,
+retrieval, and reset share a mutex; concurrent records are ordered by mutex
+acquisition and may fall before or after a reset. Reset does not toggle recording.
+Disabling waits for active appends and preserves existing entries.
+
+If ``used_kernel_names()`` is empty after an explicitly recorded run whose
+operators onnx-light-cpu overrides, the registration did not take effect — see
 :ref:`l-registration-ignored` below. The same names are available in C++ as the
 static ``AbsKernel::kName`` (etc.) members and through
 ``onnx_light_cpu::RegisteredKernelNames()`` /

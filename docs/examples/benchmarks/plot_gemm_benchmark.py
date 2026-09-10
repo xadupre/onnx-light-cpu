@@ -228,11 +228,13 @@ def inputs():
 
 for size, a, b in inputs():
     set_kernel_usage_recording(True)
-    clear_used_kernel_names()
-    run_light(a, b)
-    accelerated_kernel_names = used_kernel_names()
-    assert accelerated_kernel_name in accelerated_kernel_names, accelerated_kernel_names
-    set_kernel_usage_recording(False)
+    try:
+        clear_used_kernel_names()
+        run_light(a, b)
+        accelerated_kernel_names = used_kernel_names()
+        assert accelerated_kernel_name in accelerated_kernel_names, accelerated_kernel_names
+    finally:
+        set_kernel_usage_recording(False)
     rows_by_size[size][2] = measure(
         lambda a=a, b=b: run_light(a, b),
         args.repeat,
@@ -300,7 +302,6 @@ print(
     "verified onnx-light-cpu Gemm for every benchmark size: "
     f"accelerated={accelerated_kernel_name}"
 )
-set_kernel_usage_recording(True)
 
 sizes = np.array([r[0] for r in rows])
 numpy_times = np.array([r[1] for r in rows])

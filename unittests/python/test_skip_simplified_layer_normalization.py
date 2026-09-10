@@ -19,6 +19,7 @@ from onnx_light_cpu import (
     clear_used_kernel_names,
     register_backend_test_cases,
     register_kernel_for_session,
+    set_kernel_usage_recording,
     used_kernel_names,
 )
 
@@ -114,8 +115,13 @@ class TestSkipSimplifiedLayerNormalization(ExtTestCase):
                                 _model(tensor_type, bias=bias, residual=residual),
                                 implementation,
                             )
-                            clear_used_kernel_names()
-                            result = session.run(None, feeds)
+                            set_kernel_usage_recording(True)
+                            try:
+                                clear_used_kernel_names()
+                                result = session.run(None, feeds)
+                                dispatched = used_kernel_names()
+                            finally:
+                                set_kernel_usage_recording(False)
                             self.assertEqual(len(result), 2 if residual else 1)
                             self.assertEqual(result[0].dtype, np.dtype(dtype))
                             np.testing.assert_array_equal(
@@ -131,7 +137,7 @@ class TestSkipSimplifiedLayerNormalization(ExtTestCase):
                                 if implementation == MicrosoftKernelImplementation.NAIVE
                                 else "onnx_light_cpu::" + _OP
                             )
-                            self.assertIn(expected_name, used_kernel_names())
+                            self.assertIn(expected_name, dispatched)
                             for name, original in originals.items():
                                 np.testing.assert_array_equal(feeds[name], original)
 
