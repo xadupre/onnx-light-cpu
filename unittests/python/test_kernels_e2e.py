@@ -702,6 +702,10 @@ class TestBackendCases(ExtTestCase):
                                 if "Type Error:" not in str(exc):
                                     raise
                                 ort_session = None
+                            except RuntimeError as exc:
+                                if "can't be converted to MLDataType" not in str(exc):
+                                    raise
+                                ort_session = None
                         if expected is None:
                             # Fall back to onnx-light's own built-in (un-accelerated)
                             # kernel, resolved and cached before onnx-light-cpu's
