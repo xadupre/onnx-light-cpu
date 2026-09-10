@@ -148,6 +148,15 @@ static ``AbsKernel::kName`` (etc.) members and through
 Add a new kernel
 ----------------
 
+Kernel implementations must follow the
+`CpuExecutor bridge contract in impl/execution.h
+<https://github.com/xadupre/onnx-light-cpu/blob/main/onnx_light_cpu/impl/execution.h>`_:
+borrow the current executor only for the invocation, keep range callbacks
+non-throwing, and submit parallel work through the shared range helpers.
+The contract defines lifetime, failure propagation, nested execution, participant
+limits, and which scheduling state must not be retained. See also
+:doc:`parallel_execution` for the execution flow.
+
 A brand new kernel is a subclass of ``onnx-light``'s
 ``onnx_light::core::runtime::KernelBase`` that is registered into the dispatch
 table with ``RegisterKernelFn``. The shipped kernels are the template to copy;

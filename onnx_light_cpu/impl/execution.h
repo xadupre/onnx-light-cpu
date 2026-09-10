@@ -10,6 +10,57 @@
 
 namespace onnx_light_cpu {
 
+// CpuExecutor bridge contract for kernel implementations
+//
+// Ownership and lifetime:
+// - onnx-light owns the CpuExecutor and its workers; the session keeps an executor
+//   lease alive and installs it for the duration of a run. This bridge only borrows
+//   it and never creates a pool or extends the executor lifetime.
+// - CurrentExecutionExecutor() returns a non-owning, thread-local view, or nullptr
+//   without an installed executor. The runtime adapter reuses that view on later
+//   lookups; its address is not a stable executor identity.
+// - An explicit ExecutionExecutorScope borrows its view and context on the calling
+//   thread and restores the previous binding on destruction, including unwinding.
+//   The installer must keep both alive through the scope and all submitted work.
+//   A nullptr scope removes the explicit override, allowing runtime lookup again.
+//
+// Dispatch and failures:
+// - run_blocks must be valid whenever parallel dispatch is possible. It invokes
+//   task(task_context, i) exactly once for each i in [0, num_blocks) on success.
+//   Dispatch is synchronous: no callback may remain active after run_blocks exits,
+//   including on failure. It must not retain task_context or the callable.
+// - Range callbacks may run concurrently, in any order, on the caller or workers.
+//   Captures and buffers must stay alive until the helper finishes; writes must be
+//   disjoint or synchronized. total <= 0 invokes no callback.
+// - Range callbacks MUST NOT throw, matching CpuExecutor::ParallelFor. Validate
+//   before dispatch, or record errors safely and report them after completion.
+//   There is no worker-exception capture/rethrow guarantee; throwing on a worker
+//   can terminate the process. Inline callbacks currently propagate exceptions,
+//   but kernels must not depend on whether a particular call executes inline.
+// - Exceptions from planning or dispatch itself propagate to the kernel caller;
+//   the bridge does not catch them, translate them to status codes, or roll back
+//   output writes. plan_parallel is optional; its absence uses the fallback schedule.
+//
+// Parallelism and thread counts:
+// - Submit work only through ExecuteRanges / ExecuteCostedRanges, not a private
+//   pool, OpenMP region, or a retained executor. Every range callback, even an
+//   inline one, enters a thread-local region; nested helpers execute serially
+//   without another executor submission.
+// - ExecutionThreadCount() is the current executor's effective participant budget
+//   (including the caller), clamped to at least one; without an executor it is one.
+//   It is not the number of active workers and does not itself become one in a
+//   nested region. Work size, alignment, schedule limits, and cost planning may
+//   select fewer participants. ExecutionSchedule::max_participants is clamped to
+//   at least one (zero does not mean unlimited); preferred_participants == 0
+//   leaves the choice to the cost model.
+//
+// Retention:
+// - Kernels must not cache executor/view/context pointers, callbacks, task contexts,
+//   or executor-dependent scheduling state across invocations, nor transfer the
+//   thread-local binding to another thread. Reacquire the executor and recompute
+//   its scheduling decisions for each invocation. Executor-independent immutable
+//   kernel data and tuning constants may be retained.
+
 using ExecutionBlockFn = void (*)(void *, int64_t);
 
 struct ExecutionWorkCost {
