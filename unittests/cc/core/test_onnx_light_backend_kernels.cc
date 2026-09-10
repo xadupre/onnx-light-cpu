@@ -518,6 +518,36 @@ TEST(OnnxLightBackendKernels, MatMulIntegerRunsThroughRuntime) {
   EXPECT_TRUE(failures.empty()) << Describe(failures);
 }
 
+TEST(OnnxLightBackendKernels, QLinearMatMulRunsThroughRuntime) {
+  const std::vector<std::string> failures =
+      RunCpuBackendCases("QLinearMatMul", core::backend_test::TestMode::TEST);
+  EXPECT_TRUE(failures.empty()) << Describe(failures);
+}
+
+TEST(OnnxLightBackendKernels, VariadicElementwiseRunsThroughRuntime) {
+  std::vector<std::string> failures;
+  for (const char *op_type : {"Sum", "Mean", "Min", "Max"}) {
+    const std::vector<std::string> op_failures =
+        RunCpuBackendCases(op_type, core::backend_test::TestMode::TEST);
+    failures.insert(failures.end(), op_failures.begin(), op_failures.end());
+  }
+  EXPECT_TRUE(failures.empty()) << Describe(failures);
+}
+
+TEST(OnnxLightBackendKernels, VariadicElementwiseBenchmarksRunThroughRuntime) {
+  std::vector<std::string> failures;
+  for (const auto &[op_type, case_name] :
+       {std::pair{"Sum", "test_cpu_sum_n4096_3inputs_float32_benchmark"},
+        {"Mean", "test_cpu_mean_n4096_3inputs_float32_benchmark"},
+        {"Min", "test_cpu_min_n4096_3inputs_float32_benchmark"},
+        {"Max", "test_cpu_max_n4096_3inputs_float32_benchmark"}}) {
+    const std::vector<std::string> op_failures =
+        RunCpuBackendCases(op_type, core::backend_test::TestMode::BENCHMARK, case_name);
+    failures.insert(failures.end(), op_failures.begin(), op_failures.end());
+  }
+  EXPECT_TRUE(failures.empty()) << Describe(failures);
+}
+
 TEST(OnnxLightBackendKernels, RmsNormalizationRunsThroughRuntime) {
   const std::vector<std::string> failures =
       RunCpuBackendCases("RMSNormalization", core::backend_test::TestMode::TEST);
@@ -1241,6 +1271,15 @@ TEST(OnnxLightBackendKernels, MatMulBenchmarkCorporaCoverTypesAndPriorityShapes)
           << expected;
     }
   }
+
+  const std::vector<TestCase> qlinear = CollectTestCases("QLinearMatMul", /*include_big=*/false,
+                                                         core::backend_test::TestMode::BENCHMARK);
+  EXPECT_TRUE(std::any_of(qlinear.begin(), qlinear.end(), [](const TestCase &test_case) {
+    return test_case.name == "test_cpu_qlinearmatmul_square_64_int8_benchmark";
+  }));
+  EXPECT_TRUE(std::any_of(qlinear.begin(), qlinear.end(), [](const TestCase &test_case) {
+    return test_case.name == "test_cpu_qlinearmatmul_square_64_uint8_benchmark";
+  }));
 }
 
 TEST(OnnxLightBackendKernels, RmsNormalizationBenchmarksCoverQwen3LlmWorkloads) {
@@ -1434,6 +1473,10 @@ TEST(OnnxLightBackendKernels, MatMulBenchmarksRunThroughRuntime) {
       RunCpuBackendCases("MatMulInteger", core::backend_test::TestMode::BENCHMARK,
                          "test_cpu_matmulinteger_square_64_int8xuint8_benchmark");
   failures.insert(failures.end(), integer_failures.begin(), integer_failures.end());
+  const std::vector<std::string> qlinear_failures =
+      RunCpuBackendCases("QLinearMatMul", core::backend_test::TestMode::BENCHMARK,
+                         "test_cpu_qlinearmatmul_square_64_int8_benchmark");
+  failures.insert(failures.end(), qlinear_failures.begin(), qlinear_failures.end());
   EXPECT_TRUE(failures.empty()) << Describe(failures);
 }
 

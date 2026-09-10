@@ -17,6 +17,8 @@ using ONNX_LIGHT_NAMESPACE::core::backend_test::TestMode;
 
 void RegisterCpuBinaryCases(std::vector<TestCase> &registry, const std::string &op_type,
                             TestMode mode);
+void RegisterCpuVariadicCases(std::vector<TestCase> &registry, const std::string &op_type,
+                              TestMode mode);
 void CollectCpuElementwiseTestCases(std::vector<TestCase> &registry,
                                     const std::string &op_type = "",
                                     TestMode mode = TestMode::TEST);
