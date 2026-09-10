@@ -75,7 +75,9 @@ int main(int argc, char **argv) {
 
     rt::Tensors inputs;
     inputs.push_back(rt::Tensor::FromFloat(input_name, {4}, {-1.0f, 2.0f, -3.5f, 4.0f}));
+    onnx_light_cpu::SetKernelUsageRecording(true);
     const rt::Tensors outputs = rt::RunModel(model, std::move(inputs));
+    onnx_light_cpu::SetKernelUsageRecording(false);
     if (outputs.size() != 1 || outputs[0].element_count() != 4) {
       throw std::runtime_error("the example expects one four-element tensor output");
     }
@@ -103,6 +105,7 @@ int main(int argc, char **argv) {
     std::cout << "Kernel used: " << expected_kernel << "\n";
     return 0;
   } catch (const std::exception &error) {
+    onnx_light_cpu::SetKernelUsageRecording(false);
     std::cerr << "Inference failed: " << error.what() << "\n";
     return 1;
   }
