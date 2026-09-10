@@ -148,32 +148,55 @@ MatMulLayout ResolveLayout(const Tensor &a, const Tensor &b) {
 struct IntegerZeroPoints {
   int32_t scalar = 0;
   std::vector<int32_t> per_axis;
+  int64_t axis_size = 1;
+  int64_t batch_divisor = 0;
 
-  const int32_t *data() const { return per_axis.empty() ? &scalar : per_axis.data(); }
-  std::size_t size() const { return per_axis.empty() ? 1 : per_axis.size(); }
-  int32_t operator[](std::size_t index) const { return data()[index]; }
+  const int32_t *data(int64_t input_base = 0) const {
+    return per_axis.empty()
+               ? &scalar
+               : per_axis.data() + (batch_divisor == 0 ? 0 : input_base / batch_divisor);
+  }
+  int64_t size() const { return per_axis.empty() ? 1 : axis_size; }
 };
 
-IntegerZeroPoints ReadZeroPoints(const Tensor *tensor, int32_t expected_type, int64_t expected_size,
+IntegerZeroPoints ReadZeroPoints(const Tensor *tensor, const Tensor &input, bool left,
                                  const char *name) {
   IntegerZeroPoints values;
   if (tensor == nullptr) {
     return values;
   }
-  if (tensor->data_type != expected_type) {
+  if (tensor->data_type != input.data_type) {
     throw std::invalid_argument(std::string(name) + " dtype must match its data input.");
   }
+  const Shape input_shape = PromoteMatMulShape(input.shape, left);
+  const std::size_t reduction_axis = left ? input_shape.size() - 1 : input_shape.size() - 2;
+  const int64_t expected_size = left ? input_shape[input_shape.size() - 2] : input_shape.back();
   if (tensor->shape.size() > 1) {
-    throw std::invalid_argument(std::string(name) + " must be scalar or one-dimensional.");
+    if (tensor->shape.size() != input.shape.size()) {
+      throw std::invalid_argument(std::string(name) + " N-D rank must match its data input rank.");
+    }
+    for (std::size_t axis = 0; axis < input_shape.size(); ++axis) {
+      const int64_t expected_dim = axis == reduction_axis ? 1 : input_shape[axis];
+      if (tensor->shape[axis] != expected_dim) {
+        throw std::invalid_argument(
+            std::string(name) + " dimension " + std::to_string(axis) + " must be " +
+            std::to_string(expected_dim) +
+            " (match its data input except for a singleton reduction dimension).");
+      }
+    }
+    // Removing K from the data offset selects this operand's zero-point batch,
+    // including when that operand is broadcast across output batches.
+    values.batch_divisor = input_shape[reduction_axis];
   }
-  const int64_t count = tensor->element_count();
-  if (count != 1 && count != expected_size) {
+  const int64_t count = ElementCount(tensor->shape);
+  if (tensor->shape.size() <= 1 && count != 1 && count != expected_size) {
     throw std::invalid_argument(std::string(name) +
                                 " must contain one value or one value per matrix axis.");
   }
   if (count == 1) {
     values.scalar = ReadInteger(*tensor, 0);
   } else {
+    values.axis_size = expected_size;
     values.per_axis.resize(static_cast<std::size_t>(count));
     for (int64_t index = 0; index < count; ++index) {
       values.per_axis[static_cast<std::size_t>(index)] = ReadInteger(*tensor, index);
@@ -310,10 +333,8 @@ Tensor MatMulIntegerKernel::operator()(const Tensor &a, const Tensor &b, const T
     throw std::invalid_argument("MatMulInteger inputs must have INT8 or UINT8 dtype.");
   }
   const MatMulLayout layout = ResolveLayout(a, b);
-  const IntegerZeroPoints a_zp =
-      ReadZeroPoints(a_zero_point, a.data_type, layout.m, "a_zero_point");
-  const IntegerZeroPoints b_zp =
-      ReadZeroPoints(b_zero_point, b.data_type, layout.n, "b_zero_point");
+  const IntegerZeroPoints a_zp = ReadZeroPoints(a_zero_point, a, true, "a_zero_point");
+  const IntegerZeroPoints b_zp = ReadZeroPoints(b_zero_point, b, false, "b_zero_point");
   const std::size_t output_bytes =
       CheckedByteSize(static_cast<std::size_t>(ElementCount(layout.output_shape)), sizeof(int32_t),
                       "MatMulInteger", "output byte size");
@@ -348,9 +369,9 @@ Tensor MatMulIntegerKernel::operator()(const Tensor &a, const Tensor &b, const T
       for (int64_t index = begin; index < end; ++index) {
         const BatchWorkItem &item = work_items[static_cast<std::size_t>(index)];
         IntegerMatMul2D(a_bytes + item.a_base, a_signed, b_bytes + item.b_base, b_signed,
-                        values + item.output_base, layout.m, layout.n, layout.k, a_zp.data(),
-                        static_cast<int64_t>(a_zp.size()), b_zp.data(),
-                        static_cast<int64_t>(b_zp.size()));
+                        values + item.output_base, layout.m, layout.n, layout.k,
+                        a_zp.data(item.a_base), static_cast<int64_t>(a_zp.size()),
+                        b_zp.data(item.b_base), static_cast<int64_t>(b_zp.size()));
       }
     });
     return output;
@@ -359,8 +380,8 @@ Tensor MatMulIntegerKernel::operator()(const Tensor &a, const Tensor &b, const T
   ForEachOutput(
       a, b, layout,
       [&](int64_t a_base, int64_t b_base, int64_t row, int64_t column, int64_t output_index) {
-        const int32_t az = a_zp.size() == 1 ? a_zp[0] : a_zp[row];
-        const int32_t bz = b_zp.size() == 1 ? b_zp[0] : b_zp[column];
+        const int32_t az = a_zp.data(a_base)[a_zp.size() == 1 ? 0 : row];
+        const int32_t bz = b_zp.data(b_base)[b_zp.size() == 1 ? 0 : column];
         std::uint32_t accumulator = 0;
         for (int64_t depth = 0; depth < layout.k; ++depth) {
           const int32_t av = ReadInteger(

@@ -9,6 +9,8 @@
 
 #include "onnx_core/backend_test/expect.h"
 #include "onnx_core/runtime/kernels/kernel_context.h"
+#include "onnx_extensions/kernels/kernels/math/include_math_kernels.h"
+#include "onnx_extensions/kernels/kernels/tensor/include_tensor_kernels.h"
 
 #include <array>
 #include <cstdint>
@@ -30,6 +32,7 @@ using rt_ns::DataType;
 using rt_ns::DefaultOpset;
 using rt_ns::KernelContext;
 using rt_ns::OpsetId;
+using rt_ns::Shape;
 using rt_ns::Tensor;
 
 struct MatMulShape {
@@ -74,6 +77,31 @@ void RegisterMatMulIntegerCase(std::vector<TestCase> &registry, const OpsetId &o
          });
 }
 
+void RegisterZeroPointCase(std::vector<TestCase> &registry, const OpsetId &opset,
+                           const std::string &suffix, DataType a_type, DataType b_type,
+                           const Shape &a_shape, const Shape &b_shape, const Shape &az_shape,
+                           const Shape &bz_shape) {
+  const std::string name = "test_cpu_matmulinteger_zero_points_" + suffix + "_" +
+                           DataTypeSuffix(a_type) + "x" + DataTypeSuffix(b_type);
+  auto build = [=]() -> IoData {
+    Tensor a = MakeBenchmarkTensor(a_type, a_shape, 433);
+    Tensor b = MakeBenchmarkTensor(b_type, b_shape, 434);
+    Tensor az = MakeBenchmarkTensor(a_type, az_shape, 435);
+    Tensor bz = MakeBenchmarkTensor(b_type, bz_shape, 436);
+    // Use independent onnx-light kernels, not the MatMulInteger under test.
+    namespace reference = ONNX_LIGHT_NAMESPACE::onnx_kernels::kernel;
+    const KernelContext ctx{opset};
+    const reference::Cast cast{ctx};
+    const reference::Sub sub{ctx};
+    const reference::MatMul matmul{ctx};
+    Tensor y = matmul(sub(cast(a, DataType::INT32), cast(az, DataType::INT32)),
+                      sub(cast(b, DataType::INT32), cast(bz, DataType::INT32)));
+    return IoData{{std::move(a), std::move(b), std::move(az), std::move(bz)}, {std::move(y)}};
+  };
+  Expect(registry, MakeNode("MatMulInteger", {"A", "B", "az", "bz"}, {"Y"}), name, {opset},
+         std::move(build));
+}
+
 } // namespace
 
 void RegisterCpuMatMulIntegerCases(std::vector<TestCase> &registry, TestMode mode) {
@@ -97,6 +125,26 @@ void RegisterCpuMatMulIntegerCases(std::vector<TestCase> &registry, TestMode mod
   for (DataType a_type : data_types) {
     for (DataType b_type : data_types) {
       RegisterMatMulIntegerCase(registry, opset, {"small", 2, 3, 4}, a_type, b_type, false);
+      RegisterZeroPointCase(registry, opset, "matrix", a_type, b_type, {3, 4}, {4, 2}, {3, 1},
+                            {1, 2});
+      RegisterZeroPointCase(registry, opset, "batched_a", a_type, b_type, {2, 3, 4}, {4, 2},
+                            {2, 3, 1}, {});
+      RegisterZeroPointCase(registry, opset, "batched_b", a_type, b_type, {3, 4}, {2, 4, 2}, {},
+                            {2, 1, 2});
+      RegisterZeroPointCase(registry, opset, "multiple_batches", a_type, b_type, {2, 3, 3, 4},
+                            {2, 3, 4, 2}, {2, 3, 3, 1}, {2, 3, 1, 2});
+      RegisterZeroPointCase(registry, opset, "broadcast_batches", a_type, b_type, {2, 1, 3, 4},
+                            {3, 4, 2}, {2, 1, 3, 1}, {3, 1, 2});
+      RegisterZeroPointCase(registry, opset, "broadcast_a", a_type, b_type, {3, 4}, {2, 3, 4, 2},
+                            {3, 1}, {2, 3, 1, 2});
+      RegisterZeroPointCase(registry, opset, "single_batch", a_type, b_type, {1, 1, 3, 4}, {4, 2},
+                            {1, 1, 3, 1}, {2});
+      RegisterZeroPointCase(registry, opset, "single_axis", a_type, b_type, {2, 1, 1, 4}, {3, 4, 1},
+                            {2, 1, 1, 1}, {3, 1, 1});
+      RegisterZeroPointCase(registry, opset, "vector_b", a_type, b_type, {2, 3, 3, 4}, {4},
+                            {2, 3, 3, 1}, {});
+      RegisterZeroPointCase(registry, opset, "vector_a", a_type, b_type, {4}, {2, 3, 4, 2}, {},
+                            {2, 3, 1, 2});
     }
   }
 }
