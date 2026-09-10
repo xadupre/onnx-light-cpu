@@ -13,6 +13,7 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <numeric>
 #include <vector>
 
 namespace {
@@ -81,6 +82,66 @@ TEST(OnnxLightMatMulIntegerKernel, AccumulationWrapsModuloInt32) {
 
   const std::uint32_t wrapped = static_cast<std::uint32_t>(65025ULL * k);
   EXPECT_EQ(static_cast<std::uint32_t>(y.AsInt32()[0]), wrapped);
+}
+
+TEST(OnnxLightMatMulIntegerKernel, BroadcastsNDZeroPointsWithTheirOperands) {
+  onnx_light_cpu::MatMulIntegerKernel kernel(MakeCtx());
+  const auto a = Tensor<std::int8_t>("a", {2, 1, 1, 2}, {1, 2, 3, 4});
+  const auto b = Tensor<std::int8_t>("b", {1, 3, 2, 1}, {1, 2, 3, 4, 5, 6});
+  const auto az = Tensor<std::int8_t>("az", {2, 1, 1, 1}, {1, 2});
+  const auto bz = Tensor<std::int8_t>("bz", {1, 3, 1, 1}, {0, 1, 3});
+
+  const auto y = kernel(a, b, &az, &bz);
+
+  ASSERT_EQ(y.shape, (rt_ns::Shape{2, 3, 1, 1}));
+  const std::vector<int32_t> expected = {2, 3, 3, 5, 8, 8};
+  EXPECT_EQ(std::vector<int32_t>(y.AsInt32(), y.AsInt32() + expected.size()), expected);
+}
+
+TEST(OnnxLightMatMulIntegerKernel, NDZeroPointsWithEmptyDimensions) {
+  onnx_light_cpu::MatMulIntegerKernel kernel(MakeCtx());
+  const auto a = Tensor<std::int8_t>("a", {2, 3, 0}, {});
+  const auto b = Tensor<std::int8_t>("b", {2, 0, 2}, {});
+  const auto az = Tensor<std::int8_t>("az", {2, 3, 1}, {1, 2, 3, 4, 5, 6});
+  const auto bz = Tensor<std::int8_t>("bz", {2, 1, 2}, {1, 2, 3, 4});
+  const auto y = kernel(a, b, &az, &bz);
+  ASSERT_EQ(y.shape, (rt_ns::Shape{2, 3, 2}));
+  EXPECT_EQ(std::vector<int32_t>(y.AsInt32(), y.AsInt32() + 12), std::vector<int32_t>(12, 0));
+
+  const auto empty_a = Tensor<std::int8_t>("a", {0, 3, 4}, {});
+  const auto empty_az = Tensor<std::int8_t>("az", {0, 3, 1}, {});
+  const auto vector_b = Tensor<std::int8_t>("b", {4}, {1, 2, 3, 4});
+  EXPECT_EQ(kernel(empty_a, vector_b, &empty_az).element_count(), 0);
+  const auto no_rows = Tensor<std::int8_t>("a", {2, 0, 4}, {});
+  const auto no_row_zp = Tensor<std::int8_t>("az", {2, 0, 1}, {});
+  EXPECT_EQ(kernel(no_rows, vector_b, &no_row_zp).element_count(), 0);
+}
+
+TEST(OnnxLightMatMulIntegerKernel, RejectsIncompatibleZeroPointShapes) {
+  onnx_light_cpu::MatMulIntegerKernel kernel(MakeCtx());
+  const auto a = Tensor<std::int8_t>("a", {2, 3, 4}, std::vector<std::int8_t>(24, 1));
+  const auto b = Tensor<std::int8_t>("b", {2, 4, 2}, std::vector<std::int8_t>(16, 1));
+  for (const rt_ns::Shape &shape :
+       {rt_ns::Shape{3, 1}, {1, 2, 3, 1}, {1, 3, 1}, {2, 2, 1}, {2, 3, 2}, {2}, {0}}) {
+    SCOPED_TRACE(::testing::PrintToString(shape));
+    const auto count = std::accumulate(shape.begin(), shape.end(), int64_t{1},
+                                       [](int64_t a, int64_t b) { return a * b; });
+    const auto az = Tensor<std::int8_t>("az", shape, std::vector<std::int8_t>(count, 0));
+    EXPECT_THROW(kernel(a, b, &az), std::invalid_argument);
+  }
+  for (const rt_ns::Shape &shape :
+       {rt_ns::Shape{1, 2}, {1, 2, 1, 2}, {1, 1, 2}, {2, 2, 2}, {2, 1, 3}, {3}, {0}}) {
+    SCOPED_TRACE(::testing::PrintToString(shape));
+    const auto count = std::accumulate(shape.begin(), shape.end(), int64_t{1},
+                                       [](int64_t a, int64_t b) { return a * b; });
+    const auto bz = Tensor<std::int8_t>("bz", shape, std::vector<std::int8_t>(count, 0));
+    EXPECT_THROW(kernel(a, b, nullptr, &bz), std::invalid_argument);
+  }
+  const auto wrong_type = Tensor<std::uint8_t>("az", {2, 3, 1}, {1, 2, 3, 4, 5, 6});
+  EXPECT_THROW(kernel(a, b, &wrong_type), std::invalid_argument);
+  const auto vector_a = Tensor<std::int8_t>("a", {4}, {1, 2, 3, 4});
+  const auto promoted_zp = Tensor<std::int8_t>("az", {1, 1}, {0});
+  EXPECT_THROW(kernel(vector_a, b, &promoted_zp), std::invalid_argument);
 }
 
 TEST(OnnxLightMatMulIntegerKernel, RejectsShapeAndOutputByteOverflow) {
