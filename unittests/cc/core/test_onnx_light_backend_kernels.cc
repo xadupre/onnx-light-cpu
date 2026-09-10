@@ -648,6 +648,16 @@ TEST(OnnxLightBackendKernels, TreeEnsembleCorpusRegistersOnlyMlOpset5) {
   EXPECT_EQ(CountCpuCasesAtMlOpset5("TreeEnsembleClassifier"), 2U);
 }
 
+TEST(OnnxLightBackendKernels, TreeEnsembleCorpusCoversAllFloatTypes) {
+  const std::vector<TestCase> cases =
+      CollectCpuCases("TreeEnsemble", core::backend_test::TestMode::TEST);
+  for (std::string_view suffix : {"_float16", "_float32", "_float64"}) {
+    EXPECT_TRUE(std::any_of(cases.begin(), cases.end(), [suffix](const TestCase &test_case) {
+      return test_case.name.ends_with(suffix);
+    })) << suffix;
+  }
+}
+
 TEST(OnnxLightBackendKernels, TreeEnsembleRunsThroughRuntime) {
   const std::vector<std::string> failures =
       RunCpuBackendCases("TreeEnsemble", core::backend_test::TestMode::TEST);
