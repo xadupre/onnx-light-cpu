@@ -10,6 +10,7 @@
 #include "onnx_light_cpu/impl/simd_level.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
 #include "onnx_light_cpu/kernels/kernel_usage.h"
+#include "onnx_light_cpu/kernels/tensor_buffer_validation.h"
 
 #include "onnx_core/runtime/kernels/kernel_dispatch_table.h"
 #include "onnx_core/runtime/kernels/node_helpers.h"
@@ -42,16 +43,15 @@ using rt_ns::RuntimeContext;
 using rt_ns::Tensor;
 
 void ValidateOutput(const Tensor &x, const Tensor &output, const char *kernel_name) {
-  if (output.data_type != x.data_type || output.shape != x.shape ||
-      output.size_bytes() != x.size_bytes()) {
+  if (output.data_type != x.data_type || output.shape != x.shape) {
     throw std::invalid_argument(std::string(kernel_name) +
-                                ": output dtype, shape, and size must match the input.");
+                                ": output dtype and shape must match the input.");
   }
 }
 
-Tensor MakeLike(const Tensor &x, RuntimeContext *rt) {
-  return rt != nullptr ? rt->MakeOutputTensor(0, x.data_type, x.shape, x.size_bytes())
-                       : rt_ns::MakeOutputTensor(x.data_type, x.shape, x.size_bytes(), nullptr);
+Tensor MakeLike(const Tensor &x, std::size_t size_bytes, RuntimeContext *rt) {
+  return rt != nullptr ? rt->MakeOutputTensor(0, x.data_type, x.shape, size_bytes)
+                       : rt_ns::MakeOutputTensor(x.data_type, x.shape, size_bytes, nullptr);
 }
 
 inline constexpr UnaryExecutionTuning kActivationExecutionTuning{256 * 1024, 256 * 1024, 32, false};
@@ -323,13 +323,17 @@ std::int64_t ResolveAxis(std::int64_t axis, std::int64_t rank) {
 } // namespace
 
 Tensor SigmoidKernel::operator()(const Tensor &x, RuntimeContext *rt) const {
-  Tensor output = MakeLike(x, rt);
+  const std::size_t size_bytes =
+      tensor_validation::ValidateBufferCapacity(x, "onnx_light_cpu::Sigmoid", "input");
+  Tensor output = MakeLike(x, size_bytes, rt);
   (*this)(x, output);
   return output;
 }
 
 void SigmoidKernel::operator()(const Tensor &x, Tensor &output) const {
   ValidateOutput(x, output, "onnx_light_cpu::Sigmoid");
+  tensor_validation::ValidateBufferCapacity(x, "onnx_light_cpu::Sigmoid", "input");
+  tensor_validation::ValidateBufferCapacity(output, "onnx_light_cpu::Sigmoid", "output");
   const std::size_t count = static_cast<std::size_t>(x.element_count());
   switch (static_cast<DataType>(x.data_type)) {
   case DataType::FLOAT:
@@ -364,13 +368,17 @@ void SigmoidKernel::Run(RuntimeContext &rt) {
 }
 
 Tensor SoftmaxKernel::operator()(const Tensor &x, std::int64_t axis, RuntimeContext *rt) const {
-  Tensor output = MakeLike(x, rt);
+  const std::size_t size_bytes =
+      tensor_validation::ValidateBufferCapacity(x, "onnx_light_cpu::Softmax", "input");
+  Tensor output = MakeLike(x, size_bytes, rt);
   (*this)(x, axis, output);
   return output;
 }
 
 void SoftmaxKernel::operator()(const Tensor &x, std::int64_t axis, Tensor &output) const {
   ValidateOutput(x, output, "onnx_light_cpu::Softmax");
+  tensor_validation::ValidateBufferCapacity(x, "onnx_light_cpu::Softmax", "input");
+  tensor_validation::ValidateBufferCapacity(output, "onnx_light_cpu::Softmax", "output");
   const std::int64_t rank = static_cast<std::int64_t>(x.shape.size());
   if (rank == 0) {
     throw std::invalid_argument("onnx_light_cpu::Softmax: input rank must be at least one.");
