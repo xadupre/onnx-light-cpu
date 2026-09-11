@@ -61,6 +61,14 @@ The evaluator's runtime context owns that registration and releases it with the
 evaluator. Other evaluators are unchanged. ``register_kernels_for_session``
 provides the equivalent all-kernels operation.
 
+Session-local callbacks retain prepared kernels across runs, including copies
+held by resolved nodes. Preparation is lazy and cached by node contents, input
+presence, types and shapes, opset, device, and allocator; changing only tensor
+values reuses the same kernel. Runs of a shared instance are synchronized to
+protect mutable plans, while different nodes/signatures can execute independently.
+Replacing a registration creates a fresh cache for future resolution; already
+resolved callbacks retain their previous cache until they are destroyed.
+
 The default installs the optimized ``com.microsoft`` family. Tests and
 diagnostic callers can explicitly install the complete scalar reference
 family instead:

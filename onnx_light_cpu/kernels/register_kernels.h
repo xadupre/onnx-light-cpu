@@ -70,6 +70,10 @@ std::size_t RegisterAllKernelsGlobal(
 /// over global and built-in kernels for that session and is destroyed with the
 /// context. If `replace` is false, an existing session-local registration is
 /// retained and this function returns false.
+/// Callback copies share prepared kernels keyed by node contents, input
+/// presence/type/shape, opset, device, and allocator. Each instance is constructed
+/// lazily once and its runs are synchronized; changing tensor values alone does
+/// not rebuild it. Resolved callbacks retain their cache after replacement.
 bool RegisterKernelForSession(
     ONNX_LIGHT_NAMESPACE::core::runtime::RuntimeContext &session, const std::string &domain,
     const std::string &op_type, bool replace = true,
