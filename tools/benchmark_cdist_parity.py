@@ -250,14 +250,14 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 def ort_run(session=ort, current_feeds=feeds):
                     return session.run(None, current_feeds)[0]
 
-                set_kernel_usage_recording(True)
-                clear_used_kernel_names()
+                set_kernel_usage_recording(cpu, True)
+                clear_used_kernel_names(cpu)
                 cpu_output = cpu_run()
-                if "onnx_light_cpu::CDist" not in used_kernel_names():
+                if "onnx_light_cpu::CDist" not in used_kernel_names(cpu):
                     raise RuntimeError(
                         f"{case.name} did not dispatch the optimized CDist kernel."
                     )
-                set_kernel_usage_recording(False)
+                set_kernel_usage_recording(cpu, False)
                 ort_output = ort_run()
                 scale = max(
                     float(np.max(np.abs(a), initial=0)),

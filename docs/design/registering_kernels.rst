@@ -118,13 +118,17 @@ the same numbers whether it runs them or ``onnx-light``'s built-in kernels. To
 tell them apart, every onnx-light-cpu kernel carries a unique,
 library-qualified **name** (for example ``"onnx_light_cpu::Abs"``) that it
 can record when it runs. Recording is **disabled by default** and must be
-explicitly enabled for diagnostics. The process-wide log retains the first
-4096 invocations after each clear; later records are dropped until cleared.
+explicitly enabled for diagnostics on an individual session. Each session's
+``RuntimeContext`` retains the first 1024 invocations after each clear; later
+records are dropped until cleared. Copies of that context, including subgraph
+and function execution contexts, share the recording state; independent
+sessions do not.
 Disabled calls only load an atomic flag, without locking or allocating.
 The names can be inspected from Python:
 
 .. code-block:: python
 
+    from onnx_light.onnx.reference import ReferenceEvaluator
     from onnx_light_cpu import (
         clear_used_kernel_names,
         register_kernels,
@@ -138,24 +142,48 @@ The names can be inspected from Python:
     registered_kernel_names()  # {'Abs': 'onnx_light_cpu::Abs', 'Exp': ...}
     registered_kernels()       # (RegisteredKernel(domain='ai.onnx', op_type='Abs', ...), ...)
 
-    set_kernel_usage_recording(True)
-    clear_used_kernel_names()
+    sess = ReferenceEvaluator(model)
+    set_kernel_usage_recording(sess, True)
+    clear_used_kernel_names(sess)
     sess.run(None, feeds)  # run a model containing e.g. an Abs node
-    set_kernel_usage_recording(False)
-    used_kernel_names()       # ['onnx_light_cpu::Abs', ...]
+    set_kernel_usage_recording(sess, False)
+    used_kernel_names(sess)   # ['onnx_light_cpu::Abs', ...]
 
 Retrieval returns an independent snapshot without consuming the log. Recording,
 retrieval, and reset share a mutex; concurrent records are ordered by mutex
 acquisition and may fall before or after a reset. Reset does not toggle recording.
 Disabling waits for active appends and preserves existing entries.
 
-If ``used_kernel_names()`` is empty after an explicitly recorded run whose
-operators onnx-light-cpu overrides, the registration did not take effect — see
+Each recording function requires an explicit ``ReferenceEvaluator`` session;
+missing or invalid sessions raise ``TypeError``. Enabling, disabling, or clearing
+one session's log does not affect any independent session. Retrieval includes
+all backend kernel names recorded by that context, without filtering to
+``onnx_light_cpu`` names.
+
+The previous process-wide API without a session argument was intentionally
+removed; there is no global compatibility fallback. An updated ``onnx-light``
+containing `PR #4942 <https://github.com/xadupre/onnx-light/pull/4942>`_ is required.
+That upstream change has not been released yet, so no minimum released version
+is specified.
+
+If ``used_kernel_names(sess)`` does not include the expected ``onnx_light_cpu``
+names after an explicitly recorded run whose operators onnx-light-cpu overrides,
+the registration did not take effect — see
 :ref:`l-registration-ignored` below. The same names are available in C++ as the
 static ``AbsKernel::kName`` (etc.) members and through
-``onnx_light_cpu::RegisteredKernelNames()`` /
-``onnx_light_cpu::UsedKernelNames()`` in
-``onnx_light_cpu/kernels/kernel_usage.h``.
+``onnx_light_cpu::RegisteredKernelNames()`` in
+``onnx_light_cpu/kernels/kernel_usage.h``. C++ recording and retrieval use the
+session's ``RuntimeContext``, including ``rt.RecordKernelUsage(kName)`` and
+``rt.GetKernelUsage()`` rather than process-wide recording functions. The
+recording bound is defined by ``RuntimeContext::kKernelUsageLimit``.
+
+.. code-block:: cpp
+
+    rt.set_kernel_usage_enabled(true);
+    rt.ClearKernelUsage();
+    // Run the session using rt.
+    rt.set_kernel_usage_enabled(false);
+    const auto names = rt.GetKernelUsage();
 
 Add a new kernel
 ----------------
@@ -178,8 +206,8 @@ The three steps are:
 #. Derive from ``KernelBase`` and override ``Run(RuntimeContext &)`` to read the
    node's inputs and write its outputs (see ``AbsKernel::Run``). Give the class a
    unique ``static constexpr const char *kName`` (for example
-   ``"onnx_light_cpu::MyOp"``) and call ``RecordKernelUsage(kName)`` at the top
-   of ``Run`` so the kernel can be recognised in ``UsedKernelNames()``; add its
+   ``"onnx_light_cpu::MyOp"``) and call ``rt.RecordKernelUsage(kName)`` at the top
+   of ``Run`` so the kernel can be recognised in ``rt.GetKernelUsage()``; add its
    ``{op_type, kName}`` pair to ``RegisteredKernelNames()`` in
    ``onnx_light_cpu/kernels/kernel_usage.cc``.
 #. Wrap the class in a ``NodeKernelFn`` factory that constructs the kernel and

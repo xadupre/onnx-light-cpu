@@ -6,7 +6,6 @@
 
 #include "onnx_light_cpu/backend_test/collect_test_cases.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
-#include "onnx_light_cpu/kernels/kernel_usage.h"
 
 #include "onnx_core/backend_test/test_case.h"
 #include "onnx_core/backend_test/test_case_registry.h"
@@ -38,12 +37,6 @@ namespace rt_ns = ONNX_LIGHT_NAMESPACE::core::runtime;
 using bt_ns::DataSet;
 using bt_ns::TestCase;
 using rt_ns::Tensor;
-
-class KernelUsageRecordingGuard {
-public:
-  KernelUsageRecordingGuard() { SetKernelUsageRecording(true); }
-  ~KernelUsageRecordingGuard() { SetKernelUsageRecording(false); }
-};
 
 class TestCaseUnloadGuard {
 public:
@@ -135,10 +128,9 @@ void RunCase(const TestCase &test_case, const KernelRegistration &kernel) {
       bindings.emplace_back(input.name, input);
     }
     rt_ns::SubgraphSession session(runtime, graph);
-    const KernelUsageRecordingGuard recording;
-    ClearUsedKernelNames();
+    runtime.set_kernel_usage_enabled(true);
     CompareOutputs(test_case, data_set, session.Run(std::move(bindings), runtime));
-    const std::vector<std::string> used = UsedKernelNames();
+    const std::vector<std::string> used = runtime.GetKernelUsage();
     if (std::find(used.begin(), used.end(), kernel.kernel_name) == used.end()) {
       throw std::runtime_error("expected kernel '" + kernel.kernel_name + "' did not run");
     }

@@ -115,11 +115,11 @@ class TestSkipSimplifiedLayerNormalization(ExtTestCase):
                                 _model(tensor_type, bias=bias, residual=residual),
                                 implementation,
                             )
-                            set_kernel_usage_recording(True)
-                            clear_used_kernel_names()
+                            set_kernel_usage_recording(session, True)
+                            clear_used_kernel_names(session)
                             result = session.run(None, feeds)
-                            dispatched = used_kernel_names()
-                            set_kernel_usage_recording(False)
+                            dispatched = used_kernel_names(session)
+                            set_kernel_usage_recording(session, False)
                             self.assertEqual(len(result), 2 if residual else 1)
                             self.assertEqual(result[0].dtype, np.dtype(dtype))
                             np.testing.assert_array_equal(

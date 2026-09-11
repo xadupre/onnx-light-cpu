@@ -382,14 +382,14 @@ def benchmark_light():
             measurement["model"],
             cpu_execution=cpu_execution,
         )
-        set_kernel_usage_recording(True)
-        clear_used_kernel_names()
+        set_kernel_usage_recording(session, True)
+        clear_used_kernel_names(session)
         measurement["light_out"] = [
             np.array(output, copy=True) for output in session.run(None, measurement["feeds"])
         ]
         expected_kernel = f"onnx_light_cpu::{measurement['op_type']}"
-        assert expected_kernel in used_kernel_names(), used_kernel_names()
-        set_kernel_usage_recording(False)
+        assert expected_kernel in used_kernel_names(session), used_kernel_names(session)
+        set_kernel_usage_recording(session, False)
 
         def run(current=session, feeds=measurement["feeds"]):
             return current.run(None, feeds)

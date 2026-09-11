@@ -7,7 +7,6 @@
 #include "onnx_extensions/kernels/kernels/tensor/include_tensor_kernels.h"
 #include "onnx_light_cpu/impl/execution.h"
 #include "onnx_light_cpu/impl/tensor/cast_kernel.h"
-#include "onnx_light_cpu/kernels/kernel_usage.h"
 
 #include <gtest/gtest.h>
 
@@ -407,12 +406,10 @@ TEST(OnnxLightCastKernel, NodeAttributesRuntimeUsageAndArity) {
     onnx_light_cpu::CastKernel kernel(node, MakeCtx());
     rt_ns::RuntimeContext runtime(MakeCtx());
     runtime.Set("data", data);
-    onnx_light_cpu::ClearUsedKernelNames();
-    onnx_light_cpu::SetKernelUsageRecording(true);
+    runtime.set_kernel_usage_enabled(true);
     EXPECT_NO_THROW(kernel.Run(runtime));
-    onnx_light_cpu::SetKernelUsageRecording(false);
     Equal(runtime.Get("output"), BuiltinCast(MakeCtx())(data, DataType::FLOAT8E5M2, saturate != 0));
-    EXPECT_EQ(onnx_light_cpu::UsedKernelNames(),
+    EXPECT_EQ(runtime.GetKernelUsage(),
               std::vector<std::string>{onnx_light_cpu::CastKernel::kName});
   }
   for (int64_t to : {int64_t{-1}, int64_t{0}, int64_t{14}, INT64_MAX}) {

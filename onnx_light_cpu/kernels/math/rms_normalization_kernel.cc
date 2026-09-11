@@ -5,7 +5,6 @@
 #include "onnx_light_cpu/kernels/math/rms_normalization_kernel.h"
 
 #include "onnx_light_cpu/kernels/kernel_registration.h"
-#include "onnx_light_cpu/kernels/kernel_usage.h"
 
 #include "onnx_light_cpu/impl/execution.h"
 #include "onnx_light_cpu/impl/math/rms_normalization.h"
@@ -182,7 +181,7 @@ Tensor RmsNormalizationKernel::operator()(const Tensor &x, const Tensor &scale, 
 }
 
 void RmsNormalizationKernel::Run(RuntimeContext &rt) {
-  RecordKernelUsage(kName);
+  rt.RecordKernelUsage(kName);
   const NodeProto &node = *node_;
   rt_ns::RequireInputCount(node, 2);
   rt_ns::RequireOutputCount(node, 1);

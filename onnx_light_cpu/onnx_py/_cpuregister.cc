@@ -199,19 +199,29 @@ NB_MODULE(_cpuregister, m) {
         "operator supported by onnx-light-cpu, without mutating any registry.");
 
   m.def(
-      "used_kernel_names", []() { return onnx_light_cpu::UsedKernelNames(); },
-      "Returns the library-qualified names of the onnx-light-cpu kernels that "
-      "were recorded since the last clear_used_kernel_names() call. Returns a "
-      "non-consuming snapshot of at most 4096 entries in mutex acquisition order.");
+      "used_kernel_names",
+      [](const ONNX_LIGHT_NAMESPACE::core::runtime::RuntimeContext &context) {
+        return context.GetKernelUsage();
+      },
+      nb::arg("context"),
+      "Returns an independent snapshot of this context's recorded backend kernel names.");
 
   m.def(
-      "clear_used_kernel_names", []() { onnx_light_cpu::ClearUsedKernelNames(); },
-      "Atomically clears the kernel log without changing whether recording is enabled.");
+      "clear_used_kernel_names",
+      [](ONNX_LIGHT_NAMESPACE::core::runtime::RuntimeContext &context) {
+        context.ClearKernelUsage();
+      },
+      nb::arg("context"),
+      "Clears this context's kernel log without changing whether recording is enabled.");
 
-  m.def("set_kernel_usage_recording", &onnx_light_cpu::SetKernelUsageRecording, nb::arg("enabled"),
-        "Enables or disables process-wide recording (disabled by default). Retains "
-        "the first 4096 invocations until cleared. Disabling waits for active appends "
-        "without clearing the log; disabled kernel calls do not lock or allocate.");
+  m.def(
+      "set_kernel_usage_recording",
+      [](ONNX_LIGHT_NAMESPACE::core::runtime::RuntimeContext &context, bool enabled) {
+        context.set_kernel_usage_enabled(enabled);
+      },
+      nb::arg("context"), nb::arg("enabled"),
+      "Enables or disables recording on this context and its children (disabled by default). "
+      "Uses RuntimeContext's bounded recorder; independent contexts are unaffected.");
 
 #ifdef ONNX_LIGHT_CPU_HAS_BACKEND_TEST
   m.def(

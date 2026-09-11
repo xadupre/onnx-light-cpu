@@ -278,18 +278,18 @@ def _measure_case(
             "affinity_policy": "none",
         },
     )
-    set_kernel_usage_recording(True)
-    clear_used_kernel_names()
+    set_kernel_usage_recording(evaluator, True)
+    clear_used_kernel_names(evaluator)
     for feed in feeds:
         evaluator.run(None, feed)
     node_domain = model.graph.node[0].domain or "ai.onnx"
     expected_kernels = _kernel_names_for_operator(registered_kernels(), node_domain, operator)
     if not expected_kernels:
         raise RuntimeError(f"{case.name}: no registered kernel for {node_domain}::{operator}")
-    if not set(expected_kernels).intersection(used_kernel_names()):
+    if not set(expected_kernels).intersection(used_kernel_names(evaluator)):
         expected = " or ".join(repr(kernel) for kernel in expected_kernels)
         raise RuntimeError(f"{case.name}: expected kernel {expected} did not run")
-    set_kernel_usage_recording(False)
+    set_kernel_usage_recording(evaluator, False)
 
     def measure(run: Any) -> list[float]:
         warmup_start = time.perf_counter()

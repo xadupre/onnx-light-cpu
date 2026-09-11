@@ -10,7 +10,6 @@
 #include "onnx_core/runtime/runtime_context.h"
 #include "onnx_light_cpu/kernels/com_microsoft/naive_bias_gelu_kernel.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
-#include "onnx_light_cpu/kernels/kernel_usage.h"
 
 #include <gtest/gtest.h>
 
@@ -123,11 +122,9 @@ TEST(OnnxLightRegisterKernels, RegisterSelectedKernelGlobalRunsNativeKernel) {
   std::unique_ptr<rt_ns::KernelBase> kernel =
       rt_ns::KernelDispatchTable().at("ai.onnx:Abs")(node, runtime);
   ASSERT_NE(kernel, nullptr);
-  onnx_light_cpu::ClearUsedKernelNames();
-  onnx_light_cpu::SetKernelUsageRecording(true);
+  runtime.set_kernel_usage_enabled(true);
   EXPECT_NO_THROW(kernel->Run(runtime));
-  onnx_light_cpu::SetKernelUsageRecording(false);
-  EXPECT_EQ(onnx_light_cpu::UsedKernelNames(), (std::vector<std::string>{"onnx_light_cpu::Abs"}));
+  EXPECT_EQ(runtime.GetKernelUsage(), (std::vector<std::string>{"onnx_light_cpu::Abs"}));
   EXPECT_FLOAT_EQ(runtime.Get("y").AsFloat()[0], 2.0f);
   EXPECT_FLOAT_EQ(runtime.Get("y").AsFloat()[1], 3.0f);
 }
@@ -161,11 +158,9 @@ TEST(OnnxLightRegisterKernels, SessionRegistrationIsIsolatedAndReplaceable) {
   EXPECT_EQ(rt_ns::KernelDispatchTable().at("ai.onnx:Abs")(node, other), nullptr);
 
   selected.Set("x", rt_ns::Tensor::FromFloat("x", {2}, {-4.0f, 5.0f}));
-  onnx_light_cpu::ClearUsedKernelNames();
-  onnx_light_cpu::SetKernelUsageRecording(true);
+  selected.set_kernel_usage_enabled(true);
   EXPECT_NO_THROW(rt_ns::RunNode(node, selected));
-  onnx_light_cpu::SetKernelUsageRecording(false);
-  EXPECT_EQ(onnx_light_cpu::UsedKernelNames(), (std::vector<std::string>{"onnx_light_cpu::Abs"}));
+  EXPECT_EQ(selected.GetKernelUsage(), (std::vector<std::string>{"onnx_light_cpu::Abs"}));
   EXPECT_FLOAT_EQ(selected.Get("y").AsFloat()[0], 4.0f);
   EXPECT_FLOAT_EQ(selected.Get("y").AsFloat()[1], 5.0f);
 

@@ -9,7 +9,6 @@
 #include "onnx_light_cpu/impl/math/unary_execution_tuning.h"
 #include "onnx_light_cpu/impl/simd_level.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
-#include "onnx_light_cpu/kernels/kernel_usage.h"
 #include "onnx_light_cpu/kernels/tensor_buffer_validation.h"
 
 #include "onnx_core/runtime/kernels/kernel_dispatch_table.h"
@@ -359,7 +358,7 @@ void SigmoidKernel::operator()(const Tensor &x, Tensor &output) const {
 }
 
 void SigmoidKernel::Run(RuntimeContext &rt) {
-  RecordKernelUsage(kName);
+  rt.RecordKernelUsage(kName);
   const NodeProto &node = *node_;
   rt_ns::RequireInputCount(node, 1);
   rt_ns::RequireOutputCount(node, 1);
@@ -444,7 +443,7 @@ void SoftmaxKernel::operator()(const Tensor &x, std::int64_t axis, Tensor &outpu
 }
 
 void SoftmaxKernel::Run(RuntimeContext &rt) {
-  RecordKernelUsage(kName);
+  rt.RecordKernelUsage(kName);
   const NodeProto &node = *node_;
   rt_ns::RequireInputCount(node, 1);
   rt_ns::RequireOutputCount(node, 1);

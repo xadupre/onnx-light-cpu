@@ -345,11 +345,11 @@ def _cpu_backend(model, *inputs):
     register_kernels()
     session = ReferenceEvaluator(model)
     feeds = dict(zip(session.input_names, inputs, strict=True))
-    set_kernel_usage_recording(True)
-    clear_used_kernel_names()
+    set_kernel_usage_recording(session, True)
+    clear_used_kernel_names(session)
     outputs = session.run(None, feeds)
-    dispatched = used_kernel_names()
-    set_kernel_usage_recording(False)
+    dispatched = used_kernel_names(session)
+    set_kernel_usage_recording(session, False)
     expected_kernels = []
     for node in model.graph.node:
         domain = node.domain or "ai.onnx"

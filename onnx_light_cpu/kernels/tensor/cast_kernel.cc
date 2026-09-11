@@ -6,7 +6,6 @@
 
 #include "onnx_light_cpu/impl/tensor/cast_kernel.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
-#include "onnx_light_cpu/kernels/kernel_usage.h"
 
 #include "onnx_core/runtime/kernels/node_helpers.h"
 #include "onnx_core/symbolic/sym_tensor.h"
@@ -243,7 +242,7 @@ void CastKernel::operator()(const Tensor &data, int32_t to, bool saturate, Tenso
 }
 
 void CastKernel::Run(rt_ns::RuntimeContext &rt) {
-  RecordKernelUsage(kName);
+  rt.RecordKernelUsage(kName);
   if (node_ == nullptr) {
     Invalid("Run requires a node.");
   }

@@ -257,7 +257,7 @@ class TestBenchmarkCli(ExtTestCase):
         )
         with (
             mock.patch("onnx_light.onnx.reference.ReferenceEvaluator") as evaluator,
-            mock.patch("onnx_light_cpu._benchmark.clear_used_kernel_names"),
+            mock.patch("onnx_light_cpu._benchmark.clear_used_kernel_names") as clear,
             mock.patch("onnx_light_cpu._benchmark.set_kernel_usage_recording") as recording,
             mock.patch(
                 "onnx_light_cpu._register.registered_kernels",
@@ -267,7 +267,7 @@ class TestBenchmarkCli(ExtTestCase):
             mock.patch(
                 "onnx_light_cpu._benchmark.used_kernel_names",
                 return_value=("onnx_light_cpu::Abs",),
-            ),
+            ) as used,
         ):
             raw, _ = _benchmark._measure_case(case, 1, 0, 1.0, 3)
         evaluator.assert_called_once_with(
@@ -278,7 +278,12 @@ class TestBenchmarkCli(ExtTestCase):
         self.assertEqual(raw[0]["runtime"], "onnx-light-cpu")
         self.assertEqual(raw[0]["processor"], "test CPU")
         self.assertIn("duration_s", raw[0])
-        self.assertEqual(recording.call_args_list, [mock.call(True), mock.call(False)])
+        self.assertEqual(
+            recording.call_args_list,
+            [mock.call(evaluator.return_value, True), mock.call(evaluator.return_value, False)],
+        )
+        clear.assert_called_once_with(evaluator.return_value)
+        used.assert_called_once_with(evaluator.return_value)
 
     def test_domain_specific_kernel_name_is_checked(self):
         kernels = (

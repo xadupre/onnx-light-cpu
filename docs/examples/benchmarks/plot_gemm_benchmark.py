@@ -220,12 +220,12 @@ def inputs():
 
 
 for size, a, b in inputs():
-    set_kernel_usage_recording(True)
-    clear_used_kernel_names()
+    set_kernel_usage_recording(light_session, True)
+    clear_used_kernel_names(light_session)
     run_light(a, b)
-    accelerated_kernel_names = used_kernel_names()
+    accelerated_kernel_names = used_kernel_names(light_session)
     assert accelerated_kernel_name in accelerated_kernel_names, accelerated_kernel_names
-    set_kernel_usage_recording(False)
+    set_kernel_usage_recording(light_session, False)
     rows_by_size[size][2] = measure(
         lambda a=a, b=b: run_light(a, b),
         args.repeat,

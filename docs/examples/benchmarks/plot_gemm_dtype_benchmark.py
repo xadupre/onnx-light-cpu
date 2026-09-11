@@ -258,12 +258,12 @@ for shape_label, M, N, K in SHAPES:
         def run(session=sessions[label], a=a, b=b):
             return session.run(None, {"A": a, "B": b})[0]
 
-        set_kernel_usage_recording(True)
-        clear_used_kernel_names()
+        set_kernel_usage_recording(sessions[label], True)
+        clear_used_kernel_names(sessions[label])
         run()
-        kernel_names = used_kernel_names()
+        kernel_names = used_kernel_names(sessions[label])
         assert accelerated_kernel_name in kernel_names, (label, shape_label, kernel_names)
-        set_kernel_usage_recording(False)
+        set_kernel_usage_recording(sessions[label], False)
         elapsed = measure(run, args.repeat, args.warmup, args.max_repeat_time)
         results[label].append(elapsed)
         print(f"  {label:<9} | onnx-light-cpu={elapsed * 1e6:10.2f} us")

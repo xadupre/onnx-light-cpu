@@ -8,7 +8,6 @@
 #include "onnx_light_cpu/impl/execution.h"
 #include "onnx_light_cpu/kernels/com_microsoft/skip_simplified_layer_normalization_helpers.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
-#include "onnx_light_cpu/kernels/kernel_usage.h"
 #include "onnx_light_cpu/schemas/com_microsoft/op_schema.h"
 
 #include <cmath>
@@ -113,7 +112,7 @@ SkipSimplifiedLayerNormalizationResult SkipSimplifiedLayerNormalizationKernel::o
 }
 
 void SkipSimplifiedLayerNormalizationKernel::Run(runtime::RuntimeContext &rt) {
-  RecordKernelUsage(kName);
+  rt.RecordKernelUsage(kName);
   helpers::Run(*this, *node_, rt);
 }
 

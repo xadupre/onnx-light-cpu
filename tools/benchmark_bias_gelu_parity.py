@@ -240,12 +240,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         def ort_run(session=ort, current_feeds=feeds):
             return session.run(None, current_feeds)[0]
 
-        set_kernel_usage_recording(True)
-        clear_used_kernel_names()
+        set_kernel_usage_recording(cpu, True)
+        clear_used_kernel_names(cpu)
         cpu_output = cpu_run()
-        if "onnx_light_cpu::BiasGelu" not in used_kernel_names():
+        if "onnx_light_cpu::BiasGelu" not in used_kernel_names(cpu):
             raise RuntimeError(f"{case_name} did not dispatch the optimized BiasGelu kernel.")
-        set_kernel_usage_recording(False)
+        set_kernel_usage_recording(cpu, False)
         np.testing.assert_allclose(
             cpu_output, ort_run(), rtol=args.rtol, atol=args.atol, equal_nan=True
         )

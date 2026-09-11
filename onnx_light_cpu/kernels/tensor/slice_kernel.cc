@@ -6,7 +6,6 @@
 
 #include "onnx_light_cpu/impl/tensor/slice_kernel.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
-#include "onnx_light_cpu/kernels/kernel_usage.h"
 
 #include "onnx_core/runtime/kernels/node_helpers.h"
 #include "onnx_core/symbolic/sym_tensor.h"
@@ -263,7 +262,7 @@ void SliceKernel::operator()(const Tensor &data, const Tensor &starts, const Ten
 }
 
 void SliceKernel::Run(rt_ns::RuntimeContext &rt) {
-  RecordKernelUsage(kName);
+  rt.RecordKernelUsage(kName);
   const auto &node = *node_;
   rt_ns::RequireOutputCount(node, 1);
   if (ctx_.opset.version > 0 && ctx_.opset.version < 10) {

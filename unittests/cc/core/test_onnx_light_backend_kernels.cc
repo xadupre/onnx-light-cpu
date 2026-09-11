@@ -29,7 +29,6 @@
 #include "onnx_light_cpu/backend_test/cases/math/benchmark_helpers.h"
 #include "onnx_light_cpu/backend_test/collect_test_cases.h"
 #include "onnx_light_cpu/impl/math/binary/binary_manifest.h"
-#include "onnx_light_cpu/kernels/kernel_usage.h"
 #include "onnx_light_cpu/kernels/math/abs_kernel.h"
 #include "onnx_light_cpu/kernels/math/gemm_kernel.h"
 #include "onnx_light_cpu/kernels/register_kernels.h"
@@ -481,15 +480,12 @@ TEST(OnnxLightBackendKernels, GemmRunsThroughRuntime) {
 
 TEST(OnnxLightBackendKernels, GemmCaseCollectionRetainsNoKernels) {
   const std::int64_t baseline = onnx_light_cpu::GemmKernel::ActiveInstanceCountForTesting();
-  onnx_light_cpu::SetKernelUsageRecording(true);
 
   for (const core::backend_test::TestMode mode :
        {core::backend_test::TestMode::TEST, core::backend_test::TestMode::BENCHMARK}) {
-    onnx_light_cpu::ClearUsedKernelNames();
     std::vector<TestCase> cases = CollectCpuCases("Gemm", mode);
     ASSERT_FALSE(cases.empty());
     EXPECT_EQ(onnx_light_cpu::GemmKernel::ActiveInstanceCountForTesting(), baseline);
-    EXPECT_TRUE(onnx_light_cpu::UsedKernelNames().empty());
     for (const TestCase &test_case : cases) {
       EXPECT_FALSE(test_case.materialized()) << test_case.name;
     }

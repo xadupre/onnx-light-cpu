@@ -5,7 +5,6 @@
 #include "onnx_light_cpu/kernels/tensor/concat_kernel.h"
 
 #include "onnx_light_cpu/impl/execution.h"
-#include "onnx_light_cpu/kernels/kernel_usage.h"
 
 #include "onnx_extensions/kernels/kernels/tensor/include_tensor_kernels.h"
 
@@ -280,11 +279,9 @@ TEST(OnnxLightConcatKernel, NodeRunAcrossOpsetsAndRepeatedNames) {
     runtime.Set("first", inputs[0]);
     runtime.Set("second", inputs[1]);
     onnx_light_cpu::ConcatKernel kernel(node, MakeCtx(opset));
-    onnx_light_cpu::ClearUsedKernelNames();
-    onnx_light_cpu::SetKernelUsageRecording(true);
+    runtime.set_kernel_usage_enabled(true);
     EXPECT_NO_THROW(kernel.Run(runtime));
-    onnx_light_cpu::SetKernelUsageRecording(false);
-    EXPECT_EQ(onnx_light_cpu::UsedKernelNames(),
+    EXPECT_EQ(runtime.GetKernelUsage(),
               std::vector<std::string>{onnx_light_cpu::ConcatKernel::kName});
     EqualBytes(runtime.Get("output"),
                BuiltinConcat{MakeCtx(opset)}({inputs[0], inputs[1], inputs[0]}, -1));
