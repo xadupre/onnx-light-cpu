@@ -68,6 +68,11 @@ LinearAttentionResult NaiveMicrosoftLinearAttentionKernel::operator()(
       PlanLinearAttention(kName, query, key, value, past_state, decay, beta, attributes.update_rule,
                           attributes.query_heads, attributes.key_value_heads, attributes.scale,
                           {true, true, true}, {DataType::FLOAT});
+  // The reference uses signed element counts and unchecked byte-size multiplication.
+  for (const auto &shape : {plan.state_shape, plan.output_shape}) {
+    const auto count = static_cast<std::size_t>(shape.product(0, shape.size(), kName));
+    LinearAttentionCheckedMultiply(kName, count, sizeof(float), "reference output bytes");
+  }
   const auto &p = plan.parameters;
   // The ONNX contract requires Hq >= Hkv and a physical key for each state head.
   // Replicate only the shared inputs; state, gates, values and outputs keep their layout.

@@ -163,6 +163,22 @@ TEST(MicrosoftLinearAttentionKernel, NaiveRejectsUnsupportedInputsAndOutputs) {
   EXPECT_THROW(naive.Run(runtime), std::invalid_argument);
 }
 
+TEST(MicrosoftLinearAttentionKernel, NaiveRejectsReferenceAllocationOverflow) {
+  const rt_ns::KernelContext ctx{rt_ns::OpsetId("com.microsoft", 1)};
+  const NaiveMicrosoftLinearAttentionKernel naive{ctx};
+  NaiveMicrosoftLinearAttentionKernel::Attributes attributes;
+  attributes.update_rule = "linear";
+  attributes.query_heads = 1;
+  attributes.key_value_heads = 1;
+  const std::int64_t hidden = std::int64_t{1} << 31;
+  const Tensor input = Tensor::FromFloat("", {1, 0, hidden}, {});
+  // Empty activations need no allocation, but the state would require 2^64 bytes.
+  EXPECT_THROW((void)naive(input, input, input, attributes), std::invalid_argument);
+  const Tensor value = Tensor::FromFloat("", {1, 0, hidden * 2}, {});
+  // The reference's signed state element count would also overflow.
+  EXPECT_THROW((void)naive(input, input, value, attributes), std::invalid_argument);
+}
+
 TEST(MicrosoftLinearAttentionKernel, SupportsInverseGroupingAndSharedKeyHeads) {
   const MicrosoftLinearAttentionKernel kernel{rt_ns::KernelContext{rt_ns::DefaultOpset(27)}};
   MicrosoftLinearAttentionKernel::Attributes attributes;
