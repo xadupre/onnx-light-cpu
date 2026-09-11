@@ -290,9 +290,8 @@ TEST(OnnxLightKernelUsage, ConcurrentSessionsAreIsolated) {
   rt_ns::RuntimeContext abs_runtime(MakeContext());
   rt_ns::RuntimeContext exp_runtime(MakeContext());
   rt_ns::RuntimeContext disabled_runtime(MakeContext());
-  onnx_light_cpu::RegisterKernelForSession(abs_runtime, "", "Abs");
-  onnx_light_cpu::RegisterKernelForSession(exp_runtime, "", "Exp");
-  onnx_light_cpu::RegisterKernelForSession(disabled_runtime, "", "Abs");
+  onnx_light_cpu::RegisterKernelGlobal("", "Abs");
+  onnx_light_cpu::RegisterKernelGlobal("", "Exp");
   abs_runtime.set_kernel_usage_enabled(true);
   exp_runtime.set_kernel_usage_enabled(true);
 
@@ -399,7 +398,7 @@ TEST(OnnxLightKernelUsage, FunctionInsideSubgraphRecordsOnOwningRuntime) {
 
   rt_ns::RuntimeContext runtime(MakeContext());
   rt_ns::RuntimeContext other(MakeContext());
-  onnx_light_cpu::RegisterKernelForSession(runtime, "", "Abs");
+  onnx_light_cpu::RegisterKernelGlobal("", "Abs");
   rt_ns::RegisterModelFunctions(model, runtime);
   rt_ns::SubgraphSession session(runtime, *graph);
   auto run = [&] {
