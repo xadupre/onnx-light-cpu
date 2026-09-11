@@ -671,7 +671,9 @@ class TestBackendCases(ExtTestCase):
                     light_session = ReferenceEvaluator(tc.model)
                     model_bytes = tc.model.SerializeToString()
                     ort_session = None
-                    if ort is not None:
+                    # ORT's NumPy run API cannot accept ml_dtypes.bfloat16 feeds.
+                    # Use the pre-warmed onnx-light oracle for those cases.
+                    if ort is not None and dtype != "bfloat16":
                         try:
                             # GroupNormalization may be expanded from its ONNX function.
                             ort_session = ort.InferenceSession(
