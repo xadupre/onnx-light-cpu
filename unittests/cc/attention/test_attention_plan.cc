@@ -48,6 +48,46 @@ using onnx_light_cpu::ComputeAttentionFloat16Streaming;
 using onnx_light_cpu::ComputeAttentionFloat32;
 using onnx_light_cpu::ComputeAttentionFloat32Streaming;
 
+TEST(AttentionExp, Avx2WithoutFmaSelectsScalar) {
+  using onnx_light_cpu::SimdLevel;
+  using onnx_light_cpu::detail::SelectAttentionExpKernel;
+  const auto scalar = SelectAttentionExpKernel(SimdLevel::kNone, false);
+  const auto avx2_without_fma = SelectAttentionExpKernel(SimdLevel::kAVX2, false);
+  ASSERT_EQ(avx2_without_fma, scalar);
+  EXPECT_EQ(SelectAttentionExpKernel(SimdLevel::kAVX, true), scalar);
+
+  for (std::size_t count : {0u, 1u, 7u, 8u, 9u, 16u, 17u, 257u}) {
+    SCOPED_TRACE(count);
+    std::vector<float> values(count);
+    for (std::size_t i = 0; i < count; ++i) {
+      values[i] = -static_cast<float>(i) / 8.0f;
+    }
+    const auto input = values;
+    avx2_without_fma(values.data(), values.data(), count);
+    for (std::size_t i = 0; i < count; ++i) {
+      EXPECT_FLOAT_EQ(values[i], std::exp(input[i]));
+    }
+  }
+
+  float masked_score = -std::numeric_limits<float>::infinity();
+  avx2_without_fma(&masked_score, &masked_score, 1);
+  EXPECT_EQ(masked_score, 0.0f);
+}
+
+TEST(AttentionExp, RuntimeSelectionMatchesStdExp) {
+  const auto exp = onnx_light_cpu::detail::SelectAttentionExpKernel(
+      onnx_light_cpu::DetectSimdLevel(), onnx_light_cpu::CpuSupportsFma());
+  std::array<float, 17> values;
+  for (std::size_t i = 0; i < values.size(); ++i) {
+    values[i] = -static_cast<float>(i) / 8.0f;
+  }
+  const auto input = values;
+  exp(values.data(), values.data(), values.size());
+  for (std::size_t i = 0; i < values.size(); ++i) {
+    EXPECT_NEAR(values[i], std::exp(input[i]), 1e-6f);
+  }
+}
+
 std::vector<float> RandomTensor(std::size_t count, std::uint32_t seed) {
   std::mt19937 rng(seed);
   std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
