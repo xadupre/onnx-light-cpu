@@ -55,7 +55,7 @@ public:
     const auto &input = rt.Get(node_->input(0));
     EXPECT_EQ(input.shape, shape_);
     EXPECT_EQ(input.data_type, dtype_);
-    rt.Set(node_->output(0), input.ToOwned());
+    rt.Put(node_->output(0), input.ToOwned());
     ++counts_->runs;
     EXPECT_EQ(active_.fetch_sub(1), 1);
   }
@@ -85,19 +85,19 @@ TEST(OnnxLightRegisterKernels, SessionPlansReuseOnlyMatchingMetadata) {
   node.add_output("y");
 
   for (int i = 0; i < 5; ++i) {
-    runtime.Set("x", rt_ns::Tensor::FromFloat("x", {2}, {float(i), 2.0f}));
+    runtime.Put("x", rt_ns::Tensor::FromFloat("x", {2}, {float(i), 2.0f}));
     callback(node, runtime);
     EXPECT_EQ(runtime.Get("y").AsFloat()[0], float(i));
   }
   EXPECT_EQ(counts->plans, 1);
 
-  runtime.Set("x", rt_ns::Tensor::FromFloat("x", {1, 2}, {3.0f, 4.0f}));
+  runtime.Put("x", rt_ns::Tensor::FromFloat("x", {1, 2}, {3.0f, 4.0f}));
   callback(node, runtime);
   EXPECT_EQ(counts->plans, 2);
-  runtime.Set("x", rt_ns::Tensor::FromFloat("x", {2}, {5.0f, 6.0f}));
+  runtime.Put("x", rt_ns::Tensor::FromFloat("x", {2}, {5.0f, 6.0f}));
   callback(node, runtime);
   EXPECT_EQ(counts->plans, 2);
-  runtime.Set("x", rt_ns::Tensor::FromDouble("x", {1, 2}, {3.0, 4.0}));
+  runtime.Put("x", rt_ns::Tensor::FromDouble("x", {1, 2}, {3.0, 4.0}));
   callback(node, runtime);
   EXPECT_EQ(counts->plans, 3);
   runtime.Set("optional", rt_ns::Tensor::FromFloat("optional", {}, {1.0f}));
@@ -109,7 +109,8 @@ TEST(OnnxLightRegisterKernels, SessionPlansReuseOnlyMatchingMetadata) {
 
   // A second node must not inherit the first node's output names or attributes,
   // even when the caller reuses the same NodeProto storage.
-  node.set_output(0, "z");
+  node.clear_output();
+  node.add_output("z");
   callback(node, runtime);
   EXPECT_TRUE(runtime.Has("z"));
   EXPECT_EQ(counts->plans, 6);
@@ -171,7 +172,7 @@ TEST(OnnxLightRegisterKernels, ConcurrentSessionCallbacksPrepareEachSignatureOnc
       start.arrive_and_wait();
       for (int run = 0; run < 32; ++run) {
         const int64_t size = 1 + run % 2;
-        runtime.Set("x", rt_ns::Tensor::FromFloat("x", {size}, std::vector<float>(size, float(i))));
+        runtime.Put("x", rt_ns::Tensor::FromFloat("x", {size}, std::vector<float>(size, float(i))));
         callback(node, runtime);
         EXPECT_EQ(runtime.Get("y").AsFloat()[0], float(i));
       }
@@ -185,8 +186,12 @@ TEST(OnnxLightRegisterKernels, ConcurrentSessionCallbacksPrepareEachSignatureOnc
 }
 
 TEST(OnnxLightRegisterKernels, RuntimeSessionRetainsNativeKernelsAcrossRuns) {
-  ONNX_LIGHT_NAMESPACE::GraphProto graph;
-  auto *node = graph.add_node();
+  ONNX_LIGHT_NAMESPACE::ModelProto model;
+  auto *graph = model.mutable_graph();
+  graph->add_input()->set_name("a");
+  graph->add_input()->set_name("b");
+  graph->add_output()->set_name("y");
+  auto *node = graph->add_node();
   node->set_op_type("Gemm");
   node->add_input("a");
   node->add_input("b");
@@ -198,14 +203,14 @@ TEST(OnnxLightRegisterKernels, RuntimeSessionRetainsNativeKernelsAcrossRuns) {
     } else {
       ASSERT_TRUE(onnx_light_cpu::RegisterKernelForSession(runtime, "", "Gemm"));
     }
-    rt_ns::RuntimeSession session(graph);
+    rt_ns::RuntimeSession session(model);
     runtime.Set("a", rt_ns::Tensor::FromFloat("a", {1, 2}, {2.0f, 3.0f}));
     runtime.Set("b", rt_ns::Tensor::FromFloat("b", {2, 1}, {4.0f, 5.0f}));
     session.Run(runtime);
     EXPECT_FLOAT_EQ(runtime.Get("y").AsFloat()[0], 23.0f);
     const auto constructed = rt_ns::KernelBase::ConstructionCountForTesting();
     for (int run = 0; run < 3; ++run) {
-      runtime.Set("a", rt_ns::Tensor::FromFloat("a", {1, 2}, {3.0f, 2.0f}));
+      runtime.Put("a", rt_ns::Tensor::FromFloat("a", {1, 2}, {3.0f, 2.0f}));
       session.Run(runtime);
       EXPECT_FLOAT_EQ(runtime.Get("y").AsFloat()[0], 22.0f);
     }
