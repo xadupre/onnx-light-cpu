@@ -531,6 +531,24 @@ void ComputeAttentionFloat32Materialized(const AttentionPlan &plan, const float 
   }
 }
 
+detail::AttentionExpKernel detail::SelectAttentionExpKernel(SimdLevel simd, bool has_fma) {
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
+  if (simd == SimdLevel::kAVX512) {
+    return ExpFloat32_AVX512;
+  }
+#endif
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
+  if (simd >= SimdLevel::kAVX2 && has_fma) {
+    return ExpFloat32_AVX2_FMA;
+  }
+#endif
+  return [](const float *input, float *output, std::size_t count) {
+    for (std::size_t index = 0; index < count; ++index) {
+      output[index] = std::exp(input[index]);
+    }
+  };
+}
+
 namespace {
 
 std::size_t AttentionQueryBlock(const AttentionPlan &plan) {
@@ -576,22 +594,8 @@ std::size_t StreamingParticipantCount(const AttentionPlan &plan, std::size_t tot
 }
 
 void AttentionExp(float *values, std::size_t count) {
-  static const SimdLevel simd = DetectSimdLevel();
-#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
-  if (simd == SimdLevel::kAVX512) {
-    ExpFloat32_AVX512(values, values, count);
-    return;
-  }
-#endif
-#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
-  if (simd >= SimdLevel::kAVX2) {
-    ExpFloat32_AVX2_FMA(values, values, count);
-    return;
-  }
-#endif
-  for (std::size_t index = 0; index < count; ++index) {
-    values[index] = std::exp(values[index]);
-  }
+  static const auto exp = detail::SelectAttentionExpKernel(DetectSimdLevel(), CpuSupportsFma());
+  exp(values, values, count);
 }
 
 // FP32-storage codec: streaming Q/K/V/Y elements are already FP32, so
