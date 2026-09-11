@@ -8,7 +8,6 @@
 #include "onnx_light_cpu/impl/math/normalization_kernel.h"
 #include "onnx_light_cpu/impl/math/rms_normalization.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
-#include "onnx_light_cpu/kernels/kernel_usage.h"
 #include "onnx_light_cpu/kernels/math/normalization_helpers.h"
 
 #include "onnx_core/runtime/kernels/node_helpers.h"
@@ -167,7 +166,7 @@ SimplifiedLayerNormalizationResult SimplifiedLayerNormalizationKernel::operator(
 }
 
 void SimplifiedLayerNormalizationKernel::Run(RuntimeContext &rt) {
-  RecordKernelUsage(kName);
+  rt.RecordKernelUsage(kName);
   const NodeProto &node = *node_;
   rt_ns::RequireInputCount(node, 2);
   if (node.output_size() < 1 || node.output_size() > 2 || node.output(0).empty()) {

@@ -7,7 +7,6 @@
 #include "onnx_light_cpu/impl/checked_arithmetic.h"
 #include "onnx_light_cpu/impl/math/half_conversion.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
-#include "onnx_light_cpu/kernels/kernel_usage.h"
 #include "onnx_light_cpu/schemas/com_microsoft/op_schema.h"
 
 #include "onnx_core/runtime/kernels/kernel_dispatch_table.h"
@@ -818,7 +817,7 @@ NaiveGroupQueryAttentionKernel::NaiveGroupQueryAttentionKernel(const NodeProto &
 }
 
 void NaiveGroupQueryAttentionKernel::Run(RuntimeContext &rt) {
-  RecordKernelUsage(kName);
+  rt.RecordKernelUsage(kName);
   const NodeProto &node = *node_;
   const auto lookup = [&node, &rt](int index) -> const Tensor & {
     return rt_ns::GetInput(node, index, rt.tensors());

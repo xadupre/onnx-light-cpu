@@ -185,7 +185,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     import onnxruntime
     from onnx_light.onnx import TensorProto, helper
     from onnx_light.onnx.reference import ReferenceEvaluator
-    from onnx_light_cpu import clear_used_kernel_names, register_kernels, used_kernel_names
+    from onnx_light_cpu import (
+        clear_used_kernel_names,
+        register_kernels,
+        set_kernel_usage_recording,
+        used_kernel_names,
+    )
 
     register_kernels()
     random = np.random.default_rng(args.seed)
@@ -245,12 +250,14 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 def ort_run(session=ort, current_feeds=feeds):
                     return session.run(None, current_feeds)[0]
 
-                clear_used_kernel_names()
+                set_kernel_usage_recording(cpu, True)
+                clear_used_kernel_names(cpu)
                 cpu_output = cpu_run()
-                if "onnx_light_cpu::CDist" not in used_kernel_names():
+                if "onnx_light_cpu::CDist" not in used_kernel_names(cpu):
                     raise RuntimeError(
                         f"{case.name} did not dispatch the optimized CDist kernel."
                     )
+                set_kernel_usage_recording(cpu, False)
                 ort_output = ort_run()
                 scale = max(
                     float(np.max(np.abs(a), initial=0)),

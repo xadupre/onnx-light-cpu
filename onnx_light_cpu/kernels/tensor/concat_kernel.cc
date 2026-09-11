@@ -6,7 +6,6 @@
 
 #include "onnx_light_cpu/impl/tensor/concat_kernel.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
-#include "onnx_light_cpu/kernels/kernel_usage.h"
 
 #include "onnx_core/runtime/kernels/node_helpers.h"
 #include "onnx_core/symbolic/sym_tensor.h"
@@ -174,7 +173,7 @@ void ConcatKernel::operator()(std::span<const Tensor> inputs, int64_t axis, Tens
 }
 
 void ConcatKernel::Run(rt_ns::RuntimeContext &rt) {
-  RecordKernelUsage(kName);
+  rt.RecordKernelUsage(kName);
   const auto &node = *node_;
   rt_ns::RequireMinInputCount(node, 1);
   rt_ns::RequireOutputCount(node, 1);

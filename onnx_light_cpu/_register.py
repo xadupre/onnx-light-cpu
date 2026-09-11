@@ -411,38 +411,57 @@ def registered_kernel_names(
     return names
 
 
-def used_kernel_names() -> list[str]:
-    """Returns the onnx-light-cpu kernels that ran since the last clear.
+def used_kernel_names(sess: Any) -> list[str]:
+    """Returns backend kernel names recorded by ``sess`` since its last clear.
 
-    Every onnx-light-cpu kernel records its library-qualified name when it
-    executes, so after running a model through onnx-light's ``ReferenceEvaluator``
-    this returns, in invocation order, the names of the accelerated kernels the
-    runtime actually dispatched to. Use :func:`clear_used_kernel_names` to reset
-    the record before a run.
+    Recording is disabled by default; opt in with
+    :func:`set_kernel_usage_recording`. The session's ``RuntimeContext`` retains
+    the first 1024 invocations after each clear and drops later records.
+    Nested subgraphs and model-local functions share the session's recorder;
+    independent evaluators do not. Names from any participating backend are
+    returned, not only onnx-light-cpu.
+    Returns an independent, non-consuming snapshot in mutex acquisition order.
+    Recording, retrieval, clearing, and toggling share the context's mutex.
+    ``sess`` must be an onnx-light ``ReferenceEvaluator``.
     """
+    _validate_session(sess)
     from .onnx_py._cpuregister import (  # pyrefly: ignore[missing-import]
         used_kernel_names as _used_kernel_names,
     )
 
-    return list(_used_kernel_names())
+    return list(_used_kernel_names(sess._ctx))
 
 
-def clear_used_kernel_names() -> None:
-    """Clears the record of onnx-light-cpu kernels that have run."""
+def clear_used_kernel_names(sess: Any) -> None:
+    """Clears ``sess``'s shared log without changing its enabled state.
+
+    Concurrent records fall before or after the clear in mutex acquisition order.
+    Child contexts share the clear; independent sessions are unaffected.
+    Ordinary evaluator runs and context resets preserve recorded names.
+    """
+    _validate_session(sess)
     from .onnx_py._cpuregister import (  # pyrefly: ignore[missing-import]
         clear_used_kernel_names as _clear_used_kernel_names,
     )
 
-    _clear_used_kernel_names()
+    _clear_used_kernel_names(sess._ctx)
 
 
-def set_kernel_usage_recording(enabled: bool) -> None:
-    """Enables or disables per-invocation kernel usage recording."""
+def set_kernel_usage_recording(sess: Any, enabled: bool) -> None:
+    """Enables or disables recording on ``sess`` (disabled by default).
+
+    The setting is shared with nested execution, not independent sessions.
+    Toggling preserves existing records and does not reset kernel dispatch.
+    Disabling waits for active appends;
+    no more records are appended until enabled again. Disabled kernel calls
+    only load an atomic flag, without locking or allocating log entries.
+    """
+    _validate_session(sess)
     from .onnx_py._cpuregister import (  # pyrefly: ignore[missing-import]
         set_kernel_usage_recording as _set_kernel_usage_recording,
     )
 
-    _set_kernel_usage_recording(enabled)
+    _set_kernel_usage_recording(sess._ctx, enabled)
 
 
 def register_backend_test_cases() -> None:

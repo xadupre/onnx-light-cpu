@@ -5,7 +5,6 @@
 #include "onnx_light_cpu/kernels/math/normalization_kernel.h"
 
 #include "onnx_light_cpu/kernels/kernel_registration.h"
-#include "onnx_light_cpu/kernels/kernel_usage.h"
 #include "onnx_light_cpu/kernels/math/normalization_helpers.h"
 
 #include "onnx_core/runtime/kernels/kernel_dispatch_table.h"
@@ -705,7 +704,7 @@ BatchNormalizationKernel::Compute(const Tensor &x, const Tensor &scale, const Te
 }
 
 void BatchNormalizationKernel::Run(RuntimeContext &rt) {
-  RecordKernelUsage(kName);
+  rt.RecordKernelUsage(kName);
   const NodeProto &node = *node_;
   rt_ns::RequireInputCount(node, 5);
   const std::int64_t training_mode = rt_ns::GetAttributeIntOrDefault(node, "training_mode", 0);
@@ -795,7 +794,7 @@ Tensor GroupNormalizationKernel::operator()(const Tensor &x, const Tensor &scale
 }
 
 void GroupNormalizationKernel::Run(RuntimeContext &rt) {
-  RecordKernelUsage(kName);
+  rt.RecordKernelUsage(kName);
   const NodeProto &node = *node_;
   rt_ns::RequireInputCount(node, 3);
   rt_ns::RequireOutputCount(node, 1);
@@ -838,7 +837,7 @@ Tensor InstanceNormalizationKernel::operator()(const Tensor &x, const Tensor &sc
 }
 
 void InstanceNormalizationKernel::Run(RuntimeContext &rt) {
-  RecordKernelUsage(kName);
+  rt.RecordKernelUsage(kName);
   const NodeProto &node = *node_;
   rt_ns::RequireInputCount(node, 3);
   rt_ns::RequireOutputCount(node, 1);
@@ -908,7 +907,7 @@ LayerNormalizationResult LayerNormalizationKernel::operator()(
 }
 
 void LayerNormalizationKernel::Run(RuntimeContext &rt) {
-  RecordKernelUsage(kName);
+  rt.RecordKernelUsage(kName);
   const NodeProto &node = *node_;
   if (node.input_size() < 2 || node.input_size() > 3) {
     throw std::invalid_argument(
@@ -962,7 +961,7 @@ Tensor LpNormalizationKernel::operator()(const Tensor &x, std::int64_t axis, std
 }
 
 void LpNormalizationKernel::Run(RuntimeContext &rt) {
-  RecordKernelUsage(kName);
+  rt.RecordKernelUsage(kName);
   const NodeProto &node = *node_;
   rt_ns::RequireInputCount(node, 1);
   rt_ns::RequireOutputCount(node, 1);
@@ -1079,7 +1078,7 @@ Tensor MeanVarianceNormalizationKernel::operator()(const Tensor &x,
 }
 
 void MeanVarianceNormalizationKernel::Run(RuntimeContext &rt) {
-  RecordKernelUsage(kName);
+  rt.RecordKernelUsage(kName);
   const NodeProto &node = *node_;
   rt_ns::RequireInputCount(node, 1);
   rt_ns::RequireOutputCount(node, 1);
