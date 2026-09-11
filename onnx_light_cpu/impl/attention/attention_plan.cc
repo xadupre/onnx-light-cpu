@@ -346,9 +346,7 @@ namespace {
 
 constexpr float kNegativeInfinity = -std::numeric_limits<float>::infinity();
 
-bool IsMaskFilterValue(float value) noexcept {
-  return value == kNegativeInfinity || value == std::numeric_limits<float>::lowest();
-}
+bool IsMaskFilterValue(float value) noexcept { return value == kNegativeInfinity; }
 
 } // namespace
 
