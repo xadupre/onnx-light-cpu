@@ -328,6 +328,23 @@ TEST(OnnxLightBackendKernels, AbsRunsThroughRuntime) {
   EXPECT_TRUE(failures.empty()) << Describe(failures);
 }
 
+TEST(OnnxLightBackendKernels, LinearAttentionPoliciesRunIndependentMicrosoftKernels) {
+  using onnx_light_cpu::MicrosoftKernelImplementation;
+  for (const auto policy :
+       {MicrosoftKernelImplementation::NAIVE, MicrosoftKernelImplementation::OPTIMIZED}) {
+    onnx_light_cpu::ClearUsedKernelNames();
+    const auto failures =
+        RunCpuBackendCases("LinearAttention", core::backend_test::TestMode::TEST, {}, policy);
+    EXPECT_TRUE(failures.empty()) << Describe(failures);
+    const auto used = onnx_light_cpu::UsedKernelNames();
+    const std::string naive = "onnx_light_cpu::NaiveMicrosoftLinearAttention";
+    const std::string optimized = "onnx_light_cpu::MicrosoftLinearAttention";
+    const bool is_naive = policy == MicrosoftKernelImplementation::NAIVE;
+    EXPECT_NE(std::find(used.begin(), used.end(), is_naive ? naive : optimized), used.end());
+    EXPECT_EQ(std::find(used.begin(), used.end(), is_naive ? optimized : naive), used.end());
+  }
+}
+
 TEST(OnnxLightBackendKernels, AllRegisteredKernelsPassRegularBackendCorrectnessCorpus) {
   const onnx_light_cpu::backend_test::BackendCorrectnessReport report =
       onnx_light_cpu::backend_test::RunBackendCorrectnessTests();

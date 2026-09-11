@@ -202,6 +202,15 @@ branch of ``RegisterMicrosoftKernels`` and add differential tests covering
 their complete shared contract. Backend ``TEST`` cases generate expectations
 with the naive implementation; ``BENCHMARK`` cases use the optimized one.
 
+For ``com.microsoft::LinearAttention``, the test-only
+``NaiveMicrosoftLinearAttentionKernel`` calls the concrete onnx-light
+``onnx_kernels::kernel::LinearAttention`` reference kernel, not the optimized
+dispatcher. It expands shared query/key heads to the ONNX contract and preserves
+the Microsoft defaults, optional state, decay and beta layouts, and both outputs.
+No attention recurrence is duplicated in the adapter. FLOAT parity uses the
+backend tolerances (``rtol=1e-3``, ``atol=1e-7``); default and global registration
+continue to select ``MicrosoftLinearAttentionKernel``.
+
 For a kernel that only needs to run from Python — for example a quick,
 model-specific override written in NumPy — use ``onnx-light``'s per-evaluator
 ``ReferenceEvaluator.register_custom_kernel(domain, op_type, fn)`` hook instead;

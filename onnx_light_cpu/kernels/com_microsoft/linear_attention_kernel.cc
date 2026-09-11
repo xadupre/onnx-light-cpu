@@ -65,6 +65,4 @@ void MicrosoftLinearAttentionKernel::Run(RuntimeContext &rt) {
 
 void RegisterMicrosoftLinearAttentionKernel() { RegisterKernelImpl(); }
 
-void RegisterNaiveMicrosoftLinearAttentionKernel() { RegisterKernelImpl(); }
-
 } // namespace onnx_light_cpu

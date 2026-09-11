@@ -5,6 +5,7 @@
 #include "onnx_light_cpu/backend_test/cases/attention/linear_attention_cases.h"
 
 #include "onnx_light_cpu/backend_test/cases/math/benchmark_helpers.h"
+#include "onnx_light_cpu/kernels/com_microsoft/naive_linear_attention_kernel.h"
 #include "onnx_light_cpu/schemas/com_microsoft/op_schema.h"
 
 #include "onnx_core/backend_test/expect.h"
@@ -13,7 +14,6 @@
 #include "onnx_proto/onnx_helper.h"
 
 #include <algorithm>
-#include <cmath>
 #include <cstddef>
 #include <optional>
 #include <string>
@@ -79,86 +79,15 @@ NodeProto MakeLinearAttentionNode(const LinearAttentionCase &test_case,
 std::vector<Tensor> MicrosoftReference(const LinearAttentionCase &test_case, const Tensor &query,
                                        const Tensor &key, const Tensor &value, const Tensor *past,
                                        const Tensor *decay, const Tensor *beta) {
-  const std::size_t batch = static_cast<std::size_t>(test_case.batch);
-  const std::size_t sequence = static_cast<std::size_t>(test_case.sequence);
-  const std::size_t hq = static_cast<std::size_t>(test_case.query_heads);
-  const std::size_t hk = static_cast<std::size_t>(test_case.key_heads);
-  const std::size_t hv = static_cast<std::size_t>(test_case.key_value_heads);
-  const std::size_t dk = static_cast<std::size_t>(test_case.key_head_size);
-  const std::size_t dv = static_cast<std::size_t>(test_case.value_head_size);
-  const std::size_t output_heads = std::max(hq, hv);
-  std::vector<float> state(batch * hv * dk * dv, 0.0f);
-  if (past != nullptr && !state.empty()) {
-    std::copy(past->AsFloat(), past->AsFloat() + state.size(), state.begin());
-  }
-  std::vector<float> output(batch * sequence * output_heads * dv);
-  std::vector<float> retrieved(dv);
-  for (std::size_t b = 0; b < batch; ++b) {
-    for (std::size_t h = 0; h < hv; ++h) {
-      float *head_state = state.data() + (b * hv + h) * dk * dv;
-      const std::size_t key_head = h / (hv / hk);
-      for (std::size_t t = 0; t < sequence; ++t) {
-        const std::size_t token = b * sequence + t;
-        const float *token_key = key.AsFloat() + (token * hk + key_head) * dk;
-        const float *token_value = value.AsFloat() + (token * hv + h) * dv;
-        if (decay != nullptr) {
-          if (test_case.decay_per_dimension) {
-            for (std::size_t i = 0; i < dk; ++i) {
-              const float gate = std::exp(decay->AsFloat()[(token * hv + h) * dk + i]);
-              for (std::size_t j = 0; j < dv; ++j) {
-                head_state[i * dv + j] *= gate;
-              }
-            }
-          } else {
-            const float gate = std::exp(decay->AsFloat()[token * hv + h]);
-            for (std::size_t i = 0; i < dk * dv; ++i) {
-              head_state[i] *= gate;
-            }
-          }
-        }
-        const float *update = token_value;
-        if (beta != nullptr) {
-          std::fill(retrieved.begin(), retrieved.end(), 0.0f);
-          for (std::size_t i = 0; i < dk; ++i) {
-            for (std::size_t j = 0; j < dv; ++j) {
-              retrieved[j] += token_key[i] * head_state[i * dv + j];
-            }
-          }
-          const float rate = beta->AsFloat()[test_case.beta_shared ? token : token * hv + h];
-          for (std::size_t j = 0; j < dv; ++j) {
-            retrieved[j] = rate * (token_value[j] - retrieved[j]);
-          }
-          update = retrieved.data();
-        }
-        for (std::size_t i = 0; i < dk; ++i) {
-          for (std::size_t j = 0; j < dv; ++j) {
-            head_state[i * dv + j] += token_key[i] * update[j];
-          }
-        }
-        const std::size_t first_query = hq >= hv ? h * (hq / hv) : h / (hv / hq);
-        const std::size_t output_count = hq >= hv ? hq / hv : 1;
-        const std::size_t first_output = hq >= hv ? first_query : h;
-        for (std::size_t o = 0; o < output_count; ++o) {
-          const float *token_query = query.AsFloat() + (token * hq + first_query + o) * dk;
-          float *token_output = output.data() + (token * output_heads + first_output + o) * dv;
-          for (std::size_t j = 0; j < dv; ++j) {
-            token_output[j] = 0.0f;
-            for (std::size_t i = 0; i < dk; ++i) {
-              token_output[j] += token_query[i] * head_state[i * dv + j];
-            }
-          }
-        }
-      }
-    }
-  }
-  return {Tensor::FromFloat("output",
-                            {test_case.batch, test_case.sequence,
-                             static_cast<std::int64_t>(output_heads * test_case.value_head_size)},
-                            output),
-          Tensor::FromFloat("present_state",
-                            {test_case.batch, test_case.key_value_heads, test_case.key_head_size,
-                             test_case.value_head_size},
-                            state)};
+  NaiveMicrosoftLinearAttentionKernel::Attributes attributes;
+  attributes.update_rule = test_case.rule;
+  attributes.scale = 1.0f;
+  attributes.query_heads = test_case.query_heads;
+  attributes.key_value_heads = test_case.key_value_heads;
+  const KernelContext ctx{OpsetId(kMicrosoftDomain, 1)};
+  const NaiveMicrosoftLinearAttentionKernel kernel{ctx};
+  auto result = kernel(query, key, value, attributes, past, decay, beta);
+  return {std::move(result.output), std::move(result.present_state)};
 }
 
 std::vector<Tensor> OnnxReference(const LinearAttentionCase &test_case, const Tensor &query,
