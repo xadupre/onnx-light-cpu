@@ -106,24 +106,19 @@ void AttentionScaleFloat32_AVX2_FMA(float *values, float factor, std::size_t cou
 bool AttentionApplyAdditiveMaskFloat32_AVX2_FMA(float *scores, const float *mask,
                                                 std::size_t count) {
   const __m256 negative_infinity = _mm256_set1_ps(-std::numeric_limits<float>::infinity());
-  const __m256 lowest = _mm256_set1_ps(std::numeric_limits<float>::lowest());
   bool any_valid = false;
   std::size_t index = 0;
   for (; index + 8 <= count; index += 8) {
     const __m256 bias = _mm256_loadu_ps(mask + index);
     const __m256 not_negative_infinity = _mm256_cmp_ps(bias, negative_infinity, _CMP_NEQ_UQ);
-    const __m256 not_lowest = _mm256_cmp_ps(bias, lowest, _CMP_NEQ_UQ);
-    const __m256 valid = _mm256_and_ps(not_negative_infinity, not_lowest);
-    any_valid = any_valid || (_mm256_movemask_ps(valid) != 0);
+    any_valid = any_valid || (_mm256_movemask_ps(not_negative_infinity) != 0);
     _mm256_storeu_ps(scores + index, _mm256_add_ps(_mm256_loadu_ps(scores + index), bias));
   }
   if (index < count) {
     const __m256i tail = TailMask(count - index);
     const __m256 bias = _mm256_maskload_ps(mask + index, tail);
     const __m256 not_negative_infinity = _mm256_cmp_ps(bias, negative_infinity, _CMP_NEQ_UQ);
-    const __m256 not_lowest = _mm256_cmp_ps(bias, lowest, _CMP_NEQ_UQ);
-    const __m256 valid =
-        _mm256_and_ps(_mm256_castsi256_ps(tail), _mm256_and_ps(not_negative_infinity, not_lowest));
+    const __m256 valid = _mm256_and_ps(_mm256_castsi256_ps(tail), not_negative_infinity);
     any_valid = any_valid || (_mm256_movemask_ps(valid) != 0);
     const __m256 updated = _mm256_add_ps(_mm256_maskload_ps(scores + index, tail), bias);
     _mm256_maskstore_ps(scores + index, tail, updated);
