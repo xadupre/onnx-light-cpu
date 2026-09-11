@@ -228,11 +228,6 @@ register_kernels()
 sessions = {label: make_session(tp) for label, (tp, _) in DTYPES.items()}
 
 accelerated_kernel_name = registered_kernel_names()["Gemm"]
-# onnx-light-cpu kernels record their name on every run (a mutex per call);
-# only the accelerated curves would pay that cost, so disable recording to keep
-# the timings fair. Recording is briefly re-enabled below to verify the exact
-# implementation used for every benchmark shape and dtype.
-set_kernel_usage_recording(False)
 
 
 # %%
@@ -264,13 +259,11 @@ for shape_label, M, N, K in SHAPES:
             return session.run(None, {"A": a, "B": b})[0]
 
         set_kernel_usage_recording(True)
-        try:
-            clear_used_kernel_names()
-            run()
-            kernel_names = used_kernel_names()
-            assert accelerated_kernel_name in kernel_names, (label, shape_label, kernel_names)
-        finally:
-            set_kernel_usage_recording(False)
+        clear_used_kernel_names()
+        run()
+        kernel_names = used_kernel_names()
+        assert accelerated_kernel_name in kernel_names, (label, shape_label, kernel_names)
+        set_kernel_usage_recording(False)
         elapsed = measure(run, args.repeat, args.warmup, args.max_repeat_time)
         results[label].append(elapsed)
         print(f"  {label:<9} | onnx-light-cpu={elapsed * 1e6:10.2f} us")

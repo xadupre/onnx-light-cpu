@@ -198,13 +198,6 @@ def run_light(a, b):
 
 accelerated_kernel_name = registered_kernel_names()["Gemm"]
 
-# onnx-light-cpu kernels record their name on every run (a mutex per call);
-# only the accelerated curve would pay that cost, so disable recording to keep
-# the timings fair. Recording is briefly re-enabled below to verify the exact
-# implementation used for every benchmark size.
-set_kernel_usage_recording(False)
-
-
 # %%
 # Run the rest of the benchmark
 # -------------------------------
@@ -228,13 +221,11 @@ def inputs():
 
 for size, a, b in inputs():
     set_kernel_usage_recording(True)
-    try:
-        clear_used_kernel_names()
-        run_light(a, b)
-        accelerated_kernel_names = used_kernel_names()
-        assert accelerated_kernel_name in accelerated_kernel_names, accelerated_kernel_names
-    finally:
-        set_kernel_usage_recording(False)
+    clear_used_kernel_names()
+    run_light(a, b)
+    accelerated_kernel_names = used_kernel_names()
+    assert accelerated_kernel_name in accelerated_kernel_names, accelerated_kernel_names
+    set_kernel_usage_recording(False)
     rows_by_size[size][2] = measure(
         lambda a=a, b=b: run_light(a, b),
         args.repeat,

@@ -138,12 +138,10 @@ The names can be inspected from Python:
     registered_kernel_names()  # {'Abs': 'onnx_light_cpu::Abs', 'Exp': ...}
     registered_kernels()       # (RegisteredKernel(domain='ai.onnx', op_type='Abs', ...), ...)
 
-    clear_used_kernel_names()
     set_kernel_usage_recording(True)
-    try:
-        sess.run(None, feeds)  # run a model containing e.g. an Abs node
-    finally:
-        set_kernel_usage_recording(False)
+    clear_used_kernel_names()
+    sess.run(None, feeds)  # run a model containing e.g. an Abs node
+    set_kernel_usage_recording(False)
     used_kernel_names()       # ['onnx_light_cpu::Abs', ...]
 
 Retrieval returns an independent snapshot without consuming the log. Recording,

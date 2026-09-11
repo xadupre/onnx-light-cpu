@@ -187,12 +187,10 @@ print(
 # by the library-qualified name it records when it runs) rather than
 # onnx-light's built-in kernel.
 set_kernel_usage_recording(True)
-try:
-    clear_used_kernel_names()
-    light_session.run(None, {"X": np.zeros(1, dtype=np.float32)})
-    assert used_kernel_names() == ["onnx_light_cpu::Abs"], used_kernel_names()
-finally:
-    set_kernel_usage_recording(False)
+clear_used_kernel_names()
+light_session.run(None, {"X": np.zeros(1, dtype=np.float32)})
+assert used_kernel_names() == ["onnx_light_cpu::Abs"], used_kernel_names()
+set_kernel_usage_recording(False)
 
 # Verify the two lifetime domains directly. The NumPy input must remain a
 # zero-copy borrowed tensor and consume no ExecutionArena slot, while the
@@ -220,11 +218,6 @@ print(
     "verified onnx-light arenas: distinct ExecutionArena/IOArena, "
     f"IO buffer reused at 0x{probe_address:x}; NumPy input is zero-copy"
 )
-
-# Usage recording is diagnostic instrumentation, not part of inference. It
-# takes a mutex and appends to a process-wide log on every invocation, so leave
-# it out of the timed region after confirming the expected kernel was selected.
-set_kernel_usage_recording(False)
 
 
 def run_light(inp):
@@ -283,12 +276,10 @@ benchmark_phase(np.abs, 1, validate=False)
 benchmark_phase(run_light, 3)
 
 set_kernel_usage_recording(True)
-try:
-    clear_used_kernel_names()
-    run_light(np.zeros(1, dtype=np.float32))
-    assert used_kernel_names() == ["onnx_light_cpu::Abs"], used_kernel_names()
-finally:
-    set_kernel_usage_recording(False)
+clear_used_kernel_names()
+run_light(np.zeros(1, dtype=np.float32))
+assert used_kernel_names() == ["onnx_light_cpu::Abs"], used_kernel_names()
+set_kernel_usage_recording(False)
 
 benchmark_phase(lambda inp: alone_session.run(None, {"X": inp})[0], 2)
 
