@@ -11,6 +11,53 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  fallback_isa:
+    name: fallback ISA (${{ matrix.simd }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        simd: [AUTO, AVX2]
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install CPU emulator
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-user
+
+      - name: Build baseline-safe kernels and focused tests
+        run: |
+          cmake -S . -B build-fallback \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_FLAGS=-march=x86-64 \
+            -DONNX_LIGHT_CPU_MAX_SIMD_LEVEL=${{ matrix.simd }} \
+            -DONNX_LIGHT_CPU_BUILD_TESTS=ON \
+            -DONNX_LIGHT_CPU_BUILD_PYTHON=OFF \
+            -DONNX_LIGHT_CPU_WITH_ONNX_LIGHT=OFF
+          cmake --build build-fallback -j2 --target \
+            test_simd_level test_abs_kernel test_not_kernel \
+            test_exp_log_kernel test_binary_arithmetic_kernel \
+            test_binary_integer_kernel test_gemm_kernel test_compute_arithmetic_profile
+
+      - name: Exercise SSE2 and AVX fallbacks without AVX2 exposure
+        run: |
+          for cpu in Opteron_G1 SandyBridge; do
+            if [ "$cpu" = Opteron_G1 ]; then
+              export ONNX_LIGHT_CPU_TEST_EXPECT_SIMD_LEVEL=SSE2
+            else
+              export ONNX_LIGHT_CPU_TEST_EXPECT_SIMD_LEVEL=AVX
+            fi
+            for test in simd_level abs_kernel not_kernel exp_log_kernel \
+                        binary_arithmetic_kernel binary_integer_kernel \
+                        gemm_kernel compute_arithmetic_profile; do
+              qemu-x86_64 -cpu "$cpu" "./build-fallback/test_${test}"
+            done
+          done
+
   standalone_inference:
     name: standalone inference (Linux)
     runs-on: ubuntu-latest

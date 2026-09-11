@@ -5,7 +5,7 @@
 // Native AVX-512FP16 register-resident FP16 arithmetic throughput kernel
 // (Processor Profile PR03). Compiled with an extra -mavx512fp16 (see the
 // per-file COMPILE_OPTIONS override in CMakeLists.txt) even though the rest
-// of onnx_light_cpu keeps the project's baseline ONNX_LIGHT_CPU_SIMD_FLAGS.
+// of onnx_light_cpu keeps the compiler's baseline ISA.
 //
 // Unlike the FLOAT16 GEMM micro-kernel (which widens to float32 before
 // accumulating so results match the reference kernel), this benchmark

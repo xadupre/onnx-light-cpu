@@ -6,7 +6,7 @@
 // kernel (Processor Profile PR03). Compiled with an extra
 // -mavx512f;-mavx512bw;-mavx512bf16 (see the per-file COMPILE_OPTIONS
 // override in CMakeLists.txt) even though the rest of onnx_light_cpu keeps
-// the project's baseline ONNX_LIGHT_CPU_SIMD_FLAGS.
+// the compiler's baseline ISA.
 //
 // Every operand and accumulator stays in a ZMM register for the whole timed
 // chain of ``vdpbf16ps`` reductions.

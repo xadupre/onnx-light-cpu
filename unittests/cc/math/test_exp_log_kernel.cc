@@ -142,6 +142,10 @@ TEST(ExpFloat32, EmptyInput) {
 
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
 TEST(SigmoidFloat32AVX2FMA, HandlesVectorTailAndSpecialValues) {
+  if (onnx_light_cpu::DetectSimdLevel() < onnx_light_cpu::SimdLevel::kAVX2 ||
+      !onnx_light_cpu::CpuSupportsFma()) {
+    GTEST_SKIP() << "AVX2+FMA is unavailable";
+  }
   std::vector<float> values = {-10.0f,
                                -3.0f,
                                -1.0f,
@@ -168,6 +172,10 @@ TEST(SigmoidFloat32AVX2FMA, HandlesVectorTailAndSpecialValues) {
 }
 
 TEST(SoftmaxFloat32AVX2FMA, MatchesStableReferenceAcrossVectorTail) {
+  if (onnx_light_cpu::DetectSimdLevel() < onnx_light_cpu::SimdLevel::kAVX2 ||
+      !onnx_light_cpu::CpuSupportsFma()) {
+    GTEST_SKIP() << "AVX2+FMA is unavailable";
+  }
   constexpr std::size_t rows = 3;
   constexpr std::size_t columns = 13;
   std::vector<float> input(rows * columns);

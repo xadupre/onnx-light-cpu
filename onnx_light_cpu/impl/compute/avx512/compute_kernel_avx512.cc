@@ -5,7 +5,7 @@
 // Native AVX-512F register-resident FP32/FP64 arithmetic throughput kernels
 // (Processor Profile PR03). Compiled with an extra -mavx512f (see the
 // per-file COMPILE_OPTIONS override in CMakeLists.txt) even though the rest
-// of onnx_light_cpu keeps the project's baseline ONNX_LIGHT_CPU_SIMD_FLAGS.
+// of onnx_light_cpu keeps the compiler's baseline ISA.
 //
 // Every accumulator and operand stays in a ZMM register for the whole timed
 // chain: this is a compute kernel, not a memory-bandwidth benchmark.
