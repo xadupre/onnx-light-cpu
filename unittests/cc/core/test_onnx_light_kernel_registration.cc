@@ -451,7 +451,7 @@ TEST(KernelRegistration, MicrosoftImplementationPolicySelectsOneCompleteFamily) 
                 {"BiasGelu", "onnx_light_cpu::NaiveBiasGelu"},
                 {"CDist", "onnx_light_cpu::NaiveCDist"},
                 {"GroupQueryAttention", "onnx_light_cpu::NaiveGroupQueryAttention"},
-                {"LinearAttention", "onnx_light_cpu::MicrosoftLinearAttention"},
+                {"LinearAttention", "onnx_light_cpu::NaiveMicrosoftLinearAttention"},
                 {"SkipSimplifiedLayerNormalization",
                  "onnx_light_cpu::NaiveSkipSimplifiedLayerNormalization"}}));
   EXPECT_EQ(microsoft_names(onnx_light_cpu::CollectRegisteredKernels()),
