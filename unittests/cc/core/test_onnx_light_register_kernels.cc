@@ -149,7 +149,7 @@ TEST(OnnxLightRegisterKernels, SessionRegistrationIsIsolatedAndReplaceable) {
   node.set_op_type("Abs");
   node.add_input("x");
   node.add_output("y");
-  selected.custom_kernels().at("ai.onnx:Abs")(node, selected);
+  EXPECT_NO_THROW(rt_ns::RunNode(node, selected));
   EXPECT_TRUE(sentinel_ran);
 
   ASSERT_TRUE(onnx_light_cpu::RegisterKernelForSession(selected, "", "Abs"));
