@@ -5,7 +5,6 @@
 #include "onnx_light_cpu/kernels/com_microsoft/naive_linear_attention_kernel.h"
 
 #include "onnx_light_cpu/kernels/kernel_registration.h"
-#include "onnx_light_cpu/kernels/kernel_usage.h"
 #include "onnx_light_cpu/schemas/com_microsoft/op_schema.h"
 
 #include "onnx_core/runtime/kernels/node_helpers.h"
@@ -95,7 +94,7 @@ LinearAttentionResult NaiveMicrosoftLinearAttentionKernel::operator()(
 }
 
 void NaiveMicrosoftLinearAttentionKernel::Run(RuntimeContext &rt) {
-  RecordKernelUsage(kName);
+  rt.RecordKernelUsage(kName);
   const auto &node = *node_;
   if (node.input_size() < 3 || node.input_size() > 6 || node.output_size() != 2 ||
       node.output(0).empty() || node.output(1).empty()) {

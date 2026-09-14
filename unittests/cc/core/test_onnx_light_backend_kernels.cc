@@ -220,11 +220,13 @@ void CompareTensor(const std::string &case_name, const Tensor &actual, const Ten
 // (benchmark cases) only the output count is checked -- benchmark inputs are
 // randomly drawn (e.g. negative values for ``Log`` produce NaN), so they are
 // executed for timing coverage rather than numeric comparison.
-void RunCaseThroughRuntime(const TestCase &tc, bool compare, std::vector<std::string> &failures) {
+void RunCaseThroughRuntime(const TestCase &tc, bool compare, std::vector<std::string> &failures,
+                           std::vector<std::string> *used = nullptr) {
   const ModelProto &model = tc.model();
   const GraphProto &graph = model.ref_graph();
   for (const DataSet &ds : tc.data_sets()) {
     RuntimeContext rt(KernelContext(DefaultOpset(DefaultModelOpsetVersion(model))));
+    rt.set_kernel_usage_enabled(used != nullptr);
     RegisterModelFunctions(model, rt);
 
     std::vector<std::pair<std::string, Tensor>> bindings;
@@ -235,6 +237,10 @@ void RunCaseThroughRuntime(const TestCase &tc, bool compare, std::vector<std::st
 
     SubgraphSession session(rt, graph);
     const Tensors outputs = session.Run(std::move(bindings), rt);
+    if (used != nullptr) {
+      const auto names = rt.GetKernelUsage();
+      used->insert(used->end(), names.begin(), names.end());
+    }
 
     if (!ds.expected_outputs_generated) {
       if (compare) {
@@ -263,7 +269,8 @@ std::vector<std::string>
 RunCpuBackendCases(const std::string &op_type, core::backend_test::TestMode mode,
                    const std::string &case_name = {},
                    onnx_light_cpu::MicrosoftKernelImplementation microsoft_implementation =
-                       onnx_light_cpu::MicrosoftKernelImplementation::OPTIMIZED) {
+                       onnx_light_cpu::MicrosoftKernelImplementation::OPTIMIZED,
+                   std::vector<std::string> *used = nullptr) {
   onnx_light_cpu::backend_test::RegisterCpuKernelBackendTestCases();
   onnx_light_cpu::RegisterAllKernels(microsoft_implementation);
 
@@ -278,7 +285,7 @@ RunCpuBackendCases(const std::string &op_type, core::backend_test::TestMode mode
     TestCaseUnloadGuard unload_guard(tc);
     ++cpu_cases;
     try {
-      RunCaseThroughRuntime(tc, compare, failures);
+      RunCaseThroughRuntime(tc, compare, failures, used);
     } catch (const std::exception &e) {
       failures.push_back(tc.name + ": " + e.what());
     }
@@ -331,11 +338,10 @@ TEST(OnnxLightBackendKernels, LinearAttentionPoliciesRunIndependentMicrosoftKern
   using onnx_light_cpu::MicrosoftKernelImplementation;
   for (const auto policy :
        {MicrosoftKernelImplementation::NAIVE, MicrosoftKernelImplementation::OPTIMIZED}) {
-    onnx_light_cpu::ClearUsedKernelNames();
-    const auto failures =
-        RunCpuBackendCases("LinearAttention", core::backend_test::TestMode::TEST, {}, policy);
+    std::vector<std::string> used;
+    const auto failures = RunCpuBackendCases("LinearAttention", core::backend_test::TestMode::TEST,
+                                             {}, policy, &used);
     EXPECT_TRUE(failures.empty()) << Describe(failures);
-    const auto used = onnx_light_cpu::UsedKernelNames();
     const std::string naive = "onnx_light_cpu::NaiveMicrosoftLinearAttention";
     const std::string optimized = "onnx_light_cpu::MicrosoftLinearAttention";
     const bool is_naive = policy == MicrosoftKernelImplementation::NAIVE;

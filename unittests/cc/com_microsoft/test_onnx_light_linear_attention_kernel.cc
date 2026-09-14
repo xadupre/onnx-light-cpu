@@ -4,7 +4,6 @@
 
 #include "onnx_light_cpu/kernels/com_microsoft/linear_attention_kernel.h"
 #include "onnx_light_cpu/kernels/com_microsoft/naive_linear_attention_kernel.h"
-#include "onnx_light_cpu/kernels/kernel_usage.h"
 #include "onnx_light_cpu/kernels/register_kernels.h"
 
 #include "onnx_core/runtime/kernels/cast_helper.h"
@@ -117,16 +116,16 @@ TEST(MicrosoftLinearAttentionKernel, NaiveAndDefaultDispatchAreIndependent) {
   ASSERT_NE(dynamic_cast<MicrosoftLinearAttentionKernel *>(optimized.get()), nullptr);
   onnx_light_cpu::RegisterKernelForSession(runtime, "com.microsoft", "LinearAttention", true,
                                            MicrosoftKernelImplementation::NAIVE);
-  onnx_light_cpu::ClearUsedKernelNames();
+  runtime.set_kernel_usage_enabled(true);
   runtime.custom_kernels().at("com.microsoft:LinearAttention")(node, runtime);
-  EXPECT_EQ(onnx_light_cpu::UsedKernelNames(),
+  EXPECT_EQ(runtime.GetKernelUsage(),
             (std::vector<std::string>{NaiveMicrosoftLinearAttentionKernel::kName}));
   const Tensor reference_output = runtime.Get("output");
   const Tensor reference_state = runtime.Get("present_state");
 
-  onnx_light_cpu::ClearUsedKernelNames();
+  runtime.ClearKernelUsage();
   optimized->Run(runtime);
-  EXPECT_EQ(onnx_light_cpu::UsedKernelNames(),
+  EXPECT_EQ(runtime.GetKernelUsage(),
             (std::vector<std::string>{MicrosoftLinearAttentionKernel::kName}));
   ExpectParity(runtime.Get("output"), reference_output);
   ExpectParity(runtime.Get("present_state"), reference_state);
