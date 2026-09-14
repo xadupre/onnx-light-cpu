@@ -125,7 +125,7 @@ TEST(OnnxLightRegisterKernels, SessionPlansReuseOnlyMatchingMetadata) {
 
 TEST(OnnxLightRegisterKernels, SessionPlanCopiesOwnNodesAndReleaseWithCallbacks) {
   auto counts = std::make_shared<PreparationCounts>();
-  rt_ns::CustomKernelFn resolved;
+  rt_ns::NodeKernelFn resolved;
   ONNX_LIGHT_NAMESPACE::NodeProto saved_node;
   {
     rt_ns::RuntimeContext runtime(rt_ns::KernelContext(rt_ns::DefaultOpset(18)));
@@ -137,19 +137,19 @@ TEST(OnnxLightRegisterKernels, SessionPlanCopiesOwnNodesAndReleaseWithCallbacks)
     node.add_output("y");
     saved_node.CopyFrom(node);
     resolved = runtime.custom_kernels().at("ai.onnx:Copy");
-    resolved(node, runtime);
+    resolved(node, runtime)->Run(runtime);
     EXPECT_EQ(counts->plans, 1);
     EXPECT_EQ(counts->live, 1);
 
     runtime.RegisterCustomKernel("", "Copy", PreparedCopyCallback(counts));
-    runtime.custom_kernels().at("ai.onnx:Copy")(node, runtime);
+    runtime.custom_kernels().at("ai.onnx:Copy")(node, runtime)->Run(runtime);
     EXPECT_EQ(counts->plans, 2);
     EXPECT_EQ(counts->live, 2);
   }
   EXPECT_EQ(counts->live, 1);
   rt_ns::RuntimeContext next(rt_ns::KernelContext(rt_ns::DefaultOpset(18)));
   next.Set("x", rt_ns::Tensor::FromFloat("x", {1}, {7.0f}));
-  resolved(saved_node, next);
+  resolved(saved_node, next)->Run(next);
   EXPECT_EQ(next.Get("y").AsFloat()[0], 7.0f);
   EXPECT_EQ(counts->plans, 2);
   resolved = {};

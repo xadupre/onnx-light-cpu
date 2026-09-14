@@ -117,7 +117,7 @@ TEST(MicrosoftLinearAttentionKernel, NaiveAndDefaultDispatchAreIndependent) {
   onnx_light_cpu::RegisterKernelForSession(runtime, "com.microsoft", "LinearAttention", true,
                                            MicrosoftKernelImplementation::NAIVE);
   runtime.set_kernel_usage_enabled(true);
-  runtime.custom_kernels().at("com.microsoft:LinearAttention")(node, runtime);
+  runtime.custom_kernels().at("com.microsoft:LinearAttention")(node, runtime)->Run(runtime);
   EXPECT_EQ(runtime.GetKernelUsage(),
             (std::vector<std::string>{NaiveMicrosoftLinearAttentionKernel::kName}));
   const Tensor reference_output = runtime.Get("output");
