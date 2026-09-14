@@ -1840,14 +1840,15 @@ TEST(GemmHalf, Float16AlgorithmsDoNotWidenOperands) {
   CheckHalfNoExpandedOperand(false, 512, 1, 256, 501); // skinny-N GEMV
   CheckHalfNoExpandedOperand(false, 1, 512, 256, 511); // skinny-M GEMV
   CheckHalfNoExpandedOperand(false, 8, 2, 49152, 521); // split-K
-  CheckHalfNoExpandedOperand(false, 8, 768, 512, 531); // general blocked
+  // Exceed the maximum 512-element K panel even with SSE2 blocking.
+  CheckHalfNoExpandedOperand(false, 8, 768, 1024, 531); // general blocked
 }
 
 TEST(GemmHalf, BFloat16AlgorithmsDoNotWidenOperands) {
-  CheckHalfNoExpandedOperand(true, 512, 1, 256, 541); // skinny-N GEMV
-  CheckHalfNoExpandedOperand(true, 1, 512, 256, 551); // skinny-M GEMV
-  CheckHalfNoExpandedOperand(true, 8, 2, 49152, 561); // split-K
-  CheckHalfNoExpandedOperand(true, 8, 768, 512, 571); // general blocked
+  CheckHalfNoExpandedOperand(true, 512, 1, 256, 541);  // skinny-N GEMV
+  CheckHalfNoExpandedOperand(true, 1, 512, 256, 551);  // skinny-M GEMV
+  CheckHalfNoExpandedOperand(true, 8, 2, 49152, 561);  // split-K
+  CheckHalfNoExpandedOperand(true, 8, 768, 1024, 571); // general blocked
 }
 
 TEST(GemmFloat32, DynamicBUsesBoundedWorkerLocalPacking) {

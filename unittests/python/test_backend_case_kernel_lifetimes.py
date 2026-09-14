@@ -107,6 +107,7 @@ def test_backend_case_kernel_contexts_are_created_only_during_materialization():
             allowed_ranges.append(_function_range(source, "MakeBinaryIoData"))
         if path.name == "linear_attention_cases.cc":
             # These helpers are invoked only by the lazy builder passed to Expect in this file.
+            allowed_ranges.append(_function_range(source, "MicrosoftReference"))
             allowed_ranges.append(_function_range(source, "OnnxReference"))
             allowed_ranges.append(_function_range(source, "MakeLinearAttentionData"))
         for position in _contexts_outside_lambdas(source):

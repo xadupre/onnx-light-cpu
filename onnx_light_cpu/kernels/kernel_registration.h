@@ -6,6 +6,7 @@
 
 #include "onnx_core/runtime/kernels/kernel_dispatch_table.h"
 #include "onnx_core/runtime/memory/simple_tensor.h"
+#include "onnx_core/runtime/runtime_context.h"
 #include "onnx_core/symbolic/sym_tensor.h"
 
 #include <cstdint>
@@ -61,6 +62,15 @@ struct KernelFactoryRegistration {
   KernelRegistration info;
   ONNX_LIGHT_NAMESPACE::core::runtime::NodeKernelFn factory;
 };
+
+namespace detail {
+
+/// Adapts a factory to a session-owned callback with shared, synchronized
+/// prepared kernels. Callback copies retain the same cache.
+ONNX_LIGHT_NAMESPACE::core::runtime::CustomKernelFn
+AsSessionKernel(ONNX_LIGHT_NAMESPACE::core::runtime::NodeKernelFn factory);
+
+} // namespace detail
 
 /// RAII scope bounding one kernel-registration pass.
 ///

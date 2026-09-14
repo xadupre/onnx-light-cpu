@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "onnx_light_cpu/impl/simd_level.h"
+
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -11,6 +13,15 @@
 #include <vector>
 
 namespace onnx_light_cpu {
+
+namespace detail {
+
+using AttentionExpKernel = void (*)(const float *, float *, std::size_t);
+
+/// Select using explicit CPU features so unsupported feature combinations can be tested.
+AttentionExpKernel SelectAttentionExpKernel(SimdLevel simd, bool has_fma);
+
+} // namespace detail
 
 /// Layout of the ``Q``/``K``/``V``/``Y`` tensors of an ``ai.onnx::Attention``
 /// invocation.

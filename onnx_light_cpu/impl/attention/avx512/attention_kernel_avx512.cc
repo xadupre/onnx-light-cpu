@@ -24,20 +24,17 @@ __mmask16 TailMask(std::size_t count) {
 
 bool AttentionApplyAdditiveMaskFloat32_AVX512(float *scores, const float *mask, std::size_t count) {
   const __m512 negative_infinity = _mm512_set1_ps(-std::numeric_limits<float>::infinity());
-  const __m512 lowest = _mm512_set1_ps(std::numeric_limits<float>::lowest());
   __mmask16 valid = 0;
   std::size_t index = 0;
   for (; index + 16 <= count; index += 16) {
     const __m512 bias = _mm512_loadu_ps(mask + index);
-    valid |= _mm512_cmp_ps_mask(bias, negative_infinity, _CMP_NEQ_UQ) &
-             _mm512_cmp_ps_mask(bias, lowest, _CMP_NEQ_UQ);
+    valid |= _mm512_cmp_ps_mask(bias, negative_infinity, _CMP_NEQ_UQ);
     _mm512_storeu_ps(scores + index, _mm512_add_ps(_mm512_loadu_ps(scores + index), bias));
   }
   if (index < count) {
     const __mmask16 tail = TailMask(count - index);
     const __m512 bias = _mm512_maskz_loadu_ps(tail, mask + index);
-    valid |= tail & _mm512_cmp_ps_mask(bias, negative_infinity, _CMP_NEQ_UQ) &
-             _mm512_cmp_ps_mask(bias, lowest, _CMP_NEQ_UQ);
+    valid |= tail & _mm512_cmp_ps_mask(bias, negative_infinity, _CMP_NEQ_UQ);
     _mm512_mask_storeu_ps(scores + index, tail,
                           _mm512_add_ps(_mm512_maskz_loadu_ps(tail, scores + index), bias));
   }

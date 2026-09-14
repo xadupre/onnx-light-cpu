@@ -39,6 +39,9 @@
 
 #include "onnx_proto/onnx_helper.h"
 
+#include <map>
+#include <memory>
+#include <mutex>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -83,18 +86,67 @@ KernelFactoryRegistration FindFactory(const std::string &domain, const std::stri
                               op_type + "'.");
 }
 
-rt_ns::CustomKernelFn AsSessionKernel(rt_ns::NodeKernelFn factory) {
-  return [factory = std::move(factory)](const ONNX_LIGHT_NAMESPACE::NodeProto &node,
-                                        rt_ns::RuntimeContext &runtime) {
-    std::unique_ptr<rt_ns::KernelBase> kernel = factory(node, runtime);
-    if (kernel == nullptr) {
-      throw std::runtime_error("onnx_light_cpu: kernel factory returned null.");
-    }
-    kernel->Run(runtime);
-  };
-}
+struct PreparedSessionKernel {
+  std::mutex mutex;
+  // KernelBase retains a node pointer. Own its storage independently of the
+  // caller's graph, which may be shorter-lived than a copied callback.
+  ONNX_LIGHT_NAMESPACE::NodeProto node;
+  std::unique_ptr<rt_ns::KernelBase> kernel;
+};
+
+struct SessionKernelCache {
+  using Key = std::tuple<std::string, std::string, int64_t, std::uintptr_t,
+                         ONNX_LIGHT_NAMESPACE::core::symbolic::Device, std::vector<int64_t>>;
+  std::mutex mutex;
+  std::map<Key, std::shared_ptr<PreparedSessionKernel>> kernels;
+};
 
 } // namespace
+
+rt_ns::CustomKernelFn detail::AsSessionKernel(rt_ns::NodeKernelFn factory) {
+  return [factory = std::move(factory), cache = std::make_shared<SessionKernelCache>()](
+             const ONNX_LIGHT_NAMESPACE::NodeProto &node, rt_ns::RuntimeContext &runtime) {
+    std::vector<int64_t> inputs;
+    for (const auto &name : node.input()) {
+      if (name.empty() || !runtime.Has(name)) {
+        inputs.push_back(-1);
+        continue;
+      }
+      const auto &input = runtime.Get(name);
+      inputs.push_back(input.data_type);
+      inputs.push_back(static_cast<int64_t>(input.shape.size()));
+      inputs.insert(inputs.end(), input.shape.begin(), input.shape.end());
+    }
+    const auto &ctx = runtime.kernel_ctx();
+    // Include node contents, not just its address: RunNode callers can reuse
+    // temporary node storage. Tensor values and buffer addresses are not plans'
+    // metadata and must not prevent reuse across feeds.
+    SessionKernelCache::Key key{
+        node.SerializeAsString(), ctx.opset.domain,
+        ctx.opset.version,        reinterpret_cast<std::uintptr_t>(ctx.allocator),
+        runtime.device(),         std::move(inputs)};
+    std::shared_ptr<PreparedSessionKernel> prepared;
+    {
+      std::lock_guard<std::mutex> lock(cache->mutex);
+      auto &slot = cache->kernels[key];
+      if (!slot) {
+        slot = std::make_shared<PreparedSessionKernel>();
+      }
+      prepared = slot;
+    }
+    // Some kernels mutate lazy plan caches during Run. Serialize only this
+    // node/signature, leaving other nodes and signatures free to run in parallel.
+    std::lock_guard<std::mutex> lock(prepared->mutex);
+    if (!prepared->kernel) {
+      prepared->node.CopyFrom(node);
+      prepared->kernel = factory(prepared->node, runtime);
+    }
+    if (!prepared->kernel) {
+      throw std::runtime_error("onnx_light_cpu: kernel factory returned null.");
+    }
+    prepared->kernel->Run(runtime);
+  };
+}
 
 void RegisterMicrosoftKernels(MicrosoftKernelImplementation implementation) {
   KernelRegistrationScope scope;
@@ -178,7 +230,7 @@ bool RegisterKernelForSession(rt_ns::RuntimeContext &session, const std::string 
     return false;
   }
   session.RegisterCustomKernel(entry.info.domain, entry.info.op_type,
-                               AsSessionKernel(std::move(entry.factory)));
+                               detail::AsSessionKernel(std::move(entry.factory)));
   return true;
 }
 
@@ -191,7 +243,7 @@ std::size_t RegisterAllKernelsForSession(rt_ns::RuntimeContext &session, bool re
       continue;
     }
     session.RegisterCustomKernel(entry.info.domain, entry.info.op_type,
-                                 AsSessionKernel(std::move(entry.factory)));
+                                 detail::AsSessionKernel(std::move(entry.factory)));
     ++count;
   }
   return count;

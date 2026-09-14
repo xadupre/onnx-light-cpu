@@ -5,7 +5,7 @@
 // Native AVX-512BF16 Gemm micro-kernel (Roadmap PR07.4). This translation unit
 // is compiled with an extra -mavx512bf16 (see the per-file COMPILE_OPTIONS
 // override in CMakeLists.txt) even though the rest of onnx_light_cpu keeps the
-// project's baseline ONNX_LIGHT_CPU_SIMD_FLAGS, so a single binary can carry
+// compiler's baseline ISA, so a single binary can carry
 // this native BFLOAT16 kernel and still run correctly on CPUs that lack the
 // ISA: the BFLOAT16 GEMM path in gemm_kernel.cc only dispatches here when
 // ``CpuSupportsAvx512Bf16()`` reports the instruction set at runtime, and

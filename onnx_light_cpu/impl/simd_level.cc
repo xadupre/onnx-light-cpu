@@ -6,7 +6,6 @@
 
 #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
 #define ONNX_LIGHT_CPU_X86 1
-#include <immintrin.h>
 #if defined(_MSC_VER)
 #include <intrin.h>
 #else

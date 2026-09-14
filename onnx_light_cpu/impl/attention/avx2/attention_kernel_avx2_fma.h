@@ -38,8 +38,7 @@ void AttentionScaleFloat32_AVX2_FMA(float *values, float factor, std::size_t cou
 /// AVX2+FMA counterpart of AttentionApplyAdditiveMaskFloat32_AVX512: adds
 /// mask[i] to scores[i] for i in [0, count) and returns
 /// whether at least one position remains unmasked, i.e. its resulting bias is
-/// neither -infinity nor std::numeric_limits<float>::lowest() (the
-/// ONNX Attention mask-filter sentinel values).
+/// not -infinity. Finite biases, including -FLT_MAX, remain unmasked.
 bool AttentionApplyAdditiveMaskFloat32_AVX2_FMA(float *scores, const float *mask,
                                                 std::size_t count);
 

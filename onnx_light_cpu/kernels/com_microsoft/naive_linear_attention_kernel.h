@@ -4,7 +4,29 @@
 
 #pragma once
 
+#include "onnx_light_cpu/kernels/attention/linear_attention_shared.h"
+
 namespace onnx_light_cpu {
+
+/// Test-only Microsoft adapter to the concrete onnx-light reference kernel.
+class NaiveMicrosoftLinearAttentionKernel : public ONNX_LIGHT_NAMESPACE::core::runtime::KernelBase {
+public:
+  using ONNX_LIGHT_NAMESPACE::core::runtime::KernelBase::KernelBase;
+  static constexpr const char *kName = "onnx_light_cpu::NaiveMicrosoftLinearAttention";
+
+  using Attributes = LinearAttentionKernelAttributes;
+
+  void Run(ONNX_LIGHT_NAMESPACE::core::runtime::RuntimeContext &rt) override;
+
+  LinearAttentionResult
+  operator()(const ONNX_LIGHT_NAMESPACE::core::runtime::Tensor &query,
+             const ONNX_LIGHT_NAMESPACE::core::runtime::Tensor &key,
+             const ONNX_LIGHT_NAMESPACE::core::runtime::Tensor &value, const Attributes &attributes,
+             const ONNX_LIGHT_NAMESPACE::core::runtime::Tensor *past_state = nullptr,
+             const ONNX_LIGHT_NAMESPACE::core::runtime::Tensor *decay = nullptr,
+             const ONNX_LIGHT_NAMESPACE::core::runtime::Tensor *beta = nullptr,
+             ONNX_LIGHT_NAMESPACE::core::runtime::RuntimeContext *rt = nullptr) const;
+};
 
 void RegisterNaiveMicrosoftLinearAttentionKernel();
 

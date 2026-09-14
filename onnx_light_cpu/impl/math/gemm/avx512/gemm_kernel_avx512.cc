@@ -4,14 +4,14 @@
 //
 // AVX-512 Gemm micro-kernels. This translation unit is compiled with an extra
 // -mavx512f (see the per-file COMPILE_OPTIONS override in CMakeLists.txt)
-// even though the rest of onnx_light_cpu keeps the project's baseline
-// ONNX_LIGHT_CPU_SIMD_FLAGS (AVX2 by default). This lets a single binary
+// even though the rest of onnx_light_cpu keeps the compiler's baseline
+// ISA (SSE2 on x86-64). This lets a single binary
 // carry both an AVX2 and this wider AVX-512 micro-kernel: GemmTileF32/F64 in
 // gemm_kernel.cc pick whichever one matches DetectSimdLevel() at runtime, so
 // a binary built on an AVX-512-capable machine still runs correctly (falling
 // back to AVX2/SSE2/scalar) on a CPU that lacks it.
 //
-// Mirrors the AVX (256-bit) micro-kernels in gemm_kernel.cc one register
+// Mirrors the AVX (256-bit) micro-kernels in gemm_kernel_avx.cc one register
 // width up: a 512-bit vector holds 16 floats / 8 doubles, and every
 // general micro-kernel call processes up to ``kGemmAVX512MR`` (12) rows at
 // once, register blocked over the whole (chunked) K reduction. A dedicated

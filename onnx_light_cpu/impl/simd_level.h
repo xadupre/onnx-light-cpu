@@ -15,7 +15,7 @@ enum class SimdLevel : int {
   kNone = 0,   ///< Scalar fallback (no SIMD).
   kSSE2 = 1,   ///< SSE2 (128-bit).
   kAVX = 2,    ///< AVX (256-bit).
-  kAVX2 = 3,   ///< AVX2 (256-bit with FMA, integer ops).
+  kAVX2 = 3,   ///< AVX2 (256-bit integer ops); FMA is checked separately.
   kAVX512 = 4, ///< AVX-512F (512-bit).
 };
 

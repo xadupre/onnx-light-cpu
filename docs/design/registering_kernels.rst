@@ -61,6 +61,14 @@ The evaluator's runtime context owns that registration and releases it with the
 evaluator. Other evaluators are unchanged. ``register_kernels_for_session``
 provides the equivalent all-kernels operation.
 
+Session-local callbacks retain prepared kernels across runs, including copies
+held by resolved nodes. Preparation is lazy and cached by node contents, input
+presence, types and shapes, opset, device, and allocator; changing only tensor
+values reuses the same kernel. Runs of a shared instance are synchronized to
+protect mutable plans, while different nodes/signatures can execute independently.
+Replacing a registration creates a fresh cache for future resolution; already
+resolved callbacks retain their previous cache until they are destroyed.
+
 The default installs the optimized ``com.microsoft`` family. Tests and
 diagnostic callers can explicitly install the complete scalar reference
 family instead:
@@ -241,6 +249,15 @@ and a production optimized kernel. Add both registrars to the corresponding
 branch of ``RegisterMicrosoftKernels`` and add differential tests covering
 their complete shared contract. Backend ``TEST`` cases generate expectations
 with the naive implementation; ``BENCHMARK`` cases use the optimized one.
+
+For ``com.microsoft::LinearAttention``, the test-only
+``NaiveMicrosoftLinearAttentionKernel`` calls the concrete onnx-light
+``onnx_kernels::kernel::LinearAttention`` reference kernel, not the optimized
+dispatcher. It expands shared query/key heads to the ONNX contract and preserves
+the Microsoft defaults, optional state, decay and beta layouts, and both outputs.
+No attention recurrence is duplicated in the adapter. FLOAT parity uses the
+backend tolerances (``rtol=1e-3``, ``atol=1e-7``); default and global registration
+continue to select ``MicrosoftLinearAttentionKernel``.
 
 For a kernel that only needs to run from Python — for example a quick,
 model-specific override written in NumPy — use ``onnx-light``'s per-evaluator

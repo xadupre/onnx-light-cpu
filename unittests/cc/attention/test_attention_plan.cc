@@ -48,6 +48,46 @@ using onnx_light_cpu::ComputeAttentionFloat16Streaming;
 using onnx_light_cpu::ComputeAttentionFloat32;
 using onnx_light_cpu::ComputeAttentionFloat32Streaming;
 
+TEST(AttentionExp, Avx2WithoutFmaSelectsScalar) {
+  using onnx_light_cpu::SimdLevel;
+  using onnx_light_cpu::detail::SelectAttentionExpKernel;
+  const auto scalar = SelectAttentionExpKernel(SimdLevel::kNone, false);
+  const auto avx2_without_fma = SelectAttentionExpKernel(SimdLevel::kAVX2, false);
+  ASSERT_EQ(avx2_without_fma, scalar);
+  EXPECT_EQ(SelectAttentionExpKernel(SimdLevel::kAVX, true), scalar);
+
+  for (std::size_t count : {0u, 1u, 7u, 8u, 9u, 16u, 17u, 257u}) {
+    SCOPED_TRACE(count);
+    std::vector<float> values(count);
+    for (std::size_t i = 0; i < count; ++i) {
+      values[i] = -static_cast<float>(i) / 8.0f;
+    }
+    const auto input = values;
+    avx2_without_fma(values.data(), values.data(), count);
+    for (std::size_t i = 0; i < count; ++i) {
+      EXPECT_FLOAT_EQ(values[i], std::exp(input[i]));
+    }
+  }
+
+  float masked_score = -std::numeric_limits<float>::infinity();
+  avx2_without_fma(&masked_score, &masked_score, 1);
+  EXPECT_EQ(masked_score, 0.0f);
+}
+
+TEST(AttentionExp, RuntimeSelectionMatchesStdExp) {
+  const auto exp = onnx_light_cpu::detail::SelectAttentionExpKernel(
+      onnx_light_cpu::DetectSimdLevel(), onnx_light_cpu::CpuSupportsFma());
+  std::array<float, 17> values;
+  for (std::size_t i = 0; i < values.size(); ++i) {
+    values[i] = -static_cast<float>(i) / 8.0f;
+  }
+  const auto input = values;
+  exp(values.data(), values.data(), values.size());
+  for (std::size_t i = 0; i < values.size(); ++i) {
+    EXPECT_NEAR(values[i], std::exp(input[i]), 1e-6f);
+  }
+}
+
 std::vector<float> RandomTensor(std::size_t count, std::uint32_t seed) {
   std::mt19937 rng(seed);
   std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
@@ -449,32 +489,83 @@ TEST(ComputeAttentionFloat32, FullyMaskedRowProducesZeroOutput) {
   EXPECT_TRUE(any_nonzero);
 }
 
-TEST(ComputeAttentionFloat32, AdditiveMaskFilterValueProducesZeroForEveryExecutionPath) {
+TEST(ComputeAttentionFloat32, AdditiveMaskExtremesMatchReferenceForEveryExecutionPath) {
   AttentionDescriptor descriptor;
-  constexpr std::size_t batch = 1, heads = 1, kv_len = 17, head_dim = 9;
-  for (const std::int64_t q_len : {2, 16}) {
-    const std::vector<std::int64_t> q_shape = {batch, heads, q_len, head_dim};
-    const std::vector<std::int64_t> kv_shape = {batch, heads, kv_len, head_dim};
-    const std::vector<std::int64_t> mask_shape = {q_len, kv_len};
+  constexpr std::size_t batch = 1, heads = 1, head_dim = 9;
+  const float lowest = std::numeric_limits<float>::lowest();
+  const float neg_inf = -std::numeric_limits<float>::infinity();
+  for (const std::int64_t q_len : {1, 2, 16}) {
+    for (const std::int64_t kv_len : {1, 17, 257}) {
+      SCOPED_TRACE(q_len);
+      SCOPED_TRACE(kv_len);
+      const std::vector<std::int64_t> q_shape = {batch, heads, q_len, head_dim};
+      const std::vector<std::int64_t> kv_shape = {batch, heads, kv_len, head_dim};
+      const std::vector<std::int64_t> mask_shape = {q_len, kv_len};
+      AttentionPlan plan(descriptor, AttentionLayout::kRank4, q_shape, kv_shape, kv_shape,
+                         mask_shape, AttentionMaskKind::kAdditive);
+      const auto q = RandomTensor(q_len * head_dim, 44);
+      const auto k = RandomTensor(kv_len * head_dim, 45);
+      const auto v = RandomTensor(kv_len * head_dim, 46);
+      std::vector<std::vector<float>> masks(6, std::vector<float>(q_len * kv_len, lowest));
+      std::fill(masks[0].begin(), masks[0].end(), neg_inf);
+      for (std::int64_t i = 0; i < q_len; ++i) {
+        for (std::int64_t j = 0; j < kv_len; ++j) {
+          const auto index = i * kv_len + j;
+          masks[2][index] = j % 2 == 0 ? lowest : neg_inf;
+          masks[3][index] = j % 3 == 0 ? 0.0f : (j % 3 == 1 ? lowest : neg_inf);
+          // Exercise transitions between fully masked and finite streaming blocks.
+          masks[4][index] = j < 128 ? neg_inf : lowest;
+          masks[5][index] = j < 128 ? lowest : neg_inf;
+        }
+      }
+      for (std::size_t case_index = 0; case_index < masks.size(); ++case_index) {
+        SCOPED_TRACE(case_index);
+        const auto &mask = masks[case_index];
+        const auto expected =
+            ReferenceAttention(batch, heads, heads, q_len, kv_len, head_dim, head_dim, q, k, v,
+                               plan.scale, false, &mask, nullptr);
+        std::vector<float> streaming_y(q_len * head_dim, std::numeric_limits<float>::quiet_NaN());
+        std::vector<float> materialized_y = streaming_y;
+
+        ComputeAttentionFloat32Streaming(plan, q.data(), k.data(), v.data(), mask.data(),
+                                         streaming_y.data());
+        onnx_light_cpu::ComputeAttentionFloat32Materialized(plan, q.data(), k.data(), v.data(),
+                                                            mask.data(), materialized_y.data());
+
+        ExpectClose(streaming_y, expected);
+        ExpectClose(materialized_y, expected);
+      }
+    }
+  }
+}
+
+TEST(ComputeAttentionFloat32, AdditiveMaskExtremesProduceOnnxProbabilities) {
+  const float lowest = std::numeric_limits<float>::lowest();
+  const float neg_inf = -std::numeric_limits<float>::infinity();
+  const std::int64_t q_shape[] = {1, 1, 4, 1};
+  const std::int64_t kv_shape[] = {1, 1, 3, 1};
+  const std::int64_t mask_shape[] = {4, 3};
+  const std::vector<float> q(4, 0.0f), k(3, 0.0f), v = {2.0f, 4.0f, 12.0f};
+  const std::vector<float> mask = {neg_inf, neg_inf, neg_inf, lowest, lowest, lowest,
+                                   lowest,  neg_inf, lowest,  0.0f,   lowest, neg_inf};
+  const std::vector<float> expected_y = {0.0f, 6.0f, 7.0f, 2.0f};
+  const std::vector<float> expected_probabilities = {0.0f, 0.0f, 0.0f, 1.0f / 3, 1.0f / 3, 1.0f / 3,
+                                                     0.5f, 0.0f, 0.5f, 1.0f,     0.0f,     0.0f};
+  for (const std::int64_t precision : {1, 11}) {
+    SCOPED_TRACE(precision);
+    AttentionDescriptor descriptor;
+    descriptor.softmax_precision = precision;
+    descriptor.has_qk_matmul_output = true;
+    descriptor.qk_matmul_output_mode = 3;
     AttentionPlan plan(descriptor, AttentionLayout::kRank4, q_shape, kv_shape, kv_shape, mask_shape,
                        AttentionMaskKind::kAdditive);
-    const auto q = RandomTensor(batch * heads * q_len * head_dim, 44);
-    const auto k = RandomTensor(batch * heads * kv_len * head_dim, 45);
-    const auto v = RandomTensor(batch * heads * kv_len * head_dim, 46);
-    std::vector<float> mask(q_len * kv_len, std::numeric_limits<float>::lowest());
-    for (std::size_t index = 1; index < mask.size(); index += 2) {
-      mask[index] = -std::numeric_limits<float>::infinity();
-    }
-    std::vector<float> streaming_y(q_len * head_dim, std::numeric_limits<float>::quiet_NaN());
-    std::vector<float> materialized_y = streaming_y;
-
-    ComputeAttentionFloat32Streaming(plan, q.data(), k.data(), v.data(), mask.data(),
-                                     streaming_y.data());
+    std::vector<float> y(expected_y.size()), probabilities(expected_probabilities.size());
     onnx_light_cpu::ComputeAttentionFloat32Materialized(plan, q.data(), k.data(), v.data(),
-                                                        mask.data(), materialized_y.data());
+                                                        mask.data(), y.data(), nullptr, nullptr,
+                                                        nullptr, probabilities.data());
 
-    EXPECT_EQ(streaming_y, std::vector<float>(streaming_y.size(), 0.0f));
-    EXPECT_EQ(materialized_y, std::vector<float>(materialized_y.size(), 0.0f));
+    ExpectClose(y, expected_y);
+    ExpectClose(probabilities, expected_probabilities);
   }
 }
 
