@@ -38,6 +38,9 @@ enum class GemmMicroarchitecture {
   kAmdZen,
 };
 
+/// Returns the highest GEMM ISA supported both at runtime and by compiled GEMM kernels.
+SimdLevel EffectiveGemmSimdLevel();
+
 namespace detail {
 
 GemmAlgorithm SelectGemmAlgorithm(bool trans_a, bool trans_b, std::size_t m, std::size_t n,

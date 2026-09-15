@@ -216,6 +216,34 @@ void GemmMicroKernel_ScalarImpl(std::size_t mr, std::size_t nb, std::size_t K, T
 
 } // namespace
 
+SimdLevel EffectiveGemmSimdLevel() {
+  static const SimdLevel effective_level = [] {
+#if ONNX_LIGHT_CPU_X86
+    const SimdLevel level = DetectSimdLevel();
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
+    if (level >= SimdLevel::kAVX512) {
+      return SimdLevel::kAVX512;
+    }
+#endif
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
+    if (level >= SimdLevel::kAVX2 && CpuSupportsFma()) {
+      return SimdLevel::kAVX2;
+    }
+#endif
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX
+    if (level >= SimdLevel::kAVX) {
+      return SimdLevel::kAVX;
+    }
+#endif
+    if (level >= SimdLevel::kSSE2) {
+      return SimdLevel::kSSE2;
+    }
+#endif
+    return SimdLevel::kNone;
+  }();
+  return effective_level;
+}
+
 // Explicit non-template, external-linkage wrappers so gemm_kernel_avx512.cc (a
 // separate translation unit compiled with -mavx512f) can reuse the scalar
 // tail instead of duplicating the mode-driven combine logic.
@@ -511,7 +539,7 @@ enum class GemmKernelKind { kScalar, kSSE2, kAVX, kAVX2FMA, kAVX512, kNeon, kSve
 
 template <typename T> GemmKernelKind SelectGemmKernelKind() {
 #if ONNX_LIGHT_CPU_X86
-  static const SimdLevel level = DetectSimdLevel();
+  static const SimdLevel level = EffectiveGemmSimdLevel();
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512
   if (level >= SimdLevel::kAVX512) {
     return GemmKernelKind::kAVX512;

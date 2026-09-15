@@ -230,6 +230,30 @@ TEST(GemmPlan, BlockingUsesIsaSpecificRegisterRows) {
             GemmAlgorithm::kSkinnyM);
 }
 
+TEST(GemmPlan, EffectiveIsaMatchesCompiledKernels) {
+#if !defined(__x86_64__) && !defined(_M_X64) && !defined(__i386__) && !defined(_M_IX86)
+  GTEST_SKIP() << "GEMM effective ISA selection is x86-specific.";
+#else
+  using onnx_light_cpu::EffectiveGemmSimdLevel;
+  using onnx_light_cpu::SimdLevel;
+
+  const SimdLevel effective_level = EffectiveGemmSimdLevel();
+  EXPECT_LE(static_cast<int>(effective_level), static_cast<int>(onnx_light_cpu::DetectSimdLevel()));
+
+  const GemmPlan<float> plan(GemmPlanOptions<float>{false, false, 5, 9, 64});
+  const std::size_t expected_lanes = effective_level == SimdLevel::kAVX512 ? 16
+                                     : effective_level >= SimdLevel::kAVX  ? 8
+                                     : effective_level == SimdLevel::kSSE2 ? 4
+                                                                           : 1;
+  EXPECT_EQ(plan.blocking().nr, 2 * expected_lanes);
+
+  if constexpr (ONNX_LIGHT_CPU_MAX_SIMD_LEVEL <= static_cast<int>(SimdLevel::kAVX2)) {
+    EXPECT_LE(static_cast<int>(effective_level), static_cast<int>(SimdLevel::kAVX2));
+    EXPECT_NE(plan.blocking().nr, 32u);
+  }
+#endif
+}
+
 TEST(GemmPlan, SelectsRuntimeVectorLengthAwareArmProfile) {
   using onnx_light_cpu::ArmGemmKernelKind;
   using onnx_light_cpu::ArmSimdLevel;
