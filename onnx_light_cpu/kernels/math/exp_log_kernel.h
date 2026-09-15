@@ -41,8 +41,8 @@ public:
   Configure(const ONNX_LIGHT_NAMESPACE::core::runtime::KernelTuningParameters &parameters) override;
 
   /// Library-qualified name identifying this kernel, recorded through
-  /// :cpp:func:`RecordKernelUsage` on every :cpp:func:`Run` so callers can
-  /// tell the onnx-light-cpu kernel apart from onnx-light's built-in ``Exp``.
+  /// :cpp:func:`RuntimeContext::RecordKernelUsage` on every :cpp:func:`Run` when
+  /// enabled so callers can tell this kernel apart from onnx-light's built-in ``Exp``.
   static constexpr const char *kName = "onnx_light_cpu::Exp";
 
   /// Reads the node's single input, computes the elementwise exponential and
@@ -87,8 +87,8 @@ public:
   Configure(const ONNX_LIGHT_NAMESPACE::core::runtime::KernelTuningParameters &parameters) override;
 
   /// Library-qualified name identifying this kernel, recorded through
-  /// :cpp:func:`RecordKernelUsage` on every :cpp:func:`Run` so callers can
-  /// tell the onnx-light-cpu kernel apart from onnx-light's built-in ``Log``.
+  /// :cpp:func:`RuntimeContext::RecordKernelUsage` on every :cpp:func:`Run` when
+  /// enabled so callers can tell this kernel apart from onnx-light's built-in ``Log``.
   static constexpr const char *kName = "onnx_light_cpu::Log";
 
   /// Reads the node's single input, computes the elementwise natural logarithm

@@ -5,7 +5,6 @@
 #include "onnx_light_cpu/kernels/attention/linear_attention_shared.h"
 
 #include "onnx_light_cpu/impl/math/half_conversion.h"
-#include "onnx_light_cpu/kernels/kernel_usage.h"
 
 #include "onnx_core/runtime/kernels/kernel_dispatch_table.h"
 #include "onnx_core/runtime/kernels/node_helpers.h"
@@ -428,7 +427,7 @@ LinearAttentionResult InvokeLinearAttentionKernel(const LinearAttentionKernelCon
 
 void RunLinearAttentionKernelNode(const LinearAttentionKernelConfig &config,
                                   const ONNX_LIGHT_NAMESPACE::NodeProto &node, RuntimeContext &rt) {
-  RecordKernelUsage(config.kernel_name);
+  rt.RecordKernelUsage(config.kernel_name);
   const bool valid_outputs =
       config.require_present_state
           ? node.output_size() == 2 && !node.output(0).empty() && !node.output(1).empty()

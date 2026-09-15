@@ -494,15 +494,13 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             def ort_run(session=ort, current_feeds=feeds):
                 return session.run(None, current_feeds)
 
-            set_kernel_usage_recording(True)
-            try:
-                clear_used_kernel_names()
-                cpu_outputs = cpu_run()
-                operation_identity = f"onnx_light_cpu::{case['operator']}"
-                if operation_identity not in used_kernel_names():
-                    raise RuntimeError(f"{test_case.name} dispatched {used_kernel_names()}.")
-            finally:
-                set_kernel_usage_recording(False)
+            set_kernel_usage_recording(cpu, True)
+            clear_used_kernel_names(cpu)
+            cpu_outputs = cpu_run()
+            operation_identity = f"onnx_light_cpu::{case['operator']}"
+            if operation_identity not in used_kernel_names(cpu):
+                raise RuntimeError(f"{test_case.name} dispatched {used_kernel_names(cpu)}.")
+            set_kernel_usage_recording(cpu, False)
             ort_outputs = ort_run()
             for actual, expected in zip(cpu_outputs, ort_outputs, strict=True):
                 np.testing.assert_allclose(

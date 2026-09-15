@@ -7,7 +7,6 @@
 #include "onnx_light_cpu/impl/checked_arithmetic.h"
 #include "onnx_light_cpu/impl/com_microsoft/bias_gelu.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
-#include "onnx_light_cpu/kernels/kernel_usage.h"
 #include "onnx_light_cpu/schemas/com_microsoft/op_schema.h"
 
 #include "onnx_core/runtime/kernels/cast_helper.h"
@@ -205,7 +204,7 @@ void BiasGeluKernel::operator()(const Tensor &a, const Tensor &b, Tensor &output
 }
 
 void BiasGeluKernel::Run(RuntimeContext &rt) {
-  RecordKernelUsage(kName);
+  rt.RecordKernelUsage(kName);
   const NodeProto &node = *node_;
   rt_ns::RequireInputCount(node, 2);
   rt_ns::RequireOutputCount(node, 1);

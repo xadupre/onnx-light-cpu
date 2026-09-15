@@ -15,6 +15,7 @@ from ._register import (
     register_backend_test_cases,
     register_kernels,
     registered_kernels,
+    set_kernel_usage_recording,
     used_kernel_names,
 )
 
@@ -72,10 +73,12 @@ def _run_case(kernel_name: str):
 
     def run(model, *inputs):
         session = ReferenceEvaluator(model)
-        clear_used_kernel_names()
+        set_kernel_usage_recording(session, True)
+        clear_used_kernel_names(session)
         outputs = session.run(None, dict(zip(session.input_names, inputs, strict=True)))
-        if kernel_name not in used_kernel_names():
+        if kernel_name not in used_kernel_names(session):
             raise AssertionError(f"expected kernel {kernel_name} did not run")
+        set_kernel_usage_recording(session, False)
         return outputs
 
     return run

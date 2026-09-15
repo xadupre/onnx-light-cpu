@@ -6,7 +6,6 @@
 
 #include "onnx_light_cpu/impl/checked_arithmetic.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
-#include "onnx_light_cpu/kernels/kernel_usage.h"
 
 #include "onnx_core/runtime/kernels/cast_helper.h"
 #include "onnx_core/runtime/kernels/kernel_dispatch_table.h"
@@ -197,7 +196,7 @@ std::vector<double> ReadInput(const Tensor &input) {
 TreeEnsembleKernel::TreeEnsembleKernel(const rt_ns::KernelContext &ctx) : KernelBase(ctx) {}
 
 void TreeEnsembleKernel::Run(RuntimeContext &rt) {
-  RecordKernelUsage(kName);
+  rt.RecordKernelUsage(kName);
   const NodeProto &node = *node_;
   rt_ns::RequireInputCount(node, 1);
   rt_ns::RequireOutputCount(node, 1);

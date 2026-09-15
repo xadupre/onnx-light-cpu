@@ -7,7 +7,6 @@
 #include "onnx_light_cpu/impl/checked_arithmetic.h"
 #include "onnx_light_cpu/impl/logical/logical_kernels.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
-#include "onnx_light_cpu/kernels/kernel_usage.h"
 
 #include "onnx_core/runtime/kernels/kernel_dispatch_table.h"
 #include "onnx_core/runtime/kernels/node_helpers.h"
@@ -148,7 +147,7 @@ void NotKernel::operator()(const Tensor &x, Tensor &output) const {
 }
 
 void NotKernel::Run(RuntimeContext &rt) {
-  RecordKernelUsage(kName);
+  rt.RecordKernelUsage(kName);
   const NodeProto &node = *node_;
   rt_ns::RequireInputCount(node, 1);
   rt_ns::RequireOutputCount(node, 1);

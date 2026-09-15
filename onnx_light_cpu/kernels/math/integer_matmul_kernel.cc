@@ -8,7 +8,6 @@
 #include "onnx_light_cpu/impl/execution.h"
 #include "onnx_light_cpu/impl/math/gemm/vnni/integer_gemm_vnni.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
-#include "onnx_light_cpu/kernels/kernel_usage.h"
 
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2_INTEGER
 #include "onnx_light_cpu/impl/simd_level.h"
@@ -400,7 +399,7 @@ Tensor MatMulIntegerKernel::operator()(const Tensor &a, const Tensor &b, const T
 }
 
 void MatMulIntegerKernel::Run(RuntimeContext &rt) {
-  RecordKernelUsage(kName);
+  rt.RecordKernelUsage(kName);
   const NodeProto &node = *node_;
   rt_ns::RequireMinInputCount(node, 2);
   if (node.input_size() > 4) {
@@ -502,7 +501,7 @@ Tensor QLinearMatMulKernel::operator()(const Tensor &a, const Tensor &a_scale,
 }
 
 void QLinearMatMulKernel::Run(RuntimeContext &rt) {
-  RecordKernelUsage(kName);
+  rt.RecordKernelUsage(kName);
   const NodeProto &node = *node_;
   rt_ns::RequireInputCount(node, 8);
   rt_ns::RequireOutputCount(node, 1);

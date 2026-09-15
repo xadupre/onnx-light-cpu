@@ -34,6 +34,10 @@ NumPy or ``ml_dtypes``, including ``BFLOAT16``.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
+from types import SimpleNamespace
+
 import ml_dtypes
 import numpy as np
 
@@ -52,10 +56,12 @@ from onnx_light_cpu import (
     clear_used_kernel_names,
     has_backend_test_cases,
     register_backend_test_cases,
+    register_kernel_for_session,
     register_kernels,
     registered_kernel_names,
     registered_kernels,
     run_backend_correctness_tests,
+    set_kernel_usage_recording,
     used_kernel_names,
 )
 
@@ -344,9 +350,11 @@ def _cpu_backend(model, *inputs):
     register_kernels()
     session = ReferenceEvaluator(model)
     feeds = dict(zip(session.input_names, inputs, strict=True))
-    clear_used_kernel_names()
+    set_kernel_usage_recording(session, True)
+    clear_used_kernel_names(session)
     outputs = session.run(None, feeds)
-    dispatched = used_kernel_names()
+    dispatched = used_kernel_names(session)
+    set_kernel_usage_recording(session, False)
     expected_kernels = []
     for node in model.graph.node:
         domain = node.domain or "ai.onnx"
@@ -364,6 +372,129 @@ TestCpuBackend = make_test_class(
     include_regex=["^test_cpu_"],
     exclude_regex=["^test_cpu_treeensemble(?:classifier|regressor)_"],
 )
+
+
+class TestKernelUsage(ExtTestCase):
+    @staticmethod
+    def _session(op_type="Abs"):
+        model = helper.make_model(
+            helper.make_graph(
+                [helper.make_node(op_type, ["X"], ["Y"])],
+                "kernel_usage",
+                [helper.make_tensor_value_info("X", TensorProto.FLOAT, [2])],
+                [helper.make_tensor_value_info("Y", TensorProto.FLOAT, [2])],
+            ),
+            opset_imports=[helper.make_opsetid("", 18)],
+        )
+        session = ReferenceEvaluator(model, cpu_execution={"num_threads": 1})
+        register_kernel_for_session(session, "", op_type)
+        return session
+
+    @staticmethod
+    def _run(session):
+        return session.run(None, {"X": np.array([-1, 2], dtype=np.float32)})[0]
+
+    def test_recording_lifecycle_and_snapshot(self):
+        session = self._session()
+        np.testing.assert_array_equal(self._run(session), [1, 2])
+        self.assertEqual(used_kernel_names(session), [])
+
+        set_kernel_usage_recording(session, True)
+        self._run(session)
+        snapshot = used_kernel_names(session)
+        self.assertEqual(snapshot, ["onnx_light_cpu::Abs"])
+        snapshot.append("not a recorded kernel")
+        self.assertEqual(used_kernel_names(session), ["onnx_light_cpu::Abs"])
+
+        clear_used_kernel_names(session)
+        self.assertEqual(used_kernel_names(session), [])
+        self._run(session)
+        self.assertEqual(used_kernel_names(session), ["onnx_light_cpu::Abs"])
+
+        set_kernel_usage_recording(session, False)
+        self._run(session)
+        self.assertEqual(used_kernel_names(session), ["onnx_light_cpu::Abs"])
+        clear_used_kernel_names(session)
+        self._run(session)
+        self.assertEqual(used_kernel_names(session), [])
+        set_kernel_usage_recording(session, True)
+        self._run(session)
+        self.assertEqual(used_kernel_names(session), ["onnx_light_cpu::Abs"])
+
+    def test_independent_sessions_do_not_share_recording_state(self):
+        first = self._session()
+        set_kernel_usage_recording(first, True)
+        self._run(first)
+        second = self._session("Exp")
+        self._run(second)
+        self.assertEqual(used_kernel_names(first), ["onnx_light_cpu::Abs"])
+        self.assertEqual(used_kernel_names(second), [])
+
+        set_kernel_usage_recording(second, True)
+        self._run(second)
+        clear_used_kernel_names(first)
+        set_kernel_usage_recording(first, False)
+        self._run(first)
+        self._run(second)
+        self.assertEqual(used_kernel_names(first), [])
+        self.assertEqual(used_kernel_names(second), ["onnx_light_cpu::Exp"] * 2)
+
+        clear_used_kernel_names(second)
+        set_kernel_usage_recording(first, True)
+        self._run(first)
+        self.assertEqual(used_kernel_names(first), ["onnx_light_cpu::Abs"])
+        self.assertEqual(used_kernel_names(second), [])
+
+    def test_concurrent_sessions_clear_only_their_own_log(self):
+        first = self._session()
+        second = self._session("Exp")
+        set_kernel_usage_recording(first, True)
+        set_kernel_usage_recording(second, True)
+        barrier = Barrier(2, timeout=30)
+
+        def run(session, clear):
+            for index in range(32):
+                barrier.wait()
+                self._run(session)
+                if clear and index == 15:
+                    clear_used_kernel_names(session)
+            return used_kernel_names(session)
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            first_result = executor.submit(run, first, True)
+            second_result = executor.submit(run, second, False)
+            self.assertEqual(first_result.result(), ["onnx_light_cpu::Abs"] * 16)
+            self.assertEqual(second_result.result(), ["onnx_light_cpu::Exp"] * 32)
+
+    def test_recording_retains_first_1024_invocations_until_clear(self):
+        session = self._session()
+        set_kernel_usage_recording(session, True)
+        for _ in range(1030):
+            self._run(session)
+        self.assertEqual(used_kernel_names(session), ["onnx_light_cpu::Abs"] * 1024)
+        clear_used_kernel_names(session)
+        self._run(session)
+        self.assertEqual(used_kernel_names(session), ["onnx_light_cpu::Abs"])
+
+    def test_recording_requires_an_explicit_valid_session(self):
+        for function in (used_kernel_names, clear_used_kernel_names):
+            with self.subTest(function=function.__name__), self.assertRaises(TypeError):
+                function()
+        with self.assertRaises(TypeError):
+            set_kernel_usage_recording()
+        with self.assertRaises(TypeError):
+            set_kernel_usage_recording(True)
+        for session in (None, object(), True, SimpleNamespace(_ctx=object(), _runner=object())):
+            for function, args in (
+                (used_kernel_names, (session,)),
+                (clear_used_kernel_names, (session,)),
+                (set_kernel_usage_recording, (session, True)),
+            ):
+                with (
+                    self.subTest(function=function.__name__, session=session),
+                    self.assertRaises(TypeError),
+                ):
+                    function(*args)
 
 
 class TestBackendCases(ExtTestCase):
@@ -668,7 +799,9 @@ class TestBackendCases(ExtTestCase):
                     light_session = ReferenceEvaluator(tc.model)
                     model_bytes = tc.model.SerializeToString()
                     ort_session = None
-                    if ort is not None:
+                    # ORT's NumPy run API cannot accept ml_dtypes.bfloat16 feeds.
+                    # Use the pre-warmed onnx-light oracle for those cases.
+                    if ort is not None and dtype != "bfloat16":
                         try:
                             # GroupNormalization may be expanded from its ONNX function.
                             ort_session = ort.InferenceSession(

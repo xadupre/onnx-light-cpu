@@ -6,7 +6,6 @@
 
 #include "onnx_light_cpu/impl/tensor/split_kernel.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
-#include "onnx_light_cpu/kernels/kernel_usage.h"
 
 #include "onnx_core/runtime/kernels/node_helpers.h"
 #include "onnx_core/symbolic/sym_tensor.h"
@@ -180,7 +179,7 @@ std::vector<Tensor> SplitKernel::Compute(const Tensor &data, int64_t axis,
 }
 
 void SplitKernel::Run(rt_ns::RuntimeContext &rt) {
-  RecordKernelUsage(kName);
+  rt.RecordKernelUsage(kName);
   const auto &node = *node_;
   const int64_t version = ctx_.opset.version;
   const bool legacy = version > 0 && version < 13;

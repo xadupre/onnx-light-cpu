@@ -2,16 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "onnx_light_cpu/kernels/kernel_usage.h"
 #include "onnx_light_cpu/kernels/register_kernels.h"
 
 #include "onnx_core/runtime/kernels/run_nodes.h"
 #include "onnx_core/runtime/memory/simple_tensor.h"
+#include "onnx_core/runtime/runtime_context.h"
 #include "onnx_proto/onnx_helper.h"
 #include "onnx_proto/stream.h"
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <exception>
 #include <iostream>
 #include <stdexcept>
@@ -71,11 +72,25 @@ int main(int argc, char **argv) {
     const std::string input_name = FirstInputName(model);
 
     onnx_light_cpu::RegisterAllKernelsGlobal();
-    onnx_light_cpu::ClearUsedKernelNames();
+    int64_t opset_version = 0;
+    for (const auto &opset : model.opset_import()) {
+      if (opset.domain().empty()) {
+        opset_version = opset.version();
+        break;
+      }
+    }
+    rt::RuntimeContext runtime(rt::KernelContext(rt::DefaultOpset(opset_version)));
+    rt::RegisterModelFunctions(model, runtime);
 
-    rt::Tensors inputs;
-    inputs.push_back(rt::Tensor::FromFloat(input_name, {4}, {-1.0f, 2.0f, -3.5f, 4.0f}));
-    const rt::Tensors outputs = rt::RunModel(model, std::move(inputs));
+    runtime.Set(input_name, rt::Tensor::FromFloat(input_name, {4}, {-1.0f, 2.0f, -3.5f, 4.0f}),
+                rt::RuntimeEventKind::kInput);
+    rt::RuntimeSession session(model);
+    runtime.set_kernel_usage_enabled(true);
+    session.Run(runtime);
+    rt::Tensors outputs;
+    for (const auto &output : model.ref_graph().output()) {
+      outputs.push_back(std::move(runtime.Get(output.name())));
+    }
     if (outputs.size() != 1 || outputs[0].element_count() != 4) {
       throw std::runtime_error("the example expects one four-element tensor output");
     }
@@ -87,7 +102,7 @@ int main(int argc, char **argv) {
     }
     std::cout << "]\n";
 
-    const std::vector<std::string> used_kernels = onnx_light_cpu::UsedKernelNames();
+    const std::vector<std::string> used_kernels = runtime.GetKernelUsage();
     constexpr const char *expected_kernel = "onnx_light_cpu::Abs";
     if (std::find(used_kernels.begin(), used_kernels.end(), expected_kernel) ==
         used_kernels.end()) {

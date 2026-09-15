@@ -5,7 +5,6 @@
 #include "onnx_light_cpu/kernels/elementwise/binary_kernel.h"
 
 #include "onnx_light_cpu/kernels/kernel_registration.h"
-#include "onnx_light_cpu/kernels/kernel_usage.h"
 #include "onnx_light_cpu/kernels/tensor_buffer_validation.h"
 
 #include "onnx_core/runtime/kernels/cast_helper.h"
@@ -594,7 +593,9 @@ void BinaryElementwiseKernel::operator()(const rt_ns::Tensor &left, const rt_ns:
 
 void BinaryElementwiseKernel::Run(rt_ns::RuntimeContext &rt) {
   const auto &node = *node_;
-  RecordKernelUsage(KernelName(descriptor_.op_type()));
+  if (rt.kernel_usage_enabled()) {
+    rt.RecordKernelUsage(KernelName(descriptor_.op_type()));
+  }
   rt_ns::RequireInputCount(node, 2);
   rt_ns::RequireOutputCount(node, 1);
   const rt_ns::Tensor &left = rt_ns::GetInput(node, 0, rt.tensors());
