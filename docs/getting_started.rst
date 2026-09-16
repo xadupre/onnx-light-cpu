@@ -72,6 +72,16 @@ process's output and traceback. If a clean build passes but reused artifacts
 fail, record both source revisions and build commands with the report rather
 than changing symbol visibility or preloading libraries to mask the failure.
 
+For `issue #698 <https://github.com/xadupre/onnx-light-cpu/issues/698>`_, this
+procedure did not reproduce the reported undefined symbol on Linux x86-64.
+The clean Release builds used CPU sources at ``1ebe06e8b3e4`` and onnx-light at
+``e03a1ba56145``, with Python 3.13.15, GCC 13.3, CMake 3.31.6, and nanobind 3.0.1.
+Both import orders passed from both working directories, as did the existing
+kernel-usage and SIMD-detection tests (nine tests total). Neither project was
+installed into site-packages, and no runtime-library preload was needed.
+The reported mixed-artifact failure therefore did not warrant a source linkage
+or export change.
+
 Quick Start
 -----------
 
