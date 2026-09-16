@@ -18,7 +18,7 @@
 #include <numeric>
 #include <random>
 #include <stdexcept>
-#include <utility>
+#include <tuple>
 #include <vector>
 
 namespace {
@@ -1208,18 +1208,19 @@ TEST(ComputeAttentionFloat32Streaming, ShortStatelessQueriesAndHeadTailsMatchRef
 }
 
 TEST(ComputeAttentionFloat32Streaming, LongContextsAndTileTailsMatchReference) {
-  for (const auto &[q_len, kv_len] :
-       {std::pair{128, 1024}, std::pair{128, 8192}, std::pair{129, 1025}}) {
+  for (const auto &[q_len, kv_len, vdim] : {std::tuple{128, 1024, 64}, std::tuple{128, 8192, 64},
+                                            std::tuple{129, 1025, 63}, std::tuple{129, 1025, 65}}) {
     SCOPED_TRACE(::testing::Message() << "q=" << q_len << " kv=" << kv_len);
     constexpr std::int64_t dim = 64;
     const std::int64_t q_shape[] = {1, 1, q_len, dim};
     const std::int64_t kv_shape[] = {1, 1, kv_len, dim};
-    AttentionPlan plan({}, AttentionLayout::kRank4, q_shape, kv_shape, kv_shape, {},
+    const std::int64_t v_shape[] = {1, 1, kv_len, vdim};
+    AttentionPlan plan({}, AttentionLayout::kRank4, q_shape, kv_shape, v_shape, {},
                        AttentionMaskKind::kNone);
     const auto q = RandomTensor(q_len * dim, 1811);
     const auto k = RandomTensor(kv_len * dim, 1812);
-    const auto v = RandomTensor(kv_len * dim, 1813);
-    const auto expected = ReferenceAttention(1, 1, 1, q_len, kv_len, dim, dim, q, k, v, plan.scale,
+    const auto v = RandomTensor(kv_len * vdim, 1813);
+    const auto expected = ReferenceAttention(1, 1, 1, q_len, kv_len, dim, vdim, q, k, v, plan.scale,
                                              false, nullptr, nullptr);
     std::vector<float> actual(expected.size());
     ComputeAttentionFloat32(plan, q.data(), k.data(), v.data(), nullptr, actual.data());
