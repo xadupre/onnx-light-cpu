@@ -60,7 +60,7 @@ class TestGenerationParityWithLiveInventory(ExtTestCase):
         for registrar, domain, operators in csv.reader(table.splitlines(), skipinitialspace=True):
             self.assertTrue(registrar.startswith("Register"), registrar)
             for op_type in operators.split(", "):
-                documented.append((domain, op_type, "cpu"))
+                documented.append((domain, op_type, "CPU"))
         self.assertTrue(documented)
         self.assertEqual(len(documented), len(set(documented)))
 
