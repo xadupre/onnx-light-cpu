@@ -10,10 +10,11 @@ import subprocess
 import sys
 from tempfile import TemporaryDirectory
 from textwrap import dedent
-import unittest
+
+from onnx_light.ext_test_case import ExtTestCase
 
 
-class TestNativePackageImport(unittest.TestCase):
+class TestNativePackageImport(ExtTestCase):
     def test_optional_runtime_discovery(self):
         root = Path(__file__).resolve().parents[2]
         script = dedent("""
