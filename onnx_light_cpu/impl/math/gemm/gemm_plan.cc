@@ -121,7 +121,7 @@ std::size_t RuntimeParticipantLimit(GemmAlgorithm algorithm, std::size_t selecte
 std::size_t AlgorithmParticipantLimit(GemmAlgorithm algorithm, std::size_t m, std::size_t n,
                                       std::size_t k, std::size_t configured) {
   if (algorithm == GemmAlgorithm::kGeneral && !IsTransformerProjection(m, n, k) &&
-      DetectSimdLevel() >= SimdLevel::kAVX512) {
+      EffectiveGemmSimdLevel() >= SimdLevel::kAVX512) {
     return std::min(configured, kAvx512GeneralParticipantLimit);
   }
   return configured;
@@ -145,9 +145,9 @@ GemmBlocking ResolveBlocking(GemmBlocking configured, std::size_t element_size,
   // Medium AVX-512 and AVX2 AMD Zen GEMMs otherwise expose only one row panel and leave the
   // executor with fine-grained column tasks. Four row panels amortize
   // scheduling while allowing workers to reuse the shared packed B panel.
-  const bool optimized_x86_float = (vector_lanes == 16 && register_rows == 12) ||
-                                   (vector_lanes == 8 && register_rows == 6 &&
-                                    DetectSimdLevel() == SimdLevel::kAVX2 && CpuSupportsFma());
+  const bool optimized_x86_float =
+      (vector_lanes == 16 && register_rows == 12) ||
+      (vector_lanes == 8 && register_rows == 6 && EffectiveGemmSimdLevel() == SimdLevel::kAVX2);
   if (element_size == sizeof(float) && optimized_x86_float && participants > 1 && m >= 128 &&
       m <= 512 && n >= 128 && n <= 512) {
     const std::size_t row_tasks = std::min({participants, m / register_rows, std::size_t{4}});
@@ -201,7 +201,7 @@ template <typename T> std::size_t VectorLanes() {
     return arm_profile.vector_bytes / sizeof(T);
   }
 #endif
-  switch (DetectSimdLevel()) {
+  switch (EffectiveGemmSimdLevel()) {
   case SimdLevel::kAVX512:
     return 64 / sizeof(T);
   case SimdLevel::kAVX2:
@@ -222,7 +222,7 @@ template <typename T> std::size_t RegisterRows() {
     return arm_profile.register_rows;
   }
 #endif
-  const SimdLevel level = DetectSimdLevel();
+  const SimdLevel level = EffectiveGemmSimdLevel();
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512
   if (level >= SimdLevel::kAVX512) {
     if constexpr (std::is_same_v<T, double>) {
@@ -341,7 +341,7 @@ std::size_t HalfUsefulThreads(bool is_bfloat16, bool trans_b, GemmAlgorithm algo
                               std::size_t element_size) {
 #if defined(ONNX_LIGHT_CPU_HAVE_AVX2_FMA) && defined(ONNX_LIGHT_CPU_HAVE_F16C)
   if (algorithm == GemmAlgorithm::kSplitK && !is_bfloat16 && !trans_b && m <= kGemmAVX2MR &&
-      DetectSimdLevel() >= SimdLevel::kAVX2 && CpuSupportsFma() && CpuSupportsF16C()) {
+      EffectiveGemmSimdLevel() >= SimdLevel::kAVX2 && CpuSupportsF16C()) {
     constexpr std::size_t kFloat16SkinnyMColumns = 16;
     return std::min(available_threads, CeilDiv(n, kFloat16SkinnyMColumns));
   }
@@ -588,9 +588,9 @@ void GemmPlan<T>::Execute(const T *a, const T *b, const GemmEpilogue<T> &epilogu
   if constexpr (std::is_same_v<T, float>) {
     bool medium_avx512_square = false;
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512
-    medium_avx512_square = algorithm_ == GemmAlgorithm::kGeneral &&
-                           DetectSimdLevel() >= SimdLevel::kAVX512 && !trans_a_ && !trans_b_ &&
-                           m_ >= 128 && m_ <= 512 && n_ >= 128 && n_ <= 512 && k_ <= 512;
+    medium_avx512_square =
+        algorithm_ == GemmAlgorithm::kGeneral && EffectiveGemmSimdLevel() >= SimdLevel::kAVX512 &&
+        !trans_a_ && !trans_b_ && m_ >= 128 && m_ <= 512 && n_ >= 128 && n_ <= 512 && k_ <= 512;
 #endif
     const bool direct_broadcast_bias =
         has_bias && !has_residual && !has_activation && !converts_output;
