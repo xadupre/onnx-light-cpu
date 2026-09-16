@@ -75,7 +75,7 @@ weights, whose packing belongs in every invocation.
 .. _l-cast-simd-measurements:
 
 Cast SIMD measurements (September 16, 2026)
-------------------------------------------
+-------------------------------------------
 
 The Cast fast paths convert contiguous float32/float16 buffers with F16C and
 float32/bfloat16 buffers with AVX2. Runtime CPU/OS checks and compiled-source
