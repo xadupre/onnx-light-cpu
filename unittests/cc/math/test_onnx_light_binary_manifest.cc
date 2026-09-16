@@ -298,7 +298,8 @@ TEST(OnnxLightBinaryManifest, CalibrationIsBoundedCorrectnessGatedAndReturnsComp
   EXPECT_EQ(constrained_pow_reporter.benchmark_cases(), 0u);
 
   rt_ns::CalibrationOptions pow_options;
-  pow_options.maximum_duration_ms = 250;
+  // Allow setup and serial sampling to finish on slower CI runners.
+  pow_options.maximum_duration_ms = 5000;
   pow_options.maximum_memory_bytes = uint64_t{64} << 20;
   rt_ns::CalibrationReporter pow_reporter(pow_options);
   const auto calibrated_pow = calibrate_pow(pow_key, execution, pow_options, pow_reporter);
@@ -307,6 +308,7 @@ TEST(OnnxLightBinaryManifest, CalibrationIsBoundedCorrectnessGatedAndReturnsComp
   EXPECT_LE(pow_reporter.peak_memory_bytes(), pow_options.maximum_memory_bytes);
 
   for (const auto integer_type : {rt_ns::DataType::INT32, rt_ns::DataType::INT64}) {
+    SCOPED_TRACE(static_cast<int32_t>(integer_type));
     rt_ns::KernelTuningKey integer_pow_key = pow_key;
     integer_pow_key.element_type = static_cast<int32_t>(integer_type);
     const auto integer_pow_schema = rt_ns::GetKernelTuningRegistry().FindSchema(integer_pow_key);
@@ -319,7 +321,8 @@ TEST(OnnxLightBinaryManifest, CalibrationIsBoundedCorrectnessGatedAndReturnsComp
     EXPECT_NO_THROW(integer_pow = calibrate_integer_pow(integer_pow_key, execution, pow_options,
                                                         integer_pow_reporter));
     EXPECT_NO_THROW(integer_pow_schema->Validate(integer_pow));
-    EXPECT_GT(integer_pow_reporter.benchmark_cases(), 0u);
+    EXPECT_GT(integer_pow_reporter.benchmark_cases(), 0u)
+        << ::testing::PrintToString(integer_pow_reporter.diagnostics());
     EXPECT_LE(integer_pow_reporter.peak_memory_bytes(), pow_options.maximum_memory_bytes);
   }
 }
