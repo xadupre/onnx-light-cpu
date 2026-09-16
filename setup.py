@@ -334,6 +334,7 @@ except ModuleNotFoundError:
                 str(root),
                 "-B",
                 str(build_temp_path),
+                "-UONNX_LIGHT_CPU_SIMD_FLAGS",
                 f"-DPython_EXECUTABLE={sys.executable}",
                 *cmake_args,
             ]
@@ -450,6 +451,7 @@ class BuildExt(Command):
                 str(root),
                 "-B",
                 str(build_temp),
+                "-UONNX_LIGHT_CPU_SIMD_FLAGS",
                 f"-DPython_EXECUTABLE={sys.executable}",
                 *cmake_args,
             ]
