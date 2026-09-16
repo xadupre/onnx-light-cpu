@@ -1282,6 +1282,7 @@ void GemmFiveLoopRange(bool trans_a, bool trans_b, std::size_t M, std::size_t N,
   const std::size_t tasks_per_panel = row_panels * micro_panels_per_panel;
   constexpr bool kCanFusePacking = std::is_same_v<T, SrcT>;
   constexpr bool kIsFloat32 = std::is_same_v<T, float> && std::is_same_v<SrcT, float>;
+  const bool use_direct_b = kCanFusePacking && !trans_b && column_panels == 1 && N <= column_block;
   const bool avx2_half_packing =
       std::is_same_v<SrcT, Float16Source> && kind == GemmKernelKind::kAVX2FMA;
   const bool fuse_task_packing =
@@ -1329,11 +1330,12 @@ void GemmFiveLoopRange(bool trans_a, bool trans_b, std::size_t M, std::size_t N,
     constexpr bool use_strided_a = false;
     const std::size_t max_kc = std::min(blocking.kc, k_end - k_begin);
 #endif
+    const bool use_unpacked_a = use_strided_a || (kCanFusePacking && !trans_a && max_kc == K);
 
     ExecuteRanges(static_cast<std::int64_t>(participant_count),
                   cost * static_cast<double>(task_count) / static_cast<double>(participant_count),
                   [&](std::int64_t begin, std::int64_t end) {
-                    AlignedBuffer<T> apack(use_strided_a ? 0 : row_capacity * max_kc);
+                    AlignedBuffer<T> apack(use_unpacked_a ? 0 : row_capacity * max_kc);
                     AlignedBuffer<T> micro_b(max_kc * column_block);
                     for (std::size_t k0 = k_begin; k0 < k_end; k0 += max_kc) {
                       const std::size_t kc = std::min(max_kc, k_end - k0);
@@ -1360,11 +1362,11 @@ void GemmFiveLoopRange(bool trans_a, bool trans_b, std::size_t M, std::size_t N,
                           const std::size_t mc = std::min(blocking.mc, M - m0);
                           PackBMicroPanel(trans_b, B, K, N, k0, kc, micro_n0, jb, 0, column_block,
                                           micro_b.data());
-                          if (!use_strided_a && packed_row_panel != row_panel) {
+                          if (!use_unpacked_a && packed_row_panel != row_panel) {
                             PackAPanel(trans_a, A, M, K, m0, mc, k0, kc, apack.data());
                             packed_row_panel = row_panel;
                           }
-                          const T *packed_a = use_strided_a
+                          const T *packed_a = use_unpacked_a
                                                   ? reinterpret_cast<const T *>(A) + m0 * K + k0
                                                   : apack.data();
                           for (std::size_t ir = 0; ir < mc; ir += blocking.mr) {
@@ -1464,11 +1466,14 @@ void GemmFiveLoopRange(bool trans_a, bool trans_b, std::size_t M, std::size_t N,
         continue;
       }
 
-      if (bpack == nullptr) {
-        bpack = std::make_unique<AlignedBuffer<T>>(panels_per_wave * panel_capacity);
+      // A single non-transposed micro-panel already has the packed row stride.
+      if (!use_direct_b) {
+        if (bpack == nullptr) {
+          bpack = std::make_unique<AlignedBuffer<T>>(panels_per_wave * panel_capacity);
+        }
+        PackBPanelWave(trans_b, B, K, N, k0, kc, first_panel, wave_panels, blocking.nc,
+                       column_block, panel_capacity, bpack->data());
       }
-      PackBPanelWave(trans_b, B, K, N, k0, kc, first_panel, wave_panels, blocking.nc, column_block,
-                     panel_capacity, bpack->data());
 
       // Equal-size blocks can admit fewer workers when task_count is just above
       // the requested block count. Balanced intervals are used only in that case.
@@ -1506,7 +1511,9 @@ void GemmFiveLoopRange(bool trans_a, bool trans_b, std::size_t M, std::size_t N,
                           const T *packed_a = use_direct_a
                                                   ? reinterpret_cast<const T *>(A) + m0 * K + k0
                                                   : apack.data();
-                          const T *panel_b = bpack->data() + wave_panel * panel_capacity;
+                          const T *panel_b = use_direct_b
+                                                 ? reinterpret_cast<const T *>(B) + k0 * N
+                                                 : bpack->data() + wave_panel * panel_capacity;
                           const std::size_t jb = std::min(column_block, nb - jr);
                           const T *micro_b = panel_b + jr * kc;
                           for (std::size_t ir = 0; ir < mc; ir += blocking.mr) {
@@ -1571,7 +1578,8 @@ void GemmSplitK(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::s
     return;
   }
 
-  AlignedVector<T> partials(part_count * M * N);
+  // Every partition initializes its complete output on its first K chunk.
+  AlignedBuffer<T> partials(part_count * M * N);
   const double cost = static_cast<double>(M) * N * K /
                       (static_cast<double>(part_count) * kGemmFmasPerParallelWorkUnit);
   ExecuteRanges(static_cast<std::int64_t>(part_count), cost,
@@ -1593,7 +1601,7 @@ void GemmSplitK(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::s
                     const std::size_t index = static_cast<std::size_t>(offset);
                     T sum = T(0);
                     for (std::size_t part = 0; part < part_count; ++part) {
-                      sum += partials[part * M * N + index];
+                      sum += partials.data()[part * M * N + index];
                     }
                     Y[index] = alpha * sum + (has_bias ? beta * C[index] : T(0));
                   }
@@ -1784,8 +1792,8 @@ void GemmFloat32PlannedImpl(bool trans_a, bool trans_b, std::size_t M, std::size
   const GemmBlocking selected =
       ConstrainGemmBlockingForTasks(blocking == nullptr ? default_blocking : *blocking, M, N, K,
                                     effective_threads, sizeof(float));
-  GemmImpl<Algorithm, float>(trans_a, trans_b, M, N, K, alpha, A, B, beta, C, Y,
-                             SelectGemmKernelKind<float>(), tile, selected, bias_stride, bias_mode);
+  GemmImpl<Algorithm, float>(trans_a, trans_b, M, N, K, alpha, A, B, beta, C, Y, default_kind, tile,
+                             selected, bias_stride, bias_mode);
 }
 
 template <GemmAlgorithm Algorithm>
@@ -1832,8 +1840,8 @@ void GemmFloat64Planned(bool trans_a, bool trans_b, std::size_t M, std::size_t N
   const GemmBlocking selected =
       ConstrainGemmBlockingForTasks(blocking == nullptr ? default_blocking : *blocking, M, N, K,
                                     effective_threads, sizeof(double));
-  GemmImpl<Algorithm, double>(trans_a, trans_b, M, N, K, alpha, A, B, beta, C, Y,
-                              SelectGemmKernelKind<double>(), tile, selected);
+  GemmImpl<Algorithm, double>(trans_a, trans_b, M, N, K, alpha, A, B, beta, C, Y, default_kind,
+                              tile, selected);
 }
 
 void GemmFp16NativeGeneral(bool trans_a, std::size_t M, std::size_t N, std::size_t K, float alpha,

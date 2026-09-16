@@ -807,6 +807,115 @@ TEST(OnnxLightNormalizationKernel, MeanVarianceNormalizationUsesRequestedAxes) {
   EXPECT_THROW(kernel(x, {2}), std::invalid_argument);
 }
 
+TEST(OnnxLightNormalizationKernel, MvnRetainedAxisAlignedAndTailSlicesMatchCenteredReference) {
+  const onnx_light_cpu::MeanVarianceNormalizationKernel kernel(MakeContext(13));
+  std::vector<rt_ns::Shape> shapes{{8, 32, 16, 16}, {8, 32, 128}};
+  for (std::int64_t width : {1, 3, 4, 5, 7, 8, 9, 15, 16, 17, 127, 129, 255, 257}) {
+    shapes.push_back({3, 5, width});
+  }
+  for (const auto &shape : shapes) {
+    const std::size_t batch = static_cast<std::size_t>(shape[0]);
+    const std::size_t channels = static_cast<std::size_t>(shape[1]);
+    const std::size_t spatial = static_cast<std::size_t>(shape.product()) / (batch * channels);
+    SCOPED_TRACE(::testing::Message()
+                 << "batch=" << batch << " channels=" << channels << " spatial=" << spatial);
+    std::vector<float> values(batch * channels * spatial);
+    for (std::size_t i = 0; i < values.size(); ++i) {
+      const std::size_t channel = (i / spatial) % channels;
+      const float variation = static_cast<float>(static_cast<int>(i % 29) - 14) * 0.125F;
+      values[i] = channel % 3 == 0 ? 8.0F : variation + (channel % 3 == 1 ? 0.0F : 256.0F);
+    }
+    const auto x = rt_ns::Tensor::FromFloat("", shape, values);
+    const auto y = shape.size() == 4 ? kernel(x) : kernel(x, {0, 2});
+    const auto negative_axes = shape.size() == 4 ? kernel(x, {-4, -2, -1}) : kernel(x, {-3, -1});
+    for (std::size_t channel = 0; channel < channels; ++channel) {
+      double mean = 0.0;
+      for (std::size_t n = 0; n < batch; ++n) {
+        for (std::size_t i = 0; i < spatial; ++i) {
+          mean += values[(n * channels + channel) * spatial + i];
+        }
+      }
+      mean /= static_cast<double>(batch * spatial);
+      double variance = 0.0;
+      for (std::size_t n = 0; n < batch; ++n) {
+        for (std::size_t i = 0; i < spatial; ++i) {
+          const double delta = values[(n * channels + channel) * spatial + i] - mean;
+          variance += delta * delta;
+        }
+      }
+      variance /= static_cast<double>(batch * spatial);
+      for (std::size_t n = 0; n < batch; ++n) {
+        for (std::size_t i = 0; i < spatial; ++i) {
+          const std::size_t index = (n * channels + channel) * spatial + i;
+          const double expected = (values[index] - mean) / (std::sqrt(variance) + 1.0e-9F);
+          EXPECT_NEAR(Value(y, index), expected, 5.0e-5);
+          EXPECT_EQ(Value(y, index), Value(negative_axes, index));
+        }
+      }
+    }
+  }
+}
+
+TEST(OnnxLightNormalizationKernel, MvnRetainedAxisPreservesSpecialValuesAndEmptyOutputs) {
+  const onnx_light_cpu::MeanVarianceNormalizationKernel kernel(MakeContext(13));
+  for (const std::int64_t width : {4, 7, 8, 128, 129}) {
+    SCOPED_TRACE(width);
+    for (const float special :
+         {std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity(),
+          -std::numeric_limits<float>::infinity()}) {
+      std::vector<float> values(static_cast<std::size_t>(2 * 2 * width), 1.0F);
+      values.back() = special;
+      const auto x = rt_ns::Tensor::FromFloat("", {2, 2, width}, values);
+      const auto y = kernel(x, {0, 2});
+      for (std::size_t i = 0; i < values.size(); ++i) {
+        if ((i / static_cast<std::size_t>(width)) % 2 == 1) {
+          EXPECT_TRUE(std::isnan(Value(y, i)));
+        } else {
+          EXPECT_EQ(Value(y, i), 0.0);
+        }
+      }
+    }
+    const auto x = rt_ns::Tensor::FromFloat(
+        "", {2, 2, width},
+        std::vector<float>(static_cast<std::size_t>(4 * width), std::ldexp(1.0F, 70)));
+    const auto y = kernel(x, {0, 2});
+    for (std::size_t i = 0; i < static_cast<std::size_t>(4 * width); ++i) {
+      EXPECT_EQ(Value(y, i), 0.0);
+    }
+  }
+  const auto empty = rt_ns::Tensor::FromFloat("", {8, 0, 128}, {});
+  EXPECT_EQ(kernel(empty, {0, 2}).shape.product(), 0);
+  const auto empty_reduction = rt_ns::Tensor::FromFloat("", {0, 32, 128}, {});
+  EXPECT_THROW(kernel(empty_reduction, {0, 2}), std::invalid_argument);
+}
+
+TEST(OnnxLightNormalizationKernel, MvnRetainedAxisPreservesExecutorScheduling) {
+  const onnx_light_cpu::MeanVarianceNormalizationKernel kernel(MakeContext(13));
+  std::vector<float> values(16 * 64 * 256);
+  for (std::size_t i = 0; i < values.size(); ++i) {
+    values[i] = static_cast<float>(static_cast<int>(i % 29) - 14) * 0.125F;
+  }
+  const auto x = rt_ns::Tensor::FromFloat("", {16, 64, 16, 16}, values);
+  const auto expected = kernel(x);
+  InlineExecutor executor;
+  onnx_light_cpu::ExecutionExecutorView view{&executor, 8, &InlineExecutor::Run};
+  onnx_light_cpu::ExecutionExecutorScope scope(&view);
+  const auto small = rt_ns::Tensor::FromFloat("", {2, 2, 4}, std::vector<float>(16, 1.0F));
+  kernel(small, {0, 2});
+  EXPECT_EQ(executor.dispatches, 0);
+  const auto actual = kernel(x);
+  EXPECT_EQ(executor.dispatches, 1);
+  EXPECT_GT(executor.blocks, 1);
+  EXPECT_LE(executor.blocks, 8);
+  onnx_light_cpu::detail::ExecutionRegionScope region;
+  const auto nested = kernel(x);
+  EXPECT_EQ(executor.dispatches, 1);
+  for (std::size_t i = 0; i < values.size(); ++i) {
+    EXPECT_EQ(Value(actual, i), Value(expected, i));
+    EXPECT_EQ(Value(nested, i), Value(expected, i));
+  }
+}
+
 TEST(OnnxLightNormalizationKernel, MeanVarianceNormalizationHandlesOverflowingRawMoments) {
   const onnx_light_cpu::MeanVarianceNormalizationKernel kernel(MakeContext(13));
   const rt_ns::Tensor x = rt_ns::Tensor::FromFloat("", {2, 1}, {2.0e20F, 2.0e20F});

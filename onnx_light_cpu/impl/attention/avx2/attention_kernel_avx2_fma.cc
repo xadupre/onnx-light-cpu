@@ -43,9 +43,7 @@ inline float ReduceMax(__m256 value) {
   return _mm_cvtss_f32(maximum);
 }
 
-} // namespace
-
-float AttentionDotFloat32_AVX2_FMA(const float *q, const float *k, std::size_t count) {
+inline float AttentionDotFloat32_AVX2_FMA(const float *q, const float *k, std::size_t count) {
   // Two independent accumulators break the single-`sum` FMA dependency chain
   // (every `vfmadd` would otherwise wait ~4-5 cycles for the previous one to
   // retire even though most cores can issue two FMAs per cycle). Measured
@@ -73,8 +71,8 @@ float AttentionDotFloat32_AVX2_FMA(const float *q, const float *k, std::size_t c
   return total;
 }
 
-void AttentionAccumulateFloat32_AVX2_FMA(float *accumulator, float weight, const float *v,
-                                         std::size_t count) {
+inline void AttentionAccumulateFloat32_AVX2_FMA(float *accumulator, float weight, const float *v,
+                                                std::size_t count) {
   const __m256 weight_vector = _mm256_set1_ps(weight);
   std::size_t d = 0;
   for (; d + 8 <= count; d += 8) {
@@ -90,6 +88,8 @@ void AttentionAccumulateFloat32_AVX2_FMA(float *accumulator, float weight, const
   }
 }
 
+} // namespace
+
 void AttentionScaleFloat32_AVX2_FMA(float *values, float factor, std::size_t count) {
   const __m256 factor_vector = _mm256_set1_ps(factor);
   std::size_t d = 0;
@@ -100,6 +100,24 @@ void AttentionScaleFloat32_AVX2_FMA(float *values, float factor, std::size_t cou
     const __m256i tail = TailMask(count - d);
     const __m256 updated = _mm256_mul_ps(_mm256_maskload_ps(values + d, tail), factor_vector);
     _mm256_maskstore_ps(values + d, tail, updated);
+  }
+}
+
+void AttentionScoreBlockFloat32_AVX2_FMA(const float *q, const float *k, std::size_t rows,
+                                         std::ptrdiff_t stride, std::size_t head_dim, float scale,
+                                         float *scores) {
+  for (std::size_t row = 0; row < rows; ++row) {
+    scores[row] = scale * AttentionDotFloat32_AVX2_FMA(q, k + row * stride, head_dim);
+  }
+}
+
+void AttentionAccumulateBlockFloat32_AVX2_FMA(float *accumulator, const float *weights,
+                                              const float *v, std::size_t rows,
+                                              std::ptrdiff_t stride, std::size_t head_dim) {
+  for (std::size_t row = 0; row < rows; ++row) {
+    if (weights[row] != 0.0f) {
+      AttentionAccumulateFloat32_AVX2_FMA(accumulator, weights[row], v + row * stride, head_dim);
+    }
   }
 }
 

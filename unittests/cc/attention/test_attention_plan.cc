@@ -18,6 +18,7 @@
 #include <numeric>
 #include <random>
 #include <stdexcept>
+#include <tuple>
 #include <vector>
 
 namespace {
@@ -1184,6 +1185,113 @@ TEST(ComputeAttentionFloat32Streaming, Avx2Rank3ShortAndTiledBroadcastMaskMatche
       ExpectClose(actual, expected);
     }
   }
+}
+
+TEST(ComputeAttentionFloat32Streaming, ShortStatelessQueriesAndHeadTailsMatchReference) {
+  for (const std::int64_t q_len : {2, 8}) {
+    for (const std::int64_t dim : {7, 8, 9, 63, 64, 65}) {
+      SCOPED_TRACE(::testing::Message() << "q=" << q_len << " dim=" << dim);
+      const std::int64_t q_shape[] = {1, 1, q_len, dim};
+      const std::int64_t kv_shape[] = {1, 1, 128, dim};
+      AttentionPlan plan({}, AttentionLayout::kRank4, q_shape, kv_shape, kv_shape, {},
+                         AttentionMaskKind::kNone);
+      const auto q = RandomTensor(q_len * dim, 1801);
+      const auto k = RandomTensor(128 * dim, 1802);
+      const auto v = RandomTensor(128 * dim, 1803);
+      const auto expected = ReferenceAttention(1, 1, 1, q_len, 128, dim, dim, q, k, v, plan.scale,
+                                               false, nullptr, nullptr);
+      std::vector<float> actual(expected.size());
+      ComputeAttentionFloat32(plan, q.data(), k.data(), v.data(), nullptr, actual.data());
+      ExpectClose(actual, expected);
+    }
+  }
+}
+
+TEST(ComputeAttentionFloat32Streaming, LongContextsAndTileTailsMatchReference) {
+  for (const auto &[q_len, kv_len, vdim] : {std::tuple{128, 1024, 64}, std::tuple{128, 8192, 64},
+                                            std::tuple{129, 1025, 63}, std::tuple{129, 1025, 65}}) {
+    SCOPED_TRACE(::testing::Message() << "q=" << q_len << " kv=" << kv_len);
+    constexpr std::int64_t dim = 64;
+    const std::int64_t q_shape[] = {1, 1, q_len, dim};
+    const std::int64_t kv_shape[] = {1, 1, kv_len, dim};
+    const std::int64_t v_shape[] = {1, 1, kv_len, vdim};
+    AttentionPlan plan({}, AttentionLayout::kRank4, q_shape, kv_shape, v_shape, {},
+                       AttentionMaskKind::kNone);
+    const auto q = RandomTensor(q_len * dim, 1811);
+    const auto k = RandomTensor(kv_len * dim, 1812);
+    const auto v = RandomTensor(kv_len * vdim, 1813);
+    const auto expected = ReferenceAttention(1, 1, 1, q_len, kv_len, dim, vdim, q, k, v, plan.scale,
+                                             false, nullptr, nullptr);
+    std::vector<float> actual(expected.size());
+    ComputeAttentionFloat32(plan, q.data(), k.data(), v.data(), nullptr, actual.data());
+    ExpectClose(actual, expected);
+  }
+}
+
+TEST(ComputeAttentionFloat32Streaming, ShortQueriesSplitPastCacheAtBlockBoundaries) {
+  for (const std::int64_t past_len : {127, 128, 129, 255, 256, 257}) {
+    for (const float softcap : {0.0f, 0.7f}) {
+      SCOPED_TRACE(::testing::Message() << "past=" << past_len << " softcap=" << softcap);
+      AttentionDescriptor descriptor;
+      descriptor.is_causal = true;
+      descriptor.softcap = softcap;
+      const std::int64_t q_shape[] = {1, 2, 8, 9};
+      const std::int64_t k_shape[] = {1, 1, 135, 9};
+      const std::int64_t v_shape[] = {1, 1, 135, 11};
+      const std::int64_t past_k_shape[] = {1, 1, past_len, 9};
+      const std::int64_t past_v_shape[] = {1, 1, past_len, 11};
+      AttentionPlan plan(descriptor, AttentionLayout::kRank4, q_shape, k_shape, v_shape, {},
+                         AttentionMaskKind::kNone, past_k_shape, past_v_shape);
+      const auto q = RandomTensor(2 * 8 * 9, 1821);
+      const auto k = RandomTensor(135 * 9, 1822);
+      const auto v = RandomTensor(135 * 11, 1823);
+      const auto past_k = RandomTensor(past_len * 9, 1824);
+      const auto past_v = RandomTensor(past_len * 11, 1825);
+      std::vector<float> expected(2 * 8 * 11), actual(expected.size());
+      onnx_light_cpu::ComputeAttentionFloat32Materialized(plan, q.data(), k.data(), v.data(),
+                                                          nullptr, expected.data(), past_k.data(),
+                                                          past_v.data());
+      ComputeAttentionFloat32Streaming(plan, q.data(), k.data(), v.data(), nullptr, actual.data(),
+                                       past_k.data(), past_v.data());
+      ExpectClose(actual, expected);
+    }
+  }
+}
+
+TEST(ComputeAttentionFloat32Streaming, SingleBlockRank3CausalReusesWorkspaceAfterEmptyRows) {
+  AttentionDescriptor descriptor;
+  descriptor.q_num_heads = 4;
+  descriptor.kv_num_heads = 4;
+  descriptor.is_causal = true;
+  const std::int64_t shape[] = {1, 16, 4 * 32};
+  AttentionPlan plan(descriptor, AttentionLayout::kRank3, shape, shape, shape, {},
+                     AttentionMaskKind::kNone);
+  const auto q = RandomTensor(16 * 4 * 32, 1831);
+  const auto k = RandomTensor(16 * 4 * 32, 1832);
+  const auto v = RandomTensor(16 * 4 * 32, 1833);
+  for (const std::int64_t nonpad : {16, 0, 12, 16}) {
+    SCOPED_TRACE(nonpad);
+    std::vector<float> expected(q.size()), actual(q.size());
+    onnx_light_cpu::ComputeAttentionFloat32Materialized(plan, q.data(), k.data(), v.data(), nullptr,
+                                                        expected.data(), nullptr, nullptr, &nonpad);
+    ComputeAttentionFloat32Streaming(plan, q.data(), k.data(), v.data(), nullptr, actual.data(),
+                                     nullptr, nullptr, &nonpad);
+    ExpectClose(actual, expected);
+  }
+}
+
+TEST(ComputeAttentionFloat32Streaming, ShortQueriesSkipZeroWeightNanValues) {
+  const std::int64_t q_shape[] = {1, 1, 2, 9};
+  const std::int64_t kv_shape[] = {1, 1, 128, 9};
+  const std::int64_t mask_shape[] = {128};
+  AttentionPlan plan({}, AttentionLayout::kRank4, q_shape, kv_shape, kv_shape, mask_shape,
+                     AttentionMaskKind::kBoolean);
+  std::vector<float> q(2 * 9, 0.0f), k(128 * 9, 0.0f), v(128 * 9, 1.0f), actual(2 * 9);
+  std::vector<std::uint8_t> mask(128, 1);
+  mask[17] = 0;
+  std::fill_n(v.data() + 17 * 9, 9, std::numeric_limits<float>::quiet_NaN());
+  ComputeAttentionFloat32Streaming(plan, q.data(), k.data(), v.data(), mask.data(), actual.data());
+  ExpectClose(actual, std::vector<float>(actual.size(), 1.0f));
 }
 
 TEST(ComputeAttentionFloat32Streaming, Rank3HeadPackingPreservesMasksGroupsAndNonpadLengths) {

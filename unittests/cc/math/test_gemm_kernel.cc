@@ -33,6 +33,7 @@
 #include <new>
 #include <random>
 #include <thread>
+#include <type_traits>
 #include <vector>
 
 #if defined(_MSC_VER)
@@ -1364,6 +1365,45 @@ TEST(GemmFloat32, RawLargeKSplitBoundsParticipants) {
   }
 }
 
+template <typename T> void CheckSplitKInitializesPartialTails() {
+  constexpr std::size_t M = 33, N = 35, K = 8195;
+  const auto a_float = RandomVector(M * K, 621);
+  const auto b_float = RandomVector(K * N, 622);
+  const auto c_float = RandomVector(M * N, 623);
+  const std::vector<T> A(a_float.begin(), a_float.end()), B(b_float.begin(), b_float.end());
+  const std::vector<T> C(c_float.begin(), c_float.end());
+  const onnx_light_cpu::GemmBlocking blocking{16, 64, 129, 4, 16};
+  ThreadedExecutor executor;
+  onnx_light_cpu::ExecutionExecutorView view{&executor, 4, &ThreadedExecutor::Run};
+  onnx_light_cpu::ExecutionExecutorScope scope(&view);
+  for (bool trans_b : {false, true}) {
+    SCOPED_TRACE(trans_b);
+    const auto expected = ReferenceGemm<T>(true, trans_b, M, N, K, T(0.75), A, B, T(-0.5), &C);
+    std::vector<T> Y(M * N, std::numeric_limits<T>::quiet_NaN());
+    if constexpr (std::is_same_v<T, float>) {
+      onnx_light_cpu::detail::GemmFloat32Planned<onnx_light_cpu::GemmAlgorithm::kSplitK>(
+          true, trans_b, M, N, K, T(0.75), A.data(), B.data(), T(-0.5), C.data(), Y.data(),
+          &blocking);
+    } else {
+      onnx_light_cpu::detail::GemmFloat64Planned<onnx_light_cpu::GemmAlgorithm::kSplitK>(
+          true, trans_b, M, N, K, T(0.75), A.data(), B.data(), T(-0.5), C.data(), Y.data(),
+          &blocking);
+    }
+    for (std::size_t i = 0; i < Y.size(); ++i) {
+      EXPECT_NEAR(Y[i], expected[i], sizeof(T) == sizeof(float) ? 5e-3 : 1e-10) << "i=" << i;
+    }
+  }
+  EXPECT_GT(executor.maximum_blocks.load(std::memory_order_relaxed), 1u);
+}
+
+TEST(GemmFloat32, SplitKInitializesEveryPartialWithTails) {
+  CheckSplitKInitializesPartialTails<float>();
+}
+
+TEST(GemmFloat64, SplitKInitializesEveryPartialWithTails) {
+  CheckSplitKInitializesPartialTails<double>();
+}
+
 // Runs the native FLOAT16 general driver (Roadmap PR07.3) with an injected
 // micro-kernel and compares ``alpha * op(A) @ B`` against the equivalent
 // widen-then-float32 reference. The driver, FLOAT16 A packing (including
@@ -1869,9 +1909,56 @@ TEST(GemmFloat32, DynamicBUsesBoundedWorkerLocalPacking) {
   });
 
   EXPECT_LE(peak_allocation, K * 64 * sizeof(float));
-  EXPECT_GT(executor.maximum_active.load(std::memory_order_relaxed), 1u);
+  EXPECT_GT(executor.maximum_blocks.load(std::memory_order_relaxed), 1u);
   for (float value : Y) {
     EXPECT_FLOAT_EQ(value, static_cast<float>(K));
+  }
+}
+
+TEST(GemmFloat32, SingleMicroPanelDoesNotCopyContiguousOperands) {
+  constexpr std::size_t M = 17;
+  constexpr std::size_t K = 129;
+  const onnx_light_cpu::GemmBlocking blocking{32, 64, K, 4, 16};
+  const auto A = RandomVector(M * K, 601);
+  for (std::size_t N : {15u, 16u, 17u, 31u, 32u}) {
+    SCOPED_TRACE(N);
+    const auto B = RandomVector(K * N, 602);
+    const auto C = RandomVector(M * N, 603);
+    const auto expected = ReferenceGemm<float>(false, false, M, N, K, 0.75f, A, B, -0.5f, &C);
+    std::vector<float> Y(M * N, std::numeric_limits<float>::quiet_NaN());
+    const std::size_t peak = PeakAllocationBytes([&] {
+      onnx_light_cpu::detail::GemmFloat32Planned<onnx_light_cpu::GemmAlgorithm::kGeneral>(
+          false, false, M, N, K, 0.75f, A.data(), B.data(), -0.5f, C.data(), Y.data(), &blocking);
+    });
+    EXPECT_EQ(peak, 0u);
+    for (std::size_t i = 0; i < Y.size(); ++i) {
+      EXPECT_NEAR(Y[i], expected[i], 1e-3f) << "i=" << i;
+    }
+  }
+}
+
+TEST(GemmFloat32, FusedFullDepthPackingDoesNotCopyA) {
+  constexpr std::size_t M = 127;
+  constexpr std::size_t N = 513;
+  constexpr std::size_t K = 256;
+  const onnx_light_cpu::GemmBlocking blocking{128, 1024, K, 4, 16};
+  const auto A = RandomVector(M * K, 611);
+  const auto C = RandomVector(M * N, 613);
+  for (bool trans_b : {false, true}) {
+    SCOPED_TRACE(trans_b);
+    const auto B = RandomVector(K * N, 612);
+    const auto expected = ReferenceGemm<float>(false, trans_b, M, N, K, 0.75f, A, B, -0.5f, &C);
+    std::vector<float> Y(M * N, std::numeric_limits<float>::quiet_NaN());
+    const std::size_t peak = PeakAllocationBytes([&] {
+      onnx_light_cpu::detail::GemmFloat32Planned<onnx_light_cpu::GemmAlgorithm::kGeneral>(
+          false, trans_b, M, N, K, 0.75f, A.data(), B.data(), -0.5f, C.data(), Y.data(), &blocking);
+    });
+    const std::size_t column_block =
+        onnx_light_cpu::detail::SelectGemmColumnBlock(blocking, sizeof(float));
+    EXPECT_LE(peak, K * column_block * sizeof(float));
+    for (std::size_t i = 0; i < Y.size(); ++i) {
+      EXPECT_NEAR(Y[i], expected[i], 1e-3f) << "i=" << i;
+    }
   }
 }
 

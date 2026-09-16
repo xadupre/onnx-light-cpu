@@ -140,6 +140,116 @@ TEST(ExpFloat32, EmptyInput) {
   onnx_light_cpu::ExpFloat32(&dummy, &dummy, 0);
 }
 
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
+TEST(SigmoidFloat32AVX512, TailsUnalignedInPlaceAndSpecialValues) {
+  if (onnx_light_cpu::DetectSimdLevel() < onnx_light_cpu::SimdLevel::kAVX512) {
+    GTEST_SKIP() << "AVX-512 is unavailable";
+  }
+  const float inf = std::numeric_limits<float>::infinity();
+  const std::vector<float> corpus = {
+      -inf,   -104.0f, -100.0f, -90.0f, -87.0f,
+      -10.0f, -1.0f,   -0.0f,   0.0f,   0.25f,
+      1.0f,   10.0f,   90.0f,   inf,    std::numeric_limits<float>::quiet_NaN()};
+  std::vector<std::size_t> counts;
+  for (std::size_t count = 0; count <= 65; ++count) {
+    counts.push_back(count);
+  }
+  counts.push_back(65535);
+  for (const std::size_t count : counts) {
+    for (const bool in_place : {false, true}) {
+      SCOPED_TRACE(::testing::Message() << "count=" << count << " in_place=" << in_place);
+      std::vector<float> input(count + 2, 42.0f);
+      std::vector<float> output(count + 2, 42.0f);
+      for (std::size_t i = 0; i < count; ++i) {
+        input[i + 1] = corpus[i % corpus.size()];
+      }
+      float *result = in_place ? input.data() + 1 : output.data() + 1;
+      onnx_light_cpu::SigmoidFloat32_AVX512(input.data() + 1, result, count);
+      for (std::size_t i = 0; i < count; ++i) {
+        const double x = corpus[i % corpus.size()];
+        const float expected = static_cast<float>(1.0 / (1.0 + std::exp(-x)));
+        if (std::isnan(expected)) {
+          EXPECT_TRUE(std::isnan(result[i])) << i;
+        } else {
+          EXPECT_NEAR(result[i], expected,
+                      std::fabs(expected) * 2e-6f + std::numeric_limits<float>::denorm_min())
+              << i;
+        }
+      }
+      EXPECT_EQ(input.front(), 42.0f);
+      EXPECT_EQ(input.back(), 42.0f);
+      EXPECT_EQ(output.front(), 42.0f);
+      EXPECT_EQ(output.back(), 42.0f);
+    }
+  }
+}
+
+void ExpectPowResult(float actual, float expected) {
+  if (std::isnan(expected)) {
+    EXPECT_TRUE(std::isnan(actual));
+  } else if (std::isinf(expected) || expected == 0.0f) {
+    EXPECT_EQ(actual, expected);
+    EXPECT_EQ(std::signbit(actual), std::signbit(expected));
+  } else {
+    EXPECT_NEAR(actual, expected, std::fabs(expected) * 2e-5f);
+  }
+}
+
+TEST(PowFloat32AVX512, IntegerMixedAndExceptionalLanesWithAliasing) {
+  if (onnx_light_cpu::DetectSimdLevel() < onnx_light_cpu::SimdLevel::kAVX512) {
+    GTEST_SKIP() << "AVX-512 is unavailable";
+  }
+  const float inf = std::numeric_limits<float>::infinity();
+  const float nan = std::numeric_limits<float>::quiet_NaN();
+  const std::vector<float> bases = {2.0f, -2.0f, 0.0f, -0.0f, inf, -inf, nan, 0.5f};
+  const std::vector<float> exponents = {0.0f,  1.0f, 2.0f, 3.0f, 4.0f, 5.0f,
+                                        -1.0f, 0.5f, 1.5f, inf,  -inf, nan};
+  for (std::size_t count = 0; count <= 49; ++count) {
+    for (const bool integers_only : {false, true}) {
+      for (int alias = 0; alias < 3; ++alias) {
+        SCOPED_TRACE(::testing::Message()
+                     << "count=" << count << " integers=" << integers_only << " alias=" << alias);
+        std::vector<float> base(count + 2, 42.0f), exponent(count + 2, 42.0f);
+        std::vector<float> output(count + 2, 42.0f), expected(count);
+        for (std::size_t i = 0; i < count; ++i) {
+          base[i + 1] = bases[i % bases.size()];
+          exponent[i + 1] = exponents[i % (integers_only ? 6 : exponents.size())];
+          expected[i] = std::pow(base[i + 1], exponent[i + 1]);
+        }
+        float *result = (alias == 1   ? base.data()
+                         : alias == 2 ? exponent.data()
+                                      : output.data()) +
+                        1;
+        onnx_light_cpu::PowFloat32_AVX512(base.data() + 1, exponent.data() + 1, result, count);
+        for (std::size_t i = 0; i < count; ++i) {
+          SCOPED_TRACE(i);
+          ExpectPowResult(result[i], expected[i]);
+        }
+        for (const auto *values : {&base, &exponent, &output}) {
+          EXPECT_EQ(values->front(), 42.0f);
+          EXPECT_EQ(values->back(), 42.0f);
+        }
+      }
+      for (const float base : bases) {
+        std::vector<float> exponent(count + 2, 42.0f), expected(count);
+        for (std::size_t i = 0; i < count; ++i) {
+          exponent[i + 1] = exponents[i % (integers_only ? 6 : exponents.size())];
+          expected[i] = std::pow(base, exponent[i + 1]);
+        }
+        onnx_light_cpu::PowFloat32LeftScalar_AVX512(base, exponent.data() + 1, exponent.data() + 1,
+                                                    count);
+        for (std::size_t i = 0; i < count; ++i) {
+          SCOPED_TRACE(::testing::Message() << "base=" << base << " count=" << count << " i=" << i);
+          ExpectPowResult(exponent[i + 1], expected[i]);
+        }
+        EXPECT_EQ(exponent.front(), 42.0f);
+        EXPECT_EQ(exponent.back(), 42.0f);
+      }
+    }
+  }
+}
+#endif
+
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
 TEST(SigmoidFloat32AVX2FMA, HandlesVectorTailAndSpecialValues) {
   if (onnx_light_cpu::DetectSimdLevel() < onnx_light_cpu::SimdLevel::kAVX2 ||

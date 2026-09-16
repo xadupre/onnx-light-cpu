@@ -180,6 +180,15 @@ ONNX_LIGHT_CPU_FORCE_INLINE __m512 LogPs(__m512 x) {
   return Select(is_nan, _mm512_set1_ps(std::numeric_limits<float>::quiet_NaN()), result);
 }
 
+ONNX_LIGHT_CPU_FORCE_INLINE __m512 SigmoidPs(__m512 value) {
+  const __m512 negative_abs = _mm512_castsi512_ps(_mm512_or_epi32(
+      _mm512_castps_si512(value), _mm512_set1_epi32(static_cast<int>(0x80000000u))));
+  const __m512 exponent = ExpPs(negative_abs);
+  const __m512 one = _mm512_set1_ps(1.0f);
+  const __mmask16 negative = _mm512_cmp_ps_mask(value, _mm512_setzero_ps(), _CMP_LT_OQ);
+  return _mm512_div_ps(Select(negative, exponent, one), _mm512_add_ps(one, exponent));
+}
+
 #undef ONNX_LIGHT_CPU_FORCE_INLINE
 
 __m512d ExpPd(__m512d x) {
@@ -313,6 +322,23 @@ void LogFloat32_AVX512(const float *input, float *output, std::size_t count) {
   }
 }
 
+void SigmoidFloat32_AVX512(const float *input, float *output, std::size_t count) {
+  std::size_t i = 0;
+  for (; i + 32 <= count; i += 32) {
+    const __m512 result0 = SigmoidPs(_mm512_loadu_ps(input + i));
+    const __m512 result1 = SigmoidPs(_mm512_loadu_ps(input + i + 16));
+    _mm512_storeu_ps(output + i, result0);
+    _mm512_storeu_ps(output + i + 16, result1);
+  }
+  for (; i + 16 <= count; i += 16) {
+    _mm512_storeu_ps(output + i, SigmoidPs(_mm512_loadu_ps(input + i)));
+  }
+  if (i < count) {
+    const __mmask16 tail = static_cast<__mmask16>((1u << (count - i)) - 1u);
+    _mm512_mask_storeu_ps(output + i, tail, SigmoidPs(_mm512_maskz_loadu_ps(tail, input + i)));
+  }
+}
+
 void PowFloat32_AVX512(const float *base, const float *exponent, float *output, std::size_t count) {
   const __m512 zero = _mm512_setzero_ps();
   const __m512 one = _mm512_set1_ps(1.0f);
@@ -348,15 +374,22 @@ void PowFloat32_AVX512(const float *base, const float *exponent, float *output, 
                                       _mm512_cmp_ps_mask(abs_x, maximum, _CMP_LE_OQ) &
                                       _mm512_cmp_ps_mask(abs_y, maximum, _CMP_LE_OQ);
     const __mmask16 approximate = positive_finite & ~small_integer;
-    result = _mm512_mask_mov_ps(result, approximate, ExpPs(_mm512_mul_ps(LogPs(x), y)));
-    _mm512_storeu_ps(output + i, result);
+    if (approximate != 0) {
+      result = _mm512_mask_mov_ps(result, approximate, ExpPs(_mm512_mul_ps(LogPs(x), y)));
+    }
 
     const __mmask16 scalar = ~(small_integer | approximate);
-    for (std::size_t lane = 0; scalar != 0 && lane < 16; ++lane) {
-      if ((scalar & (static_cast<__mmask16>(1u) << lane)) != 0) {
-        output[i + lane] = std::pow(base[i + lane], exponent[i + lane]);
+    if (scalar != 0) {
+      float values[16];
+      _mm512_storeu_ps(values, result);
+      for (std::size_t lane = 0; lane < 16; ++lane) {
+        if ((scalar & (static_cast<__mmask16>(1u) << lane)) != 0) {
+          values[lane] = std::pow(base[i + lane], exponent[i + lane]);
+        }
       }
+      result = _mm512_loadu_ps(values);
     }
+    _mm512_storeu_ps(output + i, result);
   }
   for (; i < count; ++i) {
     output[i] = std::pow(base[i], exponent[i]);
@@ -373,7 +406,8 @@ void PowFloat32LeftScalar_AVX512(float base, const float *exponent, float *outpu
   const __m512 x4 = _mm512_mul_ps(x2, x2);
   const __m512 x5 = _mm512_mul_ps(x4, x);
   const bool positive_finite = base > 0.0f && std::isfinite(base);
-  const __m512 log_x = positive_finite ? LogPs(x) : zero;
+  __m512 log_x = zero;
+  bool have_log_x = false;
   std::size_t i = 0;
   for (; i + 16 <= count; i += 16) {
     const __m512 y = _mm512_loadu_ps(exponent + i);
@@ -397,14 +431,25 @@ void PowFloat32LeftScalar_AVX512(float base, const float *exponent, float *outpu
         _mm512_cmp_ps_mask(abs_y, _mm512_set1_ps(std::numeric_limits<float>::max()), _CMP_LE_OQ);
     const __mmask16 approximate =
         positive_finite ? static_cast<__mmask16>(finite_exponent & ~small_integer) : 0;
-    result = _mm512_mask_mov_ps(result, approximate, ExpPs(_mm512_mul_ps(log_x, y)));
-    _mm512_storeu_ps(output + i, result);
-    const __mmask16 scalar = ~(small_integer | approximate);
-    for (std::size_t lane = 0; scalar != 0 && lane < 16; ++lane) {
-      if ((scalar & (static_cast<__mmask16>(1u) << lane)) != 0) {
-        output[i + lane] = std::pow(base, exponent[i + lane]);
+    if (approximate != 0) {
+      if (!have_log_x) {
+        log_x = LogPs(x);
+        have_log_x = true;
       }
+      result = _mm512_mask_mov_ps(result, approximate, ExpPs(_mm512_mul_ps(log_x, y)));
     }
+    const __mmask16 scalar = ~(small_integer | approximate);
+    if (scalar != 0) {
+      float values[16];
+      _mm512_storeu_ps(values, result);
+      for (std::size_t lane = 0; lane < 16; ++lane) {
+        if ((scalar & (static_cast<__mmask16>(1u) << lane)) != 0) {
+          values[lane] = std::pow(base, exponent[i + lane]);
+        }
+      }
+      result = _mm512_loadu_ps(values);
+    }
+    _mm512_storeu_ps(output + i, result);
   }
   for (; i < count; ++i) {
     output[i] = std::pow(base, exponent[i]);
