@@ -34,7 +34,13 @@ NumPy or ``ml_dtypes``, including ``BFLOAT16``.
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from textwrap import dedent
 from threading import Barrier
 from types import SimpleNamespace
 
@@ -372,6 +378,57 @@ TestCpuBackend = make_test_class(
     include_regex=["^test_cpu_"],
     exclude_regex=["^test_cpu_treeensemble(?:classifier|regressor)_"],
 )
+
+
+class TestExtensionImportOrder(ExtTestCase):
+    def test_native_extension_import_orders(self):
+        root = Path(__file__).resolve().parents[2]
+        env = os.environ.copy()
+        env["PYTHONPATH"] = os.pathsep.join(
+            [str(root), *(str(Path(path).resolve()) for path in sys.path)]
+        )
+        script = dedent("""
+            import sys
+            from importlib import import_module
+            from pathlib import Path
+
+            root = Path(sys.argv[1])
+            for name in sys.argv[2:]:
+                assert name not in sys.modules, f"{name} was loaded prematurely"
+                module = import_module(name)
+                print(name, module.__file__, flush=True)
+                assert Path(module.__file__).resolve().parent == (
+                    root / "onnx_light_cpu" / "onnx_py"
+                ), module.__file__
+
+            from onnx_light_cpu import has_cpu_kernels, register_kernels, registered_kernels
+
+            assert has_cpu_kernels()
+            register_kernels()
+            assert registered_kernels()
+            """)
+        modules = (
+            "onnx_light_cpu.onnx_py._cpukernels",
+            "onnx_light_cpu.onnx_py._cpuregister",
+        )
+        # The temporary cwd ensures PYTHONPATH, not the working directory,
+        # selects the source checkout. Each order gets a fresh dynamic loader.
+        with TemporaryDirectory() as temporary:
+            for cwd in (root, Path(temporary)):
+                for order in (modules, modules[::-1]):
+                    with self.subTest(cwd=str(cwd), order=order):
+                        result = subprocess.run(
+                            [sys.executable, "-c", script, str(root), *order],
+                            cwd=cwd,
+                            env=env,
+                            capture_output=True,
+                            text=True,
+                            timeout=60,
+                            check=False,
+                        )
+                        self.assertEqual(
+                            result.returncode, 0, f"{result.stdout}\n{result.stderr}"
+                        )
 
 
 class TestKernelUsage(ExtTestCase):

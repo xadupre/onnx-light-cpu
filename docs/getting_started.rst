@@ -29,6 +29,49 @@ Or build with CMake (C++ only):
 The C++ quick start requires the onnx-light C++ package to be installed so
 ``find_package(onnx_light)`` can locate it.
 
+Diagnosing native-extension import failures
+------------------------------------------
+
+Before attributing an undefined symbol to import order, rebuild both projects
+from clean source trees with no existing native artifacts. Reusing an in-place
+build can mix extensions and shared libraries from different configurations.
+Use absolute source paths and fresh build directories; do not install either
+project into site-packages or use editable installs for this check.
+
+For example, on Linux, with the Python build dependencies already available:
+
+.. code-block:: bash
+
+   export ONNX_SOURCE=/absolute/path/to/onnx-light
+   export CPU_SOURCE=/absolute/path/to/onnx-light-cpu
+   export BUILD_ROOT="$(mktemp -d)"
+
+   cmake -S "$ONNX_SOURCE" -B "$BUILD_ROOT/onnx-light" \
+       -DCMAKE_BUILD_TYPE=Release -DONNX_LIGHT_INSTALL=OFF \
+       -DPython_EXECUTABLE="$(command -v python)"
+   cmake --build "$BUILD_ROOT/onnx-light" --parallel 4
+   cmake --install "$BUILD_ROOT/onnx-light" --prefix "$ONNX_SOURCE"
+
+   export PYTHONPATH="$CPU_SOURCE:$ONNX_SOURCE"
+   python "$CPU_SOURCE/setup.py" build_ext --inplace --onnx-light-source \
+       --build-temp "$BUILD_ROOT/onnx-light-cpu" --parallel 4
+
+   cd "$CPU_SOURCE"
+   python -m unittest \
+       unittests.python.test_kernels_e2e.TestExtensionImportOrder -v
+
+Here ``cmake --install`` places the dependency's freshly built libraries in its
+source tree, not in site-packages. ``--onnx-light-source`` links against those
+same runtime libraries rather than rebuilding a second copy.
+
+The regression test imports ``_cpukernels`` then ``_cpuregister``, and the
+reverse order, in separate Python subprocesses. It runs from both the checkout
+and a temporary working directory, verifies that the CPU extensions came from
+the checkout, and exercises kernel registration. A failure includes the child
+process's output and traceback. If a clean build passes but reused artifacts
+fail, record both source revisions and build commands with the report rather
+than changing symbol visibility or preloading libraries to mask the failure.
+
 Quick Start
 -----------
 
