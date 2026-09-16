@@ -30,7 +30,7 @@ The C++ quick start requires the onnx-light C++ package to be installed so
 ``find_package(onnx_light)`` can locate it.
 
 Diagnosing native-extension import failures
-------------------------------------------
+-------------------------------------------
 
 Before attributing an undefined symbol to import order, rebuild both projects
 from clean source trees with no existing native artifacts. Reusing an in-place
