@@ -57,6 +57,15 @@ inline constexpr UnaryExecutionTuning kActivationExecutionTuning{256 * 1024, 256
 inline constexpr UnaryExecutionTuning kSerialExecutionTuning{0, 1, 0, false};
 
 template <typename T> void SigmoidRange(const T *input, T *output, std::size_t count) {
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
+  if constexpr (std::is_same_v<T, float>) {
+    static const bool use_avx512 = DetectSimdLevel() >= SimdLevel::kAVX512;
+    if (use_avx512) {
+      SigmoidFloat32_AVX512(input, output, count);
+      return;
+    }
+  }
+#endif
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
   if constexpr (std::is_same_v<T, float>) {
     static const bool use_avx2_fma = DetectSimdLevel() >= SimdLevel::kAVX2 && CpuSupportsFma();
