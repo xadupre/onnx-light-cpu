@@ -22,25 +22,25 @@ enum class MicrosoftKernelImplementation {
 /// Registers exactly one implementation for every ``com.microsoft`` operator.
 void RegisterMicrosoftKernels(MicrosoftKernelImplementation implementation);
 
-/// Registers every onnx-light-cpu kernel class into onnx-light's shared
+/// Registers every shipped operator into onnx-light's process-wide
 /// ``KernelDispatchTable`` for the CPU device.
 ///
-/// This is a convenience wrapper that calls each per-operator registration
-/// function (:cpp:func:`RegisterAbsKernel`, :cpp:func:`RegisterAttentionKernel`,
-/// :cpp:func:`RegisterBiasGeluKernel`, :cpp:func:`RegisterBinaryKernels`,
-/// :cpp:func:`RegisterCDistKernel`, :cpp:func:`RegisterExpKernel`,
-/// :cpp:func:`RegisterLogKernel`, :cpp:func:`RegisterGemmKernel`,
-/// :cpp:func:`RegisterMatMulKernel`, :cpp:func:`RegisterIntegerMatMulKernels`
-/// :cpp:func:`RegisterNotKernel`, :cpp:func:`RegisterTreeEnsembleKernel`, and
-/// :cpp:func:`RegisterVariadicElementwiseKernels`), so a single call installs
-/// the accelerated elementwise/GEMM kernels, the stateless materialized
-/// ``Attention`` baseline, the prepared ``TreeEnsemble`` kernel, the portable
-/// integer matrix-multiplication kernels, and the ``com.microsoft``
-/// ``BiasGelu``/``CDist`` contrib kernels.
-/// After this call every such node dispatched by onnx-light's
-/// runtime (``RunNode`` / ``RuntimeSession``, and therefore any model executed
-/// through ``ReferenceEvaluator``) resolves to the onnx-light-cpu kernel,
-/// replacing the corresponding built-in entries for the default ONNX domain.
+/// See :ref:`l-register-all-kernels-inventory` for the complete family,
+/// domain, and operator table, validated against ``CollectRegisteredKernels``.
+/// The inventory covers ``ai.onnx`` (also accepted as the empty domain),
+/// ``ai.onnx.ml``, and ``com.microsoft``.
+///
+/// Existing global entries are replaced. Register before nodes are resolved:
+/// already-resolved sessions retain cached factories, and session-local
+/// overrides take precedence. Use ``RegisterAllKernelsForSession`` to install
+/// the same operator set on one ``RuntimeContext`` without changing global state,
+/// or ``RegisterAllKernelsGlobal`` for explicit replacement control.
+///
+/// This overload selects ``MicrosoftKernelImplementation::OPTIMIZED``.
+/// The policy overload can instead select the complete ``NAIVE`` Microsoft
+/// reference family; it does not change the ONNX or ONNX-ML registrations.
+/// Optimized kernels may still use scalar fallbacks depending on types,
+/// shapes, build options, and available CPU instructions.
 void RegisterAllKernels();
 
 /// Registers all kernels, selecting the complete ``com.microsoft`` family
