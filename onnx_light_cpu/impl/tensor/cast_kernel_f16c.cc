@@ -13,6 +13,10 @@ namespace onnx_light_cpu::detail {
 
 std::size_t CastFloat32ToFloat16_F16C(const std::uint8_t *src, std::uint8_t *dst,
                                       std::size_t count) {
+  // VCVTPS2PH ignores _MM_FROUND_NO_EXC. Match the integer-based codec even
+  // when the caller unmasks floating-point exceptions, and preserve its flags.
+  const unsigned int mxcsr = _mm_getcsr();
+  _mm_setcsr(mxcsr | _MM_MASK_MASK);
   std::size_t i = 0;
   for (; count - i >= 8; i += 8) {
     __m256 value;
@@ -33,10 +37,11 @@ std::size_t CastFloat32ToFloat16_F16C(const std::uint8_t *src, std::uint8_t *dst
         std::memcpy(dst + j * 2, &half, sizeof(half));
       }
     } else {
-      const __m128i half = _mm256_cvtps_ph(value, _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC);
+      const __m128i half = _mm256_cvtps_ph(value, _MM_FROUND_TO_NEAREST_INT);
       std::memcpy(dst + i * 2, &half, sizeof(half));
     }
   }
+  _mm_setcsr(mxcsr);
   return i;
 }
 

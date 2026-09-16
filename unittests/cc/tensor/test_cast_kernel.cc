@@ -11,7 +11,12 @@
 #include <array>
 #include <cfenv>
 #include <cstring>
+#include <utility>
 #include <vector>
+
+#if defined(__x86_64__) || defined(_M_X64)
+#include <xmmintrin.h>
+#endif
 
 namespace {
 
@@ -170,5 +175,31 @@ TEST(CastKernel, ParallelRangesAndNestedBypass) {
     }
   }
 }
+
+#if defined(__x86_64__) || defined(_M_X64)
+TEST(CastKernel, PreservesFloatingPointExceptionsAndFlushModes) {
+  const std::array<float, 17> values{65520.0f,   -65520.0f, 0x1p-25f,   -0x1p-25f,
+                                     0x1.002p0f, 0x1p-149f, -0x1p-149f, 0x1.8p-24f};
+  std::array<std::uint16_t, values.size()> expected{}, actual{};
+  CastConvert(values.data(), DataType::FLOAT, expected.data(), DataType::FLOAT16, values.size(),
+              SimdLevel::kNone);
+  const unsigned int original = _mm_getcsr();
+  for (unsigned int flush : {0u, 0x8040u}) {
+    for (unsigned int masks : {0u, static_cast<unsigned int>(_MM_MASK_MASK)}) {
+      for (unsigned int flags : {0u, static_cast<unsigned int>(_MM_EXCEPT_DIV_ZERO)}) {
+        const unsigned int requested =
+            (original & ~(_MM_MASK_MASK | _MM_EXCEPT_MASK | 0x8040u)) | masks | flags | flush;
+        _mm_setcsr(requested);
+        CastConvert(values.data(), DataType::FLOAT, actual.data(), DataType::FLOAT16,
+                    values.size());
+        const unsigned int after = _mm_getcsr();
+        _mm_setcsr(original);
+        EXPECT_EQ(after, requested);
+        EXPECT_EQ(actual, expected);
+      }
+    }
+  }
+}
+#endif
 
 } // namespace
