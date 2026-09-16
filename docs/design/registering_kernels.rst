@@ -128,7 +128,7 @@ kernels.
 .. _l-register-all-kernels-inventory:
 
 Complete RegisterAllKernels inventory
-------------------------------------
+-------------------------------------
 
 Every family below is installed for the **CPU** device. ``ai.onnx`` denotes
 the default ONNX domain (the empty string is equivalent); ``ai.onnx.ml`` and
