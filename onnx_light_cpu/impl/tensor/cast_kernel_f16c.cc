@@ -21,25 +21,16 @@ std::size_t CastFloat32ToFloat16_F16C(const std::uint8_t *src, std::uint8_t *dst
   for (; count - i >= 8; i += 8) {
     __m256 value;
     std::memcpy(&value, src + i * 4, sizeof(value));
-    const __m128i low = _mm_castps_si128(_mm256_castps256_ps128(value));
-    const __m128i high = _mm_castps_si128(_mm256_extractf128_ps(value, 1));
-    const __m128i mask = _mm_set1_epi32(0x7fffffff);
-    const __m128i inf = _mm_set1_epi32(0x7f800000);
-    const __m128i nan = _mm_or_si128(_mm_cmpgt_epi32(_mm_and_si128(low, mask), inf),
-                                     _mm_cmpgt_epi32(_mm_and_si128(high, mask), inf));
-    // F16C preserves NaN payloads and quiets signaling NaNs. Cast instead
-    // canonicalizes all float32 NaNs, without raising an invalid exception.
+    __m128i half = _mm256_cvtps_ph(value, _MM_FROUND_TO_NEAREST_INT);
+    const __m128i nan =
+        _mm_cmpgt_epi16(_mm_and_si128(half, _mm_set1_epi16(0x7fff)), _mm_set1_epi16(0x7c00));
+    // F16C preserves NaN payloads; Cast canonicalizes them, preserving sign.
     if (_mm_movemask_epi8(nan) != 0) {
-      for (std::size_t j = i; j < i + 8; ++j) {
-        float scalar;
-        std::memcpy(&scalar, src + j * 4, sizeof(scalar));
-        const auto half = FloatToFloat16Bits(scalar);
-        std::memcpy(dst + j * 2, &half, sizeof(half));
-      }
-    } else {
-      const __m128i half = _mm256_cvtps_ph(value, _MM_FROUND_TO_NEAREST_INT);
-      std::memcpy(dst + i * 2, &half, sizeof(half));
+      const __m128i canonical =
+          _mm_or_si128(_mm_and_si128(half, _mm_set1_epi16(-32768)), _mm_set1_epi16(0x7e00));
+      half = _mm_or_si128(_mm_and_si128(nan, canonical), _mm_andnot_si128(nan, half));
     }
+    std::memcpy(dst + i * 2, &half, sizeof(half));
   }
   _mm_setcsr(mxcsr);
   return i;

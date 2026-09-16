@@ -101,5 +101,6 @@ kernel names and conversion paths recorded during the untimed verification
 run. For example, ``Cast.float32_to_float16.f16c`` identifies the F16C fast
 path; ``Cast.scalar``, ``Cast.copy``, ``Cast.empty`` and ``Cast.builtin``
 identify the other Cast paths. SIMD paths still use the scalar codec for
-tails and, for F16C, vectors containing NaNs. Recording is disabled while
-timing, and these diagnostics always describe onnx-light-cpu, not ONNX Runtime.
+tails and, for float16-to-float32 F16C, vectors containing NaNs. Recording is
+disabled while timing, and these diagnostics always describe onnx-light-cpu,
+not ONNX Runtime. See :ref:`l-cast-simd-measurements` for a measured example.
