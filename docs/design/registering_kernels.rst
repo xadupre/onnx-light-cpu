@@ -1,13 +1,11 @@
 Registering kernels
 ===================
 
-``onnx-light-cpu`` does not run models on its own: it installs its
-SIMD-accelerated kernels into `onnx-light
-<https://github.com/xadupre/onnx-light>`_'s shared C++
-``KernelDispatchTable``. Once installed, every node that ``onnx-light``'s
-runtime executes (and therefore any model run through a
-``ReferenceEvaluator``) resolves to the accelerated kernel instead of the
-built-in one.
+``onnx-light-cpu`` does not run models on its own: it installs its kernels
+into `onnx-light <https://github.com/xadupre/onnx-light>`_'s shared C++
+``KernelDispatchTable`` or a session's ``RuntimeContext``. For supported
+operators, newly resolved nodes use these implementations instead of the
+built-in ones, subject to the registration scope and precedence below.
 
 This page explains how to register the shipped kernels, how to add a brand new
 kernel, and — most importantly — why a registration can appear to be *ignored*
@@ -59,7 +57,8 @@ without touching the shared table, use ``register_kernel_for_session``:
 
 The evaluator's runtime context owns that registration and releases it with the
 evaluator. Other evaluators are unchanged. ``register_kernels_for_session``
-provides the equivalent all-kernels operation.
+provides the equivalent all-kernels operation. Session-local registrations take
+precedence over global and built-in kernels for that session.
 
 Session-local callbacks retain prepared kernels across runs, including copies
 held by resolved nodes. Preparation is lazy and cached by node contents, input
@@ -99,6 +98,14 @@ its nodes. Pass ``replace=false`` to either scope to keep an existing entry;
 the function then reports no installation. Repeated calls are therefore
 idempotent in state, whether they replace the same implementation or retain it.
 
+``RegisterAllKernels()`` is the C++ convenience entry point for process-wide
+registration with replacement enabled; ``register_kernels()`` is the Python
+compatibility entry point. ``RegisterAllKernelsGlobal`` and
+``RegisterAllKernelsForSession`` install the same operator set, but provide
+explicit scope and replacement control and return the number of installations.
+For session-local calls, ``replace=false`` checks only existing local entries:
+it does not prevent overriding a global or built-in kernel.
+
 ``RegisterMicrosoftKernels`` installs exactly one complete implementation
 family for the ``com.microsoft`` domain. Mixing families in one registration
 pass is intentionally unsupported, so one operator cannot silently replace a
@@ -117,6 +124,92 @@ low-level SIMD helpers pick it up directly. Calling a kernel class directly
 outside a session therefore stays serial unless the caller installs an
 ``onnx-light`` ``CpuExecutorScope`` first, matching native ``onnx-light``
 kernels.
+
+.. _l-register-all-kernels-inventory:
+
+Complete RegisterAllKernels inventory
+-------------------------------------
+
+Every family below is installed for the **CPU** device. ``ai.onnx`` denotes
+the default ONNX domain (the empty string is equivalent); ``ai.onnx.ml`` and
+``com.microsoft`` are separate domains. In particular, the two
+``LinearAttention`` entries are distinct operators.
+
+.. csv-table:: Kernel families installed by RegisterAllKernels
+   :header: "Family registrar", "Domain", "Operators"
+   :widths: 35 15 50
+
+   "RegisterAbsKernel", "ai.onnx", "Abs"
+   "RegisterAttentionKernel", "ai.onnx", "Attention"
+   "RegisterLinearAttentionKernel", "ai.onnx", "LinearAttention"
+   "RegisterBinaryKernels", "ai.onnx", "Add, Sub, Mul, Div, Mod, Pow, Equal, Greater, GreaterOrEqual, Less, LessOrEqual, And, Or, Xor, BitwiseAnd, BitwiseOr, BitwiseXor, BitShift, PRelu"
+   "RegisterExpKernel", "ai.onnx", "Exp"
+   "RegisterLogKernel", "ai.onnx", "Log"
+   "RegisterGemmKernel", "ai.onnx", "Gemm"
+   "RegisterCastKernel", "ai.onnx", "Cast"
+   "RegisterConcatKernel", "ai.onnx", "Concat"
+   "RegisterGatherKernel", "ai.onnx", "Gather"
+   "RegisterSliceKernel", "ai.onnx", "Slice"
+   "RegisterSplitKernel", "ai.onnx", "Split"
+   "RegisterMatMulKernel", "ai.onnx", "MatMul"
+   "RegisterIntegerMatMulKernels", "ai.onnx", "MatMulInteger, QLinearMatMul"
+   "RegisterNotKernel", "ai.onnx", "Not"
+   "RegisterNormalizationKernels", "ai.onnx", "BatchNormalization, GroupNormalization, InstanceNormalization, LayerNormalization, LpNormalization, MeanVarianceNormalization"
+   "RegisterRmsNormalizationKernel", "ai.onnx", "RMSNormalization"
+   "RegisterSigmoidKernel", "ai.onnx", "Sigmoid"
+   "RegisterSimplifiedLayerNormalizationKernel", "ai.onnx", "SimplifiedLayerNormalization"
+   "RegisterSoftmaxKernel", "ai.onnx", "Softmax"
+   "RegisterSwiGLUKernel", "ai.onnx", "SwiGLU"
+   "RegisterTreeEnsembleKernel", "ai.onnx.ml", "TreeEnsemble"
+   "RegisterVariadicElementwiseKernels", "ai.onnx", "Sum, Mean, Min, Max"
+   "RegisterMicrosoftKernels", "com.microsoft", "BiasGelu, CDist, GroupQueryAttention, LinearAttention, SkipSimplifiedLayerNormalization"
+
+The table describes shipped registrations, not all operators supported by
+onnx-light, nor a guarantee of every type, opset, or shape for a listed operator.
+The :doc:`../api/python/kernel_inventory` API and the generated
+:doc:`../byop` catalogue expose the registration metadata, including
+supported element types, opset bounds, and implementation names.
+
+Microsoft implementation policy
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+``MicrosoftKernelImplementation.OPTIMIZED`` is the default for all global and
+session-local entry points. It selects the production implementations of all
+five ``com.microsoft`` operators above. ``NAIVE`` selects their reference
+implementations instead, using the ``RegisterNaive*Kernel`` registrars and
+``Naive*`` kernel names (``NaiveMicrosoftLinearAttention`` for
+``com.microsoft::LinearAttention``). These are correctness oracles for testing
+and diagnostics, not a performance option. The naive LinearAttention adapter
+delegates to onnx-light's concrete reference kernel, as described below.
+
+The policy changes only the Microsoft implementations, not their
+domain/operator set or any ``ai.onnx`` / ``ai.onnx.ml`` registration.
+The C++ policy overload is
+``RegisterAllKernels(MicrosoftKernelImplementation::NAIVE)``; the explicit
+global and session APIs also accept the policy.
+
+``OPTIMIZED`` does **not** promise SIMD for every invocation. Production
+kernels use tuning, parallel execution, and SIMD where implemented and
+applicable, with portable/scalar paths depending on element type, shape,
+build configuration, and CPU capabilities. Selecting ``NAIVE`` is distinct
+from disabling SIMD in production kernels and does not turn the entire
+registered kernel set into reference implementations.
+
+Keeping the inventory current
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+``registered_kernels(microsoft_implementation=...)`` calls
+``CollectRegisteredKernels`` in C++, which executes the same
+``RegisterAllKernels`` registration path that populates the dispatch table,
+but collects metadata **without installing or executing kernels**. It describes
+the shipped set for that policy, not the current contents of the global table
+or a particular session.
+
+``unittests/python/test_kernels_doc_e2e.py`` compares this table's
+domain/operator/device set with that live inventory for both ``OPTIMIZED``
+and ``NAIVE``. Adding, removing, or renaming a registration therefore requires
+updating this table. Multiple opset records for one operator are collapsed
+here; the generated per-kernel catalogue retains their detailed metadata.
 
 Checking which kernels are used
 -------------------------------

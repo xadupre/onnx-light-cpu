@@ -12,11 +12,14 @@ its own module, excluded from the plain ``core`` CI job the same way, and only
 exercised where that build is available.
 """
 
+import csv
 import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from onnx_light.ext_test_case import ExtTestCase
+
+from onnx_light_cpu import MicrosoftKernelImplementation, registered_kernels
 
 _EXT_DIR = Path(__file__).resolve().parents[2] / "docs" / "_ext"
 if str(_EXT_DIR) not in sys.path:
@@ -47,6 +50,30 @@ class TestGenerationParityWithLiveInventory(ExtTestCase):
         temporary_directory = TemporaryDirectory()
         self.addCleanup(temporary_directory.cleanup)
         self._tmp_path = Path(temporary_directory.name)
+
+    def test_register_all_documented_inventory_matches_both_policies(self):
+        path = _EXT_DIR.parent / "design" / "registering_kernels.rst"
+        text = path.read_text(encoding="utf-8")
+        directive = ".. csv-table:: Kernel families installed by RegisterAllKernels"
+        table = text.split(directive, 1)[1].split("\n\n", 2)[1]
+        documented = []
+        for registrar, domain, operators in csv.reader(table.splitlines(), skipinitialspace=True):
+            self.assertTrue(registrar.startswith("Register"), registrar)
+            for op_type in operators.split(", "):
+                documented.append((domain, op_type, "CPU"))
+        self.assertTrue(documented)
+        self.assertEqual(len(documented), len(set(documented)))
+
+        for policy in (
+            MicrosoftKernelImplementation.OPTIMIZED,
+            MicrosoftKernelImplementation.NAIVE,
+        ):
+            with self.subTest(policy=policy):
+                actual = {
+                    (record.domain, record.op_type, record.device)
+                    for record in registered_kernels(microsoft_implementation=policy)
+                }
+                self.assertSetEqual(set(documented), actual)
 
     def test_generated_pages_and_index_match_registered_kernels_exactly(self):
         records = load_registered_kernels()
