@@ -17,18 +17,17 @@ struct AttentionSoftmaxBlockResultAVX2 {
   float correction;
 };
 
-/// Vectorized Q . K dot product over count contiguous FP32 elements,
-/// using AVX2 8-wide FMA accumulation with a scalar-equivalent masked tail.
-/// Used by the AVX2+FMA Q == 1 decode path (see ComputeAttentionStreamingGeneric
-/// in attention_plan.cc) to compute one raw (unscaled) attention score
-/// without going through the general GEMM path.
-float AttentionDotFloat32_AVX2_FMA(const float *q, const float *k, std::size_t count);
+/// Computes scaled Q . K for a block of strided key rows without leaving the
+/// AVX2 translation unit between dot products.
+void AttentionScoreBlockFloat32_AVX2_FMA(const float *q, const float *k, std::size_t rows,
+                                         std::ptrdiff_t stride, std::size_t head_dim, float scale,
+                                         float *scores);
 
-/// Computes accumulator[d] += weight * v[d] for d in [0, count),
-/// vectorized with AVX2+FMA. Used by the Q == 1 decode path to fold one
-/// KV position's contribution into the running P @ V accumulator.
-void AttentionAccumulateFloat32_AVX2_FMA(float *accumulator, float weight, const float *v,
-                                         std::size_t count);
+/// Adds a block of weighted value rows, skipping zero weights (including
+/// masked values that may contain NaNs), in the original key order.
+void AttentionAccumulateBlockFloat32_AVX2_FMA(float *accumulator, const float *weights,
+                                              const float *v, std::size_t rows,
+                                              std::ptrdiff_t stride, std::size_t head_dim);
 
 /// Computes values[d] *= factor for d in [0, count), vectorized
 /// with AVX2. Used to rescale the running P @ V accumulator by the

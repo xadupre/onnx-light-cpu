@@ -232,7 +232,8 @@ template <typename T> std::size_t RegisterRows() {
   }
 #endif
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
-  if (level >= SimdLevel::kAVX2 && CpuSupportsFma()) {
+  // EffectiveGemmSimdLevel includes the FMA/OS check.
+  if (level >= SimdLevel::kAVX2) {
     return detail::SelectGemmRegisterRows(SimdLevel::kAVX2, true);
   }
 #endif

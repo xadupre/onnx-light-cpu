@@ -13,6 +13,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <span>
 #include <stdexcept>
 #include <vector>
@@ -135,6 +136,79 @@ TEST(GemmPlan, WideProjectionUsesSingleKBlock) {
   EXPECT_EQ(plan.blocking().kc, 768u);
   EXPECT_GT(plan.useful_threads(), 32u);
   EXPECT_LE(plan.useful_threads(), 51u);
+}
+
+TEST(GemmPlan, BenchmarkShapesPreserveScalesTransposesAndRepeatedExecution) {
+  struct Shape {
+    std::size_t m, n, k;
+    bool trans_a = false, trans_b = false;
+  };
+  const Shape shapes[] = {{32, 32, 1024},
+                          {32, 32, 16384},
+                          {32, 32, 8192},
+                          {128, 128, 128, true},
+                          {128, 128, 128, false, true},
+                          {128, 3072, 768}};
+  for (const auto &shape : shapes) {
+    const auto [m, n, k, trans_a, trans_b] = shape;
+    SCOPED_TRACE(::testing::Message()
+                 << m << "x" << n << "x" << k << " trans_a=" << trans_a << " trans_b=" << trans_b);
+    std::vector<float> a(m * k), b(k * n), c(m * n), y(m * n);
+    float dot = 0.0f;
+    for (std::size_t depth = 0; depth < k; ++depth) {
+      const float av = static_cast<float>(static_cast<int>(depth % 5) - 2) * 0.125f;
+      const float bv = static_cast<float>(static_cast<int>(depth % 3) - 1) * 0.25f;
+      dot += av * bv;
+      for (std::size_t row = 0; row < m; ++row) {
+        a[trans_a ? depth * m + row : row * k + depth] =
+            static_cast<float>(static_cast<int>(row % 7) - 3) * av;
+      }
+      for (std::size_t col = 0; col < n; ++col) {
+        b[trans_b ? col * k + depth : depth * n + col] =
+            static_cast<float>(static_cast<int>(col % 11) - 5) * bv;
+      }
+    }
+    for (std::size_t i = 0; i < c.size(); ++i) {
+      c[i] = static_cast<float>(i % 13) * 0.125f;
+    }
+    for (std::int64_t threads : {1, 4}) {
+      InlineExecutor executor;
+      onnx_light_cpu::ExecutionExecutorView view{&executor, threads, &InlineExecutor::Run};
+      onnx_light_cpu::ExecutionExecutorScope scope(&view);
+      const GemmPlan<float> plan(GemmPlanOptions<float>{trans_a, trans_b, m, n, k, 0.75f, -0.5f});
+      for (int repetition = 0; repetition < 2; ++repetition) {
+        std::fill(y.begin(), y.end(), std::numeric_limits<float>::quiet_NaN());
+        plan.Execute(a.data(), b.data(), c.data(), y.data());
+        for (std::size_t row = 0; row < m; ++row) {
+          for (std::size_t col = 0; col < n; ++col) {
+            const float product = static_cast<float>(static_cast<int>(row % 7) - 3) *
+                                  static_cast<float>(static_cast<int>(col % 11) - 5) * dot;
+            EXPECT_FLOAT_EQ(y[row * n + col], 0.75f * product - 0.5f * c[row * n + col]);
+          }
+        }
+      }
+    }
+  }
+}
+
+TEST(MatMulPlan, LargeDepthOverwritesOutputAcrossRepeatedExecution) {
+  constexpr std::size_t M = 32, N = 32, K = 8192;
+  const std::array<std::size_t, 2> a_shape{M, K}, b_shape{K, N};
+  const MatMulPlan<float> plan(a_shape, b_shape);
+  std::vector<float> a(M * K, 0.5f), b(K * N, 0.25f);
+  std::vector<float> y(M * N, std::numeric_limits<float>::quiet_NaN());
+  InlineExecutor executor;
+  onnx_light_cpu::ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run};
+  onnx_light_cpu::ExecutionExecutorScope scope(&view);
+  plan.Execute(a.data(), b.data(), y.data());
+  for (float value : y) {
+    EXPECT_FLOAT_EQ(value, static_cast<float>(K) * 0.125f);
+  }
+  std::fill(a.begin(), a.end(), -0.5f);
+  plan.Execute(a.data(), b.data(), y.data());
+  for (float value : y) {
+    EXPECT_FLOAT_EQ(value, -static_cast<float>(K) * 0.125f);
+  }
 }
 
 TEST(GemmHalfPlan, Float16SplitReportsSkinnyMParallelism) {

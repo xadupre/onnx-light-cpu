@@ -531,7 +531,7 @@ void MvnContiguous(const Tensor &x, Tensor &y, std::size_t lanes, std::size_t re
       });
 }
 
-template <DataType Type>
+template <DataType Type, bool AlignedFloat = false>
 void MvnRetainedAxis(const Tensor &x, Tensor &y, std::size_t outer, std::size_t lanes,
                      std::size_t inner) {
   using Traits = norm::TypeTraits<Type>;
@@ -546,10 +546,28 @@ void MvnRetainedAxis(const Tensor &x, Tensor &y, std::size_t outer, std::size_t 
       std::size_t position = 0;
       for (std::size_t prefix = 0; prefix < outer; ++prefix) {
         const auto *run = input + (prefix * lanes + lane) * inner;
-        for (std::size_t i = 0; i < inner; ++i, ++position) {
-          const Acc value = Traits::Load(run, i);
-          sums[position & 3] += value;
-          square_sums[position & 3] += value * value;
+        if constexpr (AlignedFloat) {
+          // Expose contiguous lanes without changing the four accumulation streams.
+          for (std::size_t i = 0; i < inner; i += 4) {
+            const float v0 = run[i];
+            const float v1 = run[i + 1];
+            const float v2 = run[i + 2];
+            const float v3 = run[i + 3];
+            sums[0] += v0;
+            sums[1] += v1;
+            sums[2] += v2;
+            sums[3] += v3;
+            square_sums[0] += v0 * v0;
+            square_sums[1] += v1 * v1;
+            square_sums[2] += v2 * v2;
+            square_sums[3] += v3 * v3;
+          }
+        } else {
+          for (std::size_t i = 0; i < inner; ++i, ++position) {
+            const Acc value = Traits::Load(run, i);
+            sums[position & 3] += value;
+            square_sums[position & 3] += value * value;
+          }
         }
       }
       const Acc mean = (sums[0] + sums[1] + sums[2] + sums[3]) / static_cast<Acc>(count);
@@ -563,9 +581,22 @@ void MvnRetainedAxis(const Tensor &x, Tensor &y, std::size_t outer, std::size_t 
         position = 0;
         for (std::size_t prefix = 0; prefix < outer; ++prefix) {
           const auto *run = input + (prefix * lanes + lane) * inner;
-          for (std::size_t i = 0; i < inner; ++i, ++position) {
-            const Acc delta = Traits::Load(run, i) - mean;
-            centered_sums[position & 3] += delta * delta;
+          if constexpr (AlignedFloat) {
+            for (std::size_t i = 0; i < inner; i += 4) {
+              const float d0 = run[i] - mean;
+              const float d1 = run[i + 1] - mean;
+              const float d2 = run[i + 2] - mean;
+              const float d3 = run[i + 3] - mean;
+              centered_sums[0] += d0 * d0;
+              centered_sums[1] += d1 * d1;
+              centered_sums[2] += d2 * d2;
+              centered_sums[3] += d3 * d3;
+            }
+          } else {
+            for (std::size_t i = 0; i < inner; ++i, ++position) {
+              const Acc delta = Traits::Load(run, i) - mean;
+              centered_sums[position & 3] += delta * delta;
+            }
           }
         }
         variance = (centered_sums[0] + centered_sums[1] + centered_sums[2] + centered_sums[3]) /
@@ -1042,6 +1073,12 @@ Tensor MeanVarianceNormalizationKernel::operator()(const Tensor &x,
     const std::size_t lanes = static_cast<std::size_t>(x.shape[retained_axis]);
     const std::size_t inner = norm::Product(x.shape, retained_axis + 1, x.shape.size(), kMvnOp);
     norm::DispatchFloatType(x.data_type, [&]<DataType Type>() {
+      if constexpr (Type == DataType::FLOAT) {
+        if (inner % 4 == 0) {
+          MvnRetainedAxis<Type, true>(x, output, outer, lanes, inner);
+          return;
+        }
+      }
       MvnRetainedAxis<Type>(x, output, outer, lanes, inner);
     });
     return output;
