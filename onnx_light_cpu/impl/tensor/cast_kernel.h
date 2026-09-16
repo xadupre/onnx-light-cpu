@@ -5,6 +5,7 @@
 #pragma once
 
 #include "onnx_light_cpu/impl/data_type.h"
+#include "onnx_light_cpu/impl/simd_level.h"
 
 #include <cstddef>
 
@@ -16,6 +17,11 @@ bool IsCastNumericType(DataType type) noexcept;
 /// Returns the numeric storage width, or throws for an unsupported type.
 std::size_t CastElementSize(DataType type);
 
+/// Selected conversion path for diagnostics. The optional ISA ceiling can only
+/// disable fast paths, never enable instructions unavailable on this CPU.
+const char *CastConversionPath(DataType from, DataType to, std::size_t count,
+                               SimdLevel max_simd = SimdLevel::kAVX512);
+
 /// Converts contiguous, possibly unaligned, non-overlapping buffers.
 /// Identity copies preserve bits, including BOOL bytes and NaN payloads.
 /// Integer conversions are direct C++20 modular conversions, never via double.
@@ -25,6 +31,7 @@ std::size_t CastElementSize(DataType type);
 /// UINT64 destinations clamp to their own bounds. BOOL is value != 0.
 /// FLOAT16/BFLOAT16 use round-to-nearest-even via FLOAT (also from DOUBLE).
 /// Validates types, byte arithmetic, null buffers and overlap before writes.
-void CastConvert(const void *input, DataType from, void *output, DataType to, std::size_t count);
+void CastConvert(const void *input, DataType from, void *output, DataType to, std::size_t count,
+                 SimdLevel max_simd = SimdLevel::kAVX512);
 
 } // namespace onnx_light_cpu

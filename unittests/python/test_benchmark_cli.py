@@ -277,6 +277,7 @@ class TestBenchmarkCli(ExtTestCase):
         self.assertEqual(raw[0]["run"], 1)
         self.assertEqual(raw[0]["runtime"], "onnx-light-cpu")
         self.assertEqual(raw[0]["processor"], "test CPU")
+        self.assertEqual(raw[0]["cpu_kernel_paths"], "onnx_light_cpu::Abs")
         self.assertIn("duration_s", raw[0])
         self.assertEqual(
             recording.call_args_list,
@@ -422,6 +423,7 @@ class TestBenchmarkCli(ExtTestCase):
                 "threads": 3,
                 "processor": "test CPU",
                 "input_shapes": '[{"x": [2, 3]}]',
+                "cpu_kernel_paths": "onnx_light_cpu::Abs",
                 "max_repeat_time": 1.0,
                 "run": 1,
                 "runtime": "onnx-light-cpu",
@@ -438,6 +440,7 @@ class TestBenchmarkCli(ExtTestCase):
                 "threads": 3,
                 "processor": "test CPU",
                 "input_shapes": '[{"x": [2, 3]}]',
+                "cpu_kernel_paths": "onnx_light_cpu::Abs",
                 "max_repeat_time": 1.0,
                 "samples": 1,
                 "mean_s": 0.0000125,
@@ -465,7 +468,8 @@ class TestBenchmarkCli(ExtTestCase):
             self.assertIn("runtime", raw_headers)
             self.assertIn("processor", raw_headers)
             self.assertNotIn("duration_us", raw_headers)
-            self.assertEqual(workbook["aggregated"]["J2"].value, 1)
+            self.assertEqual(workbook["aggregated"]["I2"].value, "onnx_light_cpu::Abs")
+            self.assertEqual(workbook["aggregated"]["K2"].value, 1)
             workbook.close()
 
     def test_writes_aggregated_markdown(self):
@@ -481,13 +485,13 @@ class TestBenchmarkCli(ExtTestCase):
             self.assertEqual(
                 output.read_text(encoding="utf-8"),
                 "| case | operator | dtype | repeat | warmup | threads | processor | input_shapes"
-                " | max_repeat_time | samples | mean_s | stdev_s | min_repeat_s | p10_s"
-                " | median_s | p90_s | max_repeat_s | onnxruntime_samples | onnxruntime_mean_s"
-                " | onnxruntime_median_s | onnxruntime_error | speedup |\n"
+                " | cpu_kernel_paths | max_repeat_time | samples | mean_s | stdev_s"
+                " | min_repeat_s | p10_s | median_s | p90_s | max_repeat_s | onnxruntime_samples"
+                " | onnxruntime_mean_s | onnxruntime_median_s | onnxruntime_error | speedup |\n"
                 "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | ---"
-                " | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n"
+                " | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n"
                 "| test\\|value | 1 | 1 | 1 | 1 | 1 | 1 | 1 | 1 | 1 | 1 | 1 | 1 | 1"
-                " | 1 | 1 | 1 | 1 | 1 | 1 | 1 | 1 |\n",
+                " | 1 | 1 | 1 | 1 | 1 | 1 | 1 | 1 | 1 |\n",
             )
 
     def test_posts_aggregated_markdown_to_pull_request(self):

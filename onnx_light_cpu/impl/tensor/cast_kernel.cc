@@ -6,6 +6,7 @@
 
 #include "onnx_light_cpu/impl/execution.h"
 #include "onnx_light_cpu/impl/math/half_conversion.h"
+#include "onnx_light_cpu/impl/tensor/cast_simd.h"
 
 #include <cmath>
 #include <cstring>
@@ -111,6 +112,62 @@ void Convert(const std::uint8_t *input, std::uint8_t *output, std::size_t begin,
   }
 }
 
+template <typename From, typename To, detail::CastSimdFunction Simd>
+void ConvertSimd(const std::uint8_t *input, std::uint8_t *output, std::size_t begin,
+                 std::size_t end) {
+  const auto converted = Simd(input + begin * sizeof(typename From::Storage),
+                              output + begin * sizeof(typename To::Storage), end - begin);
+  Convert<From, To>(input, output, begin + converted, end);
+}
+
+struct FastConversion {
+  ConvertRange convert;
+  const char *name;
+};
+
+FastConversion SelectFastConversion(DataType from, DataType to, std::size_t count,
+                                    [[maybe_unused]] SimdLevel max_simd) {
+  if (count == 0) {
+    return {nullptr, "Cast.empty"};
+  }
+  if (from == to) {
+    return {nullptr, "Cast.copy"};
+  }
+  if (count < 8) {
+    return {nullptr, "Cast.scalar"};
+  }
+  using Float [[maybe_unused]] = Codec<DataType::FLOAT, float>;
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX_F16C
+  using Half = Codec<DataType::FLOAT16, std::uint16_t>;
+  static const bool f16c = DetectSimdLevel() >= SimdLevel::kAVX && CpuSupportsF16C();
+  if (max_simd >= SimdLevel::kAVX && f16c) {
+    if (from == DataType::FLOAT && to == DataType::FLOAT16) {
+      return {&ConvertSimd<Float, Half, detail::CastFloat32ToFloat16_F16C>,
+              "Cast.float32_to_float16.f16c"};
+    }
+    if (from == DataType::FLOAT16 && to == DataType::FLOAT) {
+      return {&ConvertSimd<Half, Float, detail::CastFloat16ToFloat32_F16C>,
+              "Cast.float16_to_float32.f16c"};
+    }
+  }
+#endif
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2
+  using BFloat = Codec<DataType::BFLOAT16, std::uint16_t>;
+  static const bool avx2 = DetectSimdLevel() >= SimdLevel::kAVX2;
+  if (max_simd >= SimdLevel::kAVX2 && avx2) {
+    if (from == DataType::FLOAT && to == DataType::BFLOAT16) {
+      return {&ConvertSimd<Float, BFloat, detail::CastFloat32ToBFloat16_AVX2>,
+              "Cast.float32_to_bfloat16.avx2"};
+    }
+    if (from == DataType::BFLOAT16 && to == DataType::FLOAT) {
+      return {&ConvertSimd<BFloat, Float, detail::CastBFloat16ToFloat32_AVX2>,
+              "Cast.bfloat16_to_float32.avx2"};
+    }
+  }
+#endif
+  return {nullptr, "Cast.scalar"};
+}
+
 } // namespace
 
 bool IsCastNumericType(DataType type) noexcept {
@@ -122,7 +179,12 @@ std::size_t CastElementSize(DataType type) {
   return Dispatch(type, [](auto codec) { return sizeof(typename decltype(codec)::Storage); });
 }
 
-void CastConvert(const void *input, DataType from, void *output, DataType to, std::size_t count) {
+const char *CastConversionPath(DataType from, DataType to, std::size_t count, SimdLevel max_simd) {
+  return SelectFastConversion(from, to, count, max_simd).name;
+}
+
+void CastConvert(const void *input, DataType from, void *output, DataType to, std::size_t count,
+                 SimdLevel max_simd) {
   const std::size_t source_width = CastElementSize(from);
   const std::size_t output_width = CastElementSize(to);
   const auto limit = std::numeric_limits<std::size_t>::max();
@@ -141,8 +203,8 @@ void CastConvert(const void *input, DataType from, void *output, DataType to, st
   }
   const auto *source = static_cast<const std::uint8_t *>(input);
   auto *destination = static_cast<std::uint8_t *>(output);
-  ConvertRange convert = nullptr;
-  if (from != to) {
+  ConvertRange convert = SelectFastConversion(from, to, count, max_simd).convert;
+  if (convert == nullptr && from != to) {
     convert = Dispatch(from, [&](auto source_codec) {
       return Dispatch(to, [&](auto output_codec) -> ConvertRange {
         return &Convert<decltype(source_codec), decltype(output_codec)>;
