@@ -82,6 +82,14 @@ installed into site-packages, and no runtime-library preload was needed.
 The reported mixed-artifact failure therefore did not warrant a source linkage
 or export change.
 
+The same regression subsequently exposed a separate Windows DLL-search failure:
+``_cpuregister`` could not locate onnx-light's dependent DLLs in a fresh process.
+On Windows, the bindings package registers the selected onnx-light package's
+``onnx_py`` directory with ``os.add_dll_directory`` and retains its handle.
+This makes the DLLs discoverable without preloading either project's extensions;
+adding the directory to ``PATH`` alone is insufficient for Python's extension
+loader.
+
 Quick Start
 -----------
 
