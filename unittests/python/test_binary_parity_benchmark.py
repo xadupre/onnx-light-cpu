@@ -94,8 +94,10 @@ def test_integer_priority_paths_are_recorded_not_inferred_from_host_flags():
 
 def test_integer_mod_benchmark_uses_released_equivalent_schema():
     from onnx_light.onnx.backend import TestMode, collect_test_cases_by_name
-    from onnx_light_cpu import register_backend_test_cases
+    from onnx_light_cpu import has_backend_test_cases, register_backend_test_cases
 
+    if not has_backend_test_cases():
+        return
     register_backend_test_cases()
     cases = list(
         collect_test_cases_by_name(

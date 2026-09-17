@@ -123,7 +123,7 @@ Integer Mod benchmark fixtures use the released opset-13 schema, whose integer
 semantics are unchanged in Mod-28. Correctness fixtures retain the latest opset.
 
 2026-09-17 diagnostic campaign
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Revision ``1991b23`` was measured on an AMD EPYC 9V74 VM with two physical
 cores, affinity ``0-3``, GCC Release/AUTO dispatch, onnx-light 0.1.27, and ORT
