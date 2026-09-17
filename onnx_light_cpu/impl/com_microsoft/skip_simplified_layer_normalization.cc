@@ -6,6 +6,7 @@
 
 #include "onnx_light_cpu/impl/execution.h"
 #include "onnx_light_cpu/impl/math/normalization_kernel.h"
+#include "onnx_light_cpu/impl/simd_level.h"
 
 #include <cmath>
 #include <cstdint>
@@ -27,15 +28,25 @@ void SkipSimplifiedLayerNormalizationFloat32(const float *input, const float *sk
           const float *input_row = input + row * width;
           const float *skip_row = skip + (row % skip_rows) * width;
           float *output_row = output + row * width;
-          for (std::size_t i = 0; i < width; ++i) {
-            const float residual = input_row[i] + skip_row[i];
-            output_row[i] = bias == nullptr ? residual : residual + bias[i];
+          float mean_square;
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
+          static const bool use_avx2 = DetectSimdLevel() == SimdLevel::kAVX2 && CpuSupportsFma();
+          if (use_avx2) {
+            mean_square =
+                ComputeResidualMeanSquareFloat32_AVX2(input_row, skip_row, bias, output_row, width);
+          } else
+#endif
+          {
+            for (std::size_t i = 0; i < width; ++i) {
+              const float residual = input_row[i] + skip_row[i];
+              output_row[i] = bias == nullptr ? residual : residual + bias[i];
+            }
+            mean_square = ComputeNormalizationMeanSquareFloat32(output_row, width);
           }
           if (input_skip_bias_sum != nullptr) {
             std::memcpy(input_skip_bias_sum + row * width, output_row, width * sizeof(float));
           }
-          const float inverse =
-              1.0F / std::sqrt(ComputeNormalizationMeanSquareFloat32(output_row, width) + epsilon);
+          const float inverse = 1.0F / std::sqrt(mean_square + epsilon);
           if (mean != nullptr) {
             mean[row] = 0.0F;
           }
