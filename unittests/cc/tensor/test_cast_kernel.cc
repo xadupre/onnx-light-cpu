@@ -75,6 +75,42 @@ TEST(CastKernel, FloatRoundingBoundariesAndSpecialValues) {
   }
 }
 
+TEST(CastKernel, Avx2IntegerConversionBoundariesMatchScalar) {
+  const std::array<float, 24> values{
+      0.0f,
+      -0.0f,
+      1.9f,
+      -1.9f,
+      127.0f,
+      128.0f,
+      255.0f,
+      256.0f,
+      -129.0f,
+      2147483520.0f,
+      -0x1p31f,
+      0x1p31f,
+      std::numeric_limits<float>::infinity(),
+      -std::numeric_limits<float>::infinity(),
+      std::numeric_limits<float>::quiet_NaN(),
+      0x1p40f,
+      17.0f,
+      -31.0f,
+      63.0f,
+      -64.0f,
+      1024.0f,
+      -1024.0f,
+      0.5f,
+      -0.5f,
+  };
+  for (DataType to : {DataType::INT8, DataType::UINT8, DataType::INT32, DataType::INT64}) {
+    Compare(values.data(), DataType::FLOAT, to, values.size(), 3, 5);
+  }
+
+  const std::array<std::uint8_t, 17> bool_values{0, 1, 2, 255, 0, 7, 1, 0, 3,
+                                                 0, 1, 9, 0,   1, 0, 4, 1};
+  Compare(bool_values.data(), DataType::BOOL, DataType::FLOAT, bool_values.size(), 1, 3);
+}
+
 TEST(CastKernel, EmptyTailsAndUnalignedBuffers) {
   std::array<std::uint32_t, 65> values{};
   const std::array<std::uint32_t, 9> special{0u,          0x80000000u, 0x7f800000u,

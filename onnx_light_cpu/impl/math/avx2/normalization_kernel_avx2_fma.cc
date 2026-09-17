@@ -18,6 +18,43 @@ float HorizontalSum(__m256 value) {
 
 } // namespace
 
+float ComputeResidualMeanSquareFloat32_AVX2(const float *input, const float *skip,
+                                            const float *bias, float *residual, std::size_t count) {
+  __m256 sums[4] = {_mm256_setzero_ps(), _mm256_setzero_ps(), _mm256_setzero_ps(),
+                    _mm256_setzero_ps()};
+  std::size_t index = 0;
+  for (; index + 32 <= count; index += 32) {
+    for (std::size_t lane = 0; lane < 4; ++lane) {
+      const std::size_t offset = index + lane * 8;
+      __m256 value = _mm256_add_ps(_mm256_loadu_ps(input + offset), _mm256_loadu_ps(skip + offset));
+      if (bias != nullptr) {
+        value = _mm256_add_ps(value, _mm256_loadu_ps(bias + offset));
+      }
+      _mm256_storeu_ps(residual + offset, value);
+      sums[lane] = _mm256_fmadd_ps(value, value, sums[lane]);
+    }
+  }
+  for (; index + 8 <= count; index += 8) {
+    __m256 value = _mm256_add_ps(_mm256_loadu_ps(input + index), _mm256_loadu_ps(skip + index));
+    if (bias != nullptr) {
+      value = _mm256_add_ps(value, _mm256_loadu_ps(bias + index));
+    }
+    _mm256_storeu_ps(residual + index, value);
+    sums[0] = _mm256_fmadd_ps(value, value, sums[0]);
+  }
+  float sum = HorizontalSum(
+      _mm256_add_ps(_mm256_add_ps(sums[0], sums[1]), _mm256_add_ps(sums[2], sums[3])));
+  for (; index < count; ++index) {
+    float value = input[index] + skip[index];
+    if (bias != nullptr) {
+      value += bias[index];
+    }
+    residual[index] = value;
+    sum += value * value;
+  }
+  return sum / static_cast<float>(count);
+}
+
 // Keep the multiply rounded before adding the offset, including for constant inputs.
 #if defined(__GNUC__) && !defined(__clang__)
 __attribute__((optimize("fp-contract=off")))
