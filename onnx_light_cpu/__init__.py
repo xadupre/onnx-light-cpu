@@ -46,6 +46,7 @@ from ._register import (
     registered_kernels,
     set_kernel_usage_recording,
     used_kernel_names,
+    used_kernel_paths,
 )
 from ._backend_correctness import (
     BackendCaseResult,
@@ -96,4 +97,5 @@ __all__ = [
     "run_backend_correctness_tests",
     "set_kernel_usage_recording",
     "used_kernel_names",
+    "used_kernel_paths",
 ]

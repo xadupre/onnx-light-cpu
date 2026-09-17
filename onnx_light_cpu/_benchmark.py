@@ -24,7 +24,7 @@ from ._register import (
     register_backend_test_cases,
     register_kernels,
     set_kernel_usage_recording,
-    used_kernel_names,
+    used_kernel_paths,
 )
 
 _DTYPES = (
@@ -287,7 +287,7 @@ def _measure_case(
     expected_kernels = _kernel_names_for_operator(registered_kernels(), node_domain, operator)
     if not expected_kernels:
         raise RuntimeError(f"{case.name}: no registered kernel for {node_domain}::{operator}")
-    cpu_kernel_paths = used_kernel_names(evaluator)
+    cpu_kernel_paths = used_kernel_paths(evaluator)
     if not set(expected_kernels).intersection(cpu_kernel_paths):
         expected = " or ".join(repr(kernel) for kernel in expected_kernels)
         raise RuntimeError(f"{case.name}: expected kernel {expected} did not run")

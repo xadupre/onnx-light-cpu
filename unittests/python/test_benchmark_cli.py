@@ -16,6 +16,7 @@ from unittest import mock
 from onnx_light.ext_test_case import ExtTestCase
 from openpyxl import load_workbook
 
+from onnx_light_cpu import used_kernel_names, used_kernel_paths
 from onnx_light_cpu.__main__ import _build_parser, main
 from onnx_light_cpu import _benchmark
 from onnx_light_cpu._benchmark import (
@@ -88,6 +89,22 @@ class TestBenchmarkCli(ExtTestCase):
     def test_rejects_unknown_dtype(self):
         with self.assertRaisesRegex(ValueError, "unknown dtype"):
             normalize_dtypes(["complex128"])
+
+    def test_kernel_names_exclude_implementation_paths(self):
+        session = SimpleNamespace(_ctx=object(), _runner=object())
+        recorded = [
+            "onnx_light_cpu::Cast",
+            "Cast.float32_to_float16.f16c",
+            "onnx_light_cpu::Abs",
+        ]
+        with mock.patch(
+            "onnx_light_cpu.onnx_py._cpuregister.used_kernel_names", return_value=recorded
+        ):
+            self.assertEqual(
+                used_kernel_names(session),
+                ["onnx_light_cpu::Cast", "onnx_light_cpu::Abs"],
+            )
+            self.assertEqual(used_kernel_paths(session), recorded)
 
     def test_rejects_invalid_test_regular_expression(self):
         with self.assertRaisesRegex(re.PatternError, "unterminated"):
@@ -265,7 +282,7 @@ class TestBenchmarkCli(ExtTestCase):
             ),
             mock.patch("onnx_light_cpu._benchmark.platform.processor", return_value="test CPU"),
             mock.patch(
-                "onnx_light_cpu._benchmark.used_kernel_names",
+                "onnx_light_cpu._benchmark.used_kernel_paths",
                 return_value=("onnx_light_cpu::Abs",),
             ) as used,
         ):
@@ -328,7 +345,7 @@ class TestBenchmarkCli(ExtTestCase):
                 return_value=(self._registration("ai.onnx", "Abs", "onnx_light_cpu::Abs"),),
             ),
             mock.patch(
-                "onnx_light_cpu._benchmark.used_kernel_names",
+                "onnx_light_cpu._benchmark.used_kernel_paths",
                 return_value=("onnx_light_cpu::Abs",),
             ),
         ):
@@ -373,7 +390,7 @@ class TestBenchmarkCli(ExtTestCase):
                 return_value=(self._registration("ai.onnx", "Abs", "onnx_light_cpu::Abs"),),
             ),
             mock.patch(
-                "onnx_light_cpu._benchmark.used_kernel_names",
+                "onnx_light_cpu._benchmark.used_kernel_paths",
                 return_value=("onnx_light_cpu::Abs",),
             ),
         ):
