@@ -512,8 +512,13 @@ def has_backend_test_cases() -> bool:
     backend test registry (``lib_onnx_backend_test``). When ``False``,
     :func:`register_backend_test_cases` is not usable.
     """
-    from .onnx_py._cpuregister import (  # pyrefly: ignore[missing-import]
-        has_backend_test_cases as _has_backend_test_cases,
-    )
+    try:
+        from .onnx_py._cpuregister import (  # pyrefly: ignore[missing-import]
+            has_backend_test_cases as _has_backend_test_cases,
+        )
+    except ModuleNotFoundError as exc:
+        if exc.name != "onnx_light_cpu.onnx_py._cpuregister":
+            raise
+        return False
 
     return bool(_has_backend_test_cases)
