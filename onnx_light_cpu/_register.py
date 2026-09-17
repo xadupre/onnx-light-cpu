@@ -424,7 +424,11 @@ def used_kernel_names(sess: Any) -> list[str]:
     Recording, retrieval, clearing, and toggling share the context's mutex.
     ``sess`` must be an onnx-light ``ReferenceEvaluator``.
     """
-    return [name for name in used_kernel_paths(sess) if not name.startswith("Cast.")]
+    return _kernel_names_only(used_kernel_paths(sess))
+
+
+def _kernel_names_only(records: list[str]) -> list[str]:
+    return [name for name in records if not name.startswith("Cast.")]
 
 
 def used_kernel_paths(sess: Any) -> list[str]:

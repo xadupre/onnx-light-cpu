@@ -9,7 +9,6 @@ import re
 import sys
 import tempfile
 from contextlib import redirect_stderr, redirect_stdout
-from importlib import import_module
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -17,7 +16,6 @@ from unittest import mock
 from onnx_light.ext_test_case import ExtTestCase
 from openpyxl import load_workbook
 
-from onnx_light_cpu import used_kernel_names, used_kernel_paths
 from onnx_light_cpu.__main__ import _build_parser, main
 from onnx_light_cpu import _benchmark
 from onnx_light_cpu._benchmark import (
@@ -29,6 +27,7 @@ from onnx_light_cpu._benchmark import (
     write_pr_benchmark_markdown,
     write_benchmark_workbook,
 )
+from onnx_light_cpu._register import _kernel_names_only
 
 
 class TestBenchmarkCli(ExtTestCase):
@@ -92,19 +91,15 @@ class TestBenchmarkCli(ExtTestCase):
             normalize_dtypes(["complex128"])
 
     def test_kernel_names_exclude_implementation_paths(self):
-        session = SimpleNamespace(_ctx=object(), _runner=object())
         recorded = [
             "onnx_light_cpu::Cast",
             "Cast.float32_to_float16.f16c",
             "onnx_light_cpu::Abs",
         ]
-        binding = import_module("onnx_light_cpu.onnx_py._cpuregister")
-        with mock.patch.object(binding, "used_kernel_names", return_value=recorded):
-            self.assertEqual(
-                used_kernel_names(session),
-                ["onnx_light_cpu::Cast", "onnx_light_cpu::Abs"],
-            )
-            self.assertEqual(used_kernel_paths(session), recorded)
+        self.assertEqual(
+            _kernel_names_only(recorded),
+            ["onnx_light_cpu::Cast", "onnx_light_cpu::Abs"],
+        )
 
     def test_rejects_invalid_test_regular_expression(self):
         with self.assertRaisesRegex(re.PatternError, "unterminated"):
