@@ -229,6 +229,14 @@ Tensor CastKernel::operator()(const Tensor &data, int32_t to, bool saturate,
     output.string_data.resize(static_cast<std::size_t>(plan.count));
   }
   Convert(ctx_, data, to, saturate, output, plan);
+  if (rt != nullptr && rt->kernel_usage_enabled()) {
+    rt->RecordKernelUsage(
+        Numeric(data.data_type) && Numeric(to)
+            ? CastConversionPath(static_cast<onnx_light_cpu::DataType>(data.data_type),
+                                 static_cast<onnx_light_cpu::DataType>(to),
+                                 static_cast<std::size_t>(plan.count))
+            : "Cast.builtin");
+  }
   return output;
 }
 

@@ -410,7 +410,7 @@ TEST(OnnxLightCastKernel, NodeAttributesRuntimeUsageAndArity) {
     EXPECT_NO_THROW(kernel.Run(runtime));
     Equal(runtime.Get("output"), BuiltinCast(MakeCtx())(data, DataType::FLOAT8E5M2, saturate != 0));
     EXPECT_EQ(runtime.GetKernelUsage(),
-              std::vector<std::string>{onnx_light_cpu::CastKernel::kName});
+              (std::vector<std::string>{onnx_light_cpu::CastKernel::kName, "Cast.builtin"}));
   }
   for (int64_t to : {int64_t{-1}, int64_t{0}, int64_t{14}, INT64_MAX}) {
     EXPECT_THROW(onnx_light_cpu::CastKernel(Node(to), MakeCtx()), std::invalid_argument);
@@ -436,6 +436,33 @@ TEST(OnnxLightCastKernel, NodeAttributesRuntimeUsageAndArity) {
   rt_ns::RuntimeContext runtime(MakeCtx());
   runtime.Set("data", data);
   EXPECT_THROW(bad_arity.Run(runtime), std::invalid_argument);
+}
+
+TEST(OnnxLightCastKernel, RecordsNumericConversionPath) {
+  for (int64_t count : {0, 1, 7, 8, 17, 65537}) {
+    const Tensor seed = Tensor::From<float>(
+        "data", {count}, std::vector<float>(static_cast<std::size_t>(count), 1.5f));
+    for (const auto &[from, to] : {std::pair{DataType::FLOAT, DataType::FLOAT16},
+                                   std::pair{DataType::FLOAT16, DataType::FLOAT},
+                                   std::pair{DataType::FLOAT, DataType::BFLOAT16},
+                                   std::pair{DataType::BFLOAT16, DataType::FLOAT},
+                                   std::pair{DataType::FLOAT, DataType::FLOAT}}) {
+      Tensor input = BuiltinCast(MakeCtx())(seed, from);
+      input.name = "data";
+      const auto node = Node(to);
+      onnx_light_cpu::CastKernel kernel(node, MakeCtx());
+      rt_ns::RuntimeContext runtime(MakeCtx());
+      runtime.Set("data", input);
+      runtime.set_kernel_usage_enabled(true);
+      kernel.Run(runtime);
+      Equal(runtime.Get("output"), BuiltinCast(MakeCtx())(input, to));
+      EXPECT_EQ(runtime.GetKernelUsage(),
+                (std::vector<std::string>{onnx_light_cpu::CastKernel::kName,
+                                          onnx_light_cpu::CastConversionPath(
+                                              static_cast<CpuType>(from), static_cast<CpuType>(to),
+                                              static_cast<std::size_t>(count))}));
+    }
+  }
 }
 
 struct InlineExecutor {

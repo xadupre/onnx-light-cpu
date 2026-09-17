@@ -645,7 +645,7 @@ if(ONNX_LIGHT_CPU_HAVE_F16C_FLAG)
         COMPILE_OPTIONS "/arch:AVX")
   endif()
   target_compile_definitions(lib_onnx_light_cpu PRIVATE
-      ONNX_LIGHT_CPU_HAVE_RMS_F16C=1)
+      ONNX_LIGHT_CPU_HAVE_RMS_F16C=1 ONNX_LIGHT_CPU_HAVE_AVX_F16C=1)
 endif()
 
 if(ONNX_LIGHT_CPU_HAVE_NEON_INTRINSICS)
@@ -1259,6 +1259,14 @@ if(ONNX_LIGHT_CPU_BUILD_TESTS)
     endforeach()
     target_link_libraries(${_name} PRIVATE ${_link_lib} GTest::gtest_main)
     target_include_directories(${_name} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+    if(_name STREQUAL "test_cast_kernel")
+      if(ONNX_LIGHT_CPU_HAVE_F16C_FLAG)
+        target_compile_definitions(${_name} PRIVATE ONNX_LIGHT_CPU_HAVE_AVX_F16C=1)
+      endif()
+      if(ONNX_LIGHT_CPU_HAVE_AVX2_FLAG)
+        target_compile_definitions(${_name} PRIVATE ONNX_LIGHT_CPU_HAVE_AVX2=1)
+      endif()
+    endif()
     if(_name STREQUAL "test_integer_gemm_vnni")
       # This differential binary names and calls the optional native integer
       # kernels directly. The library keeps availability definitions private,

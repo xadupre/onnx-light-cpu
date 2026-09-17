@@ -95,3 +95,12 @@ contains the requested repeat, warm-up, thread count, input shapes, maximum
 repeat time, sample count, mean, standard deviation, minimum, 10th percentile,
 median, 90th percentile, and maximum latency for every selected case. When
 ``--onnxruntime`` is enabled, it also contains ONNX Runtime latency and speedup.
+
+Both sheets and the full Markdown report include ``cpu_kernel_paths``, the
+kernel names and implementation paths recorded during the untimed verification
+run. For example, ``Cast.float32_to_float16.f16c`` identifies the F16C fast
+path; ``Cast.scalar``, ``Cast.copy``, ``Cast.empty`` and ``Cast.builtin``
+identify the other Cast paths. SIMD paths still use the scalar codec for
+tails and, for float16-to-float32 F16C, vectors containing NaNs. Recording is
+disabled while timing, and these diagnostics always describe onnx-light-cpu,
+not ONNX Runtime. See :ref:`l-cast-simd-measurements` for a measured example.

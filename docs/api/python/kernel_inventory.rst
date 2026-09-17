@@ -60,6 +60,13 @@ Kernel inventory and usage
    invocations and drops later entries until cleared. Concurrent records are
    ordered by acquisition of the recorder's mutex.
 
+.. py:function:: used_kernel_paths(sess) -> list[str]
+
+   Returns the recorded kernel names plus implementation-path diagnostics such
+   as ``Cast.float32_to_float16.f16c``. Use this when reporting which SIMD or
+   fallback path a kernel selected; :func:`used_kernel_names` remains limited
+   to kernel identities.
+
 .. py:function:: clear_used_kernel_names(sess) -> None
 
    Clears the recorded backend-kernel invocations for ``sess`` without

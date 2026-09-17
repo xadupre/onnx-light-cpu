@@ -424,6 +424,19 @@ def used_kernel_names(sess: Any) -> list[str]:
     Recording, retrieval, clearing, and toggling share the context's mutex.
     ``sess`` must be an onnx-light ``ReferenceEvaluator``.
     """
+    return _kernel_names_only(used_kernel_paths(sess))
+
+
+def _kernel_names_only(records: list[str]) -> list[str]:
+    return [name for name in records if not name.startswith("Cast.")]
+
+
+def used_kernel_paths(sess: Any) -> list[str]:
+    """Returns backend kernel names and implementation paths recorded by ``sess``.
+
+    This includes the same kernel identities as :func:`used_kernel_names` plus
+    implementation diagnostics such as ``"Cast.float32_to_float16.f16c"``.
+    """
     _validate_session(sess)
     from .onnx_py._cpuregister import (  # pyrefly: ignore[missing-import]
         used_kernel_names as _used_kernel_names,
