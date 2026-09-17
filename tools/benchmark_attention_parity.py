@@ -49,11 +49,18 @@ def parse_case_name(name: str) -> dict[str, Any]:
 def estimate_temporary_memory(
     case: Mapping[str, Any], feeds: Mapping[str, Any], workers: int
 ) -> dict[str, Any]:
-    """Mirror the streaming dispatch and report its temporary allocation model."""
+    """Bound active attention scratch, excluding allocator capacity and GEMM panels."""
     q_shape = feeds["Q"].shape
     q_heads = (
         int(q_shape[1]) if case["layout"] == "rank4" else int(q_shape[2]) // case["head_dim"]
     )
+    k_shape = feeds["K"].shape
+    kv_heads = (
+        int(k_shape[1]) if case["layout"] == "rank4" else int(k_shape[2]) // case["head_dim"]
+    )
+    v_head_dim = int(feeds["V"].shape[-1])
+    if case["layout"] == "rank3":
+        v_head_dim //= kv_heads
     if case["kv_length"] == 1:
         return {
             "peak_temporary_bytes": 0,
@@ -64,54 +71,47 @@ def estimate_temporary_memory(
 
     tiled = (
         case["dtype"] in {"float32", "float16"}
-        and case["cache"] == "stateless"
+        and case["cache"] != "internal_cache"
         and case["q_length"] >= 16
     )
-    kv_block_limit = 128 if case["head_dim"] > 128 else KV_BLOCK
+    kv_block_limit = 128 if case["head_dim"] + v_head_dim > 256 else KV_BLOCK
     if tiled:
         query_block = min(case["q_length"], 16 if case["mask"] == "causal" else QUERY_BLOCK)
         kv_block = min(case["kv_length"], kv_block_limit)
         score_tile_bytes = workers * query_block * kv_block * 4
         worker_scratch_bytes = workers * (
-            query_block * kv_block * 4 + query_block * case["head_dim"] * 8 + query_block * 9
+            query_block * kv_block * 4 + query_block * v_head_dim * 8 + query_block * 9
         )
+        rank3 = case["layout"] == "rank3"
+        element_bytes = 2 if case["dtype"] == "float16" else 4
+        if rank3:
+            worker_scratch_bytes += workers * (
+                (query_block * case["head_dim"] * element_bytes if q_heads > 1 else 0)
+                + (kv_block * case["head_dim"] * element_bytes if kv_heads > 1 else 0)
+            )
+        if case["dtype"] == "float16" or (rank3 and kv_heads > 1):
+            worker_scratch_bytes += workers * kv_block * v_head_dim * 4
+        if case["dtype"] == "float16" or (rank3 and q_heads > 1):
+            worker_scratch_bytes += workers * query_block * v_head_dim * 4
     else:
         query_block = 1
         kv_block = min(case["kv_length"], kv_block_limit)
         score_tile_bytes = workers * kv_block * 4
-        worker_scratch_bytes = workers * (kv_block + 2 * case["head_dim"]) * 4
-
-    y_elements = int(q_shape[0]) * q_heads * case["q_length"] * case["head_dim"]
-    global_workspace_bytes = 0
-    if tiled and case["dtype"] == "float32" and case["layout"] == "rank3":
-        if (
-            workers > 1
-            and q_shape[0] != 0
-            and case["q_length"] <= 128
-            and case["kv_length"] <= 256
-            and case["head_dim"] <= 256
-        ):
-            worker_scratch_bytes += (
-                workers * (case["q_length"] + case["kv_length"]) * case["head_dim"] * 8
+        worker_scratch_bytes = workers * (kv_block + v_head_dim) * 4
+        if case["dtype"] != "float32":
+            worker_scratch_bytes += workers * case["head_dim"] * 4
+        if case["dtype"] == "float16":
+            conversion_block = (
+                case["kv_length"]
+                if case["q_length"] > 1 and case["kv_length"] <= 4 * kv_block
+                else kv_block
             )
-        else:
-            global_workspace_bytes = (
-                feeds["Q"].size + feeds["K"].size + feeds["V"].size + y_elements
-            ) * 4
-    elif tiled and case["dtype"] == "float16":
-        global_workspace_bytes = (feeds["V"].size + y_elements) * 4
-        if case["layout"] == "rank3":
-            global_workspace_bytes += (feeds["Q"].size + feeds["K"].size) * 2
-    elif case["dtype"] == "float16":
-        converted_inputs = sum(
-            feeds[name].size
-            for name in ("Q", "K", "V", "past_key", "past_value")
-            if name in feeds
-        )
-        global_workspace_bytes = (converted_inputs + y_elements) * 4
+            worker_scratch_bytes += (
+                workers * conversion_block * (case["head_dim"] + v_head_dim) * 4
+            )
 
     return {
-        "peak_temporary_bytes": worker_scratch_bytes + global_workspace_bytes,
+        "peak_temporary_bytes": worker_scratch_bytes,
         "peak_score_tile_bytes": score_tile_bytes,
         "score_block": {"Br": query_block, "Bc": kv_block},
         "memory_gate_passed": score_tile_bytes <= workers * QUERY_BLOCK * KV_BLOCK * 4,
@@ -296,6 +296,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         register_kernels,
         set_kernel_usage_recording,
         used_kernel_names,
+        used_kernel_paths,
     )
 
     if args.cpus:
@@ -338,6 +339,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         options.intra_op_num_threads = args.threads
         options.inter_op_num_threads = 1
         options.execution_mode = onnxruntime.ExecutionMode.ORT_SEQUENTIAL
+        options.add_session_config_entry("session.intra_op.allow_spinning", "0")
+        options.add_session_config_entry("session.inter_op.allow_spinning", "0")
         ort = onnxruntime.InferenceSession(
             model_bytes, sess_options=options, providers=["CPUExecutionProvider"]
         )
@@ -356,6 +359,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 f"{test_case.name} did not dispatch onnx_light_cpu::Attention: "
                 f"{used_kernel_names(cpu)}"
             )
+        execution_paths = [
+            path for path in used_kernel_paths(cpu) if path.startswith("Attention.")
+        ]
         set_kernel_usage_recording(cpu, False)
         ort_outputs = ort_run()
         tolerance = {"float32": (2e-4, 2e-5), "float16": (2e-2, 2e-3), "bfloat16": (4e-2, 4e-3)}
@@ -390,6 +396,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             {
                 **case,
                 "backend_case_name": test_case.name,
+                "execution_paths": execution_paths,
                 "cpu_samples_seconds": cpu_samples,
                 "ort_samples_seconds": ort_samples,
                 "candidate_order": orders,
@@ -405,7 +412,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 "tail_speedup": ort_p90 / cpu_p90,
                 **temporary_memory,
                 "temporary_memory_accounting": (
-                    "worker-local tiled scratch plus dtype/layout conversion workspace"
+                    "active worker-local attention scratch upper bound; "
+                    "excludes allocator capacity and internal GEMM panels"
                 ),
                 "worker_count": workers,
                 "full_score_or_probability_materialized": False,
@@ -421,6 +429,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "metadata": {
             "timestamp_utc": datetime.now(UTC).isoformat(),
             "policy": "equal-thread",
+            "ort_worker_spinning": False,
             "requested_threads": args.threads,
             "effective_threads": resolved_threads,
             "affinity": (

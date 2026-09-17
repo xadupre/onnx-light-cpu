@@ -101,7 +101,8 @@ void ComputeHalfAttentionMaterialized(const AttentionPlan &plan, DataType data_t
                                       const std::uint16_t *v, const void *mask, std::uint16_t *y,
                                       const std::uint16_t *past_k, const std::uint16_t *past_v,
                                       const std::int64_t *nonpad_kv_seqlen,
-                                      std::uint16_t *qk_matmul_output) {
+                                      std::uint16_t *qk_matmul_output,
+                                      AttentionExecutionInfo *execution_info) {
   const std::size_t q_count = CheckedProduct(
       {plan.batch, plan.q_num_heads, plan.q_length, plan.head_dim}, "Attention", "Q element count");
   const std::size_t k_count =
@@ -163,7 +164,7 @@ void ComputeHalfAttentionMaterialized(const AttentionPlan &plan, DataType data_t
   ComputeAttentionFloat32(plan, q_fp32.data(), k_fp32.data(), v_fp32.data(), mask, y_fp32.data(),
                           past_k_count != 0 ? past_k_fp32.data() : nullptr,
                           past_v_count != 0 ? past_v_fp32.data() : nullptr, nonpad_kv_seqlen,
-                          qk_count != 0 ? qk_fp32.data() : nullptr);
+                          qk_count != 0 ? qk_fp32.data() : nullptr, execution_info);
   convert_from_float(y_fp32.data(), y, y_count);
   if (qk_count != 0) {
     convert_from_float(qk_fp32.data(), qk_matmul_output, qk_count);
@@ -277,6 +278,9 @@ Tensor Compute(const Tensor &q, const Tensor &k, const Tensor &v, const Tensor *
       nonpad_kv_seqlen != nullptr
           ? reinterpret_cast<const std::int64_t *>(nonpad_kv_seqlen->bytes())
           : nullptr;
+  AttentionExecutionInfo execution_info;
+  AttentionExecutionInfo *record =
+      rt != nullptr && rt->kernel_usage_enabled() ? &execution_info : nullptr;
   if (data_type == DataType::FLOAT) {
     ComputeAttentionFloat32(
         plan, reinterpret_cast<const float *>(q.bytes()),
@@ -284,7 +288,7 @@ Tensor Compute(const Tensor &q, const Tensor &k, const Tensor &v, const Tensor *
         mask_data, reinterpret_cast<float *>(y.mutable_bytes()),
         past_k != nullptr ? reinterpret_cast<const float *>(past_k->bytes()) : nullptr,
         past_v != nullptr ? reinterpret_cast<const float *>(past_v->bytes()) : nullptr, nonpad,
-        qk_data);
+        qk_data, record);
   } else if (data_type == DataType::FLOAT16) {
     if (plan.has_qk_matmul_output || plan.softmax_fp64) {
       ComputeHalfAttentionMaterialized(
@@ -294,7 +298,7 @@ Tensor Compute(const Tensor &q, const Tensor &k, const Tensor &v, const Tensor *
           reinterpret_cast<std::uint16_t *>(y.mutable_bytes()),
           past_k != nullptr ? reinterpret_cast<const std::uint16_t *>(past_k->bytes()) : nullptr,
           past_v != nullptr ? reinterpret_cast<const std::uint16_t *>(past_v->bytes()) : nullptr,
-          nonpad, qk_half_data);
+          nonpad, qk_half_data, record);
     } else {
       ComputeAttentionFloat16Streaming(
           plan, reinterpret_cast<const std::uint16_t *>(q.bytes()),
@@ -303,7 +307,7 @@ Tensor Compute(const Tensor &q, const Tensor &k, const Tensor &v, const Tensor *
           reinterpret_cast<std::uint16_t *>(y.mutable_bytes()),
           past_k != nullptr ? reinterpret_cast<const std::uint16_t *>(past_k->bytes()) : nullptr,
           past_v != nullptr ? reinterpret_cast<const std::uint16_t *>(past_v->bytes()) : nullptr,
-          nonpad);
+          nonpad, record);
     }
   } else {
     if (plan.has_qk_matmul_output || plan.softmax_fp64) {
@@ -314,7 +318,7 @@ Tensor Compute(const Tensor &q, const Tensor &k, const Tensor &v, const Tensor *
           reinterpret_cast<std::uint16_t *>(y.mutable_bytes()),
           past_k != nullptr ? reinterpret_cast<const std::uint16_t *>(past_k->bytes()) : nullptr,
           past_v != nullptr ? reinterpret_cast<const std::uint16_t *>(past_v->bytes()) : nullptr,
-          nonpad, qk_half_data);
+          nonpad, qk_half_data, record);
     } else {
       ComputeAttentionBFloat16Streaming(
           plan, reinterpret_cast<const std::uint16_t *>(q.bytes()),
@@ -323,7 +327,44 @@ Tensor Compute(const Tensor &q, const Tensor &k, const Tensor &v, const Tensor *
           reinterpret_cast<std::uint16_t *>(y.mutable_bytes()),
           past_k != nullptr ? reinterpret_cast<const std::uint16_t *>(past_k->bytes()) : nullptr,
           past_v != nullptr ? reinterpret_cast<const std::uint16_t *>(past_v->bytes()) : nullptr,
-          nonpad);
+          nonpad, record);
+    }
+  }
+  if (record != nullptr) {
+    switch (execution_info.path) {
+    case AttentionExecutionPath::kSingleKey:
+      rt->RecordKernelUsage("Attention.single_key");
+      break;
+    case AttentionExecutionPath::kTiled:
+      rt->RecordKernelUsage("Attention.tiled");
+      break;
+    case AttentionExecutionPath::kStreaming:
+      rt->RecordKernelUsage("Attention.streaming");
+      break;
+    case AttentionExecutionPath::kMaterialized:
+      rt->RecordKernelUsage("Attention.materialized");
+      break;
+    }
+    const bool materialized_half = data_type != DataType::FLOAT &&
+                                   execution_info.path == AttentionExecutionPath::kMaterialized;
+    const bool element_conversion = data_type == DataType::BFLOAT16 &&
+                                    execution_info.path == AttentionExecutionPath::kStreaming &&
+                                    execution_info.output_tile_elements != 0;
+    rt->RecordKernelUsage(materialized_half                ? "Attention.conversion.materialized"
+                          : element_conversion             ? "Attention.conversion.element"
+                          : execution_info.tile_conversion ? "Attention.conversion.tile"
+                                                           : "Attention.conversion.none");
+    rt->RecordKernelUsage(execution_info.tile_packing ? "Attention.packing.tile"
+                                                      : "Attention.packing.none");
+    rt->RecordKernelUsage(materialized_half ? "Attention.output.materialized"
+                                            : (execution_info.output_tile_elements != 0
+                                                   ? "Attention.output.tile"
+                                                   : "Attention.output.direct"));
+    if (!mask_fp32_buffer.empty()) {
+      rt->RecordKernelUsage("Attention.mask_conversion.materialized");
+    }
+    if (plan.has_present_output) {
+      rt->RecordKernelUsage("Attention.cache_copy.materialized");
     }
   }
   if (qk_output != nullptr && plan.has_qk_matmul_output) {
