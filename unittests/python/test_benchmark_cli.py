@@ -73,18 +73,14 @@ class TestBenchmarkCli(ExtTestCase):
         )
         self.assertEqual(_build_parser().parse_args(["benchmark", "--pr"]).pr, "")
 
-    def test_parser_specifies_default_thread_count(self):
-        with mock.patch(
-            "onnx_light_cpu.__main__.os.sched_getaffinity",
-            return_value={0, 1, 2},
-            create=True,
-        ):
-            parser = _build_parser()
-        self.assertEqual(parser.parse_args(["benchmark"]).threads, 3)
+    def test_parser_uses_automatic_thread_count_by_default(self):
+        parser = _build_parser()
+        self.assertEqual(parser.parse_args(["benchmark"]).threads, 0)
+        self.assertEqual(parser.parse_args(["benchmark", "--threads", "0"]).threads, 0)
         help_output = io.StringIO()
         with redirect_stdout(help_output), self.assertRaises(SystemExit):
             parser.parse_args(["benchmark", "--help"])
-        self.assertIn("(default: 3)", help_output.getvalue())
+        self.assertIn("kernel select defaults (default: 0)", help_output.getvalue())
 
     def test_rejects_unknown_dtype(self):
         with self.assertRaisesRegex(ValueError, "unknown dtype"):
@@ -126,7 +122,7 @@ class TestBenchmarkCli(ExtTestCase):
                 repeat=1,
                 warmup=0,
                 max_repeat_time=1.0,
-                threads=1,
+                threads=0,
                 with_onnxruntime=False,
                 allow_empty=True,
             )
