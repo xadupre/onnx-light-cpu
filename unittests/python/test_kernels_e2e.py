@@ -46,6 +46,7 @@ from types import SimpleNamespace
 
 import ml_dtypes
 import numpy as np
+import onnxruntime
 
 from onnx_light.ext_test_case import ExtTestCase
 from onnx_light.onnx import TensorProto, helper, inliner
@@ -583,6 +584,38 @@ class TestBackendCases(ExtTestCase):
             "avx512_after",
             "exceptional",
         ]
+
+    def test_matmul_nbits_backend_cases_match_onnxruntime(self):
+        options = onnxruntime.SessionOptions()
+        options.intra_op_num_threads = 1
+        options.inter_op_num_threads = 1
+        cases = [
+            case
+            for case in collect_test_cases("MatMulNBits", mode=TestMode.TEST)
+            if case.name.startswith("test_cpu_matmulnbits_")
+        ]
+        self.assertEqual(len(cases), 2)
+        for case in cases:
+            with self.subTest(case=case.name):
+                model = type(case.model)()
+                model.ParseFromString(case.model.SerializeToString())
+                model.ir_version = 10
+                oracle = onnxruntime.InferenceSession(
+                    model.SerializeToString(),
+                    sess_options=options,
+                    providers=["CPUExecutionProvider"],
+                )
+                session = ReferenceEvaluator(model)
+                register_kernel_for_session(session, "com.microsoft", "MatMulNBits")
+                for dataset in case.data_sets:
+                    feeds = {
+                        value.name: _to_numpy(tensor)
+                        for value, tensor in zip(model.graph.input, dataset.inputs, strict=True)
+                    }
+                    expected = oracle.run(None, feeds)
+                    actual = session.run(None, feeds)
+                    for output, reference in zip(actual, expected, strict=True):
+                        np.testing.assert_allclose(output, reference, rtol=3e-5, atol=3e-5)
 
     def test_all_registered_kernels_pass_regular_backend_correctness_corpus(self):
         report = run_backend_correctness_tests()

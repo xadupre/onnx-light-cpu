@@ -37,13 +37,13 @@ constexpr const char *kTargetBlockOutputs = "parallel.target_block_outputs";
 constexpr const char *kMaxParticipants = "parallel.max_participants";
 
 rt_ns::KernelTuningKey MakeTuningKey() {
-  return {"onnx_light_cpu", "MatMulNBits", "packed_int4", static_cast<std::int32_t>(DataType::FLOAT),
+  return {"onnx_light_cpu",     "MatMulNBits",
+          "packed_int4",        static_cast<std::int32_t>(DataType::FLOAT),
           sym_ns::Device::kCPU, MatMulNBitsKernel::kTuningAbi};
 }
 
 void ValidateTuning(const rt_ns::KernelTuningParameters &parameters) {
-  for (const char *name :
-       {kParallelThresholdOutputs, kTargetBlockOutputs, kMaxParticipants}) {
+  for (const char *name : {kParallelThresholdOutputs, kTargetBlockOutputs, kMaxParticipants}) {
     const std::int64_t value = parameters.Get<std::int64_t>(name);
     if (value <= 0 || static_cast<std::uint64_t>(value) >
                           static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max())) {
@@ -101,21 +101,18 @@ void MatMulNBitsKernel::RegisterTuningSchemas() {
   std::call_once(once, [] {
     rt_ns::RegisterKernelTuningSchema(rt_ns::KernelTuningSchema(
         {MakeTuningKey(),
-         {{kParallelThresholdOutputs,
-           static_cast<std::int64_t>(kDefaultMatMulNBitsExecutionTuning
-                                         .parallel_threshold_outputs)},
+         {{kParallelThresholdOutputs, static_cast<std::int64_t>(kDefaultMatMulNBitsExecutionTuning
+                                                                    .parallel_threshold_outputs)},
           {kTargetBlockOutputs,
-           static_cast<std::int64_t>(
-               kDefaultMatMulNBitsExecutionTuning.target_block_outputs)},
-          {kMaxParticipants,
-           kDefaultMatMulNBitsExecutionTuning.max_participants}}},
+           static_cast<std::int64_t>(kDefaultMatMulNBitsExecutionTuning.target_block_outputs)},
+          {kMaxParticipants, kDefaultMatMulNBitsExecutionTuning.max_participants}}},
         ValidateTuning));
   });
 }
 
 rt_ns::KernelTuningKey MatMulNBitsKernel::TuningKey(std::int32_t element_type) const {
   return element_type == static_cast<std::int32_t>(DataType::FLOAT) ? MakeTuningKey()
-                                                                   : rt_ns::KernelTuningKey{};
+                                                                    : rt_ns::KernelTuningKey{};
 }
 
 void MatMulNBitsKernel::Configure(const rt_ns::KernelTuningParameters &parameters) {
@@ -147,15 +144,16 @@ Tensor MatMulNBitsKernel::operator()(const Tensor &a, const Tensor &b, const Ten
   const std::size_t n = CheckedDimension(attributes_.n, "MatMulNBits", "N");
   const std::size_t block_size =
       CheckedDimension(attributes_.block_size, "MatMulNBits", "block_size");
-  const std::size_t k_blocks = CheckedAdd(k, block_size - 1, "MatMulNBits", "K blocks") / block_size;
+  const std::size_t k_blocks =
+      CheckedAdd(k, block_size - 1, "MatMulNBits", "K blocks") / block_size;
   const std::size_t rows = TensorElementCount(a, "A") / k;
-  RequireShape(b, {attributes_.n, static_cast<std::int64_t>(k_blocks),
-                   static_cast<std::int64_t>(block_size / 2)},
+  RequireShape(b,
+               {attributes_.n, static_cast<std::int64_t>(k_blocks),
+                static_cast<std::int64_t>(block_size / 2)},
                "B");
   const std::size_t expected_scales =
       CheckedMultiply(n, k_blocks, "MatMulNBits", "scale element count");
-  if (!((scales.shape.size() == 1 &&
-         TensorElementCount(scales, "scales") == expected_scales) ||
+  if (!((scales.shape.size() == 1 && TensorElementCount(scales, "scales") == expected_scales) ||
         (scales.shape.size() == 2 && scales.shape[0] == attributes_.n &&
          scales.shape[1] == static_cast<std::int64_t>(k_blocks)))) {
     throw std::invalid_argument(
@@ -166,15 +164,13 @@ Tensor MatMulNBitsKernel::operator()(const Tensor &a, const Tensor &b, const Ten
   }
   rt_ns::Shape output_shape = a.shape;
   output_shape.back() = attributes_.n;
-  const std::size_t output_count =
-      CheckedMultiply(rows, n, "MatMulNBits", "output element count");
+  const std::size_t output_count = CheckedMultiply(rows, n, "MatMulNBits", "output element count");
   const std::size_t output_bytes =
       CheckedByteSize(output_count, sizeof(float), "MatMulNBits", "output byte size");
-  Tensor y = rt != nullptr
-                 ? rt->MakeOutputTensor(0, static_cast<std::int32_t>(DataType::FLOAT), output_shape,
-                                        output_bytes)
-                 : rt_ns::MakeOutputTensor(static_cast<std::int32_t>(DataType::FLOAT), output_shape,
-                                           output_bytes, nullptr);
+  Tensor y = rt != nullptr ? rt->MakeOutputTensor(0, static_cast<std::int32_t>(DataType::FLOAT),
+                                                  output_shape, output_bytes)
+                           : rt_ns::MakeOutputTensor(static_cast<std::int32_t>(DataType::FLOAT),
+                                                     output_shape, output_bytes, nullptr);
   MatMulNBitsFloat32(a.AsFloat(), b.bytes(), scales.AsFloat(),
                      bias == nullptr ? nullptr : bias->AsFloat(), y.AsFloat(), rows, k, n,
                      block_size, tuning_);

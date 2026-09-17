@@ -17,10 +17,9 @@ struct MatMulNBitsExecutionTuning {
 
 inline constexpr MatMulNBitsExecutionTuning kDefaultMatMulNBitsExecutionTuning{};
 
-void MatMulNBitsFloat32(const float *a, const std::uint8_t *b, const float *scales,
-                        const float *bias, float *y, std::size_t rows, std::size_t k,
-                        std::size_t n, std::size_t block_size,
-                        const MatMulNBitsExecutionTuning &tuning =
-                            kDefaultMatMulNBitsExecutionTuning);
+void MatMulNBitsFloat32(
+    const float *a, const std::uint8_t *b, const float *scales, const float *bias, float *y,
+    std::size_t rows, std::size_t k, std::size_t n, std::size_t block_size,
+    const MatMulNBitsExecutionTuning &tuning = kDefaultMatMulNBitsExecutionTuning);
 
 } // namespace onnx_light_cpu

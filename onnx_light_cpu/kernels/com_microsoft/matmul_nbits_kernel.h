@@ -34,8 +34,8 @@ public:
   static void RegisterTuningSchemas();
   ONNX_LIGHT_NAMESPACE::core::runtime::KernelTuningKey
   TuningKey(std::int32_t element_type) const override;
-  void Configure(
-      const ONNX_LIGHT_NAMESPACE::core::runtime::KernelTuningParameters &parameters) override;
+  void
+  Configure(const ONNX_LIGHT_NAMESPACE::core::runtime::KernelTuningParameters &parameters) override;
 
   ONNX_LIGHT_NAMESPACE::core::runtime::Tensor
   operator()(const ONNX_LIGHT_NAMESPACE::core::runtime::Tensor &a,
