@@ -90,6 +90,11 @@ void ExecuteCostedUnaryRanges(std::size_t count, const UnaryExecutionTuning &fal
   }
   const std::int64_t total = static_cast<std::int64_t>(std::min<std::size_t>(
       count, static_cast<std::size_t>(std::numeric_limits<std::int64_t>::max())));
+  if (fallback.parallel_threshold_bytes == 0 ||
+      total < UnaryBytesToElements(fallback.parallel_threshold_bytes, sizeof(T))) {
+    fn(std::int64_t{0}, total);
+    return;
+  }
   const std::int64_t max_participants =
       fallback.max_participants == 0
           ? std::numeric_limits<std::int64_t>::max()

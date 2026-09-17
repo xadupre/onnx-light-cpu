@@ -41,6 +41,7 @@ private:
   std::size_t input_count_;
   std::size_t element_size_;
   std::size_t element_count_;
+  bool contiguous_;
   std::vector<std::int64_t> output_shape_;
   std::vector<std::size_t> input_strides_;
 };

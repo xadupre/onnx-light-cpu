@@ -6,6 +6,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <span>
 
 namespace onnx_light_cpu {
 
@@ -14,5 +15,8 @@ namespace onnx_light_cpu {
 /// Empty work permits null pointers; all byte counts must fit INT64 and size_t.
 void SplitCopy(const void *data, void *output, int64_t rows, std::size_t input_row_bytes,
                std::size_t output_row_bytes, std::size_t offset_bytes);
+
+void SplitCopyOutputs(const void *data, std::span<void *const> outputs, int64_t rows,
+                      std::size_t input_row_bytes, std::span<const std::size_t> output_row_bytes);
 
 } // namespace onnx_light_cpu

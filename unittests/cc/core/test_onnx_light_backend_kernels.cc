@@ -617,6 +617,7 @@ TEST(OnnxLightBackendKernels, AttentionPriorityBenchmarksRunThroughRuntime) {
   std::vector<std::string> failures;
   for (const std::string &name :
        {"test_cpu_attention_opset23_rank4_mha_q1_kv128_hd64_none_stateless_float16_benchmark",
+        "test_cpu_attention_opset23_rank4_mha_q8_kv128_hd64_none_stateless_float32_benchmark",
         "test_cpu_attention_opset23_rank4_gqa_q128_kv128_hd64_causal_stateless_bfloat16_benchmark",
         "test_cpu_attention_opset23_rank3_mha_q128_kv128_hd64_none_stateless_float32_benchmark",
         "test_cpu_attention_opset23_rank4_mha_q1_kv1024_hd64_none_internal_cache_bfloat16_"

@@ -4,6 +4,7 @@
 
 #include "onnx_light_cpu/impl/math/binary/variadic_elementwise_plan.h"
 
+#include "onnx_light_cpu/impl/execution.h"
 #include "onnx_light_cpu/impl/math/half_conversion.h"
 
 #include <algorithm>
@@ -135,13 +136,81 @@ void ExecuteHalf(VariadicOperator op, std::span<const void *const> inputs,
   Store(output, bits);
 }
 
+template <typename T>
+void ExecuteContiguousRange(VariadicOperator op, std::span<const void *const> inputs, T *output,
+                            std::size_t begin, std::size_t end) {
+  const auto *first = static_cast<const T *>(inputs[0]);
+  if (inputs.size() == 1) {
+    std::copy(first + begin, first + end, output + begin);
+    return;
+  }
+  if (inputs.size() == 3) {
+    const auto *second = static_cast<const T *>(inputs[1]);
+    const auto *third = static_cast<const T *>(inputs[2]);
+    switch (op) {
+    case VariadicOperator::kSum:
+      for (std::size_t index = begin; index < end; ++index) {
+        output[index] = Add(Add(first[index], second[index]), third[index]);
+      }
+      return;
+    case VariadicOperator::kMean: {
+      const T scale = static_cast<T>(1) / static_cast<T>(3);
+      for (std::size_t index = begin; index < end; ++index) {
+        output[index] = Add(Add(first[index], second[index]), third[index]) * scale;
+      }
+      return;
+    }
+    case VariadicOperator::kMin:
+      for (std::size_t index = begin; index < end; ++index) {
+        const T pair = first[index] < second[index] ? first[index] : second[index];
+        output[index] = pair < third[index] ? pair : third[index];
+      }
+      return;
+    case VariadicOperator::kMax:
+      for (std::size_t index = begin; index < end; ++index) {
+        const T pair = first[index] > second[index] ? first[index] : second[index];
+        output[index] = pair > third[index] ? pair : third[index];
+      }
+      return;
+    }
+  }
+  const auto apply_inputs = [&](auto apply) {
+    for (std::size_t index = begin; index < end; ++index) {
+      T value = first[index];
+      for (std::size_t input = 1; input < inputs.size(); ++input) {
+        value = apply(value, static_cast<const T *>(inputs[input])[index]);
+      }
+      output[index] = value;
+    }
+  };
+  switch (op) {
+  case VariadicOperator::kSum:
+    apply_inputs([](T left, T right) { return Add(left, right); });
+    return;
+  case VariadicOperator::kMean: {
+    const T scale = static_cast<T>(1) / static_cast<T>(inputs.size());
+    apply_inputs([](T left, T right) { return Add(left, right); });
+    for (std::size_t index = begin; index < end; ++index) {
+      output[index] *= scale;
+    }
+    return;
+  }
+  case VariadicOperator::kMin:
+    apply_inputs([](T left, T right) { return left < right ? left : right; });
+    return;
+  case VariadicOperator::kMax:
+    apply_inputs([](T left, T right) { return left > right ? left : right; });
+    return;
+  }
+}
+
 } // namespace
 
 VariadicElementwisePlan::VariadicElementwisePlan(
     VariadicOperator op, std::span<const DataType> input_types,
     std::span<const std::vector<std::int64_t>> input_shapes)
     : op_(op), data_type_(DataType::UNDEFINED), input_count_(input_types.size()), element_size_(0),
-      element_count_(1) {
+      element_count_(1), contiguous_(true) {
   if (input_types.empty() || input_types.size() != input_shapes.size()) {
     throw std::invalid_argument(
         "onnx_light_cpu::VariadicElementwisePlan: inputs must be non-empty and have shapes.");
@@ -211,6 +280,16 @@ VariadicElementwisePlan::VariadicElementwisePlan(
     }
     element_count_ *= static_cast<std::size_t>(dimension);
   }
+  for (std::size_t input = 0; input < input_count_ && contiguous_; ++input) {
+    std::size_t expected_stride = 1;
+    for (std::size_t axis = rank; axis-- > 0;) {
+      if (input_strides_[input * rank + axis] != expected_stride) {
+        contiguous_ = false;
+        break;
+      }
+      expected_stride *= static_cast<std::size_t>(output_shape_[axis]);
+    }
+  }
   if (element_count_ > std::numeric_limits<std::size_t>::max() / element_size_) {
     throw std::invalid_argument("onnx_light_cpu::" + std::string(ToString(op)) +
                                 ": output tensor is too large.");
@@ -229,6 +308,44 @@ void VariadicElementwisePlan::Execute(std::span<const void *const> inputs, void 
                                        [](const void *input) { return input == nullptr; })) {
     throw std::invalid_argument("onnx_light_cpu::" + std::string(ToString(op_)) +
                                 ": non-empty tensors require data.");
+  }
+
+  if (contiguous_) {
+    const ExecutionSchedule schedule{262144, 262144, ExecutionThreadCount()};
+    ExecuteRanges(
+        static_cast<std::int64_t>(element_count_), schedule,
+        std::max<std::int64_t>(64 / static_cast<std::int64_t>(element_size_), 1),
+        [&](std::int64_t begin, std::int64_t end) {
+          switch (data_type_) {
+          case DataType::FLOAT:
+            ExecuteContiguousRange(op_, inputs, static_cast<float *>(output),
+                                   static_cast<std::size_t>(begin), static_cast<std::size_t>(end));
+            break;
+          case DataType::DOUBLE:
+            ExecuteContiguousRange(op_, inputs, static_cast<double *>(output),
+                                   static_cast<std::size_t>(begin), static_cast<std::size_t>(end));
+            break;
+#define ONNX_LIGHT_CPU_VARIADIC_CONTIGUOUS_INTEGER_CASE(TYPE, CPP_TYPE)                            \
+  case DataType::TYPE:                                                                             \
+    ExecuteContiguousRange(op_, inputs, static_cast<CPP_TYPE *>(output),                           \
+                           static_cast<std::size_t>(begin), static_cast<std::size_t>(end));        \
+    break
+            ONNX_LIGHT_CPU_VARIADIC_CONTIGUOUS_INTEGER_CASE(INT8, std::int8_t);
+            ONNX_LIGHT_CPU_VARIADIC_CONTIGUOUS_INTEGER_CASE(INT16, std::int16_t);
+            ONNX_LIGHT_CPU_VARIADIC_CONTIGUOUS_INTEGER_CASE(INT32, std::int32_t);
+            ONNX_LIGHT_CPU_VARIADIC_CONTIGUOUS_INTEGER_CASE(INT64, std::int64_t);
+            ONNX_LIGHT_CPU_VARIADIC_CONTIGUOUS_INTEGER_CASE(UINT8, std::uint8_t);
+            ONNX_LIGHT_CPU_VARIADIC_CONTIGUOUS_INTEGER_CASE(UINT16, std::uint16_t);
+            ONNX_LIGHT_CPU_VARIADIC_CONTIGUOUS_INTEGER_CASE(UINT32, std::uint32_t);
+            ONNX_LIGHT_CPU_VARIADIC_CONTIGUOUS_INTEGER_CASE(UINT64, std::uint64_t);
+#undef ONNX_LIGHT_CPU_VARIADIC_CONTIGUOUS_INTEGER_CASE
+          default:
+            break;
+          }
+        });
+    if (data_type_ != DataType::FLOAT16 && data_type_ != DataType::BFLOAT16) {
+      return;
+    }
   }
 
   const std::size_t rank = output_shape_.size();

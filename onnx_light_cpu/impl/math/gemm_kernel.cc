@@ -1245,6 +1245,20 @@ void GemmFiveLoopRange(bool trans_a, bool trans_b, std::size_t M, std::size_t N,
                        const GemmBlocking &blocking) {
   const bool has_bias = C != nullptr && beta != T(0);
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512
+  if constexpr (std::is_same_v<T, float> && std::is_same_v<SrcT, float>) {
+    if (!trans_a && !trans_b && M == 32 && N == 32 && K >= 1024 &&
+        kind == GemmKernelKind::kAVX512) {
+      const std::size_t kc = k_end - k_begin;
+      const GemmAccumMode mode = has_bias ? GemmAccumMode::kInitBias : GemmAccumMode::kInitZero;
+      for (std::size_t m0 = 0; m0 < M; m0 += blocking.mr) {
+        const std::size_t mr = std::min(blocking.mr, M - m0);
+        GemmMicroKernel_AVX512_F32_StridedA(mr, N, kc, alpha, beta, B + k_begin * N, N,
+                                            has_bias ? C + m0 * N : nullptr, N, Y + m0 * N, N, 0,
+                                            mode, A + m0 * K + k_begin, K);
+      }
+      return;
+    }
+  }
   if constexpr (std::is_same_v<T, double> && std::is_same_v<SrcT, double>) {
     if (!trans_a && !trans_b && M == 32 && N == 32 && K >= 1024 &&
         kind == GemmKernelKind::kAVX512) {
@@ -1541,7 +1555,7 @@ void GemmSplitK(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::s
                 const SrcT *A, const SrcT *B, T beta, const T *C, T *Y, GemmKernelKind kind,
                 TileFn tile, const GemmBlocking &blocking) {
   if constexpr (std::is_same_v<T, SrcT>) {
-    if (!trans_a && !trans_b && N <= blocking.nr) {
+    if (!trans_a && !trans_b && M <= blocking.mr && N <= blocking.nr) {
       if (N == 2) {
         const bool has_bias = C != nullptr && beta != T(0);
         for (std::size_t m = 0; m < M; ++m) {

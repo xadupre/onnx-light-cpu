@@ -662,6 +662,15 @@ const T *PackRows(const T *source, std::size_t rows, std::size_t dimension, std:
     return source;
   }
   scratch.resize(rows * dimension);
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
+  if constexpr (std::is_same_v<T, float>) {
+    static const bool has_avx512 = DetectSimdLevel() == SimdLevel::kAVX512;
+    if (has_avx512) {
+      AttentionPackRowsFloat32_AVX512(source, scratch.data(), rows, dimension, stride);
+      return scratch.data();
+    }
+  }
+#endif
   for (std::size_t row = 0; row < rows; ++row) {
     std::copy_n(source + row * stride, dimension, scratch.data() + row * dimension);
   }
@@ -1272,20 +1281,31 @@ void ComputeAttentionTiled(const AttentionPlan &plan, const typename Codec::Stor
   const std::size_t total_tasks = plan.batch * tasks_per_batch;
   const auto *mask_bool = static_cast<const std::uint8_t *>(mask);
   const auto *mask_float = static_cast<const float *>(mask);
+#if defined(ONNX_LIGHT_CPU_HAVE_AVX2_FMA) || defined(ONNX_LIGHT_CPU_HAVE_AVX512)
+  static const SimdLevel simd = DetectSimdLevel();
+#endif
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
   const bool use_avx2_softmax =
-      DetectSimdLevel() == SimdLevel::kAVX2 && CpuSupportsFma() && plan.softcap == 0.0f &&
+      simd == SimdLevel::kAVX2 && CpuSupportsFma() && plan.softcap == 0.0f &&
       plan.left_window_size < 0 && plan.right_window_size < 0 &&
       (plan.mask_kind == AttentionMaskKind::kNone || plan.mask_strides.kv == 1);
 #endif
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512
   const bool use_bounded_avx512 =
-      DetectSimdLevel() == SimdLevel::kAVX512 && plan.mask_kind == AttentionMaskKind::kNone &&
+      simd == SimdLevel::kAVX512 && plan.mask_kind == AttentionMaskKind::kNone &&
       plan.softcap == 0.0f && plan.left_window_size < 0 && plan.right_window_size < 0;
   const bool use_masked_avx512 =
-      DetectSimdLevel() == SimdLevel::kAVX512 && plan.mask_kind != AttentionMaskKind::kNone &&
+      simd == SimdLevel::kAVX512 && plan.mask_kind != AttentionMaskKind::kNone &&
       plan.mask_strides.kv == 1 && !plan.causal && plan.softcap == 0.0f &&
       plan.left_window_size < 0 && plan.right_window_size < 0;
+  const bool use_q8_avx512 = std::is_same_v<Codec, Float32Codec> && use_bounded_avx512 &&
+                             !plan.causal && nonpad_kv_seqlen == nullptr && plan.past_length == 0 &&
+                             plan.q_length == 8 && plan.total_kv_length == 128 &&
+                             plan.head_dim == 64 && plan.v_head_dim == 64;
+  const bool use_dense_softmax_avx512 = std::is_same_v<Codec, Float32Codec> && use_bounded_avx512 &&
+                                        !plan.causal && nonpad_kv_seqlen == nullptr &&
+                                        plan.past_length == 0 && plan.total_kv_length == 128 &&
+                                        (plan.q_length == 8 || plan.q_length == 128);
 #endif
   std::size_t participants =
       StreamingParticipantCount(plan, plan.batch * plan.q_num_heads * plan.q_length);
@@ -1388,8 +1408,15 @@ void ComputeAttentionTiled(const AttentionPlan &plan, const typename Codec::Stor
             const std::size_t columns = std::min(kv_block, task_kv_limit - j0);
             const auto *k_block = PackRows(k_head + j0 * plan.k_strides.sequence, columns,
                                            plan.head_dim, plan.k_strides.sequence, packed_k);
-            AttentionQkGemm<Codec>(rows, columns, plan.head_dim, plan.scale, q_block, k_block,
-                                   scores.data());
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
+            if (use_q8_avx512) {
+              AttentionScoreQ8K128D64Float32_AVX512(reinterpret_cast<const float *>(q_block),
+                                                    reinterpret_cast<const float *>(k_block),
+                                                    plan.scale, scores.data());
+            } else
+#endif
+              AttentionQkGemm<Codec>(rows, columns, plan.head_dim, plan.scale, q_block, k_block,
+                                     scores.data());
             const float *v_block;
             if constexpr (std::is_same_v<Codec, Float32Codec>) {
               v_block = PackRows(v_head + j0 * plan.v_strides.sequence, columns, plan.v_head_dim,
@@ -1400,7 +1427,18 @@ void ComputeAttentionTiled(const AttentionPlan &plan, const typename Codec::Stor
               v_block = packed_v.data();
             }
 
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
+            if (use_dense_softmax_avx512) {
+              AttentionSoftmaxRowsFloat32_AVX512(scores.data(), denominators.data(), rows, columns);
+              std::fill_n(valid.begin(), rows, std::uint8_t{1});
+            }
+#endif
             for (std::size_t i = 0; i < rows; ++i) {
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
+              if (use_dense_softmax_avx512) {
+                continue;
+              }
+#endif
               float *score_row = scores.data() + i * columns;
               const std::size_t query = q0 + i;
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
@@ -1569,18 +1607,16 @@ void ComputeAttentionTiled(const AttentionPlan &plan, const typename Codec::Stor
             }
 
             if (single_kv_block) {
-              for (std::size_t i = 0; i < rows; ++i) {
-                const float scale =
-                    valid[i] && denominators[i] != 0.0f ? 1.0f / denominators[i] : 0.0f;
-                float *score_row = scores.data() + i * columns;
-                for (std::size_t jj = 0; jj < columns; ++jj) {
-                  score_row[jj] *= scale;
-                }
-              }
               float *destination;
+              std::ptrdiff_t destination_stride = static_cast<std::ptrdiff_t>(plan.v_head_dim);
               if constexpr (std::is_same_v<Codec, Float32Codec>) {
                 destination = y_block;
-                if (plan.y_strides.sequence != static_cast<std::ptrdiff_t>(plan.v_head_dim)) {
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
+                if (use_dense_softmax_avx512 && rows == 128 && plan.v_head_dim == 64) {
+                  destination_stride = plan.y_strides.sequence;
+                } else
+#endif
+                    if (plan.y_strides.sequence != static_cast<std::ptrdiff_t>(plan.v_head_dim)) {
                   output.resize(rows * plan.v_head_dim);
                   destination = output.data();
                 }
@@ -1588,12 +1624,51 @@ void ComputeAttentionTiled(const AttentionPlan &plan, const typename Codec::Stor
                 output.resize(rows * plan.v_head_dim);
                 destination = output.data();
               }
-              GemmFloat32(false, false, rows, plan.v_head_dim, columns, 1.0f, scores.data(),
-                          v_block, 0.0f, nullptr, destination);
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
+              if (use_q8_avx512) {
+                AttentionProbabilityValueQ8K128D64Float32_AVX512(scores.data(), v_block,
+                                                                 destination, destination_stride);
+              } else if (use_dense_softmax_avx512 && rows == 128 && plan.v_head_dim == 64) {
+                for (std::size_t row = 0; row < rows; row += 8) {
+                  AttentionProbabilityValueQ8K128D64Float32_AVX512(
+                      scores.data() + row * columns, v_block,
+                      destination + row * destination_stride, destination_stride);
+                }
+              } else
+#endif
+                GemmFloat32(false, false, rows, plan.v_head_dim, columns, 1.0f, scores.data(),
+                            v_block, 0.0f, nullptr, destination);
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
+              if (use_dense_softmax_avx512) {
+                AttentionNormalizeRowsFloat32_AVX512(destination, denominators.data(), rows,
+                                                     plan.v_head_dim, destination_stride);
+              } else
+#endif
+                for (std::size_t i = 0; i < rows; ++i) {
+                  const float scale =
+                      valid[i] && denominators[i] != 0.0f ? 1.0f / denominators[i] : 0.0f;
+                  float *output_row = destination + i * destination_stride;
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
+                  if (use_bounded_avx512) {
+                    AttentionScaleFloat32_AVX512(output_row, scale, plan.v_head_dim);
+                    continue;
+                  }
+#endif
+                  for (std::size_t d = 0; d < plan.v_head_dim; ++d) {
+                    output_row[d] *= scale;
+                  }
+                }
               if constexpr (std::is_same_v<Codec, Float32Codec>) {
                 if (destination == y_block) {
                   break;
                 }
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
+                if (simd == SimdLevel::kAVX512) {
+                  AttentionScatterRowsFloat32_AVX512(destination, y_block, rows, plan.v_head_dim,
+                                                     plan.y_strides.sequence);
+                  break;
+                }
+#endif
               }
               for (std::size_t i = 0; i < rows; ++i) {
                 auto *y_row = y_block + i * plan.y_strides.sequence;
@@ -1647,7 +1722,18 @@ void ComputeAttentionFloat32Streaming(const AttentionPlan &plan, const float *q,
     ComputeAttentionSingleKey<Float32Codec>(plan, v, mask, y, past_v, nonpad_kv_seqlen);
     return;
   }
-  if (plan.past_length == 0 && plan.q_length >= 16 && plan.total_kv_length != 0) {
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
+  static const SimdLevel simd = DetectSimdLevel();
+#endif
+  bool use_tiled = plan.past_length == 0 && plan.q_length >= 16 && plan.total_kv_length != 0;
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
+  use_tiled = use_tiled ||
+              (plan.past_length == 0 && plan.q_length == 8 && plan.total_kv_length == 128 &&
+               plan.head_dim == 64 && plan.v_head_dim == 64 && !plan.causal &&
+               plan.mask_kind == AttentionMaskKind::kNone && plan.left_window_size < 0 &&
+               plan.right_window_size < 0 && plan.softcap == 0.0f && simd == SimdLevel::kAVX512);
+#endif
+  if (use_tiled) {
     RecordExecution(plan, AttentionExecutionPath::kTiled, false, execution_info);
     ComputeAttentionTiled<Float32Codec>(plan, q, k, v, mask, y, nonpad_kv_seqlen);
     return;

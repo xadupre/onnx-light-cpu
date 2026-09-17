@@ -84,4 +84,43 @@ void SplitCopy(const void *data, void *output, int64_t rows, std::size_t input_r
   ExecuteRanges(total, schedule, int64_t{64}, copy);
 }
 
+void SplitCopyOutputs(const void *data, std::span<void *const> outputs, int64_t rows,
+                      std::size_t input_row_bytes, std::span<const std::size_t> output_row_bytes) {
+  if (rows == 0 || input_row_bytes == 0) {
+    return;
+  }
+  const auto copy = [&](int64_t begin, int64_t end) {
+    const auto *source = static_cast<const uint8_t *>(data);
+    for (int64_t row = begin; row < end; ++row) {
+      std::size_t offset = 0;
+      for (std::size_t output = 0; output < outputs.size(); ++output) {
+        const std::size_t width = output_row_bytes[output];
+        if (width != 0) {
+          std::memcpy(static_cast<uint8_t *>(outputs[output]) +
+                          static_cast<std::size_t>(row) * width,
+                      source + static_cast<std::size_t>(row) * input_row_bytes + offset, width);
+        }
+        offset += width;
+      }
+    }
+  };
+  constexpr int64_t kParallelBytes = 1024 * 1024;
+  constexpr int64_t kBlockBytes = 256 * 1024;
+  if (input_row_bytes > static_cast<std::size_t>(std::numeric_limits<int64_t>::max())) {
+    copy(0, rows);
+    return;
+  }
+  const int64_t parallel_rows =
+      std::max<int64_t>(1, kParallelBytes / static_cast<int64_t>(input_row_bytes));
+  const int64_t block_rows =
+      std::max<int64_t>(1, kBlockBytes / static_cast<int64_t>(input_row_bytes));
+  const auto *executor = CurrentExecutionExecutor();
+  if (rows < parallel_rows || ExecutionInParallelRegion() || executor == nullptr ||
+      executor->run_blocks == nullptr || ExecutionThreadCount() <= 1) {
+    copy(0, rows);
+    return;
+  }
+  ExecuteRanges(rows, ExecutionSchedule{parallel_rows, block_rows, ExecutionThreadCount()}, copy);
+}
+
 } // namespace onnx_light_cpu

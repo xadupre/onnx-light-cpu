@@ -201,6 +201,7 @@ TEST(MatMulPlan, LargeDepthOverwritesOutputAcrossRepeatedExecution) {
   onnx_light_cpu::ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run};
   onnx_light_cpu::ExecutionExecutorScope scope(&view);
   plan.Execute(a.data(), b.data(), y.data());
+  EXPECT_GT(executor.maximum_blocks, 1);
   for (float value : y) {
     EXPECT_FLOAT_EQ(value, static_cast<float>(K) * 0.125f);
   }

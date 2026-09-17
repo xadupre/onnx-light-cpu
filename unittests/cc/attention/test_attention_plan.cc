@@ -982,6 +982,36 @@ TEST(ComputeAttentionFloat32Streaming, BooleanMaskTileSkipMatchesReference) {
   ExpectClose(y, materialized_y);
 }
 
+TEST(ComputeAttentionFloat32Streaming, DenseBenchmarkShapesMatchMaterialized) {
+  constexpr std::size_t batch = 1, heads = 12, kv_len = 128, head_dim = 64;
+  for (const auto &[layout, q_len] : {std::pair{AttentionLayout::kRank4, std::size_t{8}},
+                                      std::pair{AttentionLayout::kRank3, std::size_t{128}}}) {
+    AttentionDescriptor descriptor;
+    descriptor.q_num_heads = heads;
+    descriptor.kv_num_heads = heads;
+    const auto query_length = static_cast<std::int64_t>(q_len);
+    const std::vector<std::int64_t> q_shape =
+        layout == AttentionLayout::kRank3
+            ? std::vector<std::int64_t>{batch, query_length, heads * head_dim}
+            : std::vector<std::int64_t>{batch, heads, query_length, head_dim};
+    const std::vector<std::int64_t> kv_shape =
+        layout == AttentionLayout::kRank3
+            ? std::vector<std::int64_t>{batch, kv_len, heads * head_dim}
+            : std::vector<std::int64_t>{batch, heads, kv_len, head_dim};
+    AttentionPlan plan(descriptor, layout, q_shape, kv_shape, kv_shape, {},
+                       AttentionMaskKind::kNone, {}, {});
+    const auto q = RandomTensor(batch * heads * q_len * head_dim, 1291 + q_len);
+    const auto k = RandomTensor(batch * heads * kv_len * head_dim, 1292 + q_len);
+    const auto v = RandomTensor(batch * heads * kv_len * head_dim, 1293 + q_len);
+    std::vector<float> actual(batch * heads * q_len * head_dim);
+    std::vector<float> expected(actual.size());
+    ComputeAttentionFloat32Streaming(plan, q.data(), k.data(), v.data(), nullptr, actual.data());
+    onnx_light_cpu::ComputeAttentionFloat32Materialized(plan, q.data(), k.data(), v.data(), nullptr,
+                                                        expected.data());
+    ExpectClose(actual, expected, 2.0e-4f);
+  }
+}
+
 // -----------------------------------------------------------------------
 // AVX2+FMA `Q == 1` decode fast path (onnx_light_cpu/impl/attention/avx2):
 // on AVX2 hardware without AVX-512 these cases exercise
