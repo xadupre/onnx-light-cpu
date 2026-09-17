@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "onnx_light_cpu/impl/math/binary/binary_arithmetic_kernel.h"
 #include "onnx_light_cpu/impl/math/binary/binary_comparison_kernel.h"
 #include "onnx_light_cpu/impl/math/binary/binary_kernel_descriptor.h"
 #include "onnx_light_cpu/impl/math/binary/binary_manifest.h"
@@ -124,6 +125,26 @@ TEST(BinaryKernelDescriptor, AssignsStableDistinctCacheIdentities) {
   EXPECT_NE(first.cache_identity(), 0u);
   EXPECT_NE(second.cache_identity(), 0u);
   EXPECT_NE(first.cache_identity(), second.cache_identity());
+}
+
+TEST(BinaryKernelDescriptor, ResolvesFloat32ArithmeticDispatchOncePerAdapter) {
+  using BulkFunctions = const onnx_light_cpu::BinaryArithmeticBulkFunctions &(*)();
+  const std::array<std::pair<std::string_view, BulkFunctions>, 5> operations{{
+      {"Add", &onnx_light_cpu::BinaryAddFloat32BulkFunctions},
+      {"Sub", &onnx_light_cpu::BinarySubFloat32BulkFunctions},
+      {"Mul", &onnx_light_cpu::BinaryMulFloat32BulkFunctions},
+      {"Div", &onnx_light_cpu::BinaryDivFloat32BulkFunctions},
+      {"PRelu", &onnx_light_cpu::BinaryPReluFloat32BulkFunctions},
+  }};
+  for (const auto &[op_type, resolve] : operations) {
+    const BinaryKernelDescriptor descriptor(std::string(op_type), op_type == "PRelu" ? 16 : 14, {});
+    const auto &adapter = descriptor.ResolveAdapter(BinaryDataType::FLOAT, BinaryDataType::FLOAT,
+                                                    BinaryDataType::FLOAT);
+    const auto &functions = resolve();
+    EXPECT_EQ(adapter.bulk_contiguous, functions.contiguous) << op_type;
+    EXPECT_EQ(adapter.bulk_left_scalar, functions.left_scalar) << op_type;
+    EXPECT_EQ(adapter.bulk_right_scalar, functions.right_scalar) << op_type;
+  }
 }
 
 TEST(BinaryKernelDescriptor, Mod28EnablesFloatingRemainderWithoutChangingOlderOpsets) {

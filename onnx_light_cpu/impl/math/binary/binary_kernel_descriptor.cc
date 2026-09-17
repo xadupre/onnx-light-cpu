@@ -673,6 +673,13 @@ void SelectBulk(BinaryOperator op, DT left, BinaryKernelDescriptor::Adapter &ada
   adapter.bulk_contiguous = &BulkContiguousWrapper<T, &STEM##Contiguous>;                          \
   adapter.bulk_left_scalar = &BulkLeftScalarWrapper<T, &STEM##LeftScalar>;                         \
   adapter.bulk_right_scalar = &BulkRightScalarWrapper<T, &STEM##RightScalar>;
+#define ONNX_LIGHT_CPU_BIND_RESOLVED_BULK(STEM)                                                    \
+  {                                                                                                \
+    const BinaryArithmeticBulkFunctions &functions = STEM##BulkFunctions();                        \
+    adapter.bulk_contiguous = functions.contiguous;                                                \
+    adapter.bulk_left_scalar = functions.left_scalar;                                              \
+    adapter.bulk_right_scalar = functions.right_scalar;                                            \
+  }
 #define ONNX_LIGHT_CPU_BIND_COMPUTE_BULK(T, COMPUTE)                                               \
   adapter.bulk_contiguous = &BulkComputeContiguous<T, T, T, &COMPUTE>;                             \
   adapter.bulk_left_scalar = &BulkComputeLeftScalar<T, T, T, &COMPUTE>;                            \
@@ -713,7 +720,7 @@ void SelectBulk(BinaryOperator op, DT left, BinaryKernelDescriptor::Adapter &ada
   switch (op) {
   case BinaryOperator::kAdd:
     if (left == DT::FLOAT) {
-      ONNX_LIGHT_CPU_BIND_BULK(BinaryAddFloat32, float)
+      ONNX_LIGHT_CPU_BIND_RESOLVED_BULK(BinaryAddFloat32)
     } else if (left == DT::DOUBLE) {
       ONNX_LIGHT_CPU_BIND_BULK(BinaryAddFloat64, double)
     } else if (left == DT::FLOAT16) {
@@ -726,7 +733,7 @@ void SelectBulk(BinaryOperator op, DT left, BinaryKernelDescriptor::Adapter &ada
     break;
   case BinaryOperator::kSub:
     if (left == DT::FLOAT) {
-      ONNX_LIGHT_CPU_BIND_BULK(BinarySubFloat32, float)
+      ONNX_LIGHT_CPU_BIND_RESOLVED_BULK(BinarySubFloat32)
     } else if (left == DT::DOUBLE) {
       ONNX_LIGHT_CPU_BIND_BULK(BinarySubFloat64, double)
     } else if (left == DT::FLOAT16) {
@@ -739,7 +746,7 @@ void SelectBulk(BinaryOperator op, DT left, BinaryKernelDescriptor::Adapter &ada
     break;
   case BinaryOperator::kMul:
     if (left == DT::FLOAT) {
-      ONNX_LIGHT_CPU_BIND_BULK(BinaryMulFloat32, float)
+      ONNX_LIGHT_CPU_BIND_RESOLVED_BULK(BinaryMulFloat32)
     } else if (left == DT::DOUBLE) {
       ONNX_LIGHT_CPU_BIND_BULK(BinaryMulFloat64, double)
     } else if (left == DT::FLOAT16) {
@@ -752,7 +759,7 @@ void SelectBulk(BinaryOperator op, DT left, BinaryKernelDescriptor::Adapter &ada
     break;
   case BinaryOperator::kDiv:
     if (left == DT::FLOAT) {
-      ONNX_LIGHT_CPU_BIND_BULK(BinaryDivFloat32, float)
+      ONNX_LIGHT_CPU_BIND_RESOLVED_BULK(BinaryDivFloat32)
     } else if (left == DT::DOUBLE) {
       ONNX_LIGHT_CPU_BIND_BULK(BinaryDivFloat64, double)
     } else if (left == DT::FLOAT16) {
@@ -782,6 +789,7 @@ void SelectBulk(BinaryOperator op, DT left, BinaryKernelDescriptor::Adapter &ada
 #undef ONNX_LIGHT_CPU_BIND_INTEGER_BULK
 #undef ONNX_LIGHT_CPU_BIND_COMPUTE_BULK
 #undef ONNX_LIGHT_CPU_BIND_HALF_BULK
+#undef ONNX_LIGHT_CPU_BIND_RESOLVED_BULK
 #undef ONNX_LIGHT_CPU_BIND_BULK
 }
 
@@ -2447,9 +2455,10 @@ void SelectAdditionalBulk(BinaryOperator op, DT left, DT right, const Attrs &att
     break;
   case BinaryOperator::kPRelu:
     if (left == DT::FLOAT) {
-      adapter.bulk_contiguous = &BulkContiguousWrapper<float, &BinaryPReluFloat32Contiguous>;
-      adapter.bulk_left_scalar = &BulkLeftScalarWrapper<float, &BinaryPReluFloat32LeftScalar>;
-      adapter.bulk_right_scalar = &BulkRightScalarWrapper<float, &BinaryPReluFloat32RightScalar>;
+      const BinaryArithmeticBulkFunctions &functions = BinaryPReluFloat32BulkFunctions();
+      adapter.bulk_contiguous = functions.contiguous;
+      adapter.bulk_left_scalar = functions.left_scalar;
+      adapter.bulk_right_scalar = functions.right_scalar;
     } else if (left == DT::DOUBLE) {
       ONNX_LIGHT_CPU_BIND_TYPED_BULK(double, double, double, ComputePRelu<double>)
     } else {

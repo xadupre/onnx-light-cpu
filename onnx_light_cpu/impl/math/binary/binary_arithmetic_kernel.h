@@ -13,6 +13,14 @@
 
 namespace onnx_light_cpu {
 
+struct BinaryArithmeticBulkFunctions {
+  using Fn = void (*)(const void *, const void *, void *, std::size_t);
+
+  Fn contiguous;
+  Fn left_scalar;
+  Fn right_scalar;
+};
+
 /// Binary PR02 FP32/FP64 SIMD arithmetic kernels for ``Add``, ``Sub``, ``Mul``
 /// and ``Div``. Each operator provides three entry points that mirror
 /// ``BinaryBroadcastPlan::LoopFamily``:
@@ -46,10 +54,16 @@ ONNX_LIGHT_CPU_DECLARE_BINARY_ARITH(BinaryDivFloat64, double)
 
 #undef ONNX_LIGHT_CPU_DECLARE_BINARY_ARITH
 
+const BinaryArithmeticBulkFunctions &BinaryAddFloat32BulkFunctions();
+const BinaryArithmeticBulkFunctions &BinarySubFloat32BulkFunctions();
+const BinaryArithmeticBulkFunctions &BinaryMulFloat32BulkFunctions();
+const BinaryArithmeticBulkFunctions &BinaryDivFloat32BulkFunctions();
+
 void BinaryPReluFloat32Contiguous(const float *left, const float *right, float *out,
                                   std::size_t count);
 void BinaryPReluFloat32LeftScalar(float left, const float *right, float *out, std::size_t count);
 void BinaryPReluFloat32RightScalar(const float *left, float right, float *out, std::size_t count);
+const BinaryArithmeticBulkFunctions &BinaryPReluFloat32BulkFunctions();
 
 bool BinarySquareInt32(const std::int32_t *input, std::int32_t *output, std::size_t count);
 bool BinarySquareInt64(const std::int64_t *input, std::int64_t *output, std::size_t count);
