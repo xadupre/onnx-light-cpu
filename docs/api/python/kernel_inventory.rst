@@ -63,9 +63,10 @@ Kernel inventory and usage
 .. py:function:: used_kernel_paths(sess) -> list[str]
 
    Returns the recorded kernel names plus implementation-path diagnostics such
-   as ``Cast.float32_to_float16.f16c``. Use this when reporting which SIMD or
-   fallback path a kernel selected; :func:`used_kernel_names` remains limited
-   to kernel identities.
+   as ``Cast.float32_to_float16.f16c`` or
+   ``onnx_light_cpu::SimplifiedLayerNormalization/avx/row-scale``. Use this
+   when reporting which SIMD or fallback path a kernel selected;
+   :func:`used_kernel_names` remains limited to kernel identities.
 
 .. py:function:: clear_used_kernel_names(sess) -> None
 

@@ -428,7 +428,9 @@ def used_kernel_names(sess: Any) -> list[str]:
 
 
 def _kernel_names_only(records: list[str]) -> list[str]:
-    return [name for name in records if not name.startswith(("Cast.", "Binary."))]
+    return [
+        name for name in records if "/" not in name and not name.startswith(("Cast.", "Binary."))
+    ]
 
 
 def used_kernel_paths(sess: Any) -> list[str]:

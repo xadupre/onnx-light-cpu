@@ -8,8 +8,8 @@
 // the running CPU reports it (``CpuSupportsNeonDotProd``, Roadmap PR09.3), then
 // to a native x86 AVX-512 VNNI (``vpdpbusd``) path when the CPU reports that ISA
 // (``CpuSupportsAvx512Vnni``, Roadmap PR09.2), an exact AVX2 fallback, and
-// finally a portable scalar sibling. All paths share the same packing and
-// zero-point correction, so they are differentially testable over the portable
+// finally a portable scalar sibling. Skinny-M x86 paths stream B without packing;
+// all paths use exact zero-point correction and are testable over the portable
 // PR09.1 fallback.
 //
 // The native dot-product ``IntegerDotU8S8Avx512Vnni`` is only usable when
@@ -23,6 +23,14 @@
 #include <cstdint>
 
 namespace onnx_light_cpu {
+
+enum class IntegerMatMulPlan { kPacked, kNoPackAvx2, kNoPackVnni };
+
+// Shape/ISA plan shared by dispatch and benchmark diagnostics. All four byte
+// signedness combinations and scalar/per-axis zero points support the same plan.
+// M=2 is the packed AVX2 microkernel's MR; larger M keeps amortized packing.
+IntegerMatMulPlan SelectIntegerMatMulPlan(std::int64_t rows, std::int64_t cols, std::int64_t depth);
+const char *IntegerMatMulPlanName(IntegerMatMulPlan plan);
 
 // Computes ``C[rows, cols]`` (row-major, INT32 accumulation defined as
 // modulo-2^32 arithmetic) for ``MatMulInteger`` of the byte matrices
@@ -60,6 +68,11 @@ void IntegerMatMul4Bit2D(const std::uint8_t *a, bool a_signed, const std::uint8_
 bool IntegerMatMul2DUsesVnni();
 
 namespace detail {
+
+// Production B packer, also exposed for isolated packing/compute profiling.
+void PackS8ColRange(const std::uint8_t *b, bool b_signed, std::int64_t ob, std::int64_t depth,
+                    std::int64_t cols, std::int8_t *b_panel_data, std::int64_t *b_col_sum_data,
+                    std::int64_t begin, std::int64_t end);
 
 // Per-column dot-product used by the shared ``IntegerMatMul2D`` driver: returns
 // ``sum_{i<depth} ua[i] * sb[i]`` (modulo-2^32) where ``ua`` is a UINT8 row and
