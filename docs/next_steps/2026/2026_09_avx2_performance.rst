@@ -404,7 +404,7 @@ makes that sweep reproducible and prevents an AVX-512-capable development
 machine from hiding an AVX2 fallback.
 
 Skinny-M MatMulInteger profiling (#725)
---------------------------------------
+-----------------------------------------
 
 The September 17 checkout already bypassed packing for ``M=1``. Its AVX2
 kernel widened eight B bytes to INT32, then traversed all of K before

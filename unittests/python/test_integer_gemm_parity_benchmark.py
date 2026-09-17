@@ -17,6 +17,10 @@ def test_priority_corpus_covers_integer_shapes():
 
 def test_integer_plan_diagnostics():
     """Diagnostics use the production planner rather than inferred ISA names."""
+    from onnx_light_cpu import has_backend_test_cases
+
+    if not has_backend_test_cases():
+        return
     from onnx_light_cpu.onnx_py._cpuregister import integer_matmul_plan
 
     assert integer_matmul_plan(3, 4096, 4096) == "packed"
