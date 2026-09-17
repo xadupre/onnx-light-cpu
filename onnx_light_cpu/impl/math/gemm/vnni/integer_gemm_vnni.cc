@@ -136,6 +136,8 @@ void PackU8RowRange(const std::uint8_t *a, bool a_signed, std::int64_t oa, std::
   }
 }
 
+} // namespace
+
 // Packs the disjoint column range ``[begin, end)`` of B into a transposed
 // contiguous panel and accumulates the true per-column sums.
 void PackS8ColRange(const std::uint8_t *b, bool b_signed, std::int64_t ob, std::int64_t depth,
@@ -154,6 +156,8 @@ void PackS8ColRange(const std::uint8_t *b, bool b_signed, std::int64_t ob, std::
     b_col_sum_data[j] = col_sum;
   }
 }
+
+namespace {
 
 // Applies the zero-point correction (and, when ``has_products`` is false,
 // the raw dot product itself) to the disjoint row range ``[row_begin,

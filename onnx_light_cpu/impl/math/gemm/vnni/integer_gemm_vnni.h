@@ -61,6 +61,11 @@ bool IntegerMatMul2DUsesVnni();
 
 namespace detail {
 
+// Production B packer, also exposed for isolated packing/compute profiling.
+void PackS8ColRange(const std::uint8_t *b, bool b_signed, std::int64_t ob, std::int64_t depth,
+                    std::int64_t cols, std::int8_t *b_panel_data, std::int64_t *b_col_sum_data,
+                    std::int64_t begin, std::int64_t end);
+
 // Per-column dot-product used by the shared ``IntegerMatMul2D`` driver: returns
 // ``sum_{i<depth} ua[i] * sb[i]`` (modulo-2^32) where ``ua`` is a UINT8 row and
 // ``sb`` is an INT8 column, both contiguous of length ``depth``.
