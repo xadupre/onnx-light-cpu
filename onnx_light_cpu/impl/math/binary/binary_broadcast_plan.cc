@@ -5,6 +5,7 @@
 #include "onnx_light_cpu/impl/math/binary/binary_broadcast_plan.h"
 
 #include "onnx_light_cpu/impl/execution.h"
+#include "onnx_light_cpu/impl/math/binary/binary_comparison_kernel.h"
 #include "onnx_light_cpu/impl/math/binary/binary_execution_schedule.h"
 
 #include <algorithm>
@@ -149,6 +150,32 @@ BinaryBroadcastPlan::BinaryBroadcastPlan(const BinaryKernelDescriptor &descripto
     }
   }
   ClassifyLoopFamily();
+}
+
+std::string BinaryBroadcastPlan::implementation_path() const {
+  if (element_count_ == 0) {
+    return "empty";
+  }
+  const Dimension &inner = dimensions_.back();
+  const bool bulk =
+      (inner.left_stride == 1 && inner.right_stride == 1 && adapter_.bulk_contiguous) ||
+      (inner.left_stride == 0 && inner.right_stride == 1 && adapter_.bulk_left_scalar) ||
+      (inner.left_stride == 1 && inner.right_stride == 0 && adapter_.bulk_right_scalar);
+  if (!bulk) {
+    return "scalar";
+  }
+  using Implementation = BinaryKernelDescriptor::Adapter::BulkImplementation;
+  switch (adapter_.bulk_implementation) {
+  case Implementation::kCompare64:
+    return std::string("compare64.") + BinaryCompareInt64Implementation(inner_loop_elements_);
+  case Implementation::kIntegerPow:
+    return inner.right_stride == 0 ? "integer_pow.scalar_exponent" : "integer_pow.checked";
+  case Implementation::kIntegerDivMod:
+    return inner.right_stride == 0 && inner_loop_elements_ >= 4 ? "integer_divmod.invariant_divisor"
+                                                                : "integer_divmod.typed";
+  default:
+    return "bulk";
+  }
 }
 
 void BinaryBroadcastPlan::ClassifyLoopFamily() {

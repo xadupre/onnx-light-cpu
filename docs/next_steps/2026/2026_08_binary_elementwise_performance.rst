@@ -72,6 +72,56 @@ measurements showed no improvement.
        --test '^test_cpu_pow_v15_(outer_float32xfloat32_to_float32_swapped|per_channel_float32xfloat32_to_float32)_n1048576_benchmark$' \
        --threads 96 -r 100 -w 30 -t 0.5 -o pow-broadcast.xlsx
 
+Integer arithmetic and 64-bit comparisons
+-----------------------------------------
+
+Integer ``Pow`` uses exact checked integer multiplication, with a portable
+fallback for compilers without overflow intrinsics. Typed contiguous and
+scalar-broadcast adapters share the same overflow contract. Scalar exponents
+0, 1, and 2 use fill, copy, and checked-square paths, including repeated
+broadcast inner blocks.
+
+Integer ``Div`` and both integer ``Mod`` modes prepare an unsigned reciprocal
+once per scalar-divisor block. Quotients use multiply-high and an exact
+remainder correction, or shifts for powers of two; signed results retain
+truncation toward zero and Python-modulo sign correction. Short blocks retain
+hardware division. Both operators validate unique divisors in bulk and retain
+the signed-minimum divided by minus-one check before execution.
+
+Signed and unsigned 64-bit comparisons have baseline, AVX2, and AVX-512F
+implementations for contiguous and either scalar-broadcast input. AVX2 biases
+the unsigned sign bit before signed comparison. Output bytes are canonical
+booleans and short tails remain scalar.
+
+The parity matrix includes integer ``Pow``/``Div``, ``Mod`` (including int16),
+and all four ordered int64/uint64 comparisons across its seven broadcast
+families. Integer outputs are compared exactly, rather than after conversion
+to float32. Each integer benchmark requires a recorded implementation path;
+the comparison ISA comes from runtime dispatch, not host CPU flags.
+``used_kernel_paths(session)`` includes records such as
+``Binary.Pow.integer_pow.scalar_exponent``,
+``Binary.Mod.integer_divmod.invariant_divisor``, and
+``Binary.Greater.compare64.avx2``. ``used_kernel_names`` still returns only
+operator identities.
+
+After updating the checkout and rebuilding, run a homogeneous campaign with
+the existing runner (repeat with an AVX2-ceiling build on AVX-512 hosts):
+
+.. code-block:: bash
+
+   PYTHONPATH="$PWD" python tools/benchmark_binary_parity.py --no-calibrate \
+       --case '^test_cpu_(pow|div|mod|greater|greaterorequal|less|lessorequal)_v[0-9]+_.*_(u?int16|u?int32|u?int64)x' \
+       --threads 1 --threads physical --cpus 0-3 \
+       -r 100 -w 30 --output /tmp/integer-binary-parity.json
+
+The report retains raw alternating samples, shapes, types, effective threads,
+implementation paths, and latency percentiles. ORT worker spinning is disabled
+so idle workers cannot interfere with the other candidate. A filtered campaign
+does not satisfy the runner's complete-matrix gate; inspect its per-case
+``speedup`` values against 0.9 and retain profiles for remaining exceptions.
+Integer Mod benchmark fixtures use the released opset-13 schema, whose integer
+semantics are unchanged in Mod-28. Correctness fixtures retain the latest opset.
+
 Current execution and tuning contract
 -------------------------------------
 

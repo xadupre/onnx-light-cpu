@@ -94,6 +94,7 @@ class TestBenchmarkCli(ExtTestCase):
         recorded = [
             "onnx_light_cpu::Cast",
             "Cast.float32_to_float16.f16c",
+            "Binary.Greater.compare64.avx2",
             "onnx_light_cpu::Abs",
         ]
         self.assertEqual(

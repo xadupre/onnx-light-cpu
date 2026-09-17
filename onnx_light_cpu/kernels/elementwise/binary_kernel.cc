@@ -560,6 +560,10 @@ rt_ns::Tensor BinaryElementwiseKernel::operator()(const rt_ns::Tensor &left,
       rt != nullptr ? rt->MakeOutputTensor(0, output_type, output_shape, out_bytes)
                     : rt_ns::MakeOutputTensor(output_type, output_shape, out_bytes, nullptr);
   (*this)(left, right, output);
+  if (rt != nullptr && rt->kernel_usage_enabled()) {
+    rt->RecordKernelUsage("Binary." + std::string(descriptor_.op_type()) + "." +
+                          plan->implementation_path());
+  }
   return output;
 }
 

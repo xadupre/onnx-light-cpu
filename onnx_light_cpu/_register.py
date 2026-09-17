@@ -428,14 +428,15 @@ def used_kernel_names(sess: Any) -> list[str]:
 
 
 def _kernel_names_only(records: list[str]) -> list[str]:
-    return [name for name in records if not name.startswith("Cast.")]
+    return [name for name in records if not name.startswith(("Cast.", "Binary."))]
 
 
 def used_kernel_paths(sess: Any) -> list[str]:
     """Returns backend kernel names and implementation paths recorded by ``sess``.
 
     This includes the same kernel identities as :func:`used_kernel_names` plus
-    implementation diagnostics such as ``"Cast.float32_to_float16.f16c"``.
+    implementation diagnostics such as ``"Cast.float32_to_float16.f16c"`` or
+    ``"Binary.Greater.compare64.avx2"``.
     """
     _validate_session(sess)
     from .onnx_py._cpuregister import (  # pyrefly: ignore[missing-import]

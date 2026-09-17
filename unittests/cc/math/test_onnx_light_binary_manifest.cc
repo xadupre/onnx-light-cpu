@@ -36,6 +36,28 @@ namespace math_ns = ONNX_LIGHT_NAMESPACE::onnx_op::math;
 namespace rt_ns = ONNX_LIGHT_NAMESPACE::core::runtime;
 namespace sym_ns = ONNX_LIGHT_NAMESPACE::core::symbolic;
 
+TEST(OnnxLightBinaryManifest, RecordsIntegerImplementationPaths) {
+  const rt_ns::KernelContext context(rt_ns::OpsetId("", 16));
+  for (const auto &[op, path] : {std::pair{"Pow", "integer_pow.scalar_exponent"},
+                                 std::pair{"Div", "integer_divmod.invariant_divisor"},
+                                 std::pair{"Mod", "integer_divmod.invariant_divisor"}}) {
+    ONNX_LIGHT_NAMESPACE::NodeProto node;
+    node.set_op_type(op);
+    node.add_input("left");
+    node.add_input("right");
+    node.add_output("out");
+    onnx_light_cpu::BinaryElementwiseKernel kernel(node, context);
+    rt_ns::RuntimeContext runtime(context);
+    runtime.Set("left", rt_ns::Tensor::FromInt64("left", {33}, std::vector<std::int64_t>(33, 6)));
+    runtime.Set("right", rt_ns::Tensor::FromInt64("right", {}, {2}));
+    runtime.set_kernel_usage_enabled(true);
+    kernel.Run(runtime);
+    EXPECT_EQ(runtime.GetKernelUsage(),
+              (std::vector<std::string>{"onnx_light_cpu::" + std::string(op),
+                                        "Binary." + std::string(op) + "." + path}));
+  }
+}
+
 schema_ns::TensorType ToTensorType(onnx_light_cpu::DataType type) {
   using DT = onnx_light_cpu::DataType;
   using TT = schema_ns::TensorType;
