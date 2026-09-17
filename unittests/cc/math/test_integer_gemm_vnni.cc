@@ -315,6 +315,70 @@ TEST(IntegerVnniKernel, AccumulationWrapsModuloInt32) {
   EXPECT_EQ(std::bit_cast<std::uint32_t>(out[0]), wrapped);
 }
 
+TEST(IntegerVnniKernel, SkinnyPlannerPreservesPackedBoundary) {
+  using namespace onnx_light_cpu;
+  EXPECT_EQ(SelectIntegerMatMulPlan(3, 4096, 4096), IntegerMatMulPlan::kPacked);
+  EXPECT_EQ(SelectIntegerMatMulPlan(2, 31, 128), IntegerMatMulPlan::kPacked);
+  EXPECT_EQ(SelectIntegerMatMulPlan(2, 32, 3), IntegerMatMulPlan::kPacked);
+  EXPECT_EQ(SelectIntegerMatMulPlan(0, 32, 4), IntegerMatMulPlan::kPacked);
+  EXPECT_EQ(SelectIntegerMatMulPlan(2, 0, 4), IntegerMatMulPlan::kPacked);
+  auto expected = IntegerMatMulPlan::kPacked;
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_INTEGER
+  if (DetectSimdLevel() >= SimdLevel::kAVX2) {
+    expected = IntegerMatMulPlan::kNoPackAvx2;
+  }
+#endif
+#if defined(ONNX_LIGHT_CPU_HAVE_AVX512VNNI) && defined(ONNX_LIGHT_CPU_HAVE_AVX512BW)
+  if (CpuSupportsAvx512Vnni() && CpuSupportsAvx512BW()) {
+    expected = IntegerMatMulPlan::kNoPackVnni;
+  }
+#endif
+  EXPECT_EQ(SelectIntegerMatMulPlan(1, 4096, 4096), expected);
+  EXPECT_EQ(SelectIntegerMatMulPlan(2, 32, 4), expected);
+  EXPECT_EQ(SelectIntegerMatMulPlan(2, 4096, 4096), expected);
+  EXPECT_STREQ(IntegerMatMulPlanName(IntegerMatMulPlan::kPacked), "packed");
+  EXPECT_STREQ(IntegerMatMulPlanName(IntegerMatMulPlan::kNoPackAvx2), "no-pack-avx2");
+  EXPECT_STREQ(IntegerMatMulPlanName(IntegerMatMulPlan::kNoPackVnni), "no-pack-vnni");
+}
+
+TEST(IntegerVnniKernel, SkinnySignednessZeroPointsAndEveryColumnTail) {
+  std::mt19937 rng(725);
+  for (const std::int64_t rows : {1, 2, 3}) {
+    for (const std::int64_t depth : {0, 1, 3, 4, 5, 127, 128, 129, 131, 257}) {
+      for (std::int64_t cols = 31; cols <= 97; ++cols) {
+        SCOPED_TRACE(::testing::PrintToString(std::array<std::int64_t, 3>{rows, cols, depth}));
+        std::vector<std::uint8_t> a(rows * depth), b(depth * cols);
+        std::generate(a.begin(), a.end(), [&] { return static_cast<std::uint8_t>(rng()); });
+        std::generate(b.begin(), b.end(), [&] { return static_cast<std::uint8_t>(rng()); });
+        for (const bool a_signed : {false, true}) {
+          for (const bool b_signed : {false, true}) {
+            CheckAllPaths(a, a_signed, b, b_signed, rows, cols, depth, {0}, {0});
+            CheckAllPaths(a, a_signed, b, b_signed, rows, cols, depth, {a_signed ? 0 : 128}, {0});
+            const std::int32_t az = a_signed ? -128 : 255;
+            const std::int32_t bz = b_signed ? 127 : 255;
+            CheckAllPaths(a, a_signed, b, b_signed, rows, cols, depth, {az}, {bz});
+            std::vector<std::int32_t> azp(rows, az), bzp(cols, bz);
+            for (std::int64_t i = 0; i < rows; ++i) {
+              azp[i] = a_signed ? static_cast<std::int32_t>(i) - 1 : static_cast<std::int32_t>(i);
+            }
+            for (std::int64_t j = 0; j < cols; ++j) {
+              bzp[j] = b_signed ? static_cast<std::int32_t>(j) - 32 : static_cast<std::int32_t>(j);
+            }
+            CheckAllPaths(a, a_signed, b, b_signed, rows, cols, depth, azp, bzp);
+          }
+        }
+      }
+    }
+  }
+}
+
+TEST(IntegerVnniKernel, SkinnyVectorAccumulatorsWrap) {
+  constexpr std::int64_t rows = 2, cols = 65, depth = 40003;
+  const std::vector<std::uint8_t> a(rows * depth, 255), b(cols * depth, 255);
+  CheckAllPaths(a, false, b, false, rows, cols, depth, {0, 255}, {0});
+  CheckAllPaths(a, true, b, true, rows, cols, depth, {-128, 127}, {-128});
+}
+
 // Splits every ``ExecuteRanges`` call in the packing, bulk AVX2 microkernel,
 // and correction loops across several inline blocks (run synchronously, on
 // the calling thread, in reverse block order) so a real physical-core policy
@@ -328,6 +392,50 @@ struct InlineBlockExecutor {
     }
   }
 };
+
+struct SkinnyBlockExecutor {
+  std::int64_t calls = 0;
+  std::int64_t blocks = 0;
+
+  static void Run(void *context, std::int64_t num_blocks, void *task_context,
+                  onnx_light_cpu::ExecutionBlockFn task) {
+    auto &self = *static_cast<SkinnyBlockExecutor *>(context);
+    ++self.calls;
+    self.blocks += num_blocks;
+    EXPECT_GT(num_blocks, 1);
+    for (std::int64_t block = num_blocks; block > 0; --block) {
+      task(task_context, block - 1);
+    }
+  }
+};
+
+TEST(IntegerVnniKernel, SkinnySchedulingIsDisjointAndDoesNotNest) {
+  using namespace onnx_light_cpu;
+  if (SelectIntegerMatMulPlan(2, 1025, 1025) == IntegerMatMulPlan::kPacked) {
+    GTEST_SKIP() << "No streaming ISA compiled or available";
+  }
+  SkinnyBlockExecutor executor;
+  ExecutionExecutorView view{&executor, 8, &SkinnyBlockExecutor::Run, nullptr};
+  ExecutionExecutorScope scope(&view);
+  const std::vector<std::uint8_t> a(2 * 1025, 253), b(1025 * 1025, 129);
+  std::vector<std::int32_t> c(2 * 1025, 0);
+  const std::int32_t az[] = {0, 255}, bz = -128;
+  const auto run = [&](std::int64_t n, std::int64_t k) {
+    IntegerMatMul2D(a.data(), false, b.data(), true, c.data(), 2, n, k, az, 2, &bz, 1);
+  };
+  run(32, 4);
+  EXPECT_EQ(executor.calls, 0);
+  run(1025, 1025);
+  EXPECT_GT(executor.calls, 0);
+  EXPECT_GT(executor.blocks, executor.calls);
+  EXPECT_EQ(c, Reference(a, false, b, true, 2, 1025, 1025, {0, 255}, {-128}));
+  const auto calls = executor.calls;
+  {
+    detail::ExecutionRegionScope nested;
+    run(1025, 1025);
+  }
+  EXPECT_EQ(executor.calls, calls);
+}
 
 TEST(IntegerVnniKernel, ParallelExecutionMatchesSerialReferenceAcrossShapes) {
   onnx_light_cpu::ExecutionExecutorView view{nullptr, 8, &InlineBlockExecutor::Run, nullptr};

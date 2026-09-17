@@ -133,6 +133,10 @@ class TestRegisterKernels(ExtTestCase):
 
 
 class TestBackendTestRegistration(ExtTestCase):
+    def test_reports_missing_extension_as_unavailable(self):
+        with mock.patch.dict(sys.modules, {"onnx_light_cpu.onnx_py._cpuregister": None}):
+            assert has_backend_test_cases() is False
+
     def test_reports_backend_test_binding_availability(self):
         extension = ModuleType("onnx_light_cpu.onnx_py._cpuregister")
         extension.has_backend_test_cases = False

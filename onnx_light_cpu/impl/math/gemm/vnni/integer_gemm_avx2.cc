@@ -12,6 +12,7 @@
 #include <bit>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <type_traits>
 
 #include <immintrin.h>
@@ -22,11 +23,16 @@ namespace detail {
 
 namespace {
 
+template <bool SubtractHigh = false>
 __m256i Accumulate(__m256i accumulator, __m256i a_low, __m256i a_high, __m256i b, __m256i ones) {
   const __m256i products_low = _mm256_maddubs_epi16(a_low, b);
   const __m256i products_high = _mm256_maddubs_epi16(a_high, b);
   accumulator = _mm256_add_epi32(accumulator, _mm256_madd_epi16(products_low, ones));
-  return _mm256_add_epi32(accumulator, _mm256_madd_epi16(products_high, ones));
+  if constexpr (SubtractHigh) {
+    return _mm256_sub_epi32(accumulator, _mm256_madd_epi16(products_high, ones));
+  } else {
+    return _mm256_add_epi32(accumulator, _mm256_madd_epi16(products_high, ones));
+  }
 }
 
 std::uint32_t Reduce128(__m128i accumulator) {
@@ -157,14 +163,107 @@ std::int32_t IntegerDotU8S8Avx2ShortTail(const std::uint8_t *ua, const std::int8
 
 namespace {
 
-template <bool AIsSigned, bool BSigned>
+template <bool AIsSigned, bool BSigned, bool CenteredA = false, bool ZeroA = false>
 void IntegerMatMulSkinnyMAvx2Impl(const std::uint8_t *a, const std::uint8_t *b, std::int32_t *c,
                                   std::int64_t cols, std::int64_t depth, std::int32_t a_zero_point,
                                   const std::int32_t *b_zero_point,
                                   std::int64_t b_zero_point_count) {
+  std::uint32_t a_sum = 0;
+  for (std::int64_t inner = 0; inner < depth; ++inner) {
+    const std::int32_t av = AIsSigned ? static_cast<std::int8_t>(a[inner]) : a[inner];
+    a_sum += static_cast<std::uint32_t>(av - a_zero_point);
+  }
+  const __m256i low_mask = _mm256_set1_epi8(0x7f);
+  const __m256i ones = _mm256_set1_epi16(1);
+  const __m256i byte_ones = _mm256_set1_epi8(1);
+  const __m256i b_offset = _mm256_set1_epi8(BSigned ? 0 : static_cast<char>(0x80));
+  const __m256i az = _mm256_set1_epi32(a_zero_point + (AIsSigned ? 128 : 0));
   ExecuteRanges(
-      cols, static_cast<double>(depth) / 16.0, 8, [&](std::int64_t begin, std::int64_t end) {
+      cols, static_cast<double>(depth) / 8.0, 64, [&](std::int64_t begin, std::int64_t end) {
         std::int64_t column = begin;
+        const std::int64_t vector_end = begin + (end - begin) / 32 * 32;
+        for (std::int64_t kb = 0; kb < std::max<std::int64_t>(depth, 1); kb += 128) {
+          const std::int64_t kend = std::min(kb + 128, depth);
+          for (column = begin; column < vector_end; column += 32) {
+            __m256i acc[4] = {};
+            __m256i sums[4] = {};
+            std::int64_t inner = kb;
+            for (; inner + 4 <= kend; inner += 4) {
+              std::uint32_t a_bytes;
+              std::memcpy(&a_bytes, a + inner, sizeof(a_bytes));
+              if constexpr (AIsSigned) {
+                a_bytes ^= 0x80808080u;
+              }
+              const __m256i av = _mm256_set1_epi32(std::bit_cast<std::int32_t>(a_bytes));
+              const __m256i al = _mm256_and_si256(av, low_mask);
+              // For az + oa == 128, uA - 128 = low7 - (128 - high_bit).
+              // Reuse the exact split dot without a separate B column sum.
+              const __m256i ah =
+                  CenteredA ? _mm256_andnot_si256(av, _mm256_set1_epi8(static_cast<char>(0x80)))
+                            : _mm256_andnot_si256(low_mask, av);
+              const auto load = [&](std::int64_t d) {
+                return _mm256_xor_si256(_mm256_loadu_si256(reinterpret_cast<const __m256i *>(
+                                            b + (inner + d) * cols + column)),
+                                        b_offset);
+              };
+              const __m256i b0 = load(0), b1 = load(1), b2 = load(2), b3 = load(3);
+              const __m256i lo01 = _mm256_unpacklo_epi8(b0, b1);
+              const __m256i hi01 = _mm256_unpackhi_epi8(b0, b1);
+              const __m256i lo23 = _mm256_unpacklo_epi8(b2, b3);
+              const __m256i hi23 = _mm256_unpackhi_epi8(b2, b3);
+              // Transpose only four K values in registers, never a B panel.
+              const __m256i values[4] = {
+                  _mm256_unpacklo_epi16(lo01, lo23), _mm256_unpackhi_epi16(lo01, lo23),
+                  _mm256_unpacklo_epi16(hi01, hi23), _mm256_unpackhi_epi16(hi01, hi23)};
+              for (int i = 0; i < 4; ++i) {
+                acc[i] = Accumulate<CenteredA>(acc[i], al, ah, values[i], ones);
+                if constexpr (!CenteredA && !ZeroA) {
+                  sums[i] = _mm256_add_epi32(
+                      sums[i], _mm256_madd_epi16(_mm256_maddubs_epi16(byte_ones, values[i]), ones));
+                }
+              }
+            }
+            if constexpr (!CenteredA && !ZeroA) {
+              for (int i = 0; i < 4; ++i) {
+                acc[i] = _mm256_sub_epi32(acc[i], _mm256_mullo_epi32(az, sums[i]));
+              }
+            }
+            const __m256i ordered[4] = {_mm256_permute2x128_si256(acc[0], acc[1], 0x20),
+                                        _mm256_permute2x128_si256(acc[2], acc[3], 0x20),
+                                        _mm256_permute2x128_si256(acc[0], acc[1], 0x31),
+                                        _mm256_permute2x128_si256(acc[2], acc[3], 0x31)};
+            for (int i = 0; i < 4; ++i) {
+              const std::int64_t col = column + i * 8;
+              const __m256i bz =
+                  b_zero_point_count == 1
+                      ? _mm256_set1_epi32(b_zero_point[0])
+                      : _mm256_loadu_si256(reinterpret_cast<const __m256i *>(b_zero_point + col));
+              __m256i result = _mm256_add_epi32(
+                  ordered[i],
+                  _mm256_mullo_epi32(
+                      _mm256_set1_epi32(kb == 0 ? std::bit_cast<std::int32_t>(a_sum) : 0),
+                      _mm256_sub_epi32(_mm256_set1_epi32(BSigned ? 0 : 128), bz)));
+              for (std::int64_t d = inner; d < kend; ++d) {
+                const std::int32_t av = AIsSigned ? static_cast<std::int8_t>(a[d]) : a[d];
+                const __m128i bytes =
+                    _mm_loadl_epi64(reinterpret_cast<const __m128i *>(b + d * cols + col));
+                const __m256i bv =
+                    BSigned ? _mm256_cvtepi8_epi32(bytes) : _mm256_cvtepu8_epi32(bytes);
+                // The row-sum correction above already includes the K tail.
+                result = _mm256_add_epi32(
+                    result,
+                    _mm256_mullo_epi32(_mm256_set1_epi32(av - a_zero_point),
+                                       _mm256_sub_epi32(bv, _mm256_set1_epi32(BSigned ? 0 : 128))));
+              }
+              if (kb != 0) {
+                result = _mm256_add_epi32(
+                    result, _mm256_loadu_si256(reinterpret_cast<const __m256i *>(c + col)));
+              }
+              _mm256_storeu_si256(reinterpret_cast<__m256i *>(c + col), result);
+            }
+          }
+        }
+        column = vector_end;
         for (; column + 8 <= end; column += 8) {
           __m256i accumulator = _mm256_setzero_si256();
           const __m256i bz =
@@ -199,24 +298,40 @@ void IntegerMatMulSkinnyMAvx2Impl(const std::uint8_t *a, const std::uint8_t *b, 
 
 } // namespace
 
+template <bool AIsSigned, bool BSigned>
+void DispatchSkinnyMAvx2(const std::uint8_t *a, const std::uint8_t *b, std::int32_t *c,
+                         std::int64_t cols, std::int64_t depth, std::int32_t a_zero_point,
+                         const std::int32_t *b_zero_point, std::int64_t b_zero_point_count) {
+  if (a_zero_point + (AIsSigned ? 128 : 0) == 0) {
+    IntegerMatMulSkinnyMAvx2Impl<AIsSigned, BSigned, false, true>(
+        a, b, c, cols, depth, a_zero_point, b_zero_point, b_zero_point_count);
+  } else if (a_zero_point + (AIsSigned ? 128 : 0) == 128) {
+    IntegerMatMulSkinnyMAvx2Impl<AIsSigned, BSigned, true>(a, b, c, cols, depth, a_zero_point,
+                                                           b_zero_point, b_zero_point_count);
+  } else {
+    IntegerMatMulSkinnyMAvx2Impl<AIsSigned, BSigned, false>(a, b, c, cols, depth, a_zero_point,
+                                                            b_zero_point, b_zero_point_count);
+  }
+}
+
 void IntegerMatMulSkinnyMAvx2(const std::uint8_t *a, bool a_signed, const std::uint8_t *b,
                               bool b_signed, std::int32_t *c, std::int64_t cols, std::int64_t depth,
                               std::int32_t a_zero_point, const std::int32_t *b_zero_point,
                               std::int64_t b_zero_point_count) {
   if (a_signed) {
     if (b_signed) {
-      IntegerMatMulSkinnyMAvx2Impl<true, true>(a, b, c, cols, depth, a_zero_point, b_zero_point,
-                                               b_zero_point_count);
+      DispatchSkinnyMAvx2<true, true>(a, b, c, cols, depth, a_zero_point, b_zero_point,
+                                      b_zero_point_count);
     } else {
-      IntegerMatMulSkinnyMAvx2Impl<true, false>(a, b, c, cols, depth, a_zero_point, b_zero_point,
-                                                b_zero_point_count);
+      DispatchSkinnyMAvx2<true, false>(a, b, c, cols, depth, a_zero_point, b_zero_point,
+                                       b_zero_point_count);
     }
   } else if (b_signed) {
-    IntegerMatMulSkinnyMAvx2Impl<false, true>(a, b, c, cols, depth, a_zero_point, b_zero_point,
-                                              b_zero_point_count);
+    DispatchSkinnyMAvx2<false, true>(a, b, c, cols, depth, a_zero_point, b_zero_point,
+                                     b_zero_point_count);
   } else {
-    IntegerMatMulSkinnyMAvx2Impl<false, false>(a, b, c, cols, depth, a_zero_point, b_zero_point,
-                                               b_zero_point_count);
+    DispatchSkinnyMAvx2<false, false>(a, b, c, cols, depth, a_zero_point, b_zero_point,
+                                      b_zero_point_count);
   }
 }
 

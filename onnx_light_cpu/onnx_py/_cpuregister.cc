@@ -10,6 +10,7 @@
 #include <nanobind/stl/vector.h>
 
 #include "onnx_light_cpu/gradient/com_microsoft/gradients.h"
+#include "onnx_light_cpu/impl/math/gemm/vnni/integer_gemm_vnni.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
 #include "onnx_light_cpu/kernels/kernel_usage.h"
 #include "onnx_light_cpu/kernels/register_kernels.h"
@@ -80,6 +81,15 @@ std::vector<OperatorSupportTuple> OperatorSupportForPython() {
 NB_MODULE(_cpuregister, m) {
   m.doc() = "Python bindings for registering and inspecting onnx-light-cpu "
             "kernels and custom/experimental operator support.";
+
+  m.def(
+      "integer_matmul_plan",
+      [](std::int64_t rows, std::int64_t cols, std::int64_t depth) {
+        return onnx_light_cpu::IntegerMatMulPlanName(
+            onnx_light_cpu::SelectIntegerMatMulPlan(rows, cols, depth));
+      },
+      nb::arg("rows"), nb::arg("cols"), nb::arg("depth"),
+      "Returns the byte MatMulInteger packed/no-pack plan for this build and CPU.");
 
   nb::enum_<onnx_light_cpu::MicrosoftKernelImplementation>(m, "MicrosoftKernelImplementation")
       .value("NAIVE", onnx_light_cpu::MicrosoftKernelImplementation::NAIVE)
