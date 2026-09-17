@@ -664,6 +664,20 @@ void RegisterCpuAttentionCases(std::vector<TestCase> &registry, TestMode mode) {
       RegisterAttentionCase(registry, opset24, 24, false, Geometry::kMha, Mask::kCausal, 1, 8, 1024,
                             kHeadDim, data_type, Cache::kNonpad, true);
     }
+    // Complement the aligned hd64 cases with tiled/streaming tails and wider heads.
+    for (DataType data_type : {DataType::FLOAT, DataType::FLOAT16}) {
+      for (const auto &[rank3, q_len, kv_len, head_dim] :
+           {std::tuple<bool, std::int64_t, std::int64_t, std::int64_t>{false, 16, 257, 63},
+            {false, 128, 128, 128},
+            {false, 128, 128, 256},
+            {true, 129, 257, 64},
+            {false, 129, 257, 256},
+            {false, 1, 257, 63},
+            {false, 8, 257, 128}}) {
+        RegisterAttentionCase(registry, opset23, 23, rank3, Geometry::kMha, Mask::kNone, 1, q_len,
+                              kv_len, head_dim, data_type, Cache::kStateless, true);
+      }
+    }
     constexpr float kQwen3Scale = 0.0883883461356163f;
     RegisterAttentionCase(registry, opset23, 23, true, Geometry::kGqa, Mask::kCausal, 1, 128, 128,
                           128, DataType::FLOAT16, Cache::kStateless, true, 32, 8, "llm_qwen3_8b",

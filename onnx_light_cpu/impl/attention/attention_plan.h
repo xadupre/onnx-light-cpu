@@ -42,6 +42,25 @@ enum class AttentionMaskKind {
   kAdditive,
 };
 
+enum class AttentionExecutionPath { kSingleKey, kTiled, kStreaming, kMaterialized };
+
+/// Optional dispatch telemetry, written once by the executing entry point.
+/// Tile sizes bound per-worker scratch independently of batch and head counts.
+/// Conversion/packing describe explicit attention scratch, not internal GEMM panels.
+struct AttentionExecutionInfo {
+  AttentionExecutionPath path = AttentionExecutionPath::kMaterialized;
+  /// FP16 block conversion; BF16 scalar element conversion is reported separately.
+  bool tile_conversion = false;
+  /// Strided input/output rows require tile-local contiguous GEMM buffers.
+  bool tile_packing = false;
+  std::size_t query_tile = 0;
+  std::size_t kv_tile = 0;
+  /// KV conversion rows retained for short-query reuse, at most four score blocks.
+  std::size_t conversion_kv_tile = 0;
+  /// Logical row/tile-final output size, not evidence of a temporary Y buffer.
+  std::size_t output_tile_elements = 0;
+};
+
 /// Immutable, node-level description of one ``ai.onnx::Attention`` (v23/v24)
 /// instance: the opset, its attributes, and which optional inputs/outputs are
 /// wired to this node. It is built once, without any concrete tensor, when
@@ -258,7 +277,8 @@ void ComputeAttentionFloat32(const AttentionPlan &plan, const float *q, const fl
                              const float *v, const void *mask, float *y,
                              const float *past_k = nullptr, const float *past_v = nullptr,
                              const std::int64_t *nonpad_kv_seqlen = nullptr,
-                             float *qk_matmul_output = nullptr);
+                             float *qk_matmul_output = nullptr,
+                             AttentionExecutionInfo *execution_info = nullptr);
 
 /// Roadmap PR13/PR14: executes the FP32 attention blocked online-softmax
 /// recurrence directly, consuming an internal tensor ``past_key``/
@@ -291,7 +311,8 @@ void ComputeAttentionFloat32(const AttentionPlan &plan, const float *q, const fl
 void ComputeAttentionFloat32Streaming(const AttentionPlan &plan, const float *q, const float *k,
                                       const float *v, const void *mask, float *y,
                                       const float *past_k = nullptr, const float *past_v = nullptr,
-                                      const std::int64_t *nonpad_kv_seqlen = nullptr);
+                                      const std::int64_t *nonpad_kv_seqlen = nullptr,
+                                      AttentionExecutionInfo *execution_info = nullptr);
 
 /// Roadmap PR14: FP16 counterpart of :cpp:func:`ComputeAttentionFloat32Streaming`.
 /// ``q``/``k``/``v``/``y``/``past_k``/``past_v`` are IEEE-754 binary16
@@ -303,12 +324,23 @@ void ComputeAttentionFloat32Streaming(const AttentionPlan &plan, const float *q,
 /// :cpp:enumerator:`AttentionMaskKind::kBoolean`, FP32 for
 /// :cpp:enumerator:`AttentionMaskKind::kAdditive`) exactly like the FP32
 /// entry point.
+///
+/// Tiled prefill retains FP16 Q/K operands until GEMM panel packing, converts
+/// only the current V block to FP32, and narrows the completed output tile.
+/// Rank-3 inputs use tile-local row copies because the GEMM interface requires
+/// contiguous matrices. Short-query/cache streaming converts a query row and
+/// bounded K/V blocks (including cache-boundary splits), reusing the FP32
+/// decode kernels where supported. Up to four KV score blocks can be retained
+/// per worker to amortize conversion across queries of a short context.
+/// No complete Q/K/V/cache/Y conversion or
+/// rank-3 layout materialization is needed on either path.
 void ComputeAttentionFloat16Streaming(const AttentionPlan &plan, const std::uint16_t *q,
                                       const std::uint16_t *k, const std::uint16_t *v,
                                       const void *mask, std::uint16_t *y,
                                       const std::uint16_t *past_k = nullptr,
                                       const std::uint16_t *past_v = nullptr,
-                                      const std::int64_t *nonpad_kv_seqlen = nullptr);
+                                      const std::int64_t *nonpad_kv_seqlen = nullptr,
+                                      AttentionExecutionInfo *execution_info = nullptr);
 
 /// Roadmap PR14: BF16 counterpart of :cpp:func:`ComputeAttentionFloat32Streaming`;
 /// see :cpp:func:`ComputeAttentionFloat16Streaming` for the shared contract.
@@ -319,7 +351,8 @@ void ComputeAttentionBFloat16Streaming(const AttentionPlan &plan, const std::uin
                                        const void *mask, std::uint16_t *y,
                                        const std::uint16_t *past_k = nullptr,
                                        const std::uint16_t *past_v = nullptr,
-                                       const std::int64_t *nonpad_kv_seqlen = nullptr);
+                                       const std::int64_t *nonpad_kv_seqlen = nullptr,
+                                       AttentionExecutionInfo *execution_info = nullptr);
 
 /// Roadmap PR13: the ``S = scale * Q @ transpose(K)`` / mask / softmax /
 /// ``Y = P @ V`` baseline from Roadmap PR11/PR12, exposed under this name so
@@ -331,6 +364,7 @@ void ComputeAttentionFloat32Materialized(const AttentionPlan &plan, const float 
                                          const float *past_k = nullptr,
                                          const float *past_v = nullptr,
                                          const std::int64_t *nonpad_kv_seqlen = nullptr,
-                                         float *qk_matmul_output = nullptr);
+                                         float *qk_matmul_output = nullptr,
+                                         AttentionExecutionInfo *execution_info = nullptr);
 
 } // namespace onnx_light_cpu

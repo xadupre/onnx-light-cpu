@@ -20,9 +20,7 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
-#include <memory>
 #include <stdexcept>
-#include <tuple>
 #include <type_traits>
 #include <vector>
 
@@ -354,7 +352,12 @@ void ComputeAttentionFloat32Materialized(const AttentionPlan &plan, const float 
                                          const float *v, const void *mask, float *y,
                                          const float *past_k, const float *past_v,
                                          const std::int64_t *nonpad_kv_seqlen,
-                                         float *qk_matmul_output) {
+                                         float *qk_matmul_output,
+                                         AttentionExecutionInfo *execution_info) {
+  if (execution_info != nullptr) {
+    *execution_info = {};
+    execution_info->path = AttentionExecutionPath::kMaterialized;
+  }
   const auto *mask_bool = static_cast<const std::uint8_t *>(mask);
   const auto *mask_float = static_cast<const float *>(mask);
   const std::size_t total_kv_length = plan.total_kv_length;
@@ -566,6 +569,38 @@ std::size_t AttentionKvBlock(const AttentionPlan &plan) {
   return std::min(plan.total_kv_length, target);
 }
 
+std::size_t AttentionConversionKvBlock(const AttentionPlan &plan) {
+  const std::size_t block = AttentionKvBlock(plan);
+  // Amortize SIMD conversion across short queries without retaining an unbounded cache.
+  return plan.q_length > 1 && plan.total_kv_length <= 4 * block ? plan.total_kv_length : block;
+}
+
+void RecordExecution(const AttentionPlan &plan, AttentionExecutionPath path, bool conversion,
+                     AttentionExecutionInfo *info) {
+  if (info == nullptr) {
+    return;
+  }
+  *info = {};
+  info->path = path;
+  if (plan.batch == 0 || plan.q_num_heads == 0 || plan.q_length == 0 || plan.v_head_dim == 0 ||
+      plan.total_kv_length == 0 || path == AttentionExecutionPath::kSingleKey) {
+    return;
+  }
+  info->tile_conversion = conversion;
+  info->tile_packing = path == AttentionExecutionPath::kTiled &&
+                       (plan.q_strides.sequence != static_cast<std::ptrdiff_t>(plan.head_dim) ||
+                        plan.k_strides.sequence != static_cast<std::ptrdiff_t>(plan.head_dim) ||
+                        plan.v_strides.sequence != static_cast<std::ptrdiff_t>(plan.v_head_dim) ||
+                        plan.y_strides.sequence != static_cast<std::ptrdiff_t>(plan.v_head_dim));
+  info->query_tile = path == AttentionExecutionPath::kTiled ? AttentionQueryBlock(plan) : 1;
+  info->kv_tile = AttentionKvBlock(plan);
+  if (conversion) {
+    info->conversion_kv_tile =
+        path == AttentionExecutionPath::kTiled ? info->kv_tile : AttentionConversionKvBlock(plan);
+  }
+  info->output_tile_elements = info->query_tile * plan.v_head_dim;
+}
+
 // Estimated FMA cost of one query row visiting every KV position it may
 // attend to (`head_dim` for the QK dot product plus `v_head_dim` for the
 // P @ V accumulation): only used to size the runtime-owned outer schedule
@@ -620,6 +655,58 @@ struct BFloat16Codec {
   static Storage Store(float value) noexcept { return detail::FloatToBFloat16Bits(value); }
 };
 
+template <typename T>
+const T *PackRows(const T *source, std::size_t rows, std::size_t dimension, std::ptrdiff_t stride,
+                  std::vector<T> &scratch) {
+  if (stride == static_cast<std::ptrdiff_t>(dimension)) {
+    return source;
+  }
+  scratch.resize(rows * dimension);
+  for (std::size_t row = 0; row < rows; ++row) {
+    std::copy_n(source + row * stride, dimension, scratch.data() + row * dimension);
+  }
+  return scratch.data();
+}
+
+template <typename Codec>
+void LoadRows(const typename Codec::Storage *source, float *destination, std::size_t rows,
+              std::size_t dimension, std::ptrdiff_t stride) {
+  if (dimension == 0 || rows == 0) {
+    return;
+  }
+  if (stride == static_cast<std::ptrdiff_t>(dimension)) {
+    dimension *= rows;
+    rows = 1;
+  }
+  for (std::size_t row = 0; row < rows; ++row) {
+    if constexpr (std::is_same_v<Codec, Float16Codec>) {
+      detail::ConvertFloat16ToFloat32(source + row * stride, destination + row * dimension,
+                                      dimension);
+    } else {
+      for (std::size_t d = 0; d < dimension; ++d) {
+        destination[row * dimension + d] = Codec::Load(source[row * stride + d]);
+      }
+    }
+  }
+}
+
+template <typename Codec>
+void LoadKvRows(const AttentionPlan &plan, const typename Codec::Storage *current,
+                const typename Codec::Storage *past, float *destination, std::size_t start,
+                std::size_t count, std::size_t dimension, std::ptrdiff_t current_stride,
+                std::ptrdiff_t past_stride) {
+  const std::size_t past_count =
+      start < plan.past_length ? std::min(count, plan.past_length - start) : 0;
+  if (past_count != 0) {
+    LoadRows<Codec>(past + start * past_stride, destination, past_count, dimension, past_stride);
+  }
+  if (past_count < count) {
+    LoadRows<Codec>(current + (start + past_count - plan.past_length) * current_stride,
+                    destination + past_count * dimension, count - past_count, dimension,
+                    current_stride);
+  }
+}
+
 template <typename Codec>
 void AttentionQkGemm(std::size_t rows, std::size_t columns, std::size_t head_dim, float scale,
                      const typename Codec::Storage *q, const typename Codec::Storage *k,
@@ -638,6 +725,9 @@ void ComputeAttentionSingleKey(const AttentionPlan &plan, const typename Codec::
                                const void *mask, typename Codec::Storage *y,
                                const typename Codec::Storage *past_v,
                                const std::int64_t *nonpad_kv_seqlen) {
+  if (plan.v_head_dim == 0) {
+    return;
+  }
   const auto *mask_bool = static_cast<const std::uint8_t *>(mask);
   const auto *mask_float = static_cast<const float *>(mask);
   const std::size_t rows_per_batch = plan.q_num_heads * plan.q_length;
@@ -701,101 +791,9 @@ void ComputeAttentionSingleKey(const AttentionPlan &plan, const typename Codec::
       });
 }
 
-void ConvertFloat16Rank3ToRank4(const std::uint16_t *source, float *destination, std::size_t batch,
-                                std::size_t heads, std::size_t length, std::size_t dimension) {
-  const std::size_t rows = batch * heads * length;
-  ExecuteRanges(static_cast<std::int64_t>(rows), static_cast<double>(dimension) * 0.25, 1,
-                [&](std::int64_t begin, std::int64_t end) {
-                  for (std::size_t row = static_cast<std::size_t>(begin);
-                       row < static_cast<std::size_t>(end); ++row) {
-                    const std::size_t b = row / (heads * length);
-                    const std::size_t remainder = row % (heads * length);
-                    const std::size_t h = remainder / length;
-                    const std::size_t sequence = remainder % length;
-                    const std::uint16_t *source_row =
-                        source + ((b * length + sequence) * heads + h) * dimension;
-                    detail::ConvertFloat16ToFloat32(source_row, destination + row * dimension,
-                                                    dimension);
-                  }
-                });
-}
-
-void CopyFloat16Rank3ToRank4(const std::uint16_t *source, std::uint16_t *destination,
-                             std::size_t batch, std::size_t heads, std::size_t length,
-                             std::size_t dimension) {
-  const std::size_t rows = batch * heads * length;
-  ExecuteRanges(static_cast<std::int64_t>(rows), static_cast<double>(dimension) * 0.125, 1,
-                [&](std::int64_t begin, std::int64_t end) {
-                  for (std::size_t row = static_cast<std::size_t>(begin);
-                       row < static_cast<std::size_t>(end); ++row) {
-                    const std::size_t b = row / (heads * length);
-                    const std::size_t remainder = row % (heads * length);
-                    const std::size_t h = remainder / length;
-                    const std::size_t sequence = remainder % length;
-                    const std::uint16_t *source_row =
-                        source + ((b * length + sequence) * heads + h) * dimension;
-                    std::copy_n(source_row, dimension, destination + row * dimension);
-                  }
-                });
-}
-
-void ConvertFloat32Rank4ToFloat16Rank3(const float *source, std::uint16_t *destination,
-                                       std::size_t batch, std::size_t heads, std::size_t length,
-                                       std::size_t dimension) {
-  const std::size_t rows = batch * heads * length;
-  ExecuteRanges(static_cast<std::int64_t>(rows), static_cast<double>(dimension) * 0.25, 1,
-                [&](std::int64_t begin, std::int64_t end) {
-                  for (std::size_t row = static_cast<std::size_t>(begin);
-                       row < static_cast<std::size_t>(end); ++row) {
-                    const std::size_t b = row / (heads * length);
-                    const std::size_t remainder = row % (heads * length);
-                    const std::size_t h = remainder / length;
-                    const std::size_t sequence = remainder % length;
-                    std::uint16_t *destination_row =
-                        destination + ((b * length + sequence) * heads + h) * dimension;
-                    detail::ConvertFloat32ToFloat16(source + row * dimension, destination_row,
-                                                    dimension);
-                  }
-                });
-}
-
-void ConvertFloat32Rank3ToRank4(const float *source, float *destination, std::size_t batch,
-                                std::size_t heads, std::size_t length, std::size_t dimension) {
-  const std::size_t rows = batch * heads * length;
-  ExecuteRanges(static_cast<std::int64_t>(rows), static_cast<double>(dimension),
-                [&](std::int64_t begin, std::int64_t end) {
-                  for (std::size_t row = static_cast<std::size_t>(begin);
-                       row < static_cast<std::size_t>(end); ++row) {
-                    const std::size_t b = row / (heads * length);
-                    const std::size_t remainder = row % (heads * length);
-                    const std::size_t h = remainder / length;
-                    const std::size_t s = remainder % length;
-                    const float *input = source + ((b * length + s) * heads + h) * dimension;
-                    std::copy_n(input, dimension, destination + row * dimension);
-                  }
-                });
-}
-
-void ConvertFloat32Rank4ToRank3(const float *source, float *destination, std::size_t batch,
-                                std::size_t heads, std::size_t length, std::size_t dimension) {
-  const std::size_t rows = batch * heads * length;
-  ExecuteRanges(static_cast<std::int64_t>(rows), static_cast<double>(dimension),
-                [&](std::int64_t begin, std::int64_t end) {
-                  for (std::size_t row = static_cast<std::size_t>(begin);
-                       row < static_cast<std::size_t>(end); ++row) {
-                    const std::size_t b = row / (heads * length);
-                    const std::size_t remainder = row % (heads * length);
-                    const std::size_t h = remainder / length;
-                    const std::size_t s = remainder % length;
-                    float *output = destination + ((b * length + s) * heads + h) * dimension;
-                    std::copy_n(source + row * dimension, dimension, output);
-                  }
-                });
-}
-
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
 // AVX2+FMA decode fast path for one query row of `ComputeAttentionStreamingGeneric`
-// (FP32 only, short-query streaming). Computes exactly the same online-softmax
+// (FP32/FP16 short-query streaming). Computes exactly the same online-softmax
 // recurrence as that function's scalar `[kv_start, kv_limit)` kv loop -- same
 // per-column past/current pointer choice, same mask semantics, same block
 // stepping -- but with the dot product, block max/exp/sum reduction, the
@@ -804,30 +802,40 @@ void ConvertFloat32Rank4ToRank3(const float *source, float *destination, std::si
 // Only called when eligible (see `use_avx2_decode_row` below); the caller
 // still runs its own scalar loop whenever this function is not invoked, so no
 // existing semantics are altered.
-void ComputeAttentionDecodeRowAVX2FMA(const AttentionPlan &plan, const float *q_fp32,
-                                      const float *k_head, const float *v_head,
-                                      const float *past_k_head, const float *past_v_head,
-                                      const std::uint8_t *mask_bool, const float *mask_float,
-                                      std::ptrdiff_t mask_row, bool has_softcap,
-                                      std::size_t kv_start, std::size_t kv_limit, std::size_t block,
-                                      float *scores, float *accumulator, float &m, float &l,
-                                      bool &any_valid) {
+template <typename Codec>
+void ComputeAttentionDecodeRowAVX2FMA(
+    const AttentionPlan &plan, const float *q_fp32, const typename Codec::Storage *k_head,
+    const typename Codec::Storage *v_head, const typename Codec::Storage *past_k_head,
+    const typename Codec::Storage *past_v_head, const std::uint8_t *mask_bool,
+    const float *mask_float, std::ptrdiff_t mask_row, bool has_softcap, std::size_t kv_start,
+    std::size_t kv_limit, std::size_t block, float *scores, float *accumulator, float &m, float &l,
+    bool &any_valid, float *k_tile, float *v_tile, bool converted_head) {
   for (std::size_t j0 = kv_start; j0 < kv_limit; j0 += block) {
     const std::size_t j1 = std::min(j0 + block, kv_limit);
     const std::size_t count = j1 - j0;
 
     const std::size_t past_count =
         j0 < plan.past_length ? std::min(count, plan.past_length - j0) : 0;
-    if (past_count != 0) {
-      AttentionScoreBlockFloat32_AVX2_FMA(q_fp32, past_k_head + j0 * plan.past_k_strides.sequence,
-                                          past_count, plan.past_k_strides.sequence, plan.head_dim,
+    if constexpr (std::is_same_v<Codec, Float16Codec>) {
+      if (!converted_head) {
+        LoadKvRows<Codec>(plan, k_head, past_k_head, k_tile, j0, count, plan.head_dim,
+                          plan.k_strides.sequence, plan.past_k_strides.sequence);
+      }
+      const float *k_values = k_tile + (converted_head ? j0 * plan.head_dim : 0);
+      AttentionScoreBlockFloat32_AVX2_FMA(q_fp32, k_values, count, plan.head_dim, plan.head_dim,
                                           plan.scale, scores);
-    }
-    if (past_count < count) {
-      AttentionScoreBlockFloat32_AVX2_FMA(
-          q_fp32, k_head + (j0 + past_count - plan.past_length) * plan.k_strides.sequence,
-          count - past_count, plan.k_strides.sequence, plan.head_dim, plan.scale,
-          scores + past_count);
+    } else {
+      if (past_count != 0) {
+        AttentionScoreBlockFloat32_AVX2_FMA(q_fp32, past_k_head + j0 * plan.past_k_strides.sequence,
+                                            past_count, plan.past_k_strides.sequence, plan.head_dim,
+                                            plan.scale, scores);
+      }
+      if (past_count < count) {
+        AttentionScoreBlockFloat32_AVX2_FMA(
+            q_fp32, k_head + (j0 + past_count - plan.past_length) * plan.k_strides.sequence,
+            count - past_count, plan.k_strides.sequence, plan.head_dim, plan.scale,
+            scores + past_count);
+      }
     }
     if (has_softcap) {
       for (std::size_t jj = 0; jj < count; ++jj) {
@@ -861,16 +869,26 @@ void ComputeAttentionDecodeRowAVX2FMA(const AttentionPlan &plan, const float *q_
       AttentionScaleFloat32_AVX2_FMA(accumulator, result.correction, plan.v_head_dim);
     }
 
-    if (past_count != 0) {
-      AttentionAccumulateBlockFloat32_AVX2_FMA(
-          accumulator, scores, past_v_head + j0 * plan.past_v_strides.sequence, past_count,
-          plan.past_v_strides.sequence, plan.v_head_dim);
-    }
-    if (past_count < count) {
-      AttentionAccumulateBlockFloat32_AVX2_FMA(
-          accumulator, scores + past_count,
-          v_head + (j0 + past_count - plan.past_length) * plan.v_strides.sequence,
-          count - past_count, plan.v_strides.sequence, plan.v_head_dim);
+    if constexpr (std::is_same_v<Codec, Float16Codec>) {
+      if (!converted_head) {
+        LoadKvRows<Codec>(plan, v_head, past_v_head, v_tile, j0, count, plan.v_head_dim,
+                          plan.v_strides.sequence, plan.past_v_strides.sequence);
+      }
+      const float *v_values = v_tile + (converted_head ? j0 * plan.v_head_dim : 0);
+      AttentionAccumulateBlockFloat32_AVX2_FMA(accumulator, scores, v_values, count,
+                                               plan.v_head_dim, plan.v_head_dim);
+    } else {
+      if (past_count != 0) {
+        AttentionAccumulateBlockFloat32_AVX2_FMA(
+            accumulator, scores, past_v_head + j0 * plan.past_v_strides.sequence, past_count,
+            plan.past_v_strides.sequence, plan.v_head_dim);
+      }
+      if (past_count < count) {
+        AttentionAccumulateBlockFloat32_AVX2_FMA(
+            accumulator, scores + past_count,
+            v_head + (j0 + past_count - plan.past_length) * plan.v_strides.sequence,
+            count - past_count, plan.v_strides.sequence, plan.v_head_dim);
+      }
     }
   }
 }
@@ -894,11 +912,22 @@ void ComputeAttentionStreamingGeneric(const AttentionPlan &plan, const typename 
                                       const typename Codec::Storage *past_k,
                                       const typename Codec::Storage *past_v,
                                       const std::int64_t *nonpad_kv_seqlen) {
+  const std::size_t output_count = plan.batch * plan.q_num_heads * plan.q_length * plan.v_head_dim;
+  if (output_count == 0) {
+    return;
+  }
+  if (plan.total_kv_length == 0) {
+    std::fill_n(y, output_count, Codec::Store(0.0f));
+    return;
+  }
   const auto *mask_bool = static_cast<const std::uint8_t *>(mask);
   const auto *mask_float = static_cast<const float *>(mask);
   const std::size_t total_kv_length = plan.total_kv_length;
   const bool has_softcap = plan.softcap != 0.0f;
   const std::size_t block = total_kv_length == 0 ? std::size_t{0} : AttentionKvBlock(plan);
+  const std::size_t conversion_block = AttentionConversionKvBlock(plan);
+  const bool reuse_converted_head =
+      std::is_same_v<Codec, Float16Codec> && conversion_block == total_kv_length;
   const std::size_t rows_per_batch = plan.q_num_heads * plan.q_length;
   const std::size_t total_rows = plan.batch * rows_per_batch;
   const std::size_t participants = StreamingParticipantCount(plan, total_rows);
@@ -916,7 +945,8 @@ void ComputeAttentionStreamingGeneric(const AttentionPlan &plan, const typename 
   // mask layout (e.g. broadcast) falls back to the scalar path unchanged.
   static const bool has_avx2_fma = DetectSimdLevel() >= SimdLevel::kAVX2 && CpuSupportsFma();
   const bool use_avx2_decode_row =
-      std::is_same_v<Codec, Float32Codec> && plan.q_length < 16 && has_avx2_fma &&
+      (std::is_same_v<Codec, Float32Codec> || std::is_same_v<Codec, Float16Codec>) &&
+      plan.q_length < 16 && has_avx2_fma &&
       (plan.mask_kind == AttentionMaskKind::kNone || plan.mask_strides.kv == 1);
 #endif
 
@@ -930,16 +960,24 @@ void ComputeAttentionStreamingGeneric(const AttentionPlan &plan, const typename 
       static_cast<std::int64_t>(total_rows), schedule, [&](std::int64_t begin, std::int64_t end) {
         // Peak temporary storage: one `Bc`-sized score tile, one
         // `head_dim`-sized FP32 query cache, and one `v_head_dim`
-        // accumulator per worker (`Br == 1`); never the full
-        // `[q_length, total_kv_length]` score or probability tensor.
+        // accumulator per worker (`Br == 1`). FP16 additionally retains up to
+        // four converted KV blocks for short-context reuse; longer contexts
+        // convert one block at a time. Never materialize the full score matrix.
         thread_local std::vector<float> scores;
         thread_local std::vector<float> q_fp32;
         thread_local std::vector<float> accumulator;
+        thread_local std::vector<float> k_fp32;
+        thread_local std::vector<float> v_fp32;
         scores.resize(block);
         if constexpr (!std::is_same_v<Codec, Float32Codec>) {
           q_fp32.resize(plan.head_dim);
         }
         accumulator.resize(plan.v_head_dim);
+        if constexpr (std::is_same_v<Codec, Float16Codec>) {
+          k_fp32.resize(conversion_block * plan.head_dim);
+          v_fp32.resize(conversion_block * plan.v_head_dim);
+        }
+        std::size_t converted_head = std::numeric_limits<std::size_t>::max();
 
         for (std::int64_t row = begin; row < end; ++row) {
           const std::size_t b = static_cast<std::size_t>(row) / rows_per_batch;
@@ -963,6 +1001,18 @@ void ComputeAttentionStreamingGeneric(const AttentionPlan &plan, const typename 
                   ? past_v + b * plan.past_v_strides.batch + kv_h * plan.past_v_strides.head
                   : nullptr;
           typename Codec::Storage *y_head = y + b * plan.y_strides.batch + h * plan.y_strides.head;
+          if constexpr (std::is_same_v<Codec, Float16Codec>) {
+            const std::size_t head = b * plan.kv_num_heads + kv_h;
+            if (reuse_converted_head && converted_head != head) {
+              LoadKvRows<Codec>(plan, k_head, past_k_head, k_fp32.data(), 0, total_kv_length,
+                                plan.head_dim, plan.k_strides.sequence,
+                                plan.past_k_strides.sequence);
+              LoadKvRows<Codec>(plan, v_head, past_v_head, v_fp32.data(), 0, total_kv_length,
+                                plan.v_head_dim, plan.v_strides.sequence,
+                                plan.past_v_strides.sequence);
+              converted_head = head;
+            }
+          }
           const std::ptrdiff_t mask_base =
               b * plan.mask_strides.batch + static_cast<std::ptrdiff_t>(h) * plan.mask_strides.head;
 
@@ -985,9 +1035,7 @@ void ComputeAttentionStreamingGeneric(const AttentionPlan &plan, const typename 
             q_values = q_row;
           } else {
             // Convert once per row, not once per KV element.
-            for (std::size_t d = 0; d < plan.head_dim; ++d) {
-              q_fp32[d] = Codec::Load(q_row[d]);
-            }
+            LoadRows<Codec>(q_row, q_fp32.data(), 1, plan.head_dim, plan.head_dim);
             q_values = q_fp32.data();
           }
 
@@ -1034,12 +1082,14 @@ void ComputeAttentionStreamingGeneric(const AttentionPlan &plan, const typename 
           // scalar loop below is skipped via its own condition (its body is
           // otherwise untouched).
           bool handled_by_avx2_decode = false;
-          if constexpr (std::is_same_v<Codec, Float32Codec>) {
+          if constexpr (std::is_same_v<Codec, Float32Codec> ||
+                        std::is_same_v<Codec, Float16Codec>) {
             if (use_avx2_decode_row) {
-              ComputeAttentionDecodeRowAVX2FMA(plan, q_values, k_head, v_head, past_k_head,
-                                               past_v_head, mask_bool, mask_float, mask_row,
-                                               has_softcap, kv_start, kv_limit, block,
-                                               scores.data(), accumulator.data(), m, l, any_valid);
+              ComputeAttentionDecodeRowAVX2FMA<Codec>(
+                  plan, q_values, k_head, v_head, past_k_head, past_v_head, mask_bool, mask_float,
+                  mask_row, has_softcap, kv_start, kv_limit, block, scores.data(),
+                  accumulator.data(), m, l, any_valid, k_fp32.data(), v_fp32.data(),
+                  reuse_converted_head);
               handled_by_avx2_decode = true;
             }
           }
@@ -1069,6 +1119,16 @@ void ComputeAttentionStreamingGeneric(const AttentionPlan &plan, const typename 
               }
             }
 
+            if constexpr (std::is_same_v<Codec, Float16Codec>) {
+              if (!reuse_converted_head) {
+                LoadKvRows<Codec>(plan, k_head, past_k_head, k_fp32.data(), j0, count,
+                                  plan.head_dim, plan.k_strides.sequence,
+                                  plan.past_k_strides.sequence);
+                LoadKvRows<Codec>(plan, v_head, past_v_head, v_fp32.data(), j0, count,
+                                  plan.v_head_dim, plan.v_strides.sequence,
+                                  plan.past_v_strides.sequence);
+              }
+            }
             float block_max = kNegativeInfinity;
             for (std::size_t jj = 0; jj < count; ++jj) {
               const std::size_t j = j0 + jj;
@@ -1092,19 +1152,26 @@ void ComputeAttentionStreamingGeneric(const AttentionPlan &plan, const typename 
                 k_row = k_head + (j - plan.past_length) * plan.k_strides.sequence;
               }
               float dot = 0.0f;
-              if constexpr (std::is_same_v<Codec, Float32Codec>) {
+              if constexpr (std::is_same_v<Codec, Float32Codec> ||
+                            std::is_same_v<Codec, Float16Codec>) {
+                const float *k_values;
+                if constexpr (std::is_same_v<Codec, Float32Codec>) {
+                  k_values = k_row;
+                } else {
+                  k_values = k_fp32.data() + (reuse_converted_head ? j : jj) * plan.head_dim;
+                }
                 constexpr std::size_t kDotLanes = 8;
                 float partial[kDotLanes] = {};
                 std::size_t d = 0;
                 for (; d + kDotLanes <= plan.head_dim; d += kDotLanes) {
                   for (std::size_t lane = 0; lane < kDotLanes; ++lane) {
-                    partial[lane] += q_values[d + lane] * k_row[d + lane];
+                    partial[lane] += q_values[d + lane] * k_values[d + lane];
                   }
                 }
                 dot = ((partial[0] + partial[1]) + (partial[2] + partial[3])) +
                       ((partial[4] + partial[5]) + (partial[6] + partial[7]));
                 for (; d < plan.head_dim; ++d) {
-                  dot += q_values[d] * k_row[d];
+                  dot += q_values[d] * k_values[d];
                 }
               } else {
                 for (std::size_t d = 0; d < plan.head_dim; ++d) {
@@ -1156,7 +1223,12 @@ void ComputeAttentionStreamingGeneric(const AttentionPlan &plan, const typename 
                 v_row = v_head + (j - plan.past_length) * plan.v_strides.sequence;
               }
               for (std::size_t d = 0; d < plan.v_head_dim; ++d) {
-                accumulator[d] += p * Codec::Load(v_row[d]);
+                if constexpr (std::is_same_v<Codec, Float16Codec>) {
+                  accumulator[d] +=
+                      p * v_fp32[(reuse_converted_head ? j : jj) * plan.v_head_dim + d];
+                } else {
+                  accumulator[d] += p * Codec::Load(v_row[d]);
+                }
               }
             }
             m = m_new;
@@ -1171,8 +1243,15 @@ void ComputeAttentionStreamingGeneric(const AttentionPlan &plan, const typename 
             continue;
           }
           const float inv_l = 1.0f / l;
-          for (std::size_t d = 0; d < plan.v_head_dim; ++d) {
-            y_row[d] = Codec::Store(accumulator[d] * inv_l);
+          if constexpr (std::is_same_v<Codec, Float16Codec>) {
+            for (std::size_t d = 0; d < plan.v_head_dim; ++d) {
+              accumulator[d] *= inv_l;
+            }
+            detail::ConvertFloat32ToFloat16(accumulator.data(), y_row, plan.v_head_dim);
+          } else {
+            for (std::size_t d = 0; d < plan.v_head_dim; ++d) {
+              y_row[d] = Codec::Store(accumulator[d] * inv_l);
+            }
           }
         }
       });
@@ -1180,8 +1259,12 @@ void ComputeAttentionStreamingGeneric(const AttentionPlan &plan, const typename 
 
 template <typename Codec>
 void ComputeAttentionTiled(const AttentionPlan &plan, const typename Codec::Storage *q,
-                           const typename Codec::Storage *k, const float *v, const void *mask,
-                           float *y, const std::int64_t *nonpad_kv_seqlen) {
+                           const typename Codec::Storage *k, const typename Codec::Storage *v,
+                           const void *mask, typename Codec::Storage *y,
+                           const std::int64_t *nonpad_kv_seqlen) {
+  if (plan.batch == 0 || plan.q_num_heads == 0 || plan.v_head_dim == 0) {
+    return;
+  }
   const std::size_t kv_block = AttentionKvBlock(plan);
   const std::size_t query_block = AttentionQueryBlock(plan);
   const std::size_t query_blocks = (plan.q_length + query_block - 1) / query_block;
@@ -1191,9 +1274,8 @@ void ComputeAttentionTiled(const AttentionPlan &plan, const typename Codec::Stor
   const auto *mask_float = static_cast<const float *>(mask);
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
   const bool use_avx2_softmax =
-      std::is_same_v<Codec, Float32Codec> && DetectSimdLevel() == SimdLevel::kAVX2 &&
-      CpuSupportsFma() && plan.softcap == 0.0f && plan.left_window_size < 0 &&
-      plan.right_window_size < 0 &&
+      DetectSimdLevel() == SimdLevel::kAVX2 && CpuSupportsFma() && plan.softcap == 0.0f &&
+      plan.left_window_size < 0 && plan.right_window_size < 0 &&
       (plan.mask_kind == AttentionMaskKind::kNone || plan.mask_strides.kv == 1);
 #endif
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512
@@ -1205,8 +1287,18 @@ void ComputeAttentionTiled(const AttentionPlan &plan, const typename Codec::Stor
       plan.mask_strides.kv == 1 && !plan.causal && plan.softcap == 0.0f &&
       plan.left_window_size < 0 && plan.right_window_size < 0;
 #endif
-  const std::size_t participants =
+  std::size_t participants =
       StreamingParticipantCount(plan, plan.batch * plan.q_num_heads * plan.q_length);
+  if constexpr (std::is_same_v<Codec, Float32Codec>) {
+    if (plan.layout == AttentionLayout::kRank3 && plan.q_length <= 128 && plan.kv_length <= 256 &&
+        plan.head_dim <= 256 && plan.v_head_dim <= 256) {
+      const std::size_t heads = plan.batch * plan.q_num_heads;
+      const double work = static_cast<double>(heads) * plan.q_length * plan.kv_length *
+                          (plan.head_dim + plan.v_head_dim);
+      participants = std::min(
+          heads, static_cast<std::size_t>(std::clamp(std::ceil(work / 16384.0), 1.0, 16.0)));
+    }
+  }
   const ExecutionSchedule schedule{
       1, static_cast<std::int64_t>((total_tasks + participants - 1) / participants),
       static_cast<std::int64_t>(participants), static_cast<std::int64_t>(participants)};
@@ -1218,10 +1310,17 @@ void ComputeAttentionTiled(const AttentionPlan &plan, const typename Codec::Stor
         thread_local std::vector<float> maxima;
         thread_local std::vector<float> denominators;
         thread_local std::vector<std::uint8_t> valid;
+        thread_local std::vector<typename Codec::Storage> packed_q;
+        thread_local std::vector<typename Codec::Storage> packed_k;
+        thread_local std::vector<float> packed_v;
+        thread_local std::vector<float> output;
         scores.resize(query_block * kv_block);
         maxima.resize(query_block);
         denominators.resize(query_block);
         valid.resize(query_block);
+        if constexpr (!std::is_same_v<Codec, Float32Codec>) {
+          packed_v.resize(kv_block * plan.v_head_dim);
+        }
 
         for (std::int64_t task = begin; task < end; ++task) {
           const std::size_t b = static_cast<std::size_t>(task) / tasks_per_batch;
@@ -1235,8 +1334,10 @@ void ComputeAttentionTiled(const AttentionPlan &plan, const typename Codec::Stor
               q + b * plan.q_strides.batch + h * plan.q_strides.head + q0 * plan.q_strides.sequence;
           const typename Codec::Storage *k_head =
               k + b * plan.k_strides.batch + kv_h * plan.k_strides.head;
-          const float *v_head = v + b * plan.v_strides.batch + kv_h * plan.v_strides.head;
-          float *y_block =
+          q_block = PackRows(q_block, rows, plan.head_dim, plan.q_strides.sequence, packed_q);
+          const typename Codec::Storage *v_head =
+              v + b * plan.v_strides.batch + kv_h * plan.v_strides.head;
+          typename Codec::Storage *y_block =
               y + b * plan.y_strides.batch + h * plan.y_strides.head + q0 * plan.y_strides.sequence;
           const std::ptrdiff_t mask_base =
               b * plan.mask_strides.batch + static_cast<std::ptrdiff_t>(h) * plan.mask_strides.head;
@@ -1285,8 +1386,19 @@ void ComputeAttentionTiled(const AttentionPlan &plan, const typename Codec::Stor
 
           for (std::size_t j0 = task_kv_start; j0 < task_kv_limit; j0 += kv_block) {
             const std::size_t columns = std::min(kv_block, task_kv_limit - j0);
-            AttentionQkGemm<Codec>(rows, columns, plan.head_dim, plan.scale, q_block,
-                                   k_head + j0 * plan.k_strides.sequence, scores.data());
+            const auto *k_block = PackRows(k_head + j0 * plan.k_strides.sequence, columns,
+                                           plan.head_dim, plan.k_strides.sequence, packed_k);
+            AttentionQkGemm<Codec>(rows, columns, plan.head_dim, plan.scale, q_block, k_block,
+                                   scores.data());
+            const float *v_block;
+            if constexpr (std::is_same_v<Codec, Float32Codec>) {
+              v_block = PackRows(v_head + j0 * plan.v_strides.sequence, columns, plan.v_head_dim,
+                                 plan.v_strides.sequence, packed_v);
+            } else {
+              LoadRows<Codec>(v_head + j0 * plan.v_strides.sequence, packed_v.data(), columns,
+                              plan.v_head_dim, plan.v_strides.sequence);
+              v_block = packed_v.data();
+            }
 
             for (std::size_t i = 0; i < rows; ++i) {
               float *score_row = scores.data() + i * columns;
@@ -1465,15 +1577,39 @@ void ComputeAttentionTiled(const AttentionPlan &plan, const typename Codec::Stor
                   score_row[jj] *= scale;
                 }
               }
+              float *destination;
+              if constexpr (std::is_same_v<Codec, Float32Codec>) {
+                destination = y_block;
+                if (plan.y_strides.sequence != static_cast<std::ptrdiff_t>(plan.v_head_dim)) {
+                  output.resize(rows * plan.v_head_dim);
+                  destination = output.data();
+                }
+              } else {
+                output.resize(rows * plan.v_head_dim);
+                destination = output.data();
+              }
               GemmFloat32(false, false, rows, plan.v_head_dim, columns, 1.0f, scores.data(),
-                          v_head + j0 * plan.v_strides.sequence, 0.0f, nullptr, y_block);
+                          v_block, 0.0f, nullptr, destination);
+              if constexpr (std::is_same_v<Codec, Float32Codec>) {
+                if (destination == y_block) {
+                  break;
+                }
+              }
+              for (std::size_t i = 0; i < rows; ++i) {
+                auto *y_row = y_block + i * plan.y_strides.sequence;
+                const float *output_row = destination + i * plan.v_head_dim;
+                if constexpr (std::is_same_v<Codec, Float32Codec>) {
+                  std::copy_n(output_row, plan.v_head_dim, y_row);
+                } else {
+                  detail::ConvertFloat32ToFloat16(output_row, y_row, plan.v_head_dim);
+                }
+              }
               break;
             }
 
             // Fuse the running sum into GEMM while keeping its bias and output disjoint.
-            GemmFloat32(false, false, rows, plan.v_head_dim, columns, 1.0f, scores.data(),
-                        v_head + j0 * plan.v_strides.sequence, 1.0f, accumulator.data(),
-                        product.data());
+            GemmFloat32(false, false, rows, plan.v_head_dim, columns, 1.0f, scores.data(), v_block,
+                        1.0f, accumulator.data(), product.data());
             accumulator.swap(product);
           }
 
@@ -1481,235 +1617,22 @@ void ComputeAttentionTiled(const AttentionPlan &plan, const typename Codec::Stor
             continue;
           }
           for (std::size_t i = 0; i < rows; ++i) {
-            float *y_row = y_block + i * plan.y_strides.sequence;
+            auto *y_row = y_block + i * plan.y_strides.sequence;
             const float scale = valid[i] && denominators[i] != 0.0f ? 1.0f / denominators[i] : 0.0f;
-            const float *accumulator_row = accumulator.data() + i * plan.v_head_dim;
-            for (std::size_t d = 0; d < plan.v_head_dim; ++d) {
-              y_row[d] = accumulator_row[d] * scale;
+            float *accumulator_row = accumulator.data() + i * plan.v_head_dim;
+            if constexpr (std::is_same_v<Codec, Float32Codec>) {
+              for (std::size_t d = 0; d < plan.v_head_dim; ++d) {
+                y_row[d] = accumulator_row[d] * scale;
+              }
+            } else {
+              for (std::size_t d = 0; d < plan.v_head_dim; ++d) {
+                accumulator_row[d] *= scale;
+              }
+              detail::ConvertFloat32ToFloat16(accumulator_row, y_row, plan.v_head_dim);
             }
           }
         }
       });
-}
-
-void ComputeAttentionFloat32Rank3Tiled(const AttentionPlan &plan, const float *q, const float *k,
-                                       const float *v, const void *mask, float *y,
-                                       const std::int64_t *nonpad_kv_seqlen) {
-  if (plan.batch != 0 && plan.q_length <= 128 && plan.kv_length <= 256 && plan.head_dim <= 256 &&
-      plan.v_head_dim <= 256 && ExecutionThreadCount() > 1 && !ExecutionInParallelRegion()) {
-    // Keep packing, attention, and unpacking on the same worker for cache-sized
-    // heads, instead of synchronizing four whole-tensor layout conversions.
-    const std::size_t heads = plan.batch * plan.q_num_heads;
-    const double work = static_cast<double>(heads) * plan.q_length * plan.kv_length *
-                        (plan.head_dim + plan.v_head_dim);
-    const std::size_t participants =
-        std::min(heads, static_cast<std::size_t>(std::clamp(std::ceil(work / 16384.0), 1.0, 16.0)));
-    const ExecutionSchedule schedule{
-        1, static_cast<std::int64_t>((heads + participants - 1) / participants),
-        static_cast<std::int64_t>(participants)};
-    ExecuteRanges(
-        static_cast<std::int64_t>(heads), schedule, [&](std::int64_t begin, std::int64_t end) {
-          const std::size_t q_count = plan.q_length * plan.head_dim;
-          const std::size_t k_count = plan.kv_length * plan.head_dim;
-          const std::size_t v_count = plan.kv_length * plan.v_head_dim;
-          const std::size_t y_count = plan.q_length * plan.v_head_dim;
-          thread_local std::vector<float> workspace;
-          workspace.resize(q_count + k_count + v_count + y_count);
-          float *packed_q = workspace.data();
-          float *packed_k = packed_q + q_count;
-          float *packed_v = packed_k + k_count;
-          float *packed_y = packed_v + v_count;
-          AttentionPlan head_plan = plan;
-          head_plan.layout = AttentionLayout::kRank4;
-          head_plan.batch = 1;
-          head_plan.q_num_heads = 1;
-          head_plan.kv_num_heads = 1;
-          head_plan.group_size = 1;
-          head_plan.q_strides = {0, 0, static_cast<std::ptrdiff_t>(plan.head_dim)};
-          head_plan.k_strides = head_plan.q_strides;
-          head_plan.v_strides = {0, 0, static_cast<std::ptrdiff_t>(plan.v_head_dim)};
-          head_plan.y_strides = head_plan.v_strides;
-          for (std::int64_t head = begin; head < end; ++head) {
-            const std::size_t b = static_cast<std::size_t>(head) / plan.q_num_heads;
-            const std::size_t h = static_cast<std::size_t>(head) % plan.q_num_heads;
-            const std::size_t kv_h = h / plan.group_size;
-            const float *q_head = q + b * plan.q_strides.batch + h * plan.q_strides.head;
-            const float *k_head = k + b * plan.k_strides.batch + kv_h * plan.k_strides.head;
-            const float *v_head = v + b * plan.v_strides.batch + kv_h * plan.v_strides.head;
-            for (std::size_t i = 0; i < plan.q_length; ++i) {
-              std::copy_n(q_head + i * plan.q_strides.sequence, plan.head_dim,
-                          packed_q + i * plan.head_dim);
-            }
-            for (std::size_t i = 0; i < plan.kv_length; ++i) {
-              std::copy_n(k_head + i * plan.k_strides.sequence, plan.head_dim,
-                          packed_k + i * plan.head_dim);
-              std::copy_n(v_head + i * plan.v_strides.sequence, plan.v_head_dim,
-                          packed_v + i * plan.v_head_dim);
-            }
-            const std::ptrdiff_t mask_offset =
-                b * plan.mask_strides.batch + h * plan.mask_strides.head;
-            const void *head_mask = mask;
-            if (plan.mask_kind == AttentionMaskKind::kBoolean) {
-              head_mask = static_cast<const std::uint8_t *>(mask) + mask_offset;
-            } else if (plan.mask_kind == AttentionMaskKind::kAdditive) {
-              head_mask = static_cast<const float *>(mask) + mask_offset;
-            }
-            ComputeAttentionTiled<Float32Codec>(
-                head_plan, packed_q, packed_k, packed_v, head_mask, packed_y,
-                nonpad_kv_seqlen == nullptr ? nullptr : nonpad_kv_seqlen + b);
-            float *y_head = y + b * plan.y_strides.batch + h * plan.y_strides.head;
-            for (std::size_t i = 0; i < plan.q_length; ++i) {
-              std::copy_n(packed_y + i * plan.v_head_dim, plan.v_head_dim,
-                          y_head + i * plan.y_strides.sequence);
-            }
-          }
-        });
-    return;
-  }
-  const std::size_t q_count = plan.batch * plan.q_num_heads * plan.q_length * plan.head_dim;
-  const std::size_t k_count = plan.batch * plan.kv_num_heads * plan.kv_length * plan.head_dim;
-  const std::size_t v_count = plan.batch * plan.kv_num_heads * plan.kv_length * plan.v_head_dim;
-  const std::size_t y_count = plan.batch * plan.q_num_heads * plan.q_length * plan.v_head_dim;
-  const std::size_t workspace_count = q_count + k_count + v_count + y_count;
-  constexpr std::size_t kMaxRetainedWorkspaceElements = 16 * 1024 * 1024;
-  thread_local std::vector<float> retained_workspace;
-  std::unique_ptr<float[]> oversized_workspace;
-  float *workspace;
-  if (workspace_count <= kMaxRetainedWorkspaceElements) {
-    retained_workspace.resize(workspace_count);
-    workspace = retained_workspace.data();
-  } else {
-    oversized_workspace = std::make_unique_for_overwrite<float[]>(workspace_count);
-    workspace = oversized_workspace.get();
-  }
-  float *packed_q = workspace;
-  float *packed_k = packed_q + q_count;
-  float *packed_v = packed_k + k_count;
-  float *packed_y = packed_v + v_count;
-
-  ConvertFloat32Rank3ToRank4(q, packed_q, plan.batch, plan.q_num_heads, plan.q_length,
-                             plan.head_dim);
-  ConvertFloat32Rank3ToRank4(k, packed_k, plan.batch, plan.kv_num_heads, plan.kv_length,
-                             plan.head_dim);
-  ConvertFloat32Rank3ToRank4(v, packed_v, plan.batch, plan.kv_num_heads, plan.kv_length,
-                             plan.v_head_dim);
-
-  AttentionPlan packed_plan = plan;
-  packed_plan.layout = AttentionLayout::kRank4;
-  packed_plan.q_strides = {
-      static_cast<std::ptrdiff_t>(plan.q_num_heads * plan.q_length * plan.head_dim),
-      static_cast<std::ptrdiff_t>(plan.q_length * plan.head_dim),
-      static_cast<std::ptrdiff_t>(plan.head_dim)};
-  packed_plan.k_strides = {
-      static_cast<std::ptrdiff_t>(plan.kv_num_heads * plan.kv_length * plan.head_dim),
-      static_cast<std::ptrdiff_t>(plan.kv_length * plan.head_dim),
-      static_cast<std::ptrdiff_t>(plan.head_dim)};
-  packed_plan.v_strides = {
-      static_cast<std::ptrdiff_t>(plan.kv_num_heads * plan.kv_length * plan.v_head_dim),
-      static_cast<std::ptrdiff_t>(plan.kv_length * plan.v_head_dim),
-      static_cast<std::ptrdiff_t>(plan.v_head_dim)};
-  packed_plan.y_strides = {
-      static_cast<std::ptrdiff_t>(plan.q_num_heads * plan.q_length * plan.v_head_dim),
-      static_cast<std::ptrdiff_t>(plan.q_length * plan.v_head_dim),
-      static_cast<std::ptrdiff_t>(plan.v_head_dim)};
-
-  ComputeAttentionTiled<Float32Codec>(packed_plan, packed_q, packed_k, packed_v, mask, packed_y,
-                                      nonpad_kv_seqlen);
-  ConvertFloat32Rank4ToRank3(packed_y, y, plan.batch, plan.q_num_heads, plan.q_length,
-                             plan.v_head_dim);
-}
-
-void ConvertFloat16Contiguous(const std::uint16_t *source, float *destination, std::size_t count) {
-  ExecuteRanges(static_cast<std::int64_t>(count), 0.25, 8,
-                [&](std::int64_t begin, std::int64_t end) {
-                  detail::ConvertFloat16ToFloat32(source + begin, destination + begin,
-                                                  static_cast<std::size_t>(end - begin));
-                });
-}
-
-void ConvertFloat32ContiguousToFloat16(const float *source, std::uint16_t *destination,
-                                       std::size_t count) {
-  ExecuteRanges(static_cast<std::int64_t>(count), 0.25, 8,
-                [&](std::int64_t begin, std::int64_t end) {
-                  detail::ConvertFloat32ToFloat16(source + begin, destination + begin,
-                                                  static_cast<std::size_t>(end - begin));
-                });
-}
-
-AttentionPlan MakePackedRank4Plan(const AttentionPlan &plan) {
-  AttentionPlan packed_plan = plan;
-  packed_plan.layout = AttentionLayout::kRank4;
-  packed_plan.q_strides = {
-      static_cast<std::ptrdiff_t>(plan.q_num_heads * plan.q_length * plan.head_dim),
-      static_cast<std::ptrdiff_t>(plan.q_length * plan.head_dim),
-      static_cast<std::ptrdiff_t>(plan.head_dim)};
-  packed_plan.k_strides = {
-      static_cast<std::ptrdiff_t>(plan.kv_num_heads * plan.kv_length * plan.head_dim),
-      static_cast<std::ptrdiff_t>(plan.kv_length * plan.head_dim),
-      static_cast<std::ptrdiff_t>(plan.head_dim)};
-  packed_plan.v_strides = {
-      static_cast<std::ptrdiff_t>(plan.kv_num_heads * plan.kv_length * plan.v_head_dim),
-      static_cast<std::ptrdiff_t>(plan.kv_length * plan.v_head_dim),
-      static_cast<std::ptrdiff_t>(plan.v_head_dim)};
-  packed_plan.y_strides = {
-      static_cast<std::ptrdiff_t>(plan.q_num_heads * plan.q_length * plan.v_head_dim),
-      static_cast<std::ptrdiff_t>(plan.q_length * plan.v_head_dim),
-      static_cast<std::ptrdiff_t>(plan.v_head_dim)};
-  return packed_plan;
-}
-
-void ComputeAttentionFloat16Tiled(const AttentionPlan &plan, const std::uint16_t *q,
-                                  const std::uint16_t *k, const std::uint16_t *v, const void *mask,
-                                  std::uint16_t *y, const std::int64_t *nonpad_kv_seqlen) {
-  const std::size_t q_count = plan.batch * plan.q_num_heads * plan.q_length * plan.head_dim;
-  const std::size_t k_count = plan.batch * plan.kv_num_heads * plan.kv_length * plan.head_dim;
-  const std::size_t v_count = plan.batch * plan.kv_num_heads * plan.kv_length * plan.v_head_dim;
-  const std::size_t y_count = plan.batch * plan.q_num_heads * plan.q_length * plan.v_head_dim;
-  constexpr std::size_t kMaxRetainedWorkspaceElements = 16 * 1024 * 1024;
-  thread_local std::vector<float> float_workspace;
-  std::unique_ptr<float[]> oversized_float_workspace;
-  const std::size_t float_workspace_count = v_count + y_count;
-  float *v_fp32;
-  if (float_workspace_count <= kMaxRetainedWorkspaceElements) {
-    float_workspace.resize(float_workspace_count);
-    v_fp32 = float_workspace.data();
-  } else {
-    oversized_float_workspace = std::make_unique_for_overwrite<float[]>(float_workspace_count);
-    v_fp32 = oversized_float_workspace.get();
-  }
-  float *y_fp32 = v_fp32 + v_count;
-
-  if (plan.layout == AttentionLayout::kRank3) {
-    thread_local std::vector<std::uint16_t> half_workspace;
-    std::unique_ptr<std::uint16_t[]> oversized_half_workspace;
-    const std::size_t half_workspace_count = q_count + k_count;
-    std::uint16_t *packed_q;
-    if (half_workspace_count <= kMaxRetainedWorkspaceElements) {
-      half_workspace.resize(half_workspace_count);
-      packed_q = half_workspace.data();
-    } else {
-      oversized_half_workspace =
-          std::make_unique_for_overwrite<std::uint16_t[]>(half_workspace_count);
-      packed_q = oversized_half_workspace.get();
-    }
-    std::uint16_t *packed_k = packed_q + q_count;
-    CopyFloat16Rank3ToRank4(q, packed_q, plan.batch, plan.q_num_heads, plan.q_length,
-                            plan.head_dim);
-    CopyFloat16Rank3ToRank4(k, packed_k, plan.batch, plan.kv_num_heads, plan.kv_length,
-                            plan.head_dim);
-    ConvertFloat16Rank3ToRank4(v, v_fp32, plan.batch, plan.kv_num_heads, plan.kv_length,
-                               plan.v_head_dim);
-    const AttentionPlan packed_plan = MakePackedRank4Plan(plan);
-    ComputeAttentionTiled<Float16Codec>(packed_plan, packed_q, packed_k, v_fp32, mask, y_fp32,
-                                        nonpad_kv_seqlen);
-    ConvertFloat32Rank4ToFloat16Rank3(y_fp32, y, plan.batch, plan.q_num_heads, plan.q_length,
-                                      plan.v_head_dim);
-    return;
-  }
-
-  ConvertFloat16Contiguous(v, v_fp32, v_count);
-  ComputeAttentionTiled<Float16Codec>(plan, q, k, v_fp32, mask, y_fp32, nonpad_kv_seqlen);
-  ConvertFloat32ContiguousToFloat16(y_fp32, y, y_count);
 }
 
 } // namespace
@@ -1717,21 +1640,19 @@ void ComputeAttentionFloat16Tiled(const AttentionPlan &plan, const std::uint16_t
 void ComputeAttentionFloat32Streaming(const AttentionPlan &plan, const float *q, const float *k,
                                       const float *v, const void *mask, float *y,
                                       const float *past_k, const float *past_v,
-                                      const std::int64_t *nonpad_kv_seqlen) {
+                                      const std::int64_t *nonpad_kv_seqlen,
+                                      AttentionExecutionInfo *execution_info) {
   if (plan.total_kv_length == 1) {
+    RecordExecution(plan, AttentionExecutionPath::kSingleKey, false, execution_info);
     ComputeAttentionSingleKey<Float32Codec>(plan, v, mask, y, past_v, nonpad_kv_seqlen);
     return;
   }
-  if (plan.layout == AttentionLayout::kRank3 && plan.past_length == 0 && plan.q_length >= 16 &&
-      plan.total_kv_length != 0) {
-    ComputeAttentionFloat32Rank3Tiled(plan, q, k, v, mask, y, nonpad_kv_seqlen);
-    return;
-  }
-  if (plan.layout == AttentionLayout::kRank4 && plan.past_length == 0 && plan.q_length >= 16 &&
-      plan.total_kv_length != 0) {
+  if (plan.past_length == 0 && plan.q_length >= 16 && plan.total_kv_length != 0) {
+    RecordExecution(plan, AttentionExecutionPath::kTiled, false, execution_info);
     ComputeAttentionTiled<Float32Codec>(plan, q, k, v, mask, y, nonpad_kv_seqlen);
     return;
   }
+  RecordExecution(plan, AttentionExecutionPath::kStreaming, false, execution_info);
   ComputeAttentionStreamingGeneric<Float32Codec>(plan, q, k, v, mask, y, past_k, past_v,
                                                  nonpad_kv_seqlen);
 }
@@ -1740,123 +1661,35 @@ void ComputeAttentionFloat16Streaming(const AttentionPlan &plan, const std::uint
                                       const std::uint16_t *k, const std::uint16_t *v,
                                       const void *mask, std::uint16_t *y,
                                       const std::uint16_t *past_k, const std::uint16_t *past_v,
-                                      const std::int64_t *nonpad_kv_seqlen) {
+                                      const std::int64_t *nonpad_kv_seqlen,
+                                      AttentionExecutionInfo *execution_info) {
   if (plan.total_kv_length == 1) {
+    RecordExecution(plan, AttentionExecutionPath::kSingleKey, false, execution_info);
     ComputeAttentionSingleKey<Float16Codec>(plan, v, mask, y, past_v, nonpad_kv_seqlen);
     return;
   }
   if (plan.past_length == 0 && plan.q_length >= 16 && plan.total_kv_length != 0) {
-    ComputeAttentionFloat16Tiled(plan, q, k, v, mask, y, nonpad_kv_seqlen);
+    RecordExecution(plan, AttentionExecutionPath::kTiled, true, execution_info);
+    ComputeAttentionTiled<Float16Codec>(plan, q, k, v, mask, y, nonpad_kv_seqlen);
     return;
   }
-  const std::size_t q_count = plan.batch * plan.q_num_heads * plan.q_length * plan.head_dim;
-  const std::size_t k_count = plan.batch * plan.kv_num_heads * plan.kv_length * plan.head_dim;
-  const std::size_t v_count = plan.batch * plan.kv_num_heads * plan.kv_length * plan.v_head_dim;
-  const std::size_t y_count = plan.batch * plan.q_num_heads * plan.q_length * plan.v_head_dim;
-  const std::size_t past_k_count =
-      plan.batch * plan.kv_num_heads * plan.past_length * plan.head_dim;
-  const std::size_t past_v_count =
-      plan.batch * plan.kv_num_heads * plan.past_length * plan.v_head_dim;
-  if (y_count == 0) {
-    return;
-  }
-
-  constexpr std::size_t kMaxRetainedWorkspaceElements = 16 * 1024 * 1024;
-  const std::size_t workspace_count =
-      q_count + k_count + v_count + y_count + past_k_count + past_v_count;
-  thread_local std::vector<float> retained_workspace;
-  std::unique_ptr<float[]> oversized_workspace;
-  float *workspace;
-  if (workspace_count <= kMaxRetainedWorkspaceElements) {
-    retained_workspace.resize(workspace_count);
-    workspace = retained_workspace.data();
-  } else {
-    oversized_workspace = std::make_unique_for_overwrite<float[]>(workspace_count);
-    workspace = oversized_workspace.get();
-  }
-  float *q_fp32 = workspace;
-  float *k_fp32 = q_fp32 + q_count;
-  float *v_fp32 = k_fp32 + k_count;
-  float *y_fp32 = v_fp32 + v_count;
-  float *past_k_fp32 = y_fp32 + y_count;
-  float *past_v_fp32 = past_k_fp32 + past_k_count;
-  if (plan.layout == AttentionLayout::kRank3) {
-    ConvertFloat16Rank3ToRank4(q, q_fp32, plan.batch, plan.q_num_heads, plan.q_length,
-                               plan.head_dim);
-    ConvertFloat16Rank3ToRank4(k, k_fp32, plan.batch, plan.kv_num_heads, plan.kv_length,
-                               plan.head_dim);
-    ConvertFloat16Rank3ToRank4(v, v_fp32, plan.batch, plan.kv_num_heads, plan.kv_length,
-                               plan.v_head_dim);
-    if (past_k_count != 0) {
-      detail::ConvertFloat16ToFloat32(past_k, past_k_fp32, past_k_count);
-      detail::ConvertFloat16ToFloat32(past_v, past_v_fp32, past_v_count);
-    }
-
-    AttentionPlan rank4_plan = plan;
-    rank4_plan.layout = AttentionLayout::kRank4;
-    rank4_plan.q_strides = {
-        static_cast<std::ptrdiff_t>(plan.q_num_heads * plan.q_length * plan.head_dim),
-        static_cast<std::ptrdiff_t>(plan.q_length * plan.head_dim),
-        static_cast<std::ptrdiff_t>(plan.head_dim)};
-    rank4_plan.k_strides = {
-        static_cast<std::ptrdiff_t>(plan.kv_num_heads * plan.kv_length * plan.head_dim),
-        static_cast<std::ptrdiff_t>(plan.kv_length * plan.head_dim),
-        static_cast<std::ptrdiff_t>(plan.head_dim)};
-    rank4_plan.v_strides = {
-        static_cast<std::ptrdiff_t>(plan.kv_num_heads * plan.kv_length * plan.v_head_dim),
-        static_cast<std::ptrdiff_t>(plan.kv_length * plan.v_head_dim),
-        static_cast<std::ptrdiff_t>(plan.v_head_dim)};
-    rank4_plan.y_strides = {
-        static_cast<std::ptrdiff_t>(plan.q_num_heads * plan.q_length * plan.v_head_dim),
-        static_cast<std::ptrdiff_t>(plan.q_length * plan.v_head_dim),
-        static_cast<std::ptrdiff_t>(plan.v_head_dim)};
-    ComputeAttentionFloat32Streaming(rank4_plan, q_fp32, k_fp32, v_fp32, mask, y_fp32,
-                                     past_k_count != 0 ? past_k_fp32 : nullptr,
-                                     past_v_count != 0 ? past_v_fp32 : nullptr, nonpad_kv_seqlen);
-    ConvertFloat32Rank4ToFloat16Rank3(y_fp32, y, plan.batch, plan.q_num_heads, plan.q_length,
-                                      plan.v_head_dim);
-    return;
-  }
-
-  const std::array input_buffers = {std::tuple{q, q_fp32, q_count}, std::tuple{k, k_fp32, k_count},
-                                    std::tuple{v, v_fp32, v_count},
-                                    std::tuple{past_k, past_k_fp32, past_k_count},
-                                    std::tuple{past_v, past_v_fp32, past_v_count}};
-  const std::size_t input_count = q_count + k_count + v_count + past_k_count + past_v_count;
-  ExecuteRanges(
-      static_cast<std::int64_t>(input_count), 0.25, 8, [&](std::int64_t begin, std::int64_t end) {
-        std::size_t offset = 0;
-        for (const auto &[source, destination, count] : input_buffers) {
-          const std::size_t range_begin = std::max(offset, static_cast<std::size_t>(begin));
-          const std::size_t range_end = std::min(offset + count, static_cast<std::size_t>(end));
-          if (range_begin < range_end) {
-            detail::ConvertFloat16ToFloat32(source + range_begin - offset,
-                                            destination + range_begin - offset,
-                                            range_end - range_begin);
-          }
-          offset += count;
-        }
-      });
-
-  ComputeAttentionFloat32Streaming(plan, q_fp32, k_fp32, v_fp32, mask, y_fp32,
-                                   past_k_count != 0 ? past_k_fp32 : nullptr,
-                                   past_v_count != 0 ? past_v_fp32 : nullptr, nonpad_kv_seqlen);
-  ExecuteRanges(static_cast<std::int64_t>(y_count), 0.25, 8,
-                [&](std::int64_t begin, std::int64_t end) {
-                  detail::ConvertFloat32ToFloat16(y_fp32 + begin, y + begin,
-                                                  static_cast<std::size_t>(end - begin));
-                });
+  RecordExecution(plan, AttentionExecutionPath::kStreaming, true, execution_info);
+  ComputeAttentionStreamingGeneric<Float16Codec>(plan, q, k, v, mask, y, past_k, past_v,
+                                                 nonpad_kv_seqlen);
 }
 
 void ComputeAttentionBFloat16Streaming(const AttentionPlan &plan, const std::uint16_t *q,
                                        const std::uint16_t *k, const std::uint16_t *v,
                                        const void *mask, std::uint16_t *y,
                                        const std::uint16_t *past_k, const std::uint16_t *past_v,
-                                       const std::int64_t *nonpad_kv_seqlen) {
+                                       const std::int64_t *nonpad_kv_seqlen,
+                                       AttentionExecutionInfo *execution_info) {
   if (plan.total_kv_length == 1) {
+    RecordExecution(plan, AttentionExecutionPath::kSingleKey, false, execution_info);
     ComputeAttentionSingleKey<BFloat16Codec>(plan, v, mask, y, past_v, nonpad_kv_seqlen);
     return;
   }
+  RecordExecution(plan, AttentionExecutionPath::kStreaming, false, execution_info);
   ComputeAttentionStreamingGeneric<BFloat16Codec>(plan, q, k, v, mask, y, past_k, past_v,
                                                   nonpad_kv_seqlen);
 }
@@ -1864,7 +1697,7 @@ void ComputeAttentionBFloat16Streaming(const AttentionPlan &plan, const std::uin
 void ComputeAttentionFloat32(const AttentionPlan &plan, const float *q, const float *k,
                              const float *v, const void *mask, float *y, const float *past_k,
                              const float *past_v, const std::int64_t *nonpad_kv_seqlen,
-                             float *qk_matmul_output) {
+                             float *qk_matmul_output, AttentionExecutionInfo *execution_info) {
   // Streaming preconditions: no observable `qk_matmul_output` and no
   // requested `present` output. Either necessarily materializes a full
   // observable tensor, so the materialized path is selected instead. An
@@ -1874,11 +1707,12 @@ void ComputeAttentionFloat32(const AttentionPlan &plan, const float *q, const fl
   const bool can_stream = qk_matmul_output == nullptr && !plan.has_qk_matmul_output &&
                           !plan.has_present_output && !plan.softmax_fp64;
   if (can_stream) {
-    ComputeAttentionFloat32Streaming(plan, q, k, v, mask, y, past_k, past_v, nonpad_kv_seqlen);
+    ComputeAttentionFloat32Streaming(plan, q, k, v, mask, y, past_k, past_v, nonpad_kv_seqlen,
+                                     execution_info);
     return;
   }
   ComputeAttentionFloat32Materialized(plan, q, k, v, mask, y, past_k, past_v, nonpad_kv_seqlen,
-                                      qk_matmul_output);
+                                      qk_matmul_output, execution_info);
 }
 
 } // namespace onnx_light_cpu

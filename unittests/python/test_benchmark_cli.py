@@ -93,10 +93,14 @@ class TestBenchmarkCli(ExtTestCase):
             "Binary.Greater.compare64.avx2",
             "onnx_light_cpu::SimplifiedLayerNormalization/avx/row-scale",
             "onnx_light_cpu::Abs",
+            "onnx_light_cpu::Attention",
+            "Attention.tiled",
+            "Attention.conversion.tile",
+            "Attention.packing.tile",
         ]
         self.assertEqual(
             _kernel_names_only(recorded),
-            ["onnx_light_cpu::Cast", "onnx_light_cpu::Abs"],
+            ["onnx_light_cpu::Cast", "onnx_light_cpu::Abs", "onnx_light_cpu::Attention"],
         )
 
     def test_rejects_invalid_test_regular_expression(self):
