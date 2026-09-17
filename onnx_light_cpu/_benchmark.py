@@ -414,8 +414,8 @@ def run_backend_benchmark(
         raise ValueError("warmup must be greater than or equal to 0")
     if max_repeat_time <= 0:
         raise ValueError("max_repeat_time must be greater than 0")
-    if threads <= 0:
-        raise ValueError("threads must be greater than 0")
+    if threads < 0:
+        raise ValueError("threads must be greater than or equal to 0")
     if with_onnxruntime:
         import onnxruntime  # noqa: F401  # pyrefly: ignore[missing-import]
 
