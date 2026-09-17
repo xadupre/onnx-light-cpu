@@ -49,57 +49,105 @@ template <DataType Type> auto Load(const Tensor &tensor, std::size_t index) {
   return norm::TypeTraits<Type>::Load(&value, 0);
 }
 
-bool FloatAligned(const Tensor &tensor) {
-  return reinterpret_cast<std::uintptr_t>(tensor.bytes()) % alignof(float) == 0;
+template <DataType Type> bool Aligned(const Tensor &tensor) {
+  return reinterpret_cast<std::uintptr_t>(tensor.bytes()) % alignof(norm::StorageType<Type>) == 0;
+}
+
+struct ScaleLayout {
+  std::size_t block = 1;
+  bool scalar_row = true;
+};
+
+ScaleLayout GetScaleLayout(const Tensor &x, const Tensor &scale, std::size_t axis) {
+  ScaleLayout layout;
+  const std::size_t offset = x.shape.size() - scale.shape.size();
+  bool contiguous = true;
+  for (std::size_t dim = x.shape.size(); dim-- > axis;) {
+    const auto scale_dim = dim < offset ? 1 : scale.shape[dim - offset];
+    layout.scalar_row = layout.scalar_row && scale_dim == 1;
+    contiguous = contiguous && scale_dim == x.shape[dim];
+    if (contiguous) {
+      layout.block *= static_cast<std::size_t>(x.shape[dim]);
+    }
+  }
+  return layout;
 }
 
 template <DataType XType, DataType VType, typename Acc>
 void NormalizeRows(const Tensor &x, const Tensor &scale, SimplifiedLayerNormalizationResult &result,
                    const norm::BroadcastIndexer &scale_index, std::size_t width, float epsilon,
-                   bool scale_by_inner, bool output_inverse, std::int64_t begin, std::int64_t end) {
+                   ScaleLayout layout, bool scale_by_inner, bool output_inverse, std::int64_t begin,
+                   std::int64_t end) {
   auto *output = norm::MutableData<VType>(result.y);
+  const bool aligned_x = Aligned<XType>(x);
+  const bool aligned_scale = Aligned<VType>(scale);
+  const auto *input = reinterpret_cast<const norm::StorageType<XType> *>(x.bytes());
+  const auto *weights = reinterpret_cast<const norm::StorageType<VType> *>(scale.bytes());
   for (std::size_t row = static_cast<std::size_t>(begin); row < static_cast<std::size_t>(end);
        ++row) {
     const std::size_t base = row * width;
-    Acc mean_square;
-    if constexpr (XType == DataType::FLOAT && std::is_same_v<Acc, float>) {
-      if (FloatAligned(x)) {
-        mean_square = ComputeNormalizationMeanSquareFloat32(x.AsFloat() + base, width);
-      } else {
-        float sum = 0.0F;
-        for (std::size_t i = 0; i < width; ++i) {
-          const float value = Load<XType>(x, base + i);
-          sum += value * value;
+    const Acc mean_square = [&]() -> Acc {
+      if (aligned_x) {
+        if constexpr (XType == DataType::FLOAT && std::is_same_v<Acc, float>) {
+          return ComputeNormalizationMeanSquareFloat32(input + base, width);
+        } else if constexpr (XType == DataType::FLOAT16 && std::is_same_v<Acc, float>) {
+          return ComputeNormalizationMeanSquareFloat16(input + base, width);
+        } else if constexpr (XType == DataType::DOUBLE) {
+          if constexpr (std::is_same_v<Acc, float>) {
+            return ComputeNormalizationMeanSquareFloat64StashFloat32(input + base, width);
+          } else {
+            return ComputeNormalizationMeanSquareFloat64(input + base, width);
+          }
         }
-        mean_square = sum / static_cast<float>(width);
       }
-    } else {
       Acc sums[4] = {};
       for (std::size_t i = 0; i < width; ++i) {
         const Acc value = static_cast<Acc>(Load<XType>(x, base + i));
         sums[i % 4] += value * value;
       }
-      mean_square = ((sums[0] + sums[1]) + (sums[2] + sums[3])) / static_cast<Acc>(width);
-    }
+      return ((sums[0] + sums[1]) + (sums[2] + sums[3])) / static_cast<Acc>(width);
+    }();
     const Acc inverse = Acc{1} / std::sqrt(mean_square + static_cast<Acc>(epsilon));
     if (output_inverse) {
       norm::TensorWriter(result.inv_std_var).StoreDouble(row, static_cast<double>(inverse));
     }
-    if constexpr (XType == DataType::FLOAT && VType == DataType::FLOAT &&
-                  std::is_same_v<Acc, float>) {
-      if (scale_by_inner && FloatAligned(x) && FloatAligned(scale)) {
-        ApplyNormalizationAffineFloat32(x.AsFloat() + base, scale.AsFloat(), nullptr, output + base,
-                                        width, 0.0F, inverse);
-        continue;
+    const std::size_t block = layout.scalar_row ? width : layout.block;
+    const std::size_t row_scale = scale_by_inner ? 0 : scale_index.Index(base);
+    for (std::size_t start = 0; start < width; start += block) {
+      const std::size_t scale_position = scale_by_inner ? start
+                                         : start == 0   ? row_scale
+                                                        : scale_index.Index(base + start);
+      if (aligned_x && aligned_scale && !layout.scalar_row && block > 1) {
+        if constexpr (XType == DataType::FLOAT && VType == DataType::FLOAT &&
+                      std::is_same_v<Acc, float>) {
+          ApplyNormalizationAffineFloat32(input + base + start, weights + scale_position, nullptr,
+                                          output + base + start, block, 0.0F, inverse);
+          continue;
+        } else if constexpr (XType == DataType::FLOAT16 && VType == DataType::FLOAT16 &&
+                             std::is_same_v<Acc, float>) {
+          ApplyNormalizationAffineFloat16(input + base + start, weights + scale_position,
+                                          output + base + start, block, inverse);
+          continue;
+        } else if constexpr (XType == DataType::DOUBLE && VType == DataType::DOUBLE) {
+          if constexpr (std::is_same_v<Acc, float>) {
+            ApplyNormalizationAffineFloat64StashFloat32(input + base + start,
+                                                        weights + scale_position,
+                                                        output + base + start, block, inverse);
+          } else {
+            ApplyNormalizationAffineFloat64(input + base + start, weights + scale_position,
+                                            output + base + start, block, inverse);
+          }
+          continue;
+        }
       }
-    }
-    for (std::size_t i = 0; i < width; ++i) {
-      const std::size_t scale_position = scale_by_inner ? i : scale_index.Index(base + i);
-      // Unlike RMSNormalization, the experimental operator rounds only after scaling.
-      const Acc value = static_cast<Acc>(Load<XType>(x, base + i)) * inverse *
-                        static_cast<Acc>(Load<VType>(scale, scale_position));
-      norm::TypeTraits<VType>::Store(output, base + i,
-                                     static_cast<norm::AccumulatorType<VType>>(value));
+      for (std::size_t i = 0; i < block; ++i) {
+        // Unlike RMSNormalization, the experimental operator rounds only after scaling.
+        const Acc value =
+            static_cast<Acc>(Load<XType>(x, base + start + i)) * inverse *
+            static_cast<Acc>(Load<VType>(scale, scale_position + (layout.scalar_row ? 0 : i)));
+        norm::TypeTraits<VType>::Store(output, base + start + i,
+                                       static_cast<norm::AccumulatorType<VType>>(value));
+      }
     }
   }
 }
@@ -123,6 +171,7 @@ SimplifiedLayerNormalizationResult SimplifiedLayerNormalizationKernel::operator(
                                 ": normalized dimensions must be nonempty and rows fit int64_t.");
   }
   const norm::BroadcastIndexer scale_index(x.shape, scale.shape, kName, "scale");
+  const ScaleLayout layout = GetScaleLayout(x, scale, normalized_axis);
   const bool scale_by_inner =
       scale.shape.size() == x.shape.size() - normalized_axis &&
       std::equal(scale.shape.begin(), scale.shape.end(),
@@ -137,7 +186,10 @@ SimplifiedLayerNormalizationResult SimplifiedLayerNormalizationKernel::operator(
         norm::AllocateOutput(static_cast<std::int32_t>(stash_type), stats_shape, 1, rt);
   }
   if (x.data_type == DataType::FLOAT && scale.data_type == DataType::FLOAT && scale_by_inner &&
-      FloatAligned(x) && FloatAligned(scale) && (!output_inv_std_var || stash_type == 1)) {
+      Aligned<DataType::FLOAT>(x) && Aligned<DataType::FLOAT>(scale) && stash_type == 1) {
+    if (rt != nullptr && rt->kernel_usage_enabled()) {
+      rt->RecordKernelUsage("onnx_light_cpu::SimplifiedLayerNormalization/float32/rms");
+    }
     auto *inverse =
         output_inv_std_var ? norm::MutableData<DataType::FLOAT>(result.inv_std_var) : nullptr;
     RmsNormalizationFloat32(x.AsFloat(), scale.AsFloat(),
@@ -147,16 +199,34 @@ SimplifiedLayerNormalizationResult SimplifiedLayerNormalizationKernel::operator(
   }
   norm::DispatchFloatType(x.data_type, [&]<DataType XType>() {
     norm::DispatchFloatType(scale.data_type, [&]<DataType VType>() {
+      if (rt != nullptr && rt->kernel_usage_enabled()) {
+        const char *path = "generic";
+        if (XType == VType && Aligned<XType>(x) && Aligned<VType>(scale) && !layout.scalar_row &&
+            layout.block > 1) {
+          if constexpr (XType == DataType::FLOAT) {
+            if (stash_type == 1) {
+              path = "float32/normalization";
+            }
+          } else if constexpr (XType == DataType::FLOAT16) {
+            if (stash_type == 1) {
+              path = NormalizationFloat16Path();
+            }
+          } else if constexpr (XType == DataType::DOUBLE) {
+            path = NormalizationFloat64Path();
+          }
+        }
+        rt->RecordKernelUsage(std::string(kName) + "/" + path +
+                              (layout.scalar_row       ? "/scalar-scale"
+                               : layout.block == width ? "/row-scale"
+                                                       : "/broadcast-blocks"));
+      }
       auto run = [&](std::int64_t begin, std::int64_t end) {
-        if constexpr (XType == DataType::DOUBLE || VType == DataType::DOUBLE) {
-          NormalizeRows<XType, VType, double>(x, scale, result, scale_index, width, epsilon,
+        if (stash_type == 11) {
+          NormalizeRows<XType, VType, double>(x, scale, result, scale_index, width, epsilon, layout,
                                               scale_by_inner, output_inv_std_var, begin, end);
-        } else if (scale_by_inner) {
-          NormalizeRows<XType, VType, float>(x, scale, result, scale_index, width, epsilon, true,
-                                             output_inv_std_var, begin, end);
         } else {
-          NormalizeRows<XType, VType, double>(x, scale, result, scale_index, width, epsilon, false,
-                                              output_inv_std_var, begin, end);
+          NormalizeRows<XType, VType, float>(x, scale, result, scale_index, width, epsilon, layout,
+                                             scale_by_inner, output_inv_std_var, begin, end);
         }
       };
       ExecuteRanges(static_cast<std::int64_t>(rows), static_cast<double>(width), run);

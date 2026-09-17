@@ -4,6 +4,7 @@
 
 #include "onnx_light_cpu/impl/math/normalization_kernel.h"
 
+#include "onnx_light_cpu/impl/math/half_conversion.h"
 #include "onnx_light_cpu/impl/simd_level.h"
 
 #include <cmath>
@@ -113,6 +114,86 @@ const NormalizationDispatch &GetNormalizationDispatch() {
   return dispatch;
 }
 
+float MeanSquareFloat16Scalar(const std::uint16_t *input, std::size_t count) {
+  float sums[4] = {};
+  for (std::size_t index = 0; index < count; ++index) {
+    const float value = detail::Float16BitsToFloat(input[index]);
+    sums[index & 3] += value * value;
+  }
+  return (sums[0] + sums[1] + sums[2] + sums[3]) / static_cast<float>(count);
+}
+
+void AffineFloat16Scalar(const std::uint16_t *input, const std::uint16_t *scale,
+                         std::uint16_t *output, std::size_t count, float multiplier) {
+  for (std::size_t index = 0; index < count; ++index) {
+    const float value = detail::Float16BitsToFloat(input[index]);
+    const float weight = detail::Float16BitsToFloat(scale[index]);
+    output[index] = detail::FloatToFloat16Bits(value * multiplier * weight);
+  }
+}
+
+template <typename Stash> Stash MeanSquareFloat64Scalar(const double *input, std::size_t count) {
+  Stash sums[4] = {};
+  for (std::size_t index = 0; index < count; ++index) {
+    const Stash value = static_cast<Stash>(input[index]);
+    sums[index & 3] += value * value;
+  }
+  return (sums[0] + sums[1] + sums[2] + sums[3]) / static_cast<Stash>(count);
+}
+
+template <typename Stash>
+void AffineFloat64Scalar(const double *input, const double *scale, double *output,
+                         std::size_t count, Stash multiplier) {
+  for (std::size_t index = 0; index < count; ++index) {
+    const Stash value = static_cast<Stash>(input[index]);
+    const Stash weight = static_cast<Stash>(scale[index]);
+    output[index] = static_cast<double>(value * multiplier * weight);
+  }
+}
+
+struct Float16Dispatch {
+  float (*mean_square)(const std::uint16_t *, std::size_t);
+  void (*affine)(const std::uint16_t *, const std::uint16_t *, std::uint16_t *, std::size_t, float);
+  const char *path;
+};
+
+const Float16Dispatch &GetFloat16Dispatch() {
+  static const Float16Dispatch dispatch = [] {
+#ifdef ONNX_LIGHT_CPU_HAVE_RMS_F16C
+    if (DetectSimdLevel() >= SimdLevel::kAVX && CpuSupportsF16C()) {
+      return Float16Dispatch{&ComputeNormalizationMeanSquareFloat16_F16C,
+                             &ApplyNormalizationAffineFloat16_F16C, "f16c"};
+    }
+#endif
+    return Float16Dispatch{&MeanSquareFloat16Scalar, &AffineFloat16Scalar, "scalar"};
+  }();
+  return dispatch;
+}
+
+struct Float64Dispatch {
+  double (*mean_square)(const double *, std::size_t);
+  float (*mean_square_float)(const double *, std::size_t);
+  void (*affine)(const double *, const double *, double *, std::size_t, double);
+  void (*affine_float)(const double *, const double *, double *, std::size_t, float);
+  const char *path;
+};
+
+const Float64Dispatch &GetFloat64Dispatch() {
+  static const Float64Dispatch dispatch = [] {
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX
+    if (DetectSimdLevel() >= SimdLevel::kAVX) {
+      return Float64Dispatch{&ComputeNormalizationMeanSquareFloat64_AVX,
+                             &ComputeNormalizationMeanSquareFloat64StashFloat32_AVX,
+                             &ApplyNormalizationAffineFloat64_AVX,
+                             &ApplyNormalizationAffineFloat64StashFloat32_AVX, "avx"};
+    }
+#endif
+    return Float64Dispatch{&MeanSquareFloat64Scalar<double>, &MeanSquareFloat64Scalar<float>,
+                           &AffineFloat64Scalar<double>, &AffineFloat64Scalar<float>, "scalar"};
+  }();
+  return dispatch;
+}
+
 } // namespace
 
 float ComputeNormalizationMeanSquareFloat32(const float *input, std::size_t count) {
@@ -145,5 +226,46 @@ void ApplyNormalizationScaleBiasFloat32(const float *input, float *output, std::
                                         float multiplier, float offset) {
   GetNormalizationDispatch().scale_bias(input, output, count, multiplier, offset);
 }
+
+float ComputeNormalizationMeanSquareFloat16(const std::uint16_t *input, std::size_t count) {
+  if (count == 0) {
+    throw std::invalid_argument("normalization reduction size must be positive.");
+  }
+  return GetFloat16Dispatch().mean_square(input, count);
+}
+
+void ApplyNormalizationAffineFloat16(const std::uint16_t *input, const std::uint16_t *scale,
+                                     std::uint16_t *output, std::size_t count, float multiplier) {
+  GetFloat16Dispatch().affine(input, scale, output, count, multiplier);
+}
+
+double ComputeNormalizationMeanSquareFloat64(const double *input, std::size_t count) {
+  if (count == 0) {
+    throw std::invalid_argument("normalization reduction size must be positive.");
+  }
+  return GetFloat64Dispatch().mean_square(input, count);
+}
+
+float ComputeNormalizationMeanSquareFloat64StashFloat32(const double *input, std::size_t count) {
+  if (count == 0) {
+    throw std::invalid_argument("normalization reduction size must be positive.");
+  }
+  return GetFloat64Dispatch().mean_square_float(input, count);
+}
+
+void ApplyNormalizationAffineFloat64(const double *input, const double *scale, double *output,
+                                     std::size_t count, double multiplier) {
+  GetFloat64Dispatch().affine(input, scale, output, count, multiplier);
+}
+
+void ApplyNormalizationAffineFloat64StashFloat32(const double *input, const double *scale,
+                                                 double *output, std::size_t count,
+                                                 float multiplier) {
+  GetFloat64Dispatch().affine_float(input, scale, output, count, multiplier);
+}
+
+const char *NormalizationFloat16Path() { return GetFloat16Dispatch().path; }
+
+const char *NormalizationFloat64Path() { return GetFloat64Dispatch().path; }
 
 } // namespace onnx_light_cpu

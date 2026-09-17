@@ -22,10 +22,10 @@ LightOpSchema MakeSimplifiedLayerNormalizationSchema() {
       "Experimental ai.onnx operator compatibility adapter for ONNX Runtime. Normalizes X by "
       "sqrt(mean(X * X) + epsilon) over the suffix beginning at axis, then multiplies by Scale. "
       "Scale broadcasts right-aligned to the entire shape of X. X and Scale may independently "
-      "use FLOAT, FLOAT16, DOUBLE, or BFLOAT16; Y uses Scale's type. Arithmetic uses double "
-      "when either input is DOUBLE or Scale's shape is not exactly the normalized suffix, and "
-      "float otherwise, without intermediate low-precision rounding before scaling. "
-      "stash_type selects only the optional saved-statistics type. "
+      "use FLOAT, FLOAT16, DOUBLE, or BFLOAT16; Y uses Scale's type. stash_type selects "
+      "arithmetic and optional saved-statistics precision: 1 uses FLOAT and 11 uses DOUBLE, "
+      "independently of input types, scale layout, or whether statistics are requested. "
+      "There is no intermediate low-precision rounding before scaling. "
       "The statistics shape is X[:axis] followed by ones for every normalized dimension, "
       "matching runtime behavior rather than upstream schema inference. This is not a "
       "standardized ONNX operator.",
@@ -42,12 +42,13 @@ LightOpSchema MakeSimplifiedLayerNormalizationSchema() {
         "Independent Scale and Y floating-point type."},
        {"U",
         {TensorType::kFloat, TensorType::kDouble},
-        "Saved-statistics type selected by stash_type."}},
+        "Arithmetic and saved-statistics type selected by stash_type."}},
       {AttributeParam{"axis", "First normalized axis; negative axes count from the end.",
                       AttributeType::INT, false, int64_t{-1}},
        AttributeParam{"epsilon", "Value added to the mean square; IEEE values are permitted.",
                       AttributeType::FLOAT, false, 1.0e-5f},
-       AttributeParam{"stash_type", "Saved-statistics type: 1 (FLOAT) or 11 (DOUBLE).",
+       AttributeParam{"stash_type",
+                      "Arithmetic and saved-statistics type: 1 (FLOAT) or 11 (DOUBLE).",
                       AttributeType::INT, false, int64_t{1}}},
       false, true);
   schema.set_min_output(1);
