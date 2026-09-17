@@ -9,6 +9,7 @@ import re
 import sys
 import tempfile
 from contextlib import redirect_stderr, redirect_stdout
+from importlib import import_module
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -97,9 +98,8 @@ class TestBenchmarkCli(ExtTestCase):
             "Cast.float32_to_float16.f16c",
             "onnx_light_cpu::Abs",
         ]
-        with mock.patch(
-            "onnx_light_cpu.onnx_py._cpuregister.used_kernel_names", return_value=recorded
-        ):
+        binding = import_module("onnx_light_cpu.onnx_py._cpuregister")
+        with mock.patch.object(binding, "used_kernel_names", return_value=recorded):
             self.assertEqual(
                 used_kernel_names(session),
                 ["onnx_light_cpu::Cast", "onnx_light_cpu::Abs"],
