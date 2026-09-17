@@ -233,6 +233,11 @@ def test_cpu_ranges_are_validated():
 
 
 def test_registered_attention_reports_actual_execution_paths():
+    from onnx_light_cpu import has_backend_test_cases
+
+    if not has_backend_test_cases():
+        return
+
     import ml_dtypes
     import numpy as np
     from onnx_light.onnx import TensorProto, helper

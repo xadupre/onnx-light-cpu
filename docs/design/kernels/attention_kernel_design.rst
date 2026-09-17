@@ -149,7 +149,7 @@ The corpus includes aligned q128/kv128 cases, q129/kv257 tile tails, head
 dimensions 63/64/128/256, and short-query streaming cases for FP16 and FP32.
 
 Native half-precision arithmetic
--------------------------------
+--------------------------------
 
 QK products reuse the existing half-storage GEMM dispatch; softmax and value
 accumulation stay in FP32. AVX2/F16C accelerates conversion but does not provide
@@ -159,7 +159,7 @@ FP16 accumulation is not substituted for FP32 accumulation, and probabilities
 are not rounded to BF16 simply to use a native BF16 value product.
 
 AVX2 measurements and remaining gap
-----------------------------------
+-----------------------------------
 
 A controlled 2026-09-17 campaign used an AMD EPYC 7763, GCC 13 Release
 build with an AVX2 ceiling, Python 3.13, onnx-light 0.1.27 and ONNX Runtime
