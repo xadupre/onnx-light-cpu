@@ -170,10 +170,25 @@ std::vector<Tensor> SplitKernel::Compute(const Tensor &data, int64_t axis,
     }
   }
   std::size_t offset = 0;
+  std::vector<void *> output_data;
+  std::vector<std::size_t> output_row_bytes;
+  output_data.reserve(outputs.size());
+  output_row_bytes.reserve(outputs.size());
   for (std::size_t i = 0; i < sizes.size(); ++i) {
     const auto row_bytes = Size(Multiply(sizes[i], inner_bytes));
-    SplitCopy(data.bytes(), outputs[i].mutable_bytes(), rows, input_row_bytes, row_bytes, offset);
+    output_data.push_back(outputs[i].mutable_bytes());
+    output_row_bytes.push_back(row_bytes);
     offset += row_bytes;
+  }
+  if (rows > 1 && outputs.size() > 1 && offset == input_row_bytes) {
+    SplitCopyOutputs(data.bytes(), output_data, rows, input_row_bytes, output_row_bytes);
+  } else {
+    offset = 0;
+    for (std::size_t i = 0; i < sizes.size(); ++i) {
+      SplitCopy(data.bytes(), outputs[i].mutable_bytes(), rows, input_row_bytes,
+                output_row_bytes[i], offset);
+      offset += output_row_bytes[i];
+    }
   }
   return outputs;
 }

@@ -54,6 +54,7 @@ PRIORITY_CASES = (
     GemmCase("matrix_bias_256", 256, 256, 256, bias="matrix"),
     GemmCase("skinny_m", 1, 1024, 1024),
     GemmCase("skinny_n", 1024, 1, 1024),
+    GemmCase("large_k_1024", 32, 32, 1024),
     GemmCase("large_k", 32, 32, 4096),
     GemmCase("split_k", 2, 2, 4096),
     GemmCase("trans_a", 128, 128, 128, trans_a=True),
@@ -78,7 +79,7 @@ MATMUL_PRIORITY_CASES = (
     ),
     GemmCase("vector_matrix", 1, 128, 128, operator="MatMul", vector_a=True),
     GemmCase("matrix_vector", 128, 1, 128, operator="MatMul", vector_b=True),
-    GemmCase("large_k", 32, 32, 4096, operator="MatMul", batch_shape=(2,)),
+    GemmCase("large_k", 32, 32, 8192, operator="MatMul"),
 )
 
 PARITY_DTYPES = ("float32", "float64", "float16")
@@ -267,6 +268,30 @@ def _matmul_operand_shape(
     return batch_shape + matrix_shape
 
 
+def _broadcast_shape(left: tuple[int, ...], right: tuple[int, ...]) -> tuple[int, ...]:
+    result = []
+    for left_dim, right_dim in zip(reversed(left), reversed(right), strict=False):
+        if left_dim != right_dim and left_dim != 1 and right_dim != 1:
+            raise ValueError(f"Incompatible MatMul batch shapes {left!r} and {right!r}.")
+        result.append(max(left_dim, right_dim))
+    longer = left if len(left) > len(right) else right
+    result.extend(reversed(longer[: abs(len(left) - len(right))]))
+    return tuple(reversed(result))
+
+
+def _output_shape(case: GemmCase) -> tuple[int, ...]:
+    if case.operator == "Gemm":
+        return (case.m, case.n)
+    batch_shape = _broadcast_shape(case.batch_shape, case.b_batch_shape)
+    if case.vector_a and case.vector_b:
+        return batch_shape
+    if case.vector_a:
+        return (*batch_shape, case.n)
+    if case.vector_b:
+        return (*batch_shape, case.m)
+    return (*batch_shape, case.m, case.n)
+
+
 def _build_case(case: GemmCase, dtype_name: str, rng: Any) -> tuple[bytes, dict[str, Any]]:
     import numpy as np
     from onnx_light.onnx import TensorProto, checker, helper, numpy_helper
@@ -309,7 +334,7 @@ def _build_case(case: GemmCase, dtype_name: str, rng: Any) -> tuple[bytes, dict[
     if case.operator == "Gemm":
         node_attributes = {"transA": int(case.trans_a), "transB": int(case.trans_b)}
     node = helper.make_node(case.operator, node_inputs, ["Y"], **node_attributes)
-    output_shape = None if case.operator == "MatMul" else (case.m, case.n)
+    output_shape = _output_shape(case)
     graph = helper.make_graph(
         [node],
         f"gemm_parity_{case.name}_{dtype_name}",

@@ -4,6 +4,8 @@
 
 #include "onnx_light_cpu/impl/math/binary/variadic_elementwise_plan.h"
 
+#include "onnx_light_cpu/impl/execution.h"
+
 #include <gtest/gtest.h>
 
 #include <array>
@@ -115,6 +117,48 @@ TEST(VariadicElementwisePlan, MatchesPortableMinMaxNanAndSignedZeroSemantics) {
       Execute<float>(VariadicOperator::kMax, BinaryDataType::FLOAT, shapes, zeros)[0];
   EXPECT_TRUE(std::signbit(minimum));
   EXPECT_TRUE(std::signbit(maximum));
+}
+
+struct InlineExecutor {
+  int64_t dispatches = 0;
+  int64_t blocks = 0;
+
+  static void Run(void *context, int64_t count, void *task_context,
+                  onnx_light_cpu::ExecutionBlockFn task) {
+    auto &self = *static_cast<InlineExecutor *>(context);
+    ++self.dispatches;
+    self.blocks = count;
+    for (int64_t block = 0; block < count; ++block) {
+      task(task_context, block);
+    }
+  }
+};
+
+TEST(VariadicElementwisePlan, ContiguousPathSchedulesOnlyLargeRanges) {
+  InlineExecutor executor;
+  onnx_light_cpu::ExecutionExecutorView view{&executor, 8, &InlineExecutor::Run};
+  onnx_light_cpu::ExecutionExecutorScope scope(&view);
+  for (std::size_t count : {std::size_t{4096}, std::size_t{1048576}}) {
+    const std::vector<std::vector<std::int64_t>> shapes(3, {static_cast<int64_t>(count)});
+    std::vector<std::vector<float>> values(3, std::vector<float>(count));
+    for (std::size_t index = 0; index < count; ++index) {
+      values[0][index] = static_cast<float>(index % 31);
+      values[1][index] = static_cast<float>(index % 17);
+      values[2][index] = static_cast<float>(index % 7);
+    }
+    const int64_t previous_dispatches = executor.dispatches;
+    const auto output =
+        Execute<float>(VariadicOperator::kMean, BinaryDataType::FLOAT, shapes, values);
+    EXPECT_FLOAT_EQ(output.front(), 0.0f);
+    EXPECT_FLOAT_EQ(output.back(), (values[0].back() + values[1].back() + values[2].back()) / 3.0f);
+    if (count == 4096) {
+      EXPECT_EQ(executor.dispatches, previous_dispatches);
+    } else {
+      EXPECT_GT(executor.dispatches, previous_dispatches);
+      EXPECT_GT(executor.blocks, 1);
+      EXPECT_LE(executor.blocks, view.effective_threads);
+    }
+  }
 }
 
 } // namespace

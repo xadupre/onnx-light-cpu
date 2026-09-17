@@ -323,6 +323,7 @@ TEST(ExpLogFloat32, CostModelUsesDispatchCosts) {
   onnx_light_cpu::ExecutionExecutorScope scope(&view);
 
   auto tuning = onnx_light_cpu::kDefaultExpLogExecutionTuning;
+  tuning.parallel_threshold_bytes = 1;
   onnx_light_cpu::ExpFloat32WithTuning(input.data(), output.data(), count, tuning);
   const double exp_cycles = executor.observed_cost.compute_cycles;
   onnx_light_cpu::LogFloat32WithTuning(input.data(), output.data(), count, tuning);

@@ -292,6 +292,12 @@ __m512d LogPd(__m512d x) {
 
 void ExpFloat32_AVX512(const float *input, float *output, std::size_t count) {
   std::size_t i = 0;
+  for (; i + 64 <= count; i += 64) {
+    _mm512_storeu_ps(output + i, ExpPs(_mm512_loadu_ps(input + i)));
+    _mm512_storeu_ps(output + i + 16, ExpPs(_mm512_loadu_ps(input + i + 16)));
+    _mm512_storeu_ps(output + i + 32, ExpPs(_mm512_loadu_ps(input + i + 32)));
+    _mm512_storeu_ps(output + i + 48, ExpPs(_mm512_loadu_ps(input + i + 48)));
+  }
   for (; i + 32 <= count; i += 32) {
     _mm512_storeu_ps(output + i, ExpPs(_mm512_loadu_ps(input + i)));
     _mm512_storeu_ps(output + i + 16, ExpPs(_mm512_loadu_ps(input + i + 16)));

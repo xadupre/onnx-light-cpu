@@ -408,6 +408,12 @@ void ExpFloat32WithTuning(const float *input, float *output, std::size_t count,
     dispatch.function(input + begin, output + begin, static_cast<std::size_t>(end - begin));
   };
   if (tuning.use_cost_model) {
+    if (tuning.parallel_threshold_bytes == 0 ||
+        count < static_cast<std::size_t>(
+                    UnaryBytesToElements(tuning.parallel_threshold_bytes, sizeof(float)))) {
+      execute(0, static_cast<std::int64_t>(count));
+      return;
+    }
     ExecuteCostedUnaryRanges<float>(count, tuning, dispatch.compute_cycles, std::move(execute));
   } else {
     ExecuteUnaryRanges<float>(count, tuning, std::move(execute));
