@@ -41,9 +41,6 @@ def _positive_float(value: str) -> float:
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="onnx-light-cpu")
     subparsers = parser.add_subparsers(dest="command", required=True)
-    default_threads = (
-        len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else os.cpu_count() or 1
-    )
     benchmark = subparsers.add_parser(
         "benchmark", help="benchmark selected onnx-light-cpu backend test cases"
     )
@@ -116,9 +113,12 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     benchmark.add_argument(
         "--threads",
-        type=_positive_int,
-        default=default_threads,
-        help=f"number of onnx-light-cpu worker threads (default: {default_threads})",
+        type=_non_negative_int,
+        default=0,
+        help=(
+            "session thread limit; 0 lets the runtime and each kernel select defaults "
+            "(default: 0)"
+        ),
     )
     benchmark.add_argument(
         "--onnxruntime",

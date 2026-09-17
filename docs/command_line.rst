@@ -53,9 +53,12 @@ workbook:
    case. The default is one second.
 
 ``--threads``
-   Number of onnx-light-cpu worker threads. The default is the number of CPUs
-   available to the process. Workers are unpinned, matching ONNX Runtime when
-   ``intra_op_num_threads`` is set explicitly.
+   Session thread limit. The default, ``0``, lets the runtime derive the
+   available participants from the processor topology. Each kernel then selects
+   how many participants to use from that capacity according to its own work
+   size, thresholds, preferred participant count, and maximum participant count.
+   A positive value imposes an explicit common limit. Workers are unpinned,
+   matching ONNX Runtime, whose ``intra_op_num_threads`` receives the same value.
 
 ``--onnxruntime``
    Also measures ONNX Runtime with the same number of threads and reports its
