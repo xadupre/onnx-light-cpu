@@ -1622,6 +1622,59 @@ TEST(AttentionExecutionInfo, EmptyTensorsNeedNoConversionOrPacking) {
   }
 }
 
+TEST(AttentionExecutionInfo, ReportsLogicalOutputTileForDirectAndBufferedWrites) {
+  for (const auto layout : {AttentionLayout::kRank3, AttentionLayout::kRank4}) {
+    AttentionDescriptor descriptor;
+    descriptor.q_num_heads = 1;
+    descriptor.kv_num_heads = 1;
+    const std::vector<std::int64_t> q_shape = layout == AttentionLayout::kRank3
+                                                  ? std::vector<std::int64_t>{2, 17, 9}
+                                                  : std::vector<std::int64_t>{2, 1, 17, 9};
+    const std::vector<std::int64_t> k_shape = layout == AttentionLayout::kRank3
+                                                  ? std::vector<std::int64_t>{2, 31, 9}
+                                                  : std::vector<std::int64_t>{2, 1, 31, 9};
+    const std::vector<std::int64_t> v_shape = layout == AttentionLayout::kRank3
+                                                  ? std::vector<std::int64_t>{2, 31, 11}
+                                                  : std::vector<std::int64_t>{2, 1, 31, 11};
+    AttentionPlan plan(descriptor, layout, q_shape, k_shape, v_shape, {}, AttentionMaskKind::kNone);
+    const auto q = RandomTensor(2 * 17 * 9, 1931);
+    const auto k = RandomTensor(2 * 31 * 9, 1932);
+    const auto v = RandomTensor(2 * 31 * 11, 1933);
+    std::vector<float> actual(2 * 17 * 11), expected(actual.size());
+    onnx_light_cpu::AttentionExecutionInfo info;
+    for (const std::int64_t first_nonpad : {31, 0, 29}) {
+      const std::int64_t nonpad[] = {first_nonpad, 31};
+      ComputeAttentionFloat32(plan, q.data(), k.data(), v.data(), nullptr, actual.data(), nullptr,
+                              nullptr, nonpad, nullptr, &info);
+      onnx_light_cpu::ComputeAttentionFloat32Materialized(
+          plan, q.data(), k.data(), v.data(), nullptr, expected.data(), nullptr, nullptr, nonpad);
+      ExpectClose(actual, expected);
+      EXPECT_FALSE(info.tile_conversion);
+      EXPECT_FALSE(info.tile_packing);
+      EXPECT_EQ(info.output_tile_elements, 17 * 11);
+    }
+  }
+}
+
+TEST(AttentionExecutionInfo, BFloat16ElementConversionHasNoKvTileBuffer) {
+  const std::int64_t q_shape[] = {1, 1, 8, 9};
+  const std::int64_t k_shape[] = {1, 1, 31, 9};
+  const std::int64_t v_shape[] = {1, 1, 31, 11};
+  AttentionPlan plan({}, AttentionLayout::kRank4, q_shape, k_shape, v_shape, {},
+                     AttentionMaskKind::kNone);
+  const auto q = half_precision::ToBFloat16(RandomTensor(8 * 9, 1941));
+  const auto k = half_precision::ToBFloat16(RandomTensor(31 * 9, 1942));
+  const auto v = half_precision::ToBFloat16(RandomTensor(31 * 11, 1943));
+  std::vector<std::uint16_t> y(8 * 11);
+  onnx_light_cpu::AttentionExecutionInfo info;
+  ComputeAttentionBFloat16Streaming(plan, q.data(), k.data(), v.data(), nullptr, y.data(), nullptr,
+                                    nullptr, nullptr, &info);
+  EXPECT_FALSE(info.tile_conversion);
+  EXPECT_FALSE(info.tile_packing);
+  EXPECT_EQ(info.conversion_kv_tile, 0);
+  EXPECT_EQ(info.output_tile_elements, 11);
+}
+
 TEST(ComputeAttentionFloat16Streaming, MatchesFloat32ReferenceWithinHalfPrecisionTolerance) {
   AttentionDescriptor descriptor;
   descriptor.is_causal = true;

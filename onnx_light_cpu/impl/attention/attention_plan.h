@@ -49,7 +49,7 @@ enum class AttentionExecutionPath { kSingleKey, kTiled, kStreaming, kMaterialize
 /// Conversion/packing describe explicit attention scratch, not internal GEMM panels.
 struct AttentionExecutionInfo {
   AttentionExecutionPath path = AttentionExecutionPath::kMaterialized;
-  /// FP16 block conversion (BF16's scalar element conversion is not included).
+  /// FP16 block conversion; BF16 scalar element conversion is reported separately.
   bool tile_conversion = false;
   /// Strided input/output rows require tile-local contiguous GEMM buffers.
   bool tile_packing = false;
@@ -57,6 +57,7 @@ struct AttentionExecutionInfo {
   std::size_t kv_tile = 0;
   /// KV conversion rows retained for short-query reuse, at most four score blocks.
   std::size_t conversion_kv_tile = 0;
+  /// Logical row/tile-final output size, not evidence of a temporary Y buffer.
   std::size_t output_tile_elements = 0;
 };
 

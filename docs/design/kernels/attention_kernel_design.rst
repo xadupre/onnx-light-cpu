@@ -157,3 +157,91 @@ native FP16 arithmetic. The validation host for this change has no AVX-512
 FP16/BF16 support, so no throughput claim is made for those instructions.
 FP16 accumulation is not substituted for FP32 accumulation, and probabilities
 are not rounded to BF16 simply to use a native BF16 value product.
+
+AVX2 measurements and remaining gap
+----------------------------------
+
+A controlled 2026-09-17 campaign used an AMD EPYC 7763, GCC 13 Release
+build with an AVX2 ceiling, Python 3.13, onnx-light 0.1.27 and ONNX Runtime
+1.30.0. Both runtimes used one thread, affinity CPU 0, and disabled ORT
+worker spinning. Each case used 20 warmups and up to 100 alternating samples
+(0.25 seconds per candidate). Compilation and scanning did not overlap these
+measurements.
+
+An additional A/B/A check isolated the FP16 tiled softmax dispatch: its scores
+already have FP32 storage, but the old codec gate unnecessarily excluded the
+AVX2/FMA softmax. Removing that gate, while retaining the CPU, mask, softcap
+and window restrictions, produced:
+
+.. list-table:: FP16, batch 1, 12 heads, q128/kv128/head dimension 64
+   :header-rows: 1
+   :widths: 30 20 20 15 15
+
+   * - Layout / mask
+     - Before (ms)
+     - After (ms)
+     - Before / after
+     - ORT / after
+   * - Rank 4 / none
+     - 2.523
+     - 1.100
+     - 2.29x
+     - 0.742x
+   * - Rank 4 / causal
+     - 1.828
+     - 1.083
+     - 1.69x
+     - 0.787x
+   * - Rank 3 / none
+     - 2.547
+     - 1.124
+     - 2.27x
+     - 1.303x
+
+These are softmax-dispatch A/B measurements on the bounded-conversion
+implementation, not a claim that conversion removal alone gives those gains.
+Repeating the before candidate reproduced 2.516/1.822/2.544 ms. Short-query
+measurements also caught a regression from converting K/V independently for
+each query; bounded reuse corrected it (q8/kv257/hd128: approximately
+0.639 to 0.514 ms; q8/kv1024/hd64: approximately 1.312 to 1.305 ms).
+
+A separate 28-case original/optimized campaign used the same host, affinity
+and threading policy with 3 warmups, 20 samples and a 0.1-second cap. Its
+median original/optimized latency ratio was 1.31x for FP16 and 0.98x for FP32.
+FP16 rank-four q128/kv128/hd64 improved from 2.471 to 1.059 ms (2.33x);
+the rank-three equivalent improved from 2.508 to 1.122 ms (2.24x).
+Longer A/B/A confirmation runs put the apparent FP32 hd128/256 regressions
+at 0.993x/0.995x, consistent with unchanged performance. Contended samples
+were discarded; no four-thread speedup claim is made here.
+
+The 0.9x parity target is **not met for every comparable case**. In particular,
+rank-four tiled cases and wide-head tails remain below it. The remaining work
+is not a missing registered-kernel dispatch or a full-tensor conversion:
+
+* Streaming still evaluates scores and accumulates values per query row;
+  contexts longer than the bounded reuse window revisit and reconvert K/V.
+* Tiled attention still submits separate QK and value GEMMs for every tile.
+  GEMM panel packing, skinny/tail kernels, online-softmax bookkeeping and
+  exponentials remain, even when explicit attention packing is tile-local.
+* A native ``gprof`` run of the differential tests confirms AVX2/FMA score,
+  value-accumulation and GEMM functions execute. Their sampled costs dominate
+  the remaining explicit conversion helpers. This profile includes oracle
+  computation and test-data generation; its percentages are not end-to-end
+  benchmark phase percentages. Whole-test self-time shares were 37.62% for
+  the materialized oracle, 11.54% for AVX2 value accumulation and 7.74% for
+  AVX2 scores. Inlined work cannot be attributed separately to conversion
+  merely by summing named conversion helpers.
+
+Reproduce the focused registered-kernel campaign with:
+
+.. code-block:: bash
+
+   python tools/benchmark_attention_parity.py --threads 1 --cpus 0 \
+     --case '^test_cpu_attention_opset23_rank[34]_mha_q128_kv128_hd64_(none|causal)_stateless_float16_benchmark$' \
+     --repeat 100 --warmup 20 --max-repeat-time 0.25 \
+     --output /tmp/attention-parity.json
+
+For native attribution, configure the existing ``test_attention_plan`` target
+with ``-DCMAKE_CXX_FLAGS=-pg -DCMAKE_EXE_LINKER_FLAGS=-pg`` and an AVX2 ceiling,
+then profile tiled and streaming test filters separately using ``gprof``.
+Hardware ``perf`` counters were unavailable on this host.
