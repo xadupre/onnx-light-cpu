@@ -11,6 +11,7 @@
 #include <array>
 #include <cfenv>
 #include <cstring>
+#include <limits>
 #include <utility>
 #include <vector>
 
@@ -73,6 +74,42 @@ TEST(CastKernel, FloatRoundingBoundariesAndSpecialValues) {
   }
 }
 
+TEST(CastKernel, Avx2IntegerConversionBoundariesMatchScalar) {
+  const std::array<float, 24> values{
+      0.0f,
+      -0.0f,
+      1.9f,
+      -1.9f,
+      127.0f,
+      128.0f,
+      255.0f,
+      256.0f,
+      -129.0f,
+      2147483520.0f,
+      -0x1p31f,
+      0x1p31f,
+      std::numeric_limits<float>::infinity(),
+      -std::numeric_limits<float>::infinity(),
+      std::numeric_limits<float>::quiet_NaN(),
+      0x1p40f,
+      17.0f,
+      -31.0f,
+      63.0f,
+      -64.0f,
+      1024.0f,
+      -1024.0f,
+      0.5f,
+      -0.5f,
+  };
+  for (DataType to : {DataType::INT8, DataType::UINT8, DataType::INT32, DataType::INT64}) {
+    Compare(values.data(), DataType::FLOAT, to, values.size(), 3, 5);
+  }
+
+  const std::array<std::uint8_t, 17> bool_values{0, 1, 2, 255, 0, 7, 1, 0, 3,
+                                                 0, 1, 9, 0,   1, 0, 4, 1};
+  Compare(bool_values.data(), DataType::BOOL, DataType::FLOAT, bool_values.size(), 1, 3);
+}
+
 TEST(CastKernel, EmptyTailsAndUnalignedBuffers) {
   std::array<std::uint32_t, 65> values{};
   const std::array<std::uint32_t, 9> special{0u,          0x80000000u, 0x7f800000u,
@@ -117,6 +154,16 @@ TEST(CastKernel, ConversionPathAndForcedFallback) {
 #endif
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2
   if (DetectSimdLevel() >= SimdLevel::kAVX2) {
+    EXPECT_STREQ(CastConversionPath(DataType::FLOAT, DataType::INT32, 32),
+                 "Cast.float32_to_int32.avx2");
+    EXPECT_STREQ(CastConversionPath(DataType::FLOAT, DataType::INT64, 32),
+                 "Cast.float32_to_int64.avx2");
+    EXPECT_STREQ(CastConversionPath(DataType::FLOAT, DataType::INT8, 32),
+                 "Cast.float32_to_int8.avx2");
+    EXPECT_STREQ(CastConversionPath(DataType::FLOAT, DataType::UINT8, 32),
+                 "Cast.float32_to_uint8.avx2");
+    EXPECT_STREQ(CastConversionPath(DataType::BOOL, DataType::FLOAT, 32),
+                 "Cast.bool_to_float32.avx2");
     EXPECT_STREQ(CastConversionPath(DataType::FLOAT, DataType::BFLOAT16, 32),
                  "Cast.float32_to_bfloat16.avx2");
     EXPECT_STREQ(CastConversionPath(DataType::BFLOAT16, DataType::FLOAT, 32),

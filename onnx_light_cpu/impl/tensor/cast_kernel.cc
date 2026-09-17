@@ -153,8 +153,33 @@ FastConversion SelectFastConversion(DataType from, DataType to, std::size_t coun
 #endif
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2
   using BFloat = Codec<DataType::BFLOAT16, std::uint16_t>;
+  using Bool = Codec<DataType::BOOL, std::uint8_t>;
+  using Int8 = Codec<DataType::INT8, std::int8_t>;
+  using Uint8 = Codec<DataType::UINT8, std::uint8_t>;
+  using Int32 = Codec<DataType::INT32, std::int32_t>;
+  using Int64 = Codec<DataType::INT64, std::int64_t>;
   static const bool avx2 = DetectSimdLevel() >= SimdLevel::kAVX2;
   if (max_simd >= SimdLevel::kAVX2 && avx2) {
+    if (from == DataType::FLOAT && to == DataType::INT32) {
+      return {&ConvertSimd<Float, Int32, detail::CastFloat32ToInt32_AVX2>,
+              "Cast.float32_to_int32.avx2"};
+    }
+    if (from == DataType::FLOAT && to == DataType::INT64) {
+      return {&ConvertSimd<Float, Int64, detail::CastFloat32ToInt64_AVX2>,
+              "Cast.float32_to_int64.avx2"};
+    }
+    if (from == DataType::FLOAT && to == DataType::INT8) {
+      return {&ConvertSimd<Float, Int8, detail::CastFloat32ToInt8_AVX2>,
+              "Cast.float32_to_int8.avx2"};
+    }
+    if (from == DataType::FLOAT && to == DataType::UINT8) {
+      return {&ConvertSimd<Float, Uint8, detail::CastFloat32ToUint8_AVX2>,
+              "Cast.float32_to_uint8.avx2"};
+    }
+    if (from == DataType::BOOL && to == DataType::FLOAT) {
+      return {&ConvertSimd<Bool, Float, detail::CastBoolToFloat32_AVX2>,
+              "Cast.bool_to_float32.avx2"};
+    }
     if (from == DataType::FLOAT && to == DataType::BFLOAT16) {
       return {&ConvertSimd<Float, BFloat, detail::CastFloat32ToBFloat16_AVX2>,
               "Cast.float32_to_bfloat16.avx2"};
