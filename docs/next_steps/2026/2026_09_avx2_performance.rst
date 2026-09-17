@@ -477,6 +477,15 @@ register interleaving, output-band updates, and memory traffic remain in
 the streaming path. The phase comparison is a diagnostic floor, not a
 precise attribution of that remaining absolute gap.
 
+After background extraction finished, an isolated AUTO build on the same
+host verified ``no-pack-vnni`` and measured the public-compatible case at
+**0.000715 s versus ORT 0.004785 s (6.69x)**. The shifted case measured
+0.000719 s versus 0.004808 s (6.69x), M=2 measured 3.29x, and the tail
+case measured 1.78x. These used the same one-thread, CPU-0,
+31-alternating-sample/five-warmup protocol. All 13 native differential tests
+passed, as did all 13 AVX2 tests under AddressSanitizer/UndefinedBehaviorSanitizer;
+a build without compiled AVX kernels passed its 10 applicable tests.
+
 Reproduce without timing model construction or moving packing outside the
 end-to-end measurement:
 
