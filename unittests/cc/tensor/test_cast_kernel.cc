@@ -10,6 +10,7 @@
 
 #include <array>
 #include <cfenv>
+#include <cmath>
 #include <cstring>
 #include <limits>
 #include <utility>
@@ -129,6 +130,68 @@ TEST(CastKernel, EmptyTailsAndUnalignedBuffers) {
   }
 }
 
+TEST(CastKernel, FloatIntegerAndBoolTailsSpecialValuesAndUnalignedBuffers) {
+  const std::array<float, 41> values{
+      0.0f,
+      -0.0f,
+      1.75f,
+      -1.75f,
+      127.9f,
+      -128.9f,
+      255.9f,
+      -256.9f,
+      0x1p31f,
+      -0x1p31f,
+      std::nextafter(0x1p31f, 0.0f),
+      std::nextafter(-0x1p31f, -std::numeric_limits<float>::infinity()),
+      0x1p63f,
+      -0x1p63f,
+      std::nextafter(0x1p63f, 0.0f),
+      std::nextafter(-0x1p63f, -std::numeric_limits<float>::infinity()),
+      std::numeric_limits<float>::infinity(),
+      -std::numeric_limits<float>::infinity(),
+      std::numeric_limits<float>::quiet_NaN(),
+      std::numeric_limits<float>::denorm_min(),
+      -std::numeric_limits<float>::denorm_min(),
+      3.0f,
+      -3.0f,
+      7.0f,
+      -7.0f,
+      15.0f,
+      -15.0f,
+      31.0f,
+      -31.0f,
+      63.0f,
+      -63.0f,
+      100.0f,
+      -100.0f,
+      1000.0f,
+      -1000.0f,
+      65535.0f,
+      -65535.0f,
+      1.0e10f,
+      -1.0e10f,
+      42.5f,
+      -42.5f,
+  };
+  for (std::size_t count = 0; count <= values.size(); ++count) {
+    for (std::size_t offset = 0; offset < 4; ++offset) {
+      for (auto to :
+           {DataType::INT32, DataType::INT64, DataType::INT8, DataType::UINT8, DataType::BOOL}) {
+        Compare(values.data(), DataType::FLOAT, to, count, offset, 3 - offset);
+      }
+    }
+  }
+  const std::array<std::uint8_t, 25> boolean{
+      0, 1, 2, 127, 255, 0, 1, 0, 255, 3, 0, 4, 1, 0, 7, 8, 0, 1, 2, 0, 5, 0, 1, 255, 0,
+  };
+  for (std::size_t count = 0; count <= boolean.size(); ++count) {
+    for (std::size_t offset = 0; offset < 4; ++offset) {
+      Compare(boolean.data(), DataType::BOOL, DataType::FLOAT, count, offset, 3 - offset);
+    }
+  }
+}
+
 TEST(CastKernel, ConversionPathAndForcedFallback) {
   EXPECT_STREQ(CastConversionPath(DataType::FLOAT, DataType::FLOAT16, 0), "Cast.empty");
   EXPECT_STREQ(CastConversionPath(DataType::FLOAT, DataType::FLOAT, 32), "Cast.copy");
@@ -144,6 +207,13 @@ TEST(CastKernel, ConversionPathAndForcedFallback) {
                "Cast.scalar");
   EXPECT_STREQ(CastConversionPath(DataType::BFLOAT16, DataType::FLOAT, 32, SimdLevel::kAVX),
                "Cast.scalar");
+  for (const auto &[from, to] :
+       {std::pair{DataType::FLOAT, DataType::INT32}, std::pair{DataType::FLOAT, DataType::INT64},
+        std::pair{DataType::FLOAT, DataType::INT8}, std::pair{DataType::FLOAT, DataType::UINT8},
+        std::pair{DataType::FLOAT, DataType::BOOL}, std::pair{DataType::BOOL, DataType::FLOAT}}) {
+    EXPECT_STREQ(CastConversionPath(from, to, 7), "Cast.scalar");
+    EXPECT_STREQ(CastConversionPath(from, to, 32, SimdLevel::kAVX), "Cast.scalar");
+  }
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX_F16C
   if (DetectSimdLevel() >= SimdLevel::kAVX && CpuSupportsF16C()) {
     EXPECT_STREQ(CastConversionPath(DataType::FLOAT, DataType::FLOAT16, 32, SimdLevel::kAVX),
@@ -162,6 +232,8 @@ TEST(CastKernel, ConversionPathAndForcedFallback) {
                  "Cast.float32_to_int8.avx2");
     EXPECT_STREQ(CastConversionPath(DataType::FLOAT, DataType::UINT8, 32),
                  "Cast.float32_to_uint8.avx2");
+    EXPECT_STREQ(CastConversionPath(DataType::FLOAT, DataType::BOOL, 32),
+                 "Cast.float32_to_bool.avx2");
     EXPECT_STREQ(CastConversionPath(DataType::BOOL, DataType::FLOAT, 32),
                  "Cast.bool_to_float32.avx2");
     EXPECT_STREQ(CastConversionPath(DataType::FLOAT, DataType::BFLOAT16, 32),

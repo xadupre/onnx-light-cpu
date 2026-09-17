@@ -4,6 +4,7 @@ from tools.benchmark_gemm_parity import (
     PRIORITY_CASES,
     GemmCase,
     _build_case,
+    _output_shape,
     parse_args,
     render_comparison_table,
     repeat_count,
@@ -85,12 +86,44 @@ def test_float16_is_a_parity_dtype():
 
 
 def test_matmul_corpus_covers_batches_broadcasting_and_vectors():
-    names = {case.name for case in MATMUL_PRIORITY_CASES}
+    cases = {case.name: case for case in MATMUL_PRIORITY_CASES}
+    names = set(cases)
     assert {"batched_direct", "broadcast_b", "vector_matrix", "matrix_vector"} <= names
     assert all(case.operator == "MatMul" for case in MATMUL_PRIORITY_CASES)
     assert any(case.batch_shape for case in MATMUL_PRIORITY_CASES)
     assert any(case.b_batch_shape for case in MATMUL_PRIORITY_CASES)
     assert any(case.vector_a or case.vector_b for case in MATMUL_PRIORITY_CASES)
+    assert (cases["large_k"].m, cases["large_k"].n, cases["large_k"].k) == (32, 32, 8192)
+
+
+def test_matmul_output_shapes_follow_vector_and_batch_broadcast_semantics():
+    assert _output_shape(
+        GemmCase("vector_matrix", 1, 128, 128, operator="MatMul", vector_a=True)
+    ) == (128,)
+    assert _output_shape(
+        GemmCase("matrix_vector", 128, 1, 128, operator="MatMul", vector_b=True)
+    ) == (128,)
+    assert _output_shape(
+        GemmCase(
+            "broadcast",
+            8,
+            16,
+            4,
+            operator="MatMul",
+            batch_shape=(3, 1),
+            b_batch_shape=(2,),
+        )
+    ) == (3, 2, 8, 16)
+
+
+def test_gemm_corpus_covers_large_k_1024_benchmark():
+    cases = {case.name: case for case in PRIORITY_CASES}
+
+    assert (cases["large_k_1024"].m, cases["large_k_1024"].n, cases["large_k_1024"].k) == (
+        32,
+        32,
+        1024,
+    )
 
 
 def test_transformer_projection_covers_dynamic_and_constant_b():

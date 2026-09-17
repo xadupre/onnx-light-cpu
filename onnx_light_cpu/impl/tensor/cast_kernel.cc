@@ -176,6 +176,10 @@ FastConversion SelectFastConversion(DataType from, DataType to, std::size_t coun
       return {&ConvertSimd<Float, Uint8, detail::CastFloat32ToUint8_AVX2>,
               "Cast.float32_to_uint8.avx2"};
     }
+    if (from == DataType::FLOAT && to == DataType::BOOL) {
+      return {&ConvertSimd<Float, Bool, detail::CastFloat32ToBool_AVX2>,
+              "Cast.float32_to_bool.avx2"};
+    }
     if (from == DataType::BOOL && to == DataType::FLOAT) {
       return {&ConvertSimd<Bool, Float, detail::CastBoolToFloat32_AVX2>,
               "Cast.bool_to_float32.avx2"};

@@ -25,6 +25,12 @@ __m128i PackLowBytes(__m256i value) {
   return _mm_packus_epi16(words, _mm_setzero_si128());
 }
 
+__m128i PackBoolBytes(__m256i first, __m256i second) {
+  const __m256i interleaved = _mm256_packs_epi32(first, second);
+  const __m256i ordered = _mm256_permute4x64_epi64(interleaved, _MM_SHUFFLE(3, 1, 2, 0));
+  return _mm_packs_epi16(_mm256_castsi256_si128(ordered), _mm256_extracti128_si256(ordered, 1));
+}
+
 } // namespace
 
 std::size_t CastFloat32ToInt32_AVX2(const std::uint8_t *src, std::uint8_t *dst, std::size_t count) {
@@ -80,6 +86,33 @@ std::size_t CastFloat32ToInt8_AVX2(const std::uint8_t *src, std::uint8_t *dst, s
 
 std::size_t CastFloat32ToUint8_AVX2(const std::uint8_t *src, std::uint8_t *dst, std::size_t count) {
   return CastFloat32ToByte_AVX2<std::uint8_t>(src, dst, count);
+}
+
+std::size_t CastFloat32ToBool_AVX2(const std::uint8_t *src, std::uint8_t *dst, std::size_t count) {
+  std::size_t i = 0;
+  const __m256 zero = _mm256_setzero_ps();
+  const __m256i one = _mm256_set1_epi32(1);
+  for (; count - i >= 16; i += 16) {
+    __m256 first;
+    __m256 second;
+    std::memcpy(&first, src + i * 4, sizeof(first));
+    std::memcpy(&second, src + (i + 8) * 4, sizeof(second));
+    const __m256i first_nonzero =
+        _mm256_and_si256(_mm256_castps_si256(_mm256_cmp_ps(first, zero, _CMP_NEQ_UQ)), one);
+    const __m256i second_nonzero =
+        _mm256_and_si256(_mm256_castps_si256(_mm256_cmp_ps(second, zero, _CMP_NEQ_UQ)), one);
+    const __m128i packed = PackBoolBytes(first_nonzero, second_nonzero);
+    std::memcpy(dst + i, &packed, sizeof(packed));
+  }
+  for (; count - i >= 8; i += 8) {
+    __m256 value;
+    std::memcpy(&value, src + i * 4, sizeof(value));
+    const __m256 nonzero = _mm256_cmp_ps(value, zero, _CMP_NEQ_UQ);
+    const __m256i converted = _mm256_and_si256(_mm256_castps_si256(nonzero), one);
+    const __m128i packed = PackLowBytes(converted);
+    std::memcpy(dst + i, &packed, 8);
+  }
+  return i;
 }
 
 std::size_t CastBoolToFloat32_AVX2(const std::uint8_t *src, std::uint8_t *dst, std::size_t count) {

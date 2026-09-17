@@ -25,6 +25,7 @@ std::size_t CastFloat32ToInt32_AVX2(const std::uint8_t *src, std::uint8_t *dst, 
 std::size_t CastFloat32ToInt64_AVX2(const std::uint8_t *src, std::uint8_t *dst, std::size_t count);
 std::size_t CastFloat32ToInt8_AVX2(const std::uint8_t *src, std::uint8_t *dst, std::size_t count);
 std::size_t CastFloat32ToUint8_AVX2(const std::uint8_t *src, std::uint8_t *dst, std::size_t count);
+std::size_t CastFloat32ToBool_AVX2(const std::uint8_t *src, std::uint8_t *dst, std::size_t count);
 std::size_t CastBoolToFloat32_AVX2(const std::uint8_t *src, std::uint8_t *dst, std::size_t count);
 std::size_t CastFloat32ToBFloat16_AVX2(const std::uint8_t *src, std::uint8_t *dst,
                                        std::size_t count);
