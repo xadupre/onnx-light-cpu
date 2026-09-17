@@ -42,6 +42,103 @@ tests and vector-tail cases, and leave the automatic AVX-512 build unchanged.
 The final corpus target is at least ``1.0x`` ONNX Runtime median performance
 for each priority family, with no priority case below ``0.9x``.
 
+SimplifiedLayerNormalization follow-up
+----------------------------------------
+
+Issue `#724 <https://github.com/xadupre/onnx-light-cpu/issues/724>`_ fixes
+``stash_type`` selection and removes the FP32-only, exact-suffix restriction
+from the common optimized paths. FP16 reuses the F16C RMS reduction and affine
+implementation, but rounds only after scaling. FP64 uses AVX with either FP32
+or FP64 accumulation. Broadcast-contiguous suffixes need one scale index per
+row or block rather than per element. Mixed types, BF16, unaligned buffers,
+and other layouts retain portable fallbacks.
+
+Measurements on 2026-09-17 used an AMD EPYC 9V74 runner (two visible physical
+cores), GCC Release, the AVX2 ceiling, onnx-light 0.1.27, and ONNX Runtime
+1.30.0 CPUExecutionProvider. The existing backend CLI measured all 72 FP16,
+FP32, and FP64 cases (12 shapes, with and without inverse RMS) using
+``stash_type=1``, 100 warm-ups, up to 2,000 repetitions, and a one-second
+limit per phase. Shapes include decode, prefill, narrow/tail rows, suffix
+axes, and outer broadcasting. Every case exceeded ``0.9x``; the minimum
+single-thread speedup was ``1.45x``.
+
+An additional cross-check used the existing
+``tools._avx2_parity_worker.measure_isolated`` API on the medium, prefill4096,
+and outer-broadcast fixtures, with identical serialized inputs and thread
+counts. Runtimes ran in separate subprocesses, exited between phases, and
+alternated first-runtime order by case. Affinity was ``taskset -c 0,2``
+(one hardware thread per physical core). The 18 cases at one and two threads
+all exceeded ``0.9x``; the minimum across these 36 combinations was ``1.32x``.
+Representative isolated **median latencies in seconds**, with Y only:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 29 8 16 16 12 19
+
+   * - X / Scale shape, dtype
+     - Threads
+     - onnx-light-cpu
+     - ONNX Runtime
+     - ORT / CPU
+     - Recorded path
+   * - [64,512] / [512], FP16
+     - 1
+     - 0.000008122
+     - 0.000115275
+     - 14.19x
+     - f16c/row-scale
+   * - [64,512] / [512], FP16
+     - 2
+     - 0.000008102
+     - 0.000062875
+     - 7.76x
+     - f16c/row-scale
+   * - [4,64,128] / [4,1,128], FP32
+     - 1
+     - 0.000009113
+     - 0.000079320
+     - 8.70x
+     - float32/normalization/row-scale
+   * - [4,64,128] / [4,1,128], FP32
+     - 2
+     - 0.000009194
+     - 0.000042494
+     - 4.62x
+     - float32/normalization/row-scale
+   * - [1,128,4096] / [4096], FP64
+     - 1
+     - 0.000193082
+     - 0.000801040
+     - 4.15x
+     - avx/row-scale
+   * - [1,128,4096] / [4096], FP64
+     - 2
+     - 0.000101874
+     - 0.000403906
+     - 3.96x
+     - avx/row-scale
+
+The workbook's ``cpu_kernel_paths`` column records the registered operator
+and its selected implementation, not merely registration eligibility.
+The small cases intentionally stay serial inside the CPU executor even when
+two threads are available. The runner is virtualized; these measurements are
+not universal hardware guarantees. Hardware sampling was unavailable
+(``perf_event_paranoid=4``); no hardware-profile claim is made. No measured
+case remained below the acceptance threshold. Performance parity is not
+claimed for unmeasured mixed-type, BF16, or FP64-stash workloads.
+
+Reproduce the full single-thread corpus from the repository checkout:
+
+.. code-block:: bash
+
+    CMAKE_ARGS="-DCMAKE_BUILD_TYPE=Release -DONNX_LIGHT_CPU_MAX_SIMD_LEVEL=AVX2" \
+      python setup.py build_ext --inplace --onnx-light-source
+    taskset -c 0,2 python -m onnx_light_cpu benchmark \
+      --test '^test_cpu_simplified_layer_normalization_' \
+      --dtype float16 float32 float64 --threads 1 \
+      --repeat 2000 --warmup 100 --max-repeat-time 1 --onnxruntime \
+      --output /tmp/simplified-layer-normalization.xlsx
+
 Reproducible baseline
 ---------------------
 
@@ -402,6 +499,109 @@ These changes establish the AVX2 implementations and benchmark cases, but do
 not constitute a complete AVX2 parity sweep. The explicit SIMD ceiling now
 makes that sweep reproducible and prevents an AVX-512-capable development
 machine from hiding an AVX2 fallback.
+
+Skinny-M MatMulInteger profiling (#725)
+-----------------------------------------
+
+The September 17 checkout already bypassed packing for ``M=1``. Its AVX2
+kernel widened eight B bytes to INT32, then traversed all of K before
+advancing to the next eight columns. Thus the reported M=1 slowdown was
+not caused by a full B pack in this revision: narrow, strided B reads and
+the widening/multiply loop were the target. ``M=2`` still transposed B.
+
+Before changing dispatch, ``integer_gemm_throughput`` measured the production
+B packer, the existing dot kernel on an already packed B, the forced packed
+driver (including allocations/corrections), and public dispatch separately.
+On a Xeon Platinum 8573C, GCC 13.3 Release, CPU affinity 0, one participant,
+AVX2 ceiling, UINT8 x INT8 with scalar zero points 128 and 0:
+
+.. list-table::
+   :header-rows: 1
+
+   * - M / N / K
+     - B packing (s)
+     - Packed dots only (s)
+     - Packed driver (s)
+     - Original dispatch (s)
+   * - 1 / 4096 / 4096
+     - 0.067409
+     - 0.000743
+     - 0.070419
+     - 0.008151
+   * - 2 / 4096 / 4096
+     - 0.067964
+     - 0.001528
+     - 0.068869
+     - 0.068952
+
+These are medians of 31 samples after five warmups. Isolated phase timings
+are not additive (allocation and cache state differ). They nevertheless
+show packing dominating M=2 and confirm that M=1 needs a better streaming
+kernel. Hardware-counter profiling was unavailable on this runner
+(``perf_event_paranoid=4``); these are wall-clock phase profiles, not PMU
+attributions.
+
+The new plan interleaves four K values **in registers**, reuses the exact
+AVX2 split-byte dot arithmetic or AVX-512 VNNI, and sweeps columns within
+bounded K bands. No B panel or retained packed weights are allocated.
+All four signedness combinations and scalar/per-axis zero points are
+supported. AVX2 specializes the normalized A zero points 0 and 128 to avoid
+unnecessary column sums. M=1 retains its streaming selection; M=2 uses it
+for N >= 32 and K >= 4 (the existing packed AVX2 microkernel has MR=2).
+Larger M and unsupported ISAs retain the packed path. Runtime-owned,
+cache-line-aligned column ranges provide parallelism without nesting.
+
+The end-to-end parity tool now prints and saves ``packed``, ``no-pack-avx2``,
+or ``no-pack-vnni`` from the production planner. Its ``skinny_m_4096`` case
+omits both zero points, as does the public backend benchmark; the
+``skinny_m_4096_shifted`` case separately checks A zero point 128.
+With onnx-light 0.1.27 and ONNX Runtime 1.30.0, one thread, affinity 0,
+31 alternating samples and five warmups, the omitted-zero-point AVX2 case
+measured **0.001803 s versus ORT 0.005461 s (3.03x)**. The shifted case was
+0.001928 s versus 0.005775 s (3.00x); M=2 was 1.50x and the
+``2 x 1025`` by ``1025 x 257`` tail case was 1.34x. Results are checked
+for exact equality before timing; ORT worker spinning is disabled.
+
+This clears the selected same-host comparison, **not** the full integer
+parity gate or the issue's published absolute latency. The unchanged
+``direct`` packed case remained below parity. Background extraction work
+on this shared runner affected timings, so dedicated-machine reproduction
+is still needed. The original ORT 0.354 ms number was not reproduced.
+For the omitted-zero-point case, a final isolated profile measured
+0.075958 s packing, 0.000935 s prepacked dots, and 0.001815 s streaming.
+Even prepacked exact AVX2 arithmetic exceeds the published ORT latency;
+register interleaving, output-band updates, and memory traffic remain in
+the streaming path. The phase comparison is a diagnostic floor, not a
+precise attribution of that remaining absolute gap.
+
+After background extraction finished, an isolated AUTO build on the same
+host verified ``no-pack-vnni`` and measured the public-compatible case at
+**0.000715 s versus ORT 0.004785 s (6.69x)**. The shifted case measured
+0.000719 s versus 0.004808 s (6.69x), M=2 measured 3.29x, and the tail
+case measured 1.78x. These used the same one-thread, CPU-0,
+31-alternating-sample/five-warmup protocol. All 13 native differential tests
+passed, as did all 13 AVX2 tests under AddressSanitizer/UndefinedBehaviorSanitizer;
+a build without compiled AVX kernels passed its 10 applicable tests.
+
+Reproduce without timing model construction or moving packing outside the
+end-to-end measurement:
+
+.. code-block:: console
+
+    cmake -S . -B build-integer -DCMAKE_BUILD_TYPE=Release \
+      -DONNX_LIGHT_CPU_BUILD_BENCHMARKS=ON -DONNX_LIGHT_CPU_BUILD_PYTHON=OFF \
+      -DONNX_LIGHT_CPU_WITH_ONNX_LIGHT=OFF -DONNX_LIGHT_CPU_MAX_SIMD_LEVEL=AVX2
+    cmake --build build-integer --target integer_gemm_throughput -j4
+    taskset -c 0 build-integer/integer_gemm_throughput 1 4096 4096 0 0
+    taskset -c 0 build-integer/integer_gemm_throughput 2 4096 4096 128 0
+    python -m tools.benchmark_integer_gemm_parity --threads 1 --cpus 0 \
+      --case skinny_m_4096 --case skinny_m_4096_shifted --case skinny_m_mr \
+      --case skinny_m_tail --repeat 31 --warmup 5 --output /tmp/integer-parity.json
+
+The Python command requires an in-place extension built with the same ISA
+ceiling. Use ``AUTO`` instead of ``AVX2`` for native VNNI measurements.
+The C++ phase benchmark deliberately has no executor and reports one
+participant; use the Python tool's ``--threads`` for runtime parallelism.
 
 Work sequence
 -------------

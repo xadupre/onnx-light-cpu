@@ -576,7 +576,7 @@ TEST(OnnxLightBackendKernels, RmsNormalizationRunsThroughRuntime) {
 TEST(OnnxLightBackendKernels, SimplifiedLayerNormalizationRunsThroughRuntime) {
   EXPECT_EQ(
       CollectCpuCases("SimplifiedLayerNormalization", core::backend_test::TestMode::TEST).size(),
-      832u);
+      1088u);
   CheckTensorRegularCases("SimplifiedLayerNormalization");
 }
 

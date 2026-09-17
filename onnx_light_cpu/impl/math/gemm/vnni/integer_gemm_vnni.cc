@@ -37,6 +37,7 @@
 #include "onnx_light_cpu/impl/math/gemm/arm/gemm_kernel_arm.h"
 #endif
 
+#include <algorithm>
 #include <bit>
 #include <cstddef>
 #include <cstdint>
@@ -136,6 +137,8 @@ void PackU8RowRange(const std::uint8_t *a, bool a_signed, std::int64_t oa, std::
   }
 }
 
+} // namespace
+
 // Packs the disjoint column range ``[begin, end)`` of B into a transposed
 // contiguous panel and accumulates the true per-column sums.
 void PackS8ColRange(const std::uint8_t *b, bool b_signed, std::int64_t ob, std::int64_t depth,
@@ -154,6 +157,8 @@ void PackS8ColRange(const std::uint8_t *b, bool b_signed, std::int64_t ob, std::
     b_col_sum_data[j] = col_sum;
   }
 }
+
+namespace {
 
 // Applies the zero-point correction (and, when ``has_products`` is false,
 // the raw dot product itself) to the disjoint row range ``[row_begin,
@@ -432,24 +437,70 @@ bool IntegerMatMul2DUsesVnni() {
 #endif
 }
 
+IntegerMatMulPlan SelectIntegerMatMulPlan(std::int64_t rows, std::int64_t cols,
+                                          std::int64_t depth) {
+  if (rows < 1 || rows > 2 || cols < 1 || depth < 0 || (rows == 2 && (cols < 32 || depth < 4))) {
+    return IntegerMatMulPlan::kPacked;
+  }
+#if defined(ONNX_LIGHT_CPU_HAVE_AVX512VNNI) && defined(ONNX_LIGHT_CPU_HAVE_AVX512BW)
+  static const bool vnni = CpuSupportsAvx512Vnni() && CpuSupportsAvx512BW();
+  if (vnni) {
+    return IntegerMatMulPlan::kNoPackVnni;
+  }
+#endif
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_INTEGER
+  static const bool avx2 = DetectSimdLevel() >= SimdLevel::kAVX2;
+  if (avx2) {
+    return IntegerMatMulPlan::kNoPackAvx2;
+  }
+#endif
+  return IntegerMatMulPlan::kPacked;
+}
+
+const char *IntegerMatMulPlanName(IntegerMatMulPlan plan) {
+  switch (plan) {
+  case IntegerMatMulPlan::kNoPackAvx2:
+    return "no-pack-avx2";
+  case IntegerMatMulPlan::kNoPackVnni:
+    return "no-pack-vnni";
+  default:
+    return "packed";
+  }
+}
+
 void IntegerMatMul2D(const std::uint8_t *a, bool a_signed, const std::uint8_t *b, bool b_signed,
                      std::int32_t *c, std::int64_t rows, std::int64_t cols, std::int64_t depth,
                      const std::int32_t *a_zero_point, std::int64_t a_zero_point_count,
                      const std::int32_t *b_zero_point, std::int64_t b_zero_point_count) {
-#if defined(ONNX_LIGHT_CPU_HAVE_AVX512VNNI) && defined(ONNX_LIGHT_CPU_HAVE_AVX512BW)
-  if (rows == 1 && CpuSupportsAvx512Vnni() && CpuSupportsAvx512BW()) {
-    detail::IntegerMatMulSkinnyMAvx512(a, a_signed, b, b_signed, c, cols, depth, a_zero_point[0],
-                                       b_zero_point, b_zero_point_count);
+  if (rows <= 0 || cols <= 0) {
     return;
   }
+  if (depth == 0) {
+    for (std::int64_t row = 0; row < rows; ++row) {
+      std::fill_n(c + row * cols, cols, 0);
+    }
+    return;
+  }
+  const IntegerMatMulPlan plan = SelectIntegerMatMulPlan(rows, cols, depth);
+  if (plan != IntegerMatMulPlan::kPacked) {
+    for (std::int64_t row = 0; row < rows; ++row) {
+      const std::int32_t az = a_zero_point[a_zero_point_count == 1 ? 0 : row];
+#if defined(ONNX_LIGHT_CPU_HAVE_AVX512VNNI) && defined(ONNX_LIGHT_CPU_HAVE_AVX512BW)
+      if (plan == IntegerMatMulPlan::kNoPackVnni) {
+        detail::IntegerMatMulSkinnyMAvx512(a + row * depth, a_signed, b, b_signed, c + row * cols,
+                                           cols, depth, az, b_zero_point, b_zero_point_count);
+        continue;
+      }
 #endif
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2_INTEGER
-  if (rows == 1 && DetectSimdLevel() >= SimdLevel::kAVX2) {
-    detail::IntegerMatMulSkinnyMAvx2(a, a_signed, b, b_signed, c, cols, depth, a_zero_point[0],
-                                     b_zero_point, b_zero_point_count);
+      detail::IntegerMatMulSkinnyMAvx2(a + row * depth, a_signed, b, b_signed, c + row * cols, cols,
+                                       depth, az, b_zero_point, b_zero_point_count);
+#else
+      (void)az;
+#endif
+    }
     return;
   }
-#endif
 #ifdef ONNX_LIGHT_CPU_HAVE_AMX_INT8
   if (AmxTileStateAvailable() && CpuSupportsAmxInt8()) {
     GemmMatMulIntegerAmxInt8(a, a_signed, b, b_signed, c, static_cast<std::size_t>(rows),

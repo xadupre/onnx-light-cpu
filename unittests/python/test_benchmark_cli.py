@@ -90,6 +90,7 @@ class TestBenchmarkCli(ExtTestCase):
         recorded = [
             "onnx_light_cpu::Cast",
             "Cast.float32_to_float16.f16c",
+            "onnx_light_cpu::SimplifiedLayerNormalization/avx/row-scale",
             "onnx_light_cpu::Abs",
             "onnx_light_cpu::Attention",
             "Attention.tiled",

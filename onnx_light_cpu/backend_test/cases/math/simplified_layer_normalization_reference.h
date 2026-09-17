@@ -32,14 +32,7 @@ inline ONNX_LIGHT_NAMESPACE::core::runtime::Tensors ReferenceSimplifiedLayerNorm
   if (axis < 0) {
     axis += static_cast<std::int64_t>(x.shape.size());
   }
-  const bool suffix_scale =
-      scale.shape.size() == x.shape.size() - static_cast<std::size_t>(axis) &&
-      std::equal(scale.shape.begin(), scale.shape.end(), x.shape.begin() + axis);
-  const auto work_type =
-      static_cast<std::int32_t>(x.data_type == rt::DataType::DOUBLE ||
-                                        scale.data_type == rt::DataType::DOUBLE || !suffix_scale
-                                    ? rt::DataType::DOUBLE
-                                    : rt::DataType::FLOAT);
+  const auto work_type = static_cast<std::int32_t>(stash_type);
   std::vector<std::int64_t> axes;
   for (std::int64_t i = axis; i < static_cast<std::int64_t>(x.shape.size()); ++i) {
     axes.push_back(i);
