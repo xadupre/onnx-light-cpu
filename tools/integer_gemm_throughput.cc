@@ -32,13 +32,13 @@ template <typename Fn> double MedianSeconds(Fn run) {
 } // namespace
 
 int main(int argc, char **argv) {
-  if (argc != 1 && argc != 4) {
-    std::fprintf(stderr, "Usage: integer_gemm_throughput [M N K]\n");
+  if (argc != 1 && argc != 4 && argc != 6) {
+    std::fprintf(stderr, "Usage: integer_gemm_throughput [M N K [AZ BZ]]\n");
     return 1;
   }
-  const std::int64_t m = argc == 4 ? std::atoll(argv[1]) : 1;
-  const std::int64_t n = argc == 4 ? std::atoll(argv[2]) : 4096;
-  const std::int64_t k = argc == 4 ? std::atoll(argv[3]) : 4096;
+  const std::int64_t m = argc >= 4 ? std::atoll(argv[1]) : 1;
+  const std::int64_t n = argc >= 4 ? std::atoll(argv[2]) : 4096;
+  const std::int64_t k = argc >= 4 ? std::atoll(argv[3]) : 4096;
   if (m < 1 || n < 1 || k < 1 || m > 8192 || n > 8192 || k > 8192) {
     std::fprintf(stderr, "Dimensions must be in [1, 8192].\n");
     return 1;
@@ -65,7 +65,12 @@ int main(int argc, char **argv) {
   std::vector<std::int32_t> c(m * n), expected(m * n);
   std::vector<std::int8_t> packed_b(k * n);
   std::vector<std::int64_t> sums(n);
-  const std::int32_t az = 128, bz = 0;
+  const int az = argc == 6 ? std::atoi(argv[4]) : 128;
+  const int bz = argc == 6 ? std::atoi(argv[5]) : 0;
+  if (az < 0 || az > 255 || bz < -128 || bz > 127) {
+    std::fprintf(stderr, "Zero points must fit UINT8 (A) and INT8 (B).\n");
+    return 1;
+  }
   const auto pack = [&] {
     detail::PackS8ColRange(b.data(), true, 0, k, n, packed_b.data(), sums.data(), 0, n);
   };
@@ -92,8 +97,13 @@ int main(int argc, char **argv) {
   });
   const double packed_seconds = MedianSeconds(packed);
   const double dispatched_seconds = MedianSeconds(dispatched);
-  std::printf("M=%lld N=%lld K=%lld dtype=u8s8 az=128 bz=0 threads=1 dot_isa=%s\n",
-              static_cast<long long>(m), static_cast<long long>(n), static_cast<long long>(k), isa);
+  std::printf("M=%lld N=%lld K=%lld dtype=u8s8 az=%d bz=%d threads=1 dot_isa=%s\n",
+              static_cast<long long>(m), static_cast<long long>(n), static_cast<long long>(k), az,
+              bz, isa);
+  std::printf("plan=%s packed_b_bytes=%lld\n",
+              IntegerMatMulPlanName(SelectIntegerMatMulPlan(m, n, k)),
+              static_cast<long long>(
+                  SelectIntegerMatMulPlan(m, n, k) == IntegerMatMulPlan::kPacked ? n * k : 0));
   std::printf("pack_b_seconds=%.9f dot_seconds=%.9f packed_total_seconds=%.9f "
               "dispatched_seconds=%.9f\n",
               pack_seconds, dot_seconds, packed_seconds, dispatched_seconds);

@@ -25,6 +25,8 @@ class IntegerGemmCase:
     m: int
     n: int
     k: int
+    a_zero_point: int | None = 128
+    b_zero_point: int | None = 0
 
     @property
     def operations(self) -> int:
@@ -37,6 +39,10 @@ PRIORITY_CASES = (
     IntegerGemmCase("square_128", 128, 128, 128),
     IntegerGemmCase("square_512", 512, 512, 512),
     IntegerGemmCase("skinny_m", 1, 1024, 1024),
+    IntegerGemmCase("skinny_m_4096", 1, 4096, 4096, None, None),
+    IntegerGemmCase("skinny_m_4096_shifted", 1, 4096, 4096),
+    IntegerGemmCase("skinny_m_mr", 2, 4096, 4096),
+    IntegerGemmCase("skinny_m_tail", 2, 257, 1025),
     IntegerGemmCase("skinny_n", 1024, 1, 1024),
     IntegerGemmCase("large_k", 32, 32, 4096),
     IntegerGemmCase("transformer", 128, 3072, 768),
@@ -67,15 +73,23 @@ def _build_case(case: IntegerGemmCase, rng: Any) -> tuple[bytes, dict[str, Any]]
 
     a = rng.integers(0, 256, size=(case.m, case.k), dtype=numpy.uint8)
     b = rng.integers(-128, 128, size=(case.k, case.n), dtype=numpy.int8)
-    a_zero_point = numpy.array(128, dtype=numpy.uint8)
-    b_zero_point = numpy.array(0, dtype=numpy.int8)
     inputs = [
         helper.make_tensor_value_info("A", TensorProto.UINT8, a.shape),
         helper.make_tensor_value_info("B", TensorProto.INT8, b.shape),
-        helper.make_tensor_value_info("AZ", TensorProto.UINT8, ()),
-        helper.make_tensor_value_info("BZ", TensorProto.INT8, ()),
     ]
-    node = helper.make_node("MatMulInteger", ["A", "B", "AZ", "BZ"], ["Y"])
+    feeds = {"A": a, "B": b}
+    node_inputs = ["A", "B"]
+    for name, dtype, npdtype, value in (
+        ("AZ", TensorProto.UINT8, numpy.uint8, case.a_zero_point),
+        ("BZ", TensorProto.INT8, numpy.int8, case.b_zero_point),
+    ):
+        node_inputs.append(name if value is not None else "")
+        if value is not None:
+            inputs.append(helper.make_tensor_value_info(name, dtype, ()))
+            feeds[name] = numpy.array(value, dtype=npdtype)
+    while not node_inputs[-1]:
+        node_inputs.pop()
+    node = helper.make_node("MatMulInteger", node_inputs, ["Y"])
     graph = helper.make_graph(
         [node],
         f"integer_gemm_parity_{case.name}",
@@ -84,12 +98,7 @@ def _build_case(case: IntegerGemmCase, rng: Any) -> tuple[bytes, dict[str, Any]]
     )
     model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 18)], ir_version=13)
     checker.check_model(model)
-    return model.SerializeToString(), {
-        "A": a,
-        "B": b,
-        "AZ": a_zero_point,
-        "BZ": b_zero_point,
-    }
+    return model.SerializeToString(), feeds
 
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
@@ -99,6 +108,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             raise RuntimeError("--cpus is only supported on platforms with sched_setaffinity().")
         os.sched_setaffinity(0, _parse_cpu_list(args.cpus))
     from onnx_light_cpu import register_kernels
+    from onnx_light_cpu.onnx_py._cpuregister import integer_matmul_plan
 
     register_kernels()
     import numpy
@@ -109,6 +119,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     session_options.intra_op_num_threads = args.threads
     session_options.inter_op_num_threads = 1
     session_options.execution_mode = onnxruntime.ExecutionMode.ORT_SEQUENTIAL
+    session_options.add_session_config_entry("session.intra_op.allow_spinning", "0")
+    session_options.add_session_config_entry("session.inter_op.allow_spinning", "0")
     selected_cases = (
         PRIORITY_CASES
         if not args.case
@@ -156,6 +168,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         ort_median = statistics.median(ort_samples)
         result = {
             **asdict(case),
+            "plan": integer_matmul_plan(case.m, case.n, case.k),
             "repeat": args.repeat,
             "cpu_samples_seconds": cpu_samples,
             "ort_samples_seconds": ort_samples,
@@ -168,7 +181,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         results.append(result)
         print(
             f"{case.name:<16} cpu={cpu_median * 1e6:10.2f} us "
-            f"ort={ort_median * 1e6:10.2f} us speedup={result['speedup']:.3f}x",
+            f"ort={ort_median * 1e6:10.2f} us speedup={result['speedup']:.3f}x "
+            f"plan={result['plan']}",
             flush=True,
         )
 

@@ -403,6 +403,100 @@ not constitute a complete AVX2 parity sweep. The explicit SIMD ceiling now
 makes that sweep reproducible and prevents an AVX-512-capable development
 machine from hiding an AVX2 fallback.
 
+Skinny-M MatMulInteger profiling (#725)
+--------------------------------------
+
+The September 17 checkout already bypassed packing for ``M=1``. Its AVX2
+kernel widened eight B bytes to INT32, then traversed all of K before
+advancing to the next eight columns. Thus the reported M=1 slowdown was
+not caused by a full B pack in this revision: narrow, strided B reads and
+the widening/multiply loop were the target. ``M=2`` still transposed B.
+
+Before changing dispatch, ``integer_gemm_throughput`` measured the production
+B packer, the existing dot kernel on an already packed B, the forced packed
+driver (including allocations/corrections), and public dispatch separately.
+On a Xeon Platinum 8573C, GCC 13.3 Release, CPU affinity 0, one participant,
+AVX2 ceiling, UINT8 x INT8 with scalar zero points 128 and 0:
+
+.. list-table::
+   :header-rows: 1
+
+   * - M / N / K
+     - B packing (s)
+     - Packed dots only (s)
+     - Packed driver (s)
+     - Original dispatch (s)
+   * - 1 / 4096 / 4096
+     - 0.067409
+     - 0.000743
+     - 0.070419
+     - 0.008151
+   * - 2 / 4096 / 4096
+     - 0.067964
+     - 0.001528
+     - 0.068869
+     - 0.068952
+
+These are medians of 31 samples after five warmups. Isolated phase timings
+are not additive (allocation and cache state differ). They nevertheless
+show packing dominating M=2 and confirm that M=1 needs a better streaming
+kernel. Hardware-counter profiling was unavailable on this runner
+(``perf_event_paranoid=4``); these are wall-clock phase profiles, not PMU
+attributions.
+
+The new plan interleaves four K values **in registers**, reuses the exact
+AVX2 split-byte dot arithmetic or AVX-512 VNNI, and sweeps columns within
+bounded K bands. No B panel or retained packed weights are allocated.
+All four signedness combinations and scalar/per-axis zero points are
+supported. AVX2 specializes the normalized A zero points 0 and 128 to avoid
+unnecessary column sums. M=1 retains its streaming selection; M=2 uses it
+for N >= 32 and K >= 4 (the existing packed AVX2 microkernel has MR=2).
+Larger M and unsupported ISAs retain the packed path. Runtime-owned,
+cache-line-aligned column ranges provide parallelism without nesting.
+
+The end-to-end parity tool now prints and saves ``packed``, ``no-pack-avx2``,
+or ``no-pack-vnni`` from the production planner. Its ``skinny_m_4096`` case
+omits both zero points, as does the public backend benchmark; the
+``skinny_m_4096_shifted`` case separately checks A zero point 128.
+With onnx-light 0.1.27 and ONNX Runtime 1.30.0, one thread, affinity 0,
+31 alternating samples and five warmups, the omitted-zero-point AVX2 case
+measured **0.001803 s versus ORT 0.005461 s (3.03x)**. The shifted case was
+0.001928 s versus 0.005775 s (3.00x); M=2 was 1.50x and the
+``2 x 1025`` by ``1025 x 257`` tail case was 1.34x. Results are checked
+for exact equality before timing; ORT worker spinning is disabled.
+
+This clears the selected same-host comparison, **not** the full integer
+parity gate or the issue's published absolute latency. The unchanged
+``direct`` packed case remained below parity. Background extraction work
+on this shared runner affected timings, so dedicated-machine reproduction
+is still needed. The original ORT 0.354 ms number was not reproduced.
+For the omitted-zero-point case, a final isolated profile measured
+0.075958 s packing, 0.000935 s prepacked dots, and 0.001815 s streaming.
+Even prepacked exact AVX2 arithmetic exceeds the published ORT latency;
+register interleaving, output-band updates, and memory traffic remain in
+the streaming path. The phase comparison is a diagnostic floor, not a
+precise attribution of that remaining absolute gap.
+
+Reproduce without timing model construction or moving packing outside the
+end-to-end measurement:
+
+.. code-block:: console
+
+    cmake -S . -B build-integer -DCMAKE_BUILD_TYPE=Release \
+      -DONNX_LIGHT_CPU_BUILD_BENCHMARKS=ON -DONNX_LIGHT_CPU_BUILD_PYTHON=OFF \
+      -DONNX_LIGHT_CPU_WITH_ONNX_LIGHT=OFF -DONNX_LIGHT_CPU_MAX_SIMD_LEVEL=AVX2
+    cmake --build build-integer --target integer_gemm_throughput -j4
+    taskset -c 0 build-integer/integer_gemm_throughput 1 4096 4096 0 0
+    taskset -c 0 build-integer/integer_gemm_throughput 2 4096 4096 128 0
+    python -m tools.benchmark_integer_gemm_parity --threads 1 --cpus 0 \
+      --case skinny_m_4096 --case skinny_m_4096_shifted --case skinny_m_mr \
+      --case skinny_m_tail --repeat 31 --warmup 5 --output /tmp/integer-parity.json
+
+The Python command requires an in-place extension built with the same ISA
+ceiling. Use ``AUTO`` instead of ``AVX2`` for native VNNI measurements.
+The C++ phase benchmark deliberately has no executor and reports one
+participant; use the Python tool's ``--threads`` for runtime parallelism.
+
 Work sequence
 -------------
 
