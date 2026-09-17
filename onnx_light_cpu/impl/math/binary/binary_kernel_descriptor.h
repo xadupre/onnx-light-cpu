@@ -51,6 +51,13 @@ public:
     BulkContiguousFn bulk_contiguous = nullptr;
     BulkLeftScalarFn bulk_left_scalar = nullptr;
     BulkRightScalarFn bulk_right_scalar = nullptr;
+    enum class BulkImplementation : std::uint8_t {
+      kGeneric,
+      kIntegerPow,
+      kIntegerDivMod,
+      kCompare64,
+    };
+    BulkImplementation bulk_implementation = BulkImplementation::kGeneric;
     // Zero leaves the caller's general binary scheduling policy unchanged.
     std::size_t preferred_bulk_parallel_threshold_bytes = 0;
     std::size_t preferred_target_block_bytes = 0;

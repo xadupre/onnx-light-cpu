@@ -17,6 +17,31 @@
 
 namespace {
 
+template <typename T>
+void CheckRepeatedSquareDispatch(bool (*square)(const T *, T *, std::size_t), T limit) {
+  for (std::size_t count : {0, 1, 7, 8, 9, 31, 32, 33}) {
+    std::vector<T> input(count, limit), output(count);
+    for (int repetition = 0; repetition < 3; ++repetition) {
+      EXPECT_TRUE(square(input.data(), output.data(), count));
+      for (T value : output) {
+        EXPECT_EQ(value, limit * limit);
+      }
+    }
+    if (count != 0) {
+      input.back() = limit + 1;
+      EXPECT_FALSE(square(input.data(), output.data(), count));
+      input.back() = -limit;
+      EXPECT_TRUE(square(input.data(), input.data(), count));
+      EXPECT_EQ(input.back(), limit * limit);
+    }
+  }
+}
+
+TEST(BinaryArithmeticKernel, RepeatedCheckedSquareDispatch) {
+  CheckRepeatedSquareDispatch(onnx_light_cpu::BinarySquareInt32, std::int32_t{46340});
+  CheckRepeatedSquareDispatch(onnx_light_cpu::BinarySquareInt64, std::int64_t{3037000499});
+}
+
 // Binary PR02 -- exercises every FP32/FP64 Add/Sub/Mul/Div SIMD dispatch
 // entry point (contiguous and both scalar-broadcast directions) against a
 // portable scalar reference computed independently in the test itself.

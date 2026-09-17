@@ -88,6 +88,7 @@ _AGGREGATED_COLUMNS = (
     "speedup",
 )
 _PR_COLUMNS = ("speedup", "test_name")
+_PR_COMMENT_MAX_LENGTH = 65000
 
 
 def normalize_dtypes(values: Sequence[str]) -> tuple[str, ...]:
@@ -530,11 +531,32 @@ def _pr_benchmark_markdown(
             ),
         )
     ]
-    return (
-        '<div style="max-height: 500px; overflow-x: auto; overflow-y: auto;">\n\n'
-        + _benchmark_markdown(pr_rows, _PR_COLUMNS)
-        + "\n</div>\n"
-    )
+
+    def render(rows: Sequence[dict[str, Any]], truncated: bool = False) -> str:
+        report = (
+            '<div style="max-height: 500px; overflow-x: auto; overflow-y: auto;">\n\n'
+            + _benchmark_markdown(rows, _PR_COLUMNS)
+            + "\n</div>\n"
+        )
+        if truncated:
+            report += (
+                f"\n_Report truncated to the {len(rows)} slowest of {len(pr_rows)} rows. "
+                "Download the workflow benchmark artifact for the complete results._\n"
+            )
+        return report
+
+    report = render(pr_rows)
+    if len(report) <= _PR_COMMENT_MAX_LENGTH:
+        return report
+
+    low, high = 0, len(pr_rows)
+    while low < high:
+        middle = (low + high + 1) // 2
+        if len(render(pr_rows[:middle], truncated=True)) <= _PR_COMMENT_MAX_LENGTH:
+            low = middle
+        else:
+            high = middle - 1
+    return render(pr_rows[:low], truncated=True)
 
 
 def write_pr_benchmark_markdown(

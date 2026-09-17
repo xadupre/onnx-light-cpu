@@ -431,7 +431,15 @@ void RegisterCpuBinaryCases(std::vector<TestCase> &registry, const std::string &
       if (signature.left == CpuDataType::STRING) {
         continue;
       }
-      RegisterBenchmarksForSignature(registry, entry, signature);
+      auto benchmark_entry = entry;
+      if (entry.op == BinaryOperator::kMod && signature.left != CpuDataType::FLOAT &&
+          signature.left != CpuDataType::DOUBLE && signature.left != CpuDataType::FLOAT16 &&
+          signature.left != CpuDataType::BFLOAT16) {
+        // Integer semantics are unchanged in Mod-28; keep ORT parity fixtures
+        // on the released schema. Correctness fixtures still use the latest.
+        benchmark_entry.since_version = 13;
+      }
+      RegisterBenchmarksForSignature(registry, benchmark_entry, signature);
       if (entry.op == BinaryOperator::kMul && signature.left == CpuDataType::FLOAT16 &&
           signature.right == CpuDataType::FLOAT16 && signature.output == CpuDataType::FLOAT16) {
         for (std::int64_t sequence_length :

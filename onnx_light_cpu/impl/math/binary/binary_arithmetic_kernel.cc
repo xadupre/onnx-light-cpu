@@ -524,7 +524,8 @@ bool BinarySquare_Scalar(const T *input, T *output, std::size_t count) {
 
 bool BinarySquareInt32(const std::int32_t *input, std::int32_t *output, std::size_t count) {
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512
-  if (DetectSimdLevel() >= SimdLevel::kAVX512) {
+  static const bool use_avx512 = DetectSimdLevel() >= SimdLevel::kAVX512;
+  if (use_avx512) {
     return BinarySquareInt32_AVX512(input, output, count);
   }
 #endif
@@ -533,7 +534,8 @@ bool BinarySquareInt32(const std::int32_t *input, std::int32_t *output, std::siz
 
 bool BinarySquareInt64(const std::int64_t *input, std::int64_t *output, std::size_t count) {
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512
-  if (DetectSimdLevel() >= SimdLevel::kAVX512) {
+  static const bool use_avx512 = DetectSimdLevel() >= SimdLevel::kAVX512;
+  if (use_avx512) {
     return BinarySquareInt64_AVX512(input, output, count);
   }
 #endif
