@@ -43,14 +43,26 @@ shape is ``X[:axis] + [1] * (rank(X) - axis)`` after normalizing negative
 inference which only replaces the axis dimension. ``X`` must have positive
 rank and a nonempty normalized suffix; empty outer rows are supported.
 
-``stash_type`` does not select arithmetic precision. Work uses FP64 if either
-``X`` or ``Scale`` is ``DOUBLE``, or if the shape of ``Scale`` is not exactly
-the normalized suffix ``X.shape[axis:]``; otherwise it uses FP32. There is no intermediate
-low-precision rounding before multiplication by ``Scale``. The FP32 suffix
-path reuses the optimized RMS mean-square and affine engine, saving optional
-statistics without repeating the reduction. CPU scratch memory is zero,
-excluding inputs and outputs. This is inference compatibility support: no
-gradient rules or fusion patterns are registered for this operator.
+``stash_type`` selects arithmetic precision as well as the statistics type:
+``1`` uses FP32 and ``11`` uses FP64, independently of input types, broadcasting,
+and whether statistics are requested. Inputs and scale are converted to this
+precision for the reduction, normalization, and scaling; the result is then
+converted to the type of ``Scale``. In particular, FP64 inputs with the default
+FP32 stash can overflow when converted or squared. There is no intermediate
+low-precision rounding before multiplication by ``Scale``.
+
+The FP32 suffix path reuses the optimized RMS mean-square and affine engine.
+FP16 with FP32 stash uses shared F16C primitives with a single final rounding;
+FP64 uses AVX primitives for either stash type. Contiguous scale suffixes use
+one broadcast index per row or block, including outer-broadcast scales.
+Unsupported SIMD/type/alignment combinations retain portable fallbacks.
+Optional statistics are saved without repeating the reduction. Benchmark
+``cpu_kernel_paths`` diagnostics distinguish the RMS, FP16/F16C, FP64/AVX,
+scalar, and generic paths, together with their scale layout.
+
+CPU tensor scratch memory is zero, excluding inputs and outputs (broadcast
+metadata is proportional to rank). This is inference compatibility support:
+no gradient rules or fusion patterns are registered for this operator.
 
 Microsoft SkipSimplifiedLayerNormalization
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

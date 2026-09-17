@@ -42,6 +42,103 @@ tests and vector-tail cases, and leave the automatic AVX-512 build unchanged.
 The final corpus target is at least ``1.0x`` ONNX Runtime median performance
 for each priority family, with no priority case below ``0.9x``.
 
+SimplifiedLayerNormalization follow-up
+----------------------------------------
+
+Issue `#724 <https://github.com/xadupre/onnx-light-cpu/issues/724>`_ fixes
+``stash_type`` selection and removes the FP32-only, exact-suffix restriction
+from the common optimized paths. FP16 reuses the F16C RMS reduction and affine
+implementation, but rounds only after scaling. FP64 uses AVX with either FP32
+or FP64 accumulation. Broadcast-contiguous suffixes need one scale index per
+row or block rather than per element. Mixed types, BF16, unaligned buffers,
+and other layouts retain portable fallbacks.
+
+Measurements on 2026-09-17 used an AMD EPYC 9V74 runner (two visible physical
+cores), GCC Release, the AVX2 ceiling, onnx-light 0.1.27, and ONNX Runtime
+1.30.0 CPUExecutionProvider. The existing backend CLI measured all 72 FP16,
+FP32, and FP64 cases (12 shapes, with and without inverse RMS) using
+``stash_type=1``, 100 warm-ups, up to 2,000 repetitions, and a one-second
+limit per phase. Shapes include decode, prefill, narrow/tail rows, suffix
+axes, and outer broadcasting. Every case exceeded ``0.9x``; the minimum
+single-thread speedup was ``1.45x``.
+
+An additional cross-check used the existing
+``tools._avx2_parity_worker.measure_isolated`` API on the medium, prefill4096,
+and outer-broadcast fixtures, with identical serialized inputs and thread
+counts. Runtimes ran in separate subprocesses, exited between phases, and
+alternated first-runtime order by case. Affinity was ``taskset -c 0,2``
+(one hardware thread per physical core). The 18 cases at one and two threads
+all exceeded ``0.9x``; the minimum across these 36 combinations was ``1.32x``.
+Representative isolated **median latencies in seconds**, with Y only:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 29 8 16 16 12 19
+
+   * - X / Scale shape, dtype
+     - Threads
+     - onnx-light-cpu
+     - ONNX Runtime
+     - ORT / CPU
+     - Recorded path
+   * - [64,512] / [512], FP16
+     - 1
+     - 0.000008122
+     - 0.000115275
+     - 14.19x
+     - f16c/row-scale
+   * - [64,512] / [512], FP16
+     - 2
+     - 0.000008102
+     - 0.000062875
+     - 7.76x
+     - f16c/row-scale
+   * - [4,64,128] / [4,1,128], FP32
+     - 1
+     - 0.000009113
+     - 0.000079320
+     - 8.70x
+     - float32/normalization/row-scale
+   * - [4,64,128] / [4,1,128], FP32
+     - 2
+     - 0.000009194
+     - 0.000042494
+     - 4.62x
+     - float32/normalization/row-scale
+   * - [1,128,4096] / [4096], FP64
+     - 1
+     - 0.000193082
+     - 0.000801040
+     - 4.15x
+     - avx/row-scale
+   * - [1,128,4096] / [4096], FP64
+     - 2
+     - 0.000101874
+     - 0.000403906
+     - 3.96x
+     - avx/row-scale
+
+The workbook's ``cpu_kernel_paths`` column records the registered operator
+and its selected implementation, not merely registration eligibility.
+The small cases intentionally stay serial inside the CPU executor even when
+two threads are available. The runner is virtualized; these measurements are
+not universal hardware guarantees. Hardware sampling was unavailable
+(``perf_event_paranoid=4``); no hardware-profile claim is made. No measured
+case remained below the acceptance threshold. Performance parity is not
+claimed for unmeasured mixed-type, BF16, or FP64-stash workloads.
+
+Reproduce the full single-thread corpus from the repository checkout:
+
+.. code-block:: bash
+
+    CMAKE_ARGS="-DCMAKE_BUILD_TYPE=Release -DONNX_LIGHT_CPU_MAX_SIMD_LEVEL=AVX2" \
+      python setup.py build_ext --inplace --onnx-light-source
+    taskset -c 0,2 python -m onnx_light_cpu benchmark \
+      --test '^test_cpu_simplified_layer_normalization_' \
+      --dtype float16 float32 float64 --threads 1 \
+      --repeat 2000 --warmup 100 --max-repeat-time 1 --onnxruntime \
+      --output /tmp/simplified-layer-normalization.xlsx
+
 Reproducible baseline
 ---------------------
 

@@ -117,6 +117,10 @@ void RegisterCpuSimplifiedLayerNormalizationCases(std::vector<TestCase> &registr
            CaseShape{"suffix_axis1", {2, 3, 4}, {3, 4}, 1},
            CaseShape{"inner_broadcast", {2, 3, 4}, {4}, -2},
            CaseShape{"outer_broadcast", {2, 3, 4}, {2, 1, 4}, 1},
+           CaseShape{"outer_broadcast_tail", {2, 3, 17}, {2, 1, 17}, -1},
+           CaseShape{"inner_broadcast_tail", {2, 3, 17}, {17}, 1},
+           CaseShape{"row_scalar", {2, 3, 17}, {2, 3, 1}, -1},
+           CaseShape{"strided_scale", {2, 3, 17}, {3, 1}, 1},
            CaseShape{"scalar_scale", {2, 3, 4}, {}, -1},
            CaseShape{"empty_outer", {0, 4}, {4}, -1},
        }) {
