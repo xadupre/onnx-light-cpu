@@ -163,6 +163,7 @@ the default ONNX domain (the empty string is equivalent); ``ai.onnx.ml`` and
    "RegisterTreeEnsembleKernel", "ai.onnx.ml", "TreeEnsemble"
    "RegisterVariadicElementwiseKernels", "ai.onnx", "Sum, Mean, Min, Max"
    "RegisterMicrosoftKernels", "com.microsoft", "BiasGelu, CDist, GroupQueryAttention, LinearAttention, SkipSimplifiedLayerNormalization"
+   "RegisterMatMulNBitsKernel", "com.microsoft", "MatMulNBits"
 
 The table describes shipped registrations, not all operators supported by
 onnx-light, nor a guarantee of every type, opset, or shape for a listed operator.

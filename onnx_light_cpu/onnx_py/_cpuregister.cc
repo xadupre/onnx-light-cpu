@@ -167,7 +167,8 @@ NB_MODULE(_cpuregister, m) {
 
   m.def("microsoft_op_schemas", &onnx_light_cpu::GetMicrosoftOpSchemasWithHistory,
         nb::arg("op_type") = std::string(), nb::arg("init_doc") = true,
-        "Returns the LightOpSchema history provided for com.microsoft operators.");
+        "Returns the LightOpSchema history provided for com.microsoft operators, including the "
+        "restricted FLOAT/UINT8 MatMulNBits compatibility subset.");
 
   m.def("experimental_op_schemas", &onnx_light_cpu::GetExperimentalOpSchemasWithHistory,
         nb::arg("op_type") = std::string(), nb::arg("init_doc") = true,
@@ -184,8 +185,8 @@ NB_MODULE(_cpuregister, m) {
 
   m.def("register_custom_gradients", &onnx_light_cpu::RegisterCustomOperatorGradients,
         nb::arg("registry"),
-        "Adds the com.microsoft BiasGelu, CDist, and GroupQueryAttention backward rules to a "
-        "GradRegistry.");
+        "Adds the com.microsoft BiasGelu, CDist, GroupQueryAttention, and restricted MatMulNBits "
+        "backward rules to a GradRegistry.");
 
   m.def(
       "registered_kernel_names", []() { return onnx_light_cpu::RegisteredKernelNames(); },

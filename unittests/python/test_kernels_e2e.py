@@ -613,7 +613,7 @@ class TestBackendCases(ExtTestCase):
     def test_registered_kernels_are_immutable_and_complete(self):
         records = registered_kernels()
         assert records, "expected at least one registered kernel record"
-        versioned_binary_ops = {
+        version_bounded_ops = {
             "Add",
             "And",
             "BitShift",
@@ -627,6 +627,7 @@ class TestBackendCases(ExtTestCase):
             "Less",
             "LessOrEqual",
             "Mod",
+            "MatMulNBits",
             "Mul",
             "Or",
             "PRelu",
@@ -666,6 +667,7 @@ class TestBackendCases(ExtTestCase):
                     "Less",
                     "LessOrEqual",
                     "Max",
+                    "MatMulNBits",
                     "Mean",
                     "Min",
                     "Mod",
@@ -704,7 +706,7 @@ class TestBackendCases(ExtTestCase):
             else:
                 assert record.since_version is None
             if record.until_version is not None:
-                assert record.op_type in versioned_binary_ops
+                assert record.op_type in version_bounded_ops
                 assert isinstance(record.until_version, int)
                 assert record.until_version >= record.since_version
 

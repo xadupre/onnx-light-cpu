@@ -185,6 +185,43 @@ LightOpSchema MakeLinearAttentionSchema() {
   return schema;
 }
 
+LightOpSchema MakeMatMulNBitsSchema() {
+  return LightOpSchema(
+      "MatMulNBits", kMicrosoftDomain, 1,
+      "Restricted compatibility subset of ONNX Runtime MatMulNBits. The CPU implementation "
+      "accepts FLOAT activations, scales, optional bias, and output; UINT8 packed weights; "
+      "bits=4, block_size=32, weight_prepacked=0, and accuracy_level 0 or 4. zero_points and "
+      "g_idx retain their upstream input slots but must not be supplied. Packed B has shape "
+      "(N, ceil(K / 32), 16), scales has shape (N, ceil(K / 32)) or its flattened equivalent, "
+      "and bias has shape (N).",
+      {{"A", "FLOAT input tensor of rank at least one whose last dimension is K.", "T1"},
+       {"B", "UINT8 packed weights with shape (N, ceil(K / 32), 16).", "T2"},
+       {"scales", "FLOAT block scales with shape (N, ceil(K / 32)) or (N * ceil(K / 32)).", "T1"},
+       {"zero_points", "Unsupported optional upstream zero-point slot; must be omitted.", "T3"},
+       {"g_idx", "Unsupported deprecated upstream group-index slot; must be omitted.", "T4"},
+       {"bias", "Optional FLOAT bias with shape (N).", "T1"}},
+      {{"Y", "FLOAT output with A's leading dimensions and final dimension N.", "T1"}},
+      {{"T1", {TensorType::kFloat}, "Constrain A, scales, bias, and Y to FLOAT tensors."},
+       {"T2", {TensorType::kUint8}, "Constrain packed B to UINT8."},
+       {"T3",
+        {TensorType::kUint8},
+        "Retain the upstream zero_points type slot; this subset rejects a supplied value."},
+       {"T4",
+        {TensorType::kInt32},
+        "Retain the upstream g_idx type slot; this subset rejects a supplied value."}},
+      {AttributeParam{"K", "Positive input feature count.", AttributeType::INT, true},
+       AttributeParam{"N", "Positive output feature count.", AttributeType::INT, true},
+       AttributeParam{"bits", "Quantized weight bit width; only 4 is supported.",
+                      AttributeType::INT, false, int64_t{4}},
+       AttributeParam{"block_size", "Quantization block size; only 32 is supported.",
+                      AttributeType::INT, true},
+       AttributeParam{"accuracy_level", "Accuracy level; 0 and 4 are supported.",
+                      AttributeType::INT, false, int64_t{0}},
+       AttributeParam{"weight_prepacked", "Prepacked-weight flag; only 0 is supported.",
+                      AttributeType::INT, false, int64_t{0}}},
+      false, true);
+}
+
 } // namespace
 
 std::vector<LightOpSchema> GetMicrosoftOpSchemasWithHistory(const std::string &op_type,
@@ -195,6 +232,7 @@ std::vector<LightOpSchema> GetMicrosoftOpSchemasWithHistory(const std::string &o
       {"GroupQueryAttention",
        [] { return std::vector<LightOpSchema>{MakeGroupQueryAttentionSchema()}; }},
       {"LinearAttention", [] { return std::vector<LightOpSchema>{MakeLinearAttentionSchema()}; }},
+      {"MatMulNBits", [] { return std::vector<LightOpSchema>{MakeMatMulNBitsSchema()}; }},
       {"SkipSimplifiedLayerNormalization",
        [] { return std::vector<LightOpSchema>{MakeSkipSimplifiedLayerNormalizationSchema()}; }},
   };

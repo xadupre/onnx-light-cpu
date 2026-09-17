@@ -411,6 +411,12 @@ TEST(OnnxLightBackendKernels, CDistRunsThroughRuntime) {
   EXPECT_TRUE(failures.empty()) << Describe(failures);
 }
 
+TEST(OnnxLightBackendKernels, MatMulNBitsRunsThroughRuntime) {
+  const std::vector<std::string> failures =
+      RunCpuBackendCases("MatMulNBits", core::backend_test::TestMode::TEST);
+  EXPECT_TRUE(failures.empty()) << Describe(failures);
+}
+
 TEST(OnnxLightBackendKernels, GroupQueryAttentionRunsThroughRuntime) {
   const std::vector<std::string> failures =
       RunCpuBackendCases("GroupQueryAttention", core::backend_test::TestMode::TEST);
@@ -968,6 +974,27 @@ TEST(OnnxLightBackendKernels, CDistBenchmarkRunsThroughRuntime) {
   const std::vector<std::string> failures =
       RunCpuBackendCases("CDist", core::backend_test::TestMode::BENCHMARK,
                          "test_cpu_cdist_m64_k64_n64_sqeuclidean_float32_benchmark");
+  EXPECT_TRUE(failures.empty()) << Describe(failures);
+}
+
+TEST(OnnxLightBackendKernels, MatMulNBitsBenchmarksIncludeQwen2Shapes) {
+  const auto cases = CollectCpuCases("MatMulNBits", core::backend_test::TestMode::BENCHMARK);
+  ASSERT_EQ(cases.size(), 3U);
+  const std::vector<std::string> expected = {
+      "test_cpu_matmulnbits_qwen2_qkv_decode_m1_k4096_n6144_bits4_block32_accuracy4_float32_"
+      "benchmark",
+      "test_cpu_matmulnbits_qwen2_gate_up_decode_m1_k4096_n11008_bits4_block32_accuracy4_float32_"
+      "benchmark",
+      "test_cpu_matmulnbits_qwen3_qkv_short_prefill_m8_k1024_n4096_bits4_block32_accuracy4_"
+      "float32_benchmark",
+  };
+  for (const std::string &name : expected) {
+    EXPECT_TRUE(std::any_of(cases.begin(), cases.end(), [&](const TestCase &test_case) {
+      return test_case.name == name;
+    })) << name;
+  }
+  const std::vector<std::string> failures =
+      RunCpuBackendCases("MatMulNBits", core::backend_test::TestMode::BENCHMARK, expected.back());
   EXPECT_TRUE(failures.empty()) << Describe(failures);
 }
 
