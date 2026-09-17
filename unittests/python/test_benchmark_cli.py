@@ -90,6 +90,7 @@ class TestBenchmarkCli(ExtTestCase):
         recorded = [
             "onnx_light_cpu::Cast",
             "Cast.float32_to_float16.f16c",
+            "Binary.Greater.compare64.avx2",
             "onnx_light_cpu::SimplifiedLayerNormalization/avx/row-scale",
             "onnx_light_cpu::Abs",
             "onnx_light_cpu::Attention",
@@ -594,6 +595,17 @@ class TestBenchmarkCli(ExtTestCase):
             aggregated[0]["input_shapes"],
             '[{"x": [2, 3], "bias": []}, {"x": [0, 3], "bias": [3]}]',
         )
+
+    def test_pull_request_report_is_truncated_to_github_comment_limit(self):
+        aggregated = [
+            {"case": f"test_{index}_{'x' * 80}", "speedup": index} for index in range(20)
+        ]
+        with mock.patch.object(_benchmark, "_PR_COMMENT_MAX_LENGTH", 500):
+            report = _benchmark._pr_benchmark_markdown(aggregated)
+        self.assertLessEqual(len(report), 500)
+        self.assertIn("Report truncated", report)
+        self.assertIn("test_0_", report)
+        self.assertNotIn("test_19_", report)
 
     def test_main_runs_benchmark_and_writes_output(self):
         rows = ([{"duration_s": 1.0}], [{"case": "one"}])

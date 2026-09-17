@@ -50,6 +50,7 @@ public:
   std::size_t prepared_outer_rank() const noexcept { return prepared_outer_rank_; }
   bool left_output_alias_safe() const noexcept { return left_output_alias_safe_; }
   bool right_output_alias_safe() const noexcept { return right_output_alias_safe_; }
+  std::string implementation_path() const;
 
   void Execute(const void *left, const void *right, void *output) const;
   void Execute(const void *left, const void *right, void *output,

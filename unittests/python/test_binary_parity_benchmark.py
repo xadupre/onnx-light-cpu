@@ -2,11 +2,13 @@ import math
 
 from tools.benchmark_binary_parity import (
     ELEMENT_COUNTS,
+    INTEGER_PRIORITY_SIGNATURES,
     ORT_UNSUPPORTED_SIGNATURES,
     PRIORITY_SIGNATURES,
     SHAPE_FAMILIES,
     THREAD_POLICIES,
     _parse_cpu_list,
+    _integer_kernel_path,
     measure_alternating,
     parse_args,
     parse_case_name,
@@ -43,6 +45,15 @@ def test_fixed_priority_matrix_is_complete():
     )
     assert ("PRelu", "bfloat16") in PRIORITY_SIGNATURES
     assert ("And", "bool") in PRIORITY_SIGNATURES
+    assert {("Pow", "int32"), ("Pow", "int64"), ("Div", "int32"), ("Mod", "int16")} <= (
+        INTEGER_PRIORITY_SIGNATURES
+    )
+    assert {
+        (operator, dtype)
+        for operator in ("Greater", "GreaterOrEqual", "Less", "LessOrEqual")
+        for dtype in ("int64", "uint64")
+    } <= INTEGER_PRIORITY_SIGNATURES
+    assert INTEGER_PRIORITY_SIGNATURES <= PRIORITY_SIGNATURES
     assert THREAD_POLICIES == ("1", "physical")
 
 
@@ -59,6 +70,46 @@ def test_raw_samples_and_alternating_order_are_retained():
     assert calls == ["cpu", "ort", "ort", "cpu", "cpu", "ort"]
     assert tuple(map(len, samples)) == (3, 3)
     assert order[1] == ["onnxruntime", "onnx-light-cpu"]
+
+
+def test_integer_priority_paths_are_recorded_not_inferred_from_host_flags():
+    for operator, dtype in INTEGER_PRIORITY_SIGNATURES:
+        case = {"operator": operator, "left_type": dtype, "shape_family": "right_scalar"}
+        if operator == "Pow":
+            suffix = "integer_pow.scalar_exponent"
+        elif operator in {"Div", "Mod"}:
+            suffix = "integer_divmod.invariant_divisor"
+        else:
+            suffix = "compare64.avx2"
+        path = f"Binary.{operator}.{suffix}"
+        assert _integer_kernel_path(case, [f"onnx_light_cpu::{operator}", path]) == path
+        for invalid in ([], [f"Binary.{operator}.scalar"]):
+            try:
+                _integer_kernel_path(case, invalid)
+            except RuntimeError:
+                pass
+            else:
+                raise AssertionError(f"Accepted missing or fallback path: {invalid!r}")
+
+
+def test_integer_mod_benchmark_uses_released_equivalent_schema():
+    from onnx_light.onnx.backend import TestMode, collect_test_cases_by_name
+    from onnx_light_cpu import has_backend_test_cases, register_backend_test_cases
+
+    if not has_backend_test_cases():
+        return
+    register_backend_test_cases()
+    cases = list(
+        collect_test_cases_by_name(
+            "^test_cpu_mod_v13_right_scalar_int(16|32|64)x.*_n4096_benchmark$",
+            mode=TestMode.BENCHMARK,
+            generate_benchmark_expected_outputs=False,
+        )
+    )
+    assert len(cases) == 3
+    for case in cases:
+        assert case.model.graph.node[0].op_type == "Mod"
+        assert case.model.opset_import[0].version == 13
 
 
 def test_summary_enforces_global_median_and_minimum():

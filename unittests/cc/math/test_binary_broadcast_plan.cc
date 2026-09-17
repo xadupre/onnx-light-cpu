@@ -4,6 +4,7 @@
 
 #include "onnx_light_cpu/impl/execution.h"
 #include "onnx_light_cpu/impl/math/binary/binary_broadcast_plan.h"
+#include "onnx_light_cpu/impl/math/binary/binary_comparison_kernel.h"
 #include "onnx_light_cpu/impl/math/half_conversion.h"
 
 #include <gtest/gtest.h>
@@ -25,6 +26,45 @@ using onnx_light_cpu::BinaryBroadcastPlanCache;
 using BinaryDataType = onnx_light_cpu::DataType;
 using onnx_light_cpu::BinaryKernelDescriptor;
 using LoopFamily = BinaryBroadcastPlan::LoopFamily;
+
+TEST(BinaryBroadcastPlan, IntegerImplementationDiagnostics) {
+  const std::vector<std::int64_t> vector{33}, scalar{}, channel{3, 1}, tensor{2, 3, 33}, empty{0};
+  for (BinaryDataType type : {BinaryDataType::INT32, BinaryDataType::INT64}) {
+    BinaryKernelDescriptor pow("Pow", 15, {});
+    EXPECT_EQ(BinaryBroadcastPlan(pow, type, type, type, vector, scalar).implementation_path(),
+              "integer_pow.scalar_exponent");
+    EXPECT_EQ(BinaryBroadcastPlan(pow, type, type, type, tensor, channel).implementation_path(),
+              "integer_pow.scalar_exponent");
+    EXPECT_EQ(BinaryBroadcastPlan(pow, type, type, type, vector, vector).implementation_path(),
+              "integer_pow.checked");
+    EXPECT_EQ(BinaryBroadcastPlan(pow, type, type, type, empty, scalar).implementation_path(),
+              "empty");
+    for (const char *op : {"Div", "Mod"}) {
+      BinaryKernelDescriptor descriptor(op, 14, {});
+      EXPECT_EQ(
+          BinaryBroadcastPlan(descriptor, type, type, type, tensor, channel).implementation_path(),
+          "integer_divmod.invariant_divisor");
+      EXPECT_EQ(
+          BinaryBroadcastPlan(descriptor, type, type, type, vector, vector).implementation_path(),
+          "integer_divmod.typed");
+    }
+  }
+  for (BinaryDataType type : {BinaryDataType::INT64, BinaryDataType::UINT64}) {
+    for (const char *op : {"Equal", "Greater", "GreaterOrEqual", "Less", "LessOrEqual"}) {
+      BinaryKernelDescriptor descriptor(op, 16, {});
+      const auto path =
+          BinaryBroadcastPlan(descriptor, type, type, BinaryDataType::BOOL, tensor, channel)
+              .implementation_path();
+      EXPECT_EQ(path,
+                std::string("compare64.") + onnx_light_cpu::BinaryCompareInt64Implementation(33));
+      const std::vector<std::int64_t> short_vector{3};
+      EXPECT_EQ(
+          BinaryBroadcastPlan(descriptor, type, type, BinaryDataType::BOOL, short_vector, scalar)
+              .implementation_path(),
+          "compare64.scalar");
+    }
+  }
+}
 
 std::size_t ElementSize(BinaryDataType type) {
   switch (type) {

@@ -51,6 +51,21 @@ PRIORITY_SIGNATURES = {
     ("Pow", "float32"),
     ("Mod", "float32"),
 }
+INTEGER_PRIORITY_SIGNATURES = {
+    ("Pow", "int32"),
+    ("Pow", "int64"),
+    ("Div", "int32"),
+    ("Div", "int64"),
+    ("Mod", "int16"),
+    ("Mod", "int32"),
+    ("Mod", "int64"),
+    *(
+        (operator, dtype)
+        for operator in ("Greater", "GreaterOrEqual", "Less", "LessOrEqual")
+        for dtype in ("int64", "uint64")
+    ),
+}
+PRIORITY_SIGNATURES |= INTEGER_PRIORITY_SIGNATURES
 ORT_UNSUPPORTED_SIGNATURES = {
     ("Add", "bfloat16"),
     ("Sub", "bfloat16"),
@@ -295,6 +310,13 @@ def _tensor_numpy(tensor: Any) -> Any:
         int(TensorProto.FLOAT16): np.float16,
         int(TensorProto.BFLOAT16): ml_dtypes.bfloat16,
         int(TensorProto.INT32): np.int32,
+        int(TensorProto.INT8): np.int8,
+        int(TensorProto.INT16): np.int16,
+        int(TensorProto.INT64): np.int64,
+        int(TensorProto.UINT8): np.uint8,
+        int(TensorProto.UINT16): np.uint16,
+        int(TensorProto.UINT32): np.uint32,
+        int(TensorProto.UINT64): np.uint64,
     }
     data_type = int(tensor.data_type)
     if data_type not in dtypes:
@@ -363,6 +385,30 @@ def _selected_isa(case: dict[str, Any], flags: Sequence[str]) -> str:
     return "scalar"
 
 
+def _integer_kernel_path(case: dict[str, Any], recorded: Sequence[str]) -> str:
+    if (case["operator"], case["left_type"]) not in INTEGER_PRIORITY_SIGNATURES:
+        return ""
+    prefix = f"Binary.{case['operator']}."
+    paths = [path.removeprefix(prefix) for path in recorded if path.startswith(prefix)]
+    if len(paths) != 1:
+        raise RuntimeError(f"Missing or ambiguous integer implementation path: {recorded!r}")
+    path = paths[0]
+    operator = case["operator"]
+    if operator == "Pow":
+        expected = "integer_pow."
+    elif operator in {"Div", "Mod"}:
+        expected = (
+            "integer_divmod.invariant_divisor"
+            if case["shape_family"] in {"right_scalar", "per_channel"}
+            else "integer_divmod.typed"
+        )
+    else:
+        expected = "compare64."
+    if not path.startswith(expected):
+        raise RuntimeError(f"Expected {expected!r}, recorded {path!r} for {case!r}")
+    return prefix + path
+
+
 def _cpu_model_and_flags() -> tuple[str, list[str]]:
     cpuinfo = Path("/proc/cpuinfo")
     model = platform.processor() or "unknown"
@@ -413,6 +459,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         register_kernels,
         set_kernel_usage_recording,
         used_kernel_names,
+        used_kernel_paths,
     )
 
     if args.cpus:
@@ -431,6 +478,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "float32": int(TensorProto.FLOAT),
             "bfloat16": int(TensorProto.BFLOAT16),
             "int32": int(TensorProto.INT32),
+            "int16": int(TensorProto.INT16),
+            "int64": int(TensorProto.INT64),
+            "uint64": int(TensorProto.UINT64),
         }
         policy = CpuExecutionPolicy()
         policy.num_threads = physical_threads
@@ -473,6 +523,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             options.intra_op_num_threads = requested_threads
             options.inter_op_num_threads = 1
             options.execution_mode = onnxruntime.ExecutionMode.ORT_SEQUENTIAL
+            options.add_session_config_entry("session.intra_op.allow_spinning", "0")
+            options.add_session_config_entry("session.inter_op.allow_spinning", "0")
             try:
                 ort = onnxruntime.InferenceSession(
                     model_bytes, sess_options=options, providers=["CPUExecutionProvider"]
@@ -500,9 +552,13 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             operation_identity = f"onnx_light_cpu::{case['operator']}"
             if operation_identity not in used_kernel_names(cpu):
                 raise RuntimeError(f"{test_case.name} dispatched {used_kernel_names(cpu)}.")
+            kernel_path = _integer_kernel_path(case, used_kernel_paths(cpu))
             set_kernel_usage_recording(cpu, False)
             ort_outputs = ort_run()
             for actual, expected in zip(cpu_outputs, ort_outputs, strict=True):
+                if actual.dtype.kind in "biu":
+                    np.testing.assert_array_equal(actual, expected)
+                    continue
                 np.testing.assert_allclose(
                     actual.astype(np.float32),
                     expected.astype(np.float32),
@@ -519,7 +575,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 _tensor_element_count(data_set.inputs[0]),
                 _tensor_element_count(data_set.inputs[1]),
             )
-            output_elements = _tensor_element_count(data_set.outputs[0])
+            output_elements = int(cpu_outputs[0].size)
             rows.append(
                 {
                     **case,
@@ -528,8 +584,13 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     "requested_threads": requested_threads,
                     "effective_threads": effective_threads,
                     "operation_identity": operation_identity,
+                    "kernel_path": kernel_path,
                     "loop_family": _shape_metrics(case)[0],
-                    "isa": _selected_isa(case, flags),
+                    "isa": (
+                        kernel_path.rsplit(".", 1)[-1]
+                        if ".compare64." in kernel_path
+                        else _selected_isa(case, flags)
+                    ),
                     "unique_tensor_bytes": (
                         left_elements * _DTYPE_SIZES[case["left_type"]]
                         + right_elements * _DTYPE_SIZES[case["right_type"]]
@@ -587,6 +648,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "versions": _package_versions(),
             "ort_execution_mode": "sequential",
             "ort_inter_op_threads": 1,
+            "ort_allow_spinning": False,
             "sample_order": "alternating",
             "calibration_enabled": args.calibrate,
             "calibration_reports": calibration_reports,
@@ -656,6 +718,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             f"{row['backend_case_name']} threads={row['thread_policy']} "
             f"cpu={row['cpu_median_seconds'] * 1e3:.3f}ms "
             f"ort={row['ort_median_seconds'] * 1e3:.3f}ms speedup={row['speedup']:.3f}x"
+            f" path={row['kernel_path']}"
         )
     print(f"raw results: {args.output}")
     print(json.dumps(report["summary"], indent=2))

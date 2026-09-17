@@ -72,6 +72,153 @@ measurements showed no improvement.
        --test '^test_cpu_pow_v15_(outer_float32xfloat32_to_float32_swapped|per_channel_float32xfloat32_to_float32)_n1048576_benchmark$' \
        --threads 96 -r 100 -w 30 -t 0.5 -o pow-broadcast.xlsx
 
+Integer arithmetic and 64-bit comparisons
+-----------------------------------------
+
+Integer ``Pow`` uses exact checked integer multiplication, with a portable
+fallback for compilers without overflow intrinsics. Typed contiguous and
+scalar-broadcast adapters share the same overflow contract. Scalar exponents
+0, 1, and 2 use fill, copy, and checked-square paths, including repeated
+broadcast inner blocks.
+
+Integer ``Div`` and both integer ``Mod`` modes prepare an unsigned reciprocal
+once per scalar-divisor block. Quotients use multiply-high and an exact
+remainder correction, or shifts for powers of two; signed results retain
+truncation toward zero and Python-modulo sign correction. Short blocks retain
+hardware division. Both operators validate unique divisors in bulk and retain
+the signed-minimum divided by minus-one check before execution.
+
+Signed and unsigned 64-bit comparisons have baseline, AVX2, and AVX-512F
+implementations for contiguous and either scalar-broadcast input. AVX2 biases
+the unsigned sign bit before signed comparison. Output bytes are canonical
+booleans and short tails remain scalar.
+
+The parity matrix includes integer ``Pow``/``Div``, ``Mod`` (including int16),
+and all four ordered int64/uint64 comparisons across its seven broadcast
+families. Integer outputs are compared exactly, rather than after conversion
+to float32. Each integer benchmark requires a recorded implementation path;
+the comparison ISA comes from runtime dispatch, not host CPU flags.
+``used_kernel_paths(session)`` includes records such as
+``Binary.Pow.integer_pow.scalar_exponent``,
+``Binary.Mod.integer_divmod.invariant_divisor``, and
+``Binary.Greater.compare64.avx2``. ``used_kernel_names`` still returns only
+operator identities.
+
+After updating the checkout and rebuilding, run a homogeneous campaign with
+the existing runner (repeat with an AVX2-ceiling build on AVX-512 hosts):
+
+.. code-block:: bash
+
+   PYTHONPATH="$PWD" python tools/benchmark_binary_parity.py --no-calibrate \
+       --case '^test_cpu_(pow|div|mod|greater|greaterorequal|less|lessorequal)_v[0-9]+_.*_(u?int16|u?int32|u?int64)x' \
+       --threads 1 --threads physical --cpus 0-3 \
+       -r 100 -w 30 --output /tmp/integer-binary-parity.json
+
+The report retains raw alternating samples, shapes, types, effective threads,
+implementation paths, and latency percentiles. ORT worker spinning is disabled
+so idle workers cannot interfere with the other candidate. A filtered campaign
+does not satisfy the runner's complete-matrix gate; inspect its per-case
+``speedup`` values against 0.9 and retain profiles for remaining exceptions.
+Integer Mod benchmark fixtures use the released opset-13 schema, whose integer
+semantics are unchanged in Mod-28. Correctness fixtures retain the latest opset.
+
+2026-09-17 diagnostic campaign
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Revision ``1991b23`` was measured on an AMD EPYC 9V74 VM with two physical
+cores, affinity ``0-3``, GCC Release/AUTO dispatch, onnx-light 0.1.27, and ORT
+1.30.0. The 420 comparable rows cover 65,536 and 1,048,576 output elements,
+all seven families, and one/two configured threads. Recording confirmed the
+integer arithmetic adapters and AVX-512 comparison kernels. There were no
+unsupported cases. Median speedup was **2.017x**, but **44 rows remained below
+0.9x**: this is not a completed parity gate or a dedicated-machine result.
+The longer four-size campaign was stopped without publishing partial results.
+
+.. code-block:: bash
+
+   PYTHONPATH="$PWD" python tools/benchmark_binary_parity.py --no-calibrate \
+       --case '^test_cpu_(pow|div|mod)_v[0-9]+_.*_int(16|32|64)x.*_n(65536|1048576)_benchmark$' \
+       --case '^test_cpu_(greater|greaterorequal|less|lessorequal)_v[0-9]+_.*_(int64|uint64)x.*_n(65536|1048576)_benchmark$' \
+       --threads 1 --threads physical --cpus 0-3 \
+       -r 30 -w 10 -t 0.05 --output /tmp/integer-binary-final.json
+
+Each row below summarizes 28 measurements; ratios are ORT/CPU median latency.
+
+.. csv-table::
+   :header: "Operator", "Type", "Median ratio", "Minimum ratio", "Below 0.9x"
+
+   Div, int32, 0.450, 0.397, 28
+   Div, int64, 1.025, 0.599, 9
+   Mod, int16, 1.041, 0.878, 2
+   Mod, int32, 1.035, 0.880, 2
+   Mod, int64, 1.045, 0.893, 2
+   Pow, int32, 5.152, 1.002, 0
+   Pow, int64, 4.940, 0.551, 1
+   Greater, int64, 2.146, 1.524, 0
+   Greater, uint64, 2.258, 1.563, 0
+   GreaterOrEqual, int64, 2.359, 1.598, 0
+   GreaterOrEqual, uint64, 2.580, 1.492, 0
+   Less, int64, 2.539, 1.530, 0
+   Less, uint64, 2.718, 1.566, 0
+   LessOrEqual, int64, 2.324, 1.573, 0
+   LessOrEqual, uint64, 2.309, 1.558, 0
+
+Exception profiles and follow-up:
+
+* All int32 Div families remain below target. Non-scalar divisors still use
+  hardware division. Disassembly of the invariant-divisor adapter confirms
+  multiply/shift execution, but only baseline SSE2 compiler vectorization,
+  including reciprocal work alongside the power-of-two shift path. Dedicated
+  wider integer-division loops remain necessary.
+* Int64 Div exceptions are the 1,048,576-element left-scalar case with one
+  thread; contiguous/left-scalar at that size with two threads; and every
+  65,536-element family except right-scalar with two threads. The default
+  block-size policy can keep these small workloads serial despite two
+  configured threads.
+* Mod exceptions are contiguous and left-scalar at 1,048,576 elements with one
+  thread, for each of int16/int32/int64. These retain the divisor scan and
+  hardware remainder loop, unlike the optimized invariant-divisor path.
+* The remaining Pow exception is int64 per-channel, 65,536 elements, two
+  configured threads: CPU 0.000375912 s versus ORT 0.0002072725 s. It lies at
+  the default scheduling-granularity boundary. At 1,048,576 elements the same
+  family reaches 0.933x with two threads and 0.998x with one.
+* The first campaign exposed repeated CPUID in checked-square dispatch.
+  Caching it reduced one-thread int64 per-channel latency at 1,048,576
+  elements from 0.031368454 s to 0.005959802 s. This comparison is diagnostic:
+  the independently profiled 65,536-element case improved from 0.001325910 s
+  to 0.000379798 s.
+
+Call-level profiles used ``python -m cProfile -o /tmp/integer.pstats`` before
+the runner command, selecting the four cases below at 65,536 elements, one
+thread, ``-r 100 -w 30 -t 0.2``. Of 0.074665 s in 524 CPU wrapper calls,
+0.074490 s was in the native-backed evaluator call; case collection consumed
+0.672408 s outside the timed region. These profiles locate the remaining
+cost below the Python wrapper, not within case generation. Native PMU
+profiling was unavailable because the runner has ``perf_event_paranoid=4``;
+instruction-level hotspot attribution remains unverified.
+
+.. csv-table::
+   :header: "Operator/type/family", "CPU median (s)", "ORT median (s)", "Ratio"
+
+   Div/int32/right_scalar, 0.0000769795, 0.0000538700, 0.700
+   Mod/int16/right_scalar, 0.0000962025, 0.0001174840, 1.221
+   Pow/int64/per_channel, 0.0003797975, 0.0003817955, 1.005
+   Greater/int64/left_scalar, 0.0000118175, 0.0000312865, 2.647
+
+An exception-focused repeat (``-r 30 -w 10 -t 0.1``) reproduced the remaining
+groups below. The 902 CPU wrapper calls consumed 1.038556 s, including
+1.038014 s in the native-backed evaluator call.
+
+.. csv-table::
+   :header: "Operator/type/family", "Elements", "Threads", "CPU median (s)", "ORT median (s)", "Ratio"
+
+   Div/int32/left_scalar, 65536, 2, 0.0001487200, 0.0000709755, 0.477
+   Div/int64/left_scalar, 65536, 2, 0.0001684095, 0.0001050000, 0.623
+   Mod/int16/contiguous, 1048576, 1, 0.0023085260, 0.0020299580, 0.879
+   Mod/int32/contiguous, 1048576, 1, 0.0023076340, 0.0020325315, 0.881
+   Mod/int64/contiguous, 1048576, 1, 0.0026062220, 0.0023398920, 0.898
+   Pow/int64/per_channel, 65536, 2, 0.0003763575, 0.0002096610, 0.557
+
 Current execution and tuning contract
 -------------------------------------
 

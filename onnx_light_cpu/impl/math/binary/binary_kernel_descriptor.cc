@@ -6,6 +6,7 @@
 
 #include "onnx_light_cpu/impl/math/binary/binary_arithmetic_kernel.h"
 #include "onnx_light_cpu/impl/math/binary/binary_comparison_kernel.h"
+#include "onnx_light_cpu/impl/math/binary/binary_integer_arithmetic.h"
 #include "onnx_light_cpu/impl/math/half_conversion.h"
 #include "onnx_light_cpu/impl/math/math_kernels.h"
 
@@ -25,6 +26,7 @@ namespace {
 
 using DT = DataType;
 using Attrs = BinaryKernelDescriptor::Attributes;
+using detail::CheckedIntegerPow;
 
 std::size_t ElementSize(DT type) {
   switch (type) {
@@ -83,51 +85,6 @@ template <typename T> void ValidateSignedDivisionOverflow(T left, T right, const
       throw std::invalid_argument(std::string("onnx_light_cpu::") + op_name +
                                   ": INT_MIN / -1 is unsupported.");
     }
-  }
-}
-
-template <typename TBase, typename TExp>
-TBase CheckedIntegerPow(TBase base, TExp exponent, const char *op_name) {
-  if constexpr (std::is_floating_point_v<TExp>) {
-    const double rounded = std::round(static_cast<double>(exponent));
-    if (!std::isfinite(static_cast<double>(exponent)) || rounded != static_cast<double>(exponent)) {
-      throw std::invalid_argument(std::string("onnx_light_cpu::") + op_name +
-                                  ": integer Pow requires integral exponents.");
-    }
-    constexpr long double int64_exclusive_upper = 9223372036854775808.0L;
-    const long double wide_exponent = static_cast<long double>(exponent);
-    if (wide_exponent < -int64_exclusive_upper || wide_exponent >= int64_exclusive_upper) {
-      throw std::invalid_argument(std::string("onnx_light_cpu::") + op_name +
-                                  ": integer Pow exponent is out of range.");
-    }
-    return CheckedIntegerPow<TBase, std::int64_t>(base, static_cast<std::int64_t>(rounded),
-                                                  op_name);
-  } else {
-    if constexpr (std::is_signed_v<TExp>) {
-      if (exponent < 0) {
-        throw std::invalid_argument(std::string("onnx_light_cpu::") + op_name +
-                                    ": integer Pow requires non-negative exponents.");
-      }
-    }
-    using Wide = long double;
-    Wide result = 1;
-    Wide factor = static_cast<Wide>(base);
-    std::uint64_t remaining = static_cast<std::uint64_t>(exponent);
-    while (remaining != 0) {
-      if ((remaining & 1U) != 0U) {
-        result *= factor;
-      }
-      remaining >>= 1U;
-      if (remaining != 0) {
-        factor *= factor;
-      }
-      if (result > static_cast<Wide>(std::numeric_limits<TBase>::max()) ||
-          result < static_cast<Wide>(std::numeric_limits<TBase>::min()) || !std::isfinite(result)) {
-        throw std::invalid_argument(std::string("onnx_light_cpu::") + op_name +
-                                    ": integer Pow overflow is unsupported.");
-      }
-    }
-    return static_cast<TBase>(result);
   }
 }
 
@@ -200,15 +157,7 @@ template <typename T> void ComputeDivUnchecked(const void *left, const void *rig
   WriteTyped<T>(out, static_cast<T>(ReadTyped<T>(left) / ReadTyped<T>(right)));
 }
 
-template <typename T>
-void ValidateIntegerDivision(const void *left, const void *right, const char *op_name) {
-  const T lhs = ReadTyped<T>(left);
-  const T rhs = ReadTyped<T>(right);
-  ValidateIntegerDivisor(rhs, op_name);
-  ValidateSignedDivisionOverflow(lhs, rhs, op_name);
-}
-
-template <typename T> bool ValidateDivisors(const void *right, std::size_t count) {
+template <typename T, bool Mod> bool ValidateDivisors(const void *right, std::size_t count) {
   const auto *divisors = static_cast<const T *>(right);
   bool contains_zero = false;
   bool contains_negative_one = false;
@@ -219,7 +168,7 @@ template <typename T> bool ValidateDivisors(const void *right, std::size_t count
     }
   }
   if (contains_zero) {
-    ValidateIntegerDivisor(T(0), "Div");
+    ValidateIntegerDivisor(T(0), Mod ? "Mod" : "Div");
   }
   return contains_negative_one;
 }
@@ -237,7 +186,7 @@ template <typename T> void ValidateDivOverflow(const void *left, const void *rig
 }
 
 template <typename T> void ValidateMod(const void *left, const void *right) {
-  ValidateIntegerDivision<T>(left, right, "Mod");
+  ValidateSignedDivisionOverflow(ReadTyped<T>(left), ReadTyped<T>(right), "Mod");
 }
 
 // Binary PR02: type-erased wrappers around the SIMD-dispatched bulk kernels
@@ -291,6 +240,9 @@ void BulkComputeRightScalar(const void *left, const void *right, void *out, std:
 
 template <typename TBase, typename TExp>
 void BulkIntegerPowRightScalar(const void *left, const void *right, void *out, std::size_t count) {
+  if (count == 0) {
+    return;
+  }
   const TExp exponent = ReadTyped<TExp>(right);
   CheckedIntegerPow<TBase, TExp>(TBase{1}, exponent, "Pow");
 
@@ -857,6 +809,66 @@ void ComputeModIntUnchecked(const void *left, const void *right, void *out) {
   const T lhs = ReadTyped<T>(left);
   const T rhs = ReadTyped<T>(right);
   WriteTyped<T>(out, Fmod ? static_cast<T>(lhs % rhs) : PythonMod(lhs, rhs));
+}
+
+template <typename T, bool Mod, bool Fmod = false>
+void BulkIntegerDivModRightScalar(const void *left, const void *right, void *out,
+                                  std::size_t count) {
+  if (count == 0) {
+    return;
+  }
+  const T divisor = ReadTyped<T>(right);
+  const char *op_name = Mod ? "Mod" : "Div";
+  ValidateIntegerDivisor(divisor, op_name);
+  const auto *input = static_cast<const T *>(left);
+  auto *output = static_cast<T *>(out);
+  if constexpr (std::is_signed_v<T>) {
+    if (divisor == T(-1)) {
+      for (std::size_t i = 0; i < count; ++i) {
+        ValidateSignedDivisionOverflow(input[i], divisor, op_name);
+      }
+    }
+  }
+  if (count < 4) {
+    for (std::size_t i = 0; i < count; ++i) {
+      if constexpr (Mod) {
+        output[i] = Fmod ? static_cast<T>(input[i] % divisor) : PythonMod(input[i], divisor);
+      } else {
+        output[i] = static_cast<T>(input[i] / divisor);
+      }
+    }
+    return;
+  }
+  using U = std::make_unsigned_t<T>;
+  const U magnitude = detail::IntegerMagnitude(divisor);
+  const detail::IntegerDivider<U> divider(magnitude);
+  for (std::size_t i = 0; i < count; ++i) {
+    const T value = input[i];
+    const U numerator = detail::IntegerMagnitude(value);
+    U result = divider.Divide(numerator);
+    if constexpr (Mod) {
+      result = static_cast<U>(numerator - result * magnitude);
+      if constexpr (std::is_signed_v<T>) {
+        if (value < 0) {
+          result = static_cast<U>(U{0} - result);
+        }
+      }
+      T remainder = std::bit_cast<T>(result);
+      if constexpr (std::is_signed_v<T> && !Fmod) {
+        if (remainder != 0 && ((remainder < 0) != (divisor < 0))) {
+          remainder = static_cast<T>(remainder + divisor);
+        }
+      }
+      output[i] = remainder;
+    } else {
+      if constexpr (std::is_signed_v<T>) {
+        if ((value < 0) != (divisor < 0)) {
+          result = static_cast<U>(U{0} - result);
+        }
+      }
+      output[i] = std::bit_cast<T>(result);
+    }
+  }
 }
 
 template <typename T> void ComputeModFloat(const void *left, const void *right, void *out) {
@@ -1983,13 +1995,14 @@ BinaryKernelDescriptor::Adapter::ValidateFn SelectValidator(BinaryOperator op, D
 
 BinaryKernelDescriptor::Adapter::ValidateRightBulkFn SelectRightBulkValidator(BinaryOperator op,
                                                                               DT left) {
-  if (op != BinaryOperator::kDiv && op != BinaryOperator::kBitShift) {
+  if (op != BinaryOperator::kDiv && op != BinaryOperator::kMod && op != BinaryOperator::kBitShift) {
     return nullptr;
   }
 #define ONNX_LIGHT_CPU_DIVISOR_VALIDATOR(TYPE, CPP_TYPE)                                           \
   case DT::TYPE:                                                                                   \
-    return &ValidateDivisors<CPP_TYPE>;
-  if (op == BinaryOperator::kDiv) {
+    return op == BinaryOperator::kMod ? &ValidateDivisors<CPP_TYPE, true>                          \
+                                      : &ValidateDivisors<CPP_TYPE, false>;
+  if (op == BinaryOperator::kDiv || op == BinaryOperator::kMod) {
     switch (left) {
       ONNX_LIGHT_CPU_DIVISOR_VALIDATOR(INT8, std::int8_t)
       ONNX_LIGHT_CPU_DIVISOR_VALIDATOR(INT16, std::int16_t)
@@ -2103,6 +2116,8 @@ void SelectAdditionalBulk(BinaryOperator op, DT left, DT right, const Attrs &att
   case DT::TYPE:                                                                                   \
     ONNX_LIGHT_CPU_BIND_TYPED_BULK(BASE_CPP, RIGHT_CPP, BASE_CPP, ComputePow<BASE_CPP, RIGHT_CPP>) \
     adapter.bulk_right_scalar = &BulkIntegerPowRightScalar<BASE_CPP, RIGHT_CPP>;                   \
+    adapter.bulk_implementation =                                                                  \
+        BinaryKernelDescriptor::Adapter::BulkImplementation::kIntegerPow;                          \
     break;
     if (left == DT::FLOAT) {
       switch (right) {
@@ -2214,16 +2229,39 @@ void SelectAdditionalBulk(BinaryOperator op, DT left, DT right, const Attrs &att
   switch (op) {
   case BinaryOperator::kDiv:
     ONNX_LIGHT_CPU_BIND_INTEGER_TYPES(ComputeDivUnchecked)
+#define ONNX_LIGHT_CPU_BIND_DIV_SCALAR(TYPE, CPP_TYPE)                                             \
+  case DT::TYPE:                                                                                   \
+    adapter.bulk_right_scalar = &BulkIntegerDivModRightScalar<CPP_TYPE, false>;                    \
+    adapter.bulk_implementation =                                                                  \
+        BinaryKernelDescriptor::Adapter::BulkImplementation::kIntegerDivMod;                       \
+    break;
+    switch (left) {
+      ONNX_LIGHT_CPU_BIND_DIV_SCALAR(INT8, std::int8_t)
+      ONNX_LIGHT_CPU_BIND_DIV_SCALAR(INT16, std::int16_t)
+      ONNX_LIGHT_CPU_BIND_DIV_SCALAR(INT32, std::int32_t)
+      ONNX_LIGHT_CPU_BIND_DIV_SCALAR(INT64, std::int64_t)
+      ONNX_LIGHT_CPU_BIND_DIV_SCALAR(UINT8, std::uint8_t)
+      ONNX_LIGHT_CPU_BIND_DIV_SCALAR(UINT16, std::uint16_t)
+      ONNX_LIGHT_CPU_BIND_DIV_SCALAR(UINT32, std::uint32_t)
+      ONNX_LIGHT_CPU_BIND_DIV_SCALAR(UINT64, std::uint64_t)
+    default:
+      break;
+    }
+#undef ONNX_LIGHT_CPU_BIND_DIV_SCALAR
     break;
   case BinaryOperator::kMod:
 #define ONNX_LIGHT_CPU_BIND_MOD_CASE(TYPE, CPP_TYPE)                                               \
   case DT::TYPE:                                                                                   \
+    adapter.bulk_implementation =                                                                  \
+        BinaryKernelDescriptor::Adapter::BulkImplementation::kIntegerDivMod;                       \
     if (attributes.mod_fmod == 0) {                                                                \
       ONNX_LIGHT_CPU_BIND_TYPED_BULK(CPP_TYPE, CPP_TYPE, CPP_TYPE,                                 \
                                      ComputeModIntUnchecked<CPP_TYPE, false>)                      \
+      adapter.bulk_right_scalar = &BulkIntegerDivModRightScalar<CPP_TYPE, true, false>;            \
     } else {                                                                                       \
       ONNX_LIGHT_CPU_BIND_TYPED_BULK(CPP_TYPE, CPP_TYPE, CPP_TYPE,                                 \
                                      ComputeModIntUnchecked<CPP_TYPE, true>)                       \
+      adapter.bulk_right_scalar = &BulkIntegerDivModRightScalar<CPP_TYPE, true, true>;             \
     }                                                                                              \
     break;
     switch (left) {
@@ -2290,10 +2328,14 @@ void SelectAdditionalBulk(BinaryOperator op, DT left, DT right, const Attrs &att
       ONNX_LIGHT_CPU_BIND_TYPED_BULK(std::int32_t, std::int32_t, std::int32_t,
                                      ComputePow<std::int32_t, std::int32_t>)
       adapter.bulk_right_scalar = &BulkIntegerPowRightScalar<std::int32_t, std::int32_t>;
+      adapter.bulk_implementation =
+          BinaryKernelDescriptor::Adapter::BulkImplementation::kIntegerPow;
     } else if (left == DT::INT64) {
       ONNX_LIGHT_CPU_BIND_TYPED_BULK(std::int64_t, std::int64_t, std::int64_t,
                                      ComputePow<std::int64_t, std::int64_t>)
       adapter.bulk_right_scalar = &BulkIntegerPowRightScalar<std::int64_t, std::int64_t>;
+      adapter.bulk_implementation =
+          BinaryKernelDescriptor::Adapter::BulkImplementation::kIntegerPow;
     } else if (left == DT::FLOAT16) {
       adapter.bulk_left_scalar = &BulkFloat16PowLeft;
       adapter.bulk_right_scalar = &BulkFloat16PowRight;
@@ -2425,6 +2467,38 @@ void SelectAdditionalBulk(BinaryOperator op, DT left, DT right, const Attrs &att
 #undef ONNX_LIGHT_CPU_BIND_TYPED_BULK
 }
 
+template <typename T, BinaryOperator Op, bool LeftScalar, bool RightScalar>
+void BulkCompare64(const void *left, const void *right, void *out, std::size_t count) {
+  if constexpr (std::is_signed_v<T>) {
+    BinaryCompareInt64(static_cast<const T *>(left), static_cast<const T *>(right),
+                       static_cast<std::uint8_t *>(out), count, Op, LeftScalar, RightScalar);
+  } else {
+    BinaryCompareUInt64(static_cast<const T *>(left), static_cast<const T *>(right),
+                        static_cast<std::uint8_t *>(out), count, Op, LeftScalar, RightScalar);
+  }
+}
+
+template <typename T>
+void SelectCompare64Bulk(BinaryOperator op, BinaryKernelDescriptor::Adapter &adapter) {
+#define ONNX_LIGHT_CPU_BIND_COMPARE64(OP)                                                          \
+  case BinaryOperator::OP:                                                                         \
+    adapter.bulk_contiguous = &BulkCompare64<T, BinaryOperator::OP, false, false>;                 \
+    adapter.bulk_left_scalar = &BulkCompare64<T, BinaryOperator::OP, true, false>;                 \
+    adapter.bulk_right_scalar = &BulkCompare64<T, BinaryOperator::OP, false, true>;                \
+    adapter.bulk_implementation = BinaryKernelDescriptor::Adapter::BulkImplementation::kCompare64; \
+    break;
+  switch (op) {
+    ONNX_LIGHT_CPU_BIND_COMPARE64(kEqual)
+    ONNX_LIGHT_CPU_BIND_COMPARE64(kGreater)
+    ONNX_LIGHT_CPU_BIND_COMPARE64(kGreaterOrEqual)
+    ONNX_LIGHT_CPU_BIND_COMPARE64(kLess)
+    ONNX_LIGHT_CPU_BIND_COMPARE64(kLessOrEqual)
+  default:
+    break;
+  }
+#undef ONNX_LIGHT_CPU_BIND_COMPARE64
+}
+
 } // namespace
 
 BinaryKernelDescriptor::BinaryKernelDescriptor(std::string op_type, std::int64_t opset_version,
@@ -2464,6 +2538,11 @@ BinaryKernelDescriptor::BinaryKernelDescriptor(std::string op_type, std::int64_t
       SelectBulk(manifest_.op, signature.left, adapter);
     }
     SelectAdditionalBulk(manifest_.op, signature.left, signature.right, attributes_, adapter);
+    if (signature.left == DT::INT64) {
+      SelectCompare64Bulk<std::int64_t>(manifest_.op, adapter);
+    } else if (signature.left == DT::UINT64) {
+      SelectCompare64Bulk<std::uint64_t>(manifest_.op, adapter);
+    }
     adapters_.push_back(adapter);
   }
 }
