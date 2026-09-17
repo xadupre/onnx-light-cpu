@@ -43,7 +43,7 @@ The final corpus target is at least ``1.0x`` ONNX Runtime median performance
 for each priority family, with no priority case below ``0.9x``.
 
 SimplifiedLayerNormalization follow-up
--------------------------------------
+----------------------------------------
 
 Issue `#724 <https://github.com/xadupre/onnx-light-cpu/issues/724>`_ fixes
 ``stash_type`` selection and removes the FP32-only, exact-suffix restriction
