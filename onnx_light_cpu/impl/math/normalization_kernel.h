@@ -55,6 +55,8 @@ void ApplyNormalizationAffineFloat64StashFloat32_AVX(const double *input, const 
 #endif
 
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
+float ComputeResidualMeanSquareFloat32_AVX2(const float *input, const float *skip,
+                                            const float *bias, float *residual, std::size_t count);
 void ApplyNormalizationScaleBiasFloat32_AVX2(const float *input, float *output, std::size_t count,
                                              float multiplier, float offset);
 float ComputeNormalizationMeanSquareFloat32_AVX2(const float *input, std::size_t count);

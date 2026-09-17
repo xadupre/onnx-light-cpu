@@ -423,6 +423,96 @@ inline Fn PickImpl(Fn scalar_fn, Fn sse2_fn, Fn avx_fn, Fn avx512_fn, Fn neon_fn
 #endif
 }
 
+template <typename T, void (*Fn)(const T *, const T *, T *, std::size_t)>
+void ErasedContiguous(const void *left, const void *right, void *out, std::size_t count) {
+  Fn(static_cast<const T *>(left), static_cast<const T *>(right), static_cast<T *>(out), count);
+}
+
+template <typename T, void (*Fn)(T, const T *, T *, std::size_t)>
+void ErasedLeftScalar(const void *left, const void *right, void *out, std::size_t count) {
+  Fn(*static_cast<const T *>(left), static_cast<const T *>(right), static_cast<T *>(out), count);
+}
+
+template <typename T, void (*Fn)(const T *, T, T *, std::size_t)>
+void ErasedRightScalar(const void *left, const void *right, void *out, std::size_t count) {
+  Fn(static_cast<const T *>(left), *static_cast<const T *>(right), static_cast<T *>(out), count);
+}
+
+template <typename T, void (*Contiguous)(const T *, const T *, T *, std::size_t),
+          void (*LeftScalar)(T, const T *, T *, std::size_t),
+          void (*RightScalar)(const T *, T, T *, std::size_t)>
+const BinaryArithmeticBulkFunctions &MakeBulkFunctions() {
+  static const BinaryArithmeticBulkFunctions functions{
+      &ErasedContiguous<T, Contiguous>,
+      &ErasedLeftScalar<T, LeftScalar>,
+      &ErasedRightScalar<T, RightScalar>,
+  };
+  return functions;
+}
+
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
+#define ONNX_LIGHT_CPU_TRY_AVX512_BULK(STEM, T)                                                    \
+  if (level >= SimdLevel::kAVX512) {                                                               \
+    return MakeBulkFunctions<T, &STEM##_AVX512, &STEM##Left_AVX512, &STEM##Right_AVX512>();        \
+  }
+#else
+#define ONNX_LIGHT_CPU_TRY_AVX512_BULK(STEM, T)
+#endif
+
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX
+#define ONNX_LIGHT_CPU_TRY_AVX_BULK(STEM, T)                                                       \
+  if (level >= SimdLevel::kAVX) {                                                                  \
+    return MakeBulkFunctions<T, &STEM##_AVX, &STEM##Left_AVX, &STEM##Right_AVX>();                 \
+  }
+#else
+#define ONNX_LIGHT_CPU_TRY_AVX_BULK(STEM, T)
+#endif
+
+#if ONNX_LIGHT_CPU_BINARY_X86
+#define ONNX_LIGHT_CPU_RESOLVE_X86_BULK(STEM, T)                                                   \
+  static const SimdLevel level = DetectSimdLevel();                                                \
+  ONNX_LIGHT_CPU_TRY_AVX512_BULK(STEM, T)                                                          \
+  ONNX_LIGHT_CPU_TRY_AVX_BULK(STEM, T)                                                             \
+  if (level >= SimdLevel::kSSE2) {                                                                 \
+    return MakeBulkFunctions<T, &STEM##_SSE2, &STEM##Left_SSE2, &STEM##Right_SSE2>();              \
+  }
+#else
+#define ONNX_LIGHT_CPU_RESOLVE_X86_BULK(STEM, T)
+#endif
+
+#ifdef ONNX_LIGHT_CPU_HAVE_SVE
+#define ONNX_LIGHT_CPU_TRY_SVE_BULK(STEM, T)                                                       \
+  if (level == ArmSimdLevel::kSve || level == ArmSimdLevel::kSve2) {                               \
+    return MakeBulkFunctions<T, &STEM##_SVE, &STEM##Left_SVE, &STEM##Right_SVE>();                 \
+  }
+#else
+#define ONNX_LIGHT_CPU_TRY_SVE_BULK(STEM, T)
+#endif
+
+#if ONNX_LIGHT_CPU_BINARY_ARM64
+#define ONNX_LIGHT_CPU_RESOLVE_ARM_BULK(STEM, T)                                                   \
+  static const ArmSimdLevel level = DetectArmSimdLevel();                                          \
+  ONNX_LIGHT_CPU_TRY_SVE_BULK(STEM, T)                                                             \
+  if (level != ArmSimdLevel::kNone) {                                                              \
+    return MakeBulkFunctions<T, &STEM##_NEON, &STEM##Left_NEON, &STEM##Right_NEON>();              \
+  }
+#else
+#define ONNX_LIGHT_CPU_RESOLVE_ARM_BULK(STEM, T)
+#endif
+
+#define ONNX_LIGHT_CPU_DEFINE_BULK_RESOLVER(PUBLIC, STEM, T)                                       \
+  const BinaryArithmeticBulkFunctions &PUBLIC##BulkFunctions() {                                   \
+    ONNX_LIGHT_CPU_RESOLVE_X86_BULK(STEM, T)                                                       \
+    ONNX_LIGHT_CPU_RESOLVE_ARM_BULK(STEM, T)                                                       \
+    return MakeBulkFunctions<T, &STEM##_Scalar, &STEM##Left_Scalar, &STEM##Right_Scalar>();        \
+  }
+
+#define ONNX_LIGHT_CPU_DEFINE_X86_BULK_RESOLVER(PUBLIC, STEM, T)                                   \
+  const BinaryArithmeticBulkFunctions &PUBLIC##BulkFunctions() {                                   \
+    ONNX_LIGHT_CPU_RESOLVE_X86_BULK(STEM, T)                                                       \
+    return MakeBulkFunctions<T, &STEM##_Scalar, &STEM##Left_Scalar, &STEM##Right_Scalar>();        \
+  }
+
 #define ONNX_LIGHT_CPU_BIN_DISPATCH_CONTIG(PUBLIC, STEM, T)                                        \
   void PUBLIC##Contiguous(const T *left, const T *right, T *out, std::size_t count) {              \
     if (count == 0) {                                                                              \
@@ -468,6 +558,20 @@ inline Fn PickImpl(Fn scalar_fn, Fn sse2_fn, Fn avx_fn, Fn avx512_fn, Fn neon_fn
   ONNX_LIGHT_CPU_BIN_DISPATCH_RIGHT(PUBLIC, STEM, T)
 
 } // namespace
+
+ONNX_LIGHT_CPU_DEFINE_BULK_RESOLVER(BinaryAddFloat32, BinaryAddFloat32, float)
+ONNX_LIGHT_CPU_DEFINE_BULK_RESOLVER(BinarySubFloat32, BinarySubFloat32, float)
+ONNX_LIGHT_CPU_DEFINE_BULK_RESOLVER(BinaryMulFloat32, BinaryMulFloat32, float)
+ONNX_LIGHT_CPU_DEFINE_BULK_RESOLVER(BinaryDivFloat32, BinaryDivFloat32, float)
+ONNX_LIGHT_CPU_DEFINE_X86_BULK_RESOLVER(BinaryPReluFloat32, BinaryPReluFloat32, float)
+
+#undef ONNX_LIGHT_CPU_DEFINE_X86_BULK_RESOLVER
+#undef ONNX_LIGHT_CPU_DEFINE_BULK_RESOLVER
+#undef ONNX_LIGHT_CPU_RESOLVE_ARM_BULK
+#undef ONNX_LIGHT_CPU_TRY_SVE_BULK
+#undef ONNX_LIGHT_CPU_RESOLVE_X86_BULK
+#undef ONNX_LIGHT_CPU_TRY_AVX_BULK
+#undef ONNX_LIGHT_CPU_TRY_AVX512_BULK
 
 ONNX_LIGHT_CPU_BIN_DISPATCH(BinaryAddFloat32, BinaryAddFloat32, float)
 ONNX_LIGHT_CPU_BIN_DISPATCH(BinarySubFloat32, BinarySubFloat32, float)
