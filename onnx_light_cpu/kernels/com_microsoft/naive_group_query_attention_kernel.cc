@@ -111,6 +111,7 @@ struct GqaArgs {
   std::int64_t num_heads = 0;
   std::int64_t kv_num_heads = 0;
   bool causal = true;
+  std::int64_t local_window_size = -1;
   std::optional<float> scale;
   float softcap = 0.0f;
   bool do_rotary = false;
@@ -132,12 +133,11 @@ void ValidateUnsupportedAttributesAndInputs(const NodeProto &node) {
       rt_ns::GetAttributeIntOrDefault(node, "smooth_softmax", 0) != 0 ||
       rt_ns::GetAttributeIntOrDefault(node, "qk_output", 0) != 0 ||
       rt_ns::GetAttributeIntOrDefault(node, "kv_cache_bit_width", 0) != 0 ||
-      rt_ns::GetAttributeIntOrDefault(node, "local_window_size", -1) != -1 ||
       rt_ns::GetAttributeStringOrDefault(node, "k_quant_type", "NONE") != "NONE" ||
       rt_ns::GetAttributeStringOrDefault(node, "v_quant_type", "NONE") != "NONE") {
     throw std::invalid_argument(
         "onnx_light_cpu::NaiveGroupQueryAttention: unsupported attribute (sliding-window cache, "
-        "smooth softmax, qk_output, quantized KV cache, and local/sliding window attention are "
+        "smooth softmax, qk_output, and quantized KV cache are "
         "not implemented).");
   }
   if (HasInput(node, 11)) {
@@ -185,6 +185,23 @@ template <typename Lookup> GqaArgs ResolveAndValidate(const NodeProto &node, Loo
         "and num_heads must be a multiple of kv_num_heads.");
   }
   args.causal = rt_ns::GetAttributeIntOrDefault(node, "causal", 1) != 0;
+  if (const auto *window = rt_ns::FindAttribute(node, "local_window_size"); window != nullptr) {
+    if (window->type() != ONNX_LIGHT_NAMESPACE::AttributeProto::AttributeType::INT ||
+        !window->has_i()) {
+      throw std::invalid_argument(
+          "onnx_light_cpu::NaiveGroupQueryAttention: local_window_size must be an INT attribute.");
+    }
+    args.local_window_size = window->i();
+    if (args.local_window_size != -1 &&
+        (args.local_window_size <= 0 || args.local_window_size > INT32_MAX)) {
+      throw std::invalid_argument("onnx_light_cpu::NaiveGroupQueryAttention: local_window_size "
+                                  "must be -1 or in [1, INT32_MAX].");
+    }
+    if (args.local_window_size != -1 && rt_ns::GetAttributeIntOrDefault(node, "causal", 1) != 1) {
+      throw std::invalid_argument(
+          "onnx_light_cpu::NaiveGroupQueryAttention: local_window_size requires causal=1.");
+    }
+  }
   if (const auto *scale = rt_ns::FindAttribute(node, "scale"); scale != nullptr) {
     args.scale = scale->f();
   }
@@ -704,7 +721,9 @@ Tensor ComputeNaiveAttention(const GqaArgs &args, RuntimeContext *rt, const Tens
         float row_max = kNegativeInfinity;
         float row_bias_max = kNegativeInfinity;
         for (std::int64_t j = 0; j < total_length; ++j) {
-          const bool allowed = !args.causal || j <= window_center;
+          const bool allowed =
+              (!args.causal || j <= window_center) &&
+              (args.local_window_size == -1 || j > window_center - args.local_window_size);
           float additive_bias = 0.0f;
           if (mask_bytes != nullptr) {
             const std::ptrdiff_t index = b * mask_strides.batch + h * mask_strides.head +
