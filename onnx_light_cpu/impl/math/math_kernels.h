@@ -152,6 +152,17 @@ void ExpFloat16WithTuning(const uint16_t *input, uint16_t *output, std::size_t c
 void ExpBFloat16WithTuning(const uint16_t *input, uint16_t *output, std::size_t count,
                            const UnaryExecutionTuning &tuning);
 
+/// Elementwise tanh with runtime dispatch and executor-owned range scheduling.
+/// Supports unaligned buffers, exact in-place operation, and null buffers when count is zero.
+void TanhFloat32(const float *input, float *output, std::size_t count);
+void TanhFloat16(const std::uint16_t *input, std::uint16_t *output, std::size_t count);
+void TanhBFloat16(const std::uint16_t *input, std::uint16_t *output, std::size_t count);
+/// Serial contiguous-range reference and ISA implementation (no executor dispatch).
+void TanhFloat32_Scalar(const float *input, float *output, std::size_t count);
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
+void TanhFloat32_AVX2_FMA(const float *input, float *output, std::size_t count);
+#endif
+
 void SwiGLUFloat32(const float *gate, const float *value, float *output, std::size_t count,
                    float alpha);
 void SwiGLUFloat64(const double *gate, const double *value, double *output, std::size_t count,

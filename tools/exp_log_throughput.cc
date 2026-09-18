@@ -2,7 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Isolated float32 Exp/Log throughput driver.  This deliberately measures
+// Isolated float32 Exp/Log throughput driver (pass "tanh" as the second argument
+// for a direct scalar/AVX2 comparison). This deliberately measures
 // preallocated buffers and reports the environment separately from the
 // end-to-end parity runner.
 
@@ -13,6 +14,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
@@ -97,6 +99,67 @@ std::pair<double, double> Summary(std::vector<double> values) {
   return {median, values[(values.size() * 3) / 4] - values[values.size() / 4]};
 }
 
+int MeasureTanh(std::size_t samples) {
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
+  if (onnx_light_cpu::DetectSimdLevel() < onnx_light_cpu::SimdLevel::kAVX2 ||
+      !onnx_light_cpu::CpuSupportsFma()) {
+    std::fprintf(stderr, "direct Tanh comparison requires AVX2 and FMA\n");
+    return 2;
+  }
+  std::printf("operator,size,offset_floats,median_seconds,iqr_seconds,speedup\n");
+  for (const std::size_t count :
+       {8, 31, 100, 1000, 10000, 100000, 202048, 202055, 3232768, 25862144}) {
+    for (const std::size_t offset : {0, 1}) {
+      std::vector<float> input_storage(count + 32), output_storage(count + 32);
+      const auto aligned = [offset](std::vector<float> &storage) {
+        const auto address = reinterpret_cast<std::uintptr_t>(storage.data());
+        return reinterpret_cast<float *>((address + 63u) & ~std::uintptr_t{63u}) + offset;
+      };
+      float *input = aligned(input_storage);
+      float *output = aligned(output_storage);
+      for (std::size_t i = 0; i < count; ++i) {
+        input[i] = -8.0f + 16.0f * static_cast<float>(i) / static_cast<float>(count);
+      }
+      using Kernel = void (*)(const float *, float *, std::size_t);
+      const Kernel kernels[] = {onnx_light_cpu::TanhFloat32_Scalar,
+                                onnx_light_cpu::TanhFloat32_AVX2_FMA};
+      for (int warmup = 0; warmup < 3; ++warmup) {
+        for (const auto kernel : kernels) {
+          kernel(input, output, count);
+        }
+      }
+      std::vector<double> timings[2];
+      for (auto &values : timings) {
+        values.reserve(samples);
+      }
+      const auto iterations = std::max<std::size_t>(1, 100000 / count);
+      for (std::size_t sample = 0; sample < samples; ++sample) {
+        for (std::size_t order = 0; order < 2; ++order) {
+          const auto index = (sample + order) % 2;
+          const auto start = std::chrono::steady_clock::now();
+          for (std::size_t iteration = 0; iteration < iterations; ++iteration) {
+            kernels[index](input, output, count);
+          }
+          const auto stop = std::chrono::steady_clock::now();
+          timings[index].push_back(std::chrono::duration<double>(stop - start).count() /
+                                   static_cast<double>(iterations));
+        }
+      }
+      const auto [scalar_median, scalar_iqr] = Summary(timings[0]);
+      const auto [avx2_median, avx2_iqr] = Summary(timings[1]);
+      std::printf("TanhScalar,%zu,%zu,%.9g,%.9g,1\n", count, offset, scalar_median, scalar_iqr);
+      std::printf("TanhAVX2FMA,%zu,%zu,%.9g,%.9g,%.6g\n", count, offset, avx2_median, avx2_iqr,
+                  scalar_median / avx2_median);
+    }
+  }
+  return 0;
+#else
+  (void)samples;
+  std::fprintf(stderr, "direct Tanh comparison requires compiled AVX2/FMA support\n");
+  return 2;
+#endif
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -120,6 +183,9 @@ int main(int argc, char **argv) {
               "unknown",
 #endif
               static_cast<long>(__cplusplus), IsaName(onnx_light_cpu::DetectSimdLevel()), samples);
+  if (argc > 2 && std::string(argv[2]) == "tanh") {
+    return MeasureTanh(samples);
+  }
   std::printf("operator,size,median_seconds,iqr_seconds,cycles_per_element\n");
   for (const std::size_t size : Sizes()) {
     const auto exp = Measure(onnx_light_cpu::ExpFloat32, size, samples);

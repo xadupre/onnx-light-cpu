@@ -1,7 +1,7 @@
 Unary Kernel Design
 ===================
 
-The unary runtime adapters implement ``Abs``, ``Exp``, ``Log``, and ``Not``.
+The unary runtime adapters include ``Abs``, ``Exp``, ``Log``, ``Not``, and ``Tanh``.
 Their node-specific classes live under ``onnx_light_cpu/kernels/math`` and
 ``onnx_light_cpu/kernels/logical``; typed compute functions and tuning helpers
 live under ``onnx_light_cpu/impl``.
@@ -55,6 +55,10 @@ Operators and types
    * - ``Not``
      - BOOL
      - Byte-valued boolean inversion; ONNX BOOL tensors are not bit-packed.
+   * - ``Tanh``
+     - FLOAT, FLOAT16, BFLOAT16
+     - Portable ``std::tanh`` and runtime-selected AVX2/FMA; low-precision
+       conversion uses bounded worker-local storage.
 
 Tuning and scheduling
 ---------------------
@@ -83,3 +87,84 @@ portable fallback.
 The adapters reject unsupported types and mismatched buffers before compute.
 Floating-point paths preserve their documented NaN, infinity, signed-zero, and
 domain behavior; integer absolute value avoids undefined signed overflow.
+
+Tanh and logit softcapping
+--------------------------
+
+``ai.onnx::Tanh`` preserves the input shape and element type, including scalar
+and empty tensors. It supports in-place compute, signed zero, subnormals, NaNs,
+and infinities (mapped to signed one). FP16 and BF16 compute in FP32 and round
+once on output. Each worker uses at most a 1,024-element FP32 conversion block;
+there is no full-tensor intermediate beyond the output.
+
+The AVX2/FMA range evaluates a small-argument polynomial to avoid cancellation
+near zero and reuses the exponential approximation for larger arguments.
+CPU feature detection is cached; machines without AVX2/FMA use the portable
+path. Scheduling uses the session-owned executor rather than a private pool.
+Inputs below 65,536 elements stay serial. At and above that threshold, ranges
+target at least 32,768 elements per participant, so a large one-token
+vocabulary can also use the executor. Nested calls do not submit another
+parallel region.
+
+The backend benchmark registry includes small and tail-heavy vectors plus
+logit tensors with shapes ``[1, 1, 202048]``, ``[1, 16, 202048]``, and
+``[1, 128, 202048]`` for all three types. These measure the Tanh step in
+``20 * tanh((0.19611613513818404 * logits) / 20)``; the complete expression is
+also checked against ONNX Runtime in the integration tests.
+
+.. code-block:: bash
+
+   python -m onnx_light_cpu benchmark --tests "^test_cpu_tanh_" \
+       --dtypes float32 float16 --threads 1 --repeat 100 --warmup 10 \
+       --onnxruntime --output tanh.xlsx
+
+ONNX Runtime's CPU provider does not supply a BF16 Tanh kernel. BF16 parity is
+therefore checked with BF16-rounded inputs through its FP32 kernel, followed
+by BF16 output rounding. Some ORT CPU versions flush FP32 subnormal results;
+the tests allow that underflow-only difference while independently requiring
+this kernel to preserve subnormals and the sign of zero exactly.
+
+Measured AVX2 path
+^^^^^^^^^^^^^^^^^^
+
+On an AMD EPYC 7763 (GCC Release build, AVX2/FMA, one thread pinned to CPU 3),
+the existing throughput driver compares the scalar and AVX2 range functions
+directly. Both use the same preallocated FP32 input/output buffers, three
+warmups, and 15 samples with alternating measurement order. The table reports
+median seconds for aligned inputs; the driver also includes unaligned and
+tail-heavy cases. This comparison excludes allocation and session overhead.
+
+.. code-block:: bash
+
+   cmake -S . -B build-tanh -DONNX_LIGHT_CPU_BUILD_PYTHON=OFF \
+       -DONNX_LIGHT_CPU_BUILD_BENCHMARKS=ON -DONNX_LIGHT_CPU_MAX_SIMD_LEVEL=AVX2
+   cmake --build build-tanh --target exp_log_throughput -j4
+   taskset -c 3 build-tanh/exp_log_throughput 15 tanh
+
+.. list-table::
+   :header-rows: 1
+
+   * - FP32 shape
+     - Scalar seconds
+     - AVX2/FMA seconds
+     - Speedup
+   * - 1 x 1 x 202048
+     - 0.003291949
+     - 0.000150932
+     - 21.81x
+   * - 1 x 16 x 202048
+     - 0.052805285
+     - 0.002448955
+     - 21.56x
+   * - 1 x 128 x 202048
+     - 0.422916743
+     - 0.019602640
+     - 21.57x
+
+These are speedups over this kernel's portable implementation, not over ONNX
+Runtime. For example, the one-thread backend benchmark (30 repeats, five
+warmups, ORT 1.30) measured FP32 one-token medians of 0.000205579 seconds here
+and 0.000107706 seconds in ORT. Small eight-element sessions measured
+0.000006568 and 0.000014382 seconds respectively. Absolute session timings on
+this shared runner are indicative rather than performance guarantees.
+No AVX-512 speedup is claimed: this machine cannot execute AVX-512.
