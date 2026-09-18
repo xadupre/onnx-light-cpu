@@ -4,6 +4,7 @@
 
 #include "onnx_light_cpu/kernels/tensor/nonzero_kernel.h"
 
+#include "onnx_light_cpu/impl/tensor/nonzero_kernel.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
 
 #include "onnx_core/runtime/kernels/node_helpers.h"
@@ -49,10 +50,7 @@ Tensor NonZeroKernel::operator()(const Tensor &x, rt_ns::RuntimeContext *rt) con
   }
 
   const uint8_t *input = x.bytes();
-  int64_t count = 0;
-  for (int64_t i = 0; i < total; ++i) {
-    count += input[i] != 0;
-  }
+  const int64_t count = CountNonZeroBool(input, total);
 
   const int64_t rank = static_cast<int64_t>(x.shape.size());
   const rt_ns::Shape output_shape{rank, count};
@@ -70,20 +68,7 @@ Tensor NonZeroKernel::operator()(const Tensor &x, rt_ns::RuntimeContext *rt) con
   if (output_bytes == 0) {
     return output;
   }
-  int64_t *indices = output.AsInt64();
-  int64_t column = 0;
-  for (int64_t i = 0; i < total; ++i) {
-    if (input[i] == 0) {
-      continue;
-    }
-    int64_t flat = i;
-    for (int64_t axis = rank; axis > 0; --axis) {
-      const int64_t dim = x.shape[axis - 1];
-      indices[(axis - 1) * count + column] = flat % dim;
-      flat /= dim;
-    }
-    ++column;
-  }
+  WriteNonZeroBoolIndices(input, total, x.shape.data(), rank, count, output.AsInt64());
   return output;
 }
 
