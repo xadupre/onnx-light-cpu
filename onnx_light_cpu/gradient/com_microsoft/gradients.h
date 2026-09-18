@@ -131,6 +131,12 @@ namespace onnx_light_cpu {
  * The score scale is replayed from the forward attribute. When omitted, the
  * graph computes ``1 / sqrt(Shape(Q)[2] / num_heads)`` dynamically. Grouped
  * K/V head gradients are summed back to their original head count.
+ *
+ * MatMulNBits treats packed B and scales as constants. For the supported
+ * FLOAT, 4-bit, block-32 form it unpacks low/high nibbles, subtracts the
+ * implicit zero point 8, applies per-block scales, trims K padding, and uses
+ * the resulting N-by-K weight matrix to compute dA. Optional bias receives
+ * the sum of dY over every leading axis.
  */
 void RegisterCustomOperatorGradients(ONNX_LIGHT_NAMESPACE::core::gradient::GradRegistry &registry);
 

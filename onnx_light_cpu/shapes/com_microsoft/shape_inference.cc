@@ -129,6 +129,32 @@ std::string GetStringAttribute(const ONNX_LIGHT_NAMESPACE::NodeProto &node, cons
   return fallback;
 }
 
+std::int64_t GetRequiredIntAttribute(const ONNX_LIGHT_NAMESPACE::NodeProto &node,
+                                     const char *name) {
+  for (const auto &attribute : node.attribute()) {
+    if (attribute.name() == name &&
+        attribute.type() == ONNX_LIGHT_NAMESPACE::AttributeProto::AttributeType::INT) {
+      return attribute.i();
+    }
+  }
+  throw std::invalid_argument(std::string("ComputeShapeMatMulNBits: missing required attribute '") +
+                              name + "'.");
+}
+
+std::int64_t GetIntAttribute(const ONNX_LIGHT_NAMESPACE::NodeProto &node, const char *name,
+                             std::int64_t fallback) {
+  for (const auto &attribute : node.attribute()) {
+    if (attribute.name() == name) {
+      return attribute.i();
+    }
+  }
+  return fallback;
+}
+
+bool HasInput(const ONNX_LIGHT_NAMESPACE::NodeProto &node, std::size_t index) {
+  return node.input_size() > index && !node.input(index).empty();
+}
+
 void RequireRank4(const SymShape &shape, const char *name) {
   if (shape.Rank() != 4) {
     throw std::invalid_argument(std::string("ComputeShapeGroupQueryAttention: '") + name +
@@ -164,6 +190,12 @@ std::vector<OperatorSupportRegistration> CollectOperatorSupport() {
        "onnx_light_cpu::ComputePeakMemoryLinearAttention",
        {"onnx_light_cpu::LinearAttentionFusionPattern"},
        false},
+      {kMicrosoftDomain,
+       "MatMulNBits",
+       "onnx_light_cpu::ComputeShapeMatMulNBits",
+       "onnx_light_cpu::ComputePeakMemoryMatMulNBits",
+       {"onnx_light_cpu::MatMulNBitsBiasFusionPattern"},
+       true},
       {"ai.onnx",
        "SimplifiedLayerNormalization",
        "onnx_light_cpu::ComputeShapeSimplifiedLayerNormalization",
@@ -211,6 +243,72 @@ void ComputeShapeBiasGelu(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE::NodePr
   ConstrainEqual(ctx, a.Shape()[a.Shape().Rank() - 1], bias.Shape()[0],
                  "ComputeShapeBiasGelu: bias length must match the last input dimension.");
   ctx.Set(node.output(0), SymTensor(nullptr, a.Dtype(), a.Shape()));
+}
+
+void ComputeShapeMatMulNBits(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE::NodeProto &node) {
+  if (node.input_size() < 3 || node.input_size() > 6 || node.output_size() != 1 ||
+      node.output(0).empty() || !HasInput(node, 0) || !HasInput(node, 1) || !HasInput(node, 2) ||
+      !ctx.Has(node.input(0)) || !ctx.Has(node.input(1)) || !ctx.Has(node.input(2)) ||
+      HasInput(node, 3) || HasInput(node, 4) || (HasInput(node, 5) && !ctx.Has(node.input(5)))) {
+    throw std::invalid_argument(
+        "ComputeShapeMatMulNBits: expected A, B, scales, optional bias, and no zero_points/g_idx.");
+  }
+  const std::int64_t k = GetRequiredIntAttribute(node, "K");
+  const std::int64_t n = GetRequiredIntAttribute(node, "N");
+  const std::int64_t bits = GetIntAttribute(node, "bits", 4);
+  const std::int64_t block_size = GetRequiredIntAttribute(node, "block_size");
+  const std::int64_t accuracy_level = GetIntAttribute(node, "accuracy_level", 0);
+  const std::int64_t weight_prepacked = GetIntAttribute(node, "weight_prepacked", 0);
+  if (k <= 0 || n <= 0 || (bits != 2 && bits != 4 && bits != 8) || block_size != 32 ||
+      (accuracy_level != 0 && accuracy_level != 4) || weight_prepacked != 0) {
+    throw std::invalid_argument(
+        "ComputeShapeMatMulNBits: unsupported attributes for the INT2/INT4/INT8 block-32 subset.");
+  }
+  const SymTensor &a = ctx.Get(node.input(0));
+  const SymTensor &b = ctx.Get(node.input(1));
+  const SymTensor &scales = ctx.Get(node.input(2));
+  const bool supported_type = a.Dtype() == sym_ns::TensorType::kFloat ||
+                              a.Dtype() == sym_ns::TensorType::kFloat16 ||
+                              a.Dtype() == sym_ns::TensorType::kBfloat16;
+  if (!supported_type || scales.Dtype() != a.Dtype() || b.Dtype() != sym_ns::TensorType::kUint8) {
+    throw std::invalid_argument(
+        "ComputeShapeMatMulNBits: A/scales must have matching FLOAT, FLOAT16, or BFLOAT16 types "
+        "and B must be UINT8.");
+  }
+  if (a.Shape().Rank() == 0 || b.Shape().Rank() != 3 ||
+      (scales.Shape().Rank() != 1 && scales.Shape().Rank() != 2)) {
+    throw std::invalid_argument("ComputeShapeMatMulNBits: invalid input rank.");
+  }
+  const std::int64_t blocks = (k + 31) / 32;
+  ConstrainEqual(ctx, a.Shape()[a.Shape().Rank() - 1], sym_ns::SymDim(k),
+                 "ComputeShapeMatMulNBits: A's final dimension must equal K.");
+  ConstrainEqual(ctx, b.Shape()[0], sym_ns::SymDim(n),
+                 "ComputeShapeMatMulNBits: B dimension 0 must equal N.");
+  ConstrainEqual(ctx, b.Shape()[1], sym_ns::SymDim(blocks),
+                 "ComputeShapeMatMulNBits: B dimension 1 must equal ceil(K / 32).");
+  ConstrainEqual(ctx, b.Shape()[2], sym_ns::SymDim(4 * bits),
+                 "ComputeShapeMatMulNBits: B dimension 2 must equal 4 * bits.");
+  if (scales.Shape().Rank() == 1) {
+    ConstrainEqual(ctx, scales.Shape()[0], sym_ns::SymDim(n * blocks),
+                   "ComputeShapeMatMulNBits: flat scales has the wrong length.");
+  } else {
+    ConstrainEqual(ctx, scales.Shape()[0], sym_ns::SymDim(n),
+                   "ComputeShapeMatMulNBits: scales dimension 0 must equal N.");
+    ConstrainEqual(ctx, scales.Shape()[1], sym_ns::SymDim(blocks),
+                   "ComputeShapeMatMulNBits: scales dimension 1 has the wrong block count.");
+  }
+  if (HasInput(node, 5)) {
+    const SymTensor &bias = ctx.Get(node.input(5));
+    if (bias.Dtype() != a.Dtype() || bias.Shape().Rank() != 1) {
+      throw std::invalid_argument(
+          "ComputeShapeMatMulNBits: bias must be rank 1 and have A's type.");
+    }
+    ConstrainEqual(ctx, bias.Shape()[0], sym_ns::SymDim(n),
+                   "ComputeShapeMatMulNBits: bias length must equal N.");
+  }
+  SymShape output = a.Shape();
+  output[output.Rank() - 1] = sym_ns::SymDim(n);
+  ctx.Set(node.output(0), SymTensor(nullptr, a.Dtype(), std::move(output)));
 }
 
 void ComputeShapeSkipSimplifiedLayerNormalization(ShapesContext &ctx,
@@ -573,6 +671,8 @@ int64_t ComputePeakMemoryCDist(sym_ns::Device, const std::vector<SymShape> &) { 
 
 int64_t ComputePeakMemoryBiasGelu(sym_ns::Device, const std::vector<SymShape> &) { return 0; }
 
+int64_t ComputePeakMemoryMatMulNBits(sym_ns::Device, const std::vector<SymShape> &) { return 0; }
+
 int64_t ComputePeakMemorySkipSimplifiedLayerNormalization(sym_ns::Device,
                                                           const std::vector<SymShape> &) {
   return 0;
@@ -622,6 +722,7 @@ void RegisterMicrosoftShapeAndMemoryFunctions() {
                                       ComputeShapeGroupQueryAttention);
     shapes_ns::RegisterComputeShapeFn(kMicrosoftDomain, "LinearAttention",
                                       ComputeShapeLinearAttention);
+    shapes_ns::RegisterComputeShapeFn(kMicrosoftDomain, "MatMulNBits", ComputeShapeMatMulNBits);
     shapes_ns::RegisterComputePeakMemoryFn(kMicrosoftDomain, "CDist", sym_ns::Device::kCPU,
                                            ComputePeakMemoryCDist);
     shapes_ns::RegisterComputePeakMemoryFn(kMicrosoftDomain, "BiasGelu", sym_ns::Device::kCPU,
@@ -634,6 +735,8 @@ void RegisterMicrosoftShapeAndMemoryFunctions() {
                                            ComputePeakMemoryGroupQueryAttention);
     shapes_ns::RegisterComputePeakMemoryFn(kMicrosoftDomain, "LinearAttention",
                                            sym_ns::Device::kCPU, ComputePeakMemoryLinearAttention);
+    shapes_ns::RegisterComputePeakMemoryFn(kMicrosoftDomain, "MatMulNBits", sym_ns::Device::kCPU,
+                                           ComputePeakMemoryMatMulNBits);
   });
 }
 

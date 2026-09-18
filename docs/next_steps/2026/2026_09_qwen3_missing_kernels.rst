@@ -47,8 +47,11 @@ prerequisite for the initial kernel milestone, which uses the existing tensor
 PR sequence
 -----------
 
-All steps are pending. K00 establishes executable contracts before work starts
-in parallel. Model downloads and a complete generation benchmark are not
+K01 now has a portable packed-INT4/block-32 foundation with schema, symbolic
+shape inference, zero scratch-memory accounting, gradients, bias fusion, and
+Qwen2/Qwen3-shaped backend benchmarks. Prepared-weight persistence and the
+optimized K02 decode path remain pending. K00 still establishes the complete
+model contract; model downloads and a generation benchmark are not
 prerequisites for isolated kernel development.
 
 .. list-table::
@@ -69,11 +72,12 @@ prerequisites for isolated kernel development.
      - Existing graph inventory
    * - K01
      - ``MatMulNBits`` schema, adapter, and prepared storage.
-     - Validate the audited three-input FP32/UINT8/FP32 contract with
-       ``bits=4``, ``block_size=32``, and ``accuracy_level=4``. Match packed
-       layout, implicit zero points, scale indexing, and padding against ONNX
-       Runtime. Reuse constant packed weights; reject unsupported variants
-       explicitly without expanding the complete weight matrix.
+     - Validate matching FP32/FP16/BF16 activation, scale, bias, and output
+       types with packed UINT8 INT2/INT4/INT8 weights, ``block_size=32``, and
+       ``accuracy_level=4``. Match packed layout, implicit zero points, scale
+       indexing, and padding against ONNX Runtime. Reuse constant packed
+       weights; reject unsupported variants explicitly without expanding the
+       complete weight matrix.
      - K00
    * - K02
      - Packed INT4 decode GEMV.

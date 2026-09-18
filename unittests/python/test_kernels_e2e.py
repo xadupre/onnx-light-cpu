@@ -46,6 +46,7 @@ from types import SimpleNamespace
 
 import ml_dtypes
 import numpy as np
+import onnxruntime
 
 from onnx_light.ext_test_case import ExtTestCase
 from onnx_light.onnx import TensorProto, helper, inliner
@@ -163,6 +164,35 @@ def _assert_close(actual, expected, rtol, atol):
         np.testing.assert_allclose(
             actual.astype(np.float64), expected.astype(np.float64), rtol=rtol, atol=atol
         )
+
+
+def _matmul_nbits_numpy_reference(model, feeds):
+    node = model.graph.node[0]
+    attributes = {
+        attribute.name: helper.get_attribute_value(attribute) for attribute in node.attribute
+    }
+    bits = attributes["bits"]
+    block_size = attributes["block_size"]
+    k = attributes["K"]
+    n = attributes["N"]
+    values_per_byte = 8 // bits
+    mask = (1 << bits) - 1
+    zero_point = 1 << (bits - 1)
+    packed = feeds["B"]
+    scales = np.asarray(feeds["scales"], dtype=np.float32)
+    weights = np.empty((n, k), dtype=np.float32)
+    for column in range(n):
+        for index in range(k):
+            block = index // block_size
+            block_offset = index % block_size
+            byte = packed[column, block, block_offset // values_per_byte]
+            shift = (block_offset % values_per_byte) * bits
+            quantized = (int(byte) >> shift) & mask
+            weights[column, index] = (quantized - zero_point) * scales[column, block]
+    output = np.asarray(feeds["A"], dtype=np.float32) @ weights.T
+    if "bias" in feeds:
+        output += np.asarray(feeds["bias"], dtype=np.float32)
+    return output.astype(feeds["A"].dtype)
 
 
 def _warm_builtin_session(model, feeds):
@@ -584,6 +614,50 @@ class TestBackendCases(ExtTestCase):
             "exceptional",
         ]
 
+    def test_matmul_nbits_backend_cases_match_reference(self):
+        options = onnxruntime.SessionOptions()
+        options.intra_op_num_threads = 1
+        options.inter_op_num_threads = 1
+        cases = [
+            case
+            for case in collect_test_cases("MatMulNBits", mode=TestMode.TEST)
+            if case.name.startswith("test_cpu_matmulnbits_")
+        ]
+        self.assertEqual(len(cases), 9)
+        for case in cases:
+            with self.subTest(case=case.name):
+                model = type(case.model)()
+                model.ParseFromString(case.model.SerializeToString())
+                model.ir_version = 10
+                use_onnxruntime = (
+                    model.graph.input[0].type.tensor_type.elem_type != TensorProto.BFLOAT16
+                )
+                oracle = (
+                    onnxruntime.InferenceSession(
+                        model.SerializeToString(),
+                        sess_options=options,
+                        providers=["CPUExecutionProvider"],
+                    )
+                    if use_onnxruntime
+                    else None
+                )
+                session = ReferenceEvaluator(model)
+                register_kernel_for_session(session, "com.microsoft", "MatMulNBits")
+                for dataset in case.data_sets:
+                    feeds = {
+                        value.name: _to_numpy(tensor)
+                        for value, tensor in zip(model.graph.input, dataset.inputs, strict=True)
+                    }
+                    expected = (
+                        oracle.run(None, feeds)
+                        if oracle is not None
+                        else [_matmul_nbits_numpy_reference(model, feeds)]
+                    )
+                    actual = session.run(None, feeds)
+                    for output, reference in zip(actual, expected, strict=True):
+                        tolerance = 2e-2 if output.dtype != np.float32 else 3e-5
+                        _assert_close(output, reference, rtol=tolerance, atol=tolerance)
+
     def test_all_registered_kernels_pass_regular_backend_correctness_corpus(self):
         report = run_backend_correctness_tests()
         assert report.executed == report.passed
@@ -613,7 +687,7 @@ class TestBackendCases(ExtTestCase):
     def test_registered_kernels_are_immutable_and_complete(self):
         records = registered_kernels()
         assert records, "expected at least one registered kernel record"
-        versioned_binary_ops = {
+        version_bounded_ops = {
             "Add",
             "And",
             "BitShift",
@@ -627,6 +701,7 @@ class TestBackendCases(ExtTestCase):
             "Less",
             "LessOrEqual",
             "Mod",
+            "MatMulNBits",
             "Mul",
             "Or",
             "PRelu",
@@ -666,6 +741,7 @@ class TestBackendCases(ExtTestCase):
                     "Less",
                     "LessOrEqual",
                     "Max",
+                    "MatMulNBits",
                     "Mean",
                     "Min",
                     "Mod",
@@ -704,7 +780,7 @@ class TestBackendCases(ExtTestCase):
             else:
                 assert record.since_version is None
             if record.until_version is not None:
-                assert record.op_type in versioned_binary_ops
+                assert record.op_type in version_bounded_ops
                 assert isinstance(record.until_version, int)
                 assert record.until_version >= record.since_version
 

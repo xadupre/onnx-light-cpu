@@ -17,6 +17,33 @@ Custom operators
    These adapters are separate from standardized ONNX schemas and from the
    Microsoft-only :func:`custom_op_schemas` provider.
 
+Microsoft MatMulNBits
+~~~~~~~~~~~~~~~~~~~~~
+
+``com.microsoft::MatMulNBits`` version 1 multiplies floating-point activations by a
+block-quantized right-hand matrix without materializing the complete
+dequantized matrix. The CPU contract implements packed INT2, INT4, and INT8
+formats with required ``K`` and ``N`` attributes, ``bits`` equal to 2, 4, or
+8, ``block_size=32``, ``accuracy_level`` 0 or 4, and
+``weight_prepacked=0``. Input ``B`` has shape
+``[N, ceil(K / 32), 4 * bits]`` and scales have shape
+``[N, ceil(K / 32)]`` or the equivalent flat shape. Implicit zero points are
+2, 8, and 128. Activations, scales, optional bias, and output have one matching
+``FLOAT``, ``FLOAT16``, or ``BFLOAT16`` type; ``DOUBLE`` is not supported.
+
+The activation may have any positive rank with final dimension ``K``. Shape
+inference preserves every leading concrete or symbolic dimension and replaces
+the final dimension with ``N``. CPU scratch memory is zero: packed weights are
+decoded while accumulating each output, and inputs and outputs are excluded
+from the peak-memory function.
+
+Explicit zero points, deprecated ``g_idx``, provider-prepacked weights, other
+bit widths, block sizes, mixed floating-point types, and ``DOUBLE`` are
+rejected rather than silently using a different layout. The registered gradient differentiates the
+activation and optional bias while treating packed weights and scales as
+constants. The bias fusion applies only to an exclusively consumed
+``MatMulNBits`` output followed by a compatible rank-one ``Add``.
+
 Experimental SimplifiedLayerNormalization
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -130,5 +157,6 @@ Support inventory
 
 .. py:function:: register_custom_gradients(registry=None)
 
-   Adds the ``CDist`` and ``BiasGelu`` backward rules to an independent
-   ``GradRegistry`` and returns it.
+   Adds the ``CDist``, ``BiasGelu``, ``GroupQueryAttention``, and
+   ``MatMulNBits`` backward rules to an independent ``GradRegistry`` and
+   returns it.

@@ -28,6 +28,12 @@ available through these APIs.
 .. doxygenfunction:: onnx_light_cpu::ComputePeakMemorySkipSimplifiedLayerNormalization
    :project: onnx_light_cpu
 
+.. doxygenfunction:: onnx_light_cpu::ComputeShapeMatMulNBits
+   :project: onnx_light_cpu
+
+.. doxygenfunction:: onnx_light_cpu::ComputePeakMemoryMatMulNBits
+   :project: onnx_light_cpu
+
 .. doxygenfunction:: onnx_light_cpu::RegisterCustomOperatorGradients
    :project: onnx_light_cpu
 
@@ -41,4 +47,7 @@ available through these APIs.
    :project: onnx_light_cpu
 
 .. doxygenclass:: onnx_light_cpu::LinearAttentionFusionPattern
+   :project: onnx_light_cpu
+
+.. doxygenclass:: onnx_light_cpu::MatMulNBitsBiasFusionPattern
    :project: onnx_light_cpu

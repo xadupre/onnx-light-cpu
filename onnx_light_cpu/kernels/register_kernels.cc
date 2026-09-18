@@ -10,6 +10,7 @@
 #include "onnx_light_cpu/kernels/com_microsoft/cdist_kernel.h"
 #include "onnx_light_cpu/kernels/com_microsoft/group_query_attention_kernel.h"
 #include "onnx_light_cpu/kernels/com_microsoft/linear_attention_kernel.h"
+#include "onnx_light_cpu/kernels/com_microsoft/matmul_nbits_kernel.h"
 #include "onnx_light_cpu/kernels/com_microsoft/naive_bias_gelu_kernel.h"
 #include "onnx_light_cpu/kernels/com_microsoft/naive_cdist_kernel.h"
 #include "onnx_light_cpu/kernels/com_microsoft/naive_group_query_attention_kernel.h"
@@ -201,6 +202,7 @@ void RegisterAllKernels(MicrosoftKernelImplementation implementation) {
   RegisterTreeEnsembleKernel();
   RegisterVariadicElementwiseKernels();
   RegisterMicrosoftKernels(implementation);
+  RegisterMatMulNBitsKernel();
 }
 
 bool RegisterKernelGlobal(const std::string &domain, const std::string &op_type, bool replace,

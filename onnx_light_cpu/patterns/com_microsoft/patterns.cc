@@ -15,6 +15,7 @@
 #include <mutex>
 #include <stdexcept>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace onnx_light_cpu {
@@ -58,6 +59,10 @@ bool ExactGelu(const NodeProto &node) {
 bool IsFloating(sym_ns::TensorType type) {
   return type == sym_ns::TensorType::kFloat16 || type == sym_ns::TensorType::kFloat ||
          type == sym_ns::TensorType::kDouble || type == sym_ns::TensorType::kBfloat16;
+}
+
+bool IsNonDoubleFloating(sym_ns::TensorType type) {
+  return IsFloating(type) && type != sym_ns::TensorType::kDouble;
 }
 
 int64_t GetIntAttributeOrDefault(const NodeProto &node, const char *name, int64_t default_value) {
@@ -142,6 +147,48 @@ NodeProto MakeCast(const std::string &input, const std::string &output, const st
   ONNX_LIGHT_NAMESPACE::AddAttribute(node, "to",
                                      static_cast<int64_t>(TensorProto::DataType::INT32));
   return node;
+}
+
+bool HasInput(const NodeProto &node, std::size_t index) {
+  return node.input_size() > index && !node.input(index).empty();
+}
+
+bool IsSupportedMatMulNBitsNode(GraphGraph &graph, const NodeProto &node) {
+  if (node.domain() != kMicrosoftDomain || node.op_type() != "MatMulNBits" ||
+      graph.Builder().OpsetVersion(kMicrosoftDomain) != 1 || node.input_size() < 3 ||
+      node.input_size() > 6 || node.output_size() != 1 || node.output(0).empty() ||
+      !HasInput(node, 0) || !HasInput(node, 1) || !HasInput(node, 2) || HasInput(node, 3) ||
+      HasInput(node, 4) || HasInput(node, 5)) {
+    return false;
+  }
+  static const std::unordered_set<std::string> supported_attributes = {
+      "K", "N", "bits", "block_size", "accuracy_level", "weight_prepacked"};
+  for (const AttributeProto &attribute : node.attribute()) {
+    if (!supported_attributes.contains(attribute.name()) ||
+        attribute.type() != AttributeProto::AttributeType::INT) {
+      return false;
+    }
+  }
+  const AttributeProto *k = FindAttribute(node, "K");
+  const AttributeProto *n = FindAttribute(node, "N");
+  const AttributeProto *block_size = FindAttribute(node, "block_size");
+  const int64_t accuracy_level = GetIntAttributeOrDefault(node, "accuracy_level", 0);
+  if (k == nullptr || n == nullptr || block_size == nullptr || k->i() <= 0 || n->i() <= 0 ||
+      (GetIntAttributeOrDefault(node, "bits", 4) != 2 &&
+       GetIntAttributeOrDefault(node, "bits", 4) != 4 &&
+       GetIntAttributeOrDefault(node, "bits", 4) != 8) ||
+      block_size->i() != 32 || (accuracy_level != 0 && accuracy_level != 4) ||
+      GetIntAttributeOrDefault(node, "weight_prepacked", 0) != 0) {
+    return false;
+  }
+  if (!graph.HasType(node.input(0)) || !IsNonDoubleFloating(graph.GetType(node.input(0))) ||
+      !graph.HasType(node.input(2)) ||
+      graph.GetType(node.input(2)) != graph.GetType(node.input(0)) ||
+      !graph.HasType(node.output(0)) ||
+      graph.GetType(node.output(0)) != graph.GetType(node.input(0))) {
+    return false;
+  }
+  return graph.HasType(node.input(1)) && graph.GetType(node.input(1)) == sym_ns::TensorType::kUint8;
 }
 
 } // namespace
@@ -360,6 +407,53 @@ LinearAttentionFusionPattern::Apply(GraphGraph &graph,
   return replacements;
 }
 
+std::set<std::string> MatMulNBitsBiasFusionPattern::FastOpType() const { return {"Add"}; }
+
+MatchResult MatMulNBitsBiasFusionPattern::Match(GraphGraph &graph,
+                                                const NodeProto &candidate) const {
+  if (!IsDefaultNode(&candidate, "Add", 2)) {
+    return NoMatch(candidate, "candidate is not a two-input default-domain Add");
+  }
+  const NodeProto *left = graph.NodeBefore(candidate.input(0));
+  const NodeProto *right = graph.NodeBefore(candidate.input(1));
+  const NodeProto *matmul = left != nullptr && left->op_type() == "MatMulNBits" ? left : right;
+  if (matmul == nullptr || !IsSupportedMatMulNBitsNode(graph, *matmul) ||
+      !HasOnlyConsumer(graph, *matmul, &candidate)) {
+    return NoMatch(candidate, "Add does not exclusively consume a supported MatMulNBits");
+  }
+  const std::string &bias = candidate.input(candidate.input(0) == matmul->output(0) ? 1 : 0);
+  if (!graph.HasType(bias) || graph.GetType(bias) != graph.GetType(matmul->input(0)) ||
+      !graph.HasShape(bias) || graph.GetShape(bias).Shape().Rank() != 1) {
+    return NoMatch(candidate, "bias must be rank 1 and match the MatMulNBits activation type");
+  }
+  const int64_t n = FindAttribute(*matmul, "N")->i();
+  const sym_ns::SymDim &bias_size = graph.GetShape(bias).Shape()[0];
+  if (bias_size.IsInt() && bias_size.AsInt() != n) {
+    return NoMatch(candidate, "bias length does not match N");
+  }
+  return MatchResult{this, {matmul, &candidate}, nullptr};
+}
+
+ONNX_LIGHT_NAMESPACE::utils::RepeatedProtoField<NodeProto>
+MatMulNBitsBiasFusionPattern::Apply(GraphGraph &graph,
+                                    const std::vector<const NodeProto *> &nodes) const {
+  if (nodes.size() != 2 || nodes[0] == nullptr || nodes[1] == nullptr ||
+      Match(graph, *nodes[1]).pattern == nullptr) {
+    throw BuilderError("MatMulNBitsBiasFusionPattern::Apply received an invalid match.");
+  }
+  NodeProto replacement = *nodes[0];
+  while (replacement.input_size() < 6) {
+    replacement.add_input("");
+  }
+  replacement.ref_input()[5] = nodes[1]->input(nodes[1]->input(0) == nodes[0]->output(0) ? 1 : 0);
+  replacement.ref_output()[0] = nodes[1]->output(0);
+  replacement.set_name("MatMulNBitsBiasFusion--" + nodes[1]->name());
+  graph.Builder().SetOpsetVersion(kMicrosoftDomain, 1);
+  ONNX_LIGHT_NAMESPACE::utils::RepeatedProtoField<NodeProto> replacements;
+  replacements.push_back(std::move(replacement));
+  return replacements;
+}
+
 void RegisterCustomOperatorPatterns() {
   static std::once_flag once;
   std::call_once(once, [] {
@@ -372,6 +466,8 @@ void RegisterCustomOperatorPatterns() {
     });
     builder_ns::RegisterPattern("MicrosoftLinearAttention",
                                 [] { return std::make_unique<LinearAttentionFusionPattern>(); });
+    builder_ns::RegisterPattern("MicrosoftMatMulNBitsBias",
+                                [] { return std::make_unique<MatMulNBitsBiasFusionPattern>(); });
   });
 }
 

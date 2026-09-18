@@ -17,6 +17,21 @@ Kernel classes
    :project: onnx_light_cpu
    :members:
 
+.. doxygenclass:: onnx_light_cpu::MatMulNBitsKernel
+   :project: onnx_light_cpu
+   :members:
+
+The ``com.microsoft::MatMulNBits-1`` CPU implementation targets the
+Qwen2/Qwen3 weight layout with matching ``FLOAT``, ``FLOAT16``, or ``BFLOAT16``
+activations, scales, optional bias, and output. Packed ``UINT8`` storage holds
+2-bit, 4-bit, or 8-bit weights with ``block_size=32`` and an implicit midpoint
+zero point of 2, 8, or 128 respectively.
+It consumes the packed weights directly without allocating or expanding a
+floating-point weight matrix. ``accuracy_level`` 0 and 4 are accepted.
+Explicit zero points, ``g_idx``, prepacked provider-specific layouts, other
+bit widths, block sizes, mixed floating-point types, and ``DOUBLE`` are
+rejected.
+
 .. doxygenclass:: onnx_light_cpu::GatherKernel
    :project: onnx_light_cpu
    :members:
