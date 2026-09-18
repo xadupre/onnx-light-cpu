@@ -47,6 +47,23 @@ longer fall back to a single worker.
 As in onnx-light's built-in Gather, strings, complex values, and packed
 sub-byte types are not supported.
 
+.. doxygenclass:: onnx_light_cpu::NonZeroKernel
+   :project: onnx_light_cpu
+   :members:
+
+NonZero supports ``BOOL`` inputs from opset 9 onwards, including the
+``Equal -> NonZero -> Transpose`` token-position pattern. It produces
+``INT64`` coordinates in deterministic row-major order with shape
+``[rank, count]``. The count stays symbolic during shape inference and is
+recomputed for each invocation before checked output allocation, without
+worst-case index scratch storage. Empty dimensions and all-zero inputs
+produce zero columns.
+Other input types retain onnx-light's built-in NonZero implementation.
+
+Scalar inputs follow the ONNX specification: ``[0, 0]`` for false and
+``[0, 1]`` for true. ONNX Runtime 1.30 instead returns ``[1, count]`` for
+scalars; ranked BOOL outputs match ONNX Runtime.
+
 .. doxygenclass:: onnx_light_cpu::CastKernel
    :project: onnx_light_cpu
    :members:
