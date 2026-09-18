@@ -64,6 +64,37 @@ Scalar inputs follow the ONNX specification: ``[0, 0]`` for false and
 ``[0, 1]`` for true. ONNX Runtime 1.30 instead returns ``[1, count]`` for
 scalars; ranked BOOL outputs match ONNX Runtime.
 
+.. doxygenclass:: onnx_light_cpu::ScatterNDKernel
+   :project: onnx_light_cpu
+   :members:
+
+ScatterND implements replacement semantics from opset 11 onwards. The
+``reduction`` attribute (introduced in opset 16) must be absent or ``"none"``;
+``add``, ``mul``, ``min``, ``max``, and unknown reductions are explicitly
+rejected, including for empty updates. Payloads use the same fixed-width
+types as Gather, including FP32, FP16, and BF16, without numerical conversion.
+``INT64`` indices follow ONNX; ``INT32`` indices are an onnx-light-cpu
+extension and must be cast to ``INT64`` for portable ONNX graphs.
+
+Index tuples address scalars or contiguous trailing slices. Negative
+coordinates are normalized per dimension, and all shapes, buffer sizes, and
+bounds are validated before writing. The input is copied exactly once into
+independent output storage, then only selected blocks are replaced. Empty
+updates still produce an independent copy. Preallocated outputs must not
+overlap any input, even partially; inputs may share storage with each other.
+
+ONNX's replacement contract says indices should not contain duplicate
+destinations, because update order is unspecified. This implementation
+processes tuples in row-major order, with the last tuple winning (including
+equivalent positive and negative indices). Do not depend on this ordering
+when moving graphs between runtimes; duplicate parity tests use identical
+updates. The initial copy can use the runtime executor, but replacement
+writes are serial to avoid duplicate-index races.
+
+The embedding fixture combines ``Gather -> Equal -> NonZero -> Transpose
+-> ScatterND`` with dynamic ``[visual_tokens, 1]`` positions and
+``[visual_tokens, 6656]`` vision features, including zero-image inputs.
+
 .. doxygenclass:: onnx_light_cpu::CastKernel
    :project: onnx_light_cpu
    :members:

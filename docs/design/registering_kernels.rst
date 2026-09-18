@@ -150,6 +150,7 @@ the default ONNX domain (the empty string is equivalent); ``ai.onnx.ml`` and
    "RegisterConcatKernel", "ai.onnx", "Concat"
    "RegisterGatherKernel", "ai.onnx", "Gather"
    "RegisterNonZeroKernel", "ai.onnx", "NonZero"
+   "RegisterScatterNDKernel", "ai.onnx", "ScatterND"
    "RegisterSliceKernel", "ai.onnx", "Slice"
    "RegisterSplitKernel", "ai.onnx", "Split"
    "RegisterMatMulKernel", "ai.onnx", "MatMul"

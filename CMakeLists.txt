@@ -1379,6 +1379,7 @@ if(ONNX_LIGHT_CPU_BUILD_TESTS)
                _test_name STREQUAL "test_onnx_light_normalization_kernel" OR
                _test_name STREQUAL "test_onnx_light_cast_kernel" OR
                _test_name STREQUAL "test_onnx_light_gather_kernel" OR
+               _test_name STREQUAL "test_onnx_light_scatter_nd_kernel" OR
                _test_name STREQUAL "test_onnx_light_slice_kernel" OR
                _test_name STREQUAL "test_onnx_light_concat_kernel" OR
                _test_name STREQUAL "test_onnx_light_split_kernel" OR
