@@ -189,19 +189,22 @@ LightOpSchema MakeMatMulNBitsSchema() {
   return LightOpSchema(
       "MatMulNBits", kMicrosoftDomain, 1,
       "Restricted compatibility subset of ONNX Runtime MatMulNBits. The CPU implementation "
-      "accepts FLOAT activations, scales, optional bias, and output; UINT8 packed weights; "
-      "bits=4, block_size=32, weight_prepacked=0, and accuracy_level 0 or 4. zero_points and "
+      "accepts matching FLOAT, FLOAT16, or BFLOAT16 activations, scales, optional bias, and "
+      "output; UINT8 packed INT2, INT4, or INT8 weights; block_size=32, weight_prepacked=0, and "
+      "accuracy_level 0 or 4. zero_points and "
       "g_idx retain their upstream input slots but must not be supplied. Packed B has shape "
-      "(N, ceil(K / 32), 16), scales has shape (N, ceil(K / 32)) or its flattened equivalent, "
-      "and bias has shape (N).",
-      {{"A", "FLOAT input tensor of rank at least one whose last dimension is K.", "T1"},
-       {"B", "UINT8 packed weights with shape (N, ceil(K / 32), 16).", "T2"},
-       {"scales", "FLOAT block scales with shape (N, ceil(K / 32)) or (N * ceil(K / 32)).", "T1"},
+      "(N, ceil(K / 32), 4 * bits), scales has shape (N, ceil(K / 32)) or its flattened "
+      "equivalent, and bias has shape (N).",
+      {{"A", "FLOAT, FLOAT16, or BFLOAT16 tensor of rank at least one ending in K.", "T1"},
+       {"B", "UINT8 packed weights with shape (N, ceil(K / 32), 4 * bits).", "T2"},
+       {"scales", "Block scales with shape (N, ceil(K / 32)) or its flattened equivalent.", "T1"},
        {"zero_points", "Unsupported optional upstream zero-point slot; must be omitted.", "T3"},
        {"g_idx", "Unsupported deprecated upstream group-index slot; must be omitted.", "T4"},
-       {"bias", "Optional FLOAT bias with shape (N).", "T1"}},
-      {{"Y", "FLOAT output with A's leading dimensions and final dimension N.", "T1"}},
-      {{"T1", {TensorType::kFloat}, "Constrain A, scales, bias, and Y to FLOAT tensors."},
+       {"bias", "Optional bias with shape (N) and A's type.", "T1"}},
+      {{"Y", "Output with A's type, leading dimensions, and final dimension N.", "T1"}},
+      {{"T1",
+        {TensorType::kFloat, TensorType::kFloat16, TensorType::kBfloat16},
+        "Constrain A, scales, bias, and Y to matching non-double floating-point tensors."},
        {"T2", {TensorType::kUint8}, "Constrain packed B to UINT8."},
        {"T3",
         {TensorType::kUint8},
@@ -211,7 +214,7 @@ LightOpSchema MakeMatMulNBitsSchema() {
         "Retain the upstream g_idx type slot; this subset rejects a supplied value."}},
       {AttributeParam{"K", "Positive input feature count.", AttributeType::INT, true},
        AttributeParam{"N", "Positive output feature count.", AttributeType::INT, true},
-       AttributeParam{"bits", "Quantized weight bit width; only 4 is supported.",
+       AttributeParam{"bits", "Quantized weight bit width; 2, 4, and 8 are supported.",
                       AttributeType::INT, false, int64_t{4}},
        AttributeParam{"block_size", "Quantization block size; only 32 is supported.",
                       AttributeType::INT, true},

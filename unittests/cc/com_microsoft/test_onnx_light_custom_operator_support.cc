@@ -89,7 +89,7 @@ NodeProto MakeGroupQueryAttentionNode(int64_t num_heads = 4, int64_t kv_num_head
   return node;
 }
 
-NodeProto MakeMatMulNBitsNode(bool bias = false) {
+NodeProto MakeMatMulNBitsNode(bool bias = false, int64_t bits = 4) {
   NodeProto node;
   node.set_domain(onnx_light_cpu::kMicrosoftDomain);
   node.set_op_type("MatMulNBits");
@@ -104,6 +104,7 @@ NodeProto MakeMatMulNBitsNode(bool bias = false) {
   node.add_output("Y");
   ONNX_LIGHT_NAMESPACE::AddAttribute(node, "K", int64_t{35});
   ONNX_LIGHT_NAMESPACE::AddAttribute(node, "N", int64_t{3});
+  ONNX_LIGHT_NAMESPACE::AddAttribute(node, "bits", bits);
   ONNX_LIGHT_NAMESPACE::AddAttribute(node, "block_size", int64_t{32});
   ONNX_LIGHT_NAMESPACE::AddAttribute(node, "accuracy_level", int64_t{4});
   return node;
@@ -312,22 +313,43 @@ TEST(CustomOperatorSupport, InfersBiasGeluShapeAndRejectsWrongBias) {
 }
 
 TEST(CustomOperatorSupport, InfersMatMulNBitsShapeAndValidatesPackedInputs) {
-  shapes_ns::ShapesContext ctx;
-  ctx.Set("A", SymTensor(nullptr, TensorType::kFloat,
-                         {SymDim("batch"), SymDim("sequence"), SymDim("hidden")}));
-  ctx.Set("B", SymTensor(nullptr, TensorType::kUint8, {SymDim(3), SymDim(2), SymDim(16)}));
-  ctx.Set("scales", SymTensor(nullptr, TensorType::kFloat, {SymDim(6)}));
-  ctx.Set("bias", SymTensor(nullptr, TensorType::kFloat, {SymDim(3)}));
-  onnx_light_cpu::ComputeShapeMatMulNBits(ctx, MakeMatMulNBitsNode(true));
-  EXPECT_EQ(ctx.Get("Y").Shape(),
-            sym_ns::SymShape({SymDim("batch"), SymDim("sequence"), SymDim(3)}));
-  ASSERT_EQ(ctx.Constraints().size(), 1U);
+  for (TensorType data_type : {TensorType::kFloat, TensorType::kFloat16, TensorType::kBfloat16}) {
+    for (int64_t bits : {2, 4, 8}) {
+      shapes_ns::ShapesContext ctx;
+      ctx.Set("A", SymTensor(nullptr, data_type,
+                             {SymDim("batch"), SymDim("sequence"), SymDim("hidden")}));
+      ctx.Set("B",
+              SymTensor(nullptr, TensorType::kUint8, {SymDim(3), SymDim(2), SymDim(4 * bits)}));
+      ctx.Set("scales", SymTensor(nullptr, data_type, {SymDim(6)}));
+      ctx.Set("bias", SymTensor(nullptr, data_type, {SymDim(3)}));
+      onnx_light_cpu::ComputeShapeMatMulNBits(ctx, MakeMatMulNBitsNode(true, bits));
+      EXPECT_EQ(ctx.Get("Y").Dtype(), data_type);
+      EXPECT_EQ(ctx.Get("Y").Shape(),
+                sym_ns::SymShape({SymDim("batch"), SymDim("sequence"), SymDim(3)}));
+      ASSERT_EQ(ctx.Constraints().size(), 1U);
+    }
+  }
 
   shapes_ns::ShapesContext invalid;
   invalid.Set("A", SymTensor(nullptr, TensorType::kFloat, {SymDim(2), SymDim(35)}));
   invalid.Set("B", SymTensor(nullptr, TensorType::kUint8, {SymDim(3), SymDim(2), SymDim(15)}));
   invalid.Set("scales", SymTensor(nullptr, TensorType::kFloat, {SymDim(3), SymDim(2)}));
   EXPECT_THROW(onnx_light_cpu::ComputeShapeMatMulNBits(invalid, MakeMatMulNBitsNode()),
+               std::invalid_argument);
+
+  shapes_ns::ShapesContext double_inputs;
+  double_inputs.Set("A", SymTensor(nullptr, TensorType::kDouble, {SymDim(2), SymDim(35)}));
+  double_inputs.Set("B",
+                    SymTensor(nullptr, TensorType::kUint8, {SymDim(3), SymDim(2), SymDim(16)}));
+  double_inputs.Set("scales", SymTensor(nullptr, TensorType::kDouble, {SymDim(3), SymDim(2)}));
+  EXPECT_THROW(onnx_light_cpu::ComputeShapeMatMulNBits(double_inputs, MakeMatMulNBitsNode()),
+               std::invalid_argument);
+
+  shapes_ns::ShapesContext mixed_inputs;
+  mixed_inputs.Set("A", SymTensor(nullptr, TensorType::kFloat, {SymDim(2), SymDim(35)}));
+  mixed_inputs.Set("B", SymTensor(nullptr, TensorType::kUint8, {SymDim(3), SymDim(2), SymDim(16)}));
+  mixed_inputs.Set("scales", SymTensor(nullptr, TensorType::kFloat16, {SymDim(3), SymDim(2)}));
+  EXPECT_THROW(onnx_light_cpu::ComputeShapeMatMulNBits(mixed_inputs, MakeMatMulNBitsNode()),
                std::invalid_argument);
 }
 
@@ -522,36 +544,89 @@ TEST(CustomOperatorSupport, GroupQueryAttentionGradientUsesStandardAttention) {
 }
 
 TEST(CustomOperatorSupport, MatMulNBitsGradientUnpacksWeightsAndOnlyDifferentiatesAAndBias) {
-  const FunctionProto gradient = MakeMatMulNBitsGradient(MakeMatMulNBitsNode(true));
-  bool has_bit_shift = false;
-  bool has_bitwise_and = false;
-  bool has_tile = false;
-  bool has_slice = false;
-  bool has_matmul = false;
-  bool has_bias_reduce = false;
-  for (const NodeProto &node : gradient.node()) {
-    EXPECT_TRUE(node.domain().empty() || node.domain() == "ai.onnx");
-    has_bit_shift = has_bit_shift || node.op_type() == "BitShift";
-    has_bitwise_and = has_bitwise_and || node.op_type() == "BitwiseAnd";
-    has_tile = has_tile || node.op_type() == "Tile";
-    has_slice = has_slice || node.op_type() == "Slice";
-    has_matmul = has_matmul || node.op_type() == "MatMul";
-    has_bias_reduce = has_bias_reduce || node.op_type() == "ReduceSum";
+  for (int64_t bits : {2, 4, 8}) {
+    const FunctionProto gradient = MakeMatMulNBitsGradient(MakeMatMulNBitsNode(true, bits));
+    bool has_bit_shift = false;
+    bool has_bitwise_and = false;
+    bool has_tile = false;
+    bool has_slice = false;
+    bool has_matmul = false;
+    bool has_bias_reduce = false;
+    for (const NodeProto &node : gradient.node()) {
+      EXPECT_TRUE(node.domain().empty() || node.domain() == "ai.onnx");
+      has_bit_shift = has_bit_shift || node.op_type() == "BitShift";
+      has_bitwise_and = has_bitwise_and || node.op_type() == "BitwiseAnd";
+      has_tile = has_tile || node.op_type() == "Tile";
+      has_slice = has_slice || node.op_type() == "Slice";
+      has_matmul = has_matmul || node.op_type() == "MatMul";
+      has_bias_reduce = has_bias_reduce || node.op_type() == "ReduceSum";
+    }
+    EXPECT_EQ(has_bit_shift, bits != 8);
+    EXPECT_TRUE(has_bitwise_and);
+    EXPECT_TRUE(has_tile);
+    EXPECT_TRUE(has_slice);
+    EXPECT_TRUE(has_matmul);
+    EXPECT_TRUE(has_bias_reduce);
+    ASSERT_EQ(gradient.output_size(), 2U);
   }
-  EXPECT_TRUE(has_bit_shift);
-  EXPECT_TRUE(has_bitwise_and);
-  EXPECT_TRUE(has_tile);
-  EXPECT_TRUE(has_slice);
-  EXPECT_TRUE(has_matmul);
-  EXPECT_TRUE(has_bias_reduce);
-  ASSERT_EQ(gradient.output_size(), 2U);
+}
+
+TEST(CustomOperatorSupport, MatMulNBitsGradientExecutesForEveryTypeAndPackedWidth) {
+  RegisterExecutionKernels();
+  for (const rt_ns::DataType type :
+       {rt_ns::DataType::FLOAT, rt_ns::DataType::FLOAT16, rt_ns::DataType::BFLOAT16}) {
+    const auto make_tensor = [&](const char *name, std::vector<int64_t> shape,
+                                 const std::vector<float> &values) {
+      if (type == rt_ns::DataType::FLOAT16) {
+        return rt_ns::MakeFloat16Tensor(name, std::move(shape), values);
+      }
+      if (type == rt_ns::DataType::BFLOAT16) {
+        return rt_ns::MakeBfloat16Tensor(name, std::move(shape), values);
+      }
+      return Tensor::FromFloat(name, std::move(shape), values);
+    };
+    const auto read = [&](const Tensor &tensor, std::size_t index) {
+      if (type == rt_ns::DataType::FLOAT) {
+        return tensor.AsFloat()[index];
+      }
+      const std::uint16_t value = reinterpret_cast<const std::uint16_t *>(tensor.bytes())[index];
+      return type == rt_ns::DataType::FLOAT16 ? onnx_light_cpu::detail::Float16BitsToFloat(value)
+                                              : onnx_light_cpu::detail::Bfloat16BitsToFloat(value);
+    };
+    for (int64_t bits : {2, 4, 8}) {
+      const FunctionProto gradient = MakeMatMulNBitsGradient(MakeMatMulNBitsNode(true, bits));
+      const GraphProto graph = MakeGraph(gradient);
+      rt_ns::RuntimeContext rt(rt_ns::KernelContext(rt_ns::DefaultOpset(23)));
+      rt_ns::SubgraphSession session(rt, graph);
+      const std::uint8_t packed_value = bits == 2 ? 0xff : bits == 4 ? 0x99 : 0x81;
+      const Tensors outputs =
+          session.Run({{"A", make_tensor("A", {1, 35}, std::vector<float>(35, 1.0f))},
+                       {"B", Tensor::FromUint8("B", {3, 2, 4 * bits},
+                                               std::vector<std::uint8_t>(24 * bits, packed_value))},
+                       {"scales", make_tensor("scales", {3, 2}, std::vector<float>(6, 0.5f))},
+                       {"bias", make_tensor("bias", {3}, std::vector<float>(3, 0.0f))},
+                       {"dy", make_tensor("dy", {1, 3}, {1.0f, 2.0f, 3.0f})}},
+                      rt);
+      ASSERT_EQ(outputs.size(), 2U);
+      ASSERT_EQ(outputs[0].shape, (rt_ns::Shape{1, 35}));
+      EXPECT_EQ(outputs[0].data_type, static_cast<int32_t>(type));
+      for (std::size_t index = 0; index < outputs[0].element_count(); ++index) {
+        EXPECT_FLOAT_EQ(read(outputs[0], index), 3.0f)
+            << "type=" << static_cast<int>(type) << ", bits=" << bits;
+      }
+      EXPECT_EQ(outputs[1].shape, (rt_ns::Shape{3}));
+      EXPECT_EQ(outputs[1].data_type, static_cast<int32_t>(type));
+      EXPECT_FLOAT_EQ(read(outputs[1], 0), 1.0f);
+      EXPECT_FLOAT_EQ(read(outputs[1], 1), 2.0f);
+      EXPECT_FLOAT_EQ(read(outputs[1], 2), 3.0f);
+    }
+  }
 }
 
 TEST(CustomOperatorSupport, MatMulNBitsGradientRejectsUnsupportedForms) {
   NodeProto zero_points = MakeMatMulNBitsNode();
   zero_points.add_input("zero_points");
-  NodeProto wrong_bits = MakeMatMulNBitsNode();
-  ONNX_LIGHT_NAMESPACE::AddAttribute(wrong_bits, "bits", int64_t{8});
+  NodeProto wrong_bits = MakeMatMulNBitsNode(false, 3);
   for (const NodeProto &node : {zero_points, wrong_bits}) {
     EXPECT_ANY_THROW((void)MakeMatMulNBitsGradient(node));
   }
@@ -620,6 +695,30 @@ TEST(CustomOperatorSupport, MatMulNBitsBiasFusionAcceptsOnlySafeBiasAdd) {
     builder_ns::GraphGraph graph(builder);
     onnx_light_cpu::MatMulNBitsBiasFusionPattern pattern;
     EXPECT_EQ(pattern.Match(graph, builder.Nodes()[1]).pattern, nullptr);
+  }
+}
+
+TEST(CustomOperatorSupport, MatMulNBitsBiasFusionAcceptsEverySupportedTypeAndPackedWidth) {
+  onnx_light_cpu::RegisterMicrosoftShapeAndMemoryFunctions();
+  for (TensorType type : {TensorType::kFloat, TensorType::kFloat16, TensorType::kBfloat16}) {
+    for (int64_t bits : {2, 4, 8}) {
+      builder_ns::GraphBuilder builder("supported_type_and_width", SchemaLookup());
+      builder.SetOpsetVersion("", 23);
+      builder.SetOpsetVersion(onnx_light_cpu::kMicrosoftDomain, 1);
+      builder.MakeInput("A", type, sym_ns::SymShape({2, 35}));
+      builder.MakeInput("B", TensorType::kUint8, sym_ns::SymShape({3, 2, 4 * bits}));
+      builder.MakeInput("scales", type, sym_ns::SymShape({3, 2}));
+      builder.MakeInput("bias", type, sym_ns::SymShape({3}));
+      const NodeProto spec = MakeMatMulNBitsNode(false, bits);
+      builder.MakeNode("MatMulNBits", {"A", "B", "scales"}, {"mm"},
+                       onnx_light_cpu::kMicrosoftDomain, "", spec.attribute());
+      builder.MakeNode("Add", {"mm", "bias"}, {"Y"});
+      builder.MakeOutput("Y");
+      builder_ns::GraphGraph graph(builder);
+      onnx_light_cpu::MatMulNBitsBiasFusionPattern pattern;
+      EXPECT_EQ(pattern.Match(graph, builder.Nodes()[1]).pattern, &pattern)
+          << "type=" << static_cast<int>(type) << ", bits=" << bits;
+    }
   }
 }
 

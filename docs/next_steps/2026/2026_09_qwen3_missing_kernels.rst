@@ -72,11 +72,12 @@ prerequisites for isolated kernel development.
      - Existing graph inventory
    * - K01
      - ``MatMulNBits`` schema, adapter, and prepared storage.
-     - Validate the audited three-input FP32/UINT8/FP32 contract with
-       ``bits=4``, ``block_size=32``, and ``accuracy_level=4``. Match packed
-       layout, implicit zero points, scale indexing, and padding against ONNX
-       Runtime. Reuse constant packed weights; reject unsupported variants
-       explicitly without expanding the complete weight matrix.
+     - Validate matching FP32/FP16/BF16 activation, scale, bias, and output
+       types with packed UINT8 INT2/INT4/INT8 weights, ``block_size=32``, and
+       ``accuracy_level=4``. Match packed layout, implicit zero points, scale
+       indexing, and padding against ONNX Runtime. Reuse constant packed
+       weights; reject unsupported variants explicitly without expanding the
+       complete weight matrix.
      - K00
    * - K02
      - Packed INT4 decode GEMV.

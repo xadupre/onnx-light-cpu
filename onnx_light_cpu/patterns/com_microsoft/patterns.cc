@@ -61,6 +61,10 @@ bool IsFloating(sym_ns::TensorType type) {
          type == sym_ns::TensorType::kDouble || type == sym_ns::TensorType::kBfloat16;
 }
 
+bool IsNonDoubleFloating(sym_ns::TensorType type) {
+  return IsFloating(type) && type != sym_ns::TensorType::kDouble;
+}
+
 int64_t GetIntAttributeOrDefault(const NodeProto &node, const char *name, int64_t default_value) {
   const AttributeProto *attribute = FindAttribute(node, name);
   return attribute == nullptr ? default_value : attribute->i();
@@ -170,19 +174,21 @@ bool IsSupportedMatMulNBitsNode(GraphGraph &graph, const NodeProto &node) {
   const AttributeProto *block_size = FindAttribute(node, "block_size");
   const int64_t accuracy_level = GetIntAttributeOrDefault(node, "accuracy_level", 0);
   if (k == nullptr || n == nullptr || block_size == nullptr || k->i() <= 0 || n->i() <= 0 ||
-      GetIntAttributeOrDefault(node, "bits", 4) != 4 || block_size->i() != 32 ||
-      (accuracy_level != 0 && accuracy_level != 4) ||
+      (GetIntAttributeOrDefault(node, "bits", 4) != 2 &&
+       GetIntAttributeOrDefault(node, "bits", 4) != 4 &&
+       GetIntAttributeOrDefault(node, "bits", 4) != 8) ||
+      block_size->i() != 32 || (accuracy_level != 0 && accuracy_level != 4) ||
       GetIntAttributeOrDefault(node, "weight_prepacked", 0) != 0) {
     return false;
   }
-  return graph.HasType(node.input(0)) &&
-         graph.GetType(node.input(0)) == sym_ns::TensorType::kFloat &&
-         graph.HasType(node.input(1)) &&
-         graph.GetType(node.input(1)) == sym_ns::TensorType::kUint8 &&
-         graph.HasType(node.input(2)) &&
-         graph.GetType(node.input(2)) == sym_ns::TensorType::kFloat &&
-         graph.HasType(node.output(0)) &&
-         graph.GetType(node.output(0)) == sym_ns::TensorType::kFloat;
+  if (!graph.HasType(node.input(0)) || !IsNonDoubleFloating(graph.GetType(node.input(0))) ||
+      !graph.HasType(node.input(2)) ||
+      graph.GetType(node.input(2)) != graph.GetType(node.input(0)) ||
+      !graph.HasType(node.output(0)) ||
+      graph.GetType(node.output(0)) != graph.GetType(node.input(0))) {
+    return false;
+  }
+  return graph.HasType(node.input(1)) && graph.GetType(node.input(1)) == sym_ns::TensorType::kUint8;
 }
 
 } // namespace
@@ -416,9 +422,9 @@ MatchResult MatMulNBitsBiasFusionPattern::Match(GraphGraph &graph,
     return NoMatch(candidate, "Add does not exclusively consume a supported MatMulNBits");
   }
   const std::string &bias = candidate.input(candidate.input(0) == matmul->output(0) ? 1 : 0);
-  if (!graph.HasType(bias) || graph.GetType(bias) != sym_ns::TensorType::kFloat ||
+  if (!graph.HasType(bias) || graph.GetType(bias) != graph.GetType(matmul->input(0)) ||
       !graph.HasShape(bias) || graph.GetShape(bias).Shape().Rank() != 1) {
-    return NoMatch(candidate, "bias must be a known rank-1 FLOAT tensor");
+    return NoMatch(candidate, "bias must be rank 1 and match the MatMulNBits activation type");
   }
   const int64_t n = FindAttribute(*matmul, "N")->i();
   const sym_ns::SymDim &bias_size = graph.GetShape(bias).Shape()[0];

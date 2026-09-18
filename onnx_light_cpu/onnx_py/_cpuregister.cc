@@ -168,7 +168,7 @@ NB_MODULE(_cpuregister, m) {
   m.def("microsoft_op_schemas", &onnx_light_cpu::GetMicrosoftOpSchemasWithHistory,
         nb::arg("op_type") = std::string(), nb::arg("init_doc") = true,
         "Returns the LightOpSchema history provided for com.microsoft operators, including the "
-        "restricted FLOAT/UINT8 MatMulNBits compatibility subset.");
+        "FLOAT/FLOAT16/BFLOAT16 MatMulNBits subset with packed INT2/INT4/INT8 weights.");
 
   m.def("experimental_op_schemas", &onnx_light_cpu::GetExperimentalOpSchemasWithHistory,
         nb::arg("op_type") = std::string(), nb::arg("init_doc") = true,

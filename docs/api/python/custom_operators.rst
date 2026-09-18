@@ -20,15 +20,16 @@ Custom operators
 Microsoft MatMulNBits
 ~~~~~~~~~~~~~~~~~~~~~
 
-``com.microsoft::MatMulNBits`` version 1 multiplies FLOAT activations by a
+``com.microsoft::MatMulNBits`` version 1 multiplies floating-point activations by a
 block-quantized right-hand matrix without materializing the complete
-dequantized matrix. The initial CPU contract implements the packed INT4
-format used by Qwen2/Qwen3 exports: required ``K`` and ``N`` attributes,
-``bits=4``, ``block_size=32``, ``accuracy_level`` 0 or 4, and
+dequantized matrix. The CPU contract implements packed INT2, INT4, and INT8
+formats with required ``K`` and ``N`` attributes, ``bits`` equal to 2, 4, or
+8, ``block_size=32``, ``accuracy_level`` 0 or 4, and
 ``weight_prepacked=0``. Input ``B`` has shape
-``[N, ceil(K / 32), 16]`` and FLOAT scales have shape
-``[N, ceil(K / 32)]`` or the equivalent flat shape. The implicit zero point
-is 8. Optional FLOAT bias has shape ``[N]``.
+``[N, ceil(K / 32), 4 * bits]`` and scales have shape
+``[N, ceil(K / 32)]`` or the equivalent flat shape. Implicit zero points are
+2, 8, and 128. Activations, scales, optional bias, and output have one matching
+``FLOAT``, ``FLOAT16``, or ``BFLOAT16`` type; ``DOUBLE`` is not supported.
 
 The activation may have any positive rank with final dimension ``K``. Shape
 inference preserves every leading concrete or symbolic dimension and replaces
@@ -37,8 +38,8 @@ decoded while accumulating each output, and inputs and outputs are excluded
 from the peak-memory function.
 
 Explicit zero points, deprecated ``g_idx``, provider-prepacked weights, other
-bit widths, block sizes, and element types are rejected rather than silently
-using a different layout. The registered gradient differentiates the
+bit widths, block sizes, mixed floating-point types, and ``DOUBLE`` are
+rejected rather than silently using a different layout. The registered gradient differentiates the
 activation and optional bias while treating packed weights and scales as
 constants. The bias fusion applies only to an exclusively consumed
 ``MatMulNBits`` output followed by a compatible rank-one ``Add``.

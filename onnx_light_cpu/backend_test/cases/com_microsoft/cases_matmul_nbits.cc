@@ -3,8 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "onnx_light_cpu/backend_test/cases/com_microsoft/include_com_microsoft_cases.h"
+#include "onnx_light_cpu/backend_test/cases/math/benchmark_helpers.h"
 
-#include "onnx_light_cpu/impl/com_microsoft/matmul_nbits.h"
+#include "onnx_light_cpu/kernels/com_microsoft/matmul_nbits_kernel.h"
 #include "onnx_light_cpu/schemas/com_microsoft/op_schema.h"
 
 #include "onnx_core/backend_test/expect.h"
@@ -14,6 +15,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace onnx_light_cpu::backend_test {
@@ -24,12 +26,14 @@ namespace rt_ns = ONNX_LIGHT_NAMESPACE::core::runtime;
 
 using bt_ns::Expect;
 using bt_ns::IoData;
+using rt_ns::DataType;
 using rt_ns::DefaultOpset;
+using rt_ns::KernelContext;
 using rt_ns::OpsetId;
 using rt_ns::Tensor;
 
 ONNX_LIGHT_NAMESPACE::NodeProto MakeMatMulNBitsNode(std::int64_t k, std::int64_t n,
-                                                    bool with_bias) {
+                                                    std::int64_t bits, bool with_bias) {
   ONNX_LIGHT_NAMESPACE::NodeProto node;
   node.set_op_type("MatMulNBits");
   node.set_domain(kMicrosoftDomain);
@@ -44,117 +48,112 @@ ONNX_LIGHT_NAMESPACE::NodeProto MakeMatMulNBitsNode(std::int64_t k, std::int64_t
   node.add_output("Y");
   ONNX_LIGHT_NAMESPACE::AddAttribute(node, "K", k);
   ONNX_LIGHT_NAMESPACE::AddAttribute(node, "N", n);
-  ONNX_LIGHT_NAMESPACE::AddAttribute(node, "bits", std::int64_t{4});
+  ONNX_LIGHT_NAMESPACE::AddAttribute(node, "bits", bits);
   ONNX_LIGHT_NAMESPACE::AddAttribute(node, "block_size", std::int64_t{32});
   ONNX_LIGHT_NAMESPACE::AddAttribute(node, "accuracy_level", std::int64_t{4});
   return node;
 }
 
-std::vector<std::uint8_t> MakePackedWeights(std::int64_t k, std::int64_t n) {
+std::vector<std::uint8_t> MakePackedWeights(std::int64_t k, std::int64_t n, std::int64_t bits) {
   const std::int64_t blocks = (k + 31) / 32;
-  std::vector<std::uint8_t> packed(static_cast<std::size_t>(n * blocks * 16));
+  const std::int64_t blob_size = 4 * bits;
+  const std::int64_t values_per_byte = 8 / bits;
+  const std::uint8_t mask = static_cast<std::uint8_t>((1U << bits) - 1U);
+  std::vector<std::uint8_t> packed(static_cast<std::size_t>(n * blocks * blob_size));
   for (std::int64_t column = 0; column < n; ++column) {
     for (std::int64_t block = 0; block < blocks; ++block) {
-      for (std::int64_t byte = 0; byte < 16; ++byte) {
-        const std::uint8_t low =
-            static_cast<std::uint8_t>((column * 3 + block + byte * 2 + 5) & 15);
-        const std::uint8_t high =
-            static_cast<std::uint8_t>((column * 3 + block + byte * 2 + 6) & 15);
-        packed[static_cast<std::size_t>((column * blocks + block) * 16 + byte)] =
-            static_cast<std::uint8_t>(low | (high << 4));
+      for (std::int64_t offset = 0; offset < 32; ++offset) {
+        const std::uint8_t value =
+            static_cast<std::uint8_t>((column * 3 + block + offset + 1) & mask);
+        const std::size_t byte = static_cast<std::size_t>((column * blocks + block) * blob_size +
+                                                          offset / values_per_byte);
+        packed[byte] |= static_cast<std::uint8_t>(
+            value << (static_cast<std::uint64_t>(offset % values_per_byte) * bits));
       }
     }
   }
   return packed;
 }
 
-IoData MakeBenchmarkData(std::int64_t m, std::int64_t k, std::int64_t n,
-                         bool generate_expected_outputs) {
+IoData MakeCaseData(std::int64_t m, std::int64_t k, std::int64_t n, std::int64_t bits,
+                    DataType data_type, bool with_bias, bool generate_expected_outputs) {
   const std::int64_t blocks = (k + 31) / 32;
-  std::vector<float> a_values(static_cast<std::size_t>(m * k));
-  for (std::size_t i = 0; i < a_values.size(); ++i) {
-    a_values[i] = static_cast<float>(static_cast<int>(i % 31) - 15) / 16.0f;
+  Tensor a = MakeBenchmarkTensor(data_type, {m, k}, 7301 + bits);
+  Tensor scales = MakeBenchmarkTensor(data_type, {n, blocks}, 7311 + bits);
+  std::vector<std::uint8_t> packed_values = MakePackedWeights(k, n, bits);
+  Tensor b = Tensor::FromUint8("", {n, blocks, 4 * bits}, packed_values);
+  std::vector<Tensor> inputs;
+  inputs.push_back(std::move(a));
+  inputs.push_back(std::move(b));
+  inputs.push_back(std::move(scales));
+  if (with_bias) {
+    inputs.push_back(MakeBenchmarkTensor(data_type, {n}, 7321 + bits));
   }
-  std::vector<float> scale_values(static_cast<std::size_t>(n * blocks));
-  for (std::size_t i = 0; i < scale_values.size(); ++i) {
-    scale_values[i] = 0.0025f * static_cast<float>(1 + i % 7);
-  }
-  std::vector<std::uint8_t> packed_values = MakePackedWeights(k, n);
-  Tensor a = Tensor::FromFloat("", {m, k}, a_values);
-  Tensor b = Tensor::FromUint8("", {n, blocks, 16}, packed_values);
-  Tensor scales = Tensor::FromFloat("", {n, blocks}, scale_values);
   if (!generate_expected_outputs) {
-    return IoData{{std::move(a), std::move(b), std::move(scales)}, {}, {}, false};
+    return IoData{std::move(inputs), {}, {}, false};
   }
-  std::vector<float> y_values(static_cast<std::size_t>(m * n));
-  MatMulNBitsFloat32(a_values.data(), packed_values.data(), scale_values.data(), nullptr,
-                     y_values.data(), static_cast<std::size_t>(m), static_cast<std::size_t>(k),
-                     static_cast<std::size_t>(n), 32);
-  Tensor y = Tensor::FromFloat("", {m, n}, y_values);
-  return IoData{{std::move(a), std::move(b), std::move(scales)}, {std::move(y)}};
+  const MatMulNBitsKernel kernel{MakeMatMulNBitsNode(k, n, bits, with_bias),
+                                 KernelContext{OpsetId(kMicrosoftDomain, 1)}};
+  Tensor y = kernel(inputs[0], inputs[1], inputs[2], with_bias ? &inputs[3] : nullptr);
+  return IoData{std::move(inputs), {std::move(y)}};
+}
+
+void SetTolerance(std::vector<TestCase> &registry, DataType data_type) {
+  registry.back().rtol = data_type == DataType::BFLOAT16  ? 2.0e-2
+                         : data_type == DataType::FLOAT16 ? 3.0e-3
+                                                          : 1.0e-5;
+  registry.back().atol = data_type == DataType::BFLOAT16  ? 2.0e-2
+                         : data_type == DataType::FLOAT16 ? 3.0e-3
+                                                          : 1.0e-6;
+}
+
+void RegisterBenchmark(std::vector<TestCase> &registry, const char *shape_name, std::int64_t m,
+                       std::int64_t k, std::int64_t n, std::int64_t bits, DataType data_type) {
+  const std::int64_t blocks = (k + 31) / 32;
+  const std::string name = "test_cpu_matmulnbits_" + std::string(shape_name) + "_m" +
+                           std::to_string(m) + "_k" + std::to_string(k) + "_n" + std::to_string(n) +
+                           "_bits" + std::to_string(bits) + "_block32_accuracy4_" +
+                           DataTypeSuffix(data_type) + "_benchmark";
+  Expect(registry, MakeMatMulNBitsNode(k, n, bits, false), name,
+         {DefaultOpset(26), OpsetId(kMicrosoftDomain, 1)},
+         {m * k, n * blocks * 4 * bits, n * blocks}, {m * n},
+         [=](bool generate_expected_outputs) {
+           return MakeCaseData(m, k, n, bits, data_type, false, generate_expected_outputs);
+         },
+         "backend-test", bt_ns::TestCaseTag::AI_RT,
+         {bt_ns::TensorTypeSpec(static_cast<std::int32_t>(data_type), {m, n})});
+  SetTolerance(registry, data_type);
 }
 
 } // namespace
 
 void RegisterCpuMatMulNBitsCases(std::vector<TestCase> &registry, TestMode mode) {
-  const OpsetId microsoft_opset(kMicrosoftDomain, 1);
+  constexpr DataType data_types[] = {DataType::FLOAT, DataType::FLOAT16, DataType::BFLOAT16};
+  constexpr std::int64_t bit_widths[] = {2, 4, 8};
   if (mode == TestMode::BENCHMARK) {
-    struct Shape {
-      const char *name;
-      std::int64_t m;
-      std::int64_t k;
-      std::int64_t n;
-    };
-    const Shape shapes[] = {
-        {"qwen2_qkv_decode", 1, 4096, 6144},
-        {"qwen2_gate_up_decode", 1, 4096, 11008},
-        {"qwen3_qkv_short_prefill", 8, 1024, 4096},
-    };
-    for (const Shape &shape : shapes) {
-      const std::string name = "test_cpu_matmulnbits_" + std::string(shape.name) + "_m" +
-                               std::to_string(shape.m) + "_k" + std::to_string(shape.k) + "_n" +
-                               std::to_string(shape.n) +
-                               "_bits4_block32_accuracy4_float32_benchmark";
-      Expect(registry, MakeMatMulNBitsNode(shape.k, shape.n, false), name,
-             {DefaultOpset(26), microsoft_opset},
-             {shape.m * shape.k, shape.n * (shape.k / 32) * 16, shape.n * (shape.k / 32)},
-             {shape.m * shape.n},
-             [=](bool generate_expected_outputs) {
-               return MakeBenchmarkData(shape.m, shape.k, shape.n, generate_expected_outputs);
-             },
-             "backend-test", bt_ns::TestCaseTag::AI_RT,
-             {bt_ns::TensorTypeSpec(static_cast<std::int32_t>(rt_ns::DataType::FLOAT),
-                                    {shape.m, shape.n})});
+    for (DataType data_type : data_types) {
+      for (std::int64_t bits : bit_widths) {
+        RegisterBenchmark(registry, "type_coverage", 2, 256, 128, bits, data_type);
+      }
     }
+    RegisterBenchmark(registry, "qwen2_qkv_decode", 1, 4096, 6144, 4, DataType::FLOAT);
+    RegisterBenchmark(registry, "qwen2_gate_up_decode", 1, 4096, 11008, 4, DataType::FLOAT);
+    RegisterBenchmark(registry, "qwen3_qkv_short_prefill", 8, 1024, 4096, 4, DataType::FLOAT);
     return;
   }
 
-  Expect(
-      registry, MakeMatMulNBitsNode(32, 2, true), "test_cpu_matmulnbits_bits4_block32_bias_float32",
-      {DefaultOpset(26), microsoft_opset},
-      []() {
-        std::vector<std::uint8_t> packed(32, 0x88);
-        std::fill(packed.begin() + 16, packed.end(), 0x99);
-        return IoData{{Tensor::FromFloat("", {1, 32}, std::vector<float>(32, 1.0f)),
-                       Tensor::FromUint8("", {2, 1, 16}, packed),
-                       Tensor::FromFloat("", {2, 1}, {1.0f, 0.5f}),
-                       Tensor::FromFloat("", {2}, {1.0f, -1.0f})},
-                      {Tensor::FromFloat("", {1, 2}, {1.0f, 15.0f})}};
-      },
-      "backend-test", bt_ns::TestCaseTag::AI_RT);
-
-  Expect(
-      registry, MakeMatMulNBitsNode(33, 1, false), "test_cpu_matmulnbits_partial_block_float32",
-      {DefaultOpset(26), microsoft_opset},
-      []() {
-        std::vector<std::uint8_t> packed(32, 0x88);
-        packed[16] = 0x8a;
-        return IoData{{Tensor::FromFloat("", {1, 33}, std::vector<float>(33, 1.0f)),
-                       Tensor::FromUint8("", {1, 2, 16}, packed),
-                       Tensor::FromFloat("", {1, 2}, {1.0f, 0.25f})},
-                      {Tensor::FromFloat("", {1, 1}, {0.5f})}};
-      },
-      "backend-test", bt_ns::TestCaseTag::AI_RT);
+  for (DataType data_type : data_types) {
+    for (std::int64_t bits : bit_widths) {
+      const std::string name = "test_cpu_matmulnbits_partial_block_bias_bits" +
+                               std::to_string(bits) + "_" + DataTypeSuffix(data_type);
+      Expect(
+          registry, MakeMatMulNBitsNode(33, 3, bits, true), name,
+          {DefaultOpset(26), OpsetId(kMicrosoftDomain, 1)},
+          [=]() { return MakeCaseData(2, 33, 3, bits, data_type, true, true); }, "backend-test",
+          bt_ns::TestCaseTag::AI_RT);
+      SetTolerance(registry, data_type);
+    }
+  }
 }
 
 } // namespace onnx_light_cpu::backend_test

@@ -979,7 +979,7 @@ TEST(OnnxLightBackendKernels, CDistBenchmarkRunsThroughRuntime) {
 
 TEST(OnnxLightBackendKernels, MatMulNBitsBenchmarksIncludeQwen2Shapes) {
   const auto cases = CollectCpuCases("MatMulNBits", core::backend_test::TestMode::BENCHMARK);
-  ASSERT_EQ(cases.size(), 3U);
+  ASSERT_EQ(cases.size(), 12U);
   const std::vector<std::string> expected = {
       "test_cpu_matmulnbits_qwen2_qkv_decode_m1_k4096_n6144_bits4_block32_accuracy4_float32_"
       "benchmark",
@@ -992,6 +992,15 @@ TEST(OnnxLightBackendKernels, MatMulNBitsBenchmarksIncludeQwen2Shapes) {
     EXPECT_TRUE(std::any_of(cases.begin(), cases.end(), [&](const TestCase &test_case) {
       return test_case.name == name;
     })) << name;
+  }
+  for (const std::string &data_type : {"float32", "float16", "bfloat16"}) {
+    for (const std::string &bits : {"2", "4", "8"}) {
+      const std::string name = "test_cpu_matmulnbits_type_coverage_m2_k256_n128_bits" + bits +
+                               "_block32_accuracy4_" + data_type + "_benchmark";
+      EXPECT_TRUE(std::any_of(cases.begin(), cases.end(), [&](const TestCase &test_case) {
+        return test_case.name == name;
+      })) << name;
+    }
   }
   const std::vector<std::string> failures =
       RunCpuBackendCases("MatMulNBits", core::backend_test::TestMode::BENCHMARK, expected.back());

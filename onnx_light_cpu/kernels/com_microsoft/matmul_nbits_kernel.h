@@ -29,7 +29,7 @@ public:
                     const ONNX_LIGHT_NAMESPACE::core::runtime::KernelContext &ctx);
 
   static constexpr const char *kName = "onnx_light_cpu::MatMulNBits";
-  static constexpr std::uint32_t kTuningAbi = 1;
+  static constexpr std::uint32_t kTuningAbi = 2;
 
   static void RegisterTuningSchemas();
   ONNX_LIGHT_NAMESPACE::core::runtime::KernelTuningKey

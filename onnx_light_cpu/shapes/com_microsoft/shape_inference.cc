@@ -259,18 +259,21 @@ void ComputeShapeMatMulNBits(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE::Nod
   const std::int64_t block_size = GetRequiredIntAttribute(node, "block_size");
   const std::int64_t accuracy_level = GetIntAttribute(node, "accuracy_level", 0);
   const std::int64_t weight_prepacked = GetIntAttribute(node, "weight_prepacked", 0);
-  if (k <= 0 || n <= 0 || bits != 4 || block_size != 32 ||
+  if (k <= 0 || n <= 0 || (bits != 2 && bits != 4 && bits != 8) || block_size != 32 ||
       (accuracy_level != 0 && accuracy_level != 4) || weight_prepacked != 0) {
     throw std::invalid_argument(
-        "ComputeShapeMatMulNBits: unsupported attributes for the FLOAT INT4/block-32 subset.");
+        "ComputeShapeMatMulNBits: unsupported attributes for the INT2/INT4/INT8 block-32 subset.");
   }
   const SymTensor &a = ctx.Get(node.input(0));
   const SymTensor &b = ctx.Get(node.input(1));
   const SymTensor &scales = ctx.Get(node.input(2));
-  if (a.Dtype() != sym_ns::TensorType::kFloat || scales.Dtype() != sym_ns::TensorType::kFloat ||
-      b.Dtype() != sym_ns::TensorType::kUint8) {
+  const bool supported_type = a.Dtype() == sym_ns::TensorType::kFloat ||
+                              a.Dtype() == sym_ns::TensorType::kFloat16 ||
+                              a.Dtype() == sym_ns::TensorType::kBfloat16;
+  if (!supported_type || scales.Dtype() != a.Dtype() || b.Dtype() != sym_ns::TensorType::kUint8) {
     throw std::invalid_argument(
-        "ComputeShapeMatMulNBits: A/scales must be FLOAT and B must be UINT8.");
+        "ComputeShapeMatMulNBits: A/scales must have matching FLOAT, FLOAT16, or BFLOAT16 types "
+        "and B must be UINT8.");
   }
   if (a.Shape().Rank() == 0 || b.Shape().Rank() != 3 ||
       (scales.Shape().Rank() != 1 && scales.Shape().Rank() != 2)) {
@@ -283,8 +286,8 @@ void ComputeShapeMatMulNBits(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE::Nod
                  "ComputeShapeMatMulNBits: B dimension 0 must equal N.");
   ConstrainEqual(ctx, b.Shape()[1], sym_ns::SymDim(blocks),
                  "ComputeShapeMatMulNBits: B dimension 1 must equal ceil(K / 32).");
-  ConstrainEqual(ctx, b.Shape()[2], sym_ns::SymDim(16),
-                 "ComputeShapeMatMulNBits: B dimension 2 must equal 16.");
+  ConstrainEqual(ctx, b.Shape()[2], sym_ns::SymDim(4 * bits),
+                 "ComputeShapeMatMulNBits: B dimension 2 must equal 4 * bits.");
   if (scales.Shape().Rank() == 1) {
     ConstrainEqual(ctx, scales.Shape()[0], sym_ns::SymDim(n * blocks),
                    "ComputeShapeMatMulNBits: flat scales has the wrong length.");
@@ -296,15 +299,16 @@ void ComputeShapeMatMulNBits(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE::Nod
   }
   if (HasInput(node, 5)) {
     const SymTensor &bias = ctx.Get(node.input(5));
-    if (bias.Dtype() != sym_ns::TensorType::kFloat || bias.Shape().Rank() != 1) {
-      throw std::invalid_argument("ComputeShapeMatMulNBits: bias must be a rank-1 FLOAT tensor.");
+    if (bias.Dtype() != a.Dtype() || bias.Shape().Rank() != 1) {
+      throw std::invalid_argument(
+          "ComputeShapeMatMulNBits: bias must be rank 1 and have A's type.");
     }
     ConstrainEqual(ctx, bias.Shape()[0], sym_ns::SymDim(n),
                    "ComputeShapeMatMulNBits: bias length must equal N.");
   }
   SymShape output = a.Shape();
   output[output.Rank() - 1] = sym_ns::SymDim(n);
-  ctx.Set(node.output(0), SymTensor(nullptr, sym_ns::TensorType::kFloat, std::move(output)));
+  ctx.Set(node.output(0), SymTensor(nullptr, a.Dtype(), std::move(output)));
 }
 
 void ComputeShapeSkipSimplifiedLayerNormalization(ShapesContext &ctx,

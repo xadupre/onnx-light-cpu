@@ -29,17 +29,20 @@ namespace {
 namespace rt_ns = ONNX_LIGHT_NAMESPACE::core::runtime;
 namespace sym_ns = ONNX_LIGHT_NAMESPACE::core::symbolic;
 
-using rt_ns::DataType;
 using rt_ns::Tensor;
+using RuntimeDataType = rt_ns::DataType;
 
 constexpr const char *kParallelThresholdOutputs = "parallel.threshold_outputs";
 constexpr const char *kTargetBlockOutputs = "parallel.target_block_outputs";
 constexpr const char *kMaxParticipants = "parallel.max_participants";
 
-rt_ns::KernelTuningKey MakeTuningKey() {
-  return {"onnx_light_cpu",     "MatMulNBits",
-          "packed_int4",        static_cast<std::int32_t>(DataType::FLOAT),
-          sym_ns::Device::kCPU, MatMulNBitsKernel::kTuningAbi};
+rt_ns::KernelTuningKey MakeTuningKey(RuntimeDataType data_type, std::int64_t bits) {
+  return {"onnx_light_cpu",
+          "MatMulNBits",
+          "packed_int" + std::to_string(bits),
+          static_cast<std::int32_t>(data_type),
+          sym_ns::Device::kCPU,
+          MatMulNBitsKernel::kTuningAbi};
 }
 
 void ValidateTuning(const rt_ns::KernelTuningParameters &parameters) {
@@ -64,11 +67,12 @@ MatMulNBitsAttributes ParseAttributes(const ONNX_LIGHT_NAMESPACE::NodeProto &nod
   if (attributes.k <= 0 || attributes.n <= 0) {
     throw std::invalid_argument("onnx_light_cpu::MatMulNBits: K and N must be positive.");
   }
-  if (attributes.bits != 4 || attributes.block_size != 32 ||
+  if ((attributes.bits != 2 && attributes.bits != 4 && attributes.bits != 8) ||
+      attributes.block_size != 32 ||
       (attributes.accuracy_level != 0 && attributes.accuracy_level != 4) ||
       attributes.weight_prepacked != 0) {
     throw std::invalid_argument(
-        "onnx_light_cpu::MatMulNBits: the foundation kernel requires bits=4, block_size=32, "
+        "onnx_light_cpu::MatMulNBits: the kernel requires bits=2, 4, or 8, block_size=32, "
         "accuracy_level 0 or 4, and weight_prepacked=0.");
   }
   return attributes;
@@ -99,24 +103,39 @@ MatMulNBitsKernel::MatMulNBitsKernel(const ONNX_LIGHT_NAMESPACE::NodeProto &node
 void MatMulNBitsKernel::RegisterTuningSchemas() {
   static std::once_flag once;
   std::call_once(once, [] {
-    rt_ns::RegisterKernelTuningSchema(rt_ns::KernelTuningSchema(
-        {MakeTuningKey(),
-         {{kParallelThresholdOutputs, static_cast<std::int64_t>(kDefaultMatMulNBitsExecutionTuning
-                                                                    .parallel_threshold_outputs)},
-          {kTargetBlockOutputs,
-           static_cast<std::int64_t>(kDefaultMatMulNBitsExecutionTuning.target_block_outputs)},
-          {kMaxParticipants, kDefaultMatMulNBitsExecutionTuning.max_participants}}},
-        ValidateTuning));
+    for (RuntimeDataType data_type :
+         {RuntimeDataType::FLOAT, RuntimeDataType::FLOAT16, RuntimeDataType::BFLOAT16}) {
+      for (std::int64_t bits : {2, 4, 8}) {
+        rt_ns::RegisterKernelTuningSchema(rt_ns::KernelTuningSchema(
+            {MakeTuningKey(data_type, bits),
+             {{kParallelThresholdOutputs,
+               static_cast<std::int64_t>(
+                   kDefaultMatMulNBitsExecutionTuning.parallel_threshold_outputs)},
+              {kTargetBlockOutputs,
+               static_cast<std::int64_t>(kDefaultMatMulNBitsExecutionTuning.target_block_outputs)},
+              {kMaxParticipants, kDefaultMatMulNBitsExecutionTuning.max_participants}}},
+            ValidateTuning));
+      }
+    }
   });
 }
 
 rt_ns::KernelTuningKey MatMulNBitsKernel::TuningKey(std::int32_t element_type) const {
-  return element_type == static_cast<std::int32_t>(DataType::FLOAT) ? MakeTuningKey()
-                                                                    : rt_ns::KernelTuningKey{};
+  const auto data_type = static_cast<RuntimeDataType>(element_type);
+  return data_type == RuntimeDataType::FLOAT || data_type == RuntimeDataType::FLOAT16 ||
+                 data_type == RuntimeDataType::BFLOAT16
+             ? MakeTuningKey(data_type, attributes_.bits)
+             : rt_ns::KernelTuningKey{};
 }
 
 void MatMulNBitsKernel::Configure(const rt_ns::KernelTuningParameters &parameters) {
-  if (parameters.key != MakeTuningKey()) {
+  constexpr std::array kDataTypes{RuntimeDataType::FLOAT, RuntimeDataType::FLOAT16,
+                                  RuntimeDataType::BFLOAT16};
+  const bool key_matches =
+      std::any_of(kDataTypes.begin(), kDataTypes.end(), [&](RuntimeDataType data_type) {
+        return parameters.key == MakeTuningKey(data_type, attributes_.bits);
+      });
+  if (!key_matches) {
     throw std::invalid_argument("MatMulNBits tuning parameters have an incompatible key.");
   }
   ValidateTuning(parameters);
@@ -129,12 +148,14 @@ void MatMulNBitsKernel::Configure(const rt_ns::KernelTuningParameters &parameter
 
 Tensor MatMulNBitsKernel::operator()(const Tensor &a, const Tensor &b, const Tensor &scales,
                                      const Tensor *bias, rt_ns::RuntimeContext *rt) const {
-  if (a.data_type != static_cast<std::int32_t>(DataType::FLOAT) ||
-      scales.data_type != static_cast<std::int32_t>(DataType::FLOAT) ||
-      (bias != nullptr && bias->data_type != static_cast<std::int32_t>(DataType::FLOAT)) ||
-      b.data_type != static_cast<std::int32_t>(DataType::UINT8)) {
+  const auto data_type = static_cast<RuntimeDataType>(a.data_type);
+  if ((data_type != RuntimeDataType::FLOAT && data_type != RuntimeDataType::FLOAT16 &&
+       data_type != RuntimeDataType::BFLOAT16) ||
+      scales.data_type != a.data_type || (bias != nullptr && bias->data_type != a.data_type) ||
+      b.data_type != static_cast<std::int32_t>(RuntimeDataType::UINT8)) {
     throw std::invalid_argument(
-        "onnx_light_cpu::MatMulNBits: A, scales, bias and Y must be FLOAT and B must be UINT8.");
+        "onnx_light_cpu::MatMulNBits: A, scales, bias, and Y must have matching FLOAT, FLOAT16, "
+        "or BFLOAT16 types, and B must be UINT8.");
   }
   if (a.shape.empty() || a.shape.back() != attributes_.k) {
     throw std::invalid_argument(
@@ -146,11 +167,14 @@ Tensor MatMulNBitsKernel::operator()(const Tensor &a, const Tensor &b, const Ten
       CheckedDimension(attributes_.block_size, "MatMulNBits", "block_size");
   const std::size_t k_blocks =
       CheckedAdd(k, block_size - 1, "MatMulNBits", "K blocks") / block_size;
+  const std::size_t blob_size =
+      CheckedMultiply(block_size, static_cast<std::size_t>(attributes_.bits), "MatMulNBits",
+                      "packed block bits") /
+      8;
   const std::size_t rows = TensorElementCount(a, "A") / k;
-  RequireShape(b,
-               {attributes_.n, static_cast<std::int64_t>(k_blocks),
-                static_cast<std::int64_t>(block_size / 2)},
-               "B");
+  RequireShape(
+      b, {attributes_.n, static_cast<std::int64_t>(k_blocks), static_cast<std::int64_t>(blob_size)},
+      "B");
   const std::size_t expected_scales =
       CheckedMultiply(n, k_blocks, "MatMulNBits", "scale element count");
   if (!((scales.shape.size() == 1 && TensorElementCount(scales, "scales") == expected_scales) ||
@@ -165,15 +189,14 @@ Tensor MatMulNBitsKernel::operator()(const Tensor &a, const Tensor &b, const Ten
   rt_ns::Shape output_shape = a.shape;
   output_shape.back() = attributes_.n;
   const std::size_t output_count = CheckedMultiply(rows, n, "MatMulNBits", "output element count");
-  const std::size_t output_bytes =
-      CheckedByteSize(output_count, sizeof(float), "MatMulNBits", "output byte size");
-  Tensor y = rt != nullptr ? rt->MakeOutputTensor(0, static_cast<std::int32_t>(DataType::FLOAT),
-                                                  output_shape, output_bytes)
-                           : rt_ns::MakeOutputTensor(static_cast<std::int32_t>(DataType::FLOAT),
-                                                     output_shape, output_bytes, nullptr);
-  MatMulNBitsFloat32(a.AsFloat(), b.bytes(), scales.AsFloat(),
-                     bias == nullptr ? nullptr : bias->AsFloat(), y.AsFloat(), rows, k, n,
-                     block_size, tuning_);
+  const std::size_t output_bytes = CheckedByteSize(output_count, rt_ns::ElementSize(a.data_type),
+                                                   "MatMulNBits", "output byte size");
+  Tensor y = rt != nullptr
+                 ? rt->MakeOutputTensor(0, a.data_type, output_shape, output_bytes)
+                 : rt_ns::MakeOutputTensor(a.data_type, output_shape, output_bytes, nullptr);
+  MatMulNBits(a.bytes(), b.bytes(), scales.bytes(), bias == nullptr ? nullptr : bias->bytes(),
+              y.mutable_bytes(), static_cast<onnx_light_cpu::DataType>(a.data_type), rows, k, n,
+              static_cast<std::size_t>(attributes_.bits), block_size, tuning_);
   return y;
 }
 
@@ -210,7 +233,7 @@ void RegisterMatMulNBitsKernel() {
   info.op_type = "MatMulNBits";
   info.device = sym_ns::Device::kCPU;
   info.kernel_name = MatMulNBitsKernel::kName;
-  info.types = {DataType::FLOAT};
+  info.types = {RuntimeDataType::FLOAT, RuntimeDataType::FLOAT16, RuntimeDataType::BFLOAT16};
   info.since_version = 1;
   info.until_version = 1;
   RegisterKernel(std::move(info), std::move(factory));
