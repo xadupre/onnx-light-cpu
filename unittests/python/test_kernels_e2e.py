@@ -61,6 +61,7 @@ from onnx_light.onnx.reference import ReferenceEvaluator
 from onnx_light_cpu import (
     RegisteredKernel,
     clear_used_kernel_names,
+    custom_op_schemas,
     has_backend_test_cases,
     register_backend_test_cases,
     register_kernel_for_session,
@@ -854,6 +855,12 @@ class TestBackendCases(ExtTestCase):
             )
 
     def test_group_query_attention_backend_case_matrix(self):
+        schema = custom_op_schemas("GroupQueryAttention")[0]
+        window_attribute = next(
+            attribute for attribute in schema.attributes if attribute.name == "local_window_size"
+        )
+        assert not window_attribute.required
+        assert window_attribute.default_value == "-1"
         supported_types = {
             int(TensorProto.FLOAT),
             int(TensorProto.FLOAT16),
@@ -954,9 +961,11 @@ class TestBackendCases(ExtTestCase):
                         for vi, tensor in zip(tc.model.graph.input, data_set.inputs, strict=True)
                     }
                     rtol, atol = _muse_tolerances(feeds["query"].dtype)
-                    clear_used_kernel_names()
+                    clear_used_kernel_names(light_session)
                     got = light_session.run(None, feeds)
-                    assert _TARGET_KERNELS["GroupQueryAttention"] in used_kernel_names()
+                    assert _TARGET_KERNELS["GroupQueryAttention"] in used_kernel_names(
+                        light_session
+                    )
                     expected = ort_session.run(None, _muse_ort_feeds(feeds))
                     assert len(got) == len(expected) == 3
                     for actual, reference, naive in zip(
@@ -1009,28 +1018,36 @@ class TestBackendCases(ExtTestCase):
                     if name not in ("past_key", "past_value")
                 }
                 for layer, window in enumerate((2048, 2048, 2048, -1)):
-                    node = type(tc.model.graph.node[0])()
-                    node.CopyFrom(tc.model.graph.node[0])
-                    for attr in node.attribute:
-                        if attr.name == "local_window_size":
-                            attr.i = window
+                    source_node = tc.model.graph.node[0]
+                    attributes = {
+                        attr.name: helper.get_attribute_value(attr)
+                        for attr in source_node.attribute
+                    }
+                    attributes["local_window_size"] = window
+                    node_inputs = list(source_node.input)
+                    node_outputs = [f"{name}_{layer}" for name in source_node.output]
                     for slot, name in ((3, "past_key"), (4, "past_value")):
-                        node.input[slot] = f"{name}_{layer}"
+                        node_inputs[slot] = f"{name}_{layer}"
                         inputs.append(
                             helper.make_tensor_value_info(
-                                node.input[slot], tensor_type, [1, 2, "past_length", 128]
+                                node_inputs[slot], tensor_type, [1, 2, "past_length", 128]
                             )
                         )
-                        feeds[node.input[slot]] = fixture_feeds[name]
-                    for slot, name in enumerate(("output", "present_key", "present_value")):
-                        node.output[slot] = f"{name}_{layer}"
+                        feeds[node_inputs[slot]] = fixture_feeds[name]
+                    for slot, name in enumerate(node_outputs):
                         shape = (
                             [1, "sequence", 4096] if slot == 0 else [1, 2, "total_length", 128]
                         )
-                        outputs.append(
-                            helper.make_tensor_value_info(node.output[slot], tensor_type, shape)
+                        outputs.append(helper.make_tensor_value_info(name, tensor_type, shape))
+                    nodes.append(
+                        helper.make_node(
+                            source_node.op_type,
+                            node_inputs,
+                            node_outputs,
+                            domain=source_node.domain,
+                            **attributes,
                         )
-                    nodes.append(node)
+                    )
                 model = helper.make_model(
                     helper.make_graph(nodes, "muse_mixed_windows", inputs, outputs),
                     opset_imports=[

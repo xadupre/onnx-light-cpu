@@ -410,8 +410,8 @@ void RegisterMuseGroupQueryAttentionCase(std::vector<TestCase> &registry,
                                          std::int64_t sequence, std::int64_t past_length,
                                          std::int64_t window) {
   NodeProto node = MakeGroupQueryAttentionNode(32, 2, 1, 0.0883883461356163f, std::nullopt);
-  node.set_input(3, "past_key");
-  node.set_input(4, "past_value");
+  node.ref_input()[3] = "past_key";
+  node.ref_input()[4] = "past_value";
   node.add_output("present_key");
   node.add_output("present_value");
   AddIntAttribute(node, "local_window_size", window);
@@ -459,10 +459,10 @@ void RegisterMuseGroupQueryAttentionCase(std::vector<TestCase> &registry,
       "backend-test", bt_ns::TestCaseTag::AI_RT);
   registry.back().rtol = data_type == DataType::BFLOAT16  ? 1.0e-2
                          : data_type == DataType::FLOAT16 ? 2.0e-3
-                                                         : 2.0e-4;
+                                                          : 2.0e-4;
   registry.back().atol = data_type == DataType::BFLOAT16  ? 1.0e-3
                          : data_type == DataType::FLOAT16 ? 2.0e-4
-                                                         : 2.0e-5;
+                                                          : 2.0e-5;
 }
 
 } // namespace
