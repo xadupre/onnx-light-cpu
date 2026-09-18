@@ -860,7 +860,7 @@ class TestBackendCases(ExtTestCase):
             attribute for attribute in schema.attributes if attribute.name == "local_window_size"
         )
         assert not window_attribute.required
-        assert window_attribute.default_value == "-1"
+        assert window_attribute.default_value == -1
         supported_types = {
             int(TensorProto.FLOAT),
             int(TensorProto.FLOAT16),
