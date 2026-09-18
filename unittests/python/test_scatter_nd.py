@@ -71,9 +71,12 @@ def _ort_session(model):
     """Keep INT32 feeds and BF16 rounding while using ORT's supported ScatterND schema."""
     adapted = type(model)()
     adapted.CopyFrom(model)
-    for opset in adapted.opset_import:
-        if opset.domain in ("", "ai.onnx"):
-            opset.version = max(opset.version, 13)
+    if any(
+        value.type.tensor_type.elem_type == TensorProto.BFLOAT16 for value in adapted.graph.input
+    ):
+        for opset in adapted.opset_import:
+            if opset.domain in ("", "ai.onnx"):
+                opset.version = max(opset.version, 13)
     nodes = []
     renames = {}
     for value in adapted.graph.input:
@@ -196,10 +199,29 @@ class TestScatterND(ExtTestCase):
             )
             self.assertEqual(
                 [tuple(data.inputs[3].shape) for data in case.data_sets],
-                [(0, 6656), (5, 6656), (10, 6656), (0, 6656)],
+                [(0, 6656), (3, 6656), (6, 6656), (0, 6656)],
             )
             visual_shape = case.model.graph.input[3].type.tensor_type.shape.dim
             self.assertEqual(visual_shape[0].dim_param, "visual_count")
+            token_shape = case.model.graph.input[1].type.tensor_type.shape.dim
+            self.assertEqual(len(token_shape), 1)
+            self.assertEqual(token_shape[0].dim_param, "tokens")
+            session = _session(case.model)
+            for images, data_set in zip((0, 1, 2, 0), case.data_sets, strict=True):
+                table, ids = (_numpy(tensor) for tensor in data_set.inputs[:2])
+                feeds = {
+                    info.name: _numpy(tensor).copy()
+                    for info, tensor in zip(case.model.graph.input, data_set.inputs, strict=True)
+                }
+                output, positions = session.run(["output", "positions"], feeds)
+                self.assertEqual(output.shape, (16, 6656))
+                self.assertEqual(positions.shape, (images * 3, 1))
+                self.assertEqual(np.count_nonzero(ids == 99), images * 3)
+                for delimiter in (97, 98):
+                    self.assertEqual(np.count_nonzero(ids == delimiter), images)
+                    for position in np.flatnonzero(ids == delimiter):
+                        self.assertEqual(output[position].tobytes(), table[delimiter].tobytes())
+            self.assertIn(_KERNEL, used_kernel_names(session))
 
     def test_dynamic_shapes_and_output_ownership(self):
         model = _model(["rows", "width"], ["count", 1], ["count", "width"])
@@ -261,17 +283,38 @@ class TestScatterND(ExtTestCase):
                     with self.subTest(width=width, index=index, dtype=dtype):
                         model = _model([3, width], [1, 1], [1, width], index_type)
                         session = _session(model)
+                        feeds = {
+                            "data": np.zeros((3, width), dtype=np.float32),
+                            "indices": np.array([[index]], dtype=dtype),
+                            "updates": np.zeros((1, width), dtype=np.float32),
+                        }
                         with self.assertRaisesRegex(
                             (ValueError, RuntimeError), "(?i)(index|indices|bounds|range)"
                         ):
-                            session.run(
-                                None,
-                                {
-                                    "data": np.zeros((3, width), dtype=np.float32),
-                                    "indices": np.array([[index]], dtype=dtype),
-                                    "updates": np.zeros((1, width), dtype=np.float32),
-                                },
-                            )
+                            session.run(None, feeds)
+                        if width:
+                            with self.assertRaisesRegex(
+                                onnxruntime.capi.onnxruntime_pybind11_state.InvalidArgument,
+                                "(?i)(index|indice|bounds|range)",
+                            ):
+                                _ort_session(model).run(None, feeds)
+
+    def test_supported_opsets(self):
+        feeds = {
+            "data": np.arange(6, dtype=np.float32).reshape(3, 2),
+            "indices": np.array([[1]], dtype=np.int64),
+            "updates": np.array([[7, 8]], dtype=np.float32),
+        }
+        for opset in (11, 13, 16, 18):
+            for reduction in (None, "none") if opset >= 16 else (None,):
+                with self.subTest(opset=opset, reduction=reduction):
+                    model = _model([3, 2], [1, 1], [1, 2], reduction=reduction)
+                    model.opset_import[0].version = opset
+                    session = _session(model)
+                    self.assertEqualArray(
+                        session.run(None, feeds)[0], _ort_session(model).run(None, feeds)[0]
+                    )
+                    self.assertIn(_KERNEL, used_kernel_names(session))
 
     def test_explicit_none_and_unsupported_reductions(self):
         feeds = {

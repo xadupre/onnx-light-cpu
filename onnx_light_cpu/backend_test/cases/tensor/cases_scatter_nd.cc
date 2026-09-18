@@ -34,7 +34,8 @@ struct ScatterShape {
 void RegisterScatterCase(std::vector<TestCase> &registry, const ScatterShape &shape,
                          DataType data_type, DataType index_type, bool benchmark) {
   const auto opset = rt_ns::DefaultOpset(13);
-  Shape updates_shape(shape.indices.begin(), shape.indices.end() - 1);
+  Shape updates_shape;
+  updates_shape.insert(updates_shape.end(), shape.indices.begin(), shape.indices.end() - 1);
   updates_shape.insert(updates_shape.end(), shape.data.begin() + shape.indices.back(),
                        shape.data.end());
   const std::string name = "test_cpu_scatternd_" + std::string(shape.name) +
@@ -71,7 +72,7 @@ void RegisterEmbeddingCase(std::vector<TestCase> &registry, DataType data_type) 
   const std::string name =
       "test_cpu_scatternd_multimodal_embeddings_" + std::string(DataTypeSuffix(data_type));
   TestCase test_case(name, name, bt_ns::TestCaseKind::MODEL);
-  test_case.declared_input_element_counts = {100 * 6656, 16, 1, 10 * 6656};
+  test_case.declared_input_element_counts = {100 * 6656, 16, 1, 6 * 6656};
   test_case.declared_output_element_counts = {16 * 6656};
   const auto build = [name, data_type](bool expected) {
     const auto opset = rt_ns::DefaultOpset(13);
@@ -89,23 +90,28 @@ void RegisterEmbeddingCase(std::vector<TestCase> &registry, DataType data_type) 
     bt_ns::AppendValueInfo(*graph->add_input(), "embedding_table", data_type,
                            {bt_ns::DimSpec(int64_t{100}), bt_ns::DimSpec(int64_t{6656})});
     bt_ns::AppendValueInfo(*graph->add_input(), "input_ids", DataType::INT64,
-                           {bt_ns::DimSpec("batch"), bt_ns::DimSpec("sequence")});
+                           {bt_ns::DimSpec("tokens")});
     bt_ns::AppendValueInfo(*graph->add_input(), "image_token_id", DataType::INT64, {});
     bt_ns::AppendValueInfo(*graph->add_input(), "visual", data_type,
                            {bt_ns::DimSpec("visual_count"), bt_ns::DimSpec(int64_t{6656})});
-    bt_ns::AppendValueInfo(
-        *graph->add_output(), "output", data_type,
-        {bt_ns::DimSpec("batch"), bt_ns::DimSpec("sequence"), bt_ns::DimSpec(int64_t{6656})});
-    // Each image contributes two delimiters plus three patch tokens.
+    bt_ns::AppendValueInfo(*graph->add_output(), "output", data_type,
+                           {bt_ns::DimSpec("tokens"), bt_ns::DimSpec(int64_t{6656})});
+    // Delimiters retain their text embeddings; only the three patch tokens per
+    // image are replaced by visual embeddings.
     for (const int64_t images : {0, 1, 2, 0}) {
-      const int64_t count = images * (2 + 3);
+      const int64_t count = images * 3;
       Tensor table = MakeBenchmarkTensor(data_type, {100, 6656}, 731);
       table.name = "embedding_table";
       std::vector<int64_t> ids(16, 7);
-      for (int64_t i = 0; i < count; ++i) {
-        ids[(i * 7 + 3) % 16] = 99;
+      for (int64_t image = 0; image < images; ++image) {
+        const int64_t start = 1 + image * 7;
+        ids[start] = 97;
+        for (int64_t patch = 1; patch <= 3; ++patch) {
+          ids[start + patch] = 99;
+        }
+        ids[start + 4] = 98;
       }
-      Tensor input = Tensor::FromInt64("input_ids", {2, 8}, ids);
+      Tensor input = Tensor::FromInt64("input_ids", {16}, ids);
       Tensor token = Tensor::FromInt64("image_token_id", {}, {99});
       Tensor visual = MakeBenchmarkTensor(data_type, {count, 6656}, 947);
       visual.name = "visual";
