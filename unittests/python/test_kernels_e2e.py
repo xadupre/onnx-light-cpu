@@ -323,10 +323,10 @@ def _make_ort_compatible_model(model):
     return ort_model
 
 
-def _muse_ort_session(model):
+def _gqa_local_window_ort_session(model):
     """ORT CPU lacks BF16 GQA: promote the already-rounded BF16 inputs to FLOAT.
 
-    Muse fixtures disable RoPE, avoiding a different BF16 rotary rounding point.
+    Local-window fixtures disable RoPE, avoiding a different BF16 rotary rounding point.
     Integer sequence metadata stays INT32; no attention math is implemented here.
     """
     ort_model = _make_ort_compatible_model(model)
@@ -341,14 +341,14 @@ def _muse_ort_session(model):
     )
 
 
-def _muse_ort_feeds(feeds):
+def _gqa_local_window_ort_feeds(feeds):
     return {
         name: value.astype(np.float32) if value.dtype == ml_dtypes.bfloat16 else value
         for name, value in feeds.items()
     }
 
 
-def _muse_tolerances(dtype):
+def _gqa_local_window_tolerances(dtype):
     if dtype == ml_dtypes.bfloat16:
         return 1e-2, 1e-3
     if dtype == np.float16:
@@ -937,9 +937,9 @@ class TestBackendCases(ExtTestCase):
                     for actual, reference in zip(got, expected, strict=True):
                         _assert_close(actual, reference, rtol=2e-4, atol=2e-4)
 
-    def test_group_query_attention_muse_fixtures_match_onnx_runtime(self):
+    def test_group_query_attention_local_window_fixtures_match_onnx_runtime(self):
         cases = collect_test_cases_by_name(
-            "^test_cpu_group_query_attention_model_muse_", mode=TestMode.TEST
+            "^test_cpu_group_query_attention_local_window_", mode=TestMode.TEST
         )
         assert len(cases) == 12
         outputs = {}
@@ -954,19 +954,19 @@ class TestBackendCases(ExtTestCase):
                 assert attributes["local_window_size"] in (2048, -1)
                 light_session = ReferenceEvaluator(tc.model)
                 set_kernel_usage_recording(light_session, True)
-                ort_session = _muse_ort_session(tc.model)
+                ort_session = _gqa_local_window_ort_session(tc.model)
                 for data_set in tc.data_sets:
                     feeds = {
                         vi.name: _to_numpy(tensor)
                         for vi, tensor in zip(tc.model.graph.input, data_set.inputs, strict=True)
                     }
-                    rtol, atol = _muse_tolerances(feeds["query"].dtype)
+                    rtol, atol = _gqa_local_window_tolerances(feeds["query"].dtype)
                     clear_used_kernel_names(light_session)
                     got = light_session.run(None, feeds)
                     assert _TARGET_KERNELS["GroupQueryAttention"] in used_kernel_names(
                         light_session
                     )
-                    expected = ort_session.run(None, _muse_ort_feeds(feeds))
+                    expected = ort_session.run(None, _gqa_local_window_ort_feeds(feeds))
                     assert len(got) == len(expected) == 3
                     for actual, reference, naive in zip(
                         got, expected, data_set.outputs, strict=True
@@ -989,9 +989,9 @@ class TestBackendCases(ExtTestCase):
                 # The first row sees exactly 2048 keys, the later rows drop old keys.
                 np.testing.assert_array_equal(local[:, 0], full[:, 0])
 
-    def test_group_query_attention_muse_mixed_windows_consecutive_decode(self):
+    def test_group_query_attention_mixed_windows_consecutive_decode(self):
         cases = collect_test_cases_by_name(
-            "^test_cpu_group_query_attention_model_muse_cached_prefill_.*_window2048_",
+            "^test_cpu_group_query_attention_local_window_cached_prefill_.*_window2048_",
             mode=TestMode.TEST,
         )
         assert len(cases) == 3
@@ -1049,16 +1049,16 @@ class TestBackendCases(ExtTestCase):
                         )
                     )
                 model = helper.make_model(
-                    helper.make_graph(nodes, "muse_mixed_windows", inputs, outputs),
+                    helper.make_graph(nodes, "gqa_mixed_windows", inputs, outputs),
                     opset_imports=[
                         helper.make_opsetid("", 23),
                         helper.make_opsetid("com.microsoft", 1),
                     ],
                 )
                 light_session = ReferenceEvaluator(model)
-                ort_session = _muse_ort_session(model)
-                ort_feeds = _muse_ort_feeds(feeds)
-                rtol, atol = _muse_tolerances(feeds["query"].dtype)
+                ort_session = _gqa_local_window_ort_session(model)
+                ort_feeds = _gqa_local_window_ort_feeds(feeds)
+                rtol, atol = _gqa_local_window_tolerances(feeds["query"].dtype)
                 for step in range(3):
                     with self.subTest(step=step):
                         got = light_session.run(None, feeds)
@@ -1091,7 +1091,9 @@ class TestBackendCases(ExtTestCase):
                         # same sessions for two single-token decode steps.
                         for name in ("query", "key", "value"):
                             feeds[name] = fixture_feeds[name][:, -1:].copy()
-                            ort_feeds[name] = _muse_ort_feeds({name: feeds[name]})[name]
+                            ort_feeds[name] = _gqa_local_window_ort_feeds({name: feeds[name]})[
+                                name
+                            ]
                         feeds["seqlens_k"] = np.array([total_length], dtype=np.int32)
                         feeds["total_sequence_length"] = np.array(
                             total_length + 1, dtype=np.int32

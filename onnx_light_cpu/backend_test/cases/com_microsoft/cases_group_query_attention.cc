@@ -402,13 +402,13 @@ void RegisterCachedRotaryCorrectnessCase(std::vector<TestCase> &registry,
       "backend-test", bt_ns::TestCaseTag::AI_RT);
 }
 
-// Short cached chunks exercise Muse's 2048-token boundary without a quadratic
+// Short cached chunks exercise the 2048-token window boundary without a quadratic
 // 2049-token prefill. RoPE is disabled so BF16 inputs can also use a FLOAT ORT
 // oracle without introducing different rotary intermediate rounding.
-void RegisterMuseGroupQueryAttentionCase(std::vector<TestCase> &registry,
-                                         const OpsetId &microsoft_opset, DataType data_type,
-                                         std::int64_t sequence, std::int64_t past_length,
-                                         std::int64_t window) {
+void RegisterLocalWindowGroupQueryAttentionCase(std::vector<TestCase> &registry,
+                                                const OpsetId &microsoft_opset, DataType data_type,
+                                                std::int64_t sequence, std::int64_t past_length,
+                                                std::int64_t window) {
   NodeProto node = MakeGroupQueryAttentionNode(32, 2, 1, 0.0883883461356163f, std::nullopt);
   node.ref_input()[3] = "past_key";
   node.ref_input()[4] = "past_value";
@@ -416,7 +416,7 @@ void RegisterMuseGroupQueryAttentionCase(std::vector<TestCase> &registry,
   node.add_output("present_value");
   AddIntAttribute(node, "local_window_size", window);
   const std::int64_t total_length = past_length + sequence;
-  const std::string name = "test_cpu_group_query_attention_model_muse_" +
+  const std::string name = "test_cpu_group_query_attention_local_window_" +
                            std::string(sequence == 1 ? "decode" : "cached_prefill") + "_b1_s" +
                            std::to_string(sequence) + "_qh32_kvh2_hd128_pastlen" +
                            std::to_string(past_length) + "_window" +
@@ -530,8 +530,10 @@ void RegisterCpuGroupQueryAttentionCases(std::vector<TestCase> &registry, TestMo
   RegisterCachedRotaryCorrectnessCase(registry, microsoft_opset);
   for (const DataType data_type : {DataType::FLOAT, DataType::FLOAT16, DataType::BFLOAT16}) {
     for (const std::int64_t window : {std::int64_t{2048}, std::int64_t{-1}}) {
-      RegisterMuseGroupQueryAttentionCase(registry, microsoft_opset, data_type, 3, 2047, window);
-      RegisterMuseGroupQueryAttentionCase(registry, microsoft_opset, data_type, 1, 2050, window);
+      RegisterLocalWindowGroupQueryAttentionCase(registry, microsoft_opset, data_type, 3, 2047,
+                                                 window);
+      RegisterLocalWindowGroupQueryAttentionCase(registry, microsoft_opset, data_type, 1, 2050,
+                                                 window);
     }
   }
 }
