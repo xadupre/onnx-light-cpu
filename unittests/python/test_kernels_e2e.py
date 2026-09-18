@@ -90,7 +90,7 @@ _DOMAIN_SPECIFIC_TARGET_KERNELS = {
 }
 
 _BENCHMARK_TYPE_SUFFIXES = dict.fromkeys(_TARGET_KERNELS, "float32")
-for _op_type in ("And", "Not", "Or", "Xor"):
+for _op_type in ("And", "Not", "Or", "Xor", "NonZero"):
     _BENCHMARK_TYPE_SUFFIXES[_op_type] = "bool"
 for _op_type in ("BitwiseAnd", "BitwiseOr", "BitwiseXor", "MatMulInteger"):
     _BENCHMARK_TYPE_SUFFIXES[_op_type] = "int8"
@@ -428,6 +428,9 @@ def _cpu_backend(model, *inputs):
     expected_kernels = []
     for node in model.graph.node:
         domain = node.domain or "ai.onnx"
+        if domain == "ai.onnx" and node.op_type == "Transpose":
+            # The NonZero embedding fixture uses the unrecorded builtin Transpose.
+            continue
         expected_kernel = _DOMAIN_SPECIFIC_TARGET_KERNELS.get(
             (domain, node.op_type), _TARGET_KERNELS.get(node.op_type)
         )
@@ -811,6 +814,8 @@ class TestBackendCases(ExtTestCase):
                 assert record.since_version == 28
             elif record.op_type == "TreeEnsemble":
                 assert record.since_version == 5
+            elif record.op_type == "NonZero":
+                assert record.since_version == 9
             else:
                 assert record.since_version is None
             if record.until_version is not None:

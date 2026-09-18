@@ -39,6 +39,7 @@
 #include "onnx_core/runtime/kernels/tensor_compare.h"
 #include "onnx_core/runtime/memory/simple_tensor.h"
 #include "onnx_core/runtime/runtime_context.h"
+#include "onnx_extensions/kernels/kernel_dispatch_table.h"
 
 #include <gtest/gtest.h>
 
@@ -486,6 +487,13 @@ void CheckTensorRegularCases(const std::string &op_type) {
 }
 
 TEST(OnnxLightBackendKernels, GatherRunsThroughRuntime) { CheckTensorRegularCases("Gather"); }
+
+TEST(OnnxLightBackendKernels, NonZeroRunsThroughRuntime) {
+  onnx_kernels::RegisterKernelFunctions();
+  EXPECT_EQ(CollectCpuCases("NonZero", core::backend_test::TestMode::TEST).size(), 22u);
+  const auto failures = RunCpuBackendCases("NonZero", core::backend_test::TestMode::TEST);
+  EXPECT_TRUE(failures.empty()) << Describe(failures);
+}
 
 TEST(OnnxLightBackendKernels, SliceRunsThroughRuntime) { CheckTensorRegularCases("Slice"); }
 

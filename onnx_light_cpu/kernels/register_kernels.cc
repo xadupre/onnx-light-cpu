@@ -35,6 +35,7 @@
 #include "onnx_light_cpu/kernels/tensor/cast_kernel.h"
 #include "onnx_light_cpu/kernels/tensor/concat_kernel.h"
 #include "onnx_light_cpu/kernels/tensor/gather_kernel.h"
+#include "onnx_light_cpu/kernels/tensor/nonzero_kernel.h"
 #include "onnx_light_cpu/kernels/tensor/slice_kernel.h"
 #include "onnx_light_cpu/kernels/tensor/split_kernel.h"
 #include "onnx_light_cpu/kernels/traditionalml/tree_ensemble_kernel.h"
@@ -189,6 +190,7 @@ void RegisterAllKernels(MicrosoftKernelImplementation implementation) {
   RegisterCastKernel();
   RegisterConcatKernel();
   RegisterGatherKernel();
+  RegisterNonZeroKernel();
   RegisterSliceKernel();
   RegisterSplitKernel();
   RegisterMatMulKernel();
