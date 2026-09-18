@@ -148,11 +148,14 @@ void RegisterCpuMatMulNBitsCases(std::vector<TestCase> &registry, TestMode mode)
       std::int64_t n;
     };
     // Keep the 202048-column vocabulary projection in the opt-in Python parity tool.
-    constexpr Projection muse_projections[] = {
-        {"muse_glimmer_q", 6656, 4096},     {"muse_glimmer_k", 6656, 256},
-        {"muse_glimmer_v", 6656, 256},      {"muse_glimmer_attention_output", 4096, 6656},
-        {"muse_glimmer_gate", 6656, 19968}, {"muse_glimmer_up", 6656, 19968},
-        {"muse_glimmer_down", 19968, 6656}};
+    constexpr Projection muse_projections[] = {{"muse_glimmer_attention_gate", 6656, 4096},
+                                               {"muse_glimmer_q", 6656, 4096},
+                                               {"muse_glimmer_k", 6656, 256},
+                                               {"muse_glimmer_v", 6656, 256},
+                                               {"muse_glimmer_attention_output", 4096, 6656},
+                                               {"muse_glimmer_gate", 6656, 19968},
+                                               {"muse_glimmer_up", 6656, 19968},
+                                               {"muse_glimmer_down", 19968, 6656}};
     for (const Projection &projection : muse_projections) {
       for (std::int64_t m : {1, 8, 128}) {
         for (DataType data_type : data_types) {

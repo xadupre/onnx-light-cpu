@@ -33,6 +33,7 @@ def projections():
     """Return separate projections, not fictitious fused QKV/gate-up shapes."""
     return {
         "q": (HIDDEN, QUERY),
+        "attention_gate": (HIDDEN, QUERY),
         "k": (HIDDEN, KEY_VALUE),
         "v": (HIDDEN, KEY_VALUE),
         "attention_output": (QUERY, HIDDEN),
@@ -43,10 +44,13 @@ def projections():
     }
 
 
-def memory_accounting(m, k, n, dtype, block_size=BLOCK_SIZE):
+def memory_accounting(m, k, n, dtype, block_size=BLOCK_SIZE, *, threads=1):
     """Analytical payloads only: not allocator peaks, process RSS or measurements."""
     itemsize = 4 if dtype == "float32" else 2
     blocks = (k + block_size - 1) // block_size
+    tiles = ((m + 7) // 8) * ((n + 31) // 32)
+    participants = min(threads, 32, tiles)
+    panel_workspace = (32 * 32 + 8 * 32 + 8 * 32) * 4
     return {
         "kind": "analytical; excludes runtime/ORT arenas, model copies and thread stacks",
         "packed_initializer_bytes": n * blocks * (block_size // 2),
@@ -54,7 +58,12 @@ def memory_accounting(m, k, n, dtype, block_size=BLOCK_SIZE):
         "input_bytes": m * k * itemsize,
         "output_bytes": m * n * itemsize,
         "avoided_full_float_weight_bytes": k * n * 4,
-        "kernel_panel_workspace_bytes_per_worker": (32 * 32 + 8 * 32 + 8 * 32) * 4,
+        "kernel_panel_workspace_bytes_per_worker": panel_workspace,
+        "kernel_panel_workspace_bytes_total_upper_bound": panel_workspace * participants,
+        "kernel_workspace_bound_participants": participants,
+        "kernel_workspace_bound_scope": (
+            "analytical min(requested threads, 32, tiles); actual scheduling may use fewer"
+        ),
         "kernel_full_weight_copy_bytes_per_run": 0,
         "kernel_full_input_conversion_copy_bytes_per_run": 0,
         "kernel_activation_panel_write_bytes_per_run": m * k * ((n + 31) // 32) * 4,
@@ -137,6 +146,7 @@ def run_case(name, m, k, n, dtype, *, threads=1, repeat=3, warmup=1):
         register_kernel_for_session,
         set_kernel_usage_recording,
         used_kernel_names,
+        used_kernel_paths,
     )
 
     started = time.perf_counter()
@@ -150,10 +160,27 @@ def run_case(name, m, k, n, dtype, *, threads=1, repeat=3, warmup=1):
     cpu = ReferenceEvaluator(serialized, cpu_execution={"num_threads": threads})
     register_kernel_for_session(cpu, "com.microsoft", "MatMulNBits")
     cpu_preparation = time.perf_counter() - started
+    cpu_feeds = {"A": a}
+
+    def cpu_run():
+        return cpu.run(None, cpu_feeds)[0]
+
+    set_kernel_usage_recording(cpu, True)
+    clear_used_kernel_names(cpu)
+    started = time.perf_counter()
+    actual = cpu_run()
+    cpu_first_run = time.perf_counter() - started
+    if not any("MatMulNBits" in kernel for kernel in used_kernel_names(cpu)):
+        raise AssertionError("MatMulNBits did not dispatch the registered CPU kernel")
+    kernel_paths = used_kernel_paths(cpu)
+    set_kernel_usage_recording(cpu, False)
+
     options = ort.SessionOptions()
     options.intra_op_num_threads = threads
     options.inter_op_num_threads = 1
     options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+    options.add_session_config_entry("session.intra_op.allow_spinning", "0")
+    options.add_session_config_entry("session.inter_op.allow_spinning", "0")
     started = time.perf_counter()
     oracle_feeds = {"A": a}
     oracle_kind = "native"
@@ -187,21 +214,14 @@ def run_case(name, m, k, n, dtype, *, threads=1, repeat=3, warmup=1):
             serialized, sess_options=options, providers=["CPUExecutionProvider"]
         )
     ort_preparation = time.perf_counter() - started
-    cpu_feeds = {"A": a}
-
-    def cpu_run():
-        return cpu.run(None, cpu_feeds)[0]
 
     def ort_run():
         return oracle.run(None, oracle_feeds)[0]
 
-    set_kernel_usage_recording(cpu, True)
-    clear_used_kernel_names(cpu)
-    actual = cpu_run()
-    if not any("MatMulNBits" in kernel for kernel in used_kernel_names(cpu)):
-        raise AssertionError("MatMulNBits did not dispatch the registered CPU kernel")
-    set_kernel_usage_recording(cpu, False)
-    expected = ort_run().astype(a.dtype).astype(np.float32)
+    started = time.perf_counter()
+    expected = ort_run()
+    ort_first_run = time.perf_counter() - started
+    expected = expected.astype(a.dtype).astype(np.float32)
     rtol, atol = {
         "float32": (3e-4, 2e-4),
         "float16": (1e-2, 1e-2),
@@ -224,9 +244,11 @@ def run_case(name, m, k, n, dtype, *, threads=1, repeat=3, warmup=1):
         "accuracy_level": 0,
         "threads": threads,
         "simd_level": str(detect_simd_level()),
+        "kernel_paths": kernel_paths,
         "warmup": warmup,
         "repeat": repeat,
         "ort_version": ort.__version__,
+        "ort_allow_spinning": False,
         "oracle": oracle_kind,
         "ort_timing_scope": (
             "FP32 session.run; final BF16 reference cast excluded"
@@ -237,6 +259,9 @@ def run_case(name, m, k, n, dtype, *, threads=1, repeat=3, warmup=1):
         "input_and_model_preparation_seconds": input_preparation,
         "cpu_session_preparation_seconds": cpu_preparation,
         "ort_session_preparation_seconds": ort_preparation,
+        "cpu_first_run_seconds": cpu_first_run,
+        "ort_first_run_seconds": ort_first_run,
+        "first_run_scope": "session.run; CPU precedes ORT construction and records kernel paths",
         "ort_preparation_includes_bf16_probe_and_conversion": bool(bf16_rejection),
         "cpu_samples_seconds": samples[0],
         "ort_samples_seconds": samples[1],
@@ -246,7 +271,7 @@ def run_case(name, m, k, n, dtype, *, threads=1, repeat=3, warmup=1):
         "timing_scope": "steady-state session.run with output allocation; preparation excluded",
         "max_absolute_error": float(np.max(np.abs(actual.astype(np.float32) - expected))),
         "constants_unchanged": True,
-        "memory": memory_accounting(m, k, n, dtype),
+        "memory": memory_accounting(m, k, n, dtype, threads=threads),
     }
 
 
@@ -272,6 +297,11 @@ def main(argv=None):
     rows = args.m or (ROWS if args.full else (1,))
     dtypes = args.dtype or (DTYPES if args.full else ("float32",))
     results = []
+    report = {
+        "expected_cases": len(names) * len(rows) * len(dtypes),
+        "complete": False,
+        "results": results,
+    }
     for name in names:
         for m in rows:
             for dtype in dtypes:
@@ -286,12 +316,11 @@ def main(argv=None):
                         warmup=args.warmup,
                     )
                 )
+                report["complete"] = len(results) == report["expected_cases"]
                 print(f"Parity passed: {name}, M={m}, {dtype}", file=sys.stderr)
                 if args.output:
-                    args.output.write_text(
-                        json.dumps({"results": results}, indent=2) + "\n", encoding="utf-8"
-                    )
-    text = json.dumps({"results": results}, indent=2)
+                    args.output.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    text = json.dumps(report, indent=2)
     print(text)
 
 

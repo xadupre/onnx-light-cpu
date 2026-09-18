@@ -28,6 +28,7 @@ class TestMatMulNBitsBenchmarkContract(unittest.TestCase):
             projections(),
             {
                 "q": (6656, 4096),
+                "attention_gate": (6656, 4096),
                 "k": (6656, 256),
                 "v": (6656, 256),
                 "attention_output": (4096, 6656),
@@ -68,8 +69,68 @@ class TestMatMulNBitsBenchmarkContract(unittest.TestCase):
         self.assertEqual(args.m, [128])
         self.assertEqual(args.dtype, ["float16"])
 
+    def test_total_workspace_bound_respects_threads_tiles_and_participant_cap(self):
+        for m, n, threads, participants in (
+            (1, 1, 64, 1),
+            (9, 33, 64, 4),
+            (128, 202048, 4, 4),
+            (128, 202048, 64, 32),
+        ):
+            with self.subTest(m=m, n=n, threads=threads):
+                memory = memory_accounting(m, 6656, n, "float16", threads=threads)
+                self.assertEqual(memory["kernel_workspace_bound_participants"], participants)
+                self.assertEqual(
+                    memory["kernel_panel_workspace_bytes_total_upper_bound"], 6144 * participants
+                )
+                self.assertIn("analytical", memory["kernel_workspace_bound_scope"])
+
 
 class TestMatMulNBitsConstantParity(unittest.TestCase):
+    def test_rejects_unsupported_quantization_contracts(self):
+        import numpy as np
+        from onnx_light.onnx import helper, numpy_helper
+        from onnx_light.onnx.reference import ReferenceEvaluator
+        from onnx_light_cpu import register_kernel_for_session
+
+        cases = (
+            ("zero_points", "zero_points and g_idx are not supported"),
+            ("g_idx", "zero_points and g_idx are not supported"),
+            ("block_size", "block_size=32"),
+            ("accuracy_level", "accuracy_level 0 or 4"),
+            ("weight_prepacked", "weight_prepacked=0"),
+        )
+        for option, message in cases:
+            with self.subTest(option=option):
+                block_size = 64 if option == "block_size" else 32
+                a, packed, scales = make_inputs(1, 64, 3, "float32", block_size=block_size)
+                model = make_model(1, 64, 3, "float32", packed, scales, block_size=block_size)
+                node = model.graph.node[0]
+                if option == "zero_points":
+                    node.input.append("zero_points")
+                    model.graph.initializer.append(
+                        numpy_helper.from_array(
+                            np.full((3, 1), 0x88, dtype=np.uint8), name="zero_points"
+                        )
+                    )
+                elif option == "g_idx":
+                    node.input.extend(["", "g_idx"])
+                    model.graph.initializer.append(
+                        numpy_helper.from_array(np.arange(64, dtype=np.int32) // 32, name="g_idx")
+                    )
+                elif option == "accuracy_level":
+                    for attribute in node.attribute:
+                        if attribute.name == "accuracy_level":
+                            attribute.i = 3
+                elif option == "weight_prepacked":
+                    node.attribute.append(helper.make_attribute("weight_prepacked", 1))
+                else:
+                    self.assertEqual(packed.shape, (3, 1, 32))
+                    self.assertEqual(scales.shape, (3, 1))
+                with self.assertRaisesRegex((ValueError, RuntimeError), message):
+                    session = ReferenceEvaluator(model)
+                    register_kernel_for_session(session, "com.microsoft", "MatMulNBits")
+                    session.run(None, {"A": a})
+
     def test_deterministic_packed_initializers_not_graph_inputs(self):
         import numpy as np
         from onnx_light.onnx import TensorProto
@@ -102,6 +163,9 @@ class TestMatMulNBitsConstantParity(unittest.TestCase):
                     self.assertTrue(result["constants_unchanged"])
                     self.assertGreater(len(result["cpu_samples_seconds"]), 0)
                     self.assertGreater(result["cpu_session_preparation_seconds"], 0)
+                    self.assertGreater(result["cpu_first_run_seconds"], 0)
+                    self.assertGreater(result["ort_first_run_seconds"], 0)
+                    self.assertFalse(result["ort_allow_spinning"])
                     if dtype == "bfloat16" and result["ort_bfloat16_rejection"]:
                         self.assertIn("BF16-rounded", result["oracle"])
 

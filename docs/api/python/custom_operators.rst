@@ -116,6 +116,59 @@ and scales and rounds its output back to BF16. This validates the CPU
 BF16 path without duplicating the quantized operator in Python, but is
 not a claim of native ORT BF16 support.
 
+Validation on this runner completed all 81 full-sized ORT comparisons:
+nine projection families at ``M=1,8,128``, for all three activation types,
+including vocabulary prefill. The separate attention-gate case has the
+same dimensions and deterministic inputs as Q. Reproduce these checks
+through ``--full`` or the ``OLC_MUSE_INT4_FULL=1`` test matrix.
+Maximum absolute errors across the completed comparisons were
+``4.816e-5`` (FP32), ``0.00390625`` (FP16), and ``0.015625`` (BF16 oracle).
+
+Representative kernel measurements
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+On an AMD EPYC 9V74 runner, GCC 13.3 Release, one runtime participant,
+FP32 ``K=6656,N=256``, the standalone benchmark measured the following
+seconds (one warmup, median of five runs). The baseline is the foundation
+implementation at ``a16de32cd15d4c4ac3ba9d7644a92dc80b7c2e22``;
+the optimized binary reported ``int4_panel_avx512``.
+These are representative measurements, not portable performance thresholds.
+
+.. list-table::
+   :header-rows: 1
+
+   * - M
+     - Input preparation
+     - Baseline steady state
+     - Panel steady state
+     - Panel scratch bytes
+     - Packed-weight copy bytes/run
+   * - 1
+     - 0.00101
+     - 0.00334
+     - 0.00154
+     - 6144
+     - 0
+   * - 8
+     - 0.00114
+     - 0.0266
+     - 0.00213
+     - 6144
+     - 0
+   * - 128
+     - 0.00285
+     - 0.425
+     - 0.0295
+     - 6144
+     - 0
+
+Preparation above generates inputs and allocates output storage; the kernel
+has no packing/preparation phase. Python session construction and first-use
+costs are separate from these low-level timings. Packed weights occupy
+851,968 bytes in this case; a full FP32 weight matrix would occupy
+6,815,744 bytes. The same panel bound applies to the reference vocabulary
+projection, whose full FP32 weight matrix would occupy 5,379,325,952 bytes.
+
 Experimental SimplifiedLayerNormalization
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
