@@ -30,6 +30,7 @@ void CollectCpuMathTestCases(std::vector<TestCase> &registry, const std::string 
       {"SimplifiedLayerNormalization", &RegisterCpuSimplifiedLayerNormalizationCases},
       {"Softmax", &RegisterCpuSoftmaxCases},
       {"SwiGLU", &RegisterCpuSwiGLUCases},
+      {"Tanh", &RegisterCpuTanhCases},
   };
   DispatchRegisterByOpType(registry, op_type, kEntries, mode);
 }

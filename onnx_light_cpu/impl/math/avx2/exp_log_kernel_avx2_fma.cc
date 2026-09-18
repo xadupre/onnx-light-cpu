@@ -188,6 +188,34 @@ ONNX_LIGHT_CPU_FORCE_INLINE __m256 SigmoidPs256Fma(__m256 value) {
   return _mm256_div_ps(numerator, _mm256_add_ps(_mm256_set1_ps(1.0f), exponent));
 }
 
+ONNX_LIGHT_CPU_FORCE_INLINE __m256 TanhPs256Fma(__m256 value) {
+  const __m256 sign = _mm256_and_ps(value, _mm256_set1_ps(-0.0f));
+  const __m256 magnitude = _mm256_andnot_ps(_mm256_set1_ps(-0.0f), value);
+  // Beyond 10 the correctly rounded float32 result is one. Clamping also keeps
+  // the exponential in its normal range, including for infinite inputs.
+  const __m256 bounded = _mm256_min_ps(magnitude, _mm256_set1_ps(10.0f));
+  const __m256 exponent = ExpNormalNegativePs256Fma(_mm256_mul_ps(bounded, _mm256_set1_ps(-2.0f)));
+  const __m256 one = _mm256_set1_ps(1.0f);
+  __m256 result = _mm256_div_ps(_mm256_sub_ps(one, exponent), _mm256_add_ps(one, exponent));
+
+  // The exponential subtraction loses relative accuracy near zero. Use the odd
+  // Taylor polynomial through x^11 on [0, 1/4], with error below a float32 ULP.
+  const __m256 small = _mm256_min_ps(magnitude, _mm256_set1_ps(0.25f));
+  const __m256 squared = _mm256_mul_ps(small, small);
+  __m256 polynomial = _mm256_set1_ps(-1382.0f / 155925.0f);
+  polynomial = _mm256_fmadd_ps(polynomial, squared, _mm256_set1_ps(62.0f / 2835.0f));
+  polynomial = _mm256_fmadd_ps(polynomial, squared, _mm256_set1_ps(-17.0f / 315.0f));
+  polynomial = _mm256_fmadd_ps(polynomial, squared, _mm256_set1_ps(2.0f / 15.0f));
+  polynomial = _mm256_fmadd_ps(polynomial, squared, _mm256_set1_ps(-1.0f / 3.0f));
+  polynomial = _mm256_fmadd_ps(_mm256_mul_ps(small, squared), polynomial, small);
+  result = Select(_mm256_cmp_ps(magnitude, _mm256_set1_ps(0.25f), _CMP_LE_OQ), polynomial, result);
+  result = _mm256_or_ps(result, sign);
+  // Copy tiny inputs rather than performing arithmetic on subnormal lanes.
+  result = Select(_mm256_cmp_ps(magnitude, _mm256_set1_ps(0x1p-13f), _CMP_LT_OQ), value, result);
+  const __m256 quiet_nan = _mm256_or_ps(value, _mm256_castsi256_ps(_mm256_set1_epi32(0x00400000)));
+  return Select(_mm256_cmp_ps(value, value, _CMP_UNORD_Q), quiet_nan, result);
+}
+
 template <bool normal_range>
 void SoftmaxNormalizeRow(const float *input, float *output, std::size_t columns, __m256 maximum) {
   const std::size_t vector_columns = columns - columns % 8;
@@ -267,6 +295,25 @@ void ExpFloat32_AVX2_FMA(const float *input, float *output, std::size_t count) {
     const __m256i tail = _mm256_cmpgt_epi32(_mm256_set1_epi32(static_cast<int>(count - i)), lanes);
     const __m256 result = ExpPs256Fma(_mm256_maskload_ps(input + i, tail));
     _mm256_maskstore_ps(output + i, tail, result);
+  }
+}
+
+void TanhFloat32_AVX2_FMA(const float *input, float *output, std::size_t count) {
+  std::size_t index = 0;
+  for (; count - index >= 16; index += 16) {
+    const __m256 result0 = TanhPs256Fma(_mm256_loadu_ps(input + index));
+    const __m256 result1 = TanhPs256Fma(_mm256_loadu_ps(input + index + 8));
+    _mm256_storeu_ps(output + index, result0);
+    _mm256_storeu_ps(output + index + 8, result1);
+  }
+  if (count - index >= 8) {
+    _mm256_storeu_ps(output + index, TanhPs256Fma(_mm256_loadu_ps(input + index)));
+    index += 8;
+  }
+  if (index < count) {
+    const __m256i mask = TailMask(count - index);
+    _mm256_maskstore_ps(output + index, mask,
+                        TanhPs256Fma(_mm256_maskload_ps(input + index, mask)));
   }
 }
 
