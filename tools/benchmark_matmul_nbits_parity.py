@@ -13,6 +13,7 @@ import argparse
 import hashlib
 import json
 import statistics
+import sys
 import time
 from pathlib import Path
 
@@ -270,23 +271,27 @@ def main(argv=None):
     names = args.projection or (tuple(projections()) if args.full else ("k",))
     rows = args.m or (ROWS if args.full else (1,))
     dtypes = args.dtype or (DTYPES if args.full else ("float32",))
-    results = [
-        run_case(
-            name,
-            m,
-            *projections()[name],
-            dtype,
-            threads=args.threads,
-            repeat=args.repeat,
-            warmup=args.warmup,
-        )
-        for name in names
-        for m in rows
-        for dtype in dtypes
-    ]
+    results = []
+    for name in names:
+        for m in rows:
+            for dtype in dtypes:
+                results.append(
+                    run_case(
+                        name,
+                        m,
+                        *projections()[name],
+                        dtype,
+                        threads=args.threads,
+                        repeat=args.repeat,
+                        warmup=args.warmup,
+                    )
+                )
+                print(f"Parity passed: {name}, M={m}, {dtype}", file=sys.stderr)
+                if args.output:
+                    args.output.write_text(
+                        json.dumps({"results": results}, indent=2) + "\n", encoding="utf-8"
+                    )
     text = json.dumps({"results": results}, indent=2)
-    if args.output:
-        args.output.write_text(text + "\n", encoding="utf-8")
     print(text)
 
 

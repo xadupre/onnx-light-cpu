@@ -94,6 +94,18 @@ TEST(MatMulNBits, PanelSchedulingAndNestedSuppression) {
   ExecutionExecutorScope scope(&view);
   MatMulNBitsFloat32(a.data(), b.data(), scales.data(), nullptr, y.data(), 1, 33, 2, 32);
   EXPECT_EQ(executor.dispatches, 0);
+  MatMulNBitsExecutionTuning tuning;
+  tuning.parallel_threshold_outputs = 513;
+  MatMulNBitsFloat32(a.data(), b.data(), scales.data(), nullptr, y.data(), 8, 33, 64, 32, tuning);
+  EXPECT_EQ(executor.dispatches, 0);
+  tuning.parallel_threshold_outputs = 512;
+  MatMulNBitsFloat32(a.data(), b.data(), scales.data(), nullptr, y.data(), 8, 33, 64, 32, tuning);
+  EXPECT_EQ(executor.dispatches, 1);
+  EXPECT_EQ(executor.blocks, 2);
+  executor = {};
+  tuning.parallel_threshold_outputs = 577;
+  MatMulNBitsFloat32(a.data(), b.data(), scales.data(), nullptr, y.data(), 9, 33, 64, 32, tuning);
+  EXPECT_EQ(executor.dispatches, 0);
   MatMulNBitsFloat32(a.data(), b.data(), scales.data(), nullptr, y.data(), 9, 33, 513, 32);
   EXPECT_EQ(executor.dispatches, 1);
   EXPECT_GT(executor.blocks, 1);
@@ -125,6 +137,18 @@ TEST(MatMulNBits, PanelSpecialValuesAndEmptyOutputs) {
   }
   MatMulNBitsFloat32(nullptr, nullptr, nullptr, nullptr, nullptr, 1, 33, 0, 32);
   EXPECT_THROW(MatMulNBitsFloat32(nullptr, nullptr, nullptr, nullptr, nullptr, 0, 0, 0, 64),
+               std::invalid_argument);
+}
+
+TEST(MatMulNBits, RejectsOverflowBeforeDispatchOrBufferAccess) {
+  const auto maximum = std::numeric_limits<std::size_t>::max();
+  EXPECT_THROW(MatMulNBitsFloat32(nullptr, nullptr, nullptr, nullptr, nullptr, 1, maximum, 1, 32),
+               std::invalid_argument);
+  EXPECT_THROW(MatMulNBitsFloat32(nullptr, nullptr, nullptr, nullptr, nullptr, maximum, 33, 1, 32),
+               std::invalid_argument);
+  EXPECT_THROW(MatMulNBitsFloat32(nullptr, nullptr, nullptr, nullptr, nullptr, 1, 33, maximum, 32),
+               std::invalid_argument);
+  EXPECT_THROW(MatMulNBitsFloat32(nullptr, nullptr, nullptr, nullptr, nullptr, maximum, 0, 2, 32),
                std::invalid_argument);
 }
 

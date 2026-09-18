@@ -81,10 +81,16 @@ void MatMulInt4Panels(const typename Codec::Storage *a, const std::uint8_t *b,
   const std::size_t column_tiles = n / kNBitsColumns + (n % kNBitsColumns != 0);
   const std::size_t row_tiles = rows / kNBitsRows + (rows % kNBitsRows != 0);
   const std::size_t tiles = CheckedMultiply(row_tiles, column_tiles, "MatMulNBits", "panels");
-  const ExecutionSchedule panel_schedule{
-      std::max<std::int64_t>(1, schedule.min_parallel_size / kNBitsColumns),
-      std::max<std::int64_t>(1, schedule.min_block_size / kNBitsColumns),
-      schedule.max_participants};
+  const auto tile_outputs =
+      static_cast<std::int64_t>(std::min(rows, kNBitsRows) * std::min(n, kNBitsColumns));
+  const auto to_panels = [tile_outputs](std::int64_t outputs) {
+    outputs = std::max<std::int64_t>(outputs, 1);
+    return outputs / tile_outputs + (outputs % tile_outputs != 0);
+  };
+  const bool parallel =
+      rows * n >= static_cast<std::size_t>(std::max<std::int64_t>(schedule.min_parallel_size, 1));
+  const ExecutionSchedule panel_schedule{1, to_panels(schedule.min_block_size),
+                                         parallel ? schedule.max_participants : 1};
   ExecuteRanges(
       static_cast<std::int64_t>(tiles), panel_schedule, [&](std::int64_t begin, std::int64_t end) {
         // Bounded per callback, including decode: never expand or repack all weights.

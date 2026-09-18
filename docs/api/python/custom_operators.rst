@@ -84,8 +84,11 @@ does not supply an ONNX artifact. The generic `exporter
 packs consecutive K values low-nibble first into UINT8 ``[N,ceil(K/G),G/2]``
 and stores matching floating-point scales ``[N,ceil(K/G)]``.
 Symmetric default/RTN export omits zero points (INT4 midpoint 8);
-``G=32`` is the configurable builder default. CPU integer-weight export uses
-FP32 activations; CUDA normally uses FP16, or BF16 when requested.
+``G=32`` is the `configurable builder default
+<https://github.com/xadupre/mbext/blob/cc81bff49c8045ad734a059979076882cabb1aa2/modelbuilder/builders/base.py#L440-L500>`_.
+The `activation dtype policy
+<https://github.com/xadupre/mbext/blob/cc81bff49c8045ad734a059979076882cabb1aa2/modelbuilder/builder.py#L112-L144>`_
+uses FP32 for CPU integer-weight export; CUDA normally uses FP16, or BF16 when requested.
 These are source-audited policies, not observations of a Muse model.
 
 **Separate unsupported contract:** asymmetric and ``k_quant`` exports can
@@ -96,7 +99,7 @@ zero-point inputs, dtypes, projection fusion, and whether the LM head is
 quantized before claiming model compatibility.
 
 Run the reproducible parity/latency suite with
-``python tools/benchmark_matmul_nbits_parity.py --help``. It separates
+``python -m tools.benchmark_matmul_nbits_parity --help``. It separates
 preparation from repeated invocations using constant initializers, compares
 against ONNX Runtime, and reports scratch/copy accounting separately from
 process memory. Large vocabulary cases are opt-in because model serialization
@@ -106,6 +109,12 @@ For isolated single-thread FP32 kernel measurements, build with
 ``matmul_nbits_throughput M K N repeats``. This reports input preparation,
 median steady-state seconds, packed bytes, zero kernel weight-copy bytes,
 scratch bytes, and the selected implementation.
+
+ONNX Runtime 1.30.0 CPU does not implement native BF16 MatMulNBits. The
+BF16 oracle therefore runs ORT's FP32 operator on BF16-rounded activations
+and scales and rounds its output back to BF16. This validates the CPU
+BF16 path without duplicating the quantized operator in Python, but is
+not a claim of native ORT BF16 support.
 
 Experimental SimplifiedLayerNormalization
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
