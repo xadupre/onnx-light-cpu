@@ -89,7 +89,7 @@ Floating-point paths preserve their documented NaN, infinity, signed-zero, and
 domain behavior; integer absolute value avoids undefined signed overflow.
 
 Tanh and logit softcapping
--------------------------
+--------------------------
 
 ``ai.onnx::Tanh`` preserves the input shape and element type, including scalar
 and empty tensors. It supports in-place compute, signed zero, subnormals, NaNs,
