@@ -12,6 +12,7 @@
 #include <cmath>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace onnx_light_cpu {
@@ -62,6 +63,18 @@ std::string AddInt64Constant(FunctionProto &func, int &counter, const char *pref
   TensorProto &tensor = attribute->ref_t();
   tensor.set_data_type(TensorProto::DataType::INT64);
   tensor.ref_int64_data().push_back(value);
+  return output;
+}
+
+std::string AddUint8Constant(FunctionProto &func, int &counter, const char *prefix, uint8_t value) {
+  const std::string output = grad_ns::NewGradName(prefix, counter);
+  NodeProto &node = func.add_node("Constant", {}, {output});
+  AttributeProto *attribute = node.add_attribute();
+  attribute->set_name("value");
+  attribute->set_type(AttributeProto::AttributeType::TENSOR);
+  TensorProto &tensor = attribute->ref_t();
+  tensor.set_data_type(TensorProto::DataType::UINT8);
+  tensor.set_raw_data(std::string(1, static_cast<char>(value)));
   return output;
 }
 
@@ -150,6 +163,121 @@ std::string GetStringAttributeOrDefault(const NodeProto &node, const char *name,
 
 bool HasInput(const NodeProto &node, int index) {
   return node.input_size() > index && !node.input(index).empty();
+}
+
+bool IsSupportedMatMulNBits(const NodeProto &node, int64_t &k, int64_t &n, int64_t &bits) {
+  if (node.input_size() < 3 || node.input_size() > 6 || node.output_size() != 1 ||
+      node.output(0).empty() || !HasInput(node, 0) || !HasInput(node, 1) || !HasInput(node, 2) ||
+      HasInput(node, 3) || HasInput(node, 4)) {
+    return false;
+  }
+  static const std::unordered_set<std::string> supported_attributes = {
+      "K", "N", "bits", "block_size", "accuracy_level", "weight_prepacked"};
+  for (const AttributeProto &attribute : node.attribute()) {
+    if (!supported_attributes.contains(attribute.name()) ||
+        attribute.type() != AttributeProto::AttributeType::INT) {
+      return false;
+    }
+  }
+  const AttributeProto *k_attribute = FindAttribute(node, "K");
+  const AttributeProto *n_attribute = FindAttribute(node, "N");
+  const AttributeProto *block_size = FindAttribute(node, "block_size");
+  if (k_attribute == nullptr || n_attribute == nullptr || block_size == nullptr) {
+    return false;
+  }
+  k = k_attribute->i();
+  n = n_attribute->i();
+  bits = GetIntAttributeOrDefault(node, "bits", 4);
+  const int64_t accuracy_level = GetIntAttributeOrDefault(node, "accuracy_level", 0);
+  return k > 0 && n > 0 && (bits == 2 || bits == 4 || bits == 8) && block_size->i() == 32 &&
+         (accuracy_level == 0 || accuracy_level == 4) &&
+         GetIntAttributeOrDefault(node, "weight_prepacked", 0) == 0;
+}
+
+bool GradMatMulNBits(const NodeProto &node, const std::string &output_grad,
+                     std::unordered_map<std::string, std::string> &grad_accum, int &counter,
+                     FunctionProto &func) {
+  int64_t k = 0;
+  int64_t n = 0;
+  int64_t bits = 0;
+  if (!IsSupportedMatMulNBits(node, k, n, bits)) {
+    return false;
+  }
+  const std::string &a = node.input(0);
+  const std::string &packed = node.input(1);
+  const std::string &scales = node.input(2);
+  const std::string mask = AddUint8Constant(func, counter, "packed_weight_mask", (1 << bits) - 1);
+  std::vector<std::string> unpacked_lanes;
+  for (int64_t shift_value = 0; shift_value < 8; shift_value += bits) {
+    std::string shifted = packed;
+    if (shift_value != 0) {
+      shifted = grad_ns::NewGradName("shifted_packed_weights", counter);
+      NodeProto &bit_shift = func.add_node(
+          "BitShift", {packed, AddUint8Constant(func, counter, "packed_weight_shift", shift_value)},
+          {shifted});
+      ONNX_LIGHT_NAMESPACE::AddAttribute(bit_shift, "direction", std::string("RIGHT"));
+    }
+    const std::string lane =
+        Binary(func, counter, "BitwiseAnd", shifted, mask, "packed_weight_lane");
+    unpacked_lanes.push_back(Unsqueeze(func, counter, lane, -1, "packed_weight_lane_unsqueezed"));
+  }
+  const std::string interleaved = grad_ns::NewGradName("interleaved_weights", counter);
+  NodeProto &concat = func.add_node("Concat", unpacked_lanes, {interleaved});
+  ONNX_LIGHT_NAMESPACE::AddAttribute(concat, "axis", int64_t{-1});
+  const std::string unpacked = Reshape(func, counter, interleaved, {n, -1}, "unpacked_weights");
+
+  const std::string starts = AddAxes(func, counter, "slice_starts", {0});
+  const std::string ends = AddAxes(func, counter, "slice_ends", {k});
+  const std::string axes = AddAxes(func, counter, "slice_axes", {1});
+  const auto slice_k = [&](const std::string &input, const char *prefix) {
+    const std::string output = grad_ns::NewGradName(prefix, counter);
+    func.add_node("Slice", {input, starts, ends, axes}, {output});
+    return output;
+  };
+  const std::string unpacked_k = slice_k(unpacked, "trimmed_unpacked_weights");
+  const std::string float_weights =
+      CastToFloat(func, counter, unpacked_k, "float_unpacked_weights");
+  const std::string centered =
+      Binary(func, counter, "Sub", float_weights,
+             AddConstant(func, counter, "default_zero_point", static_cast<float>(1 << (bits - 1))),
+             "centered_weights");
+
+  const int64_t blocks = (k + 31) / 32;
+  const std::string float_scales = CastToFloat(func, counter, scales, "float_scales");
+  const std::string scale_blocks =
+      Reshape(func, counter, float_scales, {n, blocks, 1}, "scale_blocks");
+  const std::string tiled_scales =
+      Binary(func, counter, "Tile", scale_blocks,
+             AddAxes(func, counter, "scale_repeats", {1, 1, 32}), "tiled_scales");
+  const std::string flat_scales = Reshape(func, counter, tiled_scales, {n, -1}, "flat_scales");
+  const std::string trimmed_scales = slice_k(flat_scales, "trimmed_scales");
+  const std::string dequantized =
+      Binary(func, counter, "Mul", centered, trimmed_scales, "dequantized_weights");
+  const std::string float_output_grad =
+      CastToFloat(func, counter, output_grad, "float_output_grad");
+  const std::string da =
+      Binary(func, counter, "MatMul", float_output_grad, dequantized, "matmul_nbits_a_grad");
+  grad_ns::AccumulateGrad(Binary(func, counter, "CastLike", da, a, "typed_matmul_nbits_a_grad"),
+                          grad_accum[a], counter, func);
+
+  if (HasInput(node, 5)) {
+    const std::string output_shape = Unary(func, counter, "Shape", output_grad, "output_shape");
+    const std::string rank = Unary(func, counter, "Size", output_shape, "output_rank");
+    const std::string zero = AddInt64Constant(func, counter, "axis_zero", 0);
+    const std::string one = AddInt64Constant(func, counter, "axis_one", 1);
+    const std::string last_axis = Binary(func, counter, "Sub", rank, one, "last_axis");
+    const std::string reduction_axes = grad_ns::NewGradName("bias_reduction_axes", counter);
+    func.add_node("Range", {zero, last_axis, one}, {reduction_axes});
+    const std::string float_dbias = grad_ns::NewGradName("float_matmul_nbits_bias_grad", counter);
+    NodeProto &reduce =
+        func.add_node("ReduceSum", {float_output_grad, reduction_axes}, {float_dbias});
+    ONNX_LIGHT_NAMESPACE::AddAttribute(reduce, "keepdims", int64_t{0});
+    ONNX_LIGHT_NAMESPACE::AddAttribute(reduce, "noop_with_empty_axes", int64_t{1});
+    grad_ns::AccumulateGrad(Binary(func, counter, "CastLike", float_dbias, node.input(5),
+                                   "typed_matmul_nbits_bias_grad"),
+                            grad_accum[node.input(5)], counter, func);
+  }
+  return true;
 }
 
 bool IsSupportedGroupQueryAttention(const NodeProto &node, int64_t &num_heads,
@@ -397,6 +525,7 @@ void RegisterCustomOperatorGradients(grad_ns::GradRegistry &registry) {
   grad_ns::RegisterGradientFunction(kMicrosoftDomain, "CDist", GradCDist, registry);
   grad_ns::RegisterGradientFunction(kMicrosoftDomain, "GroupQueryAttention",
                                     GradGroupQueryAttention, registry);
+  grad_ns::RegisterGradientFunction(kMicrosoftDomain, "MatMulNBits", GradMatMulNBits, registry);
 }
 
 } // namespace onnx_light_cpu

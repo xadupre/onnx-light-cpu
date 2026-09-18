@@ -68,8 +68,9 @@ Started
         (AVX2 PR02a); dedicated AVX2-only hardware and an onnx-light checkout
         remain required for a genuine AVX2-vs-AVX2 ONNX Runtime parity gate.
     * - :doc:`Qwen3 missing kernels <2026/2026_09_qwen3_missing_kernels>`
-      - Tracks the remaining INT4 projections and integration work. Gather
-        and SimplifiedLayerNormalization are complete; Cast, Split, and
+      - Tracks optimized INT4 projections and integration work after the
+        portable MatMulNBits foundation. Gather and
+        SimplifiedLayerNormalization are complete; Cast, Split, and
         SkipSimplifiedLayerNormalization have delivered their principal
         kernels, with runtime metadata and persistent-cache ownership kept in
         onnx-light.

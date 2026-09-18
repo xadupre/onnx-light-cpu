@@ -93,7 +93,7 @@ def _register_all_kernels(
 
 
 def custom_op_schemas(op_type: str = "", init_doc: bool = True) -> tuple[Any, ...]:
-    """Returns the ``com.microsoft`` light schemas shipped by this package."""
+    """Returns shipped ``com.microsoft`` schemas, including restricted ``MatMulNBits``."""
     import_module("onnx_light.onnx_op")
     from .onnx_py._cpuregister import (  # pyrefly: ignore[missing-import]
         microsoft_op_schemas,
@@ -161,7 +161,7 @@ def register_operator_support() -> None:
 
 
 def register_custom_gradients(registry: Any = None) -> Any:
-    """Adds the ``CDist`` and ``BiasGelu`` backward rules to a gradient registry."""
+    """Adds shipped Microsoft gradients, including restricted ``MatMulNBits``."""
     gradient_module = import_module("onnx_light.onnx_core.gradient")
     if registry is None:
         registry = gradient_module.GradRegistry.default()

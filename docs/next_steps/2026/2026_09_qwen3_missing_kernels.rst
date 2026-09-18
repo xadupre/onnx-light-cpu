@@ -50,10 +50,10 @@ prerequisite for the initial kernel milestone, which uses the existing tensor
 Progress snapshot
 -----------------
 
-As of 2026-09-18, K04 and K07 are complete. K05, K06, and K08 have delivered
-their principal kernels but retain the integration work listed below. K00 is
-partially covered by their direct and backend fixtures. K01--K03 and K09 have
-not started.
+As of 2026-09-18, K04 and K07 are complete. K01--K03, K05, K06, and K08 have
+delivered foundations or their principal kernels but retain the optimization
+and integration work listed below. K00 is partially covered by their direct
+and backend fixtures. K09 has not started.
 
 The delivered operator work is:
 
@@ -66,9 +66,11 @@ The delivered operator work is:
   `#732 <https://github.com/xadupre/onnx-light-cpu/pull/732>`_;
 * ``SkipSimplifiedLayerNormalization``:
   `#678 <https://github.com/xadupre/onnx-light-cpu/pull/678>`_.
+* portable packed ``MatMulNBits`` foundation:
+  `#737 <https://github.com/xadupre/onnx-light-cpu/pull/737>`_.
 
-The remaining critical path is the exact ``MatMulNBits`` contract, decode
-GEMV, prefill GEMM, INT64 ``ReduceSum``, and complete-block integration.
+The remaining critical path is prepared-weight persistence, optimized decode
+GEMV and prefill GEMM, INT64 ``ReduceSum``, and complete-block integration.
 Zero-copy ``Reshape`` and persistent KV-cache work remain owned by
 ``onnx-light``; they affect efficiency but do not block the initial
 past/present-tensor correctness milestone.
@@ -76,9 +78,12 @@ past/present-tensor correctness milestone.
 PR sequence
 -----------
 
-K00 continues alongside the remaining implementation steps. Model downloads
-and a complete generation benchmark are not prerequisites for isolated kernel
-development.
+K01 now has a portable packed-INT4/block-32 foundation with schema, symbolic
+shape inference, zero scratch-memory accounting, gradients, bias fusion, and
+Qwen2/Qwen3-shaped backend benchmarks. Prepared-weight persistence and the
+optimized K02/K03 paths remain pending. K00 continues to establish the
+complete model contract; model downloads and a generation benchmark are not
+prerequisites for isolated kernel development.
 
 .. list-table::
    :header-rows: 1
@@ -96,33 +101,39 @@ development.
        attributes, types, optional outputs, and dynamic dimensions. Expected
        outputs come from ONNX Runtime or supported built-in onnx-light
        kernels, not reimplemented Python math. Record upstream execution
-       ownership and missing contracts. Operator fixtures exist for K04--K08;
-       the executable block, ``MatMulNBits`` contract, and complete ownership
-       inventory remain.
+       ownership and missing contracts. Operator fixtures exist for K01--K08;
+       the executable block and complete ownership inventory remain.
      - Existing graph inventory
    * - K01
-     - Not started
+     - Partial
      - ``MatMulNBits`` schema, adapter, and prepared storage.
-     - Validate the audited three-input FP32/UINT8/FP32 contract with
-       ``bits=4``, ``block_size=32``, and ``accuracy_level=4``. Match packed
-       layout, implicit zero points, scale indexing, and padding against ONNX
-       Runtime. Reuse constant packed weights; reject unsupported variants
-       explicitly without expanding the complete weight matrix.
+     - Validate matching FP32/FP16/BF16 activation, scale, bias, and output
+       types with packed UINT8 INT2/INT4/INT8 weights, ``block_size=32``, and
+       ``accuracy_level=4``. Match packed layout, implicit zero points, scale
+       indexing, and padding against ONNX Runtime. Reuse constant packed
+       weights; reject unsupported variants explicitly without expanding the
+       complete weight matrix. The portable direct-packed contract, schema,
+       shape inference, gradients, fusion, tests, and benchmarks are delivered;
+       prepared-weight persistence remains.
      - K00
    * - K02
-     - Not started
+     - Partial
      - Packed INT4 decode GEMV.
      - The K01 plan executes ``M=1`` for every audited projection, including
        the vocabulary head. Scales and zero points are applied while
        consuming bounded panels. Exact packing/tail tests and numerical
-       comparisons pass; repeated calls do not repack constant weights.
+       comparisons pass; repeated calls do not repack constant weights. The
+       portable kernel and Qwen-shaped ``M=1`` benchmarks are delivered; the
+       dedicated optimized GEMV and prepared-weight reuse remain.
      - K01
    * - K03
-     - Not started
+     - Partial
      - INT4 small-M and prefill GEMM.
      - Reuse the same compressed weights for short prompts and prefill.
        Bound workspace, cover partial blocks and output tails, and publish
-       latency and memory comparisons without regressing decode.
+       latency and memory comparisons without regressing decode. The portable
+       direct-packed path and a Qwen3 ``M=8`` benchmark are delivered; tiled
+       SIMD prefill performance remains.
      - K02
    * - K04
      - Complete

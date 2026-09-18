@@ -42,6 +42,9 @@ void ComputeShapeGroupQueryAttention(ONNX_LIGHT_NAMESPACE::core::shapes::ShapesC
 /// Infers output and state shapes for ``com.microsoft::LinearAttention``.
 void ComputeShapeLinearAttention(ONNX_LIGHT_NAMESPACE::core::shapes::ShapesContext &ctx,
                                  const ONNX_LIGHT_NAMESPACE::NodeProto &node);
+/// Infers the restricted ``com.microsoft::MatMulNBits`` output shape.
+void ComputeShapeMatMulNBits(ONNX_LIGHT_NAMESPACE::core::shapes::ShapesContext &ctx,
+                             const ONNX_LIGHT_NAMESPACE::NodeProto &node);
 
 /// Returns the scratch-memory requirement for ``com.microsoft::CDist``.
 int64_t ComputePeakMemoryCDist(
@@ -62,6 +65,10 @@ int64_t ComputePeakMemoryGroupQueryAttention(
     const std::vector<ONNX_LIGHT_NAMESPACE::core::symbolic::SymShape> &input_shapes);
 /// Returns the scratch-memory requirement for ``com.microsoft::LinearAttention``.
 int64_t ComputePeakMemoryLinearAttention(
+    ONNX_LIGHT_NAMESPACE::core::symbolic::Device device,
+    const std::vector<ONNX_LIGHT_NAMESPACE::core::symbolic::SymShape> &input_shapes);
+/// Returns zero scratch memory for the allocation-free MatMulNBits scalar implementation.
+int64_t ComputePeakMemoryMatMulNBits(
     ONNX_LIGHT_NAMESPACE::core::symbolic::Device device,
     const std::vector<ONNX_LIGHT_NAMESPACE::core::symbolic::SymShape> &input_shapes);
 

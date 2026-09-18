@@ -177,6 +177,27 @@ public:
         const std::vector<const ONNX_LIGHT_NAMESPACE::NodeProto *> &nodes) const override;
 };
 
+/**
+ * Fuses a rank-1 FLOAT Add bias into optional MatMulNBits input slot 5.
+ *
+ * The source must be the exact com.microsoft opset-1 FLOAT/UINT8 restricted
+ * subset, have no existing bias, zero_points, or g_idx, and its output must be
+ * consumed only by the Add.
+ */
+class MatMulNBitsBiasFusionPattern final
+    : public ONNX_LIGHT_NAMESPACE::core::builder::PatternOptimization {
+public:
+  MatMulNBitsBiasFusionPattern() : PatternOptimization(0, "MicrosoftMatMulNBitsBias") {}
+
+  std::set<std::string> FastOpType() const override;
+  ONNX_LIGHT_NAMESPACE::core::builder::MatchResult
+  Match(ONNX_LIGHT_NAMESPACE::core::builder::GraphGraph &graph,
+        const ONNX_LIGHT_NAMESPACE::NodeProto &candidate) const override;
+  ONNX_LIGHT_NAMESPACE::utils::RepeatedProtoField<ONNX_LIGHT_NAMESPACE::NodeProto>
+  Apply(ONNX_LIGHT_NAMESPACE::core::builder::GraphGraph &graph,
+        const std::vector<const ONNX_LIGHT_NAMESPACE::NodeProto *> &nodes) const override;
+};
+
 void RegisterCustomOperatorPatterns();
 
 } // namespace onnx_light_cpu
