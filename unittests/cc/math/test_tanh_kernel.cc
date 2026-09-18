@@ -231,45 +231,48 @@ struct InlineExecutor {
 };
 
 TEST(TanhKernel, ExecutorSmallLargeAndNestedRanges) {
-  InlineExecutor executor;
-  const onnx_light_cpu::ExecutionExecutorView view{&executor, 4, InlineExecutor::Run};
-  const onnx_light_cpu::ExecutionExecutorScope scope(&view);
-  constexpr std::size_t count = 1048579;
-  std::vector<float> input(count), output(count, 42.0f);
-  for (std::size_t i = 0; i < count; ++i) {
-    input[i] = static_cast<float>(i % 101) / 13.0f - 4.0f;
-  }
-  onnx_light_cpu::TanhFloat32(input.data(), output.data(), 65);
-  EXPECT_EQ(executor.dispatches, 0);
-  onnx_light_cpu::TanhFloat32(input.data(), output.data(), count);
-  EXPECT_EQ(executor.dispatches, 1);
-  EXPECT_GT(executor.blocks, 1);
-  for (std::size_t i = 0; i < count; ++i) {
-    ExpectTanh(input[i], output[i]);
-  }
-  for (const bool bfloat16 : {false, true}) {
-    const HalfKernel kernel = bfloat16 ? onnx_light_cpu::TanhBFloat16 : onnx_light_cpu::TanhFloat16;
-    std::vector<std::uint16_t> half_input(count), half_output(count, 42);
+  for (const std::size_t count : {202048, 1048579}) {
+    SCOPED_TRACE(count);
+    InlineExecutor executor;
+    const onnx_light_cpu::ExecutionExecutorView view{&executor, 4, InlineExecutor::Run};
+    const onnx_light_cpu::ExecutionExecutorScope scope(&view);
+    std::vector<float> input(count), output(count, 42.0f);
     for (std::size_t i = 0; i < count; ++i) {
-      half_input[i] = FloatToHalf(input[i], bfloat16);
+      input[i] = static_cast<float>(i % 101) / 13.0f - 4.0f;
     }
-    const auto before = executor.dispatches;
-    kernel(half_input.data(), half_output.data(), 65);
-    EXPECT_EQ(executor.dispatches, before);
-    kernel(half_input.data(), half_output.data(), count);
-    EXPECT_EQ(executor.dispatches, before + 1);
+    onnx_light_cpu::TanhFloat32(input.data(), output.data(), 1024);
+    EXPECT_EQ(executor.dispatches, 0);
+    onnx_light_cpu::TanhFloat32(input.data(), output.data(), count);
+    EXPECT_EQ(executor.dispatches, 1);
     EXPECT_GT(executor.blocks, 1);
     for (std::size_t i = 0; i < count; ++i) {
-      ExpectHalf(half_input[i], half_output[i], bfloat16);
+      ExpectTanh(input[i], output[i]);
     }
-    const auto nested_before = executor.dispatches;
-    onnx_light_cpu::ExecuteRanges(2, onnx_light_cpu::ExecutionSchedule{1, 1, 2}, 1,
-                                  [&](std::int64_t, std::int64_t) {
-                                    EXPECT_TRUE(onnx_light_cpu::ExecutionInParallelRegion());
-                                    onnx_light_cpu::TanhFloat32(input.data(), output.data(), count);
-                                    kernel(half_input.data(), half_output.data(), count);
-                                  });
-    EXPECT_EQ(executor.dispatches, nested_before + 1);
+    for (const bool bfloat16 : {false, true}) {
+      const HalfKernel kernel =
+          bfloat16 ? onnx_light_cpu::TanhBFloat16 : onnx_light_cpu::TanhFloat16;
+      std::vector<std::uint16_t> half_input(count), half_output(count, 42);
+      for (std::size_t i = 0; i < count; ++i) {
+        half_input[i] = FloatToHalf(input[i], bfloat16);
+      }
+      const auto before = executor.dispatches;
+      kernel(half_input.data(), half_output.data(), 1024);
+      EXPECT_EQ(executor.dispatches, before);
+      kernel(half_input.data(), half_output.data(), count);
+      EXPECT_EQ(executor.dispatches, before + 1);
+      EXPECT_GT(executor.blocks, 1);
+      for (std::size_t i = 0; i < count; ++i) {
+        ExpectHalf(half_input[i], half_output[i], bfloat16);
+      }
+      const auto nested_before = executor.dispatches;
+      onnx_light_cpu::ExecuteRanges(
+          2, onnx_light_cpu::ExecutionSchedule{1, 1, 2}, 1, [&](std::int64_t, std::int64_t) {
+            EXPECT_TRUE(onnx_light_cpu::ExecutionInParallelRegion());
+            onnx_light_cpu::TanhFloat32(input.data(), output.data(), count);
+            kernel(half_input.data(), half_output.data(), count);
+          });
+      EXPECT_EQ(executor.dispatches, nested_before + 1);
+    }
   }
 }
 

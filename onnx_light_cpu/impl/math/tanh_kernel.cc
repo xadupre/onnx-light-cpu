@@ -14,6 +14,9 @@ namespace {
 
 using TanhRange = void (*)(const float *, float *, std::size_t);
 
+constexpr UnaryExecutionTuning kTanhFloat32Tuning{256 * 1024, 128 * 1024, 32, false};
+constexpr UnaryExecutionTuning kTanhHalfTuning{128 * 1024, 64 * 1024, 32, false};
+
 TanhRange GetTanhRange() {
   static const TanhRange function = []() -> TanhRange {
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
@@ -30,8 +33,7 @@ template <bool BFloat16>
 void TanhHalf(const std::uint16_t *input, std::uint16_t *output, std::size_t count) {
   const auto function = GetTanhRange();
   ExecuteUnaryRanges<std::uint16_t>(
-      count, kDefaultExpLogHalfExecutionTuning,
-      [input, output, function](std::int64_t begin, std::int64_t end) {
+      count, kTanhHalfTuning, [input, output, function](std::int64_t begin, std::int64_t end) {
         constexpr std::size_t kBlockSize = 1024;
         alignas(64) float values[kBlockSize];
         while (begin < end) {
@@ -63,11 +65,10 @@ void TanhFloat32_Scalar(const float *input, float *output, std::size_t count) {
 
 void TanhFloat32(const float *input, float *output, std::size_t count) {
   const auto function = GetTanhRange();
-  ExecuteUnaryRanges<float>(count, kDefaultExpLogExecutionTuning,
-                            [input, output, function](std::int64_t begin, std::int64_t end) {
-                              function(input + begin, output + begin,
-                                       static_cast<std::size_t>(end - begin));
-                            });
+  ExecuteUnaryRanges<float>(
+      count, kTanhFloat32Tuning, [input, output, function](std::int64_t begin, std::int64_t end) {
+        function(input + begin, output + begin, static_cast<std::size_t>(end - begin));
+      });
 }
 
 void TanhFloat16(const std::uint16_t *input, std::uint16_t *output, std::size_t count) {
