@@ -7,6 +7,8 @@
 import os
 import unittest
 
+from onnx_light.ext_test_case import ExtTestCase
+
 from tools.benchmark_matmul_nbits_parity import (
     BLOCK_SIZE,
     DTYPES,
@@ -22,7 +24,7 @@ from tools.benchmark_matmul_nbits_parity import (
 )
 
 
-class TestMatMulNBitsBenchmarkContract(unittest.TestCase):
+class TestMatMulNBitsBenchmarkContract(ExtTestCase):
     def test_exact_projection_families(self):
         self.assertEqual(
             projections(),
@@ -85,7 +87,7 @@ class TestMatMulNBitsBenchmarkContract(unittest.TestCase):
                 self.assertIn("analytical", memory["kernel_workspace_bound_scope"])
 
 
-class TestMatMulNBitsConstantParity(unittest.TestCase):
+class TestMatMulNBitsConstantParity(ExtTestCase):
     def test_rejects_unsupported_quantization_contracts(self):
         import numpy as np
         from onnx_light.onnx import helper, numpy_helper

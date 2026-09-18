@@ -67,7 +67,7 @@ constants. The bias fusion applies only to an exclusively consumed
 ``MatMulNBits`` output followed by a compatible rank-one ``Add``.
 
 Muse-Glimmer projections
-^^^^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^
 
 The synthetic projection suite uses ``M=1,8,128`` for decode, short prompts,
 and prefill. Its ``K -> N`` families are Q/attention gate ``6656 -> 4096``,
