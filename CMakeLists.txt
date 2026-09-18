@@ -1222,6 +1222,9 @@ if(ONNX_LIGHT_CPU_BUILD_BENCHMARKS)
     if(_target STREQUAL "abs_throughput" AND ONNX_LIGHT_CPU_HAVE_AVX512F_FLAG)
       target_compile_definitions(${_target} PRIVATE ONNX_LIGHT_CPU_HAVE_AVX512=1)
     endif()
+    if(_target STREQUAL "exp_log_throughput" AND ONNX_LIGHT_CPU_HAVE_AVX2_FMA_FLAG)
+      target_compile_definitions(${_target} PRIVATE ONNX_LIGHT_CPU_HAVE_AVX2_FMA=1)
+    endif()
     onnx_light_apply_hardening(${_target})
   endforeach()
 endif()
@@ -1304,6 +1307,7 @@ if(ONNX_LIGHT_CPU_BUILD_TESTS)
       endif()
     endif()
     if((_name STREQUAL "test_exp_log_kernel" OR
+        _name STREQUAL "test_tanh_kernel" OR
         _name STREQUAL "test_onnx_light_sigmoid_softmax_kernel") AND
        ONNX_LIGHT_CPU_HAVE_AVX2_FMA_FLAG)
       target_compile_definitions(${_name} PRIVATE ONNX_LIGHT_CPU_HAVE_AVX2_FMA=1)

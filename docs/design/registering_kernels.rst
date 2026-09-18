@@ -157,6 +157,7 @@ the default ONNX domain (the empty string is equivalent); ``ai.onnx.ml`` and
    "RegisterNormalizationKernels", "ai.onnx", "BatchNormalization, GroupNormalization, InstanceNormalization, LayerNormalization, LpNormalization, MeanVarianceNormalization"
    "RegisterRmsNormalizationKernel", "ai.onnx", "RMSNormalization"
    "RegisterSigmoidKernel", "ai.onnx", "Sigmoid"
+   "RegisterTanhKernel", "ai.onnx", "Tanh"
    "RegisterSimplifiedLayerNormalizationKernel", "ai.onnx", "SimplifiedLayerNormalization"
    "RegisterSoftmaxKernel", "ai.onnx", "Softmax"
    "RegisterSwiGLUKernel", "ai.onnx", "SwiGLU"
