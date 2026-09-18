@@ -125,7 +125,7 @@ the tests allow that underflow-only difference while independently requiring
 this kernel to preserve subnormals and the sign of zero exactly.
 
 Measured AVX2 path
-^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^
 
 On an AMD EPYC 7763 (GCC Release build, AVX2/FMA, one thread pinned to CPU 3),
 the existing throughput driver compares the scalar and AVX2 range functions
