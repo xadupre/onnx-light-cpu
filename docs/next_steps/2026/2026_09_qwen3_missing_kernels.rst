@@ -3,7 +3,7 @@ Qwen3 Missing-Kernel Implementation Plan
 
 :Date: 2026-09
 
-**planned**
+**in progress**
 
 Objective and boundary
 ----------------------
@@ -21,8 +21,11 @@ they do not introduce a second implementation of their shared engines.
 
 Already available: ``GroupQueryAttention`` with fused RoPE and tensor cache
 inputs/outputs, ``RMSNormalization``, ``Sigmoid``, ``Mul``, ``Sub``, and the
-shared matrix engine. Reuse them rather than introducing new attention,
-normalization, or activation kernels.
+shared matrix engine. Since this plan was written, ``Gather``, ``Cast``,
+``Split``, ``SimplifiedLayerNormalization``, and
+``SkipSimplifiedLayerNormalization`` have also been delivered. Reuse them
+rather than introducing new attention, normalization, layout, or activation
+kernels.
 
 Runtime prerequisites, not new CPU kernels
 ------------------------------------------
@@ -44,30 +47,61 @@ Attention belong to Qwen PR06b after that contract exists. Neither is a
 prerequisite for the initial kernel milestone, which uses the existing tensor
 ``past``/``present`` GQA interface and reports its copy cost.
 
+Progress snapshot
+-----------------
+
+As of 2026-09-18, K04 and K07 are complete. K05, K06, and K08 have delivered
+their principal kernels but retain the integration work listed below. K00 is
+partially covered by their direct and backend fixtures. K01--K03 and K09 have
+not started.
+
+The delivered operator work is:
+
+* ``Gather``: `#666 <https://github.com/xadupre/onnx-light-cpu/pull/666>`_;
+* ``Split``: `#673 <https://github.com/xadupre/onnx-light-cpu/pull/673>`_;
+* ``Cast``: `#674 <https://github.com/xadupre/onnx-light-cpu/pull/674>`_;
+* ``SimplifiedLayerNormalization``:
+  `#675 <https://github.com/xadupre/onnx-light-cpu/pull/675>`_, with subsequent
+  precision and SIMD work in
+  `#732 <https://github.com/xadupre/onnx-light-cpu/pull/732>`_;
+* ``SkipSimplifiedLayerNormalization``:
+  `#678 <https://github.com/xadupre/onnx-light-cpu/pull/678>`_.
+
+The remaining critical path is the exact ``MatMulNBits`` contract, decode
+GEMV, prefill GEMM, INT64 ``ReduceSum``, and complete-block integration.
+Zero-copy ``Reshape`` and persistent KV-cache work remain owned by
+``onnx-light``; they affect efficiency but do not block the initial
+past/present-tensor correctness milestone.
+
 PR sequence
 -----------
 
-All steps are pending. K00 establishes executable contracts before work starts
-in parallel. Model downloads and a complete generation benchmark are not
-prerequisites for isolated kernel development.
+K00 continues alongside the remaining implementation steps. Model downloads
+and a complete generation benchmark are not prerequisites for isolated kernel
+development.
 
 .. list-table::
    :header-rows: 1
-   :widths: 8 27 49 16
+   :widths: 8 13 24 43 12
 
    * - Step
+     - Status
      - Deliverable
      - Acceptance
      - Depends on
    * - K00
+     - Partial
      - Audited contracts and C++ backend fixtures.
      - Deterministic small inputs reproduce the exact domains, opsets,
        attributes, types, optional outputs, and dynamic dimensions. Expected
        outputs come from ONNX Runtime or supported built-in onnx-light
        kernels, not reimplemented Python math. Record upstream execution
-       ownership and missing contracts.
+       ownership and missing contracts. Operator fixtures exist for K04--K08;
+       the executable block, ``MatMulNBits`` contract, and complete ownership
+       inventory remain.
      - Existing graph inventory
    * - K01
+     - Not started
      - ``MatMulNBits`` schema, adapter, and prepared storage.
      - Validate the audited three-input FP32/UINT8/FP32 contract with
        ``bits=4``, ``block_size=32``, and ``accuracy_level=4``. Match packed
@@ -76,6 +110,7 @@ prerequisites for isolated kernel development.
        explicitly without expanding the complete weight matrix.
      - K00
    * - K02
+     - Not started
      - Packed INT4 decode GEMV.
      - The K01 plan executes ``M=1`` for every audited projection, including
        the vocabulary head. Scales and zero points are applied while
@@ -83,12 +118,14 @@ prerequisites for isolated kernel development.
        comparisons pass; repeated calls do not repack constant weights.
      - K01
    * - K03
+     - Not started
      - INT4 small-M and prefill GEMM.
      - Reuse the same compressed weights for short prompts and prefill.
        Bound workspace, cover partial blocks and output tails, and publish
        latency and memory comparisons without regressing decode.
      - K02
    * - K04
+     - Complete
      - ``Gather``.
      - FP32 embedding lookup on axis 0 with INT64 indices and the INT64
        scalar shape-gather case pass negative-index, bounds, empty-index,
@@ -96,20 +133,26 @@ prerequisites for isolated kernel development.
        the entire embedding table.
      - K00
    * - K05
+     - Partial
      - ``Cast`` and ``ReduceSum`` mask prelude.
      - INT64 mask reduction with tensor axes and ``keepdims=0`` followed by
        INT64-to-INT32 conversion matches the source schemas. Test empty
        reductions, axes, dtype boundaries, and malformed inputs. GQA length
-       validation must not redefine generic ONNX Cast semantics.
+       validation must not redefine generic ONNX Cast semantics. ``Cast`` and
+       its audited Qwen conversions are delivered; INT64 ``ReduceSum`` remains.
      - K00
    * - K06
+     - Partial
      - ``Split`` and layout integration.
      - Last-axis FP32 QKV splitting with ``[2048,1024,1024]`` works for
        multi-token as well as single-token inputs. Verify split totals,
        ownership, release order, output strides, and a materialized fallback.
-       Compose with the upstream Reshape contract.
+       The registered materialized implementation covers decode, small-M,
+       prefill, and batched shapes. Complete the composed release-order and
+       upstream ``Reshape``-view validation.
      - K00; upstream layout contract
    * - K07
+     - Complete
      - ``SimplifiedLayerNormalization`` adapter.
      - Resolve the experimental ``ai.onnx`` schema/loading contract and
        reuse RMSNormalization for ``axis=-1``, ``epsilon=1e-6``, and
@@ -117,14 +160,18 @@ prerequisites for isolated kernel development.
        optional outputs if supported; do not advertise unsupported forms.
      - K00; existing RMS engine
    * - K08
+     - Partial
      - ``SkipSimplifiedLayerNormalization`` adapter.
      - Reuse residual addition and the shared RMS engine. Preserve sparse
        optional outputs for all audited output layouts, especially the
        residual result. Cover omitted outputs, aliasing, epsilon, shape
-       errors, and accumulation precision. Fusion is a measured follow-up,
-       not a prerequisite for correct execution.
+       errors, and accumulation precision. The registered kernel and sparse
+       optional-output tests are delivered; complete the ORT differential and
+       caller-output aliasing evidence. Fusion is a measured follow-up, not a
+       prerequisite for correct execution.
      - K07
    * - K09
+     - Not started
      - Complete block and native INT4 graph integration.
      - First execute a deterministic block with FP32 MatMul using K04-K08,
        then replace projections with K01-K03. Compare intermediates, logits,

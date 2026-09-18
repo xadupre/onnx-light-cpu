@@ -67,6 +67,12 @@ Started
       - Measures the AVX2-ceiling FP32/FP64 Gemm/MatMul corpus from #633
         (AVX2 PR02a); dedicated AVX2-only hardware and an onnx-light checkout
         remain required for a genuine AVX2-vs-AVX2 ONNX Runtime parity gate.
+    * - :doc:`Qwen3 missing kernels <2026/2026_09_qwen3_missing_kernels>`
+      - Tracks the remaining INT4 projections and integration work. Gather
+        and SimplifiedLayerNormalization are complete; Cast, Split, and
+        SkipSimplifiedLayerNormalization have delivered their principal
+        kernels, with runtime metadata and persistent-cache ownership kept in
+        onnx-light.
 
 Planned
 -------
@@ -82,10 +88,6 @@ Planned
       - Freezes the audited end-to-end model benchmark, then builds the
         canonical batch-1 INT4 and persistent-decode path on top of the
         delivered GQA, RMSNormalization, and Sigmoid primitives.
-    * - :doc:`Qwen3 missing kernels <2026/2026_09_qwen3_missing_kernels>`
-      - Splits the remaining INT4 projections, input/layout kernels, and
-        normalization adapters into independent PRs, with runtime metadata
-        and persistent-cache ownership kept in onnx-light.
     * - :doc:`Qwen3 non-MatMulNBits operators
         <2026/2026_09_qwen3_operator_slice>`
       - Implements the metadata, input, layout, activation, and normalization
