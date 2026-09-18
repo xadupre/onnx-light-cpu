@@ -7,6 +7,7 @@
 #include "onnx_light_cpu/kernels/kernel_registration.h"
 
 #include "onnx_core/runtime/kernels/node_helpers.h"
+#include "onnx_extensions/kernels/kernels/tensor/include_tensor_kernels.h"
 #include "onnx_lib/common/safe_math.h"
 
 #include <memory>
@@ -38,7 +39,8 @@ NonZeroKernel::NonZeroKernel(const ONNX_LIGHT_NAMESPACE::NodeProto &node,
 
 Tensor NonZeroKernel::operator()(const Tensor &x, rt_ns::RuntimeContext *rt) const {
   if (x.data_type != DataType::BOOL) {
-    Invalid("input must be BOOL.");
+    const ONNX_LIGHT_NAMESPACE::onnx_kernels::kernel::NonZero reference{ctx_};
+    return reference(x, rt);
   }
   const int64_t total = x.shape.product(0, x.shape.size(), "NonZero input");
   const std::size_t input_bytes = ONNX_LIGHT_NAMESPACE::safe_cast_to_size(total, Invalid);

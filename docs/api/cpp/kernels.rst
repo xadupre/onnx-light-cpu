@@ -58,10 +58,11 @@ NonZero supports ``BOOL`` inputs from opset 9 onwards, including the
 recomputed for each invocation before checked output allocation, without
 worst-case index scratch storage. Empty dimensions and all-zero inputs
 produce zero columns.
+Other input types retain onnx-light's built-in NonZero implementation.
 
 Scalar inputs follow the ONNX specification: ``[0, 0]`` for false and
 ``[0, 1]`` for true. ONNX Runtime 1.30 instead returns ``[1, count]`` for
-scalars; ranked-input outputs match ONNX Runtime.
+scalars; ranked BOOL outputs match ONNX Runtime.
 
 .. doxygenclass:: onnx_light_cpu::CastKernel
    :project: onnx_light_cpu

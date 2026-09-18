@@ -14,6 +14,7 @@ from onnx_light.onnx.reference import ReferenceEvaluator
 from onnx_light.onnx_core.graph_builder import GraphBuilder
 from onnx_light_cpu import (
     register_backend_test_cases,
+    register_kernel_global,
     register_kernels_for_session,
     registered_kernels,
     set_kernel_usage_recording,
@@ -21,12 +22,12 @@ from onnx_light_cpu import (
 )
 
 
-def _model(shape):
+def _model(shape, data_type=TensorProto.BOOL):
     return helper.make_model(
         helper.make_graph(
             [helper.make_node("NonZero", ["X"], ["Y"])],
             "nonzero",
-            [helper.make_tensor_value_info("X", TensorProto.BOOL, shape)],
+            [helper.make_tensor_value_info("X", data_type, shape)],
             [helper.make_tensor_value_info("Y", TensorProto.INT64, None)],
         ),
         opset_imports=[helper.make_opsetid("", 13)],
@@ -104,6 +105,32 @@ class TestNonZero(ExtTestCase):
                 expected = ort_session.run(None, feeds)[0]
                 self.assertEqual(actual.shape, expected.shape)
                 self.assertEqualArray(actual, expected)
+
+    def test_numeric_inputs_retain_builtin_support(self):
+        types = (
+            (TensorProto.FLOAT, np.float32),
+            (TensorProto.DOUBLE, np.float64),
+            (TensorProto.INT8, np.int8),
+            (TensorProto.UINT8, np.uint8),
+            (TensorProto.INT16, np.int16),
+            (TensorProto.UINT16, np.uint16),
+            (TensorProto.INT32, np.int32),
+            (TensorProto.UINT32, np.uint32),
+            (TensorProto.INT64, np.int64),
+            (TensorProto.UINT64, np.uint64),
+        )
+        for registration in ("session", "global"):
+            for data_type, dtype in types:
+                with self.subTest(registration=registration, dtype=dtype):
+                    model = _model([2, 3], data_type)
+                    session = ReferenceEvaluator(model)
+                    if registration == "session":
+                        register_kernels_for_session(session)
+                    else:
+                        register_kernel_global("", "NonZero")
+                    feeds = {"X": np.array([[0, 2, 0], [3, 0, 4]], dtype=dtype)}
+                    expected = np.array([[0, 1, 1], [1, 0, 2]], dtype=np.int64)
+                    self.assertEqualArray(session.run(None, feeds)[0], expected)
 
     def test_shape_inference_keeps_count_dynamic(self):
         for shape in ([], [7], [2, 3], ["batch", "sequence"], [2, 0, 4]):

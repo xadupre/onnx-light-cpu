@@ -65,7 +65,7 @@ TEST(OnnxLightNonZeroKernel, RejectsMalformedInputsBeforeReading) {
   const onnx_light_cpu::NonZeroKernel kernel{ctx};
   const Tensor input = Tensor::FromBool("X", {2}, {0, 1});
   Tensor bad = input;
-  bad.data_type = DataType::UINT8;
+  bad.data_type = DataType::STRING;
   EXPECT_THROW(kernel(bad), std::invalid_argument);
   for (const Shape &shape : {Shape{3}, Shape{1}, Shape{-1}, Shape{0, -1},
                              Shape{std::numeric_limits<int64_t>::max(), 2}}) {
