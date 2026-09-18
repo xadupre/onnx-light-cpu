@@ -52,6 +52,7 @@ def test_native_kernel_tests_run_in_source_integration_not_standalone():
     for filename in (
         "test_kernels_e2e.py",
         "test_kernels_doc_e2e.py",
+        "test_nonzero.py",
         "test_simplified_layer_normalization.py",
         "test_skip_simplified_layer_normalization.py",
         "test_tanh.py",
