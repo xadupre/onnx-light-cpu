@@ -987,7 +987,7 @@ TEST(OnnxLightBackendKernels, CDistBenchmarkRunsThroughRuntime) {
 
 TEST(OnnxLightBackendKernels, MatMulNBitsBenchmarksIncludeQwen2Shapes) {
   const auto cases = CollectCpuCases("MatMulNBits", core::backend_test::TestMode::BENCHMARK);
-  ASSERT_EQ(cases.size(), 12U);
+  ASSERT_EQ(cases.size(), 12U + 8U * 3U * 3U);
   const std::vector<std::string> expected = {
       "test_cpu_matmulnbits_qwen2_qkv_decode_m1_k4096_n6144_bits4_block32_accuracy4_float32_"
       "benchmark",
@@ -1002,6 +1002,23 @@ TEST(OnnxLightBackendKernels, MatMulNBitsBenchmarksIncludeQwen2Shapes) {
     })) << name;
   }
   for (const std::string &data_type : {"float32", "float16", "bfloat16"}) {
+    for (const std::string &projection :
+         {"attention_gate", "q", "k", "v", "attention_output", "gate", "up", "down"}) {
+      const int k = projection == "down" ? 19968 : projection == "attention_output" ? 4096 : 6656;
+      const int n = projection == "k" || projection == "v"                ? 256
+                    : projection == "q" || projection == "attention_gate" ? 4096
+                    : projection == "gate" || projection == "up"          ? 19968
+                                                                          : 6656;
+      for (const int m : {1, 8, 128}) {
+        const std::string name = "test_cpu_matmulnbits_muse_glimmer_" + projection + "_m" +
+                                 std::to_string(m) + "_k" + std::to_string(k) + "_n" +
+                                 std::to_string(n) + "_bits4_block32_accuracy4_" + data_type +
+                                 "_benchmark";
+        EXPECT_TRUE(std::any_of(cases.begin(), cases.end(), [&](const TestCase &test_case) {
+          return test_case.name == name;
+        })) << name;
+      }
+    }
     for (const std::string &bits : {"2", "4", "8"}) {
       const std::string name = "test_cpu_matmulnbits_type_coverage_m2_k256_n128_bits" + bits +
                                "_block32_accuracy4_" + data_type + "_benchmark";

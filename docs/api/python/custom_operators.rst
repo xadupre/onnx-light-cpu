@@ -48,9 +48,16 @@ formats with required ``K`` and ``N`` attributes, ``bits`` equal to 2, 4, or
 
 The activation may have any positive rank with final dimension ``K``. Shape
 inference preserves every leading concrete or symbolic dimension and replaces
-the final dimension with ``N``. CPU scratch memory is zero: packed weights are
-decoded while accumulating each output, and inputs and outputs are excluded
-from the peak-memory function.
+the final dimension with ``N``. INT4 uses bounded panels of 8 rows, 32 output
+columns, and 32 reduction elements, with scalar, AVX2, or AVX-512 dispatch.
+Scratch is 6,144 bytes per active callback (4,096 decoded weight bytes,
+1,024 activation bytes, and 1,024 accumulator bytes), independent of matrix
+size. INT2/INT8 retain their allocation-free scalar path. Packed constants are
+borrowed directly on every invocation: there is no kernel preparation,
+persistent repacking, packed-weight copy, or full floating-point weight matrix.
+Inputs and outputs are excluded from scratch accounting. The registered
+peak-memory function still returns zero heap scratch; the bounded worker
+stack storage is reported separately by the projection benchmark.
 
 Explicit zero points, deprecated ``g_idx``, provider-prepacked weights, other
 bit widths, block sizes, mixed floating-point types, and ``DOUBLE`` are
@@ -58,6 +65,109 @@ rejected rather than silently using a different layout. The registered gradient 
 activation and optional bias while treating packed weights and scales as
 constants. The bias fusion applies only to an exclusively consumed
 ``MatMulNBits`` output followed by a compatible rank-one ``Add``.
+
+Muse-Glimmer projections
+^^^^^^^^^^^^^^^^^^^^^^^^
+
+The synthetic projection suite uses ``M=1,8,128`` for decode, short prompts,
+and prefill. Its ``K -> N`` families are Q/attention gate ``6656 -> 4096``,
+K/V ``6656 -> 256``, attention output ``4096 -> 6656``, MLP gate/up
+``6656 -> 19968``, MLP down ``19968 -> 6656``, and vocabulary
+``6656 -> 202048``. The vocabulary is the `Transformers reference default
+<https://github.com/huggingface/transformers/blob/bdb4cc00d5c76659f46585cd552b238c4d7bec54/src/transformers/models/muse_glimmer/configuration_muse_glimmer.py#L120-L146>`_,
+not a verified checkpoint value.
+
+The `mbext source plan
+<https://github.com/xadupre/mbext/blob/cc81bff49c8045ad734a059979076882cabb1aa2/docs/next_steps/2026-08_muse_glimmer.rst>`_
+does not supply an ONNX artifact. The generic `exporter
+<https://github.com/xadupre/mbext/blob/cc81bff49c8045ad734a059979076882cabb1aa2/modelbuilder/helpers/quantization.py#L260-L359>`_
+packs consecutive K values low-nibble first into UINT8 ``[N,ceil(K/G),G/2]``
+and stores matching floating-point scales ``[N,ceil(K/G)]``.
+Symmetric default/RTN export omits zero points (INT4 midpoint 8);
+``G=32`` is the `configurable builder default
+<https://github.com/xadupre/mbext/blob/cc81bff49c8045ad734a059979076882cabb1aa2/modelbuilder/builders/base.py#L440-L500>`_.
+The `activation dtype policy
+<https://github.com/xadupre/mbext/blob/cc81bff49c8045ad734a059979076882cabb1aa2/modelbuilder/builder.py#L112-L144>`_
+uses FP32 for CPU integer-weight export; CUDA normally uses FP16, or BF16 when requested.
+These are source-audited policies, not observations of a Muse model.
+
+**Separate unsupported contract:** asymmetric and ``k_quant`` exports can
+provide explicit packed zero points ``[N,ceil(ceil(K/G)/2)]``; exporters
+can also select a block size other than 32. Neither is enabled by this
+optimization. The actual artifact must be inspected for these attributes,
+zero-point inputs, dtypes, projection fusion, and whether the LM head is
+quantized before claiming model compatibility.
+
+Run the reproducible parity/latency suite with
+``python -m tools.benchmark_matmul_nbits_parity --help``. It separates
+preparation from repeated invocations using constant initializers, compares
+against ONNX Runtime, and reports scratch/copy accounting separately from
+process memory. Large vocabulary cases are opt-in because model serialization
+and ONNX Runtime preparation can require several GB.
+For isolated single-thread FP32 kernel measurements, build with
+``-DONNX_LIGHT_CPU_BUILD_BENCHMARKS=ON`` and run
+``matmul_nbits_throughput M K N repeats``. This reports input preparation,
+median steady-state seconds, packed bytes, zero kernel weight-copy bytes,
+scratch bytes, and the selected implementation.
+
+ONNX Runtime 1.30.0 CPU does not implement native BF16 MatMulNBits. The
+BF16 oracle therefore runs ORT's FP32 operator on BF16-rounded activations
+and scales and rounds its output back to BF16. This validates the CPU
+BF16 path without duplicating the quantized operator in Python, but is
+not a claim of native ORT BF16 support.
+
+Validation on this runner completed all 81 full-sized ORT comparisons:
+nine projection families at ``M=1,8,128``, for all three activation types,
+including vocabulary prefill. The separate attention-gate case has the
+same dimensions and deterministic inputs as Q. Reproduce these checks
+through ``--full`` or the ``OLC_MUSE_INT4_FULL=1`` test matrix.
+Maximum absolute errors across the completed comparisons were
+``4.816e-5`` (FP32), ``0.00390625`` (FP16), and ``0.015625`` (BF16 oracle).
+
+Representative kernel measurements
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+On an AMD EPYC 9V74 runner, GCC 13.3 Release, one runtime participant,
+FP32 ``K=6656,N=256``, the standalone benchmark measured the following
+seconds (one warmup, median of five runs). The baseline is the foundation
+implementation at ``a16de32cd15d4c4ac3ba9d7644a92dc80b7c2e22``;
+the optimized binary reported ``int4_panel_avx512``.
+These are representative measurements, not portable performance thresholds.
+
+.. list-table::
+   :header-rows: 1
+
+   * - M
+     - Input preparation
+     - Baseline steady state
+     - Panel steady state
+     - Panel scratch bytes
+     - Packed-weight copy bytes/run
+   * - 1
+     - 0.00101
+     - 0.00334
+     - 0.00154
+     - 6144
+     - 0
+   * - 8
+     - 0.00114
+     - 0.0266
+     - 0.00213
+     - 6144
+     - 0
+   * - 128
+     - 0.00285
+     - 0.425
+     - 0.0295
+     - 6144
+     - 0
+
+Preparation above generates inputs and allocates output storage; the kernel
+has no packing/preparation phase. Python session construction and first-use
+costs are separate from these low-level timings. Packed weights occupy
+851,968 bytes in this case; a full FP32 weight matrix would occupy
+6,815,744 bytes. The same panel bound applies to the reference vocabulary
+projection, whose full FP32 weight matrix would occupy 5,379,325,952 bytes.
 
 Experimental SimplifiedLayerNormalization
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

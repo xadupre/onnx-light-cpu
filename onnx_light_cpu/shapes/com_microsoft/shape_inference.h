@@ -67,7 +67,7 @@ int64_t ComputePeakMemoryGroupQueryAttention(
 int64_t ComputePeakMemoryLinearAttention(
     ONNX_LIGHT_NAMESPACE::core::symbolic::Device device,
     const std::vector<ONNX_LIGHT_NAMESPACE::core::symbolic::SymShape> &input_shapes);
-/// Returns zero scratch memory for the allocation-free MatMulNBits scalar implementation.
+/// Returns zero heap scratch; bounded INT4 panels use 6144 bytes of stack per callback.
 int64_t ComputePeakMemoryMatMulNBits(
     ONNX_LIGHT_NAMESPACE::core::symbolic::Device device,
     const std::vector<ONNX_LIGHT_NAMESPACE::core::symbolic::SymShape> &input_shapes);

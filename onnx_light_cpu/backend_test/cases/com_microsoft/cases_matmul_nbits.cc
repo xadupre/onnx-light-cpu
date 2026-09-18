@@ -142,6 +142,27 @@ void RegisterCpuMatMulNBitsCases(std::vector<TestCase> &registry, TestMode mode)
     RegisterBenchmark(registry, "qwen2_qkv_decode", 1, 4096, 6144, 4, DataType::FLOAT);
     RegisterBenchmark(registry, "qwen2_gate_up_decode", 1, 4096, 11008, 4, DataType::FLOAT);
     RegisterBenchmark(registry, "qwen3_qkv_short_prefill", 8, 1024, 4096, 4, DataType::FLOAT);
+    struct Projection {
+      const char *name;
+      std::int64_t k;
+      std::int64_t n;
+    };
+    // Keep the 202048-column vocabulary projection in the opt-in Python parity tool.
+    constexpr Projection muse_projections[] = {{"muse_glimmer_attention_gate", 6656, 4096},
+                                               {"muse_glimmer_q", 6656, 4096},
+                                               {"muse_glimmer_k", 6656, 256},
+                                               {"muse_glimmer_v", 6656, 256},
+                                               {"muse_glimmer_attention_output", 4096, 6656},
+                                               {"muse_glimmer_gate", 6656, 19968},
+                                               {"muse_glimmer_up", 6656, 19968},
+                                               {"muse_glimmer_down", 19968, 6656}};
+    for (const Projection &projection : muse_projections) {
+      for (std::int64_t m : {1, 8, 128}) {
+        for (DataType data_type : data_types) {
+          RegisterBenchmark(registry, projection.name, m, projection.k, projection.n, 4, data_type);
+        }
+      }
+    }
     return;
   }
 
