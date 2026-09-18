@@ -102,12 +102,12 @@ near zero and reuses the exponential approximation for larger arguments.
 CPU feature detection is cached; machines without AVX2/FMA use the portable
 path. Scheduling uses the session-owned executor rather than a private pool.
 Inputs below 65,536 elements stay serial. At and above that threshold, ranges
-target at least 32,768 elements per participant, so the one-token Muse
+target at least 32,768 elements per participant, so a large one-token
 vocabulary can also use the executor. Nested calls do not submit another
 parallel region.
 
 The backend benchmark registry includes small and tail-heavy vectors plus
-Muse-Glimmer logits with shapes ``[1, 1, 202048]``, ``[1, 16, 202048]``, and
+logit tensors with shapes ``[1, 1, 202048]``, ``[1, 16, 202048]``, and
 ``[1, 128, 202048]`` for all three types. These measure the Tanh step in
 ``20 * tanh((0.19611613513818404 * logits) / 20)``; the complete expression is
 also checked against ONNX Runtime in the integration tests.

@@ -19,12 +19,12 @@ namespace {
 namespace bt = ONNX_LIGHT_NAMESPACE::core::backend_test;
 namespace rt = ONNX_LIGHT_NAMESPACE::core::runtime;
 
-void RegisterMuseBenchmark(std::vector<TestCase> &registry, rt::DataType type,
-                           std::int64_t tokens) {
+void RegisterLogitsBenchmark(std::vector<TestCase> &registry, rt::DataType type,
+                             std::int64_t tokens) {
   const auto opset = rt::DefaultOpset(13);
   const rt::Shape shape{1, tokens, 202048};
   const std::int64_t count = tokens * shape.back();
-  const std::string name = "test_cpu_tanh_muse_1x" + std::to_string(tokens) + "x202048_" +
+  const std::string name = "test_cpu_tanh_logits_1x" + std::to_string(tokens) + "x202048_" +
                            DataTypeSuffix(type) + "_benchmark";
   auto build = [=](bool generate_expected_outputs) -> bt::IoData {
     auto x = MakeBenchmarkTensor(type, shape, 987654321ULL);
@@ -53,7 +53,7 @@ void RegisterCpuTanhCases(std::vector<TestCase> &registry, TestMode mode) {
             size);
       }
       for (const std::int64_t tokens : {1, 16, 128}) {
-        RegisterMuseBenchmark(registry, type, tokens);
+        RegisterLogitsBenchmark(registry, type, tokens);
       }
       continue;
     }

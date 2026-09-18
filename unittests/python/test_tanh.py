@@ -7,6 +7,7 @@ import unittest
 import ml_dtypes
 import numpy as np
 import onnxruntime as ort
+from onnx_light.ext_test_case import ExtTestCase
 from onnx_light.onnx import TensorProto, helper
 from onnx_light.onnx.reference import ReferenceEvaluator
 
@@ -53,7 +54,7 @@ def _ort_session(model):
     )
 
 
-class TestTanh(unittest.TestCase):
+class TestTanh(ExtTestCase):
     def _run(self, model, x):
         session = ReferenceEvaluator(model)
         register_kernel_for_session(session, "", "Tanh")
@@ -146,7 +147,7 @@ class TestTanh(unittest.TestCase):
                     x = np.zeros(shape, dtype=dtype)
                     np.testing.assert_array_equal(self._run(_model(proto, shape), x), x)
 
-    def test_muse_softcap(self):
+    def test_logit_softcap(self):
         for tokens in (1, 16):
             shape = [1, tokens, 202048]
             x = np.random.default_rng(42).uniform(-2000, 2000, shape).astype(np.float32)
