@@ -76,7 +76,7 @@ std::vector<std::uint8_t> MakePackedWeights(std::int64_t k, std::int64_t n, std:
 }
 
 IoData MakeCaseData(std::int64_t m, std::int64_t k, std::int64_t n, std::int64_t bits,
-                    DataType data_type, bool with_bias, bool generate_expected_outputs) {
+                    DataType data_type, bool with_bias, const KernelContext *kernel_context) {
   const std::int64_t blocks = (k + 31) / 32;
   Tensor a = MakeBenchmarkTensor(data_type, {m, k}, 7301 + bits);
   Tensor scales = MakeBenchmarkTensor(data_type, {n, blocks}, 7311 + bits);
@@ -89,11 +89,10 @@ IoData MakeCaseData(std::int64_t m, std::int64_t k, std::int64_t n, std::int64_t
   if (with_bias) {
     inputs.push_back(MakeBenchmarkTensor(data_type, {n}, 7321 + bits));
   }
-  if (!generate_expected_outputs) {
+  if (kernel_context == nullptr) {
     return IoData{std::move(inputs), {}, {}, false};
   }
-  const MatMulNBitsKernel kernel{MakeMatMulNBitsNode(k, n, bits, with_bias),
-                                 KernelContext{OpsetId(kMicrosoftDomain, 1)}};
+  const MatMulNBitsKernel kernel{MakeMatMulNBitsNode(k, n, bits, with_bias), *kernel_context};
   Tensor y = kernel(inputs[0], inputs[1], inputs[2], with_bias ? &inputs[3] : nullptr);
   return IoData{std::move(inputs), {std::move(y)}};
 }
@@ -118,7 +117,11 @@ void RegisterBenchmark(std::vector<TestCase> &registry, const char *shape_name, 
          {DefaultOpset(26), OpsetId(kMicrosoftDomain, 1)},
          {m * k, n * blocks * 4 * bits, n * blocks}, {m * n},
          [=](bool generate_expected_outputs) {
-           return MakeCaseData(m, k, n, bits, data_type, false, generate_expected_outputs);
+           if (generate_expected_outputs) {
+             const KernelContext kernel_context{OpsetId(kMicrosoftDomain, 1)};
+             return MakeCaseData(m, k, n, bits, data_type, false, &kernel_context);
+           }
+           return MakeCaseData(m, k, n, bits, data_type, false, nullptr);
          },
          "backend-test", bt_ns::TestCaseTag::AI_RT,
          {bt_ns::TensorTypeSpec(static_cast<std::int32_t>(data_type), {m, n})});
@@ -149,8 +152,11 @@ void RegisterCpuMatMulNBitsCases(std::vector<TestCase> &registry, TestMode mode)
       Expect(
           registry, MakeMatMulNBitsNode(33, 3, bits, true), name,
           {DefaultOpset(26), OpsetId(kMicrosoftDomain, 1)},
-          [=]() { return MakeCaseData(2, 33, 3, bits, data_type, true, true); }, "backend-test",
-          bt_ns::TestCaseTag::AI_RT);
+          [=]() {
+            const KernelContext kernel_context{OpsetId(kMicrosoftDomain, 1)};
+            return MakeCaseData(2, 33, 3, bits, data_type, true, &kernel_context);
+          },
+          "backend-test", bt_ns::TestCaseTag::AI_RT);
       SetTolerance(registry, data_type);
     }
   }
