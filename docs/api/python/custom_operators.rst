@@ -17,6 +17,21 @@ Custom operators
    These adapters are separate from standardized ONNX schemas and from the
    Microsoft-only :func:`custom_op_schemas` provider.
 
+Microsoft GroupQueryAttention
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``com.microsoft::GroupQueryAttention`` supports causal local attention for
+``FLOAT``, ``FLOAT16``, and ``BFLOAT16``. ``local_window_size`` defaults to
+``-1`` (full attention); a positive INT32 value counts attended tokens,
+including the current token. For example, ``2048`` attends the current
+position and up to 2047 preceding positions. Zero, values below ``-1``,
+values above ``INT32_MAX``, and local windows with ``causal=0`` are rejected.
+
+Windowing restricts only attention scores: ``present_key`` and
+``present_value`` still contain the entire past cache followed by the current
+step. RoPE uses absolute positions as before. Full and sliding attention nodes
+can coexist in the same model; ``sliding_window_cache`` remains unsupported.
+
 Microsoft MatMulNBits
 ~~~~~~~~~~~~~~~~~~~~~
 

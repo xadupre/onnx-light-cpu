@@ -14,8 +14,10 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <string>
 #include <vector>
@@ -162,7 +164,114 @@ void ExpectTensorsNear(const Tensor &actual, const Tensor &expected, float toler
   }
 }
 
+template <typename Kernel>
+void CheckLocalWindow(DataType dtype, std::optional<std::int64_t> window, std::int64_t past_length,
+                      std::int64_t sequence_length, int steps) {
+  SCOPED_TRACE(::testing::Message() << "dtype=" << static_cast<int>(dtype) << " window="
+                                    << window.value_or(-1) << " past_length=" << past_length);
+  auto make_tensor = [&](const Shape &shape, const std::vector<float> &values) {
+    return dtype == DataType::FLOAT ? MakeFloatTensor(shape, values)
+                                    : MakeHalfTensor(dtype, shape, values);
+  };
+  const float tolerance =
+      dtype == DataType::FLOAT ? 1e-4f : (dtype == DataType::FLOAT16 ? 0.02f : 0.1f);
+  std::vector<float> keys;
+  std::vector<float> values;
+  auto append_tokens = [&](std::int64_t begin, std::int64_t end) {
+    for (std::int64_t token = begin; token < end; ++token) {
+      keys.push_back(static_cast<float>(token % 16));
+      keys.push_back(static_cast<float>(token % 16 + 1));
+      // For W=2048 at position 2050, index 2 is just outside the window and
+      // index 3 is just inside. Large sentinels make an off-by-one visible
+      // even after BF16 rounding; index 0 also distinguishes full attention.
+      const float value = past_length > 2048 ? (token == 0   ? 8192.0f
+                                                : token == 2 ? 4096.0f
+                                                : token == 3 ? 2048.0f
+                                                             : 2.0f)
+                                             : static_cast<float>(2 * token + 2);
+      values.push_back(value);
+      values.push_back(-value);
+    }
+  };
+  append_tokens(0, past_length);
+  Tensor past_key = make_tensor({1, 1, past_length, 2}, keys);
+  Tensor past_value = make_tensor({1, 1, past_length, 2}, values);
+  for (int step = 0; step < steps; ++step) {
+    SCOPED_TRACE(step);
+    const std::int64_t total_length = past_length + sequence_length;
+    append_tokens(past_length, total_length);
+    const auto offset = static_cast<std::size_t>(past_length * 2);
+    const Tensor query = make_tensor(
+        {1, sequence_length, 4}, std::vector<float>(static_cast<std::size_t>(sequence_length * 4)));
+    const Tensor key =
+        make_tensor({1, sequence_length, 2}, std::vector<float>(keys.begin() + offset, keys.end()));
+    const Tensor value = make_tensor({1, sequence_length, 2},
+                                     std::vector<float>(values.begin() + offset, values.end()));
+    const Tensor seqlens_k =
+        Tensor::FromInt32("", {1}, {static_cast<std::int32_t>(total_length - 1)});
+    const Tensor total_sequence_length =
+        Tensor::FromInt32("", {}, {static_cast<std::int32_t>(total_length)});
+    NodeProto node = MakeGqaNode(2, 1, /*causal=*/true, past_length > 0,
+                                 /*with_rotary=*/false, /*with_bias=*/false,
+                                 /*with_present=*/true);
+    if (window.has_value()) {
+      AddIntAttribute(node, "local_window_size", *window);
+    }
+    Kernel kernel(node, MakeCtx());
+    Tensor present_key;
+    Tensor present_value;
+    const Tensor output =
+        kernel(node, query, key, value, seqlens_k, total_sequence_length,
+               past_length > 0 ? &past_key : nullptr, past_length > 0 ? &past_value : nullptr,
+               nullptr, nullptr, nullptr, nullptr, nullptr, &present_key, &present_value);
+    std::vector<float> expected;
+    for (std::int64_t row = 0; row < sequence_length; ++row) {
+      const std::int64_t end = past_length + row + 1;
+      const std::int64_t begin =
+          window.value_or(-1) > 0 ? std::max(std::int64_t{0}, end - *window) : 0;
+      float sum = 0.0f;
+      for (std::int64_t token = begin; token < end; ++token) {
+        sum += values[static_cast<std::size_t>(token * 2)];
+      }
+      const float mean = sum / static_cast<float>(end - begin);
+      expected.insert(expected.end(), {mean, -mean, mean, -mean});
+    }
+    ExpectTensorsNear(output, make_tensor({1, sequence_length, 4}, expected), tolerance);
+    ExpectTensorsNear(present_key, make_tensor({1, 1, total_length, 2}, keys), 0.0f);
+    ExpectTensorsNear(present_value, make_tensor({1, 1, total_length, 2}, values), 0.0f);
+    past_key = std::move(present_key);
+    past_value = std::move(present_value);
+    past_length = total_length;
+  }
+}
+
+template <typename Kernel> void CheckLocalWindowBoundaries() {
+  for (DataType dtype : {DataType::FLOAT, DataType::FLOAT16, DataType::BFLOAT16}) {
+    for (std::optional<std::int64_t> window :
+         {std::optional<std::int64_t>{}, std::optional<std::int64_t>{-1},
+          std::optional<std::int64_t>{1}, std::optional<std::int64_t>{2},
+          std::optional<std::int64_t>{8},
+          std::optional<std::int64_t>{std::numeric_limits<std::int32_t>::max()}}) {
+      CheckLocalWindow<Kernel>(dtype, window, 0, 4, 1);
+      CheckLocalWindow<Kernel>(dtype, window, 3, 4, 1);
+    }
+    for (std::optional<std::int64_t> window :
+         {std::optional<std::int64_t>{}, std::optional<std::int64_t>{-1},
+          std::optional<std::int64_t>{2048}}) {
+      CheckLocalWindow<Kernel>(dtype, window, 2050, 1, 2);
+    }
+  }
+}
+
 } // namespace
+
+TEST(OnnxLightNaiveGroupQueryAttentionKernel, LocalWindowBoundariesAndUntruncatedDecodeCaches) {
+  CheckLocalWindowBoundaries<onnx_light_cpu::NaiveGroupQueryAttentionKernel>();
+}
+
+TEST(OnnxLightGroupQueryAttentionKernel, LocalWindowBoundariesAndUntruncatedDecodeCaches) {
+  CheckLocalWindowBoundaries<onnx_light_cpu::GroupQueryAttentionKernel>();
+}
 
 // ---------------------------------------------------------------------------
 // Hand-verifiable smoke test.
@@ -273,6 +382,7 @@ struct DifferentialCase {
   std::optional<float> scale = std::nullopt;
   std::optional<float> softcap = std::nullopt;
   bool expect_parallel = false;
+  std::optional<std::int64_t> local_window_size = std::nullopt;
 };
 
 struct InlineExecutor {
@@ -382,6 +492,9 @@ void RunDifferentialCase(const DifferentialCase &c, DataType dtype, float tolera
   if (c.softcap.has_value()) {
     AddFloatAttribute(node, "softcap", *c.softcap);
   }
+  if (c.local_window_size.has_value()) {
+    AddIntAttribute(node, "local_window_size", *c.local_window_size);
+  }
 
   onnx_light_cpu::GroupQueryAttentionKernel optimized_kernel(node, MakeCtx());
   onnx_light_cpu::NaiveGroupQueryAttentionKernel naive_kernel(node, MakeCtx());
@@ -482,6 +595,30 @@ TEST(OnnxLightNaiveGroupQueryAttentionKernel, MatchesOptimizedKernelWithFloat16C
                            /*with_present=*/true,
                            /*seed=*/505};
   RunDifferentialCase(c, DataType::FLOAT16, 5e-3f);
+}
+
+TEST(OnnxLightNaiveGroupQueryAttentionKernel, LocalWindowComposesWithRotaryScaleSoftcapAndBias) {
+  const DifferentialCase c{"GQA_LocalWindow_Rotary_Scale_Softcap_Bias",
+                           /*num_heads=*/4,
+                           /*kv_num_heads=*/2,
+                           /*batch=*/2,
+                           /*sequence_length=*/3,
+                           /*past_length=*/3,
+                           /*head_dim=*/8,
+                           /*v_head_dim=*/8,
+                           /*causal=*/true,
+                           /*with_rotary=*/true,
+                           /*with_bias=*/true,
+                           /*with_present=*/true,
+                           /*seed=*/507,
+                           /*with_position_ids=*/true,
+                           /*scale=*/1.7f,
+                           /*softcap=*/0.03f,
+                           /*expect_parallel=*/false,
+                           /*local_window_size=*/2};
+  RunDifferentialCase(c, DataType::FLOAT, 1e-4f);
+  RunDifferentialCase(c, DataType::FLOAT16, 5e-4f);
+  RunDifferentialCase(c, DataType::BFLOAT16, 2e-3f);
 }
 
 TEST(OnnxLightNaiveGroupQueryAttentionKernel, MatchesOptimizedKernelWithBFloat16CacheNonCausal) {

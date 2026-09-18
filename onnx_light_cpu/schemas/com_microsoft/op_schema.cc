@@ -134,6 +134,11 @@ LightOpSchema MakeGroupQueryAttentionSchema() {
        AttributeParam{"kv_num_heads", "Number of key/value heads.", AttributeType::INT, true},
        AttributeParam{"causal", "Whether to apply causal masking.", AttributeType::INT, false,
                       int64_t{1}},
+       AttributeParam{"local_window_size",
+                      "Causal window token count including the current token, in [1, INT32_MAX], "
+                      "or -1 for full attention. Requires causal=1 when set; does not truncate "
+                      "past/present caches.",
+                      AttributeType::INT, false, int64_t{-1}},
        AttributeParam{"scale", "Optional attention-score scale.", AttributeType::FLOAT, false},
        AttributeParam{"softcap", "Optional attention-score softcap.", AttributeType::FLOAT, false,
                       0.0f},

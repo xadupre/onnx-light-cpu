@@ -402,6 +402,69 @@ void RegisterCachedRotaryCorrectnessCase(std::vector<TestCase> &registry,
       "backend-test", bt_ns::TestCaseTag::AI_RT);
 }
 
+// Short cached chunks exercise Muse's 2048-token boundary without a quadratic
+// 2049-token prefill. RoPE is disabled so BF16 inputs can also use a FLOAT ORT
+// oracle without introducing different rotary intermediate rounding.
+void RegisterMuseGroupQueryAttentionCase(std::vector<TestCase> &registry,
+                                         const OpsetId &microsoft_opset, DataType data_type,
+                                         std::int64_t sequence, std::int64_t past_length,
+                                         std::int64_t window) {
+  NodeProto node = MakeGroupQueryAttentionNode(32, 2, 1, 0.0883883461356163f, std::nullopt);
+  node.set_input(3, "past_key");
+  node.set_input(4, "past_value");
+  node.add_output("present_key");
+  node.add_output("present_value");
+  AddIntAttribute(node, "local_window_size", window);
+  const std::int64_t total_length = past_length + sequence;
+  const std::string name = "test_cpu_group_query_attention_model_muse_" +
+                           std::string(sequence == 1 ? "decode" : "cached_prefill") + "_b1_s" +
+                           std::to_string(sequence) + "_qh32_kvh2_hd128_pastlen" +
+                           std::to_string(past_length) + "_window" +
+                           (window == -1 ? "full" : std::to_string(window)) + "_" +
+                           DataTypeSuffix(data_type);
+  Expect(
+      registry, node, name, {DefaultOpset(23), microsoft_opset},
+      [=]() -> IoData {
+        Tensor query = MakeBenchmarkTensor(data_type, {1, sequence, 4096}, 987654321ULL);
+        Tensor key = MakeBenchmarkTensor(data_type, {1, sequence, 256}, 246813579ULL);
+        Tensor value = MakeBenchmarkTensor(data_type, {1, sequence, 256}, 135792468ULL);
+        Tensor past_key = MakeBenchmarkTensor(data_type, {1, 2, past_length, 128}, 111111111ULL);
+        std::vector<float> past_values(static_cast<std::size_t>(2 * past_length * 128));
+        for (std::int64_t head = 0; head < 2; ++head) {
+          for (std::int64_t token = 0; token < past_length; ++token) {
+            for (std::int64_t dim = 0; dim < 128; ++dim) {
+              // An unmistakable old prefix makes dropping a token observable
+              // even after BF16 rounding, unlike uniform long-context noise.
+              past_values[static_cast<std::size_t>((head * past_length + token) * 128 + dim)] =
+                  token < 4 ? 64.0f : static_cast<float>((token + dim + head) % 17 - 8) / 32.0f;
+            }
+          }
+        }
+        Tensor past_value = MakeTensor(data_type, {1, 2, past_length, 128}, past_values);
+        Tensor seqlens_k =
+            Tensor::FromInt32("", {1}, {static_cast<std::int32_t>(total_length - 1)});
+        Tensor total_sequence_length =
+            Tensor::FromInt32("", {}, {static_cast<std::int32_t>(total_length)});
+        const NaiveGroupQueryAttentionKernel kernel{node, KernelContext{microsoft_opset}};
+        Tensor present_key;
+        Tensor present_value;
+        Tensor output = kernel(node, query, key, value, seqlens_k, total_sequence_length, &past_key,
+                               &past_value, nullptr, nullptr, nullptr, nullptr, nullptr,
+                               &present_key, &present_value);
+        return IoData{{std::move(query), std::move(key), std::move(value), std::move(past_key),
+                       std::move(past_value), std::move(seqlens_k),
+                       std::move(total_sequence_length)},
+                      {std::move(output), std::move(present_key), std::move(present_value)}};
+      },
+      "backend-test", bt_ns::TestCaseTag::AI_RT);
+  registry.back().rtol = data_type == DataType::BFLOAT16  ? 1.0e-2
+                         : data_type == DataType::FLOAT16 ? 2.0e-3
+                                                         : 2.0e-4;
+  registry.back().atol = data_type == DataType::BFLOAT16  ? 1.0e-3
+                         : data_type == DataType::FLOAT16 ? 2.0e-4
+                                                         : 2.0e-5;
+}
+
 } // namespace
 
 void RegisterCpuGroupQueryAttentionCases(std::vector<TestCase> &registry, TestMode mode) {
@@ -465,6 +528,12 @@ void RegisterCpuGroupQueryAttentionCases(std::vector<TestCase> &registry, TestMo
                                   4, 4, 4, 8, DataType::BFLOAT16, 1, std::nullopt, 2.0f);
   RegisterExplicitPositionIdsCase(registry, microsoft_opset);
   RegisterCachedRotaryCorrectnessCase(registry, microsoft_opset);
+  for (const DataType data_type : {DataType::FLOAT, DataType::FLOAT16, DataType::BFLOAT16}) {
+    for (const std::int64_t window : {std::int64_t{2048}, std::int64_t{-1}}) {
+      RegisterMuseGroupQueryAttentionCase(registry, microsoft_opset, data_type, 3, 2047, window);
+      RegisterMuseGroupQueryAttentionCase(registry, microsoft_opset, data_type, 1, 2050, window);
+    }
+  }
 }
 
 } // namespace onnx_light_cpu::backend_test

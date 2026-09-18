@@ -26,7 +26,10 @@ namespace onnx_light_cpu {
 /// the absolute position derived from ``seqlens_k`` (or an explicit
 /// ``position_ids``), and observable ``present_key``/``present_value``
 /// outputs holding the concatenation of the past cache with the (rotated)
-/// current step. The attention score/softmax/value reduction itself is
+/// current step. ``local_window_size`` is -1 (full attention) or a positive
+/// INT32 token count including the current token, and requires causal
+/// attention. It restricts attended keys without truncating the cache.
+/// The attention score/softmax/value reduction itself is
 /// delegated to :cpp:class:`AttentionKernel` (this kernel never duplicates
 /// that math); only the RoPE application and the ``present`` cache
 /// materialization are implemented here.

@@ -322,6 +322,39 @@ def _make_ort_compatible_model(model):
     return ort_model
 
 
+def _muse_ort_session(model):
+    """ORT CPU lacks BF16 GQA: promote the already-rounded BF16 inputs to FLOAT.
+
+    Muse fixtures disable RoPE, avoiding a different BF16 rotary rounding point.
+    Integer sequence metadata stays INT32; no attention math is implemented here.
+    """
+    ort_model = _make_ort_compatible_model(model)
+    for value_info in (*ort_model.graph.input, *ort_model.graph.output):
+        if value_info.type.tensor_type.elem_type == TensorProto.BFLOAT16:
+            value_info.type.tensor_type.elem_type = TensorProto.FLOAT
+    options = onnxruntime.SessionOptions()
+    options.intra_op_num_threads = 1
+    options.inter_op_num_threads = 1
+    return onnxruntime.InferenceSession(
+        ort_model.SerializeToString(), sess_options=options, providers=["CPUExecutionProvider"]
+    )
+
+
+def _muse_ort_feeds(feeds):
+    return {
+        name: value.astype(np.float32) if value.dtype == ml_dtypes.bfloat16 else value
+        for name, value in feeds.items()
+    }
+
+
+def _muse_tolerances(dtype):
+    if dtype == ml_dtypes.bfloat16:
+        return 1e-2, 1e-3
+    if dtype == np.float16:
+        return 2e-3, 2e-4
+    return 2e-4, 2e-5
+
+
 def _collect_low_precision_affine_builtin_sessions():
     sessions = {}
     for op_type, version, x_shape, parameter_shape, attributes in _LOW_PRECISION_AFFINE_CASES:
@@ -826,7 +859,7 @@ class TestBackendCases(ExtTestCase):
             int(TensorProto.FLOAT16),
             int(TensorProto.BFLOAT16),
         }
-        for mode, expected_count in ((TestMode.TEST, 5), (TestMode.BENCHMARK, 15)):
+        for mode, expected_count in ((TestMode.TEST, 17), (TestMode.BENCHMARK, 15)):
             cases = [
                 tc
                 for tc in collect_test_cases("GroupQueryAttention", mode=mode)
@@ -896,6 +929,158 @@ class TestBackendCases(ExtTestCase):
                     assert len(got) == len(expected) == 3
                     for actual, reference in zip(got, expected, strict=True):
                         _assert_close(actual, reference, rtol=2e-4, atol=2e-4)
+
+    def test_group_query_attention_muse_fixtures_match_onnx_runtime(self):
+        cases = collect_test_cases_by_name(
+            "^test_cpu_group_query_attention_model_muse_", mode=TestMode.TEST
+        )
+        assert len(cases) == 12
+        outputs = {}
+        for tc in cases:
+            with self.subTest(tc=tc.name):
+                attributes = {
+                    attr.name: helper.get_attribute_value(attr)
+                    for attr in tc.model.graph.node[0].attribute
+                }
+                assert attributes["num_heads"] == 32
+                assert attributes["kv_num_heads"] == 2
+                assert attributes["local_window_size"] in (2048, -1)
+                light_session = ReferenceEvaluator(tc.model)
+                set_kernel_usage_recording(light_session, True)
+                ort_session = _muse_ort_session(tc.model)
+                for data_set in tc.data_sets:
+                    feeds = {
+                        vi.name: _to_numpy(tensor)
+                        for vi, tensor in zip(tc.model.graph.input, data_set.inputs, strict=True)
+                    }
+                    rtol, atol = _muse_tolerances(feeds["query"].dtype)
+                    clear_used_kernel_names()
+                    got = light_session.run(None, feeds)
+                    assert _TARGET_KERNELS["GroupQueryAttention"] in used_kernel_names()
+                    expected = ort_session.run(None, _muse_ort_feeds(feeds))
+                    assert len(got) == len(expected) == 3
+                    for actual, reference, naive in zip(
+                        got, expected, data_set.outputs, strict=True
+                    ):
+                        assert actual.dtype == feeds["query"].dtype
+                        _assert_close(actual, reference, rtol=rtol, atol=atol)
+                        _assert_close(actual, _to_numpy(naive), rtol=rtol, atol=atol)
+                    past_length = feeds["past_key"].shape[2]
+                    total_length = int(feeds["total_sequence_length"])
+                    for actual, name in zip(got[1:], ("past_key", "past_value"), strict=True):
+                        assert actual.shape == (1, 2, total_length, 128)
+                        np.testing.assert_array_equal(actual[:, :, :past_length], feeds[name])
+                    outputs[tc.name] = got[0].astype(np.float32)
+        for name, local in outputs.items():
+            if "_window2048_" not in name:
+                continue
+            full = outputs[name.replace("_window2048_", "_windowfull_")]
+            assert np.max(np.abs(local - full)) > 0.01
+            if "_cached_prefill_" in name:
+                # The first row sees exactly 2048 keys, the later rows drop old keys.
+                np.testing.assert_array_equal(local[:, 0], full[:, 0])
+
+    def test_group_query_attention_muse_mixed_windows_consecutive_decode(self):
+        cases = collect_test_cases_by_name(
+            "^test_cpu_group_query_attention_model_muse_cached_prefill_.*_window2048_",
+            mode=TestMode.TEST,
+        )
+        assert len(cases) == 3
+        for tc in cases:
+            with self.subTest(tc=tc.name):
+                tensor_type = tc.model.graph.input[0].type.tensor_type.elem_type
+                fixture_feeds = {
+                    vi.name: _to_numpy(tensor)
+                    for vi, tensor in zip(
+                        tc.model.graph.input, tc.data_sets[0].inputs, strict=True
+                    )
+                }
+                inputs = [
+                    helper.make_tensor_value_info("query", tensor_type, [1, "sequence", 4096]),
+                    helper.make_tensor_value_info("key", tensor_type, [1, "sequence", 256]),
+                    helper.make_tensor_value_info("value", tensor_type, [1, "sequence", 256]),
+                    helper.make_tensor_value_info("seqlens_k", TensorProto.INT32, [1]),
+                    helper.make_tensor_value_info("total_sequence_length", TensorProto.INT32, []),
+                ]
+                nodes, outputs = [], []
+                feeds = {
+                    name: value
+                    for name, value in fixture_feeds.items()
+                    if name not in ("past_key", "past_value")
+                }
+                for layer, window in enumerate((2048, 2048, 2048, -1)):
+                    node = type(tc.model.graph.node[0])()
+                    node.CopyFrom(tc.model.graph.node[0])
+                    for attr in node.attribute:
+                        if attr.name == "local_window_size":
+                            attr.i = window
+                    for slot, name in ((3, "past_key"), (4, "past_value")):
+                        node.input[slot] = f"{name}_{layer}"
+                        inputs.append(
+                            helper.make_tensor_value_info(
+                                node.input[slot], tensor_type, [1, 2, "past_length", 128]
+                            )
+                        )
+                        feeds[node.input[slot]] = fixture_feeds[name]
+                    for slot, name in enumerate(("output", "present_key", "present_value")):
+                        node.output[slot] = f"{name}_{layer}"
+                        shape = (
+                            [1, "sequence", 4096] if slot == 0 else [1, 2, "total_length", 128]
+                        )
+                        outputs.append(
+                            helper.make_tensor_value_info(node.output[slot], tensor_type, shape)
+                        )
+                    nodes.append(node)
+                model = helper.make_model(
+                    helper.make_graph(nodes, "muse_mixed_windows", inputs, outputs),
+                    opset_imports=[
+                        helper.make_opsetid("", 23),
+                        helper.make_opsetid("com.microsoft", 1),
+                    ],
+                )
+                light_session = ReferenceEvaluator(model)
+                ort_session = _muse_ort_session(model)
+                ort_feeds = _muse_ort_feeds(feeds)
+                rtol, atol = _muse_tolerances(feeds["query"].dtype)
+                for step in range(3):
+                    with self.subTest(step=step):
+                        got = light_session.run(None, feeds)
+                        expected = ort_session.run(None, ort_feeds)
+                        assert len(got) == len(expected) == 12
+                        for actual, reference in zip(got, expected, strict=True):
+                            _assert_close(actual, reference, rtol=rtol, atol=atol)
+                        for layer in (1, 2):
+                            np.testing.assert_array_equal(got[0], got[3 * layer])
+                        assert (
+                            np.max(np.abs(got[0].astype(np.float32) - got[9].astype(np.float32)))
+                            > 0.01
+                        )
+                        total_length = int(feeds["total_sequence_length"])
+                        for layer in range(4):
+                            for slot, name in ((1, "past_key"), (2, "past_value")):
+                                cache = got[3 * layer + slot]
+                                previous = feeds[f"{name}_{layer}"]
+                                assert cache.shape == (1, 2, total_length, 128)
+                                np.testing.assert_array_equal(
+                                    cache[:, :, : previous.shape[2]], previous
+                                )
+                                np.testing.assert_array_equal(
+                                    cache.astype(np.float32),
+                                    expected[3 * layer + slot].astype(np.float32),
+                                )
+                                feeds[f"{name}_{layer}"] = cache
+                                ort_feeds[f"{name}_{layer}"] = expected[3 * layer + slot]
+                        # Feed each implementation's full present cache back to the
+                        # same sessions for two single-token decode steps.
+                        for name in ("query", "key", "value"):
+                            feeds[name] = fixture_feeds[name][:, -1:].copy()
+                            ort_feeds[name] = _muse_ort_feeds({name: feeds[name]})[name]
+                        feeds["seqlens_k"] = np.array([total_length], dtype=np.int32)
+                        feeds["total_sequence_length"] = np.array(
+                            total_length + 1, dtype=np.int32
+                        )
+                        ort_feeds["seqlens_k"] = feeds["seqlens_k"]
+                        ort_feeds["total_sequence_length"] = feeds["total_sequence_length"]
 
     def test_normalization_benchmarks_match_onnx_references(self):
         try:

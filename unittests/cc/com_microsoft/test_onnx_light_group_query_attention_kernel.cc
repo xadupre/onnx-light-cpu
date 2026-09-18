@@ -15,6 +15,7 @@
 #include <gtest/gtest.h>
 
 #include <cstdint>
+#include <limits>
 #include <stdexcept>
 #include <vector>
 
@@ -380,6 +381,84 @@ TEST(OnnxLightGroupQueryAttentionKernel, RegisteredKernelRunsThroughRuntimeConte
   EXPECT_EQ(output.shape[0], 1);
   EXPECT_EQ(output.shape[1], 2);
   EXPECT_EQ(output.shape[2], 8);
+}
+
+TEST(OnnxLightGroupQueryAttentionKernel, BothKernelsRejectInvalidLocalWindows) {
+  const Tensor query = Tensor::FromFloat("", {1, 1, 2}, {0.0f, 0.0f});
+  const Tensor key = Tensor::FromFloat("", {1, 1, 2}, {0.0f, 0.0f});
+  const Tensor value = Tensor::FromFloat("", {1, 1, 2}, {1.0f, 2.0f});
+  const Tensor seqlens_k = Tensor::FromInt32("", {1}, {0});
+  const Tensor total_sequence_length = Tensor::FromInt32("", {}, {1});
+  auto check = [&](const NodeProto &node) {
+    EXPECT_THROW(
+        {
+          onnx_light_cpu::GroupQueryAttentionKernel kernel(node, MakeCtx());
+          (void)kernel(node, query, key, value, seqlens_k, total_sequence_length);
+        },
+        std::invalid_argument);
+    EXPECT_THROW(
+        {
+          onnx_light_cpu::NaiveGroupQueryAttentionKernel kernel(node, MakeCtx());
+          (void)kernel(node, query, key, value, seqlens_k, total_sequence_length);
+        },
+        std::invalid_argument);
+  };
+  const NodeProto base = MakeGqaNode(1, 1, false, false, false);
+  for (std::int64_t window :
+       {std::int64_t{0}, std::int64_t{-2}, std::numeric_limits<std::int64_t>::min(),
+        static_cast<std::int64_t>(std::numeric_limits<std::int32_t>::max()) + 1,
+        std::numeric_limits<std::int64_t>::max()}) {
+    SCOPED_TRACE(window);
+    NodeProto node = base;
+    AddIntAttribute(node, "local_window_size", window);
+    check(node);
+  }
+  NodeProto wrong_type = base;
+  AddFloatAttribute(wrong_type, "local_window_size", 2.0f);
+  check(wrong_type);
+  NodeProto missing_value = base;
+  auto *attribute = missing_value.add_attribute();
+  attribute->set_name("local_window_size");
+  attribute->set_type(ONNX_LIGHT_NAMESPACE::AttributeProto::INT);
+  check(missing_value);
+  for (std::int64_t causal : {0, 2, -1}) {
+    SCOPED_TRACE(causal);
+    NodeProto noncausal = base;
+    AddIntAttribute(noncausal, "local_window_size", 1);
+    AddIntAttribute(noncausal, "causal", causal);
+    check(noncausal);
+  }
+}
+
+TEST(OnnxLightGroupQueryAttentionKernel, BothKernelsRunLocalWindowThroughRuntimeContext) {
+  onnx_light_cpu::RegisterAllKernels();
+  NodeProto node = MakeGqaNode(2, 1, false, false, true);
+  AddIntAttribute(node, "local_window_size", 2);
+  auto check = [&](auto &kernel) {
+    rt_ns::RuntimeContext rt(MakeCtx());
+    rt.tensors()["query"] = Tensor::FromFloat("query", {1, 3, 4}, std::vector<float>(12));
+    rt.tensors()["key"] = Tensor::FromFloat("key", {1, 3, 2}, std::vector<float>(6));
+    rt.tensors()["value"] =
+        Tensor::FromFloat("value", {1, 3, 2}, {2.0f, -2.0f, 4.0f, -4.0f, 8.0f, -8.0f});
+    rt.tensors()["seqlens_k"] = Tensor::FromInt32("seqlens_k", {1}, {2});
+    rt.tensors()["total_sequence_length"] = Tensor::FromInt32("total_sequence_length", {}, {3});
+    kernel.Run(rt);
+    ASSERT_TRUE(rt.tensors().count("output"));
+    const Tensor &output = rt.tensors().at("output");
+    const std::vector<float> expected = {2, -2, 2, -2, 3, -3, 3, -3, 6, -6, 6, -6};
+    ASSERT_EQ(output.element_count(), expected.size());
+    for (std::size_t i = 0; i < expected.size(); ++i) {
+      EXPECT_NEAR(output.AsFloat()[i], expected[i], 1e-5f);
+    }
+    ASSERT_TRUE(rt.tensors().count("present_key"));
+    ASSERT_TRUE(rt.tensors().count("present_value"));
+    EXPECT_EQ(rt.tensors().at("present_key").shape, (rt_ns::Shape{1, 1, 3, 2}));
+    EXPECT_EQ(rt.tensors().at("present_value").shape, (rt_ns::Shape{1, 1, 3, 2}));
+  };
+  onnx_light_cpu::GroupQueryAttentionKernel optimized(node, MakeCtx());
+  check(optimized);
+  onnx_light_cpu::NaiveGroupQueryAttentionKernel naive(node, MakeCtx());
+  check(naive);
 }
 
 } // namespace

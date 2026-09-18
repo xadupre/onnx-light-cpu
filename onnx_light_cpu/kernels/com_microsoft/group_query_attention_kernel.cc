@@ -123,6 +123,7 @@ struct GqaArgs {
   std::int64_t num_heads = 0;
   std::int64_t kv_num_heads = 0;
   bool causal = true;
+  std::int64_t local_window_size = -1;
   std::optional<float> scale;
   float softcap = 0.0f;
   bool do_rotary = false;
@@ -144,12 +145,11 @@ void ValidateUnsupportedAttributesAndInputs(const NodeProto &node) {
       rt_ns::GetAttributeIntOrDefault(node, "smooth_softmax", 0) != 0 ||
       rt_ns::GetAttributeIntOrDefault(node, "qk_output", 0) != 0 ||
       rt_ns::GetAttributeIntOrDefault(node, "kv_cache_bit_width", 0) != 0 ||
-      rt_ns::GetAttributeIntOrDefault(node, "local_window_size", -1) != -1 ||
       rt_ns::GetAttributeStringOrDefault(node, "k_quant_type", "NONE") != "NONE" ||
       rt_ns::GetAttributeStringOrDefault(node, "v_quant_type", "NONE") != "NONE") {
     throw std::invalid_argument(
         "onnx_light_cpu::GroupQueryAttention: unsupported attribute (sliding-window cache, "
-        "smooth softmax, qk_output, quantized KV cache, and local/sliding window attention are "
+        "smooth softmax, qk_output, and quantized KV cache are "
         "not implemented).");
   }
   if (HasInput(node, 11)) {
@@ -194,6 +194,23 @@ template <typename Lookup> GqaArgs ResolveAndValidate(const NodeProto &node, Loo
         "num_heads must be a multiple of kv_num_heads.");
   }
   args.causal = rt_ns::GetAttributeIntOrDefault(node, "causal", 1) != 0;
+  if (const auto *window = FindAttribute(node, "local_window_size"); window != nullptr) {
+    if (window->type() != ONNX_LIGHT_NAMESPACE::AttributeProto::AttributeType::INT ||
+        !window->has_i()) {
+      throw std::invalid_argument(
+          "onnx_light_cpu::GroupQueryAttention: local_window_size must be an INT attribute.");
+    }
+    args.local_window_size = window->i();
+    if (args.local_window_size != -1 &&
+        (args.local_window_size <= 0 || args.local_window_size > INT32_MAX)) {
+      throw std::invalid_argument("onnx_light_cpu::GroupQueryAttention: local_window_size must be "
+                                  "-1 or in [1, INT32_MAX].");
+    }
+    if (args.local_window_size != -1 && rt_ns::GetAttributeIntOrDefault(node, "causal", 1) != 1) {
+      throw std::invalid_argument(
+          "onnx_light_cpu::GroupQueryAttention: local_window_size requires causal=1.");
+    }
+  }
   if (const auto *scale = FindAttribute(node, "scale"); scale != nullptr) {
     args.scale = scale->f();
   }
@@ -595,6 +612,10 @@ NodeProto MakeAttentionNode(const GqaArgs &args) {
   AddIntAttribute(attention, "q_num_heads", args.num_heads);
   AddIntAttribute(attention, "kv_num_heads", args.kv_num_heads);
   AddIntAttribute(attention, "is_causal", args.causal ? 1 : 0);
+  if (args.local_window_size != -1) {
+    // GQA counts the current token; Attention counts positions to its left.
+    AddIntAttribute(attention, "left_window_size", args.local_window_size - 1);
+  }
   if (args.scale.has_value()) {
     AddFloatAttribute(attention, "scale", *args.scale);
   }
