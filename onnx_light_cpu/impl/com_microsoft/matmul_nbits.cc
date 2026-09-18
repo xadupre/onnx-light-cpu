@@ -5,8 +5,10 @@
 #include "onnx_light_cpu/impl/com_microsoft/matmul_nbits.h"
 
 #include "onnx_light_cpu/impl/checked_arithmetic.h"
+#include "onnx_light_cpu/impl/com_microsoft/matmul_nbits_panel.h"
 #include "onnx_light_cpu/impl/execution.h"
 #include "onnx_light_cpu/impl/math/half_conversion.h"
+#include "onnx_light_cpu/impl/simd_level.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -34,6 +36,107 @@ struct BFloat16Codec {
   static float Load(std::uint16_t value) noexcept { return detail::Bfloat16BitsToFloat(value); }
   static std::uint16_t Store(float value) noexcept { return detail::FloatToBFloat16Bits(value); }
 };
+
+void NBitsPanelScalar(const float *a, const float *b, float *sums, std::size_t rows,
+                      std::size_t depth) {
+  for (std::size_t row = 0; row < rows; ++row) {
+    for (std::size_t p = 0; p < depth; ++p) {
+      for (std::size_t column = 0; column < detail::kNBitsColumns; ++column) {
+        sums[row * detail::kNBitsColumns + column] +=
+            a[row * detail::kNBitsBlock + p] * b[p * detail::kNBitsColumns + column];
+      }
+    }
+  }
+}
+
+detail::NBitsPanelFn SelectPanel() {
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
+  if (DetectSimdLevel() >= SimdLevel::kAVX512) {
+    return detail::NBitsPanelAvx512;
+  }
+#endif
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2
+  if (DetectSimdLevel() >= SimdLevel::kAVX2) {
+    return detail::NBitsPanelAvx2;
+  }
+#endif
+  return NBitsPanelScalar;
+}
+
+detail::NBitsPanelFn PanelImplementation() {
+  static const auto panel = SelectPanel();
+  return panel;
+}
+
+template <typename Codec>
+void MatMulInt4Panels(const typename Codec::Storage *a, const std::uint8_t *b,
+                      const typename Codec::Storage *scales, const typename Codec::Storage *bias,
+                      typename Codec::Storage *y, std::size_t rows, std::size_t k, std::size_t n,
+                      std::size_t k_blocks, const ExecutionSchedule &schedule) {
+  using namespace detail;
+  const NBitsPanelFn accumulate = PanelImplementation();
+  static_assert(sizeof(float) * (kNBitsBlock * kNBitsColumns + kNBitsRows * kNBitsBlock +
+                                 kNBitsRows * kNBitsColumns) ==
+                kMatMulNBitsInt4WorkspaceBytes);
+  const std::size_t column_tiles = n / kNBitsColumns + (n % kNBitsColumns != 0);
+  const std::size_t row_tiles = rows / kNBitsRows + (rows % kNBitsRows != 0);
+  const std::size_t tiles = CheckedMultiply(row_tiles, column_tiles, "MatMulNBits", "panels");
+  const auto tile_outputs =
+      static_cast<std::int64_t>(std::min(rows, kNBitsRows) * std::min(n, kNBitsColumns));
+  const auto to_panels = [tile_outputs](std::int64_t outputs) {
+    outputs = std::max<std::int64_t>(outputs, 1);
+    return outputs / tile_outputs + (outputs % tile_outputs != 0);
+  };
+  const bool parallel =
+      rows * n >= static_cast<std::size_t>(std::max<std::int64_t>(schedule.min_parallel_size, 1));
+  const ExecutionSchedule panel_schedule{1, to_panels(schedule.min_block_size),
+                                         parallel ? schedule.max_participants : 1};
+  ExecuteRanges(
+      static_cast<std::int64_t>(tiles), panel_schedule, [&](std::int64_t begin, std::int64_t end) {
+        // Bounded per callback, including decode: never expand or repack all weights.
+        float weights[kNBitsBlock * kNBitsColumns]{};
+        float activations[kNBitsRows * kNBitsBlock];
+        float sums[kNBitsRows * kNBitsColumns];
+        for (auto tile = begin; tile < end; ++tile) {
+          const std::size_t first_row = (tile / column_tiles) * kNBitsRows;
+          const std::size_t first_column = (tile % column_tiles) * kNBitsColumns;
+          const auto mr = std::min(kNBitsRows, rows - first_row);
+          const auto nr = std::min(kNBitsColumns, n - first_column);
+          std::fill_n(sums, kNBitsRows * kNBitsColumns, 0.0f);
+          if (bias != nullptr) {
+            for (std::size_t r = 0; r < mr; ++r) {
+              for (std::size_t c = 0; c < nr; ++c) {
+                sums[r * kNBitsColumns + c] = Codec::Load(bias[first_column + c]);
+              }
+            }
+          }
+          for (std::size_t block = 0; block < k_blocks; ++block) {
+            const auto depth = std::min(kNBitsBlock, k - block * kNBitsBlock);
+            for (std::size_t c = 0; c < nr; ++c) {
+              const auto index = (first_column + c) * k_blocks + block;
+              const auto *packed = b + index * 16;
+              const float scale = Codec::Load(scales[index]);
+              for (std::size_t p = 0; p < depth; ++p) {
+                const int q = (packed[p / 2] >> ((p % 2) * 4)) & 15;
+                weights[p * kNBitsColumns + c] = static_cast<float>(q - 8) * scale;
+              }
+            }
+            for (std::size_t r = 0; r < mr; ++r) {
+              for (std::size_t p = 0; p < depth; ++p) {
+                activations[r * kNBitsBlock + p] =
+                    Codec::Load(a[(first_row + r) * k + block * kNBitsBlock + p]);
+              }
+            }
+            accumulate(activations, weights, sums, mr, depth);
+          }
+          for (std::size_t r = 0; r < mr; ++r) {
+            for (std::size_t c = 0; c < nr; ++c) {
+              y[(first_row + r) * n + first_column + c] = Codec::Store(sums[r * kNBitsColumns + c]);
+            }
+          }
+        }
+      });
+}
 
 template <typename Codec>
 void MatMulNBitsTyped(const void *a_raw, const std::uint8_t *b, const void *scales_raw,
@@ -76,6 +179,10 @@ void MatMulNBitsTyped(const void *a_raw, const std::uint8_t *b, const void *scal
       static_cast<std::int64_t>(std::max<std::size_t>(tuning.target_block_outputs, 1)),
       tuning.max_participants,
   };
+  if (bits == 4) {
+    MatMulInt4Panels<Codec>(a, b, scales, bias, y, rows, k, n, k_blocks, schedule);
+    return;
+  }
   ExecuteRanges(
       static_cast<std::int64_t>(output_size), schedule, [&](std::int64_t begin, std::int64_t end) {
         for (std::int64_t output_index = begin; output_index < end; ++output_index) {
@@ -105,6 +212,22 @@ void MatMulNBitsTyped(const void *a_raw, const std::uint8_t *b, const void *scal
 }
 
 } // namespace
+
+const char *MatMulNBitsInt4Implementation() {
+  const auto panel = PanelImplementation();
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
+  if (panel == detail::NBitsPanelAvx512) {
+    return "int4_panel_avx512";
+  }
+#endif
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2
+  if (panel == detail::NBitsPanelAvx2) {
+    return "int4_panel_avx2";
+  }
+#endif
+  (void)panel;
+  return "int4_panel_scalar";
+}
 
 void MatMulNBits(const void *a, const std::uint8_t *b, const void *scales, const void *bias,
                  void *y, DataType data_type, std::size_t rows, std::size_t k, std::size_t n,
