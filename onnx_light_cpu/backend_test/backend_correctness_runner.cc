@@ -10,9 +10,11 @@
 #include "onnx_core/backend_test/test_case.h"
 #include "onnx_core/backend_test/test_case_registry.h"
 #include "onnx_core/runtime/kernels/kernel_context.h"
+#include "onnx_core/runtime/kernels/node_helpers.h"
 #include "onnx_core/runtime/kernels/run_nodes.h"
 #include "onnx_core/runtime/kernels/tensor_compare.h"
 #include "onnx_core/runtime/runtime_context.h"
+#include "onnx_extensions/kernels/kernel_dispatch_table.h"
 #include "onnx_proto/onnx_helper.h"
 
 #include <algorithm>
@@ -94,6 +96,16 @@ bool IsApplicable(const TestCase &test_case, const KernelRegistration &kernel,
     reason = "model input types are unsupported";
     return false;
   }
+  if (kernel.domain == "ai.onnx" && kernel.op_type == "ScatterND") {
+    for (const NodeProto &node : graph.node()) {
+      if (ONNX_LIGHT_NAMESPACE::NormaliseDomain(node.domain()) == kernel.domain &&
+          node.op_type() == kernel.op_type &&
+          rt_ns::GetAttributeStringOrDefault(node, "reduction", "none") != "none") {
+        reason = "ScatterND supports only reduction='none'";
+        return false;
+      }
+    }
+  }
   return true;
 }
 
@@ -154,6 +166,9 @@ std::string BackendCorrectnessReport::Describe() const {
 
 BackendCorrectnessReport RunBackendCorrectnessTests(MicrosoftKernelImplementation implementation) {
   RegisterCpuKernelBackendTestCases();
+  // Composite fixtures need built-ins such as Transpose; install them before
+  // replacing the operators under test with onnx-light-cpu kernels.
+  ONNX_LIGHT_NAMESPACE::onnx_kernels::RegisterKernelFunctions();
   RegisterAllKernels(implementation);
   BackendCorrectnessReport report;
   std::set<std::pair<std::string, std::string>> seen_cases;

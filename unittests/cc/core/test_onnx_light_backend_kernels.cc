@@ -273,6 +273,7 @@ RunCpuBackendCases(const std::string &op_type, core::backend_test::TestMode mode
                        onnx_light_cpu::MicrosoftKernelImplementation::OPTIMIZED,
                    std::vector<std::string> *used = nullptr) {
   onnx_light_cpu::backend_test::RegisterCpuKernelBackendTestCases();
+  onnx_kernels::RegisterKernelFunctions();
   onnx_light_cpu::RegisterAllKernels(microsoft_implementation);
 
   const bool compare = mode == core::backend_test::TestMode::TEST;
@@ -356,6 +357,34 @@ TEST(OnnxLightBackendKernels, AllRegisteredKernelsPassRegularBackendCorrectnessC
       onnx_light_cpu::backend_test::RunBackendCorrectnessTests();
   EXPECT_EQ(report.executed, report.passed) << report.Describe();
   EXPECT_TRUE(report.failed.empty()) << report.Describe();
+  for (const std::string &name :
+       {"test_cc_scatternd_add", "test_cc_scatternd_multiply", "test_cc_scatternd_max",
+        "test_cc_scatternd_min", "test_cc_scatternd_max_with_element_indices",
+        "test_cc_scatternd_min_with_element_indices"}) {
+    const auto skipped =
+        std::find_if(report.skipped.begin(), report.skipped.end(), [&name](const auto &result) {
+          return result.op_type == "ScatterND" && result.case_name == name;
+        });
+    ASSERT_NE(skipped, report.skipped.end()) << name;
+    EXPECT_EQ(skipped->reason, "ScatterND supports only reduction='none'") << name;
+  }
+  for (const auto &skipped : report.skipped) {
+    EXPECT_FALSE(skipped.op_type == "ScatterND" &&
+                 skipped.case_name.rfind("test_cpu_scatternd_", 0) == 0)
+        << skipped.case_name << ": " << skipped.reason;
+  }
+}
+
+TEST(OnnxLightBackendKernels, ScatterNDCompositeFixturesRunThroughRuntime) {
+  std::vector<std::string> used;
+  const auto failures =
+      RunCpuBackendCases("ScatterND", core::backend_test::TestMode::TEST, {},
+                         onnx_light_cpu::MicrosoftKernelImplementation::OPTIMIZED, &used);
+  EXPECT_TRUE(failures.empty()) << Describe(failures);
+  for (const std::string &name :
+       {"onnx_light_cpu::Gather", "onnx_light_cpu::NonZero", "onnx_light_cpu::ScatterND"}) {
+    EXPECT_NE(std::find(used.begin(), used.end(), name), used.end()) << name;
+  }
 }
 
 TEST(OnnxLightBackendKernels, ComparisonAcceptsMatchingNaNsButRejectsUnexpectedNaNs) {
