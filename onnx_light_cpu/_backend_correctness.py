@@ -65,6 +65,12 @@ def _case_is_applicable(case: Any, kernel: Any, tensor_proto: Any) -> tuple[bool
     supported_types = {getattr(tensor_proto, name) for name in kernel.types}
     if not input_types & supported_types:
         return False, f"input types {sorted(input_types)} are unsupported"
+    if kernel.domain == "ai.onnx" and kernel.op_type == "ScatterND":
+        for node in case.model.graph.node:
+            if (node.domain or "ai.onnx") == kernel.domain and node.op_type == kernel.op_type:
+                for attribute in node.attribute:
+                    if attribute.name == "reduction" and attribute.s != b"none":
+                        return False, "ScatterND supports only reduction='none'"
     return True, ""
 
 
@@ -91,8 +97,9 @@ def run_backend_correctness_tests(
 ) -> BackendCorrectnessReport:
     """Runs all applicable ``TestMode.TEST`` backend cases for registered CPU kernels.
 
-    The report records unsupported cases as skips and execution or comparison errors as
-    failures. A kernel without an applicable correctness case is reported as a failure.
+    The report records unsupported cases (including non-replacement ScatterND reductions)
+    as skips and execution or comparison errors as failures. A kernel without an applicable
+    correctness case is reported as a failure.
     """
     from onnx_light.onnx import TensorProto  # pyrefly: ignore[missing-import]
     from onnx_light.onnx.backend import (  # pyrefly: ignore[missing-import]
