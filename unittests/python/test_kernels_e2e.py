@@ -697,8 +697,64 @@ class TestBackendCases(ExtTestCase):
 
     def test_all_registered_kernels_pass_regular_backend_correctness_corpus(self):
         report = run_backend_correctness_tests()
-        assert report.executed == report.passed
+        assert report.executed == report.passed, report
         assert not report.failed, report
+        scatter_skips = {
+            case.case_name: case.reason for case in report.skipped if case.op_type == "ScatterND"
+        }
+        for name in (
+            "test_cc_scatternd_add",
+            "test_cc_scatternd_multiply",
+            "test_cc_scatternd_max",
+            "test_cc_scatternd_min",
+            "test_cc_scatternd_max_with_element_indices",
+            "test_cc_scatternd_min_with_element_indices",
+        ):
+            self.assertEqual(scatter_skips[name], "ScatterND supports only reduction='none'")
+        self.assertFalse(any(name.startswith("test_cpu_scatternd_") for name in scatter_skips))
+
+    def test_scatternd_corpus_eligibility_checks_reduction_attributes(self):
+        from onnx_light_cpu._backend_correctness import _case_is_applicable
+
+        kernel = next(record for record in registered_kernels() if record.op_type == "ScatterND")
+        for domain in ("", "ai.onnx"):
+            for reduction in (None, "none", "add", "mul", "min", "max", "unknown"):
+                with self.subTest(domain=domain, reduction=reduction):
+                    attributes = {} if reduction is None else {"reduction": reduction}
+                    model = helper.make_model(
+                        helper.make_graph(
+                            [
+                                helper.make_node(
+                                    "ScatterND",
+                                    ["data", "indices", "updates"],
+                                    ["output"],
+                                    domain=domain,
+                                    **attributes,
+                                )
+                            ],
+                            "scatternd_eligibility",
+                            [
+                                helper.make_tensor_value_info("data", TensorProto.FLOAT, [3, 2]),
+                                helper.make_tensor_value_info(
+                                    "indices", TensorProto.INT64, [1, 1]
+                                ),
+                                helper.make_tensor_value_info(
+                                    "updates", TensorProto.FLOAT, [1, 2]
+                                ),
+                            ],
+                            [helper.make_tensor_value_info("output", TensorProto.FLOAT, [3, 2])],
+                        ),
+                        opset_imports=[helper.make_opsetid(domain, 18)],
+                    )
+                    actual = _case_is_applicable(
+                        SimpleNamespace(model=model), kernel, TensorProto
+                    )
+                    expected = (
+                        (True, "")
+                        if reduction in (None, "none")
+                        else (False, "ScatterND supports only reduction='none'")
+                    )
+                    self.assertEqual(actual, expected)
 
     def test_registered_kernels_parity_with_names(self):
         records = registered_kernels()
@@ -816,6 +872,8 @@ class TestBackendCases(ExtTestCase):
                 assert record.since_version == 5
             elif record.op_type == "NonZero":
                 assert record.since_version == 9
+            elif record.op_type == "ScatterND":
+                assert record.since_version == 11
             else:
                 assert record.since_version is None
             if record.until_version is not None:

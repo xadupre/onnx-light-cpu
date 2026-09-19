@@ -12,9 +12,10 @@ void CollectCpuTensorTestCases(std::vector<TestCase> &registry, const std::strin
   using ONNX_LIGHT_NAMESPACE::core::backend_test::OpRegisterModeMap;
 
   static const OpRegisterModeMap kEntries = {
-      {"Gather", &RegisterCpuGatherCases}, {"Slice", &RegisterCpuSliceCases},
-      {"Concat", &RegisterCpuConcatCases}, {"Split", &RegisterCpuSplitCases},
-      {"Cast", &RegisterCpuCastCases},     {"NonZero", &RegisterCpuNonZeroCases},
+      {"Gather", &RegisterCpuGatherCases},       {"Slice", &RegisterCpuSliceCases},
+      {"Concat", &RegisterCpuConcatCases},       {"Split", &RegisterCpuSplitCases},
+      {"Cast", &RegisterCpuCastCases},           {"NonZero", &RegisterCpuNonZeroCases},
+      {"ScatterND", &RegisterCpuScatterNDCases},
   };
   DispatchRegisterByOpType(registry, op_type, kEntries, mode);
 }
