@@ -59,15 +59,6 @@ void AddFloatAttribute(NodeProto &node, const char *name, float value) {
   attribute->set_f(value);
 }
 
-const ONNX_LIGHT_NAMESPACE::AttributeProto *FindAttribute(const NodeProto &node, const char *name) {
-  for (int i = 0; i < node.attribute_size(); ++i) {
-    if (node.attribute(i).name() == name) {
-      return &node.attribute(i);
-    }
-  }
-  return nullptr;
-}
-
 std::size_t ElementByteWidth(DataType dtype) {
   return dtype == DataType::FLOAT ? sizeof(float) : sizeof(std::uint16_t);
 }
@@ -194,7 +185,7 @@ template <typename Lookup> GqaArgs ResolveAndValidate(const NodeProto &node, Loo
         "num_heads must be a multiple of kv_num_heads.");
   }
   args.causal = rt_ns::GetAttributeIntOrDefault(node, "causal", 1) != 0;
-  if (const auto *window = FindAttribute(node, "local_window_size"); window != nullptr) {
+  if (const auto *window = rt_ns::FindAttribute(node, "local_window_size"); window != nullptr) {
     if (window->type() != ONNX_LIGHT_NAMESPACE::AttributeProto::AttributeType::INT ||
         !window->has_i()) {
       throw std::invalid_argument(
@@ -211,7 +202,7 @@ template <typename Lookup> GqaArgs ResolveAndValidate(const NodeProto &node, Loo
           "onnx_light_cpu::GroupQueryAttention: local_window_size requires causal=1.");
     }
   }
-  if (const auto *scale = FindAttribute(node, "scale"); scale != nullptr) {
+  if (const auto *scale = rt_ns::FindAttribute(node, "scale"); scale != nullptr) {
     args.scale = scale->f();
   }
   args.softcap = rt_ns::GetAttributeFloatOrDefault(node, "softcap", 0.0f);

@@ -105,7 +105,7 @@ struct CastPlan {
   std::size_t output_bytes;
 };
 
-CastPlan Prepare(const Tensor &data, int32_t to) {
+CastPlan PrepareCast(const Tensor &data, int32_t to) {
   const int64_t count = data.shape.product(0, data.shape.size(), "Cast");
   static_cast<void>(ONNX_LIGHT_NAMESPACE::safe_cast_to_size(count, Invalid));
   const std::size_t input_bytes = Bytes(data.data_type, count);
@@ -222,7 +222,7 @@ Tensor CastKernel::operator()(const Tensor &data, int32_t to, rt_ns::RuntimeCont
 
 Tensor CastKernel::operator()(const Tensor &data, int32_t to, bool saturate,
                               rt_ns::RuntimeContext *rt) const {
-  const CastPlan plan = Prepare(data, to);
+  const CastPlan plan = PrepareCast(data, to);
   Tensor output = rt ? rt->MakeOutputTensor(0, to, data.shape, plan.output_bytes)
                      : rt_ns::MakeOutputTensor(to, data.shape, plan.output_bytes, ctx_.allocator);
   if (to == rt_ns::DataType::STRING) {
@@ -245,7 +245,7 @@ void CastKernel::operator()(const Tensor &data, int32_t to, Tensor &output) cons
 }
 
 void CastKernel::operator()(const Tensor &data, int32_t to, bool saturate, Tensor &output) const {
-  const CastPlan plan = Prepare(data, to);
+  const CastPlan plan = PrepareCast(data, to);
   Convert(ctx_, data, to, saturate, output, plan);
 }
 

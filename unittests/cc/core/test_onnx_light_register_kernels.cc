@@ -11,6 +11,7 @@
 #include "onnx_core/runtime/runtime_session.h"
 #include "onnx_light_cpu/kernels/com_microsoft/naive_bias_gelu_kernel.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
+#include "onnx_proto/onnx_helper.h"
 
 #include <gtest/gtest.h>
 
@@ -214,6 +215,51 @@ TEST(OnnxLightRegisterKernels, RuntimeSessionRetainsNativeKernelsAcrossRuns) {
       EXPECT_FLOAT_EQ(runtime.Get("y").AsFloat()[0], 22.0f);
     }
     EXPECT_EQ(rt_ns::KernelBase::ConstructionCountForTesting(), constructed);
+  }
+}
+
+TEST(OnnxLightRegisterKernels, TensorPlanningHelpersWorkWithRuntimeSessionLifecycle) {
+  namespace onnx_ns = ONNX_LIGHT_NAMESPACE;
+  onnx_ns::ModelProto model;
+  model.add_opset_import()->set_version(18);
+  auto &graph = *model.mutable_graph();
+  graph.add_input()->set_name("x");
+  graph.add_output()->set_name("y");
+  onnx_ns::AddInitializer<int64_t>(graph, "starts", {1}, {1});
+  onnx_ns::AddInitializer<int64_t>(graph, "ends", {1}, {4});
+  onnx_ns::AddInitializer<int64_t>(graph, "indices", {2}, {2, 0});
+  onnx_ns::AddInitializer<int64_t>(graph, "scatter_indices", {1, 1}, {1});
+  onnx_ns::AddInitializer<int64_t>(graph, "updates", {1}, {9});
+  auto &cast = onnx_ns::AddNode(graph, "Cast", {"x"}, {"cast"});
+  onnx_ns::AddAttribute<int64_t>(cast, "to", rt_ns::DataType::INT64);
+  onnx_ns::AddNode(graph, "Slice", {"cast", "starts", "ends"}, {"slice"});
+  onnx_ns::AddNode(graph, "Gather", {"slice", "indices"}, {"gather"});
+  auto &concat = onnx_ns::AddNode(graph, "Concat", {"gather", "gather"}, {"concat"});
+  onnx_ns::AddAttribute<int64_t>(concat, "axis", 0);
+  onnx_ns::AddNode(graph, "ScatterND", {"concat", "scatter_indices", "updates"}, {"y"});
+
+  rt_ns::RuntimeContext runtime(rt_ns::KernelContext(rt_ns::DefaultOpset(18)));
+  for (const char *op : {"Cast", "Slice", "Gather", "Concat", "ScatterND"}) {
+    ASSERT_TRUE(onnx_light_cpu::RegisterKernelForSession(runtime, "", op));
+  }
+  rt_ns::RuntimeSession session(model);
+  uint64_t constructed = 0;
+  for (int run = 0; run < 3; ++run) {
+    const float offset = static_cast<float>(run);
+    runtime.Put("x",
+                rt_ns::Tensor::FromFloat(
+                    "x", {4}, {1.25f + offset, 2.25f + offset, 3.25f + offset, 4.25f + offset}));
+    session.Run(runtime);
+    const auto &output = runtime.Get("y");
+    ASSERT_EQ(output.data_type, rt_ns::DataType::INT64);
+    ASSERT_EQ(output.shape, (rt_ns::Shape{4}));
+    EXPECT_EQ(std::vector<int64_t>(output.AsInt64(), output.AsInt64() + 4),
+              (std::vector<int64_t>{4 + run, 9, 4 + run, 2 + run}));
+    if (run == 0) {
+      constructed = rt_ns::KernelBase::ConstructionCountForTesting();
+    } else {
+      EXPECT_EQ(rt_ns::KernelBase::ConstructionCountForTesting(), constructed);
+    }
   }
 }
 
