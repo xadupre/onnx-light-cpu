@@ -60,7 +60,7 @@ template <typename Index> void ValidateIndices(const Tensor &indices, const Gath
   }
 }
 
-GatherPlan Prepare(const Tensor &data, const Tensor &indices, int64_t axis) {
+GatherPlan PrepareGather(const Tensor &data, const Tensor &indices, int64_t axis) {
   const int64_t rank = static_cast<int64_t>(data.shape.size());
   if (rank == 0 || axis < -rank || axis >= rank) {
     Invalid("data must have rank >= 1 and axis must be in [-rank, rank).");
@@ -147,7 +147,7 @@ GatherKernel::GatherKernel(const ONNX_LIGHT_NAMESPACE::NodeProto &node,
 
 Tensor GatherKernel::operator()(const Tensor &data, const Tensor &indices,
                                 rt_ns::RuntimeContext *rt) const {
-  const GatherPlan plan = Prepare(data, indices, axis_);
+  const GatherPlan plan = PrepareGather(data, indices, axis_);
   Tensor output =
       rt ? rt->MakeOutputTensor(0, data.data_type, plan.shape, plan.output_bytes)
          : rt_ns::MakeOutputTensor(data.data_type, plan.shape, plan.output_bytes, ctx_.allocator);
@@ -156,7 +156,7 @@ Tensor GatherKernel::operator()(const Tensor &data, const Tensor &indices,
 }
 
 void GatherKernel::operator()(const Tensor &data, const Tensor &indices, Tensor &output) const {
-  const GatherPlan plan = Prepare(data, indices, axis_);
+  const GatherPlan plan = PrepareGather(data, indices, axis_);
   if (output.data_type != data.data_type || output.shape != plan.shape) {
     Invalid("output dtype or shape mismatch.");
   }

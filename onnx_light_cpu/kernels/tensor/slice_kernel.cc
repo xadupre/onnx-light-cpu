@@ -130,8 +130,8 @@ struct SlicePlan {
   std::size_t bytes = 0;
 };
 
-SlicePlan Prepare(const Tensor &data, const Shape &starts, const Shape &ends, const Shape *axes,
-                  const Shape *steps) {
+SlicePlan PrepareSlice(const Tensor &data, const Shape &starts, const Shape &ends,
+                       const Shape *axes, const Shape *steps) {
   if (starts.size() != ends.size() || (axes && axes->size() != starts.size()) ||
       (steps && steps->size() != starts.size())) {
     Invalid("starts, ends, axes and steps lengths must match.");
@@ -196,14 +196,14 @@ SlicePlan Prepare(const Tensor &data, const Shape &starts, const Shape &ends, co
   return plan;
 }
 
-SlicePlan Prepare(const Tensor &data, const Tensor &starts, const Tensor &ends, const Tensor *axes,
-                  const Tensor *steps) {
+SlicePlan PrepareSlice(const Tensor &data, const Tensor &starts, const Tensor &ends,
+                       const Tensor *axes, const Tensor *steps) {
   const Shape start_values = ReadIndices(starts);
   const Shape end_values = ReadIndices(ends);
   const Shape axis_values = axes ? ReadIndices(*axes) : Shape{};
   const Shape step_values = steps ? ReadIndices(*steps) : Shape{};
-  return Prepare(data, start_values, end_values, axes ? &axis_values : nullptr,
-                 steps ? &step_values : nullptr);
+  return PrepareSlice(data, start_values, end_values, axes ? &axis_values : nullptr,
+                      steps ? &step_values : nullptr);
 }
 
 void RejectOverlap(const Tensor &input, const Tensor &output) {
@@ -244,7 +244,7 @@ SliceKernel::SliceKernel(const ONNX_LIGHT_NAMESPACE::NodeProto &node,
 Tensor SliceKernel::operator()(const Tensor &data, const Tensor &starts, const Tensor &ends,
                                const Tensor *axes, const Tensor *steps,
                                rt_ns::RuntimeContext *rt) const {
-  const SlicePlan plan = Prepare(data, starts, ends, axes, steps);
+  const SlicePlan plan = PrepareSlice(data, starts, ends, axes, steps);
   Tensor output = Allocate(data, plan, rt, ctx_.allocator);
   Copy(data, output, plan);
   return output;
@@ -252,7 +252,7 @@ Tensor SliceKernel::operator()(const Tensor &data, const Tensor &starts, const T
 
 void SliceKernel::operator()(const Tensor &data, const Tensor &starts, const Tensor &ends,
                              const Tensor *axes, const Tensor *steps, Tensor &output) const {
-  const SlicePlan plan = Prepare(data, starts, ends, axes, steps);
+  const SlicePlan plan = PrepareSlice(data, starts, ends, axes, steps);
   for (const Tensor *input : {&starts, &ends, axes, steps}) {
     if (input) {
       RejectOverlap(*input, output);
@@ -274,8 +274,8 @@ void SliceKernel::Run(rt_ns::RuntimeContext &rt) {
     const Shape ends = rt_ns::GetAttributeShapeOrDefault(node, "ends", {});
     const Shape axes = rt_ns::GetAttributeShapeOrDefault(node, "axes", {});
     const Tensor &data = rt_ns::GetInput(node, 0, rt.tensors());
-    const SlicePlan plan =
-        Prepare(data, starts, ends, rt_ns::FindAttribute(node, "axes") ? &axes : nullptr, nullptr);
+    const SlicePlan plan = PrepareSlice(
+        data, starts, ends, rt_ns::FindAttribute(node, "axes") ? &axes : nullptr, nullptr);
     Tensor output = Allocate(data, plan, &rt, ctx_.allocator);
     Copy(data, output, plan);
     rt_ns::SetOutput(node, 0, std::move(output), rt);

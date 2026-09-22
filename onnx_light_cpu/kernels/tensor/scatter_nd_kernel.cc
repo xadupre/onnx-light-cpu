@@ -77,7 +77,7 @@ void PrepareOffsets(const Tensor &data, const Tensor &indices, int64_t tuples, i
   }
 }
 
-ScatterPlan Prepare(const Tensor &data, const Tensor &indices, const Tensor &updates) {
+ScatterPlan PrepareScatterND(const Tensor &data, const Tensor &indices, const Tensor &updates) {
   if (data.shape.empty() || indices.shape.empty()) {
     Invalid("data and indices must have rank >= 1.");
   }
@@ -170,7 +170,7 @@ ScatterNDKernel::ScatterNDKernel(const ONNX_LIGHT_NAMESPACE::NodeProto &node,
 
 Tensor ScatterNDKernel::operator()(const Tensor &data, const Tensor &indices, const Tensor &updates,
                                    rt_ns::RuntimeContext *rt) const {
-  const ScatterPlan plan = Prepare(data, indices, updates);
+  const ScatterPlan plan = PrepareScatterND(data, indices, updates);
   Tensor output =
       rt ? rt->MakeOutputTensor(0, data.data_type, data.shape, plan.output_bytes)
          : rt_ns::MakeOutputTensor(data.data_type, data.shape, plan.output_bytes, ctx_.allocator);
@@ -180,7 +180,7 @@ Tensor ScatterNDKernel::operator()(const Tensor &data, const Tensor &indices, co
 
 void ScatterNDKernel::operator()(const Tensor &data, const Tensor &indices, const Tensor &updates,
                                  Tensor &output) const {
-  const ScatterPlan plan = Prepare(data, indices, updates);
+  const ScatterPlan plan = PrepareScatterND(data, indices, updates);
   Copy(data, indices, updates, output, plan);
 }
 

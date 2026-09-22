@@ -33,17 +33,8 @@ using rt_ns::DataType;
 using rt_ns::RuntimeContext;
 using rt_ns::Tensor;
 
-const AttributeProto *FindAttribute(const NodeProto &node, const char *name) {
-  for (int index = 0; index < node.attribute_size(); ++index) {
-    if (node.attribute(index).name() == name) {
-      return &node.attribute(index);
-    }
-  }
-  return nullptr;
-}
-
 Tensor GetTensorAttribute(const NodeProto &node, const char *name, bool required) {
-  const AttributeProto *attribute = FindAttribute(node, name);
+  const AttributeProto *attribute = rt_ns::FindAttribute(node, name);
   if (attribute == nullptr) {
     if (required) {
       throw std::invalid_argument(std::string("onnx_light_cpu::TreeEnsemble: missing tensor "

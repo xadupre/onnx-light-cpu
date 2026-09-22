@@ -35,15 +35,6 @@ using rt_ns::Tensor;
 
 namespace {
 
-const ONNX_LIGHT_NAMESPACE::AttributeProto *FindAttribute(const NodeProto &node, const char *name) {
-  for (int i = 0; i < node.attribute_size(); ++i) {
-    if (node.attribute(i).name() == name) {
-      return &node.attribute(i);
-    }
-  }
-  return nullptr;
-}
-
 std::vector<std::int64_t> ShapeAsInt64(const Shape &shape) {
   return std::vector<std::int64_t>(shape.begin(), shape.end());
 }
@@ -61,16 +52,17 @@ AttentionDescriptor BuildDescriptor(const NodeProto &node) {
   }
   descriptor.opset = inferred_opset;
 
-  if (const auto *attribute = FindAttribute(node, "scale"); attribute != nullptr) {
+  if (const auto *attribute = rt_ns::FindAttribute(node, "scale"); attribute != nullptr) {
     descriptor.scale = attribute->f();
   }
-  if (const auto *attribute = FindAttribute(node, "softmax_precision"); attribute != nullptr) {
+  if (const auto *attribute = rt_ns::FindAttribute(node, "softmax_precision");
+      attribute != nullptr) {
     descriptor.softmax_precision = attribute->i();
   }
-  if (const auto *attribute = FindAttribute(node, "q_num_heads"); attribute != nullptr) {
+  if (const auto *attribute = rt_ns::FindAttribute(node, "q_num_heads"); attribute != nullptr) {
     descriptor.q_num_heads = attribute->i();
   }
-  if (const auto *attribute = FindAttribute(node, "kv_num_heads"); attribute != nullptr) {
+  if (const auto *attribute = rt_ns::FindAttribute(node, "kv_num_heads"); attribute != nullptr) {
     descriptor.kv_num_heads = attribute->i();
   }
   descriptor.is_causal = rt_ns::GetAttributeIntOrDefault(node, "is_causal", 0) != 0;

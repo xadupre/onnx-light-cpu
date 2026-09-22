@@ -74,7 +74,8 @@ struct ConcatPlan {
   std::vector<ConcatInput> inputs;
 };
 
-template <typename GetInput> ConcatPlan Prepare(std::size_t count, GetInput input, int64_t axis) {
+template <typename GetInput>
+ConcatPlan PrepareConcat(std::size_t count, GetInput input, int64_t axis) {
   if (count == 0) {
     Invalid("at least one input is required.");
   }
@@ -159,16 +160,16 @@ ConcatKernel::ConcatKernel(const ONNX_LIGHT_NAMESPACE::NodeProto &node,
 
 Tensor ConcatKernel::operator()(std::span<const Tensor> inputs, int64_t axis,
                                 rt_ns::RuntimeContext *rt) const {
-  const ConcatPlan plan =
-      Prepare(inputs.size(), [&](std::size_t i) -> const Tensor & { return inputs[i]; }, axis);
+  const ConcatPlan plan = PrepareConcat(
+      inputs.size(), [&](std::size_t i) -> const Tensor & { return inputs[i]; }, axis);
   Tensor output = Allocate(plan, rt, ctx_.allocator);
   Copy(plan, output);
   return output;
 }
 
 void ConcatKernel::operator()(std::span<const Tensor> inputs, int64_t axis, Tensor &output) const {
-  const ConcatPlan plan =
-      Prepare(inputs.size(), [&](std::size_t i) -> const Tensor & { return inputs[i]; }, axis);
+  const ConcatPlan plan = PrepareConcat(
+      inputs.size(), [&](std::size_t i) -> const Tensor & { return inputs[i]; }, axis);
   Copy(plan, output);
 }
 
@@ -181,7 +182,7 @@ void ConcatKernel::Run(rt_ns::RuntimeContext &rt) {
     Invalid("required axis attribute is missing.");
   }
   const int64_t axis = rt_ns::GetAttributeIntOrDefault(node, "axis", 0);
-  const ConcatPlan plan = Prepare(
+  const ConcatPlan plan = PrepareConcat(
       static_cast<std::size_t>(node.input_size()),
       [&](std::size_t i) -> const Tensor & {
         return rt_ns::GetInput(node, static_cast<int>(i), rt.tensors());
