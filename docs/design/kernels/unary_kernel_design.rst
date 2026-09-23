@@ -97,10 +97,13 @@ and infinities (mapped to signed one). FP16 and BF16 compute in FP32 and round
 once on output. Each worker uses at most a 1,024-element FP32 conversion block;
 there is no full-tensor intermediate beyond the output.
 
-The AVX2/FMA range evaluates a small-argument polynomial to avoid cancellation
-near zero and reuses the exponential approximation for larger arguments.
-CPU feature detection is cached; machines without AVX2/FMA use the portable
-path. Scheduling uses the session-owned executor rather than a private pool.
+The AVX-512 and AVX2/FMA ranges evaluate a small-argument polynomial to avoid
+cancellation near zero and reuse the exponential approximation for larger
+arguments. CPU feature detection is cached, preferring AVX-512, then AVX2/FMA,
+then the portable path. The AVX-512 range processes 16 lanes per vector, with
+two-vector unrolling and masked tails; FP16 and BF16 share it through the
+existing worker-local FP32 conversion blocks.
+Scheduling uses the session-owned executor rather than a private pool.
 Inputs below 65,536 elements stay serial. At and above that threshold, ranges
 target at least 32,768 elements per participant, so a large one-token
 vocabulary can also use the executor. Nested calls do not submit another
@@ -168,3 +171,12 @@ and 0.000107706 seconds in ORT. Small eight-element sessions measured
 0.000006568 and 0.000014382 seconds respectively. Absolute session timings on
 this shared runner are indicative rather than performance guarantees.
 No AVX-512 speedup is claimed: this machine cannot execute AVX-512.
+
+To compare the AVX-512 range on compatible hardware, build the same driver
+with ``-DONNX_LIGHT_CPU_MAX_SIMD_LEVEL=AVX512`` instead. The ``tanh`` mode adds
+``TanhAVX512`` rows only when that implementation is compiled and the CPU/OS
+supports it. It rotates measurement order across scalar, AVX2/FMA, and AVX-512
+using identical inputs and one thread, including sizes 15, 16, 17, 31, 32, and
+33 to expose vector and masked-tail overhead. The reported speedup is relative
+to the scalar range, not ONNX Runtime; use the backend command above for an
+end-to-end ORT comparison.

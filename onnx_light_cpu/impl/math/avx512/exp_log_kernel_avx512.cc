@@ -189,6 +189,36 @@ ONNX_LIGHT_CPU_FORCE_INLINE __m512 SigmoidPs(__m512 value) {
   return _mm512_div_ps(Select(negative, exponent, one), _mm512_add_ps(one, exponent));
 }
 
+ONNX_LIGHT_CPU_FORCE_INLINE __m512 TanhPs(__m512 value) {
+  const __m512i bits = _mm512_castps_si512(value);
+  const __m512i sign = _mm512_and_epi32(bits, _mm512_set1_epi32(static_cast<int>(0x80000000u)));
+  const __m512 magnitude =
+      _mm512_castsi512_ps(_mm512_and_epi32(bits, _mm512_set1_epi32(0x7fffffff)));
+  // Match the AVX2 approximation: clamp before exp, and avoid cancellation near zero.
+  const __m512 bounded = _mm512_min_ps(magnitude, _mm512_set1_ps(10.0f));
+  const __m512 exponent = ExpPs(_mm512_mul_ps(bounded, _mm512_set1_ps(-2.0f)));
+  const __m512 one = _mm512_set1_ps(1.0f);
+  __m512 result = _mm512_div_ps(_mm512_sub_ps(one, exponent), _mm512_add_ps(one, exponent));
+
+  const __m512 small = _mm512_min_ps(magnitude, _mm512_set1_ps(0.25f));
+  const __m512 squared = _mm512_mul_ps(small, small);
+  __m512 polynomial = _mm512_set1_ps(-1382.0f / 155925.0f);
+  polynomial = _mm512_fmadd_ps(polynomial, squared, _mm512_set1_ps(62.0f / 2835.0f));
+  polynomial = _mm512_fmadd_ps(polynomial, squared, _mm512_set1_ps(-17.0f / 315.0f));
+  polynomial = _mm512_fmadd_ps(polynomial, squared, _mm512_set1_ps(2.0f / 15.0f));
+  polynomial = _mm512_fmadd_ps(polynomial, squared, _mm512_set1_ps(-1.0f / 3.0f));
+  polynomial = _mm512_fmadd_ps(_mm512_mul_ps(small, squared), polynomial, small);
+  result =
+      Select(_mm512_cmp_ps_mask(magnitude, _mm512_set1_ps(0.25f), _CMP_LE_OQ), polynomial, result);
+  result = _mm512_castsi512_ps(_mm512_or_epi32(_mm512_castps_si512(result), sign));
+  // Preserve signed zero and subnormals, and quiet NaNs without losing their sign or payload.
+  result =
+      Select(_mm512_cmp_ps_mask(magnitude, _mm512_set1_ps(0x1p-13f), _CMP_LT_OQ), value, result);
+  const __m512 quiet_nan =
+      _mm512_castsi512_ps(_mm512_or_epi32(bits, _mm512_set1_epi32(0x00400000)));
+  return Select(_mm512_cmp_ps_mask(value, value, _CMP_UNORD_Q), quiet_nan, result);
+}
+
 #undef ONNX_LIGHT_CPU_FORCE_INLINE
 
 __m512d ExpPd(__m512d x) {
@@ -325,6 +355,24 @@ void LogFloat32_AVX512(const float *input, float *output, std::size_t count) {
     const __mmask16 tail = static_cast<__mmask16>((1u << (count - i)) - 1u);
     const __m512 result = LogPs(_mm512_maskz_loadu_ps(tail, input + i));
     _mm512_mask_storeu_ps(output + i, tail, result);
+  }
+}
+
+void TanhFloat32_AVX512(const float *input, float *output, std::size_t count) {
+  std::size_t i = 0;
+  for (; count - i >= 32; i += 32) {
+    const __m512 result0 = TanhPs(_mm512_loadu_ps(input + i));
+    const __m512 result1 = TanhPs(_mm512_loadu_ps(input + i + 16));
+    _mm512_storeu_ps(output + i, result0);
+    _mm512_storeu_ps(output + i + 16, result1);
+  }
+  if (count - i >= 16) {
+    _mm512_storeu_ps(output + i, TanhPs(_mm512_loadu_ps(input + i)));
+    i += 16;
+  }
+  if (i < count) {
+    const __mmask16 tail = static_cast<__mmask16>((1u << (count - i)) - 1u);
+    _mm512_mask_storeu_ps(output + i, tail, TanhPs(_mm512_maskz_loadu_ps(tail, input + i)));
   }
 }
 

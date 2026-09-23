@@ -19,6 +19,11 @@ constexpr UnaryExecutionTuning kTanhHalfTuning{128 * 1024, 64 * 1024, 32, false}
 
 TanhRange GetTanhRange() {
   static const TanhRange function = []() -> TanhRange {
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
+    if (DetectSimdLevel() >= SimdLevel::kAVX512) {
+      return &TanhFloat32_AVX512;
+    }
+#endif
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
     if (DetectSimdLevel() >= SimdLevel::kAVX2 && CpuSupportsFma()) {
       return &TanhFloat32_AVX2_FMA;

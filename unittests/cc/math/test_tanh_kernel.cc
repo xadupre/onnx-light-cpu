@@ -27,6 +27,11 @@ std::vector<FloatKernel> FloatKernels() {
     kernels.push_back(onnx_light_cpu::TanhFloat32_AVX2_FMA);
   }
 #endif
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
+  if (onnx_light_cpu::DetectSimdLevel() >= onnx_light_cpu::SimdLevel::kAVX512) {
+    kernels.push_back(onnx_light_cpu::TanhFloat32_AVX512);
+  }
+#endif
   return kernels;
 }
 
@@ -135,6 +140,21 @@ TEST(TanhKernel, Float32DenseAndRandomBitPatterns) {
     kernel(input.data(), output.data(), input.size());
     for (std::size_t i = 0; i < input.size(); ++i) {
       ExpectTanh(input[i], output[i]);
+    }
+  }
+}
+
+TEST(TanhKernel, Float32SpecialValuesInEveryTail) {
+  for (const auto kernel : FloatKernels()) {
+    for (const float value : Corpus()) {
+      for (std::size_t count = 1; count <= 33; ++count) {
+        SCOPED_TRACE(count);
+        std::vector<float> input(count, value), output(count);
+        kernel(input.data(), output.data(), count);
+        for (const float actual : output) {
+          ExpectTanh(value, actual);
+        }
+      }
     }
   }
 }

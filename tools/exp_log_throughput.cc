@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Isolated float32 Exp/Log throughput driver (pass "tanh" as the second argument
-// for a direct scalar/AVX2 comparison). This deliberately measures
+// for a direct scalar/AVX2/AVX-512 comparison). This deliberately measures
 // preallocated buffers and reports the environment separately from the
 // end-to-end parity runner.
 
@@ -108,7 +108,7 @@ int MeasureTanh(std::size_t samples) {
   }
   std::printf("operator,size,offset_floats,median_seconds,iqr_seconds,speedup\n");
   for (const std::size_t count :
-       {8, 31, 100, 1000, 10000, 100000, 202048, 202055, 3232768, 25862144}) {
+       {8, 15, 16, 17, 31, 32, 33, 100, 1000, 10000, 100000, 202048, 202055, 3232768, 25862144}) {
     for (const std::size_t offset : {0, 1}) {
       std::vector<float> input_storage(count + 32), output_storage(count + 32);
       const auto aligned = [offset](std::vector<float> &storage) {
@@ -121,21 +121,28 @@ int MeasureTanh(std::size_t samples) {
         input[i] = -8.0f + 16.0f * static_cast<float>(i) / static_cast<float>(count);
       }
       using Kernel = void (*)(const float *, float *, std::size_t);
-      const Kernel kernels[] = {onnx_light_cpu::TanhFloat32_Scalar,
-                                onnx_light_cpu::TanhFloat32_AVX2_FMA};
+      std::vector<Kernel> kernels{onnx_light_cpu::TanhFloat32_Scalar,
+                                  onnx_light_cpu::TanhFloat32_AVX2_FMA};
+      std::vector<const char *> names{"TanhScalar", "TanhAVX2FMA"};
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
+      if (onnx_light_cpu::DetectSimdLevel() >= onnx_light_cpu::SimdLevel::kAVX512) {
+        kernels.push_back(onnx_light_cpu::TanhFloat32_AVX512);
+        names.push_back("TanhAVX512");
+      }
+#endif
       for (int warmup = 0; warmup < 3; ++warmup) {
         for (const auto kernel : kernels) {
           kernel(input, output, count);
         }
       }
-      std::vector<double> timings[2];
+      std::vector<std::vector<double>> timings(kernels.size());
       for (auto &values : timings) {
         values.reserve(samples);
       }
       const auto iterations = std::max<std::size_t>(1, 100000 / count);
       for (std::size_t sample = 0; sample < samples; ++sample) {
-        for (std::size_t order = 0; order < 2; ++order) {
-          const auto index = (sample + order) % 2;
+        for (std::size_t order = 0; order < kernels.size(); ++order) {
+          const auto index = (sample + order) % kernels.size();
           const auto start = std::chrono::steady_clock::now();
           for (std::size_t iteration = 0; iteration < iterations; ++iteration) {
             kernels[index](input, output, count);
@@ -145,11 +152,12 @@ int MeasureTanh(std::size_t samples) {
                                    static_cast<double>(iterations));
         }
       }
-      const auto [scalar_median, scalar_iqr] = Summary(timings[0]);
-      const auto [avx2_median, avx2_iqr] = Summary(timings[1]);
-      std::printf("TanhScalar,%zu,%zu,%.9g,%.9g,1\n", count, offset, scalar_median, scalar_iqr);
-      std::printf("TanhAVX2FMA,%zu,%zu,%.9g,%.9g,%.6g\n", count, offset, avx2_median, avx2_iqr,
-                  scalar_median / avx2_median);
+      const auto scalar_median = Summary(timings[0]).first;
+      for (std::size_t index = 0; index < kernels.size(); ++index) {
+        const auto [median, iqr] = Summary(timings[index]);
+        std::printf("%s,%zu,%zu,%.9g,%.9g,%.6g\n", names[index], count, offset, median, iqr,
+                    scalar_median / median);
+      }
     }
   }
   return 0;
