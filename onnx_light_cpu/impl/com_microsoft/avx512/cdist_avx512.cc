@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "onnx_light_cpu/impl/com_microsoft/cdist.h"
+#include "onnx_light_cpu/impl/com_microsoft/cdist_simd.h"
 
 #include <cmath>
 #include <cstddef>
@@ -129,6 +130,38 @@ void CDistFloat64Rows_AVX512(const double *a, const double *b, double *c, std::s
       c_row[col] = metric == CDistMetric::kEuclidean ? std::sqrt(sum_squares) : sum_squares;
     }
   }
+}
+
+void CDistFloat32PackedRows_AVX512(const float *a, const float *b, float *c, std::size_t k,
+                                   std::size_t n, CDistMetric metric, std::size_t row_begin,
+                                   std::size_t row_end) {
+  if (CDistPackedRows<float, __m512, 16>(
+          a, b, c, k, n, metric, row_begin, row_end, _mm512_setzero_ps(),
+          [](const float *p) { return _mm512_loadu_ps(p); },
+          [](float *p, __m512 v) { _mm512_storeu_ps(p, v); },
+          [](float v) { return _mm512_set1_ps(v); },
+          [](__m512 x, __m512 y) { return _mm512_sub_ps(x, y); },
+          [](__m512 x, __m512 y, __m512 sum) { return _mm512_fmadd_ps(x, y, sum); },
+          [](__m512 v) { return _mm512_sqrt_ps(v); })) {
+    return;
+  }
+  CDistFloat32Rows_AVX512(a, b, c, k, n, metric, row_begin, row_end);
+}
+
+void CDistFloat64PackedRows_AVX512(const double *a, const double *b, double *c, std::size_t k,
+                                   std::size_t n, CDistMetric metric, std::size_t row_begin,
+                                   std::size_t row_end) {
+  if (CDistPackedRows<double, __m512d, 8>(
+          a, b, c, k, n, metric, row_begin, row_end, _mm512_setzero_pd(),
+          [](const double *p) { return _mm512_loadu_pd(p); },
+          [](double *p, __m512d v) { _mm512_storeu_pd(p, v); },
+          [](double v) { return _mm512_set1_pd(v); },
+          [](__m512d x, __m512d y) { return _mm512_sub_pd(x, y); },
+          [](__m512d x, __m512d y, __m512d sum) { return _mm512_fmadd_pd(x, y, sum); },
+          [](__m512d v) { return _mm512_sqrt_pd(v); })) {
+    return;
+  }
+  CDistFloat64Rows_AVX512(a, b, c, k, n, metric, row_begin, row_end);
 }
 
 } // namespace onnx_light_cpu

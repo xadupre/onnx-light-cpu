@@ -5,6 +5,7 @@
 #include "onnx_light_cpu/impl/com_microsoft/cdist.h"
 
 #include "onnx_light_cpu/impl/checked_arithmetic.h"
+#include "onnx_light_cpu/impl/com_microsoft/cdist_simd.h"
 #include "onnx_light_cpu/impl/execution.h"
 #include "onnx_light_cpu/impl/math/unary_execution_tuning.h"
 #include "onnx_light_cpu/impl/simd_level.h"
@@ -24,6 +25,12 @@ void CDistFloat32Rows_AVX2_FMA(const float *a, const float *b, float *c, std::si
 void CDistFloat64Rows_AVX2_FMA(const double *a, const double *b, double *c, std::size_t k,
                                std::size_t n, CDistMetric metric, std::size_t row_begin,
                                std::size_t row_end);
+void CDistFloat32PackedRows_AVX2_FMA(const float *a, const float *b, float *c, std::size_t k,
+                                     std::size_t n, CDistMetric metric, std::size_t row_begin,
+                                     std::size_t row_end);
+void CDistFloat64PackedRows_AVX2_FMA(const double *a, const double *b, double *c, std::size_t k,
+                                     std::size_t n, CDistMetric metric, std::size_t row_begin,
+                                     std::size_t row_end);
 #endif
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512
 void CDistFloat32Rows_AVX512(const float *a, const float *b, float *c, std::size_t k, std::size_t n,
@@ -31,6 +38,12 @@ void CDistFloat32Rows_AVX512(const float *a, const float *b, float *c, std::size
 void CDistFloat64Rows_AVX512(const double *a, const double *b, double *c, std::size_t k,
                              std::size_t n, CDistMetric metric, std::size_t row_begin,
                              std::size_t row_end);
+void CDistFloat32PackedRows_AVX512(const float *a, const float *b, float *c, std::size_t k,
+                                   std::size_t n, CDistMetric metric, std::size_t row_begin,
+                                   std::size_t row_end);
+void CDistFloat64PackedRows_AVX512(const double *a, const double *b, double *c, std::size_t k,
+                                   std::size_t n, CDistMetric metric, std::size_t row_begin,
+                                   std::size_t row_end);
 #endif
 
 namespace {
@@ -62,28 +75,30 @@ template <typename T>
 using CDistRowsFn = void (*)(const T *, const T *, T *, std::size_t, std::size_t, CDistMetric,
                              std::size_t, std::size_t);
 
-template <typename T> CDistRowsFn<T> SelectCDistRows(std::size_t n) {
+template <typename T> CDistRowsFn<T> SelectCDistRows(std::size_t m, std::size_t k, std::size_t n) {
 #if defined(ONNX_LIGHT_CPU_HAVE_AVX512) || defined(ONNX_LIGHT_CPU_HAVE_AVX2_FMA)
   static const SimdLevel simd_level = DetectSimdLevel();
 #endif
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512
   constexpr std::size_t avx512_lanes = std::is_same_v<T, float> ? 16 : 8;
-  if (simd_level >= SimdLevel::kAVX512 && n >= avx512_lanes) {
+  const bool packed_avx512 = CDistUsePackedRows<avx512_lanes>(m, k, n);
+  if (simd_level >= SimdLevel::kAVX512 && (n >= avx512_lanes || packed_avx512)) {
     if constexpr (std::is_same_v<T, float>) {
-      return &CDistFloat32Rows_AVX512;
+      return packed_avx512 ? &CDistFloat32PackedRows_AVX512 : &CDistFloat32Rows_AVX512;
     } else {
-      return &CDistFloat64Rows_AVX512;
+      return packed_avx512 ? &CDistFloat64PackedRows_AVX512 : &CDistFloat64Rows_AVX512;
     }
   }
 #endif
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
   static const bool supports_fma = CpuSupportsFma();
   constexpr std::size_t avx2_lanes = std::is_same_v<T, float> ? 8 : 4;
-  if (simd_level >= SimdLevel::kAVX2 && supports_fma && n >= avx2_lanes) {
+  const bool packed_avx2 = CDistUsePackedRows<avx2_lanes>(m, k, n);
+  if (simd_level >= SimdLevel::kAVX2 && supports_fma && (n >= avx2_lanes || packed_avx2)) {
     if constexpr (std::is_same_v<T, float>) {
-      return &CDistFloat32Rows_AVX2_FMA;
+      return packed_avx2 ? &CDistFloat32PackedRows_AVX2_FMA : &CDistFloat32Rows_AVX2_FMA;
     } else {
-      return &CDistFloat64Rows_AVX2_FMA;
+      return packed_avx2 ? &CDistFloat64PackedRows_AVX2_FMA : &CDistFloat64Rows_AVX2_FMA;
     }
   }
 #endif
@@ -102,7 +117,7 @@ void CDistDispatch(const T *a, const T *b, T *c, std::size_t m, std::size_t k, s
     ThrowArithmeticError("CDist", "row count", "overflows int64_t");
   }
   const std::int64_t total = static_cast<std::int64_t>(m);
-  const CDistRowsFn<T> rows = SelectCDistRows<T>(n);
+  const CDistRowsFn<T> rows = SelectCDistRows<T>(m, k, n);
   auto execute = [=](std::int64_t begin, std::int64_t end) {
     rows(a, b, c, k, n, metric, static_cast<std::size_t>(begin), static_cast<std::size_t>(end));
   };
