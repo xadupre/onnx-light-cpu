@@ -190,7 +190,7 @@ to the scalar range, not ONNX Runtime; use the backend command above for an
 end-to-end ORT comparison.
 
 Measured AVX-512 logits optimization
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 On an AMD EPYC 9V74 with AVX-512 (GCC Release, one thread pinned to CPU 0),
 the normal-range exponential reconstruction and refined reciprocal reduced
