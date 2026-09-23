@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "onnx_light_cpu/impl/com_microsoft/cdist.h"
+#include "onnx_light_cpu/impl/com_microsoft/cdist_simd.h"
 
 #include <cmath>
 #include <cstddef>
@@ -119,6 +120,38 @@ void CDistFloat64Rows_AVX2_FMA(const double *a, const double *b, double *c, std:
       [](const double *value) { return _mm256_loadu_pd(value); },
       [](__m256d left, __m256d right) { return _mm256_sub_pd(left, right); },
       [](__m256d left, __m256d right, __m256d sum) { return _mm256_fmadd_pd(left, right, sum); });
+}
+
+void CDistFloat32PackedRows_AVX2_FMA(const float *a, const float *b, float *c, std::size_t k,
+                                     std::size_t n, CDistMetric metric, std::size_t row_begin,
+                                     std::size_t row_end) {
+  if (CDistPackedRows<float, __m256, 8>(
+          a, b, c, k, n, metric, row_begin, row_end, _mm256_setzero_ps(),
+          [](const float *p) { return _mm256_loadu_ps(p); },
+          [](float *p, __m256 v) { _mm256_storeu_ps(p, v); },
+          [](float v) { return _mm256_set1_ps(v); },
+          [](__m256 x, __m256 y) { return _mm256_sub_ps(x, y); },
+          [](__m256 x, __m256 y, __m256 sum) { return _mm256_fmadd_ps(x, y, sum); },
+          [](__m256 v) { return _mm256_sqrt_ps(v); })) {
+    return;
+  }
+  CDistFloat32Rows_AVX2_FMA(a, b, c, k, n, metric, row_begin, row_end);
+}
+
+void CDistFloat64PackedRows_AVX2_FMA(const double *a, const double *b, double *c, std::size_t k,
+                                     std::size_t n, CDistMetric metric, std::size_t row_begin,
+                                     std::size_t row_end) {
+  if (CDistPackedRows<double, __m256d, 4>(
+          a, b, c, k, n, metric, row_begin, row_end, _mm256_setzero_pd(),
+          [](const double *p) { return _mm256_loadu_pd(p); },
+          [](double *p, __m256d v) { _mm256_storeu_pd(p, v); },
+          [](double v) { return _mm256_set1_pd(v); },
+          [](__m256d x, __m256d y) { return _mm256_sub_pd(x, y); },
+          [](__m256d x, __m256d y, __m256d sum) { return _mm256_fmadd_pd(x, y, sum); },
+          [](__m256d v) { return _mm256_sqrt_pd(v); })) {
+    return;
+  }
+  CDistFloat64Rows_AVX2_FMA(a, b, c, k, n, metric, row_begin, row_end);
 }
 
 } // namespace onnx_light_cpu

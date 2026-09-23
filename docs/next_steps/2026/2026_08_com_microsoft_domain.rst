@@ -76,6 +76,65 @@ only repeated and near-identical cases use a reported cancellation bound
 values follow IEEE propagation, and the generic kernel rejects a zero feature
 dimension like ONNX Runtime while permitting empty row dimensions.
 
+CDist packed SIMD tiles
+~~~~~~~~~~~~~~~~~~~~~~~
+
+For feature counts up to 256, the AVX2/FMA and AVX-512 implementations can
+transpose one SIMD-width tile of ``B`` into worker-local scratch and reuse it
+across four ``A`` rows at a time. Each lane accumulates one direct squared
+distance, eliminating horizontal reductions and scalar feature tails;
+``euclidean`` also uses vector square roots. The packed tile occupies at most
+16 KiB per worker, independent of the input matrix sizes. Packing, including its cost,
+is repeated on every call; no input data is cached between calls.
+
+The fast path requires at least 32 rows per executor slice (64 for feature
+counts above 128), and either full column tiles or at least four tiles' worth
+of columns. Smaller, skinny, and long-feature inputs retain the original
+implementation. Runtime-owned row scheduling and scalar fallbacks are unchanged.
+
+The standalone ``cdist_throughput`` benchmark includes packing, dispatch, both
+metrics/types, eligibility boundaries, and row/column/feature tails:
+
+.. code-block:: bash
+
+   cmake -S . -B /tmp/cdist-build \
+       -DONNX_LIGHT_CPU_BUILD_PYTHON=OFF \
+       -DONNX_LIGHT_CPU_BUILD_BENCHMARKS=ON
+   cmake --build /tmp/cdist-build --target cdist_throughput -j4
+   taskset -c 0 /tmp/cdist-build/cdist_throughput
+
+On an AMD EPYC 7763 with GCC 13.3, Release flags, and one pinned thread,
+three alternating baseline/candidate runs measured the following representative
+``sqeuclidean`` medians in seconds (baseline ``9afbf61``):
+
+.. list-table::
+   :header-rows: 1
+
+   * - ``(M, K, N)``
+     - Type
+     - Before
+     - After
+     - Speed-up
+   * - ``(256, 128, 64)``
+     - float32
+     - 0.000138780
+     - 0.000084538
+     - 1.64x
+   * - ``(256, 128, 64)``
+     - float64
+     - 0.000282970
+     - 0.000172523
+     - 1.64x
+   * - ``(255, 127, 65)``
+     - float32
+     - 0.000180898
+     - 0.000088195
+     - 2.05x
+
+These measurements exercised AVX2/FMA, not AVX-512: the runner lacks AVX-512.
+The AVX-512 implementation was compile-checked, but its speed-up and end-to-end
+ONNX Runtime parity still require an AVX-512 host using the parity runner above.
+
 BiasGelu latency parity
 -----------------------
 
