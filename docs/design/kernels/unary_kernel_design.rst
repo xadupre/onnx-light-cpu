@@ -97,9 +97,16 @@ and infinities (mapped to signed one). FP16 and BF16 compute in FP32 and round
 once on output. Each worker uses at most a 1,024-element FP32 conversion block;
 there is no full-tensor intermediate beyond the output.
 
-The AVX-512 and AVX2/FMA ranges evaluate a small-argument polynomial to avoid
-cancellation near zero and reuse the exponential approximation for larger
-arguments. CPU feature detection is cached, preferring AVX-512, then AVX2/FMA,
+The AVX2/FMA range evaluates a small-argument polynomial to avoid cancellation
+near zero and reuses the exponential approximation for larger arguments.
+The AVX-512 range instead reduces ``-2 * abs(x)`` and computes
+``expm1(reduced)`` with the existing exponential coefficients. Reconstructing
+the numerator as ``(1 - scale) - scale * expm1(reduced)`` avoids cancellation
+near zero without a second polynomial. Clamping the magnitude to 10 keeps the
+exponential normal, so general overflow/underflow handling is unnecessary.
+The denominator lies in ``[1, 2]``; a reciprocal estimate with one Newton
+refinement replaces vector division while preserving the FP32 error tolerance.
+CPU feature detection is cached, preferring AVX-512, then AVX2/FMA,
 then the portable path. The AVX-512 range processes 16 lanes per vector, with
 two-vector unrolling and masked tails; FP16 and BF16 share it through the
 existing worker-local FP32 conversion blocks.
@@ -170,7 +177,8 @@ warmups, ORT 1.30) measured FP32 one-token medians of 0.000205579 seconds here
 and 0.000107706 seconds in ORT. Small eight-element sessions measured
 0.000006568 and 0.000014382 seconds respectively. Absolute session timings on
 this shared runner are indicative rather than performance guarantees.
-No AVX-512 speedup is claimed: this machine cannot execute AVX-512.
+These earlier AVX2 measurements do not establish an AVX-512 speedup: the
+EPYC 7763 cannot execute AVX-512.
 
 To compare the AVX-512 range on compatible hardware, build the same driver
 with ``-DONNX_LIGHT_CPU_MAX_SIMD_LEVEL=AVX512`` instead. The ``tanh`` mode adds
@@ -180,3 +188,41 @@ using identical inputs and one thread, including sizes 15, 16, 17, 31, 32, and
 33 to expose vector and masked-tail overhead. The reported speedup is relative
 to the scalar range, not ONNX Runtime; use the backend command above for an
 end-to-end ORT comparison.
+
+Measured AVX-512 logits optimization
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+On an AMD EPYC 9V74 with AVX-512 (GCC Release, one thread pinned to CPU 0),
+the normal-range exponential reconstruction and refined reciprocal reduced
+the direct FP32 range latency as follows. These measurements use the driver
+above with 15 samples, three warmups, identical preallocated inputs and
+rotating scalar/AVX2/AVX-512 measurement order. Both columns execute AVX-512;
+the baseline is the original general-exponential, small-polynomial and
+division implementation.
+
+.. list-table::
+   :header-rows: 1
+
+   * - Elements (aligned)
+     - Before (seconds)
+     - After (seconds)
+     - Speedup
+   * - 202048
+     - 0.000113447
+     - 0.000072267
+     - 1.57x
+   * - 202055 (masked tail)
+     - 0.000113758
+     - 0.000072277
+     - 1.57x
+   * - 3232768
+     - 0.001826498
+     - 0.001169998
+     - 1.56x
+
+For ``test_cpu_tanh_logits_1x1x202048_float32_benchmark``, the end-to-end
+one-thread median was 0.000076353 seconds versus 0.000059608 seconds for
+ONNX Runtime 1.30.0 (100 repeats, 10 warmups, pinned to CPU 0).
+The arithmetic optimization narrows the gap but does not yet match ORT on
+this case. Direct range timings exclude session overhead and must not be
+reported as end-to-end ORT speedups.

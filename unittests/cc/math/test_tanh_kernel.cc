@@ -159,6 +159,32 @@ TEST(TanhKernel, Float32SpecialValuesInEveryTail) {
   }
 }
 
+TEST(TanhKernel, Float32CancellationAndExponentBoundaries) {
+  std::vector<float> input;
+  // Dense coverage where exp rounds close to one, including the tiny-input cutoff.
+  for (std::uint32_t i = 0; i <= 65536; ++i) {
+    const float value = static_cast<float>(i) * 0x1p-18f;
+    input.push_back(value);
+    input.push_back(-value);
+  }
+  // exp(-2*abs(x)) changes its power-of-two scale at these half-integer boundaries.
+  for (int exponent = 0; exponent < 29; ++exponent) {
+    const float boundary = static_cast<float>((exponent + 0.5) * std::log(2.0) / 2.0);
+    for (const float value : {std::nextafter(boundary, 0.0f), boundary,
+                              std::nextafter(boundary, std::numeric_limits<float>::infinity())}) {
+      input.push_back(value);
+      input.push_back(-value);
+    }
+  }
+  std::vector<float> output(input.size());
+  for (const auto kernel : FloatKernels()) {
+    kernel(input.data(), output.data(), input.size());
+    for (std::size_t i = 0; i < input.size(); ++i) {
+      ExpectTanh(input[i], output[i]);
+    }
+  }
+}
+
 float HalfToFloat(std::uint16_t bits, bool bfloat16) {
   return bfloat16 ? onnx_light_cpu::detail::Bfloat16BitsToFloat(bits)
                   : onnx_light_cpu::detail::Float16BitsToFloat(bits);
