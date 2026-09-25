@@ -16,7 +16,7 @@ namespace onnx_light_cpu {
 void SplitCopy(const void *data, void *output, int64_t rows, std::size_t input_row_bytes,
                std::size_t output_row_bytes, std::size_t offset_bytes);
 
-/// Copies every split in one row traversal; four 32-bit outputs use an AVX2 transpose.
+/// Copies every split in one row traversal; four 32-bit outputs use a SIMD transpose.
 void SplitCopyOutputs(const void *data, std::span<void *const> outputs, int64_t rows,
                       std::size_t input_row_bytes, std::span<const std::size_t> output_row_bytes);
 

@@ -13,6 +13,9 @@
 
 namespace onnx_light_cpu {
 
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
+void SplitCopy4x4_AVX512(const uint8_t *source, void *const *outputs, int64_t begin, int64_t end);
+#endif
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2
 void SplitCopy4x4_AVX2(const uint8_t *source, void *const *outputs, int64_t begin, int64_t end);
 #endif
@@ -94,17 +97,33 @@ void SplitCopyOutputs(const void *data, std::span<void *const> outputs, int64_t 
   if (rows == 0 || input_row_bytes == 0) {
     return;
   }
-  bool use_split4x4 = false;
+  enum class Split4x4Isa { kNone, kAvx2, kAvx512 };
+  Split4x4Isa split4x4_isa = Split4x4Isa::kNone;
+  const bool split4x4_layout = input_row_bytes == 16 && outputs.size() == 4 &&
+                               std::all_of(output_row_bytes.begin(), output_row_bytes.end(),
+                                           [](std::size_t width) { return width == 4; });
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
+  static const bool use_avx512 = DetectSimdLevel() >= SimdLevel::kAVX512;
+  if (split4x4_layout && use_avx512) {
+    split4x4_isa = Split4x4Isa::kAvx512;
+  }
+#endif
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2
   static const bool use_avx2 = DetectSimdLevel() >= SimdLevel::kAVX2;
-  use_split4x4 = use_avx2 && input_row_bytes == 16 && outputs.size() == 4 &&
-                 std::all_of(output_row_bytes.begin(), output_row_bytes.end(),
-                             [](std::size_t width) { return width == 4; });
+  if (split4x4_layout && use_avx2 && split4x4_isa == Split4x4Isa::kNone) {
+    split4x4_isa = Split4x4Isa::kAvx2;
+  }
 #endif
   const auto copy = [&](int64_t begin, int64_t end) {
     const auto *source = static_cast<const uint8_t *>(data);
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
+    if (split4x4_isa == Split4x4Isa::kAvx512) {
+      SplitCopy4x4_AVX512(source, outputs.data(), begin, end);
+      return;
+    }
+#endif
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2
-    if (use_split4x4) {
+    if (split4x4_isa == Split4x4Isa::kAvx2) {
       SplitCopy4x4_AVX2(source, outputs.data(), begin, end);
       return;
     }
@@ -123,7 +142,9 @@ void SplitCopyOutputs(const void *data, std::span<void *const> outputs, int64_t 
     }
   };
   constexpr int64_t kParallelBytes = 1024 * 1024;
-  const int64_t block_bytes = use_split4x4 ? 64 * 1024 : 256 * 1024;
+  const int64_t block_bytes = split4x4_isa == Split4x4Isa::kAvx512 ? 128 * 1024
+                              : split4x4_isa == Split4x4Isa::kAvx2 ? 64 * 1024
+                                                                   : 256 * 1024;
   if (input_row_bytes > static_cast<std::size_t>(std::numeric_limits<int64_t>::max())) {
     copy(0, rows);
     return;

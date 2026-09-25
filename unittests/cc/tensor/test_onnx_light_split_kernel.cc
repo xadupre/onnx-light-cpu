@@ -420,7 +420,7 @@ TEST(OnnxLightSplitKernel, RuntimeSchedulingSmallLargeSingleRowAndNested) {
   EXPECT_EQ(executor.dispatches, previous);
 }
 
-TEST(OnnxLightSplitKernel, NarrowFloatUsesFineGrainedAvx2Ranges) {
+TEST(OnnxLightSplitKernel, NarrowFloatUsesFineGrainedSimdRanges) {
   if (onnx_light_cpu::DetectSimdLevel() < onnx_light_cpu::SimdLevel::kAVX2) {
     GTEST_SKIP() << "AVX2 is unavailable";
   }
