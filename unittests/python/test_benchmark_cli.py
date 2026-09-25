@@ -17,8 +17,10 @@ from onnx_light.ext_test_case import ExtTestCase
 from openpyxl import load_workbook
 
 from onnx_light_cpu.__main__ import _build_parser, main
+from onnx_light_cpu import __main__ as cli
 from onnx_light_cpu import _benchmark
 from onnx_light_cpu._benchmark import (
+    compare_benchmark_dtypes,
     infer_pr_benchmark_selection,
     normalize_dtypes,
     post_benchmark_markdown,
@@ -81,6 +83,178 @@ class TestBenchmarkCli(ExtTestCase):
         with redirect_stdout(help_output), self.assertRaises(SystemExit):
             parser.parse_args(["benchmark", "--help"])
         self.assertIn("kernel select defaults (default: 0)", help_output.getvalue())
+
+    def test_parser_compares_two_dtypes(self):
+        args = _build_parser().parse_args(
+            ["benchmark", "--compare-dtypes", "float16", "bfloat16"]
+        )
+        self.assertEqual(args.compare_dtypes, ["float16", "bfloat16"])
+        self.assertEqual(args.dtypes, [])
+        self.assertIsNone(_build_parser().parse_args(["benchmark"]).compare_dtypes)
+        for options in (
+            ["--compare-dtypes", "float16"],
+            ["--compare-dtypes", "float16", "all"],
+            ["--compare-dtypes", "float16", "complex128"],
+            ["--compare-dtypes", "float16", "float16"],
+            ["--compare-dtypes", "float16", "bfloat16", "--dtype", "float32"],
+        ):
+            with self.subTest(options=options), redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit) as error:
+                    main(["benchmark", *options])
+                self.assertEqual(error.exception.code, 2)
+
+    @staticmethod
+    def _dtype_rows():
+        return [
+            {
+                **dict.fromkeys(_benchmark._AGGREGATED_COLUMNS),
+                "case": f"test_cpu_abs_n1024_{dtype}_benchmark",
+                "operator": "Abs",
+                "input_shapes": '[{"x": [1024]}]',
+                "dtype": dtype,
+                "median_s": median,
+                "onnxruntime_median_s": 100.0,
+                "speedup": 50.0,
+            }
+            for dtype, median in (("bfloat16", 2.0), ("float16", 6.0), ("float32", 1.0))
+        ]
+
+    def test_compares_matching_dtype_medians(self):
+        rows = self._dtype_rows()
+        original = [row.copy() for row in rows]
+        comparison = compare_benchmark_dtypes(rows, "float16", "bfloat16")
+        self.assertEqual(
+            comparison,
+            [
+                {
+                    "case": "test_cpu_abs_n1024_float16/bfloat16_benchmark",
+                    "operator": "Abs",
+                    "input_shapes": '[{"x": [1024]}]',
+                    "baseline_dtype": "float16",
+                    "comparison_dtype": "bfloat16",
+                    "baseline_median_s": 6.0,
+                    "comparison_median_s": 2.0,
+                    "speedup": 3.0,
+                }
+            ],
+        )
+        self.assertEqual(rows, original)
+        reverse = compare_benchmark_dtypes(rows, "bfloat16", "float16")
+        self.assertEqual(reverse[0]["speedup"], 1 / 3)
+        self.assertEqual(compare_benchmark_dtypes([], "float16", "bfloat16"), [])
+        for baseline, comparison in (("float16", "float16"), ("all", "bfloat16")):
+            with self.assertRaisesRegex(ValueError, "two different supported dtypes"):
+                compare_benchmark_dtypes(rows, baseline, comparison)
+
+    def test_dtype_comparison_does_not_pair_different_cases_or_shapes(self):
+        for changes in (
+            {"case": "test_cpu_abs_n2048_float16_benchmark"},
+            {"input_shapes": '[{"x": [2048]}]'},
+            {"operator": "Neg"},
+        ):
+            rows = self._dtype_rows()[:2]
+            rows[1].update(changes)
+            with self.subTest(changes=changes):
+                comparison = compare_benchmark_dtypes(rows, "float16", "bfloat16")
+                self.assertEqual(len(comparison), 2)
+                self.assertTrue(all(row["speedup"] is None for row in comparison))
+                self.assertIsNone(comparison[0]["baseline_median_s"])
+                self.assertIsNone(comparison[1]["comparison_median_s"])
+
+    def test_dtype_comparison_excludes_mixed_dtype_cases(self):
+        rows = [
+            {
+                **row,
+                "case": row["case"].replace("abs_n1024", "cast_float32_to"),
+                "operator": "Cast",
+            }
+            for row in self._dtype_rows()
+        ]
+        self.assertEqual(compare_benchmark_dtypes(rows, "float16", "bfloat16"), [])
+
+    def test_dtype_comparison_pairs_homogeneous_binary_cases(self):
+        rows = [
+            {
+                **row,
+                "case": (
+                    f"test_cpu_add_v14_equal_{row['dtype']}x{row['dtype']}"
+                    f"_to_{row['dtype']}_n1024_benchmark"
+                ),
+                "operator": "Add",
+            }
+            for row in self._dtype_rows()
+        ]
+        comparison = compare_benchmark_dtypes(rows, "float16", "bfloat16")
+        self.assertEqual(len(comparison), 1)
+        self.assertEqual(comparison[0]["speedup"], 3.0)
+        for row in rows:
+            row["case"] = row["case"].replace(f"{row['dtype']}x", "int32x")
+        self.assertEqual(compare_benchmark_dtypes(rows, "float16", "bfloat16"), [])
+
+    def test_dtype_comparison_zero_duration(self):
+        rows = self._dtype_rows()
+        rows[0]["median_s"] = 0.0
+        comparison = compare_benchmark_dtypes(rows, "float16", "bfloat16")
+        self.assertEqual(comparison[0]["speedup"], float("inf"))
+
+    def test_main_writes_dtype_comparison_reports(self):
+        calls = []
+        rows = self._dtype_rows()[:2]
+
+        def run(**kwargs):
+            calls.append(kwargs)
+            return [], rows
+
+        def infer(pull_request):
+            self.assertEqual(pull_request, "763")
+            return ["^test_cpu_abs_"], ["float32"]
+
+        self.addCleanup(setattr, cli, "run_backend_benchmark", cli.run_backend_benchmark)
+        self.addCleanup(
+            setattr, cli, "pull_request_benchmark_selection", cli.pull_request_benchmark_selection
+        )
+        cli.run_backend_benchmark = run
+        cli.pull_request_benchmark_selection = infer
+        for selection in (["--tests", "^test_cpu_abs_"], ["--from-pr", "763"]):
+            with self.subTest(selection=selection), tempfile.TemporaryDirectory() as temporary:
+                output = Path(temporary) / "benchmark.xlsx"
+                markdown = Path(temporary) / "benchmark.md"
+                pr_markdown = Path(temporary) / "pr.md"
+                with redirect_stdout(io.StringIO()):
+                    result = main(
+                        [
+                            "benchmark",
+                            *selection,
+                            "--compare-dtypes",
+                            "float16",
+                            "bfloat16",
+                            "--onnxruntime",
+                            "--output",
+                            str(output),
+                            "--markdown",
+                            str(markdown),
+                            "--pr-markdown",
+                            str(pr_markdown),
+                        ]
+                    )
+                self.assertEqual(result, 0)
+                self.assertEqual(calls[-1]["dtypes"], ["float16", "bfloat16"])
+                self.assertEqual(calls[-1]["tests"], ["^test_cpu_abs_"])
+                self.assertTrue(calls[-1]["with_onnxruntime"])
+                workbook = load_workbook(output, read_only=True)
+                self.assertEqual(workbook.sheetnames, ["raw", "aggregated", "dtype_comparison"])
+                values = list(workbook["dtype_comparison"].values)
+                self.assertEqual(values[0], _benchmark._DTYPE_COMPARISON_COLUMNS)
+                self.assertEqual(values[1][-3:], (6.0, 2.0, 3.0))
+                self.assertEqual(workbook["aggregated"].max_row, 3)
+                workbook.close()
+                report = markdown.read_text(encoding="utf-8")
+                self.assertIn("## Dtype comparison (baseline / comparison)", report)
+                self.assertIn("| float16 | bfloat16 | 6.0 | 2.0 | 3.0 |", report)
+                self.assertIn(
+                    "| 3.00 | test_cpu_abs_n1024_float16/bfloat16_benchmark |",
+                    pr_markdown.read_text(encoding="utf-8"),
+                )
 
     def test_rejects_unknown_dtype(self):
         with self.assertRaisesRegex(ValueError, "unknown dtype"):

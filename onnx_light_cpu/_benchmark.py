@@ -89,6 +89,16 @@ _AGGREGATED_COLUMNS = (
 )
 _PR_COLUMNS = ("speedup", "test_name")
 _PR_COMMENT_MAX_LENGTH = 65000
+_DTYPE_COMPARISON_COLUMNS = (
+    "case",
+    "operator",
+    "input_shapes",
+    "baseline_dtype",
+    "comparison_dtype",
+    "baseline_median_s",
+    "comparison_median_s",
+    "speedup",
+)
 
 
 def normalize_dtypes(values: Sequence[str]) -> tuple[str, ...]:
@@ -458,12 +468,58 @@ def run_backend_benchmark(
     return raw_rows, aggregated_rows
 
 
+def compare_benchmark_dtypes(
+    aggregated_rows: Sequence[dict[str, Any]], baseline: str, comparison: str
+) -> list[dict[str, Any]]:
+    """Pairs single-dtype case variants and reports baseline/comparison median ratios."""
+    if baseline not in _DTYPES or comparison not in _DTYPES or baseline == comparison:
+        raise ValueError("dtype comparison requires two different supported dtypes")
+    paired: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for row in aggregated_rows:
+        dtype = row["dtype"]
+        tokens = row["case"].split("_")
+        dtype_tokens = [
+            token for token in tokens if all(part in _DTYPES for part in token.split("x"))
+        ]
+        case_dtypes = {part for token in dtype_tokens for part in token.split("x")}
+        # Include homogeneous binary signatures, but not mixed-dtype conversions.
+        if dtype not in (baseline, comparison) or case_dtypes != {dtype}:
+            continue
+        name = "_".join(
+            token.replace(dtype, f"{baseline}/{comparison}") if token in dtype_tokens else token
+            for token in tokens
+        )
+        key = (name, row["operator"], row["input_shapes"])
+        if key not in paired:
+            paired[key] = {
+                "case": name,
+                "operator": row["operator"],
+                "input_shapes": row["input_shapes"],
+                "baseline_dtype": baseline,
+                "comparison_dtype": comparison,
+                "baseline_median_s": None,
+                "comparison_median_s": None,
+                "speedup": None,
+            }
+        column = "baseline_median_s" if dtype == baseline else "comparison_median_s"
+        paired[key][column] = row["median_s"]
+    for pair in paired.values():
+        if pair["baseline_median_s"] is not None and pair["comparison_median_s"] is not None:
+            pair["speedup"] = (
+                pair["baseline_median_s"] / pair["comparison_median_s"]
+                if pair["comparison_median_s"]
+                else float("inf")
+            )
+    return list(paired.values())
+
+
 def write_benchmark_workbook(
     path: str | os.PathLike[str],
     raw_rows: Sequence[dict[str, Any]],
     aggregated_rows: Sequence[dict[str, Any]],
+    comparison_rows: Sequence[dict[str, Any]] | None = None,
 ) -> None:
-    """Writes raw and aggregated benchmark data to an Excel workbook."""
+    """Writes measurements and an optional paired dtype comparison to an Excel workbook."""
     from openpyxl import Workbook  # pyrefly: ignore[missing-import]
 
     output = Path(path)
@@ -483,6 +539,11 @@ def write_benchmark_workbook(
     aggregate_sheet.append(_AGGREGATED_COLUMNS)
     for row in aggregated_rows:
         aggregate_sheet.append([row[column] for column in _AGGREGATED_COLUMNS])
+    if comparison_rows is not None:
+        comparison_sheet = workbook.create_sheet("dtype_comparison")
+        comparison_sheet.append(_DTYPE_COMPARISON_COLUMNS)
+        for row in comparison_rows:
+            comparison_sheet.append([row[column] for column in _DTYPE_COMPARISON_COLUMNS])
     workbook.save(output)
 
 
@@ -502,12 +563,18 @@ def _benchmark_markdown(
 
 
 def write_benchmark_markdown(
-    path: str | os.PathLike[str], aggregated_rows: Sequence[dict[str, Any]]
+    path: str | os.PathLike[str],
+    aggregated_rows: Sequence[dict[str, Any]],
+    comparison_rows: Sequence[dict[str, Any]] | None = None,
 ) -> None:
     """Writes aggregated benchmark data as a Markdown table."""
     output = Path(path)
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(_benchmark_markdown(aggregated_rows), encoding="utf-8")
+    report = _benchmark_markdown(aggregated_rows)
+    if comparison_rows is not None:
+        report += "\n## Dtype comparison (baseline / comparison)\n\n"
+        report += _benchmark_markdown(comparison_rows, _DTYPE_COMPARISON_COLUMNS)
+    output.write_text(report, encoding="utf-8")
 
 
 def _pr_benchmark_markdown(

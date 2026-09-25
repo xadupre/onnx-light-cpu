@@ -40,6 +40,36 @@ workbook:
    integers, and ``bool``. The default, ``all``, selects every supported type
    and cannot be combined with another type.
 
+``--compare-dtypes BASELINE COMPARISON``
+   Selects two distinct data types and compares onnx-light-cpu median times for
+   matching backend tests. It cannot be combined with ``--dtype``/``--dtypes``.
+   For example, compare float16 and bfloat16 for the same Abs workloads:
+
+   .. code-block:: bash
+
+     onnx-light-cpu benchmark \
+         --tests "^test_cpu_abs_" \
+         --compare-dtypes float16 bfloat16 \
+         --output float16_bfloat16.xlsx \
+         --markdown float16_bfloat16.md
+
+   The workbook gains a ``dtype_comparison`` sheet containing both median
+   times in seconds and ``speedup = baseline_median_s / comparison_median_s``.
+   A value above one means the second dtype (bfloat16 here) is faster.
+   The full Markdown report gains the same comparison table; ``--pr`` and
+   ``--pr-markdown`` show dtype speedups instead of ONNX Runtime speedups,
+   with the ordered dtype pair in each test name.
+
+   Cases are paired only when their names differ solely in dtype tokens and
+   their operators and input shapes match. Homogeneous binary signatures such
+   as ``float16xfloat16_to_float16`` are supported. The test regular expression
+   must match both variants. Missing counterparts have blank timings and
+   speedups (``None`` in Markdown). Mixed-dtype cases such as Cast conversions
+   are excluded from the comparison table, but remain in the measurements.
+   Raw and aggregated sheets remain unchanged, and ``--onnxruntime`` can still
+   be used to include its measurements there. When inferring tests from a pull
+   request, this option overrides the inferred dtypes.
+
 ``-r``, ``--repeat``
    Maximum number of measured iterations per case. The default is ten times
    the number of logical CPUs.
