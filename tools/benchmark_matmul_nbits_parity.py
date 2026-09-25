@@ -44,13 +44,15 @@ def projections():
     }
 
 
-def memory_accounting(m, k, n, dtype, block_size=BLOCK_SIZE, *, threads=1):
+def memory_accounting(m, k, n, dtype, block_size=BLOCK_SIZE, *, threads=1, accuracy_level=0):
     """Analytical payloads only: not allocator peaks, process RSS or measurements."""
     itemsize = 4 if dtype == "float32" else 2
     blocks = (k + block_size - 1) // block_size
     tiles = ((m + 7) // 8) * ((n + 31) // 32)
     participants = min(threads, 32, tiles)
+    accuracy4_participants = min(threads, 32, (m + 7) // 8)
     panel_workspace = (32 * 32 + 8 * 32 + 8 * 32) * 4
+    accuracy4_workspace = 8 * k + 8 * blocks * 4
     return {
         "kind": "analytical; excludes runtime/ORT arenas, model copies and thread stacks",
         "packed_initializer_bytes": n * blocks * (block_size // 2),
@@ -66,6 +68,20 @@ def memory_accounting(m, k, n, dtype, block_size=BLOCK_SIZE, *, threads=1):
         ),
         "kernel_full_weight_copy_bytes_per_run": 0,
         "kernel_full_input_conversion_copy_bytes_per_run": 0,
+        "kernel_prepared_int8_weight_bytes": (
+            k * n if dtype == "float32" and accuracy_level == 4 else 0
+        ),
+        "kernel_prepared_scale_bytes": (
+            n * blocks * 4 if dtype == "float32" and accuracy_level == 4 else 0
+        ),
+        "kernel_accuracy4_workspace_bytes_per_worker": (
+            accuracy4_workspace if dtype == "float32" and accuracy_level == 4 else 0
+        ),
+        "kernel_accuracy4_workspace_bytes_total_upper_bound": (
+            accuracy4_workspace * accuracy4_participants
+            if dtype == "float32" and accuracy_level == 4
+            else 0
+        ),
         "kernel_activation_panel_write_bytes_per_run": m * k * ((n + 31) // 32) * 4,
         "kernel_dequantized_panel_write_bytes_upper_bound": (
             ((m + 7) // 8) * ((n + 31) // 32) * ((k + 31) // 32) * 32 * 32 * 4
@@ -92,7 +108,7 @@ def make_inputs(m, k, n, dtype, block_size=BLOCK_SIZE, seed=548):
     return a, packed, scales
 
 
-def make_model(m, k, n, dtype, packed, scales, block_size=BLOCK_SIZE):
+def make_model(m, k, n, dtype, packed, scales, block_size=BLOCK_SIZE, accuracy_level=0):
     from onnx_light.onnx import TensorProto, helper, numpy_helper
 
     element = {
@@ -112,7 +128,7 @@ def make_model(m, k, n, dtype, packed, scales, block_size=BLOCK_SIZE):
                     N=n,
                     bits=4,
                     block_size=block_size,
-                    accuracy_level=0,
+                    accuracy_level=accuracy_level,
                 )
             ],
             "muse_glimmer_int4_projection",
@@ -135,7 +151,7 @@ def fingerprint(*arrays):
     )
 
 
-def run_case(name, m, k, n, dtype, *, threads=1, repeat=3, warmup=1):
+def run_case(name, m, k, n, dtype, *, threads=1, repeat=3, warmup=1, accuracy_level=0):
     """Prepare once, check independent ORT parity, then reuse both sessions."""
     import numpy as np
     import onnxruntime as ort
@@ -152,7 +168,7 @@ def run_case(name, m, k, n, dtype, *, threads=1, repeat=3, warmup=1):
     started = time.perf_counter()
     a, packed, scales = make_inputs(m, k, n, dtype)
     original = fingerprint(a, packed, scales)
-    model = make_model(m, k, n, dtype, packed, scales)
+    model = make_model(m, k, n, dtype, packed, scales, accuracy_level=accuracy_level)
     serialized = model.SerializeToString()
     original_model = hashlib.sha256(serialized).hexdigest()
     input_preparation = time.perf_counter() - started
@@ -204,7 +220,15 @@ def run_case(name, m, k, n, dtype, *, threads=1, repeat=3, warmup=1):
                 raise
             oracle_kind = "float32 with BF16-rounded inputs/scales and final BF16 cast"
             oracle_feeds = {"A": a.astype(np.float32)}
-            oracle_model = make_model(m, k, n, "float32", packed, scales.astype(np.float32))
+            oracle_model = make_model(
+                m,
+                k,
+                n,
+                "float32",
+                packed,
+                scales.astype(np.float32),
+                accuracy_level=accuracy_level,
+            )
             serialized = oracle_model.SerializeToString()
             oracle = ort.InferenceSession(
                 serialized, sess_options=options, providers=["CPUExecutionProvider"]
@@ -241,7 +265,7 @@ def run_case(name, m, k, n, dtype, *, threads=1, repeat=3, warmup=1):
         "n": n,
         "dtype": dtype,
         "block_size": BLOCK_SIZE,
-        "accuracy_level": 0,
+        "accuracy_level": accuracy_level,
         "threads": threads,
         "simd_level": str(detect_simd_level()),
         "kernel_paths": kernel_paths,
@@ -271,7 +295,9 @@ def run_case(name, m, k, n, dtype, *, threads=1, repeat=3, warmup=1):
         "timing_scope": "steady-state session.run with output allocation; preparation excluded",
         "max_absolute_error": float(np.max(np.abs(actual.astype(np.float32) - expected))),
         "constants_unchanged": True,
-        "memory": memory_accounting(m, k, n, dtype, threads=threads),
+        "memory": memory_accounting(
+            m, k, n, dtype, threads=threads, accuracy_level=accuracy_level
+        ),
     }
 
 
@@ -284,6 +310,7 @@ def parse_args(argv=None):
     parser.add_argument("--threads", type=int, default=1)
     parser.add_argument("--repeat", type=int, default=3)
     parser.add_argument("--warmup", type=int, default=1)
+    parser.add_argument("--accuracy-level", type=int, choices=(0, 4), default=0)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args(argv)
     if args.threads < 1 or args.repeat < 1 or args.warmup < 0:
@@ -314,6 +341,7 @@ def main(argv=None):
                         threads=args.threads,
                         repeat=args.repeat,
                         warmup=args.warmup,
+                        accuracy_level=args.accuracy_level,
                     )
                 )
                 report["complete"] = len(results) == report["expected_cases"]

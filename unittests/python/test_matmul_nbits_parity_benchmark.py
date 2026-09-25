@@ -70,6 +70,8 @@ class TestMatMulNBitsBenchmarkContract(ExtTestCase):
         self.assertEqual(args.projection, ["down"])
         self.assertEqual(args.m, [128])
         self.assertEqual(args.dtype, ["float16"])
+        args = parse_args(["--accuracy-level", "4"])
+        self.assertEqual(args.accuracy_level, 4)
 
     def test_total_workspace_bound_respects_threads_tiles_and_participant_cap(self):
         for m, n, threads, participants in (
@@ -85,6 +87,18 @@ class TestMatMulNBitsBenchmarkContract(ExtTestCase):
                     memory["kernel_panel_workspace_bytes_total_upper_bound"], 6144 * participants
                 )
                 self.assertIn("analytical", memory["kernel_workspace_bound_scope"])
+
+    def test_accuracy4_prepared_storage_accounting(self):
+        memory = memory_accounting(128, 6656, 256, "float32", threads=1, accuracy_level=4)
+        self.assertEqual(memory["kernel_prepared_int8_weight_bytes"], 6656 * 256)
+        self.assertEqual(memory["kernel_prepared_scale_bytes"], 256 * 208 * 4)
+        self.assertEqual(
+            memory["kernel_accuracy4_workspace_bytes_per_worker"], 8 * 6656 + 8 * 208 * 4
+        )
+        self.assertEqual(
+            memory["kernel_accuracy4_workspace_bytes_total_upper_bound"],
+            8 * 6656 + 8 * 208 * 4,
+        )
 
 
 class TestMatMulNBitsConstantParity(ExtTestCase):
