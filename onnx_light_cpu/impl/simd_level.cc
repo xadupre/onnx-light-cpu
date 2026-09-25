@@ -227,6 +227,8 @@ SimdLevel DetectSimdLevel() { return SimdLevel::kNone; }
 
 bool CpuSupportsAvx512BW() { return false; }
 
+bool CpuSupportsAvx512DQ() { return false; }
+
 bool CpuSupportsFma() { return false; }
 
 bool CpuSupportsF16C() { return false; }
