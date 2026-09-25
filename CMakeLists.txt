@@ -353,6 +353,9 @@ foreach(_source IN LISTS CPU_KERNEL_SOURCES)
   endif()
   if(_source MATCHES "avx512vnni")
     list(APPEND _avx512vnni_sources "${_source}")
+    if(_source MATCHES "/avx512bw/")
+      list(APPEND _avx512bw_vnni_sources "${_source}")
+    endif()
     if(_source MATCHES "/math/gemm/")
       list(APPEND _gemm_avx512vnni_sources "${_source}")
     endif()
@@ -678,6 +681,8 @@ if(ONNX_LIGHT_CPU_HAVE_AVX512BW_FLAG)
     if(ONNX_LIGHT_CPU_HAVE_AVX512VNNI_FLAG)
       set_property(SOURCE ${_gemm_avx512vnni_sources} APPEND PROPERTY
           COMPILE_OPTIONS "-mavx512bw")
+      set_source_files_properties(${_avx512bw_vnni_sources} PROPERTIES
+          COMPILE_OPTIONS "-mavx512f;-mavx512bw;-mavx512vnni")
     endif()
   else()
     set_source_files_properties(${_avx512bw_sources} PROPERTIES

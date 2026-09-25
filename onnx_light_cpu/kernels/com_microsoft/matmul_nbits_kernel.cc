@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -22,6 +23,7 @@
 #include <mutex>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace onnx_light_cpu {
 namespace {
@@ -94,11 +96,75 @@ void RequireShape(const Tensor &tensor, std::initializer_list<std::int64_t> expe
 
 } // namespace
 
+struct MatMulNBitsKernel::PreparedInt4Plan {
+  PreparedInt4Plan(const Tensor &a, const Tensor &b, const Tensor &scales,
+                   const MatMulNBitsAttributes &attributes,
+                   const MatMulNBitsExecutionTuning &tuning)
+      : rows(TensorElementCount(a, "A") / static_cast<std::size_t>(attributes.k)),
+        k(static_cast<std::size_t>(attributes.k)), n(static_cast<std::size_t>(attributes.n)),
+        blocks((k + 31) / 32), source_b(b), source_scales(scales),
+        vnni_weights(CheckedMultiply(k, n, "MatMulNBits", "prepared weight count") / 2),
+        vnni_weight_sums(CheckedMultiply(blocks, n, "MatMulNBits", "prepared weight sum count")),
+        vnni_scales(CheckedMultiply(blocks, n, "MatMulNBits", "prepared scale count")),
+        max_participants(tuning.max_participants) {
+    const auto *packed_values = source_b.bytes();
+    const auto *scale_values = reinterpret_cast<const float *>(source_scales.bytes());
+    const std::size_t column_groups = n / 16;
+    for (std::size_t group = 0; group < column_groups; ++group) {
+      for (std::size_t block = 0; block < blocks; ++block) {
+        for (std::size_t quad = 0; quad < 8; ++quad) {
+          for (std::size_t lane = 0; lane < 16; ++lane) {
+            const std::size_t column = group * 16 + lane;
+            const std::size_t source = (column * blocks + block) * 16 + quad * 2;
+            const std::size_t target = ((group * blocks + block) * 8 + quad) * 32 + lane * 2;
+            vnni_weights[target] = packed_values[source];
+            vnni_weights[target + 1] = packed_values[source + 1];
+          }
+        }
+        for (std::size_t lane = 0; lane < 16; ++lane) {
+          const std::size_t column = group * 16 + lane;
+          const std::size_t target = (group * blocks + block) * 16 + lane;
+          vnni_scales[target] = scale_values[column * blocks + block];
+          std::int32_t sum = 0;
+          for (std::size_t offset = 0; offset < 16; ++offset) {
+            const std::uint8_t byte = packed_values[(column * blocks + block) * 16 + offset];
+            sum += static_cast<std::int32_t>(byte & 15) - 8;
+            sum += static_cast<std::int32_t>(byte >> 4) - 8;
+          }
+          vnni_weight_sums[target] = sum;
+        }
+      }
+    }
+  }
+
+  bool Matches(const Tensor &a, const Tensor &b, const Tensor &scales) const {
+    return TensorElementCount(a, "A") == rows * k &&
+           ((b.bytes() == source_b.bytes() && scales.bytes() == source_scales.bytes()) ||
+            (std::equal(source_b.bytes(), source_b.bytes() + n * blocks * 16, b.bytes()) &&
+             std::equal(reinterpret_cast<const float *>(source_scales.bytes()),
+                        reinterpret_cast<const float *>(source_scales.bytes()) + n * blocks,
+                        reinterpret_cast<const float *>(scales.bytes()))));
+  }
+
+  std::size_t rows;
+  std::size_t k;
+  std::size_t n;
+  std::size_t blocks;
+  Tensor source_b;
+  Tensor source_scales;
+  std::vector<std::uint8_t> vnni_weights;
+  std::vector<std::int32_t> vnni_weight_sums;
+  std::vector<float> vnni_scales;
+  std::int64_t max_participants;
+};
+
 MatMulNBitsKernel::MatMulNBitsKernel(const ONNX_LIGHT_NAMESPACE::NodeProto &node,
                                      const rt_ns::KernelContext &ctx)
     : KernelBase(ctx), attributes_(ParseAttributes(node)) {
   set_node(node);
 }
+
+MatMulNBitsKernel::~MatMulNBitsKernel() = default;
 
 void MatMulNBitsKernel::RegisterTuningSchemas() {
   static std::once_flag once;
@@ -144,6 +210,8 @@ void MatMulNBitsKernel::Configure(const rt_ns::KernelTuningParameters &parameter
       static_cast<std::size_t>(parameters.Get<std::int64_t>(kTargetBlockOutputs)),
       parameters.Get<std::int64_t>(kMaxParticipants),
   };
+  std::atomic_store_explicit(&prepared_int4_, std::shared_ptr<const PreparedInt4Plan>{},
+                             std::memory_order_release);
 }
 
 Tensor MatMulNBitsKernel::operator()(const Tensor &a, const Tensor &b, const Tensor &scales,
@@ -194,6 +262,28 @@ Tensor MatMulNBitsKernel::operator()(const Tensor &a, const Tensor &b, const Ten
   Tensor y = rt != nullptr
                  ? rt->MakeOutputTensor(0, a.data_type, output_shape, output_bytes)
                  : rt_ns::MakeOutputTensor(a.data_type, output_shape, output_bytes, nullptr);
+  std::shared_ptr<const PreparedInt4Plan> prepared;
+  if (attributes_.bits == 4 && attributes_.accuracy_level == 4 &&
+      MatMulNBitsAccuracy4Float32Available() && data_type == RuntimeDataType::FLOAT &&
+      n % 16 == 0 && k % 32 == 0) {
+    prepared = std::atomic_load_explicit(&prepared_int4_, std::memory_order_acquire);
+    if (prepared == nullptr || !prepared->Matches(a, b, scales)) {
+      std::lock_guard<std::mutex> lock(prepared_int4_mutex_);
+      prepared = std::atomic_load_explicit(&prepared_int4_, std::memory_order_relaxed);
+      if (prepared == nullptr || !prepared->Matches(a, b, scales)) {
+        prepared = std::make_shared<PreparedInt4Plan>(a, b, scales, attributes_, tuning_);
+        std::atomic_store_explicit(&prepared_int4_, prepared, std::memory_order_release);
+      }
+    }
+  }
+  if (prepared != nullptr) {
+    MatMulNBitsAccuracy4Float32(
+        reinterpret_cast<const float *>(a.bytes()), prepared->vnni_weights.data(),
+        prepared->vnni_weight_sums.data(), prepared->vnni_scales.data(),
+        bias == nullptr ? nullptr : reinterpret_cast<const float *>(bias->bytes()),
+        reinterpret_cast<float *>(y.mutable_bytes()), rows, k, n, prepared->max_participants);
+    return y;
+  }
   MatMulNBits(a.bytes(), b.bytes(), scales.bytes(), bias == nullptr ? nullptr : bias->bytes(),
               y.mutable_bytes(), static_cast<onnx_light_cpu::DataType>(a.data_type), rows, k, n,
               static_cast<std::size_t>(attributes_.bits), block_size, tuning_);

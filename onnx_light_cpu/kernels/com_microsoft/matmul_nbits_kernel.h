@@ -11,6 +11,8 @@
 #include "onnx_core/runtime/runtime_context.h"
 
 #include <cstdint>
+#include <memory>
+#include <mutex>
 
 namespace onnx_light_cpu {
 
@@ -27,6 +29,7 @@ class MatMulNBitsKernel final : public ONNX_LIGHT_NAMESPACE::core::runtime::Kern
 public:
   MatMulNBitsKernel(const ONNX_LIGHT_NAMESPACE::NodeProto &node,
                     const ONNX_LIGHT_NAMESPACE::core::runtime::KernelContext &ctx);
+  ~MatMulNBitsKernel() override;
 
   static constexpr const char *kName = "onnx_light_cpu::MatMulNBits";
   static constexpr std::uint32_t kTuningAbi = 2;
@@ -47,8 +50,12 @@ public:
   void Run(ONNX_LIGHT_NAMESPACE::core::runtime::RuntimeContext &rt) override;
 
 private:
+  struct PreparedInt4Plan;
+
   MatMulNBitsAttributes attributes_;
   MatMulNBitsExecutionTuning tuning_ = kDefaultMatMulNBitsExecutionTuning;
+  mutable std::mutex prepared_int4_mutex_;
+  mutable std::shared_ptr<const PreparedInt4Plan> prepared_int4_;
 };
 
 void RegisterMatMulNBitsKernel();

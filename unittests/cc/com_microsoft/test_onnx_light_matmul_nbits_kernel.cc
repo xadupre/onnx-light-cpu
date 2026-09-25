@@ -15,6 +15,8 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -106,6 +108,69 @@ TEST(MatMulNBitsKernel, PreservesLeadingDimensionsAndFlatScales) {
   for (std::size_t i = 0; i < y.element_count(); ++i) {
     EXPECT_FLOAT_EQ(y.AsFloat()[i], 16.0f);
   }
+}
+
+TEST(MatMulNBitsKernel, Accuracy4VnniMatchesBlockQuantizationAndRefreshesWeights) {
+  if (!onnx_light_cpu::MatMulNBitsAccuracy4Float32Available()) {
+    GTEST_SKIP() << "AVX-512 VNNI and AVX-512BW are required.";
+  }
+  constexpr std::size_t rows = 9;
+  constexpr std::size_t k = 64;
+  constexpr std::size_t n = 16;
+  constexpr std::size_t blocks = k / 32;
+  std::vector<float> a(rows * k), scales(n * blocks), bias(n);
+  std::vector<std::uint8_t> packed(n * blocks * 16);
+  for (std::size_t i = 0; i < a.size(); ++i) {
+    a[i] = static_cast<float>(static_cast<int>(i % 29) - 14) / 17.0f;
+  }
+  for (std::size_t i = 0; i < scales.size(); ++i) {
+    scales[i] = static_cast<float>(i % 7 + 1) / 128.0f;
+  }
+  for (std::size_t i = 0; i < bias.size(); ++i) {
+    bias[i] = static_cast<float>(i) / 32.0f;
+  }
+  for (std::size_t i = 0; i < packed.size(); ++i) {
+    packed[i] = static_cast<std::uint8_t>(i * 37 + 11);
+  }
+
+  const rt_ns::Tensor input = rt_ns::Tensor::FromFloat("", {rows, k}, a);
+  const rt_ns::Tensor scale_tensor = rt_ns::Tensor::FromFloat("", {n, blocks}, scales);
+  const rt_ns::Tensor bias_tensor = rt_ns::Tensor::FromFloat("", {n}, bias);
+  const onnx_light_cpu::MatMulNBitsKernel kernel{
+      MakeNode(k, n), rt_ns::KernelContext{rt_ns::OpsetId("com.microsoft", 1)}};
+
+  auto check = [&](const std::vector<std::uint8_t> &weights) {
+    const rt_ns::Tensor weight_tensor = rt_ns::Tensor::FromUint8("", {n, blocks, 16}, weights);
+    const rt_ns::Tensor output = kernel(input, weight_tensor, scale_tensor, &bias_tensor);
+    for (std::size_t row = 0; row < rows; ++row) {
+      for (std::size_t column = 0; column < n; ++column) {
+        float expected = bias[column];
+        for (std::size_t block = 0; block < blocks; ++block) {
+          const float *activation = a.data() + row * k + block * 32;
+          float maximum = 0.0f;
+          for (std::size_t offset = 0; offset < 32; ++offset) {
+            maximum = std::max(maximum, std::abs(activation[offset]));
+          }
+          const float activation_scale = maximum / 127.0f;
+          std::int32_t dot = 0;
+          for (std::size_t offset = 0; offset < 32; ++offset) {
+            const auto quantized_activation = static_cast<std::int32_t>(
+                std::nearbyint(activation[offset] * (maximum == 0.0f ? 0.0f : 127.0f / maximum)));
+            const std::uint8_t byte = weights[(column * blocks + block) * 16 + offset / 2];
+            const std::int32_t quantized_weight =
+                static_cast<std::int32_t>((byte >> ((offset % 2) * 4)) & 15) - 8;
+            dot += quantized_activation * quantized_weight;
+          }
+          expected += static_cast<float>(dot) * activation_scale * scales[column * blocks + block];
+        }
+        EXPECT_NEAR(output.AsFloat()[row * n + column], expected, 2e-6f);
+      }
+    }
+  };
+
+  check(packed);
+  packed[0] ^= 0x0f;
+  check(packed);
 }
 
 TEST(MatMulNBitsKernel, SupportsEveryNonDoubleFloatAndIntWidth) {

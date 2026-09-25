@@ -17,6 +17,15 @@
 #include <stdexcept>
 
 namespace onnx_light_cpu {
+
+#if defined(ONNX_LIGHT_CPU_HAVE_AVX512VNNI) && defined(ONNX_LIGHT_CPU_HAVE_AVX512BW)
+void MatMulNBitsAccuracy4Float32Avx512Vnni(const float *a, const std::uint8_t *packed_weights,
+                                           const std::int32_t *weight_sums,
+                                           const float *block_scales, const float *bias, float *y,
+                                           std::size_t rows, std::size_t k, std::size_t n,
+                                           std::int64_t max_participants);
+#endif
+
 namespace {
 
 struct FloatCodec {
@@ -212,6 +221,28 @@ void MatMulNBitsTyped(const void *a_raw, const std::uint8_t *b, const void *scal
 }
 
 } // namespace
+
+bool MatMulNBitsAccuracy4Float32Available() {
+#if defined(ONNX_LIGHT_CPU_HAVE_AVX512VNNI) && defined(ONNX_LIGHT_CPU_HAVE_AVX512BW)
+  return CpuSupportsAvx512Vnni() && CpuSupportsAvx512BW();
+#else
+  return false;
+#endif
+}
+
+void MatMulNBitsAccuracy4Float32(const float *a, const std::uint8_t *packed_weights,
+                                 const std::int32_t *weight_sums, const float *block_scales,
+                                 const float *bias, float *y, std::size_t rows, std::size_t k,
+                                 std::size_t n, std::int64_t max_participants) {
+#if defined(ONNX_LIGHT_CPU_HAVE_AVX512VNNI) && defined(ONNX_LIGHT_CPU_HAVE_AVX512BW)
+  if (CpuSupportsAvx512Vnni() && CpuSupportsAvx512BW()) {
+    MatMulNBitsAccuracy4Float32Avx512Vnni(a, packed_weights, weight_sums, block_scales, bias, y,
+                                          rows, k, n, max_participants);
+    return;
+  }
+#endif
+  throw std::runtime_error("MatMulNBits accuracy-level-4 kernel is unavailable.");
+}
 
 const char *MatMulNBitsInt4Implementation() {
   const auto panel = PanelImplementation();

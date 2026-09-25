@@ -52,12 +52,15 @@ the final dimension with ``N``. INT4 uses bounded panels of 8 rows, 32 output
 columns, and 32 reduction elements, with scalar, AVX2, or AVX-512 dispatch.
 Scratch is 6,144 bytes per active callback (4,096 decoded weight bytes,
 1,024 activation bytes, and 1,024 accumulator bytes), independent of matrix
-size. INT2/INT8 retain their allocation-free scalar path. Packed constants are
-borrowed directly on every invocation: there is no kernel preparation,
-persistent repacking, packed-weight copy, or full floating-point weight matrix.
-Inputs and outputs are excluded from scratch accounting. The registered
-peak-memory function still returns zero heap scratch; the bounded worker
-stack storage is reported separately by the projection benchmark.
+size. On AVX-512 VNNI/BW systems, FP32 INT4 with ``accuracy_level=4`` keeps
+the weights packed at four bits in a 16-column VNNI layout, reorders the
+scales, and precomputes weight sums. This uses
+``K*N/2 + 8*N*ceil(K/32)`` persistent bytes, dynamically quantizes each
+32-value activation block to INT8, and accumulates in INT32 with ``vpdpbusd``.
+Each active eight-row tile uses ``8*K + 32*ceil(K/32)`` temporary bytes.
+Other combinations retain the bounded panel or allocation-free scalar path.
+Inputs and outputs are excluded from scratch accounting. The projection
+benchmark reports both worker-local and prepared storage.
 
 Explicit zero points, deprecated ``g_idx``, provider-prepacked weights, other
 bit widths, block sizes, mixed floating-point types, and ``DOUBLE`` are
@@ -102,8 +105,9 @@ Run the reproducible parity/latency suite with
 ``python -m tools.benchmark_matmul_nbits_parity --help``. It separates
 preparation from repeated invocations using constant initializers, compares
 against ONNX Runtime, and reports scratch/copy accounting separately from
-process memory. Large vocabulary cases are opt-in because model serialization
-and ONNX Runtime preparation can require several GB.
+process memory. Pass ``--accuracy-level 4`` to exercise the INT8-accumulation
+path. Large vocabulary cases are opt-in because model serialization and ONNX
+Runtime preparation can require several GB.
 For isolated single-thread FP32 kernel measurements, build with
 ``-DONNX_LIGHT_CPU_BUILD_BENCHMARKS=ON`` and run
 ``matmul_nbits_throughput M K N repeats``. This reports input preparation,
