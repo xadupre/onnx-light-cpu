@@ -186,7 +186,11 @@ ONNX_LIGHT_CPU_FORCE_INLINE __m512 SigmoidPs(__m512 value) {
   const __m512 exponent = ExpPs(negative_abs);
   const __m512 one = _mm512_set1_ps(1.0f);
   const __mmask16 negative = _mm512_cmp_ps_mask(value, _mm512_setzero_ps(), _CMP_LT_OQ);
-  return _mm512_div_ps(Select(negative, exponent, one), _mm512_add_ps(one, exponent));
+  const __m512 denominator = _mm512_add_ps(one, exponent);
+  __m512 reciprocal = _mm512_rcp14_ps(denominator);
+  reciprocal =
+      _mm512_fmadd_ps(reciprocal, _mm512_fnmadd_ps(denominator, reciprocal, one), reciprocal);
+  return _mm512_mul_ps(Select(negative, exponent, one), reciprocal);
 }
 
 ONNX_LIGHT_CPU_FORCE_INLINE __m512 TanhPs(__m512 value) {

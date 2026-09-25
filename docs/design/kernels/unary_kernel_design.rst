@@ -57,8 +57,8 @@ Operators and types
      - Byte-valued boolean inversion; ONNX BOOL tensors are not bit-packed.
    * - ``Tanh``
      - FLOAT, FLOAT16, BFLOAT16
-     - Portable ``std::tanh`` and runtime-selected AVX2/FMA; low-precision
-       conversion uses bounded worker-local storage.
+     - Portable ``std::tanh`` and runtime-selected AVX2/FMA or AVX-512;
+       low-precision conversion uses bounded worker-local storage.
 
 Tuning and scheduling
 ---------------------
@@ -75,6 +75,11 @@ zero disables executor dispatch completely. Otherwise, larger tensors are
 divided into independent contiguous ranges and submitted to onnx-light's
 current ``CpuExecutor``. A participant limit of zero means that the session
 executor may use every participant it admits.
+
+FP32 ``Exp`` starts executor dispatch at 128 KiB and limits cache-sized work
+to three participants. FP32 ``Sigmoid`` uses up to eight AVX-512 participants
+for vectors between 96K and 256K elements. Its AVX-512 denominator remains
+in ``[1, 2]``, so one Newton-refined reciprocal replaces vector division.
 
 Dispatch and invariants
 -----------------------
@@ -111,10 +116,10 @@ then the portable path. The AVX-512 range processes 16 lanes per vector, with
 two-vector unrolling and masked tails; FP16 and BF16 share it through the
 existing worker-local FP32 conversion blocks.
 Scheduling uses the session-owned executor rather than a private pool.
-Inputs below 65,536 elements stay serial. At and above that threshold, ranges
-target at least 32,768 elements per participant, so a large one-token
-vocabulary can also use the executor. Nested calls do not submit another
-parallel region.
+On AVX-512, FP32 inputs below 32,768 elements stay serial. At and above that
+threshold, ranges target at least 16,384 elements per participant, so a large
+one-token vocabulary can also use the executor. Other dispatch levels retain
+the 65,536-element threshold. Nested calls do not submit another parallel region.
 
 The backend benchmark registry includes small and tail-heavy vectors plus
 logit tensors with shapes ``[1, 1, 202048]``, ``[1, 16, 202048]``, and
