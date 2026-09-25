@@ -27,6 +27,11 @@ std::vector<FloatKernel> FloatKernels() {
     kernels.push_back(onnx_light_cpu::TanhFloat32_AVX2_FMA);
   }
 #endif
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
+  if (onnx_light_cpu::DetectSimdLevel() >= onnx_light_cpu::SimdLevel::kAVX512) {
+    kernels.push_back(onnx_light_cpu::TanhFloat32_AVX512);
+  }
+#endif
   return kernels;
 }
 
@@ -131,6 +136,47 @@ TEST(TanhKernel, Float32DenseAndRandomBitPatterns) {
     state = state * 1664525u + 1013904223u;
     input[2 * i + 1] = std::bit_cast<float>(state);
   }
+  for (const auto kernel : FloatKernels()) {
+    kernel(input.data(), output.data(), input.size());
+    for (std::size_t i = 0; i < input.size(); ++i) {
+      ExpectTanh(input[i], output[i]);
+    }
+  }
+}
+
+TEST(TanhKernel, Float32SpecialValuesInEveryTail) {
+  for (const auto kernel : FloatKernels()) {
+    for (const float value : Corpus()) {
+      for (std::size_t count = 1; count <= 33; ++count) {
+        SCOPED_TRACE(count);
+        std::vector<float> input(count, value), output(count);
+        kernel(input.data(), output.data(), count);
+        for (const float actual : output) {
+          ExpectTanh(value, actual);
+        }
+      }
+    }
+  }
+}
+
+TEST(TanhKernel, Float32CancellationAndExponentBoundaries) {
+  std::vector<float> input;
+  // Dense coverage where exp rounds close to one, including the tiny-input cutoff.
+  for (std::uint32_t i = 0; i <= 65536; ++i) {
+    const float value = static_cast<float>(i) * 0x1p-18f;
+    input.push_back(value);
+    input.push_back(-value);
+  }
+  // exp(-2*abs(x)) changes its power-of-two scale at these half-integer boundaries.
+  for (int exponent = 0; exponent < 29; ++exponent) {
+    const float boundary = static_cast<float>((exponent + 0.5) * std::log(2.0) / 2.0);
+    for (const float value : {std::nextafter(boundary, 0.0f), boundary,
+                              std::nextafter(boundary, std::numeric_limits<float>::infinity())}) {
+      input.push_back(value);
+      input.push_back(-value);
+    }
+  }
+  std::vector<float> output(input.size());
   for (const auto kernel : FloatKernels()) {
     kernel(input.data(), output.data(), input.size());
     for (std::size_t i = 0; i < input.size(); ++i) {

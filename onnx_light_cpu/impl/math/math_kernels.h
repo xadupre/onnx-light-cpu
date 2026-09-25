@@ -162,6 +162,9 @@ void TanhFloat32_Scalar(const float *input, float *output, std::size_t count);
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
 void TanhFloat32_AVX2_FMA(const float *input, float *output, std::size_t count);
 #endif
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
+void TanhFloat32_AVX512(const float *input, float *output, std::size_t count);
+#endif
 
 void SwiGLUFloat32(const float *gate, const float *value, float *output, std::size_t count,
                    float alpha);
