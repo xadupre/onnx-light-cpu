@@ -557,7 +557,9 @@ std::size_t AttentionQueryBlock(const AttentionPlan &plan) {
   constexpr std::size_t kFullQueryBlock = 128;
   const bool has_query_dependent_bounds =
       plan.causal || plan.left_window_size >= 0 || plan.right_window_size >= 0;
-  const std::size_t target = has_query_dependent_bounds ? kBoundedQueryBlock : kFullQueryBlock;
+  const std::size_t balanced_tail_block =
+      plan.q_length > kFullQueryBlock && plan.q_length < 2 * kFullQueryBlock ? 96 : kFullQueryBlock;
+  const std::size_t target = has_query_dependent_bounds ? kBoundedQueryBlock : balanced_tail_block;
   return std::min(plan.q_length, target);
 }
 
@@ -612,7 +614,7 @@ std::size_t StreamingParticipantCount(const AttentionPlan &plan, std::size_t tot
   constexpr std::size_t kMaximumParticipants = 16;
   const bool is_short_stateless_query = plan.past_length == 0 && plan.q_length > 1 &&
                                         plan.q_length <= 16 && plan.total_kv_length <= 1024;
-  const bool is_decode_query = plan.q_length == 1 && plan.total_kv_length >= 512;
+  const bool is_decode_query = plan.q_length == 1 && plan.total_kv_length >= 128;
   const std::size_t target_fmas_per_participant =
       plan.total_kv_length <= 16
           ? kShortKvTargetFmasPerParticipant

@@ -1287,8 +1287,7 @@ void GemmFiveLoopRange(bool trans_a, bool trans_b, std::size_t M, std::size_t N,
   const std::size_t column_block =
       sizeof(T) == sizeof(double) && kind == GemmKernelKind::kAVX512 && M >= 512
           ? std::min<std::size_t>(blocking.nc, 32)
-      : sizeof(T) == sizeof(float) && blocking.nr == 32 && M <= 256 && N >= 512 && N < 2048 &&
-              K >= 512
+      : sizeof(T) == sizeof(float) && blocking.nr == 32 && M <= 256 && N >= 512 && K >= 256
           ? 16
           : selected_column_block;
   const std::size_t panel_width = std::min(blocking.nc, N);
@@ -1324,10 +1323,15 @@ void GemmFiveLoopRange(bool trans_a, bool trans_b, std::size_t M, std::size_t N,
     const double cost = static_cast<double>(std::min(blocking.mc, M)) * task_columns *
                         (k_end - k_begin) / kGemmFmasPerParallelWorkUnit;
     // Large SMT pools oversubscribe compute-bound packed GEMM. Keep all
-    // configured workers on smaller pools and prefer one worker per physical
-    // core on high-thread-count x86 servers.
+    // configured workers on smaller pools. Cache-bound rectangular projections
+    // need fewer workers than large balanced GEMMs on high-thread-count servers.
+    const bool high_thread_avx512 = kind == GemmKernelKind::kAVX512 && thread_count >= 64;
     const std::size_t participant_limit =
-        kind == GemmKernelKind::kAVX512 && thread_count >= 64 ? thread_count / 2 : thread_count;
+        high_thread_avx512 && M <= 256 && N <= 128 && K >= 2048 ? thread_count / 8
+        : high_thread_avx512 && M <= 256 && ((N >= 2048 && K <= 256) || (N <= 256 && K >= 1024))
+            ? thread_count / 4
+        : high_thread_avx512 ? thread_count / 2
+                             : thread_count;
     const std::size_t requested_blocks = std::min<std::size_t>(
         static_cast<std::size_t>(ExecutionBlockCount(static_cast<std::int64_t>(task_count), cost)),
         std::max<std::size_t>(1, participant_limit));
