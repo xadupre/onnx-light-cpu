@@ -33,4 +33,9 @@ std::size_t CastBFloat16ToFloat32_AVX2(const std::uint8_t *src, std::uint8_t *ds
                                        std::size_t count);
 #endif
 
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512DQ
+std::size_t CastInt64ToFloat32_AVX512DQ(const std::uint8_t *src, std::uint8_t *dst,
+                                        std::size_t count);
+#endif
+
 } // namespace onnx_light_cpu::detail

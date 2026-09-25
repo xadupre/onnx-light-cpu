@@ -111,6 +111,41 @@ TEST(CastKernel, Avx2IntegerConversionBoundariesMatchScalar) {
   Compare(bool_values.data(), DataType::BOOL, DataType::FLOAT, bool_values.size(), 1, 3);
 }
 
+TEST(CastKernel, Int64ToFloat32BoundariesTailsAndUnalignedBuffers) {
+  const std::array<std::int64_t, 25> values{
+      0,
+      1,
+      -1,
+      16777215,
+      16777216,
+      16777217,
+      -16777217,
+      std::numeric_limits<std::int32_t>::max(),
+      std::numeric_limits<std::int32_t>::lowest(),
+      std::int64_t{1} << 40,
+      -(std::int64_t{1} << 40),
+      (std::int64_t{1} << 53) - 1,
+      std::int64_t{1} << 53,
+      (std::int64_t{1} << 53) + 1,
+      -(std::int64_t{1} << 53) - 1,
+      std::numeric_limits<std::int64_t>::max(),
+      std::numeric_limits<std::int64_t>::lowest(),
+      3,
+      -7,
+      31,
+      -63,
+      127,
+      -255,
+      65537,
+      -1048577,
+  };
+  for (std::size_t count = 0; count <= values.size(); ++count) {
+    for (std::size_t offset = 0; offset < 8; ++offset) {
+      Compare(values.data(), DataType::INT64, DataType::FLOAT, count, offset, 7 - offset);
+    }
+  }
+}
+
 TEST(CastKernel, EmptyTailsAndUnalignedBuffers) {
   std::array<std::uint32_t, 65> values{};
   const std::array<std::uint32_t, 9> special{0u,          0x80000000u, 0x7f800000u,
@@ -240,6 +275,14 @@ TEST(CastKernel, ConversionPathAndForcedFallback) {
                  "Cast.float32_to_bfloat16.avx2");
     EXPECT_STREQ(CastConversionPath(DataType::BFLOAT16, DataType::FLOAT, 32),
                  "Cast.bfloat16_to_float32.avx2");
+  }
+#endif
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512DQ
+  if (DetectSimdLevel() >= SimdLevel::kAVX512 && CpuSupportsAvx512DQ()) {
+    EXPECT_STREQ(CastConversionPath(DataType::INT64, DataType::FLOAT, 32),
+                 "Cast.int64_to_float32.avx512dq");
+    EXPECT_STREQ(CastConversionPath(DataType::INT64, DataType::FLOAT, 32, SimdLevel::kAVX2),
+                 "Cast.scalar");
   }
 #endif
 }

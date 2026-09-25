@@ -26,6 +26,10 @@ SimdLevel DetectSimdLevel();
 /// by the operating system. AVX-512F alone is not sufficient for byte kernels.
 bool CpuSupportsAvx512BW();
 
+/// Returns whether AVX-512DQ doubleword/quadword conversion instructions are
+/// available and enabled by the operating system.
+bool CpuSupportsAvx512DQ();
+
 /// Returns whether FMA instructions are available and AVX state is enabled by
 /// the operating system.
 bool CpuSupportsFma();

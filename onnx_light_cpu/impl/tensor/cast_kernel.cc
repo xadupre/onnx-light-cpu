@@ -151,6 +151,15 @@ FastConversion SelectFastConversion(DataType from, DataType to, std::size_t coun
     }
   }
 #endif
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512DQ
+  using Int64DQ = Codec<DataType::INT64, std::int64_t>;
+  static const bool avx512dq = DetectSimdLevel() >= SimdLevel::kAVX512 && CpuSupportsAvx512DQ();
+  if (max_simd >= SimdLevel::kAVX512 && avx512dq && from == DataType::INT64 &&
+      to == DataType::FLOAT) {
+    return {&ConvertSimd<Int64DQ, Float, detail::CastInt64ToFloat32_AVX512DQ>,
+            "Cast.int64_to_float32.avx512dq"};
+  }
+#endif
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2
   using BFloat = Codec<DataType::BFLOAT16, std::uint16_t>;
   using Bool = Codec<DataType::BOOL, std::uint8_t>;

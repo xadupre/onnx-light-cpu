@@ -135,6 +135,14 @@ bool CpuSupportsAvx512BW() {
   return has_avx512bw && OsSupportsAvx512();
 }
 
+bool CpuSupportsAvx512DQ() {
+  if constexpr (kMaximumSimdLevel < SimdLevel::kAVX512)
+    return false;
+  const auto info7 = Cpuid(7);
+  const bool has_avx512dq = (info7.ebx & (1u << 17)) != 0;
+  return has_avx512dq && OsSupportsAvx512();
+}
+
 bool CpuSupportsFma() {
   const auto info1 = Cpuid(1);
   const bool has_fma = (info1.ecx & (1u << 12)) != 0;
