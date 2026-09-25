@@ -21,8 +21,7 @@ void SplitCopy4x4_AVX512(const uint8_t *source, void *const *outputs, int64_t be
   // Keep the indices as the destructive operand so GCC does not reload each source vector.
   volatile const __mmask16 full_mask_storage = 0xffff;
   const __mmask16 full_mask = full_mask_storage;
-  int64_t row = begin;
-  for (; row + 16 <= end; row += 16) {
+  const auto copy16 = [&](int64_t row) {
     const uint8_t *block = source + row * 16;
     const __m512i rows03 = _mm512_loadu_si512(block);
     const __m512i rows47 = _mm512_loadu_si512(block + 64);
@@ -36,6 +35,15 @@ void SplitCopy4x4_AVX512(const uint8_t *source, void *const *outputs, int64_t be
     _mm512_storeu_si512(output1 + row * 4, _mm512_shuffle_i64x2(low01, high01, 0xee));
     _mm512_storeu_si512(output2 + row * 4, _mm512_shuffle_i64x2(low23, high23, 0x44));
     _mm512_storeu_si512(output3 + row * 4, _mm512_shuffle_i64x2(low23, high23, 0xee));
+  };
+  int64_t row = begin;
+  for (; row + 32 <= end; row += 32) {
+    copy16(row);
+    copy16(row + 16);
+  }
+  if (row + 16 <= end) {
+    copy16(row);
+    row += 16;
   }
   for (; row < end; ++row) {
     std::memcpy(output0 + row * 4, source + row * 16, 4);
