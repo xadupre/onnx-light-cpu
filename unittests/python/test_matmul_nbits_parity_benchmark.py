@@ -90,7 +90,8 @@ class TestMatMulNBitsBenchmarkContract(ExtTestCase):
 
     def test_accuracy4_prepared_storage_accounting(self):
         memory = memory_accounting(128, 6656, 256, "float32", threads=1, accuracy_level=4)
-        self.assertEqual(memory["kernel_prepared_int8_weight_bytes"], 6656 * 256)
+        self.assertEqual(memory["kernel_prepared_packed_weight_bytes"], 6656 * 256 // 2)
+        self.assertEqual(memory["kernel_prepared_weight_sum_bytes"], 256 * 208 * 4)
         self.assertEqual(memory["kernel_prepared_scale_bytes"], 256 * 208 * 4)
         self.assertEqual(
             memory["kernel_accuracy4_workspace_bytes_per_worker"], 8 * 6656 + 8 * 208 * 4

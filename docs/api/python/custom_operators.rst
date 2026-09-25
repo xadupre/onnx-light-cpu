@@ -52,10 +52,11 @@ the final dimension with ``N``. INT4 uses bounded panels of 8 rows, 32 output
 columns, and 32 reduction elements, with scalar, AVX2, or AVX-512 dispatch.
 Scratch is 6,144 bytes per active callback (4,096 decoded weight bytes,
 1,024 activation bytes, and 1,024 accumulator bytes), independent of matrix
-size. On AVX-512 VNNI/BW systems, FP32 INT4 with ``accuracy_level=4`` prepares
-the weights once as signed bytes in a 16-column VNNI layout and reorders the
-scales. This uses ``K*N + 4*N*ceil(K/32)`` persistent bytes, dynamically
-quantizes each 32-value activation block to INT8, and accumulates in INT32.
+size. On AVX-512 VNNI/BW systems, FP32 INT4 with ``accuracy_level=4`` keeps
+the weights packed at four bits in a 16-column VNNI layout, reorders the
+scales, and precomputes weight sums. This uses
+``K*N/2 + 8*N*ceil(K/32)`` persistent bytes, dynamically quantizes each
+32-value activation block to INT8, and accumulates in INT32 with ``vpdpbusd``.
 Each active eight-row tile uses ``8*K + 32*ceil(K/32)`` temporary bytes.
 Other combinations retain the bounded panel or allocation-free scalar path.
 Inputs and outputs are excluded from scratch accounting. The projection

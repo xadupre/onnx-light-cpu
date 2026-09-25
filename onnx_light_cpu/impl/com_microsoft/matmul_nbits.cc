@@ -19,7 +19,8 @@
 namespace onnx_light_cpu {
 
 #if defined(ONNX_LIGHT_CPU_HAVE_AVX512VNNI) && defined(ONNX_LIGHT_CPU_HAVE_AVX512BW)
-void MatMulNBitsAccuracy4Float32Avx512Vnni(const float *a, const std::int8_t *packed_weights,
+void MatMulNBitsAccuracy4Float32Avx512Vnni(const float *a, const std::uint8_t *packed_weights,
+                                           const std::int32_t *weight_sums,
                                            const float *block_scales, const float *bias, float *y,
                                            std::size_t rows, std::size_t k, std::size_t n,
                                            std::int64_t max_participants);
@@ -229,14 +230,14 @@ bool MatMulNBitsAccuracy4Float32Available() {
 #endif
 }
 
-void MatMulNBitsAccuracy4Float32(const float *a, const std::int8_t *packed_weights,
-                                 const float *block_scales, const float *bias, float *y,
-                                 std::size_t rows, std::size_t k, std::size_t n,
-                                 std::int64_t max_participants) {
+void MatMulNBitsAccuracy4Float32(const float *a, const std::uint8_t *packed_weights,
+                                 const std::int32_t *weight_sums, const float *block_scales,
+                                 const float *bias, float *y, std::size_t rows, std::size_t k,
+                                 std::size_t n, std::int64_t max_participants) {
 #if defined(ONNX_LIGHT_CPU_HAVE_AVX512VNNI) && defined(ONNX_LIGHT_CPU_HAVE_AVX512BW)
   if (CpuSupportsAvx512Vnni() && CpuSupportsAvx512BW()) {
-    MatMulNBitsAccuracy4Float32Avx512Vnni(a, packed_weights, block_scales, bias, y, rows, k, n,
-                                          max_participants);
+    MatMulNBitsAccuracy4Float32Avx512Vnni(a, packed_weights, weight_sums, block_scales, bias, y,
+                                          rows, k, n, max_participants);
     return;
   }
 #endif

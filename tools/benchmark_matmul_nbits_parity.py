@@ -68,8 +68,11 @@ def memory_accounting(m, k, n, dtype, block_size=BLOCK_SIZE, *, threads=1, accur
         ),
         "kernel_full_weight_copy_bytes_per_run": 0,
         "kernel_full_input_conversion_copy_bytes_per_run": 0,
-        "kernel_prepared_int8_weight_bytes": (
-            k * n if dtype == "float32" and accuracy_level == 4 else 0
+        "kernel_prepared_packed_weight_bytes": (
+            k * n // 2 if dtype == "float32" and accuracy_level == 4 else 0
+        ),
+        "kernel_prepared_weight_sum_bytes": (
+            n * blocks * 4 if dtype == "float32" and accuracy_level == 4 else 0
         ),
         "kernel_prepared_scale_bytes": (
             n * blocks * 4 if dtype == "float32" and accuracy_level == 4 else 0
