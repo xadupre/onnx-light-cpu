@@ -578,9 +578,13 @@ def write_benchmark_markdown(
 
 
 def _pr_benchmark_markdown(
-    aggregated_rows: Sequence[dict[str, Any]], tests: Sequence[str] = ()
+    aggregated_rows: Sequence[dict[str, Any]],
+    tests: Sequence[str] = (),
+    empty_message: str | None = None,
 ) -> str:
     if not aggregated_rows:
+        if empty_message is not None:
+            return empty_message
         expressions = ", ".join(f"`{expression}`" for expression in tests)
         return (
             f"No corresponding backend tests were found for regular expression {expressions}.\n"
@@ -630,17 +634,21 @@ def write_pr_benchmark_markdown(
     path: str | os.PathLike[str],
     aggregated_rows: Sequence[dict[str, Any]],
     tests: Sequence[str] = (),
+    empty_message: str | None = None,
 ) -> None:
     """Writes the concise pull request benchmark table."""
     output = Path(path)
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(_pr_benchmark_markdown(aggregated_rows, tests), encoding="utf-8")
+    output.write_text(
+        _pr_benchmark_markdown(aggregated_rows, tests, empty_message), encoding="utf-8"
+    )
 
 
 def post_benchmark_markdown(
     pull_request: str,
     aggregated_rows: Sequence[dict[str, Any]],
     tests: Sequence[str] = (),
+    empty_message: str | None = None,
 ) -> None:
     """Adds aggregated benchmark data to a pull request with GitHub CLI."""
     command = ["gh", "pr", "comment"]
@@ -649,7 +657,7 @@ def post_benchmark_markdown(
     command.extend(["--edit-last", "--create-if-none", "--body-file", "-"])
     subprocess.run(
         command,
-        input=_pr_benchmark_markdown(aggregated_rows, tests),
+        input=_pr_benchmark_markdown(aggregated_rows, tests, empty_message),
         text=True,
         check=True,
     )

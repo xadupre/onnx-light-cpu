@@ -178,10 +178,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.markdown:
             write_benchmark_markdown(args.markdown, aggregated_rows, **comparison)
         report_rows = comparison.get("comparison_rows", aggregated_rows)
+        empty_message = (
+            f"No comparable benchmark cases were found for dtypes "
+            f"`{args.compare_dtypes[0]}` and `{args.compare_dtypes[1]}`.\n"
+            if args.compare_dtypes and aggregated_rows and not report_rows
+            else None
+        )
+        empty_report = {"empty_message": empty_message} if empty_message is not None else {}
         if args.pr_markdown:
-            write_pr_benchmark_markdown(args.pr_markdown, report_rows, tests)
+            write_pr_benchmark_markdown(args.pr_markdown, report_rows, tests, **empty_report)
         if args.pr is not None:
-            post_benchmark_markdown(args.pr, report_rows, tests)
+            post_benchmark_markdown(args.pr, report_rows, tests, **empty_report)
         print(
             f"Wrote {len(raw_rows)} measurements for {len(aggregated_rows)} cases "
             f"to {args.output}"

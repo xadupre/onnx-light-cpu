@@ -256,6 +256,37 @@ class TestBenchmarkCli(ExtTestCase):
                     pr_markdown.read_text(encoding="utf-8"),
                 )
 
+        rows = [
+            {
+                **row,
+                "case": row["case"].replace("abs_n1024", "cast_float32_to"),
+                "operator": "Cast",
+            }
+            for row in rows
+        ]
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "benchmark.xlsx"
+            pr_markdown = Path(temporary) / "pr.md"
+            with redirect_stdout(io.StringIO()):
+                main(
+                    [
+                        "benchmark",
+                        "--tests",
+                        "^test_cpu_cast_",
+                        "--compare-dtypes",
+                        "float16",
+                        "bfloat16",
+                        "--output",
+                        str(output),
+                        "--pr-markdown",
+                        str(pr_markdown),
+                    ]
+                )
+            self.assertEqual(
+                pr_markdown.read_text(encoding="utf-8"),
+                "No comparable benchmark cases were found for dtypes `float16` and `bfloat16`.\n",
+            )
+
     def test_rejects_unknown_dtype(self):
         with self.assertRaisesRegex(ValueError, "unknown dtype"):
             normalize_dtypes(["complex128"])
