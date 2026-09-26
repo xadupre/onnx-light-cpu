@@ -29,6 +29,7 @@ TEST(SimdLevel, FeatureMaskedHost) {
   const SimdLevel level = std::strcmp(expected, "SSE2") == 0 ? SimdLevel::kSSE2 : SimdLevel::kAVX;
   EXPECT_EQ(DetectSimdLevel(), level);
   EXPECT_FALSE(CpuSupportsAvx512BW());
+  EXPECT_FALSE(CpuSupportsAvx512DQ());
   EXPECT_FALSE(CpuSupportsAvx512Fp16());
   EXPECT_FALSE(CpuSupportsAvx512Bf16());
   EXPECT_FALSE(CpuSupportsAvx512Vnni());
@@ -44,6 +45,7 @@ TEST(SimdLevel, FeatureMaskedHost) {
 TEST(SimdLevel, HigherInstructionSetsRespectAvx2Ceiling) {
   if constexpr (ONNX_LIGHT_CPU_MAX_SIMD_LEVEL <= static_cast<int>(SimdLevel::kAVX2)) {
     EXPECT_FALSE(CpuSupportsAvx512BW());
+    EXPECT_FALSE(CpuSupportsAvx512DQ());
     EXPECT_FALSE(CpuSupportsAvx512Fp16());
     EXPECT_FALSE(CpuSupportsAvx512Bf16());
     EXPECT_FALSE(CpuSupportsAvx512Vnni());
