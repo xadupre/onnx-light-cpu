@@ -5,12 +5,20 @@
 #include "onnx_light_cpu/impl/tensor/split_kernel.h"
 
 #include "onnx_light_cpu/impl/execution.h"
+#include "onnx_light_cpu/impl/simd_level.h"
 
 #include <algorithm>
 #include <cstring>
 #include <limits>
 
 namespace onnx_light_cpu {
+
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
+void SplitCopy4x4_AVX512(const uint8_t *source, void *const *outputs, int64_t begin, int64_t end);
+#endif
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2
+void SplitCopy4x4_AVX2(const uint8_t *source, void *const *outputs, int64_t begin, int64_t end);
+#endif
 
 namespace {
 
@@ -89,8 +97,37 @@ void SplitCopyOutputs(const void *data, std::span<void *const> outputs, int64_t 
   if (rows == 0 || input_row_bytes == 0) {
     return;
   }
+  enum class Split4x4Isa { kNone, kAvx2, kAvx512 };
+  Split4x4Isa split4x4_isa = Split4x4Isa::kNone;
+  const bool split4x4_layout = input_row_bytes == 16 && outputs.size() == 4 &&
+                               std::all_of(output_row_bytes.begin(), output_row_bytes.end(),
+                                           [](std::size_t width) { return width == 4; });
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
+  static const bool use_avx512 = DetectSimdLevel() >= SimdLevel::kAVX512;
+  if (split4x4_layout && use_avx512) {
+    split4x4_isa = Split4x4Isa::kAvx512;
+  }
+#endif
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2
+  static const bool use_avx2 = DetectSimdLevel() >= SimdLevel::kAVX2;
+  if (split4x4_layout && use_avx2 && split4x4_isa == Split4x4Isa::kNone) {
+    split4x4_isa = Split4x4Isa::kAvx2;
+  }
+#endif
   const auto copy = [&](int64_t begin, int64_t end) {
     const auto *source = static_cast<const uint8_t *>(data);
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
+    if (split4x4_isa == Split4x4Isa::kAvx512) {
+      SplitCopy4x4_AVX512(source, outputs.data(), begin, end);
+      return;
+    }
+#endif
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2
+    if (split4x4_isa == Split4x4Isa::kAvx2) {
+      SplitCopy4x4_AVX2(source, outputs.data(), begin, end);
+      return;
+    }
+#endif
     for (int64_t row = begin; row < end; ++row) {
       std::size_t offset = 0;
       for (std::size_t output = 0; output < outputs.size(); ++output) {
@@ -105,7 +142,9 @@ void SplitCopyOutputs(const void *data, std::span<void *const> outputs, int64_t 
     }
   };
   constexpr int64_t kParallelBytes = 1024 * 1024;
-  constexpr int64_t kBlockBytes = 256 * 1024;
+  const int64_t block_bytes = split4x4_isa == Split4x4Isa::kAvx512 ? 128 * 1024
+                              : split4x4_isa == Split4x4Isa::kAvx2 ? 64 * 1024
+                                                                   : 256 * 1024;
   if (input_row_bytes > static_cast<std::size_t>(std::numeric_limits<int64_t>::max())) {
     copy(0, rows);
     return;
@@ -113,7 +152,7 @@ void SplitCopyOutputs(const void *data, std::span<void *const> outputs, int64_t 
   const int64_t parallel_rows =
       std::max<int64_t>(1, kParallelBytes / static_cast<int64_t>(input_row_bytes));
   const int64_t block_rows =
-      std::max<int64_t>(1, kBlockBytes / static_cast<int64_t>(input_row_bytes));
+      std::max<int64_t>(1, block_bytes / static_cast<int64_t>(input_row_bytes));
   const auto *executor = CurrentExecutionExecutor();
   if (rows < parallel_rows || ExecutionInParallelRegion() || executor == nullptr ||
       executor->run_blocks == nullptr || ExecutionThreadCount() <= 1) {

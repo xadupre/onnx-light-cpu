@@ -66,7 +66,40 @@ void Gather(const void *data, const Index *indices, void *output, int64_t outer,
     }
   };
   constexpr std::size_t kParallelBytes = 192 * 1024;
+  constexpr std::size_t kLargeSliceBytes = 256 * 1024;
   const std::size_t output_bytes = static_cast<std::size_t>(total) * slice_bytes;
+  if (slice_bytes >= kLargeSliceBytes &&
+      output_bytes <= static_cast<std::size_t>(std::numeric_limits<int64_t>::max())) {
+    const auto copy_bytes = [&](int64_t begin, int64_t end) {
+      const auto *source = static_cast<const uint8_t *>(data);
+      auto *destination = static_cast<uint8_t *>(output);
+      std::size_t position = static_cast<std::size_t>(begin);
+      while (position < static_cast<std::size_t>(end)) {
+        const int64_t output_slice = static_cast<int64_t>(position / slice_bytes);
+        const std::size_t offset = position % slice_bytes;
+        const int64_t source_outer = output_slice / index_count;
+        const int64_t query = output_slice % index_count;
+        int64_t index = indices[query];
+        if (index < 0) {
+          index += axis_size;
+        }
+        const std::size_t count =
+            std::min(slice_bytes - offset, static_cast<std::size_t>(end) - position);
+        std::memcpy(destination + position,
+                    source +
+                        static_cast<std::size_t>(source_outer * axis_size + index) * slice_bytes +
+                        offset,
+                    count);
+        position += count;
+      }
+    };
+    constexpr int64_t kLargeSliceBlockBytes = 512 * 1024;
+    ExecuteRanges(static_cast<int64_t>(output_bytes),
+                  ExecutionSchedule{static_cast<int64_t>(kParallelBytes), kLargeSliceBlockBytes,
+                                    ExecutionThreadCount()},
+                  int64_t{64}, copy_bytes);
+    return;
+  }
   const bool cache_sized = output_bytes < 1024 * 1024;
   const std::size_t block_bytes = cache_sized ? 64 * 1024 : 256 * 1024;
   const auto *executor = CurrentExecutionExecutor();

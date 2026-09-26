@@ -10,6 +10,7 @@
 namespace onnx_light_cpu {
 
 /// Copies contiguous slices using validated dimensions and in-range indices.
+/// Large slices are partitioned by bytes so one slice can use multiple executor participants.
 /// Input/output buffers must not overlap. All products must fit int64_t and size_t.
 void GatherSlices(const void *data, const int32_t *indices, void *output, int64_t outer,
                   int64_t axis_size, int64_t index_count, std::size_t slice_bytes);

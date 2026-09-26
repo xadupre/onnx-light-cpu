@@ -5,6 +5,7 @@
 #include "onnx_light_cpu/kernels/tensor/split_kernel.h"
 
 #include "onnx_light_cpu/impl/execution.h"
+#include "onnx_light_cpu/impl/simd_level.h"
 #include "onnx_light_cpu/impl/tensor/split_kernel.h"
 
 #include "onnx_extensions/kernels/kernels/tensor/include_tensor_kernels.h"
@@ -417,6 +418,19 @@ TEST(OnnxLightSplitKernel, RuntimeSchedulingSmallLargeSingleRowAndNested) {
   view.run_blocks = nullptr;
   Compare(Payload(DataType::FLOAT, {257, 4096}), -1, {2048, 1024, 1024});
   EXPECT_EQ(executor.dispatches, previous);
+}
+
+TEST(OnnxLightSplitKernel, NarrowFloatUsesFineGrainedSimdRanges) {
+  if (onnx_light_cpu::DetectSimdLevel() < onnx_light_cpu::SimdLevel::kAVX2) {
+    GTEST_SKIP() << "AVX2 is unavailable";
+  }
+  InlineExecutor executor;
+  onnx_light_cpu::ExecutionExecutorView view{&executor, 32, &InlineExecutor::Run};
+  onnx_light_cpu::ExecutionExecutorScope scope(&view);
+  Compare(Payload(DataType::FLOAT, {65536, 4}), -1, {1, 1, 1, 1});
+  EXPECT_EQ(executor.dispatches, 1);
+  EXPECT_GT(executor.blocks, 4);
+  EXPECT_LE(executor.blocks, 16);
 }
 
 } // namespace

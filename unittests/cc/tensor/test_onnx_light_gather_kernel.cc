@@ -349,6 +349,14 @@ TEST(OnnxLightGatherKernel, RuntimeSchedulingSmallLargeAndNested) {
   EXPECT_LE(executor.blocks, view.effective_threads);
   EXPECT_EQ(executor.maximum_depth, 1);
   executor.run_nested = false;
+  Compare(Payload(DataType::FLOAT, {4, 1048576}), Tensor::From<int32_t>("indices", {2}, {0, -4}),
+          0);
+  EXPECT_GT(executor.blocks, 2);
+  EXPECT_LE(executor.blocks, view.effective_threads);
+  Compare(Payload(DataType::FLOAT, {3, 75001}), Tensor::From<int32_t>("indices", {3}, {0, -1, 1}),
+          0);
+  EXPECT_GT(executor.blocks, 1);
+  EXPECT_LE(executor.blocks, view.effective_threads);
   Compare(Payload(DataType::FLOAT, {65537, 8}),
           Tensor::From<int32_t>("indices", {8}, {7, 0, -1, 3, 2, 1, 0, 0}), 1);
   EXPECT_GT(executor.blocks, 1);
