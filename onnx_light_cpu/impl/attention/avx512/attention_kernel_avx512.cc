@@ -102,6 +102,10 @@ AttentionSoftmaxBlockResult AttentionSoftmaxBlockFloat32_AVX512(float *scores, s
   }
   const float block_maximum = _mm512_reduce_max_ps(maximum);
   const float new_maximum = std::max(previous_maximum, block_maximum);
+  if (new_maximum == negative_infinity) {
+    std::fill_n(scores, count, 0.0f);
+    return {new_maximum, 1.0f};
+  }
   const float correction =
       previous_maximum == negative_infinity ? 0.0f : std::exp(previous_maximum - new_maximum);
   const __m512 offset = _mm512_set1_ps(new_maximum);
