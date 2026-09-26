@@ -58,6 +58,9 @@ bool SupportsElementType(int32_t element_type) {
 }
 
 const UnaryExecutionTuning &DefaultTuning(std::string_view op_type, int32_t element_type) {
+  if (op_type == "Exp" && element_type == static_cast<int32_t>(DataType::FLOAT)) {
+    return kDefaultExpFloat32ExecutionTuning;
+  }
   if (op_type == "Log" && element_type == static_cast<int32_t>(DataType::FLOAT16)) {
     return kDefaultLogFloat16ExecutionTuning;
   }

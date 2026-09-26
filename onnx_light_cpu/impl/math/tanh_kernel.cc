@@ -15,6 +15,7 @@ namespace {
 using TanhRange = void (*)(const float *, float *, std::size_t);
 
 constexpr UnaryExecutionTuning kTanhFloat32Tuning{256 * 1024, 128 * 1024, 32, false};
+constexpr UnaryExecutionTuning kTanhFloat32Avx512Tuning{128 * 1024, 64 * 1024, 32, false};
 constexpr UnaryExecutionTuning kTanhHalfTuning{128 * 1024, 64 * 1024, 32, false};
 
 TanhRange GetTanhRange() {
@@ -70,8 +71,15 @@ void TanhFloat32_Scalar(const float *input, float *output, std::size_t count) {
 
 void TanhFloat32(const float *input, float *output, std::size_t count) {
   const auto function = GetTanhRange();
+  auto tuning = kTanhFloat32Tuning;
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
+  static const bool use_avx512 = DetectSimdLevel() >= SimdLevel::kAVX512;
+  if (use_avx512) {
+    tuning = kTanhFloat32Avx512Tuning;
+  }
+#endif
   ExecuteUnaryRanges<float>(
-      count, kTanhFloat32Tuning, [input, output, function](std::int64_t begin, std::int64_t end) {
+      count, tuning, [input, output, function](std::int64_t begin, std::int64_t end) {
         function(input + begin, output + begin, static_cast<std::size_t>(end - begin));
       });
 }

@@ -569,7 +569,7 @@ TEST(OnnxLightSigmoidSoftmaxKernel, UsesRuntimeExecutorForLargeInputs) {
 }
 
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
-TEST(OnnxLightSigmoidSoftmaxKernel, Avx2SmallSigmoidUsesBoundedTeams) {
+TEST(OnnxLightSigmoidSoftmaxKernel, SmallSigmoidUsesBoundedTeams) {
   if (onnx_light_cpu::DetectSimdLevel() < onnx_light_cpu::SimdLevel::kAVX2 ||
       !onnx_light_cpu::CpuSupportsFma()) {
     GTEST_SKIP() << "AVX2/FMA is unavailable";
@@ -587,11 +587,11 @@ TEST(OnnxLightSigmoidSoftmaxKernel, Avx2SmallSigmoidUsesBoundedTeams) {
     } else {
       EXPECT_EQ(executor.dispatches, 1);
       EXPECT_GT(executor.blocks, 1);
+      const bool avx512 = onnx_light_cpu::DetectSimdLevel() >= onnx_light_cpu::SimdLevel::kAVX512;
       const std::int64_t maximum_blocks =
-          onnx_light_cpu::DetectSimdLevel() >= onnx_light_cpu::SimdLevel::kAVX512 &&
-                  count >= 48 * 1024 && count < 96 * 1024
-              ? 4
-              : (count < 96 * 1024 ? 2 : 3);
+          avx512 && count >= 96 * 1024
+              ? 8
+              : (avx512 && count >= 48 * 1024 ? 4 : (count < 96 * 1024 ? 2 : 3));
       EXPECT_LE(executor.blocks, maximum_blocks);
     }
     EXPECT_FALSE(executor.nested);

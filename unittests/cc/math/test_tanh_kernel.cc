@@ -322,4 +322,23 @@ TEST(TanhKernel, ExecutorSmallLargeAndNestedRanges) {
   }
 }
 
+TEST(TanhKernel, Float32DispatchesAtCacheSizedBoundary) {
+  if (onnx_light_cpu::DetectSimdLevel() < onnx_light_cpu::SimdLevel::kAVX512) {
+    GTEST_SKIP() << "AVX-512 is unavailable";
+  }
+  InlineExecutor executor;
+  const onnx_light_cpu::ExecutionExecutorView view{&executor, 8, InlineExecutor::Run};
+  const onnx_light_cpu::ExecutionExecutorScope scope(&view);
+  std::vector<float> input(65535, 0.5f), output(input.size());
+  onnx_light_cpu::TanhFloat32(input.data(), output.data(), 32767);
+  EXPECT_EQ(executor.dispatches, 0);
+  onnx_light_cpu::TanhFloat32(input.data(), output.data(), 32768);
+  EXPECT_EQ(executor.dispatches, 1);
+  EXPECT_EQ(executor.blocks, 2);
+  onnx_light_cpu::TanhFloat32(input.data(), output.data(), input.size());
+  EXPECT_EQ(executor.dispatches, 2);
+  EXPECT_GT(executor.blocks, 1);
+  EXPECT_LE(executor.blocks, 4);
+}
+
 } // namespace

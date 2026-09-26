@@ -119,8 +119,8 @@ template <typename T> void Sigmoid(const T *input, T *output, std::size_t count)
     static const bool avx2 = DetectSimdLevel() >= SimdLevel::kAVX2 && CpuSupportsFma();
     if (avx2 && (!avx512 || count < 256 * 1024)) {
       // Small teams amortize dispatch without waking a full pool for a short vector loop.
-      tuning = {128 * 1024, 64 * 1024, count < 96 * 1024 ? 2u : (count < 256 * 1024 ? 3u : 32u),
-                false};
+      tuning = {128 * 1024, 64 * 1024,
+                count < 96 * 1024 ? 2u : (count < 256 * 1024 ? (avx512 ? 8u : 3u) : 32u), false};
       if (avx512 && count >= 48 * 1024 && count < 96 * 1024) {
         tuning.max_participants = 4;
       }
