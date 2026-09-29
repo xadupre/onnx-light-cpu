@@ -45,10 +45,10 @@
 
 #include "onnx_light_cpu/impl/execution.h"
 #include "onnx_light_cpu/impl/math/gemm/arm/gemm_kernel_arm.h"
+#include "onnx_light_cpu/impl/math/gemm/avx/gemm_kernel_avx.h"
 #include "onnx_light_cpu/impl/math/gemm/float8/float8_conversion.h"
 #include "onnx_light_cpu/impl/math/gemm/gemm_bf16_dispatch.h"
 #include "onnx_light_cpu/impl/math/gemm/gemm_common.h"
-#include "onnx_light_cpu/impl/math/gemm/gemm_kernel_avx.h"
 #include "onnx_light_cpu/impl/math/half_conversion.h"
 
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA

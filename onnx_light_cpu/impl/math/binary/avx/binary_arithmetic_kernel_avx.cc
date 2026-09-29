@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "onnx_light_cpu/impl/math/binary/binary_arithmetic_kernel_avx.h"
+#include "onnx_light_cpu/impl/math/binary/avx/binary_arithmetic_kernel_avx.h"
 
 #include <algorithm>
 #include <immintrin.h>

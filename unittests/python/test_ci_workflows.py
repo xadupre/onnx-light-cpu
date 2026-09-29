@@ -28,6 +28,20 @@ def test_documentation_does_not_replace_onnx_light_main():
     assert "python -m pytest" not in _DOCS_WORKFLOW
 
 
+def test_source_integration_uses_matching_nanobind_abi():
+    cmake = (_ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
+    assert "nanobind_add_module(_cpuregister STABLE_ABI " in cmake
+    for workflow in (_DOCS_WORKFLOW, _CORE_WORKFLOW):
+        install_commands = [
+            line.strip()
+            for line in workflow.splitlines()
+            if "pip install" in line
+            and ("/tmp/onnx-light" in line or '"${onnx_light_source}"' in line)
+        ]
+        assert len(install_commands) == 1
+        assert "-C wheel.py-api=cp312" in install_commands[0]
+
+
 def test_onnx_light_main_integration_runs_on_every_supported_os():
     source_job = _CORE_WORKFLOW.split("  setup_onnx_light_source:", 1)[1].split(
         "  report_pr_benchmark:", 1
