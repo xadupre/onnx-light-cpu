@@ -311,6 +311,87 @@ TEST(BinaryKernelDescriptor, SameTypeSignaturesProvideAllBulkLoopFamilies) {
   }
 }
 
+TEST(BinaryKernelDescriptor, Float16ArithmeticBulkPreservesScalarSemanticsTailsAndAliasing) {
+  const std::array<std::pair<const char *, int>, 4> operations = {
+      std::pair{"Add", 14},
+      std::pair{"Sub", 14},
+      std::pair{"Mul", 14},
+      std::pair{"Div", 14},
+  };
+  const std::array<float, 13> values = {
+      0.0f,
+      -0.0f,
+      1.0f,
+      -1.0f,
+      2.0f,
+      -2.0f,
+      0.5f,
+      -0.5f,
+      65504.0f,
+      -65504.0f,
+      std::numeric_limits<float>::infinity(),
+      -std::numeric_limits<float>::infinity(),
+      std::numeric_limits<float>::quiet_NaN(),
+  };
+  for (const auto &[name, version] : operations) {
+    const BinaryKernelDescriptor descriptor(name, version, {});
+    const auto &adapter = descriptor.ResolveAdapter(
+        BinaryDataType::FLOAT16, BinaryDataType::FLOAT16, BinaryDataType::FLOAT16);
+    for (const std::size_t count : {0, 1, 7, 8, 9, 15, 16, 17, 31, 32, 33}) {
+      SCOPED_TRACE(::testing::Message() << name << " count=" << count);
+      std::vector<std::uint16_t> left(count + 1), right(count + 1), expected(count);
+      const std::uint16_t sentinel = onnx_light_cpu::detail::FloatToFloat16Bits(42.0f);
+      for (std::size_t i = 0; i < count; ++i) {
+        left[i] = onnx_light_cpu::detail::FloatToFloat16Bits(values[i % values.size()]);
+        right[i] = onnx_light_cpu::detail::FloatToFloat16Bits(values[(i * 5 + 3) % values.size()]);
+        adapter.scalar(left.data() + i, right.data() + i, expected.data() + i);
+      }
+      left[count] = sentinel;
+      right[count] = sentinel;
+
+      const auto check = [&](const std::vector<std::uint16_t> &actual) {
+        EXPECT_EQ(actual[count], sentinel);
+        for (std::size_t i = 0; i < count; ++i) {
+          const float reference = onnx_light_cpu::detail::Float16BitsToFloat(expected[i]);
+          const float value = onnx_light_cpu::detail::Float16BitsToFloat(actual[i]);
+          if (std::isnan(reference)) {
+            EXPECT_TRUE(std::isnan(value)) << i;
+          } else {
+            EXPECT_EQ(value, reference) << i;
+            EXPECT_EQ(std::signbit(value), std::signbit(reference)) << i;
+          }
+        }
+      };
+
+      std::vector<std::uint16_t> output(count + 1, sentinel);
+      adapter.bulk_contiguous(left.data(), right.data(), output.data(), count);
+      check(output);
+      output.assign(count + 1, sentinel);
+      adapter.bulk_left_scalar(left.data(), right.data(), output.data(), count);
+      for (std::size_t i = 0; i < count; ++i) {
+        adapter.scalar(left.data(), right.data() + i, expected.data() + i);
+      }
+      check(output);
+      output.assign(count + 1, sentinel);
+      adapter.bulk_right_scalar(left.data(), right.data(), output.data(), count);
+      for (std::size_t i = 0; i < count; ++i) {
+        adapter.scalar(left.data() + i, right.data(), expected.data() + i);
+      }
+      check(output);
+
+      for (std::size_t i = 0; i < count; ++i) {
+        adapter.scalar(left.data() + i, right.data() + i, expected.data() + i);
+      }
+      auto left_alias = left;
+      auto right_alias = right;
+      adapter.bulk_contiguous(left_alias.data(), right.data(), left_alias.data(), count);
+      adapter.bulk_contiguous(left.data(), right_alias.data(), right_alias.data(), count);
+      check(left_alias);
+      check(right_alias);
+    }
+  }
+}
+
 TEST(BinaryKernelDescriptor, Float16ComparisonBulkPreservesIeeeSemanticsAndTails) {
   struct ComparisonCase {
     const char *name;
