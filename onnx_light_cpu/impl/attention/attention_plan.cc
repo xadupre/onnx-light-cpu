@@ -957,7 +957,7 @@ void ComputeAttentionStreamingGeneric(const AttentionPlan &plan, const typename 
   static const bool has_avx2_fma = DetectSimdLevel() >= SimdLevel::kAVX2 && CpuSupportsFma();
   const bool use_avx2_decode_row =
       (std::is_same_v<Codec, Float32Codec> || std::is_same_v<Codec, Float16Codec>) &&
-      plan.q_length < 16 && has_avx2_fma &&
+      plan.q_length <= 16 && has_avx2_fma &&
       (plan.mask_kind == AttentionMaskKind::kNone || plan.mask_strides.kv == 1);
 #endif
 
@@ -1283,6 +1283,39 @@ void ComputeAttentionTiled(const AttentionPlan &plan, const typename Codec::Stor
   const std::size_t total_tasks = plan.batch * tasks_per_batch;
   const auto *mask_bool = static_cast<const std::uint8_t *>(mask);
   const auto *mask_float = static_cast<const float *>(mask);
+  constexpr std::size_t kMaximumSharedKvElements = 256 * 1024;
+  const std::size_t kv_heads = plan.batch * plan.kv_num_heads;
+  const std::size_t shared_k_elements = CheckedProduct(
+      {kv_heads, plan.kv_length, plan.head_dim}, "Attention", "shared packed key element count");
+  const std::size_t shared_v_elements =
+      CheckedProduct({kv_heads, plan.kv_length, plan.v_head_dim}, "Attention",
+                     "shared converted value element count");
+  // GQA/MQA tasks sharing a KV head would otherwise repack and reconvert the same rows once per
+  // query head. Keep one invocation-local copy under a fixed memory cap.
+  const bool reuse_half_kv = std::is_same_v<Codec, Float16Codec> && plan.group_size > 1 &&
+                             shared_k_elements <= kMaximumSharedKvElements &&
+                             shared_v_elements <= kMaximumSharedKvElements;
+  std::vector<typename Codec::Storage> shared_k;
+  std::vector<float> shared_v;
+  if (reuse_half_kv) {
+    shared_k.resize(shared_k_elements);
+    shared_v.resize(shared_v_elements);
+    for (std::size_t b = 0; b < plan.batch; ++b) {
+      for (std::size_t h = 0; h < plan.kv_num_heads; ++h) {
+        const std::size_t head = b * plan.kv_num_heads + h;
+        const auto *k_head = k + b * plan.k_strides.batch + h * plan.k_strides.head;
+        const auto *v_head = v + b * plan.v_strides.batch + h * plan.v_strides.head;
+        auto *packed_k = shared_k.data() + head * plan.kv_length * plan.head_dim;
+        auto *converted_v = shared_v.data() + head * plan.kv_length * plan.v_head_dim;
+        for (std::size_t row = 0; row < plan.kv_length; ++row) {
+          std::copy_n(k_head + row * plan.k_strides.sequence, plan.head_dim,
+                      packed_k + row * plan.head_dim);
+        }
+        LoadRows<Codec>(v_head, converted_v, plan.kv_length, plan.v_head_dim,
+                        plan.v_strides.sequence);
+      }
+    }
+  }
 #if defined(ONNX_LIGHT_CPU_HAVE_AVX2_FMA) || defined(ONNX_LIGHT_CPU_HAVE_AVX512)
   static const SimdLevel simd = DetectSimdLevel();
 #endif
@@ -1311,6 +1344,22 @@ void ComputeAttentionTiled(const AttentionPlan &plan, const typename Codec::Stor
 #endif
   std::size_t participants =
       StreamingParticipantCount(plan, plan.batch * plan.q_num_heads * plan.q_length);
+  if constexpr (std::is_same_v<Codec, Float16Codec>) {
+    const std::size_t total_rows = plan.batch * plan.q_num_heads * plan.q_length;
+    const std::size_t fmas_per_row =
+        (plan.head_dim + plan.v_head_dim) * std::max<std::size_t>(plan.total_kv_length, 1);
+    const std::size_t total_fmas = total_rows * fmas_per_row;
+    if (plan.layout == AttentionLayout::kRank3) {
+      constexpr std::size_t kTargetFmasPerParticipant = 250'000;
+      constexpr std::size_t kMaximumParticipants = 16;
+      const std::size_t half_participants =
+          (total_fmas + kTargetFmasPerParticipant - 1) / kTargetFmasPerParticipant;
+      participants =
+          std::max(participants, std::min({total_tasks, half_participants, kMaximumParticipants}));
+    } else if (total_fmas >= 100'000'000) {
+      participants = std::max(participants, std::min<std::size_t>(total_tasks, 24));
+    }
+  }
   if constexpr (std::is_same_v<Codec, Float32Codec>) {
     if (plan.layout == AttentionLayout::kRank3 && plan.q_length <= 128 && plan.kv_length <= 256 &&
         plan.head_dim <= 256 && plan.v_head_dim <= 256) {
@@ -1354,11 +1403,18 @@ void ComputeAttentionTiled(const AttentionPlan &plan, const typename Codec::Stor
           const std::size_t kv_h = h / plan.group_size;
           const typename Codec::Storage *q_block =
               q + b * plan.q_strides.batch + h * plan.q_strides.head + q0 * plan.q_strides.sequence;
+          const std::size_t kv_head = b * plan.kv_num_heads + kv_h;
           const typename Codec::Storage *k_head =
-              k + b * plan.k_strides.batch + kv_h * plan.k_strides.head;
+              reuse_half_kv ? shared_k.data() + kv_head * plan.kv_length * plan.head_dim
+                            : k + b * plan.k_strides.batch + kv_h * plan.k_strides.head;
+          const std::ptrdiff_t k_stride =
+              reuse_half_kv ? static_cast<std::ptrdiff_t>(plan.head_dim) : plan.k_strides.sequence;
           q_block = PackRows(q_block, rows, plan.head_dim, plan.q_strides.sequence, packed_q);
           const typename Codec::Storage *v_head =
               v + b * plan.v_strides.batch + kv_h * plan.v_strides.head;
+          const float *converted_v_head =
+              reuse_half_kv ? shared_v.data() + kv_head * plan.kv_length * plan.v_head_dim
+                            : nullptr;
           typename Codec::Storage *y_block =
               y + b * plan.y_strides.batch + h * plan.y_strides.head + q0 * plan.y_strides.sequence;
           const std::ptrdiff_t mask_base =
@@ -1408,8 +1464,8 @@ void ComputeAttentionTiled(const AttentionPlan &plan, const typename Codec::Stor
 
           for (std::size_t j0 = task_kv_start; j0 < task_kv_limit; j0 += kv_block) {
             const std::size_t columns = std::min(kv_block, task_kv_limit - j0);
-            const auto *k_block = PackRows(k_head + j0 * plan.k_strides.sequence, columns,
-                                           plan.head_dim, plan.k_strides.sequence, packed_k);
+            const auto *k_block =
+                PackRows(k_head + j0 * k_stride, columns, plan.head_dim, k_stride, packed_k);
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512
             if (use_q8_avx512) {
               AttentionScoreQ8K128D64Float32_AVX512(reinterpret_cast<const float *>(q_block),
@@ -1424,9 +1480,13 @@ void ComputeAttentionTiled(const AttentionPlan &plan, const typename Codec::Stor
               v_block = PackRows(v_head + j0 * plan.v_strides.sequence, columns, plan.v_head_dim,
                                  plan.v_strides.sequence, packed_v);
             } else {
-              LoadRows<Codec>(v_head + j0 * plan.v_strides.sequence, packed_v.data(), columns,
-                              plan.v_head_dim, plan.v_strides.sequence);
-              v_block = packed_v.data();
+              if (reuse_half_kv) {
+                v_block = converted_v_head + j0 * plan.v_head_dim;
+              } else {
+                LoadRows<Codec>(v_head + j0 * plan.v_strides.sequence, packed_v.data(), columns,
+                                plan.v_head_dim, plan.v_strides.sequence);
+                v_block = packed_v.data();
+              }
             }
 
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512
@@ -1756,7 +1816,12 @@ void ComputeAttentionFloat16Streaming(const AttentionPlan &plan, const std::uint
     ComputeAttentionSingleKey<Float16Codec>(plan, v, mask, y, past_v, nonpad_kv_seqlen);
     return;
   }
-  if (plan.past_length == 0 && plan.q_length >= 16 && plan.total_kv_length != 0) {
+  bool use_tiled = plan.past_length == 0 && plan.q_length >= 16 && plan.total_kv_length != 0;
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
+  static const bool use_avx2_short = DetectSimdLevel() >= SimdLevel::kAVX2 && CpuSupportsFma();
+  use_tiled = use_tiled && !(plan.q_length == 16 && use_avx2_short);
+#endif
+  if (use_tiled) {
     RecordExecution(plan, AttentionExecutionPath::kTiled, true, execution_info);
     ComputeAttentionTiled<Float16Codec>(plan, q, k, v, mask, y, nonpad_kv_seqlen);
     return;
