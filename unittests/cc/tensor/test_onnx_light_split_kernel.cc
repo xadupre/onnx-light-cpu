@@ -398,6 +398,10 @@ TEST(OnnxLightSplitKernel, RuntimeSchedulingSmallLargeSingleRowAndNested) {
   Compare(Payload(DataType::FLOAT, {1, 1048583}), -1, {524291, 524292});
   EXPECT_GT(executor.dispatches, previous);
   previous = executor.dispatches;
+  Compare(Payload(DataType::FLOAT16, {1048576}), 0, {262144, 524288, 262144});
+  EXPECT_EQ(executor.dispatches, previous + 1);
+  EXPECT_EQ(executor.blocks, 8);
+  previous = executor.dispatches;
   Compare(Payload(DataType::FLOAT, {262145, 4}), -1, {1, 1, 1, 1});
   EXPECT_GT(executor.dispatches, previous);
   previous = executor.dispatches;
@@ -420,7 +424,7 @@ TEST(OnnxLightSplitKernel, RuntimeSchedulingSmallLargeSingleRowAndNested) {
   EXPECT_EQ(executor.dispatches, previous);
 }
 
-TEST(OnnxLightSplitKernel, NarrowFloatUsesFineGrainedSimdRanges) {
+TEST(OnnxLightSplitKernel, NarrowFourWayUsesFineGrainedSimdRanges) {
   if (onnx_light_cpu::DetectSimdLevel() < onnx_light_cpu::SimdLevel::kAVX2) {
     GTEST_SKIP() << "AVX2 is unavailable";
   }
@@ -431,6 +435,9 @@ TEST(OnnxLightSplitKernel, NarrowFloatUsesFineGrainedSimdRanges) {
   EXPECT_EQ(executor.dispatches, 1);
   EXPECT_GT(executor.blocks, 4);
   EXPECT_LE(executor.blocks, 16);
+  Compare(Payload(DataType::FLOAT16, {65536, 4}), -1, {1, 1, 1, 1});
+  EXPECT_EQ(executor.dispatches, 2);
+  EXPECT_EQ(executor.blocks, 8);
 }
 
 } // namespace
