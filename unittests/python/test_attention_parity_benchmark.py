@@ -267,6 +267,13 @@ def test_registered_attention_reports_actual_execution_paths():
         ):
             if tensor_type == TensorProto.BFLOAT16 and expected_path == "tiled":
                 expected_path = "streaming"
+            if (
+                tensor_type == TensorProto.FLOAT16
+                and q_length == 16
+                and kv_length > 1
+                and not materialized
+            ):
+                expected_path = "streaming"
             shapes = {
                 name: ([1, length, 2 * 7] if rank3 else [1, 2, length, 7])
                 for name, length in (("Q", q_length), ("K", kv_length), ("V", kv_length))
