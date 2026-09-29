@@ -107,6 +107,9 @@ TEST(OnnxLightConcatKernel, ManyNarrowInputsAndTails) {
   for (int64_t size : {7, 8, 9, 15, 16, 17, 31, 32, 33, 63, 64, 65}) {
     Compare({Payload(DataType::FLOAT, {size}), Payload(DataType::FLOAT, {size + 1}, 19)}, 0);
   }
+  Compare({Payload(DataType::INT8, {17, 2}), Payload(DataType::INT8, {17, 1}, 19),
+           Payload(DataType::INT8, {17, 3}, 47), Payload(DataType::INT8, {17, 2}, 71)},
+          1);
 }
 
 TEST(OnnxLightConcatKernel, FloatingPointPayloadsRemainBitwiseIdentical) {
@@ -353,12 +356,17 @@ TEST(OnnxLightConcatKernel, SmallAxisZeroLargeRowsManyInputsAndNestedScheduling)
            Payload(DataType::FLOAT, {100001, 1}, 47)},
           1);
   EXPECT_EQ(executor.dispatches, 10);
+  Compare(
+      {Payload(DataType::FLOAT16, {16, 128, 64}), Payload(DataType::FLOAT16, {16, 256, 64}, 19)},
+      1);
+  EXPECT_EQ(executor.dispatches, 12);
+  EXPECT_EQ(executor.blocks, 6);
   {
     onnx_light_cpu::detail::ExecutionRegionScope region;
     Compare(many, 1);
     EXPECT_EQ(onnx_light_cpu::detail::ExecutionRegionDepth(), 1);
   }
-  EXPECT_EQ(executor.dispatches, 10);
+  EXPECT_EQ(executor.dispatches, 12);
 }
 
 } // namespace
