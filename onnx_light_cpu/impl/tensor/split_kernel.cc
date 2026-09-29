@@ -17,6 +17,7 @@ namespace onnx_light_cpu {
 void SplitCopy4x4_AVX512(const uint8_t *source, void *const *outputs, int64_t begin, int64_t end);
 #endif
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2
+void SplitCopy4x2_AVX2(const uint8_t *source, void *const *outputs, int64_t begin, int64_t end);
 void SplitCopy4x4_AVX2(const uint8_t *source, void *const *outputs, int64_t begin, int64_t end);
 #endif
 
@@ -97,33 +98,81 @@ void SplitCopyOutputs(const void *data, std::span<void *const> outputs, int64_t 
   if (rows == 0 || input_row_bytes == 0) {
     return;
   }
-  enum class Split4x4Isa { kNone, kAvx2, kAvx512 };
-  Split4x4Isa split4x4_isa = Split4x4Isa::kNone;
+  if (rows == 1) {
+    const auto copy = [&](int64_t begin, int64_t end) {
+      std::size_t output = 0;
+      std::size_t output_begin = 0;
+      while (output + 1 < outputs.size() &&
+             output_begin + output_row_bytes[output] <= static_cast<std::size_t>(begin)) {
+        output_begin += output_row_bytes[output++];
+      }
+      std::size_t position = static_cast<std::size_t>(begin);
+      while (position < static_cast<std::size_t>(end)) {
+        const std::size_t offset = position - output_begin;
+        const std::size_t count =
+            std::min(output_row_bytes[output] - offset, static_cast<std::size_t>(end) - position);
+        std::memcpy(static_cast<uint8_t *>(outputs[output]) + offset,
+                    static_cast<const uint8_t *>(data) + position, count);
+        position += count;
+        if (position == output_begin + output_row_bytes[output] && output + 1 < outputs.size()) {
+          output_begin += output_row_bytes[output++];
+        }
+      }
+    };
+    constexpr int64_t kParallelBytes = 512 * 1024;
+    constexpr int64_t kBlockBytes = 256 * 1024;
+    if (input_row_bytes <= static_cast<std::size_t>(std::numeric_limits<int64_t>::max())) {
+      ExecuteRanges(static_cast<int64_t>(input_row_bytes),
+                    ExecutionSchedule{kParallelBytes, kBlockBytes, ExecutionThreadCount()},
+                    int64_t{64}, copy);
+    } else {
+      std::size_t offset = 0;
+      for (std::size_t output = 0; output < outputs.size(); ++output) {
+        std::memcpy(outputs[output], static_cast<const uint8_t *>(data) + offset,
+                    output_row_bytes[output]);
+        offset += output_row_bytes[output];
+      }
+    }
+    return;
+  }
+  enum class SplitIsa { kNone, kAvx2_4x2, kAvx2_4x4, kAvx512_4x4 };
+  SplitIsa split_isa = SplitIsa::kNone;
+  const bool split4x2_layout = input_row_bytes == 8 && outputs.size() == 4 &&
+                               std::all_of(output_row_bytes.begin(), output_row_bytes.end(),
+                                           [](std::size_t width) { return width == 2; });
   const bool split4x4_layout = input_row_bytes == 16 && outputs.size() == 4 &&
                                std::all_of(output_row_bytes.begin(), output_row_bytes.end(),
                                            [](std::size_t width) { return width == 4; });
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512
   static const bool use_avx512 = DetectSimdLevel() >= SimdLevel::kAVX512;
   if (split4x4_layout && use_avx512) {
-    split4x4_isa = Split4x4Isa::kAvx512;
+    split_isa = SplitIsa::kAvx512_4x4;
   }
 #endif
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2
   static const bool use_avx2 = DetectSimdLevel() >= SimdLevel::kAVX2;
-  if (split4x4_layout && use_avx2 && split4x4_isa == Split4x4Isa::kNone) {
-    split4x4_isa = Split4x4Isa::kAvx2;
+  if (split4x2_layout && use_avx2) {
+    split_isa = SplitIsa::kAvx2_4x2;
+  } else if (split4x4_layout && use_avx2 && split_isa == SplitIsa::kNone) {
+    split_isa = SplitIsa::kAvx2_4x4;
   }
 #endif
   const auto copy = [&](int64_t begin, int64_t end) {
     const auto *source = static_cast<const uint8_t *>(data);
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2
+    if (split_isa == SplitIsa::kAvx2_4x2) {
+      SplitCopy4x2_AVX2(source, outputs.data(), begin, end);
+      return;
+    }
+#endif
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512
-    if (split4x4_isa == Split4x4Isa::kAvx512) {
+    if (split_isa == SplitIsa::kAvx512_4x4) {
       SplitCopy4x4_AVX512(source, outputs.data(), begin, end);
       return;
     }
 #endif
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2
-    if (split4x4_isa == Split4x4Isa::kAvx2) {
+    if (split_isa == SplitIsa::kAvx2_4x4) {
       SplitCopy4x4_AVX2(source, outputs.data(), begin, end);
       return;
     }
@@ -142,15 +191,17 @@ void SplitCopyOutputs(const void *data, std::span<void *const> outputs, int64_t 
     }
   };
   constexpr int64_t kParallelBytes = 1024 * 1024;
-  const int64_t block_bytes = split4x4_isa == Split4x4Isa::kAvx512 ? 128 * 1024
-                              : split4x4_isa == Split4x4Isa::kAvx2 ? 64 * 1024
-                                                                   : 256 * 1024;
+  const int64_t parallel_bytes = split_isa == SplitIsa::kAvx2_4x2 ? 192 * 1024 : kParallelBytes;
+  const int64_t block_bytes = split_isa == SplitIsa::kAvx512_4x4 ? 128 * 1024
+                              : split_isa == SplitIsa::kAvx2_4x2 || split_isa == SplitIsa::kAvx2_4x4
+                                  ? 64 * 1024
+                                  : 256 * 1024;
   if (input_row_bytes > static_cast<std::size_t>(std::numeric_limits<int64_t>::max())) {
     copy(0, rows);
     return;
   }
   const int64_t parallel_rows =
-      std::max<int64_t>(1, kParallelBytes / static_cast<int64_t>(input_row_bytes));
+      std::max<int64_t>(1, parallel_bytes / static_cast<int64_t>(input_row_bytes));
   const int64_t block_rows =
       std::max<int64_t>(1, block_bytes / static_cast<int64_t>(input_row_bytes));
   const auto *executor = CurrentExecutionExecutor();

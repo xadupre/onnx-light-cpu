@@ -137,7 +137,9 @@ void SigmoidHalf(const std::uint16_t *input, std::uint16_t *output, std::size_t 
                  DecodeBlock decode, EncodeBlock encode) {
   UnaryExecutionTuning tuning = kActivationExecutionTuning;
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
-  static const bool avx2 = DetectSimdLevel() == SimdLevel::kAVX2 && CpuSupportsFma();
+  static const SimdLevel simd_level = DetectSimdLevel();
+  static const bool avx2 = CpuSupportsFma() && (simd_level == SimdLevel::kAVX2 ||
+                                                (float16 && simd_level >= SimdLevel::kAVX2));
   if (avx2) {
     tuning = {128 * 1024, 64 * 1024, count < 512 * 1024 ? 2u : 32u, false};
   }
@@ -146,7 +148,7 @@ void SigmoidHalf(const std::uint16_t *input, std::uint16_t *output, std::size_t 
 #if defined(ONNX_LIGHT_CPU_HAVE_AVX2_FMA) && defined(ONNX_LIGHT_CPU_HAVE_F16C)
     if constexpr (float16) {
       static const bool fused =
-          DetectSimdLevel() == SimdLevel::kAVX2 && CpuSupportsFma() && CpuSupportsF16C();
+          DetectSimdLevel() >= SimdLevel::kAVX2 && CpuSupportsFma() && CpuSupportsF16C();
       if (fused) {
         SigmoidFloat16_AVX2_FMA(input + begin, output + begin,
                                 static_cast<std::size_t>(end - begin));
@@ -267,7 +269,15 @@ void SoftmaxHalfLastAxis(const std::uint16_t *input, std::uint16_t *output, std:
     for (std::int64_t row = begin; row < end; ++row) {
       const std::size_t offset = static_cast<std::size_t>(row * columns);
       decode(input + offset, buffer.data(), buffer.size());
-      SoftmaxLastAxis(buffer.data(), buffer.data(), 1, columns);
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
+      static const bool use_avx2_fma = DetectSimdLevel() >= SimdLevel::kAVX2 && CpuSupportsFma();
+      if (use_avx2_fma) {
+        SoftmaxFloat32_AVX2_FMA(buffer.data(), buffer.data(), 1, static_cast<std::size_t>(columns));
+      } else
+#endif
+      {
+        SoftmaxLastAxis(buffer.data(), buffer.data(), 1, columns);
+      }
       encode(buffer.data(), output + offset, buffer.size());
     }
   });

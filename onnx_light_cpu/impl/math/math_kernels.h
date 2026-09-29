@@ -203,6 +203,12 @@ void PowFloat32LeftScalar_AVX2_FMA(float base, const float *exponent, float *out
                                    std::size_t count);
 void PowFloat32RightScalar_AVX2_FMA(const float *base, float exponent, float *output,
                                     std::size_t count);
+#ifdef ONNX_LIGHT_CPU_HAVE_F16C
+void PowFloat16RightScalar_AVX2_FMA(const std::uint16_t *base, float exponent,
+                                    std::uint16_t *output, std::size_t count);
+bool PowFloat16LeftScalarInt32_AVX2_FMA(std::uint16_t base, const std::int32_t *exponent,
+                                        std::uint16_t *output, std::size_t count);
+#endif
 #endif
 
 /// Computes elementwise natural logarithm: out[i] = log(input[i]) for float64.

@@ -20,6 +20,8 @@
 
 #include "onnx_light_cpu/impl/math/gemm/avx512fp16/gemm_kernel_avx512fp16.h"
 
+#include "onnx_light_cpu/impl/execution.h"
+
 #include <array>
 #include <cassert>
 #include <cstring>
@@ -34,6 +36,7 @@ namespace {
 // Number of ``k`` iterations ahead to issue a software prefetch for the next
 // ``B`` row; see the identical rationale in gemm_kernel.cc.
 constexpr int kGemmPrefetchDistanceK = 4;
+constexpr std::size_t kMaximumPackedK = 512;
 
 inline void PrefetchT0(const std::uint16_t *ptr) {
   _mm_prefetch(reinterpret_cast<const char *>(ptr), _MM_HINT_T0);
@@ -67,11 +70,16 @@ void GemmMicroKernel_AVX512FP16(std::size_t mr, std::size_t nb, std::size_t K, f
   // so widen each of its ``mr * K`` FLOAT16 entries to float32 exactly once
   // instead of re-widening the same scalar with every column block (the
   // previous version paid this conversion ``nb / 16`` times over).
-  std::array<std::vector<float>, kGemmAVX512MR> a_widened;
+  assert(K <= kMaximumPackedK && "K exceeds the packed micro-kernel depth");
+  alignas(64) std::array<std::array<float, kMaximumPackedK>, kGemmAVX512MR> a_widened;
   for (std::size_t r = 0; r < mr; ++r) {
-    a_widened[r].resize(K);
     const std::uint16_t *arow = Apack + r * K;
-    for (std::size_t k = 0; k < K; ++k) {
+    std::size_t k = 0;
+    for (; k + 16 <= K; k += 16) {
+      const __m256h values = _mm256_loadu_ph(reinterpret_cast<const void *>(arow + k));
+      _mm512_store_ps(a_widened[r].data() + k, _mm512_cvtxph_ps(values));
+    }
+    for (; k < K; ++k) {
       a_widened[r][k] = WidenHalfScalar(arow + k);
     }
   }
@@ -124,6 +132,60 @@ void GemmMicroKernel_AVX512FP16(std::size_t mr, std::size_t nb, std::size_t K, f
     GemmMicroKernel_ScalarFp16(mr, nb - n, K, alpha, beta, Bmat, N, Crow_base, Cstride, Yrow_base,
                                Ystride, n0 + n, mode, Apack);
   }
+}
+
+void GemmFloat16SkinnyN_AVX512FP16(std::size_t M, std::size_t K, float alpha,
+                                   const std::uint16_t *A, const std::uint16_t *B, float *Y) {
+  std::vector<float> widened_b(K);
+  std::size_t depth = 0;
+  for (; depth + 16 <= K; depth += 16) {
+    const __m256h values = _mm256_loadu_ph(reinterpret_cast<const void *>(B + depth));
+    _mm512_storeu_ps(widened_b.data() + depth, _mm512_cvtxph_ps(values));
+  }
+  for (; depth < K; ++depth) {
+    widened_b[depth] = WidenHalfScalar(B + depth);
+  }
+
+  const double cost = static_cast<double>(K) / 32768.0;
+  ExecuteRanges(static_cast<std::int64_t>(M), cost, [&](std::int64_t begin, std::int64_t end) {
+    std::int64_t row = begin;
+    for (; row + 4 <= end; row += 4) {
+      __m512 accumulators[4] = {_mm512_setzero_ps(), _mm512_setzero_ps(), _mm512_setzero_ps(),
+                                _mm512_setzero_ps()};
+      std::size_t k = 0;
+      for (; k + 16 <= K; k += 16) {
+        const __m512 b = _mm512_loadu_ps(widened_b.data() + k);
+        for (std::size_t r = 0; r < 4; ++r) {
+          const std::uint16_t *a = A + (static_cast<std::size_t>(row) + r) * K + k;
+          const __m256h values = _mm256_loadu_ph(reinterpret_cast<const void *>(a));
+          accumulators[r] = _mm512_fmadd_ps(_mm512_cvtxph_ps(values), b, accumulators[r]);
+        }
+      }
+      for (std::size_t r = 0; r < 4; ++r) {
+        const std::uint16_t *a = A + (static_cast<std::size_t>(row) + r) * K;
+        float sum = _mm512_reduce_add_ps(accumulators[r]);
+        for (std::size_t tail = k; tail < K; ++tail) {
+          sum += WidenHalfScalar(a + tail) * widened_b[tail];
+        }
+        Y[static_cast<std::size_t>(row) + r] = alpha * sum;
+      }
+    }
+    for (; row < end; ++row) {
+      const std::uint16_t *a = A + static_cast<std::size_t>(row) * K;
+      __m512 accumulator = _mm512_setzero_ps();
+      std::size_t k = 0;
+      for (; k + 16 <= K; k += 16) {
+        const __m256h values = _mm256_loadu_ph(reinterpret_cast<const void *>(a + k));
+        accumulator = _mm512_fmadd_ps(_mm512_cvtxph_ps(values),
+                                      _mm512_loadu_ps(widened_b.data() + k), accumulator);
+      }
+      float sum = _mm512_reduce_add_ps(accumulator);
+      for (; k < K; ++k) {
+        sum += WidenHalfScalar(a + k) * widened_b[k];
+      }
+      Y[row] = alpha * sum;
+    }
+  });
 }
 
 } // namespace onnx_light_cpu

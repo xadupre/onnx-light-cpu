@@ -21,8 +21,9 @@ struct BinaryArithmeticBulkFunctions {
   Fn right_scalar;
 };
 
-/// Binary PR02 FP32/FP64 SIMD arithmetic kernels for ``Add``, ``Sub``, ``Mul``
-/// and ``Div``. Each operator provides three entry points that mirror
+/// Binary PR02 FP32/FP64 SIMD arithmetic kernels and FLOAT16 bulk dispatch for
+/// ``Add``, ``Sub``, ``Mul`` and ``Div``. Each FP32/FP64 operator provides
+/// three entry points that mirror
 /// ``BinaryBroadcastPlan::LoopFamily``:
 ///
 /// * ``Contiguous``  -- ``out[i] = a[i] OP b[i]`` for two equal-length arrays.
@@ -58,6 +59,10 @@ const BinaryArithmeticBulkFunctions &BinaryAddFloat32BulkFunctions();
 const BinaryArithmeticBulkFunctions &BinarySubFloat32BulkFunctions();
 const BinaryArithmeticBulkFunctions &BinaryMulFloat32BulkFunctions();
 const BinaryArithmeticBulkFunctions &BinaryDivFloat32BulkFunctions();
+const BinaryArithmeticBulkFunctions &BinaryAddFloat16BulkFunctions();
+const BinaryArithmeticBulkFunctions &BinarySubFloat16BulkFunctions();
+const BinaryArithmeticBulkFunctions &BinaryMulFloat16BulkFunctions();
+const BinaryArithmeticBulkFunctions &BinaryDivFloat16BulkFunctions();
 
 void BinaryPReluFloat32Contiguous(const float *left, const float *right, float *out,
                                   std::size_t count);
@@ -108,6 +113,23 @@ void BinaryPReluFloat32Right_AVX512(const float *left, float right, float *out, 
 bool BinarySquareInt32_AVX512(const std::int32_t *input, std::int32_t *output, std::size_t count);
 bool BinarySquareInt64_AVX512(const std::int64_t *input, std::int64_t *output, std::size_t count);
 #endif // ONNX_LIGHT_CPU_HAVE_AVX512
+
+#ifdef ONNX_LIGHT_CPU_HAVE_F16C
+#define ONNX_LIGHT_CPU_DECLARE_BINARY_ARITH_F16C(NAME)                                             \
+  void NAME##_F16C(const std::uint16_t *left, const std::uint16_t *right, std::uint16_t *out,      \
+                   std::size_t count);                                                             \
+  void NAME##Left_F16C(std::uint16_t left, const std::uint16_t *right, std::uint16_t *out,         \
+                       std::size_t count);                                                         \
+  void NAME##Right_F16C(const std::uint16_t *left, std::uint16_t right, std::uint16_t *out,        \
+                        std::size_t count);
+
+ONNX_LIGHT_CPU_DECLARE_BINARY_ARITH_F16C(BinaryAddFloat16)
+ONNX_LIGHT_CPU_DECLARE_BINARY_ARITH_F16C(BinarySubFloat16)
+ONNX_LIGHT_CPU_DECLARE_BINARY_ARITH_F16C(BinaryMulFloat16)
+ONNX_LIGHT_CPU_DECLARE_BINARY_ARITH_F16C(BinaryDivFloat16)
+
+#undef ONNX_LIGHT_CPU_DECLARE_BINARY_ARITH_F16C
+#endif
 
 #ifdef ONNX_LIGHT_CPU_HAVE_SVE
 // Raw SVE/SVE2 implementations (SVE2 shares the same baseline SVE FP32/FP64

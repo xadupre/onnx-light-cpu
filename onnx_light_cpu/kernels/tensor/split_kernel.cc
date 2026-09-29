@@ -180,7 +180,7 @@ std::vector<Tensor> SplitKernel::Compute(const Tensor &data, int64_t axis,
     output_row_bytes.push_back(row_bytes);
     offset += row_bytes;
   }
-  if (rows > 1 && outputs.size() > 1 && offset == input_row_bytes) {
+  if (rows > 0 && outputs.size() > 1 && offset == input_row_bytes) {
     SplitCopyOutputs(data.bytes(), output_data, rows, input_row_bytes, output_row_bytes);
   } else {
     offset = 0;

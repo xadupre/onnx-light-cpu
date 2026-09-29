@@ -155,6 +155,7 @@ struct Float16Dispatch {
   float (*mean_square)(const std::uint16_t *, std::size_t);
   void (*affine)(const std::uint16_t *, const std::uint16_t *, std::uint16_t *, std::size_t, float);
   const char *path;
+  bool f16c;
 };
 
 const Float16Dispatch &GetFloat16Dispatch() {
@@ -162,10 +163,10 @@ const Float16Dispatch &GetFloat16Dispatch() {
 #ifdef ONNX_LIGHT_CPU_HAVE_RMS_F16C
     if (DetectSimdLevel() >= SimdLevel::kAVX && CpuSupportsF16C()) {
       return Float16Dispatch{&ComputeNormalizationMeanSquareFloat16_F16C,
-                             &ApplyNormalizationAffineFloat16_F16C, "f16c"};
+                             &ApplyNormalizationAffineFloat16_F16C, "f16c", true};
     }
 #endif
-    return Float16Dispatch{&MeanSquareFloat16Scalar, &AffineFloat16Scalar, "scalar"};
+    return Float16Dispatch{&MeanSquareFloat16Scalar, &AffineFloat16Scalar, "scalar", false};
   }();
   return dispatch;
 }
@@ -234,9 +235,115 @@ float ComputeNormalizationMeanSquareFloat16(const std::uint16_t *input, std::siz
   return GetFloat16Dispatch().mean_square(input, count);
 }
 
+Float32NormalizationMoments ComputeNormalizationMomentsFloat16(const std::uint16_t *input,
+                                                               std::size_t count) {
+  if (count == 0) {
+    throw std::invalid_argument("normalization reduction size must be positive.");
+  }
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX_F16C
+  if (GetFloat16Dispatch().f16c) {
+    return ComputeNormalizationMomentsFloat16_F16C(input, count);
+  }
+#endif
+  float sums[4] = {};
+  float square_sums[4] = {};
+  for (std::size_t i = 0; i < count; ++i) {
+    const float value = detail::Float16BitsToFloat(input[i]);
+    sums[i & 3] += value;
+    square_sums[i & 3] += value * value;
+  }
+  const float mean = (sums[0] + sums[1] + sums[2] + sums[3]) / static_cast<float>(count);
+  const float second_moment = (square_sums[0] + square_sums[1] + square_sums[2] + square_sums[3]) /
+                              static_cast<float>(count);
+  float variance = second_moment - mean * mean;
+  if (!(variance > CancellationFloor(second_moment, count))) {
+    float centered[4] = {};
+    for (std::size_t i = 0; i < count; ++i) {
+      const float delta = detail::Float16BitsToFloat(input[i]) - mean;
+      centered[i & 3] += delta * delta;
+    }
+    variance = (centered[0] + centered[1] + centered[2] + centered[3]) / static_cast<float>(count);
+  }
+  return {mean, variance};
+}
+
 void ApplyNormalizationAffineFloat16(const std::uint16_t *input, const std::uint16_t *scale,
                                      std::uint16_t *output, std::size_t count, float multiplier) {
   GetFloat16Dispatch().affine(input, scale, output, count, multiplier);
+}
+
+void ApplyNormalizationScaleBiasFloat16(const std::uint16_t *input, std::uint16_t *output,
+                                        std::size_t count, float multiplier, float offset) {
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX_F16C
+  if (GetFloat16Dispatch().f16c) {
+    ApplyNormalizationScaleBiasFloat16_F16C(input, output, count, multiplier, offset);
+    return;
+  }
+#endif
+  for (std::size_t i = 0; i < count; ++i) {
+    output[i] =
+        detail::FloatToFloat16Bits(detail::Float16BitsToFloat(input[i]) * multiplier + offset);
+  }
+}
+
+void ApplyLayerNormalizationFloat16(const std::uint16_t *input, const std::uint16_t *scale,
+                                    const std::uint16_t *bias, std::uint16_t *output,
+                                    std::size_t count, float center, float multiplier) {
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX_F16C
+  if (GetFloat16Dispatch().f16c) {
+    ApplyLayerNormalizationFloat16_F16C(input, scale, bias, output, count, center, multiplier);
+    return;
+  }
+#endif
+  for (std::size_t i = 0; i < count; ++i) {
+    const float normalized = detail::Float16BitsToFloat(
+        detail::FloatToFloat16Bits((detail::Float16BitsToFloat(input[i]) - center) * multiplier));
+    float value = detail::Float16BitsToFloat(
+        detail::FloatToFloat16Bits(normalized * detail::Float16BitsToFloat(scale[i])));
+    if (bias != nullptr) {
+      value += detail::Float16BitsToFloat(bias[i]);
+    }
+    output[i] = detail::FloatToFloat16Bits(value);
+  }
+}
+
+void ApplyGroupNormalizationFloat16(const std::uint16_t *input, std::uint16_t *output,
+                                    std::size_t count, float center, float multiplier, float scale,
+                                    float bias) {
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX_F16C
+  if (GetFloat16Dispatch().f16c) {
+    ApplyGroupNormalizationFloat16_F16C(input, output, count, center, multiplier, scale, bias);
+    return;
+  }
+#endif
+  for (std::size_t i = 0; i < count; ++i) {
+    const float normalized = detail::Float16BitsToFloat(
+        detail::FloatToFloat16Bits((detail::Float16BitsToFloat(input[i]) - center) * multiplier));
+    const float scaled = detail::Float16BitsToFloat(detail::FloatToFloat16Bits(normalized * scale));
+    output[i] = detail::FloatToFloat16Bits(scaled + bias);
+  }
+}
+
+void LpNormalizationFloat16(const std::uint16_t *input, std::uint16_t *output, std::size_t vectors,
+                            std::size_t width) {
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX_F16C
+  if (GetFloat16Dispatch().f16c) {
+    LpNormalizationFloat16_F16C(input, output, vectors, width);
+    return;
+  }
+#endif
+  for (std::size_t vector = 0; vector < vectors; ++vector) {
+    const std::size_t base = vector * width;
+    double sums[4] = {};
+    for (std::size_t i = 0; i < width; ++i) {
+      const double value = detail::Float16BitsToFloat(input[base + i]);
+      sums[i & 3] += value * value;
+    }
+    const double square_sum = sums[0] + sums[1] + sums[2] + sums[3];
+    const double norm = std::sqrt(square_sum);
+    const float inverse = norm == 0.0 ? 0.0F : static_cast<float>(1.0 / norm);
+    ApplyNormalizationScaleBiasFloat16(input + base, output + base, width, inverse, 0.0F);
+  }
 }
 
 double ComputeNormalizationMeanSquareFloat64(const double *input, std::size_t count) {

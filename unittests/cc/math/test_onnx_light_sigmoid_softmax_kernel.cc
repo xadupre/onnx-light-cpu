@@ -468,7 +468,7 @@ TEST(OnnxLightSigmoidSoftmaxKernel, OtherTypesSoftmaxTailsExtremesAndAliasing) {
   const double inf = std::numeric_limits<double>::infinity();
   const double nan = std::numeric_limits<double>::quiet_NaN();
   for (auto type : {rt::DataType::DOUBLE, rt::DataType::FLOAT16, rt::DataType::BFLOAT16}) {
-    for (std::int64_t columns : {1, 3, 4, 5, 7, 8, 9, 15, 16, 17, 255, 257, 1025}) {
+    for (std::int64_t columns : {1, 3, 4, 5, 7, 8, 9, 15, 16, 17, 255, 257, 1023, 1024, 1025}) {
       SCOPED_TRACE(columns);
       constexpr std::int64_t rows = 6;
       std::vector<double> values(static_cast<std::size_t>(rows * columns));
@@ -619,7 +619,7 @@ TEST(OnnxLightSigmoidSoftmaxKernel, RegisteredFloat64UsesFusedAvx2Implementation
 
 #ifdef ONNX_LIGHT_CPU_HAVE_F16C
 TEST(OnnxLightSigmoidSoftmaxKernel, FusedFloat16SigmoidCoversEveryBitPattern) {
-  if (onnx_light_cpu::DetectSimdLevel() != onnx_light_cpu::SimdLevel::kAVX2 ||
+  if (onnx_light_cpu::DetectSimdLevel() < onnx_light_cpu::SimdLevel::kAVX2 ||
       !onnx_light_cpu::CpuSupportsFma() || !onnx_light_cpu::CpuSupportsF16C()) {
     GTEST_SKIP() << "AVX2/FMA/F16C is unavailable";
   }

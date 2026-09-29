@@ -147,6 +147,77 @@ TEST(BinaryKernelDescriptor, ResolvesFloat32ArithmeticDispatchOncePerAdapter) {
   }
 }
 
+TEST(BinaryKernelDescriptor, Float16PReluBulkCoversBroadcastsTailsAndAliasing) {
+  const BinaryKernelDescriptor descriptor("PRelu", 16, {});
+  const auto &adapter = descriptor.ResolveAdapter(BinaryDataType::FLOAT16, BinaryDataType::FLOAT16,
+                                                  BinaryDataType::FLOAT16);
+  const std::array<float, 13> values = {-std::numeric_limits<float>::infinity(),
+                                        -7.0f,
+                                        -1.0f,
+                                        -0.0f,
+                                        0.0f,
+                                        0.25f,
+                                        2.0f,
+                                        std::numeric_limits<float>::infinity(),
+                                        std::numeric_limits<float>::quiet_NaN(),
+                                        -0.125f,
+                                        4.0f,
+                                        -3.0f,
+                                        0.5f};
+  const std::array<float, 7> slopes = {
+      -2.0f, -0.0f, 0.0f, 0.125f, 0.5f, 2.0f, std::numeric_limits<float>::quiet_NaN()};
+  const auto encode = [](float value) { return onnx_light_cpu::detail::FloatToFloat16Bits(value); };
+  const auto expected = [&](std::uint16_t value_bits, std::uint16_t slope_bits) {
+    const float value = onnx_light_cpu::detail::Float16BitsToFloat(value_bits);
+    const float slope = onnx_light_cpu::detail::Float16BitsToFloat(slope_bits);
+    return encode(value < 0.0f ? value * slope : value);
+  };
+  const auto expect_equal = [](std::uint16_t actual, std::uint16_t wanted) {
+    EXPECT_EQ(actual, wanted);
+  };
+
+  for (std::size_t count : {7u, 8u, 9u, 31u, 32u, 33u}) {
+    SCOPED_TRACE(count);
+    std::vector<std::uint16_t> left(count);
+    std::vector<std::uint16_t> right(count);
+    for (std::size_t index = 0; index < count; ++index) {
+      left[index] = encode(values[index % values.size()]);
+      right[index] = encode(slopes[index % slopes.size()]);
+    }
+    std::vector<std::uint16_t> wanted(count);
+    for (std::size_t index = 0; index < count; ++index) {
+      wanted[index] = expected(left[index], right[index]);
+    }
+
+    std::vector<std::uint16_t> output(count);
+    adapter.bulk_contiguous(left.data(), right.data(), output.data(), count);
+    for (std::size_t index = 0; index < count; ++index) {
+      expect_equal(output[index], wanted[index]);
+    }
+    auto aliased_left = left;
+    adapter.bulk_contiguous(aliased_left.data(), right.data(), aliased_left.data(), count);
+    for (std::size_t index = 0; index < count; ++index) {
+      expect_equal(aliased_left[index], wanted[index]);
+    }
+    auto aliased_right = right;
+    adapter.bulk_contiguous(left.data(), aliased_right.data(), aliased_right.data(), count);
+    for (std::size_t index = 0; index < count; ++index) {
+      expect_equal(aliased_right[index], wanted[index]);
+    }
+
+    const std::uint16_t scalar_slope = encode(0.25f);
+    adapter.bulk_right_scalar(left.data(), &scalar_slope, output.data(), count);
+    for (std::size_t index = 0; index < count; ++index) {
+      expect_equal(output[index], expected(left[index], scalar_slope));
+    }
+    const std::uint16_t scalar_value = encode(-2.0f);
+    adapter.bulk_left_scalar(&scalar_value, right.data(), output.data(), count);
+    for (std::size_t index = 0; index < count; ++index) {
+      expect_equal(output[index], expected(scalar_value, right[index]));
+    }
+  }
+}
+
 TEST(BinaryKernelDescriptor, Mod28EnablesFloatingRemainderWithoutChangingOlderOpsets) {
   const auto &entry = GetBinaryManifestEntry("Mod");
   EXPECT_EQ(entry.since_version, 28);
@@ -307,6 +378,87 @@ TEST(BinaryKernelDescriptor, SameTypeSignaturesProvideAllBulkLoopFamilies) {
       EXPECT_NE(adapter.bulk_contiguous, nullptr) << entry.op_type;
       EXPECT_NE(adapter.bulk_left_scalar, nullptr) << entry.op_type;
       EXPECT_NE(adapter.bulk_right_scalar, nullptr) << entry.op_type;
+    }
+  }
+}
+
+TEST(BinaryKernelDescriptor, Float16ArithmeticBulkPreservesScalarSemanticsTailsAndAliasing) {
+  const std::array<std::pair<const char *, int>, 4> operations = {
+      std::pair{"Add", 14},
+      std::pair{"Sub", 14},
+      std::pair{"Mul", 14},
+      std::pair{"Div", 14},
+  };
+  const std::array<float, 13> values = {
+      0.0f,
+      -0.0f,
+      1.0f,
+      -1.0f,
+      2.0f,
+      -2.0f,
+      0.5f,
+      -0.5f,
+      65504.0f,
+      -65504.0f,
+      std::numeric_limits<float>::infinity(),
+      -std::numeric_limits<float>::infinity(),
+      std::numeric_limits<float>::quiet_NaN(),
+  };
+  for (const auto &[name, version] : operations) {
+    const BinaryKernelDescriptor descriptor(name, version, {});
+    const auto &adapter = descriptor.ResolveAdapter(
+        BinaryDataType::FLOAT16, BinaryDataType::FLOAT16, BinaryDataType::FLOAT16);
+    for (const std::size_t count : {0, 1, 7, 8, 9, 15, 16, 17, 31, 32, 33}) {
+      SCOPED_TRACE(::testing::Message() << name << " count=" << count);
+      std::vector<std::uint16_t> left(count + 1), right(count + 1), expected(count);
+      const std::uint16_t sentinel = onnx_light_cpu::detail::FloatToFloat16Bits(42.0f);
+      for (std::size_t i = 0; i < count; ++i) {
+        left[i] = onnx_light_cpu::detail::FloatToFloat16Bits(values[i % values.size()]);
+        right[i] = onnx_light_cpu::detail::FloatToFloat16Bits(values[(i * 5 + 3) % values.size()]);
+        adapter.scalar(left.data() + i, right.data() + i, expected.data() + i);
+      }
+      left[count] = sentinel;
+      right[count] = sentinel;
+
+      const auto check = [&](const std::vector<std::uint16_t> &actual) {
+        EXPECT_EQ(actual[count], sentinel);
+        for (std::size_t i = 0; i < count; ++i) {
+          const float reference = onnx_light_cpu::detail::Float16BitsToFloat(expected[i]);
+          const float value = onnx_light_cpu::detail::Float16BitsToFloat(actual[i]);
+          if (std::isnan(reference)) {
+            EXPECT_TRUE(std::isnan(value)) << i;
+          } else {
+            EXPECT_EQ(value, reference) << i;
+            EXPECT_EQ(std::signbit(value), std::signbit(reference)) << i;
+          }
+        }
+      };
+
+      std::vector<std::uint16_t> output(count + 1, sentinel);
+      adapter.bulk_contiguous(left.data(), right.data(), output.data(), count);
+      check(output);
+      output.assign(count + 1, sentinel);
+      adapter.bulk_left_scalar(left.data(), right.data(), output.data(), count);
+      for (std::size_t i = 0; i < count; ++i) {
+        adapter.scalar(left.data(), right.data() + i, expected.data() + i);
+      }
+      check(output);
+      output.assign(count + 1, sentinel);
+      adapter.bulk_right_scalar(left.data(), right.data(), output.data(), count);
+      for (std::size_t i = 0; i < count; ++i) {
+        adapter.scalar(left.data() + i, right.data(), expected.data() + i);
+      }
+      check(output);
+
+      for (std::size_t i = 0; i < count; ++i) {
+        adapter.scalar(left.data() + i, right.data() + i, expected.data() + i);
+      }
+      auto left_alias = left;
+      auto right_alias = right;
+      adapter.bulk_contiguous(left_alias.data(), right.data(), left_alias.data(), count);
+      adapter.bulk_contiguous(left.data(), right_alias.data(), right_alias.data(), count);
+      check(left_alias);
+      check(right_alias);
     }
   }
 }
@@ -564,6 +716,93 @@ TEST(BinaryKernelDescriptor, PowMixedTypesExecuteWithBaseOutputType) {
     EXPECT_NE(bfloat_mixed.bulk_left_scalar, nullptr);
     EXPECT_NE(bfloat_mixed.bulk_right_scalar, nullptr);
   }
+}
+
+TEST(BinaryKernelDescriptor, PowFloat16ScalarBroadcastsMatchScalarTailsAndSpecialValues) {
+  const BinaryKernelDescriptor pow("Pow", 15, {});
+  const std::array<float, 12> base_values = {
+      0.0f,
+      -0.0f,
+      0.5f,
+      -0.5f,
+      1.0f,
+      -1.0f,
+      2.0f,
+      -2.0f,
+      std::numeric_limits<float>::infinity(),
+      -std::numeric_limits<float>::infinity(),
+      std::numeric_limits<float>::quiet_NaN(),
+      65504.0f,
+  };
+  for (std::size_t count = 0; count <= 25; ++count) {
+    std::vector<std::uint16_t> bases(count + 2);
+    for (std::size_t i = 0; i < count; ++i) {
+      bases[i + 1] =
+          onnx_light_cpu::detail::FloatToFloat16Bits(base_values[i % base_values.size()]);
+    }
+
+    const auto check_right_scalar = [&](BinaryDataType exponent_type, const void *exponent) {
+      const auto &adapter =
+          pow.ResolveAdapter(BinaryDataType::FLOAT16, exponent_type, BinaryDataType::FLOAT16);
+      std::vector<std::uint16_t> expected(count);
+      std::vector<std::uint16_t> output(count + 2, 0x3555);
+      for (std::size_t i = 0; i < count; ++i) {
+        adapter.scalar(bases.data() + i + 1, exponent, expected.data() + i);
+      }
+      adapter.bulk_right_scalar(bases.data() + 1, exponent, output.data() + 1, count);
+      EXPECT_EQ(output.front(), 0x3555);
+      EXPECT_EQ(output.back(), 0x3555);
+      for (std::size_t i = 0; i < count; ++i) {
+        const float actual = onnx_light_cpu::detail::Float16BitsToFloat(output[i + 1]);
+        const float reference = onnx_light_cpu::detail::Float16BitsToFloat(expected[i]);
+        if (std::isnan(reference)) {
+          EXPECT_TRUE(std::isnan(actual)) << i;
+        } else {
+          EXPECT_EQ(actual, reference) << i;
+          EXPECT_EQ(std::signbit(actual), std::signbit(reference)) << i;
+        }
+      }
+    };
+
+    const std::uint16_t half_exponent = onnx_light_cpu::detail::FloatToFloat16Bits(3.0f);
+    const float float_exponent = 3.0f;
+    const float fractional_exponent = 1.375f;
+    const std::int32_t integer_exponent = 3;
+    check_right_scalar(BinaryDataType::FLOAT16, &half_exponent);
+    check_right_scalar(BinaryDataType::FLOAT, &float_exponent);
+    check_right_scalar(BinaryDataType::FLOAT, &fractional_exponent);
+    check_right_scalar(BinaryDataType::INT32, &integer_exponent);
+
+    const auto &left_scalar_adapter =
+        pow.ResolveAdapter(BinaryDataType::FLOAT16, BinaryDataType::INT32, BinaryDataType::FLOAT16);
+    const std::uint16_t scalar_base = onnx_light_cpu::detail::FloatToFloat16Bits(-1.5f);
+    std::vector<std::int32_t> exponents(count);
+    std::vector<std::uint16_t> expected(count);
+    std::vector<std::uint16_t> output(count + 2, 0x3555);
+    for (std::size_t i = 0; i < count; ++i) {
+      exponents[i] = static_cast<std::int32_t>(i % 6);
+      left_scalar_adapter.scalar(&scalar_base, exponents.data() + i, expected.data() + i);
+    }
+    left_scalar_adapter.bulk_left_scalar(&scalar_base, exponents.data(), output.data() + 1, count);
+    EXPECT_EQ(output.front(), 0x3555);
+    EXPECT_EQ(output.back(), 0x3555);
+    for (std::size_t i = 0; i < count; ++i) {
+      EXPECT_EQ(output[i + 1], expected[i]) << i;
+    }
+  }
+
+  const auto &left_scalar_adapter =
+      pow.ResolveAdapter(BinaryDataType::FLOAT16, BinaryDataType::INT32, BinaryDataType::FLOAT16);
+  const std::uint16_t scalar_base = onnx_light_cpu::detail::FloatToFloat16Bits(-1.5f);
+  const std::array<std::int32_t, 5> exponents = {-3, 0, 5, 6, 17};
+  std::array<std::uint16_t, 5> expected = {};
+  std::array<std::uint16_t, 5> output = {};
+  for (std::size_t i = 0; i < exponents.size(); ++i) {
+    left_scalar_adapter.scalar(&scalar_base, exponents.data() + i, expected.data() + i);
+  }
+  left_scalar_adapter.bulk_left_scalar(&scalar_base, exponents.data(), output.data(),
+                                       output.size());
+  EXPECT_EQ(output, expected);
 }
 
 TEST(BinaryKernelDescriptor, PowIntegerFastPathPreservesFiniteBoundaryResults) {

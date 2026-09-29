@@ -98,6 +98,69 @@ TEST(NormalizationPrimitives, HalfRoundsOnlyAfterScale) {
   }
 }
 
+TEST(NormalizationPrimitives, HalfMomentsAndNormalizationFastPathsHandleTails) {
+  for (std::size_t count : {31, 32, 33, 63, 64, 65}) {
+    SCOPED_TRACE(count);
+    std::vector<std::uint16_t> input(count), scale(count), bias(count), output(count);
+    float sums[4] = {};
+    float square_sums[4] = {};
+    for (std::size_t i = 0; i < count; ++i) {
+      const float value = (static_cast<float>(i % 17) - 8.0F) * 0.125F;
+      input[i] = FloatToFloat16Bits(value);
+      scale[i] = FloatToFloat16Bits(0.5F + static_cast<float>(i % 5) * 0.125F);
+      bias[i] = FloatToFloat16Bits((static_cast<float>(i % 3) - 1.0F) * 0.25F);
+      sums[i & 3] += value;
+      square_sums[i & 3] += value * value;
+    }
+    const float mean = (sums[0] + sums[1] + sums[2] + sums[3]) / static_cast<float>(count);
+    const float second_moment =
+        (square_sums[0] + square_sums[1] + square_sums[2] + square_sums[3]) /
+        static_cast<float>(count);
+    const auto moments = ComputeNormalizationMomentsFloat16(input.data(), count);
+    EXPECT_NEAR(moments.mean, mean, 1.0e-6F);
+    EXPECT_NEAR(moments.variance, second_moment - mean * mean, 1.0e-6F);
+
+    ApplyNormalizationScaleBiasFloat16(input.data(), output.data(), count, 0.75F, -0.125F);
+    for (std::size_t i = 0; i < count; ++i) {
+      const float value = Float16BitsToFloat(input[i]) * 0.75F - 0.125F;
+      EXPECT_EQ(output[i], FloatToFloat16Bits(value));
+    }
+
+    ApplyLayerNormalizationFloat16(input.data(), scale.data(), bias.data(), output.data(), count,
+                                   mean, 0.75F);
+    for (std::size_t i = 0; i < count; ++i) {
+      const float normalized =
+          Float16BitsToFloat(FloatToFloat16Bits((Float16BitsToFloat(input[i]) - mean) * 0.75F));
+      const float scaled =
+          Float16BitsToFloat(FloatToFloat16Bits(normalized * Float16BitsToFloat(scale[i])));
+      EXPECT_EQ(output[i], FloatToFloat16Bits(scaled + Float16BitsToFloat(bias[i])));
+    }
+
+    ApplyGroupNormalizationFloat16(input.data(), output.data(), count, mean, 0.75F, 0.625F, -0.25F);
+    for (std::size_t i = 0; i < count; ++i) {
+      const float normalized =
+          Float16BitsToFloat(FloatToFloat16Bits((Float16BitsToFloat(input[i]) - mean) * 0.75F));
+      const float scaled = Float16BitsToFloat(FloatToFloat16Bits(normalized * 0.625F));
+      EXPECT_EQ(output[i], FloatToFloat16Bits(scaled - 0.25F));
+    }
+
+    std::vector<std::uint16_t> lp_input(2 * count), lp_output(2 * count);
+    for (std::size_t i = 0; i < lp_input.size(); ++i) {
+      lp_input[i] = input[i % count];
+    }
+    LpNormalizationFloat16(lp_input.data(), lp_output.data(), 2, count);
+    double square_sum = 0.0;
+    for (std::size_t i = 0; i < count; ++i) {
+      const double value = Float16BitsToFloat(input[i]);
+      square_sum += value * value;
+    }
+    const float inverse = static_cast<float>(1.0 / std::sqrt(square_sum));
+    for (std::size_t i = 0; i < lp_output.size(); ++i) {
+      EXPECT_EQ(lp_output[i], FloatToFloat16Bits(Float16BitsToFloat(lp_input[i]) * inverse));
+    }
+  }
+}
+
 TEST(NormalizationPrimitives, HalfSubnormalsAndNanCanonicalization) {
   for (std::uint16_t bits : {0x0001, 0x03ff, 0x8001, 0x83ff, 0x7e55, 0xfe55}) {
     for (std::size_t count = 1; count <= 33; ++count) {
