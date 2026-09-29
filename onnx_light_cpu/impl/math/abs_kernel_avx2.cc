@@ -13,6 +13,23 @@ void AbsFloat16_AVX2(const uint16_t *input, uint16_t *output, std::size_t count)
   const __m256i mask = _mm256_set1_epi16(static_cast<short>(kFloat16AbsMask));
   std::size_t i = 0;
   const std::size_t stride = 16;
+  constexpr std::size_t unrolled_stride = 4 * stride;
+  const std::size_t unrolled_count = count - (count % unrolled_stride);
+  for (; i < unrolled_count; i += unrolled_stride) {
+    const __m256i v0 = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(input + i));
+    const __m256i v1 = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(input + i + stride));
+    const __m256i v2 =
+        _mm256_loadu_si256(reinterpret_cast<const __m256i *>(input + i + 2 * stride));
+    const __m256i v3 =
+        _mm256_loadu_si256(reinterpret_cast<const __m256i *>(input + i + 3 * stride));
+    _mm256_storeu_si256(reinterpret_cast<__m256i *>(output + i), _mm256_and_si256(v0, mask));
+    _mm256_storeu_si256(reinterpret_cast<__m256i *>(output + i + stride),
+                        _mm256_and_si256(v1, mask));
+    _mm256_storeu_si256(reinterpret_cast<__m256i *>(output + i + 2 * stride),
+                        _mm256_and_si256(v2, mask));
+    _mm256_storeu_si256(reinterpret_cast<__m256i *>(output + i + 3 * stride),
+                        _mm256_and_si256(v3, mask));
+  }
   const std::size_t aligned_count = count - (count % stride);
   for (; i < aligned_count; i += stride) {
     __m256i v = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(input + i));
