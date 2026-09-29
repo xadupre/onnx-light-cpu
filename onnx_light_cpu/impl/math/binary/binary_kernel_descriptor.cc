@@ -22,6 +22,12 @@
 #include <type_traits>
 
 namespace onnx_light_cpu {
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX_F16C
+void BulkFloat16PReluF16C(const void *, const void *, void *, std::size_t);
+void BulkFloat16PReluLeftF16C(const void *, const void *, void *, std::size_t);
+void BulkFloat16PReluRightF16C(const void *, const void *, void *, std::size_t);
+#endif
+
 namespace {
 
 using DT = DataType;
@@ -667,7 +673,6 @@ void BulkBfloat16PowLeft(const void *, const void *, void *, std::size_t);
 void BulkBfloat16PowRight(const void *, const void *, void *, std::size_t);
 void BulkFloat16PRelu(const void *, const void *, void *, std::size_t);
 void BulkBfloat16PRelu(const void *, const void *, void *, std::size_t);
-
 void SelectBulk(BinaryOperator op, DT left, BinaryKernelDescriptor::Adapter &adapter) {
 #define ONNX_LIGHT_CPU_BIND_BULK(STEM, T)                                                          \
   adapter.bulk_contiguous = &BulkContiguousWrapper<T, &STEM##Contiguous>;                          \
@@ -778,6 +783,15 @@ void SelectBulk(BinaryOperator op, DT left, BinaryKernelDescriptor::Adapter &ada
     break;
   case BinaryOperator::kPRelu:
     if (left == DT::FLOAT16) {
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX_F16C
+      static const bool use_f16c = DetectSimdLevel() >= SimdLevel::kAVX && CpuSupportsF16C();
+      if (use_f16c) {
+        adapter.bulk_contiguous = &BulkFloat16PReluF16C;
+        adapter.bulk_left_scalar = &BulkFloat16PReluLeftF16C;
+        adapter.bulk_right_scalar = &BulkFloat16PReluRightF16C;
+        break;
+      }
+#endif
       ONNX_LIGHT_CPU_BIND_HALF_BULK(Float16, PRelu)
     } else if (left == DT::BFLOAT16) {
       ONNX_LIGHT_CPU_BIND_HALF_BULK(Bfloat16, PRelu)
