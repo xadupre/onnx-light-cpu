@@ -8,6 +8,7 @@
 
 #include "onnx_light_cpu/impl/arm_simd_level.h"
 #include "onnx_light_cpu/impl/execution.h"
+#include "onnx_light_cpu/impl/math/half_conversion.h"
 
 #include <algorithm>
 #include <atomic>
@@ -70,6 +71,36 @@ ONNX_LIGHT_CPU_BIN_SCALAR(BinaryMulFloat64, double, *)
 ONNX_LIGHT_CPU_BIN_SCALAR(BinaryDivFloat64, double, /)
 
 #undef ONNX_LIGHT_CPU_BIN_SCALAR
+
+#define ONNX_LIGHT_CPU_HALF_SCALAR(STEM, OPCH)                                                     \
+  void STEM##_Scalar(const std::uint16_t *left, const std::uint16_t *right, std::uint16_t *out,    \
+                     std::size_t count) {                                                          \
+    for (std::size_t i = 0; i < count; ++i) {                                                      \
+      out[i] = detail::FloatToFloat16Bits(detail::Float16BitsToFloat(left[i])                      \
+                                              OPCH detail::Float16BitsToFloat(right[i]));          \
+    }                                                                                              \
+  }                                                                                                \
+  void STEM##Left_Scalar(std::uint16_t left, const std::uint16_t *right, std::uint16_t *out,       \
+                         std::size_t count) {                                                      \
+    const float scalar = detail::Float16BitsToFloat(left);                                         \
+    for (std::size_t i = 0; i < count; ++i) {                                                      \
+      out[i] = detail::FloatToFloat16Bits(scalar OPCH detail::Float16BitsToFloat(right[i]));       \
+    }                                                                                              \
+  }                                                                                                \
+  void STEM##Right_Scalar(const std::uint16_t *left, std::uint16_t right, std::uint16_t *out,      \
+                          std::size_t count) {                                                     \
+    const float scalar = detail::Float16BitsToFloat(right);                                        \
+    for (std::size_t i = 0; i < count; ++i) {                                                      \
+      out[i] = detail::FloatToFloat16Bits(detail::Float16BitsToFloat(left[i]) OPCH scalar);        \
+    }                                                                                              \
+  }
+
+ONNX_LIGHT_CPU_HALF_SCALAR(BinaryAddFloat16, +)
+ONNX_LIGHT_CPU_HALF_SCALAR(BinarySubFloat16, -)
+ONNX_LIGHT_CPU_HALF_SCALAR(BinaryMulFloat16, *)
+ONNX_LIGHT_CPU_HALF_SCALAR(BinaryDivFloat16, /)
+
+#undef ONNX_LIGHT_CPU_HALF_SCALAR
 
 void BinaryPReluFloat32_Scalar(const float *left, const float *right, float *out,
                                std::size_t count) {
@@ -513,6 +544,25 @@ const BinaryArithmeticBulkFunctions &MakeBulkFunctions() {
     return MakeBulkFunctions<T, &STEM##_Scalar, &STEM##Left_Scalar, &STEM##Right_Scalar>();        \
   }
 
+#ifdef ONNX_LIGHT_CPU_HAVE_F16C
+#define ONNX_LIGHT_CPU_DEFINE_FLOAT16_BULK_RESOLVER(PUBLIC, STEM)                                  \
+  const BinaryArithmeticBulkFunctions &PUBLIC##BulkFunctions() {                                   \
+    static const bool use_f16c = CpuSupportsF16C();                                                \
+    if (use_f16c) {                                                                                \
+      return MakeBulkFunctions<std::uint16_t, &STEM##_F16C, &STEM##Left_F16C,                      \
+                               &STEM##Right_F16C>();                                               \
+    }                                                                                              \
+    return MakeBulkFunctions<std::uint16_t, &STEM##_Scalar, &STEM##Left_Scalar,                    \
+                             &STEM##Right_Scalar>();                                               \
+  }
+#else
+#define ONNX_LIGHT_CPU_DEFINE_FLOAT16_BULK_RESOLVER(PUBLIC, STEM)                                  \
+  const BinaryArithmeticBulkFunctions &PUBLIC##BulkFunctions() {                                   \
+    return MakeBulkFunctions<std::uint16_t, &STEM##_Scalar, &STEM##Left_Scalar,                    \
+                             &STEM##Right_Scalar>();                                               \
+  }
+#endif
+
 #define ONNX_LIGHT_CPU_BIN_DISPATCH_CONTIG(PUBLIC, STEM, T)                                        \
   void PUBLIC##Contiguous(const T *left, const T *right, T *out, std::size_t count) {              \
     if (count == 0) {                                                                              \
@@ -564,7 +614,12 @@ ONNX_LIGHT_CPU_DEFINE_BULK_RESOLVER(BinarySubFloat32, BinarySubFloat32, float)
 ONNX_LIGHT_CPU_DEFINE_BULK_RESOLVER(BinaryMulFloat32, BinaryMulFloat32, float)
 ONNX_LIGHT_CPU_DEFINE_BULK_RESOLVER(BinaryDivFloat32, BinaryDivFloat32, float)
 ONNX_LIGHT_CPU_DEFINE_X86_BULK_RESOLVER(BinaryPReluFloat32, BinaryPReluFloat32, float)
+ONNX_LIGHT_CPU_DEFINE_FLOAT16_BULK_RESOLVER(BinaryAddFloat16, BinaryAddFloat16)
+ONNX_LIGHT_CPU_DEFINE_FLOAT16_BULK_RESOLVER(BinarySubFloat16, BinarySubFloat16)
+ONNX_LIGHT_CPU_DEFINE_FLOAT16_BULK_RESOLVER(BinaryMulFloat16, BinaryMulFloat16)
+ONNX_LIGHT_CPU_DEFINE_FLOAT16_BULK_RESOLVER(BinaryDivFloat16, BinaryDivFloat16)
 
+#undef ONNX_LIGHT_CPU_DEFINE_FLOAT16_BULK_RESOLVER
 #undef ONNX_LIGHT_CPU_DEFINE_X86_BULK_RESOLVER
 #undef ONNX_LIGHT_CPU_DEFINE_BULK_RESOLVER
 #undef ONNX_LIGHT_CPU_RESOLVE_ARM_BULK

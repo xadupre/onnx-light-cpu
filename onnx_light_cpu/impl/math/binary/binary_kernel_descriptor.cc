@@ -730,7 +730,11 @@ void SelectBulk(BinaryOperator op, DT left, BinaryKernelDescriptor::Adapter &ada
     } else if (left == DT::DOUBLE) {
       ONNX_LIGHT_CPU_BIND_BULK(BinaryAddFloat64, double)
     } else if (left == DT::FLOAT16) {
+#ifdef ONNX_LIGHT_CPU_HAVE_F16C
+      ONNX_LIGHT_CPU_BIND_RESOLVED_BULK(BinaryAddFloat16)
+#else
       ONNX_LIGHT_CPU_BIND_HALF_BULK(Float16, Add)
+#endif
     } else if (left == DT::BFLOAT16) {
       ONNX_LIGHT_CPU_BIND_HALF_BULK(Bfloat16, Add)
     } else {
@@ -743,7 +747,11 @@ void SelectBulk(BinaryOperator op, DT left, BinaryKernelDescriptor::Adapter &ada
     } else if (left == DT::DOUBLE) {
       ONNX_LIGHT_CPU_BIND_BULK(BinarySubFloat64, double)
     } else if (left == DT::FLOAT16) {
+#ifdef ONNX_LIGHT_CPU_HAVE_F16C
+      ONNX_LIGHT_CPU_BIND_RESOLVED_BULK(BinarySubFloat16)
+#else
       ONNX_LIGHT_CPU_BIND_HALF_BULK(Float16, Sub)
+#endif
     } else if (left == DT::BFLOAT16) {
       ONNX_LIGHT_CPU_BIND_HALF_BULK(Bfloat16, Sub)
     } else {
@@ -756,7 +764,11 @@ void SelectBulk(BinaryOperator op, DT left, BinaryKernelDescriptor::Adapter &ada
     } else if (left == DT::DOUBLE) {
       ONNX_LIGHT_CPU_BIND_BULK(BinaryMulFloat64, double)
     } else if (left == DT::FLOAT16) {
+#ifdef ONNX_LIGHT_CPU_HAVE_F16C
+      ONNX_LIGHT_CPU_BIND_RESOLVED_BULK(BinaryMulFloat16)
+#else
       ONNX_LIGHT_CPU_BIND_HALF_BULK(Float16, Mul)
+#endif
     } else if (left == DT::BFLOAT16) {
       ONNX_LIGHT_CPU_BIND_HALF_BULK(Bfloat16, Mul)
     } else {
@@ -769,7 +781,11 @@ void SelectBulk(BinaryOperator op, DT left, BinaryKernelDescriptor::Adapter &ada
     } else if (left == DT::DOUBLE) {
       ONNX_LIGHT_CPU_BIND_BULK(BinaryDivFloat64, double)
     } else if (left == DT::FLOAT16) {
+#ifdef ONNX_LIGHT_CPU_HAVE_F16C
+      ONNX_LIGHT_CPU_BIND_RESOLVED_BULK(BinaryDivFloat16)
+#else
       ONNX_LIGHT_CPU_BIND_HALF_BULK(Float16, Div)
+#endif
     } else if (left == DT::BFLOAT16) {
       ONNX_LIGHT_CPU_BIND_HALF_BULK(Bfloat16, Div)
     }
