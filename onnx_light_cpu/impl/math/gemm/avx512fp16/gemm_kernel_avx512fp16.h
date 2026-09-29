@@ -32,4 +32,7 @@ void GemmMicroKernel_AVX512FP16(std::size_t mr, std::size_t nb, std::size_t K, f
                                 std::size_t Ystride, std::size_t n0, GemmAccumMode mode,
                                 const std::uint16_t *Apack);
 
+void GemmFloat16SkinnyN_AVX512FP16(std::size_t M, std::size_t K, float alpha,
+                                   const std::uint16_t *A, const std::uint16_t *B, float *Y);
+
 } // namespace onnx_light_cpu
