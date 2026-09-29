@@ -4,6 +4,8 @@
 
 #include "onnx_light_cpu/impl/math/math_kernels.h"
 
+#include "onnx_light_cpu/impl/math/half_conversion.h"
+
 #include <immintrin.h>
 
 #include <algorithm>
@@ -647,5 +649,140 @@ void PowFloat32RightScalar_AVX2_FMA(const float *base, float exponent, float *ou
     output[i] = std::pow(base[i], exponent);
   }
 }
+
+#ifdef ONNX_LIGHT_CPU_HAVE_F16C
+namespace {
+
+void StoreFloat16(__m256 values, std::uint16_t *output) {
+  const __m128i halves = _mm256_cvtps_ph(values, _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC);
+  _mm_storeu_si128(reinterpret_cast<__m128i *>(output), halves);
+  const int nan_mask = _mm256_movemask_ps(_mm256_cmp_ps(values, values, _CMP_UNORD_Q));
+  if (nan_mask == 0) {
+    return;
+  }
+  alignas(32) float lanes[8];
+  _mm256_store_ps(lanes, values);
+  for (std::size_t lane = 0; lane < 8; ++lane) {
+    if ((nan_mask & (1 << lane)) != 0) {
+      output[lane] = detail::FloatToFloat16Bits(lanes[lane]);
+    }
+  }
+}
+
+float SmallIntegerPow(float base, std::int32_t exponent) {
+  if (exponent == 0) {
+    return 1.0f;
+  }
+  if (exponent == 1) {
+    return base;
+  }
+  const float squared = base * base;
+  float result = exponent == 2   ? squared
+                 : exponent == 3 ? squared * base
+                 : exponent == 4 ? squared * squared
+                                 : squared * squared * base;
+  if (std::isfinite(base) && std::isfinite(result) && (result != 0.0f || base == 0.0f)) {
+    return result;
+  }
+  return std::pow(base, static_cast<float>(exponent));
+}
+
+} // namespace
+
+void PowFloat16RightScalar_AVX2_FMA(const std::uint16_t *base, float exponent,
+                                    std::uint16_t *output, std::size_t count) {
+  if (exponent >= 0.0f && exponent <= 5.0f && exponent == std::floor(exponent)) {
+    const std::int32_t integer_exponent = static_cast<std::int32_t>(exponent);
+    if (integer_exponent == 0) {
+      std::fill_n(output, count, detail::FloatToFloat16Bits(1.0f));
+      return;
+    }
+    std::size_t i = 0;
+    for (; i + 8 <= count; i += 8) {
+      const __m256 x =
+          _mm256_cvtph_ps(_mm_loadu_si128(reinterpret_cast<const __m128i *>(base + i)));
+      __m256 result = x;
+      if (integer_exponent >= 2) {
+        const __m256 squared = _mm256_mul_ps(x, x);
+        result = integer_exponent == 2   ? squared
+                 : integer_exponent == 3 ? _mm256_mul_ps(squared, x)
+                 : integer_exponent == 4 ? _mm256_mul_ps(squared, squared)
+                                         : _mm256_mul_ps(_mm256_mul_ps(squared, squared), x);
+      }
+      StoreFloat16(result, output + i);
+    }
+    for (; i < count; ++i) {
+      output[i] = detail::FloatToFloat16Bits(
+          SmallIntegerPow(detail::Float16BitsToFloat(base[i]), integer_exponent));
+    }
+    return;
+  }
+
+  const __m256 y = _mm256_set1_ps(exponent);
+  std::size_t i = 0;
+  for (; i + 8 <= count; i += 8) {
+    const __m256 x = _mm256_cvtph_ps(_mm_loadu_si128(reinterpret_cast<const __m128i *>(base + i)));
+    __m256i fallback_lanes;
+    __m256 result = PowPs256Fma(x, y, fallback_lanes);
+    const int fallback_mask = _mm256_movemask_ps(_mm256_castsi256_ps(fallback_lanes));
+    if (fallback_mask != 0) {
+      alignas(32) float lanes[8];
+      _mm256_store_ps(lanes, result);
+      for (std::size_t lane = 0; lane < 8; ++lane) {
+        if ((fallback_mask & (1 << lane)) != 0) {
+          lanes[lane] = std::pow(detail::Float16BitsToFloat(base[i + lane]), exponent);
+        }
+      }
+      result = _mm256_load_ps(lanes);
+    }
+    StoreFloat16(result, output + i);
+  }
+  for (; i < count; ++i) {
+    output[i] = detail::FloatToFloat16Bits(std::pow(detail::Float16BitsToFloat(base[i]), exponent));
+  }
+}
+
+bool PowFloat16LeftScalarInt32_AVX2_FMA(std::uint16_t base_bits, const std::int32_t *exponent,
+                                        std::uint16_t *output, std::size_t count) {
+  const __m256i zero = _mm256_setzero_si256();
+  const __m256i five = _mm256_set1_epi32(5);
+  std::size_t i = 0;
+  for (; i + 8 <= count; i += 8) {
+    const __m256i y = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(exponent + i));
+    const __m256i invalid =
+        _mm256_or_si256(_mm256_cmpgt_epi32(zero, y), _mm256_cmpgt_epi32(y, five));
+    if (!_mm256_testz_si256(invalid, invalid)) {
+      return false;
+    }
+  }
+  for (; i < count; ++i) {
+    if (exponent[i] < 0 || exponent[i] > 5) {
+      return false;
+    }
+  }
+
+  const float base = detail::Float16BitsToFloat(base_bits);
+  const __m256 powers[] = {
+      _mm256_set1_ps(SmallIntegerPow(base, 0)), _mm256_set1_ps(SmallIntegerPow(base, 1)),
+      _mm256_set1_ps(SmallIntegerPow(base, 2)), _mm256_set1_ps(SmallIntegerPow(base, 3)),
+      _mm256_set1_ps(SmallIntegerPow(base, 4)), _mm256_set1_ps(SmallIntegerPow(base, 5)),
+  };
+  i = 0;
+  for (; i + 8 <= count; i += 8) {
+    const __m256i y = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(exponent + i));
+    __m256 result = powers[0];
+    for (int value = 1; value <= 5; ++value) {
+      result =
+          _mm256_blendv_ps(result, powers[value],
+                           _mm256_castsi256_ps(_mm256_cmpeq_epi32(y, _mm256_set1_epi32(value))));
+    }
+    StoreFloat16(result, output + i);
+  }
+  for (; i < count; ++i) {
+    output[i] = detail::FloatToFloat16Bits(SmallIntegerPow(base, exponent[i]));
+  }
+  return true;
+}
+#endif
 
 } // namespace onnx_light_cpu

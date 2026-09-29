@@ -566,6 +566,93 @@ TEST(BinaryKernelDescriptor, PowMixedTypesExecuteWithBaseOutputType) {
   }
 }
 
+TEST(BinaryKernelDescriptor, PowFloat16ScalarBroadcastsMatchScalarTailsAndSpecialValues) {
+  const BinaryKernelDescriptor pow("Pow", 15, {});
+  const std::array<float, 12> base_values = {
+      0.0f,
+      -0.0f,
+      0.5f,
+      -0.5f,
+      1.0f,
+      -1.0f,
+      2.0f,
+      -2.0f,
+      std::numeric_limits<float>::infinity(),
+      -std::numeric_limits<float>::infinity(),
+      std::numeric_limits<float>::quiet_NaN(),
+      65504.0f,
+  };
+  for (std::size_t count = 0; count <= 25; ++count) {
+    std::vector<std::uint16_t> bases(count + 2);
+    for (std::size_t i = 0; i < count; ++i) {
+      bases[i + 1] =
+          onnx_light_cpu::detail::FloatToFloat16Bits(base_values[i % base_values.size()]);
+    }
+
+    const auto check_right_scalar = [&](BinaryDataType exponent_type, const void *exponent) {
+      const auto &adapter =
+          pow.ResolveAdapter(BinaryDataType::FLOAT16, exponent_type, BinaryDataType::FLOAT16);
+      std::vector<std::uint16_t> expected(count);
+      std::vector<std::uint16_t> output(count + 2, 0x3555);
+      for (std::size_t i = 0; i < count; ++i) {
+        adapter.scalar(bases.data() + i + 1, exponent, expected.data() + i);
+      }
+      adapter.bulk_right_scalar(bases.data() + 1, exponent, output.data() + 1, count);
+      EXPECT_EQ(output.front(), 0x3555);
+      EXPECT_EQ(output.back(), 0x3555);
+      for (std::size_t i = 0; i < count; ++i) {
+        const float actual = onnx_light_cpu::detail::Float16BitsToFloat(output[i + 1]);
+        const float reference = onnx_light_cpu::detail::Float16BitsToFloat(expected[i]);
+        if (std::isnan(reference)) {
+          EXPECT_TRUE(std::isnan(actual)) << i;
+        } else {
+          EXPECT_EQ(actual, reference) << i;
+          EXPECT_EQ(std::signbit(actual), std::signbit(reference)) << i;
+        }
+      }
+    };
+
+    const std::uint16_t half_exponent = onnx_light_cpu::detail::FloatToFloat16Bits(3.0f);
+    const float float_exponent = 3.0f;
+    const float fractional_exponent = 1.375f;
+    const std::int32_t integer_exponent = 3;
+    check_right_scalar(BinaryDataType::FLOAT16, &half_exponent);
+    check_right_scalar(BinaryDataType::FLOAT, &float_exponent);
+    check_right_scalar(BinaryDataType::FLOAT, &fractional_exponent);
+    check_right_scalar(BinaryDataType::INT32, &integer_exponent);
+
+    const auto &left_scalar_adapter =
+        pow.ResolveAdapter(BinaryDataType::FLOAT16, BinaryDataType::INT32, BinaryDataType::FLOAT16);
+    const std::uint16_t scalar_base = onnx_light_cpu::detail::FloatToFloat16Bits(-1.5f);
+    std::vector<std::int32_t> exponents(count);
+    std::vector<std::uint16_t> expected(count);
+    std::vector<std::uint16_t> output(count + 2, 0x3555);
+    for (std::size_t i = 0; i < count; ++i) {
+      exponents[i] = static_cast<std::int32_t>(i % 6);
+      left_scalar_adapter.scalar(&scalar_base, exponents.data() + i, expected.data() + i);
+    }
+    left_scalar_adapter.bulk_left_scalar(&scalar_base, exponents.data(), output.data() + 1, count);
+    EXPECT_EQ(output.front(), 0x3555);
+    EXPECT_EQ(output.back(), 0x3555);
+    for (std::size_t i = 0; i < count; ++i) {
+      EXPECT_EQ(output[i + 1], expected[i]) << i;
+    }
+  }
+
+  const auto &left_scalar_adapter =
+      pow.ResolveAdapter(BinaryDataType::FLOAT16, BinaryDataType::INT32, BinaryDataType::FLOAT16);
+  const std::uint16_t scalar_base = onnx_light_cpu::detail::FloatToFloat16Bits(-1.5f);
+  const std::array<std::int32_t, 5> exponents = {-3, 0, 5, 6, 17};
+  std::array<std::uint16_t, 5> expected = {};
+  std::array<std::uint16_t, 5> output = {};
+  for (std::size_t i = 0; i < exponents.size(); ++i) {
+    left_scalar_adapter.scalar(&scalar_base, exponents.data() + i, expected.data() + i);
+  }
+  left_scalar_adapter.bulk_left_scalar(&scalar_base, exponents.data(), output.data(),
+                                       output.size());
+  EXPECT_EQ(output, expected);
+}
+
 TEST(BinaryKernelDescriptor, PowIntegerFastPathPreservesFiniteBoundaryResults) {
   const BinaryKernelDescriptor pow("Pow", 15, {});
   const auto &adapter =
