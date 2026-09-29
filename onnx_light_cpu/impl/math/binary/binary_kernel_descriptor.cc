@@ -440,6 +440,12 @@ bool SupportsAvx2Fma() {
   static const bool use_avx2_fma = DetectSimdLevel() >= SimdLevel::kAVX2 && CpuSupportsFma();
   return use_avx2_fma;
 }
+#ifdef ONNX_LIGHT_CPU_HAVE_F16C
+bool SupportsAvx2FmaF16c() {
+  static const bool use_avx2_fma_f16c = SupportsAvx2Fma() && CpuSupportsF16C();
+  return use_avx2_fma_f16c;
+}
+#endif
 #endif
 
 float FastFloatPower(float base, float exponent) {
@@ -1234,6 +1240,14 @@ void BulkHalfPowRight(const void *left, const void *right, void *out, std::size_
     std::copy_n(bases, count, output);
     return;
   }
+#if defined(ONNX_LIGHT_CPU_HAVE_AVX2_FMA) && defined(ONNX_LIGHT_CPU_HAVE_F16C)
+  if constexpr (DecodeOne == detail::Float16BitsToFloat) {
+    if (SupportsAvx2FmaF16c()) {
+      PowFloat16RightScalar_AVX2_FMA(bases, exponent, output, count);
+      return;
+    }
+  }
+#endif
   alignas(32) float base_f32[kBlockSize];
   alignas(32) float output_f32[kBlockSize];
   for (std::size_t offset = 0; offset < count; offset += kBlockSize) {
@@ -1314,6 +1328,28 @@ void BulkMixedHalfPow(const void *left, const void *right, void *out, std::size_
       return;
     }
   }
+#if defined(ONNX_LIGHT_CPU_HAVE_AVX2_FMA) && defined(ONNX_LIGHT_CPU_HAVE_F16C)
+  if constexpr (DecodeBase == detail::Float16BitsToFloat) {
+    if (SupportsAvx2FmaF16c()) {
+      if (right_scalar && !left_scalar) {
+        if constexpr (!IntegerExponent) {
+          PowFloat16RightScalar_AVX2_FMA(bases, DecodeExponent(scalar_exponent), output, count);
+          return;
+        } else if (scalar_exponent >= static_cast<TExp>(0) &&
+                   scalar_exponent <= static_cast<TExp>(5)) {
+          PowFloat16RightScalar_AVX2_FMA(bases, static_cast<float>(scalar_exponent), output, count);
+          return;
+        }
+      }
+      if constexpr (IntegerExponent && std::is_same_v<TExp, std::int32_t>) {
+        if (left_scalar && !right_scalar &&
+            PowFloat16LeftScalarInt32_AVX2_FMA(*bases, exponents, output, count)) {
+          return;
+        }
+      }
+    }
+  }
+#endif
   alignas(32) float base_f32[kBlockSize];
   alignas(32) float output_f32[kBlockSize];
   for (std::size_t offset = 0; offset < count; offset += kBlockSize) {
