@@ -25,8 +25,20 @@ void ApplyNormalizationScaleBiasFloat32(const float *input, float *output, std::
 
 // Half affine rounds only the scaled result, unlike RMSNormalization's intermediate rounding.
 float ComputeNormalizationMeanSquareFloat16(const std::uint16_t *input, std::size_t count);
+Float32NormalizationMoments ComputeNormalizationMomentsFloat16(const std::uint16_t *input,
+                                                               std::size_t count);
 void ApplyNormalizationAffineFloat16(const std::uint16_t *input, const std::uint16_t *scale,
                                      std::uint16_t *output, std::size_t count, float multiplier);
+void ApplyNormalizationScaleBiasFloat16(const std::uint16_t *input, std::uint16_t *output,
+                                        std::size_t count, float multiplier, float offset);
+void ApplyLayerNormalizationFloat16(const std::uint16_t *input, const std::uint16_t *scale,
+                                    const std::uint16_t *bias, std::uint16_t *output,
+                                    std::size_t count, float center, float multiplier);
+void ApplyGroupNormalizationFloat16(const std::uint16_t *input, std::uint16_t *output,
+                                    std::size_t count, float center, float multiplier, float scale,
+                                    float bias);
+void LpNormalizationFloat16(const std::uint16_t *input, std::uint16_t *output, std::size_t vectors,
+                            std::size_t width);
 double ComputeNormalizationMeanSquareFloat64(const double *input, std::size_t count);
 float ComputeNormalizationMeanSquareFloat64StashFloat32(const double *input, std::size_t count);
 void ApplyNormalizationAffineFloat64(const double *input, const double *scale, double *output,
@@ -42,6 +54,21 @@ float ComputeNormalizationMeanSquareFloat16_F16C(const std::uint16_t *input, std
 void ApplyNormalizationAffineFloat16_F16C(const std::uint16_t *input, const std::uint16_t *scale,
                                           std::uint16_t *output, std::size_t count,
                                           float multiplier);
+#endif
+
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX_F16C
+Float32NormalizationMoments ComputeNormalizationMomentsFloat16_F16C(const std::uint16_t *input,
+                                                                    std::size_t count);
+void ApplyNormalizationScaleBiasFloat16_F16C(const std::uint16_t *input, std::uint16_t *output,
+                                             std::size_t count, float multiplier, float offset);
+void ApplyLayerNormalizationFloat16_F16C(const std::uint16_t *input, const std::uint16_t *scale,
+                                         const std::uint16_t *bias, std::uint16_t *output,
+                                         std::size_t count, float center, float multiplier);
+void ApplyGroupNormalizationFloat16_F16C(const std::uint16_t *input, std::uint16_t *output,
+                                         std::size_t count, float center, float multiplier,
+                                         float scale, float bias);
+void LpNormalizationFloat16_F16C(const std::uint16_t *input, std::uint16_t *output,
+                                 std::size_t vectors, std::size_t width);
 #endif
 
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX
