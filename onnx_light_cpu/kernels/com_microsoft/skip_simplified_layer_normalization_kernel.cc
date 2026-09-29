@@ -102,6 +102,23 @@ SkipSimplifiedLayerNormalizationResult SkipSimplifiedLayerNormalizationKernel::o
     Normalize<runtime::DataType::FLOAT>(input, skip, gamma, bias, result, dims, epsilon, output_sum,
                                         output_mean, output_inv_std_var);
   } else if (input.data_type == runtime::DataType::FLOAT16) {
+    const auto *input_data = normalization::Data<runtime::DataType::FLOAT16>(input);
+    const auto *skip_data = normalization::Data<runtime::DataType::FLOAT16>(skip);
+    const auto *gamma_data = normalization::Data<runtime::DataType::FLOAT16>(gamma);
+    const auto *bias_data =
+        bias == nullptr ? nullptr : normalization::Data<runtime::DataType::FLOAT16>(*bias);
+    auto *output_data = normalization::MutableData<runtime::DataType::FLOAT16>(result.output);
+    auto *sum_data =
+        output_sum
+            ? normalization::MutableData<runtime::DataType::FLOAT16>(result.input_skip_bias_sum)
+            : nullptr;
+    if (TrySkipSimplifiedLayerNormalizationFloat16(
+            input_data, skip_data, gamma_data, bias_data, output_data, sum_data,
+            output_mean ? result.mean.AsFloat() : nullptr,
+            output_inv_std_var ? result.inv_std_var.AsFloat() : nullptr, dims.rows, dims.width,
+            dims.skip_rows, epsilon)) {
+      return result;
+    }
     Normalize<runtime::DataType::FLOAT16>(input, skip, gamma, bias, result, dims, epsilon,
                                           output_sum, output_mean, output_inv_std_var);
   } else {

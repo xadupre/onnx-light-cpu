@@ -111,6 +111,12 @@ norm::Moments<norm::AccumulatorType<Type>> ComputeSliceMoments(const norm::Stora
       // slices: a rounded constant mean would make MVN produce +/-1, not zero.
     }
   }
+  if constexpr (Type == DataType::FLOAT16) {
+    if (count >= 32) {
+      const Float32NormalizationMoments moments = ComputeNormalizationMomentsFloat16(input, count);
+      return {moments.mean, moments.variance};
+    }
+  }
   return norm::ComputeContiguousMoments<Type>(input, count);
 }
 
@@ -316,6 +322,13 @@ void InstanceNormalize(const Tensor &x, const Tensor &scale, const Tensor &bias,
       const Acc multiplier = Traits::Load(scale_data, channel) /
                              std::sqrt(moments.variance + static_cast<Acc>(epsilon));
       const Acc offset = Traits::Load(bias_data, channel) - moments.mean * multiplier;
+      if constexpr (Type == DataType::FLOAT16) {
+        if (spatial >= 32) {
+          ApplyNormalizationScaleBiasFloat16(input + base, output + base, spatial, multiplier,
+                                             offset);
+          continue;
+        }
+      }
       ApplyAffine<Type>(input + base, output + base, spatial, multiplier, offset);
     }
   });
@@ -371,14 +384,30 @@ void GroupNormalizeStashed(const Tensor &x, const Tensor &scale, const Tensor &b
         for (std::size_t item = begin; item < end; ++item) {
           const std::size_t group = item % groups;
           const std::size_t base = item * group_size;
-          const norm::Moments<float> moments =
-              norm::ComputeContiguousFloatMoments<Type>(input + base, group_size);
+          const norm::Moments<float> moments = [&]() {
+            if constexpr (Type == DataType::FLOAT16) {
+              if (group_size >= 32) {
+                const Float32NormalizationMoments value =
+                    ComputeNormalizationMomentsFloat16(input + base, group_size);
+                return norm::Moments<float>{value.mean, value.variance};
+              }
+            }
+            return norm::ComputeContiguousFloatMoments<Type>(input + base, group_size);
+          }();
           const float inverse_std_dev = 1.0F / std::sqrt(moments.variance + epsilon);
           for (std::size_t local_channel = 0; local_channel < channels_per_group; ++local_channel) {
             const std::size_t channel = group * channels_per_group + local_channel;
             const std::size_t channel_base = base + local_channel * spatial;
             const auto scale_value = Traits::Load(scale_data, channel);
             const auto bias_value = Traits::Load(bias_data, channel);
+            if constexpr (Type == DataType::FLOAT16) {
+              if (spatial >= 32) {
+                ApplyGroupNormalizationFloat16(input + channel_base, output + channel_base, spatial,
+                                               moments.mean, inverse_std_dev, scale_value,
+                                               bias_value);
+                continue;
+              }
+            }
             for (std::size_t i = 0; i < spatial; ++i) {
               const float normalized =
                   (static_cast<float>(Traits::Load(input, channel_base + i)) - moments.mean) *
@@ -442,6 +471,13 @@ void LayerNormalize(const Tensor &x, const Tensor &scale, const Tensor *bias, Te
           continue;
         }
       }
+      if constexpr (Type == DataType::FLOAT16) {
+        if (inner >= 32 && scale_by_inner && (bias_data == nullptr || bias_by_inner)) {
+          ApplyLayerNormalizationFloat16(input + base, scale_data, bias_data, output + base, inner,
+                                         moments.mean, inverse_std_dev);
+          continue;
+        }
+      }
       for (std::size_t i = 0; i < inner; ++i) {
         const std::size_t flat = base + i;
         const std::size_t scale_position =
@@ -480,6 +516,16 @@ void LpNormalize(const Tensor &x, Tensor &y, std::size_t outer, std::size_t dime
   const auto *input = norm::Data<Type>(x);
   auto *output = norm::MutableData<Type>(y);
   const std::size_t vectors = outer * inner;
+  if constexpr (Type == DataType::FLOAT16) {
+    if (inner == 1 && p == 2 && dimension >= 32) {
+      ExecuteItems(vectors, static_cast<double>(dimension) * 4.0,
+                   [&](std::size_t begin, std::size_t end) {
+                     LpNormalizationFloat16(input + begin * dimension, output + begin * dimension,
+                                            end - begin, dimension);
+                   });
+      return;
+    }
+  }
   ExecuteItems(
       vectors, static_cast<double>(dimension) * 4.0, [&](std::size_t begin, std::size_t end) {
         for (std::size_t vector = begin; vector < end; ++vector) {

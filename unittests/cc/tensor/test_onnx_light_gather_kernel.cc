@@ -369,4 +369,14 @@ TEST(OnnxLightGatherKernel, RuntimeSchedulingSmallLargeAndNested) {
   EXPECT_EQ(executor.dispatches, calls);
 }
 
+TEST(OnnxLightGatherKernel, LargeSlicesUseCacheSizedByteBlocks) {
+  InlineExecutor executor;
+  onnx_light_cpu::ExecutionExecutorView view{&executor, 32, &InlineExecutor::Run};
+  onnx_light_cpu::ExecutionExecutorScope scope(&view);
+  Compare(Payload(DataType::FLOAT16, {4, 1048576}), Tensor::From<int64_t>("indices", {2}, {0, -4}),
+          0);
+  EXPECT_EQ(executor.dispatches, 2);
+  EXPECT_EQ(executor.blocks, 16);
+}
+
 } // namespace

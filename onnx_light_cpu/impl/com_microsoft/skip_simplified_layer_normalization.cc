@@ -59,4 +59,25 @@ void SkipSimplifiedLayerNormalizationFloat32(const float *input, const float *sk
       });
 }
 
+bool TrySkipSimplifiedLayerNormalizationFloat16(
+    const std::uint16_t *input, const std::uint16_t *skip, const std::uint16_t *gamma,
+    const std::uint16_t *bias, std::uint16_t *output, std::uint16_t *input_skip_bias_sum,
+    float *mean, float *inv_std_var, std::size_t rows, std::size_t width, std::size_t skip_rows,
+    float epsilon) {
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX_F16C
+  static const bool use_f16c = DetectSimdLevel() >= SimdLevel::kAVX && CpuSupportsF16C();
+  if (use_f16c && width >= 32) {
+    ExecuteRanges(static_cast<std::int64_t>(rows), static_cast<double>(width),
+                  [&](std::int64_t begin, std::int64_t end) {
+                    SkipSimplifiedLayerNormalizationFloat16_F16C(
+                        input, skip, gamma, bias, output, input_skip_bias_sum, mean, inv_std_var,
+                        static_cast<std::size_t>(begin), static_cast<std::size_t>(end), width,
+                        skip_rows, epsilon);
+                  });
+    return true;
+  }
+#endif
+  return false;
+}
+
 } // namespace onnx_light_cpu

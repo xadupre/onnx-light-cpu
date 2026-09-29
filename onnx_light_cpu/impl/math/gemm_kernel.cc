@@ -1918,7 +1918,7 @@ void GemmHalfPlanned(bool is_bfloat16, bool trans_a, bool trans_b, std::size_t M
         // dominates the arithmetic. Use the same register-resident kernel as
         // skinny-M instead of creating packed float32 partials.
         if (CpuSupportsF16C()) {
-          if (DetectSimdLevel() == SimdLevel::kAVX2 && M == 1 && N >= 64 && K != 0) {
+          if (M == 1 && N >= 64 && K != 0) {
             constexpr std::size_t kColumns = 256;
             const std::size_t panels = (N + kColumns - 1) / kColumns;
             ExecuteRanges(static_cast<std::int64_t>(panels),
@@ -1938,6 +1938,13 @@ void GemmHalfPlanned(bool is_bfloat16, bool trans_a, bool trans_b, std::size_t M
     }
     if constexpr (Algorithm == GemmAlgorithm::kSkinnyN) {
       if (!is_bfloat16 && !trans_a && N == 1) {
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512FP16
+        static const bool use_avx512fp16 = CpuSupportsAvx512Fp16();
+        if (use_avx512fp16) {
+          GemmFloat16SkinnyN_AVX512FP16(M, K, alpha, A, B, Y);
+          return;
+        }
+#endif
 #ifdef ONNX_LIGHT_CPU_HAVE_F16C
         if (CpuSupportsF16C()) {
           GemmFloat16SkinnyN_F16C(M, K, alpha, A, B, Y);

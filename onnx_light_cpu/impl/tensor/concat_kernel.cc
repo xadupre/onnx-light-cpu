@@ -7,6 +7,7 @@
 #include "onnx_light_cpu/impl/execution.h"
 
 #include <algorithm>
+#include <array>
 #include <cstring>
 
 namespace onnx_light_cpu {
@@ -81,6 +82,29 @@ void CopyNarrowRange(std::span<const ConcatInput> inputs, uint8_t *output, std::
   }
 }
 
+void CopyFourTwoByteRange(std::span<const ConcatInput> inputs, uint8_t *output,
+                          std::size_t row_bytes, std::size_t begin, std::size_t end) {
+  if (begin % row_bytes != 0) {
+    const std::size_t head = std::min(row_bytes - begin % row_bytes, end - begin);
+    CopyRange(inputs, output, row_bytes, begin, begin + head);
+    begin += head;
+  }
+  const std::size_t rows = (end - begin) / row_bytes;
+  const std::size_t first_row = begin / row_bytes;
+  for (std::size_t row = 0; row < rows; ++row) {
+    std::array<std::uint16_t, 4> values;
+    for (std::size_t i = 0; i < values.size(); ++i) {
+      std::memcpy(&values[i], inputs[i].data + (first_row + row) * sizeof(values[i]),
+                  sizeof(values[i]));
+    }
+    std::memcpy(output + begin + row * row_bytes, values.data(), sizeof(values));
+  }
+  begin += rows * row_bytes;
+  if (begin != end) {
+    CopyRange(inputs, output, row_bytes, begin, end);
+  }
+}
+
 } // namespace
 
 void ConcatCopy(std::span<const ConcatInput> inputs, void *output, int64_t outer,
@@ -110,9 +134,14 @@ void ConcatCopy(std::span<const ConcatInput> inputs, void *output, int64_t outer
       break;
     }
   }
+  if (inputs.size() == 4 && row_bytes == 8 &&
+      std::all_of(inputs.begin(), inputs.end(),
+                  [](const ConcatInput &input) { return input.row_bytes == 2; })) {
+    copy = &CopyFourTwoByteRange;
+  }
   const auto *executor = CurrentExecutionExecutor();
-  constexpr std::size_t kTileBytes = 64 * 1024;
-  if (bytes < 1024 * 1024 || ExecutionInParallelRegion() || executor == nullptr ||
+  constexpr std::size_t kTileBytes = 32 * 1024;
+  if (bytes < 512 * 1024 || ExecutionInParallelRegion() || executor == nullptr ||
       executor->run_blocks == nullptr || ExecutionThreadCount() <= 1) {
     copy(inputs, destination, row_bytes, 0, bytes);
     return;

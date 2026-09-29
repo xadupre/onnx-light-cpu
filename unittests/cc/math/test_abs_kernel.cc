@@ -432,6 +432,22 @@ TEST(AbsFloat16, LargeArray) {
   }
 }
 
+TEST(AbsFloat16, InPlaceAcrossUnrolledBoundaries) {
+  for (std::size_t size : {63, 64, 65, 127, 128, 129}) {
+    std::vector<std::uint16_t> values(size);
+    for (std::size_t i = 0; i < size; ++i) {
+      values[i] = static_cast<std::uint16_t>((i * 2654435761u) & 0xFFFFu);
+    }
+
+    onnx_light_cpu::AbsFloat16(values.data(), values.data(), values.size());
+    for (std::size_t i = 0; i < size; ++i) {
+      const auto input = static_cast<std::uint16_t>((i * 2654435761u) & 0xFFFFu);
+      EXPECT_EQ(values[i], static_cast<std::uint16_t>(input & 0x7FFFu))
+          << "at index " << i << " size=" << size;
+    }
+  }
+}
+
 TEST(AbsInt16, MixedValues) {
   const std::vector<std::int16_t> input = {
       std::numeric_limits<std::int16_t>::min(), -123, -1, 0, 1, 123,
