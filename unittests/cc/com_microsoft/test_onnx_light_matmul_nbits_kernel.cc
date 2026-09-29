@@ -173,6 +173,34 @@ TEST(MatMulNBitsKernel, Accuracy4VnniMatchesBlockQuantizationAndRefreshesWeights
   check(packed);
 }
 
+TEST(MatMulNBitsKernel, Accuracy4VnniSupportsFloat16InputsAndOutputs) {
+  if (!onnx_light_cpu::MatMulNBitsAccuracy4Float32Available()) {
+    GTEST_SKIP() << "AVX-512 VNNI and AVX-512BW are required.";
+  }
+  constexpr std::size_t rows = 9;
+  constexpr std::size_t k = 64;
+  constexpr std::size_t n = 16;
+  constexpr std::size_t blocks = k / 32;
+  const rt_ns::Tensor input =
+      MakeTensor(rt_ns::DataType::FLOAT16, {rows, k}, std::vector<float>(rows * k, 0.5f));
+  const rt_ns::Tensor scales =
+      MakeTensor(rt_ns::DataType::FLOAT16, {n, blocks}, std::vector<float>(n * blocks, 0.25f));
+  const onnx_light_cpu::MatMulNBitsKernel kernel{
+      MakeNode(k, n), rt_ns::KernelContext{rt_ns::OpsetId("com.microsoft", 1)}};
+
+  const auto check = [&](std::uint8_t packed, float expected) {
+    const rt_ns::Tensor weights = rt_ns::Tensor::FromUint8(
+        "", {n, blocks, 16}, std::vector<std::uint8_t>(n * blocks * 16, packed));
+    const rt_ns::Tensor output = kernel(input, weights, scales);
+    ASSERT_EQ(output.data_type, static_cast<std::int32_t>(rt_ns::DataType::FLOAT16));
+    for (std::size_t index = 0; index < rows * n; ++index) {
+      EXPECT_FLOAT_EQ(ReadValue(output, index), expected);
+    }
+  };
+  check(0x99, 8.0f);
+  check(0xaa, 16.0f);
+}
+
 TEST(MatMulNBitsKernel, SupportsEveryNonDoubleFloatAndIntWidth) {
   for (const rt_ns::DataType data_type :
        {rt_ns::DataType::FLOAT, rt_ns::DataType::FLOAT16, rt_ns::DataType::BFLOAT16}) {
