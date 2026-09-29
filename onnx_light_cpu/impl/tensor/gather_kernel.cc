@@ -93,7 +93,7 @@ void Gather(const void *data, const Index *indices, void *output, int64_t outer,
         position += count;
       }
     };
-    constexpr int64_t kLargeSliceBlockBytes = 512 * 1024;
+    constexpr int64_t kLargeSliceBlockBytes = 256 * 1024;
     ExecuteRanges(static_cast<int64_t>(output_bytes),
                   ExecutionSchedule{static_cast<int64_t>(kParallelBytes), kLargeSliceBlockBytes,
                                     ExecutionThreadCount()},
