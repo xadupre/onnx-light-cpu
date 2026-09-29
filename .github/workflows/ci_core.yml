@@ -135,7 +135,8 @@ jobs:
             CMAKE_ARGS="${CMAKE_ARGS} -DCMAKE_DISABLE_FIND_PACKAGE_OpenSSL=ON"
           fi
           export CMAKE_ARGS
-          pip install -C build.verbose=true "${onnx_light_source}" -v
+          # Match the CPU extensions' STABLE_ABI so nanobind shares C++ types.
+          pip install -C build.verbose=true -C wheel.py-api=cp312 "${onnx_light_source}" -v
           if [[ "${RUNNER_OS}" == "Windows" ]]; then
             echo "ONNX_LIGHT_CPU_ONNX_LIGHT_IMPLIB_DIR=${onnx_light_source}/build" >> "$GITHUB_ENV"
           fi
