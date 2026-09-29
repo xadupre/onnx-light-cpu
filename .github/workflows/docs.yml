@@ -51,7 +51,7 @@ jobs:
           # different dispatch registry.
           pip install nanobind scikit-build-core numpy
           git clone --depth 1 --branch main https://github.com/xadupre/onnx-light.git /tmp/onnx-light
-          pip install -C build.verbose=true /tmp/onnx-light -v
+          pip install -C build.verbose=true -C wheel.py-api=cp312 /tmp/onnx-light -v
           onnx_light_libdir=$(python -c "from onnx_light import get_cpp_build_info as info; print(info()['library_dir'])")
           echo "LD_LIBRARY_PATH=${onnx_light_libdir}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
 
