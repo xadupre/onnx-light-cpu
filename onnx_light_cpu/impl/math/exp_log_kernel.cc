@@ -41,6 +41,9 @@ void LogFloat32_AVX2(const float *input, float *output, std::size_t count);
 void ExpFloat64_AVX2(const double *input, double *output, std::size_t count);
 void LogFloat64_AVX2(const double *input, double *output, std::size_t count);
 #endif
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512BF16
+void ExpBFloat16_AVX512BF16(const std::uint16_t *input, std::uint16_t *output, std::size_t count);
+#endif
 
 namespace {
 
@@ -635,6 +638,18 @@ void ExpFloat16WithTuning(const uint16_t *input, uint16_t *output, std::size_t c
 
 void ExpBFloat16WithTuning(const uint16_t *input, uint16_t *output, std::size_t count,
                            const UnaryExecutionTuning &tuning) {
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512BF16
+  static const bool use_avx512bf16 =
+      DetectSimdLevel() >= SimdLevel::kAVX512 && CpuSupportsAvx512Bf16();
+  if (use_avx512bf16) {
+    ExecuteUnaryRanges<std::uint16_t>(
+        count, tuning, [input, output](std::int64_t begin, std::int64_t end) {
+          ExpBFloat16_AVX512BF16(input + begin, output + begin,
+                                 static_cast<std::size_t>(end - begin));
+        });
+    return;
+  }
+#endif
   TransformHalf<true>(input, output, count, tuning, &ExpFloat32_Dispatch);
 }
 

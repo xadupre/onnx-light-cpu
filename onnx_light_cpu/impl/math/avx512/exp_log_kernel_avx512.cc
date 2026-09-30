@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "onnx_light_cpu/impl/math/avx512/exp_kernel_avx512.h"
 #include "onnx_light_cpu/impl/math/math_kernels.h"
 
 #include "onnx_light_cpu/impl/math/half_conversion.h"
@@ -15,30 +16,11 @@ namespace onnx_light_cpu {
 
 namespace {
 
-constexpr float kExpHi = 88.7762626647950f;
-// True float32 underflow boundary (half of the smallest subnormal, i.e.
-// -150 * ln(2)); see exp_log_kernel.cc for the full rationale. Range
-// reduction below this bound uses a split power-of-two reconstruction so
-// subnormal results round correctly instead of flushing to zero early. The
-// clamp keeps the reduced exponent n above -150, so the split halves
-// (n1 = n>>1, n2 = n-n1, biased by 0x7f) always stay within the normal
-// exponent range [1, 254].
-constexpr float kExpLo = -103.97208f;
-
 // Smallest positive normal float32 (bit pattern 0x00800000) and the exact
 // 2^23 scale factor used to normalize positive Log subnormals without
 // rounding error; see exp_log_kernel.cc for the full rationale.
 constexpr float kSmallestNormal = 1.17549435e-38f;
 constexpr float kSubnormalScale = 8388608.0f;
-constexpr float kLog2ef = 1.44269504088896341f;
-constexpr float kExpC1 = -6.93145752e-1f;
-constexpr float kExpC2 = -1.42860677e-6f;
-constexpr float kExpP0 = 0x1.694000p-10f;
-constexpr float kExpP1 = 0x1.125edcp-7f;
-constexpr float kExpP2 = 0x1.555b5ap-5f;
-constexpr float kExpP3 = 0x1.555450p-3f;
-constexpr float kExpP4 = 0x1.fffff6p-2f;
-
 constexpr float kSqrtHalf = 0.707106781186547524f;
 constexpr float kLogP0 = 7.0376836292e-2f;
 constexpr float kLogP1 = -1.1514610310e-1f;
@@ -94,38 +76,7 @@ __m512d Select(__mmask8 mask, __m512d selected, __m512d fallback) {
 #define ONNX_LIGHT_CPU_FORCE_INLINE inline __attribute__((always_inline))
 #endif
 
-ONNX_LIGHT_CPU_FORCE_INLINE __m512 ExpPs(__m512 x) {
-  const __m512 one = _mm512_set1_ps(1.0f);
-  const __m512 hi = _mm512_set1_ps(kExpHi);
-  const __m512 lo = _mm512_set1_ps(kExpLo);
-
-  const __mmask16 is_nan = _mm512_cmp_ps_mask(x, x, _CMP_UNORD_Q);
-  const __mmask16 over = _mm512_cmp_ps_mask(x, hi, _CMP_GT_OQ);
-  const __mmask16 under = _mm512_cmp_ps_mask(x, lo, _CMP_LT_OQ);
-
-  __m512 reduced = _mm512_min_ps(_mm512_max_ps(x, lo), hi);
-  const __m512 magic = _mm512_set1_ps(12582912.0f);
-  const __m512 scaled = _mm512_fmadd_ps(reduced, _mm512_set1_ps(kLog2ef), magic);
-  const __m512i exponent_int =
-      _mm512_sub_epi32(_mm512_castps_si512(scaled), _mm512_set1_epi32(0x4b400000));
-  const __m512 exponent = _mm512_cvtepi32_ps(exponent_int);
-
-  reduced = _mm512_fmadd_ps(exponent, _mm512_set1_ps(kExpC1), reduced);
-  reduced = _mm512_fmadd_ps(exponent, _mm512_set1_ps(kExpC2), reduced);
-
-  __m512 polynomial = _mm512_set1_ps(kExpP0);
-  polynomial = _mm512_fmadd_ps(polynomial, reduced, _mm512_set1_ps(kExpP1));
-  polynomial = _mm512_fmadd_ps(polynomial, reduced, _mm512_set1_ps(kExpP2));
-  polynomial = _mm512_fmadd_ps(polynomial, reduced, _mm512_set1_ps(kExpP3));
-  polynomial = _mm512_fmadd_ps(polynomial, reduced, _mm512_set1_ps(kExpP4));
-  polynomial = _mm512_fmadd_ps(polynomial, reduced, one);
-  polynomial = _mm512_fmadd_ps(polynomial, reduced, one);
-  __m512 result = _mm512_scalef_ps(polynomial, exponent);
-
-  result = Select(under, _mm512_setzero_ps(), result);
-  result = Select(over, _mm512_set1_ps(std::numeric_limits<float>::infinity()), result);
-  return Select(is_nan, _mm512_set1_ps(std::numeric_limits<float>::quiet_NaN()), result);
-}
+ONNX_LIGHT_CPU_FORCE_INLINE __m512 ExpPs(__m512 x) { return detail::ExpFloat32Vector_AVX512(x); }
 
 ONNX_LIGHT_CPU_FORCE_INLINE __m512 LogPs(__m512 x) {
   const __m512 one = _mm512_set1_ps(1.0f);
@@ -204,18 +155,18 @@ ONNX_LIGHT_CPU_FORCE_INLINE __m512 TanhPs(__m512 value) {
   const __m512 bounded = _mm512_min_ps(magnitude, _mm512_set1_ps(10.0f));
   const __m512 x = _mm512_mul_ps(bounded, _mm512_set1_ps(-2.0f));
   const __m512 magic = _mm512_set1_ps(12582912.0f);
-  const __m512 biased = _mm512_fmadd_ps(x, _mm512_set1_ps(kLog2ef), magic);
+  const __m512 biased = _mm512_fmadd_ps(x, _mm512_set1_ps(detail::kExpLog2efAvx512), magic);
   const __m512 exponent = _mm512_sub_ps(biased, magic);
-  __m512 reduced = _mm512_fmadd_ps(exponent, _mm512_set1_ps(kExpC1), x);
-  reduced = _mm512_fmadd_ps(exponent, _mm512_set1_ps(kExpC2), reduced);
+  __m512 reduced = _mm512_fmadd_ps(exponent, _mm512_set1_ps(detail::kExpC1Avx512), x);
+  reduced = _mm512_fmadd_ps(exponent, _mm512_set1_ps(detail::kExpC2Avx512), reduced);
   const __m512 scale = _mm512_castsi512_ps(_mm512_add_epi32(
       _mm512_slli_epi32(_mm512_castps_si512(biased), 23), _mm512_set1_epi32(0x3f800000)));
   const __m512 one = _mm512_set1_ps(1.0f);
-  __m512 polynomial = _mm512_set1_ps(kExpP0);
-  polynomial = _mm512_fmadd_ps(polynomial, reduced, _mm512_set1_ps(kExpP1));
-  polynomial = _mm512_fmadd_ps(polynomial, reduced, _mm512_set1_ps(kExpP2));
-  polynomial = _mm512_fmadd_ps(polynomial, reduced, _mm512_set1_ps(kExpP3));
-  polynomial = _mm512_fmadd_ps(polynomial, reduced, _mm512_set1_ps(kExpP4));
+  __m512 polynomial = _mm512_set1_ps(detail::kExpP0Avx512);
+  polynomial = _mm512_fmadd_ps(polynomial, reduced, _mm512_set1_ps(detail::kExpP1Avx512));
+  polynomial = _mm512_fmadd_ps(polynomial, reduced, _mm512_set1_ps(detail::kExpP2Avx512));
+  polynomial = _mm512_fmadd_ps(polynomial, reduced, _mm512_set1_ps(detail::kExpP3Avx512));
+  polynomial = _mm512_fmadd_ps(polynomial, reduced, _mm512_set1_ps(detail::kExpP4Avx512));
   polynomial = _mm512_fmadd_ps(polynomial, reduced, one);
   const __m512 expm1 = _mm512_mul_ps(polynomial, reduced);
   // Reconstruct 1 +/- exp(x) without subtracting nearly equal numbers when scale=1.
