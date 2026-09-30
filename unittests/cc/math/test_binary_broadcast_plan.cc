@@ -598,7 +598,7 @@ TEST(BinaryBroadcastPlan, FlatPathDispatchesToExecutorAboveThreshold) {
   }
 }
 
-TEST(BinaryBroadcastPlan, MixedIntegerPowUsesFineGrainedBoundedScheduling) {
+TEST(BinaryBroadcastPlan, ScalarPowUsesFineGrainedBoundedScheduling) {
   const BinaryKernelDescriptor descriptor("Pow", 15, {});
   InlineExecutor executor;
   onnx_light_cpu::ExecutionExecutorView view{&executor, 64, &InlineExecutor::Run};
@@ -628,6 +628,22 @@ TEST(BinaryBroadcastPlan, MixedIntegerPowUsesFineGrainedBoundedScheduling) {
   configured.bulk_parallel_threshold_bytes = 64 * 1024 * 1024;
   large.Execute(large_input.data(), &exponent, large_output.data(), configured);
   EXPECT_EQ(executor.dispatches, 1);
+
+  const float float_exponent = 1.0F;
+  const BinaryBroadcastPlan float_pow(descriptor, BinaryDataType::FLOAT, BinaryDataType::FLOAT,
+                                      BinaryDataType::FLOAT, std::array<std::int64_t, 1>{kCount},
+                                      std::array<std::int64_t, 0>{});
+  float_pow.Execute(large_input.data(), &float_exponent, large_output.data());
+  EXPECT_EQ(executor.dispatches, 2);
+  EXPECT_EQ(executor.blocks, 32);
+  EXPECT_EQ(large_output, large_input);
+
+  {
+    onnx_light_cpu::detail::ExecutionRegionScope region;
+    float_pow.Execute(large_input.data(), &float_exponent, large_output.data());
+  }
+  EXPECT_EQ(executor.dispatches, 2);
+  EXPECT_EQ(large_output, large_input);
 }
 
 TEST(BinaryBroadcastPlan, MultiDimensionalBulkPathUsesAllAvailableParticipants) {
