@@ -558,6 +558,24 @@ class TestBenchmarkCli(ExtTestCase):
             ("onnx_light_cpu::MicrosoftLinearAttention",),
         )
 
+    def test_cpu_feeds_keep_backend_tensors(self):
+        class BackendTensor:
+            data_type = 10
+            shape = (2,)
+
+            @staticmethod
+            def raw_data():
+                return b"\x00\xbc\x00\x40"
+
+        tensor = BackendTensor()
+        cpu_feeds, numpy_feeds = _benchmark._prepare_feeds(
+            ["x"], [SimpleNamespace(inputs=[tensor])]
+        )
+
+        self.assertIs(cpu_feeds[0]["x"], tensor)
+        self.assertEqual(numpy_feeds[0]["x"].dtype.name, "float16")
+        self.assertEqual(numpy_feeds[0]["x"].tolist(), [-1.0, 2.0])
+
     def test_onnxruntime_unsupported_case_is_reported(self):
         model = SimpleNamespace(
             graph=SimpleNamespace(
@@ -648,7 +666,8 @@ class TestBenchmarkCli(ExtTestCase):
         def ort_run():
             return None
 
-        def measure(run):
+        def measure(runtime, run):
+            self.assertIn(runtime, {"onnx-light-cpu", "onnxruntime"})
             events.append(("measure", run))
             return [1.0, 2.0]
 
