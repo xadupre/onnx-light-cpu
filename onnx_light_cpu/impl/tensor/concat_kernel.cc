@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstring>
 
 namespace onnx_light_cpu {
@@ -152,8 +153,20 @@ void ConcatCopy(std::span<const ConcatInput> inputs, void *output, int64_t outer
   ExecutionSchedule schedule;
   schedule.min_parallel_size = 16;
   schedule.min_block_size = 4;
-  schedule.max_participants = ExecutionThreadCount();
+  schedule.max_participants = std::min<int64_t>(ExecutionThreadCount(), 10);
+  const bool dynamic = bytes >= 2 * 1024 * 1024;
+  std::atomic<int64_t> next_tile{0};
   ExecuteRanges(tiles, schedule, [&](int64_t begin, int64_t end) {
+    if (dynamic) {
+      for (int64_t tile = next_tile.fetch_add(1, std::memory_order_relaxed); tile < tiles;
+           tile = next_tile.fetch_add(1, std::memory_order_relaxed)) {
+        const std::size_t first = static_cast<std::size_t>(tile) * kTileBytes;
+        const std::size_t last =
+            tile + 1 == tiles ? bytes : static_cast<std::size_t>(tile + 1) * kTileBytes;
+        copy(inputs, destination, row_bytes, first, last);
+      }
+      return;
+    }
     const std::size_t first = static_cast<std::size_t>(begin) * kTileBytes;
     const std::size_t last = end == tiles ? bytes : static_cast<std::size_t>(end) * kTileBytes;
     copy(inputs, destination, row_bytes, first, last);

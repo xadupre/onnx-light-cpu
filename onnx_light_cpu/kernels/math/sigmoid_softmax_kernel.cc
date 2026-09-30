@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <bit>
 #include <cmath>
 #include <cstddef>
@@ -120,14 +121,25 @@ template <typename T> void Sigmoid(const T *input, T *output, std::size_t count)
     if (avx2 && (!avx512 || count < 256 * 1024)) {
       // Small teams amortize dispatch without waking a full pool for a short vector loop.
       tuning = {128 * 1024, 64 * 1024,
-                count < 96 * 1024 ? 2u : (count < 256 * 1024 ? (avx512 ? 8u : 3u) : 32u), false};
+                count < 96 * 1024 ? 2u : (count < 256 * 1024 ? (avx512 ? 8u : 4u) : 32u), false};
       if (avx512 && count >= 48 * 1024 && count < 96 * 1024) {
         tuning.max_participants = 4;
       }
     }
   }
 #endif
-  ExecuteUnaryRanges<T>(count, tuning, [=](std::int64_t begin, std::int64_t end) {
+  constexpr std::size_t tile = 8 * 1024;
+  std::atomic<std::size_t> next{0};
+  const bool dynamic = std::is_same_v<T, float> && count >= 2 * tile &&
+                       ExecutionThreadCount() > 1 && !ExecutionInParallelRegion();
+  ExecuteUnaryRanges<T>(count, tuning, [=, &next](std::int64_t begin, std::int64_t end) {
+    if (dynamic) {
+      for (std::size_t first = next.fetch_add(tile, std::memory_order_relaxed); first < count;
+           first = next.fetch_add(tile, std::memory_order_relaxed)) {
+        SigmoidRange(input + first, output + first, std::min(tile, count - first));
+      }
+      return;
+    }
     SigmoidRange(input + begin, output + begin, static_cast<std::size_t>(end - begin));
   });
 }
@@ -136,6 +148,15 @@ template <bool float16, typename DecodeBlock, typename EncodeBlock>
 void SigmoidHalf(const std::uint16_t *input, std::uint16_t *output, std::size_t count,
                  DecodeBlock decode, EncodeBlock encode) {
   UnaryExecutionTuning tuning = kActivationExecutionTuning;
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512BF16
+  if constexpr (!float16) {
+    static const bool avx512bf16 =
+        DetectSimdLevel() >= SimdLevel::kAVX512 && CpuSupportsAvx512Bf16();
+    if (avx512bf16) {
+      tuning = {128 * 1024, 64 * 1024, count < 512 * 1024 ? 2u : 32u, false};
+    }
+  }
+#endif
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
   static const SimdLevel simd_level = DetectSimdLevel();
   static const bool avx2 = CpuSupportsFma() && (simd_level == SimdLevel::kAVX2 ||
@@ -145,6 +166,16 @@ void SigmoidHalf(const std::uint16_t *input, std::uint16_t *output, std::size_t 
   }
 #endif
   ExecuteUnaryRanges<std::uint16_t>(count, tuning, [=](std::int64_t begin, std::int64_t end) {
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512BF16
+    if constexpr (!float16) {
+      static const bool fused = DetectSimdLevel() >= SimdLevel::kAVX512 && CpuSupportsAvx512Bf16();
+      if (fused) {
+        SigmoidBFloat16_AVX512BF16(input + begin, output + begin,
+                                   static_cast<std::size_t>(end - begin));
+        return;
+      }
+    }
+#endif
 #if defined(ONNX_LIGHT_CPU_HAVE_AVX2_FMA) && defined(ONNX_LIGHT_CPU_HAVE_F16C)
     if constexpr (float16) {
       static const bool fused =

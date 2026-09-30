@@ -249,7 +249,7 @@ TEST(OnnxLightSimplifiedLayerNormalizationKernel, RecordsSelectedPathAndBroadcas
       const std::string path = type == DataType::FLOAT     ? "float32/normalization"
                                : type == DataType::FLOAT16 ? NormalizationFloat16Path()
                                : type == DataType::DOUBLE  ? NormalizationFloat64Path()
-                                                           : "generic";
+                                                           : NormalizationBFloat16Path();
       EXPECT_EQ(paths[0], std::string(SimplifiedLayerNormalizationKernel::kName) + "/" + path +
                               (axis == -1 ? "/row-scale" : "/broadcast-blocks"));
       context.ClearKernelUsage();

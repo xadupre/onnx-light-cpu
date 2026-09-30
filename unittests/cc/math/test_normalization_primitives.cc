@@ -23,7 +23,9 @@
 namespace {
 
 using namespace onnx_light_cpu;
+using detail::Bfloat16BitsToFloat;
 using detail::Float16BitsToFloat;
+using detail::FloatToBFloat16Bits;
 using detail::FloatToFloat16Bits;
 
 TEST(NormalizationPrimitives, DispatchLabelsMatchRequiredCpuFeatures) {
@@ -33,6 +35,13 @@ TEST(NormalizationPrimitives, DispatchLabelsMatchRequiredCpuFeatures) {
     EXPECT_GE(DetectSimdLevel(), SimdLevel::kAVX);
   } else {
     EXPECT_STREQ(half_path, "scalar");
+  }
+  const char *bfloat16_path = NormalizationBFloat16Path();
+  if (std::strcmp(bfloat16_path, "avx512bf16") == 0) {
+    EXPECT_TRUE(CpuSupportsAvx512Bf16());
+    EXPECT_GE(DetectSimdLevel(), SimdLevel::kAVX512);
+  } else {
+    EXPECT_STREQ(bfloat16_path, "scalar");
   }
   const char *double_path = NormalizationFloat64Path();
   if (std::strcmp(double_path, "avx") == 0) {
@@ -44,12 +53,85 @@ TEST(NormalizationPrimitives, DispatchLabelsMatchRequiredCpuFeatures) {
 
 TEST(NormalizationPrimitives, EmptyReductionsRejectAndEmptyAffineDoesNotDereference) {
   EXPECT_THROW(ComputeNormalizationMeanSquareFloat16(nullptr, 0), std::invalid_argument);
+  EXPECT_THROW(ComputeNormalizationMeanSquareBFloat16(nullptr, 0), std::invalid_argument);
   EXPECT_THROW(ComputeNormalizationMeanSquareFloat64(nullptr, 0), std::invalid_argument);
   EXPECT_THROW(ComputeNormalizationMeanSquareFloat64StashFloat32(nullptr, 0),
                std::invalid_argument);
+  ApplyRmsNormalizationFloat32(nullptr, nullptr, nullptr, 0, 1.0F);
   ApplyNormalizationAffineFloat16(nullptr, nullptr, nullptr, 0, 1.0F);
+  ApplyNormalizationAffineBFloat16(nullptr, nullptr, nullptr, 0, 1.0F);
   ApplyNormalizationAffineFloat64(nullptr, nullptr, nullptr, 0, 1.0);
   ApplyNormalizationAffineFloat64StashFloat32(nullptr, nullptr, nullptr, 0, 1.0F);
+}
+
+TEST(NormalizationPrimitives, BFloat16EveryTailAndUnalignedInPlaceAffine) {
+  for (std::size_t count = 1; count <= 33; ++count) {
+    SCOPED_TRACE(count);
+    std::vector<std::uint16_t> input(count + 1), scale(count + 1);
+    std::vector<std::uint16_t> output(count + 2, 0x1234);
+    float squares[4] = {};
+    for (std::size_t i = 0; i < count; ++i) {
+      const float value = (static_cast<float>(i % 11) - 5.0F) * 0.25F;
+      input[i + 1] = FloatToBFloat16Bits(value);
+      scale[i + 1] = FloatToBFloat16Bits(0.5F + static_cast<float>(i % 5) * 0.25F);
+      squares[i & 3] += value * value;
+    }
+    const float expected_mean_square =
+        (squares[0] + squares[1] + squares[2] + squares[3]) / static_cast<float>(count);
+    EXPECT_FLOAT_EQ(ComputeNormalizationMeanSquareBFloat16(input.data() + 1, count),
+                    expected_mean_square);
+    ApplyNormalizationAffineBFloat16(input.data() + 1, scale.data() + 1, output.data() + 1, count,
+                                     0.731234F);
+    for (std::size_t i = 0; i < count; ++i) {
+      const float value = Bfloat16BitsToFloat(input[i + 1]) * 0.731234F;
+      EXPECT_EQ(output[i + 1], FloatToBFloat16Bits(value * Bfloat16BitsToFloat(scale[i + 1])));
+    }
+    EXPECT_EQ(output.front(), 0x1234);
+    EXPECT_EQ(output.back(), 0x1234);
+    ApplyNormalizationAffineBFloat16(input.data() + 1, scale.data() + 1, input.data() + 1, count,
+                                     0.731234F);
+    for (std::size_t i = 0; i < count; ++i) {
+      EXPECT_EQ(input[i + 1], output[i + 1]);
+    }
+  }
+}
+
+TEST(NormalizationPrimitives, Float32RmsAffineHandlesEveryTailAndUnalignedInput) {
+  constexpr float multiplier = 0.731234F;
+  for (std::size_t count = 1; count <= 33; ++count) {
+    SCOPED_TRACE(count);
+    std::vector<float> input(count + 1), scale(count + 1);
+    std::vector<float> output(count + 2, -999.0F);
+    for (std::size_t i = 0; i < count; ++i) {
+      input[i + 1] = (static_cast<float>(i % 11) - 5.0F) * 0.25F;
+      scale[i + 1] = 0.5F + static_cast<float>(i % 5) * 0.25F;
+    }
+    ApplyRmsNormalizationFloat32(input.data() + 1, scale.data() + 1, output.data() + 1, count,
+                                 multiplier);
+    for (std::size_t i = 0; i < count; ++i) {
+      EXPECT_FLOAT_EQ(output[i + 1], input[i + 1] * multiplier * scale[i + 1]);
+    }
+    EXPECT_EQ(output.front(), -999.0F);
+    EXPECT_EQ(output.back(), -999.0F);
+    ApplyRmsNormalizationFloat32(input.data() + 1, scale.data() + 1, input.data() + 1, count,
+                                 multiplier);
+    for (std::size_t i = 0; i < count; ++i) {
+      EXPECT_EQ(input[i + 1], output[i + 1]);
+    }
+  }
+}
+
+TEST(NormalizationPrimitives, BFloat16SubnormalsAndNanCanonicalization) {
+  for (std::uint16_t bits : {0x0001, 0x007f, 0x8001, 0x807f, 0x7f95, 0xff95}) {
+    for (std::size_t count = 1; count <= 33; ++count) {
+      std::vector<std::uint16_t> input(count, bits), scale(count, 0x3f80), output(count);
+      ApplyNormalizationAffineBFloat16(input.data(), scale.data(), output.data(), count, 1.0F);
+      const auto expected = FloatToBFloat16Bits(Bfloat16BitsToFloat(bits));
+      for (const auto actual : output) {
+        EXPECT_EQ(actual, expected) << "bits=" << bits << " count=" << count;
+      }
+    }
+  }
 }
 
 TEST(NormalizationPrimitives, HalfEveryTailAndUnalignedInPlaceAffine) {
@@ -159,6 +241,65 @@ TEST(NormalizationPrimitives, HalfMomentsAndNormalizationFastPathsHandleTails) {
       EXPECT_EQ(lp_output[i], FloatToFloat16Bits(Float16BitsToFloat(lp_input[i]) * inverse));
     }
   }
+}
+
+TEST(NormalizationPrimitives, HalfBatchedNormalizationMatchesPerSlicePrimitives) {
+  constexpr std::size_t kChannels = 3;
+  constexpr std::size_t kSlices = 5;
+  constexpr std::size_t kWidth = 33;
+  std::vector<std::uint16_t> input(kSlices * kWidth), scale(kWidth), bias(kWidth);
+  for (std::size_t i = 0; i < input.size(); ++i) {
+    input[i] = FloatToFloat16Bits((static_cast<float>(i % 29) - 14.0F) * 0.0625F);
+  }
+  for (std::size_t i = 0; i < kWidth; ++i) {
+    scale[i] = FloatToFloat16Bits(0.5F + static_cast<float>(i % 7) * 0.125F);
+    bias[i] = FloatToFloat16Bits((static_cast<float>(i % 5) - 2.0F) * 0.0625F);
+  }
+
+  std::vector<std::uint16_t> expected(kSlices * kWidth, 0x1234);
+  std::vector<std::uint16_t> actual = expected;
+  for (std::size_t slice = 1; slice < 4; ++slice) {
+    const auto moments = ComputeNormalizationMomentsFloat16(input.data() + slice * kWidth, kWidth);
+    const std::size_t channel = slice % kChannels;
+    const float multiplier =
+        Float16BitsToFloat(scale[channel]) / std::sqrt(moments.variance + 1.0e-5F);
+    const float offset = Float16BitsToFloat(bias[channel]) - moments.mean * multiplier;
+    ApplyNormalizationScaleBiasFloat16(input.data() + slice * kWidth,
+                                       expected.data() + slice * kWidth, kWidth, multiplier,
+                                       offset);
+  }
+  InstanceNormalizationFloat16(input.data(), scale.data(), bias.data(), actual.data(), 1, 4,
+                               kChannels, kWidth, 1.0e-5F);
+  EXPECT_EQ(actual, expected);
+
+  std::fill(expected.begin(), expected.end(), 0x1234);
+  actual = expected;
+  std::vector<float> expected_mean(kSlices, -999.0F), expected_inv(kSlices, -999.0F);
+  std::vector<float> actual_mean = expected_mean, actual_inv = expected_inv;
+  for (std::size_t row = 1; row < 4; ++row) {
+    const auto moments = ComputeNormalizationMomentsFloat16(input.data() + row * kWidth, kWidth);
+    const float inverse = 1.0F / std::sqrt(moments.variance + 1.0e-5F);
+    expected_mean[row] = moments.mean;
+    expected_inv[row] = inverse;
+    ApplyLayerNormalizationFloat16(input.data() + row * kWidth, scale.data(), bias.data(),
+                                   expected.data() + row * kWidth, kWidth, moments.mean, inverse);
+  }
+  LayerNormalizationFloat16Rows(input.data(), scale.data(), bias.data(), actual.data(),
+                                actual_mean.data(), actual_inv.data(), 1, 4, kWidth, 1.0e-5F);
+  EXPECT_EQ(actual, expected);
+  EXPECT_EQ(actual_mean, expected_mean);
+  EXPECT_EQ(actual_inv, expected_inv);
+
+  std::fill(expected.begin(), expected.end(), 0x1234);
+  actual = expected;
+  for (std::size_t channel = 0; channel < kChannels; ++channel) {
+    ApplyGroupNormalizationFloat16(
+        input.data() + channel * kWidth, expected.data() + channel * kWidth, kWidth, 0.125F, 0.75F,
+        Float16BitsToFloat(scale[channel]), Float16BitsToFloat(bias[channel]));
+  }
+  ApplyGroupNormalizationFloat16Channels(input.data(), scale.data(), bias.data(), actual.data(),
+                                         kChannels, kWidth, 0.125F, 0.75F);
+  EXPECT_EQ(actual, expected);
 }
 
 TEST(NormalizationPrimitives, HalfSubnormalsAndNanCanonicalization) {
