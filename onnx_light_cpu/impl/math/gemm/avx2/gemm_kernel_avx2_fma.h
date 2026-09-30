@@ -65,6 +65,12 @@ void GemmMicroKernel_AVX2BF16(std::size_t mr, std::size_t nb, std::size_t K, flo
                               std::size_t Ystride, std::size_t n0, GemmAccumMode mode,
                               const std::uint16_t *Apack);
 
+void GemmBfloat16SkinnyM_AVX2_FMA(bool trans_a, std::size_t M, std::size_t N, std::size_t K,
+                                  float alpha, const std::uint16_t *A, const std::uint16_t *B,
+                                  float *Y);
+void GemmBfloat16SkinnyN_AVX2_FMA(std::size_t M, std::size_t K, float alpha, const std::uint16_t *A,
+                                  const std::uint16_t *B, float *Y);
+
 // Decodes ``n`` contiguous Float8 patterns to float32 (Roadmap PR09.5) eight at
 // a time through an AVX2 ``vgatherdps`` from the caller-supplied exact 256-entry
 // per-format decode table (``detail::BuildFloat8DecodeTable``), with an exact
