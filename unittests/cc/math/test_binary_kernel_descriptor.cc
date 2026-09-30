@@ -147,6 +147,7 @@ TEST(BinaryKernelDescriptor, ResolvesFloat32ArithmeticDispatchOncePerAdapter) {
   }
 }
 
+#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
 TEST(BinaryKernelDescriptor, ResolvesFloat16ArithmeticDispatchOncePerAdapter) {
   using BulkFunctions = const onnx_light_cpu::BinaryArithmeticBulkFunctions &(*)();
   const std::array<std::pair<std::string_view, BulkFunctions>, 4> operations{{
@@ -165,6 +166,7 @@ TEST(BinaryKernelDescriptor, ResolvesFloat16ArithmeticDispatchOncePerAdapter) {
     EXPECT_EQ(adapter.bulk_right_scalar, functions.right_scalar) << op_type;
   }
 }
+#endif
 
 TEST(BinaryKernelDescriptor, Float16PReluBulkCoversBroadcastsTailsAndAliasing) {
   const BinaryKernelDescriptor descriptor("PRelu", 16, {});
