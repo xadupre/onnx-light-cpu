@@ -67,4 +67,52 @@ void EvaluateBalancedFloatRows_AVX2(const float *input, std::size_t features,
   }
 }
 
+float EvaluateBalancedFloatTrees_AVX2(const float *input, const TreeEnsembleCompactFloatNode *nodes,
+                                      const float *leaf_weights, const std::int64_t *tree_roots,
+                                      std::size_t tree_count, std::size_t depth) {
+  static_assert(offsetof(TreeEnsembleCompactFloatNode, split) == 0);
+  static_assert(offsetof(TreeEnsembleCompactFloatNode, feature_id) == 4);
+  constexpr std::size_t kLanes = 8;
+  const auto *node_words = reinterpret_cast<const std::int32_t *>(nodes);
+  const auto *node_splits = reinterpret_cast<const float *>(nodes);
+  alignas(32) float weights[kLanes];
+  float sum = 0.0F;
+  std::size_t tree = 0;
+  for (; tree + kLanes <= tree_count; tree += kLanes) {
+    __m256i node_indices = _mm256_setr_epi32(static_cast<std::int32_t>(tree_roots[tree]),
+                                             static_cast<std::int32_t>(tree_roots[tree + 1]),
+                                             static_cast<std::int32_t>(tree_roots[tree + 2]),
+                                             static_cast<std::int32_t>(tree_roots[tree + 3]),
+                                             static_cast<std::int32_t>(tree_roots[tree + 4]),
+                                             static_cast<std::int32_t>(tree_roots[tree + 5]),
+                                             static_cast<std::int32_t>(tree_roots[tree + 6]),
+                                             static_cast<std::int32_t>(tree_roots[tree + 7]));
+    for (std::size_t level = 0; level < depth; ++level) {
+      const __m256i word_indices = _mm256_slli_epi32(node_indices, 2);
+      const __m256i feature_ids =
+          _mm256_i32gather_epi32(node_words + 1, word_indices, sizeof(std::int32_t));
+      const __m256 splits = _mm256_i32gather_ps(node_splits, word_indices, sizeof(std::int32_t));
+      const __m256 values = _mm256_i32gather_ps(input, feature_ids, sizeof(float));
+      const __m256 go_true = _mm256_cmp_ps(values, splits, _CMP_LE_OQ);
+      const __m256i child_words = _mm256_add_epi32(
+          word_indices, _mm256_blendv_epi8(_mm256_set1_epi32(3), _mm256_set1_epi32(2),
+                                           _mm256_castps_si256(go_true)));
+      node_indices = _mm256_i32gather_epi32(node_words, child_words, sizeof(std::int32_t));
+    }
+    _mm256_store_ps(weights, _mm256_i32gather_ps(leaf_weights, node_indices, sizeof(float)));
+    for (float weight : weights) {
+      sum += weight;
+    }
+  }
+  for (; tree < tree_count; ++tree) {
+    std::size_t node = static_cast<std::size_t>(tree_roots[tree]);
+    for (std::size_t level = 0; level < depth; ++level) {
+      const TreeEnsembleCompactFloatNode &current = nodes[node];
+      node = input[current.feature_id] <= current.split ? current.true_child : current.false_child;
+    }
+    sum += leaf_weights[node];
+  }
+  return sum;
+}
+
 } // namespace onnx_light_cpu

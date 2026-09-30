@@ -1949,7 +1949,11 @@ void GemmHalfPlanned(bool is_bfloat16, bool trans_a, bool trans_b, std::size_t M
   static const bool use_avx2 = DetectSimdLevel() >= SimdLevel::kAVX2 && CpuSupportsFma();
   if (use_avx2) {
     if constexpr (Algorithm == GemmAlgorithm::kSkinnyM || Algorithm == GemmAlgorithm::kSplitK) {
-      if (!is_bfloat16 && !trans_b && M <= kGemmAVX2MR) {
+      if (!trans_b && M <= kGemmAVX2MR) {
+        if (is_bfloat16) {
+          GemmBfloat16SkinnyM_AVX2_FMA(trans_a, M, N, K, alpha, A, B, Y);
+          return;
+        }
 #ifdef ONNX_LIGHT_CPU_HAVE_F16C
         // For tiny split-K outputs, thread-pool and partial-reduction overhead
         // dominates the arithmetic. Use the same register-resident kernel as
@@ -1974,7 +1978,11 @@ void GemmHalfPlanned(bool is_bfloat16, bool trans_a, bool trans_b, std::size_t M
       }
     }
     if constexpr (Algorithm == GemmAlgorithm::kSkinnyN) {
-      if (!is_bfloat16 && !trans_a && N == 1) {
+      if (!trans_a && N == 1) {
+        if (is_bfloat16) {
+          GemmBfloat16SkinnyN_AVX2_FMA(M, K, alpha, A, B, Y);
+          return;
+        }
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512FP16
         static const bool use_avx512fp16 = CpuSupportsAvx512Fp16();
         if (use_avx512fp16) {
@@ -2477,6 +2485,36 @@ void ApplyGemmEpilogue(std::size_t M, std::size_t N, const GemmEpilogue<T> &epil
 
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
   if constexpr (std::is_same_v<T, float>) {
+    if (has_bias && !has_residual && !has_activation && converts_output &&
+        epilogue.output_conversion == GemmOutputConversion::kFloat16) {
+#ifdef ONNX_LIGHT_CPU_HAVE_F16C
+      static const bool use_f16c =
+          DetectSimdLevel() >= SimdLevel::kAVX2 && CpuSupportsFma() && CpuSupportsF16C();
+      if (use_f16c) {
+        std::size_t bias_row_stride = 0;
+        std::size_t bias_column_stride = 0;
+        if (epilogue.bias_layout == GemmBroadcast::kRow) {
+          bias_column_stride = 1;
+        } else if (epilogue.bias_layout == GemmBroadcast::kColumn) {
+          bias_row_stride = 1;
+        } else if (epilogue.bias_layout == GemmBroadcast::kMatrix) {
+          bias_row_stride = N;
+          bias_column_stride = 1;
+        }
+        ExecuteRanges(static_cast<std::int64_t>(M), static_cast<double>(3 * N),
+                      [Y, &epilogue, N, bias_row_stride, bias_column_stride](std::int64_t begin,
+                                                                             std::int64_t end) {
+                        const std::size_t first_row = static_cast<std::size_t>(begin);
+                        GemmAddBiasConvertFloat32ToFloat16_F16C(
+                            Y + first_row * N, epilogue.bias + first_row * bias_row_stride,
+                            epilogue.converted_output + first_row * N,
+                            static_cast<std::size_t>(end - begin), N, epilogue.beta,
+                            bias_row_stride, bias_column_stride);
+                      });
+        return;
+      }
+#endif
+    }
     if (!has_bias && !has_residual && !has_activation && converts_output) {
       static const bool use_avx2 = DetectSimdLevel() >= SimdLevel::kAVX2;
       if (use_avx2 && epilogue.output_conversion == GemmOutputConversion::kBFloat16) {
