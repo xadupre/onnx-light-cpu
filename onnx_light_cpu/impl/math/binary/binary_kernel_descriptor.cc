@@ -27,6 +27,9 @@ void BulkFloat16PReluF16C(const void *, const void *, void *, std::size_t);
 void BulkFloat16PReluLeftF16C(const void *, const void *, void *, std::size_t);
 void BulkFloat16PReluRightF16C(const void *, const void *, void *, std::size_t);
 #endif
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512BF16
+void BulkBfloat16Pow_AVX512BF16(const void *, const void *, void *, std::size_t);
+#endif
 
 namespace {
 
@@ -800,8 +803,17 @@ void SelectBulk(BinaryOperator op, DT left, BinaryKernelDescriptor::Adapter &ada
         left == DT::FLOAT16 ? &BulkFloat16Mod : (left == DT::BFLOAT16 ? &BulkBfloat16Mod : nullptr);
     break;
   case BinaryOperator::kPow:
-    adapter.bulk_contiguous =
-        left == DT::FLOAT16 ? &BulkFloat16Pow : (left == DT::BFLOAT16 ? &BulkBfloat16Pow : nullptr);
+    if (left == DT::FLOAT16) {
+      adapter.bulk_contiguous = &BulkFloat16Pow;
+    } else if (left == DT::BFLOAT16) {
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512BF16
+      static const bool use_avx512bf16 =
+          DetectSimdLevel() >= SimdLevel::kAVX512 && CpuSupportsAvx512Bf16();
+      adapter.bulk_contiguous = use_avx512bf16 ? &BulkBfloat16Pow_AVX512BF16 : &BulkBfloat16Pow;
+#else
+      adapter.bulk_contiguous = &BulkBfloat16Pow;
+#endif
+    }
     break;
   case BinaryOperator::kPRelu:
     if (left == DT::FLOAT16) {
