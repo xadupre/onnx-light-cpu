@@ -21,6 +21,7 @@
 #include "onnx_light_cpu/impl/math/half_conversion.h"
 
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -404,7 +405,19 @@ void ExpFloat32(const float *input, float *output, std::size_t count) {
 void ExpFloat32WithTuning(const float *input, float *output, std::size_t count,
                           const UnaryExecutionTuning &tuning) {
   const Float32UnaryDispatch &dispatch = GetExpFloat32Dispatch();
-  auto execute = [input, output, &dispatch](std::int64_t begin, std::int64_t end) {
+  constexpr std::size_t tile = 16 * 1024;
+  std::atomic<std::size_t> next{0};
+  const bool dynamic = count >= 2 * tile && tuning.max_participants != 1 &&
+                       ExecutionThreadCount() > 1 && !ExecutionInParallelRegion();
+  auto execute = [input, output, &dispatch, &next, dynamic, count, tile](std::int64_t begin,
+                                                                         std::int64_t end) {
+    if (dynamic) {
+      for (std::size_t first = next.fetch_add(tile, std::memory_order_relaxed); first < count;
+           first = next.fetch_add(tile, std::memory_order_relaxed)) {
+        dispatch.function(input + first, output + first, std::min(tile, count - first));
+      }
+      return;
+    }
     dispatch.function(input + begin, output + begin, static_cast<std::size_t>(end - begin));
   };
   if (tuning.use_cost_model) {
