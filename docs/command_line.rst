@@ -40,7 +40,8 @@ workbook:
    integers, and ``bool``. The default, ``all``, selects every supported type
    and cannot be combined with another type. When exactly two data types are
    selected, the workbook also contains a ``dtype_comparison`` sheet pairing
-   matching cases and computing ``speedup = first_median_s / second_median_s``.
+   matching cases, preserving both original test names, and computing
+   ``speedup = first_median_s / second_median_s``.
 
 ``--compare-dtypes BASELINE COMPARISON``
    Selects two distinct data types and compares onnx-light-cpu median times for
@@ -55,9 +56,10 @@ workbook:
          --output float16_bfloat16.xlsx \
          --markdown float16_bfloat16.md
 
-   The workbook gains a ``dtype_comparison`` sheet containing both median
-   times in seconds and ``speedup = baseline_median_s / comparison_median_s``.
-   A value above one means the second dtype (bfloat16 here) is faster.
+   The workbook gains a ``dtype_comparison`` sheet containing both original
+   test names, both median times in seconds, and
+   ``speedup = baseline_median_s / comparison_median_s``. A value above one
+   means the second dtype (bfloat16 here) is faster.
    The full Markdown report gains the same comparison table; ``--pr`` and
    ``--pr-markdown`` show dtype speedups instead of ONNX Runtime speedups,
    with the ordered dtype pair in each test name.
