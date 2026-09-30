@@ -174,6 +174,10 @@ void SwiGLUFloat16(const std::uint16_t *gate, const std::uint16_t *value, std::u
                    std::size_t count, float alpha);
 void SwiGLUBFloat16(const std::uint16_t *gate, const std::uint16_t *value, std::uint16_t *output,
                     std::size_t count, float alpha);
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512BF16
+void SwiGLUBFloat16_AVX512BF16(const std::uint16_t *gate, const std::uint16_t *value,
+                               std::uint16_t *output, std::size_t count, float alpha);
+#endif
 
 /// Computes elementwise natural logarithm: out[i] = log(input[i]) for float32.
 /// Uses a vectorized minimax polynomial approximation with runtime AVX-512/
