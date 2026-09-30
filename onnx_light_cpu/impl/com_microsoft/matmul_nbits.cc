@@ -77,21 +77,27 @@ detail::NBitsPanelFn PanelImplementation() {
   return panel;
 }
 
-template <typename Codec>
-void MatMulInt4Panels(const typename Codec::Storage *a, const std::uint8_t *b,
-                      const typename Codec::Storage *scales, const typename Codec::Storage *bias,
-                      typename Codec::Storage *y, std::size_t rows, std::size_t k, std::size_t n,
-                      std::size_t k_blocks, const ExecutionSchedule &schedule) {
+template <typename Codec, std::size_t Bits>
+void MatMulNBitsPanels(const typename Codec::Storage *a, const std::uint8_t *b,
+                       const typename Codec::Storage *scales, const typename Codec::Storage *bias,
+                       typename Codec::Storage *y, std::size_t rows, std::size_t k, std::size_t n,
+                       std::size_t k_blocks, const ExecutionSchedule &schedule) {
   using namespace detail;
+  constexpr std::size_t kValuesPerByte = 8 / Bits;
+  constexpr std::size_t kBlobSize = kNBitsBlock * Bits / 8;
+  constexpr std::uint8_t kMask = static_cast<std::uint8_t>((1U << Bits) - 1U);
+  constexpr int kZeroPoint = 1 << (Bits - 1);
   const NBitsPanelFn accumulate = PanelImplementation();
   static_assert(sizeof(float) * (kNBitsBlock * kNBitsColumns + kNBitsRows * kNBitsBlock +
                                  kNBitsRows * kNBitsColumns) ==
                 kMatMulNBitsInt4WorkspaceBytes);
   const std::size_t column_tiles = n / kNBitsColumns + (n % kNBitsColumns != 0);
-  const std::size_t row_tiles = rows / kNBitsRows + (rows % kNBitsRows != 0);
+  const std::size_t row_tile =
+      n <= 8 * kNBitsColumns ? std::min<std::size_t>(kNBitsRows, 64) : kNBitsRows;
+  const std::size_t row_tiles = rows / row_tile + (rows % row_tile != 0);
   const std::size_t tiles = CheckedMultiply(row_tiles, column_tiles, "MatMulNBits", "panels");
   const auto tile_outputs =
-      static_cast<std::int64_t>(std::min(rows, kNBitsRows) * std::min(n, kNBitsColumns));
+      static_cast<std::int64_t>(std::min(rows, row_tile) * std::min(n, kNBitsColumns));
   const auto to_panels = [tile_outputs](std::int64_t outputs) {
     outputs = std::max<std::int64_t>(outputs, 1);
     return outputs / tile_outputs + (outputs % tile_outputs != 0);
@@ -107,9 +113,9 @@ void MatMulInt4Panels(const typename Codec::Storage *a, const std::uint8_t *b,
         float activations[kNBitsRows * kNBitsBlock];
         float sums[kNBitsRows * kNBitsColumns];
         for (auto tile = begin; tile < end; ++tile) {
-          const std::size_t first_row = (tile / column_tiles) * kNBitsRows;
+          const std::size_t first_row = (tile / column_tiles) * row_tile;
           const std::size_t first_column = (tile % column_tiles) * kNBitsColumns;
-          const auto mr = std::min(kNBitsRows, rows - first_row);
+          const auto mr = std::min(row_tile, rows - first_row);
           const auto nr = std::min(kNBitsColumns, n - first_column);
           std::fill_n(sums, kNBitsRows * kNBitsColumns, 0.0f);
           if (bias != nullptr) {
@@ -123,11 +129,11 @@ void MatMulInt4Panels(const typename Codec::Storage *a, const std::uint8_t *b,
             const auto depth = std::min(kNBitsBlock, k - block * kNBitsBlock);
             for (std::size_t c = 0; c < nr; ++c) {
               const auto index = (first_column + c) * k_blocks + block;
-              const auto *packed = b + index * 16;
+              const auto *packed = b + index * kBlobSize;
               const float scale = Codec::Load(scales[index]);
               for (std::size_t p = 0; p < depth; ++p) {
-                const int q = (packed[p / 2] >> ((p % 2) * 4)) & 15;
-                weights[p * kNBitsColumns + c] = static_cast<float>(q - 8) * scale;
+                const int q = (packed[p / kValuesPerByte] >> ((p % kValuesPerByte) * Bits)) & kMask;
+                weights[p * kNBitsColumns + c] = static_cast<float>(q - kZeroPoint) * scale;
               }
             }
             for (std::size_t r = 0; r < mr; ++r) {
@@ -188,8 +194,15 @@ void MatMulNBitsTyped(const void *a_raw, const std::uint8_t *b, const void *scal
       static_cast<std::int64_t>(std::max<std::size_t>(tuning.target_block_outputs, 1)),
       tuning.max_participants,
   };
-  if (bits == 4) {
-    MatMulInt4Panels<Codec>(a, b, scales, bias, y, rows, k, n, k_blocks, schedule);
+  switch (bits) {
+  case 2:
+    MatMulNBitsPanels<Codec, 2>(a, b, scales, bias, y, rows, k, n, k_blocks, schedule);
+    return;
+  case 4:
+    MatMulNBitsPanels<Codec, 4>(a, b, scales, bias, y, rows, k, n, k_blocks, schedule);
+    return;
+  case 8:
+    MatMulNBitsPanels<Codec, 8>(a, b, scales, bias, y, rows, k, n, k_blocks, schedule);
     return;
   }
   ExecuteRanges(

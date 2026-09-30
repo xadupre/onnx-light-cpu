@@ -19,8 +19,8 @@ struct MatMulNBitsExecutionTuning {
 
 inline constexpr MatMulNBitsExecutionTuning kDefaultMatMulNBitsExecutionTuning{};
 
-// Scratch per active INT4 callback; packed weights are borrowed, never retained or copied.
-inline constexpr std::size_t kMatMulNBitsInt4WorkspaceBytes = 6144;
+// Scratch per active packed-weight panel callback; inputs are borrowed, never retained or copied.
+inline constexpr std::size_t kMatMulNBitsInt4WorkspaceBytes = 36864;
 const char *MatMulNBitsInt4Implementation();
 
 bool MatMulNBitsAccuracy4Float32Available();
