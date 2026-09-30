@@ -2179,6 +2179,22 @@ void TreeEnsemblePlan::EvaluateIntoImpl(const T *input, std::size_t input_size, 
               float *participant_values = partial_values.data() + participant * partial_stride;
               const auto [tree_begin, tree_end] = tree_range(participant, participants);
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512
+              if (rows == 1 && simd_level == SimdLevel::kAVX512 && simd_indices_fit) {
+                participant_values[0] = EvaluateBalancedFloatTrees_AVX512(
+                    input_data, compact_float_nodes_.data(), leaf_weights_float_.data(),
+                    tree_roots_.data() + tree_begin, tree_end - tree_begin, max_depth_);
+                continue;
+              }
+#endif
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
+              if (rows == 1 && simd_level >= SimdLevel::kAVX2 && simd_indices_fit) {
+                participant_values[0] = EvaluateBalancedFloatTrees_AVX2(
+                    input_data, compact_float_nodes_.data(), leaf_weights_float_.data(),
+                    tree_roots_.data() + tree_begin, tree_end - tree_begin, max_depth_);
+                continue;
+              }
+#endif
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
               if (vector_tree_partitions) {
                 EvaluateBalancedFloatRows_AVX512(
                     input_data, features, compact_float_nodes_.data(), leaf_weights_float_.data(),
