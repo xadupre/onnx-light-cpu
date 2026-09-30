@@ -128,9 +128,13 @@ struct MatMulNBitsKernel::PreparedInt4Plan {
           const std::size_t column = group * 16 + lane;
           const std::size_t target = (group * blocks + block) * 16 + lane;
           const std::size_t scale_index = column * blocks + block;
-          vnni_scales[target] = data_type == RuntimeDataType::FLOAT
-                                    ? scale_float[scale_index]
-                                    : detail::Float16BitsToFloat(scale_half[scale_index]);
+          if (data_type == RuntimeDataType::FLOAT) {
+            vnni_scales[target] = scale_float[scale_index];
+          } else if (data_type == RuntimeDataType::FLOAT16) {
+            vnni_scales[target] = detail::Float16BitsToFloat(scale_half[scale_index]);
+          } else {
+            vnni_scales[target] = detail::Bfloat16BitsToFloat(scale_half[scale_index]);
+          }
           std::int32_t sum = 0;
           for (std::size_t offset = 0; offset < 16; ++offset) {
             const std::uint8_t byte = packed_values[(column * blocks + block) * 16 + offset];
@@ -274,7 +278,8 @@ Tensor MatMulNBitsKernel::operator()(const Tensor &a, const Tensor &b, const Ten
   std::shared_ptr<const PreparedInt4Plan> prepared;
   if (attributes_.bits == 4 && attributes_.accuracy_level == 4 &&
       MatMulNBitsAccuracy4Float32Available() &&
-      (data_type == RuntimeDataType::FLOAT || data_type == RuntimeDataType::FLOAT16) &&
+      (data_type == RuntimeDataType::FLOAT || data_type == RuntimeDataType::FLOAT16 ||
+       data_type == RuntimeDataType::BFLOAT16) &&
       n % 16 == 0 && k % 32 == 0) {
     prepared = std::atomic_load_explicit(&prepared_int4_, std::memory_order_acquire);
     if (prepared == nullptr || !prepared->Matches(a, b, scales)) {
@@ -287,30 +292,42 @@ Tensor MatMulNBitsKernel::operator()(const Tensor &a, const Tensor &b, const Ten
     }
   }
   if (prepared != nullptr) {
-    if (data_type == RuntimeDataType::FLOAT16) {
-      struct Float16Scratch {
+    if (data_type == RuntimeDataType::FLOAT16 || data_type == RuntimeDataType::BFLOAT16) {
+      struct HalfScratch {
         std::vector<float> a;
         std::vector<float> bias;
         std::vector<float> y;
       };
-      thread_local Float16Scratch scratch;
+      thread_local HalfScratch scratch;
       scratch.a.resize(rows * k);
       scratch.y.resize(output_count);
-      detail::ConvertFloat16ToFloat32(reinterpret_cast<const std::uint16_t *>(a.bytes()),
-                                      scratch.a.data(), scratch.a.size());
+      const auto *half_a = reinterpret_cast<const std::uint16_t *>(a.bytes());
+      if (data_type == RuntimeDataType::FLOAT16) {
+        detail::ConvertFloat16ToFloat32(half_a, scratch.a.data(), scratch.a.size());
+      } else {
+        detail::ConvertBFloat16ToFloat32(half_a, scratch.a.data(), scratch.a.size());
+      }
       const float *float_bias = nullptr;
       if (bias != nullptr) {
         scratch.bias.resize(n);
-        detail::ConvertFloat16ToFloat32(reinterpret_cast<const std::uint16_t *>(bias->bytes()),
-                                        scratch.bias.data(), n);
+        const auto *half_bias = reinterpret_cast<const std::uint16_t *>(bias->bytes());
+        if (data_type == RuntimeDataType::FLOAT16) {
+          detail::ConvertFloat16ToFloat32(half_bias, scratch.bias.data(), n);
+        } else {
+          detail::ConvertBFloat16ToFloat32(half_bias, scratch.bias.data(), n);
+        }
         float_bias = scratch.bias.data();
       }
       MatMulNBitsAccuracy4Float32(scratch.a.data(), prepared->vnni_weights.data(),
                                   prepared->vnni_weight_sums.data(), prepared->vnni_scales.data(),
                                   float_bias, scratch.y.data(), rows, k, n,
                                   prepared->max_participants);
-      detail::ConvertFloat32ToFloat16(
-          scratch.y.data(), reinterpret_cast<std::uint16_t *>(y.mutable_bytes()), output_count);
+      auto *half_y = reinterpret_cast<std::uint16_t *>(y.mutable_bytes());
+      if (data_type == RuntimeDataType::FLOAT16) {
+        detail::ConvertFloat32ToFloat16(scratch.y.data(), half_y, output_count);
+      } else {
+        detail::ConvertFloat32ToBFloat16(scratch.y.data(), half_y, output_count);
+      }
       return y;
     }
     MatMulNBitsAccuracy4Float32(
