@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <stdexcept>
@@ -275,6 +276,24 @@ std::size_t ByteThresholdToUnits(std::size_t threshold_bytes, std::size_t bytes_
   return bytes_per_unit == 0 ? 0 : (threshold_bytes + bytes_per_unit - 1) / bytes_per_unit;
 }
 
+// Cache-sized tiles keep heterogeneous workers balanced without fragmenting SIMD loops.
+constexpr std::size_t kBinaryDynamicTileBytes = 64 * 1024;
+
+bool UsesDynamicFloatArithmetic(BinaryOperator op, DataType output_type) {
+  if (output_type != DataType::FLOAT) {
+    return false;
+  }
+  switch (op) {
+  case BinaryOperator::kAdd:
+  case BinaryOperator::kSub:
+  case BinaryOperator::kMul:
+  case BinaryOperator::kDiv:
+    return true;
+  default:
+    return false;
+  }
+}
+
 } // namespace
 
 void BinaryBroadcastPlan::ExecuteFlat(const std::byte *left, const std::byte *right,
@@ -321,24 +340,44 @@ void BinaryBroadcastPlan::ExecuteFlat(const std::byte *left, const std::byte *ri
           : tuning.max_participants;
   const ExecutionSchedule schedule{static_cast<std::int64_t>(min_units_bound), min_block_size,
                                    max_participants};
-  ExecuteRanges(static_cast<std::int64_t>(count), schedule, block_multiple,
-                [&](std::int64_t begin, std::int64_t end) {
-                  const std::size_t sub_count = static_cast<std::size_t>(end - begin);
-                  const std::byte *sub_left =
-                      left + (left_stride != 0 ? begin : 0) * adapter_.left_size;
-                  const std::byte *sub_right =
-                      right + (right_stride != 0 ? begin : 0) * adapter_.right_size;
-                  std::byte *sub_output = output + begin * adapter_.output_size;
-                  if (bulk != nullptr) {
-                    bulk(sub_left, sub_right, sub_output, sub_count);
-                    return;
-                  }
-                  for (std::size_t i = 0; i < sub_count; ++i) {
-                    adapter_.scalar(sub_left + (left_stride != 0 ? i : 0) * adapter_.left_size,
-                                    sub_right + (right_stride != 0 ? i : 0) * adapter_.right_size,
-                                    sub_output + i * adapter_.output_size);
-                  }
-                });
+  const bool dynamic = UsesDynamicFloatArithmetic(descriptor_.op(), adapter_.signature.output) &&
+                       bulk != nullptr && count >= min_units_bound && max_participants != 1 &&
+                       ExecutionThreadCount() > 1 && !ExecutionInParallelRegion();
+  const std::size_t dynamic_tile_units =
+      ByteThresholdToUnits(kBinaryDynamicTileBytes, bytes_per_unit);
+  const std::size_t dynamic_tile =
+      ((dynamic_tile_units + static_cast<std::size_t>(block_multiple) - 1) /
+       static_cast<std::size_t>(block_multiple)) *
+      static_cast<std::size_t>(block_multiple);
+  std::atomic<std::size_t> next{0};
+  ExecuteRanges(
+      static_cast<std::int64_t>(count), schedule, block_multiple,
+      [&](std::int64_t begin, std::int64_t end) {
+        const auto execute = [&](std::size_t first, std::size_t last) {
+          const std::size_t sub_count = last - first;
+          const std::byte *sub_left = left + (left_stride != 0 ? first : 0) * adapter_.left_size;
+          const std::byte *sub_right =
+              right + (right_stride != 0 ? first : 0) * adapter_.right_size;
+          std::byte *sub_output = output + first * adapter_.output_size;
+          if (bulk != nullptr) {
+            bulk(sub_left, sub_right, sub_output, sub_count);
+            return;
+          }
+          for (std::size_t i = 0; i < sub_count; ++i) {
+            adapter_.scalar(sub_left + (left_stride != 0 ? i : 0) * adapter_.left_size,
+                            sub_right + (right_stride != 0 ? i : 0) * adapter_.right_size,
+                            sub_output + i * adapter_.output_size);
+          }
+        };
+        if (!dynamic) {
+          execute(static_cast<std::size_t>(begin), static_cast<std::size_t>(end));
+          return;
+        }
+        for (std::size_t first = next.fetch_add(dynamic_tile, std::memory_order_relaxed);
+             first < count; first = next.fetch_add(dynamic_tile, std::memory_order_relaxed)) {
+          execute(first, std::min(first + dynamic_tile, count));
+        }
+      });
 }
 
 void BinaryBroadcastPlan::ComputeOuterOffsets(std::size_t outer_index,
@@ -504,10 +543,26 @@ void BinaryBroadcastPlan::ExecuteMultiDimensional(const std::byte *left, const s
       static_cast<std::int64_t>(std::max<std::size_t>(min_units, 1)),
       static_cast<std::int64_t>(std::max<std::size_t>(min_block_units, 1)),
       tuning.max_participants};
+  const bool dynamic = UsesDynamicFloatArithmetic(descriptor_.op(), adapter_.signature.output) &&
+                       outer_block_count_ >= std::max<std::size_t>(min_units, 1) &&
+                       tuning.max_participants != 1 && ExecutionThreadCount() > 1 &&
+                       !ExecutionInParallelRegion();
+  const std::size_t dynamic_tile =
+      std::max<std::size_t>(ByteThresholdToUnits(kBinaryDynamicTileBytes, bytes_per_block), 1);
+  std::atomic<std::size_t> next{0};
   ExecuteRanges(static_cast<std::int64_t>(outer_block_count_), schedule,
                 [&](std::int64_t begin, std::int64_t end) {
-                  ExecuteOuterRange(left, right, output, static_cast<std::size_t>(begin),
-                                    static_cast<std::size_t>(end));
+                  if (!dynamic) {
+                    ExecuteOuterRange(left, right, output, static_cast<std::size_t>(begin),
+                                      static_cast<std::size_t>(end));
+                    return;
+                  }
+                  for (std::size_t first = next.fetch_add(dynamic_tile, std::memory_order_relaxed);
+                       first < outer_block_count_;
+                       first = next.fetch_add(dynamic_tile, std::memory_order_relaxed)) {
+                    ExecuteOuterRange(left, right, output, first,
+                                      std::min(first + dynamic_tile, outer_block_count_));
+                  }
                 });
 }
 

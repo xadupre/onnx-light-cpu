@@ -12,6 +12,13 @@ namespace onnx_light_cpu {
 #define ONNX_LIGHT_CPU_BIN_AVX(STEM, T, VECTOR, LANES, LOAD, STORE, SET1, INTRIN, OPCH)            \
   void STEM##_AVX(const T *left, const T *right, T *out, std::size_t count) {                      \
     std::size_t i = 0;                                                                             \
+    const std::size_t unrolled = count - count % (4 * LANES);                                      \
+    for (; i < unrolled; i += 4 * LANES) {                                                         \
+      STORE(out + i, INTRIN(LOAD(left + i), LOAD(right + i)));                                     \
+      STORE(out + i + LANES, INTRIN(LOAD(left + i + LANES), LOAD(right + i + LANES)));             \
+      STORE(out + i + 2 * LANES, INTRIN(LOAD(left + i + 2 * LANES), LOAD(right + i + 2 * LANES))); \
+      STORE(out + i + 3 * LANES, INTRIN(LOAD(left + i + 3 * LANES), LOAD(right + i + 3 * LANES))); \
+    }                                                                                              \
     const std::size_t aligned = count - count % LANES;                                             \
     for (; i < aligned; i += LANES) {                                                              \
       STORE(out + i, INTRIN(LOAD(left + i), LOAD(right + i)));                                     \
@@ -22,8 +29,15 @@ namespace onnx_light_cpu {
   }                                                                                                \
   void STEM##Left_AVX(T left, const T *right, T *out, std::size_t count) {                         \
     std::size_t i = 0;                                                                             \
-    const std::size_t aligned = count - count % LANES;                                             \
     const VECTOR left_vec = SET1(left);                                                            \
+    const std::size_t unrolled = count - count % (4 * LANES);                                      \
+    for (; i < unrolled; i += 4 * LANES) {                                                         \
+      STORE(out + i, INTRIN(left_vec, LOAD(right + i)));                                           \
+      STORE(out + i + LANES, INTRIN(left_vec, LOAD(right + i + LANES)));                           \
+      STORE(out + i + 2 * LANES, INTRIN(left_vec, LOAD(right + i + 2 * LANES)));                   \
+      STORE(out + i + 3 * LANES, INTRIN(left_vec, LOAD(right + i + 3 * LANES)));                   \
+    }                                                                                              \
+    const std::size_t aligned = count - count % LANES;                                             \
     for (; i < aligned; i += LANES) {                                                              \
       STORE(out + i, INTRIN(left_vec, LOAD(right + i)));                                           \
     }                                                                                              \
@@ -33,8 +47,15 @@ namespace onnx_light_cpu {
   }                                                                                                \
   void STEM##Right_AVX(const T *left, T right, T *out, std::size_t count) {                        \
     std::size_t i = 0;                                                                             \
-    const std::size_t aligned = count - count % LANES;                                             \
     const VECTOR right_vec = SET1(right);                                                          \
+    const std::size_t unrolled = count - count % (4 * LANES);                                      \
+    for (; i < unrolled; i += 4 * LANES) {                                                         \
+      STORE(out + i, INTRIN(LOAD(left + i), right_vec));                                           \
+      STORE(out + i + LANES, INTRIN(LOAD(left + i + LANES), right_vec));                           \
+      STORE(out + i + 2 * LANES, INTRIN(LOAD(left + i + 2 * LANES), right_vec));                   \
+      STORE(out + i + 3 * LANES, INTRIN(LOAD(left + i + 3 * LANES), right_vec));                   \
+    }                                                                                              \
+    const std::size_t aligned = count - count % LANES;                                             \
     for (; i < aligned; i += LANES) {                                                              \
       STORE(out + i, INTRIN(LOAD(left + i), right_vec));                                           \
     }                                                                                              \
