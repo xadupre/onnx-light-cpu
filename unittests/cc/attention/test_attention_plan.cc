@@ -329,6 +329,32 @@ TEST(ComputeAttentionFloat32Streaming, DecodeDistributesHeadsAcrossWorkers) {
   EXPECT_EQ(executor.maximum_blocks, 4);
 }
 
+TEST(ComputeAttentionFloat32Streaming, SmallCausalGqaCapsWorkerCount) {
+  constexpr std::size_t batch = 4, q_heads = 8, kv_heads = 1, length = 32, head_dim = 64;
+  AttentionDescriptor descriptor;
+  descriptor.q_num_heads = q_heads;
+  descriptor.kv_num_heads = kv_heads;
+  descriptor.is_causal = true;
+  const std::int64_t q_shape[] = {batch, length, q_heads * head_dim};
+  const std::int64_t kv_shape[] = {batch, length, kv_heads * head_dim};
+  AttentionPlan plan(descriptor, AttentionLayout::kRank3, q_shape, kv_shape, kv_shape, {},
+                     AttentionMaskKind::kNone);
+  const auto q = RandomTensor(batch * q_heads * length * head_dim, 104);
+  const auto k = RandomTensor(batch * kv_heads * length * head_dim, 105);
+  const auto v = RandomTensor(batch * kv_heads * length * head_dim, 106);
+  std::vector<float> y(q.size());
+  InlineExecutor executor;
+  onnx_light_cpu::ExecutionExecutorView view{&executor, 16, &InlineExecutor::Run};
+
+  {
+    onnx_light_cpu::ExecutionExecutorScope scope(&view);
+    ComputeAttentionFloat32(plan, q.data(), k.data(), v.data(), nullptr, y.data());
+  }
+
+  EXPECT_GT(executor.maximum_blocks, 1);
+  EXPECT_LE(executor.maximum_blocks, 6);
+}
+
 // GQA, rank-4, causal.
 TEST(ComputeAttentionFloat32, Rank4GqaCausalMatchesReference) {
   AttentionDescriptor descriptor;

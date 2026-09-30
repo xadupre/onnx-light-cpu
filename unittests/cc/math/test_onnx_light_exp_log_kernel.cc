@@ -135,9 +135,8 @@ template <typename Kernel> void CheckTuningSchema(const char *op_type) {
               : log_float  ? 128 * 1024
               : half       ? 128 * 1024
                            : 256 * 1024);
-    EXPECT_EQ(defaults.template Get<int64_t>("parallel.max_participants"), exp_float   ? 3
-                                                                           : log_float ? 8
-                                                                                       : 32);
+    EXPECT_EQ(defaults.template Get<int64_t>("parallel.max_participants"),
+              exp_float || log_float ? 8 : 32);
     EXPECT_EQ(defaults.template Get<int64_t>("parallel.cost_model"),
               exp_float || log_float ? 0 : 1);
   }

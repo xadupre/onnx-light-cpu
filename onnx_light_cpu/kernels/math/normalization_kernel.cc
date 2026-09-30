@@ -315,6 +315,13 @@ void InstanceNormalize(const Tensor &x, const Tensor &scale, const Tensor &bias,
     }
   }
   ExecuteItems(slices, static_cast<double>(spatial) * 6.0, [&](std::size_t begin, std::size_t end) {
+    if constexpr (Type == DataType::FLOAT16) {
+      if (spatial >= 32) {
+        InstanceNormalizationFloat16(input, scale_data, bias_data, output, begin, end, channels,
+                                     spatial, epsilon);
+        return;
+      }
+    }
     for (std::size_t slice = begin; slice < end; ++slice) {
       const std::size_t channel = slice % channels;
       const std::size_t base = slice * spatial;
@@ -395,6 +402,15 @@ void GroupNormalizeStashed(const Tensor &x, const Tensor &scale, const Tensor &b
             return norm::ComputeContiguousFloatMoments<Type>(input + base, group_size);
           }();
           const float inverse_std_dev = 1.0F / std::sqrt(moments.variance + epsilon);
+          if constexpr (Type == DataType::FLOAT16) {
+            if (spatial >= 32) {
+              ApplyGroupNormalizationFloat16Channels(
+                  input + base, scale_data + group * channels_per_group,
+                  bias_data + group * channels_per_group, output + base, channels_per_group,
+                  spatial, moments.mean, inverse_std_dev);
+              continue;
+            }
+          }
           for (std::size_t local_channel = 0; local_channel < channels_per_group; ++local_channel) {
             const std::size_t channel = group * channels_per_group + local_channel;
             const std::size_t channel_base = base + local_channel * spatial;
@@ -446,16 +462,20 @@ void LayerNormalize(const Tensor &x, const Tensor &scale, const Tensor *bias, Te
   const auto *bias_data = bias == nullptr ? nullptr : norm::Data<Type>(*bias);
   auto *output = norm::MutableData<Type>(y);
   ExecuteItems(outer, static_cast<double>(inner) * 7.0, [&](std::size_t begin, std::size_t end) {
+    if constexpr (Type == DataType::FLOAT16) {
+      if (inner >= 32 && scale_by_inner && (bias_data == nullptr || bias_by_inner)) {
+        LayerNormalizationFloat16Rows(input, scale_data, bias_data, output, mean_output, inv_output,
+                                      begin, end, inner, epsilon);
+        return;
+      }
+    }
     for (std::size_t row = begin; row < end; ++row) {
       const std::size_t base = row * inner;
       const norm::Moments<float> moments = [&]() {
-        if constexpr (Type == DataType::FLOAT) {
-          const Float32NormalizationMoments shared =
-              ComputeNormalizationMomentsFloat32(input + base, inner);
-          return norm::Moments<float>{shared.mean, shared.variance};
-        } else {
-          return norm::ComputeContiguousFloatMoments<Type>(input + base, inner);
+        if constexpr (Type == DataType::FLOAT || Type == DataType::FLOAT16) {
+          return ComputeSliceMoments<Type>(input + base, inner);
         }
+        return norm::ComputeContiguousFloatMoments<Type>(input + base, inner);
       }();
       const float inverse_std_dev = 1.0F / std::sqrt(moments.variance + epsilon);
       if (mean_output != nullptr) {

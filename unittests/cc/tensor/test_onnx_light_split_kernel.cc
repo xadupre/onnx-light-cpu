@@ -18,6 +18,7 @@
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -366,6 +367,7 @@ struct InlineExecutor {
   int64_t depth = 0;
   int64_t maximum_depth = 0;
   bool nested = false;
+  bool concurrent = false;
 
   static void Run(void *context, int64_t count, void *task_context,
                   onnx_light_cpu::ExecutionBlockFn task) {
@@ -373,12 +375,21 @@ struct InlineExecutor {
     ++self.dispatches;
     self.blocks = count;
     self.maximum_depth = std::max(self.maximum_depth, ++self.depth);
-    for (int64_t i = 0; i < count; ++i) {
-      task(task_context, i);
+    std::vector<std::thread> workers;
+    for (int64_t i = 1; i < count; ++i) {
+      if (self.concurrent) {
+        workers.emplace_back(task, task_context, i);
+      } else {
+        task(task_context, i);
+      }
       if (self.nested) {
         onnx_light_cpu::detail::ExecutionRegionScope region;
         Compare(Payload(DataType::FLOAT, {257, 4096}), -1, {2048, 1024, 1024});
       }
+    }
+    task(task_context, 0);
+    for (auto &worker : workers) {
+      worker.join();
     }
     --self.depth;
   }
@@ -394,6 +405,10 @@ TEST(OnnxLightSplitKernel, RuntimeSchedulingSmallLargeSingleRowAndNested) {
   EXPECT_GT(executor.dispatches, 0);
   EXPECT_GT(executor.blocks, 1);
   EXPECT_LE(executor.blocks, view.effective_threads);
+  executor.concurrent = true;
+  Compare(Payload(DataType::FLOAT, {257, 4096}), -1, {2048, 1024, 1024});
+  EXPECT_GT(executor.blocks, 1);
+  executor.concurrent = false;
   int64_t previous = executor.dispatches;
   Compare(Payload(DataType::FLOAT, {1, 1048583}), -1, {524291, 524292});
   EXPECT_GT(executor.dispatches, previous);
