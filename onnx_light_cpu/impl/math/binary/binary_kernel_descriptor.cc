@@ -2469,6 +2469,9 @@ void SelectAdditionalBulk(BinaryOperator op, DT left, DT right, const Attrs &att
       adapter.bulk_contiguous = &BulkFloatPow;
       adapter.bulk_left_scalar = &BulkFloatPowLeftScalar;
       adapter.bulk_right_scalar = &BulkFloatPowRightScalar;
+      adapter.preferred_bulk_parallel_threshold_bytes = 256 * 1024;
+      adapter.preferred_target_block_bytes = 256 * 1024;
+      adapter.maximum_participants = 32;
     } else if (left == DT::DOUBLE) {
       ONNX_LIGHT_CPU_BIND_TYPED_BULK(double, double, double, ComputePow<double, double>)
     } else if (left == DT::INT32) {
