@@ -792,6 +792,30 @@ void SelectBulk(BinaryOperator op, DT left, BinaryKernelDescriptor::Adapter &ada
       ONNX_LIGHT_CPU_BIND_HALF_BULK(Float16, Div)
 #endif
     } else if (left == DT::BFLOAT16) {
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512BF16
+      static const bool use_avx512_bf16 = CpuSupportsAvx512Bf16();
+      if (use_avx512_bf16) {
+        adapter.bulk_contiguous =
+            &BulkContiguousWrapper<std::uint16_t, &BinaryDivBFloat16_AVX512BF16>;
+        adapter.bulk_left_scalar =
+            &BulkLeftScalarWrapper<std::uint16_t, &BinaryDivBFloat16Left_AVX512BF16>;
+        adapter.bulk_right_scalar =
+            &BulkRightScalarWrapper<std::uint16_t, &BinaryDivBFloat16Right_AVX512BF16>;
+        break;
+      }
+#endif
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
+      static const bool use_avx2_fma = DetectSimdLevel() >= SimdLevel::kAVX2 && CpuSupportsFma();
+      if (use_avx2_fma) {
+        adapter.bulk_contiguous =
+            &BulkContiguousWrapper<std::uint16_t, &BinaryDivBFloat16_AVX2_FMA>;
+        adapter.bulk_left_scalar =
+            &BulkLeftScalarWrapper<std::uint16_t, &BinaryDivBFloat16Left_AVX2_FMA>;
+        adapter.bulk_right_scalar =
+            &BulkRightScalarWrapper<std::uint16_t, &BinaryDivBFloat16Right_AVX2_FMA>;
+        break;
+      }
+#endif
       ONNX_LIGHT_CPU_BIND_HALF_BULK(Bfloat16, Div)
     }
     break;

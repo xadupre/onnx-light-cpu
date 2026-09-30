@@ -64,6 +64,24 @@ const BinaryArithmeticBulkFunctions &BinarySubFloat16BulkFunctions();
 const BinaryArithmeticBulkFunctions &BinaryMulFloat16BulkFunctions();
 const BinaryArithmeticBulkFunctions &BinaryDivFloat16BulkFunctions();
 
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
+void BinaryDivBFloat16_AVX2_FMA(const std::uint16_t *left, const std::uint16_t *right,
+                                std::uint16_t *out, std::size_t count);
+void BinaryDivBFloat16Left_AVX2_FMA(std::uint16_t left, const std::uint16_t *right,
+                                    std::uint16_t *out, std::size_t count);
+void BinaryDivBFloat16Right_AVX2_FMA(const std::uint16_t *left, std::uint16_t right,
+                                     std::uint16_t *out, std::size_t count);
+#endif
+
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512BF16
+void BinaryDivBFloat16_AVX512BF16(const std::uint16_t *left, const std::uint16_t *right,
+                                  std::uint16_t *out, std::size_t count);
+void BinaryDivBFloat16Left_AVX512BF16(std::uint16_t left, const std::uint16_t *right,
+                                      std::uint16_t *out, std::size_t count);
+void BinaryDivBFloat16Right_AVX512BF16(const std::uint16_t *left, std::uint16_t right,
+                                       std::uint16_t *out, std::size_t count);
+#endif
+
 void BinaryPReluFloat32Contiguous(const float *left, const float *right, float *out,
                                   std::size_t count);
 void BinaryPReluFloat32LeftScalar(float left, const float *right, float *out, std::size_t count);
