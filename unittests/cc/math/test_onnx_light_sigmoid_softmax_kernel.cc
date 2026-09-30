@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <limits>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -155,6 +156,7 @@ struct InlineExecutor {
   std::int64_t dispatches = 0;
   std::int64_t blocks = 0;
   bool nested = false;
+  bool concurrent = false;
 
   static void Run(void *context, std::int64_t blocks, void *task_context,
                   onnx_light_cpu::ExecutionBlockFn task) {
@@ -162,8 +164,17 @@ struct InlineExecutor {
     self.nested |= onnx_light_cpu::ExecutionInParallelRegion();
     ++self.dispatches;
     self.blocks = blocks;
-    for (std::int64_t block = blocks; block > 0; --block) {
-      task(task_context, block - 1);
+    std::vector<std::thread> workers;
+    for (std::int64_t block = 1; block < blocks; ++block) {
+      if (self.concurrent) {
+        workers.emplace_back(task, task_context, block);
+      } else {
+        task(task_context, block);
+      }
+    }
+    task(task_context, 0);
+    for (auto &worker : workers) {
+      worker.join();
     }
   }
 };
@@ -541,6 +552,7 @@ TEST(OnnxLightSigmoidSoftmaxKernel, UsesRuntimeExecutorForLargeInputs) {
   const auto expected_softmax = softmax(large, -1);
   EXPECT_EQ(executor.dispatches, 0);
   view.effective_threads = 4;
+  executor.concurrent = true;
   const auto actual_sigmoid = sigmoid(large);
   EXPECT_TRUE(std::equal(expected_sigmoid.AsFloat(),
                          expected_sigmoid.AsFloat() + large.element_count(),

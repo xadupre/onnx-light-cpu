@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <bit>
 #include <cmath>
 #include <cstddef>
@@ -127,7 +128,18 @@ template <typename T> void Sigmoid(const T *input, T *output, std::size_t count)
     }
   }
 #endif
-  ExecuteUnaryRanges<T>(count, tuning, [=](std::int64_t begin, std::int64_t end) {
+  constexpr std::size_t tile = 16 * 1024;
+  std::atomic<std::size_t> next{0};
+  const bool dynamic = std::is_same_v<T, float> && count >= 2 * tile &&
+                       ExecutionThreadCount() > 1 && !ExecutionInParallelRegion();
+  ExecuteUnaryRanges<T>(count, tuning, [=, &next](std::int64_t begin, std::int64_t end) {
+    if (dynamic) {
+      for (std::size_t first = next.fetch_add(tile, std::memory_order_relaxed); first < count;
+           first = next.fetch_add(tile, std::memory_order_relaxed)) {
+        SigmoidRange(input + first, output + first, std::min(tile, count - first));
+      }
+      return;
+    }
     SigmoidRange(input + begin, output + begin, static_cast<std::size_t>(end - begin));
   });
 }
