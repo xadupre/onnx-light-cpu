@@ -147,6 +147,76 @@ TEST(BinaryKernelDescriptor, ResolvesFloat32ArithmeticDispatchOncePerAdapter) {
   }
 }
 
+TEST(BinaryKernelDescriptor, BFloat16ArithmeticCoversBroadcastsTailsAndAliasing) {
+  const std::array<float, 11> values = {-std::numeric_limits<float>::infinity(),
+                                        -7.0f,
+                                        -1.0f,
+                                        -0.0f,
+                                        0.0f,
+                                        0.25f,
+                                        2.0f,
+                                        std::numeric_limits<float>::infinity(),
+                                        std::numeric_limits<float>::quiet_NaN(),
+                                        -0.125f,
+                                        4.0f};
+  const auto encode = onnx_light_cpu::detail::FloatToBFloat16Bits;
+  const auto decode = onnx_light_cpu::detail::Bfloat16BitsToFloat;
+  const auto expect_equal = [&](std::uint16_t actual, std::uint16_t expected) {
+    if (std::isnan(decode(expected))) {
+      EXPECT_TRUE(std::isnan(decode(actual)));
+    } else {
+      EXPECT_EQ(actual, expected);
+    }
+  };
+
+  for (const std::string op_type : {"Add", "Sub", "Mul"}) {
+    const BinaryKernelDescriptor descriptor(op_type, 14, {});
+    const auto &adapter = descriptor.ResolveAdapter(
+        BinaryDataType::BFLOAT16, BinaryDataType::BFLOAT16, BinaryDataType::BFLOAT16);
+    const auto compute = [&](std::uint16_t left, std::uint16_t right) {
+      const float a = decode(left);
+      const float b = decode(right);
+      return encode(op_type == "Add" ? a + b : op_type == "Sub" ? a - b : a * b);
+    };
+    for (const std::size_t count : {0u, 1u, 7u, 8u, 9u, 15u, 16u, 17u, 31u, 32u, 33u}) {
+      SCOPED_TRACE(::testing::Message() << op_type << " count=" << count);
+      std::vector<std::uint16_t> left(count), right(count), output(count);
+      for (std::size_t index = 0; index < count; ++index) {
+        left[index] = encode(values[index % values.size()]);
+        right[index] = encode(values[(index + 3) % values.size()]);
+      }
+
+      adapter.bulk_contiguous(left.data(), right.data(), output.data(), count);
+      for (std::size_t index = 0; index < count; ++index) {
+        expect_equal(output[index], compute(left[index], right[index]));
+      }
+      auto aliased = left;
+      adapter.bulk_contiguous(aliased.data(), right.data(), aliased.data(), count);
+      for (std::size_t index = 0; index < count; ++index) {
+        expect_equal(aliased[index], compute(left[index], right[index]));
+      }
+      aliased = right;
+      adapter.bulk_contiguous(left.data(), aliased.data(), aliased.data(), count);
+      for (std::size_t index = 0; index < count; ++index) {
+        expect_equal(aliased[index], compute(left[index], right[index]));
+      }
+
+      if (count != 0) {
+        const std::uint16_t left_scalar = encode(-2.0f);
+        adapter.bulk_left_scalar(&left_scalar, right.data(), output.data(), count);
+        for (std::size_t index = 0; index < count; ++index) {
+          expect_equal(output[index], compute(left_scalar, right[index]));
+        }
+        const std::uint16_t right_scalar = encode(0.25f);
+        adapter.bulk_right_scalar(left.data(), &right_scalar, output.data(), count);
+        for (std::size_t index = 0; index < count; ++index) {
+          expect_equal(output[index], compute(left[index], right_scalar));
+        }
+      }
+    }
+  }
+}
+
 #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
 TEST(BinaryKernelDescriptor, ResolvesFloat16ArithmeticDispatchOncePerAdapter) {
   using BulkFunctions = const onnx_light_cpu::BinaryArithmeticBulkFunctions &(*)();
@@ -235,6 +305,73 @@ TEST(BinaryKernelDescriptor, Float16PReluBulkCoversBroadcastsTailsAndAliasing) {
     adapter.bulk_left_scalar(&scalar_value, right.data(), output.data(), count);
     for (std::size_t index = 0; index < count; ++index) {
       expect_equal(output[index], expected(scalar_value, right[index]));
+    }
+  }
+}
+
+TEST(BinaryKernelDescriptor, BFloat16PReluBulkCoversBroadcastsTailsAndAliasing) {
+  const BinaryKernelDescriptor descriptor("PRelu", 16, {});
+  const auto &adapter = descriptor.ResolveAdapter(
+      BinaryDataType::BFLOAT16, BinaryDataType::BFLOAT16, BinaryDataType::BFLOAT16);
+  ASSERT_NE(adapter.bulk_contiguous, nullptr);
+  ASSERT_NE(adapter.bulk_left_scalar, nullptr);
+  ASSERT_NE(adapter.bulk_right_scalar, nullptr);
+  const std::array<float, 13> values = {-std::numeric_limits<float>::infinity(),
+                                        -7.0f,
+                                        -1.0f,
+                                        -0.0f,
+                                        0.0f,
+                                        0.25f,
+                                        2.0f,
+                                        std::numeric_limits<float>::infinity(),
+                                        std::numeric_limits<float>::quiet_NaN(),
+                                        -0.125f,
+                                        4.0f,
+                                        -3.0f,
+                                        0.5f};
+  const std::array<float, 7> slopes = {
+      -2.0f, -0.0f, 0.0f, 0.125f, 0.5f, 2.0f, std::numeric_limits<float>::quiet_NaN()};
+  const auto encode = [](float value) {
+    return onnx_light_cpu::detail::FloatToBFloat16Bits(value);
+  };
+  const auto expected = [&](std::uint16_t value_bits, std::uint16_t slope_bits) {
+    const float value = onnx_light_cpu::detail::Bfloat16BitsToFloat(value_bits);
+    const float slope = onnx_light_cpu::detail::Bfloat16BitsToFloat(slope_bits);
+    return encode(value < 0.0f ? value * slope : value);
+  };
+
+  for (std::size_t count : {0u, 1u, 15u, 16u, 17u, 31u, 32u, 33u}) {
+    SCOPED_TRACE(count);
+    std::vector<std::uint16_t> left(count);
+    std::vector<std::uint16_t> right(count);
+    for (std::size_t index = 0; index < count; ++index) {
+      left[index] = encode(values[index % values.size()]);
+      right[index] = encode(slopes[index % slopes.size()]);
+    }
+    std::vector<std::uint16_t> wanted(count);
+    for (std::size_t index = 0; index < count; ++index) {
+      wanted[index] = expected(left[index], right[index]);
+    }
+
+    std::vector<std::uint16_t> output(count);
+    adapter.bulk_contiguous(left.data(), right.data(), output.data(), count);
+    EXPECT_EQ(output, wanted);
+    auto aliased_left = left;
+    adapter.bulk_contiguous(aliased_left.data(), right.data(), aliased_left.data(), count);
+    EXPECT_EQ(aliased_left, wanted);
+    auto aliased_right = right;
+    adapter.bulk_contiguous(left.data(), aliased_right.data(), aliased_right.data(), count);
+    EXPECT_EQ(aliased_right, wanted);
+
+    const std::uint16_t scalar_slope = encode(0.25f);
+    adapter.bulk_right_scalar(left.data(), &scalar_slope, output.data(), count);
+    for (std::size_t index = 0; index < count; ++index) {
+      EXPECT_EQ(output[index], expected(left[index], scalar_slope));
+    }
+    const std::uint16_t scalar_value = encode(-2.0f);
+    adapter.bulk_left_scalar(&scalar_value, right.data(), output.data(), count);
+    for (std::size_t index = 0; index < count; ++index) {
+      EXPECT_EQ(output[index], expected(scalar_value, right[index]));
     }
   }
 }

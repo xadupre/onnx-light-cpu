@@ -8,7 +8,7 @@
 
 namespace onnx_light_cpu::detail {
 
-inline constexpr std::size_t kNBitsRows = 8;
+inline constexpr std::size_t kNBitsRows = 128;
 inline constexpr std::size_t kNBitsColumns = 32;
 inline constexpr std::size_t kNBitsBlock = 32;
 

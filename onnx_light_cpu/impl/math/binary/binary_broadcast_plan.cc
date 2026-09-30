@@ -288,6 +288,7 @@ bool UsesDynamicFloatArithmetic(BinaryOperator op, DataType output_type) {
   case BinaryOperator::kSub:
   case BinaryOperator::kMul:
   case BinaryOperator::kDiv:
+  case BinaryOperator::kPow:
   case BinaryOperator::kPRelu:
     return true;
   default:

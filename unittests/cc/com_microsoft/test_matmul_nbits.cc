@@ -17,14 +17,18 @@ namespace {
 using namespace onnx_light_cpu;
 
 template <typename Storage, typename Encode, typename Decode>
-void CheckPanels(DataType type, Encode encode, Decode decode) {
+void CheckPanels(DataType type, std::size_t bits, Encode encode, Decode decode) {
+  const std::size_t values_per_byte = 8 / bits;
+  const std::size_t blob_size = 32 * bits / 8;
+  const std::uint8_t mask = static_cast<std::uint8_t>((1U << bits) - 1U);
+  const int zero_point = 1 << (bits - 1);
   for (std::size_t m : {0u, 1u, 2u, 7u, 8u, 9u, 17u}) {
     for (std::size_t n = 1; n <= 65; ++n) {
       for (std::size_t k : {0u, 1u, 15u, 31u, 32u, 33u, 65u}) {
         SCOPED_TRACE(::testing::Message() << m << ',' << k << ',' << n);
         const auto blocks = (k + 31) / 32;
         std::vector<Storage> a(m * k), scales(n * blocks), bias(n), output(m * n + 1);
-        std::vector<std::uint8_t> packed(n * blocks * 16);
+        std::vector<std::uint8_t> packed(n * blocks * blob_size);
         for (std::size_t i = 0; i < a.size(); ++i) {
           a[i] = encode(static_cast<float>(static_cast<int>(i % 17) - 8) / 16);
         }
@@ -42,14 +46,17 @@ void CheckPanels(DataType type, Encode encode, Decode decode) {
           output.back() = encode(-42);
           for (int repeat = 0; repeat < 2; ++repeat) {
             MatMulNBits(a.data(), packed.data(), scales.data(), with_bias ? bias.data() : nullptr,
-                        output.data(), type, m, k, n, 4, 32);
+                        output.data(), type, m, k, n, bits, 32);
             for (std::size_t r = 0; r < m; ++r) {
               for (std::size_t c = 0; c < n; ++c) {
                 float expected = with_bias ? decode(bias[c]) : 0;
                 for (std::size_t p = 0; p < k; ++p) {
                   const auto index = c * blocks + p / 32;
-                  const int q = (packed[index * 16 + (p % 32) / 2] >> ((p % 2) * 4)) & 15;
-                  expected += decode(a[r * k + p]) * (q - 8) * decode(scales[index]);
+                  const std::size_t offset = p % 32;
+                  const int q = (packed[index * blob_size + offset / values_per_byte] >>
+                                 ((offset % values_per_byte) * bits)) &
+                                mask;
+                  expected += decode(a[r * k + p]) * (q - zero_point) * decode(scales[index]);
                 }
                 EXPECT_EQ(output[r * n + c], encode(expected));
               }
@@ -64,11 +71,58 @@ void CheckPanels(DataType type, Encode encode, Decode decode) {
 }
 
 TEST(MatMulNBits, PanelTailsAndRepeatedPackedConstantsAllTypes) {
-  CheckPanels<float>(DataType::FLOAT, [](float x) { return x; }, [](float x) { return x; });
-  CheckPanels<std::uint16_t>(DataType::FLOAT16, detail::FloatToFloat16Bits,
-                             detail::Float16BitsToFloat);
-  CheckPanels<std::uint16_t>(DataType::BFLOAT16, detail::FloatToBFloat16Bits,
-                             detail::Bfloat16BitsToFloat);
+  for (std::size_t bits : {2u, 4u, 8u}) {
+    CheckPanels<float>(DataType::FLOAT, bits, [](float x) { return x; }, [](float x) { return x; });
+    CheckPanels<std::uint16_t>(DataType::FLOAT16, bits, detail::FloatToFloat16Bits,
+                               detail::Float16BitsToFloat);
+    CheckPanels<std::uint16_t>(DataType::BFLOAT16, bits, detail::FloatToBFloat16Bits,
+                               detail::Bfloat16BitsToFloat);
+  }
+}
+
+TEST(MatMulNBits, WidePanelRowBoundariesMatchReference) {
+  constexpr std::size_t k = 33;
+  constexpr std::size_t n = 33;
+  constexpr std::size_t blocks = 2;
+  for (std::size_t bits : {2u, 4u, 8u}) {
+    const std::size_t values_per_byte = 8 / bits;
+    const std::size_t blob_size = 32 * bits / 8;
+    const std::uint8_t mask = static_cast<std::uint8_t>((1U << bits) - 1U);
+    const int zero_point = 1 << (bits - 1);
+    for (std::size_t rows : {127u, 128u, 129u}) {
+      SCOPED_TRACE(::testing::Message() << bits << ',' << rows);
+      std::vector<float> a(rows * k), scales(n * blocks), output(rows * n);
+      std::vector<std::uint8_t> packed(n * blocks * blob_size);
+      for (std::size_t i = 0; i < a.size(); ++i) {
+        a[i] = static_cast<float>(static_cast<int>(i % 19) - 9) / 16.0f;
+      }
+      for (std::size_t i = 0; i < scales.size(); ++i) {
+        scales[i] = static_cast<float>(i % 7 + 1) / 64.0f;
+      }
+      for (std::size_t i = 0; i < packed.size(); ++i) {
+        packed[i] = static_cast<std::uint8_t>(i * 37 + i / 11);
+      }
+
+      MatMulNBits(a.data(), packed.data(), scales.data(), nullptr, output.data(), DataType::FLOAT,
+                  rows, k, n, bits, 32);
+
+      for (std::size_t row = 0; row < rows; ++row) {
+        for (std::size_t column = 0; column < n; ++column) {
+          float expected = 0.0f;
+          for (std::size_t p = 0; p < k; ++p) {
+            const std::size_t block = p / 32;
+            const std::size_t offset = p % 32;
+            const std::size_t packed_index =
+                (column * blocks + block) * blob_size + offset / values_per_byte;
+            const int q = (packed[packed_index] >> ((offset % values_per_byte) * bits)) & mask;
+            expected += a[row * k + p] * static_cast<float>(q - zero_point) *
+                        scales[column * blocks + block];
+          }
+          EXPECT_FLOAT_EQ(output[row * n + column], expected);
+        }
+      }
+    }
+  }
 }
 
 struct InlineExecutor {
