@@ -286,6 +286,29 @@ void ApplyNormalizationScaleBiasFloat16(const std::uint16_t *input, std::uint16_
   }
 }
 
+void InstanceNormalizationFloat16(const std::uint16_t *input, const std::uint16_t *scale,
+                                  const std::uint16_t *bias, std::uint16_t *output,
+                                  std::size_t slice_begin, std::size_t slice_end,
+                                  std::size_t channels, std::size_t spatial, float epsilon) {
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX_F16C
+  if (GetFloat16Dispatch().f16c) {
+    InstanceNormalizationFloat16_F16C(input, scale, bias, output, slice_begin, slice_end, channels,
+                                      spatial, epsilon);
+    return;
+  }
+#endif
+  for (std::size_t slice = slice_begin; slice < slice_end; ++slice) {
+    const std::size_t channel = slice % channels;
+    const std::size_t base = slice * spatial;
+    const Float32NormalizationMoments moments =
+        ComputeNormalizationMomentsFloat16(input + base, spatial);
+    const float multiplier =
+        detail::Float16BitsToFloat(scale[channel]) / std::sqrt(moments.variance + epsilon);
+    const float offset = detail::Float16BitsToFloat(bias[channel]) - moments.mean * multiplier;
+    ApplyNormalizationScaleBiasFloat16(input + base, output + base, spatial, multiplier, offset);
+  }
+}
+
 void ApplyLayerNormalizationFloat16(const std::uint16_t *input, const std::uint16_t *scale,
                                     const std::uint16_t *bias, std::uint16_t *output,
                                     std::size_t count, float center, float multiplier) {
@@ -307,6 +330,33 @@ void ApplyLayerNormalizationFloat16(const std::uint16_t *input, const std::uint1
   }
 }
 
+void LayerNormalizationFloat16Rows(const std::uint16_t *input, const std::uint16_t *scale,
+                                   const std::uint16_t *bias, std::uint16_t *output,
+                                   float *mean_output, float *inv_output, std::size_t row_begin,
+                                   std::size_t row_end, std::size_t width, float epsilon) {
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX_F16C
+  if (GetFloat16Dispatch().f16c) {
+    LayerNormalizationFloat16Rows_F16C(input, scale, bias, output, mean_output, inv_output,
+                                       row_begin, row_end, width, epsilon);
+    return;
+  }
+#endif
+  for (std::size_t row = row_begin; row < row_end; ++row) {
+    const std::size_t base = row * width;
+    const Float32NormalizationMoments moments =
+        ComputeNormalizationMomentsFloat16(input + base, width);
+    const float inverse = 1.0F / std::sqrt(moments.variance + epsilon);
+    if (mean_output != nullptr) {
+      mean_output[row] = moments.mean;
+    }
+    if (inv_output != nullptr) {
+      inv_output[row] = inverse;
+    }
+    ApplyLayerNormalizationFloat16(input + base, scale, bias, output + base, width, moments.mean,
+                                   inverse);
+  }
+}
+
 void ApplyGroupNormalizationFloat16(const std::uint16_t *input, std::uint16_t *output,
                                     std::size_t count, float center, float multiplier, float scale,
                                     float bias) {
@@ -321,6 +371,25 @@ void ApplyGroupNormalizationFloat16(const std::uint16_t *input, std::uint16_t *o
         detail::FloatToFloat16Bits((detail::Float16BitsToFloat(input[i]) - center) * multiplier));
     const float scaled = detail::Float16BitsToFloat(detail::FloatToFloat16Bits(normalized * scale));
     output[i] = detail::FloatToFloat16Bits(scaled + bias);
+  }
+}
+
+void ApplyGroupNormalizationFloat16Channels(const std::uint16_t *input, const std::uint16_t *scale,
+                                            const std::uint16_t *bias, std::uint16_t *output,
+                                            std::size_t channels, std::size_t spatial, float center,
+                                            float multiplier) {
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX_F16C
+  if (GetFloat16Dispatch().f16c) {
+    ApplyGroupNormalizationFloat16Channels_F16C(input, scale, bias, output, channels, spatial,
+                                                center, multiplier);
+    return;
+  }
+#endif
+  for (std::size_t channel = 0; channel < channels; ++channel) {
+    const std::size_t base = channel * spatial;
+    ApplyGroupNormalizationFloat16(input + base, output + base, spatial, center, multiplier,
+                                   detail::Float16BitsToFloat(scale[channel]),
+                                   detail::Float16BitsToFloat(bias[channel]));
   }
 }
 
