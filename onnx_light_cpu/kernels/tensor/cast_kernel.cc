@@ -137,6 +137,13 @@ void ValidateOutput(const Tensor &data, int32_t to, const Tensor &output, const 
 }
 
 void ConvertNumeric(const Tensor &data, Tensor &output, int64_t count) {
+  constexpr int64_t kDirectIdentityCopyLimit = 128 * 1024;
+  if (data.data_type == output.data_type && count < kDirectIdentityCopyLimit) {
+    if (data.size_bytes() != 0) {
+      std::memcpy(output.mutable_bytes(), data.bytes(), data.size_bytes());
+    }
+    return;
+  }
   CastConvert(data.bytes(), static_cast<onnx_light_cpu::DataType>(data.data_type),
               output.mutable_bytes(), static_cast<onnx_light_cpu::DataType>(output.data_type),
               static_cast<std::size_t>(count));
