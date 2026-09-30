@@ -27,21 +27,20 @@ template <bool StoreInverse>
 void RmsNormalizationFloat32Impl(const float *input, const float *scale, float *output,
                                  std::size_t rows, std::size_t width, float epsilon,
                                  float *inverse_rms_output) {
-  ExecuteRanges(ToRowCount(rows), static_cast<double>(width) * 0.625,
-                [=](std::int64_t begin, std::int64_t end) {
-                  for (std::size_t row = static_cast<std::size_t>(begin);
-                       row < static_cast<std::size_t>(end); ++row) {
-                    const std::size_t offset = row * width;
-                    const float mean_square =
-                        ComputeNormalizationMeanSquareFloat32(input + offset, width);
-                    const float inverse_rms = 1.0F / std::sqrt(mean_square + epsilon);
-                    if constexpr (StoreInverse) {
-                      inverse_rms_output[row] = inverse_rms;
-                    }
-                    ApplyNormalizationAffineFloat32(input + offset, scale, nullptr, output + offset,
-                                                    width, 0.0F, inverse_rms);
-                  }
-                });
+  ExecuteRanges(
+      ToRowCount(rows), static_cast<double>(width) * 0.625,
+      [=](std::int64_t begin, std::int64_t end) {
+        for (std::size_t row = static_cast<std::size_t>(begin); row < static_cast<std::size_t>(end);
+             ++row) {
+          const std::size_t offset = row * width;
+          const float mean_square = ComputeNormalizationMeanSquareFloat32(input + offset, width);
+          const float inverse_rms = 1.0F / std::sqrt(mean_square + epsilon);
+          if constexpr (StoreInverse) {
+            inverse_rms_output[row] = inverse_rms;
+          }
+          ApplyRmsNormalizationFloat32(input + offset, scale, output + offset, width, inverse_rms);
+        }
+      });
 }
 
 } // namespace

@@ -18,6 +18,7 @@ using MeanSquareFunction = float (*)(const float *, std::size_t);
 using MomentsFunction = Float32NormalizationMoments (*)(const float *, std::size_t);
 using AffineFunction = void (*)(const float *, const float *, const float *, float *, std::size_t,
                                 float, float);
+using RmsFunction = void (*)(const float *, const float *, float *, std::size_t, float);
 using ScaleBiasFunction = void (*)(const float *, float *, std::size_t, float, float);
 
 // Match the SIMD path's separately rounded multiply and add on FMA-capable CPUs.
@@ -84,10 +85,18 @@ void AffineScalar(const float *input, const float *scale, const float *bias, flo
   }
 }
 
+void RmsScalar(const float *input, const float *scale, float *output, std::size_t count,
+               float multiplier) {
+  for (std::size_t index = 0; index < count; ++index) {
+    output[index] = input[index] * multiplier * scale[index];
+  }
+}
+
 struct NormalizationDispatch {
   MeanSquareFunction mean_square;
   MomentsFunction moments;
   AffineFunction affine;
+  RmsFunction rms;
   ScaleBiasFunction scale_bias;
 };
 
@@ -98,17 +107,19 @@ const NormalizationDispatch &GetNormalizationDispatch() {
     if (simd == SimdLevel::kAVX512) {
       return NormalizationDispatch{
           &ComputeNormalizationMeanSquareFloat32_AVX512, &ComputeNormalizationMomentsFloat32_AVX512,
-          &ApplyNormalizationAffineFloat32_AVX512, &ApplyNormalizationScaleBiasFloat32_AVX512};
+          &ApplyNormalizationAffineFloat32_AVX512, &ApplyRmsNormalizationFloat32_AVX512,
+          &ApplyNormalizationScaleBiasFloat32_AVX512};
     }
 #endif
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
     if (simd >= SimdLevel::kAVX2 && CpuSupportsFma()) {
       return NormalizationDispatch{
           &ComputeNormalizationMeanSquareFloat32_AVX2, &ComputeNormalizationMomentsFloat32_AVX2,
-          &ApplyNormalizationAffineFloat32_AVX2, &ApplyNormalizationScaleBiasFloat32_AVX2};
+          &ApplyNormalizationAffineFloat32_AVX2, &ApplyRmsNormalizationFloat32_AVX2,
+          &ApplyNormalizationScaleBiasFloat32_AVX2};
     }
 #endif
-    return NormalizationDispatch{&MeanSquareScalar, &MomentsScalar, &AffineScalar,
+    return NormalizationDispatch{&MeanSquareScalar, &MomentsScalar, &AffineScalar, &RmsScalar,
                                  &ScaleBiasScalar};
   }();
   return dispatch;
@@ -221,6 +232,11 @@ void ApplyNormalizationAffineFloat32(const float *input, const float *scale, con
                                      float *output, std::size_t count, float center,
                                      float multiplier) {
   GetNormalizationDispatch().affine(input, scale, bias, output, count, center, multiplier);
+}
+
+void ApplyRmsNormalizationFloat32(const float *input, const float *scale, float *output,
+                                  std::size_t count, float multiplier) {
+  GetNormalizationDispatch().rms(input, scale, output, count, multiplier);
 }
 
 void ApplyNormalizationScaleBiasFloat32(const float *input, float *output, std::size_t count,

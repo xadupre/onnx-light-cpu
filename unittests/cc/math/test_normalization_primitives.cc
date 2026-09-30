@@ -47,9 +47,35 @@ TEST(NormalizationPrimitives, EmptyReductionsRejectAndEmptyAffineDoesNotDerefere
   EXPECT_THROW(ComputeNormalizationMeanSquareFloat64(nullptr, 0), std::invalid_argument);
   EXPECT_THROW(ComputeNormalizationMeanSquareFloat64StashFloat32(nullptr, 0),
                std::invalid_argument);
+  ApplyRmsNormalizationFloat32(nullptr, nullptr, nullptr, 0, 1.0F);
   ApplyNormalizationAffineFloat16(nullptr, nullptr, nullptr, 0, 1.0F);
   ApplyNormalizationAffineFloat64(nullptr, nullptr, nullptr, 0, 1.0);
   ApplyNormalizationAffineFloat64StashFloat32(nullptr, nullptr, nullptr, 0, 1.0F);
+}
+
+TEST(NormalizationPrimitives, Float32RmsAffineHandlesEveryTailAndUnalignedInput) {
+  constexpr float multiplier = 0.731234F;
+  for (std::size_t count = 1; count <= 33; ++count) {
+    SCOPED_TRACE(count);
+    std::vector<float> input(count + 1), scale(count + 1);
+    std::vector<float> output(count + 2, -999.0F);
+    for (std::size_t i = 0; i < count; ++i) {
+      input[i + 1] = (static_cast<float>(i % 11) - 5.0F) * 0.25F;
+      scale[i + 1] = 0.5F + static_cast<float>(i % 5) * 0.25F;
+    }
+    ApplyRmsNormalizationFloat32(input.data() + 1, scale.data() + 1, output.data() + 1, count,
+                                 multiplier);
+    for (std::size_t i = 0; i < count; ++i) {
+      EXPECT_FLOAT_EQ(output[i + 1], input[i + 1] * multiplier * scale[i + 1]);
+    }
+    EXPECT_EQ(output.front(), -999.0F);
+    EXPECT_EQ(output.back(), -999.0F);
+    ApplyRmsNormalizationFloat32(input.data() + 1, scale.data() + 1, input.data() + 1, count,
+                                 multiplier);
+    for (std::size_t i = 0; i < count; ++i) {
+      EXPECT_EQ(input[i + 1], output[i + 1]);
+    }
+  }
 }
 
 TEST(NormalizationPrimitives, HalfEveryTailAndUnalignedInPlaceAffine) {
