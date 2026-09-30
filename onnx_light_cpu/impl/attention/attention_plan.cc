@@ -564,8 +564,8 @@ std::size_t AttentionQueryBlock(const AttentionPlan &plan) {
 }
 
 std::size_t AttentionKvBlock(const AttentionPlan &plan) {
-  constexpr std::size_t kDefaultKvBlock = 256;
-  constexpr std::size_t kLargeHeadKvBlock = 128;
+  constexpr std::size_t kDefaultKvBlock = 512;
+  constexpr std::size_t kLargeHeadKvBlock = 512;
   const std::size_t target =
       plan.head_dim + plan.v_head_dim > 256 ? kLargeHeadKvBlock : kDefaultKvBlock;
   return std::min(plan.total_kv_length, target);
