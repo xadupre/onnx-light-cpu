@@ -22,6 +22,11 @@
 #include <type_traits>
 
 namespace onnx_light_cpu {
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512FP16
+void BulkFloat16PReluAVX512FP16(const void *, const void *, void *, std::size_t);
+void BulkFloat16PReluLeftAVX512FP16(const void *, const void *, void *, std::size_t);
+void BulkFloat16PReluRightAVX512FP16(const void *, const void *, void *, std::size_t);
+#endif
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX_F16C
 void BulkFloat16PReluF16C(const void *, const void *, void *, std::size_t);
 void BulkFloat16PReluLeftF16C(const void *, const void *, void *, std::size_t);
@@ -805,6 +810,15 @@ void SelectBulk(BinaryOperator op, DT left, BinaryKernelDescriptor::Adapter &ada
     break;
   case BinaryOperator::kPRelu:
     if (left == DT::FLOAT16) {
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512FP16
+      static const bool use_avx512fp16 = CpuSupportsAvx512Fp16();
+      if (use_avx512fp16) {
+        adapter.bulk_contiguous = &BulkFloat16PReluAVX512FP16;
+        adapter.bulk_left_scalar = &BulkFloat16PReluLeftAVX512FP16;
+        adapter.bulk_right_scalar = &BulkFloat16PReluRightAVX512FP16;
+        break;
+      }
+#endif
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX_F16C
       static const bool use_f16c = DetectSimdLevel() >= SimdLevel::kAVX && CpuSupportsF16C();
       if (use_f16c) {
