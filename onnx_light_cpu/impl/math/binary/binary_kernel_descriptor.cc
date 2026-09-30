@@ -1270,6 +1270,15 @@ void BulkHalfPowRight(const void *left, const void *right, void *out, std::size_
     std::copy_n(bases, count, output);
     return;
   }
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
+  if constexpr (DecodeOne == detail::Float16BitsToFloat) {
+    static const bool use_avx512 = DetectSimdLevel() >= SimdLevel::kAVX512;
+    if (count >= 16 && use_avx512) {
+      PowFloat16RightScalar_AVX512(bases, exponent, output, count);
+      return;
+    }
+  }
+#endif
 #if defined(ONNX_LIGHT_CPU_HAVE_AVX2_FMA) && defined(ONNX_LIGHT_CPU_HAVE_F16C)
   if constexpr (DecodeOne == detail::Float16BitsToFloat) {
     if (SupportsAvx2FmaF16c()) {
