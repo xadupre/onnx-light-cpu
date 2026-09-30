@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "onnx_light_cpu/impl/math/avx512/exp_kernel_avx512.h"
+#include "onnx_light_cpu/impl/math/avx512/sigmoid_kernel_avx512.h"
 #include "onnx_light_cpu/impl/math/math_kernels.h"
 
 #include "onnx_light_cpu/impl/math/half_conversion.h"
@@ -131,19 +132,6 @@ ONNX_LIGHT_CPU_FORCE_INLINE __m512 LogPs(__m512 x) {
   result = Select(is_zero, _mm512_set1_ps(-std::numeric_limits<float>::infinity()), result);
   result = Select(is_infinite, positive_infinity, result);
   return Select(is_nan, _mm512_set1_ps(std::numeric_limits<float>::quiet_NaN()), result);
-}
-
-ONNX_LIGHT_CPU_FORCE_INLINE __m512 SigmoidPs(__m512 value) {
-  const __m512 negative_abs = _mm512_castsi512_ps(_mm512_or_epi32(
-      _mm512_castps_si512(value), _mm512_set1_epi32(static_cast<int>(0x80000000u))));
-  const __m512 exponent = ExpPs(negative_abs);
-  const __m512 one = _mm512_set1_ps(1.0f);
-  const __mmask16 negative = _mm512_cmp_ps_mask(value, _mm512_setzero_ps(), _CMP_LT_OQ);
-  const __m512 denominator = _mm512_add_ps(one, exponent);
-  __m512 reciprocal = _mm512_rcp14_ps(denominator);
-  reciprocal =
-      _mm512_fmadd_ps(reciprocal, _mm512_fnmadd_ps(denominator, reciprocal, one), reciprocal);
-  return _mm512_mul_ps(Select(negative, exponent, one), reciprocal);
 }
 
 ONNX_LIGHT_CPU_FORCE_INLINE __m512 TanhPs(__m512 value) {
@@ -346,17 +334,19 @@ void TanhFloat32_AVX512(const float *input, float *output, std::size_t count) {
 void SigmoidFloat32_AVX512(const float *input, float *output, std::size_t count) {
   std::size_t i = 0;
   for (; i + 32 <= count; i += 32) {
-    const __m512 result0 = SigmoidPs(_mm512_loadu_ps(input + i));
-    const __m512 result1 = SigmoidPs(_mm512_loadu_ps(input + i + 16));
+    const __m512 result0 = detail::SigmoidFloat32Vector_AVX512(_mm512_loadu_ps(input + i));
+    const __m512 result1 = detail::SigmoidFloat32Vector_AVX512(_mm512_loadu_ps(input + i + 16));
     _mm512_storeu_ps(output + i, result0);
     _mm512_storeu_ps(output + i + 16, result1);
   }
   for (; i + 16 <= count; i += 16) {
-    _mm512_storeu_ps(output + i, SigmoidPs(_mm512_loadu_ps(input + i)));
+    _mm512_storeu_ps(output + i, detail::SigmoidFloat32Vector_AVX512(_mm512_loadu_ps(input + i)));
   }
   if (i < count) {
     const __mmask16 tail = static_cast<__mmask16>((1u << (count - i)) - 1u);
-    _mm512_mask_storeu_ps(output + i, tail, SigmoidPs(_mm512_maskz_loadu_ps(tail, input + i)));
+    _mm512_mask_storeu_ps(
+        output + i, tail,
+        detail::SigmoidFloat32Vector_AVX512(_mm512_maskz_loadu_ps(tail, input + i)));
   }
 }
 
