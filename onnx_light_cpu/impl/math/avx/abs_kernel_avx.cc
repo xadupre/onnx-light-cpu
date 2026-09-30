@@ -14,6 +14,17 @@ void AbsFloat32_AVX(const float *input, float *output, std::size_t count) {
   const __m256 sign_mask = _mm256_castsi256_ps(_mm256_set1_epi32(0x7FFFFFFF));
   std::size_t i = 0;
   const std::size_t stride = 8;
+  const std::size_t unrolled_count = count - (count % (4 * stride));
+  for (; i < unrolled_count; i += 4 * stride) {
+    const __m256 v0 = _mm256_and_ps(_mm256_loadu_ps(input + i), sign_mask);
+    const __m256 v1 = _mm256_and_ps(_mm256_loadu_ps(input + i + stride), sign_mask);
+    const __m256 v2 = _mm256_and_ps(_mm256_loadu_ps(input + i + 2 * stride), sign_mask);
+    const __m256 v3 = _mm256_and_ps(_mm256_loadu_ps(input + i + 3 * stride), sign_mask);
+    _mm256_storeu_ps(output + i, v0);
+    _mm256_storeu_ps(output + i + stride, v1);
+    _mm256_storeu_ps(output + i + 2 * stride, v2);
+    _mm256_storeu_ps(output + i + 3 * stride, v3);
+  }
   const std::size_t aligned_count = count - (count % stride);
   for (; i < aligned_count; i += stride) {
     __m256 v = _mm256_loadu_ps(input + i);
