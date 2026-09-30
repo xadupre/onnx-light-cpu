@@ -64,6 +64,38 @@ const BinaryArithmeticBulkFunctions &BinarySubFloat16BulkFunctions();
 const BinaryArithmeticBulkFunctions &BinaryMulFloat16BulkFunctions();
 const BinaryArithmeticBulkFunctions &BinaryDivFloat16BulkFunctions();
 
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2
+#define ONNX_LIGHT_CPU_DECLARE_BINARY_BFLOAT16_AVX2(NAME)                                          \
+  void NAME##_AVX2(const std::uint16_t *left, const std::uint16_t *right, std::uint16_t *out,      \
+                   std::size_t count);                                                             \
+  void NAME##Left_AVX2(std::uint16_t left, const std::uint16_t *right, std::uint16_t *out,         \
+                       std::size_t count);                                                         \
+  void NAME##Right_AVX2(const std::uint16_t *left, std::uint16_t right, std::uint16_t *out,        \
+                        std::size_t count);
+
+ONNX_LIGHT_CPU_DECLARE_BINARY_BFLOAT16_AVX2(BinaryAddBFloat16)
+ONNX_LIGHT_CPU_DECLARE_BINARY_BFLOAT16_AVX2(BinarySubBFloat16)
+ONNX_LIGHT_CPU_DECLARE_BINARY_BFLOAT16_AVX2(BinaryMulBFloat16)
+
+#undef ONNX_LIGHT_CPU_DECLARE_BINARY_BFLOAT16_AVX2
+#endif
+
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512BF16
+#define ONNX_LIGHT_CPU_DECLARE_BINARY_BFLOAT16_AVX512BF16(NAME)                                    \
+  void NAME##_AVX512BF16(const std::uint16_t *left, const std::uint16_t *right,                    \
+                         std::uint16_t *out, std::size_t count);                                   \
+  void NAME##Left_AVX512BF16(std::uint16_t left, const std::uint16_t *right, std::uint16_t *out,   \
+                             std::size_t count);                                                   \
+  void NAME##Right_AVX512BF16(const std::uint16_t *left, std::uint16_t right, std::uint16_t *out,  \
+                              std::size_t count);
+
+ONNX_LIGHT_CPU_DECLARE_BINARY_BFLOAT16_AVX512BF16(BinaryAddBFloat16)
+ONNX_LIGHT_CPU_DECLARE_BINARY_BFLOAT16_AVX512BF16(BinarySubBFloat16)
+ONNX_LIGHT_CPU_DECLARE_BINARY_BFLOAT16_AVX512BF16(BinaryMulBFloat16)
+
+#undef ONNX_LIGHT_CPU_DECLARE_BINARY_BFLOAT16_AVX512BF16
+#endif
+
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
 void BinaryDivBFloat16_AVX2_FMA(const std::uint16_t *left, const std::uint16_t *right,
                                 std::uint16_t *out, std::size_t count);

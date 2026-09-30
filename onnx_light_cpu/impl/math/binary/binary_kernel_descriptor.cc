@@ -711,6 +711,14 @@ void SelectBulk(BinaryOperator op, DT left, BinaryKernelDescriptor::Adapter &ada
   adapter.bulk_contiguous = &Bulk##PREFIX##NAME;                                                   \
   adapter.bulk_left_scalar = &Bulk##PREFIX##NAME##Left;                                            \
   adapter.bulk_right_scalar = &Bulk##PREFIX##NAME##Right;
+#define ONNX_LIGHT_CPU_BIND_BFLOAT16_AVX2(NAME)                                                    \
+  adapter.bulk_contiguous = &BulkContiguousWrapper<std::uint16_t, &NAME##_AVX2>;                   \
+  adapter.bulk_left_scalar = &BulkLeftScalarWrapper<std::uint16_t, &NAME##Left_AVX2>;              \
+  adapter.bulk_right_scalar = &BulkRightScalarWrapper<std::uint16_t, &NAME##Right_AVX2>;
+#define ONNX_LIGHT_CPU_BIND_BFLOAT16_AVX512BF16(NAME)                                              \
+  adapter.bulk_contiguous = &BulkContiguousWrapper<std::uint16_t, &NAME##_AVX512BF16>;             \
+  adapter.bulk_left_scalar = &BulkLeftScalarWrapper<std::uint16_t, &NAME##Left_AVX512BF16>;        \
+  adapter.bulk_right_scalar = &BulkRightScalarWrapper<std::uint16_t, &NAME##Right_AVX512BF16>;
 #define ONNX_LIGHT_CPU_BIND_INTEGER_BULK(COMPUTE)                                                  \
   switch (left) {                                                                                  \
   case DT::INT8:                                                                                   \
@@ -753,6 +761,20 @@ void SelectBulk(BinaryOperator op, DT left, BinaryKernelDescriptor::Adapter &ada
       ONNX_LIGHT_CPU_BIND_HALF_BULK(Float16, Add)
 #endif
     } else if (left == DT::BFLOAT16) {
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512BF16
+      static const bool use_avx512_bf16 = CpuSupportsAvx512Bf16();
+      if (use_avx512_bf16) {
+        ONNX_LIGHT_CPU_BIND_BFLOAT16_AVX512BF16(BinaryAddBFloat16)
+        break;
+      }
+#endif
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2
+      static const bool use_avx2 = DetectSimdLevel() >= SimdLevel::kAVX2;
+      if (use_avx2) {
+        ONNX_LIGHT_CPU_BIND_BFLOAT16_AVX2(BinaryAddBFloat16)
+        break;
+      }
+#endif
       ONNX_LIGHT_CPU_BIND_HALF_BULK(Bfloat16, Add)
     } else {
       ONNX_LIGHT_CPU_BIND_INTEGER_BULK(ComputeAdd)
@@ -770,6 +792,20 @@ void SelectBulk(BinaryOperator op, DT left, BinaryKernelDescriptor::Adapter &ada
       ONNX_LIGHT_CPU_BIND_HALF_BULK(Float16, Sub)
 #endif
     } else if (left == DT::BFLOAT16) {
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512BF16
+      static const bool use_avx512_bf16 = CpuSupportsAvx512Bf16();
+      if (use_avx512_bf16) {
+        ONNX_LIGHT_CPU_BIND_BFLOAT16_AVX512BF16(BinarySubBFloat16)
+        break;
+      }
+#endif
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2
+      static const bool use_avx2 = DetectSimdLevel() >= SimdLevel::kAVX2;
+      if (use_avx2) {
+        ONNX_LIGHT_CPU_BIND_BFLOAT16_AVX2(BinarySubBFloat16)
+        break;
+      }
+#endif
       ONNX_LIGHT_CPU_BIND_HALF_BULK(Bfloat16, Sub)
     } else {
       ONNX_LIGHT_CPU_BIND_INTEGER_BULK(ComputeSub)
@@ -787,6 +823,20 @@ void SelectBulk(BinaryOperator op, DT left, BinaryKernelDescriptor::Adapter &ada
       ONNX_LIGHT_CPU_BIND_HALF_BULK(Float16, Mul)
 #endif
     } else if (left == DT::BFLOAT16) {
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512BF16
+      static const bool use_avx512_bf16 = CpuSupportsAvx512Bf16();
+      if (use_avx512_bf16) {
+        ONNX_LIGHT_CPU_BIND_BFLOAT16_AVX512BF16(BinaryMulBFloat16)
+        break;
+      }
+#endif
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2
+      static const bool use_avx2 = DetectSimdLevel() >= SimdLevel::kAVX2;
+      if (use_avx2) {
+        ONNX_LIGHT_CPU_BIND_BFLOAT16_AVX2(BinaryMulBFloat16)
+        break;
+      }
+#endif
       ONNX_LIGHT_CPU_BIND_HALF_BULK(Bfloat16, Mul)
     } else {
       ONNX_LIGHT_CPU_BIND_INTEGER_BULK(ComputeMul)
@@ -878,6 +928,8 @@ void SelectBulk(BinaryOperator op, DT left, BinaryKernelDescriptor::Adapter &ada
   }
 #undef ONNX_LIGHT_CPU_BIND_INTEGER_BULK
 #undef ONNX_LIGHT_CPU_BIND_COMPUTE_BULK
+#undef ONNX_LIGHT_CPU_BIND_BFLOAT16_AVX512BF16
+#undef ONNX_LIGHT_CPU_BIND_BFLOAT16_AVX2
 #undef ONNX_LIGHT_CPU_BIND_HALF_BULK
 #undef ONNX_LIGHT_CPU_BIND_RESOLVED_BULK
 #undef ONNX_LIGHT_CPU_BIND_BULK

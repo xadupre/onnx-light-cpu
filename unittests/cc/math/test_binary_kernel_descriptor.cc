@@ -147,6 +147,76 @@ TEST(BinaryKernelDescriptor, ResolvesFloat32ArithmeticDispatchOncePerAdapter) {
   }
 }
 
+TEST(BinaryKernelDescriptor, BFloat16ArithmeticCoversBroadcastsTailsAndAliasing) {
+  const std::array<float, 11> values = {-std::numeric_limits<float>::infinity(),
+                                        -7.0f,
+                                        -1.0f,
+                                        -0.0f,
+                                        0.0f,
+                                        0.25f,
+                                        2.0f,
+                                        std::numeric_limits<float>::infinity(),
+                                        std::numeric_limits<float>::quiet_NaN(),
+                                        -0.125f,
+                                        4.0f};
+  const auto encode = onnx_light_cpu::detail::FloatToBFloat16Bits;
+  const auto decode = onnx_light_cpu::detail::Bfloat16BitsToFloat;
+  const auto expect_equal = [&](std::uint16_t actual, std::uint16_t expected) {
+    if (std::isnan(decode(expected))) {
+      EXPECT_TRUE(std::isnan(decode(actual)));
+    } else {
+      EXPECT_EQ(actual, expected);
+    }
+  };
+
+  for (const std::string op_type : {"Add", "Sub", "Mul"}) {
+    const BinaryKernelDescriptor descriptor(op_type, 14, {});
+    const auto &adapter = descriptor.ResolveAdapter(
+        BinaryDataType::BFLOAT16, BinaryDataType::BFLOAT16, BinaryDataType::BFLOAT16);
+    const auto compute = [&](std::uint16_t left, std::uint16_t right) {
+      const float a = decode(left);
+      const float b = decode(right);
+      return encode(op_type == "Add" ? a + b : op_type == "Sub" ? a - b : a * b);
+    };
+    for (const std::size_t count : {0u, 1u, 7u, 8u, 9u, 15u, 16u, 17u, 31u, 32u, 33u}) {
+      SCOPED_TRACE(::testing::Message() << op_type << " count=" << count);
+      std::vector<std::uint16_t> left(count), right(count), output(count);
+      for (std::size_t index = 0; index < count; ++index) {
+        left[index] = encode(values[index % values.size()]);
+        right[index] = encode(values[(index + 3) % values.size()]);
+      }
+
+      adapter.bulk_contiguous(left.data(), right.data(), output.data(), count);
+      for (std::size_t index = 0; index < count; ++index) {
+        expect_equal(output[index], compute(left[index], right[index]));
+      }
+      auto aliased = left;
+      adapter.bulk_contiguous(aliased.data(), right.data(), aliased.data(), count);
+      for (std::size_t index = 0; index < count; ++index) {
+        expect_equal(aliased[index], compute(left[index], right[index]));
+      }
+      aliased = right;
+      adapter.bulk_contiguous(left.data(), aliased.data(), aliased.data(), count);
+      for (std::size_t index = 0; index < count; ++index) {
+        expect_equal(aliased[index], compute(left[index], right[index]));
+      }
+
+      if (count != 0) {
+        const std::uint16_t left_scalar = encode(-2.0f);
+        adapter.bulk_left_scalar(&left_scalar, right.data(), output.data(), count);
+        for (std::size_t index = 0; index < count; ++index) {
+          expect_equal(output[index], compute(left_scalar, right[index]));
+        }
+        const std::uint16_t right_scalar = encode(0.25f);
+        adapter.bulk_right_scalar(left.data(), &right_scalar, output.data(), count);
+        for (std::size_t index = 0; index < count; ++index) {
+          expect_equal(output[index], compute(left[index], right_scalar));
+        }
+      }
+    }
+  }
+}
+
 #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
 TEST(BinaryKernelDescriptor, ResolvesFloat16ArithmeticDispatchOncePerAdapter) {
   using BulkFunctions = const onnx_light_cpu::BinaryArithmeticBulkFunctions &(*)();
