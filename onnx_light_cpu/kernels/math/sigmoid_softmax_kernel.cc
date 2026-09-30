@@ -121,14 +121,14 @@ template <typename T> void Sigmoid(const T *input, T *output, std::size_t count)
     if (avx2 && (!avx512 || count < 256 * 1024)) {
       // Small teams amortize dispatch without waking a full pool for a short vector loop.
       tuning = {128 * 1024, 64 * 1024,
-                count < 96 * 1024 ? 2u : (count < 256 * 1024 ? (avx512 ? 8u : 3u) : 32u), false};
+                count < 96 * 1024 ? 2u : (count < 256 * 1024 ? (avx512 ? 8u : 4u) : 32u), false};
       if (avx512 && count >= 48 * 1024 && count < 96 * 1024) {
         tuning.max_participants = 4;
       }
     }
   }
 #endif
-  constexpr std::size_t tile = 16 * 1024;
+  constexpr std::size_t tile = 8 * 1024;
   std::atomic<std::size_t> next{0};
   const bool dynamic = std::is_same_v<T, float> && count >= 2 * tile &&
                        ExecutionThreadCount() > 1 && !ExecutionInParallelRegion();

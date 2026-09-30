@@ -603,7 +603,7 @@ TEST(OnnxLightSigmoidSoftmaxKernel, SmallSigmoidUsesBoundedTeams) {
       const std::int64_t maximum_blocks =
           avx512 && count >= 96 * 1024
               ? 8
-              : (avx512 && count >= 48 * 1024 ? 4 : (count < 96 * 1024 ? 2 : 3));
+              : (avx512 && count >= 48 * 1024 ? 4 : (count < 96 * 1024 ? 2 : 4));
       EXPECT_LE(executor.blocks, maximum_blocks);
     }
     EXPECT_FALSE(executor.nested);
