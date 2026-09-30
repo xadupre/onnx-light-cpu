@@ -256,6 +256,29 @@ class TestBenchmarkCli(ExtTestCase):
                     pr_markdown.read_text(encoding="utf-8"),
                 )
 
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "benchmark.xlsx"
+            with redirect_stdout(io.StringIO()):
+                main(
+                    [
+                        "benchmark",
+                        "--tests",
+                        "^test_cpu_abs_",
+                        "--dtypes",
+                        "float16",
+                        "bfloat16",
+                        "--output",
+                        str(output),
+                    ]
+                )
+            self.assertEqual(calls[-1]["dtypes"], ["float16", "bfloat16"])
+            workbook = load_workbook(output, read_only=True)
+            self.assertEqual(workbook.sheetnames, ["raw", "aggregated", "dtype_comparison"])
+            values = list(workbook["dtype_comparison"].values)
+            self.assertEqual(values[0], _benchmark._DTYPE_COMPARISON_COLUMNS)
+            self.assertEqual(values[1][-3:], (6.0, 2.0, 3.0))
+            workbook.close()
+
         rows = [
             {
                 **row,

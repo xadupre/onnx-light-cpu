@@ -38,7 +38,9 @@ workbook:
    The option may be repeated. Supported values are ``bfloat16``, ``float16``,
    ``float32``, ``float64``, signed and unsigned 8-, 16-, 32-, and 64-bit
    integers, and ``bool``. The default, ``all``, selects every supported type
-   and cannot be combined with another type.
+   and cannot be combined with another type. When exactly two data types are
+   selected, the workbook also contains a ``dtype_comparison`` sheet pairing
+   matching cases and computing ``speedup = first_median_s / second_median_s``.
 
 ``--compare-dtypes BASELINE COMPARISON``
    Selects two distinct data types and compares onnx-light-cpu median times for
