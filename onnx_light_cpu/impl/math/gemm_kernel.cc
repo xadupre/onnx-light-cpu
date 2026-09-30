@@ -73,6 +73,7 @@
 #endif
 
 #include <algorithm>
+#include <atomic>
 #include <bit>
 #include <cstddef>
 #include <cstdint>
@@ -1112,6 +1113,11 @@ void GemmSkinnyN(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::
 #endif
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
     if constexpr (std::is_same_v<T, float> && std::is_same_v<SrcT, float>) {
+      if (!trans_a && !trans_b && N == 1 && K >= 32 && kind == GemmKernelKind::kAVX2FMA) {
+        GemmSkinnyN1Range_AVX2_F32(K, alpha, A, B, beta, C, Y, static_cast<std::size_t>(begin),
+                                   static_cast<std::size_t>(end));
+        return;
+      }
       if (!trans_a && !trans_b && N > 1 && N <= 8 && K >= 32 && kind == GemmKernelKind::kAVX2FMA) {
         GemmSkinnyNRange_AVX2(N, K, alpha, A, B, beta, C, Y, static_cast<std::size_t>(begin),
                               static_cast<std::size_t>(end));
@@ -1166,13 +1172,29 @@ void GemmSkinnyM(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::
         (!has_bias || C != Y)) {
       constexpr std::size_t kColumns = 256;
       const std::size_t panels = (N + kColumns - 1) / kColumns;
-      ExecuteRanges(static_cast<std::int64_t>(panels),
-                    ExecutionSchedule{2, 1, ExecutionThreadCount()},
-                    [&](std::int64_t begin, std::int64_t end) {
-                      GemmSkinnyM1Range_AVX2_F32(
-                          N, K, alpha, A, B, beta, C, Y, static_cast<std::size_t>(begin) * kColumns,
-                          std::min(N, static_cast<std::size_t>(end) * kColumns));
-                    });
+      const std::size_t participants = std::min(
+          panels, static_cast<std::size_t>(std::max(ExecutionThreadCount(), std::int64_t{1})));
+      std::atomic<std::size_t> next_panel{participants};
+      const bool dynamic = ExecutionThreadCount() > 1 && !ExecutionInParallelRegion();
+      if (!dynamic) {
+        GemmSkinnyM1Range_AVX2_F32(N, K, alpha, A, B, beta, C, Y, 0, N);
+        return;
+      }
+      const auto execute_panel = [&](std::size_t panel) {
+        GemmSkinnyM1Range_AVX2_F32(N, K, alpha, A, B, beta, C, Y, panel * kColumns,
+                                   std::min(N, (panel + 1) * kColumns));
+      };
+      ExecuteRanges(
+          static_cast<std::int64_t>(participants), ExecutionSchedule{2, 1, ExecutionThreadCount()},
+          [&](std::int64_t begin, std::int64_t end) {
+            for (std::int64_t participant = begin; participant < end; ++participant) {
+              execute_panel(static_cast<std::size_t>(participant));
+            }
+            for (std::size_t panel = next_panel.fetch_add(1, std::memory_order_relaxed);
+                 panel < panels; panel = next_panel.fetch_add(1, std::memory_order_relaxed)) {
+              execute_panel(panel);
+            }
+          });
       return;
     }
   }
@@ -1349,65 +1371,80 @@ void GemmFiveLoopRange(bool trans_a, bool trans_b, std::size_t M, std::size_t N,
     const std::size_t max_kc = std::min(blocking.kc, k_end - k_begin);
 #endif
     const bool use_unpacked_a = use_strided_a || (kCanFusePacking && !trans_a && max_kc == K);
+    const bool dynamic_tasks = kIsFloat32 && max_kc == k_end - k_begin && participant_count > 1 &&
+                               !ExecutionInParallelRegion();
+    std::atomic<std::size_t> next_task{participant_count};
 
-    ExecuteRanges(static_cast<std::int64_t>(participant_count),
-                  cost * static_cast<double>(task_count) / static_cast<double>(participant_count),
-                  [&](std::int64_t begin, std::int64_t end) {
-                    AlignedBuffer<T> apack(use_unpacked_a ? 0 : row_capacity * max_kc);
-                    AlignedBuffer<T> micro_b(max_kc * column_block);
-                    for (std::size_t k0 = k_begin; k0 < k_end; k0 += max_kc) {
-                      const std::size_t kc = std::min(max_kc, k_end - k0);
-                      const GemmAccumMode mode =
-                          k0 == k_begin
-                              ? (has_bias ? GemmAccumMode::kInitBias : GemmAccumMode::kInitZero)
+    ExecuteRanges(
+        static_cast<std::int64_t>(participant_count),
+        cost * static_cast<double>(task_count) / static_cast<double>(participant_count),
+        [&](std::int64_t begin, std::int64_t end) {
+          AlignedBuffer<T> apack(use_unpacked_a ? 0 : row_capacity * max_kc);
+          AlignedBuffer<T> micro_b(max_kc * column_block);
+          for (std::size_t k0 = k_begin; k0 < k_end; k0 += max_kc) {
+            const std::size_t kc = std::min(max_kc, k_end - k0);
+            const GemmAccumMode mode =
+                k0 == k_begin ? (has_bias ? GemmAccumMode::kInitBias : GemmAccumMode::kInitZero)
                               : GemmAccumMode::kAccumulate;
-                      std::size_t packed_row_panel = row_panels;
-                      for (std::int64_t participant = begin; participant < end; ++participant) {
-                        const std::size_t participant_index = static_cast<std::size_t>(participant);
-                        const std::size_t tasks_per_participant = task_count / participant_count;
-                        const std::size_t extra_tasks = task_count % participant_count;
-                        const std::size_t first_task = participant_index * tasks_per_participant +
-                                                       std::min(participant_index, extra_tasks);
-                        const std::size_t last_task =
-                            first_task + tasks_per_participant +
-                            static_cast<std::size_t>(participant_index < extra_tasks);
-                        for (std::size_t task = first_task; task < last_task; ++task) {
-                          const std::size_t row_panel = task / wave_micro_panels;
-                          const std::size_t wave_micro_panel = task % wave_micro_panels;
-                          const std::size_t m0 = row_panel * blocking.mc;
-                          const std::size_t micro_n0 = wave_micro_panel * column_block;
-                          const std::size_t jb = std::min(column_block, N - micro_n0);
-                          const std::size_t mc = std::min(blocking.mc, M - m0);
-                          PackBMicroPanel(trans_b, B, K, N, k0, kc, micro_n0, jb, 0, column_block,
-                                          micro_b.data());
-                          if (!use_unpacked_a && packed_row_panel != row_panel) {
-                            PackAPanel(trans_a, A, M, K, m0, mc, k0, kc, apack.data());
-                            packed_row_panel = row_panel;
-                          }
-                          const T *packed_a = use_unpacked_a
-                                                  ? reinterpret_cast<const T *>(A) + m0 * K + k0
-                                                  : apack.data();
-                          for (std::size_t ir = 0; ir < mc; ir += blocking.mr) {
-                            const std::size_t mr = std::min(blocking.mr, mc - ir);
-                            if constexpr (std::is_same_v<T, float> && std::is_same_v<SrcT, float>) {
+            std::size_t packed_row_panel = row_panels;
+            const auto run_task = [&](std::size_t task) {
+              const std::size_t row_panel = task / wave_micro_panels;
+              const std::size_t wave_micro_panel = task % wave_micro_panels;
+              const std::size_t m0 = row_panel * blocking.mc;
+              const std::size_t micro_n0 = wave_micro_panel * column_block;
+              const std::size_t jb = std::min(column_block, N - micro_n0);
+              const std::size_t mc = std::min(blocking.mc, M - m0);
+              PackBMicroPanel(trans_b, B, K, N, k0, kc, micro_n0, jb, 0, column_block,
+                              micro_b.data());
+              if (!use_unpacked_a && packed_row_panel != row_panel) {
+                PackAPanel(trans_a, A, M, K, m0, mc, k0, kc, apack.data());
+                packed_row_panel = row_panel;
+              }
+              const T *packed_a =
+                  use_unpacked_a ? reinterpret_cast<const T *>(A) + m0 * K + k0 : apack.data();
+              for (std::size_t ir = 0; ir < mc; ir += blocking.mr) {
+                const std::size_t mr = std::min(blocking.mr, mc - ir);
+                if constexpr (std::is_same_v<T, float> && std::is_same_v<SrcT, float>) {
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512
-                              if (use_strided_a) {
-                                GemmMicroKernel_AVX512_F32_StridedA(
-                                    mr, jb, kc, alpha, beta, micro_b.data(), jb,
-                                    has_bias ? C + (m0 + ir) * N + micro_n0 : nullptr, N,
-                                    Y + (m0 + ir) * N + micro_n0, N, 0, mode, packed_a + ir * K, K);
-                                continue;
-                              }
+                  if (use_strided_a) {
+                    GemmMicroKernel_AVX512_F32_StridedA(
+                        mr, jb, kc, alpha, beta, micro_b.data(), jb,
+                        has_bias ? C + (m0 + ir) * N + micro_n0 : nullptr, N,
+                        Y + (m0 + ir) * N + micro_n0, N, 0, mode, packed_a + ir * K, K);
+                    continue;
+                  }
 #endif
-                            }
-                            tile(kind, mr, jb, kc, alpha, beta, micro_b.data(), jb,
-                                 has_bias ? C + (m0 + ir) * N + micro_n0 : nullptr, N,
-                                 Y + (m0 + ir) * N + micro_n0, N, 0, mode, packed_a + ir * kc);
-                          }
-                        }
-                      }
-                    }
-                  });
+                }
+                tile(kind, mr, jb, kc, alpha, beta, micro_b.data(), jb,
+                     has_bias ? C + (m0 + ir) * N + micro_n0 : nullptr, N,
+                     Y + (m0 + ir) * N + micro_n0, N, 0, mode, packed_a + ir * kc);
+              }
+            };
+            if (dynamic_tasks) {
+              for (std::int64_t participant = begin; participant < end; ++participant) {
+                run_task(static_cast<std::size_t>(participant));
+                for (std::size_t task = next_task.fetch_add(1, std::memory_order_relaxed);
+                     task < task_count; task = next_task.fetch_add(1, std::memory_order_relaxed)) {
+                  run_task(task);
+                }
+              }
+              continue;
+            }
+            for (std::int64_t participant = begin; participant < end; ++participant) {
+              const std::size_t participant_index = static_cast<std::size_t>(participant);
+              const std::size_t tasks_per_participant = task_count / participant_count;
+              const std::size_t extra_tasks = task_count % participant_count;
+              const std::size_t first_task = participant_index * tasks_per_participant +
+                                             std::min(participant_index, extra_tasks);
+              const std::size_t last_task =
+                  first_task + tasks_per_participant +
+                  static_cast<std::size_t>(participant_index < extra_tasks);
+              for (std::size_t task = first_task; task < last_task; ++task) {
+                run_task(task);
+              }
+            }
+          }
+        });
     return;
   }
 
@@ -2440,6 +2477,36 @@ void ApplyGemmEpilogue(std::size_t M, std::size_t N, const GemmEpilogue<T> &epil
 
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
   if constexpr (std::is_same_v<T, float>) {
+    if (has_bias && !has_residual && !has_activation && converts_output &&
+        epilogue.output_conversion == GemmOutputConversion::kFloat16) {
+#ifdef ONNX_LIGHT_CPU_HAVE_F16C
+      static const bool use_f16c =
+          DetectSimdLevel() >= SimdLevel::kAVX2 && CpuSupportsFma() && CpuSupportsF16C();
+      if (use_f16c) {
+        std::size_t bias_row_stride = 0;
+        std::size_t bias_column_stride = 0;
+        if (epilogue.bias_layout == GemmBroadcast::kRow) {
+          bias_column_stride = 1;
+        } else if (epilogue.bias_layout == GemmBroadcast::kColumn) {
+          bias_row_stride = 1;
+        } else if (epilogue.bias_layout == GemmBroadcast::kMatrix) {
+          bias_row_stride = N;
+          bias_column_stride = 1;
+        }
+        ExecuteRanges(static_cast<std::int64_t>(M), static_cast<double>(3 * N),
+                      [Y, &epilogue, N, bias_row_stride, bias_column_stride](std::int64_t begin,
+                                                                             std::int64_t end) {
+                        const std::size_t first_row = static_cast<std::size_t>(begin);
+                        GemmAddBiasConvertFloat32ToFloat16_F16C(
+                            Y + first_row * N, epilogue.bias + first_row * bias_row_stride,
+                            epilogue.converted_output + first_row * N,
+                            static_cast<std::size_t>(end - begin), N, epilogue.beta,
+                            bias_row_stride, bias_column_stride);
+                      });
+        return;
+      }
+#endif
+    }
     if (!has_bias && !has_residual && !has_activation && converts_output) {
       static const bool use_avx2 = DetectSimdLevel() >= SimdLevel::kAVX2;
       if (use_avx2 && epilogue.output_conversion == GemmOutputConversion::kBFloat16) {

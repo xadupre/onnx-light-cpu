@@ -11,6 +11,7 @@
 #include <cmath>
 #include <cstddef>
 #include <limits>
+#include <thread>
 #include <type_traits>
 #include <vector>
 
@@ -298,6 +299,50 @@ struct CDistExecutor {
     }
   }
 };
+
+struct ConcurrentCDistExecutor {
+  std::int64_t blocks = 0;
+
+  static void Run(void *context, std::int64_t count, void *task_context,
+                  onnx_light_cpu::ExecutionBlockFn task) {
+    auto &self = *static_cast<ConcurrentCDistExecutor *>(context);
+    self.blocks = count;
+    std::vector<std::thread> threads;
+    threads.reserve(static_cast<std::size_t>(count));
+    for (std::int64_t block = 0; block < count; ++block) {
+      threads.emplace_back([=] { task(task_context, block); });
+    }
+    for (auto &thread : threads) {
+      thread.join();
+    }
+  }
+};
+
+TEST(CDist, LargeFloat32RowsAreDynamicallyClaimed) {
+  constexpr std::size_t m = 128, k = 512, n = 128;
+  std::vector<float> a(m * n), b(k * n), output(m * k);
+  for (std::size_t i = 0; i < a.size(); ++i) {
+    a[i] = static_cast<float>(i % 17) / 4.0f;
+  }
+  for (std::size_t i = 0; i < b.size(); ++i) {
+    b[i] = static_cast<float>(i % 13) / 8.0f;
+  }
+  ConcurrentCDistExecutor executor;
+  const onnx_light_cpu::ExecutionExecutorView view{&executor, 4, &ConcurrentCDistExecutor::Run};
+  const onnx_light_cpu::ExecutionExecutorScope scope(&view);
+  CDistExecutionTuning tuning;
+  tuning.parallel_threshold_bytes = 1;
+  tuning.target_block_bytes = 1;
+  tuning.use_cost_model = false;
+  for (const auto metric : {CDistMetric::kSqEuclidean, CDistMetric::kEuclidean}) {
+    RunCDist(a.data(), b.data(), output.data(), m, k, n, metric, tuning);
+    EXPECT_EQ(executor.blocks, 4);
+    const auto expected = Reference(a, b, m, k, n, metric);
+    for (std::size_t i = 0; i < output.size(); ++i) {
+      EXPECT_NEAR(output[i], expected[i], 1e-3f) << i;
+    }
+  }
+}
 
 TYPED_TEST(CDistPacked, ExecutorSlicesAndNestedFallback) {
   using T = TypeParam;

@@ -155,4 +155,19 @@ void ApplyNormalizationAffineFloat32_AVX2(const float *input, const float *scale
   }
 }
 
+void ApplyRmsNormalizationFloat32_AVX2(const float *input, const float *scale, float *output,
+                                       std::size_t count, float multiplier) {
+  const __m256 multiplier8 = _mm256_set1_ps(multiplier);
+  std::size_t index = 0;
+  for (; index + 8 <= count; index += 8) {
+    const __m256 value = _mm256_loadu_ps(input + index);
+    const __m256 weight = _mm256_loadu_ps(scale + index);
+    const __m256 result = _mm256_mul_ps(_mm256_mul_ps(value, multiplier8), weight);
+    _mm256_storeu_ps(output + index, result);
+  }
+  for (; index < count; ++index) {
+    output[index] = input[index] * multiplier * scale[index];
+  }
+}
+
 } // namespace onnx_light_cpu

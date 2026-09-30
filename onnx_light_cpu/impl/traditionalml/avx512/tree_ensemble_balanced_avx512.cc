@@ -88,4 +88,61 @@ void EvaluateBalancedFloatRows_AVX512(const float *input, std::size_t features,
   }
 }
 
+float EvaluateBalancedFloatTrees_AVX512(const float *input,
+                                        const TreeEnsembleCompactFloatNode *nodes,
+                                        const float *leaf_weights, const std::int64_t *tree_roots,
+                                        std::size_t tree_count, std::size_t depth) {
+  static_assert(offsetof(TreeEnsembleCompactFloatNode, split) == 0);
+  static_assert(offsetof(TreeEnsembleCompactFloatNode, feature_id) == 4);
+  constexpr std::size_t kLanes = 16;
+  const auto *node_words = reinterpret_cast<const std::int32_t *>(nodes);
+  const auto *node_splits = reinterpret_cast<const float *>(nodes);
+  alignas(64) float weights[kLanes];
+  float sum = 0.0F;
+  std::size_t tree = 0;
+  for (; tree + kLanes <= tree_count; tree += kLanes) {
+    __m512i node_indices = _mm512_setr_epi32(static_cast<std::int32_t>(tree_roots[tree]),
+                                             static_cast<std::int32_t>(tree_roots[tree + 1]),
+                                             static_cast<std::int32_t>(tree_roots[tree + 2]),
+                                             static_cast<std::int32_t>(tree_roots[tree + 3]),
+                                             static_cast<std::int32_t>(tree_roots[tree + 4]),
+                                             static_cast<std::int32_t>(tree_roots[tree + 5]),
+                                             static_cast<std::int32_t>(tree_roots[tree + 6]),
+                                             static_cast<std::int32_t>(tree_roots[tree + 7]),
+                                             static_cast<std::int32_t>(tree_roots[tree + 8]),
+                                             static_cast<std::int32_t>(tree_roots[tree + 9]),
+                                             static_cast<std::int32_t>(tree_roots[tree + 10]),
+                                             static_cast<std::int32_t>(tree_roots[tree + 11]),
+                                             static_cast<std::int32_t>(tree_roots[tree + 12]),
+                                             static_cast<std::int32_t>(tree_roots[tree + 13]),
+                                             static_cast<std::int32_t>(tree_roots[tree + 14]),
+                                             static_cast<std::int32_t>(tree_roots[tree + 15]));
+    for (std::size_t level = 0; level < depth; ++level) {
+      const __m512i word_indices = _mm512_slli_epi32(node_indices, 2);
+      const __m512i feature_ids =
+          _mm512_i32gather_epi32(word_indices, node_words + 1, sizeof(std::int32_t));
+      const __m512 splits = _mm512_i32gather_ps(word_indices, node_splits, sizeof(std::int32_t));
+      const __m512 values = _mm512_i32gather_ps(feature_ids, input, sizeof(float));
+      const __mmask16 go_true = _mm512_cmp_ps_mask(values, splits, _CMP_LE_OQ);
+      const __m512i child_words =
+          _mm512_add_epi32(word_indices, _mm512_mask_blend_epi32(go_true, _mm512_set1_epi32(3),
+                                                                 _mm512_set1_epi32(2)));
+      node_indices = _mm512_i32gather_epi32(child_words, node_words, sizeof(std::int32_t));
+    }
+    _mm512_store_ps(weights, _mm512_i32gather_ps(node_indices, leaf_weights, sizeof(float)));
+    for (float weight : weights) {
+      sum += weight;
+    }
+  }
+  for (; tree < tree_count; ++tree) {
+    std::size_t node = static_cast<std::size_t>(tree_roots[tree]);
+    for (std::size_t level = 0; level < depth; ++level) {
+      const TreeEnsembleCompactFloatNode &current = nodes[node];
+      node = input[current.feature_id] <= current.split ? current.true_child : current.false_child;
+    }
+    sum += leaf_weights[node];
+  }
+  return sum;
+}
+
 } // namespace onnx_light_cpu
