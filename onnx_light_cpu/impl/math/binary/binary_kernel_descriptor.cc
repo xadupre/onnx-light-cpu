@@ -670,6 +670,8 @@ ONNX_LIGHT_CPU_DECLARE_HALF_BULK(Div)
 ONNX_LIGHT_CPU_DECLARE_HALF_BULK(PRelu)
 #undef ONNX_LIGHT_CPU_DECLARE_HALF_BULK
 void BulkFloat16Mod(const void *, const void *, void *, std::size_t);
+void BulkFloat16ModLeft(const void *, const void *, void *, std::size_t);
+void BulkFloat16ModRight(const void *, const void *, void *, std::size_t);
 void BulkBfloat16Mod(const void *, const void *, void *, std::size_t);
 void BulkFloat16Pow(const void *, const void *, void *, std::size_t);
 void BulkFloat16PowLeft(const void *, const void *, void *, std::size_t);
@@ -1205,6 +1207,18 @@ void BulkHalfContiguous(const void *left, const void *right, void *out, std::siz
 void BulkFloat16Mod(const void *left, const void *right, void *out, std::size_t count) {
   BulkHalfContiguous<detail::ConvertFloat16ToFloat32, detail::ConvertFloat32ToFloat16>(
       left, right, out, count, [](float a, float b) { return std::fmod(a, b); });
+}
+
+void BulkFloat16ModLeft(const void *left, const void *right, void *out, std::size_t count) {
+  BulkHalf<detail::Float16BitsToFloat, detail::ConvertFloat16ToFloat32,
+           detail::ConvertFloat32ToFloat16>(left, right, out, count, true, false,
+                                            [](float a, float b) { return std::fmod(a, b); });
+}
+
+void BulkFloat16ModRight(const void *left, const void *right, void *out, std::size_t count) {
+  BulkHalf<detail::Float16BitsToFloat, detail::ConvertFloat16ToFloat32,
+           detail::ConvertFloat32ToFloat16>(left, right, out, count, false, true,
+                                            [](float a, float b) { return std::fmod(a, b); });
 }
 
 void BulkBfloat16Mod(const void *left, const void *right, void *out, std::size_t count) {
@@ -2377,10 +2391,8 @@ void SelectAdditionalBulk(BinaryOperator op, DT left, DT right, const Attrs &att
         adapter.bulk_contiguous = &BulkFloat16Remainder;
         break;
       }
-      adapter.bulk_left_scalar =
-          &BulkComputeLeftScalar<std::uint16_t, std::uint16_t, std::uint16_t, &ComputeFloat16Mod>;
-      adapter.bulk_right_scalar =
-          &BulkComputeRightScalar<std::uint16_t, std::uint16_t, std::uint16_t, &ComputeFloat16Mod>;
+      adapter.bulk_left_scalar = &BulkFloat16ModLeft;
+      adapter.bulk_right_scalar = &BulkFloat16ModRight;
       break;
     case DT::BFLOAT16:
       if (attributes.mod_fmod == 0) {
