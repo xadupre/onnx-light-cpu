@@ -1691,7 +1691,7 @@ TEST(AttentionExecutionInfo, ReportsLogicalOutputTileForDirectAndBufferedWrites)
   }
 }
 
-TEST(AttentionExecutionInfo, BFloat16ElementConversionHasNoKvTileBuffer) {
+TEST(AttentionExecutionInfo, BFloat16UsesBoundedKvConversionTile) {
   const std::int64_t q_shape[] = {1, 1, 8, 9};
   const std::int64_t k_shape[] = {1, 1, 31, 9};
   const std::int64_t v_shape[] = {1, 1, 31, 11};
@@ -1704,9 +1704,9 @@ TEST(AttentionExecutionInfo, BFloat16ElementConversionHasNoKvTileBuffer) {
   onnx_light_cpu::AttentionExecutionInfo info;
   ComputeAttentionBFloat16Streaming(plan, q.data(), k.data(), v.data(), nullptr, y.data(), nullptr,
                                     nullptr, nullptr, &info);
-  EXPECT_FALSE(info.tile_conversion);
+  EXPECT_TRUE(info.tile_conversion);
   EXPECT_FALSE(info.tile_packing);
-  EXPECT_EQ(info.conversion_kv_tile, 0);
+  EXPECT_EQ(info.conversion_kv_tile, 31);
   EXPECT_EQ(info.output_tile_elements, 11);
 }
 
@@ -1907,6 +1907,40 @@ TEST(ComputeAttentionBFloat16Streaming, MatchesFloat32ReferenceWithinHalfPrecisi
 
   // BF16 has fewer mantissa bits than FP16, so use a looser tolerance.
   ExpectClose(y, expected, 3e-2f);
+}
+
+TEST(ComputeAttentionBFloat16Streaming, TiledGqaTailsMatchFloat32Reference) {
+  AttentionDescriptor descriptor;
+  descriptor.is_causal = true;
+  constexpr std::size_t batch = 1, heads = 4, group = 2, q_len = 17, kv_len = 33, head_dim = 9,
+                        v_head_dim = 11;
+  constexpr std::size_t kv_heads = heads / group;
+  const std::int64_t q_shape[] = {batch, heads, q_len, head_dim};
+  const std::int64_t k_shape[] = {batch, kv_heads, kv_len, head_dim};
+  const std::int64_t v_shape[] = {batch, kv_heads, kv_len, v_head_dim};
+  AttentionPlan plan(descriptor, AttentionLayout::kRank4, q_shape, k_shape, v_shape, {},
+                     AttentionMaskKind::kNone);
+
+  const auto q32 = half_precision::FromBFloat16(
+      half_precision::ToBFloat16(RandomTensor(batch * heads * q_len * head_dim, 651)));
+  const auto k32 = half_precision::FromBFloat16(
+      half_precision::ToBFloat16(RandomTensor(batch * kv_heads * kv_len * head_dim, 652)));
+  const auto v32 = half_precision::FromBFloat16(
+      half_precision::ToBFloat16(RandomTensor(batch * kv_heads * kv_len * v_head_dim, 653)));
+  const auto q16 = half_precision::ToBFloat16(q32);
+  const auto k16 = half_precision::ToBFloat16(k32);
+  const auto v16 = half_precision::ToBFloat16(v32);
+
+  std::vector<std::uint16_t> y16(batch * heads * q_len * v_head_dim);
+  onnx_light_cpu::AttentionExecutionInfo info;
+  ComputeAttentionBFloat16Streaming(plan, q16.data(), k16.data(), v16.data(), nullptr, y16.data(),
+                                    nullptr, nullptr, nullptr, &info);
+  EXPECT_EQ(info.path, onnx_light_cpu::AttentionExecutionPath::kTiled);
+  EXPECT_TRUE(info.tile_conversion);
+
+  std::vector<float> expected(batch * heads * q_len * v_head_dim);
+  ComputeAttentionFloat32(plan, q32.data(), k32.data(), v32.data(), nullptr, expected.data());
+  ExpectClose(half_precision::FromBFloat16(y16), expected, 3e-2f);
 }
 
 // Roadmap PR14: a plan with a requested `present` output must never

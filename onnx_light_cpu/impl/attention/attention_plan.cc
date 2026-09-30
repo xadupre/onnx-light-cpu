@@ -693,6 +693,9 @@ void LoadRows(const typename Codec::Storage *source, float *destination, std::si
     if constexpr (std::is_same_v<Codec, Float16Codec>) {
       detail::ConvertFloat16ToFloat32(source + row * stride, destination + row * dimension,
                                       dimension);
+    } else if constexpr (std::is_same_v<Codec, BFloat16Codec>) {
+      detail::ConvertBFloat16ToFloat32(source + row * stride, destination + row * dimension,
+                                       dimension);
     } else {
       for (std::size_t d = 0; d < dimension; ++d) {
         destination[row * dimension + d] = Codec::Load(source[row * stride + d]);
@@ -827,7 +830,7 @@ void ComputeAttentionDecodeRowAVX2FMA(
 
     const std::size_t past_count =
         j0 < plan.past_length ? std::min(count, plan.past_length - j0) : 0;
-    if constexpr (std::is_same_v<Codec, Float16Codec>) {
+    if constexpr (!std::is_same_v<Codec, Float32Codec>) {
       if (!converted_head) {
         LoadKvRows<Codec>(plan, k_head, past_k_head, k_tile, j0, count, plan.head_dim,
                           plan.k_strides.sequence, plan.past_k_strides.sequence);
@@ -880,7 +883,7 @@ void ComputeAttentionDecodeRowAVX2FMA(
       AttentionScaleFloat32_AVX2_FMA(accumulator, result.correction, plan.v_head_dim);
     }
 
-    if constexpr (std::is_same_v<Codec, Float16Codec>) {
+    if constexpr (!std::is_same_v<Codec, Float32Codec>) {
       if (!converted_head) {
         LoadKvRows<Codec>(plan, v_head, past_v_head, v_tile, j0, count, plan.v_head_dim,
                           plan.v_strides.sequence, plan.past_v_strides.sequence);
@@ -938,7 +941,7 @@ void ComputeAttentionStreamingGeneric(const AttentionPlan &plan, const typename 
   const std::size_t block = total_kv_length == 0 ? std::size_t{0} : AttentionKvBlock(plan);
   const std::size_t conversion_block = AttentionConversionKvBlock(plan);
   const bool reuse_converted_head =
-      std::is_same_v<Codec, Float16Codec> && conversion_block == total_kv_length;
+      !std::is_same_v<Codec, Float32Codec> && conversion_block == total_kv_length;
   const std::size_t rows_per_batch = plan.q_num_heads * plan.q_length;
   const std::size_t total_rows = plan.batch * rows_per_batch;
   const std::size_t participants = StreamingParticipantCount(plan, total_rows);
@@ -956,7 +959,6 @@ void ComputeAttentionStreamingGeneric(const AttentionPlan &plan, const typename 
   // mask layout (e.g. broadcast) falls back to the scalar path unchanged.
   static const bool has_avx2_fma = DetectSimdLevel() >= SimdLevel::kAVX2 && CpuSupportsFma();
   const bool use_avx2_decode_row =
-      (std::is_same_v<Codec, Float32Codec> || std::is_same_v<Codec, Float16Codec>) &&
       plan.q_length <= 16 && has_avx2_fma &&
       (plan.mask_kind == AttentionMaskKind::kNone || plan.mask_strides.kv == 1);
 #endif
@@ -984,7 +986,7 @@ void ComputeAttentionStreamingGeneric(const AttentionPlan &plan, const typename 
           q_fp32.resize(plan.head_dim);
         }
         accumulator.resize(plan.v_head_dim);
-        if constexpr (std::is_same_v<Codec, Float16Codec>) {
+        if constexpr (!std::is_same_v<Codec, Float32Codec>) {
           k_fp32.resize(conversion_block * plan.head_dim);
           v_fp32.resize(conversion_block * plan.v_head_dim);
         }
@@ -1012,7 +1014,7 @@ void ComputeAttentionStreamingGeneric(const AttentionPlan &plan, const typename 
                   ? past_v + b * plan.past_v_strides.batch + kv_h * plan.past_v_strides.head
                   : nullptr;
           typename Codec::Storage *y_head = y + b * plan.y_strides.batch + h * plan.y_strides.head;
-          if constexpr (std::is_same_v<Codec, Float16Codec>) {
+          if constexpr (!std::is_same_v<Codec, Float32Codec>) {
             const std::size_t head = b * plan.kv_num_heads + kv_h;
             if (reuse_converted_head && converted_head != head) {
               LoadKvRows<Codec>(plan, k_head, past_k_head, k_fp32.data(), 0, total_kv_length,
@@ -1094,7 +1096,8 @@ void ComputeAttentionStreamingGeneric(const AttentionPlan &plan, const typename 
           // otherwise untouched).
           bool handled_by_avx2_decode = false;
           if constexpr (std::is_same_v<Codec, Float32Codec> ||
-                        std::is_same_v<Codec, Float16Codec>) {
+                        std::is_same_v<Codec, Float16Codec> ||
+                        std::is_same_v<Codec, BFloat16Codec>) {
             if (use_avx2_decode_row) {
               ComputeAttentionDecodeRowAVX2FMA<Codec>(
                   plan, q_values, k_head, v_head, past_k_head, past_v_head, mask_bool, mask_float,
@@ -1130,7 +1133,7 @@ void ComputeAttentionStreamingGeneric(const AttentionPlan &plan, const typename 
               }
             }
 
-            if constexpr (std::is_same_v<Codec, Float16Codec>) {
+            if constexpr (!std::is_same_v<Codec, Float32Codec>) {
               if (!reuse_converted_head) {
                 LoadKvRows<Codec>(plan, k_head, past_k_head, k_fp32.data(), j0, count,
                                   plan.head_dim, plan.k_strides.sequence,
@@ -1164,7 +1167,8 @@ void ComputeAttentionStreamingGeneric(const AttentionPlan &plan, const typename 
               }
               float dot = 0.0f;
               if constexpr (std::is_same_v<Codec, Float32Codec> ||
-                            std::is_same_v<Codec, Float16Codec>) {
+                            std::is_same_v<Codec, Float16Codec> ||
+                            std::is_same_v<Codec, BFloat16Codec>) {
                 const float *k_values;
                 if constexpr (std::is_same_v<Codec, Float32Codec>) {
                   k_values = k_row;
@@ -1234,7 +1238,7 @@ void ComputeAttentionStreamingGeneric(const AttentionPlan &plan, const typename 
                 v_row = v_head + (j - plan.past_length) * plan.v_strides.sequence;
               }
               for (std::size_t d = 0; d < plan.v_head_dim; ++d) {
-                if constexpr (std::is_same_v<Codec, Float16Codec>) {
+                if constexpr (!std::is_same_v<Codec, Float32Codec>) {
                   accumulator[d] +=
                       p * v_fp32[(reuse_converted_head ? j : jj) * plan.v_head_dim + d];
                 } else {
@@ -1259,6 +1263,11 @@ void ComputeAttentionStreamingGeneric(const AttentionPlan &plan, const typename 
               accumulator[d] *= inv_l;
             }
             detail::ConvertFloat32ToFloat16(accumulator.data(), y_row, plan.v_head_dim);
+          } else if constexpr (std::is_same_v<Codec, BFloat16Codec>) {
+            for (std::size_t d = 0; d < plan.v_head_dim; ++d) {
+              accumulator[d] *= inv_l;
+            }
+            detail::ConvertFloat32ToBFloat16(accumulator.data(), y_row, plan.v_head_dim);
           } else {
             for (std::size_t d = 0; d < plan.v_head_dim; ++d) {
               y_row[d] = Codec::Store(accumulator[d] * inv_l);
@@ -1292,7 +1301,7 @@ void ComputeAttentionTiled(const AttentionPlan &plan, const typename Codec::Stor
                      "shared converted value element count");
   // GQA/MQA tasks sharing a KV head would otherwise repack and reconvert the same rows once per
   // query head. Keep one invocation-local copy under a fixed memory cap.
-  const bool reuse_half_kv = std::is_same_v<Codec, Float16Codec> && plan.group_size > 1 &&
+  const bool reuse_half_kv = !std::is_same_v<Codec, Float32Codec> && plan.group_size > 1 &&
                              shared_k_elements <= kMaximumSharedKvElements &&
                              shared_v_elements <= kMaximumSharedKvElements;
   std::vector<typename Codec::Storage> shared_k;
@@ -1344,7 +1353,7 @@ void ComputeAttentionTiled(const AttentionPlan &plan, const typename Codec::Stor
 #endif
   std::size_t participants =
       StreamingParticipantCount(plan, plan.batch * plan.q_num_heads * plan.q_length);
-  if constexpr (std::is_same_v<Codec, Float16Codec>) {
+  if constexpr (!std::is_same_v<Codec, Float32Codec>) {
     const std::size_t total_rows = plan.batch * plan.q_num_heads * plan.q_length;
     const std::size_t fmas_per_row =
         (plan.head_dim + plan.v_head_dim) * std::max<std::size_t>(plan.total_kv_length, 1);
@@ -1737,8 +1746,10 @@ void ComputeAttentionTiled(const AttentionPlan &plan, const typename Codec::Stor
                 const float *output_row = destination + i * plan.v_head_dim;
                 if constexpr (std::is_same_v<Codec, Float32Codec>) {
                   std::copy_n(output_row, plan.v_head_dim, y_row);
-                } else {
+                } else if constexpr (std::is_same_v<Codec, Float16Codec>) {
                   detail::ConvertFloat32ToFloat16(output_row, y_row, plan.v_head_dim);
+                } else {
+                  detail::ConvertFloat32ToBFloat16(output_row, y_row, plan.v_head_dim);
                 }
               }
               break;
@@ -1761,11 +1772,16 @@ void ComputeAttentionTiled(const AttentionPlan &plan, const typename Codec::Stor
               for (std::size_t d = 0; d < plan.v_head_dim; ++d) {
                 y_row[d] = accumulator_row[d] * scale;
               }
-            } else {
+            } else if constexpr (std::is_same_v<Codec, Float16Codec>) {
               for (std::size_t d = 0; d < plan.v_head_dim; ++d) {
                 accumulator_row[d] *= scale;
               }
               detail::ConvertFloat32ToFloat16(accumulator_row, y_row, plan.v_head_dim);
+            } else {
+              for (std::size_t d = 0; d < plan.v_head_dim; ++d) {
+                accumulator_row[d] *= scale;
+              }
+              detail::ConvertFloat32ToBFloat16(accumulator_row, y_row, plan.v_head_dim);
             }
           }
         }
@@ -1842,7 +1858,17 @@ void ComputeAttentionBFloat16Streaming(const AttentionPlan &plan, const std::uin
     ComputeAttentionSingleKey<BFloat16Codec>(plan, v, mask, y, past_v, nonpad_kv_seqlen);
     return;
   }
-  RecordExecution(plan, AttentionExecutionPath::kStreaming, false, execution_info);
+  bool use_tiled = plan.past_length == 0 && plan.q_length >= 16 && plan.total_kv_length != 0;
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
+  static const bool use_avx2_short = DetectSimdLevel() >= SimdLevel::kAVX2 && CpuSupportsFma();
+  use_tiled = use_tiled && !(plan.q_length == 16 && use_avx2_short);
+#endif
+  if (use_tiled) {
+    RecordExecution(plan, AttentionExecutionPath::kTiled, true, execution_info);
+    ComputeAttentionTiled<BFloat16Codec>(plan, q, k, v, mask, y, nonpad_kv_seqlen);
+    return;
+  }
+  RecordExecution(plan, AttentionExecutionPath::kStreaming, true, execution_info);
   ComputeAttentionStreamingGeneric<BFloat16Codec>(plan, q, k, v, mask, y, past_k, past_v,
                                                   nonpad_kv_seqlen);
 }
