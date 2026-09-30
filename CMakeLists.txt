@@ -941,7 +941,11 @@ if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
   # build-tree consumers resolve it via CMake's target RPATH; Windows consumers
   # must place the onnx-light runtime DLL directory on their loader search path.
   # Availability definitions on the implementation library are private. The
-  # registered activation dispatchers also need to see the compiled AVX2 path.
+  # registered activation dispatchers also need to see the compiled SIMD paths.
+  if(ONNX_LIGHT_CPU_HAVE_AVX512BF16_FLAG)
+    target_compile_definitions(lib_onnx_light_cpu_kernels PRIVATE
+        ONNX_LIGHT_CPU_HAVE_AVX512BF16=1)
+  endif()
   if(ONNX_LIGHT_CPU_HAVE_AVX2_FMA_FLAG)
     target_compile_definitions(lib_onnx_light_cpu_kernels PRIVATE
         ONNX_LIGHT_CPU_HAVE_AVX2_FMA=1)
