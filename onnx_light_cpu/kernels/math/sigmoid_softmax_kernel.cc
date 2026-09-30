@@ -257,13 +257,28 @@ void SoftmaxLastAxis(const T *input, T *output, std::int64_t rows, std::int64_t 
   });
 }
 
-template <typename DecodeBlock, typename EncodeBlock>
+template <bool BFloat16, typename DecodeBlock, typename EncodeBlock>
 void SoftmaxHalfLastAxis(const std::uint16_t *input, std::uint16_t *output, std::int64_t rows,
                          std::int64_t columns, DecodeBlock decode, EncodeBlock encode) {
   if (rows == 0 || columns == 0) {
     return;
   }
   const std::size_t row_bytes = static_cast<std::size_t>(columns) * sizeof(std::uint16_t);
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512BF16
+  if constexpr (BFloat16) {
+    static const bool use_avx512bf16 =
+        DetectSimdLevel() >= SimdLevel::kAVX512 && CpuSupportsAvx512Bf16();
+    if (use_avx512bf16) {
+      DispatchSoftmaxRows(rows, row_bytes, [=](std::int64_t begin, std::int64_t end) {
+        const std::size_t offset = static_cast<std::size_t>(begin * columns);
+        SoftmaxBFloat16_AVX512BF16(input + offset, output + offset,
+                                   static_cast<std::size_t>(end - begin),
+                                   static_cast<std::size_t>(columns));
+      });
+      return;
+    }
+  }
+#endif
   DispatchSoftmaxRows(rows, row_bytes, [=](std::int64_t begin, std::int64_t end) {
     std::vector<float> buffer(static_cast<std::size_t>(columns));
     for (std::int64_t row = begin; row < end; ++row) {
@@ -433,10 +448,10 @@ void SoftmaxKernel::operator()(const Tensor &x, std::int64_t axis, Tensor &outpu
     return;
   case DataType::FLOAT16:
     if (inner == 1) {
-      SoftmaxHalfLastAxis(reinterpret_cast<const std::uint16_t *>(x.bytes()),
-                          reinterpret_cast<std::uint16_t *>(output.mutable_bytes()), outer,
-                          axis_dim, detail::ConvertFloat16ToFloat32,
-                          detail::ConvertFloat32ToFloat16);
+      SoftmaxHalfLastAxis<false>(reinterpret_cast<const std::uint16_t *>(x.bytes()),
+                                 reinterpret_cast<std::uint16_t *>(output.mutable_bytes()), outer,
+                                 axis_dim, detail::ConvertFloat16ToFloat32,
+                                 detail::ConvertFloat32ToFloat16);
     } else {
       SoftmaxHalf(reinterpret_cast<const std::uint16_t *>(x.bytes()),
                   reinterpret_cast<std::uint16_t *>(output.mutable_bytes()), outer, axis_dim, inner,
@@ -445,10 +460,10 @@ void SoftmaxKernel::operator()(const Tensor &x, std::int64_t axis, Tensor &outpu
     return;
   case DataType::BFLOAT16:
     if (inner == 1) {
-      SoftmaxHalfLastAxis(reinterpret_cast<const std::uint16_t *>(x.bytes()),
-                          reinterpret_cast<std::uint16_t *>(output.mutable_bytes()), outer,
-                          axis_dim, detail::ConvertBFloat16ToFloat32,
-                          detail::ConvertFloat32ToBFloat16);
+      SoftmaxHalfLastAxis<true>(reinterpret_cast<const std::uint16_t *>(x.bytes()),
+                                reinterpret_cast<std::uint16_t *>(output.mutable_bytes()), outer,
+                                axis_dim, detail::ConvertBFloat16ToFloat32,
+                                detail::ConvertFloat32ToBFloat16);
     } else {
       SoftmaxHalf(reinterpret_cast<const std::uint16_t *>(x.bytes()),
                   reinterpret_cast<std::uint16_t *>(output.mutable_bytes()), outer, axis_dim, inner,
