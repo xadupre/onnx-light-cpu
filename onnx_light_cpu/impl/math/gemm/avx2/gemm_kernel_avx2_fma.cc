@@ -253,7 +253,7 @@ void GemmHalfSkinnyM(bool trans_a, std::size_t M, std::size_t N, std::size_t K, 
           _mm256_storeu_ps(Y + row * N + n0, _mm256_mul_ps(valpha, accumulators0[row]));
           _mm256_storeu_ps(Y + row * N + n0 + 8, _mm256_mul_ps(valpha, accumulators1[row]));
         }
-      } else if constexpr (!Bfloat16) {
+      } else {
         if (N == 2 && !trans_a) {
           const __m256i duplicate_pairs = _mm256_setr_epi32(0, 0, 1, 1, 2, 2, 3, 3);
           for (std::size_t row = 0; row < M; ++row) {
@@ -262,10 +262,16 @@ void GemmHalfSkinnyM(bool trans_a, std::size_t M, std::size_t N, std::size_t K, 
             std::size_t depth = 0;
             for (; depth + 4 <= K; depth += 4) {
               const __m128i ah = _mm_loadl_epi64(reinterpret_cast<const __m128i *>(arow + depth));
-              const __m128 a4 = _mm_cvtph_ps(ah);
+              const __m128 a4 = [&] {
+                if constexpr (Bfloat16) {
+                  return _mm_castsi128_ps(_mm_slli_epi32(_mm_cvtepu16_epi32(ah), 16));
+                } else {
+                  return _mm_cvtph_ps(ah);
+                }
+              }();
               const __m256 a =
                   _mm256_permutevar8x32_ps(_mm256_castps128_ps256(a4), duplicate_pairs);
-              const __m256 b = WidenHalf8<false>(B + depth * N + n0);
+              const __m256 b = WidenHalf8<Bfloat16>(B + depth * N + n0);
               accumulator = _mm256_fmadd_ps(a, b, accumulator);
             }
             alignas(32) float lanes[8];
@@ -273,34 +279,15 @@ void GemmHalfSkinnyM(bool trans_a, std::size_t M, std::size_t N, std::size_t K, 
             float sum0 = lanes[0] + lanes[2] + lanes[4] + lanes[6];
             float sum1 = lanes[1] + lanes[3] + lanes[5] + lanes[7];
             for (; depth < K; ++depth) {
-              const float a = ReadHalf<false>(arow + depth);
-              sum0 += a * ReadHalf<false>(B + depth * N + n0);
-              sum1 += a * ReadHalf<false>(B + depth * N + n0 + 1);
+              const float a = ReadHalf<Bfloat16>(arow + depth);
+              sum0 += a * ReadHalf<Bfloat16>(B + depth * N + n0);
+              sum1 += a * ReadHalf<Bfloat16>(B + depth * N + n0 + 1);
             }
             Y[row * N + n0] = alpha * sum0;
             Y[row * N + n0 + 1] = alpha * sum1;
           }
           continue;
         }
-        float accumulators[kGemmAVX2MR][kColumns] = {};
-        for (std::size_t depth = 0; depth < K; ++depth) {
-          float bvalues[kColumns];
-          for (std::size_t column = 0; column < columns; ++column) {
-            bvalues[column] = ReadHalf<Bfloat16>(B + depth * N + n0 + column);
-          }
-          for (std::size_t row = 0; row < M; ++row) {
-            const float a = ReadHalf<Bfloat16>(trans_a ? A + depth * M + row : A + row * K + depth);
-            for (std::size_t column = 0; column < columns; ++column) {
-              accumulators[row][column] += a * bvalues[column];
-            }
-          }
-        }
-        for (std::size_t row = 0; row < M; ++row) {
-          for (std::size_t column = 0; column < columns; ++column) {
-            Y[row * N + n0 + column] = alpha * accumulators[row][column];
-          }
-        }
-      } else {
         float accumulators[kGemmAVX2MR][kColumns] = {};
         for (std::size_t depth = 0; depth < K; ++depth) {
           float bvalues[kColumns];
@@ -910,6 +897,17 @@ void GemmMicroKernel_AVX2BF16(std::size_t mr, std::size_t nb, std::size_t K, flo
     return GemmMicroKernel_ScalarBf16(mr, nb, K, alpha, beta, Bmat, N, Crow_base, Cstride,
                                       Yrow_base, Ystride, n0, mode, Apack);
   }
+}
+
+void GemmBfloat16SkinnyM_AVX2_FMA(bool trans_a, std::size_t M, std::size_t N, std::size_t K,
+                                  float alpha, const std::uint16_t *A, const std::uint16_t *B,
+                                  float *Y) {
+  GemmHalfSkinnyM<true>(trans_a, M, N, K, alpha, A, B, Y);
+}
+
+void GemmBfloat16SkinnyN_AVX2_FMA(std::size_t M, std::size_t K, float alpha, const std::uint16_t *A,
+                                  const std::uint16_t *B, float *Y) {
+  GemmHalfSkinnyN<true>(M, K, alpha, A, B, Y);
 }
 
 #ifdef ONNX_LIGHT_CPU_HAVE_F16C

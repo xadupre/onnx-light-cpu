@@ -1810,6 +1810,7 @@ TEST(GemmHalf, Float16DirectSmallKMatchesReference) {
 TEST(GemmHalf, BFloat16AlgorithmVariantsMatchReference) {
   CheckGemmHalf(true, false, false, 200, 1, 300, false, 401); // skinny-N
   CheckGemmHalf(true, false, false, 1, 200, 300, false, 411); // skinny-M
+  CheckGemmHalf(true, false, false, 2, 2, 4097, false, 416);  // narrow split-K
   CheckGemmHalf(true, false, false, 8, 4, 4096, false, 421);  // split-K
   CheckGemmHalf(true, false, false, 32, 128, 16, false, 430); // AVX2 direct
   CheckGemmHalf(true, false, false, 40, 48, 16, true, 431);   // direct small-K

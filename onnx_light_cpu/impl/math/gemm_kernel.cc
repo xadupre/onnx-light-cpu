@@ -1949,7 +1949,11 @@ void GemmHalfPlanned(bool is_bfloat16, bool trans_a, bool trans_b, std::size_t M
   static const bool use_avx2 = DetectSimdLevel() >= SimdLevel::kAVX2 && CpuSupportsFma();
   if (use_avx2) {
     if constexpr (Algorithm == GemmAlgorithm::kSkinnyM || Algorithm == GemmAlgorithm::kSplitK) {
-      if (!is_bfloat16 && !trans_b && M <= kGemmAVX2MR) {
+      if (!trans_b && M <= kGemmAVX2MR) {
+        if (is_bfloat16) {
+          GemmBfloat16SkinnyM_AVX2_FMA(trans_a, M, N, K, alpha, A, B, Y);
+          return;
+        }
 #ifdef ONNX_LIGHT_CPU_HAVE_F16C
         // For tiny split-K outputs, thread-pool and partial-reduction overhead
         // dominates the arithmetic. Use the same register-resident kernel as
@@ -1974,7 +1978,11 @@ void GemmHalfPlanned(bool is_bfloat16, bool trans_a, bool trans_b, std::size_t M
       }
     }
     if constexpr (Algorithm == GemmAlgorithm::kSkinnyN) {
-      if (!is_bfloat16 && !trans_a && N == 1) {
+      if (!trans_a && N == 1) {
+        if (is_bfloat16) {
+          GemmBfloat16SkinnyN_AVX2_FMA(M, K, alpha, A, B, Y);
+          return;
+        }
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512FP16
         static const bool use_avx512fp16 = CpuSupportsAvx512Fp16();
         if (use_avx512fp16) {
