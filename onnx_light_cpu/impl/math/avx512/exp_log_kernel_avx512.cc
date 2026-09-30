@@ -5,6 +5,8 @@
 #include "onnx_light_cpu/impl/math/avx512/exp_kernel_avx512.h"
 #include "onnx_light_cpu/impl/math/math_kernels.h"
 
+#include "onnx_light_cpu/impl/math/half_conversion.h"
+
 #include <cmath>
 #include <cstddef>
 #include <immintrin.h>
@@ -472,6 +474,72 @@ void PowFloat32LeftScalar_AVX512(float base, const float *exponent, float *outpu
   }
   for (; i < count; ++i) {
     output[i] = std::pow(base, exponent[i]);
+  }
+}
+
+void PowFloat16RightScalar_AVX512(const std::uint16_t *base, float exponent, std::uint16_t *output,
+                                  std::size_t count) {
+  const __m512 zero = _mm512_setzero_ps();
+  const __m512 one = _mm512_set1_ps(1.0f);
+  const __m512 y = _mm512_set1_ps(exponent);
+  const bool finite_exponent = std::isfinite(exponent);
+  const bool exponent0 = exponent == 0.0f;
+  const bool exponent1 = exponent == 1.0f;
+  const bool exponent2 = exponent == 2.0f;
+  const bool exponent3 = exponent == 3.0f;
+  const bool exponent4 = exponent == 4.0f;
+  const bool exponent5 = exponent == 5.0f;
+  const bool small_integer =
+      exponent0 || exponent1 || exponent2 || exponent3 || exponent4 || exponent5;
+  std::size_t i = 0;
+  for (; i + 16 <= count; i += 16) {
+    const __m512 x =
+        _mm512_cvtph_ps(_mm256_loadu_si256(reinterpret_cast<const __m256i *>(base + i)));
+    const __m512 x2 = _mm512_mul_ps(x, x);
+    __m512 result = exponent0   ? one
+                    : exponent1 ? x
+                    : exponent2 ? x2
+                    : exponent3 ? _mm512_mul_ps(x2, x)
+                    : exponent4 ? _mm512_mul_ps(x2, x2)
+                    : exponent5 ? _mm512_mul_ps(_mm512_mul_ps(x2, x2), x)
+                                : zero;
+    const __m512 abs_x = _mm512_castsi512_ps(
+        _mm512_and_epi32(_mm512_castps_si512(x), _mm512_set1_epi32(0x7fffffff)));
+    const __mmask16 approximate =
+        !small_integer && finite_exponent
+            ? _mm512_cmp_ps_mask(x, zero, _CMP_GT_OQ) &
+                  _mm512_cmp_ps_mask(abs_x, _mm512_set1_ps(std::numeric_limits<float>::max()),
+                                     _CMP_LE_OQ)
+            : 0;
+    if (approximate != 0) {
+      result = _mm512_mask_mov_ps(result, approximate, ExpPs(_mm512_mul_ps(LogPs(x), y)));
+    }
+    const __mmask16 scalar = small_integer ? 0 : static_cast<__mmask16>(~approximate);
+    if (scalar != 0) {
+      alignas(64) float values[16];
+      _mm512_store_ps(values, result);
+      for (std::size_t lane = 0; lane < 16; ++lane) {
+        if ((scalar & (static_cast<__mmask16>(1u) << lane)) != 0) {
+          values[lane] = std::pow(detail::Float16BitsToFloat(base[i + lane]), exponent);
+        }
+      }
+      result = _mm512_load_ps(values);
+    }
+    const __m256i packed = _mm512_cvtps_ph(result, _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC);
+    _mm256_storeu_si256(reinterpret_cast<__m256i *>(output + i), packed);
+    const __mmask16 nan = _mm512_cmp_ps_mask(result, result, _CMP_UNORD_Q);
+    if (nan != 0) {
+      alignas(64) float values[16];
+      _mm512_store_ps(values, result);
+      for (std::size_t lane = 0; lane < 16; ++lane) {
+        if ((nan & (static_cast<__mmask16>(1u) << lane)) != 0) {
+          output[i + lane] = detail::FloatToFloat16Bits(values[lane]);
+        }
+      }
+    }
+  }
+  for (; i < count; ++i) {
+    output[i] = detail::FloatToFloat16Bits(std::pow(detail::Float16BitsToFloat(base[i]), exponent));
   }
 }
 

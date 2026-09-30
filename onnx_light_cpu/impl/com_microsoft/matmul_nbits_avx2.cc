@@ -10,7 +10,36 @@ namespace onnx_light_cpu::detail {
 
 void NBitsPanelAvx2(const float *a, const float *b, float *sums, std::size_t rows,
                     std::size_t depth) {
-  for (std::size_t row = 0; row < rows; ++row) {
+  constexpr std::size_t kRowBlock = 2;
+  std::size_t row = 0;
+  for (; row + kRowBlock <= rows; row += kRowBlock) {
+    __m256 values[kRowBlock][4];
+    for (std::size_t r = 0; r < kRowBlock; ++r) {
+      for (std::size_t chunk = 0; chunk < 4; ++chunk) {
+        values[r][chunk] = _mm256_loadu_ps(sums + (row + r) * kNBitsColumns + chunk * 8);
+      }
+    }
+    for (std::size_t p = 0; p < depth; ++p) {
+      const float *weights = b + p * kNBitsColumns;
+      __m256 weight_values[4];
+      for (std::size_t chunk = 0; chunk < 4; ++chunk) {
+        weight_values[chunk] = _mm256_loadu_ps(weights + chunk * 8);
+      }
+      for (std::size_t r = 0; r < kRowBlock; ++r) {
+        const __m256 activation = _mm256_set1_ps(a[(row + r) * kNBitsBlock + p]);
+        for (std::size_t chunk = 0; chunk < 4; ++chunk) {
+          values[r][chunk] =
+              _mm256_add_ps(values[r][chunk], _mm256_mul_ps(activation, weight_values[chunk]));
+        }
+      }
+    }
+    for (std::size_t r = 0; r < kRowBlock; ++r) {
+      for (std::size_t chunk = 0; chunk < 4; ++chunk) {
+        _mm256_storeu_ps(sums + (row + r) * kNBitsColumns + chunk * 8, values[r][chunk]);
+      }
+    }
+  }
+  for (; row < rows; ++row) {
     __m256 s0 = _mm256_loadu_ps(sums + row * kNBitsColumns);
     __m256 s1 = _mm256_loadu_ps(sums + row * kNBitsColumns + 8);
     __m256 s2 = _mm256_loadu_ps(sums + row * kNBitsColumns + 16);

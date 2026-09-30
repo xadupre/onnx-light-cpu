@@ -139,11 +139,11 @@ def _measure_runtime_phases(
     cpu_run: Any, create_onnxruntime: Any, measure: Any
 ) -> tuple[list[tuple[str, Any]], dict[str, list[float]], str | None]:
     runners = [("onnx-light-cpu", cpu_run)]
-    measured = {"onnx-light-cpu": measure(cpu_run)}
+    measured = {"onnx-light-cpu": measure("onnx-light-cpu", cpu_run)}
     ort_session, onnxruntime_error = create_onnxruntime()
     if ort_session is not None:
         runners.append(("onnxruntime", ort_session.run))
-        measured["onnxruntime"] = measure(ort_session.run)
+        measured["onnxruntime"] = measure("onnxruntime", ort_session.run)
     return runners, measured, onnxruntime_error
 
 
@@ -255,6 +255,22 @@ def _to_numpy(tensor: Any) -> np.ndarray:
     return np.frombuffer(tensor.raw_data(), dtype=dtype).reshape(shape)
 
 
+def _prepare_feeds(
+    input_names: Sequence[str], data_sets: Sequence[Any]
+) -> tuple[list[dict[str, Any]], list[dict[str, np.ndarray]]]:
+    cpu_feeds = []
+    numpy_feeds = []
+    for data_set in data_sets:
+        cpu_feeds.append(dict(zip(input_names, data_set.inputs, strict=True)))
+        numpy_feeds.append(
+            {
+                name: _to_numpy(tensor)
+                for name, tensor in zip(input_names, data_set.inputs, strict=True)
+            }
+        )
+    return cpu_feeds, numpy_feeds
+
+
 def _measure_case(
     case: Any,
     repeat: int,
@@ -271,17 +287,10 @@ def _measure_case(
 
     model = case.model
     operator = model.graph.node[0].op_type
-    feeds = []
     input_names = [value.name for value in model.graph.input]
-    for data_set in case.data_sets:
-        feeds.append(
-            {
-                name: _to_numpy(tensor)
-                for name, tensor in zip(input_names, data_set.inputs, strict=True)
-            }
-        )
+    cpu_feeds, numpy_feeds = _prepare_feeds(input_names, case.data_sets)
     input_shapes = json.dumps(
-        [{name: list(array.shape) for name, array in feed.items()} for feed in feeds]
+        [{name: list(array.shape) for name, array in feed.items()} for feed in numpy_feeds]
     )
 
     evaluator = ReferenceEvaluator(
@@ -294,7 +303,7 @@ def _measure_case(
     )
     set_kernel_usage_recording(evaluator, True)
     clear_used_kernel_names(evaluator)
-    for feed in feeds:
+    for feed in cpu_feeds:
         evaluator.run(None, feed)
     node_domain = model.graph.node[0].domain or "ai.onnx"
     expected_kernels = _kernel_names_for_operator(registered_kernels(), node_domain, operator)
@@ -306,7 +315,8 @@ def _measure_case(
         raise RuntimeError(f"{case.name}: expected kernel {expected} did not run")
     set_kernel_usage_recording(evaluator, False)
 
-    def measure(run: Any) -> list[float]:
+    def measure(runtime: str, run: Any) -> list[float]:
+        feeds = cpu_feeds if runtime == "onnx-light-cpu" else numpy_feeds
         warmup_start = time.perf_counter()
         for _ in range(warmup):
             for feed in feeds:
@@ -340,7 +350,7 @@ def _measure_case(
                 sess_options=session_options,
                 providers=["CPUExecutionProvider"],
             )
-            for feed in feeds:
+            for feed in numpy_feeds:
                 ort_session.run(None, feed)
             return ort_session, None
         except Exception as exc:  # noqa: BLE001 -- unsupported cases remain in the report.

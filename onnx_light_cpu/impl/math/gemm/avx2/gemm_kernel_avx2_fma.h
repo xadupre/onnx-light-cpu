@@ -11,6 +11,11 @@
 
 namespace onnx_light_cpu {
 
+// Non-transposed inputs, N == 1. The caller owns row scheduling.
+void GemmSkinnyN1Range_AVX2_F32(std::size_t K, float alpha, const float *A, const float *B,
+                                float beta, const float *C, float *Y, std::size_t begin,
+                                std::size_t end);
+
 // Non-transposed inputs, 2 <= N <= 8. The caller owns row scheduling.
 void GemmSkinnyNRange_AVX2(std::size_t N, std::size_t K, float alpha, const float *A,
                            const float *B, float beta, const float *C, float *Y, std::size_t begin,
@@ -65,6 +70,12 @@ void GemmMicroKernel_AVX2BF16(std::size_t mr, std::size_t nb, std::size_t K, flo
                               std::size_t Ystride, std::size_t n0, GemmAccumMode mode,
                               const std::uint16_t *Apack);
 
+void GemmBfloat16SkinnyM_AVX2_FMA(bool trans_a, std::size_t M, std::size_t N, std::size_t K,
+                                  float alpha, const std::uint16_t *A, const std::uint16_t *B,
+                                  float *Y);
+void GemmBfloat16SkinnyN_AVX2_FMA(std::size_t M, std::size_t K, float alpha, const std::uint16_t *A,
+                                  const std::uint16_t *B, float *Y);
+
 // Decodes ``n`` contiguous Float8 patterns to float32 (Roadmap PR09.5) eight at
 // a time through an AVX2 ``vgatherdps`` from the caller-supplied exact 256-entry
 // per-format decode table (``detail::BuildFloat8DecodeTable``), with an exact
@@ -92,6 +103,12 @@ void GemmPackTransposeFloat16ToFloat32_F16C(const std::uint16_t *src, std::size_
 // Narrows ``n`` contiguous float32 values to FLOAT16 with F16C
 // round-to-nearest-even conversion, canonical NaNs, and an exact scalar tail.
 void GemmConvertFloat32ToFloat16_F16C(const float *src, std::uint16_t *dst, std::size_t n);
+
+void GemmAddBiasConvertFloat32ToFloat16_F16C(const float *src, const float *bias,
+                                             std::uint16_t *dst, std::size_t rows,
+                                             std::size_t columns, float beta,
+                                             std::size_t bias_row_stride,
+                                             std::size_t bias_column_stride);
 
 // Native AVX2/F16C FLOAT16 micro-kernel with float32 accumulation. B and the
 // packed A rows remain FLOAT16 until they enter the register file.

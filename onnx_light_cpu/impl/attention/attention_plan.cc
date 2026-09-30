@@ -564,8 +564,8 @@ std::size_t AttentionQueryBlock(const AttentionPlan &plan) {
 }
 
 std::size_t AttentionKvBlock(const AttentionPlan &plan) {
-  constexpr std::size_t kDefaultKvBlock = 256;
-  constexpr std::size_t kLargeHeadKvBlock = 128;
+  constexpr std::size_t kDefaultKvBlock = 512;
+  constexpr std::size_t kLargeHeadKvBlock = 512;
   const std::size_t target =
       plan.head_dim + plan.v_head_dim > 256 ? kLargeHeadKvBlock : kDefaultKvBlock;
   return std::min(plan.total_kv_length, target);
@@ -1366,8 +1366,15 @@ void ComputeAttentionTiled(const AttentionPlan &plan, const typename Codec::Stor
       const std::size_t heads = plan.batch * plan.q_num_heads;
       const double work = static_cast<double>(heads) * plan.q_length * plan.kv_length *
                           (plan.head_dim + plan.v_head_dim);
-      participants = std::min(
-          heads, static_cast<std::size_t>(std::clamp(std::ceil(work / 16384.0), 1.0, 16.0)));
+      // Short grouped attention becomes synchronization-bound with wider worker teams.
+      const std::size_t maximum_participants = plan.causal && plan.group_size > 1 &&
+                                                       plan.q_length <= 64 && plan.head_dim == 64 &&
+                                                       plan.v_head_dim == 64
+                                                   ? 6
+                                                   : 16;
+      const std::size_t work_participants =
+          static_cast<std::size_t>(std::max(std::ceil(work / 16384.0), 1.0));
+      participants = std::min({heads, work_participants, maximum_participants});
     }
   }
   const ExecutionSchedule schedule{
