@@ -8,10 +8,12 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -27,6 +29,30 @@ struct InlineExecutor {
     self.blocks = num_blocks;
     for (std::int64_t block = 0; block < num_blocks; ++block) {
       task(task_context, block);
+    }
+  }
+};
+
+struct ThreadedExecutor {
+  std::int64_t dispatches = 0;
+  std::int64_t blocks = 0;
+  std::atomic<std::int64_t> callbacks{0};
+
+  static void Run(void *context, std::int64_t num_blocks, void *task_context,
+                  onnx_light_cpu::ExecutionBlockFn task) {
+    auto &self = *static_cast<ThreadedExecutor *>(context);
+    ++self.dispatches;
+    self.blocks = num_blocks;
+    std::vector<std::thread> threads;
+    threads.reserve(static_cast<std::size_t>(num_blocks));
+    for (std::int64_t block = 0; block < num_blocks; ++block) {
+      threads.emplace_back([&, block] {
+        task(task_context, block);
+        self.callbacks.fetch_add(1, std::memory_order_relaxed);
+      });
+    }
+    for (auto &thread : threads) {
+      thread.join();
     }
   }
 };
@@ -784,17 +810,48 @@ TEST(ExpLogParallel, ByteBasedParticipantPolicy) {
   EXPECT_EQ(executor.blocks, 8);
 
   executor = {};
-  onnx_light_cpu::LogFloat32(input.data(), output.data(), 524287);
+  onnx_light_cpu::LogFloat32(input.data(), output.data(), 131071);
   EXPECT_EQ(executor.dispatches, 0);
-  onnx_light_cpu::LogFloat32(input.data(), output.data(), 524288);
+  onnx_light_cpu::LogFloat32(input.data(), output.data(), 131072);
   EXPECT_EQ(executor.dispatches, 1);
-  EXPECT_EQ(executor.blocks, 8);
+  EXPECT_EQ(executor.blocks, 4);
 
   executor = {};
   const onnx_light_cpu::UnaryExecutionTuning tuned{1, 64 * 1024, 3};
   onnx_light_cpu::ExpFloat32WithTuning(input.data(), output.data(), input.size(), tuned);
   EXPECT_EQ(executor.dispatches, 1);
   EXPECT_EQ(executor.blocks, 3);
+}
+
+TEST(LogFloat32, ConcurrentDynamicTilesRespectParticipantLimitAndNesting) {
+  constexpr std::size_t count = 4 * 16 * 1024 + 13;
+  std::vector<float> input(count), output(count, -1.0f);
+  for (std::size_t i = 0; i < count; ++i) {
+    input[i] = 0.001f + 10.0f * static_cast<float>(i) / static_cast<float>(count);
+  }
+  const onnx_light_cpu::UnaryExecutionTuning tuning{1, 16 * 1024 * sizeof(float), 4, false};
+  ThreadedExecutor executor;
+  onnx_light_cpu::ExecutionExecutorView view{&executor, 8, &ThreadedExecutor::Run};
+  onnx_light_cpu::ExecutionExecutorScope scope(&view);
+
+  onnx_light_cpu::LogFloat32WithTuning(input.data(), output.data(), count, tuning);
+  EXPECT_EQ(executor.dispatches, 1);
+  EXPECT_EQ(executor.blocks, 4);
+  EXPECT_EQ(executor.callbacks.load(std::memory_order_relaxed), 4);
+  for (std::size_t i = 0; i < count; ++i) {
+    const float expected = std::log(input[i]);
+    EXPECT_NEAR(output[i], expected, std::fabs(expected) * 1e-5f + 1e-6f) << i;
+  }
+
+  executor.dispatches = 0;
+  executor.callbacks.store(0, std::memory_order_relaxed);
+  std::fill(output.begin(), output.end(), -1.0f);
+  {
+    onnx_light_cpu::detail::ExecutionRegionScope nested;
+    onnx_light_cpu::LogFloat32WithTuning(input.data(), output.data(), count, tuning);
+  }
+  EXPECT_EQ(executor.dispatches, 0);
+  EXPECT_EQ(executor.callbacks.load(std::memory_order_relaxed), 0);
 }
 
 } // namespace
