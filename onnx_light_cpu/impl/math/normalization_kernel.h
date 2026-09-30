@@ -31,12 +31,24 @@ void ApplyNormalizationAffineFloat16(const std::uint16_t *input, const std::uint
                                      std::uint16_t *output, std::size_t count, float multiplier);
 void ApplyNormalizationScaleBiasFloat16(const std::uint16_t *input, std::uint16_t *output,
                                         std::size_t count, float multiplier, float offset);
+void InstanceNormalizationFloat16(const std::uint16_t *input, const std::uint16_t *scale,
+                                  const std::uint16_t *bias, std::uint16_t *output,
+                                  std::size_t slice_begin, std::size_t slice_end,
+                                  std::size_t channels, std::size_t spatial, float epsilon);
 void ApplyLayerNormalizationFloat16(const std::uint16_t *input, const std::uint16_t *scale,
                                     const std::uint16_t *bias, std::uint16_t *output,
                                     std::size_t count, float center, float multiplier);
+void LayerNormalizationFloat16Rows(const std::uint16_t *input, const std::uint16_t *scale,
+                                   const std::uint16_t *bias, std::uint16_t *output,
+                                   float *mean_output, float *inv_output, std::size_t row_begin,
+                                   std::size_t row_end, std::size_t width, float epsilon);
 void ApplyGroupNormalizationFloat16(const std::uint16_t *input, std::uint16_t *output,
                                     std::size_t count, float center, float multiplier, float scale,
                                     float bias);
+void ApplyGroupNormalizationFloat16Channels(const std::uint16_t *input, const std::uint16_t *scale,
+                                            const std::uint16_t *bias, std::uint16_t *output,
+                                            std::size_t channels, std::size_t spatial, float center,
+                                            float multiplier);
 void LpNormalizationFloat16(const std::uint16_t *input, std::uint16_t *output, std::size_t vectors,
                             std::size_t width);
 double ComputeNormalizationMeanSquareFloat64(const double *input, std::size_t count);
@@ -61,12 +73,26 @@ Float32NormalizationMoments ComputeNormalizationMomentsFloat16_F16C(const std::u
                                                                     std::size_t count);
 void ApplyNormalizationScaleBiasFloat16_F16C(const std::uint16_t *input, std::uint16_t *output,
                                              std::size_t count, float multiplier, float offset);
+void InstanceNormalizationFloat16_F16C(const std::uint16_t *input, const std::uint16_t *scale,
+                                       const std::uint16_t *bias, std::uint16_t *output,
+                                       std::size_t slice_begin, std::size_t slice_end,
+                                       std::size_t channels, std::size_t spatial, float epsilon);
 void ApplyLayerNormalizationFloat16_F16C(const std::uint16_t *input, const std::uint16_t *scale,
                                          const std::uint16_t *bias, std::uint16_t *output,
                                          std::size_t count, float center, float multiplier);
+void LayerNormalizationFloat16Rows_F16C(const std::uint16_t *input, const std::uint16_t *scale,
+                                        const std::uint16_t *bias, std::uint16_t *output,
+                                        float *mean_output, float *inv_output,
+                                        std::size_t row_begin, std::size_t row_end,
+                                        std::size_t width, float epsilon);
 void ApplyGroupNormalizationFloat16_F16C(const std::uint16_t *input, std::uint16_t *output,
                                          std::size_t count, float center, float multiplier,
                                          float scale, float bias);
+void ApplyGroupNormalizationFloat16Channels_F16C(const std::uint16_t *input,
+                                                 const std::uint16_t *scale,
+                                                 const std::uint16_t *bias, std::uint16_t *output,
+                                                 std::size_t channels, std::size_t spatial,
+                                                 float center, float multiplier);
 void LpNormalizationFloat16_F16C(const std::uint16_t *input, std::uint16_t *output,
                                  std::size_t vectors, std::size_t width);
 #endif
