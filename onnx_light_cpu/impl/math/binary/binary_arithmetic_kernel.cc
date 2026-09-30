@@ -544,24 +544,34 @@ const BinaryArithmeticBulkFunctions &MakeBulkFunctions() {
     return MakeBulkFunctions<T, &STEM##_Scalar, &STEM##Left_Scalar, &STEM##Right_Scalar>();        \
   }
 
-#ifdef ONNX_LIGHT_CPU_HAVE_F16C
-#define ONNX_LIGHT_CPU_DEFINE_FLOAT16_BULK_RESOLVER(PUBLIC, STEM)                                  \
-  const BinaryArithmeticBulkFunctions &PUBLIC##BulkFunctions() {                                   \
-    static const bool use_f16c = CpuSupportsF16C();                                                \
-    if (use_f16c) {                                                                                \
-      return MakeBulkFunctions<std::uint16_t, &STEM##_F16C, &STEM##Left_F16C,                      \
-                               &STEM##Right_F16C>();                                               \
-    }                                                                                              \
-    return MakeBulkFunctions<std::uint16_t, &STEM##_Scalar, &STEM##Left_Scalar,                    \
-                             &STEM##Right_Scalar>();                                               \
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512FP16
+#define ONNX_LIGHT_CPU_TRY_AVX512FP16_BULK(STEM)                                                   \
+  static const bool use_avx512fp16 = CpuSupportsAvx512Fp16();                                      \
+  if (use_avx512fp16) {                                                                            \
+    return MakeBulkFunctions<std::uint16_t, &STEM##_AVX512FP16, &STEM##Left_AVX512FP16,            \
+                             &STEM##Right_AVX512FP16>();                                           \
   }
 #else
+#define ONNX_LIGHT_CPU_TRY_AVX512FP16_BULK(STEM)
+#endif
+
+#ifdef ONNX_LIGHT_CPU_HAVE_F16C
+#define ONNX_LIGHT_CPU_TRY_F16C_BULK(STEM)                                                         \
+  static const bool use_f16c = CpuSupportsF16C();                                                  \
+  if (use_f16c) {                                                                                  \
+    return MakeBulkFunctions<std::uint16_t, &STEM##_F16C, &STEM##Left_F16C, &STEM##Right_F16C>();  \
+  }
+#else
+#define ONNX_LIGHT_CPU_TRY_F16C_BULK(STEM)
+#endif
+
 #define ONNX_LIGHT_CPU_DEFINE_FLOAT16_BULK_RESOLVER(PUBLIC, STEM)                                  \
   const BinaryArithmeticBulkFunctions &PUBLIC##BulkFunctions() {                                   \
+    ONNX_LIGHT_CPU_TRY_AVX512FP16_BULK(STEM)                                                       \
+    ONNX_LIGHT_CPU_TRY_F16C_BULK(STEM)                                                             \
     return MakeBulkFunctions<std::uint16_t, &STEM##_Scalar, &STEM##Left_Scalar,                    \
                              &STEM##Right_Scalar>();                                               \
   }
-#endif
 
 #define ONNX_LIGHT_CPU_BIN_DISPATCH_CONTIG(PUBLIC, STEM, T)                                        \
   void PUBLIC##Contiguous(const T *left, const T *right, T *out, std::size_t count) {              \
@@ -620,6 +630,8 @@ ONNX_LIGHT_CPU_DEFINE_FLOAT16_BULK_RESOLVER(BinaryMulFloat16, BinaryMulFloat16)
 ONNX_LIGHT_CPU_DEFINE_FLOAT16_BULK_RESOLVER(BinaryDivFloat16, BinaryDivFloat16)
 
 #undef ONNX_LIGHT_CPU_DEFINE_FLOAT16_BULK_RESOLVER
+#undef ONNX_LIGHT_CPU_TRY_F16C_BULK
+#undef ONNX_LIGHT_CPU_TRY_AVX512FP16_BULK
 #undef ONNX_LIGHT_CPU_DEFINE_X86_BULK_RESOLVER
 #undef ONNX_LIGHT_CPU_DEFINE_BULK_RESOLVER
 #undef ONNX_LIGHT_CPU_RESOLVE_ARM_BULK
