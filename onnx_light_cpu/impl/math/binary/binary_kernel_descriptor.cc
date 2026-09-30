@@ -32,6 +32,11 @@ void BulkFloat16PReluF16C(const void *, const void *, void *, std::size_t);
 void BulkFloat16PReluLeftF16C(const void *, const void *, void *, std::size_t);
 void BulkFloat16PReluRightF16C(const void *, const void *, void *, std::size_t);
 #endif
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512BF16
+void BulkBfloat16PRelu_AVX512BF16(const void *, const void *, void *, std::size_t);
+void BulkBfloat16PReluLeft_AVX512BF16(const void *, const void *, void *, std::size_t);
+void BulkBfloat16PReluRight_AVX512BF16(const void *, const void *, void *, std::size_t);
+#endif
 
 namespace {
 
@@ -856,6 +861,15 @@ void SelectBulk(BinaryOperator op, DT left, BinaryKernelDescriptor::Adapter &ada
 #endif
       ONNX_LIGHT_CPU_BIND_HALF_BULK(Float16, PRelu)
     } else if (left == DT::BFLOAT16) {
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512BF16
+      static const bool use_avx512bf16 = CpuSupportsAvx512Bf16();
+      if (use_avx512bf16) {
+        adapter.bulk_contiguous = &BulkBfloat16PRelu_AVX512BF16;
+        adapter.bulk_left_scalar = &BulkBfloat16PReluLeft_AVX512BF16;
+        adapter.bulk_right_scalar = &BulkBfloat16PReluRight_AVX512BF16;
+        break;
+      }
+#endif
       ONNX_LIGHT_CPU_BIND_HALF_BULK(Bfloat16, PRelu)
     }
     break;
