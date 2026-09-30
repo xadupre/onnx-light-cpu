@@ -265,8 +265,6 @@ def test_registered_attention_reports_actual_execution_paths():
             (False, 16, 1, False, "single_key"),
             (False, 16, 17, True, "materialized"),
         ):
-            if tensor_type == TensorProto.BFLOAT16 and expected_path == "tiled":
-                expected_path = "streaming"
             if (
                 tensor_type == TensorProto.FLOAT16
                 and q_length == 16
@@ -313,6 +311,13 @@ def test_registered_attention_reports_actual_execution_paths():
                 and not materialized
             ):
                 valid_paths.add("tiled")
+            if (
+                tensor_type == TensorProto.BFLOAT16
+                and q_length == 16
+                and kv_length > 1
+                and not materialized
+            ):
+                valid_paths.add("streaming")
             assert actual_path in valid_paths, paths
             conversion = (
                 "none"

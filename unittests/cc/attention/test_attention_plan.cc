@@ -329,6 +329,32 @@ TEST(ComputeAttentionFloat32Streaming, DecodeDistributesHeadsAcrossWorkers) {
   EXPECT_EQ(executor.maximum_blocks, 4);
 }
 
+TEST(ComputeAttentionFloat32Streaming, SmallCausalGqaCapsWorkerCount) {
+  constexpr std::size_t batch = 4, q_heads = 8, kv_heads = 1, length = 32, head_dim = 64;
+  AttentionDescriptor descriptor;
+  descriptor.q_num_heads = q_heads;
+  descriptor.kv_num_heads = kv_heads;
+  descriptor.is_causal = true;
+  const std::int64_t q_shape[] = {batch, length, q_heads * head_dim};
+  const std::int64_t kv_shape[] = {batch, length, kv_heads * head_dim};
+  AttentionPlan plan(descriptor, AttentionLayout::kRank3, q_shape, kv_shape, kv_shape, {},
+                     AttentionMaskKind::kNone);
+  const auto q = RandomTensor(batch * q_heads * length * head_dim, 104);
+  const auto k = RandomTensor(batch * kv_heads * length * head_dim, 105);
+  const auto v = RandomTensor(batch * kv_heads * length * head_dim, 106);
+  std::vector<float> y(q.size());
+  InlineExecutor executor;
+  onnx_light_cpu::ExecutionExecutorView view{&executor, 16, &InlineExecutor::Run};
+
+  {
+    onnx_light_cpu::ExecutionExecutorScope scope(&view);
+    ComputeAttentionFloat32(plan, q.data(), k.data(), v.data(), nullptr, y.data());
+  }
+
+  EXPECT_GT(executor.maximum_blocks, 1);
+  EXPECT_LE(executor.maximum_blocks, 6);
+}
+
 // GQA, rank-4, causal.
 TEST(ComputeAttentionFloat32, Rank4GqaCausalMatchesReference) {
   AttentionDescriptor descriptor;
@@ -1386,7 +1412,7 @@ TEST(ComputeAttentionFloat32Streaming, Rank3HeadPackingPreservesMasksGroupsAndNo
 
 TEST(ComputeAttentionFloat32Streaming, Rank3HeadPackingBoundariesMatchMaterialized) {
   for (const std::int64_t q_len : {16, 128, 129}) {
-    for (const std::int64_t kv_len : {256, 257}) {
+    for (const std::int64_t kv_len : {256, 257, 511, 512, 513}) {
       AttentionDescriptor descriptor;
       descriptor.q_num_heads = 2;
       descriptor.kv_num_heads = 1;
@@ -1402,15 +1428,39 @@ TEST(ComputeAttentionFloat32Streaming, Rank3HeadPackingBoundariesMatchMaterializ
       onnx_light_cpu::ComputeAttentionFloat32Materialized(plan, q.data(), k.data(), v.data(),
                                                           nullptr, expected.data());
       InlineExecutor executor;
+      onnx_light_cpu::AttentionExecutionInfo info;
       onnx_light_cpu::ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run};
       {
         onnx_light_cpu::ExecutionExecutorScope scope(&view);
-        ComputeAttentionFloat32Streaming(plan, q.data(), k.data(), v.data(), nullptr,
-                                         actual.data());
+        ComputeAttentionFloat32Streaming(plan, q.data(), k.data(), v.data(), nullptr, actual.data(),
+                                         nullptr, nullptr, nullptr, &info);
       }
       ExpectClose(actual, expected);
+      EXPECT_EQ(info.path, onnx_light_cpu::AttentionExecutionPath::kTiled);
+      EXPECT_EQ(info.kv_tile, std::min<std::size_t>(kv_len, 512));
     }
   }
+}
+
+TEST(ComputeAttentionFloat32Streaming, LargeHeadKv257UsesSingleTileAndMatchesMaterialized) {
+  constexpr std::int64_t q_len = 16, kv_len = 257, head_dim = 129, v_head_dim = 129;
+  const std::int64_t q_shape[] = {1, 1, q_len, head_dim};
+  const std::int64_t k_shape[] = {1, 1, kv_len, head_dim};
+  const std::int64_t v_shape[] = {1, 1, kv_len, v_head_dim};
+  AttentionPlan plan({}, AttentionLayout::kRank4, q_shape, k_shape, v_shape, {},
+                     AttentionMaskKind::kNone);
+  const auto q = RandomTensor(q_len * head_dim, 1721);
+  const auto k = RandomTensor(kv_len * head_dim, 1722);
+  const auto v = RandomTensor(kv_len * v_head_dim, 1723);
+  std::vector<float> expected(q_len * v_head_dim), actual(expected.size());
+  onnx_light_cpu::ComputeAttentionFloat32Materialized(plan, q.data(), k.data(), v.data(), nullptr,
+                                                      expected.data());
+  onnx_light_cpu::AttentionExecutionInfo info;
+  ComputeAttentionFloat32Streaming(plan, q.data(), k.data(), v.data(), nullptr, actual.data(),
+                                   nullptr, nullptr, nullptr, &info);
+  ExpectClose(actual, expected);
+  EXPECT_EQ(info.path, onnx_light_cpu::AttentionExecutionPath::kTiled);
+  EXPECT_EQ(info.kv_tile, 257u);
 }
 
 namespace half_precision {
@@ -1537,7 +1587,7 @@ TEST(ComputeAttentionFloat16Streaming, BoundedTilesMatchMaterializedAcrossLayout
         EXPECT_TRUE(info.tile_conversion);
         EXPECT_EQ(info.tile_packing, tiled && layout == AttentionLayout::kRank3);
         EXPECT_LE(info.query_tile, 128);
-        EXPECT_LE(info.kv_tile, 256);
+        EXPECT_LE(info.kv_tile, 512);
         EXPECT_EQ(info.conversion_kv_tile, tiled || plan.total_kv_length > 4 * info.kv_tile
                                                ? info.kv_tile
                                                : plan.total_kv_length);
@@ -1691,7 +1741,7 @@ TEST(AttentionExecutionInfo, ReportsLogicalOutputTileForDirectAndBufferedWrites)
   }
 }
 
-TEST(AttentionExecutionInfo, BFloat16ElementConversionHasNoKvTileBuffer) {
+TEST(AttentionExecutionInfo, BFloat16UsesBoundedKvConversionTile) {
   const std::int64_t q_shape[] = {1, 1, 8, 9};
   const std::int64_t k_shape[] = {1, 1, 31, 9};
   const std::int64_t v_shape[] = {1, 1, 31, 11};
@@ -1704,9 +1754,9 @@ TEST(AttentionExecutionInfo, BFloat16ElementConversionHasNoKvTileBuffer) {
   onnx_light_cpu::AttentionExecutionInfo info;
   ComputeAttentionBFloat16Streaming(plan, q.data(), k.data(), v.data(), nullptr, y.data(), nullptr,
                                     nullptr, nullptr, &info);
-  EXPECT_FALSE(info.tile_conversion);
+  EXPECT_TRUE(info.tile_conversion);
   EXPECT_FALSE(info.tile_packing);
-  EXPECT_EQ(info.conversion_kv_tile, 0);
+  EXPECT_EQ(info.conversion_kv_tile, 31);
   EXPECT_EQ(info.output_tile_elements, 11);
 }
 
@@ -1907,6 +1957,40 @@ TEST(ComputeAttentionBFloat16Streaming, MatchesFloat32ReferenceWithinHalfPrecisi
 
   // BF16 has fewer mantissa bits than FP16, so use a looser tolerance.
   ExpectClose(y, expected, 3e-2f);
+}
+
+TEST(ComputeAttentionBFloat16Streaming, TiledGqaTailsMatchFloat32Reference) {
+  AttentionDescriptor descriptor;
+  descriptor.is_causal = true;
+  constexpr std::size_t batch = 1, heads = 4, group = 2, q_len = 17, kv_len = 33, head_dim = 9,
+                        v_head_dim = 11;
+  constexpr std::size_t kv_heads = heads / group;
+  const std::int64_t q_shape[] = {batch, heads, q_len, head_dim};
+  const std::int64_t k_shape[] = {batch, kv_heads, kv_len, head_dim};
+  const std::int64_t v_shape[] = {batch, kv_heads, kv_len, v_head_dim};
+  AttentionPlan plan(descriptor, AttentionLayout::kRank4, q_shape, k_shape, v_shape, {},
+                     AttentionMaskKind::kNone);
+
+  const auto q32 = half_precision::FromBFloat16(
+      half_precision::ToBFloat16(RandomTensor(batch * heads * q_len * head_dim, 651)));
+  const auto k32 = half_precision::FromBFloat16(
+      half_precision::ToBFloat16(RandomTensor(batch * kv_heads * kv_len * head_dim, 652)));
+  const auto v32 = half_precision::FromBFloat16(
+      half_precision::ToBFloat16(RandomTensor(batch * kv_heads * kv_len * v_head_dim, 653)));
+  const auto q16 = half_precision::ToBFloat16(q32);
+  const auto k16 = half_precision::ToBFloat16(k32);
+  const auto v16 = half_precision::ToBFloat16(v32);
+
+  std::vector<std::uint16_t> y16(batch * heads * q_len * v_head_dim);
+  onnx_light_cpu::AttentionExecutionInfo info;
+  ComputeAttentionBFloat16Streaming(plan, q16.data(), k16.data(), v16.data(), nullptr, y16.data(),
+                                    nullptr, nullptr, nullptr, &info);
+  EXPECT_EQ(info.path, onnx_light_cpu::AttentionExecutionPath::kTiled);
+  EXPECT_TRUE(info.tile_conversion);
+
+  std::vector<float> expected(batch * heads * q_len * v_head_dim);
+  ComputeAttentionFloat32(plan, q32.data(), k32.data(), v32.data(), nullptr, expected.data());
+  ExpectClose(half_precision::FromBFloat16(y16), expected, 3e-2f);
 }
 
 // Roadmap PR14: a plan with a requested `present` output must never

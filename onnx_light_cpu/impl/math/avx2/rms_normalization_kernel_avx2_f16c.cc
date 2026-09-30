@@ -74,6 +74,83 @@ void StoreHalf8(__m256 value, std::uint16_t *output) {
   }
 }
 
+void ApplyScaleBiasFloat16Masked(const std::uint16_t *input, std::uint16_t *output,
+                                 std::size_t count, float multiplier, float offset) {
+  const __m256 scale = _mm256_set1_ps(multiplier);
+  const __m256 bias = _mm256_set1_ps(offset);
+  std::size_t i = 0;
+  for (; i + 8 <= count; i += 8) {
+    const __m256 value =
+        _mm256_cvtph_ps(_mm_loadu_si128(reinterpret_cast<const __m128i *>(input + i)));
+    StoreHalf8(_mm256_add_ps(_mm256_mul_ps(value, scale), bias), output + i);
+  }
+  for (; i < count; ++i) {
+    output[i] =
+        detail::FloatToFloat16Bits(detail::Float16BitsToFloat(input[i]) * multiplier + offset);
+  }
+}
+
+void ApplyLayerNormalizationFloat16Masked(const std::uint16_t *input,
+                                          const std::uint16_t *scale_data,
+                                          const std::uint16_t *bias_data, std::uint16_t *output,
+                                          std::size_t count, float center_value, float multiplier) {
+  const __m256 center = _mm256_set1_ps(center_value);
+  const __m256 inverse = _mm256_set1_ps(multiplier);
+  std::size_t i = 0;
+  for (; i + 8 <= count; i += 8) {
+    const __m256 value =
+        _mm256_cvtph_ps(_mm_loadu_si128(reinterpret_cast<const __m128i *>(input + i)));
+    __m256 normalized = _mm256_mul_ps(_mm256_sub_ps(value, center), inverse);
+    normalized = _mm256_cvtph_ps(_mm256_cvtps_ph(normalized, _MM_FROUND_TO_NEAREST_INT));
+    const __m256 scale =
+        _mm256_cvtph_ps(_mm_loadu_si128(reinterpret_cast<const __m128i *>(scale_data + i)));
+    __m256 result = _mm256_mul_ps(normalized, scale);
+    result = _mm256_cvtph_ps(_mm256_cvtps_ph(result, _MM_FROUND_TO_NEAREST_INT));
+    if (bias_data != nullptr) {
+      const __m256 bias =
+          _mm256_cvtph_ps(_mm_loadu_si128(reinterpret_cast<const __m128i *>(bias_data + i)));
+      result = _mm256_add_ps(result, bias);
+    }
+    StoreHalf8(result, output + i);
+  }
+  for (; i < count; ++i) {
+    const float normalized = detail::Float16BitsToFloat(detail::FloatToFloat16Bits(
+        (detail::Float16BitsToFloat(input[i]) - center_value) * multiplier));
+    float result = detail::Float16BitsToFloat(
+        detail::FloatToFloat16Bits(normalized * detail::Float16BitsToFloat(scale_data[i])));
+    if (bias_data != nullptr) {
+      result += detail::Float16BitsToFloat(bias_data[i]);
+    }
+    output[i] = detail::FloatToFloat16Bits(result);
+  }
+}
+
+void ApplyGroupNormalizationFloat16Masked(const std::uint16_t *input, std::uint16_t *output,
+                                          std::size_t count, float center_value, float multiplier,
+                                          float scale_value, float bias_value) {
+  const __m256 center = _mm256_set1_ps(center_value);
+  const __m256 inverse = _mm256_set1_ps(multiplier);
+  const __m256 scale = _mm256_set1_ps(scale_value);
+  const __m256 bias = _mm256_set1_ps(bias_value);
+  std::size_t i = 0;
+  for (; i + 8 <= count; i += 8) {
+    const __m256 value =
+        _mm256_cvtph_ps(_mm_loadu_si128(reinterpret_cast<const __m128i *>(input + i)));
+    __m256 normalized = _mm256_mul_ps(_mm256_sub_ps(value, center), inverse);
+    normalized = _mm256_cvtph_ps(_mm256_cvtps_ph(normalized, _MM_FROUND_TO_NEAREST_INT));
+    __m256 result = _mm256_mul_ps(normalized, scale);
+    result = _mm256_cvtph_ps(_mm256_cvtps_ph(result, _MM_FROUND_TO_NEAREST_INT));
+    StoreHalf8(_mm256_add_ps(result, bias), output + i);
+  }
+  for (; i < count; ++i) {
+    const float normalized = detail::Float16BitsToFloat(detail::FloatToFloat16Bits(
+        (detail::Float16BitsToFloat(input[i]) - center_value) * multiplier));
+    const float scaled =
+        detail::Float16BitsToFloat(detail::FloatToFloat16Bits(normalized * scale_value));
+    output[i] = detail::FloatToFloat16Bits(scaled + bias_value);
+  }
+}
+
 template <bool RoundNormalized>
 void AffineFloat16(const std::uint16_t *input, const std::uint16_t *scale, std::uint16_t *output,
                    std::size_t width, float multiplier) {
@@ -187,19 +264,27 @@ void ApplyNormalizationScaleBiasFloat16_F16C(const std::uint16_t *input, std::ui
                                              std::size_t count, float multiplier, float offset) {
   const unsigned int mxcsr = _mm_getcsr();
   _mm_setcsr(mxcsr | _MM_MASK_MASK);
-  const __m256 scale = _mm256_set1_ps(multiplier);
-  const __m256 bias = _mm256_set1_ps(offset);
-  std::size_t i = 0;
-  for (; i + 8 <= count; i += 8) {
-    const __m256 value =
-        _mm256_cvtph_ps(_mm_loadu_si128(reinterpret_cast<const __m128i *>(input + i)));
-    StoreHalf8(_mm256_add_ps(_mm256_mul_ps(value, scale), bias), output + i);
+  ApplyScaleBiasFloat16Masked(input, output, count, multiplier, offset);
+  _mm_setcsr(mxcsr);
+}
+
+void InstanceNormalizationFloat16_F16C(const std::uint16_t *input, const std::uint16_t *scale,
+                                       const std::uint16_t *bias, std::uint16_t *output,
+                                       std::size_t slice_begin, std::size_t slice_end,
+                                       std::size_t channels, std::size_t spatial, float epsilon) {
+  const unsigned int mxcsr = _mm_getcsr();
+  _mm_setcsr(mxcsr | _MM_MASK_MASK);
+  for (std::size_t slice = slice_begin; slice < slice_end; ++slice) {
+    const std::size_t channel = slice % channels;
+    const std::size_t base = slice * spatial;
+    const Float32NormalizationMoments moments =
+        ComputeNormalizationMomentsFloat16_F16C(input + base, spatial);
+    const float multiplier =
+        detail::Float16BitsToFloat(scale[channel]) / std::sqrt(moments.variance + epsilon);
+    const float offset = detail::Float16BitsToFloat(bias[channel]) - moments.mean * multiplier;
+    ApplyScaleBiasFloat16Masked(input + base, output + base, spatial, multiplier, offset);
   }
   _mm_setcsr(mxcsr);
-  for (; i < count; ++i) {
-    output[i] =
-        detail::FloatToFloat16Bits(detail::Float16BitsToFloat(input[i]) * multiplier + offset);
-  }
 }
 
 void ApplyLayerNormalizationFloat16_F16C(const std::uint16_t *input,
@@ -208,36 +293,33 @@ void ApplyLayerNormalizationFloat16_F16C(const std::uint16_t *input,
                                          std::size_t count, float center_value, float multiplier) {
   const unsigned int mxcsr = _mm_getcsr();
   _mm_setcsr(mxcsr | _MM_MASK_MASK);
-  const __m256 center = _mm256_set1_ps(center_value);
-  const __m256 inverse = _mm256_set1_ps(multiplier);
-  std::size_t i = 0;
-  for (; i + 8 <= count; i += 8) {
-    const __m256 value =
-        _mm256_cvtph_ps(_mm_loadu_si128(reinterpret_cast<const __m128i *>(input + i)));
-    __m256 normalized = _mm256_mul_ps(_mm256_sub_ps(value, center), inverse);
-    normalized = _mm256_cvtph_ps(_mm256_cvtps_ph(normalized, _MM_FROUND_TO_NEAREST_INT));
-    const __m256 scale =
-        _mm256_cvtph_ps(_mm_loadu_si128(reinterpret_cast<const __m128i *>(scale_data + i)));
-    __m256 result = _mm256_mul_ps(normalized, scale);
-    result = _mm256_cvtph_ps(_mm256_cvtps_ph(result, _MM_FROUND_TO_NEAREST_INT));
-    if (bias_data != nullptr) {
-      const __m256 bias =
-          _mm256_cvtph_ps(_mm_loadu_si128(reinterpret_cast<const __m128i *>(bias_data + i)));
-      result = _mm256_add_ps(result, bias);
+  ApplyLayerNormalizationFloat16Masked(input, scale_data, bias_data, output, count, center_value,
+                                       multiplier);
+  _mm_setcsr(mxcsr);
+}
+
+void LayerNormalizationFloat16Rows_F16C(const std::uint16_t *input, const std::uint16_t *scale,
+                                        const std::uint16_t *bias, std::uint16_t *output,
+                                        float *mean_output, float *inv_output,
+                                        std::size_t row_begin, std::size_t row_end,
+                                        std::size_t width, float epsilon) {
+  const unsigned int mxcsr = _mm_getcsr();
+  _mm_setcsr(mxcsr | _MM_MASK_MASK);
+  for (std::size_t row = row_begin; row < row_end; ++row) {
+    const std::size_t base = row * width;
+    const Float32NormalizationMoments moments =
+        ComputeNormalizationMomentsFloat16_F16C(input + base, width);
+    const float inverse = 1.0F / std::sqrt(moments.variance + epsilon);
+    if (mean_output != nullptr) {
+      mean_output[row] = moments.mean;
     }
-    StoreHalf8(result, output + i);
+    if (inv_output != nullptr) {
+      inv_output[row] = inverse;
+    }
+    ApplyLayerNormalizationFloat16Masked(input + base, scale, bias, output + base, width,
+                                         moments.mean, inverse);
   }
   _mm_setcsr(mxcsr);
-  for (; i < count; ++i) {
-    const float normalized = detail::Float16BitsToFloat(detail::FloatToFloat16Bits(
-        (detail::Float16BitsToFloat(input[i]) - center_value) * multiplier));
-    float result = detail::Float16BitsToFloat(
-        detail::FloatToFloat16Bits(normalized * detail::Float16BitsToFloat(scale_data[i])));
-    if (bias_data != nullptr) {
-      result += detail::Float16BitsToFloat(bias_data[i]);
-    }
-    output[i] = detail::FloatToFloat16Bits(result);
-  }
 }
 
 void ApplyGroupNormalizationFloat16_F16C(const std::uint16_t *input, std::uint16_t *output,
@@ -245,32 +327,31 @@ void ApplyGroupNormalizationFloat16_F16C(const std::uint16_t *input, std::uint16
                                          float scale_value, float bias_value) {
   const unsigned int mxcsr = _mm_getcsr();
   _mm_setcsr(mxcsr | _MM_MASK_MASK);
-  const __m256 center = _mm256_set1_ps(center_value);
-  const __m256 inverse = _mm256_set1_ps(multiplier);
-  const __m256 scale = _mm256_set1_ps(scale_value);
-  const __m256 bias = _mm256_set1_ps(bias_value);
-  std::size_t i = 0;
-  for (; i + 8 <= count; i += 8) {
-    const __m256 value =
-        _mm256_cvtph_ps(_mm_loadu_si128(reinterpret_cast<const __m128i *>(input + i)));
-    __m256 normalized = _mm256_mul_ps(_mm256_sub_ps(value, center), inverse);
-    normalized = _mm256_cvtph_ps(_mm256_cvtps_ph(normalized, _MM_FROUND_TO_NEAREST_INT));
-    __m256 result = _mm256_mul_ps(normalized, scale);
-    result = _mm256_cvtph_ps(_mm256_cvtps_ph(result, _MM_FROUND_TO_NEAREST_INT));
-    StoreHalf8(_mm256_add_ps(result, bias), output + i);
+  ApplyGroupNormalizationFloat16Masked(input, output, count, center_value, multiplier, scale_value,
+                                       bias_value);
+  _mm_setcsr(mxcsr);
+}
+
+void ApplyGroupNormalizationFloat16Channels_F16C(const std::uint16_t *input,
+                                                 const std::uint16_t *scale,
+                                                 const std::uint16_t *bias, std::uint16_t *output,
+                                                 std::size_t channels, std::size_t spatial,
+                                                 float center, float multiplier) {
+  const unsigned int mxcsr = _mm_getcsr();
+  _mm_setcsr(mxcsr | _MM_MASK_MASK);
+  for (std::size_t channel = 0; channel < channels; ++channel) {
+    const std::size_t base = channel * spatial;
+    ApplyGroupNormalizationFloat16Masked(input + base, output + base, spatial, center, multiplier,
+                                         detail::Float16BitsToFloat(scale[channel]),
+                                         detail::Float16BitsToFloat(bias[channel]));
   }
   _mm_setcsr(mxcsr);
-  for (; i < count; ++i) {
-    const float normalized = detail::Float16BitsToFloat(detail::FloatToFloat16Bits(
-        (detail::Float16BitsToFloat(input[i]) - center_value) * multiplier));
-    const float scaled =
-        detail::Float16BitsToFloat(detail::FloatToFloat16Bits(normalized * scale_value));
-    output[i] = detail::FloatToFloat16Bits(scaled + bias_value);
-  }
 }
 
 void LpNormalizationFloat16_F16C(const std::uint16_t *input, std::uint16_t *output,
                                  std::size_t vectors, std::size_t width) {
+  const unsigned int mxcsr = _mm_getcsr();
+  _mm_setcsr(mxcsr | _MM_MASK_MASK);
   for (std::size_t vector = 0; vector < vectors; ++vector) {
     const std::size_t base = vector * width;
     __m256d sums[2] = {_mm256_setzero_pd(), _mm256_setzero_pd()};
@@ -290,8 +371,9 @@ void LpNormalizationFloat16_F16C(const std::uint16_t *input, std::uint16_t *outp
     }
     const double norm = std::sqrt(square_sum);
     const float inverse = norm == 0.0 ? 0.0F : static_cast<float>(1.0 / norm);
-    ApplyNormalizationScaleBiasFloat16_F16C(input + base, output + base, width, inverse, 0.0F);
+    ApplyScaleBiasFloat16Masked(input + base, output + base, width, inverse, 0.0F);
   }
+  _mm_setcsr(mxcsr);
 }
 
 } // namespace onnx_light_cpu

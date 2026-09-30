@@ -125,6 +125,11 @@ void SigmoidFloat32_AVX2_FMA(const float *input, float *output, std::size_t coun
 #ifdef ONNX_LIGHT_CPU_HAVE_F16C
 void SigmoidFloat16_AVX2_FMA(const std::uint16_t *input, std::uint16_t *output, std::size_t count);
 #endif
+
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512BF16
+void SigmoidBFloat16_AVX512BF16(const std::uint16_t *input, std::uint16_t *output,
+                                std::size_t count);
+#endif
 void SigmoidFloat64_AVX2_FMA(const double *input, double *output, std::size_t count);
 void SoftmaxFloat32_AVX2_FMA(const float *input, float *output, std::size_t rows,
                              std::size_t columns);
@@ -198,6 +203,8 @@ void SigmoidFloat32_AVX512(const float *input, float *output, std::size_t count)
 void PowFloat32_AVX512(const float *base, const float *exponent, float *output, std::size_t count);
 void PowFloat32LeftScalar_AVX512(float base, const float *exponent, float *output,
                                  std::size_t count);
+void PowFloat16RightScalar_AVX512(const std::uint16_t *base, float exponent, std::uint16_t *output,
+                                  std::size_t count);
 #endif
 
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA

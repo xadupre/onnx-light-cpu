@@ -240,6 +240,18 @@ template <typename T> std::size_t RegisterRows() {
   return kGemmMR;
 }
 
+template <typename T>
+std::size_t RegisterRowsForShape(std::size_t m, std::size_t n, std::size_t k) {
+  const std::size_t rows = RegisterRows<T>();
+  if constexpr (std::is_same_v<T, float>) {
+    if (rows == kGemmIntelAVX2MR && EffectiveGemmSimdLevel() == SimdLevel::kAVX2 && m >= 128 &&
+        m <= 512 && n >= 128 && k >= 128) {
+      return kGemmAVX2MR;
+    }
+  }
+  return rows;
+}
+
 template <typename T, GemmAlgorithm Algorithm>
 void ExecuteFloatKernel(bool trans_a, bool trans_b, std::size_t m, std::size_t n, std::size_t k,
                         T alpha, const T *a, const T *b, T beta, const T *c, T *y,
@@ -498,15 +510,17 @@ template <typename T>
 GemmPlan<T>::GemmPlan(const GemmPlanOptions<T> &options)
     : trans_a_(options.trans_a), trans_b_(options.trans_b), m_(options.m), n_(options.n),
       k_(options.k), alpha_(options.alpha), beta_(options.beta),
-      algorithm_(detail::SelectGemmAlgorithm(options.trans_a, options.trans_b, options.m, options.n,
-                                             options.k, VectorLanes<T>(), RegisterRows<T>())),
+      algorithm_(detail::SelectGemmAlgorithm(
+          options.trans_a, options.trans_b, options.m, options.n, options.k, VectorLanes<T>(),
+          RegisterRowsForShape<T>(options.m, options.n, options.k))),
       participant_limit_(detail::SelectGemmParticipantCount(
           options.m, options.n, options.k,
           AlgorithmParticipantLimit(algorithm_, options.m, options.n, options.k,
                                     ConfiguredParticipantLimit(options.maximum_participants)),
           TargetFmasPerParticipant(algorithm_, options.m, options.n, options.k, sizeof(T)))),
-      blocking_(ResolveBlocking(options.blocking, sizeof(T), VectorLanes<T>(), RegisterRows<T>(),
-                                options.m, options.n, options.k, participant_limit_, true)),
+      blocking_(ResolveBlocking(options.blocking, sizeof(T), VectorLanes<T>(),
+                                RegisterRowsForShape<T>(options.m, options.n, options.k), options.m,
+                                options.n, options.k, participant_limit_, true)),
       useful_threads_(UsefulThreads(algorithm_, options.m, options.n, options.k, blocking_,
                                     participant_limit_, sizeof(T))),
       has_constant_b_(!options.constant_b.empty()),

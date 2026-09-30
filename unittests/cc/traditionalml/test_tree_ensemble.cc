@@ -920,6 +920,35 @@ TEST(TreeEnsembleOracle, SingleRowBalancedFloatKeepsBaseInsideTreeReduction) {
   EXPECT_EQ(actual[2], -42.0F);
 }
 
+TEST(TreeEnsembleOracle, SingleRowBalancedFloatHandlesVectorTreeTails) {
+  const TreeEnsembleTuningContext context{"single-row-vector-tails", 4};
+  for (const std::size_t trees : {7U, 8U, 9U, 15U, 16U, 17U, 97U}) {
+    const TreeEnsembleAttributes attributes = BalancedForest(trees);
+    const TreeEnsembleOracle oracle(attributes);
+    const TreeEnsemblePlan key_plan(attributes, context, nullptr);
+    TreeEnsembleTuningRegistry registry;
+    registry.PutExact(key_plan.model_key(),
+                      OneRegionPolicy(TreeEnsembleExecutionStrategy::kTreeParallel, 4, 1));
+    TreeEnsemblePlan plan(attributes, context, &registry);
+    plan.CompactRuntimeStorage();
+    std::vector<float> input(static_cast<std::size_t>(attributes.n_features));
+    for (std::size_t index = 0; index < input.size(); ++index) {
+      input[index] = static_cast<float>(static_cast<int>(index) - 4) * 0.25F;
+    }
+    const std::vector<double> reference_input(input.begin(), input.end());
+    const std::vector<double> expected = oracle.Evaluate(reference_input, 1);
+    std::vector<float> actual(1);
+    ThreadedExecutor executor;
+    onnx_light_cpu::ExecutionExecutorView view{&executor, 4, &ThreadedExecutor::Run};
+    {
+      onnx_light_cpu::ExecutionExecutorScope scope(&view);
+      plan.EvaluateInto(input.data(), input.size(), 1, actual.data());
+    }
+    EXPECT_GT(executor.dispatches.load(std::memory_order_relaxed), 0U);
+    EXPECT_FLOAT_EQ(actual[0], static_cast<float>(expected[0])) << "trees=" << trees;
+  }
+}
+
 TEST(TreeEnsembleOracle, BalancedFloatPartitionsPreserveTailsBaseAndMissingValues) {
   const TreeEnsembleTuningContext context{"partition-cpu", 4};
   for (const auto &attributes : {StumpForest(97, 1), BalancedForest(97)}) {
