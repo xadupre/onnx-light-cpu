@@ -29,6 +29,9 @@ Float32NormalizationMoments ComputeNormalizationMomentsFloat16(const std::uint16
                                                                std::size_t count);
 void ApplyNormalizationAffineFloat16(const std::uint16_t *input, const std::uint16_t *scale,
                                      std::uint16_t *output, std::size_t count, float multiplier);
+float ComputeNormalizationMeanSquareBFloat16(const std::uint16_t *input, std::size_t count);
+void ApplyNormalizationAffineBFloat16(const std::uint16_t *input, const std::uint16_t *scale,
+                                      std::uint16_t *output, std::size_t count, float multiplier);
 void ApplyNormalizationScaleBiasFloat16(const std::uint16_t *input, std::uint16_t *output,
                                         std::size_t count, float multiplier, float offset);
 void ApplyLayerNormalizationFloat16(const std::uint16_t *input, const std::uint16_t *scale,
@@ -47,6 +50,7 @@ void ApplyNormalizationAffineFloat64StashFloat32(const double *input, const doub
                                                  double *output, std::size_t count,
                                                  float multiplier);
 const char *NormalizationFloat16Path();
+const char *NormalizationBFloat16Path();
 const char *NormalizationFloat64Path();
 
 #ifdef ONNX_LIGHT_CPU_HAVE_RMS_F16C
@@ -103,6 +107,14 @@ Float32NormalizationMoments ComputeNormalizationMomentsFloat32_AVX512(const floa
 void ApplyNormalizationAffineFloat32_AVX512(const float *input, const float *scale,
                                             const float *bias, float *output, std::size_t count,
                                             float center, float multiplier);
+#endif
+
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512BF16
+float ComputeNormalizationMeanSquareBFloat16_AVX512BF16(const std::uint16_t *input,
+                                                        std::size_t count);
+void ApplyNormalizationAffineBFloat16_AVX512BF16(const std::uint16_t *input,
+                                                 const std::uint16_t *scale, std::uint16_t *output,
+                                                 std::size_t count, float multiplier);
 #endif
 
 } // namespace onnx_light_cpu

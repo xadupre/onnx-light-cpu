@@ -92,6 +92,8 @@ void NormalizeRows(const Tensor &x, const Tensor &scale, SimplifiedLayerNormaliz
           return ComputeNormalizationMeanSquareFloat32(input + base, width);
         } else if constexpr (XType == DataType::FLOAT16 && std::is_same_v<Acc, float>) {
           return ComputeNormalizationMeanSquareFloat16(input + base, width);
+        } else if constexpr (XType == DataType::BFLOAT16 && std::is_same_v<Acc, float>) {
+          return ComputeNormalizationMeanSquareBFloat16(input + base, width);
         } else if constexpr (XType == DataType::DOUBLE) {
           if constexpr (std::is_same_v<Acc, float>) {
             return ComputeNormalizationMeanSquareFloat64StashFloat32(input + base, width);
@@ -127,6 +129,11 @@ void NormalizeRows(const Tensor &x, const Tensor &scale, SimplifiedLayerNormaliz
                              std::is_same_v<Acc, float>) {
           ApplyNormalizationAffineFloat16(input + base + start, weights + scale_position,
                                           output + base + start, block, inverse);
+          continue;
+        } else if constexpr (XType == DataType::BFLOAT16 && VType == DataType::BFLOAT16 &&
+                             std::is_same_v<Acc, float>) {
+          ApplyNormalizationAffineBFloat16(input + base + start, weights + scale_position,
+                                           output + base + start, block, inverse);
           continue;
         } else if constexpr (XType == DataType::DOUBLE && VType == DataType::DOUBLE) {
           if constexpr (std::is_same_v<Acc, float>) {
@@ -210,6 +217,10 @@ SimplifiedLayerNormalizationResult SimplifiedLayerNormalizationKernel::operator(
           } else if constexpr (XType == DataType::FLOAT16) {
             if (stash_type == 1) {
               path = NormalizationFloat16Path();
+            }
+          } else if constexpr (XType == DataType::BFLOAT16) {
+            if (stash_type == 1) {
+              path = NormalizationBFloat16Path();
             }
           } else if constexpr (XType == DataType::DOUBLE) {
             path = NormalizationFloat64Path();
