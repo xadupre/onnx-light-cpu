@@ -120,20 +120,25 @@ template <typename Kernel> void CheckTuningSchema(const char *op_type) {
     const auto defaults = schema->portable_defaults();
     const bool half = type == rt_ns::DataType::FLOAT16 || type == rt_ns::DataType::BFLOAT16;
     const bool exp_float = std::string_view(op_type) == "Exp" && type == rt_ns::DataType::FLOAT;
+    const bool log_float = std::string_view(op_type) == "Log" && type == rt_ns::DataType::FLOAT;
     const bool log_bfloat16 =
         std::string_view(op_type) == "Log" && type == rt_ns::DataType::BFLOAT16;
-    EXPECT_EQ(defaults.template Get<int64_t>("parallel.threshold_bytes"), exp_float ? 128 * 1024
+    EXPECT_EQ(defaults.template Get<int64_t>("parallel.threshold_bytes"), exp_float   ? 128 * 1024
+                                                                          : log_float ? 512 * 1024
                                                                           : log_bfloat16
                                                                               ? 512 * 1024
                                                                           : half ? 1024 * 1024
                                                                                  : 2 * 1024 * 1024);
-    EXPECT_EQ(defaults.template Get<int64_t>("parallel.target_block_bytes"), log_bfloat16
-                                                                                 ? 64 * 1024
-                                                                             : exp_float ? 64 * 1024
-                                                                             : half ? 128 * 1024
-                                                                                    : 256 * 1024);
-    EXPECT_EQ(defaults.template Get<int64_t>("parallel.max_participants"), exp_float ? 8 : 32);
-    EXPECT_EQ(defaults.template Get<int64_t>("parallel.cost_model"), exp_float ? 0 : 1);
+    EXPECT_EQ(defaults.template Get<int64_t>("parallel.target_block_bytes"),
+              log_bfloat16 ? 64 * 1024
+              : exp_float  ? 64 * 1024
+              : log_float  ? 128 * 1024
+              : half       ? 128 * 1024
+                           : 256 * 1024);
+    EXPECT_EQ(defaults.template Get<int64_t>("parallel.max_participants"),
+              exp_float || log_float ? 8 : 32);
+    EXPECT_EQ(defaults.template Get<int64_t>("parallel.cost_model"),
+              exp_float || log_float ? 0 : 1);
   }
   EXPECT_EQ(kernel.TuningKey(static_cast<int32_t>(rt_ns::DataType::INT32)).device,
             sym_ns::Device::kUndefined);
