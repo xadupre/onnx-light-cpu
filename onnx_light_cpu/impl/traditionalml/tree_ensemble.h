@@ -442,6 +442,9 @@ void EvaluateBalancedFloatRows_AVX2(const float *input, std::size_t features,
                                     std::size_t tree_count, std::size_t depth,
                                     std::size_t row_begin, std::size_t row_end, float base,
                                     float *output);
+float EvaluateBalancedFloatTrees_AVX2(const float *input, const TreeEnsembleCompactFloatNode *nodes,
+                                      const float *leaf_weights, const std::int64_t *tree_roots,
+                                      std::size_t tree_count, std::size_t depth);
 #endif
 
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512
@@ -451,6 +454,10 @@ void EvaluateBalancedFloatRows_AVX512(const float *input, std::size_t features,
                                       std::size_t tree_count, std::size_t depth,
                                       std::size_t row_begin, std::size_t row_end, float base,
                                       float *output);
+float EvaluateBalancedFloatTrees_AVX512(const float *input,
+                                        const TreeEnsembleCompactFloatNode *nodes,
+                                        const float *leaf_weights, const std::int64_t *tree_roots,
+                                        std::size_t tree_count, std::size_t depth);
 #endif
 
 /// Immutable prepared representation for the ai.onnx.ml TreeEnsemble-5 schema.

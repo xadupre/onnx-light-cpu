@@ -12,6 +12,7 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -264,14 +265,24 @@ TEST(TanhKernel, HalfSizesTailsAndConversionBlockBoundaries) {
 struct InlineExecutor {
   std::int64_t dispatches = 0;
   std::int64_t blocks = 0;
+  bool concurrent = false;
 
   static void Run(void *context, std::int64_t count, void *task_context,
                   onnx_light_cpu::ExecutionBlockFn task) {
     auto &self = *static_cast<InlineExecutor *>(context);
     ++self.dispatches;
     self.blocks = count;
-    for (std::int64_t i = count; i > 0; --i) {
-      task(task_context, i - 1);
+    std::vector<std::thread> workers;
+    for (std::int64_t i = 1; i < count; ++i) {
+      if (self.concurrent) {
+        workers.emplace_back(task, task_context, i);
+      } else {
+        task(task_context, i);
+      }
+    }
+    task(task_context, 0);
+    for (auto &worker : workers) {
+      worker.join();
     }
   }
 };
@@ -288,6 +299,7 @@ TEST(TanhKernel, ExecutorSmallLargeAndNestedRanges) {
     }
     onnx_light_cpu::TanhFloat32(input.data(), output.data(), 1024);
     EXPECT_EQ(executor.dispatches, 0);
+    executor.concurrent = count >= 512 * 1024;
     onnx_light_cpu::TanhFloat32(input.data(), output.data(), count);
     EXPECT_EQ(executor.dispatches, 1);
     EXPECT_GT(executor.blocks, 1);

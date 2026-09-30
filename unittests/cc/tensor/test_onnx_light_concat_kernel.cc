@@ -16,6 +16,7 @@
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -331,6 +332,35 @@ struct InlineExecutor {
     }
   }
 };
+
+struct ConcurrentExecutor {
+  int64_t dispatches = 0;
+  int64_t blocks = 0;
+
+  static void Run(void *context, int64_t count, void *task_context,
+                  onnx_light_cpu::ExecutionBlockFn task) {
+    auto &self = *static_cast<ConcurrentExecutor *>(context);
+    ++self.dispatches;
+    self.blocks = count;
+    std::vector<std::thread> threads;
+    threads.reserve(static_cast<std::size_t>(count));
+    for (int64_t block = 0; block < count; ++block) {
+      threads.emplace_back([=] { task(task_context, block); });
+    }
+    for (auto &thread : threads) {
+      thread.join();
+    }
+  }
+};
+
+TEST(OnnxLightConcatKernel, LargeCopiesUseConcurrentDynamicTiles) {
+  ConcurrentExecutor executor;
+  onnx_light_cpu::ExecutionExecutorView view{&executor, 16, &ConcurrentExecutor::Run};
+  onnx_light_cpu::ExecutionExecutorScope scope(&view);
+  Compare({Payload(DataType::FLOAT, {1024, 256}), Payload(DataType::FLOAT, {1024, 768}, 19)}, -1);
+  EXPECT_EQ(executor.dispatches, 2);
+  EXPECT_EQ(executor.blocks, 10);
+}
 
 TEST(OnnxLightConcatKernel, SmallAxisZeroLargeRowsManyInputsAndNestedScheduling) {
   InlineExecutor executor;
