@@ -160,7 +160,7 @@ void AbsFloat32WithTuning(const float *input, float *output, std::size_t count,
                                     : dispatch.function;
   constexpr std::size_t tile = 16 * 1024;
   std::atomic<std::size_t> next{0};
-  const bool dynamic = dispatch.dynamic_ranges && streaming_store && count >= 2 * tile &&
+  const bool dynamic = dispatch.dynamic_ranges && count >= 2 * tile &&
                        tuning.max_participants != 1 && tuning.preferred_participants != 1 &&
                        ExecutionThreadCount() > 1 && !ExecutionInParallelRegion();
   auto execute = [input, output, function, &next, dynamic, count, tile](std::int64_t begin,
@@ -177,7 +177,7 @@ void AbsFloat32WithTuning(const float *input, float *output, std::size_t count,
   };
   if (tuning.use_cost_model) {
     auto bounded = tuning;
-    if (dynamic) {
+    if (dynamic && streaming_store) {
       const std::size_t useful_participants = std::max<std::size_t>(
           1, count / UnaryBytesToElements(tuning.target_block_bytes, sizeof(float)));
       bounded.max_participants = tuning.max_participants == 0

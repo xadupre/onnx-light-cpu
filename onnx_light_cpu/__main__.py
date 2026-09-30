@@ -169,15 +169,21 @@ def main(argv: Sequence[str] | None = None) -> int:
             with_onnxruntime=args.onnxruntime,
             allow_empty=selection_inferred,
         )
-        comparison = (
-            {"comparison_rows": compare_benchmark_dtypes(aggregated_rows, *args.compare_dtypes)}
-            if args.compare_dtypes
-            else {}
+        selected_dtypes = normalize_dtypes(dtypes)
+        comparison_dtypes = tuple(args.compare_dtypes) if args.compare_dtypes else selected_dtypes
+        comparison_rows = (
+            compare_benchmark_dtypes(aggregated_rows, *comparison_dtypes)
+            if len(comparison_dtypes) == 2
+            else None
         )
-        write_benchmark_workbook(args.output, raw_rows, aggregated_rows, **comparison)
+        workbook_comparison = (
+            {"comparison_rows": comparison_rows} if comparison_rows is not None else {}
+        )
+        report_comparison = workbook_comparison if args.compare_dtypes else {}
+        write_benchmark_workbook(args.output, raw_rows, aggregated_rows, **workbook_comparison)
         if args.markdown:
-            write_benchmark_markdown(args.markdown, aggregated_rows, **comparison)
-        report_rows = comparison.get("comparison_rows", aggregated_rows)
+            write_benchmark_markdown(args.markdown, aggregated_rows, **report_comparison)
+        report_rows = report_comparison.get("comparison_rows", aggregated_rows)
         empty_message = (
             f"No comparable benchmark cases were found for dtypes "
             f"`{args.compare_dtypes[0]}` and `{args.compare_dtypes[1]}`.\n"

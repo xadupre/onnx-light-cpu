@@ -306,6 +306,21 @@ TEST(AbsFloat32, StreamingBoundsParticipantsByWorkBudget) {
   EXPECT_EQ(output, std::vector<float>(count, 2.0f));
 }
 
+TEST(AbsFloat32, CachedDynamicRangesUseExecutorParticipantLimit) {
+  auto tuning = onnx_light_cpu::DefaultAbsFloat32ExecutionTuning();
+  tuning.streaming_store_threshold_bytes = std::numeric_limits<std::size_t>::max();
+  tuning.max_participants = 8;
+  AbsExecutor executor;
+  executor.concurrent = true;
+  onnx_light_cpu::ExecutionExecutorView view{&executor, 8, &AbsExecutor::Run, &AbsExecutor::Plan};
+  onnx_light_cpu::ExecutionExecutorScope scope(&view);
+  std::vector<float> input(1048576 + 17, -2.0f), output(input.size());
+  onnx_light_cpu::AbsFloat32WithTuning(input.data(), output.data(), input.size(), tuning);
+  EXPECT_EQ(executor.maximum, 8);
+  EXPECT_EQ(executor.blocks, 8);
+  EXPECT_EQ(output, std::vector<float>(input.size(), 2.0f));
+}
+
 TEST(AbsFloat32, NestedExecutionDoesNotPlanOrDispatch) {
   AbsExecutor executor;
   onnx_light_cpu::ExecutionExecutorView view{&executor, 8, &AbsExecutor::Run, &AbsExecutor::Plan};

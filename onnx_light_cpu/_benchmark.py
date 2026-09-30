@@ -93,6 +93,8 @@ _DTYPE_COMPARISON_COLUMNS = (
     "case",
     "operator",
     "input_shapes",
+    "baseline_case",
+    "comparison_case",
     "baseline_dtype",
     "comparison_dtype",
     "baseline_median_s",
@@ -495,14 +497,17 @@ def compare_benchmark_dtypes(
                 "case": name,
                 "operator": row["operator"],
                 "input_shapes": row["input_shapes"],
+                "baseline_case": None,
+                "comparison_case": None,
                 "baseline_dtype": baseline,
                 "comparison_dtype": comparison,
                 "baseline_median_s": None,
                 "comparison_median_s": None,
                 "speedup": None,
             }
-        column = "baseline_median_s" if dtype == baseline else "comparison_median_s"
-        paired[key][column] = row["median_s"]
+        prefix = "baseline" if dtype == baseline else "comparison"
+        paired[key][f"{prefix}_case"] = row["case"]
+        paired[key][f"{prefix}_median_s"] = row["median_s"]
     for pair in paired.values():
         if pair["baseline_median_s"] is not None and pair["comparison_median_s"] is not None:
             pair["speedup"] = (
