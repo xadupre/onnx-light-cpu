@@ -274,7 +274,16 @@ void SoftmaxNormalizeRow(const float *input, float *output, std::size_t columns,
   }
   const __m256 inverse_sum = _mm256_set1_ps(
       1.0f / HorizontalSum(_mm256_add_ps(_mm256_add_ps(sum0, sum1), _mm256_add_ps(sum2, sum3))));
-  for (column = 0; column < vector_columns; column += 8) {
+  for (column = 0; column + 32 <= vector_columns; column += 32) {
+    _mm256_storeu_ps(output + column, _mm256_mul_ps(_mm256_loadu_ps(output + column), inverse_sum));
+    _mm256_storeu_ps(output + column + 8,
+                     _mm256_mul_ps(_mm256_loadu_ps(output + column + 8), inverse_sum));
+    _mm256_storeu_ps(output + column + 16,
+                     _mm256_mul_ps(_mm256_loadu_ps(output + column + 16), inverse_sum));
+    _mm256_storeu_ps(output + column + 24,
+                     _mm256_mul_ps(_mm256_loadu_ps(output + column + 24), inverse_sum));
+  }
+  for (; column < vector_columns; column += 8) {
     _mm256_storeu_ps(output + column, _mm256_mul_ps(_mm256_loadu_ps(output + column), inverse_sum));
   }
   if (column < columns) {
