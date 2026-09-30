@@ -158,6 +158,22 @@ std::uint16_t FloatToHalf(float value) {
   return h;
 }
 
+float BFloat16ToFloat(std::uint16_t value) {
+  const std::uint32_t bits = static_cast<std::uint32_t>(value) << 16;
+  float result;
+  std::memcpy(&result, &bits, sizeof(result));
+  return result;
+}
+
+std::uint16_t FloatToBFloat16(float value) {
+  std::uint32_t bits;
+  std::memcpy(&bits, &value, sizeof(bits));
+  if ((bits & 0x7fffffffu) > 0x7f800000u) {
+    return static_cast<std::uint16_t>((bits >> 16) | 0x0040u);
+  }
+  return static_cast<std::uint16_t>((bits + 0x7fffu + ((bits >> 16) & 1u)) >> 16);
+}
+
 // ---------------------------------------------------------------------------
 // ExpFloat32
 // ---------------------------------------------------------------------------
@@ -764,6 +780,26 @@ TEST(LogFloat16, AllBitPatternsMatchReference) {
   onnx_light_cpu::LogFloat16(input.data(), output.data(), input.size());
   for (std::size_t i = 0; i < input.size(); ++i) {
     EXPECT_EQ(output[i], FloatToHalf(std::log(HalfToFloat(input[i])))) << "at bits " << i;
+  }
+}
+
+TEST(LogBFloat16, AllBitPatternsMatchReference) {
+  std::vector<std::uint16_t> input(65536);
+  std::vector<std::uint16_t> output(input.size());
+  for (std::size_t i = 0; i < input.size(); ++i) {
+    input[i] = static_cast<std::uint16_t>(i);
+  }
+  auto tuning = onnx_light_cpu::kDefaultLogBFloat16ExecutionTuning;
+  tuning.parallel_threshold_bytes = 0;
+  onnx_light_cpu::LogBFloat16WithTuning(input.data(), output.data(), input.size(), tuning);
+  for (std::size_t i = 0; i < input.size(); ++i) {
+    const std::uint16_t bits = input[i];
+    const std::uint16_t magnitude = bits & 0x7fffu;
+    const std::uint16_t expected =
+        (((bits & 0x8000u) != 0 && magnitude != 0) || magnitude > 0x7f80u)
+            ? 0x7fc0u
+            : FloatToBFloat16(std::log(BFloat16ToFloat(bits)));
+    EXPECT_EQ(output[i], expected) << "at bits " << i;
   }
 }
 
