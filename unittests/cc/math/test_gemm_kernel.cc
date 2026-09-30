@@ -703,6 +703,28 @@ TEST(GemmFloat32, Avx512SkinnyNColumnRangeMatchesReference) {
 #endif
 
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
+TEST(GemmFloat32, Avx2SkinnyNColumnRangeTailsAndBias) {
+  if (onnx_light_cpu::DetectSimdLevel() < onnx_light_cpu::SimdLevel::kAVX2 ||
+      !onnx_light_cpu::CpuSupportsFma()) {
+    GTEST_SKIP() << "AVX2/FMA is required";
+  }
+  constexpr std::size_t M = 5;
+  for (const std::size_t K : {31, 32, 33, 63, 64, 65}) {
+    const auto A = RandomVector(M * K, static_cast<std::uint32_t>(K));
+    const auto B = RandomVector(K, static_cast<std::uint32_t>(K + 100));
+    const auto C = RandomVector(M, static_cast<std::uint32_t>(K + 200));
+    const auto expected = ReferenceGemm<float>(false, false, M, 1, K, 0.75f, A, B, -0.5f, &C);
+    std::vector<float> Y(M, 123.0f);
+    onnx_light_cpu::GemmSkinnyN1Range_AVX2_F32(K, 0.75f, A.data(), B.data(), -0.5f, C.data(),
+                                               Y.data(), 1, 4);
+    EXPECT_EQ(Y.front(), 123.0f);
+    EXPECT_EQ(Y.back(), 123.0f);
+    for (std::size_t i = 1; i < 4; ++i) {
+      EXPECT_NEAR(Y[i], expected[i], 1e-4f) << "K=" << K << " i=" << i;
+    }
+  }
+}
+
 TEST(GemmFloat32, Avx2SkinnyNRangeAndSpecialValues) {
   if (onnx_light_cpu::DetectSimdLevel() < onnx_light_cpu::SimdLevel::kAVX2 ||
       !onnx_light_cpu::CpuSupportsFma()) {
