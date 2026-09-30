@@ -15,7 +15,7 @@ inline constexpr std::size_t kCDistPackedMaxFeatures = 256;
 
 template <std::size_t Lanes> bool CDistUsePackedRows(std::size_t m, std::size_t k, std::size_t n) {
   return n > 0 && n <= kCDistPackedMaxFeatures && k >= Lanes &&
-         (k % Lanes == 0 || k >= 4 * Lanes) && m >= (n <= 128 ? 32u : 64u);
+         (k % Lanes == 0 || k >= 4 * Lanes) && m >= (n <= 128 ? 8u : 64u);
 }
 
 // Keep packing bounded and amortize it over several A rows. Each SIMD lane
@@ -53,6 +53,19 @@ bool CDistPackedRows(const T *a, const T *b, T *c, std::size_t k, std::size_t n,
       }
     };
     std::size_t row = row_begin;
+    for (; row + 8 <= row_end; row += 8) {
+      Vector sums[8] = {zero, zero, zero, zero, zero, zero, zero, zero};
+      for (std::size_t feature = 0; feature < n; ++feature) {
+        const Vector values = load(packed + feature * Lanes);
+        for (std::size_t r = 0; r < 8; ++r) {
+          const Vector difference = subtract(broadcast(a[(row + r) * n + feature]), values);
+          sums[r] = multiply_add(difference, difference, sums[r]);
+        }
+      }
+      for (std::size_t r = 0; r < 8; ++r) {
+        finish(sums[r], row + r);
+      }
+    }
     for (; row + 4 <= row_end; row += 4) {
       Vector sums[4] = {zero, zero, zero, zero};
       for (std::size_t feature = 0; feature < n; ++feature) {

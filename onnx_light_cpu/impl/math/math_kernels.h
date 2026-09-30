@@ -197,6 +197,8 @@ void SigmoidFloat32_AVX512(const float *input, float *output, std::size_t count)
 void PowFloat32_AVX512(const float *base, const float *exponent, float *output, std::size_t count);
 void PowFloat32LeftScalar_AVX512(float base, const float *exponent, float *output,
                                  std::size_t count);
+void PowFloat16RightScalar_AVX512(const std::uint16_t *base, float exponent, std::uint16_t *output,
+                                  std::size_t count);
 #endif
 
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA

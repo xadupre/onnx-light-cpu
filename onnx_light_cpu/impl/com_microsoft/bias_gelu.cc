@@ -27,6 +27,10 @@ void BiasGeluFloat32_AVX2_FMA(const float *a, const float *bias, float *output, 
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512
 void BiasGeluFloat32_AVX512(const float *a, const float *bias, float *output, std::size_t count);
 #endif
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512BF16
+void BiasGeluBFloat16_AVX512BF16(const std::uint16_t *a, const std::uint16_t *bias,
+                                 std::uint16_t *output, std::size_t count);
+#endif
 
 namespace {
 
@@ -87,6 +91,21 @@ BiasGeluFloat32RangeFn SelectBiasGeluFloat32Range() {
     }
 #endif
     return &BiasGeluFloat32Scalar;
+  }();
+  return selected;
+}
+
+using BiasGeluBFloat16RangeFn = void (*)(const std::uint16_t *, const std::uint16_t *,
+                                         std::uint16_t *, std::size_t);
+
+BiasGeluBFloat16RangeFn SelectBiasGeluBFloat16Range() {
+  static const BiasGeluBFloat16RangeFn selected = []() -> BiasGeluBFloat16RangeFn {
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512BF16
+    if (DetectSimdLevel() >= SimdLevel::kAVX512 && CpuSupportsAvx512Bf16()) {
+      return &BiasGeluBFloat16_AVX512BF16;
+    }
+#endif
+    return nullptr;
   }();
   return selected;
 }
@@ -169,14 +188,26 @@ void BiasGeluHalfDispatch(const std::uint16_t *a, const std::uint16_t *bias, std
   if (outer == 0 || inner == 0) {
     return;
   }
+  const std::size_t row_bytes =
+      CheckedByteSize(inner, sizeof(std::uint16_t), "BiasGelu", "input row byte size");
+  if constexpr (BFloat16) {
+    const BiasGeluBFloat16RangeFn bfloat16_range = SelectBiasGeluBFloat16Range();
+    if (bfloat16_range != nullptr) {
+      DispatchRows(outer, row_bytes, tuning, [=](std::int64_t begin, std::int64_t end) {
+        for (std::int64_t row = begin; row < end; ++row) {
+          const std::size_t offset = static_cast<std::size_t>(row) * inner;
+          bfloat16_range(a + offset, bias, output + offset, inner);
+        }
+      });
+      return;
+    }
+  }
   std::vector<float> bias_float(inner);
   if constexpr (BFloat16) {
     detail::ConvertBFloat16ToFloat32(bias, bias_float.data(), inner);
   } else {
     detail::ConvertFloat16ToFloat32(bias, bias_float.data(), inner);
   }
-  const std::size_t row_bytes =
-      CheckedByteSize(inner, sizeof(std::uint16_t), "BiasGelu", "input row byte size");
   const BiasGeluFloat32RangeFn float32_range = SelectBiasGeluFloat32Range();
   const float *bias_values = bias_float.data();
   DispatchRows(outer, row_bytes, tuning, [=](std::int64_t begin, std::int64_t end) {

@@ -7,6 +7,7 @@
 #include "onnx_light_cpu/impl/math/half_conversion.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 
 namespace onnx_light_cpu {
@@ -15,6 +16,7 @@ namespace {
 using TanhRange = void (*)(const float *, float *, std::size_t);
 
 constexpr UnaryExecutionTuning kTanhFloat32Tuning{256 * 1024, 128 * 1024, 32, false};
+constexpr UnaryExecutionTuning kTanhFloat32SmallTuning{128 * 1024, 64 * 1024, 4, false};
 constexpr UnaryExecutionTuning kTanhFloat32Avx512Tuning{128 * 1024, 64 * 1024, 32, false};
 constexpr UnaryExecutionTuning kTanhHalfTuning{128 * 1024, 64 * 1024, 32, false};
 
@@ -85,15 +87,27 @@ void TanhFloat32_Scalar(const float *input, float *output, std::size_t count) {
 
 void TanhFloat32(const float *input, float *output, std::size_t count) {
   const auto function = GetTanhRange();
-  auto tuning = kTanhFloat32Tuning;
+  auto tuning = count <= 64 * 1024 ? kTanhFloat32SmallTuning : kTanhFloat32Tuning;
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512
   static const bool use_avx512 = DetectSimdLevel() >= SimdLevel::kAVX512;
   if (use_avx512) {
     tuning = kTanhFloat32Avx512Tuning;
   }
 #endif
+  constexpr std::size_t tile = 16 * 1024;
+  std::atomic<std::size_t> next{0};
+  const bool dynamic =
+      count >= 512 * 1024 && ExecutionThreadCount() > 1 && !ExecutionInParallelRegion();
   ExecuteUnaryRanges<float>(
-      count, tuning, [input, output, function](std::int64_t begin, std::int64_t end) {
+      count, tuning,
+      [input, output, function, &next, dynamic, count, tile](std::int64_t begin, std::int64_t end) {
+        if (dynamic) {
+          for (std::size_t first = next.fetch_add(tile, std::memory_order_relaxed); first < count;
+               first = next.fetch_add(tile, std::memory_order_relaxed)) {
+            function(input + first, output + first, std::min(tile, count - first));
+          }
+          return;
+        }
         function(input + begin, output + begin, static_cast<std::size_t>(end - begin));
       });
 }
