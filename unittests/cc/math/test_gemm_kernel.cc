@@ -1833,6 +1833,54 @@ TEST(GemmHalf, Avx2OutputNarrowingMatchesScalarConversion) {
   }
 #endif
 }
+
+#ifdef ONNX_LIGHT_CPU_HAVE_F16C
+TEST(GemmHalf, Avx2Float16BiasNarrowingCoversBroadcastsAndTails) {
+  if (onnx_light_cpu::DetectSimdLevel() < onnx_light_cpu::SimdLevel::kAVX2 ||
+      !onnx_light_cpu::CpuSupportsFma() || !onnx_light_cpu::CpuSupportsF16C()) {
+    GTEST_SKIP() << "AVX2/FMA/F16C is not available.";
+  }
+  constexpr std::size_t rows = 3;
+  constexpr std::size_t columns = 13;
+  constexpr float beta = -0.75f;
+  std::vector<float> values(rows * columns);
+  std::vector<float> matrix_bias(rows * columns);
+  for (std::size_t i = 0; i < values.size(); ++i) {
+    values[i] = static_cast<float>(static_cast<int>(i % 11) - 5) / 3.0f;
+    matrix_bias[i] = static_cast<float>(static_cast<int>(i % 7) - 3) / 5.0f;
+  }
+  values[8] = std::numeric_limits<float>::quiet_NaN();
+  const std::vector<float> scalar_bias = {1.25f};
+  const std::vector<float> row_bias(matrix_bias.begin(), matrix_bias.begin() + columns);
+  const std::vector<float> column_bias = {-0.5f, 0.25f, 1.5f};
+  struct Case {
+    const float *bias;
+    std::size_t row_stride;
+    std::size_t column_stride;
+  };
+  for (const Case test_case : {
+           Case{scalar_bias.data(), 0, 0},
+           Case{row_bias.data(), 0, 1},
+           Case{column_bias.data(), 1, 0},
+           Case{matrix_bias.data(), columns, 1},
+       }) {
+    std::vector<std::uint16_t> actual(rows * columns);
+    onnx_light_cpu::GemmAddBiasConvertFloat32ToFloat16_F16C(
+        values.data(), test_case.bias, actual.data(), rows, columns, beta, test_case.row_stride,
+        test_case.column_stride);
+    for (std::size_t row = 0; row < rows; ++row) {
+      for (std::size_t column = 0; column < columns; ++column) {
+        const std::size_t index = row * columns + column;
+        const float bias =
+            test_case.bias[row * test_case.row_stride + column * test_case.column_stride];
+        EXPECT_EQ(actual[index],
+                  onnx_light_cpu::detail::FloatToFloat16Bits(values[index] + beta * bias))
+            << "row=" << row << " column=" << column;
+      }
+    }
+  }
+}
+#endif
 #endif
 
 namespace {

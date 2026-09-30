@@ -93,6 +93,12 @@ void GemmPackTransposeFloat16ToFloat32_F16C(const std::uint16_t *src, std::size_
 // round-to-nearest-even conversion, canonical NaNs, and an exact scalar tail.
 void GemmConvertFloat32ToFloat16_F16C(const float *src, std::uint16_t *dst, std::size_t n);
 
+void GemmAddBiasConvertFloat32ToFloat16_F16C(const float *src, const float *bias,
+                                             std::uint16_t *dst, std::size_t rows,
+                                             std::size_t columns, float beta,
+                                             std::size_t bias_row_stride,
+                                             std::size_t bias_column_stride);
+
 // Native AVX2/F16C FLOAT16 micro-kernel with float32 accumulation. B and the
 // packed A rows remain FLOAT16 until they enter the register file.
 void GemmMicroKernel_AVX2F16C(std::size_t mr, std::size_t nb, std::size_t K, float alpha,
