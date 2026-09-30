@@ -257,13 +257,17 @@ TEST(GemmPlan, FloatSquaresUseBoundedParallelWork) {
 }
 
 TEST(GemmPlan, MediumFloatSquareSplitsRowsAcrossParticipants) {
+  const std::size_t avx2_rows =
+      onnx_light_cpu::detail::SelectGemmRegisterRows(onnx_light_cpu::SimdLevel::kAVX2, true);
   const bool supported_profile =
       onnx_light_cpu::DetectSimdLevel() >= onnx_light_cpu::SimdLevel::kAVX512 ||
       (onnx_light_cpu::DetectSimdLevel() >= onnx_light_cpu::SimdLevel::kAVX2 &&
        onnx_light_cpu::CpuSupportsFma() &&
-       onnx_light_cpu::detail::SelectGemmRegisterRows(onnx_light_cpu::SimdLevel::kAVX2, true) == 6);
+       (avx2_rows == 6 ||
+        (avx2_rows == 5 && onnx_light_cpu::detail::DetectGemmMicroarchitecture() ==
+                               onnx_light_cpu::GemmMicroarchitecture::kIntelCore)));
   if (!supported_profile) {
-    GTEST_SKIP() << "medium-square row splitting requires AVX-512 or AVX2 on AMD Zen";
+    GTEST_SKIP() << "medium-square row splitting requires a tuned AVX2 or AVX-512 profile";
   }
   onnx_light_cpu::ExecutionExecutorView executor;
   executor.effective_threads = 4;
@@ -274,6 +278,12 @@ TEST(GemmPlan, MediumFloatSquareSplitsRowsAcrossParticipants) {
 
   EXPECT_EQ(row_tasks, 4u);
   EXPECT_GE(plan.useful_threads(), row_tasks);
+  if (onnx_light_cpu::EffectiveGemmSimdLevel() == onnx_light_cpu::SimdLevel::kAVX2 &&
+      avx2_rows == 5) {
+    EXPECT_EQ(plan.blocking().mr, 6u);
+    const GemmPlan<float> large(GemmPlanOptions<float>{false, false, 1024, 1024, 1024});
+    EXPECT_EQ(large.blocking().mr, 5u);
+  }
 }
 
 TEST(GemmPlan, SingleThreadMediumFloatUsesWideRegisterTile) {

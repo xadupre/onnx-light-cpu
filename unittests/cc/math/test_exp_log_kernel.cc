@@ -8,10 +8,12 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -45,6 +47,31 @@ struct PlanningExecutor {
   }
 
   static void Run(void *, std::int64_t, void *, onnx_light_cpu::ExecutionBlockFn) {}
+};
+
+struct ThreadedExecutor {
+  std::atomic<std::int64_t> callbacks{0};
+  std::int64_t dispatches = 0;
+  std::int64_t blocks = 0;
+
+  static void Run(void *context, std::int64_t num_blocks, void *task_context,
+                  onnx_light_cpu::ExecutionBlockFn task) {
+    auto &self = *static_cast<ThreadedExecutor *>(context);
+    ++self.dispatches;
+    self.blocks = num_blocks;
+    std::vector<std::thread> workers;
+    for (std::int64_t block = 1; block < num_blocks; ++block) {
+      workers.emplace_back([&self, task, task_context, block] {
+        task(task_context, block);
+        self.callbacks.fetch_add(1, std::memory_order_relaxed);
+      });
+    }
+    task(task_context, 0);
+    self.callbacks.fetch_add(1, std::memory_order_relaxed);
+    for (auto &worker : workers) {
+      worker.join();
+    }
+  }
 };
 
 std::size_t SelectedExpLogFloat32Lanes() {
@@ -129,6 +156,22 @@ std::uint16_t FloatToHalf(float value) {
     ++h;
   }
   return h;
+}
+
+float BFloat16ToFloat(std::uint16_t value) {
+  const std::uint32_t bits = static_cast<std::uint32_t>(value) << 16;
+  float result;
+  std::memcpy(&result, &bits, sizeof(result));
+  return result;
+}
+
+std::uint16_t FloatToBFloat16(float value) {
+  std::uint32_t bits;
+  std::memcpy(&bits, &value, sizeof(bits));
+  if ((bits & 0x7fffffffu) > 0x7f800000u) {
+    return static_cast<std::uint16_t>((bits >> 16) | 0x0040u);
+  }
+  return static_cast<std::uint16_t>((bits + 0x7fffu + ((bits >> 16) & 1u)) >> 16);
 }
 
 // ---------------------------------------------------------------------------
@@ -701,6 +744,45 @@ TEST(ExpFloat16, MatchesReference) {
   }
 }
 
+TEST(ExpBFloat16, VectorTailsAndSpecialValuesMatchReference) {
+  const float infinity = std::numeric_limits<float>::infinity();
+  const std::vector<float> values = {-infinity,
+                                     -4.0f,
+                                     -1.5f,
+                                     -0.5f,
+                                     -0.0f,
+                                     0.0f,
+                                     0.5f,
+                                     1.0f,
+                                     2.0f,
+                                     4.0f,
+                                     6.0f,
+                                     infinity,
+                                     std::numeric_limits<float>::quiet_NaN()};
+  auto tuning = onnx_light_cpu::kDefaultExpLogHalfExecutionTuning;
+  tuning.parallel_threshold_bytes = 0;
+  for (std::size_t count = 0; count <= 33; ++count) {
+    for (const bool in_place : {false, true}) {
+      std::vector<std::uint16_t> input(count + 2, 0xdead);
+      std::vector<std::uint16_t> output(count + 2, 0xdead);
+      std::vector<std::uint16_t> expected(count);
+      for (std::size_t i = 0; i < count; ++i) {
+        input[i + 1] = FloatToBFloat16(values[i % values.size()]);
+        expected[i] = FloatToBFloat16(std::exp(BFloat16ToFloat(input[i + 1])));
+      }
+      std::uint16_t *result = in_place ? input.data() + 1 : output.data() + 1;
+      onnx_light_cpu::ExpBFloat16WithTuning(input.data() + 1, result, count, tuning);
+      for (std::size_t i = 0; i < count; ++i) {
+        EXPECT_EQ(result[i], expected[i]) << count << "," << i << "," << in_place;
+      }
+      EXPECT_EQ(input.front(), 0xdead);
+      EXPECT_EQ(input.back(), 0xdead);
+      EXPECT_EQ(output.front(), 0xdead);
+      EXPECT_EQ(output.back(), 0xdead);
+    }
+  }
+}
+
 TEST(LogFloat16, MatchesReference) {
   std::vector<float> values = {0.25f, 0.5f, 1.0f, 2.0f, 3.0f, 5.0f, 10.0f, 100.0f, 1000.0f};
   std::vector<std::uint16_t> in(values.size());
@@ -737,6 +819,26 @@ TEST(LogFloat16, AllBitPatternsMatchReference) {
   onnx_light_cpu::LogFloat16(input.data(), output.data(), input.size());
   for (std::size_t i = 0; i < input.size(); ++i) {
     EXPECT_EQ(output[i], FloatToHalf(std::log(HalfToFloat(input[i])))) << "at bits " << i;
+  }
+}
+
+TEST(LogBFloat16, AllBitPatternsMatchReference) {
+  std::vector<std::uint16_t> input(65536);
+  std::vector<std::uint16_t> output(input.size());
+  for (std::size_t i = 0; i < input.size(); ++i) {
+    input[i] = static_cast<std::uint16_t>(i);
+  }
+  auto tuning = onnx_light_cpu::kDefaultLogBFloat16ExecutionTuning;
+  tuning.parallel_threshold_bytes = 0;
+  onnx_light_cpu::LogBFloat16WithTuning(input.data(), output.data(), input.size(), tuning);
+  for (std::size_t i = 0; i < input.size(); ++i) {
+    const std::uint16_t bits = input[i];
+    const std::uint16_t magnitude = bits & 0x7fffu;
+    const std::uint16_t expected =
+        (((bits & 0x8000u) != 0 && magnitude != 0) || magnitude > 0x7f80u)
+            ? 0x7fc0u
+            : FloatToBFloat16(std::log(BFloat16ToFloat(bits)));
+    EXPECT_EQ(output[i], expected) << "at bits " << i;
   }
 }
 
@@ -795,6 +897,42 @@ TEST(ExpLogParallel, ByteBasedParticipantPolicy) {
   onnx_light_cpu::ExpFloat32WithTuning(input.data(), output.data(), input.size(), tuned);
   EXPECT_EQ(executor.dispatches, 1);
   EXPECT_EQ(executor.blocks, 3);
+}
+
+TEST(ExpFloat32, ConcurrentDynamicTilesRespectParticipantLimitAndNesting) {
+  constexpr std::size_t count = 4 * 16 * 1024 + 13;
+  std::vector<float> input(count), output(count, -1.0f);
+  for (std::size_t i = 0; i < count; ++i) {
+    input[i] = -8.0f + 16.0f * static_cast<float>(i) / static_cast<float>(count);
+  }
+  const onnx_light_cpu::UnaryExecutionTuning tuning{1, 16 * 1024 * sizeof(float), 4, false};
+  ThreadedExecutor executor;
+  onnx_light_cpu::ExecutionExecutorView view{&executor, 8, &ThreadedExecutor::Run};
+  onnx_light_cpu::ExecutionExecutorScope scope(&view);
+
+  onnx_light_cpu::ExpFloat32WithTuning(input.data(), output.data(), count, tuning);
+  EXPECT_EQ(executor.dispatches, 1);
+  EXPECT_EQ(executor.blocks, 4);
+  EXPECT_EQ(executor.callbacks.load(std::memory_order_relaxed), 4);
+  for (std::size_t i = 0; i < count; ++i) {
+    const float expected = std::exp(input[i]);
+    EXPECT_NEAR(output[i], expected, std::fabs(expected) * 1e-5f + 1e-7f) << i;
+  }
+
+  executor.dispatches = 0;
+  executor.blocks = 0;
+  executor.callbacks.store(0, std::memory_order_relaxed);
+  std::fill(output.begin(), output.end(), -1.0f);
+  {
+    onnx_light_cpu::detail::ExecutionRegionScope nested;
+    onnx_light_cpu::ExpFloat32WithTuning(input.data(), output.data(), count, tuning);
+  }
+  EXPECT_EQ(executor.dispatches, 0);
+  EXPECT_EQ(executor.callbacks.load(std::memory_order_relaxed), 0);
+  for (std::size_t i = 0; i < count; ++i) {
+    const float expected = std::exp(input[i]);
+    EXPECT_NEAR(output[i], expected, std::fabs(expected) * 1e-5f + 1e-7f) << i;
+  }
 }
 
 } // namespace

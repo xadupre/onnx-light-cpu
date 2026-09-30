@@ -11,6 +11,7 @@
 #include "onnx_light_cpu/impl/simd_level.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -118,7 +119,22 @@ void CDistDispatch(const T *a, const T *b, T *c, std::size_t m, std::size_t k, s
   }
   const std::int64_t total = static_cast<std::int64_t>(m);
   const CDistRowsFn<T> rows = SelectCDistRows<T>(m, k, n);
-  auto execute = [=](std::int64_t begin, std::int64_t end) {
+  constexpr std::size_t kDynamicRowTile = 8;
+  constexpr double kDynamicWorkThreshold = 8.0 * 1024.0 * 1024.0;
+  const bool dynamic = tuning.parallel_threshold_bytes != 0 &&
+                       CurrentExecutionExecutor() != nullptr && ExecutionThreadCount() > 1 &&
+                       !ExecutionInParallelRegion() && n <= 128 &&
+                       static_cast<double>(m) * static_cast<double>(k) * static_cast<double>(n) >=
+                           kDynamicWorkThreshold;
+  std::atomic<std::size_t> next_row{0};
+  auto execute = [=, &next_row](std::int64_t begin, std::int64_t end) {
+    if (dynamic) {
+      for (std::size_t first = next_row.fetch_add(kDynamicRowTile, std::memory_order_relaxed);
+           first < m; first = next_row.fetch_add(kDynamicRowTile, std::memory_order_relaxed)) {
+        rows(a, b, c, k, n, metric, first, std::min(m, first + kDynamicRowTile));
+      }
+      return;
+    }
     rows(a, b, c, k, n, metric, static_cast<std::size_t>(begin), static_cast<std::size_t>(end));
   };
   if (tuning.parallel_threshold_bytes == 0) {

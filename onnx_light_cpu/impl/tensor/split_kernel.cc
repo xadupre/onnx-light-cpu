@@ -8,6 +8,7 @@
 #include "onnx_light_cpu/impl/simd_level.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cstring>
 #include <limits>
 
@@ -210,7 +211,20 @@ void SplitCopyOutputs(const void *data, std::span<void *const> outputs, int64_t 
     copy(0, rows);
     return;
   }
-  ExecuteRanges(rows, ExecutionSchedule{parallel_rows, block_rows, ExecutionThreadCount()}, copy);
+  const ExecutionSchedule schedule{parallel_rows, block_rows, ExecutionThreadCount()};
+  if (input_row_bytes < 8 * 1024) {
+    ExecuteRanges(rows, schedule, copy);
+    return;
+  }
+  const int64_t tile_rows =
+      std::max<int64_t>(1, (64 * 1024) / static_cast<int64_t>(input_row_bytes));
+  std::atomic<int64_t> next_row{0};
+  ExecuteRanges(rows, schedule, [&](int64_t, int64_t) {
+    for (int64_t begin = next_row.fetch_add(tile_rows, std::memory_order_relaxed); begin < rows;
+         begin = next_row.fetch_add(tile_rows, std::memory_order_relaxed)) {
+      copy(begin, std::min(begin + tile_rows, rows));
+    }
+  });
 }
 
 } // namespace onnx_light_cpu

@@ -11,6 +11,11 @@
 
 namespace onnx_light_cpu {
 
+// Non-transposed inputs, N == 1. The caller owns row scheduling.
+void GemmSkinnyN1Range_AVX2_F32(std::size_t K, float alpha, const float *A, const float *B,
+                                float beta, const float *C, float *Y, std::size_t begin,
+                                std::size_t end);
+
 // Non-transposed inputs, 2 <= N <= 8. The caller owns row scheduling.
 void GemmSkinnyNRange_AVX2(std::size_t N, std::size_t K, float alpha, const float *A,
                            const float *B, float beta, const float *C, float *Y, std::size_t begin,
@@ -92,6 +97,12 @@ void GemmPackTransposeFloat16ToFloat32_F16C(const std::uint16_t *src, std::size_
 // Narrows ``n`` contiguous float32 values to FLOAT16 with F16C
 // round-to-nearest-even conversion, canonical NaNs, and an exact scalar tail.
 void GemmConvertFloat32ToFloat16_F16C(const float *src, std::uint16_t *dst, std::size_t n);
+
+void GemmAddBiasConvertFloat32ToFloat16_F16C(const float *src, const float *bias,
+                                             std::uint16_t *dst, std::size_t rows,
+                                             std::size_t columns, float beta,
+                                             std::size_t bias_row_stride,
+                                             std::size_t bias_column_stride);
 
 // Native AVX2/F16C FLOAT16 micro-kernel with float32 accumulation. B and the
 // packed A rows remain FLOAT16 until they enter the register file.

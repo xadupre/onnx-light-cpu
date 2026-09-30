@@ -414,6 +414,33 @@ void GemmSkinnyM1Range_AVX2_F32(std::size_t N, std::size_t K, float alpha, const
   GemmSkinnyM1Range(N, K, alpha, A, B, beta, C, Y, begin, end);
 }
 
+void GemmSkinnyN1Range_AVX2_F32(std::size_t K, float alpha, const float *A, const float *B,
+                                float beta, const float *C, float *Y, std::size_t begin,
+                                std::size_t end) {
+  const bool has_bias = C != nullptr && beta != 0.0f;
+  for (std::size_t m = begin; m < end; ++m) {
+    const float *a = A + m * K;
+    __m256 acc0 = _mm256_setzero_ps();
+    __m256 acc1 = _mm256_setzero_ps();
+    __m256 acc2 = _mm256_setzero_ps();
+    __m256 acc3 = _mm256_setzero_ps();
+    std::size_t k = 0;
+    for (; k + 32 <= K; k += 32) {
+      acc0 = _mm256_fmadd_ps(_mm256_loadu_ps(a + k), _mm256_loadu_ps(B + k), acc0);
+      acc1 = _mm256_fmadd_ps(_mm256_loadu_ps(a + k + 8), _mm256_loadu_ps(B + k + 8), acc1);
+      acc2 = _mm256_fmadd_ps(_mm256_loadu_ps(a + k + 16), _mm256_loadu_ps(B + k + 16), acc2);
+      acc3 = _mm256_fmadd_ps(_mm256_loadu_ps(a + k + 24), _mm256_loadu_ps(B + k + 24), acc3);
+    }
+    const __m256 sum01 = _mm256_add_ps(acc0, acc1);
+    const __m256 sum23 = _mm256_add_ps(acc2, acc3);
+    float sum = HorizontalSum(_mm256_add_ps(sum01, sum23));
+    for (; k < K; ++k) {
+      sum += a[k] * B[k];
+    }
+    Y[m] = alpha * sum + (has_bias ? beta * C[m] : 0.0f);
+  }
+}
+
 void GemmSkinnyNRange_AVX2(std::size_t N, std::size_t K, float alpha, const float *A,
                            const float *B, float beta, const float *C, float *Y, std::size_t begin,
                            std::size_t end) {
@@ -921,6 +948,44 @@ void GemmConvertFloat32ToFloat16_F16C(const float *src, std::uint16_t *dst, std:
   }
   for (; i < n; ++i) {
     dst[i] = detail::FloatToFloat16Bits(src[i]);
+  }
+}
+
+void GemmAddBiasConvertFloat32ToFloat16_F16C(const float *src, const float *bias,
+                                             std::uint16_t *dst, std::size_t rows,
+                                             std::size_t columns, float beta,
+                                             std::size_t bias_row_stride,
+                                             std::size_t bias_column_stride) {
+  const __m256 beta_vector = _mm256_set1_ps(beta);
+  for (std::size_t row = 0; row < rows; ++row) {
+    const float *src_row = src + row * columns;
+    const float *bias_row = bias + row * bias_row_stride;
+    std::uint16_t *dst_row = dst + row * columns;
+    std::size_t column = 0;
+    for (; column + 8 <= columns; column += 8) {
+      const __m256 bias_values = bias_column_stride == 0 ? _mm256_set1_ps(bias_row[0])
+                                                         : _mm256_loadu_ps(bias_row + column);
+      const __m256 values =
+          _mm256_add_ps(_mm256_loadu_ps(src_row + column), _mm256_mul_ps(beta_vector, bias_values));
+      const __m128i halves = _mm256_cvtps_ph(values, _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC);
+      _mm_storeu_si128(reinterpret_cast<__m128i *>(dst_row + column), halves);
+      const int nan_mask = _mm256_movemask_ps(_mm256_cmp_ps(values, values, _CMP_UNORD_Q));
+      if (nan_mask != 0) {
+        alignas(32) float lanes[8];
+        _mm256_store_ps(lanes, values);
+        for (int lane = 0; lane < 8; ++lane) {
+          if ((nan_mask & (1 << lane)) != 0) {
+            dst_row[column + static_cast<std::size_t>(lane)] =
+                detail::FloatToFloat16Bits(lanes[lane]);
+          }
+        }
+      }
+    }
+    for (; column < columns; ++column) {
+      const float bias_value =
+          bias_column_stride == 0 ? bias_row[0] : bias_row[column * bias_column_stride];
+      dst_row[column] = detail::FloatToFloat16Bits(src_row[column] + beta * bias_value);
+    }
   }
 }
 
