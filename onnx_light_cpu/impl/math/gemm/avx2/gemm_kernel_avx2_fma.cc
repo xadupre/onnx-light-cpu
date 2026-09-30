@@ -414,6 +414,33 @@ void GemmSkinnyM1Range_AVX2_F32(std::size_t N, std::size_t K, float alpha, const
   GemmSkinnyM1Range(N, K, alpha, A, B, beta, C, Y, begin, end);
 }
 
+void GemmSkinnyN1Range_AVX2_F32(std::size_t K, float alpha, const float *A, const float *B,
+                                float beta, const float *C, float *Y, std::size_t begin,
+                                std::size_t end) {
+  const bool has_bias = C != nullptr && beta != 0.0f;
+  for (std::size_t m = begin; m < end; ++m) {
+    const float *a = A + m * K;
+    __m256 acc0 = _mm256_setzero_ps();
+    __m256 acc1 = _mm256_setzero_ps();
+    __m256 acc2 = _mm256_setzero_ps();
+    __m256 acc3 = _mm256_setzero_ps();
+    std::size_t k = 0;
+    for (; k + 32 <= K; k += 32) {
+      acc0 = _mm256_fmadd_ps(_mm256_loadu_ps(a + k), _mm256_loadu_ps(B + k), acc0);
+      acc1 = _mm256_fmadd_ps(_mm256_loadu_ps(a + k + 8), _mm256_loadu_ps(B + k + 8), acc1);
+      acc2 = _mm256_fmadd_ps(_mm256_loadu_ps(a + k + 16), _mm256_loadu_ps(B + k + 16), acc2);
+      acc3 = _mm256_fmadd_ps(_mm256_loadu_ps(a + k + 24), _mm256_loadu_ps(B + k + 24), acc3);
+    }
+    const __m256 sum01 = _mm256_add_ps(acc0, acc1);
+    const __m256 sum23 = _mm256_add_ps(acc2, acc3);
+    float sum = HorizontalSum(_mm256_add_ps(sum01, sum23));
+    for (; k < K; ++k) {
+      sum += a[k] * B[k];
+    }
+    Y[m] = alpha * sum + (has_bias ? beta * C[m] : 0.0f);
+  }
+}
+
 void GemmSkinnyNRange_AVX2(std::size_t N, std::size_t K, float alpha, const float *A,
                            const float *B, float beta, const float *C, float *Y, std::size_t begin,
                            std::size_t end) {

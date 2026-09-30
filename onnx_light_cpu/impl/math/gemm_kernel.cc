@@ -1113,6 +1113,11 @@ void GemmSkinnyN(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::
 #endif
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
     if constexpr (std::is_same_v<T, float> && std::is_same_v<SrcT, float>) {
+      if (!trans_a && !trans_b && N == 1 && K >= 32 && kind == GemmKernelKind::kAVX2FMA) {
+        GemmSkinnyN1Range_AVX2_F32(K, alpha, A, B, beta, C, Y, static_cast<std::size_t>(begin),
+                                   static_cast<std::size_t>(end));
+        return;
+      }
       if (!trans_a && !trans_b && N > 1 && N <= 8 && K >= 32 && kind == GemmKernelKind::kAVX2FMA) {
         GemmSkinnyNRange_AVX2(N, K, alpha, A, B, beta, C, Y, static_cast<std::size_t>(begin),
                               static_cast<std::size_t>(end));
@@ -1167,13 +1172,29 @@ void GemmSkinnyM(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::
         (!has_bias || C != Y)) {
       constexpr std::size_t kColumns = 256;
       const std::size_t panels = (N + kColumns - 1) / kColumns;
-      ExecuteRanges(static_cast<std::int64_t>(panels),
-                    ExecutionSchedule{2, 1, ExecutionThreadCount()},
-                    [&](std::int64_t begin, std::int64_t end) {
-                      GemmSkinnyM1Range_AVX2_F32(
-                          N, K, alpha, A, B, beta, C, Y, static_cast<std::size_t>(begin) * kColumns,
-                          std::min(N, static_cast<std::size_t>(end) * kColumns));
-                    });
+      const std::size_t participants = std::min(
+          panels, static_cast<std::size_t>(std::max(ExecutionThreadCount(), std::int64_t{1})));
+      std::atomic<std::size_t> next_panel{participants};
+      const bool dynamic = ExecutionThreadCount() > 1 && !ExecutionInParallelRegion();
+      if (!dynamic) {
+        GemmSkinnyM1Range_AVX2_F32(N, K, alpha, A, B, beta, C, Y, 0, N);
+        return;
+      }
+      const auto execute_panel = [&](std::size_t panel) {
+        GemmSkinnyM1Range_AVX2_F32(N, K, alpha, A, B, beta, C, Y, panel * kColumns,
+                                   std::min(N, (panel + 1) * kColumns));
+      };
+      ExecuteRanges(
+          static_cast<std::int64_t>(participants), ExecutionSchedule{2, 1, ExecutionThreadCount()},
+          [&](std::int64_t begin, std::int64_t end) {
+            for (std::int64_t participant = begin; participant < end; ++participant) {
+              execute_panel(static_cast<std::size_t>(participant));
+            }
+            for (std::size_t panel = next_panel.fetch_add(1, std::memory_order_relaxed);
+                 panel < panels; panel = next_panel.fetch_add(1, std::memory_order_relaxed)) {
+              execute_panel(panel);
+            }
+          });
       return;
     }
   }
