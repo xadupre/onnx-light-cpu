@@ -1129,6 +1129,62 @@ TEST(BinaryKernelDescriptor, PowBulkMatchesPositiveFractionalAndSpecialValues) {
   }
 }
 
+TEST(BinaryKernelDescriptor, PowBfloat16BulkCoversVectorAndBlockTailsAndAliasing) {
+  const BinaryKernelDescriptor pow("Pow", 15, {});
+  const auto &adapter = pow.ResolveAdapter(BinaryDataType::BFLOAT16, BinaryDataType::BFLOAT16,
+                                           BinaryDataType::BFLOAT16);
+  adapter.bulk_contiguous(nullptr, nullptr, nullptr, 0);
+
+  constexpr std::uint16_t sentinel = 0x1234;
+  for (const std::size_t count : {15u, 16u, 17u, 1023u, 1024u, 1025u}) {
+    std::vector<std::uint16_t> bases(count + 2, sentinel);
+    std::vector<std::uint16_t> exponents(count + 2, sentinel);
+    for (std::size_t i = 0; i < count; ++i) {
+      bases[i + 1] =
+          onnx_light_cpu::detail::FloatToBFloat16Bits(0.25f + static_cast<float>(i % 29) * 0.125f);
+      exponents[i + 1] =
+          onnx_light_cpu::detail::FloatToBFloat16Bits(-2.0f + static_cast<float>(i % 17) * 0.25f);
+    }
+    bases[1] = onnx_light_cpu::detail::FloatToBFloat16Bits(-2.0f);
+    exponents[1] = onnx_light_cpu::detail::FloatToBFloat16Bits(3.0f);
+    bases[2] = onnx_light_cpu::detail::FloatToBFloat16Bits(0.0f);
+    exponents[2] = onnx_light_cpu::detail::FloatToBFloat16Bits(-1.0f);
+    bases[3] = onnx_light_cpu::detail::FloatToBFloat16Bits(std::numeric_limits<float>::infinity());
+    exponents[3] = onnx_light_cpu::detail::FloatToBFloat16Bits(0.0f);
+
+    std::vector<std::uint16_t> output(count + 2, sentinel);
+    auto base_alias = bases;
+    auto exponent_alias = exponents;
+    adapter.bulk_contiguous(bases.data() + 1, exponents.data() + 1, output.data() + 1, count);
+    adapter.bulk_contiguous(base_alias.data() + 1, exponents.data() + 1, base_alias.data() + 1,
+                            count);
+    adapter.bulk_contiguous(bases.data() + 1, exponent_alias.data() + 1, exponent_alias.data() + 1,
+                            count);
+
+    EXPECT_EQ(output.front(), sentinel);
+    EXPECT_EQ(output.back(), sentinel);
+    EXPECT_EQ(base_alias.front(), sentinel);
+    EXPECT_EQ(base_alias.back(), sentinel);
+    EXPECT_EQ(exponent_alias.front(), sentinel);
+    EXPECT_EQ(exponent_alias.back(), sentinel);
+    for (std::size_t i = 0; i < count; ++i) {
+      EXPECT_EQ(base_alias[i + 1], output[i + 1]) << i;
+      EXPECT_EQ(exponent_alias[i + 1], output[i + 1]) << i;
+      const float base = onnx_light_cpu::detail::Bfloat16BitsToFloat(bases[i + 1]);
+      const float exponent = onnx_light_cpu::detail::Bfloat16BitsToFloat(exponents[i + 1]);
+      const float expected = std::pow(base, exponent);
+      const float actual = onnx_light_cpu::detail::Bfloat16BitsToFloat(output[i + 1]);
+      if (std::isnan(expected)) {
+        EXPECT_TRUE(std::isnan(actual)) << i;
+      } else if (std::isinf(expected)) {
+        EXPECT_EQ(actual, expected) << i;
+      } else {
+        EXPECT_NEAR(actual, expected, std::max(std::fabs(expected) * 0.01f, 1e-4f)) << i;
+      }
+    }
+  }
+}
+
 TEST(BinaryKernelDescriptor, PowLeftScalarBulkMatchesFractionalAndSpecialValues) {
   const BinaryKernelDescriptor pow("Pow", 15, {});
   const auto &adapter =
