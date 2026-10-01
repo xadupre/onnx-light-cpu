@@ -10,6 +10,9 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parents[2]
 _CORE_WORKFLOW = (_ROOT / ".github" / "workflows" / "ci_core.yml").read_text(encoding="utf-8")
 _DOCS_WORKFLOW = (_ROOT / ".github" / "workflows" / "docs.yml").read_text(encoding="utf-8")
+_RELEASE_WORKFLOW = (_ROOT / ".github" / "workflows" / "build_release_wheel.yml").read_text(
+    encoding="utf-8"
+)
 _CODECOV_CONFIG = (_ROOT / ".codecov.yml").read_text(encoding="utf-8")
 
 
@@ -40,6 +43,20 @@ def test_source_integration_uses_matching_nanobind_abi():
         ]
         assert len(install_commands) == 1
         assert "-C wheel.py-api=cp312" in install_commands[0]
+
+
+def test_release_wheels_build_and_test_session_registration_before_upload():
+    for job in ("build_wheels_linux", "build_wheels_windows", "build_wheels_macos"):
+        body = _RELEASE_WORKFLOW.split(f"  {job}:", 1)[1].split("  build_wheels_", 1)[0]
+        assert 'CIBW_BUILD_FRONTEND: "pip; args: --no-build-isolation"' in body
+        assert "CIBW_BEFORE_BUILD: >-" in body
+        assert "python -m pip install -C wheel.py-api=cp312" in body
+        assert "-DONNX_LIGHT_CPU_RELEASE_WHEEL=ON" in body
+        assert (
+            "CIBW_TEST_COMMAND: python {project}/unittests/python/wheel_registration_smoke.py"
+            in body
+        )
+        assert body.index("CIBW_TEST_COMMAND:") < body.index("Attach wheels to GitHub Release")
 
 
 def test_onnx_light_main_integration_runs_on_every_supported_os():
