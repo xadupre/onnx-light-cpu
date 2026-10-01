@@ -39,6 +39,20 @@ TanhRange GetTanhRange() {
 
 template <bool BFloat16>
 void TanhHalf(const std::uint16_t *input, std::uint16_t *output, std::size_t count) {
+#if defined(ONNX_LIGHT_CPU_HAVE_AVX2_FMA) && defined(ONNX_LIGHT_CPU_HAVE_F16C)
+  if constexpr (!BFloat16) {
+    static const bool use_avx2_f16c =
+        DetectSimdLevel() >= SimdLevel::kAVX2 && CpuSupportsFma() && CpuSupportsF16C();
+    if (use_avx2_f16c) {
+      ExecuteUnaryRanges<std::uint16_t>(
+          count, kTanhHalfTuning, [input, output](std::int64_t begin, std::int64_t end) {
+            TanhFloat16_AVX2_FMA(input + begin, output + begin,
+                                 static_cast<std::size_t>(end - begin));
+          });
+      return;
+    }
+  }
+#endif
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512BF16
   if constexpr (BFloat16) {
     static const bool use_avx512bf16 =
