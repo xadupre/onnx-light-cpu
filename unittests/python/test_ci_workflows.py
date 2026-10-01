@@ -79,6 +79,17 @@ def test_native_kernel_tests_run_in_source_integration_not_standalone():
     assert "run: python -m pytest unittests" in source_job
 
 
+def test_standalone_unix_install_retries_transient_wheel_download_failure():
+    standalone_job = _CORE_WORKFLOW.split("  setup_onnx_light_source:", 1)[0]
+    unix_install = standalone_job.split("      - name: Build and install package (Unix)", 1)[
+        1
+    ].split("      - name: Build and install package (Windows)", 1)[0]
+    assert "for attempt in 1 2 3; do" in unix_install
+    assert "pip install" in unix_install
+    assert 'if [ "$attempt" -eq 3 ]; then' in unix_install
+    assert "exit 1" in unix_install
+
+
 def test_pr_benchmark_infers_filters_and_updates_comment():
     source_job = _CORE_WORKFLOW.split("  setup_onnx_light_source:", 1)[1].split(
         "  report_pr_benchmark:", 1
