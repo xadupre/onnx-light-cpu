@@ -31,6 +31,8 @@ option(ONNX_LIGHT_CPU_BUILD_PYTHON "Build Python extension." ON)
 option(ONNX_LIGHT_CPU_INSTALL "Install the C++ library and headers." ON)
 option(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT
        "Build the onnx-light kernel registration library (requires onnx-light)." OFF)
+option(ONNX_LIGHT_CPU_RELEASE_WHEEL
+       "Link release wheels to the sibling installed onnx-light runtime." OFF)
 set(ONNX_LIGHT_CPU_ONNX_LIGHT_SOURCE_DIR "" CACHE PATH
     "Path to a local onnx-light source tree whose headers match the already-built \
 Python runtime.")
@@ -50,6 +52,33 @@ set(ONNX_LIGHT_CPU_ONNX_LIGHT_BACKEND_TEST_IMPLIB "" CACHE FILEPATH
     "Windows import library for the onnx-light backend-test runtime.")
 set(ONNX_LIGHT_CPU_ONNX_LIGHT_SHAPE_IMPLIB "" CACHE FILEPATH
     "Windows import library for the onnx-light shape-inference runtime.")
+if(ONNX_LIGHT_CPU_RELEASE_WHEEL)
+  set(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT ON)
+  get_filename_component(ONNX_LIGHT_CPU_ONNX_LIGHT_SOURCE_DIR
+      "${CMAKE_CURRENT_SOURCE_DIR}/../onnx-light" ABSOLUTE)
+  find_package(Python COMPONENTS Interpreter REQUIRED)
+  execute_process(
+      COMMAND "${Python_EXECUTABLE}" -c
+          "from onnx_light import get_cpp_build_info; info = get_cpp_build_info(); print(info['core_library']); print(info['proto_library'])"
+      OUTPUT_VARIABLE _onnx_light_runtime_libraries
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+      RESULT_VARIABLE _onnx_light_runtime_status)
+  if(NOT _onnx_light_runtime_status EQUAL 0)
+    message(FATAL_ERROR "Could not locate the installed onnx-light runtime.")
+  endif()
+  string(REPLACE "\n" ";" _onnx_light_runtime_libraries
+      "${_onnx_light_runtime_libraries}")
+  list(GET _onnx_light_runtime_libraries 0 ONNX_LIGHT_CPU_ONNX_LIGHT_LIBRARY)
+  list(GET _onnx_light_runtime_libraries 1 ONNX_LIGHT_CPU_ONNX_LIGHT_PROTO_LIBRARY)
+  if(WIN32)
+    foreach(_component CORE PROTO KERNELS BACKEND_TEST OP SHAPE)
+      string(TOLOWER "${_component}" _name)
+      file(GLOB_RECURSE _import_lib
+          "${ONNX_LIGHT_CPU_ONNX_LIGHT_SOURCE_DIR}/build/lib_onnx_${_name}.lib")
+      list(GET _import_lib 0 ONNX_LIGHT_CPU_ONNX_LIGHT_${_component}_IMPLIB)
+    endforeach()
+  endif()
+endif()
 option(ONNX_LIGHT_CPU_ENABLE_COVERAGE
        "Instrument the C++ targets for code coverage (GCC/Clang only)." OFF)
 set(ONNX_LIGHT_CPU_MAX_SIMD_LEVEL "AUTO" CACHE STRING
@@ -927,8 +956,13 @@ if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
     # cannot open shared object file". See the matching comment near
     # ONNX_LIGHT_CPU_ONNX_LIGHT_PY_LIBDIR below for lib_onnx_light_cpu_kernels.
     if(_cpu_lib_type STREQUAL "SHARED")
+      if(ONNX_LIGHT_CPU_RELEASE_WHEEL)
+        set(_onnx_light_cpu_install_libdir "$ORIGIN/../../onnx_light/onnx_py")
+      else()
+        set(_onnx_light_cpu_install_libdir "$<TARGET_FILE_DIR:onnx_light::lib_onnx_core>")
+      endif()
       set_target_properties(lib_onnx_light_cpu PROPERTIES
-          INSTALL_RPATH "$ORIGIN;$<TARGET_FILE_DIR:onnx_light::lib_onnx_core>"
+          INSTALL_RPATH "$ORIGIN;${_onnx_light_cpu_install_libdir}"
           BUILD_RPATH "$ORIGIN;$<TARGET_FILE_DIR:onnx_light::lib_onnx_core>"
       )
     endif()
@@ -1074,8 +1108,13 @@ if(ONNX_LIGHT_CPU_BUILD_PYTHON)
     # isolated build environment for this package does not have onnx-light
     # installed).
     set(ONNX_LIGHT_CPU_ONNX_LIGHT_PY_LIBDIR "$<TARGET_FILE_DIR:onnx_light::lib_onnx_core>")
+    if(ONNX_LIGHT_CPU_RELEASE_WHEEL)
+      set(_onnx_light_cpu_install_libdir "$ORIGIN/../../onnx_light/onnx_py")
+    else()
+      set(_onnx_light_cpu_install_libdir "${ONNX_LIGHT_CPU_ONNX_LIGHT_PY_LIBDIR}")
+    endif()
     set_target_properties(lib_onnx_light_cpu_kernels PROPERTIES
-        INSTALL_RPATH "$ORIGIN;${ONNX_LIGHT_CPU_ONNX_LIGHT_PY_LIBDIR};$<TARGET_FILE_DIR:onnx_light::lib_onnx_kernels>"
+        INSTALL_RPATH "$ORIGIN;${_onnx_light_cpu_install_libdir}"
         BUILD_RPATH "$ORIGIN;${ONNX_LIGHT_CPU_ONNX_LIGHT_PY_LIBDIR};$<TARGET_FILE_DIR:onnx_light::lib_onnx_kernels>"
     )
 
@@ -1086,7 +1125,7 @@ if(ONNX_LIGHT_CPU_BUILD_PYTHON)
     # same extra RPATH entry pointing at onnx-light's Python library directory.
     if(TARGET lib_onnx_light_cpu_backend_test)
       set_target_properties(lib_onnx_light_cpu_backend_test PROPERTIES
-          INSTALL_RPATH "$ORIGIN;${ONNX_LIGHT_CPU_ONNX_LIGHT_PY_LIBDIR}"
+          INSTALL_RPATH "$ORIGIN;${_onnx_light_cpu_install_libdir}"
           BUILD_RPATH "$ORIGIN;${ONNX_LIGHT_CPU_ONNX_LIGHT_PY_LIBDIR}"
       )
     endif()
@@ -1105,7 +1144,7 @@ if(ONNX_LIGHT_CPU_BUILD_PYTHON)
   # fail with "liblib_onnx_core.so: cannot open shared object file".
   if(ONNX_LIGHT_CPU_ONNX_LIGHT_PY_LIBDIR)
     set_target_properties(_cpukernels PROPERTIES
-        INSTALL_RPATH "$ORIGIN;${ONNX_LIGHT_CPU_ONNX_LIGHT_PY_LIBDIR}"
+        INSTALL_RPATH "$ORIGIN;${_onnx_light_cpu_install_libdir}"
         BUILD_RPATH "$ORIGIN;${ONNX_LIGHT_CPU_ONNX_LIGHT_PY_LIBDIR}"
     )
   else()
@@ -1154,7 +1193,7 @@ if(ONNX_LIGHT_CPU_BUILD_PYTHON)
     # not enough.
     if(ONNX_LIGHT_CPU_ONNX_LIGHT_PY_LIBDIR)
       set_target_properties(_cpuregister PROPERTIES
-          INSTALL_RPATH "$ORIGIN;${ONNX_LIGHT_CPU_ONNX_LIGHT_PY_LIBDIR}"
+          INSTALL_RPATH "$ORIGIN;${_onnx_light_cpu_install_libdir}"
           BUILD_RPATH "$ORIGIN;${ONNX_LIGHT_CPU_ONNX_LIGHT_PY_LIBDIR}"
       )
     else()
