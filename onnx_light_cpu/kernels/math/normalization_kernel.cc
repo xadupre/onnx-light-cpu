@@ -220,6 +220,13 @@ void BatchInference(const Tensor &x, Tensor &y,
     for (std::size_t slice = begin; slice < end; ++slice) {
       const std::size_t channel = slice % channels;
       const std::size_t base = slice * spatial;
+      if constexpr (Type == DataType::FLOAT16) {
+        if (spatial >= 32) {
+          ApplyNormalizationScaleBiasFloat16(input + base, output + base, spatial,
+                                             multipliers[channel], offsets[channel]);
+          continue;
+        }
+      }
       ApplyAffine<Type>(input + base, output + base, spatial, multipliers[channel],
                         offsets[channel]);
     }
