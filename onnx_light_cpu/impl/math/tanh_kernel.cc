@@ -39,6 +39,20 @@ TanhRange GetTanhRange() {
 
 template <bool BFloat16>
 void TanhHalf(const std::uint16_t *input, std::uint16_t *output, std::size_t count) {
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512BF16
+  if constexpr (BFloat16) {
+    static const bool use_avx512bf16 =
+        DetectSimdLevel() >= SimdLevel::kAVX512 && CpuSupportsAvx512Bf16();
+    if (use_avx512bf16 && count >= 256) {
+      ExecuteUnaryRanges<std::uint16_t>(
+          count, kTanhHalfTuning, [input, output](std::int64_t begin, std::int64_t end) {
+            TanhBFloat16_AVX512BF16(input + begin, output + begin,
+                                    static_cast<std::size_t>(end - begin));
+          });
+      return;
+    }
+  }
+#endif
   const auto function = GetTanhRange();
   ExecuteUnaryRanges<std::uint16_t>(
       count, kTanhHalfTuning, [input, output, function](std::int64_t begin, std::int64_t end) {
