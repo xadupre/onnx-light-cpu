@@ -257,6 +257,14 @@ TEST(CastKernel, ConversionPathAndForcedFallback) {
                  "Cast.float16_to_float32.f16c");
   }
 #endif
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_F16C
+  if (DetectSimdLevel() >= SimdLevel::kAVX2 && CpuSupportsF16C()) {
+    EXPECT_STREQ(CastConversionPath(DataType::FLOAT, DataType::FLOAT16, 32, SimdLevel::kAVX2),
+                 "Cast.float32_to_float16.avx2_f16c");
+    EXPECT_STREQ(CastConversionPath(DataType::FLOAT16, DataType::FLOAT, 32, SimdLevel::kAVX2),
+                 "Cast.float16_to_float32.avx2_f16c");
+  }
+#endif
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2
   if (DetectSimdLevel() >= SimdLevel::kAVX2) {
     EXPECT_STREQ(CastConversionPath(DataType::FLOAT, DataType::INT32, 32),

@@ -137,8 +137,23 @@ FastConversion SelectFastConversion(DataType from, DataType to, std::size_t coun
     return {nullptr, "Cast.scalar"};
   }
   using Float [[maybe_unused]] = Codec<DataType::FLOAT, float>;
-#ifdef ONNX_LIGHT_CPU_HAVE_AVX_F16C
+#if defined(ONNX_LIGHT_CPU_HAVE_AVX_F16C) || defined(ONNX_LIGHT_CPU_HAVE_AVX2_F16C)
   using Half = Codec<DataType::FLOAT16, std::uint16_t>;
+#endif
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_F16C
+  static const bool avx2_f16c = DetectSimdLevel() >= SimdLevel::kAVX2 && CpuSupportsF16C();
+  if (max_simd >= SimdLevel::kAVX2 && avx2_f16c) {
+    if (from == DataType::FLOAT && to == DataType::FLOAT16) {
+      return {&ConvertSimd<Float, Half, detail::CastFloat32ToFloat16_AVX2_F16C>,
+              "Cast.float32_to_float16.avx2_f16c"};
+    }
+    if (from == DataType::FLOAT16 && to == DataType::FLOAT) {
+      return {&ConvertSimd<Half, Float, detail::CastFloat16ToFloat32_AVX2_F16C>,
+              "Cast.float16_to_float32.avx2_f16c"};
+    }
+  }
+#endif
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX_F16C
   static const bool f16c = DetectSimdLevel() >= SimdLevel::kAVX && CpuSupportsF16C();
   if (max_simd >= SimdLevel::kAVX && f16c) {
     if (from == DataType::FLOAT && to == DataType::FLOAT16) {

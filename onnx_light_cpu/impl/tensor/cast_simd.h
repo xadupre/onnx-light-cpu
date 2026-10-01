@@ -20,6 +20,13 @@ std::size_t CastFloat16ToFloat32_F16C(const std::uint8_t *src, std::uint8_t *dst
                                       std::size_t count);
 #endif
 
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_F16C
+std::size_t CastFloat32ToFloat16_AVX2_F16C(const std::uint8_t *src, std::uint8_t *dst,
+                                           std::size_t count);
+std::size_t CastFloat16ToFloat32_AVX2_F16C(const std::uint8_t *src, std::uint8_t *dst,
+                                           std::size_t count);
+#endif
+
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2
 std::size_t CastFloat32ToInt32_AVX2(const std::uint8_t *src, std::uint8_t *dst, std::size_t count);
 std::size_t CastFloat32ToInt64_AVX2(const std::uint8_t *src, std::uint8_t *dst, std::size_t count);
