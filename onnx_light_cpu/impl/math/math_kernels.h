@@ -336,4 +336,8 @@ void ValidateGemmEpilogue(std::size_t M, std::size_t N, const GemmEpilogue<T> &e
 template <typename T>
 void ApplyGemmEpilogue(std::size_t M, std::size_t N, const GemmEpilogue<T> &epilogue, T *Y);
 
+void GemmAddHalfBiasConvertFloat32(const float *input, const std::uint16_t *bias,
+                                   std::uint16_t *output, std::size_t rows, std::size_t columns,
+                                   float beta, GemmBroadcast bias_layout, bool is_bfloat16);
+
 } // namespace onnx_light_cpu

@@ -12,7 +12,6 @@
 #include "onnx_core/runtime/kernels/cast_helper.h"
 #include "onnx_core/runtime/kernels/kernel_dispatch_table.h"
 #include "onnx_core/runtime/kernels/node_helpers.h"
-#include "onnx_core/runtime/kernels/parallel_for.h"
 #include "onnx_core/runtime/memory/temporary_buffer.h"
 #include "onnx_core/runtime/tuning/kernel_tuning.h"
 #include "onnx_core/symbolic/sym_tensor.h"
@@ -233,17 +232,6 @@ void GemmKernel::Configure(const rt_ns::KernelTuningParameters &parameters) {
 
 namespace {
 
-constexpr std::int64_t kHalfConversionParallelGrainSize = 32 * rt_ns::kParallelForGrainSize;
-
-template <typename Fn> void ParallelForHalfConversion(std::size_t count, Fn fn) {
-  const auto total = static_cast<std::int64_t>(count);
-  if (total < kHalfConversionParallelGrainSize) {
-    fn(0, total);
-    return;
-  }
-  rt_ns::ParallelFor(total, fn);
-}
-
 // Returns the two matrix dimensions of a 2-D ``Gemm`` operand, throwing when
 // the tensor is not rank 2.
 void Require2D(const Tensor &t, const char *name, std::size_t &rows, std::size_t &cols) {
@@ -282,29 +270,6 @@ GemmBroadcast ResolveBiasLayout(const Tensor &c, std::size_t M, std::size_t N) {
     return GemmBroadcast::kColumn;
   }
   return GemmBroadcast::kMatrix;
-}
-
-// Widens a FLOAT16 (``is_bfloat16 == false``) or BFLOAT16 (``is_bfloat16 ==
-// true``) tensor's raw 16-bit elements into a fresh ``float32`` buffer,
-// running the per-element bit decode through the session executor for large
-// tensors.
-std::vector<float> WidenHalfLike(const Tensor &t, bool is_bfloat16) {
-  const std::uint16_t *bits = reinterpret_cast<const std::uint16_t *>(t.bytes());
-  const std::size_t n = static_cast<std::size_t>(t.element_count());
-  std::vector<float> out(n);
-  float *dst = out.data();
-  ParallelForHalfConversion(n, [bits, dst, is_bfloat16](std::int64_t begin, std::int64_t end) {
-    if (is_bfloat16) {
-      for (std::int64_t i = begin; i < end; ++i) {
-        dst[i] = rt_ns::Bfloat16BitsToFloat(bits[i]);
-      }
-    } else {
-      for (std::int64_t i = begin; i < end; ++i) {
-        dst[i] = rt_ns::Float16BitsToFloat(bits[i]);
-      }
-    }
-  });
-  return out;
 }
 
 } // namespace
@@ -438,13 +403,10 @@ Tensor GemmKernel::Compute(const Tensor &a, const Tensor &b, const Tensor *c, fl
       plan = &*transient;
     }
 
-    std::vector<float> c_f32;
     GemmEpilogue<float> epilogue;
+    GemmBroadcast bias_layout = GemmBroadcast::kNone;
     if (has_bias) {
-      c_f32 = WidenHalfLike(*c, is_bfloat16);
-      epilogue.bias = c_f32.data();
-      epilogue.bias_layout = ResolveBiasLayout(*c, M, N);
-      epilogue.beta = beta;
+      bias_layout = ResolveBiasLayout(*c, M, N);
     }
 
     const std::size_t n_bytes =
@@ -452,12 +414,19 @@ Tensor GemmKernel::Compute(const Tensor &a, const Tensor &b, const Tensor *c, fl
     Tensor y = rt != nullptr ? rt->MakeOutputTensor(0, a.data_type, out_shape, n_bytes)
                              : rt_ns::MakeOutputTensor(a.data_type, out_shape, n_bytes, nullptr);
     epilogue.output_conversion =
-        is_bfloat16 ? GemmOutputConversion::kBFloat16 : GemmOutputConversion::kFloat16;
+        has_bias ? GemmOutputConversion::kNone
+                 : (is_bfloat16 ? GemmOutputConversion::kBFloat16 : GemmOutputConversion::kFloat16);
     epilogue.converted_output = reinterpret_cast<std::uint16_t *>(y.mutable_bytes());
     rt_ns::detail::TemporaryTypedBuffer<float> y_f32(
         output_elements, rt != nullptr ? rt->execution_allocator() : nullptr,
         "Gemm FP32 workspace");
     plan->Execute(a_bits, b_bits, epilogue, y_f32.data());
+    if (has_bias) {
+      GemmAddHalfBiasConvertFloat32(y_f32.data(),
+                                    reinterpret_cast<const std::uint16_t *>(c->bytes()),
+                                    reinterpret_cast<std::uint16_t *>(y.mutable_bytes()), M, N,
+                                    beta, bias_layout, is_bfloat16);
+    }
     return y;
   }
   default:
