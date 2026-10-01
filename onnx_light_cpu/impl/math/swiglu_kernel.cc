@@ -4,13 +4,17 @@
 
 #include "onnx_light_cpu/impl/math/math_kernels.h"
 
+#include "onnx_light_cpu/impl/execution.h"
 #include "onnx_light_cpu/impl/math/half_conversion.h"
+#include "onnx_light_cpu/impl/simd_level.h"
 
 #include <algorithm>
 #include <array>
 
 namespace onnx_light_cpu {
 namespace {
+
+constexpr UnaryExecutionTuning kSwiGLUBFloat16Tuning{128 * 1024, 64 * 1024, 32, false};
 
 template <typename T, auto Exp>
 void SwiGLUFloat(const T *gate, const T *value, T *output, std::size_t count, T alpha) {
@@ -70,6 +74,19 @@ void SwiGLUFloat16(const std::uint16_t *gate, const std::uint16_t *value, std::u
 
 void SwiGLUBFloat16(const std::uint16_t *gate, const std::uint16_t *value, std::uint16_t *output,
                     std::size_t count, float alpha) {
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512BF16
+  static const bool use_avx512bf16 =
+      DetectSimdLevel() >= SimdLevel::kAVX512 && CpuSupportsAvx512Bf16();
+  if (use_avx512bf16) {
+    ExecuteUnaryRanges<std::uint16_t>(
+        count, kSwiGLUBFloat16Tuning,
+        [gate, value, output, alpha](std::int64_t begin, std::int64_t end) {
+          SwiGLUBFloat16_AVX512BF16(gate + begin, value + begin, output + begin,
+                                    static_cast<std::size_t>(end - begin), alpha);
+        });
+    return;
+  }
+#endif
   SwiGLUHalf<detail::ConvertBFloat16ToFloat32, detail::ConvertFloat32ToBFloat16>(
       gate, value, output, count, alpha);
 }
