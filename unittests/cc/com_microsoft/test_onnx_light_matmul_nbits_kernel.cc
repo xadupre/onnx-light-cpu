@@ -110,9 +110,9 @@ TEST(MatMulNBitsKernel, PreservesLeadingDimensionsAndFlatScales) {
   }
 }
 
-TEST(MatMulNBitsKernel, Accuracy4VnniMatchesBlockQuantizationAndRefreshesWeights) {
+TEST(MatMulNBitsKernel, Accuracy4PreparedMatchesBlockQuantizationAndRefreshesWeights) {
   if (!onnx_light_cpu::MatMulNBitsAccuracy4Float32Available()) {
-    GTEST_SKIP() << "AVX-512 VNNI and AVX-512BW are required.";
+    GTEST_SKIP() << "The optimized accuracy-level-4 kernel is unavailable.";
   }
   constexpr std::size_t rows = 9;
   constexpr std::size_t k = 64;
@@ -173,9 +173,9 @@ TEST(MatMulNBitsKernel, Accuracy4VnniMatchesBlockQuantizationAndRefreshesWeights
   check(packed);
 }
 
-TEST(MatMulNBitsKernel, Accuracy4VnniSupportsHalfPrecisionInputsAndOutputs) {
+TEST(MatMulNBitsKernel, Accuracy4PreparedSupportsHalfPrecisionInputsAndOutputs) {
   if (!onnx_light_cpu::MatMulNBitsAccuracy4Float32Available()) {
-    GTEST_SKIP() << "AVX-512 VNNI and AVX-512BW are required.";
+    GTEST_SKIP() << "The optimized accuracy-level-4 kernel is unavailable.";
   }
   constexpr std::size_t rows = 9;
   constexpr std::size_t k = 64;
