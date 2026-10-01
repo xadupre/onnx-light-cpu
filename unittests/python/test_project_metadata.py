@@ -4,10 +4,27 @@
 
 """Tests the project dependency metadata."""
 
+import re
 import tomllib
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_project_version_consistency():
+    metadata = tomllib.loads((_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    version = metadata["project"]["version"]
+    assert version == "0.1.17"
+
+    for path, pattern in (
+        ("setup.py", r'version="([^"]+)"'),
+        ("CMakeLists.txt", r"project\(onnx_light_cpu VERSION ([\d.]+)"),
+        ("onnx_light_cpu/__init__.py", r'__version__ = "([^"]+)"'),
+    ):
+        text = (_ROOT / path).read_text(encoding="utf-8")
+        match = re.search(pattern, text)
+        assert match is not None, path
+        assert match.group(1) == version, path
 
 
 def test_onnx_light_dev_dependency_version():
