@@ -206,15 +206,32 @@ AttentionSoftmaxBlockResultAVX2 AttentionSoftmaxBlockFloat32_AVX2_FMA(float *sco
       previous_maximum == negative_infinity ? 0.0f : std::exp(previous_maximum - new_maximum);
 
   const __m256 offset = _mm256_set1_ps(new_maximum);
+  const __m256 one = _mm256_set1_ps(1.0f);
   index = 0;
   for (; index + 8 <= count; index += 8) {
-    _mm256_storeu_ps(scores + index, _mm256_sub_ps(_mm256_loadu_ps(scores + index), offset));
+    const __m256 score = _mm256_loadu_ps(scores + index);
+    const __m256 masked = _mm256_cmp_ps(score, _mm256_set1_ps(negative_infinity), _CMP_EQ_OQ);
+    // A positive sentinel keeps mixed masked vectors on the normal-range exponential path.
+    _mm256_storeu_ps(scores + index, _mm256_blendv_ps(_mm256_sub_ps(score, offset), one, masked));
   }
   for (std::size_t tail = index; tail < count; ++tail) {
-    scores[tail] -= new_maximum;
+    scores[tail] = scores[tail] == negative_infinity ? 1.0f : scores[tail] - new_maximum;
   }
 
   ExpFloat32_AVX2_FMA(scores, scores, count);
+
+  const __m256 zero = _mm256_setzero_ps();
+  index = 0;
+  for (; index + 8 <= count; index += 8) {
+    const __m256 exponent = _mm256_loadu_ps(scores + index);
+    _mm256_storeu_ps(scores + index,
+                     _mm256_blendv_ps(exponent, zero, _mm256_cmp_ps(exponent, one, _CMP_GT_OQ)));
+  }
+  for (std::size_t tail = index; tail < count; ++tail) {
+    if (scores[tail] > 1.0f) {
+      scores[tail] = 0.0f;
+    }
+  }
 
   __m256 sum0 = _mm256_setzero_ps();
   __m256 sum1 = _mm256_setzero_ps();

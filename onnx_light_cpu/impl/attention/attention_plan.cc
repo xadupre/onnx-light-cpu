@@ -1842,7 +1842,9 @@ void ComputeAttentionFloat16Streaming(const AttentionPlan &plan, const std::uint
   bool use_tiled = plan.past_length == 0 && plan.q_length >= 16 && plan.total_kv_length != 0;
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
   static const bool use_avx2_short = DetectSimdLevel() >= SimdLevel::kAVX2 && CpuSupportsFma();
-  use_tiled = use_tiled && !(plan.q_length == 16 && use_avx2_short);
+  const bool aligned_short =
+      plan.q_length == 16 && plan.head_dim % 8 == 0 && plan.v_head_dim % 8 == 0;
+  use_tiled = use_tiled && !(aligned_short && use_avx2_short);
 #endif
   if (use_tiled) {
     RecordExecution(plan, AttentionExecutionPath::kTiled, true, execution_info);
@@ -1868,7 +1870,9 @@ void ComputeAttentionBFloat16Streaming(const AttentionPlan &plan, const std::uin
   bool use_tiled = plan.past_length == 0 && plan.q_length >= 16 && plan.total_kv_length != 0;
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
   static const bool use_avx2_short = DetectSimdLevel() >= SimdLevel::kAVX2 && CpuSupportsFma();
-  use_tiled = use_tiled && !(plan.q_length == 16 && use_avx2_short);
+  const bool aligned_short =
+      plan.q_length == 16 && plan.head_dim % 8 == 0 && plan.v_head_dim % 8 == 0;
+  use_tiled = use_tiled && !(aligned_short && use_avx2_short);
 #endif
   if (use_tiled) {
     RecordExecution(plan, AttentionExecutionPath::kTiled, true, execution_info);
