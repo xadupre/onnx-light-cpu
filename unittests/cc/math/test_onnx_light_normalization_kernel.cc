@@ -112,6 +112,35 @@ TEST(OnnxLightNormalizationKernel, BatchNormalizationSupportsMixedParameterTypes
   EXPECT_NEAR(Value(y, 3), -0.5, 2.0e-3);
 }
 
+TEST(OnnxLightNormalizationKernel, BatchNormalizationFloat16AlignedAndTailSlices) {
+  const onnx_light_cpu::BatchNormalizationKernel kernel(MakeContext(15));
+  constexpr float scales[] = {0.5F, -1.25F, 2.0F};
+  constexpr float biases[] = {1.0F, 0.5F, -0.25F};
+  constexpr float means[] = {2.0F, 3.0F, 4.0F};
+  constexpr float variances[] = {4.0F, 9.0F, 16.0F};
+  for (const std::int64_t spatial : {31, 32, 33, 63, 64, 65}) {
+    SCOPED_TRACE(::testing::Message() << "spatial=" << spatial);
+    const rt_ns::Shape shape{2, 3, spatial};
+    std::vector<float> values(static_cast<std::size_t>(shape.product()));
+    for (std::size_t i = 0; i < values.size(); ++i) {
+      values[i] = static_cast<float>(static_cast<int>(i % 29) - 14) * 0.125F;
+    }
+    const rt_ns::Tensor x = rt_ns::MakeFloat16Tensor("", shape, values);
+    const rt_ns::Tensor y =
+        kernel(x, rt_ns::Tensor::FromFloat("", {3}, {scales[0], scales[1], scales[2]}),
+               rt_ns::Tensor::FromFloat("", {3}, {biases[0], biases[1], biases[2]}),
+               rt_ns::Tensor::FromFloat("", {3}, {means[0], means[1], means[2]}),
+               rt_ns::Tensor::FromFloat("", {3}, {variances[0], variances[1], variances[2]}), 0.0F);
+    for (std::size_t i = 0; i < values.size(); ++i) {
+      const std::size_t channel = (i / static_cast<std::size_t>(spatial)) % 3;
+      const float multiplier = scales[channel] / std::sqrt(variances[channel]);
+      const float expected =
+          (static_cast<float>(Value(x, i)) - means[channel]) * multiplier + biases[channel];
+      EXPECT_NEAR(Value(y, i), expected, 5.0e-3) << i;
+    }
+  }
+}
+
 TEST(OnnxLightNormalizationKernel, BatchNormalizationTrainingModeUpdatesRunningStatistics) {
   ONNX_LIGHT_NAMESPACE::NodeProto node;
   node.set_op_type("BatchNormalization");
