@@ -166,6 +166,9 @@ void TanhBFloat16(const std::uint16_t *input, std::uint16_t *output, std::size_t
 void TanhFloat32_Scalar(const float *input, float *output, std::size_t count);
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
 void TanhFloat32_AVX2_FMA(const float *input, float *output, std::size_t count);
+#ifdef ONNX_LIGHT_CPU_HAVE_F16C
+void TanhFloat16_AVX2_FMA(const std::uint16_t *input, std::uint16_t *output, std::size_t count);
+#endif
 #endif
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512
 void TanhFloat32_AVX512(const float *input, float *output, std::size_t count);

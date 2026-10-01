@@ -218,6 +218,30 @@ ONNX_LIGHT_CPU_FORCE_INLINE __m256 TanhPs256Fma(__m256 value) {
   return Select(_mm256_cmp_ps(value, value, _CMP_UNORD_Q), quiet_nan, result);
 }
 
+ONNX_LIGHT_CPU_FORCE_INLINE __m256 TanhFloat16Ps256Fma(__m256 value) {
+  const __m256 sign = _mm256_and_ps(value, _mm256_set1_ps(-0.0f));
+  const __m256 magnitude = _mm256_andnot_ps(_mm256_set1_ps(-0.0f), value);
+  const __m256 bounded = _mm256_min_ps(magnitude, _mm256_set1_ps(4.5f));
+  const __m256 squared = _mm256_mul_ps(bounded, bounded);
+
+  // This rational approximation stays within one FP16 ULP over every finite FP16 input.
+  __m256 numerator = _mm256_fmadd_ps(squared, _mm256_set1_ps(1.0f), _mm256_set1_ps(378.0f));
+  numerator = _mm256_fmadd_ps(numerator, squared, _mm256_set1_ps(17325.0f));
+  numerator = _mm256_fmadd_ps(numerator, squared, _mm256_set1_ps(135135.0f));
+  numerator = _mm256_mul_ps(numerator, bounded);
+
+  __m256 denominator = _mm256_fmadd_ps(squared, _mm256_set1_ps(28.0f), _mm256_set1_ps(3150.0f));
+  denominator = _mm256_fmadd_ps(denominator, squared, _mm256_set1_ps(62370.0f));
+  denominator = _mm256_fmadd_ps(denominator, squared, _mm256_set1_ps(135135.0f));
+  __m256 result = _mm256_div_ps(numerator, denominator);
+  result = Select(_mm256_cmp_ps(magnitude, _mm256_set1_ps(4.5f), _CMP_GE_OQ), _mm256_set1_ps(1.0f),
+                  result);
+  result = _mm256_or_ps(result, sign);
+  result = Select(_mm256_cmp_ps(magnitude, _mm256_set1_ps(0x1p-12f), _CMP_LT_OQ), value, result);
+  const __m256 quiet_nan = _mm256_or_ps(value, _mm256_castsi256_ps(_mm256_set1_epi32(0x00400000)));
+  return Select(_mm256_cmp_ps(value, value, _CMP_UNORD_Q), quiet_nan, result);
+}
+
 template <bool normal_range>
 void SoftmaxNormalizeRow(const float *input, float *output, std::size_t columns, __m256 maximum) {
   const std::size_t vector_columns = columns - columns % 8;
@@ -327,6 +351,38 @@ void TanhFloat32_AVX2_FMA(const float *input, float *output, std::size_t count) 
                         TanhPs256Fma(_mm256_maskload_ps(input + index, mask)));
   }
 }
+
+#ifdef ONNX_LIGHT_CPU_HAVE_F16C
+void TanhFloat16_AVX2_FMA(const std::uint16_t *input, std::uint16_t *output, std::size_t count) {
+  std::size_t index = 0;
+  for (; count - index >= 16; index += 16) {
+    const __m256 value0 =
+        _mm256_cvtph_ps(_mm_loadu_si128(reinterpret_cast<const __m128i *>(input + index)));
+    const __m256 value1 =
+        _mm256_cvtph_ps(_mm_loadu_si128(reinterpret_cast<const __m128i *>(input + index + 8)));
+    const __m128i result0 = _mm256_cvtps_ph(TanhFloat16Ps256Fma(value0), _MM_FROUND_TO_NEAREST_INT);
+    const __m128i result1 = _mm256_cvtps_ph(TanhFloat16Ps256Fma(value1), _MM_FROUND_TO_NEAREST_INT);
+    _mm_storeu_si128(reinterpret_cast<__m128i *>(output + index), result0);
+    _mm_storeu_si128(reinterpret_cast<__m128i *>(output + index + 8), result1);
+  }
+  if (count - index >= 8) {
+    const __m256 value =
+        _mm256_cvtph_ps(_mm_loadu_si128(reinterpret_cast<const __m128i *>(input + index)));
+    const __m128i result = _mm256_cvtps_ph(TanhFloat16Ps256Fma(value), _MM_FROUND_TO_NEAREST_INT);
+    _mm_storeu_si128(reinterpret_cast<__m128i *>(output + index), result);
+    index += 8;
+  }
+  if (index < count) {
+    alignas(16) std::array<std::uint16_t, 8> tail{};
+    std::copy_n(input + index, count - index, tail.data());
+    const __m256 value =
+        _mm256_cvtph_ps(_mm_load_si128(reinterpret_cast<const __m128i *>(tail.data())));
+    const __m128i result = _mm256_cvtps_ph(TanhFloat16Ps256Fma(value), _MM_FROUND_TO_NEAREST_INT);
+    _mm_store_si128(reinterpret_cast<__m128i *>(tail.data()), result);
+    std::copy_n(tail.data(), count - index, output + index);
+  }
+}
+#endif
 
 void SigmoidFloat32_AVX2_FMA(const float *input, float *output, std::size_t count) {
   std::size_t index = 0;
