@@ -987,6 +987,45 @@ void GemmAddBiasConvertFloat32ToFloat16_F16C(const float *src, const float *bias
   }
 }
 
+void GemmAddFloat16BiasConvertFloat32ToFloat16_F16C(const float *src, const std::uint16_t *bias,
+                                                    std::uint16_t *dst, std::size_t rows,
+                                                    std::size_t columns, float beta,
+                                                    std::size_t bias_row_stride,
+                                                    std::size_t bias_column_stride) {
+  const __m256 beta_vector = _mm256_set1_ps(beta);
+  for (std::size_t row = 0; row < rows; ++row) {
+    const float *src_row = src + row * columns;
+    const std::uint16_t *bias_row = bias + row * bias_row_stride;
+    std::uint16_t *dst_row = dst + row * columns;
+    std::size_t column = 0;
+    for (; column + 8 <= columns; column += 8) {
+      const __m256 bias_values = bias_column_stride == 0
+                                     ? _mm256_set1_ps(detail::Float16BitsToFloat(bias_row[0]))
+                                     : _mm256_cvtph_ps(_mm_loadu_si128(
+                                           reinterpret_cast<const __m128i *>(bias_row + column)));
+      const __m256 values =
+          _mm256_add_ps(_mm256_loadu_ps(src_row + column), _mm256_mul_ps(beta_vector, bias_values));
+      const __m128i halves = _mm256_cvtps_ph(values, _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC);
+      _mm_storeu_si128(reinterpret_cast<__m128i *>(dst_row + column), halves);
+      const int nan_mask = _mm256_movemask_ps(_mm256_cmp_ps(values, values, _CMP_UNORD_Q));
+      if (nan_mask != 0) {
+        alignas(32) float lanes[8];
+        _mm256_store_ps(lanes, values);
+        for (int lane = 0; lane < 8; ++lane) {
+          if ((nan_mask & (1 << lane)) != 0) {
+            dst_row[column + static_cast<std::size_t>(lane)] =
+                detail::FloatToFloat16Bits(lanes[lane]);
+          }
+        }
+      }
+    }
+    for (; column < columns; ++column) {
+      const float bias_value = detail::Float16BitsToFloat(bias_row[column * bias_column_stride]);
+      dst_row[column] = detail::FloatToFloat16Bits(src_row[column] + beta * bias_value);
+    }
+  }
+}
+
 void GemmMicroKernel_AVX2F16C(std::size_t mr, std::size_t nb, std::size_t K, float alpha,
                               float beta, const std::uint16_t *Bmat, std::size_t N,
                               const float *Crow_base, std::size_t Cstride, float *Yrow_base,

@@ -1901,6 +1901,30 @@ TEST(GemmHalf, Avx2Float16BiasNarrowingCoversBroadcastsAndTails) {
             << "row=" << row << " column=" << column;
       }
     }
+
+    const std::size_t bias_size =
+        test_case.row_stride == columns
+            ? rows * columns
+            : (test_case.column_stride == 1 ? columns
+                                            : (test_case.row_stride == 1 ? rows : std::size_t{1}));
+    std::vector<std::uint16_t> half_bias(bias_size);
+    for (std::size_t i = 0; i < bias_size; ++i) {
+      half_bias[i] = onnx_light_cpu::detail::FloatToFloat16Bits(test_case.bias[i]);
+    }
+    onnx_light_cpu::GemmAddFloat16BiasConvertFloat32ToFloat16_F16C(
+        values.data(), half_bias.data(), actual.data(), rows, columns, beta, test_case.row_stride,
+        test_case.column_stride);
+    for (std::size_t row = 0; row < rows; ++row) {
+      for (std::size_t column = 0; column < columns; ++column) {
+        const std::size_t index = row * columns + column;
+        const std::size_t bias_index =
+            row * test_case.row_stride + column * test_case.column_stride;
+        const float bias = onnx_light_cpu::detail::Float16BitsToFloat(half_bias[bias_index]);
+        EXPECT_EQ(actual[index],
+                  onnx_light_cpu::detail::FloatToFloat16Bits(values[index] + beta * bias))
+            << "half bias row=" << row << " column=" << column;
+      }
+    }
   }
 }
 #endif

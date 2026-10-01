@@ -2392,6 +2392,53 @@ void GemmWithEpilogue(bool trans_a, bool trans_b, std::size_t M, std::size_t N, 
 
 } // namespace
 
+void GemmAddHalfBiasConvertFloat32(const float *input, const std::uint16_t *bias,
+                                   std::uint16_t *output, std::size_t rows, std::size_t columns,
+                                   float beta, GemmBroadcast bias_layout, bool is_bfloat16) {
+  std::size_t bias_row_stride = 0;
+  std::size_t bias_column_stride = 0;
+  if (bias_layout == GemmBroadcast::kRow) {
+    bias_column_stride = 1;
+  } else if (bias_layout == GemmBroadcast::kColumn) {
+    bias_row_stride = 1;
+  } else if (bias_layout == GemmBroadcast::kMatrix) {
+    bias_row_stride = columns;
+    bias_column_stride = 1;
+  }
+#if defined(ONNX_LIGHT_CPU_HAVE_AVX2_FMA) && defined(ONNX_LIGHT_CPU_HAVE_F16C)
+  static const bool use_f16c =
+      DetectSimdLevel() >= SimdLevel::kAVX2 && CpuSupportsFma() && CpuSupportsF16C();
+  if (!is_bfloat16 && use_f16c) {
+    ExecuteRanges(static_cast<std::int64_t>(rows), static_cast<double>(3 * columns),
+                  [=](std::int64_t begin, std::int64_t end) {
+                    const std::size_t first_row = static_cast<std::size_t>(begin);
+                    GemmAddFloat16BiasConvertFloat32ToFloat16_F16C(
+                        input + first_row * columns, bias + first_row * bias_row_stride,
+                        output + first_row * columns, static_cast<std::size_t>(end - begin),
+                        columns, beta, bias_row_stride, bias_column_stride);
+                  });
+    return;
+  }
+#endif
+  ExecuteRanges(static_cast<std::int64_t>(rows), static_cast<double>(3 * columns),
+                [=](std::int64_t begin, std::int64_t end) {
+                  for (std::int64_t row = begin; row < end; ++row) {
+                    const std::size_t row_index = static_cast<std::size_t>(row);
+                    for (std::size_t column = 0; column < columns; ++column) {
+                      const std::size_t output_index = row_index * columns + column;
+                      const std::size_t bias_index =
+                          row_index * bias_row_stride + column * bias_column_stride;
+                      const float bias_value = is_bfloat16
+                                                   ? detail::Bfloat16BitsToFloat(bias[bias_index])
+                                                   : detail::Float16BitsToFloat(bias[bias_index]);
+                      const float value = input[output_index] + beta * bias_value;
+                      output[output_index] = is_bfloat16 ? detail::FloatToBFloat16Bits(value)
+                                                         : detail::FloatToFloat16Bits(value);
+                    }
+                  }
+                });
+}
+
 template <typename T>
 void ValidateGemmEpilogue(std::size_t M, std::size_t N, const GemmEpilogue<T> &epilogue) {
   const auto validate_layout = [](GemmBroadcast layout) {
