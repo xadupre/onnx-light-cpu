@@ -210,6 +210,11 @@ void PowFloat16RightScalar_AVX512(const std::uint16_t *base, float exponent, std
                                   std::size_t count);
 #endif
 
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512BF16
+void SoftmaxBFloat16_AVX512BF16(const std::uint16_t *input, std::uint16_t *output, std::size_t rows,
+                                std::size_t columns);
+#endif
+
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
 void PowFloat32_AVX2_FMA(const float *base, const float *exponent, float *output,
                          std::size_t count);
