@@ -1388,7 +1388,7 @@ void BulkHalfPowLeft(const void *left, const void *right, void *out, std::size_t
   }
 }
 
-template <auto DecodeOne, auto Decode, auto Encode>
+template <bool IsFloat16, auto DecodeOne, auto Decode, auto Encode>
 void BulkHalfPowRight(const void *left, const void *right, void *out, std::size_t count) {
   constexpr std::size_t kBlockSize = 1024;
   const auto *bases = static_cast<const std::uint16_t *>(left);
@@ -1399,7 +1399,7 @@ void BulkHalfPowRight(const void *left, const void *right, void *out, std::size_
     return;
   }
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512
-  if constexpr (DecodeOne == detail::Float16BitsToFloat) {
+  if constexpr (IsFloat16) {
     static const bool use_avx512 = DetectSimdLevel() >= SimdLevel::kAVX512;
     if (count >= 16 && use_avx512) {
       PowFloat16RightScalar_AVX512(bases, exponent, output, count);
@@ -1408,7 +1408,7 @@ void BulkHalfPowRight(const void *left, const void *right, void *out, std::size_
   }
 #endif
 #if defined(ONNX_LIGHT_CPU_HAVE_AVX2_FMA) && defined(ONNX_LIGHT_CPU_HAVE_F16C)
-  if constexpr (DecodeOne == detail::Float16BitsToFloat) {
+  if constexpr (IsFloat16) {
     if (SupportsAvx2FmaF16c()) {
       PowFloat16RightScalar_AVX2_FMA(bases, exponent, output, count);
       return;
@@ -1431,7 +1431,7 @@ void BulkFloat16PowLeft(const void *left, const void *right, void *out, std::siz
 }
 
 void BulkFloat16PowRight(const void *left, const void *right, void *out, std::size_t count) {
-  BulkHalfPowRight<detail::Float16BitsToFloat, detail::ConvertFloat16ToFloat32,
+  BulkHalfPowRight<true, detail::Float16BitsToFloat, detail::ConvertFloat16ToFloat32,
                    detail::ConvertFloat32ToFloat16>(left, right, out, count);
 }
 
@@ -1441,7 +1441,7 @@ void BulkBfloat16PowLeft(const void *left, const void *right, void *out, std::si
 }
 
 void BulkBfloat16PowRight(const void *left, const void *right, void *out, std::size_t count) {
-  BulkHalfPowRight<detail::Bfloat16BitsToFloat, detail::ConvertBFloat16ToFloat32,
+  BulkHalfPowRight<false, detail::Bfloat16BitsToFloat, detail::ConvertBFloat16ToFloat32,
                    detail::ConvertFloat32ToBFloat16>(left, right, out, count);
 }
 
@@ -1479,8 +1479,8 @@ void EvaluateFixedIntegerPowBlock(const float *base, float *output, std::size_t 
   }
 }
 
-template <typename TExp, auto DecodeBase, auto DecodeBaseBlock, auto Encode, auto DecodeExponent,
-          bool IntegerExponent>
+template <typename TExp, bool BaseIsFloat16, auto DecodeBase, auto DecodeBaseBlock, auto Encode,
+          auto DecodeExponent, bool IntegerExponent>
 void BulkMixedHalfPow(const void *left, const void *right, void *out, std::size_t count,
                       bool left_scalar, bool right_scalar) {
   constexpr std::size_t kBlockSize = 1024;
@@ -1496,7 +1496,7 @@ void BulkMixedHalfPow(const void *left, const void *right, void *out, std::size_
     }
   }
 #if defined(ONNX_LIGHT_CPU_HAVE_AVX2_FMA) && defined(ONNX_LIGHT_CPU_HAVE_F16C)
-  if constexpr (DecodeBase == detail::Float16BitsToFloat) {
+  if constexpr (BaseIsFloat16) {
     if (SupportsAvx2FmaF16c()) {
       if (right_scalar && !left_scalar) {
         if constexpr (!IntegerExponent) {
@@ -1576,25 +1576,25 @@ void BulkMixedHalfPow(const void *left, const void *right, void *out, std::size_
   }
 }
 
-template <typename TExp, auto DecodeBase, auto DecodeBaseBlock, auto Encode, auto DecodeExponent,
-          bool IntegerExponent>
+template <typename TExp, bool BaseIsFloat16, auto DecodeBase, auto DecodeBaseBlock, auto Encode,
+          auto DecodeExponent, bool IntegerExponent>
 void BulkMixedHalfPowContiguous(const void *left, const void *right, void *out, std::size_t count) {
-  BulkMixedHalfPow<TExp, DecodeBase, DecodeBaseBlock, Encode, DecodeExponent, IntegerExponent>(
-      left, right, out, count, false, false);
+  BulkMixedHalfPow<TExp, BaseIsFloat16, DecodeBase, DecodeBaseBlock, Encode, DecodeExponent,
+                   IntegerExponent>(left, right, out, count, false, false);
 }
 
-template <typename TExp, auto DecodeBase, auto DecodeBaseBlock, auto Encode, auto DecodeExponent,
-          bool IntegerExponent>
+template <typename TExp, bool BaseIsFloat16, auto DecodeBase, auto DecodeBaseBlock, auto Encode,
+          auto DecodeExponent, bool IntegerExponent>
 void BulkMixedHalfPowLeft(const void *left, const void *right, void *out, std::size_t count) {
-  BulkMixedHalfPow<TExp, DecodeBase, DecodeBaseBlock, Encode, DecodeExponent, IntegerExponent>(
-      left, right, out, count, true, false);
+  BulkMixedHalfPow<TExp, BaseIsFloat16, DecodeBase, DecodeBaseBlock, Encode, DecodeExponent,
+                   IntegerExponent>(left, right, out, count, true, false);
 }
 
-template <typename TExp, auto DecodeBase, auto DecodeBaseBlock, auto Encode, auto DecodeExponent,
-          bool IntegerExponent>
+template <typename TExp, bool BaseIsFloat16, auto DecodeBase, auto DecodeBaseBlock, auto Encode,
+          auto DecodeExponent, bool IntegerExponent>
 void BulkMixedHalfPowRight(const void *left, const void *right, void *out, std::size_t count) {
-  BulkMixedHalfPow<TExp, DecodeBase, DecodeBaseBlock, Encode, DecodeExponent, IntegerExponent>(
-      left, right, out, count, false, true);
+  BulkMixedHalfPow<TExp, BaseIsFloat16, DecodeBase, DecodeBaseBlock, Encode, DecodeExponent,
+                   IntegerExponent>(left, right, out, count, false, true);
 }
 
 template <typename TExp, auto DecodeBase, auto Encode, auto DecodeExponent>
@@ -2301,15 +2301,17 @@ void SelectAdditionalBulk(BinaryOperator op, DT left, DT right, const Attrs &att
   }
 
   if (op == BinaryOperator::kPow && left != right) {
-#define ONNX_LIGHT_CPU_BIND_MIXED_HALF_POW(TEXP, DECODE_BASE, DECODE_BASE_BLOCK, ENCODE,           \
-                                           DECODE_EXPONENT, INTEGER_EXPONENT)                      \
+#define ONNX_LIGHT_CPU_BIND_MIXED_HALF_POW(TEXP, BASE_IS_FLOAT16, DECODE_BASE, DECODE_BASE_BLOCK,  \
+                                           ENCODE, DECODE_EXPONENT, INTEGER_EXPONENT)              \
   adapter.bulk_contiguous =                                                                        \
-      &BulkMixedHalfPowContiguous<TEXP, DECODE_BASE, DECODE_BASE_BLOCK, ENCODE, DECODE_EXPONENT,   \
-                                  INTEGER_EXPONENT>;                                               \
-  adapter.bulk_left_scalar = &BulkMixedHalfPowLeft<TEXP, DECODE_BASE, DECODE_BASE_BLOCK, ENCODE,   \
-                                                   DECODE_EXPONENT, INTEGER_EXPONENT>;             \
-  adapter.bulk_right_scalar = &BulkMixedHalfPowRight<TEXP, DECODE_BASE, DECODE_BASE_BLOCK, ENCODE, \
-                                                     DECODE_EXPONENT, INTEGER_EXPONENT>;
+      &BulkMixedHalfPowContiguous<TEXP, BASE_IS_FLOAT16, DECODE_BASE, DECODE_BASE_BLOCK, ENCODE,   \
+                                  DECODE_EXPONENT, INTEGER_EXPONENT>;                              \
+  adapter.bulk_left_scalar =                                                                       \
+      &BulkMixedHalfPowLeft<TEXP, BASE_IS_FLOAT16, DECODE_BASE, DECODE_BASE_BLOCK, ENCODE,         \
+                            DECODE_EXPONENT, INTEGER_EXPONENT>;                                    \
+  adapter.bulk_right_scalar =                                                                      \
+      &BulkMixedHalfPowRight<TEXP, BASE_IS_FLOAT16, DECODE_BASE, DECODE_BASE_BLOCK, ENCODE,        \
+                             DECODE_EXPONENT, INTEGER_EXPONENT>;
 #define ONNX_LIGHT_CPU_BIND_POW_RIGHT_CASE(TYPE, RIGHT_CPP, BASE_CPP)                              \
   case DT::TYPE:                                                                                   \
     ONNX_LIGHT_CPU_BIND_TYPED_BULK(BASE_CPP, RIGHT_CPP, BASE_CPP, ComputePow<BASE_CPP, RIGHT_CPP>) \
@@ -2343,32 +2345,32 @@ void SelectAdditionalBulk(BinaryOperator op, DT left, DT right, const Attrs &att
       switch (right) {
       case DT::FLOAT:
         ONNX_LIGHT_CPU_BIND_MIXED_HALF_POW(
-            float, detail::Float16BitsToFloat, detail::ConvertFloat16ToFloat32,
+            float, true, detail::Float16BitsToFloat, detail::ConvertFloat16ToFloat32,
             detail::ConvertFloat32ToFloat16, CastExponent<float>, false)
         break;
       case DT::BFLOAT16:
         ONNX_LIGHT_CPU_BIND_MIXED_HALF_POW(
-            std::uint16_t, detail::Float16BitsToFloat, detail::ConvertFloat16ToFloat32,
+            std::uint16_t, true, detail::Float16BitsToFloat, detail::ConvertFloat16ToFloat32,
             detail::ConvertFloat32ToFloat16, detail::Bfloat16BitsToFloat, false)
         break;
       case DT::INT32:
         ONNX_LIGHT_CPU_BIND_MIXED_HALF_POW(
-            std::int32_t, detail::Float16BitsToFloat, detail::ConvertFloat16ToFloat32,
+            std::int32_t, true, detail::Float16BitsToFloat, detail::ConvertFloat16ToFloat32,
             detail::ConvertFloat32ToFloat16, CastExponent<std::int32_t>, true)
         break;
       case DT::INT64:
         ONNX_LIGHT_CPU_BIND_MIXED_HALF_POW(
-            std::int64_t, detail::Float16BitsToFloat, detail::ConvertFloat16ToFloat32,
+            std::int64_t, true, detail::Float16BitsToFloat, detail::ConvertFloat16ToFloat32,
             detail::ConvertFloat32ToFloat16, CastExponent<std::int64_t>, true)
         break;
       case DT::UINT32:
         ONNX_LIGHT_CPU_BIND_MIXED_HALF_POW(
-            std::uint32_t, detail::Float16BitsToFloat, detail::ConvertFloat16ToFloat32,
+            std::uint32_t, true, detail::Float16BitsToFloat, detail::ConvertFloat16ToFloat32,
             detail::ConvertFloat32ToFloat16, CastExponent<std::uint32_t>, true)
         break;
       case DT::UINT64:
         ONNX_LIGHT_CPU_BIND_MIXED_HALF_POW(
-            std::uint64_t, detail::Float16BitsToFloat, detail::ConvertFloat16ToFloat32,
+            std::uint64_t, true, detail::Float16BitsToFloat, detail::ConvertFloat16ToFloat32,
             detail::ConvertFloat32ToFloat16, CastExponent<std::uint64_t>, true)
         break;
       default:
@@ -2378,32 +2380,32 @@ void SelectAdditionalBulk(BinaryOperator op, DT left, DT right, const Attrs &att
       switch (right) {
       case DT::FLOAT:
         ONNX_LIGHT_CPU_BIND_MIXED_HALF_POW(
-            float, detail::Bfloat16BitsToFloat, detail::ConvertBFloat16ToFloat32,
+            float, false, detail::Bfloat16BitsToFloat, detail::ConvertBFloat16ToFloat32,
             detail::ConvertFloat32ToBFloat16, CastExponent<float>, false)
         break;
       case DT::FLOAT16:
         ONNX_LIGHT_CPU_BIND_MIXED_HALF_POW(
-            std::uint16_t, detail::Bfloat16BitsToFloat, detail::ConvertBFloat16ToFloat32,
+            std::uint16_t, false, detail::Bfloat16BitsToFloat, detail::ConvertBFloat16ToFloat32,
             detail::ConvertFloat32ToBFloat16, detail::Float16BitsToFloat, false)
         break;
       case DT::INT32:
         ONNX_LIGHT_CPU_BIND_MIXED_HALF_POW(
-            std::int32_t, detail::Bfloat16BitsToFloat, detail::ConvertBFloat16ToFloat32,
+            std::int32_t, false, detail::Bfloat16BitsToFloat, detail::ConvertBFloat16ToFloat32,
             detail::ConvertFloat32ToBFloat16, CastExponent<std::int32_t>, true)
         break;
       case DT::INT64:
         ONNX_LIGHT_CPU_BIND_MIXED_HALF_POW(
-            std::int64_t, detail::Bfloat16BitsToFloat, detail::ConvertBFloat16ToFloat32,
+            std::int64_t, false, detail::Bfloat16BitsToFloat, detail::ConvertBFloat16ToFloat32,
             detail::ConvertFloat32ToBFloat16, CastExponent<std::int64_t>, true)
         break;
       case DT::UINT32:
         ONNX_LIGHT_CPU_BIND_MIXED_HALF_POW(
-            std::uint32_t, detail::Bfloat16BitsToFloat, detail::ConvertBFloat16ToFloat32,
+            std::uint32_t, false, detail::Bfloat16BitsToFloat, detail::ConvertBFloat16ToFloat32,
             detail::ConvertFloat32ToBFloat16, CastExponent<std::uint32_t>, true)
         break;
       case DT::UINT64:
         ONNX_LIGHT_CPU_BIND_MIXED_HALF_POW(
-            std::uint64_t, detail::Bfloat16BitsToFloat, detail::ConvertBFloat16ToFloat32,
+            std::uint64_t, false, detail::Bfloat16BitsToFloat, detail::ConvertBFloat16ToFloat32,
             detail::ConvertFloat32ToBFloat16, CastExponent<std::uint64_t>, true)
         break;
       default:

@@ -1,0 +1,194 @@
+name: Build Release Wheels
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Git tag or ref to build (defaults to the branch the workflow is run from)."
+        required: false
+        type: string
+  push:
+    tags:
+      - "*"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build_wheels_linux:
+    name: wheels (linux, ${{ matrix.arch }})
+    runs-on: ${{ matrix.runs-on }}
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runs-on: ubuntu-latest
+          - arch: aarch64
+            runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Detect runner CPU count
+        id: cpu_count
+        shell: bash
+        run: |
+          count=$(python -c 'import os; print(os.cpu_count() or 1)')
+          echo "count=${count}" >> "$GITHUB_OUTPUT"
+          echo "CMAKE_BUILD_PARALLEL_LEVEL=${count}"
+      - name: Build wheels
+        uses: pypa/cibuildwheel@v4.2.0
+        env:
+          CIBW_BUILD: "cp312-* cp313-* cp314-*"
+          CIBW_SKIP: "*-musllinux_*"
+          CIBW_ARCHS: ${{ matrix.arch }}
+          CIBW_MANYLINUX_X86_64_IMAGE: manylinux_2_28
+          CIBW_MANYLINUX_AARCH64_IMAGE: manylinux_2_28
+          CIBW_ENVIRONMENT: >
+            CMAKE_BUILD_PARALLEL_LEVEL=${{ steps.cpu_count.outputs.count }}
+            CMAKE_ARGS=-DONNX_HARDENING=ON
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: wheels-linux-${{ matrix.arch }}
+          path: ./wheelhouse/*.whl
+      - name: Attach wheels to GitHub Release
+        if: github.ref_type == 'tag' || inputs.tag != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          tag="${INPUT_TAG}"
+          if [ -z "${tag}" ]; then
+            tag="${GITHUB_REF_NAME}"
+          fi
+          tag="${tag#refs/tags/}"
+          if ! gh release view "${tag}" >/dev/null 2>&1; then
+            gh release create "${tag}" --verify-tag --title "${tag}" --notes "" >/dev/null 2>&1 || \
+              gh release view "${tag}" >/dev/null 2>&1
+          fi
+          gh release upload "${tag}" ./wheelhouse/*.whl --clobber
+
+  build_wheels_windows:
+    name: wheels (windows, ${{ matrix.arch }})
+    needs: build_wheels_linux
+    runs-on: ${{ matrix.runs-on }}
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: AMD64
+            runs-on: windows-latest
+          - arch: ARM64
+            runs-on: windows-11-arm
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Detect runner CPU count
+        id: cpu_count
+        shell: bash
+        run: |
+          count=$(python -c 'import os; print(os.cpu_count() or 1)')
+          echo "count=${count}" >> "$GITHUB_OUTPUT"
+          echo "CMAKE_BUILD_PARALLEL_LEVEL=${count}"
+      - name: Build wheels
+        uses: pypa/cibuildwheel@v4.2.0
+        env:
+          CIBW_BUILD: "cp312-* cp313-* cp314-*"
+          CIBW_ARCHS: ${{ matrix.arch }}
+          CIBW_ENVIRONMENT: >
+            CMAKE_BUILD_PARALLEL_LEVEL=${{ steps.cpu_count.outputs.count }}
+            CMAKE_ARGS=-DONNX_HARDENING=ON
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: wheels-windows-${{ matrix.arch }}
+          path: ./wheelhouse/*.whl
+      - name: Attach wheels to GitHub Release
+        if: github.ref_type == 'tag' || inputs.tag != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          tag="${INPUT_TAG}"
+          if [ -z "${tag}" ]; then
+            tag="${GITHUB_REF_NAME}"
+          fi
+          tag="${tag#refs/tags/}"
+          if ! gh release view "${tag}" >/dev/null 2>&1; then
+            gh release create "${tag}" --verify-tag --title "${tag}" --notes "" >/dev/null 2>&1 || \
+              gh release view "${tag}" >/dev/null 2>&1
+          fi
+          gh release upload "${tag}" ./wheelhouse/*.whl --clobber
+
+  build_wheels_macos:
+    name: wheels (macos, universal2)
+    needs: build_wheels_linux
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "13.3"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Detect runner CPU count
+        id: cpu_count
+        shell: bash
+        run: |
+          count=$(python -c 'import os; print(os.cpu_count() or 1)')
+          echo "count=${count}" >> "$GITHUB_OUTPUT"
+          echo "CMAKE_BUILD_PARALLEL_LEVEL=${count}"
+      - name: Build wheels
+        uses: pypa/cibuildwheel@v4.2.0
+        env:
+          CIBW_BUILD: "cp312-* cp313-* cp314-*"
+          CIBW_ARCHS: universal2
+          CIBW_ENVIRONMENT: >
+            CMAKE_BUILD_PARALLEL_LEVEL=${{ steps.cpu_count.outputs.count }}
+            MACOSX_DEPLOYMENT_TARGET=${{ env.MACOSX_DEPLOYMENT_TARGET }}
+            CMAKE_ARGS='-DONNX_HARDENING=ON -DCMAKE_OSX_DEPLOYMENT_TARGET=${{ env.MACOSX_DEPLOYMENT_TARGET }} -DCMAKE_OSX_ARCHITECTURES=arm64;x86_64'
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: wheels-macos-universal2
+          path: ./wheelhouse/*.whl
+      - name: Attach wheels to GitHub Release
+        if: github.ref_type == 'tag' || inputs.tag != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          tag="${INPUT_TAG}"
+          if [ -z "${tag}" ]; then
+            tag="${GITHUB_REF_NAME}"
+          fi
+          tag="${tag#refs/tags/}"
+          if ! gh release view "${tag}" >/dev/null 2>&1; then
+            gh release create "${tag}" --verify-tag --title "${tag}" --notes "" >/dev/null 2>&1 || \
+              gh release view "${tag}" >/dev/null 2>&1
+          fi
+          gh release upload "${tag}" ./wheelhouse/*.whl --clobber
