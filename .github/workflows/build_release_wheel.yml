@@ -53,11 +53,11 @@ jobs:
           CIBW_MANYLINUX_X86_64_IMAGE: manylinux_2_28
           CIBW_MANYLINUX_AARCH64_IMAGE: manylinux_2_28
           CIBW_BUILD_FRONTEND: "pip; args: --no-build-isolation"
-          CIBW_BEFORE_ALL: git clone --depth 1 --branch main https://github.com/xadupre/onnx-light.git {project}/../onnx-light
+          CIBW_BEFORE_ALL: python {project}/tools/onnx_light_release.py clone {project}/../onnx-light
           CIBW_BEFORE_BUILD: >-
             python -m pip install scikit-build-core nanobind &&
             python -m pip install -C wheel.py-api=cp312 {project}/../onnx-light
-          CIBW_BEFORE_TEST: python -m pip install -C wheel.py-api=cp312 {project}/../onnx-light
+          CIBW_BEFORE_TEST: python {project}/tools/onnx_light_release.py install
           CIBW_TEST_COMMAND: python {project}/unittests/python/wheel_registration_smoke.py
           CIBW_REPAIR_WHEEL_COMMAND_LINUX: >-
             auditwheel repair
@@ -126,11 +126,11 @@ jobs:
           CIBW_BUILD: "cp312-* cp313-* cp314-*"
           CIBW_ARCHS: ${{ matrix.arch }}
           CIBW_BUILD_FRONTEND: "pip; args: --no-build-isolation"
-          CIBW_BEFORE_ALL: git clone --depth 1 --branch main https://github.com/xadupre/onnx-light.git {project}/../onnx-light
+          CIBW_BEFORE_ALL: python {project}/tools/onnx_light_release.py clone {project}/../onnx-light
           CIBW_BEFORE_BUILD: >-
             python -m pip install scikit-build-core nanobind &&
             python -m pip install -C wheel.py-api=cp312 {project}/../onnx-light
-          CIBW_BEFORE_TEST: python -m pip install -C wheel.py-api=cp312 {project}/../onnx-light
+          CIBW_BEFORE_TEST: python {project}/tools/onnx_light_release.py install
           CIBW_TEST_COMMAND: python {project}/unittests/python/wheel_registration_smoke.py
           CIBW_ENVIRONMENT: >
             CMAKE_BUILD_PARALLEL_LEVEL=${{ steps.cpu_count.outputs.count }}
@@ -187,11 +187,11 @@ jobs:
           CIBW_BUILD: "cp312-* cp313-* cp314-*"
           CIBW_ARCHS: universal2
           CIBW_BUILD_FRONTEND: "pip; args: --no-build-isolation"
-          CIBW_BEFORE_ALL: git clone --depth 1 --branch main https://github.com/xadupre/onnx-light.git {project}/../onnx-light
+          CIBW_BEFORE_ALL: python {project}/tools/onnx_light_release.py clone {project}/../onnx-light
           CIBW_BEFORE_BUILD: >-
             python -m pip install scikit-build-core nanobind &&
             python -m pip install -C wheel.py-api=cp312 {project}/../onnx-light
-          CIBW_BEFORE_TEST: python -m pip install -C wheel.py-api=cp312 {project}/../onnx-light
+          CIBW_BEFORE_TEST: python {project}/tools/onnx_light_release.py install
           CIBW_TEST_COMMAND: python {project}/unittests/python/wheel_registration_smoke.py
           CIBW_ENVIRONMENT: >
             CMAKE_BUILD_PARALLEL_LEVEL=${{ steps.cpu_count.outputs.count }}
