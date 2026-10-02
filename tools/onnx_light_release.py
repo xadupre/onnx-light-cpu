@@ -4,7 +4,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-
 ONNX_LIGHT_VERSION = "0.1.29"
 
 
@@ -12,30 +11,19 @@ def wheel_name(system, machine, python_version):
     python_tag = f"cp{python_version[0]}{python_version[1]}"
     normalized_machine = machine.lower()
     if system == "Linux" and normalized_machine in {"x86_64", "aarch64"}:
-        platform_tag = (
-            f"manylinux_2_27_{normalized_machine}."
-            f"manylinux_2_28_{normalized_machine}"
-        )
+        platform_tag = f"manylinux_2_27_{normalized_machine}.manylinux_2_28_{normalized_machine}"
     elif system == "Darwin":
         platform_tag = "macosx_13_0_universal2"
     elif system == "Windows" and normalized_machine in {"amd64", "arm64"}:
         platform_tag = f"win_{normalized_machine}"
     else:
-        raise ValueError(
-            f"Unsupported onnx-light release platform: {system} {machine}"
-        )
-    return (
-        f"onnx_light-{ONNX_LIGHT_VERSION}-{python_tag}-{python_tag}-"
-        f"{platform_tag}.whl"
-    )
+        raise ValueError(f"Unsupported onnx-light release platform: {system} {machine}")
+    return f"onnx_light-{ONNX_LIGHT_VERSION}-{python_tag}-{python_tag}-{platform_tag}.whl"
 
 
 def wheel_url(system, machine, python_version):
     name = wheel_name(system, machine, python_version)
-    return (
-        "https://github.com/xadupre/onnx-light/releases/download/"
-        f"{ONNX_LIGHT_VERSION}/{name}"
-    )
+    return f"https://github.com/xadupre/onnx-light/releases/download/{ONNX_LIGHT_VERSION}/{name}"
 
 
 def clone_source(destination):

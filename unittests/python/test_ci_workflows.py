@@ -55,10 +55,7 @@ def test_release_wheels_build_and_test_session_registration_before_upload():
         )
         assert "CIBW_BEFORE_BUILD: >-" in body
         assert "python -m pip install -C wheel.py-api=cp312" in body
-        assert (
-            "CIBW_BEFORE_TEST: python {project}/tools/onnx_light_release.py install"
-            in body
-        )
+        assert "CIBW_BEFORE_TEST: python {project}/tools/onnx_light_release.py install" in body
         assert "git clone --depth 1 --branch main" not in body
         assert "-DONNX_LIGHT_CPU_RELEASE_WHEEL=ON" in body
         assert (
