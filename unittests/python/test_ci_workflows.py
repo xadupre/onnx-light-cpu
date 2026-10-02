@@ -49,8 +49,14 @@ def test_release_wheels_build_and_test_session_registration_before_upload():
     for job in ("build_wheels_linux", "build_wheels_windows", "build_wheels_macos"):
         body = _RELEASE_WORKFLOW.split(f"  {job}:", 1)[1].split("  build_wheels_", 1)[0]
         assert 'CIBW_BUILD_FRONTEND: "pip; args: --no-build-isolation"' in body
+        assert (
+            "CIBW_BEFORE_ALL: python {project}/tools/onnx_light_release.py clone "
+            "{project}/../onnx-light" in body
+        )
         assert "CIBW_BEFORE_BUILD: >-" in body
         assert "python -m pip install -C wheel.py-api=cp312" in body
+        assert "CIBW_BEFORE_TEST: python {project}/tools/onnx_light_release.py install" in body
+        assert "git clone --depth 1 --branch main" not in body
         assert "-DONNX_LIGHT_CPU_RELEASE_WHEEL=ON" in body
         assert (
             "CIBW_TEST_COMMAND: python {project}/unittests/python/wheel_registration_smoke.py"
