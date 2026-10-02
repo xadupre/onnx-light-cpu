@@ -5,6 +5,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [0.1.17] – Unreleased
 
+### Fixes
+
+- Included the compiled `_cpuregister` extension in release wheels so native
+  kernel registration is available after installation.
+- Added a pre-upload wheel smoke test that registers CPU kernels and verifies
+  native `Abs` dispatch on Linux, Windows, and macOS.
+
+### Documentation & CI
+
+- Updated development and AVX2 parity workflows to use onnx-light 0.1.29.
+
 ## [0.1.16]
 
 ### New Features
