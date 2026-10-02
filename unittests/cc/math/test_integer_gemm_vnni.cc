@@ -11,7 +11,8 @@
 
 #include "onnx_light_cpu/impl/execution.h"
 
-#if defined(ONNX_LIGHT_CPU_HAVE_AVX2_INTEGER) || defined(ONNX_LIGHT_CPU_HAVE_AVX512VNNI)
+#if defined(ONNX_LIGHT_CPU_HAVE_AVX2_INTEGER) || defined(ONNX_LIGHT_CPU_HAVE_AVXVNNI) ||           \
+    defined(ONNX_LIGHT_CPU_HAVE_AVX512VNNI)
 #include "onnx_light_cpu/impl/simd_level.h"
 #endif
 
@@ -98,6 +99,17 @@ void CheckAllPaths(const std::vector<std::uint8_t> &a, bool a_signed,
           static_cast<std::int64_t>(bzp.size()));
       EXPECT_EQ(native, expected);
     }
+  }
+#endif
+
+#ifdef ONNX_LIGHT_CPU_HAVE_AVXVNNI
+  if (onnx_light_cpu::IntegerMatMul2DUsesAvxVnni()) {
+    std::vector<std::int32_t> native(expected.size(), 0);
+    onnx_light_cpu::detail::IntegerMatMul2DWithDot(
+        &onnx_light_cpu::detail::IntegerDotU8S8AvxVnni, a.data(), a_signed, b.data(), b_signed,
+        native.data(), rows, cols, depth, azp.data(), static_cast<std::int64_t>(azp.size()),
+        bzp.data(), static_cast<std::int64_t>(bzp.size()));
+    EXPECT_EQ(native, expected);
   }
 #endif
 
@@ -234,6 +246,17 @@ void Check4BitAllPaths(bool a_signed, bool b_signed, std::int64_t rows, std::int
   }
 #endif
 
+#ifdef ONNX_LIGHT_CPU_HAVE_AVXVNNI
+  if (onnx_light_cpu::IntegerMatMul2DUsesAvxVnni()) {
+    std::vector<std::int32_t> native(expected.size(), 0);
+    onnx_light_cpu::detail::IntegerMatMul4Bit2DWithDot(
+        &onnx_light_cpu::detail::IntegerDotU8S8AvxVnni, packed_a.data(), a_signed, packed_b.data(),
+        b_signed, native.data(), rows, cols, depth, azp.data(),
+        static_cast<std::int64_t>(azp.size()), bzp.data(), static_cast<std::int64_t>(bzp.size()));
+    EXPECT_EQ(native, expected);
+  }
+#endif
+
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512VNNI
   if (onnx_light_cpu::IntegerMatMul2DUsesVnni()) {
     std::vector<std::int32_t> native(expected.size(), 0);
@@ -266,7 +289,8 @@ TEST(IntegerVnniKernel, MatchesReferenceAcrossSignednessAndZeroPoints) {
   // scalar tail is exercised, plus tiny and larger matrices.
   const std::vector<std::array<std::int64_t, 3>> shapes = {
       {1, 1, 1},   {2, 3, 5},   {3, 2, 64},  {4, 4, 65},  {5, 7, 100}, {8, 6, 128},
-      {2, 9, 131}, {6, 3, 200}, {1, 16, 68}, {1, 19, 67}, {17, 1, 68}, {33, 35, 70}};
+      {2, 9, 131}, {6, 3, 200}, {1, 16, 68}, {1, 19, 67}, {17, 1, 68}, {33, 35, 70},
+      {3, 5, 31},  {3, 5, 32},  {3, 5, 33},  {3, 5, 63},  {3, 5, 95}};
 
   for (const auto &shape : shapes) {
     const std::int64_t rows = shape[0];
@@ -313,6 +337,23 @@ TEST(IntegerVnniKernel, AccumulationWrapsModuloInt32) {
 
   const std::uint32_t wrapped = static_cast<std::uint32_t>(65025ULL * depth);
   EXPECT_EQ(std::bit_cast<std::uint32_t>(out[0]), wrapped);
+#ifdef ONNX_LIGHT_CPU_HAVE_AVXVNNI
+  if (onnx_light_cpu::IntegerMatMul2DUsesAvxVnni()) {
+    const std::vector<std::int8_t> signed_b(static_cast<std::size_t>(depth), 127);
+    const std::uint32_t dot_expected = static_cast<std::uint32_t>(255ULL * 127 * depth);
+    EXPECT_EQ(std::bit_cast<std::uint32_t>(
+                  onnx_light_cpu::detail::IntegerDotU8S8AvxVnni(a.data(), signed_b.data(), depth)),
+              dot_expected);
+  }
+#endif
+}
+
+TEST(IntegerVnniKernel, AvxVnniAvailabilityIsHostAndBuildGated) {
+#ifdef ONNX_LIGHT_CPU_HAVE_AVXVNNI
+  EXPECT_EQ(onnx_light_cpu::IntegerMatMul2DUsesAvxVnni(), onnx_light_cpu::CpuSupportsAvxVnni());
+#else
+  EXPECT_FALSE(onnx_light_cpu::IntegerMatMul2DUsesAvxVnni());
+#endif
 }
 
 TEST(IntegerVnniKernel, SkinnyPlannerPreservesPackedBoundary) {

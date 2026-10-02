@@ -6,6 +6,7 @@
 #include "onnx_light_cpu/impl/simd_level.h"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -29,6 +30,33 @@ template <typename Fn> double MedianSeconds(Fn run) {
   return samples[samples.size() / 2];
 }
 
+template <typename A, typename B> std::array<double, 2> CompareSeconds(A avx2, B avxvnni) {
+  for (int i = 0; i < 5; ++i) {
+    avx2();
+    avxvnni();
+  }
+  std::array<std::vector<double>, 2> samples;
+  const auto measure = [&](auto run, int index) {
+    const auto start = std::chrono::steady_clock::now();
+    run();
+    samples[index].push_back(
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count());
+  };
+  for (int i = 0; i < 31; ++i) {
+    if (i & 1) {
+      measure(avxvnni, 1);
+      measure(avx2, 0);
+    } else {
+      measure(avx2, 0);
+      measure(avxvnni, 1);
+    }
+  }
+  for (auto &sample : samples) {
+    std::sort(sample.begin(), sample.end());
+  }
+  return {samples[0][15], samples[1][15]};
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -50,6 +78,12 @@ int main(int argc, char **argv) {
   if (DetectSimdLevel() >= SimdLevel::kAVX2) {
     dot = &detail::IntegerDotU8S8Avx2;
     isa = "avx2";
+  }
+#endif
+#ifdef ONNX_LIGHT_CPU_HAVE_AVXVNNI
+  if (IntegerMatMul2DUsesAvxVnni()) {
+    dot = &detail::IntegerDotU8S8AvxVnni;
+    isa = "avxvnni";
   }
 #endif
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512VNNI
@@ -87,6 +121,31 @@ int main(int argc, char **argv) {
     std::fprintf(stderr, "Dispatched output differs from packed output.\n");
     return 1;
   }
+#if defined(ONNX_LIGHT_CPU_HAVE_AVX2_INTEGER) && defined(ONNX_LIGHT_CPU_HAVE_AVXVNNI)
+  if (DetectSimdLevel() >= SimdLevel::kAVX2 && IntegerMatMul2DUsesAvxVnni()) {
+    const auto avx2 = [&] {
+      detail::IntegerMatMul2DWithDot(&detail::IntegerDotU8S8Avx2, a.data(), false, b.data(), true,
+                                     c.data(), m, n, k, &az, 1, &bz, 1);
+    };
+    const auto avxvnni = [&] {
+      detail::IntegerMatMul2DWithDot(&detail::IntegerDotU8S8AvxVnni, a.data(), false, b.data(),
+                                     true, c.data(), m, n, k, &az, 1, &bz, 1);
+    };
+    avx2();
+    if (c != expected) {
+      std::fprintf(stderr, "AVX2 output differs from packed output.\n");
+      return 1;
+    }
+    avxvnni();
+    if (c != expected) {
+      std::fprintf(stderr, "AVX-VNNI output differs from packed output.\n");
+      return 1;
+    }
+    const auto times = CompareSeconds(avx2, avxvnni);
+    std::printf("avx2_packed_seconds=%.9f avxvnni_packed_seconds=%.9f speedup=%.3fx\n", times[0],
+                times[1], times[0] / times[1]);
+  }
+#endif
   const double pack_seconds = MedianSeconds(pack);
   const double dot_seconds = MedianSeconds([&] {
     for (std::int64_t row = 0; row < m; ++row) {
