@@ -35,7 +35,7 @@ def test_onnx_light_dev_dependency_version():
     ]
 
     assert len(onnx_light) == 3
-    assert all("/0.1.28/onnx_light-0.1.28-" in dependency for dependency in onnx_light)
+    assert all("/0.1.29/onnx_light-0.1.29-" in dependency for dependency in onnx_light)
 
 
 def test_avx2_parity_uses_onnx_light_dev_dependency():
