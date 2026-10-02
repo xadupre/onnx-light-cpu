@@ -14,7 +14,7 @@ _ROOT = Path(__file__).resolve().parents[2]
 def test_project_version_consistency():
     metadata = tomllib.loads((_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     version = metadata["project"]["version"]
-    assert version == "0.1.17"
+    assert version == "0.1.18"
 
     for path, pattern in (
         ("setup.py", r'version="([^"]+)"'),
