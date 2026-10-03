@@ -6,8 +6,8 @@
 // / PR09.3). ``IntegerMatMul2D`` computes a single ``MatMulInteger`` matrix
 // product exactly, dispatching to the native ARM NEON dot-product kernel when
 // the running CPU reports it (``CpuSupportsNeonDotProd``, Roadmap PR09.3), then
-// to a native x86 AVX-512 VNNI (``vpdpbusd``) path when the CPU reports that ISA
-// (``CpuSupportsAvx512Vnni``, Roadmap PR09.2), an exact AVX2 fallback, and
+// to native x86 AVX-512 VNNI or AVX-VNNI (``vpdpbusd``) when the CPU reports
+// those ISAs, an exact AVX2 fallback, and
 // finally a portable scalar sibling. Skinny-M x86 paths stream B without packing;
 // all paths use exact zero-point correction and are testable over the portable
 // PR09.1 fallback.
@@ -67,6 +67,9 @@ void IntegerMatMul4Bit2D(const std::uint8_t *a, bool a_signed, const std::uint8_
 // library was built without VNNI support. Exposed for differential tests.
 bool IntegerMatMul2DUsesVnni();
 
+/// Returns whether the binary and CPU support the 256-bit AVX-VNNI dot path.
+bool IntegerMatMul2DUsesAvxVnni();
+
 namespace detail {
 
 // Production B packer, also exposed for isolated packing/compute profiling.
@@ -115,6 +118,11 @@ void RequantizeInt32ToInt8Avx2(const std::int32_t *src, std::int8_t *dst, std::i
                                float scale, std::int32_t zero_point);
 void RequantizeInt32ToUint8Avx2(const std::int32_t *src, std::uint8_t *dst, std::int64_t count,
                                 float scale, std::int32_t zero_point);
+#endif
+
+#ifdef ONNX_LIGHT_CPU_HAVE_AVXVNNI
+std::int32_t IntegerDotU8S8AvxVnni(const std::uint8_t *ua, const std::int8_t *sb,
+                                   std::int64_t depth);
 #endif
 
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512VNNI

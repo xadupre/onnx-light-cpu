@@ -38,6 +38,10 @@ bool CpuSupportsFma();
 /// and AVX state is enabled by the operating system.
 bool CpuSupportsF16C();
 
+/// Returns whether 256-bit AVX-VNNI dot-product instructions are available
+/// and the operating system has enabled AVX state.
+bool CpuSupportsAvxVnni();
+
 /// Returns whether the AVX-512FP16 instruction set (native half-precision
 /// arithmetic and conversion) is available and AVX-512 state is enabled by the
 /// operating system.

@@ -348,6 +348,25 @@ else()
   set(ONNX_LIGHT_CPU_HAVE_AMX_INT8_FLAG FALSE)
 endif()
 
+if(ONNX_LIGHT_CPU_X86 AND NOT MSVC)
+  # Check the intrinsic as well as the target flag; AVX-VNNI is independent
+  # of AVX-512 and remains available under the AVX2 build ceiling.
+  set(_saved_required_flags "${CMAKE_REQUIRED_FLAGS}")
+  set(CMAKE_REQUIRED_FLAGS "${CMAKE_REQUIRED_FLAGS} -mavx2 -mavxvnni")
+  check_cxx_source_compiles(
+      "#include <immintrin.h>
+       int main() {
+         __m256i x = _mm256_setzero_si256();
+         __m128i y = _mm_setzero_si128();
+         return _mm256_movemask_epi8(_mm256_dpbusd_epi32(x, x, x)) +
+                _mm_cvtsi128_si32(_mm_dpbusd_epi32(y, y, y));
+       }"
+      ONNX_LIGHT_CPU_HAVE_AVXVNNI_FLAG)
+  set(CMAKE_REQUIRED_FLAGS "${_saved_required_flags}")
+else()
+  set(ONNX_LIGHT_CPU_HAVE_AVXVNNI_FLAG FALSE)
+endif()
+
 # ---------------------------------------------------------------------------
 # Sources
 # ---------------------------------------------------------------------------
@@ -406,6 +425,9 @@ foreach(_source IN LISTS CPU_KERNEL_SOURCES)
   endif()
   if(_source MATCHES "integer_gemm_avx2[.]cc$")
     list(APPEND _avx2_integer_sources "${_source}")
+  endif()
+  if(_source MATCHES "integer_gemm_avxvnni[.]cc$")
+    list(APPEND _avxvnni_integer_sources "${_source}")
   endif()
   if(_source MATCHES "f16c[.]cc$")
     list(APPEND _avx_f16c_sources "${_source}")
@@ -475,6 +497,9 @@ if(NOT ONNX_LIGHT_CPU_HAVE_AVX512VNNI_FLAG)
   # Exclude the native AVX-512 VNNI INT8 dot-product when the compiler cannot
   # target the ISA; the integer matmul keeps its AVX2/scalar fallbacks.
   list(REMOVE_ITEM CPU_KERNEL_SOURCES ${_avx512vnni_sources})
+endif()
+if(NOT ONNX_LIGHT_CPU_HAVE_AVXVNNI_FLAG)
+  list(REMOVE_ITEM CPU_KERNEL_SOURCES ${_avxvnni_integer_sources})
 endif()
 if(NOT ONNX_LIGHT_CPU_HAVE_AMX_BF16_FLAG)
   # Exclude the native AMX-BF16 GEMM kernel when the compiler cannot target the
@@ -641,6 +666,12 @@ if(ONNX_LIGHT_CPU_HAVE_AVX512VNNI_FLAG)
       PROPERTIES COMPILE_OPTIONS "-mavx512f;-mavx512vnni")
   target_compile_definitions(lib_onnx_light_cpu PRIVATE
       ONNX_LIGHT_CPU_HAVE_AVX512VNNI=1)
+endif()
+if(ONNX_LIGHT_CPU_HAVE_AVXVNNI_FLAG)
+  set_source_files_properties(${_avxvnni_integer_sources} PROPERTIES
+      COMPILE_OPTIONS "-mavx2;-mavxvnni")
+  target_compile_definitions(lib_onnx_light_cpu PRIVATE
+      ONNX_LIGHT_CPU_HAVE_AVXVNNI=1)
 endif()
 
 if(ONNX_LIGHT_CPU_HAVE_AMX_TILE_FLAG)
@@ -1302,6 +1333,9 @@ if(ONNX_LIGHT_CPU_BUILD_BENCHMARKS)
     add_executable(${_target} "${_source}")
     target_link_libraries(${_target} PRIVATE lib_onnx_light_cpu)
     if(_target STREQUAL "integer_gemm_throughput")
+      if(ONNX_LIGHT_CPU_HAVE_AVXVNNI_FLAG)
+        target_compile_definitions(${_target} PRIVATE ONNX_LIGHT_CPU_HAVE_AVXVNNI=1)
+      endif()
       if(ONNX_LIGHT_CPU_HAVE_AVX2_FMA_FLAG)
         target_compile_definitions(${_target} PRIVATE ONNX_LIGHT_CPU_HAVE_AVX2_INTEGER=1)
       endif()
@@ -1378,6 +1412,9 @@ if(ONNX_LIGHT_CPU_BUILD_TESTS)
       endif()
     endif()
     if(_name STREQUAL "test_integer_gemm_vnni")
+      if(ONNX_LIGHT_CPU_HAVE_AVXVNNI_FLAG)
+        target_compile_definitions(${_name} PRIVATE ONNX_LIGHT_CPU_HAVE_AVXVNNI=1)
+      endif()
       # This differential binary names and calls the optional native integer
       # kernels directly. The library keeps availability definitions private,
       # so mirror only the definitions whose translation units were built.

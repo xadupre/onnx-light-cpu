@@ -155,6 +155,14 @@ bool CpuSupportsF16C() {
   return has_f16c && OsSupportsAvx();
 }
 
+bool CpuSupportsAvxVnni() {
+  // AVX-VNNI is CPUID.(EAX=7,ECX=1):EAX[4], independent of AVX-512 VNNI.
+  // Its 256-bit instructions require AVX2 and OS-enabled YMM state.
+  const auto info7 = Cpuid(7);
+  const auto info7_1 = Cpuid(7, 1);
+  return (info7.ebx & (1u << 5)) && (info7_1.eax & (1u << 4)) && OsSupportsAvx();
+}
+
 bool CpuSupportsAvx512Fp16() {
   if constexpr (kMaximumSimdLevel < SimdLevel::kAVX512)
     return false;
@@ -232,6 +240,8 @@ bool CpuSupportsAvx512DQ() { return false; }
 bool CpuSupportsFma() { return false; }
 
 bool CpuSupportsF16C() { return false; }
+
+bool CpuSupportsAvxVnni() { return false; }
 
 bool CpuSupportsAvx512Fp16() { return false; }
 

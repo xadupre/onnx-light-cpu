@@ -4,7 +4,7 @@
 //
 // Portable driver and scalar sibling for integer matrix multiplication. This
 // translation unit is compiled at the project's baseline SIMD flags; optional
-// AVX2, AVX-512 VNNI, AMX, and NEON kernels live in ISA-specific translation
+// AVX2, AVX-VNNI, AVX-512 VNNI, AMX, and NEON kernels live in ISA-specific translation
 // units and are only dispatched to when the running CPU supports them.
 //
 // Exactness relies on decomposing the zero-point-shifted accumulation into a
@@ -437,6 +437,15 @@ bool IntegerMatMul2DUsesVnni() {
 #endif
 }
 
+bool IntegerMatMul2DUsesAvxVnni() {
+#ifdef ONNX_LIGHT_CPU_HAVE_AVXVNNI
+  static const bool avx_vnni = CpuSupportsAvxVnni();
+  return avx_vnni;
+#else
+  return false;
+#endif
+}
+
 IntegerMatMulPlan SelectIntegerMatMulPlan(std::int64_t rows, std::int64_t cols,
                                           std::int64_t depth) {
   if (rows < 1 || rows > 2 || cols < 1 || depth < 0 || (rows == 2 && (cols < 32 || depth < 4))) {
@@ -533,6 +542,11 @@ void IntegerMatMul2D(const std::uint8_t *a, bool a_signed, const std::uint8_t *b
     dot = (depth % 32 != 0) ? &detail::IntegerDotU8S8Avx2ShortTail : &detail::IntegerDotU8S8Avx2;
   }
 #endif
+#ifdef ONNX_LIGHT_CPU_HAVE_AVXVNNI
+  if (IntegerMatMul2DUsesAvxVnni()) {
+    dot = &detail::IntegerDotU8S8AvxVnni;
+  }
+#endif
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512VNNI
   if (CpuSupportsAvx512Vnni()) {
     dot = &detail::IntegerDotU8S8Avx512Vnni;
@@ -554,6 +568,11 @@ void IntegerMatMul4Bit2D(const std::uint8_t *a, bool a_signed, const std::uint8_
     // ``ShortTail`` only for non-multiple-of-32 depths keeps the tested
     // multiple-of-32 shapes on the plain function with zero added overhead.
     dot = (depth % 32 != 0) ? &detail::IntegerDotU8S8Avx2ShortTail : &detail::IntegerDotU8S8Avx2;
+  }
+#endif
+#ifdef ONNX_LIGHT_CPU_HAVE_AVXVNNI
+  if (IntegerMatMul2DUsesAvxVnni()) {
+    dot = &detail::IntegerDotU8S8AvxVnni;
   }
 #endif
 #ifdef ONNX_LIGHT_CPU_HAVE_NEON_DOTPROD
