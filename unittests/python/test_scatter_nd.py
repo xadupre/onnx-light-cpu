@@ -155,7 +155,7 @@ class TestScatterND(ExtTestCase):
 
     def test_backend_fixtures_and_onnx_runtime(self):
         cases = collect_test_cases_by_name("^test_cpu_scatternd_", mode=BackendTestMode.TEST)
-        self.assertEqual(len(cases), 57)
+        self.assertEqual(len(cases), 63)
         for case in cases:
             with self.subTest(case=case.name):
                 model = case.model
