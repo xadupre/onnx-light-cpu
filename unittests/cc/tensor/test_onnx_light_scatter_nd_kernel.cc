@@ -88,6 +88,31 @@ TEST(OnnxLightScatterNDKernel, DuplicatesUseLastTupleIncludingNegativeAliases) {
   Compare(data, {3, 1}, {1, -2, 1}, updates);
 }
 
+TEST(OnnxLightScatterNDKernel, UniqueClusteredAndRepeatedScalarDestinations) {
+  constexpr int64_t rows = 8192;
+  for (const int64_t count : {7, 8, 9, 17, 8192}) {
+    for (int mode = 0; mode < 3; ++mode) {
+      SCOPED_TRACE(count);
+      SCOPED_TRACE(mode);
+      std::vector<int64_t> indices;
+      std::vector<int32_t> updates;
+      std::vector<int32_t> expected(rows, 0);
+      for (int64_t t = 0; t < count; ++t) {
+        const int64_t index = mode == 0 ? t : mode == 1 ? (t * 7) % 16 : 3;
+        indices.push_back(t % 2 == 0 ? index : index - rows);
+        updates.push_back(static_cast<int32_t>(t + 1));
+        expected[index] = updates.back();
+      }
+      const Tensor data = Tensor::FromInt32("data", {rows}, std::vector<int32_t>(rows, 0));
+      const Tensor changes = Tensor::FromInt32("updates", {count}, updates);
+      const Tensor positions = Tensor::FromInt64("indices", {count, 1}, indices);
+      EqualBytes(ScatterNDKernel(MakeCtx())(data, positions, changes),
+                 Tensor::FromInt32("expected", {rows}, expected));
+      Compare(data, {count, 1}, indices, changes);
+    }
+  }
+}
+
 TEST(OnnxLightScatterNDKernel, RejectsRanksShapesTypesReductionsAndMalformedBuffers) {
   const auto ctx = MakeCtx();
   const ScatterNDKernel kernel(ctx);
