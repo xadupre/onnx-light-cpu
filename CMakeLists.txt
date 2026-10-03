@@ -351,7 +351,8 @@ endif()
 if(ONNX_LIGHT_CPU_X86 AND NOT MSVC)
   # Check the intrinsic as well as the target flag; AVX-VNNI is independent
   # of AVX-512 and remains available under the AVX2 build ceiling.
-  set(CMAKE_REQUIRED_FLAGS "-mavx2 -mavxvnni")
+  set(_saved_required_flags "${CMAKE_REQUIRED_FLAGS}")
+  set(CMAKE_REQUIRED_FLAGS "${CMAKE_REQUIRED_FLAGS} -mavx2 -mavxvnni")
   check_cxx_source_compiles(
       "#include <immintrin.h>
        int main() {
@@ -361,7 +362,7 @@ if(ONNX_LIGHT_CPU_X86 AND NOT MSVC)
                 _mm_cvtsi128_si32(_mm_dpbusd_epi32(y, y, y));
        }"
       ONNX_LIGHT_CPU_HAVE_AVXVNNI_FLAG)
-  unset(CMAKE_REQUIRED_FLAGS)
+  set(CMAKE_REQUIRED_FLAGS "${_saved_required_flags}")
 else()
   set(ONNX_LIGHT_CPU_HAVE_AVXVNNI_FLAG FALSE)
 endif()

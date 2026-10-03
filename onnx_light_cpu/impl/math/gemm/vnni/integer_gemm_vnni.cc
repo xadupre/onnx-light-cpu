@@ -439,7 +439,8 @@ bool IntegerMatMul2DUsesVnni() {
 
 bool IntegerMatMul2DUsesAvxVnni() {
 #ifdef ONNX_LIGHT_CPU_HAVE_AVXVNNI
-  return CpuSupportsAvxVnni();
+  static const bool avx_vnni = CpuSupportsAvxVnni();
+  return avx_vnni;
 #else
   return false;
 #endif

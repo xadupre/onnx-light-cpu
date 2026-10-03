@@ -288,9 +288,9 @@ TEST(IntegerVnniKernel, MatchesReferenceAcrossSignednessAndZeroPoints) {
   // Include depths that are not a multiple of the 64-byte VNNI vector so the
   // scalar tail is exercised, plus tiny and larger matrices.
   const std::vector<std::array<std::int64_t, 3>> shapes = {
-      {1, 1, 1},   {2, 3, 5},   {3, 2, 64},  {4, 4, 65},  {5, 7, 100}, {8, 6, 128},
-      {2, 9, 131}, {6, 3, 200}, {1, 16, 68}, {1, 19, 67}, {17, 1, 68}, {33, 35, 70},
-      {3, 5, 31},  {3, 5, 32},  {3, 5, 33},  {3, 5, 63},  {3, 5, 95}};
+      {1, 1, 1},   {2, 3, 5},   {3, 2, 64},  {4, 4, 65},  {5, 7, 100},  {8, 6, 128}, {2, 9, 131},
+      {6, 3, 200}, {1, 16, 68}, {1, 19, 67}, {17, 1, 68}, {33, 35, 70}, {3, 5, 15},  {3, 5, 16},
+      {3, 5, 17},  {3, 5, 31},  {3, 5, 32},  {3, 5, 33},  {3, 5, 63},   {3, 5, 95}};
 
   for (const auto &shape : shapes) {
     const std::int64_t rows = shape[0];

@@ -123,9 +123,11 @@ int main(int argc, char **argv) {
   }
 #if defined(ONNX_LIGHT_CPU_HAVE_AVX2_INTEGER) && defined(ONNX_LIGHT_CPU_HAVE_AVXVNNI)
   if (DetectSimdLevel() >= SimdLevel::kAVX2 && IntegerMatMul2DUsesAvxVnni()) {
+    const detail::IntegerVnniDotFn avx2_dot =
+        k % 32 == 0 ? &detail::IntegerDotU8S8Avx2 : &detail::IntegerDotU8S8Avx2ShortTail;
     const auto avx2 = [&] {
-      detail::IntegerMatMul2DWithDot(&detail::IntegerDotU8S8Avx2, a.data(), false, b.data(), true,
-                                     c.data(), m, n, k, &az, 1, &bz, 1);
+      detail::IntegerMatMul2DWithDot(avx2_dot, a.data(), false, b.data(), true, c.data(), m, n, k,
+                                     &az, 1, &bz, 1);
     };
     const auto avxvnni = [&] {
       detail::IntegerMatMul2DWithDot(&detail::IntegerDotU8S8AvxVnni, a.data(), false, b.data(),
