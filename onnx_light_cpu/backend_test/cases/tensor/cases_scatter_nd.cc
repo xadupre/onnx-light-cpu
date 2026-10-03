@@ -154,6 +154,7 @@ void RegisterCpuScatterNDCases(std::vector<TestCase> &registry, TestMode mode) {
                       {"scalar_update", {2, 3}, {2}, {1, 2}},
                       {"slices", {3, 2, 4}, {2, 1}, {0, 2}},
                       {"negative", {2, 3}, {2, 2}, {-2, -1, -1, -3}},
+                      {"duplicate_negative_alias", {4, 2}, {4, 1}, {1, -3, 2, 1}},
                       {"tuple_grid", {3, 4, 2}, {2, 2, 2}, {0, 0, 0, 3, 2, 1, 1, 2}},
                       {"empty_updates", {3, 4}, {0, 1}, {}},
                       {"empty_data", {0, 4}, {0, 1}, {}},
