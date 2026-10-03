@@ -11,6 +11,8 @@
 #include "onnx_proto/onnx_helper.h"
 
 #include <cstdint>
+#include <cstring>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -29,6 +31,7 @@ struct ScatterShape {
   Shape data;
   Shape indices;
   std::vector<int64_t> values;
+  std::vector<size_t> update_sources;
 };
 
 void RegisterScatterCase(std::vector<TestCase> &registry, const ScatterShape &shape,
@@ -45,6 +48,29 @@ void RegisterScatterCase(std::vector<TestCase> &registry, const ScatterShape &sh
                       opset](bool expected) -> bt_ns::IoData {
     Tensor data = MakeBenchmarkTensor(data_type, shape.data, 719);
     Tensor updates = MakeBenchmarkTensor(data_type, updates_shape, 911);
+    if (!shape.update_sources.empty()) {
+      size_t tuple_count = 1;
+      for (size_t i = 0; i + 1 < shape.indices.size(); ++i) {
+        tuple_count *= static_cast<size_t>(shape.indices[i]);
+      }
+      if (shape.update_sources.size() != tuple_count) {
+        throw std::logic_error("ScatterND duplicate update mapping has an unexpected size.");
+      }
+      if (updates.size_bytes() % tuple_count != 0) {
+        throw std::logic_error("ScatterND duplicate update slices have inconsistent sizes.");
+      }
+      const size_t slice_bytes = updates.size_bytes() / tuple_count;
+      for (size_t i = 0; i < tuple_count; ++i) {
+        const size_t source = shape.update_sources[i];
+        if (source >= tuple_count) {
+          throw std::logic_error("ScatterND duplicate update source is out of range.");
+        }
+        if (source != i) {
+          std::memcpy(updates.mutable_bytes() + i * slice_bytes,
+                      updates.bytes() + source * slice_bytes, slice_bytes);
+        }
+      }
+    }
     Tensor indices =
         index_type == DataType::INT32
             ? Tensor::FromInt32("indices", shape.indices,
@@ -154,7 +180,11 @@ void RegisterCpuScatterNDCases(std::vector<TestCase> &registry, TestMode mode) {
                       {"scalar_update", {2, 3}, {2}, {1, 2}},
                       {"slices", {3, 2, 4}, {2, 1}, {0, 2}},
                       {"negative", {2, 3}, {2, 2}, {-2, -1, -1, -3}},
-                      {"duplicate_negative_alias", {4, 2}, {4, 1}, {1, -3, 2, 1}},
+                      {"duplicate_negative_alias",
+                       {4, 2},
+                       {4, 1},
+                       {1, -3, 2, 1},
+                       {0, 0, 2, 0}},
                       {"tuple_grid", {3, 4, 2}, {2, 2, 2}, {0, 0, 0, 3, 2, 1, 1, 2}},
                       {"empty_updates", {3, 4}, {0, 1}, {}},
                       {"empty_data", {0, 4}, {0, 1}, {}},

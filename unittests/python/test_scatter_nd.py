@@ -167,6 +167,9 @@ class TestScatterND(ExtTestCase):
                         info.name: _numpy(tensor).copy()
                         for info, tensor in zip(model.graph.input, data_set.inputs, strict=True)
                     }
+                    if "duplicate_negative_alias" in case.name:
+                        self.assertEqualArray(feeds["updates"][0], feeds["updates"][1])
+                        self.assertEqualArray(feeds["updates"][0], feeds["updates"][3])
                     original = {name: value.copy() for name, value in feeds.items()}
                     actual = session.run(None, feeds)[0]
                     expected = _numpy(data_set.outputs[0])
