@@ -90,14 +90,13 @@ int main() {
               Ordered(output.data(), updates.data(), offsets.data(), count);
             }
           }
-          times[path][run] =
-              std::chrono::duration<double, std::micro>(Clock::now() - begin).count() / 100;
+          times[path][run] = std::chrono::duration<double>(Clock::now() - begin).count() / 100;
         }
       }
       for (auto &path : times) {
         std::sort(path, path + 9);
       }
-      std::printf("%zu,%s,%.3f,%.3f,%.3f\n", count,
+      std::printf("%zu,%s,%.9f,%.9f,%.3f\n", count,
                   mode == 0   ? "unique"
                   : mode == 1 ? "clustered"
                               : "duplicate",

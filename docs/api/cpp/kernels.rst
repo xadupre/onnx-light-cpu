@@ -111,7 +111,7 @@ not overlap; trailing slices wider than four bytes still use the ordered
 ``memcpy`` loop. This does not implement reduction modes.
 
 The standalone, non-dispatched prototype is
-``tools/scatter_nd_conflict_throughput.cc``. On an Intel Xeon Platinum 8573C
+``tools/scatter_nd_conflict_probe.cc``. On an Intel Xeon Platinum 8573C
 with AVX-512CD, GCC 13.3, one pinned CPU and the flags shown below, it
 checked bitwise parity before measuring. Each trial
 copies 65,536 INT32 elements and writes either 8,192 or 65,536 INT32 updates
@@ -160,7 +160,7 @@ trials each give these median *seconds per copy plus update* (one thread):
 Reproduce on an AVX-512CD host (choose an allowed CPU for affinity)::
 
    g++ -O3 -std=c++20 -mavx512f -mavx512cd -mavx2 \
-       tools/scatter_nd_conflict_throughput.cc -o /tmp/scatter_cd
+       tools/scatter_nd_conflict_probe.cc -o /tmp/scatter_cd
    taskset -c <allowed-core> /tmp/scatter_cd
 
 C++ parity coverage in
