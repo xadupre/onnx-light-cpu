@@ -1202,7 +1202,10 @@ if(ONNX_LIGHT_CPU_BUILD_PYTHON)
   # kernel-registration library and is therefore only built when the
   # integration is enabled.
   if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
-    nanobind_add_module(_cpuregister STABLE_ABI ${PY_REGISTER_SOURCES})
+    # _cpuregister accepts RuntimeContext objects bound by onnx-light's
+    # _onnxpykernels extension. That extension uses the full CPython ABI for
+    # its NumPy bridge, so this module must use the same nanobind type domain.
+    nanobind_add_module(_cpuregister ${PY_REGISTER_SOURCES})
     target_include_directories(_cpuregister PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}")
     target_link_libraries(_cpuregister PRIVATE lib_onnx_light_cpu_kernels)
