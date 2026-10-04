@@ -66,7 +66,7 @@ Tensor ReduceSumKernel::Compute(const Tensor &data, const Tensor *axes, bool kee
     Invalid("data buffer size does not match shape.");
   }
 
-  rt_ns::Shape reduced(data.shape.size(), 0);
+  rt_ns::Shape reduced(std::vector<int64_t>(data.shape.size(), 0));
   int64_t axis_count = 0;
   if (axes != nullptr) {
     if (axes->data_type != DataType::INT64 || axes->shape.size() != 1) {
@@ -127,7 +127,7 @@ Tensor ReduceSumKernel::Compute(const Tensor &data, const Tensor *axes, bool kee
     return output;
   }
 
-  rt_ns::Shape input_strides(data.shape.size(), 1);
+  rt_ns::Shape input_strides(std::vector<int64_t>(data.shape.size(), 1));
   if (input_count != 0) {
     for (std::size_t dim = data.shape.size(); dim-- > 1;) {
       input_strides[dim - 1] = input_strides[dim] * data.shape[dim];
