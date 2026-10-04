@@ -33,12 +33,20 @@ def test_documentation_does_not_replace_onnx_light_main():
 
 def test_source_integration_uses_matching_nanobind_abi():
     cmake = (_ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
-    assert "option(ONNX_LIGHT_CPU_PYTHON_STABLE_ABI" in cmake
-    assert "list(APPEND _onnx_light_cpu_nanobind_abi STABLE_ABI)" in cmake
     assert (
-        "nanobind_add_module(_cpuregister ${_onnx_light_cpu_nanobind_abi} "
-        "${PY_REGISTER_SOURCES})"
+        "option(ONNX_LIGHT_CPU_PYTHON_STABLE_ABI\n"
+        '       "Build Python extensions with CPython\'s stable ABI." ON)'
     ) in cmake
+    assert "list(APPEND _onnx_light_cpu_nanobind_abi STABLE_ABI)" in cmake
+    modules = {
+        "_cpukernels": "PY_KERNELS_SOURCES",
+        "_cpuregister": "PY_REGISTER_SOURCES",
+    }
+    for module, sources in modules.items():
+        assert (
+            f"nanobind_add_module({module} ${{_onnx_light_cpu_nanobind_abi}} ${{{sources}}})"
+        ) in cmake
+        assert f"nanobind_add_module({module} STABLE_ABI " not in cmake
     assert "-C wheel.py-api=cp312" in _DOCS_WORKFLOW
     assert "-C wheel.py-api=cp312" in _CORE_WORKFLOW
     assert "-C cmake.define.ONNX_LIGHT_PYTHON_STABLE_ABI=OFF" in _CORE_WORKFLOW
