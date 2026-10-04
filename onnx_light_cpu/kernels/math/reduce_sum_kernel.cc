@@ -69,8 +69,8 @@ Tensor ReduceSumKernel::Compute(const Tensor &data, const Tensor *axes, bool kee
   rt_ns::Shape reduced(std::vector<int64_t>(data.shape.size(), 0));
   int64_t axis_count = 0;
   if (axes != nullptr) {
-    if (axes->data_type != DataType::INT64 || axes->shape.size() != 1) {
-      Invalid("axes must be a 1-D INT64 tensor.");
+    if (axes->data_type != DataType::INT64 || axes->shape.size() > 1) {
+      Invalid("axes must be a scalar or 1-D INT64 tensor.");
     }
     axis_count = ElementCount(axes->shape);
     const std::size_t axes_bytes = Bytes(axis_count);
