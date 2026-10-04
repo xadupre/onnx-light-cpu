@@ -33,16 +33,16 @@ def test_documentation_does_not_replace_onnx_light_main():
 
 def test_source_integration_uses_matching_nanobind_abi():
     cmake = (_ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
-    assert "nanobind_add_module(_cpuregister STABLE_ABI " in cmake
-    for workflow in (_DOCS_WORKFLOW, _CORE_WORKFLOW):
-        install_commands = [
-            line.strip()
-            for line in workflow.splitlines()
-            if "pip install" in line
-            and ("/tmp/onnx-light" in line or '"${onnx_light_source}"' in line)
-        ]
-        assert len(install_commands) == 1
-        assert "-C wheel.py-api=cp312" in install_commands[0]
+    assert "option(ONNX_LIGHT_CPU_PYTHON_STABLE_ABI" in cmake
+    assert "list(APPEND _onnx_light_cpu_nanobind_abi STABLE_ABI)" in cmake
+    assert (
+        "nanobind_add_module(_cpuregister ${_onnx_light_cpu_nanobind_abi} "
+        "${PY_REGISTER_SOURCES})"
+    ) in cmake
+    assert "-C wheel.py-api=cp312" in _DOCS_WORKFLOW
+    assert "-C wheel.py-api=cp312" in _CORE_WORKFLOW
+    assert "-C cmake.define.ONNX_LIGHT_PYTHON_STABLE_ABI=OFF" in _CORE_WORKFLOW
+    assert "-DONNX_LIGHT_CPU_PYTHON_STABLE_ABI=${{ matrix.stable-abi }}" in _CORE_WORKFLOW
 
 
 def test_release_wheels_build_and_test_session_registration_before_upload():
@@ -69,7 +69,10 @@ def test_onnx_light_main_integration_runs_on_every_supported_os():
     source_job = _CORE_WORKFLOW.split("  setup_onnx_light_source:", 1)[1].split(
         "  report_pr_benchmark:", 1
     )[0]
-    assert 'os: ["ubuntu-latest", "windows-latest", "macos-latest"]' in source_job
+    for os_name in ("ubuntu-latest", "windows-latest", "macos-latest"):
+        assert f"os: {os_name}" in source_job
+    assert source_job.count("python-abi: stable") == 3
+    assert source_job.count("python-abi: native") == 1
     assert "git clone --depth 1 --branch main" in source_job
     assert "scikit-build-core setuptools" in source_job
     assert "ONNX_LIGHT_CPU_ONNX_LIGHT_IMPLIB_DIR=" in source_job

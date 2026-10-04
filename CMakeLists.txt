@@ -28,6 +28,8 @@ option(ONNX_LIGHT_CPU_BUILD_TESTS "Build C++ unit tests." OFF)
 option(ONNX_LIGHT_CPU_BUILD_BENCHMARKS
        "Build the isolated C++ throughput benchmarks (not run by ctest)." OFF)
 option(ONNX_LIGHT_CPU_BUILD_PYTHON "Build Python extension." ON)
+option(ONNX_LIGHT_CPU_PYTHON_STABLE_ABI
+       "Build Python extensions with CPython's stable ABI." ON)
 option(ONNX_LIGHT_CPU_INSTALL "Install the C++ library and headers." ON)
 option(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT
        "Build the onnx-light kernel registration library (requires onnx-light)." OFF)
@@ -1100,9 +1102,18 @@ endif()
 # Python extension: _cpukernels
 # ---------------------------------------------------------------------------
 if(ONNX_LIGHT_CPU_BUILD_PYTHON)
+  set(_onnx_light_cpu_nanobind_abi)
+  if(ONNX_LIGHT_CPU_PYTHON_STABLE_ABI)
+    list(APPEND _onnx_light_cpu_nanobind_abi STABLE_ABI)
+  endif()
+
   if(CMAKE_CROSSCOMPILING)
-    find_package(Python3 3.12 REQUIRED COMPONENTS Development.Module
-        OPTIONAL_COMPONENTS Development.SABIModule)
+    if(ONNX_LIGHT_CPU_PYTHON_STABLE_ABI)
+      find_package(Python3 3.12 REQUIRED COMPONENTS Development.Module
+          OPTIONAL_COMPONENTS Development.SABIModule)
+    else()
+      find_package(Python3 3.12 REQUIRED COMPONENTS Development.Module)
+    endif()
     find_package(Python 3.12 REQUIRED COMPONENTS Interpreter)
     if(NOT TARGET Python::Module)
       add_library(Python::Module ALIAS Python3::Module)
@@ -1111,8 +1122,12 @@ if(ONNX_LIGHT_CPU_BUILD_PYTHON)
       add_library(Python::SABIModule ALIAS Python3::SABIModule)
     endif()
   else()
-    find_package(Python 3.12 REQUIRED COMPONENTS Interpreter Development.Module
-        OPTIONAL_COMPONENTS Development.SABIModule)
+    if(ONNX_LIGHT_CPU_PYTHON_STABLE_ABI)
+      find_package(Python 3.12 REQUIRED COMPONENTS Interpreter Development.Module
+          OPTIONAL_COMPONENTS Development.SABIModule)
+    else()
+      find_package(Python 3.12 REQUIRED COMPONENTS Interpreter Development.Module)
+    endif()
   endif()
 
   execute_process(
@@ -1162,7 +1177,7 @@ if(ONNX_LIGHT_CPU_BUILD_PYTHON)
     endif()
   endif()
 
-  nanobind_add_module(_cpukernels STABLE_ABI ${PY_KERNELS_SOURCES})
+  nanobind_add_module(_cpukernels ${_onnx_light_cpu_nanobind_abi} ${PY_KERNELS_SOURCES})
   target_include_directories(_cpukernels PRIVATE
       "${CMAKE_CURRENT_SOURCE_DIR}")
   target_link_libraries(_cpukernels PRIVATE lib_onnx_light_cpu)
@@ -1202,7 +1217,7 @@ if(ONNX_LIGHT_CPU_BUILD_PYTHON)
   # kernel-registration library and is therefore only built when the
   # integration is enabled.
   if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
-    nanobind_add_module(_cpuregister STABLE_ABI ${PY_REGISTER_SOURCES})
+    nanobind_add_module(_cpuregister ${_onnx_light_cpu_nanobind_abi} ${PY_REGISTER_SOURCES})
     target_include_directories(_cpuregister PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}")
     target_link_libraries(_cpuregister PRIVATE lib_onnx_light_cpu_kernels)
