@@ -95,6 +95,81 @@ The embedding fixture combines ``Gather -> Equal -> NonZero -> Transpose
 -> ScatterND`` with dynamic ``[visual_tokens, 1]`` positions and
 ``[visual_tokens, 6656]`` vision features, including zero-image inputs.
 
+AVX-512CD conflict-detection evaluation (2026-10-03)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+ScatterND is the only registered indexed-destination writer; Gather reads
+indices but writes contiguous output, and there is no histogram or
+ScatterElements kernel. For ``reduction="none"``, ONNX says duplicate
+destinations should not occur and does not define their update order. The
+local last-tuple-wins guarantee above nevertheless permits a narrow
+experiment: for each group of eight *normalized*, four-byte scalar
+destinations, reverse the offsets, use ``VPCONFLICTQ`` to retain only each
+destination's final lane, and mask-scatter the retained values. Groups remain
+ordered, and the scalar tail runs afterwards. Distinct destination bytes do
+not overlap; trailing slices wider than four bytes still use the ordered
+``memcpy`` loop. This does not implement reduction modes.
+
+The standalone, non-dispatched prototype is
+``tools/scatter_nd_conflict_probe.cc``. On an Intel Xeon Platinum 8573C
+with AVX-512CD, GCC 13.3, one pinned CPU and the flags shown below, it
+checked bitwise parity before measuring. Each trial
+copies 65,536 INT32 elements and writes either 8,192 or 65,536 INT32 updates
+using already prepared byte offsets. Nine alternating-path runs of 100
+trials each give these median *seconds per copy plus update* (one thread):
+
+.. list-table::
+   :header-rows: 1
+
+   * - Updates
+     - Destinations
+     - Ordered scalar (s)
+     - AVX-512CD (s)
+     - AVX-512CD / scalar
+   * - 8,192
+     - unique
+     - 0.000008138
+     - 0.000011916
+     - 1.46
+   * - 8,192
+     - clustered (16)
+     - 0.000008570
+     - 0.000012376
+     - 1.44
+   * - 8,192
+     - all one destination
+     - 0.000008667
+     - 0.000012556
+     - 1.45
+   * - 65,536
+     - unique
+     - 0.000030537
+     - 0.000063837
+     - 2.09
+   * - 65,536
+     - clustered (16)
+     - 0.000029877
+     - 0.000063727
+     - 2.13
+   * - 65,536
+     - all one destination
+     - 0.000030799
+     - 0.000065988
+     - 2.14
+
+Reproduce on an AVX-512CD host (choose an allowed CPU for affinity)::
+
+   g++ -O3 -std=c++20 -mavx512f -mavx512cd -mavx2 \
+       tools/scatter_nd_conflict_probe.cc -o /tmp/scatter_cd
+   taskset -c <allowed-core> /tmp/scatter_cd
+
+C++ parity coverage in
+``test_onnx_light_scatter_nd_kernel.cc`` also exercises unique, clustered and
+repeated destinations, negative aliases, both index widths, and counts around
+eight-lane boundaries against the built-in kernel and the local last-wins
+contract. Because every measured case regressed, no AVX-512CD compiler or
+runtime dispatch is added; the existing scalar replacement path remains.
+
 .. doxygenclass:: onnx_light_cpu::CastKernel
    :project: onnx_light_cpu
    :members:

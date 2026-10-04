@@ -155,7 +155,7 @@ class TestScatterND(ExtTestCase):
 
     def test_backend_fixtures_and_onnx_runtime(self):
         cases = collect_test_cases_by_name("^test_cpu_scatternd_", mode=BackendTestMode.TEST)
-        self.assertEqual(len(cases), 57)
+        self.assertEqual(len(cases), 63)
         for case in cases:
             with self.subTest(case=case.name):
                 model = case.model
@@ -167,6 +167,9 @@ class TestScatterND(ExtTestCase):
                         info.name: _numpy(tensor).copy()
                         for info, tensor in zip(model.graph.input, data_set.inputs, strict=True)
                     }
+                    if "duplicate_negative_alias" in case.name:
+                        self.assertEqualArray(feeds["updates"][0], feeds["updates"][1])
+                        self.assertEqualArray(feeds["updates"][0], feeds["updates"][3])
                     original = {name: value.copy() for name, value in feeds.items()}
                     actual = session.run(None, feeds)[0]
                     expected = _numpy(data_set.outputs[0])
