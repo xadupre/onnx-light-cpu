@@ -162,6 +162,14 @@ TEST(OnnxLightReduceSumKernel, DelegatesOtherTypesAndRejectsInvalidAxes) {
     ASSERT_TRUE(onnx_light_cpu::RegisterKernelForSession(runtime, "", "ReduceSum"));
     EXPECT_THROW(rt_ns::RunNode(node, runtime), std::invalid_argument);
   }
+  {
+    rt_ns::RuntimeContext runtime(rt_ns::KernelContext(rt_ns::DefaultOpset(13)));
+    runtime.Set("data", rt_ns::Tensor::FromInt64("data", {2, 2}, {1, 2, 3, 4}));
+    runtime.Set("axes", rt_ns::Tensor::FromInt64("axes", {1, 1}, {1}));
+    NodeProto node = MakeNode({"data", "axes"});
+    ASSERT_TRUE(onnx_light_cpu::RegisterKernelForSession(runtime, "", "ReduceSum"));
+    EXPECT_THROW(rt_ns::RunNode(node, runtime), std::invalid_argument);
+  }
 }
 
 TEST(OnnxLightReduceSumKernel, UsesRuntimeExecutorOnlyForSufficientOutputWork) {
