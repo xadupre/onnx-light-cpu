@@ -60,7 +60,7 @@ NodeProto MakeNode(const std::vector<std::string> &inputs, bool keepdims = true,
   return node;
 }
 
-void Run(NodeProto &node, rt_ns::RuntimeContext &runtime) {
+void RunKernel(NodeProto &node, rt_ns::RuntimeContext &runtime) {
   ASSERT_TRUE(onnx_light_cpu::RegisterKernelForSession(runtime, "", "ReduceSum"));
   runtime.set_kernel_usage_enabled(true);
   rt_ns::RunNode(node, runtime);
@@ -72,7 +72,7 @@ TEST(OnnxLightReduceSumKernel, ReducesInt64AxesAndRecordsCpuDispatch) {
   runtime.Set("axes", rt_ns::Tensor::FromInt64("axes", {1}, {1}));
   NodeProto node = MakeNode({"data", "axes"});
 
-  Run(node, runtime);
+  RunKernel(node, runtime);
 
   const auto &output = runtime.Get("y");
   EXPECT_EQ(output.data_type, rt_ns::DataType::INT64);
@@ -92,7 +92,7 @@ TEST(OnnxLightReduceSumKernel, PreservesLargeIntegerPrecisionAndWrapsOverflow) {
     runtime.Set("axes", rt_ns::Tensor::FromInt64("axes", {1}, {0}));
     NodeProto node = MakeNode({"data", "axes"}, false);
 
-    Run(node, runtime);
+    RunKernel(node, runtime);
 
     EXPECT_EQ(runtime.Get("y").AsInt64()[0], beyond_double_precision + 1);
   }
@@ -103,7 +103,7 @@ TEST(OnnxLightReduceSumKernel, PreservesLargeIntegerPrecisionAndWrapsOverflow) {
     runtime.Set("axes", rt_ns::Tensor::FromInt64("axes", {1}, {0}));
     NodeProto node = MakeNode({"data", "axes"}, false);
 
-    Run(node, runtime);
+    RunKernel(node, runtime);
 
     EXPECT_EQ(runtime.Get("y").AsInt64()[0], std::numeric_limits<int64_t>::min());
   }
@@ -116,7 +116,7 @@ TEST(OnnxLightReduceSumKernel, SupportsNegativeAxesKeepdimsFalseAndEmptyAxes) {
     runtime.Set("axes", rt_ns::Tensor::FromInt64("axes", {1}, {-1}));
     NodeProto node = MakeNode({"data", "axes"}, false);
 
-    Run(node, runtime);
+    RunKernel(node, runtime);
 
     const auto &output = runtime.Get("y");
     EXPECT_EQ(output.shape, (rt_ns::Shape{2}));
@@ -129,7 +129,7 @@ TEST(OnnxLightReduceSumKernel, SupportsNegativeAxesKeepdimsFalseAndEmptyAxes) {
     runtime.Set("axes", rt_ns::Tensor::FromInt64("axes", {0}, {}));
     NodeProto node = MakeNode({"data", "axes"});
 
-    Run(node, runtime);
+    RunKernel(node, runtime);
 
     const auto &output = runtime.Get("y");
     EXPECT_EQ(output.shape, (rt_ns::Shape{1, 1}));
@@ -144,7 +144,7 @@ TEST(OnnxLightReduceSumKernel, EmptyAxisNoopAndZeroSizedReduction) {
     runtime.Set("axes", rt_ns::Tensor::FromInt64("axes", {0}, {}));
     NodeProto node = MakeNode({"data", "axes"}, true, true);
 
-    Run(node, runtime);
+    RunKernel(node, runtime);
 
     const auto &output = runtime.Get("y");
     EXPECT_EQ(output.shape, (rt_ns::Shape{2, 2}));
@@ -157,7 +157,7 @@ TEST(OnnxLightReduceSumKernel, EmptyAxisNoopAndZeroSizedReduction) {
     runtime.Set("axes", rt_ns::Tensor::FromInt64("axes", {1}, {1}));
     NodeProto node = MakeNode({"data", "axes"});
 
-    Run(node, runtime);
+    RunKernel(node, runtime);
 
     const auto &output = runtime.Get("y");
     EXPECT_EQ(output.shape, (rt_ns::Shape{2, 1, 3}));
@@ -173,7 +173,7 @@ TEST(OnnxLightReduceSumKernel, DelegatesOtherTypesAndRejectsInvalidAxes) {
     runtime.Set("axes", rt_ns::Tensor::FromInt64("axes", {1}, {1}));
     NodeProto node = MakeNode({"data", "axes"});
 
-    Run(node, runtime);
+    RunKernel(node, runtime);
 
     const auto &output = runtime.Get("y");
     EXPECT_EQ(output.shape, (rt_ns::Shape{2, 1}));
@@ -209,7 +209,7 @@ TEST(OnnxLightReduceSumKernel, UsesRuntimeExecutorOnlyForSufficientOutputWork) {
     runtime.Set("axes", rt_ns::Tensor::FromInt64("axes", {1}, {1}));
     NodeProto node = MakeNode({"data", "axes"});
 
-    Run(node, runtime);
+    RunKernel(node, runtime);
     EXPECT_EQ(executor.calls, 0);
   }
   {
@@ -220,7 +220,7 @@ TEST(OnnxLightReduceSumKernel, UsesRuntimeExecutorOnlyForSufficientOutputWork) {
     runtime.Set("axes", rt_ns::Tensor::FromInt64("axes", {1}, {1}));
     NodeProto node = MakeNode({"data", "axes"});
 
-    Run(node, runtime);
+    RunKernel(node, runtime);
     EXPECT_EQ(executor.calls, 1);
     EXPECT_EQ(executor.blocks, 2);
     const auto &output = runtime.Get("y");
