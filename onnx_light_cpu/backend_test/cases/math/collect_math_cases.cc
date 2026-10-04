@@ -24,6 +24,7 @@ void CollectCpuMathTestCases(std::vector<TestCase> &registry, const std::string 
       {"MatMul", &RegisterCpuMatMulCases},
       {"MatMulInteger", &RegisterCpuMatMulIntegerCases},
       {"QLinearMatMul", &RegisterCpuQLinearMatMulCases},
+      {"ReduceSum", &RegisterCpuReduceSumCases},
       {"MeanVarianceNormalization", &RegisterCpuMeanVarianceNormalizationCases},
       {"RMSNormalization", &RegisterCpuRmsNormalizationCases},
       {"Sigmoid", &RegisterCpuSigmoidCases},
