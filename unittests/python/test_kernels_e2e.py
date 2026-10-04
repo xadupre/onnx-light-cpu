@@ -850,7 +850,7 @@ class TestBackendCases(ExtTestCase):
             ):
                 assert isinstance(record.since_version, int)
                 assert record.since_version >= 1
-            elif record.op_type == "SimplifiedLayerNormalization":
+            elif record.op_type in {"ReduceSum", "SimplifiedLayerNormalization"}:
                 assert record.since_version == 1
             elif record.op_type in {"Attention", "RMSNormalization"}:
                 assert record.since_version == 23

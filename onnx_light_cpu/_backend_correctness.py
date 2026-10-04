@@ -44,11 +44,24 @@ def _model_opset(model: Any, domain: str) -> int | None:
     return None
 
 
+def _tensor_type(graph: Any, name: str) -> int | None:
+    for values in (graph.input, graph.value_info, graph.output):
+        for value in values:
+            if value.name == name and value.type.HasField("tensor_type"):
+                return int(value.type.tensor_type.elem_type)
+    for initializer in graph.initializer:
+        if initializer.name == name:
+            return int(initializer.data_type)
+    return None
+
+
 def _case_is_applicable(case: Any, kernel: Any, tensor_proto: Any) -> tuple[bool, str]:
-    if not any(
-        (node.domain or "ai.onnx") == kernel.domain and node.op_type == kernel.op_type
+    matching_nodes = [
+        node
         for node in case.model.graph.node
-    ):
+        if (node.domain or "ai.onnx") == kernel.domain and node.op_type == kernel.op_type
+    ]
+    if not matching_nodes:
         return False, "model has no matching node"
     opset = _model_opset(case.model, kernel.domain)
     if opset is None:
@@ -57,14 +70,25 @@ def _case_is_applicable(case: Any, kernel: Any, tensor_proto: Any) -> tuple[bool
         return False, f"opset {opset} is below supported version {kernel.since_version}"
     if kernel.until_version is not None and opset > kernel.until_version:
         return False, f"opset {opset} is above supported version {kernel.until_version}"
-    input_types = {
-        value.type.tensor_type.elem_type
-        for value in case.model.graph.input
-        if value.type.HasField("tensor_type")
-    }
     supported_types = {getattr(tensor_proto, name) for name in kernel.types}
-    if not input_types & supported_types:
-        return False, f"input types {sorted(input_types)} are unsupported"
+    primary_input_types = {
+        tensor_type
+        for node in matching_nodes
+        if node.input
+        for tensor_type in [_tensor_type(case.model.graph, node.input[0])]
+        if tensor_type is not None
+    }
+    if primary_input_types:
+        if not primary_input_types & supported_types:
+            return False, f"primary input types {sorted(primary_input_types)} are unsupported"
+    else:
+        input_types = {
+            value.type.tensor_type.elem_type
+            for value in case.model.graph.input
+            if value.type.HasField("tensor_type")
+        }
+        if not input_types & supported_types:
+            return False, f"input types {sorted(input_types)} are unsupported"
     if kernel.domain == "ai.onnx" and kernel.op_type == "ScatterND":
         for node in case.model.graph.node:
             if (node.domain or "ai.onnx") == kernel.domain and node.op_type == kernel.op_type:

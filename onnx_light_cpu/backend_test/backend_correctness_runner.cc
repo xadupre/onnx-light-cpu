@@ -20,6 +20,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <exception>
+#include <optional>
 #include <set>
 #include <sstream>
 #include <stdexcept>
@@ -62,6 +63,35 @@ std::int64_t ModelOpsetVersion(const ModelProto &model, const std::string &domai
   return -1;
 }
 
+std::optional<rt_ns::DataType> TensorType(const GraphProto &graph, const std::string &name) {
+  const auto value_type = [&name](const auto &values) -> std::optional<rt_ns::DataType> {
+    const auto found =
+        std::find_if(values.begin(), values.end(), [&name](const ValueInfoProto &value) {
+          return value.name() == name && value.has_type() && value.type().has_tensor_type();
+        });
+    if (found == values.end()) {
+      return std::nullopt;
+    }
+    return static_cast<rt_ns::DataType>(found->type().tensor_type().elem_type());
+  };
+  if (const auto type = value_type(graph.input())) {
+    return type;
+  }
+  if (const auto type = value_type(graph.value_info())) {
+    return type;
+  }
+  if (const auto type = value_type(graph.output())) {
+    return type;
+  }
+  const auto initializer =
+      std::find_if(graph.initializer().begin(), graph.initializer().end(),
+                   [&name](const TensorProto &tensor) { return tensor.name() == name; });
+  if (initializer != graph.initializer().end()) {
+    return static_cast<rt_ns::DataType>(initializer->data_type());
+  }
+  return std::nullopt;
+}
+
 bool IsApplicable(const TestCase &test_case, const KernelRegistration &kernel,
                   std::string &reason) {
   const ModelProto &model = test_case.model();
@@ -85,13 +115,33 @@ bool IsApplicable(const TestCase &test_case, const KernelRegistration &kernel,
     reason = "model opset is outside the kernel's supported range";
     return false;
   }
-  const bool has_supported_input = std::any_of(
-      graph.input().begin(), graph.input().end(), [&kernel](const ValueInfoProto &input) {
-        return input.has_type() && input.type().has_tensor_type() &&
-               std::find(kernel.types.begin(), kernel.types.end(),
-                         static_cast<rt_ns::DataType>(input.type().tensor_type().elem_type())) !=
-                   kernel.types.end();
-      });
+  bool resolved_primary_input = false;
+  bool has_supported_input = false;
+  for (const NodeProto &node : graph.node()) {
+    if (ONNX_LIGHT_NAMESPACE::NormaliseDomain(node.domain()) != kernel.domain ||
+        node.op_type() != kernel.op_type || node.input().empty()) {
+      continue;
+    }
+    const std::optional<rt_ns::DataType> type = TensorType(graph, node.input(0));
+    if (!type) {
+      continue;
+    }
+    resolved_primary_input = true;
+    has_supported_input =
+        std::find(kernel.types.begin(), kernel.types.end(), *type) != kernel.types.end();
+    if (has_supported_input) {
+      break;
+    }
+  }
+  if (!resolved_primary_input) {
+    has_supported_input = std::any_of(
+        graph.input().begin(), graph.input().end(), [&kernel](const ValueInfoProto &input) {
+          return input.has_type() && input.type().has_tensor_type() &&
+                 std::find(kernel.types.begin(), kernel.types.end(),
+                           static_cast<rt_ns::DataType>(input.type().tensor_type().elem_type())) !=
+                     kernel.types.end();
+        });
+  }
   if (!has_supported_input) {
     reason = "model input types are unsupported";
     return false;

@@ -27,6 +27,7 @@
 #include "onnx_light_cpu/kernels/math/integer_matmul_kernel.h"
 #include "onnx_light_cpu/kernels/math/matmul_kernel.h"
 #include "onnx_light_cpu/kernels/math/normalization_kernel.h"
+#include "onnx_light_cpu/kernels/math/reduce_sum_kernel.h"
 #include "onnx_light_cpu/kernels/math/rms_normalization_kernel.h"
 #include "onnx_light_cpu/kernels/math/sigmoid_softmax_kernel.h"
 #include "onnx_light_cpu/kernels/math/simplified_layer_normalization_kernel.h"
@@ -192,6 +193,7 @@ void RegisterAllKernels(MicrosoftKernelImplementation implementation) {
   RegisterConcatKernel();
   RegisterGatherKernel();
   RegisterNonZeroKernel();
+  RegisterReduceSumKernel();
   RegisterScatterNDKernel();
   RegisterSliceKernel();
   RegisterSplitKernel();
