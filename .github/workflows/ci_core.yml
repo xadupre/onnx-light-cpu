@@ -212,6 +212,7 @@ jobs:
         id: benchmark_changes
         if: >-
           runner.os == 'Linux' &&
+          matrix.python-abi == 'stable' &&
           github.event_name == 'pull_request' &&
           github.event.pull_request.head.repo.full_name == github.repository
         env:
@@ -241,6 +242,7 @@ jobs:
       - name: Prepare benchmark report artifact
         if: >-
           runner.os == 'Linux' &&
+          matrix.python-abi == 'stable' &&
           github.event_name == 'pull_request' &&
           github.event.pull_request.head.repo.full_name == github.repository
         shell: bash
@@ -249,6 +251,7 @@ jobs:
       - name: Upload benchmark report
         if: >-
           runner.os == 'Linux' &&
+          matrix.python-abi == 'stable' &&
           github.event_name == 'pull_request' &&
           github.event.pull_request.head.repo.full_name == github.repository
         uses: actions/upload-artifact@v4

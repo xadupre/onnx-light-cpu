@@ -81,6 +81,7 @@ def test_onnx_light_main_integration_runs_on_every_supported_os():
         assert f"os: {os_name}" in source_job
     assert source_job.count("python-abi: stable") == 3
     assert source_job.count("python-abi: native") == 1
+    assert source_job.count("matrix.python-abi == 'stable'") == 3
     assert "git clone --depth 1 --branch main" in source_job
     assert "scikit-build-core setuptools" in source_job
     assert "ONNX_LIGHT_CPU_ONNX_LIGHT_IMPLIB_DIR=" in source_job
