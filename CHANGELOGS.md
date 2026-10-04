@@ -3,6 +3,14 @@
 All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [0.1.19] – Unreleased
+
+### Documentation & CI
+
+- Evaluated AVX-512VL narrow-vector and masked-tail candidates and retained the
+  existing dispatch after finding no consistent kernel-level benefit
+  ([#842](https://github.com/xadupre/onnx-light-cpu/pull/842)).
+
 ## [0.1.18] – 2026-10-02
 
 ## [0.1.17]
