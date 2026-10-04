@@ -83,6 +83,25 @@ TEST(OnnxLightReduceSumKernel, ReducesInt64AxesAndRecordsCpuDispatch) {
             (std::vector<std::string>{onnx_light_cpu::ReduceSumKernel::kName}));
 }
 
+TEST(OnnxLightReduceSumKernel, SupportsLegacyAxesAttribute) {
+  rt_ns::RuntimeContext runtime(rt_ns::KernelContext(rt_ns::DefaultOpset(11)));
+  runtime.Set("data", rt_ns::Tensor::FromInt64("data", {2, 3}, {1, 2, 3, 4, 5, 6}));
+  NodeProto node = MakeNode({"data"}, false);
+  auto *axes_attribute = node.add_attribute();
+  axes_attribute->set_name("axes");
+  axes_attribute->set_type(ONNX_LIGHT_NAMESPACE::AttributeProto::INTS);
+  axes_attribute->add_ints(1);
+
+  RunKernel(node, runtime);
+
+  const auto &output = runtime.Get("y");
+  EXPECT_EQ(output.shape, (rt_ns::Shape{2}));
+  EXPECT_EQ(std::vector<int64_t>(output.AsInt64(), output.AsInt64() + 2),
+            (std::vector<int64_t>{6, 15}));
+  EXPECT_EQ(runtime.GetKernelUsage(),
+            (std::vector<std::string>{onnx_light_cpu::ReduceSumKernel::kName}));
+}
+
 TEST(OnnxLightReduceSumKernel, PreservesLargeIntegerPrecisionAndWrapsOverflow) {
   constexpr int64_t beyond_double_precision = int64_t{1} << 53;
   {
