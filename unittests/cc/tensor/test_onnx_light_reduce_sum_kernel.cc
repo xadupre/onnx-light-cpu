@@ -14,6 +14,7 @@
 #include <gtest/gtest.h>
 
 #include <cstdint>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -80,6 +81,32 @@ TEST(OnnxLightReduceSumKernel, ReducesInt64AxesAndRecordsCpuDispatch) {
             (std::vector<int64_t>{2, 2}));
   EXPECT_EQ(runtime.GetKernelUsage(),
             (std::vector<std::string>{onnx_light_cpu::ReduceSumKernel::kName}));
+}
+
+TEST(OnnxLightReduceSumKernel, PreservesLargeIntegerPrecisionAndWrapsOverflow) {
+  constexpr int64_t beyond_double_precision = int64_t{1} << 53;
+  {
+    rt_ns::RuntimeContext runtime(rt_ns::KernelContext(rt_ns::DefaultOpset(13)));
+    runtime.Set("data",
+                rt_ns::Tensor::FromInt64("data", {2}, {beyond_double_precision, int64_t{1}}));
+    runtime.Set("axes", rt_ns::Tensor::FromInt64("axes", {1}, {0}));
+    NodeProto node = MakeNode({"data", "axes"}, false);
+
+    Run(node, runtime);
+
+    EXPECT_EQ(runtime.Get("y").AsInt64()[0], beyond_double_precision + 1);
+  }
+  {
+    rt_ns::RuntimeContext runtime(rt_ns::KernelContext(rt_ns::DefaultOpset(13)));
+    runtime.Set("data", rt_ns::Tensor::FromInt64(
+                            "data", {2}, {std::numeric_limits<int64_t>::max(), int64_t{1}}));
+    runtime.Set("axes", rt_ns::Tensor::FromInt64("axes", {1}, {0}));
+    NodeProto node = MakeNode({"data", "axes"}, false);
+
+    Run(node, runtime);
+
+    EXPECT_EQ(runtime.Get("y").AsInt64()[0], std::numeric_limits<int64_t>::min());
+  }
 }
 
 TEST(OnnxLightReduceSumKernel, SupportsNegativeAxesKeepdimsFalseAndEmptyAxes) {
