@@ -202,3 +202,101 @@ so instruction-versus-memory stalls and the two-thread scheduling variation
 remain unseparated. Further work should profile that loop and executor
 handoff on a dedicated runner before changing parallel thresholds or claiming
 stable multithreaded parity.
+
+AVX-512VL narrow vectors and tails (October 4, 2026)
+----------------------------------------------------
+
+**No production change.** The following is a direct-kernel feasibility probe,
+not evidence of a steady-state end-to-end improvement. No AVX-512VL runtime
+helper or dispatch tier was added.
+
+Candidate inventory
+~~~~~~~~~~~~~~~~~~~
+
+* ``NotBool_AVX512`` processes 64 bytes at a time and has a scalar remainder
+  of up to 63 bytes. A 256-bit AVX-512VL/BW compare with masked loads/stores
+  can avoid that remainder. The existing AVX2 path processes 32 bytes at a
+  time and also has a scalar remainder.
+* ``AbsFloat32_AVX512`` processes 16 floats at a time and has a scalar
+  remainder of up to 15. A 256-bit AVX-512VL/F masked tail is possible,
+  but the existing 256-bit AVX kernel already covers eight floats at a time.
+* ``CastInt64ToFloat32_AVX512DQ`` converts eight int64 values into eight
+  floats; a 256-bit VL/DQ variant would convert four at a time. This host
+  exposes DQ, but halving the input width does not itself establish a win.
+  Split's 4x4 transpose instead consumes 16 rows in each 512-bit block;
+  narrowing it would require a different transpose, not just a masked tail.
+  AVX-512VNNI is **not** exposed on this host, so no VL/VNNI result is
+  claimed. VL is a separate CPUID feature, not implied by AVX-512F, BW, or
+  DQ; a production implementation would need its own OS-gated capability
+  check and per-source ``-mavx512vl`` (plus the relevant subset flags).
+
+Protocol and raw measurements
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Shared Linux runner, AMD EPYC 9V74 (two physical cores, four logical CPUs),
+GCC 13.3.0, ``-O3 -DNDEBUG -std=c++20``. CPU set ``0`` (one pinned
+thread), no other backend running; host flags include AVX2, AVX-512F/BW/DQ/VL
+but not AVX-512VNNI. Source: ``8d27b4b`` (refreshed ``origin/main``).
+Existing kernel source was compiled with ``-mavx2`` or
+``-mavx512f -mavx512bw`` as appropriate. Experimental functions were
+compiled only in a disposable probe with
+``target("avx512f,avx512bw,avx512vl")``; the 256-bit Not candidate uses
+32-byte vectors and a masked remainder of 1–31 bytes. The 512-bit masked
+alternative uses only F/BW, 64-byte vectors and a masked remainder of
+1–63 bytes. No library code or dispatch was changed.
+
+Each function used the same preallocated input/output, 100 warmups and seven
+rotated-order runs (30,000 calls per run below 65,537 bytes; 100 at 65,537).
+Values are **raw nanoseconds per call**, in run order, not best times.
+Before each timed phase, every output byte was checked against the scalar
+logical-not contract (including noncanonical input bytes 2 and 255) and
+two output guard bytes were checked for overwrite. Small shapes fit in cache.
+
+.. code-block:: text
+
+   bytes  existing AVX2 (seven samples)                     existing AVX-512BW (seven samples)
+     15   7.37 6.77 7.15 6.77 7.24 6.77 6.77                 6.90 6.90 6.50 6.90 6.90 6.50 7.31
+     31   7.58 7.58 7.58 7.58 7.58 8.04 7.58                12.54 12.07 12.48 12.47 12.01 11.78 12.07
+     33   3.25 3.25 3.25 3.85 3.50 2.98 2.98                20.32 20.30 20.30 20.57 20.30 20.30 20.76
+     63   7.58 8.06 7.58 8.00 7.58 8.02 7.58                12.11 11.64 11.64 11.64 12.18 11.64 11.64
+    127   7.04 7.04 7.04 7.04 7.04 7.04 7.27                11.64 11.84 11.86 11.64 11.64 11.96 11.64
+    255   8.12 8.54 8.12 8.12 8.35 8.12 8.35                12.72 12.72 12.94 12.75 12.72 12.96 12.78
+  65537   1246.67 1247.98 1246.38 1249.57 1264.80 1245.87 1247.97
+          1280.43 1346.43 1347.53 1279.22 1280.23 1287.43 1280.42 (AVX-512BW)
+
+   bytes  candidate VL/BW 256 (seven samples)                 alternative masked 512 F/BW (seven samples)
+     15   2.98 3.36 2.98 2.98 2.98 2.98 2.98                 7.85 7.85 7.87 7.87 7.85 8.28 7.87
+     31   2.98 2.98 2.98 2.98 2.98 2.98 2.98                 7.96 9.38 7.87 7.87 8.33 7.85 7.92
+     33   8.49 8.45 8.12 8.12 8.12 8.56 8.12                 7.87 7.93 8.29 8.19 8.33 7.85 7.85
+     63   2.98 2.98 2.98 2.98 2.98 2.98 2.98                 2.98 2.98 2.98 2.98 2.98 2.98 2.98
+    127   3.52 3.59 3.52 3.73 3.52 3.52 3.52                 2.71 2.71 2.71 2.71 2.71 2.71 2.71
+    255   5.09 4.87 5.14 4.87 4.87 4.87 4.88                 3.25 3.25 3.25 3.25 3.25 3.25 3.25
+  65537   1337.41 1337.41 1364.55 1339.41 1397.00 1337.31 1338.52
+          1280.12 1280.73 1282.53 1280.32 1282.43 1288.23 1358.84 (masked 512)
+
+For float32 Abs, a separate AVX-512VL/F 256-bit loop with a masked
+1–7-float tail was compared against the existing AVX 256-bit and AVX-512F
+512-bit functions with the same protocol (7 runs, 30,000 calls below
+1,024 elements; 100 calls at 65,537). Bitwise parity was checked for
+negative zero, infinity and NaN; output guards were checked too:
+
+.. code-block:: text
+
+   floats   existing AVX 256 (ns/call)                      existing AVX-512F (ns/call)                     candidate VL 256 (ns/call)
+       15   3.52 3.94 3.52 3.52 3.52 3.52 3.52             3.79 3.79 3.79 3.79 4.12 3.79 3.79             2.95 2.71 2.71 2.71 2.71 2.71 2.71
+       32   2.17 1.90 1.90 1.90 1.90 1.90 1.90             2.95 2.71 2.71 2.71 2.71 2.71 2.71             4.33 4.33 4.33 4.62 4.33 4.33 4.33
+     1025   35.96 35.74 35.73 37.04 35.73 38.52 35.80   37.02 35.73 35.73 35.73 35.73 35.73 35.74   72.01 73.21 72.43 72.01 73.17 72.01 72.01
+    65537   4857.50 4817.44 4802.72 4819.54 4811.94 4823.05 4808.83
+            4958.66 4961.06 5022.85 4962.56 4974.88 4962.86 4953.74 (AVX-512F)
+            4916.39 4961.56 4922.70 4926.61 5100.47 4959.96 4906.98 (VL)
+
+The narrow masked candidate does win some tail-heavy **kernel-only** cases
+(Not 31 bytes: median 2.98 ns versus 7.58 ns AVX2 and 12.07 ns AVX-512BW),
+but loses at 33 bytes (8.12 ns versus 3.25 ns AVX2), and at 127/255 bytes
+the existing-ISA masked 512 alternative is faster. The Abs candidate loses
+substantially at 32 and 1,025 floats. A shape-specific dispatch could avoid
+those regressions but would add feature probing, build flags and branches for
+a few nanoseconds of isolated short-tensor work. These measurements neither
+prove an end-to-end win nor control AVX-512 frequency effects on a dedicated
+machine. Retain existing dispatch and scalar tails until a representative
+end-to-end benchmark demonstrates a repeatable improvement.
