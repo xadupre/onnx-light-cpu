@@ -223,8 +223,9 @@ Candidate inventory
 * ``CastInt64ToFloat32_AVX512DQ`` converts eight int64 values into eight
   floats; a 256-bit VL/DQ variant would convert four at a time. This host
   exposes DQ, but halving the input width does not itself establish a win.
-  Split's 4x4 transpose instead consumes 16 rows in each 512-bit block;
-  narrowing it would require a different transpose, not just a masked tail.
+  Split's 4x4 transpose instead processes batches of 16 rows by loading four
+  512-bit vectors, each of which holds four 16-byte rows; narrowing it would
+  require a different transpose, not just a masked tail.
   AVX-512VNNI is **not** exposed on this host, so no VL/VNNI result is
   claimed. VL is a separate CPUID feature, not implied by AVX-512F, BW, or
   DQ; a production implementation would need its own OS-gated capability
@@ -244,6 +245,13 @@ compiled only in a disposable probe with
 32-byte vectors and a masked remainder of 1–31 bytes. The 512-bit masked
 alternative uses only F/BW, 64-byte vectors and a masked remainder of
 1–63 bytes. No library code or dispatch was changed.
+
+The disposable probe source was not retained, so its exact input-generation
+and timing code and its complete build/run commands are unavailable. The raw
+measurements below are therefore a historical feasibility observation, not a
+reproducible benchmark baseline, and must not justify a production change.
+Any future evaluation must add its probe and commands to the repository before
+using new measurements to alter dispatch.
 
 Each function used the same preallocated input/output, 100 warmups and seven
 rotated-order runs (30,000 calls per run below 65,537 bytes; 100 at 65,537).
@@ -277,7 +285,7 @@ two output guard bytes were checked for overwrite. Small shapes fit in cache.
 For float32 Abs, a separate AVX-512VL/F 256-bit loop with a masked
 1–7-float tail was compared against the existing AVX 256-bit and AVX-512F
 512-bit functions with the same protocol (7 runs, 30,000 calls below
-1,024 elements; 100 calls at 65,537). Bitwise parity was checked for
+65,537 elements; 100 calls at 65,537). Bitwise parity was checked for
 negative zero, infinity and NaN; output guards were checked too:
 
 .. code-block:: text
