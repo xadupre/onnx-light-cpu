@@ -80,6 +80,9 @@ std::optional<rt_ns::DataType> TensorType(const GraphProto &graph, const std::st
   if (const auto type = value_type(graph.value_info())) {
     return type;
   }
+  if (const auto type = value_type(graph.output())) {
+    return type;
+  }
   const auto initializer =
       std::find_if(graph.initializer().begin(), graph.initializer().end(),
                    [&name](const TensorProto &tensor) { return tensor.name() == name; });

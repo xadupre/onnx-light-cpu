@@ -45,7 +45,7 @@ def _model_opset(model: Any, domain: str) -> int | None:
 
 
 def _tensor_type(graph: Any, name: str) -> int | None:
-    for values in (graph.input, graph.value_info):
+    for values in (graph.input, graph.value_info, graph.output):
         for value in values:
             if value.name == name and value.type.HasField("tensor_type"):
                 return int(value.type.tensor_type.elem_type)

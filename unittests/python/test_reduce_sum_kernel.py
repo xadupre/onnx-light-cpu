@@ -43,11 +43,11 @@ _FEEDS = {
     "x": np.array([-1.0, 2.0], dtype=np.float32),
 }
 _EXPECTED = ReferenceEvaluator(_MODEL).run(None, _FEEDS)
-register_kernels()
 
 
 class TestReduceSumKernel(ExtTestCase):
     def test_int64_reduce_sum_with_cpu_kernels(self):
+        register_kernels()
         reduce_sum = next(r for r in registered_kernels() if r.op_type == "ReduceSum")
         self.assertEqual(reduce_sum.types, ("INT64",))
         session = ReferenceEvaluator(_MODEL)
