@@ -90,7 +90,7 @@ jobs:
           fail_ci_if_error: false
 
   setup_onnx_light_source:
-    name: onnx-light main (${{ matrix.os }})
+    name: onnx-light main (${{ matrix.os }}, ${{ matrix.python-abi }})
     runs-on: ${{ matrix.os }}
     # onnx-light is compiled from source before onnx-light-cpu, so this job
     # needs more time than a plain build; sccache keeps repeat runs fast.
@@ -100,7 +100,19 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: ["ubuntu-latest", "windows-latest", "macos-latest"]
+        include:
+          - os: ubuntu-latest
+            python-abi: stable
+            stable-abi: "ON"
+          - os: windows-latest
+            python-abi: stable
+            stable-abi: "ON"
+          - os: macos-latest
+            python-abi: stable
+            stable-abi: "ON"
+          - os: ubuntu-latest
+            python-abi: native
+            stable-abi: "OFF"
     steps:
       - uses: actions/checkout@v7
 
@@ -144,8 +156,13 @@ jobs:
             CMAKE_ARGS="${CMAKE_ARGS} -DCMAKE_DISABLE_FIND_PACKAGE_OpenSSL=ON"
           fi
           export CMAKE_ARGS
-          # Match the CPU extensions' STABLE_ABI so nanobind shares C++ types.
-          pip install -C build.verbose=true -C wheel.py-api=cp312 "${onnx_light_source}" -v
+          if [[ "${{ matrix.python-abi }}" == "stable" ]]; then
+            pip install -C build.verbose=true -C wheel.py-api=cp312 "${onnx_light_source}" -v
+          else
+            pip install -C build.verbose=true \
+              -C cmake.define.ONNX_LIGHT_PYTHON_STABLE_ABI=OFF \
+              "${onnx_light_source}" -v
+          fi
           if [[ "${RUNNER_OS}" == "Windows" ]]; then
             echo "ONNX_LIGHT_CPU_ONNX_LIGHT_IMPLIB_DIR=${onnx_light_source}/build" >> "$GITHUB_ENV"
           fi
@@ -168,7 +185,10 @@ jobs:
       - name: Build extension and run C++ tests via setup.py
         env:
           SCCACHE_GHA_ENABLED: "true"
-          CMAKE_ARGS: "-DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache"
+          CMAKE_ARGS: >-
+            -DCMAKE_C_COMPILER_LAUNCHER=sccache
+            -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+            -DONNX_LIGHT_CPU_PYTHON_STABLE_ABI=${{ matrix.stable-abi }}
         run: python setup.py build_ext --inplace --cpp-tests --onnx-light-source
 
       # Regression check for the onnx-light-source integration: imports
@@ -192,6 +212,7 @@ jobs:
         id: benchmark_changes
         if: >-
           runner.os == 'Linux' &&
+          matrix.python-abi == 'stable' &&
           github.event_name == 'pull_request' &&
           github.event.pull_request.head.repo.full_name == github.repository
         env:
@@ -221,6 +242,7 @@ jobs:
       - name: Prepare benchmark report artifact
         if: >-
           runner.os == 'Linux' &&
+          matrix.python-abi == 'stable' &&
           github.event_name == 'pull_request' &&
           github.event.pull_request.head.repo.full_name == github.repository
         shell: bash
@@ -229,6 +251,7 @@ jobs:
       - name: Upload benchmark report
         if: >-
           runner.os == 'Linux' &&
+          matrix.python-abi == 'stable' &&
           github.event_name == 'pull_request' &&
           github.event.pull_request.head.repo.full_name == github.repository
         uses: actions/upload-artifact@v4
