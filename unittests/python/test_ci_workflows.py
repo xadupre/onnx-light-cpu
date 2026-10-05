@@ -89,12 +89,24 @@ def test_release_wheels_build_and_test_session_registration_before_upload():
         if job == "build_wheels_macos":
             assert (
                 "CIBW_REPAIR_WHEEL_COMMAND_MACOS: >-\n"
-                "            delocate-wheel --exclude liblib_onnx_\n"
+                "            DYLD_LIBRARY_PATH=\"$(python -c 'from onnx_light import "
+                "get_cpp_build_info as i;\n"
+                '            print(i()["library_dir"])\')" delocate-wheel --exclude '
+                "liblib_onnx_\n"
                 "            --require-archs x86_64,arm64 -w {dest_dir} {wheel}"
             ) in body
         else:
             assert "CIBW_REPAIR_WHEEL_COMMAND_MACOS" not in body
         assert body.index("CIBW_TEST_COMMAND:") < body.index("Attach wheels to GitHub Release")
+
+
+def test_release_wheel_maps_the_core_windows_import_library():
+    cmake = (_ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
+    release_block = cmake.split("if(ONNX_LIGHT_CPU_RELEASE_WHEEL)", 1)[1].split(
+        "option(ONNX_LIGHT_CPU_ENABLE_COVERAGE", 1
+    )[0]
+    assert 'if(_component STREQUAL "CORE")' in release_block
+    assert 'set(ONNX_LIGHT_CPU_ONNX_LIGHT_IMPLIB "${_import_lib_path}")' in release_block
 
 
 def test_onnx_light_main_integration_runs_on_every_supported_os():

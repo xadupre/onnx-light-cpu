@@ -10,6 +10,7 @@
 #include "onnx_core/runtime/memory/simple_tensor.h"
 #include "onnx_core/runtime/runtime_context.h"
 
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -55,7 +56,7 @@ private:
   MatMulNBitsAttributes attributes_;
   MatMulNBitsExecutionTuning tuning_ = kDefaultMatMulNBitsExecutionTuning;
   mutable std::mutex prepared_int4_mutex_;
-  mutable std::shared_ptr<const PreparedInt4Plan> prepared_int4_;
+  mutable std::atomic<std::shared_ptr<const PreparedInt4Plan>> prepared_int4_;
 };
 
 void RegisterMatMulNBitsKernel();

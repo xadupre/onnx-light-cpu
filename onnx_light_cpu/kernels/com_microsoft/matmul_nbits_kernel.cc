@@ -223,8 +223,7 @@ void MatMulNBitsKernel::Configure(const rt_ns::KernelTuningParameters &parameter
       static_cast<std::size_t>(parameters.Get<std::int64_t>(kTargetBlockOutputs)),
       parameters.Get<std::int64_t>(kMaxParticipants),
   };
-  std::atomic_store_explicit(&prepared_int4_, std::shared_ptr<const PreparedInt4Plan>{},
-                             std::memory_order_release);
+  prepared_int4_.store({}, std::memory_order_release);
 }
 
 Tensor MatMulNBitsKernel::operator()(const Tensor &a, const Tensor &b, const Tensor &scales,
@@ -281,13 +280,13 @@ Tensor MatMulNBitsKernel::operator()(const Tensor &a, const Tensor &b, const Ten
       (data_type == RuntimeDataType::FLOAT || data_type == RuntimeDataType::FLOAT16 ||
        data_type == RuntimeDataType::BFLOAT16) &&
       n % 16 == 0 && k % 32 == 0) {
-    prepared = std::atomic_load_explicit(&prepared_int4_, std::memory_order_acquire);
+    prepared = prepared_int4_.load(std::memory_order_acquire);
     if (prepared == nullptr || !prepared->Matches(a, b, scales)) {
       std::lock_guard<std::mutex> lock(prepared_int4_mutex_);
-      prepared = std::atomic_load_explicit(&prepared_int4_, std::memory_order_relaxed);
+      prepared = prepared_int4_.load(std::memory_order_relaxed);
       if (prepared == nullptr || !prepared->Matches(a, b, scales)) {
         prepared = std::make_shared<PreparedInt4Plan>(a, b, scales, attributes_, tuning_);
-        std::atomic_store_explicit(&prepared_int4_, prepared, std::memory_order_release);
+        prepared_int4_.store(prepared, std::memory_order_release);
       }
     }
   }
