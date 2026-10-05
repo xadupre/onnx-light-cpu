@@ -57,10 +57,18 @@ def test_release_wheels_build_and_test_session_registration_before_upload():
     for job in ("build_wheels_linux", "build_wheels_windows", "build_wheels_macos"):
         body = _RELEASE_WORKFLOW.split(f"  {job}:", 1)[1].split("  build_wheels_", 1)[0]
         assert 'CIBW_BUILD_FRONTEND: "pip; args: --no-build-isolation"' in body
-        assert (
-            "CIBW_BEFORE_ALL: python {project}/tools/onnx_light_release.py clone "
-            "{project}/../onnx-light" in body
+        clone_release = (
+            "python {project}/tools/onnx_light_release.py clone {project}/../onnx-light"
         )
+        assert clone_release in body
+        install_cpp = (
+            "python {project}/tools/onnx_light_release.py install-cpp "
+            "{project}/../onnx-light/build"
+        )
+        if job == "build_wheels_windows":
+            assert install_cpp in body
+        else:
+            assert install_cpp not in body
         assert "CIBW_BEFORE_BUILD: >-" in body
         install_release = "python {project}/tools/onnx_light_release.py install"
         assert (

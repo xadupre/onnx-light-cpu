@@ -126,7 +126,9 @@ jobs:
           CIBW_BUILD: "cp312-* cp313-* cp314-*"
           CIBW_ARCHS: ${{ matrix.arch }}
           CIBW_BUILD_FRONTEND: "pip; args: --no-build-isolation"
-          CIBW_BEFORE_ALL: python {project}/tools/onnx_light_release.py clone {project}/../onnx-light
+          CIBW_BEFORE_ALL: >-
+            python {project}/tools/onnx_light_release.py clone {project}/../onnx-light &&
+            python {project}/tools/onnx_light_release.py install-cpp {project}/../onnx-light/build
           CIBW_BEFORE_BUILD: >-
             python -m pip install scikit-build-core nanobind==3.1.0 &&
             python {project}/tools/onnx_light_release.py install
