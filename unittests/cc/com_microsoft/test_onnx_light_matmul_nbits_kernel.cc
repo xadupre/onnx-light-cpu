@@ -182,7 +182,8 @@ TEST(MatMulNBitsKernel, PreparesOnlyImmutableWeightsAndScales) {
   onnx_light_cpu::MatMulNBitsKernel kernel{
       node, rt_ns::KernelContext{rt_ns::OpsetId("com.microsoft", 1)}};
 
-  EXPECT_TRUE(kernel.HasPreparations({"B", "scales"}));
+  EXPECT_EQ(kernel.HasPreparations({"B", "scales"}),
+            onnx_light_cpu::MatMulNBitsAccuracy4Float32Available());
   EXPECT_FALSE(kernel.HasPreparations({"B"}));
   EXPECT_FALSE(kernel.HasPreparations({"scales"}));
 
