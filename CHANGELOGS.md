@@ -5,12 +5,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [0.1.19] – Unreleased
 
+### New Features
+
+- Added a native INT64 `ReduceSum` kernel with support for input and attribute
+  axes, empty reductions, and exact integer arithmetic
+  ([#846](https://github.com/xadupre/onnx-light-cpu/pull/846)).
+
 ### Improvements
 
 - Updated development and AVX2 parity workflows to use onnx-light 0.1.30.
+- Added 256-bit AVX-VNNI dispatch for packed INT8 and INT4 GEMM on supported
+  processors without requiring AVX-512
+  ([#839](https://github.com/xadupre/onnx-light-cpu/pull/839)).
 
 ### Documentation & CI
 
+- Pinned release-wheel builds and smoke tests to the declared onnx-light
+  release instead of building against its `main` branch
+  ([#834](https://github.com/xadupre/onnx-light-cpu/pull/834)).
+- Added CI coverage for stable and native Python ABI builds and session-local
+  kernel registration
+  ([#843](https://github.com/xadupre/onnx-light-cpu/pull/843)).
+- Evaluated AVX-512CD conflict detection for ScatterND and retained the
+  existing scalar path after the prototype regressed on measured workloads
+  ([#840](https://github.com/xadupre/onnx-light-cpu/pull/840)).
 - Evaluated AVX-512VL narrow-vector and masked-tail candidates and retained the
   existing dispatch after finding no consistent kernel-level benefit
   ([#842](https://github.com/xadupre/onnx-light-cpu/pull/842)).
