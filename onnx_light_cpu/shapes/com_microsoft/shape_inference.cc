@@ -740,8 +740,12 @@ int64_t ComputePeakMemoryGroupQueryAttention(sym_ns::Device,
   const int64_t key_elements = has_key ? element_count(input_shapes[1], 3) : 0;
   const int64_t value_elements = has_value ? element_count(input_shapes[2], 3) : 0;
   int64_t past_elements = 0;
+  int64_t past_length = 0;
   for (std::size_t index : {std::size_t{3}, std::size_t{4}}) {
     if (input_shapes.size() > index && input_shapes[index].Rank() == 4) {
+      if (past_length == 0 && input_shapes[index][2].IsInt()) {
+        past_length = input_shapes[index][2].AsInt();
+      }
       past_elements =
           CheckedIndexAdd(past_elements, element_count(input_shapes[index], 4),
                           "ComputePeakMemoryGroupQueryAttention", "past scratch element count");
@@ -766,10 +770,16 @@ int64_t ComputePeakMemoryGroupQueryAttention(sym_ns::Device,
           ? query_elements
           : CheckedIndexAdd(key_elements, value_elements, "ComputePeakMemoryGroupQueryAttention",
                             "current KV scratch element count");
+  const int64_t score_elements =
+      CheckedIndexAdd(input_shapes[0][1].AsInt(), past_length,
+                      "ComputePeakMemoryGroupQueryAttention", "score row element count");
   const int64_t elements = CheckedIndexAdd(
       unpack_elements,
       CheckedIndexAdd(rotary_elements,
-                      CheckedIndexAdd(current_kv_elements, past_elements,
+                      CheckedIndexAdd(current_kv_elements,
+                                      CheckedIndexAdd(past_elements, score_elements,
+                                                      "ComputePeakMemoryGroupQueryAttention",
+                                                      "attention row scratch element count"),
                                       "ComputePeakMemoryGroupQueryAttention",
                                       "full KV scratch element count"),
                       "ComputePeakMemoryGroupQueryAttention", "attention scratch element count"),

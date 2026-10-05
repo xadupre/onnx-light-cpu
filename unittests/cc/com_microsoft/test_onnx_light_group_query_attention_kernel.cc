@@ -357,11 +357,12 @@ TEST(OnnxLightGroupQueryAttentionKernel, PackedQkvSupportsFloat16AndBFloat16Acro
 
     node.ref_input()[1] = "";
     node.ref_input()[2] = "";
+    onnx_light_cpu::GroupQueryAttentionKernel optimized_packed_kernel(node, MakeCtx());
     onnx_light_cpu::NaiveGroupQueryAttentionKernel naive(node, MakeCtx());
     Tensor optimized_key, optimized_value, naive_key, naive_value;
-    const Tensor optimized_packed =
-        optimized(node, qkv, key, value, seqlens_k, total_length, nullptr, nullptr, nullptr,
-                  nullptr, nullptr, nullptr, nullptr, &optimized_key, &optimized_value);
+    const Tensor optimized_packed = optimized_packed_kernel(
+        node, qkv, key, value, seqlens_k, total_length, nullptr, nullptr, nullptr, nullptr, nullptr,
+        nullptr, nullptr, &optimized_key, &optimized_value);
     const Tensor naive_packed =
         naive(node, qkv, key, value, seqlens_k, total_length, nullptr, nullptr, nullptr, nullptr,
               nullptr, nullptr, nullptr, &naive_key, &naive_value);
@@ -386,7 +387,7 @@ TEST(OnnxLightGroupQueryAttentionKernel, PackedQkvSupportsFloat16AndBFloat16Acro
       ExpectFloatingTensorsNear(rt.tensors().at("present_key"), expected_key, tolerance);
       ExpectFloatingTensorsNear(rt.tensors().at("present_value"), expected_value, tolerance);
     };
-    check_runtime(optimized);
+    check_runtime(optimized_packed_kernel);
     check_runtime(naive);
   }
 }
