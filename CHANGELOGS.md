@@ -3,6 +3,14 @@
 All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [0.1.20] – Unreleased
+
+### Fixes
+
+- Fixed release-wheel compatibility with onnx-light by building against its
+  published wheel with a matching nanobind stable ABI
+  ([#854](https://github.com/xadupre/onnx-light-cpu/pull/854)).
+
 ## [0.1.19] – 2026-10-05
 
 ### New Features
