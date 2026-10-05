@@ -4,6 +4,7 @@
 
 #include "onnx_light_cpu/shapes/com_microsoft/shape_inference.h"
 
+#include "onnx_light_cpu/impl/checked_arithmetic.h"
 #include "onnx_light_cpu/schemas/com_microsoft/op_schema.h"
 
 #include "onnx_core/shapes/dispatch_table.h"
@@ -424,18 +425,27 @@ void ComputeShapeSkipSimplifiedLayerNormalization(ShapesContext &ctx,
 void ComputeShapeGroupQueryAttention(ShapesContext &ctx,
                                      const ONNX_LIGHT_NAMESPACE::NodeProto &node) {
   if (node.input_size() < 7 || node.output_size() < 1 || node.output_size() > 3 ||
-      !ctx.Has(node.input(0)) || !ctx.Has(node.input(1)) || !ctx.Has(node.input(2))) {
-    throw std::invalid_argument("ComputeShapeGroupQueryAttention: expected known Q/K/V inputs and "
-                                "one to three outputs.");
+      !ctx.Has(node.input(0))) {
+    throw std::invalid_argument(
+        "ComputeShapeGroupQueryAttention: expected a known query and one to three outputs.");
+  }
+  if (HasInput(node, 1) != HasInput(node, 2)) {
+    throw std::invalid_argument(
+        "ComputeShapeGroupQueryAttention: key and value must both be wired or both be empty.");
+  }
+  const bool packed_qkv = !HasInput(node, 1);
+  if (!packed_qkv && (!ctx.Has(node.input(1)) || !ctx.Has(node.input(2)))) {
+    throw std::invalid_argument("ComputeShapeGroupQueryAttention: key and value must be known.");
   }
   const SymTensor &query = ctx.Get(node.input(0));
-  const SymTensor &key = ctx.Get(node.input(1));
-  const SymTensor &value = ctx.Get(node.input(2));
-  if (query.Dtype() != key.Dtype() || query.Dtype() != value.Dtype()) {
+  const SymTensor *key = packed_qkv ? nullptr : &ctx.Get(node.input(1));
+  const SymTensor *value = packed_qkv ? nullptr : &ctx.Get(node.input(2));
+  if (!packed_qkv && (query.Dtype() != key->Dtype() || query.Dtype() != value->Dtype())) {
     throw std::invalid_argument(
         "ComputeShapeGroupQueryAttention: query, key, and value types must match.");
   }
-  if (query.Shape().Rank() != 3 || key.Shape().Rank() != 3 || value.Shape().Rank() != 3) {
+  if (query.Shape().Rank() != 3 ||
+      (!packed_qkv && (key->Shape().Rank() != 3 || value->Shape().Rank() != 3))) {
     throw std::invalid_argument(
         "ComputeShapeGroupQueryAttention: query, key, and value must have rank 3.");
   }
@@ -447,19 +457,32 @@ void ComputeShapeGroupQueryAttention(ShapesContext &ctx,
   }
 
   const SymShape &q_shape = query.Shape();
-  const SymShape &k_shape = key.Shape();
-  const SymShape &v_shape = value.Shape();
-
-  sym_ns::SymDim batch = MergeGqaDim(ctx, q_shape[0], k_shape[0], "batch");
-  batch = MergeGqaDim(ctx, batch, v_shape[0], "batch");
+  sym_ns::SymDim batch = q_shape[0];
   const sym_ns::SymDim &q_seq_len = q_shape[1];
-  const sym_ns::SymDim kv_seq_len = MergeGqaDim(ctx, k_shape[1], v_shape[1], "kv_sequence_length");
-  MergeGqaDim(ctx, q_seq_len, kv_seq_len, "sequence_length");
-
-  sym_ns::SymDim head_dim = DivideGqaDim(q_shape[2], num_heads, "query hidden size");
-  head_dim = MergeGqaDim(ctx, head_dim, DivideGqaDim(k_shape[2], kv_num_heads, "key hidden size"),
-                         "head_size");
-  sym_ns::SymDim v_head_dim = DivideGqaDim(v_shape[2], kv_num_heads, "value hidden size");
+  sym_ns::SymDim kv_seq_len = q_seq_len;
+  const std::int64_t heads =
+      packed_qkv ? CheckedIndexAdd(num_heads,
+                                   CheckedIndexMultiply(2, kv_num_heads, "GroupQueryAttention",
+                                                        "packed head count"),
+                                   "GroupQueryAttention", "packed head count")
+                 : num_heads;
+  if (packed_qkv && q_shape[2].IsInt() && q_shape[2].AsInt() <= 0) {
+    throw std::invalid_argument(
+        "ComputeShapeGroupQueryAttention: packed hidden size must be positive.");
+  }
+  sym_ns::SymDim head_dim = DivideGqaDim(q_shape[2], heads, "query hidden size");
+  sym_ns::SymDim v_head_dim = head_dim;
+  if (!packed_qkv) {
+    const SymShape &k_shape = key->Shape();
+    const SymShape &v_shape = value->Shape();
+    batch = MergeGqaDim(ctx, batch, k_shape[0], "batch");
+    batch = MergeGqaDim(ctx, batch, v_shape[0], "batch");
+    kv_seq_len = MergeGqaDim(ctx, k_shape[1], v_shape[1], "kv_sequence_length");
+    MergeGqaDim(ctx, q_seq_len, kv_seq_len, "sequence_length");
+    head_dim = MergeGqaDim(ctx, head_dim, DivideGqaDim(k_shape[2], kv_num_heads, "key hidden size"),
+                           "head_size");
+    v_head_dim = DivideGqaDim(v_shape[2], kv_num_heads, "value hidden size");
+  }
 
   const bool has_past_key = node.input_size() > 3 && !node.input(3).empty();
   const bool has_past_value = node.input_size() > 4 && !node.input(4).empty();
@@ -518,7 +541,7 @@ void ComputeShapeGroupQueryAttention(ShapesContext &ctx,
     pv_shape.PushBack(sym_ns::SymDim(kv_num_heads));
     pv_shape.PushBack(total_seq_len);
     pv_shape.PushBack(v_head_dim);
-    ctx.Set(node.output(2), SymTensor(nullptr, value.Dtype(), std::move(pv_shape)));
+    ctx.Set(node.output(2), SymTensor(nullptr, query.Dtype(), std::move(pv_shape)));
   }
 }
 
@@ -678,10 +701,91 @@ int64_t ComputePeakMemorySkipSimplifiedLayerNormalization(sym_ns::Device,
   return 0;
 }
 
-int64_t ComputePeakMemoryGroupQueryAttention(sym_ns::Device, const std::vector<SymShape> &) {
-  // The supported GroupQueryAttention path delegates to Attention's online-softmax
-  // implementation, which does not materialize a full attention-score tensor.
-  return 0;
+int64_t ComputePeakMemoryGroupQueryAttention(sym_ns::Device,
+                                             const std::vector<SymShape> &input_shapes) {
+  if (input_shapes.empty() || input_shapes[0].Rank() != 3) {
+    return 0;
+  }
+  const bool has_key = input_shapes.size() > 1 && input_shapes[1].Rank() == 3;
+  const bool has_value = input_shapes.size() > 2 && input_shapes[2].Rank() == 3;
+  if (has_key != has_value) {
+    return 0;
+  }
+  constexpr int64_t kConservativeElementBytes = sizeof(float);
+  bool known = true;
+  const auto element_count = [&](const SymShape &shape, std::int64_t rank) {
+    if (shape.Rank() != rank) {
+      known = false;
+      return int64_t{0};
+    }
+    int64_t count = 1;
+    for (std::int64_t index = 0; index < rank; ++index) {
+      const auto &dim = shape[index];
+      if (!dim.IsInt()) {
+        known = false;
+        return int64_t{0};
+      }
+      if (dim.AsInt() < 0) {
+        throw std::invalid_argument(
+            "ComputePeakMemoryGroupQueryAttention: dimensions must be non-negative.");
+      }
+      count = CheckedIndexMultiply(count, dim.AsInt(), "ComputePeakMemoryGroupQueryAttention",
+                                   "scratch element count");
+    }
+    return count;
+  };
+
+  const int64_t query_elements = element_count(input_shapes[0], 3);
+  const bool packed_qkv = !has_key;
+  const int64_t key_elements = has_key ? element_count(input_shapes[1], 3) : 0;
+  const int64_t value_elements = has_value ? element_count(input_shapes[2], 3) : 0;
+  int64_t past_elements = 0;
+  int64_t past_length = 0;
+  for (std::size_t index : {std::size_t{3}, std::size_t{4}}) {
+    if (input_shapes.size() > index && input_shapes[index].Rank() == 4) {
+      if (past_length == 0 && input_shapes[index][2].IsInt()) {
+        past_length = input_shapes[index][2].AsInt();
+      }
+      past_elements =
+          CheckedIndexAdd(past_elements, element_count(input_shapes[index], 4),
+                          "ComputePeakMemoryGroupQueryAttention", "past scratch element count");
+    }
+  }
+  if (!known) {
+    return 0;
+  }
+
+  // The shared hook must cover the NAIVE implementation. Its longest-lived
+  // temporaries include unpacked Q/K/V for packed input, optional rotated Q/K,
+  // and concatenated full K/V. Without node attributes, the complete packed
+  // width is a conservative upper bound for both Q+K and K+V.
+  const int64_t unpack_elements = packed_qkv ? query_elements : 0;
+  const int64_t rotary_elements =
+      packed_qkv
+          ? query_elements
+          : CheckedIndexAdd(query_elements, key_elements, "ComputePeakMemoryGroupQueryAttention",
+                            "rotary scratch element count");
+  const int64_t current_kv_elements =
+      packed_qkv
+          ? query_elements
+          : CheckedIndexAdd(key_elements, value_elements, "ComputePeakMemoryGroupQueryAttention",
+                            "current KV scratch element count");
+  const int64_t score_elements =
+      CheckedIndexAdd(input_shapes[0][1].AsInt(), past_length,
+                      "ComputePeakMemoryGroupQueryAttention", "score row element count");
+  const int64_t elements = CheckedIndexAdd(
+      unpack_elements,
+      CheckedIndexAdd(rotary_elements,
+                      CheckedIndexAdd(current_kv_elements,
+                                      CheckedIndexAdd(past_elements, score_elements,
+                                                      "ComputePeakMemoryGroupQueryAttention",
+                                                      "attention row scratch element count"),
+                                      "ComputePeakMemoryGroupQueryAttention",
+                                      "full KV scratch element count"),
+                      "ComputePeakMemoryGroupQueryAttention", "attention scratch element count"),
+      "ComputePeakMemoryGroupQueryAttention", "total scratch element count");
+  return CheckedIndexMultiply(elements, kConservativeElementBytes,
+                              "ComputePeakMemoryGroupQueryAttention", "scratch-memory byte size");
 }
 
 int64_t ComputePeakMemoryLinearAttention(sym_ns::Device,

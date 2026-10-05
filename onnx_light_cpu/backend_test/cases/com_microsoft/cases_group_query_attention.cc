@@ -121,6 +121,64 @@ void RegisterGroupQueryAttentionCase(
       "backend-test", bt_ns::TestCaseTag::AI_RT);
 }
 
+void RegisterPackedGroupQueryAttentionCase(
+    std::vector<TestCase> &registry, const OpsetId &microsoft_opset, const std::string &name,
+    std::int64_t batch, std::int64_t sequence, std::int64_t num_heads, std::int64_t kv_num_heads,
+    std::int64_t head_dim, DataType data_type, std::optional<std::int64_t> causal = std::nullopt,
+    std::optional<float> scale = std::nullopt, std::optional<float> softcap = std::nullopt) {
+  const std::int64_t query_width = num_heads * head_dim;
+  const std::int64_t kv_width = kv_num_heads * head_dim;
+  const std::int64_t packed_width = query_width + 2 * kv_width;
+  NodeProto node = MakeGroupQueryAttentionNode(num_heads, kv_num_heads, causal, scale, softcap);
+  node.ref_input()[1].clear();
+  node.ref_input()[2].clear();
+
+  Expect(
+      registry, node, name, {DefaultOpset(23), microsoft_opset},
+      {batch * sequence * packed_width, batch, 1}, {batch * sequence * query_width},
+      [=]() -> IoData {
+        const std::int64_t rows = batch * sequence;
+        std::vector<float> query_values(static_cast<std::size_t>(rows * query_width));
+        std::vector<float> key_values(static_cast<std::size_t>(rows * kv_width));
+        std::vector<float> value_values(static_cast<std::size_t>(rows * kv_width));
+        for (std::size_t i = 0; i < query_values.size(); ++i) {
+          query_values[i] = static_cast<float>(static_cast<std::int64_t>(i % 17) - 8) / 7.0f;
+        }
+        for (std::size_t i = 0; i < key_values.size(); ++i) {
+          key_values[i] = static_cast<float>(static_cast<std::int64_t>(i % 13) - 6) / 5.0f;
+          value_values[i] = static_cast<float>(static_cast<std::int64_t>(i % 11) - 5) / 6.0f;
+        }
+        std::vector<float> packed_values;
+        packed_values.reserve(static_cast<std::size_t>(rows * packed_width));
+        for (std::int64_t row = 0; row < rows; ++row) {
+          packed_values.insert(packed_values.end(), query_values.begin() + row * query_width,
+                               query_values.begin() + (row + 1) * query_width);
+          packed_values.insert(packed_values.end(), key_values.begin() + row * kv_width,
+                               key_values.begin() + (row + 1) * kv_width);
+          packed_values.insert(packed_values.end(), value_values.begin() + row * kv_width,
+                               value_values.begin() + (row + 1) * kv_width);
+        }
+
+        Tensor query = MakeTensor(data_type, {batch, sequence, query_width}, query_values);
+        Tensor key = MakeTensor(data_type, {batch, sequence, kv_width}, key_values);
+        Tensor value = MakeTensor(data_type, {batch, sequence, kv_width}, value_values);
+        Tensor packed = MakeTensor(data_type, {batch, sequence, packed_width}, packed_values);
+        Tensor seqlens_k =
+            Tensor::FromInt32("", {batch},
+                              std::vector<std::int32_t>(static_cast<std::size_t>(batch),
+                                                        static_cast<std::int32_t>(sequence - 1)));
+        Tensor total_sequence_length =
+            Tensor::FromInt32("", {}, {static_cast<std::int32_t>(sequence)});
+        const NodeProto separate_node =
+            MakeGroupQueryAttentionNode(num_heads, kv_num_heads, causal, scale, softcap);
+        const NaiveGroupQueryAttentionKernel oracle{separate_node, KernelContext{microsoft_opset}};
+        Tensor output = oracle(separate_node, query, key, value, seqlens_k, total_sequence_length);
+        return IoData{{std::move(packed), std::move(seqlens_k), std::move(total_sequence_length)},
+                      {std::move(output)}};
+      },
+      "backend-test", bt_ns::TestCaseTag::AI_RT);
+}
+
 void RegisterExplicitPositionIdsCase(std::vector<TestCase> &registry,
                                      const OpsetId &microsoft_opset) {
   NodeProto node;
@@ -526,6 +584,17 @@ void RegisterCpuGroupQueryAttentionCases(std::vector<TestCase> &registry, TestMo
   RegisterGroupQueryAttentionCase(registry, microsoft_opset,
                                   "test_cpu_group_query_attention_mha_causal_softcap_bfloat16", 1,
                                   4, 4, 4, 8, DataType::BFLOAT16, 1, std::nullopt, 2.0f);
+  RegisterPackedGroupQueryAttentionCase(registry, microsoft_opset,
+                                        "test_cpu_group_query_attention_packed_gqa_causal_float32",
+                                        2, 3, 4, 2, 8, DataType::FLOAT, 1);
+  RegisterPackedGroupQueryAttentionCase(
+      registry, microsoft_opset,
+      "test_cpu_group_query_attention_packed_mqa_bidirectional_scale_float16", 1, 4, 4, 1, 8,
+      DataType::FLOAT16, 0, 0.25f);
+  RegisterPackedGroupQueryAttentionCase(
+      registry, microsoft_opset,
+      "test_cpu_group_query_attention_packed_mha_causal_softcap_bfloat16", 1, 4, 4, 4, 8,
+      DataType::BFLOAT16, 1, std::nullopt, 2.0f);
   RegisterExplicitPositionIdsCase(registry, microsoft_opset);
   RegisterCachedRotaryCorrectnessCase(registry, microsoft_opset);
   for (const DataType data_type : {DataType::FLOAT, DataType::FLOAT16, DataType::BFLOAT16}) {
