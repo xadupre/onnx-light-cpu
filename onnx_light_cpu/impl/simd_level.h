@@ -22,6 +22,10 @@ enum class SimdLevel : int {
 /// Detects the highest SIMD level supported by the current CPU at runtime.
 SimdLevel DetectSimdLevel();
 
+/// Returns whether SSSE3 byte/word absolute-value instructions are available.
+/// Unlike AVX, SSSE3 does not need an OS-enabled extended register state.
+bool CpuSupportsSsse3();
+
 /// Returns whether AVX-512BW byte/word instructions are available and enabled
 /// by the operating system. AVX-512F alone is not sufficient for byte kernels.
 bool CpuSupportsAvx512BW();

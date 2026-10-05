@@ -127,6 +127,8 @@ SimdLevel DetectSimdLevel() {
   return SimdLevel::kNone;
 }
 
+bool CpuSupportsSsse3() { return (Cpuid(1).ecx & (1u << 9)) != 0; }
+
 bool CpuSupportsAvx512BW() {
   if constexpr (kMaximumSimdLevel < SimdLevel::kAVX512)
     return false;
@@ -232,6 +234,8 @@ bool CpuSupportsAmxInt8() {
 #else // Non-x86
 
 SimdLevel DetectSimdLevel() { return SimdLevel::kNone; }
+
+bool CpuSupportsSsse3() { return false; }
 
 bool CpuSupportsAvx512BW() { return false; }
 

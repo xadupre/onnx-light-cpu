@@ -4,6 +4,10 @@
 
 #include "onnx_light_cpu/impl/math/math_kernels.h"
 
+#ifdef ONNX_LIGHT_CPU_HAVE_SSSE3
+#include "onnx_light_cpu/impl/math/abs_kernel_ssse3.h"
+#endif
+
 #include "onnx_light_cpu/impl/cpu_cache_topology.h"
 #include "onnx_light_cpu/impl/execution.h"
 
@@ -391,6 +395,13 @@ void AbsInt8_Dispatch(const int8_t *input, int8_t *output, std::size_t count) {
     return;
   }
 #endif
+#ifdef ONNX_LIGHT_CPU_HAVE_SSSE3
+  static const bool has_ssse3 = CpuSupportsSsse3();
+  if (has_ssse3) {
+    AbsInt8_SSSE3(input, output, count);
+    return;
+  }
+#endif
   if (level >= SimdLevel::kSSE2) {
     AbsInt8_SSE2(input, output, count);
     return;
@@ -454,6 +465,13 @@ void AbsInt16_Dispatch(const int16_t *input, int16_t *output, std::size_t count)
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2
   if (level >= SimdLevel::kAVX2) {
     AbsInt16_AVX2(input, output, count);
+    return;
+  }
+#endif
+#ifdef ONNX_LIGHT_CPU_HAVE_SSSE3
+  static const bool has_ssse3 = CpuSupportsSsse3();
+  if (has_ssse3) {
+    AbsInt16_SSSE3(input, output, count);
     return;
   }
 #endif

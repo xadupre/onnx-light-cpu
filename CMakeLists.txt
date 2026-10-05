@@ -255,13 +255,22 @@ endif()
 # Unsupported sources are excluded below.
 if(ONNX_LIGHT_CPU_X86)
   if(NOT MSVC)
+    check_cxx_compiler_flag("-mssse3" ONNX_LIGHT_CPU_HAVE_SSSE3_FLAG)
     check_cxx_compiler_flag("-mavx" ONNX_LIGHT_CPU_HAVE_AVX_FLAG)
     check_cxx_compiler_flag("-mavx2" ONNX_LIGHT_CPU_HAVE_AVX2_FLAG)
   else()
+    check_cxx_source_compiles(
+        "#include <tmmintrin.h>
+         int main() {
+           __m128i x = _mm_setzero_si128();
+           return _mm_cvtsi128_si32(_mm_abs_epi8(x));
+         }"
+        ONNX_LIGHT_CPU_HAVE_SSSE3_FLAG)
     check_cxx_compiler_flag("/arch:AVX" ONNX_LIGHT_CPU_HAVE_AVX_FLAG)
     check_cxx_compiler_flag("/arch:AVX2" ONNX_LIGHT_CPU_HAVE_AVX2_FLAG)
   endif()
 else()
+  set(ONNX_LIGHT_CPU_HAVE_SSSE3_FLAG FALSE)
   set(ONNX_LIGHT_CPU_HAVE_AVX_FLAG FALSE)
   set(ONNX_LIGHT_CPU_HAVE_AVX2_FLAG FALSE)
 endif()
@@ -386,6 +395,9 @@ list(FILTER CPU_BACKEND_CORPUS_SOURCES INCLUDE REGEX "_corpus[.]cc$")
 # New implementations following these conventions automatically inherit the
 # corresponding compiler feature checks and flags.
 foreach(_source IN LISTS CPU_KERNEL_SOURCES)
+  if(_source MATCHES "_ssse3[.]cc$")
+    list(APPEND _ssse3_sources "${_source}")
+  endif()
   if(_source MATCHES "_avx[.]cc$")
     list(APPEND _avx_sources "${_source}")
   endif()
@@ -457,6 +469,9 @@ foreach(_source IN LISTS CPU_KERNEL_SOURCES)
   endif()
 endforeach()
 
+if(NOT ONNX_LIGHT_CPU_HAVE_SSSE3_FLAG)
+  list(REMOVE_ITEM CPU_KERNEL_SOURCES ${_ssse3_sources})
+endif()
 if(NOT ONNX_LIGHT_CPU_HAVE_AVX_FLAG)
   list(REMOVE_ITEM CPU_KERNEL_SOURCES ${_avx_sources})
 endif()
@@ -548,6 +563,13 @@ target_include_directories(lib_onnx_light_cpu PUBLIC
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
 set_property(TARGET lib_onnx_light_cpu PROPERTY POSITION_INDEPENDENT_CODE ON)
+
+if(ONNX_LIGHT_CPU_HAVE_SSSE3_FLAG)
+  if(NOT MSVC)
+    set_source_files_properties(${_ssse3_sources} PROPERTIES COMPILE_OPTIONS "-mssse3")
+  endif()
+  target_compile_definitions(lib_onnx_light_cpu PRIVATE ONNX_LIGHT_CPU_HAVE_SSSE3=1)
+endif()
 target_compile_features(lib_onnx_light_cpu PUBLIC cxx_std_20)
 target_compile_definitions(lib_onnx_light_cpu PRIVATE
     ONNX_LIGHT_CPU_MAX_SIMD_LEVEL=${_onnx_light_cpu_max_simd_level_value})
@@ -1476,6 +1498,9 @@ if(ONNX_LIGHT_CPU_BUILD_TESTS)
     if((_name STREQUAL "test_abs_kernel" OR _name STREQUAL "test_abs_avx512_kernel") AND
        ONNX_LIGHT_CPU_HAVE_AVX512F_FLAG)
       target_compile_definitions(${_name} PRIVATE ONNX_LIGHT_CPU_HAVE_AVX512=1)
+    endif()
+    if(_name STREQUAL "test_abs_kernel" AND ONNX_LIGHT_CPU_HAVE_SSSE3_FLAG)
+      target_compile_definitions(${_name} PRIVATE ONNX_LIGHT_CPU_HAVE_SSSE3=1)
     endif()
     if(_name STREQUAL "test_abs_avx512_kernel" AND ONNX_LIGHT_CPU_HAVE_AVX512BW_FLAG)
       target_compile_definitions(${_name} PRIVATE ONNX_LIGHT_CPU_HAVE_AVX512BW=1)
