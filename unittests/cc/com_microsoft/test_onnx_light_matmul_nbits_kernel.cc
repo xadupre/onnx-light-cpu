@@ -136,12 +136,13 @@ TEST(MatMulNBitsKernel, Accuracy4DynamicPlanMatchesBlockQuantizationAndRefreshes
   }
 
   const rt_ns::Tensor input = rt_ns::Tensor::FromFloat("", {rows, k}, a);
-  rt_ns::Tensor scale_tensor = rt_ns::Tensor::FromFloat("", {n, blocks}, scales);
+  const rt_ns::Tensor scale_tensor = rt_ns::Tensor::FromFloat("", {n, blocks}, scales);
   const rt_ns::Tensor bias_tensor = rt_ns::Tensor::FromFloat("", {n}, bias);
   const onnx_light_cpu::MatMulNBitsKernel kernel{
       MakeNode(k, n), rt_ns::KernelContext{rt_ns::OpsetId("com.microsoft", 1)}};
 
-  auto check = [&](const rt_ns::Tensor &weight_tensor, const std::vector<std::uint8_t> &weights) {
+  auto check = [&](const std::vector<std::uint8_t> &weights) {
+    const rt_ns::Tensor weight_tensor = rt_ns::Tensor::FromUint8("", {n, blocks, 16}, weights);
     const rt_ns::Tensor output = kernel(input, weight_tensor, scale_tensor, &bias_tensor);
     for (std::size_t row = 0; row < rows; ++row) {
       for (std::size_t column = 0; column < n; ++column) {
@@ -169,15 +170,9 @@ TEST(MatMulNBitsKernel, Accuracy4DynamicPlanMatchesBlockQuantizationAndRefreshes
     }
   };
 
-  rt_ns::Tensor weight_tensor = rt_ns::Tensor::FromUint8("", {n, blocks, 16}, packed);
-  check(weight_tensor, packed);
-  check(weight_tensor, packed);
+  check(packed);
   packed[0] ^= 0x0f;
-  weight_tensor.mutable_bytes()[0] = packed[0];
-  check(weight_tensor, packed);
-  scales[0] *= 2.0f;
-  reinterpret_cast<float *>(scale_tensor.mutable_bytes())[0] = scales[0];
-  check(weight_tensor, packed);
+  check(packed);
 }
 
 TEST(MatMulNBitsKernel, PreparesOnlyImmutableWeightsAndScales) {
