@@ -397,6 +397,8 @@ TEST(TreeEnsembleOracle, ExecutionTuningControlsSchedulingThresholdsAndParticipa
   const auto balanced_decision = balanced_plan.SelectExecution(kBalancedRows);
   ASSERT_EQ(balanced_decision.strategy, TreeEnsembleExecutionStrategy::kTreeParallel);
   ASSERT_EQ(balanced_decision.batch_rows, 1U);
+  EXPECT_LE(balanced_decision.participants * balanced_decision.batch_rows * sizeof(float),
+            balanced_decision.workspace_bytes);
   std::vector<float> balanced_input(kBalancedRows * 8, -1.0F);
   std::vector<float> balanced_output(kBalancedRows);
   executor.dispatches.store(0, std::memory_order_relaxed);

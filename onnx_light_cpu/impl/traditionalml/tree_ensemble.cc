@@ -1571,8 +1571,8 @@ void TreeEnsemblePlan::EvaluateIntoImpl(const T *input, std::size_t input_size, 
       const std::size_t batch_rows = std::max<std::size_t>(decision.batch_rows, 1);
       std::size_t partial_stride = batch_rows;
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512
-      const bool vector_tree_partitions =
-          simd_level == SimdLevel::kAVX512 && simd_indices_fit && rows >= 16 && participants > 1;
+      const bool vector_tree_partitions = simd_level == SimdLevel::kAVX512 && simd_indices_fit &&
+                                          batch_rows >= 16 && participants > 1;
       if (vector_tree_partitions) {
         // Keep adjacent workers' outputs off the same cache line, even when
         // the allocation itself is not cache-line aligned.
