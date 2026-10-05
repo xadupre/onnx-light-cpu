@@ -15,15 +15,11 @@
 #include <algorithm>
 #include <array>
 #include <bit>
-#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <functional>
-#include <iomanip>
 #include <limits>
 #include <numbers>
-#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
@@ -34,9 +30,6 @@
 namespace onnx_light_cpu {
 namespace {
 
-constexpr std::size_t kTreeMajorBatchRows = 128;
-constexpr std::size_t kRowParallelThreshold = 50;
-constexpr std::size_t kTreeParallelRowLimit = 128;
 constexpr std::size_t kMaximumBalancedFloatTreeParticipants = 32;
 constexpr std::size_t kFallbackL1DataCacheBytes = 32 * 1024;
 constexpr std::size_t kMinimumTreesPerCacheBlock = 4;
@@ -90,15 +83,6 @@ void ValidatePolicyShape(const TreeEnsembleTuningPolicy &policy) {
         region.tree_chunk == 0 || region.workspace_bytes == 0) {
       Invalid("execution region parameters and workspace must be positive");
     }
-  }
-}
-
-void ValidateExactKey(const TreeEnsembleModelKey &key) {
-  if (key.library != "onnx_light_cpu" || key.kernel != "TreeEnsemble" ||
-      key.domain != "ai.onnx.ml" || key.opset != 5 ||
-      key.implementation != "prepared_tree_ensemble" || key.processor.empty() || key.threads == 0 ||
-      key.model_digest.empty()) {
-    Invalid("exact profile key is incomplete or incompatible");
   }
 }
 
@@ -160,37 +144,43 @@ TreeEnsembleExecutionRegion MakeRegion(std::optional<std::size_t> maximum_rows,
 }
 
 TreeEnsembleTuningPolicy MakeSafePolicy(std::size_t trees, std::size_t targets, std::size_t threads,
-                                        const TreeEnsembleCacheBlocking &cache_blocking) {
+                                        const TreeEnsembleCacheBlocking &cache_blocking,
+                                        const TreeEnsembleExecutionTuning &tuning) {
   TreeEnsembleTuningPolicy policy;
+  const std::size_t maximum_threads =
+      tuning.maximum_participants == 0 ? threads : std::min(threads, tuning.maximum_participants);
   if (threads == 1) {
     policy.regions.push_back(MakeRegion(std::nullopt,
                                         TreeEnsembleExecutionStrategy::kTreeMajorBatch,
-                                        kTreeMajorBatchRows, 1, trees, targets));
+                                        tuning.tree_major_batch_rows, 1, trees, targets));
     return policy;
   }
   const bool use_tree_parallel = trees > cache_blocking.parallel_tree_threshold;
   const std::size_t tree_blocks =
       (trees + cache_blocking.trees_per_l1_block - 1) / cache_blocking.trees_per_l1_block;
-  const std::size_t tree_threads = std::min(threads, std::max<std::size_t>(tree_blocks, 1));
+  const std::size_t tree_threads = std::min(maximum_threads, std::max<std::size_t>(tree_blocks, 1));
   if (use_tree_parallel) {
     policy.regions.push_back(MakeRegion(1, TreeEnsembleExecutionStrategy::kTreeParallel,
-                                        kTreeMajorBatchRows, tree_threads, trees, targets,
+                                        tuning.tree_major_batch_rows, tree_threads, trees, targets,
                                         cache_blocking.trees_per_l1_block));
-    policy.regions.push_back(MakeRegion(kRowParallelThreshold,
-                                        TreeEnsembleExecutionStrategy::kTreeMajorBatch,
-                                        kTreeMajorBatchRows, 1, trees, targets));
-    policy.regions.push_back(MakeRegion(
-        kTreeParallelRowLimit, TreeEnsembleExecutionStrategy::kTreeParallel, kTreeMajorBatchRows,
-        tree_threads, trees, targets, cache_blocking.trees_per_l1_block));
+    if (tuning.row_parallel_threshold > 1) {
+      policy.regions.push_back(MakeRegion(tuning.row_parallel_threshold,
+                                          TreeEnsembleExecutionStrategy::kTreeMajorBatch,
+                                          tuning.tree_major_batch_rows, 1, trees, targets));
+    }
+    policy.regions.push_back(MakeRegion(tuning.tree_parallel_row_limit,
+                                        TreeEnsembleExecutionStrategy::kTreeParallel,
+                                        tuning.tree_major_batch_rows, tree_threads, trees, targets,
+                                        cache_blocking.trees_per_l1_block));
     policy.regions.push_back(MakeRegion(std::nullopt, TreeEnsembleExecutionStrategy::kRowParallel,
-                                        1, threads, trees, targets));
+                                        1, maximum_threads, trees, targets));
     return policy;
   }
-  policy.regions.push_back(MakeRegion(kRowParallelThreshold,
+  policy.regions.push_back(MakeRegion(tuning.row_parallel_threshold,
                                       TreeEnsembleExecutionStrategy::kTreeMajorBatch,
-                                      kTreeMajorBatchRows, 1, trees, targets));
+                                      tuning.tree_major_batch_rows, 1, trees, targets));
   policy.regions.push_back(MakeRegion(std::nullopt, TreeEnsembleExecutionStrategy::kRowParallel, 1,
-                                      threads, trees, targets));
+                                      maximum_threads, trees, targets));
   return policy;
 }
 
@@ -609,98 +599,6 @@ void ValidateWeights(const LegacyTreeAttributes &tree, const LegacyPrepared &pre
   }
 }
 
-double Median(std::vector<double> samples) {
-  std::sort(samples.begin(), samples.end());
-  const std::size_t middle = samples.size() / 2;
-  return samples.size() % 2 == 0 ? (samples[middle - 1] + samples[middle]) * 0.5 : samples[middle];
-}
-
-double MedianAbsoluteDeviation(const std::vector<double> &samples, double median) {
-  std::vector<double> deviations;
-  deviations.reserve(samples.size());
-  for (double sample : samples) {
-    deviations.push_back(std::abs(sample - median));
-  }
-  return Median(std::move(deviations));
-}
-
-std::size_t PolicyWorkspace(const TreeEnsembleTuningPolicy &policy) noexcept {
-  std::size_t result = 0;
-  for (const TreeEnsembleExecutionRegion &region : policy.regions) {
-    result = std::max(result, region.workspace_bytes);
-  }
-  return result;
-}
-
-TreeEnsembleTuningPolicy ComposeCandidatePolicy(const TreeEnsembleTuningPolicy &current,
-                                                const TreeEnsembleTuningPolicy &candidate,
-                                                TreeEnsembleCalibrationStage stage) {
-  TreeEnsembleTuningPolicy composed = current;
-  const auto workspace_density = [](const TreeEnsembleExecutionRegion &region) {
-    const std::size_t scale = SaturatingMultiply(region.maximum_threads, region.batch_rows);
-    return region.workspace_bytes / scale + (region.workspace_bytes % scale != 0 ? 1U : 0U);
-  };
-  const auto resize_workspace = [&](TreeEnsembleExecutionRegion &region, std::size_t density) {
-    region.workspace_bytes =
-        SaturatingMultiply(density, SaturatingMultiply(region.maximum_threads, region.batch_rows));
-  };
-  switch (stage) {
-  case TreeEnsembleCalibrationStage::kLayout:
-    composed.layout = candidate.layout;
-    composed.membership_linear_limit = candidate.membership_linear_limit;
-    composed.membership_bitset_range_limit = candidate.membership_bitset_range_limit;
-    break;
-  case TreeEnsembleCalibrationStage::kTraversal:
-    composed.traversal = candidate.traversal;
-    composed.target_layout = candidate.target_layout;
-    composed.optimized_float16 = candidate.optimized_float16;
-    if (candidate.target_layout == TreeEnsembleTargetLayout::kSparse) {
-      for (std::size_t index = 0;
-           index < composed.regions.size() && index < candidate.regions.size(); ++index) {
-        composed.regions[index].workspace_bytes = candidate.regions[index].workspace_bytes;
-      }
-    }
-    break;
-  case TreeEnsembleCalibrationStage::kScheduling: {
-    const std::size_t density = workspace_density(current.regions.front());
-    composed.regions = candidate.regions;
-    for (TreeEnsembleExecutionRegion &region : composed.regions) {
-      resize_workspace(region, density);
-    }
-  } break;
-  case TreeEnsembleCalibrationStage::kBatch:
-    for (std::size_t index = 0; index < composed.regions.size() && index < candidate.regions.size();
-         ++index) {
-      const std::size_t bytes_per_participant_row = workspace_density(composed.regions[index]);
-      composed.regions[index].maximum_rows = candidate.regions[index].maximum_rows;
-      composed.regions[index].batch_rows = candidate.regions[index].batch_rows;
-      resize_workspace(composed.regions[index], bytes_per_participant_row);
-    }
-    break;
-  case TreeEnsembleCalibrationStage::kChunk:
-    for (std::size_t index = 0; index < composed.regions.size() && index < candidate.regions.size();
-         ++index) {
-      const std::size_t bytes_per_participant_row = workspace_density(composed.regions[index]);
-      composed.regions[index].maximum_threads = candidate.regions[index].maximum_threads;
-      composed.regions[index].row_chunk = candidate.regions[index].row_chunk;
-      composed.regions[index].tree_chunk = candidate.regions[index].tree_chunk;
-      resize_workspace(composed.regions[index], bytes_per_participant_row);
-    }
-    break;
-  case TreeEnsembleCalibrationStage::kWorkspace:
-    for (std::size_t index = 0; index < composed.regions.size() && index < candidate.regions.size();
-         ++index) {
-      composed.regions[index].workspace_bytes = std::max(composed.regions[index].workspace_bytes,
-                                                         candidate.regions[index].workspace_bytes);
-    }
-    break;
-  case TreeEnsembleCalibrationStage::kPrefetch:
-    composed.traversal_prefetch_distance = candidate.traversal_prefetch_distance;
-    break;
-  }
-  return composed;
-}
-
 } // namespace
 
 TreeEnsembleCacheBlocking
@@ -725,428 +623,14 @@ SelectTreeEnsembleCacheBlocking(std::size_t tree_count, std::size_t node_count,
   return {trees_per_block, trees_per_block};
 }
 
-void TreeEnsembleTuningRegistry::PutExact(TreeEnsembleModelKey key,
-                                          TreeEnsembleTuningPolicy policy) {
-  ValidatePolicyShape(policy);
-  ValidateExactKey(key);
-  std::lock_guard<std::mutex> lock(mutex_);
-  const auto found = std::find_if(exact_.begin(), exact_.end(),
-                                  [&](const ExactEntry &entry) { return entry.key == key; });
-  if (found == exact_.end()) {
-    exact_.push_back({std::move(key), std::move(policy)});
-  } else {
-    found->policy = std::move(policy);
-  }
-  ++generation_;
-}
-
-void TreeEnsembleTuningRegistry::PutPortable(TreeEnsembleStructuralBuckets buckets,
-                                             TreeEnsembleTuningPolicy policy) {
-  ValidatePolicyShape(policy);
-  std::lock_guard<std::mutex> lock(mutex_);
-  const auto found =
-      std::find_if(portable_.begin(), portable_.end(),
-                   [&](const PortableEntry &entry) { return entry.buckets == buckets; });
-  if (found == portable_.end()) {
-    portable_.push_back({buckets, std::move(policy)});
-  } else {
-    found->policy = std::move(policy);
-  }
-  ++generation_;
-}
-
-TreeEnsembleCalibrationReport TreeEnsembleTuningRegistry::CalibrateExact(
-    const TreeEnsembleModelKey &key, const TreeEnsembleTuningPolicy &fallback,
-    const std::vector<TreeEnsembleCalibrationCandidate> &candidates,
-    const TreeEnsembleCalibrationOptions &options, const TreeEnsembleCalibrationMeasure &measure) {
-  ValidateExactKey(key);
-  ValidatePolicyShape(fallback);
-  if (!measure || options.duration_budget_ns == 0 || options.memory_budget_bytes == 0 ||
-      options.repetitions == 0 || options.required_wins == 0 ||
-      !std::isfinite(options.minimum_improvement) || options.minimum_improvement < 0.0 ||
-      options.minimum_improvement >= 1.0 ||
-      !std::isfinite(options.maximum_distribution_shift_regression) ||
-      options.maximum_distribution_shift_regression < 0.0) {
-    Invalid("calibration options are invalid");
-  }
-
-  TreeEnsembleCalibrationReport report;
-  report.key = key;
-  report.selected_policy = fallback;
-  {
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (!calibration_enabled_) {
-      for (const TreeEnsembleCalibrationCandidate &candidate : candidates) {
-        report.evidence.push_back({candidate.name,
-                                   candidate.stage,
-                                   candidate.policy,
-                                   {},
-                                   0.0,
-                                   0.0,
-                                   false,
-                                   false,
-                                   "calibration disabled"});
-      }
-      return report;
-    }
-  }
-
-  const auto calibration_start = std::chrono::steady_clock::now();
-  std::uint64_t reported_duration = 0;
-  const auto budget_available = [&]() {
-    const auto actual = std::chrono::duration_cast<std::chrono::nanoseconds>(
-                            std::chrono::steady_clock::now() - calibration_start)
-                            .count();
-    return actual >= 0 && static_cast<std::uint64_t>(actual) < options.duration_budget_ns &&
-           reported_duration < options.duration_budget_ns;
-  };
-  const auto run = [&](const TreeEnsembleTuningPolicy &policy,
-                       TreeEnsembleCalibrationEvidence &evidence) {
-    if (!budget_available()) {
-      evidence.rejected_reason = "duration budget exceeded";
-      report.budget_exhausted = true;
-      return false;
-    }
-    TreeEnsembleCalibrationMeasurement measurement;
-    try {
-      measurement = measure(policy, options.warmup_runs, options.repetitions);
-    } catch (const std::exception &exception) {
-      evidence.rejected_reason = std::string("measurement failed: ") + exception.what();
-      return false;
-    }
-    if (measurement.elapsed_ns > options.duration_budget_ns - reported_duration) {
-      reported_duration = options.duration_budget_ns;
-    } else {
-      reported_duration += measurement.elapsed_ns;
-    }
-    evidence.correct = measurement.correct;
-    evidence.distribution_shift_correct = measurement.distribution_shift_correct;
-    evidence.peak_memory_bytes = measurement.peak_memory_bytes;
-    evidence.samples_ns.insert(evidence.samples_ns.end(), measurement.samples_ns.begin(),
-                               measurement.samples_ns.end());
-    evidence.distribution_shift_samples_ns.insert(evidence.distribution_shift_samples_ns.end(),
-                                                  measurement.distribution_shift_samples_ns.begin(),
-                                                  measurement.distribution_shift_samples_ns.end());
-    if (!measurement.correct) {
-      evidence.rejected_reason =
-          measurement.failure.empty() ? "correctness validation failed" : measurement.failure;
-      return false;
-    }
-    if (!measurement.distribution_shift_correct) {
-      evidence.rejected_reason = measurement.distribution_shift_failure.empty()
-                                     ? "distribution-shift validation failed"
-                                     : measurement.distribution_shift_failure;
-      return false;
-    }
-    if (measurement.peak_memory_bytes > options.memory_budget_bytes) {
-      evidence.rejected_reason = "measured memory budget exceeded";
-      return false;
-    }
-    if (measurement.samples_ns.size() != options.repetitions ||
-        std::any_of(measurement.samples_ns.begin(), measurement.samples_ns.end(),
-                    [](double sample) { return !std::isfinite(sample) || sample <= 0.0; })) {
-      evidence.rejected_reason = "invalid timing samples";
-      return false;
-    }
-    if (!budget_available()) {
-      evidence.rejected_reason = "duration budget exceeded";
-      report.budget_exhausted = true;
-      return false;
-    }
-    return true;
-  };
-
-  for (int stage_code = static_cast<int>(TreeEnsembleCalibrationStage::kLayout);
-       stage_code <= static_cast<int>(TreeEnsembleCalibrationStage::kPrefetch); ++stage_code) {
-    const auto stage = static_cast<TreeEnsembleCalibrationStage>(stage_code);
-    std::vector<const TreeEnsembleCalibrationCandidate *> stage_candidates;
-    for (const TreeEnsembleCalibrationCandidate &candidate : candidates) {
-      if (candidate.stage == stage) {
-        stage_candidates.push_back(&candidate);
-      }
-    }
-    if (stage_candidates.empty()) {
-      continue;
-    }
-
-    const TreeEnsembleTuningPolicy stage_fallback = report.selected_policy;
-    double best_median = std::numeric_limits<double>::infinity();
-    const TreeEnsembleCalibrationCandidate *best = nullptr;
-    std::size_t best_evidence = 0;
-    for (const TreeEnsembleCalibrationCandidate *candidate : stage_candidates) {
-      TreeEnsembleCalibrationEvidence evidence;
-      evidence.candidate = candidate->name;
-      evidence.stage = candidate->stage;
-      evidence.policy = ComposeCandidatePolicy(stage_fallback, candidate->policy, stage);
-      try {
-        ValidatePolicyShape(evidence.policy);
-      } catch (const std::invalid_argument &exception) {
-        evidence.rejected_reason = exception.what();
-        report.evidence.push_back(std::move(evidence));
-        continue;
-      }
-      if (candidate->prepared_bytes > options.memory_budget_bytes ||
-          PolicyWorkspace(evidence.policy) >
-              options.memory_budget_bytes - candidate->prepared_bytes) {
-        evidence.rejected_reason = "memory budget exceeded";
-        report.evidence.push_back(std::move(evidence));
-        continue;
-      }
-
-      bool won_every_repeat = true;
-      for (std::size_t repeat = 0; repeat < options.required_wins; ++repeat) {
-        TreeEnsembleCalibrationEvidence baseline;
-        baseline.candidate = candidate->name + ":fallback";
-        baseline.stage = stage;
-        baseline.policy = stage_fallback;
-        if (!run(stage_fallback, baseline)) {
-          won_every_repeat = false;
-          if (report.budget_exhausted) {
-            evidence.rejected_reason = "duration budget exceeded";
-          } else {
-            evidence.rejected_reason = "fallback validation failed";
-          }
-          break;
-        }
-        baseline.median_ns = Median(baseline.samples_ns);
-        baseline.dispersion_ns = MedianAbsoluteDeviation(baseline.samples_ns, baseline.median_ns);
-        const std::vector<double> baseline_shift_samples = baseline.distribution_shift_samples_ns;
-        report.evidence.push_back(std::move(baseline));
-        const double fallback_median = report.evidence.back().median_ns;
-
-        const std::size_t previous_sample_count = evidence.samples_ns.size();
-        const std::size_t previous_shift_sample_count =
-            evidence.distribution_shift_samples_ns.size();
-        if (!run(evidence.policy, evidence)) {
-          won_every_repeat = false;
-          break;
-        }
-        if (candidate->requires_distribution_shift) {
-          if (baseline_shift_samples.size() != options.repetitions ||
-              evidence.distribution_shift_samples_ns.size() <
-                  previous_shift_sample_count + options.repetitions) {
-            evidence.rejected_reason = "missing distribution-shift timing samples";
-            won_every_repeat = false;
-            break;
-          }
-          const auto invalid_sample = [](double sample) {
-            return !std::isfinite(sample) || sample <= 0.0;
-          };
-          if (std::any_of(baseline_shift_samples.begin(), baseline_shift_samples.end(),
-                          invalid_sample) ||
-              std::any_of(evidence.distribution_shift_samples_ns.begin() +
-                              static_cast<std::ptrdiff_t>(previous_shift_sample_count),
-                          evidence.distribution_shift_samples_ns.end(), invalid_sample)) {
-            evidence.rejected_reason = "invalid distribution-shift timing samples";
-            won_every_repeat = false;
-            break;
-          }
-          const double shifted_fallback = Median(baseline_shift_samples);
-          const std::vector<double> shifted_repeat(
-              evidence.distribution_shift_samples_ns.end() -
-                  static_cast<std::ptrdiff_t>(options.repetitions),
-              evidence.distribution_shift_samples_ns.end());
-          if (Median(shifted_repeat) >
-              shifted_fallback * (1.0 + options.maximum_distribution_shift_regression)) {
-            evidence.rejected_reason = "distribution-shift performance regression";
-            won_every_repeat = false;
-            break;
-          }
-        }
-        const std::vector<double> repeat_samples(
-            evidence.samples_ns.begin() + static_cast<std::ptrdiff_t>(previous_sample_count),
-            evidence.samples_ns.end());
-        if (Median(repeat_samples) > fallback_median * (1.0 - options.minimum_improvement)) {
-          evidence.rejected_reason = "did not improve or retain the priority profile";
-          won_every_repeat = false;
-          break;
-        }
-      }
-      if (!evidence.samples_ns.empty()) {
-        evidence.median_ns = Median(evidence.samples_ns);
-        evidence.dispersion_ns = MedianAbsoluteDeviation(evidence.samples_ns, evidence.median_ns);
-      }
-      if (!evidence.distribution_shift_samples_ns.empty()) {
-        evidence.distribution_shift_median_ns = Median(evidence.distribution_shift_samples_ns);
-      }
-      const std::size_t evidence_index = report.evidence.size();
-      report.evidence.push_back(std::move(evidence));
-      if (won_every_repeat && report.evidence.back().median_ns < best_median) {
-        best = candidate;
-        best_median = report.evidence.back().median_ns;
-        best_evidence = evidence_index;
-      }
-      if (report.budget_exhausted) {
-        break;
-      }
-    }
-    if (best != nullptr) {
-      report.selected_policy = report.evidence[best_evidence].policy;
-      report.evidence[best_evidence].selected = true;
-    }
-    if (report.budget_exhausted) {
-      break;
-    }
-  }
-  report.changed = !(report.selected_policy == fallback);
-
-  {
-    std::lock_guard<std::mutex> lock(mutex_);
-    auto found = std::find_if(exact_.begin(), exact_.end(),
-                              [&](const ExactEntry &entry) { return entry.key == key; });
-    if (found == exact_.end()) {
-      exact_.push_back(
-          {key, report.changed ? std::optional(report.selected_policy) : std::nullopt});
-      found = std::prev(exact_.end());
-    } else if (report.changed) {
-      found->policy = report.selected_policy;
-    }
-    found->evidence = report.evidence;
-    ++generation_;
-  }
-  return report;
-}
-
-void TreeEnsembleTuningRegistry::OverrideExact(const TreeEnsembleModelKey &key,
-                                               TreeEnsembleTuningPolicy policy) {
-  ValidateExactKey(key);
-  ValidatePolicyShape(policy);
-  std::lock_guard<std::mutex> lock(mutex_);
-  auto found = std::find_if(exact_.begin(), exact_.end(),
-                            [&](const ExactEntry &entry) { return entry.key == key; });
-  if (found == exact_.end()) {
-    exact_.push_back({key, std::nullopt, std::move(policy)});
-  } else {
-    found->override_policy = std::move(policy);
-  }
-  ++generation_;
-}
-
-void TreeEnsembleTuningRegistry::ClearExactOverride(const TreeEnsembleModelKey &key) {
-  ValidateExactKey(key);
-  std::lock_guard<std::mutex> lock(mutex_);
-  const auto found = std::find_if(exact_.begin(), exact_.end(),
-                                  [&](const ExactEntry &entry) { return entry.key == key; });
-  if (found != exact_.end() && found->override_policy.has_value()) {
-    found->override_policy.reset();
-    ++generation_;
-  }
-}
-
-void TreeEnsembleTuningRegistry::ForcePortable(const TreeEnsembleModelKey &key, bool enabled) {
-  ValidateExactKey(key);
-  std::lock_guard<std::mutex> lock(mutex_);
-  auto found = std::find_if(exact_.begin(), exact_.end(),
-                            [&](const ExactEntry &entry) { return entry.key == key; });
-  if (found == exact_.end()) {
-    exact_.push_back({key, std::nullopt, std::nullopt, {}, enabled});
-  } else if (found->force_portable != enabled) {
-    found->force_portable = enabled;
-  } else {
-    return;
-  }
-  ++generation_;
-}
-
-void TreeEnsembleTuningRegistry::SetCalibrationEnabled(bool enabled) {
-  std::lock_guard<std::mutex> lock(mutex_);
-  if (calibration_enabled_ != enabled) {
-    calibration_enabled_ = enabled;
-    ++generation_;
-  }
-}
-
-TreeEnsembleTuningInspection
-TreeEnsembleTuningRegistry::InspectExact(const TreeEnsembleModelKey &key) const {
-  std::lock_guard<std::mutex> lock(mutex_);
-  TreeEnsembleTuningInspection inspection;
-  inspection.calibration_enabled = calibration_enabled_;
-  const auto found = std::find_if(exact_.begin(), exact_.end(),
-                                  [&](const ExactEntry &entry) { return entry.key == key; });
-  if (found == exact_.end()) {
-    return inspection;
-  }
-  inspection.override_policy = found->override_policy;
-  inspection.selected_policy =
-      found->override_policy.has_value() ? found->override_policy : found->policy;
-  inspection.evidence = found->evidence;
-  inspection.force_portable = found->force_portable;
-  for (const TreeEnsembleCalibrationEvidence &evidence : found->evidence) {
-    if (!evidence.rejected_reason.empty()) {
-      inspection.rejected_reasons.push_back(evidence.candidate + ": " + evidence.rejected_reason);
-    }
-  }
-  return inspection;
-}
-
-std::uint64_t TreeEnsembleTuningRegistry::generation() const noexcept {
-  std::lock_guard<std::mutex> lock(mutex_);
-  return generation_;
-}
-
-std::string TreeEnsemblePlan::MakeModelSignature(const TreeEnsembleAttributes &attributes,
-                                                 const TreeEnsembleStructuralBuckets &buckets) {
-  std::uint64_t hash = UINT64_C(14695981039346656037);
-  const auto append_u64 = [&](std::uint64_t value) {
-    for (int shift = 0; shift < 64; shift += 8) {
-      hash ^= static_cast<std::uint8_t>(value >> shift);
-      hash *= UINT64_C(1099511628211);
-    }
-  };
-  const auto append_scalar = [&](const auto &value) {
-    using T = std::remove_cvref_t<decltype(value)>;
-    if constexpr (std::is_enum_v<T>) {
-      append_u64(static_cast<std::uint64_t>(value));
-    } else if constexpr (std::is_floating_point_v<T>) {
-      append_u64(std::bit_cast<std::uint64_t>(static_cast<double>(value)));
-    } else {
-      append_u64(static_cast<std::uint64_t>(value));
-    }
-  };
-  const auto append_vector = [&](const auto &values) {
-    append_u64(values.size());
-    for (const auto &value : values) {
-      append_scalar(value);
-    }
-  };
-
-  append_scalar(attributes.n_features);
-  append_scalar(attributes.n_targets);
-  append_scalar(attributes.value_type);
-  append_scalar(attributes.aggregate);
-  append_scalar(attributes.post_transform);
-  append_vector(attributes.tree_roots);
-  append_vector(attributes.nodes_featureids);
-  append_vector(attributes.nodes_modes);
-  append_vector(attributes.nodes_truenodeids);
-  append_vector(attributes.nodes_falsenodeids);
-  append_vector(attributes.nodes_trueleafs);
-  append_vector(attributes.nodes_falseleafs);
-  append_vector(attributes.nodes_missing_value_tracks_true);
-  append_vector(attributes.nodes_hitrates);
-  append_vector(attributes.membership_values);
-  append_vector(attributes.leaf_targetids);
-  append_scalar(attributes.base_values.size());
-  append_scalar(buckets.tree_count);
-  append_scalar(buckets.depth);
-  append_scalar(buckets.target_count);
-  append_scalar(buckets.branch_mode_mix);
-  append_scalar(buckets.membership_density);
-
-  std::ostringstream stream;
-  stream << "tree_ensemble_v5:" << std::hex << std::setfill('0') << std::setw(16) << hash;
-  return stream.str();
-}
-
 TreeEnsemblePlan::TreeEnsemblePlan(TreeEnsembleAttributes attributes)
-    : TreeEnsemblePlan(std::move(attributes), {}, nullptr) {
-  uses_dynamic_safe_policy_ = true;
-}
+    : TreeEnsemblePlan(std::move(attributes), kDefaultTreeEnsembleExecutionTuning) {}
 
 TreeEnsemblePlan::TreeEnsemblePlan(TreeEnsembleAttributes attributes,
-                                   TreeEnsembleTuningContext context,
-                                   const TreeEnsembleTuningRegistry *registry)
-    : attributes_(std::move(attributes)) {
+                                   TreeEnsembleExecutionTuning tuning)
+    : attributes_(std::move(attributes)), execution_tuning_(tuning) {
+  const std::size_t threads =
+      std::max<std::size_t>(static_cast<std::size_t>(ExecutionThreadCount()), 1);
   TreeEnsembleOracle oracle(attributes_);
   (void)oracle;
   tree_roots_ = attributes_.tree_roots;
@@ -1418,14 +902,6 @@ TreeEnsemblePlan::TreeEnsemblePlan(TreeEnsembleAttributes attributes,
                                                  : TreeEnsembleMembershipDensity::kDense;
   }
 
-  model_signature_ = MakeModelSignature(attributes_, structural_buckets_);
-  context.threads =
-      context.threads == 0 ? static_cast<std::size_t>(ExecutionThreadCount()) : context.threads;
-  context.threads = std::max<std::size_t>(context.threads, 1);
-  model_key_.input_type = attributes_.value_type;
-  model_key_.processor = std::move(context.processor);
-  model_key_.threads = context.threads;
-  model_key_.model_digest = model_signature_;
   const bool compact_float_layout = !compact_float_nodes_.empty();
   const std::size_t node_bytes =
       compact_float_layout
@@ -1437,49 +913,32 @@ TreeEnsemblePlan::TreeEnsemblePlan(TreeEnsembleAttributes attributes,
   cache_blocking_ = SelectTreeEnsembleCacheBlocking(
       tree_roots_.size(), nodes_.size(), leaves_.size(), node_bytes, leaf_bytes, l1_bytes);
   tuning_policy_ =
-      MakeSafePolicy(tree_roots_.size(), static_cast<std::size_t>(attributes_.n_targets),
-                     context.threads, cache_blocking_);
-
-  if (registry != nullptr) {
-    std::lock_guard<std::mutex> lock(registry->mutex_);
-    profile_generation_ = registry->generation_;
-    const auto exact = std::find_if(registry->exact_.begin(), registry->exact_.end(),
-                                    [&](const TreeEnsembleTuningRegistry::ExactEntry &entry) {
-                                      return entry.key == model_key_;
-                                    });
-    const TreeEnsembleTuningPolicy *exact_policy = nullptr;
-    if (exact != registry->exact_.end() && !exact->force_portable) {
-      if (exact->override_policy.has_value()) {
-        exact_policy = &*exact->override_policy;
-      } else if (exact->policy.has_value()) {
-        exact_policy = &*exact->policy;
-      }
-    }
-    if (exact_policy != nullptr) {
-      if (PolicyCompatible(*exact_policy, static_cast<std::size_t>(attributes_.n_targets),
-                           context.threads, attributes_.value_type, uses_64_bit_indices_,
-                           all_trees_are_stumps_, all_trees_are_symmetric_,
-                           !attributes_.nodes_hitrates.empty(), active_targets_.size())) {
-        tuning_policy_ = *exact_policy;
-        profile_source_ = TreeEnsembleProfileSource::kExact;
-      }
-    } else {
-      const auto portable =
-          std::find_if(registry->portable_.begin(), registry->portable_.end(),
-                       [&](const TreeEnsembleTuningRegistry::PortableEntry &entry) {
-                         return entry.buckets == structural_buckets_;
-                       });
-      if (portable != registry->portable_.end() &&
-          PolicyCompatible(portable->policy, static_cast<std::size_t>(attributes_.n_targets),
-                           context.threads, attributes_.value_type, uses_64_bit_indices_,
-                           all_trees_are_stumps_, all_trees_are_symmetric_,
-                           !attributes_.nodes_hitrates.empty(), active_targets_.size())) {
-        tuning_policy_ = portable->policy;
-        profile_source_ = TreeEnsembleProfileSource::kPortable;
-      }
-    }
-  }
+      MakeSafePolicy(tree_roots_.size(), static_cast<std::size_t>(attributes_.n_targets), threads,
+                     cache_blocking_, tuning);
   ValidatePolicyShape(tuning_policy_);
+  workspace_bytes_ = 1;
+  for (const TreeEnsembleExecutionRegion &region : tuning_policy_.regions) {
+    workspace_bytes_ = std::max(workspace_bytes_, region.workspace_bytes);
+  }
+  uses_dynamic_safe_policy_ = true;
+}
+
+TreeEnsemblePlan::TreeEnsemblePlan(TreeEnsembleAttributes attributes, std::size_t threads,
+                                   const TreeEnsembleTuningPolicy &policy)
+    : TreeEnsemblePlan(std::move(attributes),
+                       TreeEnsembleExecutionTuning{
+                           kDefaultTreeEnsembleExecutionTuning.tree_major_batch_rows,
+                           kDefaultTreeEnsembleExecutionTuning.row_parallel_threshold,
+                           kDefaultTreeEnsembleExecutionTuning.tree_parallel_row_limit, threads}) {
+  uses_dynamic_safe_policy_ = false;
+  ValidatePolicyShape(policy);
+  if (!PolicyCompatible(policy, static_cast<std::size_t>(attributes_.n_targets), threads,
+                        attributes_.value_type, uses_64_bit_indices_, all_trees_are_stumps_,
+                        all_trees_are_symmetric_, !attributes_.nodes_hitrates.empty(),
+                        active_targets_.size())) {
+    Invalid("execution policy is incompatible with the prepared tree ensemble");
+  }
+  tuning_policy_ = policy;
   workspace_bytes_ = 1;
   for (const TreeEnsembleExecutionRegion &region : tuning_policy_.regions) {
     workspace_bytes_ = std::max(workspace_bytes_, region.workspace_bytes);
@@ -1547,14 +1006,24 @@ std::size_t TreeEnsemblePlan::prepared_storage_bytes() const noexcept {
   add_vector(hot_membership_indices_);
   add_vector(active_targets_);
   add_vector(target_to_active_);
-  bytes = SaturatingAdd(bytes, model_signature_.capacity());
-  bytes = SaturatingAdd(bytes, model_key_.library.capacity());
-  bytes = SaturatingAdd(bytes, model_key_.kernel.capacity());
-  bytes = SaturatingAdd(bytes, model_key_.domain.capacity());
-  bytes = SaturatingAdd(bytes, model_key_.implementation.capacity());
-  bytes = SaturatingAdd(bytes, model_key_.processor.capacity());
-  bytes = SaturatingAdd(bytes, model_key_.model_digest.capacity());
   return bytes;
+}
+
+void TreeEnsemblePlan::ConfigureExecutionTuning(TreeEnsembleExecutionTuning tuning) {
+  const std::size_t threads =
+      std::max<std::size_t>(static_cast<std::size_t>(ExecutionThreadCount()), 1);
+  TreeEnsembleTuningPolicy policy =
+      MakeSafePolicy(tree_roots_.size(), static_cast<std::size_t>(attributes_.n_targets), threads,
+                     cache_blocking_, tuning);
+  ValidatePolicyShape(policy);
+  std::size_t workspace_bytes = 1;
+  for (const TreeEnsembleExecutionRegion &region : policy.regions) {
+    workspace_bytes = std::max(workspace_bytes, region.workspace_bytes);
+  }
+  execution_tuning_ = tuning;
+  tuning_policy_ = std::move(policy);
+  workspace_bytes_ = workspace_bytes;
+  uses_dynamic_safe_policy_ = true;
 }
 
 void TreeEnsemblePlan::CompactRuntimeStorage() {
@@ -1601,68 +1070,6 @@ void TreeEnsemblePlan::CompactRuntimeStorage() {
   }
 }
 
-std::vector<TreeEnsembleCalibrationCandidate>
-TreeEnsemblePlan::GenerateCalibrationCandidates() const {
-  std::vector<TreeEnsembleCalibrationCandidate> candidates;
-  const auto add = [&](std::string name, TreeEnsembleCalibrationStage stage,
-                       TreeEnsembleTuningPolicy policy, bool distribution_shift = true) {
-    candidates.push_back(
-        {std::move(name), stage, std::move(policy), prepared_storage_bytes(), distribution_shift});
-  };
-  if (!uses_64_bit_indices_) {
-    TreeEnsembleTuningPolicy index = tuning_policy_;
-    index.layout = TreeEnsembleNodeLayout::kCompactAosIndex;
-    add("compact_aos_index", TreeEnsembleCalibrationStage::kLayout, std::move(index));
-
-    TreeEnsembleTuningPolicy soa = tuning_policy_;
-    soa.layout = TreeEnsembleNodeLayout::kSplitSoa;
-    add("split_soa", TreeEnsembleCalibrationStage::kLayout, std::move(soa));
-    if (!attributes_.nodes_hitrates.empty()) {
-      TreeEnsembleTuningPolicy hot = tuning_policy_;
-      hot.layout = TreeEnsembleNodeLayout::kPreorderHot;
-      add("preorder_hot", TreeEnsembleCalibrationStage::kLayout, std::move(hot));
-    }
-  }
-  if (all_trees_are_stumps_) {
-    TreeEnsembleTuningPolicy stump = tuning_policy_;
-    stump.traversal = TreeEnsembleTraversal::kStump;
-    add("stump", TreeEnsembleCalibrationStage::kTraversal, std::move(stump));
-  }
-  if (all_trees_are_symmetric_ && !all_trees_are_stumps_) {
-    TreeEnsembleTuningPolicy symmetric = tuning_policy_;
-    symmetric.traversal = TreeEnsembleTraversal::kSymmetric;
-    add("symmetric_tree", TreeEnsembleCalibrationStage::kTraversal, std::move(symmetric));
-  }
-  TreeEnsembleTuningPolicy interleaved = tuning_policy_;
-  for (TreeEnsembleExecutionRegion &region : interleaved.regions) {
-    region.strategy = TreeEnsembleExecutionStrategy::kInterleavedRows;
-    region.maximum_threads = 1;
-  }
-  add("interleaved_rows", TreeEnsembleCalibrationStage::kScheduling, std::move(interleaved));
-
-  const std::size_t targets = static_cast<std::size_t>(attributes_.n_targets);
-  if (targets >= 16 && active_targets_.size() * 4 <= targets) {
-    TreeEnsembleTuningPolicy sparse = tuning_policy_;
-    sparse.target_layout = TreeEnsembleTargetLayout::kSparse;
-    for (TreeEnsembleExecutionRegion &region : sparse.regions) {
-      region.workspace_bytes = RegionWorkspaceBytes(region, active_targets_.size());
-    }
-    add("sparse_target", TreeEnsembleCalibrationStage::kTraversal, std::move(sparse));
-  }
-  if (attributes_.value_type == DataType::FLOAT16) {
-    TreeEnsembleTuningPolicy half = tuning_policy_;
-    half.optimized_float16 = true;
-    add("optimized_float16", TreeEnsembleCalibrationStage::kTraversal, std::move(half));
-  }
-  for (const std::size_t distance : {1U, 2U, 4U}) {
-    TreeEnsembleTuningPolicy prefetch = tuning_policy_;
-    prefetch.traversal_prefetch_distance = distance;
-    add("prefetch_" + std::to_string(distance), TreeEnsembleCalibrationStage::kPrefetch,
-        std::move(prefetch));
-  }
-  return candidates;
-}
-
 TreeEnsembleExecutionDecision
 TreeEnsemblePlan::SelectExecution(std::size_t rows, std::size_t effective_threads) const noexcept {
   const std::size_t trees = tree_roots_.size();
@@ -1670,6 +1077,9 @@ TreeEnsemblePlan::SelectExecution(std::size_t rows, std::size_t effective_thread
     effective_threads = static_cast<std::size_t>(ExecutionThreadCount());
   }
   effective_threads = std::max<std::size_t>(effective_threads, 1);
+  if (execution_tuning_.maximum_participants != 0) {
+    effective_threads = std::min(effective_threads, execution_tuning_.maximum_participants);
+  }
   if (rows == 0) {
     return {};
   }
@@ -1681,7 +1091,7 @@ TreeEnsemblePlan::SelectExecution(std::size_t rows, std::size_t effective_thread
   const auto accumulator_bytes = [&](TreeEnsembleExecutionStrategy strategy) {
     if (attributes_.n_targets == 1 && attributes_.aggregate == TreeAggregate::kSum &&
         attributes_.post_transform == TreePostTransform::kNone &&
-        (rows == 1 || rows >= kRowParallelThreshold) &&
+        (rows == 1 || rows >= execution_tuning_.row_parallel_threshold) &&
         strategy != TreeEnsembleExecutionStrategy::kTreeParallel) {
       return std::size_t{0};
     }
@@ -1697,21 +1107,21 @@ TreeEnsemblePlan::SelectExecution(std::size_t rows, std::size_t effective_thread
       fallback.strategy = TreeEnsembleExecutionStrategy::kTreeMajorBatch;
     } else if (rows == 1 && tree_parallel_worthwhile) {
       fallback.strategy = TreeEnsembleExecutionStrategy::kTreeParallel;
-    } else if (rows <= kRowParallelThreshold) {
+    } else if (rows <= execution_tuning_.row_parallel_threshold) {
       fallback.strategy = TreeEnsembleExecutionStrategy::kTreeMajorBatch;
-    } else if (tree_parallel_worthwhile && rows <= kTreeParallelRowLimit) {
+    } else if (tree_parallel_worthwhile && rows <= execution_tuning_.tree_parallel_row_limit) {
       fallback.strategy = TreeEnsembleExecutionStrategy::kTreeParallel;
     } else {
       fallback.strategy = TreeEnsembleExecutionStrategy::kRowParallel;
     }
     if (fallback.strategy == TreeEnsembleExecutionStrategy::kTreeParallel) {
       fallback.participants = useful_tree_participants;
-      fallback.batch_rows = std::min(rows, kTreeMajorBatchRows);
+      fallback.batch_rows = std::min(rows, execution_tuning_.tree_major_batch_rows);
     } else if (fallback.strategy == TreeEnsembleExecutionStrategy::kRowParallel) {
       fallback.participants = std::min(effective_threads, rows);
       fallback.batch_rows = 1;
     } else {
-      fallback.batch_rows = std::min(rows, kTreeMajorBatchRows);
+      fallback.batch_rows = std::min(rows, execution_tuning_.tree_major_batch_rows);
     }
     fallback.row_chunk = (rows + fallback.participants - 1) / fallback.participants;
     fallback.tree_chunk =
@@ -1728,7 +1138,7 @@ TreeEnsemblePlan::SelectExecution(std::size_t rows, std::size_t effective_thread
   if (effective_threads == 1) {
     TreeEnsembleExecutionDecision serial;
     serial.strategy = TreeEnsembleExecutionStrategy::kTreeMajorBatch;
-    serial.batch_rows = std::min(rows, kTreeMajorBatchRows);
+    serial.batch_rows = std::min(rows, execution_tuning_.tree_major_batch_rows);
     serial.tree_chunk = std::max<std::size_t>(trees, 1);
     serial.workspace_bytes = SaturatingMultiply(
         SaturatingMultiply(serial.batch_rows,
@@ -2033,7 +1443,7 @@ void TreeEnsemblePlan::EvaluateIntoImpl(const T *input, std::size_t input_size, 
         attributes_.post_transform == TreePostTransform::kNone) {
       constexpr std::size_t kInterleavedRows = 8;
       const auto accumulate_tree = [&](std::size_t tree, std::size_t row_begin, std::size_t row_end,
-                                       float *values) {
+                                       float *values, std::size_t value_row_offset = 0) {
         const std::uint32_t root = static_cast<std::uint32_t>(tree_roots_[tree]);
         std::size_t row = row_begin;
         if (max_depth_ == 4 && !compact_float_nodes_.empty() && !leaf_weights_float_.empty()) {
@@ -2054,7 +1464,7 @@ void TreeEnsemblePlan::EvaluateIntoImpl(const T *input, std::size_t input_size, 
             advance();
             advance();
             for (std::size_t lane = 0; lane < kInterleavedRows; ++lane) {
-              values[row + lane] += leaf_weights_float_[nodes[lane]];
+              values[row + lane - value_row_offset] += leaf_weights_float_[nodes[lane]];
             }
           }
         }
@@ -2066,7 +1476,7 @@ void TreeEnsemblePlan::EvaluateIntoImpl(const T *input, std::size_t input_size, 
                        ? current.true_child
                        : current.false_child;
           }
-          values[row] += leaf_weights_float_[node];
+          values[row - value_row_offset] += leaf_weights_float_[node];
         }
       };
 #if defined(ONNX_LIGHT_CPU_HAVE_AVX2_FMA) || defined(ONNX_LIGHT_CPU_HAVE_AVX512)
@@ -2146,7 +1556,8 @@ void TreeEnsemblePlan::EvaluateIntoImpl(const T *input, std::size_t input_size, 
           return;
         }
 #endif
-        ExecuteRanges(static_cast<std::int64_t>(rows), static_cast<double>(kExecutionGrainSize),
+        const ExecutionSchedule schedule{1, 1, static_cast<std::int64_t>(decision.participants)};
+        ExecuteRanges(static_cast<std::int64_t>(rows), schedule,
                       [&](std::int64_t begin, std::int64_t end) {
                         const std::size_t row_begin = static_cast<std::size_t>(begin);
                         const std::size_t row_end = static_cast<std::size_t>(end);
@@ -2157,67 +1568,73 @@ void TreeEnsemblePlan::EvaluateIntoImpl(const T *input, std::size_t input_size, 
                       });
         return;
       }
-      std::size_t partial_stride = rows;
+      const std::size_t batch_rows = std::max<std::size_t>(decision.batch_rows, 1);
+      std::size_t partial_stride = batch_rows;
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512
-      const bool vector_tree_partitions =
-          simd_level == SimdLevel::kAVX512 && simd_indices_fit && rows >= 16 && participants > 1;
+      const bool vector_tree_partitions = simd_level == SimdLevel::kAVX512 && simd_indices_fit &&
+                                          batch_rows >= 16 && participants > 1;
       if (vector_tree_partitions) {
         // Keep adjacent workers' outputs off the same cache line, even when
         // the allocation itself is not cache-line aligned.
-        partial_stride = SaturatingAdd(rows, static_cast<std::size_t>(ExecutionSimdLanes<float>()));
+        partial_stride =
+            SaturatingAdd(batch_rows, static_cast<std::size_t>(ExecutionSimdLanes<float>()));
       }
 #endif
       std::vector<float> partial_values(SaturatingMultiply(participants, partial_stride));
-      if (participants == 1) {
-        std::fill(partial_values.begin(), partial_values.end(), base);
-      }
-      ExecuteRanges(
-          static_cast<std::int64_t>(participants), static_cast<double>(kExecutionGrainSize),
-          [&](std::int64_t begin, std::int64_t end) {
-            for (std::size_t participant = static_cast<std::size_t>(begin);
-                 participant < static_cast<std::size_t>(end); ++participant) {
-              float *participant_values = partial_values.data() + participant * partial_stride;
-              const auto [tree_begin, tree_end] = tree_range(participant, participants);
+      for (std::size_t batch = 0; batch < rows; batch += batch_rows) {
+        const std::size_t active_rows = std::min(batch_rows, rows - batch);
+        std::fill(partial_values.begin(), partial_values.end(), 0.0F);
+        if (participants == 1) {
+          std::fill(partial_values.begin(), partial_values.begin() + active_rows, base);
+        }
+        ExecuteRanges(
+            static_cast<std::int64_t>(participants), static_cast<double>(kExecutionGrainSize),
+            [&](std::int64_t begin, std::int64_t end) {
+              for (std::size_t participant = static_cast<std::size_t>(begin);
+                   participant < static_cast<std::size_t>(end); ++participant) {
+                float *participant_values = partial_values.data() + participant * partial_stride;
+                const auto [tree_begin, tree_end] = tree_range(participant, participants);
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512
-              if (rows == 1 && simd_level == SimdLevel::kAVX512 && simd_indices_fit) {
-                participant_values[0] = EvaluateBalancedFloatTrees_AVX512(
-                    input_data, compact_float_nodes_.data(), leaf_weights_float_.data(),
-                    tree_roots_.data() + tree_begin, tree_end - tree_begin, max_depth_);
-                continue;
-              }
+                if (rows == 1 && simd_level == SimdLevel::kAVX512 && simd_indices_fit) {
+                  participant_values[0] = EvaluateBalancedFloatTrees_AVX512(
+                      input_data, compact_float_nodes_.data(), leaf_weights_float_.data(),
+                      tree_roots_.data() + tree_begin, tree_end - tree_begin, max_depth_);
+                  continue;
+                }
 #endif
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
-              if (rows == 1 && simd_level >= SimdLevel::kAVX2 && simd_indices_fit) {
-                participant_values[0] = EvaluateBalancedFloatTrees_AVX2(
-                    input_data, compact_float_nodes_.data(), leaf_weights_float_.data(),
-                    tree_roots_.data() + tree_begin, tree_end - tree_begin, max_depth_);
-                continue;
-              }
+                if (rows == 1 && simd_level >= SimdLevel::kAVX2 && simd_indices_fit) {
+                  participant_values[0] = EvaluateBalancedFloatTrees_AVX2(
+                      input_data, compact_float_nodes_.data(), leaf_weights_float_.data(),
+                      tree_roots_.data() + tree_begin, tree_end - tree_begin, max_depth_);
+                  continue;
+                }
 #endif
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512
-              if (vector_tree_partitions) {
-                EvaluateBalancedFloatRows_AVX512(
-                    input_data, features, compact_float_nodes_.data(), leaf_weights_float_.data(),
-                    tree_roots_.data() + tree_begin, tree_end - tree_begin, max_depth_, 0, rows,
-                    0.0F, participant_values);
-                continue;
-              }
+                if (vector_tree_partitions) {
+                  EvaluateBalancedFloatRows_AVX512(
+                      input_data + batch * features, features, compact_float_nodes_.data(),
+                      leaf_weights_float_.data(), tree_roots_.data() + tree_begin,
+                      tree_end - tree_begin, max_depth_, 0, active_rows, 0.0F, participant_values);
+                  continue;
+                }
 #endif
-              for (std::size_t tree = tree_begin; tree < tree_end; ++tree) {
-                accumulate_tree(tree, 0, rows, participant_values);
+                for (std::size_t tree = tree_begin; tree < tree_end; ++tree) {
+                  accumulate_tree(tree, batch, batch + active_rows, participant_values, batch);
+                }
               }
-            }
-          });
-      for (std::size_t row = 0; row < rows; ++row) {
-        if (participants == 1) {
-          output_data[row] = partial_values[row];
-          continue;
+            });
+        for (std::size_t row = 0; row < active_rows; ++row) {
+          if (participants == 1) {
+            output_data[batch + row] = partial_values[row];
+            continue;
+          }
+          float value = base;
+          for (std::size_t participant = 0; participant < participants; ++participant) {
+            value += partial_values[participant * partial_stride + row];
+          }
+          output_data[batch + row] = value;
         }
-        float value = base;
-        for (std::size_t participant = 0; participant < participants; ++participant) {
-          value += partial_values[participant * partial_stride + row];
-        }
-        output_data[row] = value;
       }
       return;
     }
@@ -2239,7 +1656,7 @@ void TreeEnsemblePlan::EvaluateIntoImpl(const T *input, std::size_t input_size, 
        decision.strategy == TreeEnsembleExecutionStrategy::kInterleavedRows) &&
       targets == 1 && !sparse_targets && attributes_.aggregate == TreeAggregate::kSum &&
       attributes_.post_transform == TreePostTransform::kNone) {
-    if (rows >= kRowParallelThreshold) {
+    if (rows >= execution_tuning_.row_parallel_threshold) {
       const double base = attributes_.base_values.empty() ? 0.0 : attributes_.base_values[0];
       for (std::size_t row = 0; row < rows; ++row) {
         double value = base;
@@ -2307,7 +1724,8 @@ void TreeEnsemblePlan::EvaluateIntoImpl(const T *input, std::size_t input_size, 
     return;
   }
   if (decision.strategy == TreeEnsembleExecutionStrategy::kRowParallel) {
-    ExecuteRanges(static_cast<std::int64_t>(rows), static_cast<double>(kExecutionGrainSize),
+    const ExecutionSchedule schedule{1, 1, static_cast<std::int64_t>(decision.participants)};
+    ExecuteRanges(static_cast<std::int64_t>(rows), schedule,
                   [&](std::int64_t begin, std::int64_t end) {
                     std::vector<double> values(accumulator_targets);
                     std::vector<std::size_t> counts(accumulator_targets);

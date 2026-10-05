@@ -7,6 +7,7 @@
 #include "onnx_core/runtime/kernels/run_nodes.h"
 #include "onnx_core/runtime/memory/simple_tensor.h"
 #include "onnx_core/runtime/runtime_context.h"
+#include "onnx_core/runtime/tuning/kernel_tuning.h"
 #include "onnx_light_cpu/impl/math/binary/binary_manifest.h"
 #include "onnx_light_cpu/kernels/attention/attention_kernel.h"
 #include "onnx_light_cpu/kernels/com_microsoft/bias_gelu_kernel.h"
@@ -99,6 +100,26 @@ TEST(OnnxLightKernelUsage, KernelNamesAreLibraryQualified) {
   EXPECT_STREQ(onnx_light_cpu::SoftmaxKernel::kName, "onnx_light_cpu::Softmax");
   EXPECT_STREQ(onnx_light_cpu::SwiGLUKernel::kName, "onnx_light_cpu::SwiGLU");
   EXPECT_STREQ(onnx_light_cpu::TreeEnsembleKernel::kName, "onnx_light_cpu::TreeEnsemble");
+}
+
+TEST(OnnxLightKernelUsage, TreeEnsembleUsesSharedTuningRegistry) {
+  onnx_light_cpu::TreeEnsembleKernel::RegisterTuningSchemas();
+  for (rt_ns::DataType type :
+       {rt_ns::DataType::FLOAT, rt_ns::DataType::DOUBLE, rt_ns::DataType::FLOAT16}) {
+    const rt_ns::KernelTuningKey key{"onnx_light_cpu",
+                                     "TreeEnsemble",
+                                     "prepared_v5",
+                                     static_cast<std::int32_t>(type),
+                                     ONNX_LIGHT_NAMESPACE::core::symbolic::Device::kCPU,
+                                     onnx_light_cpu::TreeEnsembleKernel::kTuningAbi};
+    const auto schema = rt_ns::GetKernelTuningRegistry().FindSchema(key);
+    ASSERT_NE(schema, nullptr);
+    const rt_ns::KernelTuningParameters &defaults = schema->portable_defaults();
+    EXPECT_EQ(defaults.Get<std::int64_t>("parallel.tree_major_batch_rows"), 128);
+    EXPECT_EQ(defaults.Get<std::int64_t>("parallel.row_threshold"), 50);
+    EXPECT_EQ(defaults.Get<std::int64_t>("parallel.tree_row_limit"), 128);
+    EXPECT_EQ(defaults.Get<std::int64_t>("parallel.max_participants"), 0);
+  }
 }
 
 // ``RegisteredKernelNames`` maps every overridden ONNX op_type to the

@@ -8,8 +8,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <functional>
-#include <mutex>
 #include <optional>
 #include <string>
 #include <variant>
@@ -105,21 +103,6 @@ struct TreeEnsembleStructuralBuckets {
   bool operator==(const TreeEnsembleStructuralBuckets &) const = default;
 };
 
-struct TreeEnsembleModelKey {
-  std::string library = "onnx_light_cpu";
-  std::string kernel = "TreeEnsemble";
-  std::string domain = "ai.onnx.ml";
-  std::int64_t opset = 5;
-  std::string implementation = "prepared_tree_ensemble";
-  DataType input_type = DataType::FLOAT;
-  DataType accumulator_type = DataType::DOUBLE;
-  std::string processor = "portable";
-  std::size_t threads = 1;
-  std::string model_digest;
-
-  bool operator==(const TreeEnsembleModelKey &) const = default;
-};
-
 struct TreeEnsembleExecutionRegion {
   std::optional<std::size_t> maximum_rows;
   TreeEnsembleExecutionStrategy strategy = TreeEnsembleExecutionStrategy::kTreeMajorBatch;
@@ -145,91 +128,16 @@ struct TreeEnsembleTuningPolicy {
   bool operator==(const TreeEnsembleTuningPolicy &) const = default;
 };
 
-enum class TreeEnsembleProfileSource : std::uint8_t {
-  kSafeFallback,
-  kPortable,
-  kExact,
+struct TreeEnsembleExecutionTuning {
+  std::size_t tree_major_batch_rows = 128;
+  std::size_t row_parallel_threshold = 50;
+  std::size_t tree_parallel_row_limit = 128;
+  std::size_t maximum_participants = 0;
+
+  bool operator==(const TreeEnsembleExecutionTuning &) const = default;
 };
 
-struct TreeEnsembleTuningContext {
-  std::string processor = "portable";
-  std::size_t threads = 0;
-};
-
-enum class TreeEnsembleCalibrationStage : std::uint8_t {
-  kLayout,
-  kTraversal,
-  kScheduling,
-  kBatch,
-  kChunk,
-  kWorkspace,
-  kPrefetch,
-};
-
-struct TreeEnsembleCalibrationCandidate {
-  std::string name;
-  TreeEnsembleCalibrationStage stage = TreeEnsembleCalibrationStage::kLayout;
-  TreeEnsembleTuningPolicy policy;
-  std::size_t prepared_bytes = 0;
-  bool requires_distribution_shift = false;
-};
-
-struct TreeEnsembleCalibrationMeasurement {
-  bool correct = false;
-  std::vector<double> samples_ns;
-  std::uint64_t elapsed_ns = 0;
-  std::string failure;
-  bool distribution_shift_correct = true;
-  std::size_t peak_memory_bytes = 0;
-  std::string distribution_shift_failure;
-  std::vector<double> distribution_shift_samples_ns;
-};
-
-struct TreeEnsembleCalibrationOptions {
-  std::uint64_t duration_budget_ns = 1'000'000'000;
-  std::size_t memory_budget_bytes = 64 * 1024 * 1024;
-  std::size_t warmup_runs = 3;
-  std::size_t repetitions = 11;
-  std::size_t required_wins = 2;
-  double minimum_improvement = 0.0;
-  double maximum_distribution_shift_regression = 0.1;
-};
-
-struct TreeEnsembleCalibrationEvidence {
-  std::string candidate;
-  TreeEnsembleCalibrationStage stage = TreeEnsembleCalibrationStage::kLayout;
-  TreeEnsembleTuningPolicy policy;
-  std::vector<double> samples_ns;
-  double median_ns = 0.0;
-  double dispersion_ns = 0.0;
-  bool correct = false;
-  bool selected = false;
-  std::string rejected_reason;
-  bool distribution_shift_correct = true;
-  std::size_t peak_memory_bytes = 0;
-  std::vector<double> distribution_shift_samples_ns;
-  double distribution_shift_median_ns = 0.0;
-};
-
-struct TreeEnsembleCalibrationReport {
-  TreeEnsembleModelKey key;
-  TreeEnsembleTuningPolicy selected_policy;
-  std::vector<TreeEnsembleCalibrationEvidence> evidence;
-  bool changed = false;
-  bool budget_exhausted = false;
-};
-
-using TreeEnsembleCalibrationMeasure = std::function<TreeEnsembleCalibrationMeasurement(
-    const TreeEnsembleTuningPolicy &, std::size_t warmup_runs, std::size_t repetitions)>;
-
-struct TreeEnsembleTuningInspection {
-  std::optional<TreeEnsembleTuningPolicy> selected_policy;
-  std::optional<TreeEnsembleTuningPolicy> override_policy;
-  std::vector<TreeEnsembleCalibrationEvidence> evidence;
-  std::vector<std::string> rejected_reasons;
-  bool force_portable = false;
-  bool calibration_enabled = true;
-};
+inline constexpr TreeEnsembleExecutionTuning kDefaultTreeEnsembleExecutionTuning;
 
 struct TreeEnsembleExecutionDecision {
   TreeEnsembleExecutionStrategy strategy = TreeEnsembleExecutionStrategy::kTreeMajorBatch;
@@ -253,46 +161,6 @@ TreeEnsembleCacheBlocking
 SelectTreeEnsembleCacheBlocking(std::size_t tree_count, std::size_t node_count,
                                 std::size_t leaf_count, std::size_t node_bytes,
                                 std::size_t leaf_bytes, std::size_t l1_bytes);
-
-/// Thread-safe profile store. Plans resolve it once during construction and
-/// capture the selected policy and generation.
-class TreeEnsembleTuningRegistry {
-public:
-  void PutExact(TreeEnsembleModelKey key, TreeEnsembleTuningPolicy policy);
-  void PutPortable(TreeEnsembleStructuralBuckets buckets, TreeEnsembleTuningPolicy policy);
-  TreeEnsembleCalibrationReport
-  CalibrateExact(const TreeEnsembleModelKey &key, const TreeEnsembleTuningPolicy &fallback,
-                 const std::vector<TreeEnsembleCalibrationCandidate> &candidates,
-                 const TreeEnsembleCalibrationOptions &options,
-                 const TreeEnsembleCalibrationMeasure &measure);
-  void OverrideExact(const TreeEnsembleModelKey &key, TreeEnsembleTuningPolicy policy);
-  void ClearExactOverride(const TreeEnsembleModelKey &key);
-  void ForcePortable(const TreeEnsembleModelKey &key, bool enabled);
-  void SetCalibrationEnabled(bool enabled);
-  TreeEnsembleTuningInspection InspectExact(const TreeEnsembleModelKey &key) const;
-
-  std::uint64_t generation() const noexcept;
-
-private:
-  friend class TreeEnsemblePlan;
-  struct ExactEntry {
-    TreeEnsembleModelKey key;
-    std::optional<TreeEnsembleTuningPolicy> policy;
-    std::optional<TreeEnsembleTuningPolicy> override_policy;
-    std::vector<TreeEnsembleCalibrationEvidence> evidence;
-    bool force_portable = false;
-  };
-  struct PortableEntry {
-    TreeEnsembleStructuralBuckets buckets;
-    TreeEnsembleTuningPolicy policy;
-  };
-
-  mutable std::mutex mutex_;
-  std::vector<ExactEntry> exact_;
-  std::vector<PortableEntry> portable_;
-  std::uint64_t generation_ = 0;
-  bool calibration_enabled_ = true;
-};
 
 struct TreeEnsembleRegressorAttributes;
 struct TreeEnsembleClassifierAttributes;
@@ -464,8 +332,9 @@ float EvaluateBalancedFloatTrees_AVX512(const float *input,
 class TreeEnsemblePlan {
 public:
   explicit TreeEnsemblePlan(TreeEnsembleAttributes attributes);
-  TreeEnsemblePlan(TreeEnsembleAttributes attributes, TreeEnsembleTuningContext context,
-                   const TreeEnsembleTuningRegistry *registry);
+  TreeEnsemblePlan(TreeEnsembleAttributes attributes, TreeEnsembleExecutionTuning tuning);
+  TreeEnsemblePlan(TreeEnsembleAttributes attributes, std::size_t threads,
+                   const TreeEnsembleTuningPolicy &policy);
   explicit TreeEnsemblePlan(const TreeEnsembleRegressorAttributes &attributes);
   explicit TreeEnsemblePlan(const TreeEnsembleClassifierAttributes &attributes);
 
@@ -474,6 +343,7 @@ public:
                     float *output) const;
   void EvaluateInto(const double *input, std::size_t input_size, std::size_t rows,
                     double *output) const;
+  void ConfigureExecutionTuning(TreeEnsembleExecutionTuning tuning);
   void CompactRuntimeStorage();
   TreeEnsembleExecutionDecision SelectExecution(std::size_t rows,
                                                 std::size_t effective_threads = 0) const noexcept;
@@ -494,29 +364,22 @@ public:
   }
   std::size_t max_depth() const noexcept { return max_depth_; }
   std::size_t average_depth() const noexcept { return average_depth_; }
-  const std::string &model_signature() const noexcept { return model_signature_; }
-  const TreeEnsembleModelKey &model_key() const noexcept { return model_key_; }
   const TreeEnsembleStructuralBuckets &structural_buckets() const noexcept {
     return structural_buckets_;
   }
   const TreeEnsembleTuningPolicy &tuning_policy() const noexcept { return tuning_policy_; }
   const TreeEnsembleCacheBlocking &cache_blocking() const noexcept { return cache_blocking_; }
-  TreeEnsembleProfileSource profile_source() const noexcept { return profile_source_; }
-  std::uint64_t profile_generation() const noexcept { return profile_generation_; }
+  const TreeEnsembleExecutionTuning &execution_tuning() const noexcept { return execution_tuning_; }
   std::size_t workspace_bytes() const noexcept { return workspace_bytes_; }
   std::size_t prepared_storage_bytes() const noexcept;
   bool uses_64bit_indices() const noexcept { return uses_64_bit_indices_; }
   bool all_trees_are_stumps() const noexcept { return all_trees_are_stumps_; }
   bool all_trees_are_symmetric() const noexcept { return all_trees_are_symmetric_; }
   bool all_trees_are_balanced() const noexcept { return all_trees_are_balanced_; }
-  std::vector<TreeEnsembleCalibrationCandidate> GenerateCalibrationCandidates() const;
 
 private:
   template <typename T>
   void EvaluateIntoImpl(const T *input, std::size_t input_size, std::size_t rows, T *output) const;
-
-  static std::string MakeModelSignature(const TreeEnsembleAttributes &attributes,
-                                        const TreeEnsembleStructuralBuckets &buckets);
 
   TreeEnsembleAttributes attributes_;
   std::vector<std::int64_t> tree_roots_;
@@ -526,13 +389,10 @@ private:
   std::vector<std::vector<double>> membership_sets_;
   std::size_t max_depth_ = 0;
   std::size_t average_depth_ = 0;
-  std::string model_signature_;
-  TreeEnsembleModelKey model_key_;
   TreeEnsembleStructuralBuckets structural_buckets_;
   TreeEnsembleTuningPolicy tuning_policy_;
+  TreeEnsembleExecutionTuning execution_tuning_;
   TreeEnsembleCacheBlocking cache_blocking_;
-  TreeEnsembleProfileSource profile_source_ = TreeEnsembleProfileSource::kSafeFallback;
-  std::uint64_t profile_generation_ = 0;
   std::size_t workspace_bytes_ = 0;
   bool uses_64_bit_indices_ = false;
   bool uses_dynamic_safe_policy_ = false;

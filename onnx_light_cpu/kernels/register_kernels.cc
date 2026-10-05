@@ -239,9 +239,8 @@ bool RegisterKernelForSession(rt_ns::RuntimeContext &session, const std::string 
   if (!replace && session.custom_kernels().find(key) != session.custom_kernels().end()) {
     return false;
   }
-  session.RegisterCustomKernel(entry.info.domain, entry.info.op_type,
-                               detail::AsSessionKernel(std::move(entry.factory)));
-  return true;
+  return session.RegisterKernelFn(entry.info.domain, entry.info.op_type, entry.info.device,
+                                  std::move(entry.factory), replace);
 }
 
 std::size_t RegisterAllKernelsForSession(rt_ns::RuntimeContext &session, bool replace,
@@ -252,8 +251,8 @@ std::size_t RegisterAllKernelsForSession(rt_ns::RuntimeContext &session, bool re
     if (!replace && session.custom_kernels().find(key) != session.custom_kernels().end()) {
       continue;
     }
-    session.RegisterCustomKernel(entry.info.domain, entry.info.op_type,
-                                 detail::AsSessionKernel(std::move(entry.factory)));
+    session.RegisterKernelFn(entry.info.domain, entry.info.op_type, entry.info.device,
+                             std::move(entry.factory), replace);
     ++count;
   }
   return count;

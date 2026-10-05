@@ -11,21 +11,28 @@
 
 #include <cstdint>
 #include <memory>
-#include <mutex>
 
 namespace onnx_light_cpu {
 
 /// Runtime kernel adapter for ``ai.onnx.ml::TreeEnsemble`` version 5.
 class TreeEnsembleKernel : public ONNX_LIGHT_NAMESPACE::core::runtime::KernelBase {
 public:
-  explicit TreeEnsembleKernel(const ONNX_LIGHT_NAMESPACE::core::runtime::KernelContext &ctx);
+  TreeEnsembleKernel(const ONNX_LIGHT_NAMESPACE::NodeProto &node,
+                     ONNX_LIGHT_NAMESPACE::core::runtime::RuntimeContext &rt);
 
   static constexpr const char *kName = "onnx_light_cpu::TreeEnsemble";
+  static constexpr std::uint32_t kTuningAbi = 1;
+
+  static void RegisterTuningSchemas();
+  ONNX_LIGHT_NAMESPACE::core::runtime::KernelTuningKey
+  TuningKey(std::int32_t element_type) const override;
+  void
+  Configure(const ONNX_LIGHT_NAMESPACE::core::runtime::KernelTuningParameters &parameters) override;
 
   void Run(ONNX_LIGHT_NAMESPACE::core::runtime::RuntimeContext &rt) override;
 
 private:
-  std::once_flag initialize_once_;
+  TreeEnsembleExecutionTuning tuning_;
   std::unique_ptr<TreeEnsemblePlan> plan_;
   std::int32_t input_data_type_ = 0;
   std::int64_t feature_count_ = 0;
