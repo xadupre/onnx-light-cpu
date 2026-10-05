@@ -5,6 +5,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [0.1.20] – Unreleased
 
+### Improvements
+
+- Added an SSSE3 fallback for INT8 and INT16 `Abs` on x86 processors without
+  AVX2 ([#853](https://github.com/xadupre/onnx-light-cpu/pull/853)).
+
+### Fixes
+
+- Matched the effective native nanobind ABI used by onnx-light 0.1.30 in
+  release wheels on Linux, Windows, and macOS
+  ([#859](https://github.com/xadupre/onnx-light-cpu/pull/859)).
+- Fixed Windows wheel builds by locating MSVC tools through `vswhere`, and
+  macOS wheel repair by excluding separately installed onnx-light libraries
+  ([#860](https://github.com/xadupre/onnx-light-cpu/pull/860)).
+
 ## [0.1.19] – 2026-10-05
 
 ### Fixes
