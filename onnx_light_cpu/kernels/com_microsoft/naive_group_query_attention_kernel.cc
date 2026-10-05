@@ -118,6 +118,7 @@ struct GqaArgs {
 
   bool has_present_key = false;
   bool has_present_value = false;
+  bool packed_qkv = false;
 
   DataType dtype = DataType::FLOAT;
   std::int64_t batch = 0;
@@ -214,11 +215,12 @@ template <typename Lookup> GqaArgs ResolveAndValidate(const NodeProto &node, Loo
                                 "(rotary_interleaved=0) is supported.");
   }
 
-  if (!HasInput(node, 1) || !HasInput(node, 2)) {
+  if (HasInput(node, 1) != HasInput(node, 2)) {
     throw std::invalid_argument(
-        "onnx_light_cpu::NaiveGroupQueryAttention: packed QKV (empty key/value inputs) is not "
-        "supported; key and value must be wired.");
+        "onnx_light_cpu::NaiveGroupQueryAttention: key and value must both be wired or both be "
+        "empty.");
   }
+  args.packed_qkv = !HasInput(node, 1);
   const bool has_past_key = HasInput(node, 3);
   const bool has_past_value = HasInput(node, 4);
   if (has_past_key != has_past_value) {
@@ -258,8 +260,8 @@ template <typename Lookup> GqaArgs ResolveAndValidate(const NodeProto &node, Loo
   }
 
   args.query = &lookup(0);
-  args.key = &lookup(1);
-  args.value = &lookup(2);
+  args.key = args.packed_qkv ? nullptr : &lookup(1);
+  args.value = args.packed_qkv ? nullptr : &lookup(2);
   args.past_key = has_past_key ? &lookup(3) : nullptr;
   args.past_value = has_past_value ? &lookup(4) : nullptr;
   args.seqlens_k = &lookup(5);
@@ -276,8 +278,8 @@ template <typename Lookup> GqaArgs ResolveAndValidate(const NodeProto &node, Loo
         "onnx_light_cpu::NaiveGroupQueryAttention: query/key/value must be FLOAT, FLOAT16, or "
         "BFLOAT16.");
   }
-  if (static_cast<DataType>(args.key->data_type) != args.dtype ||
-      static_cast<DataType>(args.value->data_type) != args.dtype) {
+  if (!args.packed_qkv && (static_cast<DataType>(args.key->data_type) != args.dtype ||
+                           static_cast<DataType>(args.value->data_type) != args.dtype)) {
     throw std::invalid_argument(
         "onnx_light_cpu::NaiveGroupQueryAttention: query, key, and value types must match.");
   }
@@ -299,18 +301,21 @@ template <typename Lookup> GqaArgs ResolveAndValidate(const NodeProto &node, Loo
         "onnx_light_cpu::NaiveGroupQueryAttention: attention_bias type must match query.");
   }
 
-  if (args.query->shape.size() != 3 || args.key->shape.size() != 3 ||
-      args.value->shape.size() != 3) {
+  if (args.query->shape.size() != 3 ||
+      (!args.packed_qkv && (args.key->shape.size() != 3 || args.value->shape.size() != 3))) {
     throw std::invalid_argument(
         "onnx_light_cpu::NaiveGroupQueryAttention: query, key, and value must have rank 3.");
   }
   CheckedShapeIndexProduct(args.query->shape, "NaiveGroupQueryAttention", "query shape");
-  CheckedShapeIndexProduct(args.key->shape, "NaiveGroupQueryAttention", "key shape");
-  CheckedShapeIndexProduct(args.value->shape, "NaiveGroupQueryAttention", "value shape");
+  if (!args.packed_qkv) {
+    CheckedShapeIndexProduct(args.key->shape, "NaiveGroupQueryAttention", "key shape");
+    CheckedShapeIndexProduct(args.value->shape, "NaiveGroupQueryAttention", "value shape");
+  }
   args.batch = args.query->shape[0];
   args.sequence_length = args.query->shape[1];
-  if (args.key->shape[0] != args.batch || args.value->shape[0] != args.batch ||
-      args.key->shape[1] != args.sequence_length || args.value->shape[1] != args.sequence_length) {
+  if (!args.packed_qkv && (args.key->shape[0] != args.batch || args.value->shape[0] != args.batch ||
+                           args.key->shape[1] != args.sequence_length ||
+                           args.value->shape[1] != args.sequence_length)) {
     throw std::invalid_argument(
         "onnx_light_cpu::NaiveGroupQueryAttention: query, key, and value must share the same "
         "batch and sequence length.");
@@ -319,24 +324,31 @@ template <typename Lookup> GqaArgs ResolveAndValidate(const NodeProto &node, Loo
     throw std::invalid_argument(
         "onnx_light_cpu::NaiveGroupQueryAttention: batch and sequence length must be positive.");
   }
-  if (args.query->shape[2] % args.num_heads != 0) {
+  const std::int64_t packed_heads =
+      args.packed_qkv
+          ? CheckedIndexAdd(args.num_heads,
+                            CheckedIndexMultiply(2, args.kv_num_heads, "NaiveGroupQueryAttention",
+                                                 "packed head count"),
+                            "NaiveGroupQueryAttention", "packed head count")
+          : args.num_heads;
+  if (args.query->shape[2] <= 0 || args.query->shape[2] % packed_heads != 0) {
     throw std::invalid_argument(
-        "onnx_light_cpu::NaiveGroupQueryAttention: query hidden size must be a multiple of "
-        "num_heads.");
+        "onnx_light_cpu::NaiveGroupQueryAttention: query hidden size must be a positive multiple "
+        "of the packed or query head count.");
   }
-  args.head_dim = args.query->shape[2] / args.num_heads;
-  if (args.key->shape[2] % args.kv_num_heads != 0 ||
-      args.key->shape[2] / args.kv_num_heads != args.head_dim) {
+  args.head_dim = args.query->shape[2] / packed_heads;
+  if (!args.packed_qkv && (args.key->shape[2] % args.kv_num_heads != 0 ||
+                           args.key->shape[2] / args.kv_num_heads != args.head_dim)) {
     throw std::invalid_argument(
         "onnx_light_cpu::NaiveGroupQueryAttention: key hidden size must equal kv_num_heads * "
         "head_size (matching query's head_size).");
   }
-  if (args.value->shape[2] % args.kv_num_heads != 0) {
+  if (!args.packed_qkv && args.value->shape[2] % args.kv_num_heads != 0) {
     throw std::invalid_argument(
         "onnx_light_cpu::NaiveGroupQueryAttention: value hidden size must be a multiple of "
         "kv_num_heads.");
   }
-  args.v_head_dim = args.value->shape[2] / args.kv_num_heads;
+  args.v_head_dim = args.packed_qkv ? args.head_dim : args.value->shape[2] / args.kv_num_heads;
 
   if (args.past_key != nullptr) {
     if (args.past_key->shape.size() != 4 || args.past_value->shape.size() != 4) {
@@ -789,22 +801,63 @@ Tensor ComputeNaiveAttention(const GqaArgs &args, RuntimeContext *rt, const Tens
   return output;
 }
 
+void UnpackQkv(const GqaArgs &args, RuntimeContext *rt, Tensor &query, Tensor &key, Tensor &value) {
+  const std::int64_t q_hidden =
+      CheckedIndexMultiply(args.num_heads, args.head_dim, "NaiveGroupQueryAttention", "query size");
+  const std::int64_t kv_hidden =
+      CheckedIndexMultiply(args.kv_num_heads, args.head_dim, "NaiveGroupQueryAttention", "KV size");
+  const std::size_t element_bytes = ElementByteWidth(args.dtype);
+  const auto make_tensor = [&](std::int64_t hidden) {
+    Shape shape{args.batch, args.sequence_length, hidden};
+    const std::size_t bytes = CheckedByteSize(
+        static_cast<std::size_t>(shape.product(0, shape.size(), "NaiveGroupQueryAttention unpack")),
+        element_bytes, "NaiveGroupQueryAttention", "unpacked tensor byte size");
+    return rt != nullptr ? rt->MakeTemporaryTensor(args.query->data_type, shape, bytes)
+                         : rt_ns::MakeOutputTensor(args.query->data_type, shape, bytes, nullptr);
+  };
+  query = make_tensor(q_hidden);
+  key = make_tensor(kv_hidden);
+  value = make_tensor(kv_hidden);
+  const std::size_t q_bytes = CheckedByteSize(static_cast<std::size_t>(q_hidden), element_bytes,
+                                              "NaiveGroupQueryAttention", "query row byte size");
+  const std::size_t kv_bytes = CheckedByteSize(static_cast<std::size_t>(kv_hidden), element_bytes,
+                                               "NaiveGroupQueryAttention", "KV row byte size");
+  const std::size_t packed_bytes =
+      CheckedByteSize(static_cast<std::size_t>(args.query->shape[2]), element_bytes,
+                      "NaiveGroupQueryAttention", "packed row byte size");
+  const std::size_t rows = static_cast<std::size_t>(CheckedIndexMultiply(
+      args.batch, args.sequence_length, "NaiveGroupQueryAttention", "packed row count"));
+  for (std::size_t row = 0; row < rows; ++row) {
+    const std::uint8_t *src = args.query->bytes() + row * packed_bytes;
+    std::memcpy(query.mutable_bytes() + row * q_bytes, src, q_bytes);
+    std::memcpy(key.mutable_bytes() + row * kv_bytes, src + q_bytes, kv_bytes);
+    std::memcpy(value.mutable_bytes() + row * kv_bytes, src + q_bytes + kv_bytes, kv_bytes);
+  }
+}
+
 // Shared computation core used by both `Run` and `operator()`: applies RoPE
 // (when configured), materializes the concatenated past+current KV (always,
 // exposing it as `present_key`/`present_value` when requested), and runs the
 // naive scalar attention loop above.
 Tensor Compute(const GqaArgs &args, RuntimeContext *rt, Tensor *present_key,
                Tensor *present_value) {
-  const Tensor *q_for_attention = args.query;
-  const Tensor *k_for_attention = args.key;
+  Tensor unpacked_query;
+  Tensor unpacked_key;
+  Tensor unpacked_value;
+  if (args.packed_qkv) {
+    UnpackQkv(args, rt, unpacked_query, unpacked_key, unpacked_value);
+  }
+  const Tensor *q_for_attention = args.packed_qkv ? &unpacked_query : args.query;
+  const Tensor *k_for_attention = args.packed_qkv ? &unpacked_key : args.key;
+  const Tensor *v_for_attention = args.packed_qkv ? &unpacked_value : args.value;
   Tensor rotated_query;
   Tensor rotated_key;
   if (args.do_rotary) {
     const std::vector<std::int64_t> positions = ResolveRotaryPositions(args);
-    rotated_query = ApplyRotaryHalf(rt, *args.query, args.num_heads, args.head_dim, *args.cos_cache,
-                                    *args.sin_cache, positions);
-    rotated_key = ApplyRotaryHalf(rt, *args.key, args.kv_num_heads, args.head_dim, *args.cos_cache,
-                                  *args.sin_cache, positions);
+    rotated_query = ApplyRotaryHalf(rt, *q_for_attention, args.num_heads, args.head_dim,
+                                    *args.cos_cache, *args.sin_cache, positions);
+    rotated_key = ApplyRotaryHalf(rt, *k_for_attention, args.kv_num_heads, args.head_dim,
+                                  *args.cos_cache, *args.sin_cache, positions);
     q_for_attention = &rotated_query;
     k_for_attention = &rotated_key;
   }
@@ -814,7 +867,7 @@ Tensor Compute(const GqaArgs &args, RuntimeContext *rt, Tensor *present_key,
       args.past_length, args.sequence_length, args.head_dim, args.past_key, *k_for_attention);
   Tensor full_value = ConcatenatePastAndCurrent(
       rt, args.has_present_value ? 2 : -1, args.dtype, args.batch, args.kv_num_heads,
-      args.past_length, args.sequence_length, args.v_head_dim, args.past_value, *args.value);
+      args.past_length, args.sequence_length, args.v_head_dim, args.past_value, *v_for_attention);
 
   Tensor output = ComputeNaiveAttention(args, rt, *q_for_attention, full_key, full_value);
 

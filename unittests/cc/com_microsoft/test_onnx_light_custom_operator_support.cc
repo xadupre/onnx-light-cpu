@@ -490,6 +490,15 @@ TEST(CustomOperatorSupport, RegistersShapeMemoryGradientAndPatternHooks) {
   EXPECT_EQ(shapes_ns::ComputePeakMemory(onnx_light_cpu::kMicrosoftDomain, "GroupQueryAttention",
                                          sym_ns::Device::kCPU, {}),
             0);
+  EXPECT_EQ(shapes_ns::ComputePeakMemory(
+                onnx_light_cpu::kMicrosoftDomain, "GroupQueryAttention", sym_ns::Device::kCPU,
+                {sym_ns::SymShape({2, 3, 16}), sym_ns::SymShape(), sym_ns::SymShape()}),
+            384);
+  EXPECT_EQ(shapes_ns::ComputePeakMemory(onnx_light_cpu::kMicrosoftDomain, "GroupQueryAttention",
+                                         sym_ns::Device::kCPU,
+                                         {sym_ns::SymShape({2, 3, 8}), sym_ns::SymShape({2, 3, 4}),
+                                          sym_ns::SymShape({2, 3, 4})}),
+            0);
   EXPECT_EQ(shapes_ns::ComputePeakMemory(onnx_light_cpu::kMicrosoftDomain, "LinearAttention",
                                          sym_ns::Device::kCPU,
                                          {sym_ns::SymShape({2, 3, 8}), sym_ns::SymShape({2, 3, 8}),

@@ -697,10 +697,38 @@ int64_t ComputePeakMemorySkipSimplifiedLayerNormalization(sym_ns::Device,
   return 0;
 }
 
-int64_t ComputePeakMemoryGroupQueryAttention(sym_ns::Device, const std::vector<SymShape> &) {
-  // The supported GroupQueryAttention path delegates to Attention's online-softmax
-  // implementation, which does not materialize a full attention-score tensor.
-  return 0;
+int64_t ComputePeakMemoryGroupQueryAttention(sym_ns::Device,
+                                             const std::vector<SymShape> &input_shapes) {
+  if (input_shapes.empty() || input_shapes[0].Rank() != 3) {
+    return 0;
+  }
+  const bool has_key = input_shapes.size() > 1 && input_shapes[1].Rank() == 3;
+  const bool has_value = input_shapes.size() > 2 && input_shapes[2].Rank() == 3;
+  if (has_key || has_value) {
+    return 0;
+  }
+  constexpr int64_t kConservativeElementBytes = sizeof(float);
+  int64_t elements = 1;
+  for (std::int64_t index = 0; index < input_shapes[0].Rank(); ++index) {
+    const auto &dim = input_shapes[0][index];
+    if (!dim.IsInt()) {
+      return 0;
+    }
+    if (dim.AsInt() < 0) {
+      throw std::invalid_argument(
+          "ComputePeakMemoryGroupQueryAttention: packed dimensions must be non-negative.");
+    }
+    if (dim.AsInt() != 0 && elements > std::numeric_limits<int64_t>::max() / dim.AsInt()) {
+      throw std::overflow_error(
+          "ComputePeakMemoryGroupQueryAttention: scratch-memory size overflow.");
+    }
+    elements *= dim.AsInt();
+  }
+  if (elements > std::numeric_limits<int64_t>::max() / kConservativeElementBytes) {
+    throw std::overflow_error(
+        "ComputePeakMemoryGroupQueryAttention: scratch-memory size overflow.");
+  }
+  return elements * kConservativeElementBytes;
 }
 
 int64_t ComputePeakMemoryLinearAttention(sym_ns::Device,
