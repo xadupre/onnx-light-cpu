@@ -33,6 +33,7 @@ def test_changelog_release_sections():
         re.findall(r"^## \[(\d+\.\d+\.\d+)\](.*?)(?=^## \[|\Z)", changelog, re.M | re.S)
     )
     assert "Unreleased" in sections["0.1.20"]
+    assert all(f"#{number}" in sections["0.1.20"] for number in (853, 859, 860))
     assert "2026-10-05" in sections["0.1.19"]
     assert "#854" in sections["0.1.19"]
     assert "2026-10-05" in sections["0.1.18"]
