@@ -54,19 +54,21 @@ def parse_dumpbin_exports(output):
     return pattern.findall(output)
 
 
-def find_msvc_tool(name, machine, installation=None):
+def find_msvc_tool(name, machine, installation=None, environment=None, command_runner=None):
     target = {"amd64": "x64", "arm64": "arm64"}.get(machine.lower())
     if target is None:
         raise ValueError(f"Unsupported MSVC target machine: {machine}")
     if installation is None:
-        executable = shutil.which(name)
+        environment = os.environ if environment is None else environment
+        executable = shutil.which(name, path=environment.get("PATH"))
         if executable:
             return Path(executable)
-        program_files = os.environ.get("PROGRAMFILES(X86)")
+        program_files = environment.get("PROGRAMFILES(X86)")
         if not program_files:
             raise FileNotFoundError("ProgramFiles(x86) is not defined.")
         vswhere = Path(program_files) / "Microsoft Visual Studio" / "Installer" / "vswhere.exe"
-        output = subprocess.check_output(
+        runner = subprocess.check_output if command_runner is None else command_runner
+        output = runner(
             [
                 str(vswhere),
                 "-latest",

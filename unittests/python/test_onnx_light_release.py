@@ -78,3 +78,45 @@ def test_find_msvc_tool_cross_host(tmp_path):
     tool.parent.mkdir(parents=True)
     tool.touch()
     assert find_msvc_tool("lib", "ARM64", tmp_path) == tool
+
+
+def test_find_msvc_tool_discovers_visual_studio(tmp_path):
+    program_files = tmp_path / "Program Files (x86)"
+    vswhere = program_files / "Microsoft Visual Studio" / "Installer" / "vswhere.exe"
+    vswhere.parent.mkdir(parents=True)
+    vswhere.touch()
+    installation = tmp_path / "Microsoft Visual Studio" / "2022" / "Enterprise"
+    tool = (
+        installation
+        / "VC"
+        / "Tools"
+        / "MSVC"
+        / "14.44"
+        / "bin"
+        / "Hostx64"
+        / "x64"
+        / "dumpbin.exe"
+    )
+    tool.parent.mkdir(parents=True)
+    tool.touch()
+    commands = []
+
+    def run(command, **kwargs):
+        commands.append((command, kwargs))
+        return str(installation)
+
+    environment = {"PATH": "", "PROGRAMFILES(X86)": str(program_files)}
+    assert find_msvc_tool("dumpbin", "AMD64", environment=environment, command_runner=run) == tool
+    assert commands == [
+        (
+            [
+                str(vswhere),
+                "-latest",
+                "-products",
+                "*",
+                "-property",
+                "installationPath",
+            ],
+            {"text": True},
+        )
+    ]
