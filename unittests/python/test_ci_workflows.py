@@ -86,6 +86,14 @@ def test_release_wheels_build_and_test_session_registration_before_upload():
             "CIBW_TEST_COMMAND: python {project}/unittests/python/wheel_registration_smoke.py"
             in body
         )
+        if job == "build_wheels_macos":
+            assert (
+                "CIBW_REPAIR_WHEEL_COMMAND_MACOS: >-\n"
+                "            delocate-wheel --exclude liblib_onnx_\n"
+                "            --require-archs x86_64,arm64 -w {dest_dir} {wheel}"
+            ) in body
+        else:
+            assert "CIBW_REPAIR_WHEEL_COMMAND_MACOS" not in body
         assert body.index("CIBW_TEST_COMMAND:") < body.index("Attach wheels to GitHub Release")
 
 
