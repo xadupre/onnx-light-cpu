@@ -61,16 +61,17 @@ def test_release_wheels_build_and_test_session_registration_before_upload():
             "python {project}/tools/onnx_light_release.py clone {project}/../onnx-light"
         )
         assert clone_release in body
-        install_cpp = (
-            "python {project}/tools/onnx_light_release.py install-cpp "
+        install_release = "python {project}/tools/onnx_light_release.py install"
+        generate_import_libraries = (
+            "python {project}/tools/onnx_light_release.py generate-import-libraries "
             "{project}/../onnx-light/build"
         )
         if job == "build_wheels_windows":
-            assert install_cpp in body
+            assert generate_import_libraries in body
+            assert body.index(install_release) < body.index(generate_import_libraries)
         else:
-            assert install_cpp not in body
+            assert generate_import_libraries not in body
         assert "CIBW_BEFORE_BUILD: >-" in body
-        install_release = "python {project}/tools/onnx_light_release.py install"
         assert (
             "CIBW_BEFORE_BUILD: >-\n"
             "            python -m pip install scikit-build-core nanobind==3.1.0 &&\n"
@@ -80,7 +81,7 @@ def test_release_wheels_build_and_test_session_registration_before_upload():
         assert "python -m pip install -C wheel.py-api=cp312" not in body
         assert "git clone --depth 1 --branch main" not in body
         assert "-DONNX_LIGHT_CPU_RELEASE_WHEEL=ON" in body
-        assert "-DONNX_LIGHT_CPU_PYTHON_STABLE_ABI=OFF" in body
+        assert "-DONNX_LIGHT_CPU_PYTHON_STABLE_ABI=ON" in body
         assert (
             "CIBW_TEST_COMMAND: python {project}/unittests/python/wheel_registration_smoke.py"
             in body

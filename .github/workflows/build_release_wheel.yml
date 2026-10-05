@@ -67,7 +67,7 @@ jobs:
             -w {dest_dir} {wheel}
           CIBW_ENVIRONMENT: >
             CMAKE_BUILD_PARALLEL_LEVEL=${{ steps.cpu_count.outputs.count }}
-            CMAKE_ARGS="-DONNX_HARDENING=ON -DONNX_LIGHT_CPU_RELEASE_WHEEL=ON -DONNX_LIGHT_CPU_PYTHON_STABLE_ABI=OFF"
+            CMAKE_ARGS="-DONNX_HARDENING=ON -DONNX_LIGHT_CPU_RELEASE_WHEEL=ON -DONNX_LIGHT_CPU_PYTHON_STABLE_ABI=ON"
       - name: Upload artifacts
         uses: actions/upload-artifact@v7
         with:
@@ -126,17 +126,16 @@ jobs:
           CIBW_BUILD: "cp312-* cp313-* cp314-*"
           CIBW_ARCHS: ${{ matrix.arch }}
           CIBW_BUILD_FRONTEND: "pip; args: --no-build-isolation"
-          CIBW_BEFORE_ALL: >-
-            python {project}/tools/onnx_light_release.py clone {project}/../onnx-light &&
-            python {project}/tools/onnx_light_release.py install-cpp {project}/../onnx-light/build
+          CIBW_BEFORE_ALL: python {project}/tools/onnx_light_release.py clone {project}/../onnx-light
           CIBW_BEFORE_BUILD: >-
             python -m pip install scikit-build-core nanobind==3.1.0 &&
-            python {project}/tools/onnx_light_release.py install
+            python {project}/tools/onnx_light_release.py install &&
+            python {project}/tools/onnx_light_release.py generate-import-libraries {project}/../onnx-light/build
           CIBW_BEFORE_TEST: python {project}/tools/onnx_light_release.py install
           CIBW_TEST_COMMAND: python {project}/unittests/python/wheel_registration_smoke.py
           CIBW_ENVIRONMENT: >
             CMAKE_BUILD_PARALLEL_LEVEL=${{ steps.cpu_count.outputs.count }}
-            CMAKE_ARGS="-DONNX_HARDENING=ON -DONNX_LIGHT_CPU_RELEASE_WHEEL=ON -DONNX_LIGHT_CPU_PYTHON_STABLE_ABI=OFF"
+            CMAKE_ARGS="-DONNX_HARDENING=ON -DONNX_LIGHT_CPU_RELEASE_WHEEL=ON -DONNX_LIGHT_CPU_PYTHON_STABLE_ABI=ON"
       - name: Upload artifacts
         uses: actions/upload-artifact@v7
         with:
@@ -198,7 +197,7 @@ jobs:
           CIBW_ENVIRONMENT: >
             CMAKE_BUILD_PARALLEL_LEVEL=${{ steps.cpu_count.outputs.count }}
             MACOSX_DEPLOYMENT_TARGET=${{ env.MACOSX_DEPLOYMENT_TARGET }}
-            CMAKE_ARGS='-DONNX_HARDENING=ON -DONNX_LIGHT_CPU_RELEASE_WHEEL=ON -DONNX_LIGHT_CPU_PYTHON_STABLE_ABI=OFF -DCMAKE_OSX_DEPLOYMENT_TARGET=${{ env.MACOSX_DEPLOYMENT_TARGET }} -DCMAKE_OSX_ARCHITECTURES=arm64;x86_64'
+            CMAKE_ARGS='-DONNX_HARDENING=ON -DONNX_LIGHT_CPU_RELEASE_WHEEL=ON -DONNX_LIGHT_CPU_PYTHON_STABLE_ABI=ON -DCMAKE_OSX_DEPLOYMENT_TARGET=${{ env.MACOSX_DEPLOYMENT_TARGET }} -DCMAKE_OSX_ARCHITECTURES=arm64;x86_64'
       - name: Upload artifacts
         uses: actions/upload-artifact@v7
         with:

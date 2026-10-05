@@ -6,8 +6,7 @@ import pytest
 
 from tools.onnx_light_release import (
     ONNX_LIGHT_VERSION,
-    cpp_archive_name,
-    cpp_archive_url,
+    parse_dumpbin_exports,
     wheel_name,
     wheel_url,
 )
@@ -50,8 +49,10 @@ def test_unsupported_release_platform():
         wheel_name("Linux", "ppc64le", (3, 12))
 
 
-def test_cpp_release_archive_names():
-    assert cpp_archive_name("Windows", "AMD64") == "onnx-light-cpp-windows-AMD64.zip"
-    assert cpp_archive_url("Windows", "ARM64").endswith(
-        "/0.1.30/onnx-light-cpp-windows-ARM64.zip"
-    )
+def test_parse_dumpbin_exports():
+    output = """
+      ordinal hint RVA      name
+            1    0 00011000 ?CreateKernel@@YAPEAXXZ
+            2    1 00012000 PlainExport
+    """
+    assert parse_dumpbin_exports(output) == ["?CreateKernel@@YAPEAXXZ", "PlainExport"]
