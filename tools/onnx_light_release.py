@@ -1,6 +1,8 @@
 import argparse
+import os
 import platform
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -52,6 +54,45 @@ def parse_dumpbin_exports(output):
     return pattern.findall(output)
 
 
+def find_msvc_tool(name, machine, installation=None):
+    target = {"amd64": "x64", "arm64": "arm64"}.get(machine.lower())
+    if target is None:
+        raise ValueError(f"Unsupported MSVC target machine: {machine}")
+    if installation is None:
+        executable = shutil.which(name)
+        if executable:
+            return Path(executable)
+        program_files = os.environ.get("PROGRAMFILES(X86)")
+        if not program_files:
+            raise FileNotFoundError("ProgramFiles(x86) is not defined.")
+        vswhere = Path(program_files) / "Microsoft Visual Studio" / "Installer" / "vswhere.exe"
+        output = subprocess.check_output(
+            [
+                str(vswhere),
+                "-latest",
+                "-products",
+                "*",
+                "-property",
+                "installationPath",
+            ],
+            text=True,
+        )
+        if not output.strip():
+            raise FileNotFoundError("vswhere did not find a Visual Studio installation.")
+        installation = Path(output.strip())
+
+    tools_root = Path(installation) / "VC" / "Tools" / "MSVC"
+    host = f"Host{target}"
+    for version in sorted(tools_root.iterdir(), reverse=True):
+        preferred = version / "bin" / host / target / f"{name}.exe"
+        if preferred.is_file():
+            return preferred
+        candidates = sorted((version / "bin").glob(f"Host*/{target}/{name}.exe"))
+        if candidates:
+            return candidates[0]
+    raise FileNotFoundError(f"Could not find {name}.exe for {machine} under {tools_root}.")
+
+
 def generate_import_libraries(destination):
     from onnx_light import get_cpp_build_info
 
@@ -60,12 +101,14 @@ def generate_import_libraries(destination):
         raise ValueError(
             f"Unsupported import-library platform: {platform.system()} {platform.machine()}"
         )
+    dumpbin = find_msvc_tool("dumpbin", machine)
+    librarian = find_msvc_tool("lib", machine)
     library_dir = Path(get_cpp_build_info()["library_dir"])
     destination.mkdir(parents=True, exist_ok=True)
     for component in ("core", "proto", "kernels", "backend_test", "op", "shape"):
         dll = library_dir / f"lib_onnx_{component}.dll"
         output = subprocess.check_output(
-            ["dumpbin", "/nologo", "/exports", str(dll)],
+            [str(dumpbin), "/nologo", "/exports", str(dll)],
             text=True,
             encoding="utf-8",
             errors="replace",
@@ -80,7 +123,7 @@ def generate_import_libraries(destination):
         )
         subprocess.check_call(
             [
-                "lib",
+                str(librarian),
                 "/nologo",
                 f"/def:{definition}",
                 f"/out:{destination / f'lib_onnx_{component}.lib'}",

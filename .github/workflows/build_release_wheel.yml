@@ -194,6 +194,9 @@ jobs:
             python {project}/tools/onnx_light_release.py install
           CIBW_BEFORE_TEST: python {project}/tools/onnx_light_release.py install
           CIBW_TEST_COMMAND: python {project}/unittests/python/wheel_registration_smoke.py
+          CIBW_REPAIR_WHEEL_COMMAND_MACOS: >-
+            delocate-wheel --exclude liblib_onnx_
+            --require-archs x86_64,arm64 -w {dest_dir} {wheel}
           CIBW_ENVIRONMENT: >
             CMAKE_BUILD_PARALLEL_LEVEL=${{ steps.cpu_count.outputs.count }}
             MACOSX_DEPLOYMENT_TARGET=${{ env.MACOSX_DEPLOYMENT_TARGET }}

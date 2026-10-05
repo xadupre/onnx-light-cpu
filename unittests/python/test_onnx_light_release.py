@@ -6,6 +6,7 @@ import pytest
 
 from tools.onnx_light_release import (
     ONNX_LIGHT_VERSION,
+    find_msvc_tool,
     parse_dumpbin_exports,
     wheel_name,
     wheel_url,
@@ -56,3 +57,24 @@ def test_parse_dumpbin_exports():
             2    1 00012000 PlainExport
     """
     assert parse_dumpbin_exports(output) == ["?CreateKernel@@YAPEAXXZ", "PlainExport"]
+
+
+def test_find_msvc_tool(tmp_path):
+    old_tool = (
+        tmp_path / "VC" / "Tools" / "MSVC" / "14.40" / "bin" / "Hostx64" / "x64" / "dumpbin.exe"
+    )
+    new_tool = (
+        tmp_path / "VC" / "Tools" / "MSVC" / "14.44" / "bin" / "Hostx64" / "x64" / "dumpbin.exe"
+    )
+    old_tool.parent.mkdir(parents=True)
+    new_tool.parent.mkdir(parents=True)
+    old_tool.touch()
+    new_tool.touch()
+    assert find_msvc_tool("dumpbin", "AMD64", tmp_path) == new_tool
+
+
+def test_find_msvc_tool_cross_host(tmp_path):
+    tool = tmp_path / "VC" / "Tools" / "MSVC" / "14.44" / "bin" / "Hostx64" / "arm64" / "lib.exe"
+    tool.parent.mkdir(parents=True)
+    tool.touch()
+    assert find_msvc_tool("lib", "ARM64", tmp_path) == tool
