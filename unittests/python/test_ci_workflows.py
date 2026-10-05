@@ -63,7 +63,12 @@ def test_release_wheels_build_and_test_session_registration_before_upload():
         )
         assert "CIBW_BEFORE_BUILD: >-" in body
         install_release = "python {project}/tools/onnx_light_release.py install"
-        assert body.count(install_release) == 2
+        assert (
+            "CIBW_BEFORE_BUILD: >-\n"
+            "            python -m pip install scikit-build-core nanobind==3.1.0 &&\n"
+            f"            {install_release}"
+        ) in body
+        assert f"CIBW_BEFORE_TEST: {install_release}" in body
         assert "python -m pip install -C wheel.py-api=cp312" not in body
         assert "git clone --depth 1 --branch main" not in body
         assert "-DONNX_LIGHT_CPU_RELEASE_WHEEL=ON" in body
