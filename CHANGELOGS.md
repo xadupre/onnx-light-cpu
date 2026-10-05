@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Fixes
 
 - Fixed release-wheel compatibility with onnx-light by building against its
-  published wheel with a matching nanobind stable ABI
+  published wheel and matching its effective native nanobind ABI
   ([#854](https://github.com/xadupre/onnx-light-cpu/pull/854)).
 
 ## [0.1.19] – 2026-10-05
