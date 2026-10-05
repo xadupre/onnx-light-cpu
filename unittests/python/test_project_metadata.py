@@ -14,7 +14,7 @@ _ROOT = Path(__file__).resolve().parents[2]
 def test_project_version_consistency():
     metadata = tomllib.loads((_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     version = metadata["project"]["version"]
-    assert version == "0.1.19"
+    assert version == "0.1.20"
 
     for path, pattern in (
         ("setup.py", r'version="([^"]+)"'),
@@ -25,6 +25,20 @@ def test_project_version_consistency():
         match = re.search(pattern, text)
         assert match is not None, path
         assert match.group(1) == version, path
+
+
+def test_changelog_release_sections():
+    changelog = (_ROOT / "CHANGELOGS.md").read_text(encoding="utf-8")
+    sections = dict(
+        re.findall(r"^## \[(\d+\.\d+\.\d+)\](.*?)(?=^## \[|\Z)", changelog, re.M | re.S)
+    )
+    assert "Unreleased" in sections["0.1.20"]
+    assert "2026-10-05" in sections["0.1.19"]
+    assert "#854" in sections["0.1.19"]
+    assert "2026-10-05" in sections["0.1.18"]
+    assert "#846" in sections["0.1.18"]
+    assert "2026-10-02" in sections["0.1.17"]
+    assert "2026-10-01" in sections["0.1.16"]
 
 
 def test_onnx_light_dev_dependency_version():

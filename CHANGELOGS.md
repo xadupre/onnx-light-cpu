@@ -5,13 +5,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [0.1.20] – Unreleased
 
+## [0.1.19] – 2026-10-05
+
 ### Fixes
 
 - Fixed release-wheel compatibility with onnx-light by building against its
   published wheel and matching its effective native nanobind ABI
   ([#854](https://github.com/xadupre/onnx-light-cpu/pull/854)).
 
-## [0.1.19] – 2026-10-05
+## [0.1.18] – 2026-10-05
 
 ### New Features
 
@@ -41,9 +43,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   existing dispatch after finding no consistent kernel-level benefit
   ([#842](https://github.com/xadupre/onnx-light-cpu/pull/842)).
 
-## [0.1.18] – 2026-10-02
-
-## [0.1.17]
+## [0.1.17] – 2026-10-02
 
 ### Fixes
 
@@ -56,7 +56,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - Updated development and AVX2 parity workflows to use onnx-light 0.1.29.
 
-## [0.1.16]
+## [0.1.16] – 2026-10-01
 
 ### New Features
 
