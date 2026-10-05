@@ -4,6 +4,7 @@
 
 #include "onnx_light_cpu/kernels/register_kernels.h"
 
+#include "onnx_core/runtime/kernels/cast_helper.h"
 #include "onnx_core/runtime/kernels/kernel_dispatch_table.h"
 #include "onnx_core/runtime/kernels/run_nodes.h"
 #include "onnx_core/runtime/memory/simple_tensor.h"
@@ -11,12 +12,14 @@
 #include "onnx_core/runtime/runtime_session.h"
 #include "onnx_light_cpu/kernels/com_microsoft/naive_bias_gelu_kernel.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
+#include "onnx_light_cpu/kernels/traditionalml/tree_ensemble_kernel.h"
 #include "onnx_proto/onnx_helper.h"
 
 #include <gtest/gtest.h>
 
 #include <atomic>
 #include <barrier>
+#include <cstring>
 #include <memory>
 #include <set>
 #include <string>
@@ -27,6 +30,169 @@
 namespace {
 
 namespace rt_ns = ONNX_LIGHT_NAMESPACE::core::runtime;
+
+rt_ns::Tensor TreeTensor(rt_ns::DataType type, const rt_ns::Shape &shape,
+                         const std::vector<float> &values) {
+  if (type == rt_ns::DataType::FLOAT) {
+    return rt_ns::Tensor::FromFloat("", shape, values);
+  }
+  if (type == rt_ns::DataType::DOUBLE) {
+    return rt_ns::Tensor::FromDouble("", shape, std::vector<double>(values.begin(), values.end()));
+  }
+  std::vector<std::uint16_t> halves;
+  for (float value : values) {
+    halves.push_back(rt_ns::FloatToFloat16Bits(value));
+  }
+  std::vector<std::uint8_t> bytes(halves.size() * sizeof(std::uint16_t));
+  std::memcpy(bytes.data(), halves.data(), bytes.size());
+  return rt_ns::Tensor("", type, shape, std::move(bytes));
+}
+
+ONNX_LIGHT_NAMESPACE::ModelProto TreeModel(rt_ns::DataType type) {
+  namespace onnx_ns = ONNX_LIGHT_NAMESPACE;
+  constexpr std::size_t trees = 512;
+  onnx_ns::ModelProto model;
+  model.add_opset_import()->set_version(18);
+  auto *ml = model.add_opset_import();
+  ml->set_domain("ai.onnx.ml");
+  ml->set_version(5);
+  auto &graph = *model.mutable_graph();
+  graph.add_input()->set_name("x");
+  graph.add_output()->set_name("y");
+  auto &node = onnx_ns::AddNode(graph, "TreeEnsemble", {"x"}, {"y"});
+  node.set_domain("ai.onnx.ml");
+  std::vector<int64_t> roots, true_leaves, false_leaves;
+  std::vector<float> weights;
+  for (std::size_t tree = 0; tree < trees; ++tree) {
+    roots.push_back(static_cast<int64_t>(tree));
+    true_leaves.push_back(static_cast<int64_t>(2 * tree));
+    false_leaves.push_back(static_cast<int64_t>(2 * tree + 1));
+    weights.insert(weights.end(), {0.25F, -0.25F});
+  }
+  onnx_ns::AddAttribute(node, "tree_roots", roots);
+  onnx_ns::AddAttribute(node, "nodes_featureids", std::vector<int64_t>(trees, 0));
+  onnx_ns::AddAttribute(node, "nodes_truenodeids", true_leaves);
+  onnx_ns::AddAttribute(node, "nodes_falsenodeids", false_leaves);
+  onnx_ns::AddAttribute(node, "nodes_trueleafs", std::vector<int64_t>(trees, 1));
+  onnx_ns::AddAttribute(node, "nodes_falseleafs", std::vector<int64_t>(trees, 1));
+  onnx_ns::AddAttribute(node, "leaf_targetids", std::vector<int64_t>(2 * trees, 0));
+  const auto add_tensor = [&](const char *name, const rt_ns::Tensor &tensor) {
+    auto *attribute = node.add_attribute();
+    attribute->set_name(name);
+    attribute->set_type(onnx_ns::AttributeProto::TENSOR);
+    auto *proto = attribute->add_t();
+    proto->set_data_type(tensor.data_type);
+    for (int64_t dim : tensor.shape) {
+      proto->add_dims(dim);
+    }
+    std::vector<std::uint8_t> bytes(tensor.size_bytes());
+    std::memcpy(bytes.data(), tensor.bytes(), bytes.size());
+    proto->set_raw_data(onnx_ns::utils::ByteSpan(bytes));
+  };
+  add_tensor("nodes_splits", TreeTensor(type, {trees}, std::vector<float>(trees, 0.0F)));
+  const std::vector<std::uint8_t> modes(trees, 0);
+  add_tensor("nodes_modes", rt_ns::Tensor("", rt_ns::DataType::UINT8, {trees}, modes));
+  add_tensor("leaf_weights", TreeTensor(type, {2 * trees}, weights));
+  return model;
+}
+
+TEST(OnnxLightRegisterKernels, SessionTreeEnsembleResolvesSharedTuningBeforeExecution) {
+  onnx_light_cpu::TreeEnsembleKernel::RegisterTuningSchemas();
+  auto &registry = rt_ns::GetKernelTuningRegistry();
+  for (auto type : {rt_ns::DataType::FLOAT, rt_ns::DataType::DOUBLE, rt_ns::DataType::FLOAT16}) {
+    const auto model = TreeModel(type);
+    for (bool register_all : {false, true}) {
+      for (int64_t participants : {1, 2}) {
+        SCOPED_TRACE(::testing::Message() << "type=" << type << " all=" << register_all
+                                          << " participants=" << participants);
+        rt_ns::RuntimeContext runtime(rt_ns::KernelContext(rt_ns::DefaultOpset(18)));
+        std::vector<float> input(65);
+        for (std::size_t row = 0; row < input.size(); ++row) {
+          input[row] = row % 2 == 0 ? -1.0F : 1.0F;
+        }
+        runtime.Set("x", TreeTensor(type, {65, 1}, input));
+        if (register_all) {
+          ASSERT_GT(onnx_light_cpu::RegisterAllKernelsForSession(runtime), 0U);
+        } else {
+          ASSERT_TRUE(
+              onnx_light_cpu::RegisterKernelForSession(runtime, "ai.onnx.ml", "TreeEnsemble"));
+        }
+        auto kernel =
+            runtime.custom_kernels().at("ai.onnx.ml:TreeEnsemble")(model.graph().node(0), runtime);
+        const auto key = kernel->TuningKey(type);
+        ASSERT_NE(key.device, ONNX_LIGHT_NAMESPACE::core::symbolic::Device::kUndefined);
+        auto parameters = registry.FindSchema(key)->portable_defaults();
+        parameters.values["parallel.tree_major_batch_rows"] = int64_t{32};
+        parameters.values["parallel.row_threshold"] = int64_t{1};
+        parameters.values["parallel.tree_row_limit"] = int64_t{64};
+        parameters.values["parallel.max_participants"] = participants;
+        registry.PublishProfiles(std::vector<rt_ns::KernelTuningParameters>{parameters});
+        rt_ns::RuntimeSessionOptions options;
+        options.parameters.num_threads = 2;
+        options.cpu_execution_counters = true;
+        rt_ns::RuntimeSession session(model, options);
+        const auto before = session.cpu_executor()->counters();
+        session.Run(runtime);
+        EXPECT_EQ(session.tuning_resolution_statistics().tunable_kernels, 1U);
+        EXPECT_EQ(session.tuning_resolution_statistics().resolved_profiles, 1U);
+        const auto after = session.cpu_executor()->counters();
+        if (participants == 2) {
+          EXPECT_EQ(after.dispatches - before.dispatches, 1U);
+          EXPECT_EQ(after.limited_inline_dispatches - before.limited_inline_dispatches, 0U);
+        } else {
+          EXPECT_EQ(after.dispatches - before.dispatches, 0U);
+        }
+        const auto &output = runtime.Get("y");
+        EXPECT_EQ(output.shape, (rt_ns::Shape{65, 1}));
+        const auto expected = TreeTensor(type, {65, 1}, [&] {
+          std::vector<float> values;
+          for (float value : input) {
+            values.push_back(value < 0 ? 128.0F : -128.0F);
+          }
+          return values;
+        }());
+        EXPECT_EQ(output.data, expected.data);
+        const auto constructed = rt_ns::KernelBase::ConstructionCountForTesting();
+        session.Run(runtime);
+        EXPECT_EQ(rt_ns::KernelBase::ConstructionCountForTesting(), constructed);
+        EXPECT_EQ(runtime.Get("y").data, expected.data);
+
+        auto serial_parameters = parameters;
+        serial_parameters.values["parallel.row_threshold"] = int64_t{100};
+        serial_parameters.values["parallel.tree_row_limit"] = int64_t{128};
+        registry.PublishProfiles(std::vector<rt_ns::KernelTuningParameters>{serial_parameters});
+        rt_ns::RuntimeSession serial_session(model, options);
+        const auto serial_before = serial_session.cpu_executor()->counters();
+        serial_session.Run(runtime);
+        EXPECT_EQ(serial_session.cpu_executor()->counters().dispatches, serial_before.dispatches);
+        EXPECT_EQ(runtime.Get("y").data, expected.data);
+        auto invalid = parameters;
+        invalid.values["parallel.tree_major_batch_rows"] = int64_t{0};
+        EXPECT_THROW(kernel->Configure(invalid), std::invalid_argument);
+        EXPECT_THROW(registry.PublishProfiles(std::vector<rt_ns::KernelTuningParameters>{invalid}),
+                     std::invalid_argument);
+        invalid = parameters;
+        invalid.values["parallel.row_threshold"] = int64_t{128};
+        EXPECT_THROW(kernel->Configure(invalid), std::invalid_argument);
+        EXPECT_THROW(registry.PublishProfiles(std::vector<rt_ns::KernelTuningParameters>{invalid}),
+                     std::invalid_argument);
+        invalid = parameters;
+        invalid.values["parallel.max_participants"] = int64_t{-1};
+        EXPECT_THROW(kernel->Configure(invalid), std::invalid_argument);
+        EXPECT_THROW(registry.PublishProfiles(std::vector<rt_ns::KernelTuningParameters>{invalid}),
+                     std::invalid_argument);
+        invalid = parameters;
+        invalid.key.implementation = "wrong";
+        EXPECT_THROW(kernel->Configure(invalid), std::invalid_argument);
+        invalid = parameters;
+        invalid.key.element_type =
+            type == rt_ns::DataType::FLOAT ? rt_ns::DataType::DOUBLE : rt_ns::DataType::FLOAT;
+        EXPECT_THROW(kernel->Configure(invalid), std::invalid_argument);
+        registry.PublishProfiles({}, std::vector<rt_ns::KernelTuningKey>{key});
+      }
+    }
+  }
+}
 
 struct PreparationCounts {
   std::atomic<int> plans{0};

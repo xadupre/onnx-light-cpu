@@ -746,6 +746,38 @@ TEST(TreeEnsembleOracle, BalancedFloatTreePartitionsRespectThreadLimitsAndNestin
   }
 }
 
+TEST(TreeEnsembleOracle, BalancedFloatTreePartitionsCoverOffsetBatchesAndTail) {
+  constexpr std::size_t rows = 65;
+  const auto attributes = BalancedForest(97);
+  const auto policy = OneRegionPolicy(TreeEnsembleExecutionStrategy::kTreeParallel, 2, 1, 32);
+  TreeEnsemblePlan plan(attributes, 2, policy);
+  plan.CompactRuntimeStorage();
+  std::vector<float> input(rows * static_cast<std::size_t>(attributes.n_features));
+  for (std::size_t i = 0; i < input.size(); ++i) {
+    input[i] = static_cast<float>(static_cast<int>((i * 7 + i / 8) % 23) - 11) * 0.25F;
+  }
+  const std::vector<double> reference_input(input.begin(), input.end());
+  const auto expected = TreeEnsembleOracle(attributes).Evaluate(reference_input, rows);
+  std::vector<float> actual(rows + 2, -42.0F);
+  ThreadedExecutor executor;
+  onnx_light_cpu::ExecutionExecutorView view{&executor, 2, &ThreadedExecutor::Run};
+  {
+    onnx_light_cpu::ExecutionExecutorScope scope(&view);
+    const auto decision = plan.SelectExecution(rows);
+    ASSERT_EQ(decision.strategy, TreeEnsembleExecutionStrategy::kTreeParallel);
+    ASSERT_EQ(decision.batch_rows, 32U);
+    ASSERT_EQ(decision.participants, 2U);
+    plan.EvaluateInto(input.data(), input.size(), rows, actual.data() + 1);
+  }
+  EXPECT_EQ(executor.dispatches.load(std::memory_order_relaxed), 3U);
+  EXPECT_EQ(executor.dispatched_blocks.load(std::memory_order_relaxed), 2U);
+  EXPECT_EQ(actual.front(), -42.0F);
+  EXPECT_EQ(actual.back(), -42.0F);
+  for (std::size_t row = 0; row < rows; ++row) {
+    EXPECT_NEAR(actual[row + 1], expected[row], 1e-5) << row;
+  }
+}
+
 TEST(TreeEnsembleOracle, ThresholdsSignedZeroInfinityAndMissingRouting) {
   TreeEnsembleAttributes attributes = Stump();
   attributes.value_type = DataType::DOUBLE;
