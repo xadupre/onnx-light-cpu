@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <limits>
 #include <stdexcept>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -230,6 +231,67 @@ TEST(OnnxLightGroupQueryAttentionKernel, StatelessPathMatchesDelegatedAttentionK
   }
 }
 
+TEST(OnnxLightGroupQueryAttentionKernel, PackedQkvMatchesSeparateInputsWithRotaryAndCache) {
+  std::vector<float> q(2 * 2 * 8), k(2 * 2 * 4), v(2 * 2 * 4), packed;
+  for (std::size_t i = 0; i < q.size(); ++i) {
+    q[i] = static_cast<float>(i % 13) * 0.1f - 0.5f;
+  }
+  for (std::size_t i = 0; i < k.size(); ++i) {
+    k[i] = static_cast<float>(i % 7) * 0.2f - 0.4f;
+    v[i] = static_cast<float>(i % 11) * 0.15f - 0.3f;
+  }
+  for (std::size_t row = 0; row < 4; ++row) {
+    packed.insert(packed.end(), q.begin() + row * 8, q.begin() + (row + 1) * 8);
+    packed.insert(packed.end(), k.begin() + row * 4, k.begin() + (row + 1) * 4);
+    packed.insert(packed.end(), v.begin() + row * 4, v.begin() + (row + 1) * 4);
+  }
+  const Tensor query = Tensor::FromFloat("", {2, 2, 8}, q);
+  const Tensor key = Tensor::FromFloat("", {2, 2, 4}, k);
+  const Tensor value = Tensor::FromFloat("", {2, 2, 4}, v);
+  const Tensor qkv = Tensor::FromFloat("", {2, 2, 16}, packed);
+  const Tensor past_key = Tensor::FromFloat("", {2, 1, 1, 4}, std::vector<float>(8, 0.2f));
+  const Tensor past_value = Tensor::FromFloat("", {2, 1, 1, 4}, std::vector<float>(8, -0.3f));
+  const Tensor cos_cache = Tensor::FromFloat("", {3, 2}, {1, 1, 0.8f, 0.6f, 0.6f, 0.8f});
+  const Tensor sin_cache = Tensor::FromFloat("", {3, 2}, {0, 0, 0.6f, 0.8f, 0.8f, 0.6f});
+  const Tensor seqlens_k = Tensor::FromInt32("", {2}, {2, 2});
+  const Tensor total_length = Tensor::FromInt32("", {}, {3});
+  NodeProto node = MakeGqaNode(2, 1, true, true, true);
+  onnx_light_cpu::GroupQueryAttentionKernel kernel(node, MakeCtx());
+  Tensor expected_key, expected_value;
+  const Tensor expected =
+      kernel(node, query, key, value, seqlens_k, total_length, &past_key, &past_value, &cos_cache,
+             &sin_cache, nullptr, nullptr, nullptr, &expected_key, &expected_value);
+  node.ref_input()[1] = "";
+  node.ref_input()[2] = "";
+  Tensor actual_key, actual_value;
+  const Tensor actual =
+      kernel(node, qkv, key, value, seqlens_k, total_length, &past_key, &past_value, &cos_cache,
+             &sin_cache, nullptr, nullptr, nullptr, &actual_key, &actual_value);
+  for (const auto &pair : {std::pair<const Tensor *, const Tensor *>{&actual, &expected},
+                           {&actual_key, &expected_key},
+                           {&actual_value, &expected_value}}) {
+    ASSERT_EQ(pair.first->shape, pair.second->shape);
+    for (std::int64_t i = 0; i < pair.first->element_count(); ++i) {
+      EXPECT_NEAR(pair.first->AsFloat()[i], pair.second->AsFloat()[i], 1e-5f) << i;
+    }
+  }
+}
+
+TEST(OnnxLightGroupQueryAttentionKernel, PackedQkvRejectsInvalidWidthAndPartialWiring) {
+  NodeProto node = MakeGqaNode(2, 1, false, false, false);
+  node.ref_input()[1] = "";
+  node.ref_input()[2] = "";
+  onnx_light_cpu::GroupQueryAttentionKernel kernel(node, MakeCtx());
+  const Tensor invalid = Tensor::FromFloat("", {1, 1, 15}, std::vector<float>(15, 0.1f));
+  const Tensor lengths = Tensor::FromInt32("", {1}, {0});
+  const Tensor total = Tensor::FromInt32("", {}, {1});
+  EXPECT_THROW((void)kernel(node, invalid, invalid, invalid, lengths, total),
+               std::invalid_argument);
+  node.ref_input()[1] = "key";
+  EXPECT_THROW((void)kernel(node, invalid, invalid, invalid, lengths, total),
+               std::invalid_argument);
+}
+
 TEST(OnnxLightGroupQueryAttentionKernel, RejectsPastKeyWithoutPastValue) {
   NodeProto node = MakeGqaNode(4, 2, /*with_cache=*/true, /*with_rotary=*/false,
                                /*with_present=*/false);
@@ -381,6 +443,25 @@ TEST(OnnxLightGroupQueryAttentionKernel, RegisteredKernelRunsThroughRuntimeConte
   EXPECT_EQ(output.shape[0], 1);
   EXPECT_EQ(output.shape[1], 2);
   EXPECT_EQ(output.shape[2], 8);
+}
+
+TEST(OnnxLightGroupQueryAttentionKernel, PackedQkvRunsThroughRuntimeContext) {
+  NodeProto node = MakeGqaNode(2, 1, false, false, true);
+  node.ref_input()[1] = "";
+  node.ref_input()[2] = "";
+  rt_ns::RuntimeContext rt(MakeCtx());
+  rt.tensors()["query"] =
+      Tensor::FromFloat("query", {1, 2, 16}, {1, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 2, 3, 4, 5,
+                                              0, 1, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 6, 7, 8, 9});
+  rt.tensors()["seqlens_k"] = Tensor::FromInt32("seqlens_k", {1}, {1});
+  rt.tensors()["total_sequence_length"] = Tensor::FromInt32("total_sequence_length", {}, {2});
+  onnx_light_cpu::GroupQueryAttentionKernel kernel(node, MakeCtx());
+  kernel.Run(rt);
+  EXPECT_EQ(rt.tensors().at("output").shape, rt_ns::Shape({1, 2, 8}));
+  EXPECT_EQ(rt.tensors().at("present_key").shape, rt_ns::Shape({1, 1, 2, 4}));
+  EXPECT_EQ(rt.tensors().at("present_value").shape, rt_ns::Shape({1, 1, 2, 4}));
+  EXPECT_EQ(rt.tensors().at("present_value").AsFloat()[0], 2);
+  EXPECT_EQ(rt.tensors().at("present_value").AsFloat()[4], 6);
 }
 
 TEST(OnnxLightGroupQueryAttentionKernel, BothKernelsRejectInvalidLocalWindows) {

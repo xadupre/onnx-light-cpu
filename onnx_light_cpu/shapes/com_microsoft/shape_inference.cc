@@ -4,6 +4,7 @@
 
 #include "onnx_light_cpu/shapes/com_microsoft/shape_inference.h"
 
+#include "onnx_light_cpu/impl/checked_arithmetic.h"
 #include "onnx_light_cpu/schemas/com_microsoft/op_schema.h"
 
 #include "onnx_core/shapes/dispatch_table.h"
@@ -424,18 +425,27 @@ void ComputeShapeSkipSimplifiedLayerNormalization(ShapesContext &ctx,
 void ComputeShapeGroupQueryAttention(ShapesContext &ctx,
                                      const ONNX_LIGHT_NAMESPACE::NodeProto &node) {
   if (node.input_size() < 7 || node.output_size() < 1 || node.output_size() > 3 ||
-      !ctx.Has(node.input(0)) || !ctx.Has(node.input(1)) || !ctx.Has(node.input(2))) {
-    throw std::invalid_argument("ComputeShapeGroupQueryAttention: expected known Q/K/V inputs and "
-                                "one to three outputs.");
+      !ctx.Has(node.input(0))) {
+    throw std::invalid_argument(
+        "ComputeShapeGroupQueryAttention: expected a known query and one to three outputs.");
+  }
+  if (HasInput(node, 1) != HasInput(node, 2)) {
+    throw std::invalid_argument(
+        "ComputeShapeGroupQueryAttention: key and value must both be wired or both be empty.");
+  }
+  const bool packed_qkv = !HasInput(node, 1);
+  if (!packed_qkv && (!ctx.Has(node.input(1)) || !ctx.Has(node.input(2)))) {
+    throw std::invalid_argument("ComputeShapeGroupQueryAttention: key and value must be known.");
   }
   const SymTensor &query = ctx.Get(node.input(0));
-  const SymTensor &key = ctx.Get(node.input(1));
-  const SymTensor &value = ctx.Get(node.input(2));
-  if (query.Dtype() != key.Dtype() || query.Dtype() != value.Dtype()) {
+  const SymTensor *key = packed_qkv ? nullptr : &ctx.Get(node.input(1));
+  const SymTensor *value = packed_qkv ? nullptr : &ctx.Get(node.input(2));
+  if (!packed_qkv && (query.Dtype() != key->Dtype() || query.Dtype() != value->Dtype())) {
     throw std::invalid_argument(
         "ComputeShapeGroupQueryAttention: query, key, and value types must match.");
   }
-  if (query.Shape().Rank() != 3 || key.Shape().Rank() != 3 || value.Shape().Rank() != 3) {
+  if (query.Shape().Rank() != 3 ||
+      (!packed_qkv && (key->Shape().Rank() != 3 || value->Shape().Rank() != 3))) {
     throw std::invalid_argument(
         "ComputeShapeGroupQueryAttention: query, key, and value must have rank 3.");
   }
@@ -447,19 +457,28 @@ void ComputeShapeGroupQueryAttention(ShapesContext &ctx,
   }
 
   const SymShape &q_shape = query.Shape();
-  const SymShape &k_shape = key.Shape();
-  const SymShape &v_shape = value.Shape();
-
-  sym_ns::SymDim batch = MergeGqaDim(ctx, q_shape[0], k_shape[0], "batch");
-  batch = MergeGqaDim(ctx, batch, v_shape[0], "batch");
+  sym_ns::SymDim batch = q_shape[0];
   const sym_ns::SymDim &q_seq_len = q_shape[1];
-  const sym_ns::SymDim kv_seq_len = MergeGqaDim(ctx, k_shape[1], v_shape[1], "kv_sequence_length");
-  MergeGqaDim(ctx, q_seq_len, kv_seq_len, "sequence_length");
-
-  sym_ns::SymDim head_dim = DivideGqaDim(q_shape[2], num_heads, "query hidden size");
-  head_dim = MergeGqaDim(ctx, head_dim, DivideGqaDim(k_shape[2], kv_num_heads, "key hidden size"),
-                         "head_size");
-  sym_ns::SymDim v_head_dim = DivideGqaDim(v_shape[2], kv_num_heads, "value hidden size");
+  sym_ns::SymDim kv_seq_len = q_seq_len;
+  const std::int64_t heads =
+      packed_qkv ? CheckedIndexAdd(num_heads,
+                                   CheckedIndexMultiply(2, kv_num_heads, "GroupQueryAttention",
+                                                        "packed head count"),
+                                   "GroupQueryAttention", "packed head count")
+                 : num_heads;
+  sym_ns::SymDim head_dim = DivideGqaDim(q_shape[2], heads, "query hidden size");
+  sym_ns::SymDim v_head_dim = head_dim;
+  if (!packed_qkv) {
+    const SymShape &k_shape = key->Shape();
+    const SymShape &v_shape = value->Shape();
+    batch = MergeGqaDim(ctx, batch, k_shape[0], "batch");
+    batch = MergeGqaDim(ctx, batch, v_shape[0], "batch");
+    kv_seq_len = MergeGqaDim(ctx, k_shape[1], v_shape[1], "kv_sequence_length");
+    MergeGqaDim(ctx, q_seq_len, kv_seq_len, "sequence_length");
+    head_dim = MergeGqaDim(ctx, head_dim, DivideGqaDim(k_shape[2], kv_num_heads, "key hidden size"),
+                           "head_size");
+    v_head_dim = DivideGqaDim(v_shape[2], kv_num_heads, "value hidden size");
+  }
 
   const bool has_past_key = node.input_size() > 3 && !node.input(3).empty();
   const bool has_past_value = node.input_size() > 4 && !node.input(4).empty();
@@ -518,7 +537,7 @@ void ComputeShapeGroupQueryAttention(ShapesContext &ctx,
     pv_shape.PushBack(sym_ns::SymDim(kv_num_heads));
     pv_shape.PushBack(total_seq_len);
     pv_shape.PushBack(v_head_dim);
-    ctx.Set(node.output(2), SymTensor(nullptr, value.Dtype(), std::move(pv_shape)));
+    ctx.Set(node.output(2), SymTensor(nullptr, query.Dtype(), std::move(pv_shape)));
   }
 }
 

@@ -19,7 +19,8 @@ namespace onnx_light_cpu {
 /// CPU kernel for ``com.microsoft::GroupQueryAttention``.
 ///
 /// Implements the exact contract used by KV-cached decoder-only LLM export
-/// graphs (e.g. Qwen3): rank-3 ``query``/``key``/``value``, an optional
+/// graphs (e.g. Qwen3): rank-3 ``query``/``key``/``value`` or packed QKV
+/// in ``query`` with empty ``key``/``value`` inputs, an optional
 /// rank-4 ``(batch, kv_num_heads, past_sequence_length, head_size)``
 /// ``past_key``/``past_value`` tensor cache, ``do_rotary``/
 /// ``rotary_interleaved=0`` split-half RoPE applied to ``query``/``key`` at

@@ -78,12 +78,22 @@ LightOpSchema MakeSkipSimplifiedLayerNormalizationSchema() {
 LightOpSchema MakeGroupQueryAttentionSchema() {
   LightOpSchema schema(
       "GroupQueryAttention", kMicrosoftDomain, 1,
-      "Grouped-query attention over rank-3 Q/K/V tensors, with an optional tensor KV cache and "
+      "Grouped-query attention over rank-3 Q/K/V tensors (or packed QKV in query with empty "
+      "key/value inputs), with an optional tensor KV cache and "
       "split-half (rotary_interleaved=0) rotary position embedding applied to Q/K at the "
       "position derived from seqlens_k (or an explicit position_ids).",
-      {{"query", "Query tensor with shape (batch, sequence, num_heads * head_size).", "T"},
-       {"key", "Key tensor with shape (batch, sequence, kv_num_heads * head_size).", "T"},
-       {"value", "Value tensor with shape (batch, sequence, kv_num_heads * value_head_size).", "T"},
+      {{"query",
+        "Query tensor with shape (batch, sequence, num_heads * head_size), or packed QKV "
+        "(batch, sequence, (num_heads + 2 * kv_num_heads) * head_size) when key/value are empty.",
+        "T"},
+       {"key",
+        "Key tensor with shape (batch, sequence, kv_num_heads * head_size), or empty for "
+        "packed QKV.",
+        "T"},
+       {"value",
+        "Value tensor with shape (batch, sequence, kv_num_heads * value_head_size), or "
+        "empty for packed QKV (where value_head_size equals head_size).",
+        "T"},
        {"past_key",
         "Optional KV cache key tensor with shape "
         "(batch, kv_num_heads, past_sequence_length, head_size).",
@@ -110,7 +120,9 @@ LightOpSchema MakeGroupQueryAttentionSchema() {
         "Optional additive/boolean mask broadcastable to "
         "(batch, num_heads, sequence, total_sequence_length).",
         "T"}},
-      {{"output", "Output tensor with the same shape and type as query.", "T"},
+      {{"output",
+        "Output tensor with shape (batch, sequence, num_heads * value_head_size) and query type.",
+        "T"},
        {"present_key",
         "Optional present KV cache key tensor with shape "
         "(batch, kv_num_heads, past_sequence_length + sequence, head_size); the concatenation "
