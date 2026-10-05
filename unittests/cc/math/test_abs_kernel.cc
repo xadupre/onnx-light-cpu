@@ -4,6 +4,9 @@
 
 #include "onnx_light_cpu/impl/cpu_cache_topology.h"
 #include "onnx_light_cpu/impl/math/math_kernels.h"
+#ifdef ONNX_LIGHT_CPU_HAVE_SSSE3
+#include "onnx_light_cpu/impl/math/ssse3/abs_kernel_ssse3.h"
+#endif
 
 #include <gtest/gtest.h>
 
@@ -54,6 +57,44 @@ TEST(SimdDetection, FmaRequiresAvx2OrAvx) {
     EXPECT_GE(onnx_light_cpu::DetectSimdLevel(), onnx_light_cpu::SimdLevel::kAVX);
   }
 }
+
+#ifdef ONNX_LIGHT_CPU_HAVE_SSSE3
+template <typename T>
+void CheckSsse3Abs(void (*compute)(const T *, T *, std::size_t), std::size_t width) {
+  for (std::size_t size = 0; size <= 2 * width + 1; ++size) {
+    std::vector<T> input(size + 1), output(size + 2, static_cast<T>(-1));
+    for (std::size_t i = 0; i < size; ++i) {
+      input[i + 1] = static_cast<T>(static_cast<int>(i * 53) - 128);
+    }
+    if (size > 0) {
+      input[1] = std::numeric_limits<T>::min();
+    }
+    compute(input.data() + 1, output.data() + 1, size);
+    EXPECT_EQ(output[0], static_cast<T>(-1));
+    EXPECT_EQ(output[size + 1], static_cast<T>(-1));
+    for (std::size_t i = 0; i < size; ++i) {
+      const int value = static_cast<int>(input[i + 1]);
+      EXPECT_EQ(output[i + 1], static_cast<T>(value < 0 ? -value : value))
+          << "size=" << size << " index=" << i;
+    }
+    std::copy(input.begin() + 1, input.end(), output.begin() + 1);
+    compute(output.data() + 1, output.data() + 1, size);
+    for (std::size_t i = 0; i < size; ++i) {
+      const int value = static_cast<int>(input[i + 1]);
+      EXPECT_EQ(output[i + 1], static_cast<T>(value < 0 ? -value : value))
+          << "in-place size=" << size << " index=" << i;
+    }
+  }
+}
+
+TEST(AbsSsse3, IntegerAbsoluteValuesAndAllShortTails) {
+  if (!onnx_light_cpu::CpuSupportsSsse3()) {
+    GTEST_SKIP() << "SSSE3 unavailable on this CPU";
+  }
+  CheckSsse3Abs(onnx_light_cpu::AbsInt8_SSSE3, 16);
+  CheckSsse3Abs(onnx_light_cpu::AbsInt16_SSSE3, 8);
+}
+#endif
 
 // ---------------------------------------------------------------------------
 // AbsFloat32
