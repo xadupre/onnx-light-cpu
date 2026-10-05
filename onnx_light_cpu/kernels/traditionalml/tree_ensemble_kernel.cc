@@ -248,10 +248,11 @@ TreeEnsembleKernel::TreeEnsembleKernel(const NodeProto &node, RuntimeContext &rt
   if (input.shape.size() != 2) {
     throw std::invalid_argument("onnx_light_cpu::TreeEnsemble: input must have rank 2.");
   }
-  attributes_ = BuildAttributes(node, input);
+  TreeEnsembleAttributes attributes = BuildAttributes(node, input);
   input_data_type_ = input.data_type;
   feature_count_ = input.shape[1];
-  BuildPlan();
+  plan_ = std::make_unique<TreeEnsemblePlan>(std::move(attributes));
+  plan_->CompactRuntimeStorage();
 }
 
 void TreeEnsembleKernel::RegisterTuningSchemas() {
@@ -285,12 +286,7 @@ void TreeEnsembleKernel::Configure(const rt_ns::KernelTuningParameters &paramete
     return;
   }
   tuning_ = tuning;
-  BuildPlan();
-}
-
-void TreeEnsembleKernel::BuildPlan() {
-  plan_ = std::make_unique<TreeEnsemblePlan>(attributes_, tuning_);
-  plan_->CompactRuntimeStorage();
+  plan_->ConfigureExecutionTuning(tuning_);
 }
 
 void TreeEnsembleKernel::Run(RuntimeContext &rt) {

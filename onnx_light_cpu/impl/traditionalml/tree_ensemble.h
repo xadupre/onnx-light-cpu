@@ -343,6 +343,7 @@ public:
                     float *output) const;
   void EvaluateInto(const double *input, std::size_t input_size, std::size_t rows,
                     double *output) const;
+  void ConfigureExecutionTuning(TreeEnsembleExecutionTuning tuning);
   void CompactRuntimeStorage();
   TreeEnsembleExecutionDecision SelectExecution(std::size_t rows,
                                                 std::size_t effective_threads = 0) const noexcept;

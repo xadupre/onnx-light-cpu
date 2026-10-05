@@ -163,9 +163,11 @@ TreeEnsembleTuningPolicy MakeSafePolicy(std::size_t trees, std::size_t targets, 
     policy.regions.push_back(MakeRegion(1, TreeEnsembleExecutionStrategy::kTreeParallel,
                                         tuning.tree_major_batch_rows, tree_threads, trees, targets,
                                         cache_blocking.trees_per_l1_block));
-    policy.regions.push_back(MakeRegion(tuning.row_parallel_threshold,
-                                        TreeEnsembleExecutionStrategy::kTreeMajorBatch,
-                                        tuning.tree_major_batch_rows, 1, trees, targets));
+    if (tuning.row_parallel_threshold > 1) {
+      policy.regions.push_back(MakeRegion(tuning.row_parallel_threshold,
+                                          TreeEnsembleExecutionStrategy::kTreeMajorBatch,
+                                          tuning.tree_major_batch_rows, 1, trees, targets));
+    }
     policy.regions.push_back(MakeRegion(tuning.tree_parallel_row_limit,
                                         TreeEnsembleExecutionStrategy::kTreeParallel,
                                         tuning.tree_major_batch_rows, tree_threads, trees, targets,
@@ -1007,6 +1009,21 @@ std::size_t TreeEnsemblePlan::prepared_storage_bytes() const noexcept {
   return bytes;
 }
 
+void TreeEnsemblePlan::ConfigureExecutionTuning(TreeEnsembleExecutionTuning tuning) {
+  execution_tuning_ = tuning;
+  const std::size_t threads =
+      std::max<std::size_t>(static_cast<std::size_t>(ExecutionThreadCount()), 1);
+  tuning_policy_ =
+      MakeSafePolicy(tree_roots_.size(), static_cast<std::size_t>(attributes_.n_targets), threads,
+                     cache_blocking_, execution_tuning_);
+  ValidatePolicyShape(tuning_policy_);
+  workspace_bytes_ = 1;
+  for (const TreeEnsembleExecutionRegion &region : tuning_policy_.regions) {
+    workspace_bytes_ = std::max(workspace_bytes_, region.workspace_bytes);
+  }
+  uses_dynamic_safe_policy_ = true;
+}
+
 void TreeEnsemblePlan::CompactRuntimeStorage() {
   if (uses_64_bit_indices_ || compact_nodes_.empty()) {
     return;
@@ -1537,7 +1554,8 @@ void TreeEnsemblePlan::EvaluateIntoImpl(const T *input, std::size_t input_size, 
           return;
         }
 #endif
-        ExecuteRanges(static_cast<std::int64_t>(rows), static_cast<double>(kExecutionGrainSize),
+        const ExecutionSchedule schedule{1, 1, static_cast<std::int64_t>(decision.participants)};
+        ExecuteRanges(static_cast<std::int64_t>(rows), schedule,
                       [&](std::int64_t begin, std::int64_t end) {
                         const std::size_t row_begin = static_cast<std::size_t>(begin);
                         const std::size_t row_end = static_cast<std::size_t>(end);
@@ -1698,7 +1716,8 @@ void TreeEnsemblePlan::EvaluateIntoImpl(const T *input, std::size_t input_size, 
     return;
   }
   if (decision.strategy == TreeEnsembleExecutionStrategy::kRowParallel) {
-    ExecuteRanges(static_cast<std::int64_t>(rows), static_cast<double>(kExecutionGrainSize),
+    const ExecutionSchedule schedule{1, 1, static_cast<std::int64_t>(decision.participants)};
+    ExecuteRanges(static_cast<std::int64_t>(rows), schedule,
                   [&](std::int64_t begin, std::int64_t end) {
                     std::vector<double> values(accumulator_targets);
                     std::vector<std::size_t> counts(accumulator_targets);

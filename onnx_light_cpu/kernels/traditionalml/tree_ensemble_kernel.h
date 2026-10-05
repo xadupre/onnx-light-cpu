@@ -32,9 +32,6 @@ public:
   void Run(ONNX_LIGHT_NAMESPACE::core::runtime::RuntimeContext &rt) override;
 
 private:
-  void BuildPlan();
-
-  TreeEnsembleAttributes attributes_;
   TreeEnsembleExecutionTuning tuning_;
   std::unique_ptr<TreeEnsemblePlan> plan_;
   std::int32_t input_data_type_ = 0;
