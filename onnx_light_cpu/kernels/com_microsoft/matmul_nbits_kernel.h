@@ -12,7 +12,7 @@
 
 #include <cstdint>
 #include <memory>
-#include <mutex>
+#include <unordered_set>
 
 namespace onnx_light_cpu {
 
@@ -39,6 +39,10 @@ public:
   TuningKey(std::int32_t element_type) const override;
   void
   Configure(const ONNX_LIGHT_NAMESPACE::core::runtime::KernelTuningParameters &parameters) override;
+  bool HasPreparations(const std::unordered_set<std::string> &immutable_inputs) const override;
+  void Prepare(ONNX_LIGHT_NAMESPACE::core::runtime::RuntimeContext &rt,
+               const std::unordered_set<std::string> &immutable_inputs,
+               ONNX_LIGHT_NAMESPACE::core::runtime::PreparedExecutionState &state) override;
 
   ONNX_LIGHT_NAMESPACE::core::runtime::Tensor
   operator()(const ONNX_LIGHT_NAMESPACE::core::runtime::Tensor &a,
@@ -51,11 +55,11 @@ public:
 
 private:
   struct PreparedInt4Plan;
+  struct PreparedInt4State;
 
   MatMulNBitsAttributes attributes_;
   MatMulNBitsExecutionTuning tuning_ = kDefaultMatMulNBitsExecutionTuning;
-  mutable std::mutex prepared_int4_mutex_;
-  mutable std::shared_ptr<const PreparedInt4Plan> prepared_int4_;
+  std::unique_ptr<const PreparedInt4State> prepared_int4_;
 };
 
 void RegisterMatMulNBitsKernel();
