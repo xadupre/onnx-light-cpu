@@ -56,7 +56,7 @@ jobs:
           CIBW_BEFORE_ALL: python {project}/tools/onnx_light_release.py clone {project}/../onnx-light
           CIBW_BEFORE_BUILD: >-
             python -m pip install scikit-build-core nanobind &&
-            python -m pip install -C wheel.py-api=cp312 {project}/../onnx-light
+            python {project}/tools/onnx_light_release.py install
           CIBW_BEFORE_TEST: python {project}/tools/onnx_light_release.py install
           CIBW_TEST_COMMAND: python {project}/unittests/python/wheel_registration_smoke.py
           CIBW_REPAIR_WHEEL_COMMAND_LINUX: >-
@@ -67,7 +67,7 @@ jobs:
             -w {dest_dir} {wheel}
           CIBW_ENVIRONMENT: >
             CMAKE_BUILD_PARALLEL_LEVEL=${{ steps.cpu_count.outputs.count }}
-            CMAKE_ARGS="-DONNX_HARDENING=ON -DONNX_LIGHT_CPU_RELEASE_WHEEL=ON"
+            CMAKE_ARGS="-DONNX_HARDENING=ON -DONNX_LIGHT_CPU_RELEASE_WHEEL=ON -DONNX_LIGHT_CPU_PYTHON_STABLE_ABI=OFF"
       - name: Upload artifacts
         uses: actions/upload-artifact@v7
         with:
@@ -129,12 +129,12 @@ jobs:
           CIBW_BEFORE_ALL: python {project}/tools/onnx_light_release.py clone {project}/../onnx-light
           CIBW_BEFORE_BUILD: >-
             python -m pip install scikit-build-core nanobind &&
-            python -m pip install -C wheel.py-api=cp312 {project}/../onnx-light
+            python {project}/tools/onnx_light_release.py install
           CIBW_BEFORE_TEST: python {project}/tools/onnx_light_release.py install
           CIBW_TEST_COMMAND: python {project}/unittests/python/wheel_registration_smoke.py
           CIBW_ENVIRONMENT: >
             CMAKE_BUILD_PARALLEL_LEVEL=${{ steps.cpu_count.outputs.count }}
-            CMAKE_ARGS="-DONNX_HARDENING=ON -DONNX_LIGHT_CPU_RELEASE_WHEEL=ON"
+            CMAKE_ARGS="-DONNX_HARDENING=ON -DONNX_LIGHT_CPU_RELEASE_WHEEL=ON -DONNX_LIGHT_CPU_PYTHON_STABLE_ABI=OFF"
       - name: Upload artifacts
         uses: actions/upload-artifact@v7
         with:
@@ -190,13 +190,13 @@ jobs:
           CIBW_BEFORE_ALL: python {project}/tools/onnx_light_release.py clone {project}/../onnx-light
           CIBW_BEFORE_BUILD: >-
             python -m pip install scikit-build-core nanobind &&
-            python -m pip install -C wheel.py-api=cp312 {project}/../onnx-light
+            python {project}/tools/onnx_light_release.py install
           CIBW_BEFORE_TEST: python {project}/tools/onnx_light_release.py install
           CIBW_TEST_COMMAND: python {project}/unittests/python/wheel_registration_smoke.py
           CIBW_ENVIRONMENT: >
             CMAKE_BUILD_PARALLEL_LEVEL=${{ steps.cpu_count.outputs.count }}
             MACOSX_DEPLOYMENT_TARGET=${{ env.MACOSX_DEPLOYMENT_TARGET }}
-            CMAKE_ARGS='-DONNX_HARDENING=ON -DONNX_LIGHT_CPU_RELEASE_WHEEL=ON -DCMAKE_OSX_DEPLOYMENT_TARGET=${{ env.MACOSX_DEPLOYMENT_TARGET }} -DCMAKE_OSX_ARCHITECTURES=arm64;x86_64'
+            CMAKE_ARGS='-DONNX_HARDENING=ON -DONNX_LIGHT_CPU_RELEASE_WHEEL=ON -DONNX_LIGHT_CPU_PYTHON_STABLE_ABI=OFF -DCMAKE_OSX_DEPLOYMENT_TARGET=${{ env.MACOSX_DEPLOYMENT_TARGET }} -DCMAKE_OSX_ARCHITECTURES=arm64;x86_64'
       - name: Upload artifacts
         uses: actions/upload-artifact@v7
         with:
