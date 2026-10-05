@@ -184,7 +184,20 @@ std::vector<double> ReadInput(const Tensor &input) {
 
 } // namespace
 
-TreeEnsembleKernel::TreeEnsembleKernel(const rt_ns::KernelContext &ctx) : KernelBase(ctx) {}
+TreeEnsembleKernel::TreeEnsembleKernel(const NodeProto &node, RuntimeContext &rt)
+    : KernelBase(rt.kernel_ctx()) {
+  set_node(node);
+  rt_ns::RequireInputCount(node, 1);
+  rt_ns::RequireOutputCount(node, 1);
+  const Tensor &input = rt_ns::GetInput(node, 0, rt.tensors());
+  if (input.shape.size() != 2) {
+    throw std::invalid_argument("onnx_light_cpu::TreeEnsemble: input must have rank 2.");
+  }
+  plan_ = std::make_unique<TreeEnsemblePlan>(BuildAttributes(node, input));
+  input_data_type_ = input.data_type;
+  feature_count_ = input.shape[1];
+  plan_->CompactRuntimeStorage();
+}
 
 void TreeEnsembleKernel::Run(RuntimeContext &rt) {
   rt.RecordKernelUsage(kName);
@@ -196,13 +209,6 @@ void TreeEnsembleKernel::Run(RuntimeContext &rt) {
     throw std::invalid_argument("onnx_light_cpu::TreeEnsemble: input must have rank 2.");
   }
 
-  std::call_once(initialize_once_, [&]() {
-    auto plan = std::make_unique<TreeEnsemblePlan>(BuildAttributes(node, input));
-    input_data_type_ = input.data_type;
-    feature_count_ = input.shape[1];
-    plan->CompactRuntimeStorage();
-    plan_ = std::move(plan);
-  });
   if (input.data_type != input_data_type_ || input.shape[1] != feature_count_) {
     throw std::invalid_argument(
         "onnx_light_cpu::TreeEnsemble: input type and feature count must remain constant.");
@@ -243,9 +249,7 @@ void TreeEnsembleKernel::Run(RuntimeContext &rt) {
 void RegisterTreeEnsembleKernel() {
   rt_ns::NodeKernelFn factory = [](const NodeProto &node,
                                    RuntimeContext &rt) -> std::unique_ptr<rt_ns::KernelBase> {
-    auto kernel = std::make_unique<TreeEnsembleKernel>(rt.kernel_ctx());
-    kernel->set_node(node);
-    return kernel;
+    return std::make_unique<TreeEnsembleKernel>(node, rt);
   };
   KernelRegistration info;
   info.domain = "ai.onnx.ml";
