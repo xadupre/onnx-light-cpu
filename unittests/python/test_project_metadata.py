@@ -14,7 +14,7 @@ _ROOT = Path(__file__).resolve().parents[2]
 def test_project_version_consistency():
     metadata = tomllib.loads((_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     version = metadata["project"]["version"]
-    assert version == "0.1.20"
+    assert version == "0.1.21"
 
     for path, pattern in (
         ("setup.py", r'version="([^"]+)"'),
@@ -32,7 +32,8 @@ def test_changelog_release_sections():
     sections = dict(
         re.findall(r"^## \[(\d+\.\d+\.\d+)\](.*?)(?=^## \[|\Z)", changelog, re.M | re.S)
     )
-    assert "Unreleased" in sections["0.1.20"]
+    assert "Unreleased" in sections["0.1.21"]
+    assert "2026-10-05" in sections["0.1.20"]
     assert all(f"#{number}" in sections["0.1.20"] for number in (853, 859, 860))
     assert "2026-10-05" in sections["0.1.19"]
     assert "#854" in sections["0.1.19"]
