@@ -188,7 +188,10 @@ This host supports AVX2, so these are *direct 128-bit loop* results, not
 registered-operator speedups on a non-AVX2 processor. They justify trying
 the small Abs path, not generalizing the speedup to other kernels or CPUs.
 It adds one feature probe cached per dtype, one translation unit and one
-dispatch branch after AVX2; a global SSE tier would instead affect every
-kernel family. The exact scope and parity of the change are covered by
+dispatch branch after AVX2. The Release ``abs_kernel_ssse3.cc`` object on
+this host contains 1,623 bytes of text (``size``); a global SSE tier would
+instead affect every kernel family. No fleet distribution or real non-AVX2
+host measurement is available, so this local change does not imply a wider
+SSE4.1 dispatch would pay for itself. The exact scope and parity are covered by
 ``test_abs_kernel`` (direct full vectors, every short tail, unaligned and
 in-place buffers) and the existing generic Abs tests.
