@@ -64,6 +64,17 @@ Here ``cmake --install`` places the dependency's freshly built libraries in its
 source tree, not in site-packages. ``--onnx-light-source`` links against those
 same runtime libraries rather than rebuilding a second copy.
 
+Python builds that exchange nanobind-bound C++ objects must also use the same
+ABI mode. Published onnx-light and onnx-light-cpu wheels use the stable ABI, so
+keep ``ONNX_LIGHT_PYTHON_STABLE_ABI`` and
+``ONNX_LIGHT_CPU_PYTHON_STABLE_ABI`` enabled for releases. Native ABI builds
+are supported only when both projects are rebuilt together with both options
+disabled. In either mode, onnx-light-cpu must link the exact shared onnx-light
+runtime loaded by Python; linking a second copy creates a separate type and
+registry universe, so objects such as ``RuntimeContext`` cannot cross the
+module boundary. A CPython-specific wheel tag alone does not determine the
+nanobind ABI mode.
+
 The regression test imports ``_cpukernels`` then ``_cpuregister``, and the
 reverse order, in separate Python subprocesses. It runs from both the checkout
 and a temporary working directory, verifies that the CPU extensions came from
