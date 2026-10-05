@@ -5,6 +5,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [0.1.19] – Unreleased
 
+### Improvements
+
+- Updated development and AVX2 parity workflows to use onnx-light 0.1.30.
+
 ### Documentation & CI
 
 - Evaluated AVX-512VL narrow-vector and masked-tail candidates and retained the
