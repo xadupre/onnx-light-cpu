@@ -23,19 +23,19 @@ def test_release_version_matches_project_dependencies():
 
 def test_release_wheel_names():
     assert wheel_name("Linux", "x86_64", (3, 12)) == (
-        "onnx_light-0.1.29-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl"
+        "onnx_light-0.1.30-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl"
     )
     assert wheel_name("Linux", "aarch64", (3, 13)) == (
-        "onnx_light-0.1.29-cp313-cp313-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl"
+        "onnx_light-0.1.30-cp313-cp313-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl"
     )
     assert wheel_name("Darwin", "arm64", (3, 14)) == (
-        "onnx_light-0.1.29-cp314-cp314-macosx_13_0_universal2.whl"
+        "onnx_light-0.1.30-cp314-cp314-macosx_13_0_universal2.whl"
     )
     assert wheel_name("Windows", "AMD64", (3, 12)) == (
-        "onnx_light-0.1.29-cp312-cp312-win_amd64.whl"
+        "onnx_light-0.1.30-cp312-cp312-win_amd64.whl"
     )
     assert wheel_url("Windows", "ARM64", (3, 13)).endswith(
-        "/0.1.29/onnx_light-0.1.29-cp313-cp313-win_arm64.whl"
+        "/0.1.30/onnx_light-0.1.30-cp313-cp313-win_arm64.whl"
     )
 
 
