@@ -1010,17 +1010,19 @@ std::size_t TreeEnsemblePlan::prepared_storage_bytes() const noexcept {
 }
 
 void TreeEnsemblePlan::ConfigureExecutionTuning(TreeEnsembleExecutionTuning tuning) {
-  execution_tuning_ = tuning;
   const std::size_t threads =
       std::max<std::size_t>(static_cast<std::size_t>(ExecutionThreadCount()), 1);
-  tuning_policy_ =
+  TreeEnsembleTuningPolicy policy =
       MakeSafePolicy(tree_roots_.size(), static_cast<std::size_t>(attributes_.n_targets), threads,
-                     cache_blocking_, execution_tuning_);
-  ValidatePolicyShape(tuning_policy_);
-  workspace_bytes_ = 1;
-  for (const TreeEnsembleExecutionRegion &region : tuning_policy_.regions) {
-    workspace_bytes_ = std::max(workspace_bytes_, region.workspace_bytes);
+                     cache_blocking_, tuning);
+  ValidatePolicyShape(policy);
+  std::size_t workspace_bytes = 1;
+  for (const TreeEnsembleExecutionRegion &region : policy.regions) {
+    workspace_bytes = std::max(workspace_bytes, region.workspace_bytes);
   }
+  execution_tuning_ = tuning;
+  tuning_policy_ = std::move(policy);
+  workspace_bytes_ = workspace_bytes;
   uses_dynamic_safe_policy_ = true;
 }
 
@@ -1441,7 +1443,7 @@ void TreeEnsemblePlan::EvaluateIntoImpl(const T *input, std::size_t input_size, 
         attributes_.post_transform == TreePostTransform::kNone) {
       constexpr std::size_t kInterleavedRows = 8;
       const auto accumulate_tree = [&](std::size_t tree, std::size_t row_begin, std::size_t row_end,
-                                       float *values) {
+                                       float *values, std::size_t value_row_offset = 0) {
         const std::uint32_t root = static_cast<std::uint32_t>(tree_roots_[tree]);
         std::size_t row = row_begin;
         if (max_depth_ == 4 && !compact_float_nodes_.empty() && !leaf_weights_float_.empty()) {
@@ -1462,7 +1464,7 @@ void TreeEnsemblePlan::EvaluateIntoImpl(const T *input, std::size_t input_size, 
             advance();
             advance();
             for (std::size_t lane = 0; lane < kInterleavedRows; ++lane) {
-              values[row + lane] += leaf_weights_float_[nodes[lane]];
+              values[row + lane - value_row_offset] += leaf_weights_float_[nodes[lane]];
             }
           }
         }
@@ -1474,7 +1476,7 @@ void TreeEnsemblePlan::EvaluateIntoImpl(const T *input, std::size_t input_size, 
                        ? current.true_child
                        : current.false_child;
           }
-          values[row] += leaf_weights_float_[node];
+          values[row - value_row_offset] += leaf_weights_float_[node];
         }
       };
 #if defined(ONNX_LIGHT_CPU_HAVE_AVX2_FMA) || defined(ONNX_LIGHT_CPU_HAVE_AVX512)
@@ -1566,67 +1568,73 @@ void TreeEnsemblePlan::EvaluateIntoImpl(const T *input, std::size_t input_size, 
                       });
         return;
       }
-      std::size_t partial_stride = rows;
+      const std::size_t batch_rows = std::max<std::size_t>(decision.batch_rows, 1);
+      std::size_t partial_stride = batch_rows;
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512
       const bool vector_tree_partitions =
           simd_level == SimdLevel::kAVX512 && simd_indices_fit && rows >= 16 && participants > 1;
       if (vector_tree_partitions) {
         // Keep adjacent workers' outputs off the same cache line, even when
         // the allocation itself is not cache-line aligned.
-        partial_stride = SaturatingAdd(rows, static_cast<std::size_t>(ExecutionSimdLanes<float>()));
+        partial_stride =
+            SaturatingAdd(batch_rows, static_cast<std::size_t>(ExecutionSimdLanes<float>()));
       }
 #endif
       std::vector<float> partial_values(SaturatingMultiply(participants, partial_stride));
-      if (participants == 1) {
-        std::fill(partial_values.begin(), partial_values.end(), base);
-      }
-      ExecuteRanges(
-          static_cast<std::int64_t>(participants), static_cast<double>(kExecutionGrainSize),
-          [&](std::int64_t begin, std::int64_t end) {
-            for (std::size_t participant = static_cast<std::size_t>(begin);
-                 participant < static_cast<std::size_t>(end); ++participant) {
-              float *participant_values = partial_values.data() + participant * partial_stride;
-              const auto [tree_begin, tree_end] = tree_range(participant, participants);
+      for (std::size_t batch = 0; batch < rows; batch += batch_rows) {
+        const std::size_t active_rows = std::min(batch_rows, rows - batch);
+        std::fill(partial_values.begin(), partial_values.end(), 0.0F);
+        if (participants == 1) {
+          std::fill(partial_values.begin(), partial_values.begin() + active_rows, base);
+        }
+        ExecuteRanges(
+            static_cast<std::int64_t>(participants), static_cast<double>(kExecutionGrainSize),
+            [&](std::int64_t begin, std::int64_t end) {
+              for (std::size_t participant = static_cast<std::size_t>(begin);
+                   participant < static_cast<std::size_t>(end); ++participant) {
+                float *participant_values = partial_values.data() + participant * partial_stride;
+                const auto [tree_begin, tree_end] = tree_range(participant, participants);
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512
-              if (rows == 1 && simd_level == SimdLevel::kAVX512 && simd_indices_fit) {
-                participant_values[0] = EvaluateBalancedFloatTrees_AVX512(
-                    input_data, compact_float_nodes_.data(), leaf_weights_float_.data(),
-                    tree_roots_.data() + tree_begin, tree_end - tree_begin, max_depth_);
-                continue;
-              }
+                if (rows == 1 && simd_level == SimdLevel::kAVX512 && simd_indices_fit) {
+                  participant_values[0] = EvaluateBalancedFloatTrees_AVX512(
+                      input_data, compact_float_nodes_.data(), leaf_weights_float_.data(),
+                      tree_roots_.data() + tree_begin, tree_end - tree_begin, max_depth_);
+                  continue;
+                }
 #endif
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
-              if (rows == 1 && simd_level >= SimdLevel::kAVX2 && simd_indices_fit) {
-                participant_values[0] = EvaluateBalancedFloatTrees_AVX2(
-                    input_data, compact_float_nodes_.data(), leaf_weights_float_.data(),
-                    tree_roots_.data() + tree_begin, tree_end - tree_begin, max_depth_);
-                continue;
-              }
+                if (rows == 1 && simd_level >= SimdLevel::kAVX2 && simd_indices_fit) {
+                  participant_values[0] = EvaluateBalancedFloatTrees_AVX2(
+                      input_data, compact_float_nodes_.data(), leaf_weights_float_.data(),
+                      tree_roots_.data() + tree_begin, tree_end - tree_begin, max_depth_);
+                  continue;
+                }
 #endif
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512
-              if (vector_tree_partitions) {
-                EvaluateBalancedFloatRows_AVX512(
-                    input_data, features, compact_float_nodes_.data(), leaf_weights_float_.data(),
-                    tree_roots_.data() + tree_begin, tree_end - tree_begin, max_depth_, 0, rows,
-                    0.0F, participant_values);
-                continue;
-              }
+                if (vector_tree_partitions) {
+                  EvaluateBalancedFloatRows_AVX512(
+                      input_data + batch * features, features, compact_float_nodes_.data(),
+                      leaf_weights_float_.data(), tree_roots_.data() + tree_begin,
+                      tree_end - tree_begin, max_depth_, 0, active_rows, 0.0F, participant_values);
+                  continue;
+                }
 #endif
-              for (std::size_t tree = tree_begin; tree < tree_end; ++tree) {
-                accumulate_tree(tree, 0, rows, participant_values);
+                for (std::size_t tree = tree_begin; tree < tree_end; ++tree) {
+                  accumulate_tree(tree, batch, batch + active_rows, participant_values, batch);
+                }
               }
-            }
-          });
-      for (std::size_t row = 0; row < rows; ++row) {
-        if (participants == 1) {
-          output_data[row] = partial_values[row];
-          continue;
+            });
+        for (std::size_t row = 0; row < active_rows; ++row) {
+          if (participants == 1) {
+            output_data[batch + row] = partial_values[row];
+            continue;
+          }
+          float value = base;
+          for (std::size_t participant = 0; participant < participants; ++participant) {
+            value += partial_values[participant * partial_stride + row];
+          }
+          output_data[batch + row] = value;
         }
-        float value = base;
-        for (std::size_t participant = 0; participant < participants; ++participant) {
-          value += partial_values[participant * partial_stride + row];
-        }
-        output_data[row] = value;
       }
       return;
     }

@@ -390,15 +390,25 @@ TEST(TreeEnsembleOracle, ExecutionTuningControlsSchedulingThresholdsAndParticipa
   EXPECT_GT(executor.dispatches.load(std::memory_order_relaxed), 0U);
   EXPECT_LE(executor.dispatched_blocks.load(std::memory_order_relaxed), 2U);
 
-  const TreeEnsembleAttributes balanced_attributes = BalancedForest(97);
+  const TreeEnsembleAttributes balanced_attributes = BalancedForest(1024);
   TreeEnsemblePlan balanced_plan(balanced_attributes);
-  balanced_plan.ConfigureExecutionTuning({64, 10, 20, 2});
-  std::vector<float> balanced_input(129 * 8, -1.0F);
-  std::vector<float> balanced_output(129);
+  balanced_plan.ConfigureExecutionTuning({1, 10, 128, 2});
+  constexpr std::size_t kBalancedRows = 65;
+  const auto balanced_decision = balanced_plan.SelectExecution(kBalancedRows);
+  ASSERT_EQ(balanced_decision.strategy, TreeEnsembleExecutionStrategy::kTreeParallel);
+  ASSERT_EQ(balanced_decision.batch_rows, 1U);
+  std::vector<float> balanced_input(kBalancedRows * 8, -1.0F);
+  std::vector<float> balanced_output(kBalancedRows);
   executor.dispatches.store(0, std::memory_order_relaxed);
   executor.dispatched_blocks.store(0, std::memory_order_relaxed);
-  balanced_plan.EvaluateInto(balanced_input.data(), balanced_input.size(), 129,
+  balanced_plan.EvaluateInto(balanced_input.data(), balanced_input.size(), kBalancedRows,
                              balanced_output.data());
+  const std::vector<double> balanced_reference_input(balanced_input.begin(), balanced_input.end());
+  const auto balanced_expected =
+      TreeEnsembleOracle(balanced_attributes).Evaluate(balanced_reference_input, kBalancedRows);
+  for (std::size_t row = 0; row < kBalancedRows; ++row) {
+    EXPECT_NEAR(balanced_output[row], balanced_expected[row], 1e-5) << row;
+  }
   EXPECT_GT(executor.dispatches.load(std::memory_order_relaxed), 0U);
   EXPECT_LE(executor.dispatched_blocks.load(std::memory_order_relaxed), 2U);
 }
@@ -414,6 +424,22 @@ TEST(TreeEnsembleOracle, ExecutionTuningAcceptsUnitRowThreshold) {
   EXPECT_EQ(regions[0].maximum_rows, 1U);
   EXPECT_EQ(regions[1].maximum_rows, 128U);
   EXPECT_FALSE(regions[2].maximum_rows.has_value());
+}
+
+TEST(TreeEnsembleOracle, RejectedExecutionTuningPreservesPlanState) {
+  ThreadedExecutor executor;
+  onnx_light_cpu::ExecutionExecutorView view{&executor, 4, &ThreadedExecutor::Run};
+  onnx_light_cpu::ExecutionExecutorScope scope(&view);
+  const TreeEnsembleAttributes attributes = StumpForest(3);
+  TreeEnsemblePlan plan(attributes);
+  const onnx_light_cpu::TreeEnsembleExecutionTuning tuning = plan.execution_tuning();
+  const TreeEnsembleTuningPolicy policy = plan.tuning_policy();
+  EXPECT_THROW(plan.ConfigureExecutionTuning({0, 50, 128, 0}), std::invalid_argument);
+  EXPECT_EQ(plan.execution_tuning(), tuning);
+  EXPECT_EQ(plan.tuning_policy(), policy);
+  const std::vector<double> input(51, -1.0);
+  EXPECT_EQ(plan.Evaluate(input, input.size()),
+            TreeEnsembleOracle(attributes).Evaluate(input, input.size()));
 }
 
 TEST(TreeEnsembleOracle, PreparedPolicyCoversEveryInclusiveRowCrossover) {
