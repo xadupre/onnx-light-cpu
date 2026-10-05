@@ -466,6 +466,10 @@ void ComputeShapeGroupQueryAttention(ShapesContext &ctx,
                                                         "packed head count"),
                                    "GroupQueryAttention", "packed head count")
                  : num_heads;
+  if (packed_qkv && q_shape[2].IsInt() && q_shape[2].AsInt() <= 0) {
+    throw std::invalid_argument(
+        "ComputeShapeGroupQueryAttention: packed hidden size must be positive.");
+  }
   sym_ns::SymDim head_dim = DivideGqaDim(q_shape[2], heads, "query hidden size");
   sym_ns::SymDim v_head_dim = head_dim;
   if (!packed_qkv) {
@@ -704,31 +708,74 @@ int64_t ComputePeakMemoryGroupQueryAttention(sym_ns::Device,
   }
   const bool has_key = input_shapes.size() > 1 && input_shapes[1].Rank() == 3;
   const bool has_value = input_shapes.size() > 2 && input_shapes[2].Rank() == 3;
-  if (has_key || has_value) {
+  if (has_key != has_value) {
     return 0;
   }
   constexpr int64_t kConservativeElementBytes = sizeof(float);
-  int64_t elements = 1;
-  for (std::int64_t index = 0; index < input_shapes[0].Rank(); ++index) {
-    const auto &dim = input_shapes[0][index];
-    if (!dim.IsInt()) {
-      return 0;
+  bool known = true;
+  const auto element_count = [&](const SymShape &shape, std::int64_t rank) {
+    if (shape.Rank() != rank) {
+      known = false;
+      return int64_t{0};
     }
-    if (dim.AsInt() < 0) {
-      throw std::invalid_argument(
-          "ComputePeakMemoryGroupQueryAttention: packed dimensions must be non-negative.");
+    int64_t count = 1;
+    for (std::int64_t index = 0; index < rank; ++index) {
+      const auto &dim = shape[index];
+      if (!dim.IsInt()) {
+        known = false;
+        return int64_t{0};
+      }
+      if (dim.AsInt() < 0) {
+        throw std::invalid_argument(
+            "ComputePeakMemoryGroupQueryAttention: dimensions must be non-negative.");
+      }
+      count = CheckedIndexMultiply(count, dim.AsInt(), "ComputePeakMemoryGroupQueryAttention",
+                                   "scratch element count");
     }
-    if (dim.AsInt() != 0 && elements > std::numeric_limits<int64_t>::max() / dim.AsInt()) {
-      throw std::overflow_error(
-          "ComputePeakMemoryGroupQueryAttention: scratch-memory size overflow.");
+    return count;
+  };
+
+  const int64_t query_elements = element_count(input_shapes[0], 3);
+  const bool packed_qkv = !has_key;
+  const int64_t key_elements = has_key ? element_count(input_shapes[1], 3) : 0;
+  const int64_t value_elements = has_value ? element_count(input_shapes[2], 3) : 0;
+  int64_t past_elements = 0;
+  for (std::size_t index : {std::size_t{3}, std::size_t{4}}) {
+    if (input_shapes.size() > index && input_shapes[index].Rank() == 4) {
+      past_elements =
+          CheckedIndexAdd(past_elements, element_count(input_shapes[index], 4),
+                          "ComputePeakMemoryGroupQueryAttention", "past scratch element count");
     }
-    elements *= dim.AsInt();
   }
-  if (elements > std::numeric_limits<int64_t>::max() / kConservativeElementBytes) {
-    throw std::overflow_error(
-        "ComputePeakMemoryGroupQueryAttention: scratch-memory size overflow.");
+  if (!known) {
+    return 0;
   }
-  return elements * kConservativeElementBytes;
+
+  // The shared hook must cover the NAIVE implementation. Its longest-lived
+  // temporaries include unpacked Q/K/V for packed input, optional rotated Q/K,
+  // and concatenated full K/V. Without node attributes, the complete packed
+  // width is a conservative upper bound for both Q+K and K+V.
+  const int64_t unpack_elements = packed_qkv ? query_elements : 0;
+  const int64_t rotary_elements =
+      packed_qkv
+          ? query_elements
+          : CheckedIndexAdd(query_elements, key_elements, "ComputePeakMemoryGroupQueryAttention",
+                            "rotary scratch element count");
+  const int64_t current_kv_elements =
+      packed_qkv
+          ? query_elements
+          : CheckedIndexAdd(key_elements, value_elements, "ComputePeakMemoryGroupQueryAttention",
+                            "current KV scratch element count");
+  const int64_t elements = CheckedIndexAdd(
+      unpack_elements,
+      CheckedIndexAdd(rotary_elements,
+                      CheckedIndexAdd(current_kv_elements, past_elements,
+                                      "ComputePeakMemoryGroupQueryAttention",
+                                      "full KV scratch element count"),
+                      "ComputePeakMemoryGroupQueryAttention", "attention scratch element count"),
+      "ComputePeakMemoryGroupQueryAttention", "total scratch element count");
+  return CheckedIndexMultiply(elements, kConservativeElementBytes,
+                              "ComputePeakMemoryGroupQueryAttention", "scratch-memory byte size");
 }
 
 int64_t ComputePeakMemoryLinearAttention(sym_ns::Device,

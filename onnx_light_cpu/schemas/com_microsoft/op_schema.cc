@@ -84,7 +84,9 @@ LightOpSchema MakeGroupQueryAttentionSchema() {
       "position derived from seqlens_k (or an explicit position_ids).",
       {{"query",
         "Query tensor with shape (batch, sequence, num_heads * head_size), or packed QKV "
-        "(batch, sequence, (num_heads + 2 * kv_num_heads) * head_size) when key/value are empty.",
+        "(batch, sequence, (num_heads + 2 * kv_num_heads) * head_size) when key/value are empty. "
+        "Each packed row contains three contiguous segments in [Q | K | V] order, with widths "
+        "num_heads * head_size, kv_num_heads * head_size, and kv_num_heads * head_size.",
         "T"},
        {"key",
         "Key tensor with shape (batch, sequence, kv_num_heads * head_size), or empty for "

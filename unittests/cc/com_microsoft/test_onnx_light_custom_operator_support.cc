@@ -378,6 +378,9 @@ TEST(CustomOperatorSupport, InfersPackedGroupQueryAttentionShape) {
 
   ctx.Set("Q", SymTensor(nullptr, TensorType::kFloat, {SymDim("B"), SymDim("S"), SymDim(63)}));
   EXPECT_THROW(onnx_light_cpu::ComputeShapeGroupQueryAttention(ctx, node), std::invalid_argument);
+  ctx.Set("Q", SymTensor(nullptr, TensorType::kFloat,
+                         {SymDim("B"), SymDim("S"), SymDim(std::int64_t{0})}));
+  EXPECT_THROW(onnx_light_cpu::ComputeShapeGroupQueryAttention(ctx, node), std::invalid_argument);
   node.ref_input()[1] = "K";
   EXPECT_THROW(onnx_light_cpu::ComputeShapeGroupQueryAttention(ctx, node), std::invalid_argument);
 }
@@ -493,12 +496,17 @@ TEST(CustomOperatorSupport, RegistersShapeMemoryGradientAndPatternHooks) {
   EXPECT_EQ(shapes_ns::ComputePeakMemory(
                 onnx_light_cpu::kMicrosoftDomain, "GroupQueryAttention", sym_ns::Device::kCPU,
                 {sym_ns::SymShape({2, 3, 16}), sym_ns::SymShape(), sym_ns::SymShape()}),
-            384);
+            1152);
   EXPECT_EQ(shapes_ns::ComputePeakMemory(onnx_light_cpu::kMicrosoftDomain, "GroupQueryAttention",
                                          sym_ns::Device::kCPU,
                                          {sym_ns::SymShape({2, 3, 8}), sym_ns::SymShape({2, 3, 4}),
                                           sym_ns::SymShape({2, 3, 4})}),
-            0);
+            480);
+  EXPECT_EQ(shapes_ns::ComputePeakMemory(
+                onnx_light_cpu::kMicrosoftDomain, "GroupQueryAttention", sym_ns::Device::kCPU,
+                {sym_ns::SymShape({2, 3, 16}), sym_ns::SymShape(), sym_ns::SymShape(),
+                 sym_ns::SymShape({2, 1, 5, 4}), sym_ns::SymShape({2, 1, 5, 4})}),
+            1472);
   EXPECT_EQ(shapes_ns::ComputePeakMemory(onnx_light_cpu::kMicrosoftDomain, "LinearAttention",
                                          sym_ns::Device::kCPU,
                                          {sym_ns::SymShape({2, 3, 8}), sym_ns::SymShape({2, 3, 8}),

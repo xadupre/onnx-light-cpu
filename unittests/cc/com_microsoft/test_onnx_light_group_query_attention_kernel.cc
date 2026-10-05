@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "onnx_light_cpu/impl/math/half_conversion.h"
 #include "onnx_light_cpu/kernels/attention/attention_kernel.h"
 #include "onnx_light_cpu/kernels/com_microsoft/group_query_attention_kernel.h"
 #include "onnx_light_cpu/kernels/com_microsoft/naive_group_query_attention_kernel.h"
@@ -25,6 +26,8 @@ namespace {
 namespace rt_ns = ONNX_LIGHT_NAMESPACE::core::runtime;
 
 using ONNX_LIGHT_NAMESPACE::NodeProto;
+using rt_ns::DataType;
+using rt_ns::Shape;
 using rt_ns::Tensor;
 
 rt_ns::KernelContext MakeCtx() { return rt_ns::KernelContext(rt_ns::OpsetId("com.microsoft", 1)); }
@@ -35,6 +38,40 @@ void AddIntAttribute(NodeProto &node, const char *name, std::int64_t value) {
 
 void AddFloatAttribute(NodeProto &node, const char *name, float value) {
   ONNX_LIGHT_NAMESPACE::AddAttribute(node, name, value);
+}
+
+Tensor MakeFloatingTensor(DataType dtype, const Shape &shape, const std::vector<float> &values,
+                          const char *name = "") {
+  if (dtype == DataType::FLOAT) {
+    return Tensor::FromFloat(name, shape, values);
+  }
+  std::vector<std::uint8_t> bytes(values.size() * sizeof(std::uint16_t));
+  auto *words = reinterpret_cast<std::uint16_t *>(bytes.data());
+  for (std::size_t index = 0; index < values.size(); ++index) {
+    words[index] = dtype == DataType::FLOAT16
+                       ? onnx_light_cpu::detail::FloatToFloat16Bits(values[index])
+                       : onnx_light_cpu::detail::FloatToBFloat16Bits(values[index]);
+  }
+  return Tensor(name, static_cast<std::int32_t>(dtype), shape, std::move(bytes));
+}
+
+float ReadFloatingElement(const Tensor &tensor, std::size_t index) {
+  const auto dtype = static_cast<DataType>(tensor.data_type);
+  if (dtype == DataType::FLOAT) {
+    return tensor.AsFloat()[index];
+  }
+  const auto *words = reinterpret_cast<const std::uint16_t *>(tensor.bytes());
+  return dtype == DataType::FLOAT16 ? onnx_light_cpu::detail::Float16BitsToFloat(words[index])
+                                    : onnx_light_cpu::detail::Bfloat16BitsToFloat(words[index]);
+}
+
+void ExpectFloatingTensorsNear(const Tensor &actual, const Tensor &expected, float tolerance) {
+  ASSERT_EQ(actual.shape, expected.shape);
+  ASSERT_EQ(actual.data_type, expected.data_type);
+  for (std::size_t index = 0; index < actual.element_count(); ++index) {
+    EXPECT_NEAR(ReadFloatingElement(actual, index), ReadFloatingElement(expected, index), tolerance)
+        << index;
+  }
 }
 
 // Builds a GroupQueryAttention node using the exact 12-input/3-output wiring
@@ -288,6 +325,69 @@ TEST(OnnxLightGroupQueryAttentionKernel, PackedQkvMatchesSeparateInputsWithRotar
     for (std::int64_t i = 0; i < pair.first->element_count(); ++i) {
       EXPECT_NEAR(pair.first->AsFloat()[i], pair.second->AsFloat()[i], 1e-5f) << i;
     }
+  }
+}
+
+TEST(OnnxLightGroupQueryAttentionKernel, PackedQkvSupportsFloat16AndBFloat16AcrossKernels) {
+  const std::vector<float> q = {0.2f,  -0.1f, 0.4f, 0.3f,  -0.2f, 0.5f, 0.1f,  -0.4f,
+                                -0.3f, 0.6f,  0.2f, -0.5f, 0.7f,  0.1f, -0.2f, 0.4f};
+  const std::vector<float> k = {0.1f, -0.2f, 0.3f, 0.4f, -0.4f, 0.2f, 0.5f, -0.1f};
+  const std::vector<float> v = {0.5f, 0.2f, -0.3f, 0.1f, -0.2f, 0.4f, 0.6f, -0.5f};
+  std::vector<float> packed;
+  for (std::size_t row = 0; row < 2; ++row) {
+    packed.insert(packed.end(), q.begin() + row * 8, q.begin() + (row + 1) * 8);
+    packed.insert(packed.end(), k.begin() + row * 4, k.begin() + (row + 1) * 4);
+    packed.insert(packed.end(), v.begin() + row * 4, v.begin() + (row + 1) * 4);
+  }
+  const Tensor seqlens_k = Tensor::FromInt32("", {1}, {1});
+  const Tensor total_length = Tensor::FromInt32("", {}, {2});
+
+  for (DataType dtype : {DataType::FLOAT16, DataType::BFLOAT16}) {
+    SCOPED_TRACE(static_cast<std::int32_t>(dtype));
+    const Tensor query = MakeFloatingTensor(dtype, {1, 2, 8}, q);
+    const Tensor key = MakeFloatingTensor(dtype, {1, 2, 4}, k);
+    const Tensor value = MakeFloatingTensor(dtype, {1, 2, 4}, v);
+    const Tensor qkv = MakeFloatingTensor(dtype, {1, 2, 16}, packed, "query");
+    NodeProto node = MakeGqaNode(2, 1, false, false, true);
+    onnx_light_cpu::GroupQueryAttentionKernel optimized(node, MakeCtx());
+    Tensor expected_key, expected_value;
+    const Tensor expected =
+        optimized(node, query, key, value, seqlens_k, total_length, nullptr, nullptr, nullptr,
+                  nullptr, nullptr, nullptr, nullptr, &expected_key, &expected_value);
+
+    node.ref_input()[1] = "";
+    node.ref_input()[2] = "";
+    onnx_light_cpu::NaiveGroupQueryAttentionKernel naive(node, MakeCtx());
+    Tensor optimized_key, optimized_value, naive_key, naive_value;
+    const Tensor optimized_packed =
+        optimized(node, qkv, key, value, seqlens_k, total_length, nullptr, nullptr, nullptr,
+                  nullptr, nullptr, nullptr, nullptr, &optimized_key, &optimized_value);
+    const Tensor naive_packed =
+        naive(node, qkv, key, value, seqlens_k, total_length, nullptr, nullptr, nullptr, nullptr,
+              nullptr, nullptr, nullptr, &naive_key, &naive_value);
+    const float tolerance = dtype == DataType::FLOAT16 ? 2e-3f : 2e-2f;
+    for (const auto &pair :
+         {std::pair<const Tensor *, const Tensor *>{&optimized_packed, &expected},
+          {&optimized_key, &expected_key},
+          {&optimized_value, &expected_value},
+          {&naive_packed, &expected},
+          {&naive_key, &expected_key},
+          {&naive_value, &expected_value}}) {
+      ExpectFloatingTensorsNear(*pair.first, *pair.second, tolerance);
+    }
+
+    const auto check_runtime = [&](auto &kernel) {
+      rt_ns::RuntimeContext rt(MakeCtx());
+      rt.tensors()["query"] = qkv;
+      rt.tensors()["seqlens_k"] = Tensor::FromInt32("seqlens_k", {1}, {1});
+      rt.tensors()["total_sequence_length"] = Tensor::FromInt32("total_sequence_length", {}, {2});
+      kernel.Run(rt);
+      ExpectFloatingTensorsNear(rt.tensors().at("output"), expected, tolerance);
+      ExpectFloatingTensorsNear(rt.tensors().at("present_key"), expected_key, tolerance);
+      ExpectFloatingTensorsNear(rt.tensors().at("present_value"), expected_value, tolerance);
+    };
+    check_runtime(optimized);
+    check_runtime(naive);
   }
 }
 
