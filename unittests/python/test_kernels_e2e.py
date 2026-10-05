@@ -929,7 +929,7 @@ class TestBackendCases(ExtTestCase):
             int(TensorProto.FLOAT16),
             int(TensorProto.BFLOAT16),
         }
-        for mode, expected_count in ((TestMode.TEST, 17), (TestMode.BENCHMARK, 15)):
+        for mode, expected_count in ((TestMode.TEST, 20), (TestMode.BENCHMARK, 15)):
             cases = [
                 tc
                 for tc in collect_test_cases("GroupQueryAttention", mode=mode)
@@ -953,6 +953,14 @@ class TestBackendCases(ExtTestCase):
                     ) in names
             else:
                 names = {tc.name for tc in cases}
+                packed_names = {
+                    "test_cpu_group_query_attention_packed_gqa_causal_float32",
+                    "test_cpu_group_query_attention_packed_mqa_bidirectional_scale_float16",
+                    "test_cpu_group_query_attention_packed_mha_causal_softcap_bfloat16",
+                }
+                assert packed_names <= names
+                packed_cases = [tc for tc in cases if tc.name in packed_names]
+                assert all(len(tc.model.graph.input) == 3 for tc in packed_cases)
                 assert "test_cpu_group_query_attention_cached_rotary_float32" in names
                 cached_case = next(
                     tc
