@@ -196,6 +196,8 @@ TEST(MatMulNBitsKernel, PreparesOnlyImmutableWeightsAndScales) {
                                   std::vector<float>(static_cast<std::size_t>(n * k / 32), 0.25f)));
   rt_ns::PreparedExecutionState state;
   kernel.Prepare(rt, {"B", "scales"}, state);
+  EXPECT_EQ(state.objects().resident_bytes(),
+            onnx_light_cpu::MatMulNBitsAccuracy4Float32Available() ? 768U : 0U);
 
   const rt_ns::Tensor a =
       rt_ns::Tensor::FromFloat("A", {1, k}, std::vector<float>(static_cast<std::size_t>(k), 0.5f));

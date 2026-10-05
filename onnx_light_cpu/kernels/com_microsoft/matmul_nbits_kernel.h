@@ -55,10 +55,11 @@ public:
 
 private:
   struct PreparedInt4Plan;
+  struct PreparedInt4State;
 
   MatMulNBitsAttributes attributes_;
   MatMulNBitsExecutionTuning tuning_ = kDefaultMatMulNBitsExecutionTuning;
-  std::unique_ptr<const PreparedInt4Plan> prepared_int4_;
+  std::unique_ptr<const PreparedInt4State> prepared_int4_;
 };
 
 void RegisterMatMulNBitsKernel();
