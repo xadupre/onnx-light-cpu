@@ -57,15 +57,31 @@ def test_release_wheels_build_and_test_session_registration_before_upload():
     for job in ("build_wheels_linux", "build_wheels_windows", "build_wheels_macos"):
         body = _RELEASE_WORKFLOW.split(f"  {job}:", 1)[1].split("  build_wheels_", 1)[0]
         assert 'CIBW_BUILD_FRONTEND: "pip; args: --no-build-isolation"' in body
-        assert (
-            "CIBW_BEFORE_ALL: python {project}/tools/onnx_light_release.py clone "
-            "{project}/../onnx-light" in body
+        clone_release = (
+            "python {project}/tools/onnx_light_release.py clone {project}/../onnx-light"
         )
+        assert clone_release in body
+        install_release = "python {project}/tools/onnx_light_release.py install"
+        generate_import_libraries = (
+            "python {project}/tools/onnx_light_release.py generate-import-libraries "
+            "{project}/../onnx-light/build"
+        )
+        if job == "build_wheels_windows":
+            assert generate_import_libraries in body
+            assert body.index(install_release) < body.index(generate_import_libraries)
+        else:
+            assert generate_import_libraries not in body
         assert "CIBW_BEFORE_BUILD: >-" in body
-        assert "python -m pip install -C wheel.py-api=cp312" in body
-        assert "CIBW_BEFORE_TEST: python {project}/tools/onnx_light_release.py install" in body
+        assert (
+            "CIBW_BEFORE_BUILD: >-\n"
+            "            python -m pip install scikit-build-core nanobind==3.1.0 &&\n"
+            f"            {install_release}"
+        ) in body
+        assert f"CIBW_BEFORE_TEST: {install_release}" in body
+        assert "python -m pip install -C wheel.py-api=cp312" not in body
         assert "git clone --depth 1 --branch main" not in body
         assert "-DONNX_LIGHT_CPU_RELEASE_WHEEL=ON" in body
+        assert "-DONNX_LIGHT_CPU_PYTHON_STABLE_ABI=ON" in body
         assert (
             "CIBW_TEST_COMMAND: python {project}/unittests/python/wheel_registration_smoke.py"
             in body

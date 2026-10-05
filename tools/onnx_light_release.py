@@ -1,5 +1,6 @@
 import argparse
 import platform
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -46,6 +47,48 @@ def install_wheel():
     subprocess.check_call([sys.executable, "-m", "pip", "install", url])
 
 
+def parse_dumpbin_exports(output):
+    pattern = re.compile(r"^\s+\d+\s+[0-9A-Fa-f]+\s+[0-9A-Fa-f]+\s+(\S+)", re.MULTILINE)
+    return pattern.findall(output)
+
+
+def generate_import_libraries(destination):
+    from onnx_light import get_cpp_build_info
+
+    machine = platform.machine().lower()
+    if platform.system() != "Windows" or machine not in {"amd64", "arm64"}:
+        raise ValueError(
+            f"Unsupported import-library platform: {platform.system()} {platform.machine()}"
+        )
+    library_dir = Path(get_cpp_build_info()["library_dir"])
+    destination.mkdir(parents=True, exist_ok=True)
+    for component in ("core", "proto", "kernels", "backend_test", "op", "shape"):
+        dll = library_dir / f"lib_onnx_{component}.dll"
+        output = subprocess.check_output(
+            ["dumpbin", "/nologo", "/exports", str(dll)],
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        exports = parse_dumpbin_exports(output)
+        if not exports:
+            raise RuntimeError(f"No exports found in {dll}.")
+        definition = destination / f"lib_onnx_{component}.def"
+        definition.write_text(
+            f"LIBRARY {dll.name}\nEXPORTS\n" + "".join(f"  {symbol}\n" for symbol in exports),
+            encoding="utf-8",
+        )
+        subprocess.check_call(
+            [
+                "lib",
+                "/nologo",
+                f"/def:{definition}",
+                f"/out:{destination / f'lib_onnx_{component}.lib'}",
+                f"/machine:{'X64' if machine == 'amd64' else 'ARM64'}",
+            ]
+        )
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Use the onnx-light release compatible with onnx-light-cpu."
@@ -54,12 +97,16 @@ def main():
     clone = subparsers.add_parser("clone")
     clone.add_argument("destination", type=Path)
     subparsers.add_parser("install")
+    import_libraries = subparsers.add_parser("generate-import-libraries")
+    import_libraries.add_argument("destination", type=Path)
     args = parser.parse_args()
 
     if args.command == "clone":
         clone_source(args.destination)
-    else:
+    elif args.command == "install":
         install_wheel()
+    else:
+        generate_import_libraries(args.destination)
 
 
 if __name__ == "__main__":

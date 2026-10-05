@@ -4,7 +4,12 @@ from pathlib import Path
 
 import pytest
 
-from tools.onnx_light_release import ONNX_LIGHT_VERSION, wheel_name, wheel_url
+from tools.onnx_light_release import (
+    ONNX_LIGHT_VERSION,
+    parse_dumpbin_exports,
+    wheel_name,
+    wheel_url,
+)
 
 _ROOT = Path(__file__).resolve().parents[2]
 
@@ -42,3 +47,12 @@ def test_release_wheel_names():
 def test_unsupported_release_platform():
     with pytest.raises(ValueError, match="Linux ppc64le"):
         wheel_name("Linux", "ppc64le", (3, 12))
+
+
+def test_parse_dumpbin_exports():
+    output = """
+      ordinal hint RVA      name
+            1    0 00011000 ?CreateKernel@@YAPEAXXZ
+            2    1 00012000 PlainExport
+    """
+    assert parse_dumpbin_exports(output) == ["?CreateKernel@@YAPEAXXZ", "PlainExport"]
