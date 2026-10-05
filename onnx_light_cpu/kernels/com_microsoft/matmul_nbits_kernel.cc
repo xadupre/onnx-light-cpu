@@ -101,6 +101,13 @@ struct MatMulNBitsKernel::PreparedInt4Plan {
                    const MatMulNBitsExecutionTuning &tuning)
       : k(static_cast<std::size_t>(attributes.k)), n(static_cast<std::size_t>(attributes.n)),
         blocks((k + 31) / 32), data_type(static_cast<RuntimeDataType>(scales.data_type)),
+        source_b(b.bytes(), b.bytes() + CheckedProduct({n, blocks, 16}, "MatMulNBits",
+                                                       "source weight byte size")),
+        source_scales(scales.bytes(),
+                      scales.bytes() + CheckedByteSize(CheckedMultiply(n, blocks, "MatMulNBits",
+                                                                       "source scale count"),
+                                                       rt_ns::ElementSize(scales.data_type),
+                                                       "MatMulNBits", "source scale byte size")),
         vnni_weights(CheckedMultiply(k, n, "MatMulNBits", "prepared weight count") / 2),
         vnni_weight_sums(CheckedMultiply(blocks, n, "MatMulNBits", "prepared weight sum count")),
         vnni_scales(CheckedMultiply(blocks, n, "MatMulNBits", "prepared scale count")),
@@ -143,10 +150,18 @@ struct MatMulNBitsKernel::PreparedInt4Plan {
     }
   }
 
+  bool Matches(const Tensor &b, const Tensor &scales) const {
+    return static_cast<RuntimeDataType>(scales.data_type) == data_type &&
+           std::equal(source_b.begin(), source_b.end(), b.bytes()) &&
+           std::equal(source_scales.begin(), source_scales.end(), scales.bytes());
+  }
+
   std::size_t k;
   std::size_t n;
   std::size_t blocks;
   RuntimeDataType data_type;
+  std::vector<std::uint8_t> source_b;
+  std::vector<std::uint8_t> source_scales;
   std::vector<std::uint8_t> vnni_weights;
   std::vector<std::int32_t> vnni_weight_sums;
   std::vector<float> vnni_scales;
@@ -205,6 +220,7 @@ void MatMulNBitsKernel::Configure(const rt_ns::KernelTuningParameters &parameter
       static_cast<std::size_t>(parameters.Get<std::int64_t>(kTargetBlockOutputs)),
       parameters.Get<std::int64_t>(kMaxParticipants),
   };
+  prepared_int4_.store({}, std::memory_order_release);
 }
 
 bool MatMulNBitsKernel::HasPreparations(
@@ -243,7 +259,8 @@ void MatMulNBitsKernel::Prepare(rt_ns::RuntimeContext &rt,
         "onnx_light_cpu::MatMulNBits: prepared B must be UINT8 and scales must be FLOAT, FLOAT16, "
         "or BFLOAT16.");
   }
-  prepared_int4_ = std::make_unique<PreparedInt4Plan>(b, scales, attributes_, tuning_);
+  prepared_int4_.store(std::make_shared<PreparedInt4Plan>(b, scales, attributes_, tuning_),
+                       std::memory_order_release);
 }
 
 Tensor MatMulNBitsKernel::operator()(const Tensor &a, const Tensor &b, const Tensor &scales,
@@ -294,16 +311,20 @@ Tensor MatMulNBitsKernel::operator()(const Tensor &a, const Tensor &b, const Ten
   Tensor y = rt != nullptr
                  ? rt->MakeOutputTensor(0, a.data_type, output_shape, output_bytes)
                  : rt_ns::MakeOutputTensor(a.data_type, output_shape, output_bytes, nullptr);
-  const PreparedInt4Plan *prepared = prepared_int4_.get();
-  std::unique_ptr<const PreparedInt4Plan> invocation_plan;
+  std::shared_ptr<const PreparedInt4Plan> prepared;
   if (attributes_.bits == 4 && attributes_.accuracy_level == 4 &&
       MatMulNBitsAccuracy4Float32Available() &&
       (data_type == RuntimeDataType::FLOAT || data_type == RuntimeDataType::FLOAT16 ||
        data_type == RuntimeDataType::BFLOAT16) &&
       n % 16 == 0 && k % 32 == 0) {
-    if (prepared == nullptr) {
-      invocation_plan = std::make_unique<PreparedInt4Plan>(b, scales, attributes_, tuning_);
-      prepared = invocation_plan.get();
+    prepared = prepared_int4_.load(std::memory_order_acquire);
+    if (prepared == nullptr || !prepared->Matches(b, scales)) {
+      std::lock_guard<std::mutex> lock(prepared_int4_mutex_);
+      prepared = prepared_int4_.load(std::memory_order_relaxed);
+      if (prepared == nullptr || !prepared->Matches(b, scales)) {
+        prepared = std::make_shared<PreparedInt4Plan>(b, scales, attributes_, tuning_);
+        prepared_int4_.store(prepared, std::memory_order_release);
+      }
     }
   }
   if (prepared != nullptr) {
