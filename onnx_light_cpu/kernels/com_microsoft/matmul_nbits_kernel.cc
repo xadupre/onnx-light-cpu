@@ -16,7 +16,6 @@
 
 #include <algorithm>
 #include <array>
-#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -98,20 +97,17 @@ void RequireShape(const Tensor &tensor, std::initializer_list<std::int64_t> expe
 } // namespace
 
 struct MatMulNBitsKernel::PreparedInt4Plan {
-  PreparedInt4Plan(const Tensor &a, const Tensor &b, const Tensor &scales,
-                   const MatMulNBitsAttributes &attributes,
+  PreparedInt4Plan(const Tensor &b, const Tensor &scales, const MatMulNBitsAttributes &attributes,
                    const MatMulNBitsExecutionTuning &tuning)
-      : rows(TensorElementCount(a, "A") / static_cast<std::size_t>(attributes.k)),
-        k(static_cast<std::size_t>(attributes.k)), n(static_cast<std::size_t>(attributes.n)),
-        blocks((k + 31) / 32), data_type(static_cast<RuntimeDataType>(a.data_type)), source_b(b),
-        source_scales(scales),
+      : k(static_cast<std::size_t>(attributes.k)), n(static_cast<std::size_t>(attributes.n)),
+        blocks((k + 31) / 32), data_type(static_cast<RuntimeDataType>(scales.data_type)),
         vnni_weights(CheckedMultiply(k, n, "MatMulNBits", "prepared weight count") / 2),
         vnni_weight_sums(CheckedMultiply(blocks, n, "MatMulNBits", "prepared weight sum count")),
         vnni_scales(CheckedMultiply(blocks, n, "MatMulNBits", "prepared scale count")),
         max_participants(tuning.max_participants) {
-    const auto *packed_values = source_b.bytes();
-    const auto *scale_float = reinterpret_cast<const float *>(source_scales.bytes());
-    const auto *scale_half = reinterpret_cast<const std::uint16_t *>(source_scales.bytes());
+    const auto *packed_values = b.bytes();
+    const auto *scale_float = reinterpret_cast<const float *>(scales.bytes());
+    const auto *scale_half = reinterpret_cast<const std::uint16_t *>(scales.bytes());
     const std::size_t column_groups = n / 16;
     for (std::size_t group = 0; group < column_groups; ++group) {
       for (std::size_t block = 0; block < blocks; ++block) {
@@ -147,24 +143,10 @@ struct MatMulNBitsKernel::PreparedInt4Plan {
     }
   }
 
-  bool Matches(const Tensor &a, const Tensor &b, const Tensor &scales) const {
-    const std::size_t scale_bytes =
-        n * blocks * (data_type == RuntimeDataType::FLOAT ? sizeof(float) : sizeof(std::uint16_t));
-    return static_cast<RuntimeDataType>(a.data_type) == data_type &&
-           TensorElementCount(a, "A") == rows * k &&
-           ((b.bytes() == source_b.bytes() && scales.bytes() == source_scales.bytes()) ||
-            (std::equal(source_b.bytes(), source_b.bytes() + n * blocks * 16, b.bytes()) &&
-             std::equal(source_scales.bytes(), source_scales.bytes() + scale_bytes,
-                        scales.bytes())));
-  }
-
-  std::size_t rows;
   std::size_t k;
   std::size_t n;
   std::size_t blocks;
   RuntimeDataType data_type;
-  Tensor source_b;
-  Tensor source_scales;
   std::vector<std::uint8_t> vnni_weights;
   std::vector<std::int32_t> vnni_weight_sums;
   std::vector<float> vnni_scales;
@@ -223,7 +205,45 @@ void MatMulNBitsKernel::Configure(const rt_ns::KernelTuningParameters &parameter
       static_cast<std::size_t>(parameters.Get<std::int64_t>(kTargetBlockOutputs)),
       parameters.Get<std::int64_t>(kMaxParticipants),
   };
-  prepared_int4_.store({}, std::memory_order_release);
+}
+
+bool MatMulNBitsKernel::HasPreparations(
+    const std::unordered_set<std::string> &immutable_inputs) const {
+  return attributes_.bits == 4 && attributes_.accuracy_level == 4 &&
+         MatMulNBitsAccuracy4Float32Available() && attributes_.n % 16 == 0 &&
+         attributes_.k % 32 == 0 && node_ != nullptr && node_->input_size() >= 3 &&
+         immutable_inputs.contains(node_->input(1)) && immutable_inputs.contains(node_->input(2));
+}
+
+void MatMulNBitsKernel::Prepare(rt_ns::RuntimeContext &rt,
+                                const std::unordered_set<std::string> &immutable_inputs,
+                                rt_ns::PreparedExecutionState &) {
+  if (!HasPreparations(immutable_inputs)) {
+    return;
+  }
+  const Tensor &b = rt.Get(node_->input(1));
+  const Tensor &scales = rt.Get(node_->input(2));
+  const std::size_t k = CheckedDimension(attributes_.k, "MatMulNBits", "K");
+  const std::size_t n = CheckedDimension(attributes_.n, "MatMulNBits", "N");
+  const std::size_t blocks = k / 32;
+  RequireShape(b, {attributes_.n, static_cast<std::int64_t>(blocks), 16}, "B");
+  const std::size_t expected_scales =
+      CheckedMultiply(n, blocks, "MatMulNBits", "scale element count");
+  if (!((scales.shape.size() == 1 && TensorElementCount(scales, "scales") == expected_scales) ||
+        (scales.shape.size() == 2 && scales.shape[0] == attributes_.n &&
+         scales.shape[1] == static_cast<std::int64_t>(blocks)))) {
+    throw std::invalid_argument(
+        "onnx_light_cpu::MatMulNBits: scales must have shape [N, ceil(K/block_size)] or be flat.");
+  }
+  if (b.data_type != static_cast<std::int32_t>(RuntimeDataType::UINT8) ||
+      (scales.data_type != static_cast<std::int32_t>(RuntimeDataType::FLOAT) &&
+       scales.data_type != static_cast<std::int32_t>(RuntimeDataType::FLOAT16) &&
+       scales.data_type != static_cast<std::int32_t>(RuntimeDataType::BFLOAT16))) {
+    throw std::invalid_argument(
+        "onnx_light_cpu::MatMulNBits: prepared B must be UINT8 and scales must be FLOAT, FLOAT16, "
+        "or BFLOAT16.");
+  }
+  prepared_int4_ = std::make_unique<PreparedInt4Plan>(b, scales, attributes_, tuning_);
 }
 
 Tensor MatMulNBitsKernel::operator()(const Tensor &a, const Tensor &b, const Tensor &scales,
@@ -274,20 +294,16 @@ Tensor MatMulNBitsKernel::operator()(const Tensor &a, const Tensor &b, const Ten
   Tensor y = rt != nullptr
                  ? rt->MakeOutputTensor(0, a.data_type, output_shape, output_bytes)
                  : rt_ns::MakeOutputTensor(a.data_type, output_shape, output_bytes, nullptr);
-  std::shared_ptr<const PreparedInt4Plan> prepared;
+  const PreparedInt4Plan *prepared = prepared_int4_.get();
+  std::unique_ptr<const PreparedInt4Plan> invocation_plan;
   if (attributes_.bits == 4 && attributes_.accuracy_level == 4 &&
       MatMulNBitsAccuracy4Float32Available() &&
       (data_type == RuntimeDataType::FLOAT || data_type == RuntimeDataType::FLOAT16 ||
        data_type == RuntimeDataType::BFLOAT16) &&
       n % 16 == 0 && k % 32 == 0) {
-    prepared = prepared_int4_.load(std::memory_order_acquire);
-    if (prepared == nullptr || !prepared->Matches(a, b, scales)) {
-      std::lock_guard<std::mutex> lock(prepared_int4_mutex_);
-      prepared = prepared_int4_.load(std::memory_order_relaxed);
-      if (prepared == nullptr || !prepared->Matches(a, b, scales)) {
-        prepared = std::make_shared<PreparedInt4Plan>(a, b, scales, attributes_, tuning_);
-        prepared_int4_.store(prepared, std::memory_order_release);
-      }
+    if (prepared == nullptr) {
+      invocation_plan = std::make_unique<PreparedInt4Plan>(b, scales, attributes_, tuning_);
+      prepared = invocation_plan.get();
     }
   }
   if (prepared != nullptr) {

@@ -7,6 +7,7 @@
 #include "onnx_light_cpu/impl/math/half_conversion.h"
 #include "onnx_light_cpu/kernels/com_microsoft/matmul_nbits_kernel.h"
 
+#include "onnx_core/compute/prepared_execution.h"
 #include "onnx_core/runtime/kernels/cast_helper.h"
 #include "onnx_core/runtime/kernels/kernel_context.h"
 #include "onnx_core/runtime/memory/simple_tensor.h"
@@ -19,6 +20,7 @@
 #include <cmath>
 #include <cstdint>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace {
@@ -110,7 +112,7 @@ TEST(MatMulNBitsKernel, PreservesLeadingDimensionsAndFlatScales) {
   }
 }
 
-TEST(MatMulNBitsKernel, Accuracy4PreparedMatchesBlockQuantizationAndRefreshesWeights) {
+TEST(MatMulNBitsKernel, Accuracy4DynamicPlanMatchesBlockQuantizationAndRefreshesWeights) {
   if (!onnx_light_cpu::MatMulNBitsAccuracy4Float32Available()) {
     GTEST_SKIP() << "The optimized accuracy-level-4 kernel is unavailable.";
   }
@@ -173,7 +175,36 @@ TEST(MatMulNBitsKernel, Accuracy4PreparedMatchesBlockQuantizationAndRefreshesWei
   check(packed);
 }
 
-TEST(MatMulNBitsKernel, Accuracy4PreparedSupportsHalfPrecisionInputsAndOutputs) {
+TEST(MatMulNBitsKernel, PreparesOnlyImmutableWeightsAndScales) {
+  constexpr std::int64_t k = 64;
+  constexpr std::int64_t n = 16;
+  const ONNX_LIGHT_NAMESPACE::NodeProto node = MakeNode(k, n);
+  onnx_light_cpu::MatMulNBitsKernel kernel{
+      node, rt_ns::KernelContext{rt_ns::OpsetId("com.microsoft", 1)}};
+
+  EXPECT_TRUE(kernel.HasPreparations({"B", "scales"}));
+  EXPECT_FALSE(kernel.HasPreparations({"B"}));
+  EXPECT_FALSE(kernel.HasPreparations({"scales"}));
+
+  rt_ns::RuntimeContext rt{rt_ns::KernelContext{rt_ns::OpsetId("com.microsoft", 1)}};
+  rt.Put("B", rt_ns::Tensor::FromUint8(
+                  "B", {n, k / 32, 16},
+                  std::vector<std::uint8_t>(static_cast<std::size_t>(n * k / 2), 0x99)));
+  rt.Put("scales",
+         rt_ns::Tensor::FromFloat("scales", {n, k / 32},
+                                  std::vector<float>(static_cast<std::size_t>(n * k / 32), 0.25f)));
+  rt_ns::PreparedExecutionState state;
+  kernel.Prepare(rt, {"B", "scales"}, state);
+
+  const rt_ns::Tensor a =
+      rt_ns::Tensor::FromFloat("A", {1, k}, std::vector<float>(static_cast<std::size_t>(k), 0.5f));
+  const rt_ns::Tensor output = kernel(a, rt.Get("B"), rt.Get("scales"));
+  for (std::size_t index = 0; index < output.element_count(); ++index) {
+    EXPECT_FLOAT_EQ(output.AsFloat()[index], 8.0f);
+  }
+}
+
+TEST(MatMulNBitsKernel, Accuracy4DynamicPlanSupportsHalfPrecisionInputsAndOutputs) {
   if (!onnx_light_cpu::MatMulNBitsAccuracy4Float32Available()) {
     GTEST_SKIP() << "The optimized accuracy-level-4 kernel is unavailable.";
   }
