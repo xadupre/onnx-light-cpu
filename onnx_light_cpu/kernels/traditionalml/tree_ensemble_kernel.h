@@ -21,10 +21,21 @@ public:
                      ONNX_LIGHT_NAMESPACE::core::runtime::RuntimeContext &rt);
 
   static constexpr const char *kName = "onnx_light_cpu::TreeEnsemble";
+  static constexpr std::uint32_t kTuningAbi = 1;
+
+  static void RegisterTuningSchemas();
+  ONNX_LIGHT_NAMESPACE::core::runtime::KernelTuningKey
+  TuningKey(std::int32_t element_type) const override;
+  void
+  Configure(const ONNX_LIGHT_NAMESPACE::core::runtime::KernelTuningParameters &parameters) override;
 
   void Run(ONNX_LIGHT_NAMESPACE::core::runtime::RuntimeContext &rt) override;
 
 private:
+  void BuildPlan();
+
+  TreeEnsembleAttributes attributes_;
+  TreeEnsembleExecutionTuning tuning_;
   std::unique_ptr<TreeEnsemblePlan> plan_;
   std::int32_t input_data_type_ = 0;
   std::int64_t feature_count_ = 0;
