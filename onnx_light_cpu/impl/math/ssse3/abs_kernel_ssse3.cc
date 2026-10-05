@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "onnx_light_cpu/impl/math/abs_kernel_ssse3.h"
+#include "onnx_light_cpu/impl/math/ssse3/abs_kernel_ssse3.h"
 
 #include <tmmintrin.h>
 
