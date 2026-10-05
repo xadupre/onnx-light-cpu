@@ -81,7 +81,7 @@ def test_release_wheels_build_and_test_session_registration_before_upload():
         assert "python -m pip install -C wheel.py-api=cp312" not in body
         assert "git clone --depth 1 --branch main" not in body
         assert "-DONNX_LIGHT_CPU_RELEASE_WHEEL=ON" in body
-        assert "-DONNX_LIGHT_CPU_PYTHON_STABLE_ABI=ON" in body
+        assert "-DONNX_LIGHT_CPU_PYTHON_STABLE_ABI=OFF" in body
         assert (
             "CIBW_TEST_COMMAND: python {project}/unittests/python/wheel_registration_smoke.py"
             in body
