@@ -9,6 +9,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - Added an SSSE3 fallback for INT8 and INT16 `Abs` on x86 processors without
   AVX2 ([#853](https://github.com/xadupre/onnx-light-cpu/pull/853)).
+- Added packed `[Q | K | V]` inputs to optimized and scalar-reference
+  `com.microsoft::GroupQueryAttention` kernels for FLOAT, FLOAT16, and BFLOAT16,
+  including rotary embeddings and KV caches
+  ([#862](https://github.com/xadupre/onnx-light-cpu/pull/862)).
+- Prepared and compacted immutable `TreeEnsemble` plans during kernel
+  construction, and replaced the private tuning registry with shared runtime
+  tuning for FLOAT, DOUBLE, and FLOAT16
+  ([#866](https://github.com/xadupre/onnx-light-cpu/pull/866)).
+- Moved immutable `MatMulNBits` INT4 preparation into runtime-owned storage so
+  packed buffers participate in session residency accounting and eviction;
+  dynamic inputs retain invocation-local plans without kernel synchronization
+  ([#865](https://github.com/xadupre/onnx-light-cpu/pull/865)).
 
 ### Fixes
 
@@ -18,6 +30,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Fixed Windows wheel builds by locating MSVC tools through `vswhere`, and
   macOS wheel repair by excluding separately installed onnx-light libraries
   ([#860](https://github.com/xadupre/onnx-light-cpu/pull/860)).
+- Fixed the Windows imported core library configuration and macOS runtime
+  library lookup during wheel repair
+  ([#865](https://github.com/xadupre/onnx-light-cpu/pull/865)).
+- Validated packed `GroupQueryAttention` widths and included unpacking, rotary,
+  KV concatenation, and scalar score buffers in scratch-memory estimates
+  ([#862](https://github.com/xadupre/onnx-light-cpu/pull/862)).
+- Restored shared tuning and preparation hooks for session-local native kernel
+  registration through the runtime lifecycle
+  ([#866](https://github.com/xadupre/onnx-light-cpu/pull/866)).
 
 ## [0.1.19] – 2026-10-05
 
