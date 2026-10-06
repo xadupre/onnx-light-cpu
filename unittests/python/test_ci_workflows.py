@@ -14,6 +14,7 @@ _RELEASE_WORKFLOW = (_ROOT / ".github" / "workflows" / "build_release_wheel.yml"
     encoding="utf-8"
 )
 _CODECOV_CONFIG = (_ROOT / ".codecov.yml").read_text(encoding="utf-8")
+_DEPENDABOT_CONFIG = (_ROOT / ".github" / "dependabot.yml").read_text(encoding="utf-8")
 
 
 def test_documentation_build_is_linux_only():
@@ -129,6 +130,17 @@ def test_onnx_light_main_integration_runs_on_every_supported_os():
 
 def test_cpp_coverage_is_carried_forward_between_weekly_runs():
     assert "cpp:\n    carryforward: true" in _CODECOV_CONFIG
+
+
+def test_dependabot_updates_actions_and_python_dependencies():
+    assert _DEPENDABOT_CONFIG.startswith("version: 2\nupdates:\n")
+    for ecosystem in ("github-actions", "pip"):
+        assert (
+            f'  - package-ecosystem: "{ecosystem}"\n'
+            '    directory: "/"\n'
+            "    schedule:\n"
+            '      interval: "weekly"\n'
+        ) in _DEPENDABOT_CONFIG
 
 
 def test_native_kernel_tests_run_in_source_integration_not_standalone():
