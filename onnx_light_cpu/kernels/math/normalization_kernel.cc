@@ -14,6 +14,7 @@
 #include "onnx_light_cpu/impl/math/normalization_kernel.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -45,6 +46,7 @@ constexpr std::string_view kInstanceOp = "onnx_light_cpu::InstanceNormalization"
 constexpr std::string_view kLayerOp = "onnx_light_cpu::LayerNormalization";
 constexpr std::string_view kLpOp = "onnx_light_cpu::LpNormalization";
 constexpr std::string_view kMvnOp = "onnx_light_cpu::MeanVarianceNormalization";
+constexpr std::size_t kBatchChannelTile = 16;
 
 void RequireNonNegativeEpsilon(float epsilon, std::string_view op) {
   if (!std::isfinite(epsilon) || epsilon < 0.0F) {
@@ -208,11 +210,167 @@ ComputeBatchMoments(const norm::StorageType<Type> *input, std::size_t batch, std
   return {mean, variance};
 }
 
+// Isolate layout-specific hot loops from changes to the caller's inlining budget.
+#if defined(_MSC_VER)
+#define ONNX_LIGHT_CPU_NOINLINE __declspec(noinline)
+#else
+#define ONNX_LIGHT_CPU_NOINLINE __attribute__((noinline))
+#endif
+
+template <typename Acc>
+void BatchInferenceContiguousChannels(const Acc *input, Acc *output, const Acc *multipliers,
+                                      const Acc *offsets, std::size_t batch, std::size_t channels) {
+  constexpr std::size_t row_tile_size = 256;
+  const std::size_t row_tiles = channels / row_tile_size + (channels % row_tile_size != 0);
+  ExecuteItems(batch * row_tiles, static_cast<double>(std::min(channels, row_tile_size)) * 3.0,
+               [&](std::size_t begin, std::size_t end) {
+                 for (std::size_t tile = begin; tile < end; ++tile) {
+                   const std::size_t first = (tile % row_tiles) * row_tile_size;
+                   const std::size_t width = std::min(row_tile_size, channels - first);
+                   const std::size_t base = (tile / row_tiles) * channels + first;
+                   const auto *row = input + base;
+                   auto *result = output + base;
+                   for (std::size_t c = 0; c < width; ++c) {
+                     result[c] = row[c] * multipliers[first + c] + offsets[first + c];
+                   }
+                 }
+               });
+}
+
+template <typename Acc, typename StoreStatistics>
+void BatchTrainingContiguousChannels(const Acc *input, Acc *output,
+                                     const norm::TensorReader &scale_reader,
+                                     const norm::TensorReader &bias_reader, std::size_t batch,
+                                     std::size_t channels, float epsilon,
+                                     const StoreStatistics &store_statistics) {
+  constexpr std::size_t tile_size = kBatchChannelTile;
+  const std::size_t tiles = channels / tile_size + (channels % tile_size != 0);
+  ExecuteItems(
+      tiles, static_cast<double>(batch) * tile_size * 6.0, [&](std::size_t begin, std::size_t end) {
+        for (std::size_t tile = begin; tile < end; ++tile) {
+          const std::size_t first = tile * tile_size;
+          const std::size_t width = std::min(tile_size, channels - first);
+          std::array<std::array<Acc, tile_size>, 4> sums{}, square_sums{};
+          std::array<Acc, tile_size> means{}, multipliers{}, offsets{};
+          // Keep the existing four accumulation streams, vectorized across channels.
+          for (std::size_t n = 0; n < batch; ++n) {
+            const auto *row = input + n * channels + first;
+            auto &sum = sums[n & 3];
+            for (std::size_t c = 0; c < width; ++c) {
+              sum[c] += row[c];
+            }
+          }
+          for (std::size_t c = 0; c < width; ++c) {
+            means[c] =
+                (sums[0][c] + sums[1][c] + sums[2][c] + sums[3][c]) / static_cast<Acc>(batch);
+          }
+          for (std::size_t n = 0; n < batch; ++n) {
+            const auto *row = input + n * channels + first;
+            auto &sum = square_sums[n & 3];
+            for (std::size_t c = 0; c < width; ++c) {
+              const Acc delta = row[c] - means[c];
+              sum[c] += delta * delta;
+            }
+          }
+          for (std::size_t c = 0; c < width; ++c) {
+            const Acc variance =
+                (square_sums[0][c] + square_sums[1][c] + square_sums[2][c] + square_sums[3][c]) /
+                static_cast<Acc>(batch);
+            const std::size_t channel = first + c;
+            store_statistics(channel, {means[c], variance});
+            multipliers[c] = ReadParameter<Acc>(scale_reader, channel) /
+                             std::sqrt(variance + static_cast<Acc>(epsilon));
+            offsets[c] = ReadParameter<Acc>(bias_reader, channel) - means[c] * multipliers[c];
+          }
+          for (std::size_t n = 0; n < batch; ++n) {
+            const auto *row = input + n * channels + first;
+            auto *result = output + n * channels + first;
+            for (std::size_t c = 0; c < width; ++c) {
+              result[c] = row[c] * multipliers[c] + offsets[c];
+            }
+          }
+        }
+      });
+}
+
+template <typename Acc>
+void ComputeBatchScaleBias(const norm::TensorReader &scale_reader,
+                           const norm::TensorReader &bias_reader,
+                           const norm::TensorReader &mean_reader,
+                           const norm::TensorReader &variance_reader, float epsilon,
+                           std::vector<Acc> &multipliers, std::vector<Acc> &offsets) {
+  for (std::size_t channel = 0; channel < multipliers.size(); ++channel) {
+    const Acc variance_value = ReadParameter<Acc>(variance_reader, channel);
+    if (!std::isfinite(variance_value) || variance_value < Acc{}) {
+      throw std::invalid_argument(std::string(kBatchOp) +
+                                  ": input_var must be finite and non-negative.");
+    }
+    multipliers[channel] = ReadParameter<Acc>(scale_reader, channel) /
+                           std::sqrt(variance_value + static_cast<Acc>(epsilon));
+    offsets[channel] = ReadParameter<Acc>(bias_reader, channel) -
+                       ReadParameter<Acc>(mean_reader, channel) * multipliers[channel];
+  }
+}
+
 template <DataType Type>
-void BatchInference(const Tensor &x, Tensor &y,
-                    const std::vector<norm::AccumulatorType<Type>> &multipliers,
-                    const std::vector<norm::AccumulatorType<Type>> &offsets, std::size_t batch,
-                    std::size_t channels, std::size_t spatial) {
+ONNX_LIGHT_CPU_NOINLINE void BatchContiguousChannels(
+    const Tensor &x, BatchNormalizationResult &result, const norm::TensorReader &scale_reader,
+    const norm::TensorReader &bias_reader, const norm::TensorReader &mean_reader,
+    const norm::TensorReader &variance_reader, std::size_t batch, std::size_t channels,
+    bool training, float epsilon, float momentum) {
+  using Acc = norm::AccumulatorType<Type>;
+  const auto *input = norm::Data<Type>(x);
+  auto *output = norm::MutableData<Type>(result.y);
+  if (!training) {
+    std::vector<Acc> multipliers(channels), offsets(channels);
+    ComputeBatchScaleBias(scale_reader, bias_reader, mean_reader, variance_reader, epsilon,
+                          multipliers, offsets);
+    BatchInferenceContiguousChannels(input, output, multipliers.data(), offsets.data(), batch,
+                                     channels);
+    return;
+  }
+  const std::optional<norm::TensorWriter> mean_writer =
+      result.running_mean ? std::optional<norm::TensorWriter>(std::in_place, *result.running_mean)
+                          : std::nullopt;
+  const std::optional<norm::TensorWriter> variance_writer =
+      result.running_variance
+          ? std::optional<norm::TensorWriter>(std::in_place, *result.running_variance)
+          : std::nullopt;
+  const bool stats_are_double = mean_reader.type() == DataType::DOUBLE;
+  const auto store_statistics = [&](std::size_t channel, norm::Moments<Acc> moments) {
+    if (mean_writer) {
+      if (stats_are_double) {
+        mean_writer->StoreDouble(
+            channel, mean_reader.LoadDouble(channel) * static_cast<double>(momentum) +
+                         static_cast<double>(moments.mean) * static_cast<double>(1.0F - momentum));
+      } else {
+        mean_writer->StoreFloat(channel, mean_reader.LoadFloat(channel) * momentum +
+                                             static_cast<float>(moments.mean) * (1.0F - momentum));
+      }
+    }
+    if (variance_writer) {
+      if (stats_are_double) {
+        variance_writer->StoreDouble(
+            channel,
+            variance_reader.LoadDouble(channel) * static_cast<double>(momentum) +
+                static_cast<double>(moments.variance) * static_cast<double>(1.0F - momentum));
+      } else {
+        variance_writer->StoreFloat(channel,
+                                    variance_reader.LoadFloat(channel) * momentum +
+                                        static_cast<float>(moments.variance) * (1.0F - momentum));
+      }
+    }
+  };
+  BatchTrainingContiguousChannels(input, output, scale_reader, bias_reader, batch, channels,
+                                  epsilon, store_statistics);
+}
+
+template <DataType Type>
+ONNX_LIGHT_CPU_NOINLINE void
+BatchInference(const Tensor &x, Tensor &y,
+               const std::vector<norm::AccumulatorType<Type>> &multipliers,
+               const std::vector<norm::AccumulatorType<Type>> &offsets, std::size_t batch,
+               std::size_t channels, std::size_t spatial) {
   const auto *input = norm::Data<Type>(x);
   auto *output = norm::MutableData<Type>(y);
   const std::size_t slices = batch * channels;
@@ -234,11 +392,12 @@ void BatchInference(const Tensor &x, Tensor &y,
 }
 
 template <DataType Type>
-void BatchTraining(const Tensor &x, Tensor &y, const norm::TensorReader &scale_reader,
-                   const norm::TensorReader &bias_reader, const norm::TensorReader &mean_reader,
-                   const norm::TensorReader &variance_reader, Tensor *running_mean,
-                   Tensor *running_variance, std::size_t batch, std::size_t channels,
-                   std::size_t spatial, float epsilon, float momentum) {
+ONNX_LIGHT_CPU_NOINLINE void
+BatchTraining(const Tensor &x, Tensor &y, const norm::TensorReader &scale_reader,
+              const norm::TensorReader &bias_reader, const norm::TensorReader &mean_reader,
+              const norm::TensorReader &variance_reader, Tensor *running_mean,
+              Tensor *running_variance, std::size_t batch, std::size_t channels,
+              std::size_t spatial, float epsilon, float momentum) {
   using Acc = norm::AccumulatorType<Type>;
   const auto *input = norm::Data<Type>(x);
   auto *output = norm::MutableData<Type>(y);
@@ -290,6 +449,8 @@ void BatchTraining(const Tensor &x, Tensor &y, const norm::TensorReader &scale_r
         }
       });
 }
+
+#undef ONNX_LIGHT_CPU_NOINLINE
 
 template <DataType Type>
 void InstanceNormalize(const Tensor &x, const Tensor &scale, const Tensor &bias, Tensor &y,
@@ -780,6 +941,21 @@ BatchNormalizationKernel::Compute(const Tensor &x, const Tensor &scale, const Te
                                 ": training reduction dimensions must contain elements.");
   }
 
+  if (spatial == 1 && channels >= kBatchChannelTile) {
+    if (x.data_type == static_cast<std::int32_t>(DataType::FLOAT)) {
+      BatchContiguousChannels<DataType::FLOAT>(x, result, scale_reader, bias_reader, mean_reader,
+                                               variance_reader, batch, channels, training_mode,
+                                               epsilon, momentum);
+      return result;
+    }
+    if (x.data_type == static_cast<std::int32_t>(DataType::DOUBLE)) {
+      BatchContiguousChannels<DataType::DOUBLE>(x, result, scale_reader, bias_reader, mean_reader,
+                                                variance_reader, batch, channels, training_mode,
+                                                epsilon, momentum);
+      return result;
+    }
+  }
+
   norm::DispatchFloatType(x.data_type, [&]<DataType Type>() {
     using Acc = norm::AccumulatorType<Type>;
     if (training_mode) {
@@ -791,17 +967,8 @@ BatchNormalizationKernel::Compute(const Tensor &x, const Tensor &scale, const Te
     }
     std::vector<Acc> multipliers(channels);
     std::vector<Acc> offsets(channels);
-    for (std::size_t channel = 0; channel < channels; ++channel) {
-      const Acc variance_value = ReadParameter<Acc>(variance_reader, channel);
-      if (!std::isfinite(variance_value) || variance_value < Acc{}) {
-        throw std::invalid_argument(std::string(kBatchOp) +
-                                    ": input_var must be finite and non-negative.");
-      }
-      multipliers[channel] = ReadParameter<Acc>(scale_reader, channel) /
-                             std::sqrt(variance_value + static_cast<Acc>(epsilon));
-      offsets[channel] = ReadParameter<Acc>(bias_reader, channel) -
-                         ReadParameter<Acc>(mean_reader, channel) * multipliers[channel];
-    }
+    ComputeBatchScaleBias(scale_reader, bias_reader, mean_reader, variance_reader, epsilon,
+                          multipliers, offsets);
     BatchInference<Type>(x, result.y, multipliers, offsets, batch, channels, spatial);
   });
   return result;

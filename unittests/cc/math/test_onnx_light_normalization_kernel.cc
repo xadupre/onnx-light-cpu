@@ -18,6 +18,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <string>
 #include <vector>
@@ -138,6 +139,234 @@ TEST(OnnxLightNormalizationKernel, BatchNormalizationFloat16AlignedAndTailSlices
           (static_cast<float>(Value(x, i)) - means[channel]) * multiplier + biases[channel];
       EXPECT_NEAR(Value(y, i), expected, 5.0e-3) << i;
     }
+  }
+}
+
+template <typename Acc> void CheckBatchContiguousChannels(rt_ns::DataType type) {
+  const onnx_light_cpu::BatchNormalizationKernel kernel(MakeContext(15));
+  for (const std::int64_t channels : {1, 3, 15, 16, 17, 31, 32, 33, 63, 64, 65, 255, 256, 257}) {
+    for (const std::int64_t batch : {1, 5, 17}) {
+      for (const int rank : {1, 2, 3, 4}) {
+        if (rank == 1 && channels != 1) {
+          continue;
+        }
+        rt_ns::Shape shape{batch};
+        if (rank > 1) {
+          shape.push_back(channels);
+        }
+        for (int axis = 2; axis < rank; ++axis) {
+          shape.push_back(1);
+        }
+        SCOPED_TRACE(::testing::Message()
+                     << "batch=" << batch << " channels=" << channels << " rank=" << rank);
+        std::vector<float> values(static_cast<std::size_t>(batch * channels));
+        std::vector<float> scales(channels), biases(channels), means(channels), variances(channels);
+        for (std::int64_t c = 0; c < channels; ++c) {
+          scales[c] = static_cast<float>(c % 5 - 2) * 0.3F;
+          biases[c] = static_cast<float>(c % 3 - 1) * 0.2F;
+          means[c] = static_cast<float>(c % 7) * 0.14F;
+          variances[c] = 0.55F + static_cast<float>(c % 3) * 0.2F;
+          for (std::int64_t n = 0; n < batch; ++n) {
+            values[n * channels + c] =
+                100000.125F + static_cast<float>(c) +
+                (c % 3 == 0 ? 0.0F : static_cast<float>((n * 7 + c) % 19 - 9) * 0.125F);
+          }
+        }
+        const auto x = MakeTensor(type, shape, values);
+        const std::array parameter_types{rt_ns::DataType::FLOAT, rt_ns::DataType::DOUBLE,
+                                         rt_ns::DataType::FLOAT16, rt_ns::DataType::BFLOAT16};
+        for (const auto affine_type : parameter_types) {
+          const auto scale = MakeTensor(affine_type, {channels}, scales);
+          const auto bias = MakeTensor(affine_type, {channels}, biases);
+          for (const auto statistics_type : parameter_types) {
+            SCOPED_TRACE(::testing::Message()
+                         << "affine_type=" << static_cast<int>(affine_type)
+                         << " statistics_type=" << static_cast<int>(statistics_type));
+            const auto mean = MakeTensor(statistics_type, {channels}, means);
+            const auto variance = MakeTensor(statistics_type, {channels}, variances);
+            for (const bool training : {false, true}) {
+              SCOPED_TRACE(training);
+              const auto result =
+                  kernel.Compute(x, scale, bias, mean, variance, training, 0.25F, 0.75F);
+              EXPECT_EQ(result.y.shape, shape);
+              EXPECT_EQ(result.y.data_type, static_cast<std::int32_t>(type));
+              if (training) {
+                ASSERT_TRUE(result.running_mean.has_value());
+                ASSERT_TRUE(result.running_variance.has_value());
+                EXPECT_EQ(result.running_mean->data_type,
+                          static_cast<std::int32_t>(statistics_type));
+                EXPECT_EQ(result.running_variance->data_type,
+                          static_cast<std::int32_t>(statistics_type));
+              }
+              for (std::int64_t c = 0; c < channels; ++c) {
+                Acc estimated_mean = RoundFloat(statistics_type, means[c]);
+                Acc estimated_variance = RoundFloat(statistics_type, variances[c]);
+                if (training) {
+                  std::array<Acc, 4> sums{}, squares{};
+                  for (std::int64_t n = 0; n < batch; ++n) {
+                    sums[n & 3] += static_cast<Acc>(values[n * channels + c]);
+                  }
+                  estimated_mean =
+                      (sums[0] + sums[1] + sums[2] + sums[3]) / static_cast<Acc>(batch);
+                  for (std::int64_t n = 0; n < batch; ++n) {
+                    const Acc delta = static_cast<Acc>(values[n * channels + c]) - estimated_mean;
+                    squares[n & 3] += delta * delta;
+                  }
+                  estimated_variance =
+                      (squares[0] + squares[1] + squares[2] + squares[3]) / static_cast<Acc>(batch);
+                  const auto running_stat = [&](float previous, Acc estimated) {
+                    previous = RoundFloat(statistics_type, previous);
+                    if (statistics_type == rt_ns::DataType::DOUBLE) {
+                      return static_cast<double>(previous) * 0.75 +
+                             static_cast<double>(estimated) * 0.25;
+                    }
+                    return static_cast<double>(RoundFloat(
+                        statistics_type, previous * 0.75F + static_cast<float>(estimated) * 0.25F));
+                  };
+                  EXPECT_EQ(Value(*result.running_mean, c), running_stat(means[c], estimated_mean));
+                  EXPECT_EQ(Value(*result.running_variance, c),
+                            running_stat(variances[c], estimated_variance));
+                }
+                const Acc multiplier = static_cast<Acc>(RoundFloat(affine_type, scales[c])) /
+                                       std::sqrt(estimated_variance + static_cast<Acc>(0.25));
+                const Acc offset = static_cast<Acc>(RoundFloat(affine_type, biases[c])) -
+                                   estimated_mean * multiplier;
+                for (std::int64_t n = 0; n < batch; ++n) {
+                  const Acc expected =
+                      static_cast<Acc>(values[n * channels + c]) * multiplier + offset;
+                  EXPECT_EQ(Value(result.y, n * channels + c), static_cast<double>(expected));
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+TEST(OnnxLightNormalizationKernel, BatchContiguousChannelsFloatMatchFourStreamReference) {
+  CheckBatchContiguousChannels<float>(rt_ns::DataType::FLOAT);
+}
+
+TEST(OnnxLightNormalizationKernel, BatchContiguousChannelsDoubleMatchFourStreamReference) {
+  CheckBatchContiguousChannels<double>(rt_ns::DataType::DOUBLE);
+}
+
+TEST(OnnxLightNormalizationKernel, BatchContiguousChannelsSpecialValuesRemainChannelLocal) {
+  const onnx_light_cpu::BatchNormalizationKernel kernel(MakeContext(15));
+  for (const auto type : {rt_ns::DataType::FLOAT, rt_ns::DataType::DOUBLE, rt_ns::DataType::FLOAT16,
+                          rt_ns::DataType::BFLOAT16}) {
+    std::vector<float> values(5 * 65, 8.0F);
+    values[0] = std::numeric_limits<float>::quiet_NaN();
+    values[16] = std::numeric_limits<float>::infinity();
+    values[64] = -std::numeric_limits<float>::infinity();
+    const auto x = MakeTensor(type, {5, 65}, values);
+    const auto scale = MakeTensor(type, {65}, std::vector<float>(65, 1.0F));
+    const auto bias = MakeTensor(type, {65}, std::vector<float>(65, 0.0F));
+    const auto mean = MakeTensor(type, {65}, std::vector<float>(65, 8.0F));
+    const auto variance = MakeTensor(type, {65}, std::vector<float>(65, 1.0F));
+    for (bool training : {false, true}) {
+      const auto result = kernel.Compute(x, scale, bias, mean, variance, training, 0.25F);
+      for (std::size_t i = 0; i < values.size(); ++i) {
+        const std::size_t channel = i % 65;
+        if ((training && (channel == 0 || channel == 16 || channel == 64)) || i == 0) {
+          EXPECT_TRUE(std::isnan(Value(result.y, i)));
+        } else if (i == 16 || i == 64) {
+          EXPECT_EQ(Value(result.y, i), static_cast<double>(values[i]));
+        } else {
+          EXPECT_EQ(Value(result.y, i), 0.0);
+        }
+      }
+    }
+  }
+}
+
+TEST(OnnxLightNormalizationKernel, BatchContiguousChannelsEmptyAndOptionalStatistics) {
+  const onnx_light_cpu::BatchNormalizationKernel kernel(MakeContext(15));
+  for (const auto type : {rt_ns::DataType::FLOAT, rt_ns::DataType::DOUBLE, rt_ns::DataType::FLOAT16,
+                          rt_ns::DataType::BFLOAT16}) {
+    const auto scale = MakeTensor(type, {65}, std::vector<float>(65, 1.0F));
+    const auto bias = MakeTensor(type, {65}, std::vector<float>(65, 0.0F));
+    const auto mean = bias;
+    const auto variance = scale;
+    const auto empty = MakeTensor(type, {0, 65}, {});
+    EXPECT_EQ(kernel(empty, scale, bias, mean, variance).shape.product(), 0);
+    EXPECT_THROW(kernel.Compute(empty, scale, bias, mean, variance, true), std::invalid_argument);
+    const auto x = MakeTensor(type, {5, 65}, std::vector<float>(5 * 65, 1.0F));
+    for (bool output_mean : {false, true}) {
+      for (bool output_variance : {false, true}) {
+        const auto result = kernel.Compute(x, scale, bias, mean, variance, true, 0.25F, 0.75F,
+                                           nullptr, output_mean, output_variance);
+        EXPECT_EQ(result.running_mean.has_value(), output_mean);
+        EXPECT_EQ(result.running_variance.has_value(), output_variance);
+        for (std::size_t i = 0; i < 5 * 65; ++i) {
+          EXPECT_EQ(Value(result.y, i), 0.0);
+        }
+      }
+    }
+  }
+}
+
+TEST(OnnxLightNormalizationKernel, BatchContiguousChannelsPreserveExecutorScheduling) {
+  const onnx_light_cpu::BatchNormalizationKernel kernel(MakeContext(15));
+  std::vector<float> values(4097 * 65);
+  for (std::size_t i = 0; i < values.size(); ++i) {
+    values[i] = static_cast<float>(static_cast<int>(i % 29) - 14) * 0.125F;
+  }
+  const auto x = MakeTensor(rt_ns::DataType::FLOAT, {4097, 65}, values);
+  const auto small = MakeTensor(rt_ns::DataType::FLOAT, {1, 65}, std::vector<float>(65, 1.0F));
+  const auto scale = MakeTensor(rt_ns::DataType::FLOAT, {65}, std::vector<float>(65, 1.0F));
+  const auto bias = MakeTensor(rt_ns::DataType::FLOAT, {65}, std::vector<float>(65, 0.0F));
+  for (bool training : {false, true}) {
+    const auto run = [&](const rt_ns::Tensor &input) {
+      return kernel.Compute(input, scale, bias, bias, scale, training, 0.25F);
+    };
+    const auto expected = run(x);
+    InlineExecutor executor;
+    onnx_light_cpu::ExecutionExecutorView view{&executor, 8, &InlineExecutor::Run};
+    onnx_light_cpu::ExecutionExecutorScope scope(&view);
+    run(small);
+    EXPECT_EQ(executor.dispatches, 0);
+    const auto actual = run(x);
+    EXPECT_EQ(executor.dispatches, 1);
+    EXPECT_GT(executor.blocks, 1);
+    EXPECT_LE(executor.blocks, 8);
+    onnx_light_cpu::detail::ExecutionRegionScope region;
+    const auto nested = run(x);
+    EXPECT_EQ(executor.dispatches, 1);
+    for (const auto *result : {&actual, &nested}) {
+      EXPECT_EQ(std::memcmp(result->y.bytes(), expected.y.bytes(), values.size() * sizeof(float)),
+                0);
+      if (training) {
+        EXPECT_EQ(std::memcmp(result->running_mean->bytes(), expected.running_mean->bytes(),
+                              65 * sizeof(float)),
+                  0);
+        EXPECT_EQ(std::memcmp(result->running_variance->bytes(), expected.running_variance->bytes(),
+                              65 * sizeof(float)),
+                  0);
+      }
+    }
+  }
+}
+
+TEST(OnnxLightNormalizationKernel, BatchContiguousChannelsSingleRowCanUseExecutor) {
+  const onnx_light_cpu::BatchNormalizationKernel kernel(MakeContext(15));
+  constexpr std::int64_t channels = 262145;
+  const auto x =
+      MakeTensor(rt_ns::DataType::FLOAT, {1, channels}, std::vector<float>(channels, 2.0F));
+  const auto scale =
+      MakeTensor(rt_ns::DataType::FLOAT, {channels}, std::vector<float>(channels, 1.0F));
+  const auto bias =
+      MakeTensor(rt_ns::DataType::FLOAT, {channels}, std::vector<float>(channels, 0.0F));
+  InlineExecutor executor;
+  onnx_light_cpu::ExecutionExecutorView view{&executor, 8, &InlineExecutor::Run};
+  onnx_light_cpu::ExecutionExecutorScope scope(&view);
+  const auto y = kernel(x, scale, bias, bias, scale, 0.0F);
+  EXPECT_EQ(executor.dispatches, 1);
+  EXPECT_GT(executor.blocks, 1);
+  for (std::size_t c = 0; c < static_cast<std::size_t>(channels); ++c) {
+    EXPECT_EQ(Value(y, c), 2.0);
   }
 }
 

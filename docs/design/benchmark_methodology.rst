@@ -15,6 +15,12 @@ Label the result with exactly one of these layers:
 * **Kernel throughput:** call a typed kernel with preallocated inputs and
   outputs. It measures arithmetic, packing, and conversions, but not runtime
   dispatch or allocations.
+* **Allocation-inclusive operator call:** call the public C++ operator API
+  directly with preconstructed inputs. Include output and scratch allocations,
+  parameter conversion, and coefficient/statistics preparation performed by
+  each call. State which allocations are timed, the selected implementation,
+  and the executor policy. This excludes graph/session dispatch and is not an
+  end-to-end inference result.
 * **Steady-state end-to-end:** reuse a prepared evaluator/session and time
   inference. Exclude parsing, registration, construction, and first-run setup.
 * **Startup:** report serialization, registration, session construction,
@@ -24,6 +30,10 @@ An isolated kernel result needs a steady-state end-to-end companion: it does
 not establish the cost of the registered operator. Use the
 :doc:`examples gallery <../examples>` or the parity drivers in
 ``tools/benchmark_*_parity.py`` as the starting point.
+
+Allocation-inclusive operator-call results establish only the cost of that
+operator API. A claim about graph/session speedup also requires a steady-state
+end-to-end companion; do not extrapolate an operator-call ratio to a model.
 
 Prove the selected kernel ran
 -----------------------------
@@ -71,6 +81,89 @@ best observation.
 Use identical models, inputs, shapes, and attributes for every backend. If
 constant weights are prepacked, label that result separately from dynamic
 weights, whose packing belongs in every invocation.
+
+BatchNormalization contiguous channels (October 6, 2026)
+--------------------------------------------------------
+
+For float32 and float64 inputs with a singleton spatial extent and at least
+16 channels, BatchNormalization traverses contiguous channel ranges instead
+of processing one-element spatial slices. Inference uses row tiles of up to
+256 channels, including when a single wide row needs parallel scheduling.
+Training uses 16-channel tiles with bounded worker-local stack storage.
+Its four accumulation streams and centered variance calculation retain the
+existing reduction order for each channel. Small channel counts, float16,
+bfloat16, and larger spatial extents retain the generic algorithm.
+
+Both layouts use the session executor. Layout-specific entry points remain
+out of line: allowing the NC specialization to consume the generic path's
+compiler inlining budget caused spatial-layout slowdowns during development.
+The contiguous loops are portable C++; GCC emitted baseline SSE2 vector
+arithmetic in the tested build. This is not a new AVX-specific dispatch path.
+
+Measurement layer: **allocation-inclusive operator call**. The benchmark is
+``tools/batch_normalization_throughput.cc``. It calls the public kernel API
+directly, not a registered graph session. Each case includes output allocation,
+coefficient preparation, and running-statistics computation. Tensor construction
+is outside timing. The driver uses 20 warmups and 101 samples and prints the
+median and interquartile bounds in seconds. An optional output filename saves
+all output tensors and statistics as a binary stream, plus raw timings in
+``<filename>.samples.csv``.
+
+Measurements below used a shared Intel Xeon Platinum 8480C host, GCC 13.2.0,
+Release ``-O3 -DNDEBUG``, ``ONNX_LIGHT_CPU_MAX_SIMD_LEVEL=AUTO``, and one calling
+thread pinned to CPU 0. Baseline source was ``24e13a10``. The same executable
+used either the saved baseline operator library or the changed library, with
+unchanged core and low-level dependencies. Two runs reversed backend order;
+the table averages the two per-run medians.
+
+.. list-table:: Shape [2000, 64], spatial extent 1
+   :header-rows: 1
+
+   * - Type / mode
+     - Baseline (s)
+     - Contiguous channels (s)
+     - Speedup
+   * - float32 inference
+     - 3.384225e-4
+     - 3.3218e-5
+     - 10.19
+   * - float32 training
+     - 4.29681e-4
+     - 5.2693e-5
+     - 8.15
+   * - float64 inference
+     - 3.38404e-4
+     - 5.07675e-5
+     - 6.67
+   * - float64 training
+     - 7.15997e-4
+     - 1.641005e-4
+     - 4.36
+
+All outputs and running statistics were bitwise identical across 48 benchmark
+configurations, including threshold/tile tails and generic spatial layouts.
+No final measured regression exceeded both 20% and one microsecond.
+These shared-host measurements are diagnostic, not a guarantee for other CPUs,
+thread counts, compilers, or graph-session workloads. No steady-state
+end-to-end companion was measured, so the speedups above apply only to the
+direct operator call, not to graph/session inference.
+
+With an already configured onnx-light-integrated shared-library build, reproduce
+the changed-library run with:
+
+.. code-block:: bash
+
+   cmake -S . -B build -DONNX_LIGHT_CPU_BUILD_BENCHMARKS=ON
+   cmake --build build --target batch_normalization_throughput -j8
+   taskset -c 0 build/batch_normalization_throughput /tmp/bn-patched.bin \
+       > /tmp/bn-patched.csv
+
+For a before/after comparison, save the baseline
+``liblib_onnx_light_cpu_kernels.so`` before rebuilding. Select it using
+``LD_PRELOAD=/path/to/baseline/liblib_onnx_light_cpu_kernels.so`` with the same
+command and a different output filename, then compare the binary outputs
+using ``cmp``. Verify the selected library with ``LD_TRACE_LOADED_OBJECTS=1``;
+``LD_LIBRARY_PATH`` alone may not override the executable's RPATH.
 
 .. _l-cast-simd-measurements:
 
