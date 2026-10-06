@@ -15,6 +15,12 @@ Label the result with exactly one of these layers:
 * **Kernel throughput:** call a typed kernel with preallocated inputs and
   outputs. It measures arithmetic, packing, and conversions, but not runtime
   dispatch or allocations.
+* **Allocation-inclusive operator call:** call the public C++ operator API
+  directly with preconstructed inputs. Include output and scratch allocations,
+  parameter conversion, and coefficient/statistics preparation performed by
+  each call. State which allocations are timed, the selected implementation,
+  and the executor policy. This excludes graph/session dispatch and is not an
+  end-to-end inference result.
 * **Steady-state end-to-end:** reuse a prepared evaluator/session and time
   inference. Exclude parsing, registration, construction, and first-run setup.
 * **Startup:** report serialization, registration, session construction,
@@ -24,6 +30,10 @@ An isolated kernel result needs a steady-state end-to-end companion: it does
 not establish the cost of the registered operator. Use the
 :doc:`examples gallery <../examples>` or the parity drivers in
 ``tools/benchmark_*_parity.py`` as the starting point.
+
+Allocation-inclusive operator-call results establish only the cost of that
+operator API. A claim about graph/session speedup also requires a steady-state
+end-to-end companion; do not extrapolate an operator-call ratio to a model.
 
 Prove the selected kernel ran
 -----------------------------
@@ -90,7 +100,7 @@ compiler inlining budget caused spatial-layout slowdowns during development.
 The contiguous loops are portable C++; GCC emitted baseline SSE2 vector
 arithmetic in the tested build. This is not a new AVX-specific dispatch path.
 
-The allocation-inclusive C++ operator benchmark is
+Measurement layer: **allocation-inclusive operator call**. The benchmark is
 ``tools/batch_normalization_throughput.cc``. It calls the public kernel API
 directly, not a registered graph session. Each case includes output allocation,
 coefficient preparation, and running-statistics computation. Tensor construction
@@ -134,7 +144,9 @@ All outputs and running statistics were bitwise identical across 48 benchmark
 configurations, including threshold/tile tails and generic spatial layouts.
 No final measured regression exceeded both 20% and one microsecond.
 These shared-host measurements are diagnostic, not a guarantee for other CPUs,
-thread counts, compilers, or graph-session workloads.
+thread counts, compilers, or graph-session workloads. No steady-state
+end-to-end companion was measured, so the speedups above apply only to the
+direct operator call, not to graph/session inference.
 
 With an already configured onnx-light-integrated shared-library build, reproduce
 the changed-library run with:

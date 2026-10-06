@@ -162,10 +162,10 @@ template <typename Acc> void CheckBatchContiguousChannels(rt_ns::DataType type) 
         std::vector<float> values(static_cast<std::size_t>(batch * channels));
         std::vector<float> scales(channels), biases(channels), means(channels), variances(channels);
         for (std::int64_t c = 0; c < channels; ++c) {
-          scales[c] = static_cast<float>(c % 5 - 2) * 0.5F;
-          biases[c] = static_cast<float>(c % 3 - 1) * 0.25F;
-          means[c] = static_cast<float>(c % 7) * 0.125F;
-          variances[c] = 0.5F + static_cast<float>(c % 3) * 0.25F;
+          scales[c] = static_cast<float>(c % 5 - 2) * 0.3F;
+          biases[c] = static_cast<float>(c % 3 - 1) * 0.2F;
+          means[c] = static_cast<float>(c % 7) * 0.14F;
+          variances[c] = 0.55F + static_cast<float>(c % 3) * 0.2F;
           for (std::int64_t n = 0; n < batch; ++n) {
             values[n * channels + c] =
                 100000.125F + static_cast<float>(c) +
@@ -173,48 +173,69 @@ template <typename Acc> void CheckBatchContiguousChannels(rt_ns::DataType type) 
           }
         }
         const auto x = MakeTensor(type, shape, values);
-        for (const auto parameter_type : {rt_ns::DataType::FLOAT, rt_ns::DataType::DOUBLE}) {
-          const auto scale = MakeTensor(parameter_type, {channels}, scales);
-          const auto bias = MakeTensor(parameter_type, {channels}, biases);
-          const auto mean = MakeTensor(parameter_type, {channels}, means);
-          const auto variance = MakeTensor(parameter_type, {channels}, variances);
-          for (const bool training : {false, true}) {
-            SCOPED_TRACE(training);
-            const auto result =
-                kernel.Compute(x, scale, bias, mean, variance, training, 0.25F, 0.75F);
-            EXPECT_EQ(result.y.shape, shape);
-            for (std::int64_t c = 0; c < channels; ++c) {
-              Acc estimated_mean = means[c], estimated_variance = variances[c];
+        const std::array parameter_types{rt_ns::DataType::FLOAT, rt_ns::DataType::DOUBLE,
+                                         rt_ns::DataType::FLOAT16, rt_ns::DataType::BFLOAT16};
+        for (const auto affine_type : parameter_types) {
+          const auto scale = MakeTensor(affine_type, {channels}, scales);
+          const auto bias = MakeTensor(affine_type, {channels}, biases);
+          for (const auto statistics_type : parameter_types) {
+            SCOPED_TRACE(::testing::Message()
+                         << "affine_type=" << static_cast<int>(affine_type)
+                         << " statistics_type=" << static_cast<int>(statistics_type));
+            const auto mean = MakeTensor(statistics_type, {channels}, means);
+            const auto variance = MakeTensor(statistics_type, {channels}, variances);
+            for (const bool training : {false, true}) {
+              SCOPED_TRACE(training);
+              const auto result =
+                  kernel.Compute(x, scale, bias, mean, variance, training, 0.25F, 0.75F);
+              EXPECT_EQ(result.y.shape, shape);
+              EXPECT_EQ(result.y.data_type, static_cast<std::int32_t>(type));
               if (training) {
-                std::array<Acc, 4> sums{}, squares{};
-                for (std::int64_t n = 0; n < batch; ++n) {
-                  sums[n & 3] += static_cast<Acc>(values[n * channels + c]);
-                }
-                estimated_mean = (sums[0] + sums[1] + sums[2] + sums[3]) / static_cast<Acc>(batch);
-                for (std::int64_t n = 0; n < batch; ++n) {
-                  const Acc delta = static_cast<Acc>(values[n * channels + c]) - estimated_mean;
-                  squares[n & 3] += delta * delta;
-                }
-                estimated_variance =
-                    (squares[0] + squares[1] + squares[2] + squares[3]) / static_cast<Acc>(batch);
-                const auto running_stat = [&](float previous, Acc estimated) {
-                  return parameter_type == rt_ns::DataType::DOUBLE
-                             ? static_cast<double>(previous) * 0.75 +
-                                   static_cast<double>(estimated) * 0.25
-                             : static_cast<double>(previous * 0.75F +
-                                                   static_cast<float>(estimated) * 0.25F);
-                };
-                EXPECT_EQ(Value(*result.running_mean, c), running_stat(means[c], estimated_mean));
-                EXPECT_EQ(Value(*result.running_variance, c),
-                          running_stat(variances[c], estimated_variance));
+                ASSERT_TRUE(result.running_mean.has_value());
+                ASSERT_TRUE(result.running_variance.has_value());
+                EXPECT_EQ(result.running_mean->data_type,
+                          static_cast<std::int32_t>(statistics_type));
+                EXPECT_EQ(result.running_variance->data_type,
+                          static_cast<std::int32_t>(statistics_type));
               }
-              const Acc multiplier = static_cast<Acc>(scales[c]) /
-                                     std::sqrt(estimated_variance + static_cast<Acc>(0.25));
-              const Acc offset = static_cast<Acc>(biases[c]) - estimated_mean * multiplier;
-              for (std::int64_t n = 0; n < batch; ++n) {
-                const Acc expected =
-                    static_cast<Acc>(values[n * channels + c]) * multiplier + offset;
-                EXPECT_EQ(Value(result.y, n * channels + c), static_cast<double>(expected));
+              for (std::int64_t c = 0; c < channels; ++c) {
+                Acc estimated_mean = RoundFloat(statistics_type, means[c]);
+                Acc estimated_variance = RoundFloat(statistics_type, variances[c]);
+                if (training) {
+                  std::array<Acc, 4> sums{}, squares{};
+                  for (std::int64_t n = 0; n < batch; ++n) {
+                    sums[n & 3] += static_cast<Acc>(values[n * channels + c]);
+                  }
+                  estimated_mean =
+                      (sums[0] + sums[1] + sums[2] + sums[3]) / static_cast<Acc>(batch);
+                  for (std::int64_t n = 0; n < batch; ++n) {
+                    const Acc delta = static_cast<Acc>(values[n * channels + c]) - estimated_mean;
+                    squares[n & 3] += delta * delta;
+                  }
+                  estimated_variance =
+                      (squares[0] + squares[1] + squares[2] + squares[3]) / static_cast<Acc>(batch);
+                  const auto running_stat = [&](float previous, Acc estimated) {
+                    previous = RoundFloat(statistics_type, previous);
+                    if (statistics_type == rt_ns::DataType::DOUBLE) {
+                      return static_cast<double>(previous) * 0.75 +
+                             static_cast<double>(estimated) * 0.25;
+                    }
+                    return static_cast<double>(RoundFloat(
+                        statistics_type, previous * 0.75F + static_cast<float>(estimated) * 0.25F));
+                  };
+                  EXPECT_EQ(Value(*result.running_mean, c), running_stat(means[c], estimated_mean));
+                  EXPECT_EQ(Value(*result.running_variance, c),
+                            running_stat(variances[c], estimated_variance));
+                }
+                const Acc multiplier = static_cast<Acc>(RoundFloat(affine_type, scales[c])) /
+                                       std::sqrt(estimated_variance + static_cast<Acc>(0.25));
+                const Acc offset = static_cast<Acc>(RoundFloat(affine_type, biases[c])) -
+                                   estimated_mean * multiplier;
+                for (std::int64_t n = 0; n < batch; ++n) {
+                  const Acc expected =
+                      static_cast<Acc>(values[n * channels + c]) * multiplier + offset;
+                  EXPECT_EQ(Value(result.y, n * channels + c), static_cast<double>(expected));
+                }
               }
             }
           }
