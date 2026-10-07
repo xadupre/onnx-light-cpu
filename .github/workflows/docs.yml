@@ -31,7 +31,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y doxygen
 
       - name: Set up sccache
-        uses: mozilla-actions/sccache-action@v0.0.10
+        uses: mozilla-actions/sccache-action@v0.0.11
 
       - name: Set parallel build level
         shell: bash
