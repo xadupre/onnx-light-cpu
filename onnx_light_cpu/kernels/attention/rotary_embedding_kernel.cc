@@ -171,7 +171,9 @@ Tensor RotaryEmbeddingKernel::operator()(const Tensor &input, const Tensor &cos,
              sin.shape[1] != static_cast<std::int64_t>(seq)) {
     Invalid("without position_ids caches must have shape (batch, sequence, rotary_dim/2).");
   }
-  if (cos.shape != sin.shape || cos.shape.back() != static_cast<std::int64_t>(rotate_dim / 2)) {
+  if (cos.shape != sin.shape ||
+      (cos.shape.back() != static_cast<std::int64_t>(rotate_dim / 2) &&
+       (!microsoft || cos.shape.back() != static_cast<std::int64_t>(head_size / 2)))) {
     Invalid("cos_cache and sin_cache must have matching rotary dimensions.");
   }
   const std::size_t cache_count = Count(cos);

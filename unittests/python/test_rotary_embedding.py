@@ -93,6 +93,7 @@ class TestRotaryEmbedding(unittest.TestCase):
             ("", (2, 2, 3, 6), (2, 3, 2), None, True, 4, 0),
             ("", (1, 2, 3, 4), (7, 2), (1, 3), True, 0, 0),
             ("com.microsoft", (2, 3, 8), (7, 2), (2, 3), False, 4, 2),
+            ("com.microsoft", (1, 2, 8), (7, 2), (1, 2), True, 2, 2),
             ("com.microsoft", (1, 2, 3, 4), (7, 2), (1,), True, 0, 0),
         )
         for domain, x_shape, cache_shape, positions_shape, interleaved, dim, heads in cases:

@@ -236,7 +236,8 @@ indices. ``com.microsoft::RotaryEmbedding`` (opset 1+) uses the order
 ``input, position_ids, cos_cache, sin_cache`` and accepts a scalar start
 position. Both support split-half/interleaved and partial rotation for FLOAT,
 FLOAT16, and BFLOAT16. Packed batching and dynamic cache extension are not
-supported.
+supported. The Microsoft form also accepts full-head-width caches for partial
+rotation.
 
 .. doxygenstruct:: onnx_light_cpu::SimplifiedLayerNormalizationResult
    :project: onnx_light_cpu

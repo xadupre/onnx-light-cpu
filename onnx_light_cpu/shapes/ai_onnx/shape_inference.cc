@@ -136,7 +136,21 @@ void ComputeShapeRotaryEmbedding(shapes_ns::ShapesContext &ctx,
     equal(cos.Shape()[i], sin.Shape()[i]);
   }
   if (rotary_dim != 0) {
-    equal(cos.Shape()[cos.Shape().Rank() - 1], SymDim(rotary_dim / 2));
+    const auto &cache_width = cos.Shape()[cos.Shape().Rank() - 1];
+    const auto full_width = last.IsInt() && (shape.Rank() == 4 || heads > 0)
+                                ? (shape.Rank() == 4 ? last.AsInt() : last.AsInt() / heads) / 2
+                                : 0;
+    if (microsoft && full_width > 0 && cache_width.IsExpr()) {
+      const auto &width = cache_width.AsExpr();
+      ctx.AddConstraint("(" + width + "-" + std::to_string(rotary_dim / 2) + ")*(" + width + "-" +
+                            std::to_string(full_width) + ")",
+                        "0");
+    } else if (microsoft && full_width > 0 && cache_width.IsInt() &&
+               cache_width.AsInt() == full_width) {
+      // Microsoft's CPU kernel also accepts full-head-width caches for partial rotation.
+    } else {
+      equal(cache_width, SymDim(rotary_dim / 2));
+    }
   } else if (shape.Rank() == 4 && last.IsInt()) {
     equal(cos.Shape()[cos.Shape().Rank() - 1], SymDim(last.AsInt() / 2));
   } else if (shape.Rank() == 3 && heads > 0 && last.IsInt()) {
