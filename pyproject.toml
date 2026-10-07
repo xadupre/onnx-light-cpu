@@ -31,7 +31,7 @@ dev = [
     "onnxruntime",
     "openpyxl",
     "pandas",
-    "pyrefly==1.2.0",
+    "pyrefly==1.3.2",
     "pytest>=7",
     "pytest-cov",
     "ruff==0.16.10",
