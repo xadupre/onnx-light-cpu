@@ -109,7 +109,7 @@ void ComputeShapeRotaryEmbedding(shapes_ns::ShapesContext &ctx,
     }
   }
   if (rotary_dim < 0 || (rotary_dim != 0 && rotary_dim % 2 != 0) ||
-      (shape.Rank() == 3 && heads <= 0 && !microsoft)) {
+      (shape.Rank() == 3 && heads <= 0 && (!microsoft || rotary_dim != 0))) {
     throw std::invalid_argument("RotaryEmbedding: invalid rotary dimension or head count.");
   }
   const auto &last = shape[shape.Rank() - 1];
