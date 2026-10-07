@@ -16,6 +16,34 @@ using schema_ns::LightOpSchema;
 using schema_ns::SchemaBuilder;
 using schema_ns::TensorType;
 
+LightOpSchema MakeRotaryEmbeddingSchema() {
+  return LightOpSchema(
+      "RotaryEmbedding", kMicrosoftDomain, 1,
+      "Rotates the first rotary_embedding_dim values of each head using the indexed cosine and "
+      "sine caches. Supports scalar start offsets or per-token position ids; packed batching and "
+      "dynamic cache extension are not supported.",
+      {{"input", "Rank-3 (batch, sequence, hidden) or rank-4 (batch, heads, sequence, head).", "T"},
+       {"position_ids", "INT64 scalar offset or (batch, sequence) positions.", "M"},
+       {"cos_cache", "Rank-2 cosine table (positions, rotary dimension / 2).", "T"},
+       {"sin_cache", "Matching sine table.", "T"}},
+      {{"output", "Rotated tensor with input shape and type.", "T"}},
+      {{"T",
+        {TensorType::kFloat, TensorType::kFloat16, TensorType::kBfloat16},
+        "Matching input and cache types."},
+       {"M", {TensorType::kInt64}, "Position indices."}},
+      {AttributeParam{"num_heads", "Head count for rank-3 input.", AttributeType::INT, false,
+                      int64_t{0}},
+       AttributeParam{"rotary_embedding_dim", "Zero rotates the full head.", AttributeType::INT,
+                      false, int64_t{0}},
+       AttributeParam{"interleaved", "Interleaved layout if 1.", AttributeType::INT, false,
+                      int64_t{0}},
+       AttributeParam{"scale", "Used only by upstream dynamic cache extension.",
+                      AttributeType::FLOAT, false, 1.0f},
+       AttributeParam{"is_packed_batching", "Only 0 is supported.", AttributeType::INT, false,
+                      int64_t{0}}},
+      false, true);
+}
+
 LightOpSchema MakeCDistSchema() {
   return LightOpSchema(
       "CDist", kMicrosoftDomain, 1,
@@ -255,6 +283,7 @@ std::vector<LightOpSchema> GetMicrosoftOpSchemasWithHistory(const std::string &o
        [] { return std::vector<LightOpSchema>{MakeGroupQueryAttentionSchema()}; }},
       {"LinearAttention", [] { return std::vector<LightOpSchema>{MakeLinearAttentionSchema()}; }},
       {"MatMulNBits", [] { return std::vector<LightOpSchema>{MakeMatMulNBitsSchema()}; }},
+      {"RotaryEmbedding", [] { return std::vector<LightOpSchema>{MakeRotaryEmbeddingSchema()}; }},
       {"SkipSimplifiedLayerNormalization",
        [] { return std::vector<LightOpSchema>{MakeSkipSimplifiedLayerNormalizationSchema()}; }},
   };

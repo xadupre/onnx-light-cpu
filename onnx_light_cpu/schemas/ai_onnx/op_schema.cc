@@ -16,6 +16,29 @@ using schema_ns::LightOpSchema;
 using schema_ns::SchemaBuilder;
 using schema_ns::TensorType;
 
+LightOpSchema MakeRotaryEmbeddingSchema() {
+  LightOpSchema schema(
+      "RotaryEmbedding", schema_ns::kOnnxDomain, 23,
+      "Applies split-half or interleaved rotary embedding to the first rotary_embedding_dim "
+      "elements of each head; preserves the remaining elements.",
+      {{"X", "Rank-3 (batch, sequence, hidden) or rank-4 (batch, heads, sequence, head).", "T"},
+       {"cos_cache", "Rank-2 indexed cache, or rank-3 per-token cache.", "T"},
+       {"sin_cache", "Cache matching cos_cache.", "T"},
+       {"position_ids", "Optional INT64 (batch, sequence) indices for rank-2 caches.", "M"}},
+      {{"Y", "Rotated tensor with X's shape and type.", "T"}},
+      {{"T",
+        {TensorType::kFloat, TensorType::kFloat16, TensorType::kBfloat16},
+        "Matching floating-point input and caches."},
+       {"M", {TensorType::kInt64}, "Position indices."}},
+      {AttributeParam{"num_heads", "Required for rank-3 input.", AttributeType::INT, false},
+       AttributeParam{"rotary_embedding_dim", "Zero rotates the full head.", AttributeType::INT,
+                      false, int64_t{0}},
+       AttributeParam{"interleaved", "Interleaved layout if 1.", AttributeType::INT, false,
+                      int64_t{0}}},
+      false, true);
+  return schema;
+}
+
 LightOpSchema MakeSimplifiedLayerNormalizationSchema() {
   LightOpSchema schema(
       "SimplifiedLayerNormalization", schema_ns::kOnnxDomain, 1,
@@ -61,6 +84,7 @@ LightOpSchema MakeSimplifiedLayerNormalizationSchema() {
 std::vector<LightOpSchema> GetExperimentalOpSchemasWithHistory(const std::string &op_type,
                                                                bool init_doc) {
   static const std::map<std::string, SchemaBuilder> builders = {
+      {"RotaryEmbedding", [] { return std::vector<LightOpSchema>{MakeRotaryEmbeddingSchema()}; }},
       {"SimplifiedLayerNormalization",
        [] { return std::vector<LightOpSchema>{MakeSimplifiedLayerNormalizationSchema()}; }},
   };

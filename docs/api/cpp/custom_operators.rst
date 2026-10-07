@@ -22,6 +22,12 @@ available through these APIs.
 .. doxygenfunction:: onnx_light_cpu::ComputePeakMemorySimplifiedLayerNormalization
    :project: onnx_light_cpu
 
+.. doxygenfunction:: onnx_light_cpu::ComputeShapeRotaryEmbedding
+   :project: onnx_light_cpu
+
+.. doxygenfunction:: onnx_light_cpu::ComputePeakMemoryRotaryEmbedding
+   :project: onnx_light_cpu
+
 .. doxygenfunction:: onnx_light_cpu::ComputeShapeSkipSimplifiedLayerNormalization
    :project: onnx_light_cpu
 

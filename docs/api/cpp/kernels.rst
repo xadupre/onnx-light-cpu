@@ -226,6 +226,18 @@ Large copies use the runtime executor; small splits remain serial.
    :project: onnx_light_cpu
    :members:
 
+.. doxygenclass:: onnx_light_cpu::RotaryEmbeddingKernel
+   :project: onnx_light_cpu
+   :members:
+
+``ai.onnx::RotaryEmbedding`` (opset 23+) accepts rank-3 or rank-4 input and
+either per-token rank-3 cosine/sine caches or rank-2 caches with INT64 position
+indices. ``com.microsoft::RotaryEmbedding`` (opset 1+) uses the order
+``input, position_ids, cos_cache, sin_cache`` and accepts a scalar start
+position. Both support split-half/interleaved and partial rotation for FLOAT,
+FLOAT16, and BFLOAT16. Packed batching and dynamic cache extension are not
+supported.
+
 .. doxygenstruct:: onnx_light_cpu::SimplifiedLayerNormalizationResult
    :project: onnx_light_cpu
    :members:
