@@ -21,7 +21,7 @@ onnx-light-cpu = "onnx_light_cpu.__main__:main"
 [project.optional-dependencies]
 dev = [
     "black==26.5.1",
-    "clang-format==22.1.8",
+    "clang-format==23.1.2",
     "matplotlib",
     "ml_dtypes",
     "mypy==2.4.0",
