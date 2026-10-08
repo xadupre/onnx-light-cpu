@@ -121,6 +121,43 @@ TEST(NormalizationPrimitives, Float32RmsAffineHandlesEveryTailAndUnalignedInput)
   }
 }
 
+TEST(NormalizationPrimitives, Float32MomentsUseStableBlockAggregation) {
+  for (std::size_t count : {8192, 8193, 8447, 8448, 8449, 16384}) {
+    SCOPED_TRACE(count);
+    std::vector<float> input(count);
+    double sum = 0.0;
+    for (std::size_t index = 0; index < count; ++index) {
+      input[index] =
+          65536.0F + static_cast<float>(static_cast<std::int64_t>(index % 17) - 8) * 0.125F;
+      sum += input[index];
+    }
+    const double mean = sum / static_cast<double>(count);
+    double squared_deviations = 0.0;
+    for (const float value : input) {
+      const double delta = static_cast<double>(value) - mean;
+      squared_deviations += delta * delta;
+    }
+
+    const auto moments = ComputeNormalizationMomentsFloat32(input.data(), input.size());
+    EXPECT_FLOAT_EQ(moments.mean, static_cast<float>(mean));
+    EXPECT_NEAR(moments.variance,
+                static_cast<float>(squared_deviations / static_cast<double>(count)), 2.0e-6F);
+  }
+}
+
+TEST(NormalizationPrimitives, Float32ChanMomentsPreserveNonFiniteValues) {
+  std::vector<float> input(8192, 1.0F);
+  input.back() = std::numeric_limits<float>::infinity();
+  auto moments = ComputeNormalizationMomentsFloat32(input.data(), input.size());
+  EXPECT_TRUE(std::isinf(moments.mean) || std::isnan(moments.mean));
+  EXPECT_TRUE(std::isnan(moments.variance));
+
+  input.back() = std::numeric_limits<float>::quiet_NaN();
+  moments = ComputeNormalizationMomentsFloat32(input.data(), input.size());
+  EXPECT_TRUE(std::isnan(moments.mean));
+  EXPECT_TRUE(std::isnan(moments.variance));
+}
+
 TEST(NormalizationPrimitives, BFloat16SubnormalsAndNanCanonicalization) {
   for (std::uint16_t bits : {0x0001, 0x007f, 0x8001, 0x807f, 0x7f95, 0xff95}) {
     for (std::size_t count = 1; count <= 33; ++count) {

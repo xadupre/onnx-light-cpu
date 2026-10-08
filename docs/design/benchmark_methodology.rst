@@ -82,6 +82,58 @@ Use identical models, inputs, shapes, and attributes for every backend. If
 constant weights are prepacked, label that result separately from dynamic
 weights, whose packing belongs in every invocation.
 
+Normalization moments (October 8, 2026)
+---------------------------------------
+
+Float32 normalization keeps the single-pass SIMD raw-moments path when its
+variance is safely separated from the cancellation floor. Ill-conditioned
+reductions below 8,192 elements retain the centered second pass. At or above
+that threshold, 256-element blocks accumulate moments relative to their first
+element and combine ``(count, mean, M2)`` states with Chan's formula in double
+precision. RMS normalization is unchanged because it does not subtract a
+mean.
+
+Measurement layer: **kernel throughput**. The
+``tools/normalization_moments_throughput.cc`` driver performs 20 warmups and
+101 samples, batches enough calls to process at least 1,048,576 elements per
+sample, and reports per-call median and interquartile bounds. The ``shifted``
+distribution adds 65,536 to a repeating low-variance pattern and exercises the
+cancellation path. The test host was a 13th Gen Intel Core i7-13800H pinned to
+one CPU, GCC 14.2.0, Release mode, and AVX-512 dispatch. Baseline source was
+``0239e12``.
+
+.. list-table:: Shifted float32 moments
+   :header-rows: 1
+
+   * - Elements
+     - Baseline median (s)
+     - Chan median (s)
+     - Baseline mean / variance
+     - Chan mean / variance
+   * - 16,384
+     - 1.19652813e-5
+     - 1.24434531e-5
+     - 65536.0078 / 0.374969423
+     - 65536 / 0.374925584
+   * - 65,536
+     - 4.79544375e-5
+     - 4.995775e-5
+     - 65536 / 0.375009537
+     - 65536 / 0.375009537
+
+The double-precision references for 16,384 elements are
+65,535.99980163574 and 0.37492557405494153. Chan aggregation rounds both to
+the correct float32 results while adding 4.0% latency on this intentionally
+ill-conditioned case. The unchanged well-conditioned SIMD path avoids this
+cost. Reproduce the measurement with:
+
+.. code-block:: bash
+
+   cmake -S . -B build -DONNX_LIGHT_CPU_BUILD_BENCHMARKS=ON \
+       -DONNX_LIGHT_CPU_BUILD_PYTHON=OFF -DCMAKE_BUILD_TYPE=Release
+   cmake --build build --target normalization_moments_throughput -j8
+   taskset -c 0 build/normalization_moments_throughput
+
 BatchNormalization contiguous channels (October 6, 2026)
 --------------------------------------------------------
 
