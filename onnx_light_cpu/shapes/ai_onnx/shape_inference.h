@@ -16,6 +16,13 @@ void ComputeShapeSimplifiedLayerNormalization(
     ONNX_LIGHT_NAMESPACE::core::shapes::ShapesContext &ctx,
     const ONNX_LIGHT_NAMESPACE::NodeProto &node);
 
+void ComputeShapeRotaryEmbedding(ONNX_LIGHT_NAMESPACE::core::shapes::ShapesContext &ctx,
+                                 const ONNX_LIGHT_NAMESPACE::NodeProto &node);
+
+int64_t ComputePeakMemoryRotaryEmbedding(
+    ONNX_LIGHT_NAMESPACE::core::symbolic::Device device,
+    const std::vector<ONNX_LIGHT_NAMESPACE::core::symbolic::SymShape> &input_shapes);
+
 /// Returns CPU scratch memory, excluding input and output tensors.
 int64_t ComputePeakMemorySimplifiedLayerNormalization(
     ONNX_LIGHT_NAMESPACE::core::symbolic::Device device,

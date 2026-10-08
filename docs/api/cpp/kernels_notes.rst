@@ -194,6 +194,18 @@ supported for the same fixed-width data types as Gather. Outputs own their
 storage, including last-axis QKV partitions across multiple tokens.
 Large copies use the runtime executor; small splits remain serial.
 
+RotaryEmbedding
+^^^^^^^^^^^^^^^
+
+``ai.onnx::RotaryEmbedding`` (opset 23+) accepts rank-3 or rank-4 input and
+either per-token rank-3 cosine/sine caches or rank-2 caches with INT64 position
+indices. ``com.microsoft::RotaryEmbedding`` (opset 1+) uses the order
+``input, position_ids, cos_cache, sin_cache`` and accepts a scalar start
+position. Both support split-half/interleaved and partial rotation for FLOAT,
+FLOAT16, and BFLOAT16. Packed batching and dynamic cache extension are not
+supported. The Microsoft form also accepts full-head-width caches for partial
+rotation.
+
 SimplifiedLayerNormalization
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 

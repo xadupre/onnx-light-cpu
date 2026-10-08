@@ -27,6 +27,8 @@ void RegisterCpuAttentionCases(std::vector<TestCase> &registry, TestMode mode);
 /// and Qwen3.5 decode/prefill geometries.
 void RegisterCpuLinearAttentionCases(std::vector<TestCase> &registry, TestMode mode);
 
+void RegisterCpuRotaryEmbeddingCases(std::vector<TestCase> &registry, TestMode mode);
+
 void CollectCpuAttentionTestCases(std::vector<TestCase> &registry, const std::string &op_type = "",
                                   TestMode mode = TestMode::TEST);
 

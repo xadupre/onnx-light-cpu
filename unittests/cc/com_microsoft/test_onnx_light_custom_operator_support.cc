@@ -205,13 +205,14 @@ float RunForwardObjective(const NodeProto &node, const std::vector<float> &query
 
 TEST(CustomOperatorSupport, ProvidesLightSchemas) {
   const auto schemas = onnx_light_cpu::GetMicrosoftOpSchemasWithHistory();
-  ASSERT_EQ(schemas.size(), 6U);
+  ASSERT_EQ(schemas.size(), 7U);
   EXPECT_EQ(schemas[0].name(), "BiasGelu");
   EXPECT_EQ(schemas[1].name(), "CDist");
   EXPECT_EQ(schemas[2].name(), "GroupQueryAttention");
   EXPECT_EQ(schemas[3].name(), "LinearAttention");
   EXPECT_EQ(schemas[4].name(), "MatMulNBits");
-  EXPECT_EQ(schemas[5].name(), "SkipSimplifiedLayerNormalization");
+  EXPECT_EQ(schemas[5].name(), "RotaryEmbedding");
+  EXPECT_EQ(schemas[6].name(), "SkipSimplifiedLayerNormalization");
   ASSERT_EQ(schemas[4].inputs().size(), 6U);
   EXPECT_EQ(schemas[4].inputs()[3].name, "zero_points");
   EXPECT_EQ(schemas[4].inputs()[4].name, "g_idx");
@@ -240,7 +241,7 @@ TEST(CustomOperatorSupport, ProvidesLightSchemas) {
 
 TEST(CustomOperatorSupport, ProvidesReadOnlyInventory) {
   const auto support = onnx_light_cpu::CollectOperatorSupport();
-  ASSERT_EQ(support.size(), 7U);
+  ASSERT_EQ(support.size(), 9U);
   EXPECT_EQ(support[0].op_type, "BiasGelu");
   EXPECT_EQ(support[0].shape_inference_function, "onnx_light_cpu::ComputeShapeBiasGelu");
   EXPECT_EQ(support[0].peak_memory_function, "onnx_light_cpu::ComputePeakMemoryBiasGelu");
@@ -267,22 +268,34 @@ TEST(CustomOperatorSupport, ProvidesReadOnlyInventory) {
   EXPECT_EQ(support[4].fusion_patterns,
             std::vector<std::string>{"onnx_light_cpu::MatMulNBitsBiasFusionPattern"});
   EXPECT_TRUE(support[4].has_gradient);
-  EXPECT_EQ(support[5].domain, "ai.onnx");
-  EXPECT_EQ(support[5].op_type, "SimplifiedLayerNormalization");
-  EXPECT_EQ(support[5].shape_inference_function,
-            "onnx_light_cpu::ComputeShapeSimplifiedLayerNormalization");
-  EXPECT_EQ(support[5].peak_memory_function,
-            "onnx_light_cpu::ComputePeakMemorySimplifiedLayerNormalization");
+  EXPECT_EQ(support[5].domain, onnx_light_cpu::kMicrosoftDomain);
+  EXPECT_EQ(support[5].op_type, "RotaryEmbedding");
+  EXPECT_EQ(support[5].shape_inference_function, "onnx_light_cpu::ComputeShapeRotaryEmbedding");
+  EXPECT_EQ(support[5].peak_memory_function, "onnx_light_cpu::ComputePeakMemoryRotaryEmbedding");
   EXPECT_TRUE(support[5].fusion_patterns.empty());
   EXPECT_FALSE(support[5].has_gradient);
-  EXPECT_EQ(support[6].domain, onnx_light_cpu::kMicrosoftDomain);
-  EXPECT_EQ(support[6].op_type, "SkipSimplifiedLayerNormalization");
-  EXPECT_EQ(support[6].shape_inference_function,
-            "onnx_light_cpu::ComputeShapeSkipSimplifiedLayerNormalization");
-  EXPECT_EQ(support[6].peak_memory_function,
-            "onnx_light_cpu::ComputePeakMemorySkipSimplifiedLayerNormalization");
+  EXPECT_EQ(support[6].domain, "ai.onnx");
+  EXPECT_EQ(support[6].op_type, "RotaryEmbedding");
+  EXPECT_EQ(support[6].shape_inference_function, "onnx_light_cpu::ComputeShapeRotaryEmbedding");
+  EXPECT_EQ(support[6].peak_memory_function, "onnx_light_cpu::ComputePeakMemoryRotaryEmbedding");
   EXPECT_TRUE(support[6].fusion_patterns.empty());
   EXPECT_FALSE(support[6].has_gradient);
+  EXPECT_EQ(support[7].domain, "ai.onnx");
+  EXPECT_EQ(support[7].op_type, "SimplifiedLayerNormalization");
+  EXPECT_EQ(support[7].shape_inference_function,
+            "onnx_light_cpu::ComputeShapeSimplifiedLayerNormalization");
+  EXPECT_EQ(support[7].peak_memory_function,
+            "onnx_light_cpu::ComputePeakMemorySimplifiedLayerNormalization");
+  EXPECT_TRUE(support[7].fusion_patterns.empty());
+  EXPECT_FALSE(support[7].has_gradient);
+  EXPECT_EQ(support[8].domain, onnx_light_cpu::kMicrosoftDomain);
+  EXPECT_EQ(support[8].op_type, "SkipSimplifiedLayerNormalization");
+  EXPECT_EQ(support[8].shape_inference_function,
+            "onnx_light_cpu::ComputeShapeSkipSimplifiedLayerNormalization");
+  EXPECT_EQ(support[8].peak_memory_function,
+            "onnx_light_cpu::ComputePeakMemorySkipSimplifiedLayerNormalization");
+  EXPECT_TRUE(support[8].fusion_patterns.empty());
+  EXPECT_FALSE(support[8].has_gradient);
 }
 
 TEST(CustomOperatorSupport, InfersCDistShapeAndConstraint) {

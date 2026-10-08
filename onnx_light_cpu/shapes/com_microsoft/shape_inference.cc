@@ -6,6 +6,7 @@
 
 #include "onnx_light_cpu/impl/checked_arithmetic.h"
 #include "onnx_light_cpu/schemas/com_microsoft/op_schema.h"
+#include "onnx_light_cpu/shapes/ai_onnx/shape_inference.h"
 
 #include "onnx_core/shapes/dispatch_table.h"
 #include "onnx_core/symbolic/sym_tensor.h"
@@ -197,6 +198,18 @@ std::vector<OperatorSupportRegistration> CollectOperatorSupport() {
        "onnx_light_cpu::ComputePeakMemoryMatMulNBits",
        {"onnx_light_cpu::MatMulNBitsBiasFusionPattern"},
        true},
+      {kMicrosoftDomain,
+       "RotaryEmbedding",
+       "onnx_light_cpu::ComputeShapeRotaryEmbedding",
+       "onnx_light_cpu::ComputePeakMemoryRotaryEmbedding",
+       {},
+       false},
+      {"ai.onnx",
+       "RotaryEmbedding",
+       "onnx_light_cpu::ComputeShapeRotaryEmbedding",
+       "onnx_light_cpu::ComputePeakMemoryRotaryEmbedding",
+       {},
+       false},
       {"ai.onnx",
        "SimplifiedLayerNormalization",
        "onnx_light_cpu::ComputeShapeSimplifiedLayerNormalization",
@@ -827,6 +840,10 @@ void RegisterMicrosoftShapeAndMemoryFunctions() {
     shapes_ns::RegisterComputeShapeFn(kMicrosoftDomain, "LinearAttention",
                                       ComputeShapeLinearAttention);
     shapes_ns::RegisterComputeShapeFn(kMicrosoftDomain, "MatMulNBits", ComputeShapeMatMulNBits);
+    shapes_ns::RegisterComputeShapeFn(kMicrosoftDomain, "RotaryEmbedding",
+                                      ComputeShapeRotaryEmbedding);
+    shapes_ns::RegisterComputePeakMemoryFn(kMicrosoftDomain, "RotaryEmbedding",
+                                           sym_ns::Device::kCPU, ComputePeakMemoryRotaryEmbedding);
     shapes_ns::RegisterComputePeakMemoryFn(kMicrosoftDomain, "CDist", sym_ns::Device::kCPU,
                                            ComputePeakMemoryCDist);
     shapes_ns::RegisterComputePeakMemoryFn(kMicrosoftDomain, "BiasGelu", sym_ns::Device::kCPU,
