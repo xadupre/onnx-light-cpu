@@ -105,7 +105,7 @@ Float32NormalizationMoments ChanMoments(const float *input, std::size_t count) {
     mean += delta * static_cast<double>(block_count) / static_cast<double>(combined_count);
     merged_count = combined_count;
   }
-  return {static_cast<float>(mean), static_cast<float>(m2 / static_cast<double>(count))};
+  return {static_cast<float>(mean), static_cast<float>(m2 / static_cast<double>(count)), true};
 }
 
 float MeanSquareScalar(const float *input, std::size_t count) {

@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <vector>
 
 namespace {
@@ -21,7 +22,8 @@ void Benchmark(std::size_t count, bool shifted) {
     input[i] = (shifted ? 65536.0F : 0.0F) + variation;
   }
   const auto expected = onnx_light_cpu::ComputeNormalizationMomentsFloat32(input.data(), count);
-  const std::size_t calls_per_sample = std::max<std::size_t>(1, (1U << 20) / count);
+  constexpr std::size_t kElementsPerSample = 1U << 20;
+  const std::size_t calls_per_sample = (kElementsPerSample - 1) / count + 1;
   std::vector<double> timings;
   timings.reserve(101);
   float checksum = 0.0F;

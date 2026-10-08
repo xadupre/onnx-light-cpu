@@ -12,6 +12,7 @@ namespace onnx_light_cpu {
 struct Float32NormalizationMoments {
   float mean;
   float variance;
+  bool used_stable_algorithm = false;
 };
 
 float ComputeNormalizationMeanSquareFloat32(const float *input, std::size_t count);

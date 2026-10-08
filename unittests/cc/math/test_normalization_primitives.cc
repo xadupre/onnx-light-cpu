@@ -142,6 +142,7 @@ TEST(NormalizationPrimitives, Float32MomentsUseStableBlockAggregation) {
     EXPECT_FLOAT_EQ(moments.mean, static_cast<float>(mean));
     EXPECT_NEAR(moments.variance,
                 static_cast<float>(squared_deviations / static_cast<double>(count)), 2.0e-6F);
+    EXPECT_TRUE(moments.used_stable_algorithm);
   }
 }
 
