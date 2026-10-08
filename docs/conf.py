@@ -3,8 +3,11 @@
 import os
 import subprocess
 import sys
+from pathlib import Path
 
 sys.path.insert(0, os.path.abspath("_ext"))
+
+from cpp_api_pages import generate_cpp_api_pages
 
 project = "onnx-light-cpu"
 author = "xadupre"
@@ -22,7 +25,7 @@ extensions = [
 ]
 
 templates_path = ["_templates"]
-exclude_patterns = ["_build", "kernels_generated/index.rst"]
+exclude_patterns = ["_build", "kernels_generated/index.rst", "api/cpp/kernels_notes.rst"]
 html_last_updated_fmt = "%b %d, %Y"
 
 sphinx_gallery_conf = {
@@ -48,6 +51,7 @@ breathe_domain_by_extension = {"h": "cpp"}
 def _run_doxygen(app):
     """Generate the Doxygen XML consumed by Breathe before Sphinx reads it."""
     subprocess.run(["doxygen", "Doxyfile"], cwd=_docs_dir, check=True)
+    generate_cpp_api_pages(Path(_doxygen_xml), Path(app.srcdir) / "api" / "cpp")
 
 
 def setup(app):

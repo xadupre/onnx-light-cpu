@@ -56,6 +56,8 @@ docs/_build/
 docs/_doxygen/
 docs/auto_examples/
 docs/kernels_generated/
+docs/api/cpp/kernels.rst
+docs/api/cpp/custom_operators.rst
 docs/sg_execution_times.rst
 docs/examples/**/*.png
 
