@@ -55,6 +55,33 @@ TEST(OnnxLightAbsKernel, Float64) {
   }
 }
 
+TEST(OnnxLightAbsKernel, BFloat16ClearsSignBit) {
+  onnx_light_cpu::AbsKernel kernel(MakeCtx());
+  const std::vector<std::uint16_t> bits = {0x8000, 0xbf80, 0x3f80, 0xff80, 0x7f80,
+                                           0xffc1, 0x8001, 0x0001, 0xffff};
+  for (std::size_t count : {1u, 17u, 33u, 65u}) {
+    auto x = rt_ns::MakeOutputTensor(static_cast<int32_t>(rt_ns::DataType::BFLOAT16),
+                                     {static_cast<std::int64_t>(count)},
+                                     count * sizeof(std::uint16_t), nullptr);
+    auto *input = reinterpret_cast<std::uint16_t *>(x.mutable_bytes());
+    for (std::size_t i = 0; i < count; ++i) {
+      input[i] = bits[i % bits.size()];
+    }
+    const rt_ns::Tensor y = kernel(x);
+    ASSERT_EQ(y.data_type, static_cast<int32_t>(rt_ns::DataType::BFLOAT16));
+    ASSERT_EQ(y.shape, x.shape);
+    const auto *output = reinterpret_cast<const std::uint16_t *>(y.bytes());
+    for (std::size_t i = 0; i < count; ++i) {
+      EXPECT_EQ(output[i], bits[i % bits.size()] & 0x7fffu) << "at index " << i;
+    }
+
+    kernel(x, x);
+    for (std::size_t i = 0; i < count; ++i) {
+      EXPECT_EQ(input[i], bits[i % bits.size()] & 0x7fffu) << "in-place at index " << i;
+    }
+  }
+}
+
 TEST(OnnxLightAbsKernel, Int64) {
   onnx_light_cpu::AbsKernel kernel(MakeCtx());
   const std::vector<int64_t> values = {-1, 0, 3, -7, 100};
