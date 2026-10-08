@@ -5,7 +5,8 @@
 import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from unittest import TestCase
+
+from onnx_light.ext_test_case import ExtTestCase
 
 _EXT_DIR = Path(__file__).resolve().parents[2] / "docs" / "_ext"
 if str(_EXT_DIR) not in sys.path:
@@ -14,7 +15,7 @@ if str(_EXT_DIR) not in sys.path:
 from cpp_api_pages import generate_cpp_api_pages  # noqa: E402
 
 
-class TestCppApiPages(TestCase):
+class TestCppApiPages(ExtTestCase):
     def test_generates_from_public_declarations(self):
         with TemporaryDirectory() as folder:
             root = Path(folder)
