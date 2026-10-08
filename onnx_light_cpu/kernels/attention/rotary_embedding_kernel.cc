@@ -49,7 +49,8 @@ std::int64_t Position(const Tensor &positions, std::size_t index) {
 template <DataType Type>
 void Rotate(const Tensor &input, const Tensor &cos, const Tensor &sin, Tensor &output,
             const Tensor *positions, std::size_t batch, std::size_t seq, std::size_t heads,
-            std::size_t head_size, std::size_t rotate_dim, bool interleaved) {
+            std::size_t head_size, std::size_t rotate_dim, std::size_t cache_width,
+            bool interleaved) {
   using Traits = normalization::TypeTraits<Type>;
   using Storage = normalization::StorageType<Type>;
   const auto *x = input.bytes();
@@ -72,7 +73,7 @@ void Rotate(const Tensor &input, const Tensor &cos, const Tensor &sin, Tensor &o
           for (std::size_t h = 0; h < heads; ++h) {
             const std::size_t base =
                 rank4 ? ((b * heads + h) * seq + t) * head_size : (row * heads + h) * head_size;
-            const std::size_t cache_base = cache_row * half;
+            const std::size_t cache_base = cache_row * cache_width;
             for (std::size_t i = 0; i < half; ++i) {
               const std::size_t first = base + (interleaved ? i * 2 : i);
               const std::size_t second = first + (interleaved ? 1 : half);
@@ -197,13 +198,13 @@ Tensor RotaryEmbeddingKernel::operator()(const Tensor &input, const Tensor &cos,
   std::memcpy(output.mutable_bytes(), input.bytes(), input.size_bytes());
   if (type == DataType::FLOAT) {
     Rotate<DataType::FLOAT>(input, cos, sin, output, positions, batch, seq, heads, head_size,
-                            rotate_dim, interleaved);
+                            rotate_dim, static_cast<std::size_t>(cos.shape.back()), interleaved);
   } else if (type == DataType::FLOAT16) {
     Rotate<DataType::FLOAT16>(input, cos, sin, output, positions, batch, seq, heads, head_size,
-                              rotate_dim, interleaved);
+                              rotate_dim, static_cast<std::size_t>(cos.shape.back()), interleaved);
   } else {
     Rotate<DataType::BFLOAT16>(input, cos, sin, output, positions, batch, seq, heads, head_size,
-                               rotate_dim, interleaved);
+                               rotate_dim, static_cast<std::size_t>(cos.shape.back()), interleaved);
   }
   return output;
 }

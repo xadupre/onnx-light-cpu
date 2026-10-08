@@ -88,10 +88,16 @@ void ComputeShapeRotaryEmbedding(shapes_ns::ShapesContext &ctx,
   const auto &cos = ctx.Get(cos_name);
   const auto &sin = ctx.Get(sin_name);
   const auto type = x.Dtype();
-  if ((type != TensorType::kUndefined && type != TensorType::kFloat &&
-       type != TensorType::kFloat16 && type != TensorType::kBfloat16) ||
-      (cos.Dtype() != TensorType::kUndefined && cos.Dtype() != type) ||
-      (sin.Dtype() != TensorType::kUndefined && sin.Dtype() != type)) {
+  auto valid_type = [](TensorType value) {
+    return value == TensorType::kUndefined || value == TensorType::kFloat ||
+           value == TensorType::kFloat16 || value == TensorType::kBfloat16;
+  };
+  auto incompatible_types = [](TensorType left, TensorType right) {
+    return left != TensorType::kUndefined && right != TensorType::kUndefined && left != right;
+  };
+  if (!valid_type(type) || !valid_type(cos.Dtype()) || !valid_type(sin.Dtype()) ||
+      incompatible_types(type, cos.Dtype()) || incompatible_types(type, sin.Dtype()) ||
+      incompatible_types(cos.Dtype(), sin.Dtype())) {
     throw std::invalid_argument("RotaryEmbedding: input and caches must share a float type.");
   }
   const auto &shape = x.Shape();

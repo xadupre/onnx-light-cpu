@@ -20,6 +20,7 @@ void RegisterCpuCDistCases(std::vector<TestCase> &registry, TestMode mode);
 void RegisterCpuGroupQueryAttentionCases(std::vector<TestCase> &registry, TestMode mode);
 void RegisterCpuMatMulNBitsCases(std::vector<TestCase> &registry, TestMode mode);
 void RegisterCpuMicrosoftLinearAttentionCases(std::vector<TestCase> &registry, TestMode mode);
+void RegisterCpuMicrosoftRotaryEmbeddingCases(std::vector<TestCase> &registry, TestMode mode);
 void RegisterCpuSkipSimplifiedLayerNormalizationCases(std::vector<TestCase> &registry,
                                                       TestMode mode);
 

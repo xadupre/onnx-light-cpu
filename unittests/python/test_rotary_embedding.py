@@ -12,6 +12,7 @@ import onnxruntime
 from onnx_light.onnx import TensorProto, helper
 from onnx_light.onnx.reference import ReferenceEvaluator
 from onnx_light.onnx_core.graph_builder import GraphBuilder
+from onnx_light.ext_test_case import ExtTestCase
 from onnx_light_cpu import (
     custom_op_schemas,
     operator_schema_lookup,
@@ -55,7 +56,7 @@ def _model(domain, x_shape, cache_shape, positions_shape, interleaved, rotary_di
     )
 
 
-class TestRotaryEmbedding(unittest.TestCase):
+class TestRotaryEmbedding(ExtTestCase):
     def test_schemas_and_symbolic_shapes(self):
         register_operator_support()
         for domain in ("", "com.microsoft"):
@@ -86,6 +87,16 @@ class TestRotaryEmbedding(unittest.TestCase):
                     ["B", 2, "S", 4],
                 )
         self.assertEqual(len(custom_op_schemas("RotaryEmbedding")), 1)
+
+    def test_symbolic_shape_accepts_partially_unknown_types(self):
+        model = _model("", (1, 2, 4), (3, 2), (1, 2), False, 0, 1)
+        model.graph.input[0].type.tensor_type.elem_type = TensorProto.UNDEFINED
+        builder = GraphBuilder(model, schema_lookup=operator_schema_lookup)
+        result = builder.to_onnx("model").graph.output[0]
+        self.assertEqual(
+            [dimension.dim_value for dimension in result.type.tensor_type.shape.dim],
+            [1, 2, 4],
+        )
 
     def test_ort_parity(self):
         cases = (
