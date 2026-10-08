@@ -141,6 +141,7 @@ the default ONNX domain (the empty string is equivalent); ``ai.onnx.ml`` and
    "RegisterAbsKernel", "ai.onnx", "Abs"
    "RegisterAttentionKernel", "ai.onnx", "Attention"
    "RegisterLinearAttentionKernel", "ai.onnx", "LinearAttention"
+   "RegisterRotaryEmbeddingKernels", "ai.onnx", "RotaryEmbedding"
    "RegisterBinaryKernels", "ai.onnx", "Add, Sub, Mul, Div, Mod, Pow, Equal, Greater, GreaterOrEqual, Less, LessOrEqual, And, Or, Xor, BitwiseAnd, BitwiseOr, BitwiseXor, BitShift, PRelu"
    "RegisterExpKernel", "ai.onnx", "Exp"
    "RegisterLogKernel", "ai.onnx", "Log"
@@ -165,7 +166,7 @@ the default ONNX domain (the empty string is equivalent); ``ai.onnx.ml`` and
    "RegisterSwiGLUKernel", "ai.onnx", "SwiGLU"
    "RegisterTreeEnsembleKernel", "ai.onnx.ml", "TreeEnsemble"
    "RegisterVariadicElementwiseKernels", "ai.onnx", "Sum, Mean, Min, Max"
-   "RegisterMicrosoftKernels", "com.microsoft", "BiasGelu, CDist, GroupQueryAttention, LinearAttention, SkipSimplifiedLayerNormalization"
+   "RegisterMicrosoftKernels", "com.microsoft", "BiasGelu, CDist, GroupQueryAttention, LinearAttention, RotaryEmbedding, SkipSimplifiedLayerNormalization"
    "RegisterMatMulNBitsKernel", "com.microsoft", "MatMulNBits"
 
 The table describes shipped registrations, not all operators supported by

@@ -6,6 +6,7 @@
 
 #include "onnx_light_cpu/kernels/attention/attention_kernel.h"
 #include "onnx_light_cpu/kernels/attention/linear_attention_kernel.h"
+#include "onnx_light_cpu/kernels/attention/rotary_embedding_kernel.h"
 #include "onnx_light_cpu/kernels/com_microsoft/bias_gelu_kernel.h"
 #include "onnx_light_cpu/kernels/com_microsoft/cdist_kernel.h"
 #include "onnx_light_cpu/kernels/com_microsoft/group_query_attention_kernel.h"
@@ -202,6 +203,7 @@ void RegisterAllKernels(MicrosoftKernelImplementation implementation) {
   RegisterNotKernel();
   RegisterNormalizationKernels();
   RegisterRmsNormalizationKernel();
+  RegisterRotaryEmbeddingKernels();
   RegisterSigmoidKernel();
   RegisterTanhKernel();
   RegisterSimplifiedLayerNormalizationKernel();

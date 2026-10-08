@@ -14,6 +14,7 @@ void CollectCpuAttentionTestCases(std::vector<TestCase> &registry, const std::st
   static const OpRegisterModeMap kEntries = {
       {"Attention", &RegisterCpuAttentionCases},
       {"LinearAttention", &RegisterCpuLinearAttentionCases},
+      {"RotaryEmbedding", &RegisterCpuRotaryEmbeddingCases},
   };
   DispatchRegisterByOpType(registry, op_type, kEntries, mode);
 }

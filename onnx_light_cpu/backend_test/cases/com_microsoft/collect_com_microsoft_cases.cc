@@ -17,6 +17,7 @@ void CollectCpuMicrosoftTestCases(std::vector<TestCase> &registry, const std::st
       {"GroupQueryAttention", &RegisterCpuGroupQueryAttentionCases},
       {"LinearAttention", &RegisterCpuMicrosoftLinearAttentionCases},
       {"MatMulNBits", &RegisterCpuMatMulNBitsCases},
+      {"RotaryEmbedding", &RegisterCpuMicrosoftRotaryEmbeddingCases},
       {"SkipSimplifiedLayerNormalization", &RegisterCpuSkipSimplifiedLayerNormalizationCases},
   };
   DispatchRegisterByOpType(registry, op_type, kEntries, mode);

@@ -151,6 +151,7 @@ def test_native_kernel_tests_run_in_source_integration_not_standalone():
         "test_kernels_doc_e2e.py",
         "test_nonzero.py",
         "test_reduce_sum_kernel.py",
+        "test_rotary_embedding.py",
         "test_scatter_nd.py",
         "test_simplified_layer_normalization.py",
         "test_skip_simplified_layer_normalization.py",
