@@ -1,25 +1,8 @@
-Kernel classes
---------------
+Kernel implementation notes
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-.. doxygenclass:: onnx_light_cpu::AbsKernel
-   :project: onnx_light_cpu
-   :members:
-
-.. doxygenclass:: onnx_light_cpu::ExpKernel
-   :project: onnx_light_cpu
-   :members:
-
-.. doxygenclass:: onnx_light_cpu::LogKernel
-   :project: onnx_light_cpu
-   :members:
-
-.. doxygenclass:: onnx_light_cpu::GemmKernel
-   :project: onnx_light_cpu
-   :members:
-
-.. doxygenclass:: onnx_light_cpu::MatMulNBitsKernel
-   :project: onnx_light_cpu
-   :members:
+MatMulNBits
+^^^^^^^^^^^
 
 The ``com.microsoft::MatMulNBits-1`` CPU implementation targets the
 Qwen2/Qwen3 weight layout with matching ``FLOAT``, ``FLOAT16``, or ``BFLOAT16``
@@ -32,9 +15,8 @@ Explicit zero points, ``g_idx``, prepacked provider-specific layouts, other
 bit widths, block sizes, mixed floating-point types, and ``DOUBLE`` are
 rejected.
 
-.. doxygenclass:: onnx_light_cpu::GatherKernel
-   :project: onnx_light_cpu
-   :members:
+Gather
+^^^^^^
 
 Gather copies fixed-width elements without numerical conversion, accepts
 ``INT32`` or ``INT64`` indices, and handles scalar/multidimensional indices,
@@ -47,9 +29,8 @@ longer fall back to a single worker.
 As in onnx-light's built-in Gather, strings, complex values, and packed
 sub-byte types are not supported.
 
-.. doxygenclass:: onnx_light_cpu::NonZeroKernel
-   :project: onnx_light_cpu
-   :members:
+NonZero
+^^^^^^^
 
 NonZero supports ``BOOL`` inputs from opset 9 onwards, including the
 ``Equal -> NonZero -> Transpose`` token-position pattern. It produces
@@ -64,9 +45,8 @@ Scalar inputs follow the ONNX specification: ``[0, 0]`` for false and
 ``[0, 1]`` for true. ONNX Runtime 1.30 instead returns ``[1, count]`` for
 scalars; ranked BOOL outputs match ONNX Runtime.
 
-.. doxygenclass:: onnx_light_cpu::ScatterNDKernel
-   :project: onnx_light_cpu
-   :members:
+ScatterND
+^^^^^^^^^
 
 ScatterND implements replacement semantics from opset 11 onwards. The
 ``reduction`` attribute (introduced in opset 16) must be absent or ``"none"``;
@@ -96,7 +76,7 @@ The embedding fixture combines ``Gather -> Equal -> NonZero -> Transpose
 ``[visual_tokens, 6656]`` vision features, including zero-image inputs.
 
 AVX-512CD conflict-detection evaluation (2026-10-03)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+""""""""""""""""""""""""""""""""""""""""""""""""""""
 
 ScatterND is the only registered indexed-destination writer; Gather reads
 indices but writes contiguous output, and there is no histogram or
@@ -170,9 +150,8 @@ eight-lane boundaries against the built-in kernel and the local last-wins
 contract. Because every measured case regressed, no AVX-512CD compiler or
 runtime dispatch is added; the existing scalar replacement path remains.
 
-.. doxygenclass:: onnx_light_cpu::CastKernel
-   :project: onnx_light_cpu
-   :members:
+Cast
+^^^^
 
 Cast preserves the input shape while converting its element type. Common
 numeric conversions use typed loops and the runtime executor for large
@@ -188,13 +167,8 @@ values outside the integer intermediate range clamp to the destination
 bounds. Representable ``INT64`` intermediates retain modular narrowing;
 ``UINT64`` destinations clamp to their own range.
 
-.. doxygenclass:: onnx_light_cpu::NotKernel
-   :project: onnx_light_cpu
-   :members:
-
-.. doxygenclass:: onnx_light_cpu::SliceKernel
-   :project: onnx_light_cpu
-   :members:
+Slice
+^^^^^
 
 Slice supports tensor parameters from opset 10 onwards and the legacy
 attribute form. It handles optional axes and steps, clipped bounds, negative
@@ -202,18 +176,16 @@ steps, empty outputs, and the same fixed-width data types as Gather.
 Contiguous trailing dimensions are copied together; strided copies use
 bounded-rank coordinates and the runtime executor for large outputs.
 
-.. doxygenclass:: onnx_light_cpu::ConcatKernel
-   :project: onnx_light_cpu
-   :members:
+Concat
+^^^^^^
 
 Concat accepts one or more equal-rank tensors, including empty inputs and
 negative axes. It preserves fixed-width element bytes and validates matching
 non-axis dimensions, output sizes and non-overlap. Large concatenations use
 runtime-owned byte tiles, including concatenations along axis zero.
 
-.. doxygenclass:: onnx_light_cpu::SplitKernel
-   :project: onnx_light_cpu
-   :members:
+Split
+^^^^^
 
 Split supports explicit sizes (legacy attributes or an ``INT64`` tensor),
 implicit equal partitions, and the opset-18 ``num_outputs`` form with a
@@ -222,13 +194,8 @@ supported for the same fixed-width data types as Gather. Outputs own their
 storage, including last-axis QKV partitions across multiple tokens.
 Large copies use the runtime executor; small splits remain serial.
 
-.. doxygenclass:: onnx_light_cpu::SimplifiedLayerNormalizationKernel
-   :project: onnx_light_cpu
-   :members:
-
-.. doxygenstruct:: onnx_light_cpu::SimplifiedLayerNormalizationResult
-   :project: onnx_light_cpu
-   :members:
+SimplifiedLayerNormalization
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 The experimental default-domain operator normalizes the suffix beginning at
 ``axis`` and broadcasts Scale to the entire input. Input and Scale may have
