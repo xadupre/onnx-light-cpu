@@ -815,7 +815,10 @@ class TestBackendCases(ExtTestCase):
             assert record.device == "CPU"
             assert isinstance(record.types, tuple)
             assert record.types, record
-            if (record.domain == "com.microsoft" and record.op_type == "LinearAttention") or (
+            if (
+                record.domain == "com.microsoft"
+                and record.op_type in {"LinearAttention", "RotaryEmbedding"}
+            ) or (
                 record.op_type
                 in {
                     "Add",
@@ -852,7 +855,7 @@ class TestBackendCases(ExtTestCase):
                 assert record.since_version >= 1
             elif record.op_type in {"ReduceSum", "SimplifiedLayerNormalization"}:
                 assert record.since_version == 1
-            elif record.op_type in {"Attention", "RMSNormalization"}:
+            elif record.op_type in {"Attention", "RMSNormalization", "RotaryEmbedding"}:
                 assert record.since_version == 23
             elif record.op_type == "LinearAttention" and record.domain != "com.microsoft":
                 assert record.since_version == 27
