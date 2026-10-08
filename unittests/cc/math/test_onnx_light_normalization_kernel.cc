@@ -751,6 +751,36 @@ TEST(OnnxLightNormalizationKernel, ContiguousMomentsRemainStableForLargeOffsets)
   EXPECT_FLOAT_EQ(shared.variance, 0.5F);
 }
 
+TEST(OnnxLightNormalizationKernel, LayerNormalizationUsesChanMomentsForShiftedInput) {
+  constexpr std::int64_t width = 16384;
+  std::vector<float> values(width);
+  double sum = 0.0;
+  for (std::size_t i = 0; i < values.size(); ++i) {
+    values[i] = 65536.0F + static_cast<float>(static_cast<std::int64_t>(i % 17) - 8) * 0.125F;
+    sum += values[i];
+  }
+  const double mean = sum / static_cast<double>(values.size());
+  double squared_deviations = 0.0;
+  for (const float value : values) {
+    const double delta = static_cast<double>(value) - mean;
+    squared_deviations += delta * delta;
+  }
+  const double variance = squared_deviations / static_cast<double>(values.size());
+
+  const onnx_light_cpu::LayerNormalizationKernel kernel(MakeContext(17));
+  const auto x = rt_ns::Tensor::FromFloat("", {1, width}, values);
+  const auto scale = rt_ns::Tensor::FromFloat("", {width}, std::vector<float>(width, 1.0F));
+  const auto result = kernel(x, scale, nullptr, 1, 1.0e-5F, 1, true, true);
+  ASSERT_TRUE(result.mean);
+  ASSERT_TRUE(result.inv_std_dev);
+  EXPECT_FLOAT_EQ(Value(*result.mean, 0), static_cast<float>(mean));
+  EXPECT_NEAR(Value(*result.inv_std_dev, 0), 1.0 / std::sqrt(variance + 1.0e-5F), 1.0e-6);
+  for (std::size_t i = 0; i < values.size(); ++i) {
+    const double expected = (static_cast<double>(values[i]) - mean) / std::sqrt(variance + 1.0e-5F);
+    EXPECT_NEAR(Value(result.y, i), expected, 7.0e-4);
+  }
+}
+
 TEST(OnnxLightNormalizationKernel, InstanceAndMvnFloat32ContiguousMomentsMatchCenteredReference) {
   const onnx_light_cpu::InstanceNormalizationKernel instance(MakeContext(22));
   const onnx_light_cpu::MeanVarianceNormalizationKernel mvn(MakeContext(13));

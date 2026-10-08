@@ -7,6 +7,7 @@
 #include "onnx_light_cpu/impl/math/half_conversion.h"
 #include "onnx_light_cpu/impl/simd_level.h"
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
 #include <stdexcept>
@@ -50,6 +51,61 @@ float CenteredVariance(const float *input, std::size_t count, float mean) {
     sums[index & 3] += delta * delta;
   }
   return (sums[0] + sums[1] + sums[2] + sums[3]) / static_cast<float>(count);
+}
+
+Float32NormalizationMoments ChanMoments(const float *input, std::size_t count) {
+  constexpr std::size_t kBlockSize = 256;
+  double mean = 0.0;
+  double m2 = 0.0;
+  std::size_t merged_count = 0;
+  for (std::size_t block_begin = 0; block_begin < count; block_begin += kBlockSize) {
+    const std::size_t block_count = std::min(kBlockSize, count - block_begin);
+    const float origin = input[block_begin];
+    float sum0 = 0.0F, sum1 = 0.0F, sum2 = 0.0F, sum3 = 0.0F;
+    float square_sum0 = 0.0F, square_sum1 = 0.0F, square_sum2 = 0.0F, square_sum3 = 0.0F;
+    std::size_t index = 0;
+    for (; index + 4 <= block_count; index += 4) {
+      const float delta0 = input[block_begin + index] - origin;
+      const float delta1 = input[block_begin + index + 1] - origin;
+      const float delta2 = input[block_begin + index + 2] - origin;
+      const float delta3 = input[block_begin + index + 3] - origin;
+      sum0 += delta0;
+      sum1 += delta1;
+      sum2 += delta2;
+      sum3 += delta3;
+      square_sum0 += delta0 * delta0;
+      square_sum1 += delta1 * delta1;
+      square_sum2 += delta2 * delta2;
+      square_sum3 += delta3 * delta3;
+    }
+    for (; index < block_count; ++index) {
+      const float delta = input[block_begin + index] - origin;
+      sum0 += delta;
+      square_sum0 += delta * delta;
+    }
+    const double sum = static_cast<double>(sum0) + sum1 + sum2 + sum3;
+    const double square_sum =
+        static_cast<double>(square_sum0) + square_sum1 + square_sum2 + square_sum3;
+    const double block_mean = static_cast<double>(origin) + sum / block_count;
+    double block_m2 = square_sum - sum * sum / block_count;
+    if (block_m2 < 0.0) {
+      block_m2 = 0.0;
+    }
+
+    if (merged_count == 0) {
+      mean = block_mean;
+      m2 = block_m2;
+      merged_count = block_count;
+      continue;
+    }
+    const std::size_t combined_count = merged_count + block_count;
+    const double delta = block_mean - mean;
+    m2 += block_m2 + delta * delta * static_cast<double>(merged_count) *
+                         static_cast<double>(block_count) / static_cast<double>(combined_count);
+    mean += delta * static_cast<double>(block_count) / static_cast<double>(combined_count);
+    merged_count = combined_count;
+  }
+  return {static_cast<float>(mean), static_cast<float>(m2 / static_cast<double>(count)), true};
 }
 
 float MeanSquareScalar(const float *input, std::size_t count) {
@@ -254,13 +310,18 @@ float ComputeNormalizationMeanSquareFloat32(const float *input, std::size_t coun
 
 Float32NormalizationMoments ComputeNormalizationMomentsFloat32(const float *input,
                                                                std::size_t count) {
+  constexpr std::size_t kChanThreshold = 8192;
   if (count == 0) {
     throw std::invalid_argument("normalization reduction size must be positive.");
   }
   Float32NormalizationMoments moments = GetNormalizationDispatch().moments(input, count);
   const float second_moment = moments.variance + moments.mean * moments.mean;
   if (!(moments.variance > CancellationFloor(second_moment, count))) {
-    moments.variance = CenteredVariance(input, count, moments.mean);
+    if (count >= kChanThreshold && std::isfinite(second_moment)) {
+      moments = ChanMoments(input, count);
+    } else {
+      moments.variance = CenteredVariance(input, count, moments.mean);
+    }
   }
   return moments;
 }

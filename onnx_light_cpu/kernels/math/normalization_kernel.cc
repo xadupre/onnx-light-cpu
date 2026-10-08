@@ -106,7 +106,8 @@ norm::Moments<norm::AccumulatorType<Type>> ComputeSliceMoments(const norm::Stora
     if (count >= 32) {
       const Float32NormalizationMoments moments = ComputeNormalizationMomentsFloat32(input, count);
       const float second_moment = moments.variance + moments.mean * moments.mean;
-      if (moments.variance > norm::RawMomentsCancellationFloor(second_moment, count)) {
+      if (moments.used_stable_algorithm ||
+          moments.variance > norm::RawMomentsCancellationFloor(second_moment, count)) {
         return {moments.mean, moments.variance};
       }
       // Preserve the original mean as well as variance for ill-conditioned
