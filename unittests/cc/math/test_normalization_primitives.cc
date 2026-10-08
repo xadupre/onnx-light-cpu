@@ -157,6 +157,13 @@ TEST(NormalizationPrimitives, Float32ChanMomentsPreserveNonFiniteValues) {
   moments = ComputeNormalizationMomentsFloat32(input.data(), input.size());
   EXPECT_TRUE(std::isnan(moments.mean));
   EXPECT_TRUE(std::isnan(moments.variance));
+
+  const float maximum = std::numeric_limits<float>::max();
+  for (std::size_t index = 0; index < input.size(); ++index) {
+    input[index] = index % 8 < 4 ? maximum : -maximum;
+  }
+  moments = ComputeNormalizationMomentsFloat32(input.data(), input.size());
+  EXPECT_FALSE(moments.used_stable_algorithm);
 }
 
 TEST(NormalizationPrimitives, BFloat16SubnormalsAndNanCanonicalization) {

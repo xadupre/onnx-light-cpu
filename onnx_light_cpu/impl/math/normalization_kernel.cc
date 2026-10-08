@@ -317,7 +317,7 @@ Float32NormalizationMoments ComputeNormalizationMomentsFloat32(const float *inpu
   Float32NormalizationMoments moments = GetNormalizationDispatch().moments(input, count);
   const float second_moment = moments.variance + moments.mean * moments.mean;
   if (!(moments.variance > CancellationFloor(second_moment, count))) {
-    if (count >= kChanThreshold) {
+    if (count >= kChanThreshold && std::isfinite(second_moment)) {
       moments = ChanMoments(input, count);
     } else {
       moments.variance = CenteredVariance(input, count, moments.mean);

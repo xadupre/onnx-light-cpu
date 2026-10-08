@@ -99,8 +99,8 @@ Measurement layer: **kernel throughput**. The
 sample, and reports per-call median and interquartile bounds. The ``shifted``
 distribution adds 65,536 to a repeating low-variance pattern and exercises the
 cancellation path. The test host was a 13th Gen Intel Core i7-13800H pinned to
-one CPU, GCC 14.2.0, Release mode, and AVX-512 dispatch. Baseline source was
-``0239e12``.
+one CPU, GCC 14.2.0, Release mode, and AVX2/FMA dispatch
+(``detected_simd_level=3``). Baseline source was ``0239e12``.
 
 .. list-table:: Shifted float32 moments
    :header-rows: 1
