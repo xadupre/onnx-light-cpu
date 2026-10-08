@@ -175,7 +175,7 @@ TEST(OnnxLightConcatKernel, InvalidInputsAxesAndShapes) {
   }
 }
 
-TEST(OnnxLightConcatKernel, UnsupportedTypesMatchBuiltinRejection) {
+TEST(OnnxLightConcatKernel, UnsupportedTypesAreRejected) {
   for (DataType type : {DataType::STRING, DataType::INT4, DataType::UINT4, DataType::FLOAT4E2M1,
                         DataType::INT2, DataType::UINT2, DataType::FLOAT6E2M3, DataType::FLOAT6E3M2,
                         DataType::COMPLEX64, DataType::COMPLEX128, DataType::UNDEFINED}) {
@@ -188,7 +188,8 @@ TEST(OnnxLightConcatKernel, UnsupportedTypesMatchBuiltinRejection) {
   }
   const Tensors strings{Tensor::FromStrings("strings", {2}, {"hello", "world"})};
   EXPECT_THROW(onnx_light_cpu::ConcatKernel{MakeCtx()}(strings, 0), std::invalid_argument);
-  EXPECT_THROW(BuiltinConcat{MakeCtx()}(strings, 0), std::invalid_argument);
+  const Tensor builtin_strings = BuiltinConcat{MakeCtx()}(strings, 0);
+  EXPECT_EQ(builtin_strings.AsStrings(), strings[0].AsStrings());
 }
 
 TEST(OnnxLightConcatKernel, CheckedDimensionsAxisSumAndByteProducts) {
