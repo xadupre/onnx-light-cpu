@@ -207,6 +207,54 @@ TEST(MatMulNBitsKernel, PreparesOnlyImmutableWeightsAndScales) {
   }
 }
 
+TEST(MatMulNBitsKernel, PreparesInt8OnlyForImmutableInputsAndAccountsForResidency) {
+  constexpr std::int64_t k = 64;
+  constexpr std::int64_t n = 13;
+  const ONNX_LIGHT_NAMESPACE::NodeProto node = MakeNode(k, n, 8);
+  onnx_light_cpu::MatMulNBitsKernel kernel{
+      node, rt_ns::KernelContext{rt_ns::OpsetId("com.microsoft", 1)}};
+  const bool available = onnx_light_cpu::MatMulNBitsInt8Float32Available();
+  EXPECT_EQ(kernel.HasPreparations({"B", "scales"}), available);
+  EXPECT_FALSE(kernel.HasPreparations({"B"}));
+  EXPECT_FALSE(kernel.HasPreparations({"scales"}));
+  rt_ns::RuntimeContext rt{rt_ns::KernelContext{rt_ns::OpsetId("com.microsoft", 1)}};
+  rt.Put("B",
+         rt_ns::Tensor::FromUint8("B", {n, k / 32, 32},
+                                  std::vector<std::uint8_t>(static_cast<std::size_t>(n * k), 129)));
+  rt.Put("scales",
+         rt_ns::Tensor::FromFloat("scales", {n, k / 32},
+                                  std::vector<float>(static_cast<std::size_t>(n * k / 32), 0.25f)));
+  rt_ns::PreparedExecutionState state;
+  kernel.Prepare(rt, {"B", "scales"}, state);
+  const std::size_t expected_bytes = 2 * 2 * (256 + 8 * 2 * sizeof(float));
+  EXPECT_EQ(state.objects().resident_bytes(), available ? expected_bytes : 0U);
+  kernel.Prepare(rt, {"B", "scales"}, state);
+  EXPECT_EQ(state.objects().resident_bytes(), available ? expected_bytes : 0U);
+
+  const rt_ns::Tensor a = rt_ns::Tensor::FromFloat("A", {3, k}, std::vector<float>(3 * k, 0.5f));
+  const rt_ns::Tensor output = kernel(a, rt.Get("B"), rt.Get("scales"));
+  for (std::size_t index = 0; index < output.element_count(); ++index) {
+    EXPECT_FLOAT_EQ(output.AsFloat()[index], 8.0f);
+  }
+}
+
+TEST(MatMulNBitsKernel, Int8HalfScalesKeepGenericFallback) {
+  const ONNX_LIGHT_NAMESPACE::NodeProto node = MakeNode(32, 8, 8);
+  onnx_light_cpu::MatMulNBitsKernel kernel{
+      node, rt_ns::KernelContext{rt_ns::OpsetId("com.microsoft", 1)}};
+  rt_ns::RuntimeContext rt{rt_ns::KernelContext{rt_ns::OpsetId("com.microsoft", 1)}};
+  rt.Put("B", rt_ns::Tensor::FromUint8("B", {8, 1, 32}, std::vector<std::uint8_t>(256, 129)));
+  rt.Put("scales", rt_ns::MakeFloat16Tensor("scales", {8, 1}, std::vector<float>(8, 0.25f)));
+  rt_ns::PreparedExecutionState state;
+  kernel.Prepare(rt, {"B", "scales"}, state);
+  EXPECT_EQ(state.objects().resident_bytes(), 0U);
+  const rt_ns::Tensor a = rt_ns::MakeFloat16Tensor("A", {1, 32}, std::vector<float>(32, 0.5f));
+  const rt_ns::Tensor y = kernel(a, rt.Get("B"), rt.Get("scales"));
+  for (std::size_t i = 0; i < y.element_count(); ++i) {
+    EXPECT_FLOAT_EQ(ReadValue(y, i), 4.0f);
+  }
+}
+
 TEST(MatMulNBitsKernel, Accuracy4DynamicPlanSupportsHalfPrecisionInputsAndOutputs) {
   if (!onnx_light_cpu::MatMulNBitsAccuracy4Float32Available()) {
     GTEST_SKIP() << "The optimized accuracy-level-4 kernel is unavailable.";

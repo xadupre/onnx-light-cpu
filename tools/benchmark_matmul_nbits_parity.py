@@ -4,7 +4,9 @@
 Run ``python -m tools.benchmark_matmul_nbits_parity --projection k --m 8``.
 Use ``--full`` for all projections, M=1/8/128 and FP32/FP16/BF16. Large
 projections are deliberately opt-in. No floating-point weight matrix is built.
-These are reference-configuration dimensions, not an audit of an exported Muse graph.
+``--qwen-int8`` measures each of the six Qwen2 prefill projection shapes as an
+isolated synthetic node with the same graph and inputs in both runtimes. It
+does not measure the exported end-to-end Qwen2 graph.
 """
 
 from __future__ import annotations
@@ -27,6 +29,14 @@ VOCABULARY = 202048
 BLOCK_SIZE = 32
 DTYPES = ("float32", "float16", "bfloat16")
 ROWS = (1, 8, 128)
+QWEN_INT8_PROJECTIONS = {
+    "lm_head": (512, 32000),
+    "mlp/gate_proj": (512, 1376),
+    "mlp/up_proj": (512, 1376),
+    "mlp/down_proj": (1376, 512),
+    "attn/qkv_proj": (512, 1024),
+    "attn/o_proj": (512, 512),
+}
 
 
 def projections():
@@ -93,7 +103,7 @@ def memory_accounting(m, k, n, dtype, block_size=BLOCK_SIZE, *, threads=1, accur
     }
 
 
-def make_inputs(m, k, n, dtype, block_size=BLOCK_SIZE, seed=548):
+def make_inputs(m, k, n, dtype, block_size=BLOCK_SIZE, seed=548, bits=4):
     import ml_dtypes
     import numpy as np
 
@@ -106,12 +116,12 @@ def make_inputs(m, k, n, dtype, block_size=BLOCK_SIZE, seed=548):
     blocks = (k + block_size - 1) // block_size
     a = random.uniform(-0.5, 0.5, size=(m, k)).astype(storage)
     # Generate packed bytes directly: no temporary [K,N] or [N,K] float weights.
-    packed = random.integers(0, 256, size=(n, blocks, block_size // 2), dtype=np.uint8)
+    packed = random.integers(0, 256, size=(n, blocks, block_size * bits // 8), dtype=np.uint8)
     scales = random.uniform(0.001, 0.02, size=(n, blocks)).astype(storage)
     return a, packed, scales
 
 
-def make_model(m, k, n, dtype, packed, scales, block_size=BLOCK_SIZE, accuracy_level=0):
+def make_model(m, k, n, dtype, packed, scales, block_size=BLOCK_SIZE, accuracy_level=0, bits=4):
     from onnx_light.onnx import TensorProto, helper, numpy_helper
 
     element = {
@@ -129,7 +139,7 @@ def make_model(m, k, n, dtype, packed, scales, block_size=BLOCK_SIZE, accuracy_l
                     domain="com.microsoft",
                     K=k,
                     N=n,
-                    bits=4,
+                    bits=bits,
                     block_size=block_size,
                     accuracy_level=accuracy_level,
                 )
@@ -154,7 +164,7 @@ def fingerprint(*arrays):
     )
 
 
-def run_case(name, m, k, n, dtype, *, threads=1, repeat=3, warmup=1, accuracy_level=0):
+def run_case(name, m, k, n, dtype, *, threads=1, repeat=3, warmup=1, accuracy_level=0, bits=4):
     """Prepare once, check independent ORT parity, then reuse both sessions."""
     import numpy as np
     import onnxruntime as ort
@@ -169,9 +179,9 @@ def run_case(name, m, k, n, dtype, *, threads=1, repeat=3, warmup=1, accuracy_le
     )
 
     started = time.perf_counter()
-    a, packed, scales = make_inputs(m, k, n, dtype)
+    a, packed, scales = make_inputs(m, k, n, dtype, bits=bits)
     original = fingerprint(a, packed, scales)
-    model = make_model(m, k, n, dtype, packed, scales, accuracy_level=accuracy_level)
+    model = make_model(m, k, n, dtype, packed, scales, accuracy_level=accuracy_level, bits=bits)
     serialized = model.SerializeToString()
     original_model = hashlib.sha256(serialized).hexdigest()
     input_preparation = time.perf_counter() - started
@@ -192,6 +202,8 @@ def run_case(name, m, k, n, dtype, *, threads=1, repeat=3, warmup=1, accuracy_le
     if not any("MatMulNBits" in kernel for kernel in used_kernel_names(cpu)):
         raise AssertionError("MatMulNBits did not dispatch the registered CPU kernel")
     kernel_paths = used_kernel_paths(cpu)
+    if bits == 8 and not any(path.startswith("int8_") for path in kernel_paths):
+        raise AssertionError(f"Prepared INT8 path was not selected for {name}: {kernel_paths}")
     set_kernel_usage_recording(cpu, False)
 
     options = ort.SessionOptions()
@@ -254,6 +266,8 @@ def run_case(name, m, k, n, dtype, *, threads=1, repeat=3, warmup=1, accuracy_le
         "float16": (1e-2, 1e-2),
         "bfloat16": (2e-2, 3e-2),
     }[dtype]
+    if bits == 8:
+        rtol, atol = 0.05, 0.1
     np.testing.assert_allclose(actual.astype(np.float32), expected, rtol=rtol, atol=atol)
     np.testing.assert_array_equal(cpu_run(), actual)
     samples = measure_alternating((cpu_run, ort_run), repeat, warmup)
@@ -262,13 +276,14 @@ def run_case(name, m, k, n, dtype, *, threads=1, repeat=3, warmup=1, accuracy_le
     assert hashlib.sha256(model.SerializeToString()).hexdigest() == original_model
     return {
         "projection": name,
-        "shape_source": "reference configuration; synthetic constants, not audited graph weights",
+        "shape_source": "projection dimensions; synthetic constants, not exported graph weights",
         "m": m,
         "k": k,
         "n": n,
         "dtype": dtype,
         "block_size": BLOCK_SIZE,
         "accuracy_level": accuracy_level,
+        "bits": bits,
         "threads": threads,
         "simd_level": str(detect_simd_level()),
         "kernel_paths": kernel_paths,
@@ -298,8 +313,13 @@ def run_case(name, m, k, n, dtype, *, threads=1, repeat=3, warmup=1, accuracy_le
         "timing_scope": "steady-state session.run with output allocation; preparation excluded",
         "max_absolute_error": float(np.max(np.abs(actual.astype(np.float32) - expected))),
         "constants_unchanged": True,
-        "memory": memory_accounting(
-            m, k, n, dtype, threads=threads, accuracy_level=accuracy_level
+        "memory": (
+            {
+                "packed_initializer_bytes": packed.nbytes,
+                "prepared_bytes": ((n + 7) // 8) * (k // 32) * (256 + 64),
+            }
+            if bits == 8
+            else memory_accounting(m, k, n, dtype, threads=threads, accuracy_level=accuracy_level)
         ),
     }
 
@@ -310,12 +330,26 @@ def parse_args(argv=None):
     parser.add_argument("--m", action="append", type=int, choices=ROWS)
     parser.add_argument("--dtype", action="append", choices=DTYPES)
     parser.add_argument("--full", action="store_true")
+    parser.add_argument(
+        "--qwen-int8",
+        action="store_true",
+        help="Synthetic six-projection Qwen2 prefill, M=128, FLOAT, INT8, four threads",
+    )
     parser.add_argument("--threads", type=int, default=1)
     parser.add_argument("--repeat", type=int, default=3)
     parser.add_argument("--warmup", type=int, default=1)
     parser.add_argument("--accuracy-level", type=int, choices=(0, 4), default=0)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args(argv)
+    if args.qwen_int8 and (
+        args.projection
+        or args.m
+        or args.dtype
+        or args.full
+        or args.threads != 1
+        or args.accuracy_level != 0
+    ):
+        parser.error("--qwen-int8 selects its own projections, M, dtype, threads and accuracy")
     if args.threads < 1 or args.repeat < 1 or args.warmup < 0:
         parser.error("threads/repeat must be positive and warmup nonnegative")
     return args
@@ -323,9 +357,16 @@ def parse_args(argv=None):
 
 def main(argv=None):
     args = parse_args(argv)
-    names = args.projection or (tuple(projections()) if args.full else ("k",))
-    rows = args.m or (ROWS if args.full else (1,))
-    dtypes = args.dtype or (DTYPES if args.full else ("float32",))
+    shape_map = QWEN_INT8_PROJECTIONS if args.qwen_int8 else projections()
+    names = (
+        tuple(shape_map)
+        if args.qwen_int8
+        else args.projection or (tuple(shape_map) if args.full else ("k",))
+    )
+    rows = (128,) if args.qwen_int8 else args.m or (ROWS if args.full else (1,))
+    dtypes = (
+        ("float32",) if args.qwen_int8 else args.dtype or (DTYPES if args.full else ("float32",))
+    )
     results = []
     report = {
         "expected_cases": len(names) * len(rows) * len(dtypes),
@@ -339,12 +380,13 @@ def main(argv=None):
                     run_case(
                         name,
                         m,
-                        *projections()[name],
+                        *shape_map[name],
                         dtype,
-                        threads=args.threads,
+                        threads=4 if args.qwen_int8 else args.threads,
                         repeat=args.repeat,
                         warmup=args.warmup,
-                        accuracy_level=args.accuracy_level,
+                        accuracy_level=4 if args.qwen_int8 else args.accuracy_level,
+                        bits=8 if args.qwen_int8 else 4,
                     )
                 )
                 report["complete"] = len(results) == report["expected_cases"]
