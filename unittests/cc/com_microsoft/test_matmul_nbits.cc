@@ -217,6 +217,28 @@ TEST(MatMulNBits, PreparedInt8UsesRuntimeExecutor) {
   EXPECT_GT(executor.blocks, 1);
 }
 
+TEST(MatMulNBits, PreparedInt8HandlesNonFiniteAndTinyActivations) {
+  constexpr std::size_t k = 32;
+  constexpr std::size_t n = 9;
+  std::vector<std::uint8_t> b(n * k, 129), packed(2 * 256);
+  std::vector<std::int32_t> sums(16);
+  std::vector<float> scales(n, 1e30f), packed_scales(16), a(3 * k), y(3 * n);
+  std::fill_n(a.data(), k, 1e-40f);
+  std::fill_n(a.data() + k, k, 0.5f);
+  a[k] = std::numeric_limits<float>::quiet_NaN();
+  std::fill_n(a.data() + 2 * k, k, 0.5f);
+  a[2 * k] = std::numeric_limits<float>::infinity();
+  PackMatMulNBitsInt8(b.data(), scales.data(), packed.data(), sums.data(), packed_scales.data(), k,
+                      n);
+  MatMulNBitsInt8Float32(a.data(), packed.data(), sums.data(), packed_scales.data(), nullptr,
+                         y.data(), 3, k, n, 2);
+  for (std::size_t column = 0; column < n; ++column) {
+    EXPECT_NEAR(y[column], 32e-10f, 1e-10f);
+    EXPECT_TRUE(std::isnan(y[n + column]));
+    EXPECT_TRUE(std::isinf(y[2 * n + column]));
+  }
+}
+
 TEST(MatMulNBits, PanelSchedulingAndNestedSuppression) {
   const std::vector<float> a(9 * 33, 1);
   const std::vector<float> scales(513 * 2, 0.5f);

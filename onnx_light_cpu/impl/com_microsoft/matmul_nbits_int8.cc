@@ -114,27 +114,57 @@ void MatMulNBitsInt8Float32(const float *a, const std::uint8_t *weights,
                             float *y, std::size_t rows, std::size_t k, std::size_t n,
                             std::int64_t max_participants) {
   const std::size_t blocks = k / 32;
-  const std::size_t groups = (n + 7) / 8;
+  const std::size_t groups = n / 8 + (n % 8 != 0);
   const DotFn dot = SelectedDot();
   ExecuteRanges(
       static_cast<std::int64_t>(rows), ExecutionSchedule{1, 2, max_participants},
       [&](std::int64_t begin, std::int64_t end) {
         std::vector<std::uint8_t> quantized(k);
         std::vector<float> activation_scales(blocks);
+        std::vector<float> activation_maxima(blocks);
         for (std::size_t row = static_cast<std::size_t>(begin); row < static_cast<std::size_t>(end);
              ++row) {
+          bool finite = true;
           for (std::size_t block = 0; block < blocks; ++block) {
             const float *source = a + row * k + block * 32;
             float maximum = 0.0f;
             for (std::size_t p = 0; p < 32; ++p) {
+              if (!std::isfinite(source[p])) {
+                finite = false;
+                break;
+              }
               maximum = std::max(maximum, std::abs(source[p]));
             }
+            if (!finite) {
+              break;
+            }
+            activation_maxima[block] = maximum;
             activation_scales[block] = maximum / 63.0f;
             for (std::size_t p = 0; p < 32; ++p) {
-              const float scaled = maximum == 0.0f ? 0.0f : source[p] * (63.0f / maximum);
+              const float scaled = maximum == 0.0f    ? 0.0f
+                                   : maximum < 1e-36f ? (source[p] / maximum) * 63.0f
+                                                      : source[p] * (63.0f / maximum);
               quantized[block * 32 + p] =
                   static_cast<std::uint8_t>(static_cast<int>(std::nearbyint(scaled)) + 64);
             }
+          }
+          if (!finite) {
+            for (std::size_t column = 0; column < n; ++column) {
+              float sum = bias == nullptr ? 0.0f : bias[column];
+              const std::size_t group = column / 8;
+              const std::size_t lane = column % 8;
+              for (std::size_t block = 0; block < blocks; ++block) {
+                const std::size_t index = (group * blocks + block) * 8;
+                for (std::size_t p = 0; p < 32; ++p) {
+                  const auto weight = weights[index * 32 + (p / 4) * 32 + lane * 4 + p % 4];
+                  sum +=
+                      a[row * k + block * 32 + p] *
+                      (static_cast<float>(static_cast<int>(weight) - 128) * scales[index + lane]);
+                }
+              }
+              y[row * n + column] = sum;
+            }
+            continue;
           }
           for (std::size_t group = 0; group < groups; ++group) {
             float sums[8];
@@ -146,8 +176,13 @@ void MatMulNBitsInt8Float32(const float *a, const std::uint8_t *weights,
               std::int32_t dots[8];
               dot(quantized.data() + block * 32, weights + index * 32, dots);
               for (std::size_t lane = 0; lane < 8; ++lane) {
-                sums[lane] += static_cast<float>(dots[lane] - 64 * weight_sums[index + lane]) *
-                              (activation_scales[block] * scales[index + lane]);
+                const float factor =
+                    activation_scales[block] == 0.0f && activation_maxima[block] != 0.0f
+                        ? static_cast<float>(static_cast<double>(activation_maxima[block]) *
+                                             static_cast<double>(scales[index + lane]) / 63.0)
+                        : activation_scales[block] * scales[index + lane];
+                sums[lane] +=
+                    static_cast<float>(dots[lane] - 64 * weight_sums[index + lane]) * factor;
               }
             }
             for (std::size_t lane = 0; lane < std::min<std::size_t>(8, n - group * 8); ++lane) {

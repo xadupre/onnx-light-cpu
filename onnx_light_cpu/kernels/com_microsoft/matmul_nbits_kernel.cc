@@ -17,7 +17,6 @@
 
 #include <algorithm>
 #include <array>
-#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -333,8 +332,6 @@ void MatMulNBitsKernel::Prepare(rt_ns::RuntimeContext &rt,
         "onnx_light_cpu::MatMulNBits: scales must have shape [N, ceil(K/block_size)] or be flat.");
   }
   if (b.data_type != static_cast<std::int32_t>(RuntimeDataType::UINT8) ||
-      (attributes_.bits == 8 &&
-       scales.data_type != static_cast<std::int32_t>(RuntimeDataType::FLOAT)) ||
       (scales.data_type != static_cast<std::int32_t>(RuntimeDataType::FLOAT) &&
        scales.data_type != static_cast<std::int32_t>(RuntimeDataType::FLOAT16) &&
        scales.data_type != static_cast<std::int32_t>(RuntimeDataType::BFLOAT16))) {
@@ -439,10 +436,7 @@ Tensor MatMulNBitsKernel::operator()(const Tensor &a, const Tensor &b, const Ten
   Tensor y = rt != nullptr
                  ? rt->MakeOutputTensor(0, a.data_type, output_shape, output_bytes)
                  : rt_ns::MakeOutputTensor(a.data_type, output_shape, output_bytes, nullptr);
-  const auto *float_a = reinterpret_cast<const float *>(a.bytes());
-  if (prepared_int8_ != nullptr && data_type == RuntimeDataType::FLOAT &&
-      (rows == 0 || std::all_of(float_a, float_a + rows * k,
-                                [](float value) { return std::isfinite(value); }))) {
+  if (prepared_int8_ != nullptr && data_type == RuntimeDataType::FLOAT) {
     prepared_int8_->request.completion.Wait();
     const auto view = prepared_int8_->execution->objects().Find(prepared_int8_->request.key);
     if (view.has_value()) {
