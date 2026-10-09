@@ -29,6 +29,16 @@ void MatMulNBitsAccuracy4Float32(const float *a, const std::uint8_t *packed_weig
                                  const float *bias, float *y, std::size_t rows, std::size_t k,
                                  std::size_t n, std::int64_t max_participants);
 
+bool MatMulNBitsInt8Float32Available();
+const char *MatMulNBitsInt8Implementation();
+void PackMatMulNBitsInt8(const std::uint8_t *b, const float *scales, std::uint8_t *weights,
+                         std::int32_t *weight_sums, float *block_scales, std::size_t k,
+                         std::size_t n);
+void MatMulNBitsInt8Float32(const float *a, const std::uint8_t *weights,
+                            const std::int32_t *weight_sums, const float *scales, const float *bias,
+                            float *y, std::size_t rows, std::size_t k, std::size_t n,
+                            std::int64_t max_participants);
+
 void MatMulNBits(const void *a, const std::uint8_t *b, const void *scales, const void *bias,
                  void *y, DataType data_type, std::size_t rows, std::size_t k, std::size_t n,
                  std::size_t bits, std::size_t block_size,
