@@ -147,12 +147,22 @@ def test_native_kernel_tests_run_in_source_integration_not_standalone():
     standalone_job, source_jobs = _CORE_WORKFLOW.split("  setup_onnx_light_source:", 1)
     source_job = source_jobs.split("  report_pr_benchmark:", 1)[0]
     for filename in (
+        "test_api_doc.py",
+        "test_backend_cases_benchmark_plot_data.py",
+        "test_benchmark_cli.py",
+        "test_cpp_api_pages.py",
+        "test_documentation_examples.py",
+        "test_kernels_doc.py",
         "test_kernels_e2e.py",
         "test_kernels_doc_e2e.py",
+        "test_native_package_import.py",
         "test_nonzero.py",
+        "test_processor_performance_profile.py",
         "test_reduce_sum_kernel.py",
+        "test_register.py",
         "test_rotary_embedding.py",
         "test_scatter_nd.py",
+        "test_simd_detection.py",
         "test_simplified_layer_normalization.py",
         "test_skip_simplified_layer_normalization.py",
         "test_matmul_nbits_parity_benchmark.py",
