@@ -298,9 +298,10 @@ void LogKernel::Run(RuntimeContext &rt) {
 
 void RegisterExpKernel() {
   ExpKernel::RegisterTuningSchemas();
-  NodeKernelFn factory = [](const NodeProto &node,
-                            RuntimeContext &rt) -> std::unique_ptr<rt_ns::KernelBase> {
-    return std::make_unique<ExpKernel>(node, rt.kernel_ctx());
+  NodeKernelFn factory =
+      [](const NodeProto &node, RuntimeContext &,
+         const rt_ns::KernelContext &kernel_context) -> std::unique_ptr<rt_ns::KernelBase> {
+    return std::make_unique<ExpKernel>(node, kernel_context);
   };
   // Empty domain -> normalised to the default ONNX domain, overriding the
   // built-in Exp entry with the SIMD-accelerated kernel for the CPU device.
@@ -315,9 +316,10 @@ void RegisterExpKernel() {
 
 void RegisterLogKernel() {
   LogKernel::RegisterTuningSchemas();
-  NodeKernelFn factory = [](const NodeProto &node,
-                            RuntimeContext &rt) -> std::unique_ptr<rt_ns::KernelBase> {
-    return std::make_unique<LogKernel>(node, rt.kernel_ctx());
+  NodeKernelFn factory =
+      [](const NodeProto &node, RuntimeContext &,
+         const rt_ns::KernelContext &kernel_context) -> std::unique_ptr<rt_ns::KernelBase> {
+    return std::make_unique<LogKernel>(node, kernel_context);
   };
   // Empty domain -> normalised to the default ONNX domain, overriding the
   // built-in Log entry with the SIMD-accelerated kernel for the CPU device.

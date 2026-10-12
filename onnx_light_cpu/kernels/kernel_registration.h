@@ -67,7 +67,7 @@ namespace detail {
 
 /// Adapts a factory to a session-owned callback with shared, synchronized
 /// prepared kernels. Callback copies retain the same cache.
-ONNX_LIGHT_NAMESPACE::core::runtime::CustomKernelFn
+ONNX_LIGHT_NAMESPACE::core::runtime::ContextualCustomKernelFn
 AsSessionKernel(ONNX_LIGHT_NAMESPACE::core::runtime::NodeKernelFn factory);
 
 } // namespace detail

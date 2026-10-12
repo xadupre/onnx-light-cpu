@@ -478,9 +478,10 @@ void AttentionKernel::Run(RuntimeContext &rt) {
 }
 
 void RegisterAttentionKernel() {
-  NodeKernelFn factory = [](const NodeProto &node,
-                            RuntimeContext &rt) -> std::unique_ptr<rt_ns::KernelBase> {
-    auto kernel = std::make_unique<AttentionKernel>(rt.kernel_ctx());
+  NodeKernelFn factory =
+      [](const NodeProto &node, RuntimeContext &,
+         const rt_ns::KernelContext &kernel_context) -> std::unique_ptr<rt_ns::KernelBase> {
+    auto kernel = std::make_unique<AttentionKernel>(kernel_context);
     kernel->set_node(node);
     return kernel;
   };

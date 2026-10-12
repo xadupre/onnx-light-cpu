@@ -223,9 +223,10 @@ void MatMulKernel::Run(RuntimeContext &rt) {
 }
 
 void RegisterMatMulKernel() {
-  rt_ns::NodeKernelFn matmul = [](const NodeProto &node,
-                                  RuntimeContext &rt) -> std::unique_ptr<rt_ns::KernelBase> {
-    auto kernel = std::make_unique<MatMulKernel>(rt.kernel_ctx());
+  rt_ns::NodeKernelFn matmul =
+      [](const NodeProto &node, RuntimeContext &,
+         const rt_ns::KernelContext &kernel_context) -> std::unique_ptr<rt_ns::KernelBase> {
+    auto kernel = std::make_unique<MatMulKernel>(kernel_context);
     kernel->set_node(node);
     return kernel;
   };

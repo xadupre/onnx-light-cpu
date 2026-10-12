@@ -239,8 +239,9 @@ std::vector<double> ReadInput(const Tensor &input) {
 
 } // namespace
 
-TreeEnsembleKernel::TreeEnsembleKernel(const NodeProto &node, RuntimeContext &rt)
-    : KernelBase(rt.kernel_ctx()) {
+TreeEnsembleKernel::TreeEnsembleKernel(const NodeProto &node, RuntimeContext &rt,
+                                       const rt_ns::KernelContext &ctx)
+    : KernelBase(ctx) {
   set_node(node);
   rt_ns::RequireInputCount(node, 1);
   rt_ns::RequireOutputCount(node, 1);
@@ -338,9 +339,10 @@ void TreeEnsembleKernel::Run(RuntimeContext &rt) {
 
 void RegisterTreeEnsembleKernel() {
   TreeEnsembleKernel::RegisterTuningSchemas();
-  rt_ns::NodeKernelFn factory = [](const NodeProto &node,
-                                   RuntimeContext &rt) -> std::unique_ptr<rt_ns::KernelBase> {
-    return std::make_unique<TreeEnsembleKernel>(node, rt);
+  rt_ns::NodeKernelFn factory =
+      [](const NodeProto &node, RuntimeContext &rt,
+         const rt_ns::KernelContext &kernel_context) -> std::unique_ptr<rt_ns::KernelBase> {
+    return std::make_unique<TreeEnsembleKernel>(node, rt, kernel_context);
   };
   KernelRegistration info;
   info.domain = "ai.onnx.ml";

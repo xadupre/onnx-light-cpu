@@ -7,9 +7,9 @@
 #include "onnx_light_cpu/impl/math/half_conversion.h"
 #include "onnx_light_cpu/kernels/com_microsoft/matmul_nbits_kernel.h"
 
-#include "onnx_core/compute/prepared_execution.h"
 #include "onnx_core/runtime/kernels/cast_helper.h"
 #include "onnx_core/runtime/kernels/kernel_context.h"
+#include "onnx_core/runtime/kernels/value_store.h"
 #include "onnx_core/runtime/memory/simple_tensor.h"
 #include "onnx_core/runtime/tuning/kernel_tuning.h"
 #include "onnx_proto/onnx_helper.h"
@@ -194,9 +194,8 @@ TEST(MatMulNBitsKernel, PreparesOnlyImmutableWeightsAndScales) {
   rt.Put("scales",
          rt_ns::Tensor::FromFloat("scales", {n, k / 32},
                                   std::vector<float>(static_cast<std::size_t>(n * k / 32), 0.25f)));
-  rt_ns::PreparedExecutionState state;
-  kernel.Prepare(rt, {"B", "scales"}, state);
-  EXPECT_EQ(state.objects().resident_bytes(),
+  kernel.Prepare(rt, {"B", "scales"});
+  EXPECT_EQ(rt.value_store().prepared_bytes(),
             onnx_light_cpu::MatMulNBitsAccuracy4Float32Available() ? 768U : 0U);
 
   const rt_ns::Tensor a =

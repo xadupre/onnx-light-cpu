@@ -112,12 +112,15 @@ TEST(MicrosoftLinearAttentionKernel, NaiveAndDefaultDispatchAreIndependent) {
   runtime.Set("beta", Tensor::FromFloat("", {1, 1, 1}, {0.5f}));
 
   onnx_light_cpu::RegisterAllKernels();
-  auto optimized = rt_ns::KernelDispatchTable().at("com.microsoft:LinearAttention")(node, runtime);
+  auto optimized = rt_ns::KernelDispatchTable().at("com.microsoft:LinearAttention")(
+      node, runtime, runtime.kernel_ctx());
   ASSERT_NE(dynamic_cast<MicrosoftLinearAttentionKernel *>(optimized.get()), nullptr);
   onnx_light_cpu::RegisterKernelForSession(runtime, "com.microsoft", "LinearAttention", true,
                                            MicrosoftKernelImplementation::NAIVE);
   runtime.set_kernel_usage_enabled(true);
-  runtime.custom_kernels().at("com.microsoft:LinearAttention")(node, runtime)->Run(runtime);
+  runtime.custom_kernels()
+      .at("com.microsoft:LinearAttention")(node, runtime, runtime.kernel_ctx())
+      ->Run(runtime);
   EXPECT_EQ(runtime.GetKernelUsage(),
             (std::vector<std::string>{NaiveMicrosoftLinearAttentionKernel::kName}));
   const Tensor reference_output = runtime.Get("output");
@@ -130,7 +133,8 @@ TEST(MicrosoftLinearAttentionKernel, NaiveAndDefaultDispatchAreIndependent) {
   ExpectParity(runtime.Get("output"), reference_output);
   ExpectParity(runtime.Get("present_state"), reference_state);
   ASSERT_TRUE(onnx_light_cpu::RegisterKernelGlobal("com.microsoft", "LinearAttention"));
-  auto global = rt_ns::KernelDispatchTable().at("com.microsoft:LinearAttention")(node, runtime);
+  auto global = rt_ns::KernelDispatchTable().at("com.microsoft:LinearAttention")(
+      node, runtime, runtime.kernel_ctx());
   EXPECT_NE(dynamic_cast<MicrosoftLinearAttentionKernel *>(global.get()), nullptr);
 }
 

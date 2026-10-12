@@ -209,9 +209,9 @@ void ReduceSumKernel::Run(rt_ns::RuntimeContext &rt) {
 
 void RegisterReduceSumKernel() {
   rt_ns::NodeKernelFn factory =
-      [](const ONNX_LIGHT_NAMESPACE::NodeProto &node,
-         rt_ns::RuntimeContext &rt) -> std::unique_ptr<rt_ns::KernelBase> {
-    return std::make_unique<ReduceSumKernel>(node, rt.kernel_ctx());
+      [](const ONNX_LIGHT_NAMESPACE::NodeProto &node, rt_ns::RuntimeContext &,
+         const rt_ns::KernelContext &kernel_context) -> std::unique_ptr<rt_ns::KernelBase> {
+    return std::make_unique<ReduceSumKernel>(node, kernel_context);
   };
   KernelRegistration info;
   info.domain = "";

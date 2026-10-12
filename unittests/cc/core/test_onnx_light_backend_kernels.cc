@@ -236,7 +236,7 @@ void RunCaseThroughRuntime(const TestCase &tc, bool compare, std::vector<std::st
       bindings.emplace_back(t.name, t);
     }
 
-    SubgraphSession session(rt, graph);
+    SubgraphSession session(graph);
     const Tensors outputs = session.Run(std::move(bindings), rt);
     if (used != nullptr) {
       const auto names = rt.GetKernelUsage();
