@@ -1,5 +1,3 @@
-import re
-import tomllib
 from pathlib import Path
 
 import pytest
@@ -15,16 +13,9 @@ from tools.onnx_light_release import (
 _ROOT = Path(__file__).resolve().parents[2]
 
 
-def test_release_version_matches_project_dependencies():
-    metadata = tomllib.loads((_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    dependencies = metadata["project"]["optional-dependencies"]["dev"]
-    versions = {
-        match.group(1)
-        for dependency in dependencies
-        if dependency.startswith("onnx-light @")
-        if (match := re.search(r"/releases/download/([^/]+)/", dependency))
-    }
-    assert versions == {ONNX_LIGHT_VERSION}
+def test_avx2_parity_uses_release_version():
+    workflow = (_ROOT / ".github" / "workflows" / "avx2_parity.yml").read_text(encoding="utf-8")
+    assert f'"onnx-light=={ONNX_LIGHT_VERSION}"' in workflow
 
 
 def test_release_wheel_names():
