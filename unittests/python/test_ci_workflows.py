@@ -143,9 +143,12 @@ def test_dependabot_updates_actions_and_python_dependencies():
         ) in _DEPENDABOT_CONFIG
 
 
-def test_native_kernel_tests_run_in_source_integration_not_standalone():
+def test_native_kernel_tests_are_version_gated_in_standalone():
     standalone_job, source_jobs = _CORE_WORKFLOW.split("  setup_onnx_light_source:", 1)
     source_job = source_jobs.split("  report_pr_benchmark:", 1)[0]
+    assert 'installed = version("onnx-light")' in standalone_job
+    assert ">= (0, 1, 31)" in standalone_job
+    assert "ONNX_LIGHT_PYTEST_ARGS=" in standalone_job
     for filename in (
         "test_api_doc.py",
         "test_backend_cases_benchmark_plot_data.py",
@@ -169,7 +172,7 @@ def test_native_kernel_tests_run_in_source_integration_not_standalone():
         "test_tanh.py",
     ):
         exclusion = f"--ignore=unittests/python/{filename}"
-        assert exclusion in standalone_job
+        assert f'"{filename}"' in standalone_job
         assert exclusion not in source_job
     assert "run: python -m pytest unittests" in source_job
 

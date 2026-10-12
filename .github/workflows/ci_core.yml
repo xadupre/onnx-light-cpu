@@ -77,8 +77,54 @@ jobs:
       - name: Run C++ unit tests
         run: ctest --test-dir build --output-on-failure -C Release --timeout 240
 
+      - name: Select onnx-light Python tests
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os
+          import re
+          from importlib.metadata import PackageNotFoundError, version
+
+          try:
+              installed = version("onnx-light")
+          except PackageNotFoundError:
+              installed = None
+          match = re.match(r"^(\d+)\.(\d+)\.(\d+)", installed or "")
+          compatible = match is not None and tuple(map(int, match.groups())) >= (0, 1, 31)
+          ignored = [
+              "test_api_doc.py",
+              "test_backend_cases_benchmark_plot_data.py",
+              "test_benchmark_cli.py",
+              "test_cpp_api_pages.py",
+              "test_documentation_examples.py",
+              "test_kernels_doc.py",
+              "test_kernels_e2e.py",
+              "test_kernels_doc_e2e.py",
+              "test_native_package_import.py",
+              "test_nonzero.py",
+              "test_processor_performance_profile.py",
+              "test_reduce_sum_kernel.py",
+              "test_register.py",
+              "test_rotary_embedding.py",
+              "test_scatter_nd.py",
+              "test_simd_detection.py",
+              "test_simplified_layer_normalization.py",
+              "test_skip_simplified_layer_normalization.py",
+              "test_matmul_nbits_parity_benchmark.py",
+              "test_tanh.py",
+          ]
+          arguments = "" if compatible else " ".join(
+              f"--ignore=unittests/python/{filename}" for filename in ignored
+          )
+          print(f"onnx-light {installed or 'not installed'}: "
+                f"{'enabling' if compatible else 'disabling'} integration tests")
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env:
+              env.write(f"ONNX_LIGHT_PYTEST_ARGS={arguments}\n")
+          PY
+
       - name: Run Python tests
-        run: pytest --durations=10 --cov=onnx_light_cpu --cov-report=xml --cov-report=term-missing unittests --ignore=unittests/python/test_api_doc.py --ignore=unittests/python/test_backend_cases_benchmark_plot_data.py --ignore=unittests/python/test_benchmark_cli.py --ignore=unittests/python/test_cpp_api_pages.py --ignore=unittests/python/test_documentation_examples.py --ignore=unittests/python/test_kernels_doc.py --ignore=unittests/python/test_kernels_e2e.py --ignore=unittests/python/test_kernels_doc_e2e.py --ignore=unittests/python/test_native_package_import.py --ignore=unittests/python/test_nonzero.py --ignore=unittests/python/test_processor_performance_profile.py --ignore=unittests/python/test_reduce_sum_kernel.py --ignore=unittests/python/test_register.py --ignore=unittests/python/test_rotary_embedding.py --ignore=unittests/python/test_scatter_nd.py --ignore=unittests/python/test_simd_detection.py --ignore=unittests/python/test_simplified_layer_normalization.py --ignore=unittests/python/test_skip_simplified_layer_normalization.py --ignore=unittests/python/test_matmul_nbits_parity_benchmark.py --ignore=unittests/python/test_tanh.py
+        shell: bash
+        run: pytest --durations=10 --cov=onnx_light_cpu --cov-report=xml --cov-report=term-missing unittests $ONNX_LIGHT_PYTEST_ARGS
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v7
