@@ -117,8 +117,8 @@ TEST(OnnxLightRegisterKernels, SessionTreeEnsembleResolvesSharedTuningBeforeExec
           ASSERT_TRUE(
               onnx_light_cpu::RegisterKernelForSession(runtime, "ai.onnx.ml", "TreeEnsemble"));
         }
-        auto kernel =
-            runtime.custom_kernels().at("ai.onnx.ml:TreeEnsemble")(model.graph().node(0), runtime);
+        auto kernel = runtime.custom_kernels().at("ai.onnx.ml:TreeEnsemble")(
+            model.graph().node(0), runtime, runtime.kernel_ctx());
         const auto key = kernel->TuningKey(type);
         ASSERT_NE(key.device, ONNX_LIGHT_NAMESPACE::core::symbolic::Device::kUndefined);
         auto parameters = registry.FindSchema(key)->portable_defaults();
@@ -151,11 +151,12 @@ TEST(OnnxLightRegisterKernels, SessionTreeEnsembleResolvesSharedTuningBeforeExec
           }
           return values;
         }());
-        EXPECT_EQ(output.data, expected.data);
+        EXPECT_EQ(std::memcmp(output.bytes(), expected.bytes(), expected.size_bytes()), 0);
         const auto constructed = rt_ns::KernelBase::ConstructionCountForTesting();
         session.Run(runtime);
         EXPECT_EQ(rt_ns::KernelBase::ConstructionCountForTesting(), constructed);
-        EXPECT_EQ(runtime.Get("y").data, expected.data);
+        EXPECT_EQ(std::memcmp(runtime.Get("y").bytes(), expected.bytes(), expected.size_bytes()),
+                  0);
 
         auto serial_parameters = parameters;
         serial_parameters.values["parallel.row_threshold"] = int64_t{100};
@@ -165,7 +166,8 @@ TEST(OnnxLightRegisterKernels, SessionTreeEnsembleResolvesSharedTuningBeforeExec
         const auto serial_before = serial_session.cpu_executor()->counters();
         serial_session.Run(runtime);
         EXPECT_EQ(serial_session.cpu_executor()->counters().dispatches, serial_before.dispatches);
-        EXPECT_EQ(runtime.Get("y").data, expected.data);
+        EXPECT_EQ(std::memcmp(runtime.Get("y").bytes(), expected.bytes(), expected.size_bytes()),
+                  0);
         auto invalid = parameters;
         invalid.values["parallel.tree_major_batch_rows"] = int64_t{0};
         EXPECT_THROW(kernel->Configure(invalid), std::invalid_argument);
@@ -205,9 +207,10 @@ struct PreparationCounts {
 class PreparedCopyKernel : public rt_ns::KernelBase {
 public:
   PreparedCopyKernel(const ONNX_LIGHT_NAMESPACE::NodeProto &node, rt_ns::RuntimeContext &rt,
+                     const rt_ns::KernelContext &kernel_context,
                      std::shared_ptr<PreparationCounts> counts)
-      : KernelBase(rt.kernel_ctx()), counts_(std::move(counts)),
-        shape_(rt.Get(node.input(0)).shape), dtype_(rt.Get(node.input(0)).data_type) {
+      : KernelBase(kernel_context), counts_(std::move(counts)), shape_(rt.Get(node.input(0)).shape),
+        dtype_(rt.Get(node.input(0)).data_type) {
     set_node(node);
     ++counts_->plans;
     ++counts_->live;
@@ -233,10 +236,12 @@ private:
   std::atomic<int> active_{0};
 };
 
-rt_ns::CustomKernelFn PreparedCopyCallback(const std::shared_ptr<PreparationCounts> &counts) {
+rt_ns::ContextualCustomKernelFn
+PreparedCopyCallback(const std::shared_ptr<PreparationCounts> &counts) {
   return onnx_light_cpu::detail::AsSessionKernel(
-      [counts](const ONNX_LIGHT_NAMESPACE::NodeProto &node, rt_ns::RuntimeContext &rt) {
-        return std::make_unique<PreparedCopyKernel>(node, rt, counts);
+      [counts](const ONNX_LIGHT_NAMESPACE::NodeProto &node, rt_ns::RuntimeContext &rt,
+               const rt_ns::KernelContext &kernel_context) {
+        return std::make_unique<PreparedCopyKernel>(node, rt, kernel_context, counts);
       });
 }
 
@@ -252,41 +257,41 @@ TEST(OnnxLightRegisterKernels, SessionPlansReuseOnlyMatchingMetadata) {
 
   for (int i = 0; i < 5; ++i) {
     runtime.Put("x", rt_ns::Tensor::FromFloat("x", {2}, {float(i), 2.0f}));
-    callback(node, runtime);
+    callback(node, runtime, runtime.kernel_ctx());
     EXPECT_EQ(runtime.Get("y").AsFloat()[0], float(i));
   }
   EXPECT_EQ(counts->plans, 1);
 
   runtime.Put("x", rt_ns::Tensor::FromFloat("x", {1, 2}, {3.0f, 4.0f}));
-  callback(node, runtime);
+  callback(node, runtime, runtime.kernel_ctx());
   EXPECT_EQ(counts->plans, 2);
   runtime.Put("x", rt_ns::Tensor::FromFloat("x", {2}, {5.0f, 6.0f}));
-  callback(node, runtime);
+  callback(node, runtime, runtime.kernel_ctx());
   EXPECT_EQ(counts->plans, 2);
   runtime.Put("x", rt_ns::Tensor::FromDouble("x", {1, 2}, {3.0, 4.0}));
-  callback(node, runtime);
+  callback(node, runtime, runtime.kernel_ctx());
   EXPECT_EQ(counts->plans, 3);
   runtime.Set("optional", rt_ns::Tensor::FromFloat("optional", {}, {1.0f}));
-  callback(node, runtime);
+  callback(node, runtime, runtime.kernel_ctx());
   EXPECT_EQ(counts->plans, 4);
   runtime.kernel_ctx().opset.version = 19;
-  callback(node, runtime);
+  callback(node, runtime, runtime.kernel_ctx());
   EXPECT_EQ(counts->plans, 5);
 
   // A second node must not inherit the first node's output names or attributes,
   // even when the caller reuses the same NodeProto storage.
   node.clear_output();
   node.add_output("z");
-  callback(node, runtime);
+  callback(node, runtime, runtime.kernel_ctx());
   EXPECT_TRUE(runtime.Has("z"));
   EXPECT_EQ(counts->plans, 6);
   auto *attribute = node.add_attribute();
   attribute->set_name("version");
   attribute->set_type(ONNX_LIGHT_NAMESPACE::AttributeProto::INT);
   attribute->set_i(1);
-  callback(node, runtime);
+  callback(node, runtime, runtime.kernel_ctx());
   EXPECT_EQ(counts->plans, 7);
-  callback(node, runtime);
+  callback(node, runtime, runtime.kernel_ctx());
   EXPECT_EQ(counts->plans, 7);
 }
 
@@ -304,19 +309,19 @@ TEST(OnnxLightRegisterKernels, SessionPlanCopiesOwnNodesAndReleaseWithCallbacks)
     node.add_output("y");
     saved_node.CopyFrom(node);
     resolved = runtime.custom_kernels().at("ai.onnx:Copy");
-    resolved(node, runtime)->Run(runtime);
+    resolved(node, runtime, runtime.kernel_ctx())->Run(runtime);
     EXPECT_EQ(counts->plans, 1);
     EXPECT_EQ(counts->live, 1);
 
     runtime.RegisterCustomKernel("", "Copy", PreparedCopyCallback(counts));
-    runtime.custom_kernels().at("ai.onnx:Copy")(node, runtime)->Run(runtime);
+    runtime.custom_kernels().at("ai.onnx:Copy")(node, runtime, runtime.kernel_ctx())->Run(runtime);
     EXPECT_EQ(counts->plans, 2);
     EXPECT_EQ(counts->live, 2);
   }
   EXPECT_EQ(counts->live, 1);
   rt_ns::RuntimeContext next(rt_ns::KernelContext(rt_ns::DefaultOpset(18)));
   next.Set("x", rt_ns::Tensor::FromFloat("x", {1}, {7.0f}));
-  resolved(saved_node, next)->Run(next);
+  resolved(saved_node, next, next.kernel_ctx())->Run(next);
   EXPECT_EQ(next.Get("y").AsFloat()[0], 7.0f);
   EXPECT_EQ(counts->plans, 2);
   resolved = {};
@@ -339,7 +344,7 @@ TEST(OnnxLightRegisterKernels, ConcurrentSessionCallbacksPrepareEachSignatureOnc
       for (int run = 0; run < 32; ++run) {
         const int64_t size = 1 + run % 2;
         runtime.Put("x", rt_ns::Tensor::FromFloat("x", {size}, std::vector<float>(size, float(i))));
-        callback(node, runtime);
+        callback(node, runtime, runtime.kernel_ctx());
         EXPECT_EQ(runtime.Get("y").AsFloat()[0], float(i));
       }
     });
@@ -353,6 +358,7 @@ TEST(OnnxLightRegisterKernels, ConcurrentSessionCallbacksPrepareEachSignatureOnc
 
 TEST(OnnxLightRegisterKernels, RuntimeSessionRetainsNativeKernelsAcrossRuns) {
   ONNX_LIGHT_NAMESPACE::ModelProto model;
+  model.add_opset_import()->set_version(18);
   auto *graph = model.mutable_graph();
   graph->add_input()->set_name("a");
   graph->add_input()->set_name("b");
@@ -433,12 +439,12 @@ TEST(OnnxLightRegisterKernels, FailedSessionPreparationCanBeRetried) {
   auto counts = std::make_shared<PreparationCounts>();
   int attempts = 0;
   auto callback = onnx_light_cpu::detail::AsSessionKernel(
-      [&](const ONNX_LIGHT_NAMESPACE::NodeProto &node,
-          rt_ns::RuntimeContext &rt) -> std::unique_ptr<rt_ns::KernelBase> {
+      [&](const ONNX_LIGHT_NAMESPACE::NodeProto &node, rt_ns::RuntimeContext &rt,
+          const rt_ns::KernelContext &kernel_context) -> std::unique_ptr<rt_ns::KernelBase> {
         if (++attempts == 1) {
           return nullptr;
         }
-        return std::make_unique<PreparedCopyKernel>(node, rt, counts);
+        return std::make_unique<PreparedCopyKernel>(node, rt, kernel_context, counts);
       });
   ONNX_LIGHT_NAMESPACE::NodeProto node;
   node.set_op_type("Copy");
@@ -446,9 +452,9 @@ TEST(OnnxLightRegisterKernels, FailedSessionPreparationCanBeRetried) {
   node.add_output("y");
   rt_ns::RuntimeContext runtime(rt_ns::KernelContext(rt_ns::DefaultOpset(18)));
   runtime.Set("x", rt_ns::Tensor::FromFloat("x", {1}, {4.0f}));
-  EXPECT_THROW(callback(node, runtime), std::runtime_error);
-  callback(node, runtime);
-  callback(node, runtime);
+  EXPECT_THROW(callback(node, runtime, runtime.kernel_ctx()), std::runtime_error);
+  callback(node, runtime, runtime.kernel_ctx());
+  callback(node, runtime, runtime.kernel_ctx());
   EXPECT_EQ(attempts, 2);
   EXPECT_EQ(counts->plans, 1);
   EXPECT_EQ(runtime.Get("y").AsFloat()[0], 4.0f);
@@ -480,7 +486,7 @@ TEST(OnnxLightRegisterKernels, NaivePolicyInstallsNaiveMicrosoftFactories) {
   runtime.Set("a", rt_ns::Tensor::FromFloat("a", {1, 2}, {-1.0f, 2.0f}));
   runtime.Set("b", rt_ns::Tensor::FromFloat("b", {2}, {0.25f, -0.5f}));
 
-  std::unique_ptr<rt_ns::KernelBase> kernel = factory->second(node, runtime);
+  std::unique_ptr<rt_ns::KernelBase> kernel = factory->second(node, runtime, runtime.kernel_ctx());
   EXPECT_NE(dynamic_cast<onnx_light_cpu::NaiveBiasGeluKernel *>(kernel.get()), nullptr);
 
   onnx_light_cpu::RegisterAllKernels();
@@ -500,7 +506,7 @@ TEST(OnnxLightRegisterKernels, RegisteredFactoriesConstructWithoutSessionExecuto
   runtime.Set("x", rt_ns::Tensor::FromFloat("x", {4}, {-1.0f, 2.0f, -3.5f, 4.0f}));
 
   std::unique_ptr<rt_ns::KernelBase> kernel;
-  ASSERT_NO_THROW(kernel = factory->second(node, runtime));
+  ASSERT_NO_THROW(kernel = factory->second(node, runtime, runtime.kernel_ctx()));
   ASSERT_NE(kernel, nullptr);
   EXPECT_NO_THROW(kernel->Run(runtime));
   const float *y = runtime.Get("y").AsFloat();
@@ -526,7 +532,7 @@ TEST(OnnxLightRegisterKernels, VariadicFactoryUsesOneCommonBroadcastPlan) {
   runtime.Set("b", rt_ns::Tensor::FromFloat("b", {1, 3}, {10.0f, 20.0f, 30.0f}));
   runtime.Set("c", rt_ns::Tensor::FromFloat("c", {}, {100.0f}));
 
-  std::unique_ptr<rt_ns::KernelBase> kernel = factory->second(node, runtime);
+  std::unique_ptr<rt_ns::KernelBase> kernel = factory->second(node, runtime, runtime.kernel_ctx());
   ASSERT_NE(kernel, nullptr);
   ASSERT_NO_THROW(kernel->Run(runtime));
   const rt_ns::Tensor &output = runtime.Get("y");
@@ -539,9 +545,10 @@ TEST(OnnxLightRegisterKernels, VariadicFactoryUsesOneCommonBroadcastPlan) {
 TEST(OnnxLightRegisterKernels, RegisterSelectedKernelGlobalRunsNativeKernel) {
   namespace rt_ns = ONNX_LIGHT_NAMESPACE::core::runtime;
   namespace sym_ns = ONNX_LIGHT_NAMESPACE::core::symbolic;
-  rt_ns::RegisterKernelFn("", "Abs", sym_ns::Device::kCPU,
-                          [](const ONNX_LIGHT_NAMESPACE::NodeProto &, rt_ns::RuntimeContext &)
-                              -> std::unique_ptr<rt_ns::KernelBase> { return nullptr; });
+  rt_ns::RegisterKernelFn(
+      "", "Abs", sym_ns::Device::kCPU,
+      [](const ONNX_LIGHT_NAMESPACE::NodeProto &, rt_ns::RuntimeContext &,
+         const rt_ns::KernelContext &) -> std::unique_ptr<rt_ns::KernelBase> { return nullptr; });
 
   EXPECT_FALSE(onnx_light_cpu::RegisterKernelGlobal("", "Abs", false));
   ONNX_LIGHT_NAMESPACE::NodeProto node;
@@ -550,11 +557,12 @@ TEST(OnnxLightRegisterKernels, RegisterSelectedKernelGlobalRunsNativeKernel) {
   node.add_output("y");
   rt_ns::RuntimeContext runtime(rt_ns::KernelContext(rt_ns::DefaultOpset(18)));
   runtime.Set("x", rt_ns::Tensor::FromFloat("x", {2}, {-2.0f, 3.0f}));
-  EXPECT_EQ(rt_ns::KernelDispatchTable().at("ai.onnx:Abs")(node, runtime), nullptr);
+  EXPECT_EQ(rt_ns::KernelDispatchTable().at("ai.onnx:Abs")(node, runtime, runtime.kernel_ctx()),
+            nullptr);
 
   ASSERT_TRUE(onnx_light_cpu::RegisterKernelGlobal("ai.onnx", "Abs"));
   std::unique_ptr<rt_ns::KernelBase> kernel =
-      rt_ns::KernelDispatchTable().at("ai.onnx:Abs")(node, runtime);
+      rt_ns::KernelDispatchTable().at("ai.onnx:Abs")(node, runtime, runtime.kernel_ctx());
   ASSERT_NE(kernel, nullptr);
   runtime.set_kernel_usage_enabled(true);
   EXPECT_NO_THROW(kernel->Run(runtime));
@@ -566,9 +574,10 @@ TEST(OnnxLightRegisterKernels, RegisterSelectedKernelGlobalRunsNativeKernel) {
 TEST(OnnxLightRegisterKernels, SessionRegistrationIsIsolatedAndReplaceable) {
   namespace rt_ns = ONNX_LIGHT_NAMESPACE::core::runtime;
   namespace sym_ns = ONNX_LIGHT_NAMESPACE::core::symbolic;
-  rt_ns::RegisterKernelFn("", "Abs", sym_ns::Device::kCPU,
-                          [](const ONNX_LIGHT_NAMESPACE::NodeProto &, rt_ns::RuntimeContext &)
-                              -> std::unique_ptr<rt_ns::KernelBase> { return nullptr; });
+  rt_ns::RegisterKernelFn(
+      "", "Abs", sym_ns::Device::kCPU,
+      [](const ONNX_LIGHT_NAMESPACE::NodeProto &, rt_ns::RuntimeContext &,
+         const rt_ns::KernelContext &) -> std::unique_ptr<rt_ns::KernelBase> { return nullptr; });
   const std::size_t global_size = rt_ns::KernelDispatchTable().size();
 
   rt_ns::RuntimeContext selected(rt_ns::KernelContext(rt_ns::DefaultOpset(18)));
@@ -589,7 +598,8 @@ TEST(OnnxLightRegisterKernels, SessionRegistrationIsIsolatedAndReplaceable) {
   ASSERT_TRUE(onnx_light_cpu::RegisterKernelForSession(selected, "", "Abs"));
   EXPECT_EQ(other.custom_kernels().find("ai.onnx:Abs"), other.custom_kernels().end());
   EXPECT_EQ(rt_ns::KernelDispatchTable().size(), global_size);
-  EXPECT_EQ(rt_ns::KernelDispatchTable().at("ai.onnx:Abs")(node, other), nullptr);
+  EXPECT_EQ(rt_ns::KernelDispatchTable().at("ai.onnx:Abs")(node, other, other.kernel_ctx()),
+            nullptr);
 
   selected.Set("x", rt_ns::Tensor::FromFloat("x", {2}, {-4.0f, 5.0f}));
   selected.set_kernel_usage_enabled(true);

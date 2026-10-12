@@ -768,9 +768,10 @@ Tensor GroupQueryAttentionKernel::operator()(
 }
 
 void RegisterGroupQueryAttentionKernel() {
-  NodeKernelFn factory = [](const NodeProto &node,
-                            RuntimeContext &rt) -> std::unique_ptr<rt_ns::KernelBase> {
-    return std::make_unique<GroupQueryAttentionKernel>(node, rt.kernel_ctx());
+  NodeKernelFn factory =
+      [](const NodeProto &node, RuntimeContext &,
+         const rt_ns::KernelContext &kernel_context) -> std::unique_ptr<rt_ns::KernelBase> {
+    return std::make_unique<GroupQueryAttentionKernel>(node, kernel_context);
   };
   KernelRegistration info;
   info.domain = kMicrosoftDomain;

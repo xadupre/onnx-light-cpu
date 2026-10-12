@@ -189,7 +189,7 @@ void RunCase(const TestCase &test_case, const KernelRegistration &kernel) {
     for (const Tensor &input : data_set.inputs) {
       bindings.emplace_back(input.name, input);
     }
-    rt_ns::SubgraphSession session(runtime, graph);
+    rt_ns::SubgraphSession session(graph);
     runtime.set_kernel_usage_enabled(true);
     CompareOutputs(test_case, data_set, session.Run(std::move(bindings), runtime));
     const std::vector<std::string> used = runtime.GetKernelUsage();

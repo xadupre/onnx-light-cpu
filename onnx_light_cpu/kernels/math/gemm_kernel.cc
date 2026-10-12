@@ -463,9 +463,10 @@ void GemmKernel::Run(RuntimeContext &rt) {
 
 void RegisterGemmKernel() {
   GemmKernel::RegisterTuningSchemas();
-  NodeKernelFn factory = [](const NodeProto &node,
-                            RuntimeContext &rt) -> std::unique_ptr<rt_ns::KernelBase> {
-    auto kernel = std::make_unique<GemmKernel>(rt.kernel_ctx());
+  NodeKernelFn factory =
+      [](const NodeProto &node, RuntimeContext &,
+         const rt_ns::KernelContext &kernel_context) -> std::unique_ptr<rt_ns::KernelBase> {
+    auto kernel = std::make_unique<GemmKernel>(kernel_context);
     kernel->set_node(node);
     return kernel;
   };

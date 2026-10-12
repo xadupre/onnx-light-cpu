@@ -18,7 +18,8 @@ namespace onnx_light_cpu {
 class TreeEnsembleKernel : public ONNX_LIGHT_NAMESPACE::core::runtime::KernelBase {
 public:
   TreeEnsembleKernel(const ONNX_LIGHT_NAMESPACE::NodeProto &node,
-                     ONNX_LIGHT_NAMESPACE::core::runtime::RuntimeContext &rt);
+                     ONNX_LIGHT_NAMESPACE::core::runtime::RuntimeContext &rt,
+                     const ONNX_LIGHT_NAMESPACE::core::runtime::KernelContext &ctx);
 
   static constexpr const char *kName = "onnx_light_cpu::TreeEnsemble";
   static constexpr std::uint32_t kTuningAbi = 1;

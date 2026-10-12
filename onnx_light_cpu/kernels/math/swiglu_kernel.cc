@@ -95,9 +95,10 @@ void SwiGLUKernel::Run(RuntimeContext &rt) {
 }
 
 void RegisterSwiGLUKernel() {
-  rt_ns::NodeKernelFn factory = [](const NodeProto &node,
-                                   RuntimeContext &rt) -> std::unique_ptr<rt_ns::KernelBase> {
-    auto kernel = std::make_unique<SwiGLUKernel>(rt.kernel_ctx());
+  rt_ns::NodeKernelFn factory =
+      [](const NodeProto &node, RuntimeContext &,
+         const rt_ns::KernelContext &kernel_context) -> std::unique_ptr<rt_ns::KernelBase> {
+    auto kernel = std::make_unique<SwiGLUKernel>(kernel_context);
     kernel->set_node(node);
     return kernel;
   };

@@ -166,12 +166,16 @@ Tensors RunGradient(const NodeProto &node, Tensor query, Tensor key, Tensor valu
   const FunctionProto gradient = MakeGroupQueryAttentionGradient(node);
   const GraphProto graph = MakeGraph(gradient);
   rt_ns::RuntimeContext rt(rt_ns::KernelContext(rt_ns::DefaultOpset(23)));
-  rt_ns::SubgraphSession session(rt, graph);
-  return session.Run({{"Q", std::move(query)},
-                      {"K", std::move(key)},
-                      {"V", std::move(value)},
-                      {"dy", std::move(output_grad)}},
-                     rt);
+  rt_ns::SubgraphSession session(graph);
+  Tensors outputs = session.Run({{"Q", std::move(query)},
+                                 {"K", std::move(key)},
+                                 {"V", std::move(value)},
+                                 {"dy", std::move(output_grad)}},
+                                rt);
+  for (Tensor &output : outputs) {
+    output = output.ToOwned();
+  }
+  return outputs;
 }
 
 float RunForwardObjective(const NodeProto &node, const std::vector<float> &query,
@@ -187,7 +191,7 @@ float RunForwardObjective(const NodeProto &node, const std::vector<float> &query
   graph.add_output()->set_name("Y");
 
   rt_ns::RuntimeContext rt(rt_ns::KernelContext(rt_ns::DefaultOpset(23)));
-  rt_ns::SubgraphSession session(rt, graph);
+  rt_ns::SubgraphSession session(graph);
   Tensors outputs = session.Run(
       {{"Q", Tensor::FromFloat("Q", {1, 2, 4}, query)},
        {"K", Tensor::FromFloat("K", {1, 2, 2}, key)},
@@ -647,7 +651,7 @@ TEST(CustomOperatorSupport, MatMulNBitsGradientExecutesForEveryTypeAndPackedWidt
       const FunctionProto gradient = MakeMatMulNBitsGradient(MakeMatMulNBitsNode(true, bits));
       const GraphProto graph = MakeGraph(gradient);
       rt_ns::RuntimeContext rt(rt_ns::KernelContext(rt_ns::DefaultOpset(23)));
-      rt_ns::SubgraphSession session(rt, graph);
+      rt_ns::SubgraphSession session(graph);
       const std::uint8_t packed_value = bits == 2 ? 0xff : bits == 4 ? 0x99 : 0x81;
       const Tensors outputs =
           session.Run({{"A", make_tensor("A", {1, 35}, std::vector<float>(35, 1.0f))},

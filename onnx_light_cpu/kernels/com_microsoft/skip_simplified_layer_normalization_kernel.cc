@@ -135,8 +135,9 @@ void SkipSimplifiedLayerNormalizationKernel::Run(runtime::RuntimeContext &rt) {
 
 void RegisterSkipSimplifiedLayerNormalizationKernel() {
   runtime::NodeKernelFn factory = [](const ONNX_LIGHT_NAMESPACE::NodeProto &node,
-                                     runtime::RuntimeContext &rt) {
-    return std::make_unique<SkipSimplifiedLayerNormalizationKernel>(node, rt.kernel_ctx());
+                                     runtime::RuntimeContext &,
+                                     const runtime::KernelContext &kernel_context) {
+    return std::make_unique<SkipSimplifiedLayerNormalizationKernel>(node, kernel_context);
   };
   KernelRegistration info;
   info.domain = kMicrosoftDomain;

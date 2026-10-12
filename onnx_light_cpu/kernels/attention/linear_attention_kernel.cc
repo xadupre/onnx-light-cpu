@@ -48,9 +48,10 @@ void LinearAttentionKernel::Run(RuntimeContext &rt) {
 }
 
 void RegisterLinearAttentionKernel() {
-  rt_ns::NodeKernelFn factory = [](const NodeProto &node,
-                                   RuntimeContext &rt) -> std::unique_ptr<rt_ns::KernelBase> {
-    auto kernel = std::make_unique<LinearAttentionKernel>(rt.kernel_ctx());
+  rt_ns::NodeKernelFn factory =
+      [](const NodeProto &node, RuntimeContext &,
+         const rt_ns::KernelContext &kernel_context) -> std::unique_ptr<rt_ns::KernelBase> {
+    auto kernel = std::make_unique<LinearAttentionKernel>(kernel_context);
     kernel->set_node(node);
     return kernel;
   };

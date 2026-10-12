@@ -515,9 +515,10 @@ void QLinearMatMulKernel::Run(RuntimeContext &rt) {
 }
 
 void RegisterIntegerMatMulKernels() {
-  NodeKernelFn matmul_integer = [](const NodeProto &node,
-                                   RuntimeContext &rt) -> std::unique_ptr<rt_ns::KernelBase> {
-    auto kernel = std::make_unique<MatMulIntegerKernel>(rt.kernel_ctx());
+  NodeKernelFn matmul_integer =
+      [](const NodeProto &node, RuntimeContext &,
+         const rt_ns::KernelContext &kernel_context) -> std::unique_ptr<rt_ns::KernelBase> {
+    auto kernel = std::make_unique<MatMulIntegerKernel>(kernel_context);
     kernel->set_node(node);
     return kernel;
   };
@@ -531,9 +532,10 @@ void RegisterIntegerMatMulKernels() {
     RegisterKernel(std::move(info), std::move(matmul_integer));
   }
 
-  NodeKernelFn qlinear_matmul = [](const NodeProto &node,
-                                   RuntimeContext &rt) -> std::unique_ptr<rt_ns::KernelBase> {
-    auto kernel = std::make_unique<QLinearMatMulKernel>(rt.kernel_ctx());
+  NodeKernelFn qlinear_matmul =
+      [](const NodeProto &node, RuntimeContext &,
+         const rt_ns::KernelContext &kernel_context) -> std::unique_ptr<rt_ns::KernelBase> {
+    auto kernel = std::make_unique<QLinearMatMulKernel>(kernel_context);
     kernel->set_node(node);
     return kernel;
   };

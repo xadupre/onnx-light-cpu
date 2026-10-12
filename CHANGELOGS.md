@@ -5,6 +5,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [0.1.21] – Unreleased
 
+### Improvements
+
+- Updated native kernel registration and immutable input preparation for the
+  onnx-light 0.1.31 runtime API, and pinned CI and release builds to 0.1.31.
+
 ## [0.1.20] – 2026-10-05
 
 ### Improvements
