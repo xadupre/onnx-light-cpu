@@ -151,10 +151,19 @@ def test_native_kernel_tests_are_version_gated_in_standalone():
     assert "ONNX_LIGHT_PYTEST_ARGS=" in standalone_job
     for filename in (
         "test_api_doc.py",
+        "test_attention_parity_benchmark.py",
+        "test_avx2_parity_benchmark.py",
+        "test_avx2_parity_isolation.py",
         "test_backend_cases_benchmark_plot_data.py",
         "test_benchmark_cli.py",
+        "test_bias_gelu_parity_benchmark.py",
+        "test_binary_parity_benchmark.py",
+        "test_cdist_parity_benchmark.py",
         "test_cpp_api_pages.py",
         "test_documentation_examples.py",
+        "test_exp_log_parity_benchmark.py",
+        "test_gemm_parity_benchmark.py",
+        "test_integer_gemm_parity_benchmark.py",
         "test_kernels_doc.py",
         "test_kernels_e2e.py",
         "test_kernels_doc_e2e.py",
@@ -170,6 +179,7 @@ def test_native_kernel_tests_are_version_gated_in_standalone():
         "test_skip_simplified_layer_normalization.py",
         "test_matmul_nbits_parity_benchmark.py",
         "test_tanh.py",
+        "test_tree_ensemble_parity_benchmark.py",
     ):
         exclusion = f"--ignore=unittests/python/{filename}"
         assert f'"{filename}"' in standalone_job

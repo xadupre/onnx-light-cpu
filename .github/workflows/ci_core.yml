@@ -93,10 +93,19 @@ jobs:
           compatible = match is not None and tuple(map(int, match.groups())) >= (0, 1, 31)
           ignored = [
               "test_api_doc.py",
+              "test_attention_parity_benchmark.py",
+              "test_avx2_parity_benchmark.py",
+              "test_avx2_parity_isolation.py",
               "test_backend_cases_benchmark_plot_data.py",
               "test_benchmark_cli.py",
+              "test_bias_gelu_parity_benchmark.py",
+              "test_binary_parity_benchmark.py",
+              "test_cdist_parity_benchmark.py",
               "test_cpp_api_pages.py",
               "test_documentation_examples.py",
+              "test_exp_log_parity_benchmark.py",
+              "test_gemm_parity_benchmark.py",
+              "test_integer_gemm_parity_benchmark.py",
               "test_kernels_doc.py",
               "test_kernels_e2e.py",
               "test_kernels_doc_e2e.py",
@@ -112,6 +121,7 @@ jobs:
               "test_skip_simplified_layer_normalization.py",
               "test_matmul_nbits_parity_benchmark.py",
               "test_tanh.py",
+              "test_tree_ensemble_parity_benchmark.py",
           ]
           arguments = "" if compatible else " ".join(
               f"--ignore=unittests/python/{filename}" for filename in ignored
