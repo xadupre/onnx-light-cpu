@@ -65,7 +65,7 @@ source tree, not in site-packages. ``--onnx-light-source`` links against those
 same runtime libraries rather than rebuilding a second copy.
 
 Python builds that exchange nanobind-bound C++ objects must also use the same
-effective ABI mode. The published onnx-light 0.1.30 wheels use nanobind's
+effective ABI mode. The published onnx-light 0.1.31 wheels use nanobind's
 native ABI even though ``ONNX_LIGHT_PYTHON_STABLE_ABI`` defaults to ``ON``:
 the option requests stable ABI support, but the effective mode depends on the
 build frontend and Python configuration. The matching onnx-light-cpu release
