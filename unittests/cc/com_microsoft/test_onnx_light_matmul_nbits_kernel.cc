@@ -309,13 +309,23 @@ TEST(MatMulNBitsKernel, ConsumesEncodedWeightsWithoutPreparingThemAgain) {
 
 TEST(MatMulNBitsKernel, RejectsUnsupportedEncodedWeightContracts) {
   const rt_ns::Tensor input = rt_ns::Tensor::FromFloat("", {1, 32}, std::vector<float>(32, 1.0f));
-  const onnx_light_cpu::MatMulNBitsKernel kernel{
-      MakeNode(32, 1), rt_ns::KernelContext{rt_ns::OpsetId("com.microsoft", 1)}};
+  ONNX_LIGHT_NAMESPACE::NodeProto node = MakeNode(32, 1);
+  node.ref_input().resize(2);
+  onnx_light_cpu::MatMulNBitsKernel kernel{
+      node, rt_ns::KernelContext{rt_ns::OpsetId("com.microsoft", 1)}};
 
   EXPECT_THROW(kernel(input, MakeEncodedWeights(rt_ns::DataType::FLOAT, 32, 1, 4, 64)),
                std::invalid_argument);
   EXPECT_THROW(kernel(input, MakeEncodedWeights(rt_ns::DataType::FLOAT, 32, 1, 4, 32, 7.0)),
                std::invalid_argument);
+
+  for (const auto &encoded : {MakeEncodedWeights(rt_ns::DataType::FLOAT, 32, 1, 4, 64),
+                              MakeEncodedWeights(rt_ns::DataType::FLOAT, 32, 1, 4, 32, 7.0)}) {
+    rt_ns::RuntimeContext rt{rt_ns::KernelContext{rt_ns::OpsetId("com.microsoft", 1)}};
+    rt.PutValue("B", rt_ns::RuntimeValue(encoded));
+    EXPECT_THROW(kernel.Prepare(rt, {"B"}), std::invalid_argument);
+    EXPECT_EQ(rt.value_store().prepared_bytes(), 0U);
+  }
 }
 
 TEST(MatMulNBitsKernel, RegistersTypeAndBitSpecificTuningSchemas) {

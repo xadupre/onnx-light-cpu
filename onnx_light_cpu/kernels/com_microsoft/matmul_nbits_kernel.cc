@@ -274,15 +274,22 @@ bool MatMulNBitsKernel::HasPreparations(
 
 void MatMulNBitsKernel::Prepare(rt_ns::RuntimeContext &rt,
                                 const std::unordered_set<std::string> &immutable_inputs) {
-  if (!HasPreparations(immutable_inputs)) {
-    return;
-  }
-  const auto encoded = rt.values().find(node_->input(1));
+  const auto encoded = node_ != nullptr && node_->input_size() >= 2
+                           ? rt.values().find(node_->input(1))
+                           : rt.values().end();
   if (encoded != rt.values().end()) {
     if (encoded->second.kind != rt_ns::RuntimeValue::Kind::kEncoded) {
       throw std::invalid_argument(
           "onnx_light_cpu::MatMulNBits: B must be a Tensor or EncodedValueProto.");
     }
+    if (encoded->second.Encoded().has_parameter_ref()) {
+      throw std::invalid_argument(
+          "onnx_light_cpu::MatMulNBits: shared EncodedValueProto parameters are not supported.");
+    }
+    (void)ValidateEncodedWeights(encoded->second.Encoded(), rt.struct_type_catalogue());
+    return;
+  }
+  if (!HasPreparations(immutable_inputs)) {
     return;
   }
   const Tensor &b = rt.Get(node_->input(1));
@@ -347,7 +354,16 @@ Tensor MatMulNBitsKernel::operator()(const Tensor &a,
                                      const Tensor *bias,
                                      const ONNX_LIGHT_NAMESPACE::StructTypeCatalogue &catalogue,
                                      rt_ns::RuntimeContext *rt) const {
-  const rt_ns::MatMulNBitsInputs inputs = rt_ns::ExportMatMulNBitsInputs(packed_weights, catalogue);
+  const rt_ns::MatMulNBitsInputs inputs = ValidateEncodedWeights(packed_weights, catalogue);
+  const Tensor b = rt_ns::TensorFromProto(inputs.weights);
+  const Tensor scales = rt_ns::TensorFromProto(inputs.scales);
+  return Compute(a, b, scales, bias, rt, false);
+}
+
+rt_ns::MatMulNBitsInputs MatMulNBitsKernel::ValidateEncodedWeights(
+    const ONNX_LIGHT_NAMESPACE::EncodedValueProto &packed_weights,
+    const ONNX_LIGHT_NAMESPACE::StructTypeCatalogue &catalogue) const {
+  rt_ns::MatMulNBitsInputs inputs = rt_ns::ExportMatMulNBitsInputs(packed_weights, catalogue);
   if (inputs.k != static_cast<std::uint64_t>(attributes_.k) ||
       inputs.n != static_cast<std::uint64_t>(attributes_.n) ||
       inputs.bits != static_cast<std::uint32_t>(attributes_.bits) ||
@@ -360,9 +376,7 @@ Tensor MatMulNBitsKernel::operator()(const Tensor &a,
     throw std::invalid_argument(
         "onnx_light_cpu::MatMulNBits: EncodedValueProto zero points are not supported.");
   }
-  const Tensor b = rt_ns::TensorFromProto(inputs.weights);
-  const Tensor scales = rt_ns::TensorFromProto(inputs.scales);
-  return Compute(a, b, scales, bias, rt, false);
+  return inputs;
 }
 
 Tensor MatMulNBitsKernel::Compute(const Tensor &a, const Tensor &b, const Tensor &scales,

@@ -70,6 +70,9 @@ private:
           const ONNX_LIGHT_NAMESPACE::core::runtime::Tensor &scales,
           const ONNX_LIGHT_NAMESPACE::core::runtime::Tensor *bias,
           ONNX_LIGHT_NAMESPACE::core::runtime::RuntimeContext *rt, bool allow_prepacking) const;
+  ONNX_LIGHT_NAMESPACE::core::runtime::MatMulNBitsInputs
+  ValidateEncodedWeights(const ONNX_LIGHT_NAMESPACE::EncodedValueProto &packed_weights,
+                         const ONNX_LIGHT_NAMESPACE::StructTypeCatalogue &catalogue) const;
 
   MatMulNBitsAttributes attributes_;
   MatMulNBitsExecutionTuning tuning_ = kDefaultMatMulNBitsExecutionTuning;
