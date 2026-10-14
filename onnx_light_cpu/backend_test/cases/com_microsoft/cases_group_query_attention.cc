@@ -460,6 +460,47 @@ void RegisterCachedRotaryCorrectnessCase(std::vector<TestCase> &registry,
       "backend-test", bt_ns::TestCaseTag::AI_RT);
 }
 
+void RegisterChatGlmGenerationCase(std::vector<TestCase> &registry,
+                                   const OpsetId &microsoft_opset) {
+  NodeProto node = MakeGroupQueryAttentionNode(32, 2, 1, std::nullopt, std::nullopt);
+  node.ref_input()[3] = "past_key";
+  node.ref_input()[4] = "past_value";
+  node.add_input("cos_cache");
+  node.add_input("sin_cache");
+  node.add_output("present_key");
+  node.add_output("present_value");
+  AddIntAttribute(node, "do_rotary", 1);
+  AddIntAttribute(node, "rotary_interleaved", 1);
+
+  Expect(
+      registry, node, "test_cpu_group_query_attention_model_chatglm_generation_float32",
+      {DefaultOpset(27), microsoft_opset},
+      [=]() -> IoData {
+        Tensor query = MakeBenchmarkTensor(DataType::FLOAT, {1, 1, 4096}, 987654321ULL);
+        Tensor key = MakeBenchmarkTensor(DataType::FLOAT, {1, 1, 256}, 246813579ULL);
+        Tensor value = MakeBenchmarkTensor(DataType::FLOAT, {1, 1, 256}, 135792468ULL);
+        Tensor past_key = MakeBenchmarkTensor(DataType::FLOAT, {1, 2, 3, 128}, 111111111ULL);
+        Tensor past_value = MakeBenchmarkTensor(DataType::FLOAT, {1, 2, 3, 128}, 222222222ULL);
+        Tensor seqlens_k = Tensor::FromInt32("", {1}, {3});
+        Tensor total_sequence_length = Tensor::FromInt32("", {}, {4});
+        Tensor cos_cache = MakeBenchmarkTensor(DataType::FLOAT, {8, 64}, 333333333ULL);
+        Tensor sin_cache = MakeBenchmarkTensor(DataType::FLOAT, {8, 64}, 444444444ULL);
+        const NaiveGroupQueryAttentionKernel oracle{node, KernelContext{microsoft_opset}};
+        Tensor present_key, present_value;
+        Tensor output = oracle(node, query, key, value, seqlens_k, total_sequence_length, &past_key,
+                               &past_value, &cos_cache, &sin_cache, nullptr, nullptr, nullptr,
+                               &present_key, &present_value);
+        return IoData{{std::move(query), std::move(key), std::move(value), std::move(past_key),
+                       std::move(past_value), std::move(seqlens_k),
+                       std::move(total_sequence_length), std::move(cos_cache),
+                       std::move(sin_cache)},
+                      {std::move(output), std::move(present_key), std::move(present_value)}};
+      },
+      "backend-test", bt_ns::TestCaseTag::AI_RT);
+  registry.back().rtol = 2e-4;
+  registry.back().atol = 2e-4;
+}
+
 // Short cached chunks exercise the 2048-token window boundary without a quadratic
 // 2049-token prefill. RoPE is disabled so BF16 inputs can also use a FLOAT ORT
 // oracle without introducing different rotary intermediate rounding.
@@ -597,6 +638,7 @@ void RegisterCpuGroupQueryAttentionCases(std::vector<TestCase> &registry, TestMo
       DataType::BFLOAT16, 1, std::nullopt, 2.0f);
   RegisterExplicitPositionIdsCase(registry, microsoft_opset);
   RegisterCachedRotaryCorrectnessCase(registry, microsoft_opset);
+  RegisterChatGlmGenerationCase(registry, microsoft_opset);
   for (const DataType data_type : {DataType::FLOAT, DataType::FLOAT16, DataType::BFLOAT16}) {
     for (const std::int64_t window : {std::int64_t{2048}, std::int64_t{-1}}) {
       RegisterLocalWindowGroupQueryAttentionCase(registry, microsoft_opset, data_type, 3, 2047,

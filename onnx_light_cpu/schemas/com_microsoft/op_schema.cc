@@ -139,7 +139,7 @@ LightOpSchema MakeGroupQueryAttentionSchema() {
       "GroupQueryAttention", kMicrosoftDomain, 1,
       "Grouped-query attention over rank-3 Q/K/V tensors (or packed QKV in query with empty "
       "key/value inputs), with an optional tensor KV cache and "
-      "split-half (rotary_interleaved=0) rotary position embedding applied to Q/K at the "
+      "split-half or interleaved rotary position embedding applied to Q/K at the "
       "position derived from seqlens_k (or an explicit position_ids).",
       {{"query",
         "Query tensor with shape (batch, sequence, num_heads * head_size), or packed QKV "
@@ -217,7 +217,7 @@ LightOpSchema MakeGroupQueryAttentionSchema() {
                       0.0f},
        AttributeParam{"do_rotary", "Whether to apply rotary position embedding.",
                       AttributeType::INT, false, int64_t{0}},
-       AttributeParam{"rotary_interleaved", "Rotary layout; only 0 (split-half) is supported.",
+       AttributeParam{"rotary_interleaved", "Rotary layout: 0 split-half, 1 interleaved.",
                       AttributeType::INT, false, int64_t{0}}},
       false, true);
   schema.set_min_output(1);
