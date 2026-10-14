@@ -176,6 +176,7 @@ def test_native_kernel_tests_are_version_gated_in_standalone():
         "test_scatter_nd.py",
         "test_simd_detection.py",
         "test_simplified_layer_normalization.py",
+        "test_skip_layer_normalization.py",
         "test_skip_simplified_layer_normalization.py",
         "test_matmul_nbits_parity_benchmark.py",
         "test_tanh.py",

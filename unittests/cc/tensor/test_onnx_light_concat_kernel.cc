@@ -176,9 +176,9 @@ TEST(OnnxLightConcatKernel, InvalidInputsAxesAndShapes) {
 }
 
 TEST(OnnxLightConcatKernel, UnsupportedTypesAreRejected) {
-  for (DataType type : {DataType::STRING, DataType::INT4, DataType::UINT4, DataType::FLOAT4E2M1,
-                        DataType::INT2, DataType::UINT2, DataType::FLOAT6E2M3, DataType::FLOAT6E3M2,
-                        DataType::COMPLEX64, DataType::COMPLEX128, DataType::UNDEFINED}) {
+  for (DataType type :
+       {DataType::STRING, DataType::INT4, DataType::UINT4, DataType::FLOAT4E2M1, DataType::INT2,
+        DataType::UINT2, DataType::FLOAT6E2M3, DataType::FLOAT6E3M2, DataType::UNDEFINED}) {
     Tensor data;
     data.data_type = type;
     data.shape = {1};

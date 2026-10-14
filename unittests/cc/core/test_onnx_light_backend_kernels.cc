@@ -535,7 +535,9 @@ TEST(OnnxLightBackendKernels, SplitRunsThroughRuntime) {
 
 TEST(OnnxLightBackendKernels, CastRunsThroughRuntime) {
   EXPECT_EQ(CollectCpuCases("Cast", core::backend_test::TestMode::TEST).size(), 607u);
-  CheckTensorRegularCases("Cast");
+  const std::vector<std::string> failures =
+      RunCpuBackendCases("Cast", core::backend_test::TestMode::TEST);
+  EXPECT_TRUE(failures.empty()) << Describe(failures);
 }
 
 TEST(OnnxLightBackendKernels, GemmRunsThroughRuntime) {
