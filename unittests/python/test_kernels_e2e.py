@@ -845,6 +845,7 @@ class TestBackendCases(ExtTestCase):
                     "Or",
                     "PRelu",
                     "Pow",
+                    "SkipLayerNormalization",
                     "SkipSimplifiedLayerNormalization",
                     "Sub",
                     "Sum",
