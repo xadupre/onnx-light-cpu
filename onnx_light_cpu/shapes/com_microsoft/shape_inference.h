@@ -49,6 +49,8 @@ void ComputeShapeLinearAttention(ONNX_LIGHT_NAMESPACE::core::shapes::ShapesConte
 /// Infers the restricted ``com.microsoft::MatMulNBits`` output shape.
 void ComputeShapeMatMulNBits(ONNX_LIGHT_NAMESPACE::core::shapes::ShapesContext &ctx,
                              const ONNX_LIGHT_NAMESPACE::NodeProto &node);
+void ComputeShapeMoE(ONNX_LIGHT_NAMESPACE::core::shapes::ShapesContext &ctx,
+                     const ONNX_LIGHT_NAMESPACE::NodeProto &node);
 
 /// Returns the scratch-memory requirement for ``com.microsoft::CDist``.
 int64_t ComputePeakMemoryCDist(
@@ -78,6 +80,9 @@ int64_t ComputePeakMemoryLinearAttention(
     const std::vector<ONNX_LIGHT_NAMESPACE::core::symbolic::SymShape> &input_shapes);
 /// Returns zero heap scratch; bounded INT4 panels use 6144 bytes of stack per callback.
 int64_t ComputePeakMemoryMatMulNBits(
+    ONNX_LIGHT_NAMESPACE::core::symbolic::Device device,
+    const std::vector<ONNX_LIGHT_NAMESPACE::core::symbolic::SymShape> &input_shapes);
+int64_t ComputePeakMemoryMoE(
     ONNX_LIGHT_NAMESPACE::core::symbolic::Device device,
     const std::vector<ONNX_LIGHT_NAMESPACE::core::symbolic::SymShape> &input_shapes);
 

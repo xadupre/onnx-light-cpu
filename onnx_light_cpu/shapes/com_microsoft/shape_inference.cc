@@ -282,6 +282,12 @@ std::vector<OperatorSupportRegistration> CollectOperatorSupport() {
        {"onnx_light_cpu::MatMulNBitsBiasFusionPattern"},
        true},
       {kMicrosoftDomain,
+       "MoE",
+       "onnx_light_cpu::ComputeShapeMoE",
+       "onnx_light_cpu::ComputePeakMemoryMoE",
+       {},
+       false},
+      {kMicrosoftDomain,
        "RotaryEmbedding",
        "onnx_light_cpu::ComputeShapeRotaryEmbedding",
        "onnx_light_cpu::ComputePeakMemoryRotaryEmbedding",
@@ -346,6 +352,91 @@ void ComputeShapeBiasGelu(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE::NodePr
   ConstrainEqual(ctx, a.Shape()[a.Shape().Rank() - 1], bias.Shape()[0],
                  "ComputeShapeBiasGelu: bias length must match the last input dimension.");
   ctx.Set(node.output(0), SymTensor(nullptr, a.Dtype(), a.Shape()));
+}
+
+void ComputeShapeMoE(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE::NodeProto &node) {
+  if (node.input_size() < 5 || node.input_size() > 8 || node.output_size() != 1 ||
+      node.output(0).empty()) {
+    throw std::invalid_argument("ComputeShapeMoE: expected five to eight input slots and one output.");
+  }
+  for (int index : {0, 1, 2, 4}) {
+    if (node.input(index).empty() || !ctx.Has(node.input(index))) {
+      throw std::invalid_argument("ComputeShapeMoE: missing required input.");
+    }
+  }
+  for (int index : {6, 7}) {
+    if (HasInput(node, index)) {
+      throw std::invalid_argument("ComputeShapeMoE: FC3 is not supported by the CPU kernel.");
+    }
+  }
+  const auto &input = ctx.Get(node.input(0));
+  const auto &router = ctx.Get(node.input(1));
+  const auto &fc1 = ctx.Get(node.input(2));
+  const auto &fc2 = ctx.Get(node.input(4));
+  const auto type = input.Dtype();
+  if ((type != ONNX_LIGHT_NAMESPACE::TensorProto::FLOAT &&
+       type != ONNX_LIGHT_NAMESPACE::TensorProto::FLOAT16) ||
+      router.Dtype() != type || fc1.Dtype() != type || fc2.Dtype() != type ||
+      (input.Shape().Rank() != 2 && input.Shape().Rank() != 3) ||
+      router.Shape().Rank() != 2 || fc1.Shape().Rank() != 3 || fc2.Shape().Rank() != 3) {
+    throw std::invalid_argument("ComputeShapeMoE: invalid input types or ranks.");
+  }
+  const auto &shape = input.Shape();
+  const auto &hidden = shape[shape.Rank() - 1];
+  const auto &experts = router.Shape()[1];
+  const auto &intermediate = fc2.Shape()[2];
+  const auto k = GetGqaIntAttribute(node, "k", 1);
+  const auto activation = GetStringAttribute(node, "activation_type", "relu");
+  const auto fusion = GetGqaIntAttribute(node, "swiglu_fusion", 0);
+  if (k < 1 || (experts.IsInt() && k > experts.AsInt()) ||
+      (activation == "swiglu" && fusion != 1) ||
+      (activation != "swiglu" && fusion != 0) ||
+      (activation != "relu" && activation != "gelu" && activation != "silu" &&
+       activation != "identity" && activation != "swiglu") ||
+      GetGqaIntAttribute(node, "use_sparse_mixer", 0) != 0) {
+    throw std::invalid_argument("ComputeShapeMoE: unsupported attributes or expert count.");
+  }
+  for (const auto &dim : {hidden, experts, intermediate}) {
+    if (dim.IsInt() && dim.AsInt() <= 0) {
+      throw std::invalid_argument("ComputeShapeMoE: feature and expert dimensions must be positive.");
+    }
+  }
+  const sym_ns::SymDim rows =
+      shape.Rank() == 2 ? shape[0]
+                        : sym_ns::SymDim("(" + shape[0].ToString() + ")*(" +
+                                         shape[1].ToString() + ")");
+  if (shape.Rank() == 3 && shape[0].IsInt() && shape[1].IsInt()) {
+    ConstrainEqual(ctx, sym_ns::SymDim(CheckedIndexMultiply(shape[0].AsInt(), shape[1].AsInt(),
+                                                             "MoE", "token count")),
+                   router.Shape()[0], "ComputeShapeMoE: router token count mismatch.");
+  } else {
+    ConstrainEqual(ctx, rows, router.Shape()[0], "ComputeShapeMoE: router token count mismatch.");
+  }
+  ConstrainEqual(ctx, experts, fc1.Shape()[0], "ComputeShapeMoE: FC1 experts mismatch.");
+  ConstrainEqual(ctx, experts, fc2.Shape()[0], "ComputeShapeMoE: FC2 experts mismatch.");
+  ConstrainEqual(ctx, hidden, fc1.Shape()[2], "ComputeShapeMoE: FC1 hidden mismatch.");
+  ConstrainEqual(ctx, hidden, fc2.Shape()[1], "ComputeShapeMoE: FC2 hidden mismatch.");
+  const sym_ns::SymDim width =
+      activation != "swiglu" ? intermediate
+      : intermediate.IsInt()
+          ? sym_ns::SymDim(CheckedIndexMultiply(intermediate.AsInt(), 2, "MoE", "FC1 width"))
+          : sym_ns::SymDim("2*(" + intermediate.ToString() + ")");
+  ConstrainEqual(ctx, width, fc1.Shape()[1], "ComputeShapeMoE: FC1 width mismatch.");
+  for (const auto [index, second] :
+       {std::pair{3, width}, std::pair{5, hidden}}) {
+    if (HasInput(node, index)) {
+      if (!ctx.Has(node.input(index))) {
+        throw std::invalid_argument("ComputeShapeMoE: missing bias.");
+      }
+      const auto &bias = ctx.Get(node.input(index));
+      if (bias.Dtype() != type || bias.Shape().Rank() != 2) {
+        throw std::invalid_argument("ComputeShapeMoE: invalid bias type or rank.");
+      }
+      ConstrainEqual(ctx, experts, bias.Shape()[0], "ComputeShapeMoE: bias experts mismatch.");
+      ConstrainEqual(ctx, second, bias.Shape()[1], "ComputeShapeMoE: bias width mismatch.");
+    }
+  }
+  ctx.Set(node.output(0), SymTensor(nullptr, type, shape));
 }
 
 void ComputeShapeMatMulNBits(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE::NodeProto &node) {
@@ -843,6 +934,28 @@ int64_t ComputePeakMemoryBiasGelu(sym_ns::Device, const std::vector<SymShape> &)
 
 int64_t ComputePeakMemoryMatMulNBits(sym_ns::Device, const std::vector<SymShape> &) { return 0; }
 
+int64_t ComputePeakMemoryMoE(sym_ns::Device, const std::vector<SymShape> &shapes) {
+  if (shapes.size() < 5 || shapes[0].Rank() < 2 || shapes[1].Rank() != 2 ||
+      shapes[2].Rank() != 3 || shapes[4].Rank() != 3) {
+    return 0;
+  }
+  const auto &experts = shapes[1][1];
+  const auto &hidden = shapes[0][shapes[0].Rank() - 1];
+  const auto &width = shapes[2][1];
+  const auto &intermediate = shapes[4][2];
+  if (!experts.IsInt() || !hidden.IsInt() || !width.IsInt() || !intermediate.IsInt()) {
+    return 0;
+  }
+  const auto bytes = CheckedIndexMultiply(experts.AsInt(), 16, "MoE", "routing scratch");
+  const auto values = CheckedIndexAdd(CheckedIndexAdd(width.AsInt(), intermediate.AsInt(),
+                                                      "MoE", "expert scratch"),
+                                      CheckedIndexMultiply(hidden.AsInt(), 2, "MoE",
+                                                           "expert scratch"),
+                                      "MoE", "expert scratch");
+  return CheckedIndexAdd(bytes, CheckedIndexMultiply(values, 4, "MoE", "scratch"),
+                         "MoE", "scratch");
+}
+
 int64_t ComputePeakMemorySkipLayerNormalization(sym_ns::Device, const std::vector<SymShape> &) {
   return 0;
 }
@@ -980,6 +1093,7 @@ void RegisterMicrosoftShapeAndMemoryFunctions() {
     shapes_ns::RegisterComputeShapeFn(kMicrosoftDomain, "LinearAttention",
                                       ComputeShapeLinearAttention);
     shapes_ns::RegisterComputeShapeFn(kMicrosoftDomain, "MatMulNBits", ComputeShapeMatMulNBits);
+    shapes_ns::RegisterComputeShapeFn(kMicrosoftDomain, "MoE", ComputeShapeMoE);
     shapes_ns::RegisterComputeShapeFn(kMicrosoftDomain, "RotaryEmbedding",
                                       ComputeShapeRotaryEmbedding);
     shapes_ns::RegisterComputePeakMemoryFn(kMicrosoftDomain, "RotaryEmbedding",
@@ -1001,6 +1115,8 @@ void RegisterMicrosoftShapeAndMemoryFunctions() {
                                            sym_ns::Device::kCPU, ComputePeakMemoryLinearAttention);
     shapes_ns::RegisterComputePeakMemoryFn(kMicrosoftDomain, "MatMulNBits", sym_ns::Device::kCPU,
                                            ComputePeakMemoryMatMulNBits);
+    shapes_ns::RegisterComputePeakMemoryFn(kMicrosoftDomain, "MoE", sym_ns::Device::kCPU,
+                                           ComputePeakMemoryMoE);
   });
 }
 
