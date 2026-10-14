@@ -84,26 +84,25 @@ void RegisterCpuMoECases(std::vector<TestCase> &registry, TestMode mode) {
                                  DataTypeSuffix(type) + (benchmark ? "_benchmark" : "");
         const auto node = MakeNode(swiglu, normalize, k);
         const std::vector<rt_ns::OpsetId> opsets = {rt_ns::DefaultOpset(23),
-                                                   rt_ns::OpsetId(kMicrosoftDomain, 1)};
+                                                    rt_ns::OpsetId(kMicrosoftDomain, 1)};
         if (benchmark) {
           const auto fc1_width = intermediate * (swiglu ? 2 : 1);
-          bt_ns::Expect(
-              registry, node, name, opsets,
-              {tokens * hidden, tokens * experts, experts * fc1_width * hidden,
-               experts * fc1_width, experts * hidden * intermediate, experts * hidden},
-              {tokens * hidden},
-              [=](bool generate_expected_outputs) {
-                return BuildData(tokens, hidden, intermediate, experts, type, swiglu, normalize,
-                                 k, generate_expected_outputs);
-              },
-              "backend-test", bt_ns::TestCaseTag::AI_RT,
-              {bt_ns::TensorTypeSpec(static_cast<std::int32_t>(type), {tokens, hidden})});
+          bt_ns::Expect(registry, node, name, opsets,
+                        {tokens * hidden, tokens * experts, experts * fc1_width * hidden,
+                         experts * fc1_width, experts * hidden * intermediate, experts * hidden},
+                        {tokens * hidden},
+                        [=](bool generate_expected_outputs) {
+                          return BuildData(tokens, hidden, intermediate, experts, type, swiglu,
+                                           normalize, k, generate_expected_outputs);
+                        },
+                        "backend-test", bt_ns::TestCaseTag::AI_RT,
+                        {bt_ns::TensorTypeSpec(static_cast<std::int32_t>(type), {tokens, hidden})});
         } else {
           bt_ns::Expect(
               registry, node, name, opsets,
               [=]() {
-                return BuildData(tokens, hidden, intermediate, experts, type, swiglu, normalize,
-                                 k, true);
+                return BuildData(tokens, hidden, intermediate, experts, type, swiglu, normalize, k,
+                                 true);
               },
               "backend-test", bt_ns::TestCaseTag::AI_RT);
         }
