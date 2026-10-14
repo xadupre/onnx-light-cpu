@@ -299,8 +299,12 @@ void ComputeShapeMatMulNBits(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE::Nod
   ConstrainEqual(ctx, a.Shape()[a.Shape().Rank() - 1], sym_ns::SymDim(k),
                  "ComputeShapeMatMulNBits: A's final dimension must equal K.");
   if (encoded_weights) {
-    const auto inputs = ONNX_LIGHT_NAMESPACE::core::runtime::ExportMatMulNBitsInputs(
-        ctx.GetEncodedValue(node.input(1)));
+    ONNX_LIGHT_NAMESPACE::EncodedValueProto encoded = ctx.GetEncodedValue(node.input(1));
+    if (encoded.has_struct_type() && encoded.struct_type().has_type_ref()) {
+      encoded.ref_struct_type() = ctx.ResolveStructType(encoded.struct_type());
+      encoded.mutable_struct_type()->clear_type_id();
+    }
+    const auto inputs = ONNX_LIGHT_NAMESPACE::core::runtime::ExportMatMulNBitsInputs(encoded);
     const auto encoded_data_type =
         inputs.scales.data_type() == ONNX_LIGHT_NAMESPACE::TensorProto::FLOAT
             ? sym_ns::TensorType::kFloat

@@ -50,10 +50,12 @@ Input ``B`` may instead be an ``EncodedValueProto`` using onnx-light's
 ``ORT_MATMULNBITS_INT2``, ``ORT_MATMULNBITS_INT4``, or
 ``ORT_MATMULNBITS_INT8`` layout. In that form, omit the ``scales`` input: the
 kernel validates the encoded geometry, dtype, layout, padding, and implicit
-zero points, then consumes its packed ``B`` and scales directly. It never
-converts the encoded weights to the VNNI preparation layout. Encoded layouts
+zero points, then borrows its packed ``B`` and scales without copying them per
+inference. It never converts the encoded weights to the VNNI preparation layout. Encoded layouts
 with explicit zero points, shared parameter references, incompatible
 attributes, or any other unsupported representation fail with an exception.
+This encoded form is inference-only; automatic differentiation continues to
+require separate tensor ``B`` and ``scales`` inputs.
 
 The activation may have any positive rank with final dimension ``K``. Shape
 inference preserves every leading concrete or symbolic dimension and replaces

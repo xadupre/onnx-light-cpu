@@ -278,7 +278,7 @@ TEST(MatMulNBitsKernel, SupportsEveryNonDoubleFloatAndIntWidth) {
   }
 }
 
-TEST(MatMulNBitsKernel, ConsumesEncodedWeightsWithoutPreparingThemAgain) {
+TEST(MatMulNBitsKernel, BorrowsEncodedWeightsWithoutRepackingThem) {
   constexpr std::int64_t k = 64;
   constexpr std::int64_t n = 16;
   for (const rt_ns::DataType data_type :

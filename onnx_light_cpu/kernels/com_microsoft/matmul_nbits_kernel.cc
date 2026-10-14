@@ -210,6 +210,16 @@ struct MatMulNBitsKernel::PreparedInt4State {
   std::int64_t max_participants;
 };
 
+struct MatMulNBitsKernel::PreparedEncodedState {
+  PreparedEncodedState(std::shared_ptr<const ONNX_LIGHT_NAMESPACE::EncodedValueProto> owner_,
+                       Tensor weights_, Tensor scales_)
+      : owner(std::move(owner_)), weights(std::move(weights_)), scales(std::move(scales_)) {}
+
+  std::shared_ptr<const ONNX_LIGHT_NAMESPACE::EncodedValueProto> owner;
+  Tensor weights;
+  Tensor scales;
+};
+
 MatMulNBitsKernel::MatMulNBitsKernel(const ONNX_LIGHT_NAMESPACE::NodeProto &node,
                                      const rt_ns::KernelContext &ctx)
     : KernelBase(ctx), attributes_(ParseAttributes(node)) {
@@ -286,7 +296,18 @@ void MatMulNBitsKernel::Prepare(rt_ns::RuntimeContext &rt,
       throw std::invalid_argument(
           "onnx_light_cpu::MatMulNBits: shared EncodedValueProto parameters are not supported.");
     }
-    (void)ValidateEncodedWeights(encoded->second.Encoded(), rt.struct_type_catalogue());
+    const rt_ns::MatMulNBitsInputs inputs =
+        ValidateEncodedWeights(encoded->second.Encoded(), rt.struct_type_catalogue());
+    const auto &raw_data = encoded->second.Encoded().raw_data();
+    const std::size_t weight_bytes = inputs.weights.raw_data().size();
+    Tensor weights =
+        Tensor::Borrow("B", inputs.weights.data_type(),
+                       rt_ns::Shape(inputs.weights.dims().values()), raw_data.data(), weight_bytes);
+    Tensor scales = Tensor::Borrow("scales", inputs.scales.data_type(),
+                                   rt_ns::Shape(inputs.scales.dims().values()),
+                                   raw_data.data() + weight_bytes, inputs.scales.raw_data().size());
+    prepared_encoded_ = std::make_unique<PreparedEncodedState>(
+        encoded->second.encoded, std::move(weights), std::move(scales));
     return;
   }
   if (!HasPreparations(immutable_inputs)) {
@@ -355,8 +376,14 @@ Tensor MatMulNBitsKernel::operator()(const Tensor &a,
                                      const ONNX_LIGHT_NAMESPACE::StructTypeCatalogue &catalogue,
                                      rt_ns::RuntimeContext *rt) const {
   const rt_ns::MatMulNBitsInputs inputs = ValidateEncodedWeights(packed_weights, catalogue);
-  const Tensor b = rt_ns::TensorFromProto(inputs.weights);
-  const Tensor scales = rt_ns::TensorFromProto(inputs.scales);
+  const auto &raw_data = packed_weights.raw_data();
+  const std::size_t weight_bytes = inputs.weights.raw_data().size();
+  const Tensor b =
+      Tensor::Borrow("B", inputs.weights.data_type(), rt_ns::Shape(inputs.weights.dims().values()),
+                     raw_data.data(), weight_bytes);
+  const Tensor scales = Tensor::Borrow(
+      "scales", inputs.scales.data_type(), rt_ns::Shape(inputs.scales.dims().values()),
+      raw_data.data() + weight_bytes, inputs.scales.raw_data().size());
   return Compute(a, b, scales, bias, rt, false);
 }
 
@@ -538,6 +565,13 @@ void MatMulNBitsKernel::Run(rt_ns::RuntimeContext &rt) {
     if (encoded->second.Encoded().has_parameter_ref()) {
       throw std::invalid_argument(
           "onnx_light_cpu::MatMulNBits: shared EncodedValueProto parameters are not supported.");
+    }
+    if (prepared_encoded_ != nullptr) {
+      rt_ns::SetOutput(node, 0,
+                       Compute(rt_ns::GetInput(node, 0, rt), prepared_encoded_->weights,
+                               prepared_encoded_->scales, bias, &rt, false),
+                       rt);
+      return;
     }
     rt_ns::SetOutput(node, 0,
                      (*this)(rt_ns::GetInput(node, 0, rt), encoded->second.Encoded(), bias,

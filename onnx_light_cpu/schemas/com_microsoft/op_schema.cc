@@ -241,7 +241,7 @@ LightOpSchema MakeMatMulNBitsSchema() {
       "output; UINT8 packed INT2, INT4, or INT8 weights; block_size=32, weight_prepacked=0, and "
       "accuracy_level 0 or 4. B may instead be an ORT MatMulNBits EncodedValueProto, in which "
       "case scales must be omitted and the encoded packing is consumed without provider "
-      "repacking. zero_points and "
+      "repacking. This encoded form is inference-only. zero_points and "
       "g_idx retain their upstream input slots but must not be supplied. Packed B has shape "
       "(N, ceil(K / 32), 4 * bits), scales has shape (N, ceil(K / 32)) or its flattened "
       "equivalent, and bias has shape (N).",
@@ -261,7 +261,9 @@ LightOpSchema MakeMatMulNBitsSchema() {
       {{"T1",
         {TensorType::kFloat, TensorType::kFloat16, TensorType::kBfloat16},
         "Constrain A, scales, bias, and Y to matching non-double floating-point tensors."},
-       {"T2", {TensorType::kUint8}, "Constrain packed B to UINT8."},
+       {"T2",
+        {TensorType::kUint8, TensorType::kStruct},
+        "Constrain packed B to UINT8 or a structured encoded value."},
        {"T3",
         {TensorType::kUint8},
         "Retain the upstream zero_points type slot; this subset rejects a supplied value."},
