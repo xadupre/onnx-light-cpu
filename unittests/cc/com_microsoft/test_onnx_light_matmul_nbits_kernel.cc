@@ -312,34 +312,36 @@ TEST(MatMulNBitsKernel, BorrowsEncodedWeightsWithoutRepackingThem) {
 TEST(MatMulNBitsKernel, RuntimeSessionPreparesEncodedWeightsWithoutSeparateScales) {
   constexpr std::int64_t k = 64;
   constexpr std::int64_t n = 16;
-  ONNX_LIGHT_NAMESPACE::ModelProto model;
-  model.add_opset_import()->set_version(23);
-  auto *microsoft_opset = model.add_opset_import();
-  microsoft_opset->set_domain("com.microsoft");
-  microsoft_opset->set_version(1);
-  auto *graph = model.mutable_graph();
-  graph->add_input()->set_name("A");
-  graph->add_output()->set_name("Y");
-  auto encoded = MakeEncodedWeights(rt_ns::DataType::FLOAT, k, n);
-  encoded.set_name("B");
-  *graph->add_encoded_initializer() = std::move(encoded);
-  ONNX_LIGHT_NAMESPACE::NodeProto node = MakeNode(k, n);
-  node.ref_input().resize(2);
-  *graph->add_node() = std::move(node);
+  for (const std::int64_t bits : {2, 4, 8}) {
+    ONNX_LIGHT_NAMESPACE::ModelProto model;
+    model.add_opset_import()->set_version(23);
+    auto *microsoft_opset = model.add_opset_import();
+    microsoft_opset->set_domain("com.microsoft");
+    microsoft_opset->set_version(1);
+    auto *graph = model.mutable_graph();
+    graph->add_input()->set_name("A");
+    graph->add_output()->set_name("Y");
+    auto encoded = MakeEncodedWeights(rt_ns::DataType::FLOAT, k, n, bits);
+    encoded.set_name("B");
+    *graph->add_encoded_initializer() = std::move(encoded);
+    ONNX_LIGHT_NAMESPACE::NodeProto node = MakeNode(k, n, bits);
+    node.ref_input().resize(2);
+    *graph->add_node() = std::move(node);
 
-  rt_ns::RuntimeContext rt{rt_ns::KernelContext{rt_ns::DefaultOpset(23)}};
-  ASSERT_TRUE(onnx_light_cpu::RegisterKernelForSession(rt, "com.microsoft", "MatMulNBits"));
-  rt_ns::RuntimeSession session(model);
-  for (float value : {1.0f, 2.0f}) {
-    rt.Put("A", rt_ns::Tensor::FromFloat("A", {1, k}, std::vector<float>(k, value)));
-    session.Run(rt);
-    const rt_ns::Tensor &output = rt.Get("Y");
-    ASSERT_EQ(output.shape, (rt_ns::Shape{1, n}));
-    for (std::size_t index = 0; index < output.element_count(); ++index) {
-      EXPECT_FLOAT_EQ(output.AsFloat()[index], 64.0f * value);
+    rt_ns::RuntimeContext rt{rt_ns::KernelContext{rt_ns::DefaultOpset(23)}};
+    ASSERT_TRUE(onnx_light_cpu::RegisterKernelForSession(rt, "com.microsoft", "MatMulNBits"));
+    rt_ns::RuntimeSession session(model);
+    for (float value : {1.0f, 2.0f}) {
+      rt.Put("A", rt_ns::Tensor::FromFloat("A", {1, k}, std::vector<float>(k, value)));
+      session.Run(rt);
+      const rt_ns::Tensor &output = rt.Get("Y");
+      ASSERT_EQ(output.shape, (rt_ns::Shape{1, n}));
+      for (std::size_t index = 0; index < output.element_count(); ++index) {
+        EXPECT_FLOAT_EQ(output.AsFloat()[index], 64.0f * value) << "bits=" << bits;
+      }
     }
+    EXPECT_EQ(session.prepared_bytes(), 0U);
   }
-  EXPECT_EQ(session.prepared_bytes(), 0U);
 }
 
 TEST(MatMulNBitsKernel, RejectsUnsupportedEncodedWeightContracts) {
