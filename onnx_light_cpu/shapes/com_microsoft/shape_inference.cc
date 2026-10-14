@@ -936,14 +936,15 @@ int64_t ComputePeakMemoryBiasGelu(sym_ns::Device, const std::vector<SymShape> &)
 int64_t ComputePeakMemoryMatMulNBits(sym_ns::Device, const std::vector<SymShape> &) { return 0; }
 
 int64_t ComputePeakMemoryMoE(sym_ns::Device, const std::vector<SymShape> &shapes) {
-  if (shapes.size() < 5 || shapes[0].Rank() < 2 || shapes[1].Rank() != 2 || shapes[2].Rank() != 3 ||
-      shapes[4].Rank() != 3) {
+  const std::size_t fc2_index = shapes.size() > 4 && shapes[4].Rank() == 3 ? 4 : 3;
+  if (shapes.size() <= fc2_index || shapes[0].Rank() < 2 || shapes[1].Rank() != 2 ||
+      shapes[2].Rank() != 3 || shapes[fc2_index].Rank() != 3) {
     return 0;
   }
   const auto &experts = shapes[1][1];
   const auto &hidden = shapes[0][shapes[0].Rank() - 1];
   const auto &width = shapes[2][1];
-  const auto &intermediate = shapes[4][2];
+  const auto &intermediate = shapes[fc2_index][2];
   if (!experts.IsInt() || !hidden.IsInt() || !width.IsInt() || !intermediate.IsInt()) {
     return 0;
   }

@@ -347,6 +347,10 @@ TEST(CustomOperatorSupport, InfersMoESymbolicShapeAndRejectsMismatch) {
                                                                         {},
                                                                         ctx.Get("fc2").Shape()}),
             0);
+  EXPECT_GT(onnx_light_cpu::ComputePeakMemoryMoE(
+                sym_ns::Device::kCPU, {ctx.Get("input").Shape(), ctx.Get("router").Shape(),
+                                       ctx.Get("fc1").Shape(), ctx.Get("fc2").Shape()}),
+            0);
 
   shapes_ns::ShapesContext invalid;
   invalid.Set("input", SymTensor(nullptr, TensorType::kFloat, {SymDim(2), SymDim(8)}));
