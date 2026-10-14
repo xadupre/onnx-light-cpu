@@ -208,9 +208,9 @@ TEST(OnnxLightSplitKernel, InvalidShapesTypesAxesSizesAndOverflow) {
     malformed.shape = shape;
     EXPECT_THROW(kernel(malformed, 0, {1}, 0), std::invalid_argument);
   }
-  for (DataType type : {DataType::STRING, DataType::INT4, DataType::UINT4, DataType::FLOAT4E2M1,
-                        DataType::INT2, DataType::UINT2, DataType::FLOAT6E2M3, DataType::FLOAT6E3M2,
-                        DataType::COMPLEX64, DataType::COMPLEX128, DataType::UNDEFINED}) {
+  for (DataType type :
+       {DataType::STRING, DataType::INT4, DataType::UINT4, DataType::FLOAT4E2M1, DataType::INT2,
+        DataType::UINT2, DataType::FLOAT6E2M3, DataType::FLOAT6E3M2, DataType::UNDEFINED}) {
     malformed.data_type = type;
     malformed.shape = {0};
     EXPECT_THROW(kernel(malformed, 0, {0}, 0), std::invalid_argument);

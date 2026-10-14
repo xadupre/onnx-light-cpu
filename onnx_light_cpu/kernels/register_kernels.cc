@@ -17,6 +17,7 @@
 #include "onnx_light_cpu/kernels/com_microsoft/naive_group_query_attention_kernel.h"
 #include "onnx_light_cpu/kernels/com_microsoft/naive_linear_attention_kernel.h"
 #include "onnx_light_cpu/kernels/com_microsoft/naive_skip_simplified_layer_normalization_kernel.h"
+#include "onnx_light_cpu/kernels/com_microsoft/skip_layer_normalization_kernel.h"
 #include "onnx_light_cpu/kernels/com_microsoft/skip_simplified_layer_normalization_kernel.h"
 #include "onnx_light_cpu/kernels/elementwise/binary_kernel.h"
 #include "onnx_light_cpu/kernels/elementwise/variadic_kernel.h"
@@ -164,6 +165,7 @@ void RegisterMicrosoftKernels(MicrosoftKernelImplementation implementation) {
     RegisterNaiveCDistKernel();
     RegisterNaiveGroupQueryAttentionKernel();
     RegisterNaiveMicrosoftLinearAttentionKernel();
+    RegisterSkipLayerNormalizationKernel();
     RegisterNaiveSkipSimplifiedLayerNormalizationKernel();
     return;
   case MicrosoftKernelImplementation::OPTIMIZED:
@@ -171,6 +173,7 @@ void RegisterMicrosoftKernels(MicrosoftKernelImplementation implementation) {
     RegisterCDistKernel();
     RegisterGroupQueryAttentionKernel();
     RegisterMicrosoftLinearAttentionKernel();
+    RegisterSkipLayerNormalizationKernel();
     RegisterSkipSimplifiedLayerNormalizationKernel();
     return;
   }

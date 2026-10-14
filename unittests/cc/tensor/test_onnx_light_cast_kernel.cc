@@ -59,6 +59,13 @@ Tensor Output(int32_t type, const Shape &shape, std::size_t bytes) {
   return result;
 }
 
+template <typename T>
+Tensor RawTensor(int32_t type, const Shape &shape, const std::vector<T> &values) {
+  std::vector<std::uint8_t> bytes(values.size() * sizeof(T));
+  std::memcpy(bytes.data(), values.data(), bytes.size());
+  return Tensor("expected", type, shape, std::move(bytes));
+}
+
 void Compare(const Tensor &data, int32_t to, bool saturate = true) {
   SCOPED_TRACE(to);
   onnx_light_cpu::CastKernel kernel(MakeCtx());
@@ -293,6 +300,82 @@ TEST(OnnxLightCastKernel, StringsPreserveParserFormattingAndBorrowedInputs) {
         Tensor::From<int64_t>("expected", {3}, {0, INT64_MAX, INT64_MIN}));
 }
 
+TEST(OnnxLightCastKernel, ComplexPairsPreserveRealAndImaginaryComponents) {
+  const onnx_light_cpu::CastKernel kernel(MakeCtx());
+  const Tensor real = Tensor::From<double>("data", {5}, {-3.5, -0.0, 0.0, 2.25, 17.0});
+  Equal(kernel(real, DataType::COMPLEX64),
+        RawTensor<float>(DataType::COMPLEX64, {5},
+                         {-3.5F, 0.0F, -0.0F, 0.0F, 0.0F, 0.0F, 2.25F, 0.0F, 17.0F, 0.0F}));
+  Equal(kernel(real, DataType::COMPLEX128),
+        RawTensor<double>(DataType::COMPLEX128, {5},
+                          {-3.5, 0.0, -0.0, 0.0, 0.0, 0.0, 2.25, 0.0, 17.0, 0.0}));
+
+  const Tensor input64 = RawTensor<float>(DataType::COMPLEX64, {4},
+                                          {-3.5F, 2.25F, -0.0F, 0.0F, 7.0F, -11.0F, 1.0F, 0.5F});
+  const Tensor input128 =
+      RawTensor<double>(DataType::COMPLEX128, {4}, {-3.5, 2.25, -0.0, 0.0, 7.0, -11.0, 1.0, 0.5});
+
+  Tensor output64 = Output(DataType::COMPLEX64, input128.shape, input64.size_bytes());
+  kernel(input128, DataType::COMPLEX64, output64);
+  Equal(output64, input64);
+  Tensor output128 = Output(DataType::COMPLEX128, input64.shape, input128.size_bytes());
+  kernel(input64, DataType::COMPLEX128, output128);
+  Equal(output128, input128);
+
+  for (const Tensor *input : {&input64, &input128}) {
+    Equal(kernel(*input, DataType::FLOAT),
+          Tensor::From<float>("expected", {4}, {-3.5F, -0.0F, 7.0F, 1.0F}));
+    Equal(kernel(*input, DataType::DOUBLE),
+          Tensor::From<double>("expected", {4}, {-3.5, -0.0, 7.0, 1.0}));
+    Equal(kernel(*input, DataType::INT32),
+          Tensor::From<std::int32_t>("expected", {4}, {-3, 0, 7, 1}));
+    Equal(kernel(*input, DataType::COMPLEX64), input64);
+    Equal(kernel(*input, DataType::COMPLEX128), input128);
+    for (DataType unsupported : {DataType::STRING, DataType::FLOAT8E4M3FN, DataType::INT4}) {
+      EXPECT_THROW(kernel(*input, unsupported), std::invalid_argument);
+    }
+  }
+
+  const Tensor scalar64 = RawTensor<float>(DataType::COMPLEX64, {}, {2.5F, -3.0F});
+  const Tensor scalar128 = RawTensor<double>(DataType::COMPLEX128, {}, {2.5, -3.0});
+  Equal(kernel(scalar64, DataType::COMPLEX128), scalar128);
+  Equal(kernel(scalar128, DataType::COMPLEX64), scalar64);
+  Tensor scalar_output = Output(DataType::COMPLEX128, {}, scalar128.size_bytes());
+  kernel(scalar64, DataType::COMPLEX128, scalar_output);
+  Equal(scalar_output, scalar128);
+  scalar_output = Output(DataType::COMPLEX64, {}, scalar64.size_bytes());
+  kernel(scalar128, DataType::COMPLEX64, scalar_output);
+  Equal(scalar_output, scalar64);
+
+  Tensor unsupported = RawTensor<uint8_t>(DataType::FLOAT8E4M3FN, {4}, {1, 2, 3, 4});
+  const Tensor original = unsupported;
+  EXPECT_THROW(kernel(input64, DataType::FLOAT8E4M3FN, unsupported), std::invalid_argument);
+  Equal(unsupported, original);
+}
+
+TEST(OnnxLightCastKernel, ComplexBoolUsesBothComponents) {
+  const onnx_light_cpu::CastKernel kernel(MakeCtx());
+  Tensor expected = Tensor::From<uint8_t>("expected", {4}, {0, 1, 1, 1});
+  expected.data_type = DataType::BOOL;
+  Equal(kernel(RawTensor<float>(DataType::COMPLEX64, {4},
+                                {0.0F, 0.0F, 0.0F, 1.0F, -2.0F, 0.0F, 0.0F,
+                                 std::numeric_limits<float>::quiet_NaN()}),
+               DataType::BOOL),
+        expected);
+  Equal(kernel(RawTensor<double>(
+                   DataType::COMPLEX128, {4},
+                   {0.0, 0.0, 0.0, 1.0, -2.0, 0.0, 0.0, std::numeric_limits<double>::quiet_NaN()}),
+               DataType::BOOL),
+        expected);
+}
+
+TEST(OnnxLightCastKernel, IntegerToComplex64RoundsDirectlyToFloat) {
+  const int64_t value = INT64_C(4611686293305294849);
+  const Tensor converted = onnx_light_cpu::CastKernel(MakeCtx())(
+      Tensor::From<int64_t>("data", {1}, {value}), DataType::COMPLEX64);
+  Equal(converted, RawTensor<float>(DataType::COMPLEX64, {1}, {static_cast<float>(value), 0.0F}));
+}
+
 TEST(OnnxLightCastKernel, UnalignedInputOutputAndSentinels) {
   onnx_light_cpu::CastKernel kernel(MakeCtx());
   BuiltinCast builtin(MakeCtx());
@@ -329,7 +412,7 @@ TEST(OnnxLightCastKernel, ValidationErrorsDoNotWritePreallocatedOutput) {
   const Tensor input = Tensor::From<int32_t>("data", {2}, {1, 2});
   const Tensor original = Tensor::From<int32_t>("out", {2}, {123, 456});
   Tensor output = original;
-  for (DataType type : {DataType::UNDEFINED, DataType::COMPLEX64, DataType::COMPLEX128}) {
+  for (DataType type : {DataType::UNDEFINED}) {
     EXPECT_THROW(kernel(input, type, output), std::invalid_argument);
     Equal(output, original);
     Tensor malformed = input;
@@ -412,7 +495,7 @@ TEST(OnnxLightCastKernel, NodeAttributesRuntimeUsageAndArity) {
     EXPECT_EQ(runtime.GetKernelUsage(),
               (std::vector<std::string>{onnx_light_cpu::CastKernel::kName, "Cast.builtin"}));
   }
-  for (int64_t to : {int64_t{-1}, int64_t{0}, int64_t{14}, INT64_MAX}) {
+  for (int64_t to : {int64_t{-1}, int64_t{0}, int64_t{999}, INT64_MAX}) {
     EXPECT_THROW(onnx_light_cpu::CastKernel(Node(to), MakeCtx()), std::invalid_argument);
   }
   EXPECT_THROW(onnx_light_cpu::CastKernel(Node(DataType::FLOAT, 2), MakeCtx()),
@@ -511,6 +594,39 @@ TEST(OnnxLightCastKernel, ExecutorSmallLargeIdentityAndNestedBypass) {
   view.run_blocks = nullptr;
   Compare(large, DataType::INT32);
   EXPECT_EQ(executor.dispatches, 8);
+}
+
+TEST(OnnxLightCastKernel, ExecutorParallelComplexConversionAndNestedBypass) {
+  constexpr int64_t count = 65537;
+  std::vector<float> components(static_cast<std::size_t>(count) * 2);
+  std::vector<double> expected_values(static_cast<std::size_t>(count));
+  for (int64_t i = 0; i < count; ++i) {
+    const float real = static_cast<float>(i % 97) - 48.0F;
+    components[static_cast<std::size_t>(i) * 2] = real;
+    components[static_cast<std::size_t>(i) * 2 + 1] = -static_cast<float>(i % 31);
+    expected_values[static_cast<std::size_t>(i)] = real;
+  }
+  const Tensor input = RawTensor<float>(DataType::COMPLEX64, {count}, components);
+  const Tensor expected = Tensor::From<double>("expected", {count}, expected_values);
+  const onnx_light_cpu::CastKernel kernel(MakeCtx());
+  InlineExecutor executor;
+  onnx_light_cpu::ExecutionExecutorView view{&executor, 8, &InlineExecutor::Run};
+  onnx_light_cpu::ExecutionExecutorScope scope(&view);
+
+  Equal(kernel(input, DataType::DOUBLE), expected);
+  EXPECT_EQ(executor.dispatches, 1);
+  EXPECT_GT(executor.blocks, 1);
+  EXPECT_LE(executor.blocks, view.effective_threads);
+  Tensor output = Output(DataType::DOUBLE, {count}, expected.size_bytes());
+  kernel(input, DataType::DOUBLE, output);
+  Equal(output, expected);
+  EXPECT_EQ(executor.dispatches, 2);
+  {
+    onnx_light_cpu::detail::ExecutionRegionScope region;
+    Equal(kernel(input, DataType::DOUBLE), expected);
+    EXPECT_EQ(onnx_light_cpu::detail::ExecutionRegionDepth(), 1);
+  }
+  EXPECT_EQ(executor.dispatches, 2);
 }
 
 TEST(OnnxLightCastKernel, StandaloneContractValidation) {
