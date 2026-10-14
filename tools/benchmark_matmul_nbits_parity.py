@@ -322,7 +322,11 @@ def run_case(name, m, k, n, dtype, *, threads=1, repeat=3, warmup=1, accuracy_le
         "memory": (
             {
                 "packed_initializer_bytes": packed.nbytes,
-                "prepared_bytes": ((n + 7) // 8) * (k // 32) * (256 + 64),
+                "prepared_bytes": (
+                    ((n + 7) // 8) * (k // 32) * (256 + 64)
+                    if any(path.startswith("int8_") for path in kernel_paths)
+                    else 0
+                ),
             }
             if bits == 8
             else memory_accounting(m, k, n, dtype, threads=threads, accuracy_level=accuracy_level)

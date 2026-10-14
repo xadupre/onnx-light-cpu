@@ -211,6 +211,7 @@ class TestMatMulNBitsConstantParity(ExtTestCase):
             bits=8,
         )
         self.assertEqual(result["bits"], 8)
+        self.assertEqual(result["memory"]["prepared_bytes"], 0)
         self.assertTrue(result["constants_unchanged"])
 
     def test_muse_key_projection_all_rows_and_dtypes(self):
