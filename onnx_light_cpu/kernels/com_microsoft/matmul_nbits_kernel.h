@@ -8,6 +8,7 @@
 
 #include "onnx_core/runtime/kernels/kernel_context.h"
 #include "onnx_core/runtime/memory/simple_tensor.h"
+#include "onnx_core/runtime/quantization.h"
 #include "onnx_core/runtime/runtime_context.h"
 
 #include <cstdint>
@@ -50,15 +51,34 @@ public:
              const ONNX_LIGHT_NAMESPACE::core::runtime::Tensor *bias = nullptr,
              ONNX_LIGHT_NAMESPACE::core::runtime::RuntimeContext *rt = nullptr) const;
 
+  ONNX_LIGHT_NAMESPACE::core::runtime::Tensor
+  operator()(const ONNX_LIGHT_NAMESPACE::core::runtime::Tensor &a,
+             const ONNX_LIGHT_NAMESPACE::EncodedValueProto &packed_weights,
+             const ONNX_LIGHT_NAMESPACE::core::runtime::Tensor *bias = nullptr,
+             const ONNX_LIGHT_NAMESPACE::StructTypeCatalogue &catalogue = {},
+             ONNX_LIGHT_NAMESPACE::core::runtime::RuntimeContext *rt = nullptr) const;
+
   void Run(ONNX_LIGHT_NAMESPACE::core::runtime::RuntimeContext &rt) override;
 
 private:
   struct PreparedInt4Plan;
   struct PreparedInt4State;
+  struct PreparedEncodedState;
+
+  ONNX_LIGHT_NAMESPACE::core::runtime::Tensor
+  Compute(const ONNX_LIGHT_NAMESPACE::core::runtime::Tensor &a,
+          const ONNX_LIGHT_NAMESPACE::core::runtime::Tensor &b,
+          const ONNX_LIGHT_NAMESPACE::core::runtime::Tensor &scales,
+          const ONNX_LIGHT_NAMESPACE::core::runtime::Tensor *bias,
+          ONNX_LIGHT_NAMESPACE::core::runtime::RuntimeContext *rt, bool allow_prepacking) const;
+  ONNX_LIGHT_NAMESPACE::core::runtime::MatMulNBitsInputs
+  ValidateEncodedWeights(const ONNX_LIGHT_NAMESPACE::EncodedValueProto &packed_weights,
+                         const ONNX_LIGHT_NAMESPACE::StructTypeCatalogue &catalogue) const;
 
   MatMulNBitsAttributes attributes_;
   MatMulNBitsExecutionTuning tuning_ = kDefaultMatMulNBitsExecutionTuning;
   std::unique_ptr<const PreparedInt4State> prepared_int4_;
+  std::unique_ptr<const PreparedEncodedState> prepared_encoded_;
 };
 
 void RegisterMatMulNBitsKernel();
