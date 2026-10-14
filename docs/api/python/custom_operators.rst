@@ -46,6 +46,15 @@ formats with required ``K`` and ``N`` attributes, ``bits`` equal to 2, 4, or
 2, 8, and 128. Activations, scales, optional bias, and output have one matching
 ``FLOAT``, ``FLOAT16``, or ``BFLOAT16`` type; ``DOUBLE`` is not supported.
 
+Input ``B`` may instead be an ``EncodedValueProto`` using onnx-light's
+``ORT_MATMULNBITS_INT2``, ``ORT_MATMULNBITS_INT4``, or
+``ORT_MATMULNBITS_INT8`` layout. In that form, omit the ``scales`` input: the
+kernel validates the encoded geometry, dtype, layout, padding, and implicit
+zero points, then consumes its packed ``B`` and scales directly. It never
+converts the encoded weights to the VNNI preparation layout. Encoded layouts
+with explicit zero points, shared parameter references, incompatible
+attributes, or any other unsupported representation fail with an exception.
+
 The activation may have any positive rank with final dimension ``K``. Shape
 inference preserves every leading concrete or symbolic dimension and replaces
 the final dimension with ``N``. INT4 uses bounded panels of 8 rows, 32 output

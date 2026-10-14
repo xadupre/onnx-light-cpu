@@ -239,13 +239,21 @@ LightOpSchema MakeMatMulNBitsSchema() {
       "Restricted compatibility subset of ONNX Runtime MatMulNBits. The CPU implementation "
       "accepts matching FLOAT, FLOAT16, or BFLOAT16 activations, scales, optional bias, and "
       "output; UINT8 packed INT2, INT4, or INT8 weights; block_size=32, weight_prepacked=0, and "
-      "accuracy_level 0 or 4. zero_points and "
+      "accuracy_level 0 or 4. B may instead be an ORT MatMulNBits EncodedValueProto, in which "
+      "case scales must be omitted and the encoded packing is consumed without provider "
+      "repacking. zero_points and "
       "g_idx retain their upstream input slots but must not be supplied. Packed B has shape "
       "(N, ceil(K / 32), 4 * bits), scales has shape (N, ceil(K / 32)) or its flattened "
       "equivalent, and bias has shape (N).",
       {{"A", "FLOAT, FLOAT16, or BFLOAT16 tensor of rank at least one ending in K.", "T1"},
-       {"B", "UINT8 packed weights with shape (N, ceil(K / 32), 4 * bits).", "T2"},
-       {"scales", "Block scales with shape (N, ceil(K / 32)) or its flattened equivalent.", "T1"},
+       {"B",
+        "UINT8 packed weights with shape (N, ceil(K / 32), 4 * bits), or an ORT MatMulNBits "
+        "EncodedValueProto.",
+        "T2"},
+       {"scales",
+        "Block scales with shape (N, ceil(K / 32)) or its flattened equivalent; omitted when B "
+        "is encoded.",
+        "T1"},
        {"zero_points", "Unsupported optional upstream zero-point slot; must be omitted.", "T3"},
        {"g_idx", "Unsupported deprecated upstream group-index slot; must be omitted.", "T4"},
        {"bias", "Optional bias with shape (N) and A's type.", "T1"}},

@@ -70,6 +70,25 @@ rt_ns::Tensor MakeTensor(rt_ns::DataType data_type, const rt_ns::Shape &shape,
   return rt_ns::Tensor::FromFloat("", shape, values);
 }
 
+ONNX_LIGHT_NAMESPACE::EncodedValueProto
+MakeEncodedWeights(rt_ns::DataType data_type, std::int64_t k, std::int64_t n, std::int64_t bits = 4,
+                   std::int64_t block_size = 32, double zero_point = -1.0) {
+  const auto format = bits == 2   ? rt_ns::QuantizationFormat::kOrtMatmulnbitsInt2
+                      : bits == 4 ? rt_ns::QuantizationFormat::kOrtMatmulnbitsInt4
+                                  : rt_ns::QuantizationFormat::kOrtMatmulnbitsInt8;
+  rt_ns::QuantizationPlan plan = rt_ns::MakeMatMulNBitsPlan(format, k, n, block_size);
+  if (zero_point >= 0.0) {
+    for (auto &block : plan.runs[0].blocks) {
+      block.zero_point = zero_point;
+    }
+  }
+  return rt_ns::QuantizeTensor(
+             MakeTensor(data_type, {k, n},
+                        std::vector<float>(static_cast<std::size_t>(k * n), 1.0f)),
+             plan)
+      .Encoded();
+}
+
 float ReadValue(const rt_ns::Tensor &tensor, std::size_t index) {
   if (tensor.data_type == static_cast<std::int32_t>(rt_ns::DataType::FLOAT)) {
     return tensor.AsFloat()[index];
@@ -257,6 +276,46 @@ TEST(MatMulNBitsKernel, SupportsEveryNonDoubleFloatAndIntWidth) {
           << "type=" << static_cast<int>(data_type) << ", bits=" << bits;
     }
   }
+}
+
+TEST(MatMulNBitsKernel, ConsumesEncodedWeightsWithoutPreparingThemAgain) {
+  constexpr std::int64_t k = 64;
+  constexpr std::int64_t n = 16;
+  for (const rt_ns::DataType data_type :
+       {rt_ns::DataType::FLOAT, rt_ns::DataType::FLOAT16, rt_ns::DataType::BFLOAT16}) {
+    for (const std::int64_t bits : {2, 4, 8}) {
+      ONNX_LIGHT_NAMESPACE::NodeProto node = MakeNode(k, n, bits);
+      node.ref_input().resize(2);
+      onnx_light_cpu::MatMulNBitsKernel kernel{
+          node, rt_ns::KernelContext{rt_ns::OpsetId("com.microsoft", 1)}};
+      rt_ns::RuntimeContext rt{rt_ns::KernelContext{rt_ns::OpsetId("com.microsoft", 1)}};
+      rt.Put("A", MakeTensor(data_type, {1, k}, std::vector<float>(k, 1.0f)));
+      rt.PutValue("B", rt_ns::RuntimeValue(MakeEncodedWeights(data_type, k, n, bits)));
+
+      EXPECT_EQ(kernel.HasPreparations({"B"}), false);
+      kernel.Prepare(rt, {"B"});
+      EXPECT_EQ(rt.value_store().prepared_bytes(), 0U);
+      kernel.Run(rt);
+
+      const rt_ns::Tensor &output = rt.Get("Y");
+      ASSERT_EQ(output.shape, (rt_ns::Shape{1, n}));
+      for (std::size_t index = 0; index < output.element_count(); ++index) {
+        EXPECT_FLOAT_EQ(ReadValue(output, index), 64.0f)
+            << "type=" << static_cast<int>(data_type) << ", bits=" << bits;
+      }
+    }
+  }
+}
+
+TEST(MatMulNBitsKernel, RejectsUnsupportedEncodedWeightContracts) {
+  const rt_ns::Tensor input = rt_ns::Tensor::FromFloat("", {1, 32}, std::vector<float>(32, 1.0f));
+  const onnx_light_cpu::MatMulNBitsKernel kernel{
+      MakeNode(32, 1), rt_ns::KernelContext{rt_ns::OpsetId("com.microsoft", 1)}};
+
+  EXPECT_THROW(kernel(input, MakeEncodedWeights(rt_ns::DataType::FLOAT, 32, 1, 4, 64)),
+               std::invalid_argument);
+  EXPECT_THROW(kernel(input, MakeEncodedWeights(rt_ns::DataType::FLOAT, 32, 1, 4, 32, 7.0)),
+               std::invalid_argument);
 }
 
 TEST(MatMulNBitsKernel, RegistersTypeAndBitSpecificTuningSchemas) {

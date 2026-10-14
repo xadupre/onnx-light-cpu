@@ -17,6 +17,7 @@
 #include "onnx_core/runtime/kernels/kernel_context.h"
 #include "onnx_core/runtime/kernels/run_nodes.h"
 #include "onnx_core/runtime/memory/simple_tensor.h"
+#include "onnx_core/runtime/quantization.h"
 #include "onnx_core/runtime/runtime_context.h"
 #include "onnx_core/shapes/dispatch_table.h"
 #include "onnx_core/symbolic/sym_tensor.h"
@@ -368,6 +369,33 @@ TEST(CustomOperatorSupport, InfersMatMulNBitsShapeAndValidatesPackedInputs) {
   mixed_inputs.Set("scales", SymTensor(nullptr, TensorType::kFloat16, {SymDim(3), SymDim(2)}));
   EXPECT_THROW(onnx_light_cpu::ComputeShapeMatMulNBits(mixed_inputs, MakeMatMulNBitsNode()),
                std::invalid_argument);
+}
+
+TEST(CustomOperatorSupport, InfersMatMulNBitsShapeFromEncodedWeights) {
+  shapes_ns::ShapesContext ctx;
+  ctx.Set("A", SymTensor(nullptr, TensorType::kFloat,
+                         {SymDim("batch"), SymDim("sequence"), SymDim(35)}));
+  const auto plan =
+      rt_ns::MakeMatMulNBitsPlan(rt_ns::QuantizationFormat::kOrtMatmulnbitsInt4, 35, 3, 32);
+  const auto encoded =
+      rt_ns::QuantizeTensor(Tensor::FromFloat("", {35, 3}, std::vector<float>(105, 1.0f)), plan);
+  ctx.SetEncodedValue("B", encoded.Encoded());
+  NodeProto node = MakeMatMulNBitsNode(false, 4);
+  node.ref_input().resize(2);
+
+  onnx_light_cpu::ComputeShapeMatMulNBits(ctx, node);
+
+  EXPECT_EQ(ctx.Get("Y").Dtype(), TensorType::kFloat);
+  EXPECT_EQ(ctx.Get("Y").Shape(),
+            sym_ns::SymShape({SymDim("batch"), SymDim("sequence"), SymDim(3)}));
+
+  NodeProto wrong_bits = node;
+  for (auto &attribute : wrong_bits.ref_attribute()) {
+    if (attribute.name() == "bits") {
+      attribute.set_i(2);
+    }
+  }
+  EXPECT_THROW(onnx_light_cpu::ComputeShapeMatMulNBits(ctx, wrong_bits), std::invalid_argument);
 }
 
 TEST(CustomOperatorSupport, InfersGroupQueryAttentionShape) {
