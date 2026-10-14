@@ -38,8 +38,7 @@ void RequireShape(const Tensor &tensor, std::initializer_list<std::int64_t> dime
 
 } // namespace
 
-MoEKernel::MoEKernel(const ONNX_LIGHT_NAMESPACE::NodeProto &node,
-                     const rt_ns::KernelContext &ctx)
+MoEKernel::MoEKernel(const ONNX_LIGHT_NAMESPACE::NodeProto &node, const rt_ns::KernelContext &ctx)
     : KernelBase(ctx) {
   set_node(node);
   const auto k = rt_ns::GetAttributeIntOrDefault(node, "k", 1);
@@ -66,8 +65,8 @@ MoEKernel::MoEKernel(const ONNX_LIGHT_NAMESPACE::NodeProto &node,
   attributes_.normalize = normalize == 1;
   attributes_.alpha = rt_ns::GetAttributeFloatOrDefault(node, "activation_alpha", 1.0f);
   attributes_.beta = rt_ns::GetAttributeFloatOrDefault(node, "activation_beta", 0.0f);
-  attributes_.limit = rt_ns::GetAttributeFloatOrDefault(
-      node, "swiglu_limit", std::numeric_limits<float>::infinity());
+  attributes_.limit = rt_ns::GetAttributeFloatOrDefault(node, "swiglu_limit",
+                                                        std::numeric_limits<float>::infinity());
   if (!std::isfinite(attributes_.alpha) || !std::isfinite(attributes_.beta) ||
       std::isnan(attributes_.limit) || attributes_.limit < 0) {
     throw std::invalid_argument("MoE: invalid activation parameters.");
@@ -91,48 +90,49 @@ Tensor MoEKernel::operator()(const Tensor &input, const Tensor &router, const Te
   }
   const std::size_t hidden = CheckedDimension(input.shape[input.shape.size() - 1], "MoE", "hidden");
   const std::size_t tokens = CheckedDimension(input.shape[0], "MoE", "tokens");
-  const std::size_t rows = input.shape.size() == 3
-                               ? CheckedMultiply(tokens, CheckedDimension(input.shape[1], "MoE",
-                                                                            "sequence"),
-                                                 "MoE", "token count")
-                               : tokens;
+  const std::size_t rows =
+      input.shape.size() == 3
+          ? CheckedMultiply(tokens, CheckedDimension(input.shape[1], "MoE", "sequence"), "MoE",
+                            "token count")
+          : tokens;
   if (hidden == 0 || router.shape.size() != 2) {
     throw std::invalid_argument("MoE: hidden must be positive and router must have rank 2.");
   }
   const std::size_t experts = CheckedDimension(router.shape[1], "MoE", "experts");
-  if (experts == 0 || attributes_.k > experts || router.shape[0] != static_cast<std::int64_t>(rows) ||
-      fc2.shape.size() != 3) {
+  if (experts == 0 || attributes_.k > experts ||
+      router.shape[0] != static_cast<std::int64_t>(rows) || fc2.shape.size() != 3) {
     throw std::invalid_argument("MoE: invalid router, k, or fc2 dimensions.");
   }
   const std::size_t intermediate = CheckedDimension(fc2.shape[2], "MoE", "intermediate");
   if (intermediate == 0) {
     throw std::invalid_argument("MoE: intermediate must be positive.");
   }
-  const std::size_t fc1_width = CheckedMultiply(intermediate,
-                                                attributes_.activation == "swiglu" ? 2 : 1, "MoE",
-                                                "fc1 width");
-  RequireShape(fc1, {static_cast<std::int64_t>(experts), static_cast<std::int64_t>(fc1_width),
-                     static_cast<std::int64_t>(hidden)},
+  const std::size_t fc1_width =
+      CheckedMultiply(intermediate, attributes_.activation == "swiglu" ? 2 : 1, "MoE", "fc1 width");
+  RequireShape(fc1,
+               {static_cast<std::int64_t>(experts), static_cast<std::int64_t>(fc1_width),
+                static_cast<std::int64_t>(hidden)},
                "fc1_experts_weights");
-  RequireShape(fc2, {static_cast<std::int64_t>(experts), static_cast<std::int64_t>(hidden),
-                     static_cast<std::int64_t>(intermediate)},
+  RequireShape(fc2,
+               {static_cast<std::int64_t>(experts), static_cast<std::int64_t>(hidden),
+                static_cast<std::int64_t>(intermediate)},
                "fc2_experts_weights");
   if (bias1 != nullptr) {
-    RequireShape(*bias1, {static_cast<std::int64_t>(experts),
-                          static_cast<std::int64_t>(fc1_width)}, "fc1_experts_bias");
+    RequireShape(*bias1, {static_cast<std::int64_t>(experts), static_cast<std::int64_t>(fc1_width)},
+                 "fc1_experts_bias");
   }
   if (bias2 != nullptr) {
-    RequireShape(*bias2, {static_cast<std::int64_t>(experts),
-                          static_cast<std::int64_t>(hidden)}, "fc2_experts_bias");
+    RequireShape(*bias2, {static_cast<std::int64_t>(experts), static_cast<std::int64_t>(hidden)},
+                 "fc2_experts_bias");
   }
   CheckedProduct({experts, fc1_width, hidden}, "MoE", "fc1 elements");
   CheckedProduct({experts, hidden, intermediate}, "MoE", "fc2 elements");
   CheckedMultiply(rows, experts, "MoE", "router elements");
   const auto bytes = CheckedByteSize(CheckedMultiply(rows, hidden, "MoE", "output elements"),
                                      input.element_size(), "MoE", "output bytes");
-  Tensor output = rt != nullptr ? rt->MakeOutputTensor(0, input.data_type, input.shape, bytes)
-                                : rt_ns::MakeOutputTensor(input.data_type, input.shape, bytes,
-                                                          nullptr);
+  Tensor output = rt != nullptr
+                      ? rt->MakeOutputTensor(0, input.data_type, input.shape, bytes)
+                      : rt_ns::MakeOutputTensor(input.data_type, input.shape, bytes, nullptr);
   ComputeMoE(input.bytes(), router.bytes(), fc1.bytes(), bias1 ? bias1->bytes() : nullptr,
              fc2.bytes(), bias2 ? bias2->bytes() : nullptr, output.mutable_bytes(), rows, hidden,
              experts, intermediate, dtype == DataType::FLOAT16, attributes_);
@@ -148,13 +148,12 @@ void MoEKernel::Run(rt_ns::RuntimeContext &rt) {
     throw std::invalid_argument("MoE: FC3 inputs are not supported on CPU.");
   }
   rt_ns::RequireOutputCount(node, 1);
-  rt_ns::SetOutput(node, 0,
-                   (*this)(rt_ns::GetInput(node, 0, rt), rt_ns::GetInput(node, 1, rt),
-                           rt_ns::GetInput(node, 2, rt),
-                           rt_ns::GetOptionalInput(node, 3, rt.tensors()),
-                           rt_ns::GetInput(node, 4, rt),
-                           rt_ns::GetOptionalInput(node, 5, rt.tensors()), &rt),
-                   rt);
+  rt_ns::SetOutput(
+      node, 0,
+      (*this)(rt_ns::GetInput(node, 0, rt), rt_ns::GetInput(node, 1, rt),
+              rt_ns::GetInput(node, 2, rt), rt_ns::GetOptionalInput(node, 3, rt.tensors()),
+              rt_ns::GetInput(node, 4, rt), rt_ns::GetOptionalInput(node, 5, rt.tensors()), &rt),
+      rt);
 }
 
 void RegisterMoEKernel() {

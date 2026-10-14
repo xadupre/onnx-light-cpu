@@ -32,6 +32,27 @@ Windowing restricts only attention scores: ``present_key`` and
 step. RoPE uses absolute positions as before. Full and sliding attention nodes
 can coexist in the same model; ``sliding_window_cache`` remains unsupported.
 
+Microsoft MoE
+~~~~~~~~~~~~~
+
+``com.microsoft::MoE`` version 1 routes rank-2 packed tokens ``[T,H]`` or
+rank-3 decoder activations ``[B,S,H]`` using rank-2 ``[T,E]`` router **logits**.
+It applies a softmax over all experts, selects the top ``k`` (default 1), and
+optionally renormalizes the selected weights before summing expert outputs.
+Expert weights are ``[E,I,H]`` for FC1 and ``[E,H,I]`` for FC2. Optional
+expert-major biases occupy inputs 3 and 5. Interleaved SwiGLU
+(``activation_type="swiglu"``, ``swiglu_fusion=1``) uses FC1 ``[E,2*I,H]``
+with alternating gate and linear rows, and supports ``swiglu_limit``,
+``activation_alpha``, and ``activation_beta``. The other supported activations
+are ``relu`` (default), ``gelu``, ``silu``, and ``identity``.
+
+Input and output types must match and be ``FLOAT`` or ``FLOAT16``. Separate
+FC3 weights and biases, sparse mixer routing, noninterleaved SwiGLU, and BF16
+are not supported by the CPU kernel. The output retains the input shape.
+See `ONNX Runtime's MoE CPU implementation
+<https://github.com/microsoft/onnxruntime/blob/main/onnxruntime/contrib_ops/cpu/moe/moe_cpu.cc>`_
+for the upstream compatibility contract.
+
 Microsoft MatMulNBits
 ~~~~~~~~~~~~~~~~~~~~~
 

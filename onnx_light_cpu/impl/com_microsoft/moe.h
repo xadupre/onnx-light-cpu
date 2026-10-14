@@ -22,7 +22,7 @@ struct MoEAttributes {
 
 void ComputeMoE(const void *input, const void *router, const void *fc1, const void *bias1,
                 const void *fc2, const void *bias2, void *output, std::size_t tokens,
-                std::size_t hidden, std::size_t experts, std::size_t intermediate,
-                bool float16, const MoEAttributes &attributes);
+                std::size_t hidden, std::size_t experts, std::size_t intermediate, bool float16,
+                const MoEAttributes &attributes);
 
 } // namespace onnx_light_cpu

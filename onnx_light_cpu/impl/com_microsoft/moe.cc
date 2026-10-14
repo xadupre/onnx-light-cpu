@@ -39,8 +39,7 @@ float Activate(float value, const MoEAttributes &attributes) {
   }
   if (attributes.activation == "gelu") {
     return 0.5f * value *
-           (1.0f + std::tanh(0.7978845608f *
-                             (value + 0.044715f * value * value * value)));
+           (1.0f + std::tanh(0.7978845608f * (value + 0.044715f * value * value * value)));
   }
   if (attributes.activation == "silu") {
     return value / (1.0f + std::exp(-value));
@@ -50,8 +49,8 @@ float Activate(float value, const MoEAttributes &attributes) {
 
 template <typename T>
 void Compute(const T *input, const T *router, const T *fc1, const T *bias1, const T *fc2,
-             const T *bias2, T *output, std::size_t tokens, std::size_t hidden,
-             std::size_t experts, std::size_t intermediate, const MoEAttributes &attributes) {
+             const T *bias2, T *output, std::size_t tokens, std::size_t hidden, std::size_t experts,
+             std::size_t intermediate, const MoEAttributes &attributes) {
   const bool swiglu = attributes.activation == "swiglu";
   const std::size_t fc1_width = intermediate * (swiglu ? 2 : 1);
   std::vector<std::pair<float, std::size_t>> routes(experts);
@@ -102,8 +101,7 @@ void Compute(const T *input, const T *router, const T *fc1, const T *bias1, cons
               std::clamp(Read(first.data(), 2 * row + 1), -attributes.limit, attributes.limit);
           const float arg = attributes.alpha * gate;
           const float sigmoid =
-              arg > 0 ? 1.0f / (1.0f + std::exp(-arg))
-                      : std::exp(arg) / (1.0f + std::exp(arg));
+              arg > 0 ? 1.0f / (1.0f + std::exp(-arg)) : std::exp(arg) / (1.0f + std::exp(arg));
           value = gate * sigmoid * (linear + attributes.beta);
         } else {
           value = Activate(Read(first.data(), row), attributes);
@@ -113,15 +111,15 @@ void Compute(const T *input, const T *router, const T *fc1, const T *bias1, cons
       for (std::size_t row = 0; row < hidden; ++row) {
         float value = 0.0f;
         for (std::size_t col = 0; col < intermediate; ++col) {
-          value += Read(activated.data(), col) *
-                   Read(fc2, (expert * hidden + row) * intermediate + col);
+          value +=
+              Read(activated.data(), col) * Read(fc2, (expert * hidden + row) * intermediate + col);
         }
         second[row] = Narrow<T>(value);
         if (bias2 != nullptr) {
           second[row] = Narrow<T>(Read(second.data(), row) + Read(bias2, expert * hidden + row));
         }
-        result[row] += (attributes.normalize ? weight / top_sum : weight) *
-                       Read(second.data(), row);
+        result[row] +=
+            (attributes.normalize ? weight / top_sum : weight) * Read(second.data(), row);
       }
     }
     for (std::size_t row = 0; row < hidden; ++row) {

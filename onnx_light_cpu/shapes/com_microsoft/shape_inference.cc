@@ -357,7 +357,8 @@ void ComputeShapeBiasGelu(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE::NodePr
 void ComputeShapeMoE(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE::NodeProto &node) {
   if (node.input_size() < 5 || node.input_size() > 8 || node.output_size() != 1 ||
       node.output(0).empty()) {
-    throw std::invalid_argument("ComputeShapeMoE: expected five to eight input slots and one output.");
+    throw std::invalid_argument(
+        "ComputeShapeMoE: expected five to eight input slots and one output.");
   }
   for (int index : {0, 1, 2, 4}) {
     if (node.input(index).empty() || !ctx.Has(node.input(index))) {
@@ -374,11 +375,11 @@ void ComputeShapeMoE(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE::NodeProto &
   const auto &fc1 = ctx.Get(node.input(2));
   const auto &fc2 = ctx.Get(node.input(4));
   const auto type = input.Dtype();
-  if ((type != ONNX_LIGHT_NAMESPACE::TensorProto::FLOAT &&
-       type != ONNX_LIGHT_NAMESPACE::TensorProto::FLOAT16) ||
+  if ((type != ONNX_LIGHT_NAMESPACE::core::schema::TensorType::kFloat &&
+       type != ONNX_LIGHT_NAMESPACE::core::schema::TensorType::kFloat16) ||
       router.Dtype() != type || fc1.Dtype() != type || fc2.Dtype() != type ||
-      (input.Shape().Rank() != 2 && input.Shape().Rank() != 3) ||
-      router.Shape().Rank() != 2 || fc1.Shape().Rank() != 3 || fc2.Shape().Rank() != 3) {
+      (input.Shape().Rank() != 2 && input.Shape().Rank() != 3) || router.Shape().Rank() != 2 ||
+      fc1.Shape().Rank() != 3 || fc2.Shape().Rank() != 3) {
     throw std::invalid_argument("ComputeShapeMoE: invalid input types or ranks.");
   }
   const auto &shape = input.Shape();
@@ -389,8 +390,7 @@ void ComputeShapeMoE(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE::NodeProto &
   const auto activation = GetStringAttribute(node, "activation_type", "relu");
   const auto fusion = GetGqaIntAttribute(node, "swiglu_fusion", 0);
   if (k < 1 || (experts.IsInt() && k > experts.AsInt()) ||
-      (activation == "swiglu" && fusion != 1) ||
-      (activation != "swiglu" && fusion != 0) ||
+      (activation == "swiglu" && fusion != 1) || (activation != "swiglu" && fusion != 0) ||
       (activation != "relu" && activation != "gelu" && activation != "silu" &&
        activation != "identity" && activation != "swiglu") ||
       GetGqaIntAttribute(node, "use_sparse_mixer", 0) != 0) {
@@ -398,16 +398,18 @@ void ComputeShapeMoE(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE::NodeProto &
   }
   for (const auto &dim : {hidden, experts, intermediate}) {
     if (dim.IsInt() && dim.AsInt() <= 0) {
-      throw std::invalid_argument("ComputeShapeMoE: feature and expert dimensions must be positive.");
+      throw std::invalid_argument(
+          "ComputeShapeMoE: feature and expert dimensions must be positive.");
     }
   }
   const sym_ns::SymDim rows =
-      shape.Rank() == 2 ? shape[0]
-                        : sym_ns::SymDim("(" + shape[0].ToString() + ")*(" +
-                                         shape[1].ToString() + ")");
+      shape.Rank() == 2
+          ? shape[0]
+          : sym_ns::SymDim("(" + shape[0].ToString() + ")*(" + shape[1].ToString() + ")");
   if (shape.Rank() == 3 && shape[0].IsInt() && shape[1].IsInt()) {
-    ConstrainEqual(ctx, sym_ns::SymDim(CheckedIndexMultiply(shape[0].AsInt(), shape[1].AsInt(),
-                                                             "MoE", "token count")),
+    ConstrainEqual(ctx,
+                   sym_ns::SymDim(CheckedIndexMultiply(shape[0].AsInt(), shape[1].AsInt(), "MoE",
+                                                       "token count")),
                    router.Shape()[0], "ComputeShapeMoE: router token count mismatch.");
   } else {
     ConstrainEqual(ctx, rows, router.Shape()[0], "ComputeShapeMoE: router token count mismatch.");
@@ -422,8 +424,7 @@ void ComputeShapeMoE(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE::NodeProto &
           ? sym_ns::SymDim(CheckedIndexMultiply(intermediate.AsInt(), 2, "MoE", "FC1 width"))
           : sym_ns::SymDim("2*(" + intermediate.ToString() + ")");
   ConstrainEqual(ctx, width, fc1.Shape()[1], "ComputeShapeMoE: FC1 width mismatch.");
-  for (const auto [index, second] :
-       {std::pair{3, width}, std::pair{5, hidden}}) {
+  for (const auto [index, second] : {std::pair{3, width}, std::pair{5, hidden}}) {
     if (HasInput(node, index)) {
       if (!ctx.Has(node.input(index))) {
         throw std::invalid_argument("ComputeShapeMoE: missing bias.");
@@ -935,8 +936,8 @@ int64_t ComputePeakMemoryBiasGelu(sym_ns::Device, const std::vector<SymShape> &)
 int64_t ComputePeakMemoryMatMulNBits(sym_ns::Device, const std::vector<SymShape> &) { return 0; }
 
 int64_t ComputePeakMemoryMoE(sym_ns::Device, const std::vector<SymShape> &shapes) {
-  if (shapes.size() < 5 || shapes[0].Rank() < 2 || shapes[1].Rank() != 2 ||
-      shapes[2].Rank() != 3 || shapes[4].Rank() != 3) {
+  if (shapes.size() < 5 || shapes[0].Rank() < 2 || shapes[1].Rank() != 2 || shapes[2].Rank() != 3 ||
+      shapes[4].Rank() != 3) {
     return 0;
   }
   const auto &experts = shapes[1][1];
@@ -947,13 +948,11 @@ int64_t ComputePeakMemoryMoE(sym_ns::Device, const std::vector<SymShape> &shapes
     return 0;
   }
   const auto bytes = CheckedIndexMultiply(experts.AsInt(), 16, "MoE", "routing scratch");
-  const auto values = CheckedIndexAdd(CheckedIndexAdd(width.AsInt(), intermediate.AsInt(),
-                                                      "MoE", "expert scratch"),
-                                      CheckedIndexMultiply(hidden.AsInt(), 2, "MoE",
-                                                           "expert scratch"),
-                                      "MoE", "expert scratch");
-  return CheckedIndexAdd(bytes, CheckedIndexMultiply(values, 4, "MoE", "scratch"),
-                         "MoE", "scratch");
+  const auto values = CheckedIndexAdd(
+      CheckedIndexAdd(width.AsInt(), intermediate.AsInt(), "MoE", "expert scratch"),
+      CheckedIndexMultiply(hidden.AsInt(), 2, "MoE", "expert scratch"), "MoE", "expert scratch");
+  return CheckedIndexAdd(bytes, CheckedIndexMultiply(values, 4, "MoE", "scratch"), "MoE",
+                         "scratch");
 }
 
 int64_t ComputePeakMemorySkipLayerNormalization(sym_ns::Device, const std::vector<SymShape> &) {

@@ -211,15 +211,17 @@ float RunForwardObjective(const NodeProto &node, const std::vector<float> &query
 
 TEST(CustomOperatorSupport, ProvidesLightSchemas) {
   const auto schemas = onnx_light_cpu::GetMicrosoftOpSchemasWithHistory();
-  ASSERT_EQ(schemas.size(), 8U);
+  ASSERT_EQ(schemas.size(), 9U);
   EXPECT_EQ(schemas[0].name(), "BiasGelu");
   EXPECT_EQ(schemas[1].name(), "CDist");
   EXPECT_EQ(schemas[2].name(), "GroupQueryAttention");
   EXPECT_EQ(schemas[3].name(), "LinearAttention");
   EXPECT_EQ(schemas[4].name(), "MatMulNBits");
-  EXPECT_EQ(schemas[5].name(), "RotaryEmbedding");
-  EXPECT_EQ(schemas[6].name(), "SkipLayerNormalization");
-  EXPECT_EQ(schemas[7].name(), "SkipSimplifiedLayerNormalization");
+  EXPECT_EQ(schemas[5].name(), "MoE");
+  EXPECT_EQ(schemas[6].name(), "RotaryEmbedding");
+  EXPECT_EQ(schemas[7].name(), "SkipLayerNormalization");
+  EXPECT_EQ(schemas[8].name(), "SkipSimplifiedLayerNormalization");
+  EXPECT_EQ(schemas[5].inputs().size(), 8U);
   ASSERT_EQ(schemas[4].inputs().size(), 6U);
   EXPECT_EQ(schemas[4].inputs()[3].name, "zero_points");
   EXPECT_EQ(schemas[4].inputs()[4].name, "g_idx");
@@ -248,7 +250,7 @@ TEST(CustomOperatorSupport, ProvidesLightSchemas) {
 
 TEST(CustomOperatorSupport, ProvidesReadOnlyInventory) {
   const auto support = onnx_light_cpu::CollectOperatorSupport();
-  ASSERT_EQ(support.size(), 10U);
+  ASSERT_EQ(support.size(), 11U);
   EXPECT_EQ(support[0].op_type, "BiasGelu");
   EXPECT_EQ(support[0].shape_inference_function, "onnx_light_cpu::ComputeShapeBiasGelu");
   EXPECT_EQ(support[0].peak_memory_function, "onnx_light_cpu::ComputePeakMemoryBiasGelu");
@@ -275,42 +277,83 @@ TEST(CustomOperatorSupport, ProvidesReadOnlyInventory) {
   EXPECT_EQ(support[4].fusion_patterns,
             std::vector<std::string>{"onnx_light_cpu::MatMulNBitsBiasFusionPattern"});
   EXPECT_TRUE(support[4].has_gradient);
-  EXPECT_EQ(support[5].domain, onnx_light_cpu::kMicrosoftDomain);
-  EXPECT_EQ(support[5].op_type, "RotaryEmbedding");
-  EXPECT_EQ(support[5].shape_inference_function, "onnx_light_cpu::ComputeShapeRotaryEmbedding");
-  EXPECT_EQ(support[5].peak_memory_function, "onnx_light_cpu::ComputePeakMemoryRotaryEmbedding");
+  EXPECT_EQ(support[5].op_type, "MoE");
+  EXPECT_EQ(support[5].shape_inference_function, "onnx_light_cpu::ComputeShapeMoE");
+  EXPECT_EQ(support[5].peak_memory_function, "onnx_light_cpu::ComputePeakMemoryMoE");
   EXPECT_TRUE(support[5].fusion_patterns.empty());
   EXPECT_FALSE(support[5].has_gradient);
-  EXPECT_EQ(support[6].domain, "ai.onnx");
+  EXPECT_EQ(support[6].domain, onnx_light_cpu::kMicrosoftDomain);
   EXPECT_EQ(support[6].op_type, "RotaryEmbedding");
   EXPECT_EQ(support[6].shape_inference_function, "onnx_light_cpu::ComputeShapeRotaryEmbedding");
   EXPECT_EQ(support[6].peak_memory_function, "onnx_light_cpu::ComputePeakMemoryRotaryEmbedding");
   EXPECT_TRUE(support[6].fusion_patterns.empty());
   EXPECT_FALSE(support[6].has_gradient);
   EXPECT_EQ(support[7].domain, "ai.onnx");
-  EXPECT_EQ(support[7].op_type, "SimplifiedLayerNormalization");
-  EXPECT_EQ(support[7].shape_inference_function,
-            "onnx_light_cpu::ComputeShapeSimplifiedLayerNormalization");
-  EXPECT_EQ(support[7].peak_memory_function,
-            "onnx_light_cpu::ComputePeakMemorySimplifiedLayerNormalization");
+  EXPECT_EQ(support[7].op_type, "RotaryEmbedding");
+  EXPECT_EQ(support[7].shape_inference_function, "onnx_light_cpu::ComputeShapeRotaryEmbedding");
+  EXPECT_EQ(support[7].peak_memory_function, "onnx_light_cpu::ComputePeakMemoryRotaryEmbedding");
   EXPECT_TRUE(support[7].fusion_patterns.empty());
   EXPECT_FALSE(support[7].has_gradient);
-  EXPECT_EQ(support[8].domain, onnx_light_cpu::kMicrosoftDomain);
-  EXPECT_EQ(support[8].op_type, "SkipLayerNormalization");
+  EXPECT_EQ(support[8].domain, "ai.onnx");
+  EXPECT_EQ(support[8].op_type, "SimplifiedLayerNormalization");
   EXPECT_EQ(support[8].shape_inference_function,
-            "onnx_light_cpu::ComputeShapeSkipLayerNormalization");
+            "onnx_light_cpu::ComputeShapeSimplifiedLayerNormalization");
   EXPECT_EQ(support[8].peak_memory_function,
-            "onnx_light_cpu::ComputePeakMemorySkipLayerNormalization");
+            "onnx_light_cpu::ComputePeakMemorySimplifiedLayerNormalization");
   EXPECT_TRUE(support[8].fusion_patterns.empty());
   EXPECT_FALSE(support[8].has_gradient);
   EXPECT_EQ(support[9].domain, onnx_light_cpu::kMicrosoftDomain);
-  EXPECT_EQ(support[9].op_type, "SkipSimplifiedLayerNormalization");
+  EXPECT_EQ(support[9].op_type, "SkipLayerNormalization");
   EXPECT_EQ(support[9].shape_inference_function,
-            "onnx_light_cpu::ComputeShapeSkipSimplifiedLayerNormalization");
+            "onnx_light_cpu::ComputeShapeSkipLayerNormalization");
   EXPECT_EQ(support[9].peak_memory_function,
-            "onnx_light_cpu::ComputePeakMemorySkipSimplifiedLayerNormalization");
+            "onnx_light_cpu::ComputePeakMemorySkipLayerNormalization");
   EXPECT_TRUE(support[9].fusion_patterns.empty());
   EXPECT_FALSE(support[9].has_gradient);
+  EXPECT_EQ(support[10].domain, onnx_light_cpu::kMicrosoftDomain);
+  EXPECT_EQ(support[10].op_type, "SkipSimplifiedLayerNormalization");
+  EXPECT_EQ(support[10].shape_inference_function,
+            "onnx_light_cpu::ComputeShapeSkipSimplifiedLayerNormalization");
+  EXPECT_EQ(support[10].peak_memory_function,
+            "onnx_light_cpu::ComputePeakMemorySkipSimplifiedLayerNormalization");
+  EXPECT_TRUE(support[10].fusion_patterns.empty());
+  EXPECT_FALSE(support[10].has_gradient);
+}
+
+TEST(CustomOperatorSupport, InfersMoESymbolicShapeAndRejectsMismatch) {
+  shapes_ns::ShapesContext ctx;
+  ctx.Set("input", SymTensor(nullptr, TensorType::kFloat16,
+                             {SymDim("batch"), SymDim("sequence"), SymDim(8)}));
+  ctx.Set("router", SymTensor(nullptr, TensorType::kFloat16, {SymDim("tokens"), SymDim(3)}));
+  ctx.Set("fc1", SymTensor(nullptr, TensorType::kFloat16, {SymDim(3), SymDim(10), SymDim(8)}));
+  ctx.Set("fc2", SymTensor(nullptr, TensorType::kFloat16, {SymDim(3), SymDim(8), SymDim(5)}));
+  NodeProto node;
+  node.set_domain(onnx_light_cpu::kMicrosoftDomain);
+  node.set_op_type("MoE");
+  for (const char *name : {"input", "router", "fc1", "", "fc2", "", "", ""}) {
+    node.add_input(name);
+  }
+  node.add_output("output");
+  ONNX_LIGHT_NAMESPACE::AddAttribute(node, "activation_type", std::string("swiglu"));
+  ONNX_LIGHT_NAMESPACE::AddAttribute(node, "swiglu_fusion", int64_t{1});
+  ONNX_LIGHT_NAMESPACE::AddAttribute(node, "k", int64_t{2});
+  onnx_light_cpu::ComputeShapeMoE(ctx, node);
+  EXPECT_EQ(ctx.Get("output").Shape(), ctx.Get("input").Shape());
+  EXPECT_EQ(ctx.Get("output").Dtype(), TensorType::kFloat16);
+  EXPECT_EQ(ctx.Constraints().size(), 1U);
+  EXPECT_GT(onnx_light_cpu::ComputePeakMemoryMoE(sym_ns::Device::kCPU, {ctx.Get("input").Shape(),
+                                                                        ctx.Get("router").Shape(),
+                                                                        ctx.Get("fc1").Shape(),
+                                                                        {},
+                                                                        ctx.Get("fc2").Shape()}),
+            0);
+
+  shapes_ns::ShapesContext invalid;
+  invalid.Set("input", SymTensor(nullptr, TensorType::kFloat, {SymDim(2), SymDim(8)}));
+  invalid.Set("router", SymTensor(nullptr, TensorType::kFloat, {SymDim(2), SymDim(3)}));
+  invalid.Set("fc1", SymTensor(nullptr, TensorType::kFloat, {SymDim(3), SymDim(9), SymDim(8)}));
+  invalid.Set("fc2", SymTensor(nullptr, TensorType::kFloat, {SymDim(3), SymDim(8), SymDim(5)}));
+  EXPECT_THROW(onnx_light_cpu::ComputeShapeMoE(invalid, node), std::invalid_argument);
 }
 
 TEST(CustomOperatorSupport, InfersCDistShapeAndConstraint) {
