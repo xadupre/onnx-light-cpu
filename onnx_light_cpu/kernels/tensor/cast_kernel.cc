@@ -55,6 +55,8 @@ bool Supported(int32_t type) {
   case DataType::FLOAT4E2M1:
   case DataType::FLOAT6E2M3:
   case DataType::FLOAT6E3M2:
+  case DataType::COMPLEX64:
+  case DataType::COMPLEX128:
     return true;
   default:
     return false;
@@ -74,7 +76,7 @@ std::size_t Bytes(int32_t type, int64_t count) {
     Invalid("element count exceeds safe packed-size arithmetic.");
   }
   if (Numeric(type) || (type >= DataType::FLOAT8E4M3FN && type <= DataType::FLOAT8E5M2FNUZ) ||
-      type == DataType::FLOAT8E8M0) {
+      type == DataType::FLOAT8E8M0 || type == DataType::COMPLEX64 || type == DataType::COMPLEX128) {
     int64_t bytes;
     if (ONNX_LIGHT_NAMESPACE::checked_mul_overflow(
             count, static_cast<int64_t>(rt_ns::ElementSize(type)), &bytes)) {
@@ -288,7 +290,8 @@ void RegisterCastKernel() {
                 DataType::FLOAT8E4M3FNUZ, DataType::FLOAT8E5M2, DataType::FLOAT8E5M2FNUZ,
                 DataType::FLOAT8E8M0,     DataType::INT4,       DataType::UINT4,
                 DataType::INT2,           DataType::UINT2,      DataType::FLOAT4E2M1,
-                DataType::FLOAT6E2M3,     DataType::FLOAT6E3M2};
+                DataType::FLOAT6E2M3,     DataType::FLOAT6E3M2, DataType::COMPLEX64,
+                DataType::COMPLEX128};
   RegisterKernel(std::move(info), std::move(factory));
 }
 

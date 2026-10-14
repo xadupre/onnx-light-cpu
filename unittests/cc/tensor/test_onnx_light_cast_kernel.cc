@@ -12,6 +12,7 @@
 
 #include <array>
 #include <cmath>
+#include <complex>
 #include <cstring>
 #include <limits>
 #include <stdexcept>
@@ -293,6 +294,38 @@ TEST(OnnxLightCastKernel, StringsPreserveParserFormattingAndBorrowedInputs) {
         Tensor::From<int64_t>("expected", {3}, {0, INT64_MAX, INT64_MIN}));
 }
 
+TEST(OnnxLightCastKernel, ComplexPairsPreserveRealAndImaginaryComponents) {
+  const Tensor real = Tensor::From<double>("data", {5}, {-3.5, -0.0, 0.0, 2.25, 17.0});
+  for (DataType complex_type : {DataType::COMPLEX64, DataType::COMPLEX128}) {
+    Compare(real, complex_type);
+  }
+
+  const std::array<std::complex<float>, 4> complex64 = {
+      std::complex<float>{-3.5F, 2.25F}, std::complex<float>{-0.0F, 0.0F},
+      std::complex<float>{7.0F, -11.0F}, std::complex<float>{1.0F, 0.5F}};
+  std::vector<std::uint8_t> bytes64(sizeof(complex64));
+  std::memcpy(bytes64.data(), complex64.data(), bytes64.size());
+  const Tensor input64("data", DataType::COMPLEX64, {4}, std::move(bytes64));
+
+  const std::array<std::complex<double>, 4> complex128 = {
+      std::complex<double>{-3.5, 2.25}, std::complex<double>{-0.0, 0.0},
+      std::complex<double>{7.0, -11.0}, std::complex<double>{1.0, 0.5}};
+  std::vector<std::uint8_t> bytes128(sizeof(complex128));
+  std::memcpy(bytes128.data(), complex128.data(), bytes128.size());
+  const Tensor input128("data", DataType::COMPLEX128, {4}, std::move(bytes128));
+
+  const onnx_light_cpu::CastKernel kernel(MakeCtx());
+  for (const Tensor *input : {&input64, &input128}) {
+    for (DataType to : {DataType::FLOAT, DataType::DOUBLE, DataType::INT32, DataType::COMPLEX64,
+                        DataType::COMPLEX128}) {
+      Compare(*input, to);
+    }
+    for (DataType unsupported : {DataType::STRING, DataType::FLOAT8E4M3FN, DataType::INT4}) {
+      EXPECT_THROW(kernel(*input, unsupported), std::invalid_argument);
+    }
+  }
+}
+
 TEST(OnnxLightCastKernel, UnalignedInputOutputAndSentinels) {
   onnx_light_cpu::CastKernel kernel(MakeCtx());
   BuiltinCast builtin(MakeCtx());
@@ -329,7 +362,7 @@ TEST(OnnxLightCastKernel, ValidationErrorsDoNotWritePreallocatedOutput) {
   const Tensor input = Tensor::From<int32_t>("data", {2}, {1, 2});
   const Tensor original = Tensor::From<int32_t>("out", {2}, {123, 456});
   Tensor output = original;
-  for (DataType type : {DataType::UNDEFINED, DataType::COMPLEX64, DataType::COMPLEX128}) {
+  for (DataType type : {DataType::UNDEFINED}) {
     EXPECT_THROW(kernel(input, type, output), std::invalid_argument);
     Equal(output, original);
     Tensor malformed = input;
@@ -412,7 +445,7 @@ TEST(OnnxLightCastKernel, NodeAttributesRuntimeUsageAndArity) {
     EXPECT_EQ(runtime.GetKernelUsage(),
               (std::vector<std::string>{onnx_light_cpu::CastKernel::kName, "Cast.builtin"}));
   }
-  for (int64_t to : {int64_t{-1}, int64_t{0}, int64_t{14}, INT64_MAX}) {
+  for (int64_t to : {int64_t{-1}, int64_t{0}, int64_t{999}, INT64_MAX}) {
     EXPECT_THROW(onnx_light_cpu::CastKernel(Node(to), MakeCtx()), std::invalid_argument);
   }
   EXPECT_THROW(onnx_light_cpu::CastKernel(Node(DataType::FLOAT, 2), MakeCtx()),
