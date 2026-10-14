@@ -18,6 +18,8 @@ struct Float32NormalizationMoments {
 float ComputeNormalizationMeanSquareFloat32(const float *input, std::size_t count);
 Float32NormalizationMoments ComputeNormalizationMomentsFloat32(const float *input,
                                                                std::size_t count);
+void AddNormalizationResidualFloat32(const float *input, const float *skip, const float *bias,
+                                     float *residual, std::size_t count);
 void ApplyNormalizationAffineFloat32(const float *input, const float *scale, const float *bias,
                                      float *output, std::size_t count, float center,
                                      float multiplier);
@@ -117,6 +119,8 @@ void ApplyNormalizationAffineFloat64StashFloat32_AVX(const double *input, const 
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
 float ComputeResidualMeanSquareFloat32_AVX2(const float *input, const float *skip,
                                             const float *bias, float *residual, std::size_t count);
+void AddNormalizationResidualFloat32_AVX2(const float *input, const float *skip, const float *bias,
+                                          float *residual, std::size_t count);
 void ApplyNormalizationScaleBiasFloat32_AVX2(const float *input, float *output, std::size_t count,
                                              float multiplier, float offset);
 float ComputeNormalizationMeanSquareFloat32_AVX2(const float *input, std::size_t count);
@@ -132,6 +136,8 @@ void ApplyRmsNormalizationFloat32_AVX2(const float *input, const float *scale, f
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512
 void ApplyNormalizationScaleBiasFloat32_AVX512(const float *input, float *output, std::size_t count,
                                                float multiplier, float offset);
+void AddNormalizationResidualFloat32_AVX512(const float *input, const float *skip,
+                                            const float *bias, float *residual, std::size_t count);
 float ComputeNormalizationMeanSquareFloat32_AVX512(const float *input, std::size_t count);
 Float32NormalizationMoments ComputeNormalizationMomentsFloat32_AVX512(const float *input,
                                                                       std::size_t count);

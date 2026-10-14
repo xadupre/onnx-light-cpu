@@ -13,6 +13,7 @@
 
 #include <gtest/gtest.h>
 
+#include <cmath>
 #include <cstdint>
 #include <limits>
 #include <stdexcept>
@@ -92,6 +93,29 @@ TEST(SkipLayerNormalizationKernel, SupportsBroadcastSkipAndEmptyRows) {
   const auto empty_result = kernel(empty, empty, gamma, nullptr, nullptr, 1e-5F, true);
   EXPECT_EQ(empty_result.output.size_bytes(), 0U);
   EXPECT_EQ(empty_result.input_skip_bias_sum.size_bytes(), 0U);
+}
+
+TEST(SkipLayerNormalizationKernel, HandlesFloat32VectorWidthsAndTails) {
+  const onnx_light_cpu::SkipLayerNormalizationKernel kernel(MakeCtx());
+  for (const std::size_t width : {32U, 33U}) {
+    std::vector<float> residual(width, 0.0F);
+    for (std::size_t index = 0; index < 32; ++index) {
+      residual[index] = index % 2 == 0 ? -1.0F : 1.0F;
+    }
+    const auto input = Tensor::FromFloat("", {1, static_cast<std::int64_t>(width)},
+                                         std::vector<float>(width, 0.0F));
+    const auto skip = Tensor::FromFloat("", {1, static_cast<std::int64_t>(width)}, residual);
+    const auto gamma =
+        Tensor::FromFloat("", {static_cast<std::int64_t>(width)}, std::vector<float>(width, 1.0F));
+    const auto result = kernel(input, skip, gamma, nullptr, nullptr, 0.0F, true, true, true);
+    const float inverse = std::sqrt(static_cast<float>(width) / 32.0F);
+    EXPECT_NEAR(result.mean.AsFloat()[0], 0.0F, 1.0e-6F);
+    EXPECT_NEAR(result.inv_std_var.AsFloat()[0], inverse, 1.0e-6F);
+    for (std::size_t index = 0; index < width; ++index) {
+      EXPECT_FLOAT_EQ(result.input_skip_bias_sum.AsFloat()[index], residual[index]);
+      EXPECT_NEAR(result.output.AsFloat()[index], residual[index] * inverse, 1.0e-6F);
+    }
+  }
 }
 
 TEST(SkipLayerNormalizationKernel, RunsOptionalBiasWithoutBeta) {

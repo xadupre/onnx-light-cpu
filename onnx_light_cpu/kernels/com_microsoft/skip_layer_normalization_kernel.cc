@@ -5,6 +5,7 @@
 #include "onnx_light_cpu/kernels/com_microsoft/skip_layer_normalization_kernel.h"
 
 #include "onnx_light_cpu/impl/execution.h"
+#include "onnx_light_cpu/impl/math/normalization_kernel.h"
 #include "onnx_light_cpu/kernels/com_microsoft/skip_simplified_layer_normalization_helpers.h"
 #include "onnx_light_cpu/kernels/com_microsoft/skip_simplified_layer_normalization_kernel.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
@@ -14,6 +15,7 @@
 
 #include <cmath>
 #include <cstddef>
+#include <cstring>
 #include <memory>
 #include <stdexcept>
 #include <utility>
@@ -106,6 +108,65 @@ Normalize(const runtime::Tensor &input, const runtime::Tensor &skip, const runti
   return result;
 }
 
+SkipLayerNormalizationResult
+NormalizeFloat32(const runtime::Tensor &input, const runtime::Tensor &skip,
+                 const runtime::Tensor &gamma, const runtime::Tensor *beta,
+                 const runtime::Tensor *bias, float epsilon, bool output_sum, bool output_mean,
+                 bool output_inv_std_var, runtime::RuntimeContext *rt) {
+  const auto dims = helpers::Validate(input, skip, gamma, bias, epsilon, "SkipLayerNormalization");
+  ValidateVector(input, beta, dims.width, "beta");
+  SkipLayerNormalizationResult result;
+  result.output = normalization::AllocateOutput(input.data_type, input.shape, 0, rt);
+  if (output_mean) {
+    auto shape = input.shape;
+    shape.back() = 1;
+    result.mean = normalization::AllocateOutput(runtime::DataType::FLOAT, shape, 1, rt);
+  }
+  if (output_inv_std_var) {
+    auto shape = input.shape;
+    shape.back() = 1;
+    result.inv_std_var = normalization::AllocateOutput(runtime::DataType::FLOAT, shape, 2, rt);
+  }
+  if (output_sum) {
+    result.input_skip_bias_sum = normalization::AllocateOutput(input.data_type, input.shape, 3, rt);
+  }
+
+  const auto *input_data = input.AsFloat();
+  const auto *skip_data = skip.AsFloat();
+  const auto *gamma_data = gamma.AsFloat();
+  const auto *beta_data = beta == nullptr ? nullptr : beta->AsFloat();
+  const auto *bias_data = bias == nullptr ? nullptr : bias->AsFloat();
+  auto *output = normalization::MutableData<runtime::DataType::FLOAT>(result.output);
+  auto *sum = output_sum
+                  ? normalization::MutableData<runtime::DataType::FLOAT>(result.input_skip_bias_sum)
+                  : nullptr;
+  ExecuteRanges(
+      static_cast<std::int64_t>(dims.rows), static_cast<double>(dims.width),
+      [&](std::int64_t begin, std::int64_t end) {
+        for (std::size_t row = static_cast<std::size_t>(begin); row < static_cast<std::size_t>(end);
+             ++row) {
+          const std::size_t base = row * dims.width;
+          const std::size_t skip_base = (row % dims.skip_rows) * dims.width;
+          AddNormalizationResidualFloat32(input_data + base, skip_data + skip_base, bias_data,
+                                          output + base, dims.width);
+          const auto moments = ComputeNormalizationMomentsFloat32(output + base, dims.width);
+          const float inverse = 1.0F / std::sqrt(moments.variance + epsilon);
+          if (sum != nullptr) {
+            std::memcpy(sum + base, output + base, dims.width * sizeof(float));
+          }
+          if (output_mean) {
+            result.mean.AsFloat()[row] = moments.mean;
+          }
+          if (output_inv_std_var) {
+            result.inv_std_var.AsFloat()[row] = inverse;
+          }
+          ApplyNormalizationAffineFloat32(output + base, gamma_data, beta_data, output + base,
+                                          dims.width, moments.mean, inverse);
+        }
+      });
+  return result;
+}
+
 } // namespace
 
 SkipLayerNormalizationKernel::SkipLayerNormalizationKernel(
@@ -119,8 +180,8 @@ SkipLayerNormalizationResult SkipLayerNormalizationKernel::operator()(
     const runtime::Tensor *beta, const runtime::Tensor *bias, float epsilon, bool output_sum,
     bool output_mean, bool output_inv_std_var, runtime::RuntimeContext *rt) const {
   if (input.data_type == runtime::DataType::FLOAT) {
-    return Normalize<runtime::DataType::FLOAT>(input, skip, gamma, beta, bias, epsilon, output_sum,
-                                               output_mean, output_inv_std_var, rt);
+    return NormalizeFloat32(input, skip, gamma, beta, bias, epsilon, output_sum, output_mean,
+                            output_inv_std_var, rt);
   }
   if (input.data_type == runtime::DataType::FLOAT16) {
     return Normalize<runtime::DataType::FLOAT16>(input, skip, gamma, beta, bias, epsilon,
