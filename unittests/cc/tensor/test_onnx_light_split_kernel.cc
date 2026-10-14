@@ -34,13 +34,14 @@ rt_ns::KernelContext MakeCtx(int64_t version = 18) {
   return rt_ns::KernelContext(rt_ns::OpsetId(std::string(), version));
 }
 
-constexpr std::array<DataType, 18> kTypes = {
+constexpr std::array<DataType, 20> kTypes = {
     DataType::FLOAT,      DataType::DOUBLE,         DataType::FLOAT16,
     DataType::BFLOAT16,   DataType::INT8,           DataType::UINT8,
     DataType::INT16,      DataType::UINT16,         DataType::INT32,
     DataType::UINT32,     DataType::INT64,          DataType::UINT64,
     DataType::BOOL,       DataType::FLOAT8E4M3FN,   DataType::FLOAT8E4M3FNUZ,
-    DataType::FLOAT8E5M2, DataType::FLOAT8E5M2FNUZ, DataType::FLOAT8E8M0};
+    DataType::FLOAT8E5M2, DataType::FLOAT8E5M2FNUZ, DataType::FLOAT8E8M0,
+    DataType::COMPLEX64,  DataType::COMPLEX128};
 
 Tensor Payload(DataType type, const Shape &shape) {
   std::vector<uint8_t> bytes(static_cast<std::size_t>(shape.product()) * rt_ns::ElementSize(type));
@@ -208,9 +209,9 @@ TEST(OnnxLightSplitKernel, InvalidShapesTypesAxesSizesAndOverflow) {
     malformed.shape = shape;
     EXPECT_THROW(kernel(malformed, 0, {1}, 0), std::invalid_argument);
   }
-  for (DataType type : {DataType::STRING, DataType::INT4, DataType::UINT4, DataType::FLOAT4E2M1,
-                        DataType::INT2, DataType::UINT2, DataType::FLOAT6E2M3, DataType::FLOAT6E3M2,
-                        DataType::COMPLEX64, DataType::COMPLEX128, DataType::UNDEFINED}) {
+  for (DataType type :
+       {DataType::STRING, DataType::INT4, DataType::UINT4, DataType::FLOAT4E2M1, DataType::INT2,
+        DataType::UINT2, DataType::FLOAT6E2M3, DataType::FLOAT6E3M2, DataType::UNDEFINED}) {
     malformed.data_type = type;
     malformed.shape = {0};
     EXPECT_THROW(kernel(malformed, 0, {0}, 0), std::invalid_argument);

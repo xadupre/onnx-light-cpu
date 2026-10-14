@@ -27,13 +27,14 @@ using BuiltinGather = ONNX_LIGHT_NAMESPACE::onnx_kernels::kernel::Gather;
 
 rt_ns::KernelContext MakeCtx() { return rt_ns::KernelContext(rt_ns::OpsetId(std::string(), 18)); }
 
-constexpr std::array<DataType, 18> kTypes = {
+constexpr std::array<DataType, 20> kTypes = {
     DataType::FLOAT,      DataType::DOUBLE,         DataType::FLOAT16,
     DataType::BFLOAT16,   DataType::INT8,           DataType::UINT8,
     DataType::INT16,      DataType::UINT16,         DataType::INT32,
     DataType::UINT32,     DataType::INT64,          DataType::UINT64,
     DataType::BOOL,       DataType::FLOAT8E4M3FN,   DataType::FLOAT8E4M3FNUZ,
-    DataType::FLOAT8E5M2, DataType::FLOAT8E5M2FNUZ, DataType::FLOAT8E8M0};
+    DataType::FLOAT8E5M2, DataType::FLOAT8E5M2FNUZ, DataType::FLOAT8E8M0,
+    DataType::COMPLEX64,  DataType::COMPLEX128};
 
 Tensor Payload(DataType type, const Shape &shape) {
   std::vector<uint8_t> bytes(static_cast<std::size_t>(shape.product()) * rt_ns::ElementSize(type));
@@ -153,9 +154,9 @@ TEST(OnnxLightGatherKernel, ValidatesIndicesEvenWhenOutputIsEmpty) {
 TEST(OnnxLightGatherKernel, UnsupportedTypesPreserveBuiltinErrors) {
   const Tensor indices = Tensor::From<int64_t>("indices", {1}, {0});
   BuiltinGather reference(MakeCtx());
-  for (DataType type : {DataType::STRING, DataType::INT4, DataType::UINT4, DataType::FLOAT4E2M1,
-                        DataType::INT2, DataType::UINT2, DataType::FLOAT6E2M3, DataType::FLOAT6E3M2,
-                        DataType::COMPLEX64, DataType::COMPLEX128, DataType::UNDEFINED}) {
+  for (DataType type :
+       {DataType::STRING, DataType::INT4, DataType::UINT4, DataType::FLOAT4E2M1, DataType::INT2,
+        DataType::UINT2, DataType::FLOAT6E2M3, DataType::FLOAT6E3M2, DataType::UNDEFINED}) {
     Tensor data;
     data.data_type = type;
     data.shape = {1};

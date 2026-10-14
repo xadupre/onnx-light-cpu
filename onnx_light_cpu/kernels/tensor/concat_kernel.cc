@@ -209,7 +209,8 @@ void RegisterConcatKernel() {
                 DataType::INT16,      DataType::UINT16,         DataType::INT32,
                 DataType::UINT32,     DataType::INT64,          DataType::UINT64,
                 DataType::BOOL,       DataType::FLOAT8E4M3FN,   DataType::FLOAT8E4M3FNUZ,
-                DataType::FLOAT8E5M2, DataType::FLOAT8E5M2FNUZ, DataType::FLOAT8E8M0};
+                DataType::FLOAT8E5M2, DataType::FLOAT8E5M2FNUZ, DataType::FLOAT8E8M0,
+                DataType::COMPLEX64,  DataType::COMPLEX128};
   RegisterKernel(std::move(info), std::move(factory));
 }
 

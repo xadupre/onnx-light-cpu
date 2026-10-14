@@ -293,6 +293,20 @@ TEST(OnnxLightCastKernel, StringsPreserveParserFormattingAndBorrowedInputs) {
         Tensor::From<int64_t>("expected", {3}, {0, INT64_MAX, INT64_MIN}));
 }
 
+TEST(OnnxLightCastKernel, ComplexOutputsMatchBuiltin) {
+  Tensor complex64 = Tensor::From<float>("data", {6}, {-1.5f, -2.0f, 0.0f, 4.5f, 2.25f, -0.75f});
+  complex64.data_type = DataType::COMPLEX64;
+  complex64.shape = {3};
+  Tensor complex128 = Tensor::From<double>("data", {6}, {-1.5, -2.0, 0.0, 4.5, 2.25, -0.75});
+  complex128.data_type = DataType::COMPLEX128;
+  complex128.shape = {3};
+  const Tensor real = Tensor::From<float>("data", {3}, {-1.5f, 0.0f, 2.25f});
+  for (const Tensor &input : {real, complex64, complex128}) {
+    Compare(input, DataType::COMPLEX64);
+    Compare(input, DataType::COMPLEX128);
+  }
+}
+
 TEST(OnnxLightCastKernel, UnalignedInputOutputAndSentinels) {
   onnx_light_cpu::CastKernel kernel(MakeCtx());
   BuiltinCast builtin(MakeCtx());
@@ -329,13 +343,14 @@ TEST(OnnxLightCastKernel, ValidationErrorsDoNotWritePreallocatedOutput) {
   const Tensor input = Tensor::From<int32_t>("data", {2}, {1, 2});
   const Tensor original = Tensor::From<int32_t>("out", {2}, {123, 456});
   Tensor output = original;
-  for (DataType type : {DataType::UNDEFINED, DataType::COMPLEX64, DataType::COMPLEX128}) {
-    EXPECT_THROW(kernel(input, type, output), std::invalid_argument);
-    Equal(output, original);
-    Tensor malformed = input;
-    malformed.data_type = type;
-    EXPECT_THROW(kernel(malformed, DataType::INT32, output), std::invalid_argument);
-  }
+  EXPECT_THROW(kernel(input, DataType::UNDEFINED, output), std::invalid_argument);
+  Equal(output, original);
+  Tensor malformed_type = input;
+  malformed_type.data_type = DataType::UNDEFINED;
+  EXPECT_THROW(kernel(malformed_type, DataType::INT32, output), std::invalid_argument);
+  Tensor malformed_complex = input;
+  malformed_complex.data_type = DataType::COMPLEX64;
+  EXPECT_THROW(kernel(malformed_complex, DataType::INT32, output), std::invalid_argument);
   for (const Shape &shape : {Shape{-1}, Shape{3}, Shape{INT64_MAX, 2}, Shape{INT64_MAX / 2}}) {
     Tensor malformed = input;
     malformed.shape = shape;
@@ -412,7 +427,7 @@ TEST(OnnxLightCastKernel, NodeAttributesRuntimeUsageAndArity) {
     EXPECT_EQ(runtime.GetKernelUsage(),
               (std::vector<std::string>{onnx_light_cpu::CastKernel::kName, "Cast.builtin"}));
   }
-  for (int64_t to : {int64_t{-1}, int64_t{0}, int64_t{14}, INT64_MAX}) {
+  for (int64_t to : {int64_t{-1}, int64_t{0}, INT64_MAX}) {
     EXPECT_THROW(onnx_light_cpu::CastKernel(Node(to), MakeCtx()), std::invalid_argument);
   }
   EXPECT_THROW(onnx_light_cpu::CastKernel(Node(DataType::FLOAT, 2), MakeCtx()),
