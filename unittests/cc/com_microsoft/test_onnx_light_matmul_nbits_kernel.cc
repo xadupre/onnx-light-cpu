@@ -6,11 +6,13 @@
 #include "onnx_light_cpu/impl/execution.h"
 #include "onnx_light_cpu/impl/math/half_conversion.h"
 #include "onnx_light_cpu/kernels/com_microsoft/matmul_nbits_kernel.h"
+#include "onnx_light_cpu/kernels/register_kernels.h"
 
-#include "onnx_core/compute/prepared_execution.h"
 #include "onnx_core/runtime/kernels/cast_helper.h"
 #include "onnx_core/runtime/kernels/kernel_context.h"
+#include "onnx_core/runtime/kernels/value_store.h"
 #include "onnx_core/runtime/memory/simple_tensor.h"
+#include "onnx_core/runtime/runtime_session.h"
 #include "onnx_core/runtime/tuning/kernel_tuning.h"
 #include "onnx_proto/onnx_helper.h"
 
@@ -68,6 +70,25 @@ rt_ns::Tensor MakeTensor(rt_ns::DataType data_type, const rt_ns::Shape &shape,
     return rt_ns::MakeBfloat16Tensor("", shape, values);
   }
   return rt_ns::Tensor::FromFloat("", shape, values);
+}
+
+ONNX_LIGHT_NAMESPACE::EncodedValueProto
+MakeEncodedWeights(rt_ns::DataType data_type, std::int64_t k, std::int64_t n, std::int64_t bits = 4,
+                   std::int64_t block_size = 32, double zero_point = -1.0) {
+  const auto format = bits == 2   ? rt_ns::QuantizationFormat::kOrtMatmulnbitsInt2
+                      : bits == 4 ? rt_ns::QuantizationFormat::kOrtMatmulnbitsInt4
+                                  : rt_ns::QuantizationFormat::kOrtMatmulnbitsInt8;
+  rt_ns::QuantizationPlan plan = rt_ns::MakeMatMulNBitsPlan(format, k, n, block_size);
+  if (zero_point >= 0.0) {
+    for (auto &block : plan.runs[0].blocks) {
+      block.zero_point = zero_point;
+    }
+  }
+  return rt_ns::QuantizeTensor(
+             MakeTensor(data_type, {k, n},
+                        std::vector<float>(static_cast<std::size_t>(k * n), 1.0f)),
+             plan)
+      .Encoded();
 }
 
 float ReadValue(const rt_ns::Tensor &tensor, std::size_t index) {
@@ -194,9 +215,8 @@ TEST(MatMulNBitsKernel, PreparesOnlyImmutableWeightsAndScales) {
   rt.Put("scales",
          rt_ns::Tensor::FromFloat("scales", {n, k / 32},
                                   std::vector<float>(static_cast<std::size_t>(n * k / 32), 0.25f)));
-  rt_ns::PreparedExecutionState state;
-  kernel.Prepare(rt, {"B", "scales"}, state);
-  EXPECT_EQ(state.objects().resident_bytes(),
+  kernel.Prepare(rt, {"B", "scales"});
+  EXPECT_EQ(rt.value_store().prepared_bytes(),
             onnx_light_cpu::MatMulNBitsAccuracy4Float32Available() ? 768U : 0U);
 
   const rt_ns::Tensor a =
@@ -224,12 +244,11 @@ TEST(MatMulNBitsKernel, PreparesInt8OnlyForImmutableInputsAndAccountsForResidenc
   rt.Put("scales",
          rt_ns::Tensor::FromFloat("scales", {n, k / 32},
                                   std::vector<float>(static_cast<std::size_t>(n * k / 32), 0.25f)));
-  rt_ns::PreparedExecutionState state;
-  kernel.Prepare(rt, {"B", "scales"}, state);
+  kernel.Prepare(rt, {"B", "scales"});
   const std::size_t expected_bytes = 2 * 2 * (256 + 8 * 2 * sizeof(float));
-  EXPECT_EQ(state.objects().resident_bytes(), available ? expected_bytes : 0U);
-  kernel.Prepare(rt, {"B", "scales"}, state);
-  EXPECT_EQ(state.objects().resident_bytes(), available ? expected_bytes : 0U);
+  EXPECT_EQ(rt.value_store().prepared_bytes(), available ? expected_bytes : 0U);
+  kernel.Prepare(rt, {"B", "scales"});
+  EXPECT_EQ(rt.value_store().prepared_bytes(), available ? expected_bytes : 0U);
 
   const rt_ns::Tensor a = rt_ns::Tensor::FromFloat("A", {3, k}, std::vector<float>(3 * k, 0.5f));
   const rt_ns::Tensor output = kernel(a, rt.Get("B"), rt.Get("scales"));
@@ -245,9 +264,8 @@ TEST(MatMulNBitsKernel, Int8HalfScalesKeepGenericFallback) {
   rt_ns::RuntimeContext rt{rt_ns::KernelContext{rt_ns::OpsetId("com.microsoft", 1)}};
   rt.Put("B", rt_ns::Tensor::FromUint8("B", {8, 1, 32}, std::vector<std::uint8_t>(256, 129)));
   rt.Put("scales", rt_ns::MakeFloat16Tensor("scales", {8, 1}, std::vector<float>(8, 0.25f)));
-  rt_ns::PreparedExecutionState state;
-  kernel.Prepare(rt, {"B", "scales"}, state);
-  EXPECT_EQ(state.objects().resident_bytes(), 0U);
+  kernel.Prepare(rt, {"B", "scales"});
+  EXPECT_EQ(rt.value_store().prepared_bytes(), 0U);
   const rt_ns::Tensor a = rt_ns::MakeFloat16Tensor("A", {1, 32}, std::vector<float>(32, 0.5f));
   const rt_ns::Tensor y = kernel(a, rt.Get("B"), rt.Get("scales"));
   for (std::size_t i = 0; i < y.element_count(); ++i) {
@@ -305,6 +323,111 @@ TEST(MatMulNBitsKernel, SupportsEveryNonDoubleFloatAndIntWidth) {
       EXPECT_FLOAT_EQ(ReadValue(y, 0), 16.75f)
           << "type=" << static_cast<int>(data_type) << ", bits=" << bits;
     }
+  }
+}
+
+TEST(MatMulNBitsKernel, BorrowsEncodedWeightsWithoutRepackingThem) {
+  constexpr std::int64_t k = 64;
+  constexpr std::int64_t n = 16;
+  for (const rt_ns::DataType data_type :
+       {rt_ns::DataType::FLOAT, rt_ns::DataType::FLOAT16, rt_ns::DataType::BFLOAT16}) {
+    for (const std::int64_t bits : {2, 4, 8}) {
+      ONNX_LIGHT_NAMESPACE::NodeProto node = MakeNode(k, n, bits);
+      node.ref_input().resize(2);
+      onnx_light_cpu::MatMulNBitsKernel kernel{
+          node, rt_ns::KernelContext{rt_ns::OpsetId("com.microsoft", 1)}};
+      rt_ns::RuntimeContext rt{rt_ns::KernelContext{rt_ns::OpsetId("com.microsoft", 1)}};
+      rt.Put("A", MakeTensor(data_type, {1, k}, std::vector<float>(k, 1.0f)));
+      rt.PutValue("B", rt_ns::RuntimeValue(MakeEncodedWeights(data_type, k, n, bits)));
+
+      EXPECT_TRUE(kernel.HasPreparations({"B"}));
+      kernel.Prepare(rt, {"B"});
+      EXPECT_EQ(rt.value_store().prepared_bytes(), 0U);
+      kernel.Run(rt);
+
+      const rt_ns::Tensor &output = rt.Get("Y");
+      ASSERT_EQ(output.shape, (rt_ns::Shape{1, n}));
+      for (std::size_t index = 0; index < output.element_count(); ++index) {
+        EXPECT_FLOAT_EQ(ReadValue(output, index), 64.0f)
+            << "type=" << static_cast<int>(data_type) << ", bits=" << bits;
+      }
+    }
+  }
+}
+
+TEST(MatMulNBitsKernel, RunsUnpreparedEncodedWeights) {
+  constexpr std::int64_t k = 64;
+  constexpr std::int64_t n = 16;
+  const rt_ns::Tensor input = rt_ns::Tensor::FromFloat("", {1, k}, std::vector<float>(k, 1.0f));
+  for (const std::int64_t bits : {2, 4, 8}) {
+    ONNX_LIGHT_NAMESPACE::NodeProto node = MakeNode(k, n, bits);
+    node.ref_input().resize(2);
+    const onnx_light_cpu::MatMulNBitsKernel kernel{
+        node, rt_ns::KernelContext{rt_ns::OpsetId("com.microsoft", 1)}};
+
+    const rt_ns::Tensor output =
+        kernel(input, MakeEncodedWeights(rt_ns::DataType::FLOAT, k, n, bits));
+
+    ASSERT_EQ(output.shape, (rt_ns::Shape{1, n}));
+    for (std::size_t index = 0; index < output.element_count(); ++index) {
+      EXPECT_FLOAT_EQ(output.AsFloat()[index], 64.0f) << "bits=" << bits;
+    }
+  }
+}
+
+TEST(MatMulNBitsKernel, RuntimeSessionPreparesEncodedWeightsWithoutSeparateScales) {
+  constexpr std::int64_t k = 64;
+  constexpr std::int64_t n = 16;
+  for (const std::int64_t bits : {2, 4, 8}) {
+    ONNX_LIGHT_NAMESPACE::ModelProto model;
+    model.add_opset_import()->set_version(23);
+    auto *microsoft_opset = model.add_opset_import();
+    microsoft_opset->set_domain("com.microsoft");
+    microsoft_opset->set_version(1);
+    auto *graph = model.mutable_graph();
+    graph->add_input()->set_name("A");
+    graph->add_output()->set_name("Y");
+    auto encoded = MakeEncodedWeights(rt_ns::DataType::FLOAT, k, n, bits);
+    encoded.set_name("B");
+    *graph->add_encoded_initializer() = std::move(encoded);
+    ONNX_LIGHT_NAMESPACE::NodeProto node = MakeNode(k, n, bits);
+    node.ref_input().resize(2);
+    *graph->add_node() = std::move(node);
+
+    rt_ns::RuntimeContext rt{rt_ns::KernelContext{rt_ns::DefaultOpset(23)}};
+    ASSERT_TRUE(onnx_light_cpu::RegisterKernelForSession(rt, "com.microsoft", "MatMulNBits"));
+    rt_ns::RuntimeSession session(model);
+    for (float value : {1.0f, 2.0f}) {
+      rt.Put("A", rt_ns::Tensor::FromFloat("A", {1, k}, std::vector<float>(k, value)));
+      session.Run(rt);
+      const rt_ns::Tensor &output = rt.Get("Y");
+      ASSERT_EQ(output.shape, (rt_ns::Shape{1, n}));
+      for (std::size_t index = 0; index < output.element_count(); ++index) {
+        EXPECT_FLOAT_EQ(output.AsFloat()[index], 64.0f * value) << "bits=" << bits;
+      }
+    }
+    EXPECT_EQ(session.prepared_bytes(), 0U);
+  }
+}
+
+TEST(MatMulNBitsKernel, RejectsUnsupportedEncodedWeightContracts) {
+  const rt_ns::Tensor input = rt_ns::Tensor::FromFloat("", {1, 32}, std::vector<float>(32, 1.0f));
+  ONNX_LIGHT_NAMESPACE::NodeProto node = MakeNode(32, 1);
+  node.ref_input().resize(2);
+  onnx_light_cpu::MatMulNBitsKernel kernel{
+      node, rt_ns::KernelContext{rt_ns::OpsetId("com.microsoft", 1)}};
+
+  EXPECT_THROW(kernel(input, MakeEncodedWeights(rt_ns::DataType::FLOAT, 32, 1, 4, 64)),
+               std::invalid_argument);
+  EXPECT_THROW(kernel(input, MakeEncodedWeights(rt_ns::DataType::FLOAT, 32, 1, 4, 32, 7.0)),
+               std::invalid_argument);
+
+  for (const auto &encoded : {MakeEncodedWeights(rt_ns::DataType::FLOAT, 32, 1, 4, 64),
+                              MakeEncodedWeights(rt_ns::DataType::FLOAT, 32, 1, 4, 32, 7.0)}) {
+    rt_ns::RuntimeContext rt{rt_ns::KernelContext{rt_ns::OpsetId("com.microsoft", 1)}};
+    rt.PutValue("B", rt_ns::RuntimeValue(encoded));
+    EXPECT_THROW(kernel.Prepare(rt, {"B"}), std::invalid_argument);
+    EXPECT_EQ(rt.value_store().prepared_bytes(), 0U);
   }
 }
 

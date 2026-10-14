@@ -157,9 +157,10 @@ void NotKernel::Run(RuntimeContext &rt) {
 
 void RegisterNotKernel() {
   NotKernel::RegisterTuningSchemas();
-  NodeKernelFn factory = [](const NodeProto &node,
-                            RuntimeContext &rt) -> std::unique_ptr<rt_ns::KernelBase> {
-    return std::make_unique<NotKernel>(node, rt.kernel_ctx());
+  NodeKernelFn factory =
+      [](const NodeProto &node, RuntimeContext &,
+         const rt_ns::KernelContext &kernel_context) -> std::unique_ptr<rt_ns::KernelBase> {
+    return std::make_unique<NotKernel>(node, kernel_context);
   };
   // Empty domain -> normalised to the default ONNX domain, overriding the
   // built-in Not entry with the SIMD-accelerated kernel for the CPU device.

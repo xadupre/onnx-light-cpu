@@ -271,7 +271,7 @@ TEST(OnnxLightAbsKernel, RegisteredKernelUsesSessionExecutorWithoutPrivatePool) 
   const int64_t n = 2097152;
   std::vector<float> values(static_cast<std::size_t>(n), -3.0f);
   runtime.Set("x", rt_ns::Tensor::FromFloat("x", {n}, values));
-  std::unique_ptr<rt_ns::KernelBase> kernel = factory->second(node, runtime);
+  std::unique_ptr<rt_ns::KernelBase> kernel = factory->second(node, runtime, runtime.kernel_ctx());
   {
     rt_ns::CpuExecutorScope scope(executor.get());
     kernel->Run(runtime);

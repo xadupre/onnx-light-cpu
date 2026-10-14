@@ -519,9 +519,10 @@ TEST(KernelRegistration, MicrosoftImplementationPolicySelectsOneCompleteFamily) 
 // Collecting the inventory must never install, replace, or execute a kernel:
 // it must not mutate onnx-light's shared ``KernelDispatchTable`` at all.
 TEST(KernelRegistration, CollectionDoesNotMutateDispatchTable) {
-  rt_ns::RegisterKernelFn("ai.onnx", "Abs", sym_ns::Device::kCPU,
-                          [](const ONNX_LIGHT_NAMESPACE::NodeProto &, rt_ns::RuntimeContext &)
-                              -> std::unique_ptr<rt_ns::KernelBase> { return nullptr; });
+  rt_ns::RegisterKernelFn(
+      "ai.onnx", "Abs", sym_ns::Device::kCPU,
+      [](const ONNX_LIGHT_NAMESPACE::NodeProto &, rt_ns::RuntimeContext &,
+         const rt_ns::KernelContext &) -> std::unique_ptr<rt_ns::KernelBase> { return nullptr; });
   const std::size_t before = rt_ns::KernelDispatchTable().size();
 
   const std::vector<KernelRegistration> records = onnx_light_cpu::CollectRegisteredKernels();
@@ -532,7 +533,7 @@ TEST(KernelRegistration, CollectionDoesNotMutateDispatchTable) {
   ASSERT_NE(factory, rt_ns::KernelDispatchTable().end());
   ONNX_LIGHT_NAMESPACE::NodeProto node;
   rt_ns::RuntimeContext runtime(rt_ns::KernelContext(rt_ns::DefaultOpset(18)));
-  EXPECT_EQ(factory->second(node, runtime), nullptr);
+  EXPECT_EQ(factory->second(node, runtime, runtime.kernel_ctx()), nullptr);
 }
 
 // A repeated ``(domain, op_type, device)`` registration within a single pass
@@ -552,15 +553,17 @@ TEST(KernelRegistration, RejectsDuplicateRegistrationWithinOnePass) {
   first.kernel_name = "onnx_light_cpu::Abs";
   onnx_light_cpu::RegisterKernel(
       first,
-      [](const ONNX_LIGHT_NAMESPACE::NodeProto &,
-         rt_ns::RuntimeContext &) -> std::unique_ptr<rt_ns::KernelBase> { return nullptr; });
+      [](const ONNX_LIGHT_NAMESPACE::NodeProto &, rt_ns::RuntimeContext &,
+         const rt_ns::KernelContext &) -> std::unique_ptr<rt_ns::KernelBase> { return nullptr; });
   ASSERT_EQ(inventory.size(), 1u);
 
   KernelRegistration duplicate = first;
   EXPECT_THROW(onnx_light_cpu::RegisterKernel(
                    duplicate,
-                   [](const ONNX_LIGHT_NAMESPACE::NodeProto &, rt_ns::RuntimeContext &)
-                       -> std::unique_ptr<rt_ns::KernelBase> { return nullptr; }),
+                   [](const ONNX_LIGHT_NAMESPACE::NodeProto &, rt_ns::RuntimeContext &,
+                      const rt_ns::KernelContext &) -> std::unique_ptr<rt_ns::KernelBase> {
+                     return nullptr;
+                   }),
                std::invalid_argument);
   // The failed duplicate must not have been appended to the inventory.
   EXPECT_EQ(inventory.size(), 1u);
@@ -575,8 +578,8 @@ TEST(KernelRegistration, OpsetBoundsRoundTripThroughCollection) {
   std::vector<KernelRegistration> inventory;
   onnx_light_cpu::KernelRegistrationScope scope(&inventory);
 
-  auto noop_factory = [](const ONNX_LIGHT_NAMESPACE::NodeProto &,
-                         rt_ns::RuntimeContext &) -> std::unique_ptr<rt_ns::KernelBase> {
+  auto noop_factory = [](const ONNX_LIGHT_NAMESPACE::NodeProto &, rt_ns::RuntimeContext &,
+                         const rt_ns::KernelContext &) -> std::unique_ptr<rt_ns::KernelBase> {
     return nullptr;
   };
 

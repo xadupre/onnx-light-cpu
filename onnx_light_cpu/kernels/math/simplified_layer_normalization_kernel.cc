@@ -266,8 +266,9 @@ void SimplifiedLayerNormalizationKernel::Run(RuntimeContext &rt) {
 }
 
 void RegisterSimplifiedLayerNormalizationKernel() {
-  rt_ns::NodeKernelFn factory = [](const NodeProto &node, RuntimeContext &rt) {
-    auto kernel = std::make_unique<SimplifiedLayerNormalizationKernel>(rt.kernel_ctx());
+  rt_ns::NodeKernelFn factory = [](const NodeProto &node, RuntimeContext &,
+                                   const rt_ns::KernelContext &kernel_context) {
+    auto kernel = std::make_unique<SimplifiedLayerNormalizationKernel>(kernel_context);
     kernel->set_node(node);
     return kernel;
   };

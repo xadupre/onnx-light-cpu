@@ -28,7 +28,10 @@ int main(int argc, char **argv) {
   const auto m = parse(argv[1]), k = parse(argv[2]), n = parse(argv[3]);
   const auto repeats = parse(argv[4]);
   const auto bits = argc == 6 ? parse(argv[5]) : 4;
-  if ((bits != 4 && bits != 8) || (bits == 8 && k % 32 != 0)) {
+  if (bits != 4 && bits != 8) {
+    throw std::invalid_argument("bits must be 4 or 8.");
+  }
+  if (bits == 8 && k % 32 != 0) {
     throw std::invalid_argument("INT8 preparation requires K divisible by 32.");
   }
   using Clock = std::chrono::steady_clock;
@@ -84,7 +87,7 @@ int main(int argc, char **argv) {
             << weights.size() + sums.size() * sizeof(std::int32_t) +
                    packed_scales.size() * sizeof(float)
             << ','
-            << (bits == 8 ? k + blocks * sizeof(float)
+            << (bits == 8 ? k + 2 * blocks * sizeof(float)
                           : onnx_light_cpu::kMatMulNBitsInt4WorkspaceBytes)
             << ','
             << (bits == 8 ? onnx_light_cpu::MatMulNBitsInt8Implementation()

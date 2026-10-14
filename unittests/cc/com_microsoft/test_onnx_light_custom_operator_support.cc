@@ -17,6 +17,7 @@
 #include "onnx_core/runtime/kernels/kernel_context.h"
 #include "onnx_core/runtime/kernels/run_nodes.h"
 #include "onnx_core/runtime/memory/simple_tensor.h"
+#include "onnx_core/runtime/quantization.h"
 #include "onnx_core/runtime/runtime_context.h"
 #include "onnx_core/shapes/dispatch_table.h"
 #include "onnx_core/symbolic/sym_tensor.h"
@@ -39,6 +40,7 @@ namespace {
 namespace builder_ns = ONNX_LIGHT_NAMESPACE::core::builder;
 namespace grad_ns = ONNX_LIGHT_NAMESPACE::core::gradient;
 namespace rt_ns = ONNX_LIGHT_NAMESPACE::core::runtime;
+namespace schema_ns = ONNX_LIGHT_NAMESPACE::core::schema;
 namespace shapes_ns = ONNX_LIGHT_NAMESPACE::core::shapes;
 namespace sym_ns = ONNX_LIGHT_NAMESPACE::core::symbolic;
 
@@ -166,12 +168,16 @@ Tensors RunGradient(const NodeProto &node, Tensor query, Tensor key, Tensor valu
   const FunctionProto gradient = MakeGroupQueryAttentionGradient(node);
   const GraphProto graph = MakeGraph(gradient);
   rt_ns::RuntimeContext rt(rt_ns::KernelContext(rt_ns::DefaultOpset(23)));
-  rt_ns::SubgraphSession session(rt, graph);
-  return session.Run({{"Q", std::move(query)},
-                      {"K", std::move(key)},
-                      {"V", std::move(value)},
-                      {"dy", std::move(output_grad)}},
-                     rt);
+  rt_ns::SubgraphSession session(graph);
+  Tensors outputs = session.Run({{"Q", std::move(query)},
+                                 {"K", std::move(key)},
+                                 {"V", std::move(value)},
+                                 {"dy", std::move(output_grad)}},
+                                rt);
+  for (Tensor &output : outputs) {
+    output = output.ToOwned();
+  }
+  return outputs;
 }
 
 float RunForwardObjective(const NodeProto &node, const std::vector<float> &query,
@@ -187,7 +193,7 @@ float RunForwardObjective(const NodeProto &node, const std::vector<float> &query
   graph.add_output()->set_name("Y");
 
   rt_ns::RuntimeContext rt(rt_ns::KernelContext(rt_ns::DefaultOpset(23)));
-  rt_ns::SubgraphSession session(rt, graph);
+  rt_ns::SubgraphSession session(graph);
   Tensors outputs = session.Run(
       {{"Q", Tensor::FromFloat("Q", {1, 2, 4}, query)},
        {"K", Tensor::FromFloat("K", {1, 2, 2}, key)},
@@ -364,6 +370,83 @@ TEST(CustomOperatorSupport, InfersMatMulNBitsShapeAndValidatesPackedInputs) {
   mixed_inputs.Set("scales", SymTensor(nullptr, TensorType::kFloat16, {SymDim(3), SymDim(2)}));
   EXPECT_THROW(onnx_light_cpu::ComputeShapeMatMulNBits(mixed_inputs, MakeMatMulNBitsNode()),
                std::invalid_argument);
+}
+
+TEST(CustomOperatorSupport, InfersMatMulNBitsShapeFromEncodedWeights) {
+  for (const auto [format, bits] :
+       {std::pair{rt_ns::QuantizationFormat::kOrtMatmulnbitsInt2, std::int64_t{2}},
+        std::pair{rt_ns::QuantizationFormat::kOrtMatmulnbitsInt4, std::int64_t{4}},
+        std::pair{rt_ns::QuantizationFormat::kOrtMatmulnbitsInt8, std::int64_t{8}}}) {
+    shapes_ns::ShapesContext ctx;
+    ctx.Set("A", SymTensor(nullptr, TensorType::kFloat,
+                           {SymDim("batch"), SymDim("sequence"), SymDim(35)}));
+    const auto plan = rt_ns::MakeMatMulNBitsPlan(format, 35, 3, 32);
+    auto encoded =
+        rt_ns::QuantizeTensor(Tensor::FromFloat("", {35, 3}, std::vector<float>(105, 1.0f)), plan)
+            .Encoded();
+    const std::size_t payload_bytes = encoded.raw_data().size();
+    encoded.clear_raw_data();
+    encoded.set_data_location(ONNX_LIGHT_NAMESPACE::TensorProto::EXTERNAL);
+    auto *location = encoded.add_external_data();
+    location->set_key("location");
+    location->set_value("weights.bin");
+    auto *length = encoded.add_external_data();
+    length->set_key("length");
+    length->set_value(std::to_string(payload_bytes));
+    ctx.SetEncodedValue("B", encoded);
+    NodeProto node = MakeMatMulNBitsNode(false, bits);
+    node.ref_input().resize(2);
+
+    onnx_light_cpu::ComputeShapeMatMulNBits(ctx, node);
+
+    EXPECT_EQ(ctx.Get("Y").Dtype(), TensorType::kFloat);
+    EXPECT_EQ(ctx.Get("Y").Shape(),
+              sym_ns::SymShape({SymDim("batch"), SymDim("sequence"), SymDim(3)}));
+
+    NodeProto wrong_bits = node;
+    for (auto &attribute : wrong_bits.ref_attribute()) {
+      if (attribute.name() == "bits") {
+        attribute.set_i(bits == 2 ? 4 : 2);
+      }
+    }
+    EXPECT_THROW(onnx_light_cpu::ComputeShapeMatMulNBits(ctx, wrong_bits), std::invalid_argument);
+
+    const auto schemas = onnx_light_cpu::GetMicrosoftOpSchemasWithHistory("MatMulNBits", false);
+    ASSERT_EQ(schemas.size(), 1U);
+    ONNX_LIGHT_NAMESPACE::ValueInfoProto encoded_info;
+    encoded_info.set_name("B");
+    encoded_info.ref_type() = ctx.GetType("B");
+    std::vector<std::optional<schema_ns::SchemaInputValue>> schema_inputs = {
+        schema_ns::SchemaInputValue(ctx.Get("A")), schema_ns::SchemaInputValue(encoded_info)};
+    EXPECT_NO_THROW(schemas[0].Verify(node, &schema_inputs));
+
+    NodeProto duplicate_scales = MakeMatMulNBitsNode(false, bits);
+    ctx.Set("scales", SymTensor(nullptr, TensorType::kFloat, {SymDim(3), SymDim(2)}));
+    EXPECT_THROW(onnx_light_cpu::ComputeShapeMatMulNBits(ctx, duplicate_scales),
+                 std::invalid_argument);
+  }
+}
+
+TEST(CustomOperatorSupport, InfersMatMulNBitsShapeFromReferencedEncodedType) {
+  shapes_ns::ShapesContext ctx;
+  ctx.Set("A", SymTensor(nullptr, TensorType::kFloat, {SymDim(2), SymDim(35)}));
+  const auto plan =
+      rt_ns::MakeMatMulNBitsPlan(rt_ns::QuantizationFormat::kOrtMatmulnbitsInt4, 35, 3, 32);
+  auto encoded =
+      rt_ns::QuantizeTensor(Tensor::FromFloat("", {35, 3}, std::vector<float>(105, 1.0f)), plan)
+          .Encoded();
+  ONNX_LIGHT_NAMESPACE::ModelProto model;
+  *model.add_struct_types() = encoded.struct_type();
+  model.mutable_struct_types(0)->set_type_id(17);
+  ctx.SetStructTypes(model.ref_struct_types());
+  encoded.mutable_struct_type()->Clear();
+  encoded.mutable_struct_type()->set_type_ref(17);
+  ctx.SetEncodedValue("B", encoded);
+  NodeProto node = MakeMatMulNBitsNode(false, 4);
+  node.ref_input().resize(2);
+
+  EXPECT_NO_THROW(onnx_light_cpu::ComputeShapeMatMulNBits(ctx, node));
+  EXPECT_EQ(ctx.Get("Y").Shape(), sym_ns::SymShape({SymDim(2), SymDim(3)}));
 }
 
 TEST(CustomOperatorSupport, InfersGroupQueryAttentionShape) {
@@ -647,7 +730,7 @@ TEST(CustomOperatorSupport, MatMulNBitsGradientExecutesForEveryTypeAndPackedWidt
       const FunctionProto gradient = MakeMatMulNBitsGradient(MakeMatMulNBitsNode(true, bits));
       const GraphProto graph = MakeGraph(gradient);
       rt_ns::RuntimeContext rt(rt_ns::KernelContext(rt_ns::DefaultOpset(23)));
-      rt_ns::SubgraphSession session(rt, graph);
+      rt_ns::SubgraphSession session(graph);
       const std::uint8_t packed_value = bits == 2 ? 0xff : bits == 4 ? 0x99 : 0x81;
       const Tensors outputs =
           session.Run({{"A", make_tensor("A", {1, 35}, std::vector<float>(35, 1.0f))},
@@ -677,7 +760,9 @@ TEST(CustomOperatorSupport, MatMulNBitsGradientRejectsUnsupportedForms) {
   NodeProto zero_points = MakeMatMulNBitsNode();
   zero_points.add_input("zero_points");
   NodeProto wrong_bits = MakeMatMulNBitsNode(false, 3);
-  for (const NodeProto &node : {zero_points, wrong_bits}) {
+  NodeProto encoded = MakeMatMulNBitsNode();
+  encoded.ref_input().resize(2);
+  for (const NodeProto &node : {zero_points, wrong_bits, encoded}) {
     EXPECT_ANY_THROW((void)MakeMatMulNBitsGradient(node));
   }
 }

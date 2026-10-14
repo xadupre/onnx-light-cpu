@@ -43,25 +43,11 @@ def test_changelog_release_sections():
     assert "2026-10-01" in sections["0.1.16"]
 
 
-def test_onnx_light_dev_dependency_version():
+def test_dev_dependencies_exclude_onnx_light_runtime():
     metadata = tomllib.loads((_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     dependencies = metadata["project"]["optional-dependencies"]["dev"]
     onnx_light = [
-        dependency for dependency in dependencies if dependency.startswith("onnx-light @")
+        dependency for dependency in dependencies if dependency.startswith("onnx-light")
     ]
 
-    assert len(onnx_light) == 3
-    assert all("/0.1.30/onnx_light-0.1.30-" in dependency for dependency in onnx_light)
-
-
-def test_avx2_parity_uses_onnx_light_dev_dependency():
-    metadata = tomllib.loads((_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    dependencies = metadata["project"]["optional-dependencies"]["dev"]
-    linux_dependency = next(
-        dependency.split(" ; ", 1)[0]
-        for dependency in dependencies
-        if dependency.startswith("onnx-light @") and "sys_platform == 'linux'" in dependency
-    )
-    workflow = (_ROOT / ".github" / "workflows" / "avx2_parity.yml").read_text(encoding="utf-8")
-
-    assert f'"{linux_dependency}"' in workflow
+    assert not onnx_light

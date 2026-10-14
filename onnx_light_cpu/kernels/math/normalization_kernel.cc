@@ -64,9 +64,10 @@ Shape ReducedShape(const Shape &shape, std::size_t axis) {
 
 template <typename Kernel>
 void RegisterOne(const char *op_type, const char *kernel_name, std::int64_t since_version) {
-  rt_ns::NodeKernelFn factory = [](const NodeProto &node,
-                                   RuntimeContext &rt) -> std::unique_ptr<rt_ns::KernelBase> {
-    auto kernel = std::make_unique<Kernel>(rt.kernel_ctx());
+  rt_ns::NodeKernelFn factory =
+      [](const NodeProto &node, RuntimeContext &,
+         const rt_ns::KernelContext &kernel_context) -> std::unique_ptr<rt_ns::KernelBase> {
+    auto kernel = std::make_unique<Kernel>(kernel_context);
     kernel->set_node(node);
     return kernel;
   };

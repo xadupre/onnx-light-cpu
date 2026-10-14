@@ -11,6 +11,7 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -139,11 +140,29 @@ struct InlineExecutor {
   }
 };
 
+struct ConcurrentExecutor {
+  int dispatches = 0;
+  std::int64_t blocks = 0;
+  static void Run(void *context, std::int64_t count, void *task_context, ExecutionBlockFn task) {
+    auto &self = *static_cast<ConcurrentExecutor *>(context);
+    ++self.dispatches;
+    self.blocks = count;
+    std::vector<std::thread> workers;
+    workers.reserve(static_cast<std::size_t>(count));
+    for (std::int64_t block = 0; block < count; ++block) {
+      workers.emplace_back([=] { task(task_context, block); });
+    }
+    for (auto &worker : workers) {
+      worker.join();
+    }
+  }
+};
+
 TEST(MatMulNBits, PreparedInt8QwenShapesAndTails) {
   for (const auto [k, n] : {std::pair{512u, 32000u}, std::pair{512u, 1376u}, std::pair{1376u, 512u},
                             std::pair{512u, 1024u}, std::pair{512u, 512u}, std::pair{96u, 13u}}) {
     SCOPED_TRACE(::testing::Message() << k << ',' << n);
-    const std::size_t rows = n == 13 ? 3 : 128;
+    const std::size_t rows = n == 13 ? 9 : 128;
     const std::size_t blocks = k / 32;
     const std::size_t slots = (n / 8 + (n % 8 != 0)) * blocks * 8;
     std::vector<float> a(rows * k), scales(n * blocks), bias(n), packed_scales(slots), y(rows * n);
@@ -165,8 +184,18 @@ TEST(MatMulNBits, PreparedInt8QwenShapesAndTails) {
                         k, n);
     for (std::int64_t threads : {1, 2, 4, 8}) {
       for (bool with_bias : {false, true}) {
-        MatMulNBitsInt8Float32(a.data(), packed.data(), sums.data(), packed_scales.data(),
-                               with_bias ? bias.data() : nullptr, y.data(), rows, k, n, threads);
+        ConcurrentExecutor executor;
+        ExecutionExecutorView view{&executor, threads, &ConcurrentExecutor::Run};
+        {
+          ExecutionExecutorScope scope(&view);
+          MatMulNBitsInt8Float32(a.data(), packed.data(), sums.data(), packed_scales.data(),
+                                 with_bias ? bias.data() : nullptr, y.data(), rows, k, n, threads);
+        }
+        EXPECT_EQ(executor.dispatches > 0, threads > 1);
+        if (threads > 1) {
+          EXPECT_GT(executor.blocks, 1);
+          EXPECT_LE(executor.blocks, threads);
+        }
         for (std::size_t row :
              {0u, static_cast<unsigned>(rows / 2), static_cast<unsigned>(rows - 1)}) {
           for (std::size_t col : {0u, static_cast<unsigned>(n / 2), static_cast<unsigned>(n - 1)}) {

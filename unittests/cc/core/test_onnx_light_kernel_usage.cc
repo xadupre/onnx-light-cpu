@@ -324,9 +324,9 @@ TEST(OnnxLightKernelUsage, ConcurrentSessionsAreIsolated) {
   exp_graph.add_input()->set_name("x");
   exp_graph.add_output()->set_name("y");
   *exp_graph.add_node() = MakeNode("Exp");
-  rt_ns::SubgraphSession abs_session(abs_runtime, abs_graph);
-  rt_ns::SubgraphSession exp_session(exp_runtime, exp_graph);
-  rt_ns::SubgraphSession disabled_session(disabled_runtime, abs_graph);
+  rt_ns::SubgraphSession abs_session(abs_graph);
+  rt_ns::SubgraphSession exp_session(exp_graph);
+  rt_ns::SubgraphSession disabled_session(abs_graph);
   constexpr int invocations = 128;
   std::barrier start(3);
   auto run = [&](rt_ns::SubgraphSession &session, rt_ns::RuntimeContext &runtime, float expected) {
@@ -421,7 +421,7 @@ TEST(OnnxLightKernelUsage, FunctionInsideSubgraphRecordsOnOwningRuntime) {
   rt_ns::RuntimeContext other(MakeContext());
   onnx_light_cpu::RegisterKernelGlobal("", "Abs");
   rt_ns::RegisterModelFunctions(model, runtime);
-  rt_ns::SubgraphSession session(runtime, *graph);
+  rt_ns::SubgraphSession session(*graph);
   auto run = [&] {
     const auto outputs =
         session.Run({{"x", rt_ns::Tensor::FromFloat("x", {2}, {-2.0f, 3.0f})}}, runtime, "body");

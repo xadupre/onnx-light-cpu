@@ -198,6 +198,21 @@ class TestMatMulNBitsConstantParity(ExtTestCase):
                     if dtype == "bfloat16" and result["ort_bfloat16_rejection"]:
                         self.assertIn("BF16-rounded", result["oracle"])
 
+    def test_int8_bfloat16_oracle_preserves_bit_width(self):
+        result = run_case(
+            "int8_bfloat16",
+            1,
+            64,
+            13,
+            "bfloat16",
+            repeat=1,
+            warmup=0,
+            accuracy_level=4,
+            bits=8,
+        )
+        self.assertEqual(result["bits"], 8)
+        self.assertTrue(result["constants_unchanged"])
+
     def test_muse_key_projection_all_rows_and_dtypes(self):
         for dtype in DTYPES:
             for m in ROWS:

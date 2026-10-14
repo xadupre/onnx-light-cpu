@@ -141,9 +141,10 @@ void NaiveBiasGeluKernel::Run(RuntimeContext &rt) {
 }
 
 void RegisterNaiveBiasGeluKernel() {
-  rt_ns::NodeKernelFn factory = [](const NodeProto &node,
-                                   RuntimeContext &rt) -> std::unique_ptr<rt_ns::KernelBase> {
-    return std::make_unique<NaiveBiasGeluKernel>(node, rt.kernel_ctx());
+  rt_ns::NodeKernelFn factory =
+      [](const NodeProto &node, RuntimeContext &,
+         const rt_ns::KernelContext &kernel_context) -> std::unique_ptr<rt_ns::KernelBase> {
+    return std::make_unique<NaiveBiasGeluKernel>(node, kernel_context);
   };
   KernelRegistration info;
   info.domain = kMicrosoftDomain;

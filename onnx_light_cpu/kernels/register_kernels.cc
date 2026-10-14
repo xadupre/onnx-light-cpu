@@ -109,9 +109,10 @@ struct SessionKernelCache {
 
 } // namespace
 
-rt_ns::CustomKernelFn detail::AsSessionKernel(rt_ns::NodeKernelFn factory) {
+rt_ns::ContextualCustomKernelFn detail::AsSessionKernel(rt_ns::NodeKernelFn factory) {
   return [factory = std::move(factory), cache = std::make_shared<SessionKernelCache>()](
-             const ONNX_LIGHT_NAMESPACE::NodeProto &node, rt_ns::RuntimeContext &runtime) {
+             const ONNX_LIGHT_NAMESPACE::NodeProto &node, rt_ns::RuntimeContext &runtime,
+             const rt_ns::KernelContext &kernel_context) {
     std::vector<int64_t> inputs;
     for (const auto &name : node.input()) {
       if (name.empty() || !runtime.Has(name)) {
@@ -123,14 +124,15 @@ rt_ns::CustomKernelFn detail::AsSessionKernel(rt_ns::NodeKernelFn factory) {
       inputs.push_back(static_cast<int64_t>(input.shape.size()));
       inputs.insert(inputs.end(), input.shape.begin(), input.shape.end());
     }
-    const auto &ctx = runtime.kernel_ctx();
     // Include node contents, not just its address: RunNode callers can reuse
     // temporary node storage. Tensor values and buffer addresses are not plans'
     // metadata and must not prevent reuse across feeds.
-    SessionKernelCache::Key key{
-        node.SerializeAsString(), ctx.opset.domain,
-        ctx.opset.version,        reinterpret_cast<std::uintptr_t>(ctx.allocator),
-        runtime.device(),         std::move(inputs)};
+    SessionKernelCache::Key key{node.SerializeAsString(),
+                                kernel_context.opset.domain,
+                                kernel_context.opset.version,
+                                reinterpret_cast<std::uintptr_t>(kernel_context.allocator),
+                                runtime.device(),
+                                std::move(inputs)};
     std::shared_ptr<PreparedSessionKernel> prepared;
     {
       std::lock_guard<std::mutex> lock(cache->mutex);
@@ -145,7 +147,7 @@ rt_ns::CustomKernelFn detail::AsSessionKernel(rt_ns::NodeKernelFn factory) {
     std::lock_guard<std::mutex> lock(prepared->mutex);
     if (!prepared->kernel) {
       prepared->node.CopyFrom(node);
-      prepared->kernel = factory(prepared->node, runtime);
+      prepared->kernel = factory(prepared->node, runtime, kernel_context);
     }
     if (!prepared->kernel) {
       throw std::runtime_error("onnx_light_cpu: kernel factory returned null.");

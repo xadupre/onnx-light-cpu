@@ -46,6 +46,17 @@ formats with required ``K`` and ``N`` attributes, ``bits`` equal to 2, 4, or
 2, 8, and 128. Activations, scales, optional bias, and output have one matching
 ``FLOAT``, ``FLOAT16``, or ``BFLOAT16`` type; ``DOUBLE`` is not supported.
 
+Input ``B`` may instead be an ``EncodedValueProto`` using onnx-light's
+``ORT_MATMULNBITS_INT2``, ``ORT_MATMULNBITS_INT4``, or
+``ORT_MATMULNBITS_INT8`` layout. In that form, omit the ``scales`` input: the
+kernel validates the encoded geometry, dtype, layout, padding, and implicit
+zero points, then borrows its packed ``B`` and scales without copying them per
+inference. It never converts the encoded weights to the VNNI preparation layout. Encoded layouts
+with explicit zero points, shared parameter references, incompatible
+attributes, or any other unsupported representation fail with an exception.
+This encoded form is inference-only; automatic differentiation continues to
+require separate tensor ``B`` and ``scales`` inputs.
+
 The activation may have any positive rank with final dimension ``K``. Shape
 inference preserves every leading concrete or symbolic dimension and replaces
 the final dimension with ``N``. INT4 uses bounded panels of 8 rows, 32 output
@@ -110,9 +121,10 @@ path. Large vocabulary cases are opt-in because model serialization and ONNX
 Runtime preparation can require several GB.
 For isolated single-thread FP32 kernel measurements, build with
 ``-DONNX_LIGHT_CPU_BUILD_BENCHMARKS=ON`` and run
-``matmul_nbits_throughput M K N repeats``. This reports input preparation,
-median steady-state seconds, packed bytes, zero kernel weight-copy bytes,
-scratch bytes, and the selected implementation.
+``matmul_nbits_throughput M K N repeats [bits=4|8]``. This reports input
+preparation, first-use packing time, median steady-state seconds, source packed
+bytes, persistent prepared bytes, per-callback scratch bytes, and the selected
+implementation.
 
 ONNX Runtime 1.30.0 CPU does not implement native BF16 MatMulNBits. The
 BF16 oracle therefore runs ORT's FP32 operator on BF16-rounded activations

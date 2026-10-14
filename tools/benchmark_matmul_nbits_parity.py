@@ -202,7 +202,12 @@ def run_case(name, m, k, n, dtype, *, threads=1, repeat=3, warmup=1, accuracy_le
     if not any("MatMulNBits" in kernel for kernel in used_kernel_names(cpu)):
         raise AssertionError("MatMulNBits did not dispatch the registered CPU kernel")
     kernel_paths = used_kernel_paths(cpu)
-    if bits == 8 and not any(path.startswith("int8_") for path in kernel_paths):
+    if (
+        bits == 8
+        and dtype == "float32"
+        and accuracy_level == 4
+        and not any(path.startswith("int8_") for path in kernel_paths)
+    ):
         raise AssertionError(f"Prepared INT8 path was not selected for {name}: {kernel_paths}")
     set_kernel_usage_recording(cpu, False)
 
@@ -243,6 +248,7 @@ def run_case(name, m, k, n, dtype, *, threads=1, repeat=3, warmup=1, accuracy_le
                 packed,
                 scales.astype(np.float32),
                 accuracy_level=accuracy_level,
+                bits=bits,
             )
             serialized = oracle_model.SerializeToString()
             oracle = ort.InferenceSession(

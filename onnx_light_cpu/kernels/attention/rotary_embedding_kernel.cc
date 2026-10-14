@@ -242,8 +242,9 @@ void RegisterRotaryEmbeddingKernels() {
   for (const auto &[domain, version] :
        {std::pair{"", std::int64_t{23}}, std::pair{kMicrosoftDomain, std::int64_t{1}}}) {
     rt_ns::NodeKernelFn factory = [](const ONNX_LIGHT_NAMESPACE::NodeProto &node,
-                                     rt_ns::RuntimeContext &rt) {
-      auto kernel = std::make_unique<RotaryEmbeddingKernel>(rt.kernel_ctx());
+                                     rt_ns::RuntimeContext &,
+                                     const rt_ns::KernelContext &kernel_context) {
+      auto kernel = std::make_unique<RotaryEmbeddingKernel>(kernel_context);
       kernel->set_node(node);
       return kernel;
     };
