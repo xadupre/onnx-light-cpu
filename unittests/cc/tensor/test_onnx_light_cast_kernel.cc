@@ -12,7 +12,6 @@
 
 #include <array>
 #include <cmath>
-#include <complex>
 #include <cstring>
 #include <limits>
 #include <stdexcept>
@@ -58,6 +57,13 @@ Tensor Output(int32_t type, const Shape &shape, std::size_t bytes) {
     result.string_data.resize(static_cast<std::size_t>(shape.product()));
   }
   return result;
+}
+
+template <typename T>
+Tensor RawTensor(int32_t type, const Shape &shape, const std::vector<T> &values) {
+  std::vector<std::uint8_t> bytes(values.size() * sizeof(T));
+  std::memcpy(bytes.data(), values.data(), bytes.size());
+  return Tensor("expected", type, shape, std::move(bytes));
 }
 
 void Compare(const Tensor &data, int32_t to, bool saturate = true) {
@@ -295,31 +301,29 @@ TEST(OnnxLightCastKernel, StringsPreserveParserFormattingAndBorrowedInputs) {
 }
 
 TEST(OnnxLightCastKernel, ComplexPairsPreserveRealAndImaginaryComponents) {
-  const Tensor real = Tensor::From<double>("data", {5}, {-3.5, -0.0, 0.0, 2.25, 17.0});
-  for (DataType complex_type : {DataType::COMPLEX64, DataType::COMPLEX128}) {
-    Compare(real, complex_type);
-  }
-
-  const std::array<std::complex<float>, 4> complex64 = {
-      std::complex<float>{-3.5F, 2.25F}, std::complex<float>{-0.0F, 0.0F},
-      std::complex<float>{7.0F, -11.0F}, std::complex<float>{1.0F, 0.5F}};
-  std::vector<std::uint8_t> bytes64(sizeof(complex64));
-  std::memcpy(bytes64.data(), complex64.data(), bytes64.size());
-  const Tensor input64("data", DataType::COMPLEX64, {4}, std::move(bytes64));
-
-  const std::array<std::complex<double>, 4> complex128 = {
-      std::complex<double>{-3.5, 2.25}, std::complex<double>{-0.0, 0.0},
-      std::complex<double>{7.0, -11.0}, std::complex<double>{1.0, 0.5}};
-  std::vector<std::uint8_t> bytes128(sizeof(complex128));
-  std::memcpy(bytes128.data(), complex128.data(), bytes128.size());
-  const Tensor input128("data", DataType::COMPLEX128, {4}, std::move(bytes128));
-
   const onnx_light_cpu::CastKernel kernel(MakeCtx());
+  const Tensor real = Tensor::From<double>("data", {5}, {-3.5, -0.0, 0.0, 2.25, 17.0});
+  Equal(kernel(real, DataType::COMPLEX64),
+        RawTensor<float>(DataType::COMPLEX64, {5},
+                         {-3.5F, 0.0F, -0.0F, 0.0F, 0.0F, 0.0F, 2.25F, 0.0F, 17.0F, 0.0F}));
+  Equal(kernel(real, DataType::COMPLEX128),
+        RawTensor<double>(DataType::COMPLEX128, {5},
+                          {-3.5, 0.0, -0.0, 0.0, 0.0, 0.0, 2.25, 0.0, 17.0, 0.0}));
+
+  const Tensor input64 = RawTensor<float>(DataType::COMPLEX64, {4},
+                                          {-3.5F, 2.25F, -0.0F, 0.0F, 7.0F, -11.0F, 1.0F, 0.5F});
+  const Tensor input128 =
+      RawTensor<double>(DataType::COMPLEX128, {4}, {-3.5, 2.25, -0.0, 0.0, 7.0, -11.0, 1.0, 0.5});
+
   for (const Tensor *input : {&input64, &input128}) {
-    for (DataType to : {DataType::FLOAT, DataType::DOUBLE, DataType::INT32, DataType::COMPLEX64,
-                        DataType::COMPLEX128}) {
-      Compare(*input, to);
-    }
+    Equal(kernel(*input, DataType::FLOAT),
+          Tensor::From<float>("expected", {4}, {-3.5F, -0.0F, 7.0F, 1.0F}));
+    Equal(kernel(*input, DataType::DOUBLE),
+          Tensor::From<double>("expected", {4}, {-3.5, -0.0, 7.0, 1.0}));
+    Equal(kernel(*input, DataType::INT32),
+          Tensor::From<std::int32_t>("expected", {4}, {-3, 0, 7, 1}));
+    Equal(kernel(*input, DataType::COMPLEX64), input64);
+    Equal(kernel(*input, DataType::COMPLEX128), input128);
     for (DataType unsupported : {DataType::STRING, DataType::FLOAT8E4M3FN, DataType::INT4}) {
       EXPECT_THROW(kernel(*input, unsupported), std::invalid_argument);
     }

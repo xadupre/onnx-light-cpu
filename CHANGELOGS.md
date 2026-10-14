@@ -9,8 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - Updated native kernel registration and immutable input preparation for the
   onnx-light 0.1.31 runtime API, and pinned CI and release builds to 0.1.31.
-- Added COMPLEX64 and COMPLEX128 input and output support to the CPU Cast
-  kernel when linked with onnx-light 0.1.32 or later.
+- Added allocation-free COMPLEX64 and COMPLEX128 input and output support to
+  the CPU Cast kernel.
 
 ### Documentation & CI
 
