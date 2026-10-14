@@ -20,7 +20,7 @@ namespace onnx_light_cpu {
 /// (rank-3 ``query``/``key``/``value``, an optional rank-4
 /// ``(batch, kv_num_heads, past_sequence_length, head_size)``
 /// ``past_key``/``past_value`` tensor cache, ``do_rotary``/
-/// ``rotary_interleaved=0`` split-half RoPE applied to ``query``/``key`` at
+/// split-half or interleaved RoPE applied to ``query``/``key`` at
 /// the absolute position derived from ``seqlens_k`` (or an explicit
 /// ``position_ids``), an optional ``attention_bias`` additive mask, and
 /// observable ``present_key``/``present_value`` outputs) but computes every
