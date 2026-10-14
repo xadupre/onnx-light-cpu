@@ -276,6 +276,10 @@ void MatMulNBitsKernel::Configure(const rt_ns::KernelTuningParameters &parameter
 
 bool MatMulNBitsKernel::HasPreparations(
     const std::unordered_set<std::string> &immutable_inputs) const {
+  if (node_ != nullptr && node_->input_size() >= 2 && !node_->input(1).empty() &&
+      (node_->input_size() < 3 || node_->input(2).empty())) {
+    return immutable_inputs.contains(node_->input(1));
+  }
   return attributes_.bits == 4 && attributes_.accuracy_level == 4 &&
          MatMulNBitsAccuracy4Float32Available() && attributes_.n % 16 == 0 &&
          attributes_.k % 32 == 0 && node_ != nullptr && node_->input_size() >= 3 &&
@@ -312,6 +316,11 @@ void MatMulNBitsKernel::Prepare(rt_ns::RuntimeContext &rt,
   }
   if (!HasPreparations(immutable_inputs)) {
     return;
+  }
+  if (node_->input_size() < 3 || node_->input(2).empty()) {
+    throw std::invalid_argument(
+        "onnx_light_cpu::MatMulNBits: scales may be supplied either inside encoded B or as input "
+        "2, but not omitted from both.");
   }
   const Tensor &b = rt.Get(node_->input(1));
   const Tensor &scales = rt.Get(node_->input(2));

@@ -406,6 +406,11 @@ TEST(CustomOperatorSupport, InfersMatMulNBitsShapeFromEncodedWeights) {
   std::vector<std::optional<schema_ns::SchemaInputValue>> schema_inputs = {
       schema_ns::SchemaInputValue(ctx.Get("A")), schema_ns::SchemaInputValue(encoded_info)};
   EXPECT_NO_THROW(schemas[0].Verify(node, &schema_inputs));
+
+  NodeProto duplicate_scales = MakeMatMulNBitsNode(false, 4);
+  ctx.Set("scales", SymTensor(nullptr, TensorType::kFloat, {SymDim(3), SymDim(2)}));
+  EXPECT_THROW(onnx_light_cpu::ComputeShapeMatMulNBits(ctx, duplicate_scales),
+               std::invalid_argument);
 }
 
 TEST(CustomOperatorSupport, InfersMatMulNBitsShapeFromReferencedEncodedType) {
