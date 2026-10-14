@@ -35,6 +35,88 @@ using shapes_ns::ShapesContext;
 using sym_ns::SymShape;
 using sym_ns::SymTensor;
 
+struct EncodedMatMulNBitsShape {
+  std::int64_t k;
+  std::int64_t n;
+  std::int64_t bits;
+  std::int64_t block_size;
+  std::int32_t data_type;
+  bool has_zero_points;
+};
+
+EncodedMatMulNBitsShape InspectEncodedMatMulNBitsShape(const ShapesContext &ctx,
+                                                       const std::string &name) {
+  const auto &encoded = ctx.GetEncodedValue(name);
+  const auto layout = ctx.GetEncodedLayout(name);
+  if (encoded.has_parameter_ref() || layout.root == nullptr || layout.record_count != 1 ||
+      !encoded.has_logical_type() || !encoded.logical_type().has_tensor_type()) {
+    throw std::invalid_argument(
+        "ComputeShapeMatMulNBits: expected one self-contained encoded weight record.");
+  }
+  const auto &logical = encoded.logical_type().tensor_type();
+  if (!logical.has_shape() || logical.shape().dim().size() != 2 ||
+      !logical.shape().dim(0).has_dim_value() || !logical.shape().dim(1).has_dim_value() ||
+      logical.shape().dim(0).dim_value() <= 0 || logical.shape().dim(1).dim_value() <= 0) {
+    throw std::invalid_argument(
+        "ComputeShapeMatMulNBits: encoded weights require a concrete positive [K, N] shape.");
+  }
+
+  const auto &root = *layout.root;
+  const std::string format = root.name().value();
+  const std::string prefix = "onnx_light.quantization.v1/ort_matmulnbits_int";
+  const std::int64_t format_bits = format == prefix + "2"   ? 2
+                                   : format == prefix + "4" ? 4
+                                   : format == prefix + "8" ? 8
+                                                            : 0;
+  if (format_bits == 0 || !root.has_structure() ||
+      (root.structure().field().size() != 3 && root.structure().field().size() != 4)) {
+    throw std::invalid_argument("ComputeShapeMatMulNBits: unsupported encoded weight layout.");
+  }
+
+  const auto &parameters = root.structure().field(0);
+  if (parameters.name() != "parameters" || !parameters.has_constant() ||
+      parameters.constant().data_type() != ONNX_LIGHT_NAMESPACE::TensorProto::INT64 ||
+      parameters.constant().dims().size() != 1 || parameters.constant().dims(0) != 2 ||
+      parameters.constant().int64_data().size() != 2 ||
+      parameters.constant().int64_data(0) != format_bits ||
+      parameters.constant().int64_data(1) <= 0) {
+    throw std::invalid_argument("ComputeShapeMatMulNBits: invalid encoded weight parameters.");
+  }
+
+  const std::int64_t k = logical.shape().dim(0).dim_value();
+  const std::int64_t n = logical.shape().dim(1).dim_value();
+  const std::int64_t block_size = parameters.constant().int64_data(1);
+  if (block_size > std::numeric_limits<std::int64_t>::max() / format_bits) {
+    throw std::invalid_argument(
+        "ComputeShapeMatMulNBits: encoded block size exceeds supported bounds.");
+  }
+  const std::int64_t groups = k / block_size + (k % block_size != 0 ? 1 : 0);
+  const std::int64_t blob_size = block_size * format_bits / 8;
+  const auto has_tensor_shape = [](const auto &field, const char *field_name,
+                                   std::int32_t data_type, std::int64_t dim0, std::int64_t dim1,
+                                   std::int64_t dim2 = -1) {
+    if (field.name() != field_name || !field.has_type() || !field.type().has_tensor_type()) {
+      return false;
+    }
+    const auto &tensor = field.type().tensor_type();
+    const std::size_t rank = dim2 < 0 ? 2 : 3;
+    return tensor.elem_type() == data_type && tensor.has_shape() &&
+           tensor.shape().dim().size() == rank && tensor.shape().dim(0).has_dim_value() &&
+           tensor.shape().dim(0).dim_value() == dim0 && tensor.shape().dim(1).has_dim_value() &&
+           tensor.shape().dim(1).dim_value() == dim1 &&
+           (dim2 < 0 ||
+            (tensor.shape().dim(2).has_dim_value() && tensor.shape().dim(2).dim_value() == dim2));
+  };
+  if (block_size * format_bits % 8 != 0 ||
+      !has_tensor_shape(root.structure().field(1), "B", ONNX_LIGHT_NAMESPACE::TensorProto::UINT8, n,
+                        groups, blob_size) ||
+      !has_tensor_shape(root.structure().field(2), "scales", logical.elem_type(), n, groups)) {
+    throw std::invalid_argument(
+        "ComputeShapeMatMulNBits: encoded weight fields do not match their logical tensor.");
+  }
+  return {k, n, format_bits, block_size, logical.elem_type(), root.structure().field().size() == 4};
+}
+
 void RequireInputs(const ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE::NodeProto &node,
                    const char *op_type) {
   if (node.input_size() != 2 || node.output_size() != 1 || !ctx.Has(node.input(0)) ||
@@ -299,28 +381,20 @@ void ComputeShapeMatMulNBits(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE::Nod
   ConstrainEqual(ctx, a.Shape()[a.Shape().Rank() - 1], sym_ns::SymDim(k),
                  "ComputeShapeMatMulNBits: A's final dimension must equal K.");
   if (encoded_weights) {
-    ONNX_LIGHT_NAMESPACE::EncodedValueProto encoded = ctx.GetEncodedValue(node.input(1));
-    if (encoded.has_struct_type() && encoded.struct_type().has_type_ref()) {
-      encoded.ref_struct_type() = ctx.ResolveStructType(encoded.struct_type());
-      encoded.mutable_struct_type()->clear_type_id();
-    }
-    const auto inputs = ONNX_LIGHT_NAMESPACE::core::runtime::ExportMatMulNBitsInputs(encoded);
-    const auto encoded_data_type =
-        inputs.scales.data_type() == ONNX_LIGHT_NAMESPACE::TensorProto::FLOAT
-            ? sym_ns::TensorType::kFloat
-        : inputs.scales.data_type() == ONNX_LIGHT_NAMESPACE::TensorProto::FLOAT16
-            ? sym_ns::TensorType::kFloat16
-        : inputs.scales.data_type() == ONNX_LIGHT_NAMESPACE::TensorProto::BFLOAT16
-            ? sym_ns::TensorType::kBfloat16
-            : sym_ns::TensorType::kUndefined;
-    if (inputs.k != static_cast<std::uint64_t>(k) || inputs.n != static_cast<std::uint64_t>(n) ||
-        inputs.bits != static_cast<std::uint32_t>(bits) ||
-        inputs.block_size != static_cast<std::uint64_t>(block_size)) {
+    const auto inputs = InspectEncodedMatMulNBitsShape(ctx, node.input(1));
+    const auto encoded_data_type = inputs.data_type == ONNX_LIGHT_NAMESPACE::TensorProto::FLOAT
+                                       ? sym_ns::TensorType::kFloat
+                                   : inputs.data_type == ONNX_LIGHT_NAMESPACE::TensorProto::FLOAT16
+                                       ? sym_ns::TensorType::kFloat16
+                                   : inputs.data_type == ONNX_LIGHT_NAMESPACE::TensorProto::BFLOAT16
+                                       ? sym_ns::TensorType::kBfloat16
+                                       : sym_ns::TensorType::kUndefined;
+    if (inputs.k != k || inputs.n != n || inputs.bits != bits || inputs.block_size != block_size) {
       throw std::invalid_argument(
           "ComputeShapeMatMulNBits: EncodedValueProto geometry does not match the node "
           "attributes.");
     }
-    if (inputs.zero_points.has_value() || encoded_data_type != a.Dtype()) {
+    if (inputs.has_zero_points || encoded_data_type != a.Dtype()) {
       throw std::invalid_argument(
           "ComputeShapeMatMulNBits: encoded zero points are unsupported and encoded scales must "
           "match A's type.");

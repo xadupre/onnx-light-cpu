@@ -309,6 +309,26 @@ TEST(MatMulNBitsKernel, BorrowsEncodedWeightsWithoutRepackingThem) {
   }
 }
 
+TEST(MatMulNBitsKernel, RunsUnpreparedEncodedWeights) {
+  constexpr std::int64_t k = 64;
+  constexpr std::int64_t n = 16;
+  const rt_ns::Tensor input = rt_ns::Tensor::FromFloat("", {1, k}, std::vector<float>(k, 1.0f));
+  for (const std::int64_t bits : {2, 4, 8}) {
+    ONNX_LIGHT_NAMESPACE::NodeProto node = MakeNode(k, n, bits);
+    node.ref_input().resize(2);
+    const onnx_light_cpu::MatMulNBitsKernel kernel{
+        node, rt_ns::KernelContext{rt_ns::OpsetId("com.microsoft", 1)}};
+
+    const rt_ns::Tensor output =
+        kernel(input, MakeEncodedWeights(rt_ns::DataType::FLOAT, k, n, bits));
+
+    ASSERT_EQ(output.shape, (rt_ns::Shape{1, n}));
+    for (std::size_t index = 0; index < output.element_count(); ++index) {
+      EXPECT_FLOAT_EQ(output.AsFloat()[index], 64.0f) << "bits=" << bits;
+    }
+  }
+}
+
 TEST(MatMulNBitsKernel, RuntimeSessionPreparesEncodedWeightsWithoutSeparateScales) {
   constexpr std::int64_t k = 64;
   constexpr std::int64_t n = 16;
