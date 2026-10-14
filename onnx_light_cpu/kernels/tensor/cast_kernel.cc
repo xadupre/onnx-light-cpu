@@ -165,6 +165,7 @@ std::size_t ComplexElementSize(int32_t type) {
 void ConvertComplexRange(const Tensor &data, Tensor &output, std::size_t begin, std::size_t end) {
   constexpr std::size_t kBlockSize = 256;
   std::array<double, kBlockSize> values;
+  std::array<float, kBlockSize> float_values;
   const bool from_complex = Complex(data.data_type);
   const bool to_complex = Complex(output.data_type);
   const std::size_t input_width =
@@ -200,8 +201,48 @@ void ConvertComplexRange(const Tensor &data, Tensor &output, std::size_t begin, 
       }
       continue;
     }
+    if (!from_complex && to_complex) {
+      const std::size_t part_width = output_width / 2;
+      if (output.data_type == DataType::COMPLEX64) {
+        CastConvert(data.bytes() + block_begin * input_width,
+                    static_cast<onnx_light_cpu::DataType>(data.data_type), float_values.data(),
+                    onnx_light_cpu::DataType::FLOAT, block_count);
+        for (std::size_t i = 0; i < block_count; ++i) {
+          auto *destination = output.mutable_bytes() + (block_begin + i) * output_width;
+          std::memcpy(destination, &float_values[i], part_width);
+          std::memset(destination + part_width, 0, part_width);
+        }
+      } else {
+        CastConvert(data.bytes() + block_begin * input_width,
+                    static_cast<onnx_light_cpu::DataType>(data.data_type), values.data(),
+                    onnx_light_cpu::DataType::DOUBLE, block_count);
+        for (std::size_t i = 0; i < block_count; ++i) {
+          auto *destination = output.mutable_bytes() + (block_begin + i) * output_width;
+          std::memcpy(destination, &values[i], part_width);
+          std::memset(destination + part_width, 0, part_width);
+        }
+      }
+      continue;
+    }
     if (from_complex) {
       const std::size_t part_width = input_width / 2;
+      if (output.data_type == DataType::BOOL) {
+        for (std::size_t i = 0; i < block_count; ++i) {
+          const auto *source = data.bytes() + (block_begin + i) * input_width;
+          bool nonzero;
+          if (data.data_type == DataType::COMPLEX64) {
+            float parts[2];
+            std::memcpy(parts, source, input_width);
+            nonzero = parts[0] != 0.0F || parts[1] != 0.0F;
+          } else {
+            double parts[2];
+            std::memcpy(parts, source, input_width);
+            nonzero = parts[0] != 0.0 || parts[1] != 0.0;
+          }
+          output.mutable_bytes()[block_begin + i] = static_cast<std::uint8_t>(nonzero);
+        }
+        continue;
+      }
       for (std::size_t i = 0; i < block_count; ++i) {
         const auto *source = data.bytes() + (block_begin + i) * input_width;
         if (data.data_type == DataType::COMPLEX64) {
@@ -218,23 +259,9 @@ void ConvertComplexRange(const Tensor &data, Tensor &output, std::size_t begin, 
                   onnx_light_cpu::DataType::DOUBLE, block_count);
     }
 
-    if (to_complex) {
-      const std::size_t part_width = output_width / 2;
-      for (std::size_t i = 0; i < block_count; ++i) {
-        auto *destination = output.mutable_bytes() + (block_begin + i) * output_width;
-        if (output.data_type == DataType::COMPLEX64) {
-          const float parts[2] = {static_cast<float>(values[i]), 0.0F};
-          std::memcpy(destination, parts, sizeof(parts));
-        } else {
-          const double parts[2] = {values[i], 0.0};
-          std::memcpy(destination, parts, sizeof(parts));
-        }
-      }
-    } else {
-      CastConvert(values.data(), onnx_light_cpu::DataType::DOUBLE,
-                  output.mutable_bytes() + block_begin * output_width,
-                  static_cast<onnx_light_cpu::DataType>(output.data_type), block_count);
-    }
+    CastConvert(values.data(), onnx_light_cpu::DataType::DOUBLE,
+                output.mutable_bytes() + block_begin * output_width,
+                static_cast<onnx_light_cpu::DataType>(output.data_type), block_count);
   }
 }
 

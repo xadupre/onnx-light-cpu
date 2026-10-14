@@ -315,6 +315,13 @@ TEST(OnnxLightCastKernel, ComplexPairsPreserveRealAndImaginaryComponents) {
   const Tensor input128 =
       RawTensor<double>(DataType::COMPLEX128, {4}, {-3.5, 2.25, -0.0, 0.0, 7.0, -11.0, 1.0, 0.5});
 
+  Tensor output64 = Output(DataType::COMPLEX64, input128.shape, input64.size_bytes());
+  kernel(input128, DataType::COMPLEX64, output64);
+  Equal(output64, input64);
+  Tensor output128 = Output(DataType::COMPLEX128, input64.shape, input128.size_bytes());
+  kernel(input64, DataType::COMPLEX128, output128);
+  Equal(output128, input128);
+
   for (const Tensor *input : {&input64, &input128}) {
     Equal(kernel(*input, DataType::FLOAT),
           Tensor::From<float>("expected", {4}, {-3.5F, -0.0F, 7.0F, 1.0F}));
@@ -328,6 +335,45 @@ TEST(OnnxLightCastKernel, ComplexPairsPreserveRealAndImaginaryComponents) {
       EXPECT_THROW(kernel(*input, unsupported), std::invalid_argument);
     }
   }
+
+  const Tensor scalar64 = RawTensor<float>(DataType::COMPLEX64, {}, {2.5F, -3.0F});
+  const Tensor scalar128 = RawTensor<double>(DataType::COMPLEX128, {}, {2.5, -3.0});
+  Equal(kernel(scalar64, DataType::COMPLEX128), scalar128);
+  Equal(kernel(scalar128, DataType::COMPLEX64), scalar64);
+  Tensor scalar_output = Output(DataType::COMPLEX128, {}, scalar128.size_bytes());
+  kernel(scalar64, DataType::COMPLEX128, scalar_output);
+  Equal(scalar_output, scalar128);
+  scalar_output = Output(DataType::COMPLEX64, {}, scalar64.size_bytes());
+  kernel(scalar128, DataType::COMPLEX64, scalar_output);
+  Equal(scalar_output, scalar64);
+
+  Tensor unsupported = RawTensor<uint8_t>(DataType::FLOAT8E4M3FN, {4}, {1, 2, 3, 4});
+  const Tensor original = unsupported;
+  EXPECT_THROW(kernel(input64, DataType::FLOAT8E4M3FN, unsupported), std::invalid_argument);
+  Equal(unsupported, original);
+}
+
+TEST(OnnxLightCastKernel, ComplexBoolUsesBothComponents) {
+  const onnx_light_cpu::CastKernel kernel(MakeCtx());
+  Tensor expected = Tensor::From<uint8_t>("expected", {4}, {0, 1, 1, 1});
+  expected.data_type = DataType::BOOL;
+  Equal(kernel(RawTensor<float>(DataType::COMPLEX64, {4},
+                                {0.0F, 0.0F, 0.0F, 1.0F, -2.0F, 0.0F, 0.0F,
+                                 std::numeric_limits<float>::quiet_NaN()}),
+               DataType::BOOL),
+        expected);
+  Equal(kernel(RawTensor<double>(
+                   DataType::COMPLEX128, {4},
+                   {0.0, 0.0, 0.0, 1.0, -2.0, 0.0, 0.0, std::numeric_limits<double>::quiet_NaN()}),
+               DataType::BOOL),
+        expected);
+}
+
+TEST(OnnxLightCastKernel, IntegerToComplex64RoundsDirectlyToFloat) {
+  const int64_t value = INT64_C(4611686293305294849);
+  const Tensor converted = onnx_light_cpu::CastKernel(MakeCtx())(
+      Tensor::From<int64_t>("data", {1}, {value}), DataType::COMPLEX64);
+  Equal(converted, RawTensor<float>(DataType::COMPLEX64, {1}, {static_cast<float>(value), 0.0F}));
 }
 
 TEST(OnnxLightCastKernel, UnalignedInputOutputAndSentinels) {
@@ -548,6 +594,39 @@ TEST(OnnxLightCastKernel, ExecutorSmallLargeIdentityAndNestedBypass) {
   view.run_blocks = nullptr;
   Compare(large, DataType::INT32);
   EXPECT_EQ(executor.dispatches, 8);
+}
+
+TEST(OnnxLightCastKernel, ExecutorParallelComplexConversionAndNestedBypass) {
+  constexpr int64_t count = 65537;
+  std::vector<float> components(static_cast<std::size_t>(count) * 2);
+  std::vector<double> expected_values(static_cast<std::size_t>(count));
+  for (int64_t i = 0; i < count; ++i) {
+    const float real = static_cast<float>(i % 97) - 48.0F;
+    components[static_cast<std::size_t>(i) * 2] = real;
+    components[static_cast<std::size_t>(i) * 2 + 1] = -static_cast<float>(i % 31);
+    expected_values[static_cast<std::size_t>(i)] = real;
+  }
+  const Tensor input = RawTensor<float>(DataType::COMPLEX64, {count}, components);
+  const Tensor expected = Tensor::From<double>("expected", {count}, expected_values);
+  const onnx_light_cpu::CastKernel kernel(MakeCtx());
+  InlineExecutor executor;
+  onnx_light_cpu::ExecutionExecutorView view{&executor, 8, &InlineExecutor::Run};
+  onnx_light_cpu::ExecutionExecutorScope scope(&view);
+
+  Equal(kernel(input, DataType::DOUBLE), expected);
+  EXPECT_EQ(executor.dispatches, 1);
+  EXPECT_GT(executor.blocks, 1);
+  EXPECT_LE(executor.blocks, view.effective_threads);
+  Tensor output = Output(DataType::DOUBLE, {count}, expected.size_bytes());
+  kernel(input, DataType::DOUBLE, output);
+  Equal(output, expected);
+  EXPECT_EQ(executor.dispatches, 2);
+  {
+    onnx_light_cpu::detail::ExecutionRegionScope region;
+    Equal(kernel(input, DataType::DOUBLE), expected);
+    EXPECT_EQ(onnx_light_cpu::detail::ExecutionRegionDepth(), 1);
+  }
+  EXPECT_EQ(executor.dispatches, 2);
 }
 
 TEST(OnnxLightCastKernel, StandaloneContractValidation) {
