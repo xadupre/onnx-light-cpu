@@ -845,6 +845,7 @@ class TestBackendCases(ExtTestCase):
                     "Or",
                     "PRelu",
                     "Pow",
+                    "SkipLayerNormalization",
                     "SkipSimplifiedLayerNormalization",
                     "Sub",
                     "Sum",
@@ -932,7 +933,7 @@ class TestBackendCases(ExtTestCase):
             int(TensorProto.FLOAT16),
             int(TensorProto.BFLOAT16),
         }
-        for mode, expected_count in ((TestMode.TEST, 20), (TestMode.BENCHMARK, 15)):
+        for mode, expected_count in ((TestMode.TEST, 21), (TestMode.BENCHMARK, 15)):
             cases = [
                 tc
                 for tc in collect_test_cases("GroupQueryAttention", mode=mode)
@@ -975,6 +976,7 @@ class TestBackendCases(ExtTestCase):
                 # output/present_key/present_value all produced.
                 assert len(cached_case.model.graph.input) == 9
                 assert len(cached_case.model.graph.output) == 3
+                assert "test_cpu_group_query_attention_model_chatglm_generation_float32" in names
 
     def test_group_query_attention_benchmarks_match_onnx_runtime(self):
         try:
@@ -1010,6 +1012,36 @@ class TestBackendCases(ExtTestCase):
                     assert len(got) == len(expected) == 3
                     for actual, reference in zip(got, expected, strict=True):
                         _assert_close(actual, reference, rtol=2e-4, atol=2e-4)
+
+    def test_group_query_attention_chatglm_generation_matches_onnx_runtime(self):
+        import onnxruntime as ort
+
+        cases = collect_test_cases_by_name(
+            "^test_cpu_group_query_attention_model_chatglm_generation_float32$",
+            mode=TestMode.TEST,
+        )
+        assert len(cases) == 1
+        tc = cases[0]
+        options = ort.SessionOptions()
+        options.intra_op_num_threads = 1
+        options.inter_op_num_threads = 1
+        light_session = ReferenceEvaluator(tc.model)
+        ort_session = ort.InferenceSession(
+            _make_ort_compatible_model(tc.model).SerializeToString(),
+            sess_options=options,
+            providers=["CPUExecutionProvider"],
+        )
+        input_names = [vi.name for vi in tc.model.graph.input]
+        for data_set in tc.data_sets:
+            feeds = {
+                name: _to_numpy(tensor)
+                for name, tensor in zip(input_names, data_set.inputs, strict=True)
+            }
+            got = light_session.run(None, feeds)
+            expected = ort_session.run(None, feeds)
+            assert len(got) == len(expected) == 3
+            for actual, reference in zip(got, expected, strict=True):
+                _assert_close(actual, reference, rtol=2e-4, atol=2e-4)
 
     def test_group_query_attention_local_window_fixtures_match_onnx_runtime(self):
         cases = collect_test_cases_by_name(

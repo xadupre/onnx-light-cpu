@@ -211,14 +211,15 @@ float RunForwardObjective(const NodeProto &node, const std::vector<float> &query
 
 TEST(CustomOperatorSupport, ProvidesLightSchemas) {
   const auto schemas = onnx_light_cpu::GetMicrosoftOpSchemasWithHistory();
-  ASSERT_EQ(schemas.size(), 7U);
+  ASSERT_EQ(schemas.size(), 8U);
   EXPECT_EQ(schemas[0].name(), "BiasGelu");
   EXPECT_EQ(schemas[1].name(), "CDist");
   EXPECT_EQ(schemas[2].name(), "GroupQueryAttention");
   EXPECT_EQ(schemas[3].name(), "LinearAttention");
   EXPECT_EQ(schemas[4].name(), "MatMulNBits");
   EXPECT_EQ(schemas[5].name(), "RotaryEmbedding");
-  EXPECT_EQ(schemas[6].name(), "SkipSimplifiedLayerNormalization");
+  EXPECT_EQ(schemas[6].name(), "SkipLayerNormalization");
+  EXPECT_EQ(schemas[7].name(), "SkipSimplifiedLayerNormalization");
   ASSERT_EQ(schemas[4].inputs().size(), 6U);
   EXPECT_EQ(schemas[4].inputs()[3].name, "zero_points");
   EXPECT_EQ(schemas[4].inputs()[4].name, "g_idx");
@@ -247,7 +248,7 @@ TEST(CustomOperatorSupport, ProvidesLightSchemas) {
 
 TEST(CustomOperatorSupport, ProvidesReadOnlyInventory) {
   const auto support = onnx_light_cpu::CollectOperatorSupport();
-  ASSERT_EQ(support.size(), 9U);
+  ASSERT_EQ(support.size(), 10U);
   EXPECT_EQ(support[0].op_type, "BiasGelu");
   EXPECT_EQ(support[0].shape_inference_function, "onnx_light_cpu::ComputeShapeBiasGelu");
   EXPECT_EQ(support[0].peak_memory_function, "onnx_light_cpu::ComputePeakMemoryBiasGelu");
@@ -295,13 +296,21 @@ TEST(CustomOperatorSupport, ProvidesReadOnlyInventory) {
   EXPECT_TRUE(support[7].fusion_patterns.empty());
   EXPECT_FALSE(support[7].has_gradient);
   EXPECT_EQ(support[8].domain, onnx_light_cpu::kMicrosoftDomain);
-  EXPECT_EQ(support[8].op_type, "SkipSimplifiedLayerNormalization");
+  EXPECT_EQ(support[8].op_type, "SkipLayerNormalization");
   EXPECT_EQ(support[8].shape_inference_function,
-            "onnx_light_cpu::ComputeShapeSkipSimplifiedLayerNormalization");
+            "onnx_light_cpu::ComputeShapeSkipLayerNormalization");
   EXPECT_EQ(support[8].peak_memory_function,
-            "onnx_light_cpu::ComputePeakMemorySkipSimplifiedLayerNormalization");
+            "onnx_light_cpu::ComputePeakMemorySkipLayerNormalization");
   EXPECT_TRUE(support[8].fusion_patterns.empty());
   EXPECT_FALSE(support[8].has_gradient);
+  EXPECT_EQ(support[9].domain, onnx_light_cpu::kMicrosoftDomain);
+  EXPECT_EQ(support[9].op_type, "SkipSimplifiedLayerNormalization");
+  EXPECT_EQ(support[9].shape_inference_function,
+            "onnx_light_cpu::ComputeShapeSkipSimplifiedLayerNormalization");
+  EXPECT_EQ(support[9].peak_memory_function,
+            "onnx_light_cpu::ComputePeakMemorySkipSimplifiedLayerNormalization");
+  EXPECT_TRUE(support[9].fusion_patterns.empty());
+  EXPECT_FALSE(support[9].has_gradient);
 }
 
 TEST(CustomOperatorSupport, InfersCDistShapeAndConstraint) {
@@ -329,6 +338,47 @@ TEST(CustomOperatorSupport, InfersBiasGeluShapeAndRejectsWrongBias) {
   invalid.Set("A", SymTensor(nullptr, TensorType::kFloat, {SymDim(2), SymDim(3)}));
   invalid.Set("B", SymTensor(nullptr, TensorType::kFloat, {SymDim(4)}));
   EXPECT_THROW(onnx_light_cpu::ComputeShapeBiasGelu(invalid, node), std::invalid_argument);
+}
+
+TEST(CustomOperatorSupport, InfersSkipLayerNormalizationOutputsAndConstraints) {
+  shapes_ns::ShapesContext ctx;
+  ctx.Set("input", SymTensor(nullptr, TensorType::kFloat16,
+                             {SymDim("batch"), SymDim("sequence"), SymDim("hidden")}));
+  ctx.Set("skip", SymTensor(nullptr, TensorType::kFloat16, {SymDim("sequence"), SymDim("hidden")}));
+  for (const char *name : {"gamma", "beta", "bias"}) {
+    ctx.Set(name, SymTensor(nullptr, TensorType::kFloat16, {SymDim("hidden")}));
+  }
+  NodeProto node;
+  node.set_domain(onnx_light_cpu::kMicrosoftDomain);
+  node.set_op_type("SkipLayerNormalization");
+  for (const char *name : {"input", "skip", "gamma", "beta", "bias"}) {
+    node.add_input(name);
+  }
+  for (const char *name : {"output", "mean", "inverse", "sum"}) {
+    node.add_output(name);
+  }
+  onnx_light_cpu::ComputeShapeSkipLayerNormalization(ctx, node);
+  EXPECT_EQ(ctx.Get("output").Shape(), ctx.Get("input").Shape());
+  EXPECT_EQ(ctx.Get("output").Dtype(), TensorType::kFloat16);
+  EXPECT_EQ(ctx.Get("sum").Shape(), ctx.Get("input").Shape());
+  EXPECT_EQ(ctx.Get("sum").Dtype(), TensorType::kFloat16);
+  EXPECT_EQ(ctx.Get("mean").Dtype(), TensorType::kFloat);
+  EXPECT_EQ(ctx.Get("inverse").Dtype(), TensorType::kFloat);
+  EXPECT_EQ(ctx.Get("mean").Shape()[2], SymDim(1));
+  EXPECT_EQ(onnx_light_cpu::ComputePeakMemorySkipLayerNormalization(sym_ns::Device::kCPU,
+                                                                    {ctx.Get("input").Shape()}),
+            0);
+
+  shapes_ns::ShapesContext invalid;
+  invalid.Set("input", SymTensor(nullptr, TensorType::kFloat16,
+                                 {SymDim("batch"), SymDim("sequence"), SymDim("hidden")}));
+  invalid.Set("skip",
+              SymTensor(nullptr, TensorType::kFloat16, {SymDim("sequence"), SymDim("hidden")}));
+  invalid.Set("gamma", SymTensor(nullptr, TensorType::kFloat16, {SymDim("hidden")}));
+  invalid.Set("beta", SymTensor(nullptr, TensorType::kFloat, {SymDim("hidden")}));
+  invalid.Set("bias", SymTensor(nullptr, TensorType::kFloat16, {SymDim("hidden")}));
+  EXPECT_THROW(onnx_light_cpu::ComputeShapeSkipLayerNormalization(invalid, node),
+               std::invalid_argument);
 }
 
 TEST(CustomOperatorSupport, InfersMatMulNBitsShapeAndValidatesPackedInputs) {

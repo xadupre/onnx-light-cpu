@@ -4,6 +4,7 @@
 
 #include "onnx_light_cpu/kernels/tensor/cast_kernel.h"
 
+#include "onnx_light_cpu/impl/execution.h"
 #include "onnx_light_cpu/impl/tensor/cast_kernel.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
 
@@ -12,6 +13,8 @@
 #include "onnx_extensions/kernels/kernels/tensor/include_tensor_kernels.h"
 #include "onnx_lib/common/safe_math.h"
 
+#include <algorithm>
+#include <array>
 #include <cstring>
 #include <limits>
 #include <memory>
@@ -78,8 +81,10 @@ std::size_t Bytes(int32_t type, int64_t count) {
   if (Numeric(type) || (type >= DataType::FLOAT8E4M3FN && type <= DataType::FLOAT8E5M2FNUZ) ||
       type == DataType::FLOAT8E8M0 || type == DataType::COMPLEX64 || type == DataType::COMPLEX128) {
     int64_t bytes;
-    if (ONNX_LIGHT_NAMESPACE::checked_mul_overflow(
-            count, static_cast<int64_t>(rt_ns::ElementSize(type)), &bytes)) {
+    const std::size_t width = type == DataType::COMPLEX64    ? 2 * sizeof(float)
+                              : type == DataType::COMPLEX128 ? 2 * sizeof(double)
+                                                             : rt_ns::ElementSize(type);
+    if (ONNX_LIGHT_NAMESPACE::checked_mul_overflow(count, static_cast<int64_t>(width), &bytes)) {
       Invalid("byte size overflow.");
     }
     return ONNX_LIGHT_NAMESPACE::safe_cast_to_size(bytes, Invalid);
@@ -151,9 +156,140 @@ void ConvertNumeric(const Tensor &data, Tensor &output, int64_t count) {
               static_cast<std::size_t>(count));
 }
 
+bool Complex(int32_t type) { return type == DataType::COMPLEX64 || type == DataType::COMPLEX128; }
+
+std::size_t ComplexElementSize(int32_t type) {
+  return type == DataType::COMPLEX64 ? 2 * sizeof(float) : 2 * sizeof(double);
+}
+
+void ConvertComplexRange(const Tensor &data, Tensor &output, std::size_t begin, std::size_t end) {
+  constexpr std::size_t kBlockSize = 256;
+  std::array<double, kBlockSize> values;
+  std::array<float, kBlockSize> float_values;
+  const bool from_complex = Complex(data.data_type);
+  const bool to_complex = Complex(output.data_type);
+  const std::size_t input_width =
+      from_complex ? ComplexElementSize(data.data_type)
+                   : CastElementSize(static_cast<onnx_light_cpu::DataType>(data.data_type));
+  const std::size_t output_width =
+      to_complex ? ComplexElementSize(output.data_type)
+                 : CastElementSize(static_cast<onnx_light_cpu::DataType>(output.data_type));
+  for (std::size_t block_begin = begin; block_begin < end; block_begin += kBlockSize) {
+    const std::size_t block_count = std::min(kBlockSize, end - block_begin);
+    if (from_complex && to_complex) {
+      const std::size_t input_part_width = input_width / 2;
+      const std::size_t output_part_width = output_width / 2;
+      for (std::size_t i = 0; i < block_count; ++i) {
+        const auto *source = data.bytes() + (block_begin + i) * input_width;
+        auto *destination = output.mutable_bytes() + (block_begin + i) * output_width;
+        for (std::size_t part = 0; part < 2; ++part) {
+          double value;
+          if (data.data_type == DataType::COMPLEX64) {
+            float source_part;
+            std::memcpy(&source_part, source + part * input_part_width, input_part_width);
+            value = source_part;
+          } else {
+            std::memcpy(&value, source + part * input_part_width, input_part_width);
+          }
+          if (output.data_type == DataType::COMPLEX64) {
+            const float output_part = static_cast<float>(value);
+            std::memcpy(destination + part * output_part_width, &output_part, output_part_width);
+          } else {
+            std::memcpy(destination + part * output_part_width, &value, output_part_width);
+          }
+        }
+      }
+      continue;
+    }
+    if (!from_complex && to_complex) {
+      const std::size_t part_width = output_width / 2;
+      if (output.data_type == DataType::COMPLEX64) {
+        CastConvert(data.bytes() + block_begin * input_width,
+                    static_cast<onnx_light_cpu::DataType>(data.data_type), float_values.data(),
+                    onnx_light_cpu::DataType::FLOAT, block_count);
+        for (std::size_t i = 0; i < block_count; ++i) {
+          auto *destination = output.mutable_bytes() + (block_begin + i) * output_width;
+          std::memcpy(destination, &float_values[i], part_width);
+          std::memset(destination + part_width, 0, part_width);
+        }
+      } else {
+        CastConvert(data.bytes() + block_begin * input_width,
+                    static_cast<onnx_light_cpu::DataType>(data.data_type), values.data(),
+                    onnx_light_cpu::DataType::DOUBLE, block_count);
+        for (std::size_t i = 0; i < block_count; ++i) {
+          auto *destination = output.mutable_bytes() + (block_begin + i) * output_width;
+          std::memcpy(destination, &values[i], part_width);
+          std::memset(destination + part_width, 0, part_width);
+        }
+      }
+      continue;
+    }
+    if (from_complex) {
+      const std::size_t part_width = input_width / 2;
+      if (output.data_type == DataType::BOOL) {
+        for (std::size_t i = 0; i < block_count; ++i) {
+          const auto *source = data.bytes() + (block_begin + i) * input_width;
+          bool nonzero;
+          if (data.data_type == DataType::COMPLEX64) {
+            float parts[2];
+            std::memcpy(parts, source, input_width);
+            nonzero = parts[0] != 0.0F || parts[1] != 0.0F;
+          } else {
+            double parts[2];
+            std::memcpy(parts, source, input_width);
+            nonzero = parts[0] != 0.0 || parts[1] != 0.0;
+          }
+          output.mutable_bytes()[block_begin + i] = static_cast<std::uint8_t>(nonzero);
+        }
+        continue;
+      }
+      for (std::size_t i = 0; i < block_count; ++i) {
+        const auto *source = data.bytes() + (block_begin + i) * input_width;
+        if (data.data_type == DataType::COMPLEX64) {
+          float real;
+          std::memcpy(&real, source, part_width);
+          values[i] = real;
+        } else {
+          std::memcpy(&values[i], source, part_width);
+        }
+      }
+    } else {
+      CastConvert(data.bytes() + block_begin * input_width,
+                  static_cast<onnx_light_cpu::DataType>(data.data_type), values.data(),
+                  onnx_light_cpu::DataType::DOUBLE, block_count);
+    }
+
+    CastConvert(values.data(), onnx_light_cpu::DataType::DOUBLE,
+                output.mutable_bytes() + block_begin * output_width,
+                static_cast<onnx_light_cpu::DataType>(output.data_type), block_count);
+  }
+}
+
+void ConvertComplex(const Tensor &data, Tensor &output, int64_t count) {
+  if (data.data_type == output.data_type) {
+    if (data.size_bytes() != 0) {
+      std::memcpy(output.mutable_bytes(), data.bytes(), data.size_bytes());
+    }
+    return;
+  }
+  const bool from_complex = Complex(data.data_type);
+  const bool to_complex = Complex(output.data_type);
+  if ((!from_complex && !Numeric(data.data_type)) || (!to_complex && !Numeric(output.data_type))) {
+    Invalid("unsupported complex cast pair.");
+  }
+  ExecuteRanges(count, 1.0, 256, [&](int64_t begin, int64_t end) {
+    ConvertComplexRange(data, output, static_cast<std::size_t>(begin),
+                        static_cast<std::size_t>(end));
+  });
+}
+
 void Convert(const rt_ns::KernelContext &ctx, const Tensor &data, int32_t to, bool saturate,
              Tensor &output, const CastPlan &plan) {
   ValidateOutput(data, to, output, plan);
+  if (Complex(data.data_type) || Complex(to)) {
+    ConvertComplex(data, output, plan.count);
+    return;
+  }
   if (Numeric(data.data_type) && Numeric(to)) {
     ConvertNumeric(data, output, plan.count);
     return;
@@ -240,7 +376,8 @@ Tensor CastKernel::operator()(const Tensor &data, int32_t to, bool saturate,
   Convert(ctx_, data, to, saturate, output, plan);
   if (rt != nullptr && rt->kernel_usage_enabled()) {
     rt->RecordKernelUsage(
-        Numeric(data.data_type) && Numeric(to)
+        Complex(data.data_type) || Complex(to) ? "Cast.complex"
+        : Numeric(data.data_type) && Numeric(to)
             ? CastConversionPath(static_cast<onnx_light_cpu::DataType>(data.data_type),
                                  static_cast<onnx_light_cpu::DataType>(to),
                                  static_cast<std::size_t>(plan.count))

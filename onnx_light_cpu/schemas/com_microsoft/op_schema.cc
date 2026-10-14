@@ -104,12 +104,42 @@ LightOpSchema MakeSkipSimplifiedLayerNormalizationSchema() {
   return schema;
 }
 
+LightOpSchema MakeSkipLayerNormalizationSchema() {
+  LightOpSchema schema(
+      "SkipLayerNormalization", kMicrosoftDomain, 1,
+      "Adds input, skip, and optional bias, then applies last-axis layer normalization, gamma "
+      "scaling, and optional beta. Supports rank-2 and rank-3 inputs with matching FLOAT, "
+      "FLOAT16, or BFLOAT16 types. For rank-3 input, skip may omit the batch dimension or have "
+      "batch size one. Optional FLOAT statistics contain the mean and inverse standard "
+      "deviation. Optional output slot 3 contains the residual sum in the input type.",
+      {{"input", "Input tensor with shape (S, H) or (B, S, H), with 0 < H <= INT_MAX.", "T"},
+       {"skip", "Residual tensor matching input, or (S, H)/(1, S, H) for rank-3 input.", "T"},
+       {"gamma", "Rank-1 scale tensor with length H.", "T"},
+       {"beta", "Optional rank-1 shift tensor with length H.", "T"},
+       {"bias", "Optional rank-1 bias added to the residual, with length H.", "T"}},
+      {{"output", "Normalized result with the input shape and type.", "T"},
+       {"mean", "Optional FLOAT mean with input shape and final dimension one.", "U"},
+       {"inv_std_var",
+        "Optional FLOAT inverse standard deviation with input shape and final dimension one.", "U"},
+       {"input_skip_bias_sum", "Optional residual sum with the input shape and type.", "T"}},
+      {{"T",
+        {TensorType::kFloat, TensorType::kFloat16, TensorType::kBfloat16},
+        "Matching FLOAT, FLOAT16, or BFLOAT16 tensors."},
+       {"U", {TensorType::kFloat}, "FLOAT saved-statistics tensors."}},
+      {AttributeParam{"epsilon", "Finite nonnegative value added to the last-axis variance.",
+                      AttributeType::FLOAT, false, 1.0e-12F}},
+      false, true);
+  schema.set_min_output(1);
+  schema.set_max_output(4);
+  return schema;
+}
+
 LightOpSchema MakeGroupQueryAttentionSchema() {
   LightOpSchema schema(
       "GroupQueryAttention", kMicrosoftDomain, 1,
       "Grouped-query attention over rank-3 Q/K/V tensors (or packed QKV in query with empty "
       "key/value inputs), with an optional tensor KV cache and "
-      "split-half (rotary_interleaved=0) rotary position embedding applied to Q/K at the "
+      "split-half or interleaved rotary position embedding applied to Q/K at the "
       "position derived from seqlens_k (or an explicit position_ids).",
       {{"query",
         "Query tensor with shape (batch, sequence, num_heads * head_size), or packed QKV "
@@ -187,7 +217,7 @@ LightOpSchema MakeGroupQueryAttentionSchema() {
                       0.0f},
        AttributeParam{"do_rotary", "Whether to apply rotary position embedding.",
                       AttributeType::INT, false, int64_t{0}},
-       AttributeParam{"rotary_interleaved", "Rotary layout; only 0 (split-half) is supported.",
+       AttributeParam{"rotary_interleaved", "Rotary layout: 0 split-half, 1 interleaved.",
                       AttributeType::INT, false, int64_t{0}}},
       false, true);
   schema.set_min_output(1);
@@ -295,6 +325,8 @@ std::vector<LightOpSchema> GetMicrosoftOpSchemasWithHistory(const std::string &o
       {"LinearAttention", [] { return std::vector<LightOpSchema>{MakeLinearAttentionSchema()}; }},
       {"MatMulNBits", [] { return std::vector<LightOpSchema>{MakeMatMulNBitsSchema()}; }},
       {"RotaryEmbedding", [] { return std::vector<LightOpSchema>{MakeRotaryEmbeddingSchema()}; }},
+      {"SkipLayerNormalization",
+       [] { return std::vector<LightOpSchema>{MakeSkipLayerNormalizationSchema()}; }},
       {"SkipSimplifiedLayerNormalization",
        [] { return std::vector<LightOpSchema>{MakeSkipSimplifiedLayerNormalizationSchema()}; }},
   };

@@ -28,47 +28,44 @@ struct Dimensions {
   std::size_t skip_rows;
 };
 
-inline void ValidateBuffer(const runtime::Tensor &tensor, const char *role) {
+inline void ValidateBuffer(const runtime::Tensor &tensor, const char *role,
+                           const char *op = "SkipSimplifiedLayerNormalization") {
   if (tensor.data_type != runtime::DataType::FLOAT &&
       tensor.data_type != runtime::DataType::FLOAT16 &&
       tensor.data_type != runtime::DataType::BFLOAT16) {
-    throw std::invalid_argument(std::string("SkipSimplifiedLayerNormalization: ") + role +
+    throw std::invalid_argument(std::string(op) + ": " + role +
                                 " must be FLOAT, FLOAT16, or BFLOAT16.");
   }
   for (const auto dim : tensor.shape) {
     if (dim < 0 || static_cast<std::uint64_t>(dim) > std::numeric_limits<std::size_t>::max()) {
-      throw std::invalid_argument("SkipSimplifiedLayerNormalization: invalid tensor dimension.");
+      throw std::invalid_argument(std::string(op) + ": invalid tensor dimension.");
     }
   }
-  const auto count = normalization::Product(tensor.shape, 0, tensor.shape.size(),
-                                            "SkipSimplifiedLayerNormalization");
+  const auto count = normalization::Product(tensor.shape, 0, tensor.shape.size(), op);
   const auto width = normalization::ElementSize(tensor.data_type);
   if (count > std::numeric_limits<std::size_t>::max() / width ||
       tensor.size_bytes() != count * width || (count != 0 && tensor.bytes() == nullptr)) {
-    throw std::invalid_argument(std::string("SkipSimplifiedLayerNormalization: ") + role +
+    throw std::invalid_argument(std::string(op) + ": " + role +
                                 " buffer does not match its shape.");
   }
 }
 
 inline Dimensions Validate(const runtime::Tensor &input, const runtime::Tensor &skip,
-                           const runtime::Tensor &gamma, const runtime::Tensor *bias,
-                           float epsilon) {
-  constexpr const char *op = "SkipSimplifiedLayerNormalization";
+                           const runtime::Tensor &gamma, const runtime::Tensor *bias, float epsilon,
+                           const char *op = "SkipSimplifiedLayerNormalization") {
   if (!std::isfinite(epsilon) || epsilon < 0.0F) {
-    throw std::invalid_argument(
-        "SkipSimplifiedLayerNormalization: epsilon must be finite and nonnegative.");
+    throw std::invalid_argument(std::string(op) + ": epsilon must be finite and nonnegative.");
   }
-  ValidateBuffer(input, "input");
-  ValidateBuffer(skip, "skip");
-  ValidateBuffer(gamma, "gamma");
+  ValidateBuffer(input, "input", op);
+  ValidateBuffer(skip, "skip", op);
+  ValidateBuffer(gamma, "gamma", op);
   normalization::RequireSameType(input, skip, op, "input and skip");
   normalization::RequireSameType(input, gamma, op, "input and gamma");
   if (input.shape.size() != 2 && input.shape.size() != 3) {
-    throw std::invalid_argument("SkipSimplifiedLayerNormalization: input must have rank 2 or 3.");
+    throw std::invalid_argument(std::string(op) + ": input must have rank 2 or 3.");
   }
   if (input.shape.back() <= 0 || input.shape.back() > std::numeric_limits<int>::max()) {
-    throw std::invalid_argument(
-        "SkipSimplifiedLayerNormalization: hidden size must be positive and fit int.");
+    throw std::invalid_argument(std::string(op) + ": hidden size must be positive and fit int.");
   }
   const std::size_t width = static_cast<std::size_t>(input.shape.back());
   normalization::RequireVector(gamma, width, op, "gamma");
@@ -79,18 +76,19 @@ inline Dimensions Validate(const runtime::Tensor &input, const runtime::Tensor &
        (skip.shape.size() == 3 && skip.shape[0] == 1 && skip.shape[1] == input.shape[1] &&
         skip.shape[2] == input.shape[2]));
   if (skip.shape != input.shape && !broadcast_skip) {
-    throw std::invalid_argument("SkipSimplifiedLayerNormalization: skip shape must match input or "
-                                "broadcast over its batch dimension.");
+    throw std::invalid_argument(std::string(op) +
+                                ": skip shape must match input or broadcast over its batch "
+                                "dimension.");
   }
   if (bias != nullptr) {
-    ValidateBuffer(*bias, "bias");
+    ValidateBuffer(*bias, "bias", op);
     normalization::RequireSameType(input, *bias, op, "input and bias");
     normalization::RequireVector(*bias, width, op, "bias");
   }
   const std::size_t rows = normalization::Product(input.shape, 0, input.shape.size() - 1, op);
   const std::size_t skip_rows = normalization::Product(skip.shape, 0, skip.shape.size() - 1, op);
   if (rows > static_cast<std::size_t>(std::numeric_limits<std::int64_t>::max())) {
-    throw std::invalid_argument("SkipSimplifiedLayerNormalization: row count must fit int64_t.");
+    throw std::invalid_argument(std::string(op) + ": row count must fit int64_t.");
   }
   return {rows, width, skip_rows};
 }

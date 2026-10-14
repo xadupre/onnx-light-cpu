@@ -146,6 +146,20 @@ bool IsApplicable(const TestCase &test_case, const KernelRegistration &kernel,
     reason = "model input types are unsupported";
     return false;
   }
+  if (kernel.domain == "ai.onnx" && kernel.op_type == "Cast") {
+    for (const NodeProto &node : graph.node()) {
+      if (ONNX_LIGHT_NAMESPACE::NormaliseDomain(node.domain()) != kernel.domain ||
+          node.op_type() != kernel.op_type) {
+        continue;
+      }
+      const auto output_type =
+          static_cast<rt_ns::DataType>(rt_ns::GetAttributeIntOrDefault(node, "to", 0));
+      if (std::find(kernel.types.begin(), kernel.types.end(), output_type) == kernel.types.end()) {
+        reason = "model output types are unsupported";
+        return false;
+      }
+    }
+  }
   if (kernel.domain == "ai.onnx" && kernel.op_type == "ScatterND") {
     for (const NodeProto &node : graph.node()) {
       if (ONNX_LIGHT_NAMESPACE::NormaliseDomain(node.domain()) == kernel.domain &&

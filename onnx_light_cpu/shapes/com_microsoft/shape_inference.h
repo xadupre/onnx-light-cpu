@@ -32,6 +32,10 @@ void ComputeShapeCDist(ONNX_LIGHT_NAMESPACE::core::shapes::ShapesContext &ctx,
 void ComputeShapeBiasGelu(ONNX_LIGHT_NAMESPACE::core::shapes::ShapesContext &ctx,
                           const ONNX_LIGHT_NAMESPACE::NodeProto &node);
 /// Infers the output, optional statistics, and residual shapes for
+/// ``com.microsoft::SkipLayerNormalization``.
+void ComputeShapeSkipLayerNormalization(ONNX_LIGHT_NAMESPACE::core::shapes::ShapesContext &ctx,
+                                        const ONNX_LIGHT_NAMESPACE::NodeProto &node);
+/// Infers the output, optional statistics, and residual shapes for
 /// ``com.microsoft::SkipSimplifiedLayerNormalization``.
 void ComputeShapeSkipSimplifiedLayerNormalization(
     ONNX_LIGHT_NAMESPACE::core::shapes::ShapesContext &ctx,
@@ -52,6 +56,11 @@ int64_t ComputePeakMemoryCDist(
     const std::vector<ONNX_LIGHT_NAMESPACE::core::symbolic::SymShape> &input_shapes);
 /// Returns the scratch-memory requirement for ``com.microsoft::BiasGelu``.
 int64_t ComputePeakMemoryBiasGelu(
+    ONNX_LIGHT_NAMESPACE::core::symbolic::Device device,
+    const std::vector<ONNX_LIGHT_NAMESPACE::core::symbolic::SymShape> &input_shapes);
+/// Returns the zero scratch-memory requirement for
+/// ``com.microsoft::SkipLayerNormalization``.
+int64_t ComputePeakMemorySkipLayerNormalization(
     ONNX_LIGHT_NAMESPACE::core::symbolic::Device device,
     const std::vector<ONNX_LIGHT_NAMESPACE::core::symbolic::SymShape> &input_shapes);
 /// Returns the zero scratch-memory requirement for

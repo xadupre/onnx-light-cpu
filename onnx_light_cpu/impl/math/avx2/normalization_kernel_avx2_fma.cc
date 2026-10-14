@@ -55,6 +55,22 @@ float ComputeResidualMeanSquareFloat32_AVX2(const float *input, const float *ski
   return sum / static_cast<float>(count);
 }
 
+void AddNormalizationResidualFloat32_AVX2(const float *input, const float *skip, const float *bias,
+                                          float *residual, std::size_t count) {
+  std::size_t index = 0;
+  for (; index + 8 <= count; index += 8) {
+    __m256 value = _mm256_add_ps(_mm256_loadu_ps(input + index), _mm256_loadu_ps(skip + index));
+    if (bias != nullptr) {
+      value = _mm256_add_ps(value, _mm256_loadu_ps(bias + index));
+    }
+    _mm256_storeu_ps(residual + index, value);
+  }
+  for (; index < count; ++index) {
+    const float value = input[index] + skip[index];
+    residual[index] = bias == nullptr ? value : value + bias[index];
+  }
+}
+
 // Keep the multiply rounded before adding the offset, including for constant inputs.
 #if defined(__GNUC__) && !defined(__clang__)
 __attribute__((optimize("fp-contract=off")))

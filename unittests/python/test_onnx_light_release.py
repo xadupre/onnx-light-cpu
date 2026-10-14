@@ -18,6 +18,11 @@ def test_avx2_parity_uses_release_version():
     assert f'"onnx-light=={ONNX_LIGHT_VERSION}"' in workflow
 
 
+def test_getting_started_uses_release_version():
+    guide = (_ROOT / "docs" / "getting_started.rst").read_text(encoding="utf-8")
+    assert f"published onnx-light {ONNX_LIGHT_VERSION} wheels" in guide
+
+
 def test_release_wheel_names():
     assert wheel_name("Linux", "x86_64", (3, 12)) == (
         "onnx_light-0.1.31-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl"

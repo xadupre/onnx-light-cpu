@@ -8,6 +8,27 @@
 
 namespace onnx_light_cpu {
 
+void AddNormalizationResidualFloat32_AVX512(const float *input, const float *skip,
+                                            const float *bias, float *residual, std::size_t count) {
+  std::size_t index = 0;
+  for (; index + 16 <= count; index += 16) {
+    __m512 value = _mm512_add_ps(_mm512_loadu_ps(input + index), _mm512_loadu_ps(skip + index));
+    if (bias != nullptr) {
+      value = _mm512_add_ps(value, _mm512_loadu_ps(bias + index));
+    }
+    _mm512_storeu_ps(residual + index, value);
+  }
+  if (index < count) {
+    const __mmask16 mask = static_cast<__mmask16>((1U << (count - index)) - 1U);
+    __m512 value = _mm512_add_ps(_mm512_maskz_loadu_ps(mask, input + index),
+                                 _mm512_maskz_loadu_ps(mask, skip + index));
+    if (bias != nullptr) {
+      value = _mm512_add_ps(value, _mm512_maskz_loadu_ps(mask, bias + index));
+    }
+    _mm512_mask_storeu_ps(residual + index, mask, value);
+  }
+}
+
 // Keep the multiply rounded before adding the offset, including for constant inputs.
 #if defined(__GNUC__) && !defined(__clang__)
 __attribute__((optimize("fp-contract=off")))
