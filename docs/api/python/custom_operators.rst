@@ -231,6 +231,27 @@ CPU tensor scratch memory is zero, excluding inputs and outputs (broadcast
 metadata is proportional to rank). This is inference compatibility support:
 no gradient rules or fusion patterns are registered for this operator.
 
+Microsoft SkipLayerNormalization
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``com.microsoft::SkipLayerNormalization`` version 1 adds ``input``, ``skip``,
+and optional ``bias`` before centering the residual sum over its last axis,
+scaling by the inverse standard deviation and ``gamma``, and adding optional
+``beta``. All inputs have one matching ``FLOAT``, ``FLOAT16``, or ``BFLOAT16``
+type. ``input`` has shape ``[S, H]`` or ``[B, S, H]``; for rank-three input,
+``skip`` may also have shape ``[S, H]`` or ``[1, S, H]``. ``gamma``, optional
+``beta``, and optional ``bias`` are rank-one tensors of length ``H``.
+
+Output slot 0 has the input shape and type. Optional slots 1 and 2 are FLOAT
+mean and inverse-standard-deviation tensors with final dimension one. Optional
+slot 3 is the typed residual sum. ``epsilon`` defaults to ``1e-12`` and must be
+finite and nonnegative. The allocation-free CPU kernel uses FP32 arithmetic
+for narrow inputs and runtime-owned row scheduling. This follows the
+`ONNX Runtime CPU contract
+<https://github.com/microsoft/onnxruntime/blob/9c87bdf2e6676eee0073c711a32e75183dc41199/onnxruntime/contrib_ops/cpu/skip_layer_norm.cc>`_.
+Shape inference preserves symbolic dimensions and scratch-memory accounting is
+zero, excluding inputs and outputs.
+
 Microsoft SkipSimplifiedLayerNormalization
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
