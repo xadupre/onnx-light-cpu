@@ -10,6 +10,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Updated native kernel registration and immutable input preparation for the
   onnx-light 0.1.31 runtime API, and pinned CI and release builds to 0.1.31.
 
+### Documentation & CI
+
+- Corrected the published-wheel compatibility guide to reference onnx-light
+  0.1.31 and added a regression check that keeps it aligned with the release
+  version ([#901](https://github.com/xadupre/onnx-light-cpu/pull/901)).
+
 ## [0.1.20] – 2026-10-05
 
 ### Improvements
