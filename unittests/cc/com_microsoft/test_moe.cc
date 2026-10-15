@@ -22,6 +22,7 @@ namespace {
 struct ScratchStorage {
   std::vector<MoERoute> routes;
   std::vector<float> values;
+  std::size_t token_blocks = 0;
 
   ScratchStorage(std::size_t tokens, std::size_t hidden, std::size_t experts,
                  std::size_t intermediate, MoEDataType data_type, const MoEAttributes &attributes) {
@@ -29,9 +30,12 @@ struct ScratchStorage {
         ComputeMoEScratchSize(tokens, hidden, experts, intermediate, data_type, attributes);
     routes.resize(size.route_count);
     values.resize(size.value_count);
+    token_blocks = size.token_blocks;
   }
 
-  MoEScratch Get() { return {routes.data(), routes.size(), values.data(), values.size()}; }
+  MoEScratch Get() {
+    return {routes.data(), routes.size(), values.data(), values.size(), token_blocks};
+  }
 };
 
 void RunMoE(const void *input, const void *router, const void *fc1, const void *bias1,
@@ -131,6 +135,10 @@ TEST(MoE, UsesRuntimeExecutorAcrossIndependentTokens) {
   ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run, &InlineExecutor::Plan};
   {
     ExecutionExecutorScope scope(&view);
+    const MoEScratchSize scratch_size =
+        ComputeMoEScratchSize(tokens, 1, 1, 1, MoEDataType::kFloat32, attributes);
+    EXPECT_EQ(scratch_size.token_blocks, 4U);
+    EXPECT_EQ(scratch_size.route_count, 4U);
     RunMoE(input.data(), router.data(), fc1, nullptr, fc2, nullptr, output.data(), tokens, 1, 1, 1,
            MoEDataType::kFloat32, attributes);
   }
@@ -140,6 +148,19 @@ TEST(MoE, UsesRuntimeExecutorAcrossIndependentTokens) {
   for (float value : output) {
     EXPECT_FLOAT_EQ(value, 24.0f);
   }
+}
+
+TEST(MoE, ReusesSingleBlockScratchAcrossLongPrompts) {
+  MoEAttributes attributes;
+  attributes.activation = "swiglu";
+  attributes.k = 8;
+  const MoEScratchSize scratch_size =
+      ComputeMoEScratchSize(32768, 2880, 32, 2880, MoEDataType::kBFloat16, attributes);
+
+  EXPECT_EQ(scratch_size.token_blocks, 1U);
+  EXPECT_EQ(scratch_size.route_count, 32U);
+  EXPECT_EQ(scratch_size.value_count, 14432U);
+  EXPECT_EQ(scratch_size.value_count * sizeof(float), 57728U);
 }
 
 TEST(MoE, RejectsMissingScratchBeforeParallelDispatch) {
@@ -203,6 +224,96 @@ TEST(MoE, ParallelExpertsClearUnderflowedRouteResults) {
                             [](std::uint16_t value) { return value == 0; }));
   }
   EXPECT_EQ(executor.dispatches, 3);
+}
+
+TEST(MoE, ParallelExpertsMatchNestedSerialForNonzeroValuesAndBiases) {
+  constexpr std::size_t hidden = 1024;
+  constexpr std::size_t intermediate = 512;
+  constexpr std::size_t experts = 2;
+  std::vector<float> input(hidden, 0.0f);
+  std::array<float, experts> router{0.25f, -0.5f};
+  std::vector<float> fc1(experts * intermediate * hidden, 0.0f);
+  std::vector<float> bias1(experts * intermediate, 0.0f);
+  std::vector<float> fc2(experts * hidden * intermediate, 0.0f);
+  std::vector<float> bias2(experts * hidden, 0.0f);
+  input[0] = 1.0f;
+  fc1[0] = 1.0f;
+  fc1[intermediate * hidden] = 2.0f;
+  bias1[0] = 0.5f;
+  bias1[intermediate] = -0.25f;
+  fc2[0] = 3.0f;
+  fc2[hidden * intermediate] = 5.0f;
+  bias2[0] = 0.25f;
+  bias2[hidden] = -0.5f;
+  bias2[1] = 0.125f;
+  bias2[hidden + 1] = -0.25f;
+
+  InlineExecutor executor;
+  ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run, &InlineExecutor::Plan};
+  ExecutionExecutorScope scope(&view);
+  for (const bool normalize : {false, true}) {
+    MoEAttributes attributes;
+    attributes.activation = "identity";
+    attributes.k = experts;
+    attributes.normalize = normalize;
+    for (const MoEDataType data_type :
+         {MoEDataType::kFloat32, MoEDataType::kFloat16, MoEDataType::kBFloat16}) {
+      ScratchStorage parallel_scratch(1, hidden, experts, intermediate, data_type, attributes);
+      ScratchStorage serial_scratch(1, hidden, experts, intermediate, data_type, attributes);
+      const std::int64_t dispatches_before = executor.dispatches;
+      if (data_type == MoEDataType::kFloat32) {
+        std::vector<float> parallel_output(hidden), serial_output(hidden);
+        ComputeMoE(input.data(), router.data(), fc1.data(), bias1.data(), fc2.data(), bias2.data(),
+                   parallel_output.data(), 1, hidden, experts, intermediate, data_type, attributes,
+                   parallel_scratch.Get());
+        EXPECT_EQ(executor.dispatches, dispatches_before + 1);
+        ExecuteRanges(1, ExecutionSchedule{1, 1, 4, 0}, [&](std::int64_t, std::int64_t) {
+          ComputeMoE(input.data(), router.data(), fc1.data(), bias1.data(), fc2.data(),
+                     bias2.data(), serial_output.data(), 1, hidden, experts, intermediate,
+                     data_type, attributes, serial_scratch.Get());
+        });
+        for (std::size_t index = 0; index < hidden; ++index) {
+          EXPECT_NEAR(parallel_output[index], serial_output[index], 1e-6f);
+        }
+        EXPECT_NE(parallel_output[0], 0.0f);
+        EXPECT_NE(parallel_output[1], 0.0f);
+      } else {
+        const auto encode = [data_type](float value) {
+          return data_type == MoEDataType::kFloat16 ? detail::FloatToFloat16Bits(value)
+                                                    : detail::FloatToBFloat16Bits(value);
+        };
+        const auto decode = [data_type](std::uint16_t value) {
+          return data_type == MoEDataType::kFloat16 ? detail::Float16BitsToFloat(value)
+                                                    : detail::Bfloat16BitsToFloat(value);
+        };
+        std::vector<std::uint16_t> low_input(input.size()), low_router(router.size()),
+            low_fc1(fc1.size()), low_bias1(bias1.size()), low_fc2(fc2.size()),
+            low_bias2(bias2.size());
+        std::transform(input.begin(), input.end(), low_input.begin(), encode);
+        std::transform(router.begin(), router.end(), low_router.begin(), encode);
+        std::transform(fc1.begin(), fc1.end(), low_fc1.begin(), encode);
+        std::transform(bias1.begin(), bias1.end(), low_bias1.begin(), encode);
+        std::transform(fc2.begin(), fc2.end(), low_fc2.begin(), encode);
+        std::transform(bias2.begin(), bias2.end(), low_bias2.begin(), encode);
+        std::vector<std::uint16_t> parallel_output(hidden), serial_output(hidden);
+        ComputeMoE(low_input.data(), low_router.data(), low_fc1.data(), low_bias1.data(),
+                   low_fc2.data(), low_bias2.data(), parallel_output.data(), 1, hidden, experts,
+                   intermediate, data_type, attributes, parallel_scratch.Get());
+        EXPECT_EQ(executor.dispatches, dispatches_before + 1);
+        ExecuteRanges(1, ExecutionSchedule{1, 1, 4, 0}, [&](std::int64_t, std::int64_t) {
+          ComputeMoE(low_input.data(), low_router.data(), low_fc1.data(), low_bias1.data(),
+                     low_fc2.data(), low_bias2.data(), serial_output.data(), 1, hidden, experts,
+                     intermediate, data_type, attributes, serial_scratch.Get());
+        });
+        for (std::size_t index = 0; index < hidden; ++index) {
+          EXPECT_NEAR(decode(parallel_output[index]), decode(serial_output[index]), 1e-6f);
+        }
+        EXPECT_NE(decode(parallel_output[0]), 0.0f);
+        EXPECT_NE(decode(parallel_output[1]), 0.0f);
+      }
+      EXPECT_EQ(executor.dispatches, dispatches_before + 1);
+    }
+  }
 }
 
 TEST(MoE, SingleTokenAndNestedExecutionRemainSerial) {

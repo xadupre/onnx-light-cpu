@@ -34,6 +34,7 @@ struct MoERoute {
 struct MoEScratchSize {
   std::size_t route_count = 0;
   std::size_t value_count = 0;
+  std::size_t token_blocks = 0;
 };
 
 struct MoEScratch {
@@ -41,6 +42,7 @@ struct MoEScratch {
   std::size_t route_count = 0;
   float *values = nullptr;
   std::size_t value_count = 0;
+  std::size_t token_blocks = 0;
 };
 
 MoEScratchSize ComputeMoEScratchSize(std::size_t tokens, std::size_t hidden, std::size_t experts,

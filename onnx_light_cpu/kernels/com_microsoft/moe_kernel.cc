@@ -148,7 +148,8 @@ Tensor MoEKernel::operator()(const Tensor &input, const Tensor &router, const Te
   ComputeMoE(input.bytes(), router.bytes(), fc1.bytes(), bias1 ? bias1->bytes() : nullptr,
              fc2.bytes(), bias2 ? bias2->bytes() : nullptr, output.mutable_bytes(), rows, hidden,
              experts, intermediate, data_type, attributes_,
-             {routes.data(), scratch_size.route_count, values.data(), scratch_size.value_count});
+             {routes.data(), scratch_size.route_count, values.data(), scratch_size.value_count,
+              scratch_size.token_blocks});
   return output;
 }
 

@@ -22,6 +22,7 @@ namespace onnx_light_cpu {
 namespace {
 
 constexpr std::size_t kParallelExpertWork = 512 * 1024;
+constexpr std::int64_t kMaximumTokenParticipants = 256;
 
 std::size_t WorkspaceValues(std::size_t fc1_width, std::size_t intermediate, std::size_t hidden) {
   return CheckedAdd(CheckedAdd(fc1_width, intermediate, "MoE", "workspace values"), hidden, "MoE",
@@ -40,6 +41,47 @@ bool RouteGreater(const MoERoute &left, const MoERoute &right) {
   return left.weight > right.weight || (left.weight == right.weight && left.expert > right.expert);
 }
 
+std::size_t ElementBytes(MoEDataType data_type) {
+  return data_type == MoEDataType::kFloat32 ? sizeof(float) : sizeof(std::uint16_t);
+}
+
+ExecutionWorkCost TokenWorkCost(std::size_t hidden, std::size_t experts, std::size_t intermediate,
+                                std::size_t fc1_width, MoEDataType data_type,
+                                const MoEAttributes &attributes) {
+  const double expert_multiply_adds =
+      static_cast<double>(fc1_width) * static_cast<double>(hidden) +
+      static_cast<double>(hidden) * static_cast<double>(intermediate);
+  const double selected_experts = static_cast<double>(attributes.k);
+  const double element_bytes = static_cast<double>(ElementBytes(data_type));
+  return {element_bytes * (static_cast<double>(experts) + selected_experts * expert_multiply_adds),
+          element_bytes * static_cast<double>(hidden), selected_experts * expert_multiply_adds};
+}
+
+MoEScratchSize ScratchSizeForBlocks(std::size_t token_blocks, std::size_t hidden,
+                                    std::size_t experts, std::size_t intermediate,
+                                    MoEDataType data_type, const MoEAttributes &attributes,
+                                    bool parallel_experts) {
+  const std::size_t fc1_width =
+      CheckedMultiply(intermediate, attributes.activation == "swiglu" ? 2 : 1, "MoE", "fc1 width");
+  const std::size_t workspace_count = parallel_experts ? attributes.k : 1;
+  std::size_t values_per_block = hidden;
+  if (data_type != MoEDataType::kFloat32) {
+    values_per_block = CheckedAdd(values_per_block, experts, "MoE", "router scratch");
+  }
+  if (parallel_experts) {
+    values_per_block = CheckedAdd(
+        values_per_block, CheckedMultiply(attributes.k, hidden, "MoE", "parallel expert results"),
+        "MoE", "parallel expert results");
+  }
+  values_per_block =
+      CheckedAdd(values_per_block,
+                 CheckedMultiply(workspace_count, WorkspaceValues(fc1_width, intermediate, hidden),
+                                 "MoE", "expert workspaces"),
+                 "MoE", "scratch values");
+  return {CheckedMultiply(token_blocks, experts, "MoE", "routing scratch"),
+          CheckedMultiply(token_blocks, values_per_block, "MoE", "value scratch"), token_blocks};
+}
+
 MoEScratchSize RequiredScratchSize(std::size_t tokens, std::size_t hidden, std::size_t experts,
                                    std::size_t intermediate, MoEDataType data_type,
                                    const MoEAttributes &attributes) {
@@ -49,23 +91,16 @@ MoEScratchSize RequiredScratchSize(std::size_t tokens, std::size_t hidden, std::
   const std::size_t fc1_width =
       CheckedMultiply(intermediate, attributes.activation == "swiglu" ? 2 : 1, "MoE", "fc1 width");
   const bool parallel_experts = UseParallelExperts(tokens, hidden, fc1_width, attributes);
-  const std::size_t workspace_count = parallel_experts ? attributes.k : 1;
-  std::size_t values_per_token = hidden;
-  if (data_type != MoEDataType::kFloat32) {
-    values_per_token = CheckedAdd(values_per_token, experts, "MoE", "router scratch");
-  }
-  if (parallel_experts) {
-    values_per_token = CheckedAdd(
-        values_per_token, CheckedMultiply(attributes.k, hidden, "MoE", "parallel expert results"),
-        "MoE", "parallel expert results");
-  }
-  values_per_token =
-      CheckedAdd(values_per_token,
-                 CheckedMultiply(workspace_count, WorkspaceValues(fc1_width, intermediate, hidden),
-                                 "MoE", "expert workspaces"),
-                 "MoE", "scratch values");
-  return {CheckedMultiply(tokens, experts, "MoE", "routing scratch"),
-          CheckedMultiply(tokens, values_per_token, "MoE", "value scratch")};
+  const ExecutionSchedule schedule{2, 1, kMaximumTokenParticipants, 0};
+  const std::size_t token_blocks =
+      tokens == 1
+          ? 1
+          : static_cast<std::size_t>(ExecutionCostedBlockCount(
+                static_cast<std::int64_t>(tokens),
+                TokenWorkCost(hidden, experts, intermediate, fc1_width, data_type, attributes),
+                schedule, std::int64_t{1}));
+  return ScratchSizeForBlocks(token_blocks, hidden, experts, intermediate, data_type, attributes,
+                              parallel_experts);
 }
 
 template <typename T> float Read(const T *data, std::size_t index) {
@@ -142,13 +177,15 @@ template <typename T>
 void ComputeRange(const T *input, const T *router, const T *fc1, const T *bias1, const T *fc2,
                   const T *bias2, T *output, std::size_t begin, std::size_t end, std::size_t hidden,
                   std::size_t experts, std::size_t intermediate, const MoEAttributes &attributes,
-                  MoEScratch scratch, std::size_t values_per_token, bool parallel_experts) {
+                  MoEScratch scratch, std::size_t values_per_block, std::size_t scratch_block,
+                  bool parallel_experts) {
   const bool swiglu = attributes.activation == "swiglu";
   const std::size_t fc1_width = intermediate * (swiglu ? 2 : 1);
   const std::size_t workspace_values = WorkspaceValues(fc1_width, intermediate, hidden);
+  MoERoute *routes = scratch.routes + scratch_block * experts;
+  float *block_values = scratch.values + scratch_block * values_per_block;
   for (std::size_t token = begin; token < end; ++token) {
-    MoERoute *routes = scratch.routes + token * experts;
-    float *cursor = scratch.values + token * values_per_token;
+    float *cursor = block_values;
     float *result = cursor;
     cursor += hidden;
     float *expert_results = parallel_experts ? cursor : nullptr;
@@ -255,13 +292,15 @@ void ComputeLowPrecisionRange(const std::uint16_t *input, const std::uint16_t *r
                               std::uint16_t *output, std::size_t begin, std::size_t end,
                               std::size_t hidden, std::size_t experts, std::size_t intermediate,
                               const MoEAttributes &attributes, MoEScratch scratch,
-                              std::size_t values_per_token, bool parallel_experts) {
+                              std::size_t values_per_block, std::size_t scratch_block,
+                              bool parallel_experts) {
   const bool swiglu = attributes.activation == "swiglu";
   const std::size_t fc1_width = intermediate * (swiglu ? 2 : 1);
   const std::size_t workspace_values = WorkspaceValues(fc1_width, intermediate, hidden);
+  MoERoute *routes = scratch.routes + scratch_block * experts;
+  float *block_values = scratch.values + scratch_block * values_per_block;
   for (std::size_t token = begin; token < end; ++token) {
-    MoERoute *routes = scratch.routes + token * experts;
-    float *cursor = scratch.values + token * values_per_token;
+    float *cursor = block_values;
     float *router_values = cursor;
     cursor += experts;
     float *result = cursor;
@@ -367,28 +406,27 @@ void Compute(const T *input, const T *router, const T *fc1, const T *bias1, cons
   const std::size_t fc1_width = CheckedMultiply(
       intermediate, attributes.activation == "swiglu" ? std::size_t{2} : 1, "MoE", "fc1 width");
   const bool parallel_experts = UseParallelExperts(tokens, hidden, fc1_width, attributes);
-  const std::size_t values_per_token = scratch.value_count / tokens;
+  const std::size_t values_per_block =
+      ScratchSizeForBlocks(1, hidden, experts, intermediate, MoEDataType::kFloat32, attributes,
+                           parallel_experts)
+          .value_count;
   if (tokens == 1) {
     ComputeRange(input, router, fc1, bias1, fc2, bias2, output, 0, 1, hidden, experts, intermediate,
-                 attributes, scratch, values_per_token, parallel_experts);
+                 attributes, scratch, values_per_block, 0, parallel_experts);
     return;
   }
-  const double expert_multiply_adds =
-      static_cast<double>(fc1_width) * static_cast<double>(hidden) +
-      static_cast<double>(hidden) * static_cast<double>(intermediate);
-  const double selected_experts = static_cast<double>(attributes.k);
-  const double element_bytes = static_cast<double>(sizeof(T));
-  const ExecutionWorkCost cost{
-      element_bytes * (static_cast<double>(experts) + selected_experts * expert_multiply_adds),
-      element_bytes * static_cast<double>(hidden), selected_experts * expert_multiply_adds};
-  const ExecutionSchedule schedule{2, 1, std::numeric_limits<std::int64_t>::max(), 0};
-  ExecuteCostedRanges(static_cast<std::int64_t>(tokens), cost, schedule, std::int64_t{1},
-                      [=](std::int64_t begin, std::int64_t end) {
-                        ComputeRange(input, router, fc1, bias1, fc2, bias2, output,
-                                     static_cast<std::size_t>(begin), static_cast<std::size_t>(end),
-                                     hidden, experts, intermediate, attributes, scratch,
-                                     values_per_token, false);
-                      });
+  const std::size_t active_blocks = ExecutionInParallelRegion() ? 1 : scratch.token_blocks;
+  const std::size_t tokens_per_block = (tokens + active_blocks - 1) / active_blocks;
+  const ExecutionSchedule schedule{1, 1, static_cast<std::int64_t>(active_blocks),
+                                   static_cast<std::int64_t>(active_blocks)};
+  ExecuteRanges(
+      static_cast<std::int64_t>(tokens), schedule, std::int64_t{1},
+      [=](std::int64_t begin, std::int64_t end) {
+        const std::size_t scratch_block = static_cast<std::size_t>(begin) / tokens_per_block;
+        ComputeRange(input, router, fc1, bias1, fc2, bias2, output, static_cast<std::size_t>(begin),
+                     static_cast<std::size_t>(end), hidden, experts, intermediate, attributes,
+                     scratch, values_per_block, scratch_block, false);
+      });
 }
 
 template <typename Codec>
@@ -404,28 +442,31 @@ void ComputeLowPrecision(const std::uint16_t *input, const std::uint16_t *router
   const std::size_t fc1_width = CheckedMultiply(
       intermediate, attributes.activation == "swiglu" ? std::size_t{2} : 1, "MoE", "fc1 width");
   const bool parallel_experts = UseParallelExperts(tokens, hidden, fc1_width, attributes);
-  const std::size_t values_per_token = scratch.value_count / tokens;
+  const MoEDataType data_type =
+      std::is_same_v<Codec, Float16Codec> ? MoEDataType::kFloat16 : MoEDataType::kBFloat16;
+  const std::size_t values_per_block = ScratchSizeForBlocks(1, hidden, experts, intermediate,
+                                                            data_type, attributes, parallel_experts)
+                                           .value_count;
   if (tokens == 1) {
     ComputeLowPrecisionRange<Codec>(input, router, fc1, bias1, fc2, bias2, output, 0, 1, hidden,
-                                    experts, intermediate, attributes, scratch, values_per_token,
+                                    experts, intermediate, attributes, scratch, values_per_block, 0,
                                     parallel_experts);
     return;
   }
-  const double expert_multiply_adds =
-      static_cast<double>(fc1_width) * static_cast<double>(hidden) +
-      static_cast<double>(hidden) * static_cast<double>(intermediate);
-  const double selected_experts = static_cast<double>(attributes.k);
-  const ExecutionWorkCost cost{
-      2.0 * (static_cast<double>(experts) + selected_experts * expert_multiply_adds),
-      2.0 * static_cast<double>(hidden), selected_experts * expert_multiply_adds};
-  const ExecutionSchedule schedule{2, 1, std::numeric_limits<std::int64_t>::max(), 0};
-  ExecuteCostedRanges(static_cast<std::int64_t>(tokens), cost, schedule, std::int64_t{1},
-                      [=](std::int64_t begin, std::int64_t end) {
-                        ComputeLowPrecisionRange<Codec>(
-                            input, router, fc1, bias1, fc2, bias2, output,
-                            static_cast<std::size_t>(begin), static_cast<std::size_t>(end), hidden,
-                            experts, intermediate, attributes, scratch, values_per_token, false);
-                      });
+  const std::size_t active_blocks = ExecutionInParallelRegion() ? 1 : scratch.token_blocks;
+  const std::size_t tokens_per_block = (tokens + active_blocks - 1) / active_blocks;
+  const ExecutionSchedule schedule{1, 1, static_cast<std::int64_t>(active_blocks),
+                                   static_cast<std::int64_t>(active_blocks)};
+  ExecuteRanges(static_cast<std::int64_t>(tokens), schedule, std::int64_t{1},
+                [=](std::int64_t begin, std::int64_t end) {
+                  const std::size_t scratch_block =
+                      static_cast<std::size_t>(begin) / tokens_per_block;
+                  ComputeLowPrecisionRange<Codec>(input, router, fc1, bias1, fc2, bias2, output,
+                                                  static_cast<std::size_t>(begin),
+                                                  static_cast<std::size_t>(end), hidden, experts,
+                                                  intermediate, attributes, scratch,
+                                                  values_per_block, scratch_block, false);
+                });
 }
 
 } // namespace
@@ -441,6 +482,8 @@ std::size_t ComputeMoEMaxScratchBytes(std::size_t tokens, std::size_t hidden, st
   if (tokens == 0) {
     return 0;
   }
+  const std::size_t token_blocks =
+      tokens == 1 ? 1 : std::min(tokens, static_cast<std::size_t>(kMaximumTokenParticipants));
   const std::size_t workspace = WorkspaceValues(fc1_width, intermediate, hidden);
   std::size_t value_count;
   if (tokens == 1) {
@@ -453,11 +496,11 @@ std::size_t ComputeMoEMaxScratchBytes(std::size_t tokens, std::size_t hidden, st
   } else {
     const std::size_t values_per_token = CheckedAdd(
         CheckedAdd(experts, hidden, "MoE", "token scratch"), workspace, "MoE", "token scratch");
-    value_count = CheckedMultiply(tokens, values_per_token, "MoE", "token scratch");
+    value_count = CheckedMultiply(token_blocks, values_per_token, "MoE", "token scratch");
   }
   const std::size_t route_bytes =
-      CheckedByteSize(CheckedMultiply(tokens, experts, "MoE", "routing scratch"), sizeof(MoERoute),
-                      "MoE", "routing scratch bytes");
+      CheckedByteSize(CheckedMultiply(token_blocks, experts, "MoE", "routing scratch"),
+                      sizeof(MoERoute), "MoE", "routing scratch bytes");
   return CheckedAdd(route_bytes,
                     CheckedByteSize(value_count, sizeof(float), "MoE", "value scratch bytes"),
                     "MoE", "maximum scratch bytes");
@@ -467,8 +510,14 @@ void ComputeMoE(const void *input, const void *router, const void *fc1, const vo
                 const void *fc2, const void *bias2, void *output, std::size_t tokens,
                 std::size_t hidden, std::size_t experts, std::size_t intermediate,
                 MoEDataType data_type, const MoEAttributes &attributes, MoEScratch scratch) {
-  const MoEScratchSize required =
-      RequiredScratchSize(tokens, hidden, experts, intermediate, data_type, attributes);
+  if (tokens != 0 && (scratch.token_blocks == 0 || scratch.token_blocks > tokens)) {
+    throw std::invalid_argument("MoE: invalid token block scratch count.");
+  }
+  const std::size_t fc1_width =
+      CheckedMultiply(intermediate, attributes.activation == "swiglu" ? 2 : 1, "MoE", "fc1 width");
+  const bool parallel_experts = UseParallelExperts(tokens, hidden, fc1_width, attributes);
+  const MoEScratchSize required = ScratchSizeForBlocks(
+      scratch.token_blocks, hidden, experts, intermediate, data_type, attributes, parallel_experts);
   if ((required.route_count != 0 &&
        (scratch.routes == nullptr || scratch.route_count < required.route_count)) ||
       (required.value_count != 0 &&
