@@ -115,19 +115,27 @@ void MatMulNBitsInt8Float32(const float *a, const std::uint8_t *weights,
                             std::int64_t max_participants) {
   struct Scratch {
     std::vector<std::uint8_t> quantized;
-    std::vector<float> activation_scales;
-    std::vector<float> activation_maxima;
+    std::vector<double> activation_scales;
   };
+  if (rows == 0) {
+    return;
+  }
   const std::size_t blocks = k / 32;
   const std::size_t groups = n / 8 + (n % 8 != 0);
   const DotFn dot = SelectedDot();
+  const ExecutionSchedule schedule{1, 2, max_participants};
+  const auto participants =
+      static_cast<std::size_t>(ExecutionBlockCount(static_cast<std::int64_t>(rows), schedule));
+  const std::size_t rows_per_range = rows / participants + (rows % participants != 0);
+  std::vector<Scratch> scratch_buffers(participants);
+  for (auto &scratch : scratch_buffers) {
+    scratch.quantized.resize(k);
+    scratch.activation_scales.resize(blocks);
+  }
   ExecuteRanges(
-      static_cast<std::int64_t>(rows), ExecutionSchedule{1, 2, max_participants},
-      [&](std::int64_t begin, std::int64_t end) {
-        thread_local Scratch scratch;
-        scratch.quantized.resize(k);
-        scratch.activation_scales.resize(blocks);
-        scratch.activation_maxima.resize(blocks);
+      static_cast<std::int64_t>(rows), schedule,
+      [&](std::int64_t begin, std::int64_t end) noexcept {
+        auto &scratch = scratch_buffers[static_cast<std::size_t>(begin) / rows_per_range];
         for (std::size_t row = static_cast<std::size_t>(begin); row < static_cast<std::size_t>(end);
              ++row) {
           bool finite = true;
@@ -144,8 +152,7 @@ void MatMulNBitsInt8Float32(const float *a, const std::uint8_t *weights,
             if (!finite) {
               break;
             }
-            scratch.activation_maxima[block] = maximum;
-            scratch.activation_scales[block] = maximum / 63.0f;
+            scratch.activation_scales[block] = static_cast<double>(maximum) / 63.0;
             for (std::size_t p = 0; p < 32; ++p) {
               const float scaled = maximum == 0.0f    ? 0.0f
                                    : maximum < 1e-36f ? (source[p] / maximum) * 63.0f
@@ -182,14 +189,10 @@ void MatMulNBitsInt8Float32(const float *a, const std::uint8_t *weights,
               std::int32_t dots[8];
               dot(scratch.quantized.data() + block * 32, weights + index * 32, dots);
               for (std::size_t lane = 0; lane < 8; ++lane) {
-                const float factor =
-                    scratch.activation_scales[block] == 0.0f &&
-                            scratch.activation_maxima[block] != 0.0f
-                        ? static_cast<float>(static_cast<double>(scratch.activation_maxima[block]) *
-                                             static_cast<double>(scales[index + lane]) / 63.0)
-                        : scratch.activation_scales[block] * scales[index + lane];
-                sums[lane] +=
-                    static_cast<float>(dots[lane] - 64 * weight_sums[index + lane]) * factor;
+                const double factor =
+                    scratch.activation_scales[block] * static_cast<double>(scales[index + lane]);
+                sums[lane] += static_cast<float>(
+                    static_cast<double>(dots[lane] - 64 * weight_sums[index + lane]) * factor);
               }
             }
             for (std::size_t lane = 0; lane < std::min<std::size_t>(8, n - group * 8); ++lane) {

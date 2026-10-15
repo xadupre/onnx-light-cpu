@@ -126,6 +126,12 @@ preparation, first-use packing time, median steady-state seconds, source packed
 bytes, persistent prepared bytes, per-callback scratch bytes, and the selected
 implementation.
 
+The prepared INT8 path allocates disjoint per-participant scratch before
+dispatching work; range callbacks do not allocate. Activation scales and their
+products with weight scales and corrected integer dot products use double
+precision until each block contribution is converted to FLOAT, avoiding
+premature scale overflow or underflow.
+
 ONNX Runtime 1.30.0 CPU does not implement native BF16 MatMulNBits. The
 BF16 oracle therefore runs ORT's FP32 operator on BF16-rounded activations
 and scales and rounds its output back to BF16. This validates the CPU

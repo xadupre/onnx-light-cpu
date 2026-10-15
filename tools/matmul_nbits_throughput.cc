@@ -87,7 +87,7 @@ int main(int argc, char **argv) {
             << weights.size() + sums.size() * sizeof(std::int32_t) +
                    packed_scales.size() * sizeof(float)
             << ','
-            << (bits == 8 ? k + 2 * blocks * sizeof(float)
+            << (bits == 8 ? k + blocks * sizeof(double)
                           : onnx_light_cpu::kMatMulNBitsInt4WorkspaceBytes)
             << ','
             << (bits == 8 ? onnx_light_cpu::MatMulNBitsInt8Implementation()

@@ -244,6 +244,58 @@ TEST(MatMulNBits, PreparedInt8UsesRuntimeExecutor) {
                          32, 8, 4);
   EXPECT_EQ(executor.dispatches, 1);
   EXPECT_GT(executor.blocks, 1);
+  for (float value : y) {
+    EXPECT_FLOAT_EQ(value, 4.0f);
+  }
+  std::fill(y.begin(), y.end(), -1.0f);
+  {
+    detail::ExecutionRegionScope nested;
+    MatMulNBitsInt8Float32(a.data(), packed.data(), sums.data(), scales.data(), nullptr, y.data(),
+                           9, 32, 8, 4);
+  }
+  EXPECT_EQ(executor.dispatches, 1);
+  for (float value : y) {
+    EXPECT_FLOAT_EQ(value, 4.0f);
+  }
+  MatMulNBitsInt8Float32(nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, 0, 32, 8, 4);
+  EXPECT_EQ(executor.dispatches, 1);
+}
+
+TEST(MatMulNBits, PreparedInt8PreservesExtremeScaleProducts) {
+  constexpr std::size_t rows = 9;
+  constexpr std::size_t k = 32;
+  constexpr std::size_t n = 9;
+  struct TestCase {
+    float activation;
+    std::uint8_t weight;
+    float scale;
+  };
+  for (const TestCase test : {TestCase{1e30f, 128, 1e12f}, TestCase{-1e30f, 128, 1e12f},
+                              TestCase{1e-20f, 129, 1e-24f}, TestCase{-1e-20f, 129, 1e-24f}}) {
+    SCOPED_TRACE(::testing::Message() << test.activation << ',' << test.scale);
+    std::vector<float> a(rows * k, test.activation), scales(n, test.scale), packed_scales(16),
+        y(rows * n, -1.0f);
+    std::vector<std::uint8_t> b(n * k, test.weight), packed(2 * 256);
+    std::vector<std::int32_t> sums(16);
+    PackMatMulNBitsInt8(b.data(), scales.data(), packed.data(), sums.data(), packed_scales.data(),
+                        k, n);
+    const float expected =
+        static_cast<float>(static_cast<double>(test.activation) *
+                           (static_cast<int>(test.weight) - 128) * test.scale * k);
+    if (test.weight != 128) {
+      ASSERT_NE(expected, 0.0f);
+    }
+    for (std::int64_t threads : {1, 4}) {
+      ConcurrentExecutor executor;
+      ExecutionExecutorView view{&executor, threads, &ConcurrentExecutor::Run};
+      ExecutionExecutorScope scope(&view);
+      MatMulNBitsInt8Float32(a.data(), packed.data(), sums.data(), packed_scales.data(), nullptr,
+                             y.data(), rows, k, n, threads);
+      for (float value : y) {
+        EXPECT_EQ(value, expected);
+      }
+    }
+  }
 }
 
 TEST(MatMulNBits, PreparedInt8HandlesNonFiniteAndTinyActivations) {
