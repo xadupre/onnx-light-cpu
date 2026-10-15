@@ -5,6 +5,7 @@
 #include "onnx_light_cpu/kernels/com_microsoft/matmul_nbits_kernel.h"
 
 #include "onnx_light_cpu/impl/checked_arithmetic.h"
+#include "onnx_light_cpu/impl/com_microsoft/matmul_nbits_int3.h"
 #include "onnx_light_cpu/impl/math/half_conversion.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
 #include "onnx_light_cpu/schemas/com_microsoft/op_schema.h"

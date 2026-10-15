@@ -253,7 +253,7 @@ TEST(MatMulNBitsKernel, InfersEncodedInt3ShapeAndRejectsAttributeMismatch) {
   ctx.Set("A", sym_ns::SymTensor(nullptr, sym_ns::TensorType::kFloat,
                                  {sym_ns::SymDim(2), sym_ns::SymDim(35)}));
   const auto encoded = MakeInt3Weights(rt_ns::DataType::FLOAT, 35, 2,
-                                        std::vector<std::uint8_t>(70, 4), {1, 1, 1, 1});
+                                       std::vector<std::uint8_t>(70, 4), {1, 1, 1, 1});
   ctx.SetEncodedValue("B", encoded);
   auto node = MakeNode(35, 2, 3);
   node.ref_input().resize(2);
@@ -273,9 +273,9 @@ TEST(MatMulNBitsKernel, RunsPreparedEncodedInt3WithoutTensorScales) {
   onnx_light_cpu::MatMulNBitsKernel kernel{
       node, rt_ns::KernelContext{rt_ns::OpsetId("com.microsoft", 1)}};
   rt_ns::RuntimeContext rt{rt_ns::KernelContext{rt_ns::OpsetId("com.microsoft", 1)}};
-  rt.PutValue("B", rt_ns::RuntimeValue(MakeInt3Weights(
-                       rt_ns::DataType::FLOAT, 35, 1, std::vector<std::uint8_t>(35, 5),
-                       {0.5f, 2.0f})));
+  rt.PutValue("B",
+              rt_ns::RuntimeValue(MakeInt3Weights(rt_ns::DataType::FLOAT, 35, 1,
+                                                  std::vector<std::uint8_t>(35, 5), {0.5f, 2.0f})));
   rt.Put("A", rt_ns::Tensor::FromFloat("A", {1, 35}, std::vector<float>(35, 1)));
   ASSERT_TRUE(kernel.HasPreparations({"B"}));
   kernel.Prepare(rt, {"B"});
@@ -590,7 +590,7 @@ TEST(MatMulNBitsKernel, RegistersTypeAndBitSpecificTuningSchemas) {
 
 TEST(MatMulNBitsKernel, RejectsUnsupportedContractAndInvalidShapes) {
   EXPECT_THROW((onnx_light_cpu::MatMulNBitsKernel{
-                   MakeNode(32, 1, 3), rt_ns::KernelContext{rt_ns::OpsetId("com.microsoft", 1)}}),
+                   MakeNode(32, 1, 5), rt_ns::KernelContext{rt_ns::OpsetId("com.microsoft", 1)}}),
                std::invalid_argument);
   EXPECT_THROW(
       (onnx_light_cpu::MatMulNBitsKernel{MakeNode(32, 1, 4, 64),

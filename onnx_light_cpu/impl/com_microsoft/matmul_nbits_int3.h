@@ -66,10 +66,12 @@ InspectMatMulNBitsInt3(const ONNX_LIGHT_NAMESPACE::EncodedValueProto &encoded,
       return false;
     }
     const auto &tensor = field.type().tensor_type();
+    if (!tensor.has_shape()) {
+      return false;
+    }
     const auto &dims = tensor.shape().dim();
-    return tensor.elem_type() == data_type && tensor.has_shape() &&
-           dims.size() == (third < 0 ? 2U : 3U) && dims[0].has_dim_value() &&
-           dims[0].dim_value() == n && dims[1].has_dim_value() &&
+    return tensor.elem_type() == data_type && dims.size() == (third < 0 ? 2U : 3U) &&
+           dims[0].has_dim_value() && dims[0].dim_value() == n && dims[1].has_dim_value() &&
            dims[1].dim_value() == static_cast<std::int64_t>(blocks) &&
            (third < 0 || (dims[2].has_dim_value() && dims[2].dim_value() == third));
   };
