@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <stdexcept>
 
@@ -247,7 +248,7 @@ void MatMulNBitsEncodedInt3Typed(const void *a_raw, const std::uint8_t *b, const
                                  const MatMulNBitsExecutionTuning &tuning) {
   using Storage = typename Codec::Storage;
   const auto *a = static_cast<const Storage *>(a_raw);
-  const auto *scales = static_cast<const Storage *>(scales_raw);
+  const auto *scales = static_cast<const std::uint8_t *>(scales_raw);
   const auto *bias = static_cast<const Storage *>(bias_raw);
   auto *y = static_cast<Storage *>(y_raw);
   const std::size_t blocks = k / 32 + (k % 32 != 0);
@@ -268,7 +269,9 @@ void MatMulNBitsEncodedInt3Typed(const void *a_raw, const std::uint8_t *b, const
           for (std::size_t block = 0; block < blocks; ++block) {
             const std::size_t parameter = column * blocks + block;
             const auto *packed = b + parameter * 12;
-            const float scale = Codec::Load(scales[parameter]);
+            Storage scale_bits;
+            std::memcpy(&scale_bits, scales + parameter * sizeof(Storage), sizeof(Storage));
+            const float scale = Codec::Load(scale_bits);
             const int zero = zero_points == nullptr ? 4 : zero_points[parameter];
             const std::size_t depth = std::min<std::size_t>(32, k - block * 32);
             for (std::size_t p = 0; p < depth; ++p) {
