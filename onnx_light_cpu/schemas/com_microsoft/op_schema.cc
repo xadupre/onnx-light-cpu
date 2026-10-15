@@ -313,6 +313,40 @@ LightOpSchema MakeMatMulNBitsSchema() {
       false, true);
 }
 
+LightOpSchema MakeMoESchema() {
+  return LightOpSchema(
+      "MoE", kMicrosoftDomain, 1,
+      "ONNX Runtime CPU MoE: softmax router logits, select top-k experts and combine "
+      "their outputs. FC1 and FC2 weights are expert-major, output-major.",
+      {{"input", "Rank-2 (tokens, hidden) or rank-3 (batch, sequence, hidden).", "T"},
+       {"router_probs", "Rank-2 (tokens, experts) logits.", "T"},
+       {"fc1_experts_weights", "(experts, intermediate * fusion, hidden).", "T"},
+       {"fc1_experts_bias", "Optional (experts, intermediate * fusion).", "T"},
+       {"fc2_experts_weights", "(experts, hidden, intermediate).", "T"},
+       {"fc2_experts_bias", "Optional (experts, hidden).", "T"},
+       {"fc3_experts_weights", "Unsupported optional FC3 slot.", "T"},
+       {"fc3_experts_bias", "Unsupported optional FC3 slot.", "T"}},
+      {{"output", "Same shape and type as input.", "T"}},
+      {{"T",
+        {TensorType::kFloat, TensorType::kFloat16, TensorType::kBfloat16},
+        "Matching FLOAT, FLOAT16 or BFLOAT16 tensors."}},
+      {AttributeParam{"k", "Number of selected experts.", AttributeType::INT, false, int64_t{1}},
+       AttributeParam{"activation_type", "relu, gelu, silu, identity or swiglu.",
+                      AttributeType::STRING, false, std::string("relu")},
+       AttributeParam{"swiglu_fusion", "Interleaved SwiGLU requires 1.", AttributeType::INT, false,
+                      int64_t{0}},
+       AttributeParam{"swiglu_limit", "Optional SwiGLU clamp limit.", AttributeType::FLOAT, false},
+       AttributeParam{"activation_alpha", "SwiGLU sigmoid scale.", AttributeType::FLOAT, false,
+                      1.0f},
+       AttributeParam{"activation_beta", "SwiGLU linear offset.", AttributeType::FLOAT, false,
+                      0.0f},
+       AttributeParam{"normalize_routing_weights", "Renormalize selected softmax weights.",
+                      AttributeType::INT, false, int64_t{0}},
+       AttributeParam{"use_sparse_mixer", "Only zero is supported.", AttributeType::INT, false,
+                      int64_t{0}}},
+      false, true);
+}
+
 } // namespace
 
 std::vector<LightOpSchema> GetMicrosoftOpSchemasWithHistory(const std::string &op_type,
@@ -324,6 +358,7 @@ std::vector<LightOpSchema> GetMicrosoftOpSchemasWithHistory(const std::string &o
        [] { return std::vector<LightOpSchema>{MakeGroupQueryAttentionSchema()}; }},
       {"LinearAttention", [] { return std::vector<LightOpSchema>{MakeLinearAttentionSchema()}; }},
       {"MatMulNBits", [] { return std::vector<LightOpSchema>{MakeMatMulNBitsSchema()}; }},
+      {"MoE", [] { return std::vector<LightOpSchema>{MakeMoESchema()}; }},
       {"RotaryEmbedding", [] { return std::vector<LightOpSchema>{MakeRotaryEmbeddingSchema()}; }},
       {"SkipLayerNormalization",
        [] { return std::vector<LightOpSchema>{MakeSkipLayerNormalizationSchema()}; }},

@@ -142,6 +142,7 @@ the default ONNX domain (the empty string is equivalent); ``ai.onnx.ml`` and
    "RegisterAttentionKernel", "ai.onnx", "Attention"
    "RegisterLinearAttentionKernel", "ai.onnx", "LinearAttention"
    "RegisterRotaryEmbeddingKernels", "ai.onnx", "RotaryEmbedding"
+   "RegisterRotaryEmbeddingKernels", "com.microsoft", "RotaryEmbedding"
    "RegisterBinaryKernels", "ai.onnx", "Add, Sub, Mul, Div, Mod, Pow, Equal, Greater, GreaterOrEqual, Less, LessOrEqual, And, Or, Xor, BitwiseAnd, BitwiseOr, BitwiseXor, BitShift, PRelu"
    "RegisterExpKernel", "ai.onnx", "Exp"
    "RegisterLogKernel", "ai.onnx", "Log"
@@ -166,8 +167,9 @@ the default ONNX domain (the empty string is equivalent); ``ai.onnx.ml`` and
    "RegisterSwiGLUKernel", "ai.onnx", "SwiGLU"
    "RegisterTreeEnsembleKernel", "ai.onnx.ml", "TreeEnsemble"
    "RegisterVariadicElementwiseKernels", "ai.onnx", "Sum, Mean, Min, Max"
-   "RegisterMicrosoftKernels", "com.microsoft", "BiasGelu, CDist, GroupQueryAttention, LinearAttention, RotaryEmbedding, SkipLayerNormalization, SkipSimplifiedLayerNormalization"
+   "RegisterMicrosoftKernels", "com.microsoft", "BiasGelu, CDist, GroupQueryAttention, LinearAttention, SkipLayerNormalization, SkipSimplifiedLayerNormalization"
    "RegisterMatMulNBitsKernel", "com.microsoft", "MatMulNBits"
+   "RegisterMoEKernel", "com.microsoft", "MoE"
 
 The table describes shipped registrations, not all operators supported by
 onnx-light, nor a guarantee of every type, opset, or shape for a listed operator.
@@ -180,15 +182,17 @@ Microsoft implementation policy
 
 ``MicrosoftKernelImplementation.OPTIMIZED`` is the default for all global and
 session-local entry points. It selects the production implementations of all
-five ``com.microsoft`` operators above. ``NAIVE`` selects their reference
-implementations instead, using the ``RegisterNaive*Kernel`` registrars and
+six operators registered by ``RegisterMicrosoftKernels`` above. ``NAIVE``
+selects their reference implementations instead, using the
+``RegisterNaive*Kernel`` registrars and
 ``Naive*`` kernel names (``NaiveMicrosoftLinearAttention`` for
 ``com.microsoft::LinearAttention``). These are correctness oracles for testing
 and diagnostics, not a performance option. The naive LinearAttention adapter
 delegates to onnx-light's concrete reference kernel, as described below.
 
-The policy changes only the Microsoft implementations, not their
-domain/operator set or any ``ai.onnx`` / ``ai.onnx.ml`` registration.
+The policy changes only those six Microsoft implementations, not standalone
+Microsoft registrations such as ``MatMulNBits``, ``MoE``, and
+``RotaryEmbedding``, nor any ``ai.onnx`` / ``ai.onnx.ml`` registration.
 The C++ policy overload is
 ``RegisterAllKernels(MicrosoftKernelImplementation::NAIVE)``; the explicit
 global and session APIs also accept the policy.
