@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "onnx_light_cpu/impl/com_microsoft/moe.h"
+#include "onnx_light_cpu/impl/com_microsoft/moe_matvec.h"
 
 #include "onnx_light_cpu/impl/execution.h"
 #include "onnx_light_cpu/impl/math/half_conversion.h"
@@ -12,7 +13,7 @@
 #include <cstdint>
 #include <functional>
 #include <limits>
-#include <numeric>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -55,6 +56,26 @@ struct BFloat16Codec {
   }
 };
 
+template <typename Codec>
+void LowPrecisionMatVec(const std::uint16_t *input, const std::uint16_t *weights, float *output,
+                        std::size_t rows, std::size_t columns) {
+  if constexpr (std::is_same_v<Codec, Float16Codec>) {
+    detail::MoEMatVecFloat16(input, weights, output, rows, columns);
+  } else {
+    detail::MoEMatVecBFloat16(input, weights, output, rows, columns);
+  }
+}
+
+template <typename Codec>
+void MixedPrecisionMatVec(const float *input, const std::uint16_t *weights, float *output,
+                          std::size_t rows, std::size_t columns) {
+  if constexpr (std::is_same_v<Codec, Float16Codec>) {
+    detail::MoEMatVecFloat32Float16(input, weights, output, rows, columns);
+  } else {
+    detail::MoEMatVecFloat32BFloat16(input, weights, output, rows, columns);
+  }
+}
+
 float Activate(float value, const MoEAttributes &attributes) {
   if (attributes.activation == "relu") {
     return std::max(0.0f, value);
@@ -76,7 +97,6 @@ void ComputeRange(const T *input, const T *router, const T *fc1, const T *bias1,
   const bool swiglu = attributes.activation == "swiglu";
   const std::size_t fc1_width = intermediate * (swiglu ? 2 : 1);
   std::vector<std::pair<float, std::size_t>> routes(experts);
-  std::vector<T> first(fc1_width), activated(intermediate), second(hidden);
   std::vector<float> result(hidden);
   for (std::size_t token = begin; token < end; ++token) {
     float max_logit = Read(router, token * experts);
@@ -99,50 +119,72 @@ void ComputeRange(const T *input, const T *router, const T *fc1, const T *bias1,
       top_sum += routes[slot].first;
     }
     std::fill(result.begin(), result.end(), 0.0f);
-    for (std::size_t slot = 0; slot < attributes.k; ++slot) {
-      const auto [weight, expert] = routes[slot];
-      if (weight == 0.0f) {
-        continue;
-      }
-      for (std::size_t row = 0; row < fc1_width; ++row) {
-        float value = 0.0f;
-        for (std::size_t col = 0; col < hidden; ++col) {
-          value += Read(input, token * hidden + col) *
-                   Read(fc1, (expert * fc1_width + row) * hidden + col);
+    const bool parallel_experts =
+        attributes.k > 1 && fc1_width * hidden >= 512 * 1024 && !ExecutionInParallelRegion();
+    std::vector<float> expert_results(parallel_experts ? attributes.k * hidden : 0);
+    const auto compute_slots = [&](std::size_t slot_begin, std::size_t slot_end,
+                                   float *disjoint_results) {
+      std::vector<float> first(fc1_width), activated(intermediate), second(hidden);
+      for (std::size_t slot = slot_begin; slot < slot_end; ++slot) {
+        const auto [weight, expert] = routes[slot];
+        if (weight == 0.0f) {
+          continue;
         }
-        first[row] = Narrow<T>(value);
+        detail::MoEMatVecFloat32(input + token * hidden, fc1 + expert * fc1_width * hidden,
+                                 first.data(), fc1_width, hidden);
         if (bias1 != nullptr) {
-          first[row] = Narrow<T>(Read(first.data(), row) + Read(bias1, expert * fc1_width + row));
+          for (std::size_t row = 0; row < fc1_width; ++row) {
+            first[row] += bias1[expert * fc1_width + row];
+          }
+        }
+        for (std::size_t row = 0; row < intermediate; ++row) {
+          float value;
+          if (swiglu) {
+            const float gate = std::min(first[2 * row], attributes.limit);
+            const float linear =
+                std::clamp(first[2 * row + 1], -attributes.limit, attributes.limit);
+            const float arg = attributes.alpha * gate;
+            const float sigmoid =
+                arg > 0 ? 1.0f / (1.0f + std::exp(-arg)) : std::exp(arg) / (1.0f + std::exp(arg));
+            value = gate * sigmoid * (linear + attributes.beta);
+          } else {
+            value = Activate(first[row], attributes);
+          }
+          activated[row] = value;
+        }
+        detail::MoEMatVecFloat32(activated.data(), fc2 + expert * hidden * intermediate,
+                                 second.data(), hidden, intermediate);
+        const float route_weight = attributes.normalize ? weight / top_sum : weight;
+        for (std::size_t row = 0; row < hidden; ++row) {
+          const float value =
+              second[row] + (bias2 != nullptr ? bias2[expert * hidden + row] : 0.0f);
+          if (disjoint_results != nullptr) {
+            disjoint_results[slot * hidden + row] = route_weight * value;
+          } else {
+            result[row] += route_weight * value;
+          }
         }
       }
-      for (std::size_t row = 0; row < intermediate; ++row) {
-        float value;
-        if (swiglu) {
-          const float gate = std::min(Read(first.data(), 2 * row), attributes.limit);
-          const float linear =
-              std::clamp(Read(first.data(), 2 * row + 1), -attributes.limit, attributes.limit);
-          const float arg = attributes.alpha * gate;
-          const float sigmoid =
-              arg > 0 ? 1.0f / (1.0f + std::exp(-arg)) : std::exp(arg) / (1.0f + std::exp(arg));
-          value = gate * sigmoid * (linear + attributes.beta);
-        } else {
-          value = Activate(Read(first.data(), row), attributes);
+    };
+    if (parallel_experts) {
+      const double expert_cost =
+          static_cast<double>(fc1_width) * hidden + static_cast<double>(hidden) * intermediate;
+      const ExecutionWorkCost cost{sizeof(T) * expert_cost,
+                                   static_cast<double>(sizeof(float) * hidden), expert_cost};
+      const ExecutionSchedule schedule{2, 1, std::numeric_limits<std::int64_t>::max(), 0};
+      ExecuteCostedRanges(static_cast<std::int64_t>(attributes.k), cost, schedule, std::int64_t{1},
+                          [&](std::int64_t slot_begin, std::int64_t slot_end) {
+                            compute_slots(static_cast<std::size_t>(slot_begin),
+                                          static_cast<std::size_t>(slot_end),
+                                          expert_results.data());
+                          });
+      for (std::size_t slot = 0; slot < attributes.k; ++slot) {
+        for (std::size_t row = 0; row < hidden; ++row) {
+          result[row] += expert_results[slot * hidden + row];
         }
-        activated[row] = Narrow<T>(value);
       }
-      for (std::size_t row = 0; row < hidden; ++row) {
-        float value = 0.0f;
-        for (std::size_t col = 0; col < intermediate; ++col) {
-          value +=
-              Read(activated.data(), col) * Read(fc2, (expert * hidden + row) * intermediate + col);
-        }
-        second[row] = Narrow<T>(value);
-        if (bias2 != nullptr) {
-          second[row] = Narrow<T>(Read(second.data(), row) + Read(bias2, expert * hidden + row));
-        }
-        result[row] +=
-            (attributes.normalize ? weight / top_sum : weight) * Read(second.data(), row);
-      }
+    } else {
+      compute_slots(0, attributes.k, nullptr);
     }
     for (std::size_t row = 0; row < hidden; ++row) {
       output[token * hidden + row] = Narrow<T>(result[row]);
@@ -160,10 +202,8 @@ void ComputeLowPrecisionRange(const std::uint16_t *input, const std::uint16_t *r
   const bool swiglu = attributes.activation == "swiglu";
   const std::size_t fc1_width = intermediate * (swiglu ? 2 : 1);
   std::vector<std::pair<float, std::size_t>> routes(experts);
-  std::vector<float> input_values(hidden), router_values(experts), first(fc1_width),
-      activated(intermediate), result(hidden), weight_row(std::max(hidden, intermediate));
+  std::vector<float> router_values(experts), result(hidden);
   for (std::size_t token = begin; token < end; ++token) {
-    Codec::Convert(input + token * hidden, input_values.data(), hidden);
     Codec::Convert(router + token * experts, router_values.data(), experts);
     const float max_logit = *std::max_element(router_values.begin(), router_values.end());
     float denominator = 0.0f;
@@ -182,41 +222,70 @@ void ComputeLowPrecisionRange(const std::uint16_t *input, const std::uint16_t *r
       top_sum += routes[slot].first;
     }
     std::fill(result.begin(), result.end(), 0.0f);
-    for (std::size_t slot = 0; slot < attributes.k; ++slot) {
-      const auto [weight, expert] = routes[slot];
-      if (weight == 0.0f) {
-        continue;
-      }
-      for (std::size_t row = 0; row < fc1_width; ++row) {
-        Codec::Convert(fc1 + (expert * fc1_width + row) * hidden, weight_row.data(), hidden);
-        first[row] =
-            std::inner_product(input_values.begin(), input_values.end(), weight_row.begin(), 0.0f);
+    const bool parallel_experts =
+        attributes.k > 1 && fc1_width * hidden >= 512 * 1024 && !ExecutionInParallelRegion();
+    std::vector<float> expert_results(parallel_experts ? attributes.k * hidden : 0);
+    const auto compute_slots = [&](std::size_t slot_begin, std::size_t slot_end,
+                                   float *disjoint_results) {
+      std::vector<float> first(fc1_width), activated(intermediate), second(hidden);
+      for (std::size_t slot = slot_begin; slot < slot_end; ++slot) {
+        const auto [weight, expert] = routes[slot];
+        if (weight == 0.0f) {
+          continue;
+        }
+        LowPrecisionMatVec<Codec>(input + token * hidden, fc1 + expert * fc1_width * hidden,
+                                  first.data(), fc1_width, hidden);
         if (bias1 != nullptr) {
-          first[row] += Codec::Load(bias1[expert * fc1_width + row]);
+          for (std::size_t row = 0; row < fc1_width; ++row) {
+            first[row] += Codec::Load(bias1[expert * fc1_width + row]);
+          }
+        }
+        for (std::size_t row = 0; row < intermediate; ++row) {
+          if (swiglu) {
+            const float gate = std::min(first[2 * row], attributes.limit);
+            const float linear =
+                std::clamp(first[2 * row + 1], -attributes.limit, attributes.limit);
+            const float arg = attributes.alpha * gate;
+            const float sigmoid =
+                arg > 0 ? 1.0f / (1.0f + std::exp(-arg)) : std::exp(arg) / (1.0f + std::exp(arg));
+            activated[row] = gate * sigmoid * (linear + attributes.beta);
+          } else {
+            activated[row] = Activate(first[row], attributes);
+          }
+        }
+        MixedPrecisionMatVec<Codec>(activated.data(), fc2 + expert * hidden * intermediate,
+                                    second.data(), hidden, intermediate);
+        const float route_weight = attributes.normalize ? weight / top_sum : weight;
+        for (std::size_t row = 0; row < hidden; ++row) {
+          const float value =
+              second[row] + (bias2 != nullptr ? Codec::Load(bias2[expert * hidden + row]) : 0.0f);
+          if (disjoint_results != nullptr) {
+            disjoint_results[slot * hidden + row] = route_weight * value;
+          } else {
+            result[row] += route_weight * value;
+          }
         }
       }
-      for (std::size_t row = 0; row < intermediate; ++row) {
-        if (swiglu) {
-          const float gate = std::min(first[2 * row], attributes.limit);
-          const float linear = std::clamp(first[2 * row + 1], -attributes.limit, attributes.limit);
-          const float arg = attributes.alpha * gate;
-          const float sigmoid =
-              arg > 0 ? 1.0f / (1.0f + std::exp(-arg)) : std::exp(arg) / (1.0f + std::exp(arg));
-          activated[row] = gate * sigmoid * (linear + attributes.beta);
-        } else {
-          activated[row] = Activate(first[row], attributes);
+    };
+    if (parallel_experts) {
+      const double expert_cost =
+          static_cast<double>(fc1_width) * hidden + static_cast<double>(hidden) * intermediate;
+      const ExecutionWorkCost cost{2.0 * expert_cost, static_cast<double>(sizeof(float) * hidden),
+                                   expert_cost};
+      const ExecutionSchedule schedule{2, 1, std::numeric_limits<std::int64_t>::max(), 0};
+      ExecuteCostedRanges(static_cast<std::int64_t>(attributes.k), cost, schedule, std::int64_t{1},
+                          [&](std::int64_t slot_begin, std::int64_t slot_end) {
+                            compute_slots(static_cast<std::size_t>(slot_begin),
+                                          static_cast<std::size_t>(slot_end),
+                                          expert_results.data());
+                          });
+      for (std::size_t slot = 0; slot < attributes.k; ++slot) {
+        for (std::size_t row = 0; row < hidden; ++row) {
+          result[row] += expert_results[slot * hidden + row];
         }
       }
-      for (std::size_t row = 0; row < hidden; ++row) {
-        Codec::Convert(fc2 + (expert * hidden + row) * intermediate, weight_row.data(),
-                       intermediate);
-        float value =
-            std::inner_product(activated.begin(), activated.end(), weight_row.begin(), 0.0f);
-        if (bias2 != nullptr) {
-          value += Codec::Load(bias2[expert * hidden + row]);
-        }
-        result[row] += (attributes.normalize ? weight / top_sum : weight) * value;
-      }
+    } else {
+      compute_slots(0, attributes.k, nullptr);
     }
     Codec::Store(result.data(), output + token * hidden, hidden);
   }
@@ -227,6 +296,11 @@ void Compute(const T *input, const T *router, const T *fc1, const T *bias1, cons
              const T *bias2, T *output, std::size_t tokens, std::size_t hidden, std::size_t experts,
              std::size_t intermediate, const MoEAttributes &attributes) {
   if (tokens == 0) {
+    return;
+  }
+  if (tokens == 1) {
+    ComputeRange(input, router, fc1, bias1, fc2, bias2, output, 0, 1, hidden, experts, intermediate,
+                 attributes);
     return;
   }
   const std::size_t fc1_width =
@@ -256,6 +330,11 @@ void ComputeLowPrecision(const std::uint16_t *input, const std::uint16_t *router
                          std::size_t experts, std::size_t intermediate,
                          const MoEAttributes &attributes) {
   if (tokens == 0) {
+    return;
+  }
+  if (tokens == 1) {
+    ComputeLowPrecisionRange<Codec>(input, router, fc1, bias1, fc2, bias2, output, 0, 1, hidden,
+                                    experts, intermediate, attributes);
     return;
   }
   const std::size_t fc1_width =

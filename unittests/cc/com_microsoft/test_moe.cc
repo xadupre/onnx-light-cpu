@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "onnx_light_cpu/impl/com_microsoft/moe.h"
+#include "onnx_light_cpu/impl/com_microsoft/moe_matvec.h"
 #include "onnx_light_cpu/impl/execution.h"
 #include "onnx_light_cpu/impl/math/half_conversion.h"
 
@@ -153,6 +154,61 @@ TEST(MoE, BFloat16UsesFloatAccumulation) {
              attributes);
 
   EXPECT_FLOAT_EQ(detail::Bfloat16BitsToFloat(output), 24.0f);
+}
+
+TEST(MoE, MatVecSimdWidthsAndTailsMatchReference) {
+  for (const std::size_t columns : {7, 8, 9, 15, 16, 17, 31, 32, 33, 63, 64, 65}) {
+    constexpr std::size_t rows = 3;
+    std::vector<float> input(columns);
+    std::vector<float> weights(rows * columns);
+    for (std::size_t column = 0; column < columns; ++column) {
+      input[column] = static_cast<float>(static_cast<int>(column % 7) - 3) / 8.0f;
+    }
+    for (std::size_t index = 0; index < weights.size(); ++index) {
+      weights[index] = static_cast<float>(static_cast<int>(index % 11) - 5) / 16.0f;
+    }
+    std::vector<std::uint16_t> float16_input(columns), bfloat16_input(columns);
+    std::vector<std::uint16_t> float16_weights(weights.size()), bfloat16_weights(weights.size());
+    detail::ConvertFloat32ToFloat16(input.data(), float16_input.data(), columns);
+    detail::ConvertFloat32ToBFloat16(input.data(), bfloat16_input.data(), columns);
+    detail::ConvertFloat32ToFloat16(weights.data(), float16_weights.data(), weights.size());
+    detail::ConvertFloat32ToBFloat16(weights.data(), bfloat16_weights.data(), weights.size());
+
+    std::vector<float> result(rows), float16_result(rows), bfloat16_result(rows);
+    std::vector<float> mixed_float16_result(rows), mixed_bfloat16_result(rows);
+    detail::MoEMatVecFloat32(input.data(), weights.data(), result.data(), rows, columns);
+    detail::MoEMatVecFloat16(float16_input.data(), float16_weights.data(), float16_result.data(),
+                             rows, columns);
+    detail::MoEMatVecBFloat16(bfloat16_input.data(), bfloat16_weights.data(),
+                              bfloat16_result.data(), rows, columns);
+    detail::MoEMatVecFloat32Float16(input.data(), float16_weights.data(),
+                                    mixed_float16_result.data(), rows, columns);
+    detail::MoEMatVecFloat32BFloat16(input.data(), bfloat16_weights.data(),
+                                     mixed_bfloat16_result.data(), rows, columns);
+
+    for (std::size_t row = 0; row < rows; ++row) {
+      float expected = 0.0f;
+      float float16_expected = 0.0f;
+      float bfloat16_expected = 0.0f;
+      float mixed_float16_expected = 0.0f;
+      float mixed_bfloat16_expected = 0.0f;
+      for (std::size_t column = 0; column < columns; ++column) {
+        const std::size_t index = row * columns + column;
+        expected += input[column] * weights[index];
+        const float float16_value = detail::Float16BitsToFloat(float16_weights[index]);
+        const float bfloat16_value = detail::Bfloat16BitsToFloat(bfloat16_weights[index]);
+        float16_expected += detail::Float16BitsToFloat(float16_input[column]) * float16_value;
+        bfloat16_expected += detail::Bfloat16BitsToFloat(bfloat16_input[column]) * bfloat16_value;
+        mixed_float16_expected += input[column] * float16_value;
+        mixed_bfloat16_expected += input[column] * bfloat16_value;
+      }
+      EXPECT_NEAR(result[row], expected, 1e-5f);
+      EXPECT_NEAR(float16_result[row], float16_expected, 1e-5f);
+      EXPECT_NEAR(bfloat16_result[row], bfloat16_expected, 1e-5f);
+      EXPECT_NEAR(mixed_float16_result[row], mixed_float16_expected, 1e-5f);
+      EXPECT_NEAR(mixed_bfloat16_result[row], mixed_bfloat16_expected, 1e-5f);
+    }
+  }
 }
 
 } // namespace

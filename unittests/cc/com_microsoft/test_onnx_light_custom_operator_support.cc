@@ -352,6 +352,28 @@ TEST(CustomOperatorSupport, InfersMoESymbolicShapeAndRejectsMismatch) {
                                        ctx.Get("fc1").Shape(), ctx.Get("fc2").Shape()}),
             0);
 
+  shapes_ns::ShapesContext qwen35;
+  qwen35.Set("input", SymTensor(nullptr, TensorType::kBfloat16, {SymDim(1), SymDim(2048)}));
+  qwen35.Set("router", SymTensor(nullptr, TensorType::kBfloat16, {SymDim(1), SymDim(256)}));
+  qwen35.Set("fc1",
+             SymTensor(nullptr, TensorType::kBfloat16, {SymDim(256), SymDim(1024), SymDim(2048)}));
+  qwen35.Set("fc2",
+             SymTensor(nullptr, TensorType::kBfloat16, {SymDim(256), SymDim(2048), SymDim(512)}));
+  NodeProto qwen35_node;
+  qwen35_node.set_domain(onnx_light_cpu::kMicrosoftDomain);
+  qwen35_node.set_op_type("MoE");
+  for (const char *name : {"input", "router", "fc1", "", "fc2", "", "", ""}) {
+    qwen35_node.add_input(name);
+  }
+  qwen35_node.add_output("output");
+  ONNX_LIGHT_NAMESPACE::AddAttribute(qwen35_node, "activation_type", std::string("swiglu"));
+  ONNX_LIGHT_NAMESPACE::AddAttribute(qwen35_node, "swiglu_fusion", int64_t{1});
+  ONNX_LIGHT_NAMESPACE::AddAttribute(qwen35_node, "normalize_routing_weights", int64_t{1});
+  ONNX_LIGHT_NAMESPACE::AddAttribute(qwen35_node, "k", int64_t{8});
+  onnx_light_cpu::ComputeShapeMoE(qwen35, qwen35_node);
+  EXPECT_EQ(qwen35.Get("output").Shape(), qwen35.Get("input").Shape());
+  EXPECT_EQ(qwen35.Get("output").Dtype(), TensorType::kBfloat16);
+
   shapes_ns::ShapesContext invalid;
   invalid.Set("input", SymTensor(nullptr, TensorType::kFloat, {SymDim(2), SymDim(8)}));
   invalid.Set("router", SymTensor(nullptr, TensorType::kFloat, {SymDim(2), SymDim(3)}));

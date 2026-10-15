@@ -954,9 +954,11 @@ int64_t ComputePeakMemoryMoE(sym_ns::Device, const std::vector<SymShape> &shapes
       CheckedIndexAdd(CheckedIndexAdd(width.AsInt(), intermediate.AsInt(), "MoE", "expert scratch"),
                       CheckedIndexMultiply(hidden.AsInt(), 2, "MoE", "expert scratch"), "MoE",
                       "expert scratch"),
-      CheckedIndexAdd(experts.AsInt(), std::max(hidden.AsInt(), intermediate.AsInt()), "MoE",
-                      "conversion scratch"),
-      "MoE", "expert scratch");
+      CheckedIndexAdd(
+          experts.AsInt(),
+          CheckedIndexMultiply(experts.AsInt(), hidden.AsInt(), "MoE", "parallel expert results"),
+          "MoE", "routing and expert results"),
+      "MoE", "scratch");
   return CheckedIndexAdd(bytes, CheckedIndexMultiply(values, 4, "MoE", "scratch"), "MoE",
                          "scratch");
 }

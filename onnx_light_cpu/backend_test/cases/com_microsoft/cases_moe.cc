@@ -24,12 +24,14 @@ namespace rt_ns = ONNX_LIGHT_NAMESPACE::core::runtime;
 using rt_ns::DataType;
 using rt_ns::Tensor;
 
-ONNX_LIGHT_NAMESPACE::NodeProto MakeNode(bool swiglu, bool normalize, int64_t k) {
+ONNX_LIGHT_NAMESPACE::NodeProto MakeNode(bool swiglu, bool normalize, int64_t k,
+                                         bool qwen35 = false) {
   ONNX_LIGHT_NAMESPACE::NodeProto node;
   node.set_domain(kMicrosoftDomain);
   node.set_op_type("MoE");
-  for (const char *name : {"input", "router_probs", "fc1_experts_weights", "fc1_experts_bias",
-                           "fc2_experts_weights", "fc2_experts_bias", "", ""}) {
+  for (const char *name :
+       {"input", "router_probs", "fc1_experts_weights", qwen35 ? "" : "fc1_experts_bias",
+        "fc2_experts_weights", qwen35 ? "" : "fc2_experts_bias", "", ""}) {
     node.add_input(name);
   }
   node.add_output("output");
@@ -39,7 +41,7 @@ ONNX_LIGHT_NAMESPACE::NodeProto MakeNode(bool swiglu, bool normalize, int64_t k)
   ONNX_LIGHT_NAMESPACE::AddAttribute(node, "swiglu_fusion", std::int64_t{swiglu ? 1 : 0});
   ONNX_LIGHT_NAMESPACE::AddAttribute(node, "normalize_routing_weights",
                                      std::int64_t{normalize ? 1 : 0});
-  if (swiglu) {
+  if (swiglu && !qwen35) {
     ONNX_LIGHT_NAMESPACE::AddAttribute(node, "activation_alpha", 1.702f);
     ONNX_LIGHT_NAMESPACE::AddAttribute(node, "activation_beta", 1.0f);
     ONNX_LIGHT_NAMESPACE::AddAttribute(node, "swiglu_limit", 7.0f);
@@ -65,6 +67,33 @@ bt_ns::IoData BuildData(int64_t tokens, int64_t hidden, int64_t intermediate, in
     const rt_ns::KernelContext ctx{rt_ns::OpsetId(kMicrosoftDomain, 1)};
     const MoEKernel kernel{MakeNode(swiglu, normalize, k), ctx};
     Tensor output = kernel(inputs[0], inputs[1], inputs[2], &inputs[3], inputs[4], &inputs[5]);
+    return bt_ns::IoData{std::move(inputs), {std::move(output)}};
+  };
+  return build_data();
+}
+
+bt_ns::IoData BuildQwen35ActiveExpertsData(DataType type, bool generate_expected_outputs) {
+  // Qwen3.5-35B-A3B routes each token to 8 of 256 experts. Keep the exact
+  // per-token projection dimensions and active-expert count without allocating
+  // the 1.5 GiB full BF16 expert bank in every benchmark process.
+  constexpr int64_t kTokens = 1;
+  constexpr int64_t kHidden = 2048;
+  constexpr int64_t kIntermediate = 512;
+  constexpr int64_t kActiveExperts = 8;
+  constexpr int64_t kTopK = 8;
+  std::vector<Tensor> inputs{
+      MakeBenchmarkTensor(type, {kTokens, kHidden}, 2001),
+      MakeBenchmarkTensor(type, {kTokens, kActiveExperts}, 2002),
+      MakeBenchmarkTensor(type, {kActiveExperts, 2 * kIntermediate, kHidden}, 2003),
+      MakeBenchmarkTensor(type, {kActiveExperts, kHidden, kIntermediate}, 2004),
+  };
+  if (!generate_expected_outputs) {
+    return bt_ns::IoData{std::move(inputs), {}, {}, false};
+  }
+  auto build_data = [&]() {
+    const rt_ns::KernelContext ctx{rt_ns::OpsetId(kMicrosoftDomain, 1)};
+    const MoEKernel kernel{MakeNode(true, true, kTopK, true), ctx};
+    Tensor output = kernel(inputs[0], inputs[1], inputs[2], nullptr, inputs[3], nullptr);
     return bt_ns::IoData{std::move(inputs), {std::move(output)}};
   };
   return build_data();
@@ -116,6 +145,36 @@ void RegisterCpuMoECases(std::vector<TestCase> &registry, TestMode mode) {
                                : type == DataType::FLOAT16 ? 5e-3
                                                            : 1e-6;
       }
+    }
+  }
+  if (benchmark) {
+    constexpr int64_t kTokens = 1;
+    constexpr int64_t kHidden = 2048;
+    constexpr int64_t kIntermediate = 512;
+    constexpr int64_t kActiveExperts = 8;
+    constexpr int64_t kTopK = 8;
+    for (const DataType type : {DataType::FLOAT, DataType::FLOAT16, DataType::BFLOAT16}) {
+      const auto node = MakeNode(true, true, kTopK, true);
+      const std::string name =
+          std::string("test_cpu_moe_qwen35_active_experts_") + DataTypeSuffix(type) + "_benchmark";
+      const std::vector<rt_ns::OpsetId> opsets = {rt_ns::DefaultOpset(23),
+                                                  rt_ns::OpsetId(kMicrosoftDomain, 1)};
+      bt_ns::Expect(registry, node, name, opsets,
+                    {kTokens * kHidden, kTokens * kActiveExperts,
+                     kActiveExperts * 2 * kIntermediate * kHidden,
+                     kActiveExperts * kHidden * kIntermediate},
+                    {kTokens * kHidden},
+                    [=](bool generate_expected_outputs) {
+                      return BuildQwen35ActiveExpertsData(type, generate_expected_outputs);
+                    },
+                    "backend-test", bt_ns::TestCaseTag::AI_RT,
+                    {bt_ns::TensorTypeSpec(static_cast<std::int32_t>(type), {kTokens, kHidden})});
+      registry.back().rtol = type == DataType::BFLOAT16  ? 3e-2
+                             : type == DataType::FLOAT16 ? 5e-3
+                                                         : 1e-5;
+      registry.back().atol = type == DataType::BFLOAT16  ? 3e-2
+                             : type == DataType::FLOAT16 ? 5e-3
+                                                         : 1e-6;
     }
   }
 }
