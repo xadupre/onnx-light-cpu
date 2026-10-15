@@ -83,7 +83,8 @@ int64_t ComputePeakMemoryLinearAttention(
 int64_t ComputePeakMemoryMatMulNBits(
     ONNX_LIGHT_NAMESPACE::core::symbolic::Device device,
     const std::vector<ONNX_LIGHT_NAMESPACE::core::symbolic::SymShape> &input_shapes);
-/// Returns the per-worker routing and expert scratch requirement for ``com.microsoft::MoE``.
+/// Returns a conservative whole-operator routing and expert scratch bound for
+/// ``com.microsoft::MoE``.
 int64_t ComputePeakMemoryMoE(
     ONNX_LIGHT_NAMESPACE::core::symbolic::Device device,
     const std::vector<ONNX_LIGHT_NAMESPACE::core::symbolic::SymShape> &input_shapes);

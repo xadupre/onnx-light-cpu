@@ -5,6 +5,7 @@
 #include "onnx_light_cpu/shapes/com_microsoft/shape_inference.h"
 
 #include "onnx_light_cpu/impl/checked_arithmetic.h"
+#include "onnx_light_cpu/impl/com_microsoft/moe.h"
 #include "onnx_light_cpu/schemas/com_microsoft/op_schema.h"
 #include "onnx_light_cpu/shapes/ai_onnx/shape_inference.h"
 
@@ -938,29 +939,32 @@ int64_t ComputePeakMemoryMatMulNBits(sym_ns::Device, const std::vector<SymShape>
 
 int64_t ComputePeakMemoryMoE(sym_ns::Device, const std::vector<SymShape> &shapes) {
   const std::size_t fc2_index = shapes.size() > 4 && shapes[4].Rank() == 3 ? 4 : 3;
-  if (shapes.size() <= fc2_index || shapes[0].Rank() < 2 || shapes[1].Rank() != 2 ||
-      shapes[2].Rank() != 3 || shapes[fc2_index].Rank() != 3) {
+  if (shapes.size() <= fc2_index || (shapes[0].Rank() != 2 && shapes[0].Rank() != 3) ||
+      shapes[1].Rank() != 2 || shapes[2].Rank() != 3 || shapes[fc2_index].Rank() != 3) {
     return 0;
   }
+  const auto &batch = shapes[0][0];
+  const auto &sequence = shapes[0].Rank() == 3 ? shapes[0][1] : sym_ns::SymDim(1);
   const auto &experts = shapes[1][1];
   const auto &hidden = shapes[0][shapes[0].Rank() - 1];
   const auto &width = shapes[2][1];
   const auto &intermediate = shapes[fc2_index][2];
-  if (!experts.IsInt() || !hidden.IsInt() || !width.IsInt() || !intermediate.IsInt()) {
+  if (!batch.IsInt() || !sequence.IsInt() || !experts.IsInt() || !hidden.IsInt() ||
+      !width.IsInt() || !intermediate.IsInt()) {
     return 0;
   }
-  const auto bytes = CheckedIndexMultiply(experts.AsInt(), 16, "MoE", "routing scratch");
-  const auto values = CheckedIndexAdd(
-      CheckedIndexAdd(CheckedIndexAdd(width.AsInt(), intermediate.AsInt(), "MoE", "expert scratch"),
-                      CheckedIndexMultiply(hidden.AsInt(), 2, "MoE", "expert scratch"), "MoE",
-                      "expert scratch"),
-      CheckedIndexAdd(
-          experts.AsInt(),
-          CheckedIndexMultiply(experts.AsInt(), hidden.AsInt(), "MoE", "parallel expert results"),
-          "MoE", "routing and expert results"),
-      "MoE", "scratch");
-  return CheckedIndexAdd(bytes, CheckedIndexMultiply(values, 4, "MoE", "scratch"), "MoE",
-                         "scratch");
+  const std::size_t tokens =
+      CheckedMultiply(CheckedDimension(batch.AsInt(), "MoE", "batch"),
+                      CheckedDimension(sequence.AsInt(), "MoE", "sequence"), "MoE", "token count");
+  const std::size_t bytes =
+      ComputeMoEMaxScratchBytes(tokens, CheckedDimension(hidden.AsInt(), "MoE", "hidden"),
+                                CheckedDimension(experts.AsInt(), "MoE", "experts"),
+                                CheckedDimension(width.AsInt(), "MoE", "fc1 width"),
+                                CheckedDimension(intermediate.AsInt(), "MoE", "intermediate"));
+  if (bytes > static_cast<std::size_t>(std::numeric_limits<std::int64_t>::max())) {
+    throw std::overflow_error("ComputePeakMemoryMoE: scratch-memory size overflow.");
+  }
+  return static_cast<std::int64_t>(bytes);
 }
 
 int64_t ComputePeakMemorySkipLayerNormalization(sym_ns::Device, const std::vector<SymShape> &) {

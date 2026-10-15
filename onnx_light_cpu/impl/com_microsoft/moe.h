@@ -26,9 +26,33 @@ enum class MoEDataType {
   kBFloat16,
 };
 
+struct MoERoute {
+  float weight = 0.0f;
+  std::size_t expert = 0;
+};
+
+struct MoEScratchSize {
+  std::size_t route_count = 0;
+  std::size_t value_count = 0;
+};
+
+struct MoEScratch {
+  MoERoute *routes = nullptr;
+  std::size_t route_count = 0;
+  float *values = nullptr;
+  std::size_t value_count = 0;
+};
+
+MoEScratchSize ComputeMoEScratchSize(std::size_t tokens, std::size_t hidden, std::size_t experts,
+                                     std::size_t intermediate, MoEDataType data_type,
+                                     const MoEAttributes &attributes);
+
+std::size_t ComputeMoEMaxScratchBytes(std::size_t tokens, std::size_t hidden, std::size_t experts,
+                                      std::size_t fc1_width, std::size_t intermediate);
+
 void ComputeMoE(const void *input, const void *router, const void *fc1, const void *bias1,
                 const void *fc2, const void *bias2, void *output, std::size_t tokens,
                 std::size_t hidden, std::size_t experts, std::size_t intermediate,
-                MoEDataType data_type, const MoEAttributes &attributes);
+                MoEDataType data_type, const MoEAttributes &attributes, MoEScratch scratch);
 
 } // namespace onnx_light_cpu

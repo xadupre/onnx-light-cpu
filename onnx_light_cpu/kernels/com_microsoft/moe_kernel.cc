@@ -10,6 +10,7 @@
 
 #include "onnx_core/runtime/kernels/kernel_dispatch_table.h"
 #include "onnx_core/runtime/kernels/node_helpers.h"
+#include "onnx_core/runtime/memory/temporary_buffer.h"
 #include "onnx_core/symbolic/sym_tensor.h"
 
 #include <algorithm>
@@ -131,16 +132,23 @@ Tensor MoEKernel::operator()(const Tensor &input, const Tensor &router, const Te
   CheckedMultiply(rows, experts, "MoE", "router elements");
   const auto bytes = CheckedByteSize(CheckedMultiply(rows, hidden, "MoE", "output elements"),
                                      input.element_size(), "MoE", "output bytes");
-  Tensor output = rt != nullptr
-                      ? rt->MakeOutputTensor(0, input.data_type, input.shape, bytes)
-                      : rt_ns::MakeOutputTensor(input.data_type, input.shape, bytes, nullptr);
+  rt_ns::RawBufferAllocator *allocator = rt != nullptr ? rt->execution_allocator() : ctx_.allocator;
+  Tensor output =
+      rt != nullptr ? rt->MakeOutputTensor(0, input.data_type, input.shape, bytes)
+                    : rt_ns::MakeOutputTensor(input.data_type, input.shape, bytes, ctx_.allocator);
+  const MoEDataType data_type = dtype == DataType::FLOAT     ? MoEDataType::kFloat32
+                                : dtype == DataType::FLOAT16 ? MoEDataType::kFloat16
+                                                             : MoEDataType::kBFloat16;
+  const MoEScratchSize scratch_size =
+      ComputeMoEScratchSize(rows, hidden, experts, intermediate, data_type, attributes_);
+  rt_ns::detail::TemporaryTypedBuffer<MoERoute> routes(scratch_size.route_count, allocator,
+                                                       "MoE routing scratch");
+  rt_ns::detail::TemporaryTypedBuffer<float> values(scratch_size.value_count, allocator,
+                                                    "MoE value scratch");
   ComputeMoE(input.bytes(), router.bytes(), fc1.bytes(), bias1 ? bias1->bytes() : nullptr,
              fc2.bytes(), bias2 ? bias2->bytes() : nullptr, output.mutable_bytes(), rows, hidden,
-             experts, intermediate,
-             dtype == DataType::FLOAT     ? MoEDataType::kFloat32
-             : dtype == DataType::FLOAT16 ? MoEDataType::kFloat16
-                                          : MoEDataType::kBFloat16,
-             attributes_);
+             experts, intermediate, data_type, attributes_,
+             {routes.data(), scratch_size.route_count, values.data(), scratch_size.value_count});
   return output;
 }
 

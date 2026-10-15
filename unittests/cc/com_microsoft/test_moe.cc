@@ -9,12 +9,38 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
 #include <cmath>
 #include <cstdint>
+#include <stdexcept>
 #include <vector>
 
 namespace onnx_light_cpu {
 namespace {
+
+struct ScratchStorage {
+  std::vector<MoERoute> routes;
+  std::vector<float> values;
+
+  ScratchStorage(std::size_t tokens, std::size_t hidden, std::size_t experts,
+                 std::size_t intermediate, MoEDataType data_type, const MoEAttributes &attributes) {
+    const MoEScratchSize size =
+        ComputeMoEScratchSize(tokens, hidden, experts, intermediate, data_type, attributes);
+    routes.resize(size.route_count);
+    values.resize(size.value_count);
+  }
+
+  MoEScratch Get() { return {routes.data(), routes.size(), values.data(), values.size()}; }
+};
+
+void RunMoE(const void *input, const void *router, const void *fc1, const void *bias1,
+            const void *fc2, const void *bias2, void *output, std::size_t tokens,
+            std::size_t hidden, std::size_t experts, std::size_t intermediate,
+            MoEDataType data_type, const MoEAttributes &attributes) {
+  ScratchStorage scratch(tokens, hidden, experts, intermediate, data_type, attributes);
+  ComputeMoE(input, router, fc1, bias1, fc2, bias2, output, tokens, hidden, experts, intermediate,
+             data_type, attributes, scratch.Get());
+}
 
 struct InlineExecutor {
   std::int64_t dispatches = 0;
@@ -45,14 +71,14 @@ TEST(MoE, SelectsTopExpertsAndNormalizes) {
   attributes.activation = "identity";
   attributes.k = 2;
   attributes.normalize = true;
-  ComputeMoE(input, router, fc1, nullptr, fc2, nullptr, output, 1, 2, 3, 1, MoEDataType::kFloat32,
-             attributes);
+  RunMoE(input, router, fc1, nullptr, fc2, nullptr, output, 1, 2, 3, 1, MoEDataType::kFloat32,
+         attributes);
   const float top = std::exp(2.0f) / (std::exp(1.0f) + std::exp(2.0f));
   EXPECT_NEAR(output[0], 1.0f + 2.0f * top, 1e-5f);
   EXPECT_NEAR(output[1], 2.0f + 2.0f * top, 1e-5f);
   attributes.normalize = false;
-  ComputeMoE(input, router, fc1, nullptr, fc2, nullptr, output, 1, 2, 3, 1, MoEDataType::kFloat32,
-             attributes);
+  RunMoE(input, router, fc1, nullptr, fc2, nullptr, output, 1, 2, 3, 1, MoEDataType::kFloat32,
+         attributes);
   EXPECT_LT(output[0], 1.0f + 2.0f * top);
 }
 
@@ -67,8 +93,8 @@ TEST(MoE, InterleavedSwiGLUAndFloat16Output) {
   attributes.limit = 1.0f;
   attributes.alpha = 2.0f;
   attributes.beta = 0.5f;
-  ComputeMoE(input, router, fc1, nullptr, fc2, nullptr, output, 1, 1, 1, 1, MoEDataType::kFloat32,
-             attributes);
+  RunMoE(input, router, fc1, nullptr, fc2, nullptr, output, 1, 1, 1, 1, MoEDataType::kFloat32,
+         attributes);
   EXPECT_NEAR(output[0], 3.0f * (1.0f / (1.0f + std::exp(-2.0f))) * 1.5f, 1e-5f);
 
   const std::uint16_t half_input[] = {detail::FloatToFloat16Bits(2.0f)};
@@ -77,16 +103,16 @@ TEST(MoE, InterleavedSwiGLUAndFloat16Output) {
                                     detail::FloatToFloat16Bits(2.0f)};
   const std::uint16_t half_fc2[] = {detail::FloatToFloat16Bits(3.0f)};
   std::uint16_t half_output[] = {0};
-  ComputeMoE(half_input, half_router, half_fc1, nullptr, half_fc2, nullptr, half_output, 1, 1, 1, 1,
-             MoEDataType::kFloat16, attributes);
+  RunMoE(half_input, half_router, half_fc1, nullptr, half_fc2, nullptr, half_output, 1, 1, 1, 1,
+         MoEDataType::kFloat16, attributes);
   EXPECT_NEAR(detail::Float16BitsToFloat(half_output[0]), output[0], 0.01f);
 }
 
 TEST(MoE, EmptyTokensDoNotReadRouter) {
   MoEAttributes attributes;
   float output = 42.0f;
-  ComputeMoE(nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, &output, 0, 2, 1, 1,
-             MoEDataType::kFloat32, attributes);
+  RunMoE(nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, &output, 0, 2, 1, 1,
+         MoEDataType::kFloat32, attributes);
   EXPECT_FLOAT_EQ(output, 42.0f);
 }
 
@@ -104,8 +130,8 @@ TEST(MoE, UsesRuntimeExecutorAcrossIndependentTokens) {
   ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run, &InlineExecutor::Plan};
   {
     ExecutionExecutorScope scope(&view);
-    ComputeMoE(input.data(), router.data(), fc1, nullptr, fc2, nullptr, output.data(), tokens, 1, 1,
-               1, MoEDataType::kFloat32, attributes);
+    RunMoE(input.data(), router.data(), fc1, nullptr, fc2, nullptr, output.data(), tokens, 1, 1, 1,
+           MoEDataType::kFloat32, attributes);
   }
 
   EXPECT_EQ(executor.dispatches, 1);
@@ -113,6 +139,25 @@ TEST(MoE, UsesRuntimeExecutorAcrossIndependentTokens) {
   for (float value : output) {
     EXPECT_FLOAT_EQ(value, 24.0f);
   }
+}
+
+TEST(MoE, RejectsMissingScratchBeforeParallelDispatch) {
+  InlineExecutor executor;
+  ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run, &InlineExecutor::Plan};
+  ExecutionExecutorScope scope(&view);
+  MoEAttributes attributes;
+  attributes.activation = "identity";
+
+  EXPECT_THROW(ComputeMoE(nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, 8, 1, 1, 1,
+                          MoEDataType::kFloat32, attributes, {}),
+               std::invalid_argument);
+  EXPECT_EQ(executor.dispatches, 0);
+
+  attributes.k = 2;
+  EXPECT_THROW(ComputeMoE(nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, 1, 1024, 2,
+                          512, MoEDataType::kFloat32, attributes, {}),
+               std::invalid_argument);
+  EXPECT_EQ(executor.dispatches, 0);
 }
 
 TEST(MoE, SingleTokenAndNestedExecutionRemainSerial) {
@@ -128,12 +173,13 @@ TEST(MoE, SingleTokenAndNestedExecutionRemainSerial) {
   ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run, &InlineExecutor::Plan};
   {
     ExecutionExecutorScope scope(&view);
-    ComputeMoE(input.data(), router.data(), fc1, nullptr, fc2, nullptr, &output, 1, 1, 1, 1,
-               MoEDataType::kFloat32, attributes);
+    RunMoE(input.data(), router.data(), fc1, nullptr, fc2, nullptr, &output, 1, 1, 1, 1,
+           MoEDataType::kFloat32, attributes);
+    ScratchStorage nested_scratch(8, 1, 1, 1, MoEDataType::kFloat32, attributes);
+    std::array<float, 8> nested_output{};
     ExecuteRanges(2, ExecutionSchedule{1, 1, 4, 0}, [&](std::int64_t, std::int64_t) {
-      std::vector<float> nested_output(8);
       ComputeMoE(input.data(), router.data(), fc1, nullptr, fc2, nullptr, nested_output.data(), 8,
-                 1, 1, 1, MoEDataType::kFloat32, attributes);
+                 1, 1, 1, MoEDataType::kFloat32, attributes, nested_scratch.Get());
     });
   }
 
@@ -150,8 +196,8 @@ TEST(MoE, BFloat16UsesFloatAccumulation) {
   MoEAttributes attributes;
   attributes.activation = "identity";
 
-  ComputeMoE(input, router, fc1, nullptr, fc2, nullptr, &output, 1, 1, 1, 1, MoEDataType::kBFloat16,
-             attributes);
+  RunMoE(input, router, fc1, nullptr, fc2, nullptr, &output, 1, 1, 1, 1, MoEDataType::kBFloat16,
+         attributes);
 
   EXPECT_FLOAT_EQ(detail::Bfloat16BitsToFloat(output), 24.0f);
 }

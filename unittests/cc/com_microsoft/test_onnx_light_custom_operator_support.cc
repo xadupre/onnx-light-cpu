@@ -3,7 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "onnx_light_cpu/gradient/com_microsoft/gradients.h"
+#include "onnx_light_cpu/impl/com_microsoft/moe.h"
 #include "onnx_light_cpu/impl/math/half_conversion.h"
+#include "onnx_light_cpu/kernels/com_microsoft/moe_kernel.h"
 #include "onnx_light_cpu/kernels/register_kernels.h"
 #include "onnx_light_cpu/patterns/com_microsoft/patterns.h"
 #include "onnx_light_cpu/schemas/com_microsoft/op_schema.h"
@@ -341,15 +343,39 @@ TEST(CustomOperatorSupport, InfersMoESymbolicShapeAndRejectsMismatch) {
   EXPECT_EQ(ctx.Get("output").Shape(), ctx.Get("input").Shape());
   EXPECT_EQ(ctx.Get("output").Dtype(), TensorType::kFloat16);
   EXPECT_EQ(ctx.Constraints().size(), 1U);
-  EXPECT_GT(onnx_light_cpu::ComputePeakMemoryMoE(sym_ns::Device::kCPU, {ctx.Get("input").Shape(),
+  EXPECT_EQ(onnx_light_cpu::ComputePeakMemoryMoE(sym_ns::Device::kCPU, {ctx.Get("input").Shape(),
                                                                         ctx.Get("router").Shape(),
                                                                         ctx.Get("fc1").Shape(),
                                                                         {},
                                                                         ctx.Get("fc2").Shape()}),
             0);
-  EXPECT_GT(onnx_light_cpu::ComputePeakMemoryMoE(
+  EXPECT_EQ(onnx_light_cpu::ComputePeakMemoryMoE(
                 sym_ns::Device::kCPU, {ctx.Get("input").Shape(), ctx.Get("router").Shape(),
                                        ctx.Get("fc1").Shape(), ctx.Get("fc2").Shape()}),
+            0);
+  const sym_ns::SymShape router_shape{SymDim(8), SymDim(3)};
+  const sym_ns::SymShape fc1_shape{SymDim(3), SymDim(10), SymDim(8)};
+  const sym_ns::SymShape fc2_shape{SymDim(3), SymDim(8), SymDim(5)};
+  const std::int64_t expected_scratch =
+      8 * 3 * static_cast<std::int64_t>(sizeof(onnx_light_cpu::MoERoute)) +
+      8 * (3 + 10 + 5 + 2 * 8) * static_cast<std::int64_t>(sizeof(float));
+  EXPECT_EQ(onnx_light_cpu::ComputePeakMemoryMoE(
+                sym_ns::Device::kCPU,
+                {sym_ns::SymShape{SymDim(8), SymDim(8)}, router_shape, fc1_shape, {}, fc2_shape}),
+            expected_scratch);
+  EXPECT_EQ(onnx_light_cpu::ComputePeakMemoryMoE(sym_ns::Device::kCPU,
+                                                 {sym_ns::SymShape{SymDim(2), SymDim(4), SymDim(8)},
+                                                  router_shape,
+                                                  fc1_shape,
+                                                  {},
+                                                  fc2_shape}),
+            expected_scratch);
+  EXPECT_EQ(onnx_light_cpu::ComputePeakMemoryMoE(sym_ns::Device::kCPU,
+                                                 {sym_ns::SymShape{SymDim(int64_t{0}), SymDim(8)},
+                                                  sym_ns::SymShape{SymDim(int64_t{0}), SymDim(3)},
+                                                  fc1_shape,
+                                                  {},
+                                                  fc2_shape}),
             0);
 
   shapes_ns::ShapesContext qwen35;
@@ -380,6 +406,32 @@ TEST(CustomOperatorSupport, InfersMoESymbolicShapeAndRejectsMismatch) {
   invalid.Set("fc1", SymTensor(nullptr, TensorType::kFloat, {SymDim(3), SymDim(9), SymDim(8)}));
   invalid.Set("fc2", SymTensor(nullptr, TensorType::kFloat, {SymDim(3), SymDim(8), SymDim(5)}));
   EXPECT_THROW(onnx_light_cpu::ComputeShapeMoE(invalid, node), std::invalid_argument);
+}
+
+TEST(CustomOperatorSupport, MoEUsesRuntimeAllocatorForAllStorage) {
+  rt_ns::SimpleRawBufferAllocator allocator(3);
+  const rt_ns::KernelContext context{rt_ns::OpsetId(onnx_light_cpu::kMicrosoftDomain, 1),
+                                     &allocator};
+  NodeProto node;
+  const onnx_light_cpu::MoEKernel kernel(node, context);
+  const Tensor input = Tensor::FromFloat("", {1, 1}, {2.0f});
+  const Tensor router = Tensor::FromFloat("", {1, 1}, {0.0f});
+  const Tensor fc1 = Tensor::FromFloat("", {1, 1, 1}, {3.0f});
+  const Tensor fc2 = Tensor::FromFloat("", {1, 1, 1}, {4.0f});
+  const onnx_light_cpu::MoEAttributes attributes;
+  const onnx_light_cpu::MoEScratchSize scratch_size = onnx_light_cpu::ComputeMoEScratchSize(
+      1, 1, 1, 1, onnx_light_cpu::MoEDataType::kFloat32, attributes);
+  const std::size_t expected_peak = sizeof(float) +
+                                    scratch_size.route_count * sizeof(onnx_light_cpu::MoERoute) +
+                                    scratch_size.value_count * sizeof(float);
+
+  {
+    const Tensor output = kernel(input, router, fc1, nullptr, fc2, nullptr);
+    EXPECT_FLOAT_EQ(*reinterpret_cast<const float *>(output.bytes()), 24.0f);
+    EXPECT_EQ(allocator.allocated_count(), 1U);
+    EXPECT_EQ(allocator.PeakAllocatedSize(), expected_peak);
+  }
+  EXPECT_EQ(allocator.allocated_count(), 0U);
 }
 
 TEST(CustomOperatorSupport, InfersCDistShapeAndConstraint) {
