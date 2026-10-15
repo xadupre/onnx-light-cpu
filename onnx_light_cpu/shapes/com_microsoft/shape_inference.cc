@@ -123,6 +123,62 @@ EncodedMatMulNBitsShape InspectEncodedMatMulNBitsShape(const ShapesContext &ctx,
   return {k, n, format_bits, block_size, logical.elem_type(), root.structure().field().size() == 4};
 }
 
+void ValidateStructuredMatMulNBitsType(const ShapesContext &ctx, const std::string &name,
+                                       std::int64_t k, std::int64_t n, std::int64_t bits,
+                                       sym_ns::TensorType data_type) {
+  const auto &declared = ctx.GetType(name);
+  if (!declared.has_struct_type()) {
+    return;
+  }
+  const auto &root = ctx.ResolveStructType(declared.struct_type());
+  const bool is_int3 = root.name().value() == kMatMulNBitsInt3Format;
+  if (!is_int3) {
+    if (bits == 3) {
+      throw std::invalid_argument("ComputeShapeMatMulNBits: INT3 requires an INT3 structured B.");
+    }
+    return;
+  }
+  if (bits != 3 || !root.has_structure() ||
+      (root.structure().field().size() != 3 && root.structure().field().size() != 4)) {
+    throw std::invalid_argument("ComputeShapeMatMulNBits: invalid INT3 structured B.");
+  }
+
+  const auto &fields = root.structure().field();
+  const auto &parameters = fields[0];
+  if (parameters.name() != "parameters" || !parameters.has_constant() ||
+      parameters.constant().data_type() != ONNX_LIGHT_NAMESPACE::TensorProto::INT64 ||
+      parameters.constant().dims().size() != 1 || parameters.constant().dims(0) != 2 ||
+      parameters.constant().int64_data().size() != 2 || parameters.constant().int64_data(0) != 3 ||
+      parameters.constant().int64_data(1) != 32) {
+    throw std::invalid_argument("ComputeShapeMatMulNBits: invalid INT3 parameters.");
+  }
+
+  const std::int64_t blocks = k / 32 + (k % 32 != 0 ? 1 : 0);
+  const auto matches = [n, blocks](const auto &field, const char *field_name,
+                                   std::int32_t elem_type, std::int64_t third = -1) {
+    if (field.name() != field_name || !field.has_type() || !field.type().has_tensor_type()) {
+      return false;
+    }
+    const auto &tensor = field.type().tensor_type();
+    const auto &dimensions = tensor.shape().dim();
+    const std::size_t rank = third < 0 ? 2 : 3;
+    return tensor.elem_type() == elem_type && tensor.has_shape() && dimensions.size() == rank &&
+           dimensions[0].has_dim_value() && dimensions[0].dim_value() == n &&
+           dimensions[1].has_dim_value() && dimensions[1].dim_value() == blocks &&
+           (third < 0 || (dimensions[2].has_dim_value() && dimensions[2].dim_value() == third));
+  };
+  const std::int32_t scale_type =
+      data_type == sym_ns::TensorType::kFloat     ? ONNX_LIGHT_NAMESPACE::TensorProto::FLOAT
+      : data_type == sym_ns::TensorType::kFloat16 ? ONNX_LIGHT_NAMESPACE::TensorProto::FLOAT16
+                                                  : ONNX_LIGHT_NAMESPACE::TensorProto::BFLOAT16;
+  if (!matches(fields[1], "B", ONNX_LIGHT_NAMESPACE::TensorProto::UINT8, 12) ||
+      !matches(fields[2], "scales", scale_type) ||
+      (fields.size() == 4 &&
+       !matches(fields[3], "zero_points", ONNX_LIGHT_NAMESPACE::TensorProto::UINT8))) {
+    throw std::invalid_argument("ComputeShapeMatMulNBits: invalid INT3 structured fields.");
+  }
+}
+
 void RequireInputs(const ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE::NodeProto &node,
                    const char *op_type) {
   if (node.input_size() != 2 || node.output_size() != 1 || !ctx.Has(node.input(0)) ||
@@ -485,6 +541,9 @@ void ComputeShapeMatMulNBits(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE::Nod
   }
   if (a.Shape().Rank() == 0) {
     throw std::invalid_argument("ComputeShapeMatMulNBits: A must have positive rank.");
+  }
+  if (has_structured_type) {
+    ValidateStructuredMatMulNBitsType(ctx, node.input(1), k, n, bits, a.Dtype());
   }
   const std::int64_t blocks = (k + 31) / 32;
   ConstrainEqual(ctx, a.Shape()[a.Shape().Rank() - 1], sym_ns::SymDim(k),
