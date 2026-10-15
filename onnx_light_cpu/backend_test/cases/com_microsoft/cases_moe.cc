@@ -71,7 +71,7 @@ bt_ns::IoData BuildData(int64_t tokens, int64_t hidden, int64_t intermediate, in
 
 void RegisterCpuMoECases(std::vector<TestCase> &registry, TestMode mode) {
   const bool benchmark = mode == TestMode::BENCHMARK;
-  for (const DataType type : {DataType::FLOAT, DataType::FLOAT16}) {
+  for (const DataType type : {DataType::FLOAT, DataType::FLOAT16, DataType::BFLOAT16}) {
     for (const bool swiglu : {false, true}) {
       for (const bool normalize : {false, true}) {
         const auto tokens = benchmark ? 8 : 2;
@@ -106,8 +106,12 @@ void RegisterCpuMoECases(std::vector<TestCase> &registry, TestMode mode) {
               },
               "backend-test", bt_ns::TestCaseTag::AI_RT);
         }
-        registry.back().rtol = type == DataType::FLOAT16 ? 1e-2 : 1e-5;
-        registry.back().atol = type == DataType::FLOAT16 ? 1e-2 : 1e-6;
+        registry.back().rtol = type == DataType::BFLOAT16  ? 3e-2
+                               : type == DataType::FLOAT16 ? 5e-3
+                                                           : 1e-5;
+        registry.back().atol = type == DataType::BFLOAT16  ? 3e-2
+                               : type == DataType::FLOAT16 ? 5e-3
+                                                           : 1e-6;
       }
     }
   }

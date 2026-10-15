@@ -77,8 +77,9 @@ Tensor MoEKernel::operator()(const Tensor &input, const Tensor &router, const Te
                              const Tensor *bias1, const Tensor &fc2, const Tensor *bias2,
                              rt_ns::RuntimeContext *rt) const {
   const auto dtype = static_cast<DataType>(input.data_type);
-  if (dtype != DataType::FLOAT && dtype != DataType::FLOAT16) {
-    throw std::invalid_argument("MoE: only FLOAT and FLOAT16 are supported by the CPU kernel.");
+  if (dtype != DataType::FLOAT && dtype != DataType::FLOAT16 && dtype != DataType::BFLOAT16) {
+    throw std::invalid_argument(
+        "MoE: only FLOAT, FLOAT16 and BFLOAT16 are supported by the CPU kernel.");
   }
   for (const Tensor *tensor : {&router, &fc1, bias1, &fc2, bias2}) {
     if (tensor != nullptr && tensor->data_type != input.data_type) {
@@ -135,7 +136,11 @@ Tensor MoEKernel::operator()(const Tensor &input, const Tensor &router, const Te
                       : rt_ns::MakeOutputTensor(input.data_type, input.shape, bytes, nullptr);
   ComputeMoE(input.bytes(), router.bytes(), fc1.bytes(), bias1 ? bias1->bytes() : nullptr,
              fc2.bytes(), bias2 ? bias2->bytes() : nullptr, output.mutable_bytes(), rows, hidden,
-             experts, intermediate, dtype == DataType::FLOAT16, attributes_);
+             experts, intermediate,
+             dtype == DataType::FLOAT     ? MoEDataType::kFloat32
+             : dtype == DataType::FLOAT16 ? MoEDataType::kFloat16
+                                          : MoEDataType::kBFloat16,
+             attributes_);
   return output;
 }
 
@@ -168,7 +173,7 @@ void RegisterMoEKernel() {
   info.op_type = "MoE";
   info.device = sym_ns::Device::kCPU;
   info.kernel_name = MoEKernel::kName;
-  info.types = {DataType::FLOAT, DataType::FLOAT16};
+  info.types = {DataType::FLOAT, DataType::FLOAT16, DataType::BFLOAT16};
   info.since_version = 1;
   info.until_version = 1;
   RegisterKernel(std::move(info), std::move(factory));

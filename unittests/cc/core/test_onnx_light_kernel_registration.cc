@@ -135,7 +135,7 @@ TEST(KernelRegistration, CollectionReportsEveryActualRegistration) {
        "MoE",
        sym_ns::Device::kCPU,
        "onnx_light_cpu::MoE",
-       {rt_ns::DataType::FLOAT, rt_ns::DataType::FLOAT16},
+       {rt_ns::DataType::FLOAT, rt_ns::DataType::FLOAT16, rt_ns::DataType::BFLOAT16},
        1,
        1},
       {"com.microsoft",

@@ -376,7 +376,8 @@ void ComputeShapeMoE(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE::NodeProto &
   const auto &fc2 = ctx.Get(node.input(4));
   const auto type = input.Dtype();
   if ((type != ONNX_LIGHT_NAMESPACE::core::schema::TensorType::kFloat &&
-       type != ONNX_LIGHT_NAMESPACE::core::schema::TensorType::kFloat16) ||
+       type != ONNX_LIGHT_NAMESPACE::core::schema::TensorType::kFloat16 &&
+       type != ONNX_LIGHT_NAMESPACE::core::schema::TensorType::kBfloat16) ||
       router.Dtype() != type || fc1.Dtype() != type || fc2.Dtype() != type ||
       (input.Shape().Rank() != 2 && input.Shape().Rank() != 3) || router.Shape().Rank() != 2 ||
       fc1.Shape().Rank() != 3 || fc2.Shape().Rank() != 3) {
@@ -950,8 +951,12 @@ int64_t ComputePeakMemoryMoE(sym_ns::Device, const std::vector<SymShape> &shapes
   }
   const auto bytes = CheckedIndexMultiply(experts.AsInt(), 16, "MoE", "routing scratch");
   const auto values = CheckedIndexAdd(
-      CheckedIndexAdd(width.AsInt(), intermediate.AsInt(), "MoE", "expert scratch"),
-      CheckedIndexMultiply(hidden.AsInt(), 2, "MoE", "expert scratch"), "MoE", "expert scratch");
+      CheckedIndexAdd(CheckedIndexAdd(width.AsInt(), intermediate.AsInt(), "MoE", "expert scratch"),
+                      CheckedIndexMultiply(hidden.AsInt(), 2, "MoE", "expert scratch"), "MoE",
+                      "expert scratch"),
+      CheckedIndexAdd(experts.AsInt(), std::max(hidden.AsInt(), intermediate.AsInt()), "MoE",
+                      "conversion scratch"),
+      "MoE", "expert scratch");
   return CheckedIndexAdd(bytes, CheckedIndexMultiply(values, 4, "MoE", "scratch"), "MoE",
                          "scratch");
 }

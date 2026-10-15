@@ -6,6 +6,7 @@
 
 import unittest
 
+import ml_dtypes
 import numpy as np
 import onnxruntime
 
@@ -33,7 +34,11 @@ def _moe_node(inputs, activation="swiglu", k=2, normalize=True):
 
 def _model(shape, dtype, activation="swiglu", k=2, normalize=True):
     rng = np.random.default_rng(897)
-    numpy_dtype = np.float32 if dtype == TensorProto.FLOAT else np.float16
+    numpy_dtype = {
+        TensorProto.FLOAT: np.float32,
+        TensorProto.FLOAT16: np.float16,
+        TensorProto.BFLOAT16: ml_dtypes.bfloat16,
+    }[dtype]
     tokens = int(np.prod(shape[:-1]))
     experts, intermediate, hidden = 3, 5, shape[-1]
     arrays = {
@@ -113,13 +118,13 @@ def _decoder():
 
 class TestMoE(ExtTestCase):
     def test_routing_activation_normalization_and_dtype_against_ort(self):
-        for dtype in (TensorProto.FLOAT, TensorProto.FLOAT16):
+        for dtype in (TensorProto.FLOAT, TensorProto.FLOAT16, TensorProto.BFLOAT16):
             for shape in ((2, 8), (1, 2, 8)):
                 for activation in ("relu", "gelu", "silu", "identity", "swiglu"):
                     for k, normalize in ((1, False), (2, True), (3, False)):
                         with self.subTest(dtype=dtype, shape=shape, activation=activation, k=k):
                             model, feeds = _model(shape, dtype, activation, k, normalize)
-                            if dtype == TensorProto.FLOAT16:
+                            if dtype != TensorProto.FLOAT:
                                 reference_model, _ = _model(
                                     shape, TensorProto.FLOAT, activation, k, normalize
                                 )
@@ -132,9 +137,17 @@ class TestMoE(ExtTestCase):
                             actual = _light_run(model, feeds)[0]
                             self.assertEqual(
                                 actual.dtype,
-                                np.float16 if dtype == TensorProto.FLOAT16 else np.float32,
+                                {
+                                    TensorProto.FLOAT: np.float32,
+                                    TensorProto.FLOAT16: np.float16,
+                                    TensorProto.BFLOAT16: ml_dtypes.bfloat16,
+                                }[dtype],
                             )
-                            tolerance = 3e-2 if dtype == TensorProto.FLOAT16 else 1e-4
+                            tolerance = {
+                                TensorProto.FLOAT: 1e-4,
+                                TensorProto.FLOAT16: 5e-3,
+                                TensorProto.BFLOAT16: 3e-2,
+                            }[dtype]
                             np.testing.assert_allclose(
                                 actual, reference, rtol=tolerance, atol=tolerance
                             )

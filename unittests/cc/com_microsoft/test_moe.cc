@@ -44,12 +44,14 @@ TEST(MoE, SelectsTopExpertsAndNormalizes) {
   attributes.activation = "identity";
   attributes.k = 2;
   attributes.normalize = true;
-  ComputeMoE(input, router, fc1, nullptr, fc2, nullptr, output, 1, 2, 3, 1, false, attributes);
+  ComputeMoE(input, router, fc1, nullptr, fc2, nullptr, output, 1, 2, 3, 1, MoEDataType::kFloat32,
+             attributes);
   const float top = std::exp(2.0f) / (std::exp(1.0f) + std::exp(2.0f));
   EXPECT_NEAR(output[0], 1.0f + 2.0f * top, 1e-5f);
   EXPECT_NEAR(output[1], 2.0f + 2.0f * top, 1e-5f);
   attributes.normalize = false;
-  ComputeMoE(input, router, fc1, nullptr, fc2, nullptr, output, 1, 2, 3, 1, false, attributes);
+  ComputeMoE(input, router, fc1, nullptr, fc2, nullptr, output, 1, 2, 3, 1, MoEDataType::kFloat32,
+             attributes);
   EXPECT_LT(output[0], 1.0f + 2.0f * top);
 }
 
@@ -64,7 +66,8 @@ TEST(MoE, InterleavedSwiGLUAndFloat16Output) {
   attributes.limit = 1.0f;
   attributes.alpha = 2.0f;
   attributes.beta = 0.5f;
-  ComputeMoE(input, router, fc1, nullptr, fc2, nullptr, output, 1, 1, 1, 1, false, attributes);
+  ComputeMoE(input, router, fc1, nullptr, fc2, nullptr, output, 1, 1, 1, 1, MoEDataType::kFloat32,
+             attributes);
   EXPECT_NEAR(output[0], 3.0f * (1.0f / (1.0f + std::exp(-2.0f))) * 1.5f, 1e-5f);
 
   const std::uint16_t half_input[] = {detail::FloatToFloat16Bits(2.0f)};
@@ -74,15 +77,15 @@ TEST(MoE, InterleavedSwiGLUAndFloat16Output) {
   const std::uint16_t half_fc2[] = {detail::FloatToFloat16Bits(3.0f)};
   std::uint16_t half_output[] = {0};
   ComputeMoE(half_input, half_router, half_fc1, nullptr, half_fc2, nullptr, half_output, 1, 1, 1, 1,
-             true, attributes);
+             MoEDataType::kFloat16, attributes);
   EXPECT_NEAR(detail::Float16BitsToFloat(half_output[0]), output[0], 0.01f);
 }
 
 TEST(MoE, EmptyTokensDoNotReadRouter) {
   MoEAttributes attributes;
   float output = 42.0f;
-  ComputeMoE(nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, &output, 0, 2, 1, 1, false,
-             attributes);
+  ComputeMoE(nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, &output, 0, 2, 1, 1,
+             MoEDataType::kFloat32, attributes);
   EXPECT_FLOAT_EQ(output, 42.0f);
 }
 
@@ -101,7 +104,7 @@ TEST(MoE, UsesRuntimeExecutorAcrossIndependentTokens) {
   {
     ExecutionExecutorScope scope(&view);
     ComputeMoE(input.data(), router.data(), fc1, nullptr, fc2, nullptr, output.data(), tokens, 1, 1,
-               1, false, attributes);
+               1, MoEDataType::kFloat32, attributes);
   }
 
   EXPECT_EQ(executor.dispatches, 1);
@@ -124,17 +127,32 @@ TEST(MoE, SingleTokenAndNestedExecutionRemainSerial) {
   ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run, &InlineExecutor::Plan};
   {
     ExecutionExecutorScope scope(&view);
-    ComputeMoE(input.data(), router.data(), fc1, nullptr, fc2, nullptr, &output, 1, 1, 1, 1, false,
-               attributes);
+    ComputeMoE(input.data(), router.data(), fc1, nullptr, fc2, nullptr, &output, 1, 1, 1, 1,
+               MoEDataType::kFloat32, attributes);
     ExecuteRanges(2, ExecutionSchedule{1, 1, 4, 0}, [&](std::int64_t, std::int64_t) {
       std::vector<float> nested_output(8);
       ComputeMoE(input.data(), router.data(), fc1, nullptr, fc2, nullptr, nested_output.data(), 8,
-                 1, 1, 1, false, attributes);
+                 1, 1, 1, MoEDataType::kFloat32, attributes);
     });
   }
 
   EXPECT_FLOAT_EQ(output, 24.0f);
   EXPECT_EQ(executor.dispatches, 1);
+}
+
+TEST(MoE, BFloat16UsesFloatAccumulation) {
+  const std::uint16_t input[] = {detail::FloatToBFloat16Bits(2.0f)};
+  const std::uint16_t router[] = {detail::FloatToBFloat16Bits(0.0f)};
+  const std::uint16_t fc1[] = {detail::FloatToBFloat16Bits(3.0f)};
+  const std::uint16_t fc2[] = {detail::FloatToBFloat16Bits(4.0f)};
+  std::uint16_t output = 0;
+  MoEAttributes attributes;
+  attributes.activation = "identity";
+
+  ComputeMoE(input, router, fc1, nullptr, fc2, nullptr, &output, 1, 1, 1, 1, MoEDataType::kBFloat16,
+             attributes);
+
+  EXPECT_FLOAT_EQ(detail::Bfloat16BitsToFloat(output), 24.0f);
 }
 
 } // namespace

@@ -46,9 +46,11 @@ with alternating gate and linear rows, and supports ``swiglu_limit``,
 ``activation_alpha``, and ``activation_beta``. The other supported activations
 are ``relu`` (default), ``gelu``, ``silu``, and ``identity``.
 
-Input and output types must match and be ``FLOAT`` or ``FLOAT16``. Separate
-FC3 weights and biases, sparse mixer routing, noninterleaved SwiGLU, and BF16
-are not supported by the CPU kernel. The output retains the input shape.
+Input and output types must match and be ``FLOAT``, ``FLOAT16``, or
+``BFLOAT16``. Low-precision inputs and weights are converted in bounded row
+tiles and accumulated in FLOAT before the output is narrowed. Separate FC3
+weights and biases, sparse mixer routing, and noninterleaved SwiGLU are not
+supported by the CPU kernel. The output retains the input shape.
 See `ONNX Runtime's MoE CPU implementation
 <https://github.com/microsoft/onnxruntime/blob/main/onnxruntime/contrib_ops/cpu/moe/moe_cpu.cc>`_
 for the upstream compatibility contract.
