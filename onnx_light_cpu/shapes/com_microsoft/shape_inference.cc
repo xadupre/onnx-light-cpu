@@ -349,8 +349,12 @@ void ComputeShapeBiasGelu(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE::NodePr
 }
 
 void ComputeShapeMatMulNBits(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE::NodeProto &node) {
-  const bool encoded_weights =
+  const bool has_encoded_value =
       node.input_size() >= 2 && HasInput(node, 1) && ctx.HasEncodedValue(node.input(1));
+  const bool has_structured_type = node.input_size() >= 2 && HasInput(node, 1) &&
+                                   ctx.HasType(node.input(1)) &&
+                                   ctx.GetType(node.input(1)).has_struct_type();
+  const bool encoded_weights = has_encoded_value || has_structured_type;
   if (node.input_size() < 2 || node.input_size() > 6 || node.output_size() != 1 ||
       node.output(0).empty() || !HasInput(node, 0) || !HasInput(node, 1) ||
       (!encoded_weights && !HasInput(node, 2)) || !ctx.Has(node.input(0)) ||
@@ -386,7 +390,7 @@ void ComputeShapeMatMulNBits(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE::Nod
   const std::int64_t blocks = (k + 31) / 32;
   ConstrainEqual(ctx, a.Shape()[a.Shape().Rank() - 1], sym_ns::SymDim(k),
                  "ComputeShapeMatMulNBits: A's final dimension must equal K.");
-  if (encoded_weights) {
+  if (has_encoded_value) {
     const auto inputs = InspectEncodedMatMulNBitsShape(ctx, node.input(1));
     const auto encoded_data_type = inputs.data_type == ONNX_LIGHT_NAMESPACE::TensorProto::FLOAT
                                        ? sym_ns::TensorType::kFloat
@@ -405,7 +409,7 @@ void ComputeShapeMatMulNBits(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE::Nod
           "ComputeShapeMatMulNBits: encoded zero points are unsupported and encoded scales must "
           "match A's type.");
     }
-  } else {
+  } else if (!has_structured_type) {
     const SymTensor &b = ctx.Get(node.input(1));
     const SymTensor &scales = ctx.Get(node.input(2));
     if (scales.Dtype() != a.Dtype() || b.Dtype() != sym_ns::TensorType::kUint8) {
@@ -979,7 +983,8 @@ void RegisterMicrosoftShapeAndMemoryFunctions() {
                                       ComputeShapeGroupQueryAttention);
     shapes_ns::RegisterComputeShapeFn(kMicrosoftDomain, "LinearAttention",
                                       ComputeShapeLinearAttention);
-    shapes_ns::RegisterComputeShapeFn(kMicrosoftDomain, "MatMulNBits", ComputeShapeMatMulNBits);
+    shapes_ns::RegisterComputeShapeFn(kMicrosoftDomain, "MatMulNBits", ComputeShapeMatMulNBits,
+                                      true);
     shapes_ns::RegisterComputeShapeFn(kMicrosoftDomain, "RotaryEmbedding",
                                       ComputeShapeRotaryEmbedding);
     shapes_ns::RegisterComputePeakMemoryFn(kMicrosoftDomain, "RotaryEmbedding",
