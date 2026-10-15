@@ -620,6 +620,42 @@ TEST(CustomOperatorSupport, InfersMatMulNBitsShapeFromReferencedEncodedType) {
   EXPECT_EQ(ctx.Get("Y").Shape(), sym_ns::SymShape({SymDim(2), SymDim(3)}));
 }
 
+TEST(CustomOperatorSupport, InfersModelWithDynamicStructuredMatMulNBitsWeights) {
+  const auto plan =
+      rt_ns::MakeMatMulNBitsPlan(rt_ns::QuantizationFormat::kOrtMatmulnbitsInt4, 35, 3, 32);
+  auto encoded =
+      rt_ns::QuantizeTensor(Tensor::FromFloat("", {35, 3}, std::vector<float>(105, 1.0f)), plan)
+          .Encoded();
+  ONNX_LIGHT_NAMESPACE::ModelProto model;
+  *model.add_struct_types() = encoded.struct_type();
+  model.mutable_struct_types(0)->set_type_id(17);
+  auto *opset = model.add_opset_import();
+  opset->set_domain(onnx_light_cpu::kMicrosoftDomain);
+  opset->set_version(1);
+  auto *input = model.mutable_graph()->add_input();
+  input->set_name("A");
+  auto *input_type = input->mutable_type()->mutable_tensor_type();
+  input_type->set_elem_type(ONNX_LIGHT_NAMESPACE::TensorProto::FLOAT);
+  input_type->mutable_shape()->add_dim()->set_dim_value(2);
+  input_type->mutable_shape()->add_dim()->set_dim_value(35);
+  auto *weights = model.mutable_graph()->add_input();
+  weights->set_name("B");
+  weights->mutable_type()->mutable_struct_type()->set_type_ref(17);
+  NodeProto node = MakeMatMulNBitsNode(false, 4);
+  node.ref_input().resize(2);
+  *model.mutable_graph()->add_node() = std::move(node);
+  model.mutable_graph()->add_output()->set_name("Y");
+
+  onnx_light_cpu::RegisterMicrosoftShapeAndMemoryFunctions();
+  shapes_ns::ShapesContext ctx;
+  ctx.ComputeShapeModel(model);
+
+  EXPECT_TRUE(ctx.HasType("B"));
+  EXPECT_FALSE(ctx.HasEncodedValue("B"));
+  EXPECT_EQ(ctx.Get("Y").Dtype(), TensorType::kFloat);
+  EXPECT_EQ(ctx.Get("Y").Shape(), sym_ns::SymShape({SymDim(2), SymDim(3)}));
+}
+
 TEST(CustomOperatorSupport, InfersGroupQueryAttentionShape) {
   shapes_ns::ShapesContext ctx;
   ctx.Set("Q", SymTensor(nullptr, TensorType::kFloat, {SymDim("B"), SymDim("S"), SymDim(32)}));
