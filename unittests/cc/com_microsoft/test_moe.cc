@@ -13,6 +13,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <stdexcept>
 #include <vector>
 
@@ -411,6 +412,61 @@ TEST(MoE, MatVecSimdWidthsAndTailsMatchReference) {
       EXPECT_NEAR(mixed_bfloat16_result[row], mixed_bfloat16_expected, 1e-5f);
     }
   }
+}
+
+TEST(MoE, MatVecRowParallelModesMatchNestedSerial) {
+  constexpr std::size_t rows = 512;
+  constexpr std::size_t columns = 1024;
+  std::vector<float> input(columns);
+  std::vector<float> weights(rows * columns);
+  for (std::size_t column = 0; column < columns; ++column) {
+    input[column] = static_cast<float>(static_cast<int>(column % 7) - 3) / 8.0f;
+  }
+  for (std::size_t index = 0; index < weights.size(); ++index) {
+    weights[index] = static_cast<float>(static_cast<int>(index % 11) - 5) / 16.0f;
+  }
+  std::vector<std::uint16_t> float16_input(columns), bfloat16_input(columns);
+  std::vector<std::uint16_t> float16_weights(weights.size()), bfloat16_weights(weights.size());
+  detail::ConvertFloat32ToFloat16(input.data(), float16_input.data(), columns);
+  detail::ConvertFloat32ToBFloat16(input.data(), bfloat16_input.data(), columns);
+  detail::ConvertFloat32ToFloat16(weights.data(), float16_weights.data(), weights.size());
+  detail::ConvertFloat32ToBFloat16(weights.data(), bfloat16_weights.data(), weights.size());
+
+  InlineExecutor executor;
+  ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run, &InlineExecutor::Plan};
+  ExecutionExecutorScope scope(&view);
+  const auto check_mode = [&](const auto &run) {
+    std::vector<float> parallel(rows, std::numeric_limits<float>::quiet_NaN());
+    std::vector<float> serial(rows, std::numeric_limits<float>::quiet_NaN());
+    const std::int64_t dispatches_before = executor.dispatches;
+    run(parallel.data());
+    EXPECT_EQ(executor.dispatches, dispatches_before + 1);
+    EXPECT_GT(executor.blocks, 1);
+    ExecuteRanges(1, ExecutionSchedule{1, 1, 4, 0},
+                  [&](std::int64_t, std::int64_t) { run(serial.data()); });
+    EXPECT_EQ(executor.dispatches, dispatches_before + 1);
+    for (std::size_t row = 0; row < rows; ++row) {
+      EXPECT_TRUE(std::isfinite(parallel[row]));
+      EXPECT_FLOAT_EQ(parallel[row], serial[row]);
+    }
+  };
+
+  check_mode([&](float *output) {
+    detail::MoEMatVecFloat32(input.data(), weights.data(), output, rows, columns);
+  });
+  check_mode([&](float *output) {
+    detail::MoEMatVecFloat16(float16_input.data(), float16_weights.data(), output, rows, columns);
+  });
+  check_mode([&](float *output) {
+    detail::MoEMatVecBFloat16(bfloat16_input.data(), bfloat16_weights.data(), output, rows,
+                              columns);
+  });
+  check_mode([&](float *output) {
+    detail::MoEMatVecFloat32Float16(input.data(), float16_weights.data(), output, rows, columns);
+  });
+  check_mode([&](float *output) {
+    detail::MoEMatVecFloat32BFloat16(input.data(), bfloat16_weights.data(), output, rows, columns);
+  });
 }
 
 } // namespace
