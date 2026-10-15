@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "onnx_light_cpu/impl/com_microsoft/moe.h"
+#include "onnx_light_cpu/impl/execution.h"
 #include "onnx_light_cpu/impl/math/half_conversion.h"
 
 #include <gtest/gtest.h>
@@ -13,6 +14,25 @@
 
 namespace onnx_light_cpu {
 namespace {
+
+struct InlineExecutor {
+  std::int64_t dispatches = 0;
+  std::int64_t blocks = 0;
+
+  static void Run(void *context, std::int64_t blocks, void *task_context, ExecutionBlockFn task) {
+    auto &self = *static_cast<InlineExecutor *>(context);
+    ++self.dispatches;
+    self.blocks = blocks;
+    for (std::int64_t block = 0; block < blocks; ++block) {
+      task(task_context, block);
+    }
+  }
+
+  static ExecutionParallelPlan Plan(void *, std::int64_t, const ExecutionWorkCost &, std::int64_t,
+                                    std::int64_t) {
+    return {1, 4};
+  }
+};
 
 TEST(MoE, SelectsTopExpertsAndNormalizes) {
   const float input[] = {1.0f, 2.0f};
@@ -64,6 +84,57 @@ TEST(MoE, EmptyTokensDoNotReadRouter) {
   ComputeMoE(nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, &output, 0, 2, 1, 1, false,
              attributes);
   EXPECT_FLOAT_EQ(output, 42.0f);
+}
+
+TEST(MoE, UsesRuntimeExecutorAcrossIndependentTokens) {
+  constexpr std::size_t tokens = 8;
+  const std::vector<float> input(tokens, 2.0f);
+  const std::vector<float> router(tokens, 0.0f);
+  const float fc1[] = {3.0f};
+  const float fc2[] = {4.0f};
+  std::vector<float> output(tokens);
+  MoEAttributes attributes;
+  attributes.activation = "identity";
+
+  InlineExecutor executor;
+  ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run, &InlineExecutor::Plan};
+  {
+    ExecutionExecutorScope scope(&view);
+    ComputeMoE(input.data(), router.data(), fc1, nullptr, fc2, nullptr, output.data(), tokens, 1, 1,
+               1, false, attributes);
+  }
+
+  EXPECT_EQ(executor.dispatches, 1);
+  EXPECT_EQ(executor.blocks, 4);
+  for (float value : output) {
+    EXPECT_FLOAT_EQ(value, 24.0f);
+  }
+}
+
+TEST(MoE, SingleTokenAndNestedExecutionRemainSerial) {
+  const std::vector<float> input(8, 2.0f);
+  const std::vector<float> router(8, 0.0f);
+  const float fc1[] = {3.0f};
+  const float fc2[] = {4.0f};
+  float output = 0.0f;
+  MoEAttributes attributes;
+  attributes.activation = "identity";
+
+  InlineExecutor executor;
+  ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run, &InlineExecutor::Plan};
+  {
+    ExecutionExecutorScope scope(&view);
+    ComputeMoE(input.data(), router.data(), fc1, nullptr, fc2, nullptr, &output, 1, 1, 1, 1, false,
+               attributes);
+    ExecuteRanges(2, ExecutionSchedule{1, 1, 4, 0}, [&](std::int64_t, std::int64_t) {
+      std::vector<float> nested_output(8);
+      ComputeMoE(input.data(), router.data(), fc1, nullptr, fc2, nullptr, nested_output.data(), 8,
+                 1, 1, 1, false, attributes);
+    });
+  }
+
+  EXPECT_FLOAT_EQ(output, 24.0f);
+  EXPECT_EQ(executor.dispatches, 1);
 }
 
 } // namespace

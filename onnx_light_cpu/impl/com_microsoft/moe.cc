@@ -4,12 +4,14 @@
 
 #include "onnx_light_cpu/impl/com_microsoft/moe.h"
 
+#include "onnx_light_cpu/impl/execution.h"
 #include "onnx_light_cpu/impl/math/half_conversion.h"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <numeric>
 #include <utility>
 #include <vector>
@@ -48,15 +50,15 @@ float Activate(float value, const MoEAttributes &attributes) {
 }
 
 template <typename T>
-void Compute(const T *input, const T *router, const T *fc1, const T *bias1, const T *fc2,
-             const T *bias2, T *output, std::size_t tokens, std::size_t hidden, std::size_t experts,
-             std::size_t intermediate, const MoEAttributes &attributes) {
+void ComputeRange(const T *input, const T *router, const T *fc1, const T *bias1, const T *fc2,
+                  const T *bias2, T *output, std::size_t begin, std::size_t end, std::size_t hidden,
+                  std::size_t experts, std::size_t intermediate, const MoEAttributes &attributes) {
   const bool swiglu = attributes.activation == "swiglu";
   const std::size_t fc1_width = intermediate * (swiglu ? 2 : 1);
   std::vector<std::pair<float, std::size_t>> routes(experts);
   std::vector<T> first(fc1_width), activated(intermediate), second(hidden);
   std::vector<float> result(hidden);
-  for (std::size_t token = 0; token < tokens; ++token) {
+  for (std::size_t token = begin; token < end; ++token) {
     float max_logit = Read(router, token * experts);
     for (std::size_t expert = 1; expert < experts; ++expert) {
       max_logit = std::max(max_logit, Read(router, token * experts + expert));
@@ -126,6 +128,32 @@ void Compute(const T *input, const T *router, const T *fc1, const T *bias1, cons
       output[token * hidden + row] = Narrow<T>(result[row]);
     }
   }
+}
+
+template <typename T>
+void Compute(const T *input, const T *router, const T *fc1, const T *bias1, const T *fc2,
+             const T *bias2, T *output, std::size_t tokens, std::size_t hidden, std::size_t experts,
+             std::size_t intermediate, const MoEAttributes &attributes) {
+  if (tokens == 0) {
+    return;
+  }
+  const std::size_t fc1_width =
+      intermediate * (attributes.activation == "swiglu" ? std::size_t{2} : std::size_t{1});
+  const double expert_multiply_adds =
+      static_cast<double>(fc1_width) * static_cast<double>(hidden) +
+      static_cast<double>(hidden) * static_cast<double>(intermediate);
+  const double selected_experts = static_cast<double>(attributes.k);
+  const double element_bytes = static_cast<double>(sizeof(T));
+  const ExecutionWorkCost cost{
+      element_bytes * (static_cast<double>(experts) + selected_experts * expert_multiply_adds),
+      element_bytes * static_cast<double>(hidden), selected_experts * expert_multiply_adds};
+  const ExecutionSchedule schedule{2, 1, std::numeric_limits<std::int64_t>::max(), 0};
+  ExecuteCostedRanges(static_cast<std::int64_t>(tokens), cost, schedule, std::int64_t{1},
+                      [=](std::int64_t begin, std::int64_t end) {
+                        ComputeRange(input, router, fc1, bias1, fc2, bias2, output,
+                                     static_cast<std::size_t>(begin), static_cast<std::size_t>(end),
+                                     hidden, experts, intermediate, attributes);
+                      });
 }
 
 } // namespace

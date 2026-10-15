@@ -142,8 +142,10 @@ Tensor MoEKernel::operator()(const Tensor &input, const Tensor &router, const Te
 void MoEKernel::Run(rt_ns::RuntimeContext &rt) {
   rt.RecordKernelUsage(kName);
   const auto &node = *node_;
-  if (node.input_size() < 5 || node.input_size() > 8 ||
-      (node.input_size() > 6 && !node.input(6).empty()) ||
+  if (node.input_size() < 5 || node.input_size() > 8) {
+    throw std::invalid_argument("MoE: expected five to eight input slots.");
+  }
+  if ((node.input_size() > 6 && !node.input(6).empty()) ||
       (node.input_size() > 7 && !node.input(7).empty())) {
     throw std::invalid_argument("MoE: FC3 inputs are not supported on CPU.");
   }

@@ -49,6 +49,7 @@ void ComputeShapeLinearAttention(ONNX_LIGHT_NAMESPACE::core::shapes::ShapesConte
 /// Infers the restricted ``com.microsoft::MatMulNBits`` output shape.
 void ComputeShapeMatMulNBits(ONNX_LIGHT_NAMESPACE::core::shapes::ShapesContext &ctx,
                              const ONNX_LIGHT_NAMESPACE::NodeProto &node);
+/// Infers the output shape for the supported ``com.microsoft::MoE`` subset.
 void ComputeShapeMoE(ONNX_LIGHT_NAMESPACE::core::shapes::ShapesContext &ctx,
                      const ONNX_LIGHT_NAMESPACE::NodeProto &node);
 
@@ -82,6 +83,7 @@ int64_t ComputePeakMemoryLinearAttention(
 int64_t ComputePeakMemoryMatMulNBits(
     ONNX_LIGHT_NAMESPACE::core::symbolic::Device device,
     const std::vector<ONNX_LIGHT_NAMESPACE::core::symbolic::SymShape> &input_shapes);
+/// Returns the per-worker routing and expert scratch requirement for ``com.microsoft::MoE``.
 int64_t ComputePeakMemoryMoE(
     ONNX_LIGHT_NAMESPACE::core::symbolic::Device device,
     const std::vector<ONNX_LIGHT_NAMESPACE::core::symbolic::SymShape> &input_shapes);

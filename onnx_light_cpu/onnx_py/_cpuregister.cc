@@ -185,8 +185,7 @@ NB_MODULE(_cpuregister, m) {
 
   m.def("register_custom_gradients", &onnx_light_cpu::RegisterCustomOperatorGradients,
         nb::arg("registry"),
-        "Adds the com.microsoft BiasGelu, CDist, GroupQueryAttention, MoE, and restricted "
-        "MatMulNBits "
+        "Adds the com.microsoft BiasGelu, CDist, GroupQueryAttention, and restricted MatMulNBits "
         "backward rules to a GradRegistry.");
 
   m.def(

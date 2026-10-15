@@ -119,9 +119,21 @@ class TestMoE(ExtTestCase):
                     for k, normalize in ((1, False), (2, True), (3, False)):
                         with self.subTest(dtype=dtype, shape=shape, activation=activation, k=k):
                             model, feeds = _model(shape, dtype, activation, k, normalize)
-                            reference = _ort_run(model, feeds)[0]
+                            if dtype == TensorProto.FLOAT16:
+                                reference_model, _ = _model(
+                                    shape, TensorProto.FLOAT, activation, k, normalize
+                                )
+                                reference_feeds = {
+                                    name: value.astype(np.float32) for name, value in feeds.items()
+                                }
+                                reference = _ort_run(reference_model, reference_feeds)[0]
+                            else:
+                                reference = _ort_run(model, feeds)[0]
                             actual = _light_run(model, feeds)[0]
-                            self.assertEqual(actual.dtype, reference.dtype)
+                            self.assertEqual(
+                                actual.dtype,
+                                np.float16 if dtype == TensorProto.FLOAT16 else np.float32,
+                            )
                             tolerance = 3e-2 if dtype == TensorProto.FLOAT16 else 1e-4
                             np.testing.assert_allclose(
                                 actual, reference, rtol=tolerance, atol=tolerance
