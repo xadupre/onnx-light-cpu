@@ -198,7 +198,7 @@ TEST(MatMulNBits, PreparedInt8QwenShapesAndTails) {
         }
         for (std::size_t row :
              {0u, static_cast<unsigned>(rows / 2), static_cast<unsigned>(rows - 1)}) {
-          for (std::size_t col : {0u, static_cast<unsigned>(n / 2), static_cast<unsigned>(n - 1)}) {
+          for (std::size_t col = 0; col < n; ++col) {
             float expected = with_bias ? bias[col] : 0.0f;
             for (std::size_t block = 0; block < blocks; ++block) {
               float maximum = 0;
