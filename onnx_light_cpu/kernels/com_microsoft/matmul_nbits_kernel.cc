@@ -73,12 +73,13 @@ MatMulNBitsAttributes ParseAttributes(const ONNX_LIGHT_NAMESPACE::NodeProto &nod
   if (attributes.k <= 0 || attributes.n <= 0) {
     throw std::invalid_argument("onnx_light_cpu::MatMulNBits: K and N must be positive.");
   }
-  if ((attributes.bits != 2 && attributes.bits != 4 && attributes.bits != 8) ||
+  if ((attributes.bits != 2 && attributes.bits != 3 && attributes.bits != 4 &&
+       attributes.bits != 8) ||
       attributes.block_size != 32 ||
       (attributes.accuracy_level != 0 && attributes.accuracy_level != 4) ||
       attributes.weight_prepacked != 0) {
     throw std::invalid_argument(
-        "onnx_light_cpu::MatMulNBits: the kernel requires bits=2, 4, or 8, block_size=32, "
+        "onnx_light_cpu::MatMulNBits: the kernel requires bits=2, 3, 4, or 8, block_size=32, "
         "accuracy_level 0 or 4, and weight_prepacked=0.");
   }
   return attributes;
@@ -233,7 +234,7 @@ void MatMulNBitsKernel::RegisterTuningSchemas() {
   std::call_once(once, [] {
     for (RuntimeDataType data_type :
          {RuntimeDataType::FLOAT, RuntimeDataType::FLOAT16, RuntimeDataType::BFLOAT16}) {
-      for (std::int64_t bits : {2, 4, 8}) {
+      for (std::int64_t bits : {2, 3, 4, 8}) {
         rt_ns::RegisterKernelTuningSchema(rt_ns::KernelTuningSchema(
             {MakeTuningKey(data_type, bits),
              {{kParallelThresholdOutputs,
@@ -300,6 +301,17 @@ void MatMulNBitsKernel::Prepare(rt_ns::RuntimeContext &rt,
       throw std::invalid_argument(
           "onnx_light_cpu::MatMulNBits: shared EncodedValueProto parameters are not supported.");
     }
+    if (attributes_.bits == 3) {
+      const auto &value = encoded->second.Encoded();
+      if (!value.has_struct_type()) {
+        throw std::invalid_argument("MatMulNBits INT3: expected an inline structured layout.");
+      }
+      const auto layout = InspectMatMulNBitsInt3(value, value.struct_type());
+      if (layout.k != attributes_.k || layout.n != attributes_.n) {
+        throw std::invalid_argument("MatMulNBits INT3: geometry does not match node attributes.");
+      }
+      return;
+    }
     const rt_ns::MatMulNBitsInputs inputs =
         ValidateEncodedWeights(encoded->second.Encoded(), rt.struct_type_catalogue());
     const auto &raw_data = encoded->second.Encoded().raw_data();
@@ -313,6 +325,9 @@ void MatMulNBitsKernel::Prepare(rt_ns::RuntimeContext &rt,
     prepared_encoded_ = std::make_unique<PreparedEncodedState>(
         encoded->second.encoded, std::move(weights), std::move(scales));
     return;
+  }
+  if (attributes_.bits == 3) {
+    throw std::invalid_argument("MatMulNBits INT3: B must be an EncodedValueProto.");
   }
   if (!HasPreparations(immutable_inputs)) {
     return;
@@ -376,6 +391,9 @@ void MatMulNBitsKernel::Prepare(rt_ns::RuntimeContext &rt,
 
 Tensor MatMulNBitsKernel::operator()(const Tensor &a, const Tensor &b, const Tensor &scales,
                                      const Tensor *bias, rt_ns::RuntimeContext *rt) const {
+  if (attributes_.bits == 3) {
+    throw std::invalid_argument("MatMulNBits INT3: B must be an EncodedValueProto.");
+  }
   return Compute(a, b, scales, bias, rt, true);
 }
 
@@ -384,6 +402,9 @@ Tensor MatMulNBitsKernel::operator()(const Tensor &a,
                                      const Tensor *bias,
                                      const ONNX_LIGHT_NAMESPACE::StructTypeCatalogue &catalogue,
                                      rt_ns::RuntimeContext *rt) const {
+  if (attributes_.bits == 3) {
+    return ComputeInt3(a, packed_weights, bias, rt);
+  }
   const rt_ns::MatMulNBitsInputs inputs = ValidateEncodedWeights(packed_weights, catalogue);
   const auto &raw_data = packed_weights.raw_data();
   const std::size_t weight_bytes = inputs.weights.raw_data().size();
@@ -394,6 +415,41 @@ Tensor MatMulNBitsKernel::operator()(const Tensor &a,
       "scales", inputs.scales.data_type(), rt_ns::Shape(inputs.scales.dims().values()),
       raw_data.data() + weight_bytes, inputs.scales.raw_data().size());
   return Compute(a, b, scales, bias, rt, false);
+}
+
+Tensor MatMulNBitsKernel::ComputeInt3(const Tensor &a,
+                                      const ONNX_LIGHT_NAMESPACE::EncodedValueProto &packed_weights,
+                                      const Tensor *bias, rt_ns::RuntimeContext *rt) const {
+  if (!packed_weights.has_struct_type()) {
+    throw std::invalid_argument("MatMulNBits INT3: expected an inline structured layout.");
+  }
+  const auto layout = InspectMatMulNBitsInt3(packed_weights, packed_weights.struct_type());
+  if (layout.k != attributes_.k || layout.n != attributes_.n || a.data_type != layout.data_type ||
+      a.shape.empty() || a.shape.back() != attributes_.k ||
+      (bias != nullptr && bias->data_type != a.data_type)) {
+    throw std::invalid_argument("MatMulNBits INT3: encoded geometry or data type does not match.");
+  }
+  if (bias != nullptr) {
+    RequireShape(*bias, {attributes_.n}, "bias");
+  }
+  const auto k = static_cast<std::size_t>(layout.k);
+  const auto n = static_cast<std::size_t>(layout.n);
+  const auto rows = TensorElementCount(a, "A") / k;
+  rt_ns::Shape output_shape = a.shape;
+  output_shape.back() = attributes_.n;
+  const auto output_bytes =
+      CheckedByteSize(CheckedMultiply(rows, n, "MatMulNBits INT3", "output count"),
+                      rt_ns::ElementSize(a.data_type), "MatMulNBits INT3", "output bytes");
+  Tensor y = rt != nullptr
+                 ? rt->MakeOutputTensor(0, a.data_type, output_shape, output_bytes)
+                 : rt_ns::MakeOutputTensor(a.data_type, output_shape, output_bytes, nullptr);
+  const auto *weights = reinterpret_cast<const std::uint8_t *>(packed_weights.raw_data().data());
+  const auto *zero_points =
+      layout.has_zero_points ? weights + layout.weight_bytes + layout.scale_bytes : nullptr;
+  MatMulNBitsEncodedInt3(a.bytes(), weights, weights + layout.weight_bytes, zero_points,
+                         bias == nullptr ? nullptr : bias->bytes(), y.mutable_bytes(),
+                         static_cast<onnx_light_cpu::DataType>(a.data_type), rows, k, n, tuning_);
+  return y;
 }
 
 rt_ns::MatMulNBitsInputs MatMulNBitsKernel::ValidateEncodedWeights(
@@ -587,6 +643,9 @@ void MatMulNBitsKernel::Run(rt_ns::RuntimeContext &rt) {
                              rt.struct_type_catalogue(), &rt),
                      rt);
     return;
+  }
+  if (attributes_.bits == 3) {
+    throw std::invalid_argument("MatMulNBits INT3: B must be an EncodedValueProto.");
   }
   if (node.input_size() < 3 || node.input(2).empty()) {
     throw std::invalid_argument(

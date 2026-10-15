@@ -3,10 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "onnx_light_cpu/impl/com_microsoft/matmul_nbits.h"
+#include "onnx_light_cpu/impl/com_microsoft/matmul_nbits_int3.h"
 #include "onnx_light_cpu/impl/execution.h"
 #include "onnx_light_cpu/impl/math/half_conversion.h"
 #include "onnx_light_cpu/kernels/com_microsoft/matmul_nbits_kernel.h"
 #include "onnx_light_cpu/kernels/register_kernels.h"
+#include "onnx_light_cpu/shapes/com_microsoft/shape_inference.h"
 
 #include "onnx_core/runtime/kernels/cast_helper.h"
 #include "onnx_core/runtime/kernels/kernel_context.h"
@@ -14,6 +16,8 @@
 #include "onnx_core/runtime/memory/simple_tensor.h"
 #include "onnx_core/runtime/runtime_session.h"
 #include "onnx_core/runtime/tuning/kernel_tuning.h"
+#include "onnx_core/shapes/shape_inference.h"
+#include "onnx_core/symbolic/sym_tensor.h"
 #include "onnx_proto/onnx_helper.h"
 
 #include <gtest/gtest.h>
@@ -99,6 +103,184 @@ float ReadValue(const rt_ns::Tensor &tensor, std::size_t index) {
   return tensor.data_type == static_cast<std::int32_t>(rt_ns::DataType::FLOAT16)
              ? onnx_light_cpu::detail::Float16BitsToFloat(value)
              : onnx_light_cpu::detail::Bfloat16BitsToFloat(value);
+}
+
+ONNX_LIGHT_NAMESPACE::EncodedValueProto
+MakeInt3Weights(rt_ns::DataType data_type, std::int64_t k, std::int64_t n,
+                const std::vector<std::uint8_t> &codes, const std::vector<float> &scales,
+                const std::vector<std::uint8_t> &zero_points = {}) {
+  const std::size_t blocks = static_cast<std::size_t>((k + 31) / 32);
+  const std::size_t count = static_cast<std::size_t>(n) * blocks;
+  std::string raw(count * 12, '\0');
+  for (std::size_t column = 0; column < static_cast<std::size_t>(n); ++column) {
+    for (std::size_t p = 0; p < static_cast<std::size_t>(k); ++p) {
+      const auto code = codes[column * static_cast<std::size_t>(k) + p];
+      const std::size_t bit = (column * blocks + p / 32) * 96 + (p % 32) * 3;
+      raw[bit / 8] |= static_cast<char>(code << (bit % 8));
+      if (bit % 8 > 5) {
+        raw[bit / 8 + 1] |= static_cast<char>(code >> (8 - bit % 8));
+      }
+    }
+  }
+  const rt_ns::Tensor scale_tensor =
+      MakeTensor(data_type, {n, static_cast<std::int64_t>(blocks)}, scales);
+  raw.append(reinterpret_cast<const char *>(scale_tensor.bytes()), scale_tensor.size_bytes());
+  if (!zero_points.empty()) {
+    raw.append(reinterpret_cast<const char *>(zero_points.data()), zero_points.size());
+  }
+  ONNX_LIGHT_NAMESPACE::EncodedValueProto encoded;
+  auto *logical = encoded.mutable_logical_type()->mutable_tensor_type();
+  logical->set_elem_type(static_cast<std::int32_t>(data_type));
+  logical->mutable_shape()->add_dim()->set_dim_value(k);
+  logical->mutable_shape()->add_dim()->set_dim_value(n);
+  auto *root = encoded.mutable_struct_type();
+  root->set_name(std::string(onnx_light_cpu::kMatMulNBitsInt3Format));
+  auto *parameters = root->mutable_structure()->add_field();
+  parameters->set_name("parameters");
+  auto *constant = parameters->mutable_constant();
+  constant->set_data_type(ONNX_LIGHT_NAMESPACE::TensorProto::INT64);
+  constant->add_dims(2);
+  constant->add_int64_data(3);
+  constant->add_int64_data(32);
+  const auto add_field = [root, n, blocks](const char *name, int type, std::int64_t third = -1) {
+    auto *field = root->mutable_structure()->add_field();
+    field->set_name(name);
+    auto *tensor = field->mutable_type()->mutable_tensor_type();
+    tensor->set_elem_type(type);
+    tensor->mutable_shape()->add_dim()->set_dim_value(n);
+    tensor->mutable_shape()->add_dim()->set_dim_value(static_cast<std::int64_t>(blocks));
+    if (third > 0) {
+      tensor->mutable_shape()->add_dim()->set_dim_value(third);
+    }
+  };
+  add_field("B", ONNX_LIGHT_NAMESPACE::TensorProto::UINT8, 12);
+  add_field("scales", static_cast<std::int32_t>(data_type));
+  if (!zero_points.empty()) {
+    add_field("zero_points", ONNX_LIGHT_NAMESPACE::TensorProto::UINT8);
+  }
+  encoded.set_raw_data(raw);
+  return encoded;
+}
+
+TEST(MatMulNBitsKernel, EncodedInt3MatchesDequantizedMatMulAcrossBlockTails) {
+  constexpr std::int64_t k = 35;
+  constexpr std::int64_t n = 2;
+  constexpr std::size_t rows = 3;
+  std::vector<std::uint8_t> codes(k * n);
+  std::vector<float> activations(rows * k);
+  for (std::size_t i = 0; i < codes.size(); ++i) {
+    codes[i] = static_cast<std::uint8_t>((i * 5 + 3) % 8);
+  }
+  for (std::size_t i = 0; i < activations.size(); ++i) {
+    activations[i] = static_cast<float>(static_cast<int>(i % 7) - 3) / 4;
+  }
+  const std::vector<float> scales{0.5f, 0.25f, 1.0f, 2.0f};
+  for (auto dtype : {rt_ns::DataType::FLOAT, rt_ns::DataType::FLOAT16, rt_ns::DataType::BFLOAT16}) {
+    for (const std::vector<std::uint8_t> zeros :
+         {std::vector<std::uint8_t>{}, std::vector<std::uint8_t>{1, 7, 0, 3}}) {
+      const auto encoded = MakeInt3Weights(dtype, k, n, codes, scales, zeros);
+      const auto a = MakeTensor(dtype, {rows, k}, activations);
+      const onnx_light_cpu::MatMulNBitsKernel kernel{
+          MakeNode(k, n, 3), rt_ns::KernelContext{rt_ns::OpsetId("com.microsoft", 1)}};
+      const auto y = kernel(a, encoded);
+      ASSERT_EQ(y.shape, (rt_ns::Shape{rows, n}));
+      const auto actual_scales = MakeTensor(dtype, {n, 2}, scales);
+      for (std::size_t row = 0; row < rows; ++row) {
+        for (std::size_t column = 0; column < n; ++column) {
+          float expected = 0;
+          for (std::size_t p = 0; p < k; ++p) {
+            const std::size_t block = column * 2 + p / 32;
+            const int zero = zeros.empty() ? 4 : zeros[block];
+            expected += ReadValue(a, row * k + p) *
+                        (static_cast<int>(codes[column * k + p]) - zero) *
+                        ReadValue(actual_scales, block);
+          }
+          EXPECT_NEAR(ReadValue(y, row * n + column), expected,
+                      dtype == rt_ns::DataType::FLOAT ? 1e-4f : 0.15f);
+        }
+      }
+    }
+  }
+}
+
+TEST(MatMulNBitsKernel, EncodedInt3RejectsMalformedMetadataAndPadding) {
+  const auto a = rt_ns::Tensor::FromFloat("", {1, 35}, std::vector<float>(35, 1));
+  const onnx_light_cpu::MatMulNBitsKernel kernel{
+      MakeNode(35, 1, 3), rt_ns::KernelContext{rt_ns::OpsetId("com.microsoft", 1)}};
+  const auto valid = MakeInt3Weights(rt_ns::DataType::FLOAT, 35, 1,
+                                     std::vector<std::uint8_t>(35, 7), {1, 1}, {4, 0});
+  EXPECT_NO_THROW(kernel(a, valid));
+  auto bad = valid;
+  std::string payload(valid.raw_data().data(), valid.raw_data().size());
+  payload[13] |= static_cast<char>(0x80);
+  bad.set_raw_data(payload);
+  EXPECT_THROW(kernel(a, bad), std::invalid_argument);
+  bad = valid;
+  bad.set_raw_data(payload.data(), payload.size() - 1);
+  EXPECT_THROW(kernel(a, bad), std::invalid_argument);
+  bad = valid;
+  payload.assign(valid.raw_data().data(), valid.raw_data().size());
+  payload.back() = 8;
+  bad.set_raw_data(payload);
+  EXPECT_THROW(kernel(a, bad), std::invalid_argument);
+  bad = valid;
+  *bad.mutable_struct_type()
+       ->mutable_structure()
+       ->mutable_field(0)
+       ->mutable_constant()
+       ->mutable_int64_data(1) = 64;
+  EXPECT_THROW(kernel(a, bad), std::invalid_argument);
+  bad = valid;
+  bad.mutable_struct_type()
+      ->mutable_structure()
+      ->mutable_field(2)
+      ->mutable_type()
+      ->mutable_tensor_type()
+      ->set_elem_type(ONNX_LIGHT_NAMESPACE::TensorProto::DOUBLE);
+  EXPECT_THROW(kernel(a, bad), std::invalid_argument);
+  const onnx_light_cpu::MatMulNBitsKernel wrong_geometry{
+      MakeNode(35, 2, 3), rt_ns::KernelContext{rt_ns::OpsetId("com.microsoft", 1)}};
+  EXPECT_THROW(wrong_geometry(a, valid), std::invalid_argument);
+  const auto raw = rt_ns::Tensor::FromUint8("", {1, 2, 12}, std::vector<std::uint8_t>(24));
+  EXPECT_THROW(kernel(a, raw, MakeTensor(rt_ns::DataType::FLOAT, {1, 2}, {1, 1})),
+               std::invalid_argument);
+}
+
+TEST(MatMulNBitsKernel, InfersEncodedInt3ShapeAndRejectsAttributeMismatch) {
+  namespace shapes_ns = ONNX_LIGHT_NAMESPACE::core::shapes;
+  namespace sym_ns = ONNX_LIGHT_NAMESPACE::core::symbolic;
+  shapes_ns::ShapesContext ctx;
+  ctx.Set("A", sym_ns::SymTensor(nullptr, sym_ns::TensorType::kFloat,
+                                 {sym_ns::SymDim(2), sym_ns::SymDim(35)}));
+  const auto encoded = MakeInt3Weights(rt_ns::DataType::FLOAT, 35, 2,
+                                        std::vector<std::uint8_t>(70, 4), {1, 1, 1, 1});
+  ctx.SetEncodedValue("B", encoded);
+  auto node = MakeNode(35, 2, 3);
+  node.ref_input().resize(2);
+  onnx_light_cpu::ComputeShapeMatMulNBits(ctx, node);
+  EXPECT_EQ(ctx.Get("Y").Shape(), (sym_ns::SymShape{sym_ns::SymDim(2), sym_ns::SymDim(2)}));
+  auto wrong = MakeNode(35, 3, 3);
+  wrong.ref_input().resize(2);
+  EXPECT_THROW(onnx_light_cpu::ComputeShapeMatMulNBits(ctx, wrong), std::invalid_argument);
+  wrong = MakeNode(35, 2, 4);
+  wrong.ref_input().resize(2);
+  EXPECT_THROW(onnx_light_cpu::ComputeShapeMatMulNBits(ctx, wrong), std::invalid_argument);
+}
+
+TEST(MatMulNBitsKernel, RunsPreparedEncodedInt3WithoutTensorScales) {
+  auto node = MakeNode(35, 1, 3);
+  node.ref_input().resize(2);
+  onnx_light_cpu::MatMulNBitsKernel kernel{
+      node, rt_ns::KernelContext{rt_ns::OpsetId("com.microsoft", 1)}};
+  rt_ns::RuntimeContext rt{rt_ns::KernelContext{rt_ns::OpsetId("com.microsoft", 1)}};
+  rt.PutValue("B", rt_ns::RuntimeValue(MakeInt3Weights(
+                       rt_ns::DataType::FLOAT, 35, 1, std::vector<std::uint8_t>(35, 5),
+                       {0.5f, 2.0f})));
+  rt.Put("A", rt_ns::Tensor::FromFloat("A", {1, 35}, std::vector<float>(35, 1)));
+  ASSERT_TRUE(kernel.HasPreparations({"B"}));
+  kernel.Prepare(rt, {"B"});
+  kernel.Run(rt);
+  EXPECT_FLOAT_EQ(rt.Get("Y").AsFloat()[0], 22.0f);
 }
 
 TEST(MatMulNBitsKernel, DecodesInt4AndAppliesPerBlockScalesAndBias) {

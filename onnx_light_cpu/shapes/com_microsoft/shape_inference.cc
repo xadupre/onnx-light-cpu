@@ -5,6 +5,7 @@
 #include "onnx_light_cpu/shapes/com_microsoft/shape_inference.h"
 
 #include "onnx_light_cpu/impl/checked_arithmetic.h"
+#include "onnx_light_cpu/impl/com_microsoft/matmul_nbits_int3.h"
 #include "onnx_light_cpu/impl/com_microsoft/moe.h"
 #include "onnx_light_cpu/schemas/com_microsoft/op_schema.h"
 #include "onnx_light_cpu/shapes/ai_onnx/shape_inference.h"
@@ -64,6 +65,10 @@ EncodedMatMulNBitsShape InspectEncodedMatMulNBitsShape(const ShapesContext &ctx,
 
   const auto &root = *layout.root;
   const std::string format = root.name().value();
+  if (format == kMatMulNBitsInt3Format) {
+    const auto int3 = InspectMatMulNBitsInt3(encoded, root);
+    return {int3.k, int3.n, 3, 32, int3.data_type, int3.has_zero_points};
+  }
   const std::string prefix = "onnx_light.quantization.v1/ort_matmulnbits_int";
   const std::int64_t format_bits = format == prefix + "2"   ? 2
                                    : format == prefix + "4" ? 4
@@ -465,10 +470,10 @@ void ComputeShapeMatMulNBits(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE::Nod
   const std::int64_t block_size = GetRequiredIntAttribute(node, "block_size");
   const std::int64_t accuracy_level = GetIntAttribute(node, "accuracy_level", 0);
   const std::int64_t weight_prepacked = GetIntAttribute(node, "weight_prepacked", 0);
-  if (k <= 0 || n <= 0 || (bits != 2 && bits != 4 && bits != 8) || block_size != 32 ||
+  if (k <= 0 || n <= 0 || (bits != 2 && bits != 3 && bits != 4 && bits != 8) || block_size != 32 ||
       (accuracy_level != 0 && accuracy_level != 4) || weight_prepacked != 0) {
     throw std::invalid_argument(
-        "ComputeShapeMatMulNBits: unsupported attributes for the INT2/INT4/INT8 block-32 subset.");
+        "ComputeShapeMatMulNBits: unsupported attributes for the block-32 subset.");
   }
   const SymTensor &a = ctx.Get(node.input(0));
   const bool supported_type = a.Dtype() == sym_ns::TensorType::kFloat ||
@@ -498,12 +503,15 @@ void ComputeShapeMatMulNBits(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE::Nod
           "ComputeShapeMatMulNBits: EncodedValueProto geometry does not match the node "
           "attributes.");
     }
-    if (inputs.has_zero_points || encoded_data_type != a.Dtype()) {
+    if ((bits != 3 && inputs.has_zero_points) || encoded_data_type != a.Dtype()) {
       throw std::invalid_argument(
           "ComputeShapeMatMulNBits: encoded zero points are unsupported and encoded scales must "
           "match A's type.");
     }
   } else if (!has_structured_type) {
+    if (bits == 3) {
+      throw std::invalid_argument("ComputeShapeMatMulNBits: INT3 requires encoded B.");
+    }
     const SymTensor &b = ctx.Get(node.input(1));
     const SymTensor &scales = ctx.Get(node.input(2));
     if (scales.Dtype() != a.Dtype() || b.Dtype() != sym_ns::TensorType::kUint8) {
