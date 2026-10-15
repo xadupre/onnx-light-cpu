@@ -61,10 +61,13 @@ bt_ns::IoData BuildData(int64_t tokens, int64_t hidden, int64_t intermediate, in
   if (!generate_expected_outputs) {
     return bt_ns::IoData{std::move(inputs), {}, {}, false};
   }
-  const rt_ns::KernelContext ctx{rt_ns::OpsetId(kMicrosoftDomain, 1)};
-  const MoEKernel kernel{MakeNode(swiglu, normalize, k), ctx};
-  Tensor output = kernel(inputs[0], inputs[1], inputs[2], &inputs[3], inputs[4], &inputs[5]);
-  return bt_ns::IoData{std::move(inputs), {std::move(output)}};
+  auto build_data = [&]() {
+    const rt_ns::KernelContext ctx{rt_ns::OpsetId(kMicrosoftDomain, 1)};
+    const MoEKernel kernel{MakeNode(swiglu, normalize, k), ctx};
+    Tensor output = kernel(inputs[0], inputs[1], inputs[2], &inputs[3], inputs[4], &inputs[5]);
+    return bt_ns::IoData{std::move(inputs), {std::move(output)}};
+  };
+  return build_data();
 }
 
 } // namespace

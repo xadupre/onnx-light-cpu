@@ -129,7 +129,8 @@ class TestMoE(ExtTestCase):
                                     shape, TensorProto.FLOAT, activation, k, normalize
                                 )
                                 reference_feeds = {
-                                    name: value.astype(np.float32) for name, value in feeds.items()
+                                    name: value.astype(np.float32)
+                                    for name, value in feeds.items()
                                 }
                                 reference = _ort_run(reference_model, reference_feeds)[0]
                             else:
