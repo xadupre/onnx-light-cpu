@@ -115,6 +115,7 @@ struct GqaArgs {
   std::optional<float> scale;
   float softcap = 0.0f;
   bool do_rotary = false;
+  bool rotary_interleaved = false;
 
   bool has_present_key = false;
   bool has_present_value = false;
@@ -208,12 +209,12 @@ template <typename Lookup> GqaArgs ResolveAndValidate(const NodeProto &node, Loo
   }
   args.softcap = rt_ns::GetAttributeFloatOrDefault(node, "softcap", 0.0f);
   args.do_rotary = rt_ns::GetAttributeIntOrDefault(node, "do_rotary", 0) != 0;
-  const bool rotary_interleaved =
-      rt_ns::GetAttributeIntOrDefault(node, "rotary_interleaved", 0) != 0;
-  if (args.do_rotary && rotary_interleaved) {
-    throw std::invalid_argument("onnx_light_cpu::NaiveGroupQueryAttention: only split-half rotary "
-                                "(rotary_interleaved=0) is supported.");
+  const std::int64_t rotary_layout = rt_ns::GetAttributeIntOrDefault(node, "rotary_interleaved", 0);
+  if (args.do_rotary && rotary_layout != 0 && rotary_layout != 1) {
+    throw std::invalid_argument(
+        "onnx_light_cpu::NaiveGroupQueryAttention: rotary_interleaved must be 0 or 1.");
   }
+  args.rotary_interleaved = rotary_layout == 1;
 
   if (HasInput(node, 1) != HasInput(node, 2)) {
     throw std::invalid_argument(
@@ -496,14 +497,14 @@ std::vector<std::int64_t> ResolveRotaryPositions(const GqaArgs &args) {
   return positions;
 }
 
-// Applies split-half RoPE (`rotary_interleaved=0`) to every head of `input`
+// Applies split-half or interleaved RoPE to every head of `input`
 // (rank-3, `(batch, sequence, heads * head_dim)`) at the absolute position
 // supplied in `positions`, reading `cos_cache`/`sin_cache` rows
 // `(position, 0:head_dim/2)`. Returns a freshly materialized tensor of the
 // same shape/type; `input` is left unmodified.
 Tensor ApplyRotaryHalf(RuntimeContext *rt, const Tensor &input, std::int64_t heads,
                        std::int64_t head_dim, const Tensor &cos_cache, const Tensor &sin_cache,
-                       const std::vector<std::int64_t> &positions) {
+                       const std::vector<std::int64_t> &positions, bool interleaved) {
   const DataType dtype = static_cast<DataType>(input.data_type);
   const DataType cache_dtype = static_cast<DataType>(cos_cache.data_type);
   const std::int64_t batch = input.shape[0];
@@ -532,13 +533,13 @@ Tensor ApplyRotaryHalf(RuntimeContext *rt, const Tensor &input, std::int64_t hea
           const std::size_t cache_index = static_cast<std::size_t>(position * half + d);
           const float cos_value = ReadElementAsFloat(cache_dtype, cos_bytes, cache_index);
           const float sin_value = ReadElementAsFloat(cache_dtype, sin_bytes, cache_index);
-          const float x0 = ReadElementAsFloat(dtype, src, head_base + static_cast<std::size_t>(d));
-          const float x1 =
-              ReadElementAsFloat(dtype, src, head_base + static_cast<std::size_t>(half + d));
-          WriteElementFromFloat(dtype, dst, head_base + static_cast<std::size_t>(d),
-                                x0 * cos_value - x1 * sin_value);
-          WriteElementFromFloat(dtype, dst, head_base + static_cast<std::size_t>(half + d),
-                                x1 * cos_value + x0 * sin_value);
+          const std::size_t first = head_base + static_cast<std::size_t>(interleaved ? 2 * d : d);
+          const std::size_t second =
+              head_base + static_cast<std::size_t>(interleaved ? 2 * d + 1 : half + d);
+          const float x0 = ReadElementAsFloat(dtype, src, first);
+          const float x1 = ReadElementAsFloat(dtype, src, second);
+          WriteElementFromFloat(dtype, dst, first, x0 * cos_value - x1 * sin_value);
+          WriteElementFromFloat(dtype, dst, second, x1 * cos_value + x0 * sin_value);
         }
       }
     }
@@ -854,10 +855,12 @@ Tensor Compute(const GqaArgs &args, RuntimeContext *rt, Tensor *present_key,
   Tensor rotated_key;
   if (args.do_rotary) {
     const std::vector<std::int64_t> positions = ResolveRotaryPositions(args);
-    rotated_query = ApplyRotaryHalf(rt, *q_for_attention, args.num_heads, args.head_dim,
-                                    *args.cos_cache, *args.sin_cache, positions);
-    rotated_key = ApplyRotaryHalf(rt, *k_for_attention, args.kv_num_heads, args.head_dim,
-                                  *args.cos_cache, *args.sin_cache, positions);
+    rotated_query =
+        ApplyRotaryHalf(rt, *q_for_attention, args.num_heads, args.head_dim, *args.cos_cache,
+                        *args.sin_cache, positions, args.rotary_interleaved);
+    rotated_key =
+        ApplyRotaryHalf(rt, *k_for_attention, args.kv_num_heads, args.head_dim, *args.cos_cache,
+                        *args.sin_cache, positions, args.rotary_interleaved);
     q_for_attention = &rotated_query;
     k_for_attention = &rotated_key;
   }

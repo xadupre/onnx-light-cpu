@@ -17,6 +17,7 @@ void CollectCpuMicrosoftTestCases(std::vector<TestCase> &registry, const std::st
       {"GroupQueryAttention", &RegisterCpuGroupQueryAttentionCases},
       {"LinearAttention", &RegisterCpuMicrosoftLinearAttentionCases},
       {"MatMulNBits", &RegisterCpuMatMulNBitsCases},
+      {"MoE", &RegisterCpuMoECases},
       {"RotaryEmbedding", &RegisterCpuMicrosoftRotaryEmbeddingCases},
       {"SkipLayerNormalization", &RegisterCpuSkipLayerNormalizationCases},
       {"SkipSimplifiedLayerNormalization", &RegisterCpuSkipSimplifiedLayerNormalizationCases},

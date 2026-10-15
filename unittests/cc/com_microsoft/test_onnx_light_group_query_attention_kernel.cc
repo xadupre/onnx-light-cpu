@@ -477,19 +477,52 @@ TEST(OnnxLightGroupQueryAttentionKernel, RejectsRotaryWithoutCosSinCache) {
                std::invalid_argument);
 }
 
-TEST(OnnxLightGroupQueryAttentionKernel, RejectsInterleavedRotary) {
-  const NodeProto node = MakeGqaNode(4, 2, /*with_cache=*/false, /*with_rotary=*/true,
-                                     /*with_present=*/false, /*rotary_interleaved=*/1);
-  onnx_light_cpu::GroupQueryAttentionKernel kernel(node, MakeCtx());
-  const Tensor query = Tensor::FromFloat("", {1, 1, 32}, std::vector<float>(32, 0.1f));
-  const Tensor key = Tensor::FromFloat("", {1, 1, 16}, std::vector<float>(16, 0.1f));
-  const Tensor value = Tensor::FromFloat("", {1, 1, 16}, std::vector<float>(16, 0.1f));
-  const Tensor cos_cache = Tensor::FromFloat("", {8, 4}, std::vector<float>(32, 0.1f));
-  const Tensor sin_cache = Tensor::FromFloat("", {8, 4}, std::vector<float>(32, 0.1f));
+TEST(OnnxLightGroupQueryAttentionKernel, RotaryLayoutsUseDistinctCoordinatesAcrossDtypes) {
+  const Tensor seqlens_k = Tensor::FromInt32("", {1}, {1});
+  const Tensor total_sequence_length = Tensor::FromInt32("", {}, {2});
+  const Tensor position_ids = Tensor::FromInt64("", {1, 2}, {1, 2});
+  for (DataType dtype : {DataType::FLOAT, DataType::FLOAT16, DataType::BFLOAT16}) {
+    SCOPED_TRACE(static_cast<std::int32_t>(dtype));
+    const Tensor query = MakeFloatingTensor(dtype, {1, 2, 4}, {1, 2, 3, 4, 2, 3, 4, 5});
+    const Tensor key = MakeFloatingTensor(dtype, {1, 2, 4}, {1, 2, 3, 4, 1, 2, 3, 4});
+    const Tensor value = MakeFloatingTensor(dtype, {1, 2, 4}, {1, 2, 3, 4, 4, 3, 2, 1});
+    const Tensor cos_cache = MakeFloatingTensor(dtype, {3, 2}, {1, 1, 0, 1, 1, 0});
+    const Tensor sin_cache = MakeFloatingTensor(dtype, {3, 2}, {0, 0, 1, 0, 0, -1});
+    for (std::int64_t layout : {std::int64_t{0}, std::int64_t{1}}) {
+      SCOPED_TRACE(layout);
+      NodeProto node = MakeGqaNode(1, 1, false, true, true, layout);
+      node.ref_input()[9] = "position_ids";
+      onnx_light_cpu::GroupQueryAttentionKernel optimized(node, MakeCtx());
+      onnx_light_cpu::NaiveGroupQueryAttentionKernel naive(node, MakeCtx());
+      Tensor present_key, present_value, naive_key, naive_value;
+      const Tensor output = optimized(node, query, key, value, seqlens_k, total_sequence_length,
+                                      nullptr, nullptr, &cos_cache, &sin_cache, &position_ids,
+                                      nullptr, nullptr, &present_key, &present_value);
+      const Tensor reference =
+          naive(node, query, key, value, seqlens_k, total_sequence_length, nullptr, nullptr,
+                &cos_cache, &sin_cache, &position_ids, nullptr, nullptr, &naive_key, &naive_value);
+      const Tensor expected_key =
+          MakeFloatingTensor(dtype, {1, 1, 2, 4},
+                             layout == 1 ? std::vector<float>{-2, 1, 3, 4, 1, 2, 4, -3}
+                                         : std::vector<float>{-3, 2, 1, 4, 1, 4, 3, -2});
+      ExpectFloatingTensorsNear(present_key, expected_key, 0.0f);
+      ExpectFloatingTensorsNear(naive_key, expected_key, 0.0f);
+      ExpectFloatingTensorsNear(output, reference, dtype == DataType::BFLOAT16 ? 2e-2f : 2e-3f);
+      ExpectFloatingTensorsNear(present_value, naive_value, 0.0f);
+    }
+  }
+}
+
+TEST(OnnxLightGroupQueryAttentionKernel, RejectsUnsupportedRotaryLayout) {
+  const NodeProto node = MakeGqaNode(1, 1, false, true, false, 2);
+  onnx_light_cpu::GroupQueryAttentionKernel optimized(node, MakeCtx());
+  onnx_light_cpu::NaiveGroupQueryAttentionKernel naive(node, MakeCtx());
+  const Tensor query = Tensor::FromFloat("", {1, 1, 4}, {1, 2, 3, 4});
   const Tensor seqlens_k = Tensor::FromInt32("", {1}, {0});
-  const Tensor total_sequence_length = Tensor::FromInt32("", {}, {1});
-  EXPECT_THROW((void)kernel(node, query, key, value, seqlens_k, total_sequence_length, nullptr,
-                            nullptr, &cos_cache, &sin_cache),
+  const Tensor total_length = Tensor::FromInt32("", {}, {1});
+  EXPECT_THROW((void)optimized(node, query, query, query, seqlens_k, total_length),
+               std::invalid_argument);
+  EXPECT_THROW((void)naive(node, query, query, query, seqlens_k, total_length),
                std::invalid_argument);
 }
 
