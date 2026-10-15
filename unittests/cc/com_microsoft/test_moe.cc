@@ -9,6 +9,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -158,6 +159,50 @@ TEST(MoE, RejectsMissingScratchBeforeParallelDispatch) {
                           512, MoEDataType::kFloat32, attributes, {}),
                std::invalid_argument);
   EXPECT_EQ(executor.dispatches, 0);
+}
+
+TEST(MoE, ParallelExpertsClearUnderflowedRouteResults) {
+  constexpr std::size_t hidden = 1024;
+  constexpr std::size_t intermediate = 512;
+  constexpr std::size_t experts = 2;
+  const std::vector<float> float_input(hidden, 0.0f);
+  const std::array<float, experts> float_router{0.0f, -200.0f};
+  const std::vector<float> float_fc1(experts * intermediate * hidden, 0.0f);
+  const std::vector<float> float_fc2(experts * hidden * intermediate, 0.0f);
+  MoEAttributes attributes;
+  attributes.activation = "identity";
+  attributes.k = experts;
+
+  InlineExecutor executor;
+  ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run, &InlineExecutor::Plan};
+  ExecutionExecutorScope scope(&view);
+
+  std::vector<float> float_output(hidden);
+  ScratchStorage float_scratch(1, hidden, experts, intermediate, MoEDataType::kFloat32, attributes);
+  std::fill(float_scratch.values.begin(), float_scratch.values.end(), 7.0f);
+  ComputeMoE(float_input.data(), float_router.data(), float_fc1.data(), nullptr, float_fc2.data(),
+             nullptr, float_output.data(), 1, hidden, experts, intermediate, MoEDataType::kFloat32,
+             attributes, float_scratch.Get());
+  EXPECT_TRUE(std::all_of(float_output.begin(), float_output.end(),
+                          [](float value) { return value == 0.0f; }));
+
+  const std::vector<std::uint16_t> low_input(hidden, 0);
+  const std::vector<std::uint16_t> low_fc1(experts * intermediate * hidden, 0);
+  const std::vector<std::uint16_t> low_fc2(experts * hidden * intermediate, 0);
+  for (const MoEDataType data_type : {MoEDataType::kFloat16, MoEDataType::kBFloat16}) {
+    const std::array<std::uint16_t, experts> low_router{
+        0, data_type == MoEDataType::kFloat16 ? detail::FloatToFloat16Bits(-200.0f)
+                                              : detail::FloatToBFloat16Bits(-200.0f)};
+    std::vector<std::uint16_t> low_output(hidden);
+    ScratchStorage low_scratch(1, hidden, experts, intermediate, data_type, attributes);
+    std::fill(low_scratch.values.begin(), low_scratch.values.end(), 7.0f);
+    ComputeMoE(low_input.data(), low_router.data(), low_fc1.data(), nullptr, low_fc2.data(),
+               nullptr, low_output.data(), 1, hidden, experts, intermediate, data_type, attributes,
+               low_scratch.Get());
+    EXPECT_TRUE(std::all_of(low_output.begin(), low_output.end(),
+                            [](std::uint16_t value) { return value == 0; }));
+  }
+  EXPECT_EQ(executor.dispatches, 3);
 }
 
 TEST(MoE, SingleTokenAndNestedExecutionRemainSerial) {
