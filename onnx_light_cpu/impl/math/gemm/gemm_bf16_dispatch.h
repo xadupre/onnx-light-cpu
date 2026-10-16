@@ -18,10 +18,11 @@ struct GemmBf16Capabilities {
 
 // Capabilities include build support and runtime CPU/OS availability.
 constexpr GemmBf16KernelKind SelectGemmBf16KernelKind(GemmAlgorithm algorithm, bool trans_b,
-                                                      GemmBf16Capabilities capabilities) {
+                                                      GemmBf16Capabilities capabilities,
+                                                      bool requires_gradual_underflow = false) {
   if (trans_b)
     return GemmBf16KernelKind::kNone;
-  if (algorithm == GemmAlgorithm::kGeneral) {
+  if (algorithm == GemmAlgorithm::kGeneral && !requires_gradual_underflow) {
     if (capabilities.amx_bf16)
       return GemmBf16KernelKind::kAMXBF16;
     if (capabilities.avx512_bf16)

@@ -253,3 +253,11 @@ executes BF16 ``MatMulKernel`` through ``RuntimeContext`` for both general
 and direct shapes. Its allocation budget permits the FP32 output workspace
 but rejects full-width input conversions; reference outputs use BF16-exact
 inputs with the FLOAT kernel followed by BF16 rounding.
+
+Native AVX-512BF16 and AMX-BF16 dot products unconditionally flush denormal
+inputs and intermediate results to zero. Their dispatch checks nonzero operand
+magnitudes before execution: values below ``2**-56`` select bounded FP32
+widening instead (AVX2/FMA when available, otherwise converting panels).
+The conservative bound accounts for the 14 fractional bits in a BF16 product,
+preserving gradual underflow without full-tensor FP32 copies. Other inputs
+retain the existing native BF16 dispatch.

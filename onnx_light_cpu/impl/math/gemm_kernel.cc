@@ -43,6 +43,7 @@
 
 #include "onnx_light_cpu/impl/math/math_kernels.h"
 
+#include "onnx_light_cpu/impl/checked_arithmetic.h"
 #include "onnx_light_cpu/impl/execution.h"
 #include "onnx_light_cpu/impl/math/gemm/arm/gemm_kernel_arm.h"
 #include "onnx_light_cpu/impl/math/gemm/avx/gemm_kernel_avx.h"
@@ -1822,6 +1823,18 @@ void GemmHalfNativeGeneral(bool trans_a, std::size_t M, std::size_t N, std::size
   }
 }
 
+bool HasBfloat16UnderflowRisk(const std::uint16_t *values, std::size_t count) {
+  // Native BF16 dots force DAZ/FTZ. With both magnitudes >= 2^-56, the
+  // products' 14 fractional bits keep even differences >= 2^-126.
+  constexpr std::uint16_t minimum_safe_magnitude = 0x2380; // 2^-56.
+  std::uint16_t found = 0;
+  for (std::size_t i = 0; i < count; ++i) {
+    const std::uint16_t magnitude = values[i] & 0x7fff;
+    found |= static_cast<std::uint16_t>((magnitude != 0) & (magnitude < minimum_safe_magnitude));
+  }
+  return found != 0;
+}
+
 } // namespace
 
 namespace detail {
@@ -2055,8 +2068,17 @@ void GemmHalfPlanned(bool is_bfloat16, bool trans_a, bool trans_b, std::size_t M
 #endif
         return result;
       }();
-      [[maybe_unused]] const auto native_kind =
+      [[maybe_unused]] auto native_kind =
           SelectGemmBf16KernelKind(Algorithm, trans_b, capabilities);
+      if (M != 0 && N != 0 && K != 0 &&
+          (native_kind == GemmBf16KernelKind::kAMXBF16 ||
+           native_kind == GemmBf16KernelKind::kAVX512BF16)) {
+        const std::size_t a_elements = CheckedMultiply(M, K, "GemmHalf", "A elements");
+        const std::size_t b_elements = CheckedMultiply(K, N, "GemmHalf", "B elements");
+        if (HasBfloat16UnderflowRisk(A, a_elements) || HasBfloat16UnderflowRisk(B, b_elements)) {
+          native_kind = SelectGemmBf16KernelKind(Algorithm, trans_b, capabilities, true);
+        }
+      }
 #ifdef ONNX_LIGHT_CPU_HAVE_AMX_BF16
       if (native_kind == GemmBf16KernelKind::kAMXBF16) {
         GemmBf16NativeGeneral(trans_a, M, N, K, alpha, A, B, Y, &GemmMicroKernel_AMXBF16,

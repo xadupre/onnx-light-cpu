@@ -2,6 +2,7 @@
 
 #include "onnx_light_cpu/impl/math/gemm/gemm_plan.h"
 #include "unittests/cc/heap_allocation_tracker.h"
+#include "unittests/cc/scoped_x86_gradual_underflow.h"
 
 #include "onnx_core/runtime/kernels/cast_helper.h"
 #include "onnx_core/runtime/kernels/kernel_context.h"
@@ -22,15 +23,18 @@ namespace rt_ns = ONNX_LIGHT_NAMESPACE::core::runtime;
 rt_ns::KernelContext MakeCtx() { return rt_ns::KernelContext(rt_ns::OpsetId(std::string(), 18)); }
 
 void CheckBfloat16BoundedConversion(std::size_t m, std::size_t n, std::size_t k,
-                                    onnx_light_cpu::GemmAlgorithm algorithm) {
+                                    onnx_light_cpu::GemmAlgorithm algorithm,
+                                    bool subnormal_inputs = false) {
   const rt_ns::Shape a_shape{static_cast<std::int64_t>(m), static_cast<std::int64_t>(k)};
   const rt_ns::Shape b_shape{static_cast<std::int64_t>(k), static_cast<std::int64_t>(n)};
   std::vector<float> a(m * k), b(k * n);
   for (std::size_t i = 0; i < a.size(); ++i) {
-    a[i] = static_cast<float>(static_cast<int>(i % 9) - 4) / 8.0f;
+    a[i] = subnormal_inputs ? rt_ns::Bfloat16BitsToFloat(0x0010)
+                            : static_cast<float>(static_cast<int>(i % 9) - 4) / 8.0f;
   }
   for (std::size_t i = 0; i < b.size(); ++i) {
-    b[i] = static_cast<float>(static_cast<int>(i % 7) - 3) / 8.0f;
+    b[i] = subnormal_inputs ? rt_ns::Bfloat16BitsToFloat(0x7e80)
+                            : static_cast<float>(static_cast<int>(i % 7) - 3) / 8.0f;
   }
 
   const onnx_light_cpu::GemmHalfPlan plan({true, false, false, m, n, k});
@@ -82,6 +86,48 @@ TEST(MatMulKernel, Bfloat16GeneralUsesBoundedConversion) {
 
 TEST(MatMulKernel, Bfloat16DirectUsesBoundedConversion) {
   CheckBfloat16BoundedConversion(8, 4097, 32, onnx_light_cpu::GemmAlgorithm::kDirect);
+}
+
+TEST(MatMulKernel, Bfloat16SubnormalConversionStaysBounded) {
+  onnx_light_cpu::test::ScopedX86GradualUnderflow gradual_underflow;
+  CheckBfloat16BoundedConversion(512, 512, 1024, onnx_light_cpu::GemmAlgorithm::kGeneral, true);
+}
+
+TEST(MatMulKernel, Bfloat16SubnormalInputsMatchFloat32) {
+  onnx_light_cpu::test::ScopedX86GradualUnderflow gradual_underflow;
+  constexpr std::size_t size = 128;
+  constexpr std::uint16_t input_pairs[][2] = {
+      {0x0080, 0x7e80}, {0x0010, 0x7e80}, {0x0080, 0x3e80}, {0x0080, 0x7e80}};
+  const rt_ns::Shape shape{size, size};
+  ONNX_LIGHT_NAMESPACE::NodeProto node;
+  node.set_op_type("MatMul");
+  node.add_input("A");
+  node.add_input("B");
+  node.add_output("Y");
+  onnx_light_cpu::MatMulKernel kernel(MakeCtx());
+  kernel.set_node(node);
+  rt_ns::RuntimeContext runtime(MakeCtx());
+  for (const auto &[bits, large_bits] : input_pairs) {
+    for (bool small_b : {false, true}) {
+      SCOPED_TRACE(bits);
+      SCOPED_TRACE(small_b);
+      const float small = rt_ns::Bfloat16BitsToFloat(bits);
+      const float large = rt_ns::Bfloat16BitsToFloat(large_bits);
+      const std::vector<float> a(size * size, small_b ? large : small);
+      const std::vector<float> b(size * size, small_b ? small : large);
+      const auto expected = kernel(rt_ns::Tensor::From<float>("A", shape, a),
+                                   rt_ns::Tensor::From<float>("B", shape, b));
+      runtime.Put("A", rt_ns::MakeBfloat16Tensor("A", shape, a));
+      runtime.Put("B", rt_ns::MakeBfloat16Tensor("B", shape, b));
+      kernel.Run(runtime);
+      const auto &actual = runtime.Get("Y");
+      ASSERT_EQ(actual.shape, shape);
+      const auto *actual_bits = reinterpret_cast<const std::uint16_t *>(actual.bytes());
+      for (std::size_t i = 0; i < size * size; ++i) {
+        ASSERT_EQ(actual_bits[i], rt_ns::FloatToBfloat16Bits(expected.AsFloat()[i])) << i;
+      }
+    }
+  }
 }
 
 TEST(MatMulKernel, BroadcastsBatches) {
