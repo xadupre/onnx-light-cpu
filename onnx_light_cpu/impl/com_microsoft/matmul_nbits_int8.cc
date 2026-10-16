@@ -89,9 +89,16 @@ ExecutionSchedule Int8Schedule(std::size_t n, const MatMulNBitsExecutionTuning &
           tuning.max_participants};
 }
 
-ExecutionSchedule Int8SmallSchedule(std::size_t k, const MatMulNBitsExecutionTuning &tuning) {
+ExecutionSchedule Int8SmallSchedule(std::size_t rows, std::size_t k,
+                                    const MatMulNBitsExecutionTuning &tuning) {
   const auto groups_per_worker = static_cast<std::int64_t>(std::max<std::size_t>(1, 16384 / k));
-  return {groups_per_worker * 2, groups_per_worker, tuning.max_participants};
+  const auto groups_for_outputs = [rows](std::size_t outputs) {
+    const auto columns = rows * 8;
+    return static_cast<std::int64_t>(outputs / columns + (outputs % columns != 0));
+  };
+  return {std::max(groups_per_worker * 2, groups_for_outputs(tuning.parallel_threshold_outputs)),
+          std::max(groups_per_worker, groups_for_outputs(tuning.target_block_outputs)),
+          tuning.max_participants};
 }
 
 void ComputeFloatRow(const float *a, const std::uint8_t *weights, const float *scales,
@@ -243,7 +250,7 @@ void MatMulNBitsInt8Float32(const float *a, const std::uint8_t *weights,
     }
     const bool finite_inputs = finite_scales && std::all_of(finite_rows, finite_rows + rows,
                                                             [](bool value) { return value; });
-    const auto small_schedule = Int8SmallSchedule(k, tuning);
+    const auto small_schedule = Int8SmallSchedule(rows, k, tuning);
     ExecuteRanges(static_cast<std::int64_t>(groups), small_schedule,
                   [&](std::int64_t begin, std::int64_t end) noexcept {
                     for (auto group = static_cast<std::size_t>(begin);

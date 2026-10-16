@@ -348,6 +348,14 @@ TEST(MatMulNBits, PreparedInt8DecodeReusesPackedWeights) {
       } else {
         EXPECT_GT(executor.dispatches, 0);
         EXPECT_LE(executor.blocks, 4);
+        const auto dispatches = executor.dispatches;
+        {
+          ExecutionExecutorScope scope(&view);
+          MatMulNBitsInt8Float32(a.data(), weights.data(), sums.data(), packed_scales.data(),
+                                 bias.data(), y.data(), rows, k, n, {rows * n + 1, 1, 4},
+                                 {scratch.data(), scratch_size});
+        }
+        EXPECT_EQ(executor.dispatches, dispatches);
       }
     }
   }

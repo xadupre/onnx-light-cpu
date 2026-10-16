@@ -10,11 +10,12 @@
 #include <cstdlib>
 #include <iostream>
 #include <stdexcept>
+#include <string_view>
 #include <vector>
 
 int main(int argc, char **argv) {
-  if (argc != 5 && argc != 6) {
-    std::cerr << "Usage: matmul_nbits_throughput M K N repeats [bits=4|8]\n";
+  if (argc < 5 || argc > 7 || (argc == 7 && std::string_view(argv[6]) != "--generic")) {
+    std::cerr << "Usage: matmul_nbits_throughput M K N repeats [bits=4|8] [--generic]\n";
     return 1;
   }
   const auto parse = [](const char *text) {
@@ -27,7 +28,8 @@ int main(int argc, char **argv) {
   };
   const auto m = parse(argv[1]), k = parse(argv[2]), n = parse(argv[3]);
   const auto repeats = parse(argv[4]);
-  const auto bits = argc == 6 ? parse(argv[5]) : 4;
+  const auto bits = argc >= 6 ? parse(argv[5]) : 4;
+  const bool generic = argc == 7;
   if (bits != 4 && bits != 8) {
     throw std::invalid_argument("bits must be 4 or 8.");
   }
@@ -57,13 +59,13 @@ int main(int argc, char **argv) {
   std::vector<std::int32_t> sums(slots);
   std::vector<float> packed_scales(slots);
   const auto first = Clock::now();
-  if (bits == 8) {
+  if (bits == 8 && !generic) {
     onnx_light_cpu::PackMatMulNBitsInt8(b.data(), scales.data(), weights.data(), sums.data(),
                                         packed_scales.data(), k, n);
   }
   const double first_use = std::chrono::duration<double>(Clock::now() - first).count();
   const auto run = [&] {
-    if (bits == 8) {
+    if (bits == 8 && !generic) {
       onnx_light_cpu::MatMulNBitsInt8Float32(a.data(), weights.data(), sums.data(),
                                              packed_scales.data(), nullptr, y.data(), m, k, n,
                                              {256, 64, 1});
@@ -85,15 +87,17 @@ int main(int argc, char **argv) {
                "workspace_bytes,implementation\n"
             << m << ',' << k << ',' << n << ',' << bits << ",float32,1," << preparation << ','
             << first_use << ',' << times[times.size() / 2] << ',' << b.size() << ','
-            << weights.size() + sums.size() * sizeof(std::int32_t) +
-                   packed_scales.size() * sizeof(float)
+            << (generic ? 0
+                        : weights.size() + sums.size() * sizeof(std::int32_t) +
+                              packed_scales.size() * sizeof(float))
             << ','
-            << (bits == 8
+            << (bits == 8 && !generic
                     ? onnx_light_cpu::MatMulNBitsInt8WorkspaceElements(m, k, n, {256, 64, 1}) *
                           sizeof(double)
                     : onnx_light_cpu::kMatMulNBitsInt4WorkspaceBytes)
             << ','
-            << (bits == 8 ? onnx_light_cpu::MatMulNBitsInt8Implementation()
-                          : onnx_light_cpu::MatMulNBitsInt4Implementation())
+            << (generic     ? "generic"
+                : bits == 8 ? onnx_light_cpu::MatMulNBitsInt8Implementation()
+                            : onnx_light_cpu::MatMulNBitsInt4Implementation())
             << '\n';
 }
