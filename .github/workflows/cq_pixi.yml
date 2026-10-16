@@ -64,7 +64,8 @@ jobs:
         with:
           pixi-version: latest
           environments: ${{ matrix.environment }}
-          cache: true
+          # Cache restore hashes the lockfile before pixi install can create it.
+          cache: ${{ hashFiles('pixi.lock') != '' }}
 
       - name: Show pixi info
         run: pixi info

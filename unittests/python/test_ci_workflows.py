@@ -11,6 +11,7 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parents[2]
 _CORE_WORKFLOW = (_ROOT / ".github" / "workflows" / "ci_core.yml").read_text(encoding="utf-8")
 _DOCS_WORKFLOW = (_ROOT / ".github" / "workflows" / "docs.yml").read_text(encoding="utf-8")
+_PIXI_WORKFLOW = (_ROOT / ".github" / "workflows" / "cq_pixi.yml").read_text(encoding="utf-8")
 _RELEASE_WORKFLOW = (_ROOT / ".github" / "workflows" / "build_release_wheel.yml").read_text(
     encoding="utf-8"
 )
@@ -23,6 +24,15 @@ def test_documentation_build_is_linux_only():
     assert "matrix:" not in _DOCS_WORKFLOW
     assert "sphinx-build -W -b html docs dist/html" in _DOCS_WORKFLOW
     assert "PYTHONPATH: ${{ github.workspace }}" in _DOCS_WORKFLOW
+
+
+def test_pixi_environment_cache_requires_an_existing_lockfile():
+    setup = _PIXI_WORKFLOW.split("      - name: Set up pixi", 1)[1].split(
+        "      - name: Show pixi info", 1
+    )[0]
+    assert "uses: prefix-dev/setup-pixi@" in setup
+    assert "environments: ${{ matrix.environment }}" in setup
+    assert "cache: ${{ hashFiles('pixi.lock') != '' }}" in setup
 
 
 def test_documentation_does_not_replace_onnx_light_main():
