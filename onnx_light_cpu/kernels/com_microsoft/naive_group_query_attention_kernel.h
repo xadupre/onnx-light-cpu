@@ -22,7 +22,8 @@ namespace onnx_light_cpu {
 /// ``past_key``/``past_value`` tensor cache, ``do_rotary``/
 /// split-half or interleaved RoPE applied to ``query``/``key`` at
 /// the absolute position derived from ``seqlens_k`` (or an explicit
-/// ``position_ids``), an optional ``attention_bias`` additive mask, and
+/// ``position_ids``), an optional ``attention_bias`` additive mask, a
+/// per-query-head ``head_sink`` virtual softmax logit, and
 /// observable ``present_key``/``present_value`` outputs) but computes every
 /// step -- RoPE, the score/softmax/value reduction, and the KV-cache
 /// concatenation -- with plain, readable scalar loops. It never calls
