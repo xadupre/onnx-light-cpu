@@ -133,6 +133,10 @@ jobs:
             python {project}/tools/onnx_light_release.py generate-import-libraries {project}/../onnx-light/build
           CIBW_BEFORE_TEST: python {project}/tools/onnx_light_release.py install
           CIBW_TEST_COMMAND: python {project}/unittests/python/wheel_registration_smoke.py
+          CIBW_REPAIR_WHEEL_COMMAND_WINDOWS: >-
+            delvewheel repair
+            --exclude "lib_onnx_core.dll;lib_onnx_proto.dll;lib_onnx_kernels.dll;lib_onnx_backend_test.dll;lib_onnx_op.dll;lib_onnx_shape.dll"
+            -w {dest_dir} {wheel}
           CIBW_ENVIRONMENT: >
             CMAKE_BUILD_PARALLEL_LEVEL=${{ steps.cpu_count.outputs.count }}
             CMAKE_ARGS="-DONNX_HARDENING=ON -DONNX_LIGHT_CPU_RELEASE_WHEEL=ON -DONNX_LIGHT_CPU_PYTHON_STABLE_ABI=OFF"
