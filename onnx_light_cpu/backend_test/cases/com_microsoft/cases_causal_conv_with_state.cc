@@ -66,6 +66,8 @@ void RegisterCpuCausalConvWithStateCases(std::vector<TestCase> &registry, TestMo
             [=]() -> bt_ns::IoData {
               const rt_ns::Shape shape =
                   channels_last ? rt_ns::Shape{1, length, 1} : rt_ns::Shape{1, 1, length};
+              const rt_ns::Shape state_shape =
+                  channels_last ? rt_ns::Shape{1, 2, 1} : rt_ns::Shape{1, 1, 2};
               std::vector<float> values(static_cast<std::size_t>(length));
               for (std::int64_t i = 0; i < length; ++i) {
                 values[static_cast<std::size_t>(i)] = static_cast<float>(i % 4 + 1);
@@ -85,11 +87,11 @@ void RegisterCpuCausalConvWithStateCases(std::vector<TestCase> &registry, TestMo
               inputs.push_back(w);
               if (with_past) {
                 inputs.push_back(MakeTensor(dtype, {1}, {0}));
-                inputs.push_back(MakeTensor(dtype, {1, 1, 2}, {4, 5}));
+                inputs.push_back(MakeTensor(dtype, state_shape, {4, 5}));
               }
               return bt_ns::IoData{
                   std::move(inputs),
-                  {MakeTensor(dtype, shape, expected), MakeTensor(dtype, {1, 1, 2}, state)}};
+                  {MakeTensor(dtype, shape, expected), MakeTensor(dtype, state_shape, state)}};
             },
             "backend-test", bt_ns::TestCaseTag::AI_RT);
       }
