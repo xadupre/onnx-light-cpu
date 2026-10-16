@@ -1,17 +1,80 @@
 #include "onnx_light_cpu/kernels/math/matmul_kernel.h"
 
+#include "onnx_light_cpu/impl/math/gemm/gemm_plan.h"
+#include "unittests/cc/heap_allocation_tracker.h"
+
+#include "onnx_core/runtime/kernels/cast_helper.h"
 #include "onnx_core/runtime/kernels/kernel_context.h"
 #include "onnx_core/runtime/memory/simple_tensor.h"
 
 #include <gtest/gtest.h>
 
+#include <cstddef>
+#include <cstdint>
 #include <string>
+#include <vector>
 
 namespace {
 
 namespace rt_ns = ONNX_LIGHT_NAMESPACE::core::runtime;
 
 rt_ns::KernelContext MakeCtx() { return rt_ns::KernelContext(rt_ns::OpsetId(std::string(), 18)); }
+
+void CheckBfloat16BoundedConversion(std::size_t m, std::size_t n, std::size_t k,
+                                    onnx_light_cpu::GemmAlgorithm algorithm) {
+  const rt_ns::Shape a_shape{static_cast<std::int64_t>(m), static_cast<std::int64_t>(k)};
+  const rt_ns::Shape b_shape{static_cast<std::int64_t>(k), static_cast<std::int64_t>(n)};
+  std::vector<float> a(m * k), b(k * n);
+  for (std::size_t i = 0; i < a.size(); ++i) {
+    a[i] = static_cast<float>(static_cast<int>(i % 9) - 4) / 8.0f;
+  }
+  for (std::size_t i = 0; i < b.size(); ++i) {
+    b[i] = static_cast<float>(static_cast<int>(i % 7) - 3) / 8.0f;
+  }
+
+  const onnx_light_cpu::GemmHalfPlan plan({true, false, false, m, n, k});
+  ASSERT_EQ(plan.algorithm(), algorithm);
+  onnx_light_cpu::MatMulKernel kernel(MakeCtx());
+  const auto expected = kernel(rt_ns::Tensor::From<float>("A", a_shape, a),
+                               rt_ns::Tensor::From<float>("B", b_shape, b));
+
+  ONNX_LIGHT_NAMESPACE::NodeProto node;
+  node.set_op_type("MatMul");
+  node.add_input("A");
+  node.add_input("B");
+  node.add_output("Y");
+  kernel.set_node(node);
+  rt_ns::RuntimeContext runtime(MakeCtx());
+  runtime.Set("A", rt_ns::MakeBfloat16Tensor("A", a_shape, a));
+  runtime.Set("B", rt_ns::MakeBfloat16Tensor("B", b_shape, b));
+  const std::size_t peak = PeakAllocationBytes([&] { kernel.Run(runtime); });
+
+  // The output-sized FP32 workspace is necessary; neither full input widening
+  // (both operands for general, the large B for direct) fits this budget.
+  const std::size_t workspace_bytes = m * n * sizeof(float);
+  EXPECT_LE(peak, workspace_bytes);
+  EXPECT_GT(k * n * sizeof(float), workspace_bytes);
+  if (algorithm == onnx_light_cpu::GemmAlgorithm::kGeneral) {
+    EXPECT_GT(m * k * sizeof(float), workspace_bytes);
+  }
+  const auto &actual = runtime.Get("Y");
+  ASSERT_EQ(actual.shape, expected.shape);
+  ASSERT_EQ(actual.data_type, static_cast<std::int32_t>(rt_ns::DataType::BFLOAT16));
+  const auto *actual_bits = reinterpret_cast<const std::uint16_t *>(actual.bytes());
+  for (std::size_t i = 0; i < m * n; ++i) {
+    ASSERT_FLOAT_EQ(rt_ns::Bfloat16BitsToFloat(actual_bits[i]),
+                    rt_ns::Bfloat16BitsToFloat(rt_ns::FloatToBfloat16Bits(expected.AsFloat()[i])))
+        << i;
+  }
+}
+
+TEST(MatMulKernel, Bfloat16GeneralUsesBoundedConversion) {
+  CheckBfloat16BoundedConversion(512, 512, 1024, onnx_light_cpu::GemmAlgorithm::kGeneral);
+}
+
+TEST(MatMulKernel, Bfloat16DirectUsesBoundedConversion) {
+  CheckBfloat16BoundedConversion(8, 4097, 32, onnx_light_cpu::GemmAlgorithm::kDirect);
+}
 
 TEST(MatMulKernel, BroadcastsBatches) {
   onnx_light_cpu::MatMulKernel kernel(MakeCtx());

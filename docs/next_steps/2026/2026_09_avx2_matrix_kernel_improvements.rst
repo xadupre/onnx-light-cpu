@@ -245,3 +245,11 @@ there is no persistent half-plan B storage. These numbers cannot claim an
 FP16 speedup without a comparable before measurement. Per-phase executor
 wait breakdown, temporary allocation high-water marks, whole-model latency
 and one/four-thread *before* tail measurements remain outstanding.
+
+This is a partial improvement, not completion of issue #892. Runtime
+immutable-B preparation remains the separate prerequisite tracked in #891.
+Regression coverage requires preparation for the eligible AVX2 plan and
+executes BF16 ``MatMulKernel`` through ``RuntimeContext`` for both general
+and direct shapes. Its allocation budget permits the FP32 output workspace
+but rejects full-width input conversions; reference outputs use BF16-exact
+inputs with the FLOAT kernel followed by BF16 rounding.

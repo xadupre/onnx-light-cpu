@@ -163,9 +163,8 @@ TEST(GemmPlan, PreparedWideProjectionMatchesDynamicWithBiasAndEpilogue) {
   onnx_light_cpu::ExecutionExecutorScope scope(&view);
   const GemmPlan<float> prepared(options);
   EXPECT_EQ(prepared.algorithm(), GemmAlgorithm::kGeneral);
-  if (prepared.has_prepared_b()) {
-    EXPECT_EQ(onnx_light_cpu::EffectiveGemmSimdLevel(), onnx_light_cpu::SimdLevel::kAVX2);
-  }
+  EXPECT_EQ(prepared.has_prepared_b(),
+            onnx_light_cpu::EffectiveGemmSimdLevel() == onnx_light_cpu::SimdLevel::kAVX2);
   EXPECT_FALSE(dynamic.has_prepared_b());
   std::vector<float> expected(m * n), actual(m * n);
   dynamic.Execute(a.data(), b.data(), bias.data(), expected.data());
