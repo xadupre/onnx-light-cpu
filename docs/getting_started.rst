@@ -64,6 +64,11 @@ Here ``cmake --install`` places the dependency's freshly built libraries in its
 source tree, not in site-packages. ``--onnx-light-source`` links against those
 same runtime libraries rather than rebuilding a second copy.
 
+In-place builds may place symbolic links in ``onnx_light/onnx_py`` pointing to
+native artifacts in the same checkout's build directory. These are supported:
+the extension is located through the selected source package, and linking uses
+the resolved runtime-library paths.
+
 Python builds that exchange nanobind-bound C++ objects must also use the same
 effective ABI mode. The published onnx-light 0.1.32 wheels use nanobind's
 native ABI even though ``ONNX_LIGHT_PYTHON_STABLE_ABI`` defaults to ``ON``:
