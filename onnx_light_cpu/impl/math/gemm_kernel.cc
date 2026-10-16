@@ -43,6 +43,7 @@
 
 #include "onnx_light_cpu/impl/math/math_kernels.h"
 
+#include "onnx_light_cpu/impl/checked_arithmetic.h"
 #include "onnx_light_cpu/impl/execution.h"
 #include "onnx_light_cpu/impl/math/gemm/arm/gemm_kernel_arm.h"
 #include "onnx_light_cpu/impl/math/gemm/avx/gemm_kernel_avx.h"
@@ -1822,9 +1823,56 @@ void GemmHalfNativeGeneral(bool trans_a, std::size_t M, std::size_t N, std::size
   }
 }
 
+bool HasBfloat16UnderflowRisk(const std::uint16_t *values, std::size_t count) {
+  // Native BF16 dots force DAZ/FTZ. With both magnitudes >= 2^-56, the
+  // products' 14 fractional bits keep even differences >= 2^-126.
+  constexpr std::uint16_t minimum_safe_magnitude = 0x2380; // 2^-56.
+  std::uint16_t found = 0;
+  for (std::size_t i = 0; i < count; ++i) {
+    const std::uint16_t magnitude = values[i] & 0x7fff;
+    found |= static_cast<std::uint16_t>((magnitude != 0) & (magnitude < minimum_safe_magnitude));
+  }
+  return found != 0;
+}
+
 } // namespace
 
 namespace detail {
+
+std::vector<float> PackGemmWideB(std::size_t n, std::size_t k, const float *b) {
+  constexpr std::size_t width = 16;
+  std::vector<float> packed(n * k);
+  for (std::size_t col = 0; col < n; col += width) {
+    float *panel = packed.data() + col * k;
+    for (std::size_t depth = 0; depth < k; ++depth) {
+      std::copy_n(b + depth * n + col, width, panel + depth * width);
+    }
+  }
+  return packed;
+}
+
+void GemmWidePreparedB(std::size_t m, std::size_t n, std::size_t k, float alpha, const float *a,
+                       const float *packed_b, float beta, const float *c, float *y,
+                       std::size_t mr) {
+  constexpr std::size_t width = 16;
+  const GemmAccumMode mode =
+      c != nullptr && beta != 0.0f ? GemmAccumMode::kInitBias : GemmAccumMode::kInitZero;
+  ExecuteRanges(static_cast<std::int64_t>(n / width),
+                static_cast<double>(m) * width * k / kGemmFmasPerParallelWorkUnit,
+                [&](std::int64_t begin, std::int64_t end) {
+                  for (std::size_t panel = static_cast<std::size_t>(begin);
+                       panel < static_cast<std::size_t>(end); ++panel) {
+                    const std::size_t col = panel * width;
+                    const float *b = packed_b + col * k;
+                    for (std::size_t row = 0; row < m; row += mr) {
+                      const std::size_t rows = std::min(mr, m - row);
+                      GemmTileF32(GemmKernelKind::kAVX2FMA, rows, width, k, alpha, beta, b, width,
+                                  c == nullptr ? nullptr : c + row * n + col, n, y + row * n + col,
+                                  n, 0, mode, a + row * k);
+                    }
+                  }
+                });
+}
 
 template <GemmAlgorithm Algorithm>
 void GemmFloat32PlannedImpl(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::size_t K,
@@ -2020,8 +2068,17 @@ void GemmHalfPlanned(bool is_bfloat16, bool trans_a, bool trans_b, std::size_t M
 #endif
         return result;
       }();
-      [[maybe_unused]] const auto native_kind =
+      [[maybe_unused]] auto native_kind =
           SelectGemmBf16KernelKind(Algorithm, trans_b, capabilities);
+      if (M != 0 && N != 0 && K != 0 &&
+          (native_kind == GemmBf16KernelKind::kAMXBF16 ||
+           native_kind == GemmBf16KernelKind::kAVX512BF16)) {
+        const std::size_t a_elements = CheckedMultiply(M, K, "GemmHalf", "A elements");
+        const std::size_t b_elements = CheckedMultiply(K, N, "GemmHalf", "B elements");
+        if (HasBfloat16UnderflowRisk(A, a_elements) || HasBfloat16UnderflowRisk(B, b_elements)) {
+          native_kind = SelectGemmBf16KernelKind(Algorithm, trans_b, capabilities, true);
+        }
+      }
 #ifdef ONNX_LIGHT_CPU_HAVE_AMX_BF16
       if (native_kind == GemmBf16KernelKind::kAMXBF16) {
         GemmBf16NativeGeneral(trans_a, M, N, K, alpha, A, B, Y, &GemmMicroKernel_AMXBF16,

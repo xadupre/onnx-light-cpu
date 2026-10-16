@@ -186,6 +186,13 @@ constexpr GemmCase kCases[] = {
     {"trans_a_128", 128, 128, 128, true, false, false},
     {"trans_b_128", 128, 128, 128, false, true, false},
     {"transformer_proj", 128, 3072, 768, false, false, true},
+    {"qwen_lm_head", 128, 32000, 512, false, false, true},
+    {"qwen_qkv", 128, 1024, 512, false, false, true},
+    {"qwen_attention_out", 128, 512, 512, false, false, true},
+    {"qwen_gate", 128, 1376, 512, false, false, true},
+    {"qwen_up", 128, 1376, 512, false, false, true},
+    {"qwen_down", 128, 512, 1376, false, false, true},
+    {"qwen_decode_lm_head", 1, 32000, 512, false, false, true},
 };
 
 std::size_t RepeatCount(const GemmCase &c) {
@@ -197,7 +204,8 @@ std::size_t RepeatCount(const GemmCase &c) {
 
 template <typename T>
 double MeasureGflops(const GemmCase &c, std::size_t *useful_threads, ThreadExecutor *executor,
-                     std::int64_t *actual_blocks) {
+                     std::int64_t *actual_blocks, double *p90_seconds = nullptr,
+                     bool *prepared_b = nullptr) {
   std::mt19937 rng(0x5eed5eedu);
   std::uniform_real_distribution<double> dist(-1.0, 1.0);
   std::vector<T> a(c.m * c.k);
@@ -223,6 +231,9 @@ double MeasureGflops(const GemmCase &c, std::size_t *useful_threads, ThreadExecu
   }
   const GemmPlan<T> plan(options);
   *useful_threads = plan.useful_threads();
+  if (prepared_b != nullptr) {
+    *prepared_b = plan.has_prepared_b();
+  }
   executor->ResetMetrics();
 
   const auto run = [&]() {
@@ -248,6 +259,9 @@ double MeasureGflops(const GemmCase &c, std::size_t *useful_threads, ThreadExecu
   }
   std::sort(seconds.begin(), seconds.end());
   const double median = seconds[seconds.size() / 2];
+  if (p90_seconds != nullptr) {
+    *p90_seconds = seconds[(9 * seconds.size() + 9) / 10 - 1];
+  }
   const double operations =
       2.0 * static_cast<double>(c.m) * static_cast<double>(c.n) * static_cast<double>(c.k);
   *actual_blocks = executor->maximum_blocks;
@@ -259,7 +273,9 @@ double MeasureGflops(const GemmCase &c, std::size_t *useful_threads, ThreadExecu
 // patterns derived from random float32 values; the reduction accumulates in
 // float32 and the epilogue narrows the result back to the half format, so the
 // figure includes the per-element input conversion done during packing.
-template <bool Bfloat16> double MeasureHalfGflops(const GemmCase &c) {
+template <bool Bfloat16>
+double MeasureHalfGflops(const GemmCase &c, ThreadExecutor *executor, std::int64_t *actual_blocks,
+                         double *p90_seconds = nullptr) {
   std::mt19937 rng(0x5eed5eedu);
   std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
   const auto narrow = [](float value) {
@@ -281,11 +297,17 @@ template <bool Bfloat16> double MeasureHalfGflops(const GemmCase &c) {
   epilogue.output_conversion = Bfloat16 ? onnx_light_cpu::GemmOutputConversion::kBFloat16
                                         : onnx_light_cpu::GemmOutputConversion::kFloat16;
   epilogue.converted_output = out.data();
+  onnx_light_cpu::GemmHalfPlanOptions options;
+  options.is_bfloat16 = Bfloat16;
+  options.trans_a = c.trans_a;
+  options.trans_b = c.trans_b;
+  options.m = c.m;
+  options.n = c.n;
+  options.k = c.k;
+  const onnx_light_cpu::GemmHalfPlan plan(options);
+  executor->ResetMetrics();
 
-  const auto run = [&]() {
-    onnx_light_cpu::GemmHalfWithEpilogue(Bfloat16, c.trans_a, c.trans_b, c.m, c.n, c.k, 1.0f,
-                                         a.data(), b.data(), epilogue, workspace.data());
-  };
+  const auto run = [&]() { plan.Execute(a.data(), b.data(), epilogue, workspace.data()); };
 
   for (int warmup = 0; warmup < 3; ++warmup) {
     run();
@@ -302,6 +324,10 @@ template <bool Bfloat16> double MeasureHalfGflops(const GemmCase &c) {
   }
   std::sort(seconds.begin(), seconds.end());
   const double median = seconds[seconds.size() / 2];
+  if (p90_seconds != nullptr) {
+    *p90_seconds = seconds[(9 * seconds.size() + 9) / 10 - 1];
+  }
+  *actual_blocks = executor->maximum_blocks;
   const double operations =
       2.0 * static_cast<double>(c.m) * static_cast<double>(c.n) * static_cast<double>(c.k);
   return operations / median / 1e9;
@@ -372,17 +398,28 @@ int main(int argc, char **argv) {
     if (argc > 3) {
       std::size_t useful_threads = 0;
       std::int64_t blocks = 1;
+      double p90_seconds = 0;
+      bool prepared_b = false;
       const std::string dtype(argv[3]);
-      if (dtype != "fp32" && dtype != "fp64") {
-        std::fprintf(stderr, "dtype must be fp32 or fp64\n");
+      if (dtype != "fp32" && dtype != "fp64" && dtype != "fp16" && dtype != "bf16") {
+        std::fprintf(stderr, "dtype must be fp32, fp64, fp16 or bf16\n");
         return 2;
       }
-      const double gflops = dtype == "fp32"
-                                ? MeasureGflops<float>(c, &useful_threads, &executor, &blocks)
-                                : MeasureGflops<double>(c, &useful_threads, &executor, &blocks);
+      const double gflops =
+          dtype == "fp32"   ? MeasureGflops<float>(c, &useful_threads, &executor, &blocks,
+                                                   &p90_seconds, &prepared_b)
+          : dtype == "fp64" ? MeasureGflops<double>(c, &useful_threads, &executor, &blocks,
+                                                    &p90_seconds, &prepared_b)
+          : dtype == "fp16" ? MeasureHalfGflops<false>(c, &executor, &blocks, &p90_seconds)
+                            : MeasureHalfGflops<true>(c, &executor, &blocks, &p90_seconds);
       const double seconds = 2.0 * c.m * c.n * c.k / (gflops * 1e9);
-      std::printf("%s %s M=%zu N=%zu K=%zu seconds=%.9g GFLOP/s=%.3f blocks=%lld\n", c.name,
-                  dtype.c_str(), c.m, c.n, c.k, seconds, gflops, static_cast<long long>(blocks));
+      std::printf("%s %s M=%zu N=%zu K=%zu seconds=%.9g p90=%.9g GFLOP/s=%.3f blocks=%lld "
+                  "prepared_b=%s prepared_bytes=%zu\n",
+                  c.name, dtype.c_str(), c.m, c.n, c.k, seconds, p90_seconds, gflops,
+                  static_cast<long long>(blocks), prepared_b ? "yes" : "no",
+                  c.constant_b && (dtype == "fp32" || dtype == "fp64")
+                      ? c.k * c.n * (dtype == "fp32" ? sizeof(float) : sizeof(double))
+                      : std::size_t{0});
       continue;
     }
     std::size_t fp32_threads = 0;
@@ -391,8 +428,9 @@ int main(int argc, char **argv) {
     std::int64_t fp64_blocks = 1;
     const double fp32 = MeasureGflops<float>(c, &fp32_threads, &executor, &fp32_blocks);
     const double fp64 = MeasureGflops<double>(c, &fp64_threads, &executor, &fp64_blocks);
-    const double fp16 = MeasureHalfGflops<false>(c);
-    const double bf16 = MeasureHalfGflops<true>(c);
+    std::int64_t half_blocks = 1;
+    const double fp16 = MeasureHalfGflops<false>(c, &executor, &half_blocks);
+    const double bf16 = MeasureHalfGflops<true>(c, &executor, &half_blocks);
     std::printf("%-18s %6zu %6zu %6zu %8zu %10lld %14.2f %8zu %10lld %14.2f %14.2f %14.2f\n",
                 c.name, c.m, c.n, c.k, fp32_threads, static_cast<long long>(fp32_blocks), fp32,
                 fp64_threads, static_cast<long long>(fp64_blocks), fp64, fp16, bf16);

@@ -138,6 +138,83 @@ TEST(GemmPlan, WideProjectionUsesSingleKBlock) {
   EXPECT_LE(plan.useful_threads(), 51u);
 }
 
+TEST(GemmPlan, PreparedWideProjectionMatchesDynamicWithBiasAndEpilogue) {
+  constexpr std::size_t m = 128, n = 32000, k = 512;
+  std::vector<float> a(m * k), b(k * n), bias(m * n);
+  for (std::size_t i = 0; i < a.size(); ++i) {
+    a[i] = static_cast<float>(static_cast<int>(i % 13) - 6) / 16.0f;
+  }
+  for (std::size_t i = 0; i < b.size(); ++i) {
+    b[i] = static_cast<float>(static_cast<int>(i % 17) - 8) / 32.0f;
+  }
+  for (std::size_t i = 0; i < bias.size(); ++i) {
+    bias[i] = static_cast<float>(i % 7) / 8.0f;
+  }
+  GemmPlanOptions<float> options;
+  options.m = m;
+  options.n = n;
+  options.k = k;
+  options.alpha = 0.75f;
+  options.beta = 0.5f;
+  const GemmPlan<float> dynamic(options);
+  options.constant_b = b;
+  InlineExecutor executor;
+  onnx_light_cpu::ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run};
+  onnx_light_cpu::ExecutionExecutorScope scope(&view);
+  const GemmPlan<float> prepared(options);
+  EXPECT_EQ(prepared.algorithm(), GemmAlgorithm::kGeneral);
+  EXPECT_EQ(prepared.has_prepared_b(),
+            onnx_light_cpu::EffectiveGemmSimdLevel() == onnx_light_cpu::SimdLevel::kAVX2);
+  EXPECT_FALSE(dynamic.has_prepared_b());
+  std::vector<float> expected(m * n), actual(m * n);
+  dynamic.Execute(a.data(), b.data(), bias.data(), expected.data());
+  prepared.Execute(a.data(), nullptr, bias.data(), actual.data());
+  EXPECT_GT(executor.maximum_blocks, 1);
+  for (std::size_t i = 0; i < actual.size(); ++i) {
+    ASSERT_NEAR(actual[i], expected[i], 1e-4f) << i;
+  }
+
+  onnx_light_cpu::GemmEpilogue<float> epilogue;
+  epilogue.bias = bias.data();
+  epilogue.bias_layout = onnx_light_cpu::GemmBroadcast::kMatrix;
+  epilogue.beta = 0.5f;
+  dynamic.Execute(a.data(), b.data(), epilogue, expected.data());
+  prepared.Execute(a.data(), epilogue, actual.data());
+  for (std::size_t i = 0; i < actual.size(); ++i) {
+    ASSERT_NEAR(actual[i], expected[i], 1e-4f) << i;
+  }
+}
+
+TEST(GemmHalfPlan, Bfloat16ProjectionUsesBoundedConversion) {
+  constexpr std::size_t m = 128, n = 512, k = 512;
+  std::vector<float> a_float(m * k), b_float(k * n), expected(m * n), workspace(m * n);
+  std::vector<std::uint16_t> a(m * k), b(k * n), converted(m * n);
+  for (std::size_t i = 0; i < a.size(); ++i) {
+    a_float[i] = static_cast<float>(static_cast<int>(i % 9) - 4) / 8.0f;
+    a[i] = EncodeBFloat16(a_float[i]);
+  }
+  for (std::size_t i = 0; i < b.size(); ++i) {
+    b_float[i] = static_cast<float>(static_cast<int>(i % 7) - 3) / 8.0f;
+    b[i] = EncodeBFloat16(b_float[i]);
+  }
+  const GemmPlan<float> reference(GemmPlanOptions<float>{false, false, m, n, k});
+  reference.Execute(a_float.data(), b_float.data(), nullptr, expected.data());
+  GemmHalfPlanOptions options;
+  options.is_bfloat16 = true;
+  options.m = m;
+  options.n = n;
+  options.k = k;
+  const GemmHalfPlan plan(options);
+  EXPECT_EQ(plan.algorithm(), GemmAlgorithm::kGeneral);
+  onnx_light_cpu::GemmEpilogue<float> epilogue;
+  epilogue.output_conversion = onnx_light_cpu::GemmOutputConversion::kBFloat16;
+  epilogue.converted_output = converted.data();
+  plan.Execute(a.data(), b.data(), epilogue, workspace.data());
+  for (std::size_t i = 0; i < converted.size(); ++i) {
+    ASSERT_NEAR(DecodeBFloat16(converted[i]), expected[i], 0.05f) << i;
+  }
+}
+
 TEST(GemmPlan, BenchmarkShapesPreserveScalesTransposesAndRepeatedExecution) {
   struct Shape {
     std::size_t m, n, k;

@@ -11,6 +11,9 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parents[2]
 _CORE_WORKFLOW = (_ROOT / ".github" / "workflows" / "ci_core.yml").read_text(encoding="utf-8")
 _DOCS_WORKFLOW = (_ROOT / ".github" / "workflows" / "docs.yml").read_text(encoding="utf-8")
+_STANDALONE_WORKFLOW = (_ROOT / ".github" / "workflows" / "cpp_standalone.yml").read_text(
+    encoding="utf-8"
+)
 _PIXI_WORKFLOW = (_ROOT / ".github" / "workflows" / "cq_pixi.yml").read_text(encoding="utf-8")
 _RELEASE_WORKFLOW = (_ROOT / ".github" / "workflows" / "build_release_wheel.yml").read_text(
     encoding="utf-8"
@@ -41,6 +44,13 @@ def test_documentation_does_not_replace_onnx_light_main():
     assert "--onnx-light-source" in _DOCS_WORKFLOW
     assert "--cpp-tests" not in _DOCS_WORKFLOW
     assert "python -m pytest" not in _DOCS_WORKFLOW
+
+
+def test_standalone_source_build_allows_time_for_both_projects():
+    standalone_job = _STANDALONE_WORKFLOW.split("  standalone_inference:", 1)[1]
+    assert "timeout-minutes: 60" in standalone_job
+    assert "- name: Build and install onnx-light\n" in standalone_job
+    assert "- name: Build and install onnx-light-cpu\n" in standalone_job
 
 
 def test_source_integration_uses_matching_nanobind_abi():

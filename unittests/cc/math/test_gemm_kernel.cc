@@ -12,6 +12,8 @@
 #include "onnx_light_cpu/impl/math/half_conversion.h"
 #include "onnx_light_cpu/impl/math/math_kernels.h"
 #include "onnx_light_cpu/impl/simd_level.h"
+#include "unittests/cc/heap_allocation_tracker.h"
+#include "unittests/cc/scoped_x86_gradual_underflow.h"
 
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
 #include "onnx_light_cpu/impl/math/gemm/avx2/gemm_kernel_avx2_fma.h"
@@ -34,89 +36,8 @@
 #include <random>
 #include <thread>
 #include <type_traits>
+#include <utility>
 #include <vector>
-
-#if defined(_MSC_VER)
-#include <malloc.h>
-#endif
-
-// Heap-allocation tracker used by the FP16/BF16 "no expanded operand" tests
-// below. While ``g_alloc_recording`` is set, every global allocation updates
-// ``g_alloc_peak`` with the largest single request seen (including worker-thread
-// allocations), so a test can assert the half-precision path never allocates a
-// buffer large enough to widen a full ``M*K`` or ``K*N`` operand (Roadmap PR07.2).
-namespace {
-std::atomic<bool> g_alloc_recording{false};
-std::atomic<std::size_t> g_alloc_peak{0};
-
-void RecordAllocation(std::size_t bytes) {
-  if (!g_alloc_recording.load(std::memory_order_relaxed)) {
-    return;
-  }
-  std::size_t previous = g_alloc_peak.load(std::memory_order_relaxed);
-  while (bytes > previous &&
-         !g_alloc_peak.compare_exchange_weak(previous, bytes, std::memory_order_relaxed)) {
-  }
-}
-
-// Portable aligned allocation helpers: MSVC does not provide std::aligned_alloc,
-// so fall back to _aligned_malloc / _aligned_free on that toolchain.
-void *AlignedAlloc(std::size_t alignment, std::size_t size) {
-#if defined(_MSC_VER)
-  return _aligned_malloc(size, alignment);
-#else
-  return std::aligned_alloc(alignment, size);
-#endif
-}
-
-void AlignedFree(void *pointer) noexcept {
-#if defined(_MSC_VER)
-  _aligned_free(pointer);
-#else
-  std::free(pointer);
-#endif
-}
-} // namespace
-
-void *operator new(std::size_t bytes) {
-  RecordAllocation(bytes);
-  void *pointer = std::malloc(bytes != 0 ? bytes : 1);
-  if (pointer == nullptr) {
-    throw std::bad_alloc();
-  }
-  return pointer;
-}
-
-void *operator new[](std::size_t bytes) { return ::operator new(bytes); }
-
-void operator delete(void *pointer) noexcept { std::free(pointer); }
-void operator delete[](void *pointer) noexcept { std::free(pointer); }
-void operator delete(void *pointer, std::size_t) noexcept { std::free(pointer); }
-void operator delete[](void *pointer, std::size_t) noexcept { std::free(pointer); }
-
-void *operator new(std::size_t bytes, std::align_val_t alignment) {
-  RecordAllocation(bytes);
-  const std::size_t align = static_cast<std::size_t>(alignment);
-  const std::size_t size = (bytes + align - 1) / align * align;
-  void *pointer = AlignedAlloc(align, size != 0 ? size : align);
-  if (pointer == nullptr) {
-    throw std::bad_alloc();
-  }
-  return pointer;
-}
-
-void *operator new[](std::size_t bytes, std::align_val_t alignment) {
-  return ::operator new(bytes, alignment);
-}
-
-void operator delete(void *pointer, std::align_val_t) noexcept { AlignedFree(pointer); }
-void operator delete[](void *pointer, std::align_val_t) noexcept { AlignedFree(pointer); }
-void operator delete(void *pointer, std::size_t, std::align_val_t) noexcept {
-  AlignedFree(pointer);
-}
-void operator delete[](void *pointer, std::size_t, std::align_val_t) noexcept {
-  AlignedFree(pointer);
-}
 
 namespace {
 
@@ -1665,6 +1586,24 @@ TEST(GemmBf16Dispatch, PreservesLayoutAndAlgorithmRestrictions) {
   }
 }
 
+TEST(GemmBf16Dispatch, GradualUnderflowUsesFloat32Arithmetic) {
+  using onnx_light_cpu::detail::GemmBf16Capabilities;
+  using Kind = onnx_light_cpu::detail::GemmBf16KernelKind;
+  for (unsigned mask = 0; mask < 8; ++mask) {
+    SCOPED_TRACE(mask);
+    const GemmBf16Capabilities capabilities{(mask & 1) != 0, (mask & 2) != 0, (mask & 4) != 0};
+    for (const auto algorithm :
+         {onnx_light_cpu::GemmAlgorithm::kGeneral, onnx_light_cpu::GemmAlgorithm::kDirect}) {
+      EXPECT_EQ(
+          onnx_light_cpu::detail::SelectGemmBf16KernelKind(algorithm, false, capabilities, true),
+          capabilities.avx2_fma ? Kind::kAVX2 : Kind::kNone);
+      EXPECT_EQ(
+          onnx_light_cpu::detail::SelectGemmBf16KernelKind(algorithm, true, capabilities, true),
+          Kind::kNone);
+    }
+  }
+}
+
 TEST(GemmBf16Native, ScalarKernelMatchesReference) {
   // Portable scalar member: several row blocks (M > 6), exact-16 and tail N,
   // even and odd K, an empty K, ``trans_a``, and a non-unit alpha.
@@ -1932,17 +1871,6 @@ TEST(GemmHalf, Avx2Float16BiasNarrowingCoversBroadcastsAndTails) {
 
 namespace {
 
-// Runs ``fn`` once to warm up one-time allocations, then again while recording
-// heap allocations, and returns the largest single allocation observed.
-template <typename Fn> std::size_t PeakAllocationBytes(Fn fn) {
-  fn();
-  g_alloc_peak.store(0, std::memory_order_relaxed);
-  g_alloc_recording.store(true, std::memory_order_relaxed);
-  fn();
-  g_alloc_recording.store(false, std::memory_order_relaxed);
-  return g_alloc_peak.load(std::memory_order_relaxed);
-}
-
 // Confirms the FP16/BF16 path never allocates enough space to widen its larger
 // operand in full. Native kernels use a separate compact blocking profile, so
 // their bounded panel allocation need not match the float32 path's panel size.
@@ -1984,6 +1912,73 @@ TEST(GemmHalf, BFloat16AlgorithmsDoNotWidenOperands) {
   CheckHalfNoExpandedOperand(true, 1, 512, 256, 551);  // skinny-M GEMV
   CheckHalfNoExpandedOperand(true, 8, 2, 49152, 561);  // split-K
   CheckHalfNoExpandedOperand(true, 8, 768, 1024, 571); // general blocked
+}
+
+TEST(GemmHalf, Bfloat16SubnormalOperandsMatchFloat32) {
+  onnx_light_cpu::test::ScopedX86GradualUnderflow gradual_underflow;
+  constexpr std::size_t m = 17, n = 19, k = 129;
+  constexpr std::uint16_t input_pairs[][2] = {
+      {0x0010, 0x7e80}, {0x0001, 0x7e80}, {0x007f, 0x7e80}, {0x8010, 0x7e80}, {0x8001, 0x7e80},
+      {0x807f, 0x7e80}, {0x0000, 0x7e80}, {0x8000, 0x7e80}, {0x0080, 0x7e80}, {0x0080, 0x3e80},
+      {0x0010, 0x3e80}, {0x2380, 0x2380}, {0x237f, 0x2380}};
+  for (bool trans_a : {false, true}) {
+    for (bool trans_b : {false, true}) {
+      const onnx_light_cpu::GemmHalfPlan half_plan({true, trans_a, trans_b, m, n, k});
+      const onnx_light_cpu::GemmPlan<float> reference({trans_a, trans_b, m, n, k});
+      for (const auto &[bits, large_bits] : input_pairs) {
+        for (bool small_b : {false, true}) {
+          SCOPED_TRACE(trans_a);
+          SCOPED_TRACE(trans_b);
+          SCOPED_TRACE(bits);
+          SCOPED_TRACE(small_b);
+          const std::vector<std::uint16_t> a(m * k, small_b ? large_bits : bits);
+          const std::vector<std::uint16_t> b(k * n, small_b ? bits : large_bits);
+          const auto a_float = WidenHalf(a, true);
+          const auto b_float = WidenHalf(b, true);
+          std::vector<float> actual(m * n), expected(m * n);
+          reference.Execute(a_float.data(), b_float.data(), nullptr, expected.data());
+          half_plan.Execute(a.data(), b.data(), {}, actual.data());
+          for (std::size_t i = 0; i < actual.size(); ++i) {
+            ASSERT_FLOAT_EQ(actual[i], expected[i]) << i;
+          }
+        }
+      }
+    }
+  }
+}
+
+TEST(GemmHalf, Bfloat16SubnormalAtOperandTailMatchesFloat32) {
+  onnx_light_cpu::test::ScopedX86GradualUnderflow gradual_underflow;
+  constexpr std::size_t m = 17, n = 19, k = 129;
+  const onnx_light_cpu::GemmHalfPlan half_plan({true, false, false, m, n, k});
+  const onnx_light_cpu::GemmPlan<float> reference({false, false, m, n, k});
+  for (bool small_b : {false, true}) {
+    SCOPED_TRACE(small_b);
+    std::vector<std::uint16_t> a(m * k, small_b ? 0x7e80 : 0);
+    std::vector<std::uint16_t> b(k * n, small_b ? 0 : 0x7e80);
+    (small_b ? b : a).back() = 0x0010;
+    const auto a_float = WidenHalf(a, true);
+    const auto b_float = WidenHalf(b, true);
+    std::vector<float> actual(m * n), expected(m * n);
+    reference.Execute(a_float.data(), b_float.data(), nullptr, expected.data());
+    half_plan.Execute(a.data(), b.data(), {}, actual.data());
+    for (std::size_t i = 0; i < actual.size(); ++i) {
+      ASSERT_FLOAT_EQ(actual[i], expected[i]) << i;
+    }
+  }
+}
+
+TEST(GemmHalf, Bfloat16UnderflowCheckPreservesEmptyInputs) {
+  for (const auto &[m, n] : {std::pair{0u, 19u}, std::pair{17u, 0u}}) {
+    onnx_light_cpu::detail::GemmHalfPlanned<onnx_light_cpu::GemmAlgorithm::kGeneral>(
+        true, false, false, m, n, 129, 1.0f, nullptr, nullptr, nullptr);
+  }
+  std::vector<float> output(17 * 19, 1.0f);
+  onnx_light_cpu::detail::GemmHalfPlanned<onnx_light_cpu::GemmAlgorithm::kGeneral>(
+      true, false, false, 17, 19, 0, 1.0f, nullptr, nullptr, output.data());
+  for (const float value : output) {
+    EXPECT_EQ(value, 0.0f);
+  }
 }
 
 TEST(GemmFloat32, DynamicBUsesBoundedWorkerLocalPacking) {

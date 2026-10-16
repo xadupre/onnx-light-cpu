@@ -61,7 +61,8 @@ jobs:
   standalone_inference:
     name: standalone inference (Linux)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Allow time for both source builds on the two-worker runner.
+    timeout-minutes: 60
     permissions:
       contents: read
     env:

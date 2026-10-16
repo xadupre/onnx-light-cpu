@@ -523,15 +523,38 @@ GemmPlan<T>::GemmPlan(const GemmPlanOptions<T> &options)
                                 options.n, options.k, participant_limit_, true)),
       useful_threads_(UsefulThreads(algorithm_, options.m, options.n, options.k, blocking_,
                                     participant_limit_, sizeof(T))),
-      has_constant_b_(!options.constant_b.empty()),
-      constant_b_(options.constant_b.begin(), options.constant_b.end()),
-      kernel_(SelectKernel<T>(algorithm_)) {
+      has_constant_b_(!options.constant_b.empty()), kernel_(SelectKernel<T>(algorithm_)) {
   CheckedProduct(m_, k_, "A");
   const std::size_t b_count = CheckedProduct(k_, n_, "B");
   CheckedProduct(m_, n_, "Y");
-  if (has_constant_b_ && constant_b_.size() != b_count) {
+  if (has_constant_b_ && options.constant_b.size() != b_count) {
     throw std::invalid_argument("onnx_light_cpu::GemmPlan: constant B size does not match K * N.");
   }
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
+  if constexpr (std::is_same_v<T, float>) {
+    prepared_wide_b_ = has_constant_b_ && algorithm_ == GemmAlgorithm::kGeneral && !trans_a_ &&
+                       !trans_b_ && m_ == 128 && n_ >= 32000 && n_ % 16 == 0 && k_ == 512 &&
+                       EffectiveGemmSimdLevel() == SimdLevel::kAVX2;
+    if (prepared_wide_b_) {
+      constant_b_ = detail::PackGemmWideB(n_, k_, options.constant_b.data());
+    }
+  }
+#endif
+  if (has_constant_b_ && !prepared_wide_b_) {
+    constant_b_.assign(options.constant_b.begin(), options.constant_b.end());
+  }
+}
+
+template <typename T>
+void GemmPlan<T>::ExecuteProduct(const T *a, const T *b, T beta, const T *c, T *y) const {
+  if constexpr (std::is_same_v<T, float>) {
+    if (prepared_wide_b_) {
+      detail::GemmWidePreparedB(m_, n_, k_, alpha_, a, constant_b_.data(), beta, c, y,
+                                blocking_.mr);
+      return;
+    }
+  }
+  kernel_(trans_a_, trans_b_, m_, n_, k_, alpha_, a, b, beta, c, y, &blocking_);
 }
 
 template <typename T> void GemmPlan<T>::Execute(const T *a, const T *b, const T *c, T *y) const {
@@ -550,7 +573,7 @@ template <typename T> void GemmPlan<T>::Execute(const T *a, const T *b, const T 
   if (k_ != 0 && resolved_b == nullptr) {
     throw std::invalid_argument("onnx_light_cpu::GemmPlan: B must not be null when K is nonzero.");
   }
-  kernel_(trans_a_, trans_b_, m_, n_, k_, alpha_, a, resolved_b, beta_, c, y, &blocking_);
+  ExecuteProduct(a, resolved_b, beta_, c, y);
 }
 
 template <typename T> void GemmPlan<T>::Execute(const T *a, const T *c, T *y) const {
@@ -590,14 +613,13 @@ void GemmPlan<T>::Execute(const T *a, const T *b, const GemmEpilogue<T> &epilogu
   const bool converts_output = epilogue.output_conversion != GemmOutputConversion::kNone;
 
   if (!has_bias && !has_residual && !has_activation && !converts_output) {
-    kernel_(trans_a_, trans_b_, m_, n_, k_, alpha_, a, resolved_b, T(0), nullptr, y, &blocking_);
+    ExecuteProduct(a, resolved_b, T(0), nullptr, y);
     return;
   }
   const bool matrix_bias_only = has_bias && epilogue.bias_layout == GemmBroadcast::kMatrix &&
                                 !has_residual && !has_activation && !converts_output;
   if (matrix_bias_only) {
-    kernel_(trans_a_, trans_b_, m_, n_, k_, alpha_, a, resolved_b, epilogue.beta, epilogue.bias, y,
-            &blocking_);
+    ExecuteProduct(a, resolved_b, epilogue.beta, epilogue.bias, y);
     return;
   }
   if constexpr (std::is_same_v<T, float>) {
@@ -636,12 +658,11 @@ void GemmPlan<T>::Execute(const T *a, const T *b, const GemmEpilogue<T> &epilogu
                                    m_ <= kMaximumFusedBroadcastElements / n_;
   if (broadcast_bias_only) {
     const T *expanded_bias = ExpandBroadcast(m_, n_, epilogue.bias, epilogue.bias_layout);
-    kernel_(trans_a_, trans_b_, m_, n_, k_, alpha_, a, resolved_b, epilogue.beta, expanded_bias, y,
-            &blocking_);
+    ExecuteProduct(a, resolved_b, epilogue.beta, expanded_bias, y);
     return;
   }
 
-  kernel_(trans_a_, trans_b_, m_, n_, k_, alpha_, a, resolved_b, T(0), nullptr, y, &blocking_);
+  ExecuteProduct(a, resolved_b, T(0), nullptr, y);
   ApplyGemmEpilogue(m_, n_, epilogue, y);
 }
 

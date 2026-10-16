@@ -92,18 +92,6 @@ Tensor ComputeHalf(const Tensor &a, const Tensor &b, RuntimeContext *rt, bool bf
                  : rt_ns::MakeOutputTensor(a.data_type, output_shape,
                                            output_elements * sizeof(std::uint16_t), nullptr);
   const GemmPlan<float> &float_plan = plan.gemm_plan();
-  if (bfloat16 && (float_plan.algorithm() == GemmAlgorithm::kGeneral ||
-                   float_plan.algorithm() == GemmAlgorithm::kDirect)) {
-    std::vector<float> a_f32(a.element_count());
-    std::vector<float> b_f32(b.element_count());
-    std::vector<float> output(output_elements);
-    detail::ConvertBFloat16ToFloat32(a_bits, a_f32.data(), a_f32.size());
-    detail::ConvertBFloat16ToFloat32(b_bits, b_f32.data(), b_f32.size());
-    plan.Execute(a_f32.data(), b_f32.data(), output.data());
-    detail::ConvertFloat32ToBFloat16(
-        output.data(), reinterpret_cast<std::uint16_t *>(y.mutable_bytes()), output.size());
-    return y;
-  }
   const GemmHalfPlan half_plan(
       GemmHalfPlanOptions{bfloat16, float_plan.trans_a(), float_plan.trans_b(), float_plan.m(),
                           float_plan.n(), float_plan.k(), float_plan.alpha()});
