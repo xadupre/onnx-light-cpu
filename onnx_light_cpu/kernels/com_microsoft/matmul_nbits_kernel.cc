@@ -593,6 +593,9 @@ Tensor MatMulNBitsKernel::Compute(const Tensor &a, const Tensor &b, const Tensor
         {workspace.data(), workspace_elements});
     if (rt != nullptr) {
       rt->RecordKernelUsage(MatMulNBitsInt8Implementation());
+      if (rows <= 4 && rows != 0 && n != 0) {
+        rt->RecordKernelUsage("int8_gemv");
+      }
     }
     return y;
   }

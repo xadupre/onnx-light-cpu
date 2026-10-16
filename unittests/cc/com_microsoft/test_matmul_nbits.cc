@@ -279,6 +279,80 @@ TEST(MatMulNBits, PreparedInt8QwenShapesAndTails) {
   }
 }
 
+TEST(MatMulNBits, PreparedInt8DecodeReusesPackedWeights) {
+  for (const auto [k, n] : {std::pair{512u, 32000u}, std::pair{512u, 1376u}, std::pair{1376u, 512u},
+                            std::pair{512u, 1024u}, std::pair{512u, 512u}, std::pair{96u, 13u}}) {
+    SCOPED_TRACE(::testing::Message() << k << ',' << n);
+    const std::size_t blocks = k / 32;
+    const std::size_t slots = ((n + 7) / 8) * blocks * 8;
+    std::vector<std::uint8_t> b(n * k), weights(slots * 32);
+    std::vector<std::int32_t> sums(slots);
+    std::vector<float> scales(n * blocks), packed_scales(slots), bias(n);
+    for (std::size_t i = 0; i < b.size(); ++i) {
+      b[i] = static_cast<std::uint8_t>((i * 37 + i / 29) % 256);
+    }
+    for (std::size_t i = 0; i < scales.size(); ++i) {
+      scales[i] = static_cast<float>(i % 7 + 1) / 1024.0f;
+    }
+    for (std::size_t i = 0; i < n; ++i) {
+      bias[i] = static_cast<float>(i % 5) / 16;
+    }
+    PackMatMulNBitsInt8(b.data(), scales.data(), weights.data(), sums.data(), packed_scales.data(),
+                        k, n);
+    const auto original_weights = weights;
+    for (std::size_t rows : {1u, 2u, 4u}) {
+      std::vector<float> a(rows * k), y(rows * n, -42.0f);
+      for (std::size_t i = 0; i < a.size(); ++i) {
+        a[i] = static_cast<float>(static_cast<int>(i * 17 % 127) - 63) / 63.0f;
+      }
+      const auto scratch_size = MatMulNBitsInt8WorkspaceElements(rows, k, n);
+      EXPECT_EQ(scratch_size * sizeof(double), rows * (k + blocks * sizeof(double)));
+      std::vector<double> scratch(scratch_size + 1, -42.0);
+      InlineExecutor executor;
+      ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run};
+      for (int repeat = 0; repeat < 2; ++repeat) {
+        ExecutionExecutorScope scope(&view);
+        MatMulNBitsInt8Float32(a.data(), weights.data(), sums.data(), packed_scales.data(),
+                               bias.data(), y.data(), rows, k, n, {1, 1, 4},
+                               {scratch.data(), scratch_size});
+        for (std::size_t row = 0; row < rows; ++row) {
+          for (std::size_t col : {0u, 7u, 8u, 12u, 127u, 511u, 1023u, 1375u, 31999u}) {
+            if (col >= n) {
+              continue;
+            }
+            float expected = bias[col];
+            for (std::size_t block = 0; block < blocks; ++block) {
+              float maximum = 0.0f;
+              for (std::size_t p = 0; p < 32; ++p) {
+                maximum = std::max(maximum, std::abs(a[row * k + block * 32 + p]));
+              }
+              std::int32_t dot = 0;
+              for (std::size_t p = 0; p < 32; ++p) {
+                const auto value = a[row * k + block * 32 + p];
+                const int q = maximum == 0.0f
+                                  ? 0
+                                  : static_cast<int>(std::nearbyint(value * (127.0f / maximum)));
+                dot += q * (static_cast<int>(b[(col * blocks + block) * 32 + p]) - 128);
+              }
+              expected +=
+                  static_cast<float>(dot) * (maximum / 127.0f) * scales[col * blocks + block];
+            }
+            EXPECT_NEAR(y[row * n + col], expected, 0.0002f);
+          }
+        }
+      }
+      EXPECT_EQ(scratch.back(), -42.0);
+      EXPECT_EQ(weights, original_weights);
+      if (n == 13) {
+        EXPECT_EQ(executor.dispatches, 0);
+      } else {
+        EXPECT_GT(executor.dispatches, 0);
+        EXPECT_LE(executor.blocks, 4);
+      }
+    }
+  }
+}
+
 TEST(MatMulNBits, PreparedInt8UsesRuntimeExecutor) {
   std::vector<float> a(9 * 32, 0.5f), scales(8, 0.25f), y(9 * 8);
   std::vector<std::uint8_t> b(8 * 32, 129), packed(8 * 32);

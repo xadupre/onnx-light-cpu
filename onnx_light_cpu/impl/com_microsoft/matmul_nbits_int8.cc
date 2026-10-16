@@ -89,10 +89,19 @@ ExecutionSchedule Int8Schedule(std::size_t n, const MatMulNBitsExecutionTuning &
           tuning.max_participants};
 }
 
+ExecutionSchedule Int8SmallSchedule(std::size_t k, const MatMulNBitsExecutionTuning &tuning) {
+  const auto groups_per_worker = static_cast<std::int64_t>(std::max<std::size_t>(1, 16384 / k));
+  return {groups_per_worker * 2, groups_per_worker, tuning.max_participants};
+}
+
 void ComputeFloatRow(const float *a, const std::uint8_t *weights, const float *scales,
-                     const float *bias, float *y, std::size_t k, std::size_t n) {
+                     const float *bias, float *y, std::size_t k, std::size_t n,
+                     std::size_t first_column = 0, std::size_t last_column = 0) {
   const std::size_t blocks = k / 32;
-  for (std::size_t column = 0; column < n; ++column) {
+  if (last_column == 0) {
+    last_column = n;
+  }
+  for (std::size_t column = first_column; column < last_column; ++column) {
     float sum = bias == nullptr ? 0.0f : bias[column];
     const std::size_t group = column / 8;
     const std::size_t lane = column % 8;
@@ -165,6 +174,10 @@ std::size_t MatMulNBitsInt8WorkspaceElements(std::size_t rows, std::size_t k, st
   if (rows > static_cast<std::size_t>(std::numeric_limits<std::int64_t>::max())) {
     ThrowArithmeticError("MatMulNBits", "INT8 row count", "overflows int64_t");
   }
+  if (rows <= 4) {
+    const std::size_t blocks = k / 32;
+    return CheckedMultiply(rows, k / 8 + blocks, "MatMulNBits", "INT8 workspace");
+  }
   const auto participants = static_cast<std::size_t>(
       ExecutionBlockCount(static_cast<std::int64_t>(rows), Int8Schedule(n, tuning)));
   // Four byte rows and four rows of double scales, one scale per 32 activations.
@@ -197,6 +210,62 @@ void MatMulNBitsInt8Float32(const float *a, const std::uint8_t *weights,
   }
   const bool finite_scales = std::all_of(scales, scales + groups * blocks * 8,
                                          [](float scale) { return std::isfinite(scale); });
+  if (rows <= 4) {
+    auto *quantized = reinterpret_cast<std::uint8_t *>(workspace.data());
+    double *activation_scales = workspace.data() + rows * k / 8;
+    bool finite_rows[4]{};
+    for (std::size_t row = 0; row < rows; ++row) {
+      finite_rows[row] = finite_scales;
+      if (!finite_scales) {
+        continue;
+      }
+      if (quantize != nullptr &&
+          quantize(a + row * k, quantized + row * k, activation_scales + row * blocks, k)) {
+        continue;
+      }
+      for (std::size_t block = 0; block < blocks; ++block) {
+        const float *source = a + row * k + block * 32;
+        float maximum = 0.0f;
+        for (std::size_t p = 0; p < 32; ++p) {
+          finite_rows[row] &= std::isfinite(source[p]);
+          maximum = std::max(maximum, std::abs(source[p]));
+        }
+        activation_scales[row * blocks + block] =
+            finite_rows[row] ? static_cast<double>(maximum) / 127.0 : 0.0;
+        for (std::size_t p = 0; p < 32; ++p) {
+          const float scaled = !finite_rows[row] || maximum == 0.0f ? 0.0f
+                               : maximum < 1e-36f ? (source[p] / maximum) * 127.0f
+                                                  : source[p] * (127.0f / maximum);
+          quantized[row * k + block * 32 + p] =
+              static_cast<std::uint8_t>(static_cast<int>(std::nearbyint(scaled)) + 128);
+        }
+      }
+    }
+    const bool finite_inputs = finite_scales && std::all_of(finite_rows, finite_rows + rows,
+                                                            [](bool value) { return value; });
+    const auto small_schedule = Int8SmallSchedule(k, tuning);
+    ExecuteRanges(static_cast<std::int64_t>(groups), small_schedule,
+                  [&](std::int64_t begin, std::int64_t end) noexcept {
+                    for (auto group = static_cast<std::size_t>(begin);
+                         group < static_cast<std::size_t>(end); ++group) {
+                      const std::size_t index = group * blocks * 8;
+                      const std::size_t column = group * 8;
+                      if (finite_inputs) {
+                        tile({quantized, activation_scales, weights + index * 32,
+                              weight_sums + index, scales + index,
+                              bias == nullptr ? nullptr : bias + column, y + column, rows, k, n,
+                              std::min<std::size_t>(8, n - column)});
+                      }
+                      for (std::size_t row = 0; row < rows; ++row) {
+                        if (!finite_inputs) {
+                          ComputeFloatRow(a + row * k, weights, scales, bias, y + row * n, k, n,
+                                          column, std::min(column + 8, n));
+                        }
+                      }
+                    }
+                  });
+    return;
+  }
   ExecuteRanges(
       static_cast<std::int64_t>(rows), schedule,
       [&](std::int64_t begin, std::int64_t end) noexcept {
