@@ -253,7 +253,7 @@ void MatMulNBitsInt8Float32(const float *a, const std::uint8_t *weights,
             finite_rows[row] ? static_cast<double>(maximum) / 127.0 : 0.0;
         for (std::size_t p = 0; p < 32; ++p) {
           const float scaled = !finite_rows[row] || maximum == 0.0f ? 0.0f
-                               : maximum < 1e-36f                   ? (source[p] / maximum) * 127.0f
+                               : maximum < 1e-36f ? (source[p] / maximum) * 127.0f
                                                   : source[p] * (127.0f / maximum);
           quantized[row * k + block * 32 + p] =
               static_cast<std::uint8_t>(static_cast<int>(std::nearbyint(scaled)) + 128);
