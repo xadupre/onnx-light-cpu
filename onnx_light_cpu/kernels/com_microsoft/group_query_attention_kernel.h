@@ -65,7 +65,8 @@ public:
              const ONNX_LIGHT_NAMESPACE::core::runtime::Tensor *attention_bias = nullptr,
              ONNX_LIGHT_NAMESPACE::core::runtime::RuntimeContext *rt = nullptr,
              ONNX_LIGHT_NAMESPACE::core::runtime::Tensor *present_key = nullptr,
-             ONNX_LIGHT_NAMESPACE::core::runtime::Tensor *present_value = nullptr) const;
+             ONNX_LIGHT_NAMESPACE::core::runtime::Tensor *present_value = nullptr,
+             const ONNX_LIGHT_NAMESPACE::core::runtime::Tensor *head_sink = nullptr) const;
 
 private:
   AttentionKernel attention_;

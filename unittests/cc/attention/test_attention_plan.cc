@@ -49,6 +49,80 @@ using onnx_light_cpu::ComputeAttentionFloat16Streaming;
 using onnx_light_cpu::ComputeAttentionFloat32;
 using onnx_light_cpu::ComputeAttentionFloat32Streaming;
 
+TEST(AttentionSink, NormalizesRealValuesAcrossTypesAndWindows) {
+  for (const bool cached : {false, true}) {
+    for (const std::int64_t window : {-1, 2}) {
+      const std::size_t sequence = cached ? 1 : 20;
+      const std::size_t past_length = cached ? 5 : 0;
+      AttentionDescriptor descriptor;
+      descriptor.q_num_heads = 2;
+      descriptor.kv_num_heads = 1;
+      descriptor.is_causal = true;
+      descriptor.left_window_size = window < 0 ? -1 : window - 1;
+      if (window > 0) {
+        descriptor.opset = 25;
+      }
+      const std::array<std::int64_t, 4> q_shape{1, 2, static_cast<std::int64_t>(sequence), 1};
+      const std::array<std::int64_t, 4> kv_shape{1, 1, static_cast<std::int64_t>(sequence), 1};
+      const std::vector<std::int64_t> past_shape =
+          cached ? std::vector<std::int64_t>{1, 1, 5, 1} : std::vector<std::int64_t>{};
+      AttentionPlan plan(descriptor, AttentionLayout::kRank4, q_shape, kv_shape, kv_shape, {},
+                         AttentionMaskKind::kNone, past_shape, past_shape);
+      const std::array<float, 2> sink{0.0f, 1.0f};
+      plan.head_sink = sink.data();
+      const std::vector<float> query(2 * sequence, 0.0f);
+      const std::vector<float> key(sequence, 0.0f);
+      const std::vector<float> value(sequence, 4.0f);
+      const std::vector<float> past_key(past_length, 0.0f);
+      const std::vector<float> past_value(past_length, 4.0f);
+      const auto check = [&](auto run, float tolerance) {
+        for (std::size_t h = 0; h < 2; ++h) {
+          for (std::size_t i = 0; i < sequence; ++i) {
+            const std::size_t visible = window < 0
+                                            ? past_length + i + 1
+                                            : std::min<std::size_t>(window, past_length + i + 1);
+            EXPECT_NEAR(run[h * sequence + i], 4.0f * visible / (std::exp(sink[h]) + visible),
+                        tolerance);
+          }
+        }
+      };
+      std::vector<float> y(2 * sequence);
+      ComputeAttentionFloat32(plan, query.data(), key.data(), value.data(), nullptr, y.data(),
+                              cached ? past_key.data() : nullptr,
+                              cached ? past_value.data() : nullptr);
+      check(y, 1e-5f);
+      for (const bool bfloat : {false, true}) {
+        const auto encode = [bfloat](const std::vector<float> &input) {
+          std::vector<std::uint16_t> output(input.size());
+          for (std::size_t i = 0; i < input.size(); ++i) {
+            output[i] = bfloat ? onnx_light_cpu::detail::FloatToBFloat16Bits(input[i])
+                               : onnx_light_cpu::detail::FloatToFloat16Bits(input[i]);
+          }
+          return output;
+        };
+        const auto q16 = encode(query), k16 = encode(key), v16 = encode(value);
+        const auto pk16 = encode(past_key), pv16 = encode(past_value);
+        std::vector<std::uint16_t> y16(y.size());
+        if (bfloat) {
+          ComputeAttentionBFloat16Streaming(plan, q16.data(), k16.data(), v16.data(), nullptr,
+                                            y16.data(), cached ? pk16.data() : nullptr,
+                                            cached ? pv16.data() : nullptr);
+        } else {
+          ComputeAttentionFloat16Streaming(plan, q16.data(), k16.data(), v16.data(), nullptr,
+                                           y16.data(), cached ? pk16.data() : nullptr,
+                                           cached ? pv16.data() : nullptr);
+        }
+        std::vector<float> decoded(y.size());
+        for (std::size_t i = 0; i < y.size(); ++i) {
+          decoded[i] = bfloat ? onnx_light_cpu::detail::Bfloat16BitsToFloat(y16[i])
+                              : onnx_light_cpu::detail::Float16BitsToFloat(y16[i]);
+        }
+        check(decoded, bfloat ? 0.02f : 0.002f);
+      }
+    }
+  }
+}
+
 TEST(AttentionExp, Avx2WithoutFmaSelectsScalar) {
   using onnx_light_cpu::SimdLevel;
   using onnx_light_cpu::detail::SelectAttentionExpKernel;
