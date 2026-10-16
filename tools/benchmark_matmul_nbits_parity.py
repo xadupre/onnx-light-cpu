@@ -4,9 +4,10 @@
 Run ``python -m tools.benchmark_matmul_nbits_parity --projection k --m 8``.
 Use ``--full`` for all projections, M=1/8/128 and FP32/FP16/BF16. Large
 projections are deliberately opt-in. No floating-point weight matrix is built.
-``--qwen-int8`` measures each of the six Qwen2 prefill projection shapes as an
-isolated synthetic node with the same graph and inputs in both runtimes. It
-does not measure the exported end-to-end Qwen2 graph.
+``--qwen-int8`` measures prefill; ``--qwen-int8-decode`` measures M=1/2/4
+with one and four threads. Each of the six Qwen2 projection shapes is an
+isolated synthetic node with the same graph and inputs in both runtimes.
+Neither mode measures the exported end-to-end Qwen2 graph.
 """
 
 from __future__ import annotations
@@ -218,6 +219,9 @@ def run_case(name, m, k, n, dtype, *, threads=1, repeat=3, warmup=1, accuracy_le
         and not any(path.startswith("int8_") for path in kernel_paths)
     ):
         raise AssertionError(f"Prepared INT8 path was not selected for {name}: {kernel_paths}")
+    if bits == 8 and dtype == "float32" and accuracy_level == 4 and m <= 4:
+        if "int8_gemv" not in kernel_paths:
+            raise AssertionError(f"INT8 GEMV path was not selected for {name}: {kernel_paths}")
     set_kernel_usage_recording(cpu, False)
 
     options = ort.SessionOptions()
@@ -349,10 +353,16 @@ def parse_args(argv=None):
     parser.add_argument("--m", action="append", type=int, choices=ROWS)
     parser.add_argument("--dtype", action="append", choices=DTYPES)
     parser.add_argument("--full", action="store_true")
-    parser.add_argument(
+    qwen = parser.add_mutually_exclusive_group()
+    qwen.add_argument(
         "--qwen-int8",
         action="store_true",
         help="Synthetic six-projection Qwen2 prefill, M=128, FLOAT, INT8, four threads",
+    )
+    qwen.add_argument(
+        "--qwen-int8-decode",
+        action="store_true",
+        help="Synthetic six-projection Qwen2 decode, M=1/2/4, FLOAT, INT8, 1/4 threads",
     )
     parser.add_argument("--threads", type=int, default=1)
     parser.add_argument("--repeat", type=int, default=3)
@@ -360,7 +370,7 @@ def parse_args(argv=None):
     parser.add_argument("--accuracy-level", type=int, choices=(0, 4), default=0)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args(argv)
-    if args.qwen_int8 and (
+    if (args.qwen_int8 or args.qwen_int8_decode) and (
         args.projection
         or args.m
         or args.dtype
@@ -368,7 +378,9 @@ def parse_args(argv=None):
         or args.threads != 1
         or args.accuracy_level != 0
     ):
-        parser.error("--qwen-int8 selects its own projections, M, dtype, threads and accuracy")
+        parser.error(
+            "Qwen INT8 modes select their own projections, M, dtype, threads and accuracy"
+        )
     if args.threads < 1 or args.repeat < 1 or args.warmup < 0:
         parser.error("threads/repeat must be positive and warmup nonnegative")
     return args
@@ -376,42 +388,57 @@ def parse_args(argv=None):
 
 def main(argv=None):
     args = parse_args(argv)
-    shape_map = QWEN_INT8_PROJECTIONS if args.qwen_int8 else projections()
+    qwen_int8 = args.qwen_int8 or args.qwen_int8_decode
+    shape_map = QWEN_INT8_PROJECTIONS if qwen_int8 else projections()
     names = (
         tuple(shape_map)
-        if args.qwen_int8
+        if qwen_int8
         else args.projection or (tuple(shape_map) if args.full else ("k",))
     )
-    rows = (128,) if args.qwen_int8 else args.m or (ROWS if args.full else (1,))
-    dtypes = (
-        ("float32",) if args.qwen_int8 else args.dtype or (DTYPES if args.full else ("float32",))
-    )
+    if args.qwen_int8_decode:
+        rows = (1, 2, 4)
+    elif args.qwen_int8:
+        rows = (128,)
+    else:
+        rows = args.m or (ROWS if args.full else (1,))
+    dtypes = ("float32",) if qwen_int8 else args.dtype or (DTYPES if args.full else ("float32",))
     results = []
     report = {
-        "expected_cases": len(names) * len(rows) * len(dtypes),
+        "expected_cases": len(names)
+        * len(rows)
+        * len(dtypes)
+        * (2 if args.qwen_int8_decode else 1),
         "complete": False,
         "results": results,
     }
     for name in names:
         for m in rows:
             for dtype in dtypes:
-                results.append(
-                    run_case(
-                        name,
-                        m,
-                        *shape_map[name],
-                        dtype,
-                        threads=4 if args.qwen_int8 else args.threads,
-                        repeat=args.repeat,
-                        warmup=args.warmup,
-                        accuracy_level=4 if args.qwen_int8 else args.accuracy_level,
-                        bits=8 if args.qwen_int8 else 4,
+                for threads in (
+                    (1, 4) if args.qwen_int8_decode else (4 if args.qwen_int8 else args.threads,)
+                ):
+                    results.append(
+                        run_case(
+                            name,
+                            m,
+                            *shape_map[name],
+                            dtype,
+                            threads=threads,
+                            repeat=args.repeat,
+                            warmup=args.warmup,
+                            accuracy_level=4 if qwen_int8 else args.accuracy_level,
+                            bits=8 if qwen_int8 else 4,
+                        )
                     )
-                )
-                report["complete"] = len(results) == report["expected_cases"]
-                print(f"Parity passed: {name}, M={m}, {dtype}", file=sys.stderr)
-                if args.output:
-                    args.output.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+                    report["complete"] = len(results) == report["expected_cases"]
+                    print(
+                        f"Parity passed: {name}, M={m}, {dtype}, threads={threads}",
+                        file=sys.stderr,
+                    )
+                    if args.output:
+                        args.output.write_text(
+                            json.dumps(report, indent=2) + "\n", encoding="utf-8"
+                        )
     text = json.dumps(report, indent=2)
     print(text)
 

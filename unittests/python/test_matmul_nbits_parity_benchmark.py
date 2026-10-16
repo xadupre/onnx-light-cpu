@@ -74,6 +74,7 @@ class TestMatMulNBitsBenchmarkContract(ExtTestCase):
         args = parse_args(["--accuracy-level", "4"])
         self.assertEqual(args.accuracy_level, 4)
         self.assertTrue(parse_args(["--qwen-int8"]).qwen_int8)
+        self.assertTrue(parse_args(["--qwen-int8-decode"]).qwen_int8_decode)
         self.assertEqual(len(QWEN_INT8_PROJECTIONS), 6)
 
     def test_qwen_int8_graph_uses_symmetric_packed_weights(self):
