@@ -217,7 +217,8 @@ TEST(MatMulNBitsKernel, EncodedInt3RejectsMalformedMetadataAndPadding) {
   bad.set_raw_data(payload);
   EXPECT_THROW(kernel(a, bad), std::invalid_argument);
   bad = valid;
-  bad.set_raw_data(payload.data(), payload.size() - 1);
+  bad.set_raw_data(reinterpret_cast<const char *>(valid.raw_data().data()),
+                   valid.raw_data().size() - 1);
   EXPECT_THROW(kernel(a, bad), std::invalid_argument);
   bad = valid;
   payload.assign(reinterpret_cast<const char *>(valid.raw_data().data()), valid.raw_data().size());

@@ -246,16 +246,29 @@ void MatMulNBitsEncodedInt3Typed(const void *a_raw, const std::uint8_t *b, const
                                  const std::uint8_t *zero_points, const void *bias_raw, void *y_raw,
                                  std::size_t rows, std::size_t k, std::size_t n,
                                  const MatMulNBitsExecutionTuning &tuning) {
+  if (rows == 0 || n == 0) {
+    return;
+  }
   using Storage = typename Codec::Storage;
   const auto *a = static_cast<const Storage *>(a_raw);
   const auto *scales = static_cast<const std::uint8_t *>(scales_raw);
   const auto *bias = static_cast<const Storage *>(bias_raw);
   auto *y = static_cast<Storage *>(y_raw);
   const std::size_t blocks = k / 32 + (k % 32 != 0);
+  const std::size_t activation_count =
+      CheckedMultiply(rows, k, "MatMulNBits INT3", "activation element count");
+  CheckedByteSize(activation_count, sizeof(Storage), "MatMulNBits INT3", "activation bytes");
+  const std::size_t packed_column_stride =
+      CheckedMultiply(blocks, 12, "MatMulNBits INT3", "packed column stride");
+  CheckedMultiply(n, packed_column_stride, "MatMulNBits INT3", "packed weight bytes");
+  const std::size_t scale_count =
+      CheckedMultiply(n, blocks, "MatMulNBits INT3", "scale element count");
+  CheckedByteSize(scale_count, sizeof(Storage), "MatMulNBits INT3", "scale bytes");
   const std::size_t count = CheckedMultiply(rows, n, "MatMulNBits INT3", "output count");
   if (count > static_cast<std::size_t>(std::numeric_limits<std::int64_t>::max())) {
     throw std::invalid_argument("MatMulNBits INT3: output count exceeds int64_t.");
   }
+  CheckedByteSize(count, sizeof(Storage), "MatMulNBits INT3", "output bytes");
   const ExecutionSchedule schedule{
       static_cast<std::int64_t>(std::max<std::size_t>(tuning.parallel_threshold_outputs, 1)),
       static_cast<std::int64_t>(std::max<std::size_t>(tuning.target_block_outputs, 1)),

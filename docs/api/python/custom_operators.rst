@@ -105,6 +105,8 @@ code 4 for every block; explicit zero points must each be in ``[0,7]``.
 Weights are reconstructed as ``(q - zero_point) * scale`` without
 expanding a full INT8 matrix. INT3 is not ternary: it represents eight
 distinct codes.
+The low-level C++ INT3 entry point also rejects overflowing activation,
+packed-weight, scale, and output sizes before dispatch or buffer access.
 
 The activation may have any positive rank with final dimension ``K``. Shape
 inference preserves every leading concrete or symbolic dimension and replaces

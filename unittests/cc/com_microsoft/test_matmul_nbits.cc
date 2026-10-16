@@ -239,6 +239,29 @@ TEST(MatMulNBits, RejectsOverflowBeforeDispatchOrBufferAccess) {
                std::invalid_argument);
   EXPECT_THROW(MatMulNBitsFloat32(nullptr, nullptr, nullptr, nullptr, nullptr, maximum, 0, 2, 32),
                std::invalid_argument);
+  InlineExecutor executor;
+  ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run};
+  ExecutionExecutorScope scope(&view);
+  for (DataType type : {DataType::FLOAT, DataType::FLOAT16, DataType::BFLOAT16}) {
+    SCOPED_TRACE(static_cast<int>(type));
+    const std::size_t width = type == DataType::FLOAT ? sizeof(float) : sizeof(std::uint16_t);
+    const auto check = [&](std::size_t rows, std::size_t k, std::size_t n) {
+      EXPECT_THROW(MatMulNBitsEncodedInt3(nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+                                          type, rows, k, n, {1, 1, 4}),
+                   std::invalid_argument);
+    };
+    check(maximum / 33 + 1, 33, 1);
+    check(1, 33, maximum / 24 + 1);
+    check(1, maximum / width + 1, 1);
+    check(maximum / width + 1, 0, 1);
+    check(maximum, 0, 2);
+    check(maximum, 0, 1);
+    EXPECT_NO_THROW(MatMulNBitsEncodedInt3(nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+                                           type, 0, maximum, maximum));
+    EXPECT_NO_THROW(MatMulNBitsEncodedInt3(nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+                                           type, maximum, maximum, 0));
+  }
+  EXPECT_EQ(executor.dispatches, 0);
 }
 
 } // namespace
