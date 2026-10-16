@@ -12,6 +12,7 @@ from onnx_light.ext_test_case import ExtTestCase
 from tools.benchmark_matmul_nbits_parity import (
     BLOCK_SIZE,
     DTYPES,
+    QWEN_INT8_PROJECTIONS,
     ROWS,
     VOCABULARY,
     fingerprint,
@@ -72,6 +73,17 @@ class TestMatMulNBitsBenchmarkContract(ExtTestCase):
         self.assertEqual(args.dtype, ["float16"])
         args = parse_args(["--accuracy-level", "4"])
         self.assertEqual(args.accuracy_level, 4)
+        self.assertTrue(parse_args(["--qwen-int8"]).qwen_int8)
+        self.assertEqual(len(QWEN_INT8_PROJECTIONS), 6)
+
+    def test_qwen_int8_graph_uses_symmetric_packed_weights(self):
+        a, packed, scales = make_inputs(128, 512, 13, "float32", bits=8)
+        self.assertEqual(a.shape, (128, 512))
+        self.assertEqual(packed.shape, (13, 16, 32))
+        model = make_model(128, 512, 13, "float32", packed, scales, accuracy_level=4, bits=8)
+        attributes = {attribute.name: attribute.i for attribute in model.graph.node[0].attribute}
+        self.assertEqual(attributes["bits"], 8)
+        self.assertEqual(attributes["accuracy_level"], 4)
 
     def test_total_workspace_bound_respects_threads_tiles_and_participant_cap(self):
         for m, n, threads, participants in (
@@ -185,6 +197,22 @@ class TestMatMulNBitsConstantParity(ExtTestCase):
                     self.assertFalse(result["ort_allow_spinning"])
                     if dtype == "bfloat16" and result["ort_bfloat16_rejection"]:
                         self.assertIn("BF16-rounded", result["oracle"])
+
+    def test_int8_bfloat16_oracle_preserves_bit_width(self):
+        result = run_case(
+            "int8_bfloat16",
+            1,
+            64,
+            13,
+            "bfloat16",
+            repeat=1,
+            warmup=0,
+            accuracy_level=4,
+            bits=8,
+        )
+        self.assertEqual(result["bits"], 8)
+        self.assertEqual(result["memory"]["prepared_bytes"], 0)
+        self.assertTrue(result["constants_unchanged"])
 
     def test_muse_key_projection_all_rows_and_dtypes(self):
         for dtype in DTYPES:

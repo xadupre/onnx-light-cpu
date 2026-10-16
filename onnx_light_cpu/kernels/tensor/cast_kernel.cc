@@ -46,6 +46,8 @@ bool Supported(int32_t type) {
   }
   switch (static_cast<DataType>(type)) {
   case DataType::STRING:
+  case DataType::COMPLEX64:
+  case DataType::COMPLEX128:
   case DataType::FLOAT8E4M3FN:
   case DataType::FLOAT8E4M3FNUZ:
   case DataType::FLOAT8E5M2:
@@ -58,8 +60,6 @@ bool Supported(int32_t type) {
   case DataType::FLOAT4E2M1:
   case DataType::FLOAT6E2M3:
   case DataType::FLOAT6E3M2:
-  case DataType::COMPLEX64:
-  case DataType::COMPLEX128:
     return true;
   default:
     return false;

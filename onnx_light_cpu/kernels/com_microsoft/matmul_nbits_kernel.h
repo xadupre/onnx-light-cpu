@@ -63,6 +63,7 @@ public:
 private:
   struct PreparedInt4Plan;
   struct PreparedInt4State;
+  struct PreparedInt8Plan;
   struct PreparedEncodedState;
 
   ONNX_LIGHT_NAMESPACE::core::runtime::Tensor
@@ -83,6 +84,7 @@ private:
   MatMulNBitsAttributes attributes_;
   MatMulNBitsExecutionTuning tuning_ = kDefaultMatMulNBitsExecutionTuning;
   std::unique_ptr<const PreparedInt4State> prepared_int4_;
+  std::unique_ptr<const PreparedInt4State> prepared_int8_;
   std::unique_ptr<const PreparedEncodedState> prepared_encoded_;
 };
 

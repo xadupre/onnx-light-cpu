@@ -34,13 +34,14 @@ rt_ns::KernelContext MakeCtx(int64_t version = 18) {
   return rt_ns::KernelContext(rt_ns::OpsetId(std::string(), version));
 }
 
-constexpr std::array<DataType, 18> kTypes = {
+constexpr std::array<DataType, 20> kTypes = {
     DataType::FLOAT,      DataType::DOUBLE,         DataType::FLOAT16,
     DataType::BFLOAT16,   DataType::INT8,           DataType::UINT8,
     DataType::INT16,      DataType::UINT16,         DataType::INT32,
     DataType::UINT32,     DataType::INT64,          DataType::UINT64,
     DataType::BOOL,       DataType::FLOAT8E4M3FN,   DataType::FLOAT8E4M3FNUZ,
-    DataType::FLOAT8E5M2, DataType::FLOAT8E5M2FNUZ, DataType::FLOAT8E8M0};
+    DataType::FLOAT8E5M2, DataType::FLOAT8E5M2FNUZ, DataType::FLOAT8E8M0,
+    DataType::COMPLEX64,  DataType::COMPLEX128};
 
 Tensor Payload(DataType type, const Shape &shape) {
   std::vector<uint8_t> bytes(static_cast<std::size_t>(shape.product()) * rt_ns::ElementSize(type));
@@ -130,6 +131,37 @@ TEST(OnnxLightSplitKernel, QkvSingleAndMultipleRowsAndUneven18) {
   Compare(Payload(DataType::FLOAT, {2, 7}), -1, {}, 4);
   Compare(Payload(DataType::FLOAT, {2, 3}), -1, {}, 4);
   Compare(Payload(DataType::FLOAT, {3, 12}), -1, {}, 3);
+}
+
+TEST(OnnxLightSplitKernel, FourWayByteAndEightByteColumnsPreserveTailsAndGuards) {
+  for (std::size_t width : {1u, 8u}) {
+    for (int64_t rows : {0, 1, 2, 3, 4, 7, 8, 9, 15, 16, 17, 31, 32, 33, 65}) {
+      std::vector<uint8_t> source(2 + rows * width * 4);
+      for (std::size_t i = 0; i < source.size(); ++i) {
+        source[i] = static_cast<uint8_t>(i * 37 + 131);
+      }
+      std::array<std::vector<uint8_t>, 4> storage;
+      std::array<void *, 4> outputs;
+      const std::array<std::size_t, 4> widths{width, width, width, width};
+      for (std::size_t output = 0; output < 4; ++output) {
+        storage[output].assign(2 + rows * width, 0xa5);
+        outputs[output] = storage[output].data() + 1;
+      }
+      onnx_light_cpu::SplitCopyOutputs(source.data() + 1, outputs, rows, width * 4, widths);
+      for (std::size_t output = 0; output < 4; ++output) {
+        EXPECT_EQ(storage[output].front(), 0xa5);
+        EXPECT_EQ(storage[output].back(), 0xa5);
+        for (int64_t row = 0; row < rows; ++row) {
+          EXPECT_EQ(std::memcmp(storage[output].data() + 1 + row * width,
+                                source.data() + 1 + (row * 4 + output) * width, width),
+                    0);
+        }
+      }
+    }
+  }
+  for (DataType type : {DataType::INT8, DataType::DOUBLE, DataType::INT64, DataType::COMPLEX64}) {
+    Compare(Payload(type, {65537, 4}), -1, {1, 1, 1, 1});
+  }
 }
 
 TEST(OnnxLightSplitKernel, SpecialValuesAndOwnedMaterializedOutputs) {

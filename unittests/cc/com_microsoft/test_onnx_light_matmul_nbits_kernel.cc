@@ -411,6 +411,97 @@ TEST(MatMulNBitsKernel, PreparesOnlyImmutableWeightsAndScales) {
   }
 }
 
+TEST(MatMulNBitsKernel, PreparesInt8OnlyForImmutableInputsAndAccountsForResidency) {
+  constexpr std::int64_t k = 64;
+  constexpr std::int64_t n = 13;
+  const ONNX_LIGHT_NAMESPACE::NodeProto node = MakeNode(k, n, 8);
+  onnx_light_cpu::MatMulNBitsKernel kernel{
+      node, rt_ns::KernelContext{rt_ns::OpsetId("com.microsoft", 1)}};
+  const bool available = onnx_light_cpu::MatMulNBitsInt8Float32Available();
+  EXPECT_EQ(kernel.HasPreparations({"B", "scales"}), available);
+  EXPECT_FALSE(kernel.HasPreparations({"B"}));
+  EXPECT_FALSE(kernel.HasPreparations({"scales"}));
+  rt_ns::RuntimeContext rt{rt_ns::KernelContext{rt_ns::OpsetId("com.microsoft", 1)}};
+  rt.Put("B",
+         rt_ns::Tensor::FromUint8("B", {n, k / 32, 32},
+                                  std::vector<std::uint8_t>(static_cast<std::size_t>(n * k), 129)));
+  rt.Put("scales",
+         rt_ns::Tensor::FromFloat("scales", {n, k / 32},
+                                  std::vector<float>(static_cast<std::size_t>(n * k / 32), 0.25f)));
+  kernel.Prepare(rt, {"B", "scales"});
+  const std::size_t expected_bytes = 2 * 2 * (256 + 8 * 2 * sizeof(float));
+  EXPECT_EQ(rt.value_store().prepared_bytes(), available ? expected_bytes : 0U);
+  kernel.Prepare(rt, {"B", "scales"});
+  EXPECT_EQ(rt.value_store().prepared_bytes(), available ? expected_bytes : 0U);
+
+  const rt_ns::Tensor a = rt_ns::Tensor::FromFloat("A", {3, k}, std::vector<float>(3 * k, 0.5f));
+  const rt_ns::Tensor output = kernel(a, rt.Get("B"), rt.Get("scales"));
+  for (std::size_t index = 0; index < output.element_count(); ++index) {
+    EXPECT_FLOAT_EQ(output.AsFloat()[index], 8.0f);
+  }
+}
+
+TEST(MatMulNBitsKernel, Int8HalfScalesKeepGenericFallback) {
+  const ONNX_LIGHT_NAMESPACE::NodeProto node = MakeNode(32, 8, 8);
+  onnx_light_cpu::MatMulNBitsKernel kernel{
+      node, rt_ns::KernelContext{rt_ns::OpsetId("com.microsoft", 1)}};
+  rt_ns::RuntimeContext rt{rt_ns::KernelContext{rt_ns::OpsetId("com.microsoft", 1)}};
+  rt.Put("B", rt_ns::Tensor::FromUint8("B", {8, 1, 32}, std::vector<std::uint8_t>(256, 129)));
+  rt.Put("scales", rt_ns::MakeFloat16Tensor("scales", {8, 1}, std::vector<float>(8, 0.25f)));
+  kernel.Prepare(rt, {"B", "scales"});
+  EXPECT_EQ(rt.value_store().prepared_bytes(), 0U);
+  const rt_ns::Tensor a = rt_ns::MakeFloat16Tensor("A", {1, 32}, std::vector<float>(32, 0.5f));
+  const rt_ns::Tensor y = kernel(a, rt.Get("B"), rt.Get("scales"));
+  for (std::size_t i = 0; i < y.element_count(); ++i) {
+    EXPECT_FLOAT_EQ(ReadValue(y, i), 4.0f);
+  }
+}
+
+TEST(MatMulNBitsKernel, PreparedInt8HonorsOutputTuning) {
+  constexpr std::int64_t k = 32;
+  constexpr std::int64_t n = 16;
+  constexpr std::int64_t rows = 9;
+  const auto node = MakeNode(k, n, 8);
+  onnx_light_cpu::MatMulNBitsKernel kernel{
+      node, rt_ns::KernelContext{rt_ns::OpsetId("com.microsoft", 1)}};
+  if (!onnx_light_cpu::MatMulNBitsInt8Float32Available()) {
+    GTEST_SKIP() << "The prepared INT8 kernel is unavailable.";
+  }
+  onnx_light_cpu::MatMulNBitsKernel::RegisterTuningSchemas();
+  const auto key = kernel.TuningKey(static_cast<std::int32_t>(rt_ns::DataType::FLOAT));
+  auto parameters = rt_ns::GetKernelTuningRegistry().FindSchema(key)->portable_defaults();
+  parameters.values["parallel.threshold_outputs"] = rows * n + 1;
+  parameters.values["parallel.target_block_outputs"] = n;
+  parameters.values["parallel.max_participants"] = std::int64_t{4};
+  kernel.Configure(parameters);
+  rt_ns::RuntimeContext rt{rt_ns::KernelContext{rt_ns::OpsetId("com.microsoft", 1)}};
+  rt.Put("B", rt_ns::Tensor::FromUint8("B", {n, 1, 32}, std::vector<std::uint8_t>(n * k, 129)));
+  rt.Put("scales", rt_ns::Tensor::FromFloat("scales", {n, 1}, std::vector<float>(n, 0.25f)));
+  kernel.Prepare(rt, {"B", "scales"});
+  const auto a = rt_ns::Tensor::FromFloat("A", {rows, k}, std::vector<float>(rows * k, 0.5f));
+  InlineExecutor executor;
+  onnx_light_cpu::ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run};
+  onnx_light_cpu::ExecutionExecutorScope scope(&view);
+  const auto check = [&] {
+    const auto y = kernel(a, rt.Get("B"), rt.Get("scales"));
+    for (std::size_t i = 0; i < y.element_count(); ++i) {
+      EXPECT_FLOAT_EQ(y.AsFloat()[i], 4.0f);
+    }
+  };
+  check();
+  EXPECT_EQ(executor.dispatches, 0);
+  parameters.values["parallel.threshold_outputs"] = rows * n;
+  parameters.values["parallel.target_block_outputs"] = 3 * n;
+  kernel.Configure(parameters);
+  check();
+  EXPECT_EQ(executor.dispatches, 1);
+  EXPECT_EQ(executor.blocks, 3);
+  parameters.values["parallel.target_block_outputs"] = rows * n;
+  kernel.Configure(parameters);
+  check();
+  EXPECT_EQ(executor.dispatches, 1);
+}
+
 TEST(MatMulNBitsKernel, Accuracy4DynamicPlanSupportsHalfPrecisionInputsAndOutputs) {
   if (!onnx_light_cpu::MatMulNBitsAccuracy4Float32Available()) {
     GTEST_SKIP() << "The optimized accuracy-level-4 kernel is unavailable.";

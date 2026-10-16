@@ -431,7 +431,7 @@ def _kernel_names_only(records: list[str]) -> list[str]:
     return [
         name
         for name in records
-        if "/" not in name and not name.startswith(("Cast.", "Binary.", "Attention."))
+        if "/" not in name and not name.startswith(("Cast.", "Binary.", "Attention.", "int8_"))
     ]
 
 

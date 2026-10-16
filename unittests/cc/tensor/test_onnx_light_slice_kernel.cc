@@ -33,13 +33,14 @@ rt_ns::KernelContext MakeCtx(int64_t opset = 13) {
   return rt_ns::KernelContext(rt_ns::DefaultOpset(opset));
 }
 
-constexpr std::array<DataType, 18> kTypes = {
+constexpr std::array<DataType, 20> kTypes = {
     DataType::FLOAT,      DataType::DOUBLE,         DataType::FLOAT16,
     DataType::BFLOAT16,   DataType::INT8,           DataType::UINT8,
     DataType::INT16,      DataType::UINT16,         DataType::INT32,
     DataType::UINT32,     DataType::INT64,          DataType::UINT64,
     DataType::BOOL,       DataType::FLOAT8E4M3FN,   DataType::FLOAT8E4M3FNUZ,
-    DataType::FLOAT8E5M2, DataType::FLOAT8E5M2FNUZ, DataType::FLOAT8E8M0};
+    DataType::FLOAT8E5M2, DataType::FLOAT8E5M2FNUZ, DataType::FLOAT8E8M0,
+    DataType::COMPLEX64,  DataType::COMPLEX128};
 
 Tensor Payload(DataType type, const Shape &shape) {
   std::vector<uint8_t> bytes(static_cast<std::size_t>(shape.product()) * rt_ns::ElementSize(type));
