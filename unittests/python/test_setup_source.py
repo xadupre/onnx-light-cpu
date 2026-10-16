@@ -32,62 +32,58 @@ print(json.dumps(namespace["_onnx_light_source_build_info"]()))
 """
 
 
-class TestSourceRuntimeSelection(unittest.TestCase):
-    def _check_runtime(self, *, symlinks=False, foreign=False):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp).resolve()
-            package = root / "onnx_light"
-            runtime = package / "onnx_py"
-            runtime.mkdir(parents=True)
-            header = package / "onnx_core/runtime/kernels/kernel_dispatch_table.h"
-            header.parent.mkdir(parents=True)
-            header.touch()
-            (package / "__init__.py").touch()
-            (runtime / "__init__.py").touch()
-            artifacts = root / "build" if symlinks or foreign else runtime
-            artifacts.mkdir(exist_ok=True)
-            extension_name = "_onnxpyprotoop" + importlib.machinery.EXTENSION_SUFFIXES[0]
-            for name in (extension_name, "liblib_onnx_core.so", "liblib_onnx_proto.so"):
-                artifact = artifacts / name
-                artifact.touch()
-                if symlinks:
-                    (runtime / name).symlink_to(artifact)
-            if foreign:
-                (runtime / "__init__.py").write_text(
-                    f"__path__ = [{str(artifacts)!r}]\n", encoding="utf-8"
-                )
-            env = dict(os.environ, PYTHONPATH=str(root))
-            result = subprocess.run(
-                [sys.executable, "-c", _SCRIPT, str(_SETUP)],
-                env=env,
-                cwd=root,
-                capture_output=True,
-                text=True,
-                check=False,
+def _check_runtime(*, symlinks=False, foreign=False):
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp).resolve()
+        package = root / "onnx_light"
+        runtime = package / "onnx_py"
+        runtime.mkdir(parents=True)
+        header = package / "onnx_core/runtime/kernels/kernel_dispatch_table.h"
+        header.parent.mkdir(parents=True)
+        header.touch()
+        (package / "__init__.py").touch()
+        (runtime / "__init__.py").touch()
+        artifacts = root / "build" if symlinks or foreign else runtime
+        artifacts.mkdir(exist_ok=True)
+        extension_name = "_onnxpyprotoop" + importlib.machinery.EXTENSION_SUFFIXES[0]
+        for name in (extension_name, "liblib_onnx_core.so", "liblib_onnx_proto.so"):
+            artifact = artifacts / name
+            artifact.touch()
+            if symlinks:
+                (runtime / name).symlink_to(artifact)
+        if foreign:
+            (runtime / "__init__.py").write_text(
+                f"__path__ = [{str(artifacts)!r}]\n", encoding="utf-8"
             )
-            if foreign:
-                self.assertNotEqual(result.returncode, 0)
-                self.assertIn(
-                    f"extension was found at {artifacts / extension_name}", result.stderr
-                )
-                self.assertIn(f"expected it in {runtime}", result.stderr)
-            else:
-                self.assertEqual(result.returncode, 0, result.stderr)
-                info = json.loads(result.stdout)
-                self.assertEqual(info["include_dir"], str(package))
-                self.assertEqual(info["core_library"], str(artifacts / "liblib_onnx_core.so"))
-                self.assertEqual(info["proto_library"], str(artifacts / "liblib_onnx_proto.so"))
-
-    def test_inplace_files(self):
-        self._check_runtime()
-
-    @unittest.skipIf(sys.platform == "win32", "Symbolic links require Windows privileges.")
-    def test_inplace_symlinks(self):
-        self._check_runtime(symlinks=True)
-
-    def test_foreign_extension(self):
-        self._check_runtime(foreign=True)
+        env = dict(os.environ, PYTHONPATH=str(root))
+        result = subprocess.run(
+            [sys.executable, "-c", _SCRIPT, str(_SETUP)],
+            env=env,
+            cwd=root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if foreign:
+            assert result.returncode != 0
+            assert f"extension was found at {artifacts / extension_name}" in result.stderr
+            assert f"expected it in {runtime}" in result.stderr
+        else:
+            assert result.returncode == 0, result.stderr
+            info = json.loads(result.stdout)
+            assert info["include_dir"] == str(package)
+            assert info["core_library"] == str(artifacts / "liblib_onnx_core.so")
+            assert info["proto_library"] == str(artifacts / "liblib_onnx_proto.so")
 
 
-if __name__ == "__main__":
-    unittest.main()
+def test_inplace_files():
+    _check_runtime()
+
+
+@unittest.skipIf(sys.platform == "win32", "Symbolic links require Windows privileges.")
+def test_inplace_symlinks():
+    _check_runtime(symlinks=True)
+
+
+def test_foreign_extension():
+    _check_runtime(foreign=True)
