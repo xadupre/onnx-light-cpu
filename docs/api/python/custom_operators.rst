@@ -179,6 +179,8 @@ implementation.
 For example, ``matmul_nbits_throughput 1 512 32000 21 8 --generic`` measures
 the generic INT8 panel path, not INT4. Both modes use one participant;
 the generic mode allocates no persistent prepared-weight buffers.
+The bit width remains optional with ``--generic``:
+``matmul_nbits_throughput 1 512 32000 21 --generic`` uses the default INT4 path.
 
 The prepared INT8 path processes four activation rows per eight-column tile,
 reusing packed weights across rows and keeping dot products and accumulation

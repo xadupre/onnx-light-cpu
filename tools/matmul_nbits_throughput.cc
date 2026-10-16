@@ -28,8 +28,9 @@ int main(int argc, char **argv) {
   };
   const auto m = parse(argv[1]), k = parse(argv[2]), n = parse(argv[3]);
   const auto repeats = parse(argv[4]);
-  const auto bits = argc >= 6 ? parse(argv[5]) : 4;
-  const bool generic = argc == 7;
+  const bool generic = argc >= 6 && std::string_view(argv[argc - 1]) == "--generic";
+  const int positional_argc = argc - (generic ? 1 : 0);
+  const auto bits = positional_argc == 6 ? parse(argv[5]) : 4;
   if (bits != 4 && bits != 8) {
     throw std::invalid_argument("bits must be 4 or 8.");
   }
