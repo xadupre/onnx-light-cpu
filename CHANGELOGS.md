@@ -5,21 +5,49 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [0.1.21] – Unreleased
 
+### New Features
+
+- Added `RotaryEmbedding` CPU kernels for ONNX and `com.microsoft` with FLOAT,
+  FLOAT16, and BFLOAT16 inputs and split-half or interleaved layouts
+  ([#883](https://github.com/xadupre/onnx-light-cpu/pull/883)).
+- Added `com.microsoft::MoE` decoder inference for FLOAT, FLOAT16, and
+  BFLOAT16 with softmax top-k routing and interleaved SwiGLU
+  ([#913](https://github.com/xadupre/onnx-light-cpu/pull/913)).
+
 ### Improvements
 
 - Updated native kernel registration and immutable input preparation for the
   onnx-light 0.1.32 runtime API, and pinned CI and release builds to 0.1.32.
+- Supported encoded INT2/INT4/INT8 `MatMulNBits` weights with embedded scales,
+  without repacking them for VNNI execution
+  ([#895](https://github.com/xadupre/onnx-light-cpu/pull/895)).
+- Added interleaved rotary pairing for `GroupQueryAttention` query and key
+  inputs ([#906](https://github.com/xadupre/onnx-light-cpu/pull/906)).
+- Optimized `BatchNormalization` for contiguous channels and improved
+  normalization moment stability with Chan aggregation
+  ([#870](https://github.com/xadupre/onnx-light-cpu/pull/870),
+  [#888](https://github.com/xadupre/onnx-light-cpu/pull/888)).
 - Added allocation-free COMPLEX64 and COMPLEX128 input and output support to
   the CPU Cast kernel.
 - Added `com.microsoft::SkipLayerNormalization` for FLOAT, FLOAT16, and
   BFLOAT16 decoder graphs, including optional beta, bias, saved statistics,
   and residual outputs ([#896](https://github.com/xadupre/onnx-light-cpu/issues/896)).
 
+### Fixes
+
+- Accepted dynamic structured `MatMulNBits` weight inputs during shape inference
+  without requiring a concrete encoded value
+  ([#905](https://github.com/xadupre/onnx-light-cpu/pull/905)).
+
 ### Documentation & CI
 
 - Corrected the published-wheel compatibility guide to reference onnx-light
   0.1.32 and added a regression check that keeps it aligned with the release
   version ([#901](https://github.com/xadupre/onnx-light-cpu/pull/901)).
+- Generated C++ kernel and custom-operator API pages from Doxygen declarations
+  ([#887](https://github.com/xadupre/onnx-light-cpu/pull/887)).
+- Enabled weekly Dependabot updates for GitHub Actions and Python dependencies
+  ([#872](https://github.com/xadupre/onnx-light-cpu/pull/872)).
 
 ## [0.1.20] – 2026-10-05
 
