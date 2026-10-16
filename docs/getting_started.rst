@@ -102,6 +102,11 @@ This makes the DLLs discoverable without preloading either project's extensions;
 adding the directory to ``PATH`` alone is insufficient for Python's extension
 loader.
 
+Windows release-wheel repair excludes the runtime DLLs supplied by onnx-light
+from ``delvewheel`` bundling and renaming, just as Linux and macOS keep that
+runtime external. The installed onnx-light wheel supplies the shared runtime;
+bundling another copy would separate its types and kernel registries.
+
 Quick Start
 -----------
 
