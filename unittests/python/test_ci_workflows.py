@@ -5,6 +5,7 @@
 """Tests the cross-repository CI ownership contract."""
 
 import ast
+import shlex
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[2]
@@ -13,6 +14,7 @@ _DOCS_WORKFLOW = (_ROOT / ".github" / "workflows" / "docs.yml").read_text(encodi
 _STANDALONE_WORKFLOW = (_ROOT / ".github" / "workflows" / "cpp_standalone.yml").read_text(
     encoding="utf-8"
 )
+_PIXI_WORKFLOW = (_ROOT / ".github" / "workflows" / "cq_pixi.yml").read_text(encoding="utf-8")
 _RELEASE_WORKFLOW = (_ROOT / ".github" / "workflows" / "build_release_wheel.yml").read_text(
     encoding="utf-8"
 )
@@ -25,6 +27,15 @@ def test_documentation_build_is_linux_only():
     assert "matrix:" not in _DOCS_WORKFLOW
     assert "sphinx-build -W -b html docs dist/html" in _DOCS_WORKFLOW
     assert "PYTHONPATH: ${{ github.workspace }}" in _DOCS_WORKFLOW
+
+
+def test_pixi_environment_cache_requires_an_existing_lockfile():
+    setup = _PIXI_WORKFLOW.split("      - name: Set up pixi", 1)[1].split(
+        "      - name: Show pixi info", 1
+    )[0]
+    assert "uses: prefix-dev/setup-pixi@" in setup
+    assert "environments: ${{ matrix.environment }}" in setup
+    assert "cache: ${{ hashFiles('pixi.lock') != '' }}" in setup
 
 
 def test_documentation_does_not_replace_onnx_light_main():
@@ -109,6 +120,28 @@ def test_release_wheels_build_and_test_session_registration_before_upload():
         else:
             assert "CIBW_REPAIR_WHEEL_COMMAND_MACOS" not in body
         assert body.index("CIBW_TEST_COMMAND:") < body.index("Attach wheels to GitHub Release")
+
+
+def test_windows_release_repair_keeps_onnx_light_dlls_external():
+    windows_job = _RELEASE_WORKFLOW.split("  build_wheels_windows:", 1)[1].split(
+        "  build_wheels_macos:", 1
+    )[0]
+    repair = windows_job.split("CIBW_REPAIR_WHEEL_COMMAND_WINDOWS: >-\n", 1)[1].split(
+        "          CIBW_", 1
+    )[0]
+    dependencies = ";".join(
+        f"lib_onnx_{component}.dll"
+        for component in ("core", "proto", "kernels", "backend_test", "op", "shape")
+    )
+    assert shlex.split(repair) == [
+        "delvewheel",
+        "repair",
+        "--exclude",
+        dependencies,
+        "-w",
+        "{dest_dir}",
+        "{wheel}",
+    ]
 
 
 def test_release_wheel_maps_the_core_windows_import_library():

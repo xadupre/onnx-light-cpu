@@ -9,7 +9,7 @@ if(NOT _is_multi_config AND NOT CMAKE_BUILD_TYPE)
       "Debug" "Release" "RelWithDebInfo" "MinSizeRel")
 endif()
 
-project(onnx_light_cpu VERSION 0.1.21 LANGUAGES CXX)
+project(onnx_light_cpu VERSION 0.1.23 LANGUAGES CXX)
 
 # CMake 4.1 introduced CMP0178, which stops silently discarding empty test
 # launcher / crosscompiling-emulator arguments. With the NEW behaviour,
@@ -1366,7 +1366,7 @@ if(ONNX_LIGHT_CPU_INSTALL)
 endif()
 
 # ---------------------------------------------------------------------------
-# Isolated C++ throughput benchmarks (opt-in, not run by ctest)
+# Isolated C++ throughput benchmarks (opt-in; ctest only runs tiny CLI smoke tests)
 # ---------------------------------------------------------------------------
 if(ONNX_LIGHT_CPU_BUILD_BENCHMARKS)
   file(GLOB _throughput_sources CONFIGURE_DEPENDS
@@ -1594,6 +1594,27 @@ if(ONNX_LIGHT_CPU_BUILD_TESTS)
       onnx_light_cpu_add_test("${_test_src}" lib_onnx_light_cpu)
     endif()
   endforeach()
+
+  if(TARGET matmul_nbits_throughput)
+    foreach(_bits IN ITEMS 4 8)
+      add_test(NAME MatMulNBitsThroughput.Bits${_bits}
+          COMMAND matmul_nbits_throughput 1 32 9 1 ${_bits})
+      set_tests_properties(MatMulNBitsThroughput.Bits${_bits} PROPERTIES
+          TIMEOUT 30 PASS_REGULAR_EXPRESSION "1,32,9,${_bits},float32,1,")
+      add_test(NAME MatMulNBitsThroughput.Bits${_bits}Generic
+          COMMAND matmul_nbits_throughput 1 32 9 1 ${_bits} --generic)
+      set_tests_properties(MatMulNBitsThroughput.Bits${_bits}Generic PROPERTIES
+          TIMEOUT 30 PASS_REGULAR_EXPRESSION "1,32,9,${_bits},float32,1,.*generic")
+    endforeach()
+    add_test(NAME MatMulNBitsThroughput.DefaultBits
+        COMMAND matmul_nbits_throughput 1 32 9 1)
+    set_tests_properties(MatMulNBitsThroughput.DefaultBits PROPERTIES
+        TIMEOUT 30 PASS_REGULAR_EXPRESSION "1,32,9,4,float32,1,")
+    add_test(NAME MatMulNBitsThroughput.DefaultBitsGeneric
+        COMMAND matmul_nbits_throughput 1 32 9 1 --generic)
+    set_tests_properties(MatMulNBitsThroughput.DefaultBitsGeneric PROPERTIES
+        TIMEOUT 30 PASS_REGULAR_EXPRESSION "1,32,9,4,float32,1,.*generic")
+  endif()
 endif()
 
 # ---------------------------------------------------------------------------
