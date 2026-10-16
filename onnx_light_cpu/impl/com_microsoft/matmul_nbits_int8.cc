@@ -248,8 +248,6 @@ void MatMulNBitsInt8Float32(const float *a, const std::uint8_t *weights,
         }
       }
     }
-    const bool finite_inputs = finite_scales && std::all_of(finite_rows, finite_rows + rows,
-                                                            [](bool value) { return value; });
     const auto small_schedule = Int8SmallSchedule(rows, k, tuning);
     ExecuteRanges(static_cast<std::int64_t>(groups), small_schedule,
                   [&](std::int64_t begin, std::int64_t end) noexcept {
@@ -257,14 +255,14 @@ void MatMulNBitsInt8Float32(const float *a, const std::uint8_t *weights,
                          group < static_cast<std::size_t>(end); ++group) {
                       const std::size_t index = group * blocks * 8;
                       const std::size_t column = group * 8;
-                      if (finite_inputs) {
+                      if (finite_scales) {
                         tile({quantized, activation_scales, weights + index * 32,
                               weight_sums + index, scales + index,
                               bias == nullptr ? nullptr : bias + column, y + column, rows, k, n,
                               std::min<std::size_t>(8, n - column)});
                       }
                       for (std::size_t row = 0; row < rows; ++row) {
-                        if (!finite_inputs) {
+                        if (!finite_rows[row]) {
                           ComputeFloatRow(a + row * k, weights, scales, bias, y + row * n, k, n,
                                           column, std::min(column + 8, n));
                         }
