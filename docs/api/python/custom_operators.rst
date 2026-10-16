@@ -149,11 +149,90 @@ preparation, first-use packing time, median steady-state seconds, source packed
 bytes, persistent prepared bytes, per-callback scratch bytes, and the selected
 implementation.
 
-The prepared INT8 path allocates disjoint per-participant scratch before
-dispatching work; range callbacks do not allocate. Activation scales and their
-products with weight scales and corrected integer dot products use double
-precision until each block contribution is converted to FLOAT, avoiding
-premature scale overflow or underflow.
+The prepared INT8 path processes four activation rows per eight-column tile,
+reusing packed weights across rows and keeping dot products and accumulation
+inside the ISA-specific implementation. Activation blocks use the full signed
+INT8 range ``[-127,127]``; AVX2 splits the unsigned activation's high bit before
+pairwise multiplication to avoid 16-bit saturation. AVX-512 VNNI uses all 512
+bits to process two weight quads at once.
+
+Disjoint scratch of ``5*K`` bytes per participant is allocated through the
+runtime execution allocator before dispatch; range callbacks do not allocate.
+The output-based parallel threshold, target block size, and participant cap
+apply to prepared execution as well as the generic path. Activation scales,
+scale products, and biased accumulation remain in double precision until each
+updated block accumulator is converted to FLOAT. Nonfinite activations or
+weight scales retain per-element floating-point dequantization semantics.
+Implementation labels remain available through ``used_kernel_paths()``, but
+are excluded from ``used_kernel_names()``.
+
+Run ``python -m tools.benchmark_matmul_nbits_parity --qwen-int8`` for all six
+synthetic Qwen2 prefill projections at four threads. Both sessions use the
+same graph and input values; CPU timings feed native backend tensors without
+NumPy adaptation. Preparation and first-run times are separate from the
+alternating steady-state samples. These isolated nodes do not measure the
+exported end-to-end decoder.
+
+On an Intel Xeon Platinum 8480C with affinity restricted to four CPUs,
+GCC 13.2 Release and ONNX Runtime 1.32.0, the command above with
+``--repeat 15 --warmup 5`` measured these median steady-state milliseconds
+(``M=128``, FP32, INT8, block size 32, accuracy level 4). The selected CPU
+implementation was ``int8_avx512_vnni``; maximum absolute error against ORT
+across these six cases was below ``1.9e-5``.
+
+.. list-table::
+   :header-rows: 1
+
+   * - Projection
+     - K
+     - N
+     - CPU before (``51e760e``)
+     - CPU tiled
+     - ORT
+   * - LM head
+     - 512
+     - 32000
+     - 21.044
+     - 6.812
+     - 6.725
+   * - MLP gate
+     - 512
+     - 1376
+     - 0.900
+     - 0.337
+     - 0.401
+   * - MLP up
+     - 512
+     - 1376
+     - 0.900
+     - 0.325
+     - 0.421
+   * - MLP down
+     - 1376
+     - 512
+     - 0.951
+     - 0.328
+     - 0.484
+   * - Attention QKV
+     - 512
+     - 1024
+     - 0.704
+     - 0.251
+     - 0.337
+   * - Attention output
+     - 512
+     - 512
+     - 0.376
+     - 0.137
+     - 0.228
+
+Both CPU revisions used native backend feeds, the same deterministic inputs,
+four threads, five warmups, and fifteen alternating samples. Preparation is
+excluded. The old seven-bit activation quantization also failed ORT parity
+on these cases (maximum LM-head error about ``0.285``); the timings above
+do not imply that its numerical behavior was equivalent. These measurements
+are not portable speedup thresholds, and the LM head remains slightly slower
+than ORT on this runner.
 
 ONNX Runtime 1.30.0 CPU does not implement native BF16 MatMulNBits. The
 BF16 oracle therefore runs ORT's FP32 operator on BF16-rounded activations

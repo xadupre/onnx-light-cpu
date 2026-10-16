@@ -65,7 +65,8 @@ int main(int argc, char **argv) {
   const auto run = [&] {
     if (bits == 8) {
       onnx_light_cpu::MatMulNBitsInt8Float32(a.data(), weights.data(), sums.data(),
-                                             packed_scales.data(), nullptr, y.data(), m, k, n, 1);
+                                             packed_scales.data(), nullptr, y.data(), m, k, n,
+                                             {256, 64, 1});
     } else {
       onnx_light_cpu::MatMulNBitsFloat32(a.data(), b.data(), scales.data(), nullptr, y.data(), m, k,
                                          n, 32);
@@ -87,8 +88,10 @@ int main(int argc, char **argv) {
             << weights.size() + sums.size() * sizeof(std::int32_t) +
                    packed_scales.size() * sizeof(float)
             << ','
-            << (bits == 8 ? k + blocks * sizeof(double)
-                          : onnx_light_cpu::kMatMulNBitsInt4WorkspaceBytes)
+            << (bits == 8
+                    ? onnx_light_cpu::MatMulNBitsInt8WorkspaceElements(m, k, n, {256, 64, 1}) *
+                          sizeof(double)
+                    : onnx_light_cpu::kMatMulNBitsInt4WorkspaceBytes)
             << ','
             << (bits == 8 ? onnx_light_cpu::MatMulNBitsInt8Implementation()
                           : onnx_light_cpu::MatMulNBitsInt4Implementation())

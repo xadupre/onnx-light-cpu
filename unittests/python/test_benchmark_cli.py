@@ -341,10 +341,20 @@ class TestBenchmarkCli(ExtTestCase):
             "Attention.tiled",
             "Attention.conversion.tile",
             "Attention.packing.tile",
+            "onnx_light_cpu::MatMulNBits",
+            "int8_scalar",
+            "int8_avx2",
+            "int8_avx_vnni",
+            "int8_avx512_vnni",
         ]
         self.assertEqual(
             _kernel_names_only(recorded),
-            ["onnx_light_cpu::Cast", "onnx_light_cpu::Abs", "onnx_light_cpu::Attention"],
+            [
+                "onnx_light_cpu::Cast",
+                "onnx_light_cpu::Abs",
+                "onnx_light_cpu::Attention",
+                "onnx_light_cpu::MatMulNBits",
+            ],
         )
 
     def test_rejects_invalid_test_regular_expression(self):

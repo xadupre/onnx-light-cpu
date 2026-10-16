@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "onnx_light_cpu/impl/com_microsoft/matmul_nbits_int8_tile.h"
+
 #include <immintrin.h>
 
 #include <cstdint>
@@ -9,7 +11,8 @@
 
 namespace onnx_light_cpu {
 
-void MatMulNBitsInt8DotAvxVnni(const std::uint8_t *a, const std::uint8_t *b, std::int32_t *dots) {
+static inline void MatMulNBitsInt8DotAvxVnni(const std::uint8_t *a, const std::uint8_t *b,
+                                             std::int32_t *dots) {
   const __m256i offset = _mm256_set1_epi8(static_cast<char>(128));
   __m256i sum = _mm256_setzero_si256();
   for (int quad = 0; quad < 8; ++quad) {
@@ -21,6 +24,10 @@ void MatMulNBitsInt8DotAvxVnni(const std::uint8_t *a, const std::uint8_t *b, std
     sum = _mm256_dpbusd_epi32(sum, activation, weight);
   }
   _mm256_storeu_si256(reinterpret_cast<__m256i *>(dots), sum);
+}
+
+void MatMulNBitsInt8TileAvxVnni(const MatMulNBitsInt8Tile &tile) {
+  ComputeMatMulNBitsInt8Tile<MatMulNBitsInt8DotAvxVnni>(tile);
 }
 
 } // namespace onnx_light_cpu

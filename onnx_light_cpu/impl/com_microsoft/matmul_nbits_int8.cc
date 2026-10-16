@@ -2,30 +2,46 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "onnx_light_cpu/impl/checked_arithmetic.h"
 #include "onnx_light_cpu/impl/com_microsoft/matmul_nbits.h"
+#include "onnx_light_cpu/impl/com_microsoft/matmul_nbits_int8_tile.h"
 #include "onnx_light_cpu/impl/execution.h"
 #include "onnx_light_cpu/impl/simd_level.h"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <vector>
 
 namespace onnx_light_cpu {
 
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2
-void MatMulNBitsInt8DotAvx2(const std::uint8_t *a, const std::uint8_t *b, std::int32_t *dots);
+void MatMulNBitsInt8TileAvx2(const MatMulNBitsInt8Tile &tile);
+bool QuantizeMatMulNBitsInt8RowAvx2(const float *input, std::uint8_t *quantized, double *scales,
+                                    std::size_t k);
 #endif
 #ifdef ONNX_LIGHT_CPU_HAVE_AVXVNNI
-void MatMulNBitsInt8DotAvxVnni(const std::uint8_t *a, const std::uint8_t *b, std::int32_t *dots);
+void MatMulNBitsInt8TileAvxVnni(const MatMulNBitsInt8Tile &tile);
 #endif
 #if defined(ONNX_LIGHT_CPU_HAVE_AVX512VNNI) && defined(ONNX_LIGHT_CPU_HAVE_AVX512BW)
-void MatMulNBitsInt8DotAvx512Vnni(const std::uint8_t *a, const std::uint8_t *b, std::int32_t *dots);
+void MatMulNBitsInt8TileAvx512Vnni(const MatMulNBitsInt8Tile &tile);
 #endif
 
 namespace {
 
-using DotFn = void (*)(const std::uint8_t *, const std::uint8_t *, std::int32_t *);
+using TileFn = void (*)(const MatMulNBitsInt8Tile &);
+using QuantizeFn = bool (*)(const float *, std::uint8_t *, double *, std::size_t);
+
+QuantizeFn SelectedQuantizer() {
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2
+  static const QuantizeFn quantize =
+      DetectSimdLevel() >= SimdLevel::kAVX2 ? QuantizeMatMulNBitsInt8RowAvx2 : nullptr;
+  return quantize;
+#else
+  return nullptr;
+#endif
+}
 
 void DotScalar(const std::uint8_t *a, const std::uint8_t *b, std::int32_t *dots) {
   std::fill_n(dots, 8, 0);
@@ -39,33 +55,62 @@ void DotScalar(const std::uint8_t *a, const std::uint8_t *b, std::int32_t *dots)
   }
 }
 
-DotFn SelectDot() {
+void TileScalar(const MatMulNBitsInt8Tile &tile) { ComputeMatMulNBitsInt8Tile<DotScalar>(tile); }
+
+TileFn SelectTile() {
 #if defined(ONNX_LIGHT_CPU_HAVE_AVX512VNNI) && defined(ONNX_LIGHT_CPU_HAVE_AVX512BW)
   if (CpuSupportsAvx512Vnni() && CpuSupportsAvx512BW()) {
-    return MatMulNBitsInt8DotAvx512Vnni;
+    return MatMulNBitsInt8TileAvx512Vnni;
   }
 #endif
 #ifdef ONNX_LIGHT_CPU_HAVE_AVXVNNI
   if (CpuSupportsAvxVnni()) {
-    return MatMulNBitsInt8DotAvxVnni;
+    return MatMulNBitsInt8TileAvxVnni;
   }
 #endif
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2
   if (DetectSimdLevel() >= SimdLevel::kAVX2) {
-    return MatMulNBitsInt8DotAvx2;
+    return MatMulNBitsInt8TileAvx2;
   }
 #endif
-  return DotScalar;
+  return TileScalar;
 }
 
-DotFn SelectedDot() {
-  static const DotFn dot = SelectDot();
-  return dot;
+TileFn SelectedTile() {
+  static const TileFn tile = SelectTile();
+  return tile;
+}
+
+ExecutionSchedule Int8Schedule(std::size_t n, const MatMulNBitsExecutionTuning &tuning) {
+  const auto output_rows = [n](std::size_t outputs) {
+    return static_cast<std::int64_t>(outputs / n + (outputs % n != 0));
+  };
+  return {output_rows(tuning.parallel_threshold_outputs), output_rows(tuning.target_block_outputs),
+          tuning.max_participants};
+}
+
+void ComputeFloatRow(const float *a, const std::uint8_t *weights, const float *scales,
+                     const float *bias, float *y, std::size_t k, std::size_t n) {
+  const std::size_t blocks = k / 32;
+  for (std::size_t column = 0; column < n; ++column) {
+    float sum = bias == nullptr ? 0.0f : bias[column];
+    const std::size_t group = column / 8;
+    const std::size_t lane = column % 8;
+    for (std::size_t block = 0; block < blocks; ++block) {
+      const std::size_t index = (group * blocks + block) * 8;
+      for (std::size_t p = 0; p < 32; ++p) {
+        const auto weight = weights[index * 32 + (p / 4) * 32 + lane * 4 + p % 4];
+        sum += a[block * 32 + p] *
+               (static_cast<float>(static_cast<int>(weight) - 128) * scales[index + lane]);
+      }
+    }
+    y[column] = sum;
+  }
 }
 
 } // namespace
 
-bool MatMulNBitsInt8Float32Available() { return SelectedDot() != DotScalar; }
+bool MatMulNBitsInt8Float32Available() { return SelectedTile() != TileScalar; }
 
 void PackMatMulNBitsInt8(const std::uint8_t *b, const float *scales, std::uint8_t *weights,
                          std::int32_t *weight_sums, float *block_scales, std::size_t k,
@@ -92,111 +137,119 @@ void PackMatMulNBitsInt8(const std::uint8_t *b, const float *scales, std::uint8_
 
 const char *MatMulNBitsInt8Implementation() {
 #if defined(ONNX_LIGHT_CPU_HAVE_AVX512VNNI) && defined(ONNX_LIGHT_CPU_HAVE_AVX512BW)
-  if (SelectedDot() == MatMulNBitsInt8DotAvx512Vnni) {
+  if (SelectedTile() == MatMulNBitsInt8TileAvx512Vnni) {
     return "int8_avx512_vnni";
   }
 #endif
 #ifdef ONNX_LIGHT_CPU_HAVE_AVXVNNI
-  if (SelectedDot() == MatMulNBitsInt8DotAvxVnni) {
+  if (SelectedTile() == MatMulNBitsInt8TileAvxVnni) {
     return "int8_avx_vnni";
   }
 #endif
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2
-  if (SelectedDot() == MatMulNBitsInt8DotAvx2) {
+  if (SelectedTile() == MatMulNBitsInt8TileAvx2) {
     return "int8_avx2";
   }
 #endif
   return "int8_scalar";
 }
 
+std::size_t MatMulNBitsInt8WorkspaceElements(std::size_t rows, std::size_t k, std::size_t n,
+                                             const MatMulNBitsExecutionTuning &tuning) {
+  if (rows == 0 || n == 0) {
+    return 0;
+  }
+  if (k % 32 != 0) {
+    throw std::invalid_argument("MatMulNBits INT8 preparation requires K divisible by 32.");
+  }
+  if (rows > static_cast<std::size_t>(std::numeric_limits<std::int64_t>::max())) {
+    ThrowArithmeticError("MatMulNBits", "INT8 row count", "overflows int64_t");
+  }
+  const auto participants = static_cast<std::size_t>(
+      ExecutionBlockCount(static_cast<std::int64_t>(rows), Int8Schedule(n, tuning)));
+  // Four byte rows and four rows of double scales, one scale per 32 activations.
+  const std::size_t per_participant = CheckedMultiply(k, 5, "MatMulNBits", "INT8 workspace") / 8;
+  return CheckedMultiply(participants, per_participant, "MatMulNBits", "INT8 workspace");
+}
+
 void MatMulNBitsInt8Float32(const float *a, const std::uint8_t *weights,
                             const std::int32_t *weight_sums, const float *scales, const float *bias,
                             float *y, std::size_t rows, std::size_t k, std::size_t n,
-                            std::int64_t max_participants) {
-  struct Scratch {
-    std::vector<std::uint8_t> quantized;
-    std::vector<double> activation_scales;
-  };
-  if (rows == 0) {
+                            const MatMulNBitsExecutionTuning &tuning, std::span<double> workspace) {
+  if (rows == 0 || n == 0) {
     return;
   }
   const std::size_t blocks = k / 32;
   const std::size_t groups = n / 8 + (n % 8 != 0);
-  const DotFn dot = SelectedDot();
-  const ExecutionSchedule schedule{1, 2, max_participants};
+  const std::size_t workspace_elements = MatMulNBitsInt8WorkspaceElements(rows, k, n, tuning);
+  const TileFn tile = SelectedTile();
+  const QuantizeFn quantize = SelectedQuantizer();
+  const ExecutionSchedule schedule = Int8Schedule(n, tuning);
   const auto participants =
       static_cast<std::size_t>(ExecutionBlockCount(static_cast<std::int64_t>(rows), schedule));
   const std::size_t rows_per_range = rows / participants + (rows % participants != 0);
-  std::vector<Scratch> scratch_buffers(participants);
-  for (auto &scratch : scratch_buffers) {
-    scratch.quantized.resize(k);
-    scratch.activation_scales.resize(blocks);
+  std::vector<double> owned_workspace;
+  if (workspace.empty()) {
+    owned_workspace.resize(workspace_elements);
+    workspace = owned_workspace;
+  } else if (workspace.size() < workspace_elements) {
+    throw std::invalid_argument("MatMulNBits INT8 workspace is too small.");
   }
+  const bool finite_scales = std::all_of(scales, scales + groups * blocks * 8,
+                                         [](float scale) { return std::isfinite(scale); });
   ExecuteRanges(
       static_cast<std::int64_t>(rows), schedule,
       [&](std::int64_t begin, std::int64_t end) noexcept {
-        auto &scratch = scratch_buffers[static_cast<std::size_t>(begin) / rows_per_range];
-        for (std::size_t row = static_cast<std::size_t>(begin); row < static_cast<std::size_t>(end);
-             ++row) {
-          bool finite = true;
-          for (std::size_t block = 0; block < blocks; ++block) {
-            const float *source = a + row * k + block * 32;
-            float maximum = 0.0f;
-            for (std::size_t p = 0; p < 32; ++p) {
-              if (!std::isfinite(source[p])) {
-                finite = false;
-                break;
-              }
-              maximum = std::max(maximum, std::abs(source[p]));
-            }
-            if (!finite) {
-              break;
-            }
-            scratch.activation_scales[block] = static_cast<double>(maximum) / 63.0;
-            for (std::size_t p = 0; p < 32; ++p) {
-              const float scaled = maximum == 0.0f    ? 0.0f
-                                   : maximum < 1e-36f ? (source[p] / maximum) * 63.0f
-                                                      : source[p] * (63.0f / maximum);
-              scratch.quantized[block * 32 + p] =
-                  static_cast<std::uint8_t>(static_cast<int>(std::nearbyint(scaled)) + 64);
-            }
-          }
-          if (!finite) {
-            for (std::size_t column = 0; column < n; ++column) {
-              float sum = bias == nullptr ? 0.0f : bias[column];
-              const std::size_t group = column / 8;
-              const std::size_t lane = column % 8;
-              for (std::size_t block = 0; block < blocks; ++block) {
-                const std::size_t index = (group * blocks + block) * 8;
-                for (std::size_t p = 0; p < 32; ++p) {
-                  const auto weight = weights[index * 32 + (p / 4) * 32 + lane * 4 + p % 4];
-                  sum +=
-                      a[row * k + block * 32 + p] *
-                      (static_cast<float>(static_cast<int>(weight) - 128) * scales[index + lane]);
-                }
-              }
-              y[row * n + column] = sum;
+        double *scratch = workspace.data() + (static_cast<std::size_t>(begin) / rows_per_range) *
+                                                 (workspace_elements / participants);
+        auto *quantized = reinterpret_cast<std::uint8_t *>(scratch);
+        double *activation_scales = scratch + k / 2;
+        for (std::size_t first = static_cast<std::size_t>(begin);
+             first < static_cast<std::size_t>(end); first += 4) {
+          const std::size_t tile_rows = std::min<std::size_t>(4, end - first);
+          bool finite_rows[4]{};
+          if (!finite_scales) {
+            for (std::size_t row = first; row < first + tile_rows; ++row) {
+              ComputeFloatRow(a + row * k, weights, scales, bias, y + row * n, k, n);
             }
             continue;
           }
-          for (std::size_t group = 0; group < groups; ++group) {
-            float sums[8];
-            for (std::size_t lane = 0; lane < 8; ++lane) {
-              sums[lane] = bias != nullptr && group * 8 + lane < n ? bias[group * 8 + lane] : 0.0f;
+          for (std::size_t row = 0; row < tile_rows; ++row) {
+            finite_rows[row] = true;
+            if (quantize != nullptr && quantize(a + (first + row) * k, quantized + row * k,
+                                                activation_scales + row * blocks, k)) {
+              continue;
             }
             for (std::size_t block = 0; block < blocks; ++block) {
-              const std::size_t index = (group * blocks + block) * 8;
-              std::int32_t dots[8];
-              dot(scratch.quantized.data() + block * 32, weights + index * 32, dots);
-              for (std::size_t lane = 0; lane < 8; ++lane) {
-                const double factor =
-                    scratch.activation_scales[block] * static_cast<double>(scales[index + lane]);
-                sums[lane] += static_cast<float>(
-                    static_cast<double>(dots[lane] - 64 * weight_sums[index + lane]) * factor);
+              const float *source = a + (first + row) * k + block * 32;
+              float maximum = 0.0f;
+              for (std::size_t p = 0; p < 32; ++p) {
+                finite_rows[row] &= std::isfinite(source[p]);
+                maximum = std::max(maximum, std::abs(source[p]));
+              }
+              activation_scales[row * blocks + block] =
+                  finite_rows[row] ? static_cast<double>(maximum) / 127.0 : 0.0;
+              for (std::size_t p = 0; p < 32; ++p) {
+                const float scaled = !finite_rows[row] || maximum == 0.0f ? 0.0f
+                                     : maximum < 1e-36f ? (source[p] / maximum) * 127.0f
+                                                        : source[p] * (127.0f / maximum);
+                const std::size_t index = row * k + block * 32 + p;
+                quantized[index] =
+                    static_cast<std::uint8_t>(static_cast<int>(std::nearbyint(scaled)) + 128);
               }
             }
-            for (std::size_t lane = 0; lane < std::min<std::size_t>(8, n - group * 8); ++lane) {
-              y[row * n + group * 8 + lane] = sums[lane];
+          }
+          for (std::size_t group = 0; group < groups; ++group) {
+            const std::size_t index = group * blocks * 8;
+            tile({quantized, activation_scales, weights + index * 32, weight_sums + index,
+                  scales + index, bias == nullptr ? nullptr : bias + group * 8,
+                  y + first * n + group * 8, tile_rows, k, n,
+                  std::min<std::size_t>(8, n - group * 8)});
+          }
+          for (std::size_t row = 0; row < tile_rows; ++row) {
+            if (!finite_rows[row]) {
+              ComputeFloatRow(a + (first + row) * k, weights, scales, bias, y + (first + row) * n,
+                              k, n);
             }
           }
         }

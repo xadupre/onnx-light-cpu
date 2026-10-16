@@ -12,6 +12,7 @@
 #include "onnx_core/runtime/kernels/kernel_dispatch_table.h"
 #include "onnx_core/runtime/kernels/node_helpers.h"
 #include "onnx_core/runtime/kernels/value_store.h"
+#include "onnx_core/runtime/memory/temporary_buffer.h"
 #include "onnx_core/runtime/quantization.h"
 #include "onnx_core/runtime/tuning/kernel_tuning.h"
 #include "onnx_core/symbolic/sym_tensor.h"
@@ -521,13 +522,18 @@ Tensor MatMulNBitsKernel::Compute(const Tensor &a, const Tensor &b, const Tensor
       throw std::runtime_error("onnx_light_cpu::MatMulNBits: prepared INT8 plan is truncated.");
     }
     const std::uint8_t *base = prepared.tensor.bytes();
+    const auto workspace_elements = MatMulNBitsInt8WorkspaceElements(rows, k, n, tuning_);
+    rt_ns::detail::TemporaryTypedBuffer<double> workspace(
+        workspace_elements, rt != nullptr ? rt->execution_allocator() : ctx_.allocator,
+        "MatMulNBits INT8 scratch");
     MatMulNBitsInt8Float32(
         reinterpret_cast<const float *>(a.bytes()), base,
         reinterpret_cast<const std::int32_t *>(base + prepared_int8_->weight_bytes),
         reinterpret_cast<const float *>(base + prepared_int8_->weight_bytes +
                                         prepared_int8_->weight_sum_bytes),
         bias == nullptr ? nullptr : reinterpret_cast<const float *>(bias->bytes()),
-        reinterpret_cast<float *>(y.mutable_bytes()), rows, k, n, prepared_int8_->max_participants);
+        reinterpret_cast<float *>(y.mutable_bytes()), rows, k, n, tuning_,
+        {workspace.data(), workspace_elements});
     if (rt != nullptr) {
       rt->RecordKernelUsage(MatMulNBitsInt8Implementation());
     }

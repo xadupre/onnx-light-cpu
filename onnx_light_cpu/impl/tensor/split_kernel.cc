@@ -35,6 +35,20 @@ void CopyFixedRows(const uint8_t *source, uint8_t *destination, std::size_t inpu
   }
 }
 
+template <std::size_t Width>
+void CopyFourFixedOutputs(const uint8_t *source, void *const *outputs, int64_t begin, int64_t end) {
+  auto *output0 = static_cast<uint8_t *>(outputs[0]);
+  auto *output1 = static_cast<uint8_t *>(outputs[1]);
+  auto *output2 = static_cast<uint8_t *>(outputs[2]);
+  auto *output3 = static_cast<uint8_t *>(outputs[3]);
+  for (int64_t row = begin; row < end; ++row) {
+    std::memcpy(output0 + row * Width, source + row * 4 * Width, Width);
+    std::memcpy(output1 + row * Width, source + row * 4 * Width + Width, Width);
+    std::memcpy(output2 + row * Width, source + row * 4 * Width + 2 * Width, Width);
+    std::memcpy(output3 + row * Width, source + row * 4 * Width + 3 * Width, Width);
+  }
+}
+
 } // namespace
 
 void SplitCopy(const void *data, void *output, int64_t rows, std::size_t input_row_bytes,
@@ -158,8 +172,22 @@ void SplitCopyOutputs(const void *data, std::span<void *const> outputs, int64_t 
     split_isa = SplitIsa::kAvx2_4x4;
   }
 #endif
+  const bool fixed_four_outputs =
+      outputs.size() == 4 && (input_row_bytes == 4 || input_row_bytes == 32) &&
+      std::all_of(output_row_bytes.begin(), output_row_bytes.end(),
+                  [&](std::size_t width) { return width == input_row_bytes / 4; });
   const auto copy = [&](int64_t begin, int64_t end) {
     const auto *source = static_cast<const uint8_t *>(data);
+    if (fixed_four_outputs) {
+      if (input_row_bytes == 4) {
+        CopyFourFixedOutputs<1>(source, outputs.data(), begin, end);
+        return;
+      }
+      if (input_row_bytes == 32) {
+        CopyFourFixedOutputs<8>(source, outputs.data(), begin, end);
+        return;
+      }
+    }
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2
     if (split_isa == SplitIsa::kAvx2_4x2) {
       SplitCopy4x2_AVX2(source, outputs.data(), begin, end);

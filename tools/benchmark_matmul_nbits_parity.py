@@ -169,6 +169,7 @@ def run_case(name, m, k, n, dtype, *, threads=1, repeat=3, warmup=1, accuracy_le
     import numpy as np
     import onnxruntime as ort
     from onnx_light.onnx.reference import ReferenceEvaluator
+    from onnx_light.onnx_py._onnxpykernels.runtime import tensor_from_numpy
     from onnx_light_cpu import (
         clear_used_kernel_names,
         detect_simd_level,
@@ -188,8 +189,16 @@ def run_case(name, m, k, n, dtype, *, threads=1, repeat=3, warmup=1, accuracy_le
     started = time.perf_counter()
     cpu = ReferenceEvaluator(serialized, cpu_execution={"num_threads": threads})
     register_kernel_for_session(cpu, "com.microsoft", "MatMulNBits")
+    cpu_feeds = {
+        "A": tensor_from_numpy(
+            "A",
+            model.graph.input[0].type.tensor_type.elem_type,
+            a.shape,
+            a.view(np.uint8).reshape(-1),
+            False,
+        )
+    }
     cpu_preparation = time.perf_counter() - started
-    cpu_feeds = {"A": a}
 
     def cpu_run():
         return cpu.run(None, cpu_feeds)[0]
@@ -272,7 +281,7 @@ def run_case(name, m, k, n, dtype, *, threads=1, repeat=3, warmup=1, accuracy_le
         "float16": (1e-2, 1e-2),
         "bfloat16": (2e-2, 3e-2),
     }[dtype]
-    if bits == 8:
+    if bits == 8 and (dtype != "float32" or accuracy_level != 4):
         rtol, atol = 0.05, 0.1
     np.testing.assert_allclose(actual.astype(np.float32), expected, rtol=rtol, atol=atol)
     np.testing.assert_array_equal(cpu_run(), actual)
