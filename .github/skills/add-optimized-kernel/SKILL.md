@@ -50,12 +50,13 @@ correctness tests, and reproducible benchmarks in one change.
 
 ## 4. Add AVX and AVX2/FMA kernels safely
 
-1. Keep dispatch and scalar/SSE2 code at the baseline ISA. Put pure AVX implementations in
-   `_avx.cc` files and AVX2 implementations without FMA in `_avx2.cc` files; CMake assigns their
-   per-source flags. Guard declarations and calls with `ONNX_LIGHT_CPU_HAVE_AVX` or
-   `ONNX_LIGHT_CPU_HAVE_AVX2`, respectively, and check the matching runtime SIMD level.
-2. Put AVX2/FMA code in a file ending in `_avx2_fma.cc`; CMake discovers that suffix, compiles it
-   with `-mavx2 -mfma` (or `/arch:AVX2`), and defines
+1. Keep dispatch and scalar/SSE2 code at the baseline ISA. Put pure AVX implementations under an
+   `avx/` directory in `_avx.cc` files and AVX2 implementations under an `avx2/` directory in
+   `_avx2.cc` files; CMake assigns their per-source flags. Guard declarations and calls with
+   `ONNX_LIGHT_CPU_HAVE_AVX` or `ONNX_LIGHT_CPU_HAVE_AVX2`, respectively, and check the matching
+   runtime SIMD level.
+2. Put AVX2/FMA code under an `avx2/` directory in a file ending in `_avx2_fma.cc`; CMake discovers
+   that suffix, compiles it with `-mavx2 -mfma` (or `/arch:AVX2`), and defines
    `ONNX_LIGHT_CPU_HAVE_AVX2_FMA`. Guard declarations and calls with that definition.
 3. Do not infer FMA or F16C from `SimdLevel::kAVX2`. Require `CpuSupportsFma()` or
    `CpuSupportsF16C()` when the selected function executes those instructions.

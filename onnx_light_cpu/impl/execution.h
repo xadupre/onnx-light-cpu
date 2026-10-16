@@ -211,17 +211,20 @@ template <typename Fn> void ExecuteRanges(int64_t total, const ExecutionSchedule
   ExecuteRanges(total, schedule, int64_t{1}, std::move(fn));
 }
 
-template <typename Fn>
-void ExecuteCostedRanges(int64_t total, const ExecutionWorkCost &cost,
-                         const ExecutionSchedule &fallback, int64_t block_multiple, Fn fn) {
+inline int64_t ExecutionCostedBlockCount(int64_t total, const ExecutionWorkCost &cost,
+                                         const ExecutionSchedule &fallback,
+                                         int64_t block_multiple) {
   if (total <= 0) {
-    return;
+    return 0;
   }
   const ExecutionExecutorView *executor = CurrentExecutionExecutor();
   if (executor == nullptr || executor->run_blocks == nullptr ||
       executor->plan_parallel == nullptr || ExecutionInParallelRegion()) {
-    ExecuteRanges(total, fallback, block_multiple, std::move(fn));
-    return;
+    const int64_t blocks = ExecutionBlockCount(total, fallback);
+    block_multiple = std::max<int64_t>(block_multiple, 1);
+    int64_t block = total / blocks + (total % blocks != 0);
+    block += (block_multiple - block % block_multiple) % block_multiple;
+    return total / block + (total % block != 0);
   }
   const int64_t participant_limit = std::min(std::max<int64_t>(fallback.max_participants, 1),
                                              std::max<int64_t>(executor->effective_threads, 1));
@@ -232,27 +235,23 @@ void ExecuteCostedRanges(int64_t total, const ExecutionWorkCost &cost,
   const int64_t participants = std::min(participant_limit, std::max<int64_t>(plan.participants, 1));
   const int64_t num_blocks = std::min(participants, total / grain);
   if (num_blocks <= 1) {
-    detail::ExecutionRegionScope region;
-    fn(0, total);
-    return;
+    return 1;
   }
 
   block_multiple = std::max<int64_t>(block_multiple, 1);
   int64_t block = total / num_blocks + (total % num_blocks != 0);
   block += (block_multiple - block % block_multiple) % block_multiple;
-  const int64_t aligned_blocks = total / block + (total % block != 0);
-  auto run_block = [&fn, block, total](int64_t index) {
-    const int64_t begin = index * block;
-    if (begin >= total) {
-      return;
-    }
-    detail::ExecutionRegionScope region;
-    fn(begin, std::min(begin + block, total));
-  };
-  using Callable = decltype(run_block);
-  executor->run_blocks(
-      executor->context, aligned_blocks, static_cast<void *>(&run_block),
-      [](void *context, int64_t block_index) { (*static_cast<Callable *>(context))(block_index); });
+  return total / block + (total % block != 0);
+}
+
+template <typename Fn>
+void ExecuteCostedRanges(int64_t total, const ExecutionWorkCost &cost,
+                         const ExecutionSchedule &fallback, int64_t block_multiple, Fn fn) {
+  const int64_t blocks = ExecutionCostedBlockCount(total, cost, fallback, block_multiple);
+  if (blocks <= 0) {
+    return;
+  }
+  ExecuteRanges(total, ExecutionSchedule{1, 1, blocks, blocks}, block_multiple, std::move(fn));
 }
 
 template <typename Fn>
