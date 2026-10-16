@@ -269,7 +269,8 @@ LightOpSchema MakeMatMulNBitsSchema() {
       "Restricted compatibility subset of ONNX Runtime MatMulNBits. The CPU implementation "
       "accepts matching FLOAT, FLOAT16, or BFLOAT16 activations, scales, optional bias, and "
       "output; UINT8 packed INT2, INT4, or INT8 weights; block_size=32, weight_prepacked=0, and "
-      "accuracy_level 0 or 4. B may instead be an ORT MatMulNBits EncodedValueProto, in which "
+      "accuracy_level 0 or 4. B may instead be an ORT MatMulNBits EncodedValueProto "
+      "(INT2/4/8) or an onnx-light MATMULNBITS_INT3 EncodedValueProto, in which "
       "case scales must be omitted and the encoded packing is consumed without provider "
       "repacking. This encoded form is inference-only. zero_points and "
       "g_idx retain their upstream input slots but must not be supplied. Packed B has shape "
@@ -278,7 +279,7 @@ LightOpSchema MakeMatMulNBitsSchema() {
       {{"A", "FLOAT, FLOAT16, or BFLOAT16 tensor of rank at least one ending in K.", "T1"},
        {"B",
         "UINT8 packed weights with shape (N, ceil(K / 32), 4 * bits), or an ORT MatMulNBits "
-        "EncodedValueProto.",
+        "EncodedValueProto (required for INT3).",
         "T2"},
        {"scales",
         "Block scales with shape (N, ceil(K / 32)) or its flattened equivalent; omitted when B "
@@ -302,7 +303,7 @@ LightOpSchema MakeMatMulNBitsSchema() {
         "Retain the upstream g_idx type slot; this subset rejects a supplied value."}},
       {AttributeParam{"K", "Positive input feature count.", AttributeType::INT, true},
        AttributeParam{"N", "Positive output feature count.", AttributeType::INT, true},
-       AttributeParam{"bits", "Quantized weight bit width; 2, 4, and 8 are supported.",
+       AttributeParam{"bits", "Quantized weight bit width; 2, 4, 8 or encoded-only 3.",
                       AttributeType::INT, false, int64_t{4}},
        AttributeParam{"block_size", "Quantization block size; only 32 is supported.",
                       AttributeType::INT, true},

@@ -80,6 +80,34 @@ attributes, or any other unsupported representation fail with an exception.
 This encoded form is inference-only; automatic differentiation continues to
 require separate tensor ``B`` and ``scales`` inputs.
 
+Genuine three-bit weights use the separate onnx-light
+``MATMULNBITS_INT3`` format (struct name
+``onnx_light.quantization.v1/matmulnbits_int3``), **not** an ORT layout
+or a ``UINT8`` tensor ``B``. Set ``bits=3``, ``block_size=32`` and omit
+the ``scales`` node input. Its ``EncodedValueProto.logical_type`` is
+``[K,N]`` with ``FLOAT``, ``FLOAT16``, or ``BFLOAT16`` element type.
+The inline struct has, in order, an ``INT64[2]`` constant named
+``parameters`` containing ``[3,32]``, a ``UINT8[N,ceil(K/32),12]``
+field named ``B``, a ``[N,ceil(K/32)]`` field named ``scales`` with
+the logical element type, and optionally a ``UINT8[N,ceil(K/32)]``
+field named ``zero_points``. Concatenate these fields (excluding the
+constant) in that order into ``raw_data``; no external payload or shared
+parameters are permitted. Block order is output column first, then K
+block. In each 12-byte block, code ``q[p]`` occupies bits
+``[3*p, 3*p+3)`` in little-endian bit order (least-significant bit
+first within each byte). Unused codes and bits after the final K
+element in each column must be zero. For example, codes
+``[1,2,5]`` begin with bytes ``51 01`` (the low byte of
+``1 | (2 << 3) | (5 << 6)`` is ``0x51``; the third code's high
+bit is in the second byte). The remaining
+ten bytes of this block are zero. An omitted zero-point field means
+code 4 for every block; explicit zero points must each be in ``[0,7]``.
+Weights are reconstructed as ``(q - zero_point) * scale`` without
+expanding a full INT8 matrix. INT3 is not ternary: it represents eight
+distinct codes.
+The low-level C++ INT3 entry point also rejects overflowing activation,
+packed-weight, scale, and output sizes before dispatch or buffer access.
+
 The activation may have any positive rank with final dimension ``K``. Shape
 inference preserves every leading concrete or symbolic dimension and replaces
 the final dimension with ``N``. INT4 uses bounded panels of 8 rows, 32 output
@@ -96,8 +124,8 @@ Other combinations retain the bounded panel or allocation-free scalar path.
 Inputs and outputs are excluded from scratch accounting. The projection
 benchmark reports both worker-local and prepared storage.
 
-Explicit zero points, deprecated ``g_idx``, provider-prepacked weights, other
-bit widths, block sizes, mixed floating-point types, and ``DOUBLE`` are
+Explicit zero points in the legacy layouts or node input, deprecated ``g_idx``,
+provider-prepacked weights, other bit widths, block sizes, mixed floating-point types, and ``DOUBLE`` are
 rejected rather than silently using a different layout. The registered gradient differentiates the
 activation and optional bias while treating packed weights and scales as
 constants. The bias fusion applies only to an exclusively consumed

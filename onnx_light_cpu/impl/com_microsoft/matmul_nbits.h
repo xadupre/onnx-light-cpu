@@ -34,6 +34,11 @@ void MatMulNBits(const void *a, const std::uint8_t *b, const void *scales, const
                  std::size_t bits, std::size_t block_size,
                  const MatMulNBitsExecutionTuning &tuning = kDefaultMatMulNBitsExecutionTuning);
 
+void MatMulNBitsEncodedInt3(
+    const void *a, const std::uint8_t *b, const void *scales, const std::uint8_t *zero_points,
+    const void *bias, void *y, DataType data_type, std::size_t rows, std::size_t k, std::size_t n,
+    const MatMulNBitsExecutionTuning &tuning = kDefaultMatMulNBitsExecutionTuning);
+
 void MatMulNBitsFloat32(
     const float *a, const std::uint8_t *b, const float *scales, const float *bias, float *y,
     std::size_t rows, std::size_t k, std::size_t n, std::size_t block_size,

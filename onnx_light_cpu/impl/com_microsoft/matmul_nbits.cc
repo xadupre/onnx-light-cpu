@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <stdexcept>
 
@@ -240,6 +241,67 @@ void MatMulNBitsTyped(const void *a_raw, const std::uint8_t *b, const void *scal
       });
 }
 
+template <typename Codec>
+void MatMulNBitsEncodedInt3Typed(const void *a_raw, const std::uint8_t *b, const void *scales_raw,
+                                 const std::uint8_t *zero_points, const void *bias_raw, void *y_raw,
+                                 std::size_t rows, std::size_t k, std::size_t n,
+                                 const MatMulNBitsExecutionTuning &tuning) {
+  if (rows == 0 || n == 0) {
+    return;
+  }
+  using Storage = typename Codec::Storage;
+  const auto *a = static_cast<const Storage *>(a_raw);
+  const auto *scales = static_cast<const std::uint8_t *>(scales_raw);
+  const auto *bias = static_cast<const Storage *>(bias_raw);
+  auto *y = static_cast<Storage *>(y_raw);
+  const std::size_t blocks = k / 32 + (k % 32 != 0);
+  const std::size_t activation_count =
+      CheckedMultiply(rows, k, "MatMulNBits INT3", "activation element count");
+  CheckedByteSize(activation_count, sizeof(Storage), "MatMulNBits INT3", "activation bytes");
+  const std::size_t packed_column_stride =
+      CheckedMultiply(blocks, 12, "MatMulNBits INT3", "packed column stride");
+  CheckedMultiply(n, packed_column_stride, "MatMulNBits INT3", "packed weight bytes");
+  const std::size_t scale_count =
+      CheckedMultiply(n, blocks, "MatMulNBits INT3", "scale element count");
+  CheckedByteSize(scale_count, sizeof(Storage), "MatMulNBits INT3", "scale bytes");
+  const std::size_t count = CheckedMultiply(rows, n, "MatMulNBits INT3", "output count");
+  if (count > static_cast<std::size_t>(std::numeric_limits<std::int64_t>::max())) {
+    throw std::invalid_argument("MatMulNBits INT3: output count exceeds int64_t.");
+  }
+  CheckedByteSize(count, sizeof(Storage), "MatMulNBits INT3", "output bytes");
+  const ExecutionSchedule schedule{
+      static_cast<std::int64_t>(std::max<std::size_t>(tuning.parallel_threshold_outputs, 1)),
+      static_cast<std::int64_t>(std::max<std::size_t>(tuning.target_block_outputs, 1)),
+      tuning.max_participants};
+  ExecuteRanges(
+      static_cast<std::int64_t>(count), schedule, [&](std::int64_t begin, std::int64_t end) {
+        for (auto index = begin; index < end; ++index) {
+          const std::size_t row = static_cast<std::size_t>(index) / n;
+          const std::size_t column = static_cast<std::size_t>(index) % n;
+          float sum = bias == nullptr ? 0.0f : Codec::Load(bias[column]);
+          for (std::size_t block = 0; block < blocks; ++block) {
+            const std::size_t parameter = column * blocks + block;
+            const auto *packed = b + parameter * 12;
+            Storage scale_bits;
+            std::memcpy(&scale_bits, scales + parameter * sizeof(Storage), sizeof(Storage));
+            const float scale = Codec::Load(scale_bits);
+            const int zero = zero_points == nullptr ? 4 : zero_points[parameter];
+            const std::size_t depth = std::min<std::size_t>(32, k - block * 32);
+            for (std::size_t p = 0; p < depth; ++p) {
+              const std::size_t bit = p * 3;
+              const auto word =
+                  static_cast<unsigned>(packed[bit / 8]) |
+                  (bit / 8 + 1 < 12 ? static_cast<unsigned>(packed[bit / 8 + 1]) << 8 : 0U);
+              const int q = static_cast<int>((word >> (bit % 8)) & 7U);
+              sum +=
+                  Codec::Load(a[row * k + block * 32 + p]) * (static_cast<float>(q - zero) * scale);
+            }
+          }
+          y[index] = Codec::Store(sum);
+        }
+      });
+}
+
 } // namespace
 
 bool MatMulNBitsAccuracy4Float32Available() {
@@ -309,6 +371,27 @@ void MatMulNBits(const void *a, const std::uint8_t *b, const void *scales, const
   default:
     throw std::invalid_argument(
         "onnx_light_cpu::MatMulNBits: data type must be FLOAT, FLOAT16, or BFLOAT16.");
+  }
+}
+
+void MatMulNBitsEncodedInt3(const void *a, const std::uint8_t *b, const void *scales,
+                            const std::uint8_t *zero_points, const void *bias, void *y,
+                            DataType data_type, std::size_t rows, std::size_t k, std::size_t n,
+                            const MatMulNBitsExecutionTuning &tuning) {
+  switch (data_type) {
+  case DataType::FLOAT:
+    MatMulNBitsEncodedInt3Typed<FloatCodec>(a, b, scales, zero_points, bias, y, rows, k, n, tuning);
+    return;
+  case DataType::FLOAT16:
+    MatMulNBitsEncodedInt3Typed<Float16Codec>(a, b, scales, zero_points, bias, y, rows, k, n,
+                                              tuning);
+    return;
+  case DataType::BFLOAT16:
+    MatMulNBitsEncodedInt3Typed<BFloat16Codec>(a, b, scales, zero_points, bias, y, rows, k, n,
+                                               tuning);
+    return;
+  default:
+    throw std::invalid_argument("MatMulNBits INT3: unsupported activation type.");
   }
 }
 

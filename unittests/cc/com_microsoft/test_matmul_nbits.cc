@@ -80,6 +80,41 @@ TEST(MatMulNBits, PanelTailsAndRepeatedPackedConstantsAllTypes) {
   }
 }
 
+TEST(MatMulNBits, EncodedInt3DirectAffineMatchesReferenceAtByteAndBlockBoundaries) {
+  constexpr std::size_t k = 35;
+  constexpr std::size_t n = 2;
+  constexpr std::size_t blocks = 2;
+  std::vector<std::uint8_t> packed(n * blocks * 12, 0), zero_points{4, 1, 7, 0};
+  std::vector<float> a(k), scales{0.5f, 0.25f, 1.0f, 2.0f}, output(n);
+  for (std::size_t p = 0; p < k; ++p) {
+    a[p] = static_cast<float>(static_cast<int>(p % 7) - 3) / 4;
+  }
+  for (std::size_t column = 0; column < n; ++column) {
+    for (std::size_t p = 0; p < k; ++p) {
+      const unsigned code = static_cast<unsigned>((column * 3 + p * 5) % 8);
+      const std::size_t bit = (column * blocks + p / 32) * 96 + (p % 32) * 3;
+      packed[bit / 8] |= static_cast<std::uint8_t>(code << (bit % 8));
+      if (bit % 8 > 5) {
+        packed[bit / 8 + 1] |= static_cast<std::uint8_t>(code >> (8 - bit % 8));
+      }
+    }
+  }
+  for (bool asymmetric : {false, true}) {
+    const std::uint8_t *zeros = asymmetric ? zero_points.data() : nullptr;
+    MatMulNBitsEncodedInt3(a.data(), packed.data(), scales.data(), zeros, nullptr, output.data(),
+                           DataType::FLOAT, 1, k, n);
+    for (std::size_t column = 0; column < n; ++column) {
+      float expected = 0;
+      for (std::size_t p = 0; p < k; ++p) {
+        const std::size_t block = column * blocks + p / 32;
+        const int code = static_cast<int>((column * 3 + p * 5) % 8);
+        expected += a[p] * (code - (zeros ? zeros[block] : 4)) * scales[block];
+      }
+      EXPECT_NEAR(output[column], expected, 1e-5f);
+    }
+  }
+}
+
 TEST(MatMulNBits, WidePanelRowBoundariesMatchReference) {
   constexpr std::size_t k = 33;
   constexpr std::size_t n = 33;
@@ -204,6 +239,29 @@ TEST(MatMulNBits, RejectsOverflowBeforeDispatchOrBufferAccess) {
                std::invalid_argument);
   EXPECT_THROW(MatMulNBitsFloat32(nullptr, nullptr, nullptr, nullptr, nullptr, maximum, 0, 2, 32),
                std::invalid_argument);
+  InlineExecutor executor;
+  ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run};
+  ExecutionExecutorScope scope(&view);
+  for (DataType type : {DataType::FLOAT, DataType::FLOAT16, DataType::BFLOAT16}) {
+    SCOPED_TRACE(static_cast<int>(type));
+    const std::size_t width = type == DataType::FLOAT ? sizeof(float) : sizeof(std::uint16_t);
+    const auto check = [&](std::size_t rows, std::size_t k, std::size_t n) {
+      EXPECT_THROW(MatMulNBitsEncodedInt3(nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+                                          type, rows, k, n, {1, 1, 4}),
+                   std::invalid_argument);
+    };
+    check(maximum / 33 + 1, 33, 1);
+    check(1, 33, maximum / 24 + 1);
+    check(1, maximum / width + 1, 1);
+    check(maximum / width + 1, 0, 1);
+    check(maximum, 0, 2);
+    check(maximum, 0, 1);
+    EXPECT_NO_THROW(MatMulNBitsEncodedInt3(nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+                                           type, 0, maximum, maximum));
+    EXPECT_NO_THROW(MatMulNBitsEncodedInt3(nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+                                           type, maximum, maximum, 0));
+  }
+  EXPECT_EQ(executor.dispatches, 0);
 }
 
 } // namespace

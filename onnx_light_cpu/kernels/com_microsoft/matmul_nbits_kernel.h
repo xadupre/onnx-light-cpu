@@ -74,6 +74,11 @@ private:
   ONNX_LIGHT_NAMESPACE::core::runtime::MatMulNBitsInputs
   ValidateEncodedWeights(const ONNX_LIGHT_NAMESPACE::EncodedValueProto &packed_weights,
                          const ONNX_LIGHT_NAMESPACE::StructTypeCatalogue &catalogue) const;
+  ONNX_LIGHT_NAMESPACE::core::runtime::Tensor
+  ComputeInt3(const ONNX_LIGHT_NAMESPACE::core::runtime::Tensor &a,
+              const ONNX_LIGHT_NAMESPACE::EncodedValueProto &packed_weights,
+              const ONNX_LIGHT_NAMESPACE::core::runtime::Tensor *bias,
+              ONNX_LIGHT_NAMESPACE::core::runtime::RuntimeContext *rt) const;
 
   MatMulNBitsAttributes attributes_;
   MatMulNBitsExecutionTuning tuning_ = kDefaultMatMulNBitsExecutionTuning;

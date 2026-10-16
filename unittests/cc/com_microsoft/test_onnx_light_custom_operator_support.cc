@@ -656,6 +656,80 @@ TEST(CustomOperatorSupport, InfersModelWithDynamicStructuredMatMulNBitsWeights) 
   EXPECT_EQ(ctx.Get("Y").Shape(), sym_ns::SymShape({SymDim(2), SymDim(3)}));
 }
 
+TEST(CustomOperatorSupport, ValidatesDynamicStructuredMatMulNBitsInt3Weights) {
+  const auto make_int3_type = [](std::int64_t n, std::int64_t blocks, std::int32_t scale_type) {
+    ONNX_LIGHT_NAMESPACE::StructTypeProto type;
+    type.set_name("onnx_light.quantization.v1/matmulnbits_int3");
+    auto *parameters = type.mutable_structure()->add_field();
+    parameters->set_name("parameters");
+    auto *constant = parameters->mutable_constant();
+    constant->set_data_type(ONNX_LIGHT_NAMESPACE::TensorProto::INT64);
+    constant->add_dims(2);
+    constant->add_int64_data(3);
+    constant->add_int64_data(32);
+    const auto add_field = [&](const char *name, std::int32_t elem_type, std::int64_t third = -1) {
+      auto *field = type.mutable_structure()->add_field();
+      field->set_name(name);
+      auto *tensor = field->mutable_type()->mutable_tensor_type();
+      tensor->set_elem_type(elem_type);
+      tensor->mutable_shape()->add_dim()->set_dim_value(n);
+      tensor->mutable_shape()->add_dim()->set_dim_value(blocks);
+      if (third > 0) {
+        tensor->mutable_shape()->add_dim()->set_dim_value(third);
+      }
+    };
+    add_field("B", ONNX_LIGHT_NAMESPACE::TensorProto::UINT8, 12);
+    add_field("scales", scale_type);
+    return type;
+  };
+  const auto make_model = [](ONNX_LIGHT_NAMESPACE::StructTypeProto type, std::int64_t bits) {
+    ONNX_LIGHT_NAMESPACE::ModelProto model;
+    *model.add_struct_types() = std::move(type);
+    model.mutable_struct_types(0)->set_type_id(17);
+    auto *opset = model.add_opset_import();
+    opset->set_domain(onnx_light_cpu::kMicrosoftDomain);
+    opset->set_version(1);
+    auto *input = model.mutable_graph()->add_input();
+    input->set_name("A");
+    auto *input_type = input->mutable_type()->mutable_tensor_type();
+    input_type->set_elem_type(ONNX_LIGHT_NAMESPACE::TensorProto::FLOAT);
+    input_type->mutable_shape()->add_dim()->set_dim_value(2);
+    input_type->mutable_shape()->add_dim()->set_dim_value(35);
+    auto *weights = model.mutable_graph()->add_input();
+    weights->set_name("B");
+    weights->mutable_type()->mutable_struct_type()->set_type_ref(17);
+    NodeProto node = MakeMatMulNBitsNode(false, bits);
+    node.ref_input().resize(2);
+    *model.mutable_graph()->add_node() = std::move(node);
+    model.mutable_graph()->add_output()->set_name("Y");
+    return model;
+  };
+
+  onnx_light_cpu::RegisterMicrosoftShapeAndMemoryFunctions();
+  shapes_ns::ShapesContext ctx;
+  ctx.ComputeShapeModel(
+      make_model(make_int3_type(3, 2, ONNX_LIGHT_NAMESPACE::TensorProto::FLOAT), 3));
+  EXPECT_TRUE(ctx.HasType("B"));
+  EXPECT_FALSE(ctx.HasEncodedValue("B"));
+  EXPECT_EQ(ctx.Get("Y").Shape(), sym_ns::SymShape({SymDim(2), SymDim(3)}));
+
+  const auto expect_invalid = [&](ONNX_LIGHT_NAMESPACE::StructTypeProto type, std::int64_t bits) {
+    shapes_ns::ShapesContext invalid;
+    EXPECT_THROW(invalid.ComputeShapeModel(make_model(std::move(type), bits)),
+                 std::invalid_argument);
+  };
+  expect_invalid(make_int3_type(4, 2, ONNX_LIGHT_NAMESPACE::TensorProto::FLOAT), 3);
+  expect_invalid(make_int3_type(3, 2, ONNX_LIGHT_NAMESPACE::TensorProto::FLOAT16), 3);
+
+  const auto int4_plan =
+      rt_ns::MakeMatMulNBitsPlan(rt_ns::QuantizationFormat::kOrtMatmulnbitsInt4, 35, 3, 32);
+  const auto int4_encoded =
+      rt_ns::QuantizeTensor(Tensor::FromFloat("", {35, 3}, std::vector<float>(105, 1.0f)),
+                            int4_plan)
+          .Encoded();
+  expect_invalid(int4_encoded.struct_type(), 3);
+}
+
 TEST(CustomOperatorSupport, InfersGroupQueryAttentionShape) {
   shapes_ns::ShapesContext ctx;
   ctx.Set("Q", SymTensor(nullptr, TensorType::kFloat, {SymDim("B"), SymDim("S"), SymDim(32)}));
