@@ -6,6 +6,7 @@
 #include "onnx_core/runtime/kernels/cast_helper.h"
 #include "onnx_core/runtime/kernels/kernel_context.h"
 #include "onnx_core/runtime/memory/simple_tensor.h"
+#include "onnx_core/runtime/memory/temporary_buffer.h"
 
 #include <gtest/gtest.h>
 
@@ -47,15 +48,22 @@ void CheckBfloat16BoundedConversion(std::size_t m, std::size_t n, std::size_t k,
   rt_ns::RuntimeContext runtime(MakeCtx());
   runtime.Set("A", rt_ns::MakeBfloat16Tensor("A", a_shape, a));
   runtime.Set("B", rt_ns::MakeBfloat16Tensor("B", b_shape, b));
+  // Measure the actual workspace allocation, including STL alignment bookkeeping
+  // (MSVC adds overhead to large vector allocations).
+  const std::size_t workspace_peak = PeakAllocationBytes([&] {
+    rt_ns::detail::TemporaryTypedBuffer<float> workspace(m * n, nullptr, "MatMul FP32 workspace");
+    EXPECT_NE(workspace.data(), nullptr);
+  });
   const std::size_t peak = PeakAllocationBytes([&] { kernel.Run(runtime); });
 
   // The output-sized FP32 workspace is necessary; neither full input widening
   // (both operands for general, the large B for direct) fits this budget.
   const std::size_t workspace_bytes = m * n * sizeof(float);
-  EXPECT_LE(peak, workspace_bytes);
-  EXPECT_GT(k * n * sizeof(float), workspace_bytes);
+  ASSERT_GE(workspace_peak, workspace_bytes);
+  EXPECT_LE(peak, workspace_peak);
+  ASSERT_GT(k * n * sizeof(float), workspace_peak);
   if (algorithm == onnx_light_cpu::GemmAlgorithm::kGeneral) {
-    EXPECT_GT(m * k * sizeof(float), workspace_bytes);
+    ASSERT_GT(m * k * sizeof(float), workspace_peak);
   }
   const auto &actual = runtime.Get("Y");
   ASSERT_EQ(actual.shape, expected.shape);
