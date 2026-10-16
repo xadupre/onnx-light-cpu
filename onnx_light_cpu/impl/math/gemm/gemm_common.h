@@ -11,6 +11,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <vector>
 
 namespace onnx_light_cpu {
 
@@ -73,6 +74,11 @@ std::size_t SelectGemmRegisterRowsForMicroarchitecture(SimdLevel level, bool has
                                                        GemmMicroarchitecture microarchitecture);
 
 std::size_t SelectGemmRegisterRows(SimdLevel level, bool has_fma);
+
+/// Constant-B AVX2 FP32 projection: panels have K rows of 16 contiguous columns.
+std::vector<float> PackGemmWideB(std::size_t n, std::size_t k, const float *b);
+void GemmWidePreparedB(std::size_t m, std::size_t n, std::size_t k, float alpha, const float *a,
+                       const float *packed_b, float beta, const float *c, float *y, std::size_t mr);
 
 template <GemmAlgorithm Algorithm>
 void GemmFloat32Planned(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::size_t K,

@@ -74,6 +74,7 @@ public:
   const GemmBlocking &blocking() const noexcept { return blocking_; }
   std::size_t useful_threads() const noexcept { return useful_threads_; }
   bool has_constant_b() const noexcept { return has_constant_b_; }
+  bool has_prepared_b() const noexcept { return prepared_wide_b_; }
 
 private:
   using KernelFn = void (*)(bool, bool, std::size_t, std::size_t, std::size_t, T, const T *,
@@ -91,8 +92,11 @@ private:
   GemmBlocking blocking_;
   std::size_t useful_threads_;
   bool has_constant_b_;
+  bool prepared_wide_b_ = false;
   std::vector<T> constant_b_;
   KernelFn kernel_;
+
+  void ExecuteProduct(const T *a, const T *b, T beta, const T *c, T *y) const;
 };
 
 /// Immutable inputs used to prepare a :cpp:class:`GemmHalfPlan`.

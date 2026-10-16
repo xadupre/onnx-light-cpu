@@ -181,3 +181,67 @@ isolated acceptance corpus remain separate work.
 Retain the raw samples and actual binary provenance with future measurements.
 Repeat the priority cases on dedicated hardware before accepting the final
 ``1.0x`` family median / ``0.9x`` minimum parity gate.
+
+Qwen2 floating-point projection follow-up (2026-10-16)
+------------------------------------------------------
+
+The isolated ``gemm_throughput`` driver now includes all six FP32 Qwen2
+projection instances. Build with ``ONNX_LIGHT_CPU_BUILD_BENCHMARKS=ON`` and
+``ONNX_LIGHT_CPU_MAX_SIMD_LEVEL=AVX2``; run
+``taskset -c 0-3 ./gemm_throughput 1 qwen_lm_head fp32`` (and repeat with
+``4`` workers or the other ``qwen_`` case names). Preparation happens during
+plan construction, before warmup and timing. The driver reports the selected
+prepared-B path, median, p90, executor block count and persistent B bytes.
+
+On a four-vCPU AMD EPYC 9V74 with AVX2/FMA, GCC 13.3 Release and affinity
+``0-3``, the isolated FP32 median times in milliseconds were:
+
+.. list-table::
+   :header-rows: 1
+
+   * - Projection
+     - 1 worker before / after
+     - 4 workers before / after
+     - 4 workers after p90
+   * - LM head (128x512x32000)
+     - 65.39 / 55.98
+     - 32.51 / 30.44
+     - 32.74
+   * - QKV (128x512x1024)
+     - 1.74 / 1.70
+     - 1.11 / 1.09
+     - 1.11
+   * - Attention output (128x512x512)
+     - 0.86 / 0.85
+     - 0.71 / 0.65
+     - 0.70
+   * - Gate / up (128x512x1376, each)
+     - 2.32 / 2.30
+     - 1.44 / 1.45
+     - 1.51
+   * - Down (128x1376x512)
+     - 2.32 / 2.35
+     - 1.70 / 1.69
+     - 2.01
+
+The LM-head constant-B plan packs 16-column panels once into 65,536,000
+bytes (the same size as its FP32 weights); its execution requires no B
+repacking or A workspace, and the four-worker run dispatches four blocks.
+The smaller projections retain the existing general plan and copied constant
+B; measurements do **not** establish that their remaining gap is caused by
+packing. The FP32 decode LM head retains its skinny-M path (four-worker
+median 1.74 ms after, 1.74 ms before). These are isolated C++ timings, **not**
+ONNX Runtime comparisons or whole-model Qwen measurements. The prerequisite
+immutable-B runtime preparation is not connected to ``MatMulKernel`` in this
+checkout, so these figures cannot establish a whole-model gain.
+
+The separate half-plan measurement (no constant-B preparation) measured
+FP16 LM-head median/p90 of 58.81/59.53 ms with one worker and
+32.25/33.08 ms with four; FP16 decode LM-head median/p90 was
+1.97/2.01 ms and 0.90/1.08 ms, respectively. BF16 LM-head median/p90
+was 73.38/73.65 ms and 41.97/43.72 ms. The half path retains compact B
+and allocates a 16,384,000-byte FP32 output workspace for the LM head;
+there is no persistent half-plan B storage. These numbers cannot claim an
+FP16 speedup without a comparable before measurement. Per-phase executor
+wait breakdown, temporary allocation high-water marks, whole-model latency
+and one/four-thread *before* tail measurements remain outstanding.

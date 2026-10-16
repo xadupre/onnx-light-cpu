@@ -1826,6 +1826,41 @@ void GemmHalfNativeGeneral(bool trans_a, std::size_t M, std::size_t N, std::size
 
 namespace detail {
 
+std::vector<float> PackGemmWideB(std::size_t n, std::size_t k, const float *b) {
+  constexpr std::size_t width = 16;
+  std::vector<float> packed(n * k);
+  for (std::size_t col = 0; col < n; col += width) {
+    float *panel = packed.data() + col * k;
+    for (std::size_t depth = 0; depth < k; ++depth) {
+      std::copy_n(b + depth * n + col, width, panel + depth * width);
+    }
+  }
+  return packed;
+}
+
+void GemmWidePreparedB(std::size_t m, std::size_t n, std::size_t k, float alpha, const float *a,
+                       const float *packed_b, float beta, const float *c, float *y,
+                       std::size_t mr) {
+  constexpr std::size_t width = 16;
+  const GemmAccumMode mode =
+      c != nullptr && beta != 0.0f ? GemmAccumMode::kInitBias : GemmAccumMode::kInitZero;
+  ExecuteRanges(static_cast<std::int64_t>(n / width),
+                static_cast<double>(m) * width * k / kGemmFmasPerParallelWorkUnit,
+                [&](std::int64_t begin, std::int64_t end) {
+                  for (std::size_t panel = static_cast<std::size_t>(begin);
+                       panel < static_cast<std::size_t>(end); ++panel) {
+                    const std::size_t col = panel * width;
+                    const float *b = packed_b + col * k;
+                    for (std::size_t row = 0; row < m; row += mr) {
+                      const std::size_t rows = std::min(mr, m - row);
+                      GemmTileF32(GemmKernelKind::kAVX2FMA, rows, width, k, alpha, beta, b, width,
+                                  c == nullptr ? nullptr : c + row * n + col, n, y + row * n + col,
+                                  n, 0, mode, a + row * k);
+                    }
+                  }
+                });
+}
+
 template <GemmAlgorithm Algorithm>
 void GemmFloat32PlannedImpl(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::size_t K,
                             float alpha, const float *A, const float *B, float beta, const float *C,
