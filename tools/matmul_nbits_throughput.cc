@@ -54,7 +54,8 @@ int main(int argc, char **argv) {
     b[i] = static_cast<std::uint8_t>((i * 37 + i / 17) & 255);
   }
   const double preparation = std::chrono::duration<double>(Clock::now() - start).count();
-  const std::size_t slots = bits == 8 ? multiply(n / 8 + (n % 8 != 0), multiply(blocks, 8)) : 0;
+  const std::size_t slots =
+      bits == 8 && !generic ? multiply(n / 8 + (n % 8 != 0), multiply(blocks, 8)) : 0;
   std::vector<std::uint8_t> weights(multiply(slots, 32));
   std::vector<std::int32_t> sums(slots);
   std::vector<float> packed_scales(slots);
@@ -70,8 +71,8 @@ int main(int argc, char **argv) {
                                              packed_scales.data(), nullptr, y.data(), m, k, n,
                                              {256, 64, 1});
     } else {
-      onnx_light_cpu::MatMulNBitsFloat32(a.data(), b.data(), scales.data(), nullptr, y.data(), m, k,
-                                         n, 32);
+      onnx_light_cpu::MatMulNBits(a.data(), b.data(), scales.data(), nullptr, y.data(),
+                                  onnx_light_cpu::DataType::FLOAT, m, k, n, bits, 32, {256, 64, 1});
     }
   };
   run();

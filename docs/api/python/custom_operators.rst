@@ -172,10 +172,13 @@ path. Large vocabulary cases are opt-in because model serialization and ONNX
 Runtime preparation can require several GB.
 For isolated single-thread FP32 kernel measurements, build with
 ``-DONNX_LIGHT_CPU_BUILD_BENCHMARKS=ON`` and run
-``matmul_nbits_throughput M K N repeats [bits=4|8]``. This reports input
+``matmul_nbits_throughput M K N repeats [bits=4|8] [--generic]``. This reports input
 preparation, first-use packing time, median steady-state seconds, source packed
 bytes, persistent prepared bytes, per-callback scratch bytes, and the selected
 implementation.
+For example, ``matmul_nbits_throughput 1 512 32000 21 8 --generic`` measures
+the generic INT8 panel path, not INT4. Both modes use one participant;
+the generic mode allocates no persistent prepared-weight buffers.
 
 The prepared INT8 path processes four activation rows per eight-column tile,
 reusing packed weights across rows and keeping dot products and accumulation
@@ -186,6 +189,12 @@ bits to process two weight quads at once.
 
 Disjoint scratch of ``5*K`` bytes per participant is allocated through the
 runtime execution allocator before dispatch; range callbacks do not allocate.
+For decode with ``M=1,2,3,4``, activations are quantized once into shared,
+read-only scratch of ``5*M*K/4`` bytes and workers own disjoint groups of
+eight output columns. The parallel threshold uses the actual ``M*N``
+output count, excluding padded lanes. For a zero reduction dimension, the
+low-level entry point returns the bias, or zero when no bias is supplied,
+without dispatch.
 The output-based parallel threshold, target block size, and participant cap
 apply to prepared execution as well as the generic path. Activation scales,
 scale products, and biased accumulation remain in double precision until each
@@ -200,9 +209,11 @@ same graph and input values; CPU timings feed native backend tensors without
 NumPy adaptation. Preparation and first-run times are separate from the
 alternating steady-state samples. These isolated nodes do not measure the
 exported end-to-end decoder.
+Use ``--qwen-int8-decode`` instead for all six projections at ``M=1,2,4``
+with one and four threads.
 
 On an Intel Xeon Platinum 8480C with affinity restricted to four CPUs,
-GCC 13.2 Release and ONNX Runtime 1.32.0, the command above with
+GCC 13.2 Release and ONNX Runtime 1.32.0, the ``--qwen-int8`` command with
 ``--repeat 15 --warmup 5`` measured these median steady-state milliseconds
 (``M=128``, FP32, INT8, block size 32, accuracy level 4). The selected CPU
 implementation was ``int8_avx512_vnni``; maximum absolute error against ORT

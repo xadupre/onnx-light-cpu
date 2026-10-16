@@ -308,8 +308,8 @@ TEST(MatMulNBits, PreparedInt8DecodeReusesPackedWeights) {
       const auto scratch_size = MatMulNBitsInt8WorkspaceElements(rows, k, n);
       EXPECT_EQ(scratch_size * sizeof(double), rows * (k + blocks * sizeof(double)));
       std::vector<double> scratch(scratch_size + 1, -42.0);
-      InlineExecutor executor;
-      ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run};
+      ConcurrentExecutor executor;
+      ExecutionExecutorView view{&executor, 4, &ConcurrentExecutor::Run};
       for (int repeat = 0; repeat < 2; ++repeat) {
         ExecutionExecutorScope scope(&view);
         MatMulNBitsInt8Float32(a.data(), weights.data(), sums.data(), packed_scales.data(),
@@ -359,6 +359,70 @@ TEST(MatMulNBits, PreparedInt8DecodeReusesPackedWeights) {
       }
     }
   }
+}
+
+TEST(MatMulNBits, PreparedInt8DecodeHonorsActualOutputThresholdWithColumnTails) {
+  constexpr std::size_t k = 512;
+  for (std::size_t rows : {1u, 2u, 4u}) {
+    for (std::size_t n : {511u, 512u, 513u}) {
+      SCOPED_TRACE(::testing::Message() << rows << ',' << n);
+      const std::size_t blocks = k / 32;
+      const std::size_t slots = (n / 8 + (n % 8 != 0)) * blocks * 8;
+      std::vector<float> a(rows * k, 0.5f), scales(n * blocks, 0.25f), packed_scales(slots),
+          y(rows * n + 1, -42.0f);
+      std::vector<std::uint8_t> b(n * k, 129), weights(slots * 32);
+      std::vector<std::int32_t> sums(slots);
+      PackMatMulNBitsInt8(b.data(), scales.data(), weights.data(), sums.data(),
+                          packed_scales.data(), k, n);
+      InlineExecutor executor;
+      ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run};
+      ExecutionExecutorScope scope(&view);
+      const auto run = [&](std::size_t threshold) {
+        MatMulNBitsInt8Float32(a.data(), weights.data(), sums.data(), packed_scales.data(), nullptr,
+                               y.data(), rows, k, n, {threshold, 1, 4});
+        for (std::size_t index = 0; index < rows * n; ++index) {
+          EXPECT_FLOAT_EQ(y[index], 64.0f);
+        }
+        EXPECT_FLOAT_EQ(y.back(), -42.0f);
+      };
+      run(rows * n + 1);
+      EXPECT_EQ(executor.dispatches, 0);
+      run(rows * n);
+      EXPECT_EQ(executor.dispatches, 1);
+      EXPECT_GT(executor.blocks, 1);
+      EXPECT_LE(executor.blocks, 4);
+      {
+        detail::ExecutionRegionScope nested;
+        run(rows * n);
+      }
+      EXPECT_EQ(executor.dispatches, 1);
+    }
+  }
+}
+
+TEST(MatMulNBits, PreparedInt8ZeroReductionReturnsBiasWithoutDispatch) {
+  InlineExecutor executor;
+  ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run};
+  ExecutionExecutorScope scope(&view);
+  for (std::size_t rows : {1u, 2u, 4u, 5u}) {
+    for (std::size_t n : {1u, 13u, 512u}) {
+      SCOPED_TRACE(::testing::Message() << rows << ',' << n);
+      std::vector<float> bias(n), y(rows * n + 1, -42.0f);
+      for (std::size_t column = 0; column < n; ++column) {
+        bias[column] = static_cast<float>(column) - 7.0f;
+      }
+      EXPECT_EQ(MatMulNBitsInt8WorkspaceElements(rows, 0, n), 0U);
+      for (bool with_bias : {false, true}) {
+        MatMulNBitsInt8Float32(nullptr, nullptr, nullptr, nullptr,
+                               with_bias ? bias.data() : nullptr, y.data(), rows, 0, n);
+        for (std::size_t index = 0; index < rows * n; ++index) {
+          EXPECT_FLOAT_EQ(y[index], with_bias ? bias[index % n] : 0.0f);
+        }
+        EXPECT_FLOAT_EQ(y.back(), -42.0f);
+      }
+    }
+  }
+  EXPECT_EQ(executor.dispatches, 0);
 }
 
 TEST(MatMulNBits, PreparedInt8UsesRuntimeExecutor) {

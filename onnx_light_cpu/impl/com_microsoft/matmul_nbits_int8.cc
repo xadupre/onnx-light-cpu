@@ -89,8 +89,13 @@ ExecutionSchedule Int8Schedule(std::size_t n, const MatMulNBitsExecutionTuning &
           tuning.max_participants};
 }
 
-ExecutionSchedule Int8SmallSchedule(std::size_t rows, std::size_t k,
+ExecutionSchedule Int8SmallSchedule(std::size_t rows, std::size_t k, std::size_t n,
                                     const MatMulNBitsExecutionTuning &tuning) {
+  const auto minimum_columns =
+      tuning.parallel_threshold_outputs / rows + (tuning.parallel_threshold_outputs % rows != 0);
+  if (n < minimum_columns) {
+    return {1, 1, 1};
+  }
   const auto groups_per_worker = static_cast<std::int64_t>(std::max<std::size_t>(1, 16384 / k));
   const auto groups_for_outputs = [rows](std::size_t outputs) {
     const auto columns = rows * 8;
@@ -202,6 +207,13 @@ void MatMulNBitsInt8Float32(const float *a, const std::uint8_t *weights,
   const std::size_t blocks = k / 32;
   const std::size_t groups = n / 8 + (n % 8 != 0);
   const std::size_t workspace_elements = MatMulNBitsInt8WorkspaceElements(rows, k, n, tuning);
+  if (k == 0) {
+    const auto count = CheckedMultiply(rows, n, "MatMulNBits", "INT8 output count");
+    for (std::size_t index = 0; index < count; ++index) {
+      y[index] = bias == nullptr ? 0.0f : bias[index % n];
+    }
+    return;
+  }
   const TileFn tile = SelectedTile();
   const QuantizeFn quantize = SelectedQuantizer();
   const ExecutionSchedule schedule = Int8Schedule(n, tuning);
@@ -241,14 +253,14 @@ void MatMulNBitsInt8Float32(const float *a, const std::uint8_t *weights,
             finite_rows[row] ? static_cast<double>(maximum) / 127.0 : 0.0;
         for (std::size_t p = 0; p < 32; ++p) {
           const float scaled = !finite_rows[row] || maximum == 0.0f ? 0.0f
-                               : maximum < 1e-36f ? (source[p] / maximum) * 127.0f
+                               : maximum < 1e-36f                   ? (source[p] / maximum) * 127.0f
                                                   : source[p] * (127.0f / maximum);
           quantized[row * k + block * 32 + p] =
               static_cast<std::uint8_t>(static_cast<int>(std::nearbyint(scaled)) + 128);
         }
       }
     }
-    const auto small_schedule = Int8SmallSchedule(rows, k, tuning);
+    const auto small_schedule = Int8SmallSchedule(rows, k, n, tuning);
     ExecuteRanges(static_cast<std::int64_t>(groups), small_schedule,
                   [&](std::int64_t begin, std::int64_t end) noexcept {
                     for (auto group = static_cast<std::size_t>(begin);
