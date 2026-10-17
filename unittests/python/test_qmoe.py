@@ -162,9 +162,10 @@ class TestQMoEDecoder(ExtTestCase):
             hidden = arrays[original_inputs[0]].shape[-1]
             experts = arrays[original_inputs[1]].shape[-1]
             dimensions.append((hidden, experts))
-            node.input[0] = "hidden"
-            node.input[1] = "router"
-            node.output[0] = "moe_output"
+            node.input.clear()
+            node.input.extend(["hidden", "router", *original_inputs[2:]])
+            node.output.clear()
+            node.output.append("moe_output")
             expert_weights = {name: arrays[name] for name in original_inputs[2:] if name}
             sessions.append(ReferenceEvaluator(_decoder(node, expert_weights, hidden, experts)))
         self.assertEqual(dimensions[0], dimensions[1])
