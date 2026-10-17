@@ -326,6 +326,12 @@ std::vector<OperatorSupportRegistration> CollectOperatorSupport() {
        {"onnx_light_cpu::CDistFusionPattern"},
        true},
       {kMicrosoftDomain,
+       "CausalConvWithState",
+       "onnx_light_cpu::ComputeShapeCausalConvWithState",
+       "onnx_light_cpu::ComputePeakMemoryCausalConvWithState",
+       {},
+       false},
+      {kMicrosoftDomain,
        "GroupQueryAttention",
        "onnx_light_cpu::ComputeShapeGroupQueryAttention",
        "onnx_light_cpu::ComputePeakMemoryGroupQueryAttention",
@@ -1141,6 +1147,85 @@ void ComputeShapeLinearAttention(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE:
   ctx.Set(node.output(1), SymTensor(nullptr, query.Dtype(), std::move(state_shape)));
 }
 
+void ComputeShapeCausalConvWithState(ShapesContext &ctx,
+                                     const ONNX_LIGHT_NAMESPACE::NodeProto &node) {
+  constexpr const char *error = "ComputeShapeCausalConvWithState: invalid input geometry.";
+  if (node.input_size() < 2 || node.input_size() > 4 || node.output_size() != 2 ||
+      node.output(0).empty() || node.output(1).empty() || !ctx.Has(node.input(0)) ||
+      !ctx.Has(node.input(1))) {
+    throw std::invalid_argument(error);
+  }
+  const auto &input = ctx.Get(node.input(0));
+  const auto &weight = ctx.Get(node.input(1));
+  const auto dtype = input.Dtype();
+  if ((dtype != sym_ns::TensorType::kFloat && dtype != sym_ns::TensorType::kFloat16 &&
+       dtype != sym_ns::TensorType::kBfloat16) ||
+      weight.Dtype() != dtype || weight.Shape().Rank() != 3 ||
+      GetIntAttribute(node, "ndim", 1) != 1 || GetIntAttribute(node, "state_window", 0) != 0 ||
+      GetIntAttribute(node, "dilation", 1) < 1 ||
+      GetIntAttribute(node, "dilation", 1) > std::numeric_limits<int>::max() ||
+      (GetIntAttribute(node, "channels_last", 0) != 0 &&
+       GetIntAttribute(node, "channels_last", 0) != 1)) {
+    throw std::invalid_argument(error);
+  }
+  const auto &activation = GetStringAttribute(node, "activation", "none");
+  if (activation != "none" && activation != "silu" && activation != "swish") {
+    throw std::invalid_argument(error);
+  }
+  const bool channels_last = GetIntAttribute(node, "channels_last", 0) == 1;
+  const auto &in_shape = input.Shape();
+  const auto &w_shape = weight.Shape();
+  if ((!channels_last && in_shape.Rank() != 3) || (channels_last && in_shape.Rank() < 3) ||
+      (w_shape[2].IsInt() && w_shape[2].AsInt() < 1)) {
+    throw std::invalid_argument(error);
+  }
+  ConstrainEqual(ctx, w_shape[1], sym_ns::SymDim(1), error);
+  sym_ns::SymDim channels = in_shape[1];
+  if (channels_last) {
+    channels = in_shape[2];
+    for (std::size_t i = 3; i < in_shape.Rank(); ++i) {
+      channels =
+          channels.IsInt() && in_shape[i].IsInt()
+              ? sym_ns::SymDim(CheckedIndexMultiply(channels.AsInt(), in_shape[i].AsInt(),
+                                                    "CausalConvWithState", "channels"))
+              : sym_ns::SymDim("(" + channels.ToString() + ")*(" + in_shape[i].ToString() + ")");
+    }
+  }
+  ConstrainEqual(ctx, w_shape[0], channels, error);
+  if (HasInput(node, 2)) {
+    if (!ctx.Has(node.input(2)) || ctx.Get(node.input(2)).Dtype() != dtype ||
+        ctx.Get(node.input(2)).Shape().Rank() != 1) {
+      throw std::invalid_argument(error);
+    }
+    ConstrainEqual(ctx, ctx.Get(node.input(2)).Shape()[0], channels, error);
+  }
+  const std::int64_t dilation = GetIntAttribute(node, "dilation", 1);
+  const auto &kernel = w_shape[2];
+  const sym_ns::SymDim pad =
+      kernel.IsInt() ? sym_ns::SymDim(CheckedIndexMultiply(kernel.AsInt() - 1, dilation,
+                                                           "CausalConvWithState", "state length"))
+                     : sym_ns::SymDim("(" + kernel.ToString() + "-1)*" + std::to_string(dilation));
+  SymShape state;
+  for (std::size_t i = 0; i < in_shape.Rank(); ++i) {
+    state.PushBack(i == (channels_last ? 1U : 2U) ? pad : in_shape[i]);
+  }
+  if (HasInput(node, 3)) {
+    if (!ctx.Has(node.input(3)) || ctx.Get(node.input(3)).Dtype() != dtype ||
+        ctx.Get(node.input(3)).Shape().Rank() != state.Rank()) {
+      throw std::invalid_argument(error);
+    }
+    for (std::size_t i = 0; i < state.Rank(); ++i) {
+      ConstrainEqual(ctx, ctx.Get(node.input(3)).Shape()[i], state[i], error);
+    }
+  }
+  ctx.Set(node.output(0), SymTensor(nullptr, dtype, in_shape));
+  ctx.Set(node.output(1), SymTensor(nullptr, dtype, std::move(state)));
+}
+
+int64_t ComputePeakMemoryCausalConvWithState(sym_ns::Device, const std::vector<SymShape> &) {
+  return 0;
+}
+
 int64_t ComputePeakMemoryCDist(sym_ns::Device, const std::vector<SymShape> &) { return 0; }
 
 int64_t ComputePeakMemoryBiasGelu(sym_ns::Device, const std::vector<SymShape> &) { return 0; }
@@ -1331,6 +1416,8 @@ void RegisterMicrosoftShapeAndMemoryFunctions() {
   static std::once_flag once;
   std::call_once(once, [] {
     shapes_ns::RegisterComputeShapeFn(kMicrosoftDomain, "CDist", ComputeShapeCDist);
+    shapes_ns::RegisterComputeShapeFn(kMicrosoftDomain, "CausalConvWithState",
+                                      ComputeShapeCausalConvWithState);
     shapes_ns::RegisterComputeShapeFn(kMicrosoftDomain, "BiasGelu", ComputeShapeBiasGelu);
     shapes_ns::RegisterComputeShapeFn(kMicrosoftDomain, "SkipLayerNormalization",
                                       ComputeShapeSkipLayerNormalization);
@@ -1351,6 +1438,9 @@ void RegisterMicrosoftShapeAndMemoryFunctions() {
                                            sym_ns::Device::kCPU, ComputePeakMemoryRotaryEmbedding);
     shapes_ns::RegisterComputePeakMemoryFn(kMicrosoftDomain, "CDist", sym_ns::Device::kCPU,
                                            ComputePeakMemoryCDist);
+    shapes_ns::RegisterComputePeakMemoryFn(kMicrosoftDomain, "CausalConvWithState",
+                                           sym_ns::Device::kCPU,
+                                           ComputePeakMemoryCausalConvWithState);
     shapes_ns::RegisterComputePeakMemoryFn(kMicrosoftDomain, "BiasGelu", sym_ns::Device::kCPU,
                                            ComputePeakMemoryBiasGelu);
     shapes_ns::RegisterComputePeakMemoryFn(kMicrosoftDomain, "SkipLayerNormalization",

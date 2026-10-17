@@ -92,6 +92,7 @@ correctness tests, and reproducible benchmarks in one change.
 4. Follow CMake's recognized naming conventions. If a new ISA family does not match
    `*_avx2_fma.cc`, `avx512/`, or another existing source group, update the source properties and
    compiler feature check rather than relying on global flags.
+5. Prepack immutable weights for the actual kernel and computation path selected on the target processor, respecting its ISA, dtype, and layout rather than imposing a generic format.
 
 ## 7. Prove correctness and performance
 

@@ -8,6 +8,7 @@
 #include "onnx_light_cpu/kernels/attention/linear_attention_kernel.h"
 #include "onnx_light_cpu/kernels/attention/rotary_embedding_kernel.h"
 #include "onnx_light_cpu/kernels/com_microsoft/bias_gelu_kernel.h"
+#include "onnx_light_cpu/kernels/com_microsoft/causal_conv_with_state_kernel.h"
 #include "onnx_light_cpu/kernels/com_microsoft/cdist_kernel.h"
 #include "onnx_light_cpu/kernels/com_microsoft/group_query_attention_kernel.h"
 #include "onnx_light_cpu/kernels/com_microsoft/linear_attention_kernel.h"
@@ -15,6 +16,7 @@
 #include "onnx_light_cpu/kernels/com_microsoft/moe_kernel.h"
 #include "onnx_light_cpu/kernels/com_microsoft/multi_head_attention_kernel.h"
 #include "onnx_light_cpu/kernels/com_microsoft/naive_bias_gelu_kernel.h"
+#include "onnx_light_cpu/kernels/com_microsoft/naive_causal_conv_with_state_kernel.h"
 #include "onnx_light_cpu/kernels/com_microsoft/naive_cdist_kernel.h"
 #include "onnx_light_cpu/kernels/com_microsoft/naive_group_query_attention_kernel.h"
 #include "onnx_light_cpu/kernels/com_microsoft/naive_linear_attention_kernel.h"
@@ -164,6 +166,7 @@ void RegisterMicrosoftKernels(MicrosoftKernelImplementation implementation) {
   switch (implementation) {
   case MicrosoftKernelImplementation::NAIVE:
     RegisterNaiveBiasGeluKernel();
+    RegisterNaiveCausalConvWithStateKernel();
     RegisterNaiveCDistKernel();
     RegisterNaiveGroupQueryAttentionKernel();
     RegisterMultiHeadAttentionKernel();
@@ -173,6 +176,7 @@ void RegisterMicrosoftKernels(MicrosoftKernelImplementation implementation) {
     return;
   case MicrosoftKernelImplementation::OPTIMIZED:
     RegisterBiasGeluKernel();
+    RegisterCausalConvWithStateKernel();
     RegisterCDistKernel();
     RegisterGroupQueryAttentionKernel();
     RegisterMultiHeadAttentionKernel();

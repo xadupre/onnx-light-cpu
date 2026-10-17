@@ -61,6 +61,36 @@ LightOpSchema MakeCDistSchema() {
       false, true);
 }
 
+LightOpSchema MakeCausalConvWithStateSchema() {
+  LightOpSchema schema(
+      "CausalConvWithState", kMicrosoftDomain, 1,
+      "Stateful causal 1D depthwise convolution. Supports dilation, optional SiLU/Swish, "
+      "channels-first or sequence-major channels-last layout, and unwindowed recurrent state.",
+      {{"input", "(B, C, L), or (B, L, d_1, ...) when channels_last=1.", "T"},
+       {"weight", "(C, 1, K) depthwise weights.", "T"},
+       {"bias", "Optional (C) bias.", "T"},
+       {"past_state", "Optional previous state, same shape as present_state.", "T"}},
+      {{"output", "Same shape and type as input.", "T"},
+       {"present_state",
+        "(B, C, (K-1)*dilation), or (B, (K-1)*dilation, d_1, ...) when channels_last=1.", "T"}},
+      {{"T",
+        {TensorType::kFloat, TensorType::kFloat16, TensorType::kBfloat16},
+        "Matching floating-point inputs and outputs."}},
+      {AttributeParam{"activation", "none, silu or swish.", AttributeType::STRING, false,
+                      std::string("none")},
+       AttributeParam{"ndim", "Only 1 is supported on CPU.", AttributeType::INT, false, int64_t{1}},
+       AttributeParam{"dilation", "Positive spacing between kernel taps.", AttributeType::INT,
+                      false, int64_t{1}},
+       AttributeParam{"channels_last", "Sequence-major layout when 1.", AttributeType::INT, false,
+                      int64_t{0}},
+       AttributeParam{"state_window", "Only unwindowed state (0) is supported on CPU.",
+                      AttributeType::INT, false, int64_t{0}}},
+      false, true);
+  schema.set_min_output(2);
+  schema.set_max_output(2);
+  return schema;
+}
+
 LightOpSchema MakeBiasGeluSchema() {
   return LightOpSchema(
       "BiasGelu", kMicrosoftDomain, 1,
@@ -393,6 +423,8 @@ std::vector<LightOpSchema> GetMicrosoftOpSchemasWithHistory(const std::string &o
                                                             bool init_doc) {
   static const std::map<std::string, SchemaBuilder> builders = {
       {"BiasGelu", [] { return std::vector<LightOpSchema>{MakeBiasGeluSchema()}; }},
+      {"CausalConvWithState",
+       [] { return std::vector<LightOpSchema>{MakeCausalConvWithStateSchema()}; }},
       {"CDist", [] { return std::vector<LightOpSchema>{MakeCDistSchema()}; }},
       {"GroupQueryAttention",
        [] { return std::vector<LightOpSchema>{MakeGroupQueryAttentionSchema()}; }},
