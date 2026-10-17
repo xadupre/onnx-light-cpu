@@ -28,6 +28,9 @@ std::vector<OperatorSupportRegistration> CollectOperatorSupport();
 /// Infers the output shape for ``com.microsoft::CDist``.
 void ComputeShapeCDist(ONNX_LIGHT_NAMESPACE::core::shapes::ShapesContext &ctx,
                        const ONNX_LIGHT_NAMESPACE::NodeProto &node);
+/// Infers output and unwindowed carry state for ``com.microsoft::CausalConvWithState``.
+void ComputeShapeCausalConvWithState(ONNX_LIGHT_NAMESPACE::core::shapes::ShapesContext &ctx,
+                                     const ONNX_LIGHT_NAMESPACE::NodeProto &node);
 /// Infers the output shape for ``com.microsoft::BiasGelu``.
 void ComputeShapeBiasGelu(ONNX_LIGHT_NAMESPACE::core::shapes::ShapesContext &ctx,
                           const ONNX_LIGHT_NAMESPACE::NodeProto &node);
@@ -55,6 +58,10 @@ void ComputeShapeMoE(ONNX_LIGHT_NAMESPACE::core::shapes::ShapesContext &ctx,
 
 /// Returns the scratch-memory requirement for ``com.microsoft::CDist``.
 int64_t ComputePeakMemoryCDist(
+    ONNX_LIGHT_NAMESPACE::core::symbolic::Device device,
+    const std::vector<ONNX_LIGHT_NAMESPACE::core::symbolic::SymShape> &input_shapes);
+/// Returns zero scratch memory for the streaming causal convolution.
+int64_t ComputePeakMemoryCausalConvWithState(
     ONNX_LIGHT_NAMESPACE::core::symbolic::Device device,
     const std::vector<ONNX_LIGHT_NAMESPACE::core::symbolic::SymShape> &input_shapes);
 /// Returns the scratch-memory requirement for ``com.microsoft::BiasGelu``.

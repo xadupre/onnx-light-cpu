@@ -454,13 +454,52 @@ TEST(OnnxLightBackendKernels, GroupQueryAttentionRunsThroughRuntime) {
 }
 
 TEST(OnnxLightBackendKernels, MicrosoftCorrectnessCasesRunWithNaiveRegistration) {
-  for (const std::string &op_type : {"BiasGelu", "CDist", "GroupQueryAttention", "LinearAttention",
-                                     "SkipSimplifiedLayerNormalization"}) {
+  for (const std::string &op_type :
+       {"BiasGelu", "CDist", "CausalConvWithState", "GroupQueryAttention", "LinearAttention",
+        "SkipSimplifiedLayerNormalization"}) {
     const auto failures = RunCpuBackendCases(op_type, core::backend_test::TestMode::TEST, {},
                                              onnx_light_cpu::MicrosoftKernelImplementation::NAIVE);
     EXPECT_TRUE(failures.empty()) << Describe(failures);
   }
   onnx_light_cpu::RegisterAllKernels();
+}
+
+TEST(OnnxLightBackendKernels, CausalConvPoliciesRunIndependentKernels) {
+  using onnx_light_cpu::MicrosoftKernelImplementation;
+  for (const auto policy :
+       {MicrosoftKernelImplementation::NAIVE, MicrosoftKernelImplementation::OPTIMIZED}) {
+    std::vector<std::string> used;
+    const auto failures = RunCpuBackendCases("CausalConvWithState",
+                                             core::backend_test::TestMode::TEST, {}, policy, &used);
+    EXPECT_TRUE(failures.empty()) << Describe(failures);
+    const bool naive = policy == MicrosoftKernelImplementation::NAIVE;
+    const std::string reference = "onnx_light_cpu::NaiveCausalConvWithState";
+    const std::string production = "onnx_light_cpu::CausalConvWithState";
+    EXPECT_NE(std::find(used.begin(), used.end(), naive ? reference : production), used.end());
+    EXPECT_EQ(std::find(used.begin(), used.end(), naive ? production : reference), used.end());
+  }
+  onnx_light_cpu::RegisterAllKernels();
+}
+
+TEST(OnnxLightBackendKernels, CausalConvBenchmarksDeclareLazyCountsAndRunThroughRuntime) {
+  auto cases = CollectCpuCases("CausalConvWithState", core::backend_test::TestMode::BENCHMARK);
+  ASSERT_EQ(cases.size(), 18U);
+  onnx_light_cpu::RegisterAllKernels();
+  std::vector<std::string> failures;
+  for (auto &test_case : cases) {
+    EXPECT_FALSE(test_case.materialized());
+    const std::int64_t length = test_case.name.find("_l128_") != std::string::npos   ? 128
+                                : test_case.name.find("_l513_") != std::string::npos ? 513
+                                                                                     : 1;
+    EXPECT_EQ(test_case.declared_input_element_counts,
+              (std::vector<std::int64_t>{64 * length, 64 * 3}));
+    EXPECT_EQ(test_case.declared_output_element_counts,
+              (std::vector<std::int64_t>{64 * length, 64 * 2}));
+    TestCaseUnloadGuard unload_guard(test_case);
+    test_case.set_expected_outputs_generated(true);
+    RunCaseThroughRuntime(test_case, true, failures);
+  }
+  EXPECT_TRUE(failures.empty()) << Describe(failures);
 }
 
 TEST(OnnxLightBackendKernels, SkipSimplifiedLayerNormalizationRunsThroughRuntime) {

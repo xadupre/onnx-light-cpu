@@ -213,27 +213,30 @@ float RunForwardObjective(const NodeProto &node, const std::vector<float> &query
 
 TEST(CustomOperatorSupport, ProvidesLightSchemas) {
   const auto schemas = onnx_light_cpu::GetMicrosoftOpSchemasWithHistory();
-  ASSERT_EQ(schemas.size(), 9U);
+  ASSERT_EQ(schemas.size(), 10U);
   EXPECT_EQ(schemas[0].name(), "BiasGelu");
   EXPECT_EQ(schemas[1].name(), "CDist");
-  EXPECT_EQ(schemas[2].name(), "GroupQueryAttention");
-  ASSERT_EQ(schemas[2].inputs().size(), 12U);
-  EXPECT_EQ(schemas[2].inputs()[11].name, "head_sink");
-  EXPECT_EQ(schemas[2].inputs()[11].type, "T");
-  EXPECT_EQ(schemas[3].name(), "LinearAttention");
-  EXPECT_EQ(schemas[4].name(), "MatMulNBits");
-  EXPECT_EQ(schemas[5].name(), "MoE");
-  EXPECT_EQ(schemas[6].name(), "RotaryEmbedding");
-  EXPECT_EQ(schemas[7].name(), "SkipLayerNormalization");
-  EXPECT_EQ(schemas[8].name(), "SkipSimplifiedLayerNormalization");
-  EXPECT_EQ(schemas[5].inputs().size(), 8U);
-  ASSERT_EQ(schemas[4].inputs().size(), 6U);
-  EXPECT_EQ(schemas[4].inputs()[3].name, "zero_points");
-  EXPECT_EQ(schemas[4].inputs()[4].name, "g_idx");
-  EXPECT_EQ(schemas[4].inputs()[5].name, "bias");
-  ASSERT_EQ(schemas[4].attributes().size(), 6U);
+  EXPECT_EQ(schemas[2].name(), "CausalConvWithState");
+  EXPECT_EQ(schemas[3].name(), "GroupQueryAttention");
+  ASSERT_EQ(schemas[3].inputs().size(), 12U);
+  EXPECT_EQ(schemas[3].inputs()[11].name, "head_sink");
+  EXPECT_EQ(schemas[3].inputs()[11].type, "T");
+  EXPECT_EQ(schemas[4].name(), "LinearAttention");
+  EXPECT_EQ(schemas[5].name(), "MatMulNBits");
+  EXPECT_EQ(schemas[6].name(), "MoE");
+  EXPECT_EQ(schemas[7].name(), "RotaryEmbedding");
+  EXPECT_EQ(schemas[8].name(), "SkipLayerNormalization");
+  EXPECT_EQ(schemas[9].name(), "SkipSimplifiedLayerNormalization");
+  EXPECT_EQ(schemas[2].inputs().size(), 4U);
+  EXPECT_EQ(schemas[2].outputs().size(), 2U);
+  EXPECT_EQ(schemas[6].inputs().size(), 8U);
+  ASSERT_EQ(schemas[5].inputs().size(), 6U);
+  EXPECT_EQ(schemas[5].inputs()[3].name, "zero_points");
+  EXPECT_EQ(schemas[5].inputs()[4].name, "g_idx");
+  EXPECT_EQ(schemas[5].inputs()[5].name, "bias");
+  ASSERT_EQ(schemas[5].attributes().size(), 6U);
   const auto find_attribute = [&](const char *name) {
-    return std::find_if(schemas[4].attributes().begin(), schemas[4].attributes().end(),
+    return std::find_if(schemas[5].attributes().begin(), schemas[5].attributes().end(),
                         [&](const auto &attribute) { return attribute.name == name; });
   };
   EXPECT_TRUE(find_attribute("K")->required);
@@ -255,74 +258,110 @@ TEST(CustomOperatorSupport, ProvidesLightSchemas) {
 
 TEST(CustomOperatorSupport, ProvidesReadOnlyInventory) {
   const auto support = onnx_light_cpu::CollectOperatorSupport();
-  ASSERT_EQ(support.size(), 11U);
-  EXPECT_EQ(support[0].op_type, "BiasGelu");
-  EXPECT_EQ(support[0].shape_inference_function, "onnx_light_cpu::ComputeShapeBiasGelu");
-  EXPECT_EQ(support[0].peak_memory_function, "onnx_light_cpu::ComputePeakMemoryBiasGelu");
-  EXPECT_EQ(support[0].fusion_patterns,
-            std::vector<std::string>{"onnx_light_cpu::BiasGeluFusionPattern"});
-  EXPECT_TRUE(support[0].has_gradient);
-  EXPECT_EQ(support[1].op_type, "CDist");
-  EXPECT_EQ(support[2].op_type, "GroupQueryAttention");
-  EXPECT_EQ(support[2].shape_inference_function, "onnx_light_cpu::ComputeShapeGroupQueryAttention");
-  EXPECT_EQ(support[2].peak_memory_function,
-            "onnx_light_cpu::ComputePeakMemoryGroupQueryAttention");
-  EXPECT_EQ(support[2].fusion_patterns,
-            std::vector<std::string>{"onnx_light_cpu::GroupQueryAttentionFusionPattern"});
-  EXPECT_TRUE(support[2].has_gradient);
-  EXPECT_EQ(support[3].op_type, "LinearAttention");
-  EXPECT_EQ(support[3].shape_inference_function, "onnx_light_cpu::ComputeShapeLinearAttention");
-  EXPECT_EQ(support[3].peak_memory_function, "onnx_light_cpu::ComputePeakMemoryLinearAttention");
-  EXPECT_EQ(support[3].fusion_patterns,
-            std::vector<std::string>{"onnx_light_cpu::LinearAttentionFusionPattern"});
-  EXPECT_FALSE(support[3].has_gradient);
-  EXPECT_EQ(support[4].op_type, "MatMulNBits");
-  EXPECT_EQ(support[4].shape_inference_function, "onnx_light_cpu::ComputeShapeMatMulNBits");
-  EXPECT_EQ(support[4].peak_memory_function, "onnx_light_cpu::ComputePeakMemoryMatMulNBits");
-  EXPECT_EQ(support[4].fusion_patterns,
-            std::vector<std::string>{"onnx_light_cpu::MatMulNBitsBiasFusionPattern"});
-  EXPECT_TRUE(support[4].has_gradient);
-  EXPECT_EQ(support[5].op_type, "MoE");
-  EXPECT_EQ(support[5].shape_inference_function, "onnx_light_cpu::ComputeShapeMoE");
-  EXPECT_EQ(support[5].peak_memory_function, "onnx_light_cpu::ComputePeakMemoryMoE");
-  EXPECT_TRUE(support[5].fusion_patterns.empty());
-  EXPECT_FALSE(support[5].has_gradient);
-  EXPECT_EQ(support[6].domain, onnx_light_cpu::kMicrosoftDomain);
-  EXPECT_EQ(support[6].op_type, "RotaryEmbedding");
-  EXPECT_EQ(support[6].shape_inference_function, "onnx_light_cpu::ComputeShapeRotaryEmbedding");
-  EXPECT_EQ(support[6].peak_memory_function, "onnx_light_cpu::ComputePeakMemoryRotaryEmbedding");
-  EXPECT_TRUE(support[6].fusion_patterns.empty());
-  EXPECT_FALSE(support[6].has_gradient);
-  EXPECT_EQ(support[7].domain, "ai.onnx");
-  EXPECT_EQ(support[7].op_type, "RotaryEmbedding");
-  EXPECT_EQ(support[7].shape_inference_function, "onnx_light_cpu::ComputeShapeRotaryEmbedding");
-  EXPECT_EQ(support[7].peak_memory_function, "onnx_light_cpu::ComputePeakMemoryRotaryEmbedding");
-  EXPECT_TRUE(support[7].fusion_patterns.empty());
-  EXPECT_FALSE(support[7].has_gradient);
-  EXPECT_EQ(support[8].domain, "ai.onnx");
-  EXPECT_EQ(support[8].op_type, "SimplifiedLayerNormalization");
-  EXPECT_EQ(support[8].shape_inference_function,
-            "onnx_light_cpu::ComputeShapeSimplifiedLayerNormalization");
-  EXPECT_EQ(support[8].peak_memory_function,
-            "onnx_light_cpu::ComputePeakMemorySimplifiedLayerNormalization");
-  EXPECT_TRUE(support[8].fusion_patterns.empty());
-  EXPECT_FALSE(support[8].has_gradient);
-  EXPECT_EQ(support[9].domain, onnx_light_cpu::kMicrosoftDomain);
-  EXPECT_EQ(support[9].op_type, "SkipLayerNormalization");
-  EXPECT_EQ(support[9].shape_inference_function,
-            "onnx_light_cpu::ComputeShapeSkipLayerNormalization");
-  EXPECT_EQ(support[9].peak_memory_function,
-            "onnx_light_cpu::ComputePeakMemorySkipLayerNormalization");
-  EXPECT_TRUE(support[9].fusion_patterns.empty());
-  EXPECT_FALSE(support[9].has_gradient);
-  EXPECT_EQ(support[10].domain, onnx_light_cpu::kMicrosoftDomain);
-  EXPECT_EQ(support[10].op_type, "SkipSimplifiedLayerNormalization");
-  EXPECT_EQ(support[10].shape_inference_function,
-            "onnx_light_cpu::ComputeShapeSkipSimplifiedLayerNormalization");
-  EXPECT_EQ(support[10].peak_memory_function,
-            "onnx_light_cpu::ComputePeakMemorySkipSimplifiedLayerNormalization");
-  EXPECT_TRUE(support[10].fusion_patterns.empty());
-  EXPECT_FALSE(support[10].has_gradient);
+  struct Expected {
+    const char *domain;
+    const char *op_type;
+    const char *fusion;
+    bool has_gradient;
+  };
+  const std::vector<Expected> expected = {
+      {"com.microsoft", "BiasGelu", "BiasGeluFusionPattern", true},
+      {"com.microsoft", "CDist", "CDistFusionPattern", true},
+      {"com.microsoft", "CausalConvWithState", "", false},
+      {"com.microsoft", "GroupQueryAttention", "GroupQueryAttentionFusionPattern", true},
+      {"com.microsoft", "LinearAttention", "LinearAttentionFusionPattern", false},
+      {"com.microsoft", "MatMulNBits", "MatMulNBitsBiasFusionPattern", true},
+      {"com.microsoft", "MoE", "", false},
+      {"com.microsoft", "RotaryEmbedding", "", false},
+      {"ai.onnx", "RotaryEmbedding", "", false},
+      {"ai.onnx", "SimplifiedLayerNormalization", "", false},
+      {"com.microsoft", "SkipLayerNormalization", "", false},
+      {"com.microsoft", "SkipSimplifiedLayerNormalization", "", false}};
+  ASSERT_EQ(support.size(), expected.size());
+  for (const auto &entry : expected) {
+    const auto actual = std::find_if(support.begin(), support.end(), [&](const auto &record) {
+      return record.domain == entry.domain && record.op_type == entry.op_type;
+    });
+    ASSERT_NE(actual, support.end()) << entry.domain << ":" << entry.op_type;
+    EXPECT_EQ(actual->shape_inference_function,
+              std::string("onnx_light_cpu::ComputeShape") + entry.op_type);
+    EXPECT_EQ(actual->peak_memory_function,
+              std::string("onnx_light_cpu::ComputePeakMemory") + entry.op_type);
+    const std::vector<std::string> fusions =
+        entry.fusion[0] ? std::vector<std::string>{std::string("onnx_light_cpu::") + entry.fusion}
+                        : std::vector<std::string>{};
+    EXPECT_EQ(actual->fusion_patterns, fusions);
+    EXPECT_EQ(actual->has_gradient, entry.has_gradient);
+  }
+}
+
+TEST(CustomOperatorSupport, InfersCausalConvSymbolicStateAndConstraints) {
+  shapes_ns::ShapesContext ctx;
+  ctx.Set("X", SymTensor(nullptr, TensorType::kFloat16, {SymDim("B"), SymDim("C"), SymDim("S")}));
+  ctx.Set("W", SymTensor(nullptr, TensorType::kFloat16, {SymDim("WC"), SymDim(1), SymDim("K")}));
+  ctx.Set("bias", SymTensor(nullptr, TensorType::kFloat16, {SymDim("BC")}));
+  ctx.Set("past",
+          SymTensor(nullptr, TensorType::kFloat16, {SymDim("PB"), SymDim("PC"), SymDim("P")}));
+  NodeProto node = MakeNode("CausalConvWithState", "X", "W", "Y");
+  node.add_input("bias");
+  node.add_input("past");
+  node.add_output("state");
+  ONNX_LIGHT_NAMESPACE::AddAttribute(node, "dilation", int64_t{2});
+  onnx_light_cpu::ComputeShapeCausalConvWithState(ctx, node);
+  EXPECT_EQ(ctx.Get("Y").Shape(), ctx.Get("X").Shape());
+  EXPECT_EQ(ctx.Get("state").Shape(),
+            sym_ns::SymShape({SymDim("B"), SymDim("C"), SymDim("(K-1)*2")}));
+  EXPECT_EQ(ctx.Get("state").Dtype(), TensorType::kFloat16);
+  EXPECT_EQ(ctx.Constraints().size(), 5U);
+  EXPECT_EQ(ctx.Constraints().count({"(K-1)*2", "P"}), 1U);
+  EXPECT_EQ(onnx_light_cpu::ComputePeakMemoryCausalConvWithState(
+                sym_ns::Device::kCPU, {ctx.Get("X").Shape(), ctx.Get("W").Shape()}),
+            0);
+}
+
+TEST(CustomOperatorSupport, InfersHigherRankChannelsLastCausalConvWithSchema) {
+  onnx_light_cpu::RegisterMicrosoftShapeAndMemoryFunctions();
+  shapes_ns::ShapesContext ctx;
+  ctx.Set("X", SymTensor(nullptr, TensorType::kBfloat16,
+                         {SymDim("B"), SymDim("S"), SymDim("H"), SymDim(4)}));
+  ctx.Set("W", SymTensor(nullptr, TensorType::kBfloat16, {SymDim("C"), SymDim(1), SymDim(3)}));
+  NodeProto node = MakeNode("CausalConvWithState", "X", "W", "Y");
+  node.add_output("state");
+  ONNX_LIGHT_NAMESPACE::AddAttribute(node, "channels_last", int64_t{1});
+  ONNX_LIGHT_NAMESPACE::AddAttribute(node, "dilation", int64_t{3});
+  const auto schemas = onnx_light_cpu::GetMicrosoftOpSchemasWithHistory("CausalConvWithState");
+  ASSERT_EQ(schemas.size(), 1U);
+  const std::vector<std::optional<schema_ns::SchemaInputValue>> inputs = {
+      schema_ns::SchemaInputValue(ctx.Get("X")), schema_ns::SchemaInputValue(ctx.Get("W"))};
+  schemas[0].Verify(node, &inputs);
+  ctx.ComputeShapeNode(node);
+  EXPECT_EQ(ctx.Get("Y").Shape(), ctx.Get("X").Shape());
+  EXPECT_EQ(ctx.Get("state").Shape(),
+            sym_ns::SymShape({SymDim("B"), SymDim(6), SymDim("H"), SymDim(4)}));
+  EXPECT_EQ(ctx.Constraints().size(), 1U);
+  EXPECT_EQ(ctx.Constraints().count({"(H)*(4)", "C"}), 1U);
+  ctx.Set("X", SymTensor(nullptr, TensorType::kBfloat16,
+                         {SymDim("B"), SymDim("S"), SymDim(2), SymDim(4)}));
+  ctx.Set("W", SymTensor(nullptr, TensorType::kBfloat16, {SymDim(7), SymDim(1), SymDim(3)}));
+  EXPECT_THROW(onnx_light_cpu::ComputeShapeCausalConvWithState(ctx, node), std::invalid_argument);
+  ctx.Set("W", SymTensor(nullptr, TensorType::kBfloat16, {SymDim(8), SymDim(1), SymDim(3)}));
+  EXPECT_NO_THROW(onnx_light_cpu::ComputeShapeCausalConvWithState(ctx, node));
+}
+
+TEST(CustomOperatorSupport, RejectsIncompatibleCausalConvPastState) {
+  for (const auto &shape : {sym_ns::SymShape({3, 4, 4}), sym_ns::SymShape({2, 5, 4}),
+                            sym_ns::SymShape({2, 4, 2}), sym_ns::SymShape({2, 4})}) {
+    shapes_ns::ShapesContext ctx;
+    ctx.Set("X", SymTensor(nullptr, TensorType::kFloat, {2, 4, 7}));
+    ctx.Set("W", SymTensor(nullptr, TensorType::kFloat, {4, 1, 3}));
+    ctx.Set("past", SymTensor(nullptr, TensorType::kFloat, shape));
+    NodeProto node = MakeNode("CausalConvWithState", "X", "W", "Y");
+    node.add_input("");
+    node.add_input("past");
+    node.add_output("state");
+    ONNX_LIGHT_NAMESPACE::AddAttribute(node, "dilation", int64_t{2});
+    EXPECT_THROW(onnx_light_cpu::ComputeShapeCausalConvWithState(ctx, node), std::invalid_argument);
+  }
 }
 
 TEST(CustomOperatorSupport, InfersMoESymbolicShapeAndRejectsMismatch) {
