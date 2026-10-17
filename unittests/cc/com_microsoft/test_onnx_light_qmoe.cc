@@ -25,7 +25,7 @@ using onnx_light_cpu::QMoEKernel;
 using ONNX_LIGHT_NAMESPACE::NodeProto;
 using rt_ns::Tensor;
 
-NodeProto MakeNode(int64_t bits = 4, int64_t block = 0, bool fc3 = false) {
+NodeProto MakeNode(int64_t bits = 4, int64_t block = 32, bool fc3 = false) {
   NodeProto node;
   node.set_domain("com.microsoft");
   node.set_op_type("QMoE");
@@ -48,23 +48,23 @@ const rt_ns::KernelContext &Context() {
 struct Inputs {
   Tensor x = Tensor::FromFloat("", {1, 2}, {2.0f, -1.0f});
   Tensor router = Tensor::FromFloat("", {1, 1}, {0.0f});
-  // Tensor-level matrices are input-major, offset-eight INT4, low nibble first.
+  // Blockwise matrices are input-major, offset-eight INT4, low nibble first.
   Tensor w1 = Tensor::FromUint8("", {1, 2, 1}, {0xA9, 0xCB});
-  Tensor s1 = Tensor::FromFloat("", {1, 2}, {0.5f, 0.25f});
+  Tensor s1 = Tensor::FromFloat("", {1, 2, 1}, {0.5f, 0.25f});
   Tensor w2 = Tensor::FromUint8("", {1, 2, 1}, {0xA9, 0xCB});
-  Tensor s2 = Tensor::FromFloat("", {1, 2}, {0.5f, 0.25f});
+  Tensor s2 = Tensor::FromFloat("", {1, 2, 1}, {0.5f, 0.25f});
 
   Tensor Run(const QMoEKernel &kernel) const {
     return kernel(x, router, w1, s1, nullptr, w2, s2, nullptr);
   }
 };
 
-TEST(QMoERuntime, TensorLevelSignedWeightsHaveIndependentExpectedValues) {
+TEST(QMoERuntime, BlockWeightsHaveIndependentExpectedValues) {
   Inputs inputs;
   const Tensor output = inputs.Run(QMoEKernel(MakeNode(), Context()));
-  // X * [[.5,.5],[1.5,1]] = [-.5,0], followed by the same FC2.
-  EXPECT_FLOAT_EQ(output.AsFloat()[0], -0.25f);
-  EXPECT_FLOAT_EQ(output.AsFloat()[1], -0.25f);
+  // X * [[.5,1],[.75,1]] = [.25,1], followed by the same FC2.
+  EXPECT_FLOAT_EQ(output.AsFloat()[0], 0.875f);
+  EXPECT_FLOAT_EQ(output.AsFloat()[1], 1.25f);
 }
 
 TEST(QMoERuntime, PreservesThreeDimensionalInputShape) {
@@ -72,17 +72,17 @@ TEST(QMoERuntime, PreservesThreeDimensionalInputShape) {
   inputs.x = Tensor::FromFloat("", {1, 1, 2}, {2.0f, -1.0f});
   const Tensor output = inputs.Run(QMoEKernel(MakeNode(), Context()));
   EXPECT_EQ(output.shape, (rt_ns::Shape{1, 1, 2}));
-  EXPECT_FLOAT_EQ(output.AsFloat()[0], -0.25f);
-  EXPECT_FLOAT_EQ(output.AsFloat()[1], -0.25f);
+  EXPECT_FLOAT_EQ(output.AsFloat()[0], 0.875f);
+  EXPECT_FLOAT_EQ(output.AsFloat()[1], 1.25f);
 }
 
 TEST(QMoERuntime, AcceptsIndependentFloatingScaleTypes) {
   Inputs inputs;
-  inputs.s1 = rt_ns::MakeFloat16Tensor("", {1, 2}, {0.5f, 0.25f});
-  inputs.s2 = rt_ns::MakeBfloat16Tensor("", {1, 2}, {0.5f, 0.25f});
+  inputs.s1 = rt_ns::MakeFloat16Tensor("", {1, 2, 1}, {0.5f, 0.25f});
+  inputs.s2 = rt_ns::MakeBfloat16Tensor("", {1, 2, 1}, {0.5f, 0.25f});
   const Tensor output = inputs.Run(QMoEKernel(MakeNode(), Context()));
-  EXPECT_FLOAT_EQ(output.AsFloat()[0], -0.25f);
-  EXPECT_FLOAT_EQ(output.AsFloat()[1], -0.25f);
+  EXPECT_FLOAT_EQ(output.AsFloat()[0], 0.875f);
+  EXPECT_FLOAT_EQ(output.AsFloat()[1], 1.25f);
 }
 
 TEST(QMoERuntime, BlockScalesApplyToStoredRowsRatherThanOutputColumns) {
@@ -107,11 +107,21 @@ TEST(QMoERuntime, AcceptsCanonicalOutputMajorTensorScalesAndUnsignedInt8) {
     inputs.w2 = bits == 4 ? Tensor::FromUint8("", {1, 3, 1}, {0x89, 0x98, 0x99})
                           : Tensor::FromUint8("", {1, 3, 2}, {129, 128, 128, 129, 129, 129});
     inputs.s2 = Tensor::FromFloat("", {1, 3}, {1, 2, 3});
-    const Tensor output = inputs.Run(QMoEKernel(MakeNode(bits), Context()));
+    const Tensor output = inputs.Run(QMoEKernel(MakeNode(bits, 0), Context()));
     EXPECT_FLOAT_EQ(output.AsFloat()[0], 1.0f);
     EXPECT_FLOAT_EQ(output.AsFloat()[1], 2.0f);
     EXPECT_FLOAT_EQ(output.AsFloat()[2], 6.0f);
   }
+}
+
+TEST(QMoERuntime, RejectsLegacyColumnScaledTensorPacking) {
+  Inputs inputs;
+  inputs.s1 = Tensor::FromFloat("", {1, 2}, {0.5f, 0.25f});
+  inputs.s2 = Tensor::FromFloat("", {1, 3}, {1, 1, 1});
+  inputs.x = Tensor::FromFloat("", {1, 3}, {1, 2, 3});
+  inputs.w1 = Tensor::FromUint8("", {1, 3, 1}, {0x99, 0x99, 0x99});
+  inputs.w2 = Tensor::FromUint8("", {1, 2, 2}, {0x99, 0x09, 0x99, 0x09});
+  EXPECT_THROW(inputs.Run(QMoEKernel(MakeNode(4, 0), Context())), std::invalid_argument);
 }
 
 rt_ns::Tensors RunGraph(const NodeProto &node) {
@@ -147,19 +157,15 @@ rt_ns::Tensors RunGraph(const NodeProto &node) {
 TEST(QMoERuntime, DispatchesThroughRunWithOptionalInputHoles) {
   const auto outputs = RunGraph(MakeNode());
   ASSERT_EQ(outputs.size(), 1U);
-  EXPECT_FLOAT_EQ(outputs[0].AsFloat()[0], -0.25f);
-  EXPECT_FLOAT_EQ(outputs[0].AsFloat()[1], -0.25f);
+  EXPECT_FLOAT_EQ(outputs[0].AsFloat()[0], 0.875f);
+  EXPECT_FLOAT_EQ(outputs[0].AsFloat()[1], 1.25f);
 }
 
 TEST(QMoERuntime, EmptyTokensPreserveShapeAndType) {
-  for (const int64_t block : {0, 16, 32, 64}) {
+  for (const int64_t block : {16, 32, 64}) {
     Inputs inputs;
     inputs.x = Tensor::FromFloat("", {0, 2}, {});
     inputs.router = Tensor::FromFloat("", {0, 1}, {});
-    if (block != 0) {
-      inputs.s1 = Tensor::FromFloat("", {1, 2, 1}, {0.5f, 0.25f});
-      inputs.s2 = Tensor::FromFloat("", {1, 2, 1}, {0.5f, 0.25f});
-    }
     const Tensor output = inputs.Run(QMoEKernel(MakeNode(4, block), Context()));
     EXPECT_EQ(output.shape, (rt_ns::Shape{0, 2}));
     EXPECT_EQ(output.data_type, static_cast<int32_t>(rt_ns::DataType::FLOAT));
@@ -302,6 +308,7 @@ TEST(QMoERuntime, RejectsTopKLargerThanExpertCountAndInvalidBlockScales) {
   ONNX_LIGHT_NAMESPACE::AddAttribute(node, "k", int64_t{2});
   EXPECT_THROW(inputs.Run(QMoEKernel(node, Context())), std::invalid_argument);
   node = MakeNode(4, 32);
+  inputs.s1 = Tensor::FromFloat("", {1, 2}, {0.5f, 0.25f});
   EXPECT_THROW(inputs.Run(QMoEKernel(node, Context())), std::invalid_argument);
 }
 

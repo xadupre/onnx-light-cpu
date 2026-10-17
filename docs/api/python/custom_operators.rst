@@ -80,15 +80,18 @@ sparse mixer routing, and CUDA-prepacked weights are rejected.
 
 ``expert_weight_bits`` supports **4 and 8**. INT4 stores adjacent last-axis
 values in low-then-high nibbles with implicit zero point 8; INT8 stores signed
-two's-complement values in ``UINT8`` tensors. ``block_size=0`` (default)
-uses raw per-last-axis-column scales ``[E,C]``. Supported positive block sizes
+two's-complement values in ``UINT8`` tensors for block quantization.
+``block_size=0`` (default) accepts only raw CPU output-major matrices with
+per-output-row scales ``[E,R]``; INT8 then uses an implicit zero point of 128.
+Supported positive block sizes
 are powers of two of at least 16, including **16, 32, 64, and 128**;
 scales then have shape
 ``[E,R,ceil(C/block_size)]`` for a stored logical matrix ``[E,R,C]``.
 The final block and an odd INT4 column count need not be padded in the
 weight tensor: its shape is ``[E,R,ceil(C/2)]`` for INT4 or ``[E,R,C]`` for INT8.
 
-The fused builder emits output-major FC1 ``[E,2*I,H]`` and FC2 ``[E,H,I]``
+For block quantization, the fused builder emits output-major FC1
+``[E,2*I,H]`` and FC2 ``[E,H,I]``
 logical matrices with interleaved SwiGLU gate/up rows
 (``activation_type="swiglu"``, ``swiglu_fusion=1``).
 The split builder supplies FC3 and emits input-major FC1/FC3 ``[E,H,I]``
@@ -98,12 +101,10 @@ Separate FC3 and fused SwiGLU cannot be combined. Without FC3, ordinary
 ``relu``, ``gelu``, ``silu``, and ``identity`` projections are also supported
 in input-major layout.
 
-The kernel validates both orientations against all projection and scale
-shapes, preferring the builder's orientation when dimensions are ambiguous.
-It also accepts ONNX Runtime's raw output-major, row-scaled tensor format
-(``block_size=0``, scales ``[E,R]``) when the per-column formats do not fit.
-That format uses an implicit INT8 zero point of 128 rather than signed
-bytes. See the `ONNX Runtime CPU dequantizer
+For block quantization, the kernel validates both orientations against all
+projection and scale shapes, preferring the builder's orientation when
+dimensions are ambiguous. Tensor quantization always uses ONNX Runtime's
+raw output-major, row-scaled format. See the `ONNX Runtime CPU dequantizer
 <https://github.com/microsoft/onnxruntime/blob/main/onnxruntime/contrib_ops/cpu/moe/moe_quantization_cpu.cc>`_.
 
 This is a portable correctness implementation: expert matrices are

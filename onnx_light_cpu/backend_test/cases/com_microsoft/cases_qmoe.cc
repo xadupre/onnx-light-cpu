@@ -91,14 +91,15 @@ Projection MakeProjection(const Configuration &c, int64_t rows, int64_t columns,
   // mbext 68a6860cc8fe2c3381f5248d215b7217a36822e3, builders/base.py:
   // separate experts quantize transposed linear weights; fused SwiGLU keeps
   // output-major weights. Block quantization groups the last stored axis.
-  // Tensor-level fixtures use raw CPU packing, not TensorRT-LLM CUDA preprocessing.
-  const bool output_major = c.activation == "swiglu" && !c.input_major_fused;
+  // Tensor-level fixtures use the canonical CPU output-major, row-scaled
+  // contract, not TensorRT-LLM CUDA-preprocessed legacy producer tensors.
+  const bool output_major = c.block == 0 || (c.activation == "swiglu" && !c.input_major_fused);
   const int64_t stored_rows = output_major ? rows : columns;
   const int64_t stored_columns = output_major ? columns : rows;
   const int64_t bytes = c.bits == 4 ? (stored_columns + 1) / 2 : stored_columns;
   const int64_t blocks = c.block == 0 ? 1 : (stored_columns + c.block - 1) / c.block;
   std::vector<uint8_t> packed(c.experts * stored_rows * bytes);
-  std::vector<float> scales(c.experts * (c.block == 0 ? stored_columns : stored_rows * blocks));
+  std::vector<float> scales(c.experts * stored_rows * blocks);
   std::vector<float> decoded(c.experts * rows * columns);
   std::mt19937 generator(0x514d4f45U + static_cast<uint32_t>(seed));
   std::uniform_int_distribution<int> quantized(c.bits == 4 ? -7 : -127, c.bits == 4 ? 7 : 127);
@@ -121,7 +122,7 @@ Projection MakeProjection(const Configuration &c, int64_t rows, int64_t columns,
         if (c.bits == 4) {
           packed[index] |= static_cast<uint8_t>((value + 8) << (4 * (inner % 2)));
         } else {
-          packed[index] = static_cast<uint8_t>(value);
+          packed[index] = static_cast<uint8_t>(c.block == 0 ? value + 128 : value);
         }
       }
       // Decode the serialized bytes independently of the QMoE kernel.
@@ -131,15 +132,16 @@ Projection MakeProjection(const Configuration &c, int64_t rows, int64_t columns,
         const uint8_t byte =
             packed[(e * stored_rows + outer) * bytes + (c.bits == 4 ? inner / 2 : inner)];
         const int nibble = (byte >> (4 * (inner % 2))) & 15;
-        const int value =
-            c.bits == 4 ? nibble - 8 : (byte >= 128 ? static_cast<int>(byte) - 256 : byte);
+        const int value = c.bits == 4    ? nibble - 8
+                          : c.block == 0 ? static_cast<int>(byte) - 128
+                                         : (byte >= 128 ? static_cast<int>(byte) - 256 : byte);
         decoded[(e * rows + r) * columns + k] =
-            value * scales[c.block == 0 ? e * stored_columns + inner
+            value * scales[c.block == 0 ? e * stored_rows + outer
                                         : (e * stored_rows + outer) * blocks + inner / c.block];
       }
     }
   }
-  const rt_ns::Shape scale_shape = c.block == 0 ? rt_ns::Shape{c.experts, stored_columns}
+  const rt_ns::Shape scale_shape = c.block == 0 ? rt_ns::Shape{c.experts, stored_rows}
                                                 : rt_ns::Shape{c.experts, stored_rows, blocks};
   return {Tensor::FromUint8("", {c.experts, stored_rows, bytes}, packed),
           MakeTensor(c.type, scale_shape, scales), std::move(decoded)};
@@ -285,14 +287,16 @@ void RegisterCpuQMoECases(std::vector<TestCase> &registry, TestMode mode) {
               c.hidden = 64;
               c.intermediate = 96;
               const auto packed_size = [c](int64_t outputs, int64_t inputs) {
-                const int64_t last = c.activation == "swiglu" ? inputs : outputs;
-                const int64_t first = c.activation == "swiglu" ? outputs : inputs;
+                const bool output_major = c.block == 0 || c.activation == "swiglu";
+                const int64_t last = output_major ? inputs : outputs;
+                const int64_t first = output_major ? outputs : inputs;
                 return c.experts * first * (c.bits == 4 ? (last + 1) / 2 : last);
               };
               const auto scale_size = [c](int64_t outputs, int64_t inputs) {
-                const int64_t last = c.activation == "swiglu" ? inputs : outputs;
-                const int64_t first = c.activation == "swiglu" ? outputs : inputs;
-                return c.experts * (c.block == 0 ? last : first * ((last + c.block - 1) / c.block));
+                const bool output_major = c.block == 0 || c.activation == "swiglu";
+                const int64_t last = output_major ? inputs : outputs;
+                const int64_t first = output_major ? outputs : inputs;
+                return c.experts * first * (c.block == 0 ? 1 : (last + c.block - 1) / c.block);
               };
               const int64_t width = c.intermediate * (c.activation == "swiglu" ? 2 : 1);
               std::vector<int64_t> sizes{c.tokens * c.hidden,
@@ -355,16 +359,18 @@ void RegisterCpuQMoECases(std::vector<TestCase> &registry, TestMode mode) {
           registry.back().atol = type == DataType::BFLOAT16 ? 3e-3 : 1e-6;
         }
         for (int64_t block : {0, 32}) {
-          Configuration fused{type, bits, block, "swiglu", true, false};
-          fused.input_major_fused = true;
-          bt_ns::Expect(
-              registry, MakeQMoENode(fused),
-              "test_cpu_qmoe_swiglu_input_major_bits" + std::to_string(bits) + "_block" +
-                  std::to_string(block) + "_" + DataTypeSuffix(type),
-              opsets, [fused]() { return MakeQMoEData(fused, true); }, "backend-test",
-              bt_ns::TestCaseTag::AI_RT);
-          registry.back().rtol = type == DataType::BFLOAT16 ? 3e-2 : 1e-3;
-          registry.back().atol = type == DataType::BFLOAT16 ? 3e-3 : 1e-6;
+          if (block != 0) {
+            Configuration fused{type, bits, block, "swiglu", true, false};
+            fused.input_major_fused = true;
+            bt_ns::Expect(
+                registry, MakeQMoENode(fused),
+                "test_cpu_qmoe_swiglu_input_major_bits" + std::to_string(bits) + "_block" +
+                    std::to_string(block) + "_" + DataTypeSuffix(type),
+                opsets, [fused]() { return MakeQMoEData(fused, true); }, "backend-test",
+                bt_ns::TestCaseTag::AI_RT);
+            registry.back().rtol = type == DataType::BFLOAT16 ? 3e-2 : 1e-3;
+            registry.back().atol = type == DataType::BFLOAT16 ? 3e-3 : 1e-6;
+          }
           for (int64_t tokens : {0, 1}) {
             Configuration c{type, bits, block, "relu", false, true};
             c.tokens = tokens;

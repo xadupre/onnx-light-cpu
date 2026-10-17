@@ -13,9 +13,10 @@ struct QMoEAttributes : MoEAttributes {
   std::size_t block_size = 0;
 };
 
-// Quantization packs adjacent elements of the last stored axis, low nibble first.
-// Producer tensor-level scales are per last-axis column; block scales are per
-// stored row. CPU row-wise tensors instead use rowwise_scales and unsigned_int8.
+// Explicit raw layout: adjacent last-axis values pack low nibble first.
+// CPU tensor quantization uses output_major, rowwise_scales and unsigned_int8.
+// Producer block quantization uses row/block scales and signed INT8 instead.
+// TensorRT-preprocessed buffers are not a raw layout.
 struct QMoEWeight {
   const std::uint8_t *data = nullptr;
   const void *scales = nullptr;

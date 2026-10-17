@@ -175,24 +175,32 @@ TEST(CustomOperatorSupport, QMoESplitExpertShapes) {
   }
   node.add_output("Y");
   ONNX_LIGHT_NAMESPACE::AddAttribute(node, "expert_weight_bits", int64_t{4});
+  ONNX_LIGHT_NAMESPACE::AddAttribute(node, "block_size", int64_t{32});
   ONNX_LIGHT_NAMESPACE::AddAttribute(node, "activation_type", std::string("silu"));
   shapes_ns::ShapesContext ctx;
   ctx.Set("X", SymTensor(nullptr, TensorType::kFloat16, {SymDim("T"), SymDim(5)}));
   ctx.Set("router", SymTensor(nullptr, TensorType::kFloat16, {SymDim("T"), SymDim(3)}));
   ctx.Set("W1", SymTensor(nullptr, TensorType::kUint8, {SymDim(3), SymDim(5), SymDim(4)}));
-  ctx.Set("S1", SymTensor(nullptr, TensorType::kFloat, {SymDim(3), SymDim(7)}));
+  ctx.Set("S1", SymTensor(nullptr, TensorType::kFloat, {SymDim(3), SymDim(5), SymDim(1)}));
   ctx.Set("W2", SymTensor(nullptr, TensorType::kUint8, {SymDim(3), SymDim(7), SymDim(3)}));
-  ctx.Set("S2", SymTensor(nullptr, TensorType::kFloat, {SymDim(3), SymDim(5)}));
+  ctx.Set("S2", SymTensor(nullptr, TensorType::kFloat, {SymDim(3), SymDim(7), SymDim(1)}));
   ctx.Set("W3", SymTensor(nullptr, TensorType::kUint8, {SymDim(3), SymDim(5), SymDim(4)}));
-  ctx.Set("S3", SymTensor(nullptr, TensorType::kFloat, {SymDim(3), SymDim(7)}));
+  ctx.Set("S3", SymTensor(nullptr, TensorType::kFloat, {SymDim(3), SymDim(5), SymDim(1)}));
   onnx_light_cpu::ComputeShapeQMoE(ctx, node);
   EXPECT_EQ(ctx.Get("Y").Shape().ToString(), ctx.Get("X").Shape().ToString());
   EXPECT_EQ(ctx.Get("Y").Dtype(), TensorType::kFloat16);
   node.ref_input()[9] = "";
   EXPECT_THROW(onnx_light_cpu::ComputeShapeQMoE(ctx, node), std::invalid_argument);
   node.ref_input()[8] = "";
+  for (auto &attribute : node.ref_attribute()) {
+    if (attribute.name() == "block_size") {
+      attribute.set_i(0);
+    }
+  }
   ctx.Set("W1", SymTensor(nullptr, TensorType::kUint8, {SymDim(3), SymDim(7), SymDim(3)}));
   ctx.Set("W2", SymTensor(nullptr, TensorType::kUint8, {SymDim(3), SymDim(5), SymDim(4)}));
+  ctx.Set("S1", SymTensor(nullptr, TensorType::kFloat, {SymDim(3), SymDim(7)}));
+  ctx.Set("S2", SymTensor(nullptr, TensorType::kFloat, {SymDim(3), SymDim(5)}));
   onnx_light_cpu::ComputeShapeQMoE(ctx, node);
   EXPECT_EQ(ctx.Get("Y").Dtype(), TensorType::kFloat16);
 }

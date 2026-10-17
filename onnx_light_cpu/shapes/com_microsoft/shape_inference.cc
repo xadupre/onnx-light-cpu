@@ -622,8 +622,8 @@ void ComputeShapeQMoE(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE::NodeProto 
     width = candidate;
     return true;
   };
-  // Prefer mbext's layout when symbolic or square dimensions are ambiguous.
-  if (!fits(fused, false) && !fits(!fused, false) && !(block == 0 && fits(true, true))) {
+  // Tensor quantization uses raw CPU output-major, per-row scales only.
+  if (block == 0 ? !fits(true, true) : (!fits(fused, false) && !fits(!fused, false))) {
     throw std::invalid_argument("ComputeShapeQMoE: incompatible expert layouts.");
   }
   const auto rows =

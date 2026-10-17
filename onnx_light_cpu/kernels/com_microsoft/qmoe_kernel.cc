@@ -207,10 +207,17 @@ Tensor QMoEKernel::operator()(const Tensor &input, const Tensor &router, const T
     width = candidate_width;
     return true;
   };
-  // Prefer the exact producer formats: separate linears are transposed whereas
-  // fused interleaved weights are output-major. Also accept CPU row-scaled tensors.
-  if (!fits(fused, false) && !fits(!fused, false) &&
-      !(attributes_.block_size == 0 && fits(true, true))) {
+  if (attributes_.block_size == 0) {
+    // Raw CPU tensor quantization is row-scaled and output-major. mbext's
+    // legacy tensor path selects TensorRT's CUDA-preprocessed second output.
+    if (!fits(true, true)) {
+      throw std::invalid_argument(
+          "QMoE: block_size=0 requires raw CPU output-major row-scaled weights. Legacy mbext "
+          "TensorRT-preprocessed weights are unsupported; re-export with positive block_size.");
+    }
+  } else if (!fits(fused, false) && !fits(!fused, false)) {
+    // Prefer the exact producer formats: separate linears are transposed whereas
+    // fused interleaved weights are output-major.
     throw std::invalid_argument("QMoE: incompatible expert weight and scale layouts.");
   }
   auto w1 = Weight(fc1, scales1, experts, hidden, width, output_major, attributes_,
