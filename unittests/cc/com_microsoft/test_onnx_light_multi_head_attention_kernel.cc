@@ -18,6 +18,7 @@
 #include <cmath>
 #include <cstdint>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 namespace {
@@ -179,5 +180,51 @@ TEST(MultiHeadAttentionKernel, SymbolicShapesAndScratchMemory) {
                 sym::Device::kCPU, {{sym::SymDim(2), sym::SymDim(4), sym::SymDim(8)},
                                     {sym::SymDim(2), sym::SymDim(5), sym::SymDim(8)}}),
             0);
+}
+
+TEST(MultiHeadAttentionKernel, PreservesSymbolicRankThreeValueWidth) {
+  namespace sym = ONNX_LIGHT_NAMESPACE::core::symbolic;
+  for (const std::int64_t heads : {1, 2}) {
+    SCOPED_TRACE(heads);
+    ONNX_LIGHT_NAMESPACE::core::shapes::ShapesContext shapes;
+    shapes.Set("q", sym::SymTensor(nullptr, sym::TensorType::kFloat,
+                                   {sym::SymDim("B"), sym::SymDim("S"), sym::SymDim(8)}));
+    shapes.Set("k", sym::SymTensor(nullptr, sym::TensorType::kFloat,
+                                   {sym::SymDim("B"), sym::SymDim("L"), sym::SymDim(8)}));
+    shapes.Set("v", sym::SymTensor(nullptr, sym::TensorType::kFloat,
+                                   {sym::SymDim("B"), sym::SymDim("L"), sym::SymDim("Dv")}));
+    onnx_light_cpu::ComputeShapeMultiHeadAttention(shapes, MakeNode(false, heads));
+    const auto &output = shapes.Get("out").Shape();
+    ASSERT_EQ(output.Rank(), 3U);
+    EXPECT_EQ(output[0], sym::SymDim("B"));
+    EXPECT_EQ(output[1], sym::SymDim("S"));
+    EXPECT_EQ(output[2], sym::SymDim("Dv"));
+  }
+}
+
+TEST(MultiHeadAttentionKernel, PreservesSymbolicRankFourValueHeadWidth) {
+  namespace sym = ONNX_LIGHT_NAMESPACE::core::symbolic;
+  for (const std::int64_t heads : {1, 2}) {
+    for (const char *width : {"Hv", "Hv+1"}) {
+      SCOPED_TRACE(heads);
+      SCOPED_TRACE(width);
+      ONNX_LIGHT_NAMESPACE::core::shapes::ShapesContext shapes;
+      shapes.Set("q", sym::SymTensor(nullptr, sym::TensorType::kFloat,
+                                     {sym::SymDim("B"), sym::SymDim("S"), sym::SymDim(8)}));
+      shapes.Set("k", sym::SymTensor(nullptr, sym::TensorType::kFloat,
+                                     {sym::SymDim("B"), sym::SymDim(heads), sym::SymDim("L"),
+                                      sym::SymDim(8 / heads)}));
+      shapes.Set("v", sym::SymTensor(nullptr, sym::TensorType::kFloat,
+                                     {sym::SymDim("B"), sym::SymDim(heads), sym::SymDim("L"),
+                                      sym::SymDim(width)}));
+      onnx_light_cpu::ComputeShapeMultiHeadAttention(shapes, MakeNode(false, heads));
+      const auto &output = shapes.Get("out").Shape();
+      ASSERT_EQ(output.Rank(), 3U);
+      EXPECT_EQ(output[0], sym::SymDim("B"));
+      EXPECT_EQ(output[1], sym::SymDim("S"));
+      EXPECT_EQ(output[2],
+                heads == 1 ? sym::SymDim(width) : sym::SymDim(std::string("2*(") + width + ")"));
+    }
+  }
 }
 } // namespace

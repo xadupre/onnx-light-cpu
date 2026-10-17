@@ -24,6 +24,9 @@ Microsoft MultiHeadAttention
 query ``(B,S,N*H)``, key ``(B,L,N*H)`` and value ``(B,L,N*Hv)``, or
 Whisper-style cross-attention key ``(B,N,L,H)`` and value
 ``(B,N,L,Hv)``. ``num_heads`` is required.
+The output shape is ``(B,S,N*Hv)``. Shape inference preserves the value's
+symbolic total width for rank-3 inputs and the symbolic product ``N*Hv``
+for rank-4 inputs.
 Optional inputs are projection bias ``(2*N*H+N*Hv)``, int32 key-padding
 lengths ``(B)`` or binary masks ``(B,T)/(B,S,T)``, additive attention bias
 ``(1 or B,1 or N,S,T)``, and paired past key ``(B,N,P,H)`` and

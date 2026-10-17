@@ -845,7 +845,15 @@ void ComputeShapeMultiHeadAttention(ShapesContext &ctx,
   SymShape out;
   out.PushBack(batch);
   out.PushBack(qs[1]);
-  out.PushBack(MultiplyGqaDim(heads, value_head));
+  if (!cross) {
+    out.PushBack(vs[2]);
+  } else if (value_head.IsInt()) {
+    out.PushBack(MultiplyGqaDim(heads, value_head));
+  } else {
+    out.PushBack(heads == 1
+                     ? value_head
+                     : sym_ns::SymDim(std::to_string(heads) + "*(" + value_head.ToString() + ")"));
+  }
   ctx.Set(node.output(0), SymTensor(nullptr, dtype, std::move(out)));
   const bool present_k = node.output_size() > 1 && !node.output(1).empty();
   const bool present_v = node.output_size() > 2 && !node.output(2).empty();
