@@ -332,6 +332,12 @@ std::vector<OperatorSupportRegistration> CollectOperatorSupport() {
        {"onnx_light_cpu::GroupQueryAttentionFusionPattern"},
        true},
       {kMicrosoftDomain,
+       "MultiHeadAttention",
+       "onnx_light_cpu::ComputeShapeMultiHeadAttention",
+       "onnx_light_cpu::ComputePeakMemoryMultiHeadAttention",
+       {},
+       false},
+      {kMicrosoftDomain,
        "LinearAttention",
        "onnx_light_cpu::ComputeShapeLinearAttention",
        "onnx_light_cpu::ComputePeakMemoryLinearAttention",
@@ -734,6 +740,131 @@ void ComputeShapeSkipSimplifiedLayerNormalization(ShapesContext &ctx,
   ComputeShapeSkipLayerNormalizationCommon(ctx, node, true);
 }
 
+void ComputeShapeMultiHeadAttention(ShapesContext &ctx,
+                                    const ONNX_LIGHT_NAMESPACE::NodeProto &node) {
+  const auto fail = [](const char *message) {
+    throw std::invalid_argument(std::string("ComputeShapeMultiHeadAttention: ") + message);
+  };
+  if (!HasInput(node, 0) || !HasInput(node, 1) || !HasInput(node, 2) || node.output_size() < 1 ||
+      node.output_size() > 3 || node.output(0).empty() || node.input_size() > 10 ||
+      HasInput(node, 8) || HasInput(node, 9) || (node.output_size() > 3 && !node.output(3).empty()))
+    fail("Q/K/V and output are required; shared buffers and qk are unsupported.");
+  for (int i = 0; i < node.input_size(); ++i)
+    if (HasInput(node, i) && !ctx.Has(node.input(i)))
+      fail("input shape is unknown.");
+  const auto &q = ctx.Get(node.input(0));
+  const auto &k = ctx.Get(node.input(1));
+  const auto &v = ctx.Get(node.input(2));
+  const auto dtype = q.Dtype();
+  if ((dtype != sym_ns::TensorType::kFloat && dtype != sym_ns::TensorType::kFloat16 &&
+       dtype != sym_ns::TensorType::kBfloat16) ||
+      dtype != k.Dtype() || dtype != v.Dtype())
+    fail("Q/K/V floating types must match.");
+  const auto &qs = q.Shape(), &ks = k.Shape(), &vs = v.Shape();
+  if (qs.Rank() != 3 || (ks.Rank() != 3 && ks.Rank() != 4) || vs.Rank() != ks.Rank())
+    fail("Q must be rank 3 and K/V rank 3 or 4; packed rank 5 is unsupported.");
+  const bool cross = ks.Rank() == 4;
+  const int64_t heads = GetIntAttribute(node, "num_heads", 0);
+  if (heads <= 0 || GetIntAttribute(node, "unidirectional", 0) < 0 ||
+      GetIntAttribute(node, "unidirectional", 0) > 1)
+    fail("invalid num_heads or unidirectional.");
+  auto batch = qs[0];
+  batch = MergeGqaDim(ctx, batch, ks[0], "batch");
+  batch = MergeGqaDim(ctx, batch, vs[0], "batch");
+  auto head = DivideGqaDim(qs[2], heads, "query width");
+  sym_ns::SymDim value_head(std::string("?"));
+  sym_ns::SymDim length = ks[cross ? 2 : 1];
+  if (cross) {
+    MergeGqaDim(ctx, ks[1], sym_ns::SymDim(heads), "key heads");
+    MergeGqaDim(ctx, vs[1], sym_ns::SymDim(heads), "value heads");
+    head = MergeGqaDim(ctx, head, ks[3], "key head size");
+    value_head = vs[3];
+    MergeGqaDim(ctx, length, vs[2], "KV length");
+  } else {
+    MergeGqaDim(ctx, length, vs[1], "KV length");
+    head = MergeGqaDim(ctx, head, DivideGqaDim(ks[2], heads, "key width"), "head size");
+    value_head = DivideGqaDim(vs[2], heads, "value width");
+  }
+  if (HasInput(node, 3)) {
+    if (ctx.Get(node.input(3)).Dtype() != dtype || ctx.Get(node.input(3)).Shape().Rank() != 1)
+      fail("invalid projection bias.");
+    const auto &bd = ctx.Get(node.input(3)).Shape()[0];
+    if (head.IsInt() && value_head.IsInt())
+      MergeGqaDim(
+          ctx, bd,
+          sym_ns::SymDim(CheckedIndexMultiply(
+              heads,
+              CheckedIndexAdd(CheckedIndexMultiply(2, head.AsInt(), "MultiHeadAttention", "bias"),
+                              value_head.AsInt(), "MultiHeadAttention", "bias"),
+              "MultiHeadAttention", "bias")),
+          "projection bias");
+  }
+  if (HasInput(node, 6) != HasInput(node, 7))
+    fail("past K/V must be paired.");
+  sym_ns::SymDim past(int64_t{0});
+  if (HasInput(node, 6)) {
+    if (cross)
+      fail("past cache with rank-4 cross-attention is unsupported.");
+    const auto &pk = ctx.Get(node.input(6)), &pv = ctx.Get(node.input(7));
+    if (pk.Dtype() != dtype || pv.Dtype() != dtype || pk.Shape().Rank() != 4 ||
+        pv.Shape().Rank() != 4)
+      fail("invalid past cache.");
+    batch = MergeGqaDim(ctx, batch, pk.Shape()[0], "past batch");
+    batch = MergeGqaDim(ctx, batch, pv.Shape()[0], "past batch");
+    MergeGqaDim(ctx, pk.Shape()[1], sym_ns::SymDim(heads), "past heads");
+    MergeGqaDim(ctx, pv.Shape()[1], sym_ns::SymDim(heads), "past heads");
+    head = MergeGqaDim(ctx, head, pk.Shape()[3], "past key size");
+    value_head = MergeGqaDim(ctx, value_head, pv.Shape()[3], "past value size");
+    past = MergeGqaDim(ctx, pk.Shape()[2], pv.Shape()[2], "past length");
+  }
+  const auto total = AddGqaDims(past, length);
+  if (HasInput(node, 4)) {
+    const auto &mask = ctx.Get(node.input(4));
+    if (mask.Dtype() != sym_ns::TensorType::kInt32 ||
+        (mask.Shape().Rank() != 1 && mask.Shape().Rank() != 2 && mask.Shape().Rank() != 3))
+      fail("invalid int32 mask.");
+    MergeGqaDim(ctx, mask.Shape()[0], batch, "mask batch");
+    if (mask.Shape().Rank() == 3)
+      MergeGqaDim(ctx, mask.Shape()[1], qs[1], "mask query length");
+    if (mask.Shape().Rank() >= 2)
+      MergeGqaDim(ctx, mask.Shape()[mask.Shape().Rank() - 1], total, "mask total length");
+  }
+  if (HasInput(node, 5)) {
+    const auto &ab = ctx.Get(node.input(5));
+    if (ab.Dtype() != dtype || ab.Shape().Rank() != 4)
+      fail("invalid attention bias.");
+    for (int i = 0; i < 2; ++i) {
+      const auto &dim = ab.Shape()[i];
+      if (dim.IsInt() && dim.AsInt() == 1)
+        continue;
+      MergeGqaDim(ctx, dim, i == 0 ? batch : sym_ns::SymDim(heads), "attention bias");
+    }
+    MergeGqaDim(ctx, ab.Shape()[2], qs[1], "attention bias S");
+    MergeGqaDim(ctx, ab.Shape()[3], total, "attention bias T");
+  }
+  SymShape out;
+  out.PushBack(batch);
+  out.PushBack(qs[1]);
+  out.PushBack(MultiplyGqaDim(heads, value_head));
+  ctx.Set(node.output(0), SymTensor(nullptr, dtype, std::move(out)));
+  const bool present_k = node.output_size() > 1 && !node.output(1).empty();
+  const bool present_v = node.output_size() > 2 && !node.output(2).empty();
+  if (present_k || present_v) {
+    SymShape pk, pv;
+    for (auto *shape : {&pk, &pv}) {
+      shape->PushBack(batch);
+      shape->PushBack(sym_ns::SymDim(heads));
+      shape->PushBack(total);
+    }
+    pk.PushBack(head);
+    pv.PushBack(value_head);
+    if (present_k)
+      ctx.Set(node.output(1), SymTensor(nullptr, dtype, std::move(pk)));
+    if (present_v)
+      ctx.Set(node.output(2), SymTensor(nullptr, dtype, std::move(pv)));
+  }
+}
+
 void ComputeShapeGroupQueryAttention(ShapesContext &ctx,
                                      const ONNX_LIGHT_NAMESPACE::NodeProto &node) {
   if (node.input_size() < 7 || node.output_size() < 1 || node.output_size() > 3 ||
@@ -1052,6 +1183,7 @@ int64_t ComputePeakMemoryGroupQueryAttention(sym_ns::Device,
   if (input_shapes.empty() || input_shapes[0].Rank() != 3) {
     return 0;
   }
+
   const bool has_key = input_shapes.size() > 1 && input_shapes[1].Rank() == 3;
   const bool has_value = input_shapes.size() > 2 && input_shapes[2].Rank() == 3;
   if (has_key != has_value) {
@@ -1134,6 +1266,32 @@ int64_t ComputePeakMemoryGroupQueryAttention(sym_ns::Device,
                               "ComputePeakMemoryGroupQueryAttention", "scratch-memory byte size");
 }
 
+int64_t ComputePeakMemoryMultiHeadAttention(sym_ns::Device, const std::vector<SymShape> &shapes) {
+  if (shapes.size() < 2 || shapes[0].Rank() != 3 ||
+      (shapes[1].Rank() != 3 && shapes[1].Rank() != 4))
+    return 0;
+  const auto &b = shapes[0][0], &s = shapes[0][1];
+  const auto &l = shapes[1][shapes[1].Rank() == 4 ? 2 : 1];
+  if (!b.IsInt() || !s.IsInt() || !l.IsInt())
+    return 0;
+  int64_t p = 0;
+  if (shapes.size() > 6 && shapes[6].Rank() == 4) {
+    if (!shapes[6][2].IsInt())
+      return 0;
+    p = shapes[6][2].AsInt();
+  }
+  const auto total = CheckedIndexAdd(p, l.AsInt(), "MultiHeadAttention", "score width");
+  const auto rows = CheckedIndexMultiply(b.AsInt(), s.AsInt(), "MultiHeadAttention", "rows");
+  // Every query head may own a score row concurrently. The query's hidden
+  // dimension is at least the head count, providing a conservative bound.
+  if (!shapes[0][2].IsInt())
+    return 0;
+  return CheckedIndexMultiply(
+      CheckedIndexMultiply(rows, shapes[0][2].AsInt(), "MultiHeadAttention", "score rows"),
+      CheckedIndexMultiply(total, int64_t{4}, "MultiHeadAttention", "score bytes"),
+      "MultiHeadAttention", "score scratch");
+}
+
 int64_t ComputePeakMemoryLinearAttention(sym_ns::Device,
                                          const std::vector<SymShape> &input_shapes) {
   constexpr int64_t kAccumulatorElementBytes = sizeof(float);
@@ -1172,6 +1330,8 @@ void RegisterMicrosoftShapeAndMemoryFunctions() {
                                       ComputeShapeSkipSimplifiedLayerNormalization);
     shapes_ns::RegisterComputeShapeFn(kMicrosoftDomain, "GroupQueryAttention",
                                       ComputeShapeGroupQueryAttention);
+    shapes_ns::RegisterComputeShapeFn(kMicrosoftDomain, "MultiHeadAttention",
+                                      ComputeShapeMultiHeadAttention);
     shapes_ns::RegisterComputeShapeFn(kMicrosoftDomain, "LinearAttention",
                                       ComputeShapeLinearAttention);
     shapes_ns::RegisterComputeShapeFn(kMicrosoftDomain, "MatMulNBits", ComputeShapeMatMulNBits,
@@ -1194,6 +1354,9 @@ void RegisterMicrosoftShapeAndMemoryFunctions() {
     shapes_ns::RegisterComputePeakMemoryFn(kMicrosoftDomain, "GroupQueryAttention",
                                            sym_ns::Device::kCPU,
                                            ComputePeakMemoryGroupQueryAttention);
+    shapes_ns::RegisterComputePeakMemoryFn(kMicrosoftDomain, "MultiHeadAttention",
+                                           sym_ns::Device::kCPU,
+                                           ComputePeakMemoryMultiHeadAttention);
     shapes_ns::RegisterComputePeakMemoryFn(kMicrosoftDomain, "LinearAttention",
                                            sym_ns::Device::kCPU, ComputePeakMemoryLinearAttention);
     shapes_ns::RegisterComputePeakMemoryFn(kMicrosoftDomain, "MatMulNBits", sym_ns::Device::kCPU,

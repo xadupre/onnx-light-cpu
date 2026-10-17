@@ -134,6 +134,40 @@ LightOpSchema MakeSkipLayerNormalizationSchema() {
   return schema;
 }
 
+LightOpSchema MakeMultiHeadAttentionSchema() {
+  LightOpSchema schema(
+      "MultiHeadAttention", kMicrosoftDomain, 1,
+      "ONNX Runtime multi-head self/cross attention. Rank-5 packed QKV, shared cache buffers and "
+      "qk output are not implemented by this CPU provider.",
+      {{"query", "(B,S,N*H).", "T"},
+       {"key", "(B,L,N*H) or cross-attention (B,N,L,H).", "T"},
+       {"value", "(B,L,N*Hv) or cross-attention (B,N,L,Hv).", "T"},
+       {"bias", "Optional projection bias (2*N*H+N*Hv); cross-attention uses query bias.", "T"},
+       {"key_padding_mask", "Optional int32 lengths (B), or binary mask (B,T)/(B,S,T).", "M"},
+       {"attention_bias", "Optional additive (1 or B,1 or N,S,T).", "T"},
+       {"past_key", "Optional paired cache (B,N,P,H).", "T"},
+       {"past_value", "Optional paired cache (B,N,P,Hv).", "T"},
+       {"past_sequence_length", "Unsupported shared-buffer input.", "M"},
+       {"cache_indirection", "Unsupported shared-buffer input.", "M"}},
+      {{"output", "(B,S,N*Hv).", "T"},
+       {"present_key", "Optional (B,N,P+L,H).", "T"},
+       {"present_value", "Optional (B,N,P+L,Hv).", "T"}},
+      {{"T",
+        {TensorType::kFloat, TensorType::kFloat16, TensorType::kBfloat16},
+        "Matching floating-point tensors."},
+       {"M", {TensorType::kInt32}, "Int32 padding mask."}},
+      {AttributeParam{"num_heads", "Number of heads.", AttributeType::INT, true},
+       AttributeParam{"scale", "Defaults to 1/sqrt(H).", AttributeType::FLOAT, false},
+       AttributeParam{"mask_filter_value", "Mask additive penalty.", AttributeType::FLOAT, false,
+                      -10000.0f},
+       AttributeParam{"unidirectional", "Causal mask flag.", AttributeType::INT, false,
+                      int64_t{0}}},
+      false, true);
+  schema.set_min_output(1);
+  schema.set_max_output(3);
+  return schema;
+}
+
 LightOpSchema MakeGroupQueryAttentionSchema() {
   LightOpSchema schema(
       "GroupQueryAttention", kMicrosoftDomain, 1,
@@ -364,6 +398,8 @@ std::vector<LightOpSchema> GetMicrosoftOpSchemasWithHistory(const std::string &o
        [] { return std::vector<LightOpSchema>{MakeGroupQueryAttentionSchema()}; }},
       {"LinearAttention", [] { return std::vector<LightOpSchema>{MakeLinearAttentionSchema()}; }},
       {"MatMulNBits", [] { return std::vector<LightOpSchema>{MakeMatMulNBitsSchema()}; }},
+      {"MultiHeadAttention",
+       [] { return std::vector<LightOpSchema>{MakeMultiHeadAttentionSchema()}; }},
       {"MoE", [] { return std::vector<LightOpSchema>{MakeMoESchema()}; }},
       {"RotaryEmbedding", [] { return std::vector<LightOpSchema>{MakeRotaryEmbeddingSchema()}; }},
       {"SkipLayerNormalization",

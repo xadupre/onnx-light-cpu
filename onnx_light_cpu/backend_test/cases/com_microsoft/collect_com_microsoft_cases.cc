@@ -15,6 +15,7 @@ void CollectCpuMicrosoftTestCases(std::vector<TestCase> &registry, const std::st
       {"BiasGelu", &RegisterCpuBiasGeluCases},
       {"CDist", &RegisterCpuCDistCases},
       {"GroupQueryAttention", &RegisterCpuGroupQueryAttentionCases},
+      {"MultiHeadAttention", &RegisterCpuMultiHeadAttentionCases},
       {"LinearAttention", &RegisterCpuMicrosoftLinearAttentionCases},
       {"MatMulNBits", &RegisterCpuMatMulNBitsCases},
       {"MoE", &RegisterCpuMoECases},
