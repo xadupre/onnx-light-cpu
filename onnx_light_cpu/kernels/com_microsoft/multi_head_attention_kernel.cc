@@ -275,7 +275,7 @@ void MultiHeadAttentionKernel::Run(rt_ns::RuntimeContext &rt) {
             if (causal && pos > p + seq)
               score += filter;
             scores[pos] = score;
-            maximum = std::max(maximum, score);
+            maximum = std::isnan(score) ? score : std::max(maximum, score);
           }
           float sum = 0;
           for (std::int64_t pos = 0; pos < t; ++pos) {
