@@ -218,6 +218,9 @@ TEST(CustomOperatorSupport, ProvidesLightSchemas) {
   EXPECT_EQ(schemas[1].name(), "CDist");
   EXPECT_EQ(schemas[2].name(), "CausalConvWithState");
   EXPECT_EQ(schemas[3].name(), "GroupQueryAttention");
+  ASSERT_EQ(schemas[3].inputs().size(), 12U);
+  EXPECT_EQ(schemas[3].inputs()[11].name, "head_sink");
+  EXPECT_EQ(schemas[3].inputs()[11].type, "T");
   EXPECT_EQ(schemas[4].name(), "LinearAttention");
   EXPECT_EQ(schemas[5].name(), "MatMulNBits");
   EXPECT_EQ(schemas[6].name(), "MoE");

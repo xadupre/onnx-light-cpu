@@ -30,6 +30,8 @@ namespace onnx_light_cpu {
 /// current step. ``local_window_size`` is -1 (full attention) or a positive
 /// INT32 token count including the current token, and requires causal
 /// attention. It restricts attended keys without truncating the cache.
+/// Optional ``head_sink`` supplies one virtual softmax logit per query head;
+/// it contributes to normalization but not to the value reduction.
 /// The attention score/softmax/value reduction itself is
 /// delegated to :cpp:class:`AttentionKernel` (this kernel never duplicates
 /// that math); only the RoPE application and the ``present`` cache
@@ -65,7 +67,8 @@ public:
              const ONNX_LIGHT_NAMESPACE::core::runtime::Tensor *attention_bias = nullptr,
              ONNX_LIGHT_NAMESPACE::core::runtime::RuntimeContext *rt = nullptr,
              ONNX_LIGHT_NAMESPACE::core::runtime::Tensor *present_key = nullptr,
-             ONNX_LIGHT_NAMESPACE::core::runtime::Tensor *present_value = nullptr) const;
+             ONNX_LIGHT_NAMESPACE::core::runtime::Tensor *present_value = nullptr,
+             const ONNX_LIGHT_NAMESPACE::core::runtime::Tensor *head_sink = nullptr) const;
 
 private:
   AttentionKernel attention_;

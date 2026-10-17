@@ -110,6 +110,7 @@ struct GqaArgs {
   const Tensor *sin_cache = nullptr;
   const Tensor *position_ids = nullptr;
   const Tensor *attention_bias = nullptr;
+  const Tensor *head_sink = nullptr;
 
   std::int64_t num_heads = 0;
   std::int64_t kv_num_heads = 0;
@@ -144,9 +145,6 @@ void ValidateUnsupportedAttributesAndInputs(const NodeProto &node) {
         "onnx_light_cpu::GroupQueryAttention: unsupported attribute (sliding-window cache, "
         "smooth softmax, qk_output, and quantized KV cache are "
         "not implemented).");
-  }
-  if (HasInput(node, 11)) {
-    throw std::invalid_argument("onnx_light_cpu::GroupQueryAttention: head_sink is not supported.");
   }
   if (HasInput(node, 12) || HasInput(node, 13)) {
     throw std::invalid_argument(
@@ -266,6 +264,7 @@ template <typename Lookup> GqaArgs ResolveAndValidate(const NodeProto &node, Loo
   args.sin_cache = has_sin ? &lookup(8) : nullptr;
   args.position_ids = has_position_ids ? &lookup(9) : nullptr;
   args.attention_bias = has_attention_bias ? &lookup(10) : nullptr;
+  args.head_sink = HasInput(node, 11) ? &lookup(11) : nullptr;
 
   args.dtype = static_cast<DataType>(args.query->data_type);
   if (args.dtype != DataType::FLOAT && args.dtype != DataType::FLOAT16 &&
@@ -294,6 +293,13 @@ template <typename Lookup> GqaArgs ResolveAndValidate(const NodeProto &node, Loo
       static_cast<DataType>(args.attention_bias->data_type) != args.dtype) {
     throw std::invalid_argument(
         "onnx_light_cpu::GroupQueryAttention: attention_bias type must match query.");
+  }
+  if (args.head_sink != nullptr &&
+      (static_cast<DataType>(args.head_sink->data_type) != args.dtype ||
+       args.head_sink->shape.size() != 1 || args.head_sink->shape[0] != args.num_heads)) {
+    throw std::invalid_argument(
+        "onnx_light_cpu::GroupQueryAttention: head_sink must match query type and have shape "
+        "(num_heads,).");
   }
 
   if (args.query->shape.size() != 3 ||
@@ -710,7 +716,8 @@ Tensor Compute(const AttentionKernel &attention, const GqaArgs &args, RuntimeCon
 
   const NodeProto attention_node = MakeAttentionNode(args);
   return attention(attention_node, *q_for_attention, *k_for_attention, *v_for_attention,
-                   args.attention_bias, rt, args.past_key, args.past_value, nullptr);
+                   args.attention_bias, rt, args.past_key, args.past_value, nullptr,
+                   args.head_sink);
 }
 
 } // namespace
@@ -744,8 +751,8 @@ Tensor GroupQueryAttentionKernel::operator()(
     const Tensor &seqlens_k, const Tensor &total_sequence_length, const Tensor *past_key,
     const Tensor *past_value, const Tensor *cos_cache, const Tensor *sin_cache,
     const Tensor *position_ids, const Tensor *attention_bias, RuntimeContext *rt,
-    Tensor *present_key, Tensor *present_value) const {
-  std::array<const Tensor *, 11> inputs{};
+    Tensor *present_key, Tensor *present_value, const Tensor *head_sink) const {
+  std::array<const Tensor *, 12> inputs{};
   inputs[0] = &query;
   inputs[1] = &key;
   inputs[2] = &value;
@@ -757,6 +764,7 @@ Tensor GroupQueryAttentionKernel::operator()(
   inputs[8] = sin_cache;
   inputs[9] = position_ids;
   inputs[10] = attention_bias;
+  inputs[11] = head_sink;
   const auto lookup = [&inputs](int index) -> const Tensor & {
     if (index >= static_cast<int>(inputs.size()) ||
         inputs[static_cast<std::size_t>(index)] == nullptr) {

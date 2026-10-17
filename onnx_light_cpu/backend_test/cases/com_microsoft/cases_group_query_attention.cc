@@ -564,6 +564,78 @@ void RegisterLocalWindowGroupQueryAttentionCase(std::vector<TestCase> &registry,
                                                           : 2.0e-5;
 }
 
+void RegisterSinkGroupQueryAttentionCase(std::vector<TestCase> &registry,
+                                         const OpsetId &microsoft_opset, DataType data_type,
+                                         std::int64_t sequence, std::int64_t past_length,
+                                         std::int64_t window) {
+  NodeProto node = MakeGroupQueryAttentionNode(4, 2, 1, std::nullopt, 2.0f);
+  node.ref_input()[3] = past_length != 0 ? "past_key" : "";
+  node.ref_input()[4] = past_length != 0 ? "past_value" : "";
+  for (int index = 7; index < 11; ++index) {
+    node.add_input("");
+  }
+  node.add_input("head_sink");
+  if (past_length != 0) {
+    node.add_output("present_key");
+    node.add_output("present_value");
+  }
+  if (window != -1) {
+    AddIntAttribute(node, "local_window_size", window);
+  }
+  const std::int64_t total_length = past_length + sequence;
+  const std::string name = "test_cpu_group_query_attention_sink_" +
+                           std::string(past_length == 0 ? "prefill" : "cached") + "_s" +
+                           std::to_string(sequence) + "_p" + std::to_string(past_length) + "_w" +
+                           std::to_string(window) + "_" + DataTypeSuffix(data_type);
+  Expect(
+      registry, node, name, {DefaultOpset(23), microsoft_opset},
+      [=]() -> IoData {
+        Tensor query = MakeBenchmarkTensor(data_type, {1, sequence, 32}, 987654321ULL);
+        Tensor key = MakeBenchmarkTensor(data_type, {1, sequence, 16}, 246813579ULL);
+        Tensor value = MakeBenchmarkTensor(data_type, {1, sequence, 16}, 135792468ULL);
+        Tensor seqlens_k =
+            Tensor::FromInt32("", {1}, {static_cast<std::int32_t>(total_length - 1)});
+        Tensor total_sequence_length =
+            Tensor::FromInt32("", {}, {static_cast<std::int32_t>(total_length)});
+        Tensor sink = MakeTensor(data_type, {4}, {1.5f, -0.75f, 0.5f, 2.0f});
+        Tensor past_key, past_value;
+        const Tensor *past_key_ptr = nullptr;
+        const Tensor *past_value_ptr = nullptr;
+        if (past_length != 0) {
+          past_key = MakeBenchmarkTensor(data_type, {1, 2, past_length, 8}, 111111111ULL);
+          past_value = MakeBenchmarkTensor(data_type, {1, 2, past_length, 8}, 222222222ULL);
+          past_key_ptr = &past_key;
+          past_value_ptr = &past_value;
+        }
+        const NaiveGroupQueryAttentionKernel kernel{node, KernelContext{microsoft_opset}};
+        Tensor present_key, present_value;
+        Tensor output = kernel(node, query, key, value, seqlens_k, total_sequence_length,
+                               past_key_ptr, past_value_ptr, nullptr, nullptr, nullptr, nullptr,
+                               nullptr, &present_key, &present_value, &sink);
+        std::vector<Tensor> inputs;
+        inputs.push_back(std::move(query));
+        inputs.push_back(std::move(key));
+        inputs.push_back(std::move(value));
+        if (past_length != 0) {
+          inputs.push_back(std::move(past_key));
+          inputs.push_back(std::move(past_value));
+        }
+        inputs.push_back(std::move(seqlens_k));
+        inputs.push_back(std::move(total_sequence_length));
+        inputs.push_back(std::move(sink));
+        std::vector<Tensor> outputs;
+        outputs.push_back(std::move(output));
+        if (past_length != 0) {
+          outputs.push_back(std::move(present_key));
+          outputs.push_back(std::move(present_value));
+        }
+        return IoData{std::move(inputs), std::move(outputs)};
+      },
+      "backend-test", bt_ns::TestCaseTag::AI_RT);
+  registry.back().rtol = data_type == DataType::BFLOAT16 ? 2e-2 : 3e-3;
+  registry.back().atol = data_type == DataType::BFLOAT16 ? 2e-3 : 3e-4;
+}
+
 } // namespace
 
 void RegisterCpuGroupQueryAttentionCases(std::vector<TestCase> &registry, TestMode mode) {
@@ -640,6 +712,11 @@ void RegisterCpuGroupQueryAttentionCases(std::vector<TestCase> &registry, TestMo
   RegisterCachedRotaryCorrectnessCase(registry, microsoft_opset);
   RegisterChatGlmGenerationCase(registry, microsoft_opset);
   for (const DataType data_type : {DataType::FLOAT, DataType::FLOAT16, DataType::BFLOAT16}) {
+    for (const std::int64_t window : {std::int64_t{-1}, std::int64_t{2}}) {
+      RegisterSinkGroupQueryAttentionCase(registry, microsoft_opset, data_type, 20, 0, window);
+      RegisterSinkGroupQueryAttentionCase(registry, microsoft_opset, data_type, 1, 5, window);
+      RegisterSinkGroupQueryAttentionCase(registry, microsoft_opset, data_type, 3, 5, window);
+    }
     for (const std::int64_t window : {std::int64_t{2048}, std::int64_t{-1}}) {
       RegisterLocalWindowGroupQueryAttentionCase(registry, microsoft_opset, data_type, 3, 2047,
                                                  window);

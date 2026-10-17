@@ -128,15 +128,17 @@ def _onnx_light_source_build_info():
             )
         extension_spec = find_spec("onnx_light.onnx_py._onnxpyprotoop")
         extension_path = (
-            Path(extension_spec.origin).resolve()
+            Path(extension_spec.origin)
             if extension_spec is not None and extension_spec.origin is not None
             else None
         )
         runtime_dir = include_dir / "onnx_py"
-        if extension_path is None or extension_path.parent != runtime_dir:
+        if extension_path is None or extension_path.parent.resolve() != runtime_dir:
             raise RuntimeError(
                 f"PYTHONPATH selects onnx-light from {include_dir}, but its native "
-                f"extension resolves to {extension_path}. Remove the conflicting "
+                f"extension was found at {extension_path} "
+                f"(resolved: {extension_path.resolve() if extension_path else None}); "
+                f"expected it in {runtime_dir}. Remove the conflicting "
                 "onnx-light installation; mixing runtimes is not supported."
             )
 

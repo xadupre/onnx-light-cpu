@@ -43,7 +43,8 @@ public:
              ONNX_LIGHT_NAMESPACE::core::runtime::RuntimeContext *rt = nullptr,
              const ONNX_LIGHT_NAMESPACE::core::runtime::Tensor *past_k = nullptr,
              const ONNX_LIGHT_NAMESPACE::core::runtime::Tensor *past_v = nullptr,
-             const ONNX_LIGHT_NAMESPACE::core::runtime::Tensor *nonpad_kv_seqlen = nullptr) const;
+             const ONNX_LIGHT_NAMESPACE::core::runtime::Tensor *nonpad_kv_seqlen = nullptr,
+             const ONNX_LIGHT_NAMESPACE::core::runtime::Tensor *head_sink = nullptr) const;
 };
 
 void RegisterAttentionKernel();

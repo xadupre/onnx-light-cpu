@@ -192,6 +192,8 @@ struct AttentionPlan {
   AttentionMaskKind mask_kind = AttentionMaskKind::kNone;
   /// ``softcap`` attribute, copied from the descriptor; ``0`` disables it.
   float softcap = 0.0f;
+  /// Optional per-query-head virtual logit; contributes only to softmax normalization.
+  const float *head_sink = nullptr;
   /// Whether softmax exponentiation and normalization use FP64 arithmetic.
   bool softmax_fp64 = false;
   /// ``qk_matmul_output_mode`` attribute, copied from the descriptor.
