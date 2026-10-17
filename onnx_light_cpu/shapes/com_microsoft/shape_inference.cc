@@ -780,9 +780,8 @@ void ComputeShapeMultiHeadAttention(ShapesContext &ctx,
   const auto per_head = [heads](const sym_ns::SymDim &width, const char *what) {
     if (width.IsInt())
       return DivideGqaDim(width, heads, what);
-    return heads == 1
-               ? width
-               : sym_ns::SymDim("(" + width.ToString() + ")/" + std::to_string(heads));
+    return heads == 1 ? width
+                      : sym_ns::SymDim("(" + width.ToString() + ")/" + std::to_string(heads));
   };
   auto head = per_head(qs[2], "query width");
   sym_ns::SymDim value_head(std::string("?"));
