@@ -15,6 +15,7 @@
 #include "onnx_light_cpu/kernels/com_microsoft/matmul_nbits_kernel.h"
 #include "onnx_light_cpu/kernels/com_microsoft/moe_kernel.h"
 #include "onnx_light_cpu/kernels/com_microsoft/naive_bias_gelu_kernel.h"
+#include "onnx_light_cpu/kernels/com_microsoft/naive_causal_conv_with_state_kernel.h"
 #include "onnx_light_cpu/kernels/com_microsoft/naive_cdist_kernel.h"
 #include "onnx_light_cpu/kernels/com_microsoft/naive_group_query_attention_kernel.h"
 #include "onnx_light_cpu/kernels/com_microsoft/naive_linear_attention_kernel.h"
@@ -164,7 +165,7 @@ void RegisterMicrosoftKernels(MicrosoftKernelImplementation implementation) {
   switch (implementation) {
   case MicrosoftKernelImplementation::NAIVE:
     RegisterNaiveBiasGeluKernel();
-    RegisterCausalConvWithStateKernel();
+    RegisterNaiveCausalConvWithStateKernel();
     RegisterNaiveCDistKernel();
     RegisterNaiveGroupQueryAttentionKernel();
     RegisterNaiveMicrosoftLinearAttentionKernel();

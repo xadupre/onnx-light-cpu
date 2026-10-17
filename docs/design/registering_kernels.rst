@@ -167,7 +167,7 @@ the default ONNX domain (the empty string is equivalent); ``ai.onnx.ml`` and
    "RegisterSwiGLUKernel", "ai.onnx", "SwiGLU"
    "RegisterTreeEnsembleKernel", "ai.onnx.ml", "TreeEnsemble"
    "RegisterVariadicElementwiseKernels", "ai.onnx", "Sum, Mean, Min, Max"
-   "RegisterMicrosoftKernels", "com.microsoft", "BiasGelu, CDist, GroupQueryAttention, LinearAttention, SkipLayerNormalization, SkipSimplifiedLayerNormalization"
+   "RegisterMicrosoftKernels", "com.microsoft", "BiasGelu, CDist, CausalConvWithState, GroupQueryAttention, LinearAttention, SkipLayerNormalization, SkipSimplifiedLayerNormalization"
    "RegisterMatMulNBitsKernel", "com.microsoft", "MatMulNBits"
    "RegisterMoEKernel", "com.microsoft", "MoE"
 
@@ -351,6 +351,17 @@ and a production optimized kernel. Add both registrars to the corresponding
 branch of ``RegisterMicrosoftKernels`` and add differential tests covering
 their complete shared contract. Backend ``TEST`` cases generate expectations
 with the naive implementation; ``BENCHMARK`` cases use the optimized one.
+
+For ``com.microsoft::CausalConvWithState``, the two adapters share only
+input validation, output planning, and node attribute parsing. The naive
+adapter indexes a virtual concatenation of past state and input; the production
+adapter uses lag-based convolution over independently scheduled batch/channel
+tasks. Scheduling cost includes all convolution taps and state copies, so
+prefill and empty-sequence state handoffs are not mistaken for cheap decode work.
+Differential tests cover all three types, both layouts (including higher-rank
+channels-last inputs), dilation, optional bias and past state, activation modes,
+and empty or short sequences. The ordinary FLOAT/FLOAT16 contract is also checked
+against onnx-light's concrete reference kernel.
 
 For ``com.microsoft::LinearAttention``, the test-only
 ``NaiveMicrosoftLinearAttentionKernel`` calls the concrete onnx-light

@@ -101,6 +101,7 @@ _BENCHMARK_TYPE_SUFFIXES["Mean"] = "(?:float32|float64)"
 _BENCHMARK_TYPE_SUFFIXES["com.microsoft::LinearAttention"] = "float32"
 for _op_type in {
     "BatchNormalization",
+    "CausalConvWithState",
     "GroupNormalization",
     "GroupQueryAttention",
     "InstanceNormalization",
@@ -115,6 +116,7 @@ _BENCHMARK_TYPE_SUFFIXES["SimplifiedLayerNormalization"] = "(?:float32|float64|f
 _BENCHMARK_TYPE_SUFFIXES["SkipSimplifiedLayerNormalization"] = "(?:float32|float16|bfloat16)"
 _BENCHMARK_OP_TAGS = {
     "com.microsoft::LinearAttention": "microsoft_linear_attention",
+    "CausalConvWithState": "causal_conv",
     "GroupQueryAttention": "group_query_attention",
     "RMSNormalization": "rms_normalization",
     "SimplifiedLayerNormalization": "simplified_layer_normalization",
@@ -830,6 +832,7 @@ class TestBackendCases(ExtTestCase):
                     "BitwiseOr",
                     "BitwiseXor",
                     "CDist",
+                    "CausalConvWithState",
                     "Div",
                     "Equal",
                     "Greater",

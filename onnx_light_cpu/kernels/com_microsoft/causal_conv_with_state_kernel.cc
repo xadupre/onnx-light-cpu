@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "onnx_light_cpu/kernels/com_microsoft/causal_conv_with_state_kernel.h"
+#include "onnx_light_cpu/kernels/com_microsoft/causal_conv_with_state_common.h"
 
 #include "onnx_light_cpu/impl/checked_arithmetic.h"
 #include "onnx_light_cpu/impl/execution.h"
@@ -65,7 +66,8 @@ void Compute(const Tensor &input, const Tensor &weight, const Tensor *bias, cons
   ExecuteRanges(
       CheckedIndexMultiply(static_cast<std::int64_t>(batch), static_cast<std::int64_t>(channels),
                            "CausalConvWithState", "batch channels"),
-      1, [&](std::int64_t first, std::int64_t last) {
+      static_cast<double>(length) * static_cast<double>(width) + 2.0 * static_cast<double>(pad),
+      [&](std::int64_t first, std::int64_t last) {
         for (auto task = first; task < last; ++task) {
           const std::size_t n = static_cast<std::size_t>(task);
           const std::size_t row = n / channels;
@@ -104,17 +106,12 @@ void Compute(const Tensor &input, const Tensor &weight, const Tensor *bias, cons
       });
 }
 
-bool HasInput(const NodeProto &node, int index) {
-  return node.input_size() > index && !node.input(index).empty();
-}
-
 } // namespace
 
-std::pair<Tensor, Tensor>
-CausalConvWithStateKernel::operator()(const Tensor &input, const Tensor &weight, const Tensor *bias,
-                                      const Tensor *past_state, const std::string &activation,
-                                      bool channels_last, std::int64_t dilation,
-                                      RuntimeContext *rt) const {
+detail::CausalConvWithStatePlan
+detail::PlanCausalConvWithState(const Tensor &input, const Tensor &weight, const Tensor *bias,
+                                const Tensor *past_state, const std::string &activation,
+                                bool channels_last, std::int64_t dilation) {
   constexpr const char *name = "CausalConvWithState";
   const DataType dtype = static_cast<DataType>(input.data_type);
   if (dtype != DataType::FLOAT && dtype != DataType::FLOAT16 && dtype != DataType::BFLOAT16) {
@@ -167,10 +164,26 @@ CausalConvWithStateKernel::operator()(const Tensor &input, const Tensor &weight,
   const std::size_t bytes = CheckedByteSize(elements, input.element_size(), name, "output");
   const std::size_t state_bytes =
       CheckedByteSize(state_elements, input.element_size(), name, "state");
-  Tensor output = rt ? rt->MakeOutputTensor(0, input.data_type, input.shape, bytes)
-                     : rt_ns::MakeOutputTensor(input.data_type, input.shape, bytes, nullptr);
-  Tensor present = rt ? rt->MakeOutputTensor(1, input.data_type, state_shape, state_bytes)
-                      : rt_ns::MakeOutputTensor(input.data_type, state_shape, state_bytes, nullptr);
+  CheckedIndexMultiply(static_cast<std::int64_t>(batch), static_cast<std::int64_t>(channels), name,
+                       "batch channels");
+  return {batch, channels, length, width, pad, state_shape, bytes, state_bytes};
+}
+
+std::pair<Tensor, Tensor>
+CausalConvWithStateKernel::operator()(const Tensor &input, const Tensor &weight, const Tensor *bias,
+                                      const Tensor *past_state, const std::string &activation,
+                                      bool channels_last, std::int64_t dilation,
+                                      RuntimeContext *rt) const {
+  const auto plan = detail::PlanCausalConvWithState(input, weight, bias, past_state, activation,
+                                                    channels_last, dilation);
+  Tensor output =
+      rt ? rt->MakeOutputTensor(0, input.data_type, input.shape, plan.output_bytes)
+         : rt_ns::MakeOutputTensor(input.data_type, input.shape, plan.output_bytes, nullptr);
+  Tensor present =
+      rt ? rt->MakeOutputTensor(1, input.data_type, plan.state_shape, plan.state_bytes)
+         : rt_ns::MakeOutputTensor(input.data_type, plan.state_shape, plan.state_bytes, nullptr);
+  const auto &[batch, channels, length, width, pad, state_shape, bytes, state_bytes] = plan;
+  const DataType dtype = static_cast<DataType>(input.data_type);
   if (batch != 0 && channels != 0) {
     if (dtype == DataType::FLOAT) {
       Compute<float>(input, weight, bias, past_state, output, present, batch, channels, length,
@@ -186,31 +199,7 @@ CausalConvWithStateKernel::operator()(const Tensor &input, const Tensor &weight,
 }
 
 void CausalConvWithStateKernel::Run(RuntimeContext &rt) {
-  rt.RecordKernelUsage(kName);
-  const NodeProto &node = *node_;
-  if (node.input_size() < 2 || node.input_size() > 4 || node.input(0).empty() ||
-      node.input(1).empty()) {
-    throw std::invalid_argument("CausalConvWithState: expected two to four inputs.");
-  }
-  rt_ns::RequireOutputCount(node, 2);
-  if (node.output(0).empty() || node.output(1).empty() ||
-      rt_ns::GetAttributeIntOrDefault(node, "ndim", 1) != 1 ||
-      rt_ns::GetAttributeIntOrDefault(node, "state_window", 0) != 0 ||
-      (rt_ns::GetAttributeIntOrDefault(node, "channels_last", 0) != 0 &&
-       rt_ns::GetAttributeIntOrDefault(node, "channels_last", 0) != 1)) {
-    throw std::invalid_argument(
-        "CausalConvWithState: requires two outputs, ndim=1 and state_window=0.");
-  }
-  const Tensor &input = rt_ns::GetInput(node, 0, rt.tensors());
-  const Tensor &weight = rt_ns::GetInput(node, 1, rt.tensors());
-  const Tensor *bias = HasInput(node, 2) ? &rt_ns::GetInput(node, 2, rt.tensors()) : nullptr;
-  const Tensor *past = HasInput(node, 3) ? &rt_ns::GetInput(node, 3, rt.tensors()) : nullptr;
-  auto [output, state] = (*this)(input, weight, bias, past,
-                                 rt_ns::GetAttributeStringOrDefault(node, "activation", "none"),
-                                 rt_ns::GetAttributeIntOrDefault(node, "channels_last", 0) == 1,
-                                 rt_ns::GetAttributeIntOrDefault(node, "dilation", 1), &rt);
-  rt_ns::SetOutput(node, 0, std::move(output), rt);
-  rt_ns::SetOutput(node, 1, std::move(state), rt);
+  detail::RunCausalConvWithState(*this, *node_, rt);
 }
 
 void RegisterCausalConvWithStateKernel() {
