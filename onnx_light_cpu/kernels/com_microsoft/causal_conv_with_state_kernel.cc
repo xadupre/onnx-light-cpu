@@ -9,6 +9,7 @@
 #include "onnx_light_cpu/impl/execution.h"
 #include "onnx_light_cpu/impl/math/half_conversion.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
+#include "onnx_light_cpu/kernels/tensor_buffer_validation.h"
 #include "onnx_light_cpu/schemas/com_microsoft/op_schema.h"
 
 #include "onnx_core/runtime/kernels/kernel_dispatch_table.h"
@@ -166,6 +167,14 @@ detail::PlanCausalConvWithState(const Tensor &input, const Tensor &weight, const
       CheckedByteSize(state_elements, input.element_size(), name, "state");
   CheckedIndexMultiply(static_cast<std::int64_t>(batch), static_cast<std::int64_t>(channels), name,
                        "batch channels");
+  tensor_validation::ValidateBufferCapacity(input, name, "input");
+  tensor_validation::ValidateBufferCapacity(weight, name, "weight");
+  if (bias != nullptr) {
+    tensor_validation::ValidateBufferCapacity(*bias, name, "bias");
+  }
+  if (past_state != nullptr) {
+    tensor_validation::ValidateBufferCapacity(*past_state, name, "past_state");
+  }
   return {batch, channels, length, width, pad, state_shape, bytes, state_bytes};
 }
 

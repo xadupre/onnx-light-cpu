@@ -283,4 +283,31 @@ TEST(CausalConvWithState, RejectsInvalidGeometryAndAttributes) {
                std::invalid_argument);
 }
 
+TEST(CausalConvWithState, RejectsUndersizedBorrowedBuffers) {
+  const onnx_light_cpu::CausalConvWithStateKernel kernel(Context());
+  const onnx_light_cpu::NaiveCausalConvWithStateKernel naive(Context());
+  const std::vector<float> storage{1, 2};
+  const auto *bytes = reinterpret_cast<const std::uint8_t *>(storage.data());
+  const auto input =
+      rt_ns::Tensor::Borrow("", rt_ns::DataType::FLOAT, {1, 1, 2}, bytes, sizeof(float));
+  const auto valid_input = rt_ns::Tensor::FromFloat("", {1, 1, 2}, {1, 2});
+  const auto valid_weight = rt_ns::Tensor::FromFloat("", {1, 1, 1}, {1});
+  const auto undersized_weight =
+      rt_ns::Tensor::Borrow("", rt_ns::DataType::FLOAT, {1, 1, 2}, bytes, sizeof(float));
+  const auto wider_weight = rt_ns::Tensor::FromFloat("", {1, 1, 2}, {1, 2});
+  const auto undersized_bias = rt_ns::Tensor::Borrow("", rt_ns::DataType::FLOAT, {1}, bytes, 0);
+  const auto undersized_past =
+      rt_ns::Tensor::Borrow("", rt_ns::DataType::FLOAT, {1, 1, 1}, bytes, 0);
+  const auto check = [&](const auto &implementation) {
+    EXPECT_THROW((void)implementation(input, valid_weight), std::invalid_argument);
+    EXPECT_THROW((void)implementation(valid_input, undersized_weight), std::invalid_argument);
+    EXPECT_THROW((void)implementation(valid_input, wider_weight, &undersized_bias),
+                 std::invalid_argument);
+    EXPECT_THROW((void)implementation(valid_input, wider_weight, nullptr, &undersized_past),
+                 std::invalid_argument);
+  };
+  check(kernel);
+  check(naive);
+}
+
 } // namespace
