@@ -169,6 +169,9 @@ void ComputeQMoE(const void *input, const void *router, QMoEWeight fc1, const vo
                  std::size_t intermediate, MoEDataType data_type, const QMoEAttributes &attributes,
                  float *values, std::size_t value_count, MoEScratch scratch) {
   ValidateType(data_type);
+  if (fc3 == nullptr && bias3 != nullptr) {
+    throw std::invalid_argument("QMoE: FC3 bias requires FC3 weights.");
+  }
   const auto required =
       ComputeQMoEScratchSize(tokens, hidden, experts, intermediate, attributes, fc3 != nullptr);
   if (tokens == 0) {
@@ -193,9 +196,6 @@ void ComputeQMoE(const void *input, const void *router, QMoEWeight fc1, const vo
         throw std::invalid_argument("QMoE: null expert weights or scales.");
       }
     }
-  }
-  if (fc3 == nullptr && bias3 != nullptr) {
-    throw std::invalid_argument("QMoE: FC3 bias requires FC3 weights.");
   }
   const auto width = intermediate * (attributes.activation == "swiglu" ? 2 : 1);
   float *cursor = values;
