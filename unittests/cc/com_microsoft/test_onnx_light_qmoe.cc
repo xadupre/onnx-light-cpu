@@ -97,6 +97,23 @@ TEST(QMoERuntime, BlockScalesApplyToStoredRowsRatherThanOutputColumns) {
   }
 }
 
+TEST(QMoERuntime, AcceptsCanonicalOutputMajorTensorScalesAndUnsignedInt8) {
+  for (const int64_t bits : {4, 8}) {
+    Inputs inputs;
+    inputs.x = Tensor::FromFloat("", {1, 3}, {2, 4, 6});
+    inputs.w1 = bits == 4 ? Tensor::FromUint8("", {1, 2, 2}, {0x89, 0x08, 0x98, 0x08})
+                          : Tensor::FromUint8("", {1, 2, 3}, {129, 128, 128, 128, 129, 128});
+    inputs.s1 = Tensor::FromFloat("", {1, 2}, {0.5f, 0.25f});
+    inputs.w2 = bits == 4 ? Tensor::FromUint8("", {1, 3, 1}, {0x89, 0x98, 0x99})
+                          : Tensor::FromUint8("", {1, 3, 2}, {129, 128, 128, 129, 129, 129});
+    inputs.s2 = Tensor::FromFloat("", {1, 3}, {1, 2, 3});
+    const Tensor output = inputs.Run(QMoEKernel(MakeNode(bits), Context()));
+    EXPECT_FLOAT_EQ(output.AsFloat()[0], 1.0f);
+    EXPECT_FLOAT_EQ(output.AsFloat()[1], 2.0f);
+    EXPECT_FLOAT_EQ(output.AsFloat()[2], 6.0f);
+  }
+}
+
 rt_ns::Tensors RunGraph(const NodeProto &node) {
   static const bool registered = [] {
     onnx_light_cpu::RegisterQMoEKernel();

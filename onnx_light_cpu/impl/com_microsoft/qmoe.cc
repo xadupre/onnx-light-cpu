@@ -120,6 +120,10 @@ void DequantizeQMoEWeights(QMoEWeight weight, float *output, std::size_t experts
       weight.data == nullptr || weight.scales == nullptr || output == nullptr) {
     throw std::invalid_argument("QMoE: invalid quantized weights or expert_weight_bits.");
   }
+  if (attributes.block_size != 0 &&
+      (attributes.block_size < 16 || (attributes.block_size & (attributes.block_size - 1)) != 0)) {
+    throw std::invalid_argument("QMoE: block_size must be zero or a power of two at least 16.");
+  }
   const auto rows = weight.output_major ? outputs : inputs;
   const auto columns = weight.output_major ? inputs : outputs;
   const auto packed = columns / (8 / attributes.expert_weight_bits) +

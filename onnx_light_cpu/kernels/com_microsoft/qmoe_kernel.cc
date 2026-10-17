@@ -242,6 +242,9 @@ Tensor QMoEKernel::operator()(const Tensor &input, const Tensor &router, const T
   auto *allocator = rt ? rt->execution_allocator() : ctx_.allocator;
   Tensor output = rt ? rt->MakeOutputTensor(0, input.data_type, input.shape, bytes)
                      : rt_ns::MakeOutputTensor(input.data_type, input.shape, bytes, allocator);
+  if (tokens == 0) {
+    return output;
+  }
   rt_ns::detail::TemporaryTypedBuffer<float> values(size.value_count, allocator,
                                                     "QMoE dequantization");
   rt_ns::detail::TemporaryTypedBuffer<float> workspace(size.moe.value_count, allocator,
