@@ -841,9 +841,11 @@ void ComputeShapeMultiHeadAttention(ShapesContext &ctx,
       fail("invalid attention bias.");
     for (int i = 0; i < 2; ++i) {
       const auto &dim = ab.Shape()[i];
+      const auto expected = i == 0 ? batch : sym_ns::SymDim(heads);
       if (dim.IsInt() && dim.AsInt() == 1)
         continue;
-      MergeGqaDim(ctx, dim, i == 0 ? batch : sym_ns::SymDim(heads), "attention bias");
+      if (dim.IsInt() || (expected.IsInt() && expected.AsInt() == 1))
+        MergeGqaDim(ctx, dim, expected, "attention bias");
     }
     MergeGqaDim(ctx, ab.Shape()[2], qs[1], "attention bias S");
     MergeGqaDim(ctx, ab.Shape()[3], total, "attention bias T");
