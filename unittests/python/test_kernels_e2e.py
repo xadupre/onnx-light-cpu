@@ -845,6 +845,7 @@ class TestBackendCases(ExtTestCase):
                     "LessOrEqual",
                     "Max",
                     "MatMulNBits",
+                    "MultiHeadAttention",
                     "Mean",
                     "Min",
                     "Mod",

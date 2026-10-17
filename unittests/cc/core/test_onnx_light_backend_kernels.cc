@@ -453,6 +453,12 @@ TEST(OnnxLightBackendKernels, GroupQueryAttentionRunsThroughRuntime) {
   EXPECT_TRUE(failures.empty()) << Describe(failures);
 }
 
+TEST(OnnxLightBackendKernels, MultiHeadAttentionRunsThroughRuntime) {
+  const std::vector<std::string> failures =
+      RunCpuBackendCases("MultiHeadAttention", core::backend_test::TestMode::TEST);
+  EXPECT_TRUE(failures.empty()) << Describe(failures);
+}
+
 TEST(OnnxLightBackendKernels, MicrosoftCorrectnessCasesRunWithNaiveRegistration) {
   for (const std::string &op_type :
        {"BiasGelu", "CDist", "CausalConvWithState", "GroupQueryAttention", "LinearAttention",
