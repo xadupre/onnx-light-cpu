@@ -194,7 +194,7 @@ TEST(QMoERuntime, RejectsInvalidQuantizationAndRoutingAttributes) {
       }
     }
     if (entry.first != "expert_weight_bits" && entry.first != "block_size") {
-      ONNX_LIGHT_NAMESPACE::AddAttribute(node, entry.first, entry.second);
+      ONNX_LIGHT_NAMESPACE::AddAttribute(node, entry.first.c_str(), entry.second);
     }
     EXPECT_THROW(QMoEKernel(node, Context()), std::invalid_argument);
   }
@@ -206,7 +206,7 @@ TEST(QMoERuntime, RejectsInvalidActivationParameters) {
            {"activation_beta", std::numeric_limits<float>::infinity()},
            {"swiglu_limit", -1.0f}}) {
     NodeProto node = MakeNode();
-    ONNX_LIGHT_NAMESPACE::AddAttribute(node, entry.first, entry.second);
+    ONNX_LIGHT_NAMESPACE::AddAttribute(node, entry.first.c_str(), entry.second);
     EXPECT_THROW(QMoEKernel(node, Context()), std::invalid_argument);
   }
 }

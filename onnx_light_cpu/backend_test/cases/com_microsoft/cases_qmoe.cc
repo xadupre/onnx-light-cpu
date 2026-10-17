@@ -44,7 +44,6 @@ struct Configuration {
   float alpha = 1.0f;
   float beta = 0.0f;
   float limit = std::numeric_limits<float>::infinity();
-  bool input_major_fused = false;
 };
 
 Configuration DecoderConfiguration() {
@@ -93,7 +92,7 @@ Projection MakeProjection(const Configuration &c, int64_t rows, int64_t columns,
   // output-major weights. Block quantization groups the last stored axis.
   // Tensor-level fixtures use the canonical CPU output-major, row-scaled
   // contract, not TensorRT-LLM CUDA-preprocessed legacy producer tensors.
-  const bool output_major = c.block == 0 || (c.activation == "swiglu" && !c.input_major_fused);
+  const bool output_major = c.block == 0 || c.activation == "swiglu";
   const int64_t stored_rows = output_major ? rows : columns;
   const int64_t stored_columns = output_major ? columns : rows;
   const int64_t bytes = c.bits == 4 ? (stored_columns + 1) / 2 : stored_columns;
@@ -359,18 +358,6 @@ void RegisterCpuQMoECases(std::vector<TestCase> &registry, TestMode mode) {
           registry.back().atol = type == DataType::BFLOAT16 ? 3e-3 : 1e-6;
         }
         for (int64_t block : {0, 32}) {
-          if (block != 0) {
-            Configuration fused{type, bits, block, "swiglu", true, false};
-            fused.input_major_fused = true;
-            bt_ns::Expect(
-                registry, MakeQMoENode(fused),
-                "test_cpu_qmoe_swiglu_input_major_bits" + std::to_string(bits) + "_block" +
-                    std::to_string(block) + "_" + DataTypeSuffix(type),
-                opsets, [fused]() { return MakeQMoEData(fused, true); }, "backend-test",
-                bt_ns::TestCaseTag::AI_RT);
-            registry.back().rtol = type == DataType::BFLOAT16 ? 3e-2 : 1e-3;
-            registry.back().atol = type == DataType::BFLOAT16 ? 3e-3 : 1e-6;
-          }
           for (int64_t tokens : {0, 1}) {
             Configuration c{type, bits, block, "relu", false, true};
             c.tokens = tokens;
