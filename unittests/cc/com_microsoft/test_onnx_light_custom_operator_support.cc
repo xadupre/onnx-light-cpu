@@ -166,6 +166,46 @@ TEST(CustomOperatorSupport, QMoESymbolicShapeAndInvalidContracts) {
   EXPECT_THROW(onnx_light_cpu::ComputeShapeQMoE(ctx, node), std::invalid_argument);
 }
 
+TEST(CustomOperatorSupport, QMoESymbolicHiddenDimensionDefersAmbiguousLayout) {
+  const auto make_node = [](bool with_bias) {
+    NodeProto node;
+    node.set_domain(onnx_light_cpu::kMicrosoftDomain);
+    node.set_op_type("QMoE");
+    for (const char *name : {"X", "router", "W1", "S1", with_bias ? "B1" : "", "W2", "S2"}) {
+      node.add_input(name);
+    }
+    node.add_output("Y");
+    ONNX_LIGHT_NAMESPACE::AddAttribute(node, "expert_weight_bits", int64_t{4});
+    ONNX_LIGHT_NAMESPACE::AddAttribute(node, "block_size", int64_t{32});
+    return node;
+  };
+  const auto populate = [](shapes_ns::ShapesContext &ctx, bool with_bias) {
+    ctx.Set("X", SymTensor(nullptr, TensorType::kFloat, {SymDim("T"), SymDim("H")}));
+    ctx.Set("router", SymTensor(nullptr, TensorType::kFloat, {SymDim("T"), SymDim(3)}));
+    ctx.Set("W1", SymTensor(nullptr, TensorType::kUint8, {SymDim(3), SymDim(7), SymDim(3)}));
+    ctx.Set("S1", SymTensor(nullptr, TensorType::kFloat, {SymDim(3), SymDim(7), SymDim(1)}));
+    ctx.Set("W2", SymTensor(nullptr, TensorType::kUint8, {SymDim(3), SymDim(5), SymDim(4)}));
+    ctx.Set("S2", SymTensor(nullptr, TensorType::kFloat, {SymDim(3), SymDim(5), SymDim(1)}));
+    if (with_bias) {
+      ctx.Set("B1", SymTensor(nullptr, TensorType::kFloat, {SymDim(3), SymDim(7)}));
+    }
+  };
+
+  shapes_ns::ShapesContext ambiguous;
+  populate(ambiguous, false);
+  onnx_light_cpu::ComputeShapeQMoE(ambiguous, make_node(false));
+  EXPECT_EQ(ambiguous.Get("Y").Shape(), ambiguous.Get("X").Shape());
+  EXPECT_EQ(ambiguous.Constraints().count({"H", "5"}), 0U);
+  EXPECT_EQ(ambiguous.Constraints().count({"H", "7"}), 0U);
+
+  shapes_ns::ShapesContext disambiguated;
+  populate(disambiguated, true);
+  onnx_light_cpu::ComputeShapeQMoE(disambiguated, make_node(true));
+  EXPECT_EQ(disambiguated.Get("Y").Shape(), disambiguated.Get("X").Shape());
+  EXPECT_EQ(disambiguated.Constraints().count({"H", "5"}), 1U);
+  EXPECT_EQ(disambiguated.Constraints().count({"H", "7"}), 0U);
+}
+
 TEST(CustomOperatorSupport, QMoESplitExpertShapes) {
   NodeProto node;
   node.set_domain(onnx_light_cpu::kMicrosoftDomain);

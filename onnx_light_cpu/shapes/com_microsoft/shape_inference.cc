@@ -23,6 +23,7 @@
 #include <cstdint>
 #include <limits>
 #include <mutex>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -584,9 +585,16 @@ void ComputeShapeQMoE(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE::NodeProto 
   const bool fused = activation == "swiglu";
   bool output_major = fused;
   bool rowwise = false;
+  bool layout_ambiguous = false;
   auto width = fc2.Shape()[1];
   auto intermediate = width;
-  const auto fits = [&](bool major, bool row_scales) {
+  struct Layout {
+    bool output_major;
+    bool rowwise;
+    sym_ns::SymDim intermediate;
+    sym_ns::SymDim width;
+  };
+  const auto fits = [&](bool major, bool row_scales) -> std::optional<Layout> {
     const auto candidate_width =
         major ? ctx.Get(node.input(2)).Shape()[1]
         : fused && fc2.Shape()[1].IsInt()
@@ -595,7 +603,7 @@ void ComputeShapeQMoE(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE::NodeProto 
                 : fc2.Shape()[1];
     if (candidate_width.IsInt() &&
         (candidate_width.AsInt() <= 0 || (fused && candidate_width.AsInt() % 2 != 0))) {
-      return false;
+      return std::nullopt;
     }
     const auto candidate = fused ? divide_up(candidate_width, 2) : candidate_width;
     const auto match_projection = [&](int wi, int si, const sym_ns::SymDim &out,
@@ -614,17 +622,36 @@ void ComputeShapeQMoE(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE::NodeProto 
     if (!match_projection(2, 3, candidate_width, hidden) ||
         !match_projection(5, 6, hidden, candidate) ||
         (third && !match_projection(8, 9, candidate, hidden))) {
-      return false;
+      return std::nullopt;
     }
-    output_major = major;
-    rowwise = row_scales;
-    intermediate = candidate_width;
-    width = candidate;
-    return true;
+    const auto bias_matches = [&](int bias_index, const sym_ns::SymDim &outputs) {
+      if (!HasInput(node, bias_index)) {
+        return true;
+      }
+      const auto &bias = ctx.Get(node.input(bias_index));
+      return bias.Shape().Rank() == 2 && compatible(experts, bias.Shape()[0]) &&
+             compatible(outputs, bias.Shape()[1]);
+    };
+    if (!bias_matches(4, candidate_width) || !bias_matches(7, hidden) ||
+        (third && !bias_matches(10, candidate))) {
+      return std::nullopt;
+    }
+    return Layout{major, row_scales, candidate_width, candidate};
   };
   // Tensor quantization uses raw CPU output-major, per-row scales only.
-  if (block == 0 ? !fits(true, true) : (!fits(fused, false) && !fits(!fused, false))) {
+  const auto output_layout = fits(true, block == 0);
+  const std::optional<Layout> input_layout = block == 0 ? std::nullopt : fits(false, false);
+  if (!output_layout && !input_layout) {
     throw std::invalid_argument("ComputeShapeQMoE: incompatible expert layouts.");
+  }
+  if (output_layout && input_layout) {
+    layout_ambiguous = true;
+  } else {
+    const auto &layout = output_layout ? *output_layout : *input_layout;
+    output_major = layout.output_major;
+    rowwise = layout.rowwise;
+    intermediate = layout.intermediate;
+    width = layout.width;
   }
   const auto rows =
       shape.Rank() == 2 ? shape[0]
@@ -646,10 +673,20 @@ void ComputeShapeQMoE(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE::NodeProto 
       throw std::invalid_argument("ComputeShapeQMoE: invalid projection types or ranks.");
     }
     ConstrainEqual(ctx, experts, weight.Shape()[0], "ComputeShapeQMoE: weight experts mismatch.");
+    ConstrainEqual(ctx, experts, scales.Shape()[0], "ComputeShapeQMoE: scale experts mismatch.");
+    if (HasInput(node, bias_index)) {
+      const auto &bias = ctx.Get(node.input(bias_index));
+      if (bias.Dtype() != type || bias.Shape().Rank() != 2) {
+        throw std::invalid_argument("ComputeShapeQMoE: invalid bias type or rank.");
+      }
+      ConstrainEqual(ctx, experts, bias.Shape()[0], "ComputeShapeQMoE: bias experts mismatch.");
+    }
+    if (layout_ambiguous) {
+      return;
+    }
     ConstrainEqual(ctx, leading, weight.Shape()[1], "ComputeShapeQMoE: weight rows mismatch.");
     ConstrainEqual(ctx, divide_up(last, 8 / bits), weight.Shape()[2],
                    "ComputeShapeQMoE: packed width mismatch.");
-    ConstrainEqual(ctx, experts, scales.Shape()[0], "ComputeShapeQMoE: scale experts mismatch.");
     ConstrainEqual(ctx, block == 0 && !rowwise ? last : leading, scales.Shape()[1],
                    "ComputeShapeQMoE: scale rows mismatch.");
     if (block != 0) {
@@ -658,10 +695,6 @@ void ComputeShapeQMoE(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE::NodeProto 
     }
     if (HasInput(node, bias_index)) {
       const auto &bias = ctx.Get(node.input(bias_index));
-      if (bias.Dtype() != type || bias.Shape().Rank() != 2) {
-        throw std::invalid_argument("ComputeShapeQMoE: invalid bias type or rank.");
-      }
-      ConstrainEqual(ctx, experts, bias.Shape()[0], "ComputeShapeQMoE: bias experts mismatch.");
       ConstrainEqual(ctx, outputs, bias.Shape()[1], "ComputeShapeQMoE: bias width mismatch.");
     }
   };
