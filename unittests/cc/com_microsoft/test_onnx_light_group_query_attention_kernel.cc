@@ -15,6 +15,7 @@
 
 #include <gtest/gtest.h>
 
+#include <cmath>
 #include <cstdint>
 #include <limits>
 #include <stdexcept>
@@ -698,6 +699,40 @@ TEST(OnnxLightGroupQueryAttentionKernel, BothKernelsRunLocalWindowThroughRuntime
   check(optimized);
   onnx_light_cpu::NaiveGroupQueryAttentionKernel naive(node, MakeCtx());
   check(naive);
+}
+
+TEST(OnnxLightGroupQueryAttentionKernel, SinkNormalizesWithoutContributingValue) {
+  for (const DataType dtype : {DataType::FLOAT, DataType::FLOAT16, DataType::BFLOAT16}) {
+    SCOPED_TRACE(static_cast<int>(dtype));
+    NodeProto node = MakeGqaNode(2, 1, false, false, false);
+    node.ref_input()[11] = "head_sink";
+    const Tensor query = MakeFloatingTensor(dtype, {1, 1, 2}, {0.0f, 0.0f});
+    const Tensor key = MakeFloatingTensor(dtype, {1, 1, 1}, {0.0f});
+    const Tensor value = MakeFloatingTensor(dtype, {1, 1, 1}, {4.0f});
+    const Tensor sink = MakeFloatingTensor(dtype, {2}, {0.0f, 1.0f});
+    const Tensor seqlens = Tensor::FromInt32("", {1}, {0});
+    const Tensor total = Tensor::FromInt32("", {}, {1});
+    const auto check = [&](auto &kernel) {
+      const Tensor result =
+          kernel(node, query, key, value, seqlens, total, nullptr, nullptr, nullptr, nullptr,
+                 nullptr, nullptr, nullptr, nullptr, nullptr, &sink);
+      EXPECT_NEAR(ReadFloatingElement(result, 0), 2.0f, 0.02f);
+      EXPECT_NEAR(ReadFloatingElement(result, 1), 4.0f / (1.0f + std::exp(1.0f)), 0.02f);
+      const auto invalid_sink = [&](const Tensor &invalid) {
+        EXPECT_THROW((void)kernel(node, query, key, value, seqlens, total, nullptr, nullptr,
+                                  nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+                                  &invalid),
+                     std::invalid_argument);
+      };
+      invalid_sink(MakeFloatingTensor(dtype, {}, {0.0f}));
+      invalid_sink(MakeFloatingTensor(dtype, {1}, {0.0f}));
+      invalid_sink(Tensor::FromInt32("", {2}, {0, 1}));
+    };
+    onnx_light_cpu::GroupQueryAttentionKernel optimized(node, MakeCtx());
+    onnx_light_cpu::NaiveGroupQueryAttentionKernel naive(node, MakeCtx());
+    check(optimized);
+    check(naive);
+  }
 }
 
 } // namespace

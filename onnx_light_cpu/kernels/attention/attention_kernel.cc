@@ -166,7 +166,8 @@ void ComputeHalfAttentionMaterialized(const AttentionPlan &plan, DataType data_t
 Tensor Compute(const Tensor &q, const Tensor &k, const Tensor &v, const Tensor *mask,
                const Tensor *past_k, const Tensor *past_v, const Tensor *nonpad_kv_seqlen,
                const AttentionDescriptor &descriptor, RuntimeContext *rt, Tensor *qk_output,
-               Tensor *present_key_output, Tensor *present_value_output) {
+               Tensor *present_key_output, Tensor *present_value_output,
+               const Tensor *head_sink = nullptr) {
   const DataType data_type = static_cast<DataType>(q.data_type);
   if (k.data_type != q.data_type || v.data_type != q.data_type ||
       (data_type != DataType::FLOAT && data_type != DataType::FLOAT16 &&
@@ -215,11 +216,32 @@ Tensor Compute(const Tensor &q, const Tensor &k, const Tensor &v, const Tensor *
     }
   }
 
-  const AttentionPlan plan(
+  AttentionPlan plan(
       descriptor, layout, ShapeAsInt64(q.shape), ShapeAsInt64(k.shape), ShapeAsInt64(v.shape),
       mask != nullptr ? ShapeAsInt64(mask->shape) : std::vector<std::int64_t>{}, mask_kind,
       past_k != nullptr ? ShapeAsInt64(past_k->shape) : std::vector<std::int64_t>{},
       past_v != nullptr ? ShapeAsInt64(past_v->shape) : std::vector<std::int64_t>{});
+  std::vector<float> sink_values;
+  if (head_sink != nullptr) {
+    if (head_sink->data_type != q.data_type || head_sink->shape.size() != 1 ||
+        head_sink->shape[0] != static_cast<std::int64_t>(plan.q_num_heads)) {
+      throw std::invalid_argument(
+          "onnx_light_cpu::AttentionKernel: head_sink must match Q type and have shape "
+          "(q_num_heads,).");
+    }
+    sink_values.resize(plan.q_num_heads);
+    if (data_type == DataType::FLOAT) {
+      const float *values = reinterpret_cast<const float *>(head_sink->bytes());
+      std::copy_n(values, sink_values.size(), sink_values.data());
+    } else if (data_type == DataType::FLOAT16) {
+      detail::ConvertFloat16ToFloat32(reinterpret_cast<const std::uint16_t *>(head_sink->bytes()),
+                                      sink_values.data(), sink_values.size());
+    } else {
+      detail::ConvertBFloat16ToFloat32(reinterpret_cast<const std::uint16_t *>(head_sink->bytes()),
+                                       sink_values.data(), sink_values.size());
+    }
+    plan.head_sink = sink_values.data();
+  }
 
   const std::vector<std::int64_t> plan_output_shape = plan.output_shape();
   Shape output_shape;
@@ -440,11 +462,11 @@ AttentionKernel::AttentionKernel(const rt_ns::KernelContext &ctx) : KernelBase(c
 Tensor AttentionKernel::operator()(const NodeProto &node, const Tensor &q, const Tensor &k,
                                    const Tensor &v, const Tensor *mask, RuntimeContext *rt,
                                    const Tensor *past_k, const Tensor *past_v,
-                                   const Tensor *nonpad_kv_seqlen) const {
+                                   const Tensor *nonpad_kv_seqlen, const Tensor *head_sink) const {
   const AttentionDescriptor descriptor = BuildDescriptor(node);
   Tensor qk_output, present_key, present_value;
   return Compute(q, k, v, mask, past_k, past_v, nonpad_kv_seqlen, descriptor, rt, &qk_output,
-                 &present_key, &present_value);
+                 &present_key, &present_value, head_sink);
 }
 
 void AttentionKernel::Run(RuntimeContext &rt) {

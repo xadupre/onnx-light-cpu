@@ -57,15 +57,18 @@ from onnx_light.onnx.backend import (
     make_test_class,
 )
 from onnx_light.onnx.reference import ReferenceEvaluator
+from onnx_light.onnx_core.graph_builder import GraphBuilder
 
 from onnx_light_cpu import (
     RegisteredKernel,
     clear_used_kernel_names,
     custom_op_schemas,
     has_backend_test_cases,
+    operator_schema_lookup,
     register_backend_test_cases,
     register_kernel_for_session,
     register_kernels,
+    register_operator_support,
     registered_kernel_names,
     registered_kernels,
     run_backend_correctness_tests,
@@ -935,7 +938,7 @@ class TestBackendCases(ExtTestCase):
             int(TensorProto.FLOAT16),
             int(TensorProto.BFLOAT16),
         }
-        for mode, expected_count in ((TestMode.TEST, 21), (TestMode.BENCHMARK, 15)):
+        for mode, expected_count in ((TestMode.TEST, 39), (TestMode.BENCHMARK, 15)):
             cases = [
                 tc
                 for tc in collect_test_cases("GroupQueryAttention", mode=mode)
@@ -959,6 +962,27 @@ class TestBackendCases(ExtTestCase):
                     ) in names
             else:
                 names = {tc.name for tc in cases}
+                sink_names = {
+                    f"test_cpu_group_query_attention_sink_{kind}_s{sequence}_p{past}_w{window}_{dtype}"
+                    for dtype in ("float32", "float16", "bfloat16")
+                    for window in (-1, 2)
+                    for kind, sequence, past in (
+                        ("prefill", 20, 0),
+                        ("cached", 1, 5),
+                        ("cached", 3, 5),
+                    )
+                }
+                sink_cases = [
+                    tc
+                    for tc in cases
+                    if tc.name.startswith("test_cpu_group_query_attention_sink_")
+                ]
+                assert {tc.name for tc in sink_cases} == sink_names
+                assert all(
+                    len(tc.model.graph.node[0].input) == 12
+                    and tc.model.graph.node[0].input[11] == "head_sink"
+                    for tc in sink_cases
+                )
                 packed_names = {
                     "test_cpu_group_query_attention_packed_gqa_causal_float32",
                     "test_cpu_group_query_attention_packed_mqa_bidirectional_scale_float16",
@@ -979,6 +1003,74 @@ class TestBackendCases(ExtTestCase):
                 assert len(cached_case.model.graph.input) == 9
                 assert len(cached_case.model.graph.output) == 3
                 assert "test_cpu_group_query_attention_model_chatglm_generation_float32" in names
+
+    def test_group_query_attention_sink_schema(self):
+        schema = custom_op_schemas("GroupQueryAttention")[0]
+        assert len(schema.inputs) == 12
+        assert schema.inputs[11].name == "head_sink"
+        assert schema.inputs[11].type == "T"
+        register_operator_support()
+        for dtype in (TensorProto.FLOAT, TensorProto.FLOAT16, TensorProto.BFLOAT16):
+            with self.subTest(dtype=dtype):
+                inputs = [
+                    helper.make_tensor_value_info(name, dtype, shape)
+                    for name, shape in (
+                        ("query", ["B", "S", 8]),
+                        ("key", ["B", "S", 4]),
+                        ("value", ["B", "S", 4]),
+                        ("head_sink", [2]),
+                    )
+                ]
+                inputs.extend(
+                    [
+                        helper.make_tensor_value_info("seqlens_k", TensorProto.INT32, ["B"]),
+                        helper.make_tensor_value_info(
+                            "total_sequence_length", TensorProto.INT32, []
+                        ),
+                    ]
+                )
+                node = helper.make_node(
+                    "GroupQueryAttention",
+                    [
+                        "query",
+                        "key",
+                        "value",
+                        "",
+                        "",
+                        "seqlens_k",
+                        "total_sequence_length",
+                        "",
+                        "",
+                        "",
+                        "",
+                        "head_sink",
+                    ],
+                    ["output"],
+                    domain="com.microsoft",
+                    num_heads=2,
+                    kv_num_heads=1,
+                )
+                model = helper.make_model(
+                    helper.make_graph(
+                        [node],
+                        "gqa-head-sink",
+                        inputs,
+                        [helper.make_tensor_value_info("output", dtype, None)],
+                    ),
+                    opset_imports=[
+                        helper.make_opsetid("", 23),
+                        helper.make_opsetid("com.microsoft", 1),
+                    ],
+                    ir_version=10,
+                )
+                builder = GraphBuilder(model, schema_lookup=operator_schema_lookup)
+                output = builder.to_onnx("model").graph.output[0].type.tensor_type
+                assert output.elem_type == dtype
+                assert [dim.dim_param or dim.dim_value for dim in output.shape.dim] == [
+                    "B",
+                    "S",
+                    8,
+                ]
 
     def test_group_query_attention_benchmarks_match_onnx_runtime(self):
         try:

@@ -180,6 +180,10 @@ LightOpSchema MakeGroupQueryAttentionSchema() {
        {"attention_bias",
         "Optional additive/boolean mask broadcastable to "
         "(batch, num_heads, sequence, total_sequence_length).",
+        "T"},
+       {"head_sink",
+        "Optional tensor with shape (num_heads,) and the query type. Each value is a virtual "
+        "softmax logit contributing to normalization without contributing to the value reduction.",
         "T"}},
       {{"output",
         "Output tensor with shape (batch, sequence, num_heads * value_head_size) and query type.",
@@ -196,7 +200,8 @@ LightOpSchema MakeGroupQueryAttentionSchema() {
         "T_CACHE"}},
       {{"T",
         {TensorType::kFloat16, TensorType::kFloat, TensorType::kBfloat16},
-        "Constrain query, key, value, output, and rotary cache tensors to floating-point "
+        "Constrain query, key, value, output, rotary cache, and head_sink tensors to "
+        "floating-point "
         "tensors."},
        {"T_CACHE",
         {TensorType::kFloat16, TensorType::kFloat, TensorType::kBfloat16},

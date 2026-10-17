@@ -399,7 +399,8 @@ void ComputeAttentionFloat32Materialized(const AttentionPlan &plan, const float 
         const float *q_row = q_head + i * plan.q_strides.sequence;
         const std::ptrdiff_t mask_row =
             mask_base + static_cast<std::ptrdiff_t>(i) * plan.mask_strides.q;
-        float row_max = kNegativeInfinity;
+        const float sink = plan.head_sink != nullptr ? plan.head_sink[h] : kNegativeInfinity;
+        float row_max = sink;
         // Tracks whether every KV position of this row is disallowed by the
         // combined causal/padding/attn_mask bias (independent of the raw QK
         // score), matching the spec's fully-masked-row guard.
@@ -488,6 +489,14 @@ void ComputeAttentionFloat32Materialized(const AttentionPlan &plan, const float 
         }
         double sum_fp64 = 0.0;
         float sum_fp32 = 0.0f;
+        if (sink != kNegativeInfinity) {
+          const double shifted = static_cast<double>(sink) - static_cast<double>(row_max);
+          if (plan.softmax_fp64) {
+            sum_fp64 = std::exp(shifted);
+          } else {
+            sum_fp32 = std::exp(static_cast<float>(shifted));
+          }
+        }
         for (std::size_t j = 0; j < total_kv_length; ++j) {
           const double shifted = static_cast<double>(scores[j]) - static_cast<double>(row_max);
           const double probability =
@@ -959,7 +968,7 @@ void ComputeAttentionStreamingGeneric(const AttentionPlan &plan, const typename 
   // mask layout (e.g. broadcast) falls back to the scalar path unchanged.
   static const bool has_avx2_fma = DetectSimdLevel() >= SimdLevel::kAVX2 && CpuSupportsFma();
   const bool use_avx2_decode_row =
-      plan.q_length <= 16 && has_avx2_fma &&
+      plan.head_sink == nullptr && plan.q_length <= 16 && has_avx2_fma &&
       (plan.mask_kind == AttentionMaskKind::kNone || plan.mask_strides.kv == 1);
 #endif
 
@@ -1085,8 +1094,8 @@ void ComputeAttentionStreamingGeneric(const AttentionPlan &plan, const typename 
             }
           }
 
-          float m = kNegativeInfinity;
-          float l = 0.0f;
+          float m = plan.head_sink != nullptr ? plan.head_sink[h] : kNegativeInfinity;
+          float l = plan.head_sink != nullptr ? 1.0f : 0.0f;
           std::fill(accumulator.begin(), accumulator.end(), 0.0f);
           bool any_valid = false;
 
@@ -1802,7 +1811,7 @@ void ComputeAttentionFloat32Streaming(const AttentionPlan &plan, const float *q,
                                       const float *past_k, const float *past_v,
                                       const std::int64_t *nonpad_kv_seqlen,
                                       AttentionExecutionInfo *execution_info) {
-  if (plan.total_kv_length == 1) {
+  if (plan.total_kv_length == 1 && plan.head_sink == nullptr) {
     RecordExecution(plan, AttentionExecutionPath::kSingleKey, false, execution_info);
     ComputeAttentionSingleKey<Float32Codec>(plan, v, mask, y, past_v, nonpad_kv_seqlen);
     return;
@@ -1810,13 +1819,15 @@ void ComputeAttentionFloat32Streaming(const AttentionPlan &plan, const float *q,
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512
   static const SimdLevel simd = DetectSimdLevel();
 #endif
-  bool use_tiled = plan.past_length == 0 && plan.q_length >= 16 && plan.total_kv_length != 0;
+  bool use_tiled = plan.head_sink == nullptr && plan.past_length == 0 && plan.q_length >= 16 &&
+                   plan.total_kv_length != 0;
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512
-  use_tiled = use_tiled ||
-              (plan.past_length == 0 && plan.q_length == 8 && plan.total_kv_length == 128 &&
-               plan.head_dim == 64 && plan.v_head_dim == 64 && !plan.causal &&
-               plan.mask_kind == AttentionMaskKind::kNone && plan.left_window_size < 0 &&
-               plan.right_window_size < 0 && plan.softcap == 0.0f && simd == SimdLevel::kAVX512);
+  use_tiled =
+      use_tiled ||
+      (plan.head_sink == nullptr && plan.past_length == 0 && plan.q_length == 8 &&
+       plan.total_kv_length == 128 && plan.head_dim == 64 && plan.v_head_dim == 64 &&
+       !plan.causal && plan.mask_kind == AttentionMaskKind::kNone && plan.left_window_size < 0 &&
+       plan.right_window_size < 0 && plan.softcap == 0.0f && simd == SimdLevel::kAVX512);
 #endif
   if (use_tiled) {
     RecordExecution(plan, AttentionExecutionPath::kTiled, false, execution_info);
@@ -1834,12 +1845,13 @@ void ComputeAttentionFloat16Streaming(const AttentionPlan &plan, const std::uint
                                       const std::uint16_t *past_k, const std::uint16_t *past_v,
                                       const std::int64_t *nonpad_kv_seqlen,
                                       AttentionExecutionInfo *execution_info) {
-  if (plan.total_kv_length == 1) {
+  if (plan.total_kv_length == 1 && plan.head_sink == nullptr) {
     RecordExecution(plan, AttentionExecutionPath::kSingleKey, false, execution_info);
     ComputeAttentionSingleKey<Float16Codec>(plan, v, mask, y, past_v, nonpad_kv_seqlen);
     return;
   }
-  bool use_tiled = plan.past_length == 0 && plan.q_length >= 16 && plan.total_kv_length != 0;
+  bool use_tiled = plan.head_sink == nullptr && plan.past_length == 0 && plan.q_length >= 16 &&
+                   plan.total_kv_length != 0;
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
   static const bool use_avx2_short = DetectSimdLevel() >= SimdLevel::kAVX2 && CpuSupportsFma();
   const bool aligned_short =
@@ -1862,12 +1874,13 @@ void ComputeAttentionBFloat16Streaming(const AttentionPlan &plan, const std::uin
                                        const std::uint16_t *past_k, const std::uint16_t *past_v,
                                        const std::int64_t *nonpad_kv_seqlen,
                                        AttentionExecutionInfo *execution_info) {
-  if (plan.total_kv_length == 1) {
+  if (plan.total_kv_length == 1 && plan.head_sink == nullptr) {
     RecordExecution(plan, AttentionExecutionPath::kSingleKey, false, execution_info);
     ComputeAttentionSingleKey<BFloat16Codec>(plan, v, mask, y, past_v, nonpad_kv_seqlen);
     return;
   }
-  bool use_tiled = plan.past_length == 0 && plan.q_length >= 16 && plan.total_kv_length != 0;
+  bool use_tiled = plan.head_sink == nullptr && plan.past_length == 0 && plan.q_length >= 16 &&
+                   plan.total_kv_length != 0;
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
   static const bool use_avx2_short = DetectSimdLevel() >= SimdLevel::kAVX2 && CpuSupportsFma();
   const bool aligned_short =
