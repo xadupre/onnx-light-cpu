@@ -55,6 +55,9 @@ void ComputeShapeMatMulNBits(ONNX_LIGHT_NAMESPACE::core::shapes::ShapesContext &
 /// Infers the output shape for the supported ``com.microsoft::MoE`` subset.
 void ComputeShapeMoE(ONNX_LIGHT_NAMESPACE::core::shapes::ShapesContext &ctx,
                      const ONNX_LIGHT_NAMESPACE::NodeProto &node);
+/// Infers the output shape for CPU quantized expert projections.
+void ComputeShapeQMoE(ONNX_LIGHT_NAMESPACE::core::shapes::ShapesContext &ctx,
+                      const ONNX_LIGHT_NAMESPACE::NodeProto &node);
 
 /// Returns the scratch-memory requirement for ``com.microsoft::CDist``.
 int64_t ComputePeakMemoryCDist(
@@ -93,6 +96,10 @@ int64_t ComputePeakMemoryMatMulNBits(
 /// Returns a conservative whole-operator routing and expert scratch bound for
 /// ``com.microsoft::MoE``.
 int64_t ComputePeakMemoryMoE(
+    ONNX_LIGHT_NAMESPACE::core::symbolic::Device device,
+    const std::vector<ONNX_LIGHT_NAMESPACE::core::symbolic::SymShape> &input_shapes);
+/// Returns the conservative quantized expert and routing scratch bound.
+int64_t ComputePeakMemoryQMoE(
     ONNX_LIGHT_NAMESPACE::core::symbolic::Device device,
     const std::vector<ONNX_LIGHT_NAMESPACE::core::symbolic::SymShape> &input_shapes);
 

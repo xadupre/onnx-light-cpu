@@ -18,10 +18,12 @@
 #include "onnx_extensions/shapes/shapes/nn/shape_nn.h"
 #endif
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <limits>
 #include <mutex>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -356,6 +358,12 @@ std::vector<OperatorSupportRegistration> CollectOperatorSupport() {
        {},
        false},
       {kMicrosoftDomain,
+       "QMoE",
+       "onnx_light_cpu::ComputeShapeQMoE",
+       "onnx_light_cpu::ComputePeakMemoryQMoE",
+       {},
+       false},
+      {kMicrosoftDomain,
        "RotaryEmbedding",
        "onnx_light_cpu::ComputeShapeRotaryEmbedding",
        "onnx_light_cpu::ComputePeakMemoryRotaryEmbedding",
@@ -505,6 +513,195 @@ void ComputeShapeMoE(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE::NodeProto &
       ConstrainEqual(ctx, experts, bias.Shape()[0], "ComputeShapeMoE: bias experts mismatch.");
       ConstrainEqual(ctx, second, bias.Shape()[1], "ComputeShapeMoE: bias width mismatch.");
     }
+  }
+  ctx.Set(node.output(0), SymTensor(nullptr, type, shape));
+}
+
+void ComputeShapeQMoE(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE::NodeProto &node) {
+  using ONNX_LIGHT_NAMESPACE::core::schema::TensorType;
+  if (node.input_size() < 7 || node.input_size() > 14 || node.output_size() != 1 ||
+      node.output(0).empty()) {
+    throw std::invalid_argument("ComputeShapeQMoE: expected seven to fourteen input slots.");
+  }
+  for (int index : {0, 1, 2, 3, 5, 6}) {
+    if (!HasInput(node, index) || !ctx.Has(node.input(index))) {
+      throw std::invalid_argument("ComputeShapeQMoE: missing required input.");
+    }
+  }
+  const auto &input = ctx.Get(node.input(0));
+  const auto &router = ctx.Get(node.input(1));
+  const auto type = input.Dtype();
+  if ((type != TensorType::kFloat && type != TensorType::kFloat16 &&
+       type != TensorType::kBfloat16) ||
+      router.Dtype() != type || (input.Shape().Rank() != 2 && input.Shape().Rank() != 3) ||
+      router.Shape().Rank() != 2) {
+    throw std::invalid_argument("ComputeShapeQMoE: invalid activation/router types or ranks.");
+  }
+  const auto bits = GetGqaIntAttribute(node, "expert_weight_bits", 4);
+  const auto block = GetGqaIntAttribute(node, "block_size", 0);
+  const auto k = GetGqaIntAttribute(node, "k", 1);
+  const auto fusion = GetGqaIntAttribute(node, "swiglu_fusion", 0);
+  const auto activation = GetStringAttribute(node, "activation_type", "relu");
+  const auto normalize = GetGqaIntAttribute(node, "normalize_routing_weights", 0);
+  const bool third = HasInput(node, 8);
+  for (const auto &attribute : node.attribute()) {
+    if (((attribute.name() == "activation_alpha" || attribute.name() == "activation_beta") &&
+         !std::isfinite(attribute.f())) ||
+        (attribute.name() == "swiglu_limit" && (std::isnan(attribute.f()) || attribute.f() < 0))) {
+      throw std::invalid_argument("ComputeShapeQMoE: invalid activation parameters.");
+    }
+  }
+  if ((bits != 4 && bits != 8) || block < 0 ||
+      (block != 0 && (block < 16 || (block & (block - 1)) != 0)) || k < 1 ||
+      (normalize != 0 && normalize != 1) ||
+      (activation != "relu" && activation != "gelu" && activation != "silu" &&
+       activation != "identity" && activation != "swiglu") ||
+      (activation == "swiglu" ? fusion != 1 : fusion != 0) || (third && fusion != 0) ||
+      HasInput(node, 9) != third || (!third && HasInput(node, 10)) || HasInput(node, 11) ||
+      HasInput(node, 12) || HasInput(node, 13) ||
+      GetGqaIntAttribute(node, "use_sparse_mixer", 0) != 0 ||
+      GetGqaIntAttribute(node, "weights_prepacked", 0) != 0) {
+    throw std::invalid_argument("ComputeShapeQMoE: unsupported quantization or attributes.");
+  }
+  const auto &shape = input.Shape();
+  const auto hidden = shape[shape.Rank() - 1];
+  const auto experts = router.Shape()[1];
+  if ((hidden.IsInt() && hidden.AsInt() <= 0) ||
+      (experts.IsInt() && (experts.AsInt() <= 0 || k > experts.AsInt()))) {
+    throw std::invalid_argument("ComputeShapeQMoE: invalid hidden or expert count.");
+  }
+  const auto &fc2 = ctx.Get(node.input(5));
+  if (fc2.Shape().Rank() != 3 || ctx.Get(node.input(2)).Shape().Rank() != 3) {
+    throw std::invalid_argument("ComputeShapeQMoE: projections must have rank 3.");
+  }
+  const auto divide_up = [](const sym_ns::SymDim &dim, int64_t divisor) {
+    return dim.IsInt()
+               ? sym_ns::SymDim(dim.AsInt() / divisor + (dim.AsInt() % divisor != 0))
+               : sym_ns::SymDim("ceil((" + dim.ToString() + ")/" + std::to_string(divisor) + ")");
+  };
+  const auto compatible = [](const sym_ns::SymDim &left, const sym_ns::SymDim &right) {
+    return !left.IsInt() || !right.IsInt() || left.AsInt() == right.AsInt();
+  };
+  const bool fused = activation == "swiglu";
+  bool output_major = fused;
+  bool rowwise = false;
+  bool layout_ambiguous = false;
+  auto width = fc2.Shape()[1];
+  auto intermediate = width;
+  struct Layout {
+    bool output_major;
+    bool rowwise;
+    sym_ns::SymDim intermediate;
+    sym_ns::SymDim width;
+  };
+  const auto fits = [&](bool major, bool row_scales) -> std::optional<Layout> {
+    const auto candidate_width =
+        major ? ctx.Get(node.input(2)).Shape()[1]
+        : fused && fc2.Shape()[1].IsInt()
+            ? sym_ns::SymDim(CheckedIndexMultiply(fc2.Shape()[1].AsInt(), 2, "QMoE", "width"))
+        : fused ? sym_ns::SymDim("2*(" + fc2.Shape()[1].ToString() + ")")
+                : fc2.Shape()[1];
+    if (candidate_width.IsInt() &&
+        (candidate_width.AsInt() <= 0 || (fused && candidate_width.AsInt() % 2 != 0))) {
+      return std::nullopt;
+    }
+    const auto candidate = fused ? divide_up(candidate_width, 2) : candidate_width;
+    const auto match_projection = [&](int wi, int si, const sym_ns::SymDim &out,
+                                      const sym_ns::SymDim &in) {
+      const auto &w = ctx.Get(node.input(wi));
+      const auto &s = ctx.Get(node.input(si));
+      const auto leading = major ? out : in;
+      const auto last = major ? in : out;
+      return w.Shape().Rank() == 3 && s.Shape().Rank() == (block == 0 ? 2 : 3) &&
+             compatible(experts, w.Shape()[0]) && compatible(leading, w.Shape()[1]) &&
+             compatible(divide_up(last, 8 / bits), w.Shape()[2]) &&
+             compatible(experts, s.Shape()[0]) &&
+             compatible(block == 0 && !row_scales ? last : leading, s.Shape()[1]) &&
+             (block == 0 || compatible(divide_up(last, block), s.Shape()[2]));
+    };
+    if (!match_projection(2, 3, candidate_width, hidden) ||
+        !match_projection(5, 6, hidden, candidate) ||
+        (third && !match_projection(8, 9, candidate, hidden))) {
+      return std::nullopt;
+    }
+    const auto bias_matches = [&](int bias_index, const sym_ns::SymDim &outputs) {
+      if (!HasInput(node, bias_index)) {
+        return true;
+      }
+      const auto &bias = ctx.Get(node.input(bias_index));
+      return bias.Shape().Rank() == 2 && compatible(experts, bias.Shape()[0]) &&
+             compatible(outputs, bias.Shape()[1]);
+    };
+    if (!bias_matches(4, candidate_width) || !bias_matches(7, hidden) ||
+        (third && !bias_matches(10, candidate))) {
+      return std::nullopt;
+    }
+    return Layout{major, row_scales, candidate_width, candidate};
+  };
+  // Tensor quantization uses raw CPU output-major, per-row scales only.
+  const auto output_layout = fits(true, block == 0);
+  const std::optional<Layout> input_layout = block == 0 ? std::nullopt : fits(false, false);
+  if (!output_layout && !input_layout) {
+    throw std::invalid_argument("ComputeShapeQMoE: incompatible expert layouts.");
+  }
+  if (output_layout && input_layout) {
+    layout_ambiguous = true;
+  } else {
+    const auto &layout = output_layout ? *output_layout : *input_layout;
+    output_major = layout.output_major;
+    rowwise = layout.rowwise;
+    intermediate = layout.intermediate;
+    width = layout.width;
+  }
+  const auto rows =
+      shape.Rank() == 2 ? shape[0]
+      : shape[0].IsInt() && shape[1].IsInt()
+          ? sym_ns::SymDim(
+                CheckedIndexMultiply(shape[0].AsInt(), shape[1].AsInt(), "QMoE", "tokens"))
+          : sym_ns::SymDim("(" + shape[0].ToString() + ")*(" + shape[1].ToString() + ")");
+  ConstrainEqual(ctx, rows, router.Shape()[0], "ComputeShapeQMoE: router rows mismatch.");
+  const auto projection = [&](int weight_index, int scale_index, int bias_index,
+                              const sym_ns::SymDim &outputs, const sym_ns::SymDim &inputs) {
+    const auto &weight = ctx.Get(node.input(weight_index));
+    const auto &scales = ctx.Get(node.input(scale_index));
+    const auto leading = output_major ? outputs : inputs;
+    const auto last = output_major ? inputs : outputs;
+    if (weight.Dtype() != TensorType::kUint8 || weight.Shape().Rank() != 3 ||
+        (scales.Dtype() != TensorType::kFloat && scales.Dtype() != TensorType::kFloat16 &&
+         scales.Dtype() != TensorType::kBfloat16) ||
+        scales.Shape().Rank() != (block == 0 ? 2 : 3)) {
+      throw std::invalid_argument("ComputeShapeQMoE: invalid projection types or ranks.");
+    }
+    ConstrainEqual(ctx, experts, weight.Shape()[0], "ComputeShapeQMoE: weight experts mismatch.");
+    ConstrainEqual(ctx, experts, scales.Shape()[0], "ComputeShapeQMoE: scale experts mismatch.");
+    if (HasInput(node, bias_index)) {
+      const auto &bias = ctx.Get(node.input(bias_index));
+      if (bias.Dtype() != type || bias.Shape().Rank() != 2) {
+        throw std::invalid_argument("ComputeShapeQMoE: invalid bias type or rank.");
+      }
+      ConstrainEqual(ctx, experts, bias.Shape()[0], "ComputeShapeQMoE: bias experts mismatch.");
+    }
+    if (layout_ambiguous) {
+      return;
+    }
+    ConstrainEqual(ctx, leading, weight.Shape()[1], "ComputeShapeQMoE: weight rows mismatch.");
+    ConstrainEqual(ctx, divide_up(last, 8 / bits), weight.Shape()[2],
+                   "ComputeShapeQMoE: packed width mismatch.");
+    ConstrainEqual(ctx, block == 0 && !rowwise ? last : leading, scales.Shape()[1],
+                   "ComputeShapeQMoE: scale rows mismatch.");
+    if (block != 0) {
+      ConstrainEqual(ctx, divide_up(last, block), scales.Shape()[2],
+                     "ComputeShapeQMoE: scale blocks mismatch.");
+    }
+    if (HasInput(node, bias_index)) {
+      const auto &bias = ctx.Get(node.input(bias_index));
+      ConstrainEqual(ctx, outputs, bias.Shape()[1], "ComputeShapeQMoE: bias width mismatch.");
+    }
+  };
+  projection(2, 3, 4, intermediate, hidden);
+  projection(5, 6, 7, hidden, width);
+  if (third) {
+    projection(8, 9, 10, width, hidden);
   }
   ctx.Set(node.output(0), SymTensor(nullptr, type, shape));
 }
@@ -1123,6 +1320,69 @@ int64_t ComputePeakMemoryMoE(sym_ns::Device, const std::vector<SymShape> &shapes
   return static_cast<std::int64_t>(bytes);
 }
 
+int64_t ComputePeakMemoryQMoE(sym_ns::Device, const std::vector<SymShape> &shapes) {
+  if (shapes.size() < 4 || (shapes[0].Rank() != 2 && shapes[0].Rank() != 3) ||
+      shapes[1].Rank() != 2) {
+    return 0;
+  }
+  for (const auto &shape : shapes) {
+    for (std::size_t index = 0; index < shape.Rank(); ++index) {
+      if (!shape[index].IsInt()) {
+        return 0;
+      }
+      CheckedDimension(shape[index].AsInt(), "QMoE", "scratch dimension");
+    }
+  }
+  const auto hidden = CheckedDimension(shapes[0][shapes[0].Rank() - 1].AsInt(), "QMoE", "hidden");
+  const auto experts = CheckedDimension(shapes[1][1].AsInt(), "QMoE", "experts");
+  std::size_t tokens = CheckedDimension(shapes[0][0].AsInt(), "QMoE", "tokens");
+  if (shapes[0].Rank() == 3) {
+    tokens = CheckedMultiply(tokens, CheckedDimension(shapes[0][1].AsInt(), "QMoE", "sequence"),
+                             "QMoE", "tokens");
+  }
+  if (tokens == 0) {
+    return 0;
+  }
+  std::size_t values = CheckedProduct({tokens, hidden, 2}, "QMoE", "activation scratch");
+  values = CheckedAdd(values, CheckedMultiply(tokens, experts, "QMoE", "router scratch"), "QMoE",
+                      "value scratch");
+  std::size_t width = hidden;
+  // Shapes do not carry bit width or optional-slot metadata. Bounding every
+  // rank-3 tensor as INT4 weights also handles compacted optional input lists.
+  for (std::size_t index = 2; index < shapes.size(); ++index) {
+    const auto &shape = shapes[index];
+    if (shape.Rank() == 3) {
+      const auto rows = CheckedDimension(shape[1].AsInt(), "QMoE", "projection rows");
+      const auto columns = CheckedMultiply(
+          CheckedDimension(shape[2].AsInt(), "QMoE", "packed columns"), 2, "QMoE", "columns");
+      width = std::max(width, std::max(rows, columns));
+      values =
+          CheckedAdd(values,
+                     CheckedProduct({CheckedDimension(shape[0].AsInt(), "QMoE", "weight experts"),
+                                     rows, columns},
+                                    "QMoE", "dequantized projection"),
+                     "QMoE", "value scratch");
+    }
+  }
+  values = CheckedAdd(values, CheckedProduct({experts, width, 3}, "QMoE", "bias scratch"), "QMoE",
+                      "value scratch");
+  const auto workspace =
+      CheckedAdd(CheckedMultiply(width, 3, "QMoE", "workspace"), hidden, "QMoE", "workspace");
+  values = CheckedAdd(values, CheckedMultiply(tokens, workspace, "QMoE", "split expert scratch"),
+                      "QMoE", "value scratch");
+  auto bytes = CheckedByteSize(values, sizeof(float), "QMoE", "value bytes");
+  bytes = CheckedAdd(bytes, ComputeMoEMaxScratchBytes(tokens, hidden, experts, width, width),
+                     "QMoE", "scratch bytes");
+  // Split FC3 execution has one route array per token, unlike bounded fused MoE tiles.
+  bytes =
+      CheckedAdd(bytes, CheckedProduct({tokens, experts, sizeof(MoERoute)}, "QMoE", "split routes"),
+                 "QMoE", "scratch bytes");
+  if (bytes > static_cast<std::size_t>(std::numeric_limits<int64_t>::max())) {
+    throw std::overflow_error("ComputePeakMemoryQMoE: scratch size overflows int64_t.");
+  }
+  return static_cast<int64_t>(bytes);
+}
+
 int64_t ComputePeakMemorySkipLayerNormalization(sym_ns::Device, const std::vector<SymShape> &) {
   return 0;
 }
@@ -1264,6 +1524,7 @@ void RegisterMicrosoftShapeAndMemoryFunctions() {
     shapes_ns::RegisterComputeShapeFn(kMicrosoftDomain, "MatMulNBits", ComputeShapeMatMulNBits,
                                       true);
     shapes_ns::RegisterComputeShapeFn(kMicrosoftDomain, "MoE", ComputeShapeMoE);
+    shapes_ns::RegisterComputeShapeFn(kMicrosoftDomain, "QMoE", ComputeShapeQMoE);
     shapes_ns::RegisterComputeShapeFn(kMicrosoftDomain, "RotaryEmbedding",
                                       ComputeShapeRotaryEmbedding);
     shapes_ns::RegisterComputePeakMemoryFn(kMicrosoftDomain, "RotaryEmbedding",
@@ -1290,6 +1551,8 @@ void RegisterMicrosoftShapeAndMemoryFunctions() {
                                            ComputePeakMemoryMatMulNBits);
     shapes_ns::RegisterComputePeakMemoryFn(kMicrosoftDomain, "MoE", sym_ns::Device::kCPU,
                                            ComputePeakMemoryMoE);
+    shapes_ns::RegisterComputePeakMemoryFn(kMicrosoftDomain, "QMoE", sym_ns::Device::kCPU,
+                                           ComputePeakMemoryQMoE);
   });
 }
 
