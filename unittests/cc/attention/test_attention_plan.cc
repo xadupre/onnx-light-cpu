@@ -91,6 +91,45 @@ TEST(AttentionSink, NormalizesRealValuesAcrossTypesAndWindows) {
                               cached ? past_key.data() : nullptr,
                               cached ? past_value.data() : nullptr);
       check(y, 1e-5f);
+      for (const bool fp64 : {false, true}) {
+        for (int fallback = -1; fallback < 5; ++fallback) {
+          if (fallback == -1 && !fp64) {
+            continue;
+          }
+          SCOPED_TRACE(::testing::Message() << "cached=" << cached << " window=" << window
+                                            << " fp64=" << fp64 << " fallback=" << fallback);
+          AttentionPlan materialized_plan = plan;
+          materialized_plan.softmax_fp64 = fp64;
+          materialized_plan.has_present_output = fallback == 0;
+          materialized_plan.has_qk_matmul_output = fallback > 0;
+          materialized_plan.qk_matmul_output_mode = fallback > 0 ? fallback - 1 : 0;
+          std::vector<float> probabilities(2 * sequence * (sequence + past_length));
+          onnx_light_cpu::AttentionExecutionInfo info;
+          ComputeAttentionFloat32(materialized_plan, query.data(), key.data(), value.data(),
+                                  nullptr, y.data(), cached ? past_key.data() : nullptr,
+                                  cached ? past_value.data() : nullptr, nullptr,
+                                  fallback > 0 ? probabilities.data() : nullptr, &info);
+          EXPECT_EQ(info.path, onnx_light_cpu::AttentionExecutionPath::kMaterialized);
+          check(y, 1e-5f);
+          if (fallback == 4) {
+            for (std::size_t h = 0; h < 2; ++h) {
+              for (std::size_t i = 0; i < sequence; ++i) {
+                const std::size_t frontier = past_length + i;
+                const std::size_t visible =
+                    window < 0 ? frontier + 1 : std::min<std::size_t>(window, frontier + 1);
+                for (std::size_t j = 0; j < sequence + past_length; ++j) {
+                  const bool allowed =
+                      j <= frontier &&
+                      (window < 0 || frontier - j < static_cast<std::size_t>(window));
+                  const float expected = allowed ? 1.0f / (std::exp(sink[h]) + visible) : 0.0f;
+                  EXPECT_NEAR(probabilities[(h * sequence + i) * (sequence + past_length) + j],
+                              expected, 1e-6f);
+                }
+              }
+            }
+          }
+        }
+      }
       for (const bool bfloat : {false, true}) {
         const auto encode = [bfloat](const std::vector<float> &input) {
           std::vector<std::uint16_t> output(input.size());
@@ -118,6 +157,39 @@ TEST(AttentionSink, NormalizesRealValuesAcrossTypesAndWindows) {
                               : onnx_light_cpu::detail::Float16BitsToFloat(y16[i]);
         }
         check(decoded, bfloat ? 0.02f : 0.002f);
+      }
+    }
+  }
+}
+
+TEST(AttentionSink, MaterializedExtremesPreserveFullyMaskedRows) {
+  const float negative_infinity = -std::numeric_limits<float>::infinity();
+  const std::int64_t q_shape[] = {1, 2, 2, 1};
+  const std::int64_t kv_shape[] = {1, 1, 1, 1};
+  const std::int64_t mask_shape[] = {2, 1};
+  const float query[] = {0.0f, 0.0f, 0.0f, 0.0f};
+  const float key[] = {0.0f}, value[] = {4.0f};
+  const float mask[] = {negative_infinity, 0.0f};
+  for (const std::int64_t precision : {1, 11}) {
+    AttentionDescriptor descriptor;
+    descriptor.softmax_precision = precision;
+    descriptor.has_qk_matmul_output = true;
+    descriptor.qk_matmul_output_mode = 3;
+    AttentionPlan plan(descriptor, AttentionLayout::kRank4, q_shape, kv_shape, kv_shape, mask_shape,
+                       AttentionMaskKind::kAdditive);
+    for (const auto &sink :
+         {std::array<float, 2>{1000.0f, -1000.0f}, std::array<float, 2>{negative_infinity, 0.0f}}) {
+      plan.head_sink = sink.data();
+      std::array<float, 4> output, probabilities;
+      ComputeAttentionFloat32(plan, query, key, value, mask, output.data(), nullptr, nullptr,
+                              nullptr, probabilities.data());
+      for (std::size_t h = 0; h < sink.size(); ++h) {
+        const float expected =
+            static_cast<float>(1.0 / (1.0 + std::exp(static_cast<double>(sink[h]))));
+        EXPECT_FLOAT_EQ(output[2 * h], 0.0f);
+        EXPECT_FLOAT_EQ(probabilities[2 * h], 0.0f);
+        EXPECT_FLOAT_EQ(output[2 * h + 1], 4.0f * expected);
+        EXPECT_FLOAT_EQ(probabilities[2 * h + 1], expected);
       }
     }
   }

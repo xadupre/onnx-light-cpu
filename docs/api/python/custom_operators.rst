@@ -32,6 +32,12 @@ Windowing restricts only attention scores: ``present_key`` and
 step. RoPE uses absolute positions as before. Full and sliding attention nodes
 can coexist in the same model; ``sliding_window_cache`` remains unsupported.
 
+The optional twelfth input, ``head_sink``, has shape ``(num_heads,)`` and the
+same element type as the query. Each query head's sink is a virtual softmax
+logit: it contributes to the normalization denominator, but contributes no
+value to the output. Causal and local-window masks still apply only to real
+keys. Omitting the input preserves ordinary attention normalization.
+
 Microsoft MoE
 ~~~~~~~~~~~~~
 

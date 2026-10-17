@@ -399,7 +399,8 @@ void ComputeAttentionFloat32Materialized(const AttentionPlan &plan, const float 
         const float *q_row = q_head + i * plan.q_strides.sequence;
         const std::ptrdiff_t mask_row =
             mask_base + static_cast<std::ptrdiff_t>(i) * plan.mask_strides.q;
-        float row_max = kNegativeInfinity;
+        const float sink = plan.head_sink != nullptr ? plan.head_sink[h] : kNegativeInfinity;
+        float row_max = sink;
         // Tracks whether every KV position of this row is disallowed by the
         // combined causal/padding/attn_mask bias (independent of the raw QK
         // score), matching the spec's fully-masked-row guard.
@@ -488,6 +489,14 @@ void ComputeAttentionFloat32Materialized(const AttentionPlan &plan, const float 
         }
         double sum_fp64 = 0.0;
         float sum_fp32 = 0.0f;
+        if (sink != kNegativeInfinity) {
+          const double shifted = static_cast<double>(sink) - static_cast<double>(row_max);
+          if (plan.softmax_fp64) {
+            sum_fp64 = std::exp(shifted);
+          } else {
+            sum_fp32 = std::exp(static_cast<float>(shifted));
+          }
+        }
         for (std::size_t j = 0; j < total_kv_length; ++j) {
           const double shifted = static_cast<double>(scores[j]) - static_cast<double>(row_max);
           const double probability =
