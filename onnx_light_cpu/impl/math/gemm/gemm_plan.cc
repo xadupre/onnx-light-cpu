@@ -557,6 +557,37 @@ void GemmPlan<T>::ExecuteProduct(const T *a, const T *b, T beta, const T *c, T *
   kernel_(trans_a_, trans_b_, m_, n_, k_, alpha_, a, b, beta, c, y, &blocking_);
 }
 
+template <typename T>
+void GemmPlan<T>::ExecutePackedB(const float *a, const float *packed_b, float *y) const
+  requires std::is_same_v<T, float>
+{
+  if (trans_a_ || trans_b_ || alpha_ != 1.0f || beta_ != 0.0f) {
+    throw std::invalid_argument("Packed B requires a non-transposed, unit-scale GEMM plan.");
+  }
+  if (m_ != 0 && n_ != 0 && (y == nullptr || (k_ != 0 && (a == nullptr || packed_b == nullptr)))) {
+    throw std::invalid_argument("Packed GEMM inputs and output must not be null.");
+  }
+  ParticipantLimitScope participant_limit(
+      RuntimeParticipantLimit(algorithm_, participant_limit_, useful_threads_));
+  detail::GemmPackedB(m_, n_, k_, a, packed_b, y, blocking_);
+}
+
+template <typename T>
+void GemmPlan<T>::ExecutePackedB(bool is_bfloat16, const std::uint16_t *a, const float *packed_b,
+                                 float *y) const
+  requires std::is_same_v<T, float>
+{
+  if (trans_a_ || trans_b_ || alpha_ != 1.0f || beta_ != 0.0f) {
+    throw std::invalid_argument("Packed B requires a non-transposed, unit-scale GEMM plan.");
+  }
+  if (m_ != 0 && n_ != 0 && (y == nullptr || (k_ != 0 && (a == nullptr || packed_b == nullptr)))) {
+    throw std::invalid_argument("Packed GEMM inputs and output must not be null.");
+  }
+  ParticipantLimitScope participant_limit(
+      RuntimeParticipantLimit(algorithm_, participant_limit_, useful_threads_));
+  detail::GemmHalfPackedB(is_bfloat16, m_, n_, k_, a, packed_b, y, blocking_);
+}
+
 template <typename T> void GemmPlan<T>::Execute(const T *a, const T *b, const T *c, T *y) const {
   ParticipantLimitScope participant_limit(
       RuntimeParticipantLimit(algorithm_, participant_limit_, useful_threads_));

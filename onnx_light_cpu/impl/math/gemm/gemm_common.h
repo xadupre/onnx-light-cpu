@@ -80,6 +80,19 @@ std::vector<float> PackGemmWideB(std::size_t n, std::size_t k, const float *b);
 void GemmWidePreparedB(std::size_t m, std::size_t n, std::size_t k, float alpha, const float *a,
                        const float *packed_b, float beta, const float *c, float *y, std::size_t mr);
 
+/// Packs immutable B into ISA-sized column panels, independently of M.
+std::size_t GemmPackedBColumnBlock();
+void PackGemmB(std::size_t n, std::size_t k, const float *b, float *packed_b);
+void PackGemmHalfB(bool is_bfloat16, std::size_t n, std::size_t k, const std::uint16_t *b,
+                   float *packed_b);
+
+/// Executes with packed B, converting only bounded A panels for half inputs.
+void GemmPackedB(std::size_t m, std::size_t n, std::size_t k, const float *a, const float *packed_b,
+                 float *y, const GemmBlocking &blocking);
+void GemmHalfPackedB(bool is_bfloat16, std::size_t m, std::size_t n, std::size_t k,
+                     const std::uint16_t *a, const float *packed_b, float *y,
+                     const GemmBlocking &blocking);
+
 template <GemmAlgorithm Algorithm>
 void GemmFloat32Planned(bool trans_a, bool trans_b, std::size_t M, std::size_t N, std::size_t K,
                         float alpha, const float *A, const float *B, float beta, const float *C,

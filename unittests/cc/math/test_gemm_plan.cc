@@ -96,6 +96,35 @@ TEST(GemmPlan, ExecutesExistingKernelAndExposesSelection) {
   EXPECT_GE(plan.useful_threads(), 1u);
 }
 
+TEST(GemmPlan, PackedBRejectsIncompatibleContractsAndHandlesEmptyReduction) {
+  const GemmPlan<float> plan({false, false, 1, 2, 2});
+  const float values[] = {1, 2, 3, 4};
+  float packed[4];
+  onnx_light_cpu::detail::PackGemmB(2, 2, values, packed);
+  float output[2];
+  const std::uint16_t half[] = {EncodeBFloat16(1), EncodeBFloat16(2)};
+  EXPECT_THROW(plan.ExecutePackedB(nullptr, packed, output), std::invalid_argument);
+  EXPECT_THROW(plan.ExecutePackedB(values, nullptr, output), std::invalid_argument);
+  EXPECT_THROW(plan.ExecutePackedB(values, packed, nullptr), std::invalid_argument);
+  EXPECT_THROW(plan.ExecutePackedB(true, nullptr, packed, output), std::invalid_argument);
+  EXPECT_THROW(plan.ExecutePackedB(true, half, nullptr, output), std::invalid_argument);
+  for (const GemmPlanOptions<float> options :
+       {GemmPlanOptions<float>{true, false, 1, 2, 2}, GemmPlanOptions<float>{false, true, 1, 2, 2},
+        GemmPlanOptions<float>{false, false, 1, 2, 2, 2},
+        GemmPlanOptions<float>{false, false, 1, 2, 2, 1, 1}}) {
+    const GemmPlan<float> incompatible(options);
+    EXPECT_THROW(incompatible.ExecutePackedB(values, packed, output), std::invalid_argument);
+    EXPECT_THROW(incompatible.ExecutePackedB(true, half, packed, output), std::invalid_argument);
+  }
+  const GemmPlan<float> empty({false, false, 1, 2, 0});
+  empty.ExecutePackedB(nullptr, nullptr, output);
+  EXPECT_EQ(output[0], 0.0f);
+  EXPECT_EQ(output[1], 0.0f);
+  empty.ExecutePackedB(true, nullptr, nullptr, output);
+  EXPECT_EQ(output[0], 0.0f);
+  EXPECT_EQ(output[1], 0.0f);
+}
+
 TEST(GemmPlan, SelectsShapeSpecificAlgorithms) {
   const GemmPlan<float> general(GemmPlanOptions<float>{false, false, 128, 128, 128});
   const GemmPlan<float> skinny_m(GemmPlanOptions<float>{false, false, 1, 1024, 1024});

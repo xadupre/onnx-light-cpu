@@ -1835,9 +1835,132 @@ bool HasBfloat16UnderflowRisk(const std::uint16_t *values, std::size_t count) {
   return found != 0;
 }
 
+template <typename SrcT>
+void PackImmutableB(std::size_t n, std::size_t k, const SrcT *b, float *packed_b) {
+  const std::size_t width = detail::GemmPackedBColumnBlock();
+  const std::size_t panels = n / width + static_cast<std::size_t>(n % width != 0);
+  ExecuteRanges(static_cast<std::int64_t>(panels), static_cast<double>(k) * width,
+                [&](std::int64_t begin, std::int64_t end) {
+                  for (std::size_t panel = static_cast<std::size_t>(begin);
+                       panel < static_cast<std::size_t>(end); ++panel) {
+                    const std::size_t col = panel * width;
+                    const std::size_t columns = std::min(width, n - col);
+                    PackBMicroPanel<float>(false, b, k, n, 0, k, col, columns, 0, width,
+                                           packed_b + col * k);
+                  }
+                });
+}
+
+template <typename SrcT>
+void ExecutePackedB(std::size_t m, std::size_t n, std::size_t k, const SrcT *a,
+                    const float *packed_b, float *y, const GemmBlocking &blocking) {
+  if (m == 0 || n == 0) {
+    return;
+  }
+  if (k == 0) {
+    std::fill_n(y, m * n, 0.0f);
+    return;
+  }
+  const GemmKernelKind kind = SelectGemmKernelKind<float>();
+  const std::size_t width = detail::GemmPackedBColumnBlock();
+  const std::size_t mr = std::min(blocking.mr, GemmRegisterRows<float>(kind));
+  const std::size_t mc = std::max(mr, std::min(blocking.mc, m));
+  const std::size_t max_kc = std::min(blocking.kc, k);
+  const std::size_t columns = n / width + static_cast<std::size_t>(n % width != 0);
+  const std::size_t rows = m / mc + static_cast<std::size_t>(m % mc != 0);
+  const bool direct_a = std::is_same_v<SrcT, float> && max_kc == k;
+  const double cost = static_cast<double>(mc) * width * k / kGemmFmasPerParallelWorkUnit;
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
+  if (m == 1 && kind == GemmKernelKind::kAVX2FMA && (std::is_same_v<SrcT, float> || k <= 1024)) {
+    ExecuteRanges(static_cast<std::int64_t>(columns),
+                  ExecutionSchedule{2, 1, ExecutionThreadCount()},
+                  [&](std::int64_t begin, std::int64_t end) {
+                    AlignedBuffer<float> converted_a(std::is_same_v<SrcT, float> ? 0 : k);
+                    const float *source_a;
+                    if constexpr (std::is_same_v<SrcT, float>) {
+                      source_a = a;
+                    } else {
+                      PackAPanel<float>(false, a, m, k, 0, 1, 0, k, converted_a.data());
+                      source_a = converted_a.data();
+                    }
+                    for (std::size_t panel = static_cast<std::size_t>(begin);
+                         panel < static_cast<std::size_t>(end); ++panel) {
+                      const std::size_t col = panel * width;
+                      const std::size_t count = std::min(width, n - col);
+                      GemmSkinnyM1Range_AVX2_F32(count, k, 1.0f, source_a, packed_b + col * k, 0.0f,
+                                                 nullptr, y + col, 0, count);
+                    }
+                  });
+    return;
+  }
+#endif
+  ExecuteRanges(static_cast<std::int64_t>(rows * columns), cost,
+                [&](std::int64_t begin, std::int64_t end) {
+                  AlignedBuffer<float> apack(direct_a ? 0 : mc * max_kc);
+                  for (std::size_t task = static_cast<std::size_t>(begin);
+                       task < static_cast<std::size_t>(end); ++task) {
+                    const std::size_t row = (task / columns) * mc;
+                    const std::size_t col = (task % columns) * width;
+                    const std::size_t row_count = std::min(mc, m - row);
+                    const std::size_t col_count = std::min(width, n - col);
+                    for (std::size_t k0 = 0; k0 < k; k0 += max_kc) {
+                      const std::size_t kc = std::min(max_kc, k - k0);
+                      if (!direct_a) {
+                        PackAPanel<float>(false, a, m, k, row, row_count, k0, kc, apack.data());
+                      }
+                      const float *source_a = apack.data();
+                      if constexpr (std::is_same_v<SrcT, float>) {
+                        if (direct_a) {
+                          source_a = a + row * k;
+                        }
+                      }
+                      for (std::size_t ir = 0; ir < row_count; ir += mr) {
+                        GemmTileF32(kind, std::min(mr, row_count - ir), col_count, kc, 1.0f, 0.0f,
+                                    packed_b + col * k + k0 * col_count, col_count, nullptr, 0,
+                                    y + (row + ir) * n + col, n, 0,
+                                    k0 == 0 ? GemmAccumMode::kInitZero : GemmAccumMode::kAccumulate,
+                                    source_a + ir * kc);
+                      }
+                    }
+                  }
+                });
+}
+
 } // namespace
 
 namespace detail {
+
+std::size_t GemmPackedBColumnBlock() {
+  return std::max<std::size_t>(64, 2 * GemmVectorLanes<float>(SelectGemmKernelKind<float>()));
+}
+
+void PackGemmB(std::size_t n, std::size_t k, const float *b, float *packed_b) {
+  PackImmutableB(n, k, b, packed_b);
+}
+
+void PackGemmHalfB(bool is_bfloat16, std::size_t n, std::size_t k, const std::uint16_t *b,
+                   float *packed_b) {
+  if (is_bfloat16) {
+    PackImmutableB(n, k, reinterpret_cast<const BFloat16Source *>(b), packed_b);
+  } else {
+    PackImmutableB(n, k, reinterpret_cast<const Float16Source *>(b), packed_b);
+  }
+}
+
+void GemmPackedB(std::size_t m, std::size_t n, std::size_t k, const float *a, const float *packed_b,
+                 float *y, const GemmBlocking &blocking) {
+  ExecutePackedB(m, n, k, a, packed_b, y, blocking);
+}
+
+void GemmHalfPackedB(bool is_bfloat16, std::size_t m, std::size_t n, std::size_t k,
+                     const std::uint16_t *a, const float *packed_b, float *y,
+                     const GemmBlocking &blocking) {
+  if (is_bfloat16) {
+    ExecutePackedB(m, n, k, reinterpret_cast<const BFloat16Source *>(a), packed_b, y, blocking);
+  } else {
+    ExecutePackedB(m, n, k, reinterpret_cast<const Float16Source *>(a), packed_b, y, blocking);
+  }
+}
 
 std::vector<float> PackGemmWideB(std::size_t n, std::size_t k, const float *b) {
   constexpr std::size_t width = 16;

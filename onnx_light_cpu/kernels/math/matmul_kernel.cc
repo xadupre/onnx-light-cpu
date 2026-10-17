@@ -4,6 +4,7 @@
 
 #include "onnx_light_cpu/kernels/math/matmul_kernel.h"
 
+#include "onnx_light_cpu/impl/checked_arithmetic.h"
 #include "onnx_light_cpu/impl/math/gemm/gemm_plan.h"
 #include "onnx_light_cpu/impl/math/half_conversion.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
@@ -11,12 +12,14 @@
 #include "onnx_core/runtime/kernels/cast_helper.h"
 #include "onnx_core/runtime/kernels/kernel_dispatch_table.h"
 #include "onnx_core/runtime/kernels/node_helpers.h"
+#include "onnx_core/runtime/kernels/value_store.h"
 #include "onnx_core/runtime/memory/temporary_buffer.h"
 
 #include <algorithm>
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <sstream>
 #include <stdexcept>
 #include <type_traits>
 #include <utility>
@@ -114,6 +117,16 @@ struct MatMulKernel::MatMulPlanCache {
   std::vector<std::size_t> b_shape;
   std::unique_ptr<MatMulPlan<float>> plan_f32;
   std::unique_ptr<MatMulPlan<double>> plan_f64;
+  std::unique_ptr<GemmPlan<float>> packed_product;
+
+  const GemmPlan<float> &PackedProduct(std::size_t m, std::size_t n, std::size_t k) {
+    if (packed_product == nullptr || packed_product->m() != m || packed_product->n() != n ||
+        packed_product->k() != k) {
+      packed_product =
+          std::make_unique<GemmPlan<float>>(GemmPlanOptions<float>{false, false, m, n, k});
+    }
+    return *packed_product;
+  }
 
   template <typename T>
   const MatMulPlan<T> &GetOrBuild(int type, std::span<const std::size_t> current_a_shape,
@@ -143,10 +156,97 @@ private:
   }
 };
 
+struct MatMulKernel::PreparedB {
+  rt_ns::ValueStore *store;
+  std::uint32_t slot;
+  std::int32_t source_data_type;
+  Shape shape;
+};
+
 MatMulKernel::MatMulKernel(const rt_ns::KernelContext &ctx)
     : KernelBase(ctx), plan_cache_(std::make_unique<MatMulPlanCache>()) {}
 
 MatMulKernel::~MatMulKernel() = default;
+
+bool MatMulKernel::HasPreparations(const std::unordered_set<std::string> &immutable_inputs) const {
+  return node_ != nullptr && node_->input_size() == 2 && immutable_inputs.contains(node_->input(1));
+}
+
+void MatMulKernel::Prepare(RuntimeContext &rt,
+                           const std::unordered_set<std::string> &immutable_inputs) {
+  prepared_b_.reset();
+  if (!HasPreparations(immutable_inputs)) {
+    return;
+  }
+  const Tensor &b = rt.Get(node_->input(1));
+  if (b.shape.size() != 2 || b.shape[0] == 0 || b.shape[1] == 0 ||
+      (b.data_type != DataType::FLOAT && b.data_type != DataType::FLOAT16 &&
+       b.data_type != DataType::BFLOAT16)) {
+    return;
+  }
+  const auto shape = ShapeAsSize(b.shape);
+  std::uint64_t digest = 14695981039346656037ULL;
+  for (std::size_t index = 0; index < b.size_bytes(); ++index) {
+    digest = (digest ^ b.bytes()[index]) * 1099511628211ULL;
+  }
+  std::ostringstream key;
+  key << "onnx_light_cpu:MatMul:B:panels-f32-v1:name=" << node_->input(1)
+      << ":dtype=" << b.data_type << ":K=" << shape[0] << ":N=" << shape[1]
+      << ":isa=" << static_cast<int>(EffectiveGemmSimdLevel())
+      << ":width=" << detail::GemmPackedBColumnBlock() << ":digest=" << digest;
+  rt_ns::ValueStore &store = rt.value_store();
+  const std::uint32_t slot = store.Bind(key.str());
+  if (!store.IsReady(slot)) {
+    Tensor packed = store.AllocateTensor(
+        DataType::FLOAT, b.shape,
+        CheckedByteSize(b.element_count(), sizeof(float), "MatMul", "prepared B"));
+    if (b.data_type == DataType::FLOAT) {
+      detail::PackGemmB(shape[1], shape[0], b.AsFloat(), packed.AsFloat());
+    } else {
+      detail::PackGemmHalfB(b.data_type == DataType::BFLOAT16, shape[1], shape[0],
+                            reinterpret_cast<const std::uint16_t *>(b.bytes()), packed.AsFloat());
+    }
+    store.Publish(slot, rt_ns::RuntimeValue(std::move(packed)));
+  }
+  prepared_b_ = std::make_unique<PreparedB>(PreparedB{&store, slot, b.data_type, b.shape});
+}
+
+Tensor MatMulKernel::ComputePrepared(const Tensor &a, RuntimeContext &rt) const {
+  if (a.data_type != prepared_b_->source_data_type) {
+    throw std::invalid_argument("onnx_light_cpu::MatMulKernel: inputs must share the same dtype.");
+  }
+  const auto a_shape = ShapeAsSize(a.shape);
+  const auto b_shape = ShapeAsSize(prepared_b_->shape);
+  const auto &plan = plan_cache_->GetOrBuild<float>(a.data_type, a_shape, b_shape);
+  const Shape output_shape = OutputShape(plan.output_shape());
+  const std::size_t count = ElementCount(plan.output_shape());
+  Tensor output = rt.MakeOutputTensor(0, a.data_type, output_shape,
+                                      CheckedByteSize(count, a.element_size(), "MatMul", "Y"));
+  if (count == 0) {
+    return output;
+  }
+  const Tensor &packed = prepared_b_->store->Get(prepared_b_->slot).tensor;
+  const std::size_t n = b_shape[1];
+  const std::size_t k = b_shape[0];
+  // A rank-2 B broadcasts over every leading A dimension without changing layout.
+  const GemmPlan<float> &product = plan_cache_->PackedProduct(count / n, n, k);
+  if (a.data_type == DataType::FLOAT) {
+    product.ExecutePackedB(a.AsFloat(), packed.AsFloat(), output.AsFloat());
+  } else {
+    rt_ns::detail::TemporaryTypedBuffer<float> workspace(count, rt.execution_allocator(),
+                                                         "MatMul FP32 workspace");
+    product.ExecutePackedB(a.data_type == DataType::BFLOAT16,
+                           reinterpret_cast<const std::uint16_t *>(a.bytes()), packed.AsFloat(),
+                           workspace.data());
+    auto *bits = reinterpret_cast<std::uint16_t *>(output.mutable_bytes());
+    if (a.data_type == DataType::BFLOAT16) {
+      detail::ConvertFloat32ToBFloat16(workspace.data(), bits, count);
+    } else {
+      detail::ConvertFloat32ToFloat16(workspace.data(), bits, count);
+    }
+  }
+  return output;
+}
 
 Tensor MatMulKernel::Compute(const Tensor &a, const Tensor &b, RuntimeContext *rt,
                              MatMulPlanCache *cache) {
@@ -207,7 +307,12 @@ void MatMulKernel::Run(RuntimeContext &rt) {
   rt_ns::RequireOutputCount(node, 1);
   const Tensor &a = rt_ns::GetInput(node, 0, rt.tensors());
   const Tensor &b = rt_ns::GetInput(node, 1, rt.tensors());
-  rt_ns::SetOutput(node, 0, Compute(a, b, &rt, plan_cache_.get()), rt);
+  rt_ns::SetOutput(node, 0,
+                   prepared_b_ != nullptr && prepared_b_->shape == b.shape &&
+                           prepared_b_->source_data_type == b.data_type
+                       ? ComputePrepared(a, rt)
+                       : Compute(a, b, &rt, plan_cache_.get()),
+                   rt);
 }
 
 void RegisterMatMulKernel() {

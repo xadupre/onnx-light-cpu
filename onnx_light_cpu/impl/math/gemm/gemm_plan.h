@@ -63,6 +63,13 @@ public:
   /// Constant-B overload of the epilogue-aware :cpp:func:`Execute`.
   void Execute(const T *a, const GemmEpilogue<T> &epilogue, T *y) const;
 
+  /// Executes a unit-scale product using externally owned, ISA-packed float B.
+  void ExecutePackedB(const float *a, const float *packed_b, float *y) const
+    requires std::is_same_v<T, float>;
+  void ExecutePackedB(bool is_bfloat16, const std::uint16_t *a, const float *packed_b,
+                      float *y) const
+    requires std::is_same_v<T, float>;
+
   bool trans_a() const noexcept { return trans_a_; }
   bool trans_b() const noexcept { return trans_b_; }
   std::size_t m() const noexcept { return m_; }

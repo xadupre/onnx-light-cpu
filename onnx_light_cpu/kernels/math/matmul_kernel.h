@@ -9,6 +9,8 @@
 #include "onnx_core/runtime/runtime_context.h"
 
 #include <memory>
+#include <string>
+#include <unordered_set>
 
 namespace onnx_light_cpu {
 
@@ -22,6 +24,9 @@ public:
 
   static constexpr const char *kName = "onnx_light_cpu::MatMul";
 
+  bool HasPreparations(const std::unordered_set<std::string> &immutable_inputs) const override;
+  void Prepare(ONNX_LIGHT_NAMESPACE::core::runtime::RuntimeContext &rt,
+               const std::unordered_set<std::string> &immutable_inputs) override;
   void Run(ONNX_LIGHT_NAMESPACE::core::runtime::RuntimeContext &rt) override;
 
   ONNX_LIGHT_NAMESPACE::core::runtime::Tensor
@@ -32,6 +37,12 @@ public:
 private:
   struct MatMulPlanCache;
   std::unique_ptr<MatMulPlanCache> plan_cache_;
+  struct PreparedB;
+  std::unique_ptr<PreparedB> prepared_b_;
+
+  ONNX_LIGHT_NAMESPACE::core::runtime::Tensor
+  ComputePrepared(const ONNX_LIGHT_NAMESPACE::core::runtime::Tensor &a,
+                  ONNX_LIGHT_NAMESPACE::core::runtime::RuntimeContext &rt) const;
 
   static ONNX_LIGHT_NAMESPACE::core::runtime::Tensor
   Compute(const ONNX_LIGHT_NAMESPACE::core::runtime::Tensor &a,
