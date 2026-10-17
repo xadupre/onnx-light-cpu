@@ -105,6 +105,7 @@ NodeProto MakeMatMulNBitsNode(bool bias = false, int64_t bits = 4) {
     node.add_input("");
     node.add_input("bias");
   }
+
   node.add_output("Y");
   ONNX_LIGHT_NAMESPACE::AddAttribute(node, "K", int64_t{35});
   ONNX_LIGHT_NAMESPACE::AddAttribute(node, "N", int64_t{3});
@@ -112,6 +113,88 @@ NodeProto MakeMatMulNBitsNode(bool bias = false, int64_t bits = 4) {
   ONNX_LIGHT_NAMESPACE::AddAttribute(node, "block_size", int64_t{32});
   ONNX_LIGHT_NAMESPACE::AddAttribute(node, "accuracy_level", int64_t{4});
   return node;
+}
+
+TEST(CustomOperatorSupport, QMoESymbolicShapeAndInvalidContracts) {
+  NodeProto node;
+  node.set_domain(onnx_light_cpu::kMicrosoftDomain);
+  node.set_op_type("QMoE");
+  for (const char *name : {"X", "router", "W1", "S1", "", "W2", "S2"}) {
+    node.add_input(name);
+  }
+  node.add_output("Y");
+  ONNX_LIGHT_NAMESPACE::AddAttribute(node, "expert_weight_bits", int64_t{4});
+  ONNX_LIGHT_NAMESPACE::AddAttribute(node, "block_size", int64_t{32});
+  ONNX_LIGHT_NAMESPACE::AddAttribute(node, "activation_type", std::string("swiglu"));
+  ONNX_LIGHT_NAMESPACE::AddAttribute(node, "swiglu_fusion", int64_t{1});
+  ONNX_LIGHT_NAMESPACE::AddAttribute(node, "k", int64_t{2});
+  shapes_ns::ShapesContext ctx;
+  ctx.Set("X", SymTensor(nullptr, TensorType::kFloat, {SymDim(1), SymDim("S"), SymDim(8)}));
+  ctx.Set("router", SymTensor(nullptr, TensorType::kFloat, {SymDim("S"), SymDim(3)}));
+  ctx.Set("W1", SymTensor(nullptr, TensorType::kUint8, {SymDim(3), SymDim(10), SymDim(4)}));
+  ctx.Set("S1", SymTensor(nullptr, TensorType::kFloat, {SymDim(3), SymDim(10), SymDim(1)}));
+  ctx.Set("W2", SymTensor(nullptr, TensorType::kUint8, {SymDim(3), SymDim(8), SymDim(3)}));
+  ctx.Set("S2", SymTensor(nullptr, TensorType::kFloat, {SymDim(3), SymDim(8), SymDim(1)}));
+  onnx_light_cpu::ComputeShapeQMoE(ctx, node);
+  EXPECT_EQ(ctx.Get("Y").Shape().ToString(), ctx.Get("X").Shape().ToString());
+  EXPECT_EQ(ctx.Get("Y").Dtype(), TensorType::kFloat);
+  const auto schemas = onnx_light_cpu::GetMicrosoftOpSchemasWithHistory("QMoE");
+  ASSERT_EQ(schemas.size(), 1U);
+  const std::vector<sym_ns::SymShape> memory_shapes = {{SymDim(2), SymDim(8)},
+                                                       {SymDim(2), SymDim(3)},
+                                                       {SymDim(3), SymDim(10), SymDim(4)},
+                                                       {SymDim(3), SymDim(10), SymDim(1)},
+                                                       {},
+                                                       {SymDim(3), SymDim(8), SymDim(3)},
+                                                       {SymDim(3), SymDim(8), SymDim(1)}};
+  EXPECT_GT(onnx_light_cpu::ComputePeakMemoryQMoE(sym_ns::Device::kCPU, memory_shapes),
+            (3 * 10 * 8 + 3 * 8 * 5) * static_cast<int64_t>(sizeof(float)));
+  auto empty_shapes = memory_shapes;
+  empty_shapes[0] = sym_ns::SymShape{SymDim(int64_t{0}), SymDim(8)};
+  EXPECT_EQ(onnx_light_cpu::ComputePeakMemoryQMoE(sym_ns::Device::kCPU, empty_shapes), 0);
+  EXPECT_EQ(onnx_light_cpu::ComputePeakMemoryQMoE(
+                sym_ns::Device::kCPU, {ctx.Get("X").Shape(), ctx.Get("router").Shape()}),
+            0);
+  ctx.Set("S2", SymTensor(nullptr, TensorType::kFloat, {SymDim(3), SymDim(8), SymDim(2)}));
+  EXPECT_THROW(onnx_light_cpu::ComputeShapeQMoE(ctx, node), std::invalid_argument);
+  ctx.Set("S2", SymTensor(nullptr, TensorType::kFloat, {SymDim(3), SymDim(8), SymDim(1)}));
+  node.add_input("");
+  node.add_input("");
+  node.add_input("");
+  node.add_input("");
+  node.add_input("ZP");
+  EXPECT_THROW(onnx_light_cpu::ComputeShapeQMoE(ctx, node), std::invalid_argument);
+}
+
+TEST(CustomOperatorSupport, QMoESplitExpertShapes) {
+  NodeProto node;
+  node.set_domain(onnx_light_cpu::kMicrosoftDomain);
+  node.set_op_type("QMoE");
+  for (const char *name : {"X", "router", "W1", "S1", "", "W2", "S2", "", "W3", "S3"}) {
+    node.add_input(name);
+  }
+  node.add_output("Y");
+  ONNX_LIGHT_NAMESPACE::AddAttribute(node, "expert_weight_bits", int64_t{4});
+  ONNX_LIGHT_NAMESPACE::AddAttribute(node, "activation_type", std::string("silu"));
+  shapes_ns::ShapesContext ctx;
+  ctx.Set("X", SymTensor(nullptr, TensorType::kFloat16, {SymDim("T"), SymDim(5)}));
+  ctx.Set("router", SymTensor(nullptr, TensorType::kFloat16, {SymDim("T"), SymDim(3)}));
+  ctx.Set("W1", SymTensor(nullptr, TensorType::kUint8, {SymDim(3), SymDim(5), SymDim(4)}));
+  ctx.Set("S1", SymTensor(nullptr, TensorType::kFloat, {SymDim(3), SymDim(7)}));
+  ctx.Set("W2", SymTensor(nullptr, TensorType::kUint8, {SymDim(3), SymDim(7), SymDim(3)}));
+  ctx.Set("S2", SymTensor(nullptr, TensorType::kFloat, {SymDim(3), SymDim(5)}));
+  ctx.Set("W3", SymTensor(nullptr, TensorType::kUint8, {SymDim(3), SymDim(5), SymDim(4)}));
+  ctx.Set("S3", SymTensor(nullptr, TensorType::kFloat, {SymDim(3), SymDim(7)}));
+  onnx_light_cpu::ComputeShapeQMoE(ctx, node);
+  EXPECT_EQ(ctx.Get("Y").Shape().ToString(), ctx.Get("X").Shape().ToString());
+  EXPECT_EQ(ctx.Get("Y").Dtype(), TensorType::kFloat16);
+  node.ref_input()[9] = "";
+  EXPECT_THROW(onnx_light_cpu::ComputeShapeQMoE(ctx, node), std::invalid_argument);
+  node.ref_input()[8] = "";
+  ctx.Set("W1", SymTensor(nullptr, TensorType::kUint8, {SymDim(3), SymDim(7), SymDim(3)}));
+  ctx.Set("W2", SymTensor(nullptr, TensorType::kUint8, {SymDim(3), SymDim(5), SymDim(4)}));
+  onnx_light_cpu::ComputeShapeQMoE(ctx, node);
+  EXPECT_EQ(ctx.Get("Y").Dtype(), TensorType::kFloat16);
 }
 
 FunctionProto MakeMatMulNBitsGradient(const NodeProto &node) {
@@ -213,7 +296,7 @@ float RunForwardObjective(const NodeProto &node, const std::vector<float> &query
 
 TEST(CustomOperatorSupport, ProvidesLightSchemas) {
   const auto schemas = onnx_light_cpu::GetMicrosoftOpSchemasWithHistory();
-  ASSERT_EQ(schemas.size(), 10U);
+  ASSERT_EQ(schemas.size(), 11U);
   EXPECT_EQ(schemas[0].name(), "BiasGelu");
   EXPECT_EQ(schemas[1].name(), "CDist");
   EXPECT_EQ(schemas[2].name(), "CausalConvWithState");
@@ -224,9 +307,11 @@ TEST(CustomOperatorSupport, ProvidesLightSchemas) {
   EXPECT_EQ(schemas[4].name(), "LinearAttention");
   EXPECT_EQ(schemas[5].name(), "MatMulNBits");
   EXPECT_EQ(schemas[6].name(), "MoE");
-  EXPECT_EQ(schemas[7].name(), "RotaryEmbedding");
-  EXPECT_EQ(schemas[8].name(), "SkipLayerNormalization");
-  EXPECT_EQ(schemas[9].name(), "SkipSimplifiedLayerNormalization");
+  EXPECT_EQ(schemas[7].name(), "QMoE");
+  EXPECT_EQ(schemas[8].name(), "RotaryEmbedding");
+  EXPECT_EQ(schemas[9].name(), "SkipLayerNormalization");
+  EXPECT_EQ(schemas[10].name(), "SkipSimplifiedLayerNormalization");
+  EXPECT_EQ(schemas[7].inputs().size(), 14U);
   EXPECT_EQ(schemas[2].inputs().size(), 4U);
   EXPECT_EQ(schemas[2].outputs().size(), 2U);
   EXPECT_EQ(schemas[6].inputs().size(), 8U);
@@ -272,6 +357,7 @@ TEST(CustomOperatorSupport, ProvidesReadOnlyInventory) {
       {"com.microsoft", "LinearAttention", "LinearAttentionFusionPattern", false},
       {"com.microsoft", "MatMulNBits", "MatMulNBitsBiasFusionPattern", true},
       {"com.microsoft", "MoE", "", false},
+      {"com.microsoft", "QMoE", "", false},
       {"com.microsoft", "RotaryEmbedding", "", false},
       {"ai.onnx", "RotaryEmbedding", "", false},
       {"ai.onnx", "SimplifiedLayerNormalization", "", false},

@@ -21,6 +21,8 @@ void RegisterCpuCausalConvWithStateCases(std::vector<TestCase> &registry, TestMo
 void RegisterCpuGroupQueryAttentionCases(std::vector<TestCase> &registry, TestMode mode);
 void RegisterCpuMatMulNBitsCases(std::vector<TestCase> &registry, TestMode mode);
 void RegisterCpuMoECases(std::vector<TestCase> &registry, TestMode mode);
+void RegisterCpuQMoECases(std::vector<TestCase> &registry, TestMode mode);
+void RegisterCpuQMoEReferenceCases(std::vector<TestCase> &registry, TestMode mode);
 void RegisterCpuMicrosoftLinearAttentionCases(std::vector<TestCase> &registry, TestMode mode);
 void RegisterCpuMicrosoftRotaryEmbeddingCases(std::vector<TestCase> &registry, TestMode mode);
 void RegisterCpuSkipLayerNormalizationCases(std::vector<TestCase> &registry, TestMode mode);

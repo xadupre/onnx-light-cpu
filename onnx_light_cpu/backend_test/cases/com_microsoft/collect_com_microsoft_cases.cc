@@ -5,6 +5,14 @@
 #include "onnx_light_cpu/backend_test/cases/com_microsoft/include_com_microsoft_cases.h"
 
 namespace onnx_light_cpu::backend_test {
+namespace {
+
+void RegisterMoEAndQuantizedReferenceCases(std::vector<TestCase> &registry, TestMode mode) {
+  RegisterCpuMoECases(registry, mode);
+  RegisterCpuQMoEReferenceCases(registry, mode);
+}
+
+} // namespace
 
 void CollectCpuMicrosoftTestCases(std::vector<TestCase> &registry, const std::string &op_type,
                                   TestMode mode) {
@@ -18,7 +26,8 @@ void CollectCpuMicrosoftTestCases(std::vector<TestCase> &registry, const std::st
       {"GroupQueryAttention", &RegisterCpuGroupQueryAttentionCases},
       {"LinearAttention", &RegisterCpuMicrosoftLinearAttentionCases},
       {"MatMulNBits", &RegisterCpuMatMulNBitsCases},
-      {"MoE", &RegisterCpuMoECases},
+      {"MoE", &RegisterMoEAndQuantizedReferenceCases},
+      {"QMoE", &RegisterCpuQMoECases},
       {"RotaryEmbedding", &RegisterCpuMicrosoftRotaryEmbeddingCases},
       {"SkipLayerNormalization", &RegisterCpuSkipLayerNormalizationCases},
       {"SkipSimplifiedLayerNormalization", &RegisterCpuSkipSimplifiedLayerNormalizationCases},

@@ -61,6 +61,67 @@ See `ONNX Runtime's MoE CPU implementation
 <https://github.com/microsoft/onnxruntime/blob/main/onnxruntime/contrib_ops/cpu/moe/moe_cpu.cc>`_
 for the upstream compatibility contract.
 
+Microsoft QMoE
+~~~~~~~~~~~~~~
+
+``com.microsoft::QMoE`` version 1 accepts the block-wise CPU expert tensors emitted by
+`mbext's MoE builder
+<https://github.com/xadupre/mbext/blob/68a6860cc8fe2c3381f5248d215b7217a36822e3/modelbuilder/builders/base.py#L3870-L4010>`_.
+Activations, router logits, optional biases, and output share one of
+``FLOAT``, ``FLOAT16``, or ``BFLOAT16``. Scales may independently use any of
+these three floating-point types. Input/output and routing shapes,
+top-k softmax normalization, and activation parameters follow ``MoE`` above.
+
+Inputs are, in order: input, router logits, FC1 weights, FC1 scales,
+optional FC1 bias, FC2 weights, FC2 scales, optional FC2 bias, optional FC3
+weights, optional FC3 scales, optional FC3 bias, and three optional zero-point
+slots. FC3 weights and scales must appear together. Nonempty zero points,
+sparse mixer routing, and CUDA-prepacked weights are rejected.
+
+``expert_weight_bits`` supports **4 and 8**. INT4 stores adjacent last-axis
+values in low-then-high nibbles with implicit zero point 8; INT8 stores signed
+two's-complement values in ``UINT8`` tensors. ``block_size=0`` (default)
+uses raw per-last-axis-column scales ``[E,C]``. Supported positive block sizes
+are powers of two of at least 16, including **16, 32, 64, and 128**;
+scales then have shape
+``[E,R,ceil(C/block_size)]`` for a stored logical matrix ``[E,R,C]``.
+The final block and an odd INT4 column count need not be padded in the
+weight tensor: its shape is ``[E,R,ceil(C/2)]`` for INT4 or ``[E,R,C]`` for INT8.
+
+The fused builder emits output-major FC1 ``[E,2*I,H]`` and FC2 ``[E,H,I]``
+logical matrices with interleaved SwiGLU gate/up rows
+(``activation_type="swiglu"``, ``swiglu_fusion=1``).
+The split builder supplies FC3 and emits input-major FC1/FC3 ``[E,H,I]``
+and FC2 ``[E,I,H]`` logical matrices. Its expert function is
+``FC2(activation(FC1(input)) * FC3(input))``, including optional biases.
+Separate FC3 and fused SwiGLU cannot be combined. Without FC3, ordinary
+``relu``, ``gelu``, ``silu``, and ``identity`` projections are also supported
+in input-major layout.
+
+The kernel validates both orientations against all projection and scale
+shapes, preferring the builder's orientation when dimensions are ambiguous.
+It also accepts ONNX Runtime's raw output-major, row-scaled tensor format
+(``block_size=0``, scales ``[E,R]``) when the per-column formats do not fit.
+That format uses an implicit INT8 zero point of 128 rather than signed
+bytes. See the `ONNX Runtime CPU dequantizer
+<https://github.com/microsoft/onnxruntime/blob/main/onnxruntime/contrib_ops/cpu/moe/moe_quantization_cpu.cc>`_.
+
+This is a portable correctness implementation: expert matrices are
+dequantized into execution-allocator scratch and projections accumulate in
+FLOAT. It does not interpret CPU weights as CUDA's MatMulNBits block packing
+or TensorRT's shuffled prepacked format. Quantized weights are inference-only;
+no QMoE gradient or graph-fusion rule is registered.
+
+The cited builder's legacy ``qmoe_block_size=0`` fallback selects
+`TensorRT-LLM's preprocessed quantizer output
+<https://github.com/NVIDIA/TensorRT-LLM/blob/main/cpp/tensorrt_llm/thop/weightOnlyQuantOp.cpp>`_,
+not its raw CPU tensor output. That
+architecture-dependent CUDA format is not the raw tensor layout described
+above, even though it has the same tensor shape. Re-export those models with
+a positive CPU ``qmoe_block_size`` (for example, 32). Untagged CUDA-prepacked
+contents cannot be identified from tensor shapes alone; do not pass them as
+raw CPU tensors.
+
 Microsoft MatMulNBits
 ~~~~~~~~~~~~~~~~~~~~~
 
