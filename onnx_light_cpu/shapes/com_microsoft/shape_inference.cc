@@ -777,7 +777,14 @@ void ComputeShapeMultiHeadAttention(ShapesContext &ctx,
   auto batch = qs[0];
   batch = MergeGqaDim(ctx, batch, ks[0], "batch");
   batch = MergeGqaDim(ctx, batch, vs[0], "batch");
-  auto head = DivideGqaDim(qs[2], heads, "query width");
+  const auto per_head = [heads](const sym_ns::SymDim &width, const char *what) {
+    if (width.IsInt())
+      return DivideGqaDim(width, heads, what);
+    return heads == 1
+               ? width
+               : sym_ns::SymDim("(" + width.ToString() + ")/" + std::to_string(heads));
+  };
+  auto head = per_head(qs[2], "query width");
   sym_ns::SymDim value_head(std::string("?"));
   sym_ns::SymDim length = ks[cross ? 2 : 1];
   if (cross) {
@@ -788,8 +795,8 @@ void ComputeShapeMultiHeadAttention(ShapesContext &ctx,
     MergeGqaDim(ctx, length, vs[2], "KV length");
   } else {
     MergeGqaDim(ctx, length, vs[1], "KV length");
-    head = MergeGqaDim(ctx, head, DivideGqaDim(ks[2], heads, "key width"), "head size");
-    value_head = DivideGqaDim(vs[2], heads, "value width");
+    head = MergeGqaDim(ctx, head, per_head(ks[2], "key width"), "head size");
+    value_head = per_head(vs[2], "value width");
   }
   if (HasInput(node, 3)) {
     if (ctx.Get(node.input(3)).Dtype() != dtype || ctx.Get(node.input(3)).Shape().Rank() != 1)
