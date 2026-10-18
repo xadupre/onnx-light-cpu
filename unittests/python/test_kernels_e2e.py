@@ -1070,7 +1070,7 @@ class TestBackendCases(ExtTestCase):
                     ir_version=10,
                 )
                 builder = GraphBuilder(model, schema_lookup=operator_schema_lookup)
-                output = builder.to_onnx("model").graph.output[0].type.tensor_type
+                output = builder.to_onnx().graph.output[0].type.tensor_type
                 assert output.elem_type == dtype
                 assert [dim.dim_param or dim.dim_value for dim in output.shape.dim] == [
                     "B",
