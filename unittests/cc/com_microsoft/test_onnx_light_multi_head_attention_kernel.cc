@@ -77,6 +77,44 @@ TEST(MultiHeadAttentionKernel, NormalizesWeightsBeforeAccumulatingLargeFloatValu
   EXPECT_FLOAT_EQ(actual, 3.e38f);
 }
 
+TEST(MultiHeadAttentionKernel, CausalPrefillExcludesFutureKeys) {
+  auto node = MakeNode();
+  ONNX_LIGHT_NAMESPACE::AddAttribute(node, "unidirectional", std::int64_t{1});
+  rt::RuntimeContext runtime{rt::KernelContext{rt::OpsetId("com.microsoft", 1)}};
+  runtime.Set("q", rt::Tensor::FromFloat("q", {1, 3, 1}, {0, 0, 0}));
+  runtime.Set("k", rt::Tensor::FromFloat("k", {1, 3, 1}, {1, 2, 3}));
+  runtime.Set("v", rt::Tensor::FromFloat("v", {1, 3, 1}, {2, 8, 20}));
+  onnx_light_cpu::MultiHeadAttentionKernel kernel(
+      node, rt::KernelContext{rt::OpsetId("com.microsoft", 1)});
+  kernel.Run(runtime);
+  const auto &result = runtime.Get("out");
+  ASSERT_EQ(result.shape, (rt::Shape{1, 3, 1}));
+  // Zero queries give uniform weights over each causal prefix, not all three keys.
+  const float expected[] = {2, 5, 10};
+  for (std::size_t i = 0; i < 3; ++i)
+    EXPECT_NEAR(result.AsFloat()[i], expected[i], 1.e-5f) << "query " << i;
+}
+
+TEST(MultiHeadAttentionKernel, CausalCachedChunkExcludesFutureKeys) {
+  auto node = MakeNode(true);
+  ONNX_LIGHT_NAMESPACE::AddAttribute(node, "unidirectional", std::int64_t{1});
+  rt::RuntimeContext runtime{rt::KernelContext{rt::OpsetId("com.microsoft", 1)}};
+  runtime.Set("q", rt::Tensor::FromFloat("q", {1, 3, 1}, {0, 0, 0}));
+  runtime.Set("k", rt::Tensor::FromFloat("k", {1, 3, 1}, {3, 4, 5}));
+  runtime.Set("v", rt::Tensor::FromFloat("v", {1, 3, 1}, {12, 30, 52}));
+  runtime.Set("pk", rt::Tensor::FromFloat("pk", {1, 1, 2, 1}, {1, 2}));
+  runtime.Set("pv", rt::Tensor::FromFloat("pv", {1, 1, 2, 1}, {2, 4}));
+  onnx_light_cpu::MultiHeadAttentionKernel kernel(
+      node, rt::KernelContext{rt::OpsetId("com.microsoft", 1)});
+  kernel.Run(runtime);
+  const auto &result = runtime.Get("out");
+  ASSERT_EQ(result.shape, (rt::Shape{1, 3, 1}));
+  // Each prefix includes both past values and current values through the query position.
+  const float expected[] = {6, 12, 20};
+  for (std::size_t i = 0; i < 3; ++i)
+    EXPECT_NEAR(result.AsFloat()[i], expected[i], 1.e-5f) << "query " << i;
+}
+
 TEST(MultiHeadAttentionKernel, FullyMaskedRowProducesZero) {
   auto node = MakeNode();
   node.ref_input()[4] = "mask";
