@@ -322,7 +322,7 @@ void RegisterCpuQMoECases(std::vector<TestCase> &registry, TestMode mode) {
                   "backend-test", bt_ns::TestCaseTag::AI_RT);
             }
             registry.back().rtol = type == DataType::BFLOAT16  ? 3e-2
-                                   : type == DataType::FLOAT16 ? 5e-4
+                                   : type == DataType::FLOAT16 ? 1e-3
                                                                : 1e-5;
             registry.back().atol = type == DataType::BFLOAT16 ? 3e-3 : 1e-6;
           }

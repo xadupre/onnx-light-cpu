@@ -190,20 +190,25 @@ TEST(CustomOperatorSupport, QMoESymbolicHiddenDimensionDefersAmbiguousLayout) {
       ctx.Set("B1", SymTensor(nullptr, TensorType::kFloat, {SymDim(3), SymDim(7)}));
     }
   };
+  const auto has_constraint = [](const shapes_ns::ShapesContext &ctx, const std::string &left,
+                                 const std::string &right) {
+    return ctx.Constraints().count({left, right}) != 0 ||
+           ctx.Constraints().count({right, left}) != 0;
+  };
 
   shapes_ns::ShapesContext ambiguous;
   populate(ambiguous, false);
   onnx_light_cpu::ComputeShapeQMoE(ambiguous, make_node(false));
   EXPECT_EQ(ambiguous.Get("Y").Shape(), ambiguous.Get("X").Shape());
-  EXPECT_EQ(ambiguous.Constraints().count({"H", "5"}), 0U);
-  EXPECT_EQ(ambiguous.Constraints().count({"H", "7"}), 0U);
+  EXPECT_FALSE(has_constraint(ambiguous, "H", "5"));
+  EXPECT_FALSE(has_constraint(ambiguous, "H", "7"));
 
   shapes_ns::ShapesContext disambiguated;
   populate(disambiguated, true);
   onnx_light_cpu::ComputeShapeQMoE(disambiguated, make_node(true));
   EXPECT_EQ(disambiguated.Get("Y").Shape(), disambiguated.Get("X").Shape());
-  EXPECT_EQ(disambiguated.Constraints().count({"H", "5"}), 1U);
-  EXPECT_EQ(disambiguated.Constraints().count({"H", "7"}), 0U);
+  EXPECT_TRUE(has_constraint(disambiguated, "H", "5"));
+  EXPECT_FALSE(has_constraint(disambiguated, "H", "7"));
 }
 
 TEST(CustomOperatorSupport, QMoESplitExpertShapes) {
