@@ -135,7 +135,7 @@ class TestNonZero(ExtTestCase):
     def test_shape_inference_keeps_count_dynamic(self):
         for shape in ([], [7], [2, 3], ["batch", "sequence"], [2, 0, 4]):
             with self.subTest(shape=shape):
-                model = GraphBuilder(_model(shape)).to_onnx("model")
+                model = GraphBuilder(_model(shape)).to_onnx()
                 output = model.graph.output[0].type.tensor_type
                 self.assertEqual(output.elem_type, TensorProto.INT64)
                 self.assertEqual(len(output.shape.dim), 2)
@@ -153,7 +153,7 @@ class TestNonZero(ExtTestCase):
             [tuple(data.outputs[0].shape) for data in case.data_sets],
             [(0, 2), (1, 2), (6, 2), (10, 2), (16, 2), (0, 2)],
         )
-        model = GraphBuilder(case.model).to_onnx("model")
+        model = GraphBuilder(case.model).to_onnx()
         shape = model.graph.output[0].type.tensor_type.shape.dim
         self.assertTrue(shape[0].dim_param)
         self.assertEqual(shape[1].dim_value, 2)

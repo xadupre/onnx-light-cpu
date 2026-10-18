@@ -78,7 +78,7 @@ class TestRotaryEmbedding(ExtTestCase):
                     _model(domain, ("B", 2, "S", 4), (7, 2), ("B", "S"), False, 0, 0),
                     schema_lookup=operator_schema_lookup,
                 )
-                result = builder.to_onnx("model").graph.output[0]
+                result = builder.to_onnx().graph.output[0]
                 self.assertEqual(
                     [
                         dimension.dim_param or dimension.dim_value
@@ -92,7 +92,7 @@ class TestRotaryEmbedding(ExtTestCase):
         model = _model("", (1, 2, 4), (3, 2), (1, 2), False, 0, 1)
         model.graph.input[0].type.tensor_type.elem_type = TensorProto.UNDEFINED
         builder = GraphBuilder(model, schema_lookup=operator_schema_lookup)
-        result = builder.to_onnx("model").graph.output[0]
+        result = builder.to_onnx().graph.output[0]
         self.assertEqual(
             [dimension.dim_value for dimension in result.type.tensor_type.shape.dim],
             [1, 2, 4],

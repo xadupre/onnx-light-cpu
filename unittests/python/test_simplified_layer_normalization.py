@@ -107,7 +107,7 @@ def _check_registration_entry(entry):
         else:
             register_kernels_for_session(session)
     builder = GraphBuilder(_model(), schema_lookup=operator_schema_lookup)
-    model = builder.to_onnx("model")
+    model = builder.to_onnx()
     assert _shape(model.graph.output[0]) == ["B", 3, 4]
     assert _shape(model.graph.output[1]) == ["B", 1, 1]
 
@@ -156,7 +156,7 @@ class TestSimplifiedLayerNormalization(ExtTestCase):
                         ),
                         schema_lookup=operator_schema_lookup,
                     )
-                    model = builder.to_onnx("model")
+                    model = builder.to_onnx()
                     y, statistics = model.graph.output
                     self.assertEqual(_shape(y), ["B", 3, 4])
                     self.assertEqual(y.type.tensor_type.elem_type, TensorProto.FLOAT16)
@@ -180,7 +180,7 @@ class TestSimplifiedLayerNormalization(ExtTestCase):
                     )
                     for name in outputs:
                         builder.make_output(name)
-                    y, statistics = builder.to_onnx("model").graph.output
+                    y, statistics = builder.to_onnx().graph.output
                     self.assertEqual(_shape(y), ["B", "S", 4])
                     self.assertEqual(y.type.tensor_type.elem_type, scale_type)
                     self.assertEqual(_shape(statistics), ["B", 1, 1])
@@ -192,7 +192,7 @@ class TestSimplifiedLayerNormalization(ExtTestCase):
                 _model(scale_shape=(), statistics=statistics),
                 schema_lookup=operator_schema_lookup,
             )
-            model = builder.to_onnx("model")
+            model = builder.to_onnx()
             self.assertEqual(len(model.graph.output), 1)
             self.assertEqual(_shape(model.graph.output[0]), ["B", 3, 4])
             self.assertEqual(model.graph.node[0].output[0], "Y")
