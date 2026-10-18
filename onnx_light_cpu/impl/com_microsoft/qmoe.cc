@@ -8,6 +8,7 @@
 #include "onnx_light_cpu/impl/com_microsoft/moe_matvec.h"
 #include "onnx_light_cpu/impl/execution.h"
 #include "onnx_light_cpu/impl/math/half_conversion.h"
+#include "onnx_light_cpu/impl/simd_level.h"
 
 #include <algorithm>
 #include <cmath>
@@ -15,7 +16,34 @@
 #include <stdexcept>
 
 namespace onnx_light_cpu {
+#if defined(ONNX_LIGHT_CPU_HAVE_AVX512)
+void DequantizeQMoEAvx512(QMoEWeight, float *, std::size_t, std::size_t, std::size_t,
+                          const QMoEAttributes &, std::size_t, std::size_t);
+#endif
+
+#if defined(ONNX_LIGHT_CPU_HAVE_AVX2)
+void DequantizeQMoEAvx2(QMoEWeight, float *, std::size_t, std::size_t, std::size_t,
+                        const QMoEAttributes &, std::size_t, std::size_t);
+#endif
+
 namespace {
+
+using QMoEDequantizeRange = void (*)(QMoEWeight, float *, std::size_t, std::size_t, std::size_t,
+                                     const QMoEAttributes &, std::size_t, std::size_t);
+
+QMoEDequantizeRange SelectQMoEDequantizeRange() {
+#if defined(ONNX_LIGHT_CPU_HAVE_AVX512)
+  if (DetectSimdLevel() >= SimdLevel::kAVX512) {
+    return DequantizeQMoEAvx512;
+  }
+#endif
+#if defined(ONNX_LIGHT_CPU_HAVE_AVX2)
+  if (DetectSimdLevel() >= SimdLevel::kAVX2) {
+    return DequantizeQMoEAvx2;
+  }
+#endif
+  return nullptr;
+}
 
 void ValidateType(MoEDataType type) {
   if (type != MoEDataType::kFloat32 && type != MoEDataType::kFloat16 &&
@@ -138,6 +166,20 @@ void DequantizeQMoEWeights(QMoEWeight weight, float *output, std::size_t experts
   CheckedMultiply(experts, columns, "QMoE", "tensor scales");
   if (count > static_cast<std::size_t>(std::numeric_limits<std::int64_t>::max())) {
     throw std::invalid_argument("QMoE: weight count overflows int64_t.");
+  }
+  if (attributes.block_size != 0 || weight.rowwise_scales) {
+    static const auto range = SelectQMoEDequantizeRange();
+    if (range != nullptr) {
+      const auto rows_per_expert = weight.output_major ? outputs : inputs;
+      const auto columns = weight.output_major ? inputs : outputs;
+      const auto row_count = CheckedMultiply(experts, rows_per_expert, "QMoE", "dequantized rows");
+      ExecuteRanges(static_cast<std::int64_t>(row_count), 8.0 * static_cast<double>(columns),
+                    [&](std::int64_t begin, std::int64_t end) {
+                      range(weight, output, experts, inputs, outputs, attributes,
+                            static_cast<std::size_t>(begin), static_cast<std::size_t>(end));
+                    });
+      return;
+    }
   }
   ExecuteRanges(static_cast<std::int64_t>(count), 8.0, [&](std::int64_t begin, std::int64_t end) {
     for (auto index = begin; index < end; ++index) {

@@ -312,4 +312,74 @@ TEST(QMoERuntime, RejectsTopKLargerThanExpertCountAndInvalidBlockScales) {
   EXPECT_THROW(inputs.Run(QMoEKernel(node, Context())), std::invalid_argument);
 }
 
+TEST(QMoEDequantization, SimdLayoutsPreserveQuantizationAndTails) {
+  constexpr std::size_t experts = 2;
+  constexpr std::size_t inputs = 35;
+  constexpr std::size_t outputs = 27;
+  for (const std::size_t bits : {4U, 8U}) {
+    for (const std::size_t block_size : {0U, 16U}) {
+      for (const bool output_major : {false, true}) {
+        for (const bool unsigned_int8 : {false, true}) {
+          if (bits == 4 && unsigned_int8) {
+            continue;
+          }
+          onnx_light_cpu::QMoEAttributes attributes;
+          attributes.expert_weight_bits = bits;
+          attributes.block_size = block_size;
+          const auto factor = 8 / bits;
+          const auto stored_rows = output_major ? outputs : inputs;
+          const auto columns = output_major ? inputs : outputs;
+          const auto packed = (columns + factor - 1) / factor;
+          const auto blocks = block_size == 0 ? 1 : (columns + block_size - 1) / block_size;
+          std::vector<std::uint8_t> data(experts * stored_rows * packed);
+          std::vector<float> scales(experts * stored_rows * blocks);
+          for (std::size_t row = 0; row < experts * stored_rows; ++row) {
+            for (std::size_t block = 0; block < blocks; ++block) {
+              scales[row * blocks + block] = 0.25f * static_cast<float>(row + block + 1);
+            }
+            for (std::size_t column = 0; column < columns; ++column) {
+              const auto index = row * columns + column;
+              const int quantized = bits == 4 ? static_cast<int>(index % 16) - 8
+                                              : static_cast<int>((index * 7) % 256) - 128;
+              const auto encoded = bits == 4       ? static_cast<std::uint8_t>(quantized + 8)
+                                   : unsigned_int8 ? static_cast<std::uint8_t>(quantized + 128)
+                                                   : static_cast<std::uint8_t>(quantized);
+              if (bits == 4) {
+                data[row * packed + column / 2] |=
+                    static_cast<std::uint8_t>(encoded << (4 * (column % 2)));
+              } else {
+                data[row * packed + column] = encoded;
+              }
+            }
+          }
+          onnx_light_cpu::QMoEWeight weight{
+              data.data(),  scales.data(),   onnx_light_cpu::MoEDataType::kFloat32,
+              output_major, block_size == 0, unsigned_int8};
+          std::vector<float> actual(experts * outputs * inputs);
+          onnx_light_cpu::DequantizeQMoEWeights(weight, actual.data(), experts, inputs, outputs,
+                                                attributes);
+          for (std::size_t row = 0; row < experts * stored_rows; ++row) {
+            const auto expert = row / stored_rows;
+            const auto stored_row = row % stored_rows;
+            for (std::size_t column = 0; column < columns; ++column) {
+              const auto byte = data[row * packed + column / factor];
+              const int quantized = bits == 4
+                                        ? static_cast<int>((byte >> (4 * (column % 2))) & 15) - 8
+                                    : unsigned_int8 ? static_cast<int>(byte) - 128
+                                    : byte < 128    ? static_cast<int>(byte)
+                                                    : static_cast<int>(byte) - 256;
+              const auto block = block_size == 0 ? 0 : column / block_size;
+              const auto scale = scales[row * blocks + block];
+              const auto output_index =
+                  output_major ? row * inputs + column
+                               : expert * outputs * inputs + column * inputs + stored_row;
+              EXPECT_FLOAT_EQ(actual[output_index], static_cast<float>(quantized) * scale);
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
 } // namespace
