@@ -474,10 +474,11 @@ void RegisterRotaryCorrectnessCase(std::vector<TestCase> &registry, const OpsetI
   node.add_output("present_value");
   AddIntAttribute(node, "do_rotary", 1);
   AddIntAttribute(node, "rotary_interleaved", layout);
-  const std::string name =
-      "test_cpu_group_query_attention_rotary_" + std::string(rotary_dim == 8 ? "full" : "partial") +
-      (layout == 0 ? "_split" : "_interleaved") + (past_length == 0 ? "_prefill_" : "_decode_") +
-      DataTypeSuffix(data_type);
+  const std::string name = "test_cpu_group_query_attention_rotary_" +
+                           std::string(rotary_dim == 32 ? "full" : "partial") +
+                           (layout == 0 ? "_split" : "_interleaved") +
+                           (past_length == 0 ? "_prefill_" : "_decode_") +
+                           DataTypeSuffix(data_type);
   Expect(
       registry, node, name, {DefaultOpset(23), microsoft_opset},
       [=]() -> IoData {
@@ -485,15 +486,15 @@ void RegisterRotaryCorrectnessCase(std::vector<TestCase> &registry, const OpsetI
           std::vector<float> values(
               static_cast<std::size_t>(shape.product(0, shape.size(), "GQA rotary fixture")));
           for (std::size_t i = 0; i < values.size(); ++i) {
-            values[i] = offset + static_cast<float>(i + 1) / 128.0f;
+            values[i] = offset + static_cast<float>(i + 1) / 256.0f;
           }
           return MakeTensor(data_type, shape, values);
         };
-        Tensor query = distinct_tensor({1, sequence, 32}, -0.9f);
-        Tensor key = distinct_tensor({1, sequence, 16}, 0.1f);
-        Tensor value = distinct_tensor({1, sequence, 16}, -0.6f);
-        Tensor past_key = distinct_tensor({1, 2, past_length, 8}, 0.2f);
-        Tensor past_value = distinct_tensor({1, 2, past_length, 8}, -0.4f);
+        Tensor query = distinct_tensor({1, sequence, 128}, -0.751f);
+        Tensor key = distinct_tensor({1, sequence, 64}, 0.1f);
+        Tensor value = distinct_tensor({1, sequence, 64}, -0.6f);
+        Tensor past_key = distinct_tensor({1, 2, past_length, 32}, 0.2f);
+        Tensor past_value = distinct_tensor({1, 2, past_length, 32}, -0.4f);
         Tensor seqlens_k =
             Tensor::FromInt32("", {1}, {static_cast<std::int32_t>(past_length + sequence - 1)});
         Tensor total_length =
@@ -772,7 +773,7 @@ void RegisterCpuGroupQueryAttentionCases(std::vector<TestCase> &registry, TestMo
   RegisterCachedRotaryCorrectnessCase(registry, microsoft_opset);
   RegisterChatGlmGenerationCase(registry, microsoft_opset);
   for (const DataType data_type : {DataType::FLOAT, DataType::FLOAT16, DataType::BFLOAT16}) {
-    for (const std::int64_t rotary_dim : {4, 8}) {
+    for (const std::int64_t rotary_dim : {16, 32}) {
       for (const std::int64_t layout : {0, 1}) {
         for (const std::int64_t past_length : {0, 3}) {
           RegisterRotaryCorrectnessCase(registry, microsoft_opset, data_type, rotary_dim, layout,

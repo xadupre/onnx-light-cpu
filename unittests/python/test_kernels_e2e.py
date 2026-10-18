@@ -1043,7 +1043,8 @@ class TestBackendCases(ExtTestCase):
                         _assert_close(actual, _to_numpy(naive), rtol=rtol, atol=atol)
                     past = feeds["past_key"].shape[2]
                     rotary_dim = 2 * feeds["cos_cache"].shape[1]
-                    current_key = feeds["key"].reshape(1, -1, 2, 8).transpose(0, 2, 1, 3)
+                    head_dim = feeds["past_key"].shape[-1]
+                    current_key = feeds["key"].reshape(1, -1, 2, head_dim).transpose(0, 2, 1, 3)
                     np.testing.assert_array_equal(got[1][:, :, :past], feeds["past_key"])
                     np.testing.assert_array_equal(
                         got[1][:, :, past:, rotary_dim:], current_key[:, :, :, rotary_dim:]
