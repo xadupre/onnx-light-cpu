@@ -2070,7 +2070,7 @@ TEST(GemmFloat32, SmallMicroPanelGridKeepsPackingBounded) {
   });
 
   EXPECT_LT(peak_allocation, K * N * sizeof(float));
-  EXPECT_GT(executor.maximum_active.load(std::memory_order_relaxed), 1u);
+  EXPECT_GT(executor.maximum_blocks.load(std::memory_order_relaxed), 1u);
   for (float value : Y) {
     EXPECT_FLOAT_EQ(value, static_cast<float>(K));
   }

@@ -19,6 +19,7 @@ void RegisterCpuBiasGeluCases(std::vector<TestCase> &registry, TestMode mode);
 void RegisterCpuCDistCases(std::vector<TestCase> &registry, TestMode mode);
 void RegisterCpuCausalConvWithStateCases(std::vector<TestCase> &registry, TestMode mode);
 void RegisterCpuGroupQueryAttentionCases(std::vector<TestCase> &registry, TestMode mode);
+void RegisterCpuMultiHeadAttentionCases(std::vector<TestCase> &registry, TestMode mode);
 void RegisterCpuMatMulNBitsCases(std::vector<TestCase> &registry, TestMode mode);
 void RegisterCpuMoECases(std::vector<TestCase> &registry, TestMode mode);
 void RegisterCpuQMoECases(std::vector<TestCase> &registry, TestMode mode);
