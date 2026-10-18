@@ -408,15 +408,11 @@ template <typename Lookup> GqaArgs ResolveAndValidate(const NodeProto &node, Loo
     }
     CheckedShapeIndexProduct(args.cos_cache->shape, "GroupQueryAttention", "cos cache shape");
     CheckedShapeIndexProduct(args.sin_cache->shape, "GroupQueryAttention", "sin cache shape");
-    if (args.head_dim % 2 != 0) {
-      throw std::invalid_argument(
-          "onnx_light_cpu::GroupQueryAttention: rotary embeddings require an even head_size.");
-    }
-    const std::int64_t half = args.head_dim / 2;
-    if (args.cos_cache->shape[1] != half || args.sin_cache->shape[1] != half ||
-        args.cos_cache->shape[0] != args.sin_cache->shape[0]) {
+    const std::int64_t half = args.cos_cache->shape[1];
+    if (args.cos_cache->shape != args.sin_cache->shape || half <= 0 || half > args.head_dim / 2) {
       throw std::invalid_argument("onnx_light_cpu::GroupQueryAttention: cos_cache/sin_cache must "
-                                  "both have shape (max_sequence_length, head_size / 2).");
+                                  "both have shape (max_sequence_length, rotary_dim / 2), with "
+                                  "a positive even rotary_dim <= head_size.");
     }
     if (args.position_ids != nullptr) {
       if (static_cast<DataType>(args.position_ids->data_type) != DataType::INT64 ||
@@ -476,8 +472,8 @@ std::vector<std::int64_t> ResolveRotaryPositions(const GqaArgs &args) {
 // Applies split-half or interleaved RoPE to every head of `input`
 // (rank-3, `(batch, sequence, heads * head_dim)`) at the absolute position
 // supplied in `positions`, reading `cos_cache`/`sin_cache` rows
-// `(position, 0:head_dim/2)`. Returns a freshly materialized tensor of the
-// same shape/type; `input` is left unmodified.
+// `(position, 0:rotary_dim/2)`. The remaining head coordinates are copied
+// unchanged. Returns a tensor of the same shape/type; `input` is left unmodified.
 Tensor ApplyRotaryHalf(RuntimeContext *rt, const Tensor &input, std::int64_t heads,
                        std::int64_t head_dim, const Tensor &cos_cache, const Tensor &sin_cache,
                        const std::vector<std::int64_t> &positions, bool interleaved) {
@@ -486,7 +482,7 @@ Tensor ApplyRotaryHalf(RuntimeContext *rt, const Tensor &input, std::int64_t hea
   const std::int64_t batch = input.shape[0];
   const std::int64_t sequence_length = input.shape[1];
   const std::int64_t hidden = input.shape[2];
-  const std::int64_t half = head_dim / 2;
+  const std::int64_t half = cos_cache.shape[1];
   const std::size_t element_bytes = ElementByteWidth(dtype);
   const std::size_t total_bytes =
       CheckedByteSize(static_cast<std::size_t>(
@@ -505,6 +501,12 @@ Tensor ApplyRotaryHalf(RuntimeContext *rt, const Tensor &input, std::int64_t hea
       const std::size_t row_base = static_cast<std::size_t>((b * sequence_length + s) * hidden);
       for (std::int64_t h = 0; h < heads; ++h) {
         const std::size_t head_base = row_base + static_cast<std::size_t>(h * head_dim);
+        if (2 * half < head_dim) {
+          const std::size_t suffix =
+              (head_base + static_cast<std::size_t>(2 * half)) * element_bytes;
+          std::memcpy(dst + suffix, src + suffix,
+                      static_cast<std::size_t>(head_dim - 2 * half) * element_bytes);
+        }
         for (std::int64_t d = 0; d < half; ++d) {
           const std::size_t cache_index = static_cast<std::size_t>(position * half + d);
           const float cos_value = ReadElementAsFloat(cache_dtype, cos_bytes, cache_index);
