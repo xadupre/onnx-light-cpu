@@ -33,16 +33,43 @@ namespace {
 using namespace onnx_light_cpu;
 
 template <typename Storage, typename Encode, typename Decode>
-void CheckPanels(DataType type, std::size_t bits, Encode encode, Decode decode) {
+void CheckPanels(DataType type, std::size_t bits, Encode encode, Decode decode,
+                 std::size_t block_size = 32, int zero_mode = 0) {
   const std::size_t values_per_byte = 8 / bits;
-  const std::size_t blob_size = 32 * bits / 8;
+  const std::size_t blob_size = block_size * bits / 8;
   const std::uint8_t mask = static_cast<std::uint8_t>((1U << bits) - 1U);
   const int zero_point = 1 << (bits - 1);
+  const std::vector<std::size_t> depths = block_size == 32
+                                              ? std::vector<std::size_t>{0, 1, 15, 31, 32, 33, 65}
+                                              : std::vector<std::size_t>{0,
+                                                                         1,
+                                                                         block_size - 1,
+                                                                         block_size,
+                                                                         block_size + 1,
+                                                                         2 * block_size + 3,
+                                                                         5 * block_size - 1};
   for (std::size_t m : {0u, 1u, 2u, 7u, 8u, 9u, 17u}) {
+    if (block_size != 32 && m != 0 && m != 1 && m != 9) {
+      continue;
+    }
     for (std::size_t n = 1; n <= 65; ++n) {
-      for (std::size_t k : {0u, 1u, 15u, 31u, 32u, 33u, 65u}) {
+      if (block_size != 32 && n != 1 && n != 33) {
+        continue;
+      }
+      for (std::size_t k : depths) {
         SCOPED_TRACE(::testing::Message() << m << ',' << k << ',' << n);
-        const auto blocks = (k + 31) / 32;
+        const auto blocks = (k + block_size - 1) / block_size;
+        const auto zero_stride = (blocks + values_per_byte - 1) / values_per_byte;
+        std::vector<std::uint8_t> packed_zeros(n * zero_stride, 0);
+        std::vector<Storage> float_zeros(n * blocks);
+        for (std::size_t c = 0; c < n; ++c) {
+          for (std::size_t block = 0; block < blocks; ++block) {
+            const auto zero = (c + block + 1) & mask;
+            packed_zeros[c * zero_stride + block / values_per_byte] |=
+                static_cast<std::uint8_t>(zero << ((block % values_per_byte) * bits));
+            float_zeros[c * blocks + block] = encode(static_cast<float>(zero) + 0.5f);
+          }
+        }
         std::vector<Storage> a(m * k), scales(n * blocks), bias(n), output(m * n + 1);
         std::vector<std::uint8_t> packed(n * blocks * blob_size);
         for (std::size_t i = 0; i < a.size(); ++i) {
@@ -60,19 +87,27 @@ void CheckPanels(DataType type, std::size_t bits, Encode encode, Decode decode) 
         const auto original = packed;
         for (bool with_bias : {false, true}) {
           output.back() = encode(-42);
-          for (int repeat = 0; repeat < 2; ++repeat) {
+          for (int repeat = 0; repeat < (block_size == 32 ? 2 : 1); ++repeat) {
             MatMulNBits(a.data(), packed.data(), scales.data(), with_bias ? bias.data() : nullptr,
-                        output.data(), type, m, k, n, bits, 32);
+                        output.data(), type, m, k, n, bits, block_size,
+                        kDefaultMatMulNBitsExecutionTuning,
+                        zero_mode == 1   ? static_cast<const void *>(packed_zeros.data())
+                        : zero_mode == 2 ? static_cast<const void *>(float_zeros.data())
+                                         : nullptr,
+                        zero_mode != 2);
             for (std::size_t r = 0; r < m; ++r) {
               for (std::size_t c = 0; c < n; ++c) {
                 float expected = with_bias ? decode(bias[c]) : 0;
                 for (std::size_t p = 0; p < k; ++p) {
-                  const auto index = c * blocks + p / 32;
-                  const std::size_t offset = p % 32;
+                  const auto index = c * blocks + p / block_size;
+                  const std::size_t offset = p % block_size;
                   const int q = (packed[index * blob_size + offset / values_per_byte] >>
                                  ((offset % values_per_byte) * bits)) &
                                 mask;
-                  expected += decode(a[r * k + p]) * (q - zero_point) * decode(scales[index]);
+                  const float zero = zero_mode == 0   ? zero_point
+                                     : zero_mode == 1 ? ((c + p / block_size + 1) & mask)
+                                                      : decode(float_zeros[index]);
+                  expected += decode(a[r * k + p]) * ((q - zero) * decode(scales[index]));
                 }
                 EXPECT_EQ(output[r * n + c], encode(expected));
               }
@@ -93,6 +128,23 @@ TEST(MatMulNBits, PanelTailsAndRepeatedPackedConstantsAllTypes) {
                                detail::Float16BitsToFloat);
     CheckPanels<std::uint16_t>(DataType::BFLOAT16, bits, detail::FloatToBFloat16Bits,
                                detail::Bfloat16BitsToFloat);
+  }
+}
+
+TEST(MatMulNBits, Non32GroupsAndExplicitZeroPointsAllTypes) {
+  for (std::size_t block_size : {16u, 64u, 128u, 256u}) {
+    for (std::size_t bits : {2u, 4u, 8u}) {
+      for (int zero_mode : {0, 1, 2}) {
+        SCOPED_TRACE(::testing::Message() << bits << ',' << block_size << ',' << zero_mode);
+        CheckPanels<float>(
+            DataType::FLOAT, bits, [](float x) { return x; }, [](float x) { return x; }, block_size,
+            zero_mode);
+        CheckPanels<std::uint16_t>(DataType::FLOAT16, bits, detail::FloatToFloat16Bits,
+                                   detail::Float16BitsToFloat, block_size, zero_mode);
+        CheckPanels<std::uint16_t>(DataType::BFLOAT16, bits, detail::FloatToBFloat16Bits,
+                                   detail::Bfloat16BitsToFloat, block_size, zero_mode);
+      }
+    }
   }
 }
 

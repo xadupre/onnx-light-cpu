@@ -33,15 +33,19 @@ using rt_ns::OpsetId;
 using rt_ns::Tensor;
 
 ONNX_LIGHT_NAMESPACE::NodeProto MakeMatMulNBitsNode(std::int64_t k, std::int64_t n,
-                                                    std::int64_t bits, bool with_bias) {
+                                                    std::int64_t bits, bool with_bias,
+                                                    std::int64_t block_size = 32,
+                                                    bool with_zeros = false) {
   ONNX_LIGHT_NAMESPACE::NodeProto node;
   node.set_op_type("MatMulNBits");
   node.set_domain(kMicrosoftDomain);
   node.add_input("A");
   node.add_input("B");
   node.add_input("scales");
+  if (with_bias || with_zeros) {
+    node.add_input(with_zeros ? "zero_points" : "");
+  }
   if (with_bias) {
-    node.add_input("");
     node.add_input("");
     node.add_input("bias");
   }
@@ -49,22 +53,23 @@ ONNX_LIGHT_NAMESPACE::NodeProto MakeMatMulNBitsNode(std::int64_t k, std::int64_t
   ONNX_LIGHT_NAMESPACE::AddAttribute(node, "K", k);
   ONNX_LIGHT_NAMESPACE::AddAttribute(node, "N", n);
   ONNX_LIGHT_NAMESPACE::AddAttribute(node, "bits", bits);
-  ONNX_LIGHT_NAMESPACE::AddAttribute(node, "block_size", std::int64_t{32});
+  ONNX_LIGHT_NAMESPACE::AddAttribute(node, "block_size", block_size);
   ONNX_LIGHT_NAMESPACE::AddAttribute(node, "accuracy_level", std::int64_t{4});
   return node;
 }
 
-std::vector<std::uint8_t> MakePackedWeights(std::int64_t k, std::int64_t n, std::int64_t bits) {
-  const std::int64_t blocks = (k + 31) / 32;
-  const std::int64_t blob_size = 4 * bits;
+std::vector<std::uint8_t> MakePackedWeights(std::int64_t k, std::int64_t n, std::int64_t bits,
+                                            std::int64_t block_size, bool ternary) {
+  const std::int64_t blocks = (k + block_size - 1) / block_size;
+  const std::int64_t blob_size = block_size * bits / 8;
   const std::int64_t values_per_byte = 8 / bits;
   const std::uint8_t mask = static_cast<std::uint8_t>((1U << bits) - 1U);
   std::vector<std::uint8_t> packed(static_cast<std::size_t>(n * blocks * blob_size));
   for (std::int64_t column = 0; column < n; ++column) {
     for (std::int64_t block = 0; block < blocks; ++block) {
-      for (std::int64_t offset = 0; offset < 32; ++offset) {
-        const std::uint8_t value =
-            static_cast<std::uint8_t>((column * 3 + block + offset + 1) & mask);
+      for (std::int64_t offset = 0; offset < block_size; ++offset) {
+        const auto code = column * 3 + block + offset + 1;
+        const std::uint8_t value = static_cast<std::uint8_t>(ternary ? code % 3 : code & mask);
         const std::size_t byte = static_cast<std::size_t>((column * blocks + block) * blob_size +
                                                           offset / values_per_byte);
         packed[byte] |= static_cast<std::uint8_t>(
@@ -76,24 +81,48 @@ std::vector<std::uint8_t> MakePackedWeights(std::int64_t k, std::int64_t n, std:
 }
 
 IoData MakeCaseData(std::int64_t m, std::int64_t k, std::int64_t n, std::int64_t bits,
-                    DataType data_type, bool with_bias, const KernelContext *kernel_context) {
-  const std::int64_t blocks = (k + 31) / 32;
+                    DataType data_type, bool with_bias, const KernelContext *kernel_context,
+                    std::int64_t block_size = 32, int zero_mode = 0) {
+  const std::int64_t blocks = (k + block_size - 1) / block_size;
   Tensor a = MakeBenchmarkTensor(data_type, {m, k}, 7301 + bits);
   Tensor scales = MakeBenchmarkTensor(data_type, {n, blocks}, 7311 + bits);
-  std::vector<std::uint8_t> packed_values = MakePackedWeights(k, n, bits);
-  Tensor b = Tensor::FromUint8("", {n, blocks, 4 * bits}, packed_values);
+  const bool ternary = bits == 2 && block_size == 128 && zero_mode == 1;
+  std::vector<std::uint8_t> packed_values = MakePackedWeights(k, n, bits, block_size, ternary);
+  Tensor b = Tensor::FromUint8("", {n, blocks, block_size * bits / 8}, packed_values);
   std::vector<Tensor> inputs;
   inputs.push_back(std::move(a));
   inputs.push_back(std::move(b));
   inputs.push_back(std::move(scales));
+  if (zero_mode == 1) {
+    const auto per_byte = 8 / bits;
+    const auto stride = (blocks + per_byte - 1) / per_byte;
+    std::vector<std::uint8_t> zeros(n * stride, 0);
+    for (std::int64_t column = 0; column < n; ++column) {
+      for (std::int64_t block = 0; block < blocks; ++block) {
+        const auto zero = ternary ? 1 : (column + block + 1) % (1 << bits);
+        zeros[column * stride + block / per_byte] |=
+            static_cast<std::uint8_t>(zero << ((block % per_byte) * bits));
+      }
+    }
+    inputs.push_back(Tensor::FromUint8("", {n, stride}, zeros));
+  } else if (zero_mode == 2) {
+    std::vector<float> zeros(n * blocks);
+    for (std::size_t i = 0; i < zeros.size(); ++i) {
+      zeros[i] = static_cast<float>((i + 1) % (1 << bits)) + 0.5f;
+    }
+    inputs.push_back(MakeTensor(data_type, {n, blocks}, zeros));
+  }
   if (with_bias) {
     inputs.push_back(MakeBenchmarkTensor(data_type, {n}, 7321 + bits));
   }
   if (kernel_context == nullptr) {
     return IoData{std::move(inputs), {}, {}, false};
   }
-  const MatMulNBitsKernel kernel{MakeMatMulNBitsNode(k, n, bits, with_bias), *kernel_context};
-  Tensor y = kernel(inputs[0], inputs[1], inputs[2], with_bias ? &inputs[3] : nullptr);
+  const MatMulNBitsKernel kernel{
+      MakeMatMulNBitsNode(k, n, bits, with_bias, block_size, zero_mode != 0), *kernel_context};
+  Tensor y =
+      kernel(inputs[0], inputs[1], inputs[2], with_bias ? &inputs[zero_mode == 0 ? 3 : 4] : nullptr,
+             nullptr, zero_mode == 0 ? nullptr : &inputs[3]);
   return IoData{std::move(inputs), {std::move(y)}};
 }
 
@@ -179,6 +208,31 @@ void RegisterCpuMatMulNBitsCases(std::vector<TestCase> &registry, TestMode mode)
           },
           "backend-test", bt_ns::TestCaseTag::AI_RT);
       SetTolerance(registry, data_type);
+    }
+    for (const std::int64_t block_size : {16, 32, 64, 128, 256}) {
+      for (const std::int64_t bits : bit_widths) {
+        for (int zero_mode : {0, 1, 2}) {
+          for (bool with_bias : {false, true}) {
+            const auto k = 4 * block_size + 3;
+            const std::string name =
+                std::string("test_cpu_matmulnbits_") +
+                (bits == 2 && block_size == 128 && zero_mode == 1 ? "ternary_bonsai_" : "") +
+                "groups_bits" + std::to_string(bits) + "_block" + std::to_string(block_size) +
+                "_zeros" + std::to_string(zero_mode) + (with_bias ? "_bias_" : "_") +
+                DataTypeSuffix(data_type);
+            Expect(
+                registry, MakeMatMulNBitsNode(k, 17, bits, with_bias, block_size, zero_mode != 0),
+                name, {DefaultOpset(26), OpsetId(kMicrosoftDomain, 1)},
+                [=]() {
+                  const KernelContext kernel_context{OpsetId(kMicrosoftDomain, 1)};
+                  return MakeCaseData(2, k, 17, bits, data_type, with_bias, &kernel_context,
+                                      block_size, zero_mode);
+                },
+                "backend-test", bt_ns::TestCaseTag::AI_RT);
+            SetTolerance(registry, data_type);
+          }
+        }
+      }
     }
   }
 }

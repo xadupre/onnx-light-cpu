@@ -75,13 +75,12 @@ MatMulNBitsAttributes ParseAttributes(const ONNX_LIGHT_NAMESPACE::NodeProto &nod
   if (attributes.k <= 0 || attributes.n <= 0) {
     throw std::invalid_argument("onnx_light_cpu::MatMulNBits: K and N must be positive.");
   }
-  if ((attributes.bits != 2 && attributes.bits != 3 && attributes.bits != 4 &&
-       attributes.bits != 8) ||
-      attributes.block_size != 32 ||
+  if (!MatMulNBitsBlockSizeSupported(attributes.bits, attributes.block_size) ||
       (attributes.accuracy_level != 0 && attributes.accuracy_level != 4) ||
       attributes.weight_prepacked != 0) {
     throw std::invalid_argument(
-        "onnx_light_cpu::MatMulNBits: the kernel requires bits=2, 3, 4, or 8, block_size=32, "
+        "onnx_light_cpu::MatMulNBits: bits=2, 4, or 8 require a power-of-two block_size in "
+        "[16, UINT32_MAX]; bits=3 requires block_size=32; the kernel requires "
         "accuracy_level 0 or 4, and weight_prepacked=0.");
   }
   return attributes;
@@ -247,12 +246,14 @@ struct MatMulNBitsKernel::PreparedInt4State {
 
 struct MatMulNBitsKernel::PreparedEncodedState {
   PreparedEncodedState(std::shared_ptr<const ONNX_LIGHT_NAMESPACE::EncodedValueProto> owner_,
-                       Tensor weights_, Tensor scales_)
-      : owner(std::move(owner_)), weights(std::move(weights_)), scales(std::move(scales_)) {}
+                       Tensor weights_, Tensor scales_, std::optional<Tensor> zero_points_)
+      : owner(std::move(owner_)), weights(std::move(weights_)), scales(std::move(scales_)),
+        zero_points(std::move(zero_points_)) {}
 
   std::shared_ptr<const ONNX_LIGHT_NAMESPACE::EncodedValueProto> owner;
   Tensor weights;
   Tensor scales;
+  std::optional<Tensor> zero_points;
 };
 
 MatMulNBitsKernel::MatMulNBitsKernel(const ONNX_LIGHT_NAMESPACE::NodeProto &node,
@@ -315,7 +316,9 @@ bool MatMulNBitsKernel::HasPreparations(
       (node_->input_size() < 3 || node_->input(2).empty())) {
     return immutable_inputs.contains(node_->input(1));
   }
-  return ((attributes_.bits == 4 && attributes_.accuracy_level == 4 &&
+  return node_ != nullptr && attributes_.block_size == 32 &&
+         (node_->input_size() <= 3 || node_->input(3).empty()) &&
+         ((attributes_.bits == 4 && attributes_.accuracy_level == 4 &&
            MatMulNBitsAccuracy4Float32Available() && attributes_.n % 16 == 0) ||
           (attributes_.bits == 8 && attributes_.accuracy_level == 4 &&
            MatMulNBitsInt8Float32Available())) &&
@@ -358,8 +361,15 @@ void MatMulNBitsKernel::Prepare(rt_ns::RuntimeContext &rt,
     Tensor scales = Tensor::Borrow("scales", inputs.scales.data_type(),
                                    rt_ns::Shape(inputs.scales.dims().values()),
                                    raw_data.data() + weight_bytes, inputs.scales.raw_data().size());
+    std::optional<Tensor> zero_points;
+    if (inputs.zero_points) {
+      const auto &zero = *inputs.zero_points;
+      zero_points = Tensor::Borrow(
+          "zero_points", zero.data_type(), rt_ns::Shape(zero.dims().values()),
+          raw_data.data() + weight_bytes + inputs.scales.raw_data().size(), zero.raw_data().size());
+    }
     prepared_encoded_ = std::make_unique<PreparedEncodedState>(
-        encoded->second.encoded, std::move(weights), std::move(scales));
+        encoded->second.encoded, std::move(weights), std::move(scales), std::move(zero_points));
     return;
   }
   if (attributes_.bits == 3) {
@@ -442,11 +452,12 @@ void MatMulNBitsKernel::Prepare(rt_ns::RuntimeContext &rt,
 }
 
 Tensor MatMulNBitsKernel::operator()(const Tensor &a, const Tensor &b, const Tensor &scales,
-                                     const Tensor *bias, rt_ns::RuntimeContext *rt) const {
+                                     const Tensor *bias, rt_ns::RuntimeContext *rt,
+                                     const Tensor *zero_points) const {
   if (attributes_.bits == 3) {
     throw std::invalid_argument("MatMulNBits INT3: B must be an EncodedValueProto.");
   }
-  return Compute(a, b, scales, bias, rt, true);
+  return Compute(a, b, scales, bias, rt, true, zero_points);
 }
 
 Tensor MatMulNBitsKernel::operator()(const Tensor &a,
@@ -466,7 +477,14 @@ Tensor MatMulNBitsKernel::operator()(const Tensor &a,
   const Tensor scales = Tensor::Borrow(
       "scales", inputs.scales.data_type(), rt_ns::Shape(inputs.scales.dims().values()),
       raw_data.data() + weight_bytes, inputs.scales.raw_data().size());
-  return Compute(a, b, scales, bias, rt, false);
+  std::optional<Tensor> zero_points;
+  if (inputs.zero_points) {
+    const auto &zero = *inputs.zero_points;
+    zero_points = Tensor::Borrow(
+        "zero_points", zero.data_type(), rt_ns::Shape(zero.dims().values()),
+        raw_data.data() + weight_bytes + inputs.scales.raw_data().size(), zero.raw_data().size());
+  }
+  return Compute(a, b, scales, bias, rt, false, zero_points ? &*zero_points : nullptr);
 }
 
 Tensor MatMulNBitsKernel::ComputeInt3(const Tensor &a,
@@ -516,16 +534,12 @@ rt_ns::MatMulNBitsInputs MatMulNBitsKernel::ValidateEncodedWeights(
         "onnx_light_cpu::MatMulNBits: EncodedValueProto geometry does not match the node "
         "attributes.");
   }
-  if (inputs.zero_points.has_value()) {
-    throw std::invalid_argument(
-        "onnx_light_cpu::MatMulNBits: EncodedValueProto zero points are not supported.");
-  }
   return inputs;
 }
 
 Tensor MatMulNBitsKernel::Compute(const Tensor &a, const Tensor &b, const Tensor &scales,
                                   const Tensor *bias, rt_ns::RuntimeContext *rt,
-                                  bool allow_prepacking) const {
+                                  bool allow_prepacking, const Tensor *zero_points) const {
   const auto data_type = static_cast<RuntimeDataType>(a.data_type);
   if ((data_type != RuntimeDataType::FLOAT && data_type != RuntimeDataType::FLOAT16 &&
        data_type != RuntimeDataType::BFLOAT16) ||
@@ -555,6 +569,22 @@ Tensor MatMulNBitsKernel::Compute(const Tensor &a, const Tensor &b, const Tensor
       "B");
   const std::size_t expected_scales =
       CheckedMultiply(n, k_blocks, "MatMulNBits", "scale element count");
+  if (zero_points != nullptr) {
+    const bool packed = zero_points->data_type == static_cast<std::int32_t>(RuntimeDataType::UINT8);
+    if (!packed && zero_points->data_type != a.data_type) {
+      throw std::invalid_argument("MatMulNBits: zero_points must be UINT8 or match A's type.");
+    }
+    const auto per_byte = 8 / static_cast<std::size_t>(attributes_.bits);
+    const auto stride = packed ? k_blocks / per_byte + (k_blocks % per_byte != 0) : k_blocks;
+    if (!((zero_points->shape.size() == 1 &&
+           TensorElementCount(*zero_points, "zero_points") ==
+               CheckedMultiply(n, stride, "MatMulNBits", "zero point count")) ||
+          (zero_points->shape.size() == 2 && zero_points->shape[0] == attributes_.n &&
+           zero_points->shape[1] == static_cast<std::int64_t>(stride)))) {
+      throw std::invalid_argument("MatMulNBits: invalid zero_points shape.");
+    }
+    allow_prepacking = false;
+  }
   if (!((scales.shape.size() == 1 && TensorElementCount(scales, "scales") == expected_scales) ||
         (scales.shape.size() == 2 && scales.shape[0] == attributes_.n &&
          scales.shape[1] == static_cast<std::int64_t>(k_blocks)))) {
@@ -618,8 +648,8 @@ Tensor MatMulNBitsKernel::Compute(const Tensor &a, const Tensor &b, const Tensor
                                                       prepared_int4_->weight_sum_bytes);
     prepared_max_participants = prepared_int4_->max_participants;
   }
-  if (allow_prepacking && attributes_.bits == 4 && attributes_.accuracy_level == 4 &&
-      MatMulNBitsAccuracy4Float32Available() &&
+  if (allow_prepacking && attributes_.block_size == 32 && attributes_.bits == 4 &&
+      attributes_.accuracy_level == 4 && MatMulNBitsAccuracy4Float32Available() &&
       (data_type == RuntimeDataType::FLOAT || data_type == RuntimeDataType::FLOAT16 ||
        data_type == RuntimeDataType::BFLOAT16) &&
       n % 16 == 0 && k % 32 == 0) {
@@ -677,7 +707,10 @@ Tensor MatMulNBitsKernel::Compute(const Tensor &a, const Tensor &b, const Tensor
   }
   MatMulNBits(a.bytes(), b.bytes(), scales.bytes(), bias == nullptr ? nullptr : bias->bytes(),
               y.mutable_bytes(), static_cast<onnx_light_cpu::DataType>(a.data_type), rows, k, n,
-              static_cast<std::size_t>(attributes_.bits), block_size, tuning_);
+              static_cast<std::size_t>(attributes_.bits), block_size, tuning_,
+              zero_points == nullptr ? nullptr : zero_points->bytes(),
+              zero_points == nullptr ||
+                  zero_points->data_type == static_cast<std::int32_t>(RuntimeDataType::UINT8));
   return y;
 }
 
@@ -689,10 +722,9 @@ void MatMulNBitsKernel::Run(rt_ns::RuntimeContext &rt) {
         "onnx_light_cpu::MatMulNBits: expected A, B, optional scales, and optional input slots.");
   }
   rt_ns::RequireOutputCount(node, 1);
-  if ((node.input_size() > 3 && !node.input(3).empty()) ||
-      (node.input_size() > 4 && !node.input(4).empty())) {
+  if (node.input_size() > 4 && !node.input(4).empty()) {
     throw std::invalid_argument(
-        "onnx_light_cpu::MatMulNBits: zero_points and g_idx are not supported by the foundation "
+        "onnx_light_cpu::MatMulNBits: g_idx is not supported by the foundation "
         "kernel.");
   }
   const Tensor *bias = rt_ns::GetOptionalInput(node, 5, rt.tensors());
@@ -702,19 +734,22 @@ void MatMulNBitsKernel::Run(rt_ns::RuntimeContext &rt) {
       throw std::invalid_argument(
           "onnx_light_cpu::MatMulNBits: B must be a Tensor or EncodedValueProto.");
     }
-    if (node.input_size() > 2 && !node.input(2).empty()) {
+    if ((node.input_size() > 2 && !node.input(2).empty()) ||
+        (node.input_size() > 3 && !node.input(3).empty())) {
       throw std::invalid_argument(
-          "onnx_light_cpu::MatMulNBits: scales must be omitted when B is an EncodedValueProto.");
+          "onnx_light_cpu::MatMulNBits: scales and zero_points must be omitted when B is encoded.");
     }
     if (encoded->second.Encoded().has_parameter_ref()) {
       throw std::invalid_argument(
           "onnx_light_cpu::MatMulNBits: shared EncodedValueProto parameters are not supported.");
     }
     if (prepared_encoded_ != nullptr) {
-      rt_ns::SetOutput(node, 0,
-                       Compute(rt_ns::GetInput(node, 0, rt), prepared_encoded_->weights,
-                               prepared_encoded_->scales, bias, &rt, false),
-                       rt);
+      rt_ns::SetOutput(
+          node, 0,
+          Compute(rt_ns::GetInput(node, 0, rt), prepared_encoded_->weights,
+                  prepared_encoded_->scales, bias, &rt, false,
+                  prepared_encoded_->zero_points ? &*prepared_encoded_->zero_points : nullptr),
+          rt);
       return;
     }
     rt_ns::SetOutput(node, 0,
@@ -732,7 +767,8 @@ void MatMulNBitsKernel::Run(rt_ns::RuntimeContext &rt) {
   }
   rt_ns::SetOutput(node, 0,
                    (*this)(rt_ns::GetInput(node, 0, rt), rt_ns::GetInput(node, 1, rt),
-                           rt_ns::GetInput(node, 2, rt), bias, &rt),
+                           rt_ns::GetInput(node, 2, rt), bias, &rt,
+                           rt_ns::GetOptionalInput(node, 3, rt.tensors())),
                    rt);
 }
 

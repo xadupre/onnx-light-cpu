@@ -89,10 +89,12 @@ template <typename Codec, std::size_t Bits>
 void MatMulNBitsPanels(const typename Codec::Storage *a, const std::uint8_t *b,
                        const typename Codec::Storage *scales, const typename Codec::Storage *bias,
                        typename Codec::Storage *y, std::size_t rows, std::size_t k, std::size_t n,
-                       std::size_t k_blocks, const ExecutionSchedule &schedule) {
+                       std::size_t k_blocks, std::size_t block_size, const void *zero_points,
+                       bool packed_zero_points, const ExecutionSchedule &schedule) {
   using namespace detail;
   constexpr std::size_t kValuesPerByte = 8 / Bits;
-  constexpr std::size_t kBlobSize = kNBitsBlock * Bits / 8;
+  const std::size_t blob_size = block_size * Bits / 8;
+  const std::size_t zero_stride = k_blocks / kValuesPerByte + (k_blocks % kValuesPerByte != 0);
   constexpr std::uint8_t kMask = static_cast<std::uint8_t>((1U << Bits) - 1U);
   constexpr int kZeroPoint = 1 << (Bits - 1);
   const NBitsPanelFn accumulate = PanelImplementation();
@@ -133,24 +135,38 @@ void MatMulNBitsPanels(const typename Codec::Storage *a, const std::uint8_t *b,
               }
             }
           }
-          for (std::size_t block = 0; block < k_blocks; ++block) {
-            const auto depth = std::min(kNBitsBlock, k - block * kNBitsBlock);
+          for (std::size_t first_k = 0; first_k < k;) {
+            const auto block = first_k / block_size;
+            const auto offset = first_k % block_size;
+            const auto depth = std::min({kNBitsBlock, k - first_k, block_size - offset});
             for (std::size_t c = 0; c < nr; ++c) {
               const auto index = (first_column + c) * k_blocks + block;
-              const auto *packed = b + index * kBlobSize;
+              const auto *packed = b + index * blob_size + offset / kValuesPerByte;
               const float scale = Codec::Load(scales[index]);
+              float zero = kZeroPoint;
+              if (zero_points != nullptr) {
+                if (packed_zero_points) {
+                  const auto byte = static_cast<const std::uint8_t *>(
+                      zero_points)[(first_column + c) * zero_stride + block / kValuesPerByte];
+                  zero = (byte >> ((block % kValuesPerByte) * Bits)) & kMask;
+                } else {
+                  zero =
+                      Codec::Load(static_cast<const typename Codec::Storage *>(zero_points)[index]);
+                }
+              }
               for (std::size_t p = 0; p < depth; ++p) {
                 const int q = (packed[p / kValuesPerByte] >> ((p % kValuesPerByte) * Bits)) & kMask;
-                weights[p * kNBitsColumns + c] = static_cast<float>(q - kZeroPoint) * scale;
+                weights[p * kNBitsColumns + c] = (static_cast<float>(q) - zero) * scale;
               }
             }
             for (std::size_t r = 0; r < mr; ++r) {
               for (std::size_t p = 0; p < depth; ++p) {
                 activations[r * kNBitsBlock + p] =
-                    Codec::Load(a[(first_row + r) * k + block * kNBitsBlock + p]);
+                    Codec::Load(a[(first_row + r) * k + first_k + p]);
               }
             }
             accumulate(activations, weights, sums, mr, depth);
+            first_k += depth;
           }
           for (std::size_t r = 0; r < mr; ++r) {
             for (std::size_t c = 0; c < nr; ++c) {
@@ -165,9 +181,12 @@ template <typename Codec>
 void MatMulNBitsTyped(const void *a_raw, const std::uint8_t *b, const void *scales_raw,
                       const void *bias_raw, void *y_raw, std::size_t rows, std::size_t k,
                       std::size_t n, std::size_t bits, std::size_t block_size,
-                      const MatMulNBitsExecutionTuning &tuning) {
-  if (block_size != 32) {
-    throw std::invalid_argument("onnx_light_cpu::MatMulNBits: block_size must be 32.");
+                      const MatMulNBitsExecutionTuning &tuning, const void *zero_points,
+                      bool packed_zero_points) {
+  if (!MatMulNBitsBlockSizeSupported(bits, block_size)) {
+    throw std::invalid_argument(
+        "onnx_light_cpu::MatMulNBits: bits must be 2, 4, or 8 and block_size must be a power "
+        "of two in [16, UINT32_MAX].");
   }
   if (bits != 2 && bits != 4 && bits != 8) {
     throw std::invalid_argument("onnx_light_cpu::MatMulNBits: bits must be 2, 4, or 8.");
@@ -204,13 +223,16 @@ void MatMulNBitsTyped(const void *a_raw, const std::uint8_t *b, const void *scal
   };
   switch (bits) {
   case 2:
-    MatMulNBitsPanels<Codec, 2>(a, b, scales, bias, y, rows, k, n, k_blocks, schedule);
+    MatMulNBitsPanels<Codec, 2>(a, b, scales, bias, y, rows, k, n, k_blocks, block_size,
+                                zero_points, packed_zero_points, schedule);
     return;
   case 4:
-    MatMulNBitsPanels<Codec, 4>(a, b, scales, bias, y, rows, k, n, k_blocks, schedule);
+    MatMulNBitsPanels<Codec, 4>(a, b, scales, bias, y, rows, k, n, k_blocks, block_size,
+                                zero_points, packed_zero_points, schedule);
     return;
   case 8:
-    MatMulNBitsPanels<Codec, 8>(a, b, scales, bias, y, rows, k, n, k_blocks, schedule);
+    MatMulNBitsPanels<Codec, 8>(a, b, scales, bias, y, rows, k, n, k_blocks, block_size,
+                                zero_points, packed_zero_points, schedule);
     return;
   }
   ExecuteRanges(
@@ -356,17 +378,20 @@ const char *MatMulNBitsInt4Implementation() {
 
 void MatMulNBits(const void *a, const std::uint8_t *b, const void *scales, const void *bias,
                  void *y, DataType data_type, std::size_t rows, std::size_t k, std::size_t n,
-                 std::size_t bits, std::size_t block_size,
-                 const MatMulNBitsExecutionTuning &tuning) {
+                 std::size_t bits, std::size_t block_size, const MatMulNBitsExecutionTuning &tuning,
+                 const void *zero_points, bool packed_zero_points) {
   switch (data_type) {
   case DataType::FLOAT:
-    MatMulNBitsTyped<FloatCodec>(a, b, scales, bias, y, rows, k, n, bits, block_size, tuning);
+    MatMulNBitsTyped<FloatCodec>(a, b, scales, bias, y, rows, k, n, bits, block_size, tuning,
+                                 zero_points, packed_zero_points);
     return;
   case DataType::FLOAT16:
-    MatMulNBitsTyped<Float16Codec>(a, b, scales, bias, y, rows, k, n, bits, block_size, tuning);
+    MatMulNBitsTyped<Float16Codec>(a, b, scales, bias, y, rows, k, n, bits, block_size, tuning,
+                                   zero_points, packed_zero_points);
     return;
   case DataType::BFLOAT16:
-    MatMulNBitsTyped<BFloat16Codec>(a, b, scales, bias, y, rows, k, n, bits, block_size, tuning);
+    MatMulNBitsTyped<BFloat16Codec>(a, b, scales, bias, y, rows, k, n, bits, block_size, tuning,
+                                    zero_points, packed_zero_points);
     return;
   default:
     throw std::invalid_argument(

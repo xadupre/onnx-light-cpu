@@ -17,13 +17,18 @@ MatMulNBits
 The ``com.microsoft::MatMulNBits-1`` CPU implementation targets the
 Qwen2/Qwen3 weight layout with matching ``FLOAT``, ``FLOAT16``, or ``BFLOAT16``
 activations, scales, optional bias, and output. Packed ``UINT8`` storage holds
-2-bit, 4-bit, or 8-bit weights with ``block_size=32`` and an implicit midpoint
-zero point of 2, 8, or 128 respectively.
+2-bit, 4-bit, or 8-bit weights with power-of-two ``block_size`` in
+``[16, UINT32_MAX]``, including 128-element ternary groups. The implicit midpoint
+zero point is 2, 8, or 128 respectively; explicit packed UINT8 or matching
+floating-point zero points are also supported. Scales and zero points are
+indexed by quantization group, independently of the 32-element compute panels.
 It consumes the packed weights directly without allocating or expanding a
 floating-point weight matrix. ``accuracy_level`` 0 and 4 are accepted.
-Explicit zero points, ``g_idx``, prepacked provider-specific layouts, other
-bit widths, block sizes, mixed floating-point types, and ``DOUBLE`` are
-rejected.
+``g_idx``, prepacked provider-specific layouts, invalid block sizes, mixed
+floating-point types, and ``DOUBLE`` are rejected. The separate encoded INT3
+layout requires block size 32. INT4/INT8 optimized preparation is used only
+for block size 32 with implicit zero points; all other supported groups use
+the bounded-panel path, including K tails and optional bias.
 
 Gather
 ^^^^^^

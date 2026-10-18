@@ -166,23 +166,35 @@ Microsoft MatMulNBits
 block-quantized right-hand matrix without materializing the complete
 dequantized matrix. The CPU contract implements packed INT2, INT4, and INT8
 formats with required ``K`` and ``N`` attributes, ``bits`` equal to 2, 4, or
-8, ``block_size=32``, ``accuracy_level`` 0 or 4, and
+8, a power-of-two ``block_size`` in ``[16, UINT32_MAX]`` (including 16, 32,
+64, 128, and 256), ``accuracy_level`` 0 or 4, and
 ``weight_prepacked=0``. Input ``B`` has shape
-``[N, ceil(K / 32), 4 * bits]`` and scales have shape
-``[N, ceil(K / 32)]`` or the equivalent flat shape. Implicit zero points are
-2, 8, and 128. Activations, scales, optional bias, and output have one matching
+``[N, ceil(K / block_size), block_size * bits / 8]`` and scales have shape
+``[N, ceil(K / block_size)]`` or the equivalent flat shape. Codes are packed
+low bits first within each byte; the last group is padded in storage and only
+its valid K elements contribute. Implicit zero points are
+2, 8, and 128. Optional ``zero_points`` (input 3) may instead be packed ``UINT8``
+with shape ``[N, ceil(ceil(K / block_size) / (8 / bits))]`` (each column
+starts at a byte boundary), or floating-point values with the scales' shape
+and dtype. Both zero-point layouts also accept the equivalent flat shape.
+This supports ternary INT2 groups of 128 with zero point 1 without changing
+their quantization geometry. Activations, scales, optional bias, and output have one matching
 ``FLOAT``, ``FLOAT16``, or ``BFLOAT16`` type; ``DOUBLE`` is not supported.
 
 Input ``B`` may instead be an ``EncodedValueProto`` using onnx-light's
 ``ORT_MATMULNBITS_INT2``, ``ORT_MATMULNBITS_INT4``, or
 ``ORT_MATMULNBITS_INT8`` layout. In that form, omit the ``scales`` input: the
-kernel validates the encoded geometry, dtype, layout, padding, and implicit
+kernel validates the encoded geometry, dtype, layout, padding, and
 zero points, then borrows its packed ``B`` and scales without copying them per
 inference. It never converts the encoded weights to the VNNI preparation layout. Encoded layouts
-with explicit zero points, shared parameter references, incompatible
+with shared parameter references, incompatible
 attributes, or any other unsupported representation fail with an exception.
 This encoded form is inference-only; automatic differentiation continues to
 require separate tensor ``B`` and ``scales`` inputs.
+Explicit zero points are borrowed from the encoded payload; omit input 3 as
+well as input 2. Larger groups and explicit zero points use the bounded-panel
+decoder. The specialized INT4/INT8 preparation paths remain restricted to
+block size 32 with implicit zero points. ``g_idx`` is not supported.
 
 Genuine three-bit weights use the separate onnx-light
 ``MATMULNBITS_INT3`` format (struct name

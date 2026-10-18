@@ -648,11 +648,7 @@ TEST(MatMulNBitsKernel, RejectsUnsupportedEncodedWeightContracts) {
 
   EXPECT_THROW(kernel(input, MakeEncodedWeights(rt_ns::DataType::FLOAT, 32, 1, 4, 64)),
                std::invalid_argument);
-  EXPECT_THROW(kernel(input, MakeEncodedWeights(rt_ns::DataType::FLOAT, 32, 1, 4, 32, 7.0)),
-               std::invalid_argument);
-
-  for (const auto &encoded : {MakeEncodedWeights(rt_ns::DataType::FLOAT, 32, 1, 4, 64),
-                              MakeEncodedWeights(rt_ns::DataType::FLOAT, 32, 1, 4, 32, 7.0)}) {
+  for (const auto &encoded : {MakeEncodedWeights(rt_ns::DataType::FLOAT, 32, 1, 4, 64)}) {
     rt_ns::RuntimeContext rt{rt_ns::KernelContext{rt_ns::OpsetId("com.microsoft", 1)}};
     rt.PutValue("B", rt_ns::RuntimeValue(encoded));
     EXPECT_THROW(kernel.Prepare(rt, {"B"}), std::invalid_argument);
@@ -686,7 +682,7 @@ TEST(MatMulNBitsKernel, RejectsUnsupportedContractAndInvalidShapes) {
                    MakeNode(32, 1, 5), rt_ns::KernelContext{rt_ns::OpsetId("com.microsoft", 1)}}),
                std::invalid_argument);
   EXPECT_THROW(
-      (onnx_light_cpu::MatMulNBitsKernel{MakeNode(32, 1, 4, 64),
+      (onnx_light_cpu::MatMulNBitsKernel{MakeNode(32, 1, 4, 48),
                                          rt_ns::KernelContext{rt_ns::OpsetId("com.microsoft", 1)}}),
       std::invalid_argument);
 
@@ -710,8 +706,114 @@ TEST(MatMulNBitsKernel, LowLevelRejectsUnsupportedBlockSize) {
   float value = 0.0f;
   const std::uint8_t packed = 0x88;
   EXPECT_THROW(
-      onnx_light_cpu::MatMulNBitsFloat32(&value, &packed, &value, nullptr, &value, 1, 1, 1, 16),
+      onnx_light_cpu::MatMulNBitsFloat32(&value, &packed, &value, nullptr, &value, 1, 1, 1, 24),
       std::invalid_argument);
+}
+
+TEST(MatMulNBitsKernel, Non32EncodedGeometryPreparationAndDequantizationParity) {
+  for (const std::int64_t block_size : {16, 64, 128, 256}) {
+    const std::int64_t k = 2 * block_size + 3;
+    constexpr std::int64_t n = 16;
+    for (const std::int64_t bits : {2, 4, 8}) {
+      for (const auto dtype :
+           {rt_ns::DataType::FLOAT, rt_ns::DataType::FLOAT16, rt_ns::DataType::BFLOAT16}) {
+        for (double zero : {-1.0, 1.0}) {
+          SCOPED_TRACE(::testing::Message() << block_size << ',' << bits << ',' << zero);
+          const auto encoded = MakeEncodedWeights(dtype, k, n, bits, block_size, zero);
+          const auto weights = rt_ns::DequantizeTensor(encoded);
+          auto node = MakeNode(k, n, bits, block_size);
+          onnx_light_cpu::MatMulNBitsKernel raw_kernel{
+              node, rt_ns::KernelContext{rt_ns::OpsetId("com.microsoft", 1)}};
+          EXPECT_FALSE(raw_kernel.HasPreparations({"B", "scales"}));
+          node.ref_input().resize(2);
+          onnx_light_cpu::MatMulNBitsKernel kernel{
+              node, rt_ns::KernelContext{rt_ns::OpsetId("com.microsoft", 1)}};
+          const auto a = MakeTensor(dtype, {2, k}, std::vector<float>(2 * k, 0.5f));
+          const auto bias = MakeTensor(dtype, {n}, std::vector<float>(n, 0.25f));
+          const auto output = kernel(a, encoded, &bias);
+          for (std::size_t column = 0; column < n; ++column) {
+            float expected = 0.25f;
+            for (std::size_t p = 0; p < static_cast<std::size_t>(k); ++p) {
+              expected += 0.5f * ReadValue(weights, p * n + column);
+            }
+            const auto rounded = MakeTensor(dtype, {1}, {expected});
+            EXPECT_FLOAT_EQ(ReadValue(output, column), ReadValue(rounded, 0));
+          }
+          rt_ns::RuntimeContext rt{rt_ns::KernelContext{rt_ns::OpsetId("com.microsoft", 1)}};
+          rt.Put("A", a);
+          rt.PutValue("B", rt_ns::RuntimeValue(encoded));
+          EXPECT_TRUE(kernel.HasPreparations({"B"}));
+          kernel.Prepare(rt, {"B"});
+          kernel.Run(rt);
+          const auto unprepared = kernel(a, encoded);
+          for (std::size_t i = 0; i < unprepared.element_count(); ++i) {
+            EXPECT_FLOAT_EQ(ReadValue(rt.Get("Y"), i), ReadValue(unprepared, i));
+          }
+          namespace shapes_ns = ONNX_LIGHT_NAMESPACE::core::shapes;
+          namespace sym_ns = ONNX_LIGHT_NAMESPACE::core::symbolic;
+          shapes_ns::ShapesContext ctx;
+          const auto type = dtype == rt_ns::DataType::FLOAT     ? sym_ns::TensorType::kFloat
+                            : dtype == rt_ns::DataType::FLOAT16 ? sym_ns::TensorType::kFloat16
+                                                                : sym_ns::TensorType::kBfloat16;
+          ctx.Set("A", sym_ns::SymTensor(nullptr, type, {sym_ns::SymDim(2), sym_ns::SymDim(k)}));
+          ctx.SetEncodedValue("B", encoded);
+          EXPECT_NO_THROW(onnx_light_cpu::ComputeShapeMatMulNBits(ctx, node));
+          const onnx_light_cpu::MatMulNBitsKernel wrong_geometry{
+              MakeNode(k, n, bits, block_size * 2),
+              rt_ns::KernelContext{rt_ns::OpsetId("com.microsoft", 1)}};
+          EXPECT_THROW(wrong_geometry(a, encoded), std::invalid_argument);
+        }
+      }
+    }
+  }
+}
+
+TEST(MatMulNBitsKernel, RejectsInvalidGroupsAndZeroPointShapes) {
+  const rt_ns::KernelContext ctx{rt_ns::OpsetId("com.microsoft", 1)};
+  for (const std::int64_t block : {-32, 0, 8, 24, 48, INT64_C(4294967296)}) {
+    EXPECT_THROW((onnx_light_cpu::MatMulNBitsKernel{MakeNode(128, 1, 2, block), ctx}),
+                 std::invalid_argument);
+  }
+  EXPECT_THROW((onnx_light_cpu::MatMulNBitsKernel{MakeNode(128, 1, 3, 128), ctx}),
+               std::invalid_argument);
+  const onnx_light_cpu::MatMulNBitsKernel kernel{MakeNode(256, 16, 2, 128), ctx};
+  const auto a = MakeTensor(rt_ns::DataType::FLOAT, {1, 256}, std::vector<float>(256, 1));
+  const auto b = rt_ns::Tensor::FromUint8("", {16, 2, 32}, std::vector<std::uint8_t>(1024, 0x55));
+  const auto scales = MakeTensor(rt_ns::DataType::FLOAT, {16, 2}, std::vector<float>(32, 1));
+  const auto zeros = rt_ns::Tensor::FromUint8("", {16, 2}, std::vector<std::uint8_t>(32, 1));
+  EXPECT_THROW(kernel(a, b, scales, nullptr, nullptr, &zeros), std::invalid_argument);
+}
+
+TEST(MatMulNBitsKernel, AlignedNon32TensorGroupsDoNotUseBlock32Preparation) {
+  const rt_ns::KernelContext ctx{rt_ns::OpsetId("com.microsoft", 1)};
+  for (const std::int64_t block : {16, 64, 128, 256}) {
+    for (const std::int64_t bits : {2, 4, 8}) {
+      const auto k = 2 * block;
+      const std::uint8_t packed = bits == 2 ? 0xff : bits == 4 ? 0x99 : 0x81;
+      const auto b =
+          rt_ns::Tensor::FromUint8("", {16, 2, block * bits / 8},
+                                   std::vector<std::uint8_t>(16 * 2 * block * bits / 8, packed));
+      std::vector<float> values(32);
+      for (std::size_t i = 0; i < values.size(); ++i) {
+        values[i] = i % 2 == 0 ? 0.5f : 1.0f;
+      }
+      for (const auto dtype :
+           {rt_ns::DataType::FLOAT, rt_ns::DataType::FLOAT16, rt_ns::DataType::BFLOAT16}) {
+        onnx_light_cpu::MatMulNBitsKernel kernel{MakeNode(k, 16, bits, block), ctx};
+        rt_ns::RuntimeContext rt{ctx};
+        rt.Put("A", MakeTensor(dtype, {2, k}, std::vector<float>(2 * k, 1)));
+        rt.Put("B", b);
+        rt.Put("scales", MakeTensor(dtype, {16, 2}, values));
+        EXPECT_FALSE(kernel.HasPreparations({"B", "scales"}));
+        EXPECT_NO_THROW(kernel.Prepare(rt, {"B", "scales"}));
+        kernel.Run(rt);
+        EXPECT_EQ(rt.value_store().prepared_bytes(), 0U);
+        for (std::size_t i = 0; i < 32; ++i) {
+          EXPECT_FLOAT_EQ(ReadValue(rt.Get("Y"), i), 1.5f * block);
+        }
+      }
+    }
+  }
 }
 
 TEST(MatMulNBitsKernel, UsesRuntimeSchedulingAndSuppressesNestedParallelism) {

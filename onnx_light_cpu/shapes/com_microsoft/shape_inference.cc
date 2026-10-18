@@ -5,6 +5,7 @@
 #include "onnx_light_cpu/shapes/com_microsoft/shape_inference.h"
 
 #include "onnx_light_cpu/impl/checked_arithmetic.h"
+#include "onnx_light_cpu/impl/com_microsoft/matmul_nbits.h"
 #include "onnx_light_cpu/impl/com_microsoft/matmul_nbits_int3.h"
 #include "onnx_light_cpu/impl/com_microsoft/moe.h"
 #include "onnx_light_cpu/schemas/com_microsoft/op_schema.h"
@@ -94,7 +95,7 @@ EncodedMatMulNBitsShape InspectEncodedMatMulNBitsShape(const ShapesContext &ctx,
   const std::int64_t k = logical.shape().dim(0).dim_value();
   const std::int64_t n = logical.shape().dim(1).dim_value();
   const std::int64_t block_size = parameters.constant().int64_data(1);
-  if (block_size > std::numeric_limits<std::int64_t>::max() / format_bits) {
+  if (!MatMulNBitsBlockSizeSupported(format_bits, block_size)) {
     throw std::invalid_argument(
         "ComputeShapeMatMulNBits: encoded block size exceeds supported bounds.");
   }
@@ -115,7 +116,16 @@ EncodedMatMulNBitsShape InspectEncodedMatMulNBitsShape(const ShapesContext &ctx,
            (dim2 < 0 ||
             (tensor.shape().dim(2).has_dim_value() && tensor.shape().dim(2).dim_value() == dim2));
   };
-  if (block_size * format_bits % 8 != 0 ||
+  const bool has_zeros = root.structure().field().size() == 4;
+  bool valid_zeros = true;
+  if (has_zeros) {
+    const auto &zero = root.structure().field(3);
+    const auto per_byte = 8 / format_bits;
+    valid_zeros = has_tensor_shape(zero, "zero_points", ONNX_LIGHT_NAMESPACE::TensorProto::UINT8, n,
+                                   groups / per_byte + (groups % per_byte != 0)) ||
+                  has_tensor_shape(zero, "zero_points", logical.elem_type(), n, groups);
+  }
+  if (!valid_zeros ||
       !has_tensor_shape(root.structure().field(1), "B", ONNX_LIGHT_NAMESPACE::TensorProto::UINT8, n,
                         groups, blob_size) ||
       !has_tensor_shape(root.structure().field(2), "scales", logical.elem_type(), n, groups)) {
@@ -723,11 +733,12 @@ void ComputeShapeMatMulNBits(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE::Nod
       node.output(0).empty() || !HasInput(node, 0) || !HasInput(node, 1) ||
       (!encoded_weights && !HasInput(node, 2)) || !ctx.Has(node.input(0)) ||
       (!encoded_weights && (!ctx.Has(node.input(1)) || !ctx.Has(node.input(2)))) ||
-      (encoded_weights && HasInput(node, 2)) || HasInput(node, 3) || HasInput(node, 4) ||
+      (encoded_weights && (HasInput(node, 2) || HasInput(node, 3))) || HasInput(node, 4) ||
+      (HasInput(node, 3) && !ctx.Has(node.input(3))) ||
       (HasInput(node, 5) && !ctx.Has(node.input(5)))) {
     throw std::invalid_argument(
-        "ComputeShapeMatMulNBits: expected A, B, optional scales, optional bias, and no "
-        "zero_points/g_idx; scales must be omitted for encoded B.");
+        "ComputeShapeMatMulNBits: expected A, B, optional scales, zero_points and bias, and no "
+        "g_idx; scales and zero_points must be omitted for encoded B.");
   }
   const std::int64_t k = GetRequiredIntAttribute(node, "K");
   const std::int64_t n = GetRequiredIntAttribute(node, "N");
@@ -735,10 +746,10 @@ void ComputeShapeMatMulNBits(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE::Nod
   const std::int64_t block_size = GetRequiredIntAttribute(node, "block_size");
   const std::int64_t accuracy_level = GetIntAttribute(node, "accuracy_level", 0);
   const std::int64_t weight_prepacked = GetIntAttribute(node, "weight_prepacked", 0);
-  if (k <= 0 || n <= 0 || (bits != 2 && bits != 3 && bits != 4 && bits != 8) || block_size != 32 ||
+  if (k <= 0 || n <= 0 || !MatMulNBitsBlockSizeSupported(bits, block_size) ||
       (accuracy_level != 0 && accuracy_level != 4) || weight_prepacked != 0) {
-    throw std::invalid_argument(
-        "ComputeShapeMatMulNBits: unsupported attributes for the block-32 subset.");
+    throw std::invalid_argument("ComputeShapeMatMulNBits: unsupported bits, block_size, "
+                                "accuracy_level or weight_prepacked.");
   }
   const SymTensor &a = ctx.Get(node.input(0));
   const bool supported_type = a.Dtype() == sym_ns::TensorType::kFloat ||
@@ -754,7 +765,7 @@ void ComputeShapeMatMulNBits(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE::Nod
   if (has_structured_type) {
     ValidateStructuredMatMulNBitsType(ctx, node.input(1), k, n, bits, a.Dtype());
   }
-  const std::int64_t blocks = (k + 31) / 32;
+  const std::int64_t blocks = k / block_size + (k % block_size != 0);
   ConstrainEqual(ctx, a.Shape()[a.Shape().Rank() - 1], sym_ns::SymDim(k),
                  "ComputeShapeMatMulNBits: A's final dimension must equal K.");
   if (has_encoded_value) {
@@ -771,10 +782,8 @@ void ComputeShapeMatMulNBits(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE::Nod
           "ComputeShapeMatMulNBits: EncodedValueProto geometry does not match the node "
           "attributes.");
     }
-    if ((bits != 3 && inputs.has_zero_points) || encoded_data_type != a.Dtype()) {
-      throw std::invalid_argument(
-          "ComputeShapeMatMulNBits: encoded zero points are unsupported and encoded scales must "
-          "match A's type.");
+    if (encoded_data_type != a.Dtype()) {
+      throw std::invalid_argument("ComputeShapeMatMulNBits: encoded scales must match A's type.");
     }
   } else if (!has_structured_type) {
     if (bits == 3) {
@@ -792,9 +801,9 @@ void ComputeShapeMatMulNBits(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE::Nod
     ConstrainEqual(ctx, b.Shape()[0], sym_ns::SymDim(n),
                    "ComputeShapeMatMulNBits: B dimension 0 must equal N.");
     ConstrainEqual(ctx, b.Shape()[1], sym_ns::SymDim(blocks),
-                   "ComputeShapeMatMulNBits: B dimension 1 must equal ceil(K / 32).");
-    ConstrainEqual(ctx, b.Shape()[2], sym_ns::SymDim(4 * bits),
-                   "ComputeShapeMatMulNBits: B dimension 2 must equal 4 * bits.");
+                   "ComputeShapeMatMulNBits: B dimension 1 must equal ceil(K / block_size).");
+    ConstrainEqual(ctx, b.Shape()[2], sym_ns::SymDim(block_size * bits / 8),
+                   "ComputeShapeMatMulNBits: B dimension 2 must equal block_size * bits / 8.");
     if (scales.Shape().Rank() == 1) {
       ConstrainEqual(ctx, scales.Shape()[0], sym_ns::SymDim(n * blocks),
                      "ComputeShapeMatMulNBits: flat scales has the wrong length.");
@@ -803,6 +812,25 @@ void ComputeShapeMatMulNBits(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE::Nod
                      "ComputeShapeMatMulNBits: scales dimension 0 must equal N.");
       ConstrainEqual(ctx, scales.Shape()[1], sym_ns::SymDim(blocks),
                      "ComputeShapeMatMulNBits: scales dimension 1 has the wrong block count.");
+    }
+  }
+  if (HasInput(node, 3)) {
+    const auto &zero = ctx.Get(node.input(3));
+    const bool packed = zero.Dtype() == sym_ns::TensorType::kUint8;
+    if ((!packed && zero.Dtype() != a.Dtype()) ||
+        (zero.Shape().Rank() != 1 && zero.Shape().Rank() != 2)) {
+      throw std::invalid_argument("ComputeShapeMatMulNBits: invalid zero_points type or rank.");
+    }
+    const auto per_byte = 8 / bits;
+    const auto stride = packed ? blocks / per_byte + (blocks % per_byte != 0) : blocks;
+    if (zero.Shape().Rank() == 1) {
+      ConstrainEqual(ctx, zero.Shape()[0], sym_ns::SymDim(n * stride),
+                     "ComputeShapeMatMulNBits: invalid flat zero_points length.");
+    } else {
+      ConstrainEqual(ctx, zero.Shape()[0], sym_ns::SymDim(n),
+                     "ComputeShapeMatMulNBits: zero_points dimension 0 must equal N.");
+      ConstrainEqual(ctx, zero.Shape()[1], sym_ns::SymDim(stride),
+                     "ComputeShapeMatMulNBits: invalid zero_points stride.");
     }
   }
   if (HasInput(node, 5)) {

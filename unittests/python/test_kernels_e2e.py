@@ -172,35 +172,6 @@ def _assert_close(actual, expected, rtol, atol):
         )
 
 
-def _matmul_nbits_numpy_reference(model, feeds):
-    node = model.graph.node[0]
-    attributes = {
-        attribute.name: helper.get_attribute_value(attribute) for attribute in node.attribute
-    }
-    bits = attributes["bits"]
-    block_size = attributes["block_size"]
-    k = attributes["K"]
-    n = attributes["N"]
-    values_per_byte = 8 // bits
-    mask = (1 << bits) - 1
-    zero_point = 1 << (bits - 1)
-    packed = feeds["B"]
-    scales = np.asarray(feeds["scales"], dtype=np.float32)
-    weights = np.empty((n, k), dtype=np.float32)
-    for column in range(n):
-        for index in range(k):
-            block = index // block_size
-            block_offset = index % block_size
-            byte = packed[column, block, block_offset // values_per_byte]
-            shift = (block_offset % values_per_byte) * bits
-            quantized = (int(byte) >> shift) & mask
-            weights[column, index] = (quantized - zero_point) * scales[column, block]
-    output = np.asarray(feeds["A"], dtype=np.float32) @ weights.T
-    if "bias" in feeds:
-        output += np.asarray(feeds["bias"], dtype=np.float32)
-    return output.astype(feeds["A"].dtype)
-
-
 def _warm_builtin_session(model, feeds):
     """Builds a ``ReferenceEvaluator`` for ``model`` and runs it once on ``feeds``.
 
@@ -665,36 +636,38 @@ class TestBackendCases(ExtTestCase):
             for case in collect_test_cases("MatMulNBits", mode=TestMode.TEST)
             if case.name.startswith("test_cpu_matmulnbits_")
         ]
-        self.assertEqual(len(cases), 9)
+        self.assertEqual(len(cases), 9 + 5 * 3 * 3 * 2 * 3)
         for case in cases:
             with self.subTest(case=case.name):
                 model = type(case.model)()
                 model.ParseFromString(case.model.SerializeToString())
                 model.ir_version = 10
-                use_onnxruntime = (
-                    model.graph.input[0].type.tensor_type.elem_type != TensorProto.BFLOAT16
-                )
-                oracle = (
-                    onnxruntime.InferenceSession(
-                        model.SerializeToString(),
-                        sess_options=options,
-                        providers=["CPUExecutionProvider"],
-                    )
-                    if use_onnxruntime
-                    else None
-                )
                 session = ReferenceEvaluator(model)
                 register_kernel_for_session(session, "com.microsoft", "MatMulNBits")
+                oracle_model = type(model)()
+                oracle_model.ParseFromString(model.SerializeToString())
+                for value in (*oracle_model.graph.input, *oracle_model.graph.output):
+                    if value.type.tensor_type.elem_type == TensorProto.BFLOAT16:
+                        value.type.tensor_type.elem_type = TensorProto.FLOAT
+                oracle = onnxruntime.InferenceSession(
+                    oracle_model.SerializeToString(),
+                    sess_options=options,
+                    providers=["CPUExecutionProvider"],
+                )
                 for dataset in case.data_sets:
                     feeds = {
                         value.name: _to_numpy(tensor)
                         for value, tensor in zip(model.graph.input, dataset.inputs, strict=True)
                     }
-                    expected = (
-                        oracle.run(None, feeds)
-                        if oracle is not None
-                        else [_matmul_nbits_numpy_reference(model, feeds)]
-                    )
+                    oracle_feeds = {
+                        name: (
+                            value.astype(np.float32)
+                            if value.dtype == ml_dtypes.bfloat16
+                            else value
+                        )
+                        for name, value in feeds.items()
+                    }
+                    expected = oracle.run(None, oracle_feeds)
                     actual = session.run(None, feeds)
                     for output, reference in zip(actual, expected, strict=True):
                         tolerance = 2e-2 if output.dtype != np.float32 else 3e-5
