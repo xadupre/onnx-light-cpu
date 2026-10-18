@@ -3,7 +3,7 @@ Run com.microsoft custom operators
 ==================================
 
 This example registers the portable ``CDist``, ``BiasGelu``, ``MatMulNBits``,
-and ``LinearAttention`` CPU kernels and runs one model containing the four
+``QMoE``, and ``LinearAttention`` CPU kernels and runs one model containing the five
 operators through onnx-light.
 """
 
@@ -13,7 +13,7 @@ import math
 
 import numpy as np
 
-from onnx_light.onnx import TensorProto, helper
+from onnx_light.onnx import TensorProto, helper, numpy_helper
 from onnx_light.onnx.reference import ReferenceEvaluator
 from onnx_light_cpu import operator_schema_lookup, register_kernels
 
@@ -36,6 +36,17 @@ def make_model():
                 bits=4,
                 block_size=32,
                 accuracy_level=4,
+            ),
+            helper.make_node(
+                "QMoE",
+                ["projection", "router", "experts1", "scales1", "", "experts2", "scales2"],
+                ["moe"],
+                domain="com.microsoft",
+                expert_weight_bits=4,
+                block_size=32,
+                k=2,
+                normalize_routing_weights=1,
+                activation_type="relu",
             ),
             helper.make_node(
                 "LinearAttention",
@@ -67,6 +78,17 @@ def make_model():
             helper.make_tensor_value_info("projection", TensorProto.FLOAT, [None, 2]),
             helper.make_tensor_value_info("attention", TensorProto.FLOAT, [1, 2, 1]),
             helper.make_tensor_value_info("state", TensorProto.FLOAT, [1, 1, 2, 1]),
+            helper.make_tensor_value_info("moe", TensorProto.FLOAT, [1, 2]),
+        ],
+        [
+            numpy_helper.from_array(value, name=name)
+            for name, value in {
+                "router": np.zeros((1, 2), dtype=np.float32),
+                "experts1": np.full((2, 2, 1), 0x89, dtype=np.uint8),
+                "scales1": np.ones((2, 2, 1), dtype=np.float32),
+                "experts2": np.full((2, 1, 1), 0x99, dtype=np.uint8),
+                "scales2": np.ones((2, 1, 1), dtype=np.float32),
+            }.items()
         ],
     )
     return helper.make_model(
@@ -94,7 +116,7 @@ scales = np.array([[1.0], [0.5]], dtype=np.float32)
 
 register_kernels()
 session = ReferenceEvaluator(make_model())
-distances, activated, projection, attention, state = session.run(
+distances, activated, projection, attention, state, moe = session.run(
     None,
     {
         "A": a,
@@ -120,16 +142,18 @@ np.testing.assert_allclose(activated, expected_activated, rtol=1e-6, atol=1e-5)
 np.testing.assert_allclose(projection, np.array([[0.0, 16.0]], dtype=np.float32))
 np.testing.assert_allclose(attention, np.array([[[22.0], [32.0]]], dtype=np.float32))
 np.testing.assert_allclose(state, np.array([[[[9.0], [14.0]]]], dtype=np.float32))
+np.testing.assert_allclose(moe, np.array([[16.0, 16.0]], dtype=np.float32))
 
 print(
     "Registered custom schemas:",
     [
         op_type
-        for op_type in ("CDist", "BiasGelu", "MatMulNBits", "LinearAttention")
+        for op_type in ("CDist", "BiasGelu", "MatMulNBits", "QMoE", "LinearAttention")
         if operator_schema_lookup(op_type)
     ],
 )
 print("CDist output:\n", distances)
 print("BiasGelu output:\n", activated)
 print("MatMulNBits output:\n", projection)
+print("QMoE output:\n", moe)
 print("LinearAttention output:\n", attention)

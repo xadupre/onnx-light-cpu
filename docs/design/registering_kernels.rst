@@ -170,6 +170,7 @@ the default ONNX domain (the empty string is equivalent); ``ai.onnx.ml`` and
    "RegisterMicrosoftKernels", "com.microsoft", "BiasGelu, CDist, CausalConvWithState, GroupQueryAttention, MultiHeadAttention, LinearAttention, SkipLayerNormalization, SkipSimplifiedLayerNormalization"
    "RegisterMatMulNBitsKernel", "com.microsoft", "MatMulNBits"
    "RegisterMoEKernel", "com.microsoft", "MoE"
+   "RegisterQMoEKernel", "com.microsoft", "QMoE"
 
 The table describes shipped registrations, not all operators supported by
 onnx-light, nor a guarantee of every type, opset, or shape for a listed operator.
@@ -192,7 +193,8 @@ delegates to onnx-light's concrete reference kernel, as described below.
 
 The policy changes only those six Microsoft implementations, not standalone
 Microsoft registrations such as ``MatMulNBits``, ``MoE``, and
-``RotaryEmbedding``, nor any ``ai.onnx`` / ``ai.onnx.ml`` registration.
+``QMoE``, ``RotaryEmbedding``, nor any ``ai.onnx`` / ``ai.onnx.ml``
+registration.
 The C++ policy overload is
 ``RegisterAllKernels(MicrosoftKernelImplementation::NAIVE)``; the explicit
 global and session APIs also accept the policy.

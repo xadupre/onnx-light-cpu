@@ -21,6 +21,7 @@
 #include "onnx_light_cpu/kernels/com_microsoft/naive_group_query_attention_kernel.h"
 #include "onnx_light_cpu/kernels/com_microsoft/naive_linear_attention_kernel.h"
 #include "onnx_light_cpu/kernels/com_microsoft/naive_skip_simplified_layer_normalization_kernel.h"
+#include "onnx_light_cpu/kernels/com_microsoft/qmoe_kernel.h"
 #include "onnx_light_cpu/kernels/com_microsoft/skip_layer_normalization_kernel.h"
 #include "onnx_light_cpu/kernels/com_microsoft/skip_simplified_layer_normalization_kernel.h"
 #include "onnx_light_cpu/kernels/elementwise/binary_kernel.h"
@@ -227,6 +228,7 @@ void RegisterAllKernels(MicrosoftKernelImplementation implementation) {
   RegisterMicrosoftKernels(implementation);
   RegisterMatMulNBitsKernel();
   RegisterMoEKernel();
+  RegisterQMoEKernel();
 }
 
 bool RegisterKernelGlobal(const std::string &domain, const std::string &op_type, bool replace,

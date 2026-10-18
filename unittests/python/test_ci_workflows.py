@@ -223,6 +223,7 @@ def test_native_kernel_tests_are_version_gated_in_standalone():
         "test_skip_simplified_layer_normalization.py",
         "test_matmul_nbits_parity_benchmark.py",
         "test_moe.py",
+        "test_qmoe.py",
         "test_tanh.py",
         "test_tree_ensemble_parity_benchmark.py",
     ):

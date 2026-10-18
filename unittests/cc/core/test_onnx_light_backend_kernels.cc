@@ -447,6 +447,12 @@ TEST(OnnxLightBackendKernels, MatMulNBitsRunsThroughRuntime) {
   EXPECT_TRUE(failures.empty()) << Describe(failures);
 }
 
+TEST(OnnxLightBackendKernels, QMoERunsThroughRuntime) {
+  const std::vector<std::string> failures =
+      RunCpuBackendCases("QMoE", core::backend_test::TestMode::TEST);
+  EXPECT_TRUE(failures.empty()) << Describe(failures);
+}
+
 TEST(OnnxLightBackendKernels, GroupQueryAttentionRunsThroughRuntime) {
   const std::vector<std::string> failures =
       RunCpuBackendCases("GroupQueryAttention", core::backend_test::TestMode::TEST);
@@ -462,7 +468,7 @@ TEST(OnnxLightBackendKernels, MultiHeadAttentionRunsThroughRuntime) {
 TEST(OnnxLightBackendKernels, MicrosoftCorrectnessCasesRunWithNaiveRegistration) {
   for (const std::string &op_type :
        {"BiasGelu", "CDist", "CausalConvWithState", "GroupQueryAttention", "LinearAttention",
-        "SkipSimplifiedLayerNormalization"}) {
+        "QMoE", "SkipSimplifiedLayerNormalization"}) {
     const auto failures = RunCpuBackendCases(op_type, core::backend_test::TestMode::TEST, {},
                                              onnx_light_cpu::MicrosoftKernelImplementation::NAIVE);
     EXPECT_TRUE(failures.empty()) << Describe(failures);

@@ -383,6 +383,55 @@ LightOpSchema MakeMatMulNBitsSchema() {
       false, true);
 }
 
+LightOpSchema MakeQMoESchema() {
+  return LightOpSchema(
+      "QMoE", kMicrosoftDomain, 1,
+      "CPU quantized mixture of experts. Weights use the mbext CPU layout, not CUDA packing.",
+      {{"input", "Rank-2 tokens or rank-3 batch, sequence, hidden.", "T"},
+       {"router_probs", "Rank-2 token, expert router logits.", "T"},
+       {"fc1_experts_weights", "Packed expert projection.", "Q"},
+       {"fc1_scales", "Per-channel or block-wise scales.", "S"},
+       {"fc1_experts_bias", "Optional first projection bias.", "T"},
+       {"fc2_experts_weights", "Packed output projection.", "Q"},
+       {"fc2_scales", "Per-channel or block-wise scales.", "S"},
+       {"fc2_experts_bias", "Optional output projection bias.", "T"},
+       {"fc3_experts_weights", "Optional gate projection.", "Q"},
+       {"fc3_scales", "Optional gate scales.", "S"},
+       {"fc3_experts_bias", "Optional gate bias.", "T"},
+       {"fc1_zero_points", "Unsupported optional zero points.", "Q"},
+       {"fc2_zero_points", "Unsupported optional zero points.", "Q"},
+       {"fc3_zero_points", "Unsupported optional zero points.", "Q"}},
+      {{"output", "Same shape and type as input.", "T"}},
+      {{"T",
+        {TensorType::kFloat, TensorType::kFloat16, TensorType::kBfloat16},
+        "FLOAT, FLOAT16 or BFLOAT16 activations."},
+       {"S",
+        {TensorType::kFloat, TensorType::kFloat16, TensorType::kBfloat16},
+        "FLOAT, FLOAT16 or BFLOAT16 scales."},
+       {"Q", {TensorType::kUint8}, "Packed unsigned bytes."}},
+      {AttributeParam{"k", "Number of selected experts.", AttributeType::INT, false, int64_t{1}},
+       AttributeParam{"expert_weight_bits", "4 or 8 bits per weight.", AttributeType::INT, false,
+                      int64_t{4}},
+       AttributeParam{"block_size", "Zero for tensor scales, or a power of two of at least 16.",
+                      AttributeType::INT, false, int64_t{0}},
+       AttributeParam{"activation_type", "relu, gelu, silu, identity or swiglu.",
+                      AttributeType::STRING, false, std::string("relu")},
+       AttributeParam{"activation_alpha", "SwiGLU sigmoid scale.", AttributeType::FLOAT, false,
+                      1.0f},
+       AttributeParam{"activation_beta", "SwiGLU linear offset.", AttributeType::FLOAT, false,
+                      0.0f},
+       AttributeParam{"swiglu_fusion", "Interleaved SwiGLU mode.", AttributeType::INT, false,
+                      int64_t{0}},
+       AttributeParam{"swiglu_limit", "Optional SwiGLU clamp limit.", AttributeType::FLOAT, false},
+       AttributeParam{"normalize_routing_weights", "Renormalize selected softmax weights.",
+                      AttributeType::INT, false, int64_t{0}},
+       AttributeParam{"use_sparse_mixer", "Only zero is supported.", AttributeType::INT, false,
+                      int64_t{0}},
+       AttributeParam{"weights_prepacked", "Only zero (CPU layout) is supported.",
+                      AttributeType::INT, false, int64_t{0}}},
+      false, true);
+}
+
 LightOpSchema MakeMoESchema() {
   return LightOpSchema(
       "MoE", kMicrosoftDomain, 1,
@@ -433,6 +482,7 @@ std::vector<LightOpSchema> GetMicrosoftOpSchemasWithHistory(const std::string &o
       {"MultiHeadAttention",
        [] { return std::vector<LightOpSchema>{MakeMultiHeadAttentionSchema()}; }},
       {"MoE", [] { return std::vector<LightOpSchema>{MakeMoESchema()}; }},
+      {"QMoE", [] { return std::vector<LightOpSchema>{MakeQMoESchema()}; }},
       {"RotaryEmbedding", [] { return std::vector<LightOpSchema>{MakeRotaryEmbeddingSchema()}; }},
       {"SkipLayerNormalization",
        [] { return std::vector<LightOpSchema>{MakeSkipLayerNormalizationSchema()}; }},
