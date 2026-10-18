@@ -17,6 +17,42 @@ Custom operators
    These adapters are separate from standardized ONNX schemas and from the
    Microsoft-only :func:`custom_op_schemas` provider.
 
+Microsoft MultiHeadAttention
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``com.microsoft::MultiHeadAttention`` v1 accepts FLOAT, FLOAT16 and BFLOAT16
+query ``(B,S,N*H)``, key ``(B,L,N*H)`` and value ``(B,L,N*Hv)``, or
+Whisper-style cross-attention key ``(B,N,L,H)`` and value
+``(B,N,L,Hv)``. ``num_heads`` is required.
+The output shape is ``(B,S,N*Hv)``. Shape inference preserves the value's
+symbolic total width for rank-3 inputs and the symbolic product ``N*Hv``
+for rank-4 inputs.
+Optional inputs are projection bias ``(2*N*H+N*Hv)``, int32 key-padding
+lengths ``(B)`` or binary masks ``(B,T)/(B,S,T)``, additive attention bias
+``(1 or B,1 or N,S,T)``, and paired past key ``(B,N,P,H)`` and
+value ``(B,N,P,Hv)``.
+For rank-4 cross attention, only the query segment of projection bias is
+applied; the key and value bias segments are ignored, as in the upstream
+CPU implementation.
+The optional present outputs contain ``P+L`` positions. ``scale`` defaults
+to ``1/sqrt(H)``, ``mask_filter_value`` to ``-10000``, and
+``unidirectional`` to zero. Packed rank-5 inputs, shared-buffer inputs
+8/9 and ``qk`` output are explicitly unsupported. The implementation
+is independent of ``ai.onnx::Attention`` and does not reinterpret its
+different mask and projection semantics.
+The contract is based on `ONNX Runtime's upstream schema
+<https://github.com/microsoft/onnxruntime/blob/main/onnxruntime/core/graph/contrib_ops/bert_defs.cc>`_
+and `CPU implementation
+<https://github.com/microsoft/onnxruntime/blob/main/onnxruntime/contrib_ops/cpu/bert/multihead_attention.cc>`_;
+the CPU kernel here is an original implementation, not a copy of upstream code.
+
+The focused C++ tests cover scalar self/cross attention, projection bias,
+key padding, cached present outputs, all three floating types, symbolic
+shapes and the explicitly rejected slots. An end-to-end Whisper model run
+and direct numerical differential testing against ONNX Runtime remain
+untested; the backend fixtures use independently specified small expected
+outputs rather than importing ONNX Runtime.
+
 Microsoft GroupQueryAttention
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
