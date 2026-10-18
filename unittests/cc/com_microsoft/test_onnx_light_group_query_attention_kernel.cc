@@ -17,6 +17,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <stdexcept>
 #include <utility>
@@ -527,21 +528,99 @@ TEST(OnnxLightGroupQueryAttentionKernel, RejectsUnsupportedRotaryLayout) {
                std::invalid_argument);
 }
 
-TEST(OnnxLightGroupQueryAttentionKernel, RejectsCosCacheHalfHeadDimMismatch) {
+TEST(OnnxLightGroupQueryAttentionKernel, PartialRotaryPreservesSuffixAcrossDtypesAndDecode) {
+  for (DataType dtype : {DataType::FLOAT, DataType::FLOAT16, DataType::BFLOAT16}) {
+    for (std::int64_t head_dim : {8, 9}) {
+      for (std::int64_t layout : {0, 1}) {
+        SCOPED_TRACE(static_cast<std::int32_t>(dtype));
+        SCOPED_TRACE(head_dim);
+        SCOPED_TRACE(layout);
+        std::vector<float> coordinates{1, 2, 3, 4, -0.0f, -6, 7, 8};
+        if (head_dim == 9) {
+          coordinates.push_back(9);
+        }
+        const Tensor query = MakeFloatingTensor(dtype, {1, 1, head_dim}, coordinates);
+        const Tensor cos_cache = MakeFloatingTensor(dtype, {2, 2}, {0, 1, 1, 0});
+        const Tensor sin_cache = MakeFloatingTensor(dtype, {2, 2}, {1, 0, 0, -1});
+        NodeProto node = MakeGqaNode(1, 1, true, true, true, layout);
+        Tensor past_key = MakeFloatingTensor(dtype, {1, 1, 0, head_dim}, {});
+        Tensor past_value = MakeFloatingTensor(dtype, {1, 1, 0, head_dim}, {});
+        onnx_light_cpu::GroupQueryAttentionKernel optimized(node, MakeCtx());
+        onnx_light_cpu::NaiveGroupQueryAttentionKernel naive(node, MakeCtx());
+        for (std::int64_t past_length : {0, 1}) {
+          SCOPED_TRACE(past_length);
+          const Tensor seqlens =
+              Tensor::FromInt32("", {1}, {static_cast<std::int32_t>(past_length)});
+          const Tensor total =
+              Tensor::FromInt32("", {}, {static_cast<std::int32_t>(past_length + 1)});
+          Tensor present_key, present_value, naive_key, naive_value;
+          const Tensor output = optimized(node, query, query, query, seqlens, total, &past_key,
+                                          &past_value, &cos_cache, &sin_cache, nullptr, nullptr,
+                                          nullptr, &present_key, &present_value);
+          const Tensor reference =
+              naive(node, query, query, query, seqlens, total, &past_key, &past_value, &cos_cache,
+                    &sin_cache, nullptr, nullptr, nullptr, &naive_key, &naive_value);
+          const std::vector<float> expected_prefix =
+              past_length == 0 ? (layout == 0 ? std::vector<float>{-3, 2, 1, 4}
+                                              : std::vector<float>{-2, 1, 3, 4})
+                               : (layout == 0 ? std::vector<float>{1, 4, 3, -2}
+                                              : std::vector<float>{1, 2, 4, -3});
+          for (std::size_t d = 0; d < 4; ++d) {
+            EXPECT_EQ(ReadFloatingElement(present_key, past_length * head_dim + d),
+                      expected_prefix[d]);
+          }
+          const std::size_t width = dtype == DataType::FLOAT ? 4 : 2;
+          EXPECT_EQ(std::memcmp(present_key.bytes() + (past_length * head_dim + 4) * width,
+                                query.bytes() + 4 * width, (head_dim - 4) * width),
+                    0);
+          if (past_length > 0) {
+            EXPECT_EQ(std::memcmp(present_key.bytes(), past_key.bytes(), head_dim * width), 0);
+          }
+          ExpectFloatingTensorsNear(present_key, naive_key, 0.0f);
+          EXPECT_EQ(std::memcmp(present_key.bytes(), naive_key.bytes(),
+                                present_key.element_count() * width),
+                    0);
+          ExpectFloatingTensorsNear(output, reference, dtype == DataType::BFLOAT16 ? 2e-2f : 2e-3f);
+          ExpectFloatingTensorsNear(present_value, naive_value, 0.0f);
+          past_key = std::move(present_key);
+          past_value = std::move(present_value);
+        }
+      }
+    }
+  }
+}
+
+TEST(OnnxLightGroupQueryAttentionKernel, BothKernelsRejectInvalidRotaryCacheGeometry) {
   const NodeProto node = MakeGqaNode(4, 2, /*with_cache=*/false, /*with_rotary=*/true,
                                      /*with_present=*/false);
   onnx_light_cpu::GroupQueryAttentionKernel kernel(node, MakeCtx());
+  onnx_light_cpu::NaiveGroupQueryAttentionKernel naive(node, MakeCtx());
   const Tensor query = Tensor::FromFloat("", {1, 1, 32}, std::vector<float>(32, 0.1f));
   const Tensor key = Tensor::FromFloat("", {1, 1, 16}, std::vector<float>(16, 0.1f));
   const Tensor value = Tensor::FromFloat("", {1, 1, 16}, std::vector<float>(16, 0.1f));
-  // head_size is 8, so cos_cache/sin_cache must have 4 columns, not 3.
-  const Tensor cos_cache = Tensor::FromFloat("", {8, 3}, std::vector<float>(24, 0.1f));
-  const Tensor sin_cache = Tensor::FromFloat("", {8, 3}, std::vector<float>(24, 0.1f));
   const Tensor seqlens_k = Tensor::FromInt32("", {1}, {0});
   const Tensor total_sequence_length = Tensor::FromInt32("", {}, {1});
-  EXPECT_THROW((void)kernel(node, query, key, value, seqlens_k, total_sequence_length, nullptr,
-                            nullptr, &cos_cache, &sin_cache),
-               std::invalid_argument);
+  for (const auto &shapes : {std::pair<Shape, Shape>{{8, 5}, {8, 5}},
+                             {{8, 0}, {8, 0}},
+                             {{8, 2}, {8, 3}},
+                             {{8, 2}, {7, 2}},
+                             {{0, 2}, {0, 2}},
+                             {{8, 2}, {16}},
+                             {{16}, {8, 2}}}) {
+    const auto make_cache = [](const Shape &shape) {
+      return Tensor::FromFloat(
+          "", shape,
+          std::vector<float>(shape.product(0, shape.size(), "invalid rotary cache"), 0.1f));
+    };
+    const Tensor cos_cache = make_cache(shapes.first);
+    const Tensor sin_cache = make_cache(shapes.second);
+    EXPECT_THROW((void)kernel(node, query, key, value, seqlens_k, total_sequence_length, nullptr,
+                              nullptr, &cos_cache, &sin_cache),
+                 std::invalid_argument);
+    EXPECT_THROW((void)naive(node, query, key, value, seqlens_k, total_sequence_length, nullptr,
+                             nullptr, &cos_cache, &sin_cache),
+                 std::invalid_argument);
+  }
 }
 
 TEST(OnnxLightGroupQueryAttentionKernel, RejectsRotaryPositionOutOfCacheBounds) {

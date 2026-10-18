@@ -230,12 +230,12 @@ LightOpSchema MakeGroupQueryAttentionSchema() {
        {"seqlens_k", "INT32 tensor containing one total sequence length minus one per batch.", "M"},
        {"total_sequence_length", "INT32 scalar total sequence length.", "M"},
        {"cos_cache",
-        "Optional rotary cosine cache with shape (max_sequence_length, head_size / 2); required "
-        "when do_rotary is set.",
+        "Optional rotary cosine cache with shape (max_sequence_length, rotary_dim / 2), where "
+        "rotary_dim is positive, even, and <= head_size; required when do_rotary is set.",
         "T"},
        {"sin_cache",
-        "Optional rotary sine cache with shape (max_sequence_length, head_size / 2); required "
-        "when do_rotary is set.",
+        "Optional rotary sine cache matching cos_cache; only the first rotary_dim coordinates "
+        "are rotated, leaving the head suffix unchanged; required when do_rotary is set.",
         "T"},
        {"position_ids",
         "Optional INT64 tensor with shape (batch, sequence) giving the rotary position of the "

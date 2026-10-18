@@ -944,7 +944,7 @@ class TestBackendCases(ExtTestCase):
             int(TensorProto.FLOAT16),
             int(TensorProto.BFLOAT16),
         }
-        for mode, expected_count in ((TestMode.TEST, 39), (TestMode.BENCHMARK, 15)):
+        for mode, expected_count in ((TestMode.TEST, 63), (TestMode.BENCHMARK, 15)):
             cases = [
                 tc
                 for tc in collect_test_cases("GroupQueryAttention", mode=mode)
@@ -1009,6 +1009,45 @@ class TestBackendCases(ExtTestCase):
                 assert len(cached_case.model.graph.input) == 9
                 assert len(cached_case.model.graph.output) == 3
                 assert "test_cpu_group_query_attention_model_chatglm_generation_float32" in names
+
+    def test_group_query_attention_rotary_fixtures_match_onnx_runtime(self):
+        cases = collect_test_cases_by_name(
+            "^test_cpu_group_query_attention_rotary_", mode=TestMode.TEST
+        )
+        assert len(cases) == 24
+        for tc in cases:
+            with self.subTest(tc=tc.name):
+                light_session = ReferenceEvaluator(tc.model)
+                set_kernel_usage_recording(light_session, True)
+                # ORT CPU has no BF16 GQA: compare its FLOAT path on rounded inputs.
+                ort_session = _gqa_local_window_ort_session(tc.model)
+                for data_set in tc.data_sets:
+                    feeds = {
+                        vi.name: _to_numpy(tensor)
+                        for vi, tensor in zip(tc.model.graph.input, data_set.inputs, strict=True)
+                    }
+                    got = light_session.run(None, feeds)
+                    assert _TARGET_KERNELS["GroupQueryAttention"] in used_kernel_names(
+                        light_session
+                    )
+                    expected = ort_session.run(None, _gqa_local_window_ort_feeds(feeds))
+                    rtol, atol = (
+                        (2e-2, 4e-3)
+                        if feeds["query"].dtype == ml_dtypes.bfloat16
+                        else (2e-3, 2e-4)
+                    )
+                    for actual, reference, naive in zip(
+                        got, expected, data_set.outputs, strict=True
+                    ):
+                        _assert_close(actual, reference, rtol=rtol, atol=atol)
+                        _assert_close(actual, _to_numpy(naive), rtol=rtol, atol=atol)
+                    past = feeds["past_key"].shape[2]
+                    rotary_dim = 2 * feeds["cos_cache"].shape[1]
+                    current_key = feeds["key"].reshape(1, -1, 2, 8).transpose(0, 2, 1, 3)
+                    np.testing.assert_array_equal(got[1][:, :, :past], feeds["past_key"])
+                    np.testing.assert_array_equal(
+                        got[1][:, :, past:, rotary_dim:], current_key[:, :, :, rotary_dim:]
+                    )
 
     def test_group_query_attention_sink_schema(self):
         schema = custom_op_schemas("GroupQueryAttention")[0]

@@ -12,6 +12,7 @@
 #include "onnx_core/backend_test/expect.h"
 #include "onnx_core/runtime/kernels/kernel_context.h"
 
+#include <cmath>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -460,6 +461,65 @@ void RegisterCachedRotaryCorrectnessCase(std::vector<TestCase> &registry,
       "backend-test", bt_ns::TestCaseTag::AI_RT);
 }
 
+void RegisterRotaryCorrectnessCase(std::vector<TestCase> &registry, const OpsetId &microsoft_opset,
+                                   DataType data_type, std::int64_t rotary_dim, std::int64_t layout,
+                                   std::int64_t past_length) {
+  const std::int64_t sequence = past_length == 0 ? 3 : 1;
+  NodeProto node = MakeGroupQueryAttentionNode(4, 2, 1, std::nullopt, std::nullopt);
+  node.ref_input()[3] = "past_key";
+  node.ref_input()[4] = "past_value";
+  node.add_input("cos_cache");
+  node.add_input("sin_cache");
+  node.add_output("present_key");
+  node.add_output("present_value");
+  AddIntAttribute(node, "do_rotary", 1);
+  AddIntAttribute(node, "rotary_interleaved", layout);
+  const std::string name =
+      "test_cpu_group_query_attention_rotary_" + std::string(rotary_dim == 8 ? "full" : "partial") +
+      (layout == 0 ? "_split" : "_interleaved") + (past_length == 0 ? "_prefill_" : "_decode_") +
+      DataTypeSuffix(data_type);
+  Expect(
+      registry, node, name, {DefaultOpset(23), microsoft_opset},
+      [=]() -> IoData {
+        auto distinct_tensor = [=](const rt_ns::Shape &shape, float offset) {
+          std::vector<float> values(
+              static_cast<std::size_t>(shape.product(0, shape.size(), "GQA rotary fixture")));
+          for (std::size_t i = 0; i < values.size(); ++i) {
+            values[i] = offset + static_cast<float>(i + 1) / 128.0f;
+          }
+          return MakeTensor(data_type, shape, values);
+        };
+        Tensor query = distinct_tensor({1, sequence, 32}, -0.9f);
+        Tensor key = distinct_tensor({1, sequence, 16}, 0.1f);
+        Tensor value = distinct_tensor({1, sequence, 16}, -0.6f);
+        Tensor past_key = distinct_tensor({1, 2, past_length, 8}, 0.2f);
+        Tensor past_value = distinct_tensor({1, 2, past_length, 8}, -0.4f);
+        Tensor seqlens_k =
+            Tensor::FromInt32("", {1}, {static_cast<std::int32_t>(past_length + sequence - 1)});
+        Tensor total_length =
+            Tensor::FromInt32("", {}, {static_cast<std::int32_t>(past_length + sequence)});
+        std::vector<float> cos_values(static_cast<std::size_t>(8 * rotary_dim / 2));
+        std::vector<float> sin_values(cos_values.size());
+        for (std::size_t i = 0; i < cos_values.size(); ++i) {
+          const float angle = static_cast<float>(i + 1) * 0.17f;
+          cos_values[i] = std::cos(angle);
+          sin_values[i] = std::sin(angle);
+        }
+        Tensor cos_cache = MakeTensor(data_type, {8, rotary_dim / 2}, cos_values);
+        Tensor sin_cache = MakeTensor(data_type, {8, rotary_dim / 2}, sin_values);
+        const NaiveGroupQueryAttentionKernel kernel{node, KernelContext{microsoft_opset}};
+        Tensor present_key, present_value;
+        Tensor output =
+            kernel(node, query, key, value, seqlens_k, total_length, &past_key, &past_value,
+                   &cos_cache, &sin_cache, nullptr, nullptr, nullptr, &present_key, &present_value);
+        return IoData{{std::move(query), std::move(key), std::move(value), std::move(past_key),
+                       std::move(past_value), std::move(seqlens_k), std::move(total_length),
+                       std::move(cos_cache), std::move(sin_cache)},
+                      {std::move(output), std::move(present_key), std::move(present_value)}};
+      },
+      "backend-test", bt_ns::TestCaseTag::AI_RT);
+}
+
 void RegisterChatGlmGenerationCase(std::vector<TestCase> &registry,
                                    const OpsetId &microsoft_opset) {
   NodeProto node = MakeGroupQueryAttentionNode(32, 2, 1, std::nullopt, std::nullopt);
@@ -712,6 +772,14 @@ void RegisterCpuGroupQueryAttentionCases(std::vector<TestCase> &registry, TestMo
   RegisterCachedRotaryCorrectnessCase(registry, microsoft_opset);
   RegisterChatGlmGenerationCase(registry, microsoft_opset);
   for (const DataType data_type : {DataType::FLOAT, DataType::FLOAT16, DataType::BFLOAT16}) {
+    for (const std::int64_t rotary_dim : {4, 8}) {
+      for (const std::int64_t layout : {0, 1}) {
+        for (const std::int64_t past_length : {0, 3}) {
+          RegisterRotaryCorrectnessCase(registry, microsoft_opset, data_type, rotary_dim, layout,
+                                        past_length);
+        }
+      }
+    }
     for (const std::int64_t window : {std::int64_t{-1}, std::int64_t{2}}) {
       RegisterSinkGroupQueryAttentionCase(registry, microsoft_opset, data_type, 20, 0, window);
       RegisterSinkGroupQueryAttentionCase(registry, microsoft_opset, data_type, 1, 5, window);

@@ -1,6 +1,16 @@
 Kernel implementation notes
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
+GroupQueryAttention
+^^^^^^^^^^^^^^^^^^^
+
+Both optimized and naive ``com.microsoft::GroupQueryAttention`` kernels support
+full and partial rotary embeddings in split-half and interleaved layouts for
+FP32, FP16, and BF16. Matching rank-2 cosine/sine caches determine
+``rotary_dim = 2 * cache.shape[1]``, which must be positive and no larger than
+the head size. Only this even-sized prefix of Q/K is rotated; the suffix and
+previously cached keys remain bitwise unchanged, including during decode.
+
 MatMulNBits
 ^^^^^^^^^^^
 
