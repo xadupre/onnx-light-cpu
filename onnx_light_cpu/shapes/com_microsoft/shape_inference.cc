@@ -805,7 +805,8 @@ void ComputeShapeMatMulNBits(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE::Nod
     ConstrainEqual(ctx, b.Shape()[2], sym_ns::SymDim(block_size * bits / 8),
                    "ComputeShapeMatMulNBits: B dimension 2 must equal block_size * bits / 8.");
     if (scales.Shape().Rank() == 1) {
-      ConstrainEqual(ctx, scales.Shape()[0], sym_ns::SymDim(n * blocks),
+      ConstrainEqual(ctx, scales.Shape()[0],
+                     sym_ns::SymDim(CheckedIndexMultiply(n, blocks, "MatMulNBits", "scale count")),
                      "ComputeShapeMatMulNBits: flat scales has the wrong length.");
     } else {
       ConstrainEqual(ctx, scales.Shape()[0], sym_ns::SymDim(n),
@@ -824,8 +825,10 @@ void ComputeShapeMatMulNBits(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE::Nod
     const auto per_byte = 8 / bits;
     const auto stride = packed ? blocks / per_byte + (blocks % per_byte != 0) : blocks;
     if (zero.Shape().Rank() == 1) {
-      ConstrainEqual(ctx, zero.Shape()[0], sym_ns::SymDim(n * stride),
-                     "ComputeShapeMatMulNBits: invalid flat zero_points length.");
+      ConstrainEqual(
+          ctx, zero.Shape()[0],
+          sym_ns::SymDim(CheckedIndexMultiply(n, stride, "MatMulNBits", "zero point count")),
+          "ComputeShapeMatMulNBits: invalid flat zero_points length.");
     } else {
       ConstrainEqual(ctx, zero.Shape()[0], sym_ns::SymDim(n),
                      "ComputeShapeMatMulNBits: zero_points dimension 0 must equal N.");

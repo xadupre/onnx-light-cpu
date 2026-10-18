@@ -8,6 +8,7 @@
 #include "onnx_light_cpu/impl/math/half_conversion.h"
 #include "onnx_light_cpu/kernels/com_microsoft/matmul_nbits_kernel.h"
 #include "onnx_light_cpu/kernels/register_kernels.h"
+#include "onnx_light_cpu/schemas/com_microsoft/op_schema.h"
 #include "onnx_light_cpu/shapes/com_microsoft/shape_inference.h"
 
 #include "onnx_core/runtime/kernels/cast_helper.h"
@@ -25,6 +26,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <initializer_list>
+#include <optional>
 #include <string>
 #include <unordered_set>
 #include <vector>
@@ -770,7 +773,8 @@ TEST(MatMulNBitsKernel, Non32EncodedGeometryPreparationAndDequantizationParity) 
 
 TEST(MatMulNBitsKernel, RejectsInvalidGroupsAndZeroPointShapes) {
   const rt_ns::KernelContext ctx{rt_ns::OpsetId("com.microsoft", 1)};
-  for (const std::int64_t block : {-32, 0, 8, 24, 48, INT64_C(4294967296)}) {
+  for (const std::int64_t block :
+       std::initializer_list<std::int64_t>{-32, 0, 8, 24, 48, INT64_C(4294967296)}) {
     EXPECT_THROW((onnx_light_cpu::MatMulNBitsKernel{MakeNode(128, 1, 2, block), ctx}),
                  std::invalid_argument);
   }
@@ -812,6 +816,67 @@ TEST(MatMulNBitsKernel, AlignedNon32TensorGroupsDoNotUseBlock32Preparation) {
           EXPECT_FLOAT_EQ(ReadValue(rt.Get("Y"), i), 1.5f * block);
         }
       }
+    }
+  }
+}
+
+TEST(MatMulNBitsKernel, ExplicitZeroPointsDisableBlock32Preparation) {
+  const rt_ns::KernelContext ctx{rt_ns::OpsetId("com.microsoft", 1)};
+  for (const std::int64_t bits : {4, 8}) {
+    auto node = MakeNode(64, 16, bits);
+    node.add_input("zero_points");
+    onnx_light_cpu::MatMulNBitsKernel kernel{node, ctx};
+    const auto a = rt_ns::Tensor::FromFloat("", {1, 64}, std::vector<float>(64, 1));
+    const auto b = rt_ns::Tensor::FromUint8(
+        "", {16, 2, 4 * bits},
+        std::vector<std::uint8_t>(16 * 2 * 4 * bits, bits == 4 ? 0x99 : 0x81));
+    const auto scales = rt_ns::Tensor::FromFloat("", {16, 2}, std::vector<float>(32, 1));
+    const auto stride = bits == 4 ? 1 : 2;
+    const auto zeros = rt_ns::Tensor::FromUint8(
+        "", {16, stride}, std::vector<std::uint8_t>(16 * stride, bits == 4 ? 0x77 : 0x7f));
+    const auto direct = kernel(a, b, scales, nullptr, nullptr, &zeros);
+    rt_ns::RuntimeContext rt{ctx};
+    rt.Put("A", a);
+    rt.Put("B", b);
+    rt.Put("scales", scales);
+    rt.Put("zero_points", zeros);
+    EXPECT_FALSE(kernel.HasPreparations({"B", "scales", "zero_points"}));
+    kernel.Prepare(rt, {"B", "scales", "zero_points"});
+    kernel.Run(rt);
+    EXPECT_EQ(rt.value_store().prepared_bytes(), 0U);
+    for (std::size_t i = 0; i < 16; ++i) {
+      EXPECT_FLOAT_EQ(ReadValue(direct, i), 128);
+      EXPECT_FLOAT_EQ(ReadValue(rt.Get("Y"), i), 128);
+    }
+  }
+}
+
+TEST(MatMulNBitsKernel, SchemaAndShapeInferenceAcceptNon32ZeroPoints) {
+  namespace shapes_ns = ONNX_LIGHT_NAMESPACE::core::shapes;
+  namespace sym_ns = ONNX_LIGHT_NAMESPACE::core::symbolic;
+  namespace schema_ns = ONNX_LIGHT_NAMESPACE::core::schema;
+  const auto schemas = onnx_light_cpu::GetMicrosoftOpSchemasWithHistory("MatMulNBits", false);
+  ASSERT_EQ(schemas.size(), 1U);
+  for (const auto type :
+       {sym_ns::TensorType::kFloat, sym_ns::TensorType::kFloat16, sym_ns::TensorType::kBfloat16}) {
+    for (bool packed : {false, true}) {
+      auto node = MakeNode(515, 3, 2, 128);
+      node.add_input("zero_points");
+      shapes_ns::ShapesContext ctx;
+      ctx.Set("A", sym_ns::SymTensor(nullptr, type, {2, 515}));
+      ctx.Set("B", sym_ns::SymTensor(nullptr, sym_ns::TensorType::kUint8, {3, 5, 32}));
+      ctx.Set("scales", sym_ns::SymTensor(nullptr, type, {3, 5}));
+      ctx.Set("zero_points", sym_ns::SymTensor(nullptr, packed ? sym_ns::TensorType::kUint8 : type,
+                                               {3, packed ? 2 : 5}));
+      const std::vector<std::optional<schema_ns::SchemaInputValue>> inputs = {
+          schema_ns::SchemaInputValue(ctx.Get("A")), schema_ns::SchemaInputValue(ctx.Get("B")),
+          schema_ns::SchemaInputValue(ctx.Get("scales")),
+          schema_ns::SchemaInputValue(ctx.Get("zero_points"))};
+      EXPECT_NO_THROW(schemas[0].Verify(node, &inputs));
+      EXPECT_NO_THROW(onnx_light_cpu::ComputeShapeMatMulNBits(ctx, node));
+      EXPECT_EQ(ctx.Get("Y").Shape(), sym_ns::SymShape({2, 3}));
+      ctx.Set("zero_points", sym_ns::SymTensor(nullptr, type, {3, 5, 1}));
+      EXPECT_THROW(onnx_light_cpu::ComputeShapeMatMulNBits(ctx, node), std::invalid_argument);
     }
   }
 }

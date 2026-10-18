@@ -760,7 +760,8 @@ TEST(MatMulNBits, PanelSpecialValuesAndEmptyOutputs) {
     }
   }
   MatMulNBitsFloat32(nullptr, nullptr, nullptr, nullptr, nullptr, 1, 33, 0, 32);
-  EXPECT_THROW(MatMulNBitsFloat32(nullptr, nullptr, nullptr, nullptr, nullptr, 0, 0, 0, 64),
+  EXPECT_NO_THROW(MatMulNBitsFloat32(nullptr, nullptr, nullptr, nullptr, nullptr, 0, 0, 0, 64));
+  EXPECT_THROW(MatMulNBitsFloat32(nullptr, nullptr, nullptr, nullptr, nullptr, 0, 0, 0, 24),
                std::invalid_argument);
 }
 

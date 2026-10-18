@@ -190,7 +190,8 @@ inference. It never converts the encoded weights to the VNNI preparation layout.
 with shared parameter references, incompatible
 attributes, or any other unsupported representation fail with an exception.
 This encoded form is inference-only; automatic differentiation continues to
-require separate tensor ``B`` and ``scales`` inputs.
+require separate tensor ``B`` and ``scales`` inputs with block size 32 and
+implicit zero points.
 Explicit zero points are borrowed from the encoded payload; omit input 3 as
 well as input 2. Larger groups and explicit zero points use the bounded-panel
 decoder. The specialized INT4/INT8 preparation paths remain restricted to
