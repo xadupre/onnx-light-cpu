@@ -846,7 +846,6 @@ class TestBackendCases(ExtTestCase):
                     "LessOrEqual",
                     "Max",
                     "MatMulNBits",
-                    "MultiHeadAttention",
                     "Mean",
                     "Min",
                     "Mod",
@@ -865,7 +864,11 @@ class TestBackendCases(ExtTestCase):
             ):
                 assert isinstance(record.since_version, int)
                 assert record.since_version >= 1
-            elif record.op_type in {"ReduceSum", "SimplifiedLayerNormalization"}:
+            elif record.op_type in {
+                "MultiHeadAttention",
+                "ReduceSum",
+                "SimplifiedLayerNormalization",
+            }:
                 assert record.since_version == 1
             elif record.op_type in {"Attention", "RMSNormalization", "RotaryEmbedding"}:
                 assert record.since_version == 23
