@@ -284,6 +284,9 @@ void MultiHeadAttentionKernel::Run(rt_ns::RuntimeContext &rt) {
                               : std::exp(scores[pos] - maximum);
             sum += scores[pos];
           }
+          if (sum != 0)
+            for (std::int64_t pos = 0; pos < t; ++pos)
+              scores[pos] /= sum;
           for (std::int64_t feature = 0; feature < hv; ++feature) {
             float result = 0;
             for (std::int64_t pos = 0; pos < t; ++pos)
@@ -292,7 +295,7 @@ void MultiHeadAttentionKernel::Run(rt_ns::RuntimeContext &rt) {
                                             ? Read(*bias, 2 * heads * h + head * hv + feature)
                                             : 0));
             Write(output, (batch * s + seq) * heads * hv + head * hv + feature,
-                  sum == 0 ? 0 : result / sum);
+                  sum == 0 ? 0 : result);
           }
         }
       });

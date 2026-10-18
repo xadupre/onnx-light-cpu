@@ -17,6 +17,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -60,6 +61,36 @@ TEST(MultiHeadAttentionKernel, SoftmaxScaleBiasCacheAndPresent) {
   EXPECT_NEAR(runtime.Get("out").AsFloat()[0], 2.f * (1 - weight) + 6.f * weight, 1.e-5f);
   EXPECT_FLOAT_EQ(runtime.Get("present_k").AsFloat()[1], 2.f);
   EXPECT_FLOAT_EQ(runtime.Get("present_v").AsFloat()[1], 6.f);
+}
+
+TEST(MultiHeadAttentionKernel, NormalizesWeightsBeforeAccumulatingLargeFloatValues) {
+  auto node = MakeNode();
+  rt::RuntimeContext runtime{rt::KernelContext{rt::OpsetId("com.microsoft", 1)}};
+  runtime.Set("q", rt::Tensor::FromFloat("q", {1, 1, 1}, {0}));
+  runtime.Set("k", rt::Tensor::FromFloat("k", {1, 2, 1}, {0, 0}));
+  runtime.Set("v", rt::Tensor::FromFloat("v", {1, 2, 1}, {3.e38f, 3.e38f}));
+  onnx_light_cpu::MultiHeadAttentionKernel kernel(
+      node, rt::KernelContext{rt::OpsetId("com.microsoft", 1)});
+  kernel.Run(runtime);
+  const float actual = runtime.Get("out").AsFloat()[0];
+  EXPECT_TRUE(std::isfinite(actual));
+  EXPECT_FLOAT_EQ(actual, 3.e38f);
+}
+
+TEST(MultiHeadAttentionKernel, FullyMaskedRowProducesZero) {
+  auto node = MakeNode();
+  node.ref_input()[4] = "mask";
+  ONNX_LIGHT_NAMESPACE::AddAttribute(node, "mask_filter_value",
+                                     -std::numeric_limits<float>::infinity());
+  rt::RuntimeContext runtime{rt::KernelContext{rt::OpsetId("com.microsoft", 1)}};
+  runtime.Set("q", rt::Tensor::FromFloat("q", {1, 1, 1}, {0}));
+  runtime.Set("k", rt::Tensor::FromFloat("k", {1, 2, 1}, {0, 0}));
+  runtime.Set("v", rt::Tensor::FromFloat("v", {1, 2, 1}, {3.e38f, 3.e38f}));
+  runtime.Set("mask", rt::Tensor::FromInt32("mask", {1, 2}, {0, 0}));
+  onnx_light_cpu::MultiHeadAttentionKernel kernel(
+      node, rt::KernelContext{rt::OpsetId("com.microsoft", 1)});
+  kernel.Run(runtime);
+  EXPECT_FLOAT_EQ(runtime.Get("out").AsFloat()[0], 0.f);
 }
 
 TEST(MultiHeadAttentionKernel, RejectsUnsupportedSlotsAndPackedInput) {
