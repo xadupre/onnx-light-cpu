@@ -720,7 +720,7 @@ TEST(MatMulNBitsKernel, Non32EncodedGeometryPreparationAndDequantizationParity) 
     for (const std::int64_t bits : {2, 4, 8}) {
       for (const auto dtype :
            {rt_ns::DataType::FLOAT, rt_ns::DataType::FLOAT16, rt_ns::DataType::BFLOAT16}) {
-        for (double zero : {-1.0, 1.0}) {
+        for (double zero : {-1.0, 1.0, 0.5}) {
           SCOPED_TRACE(::testing::Message() << block_size << ',' << bits << ',' << zero);
           const auto encoded = MakeEncodedWeights(dtype, k, n, bits, block_size, zero);
           const auto weights = rt_ns::DequantizeTensor(encoded);
@@ -803,7 +803,8 @@ TEST(MatMulNBitsKernel, AlignedNon32TensorGroupsDoNotUseBlock32Preparation) {
       }
       for (const auto dtype :
            {rt_ns::DataType::FLOAT, rt_ns::DataType::FLOAT16, rt_ns::DataType::BFLOAT16}) {
-        onnx_light_cpu::MatMulNBitsKernel kernel{MakeNode(k, 16, bits, block), ctx};
+        const auto node = MakeNode(k, 16, bits, block);
+        onnx_light_cpu::MatMulNBitsKernel kernel{node, ctx};
         rt_ns::RuntimeContext rt{ctx};
         rt.Put("A", MakeTensor(dtype, {2, k}, std::vector<float>(2 * k, 1)));
         rt.Put("B", b);

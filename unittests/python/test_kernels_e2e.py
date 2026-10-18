@@ -636,12 +636,13 @@ class TestBackendCases(ExtTestCase):
             for case in collect_test_cases("MatMulNBits", mode=TestMode.TEST)
             if case.name.startswith("test_cpu_matmulnbits_")
         ]
-        self.assertEqual(len(cases), 9 + 5 * 3 * 3 * 2 * 3)
+        self.assertEqual(len(cases), 9 + 5 * 8 * 2 * 3)
         for case in cases:
             with self.subTest(case=case.name):
                 model = type(case.model)()
                 model.ParseFromString(case.model.SerializeToString())
                 model.ir_version = 10
+                bits = next(a.i for a in model.graph.node[0].attribute if a.name == "bits")
                 session = ReferenceEvaluator(model)
                 register_kernel_for_session(session, "com.microsoft", "MatMulNBits")
                 oracle_model = type(model)()
@@ -670,7 +671,8 @@ class TestBackendCases(ExtTestCase):
                     expected = oracle.run(None, oracle_feeds)
                     actual = session.run(None, feeds)
                     for output, reference in zip(actual, expected, strict=True):
-                        tolerance = 2e-2 if output.dtype != np.float32 else 3e-5
+                        float_tolerance = 1e-4 if bits == 8 else 3e-5
+                        tolerance = 2e-2 if output.dtype != np.float32 else float_tolerance
                         _assert_close(output, reference, rtol=tolerance, atol=tolerance)
 
     def test_all_registered_kernels_pass_regular_backend_correctness_corpus(self):

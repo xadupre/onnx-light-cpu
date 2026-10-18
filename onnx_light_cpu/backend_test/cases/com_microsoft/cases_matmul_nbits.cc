@@ -212,6 +212,10 @@ void RegisterCpuMatMulNBitsCases(std::vector<TestCase> &registry, TestMode mode)
     for (const std::int64_t block_size : {16, 32, 64, 128, 256}) {
       for (const std::int64_t bits : bit_widths) {
         for (int zero_mode : {0, 1, 2}) {
+          // ORT CPU cannot serve as a parity oracle for floating INT8 zero points.
+          if (bits == 8 && zero_mode == 2) {
+            continue;
+          }
           for (bool with_bias : {false, true}) {
             const auto k = 4 * block_size + 3;
             const std::string name =
