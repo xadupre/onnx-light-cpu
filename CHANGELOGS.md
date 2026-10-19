@@ -1,137 +1,80 @@
 # Changelog
 
-All notable changes to this project are documented in this file.
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
+All notable changes to this project are documented in this file. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [0.1.23] – Unreleased
 
 ### New Features
 
-- Added `RotaryEmbedding` CPU kernels for ONNX and `com.microsoft` with FLOAT,
-  FLOAT16, and BFLOAT16 inputs and split-half or interleaved layouts
-  ([#883](https://github.com/xadupre/onnx-light-cpu/pull/883)).
-- Added `com.microsoft::MoE` decoder inference for FLOAT, FLOAT16, and
-  BFLOAT16 with softmax top-k routing and interleaved SwiGLU
-  ([#913](https://github.com/xadupre/onnx-light-cpu/pull/913)).
+- Added `RotaryEmbedding` CPU kernels for ONNX and `com.microsoft` with FLOAT, FLOAT16, and BFLOAT16 inputs and split-half or interleaved layouts ([#883](https://github.com/xadupre/onnx-light-cpu/pull/883)).
+- Added `com.microsoft::MoE` decoder inference for FLOAT, FLOAT16, and BFLOAT16 with softmax top-k routing and interleaved SwiGLU ([#913](https://github.com/xadupre/onnx-light-cpu/pull/913)).
 
 ### Improvements
 
-- Updated native kernel registration and immutable input preparation for the
-  onnx-light 0.1.32 runtime API, and pinned CI and release builds to 0.1.32.
-- Supported encoded INT2/INT4/INT8 `MatMulNBits` weights with embedded scales,
-  without repacking them for VNNI execution
-  ([#895](https://github.com/xadupre/onnx-light-cpu/pull/895)).
-- Added interleaved rotary pairing for `GroupQueryAttention` query and key
-  inputs ([#906](https://github.com/xadupre/onnx-light-cpu/pull/906)).
-- Optimized `BatchNormalization` for contiguous channels and improved
-  normalization moment stability with Chan aggregation
-  ([#870](https://github.com/xadupre/onnx-light-cpu/pull/870),
-  [#888](https://github.com/xadupre/onnx-light-cpu/pull/888)).
-- Added allocation-free COMPLEX64 and COMPLEX128 input and output support to
-  the CPU Cast kernel.
-- Added `com.microsoft::SkipLayerNormalization` for FLOAT, FLOAT16, and
-  BFLOAT16 decoder graphs, including optional beta, bias, saved statistics,
-  and residual outputs ([#896](https://github.com/xadupre/onnx-light-cpu/issues/896)).
+- Updated native kernel registration and immutable input preparation for the onnx-light 0.1.32 runtime API, and pinned CI and release builds to 0.1.32.
+- Supported encoded INT2/INT4/INT8 `MatMulNBits` weights with embedded scales, without repacking them for VNNI execution ([#895](https://github.com/xadupre/onnx-light-cpu/pull/895)).
+- Added interleaved rotary pairing for `GroupQueryAttention` query and key inputs ([#906](https://github.com/xadupre/onnx-light-cpu/pull/906)).
+- Optimized `BatchNormalization` for contiguous channels and improved normalization moment stability with Chan aggregation ([#870](https://github.com/xadupre/onnx-light-cpu/pull/870), [#888](https://github.com/xadupre/onnx-light-cpu/pull/888)).
+- Added allocation-free COMPLEX64 and COMPLEX128 input and output support to the CPU Cast kernel.
+- Added `com.microsoft::SkipLayerNormalization` for FLOAT, FLOAT16, and BFLOAT16 decoder graphs, including optional beta, bias, saved statistics, and residual outputs ([#896](https://github.com/xadupre/onnx-light-cpu/issues/896)).
 
 ### Fixes
 
-- Accepted dynamic structured `MatMulNBits` weight inputs during shape inference
-  without requiring a concrete encoded value
-  ([#905](https://github.com/xadupre/onnx-light-cpu/pull/905)).
+- Accepted dynamic structured `MatMulNBits` weight inputs during shape inference without requiring a concrete encoded value ([#905](https://github.com/xadupre/onnx-light-cpu/pull/905)).
 
 ### Documentation & CI
 
-- Corrected the published-wheel compatibility guide to reference onnx-light
-  0.1.32 and added a regression check that keeps it aligned with the release
-  version ([#901](https://github.com/xadupre/onnx-light-cpu/pull/901)).
-- Generated C++ kernel and custom-operator API pages from Doxygen declarations
-  ([#887](https://github.com/xadupre/onnx-light-cpu/pull/887)).
-- Enabled weekly Dependabot updates for GitHub Actions and Python dependencies
-  ([#872](https://github.com/xadupre/onnx-light-cpu/pull/872)).
+- Corrected the published-wheel compatibility guide to reference onnx-light 0.1.32 and added a regression check that keeps it aligned with the release version ([#901](https://github.com/xadupre/onnx-light-cpu/pull/901)).
+- Generated C++ kernel and custom-operator API pages from Doxygen declarations ([#887](https://github.com/xadupre/onnx-light-cpu/pull/887)).
+- Enabled weekly Dependabot updates for GitHub Actions and Python dependencies ([#872](https://github.com/xadupre/onnx-light-cpu/pull/872)).
 
 ## [0.1.20] – 2026-10-05
 
 ### Improvements
 
-- Added an SSSE3 fallback for INT8 and INT16 `Abs` on x86 processors without
-  AVX2 ([#853](https://github.com/xadupre/onnx-light-cpu/pull/853)).
-- Added packed `[Q | K | V]` inputs to optimized and scalar-reference
-  `com.microsoft::GroupQueryAttention` kernels for FLOAT, FLOAT16, and BFLOAT16,
-  including rotary embeddings and KV caches
-  ([#862](https://github.com/xadupre/onnx-light-cpu/pull/862)).
-- Prepared and compacted immutable `TreeEnsemble` plans during kernel
-  construction, and replaced the private tuning registry with shared runtime
-  tuning for FLOAT, DOUBLE, and FLOAT16
-  ([#866](https://github.com/xadupre/onnx-light-cpu/pull/866)).
-- Moved immutable `MatMulNBits` INT4 preparation into runtime-owned storage so
-  packed buffers participate in session residency accounting and eviction;
-  dynamic inputs retain invocation-local plans without kernel synchronization
-  ([#865](https://github.com/xadupre/onnx-light-cpu/pull/865)).
+- Added an SSSE3 fallback for INT8 and INT16 `Abs` on x86 processors without AVX2 ([#853](https://github.com/xadupre/onnx-light-cpu/pull/853)).
+- Added packed `[Q | K | V]` inputs to optimized and scalar-reference `com.microsoft::GroupQueryAttention` kernels for FLOAT, FLOAT16, and BFLOAT16, including rotary embeddings and KV caches ([#862](https://github.com/xadupre/onnx-light-cpu/pull/862)).
+- Prepared and compacted immutable `TreeEnsemble` plans during kernel construction, and replaced the private tuning registry with shared runtime tuning for FLOAT, DOUBLE, and FLOAT16 ([#866](https://github.com/xadupre/onnx-light-cpu/pull/866)).
+- Moved immutable `MatMulNBits` INT4 preparation into runtime-owned storage so packed buffers participate in session residency accounting and eviction; dynamic inputs retain invocation-local plans without kernel synchronization ([#865](https://github.com/xadupre/onnx-light-cpu/pull/865)).
 
 ### Fixes
 
-- Matched the effective native nanobind ABI used by onnx-light 0.1.30 in
-  release wheels on Linux, Windows, and macOS
-  ([#859](https://github.com/xadupre/onnx-light-cpu/pull/859)).
-- Fixed Windows wheel builds by locating MSVC tools through `vswhere`, and
-  macOS wheel repair by excluding separately installed onnx-light libraries
-  ([#860](https://github.com/xadupre/onnx-light-cpu/pull/860)).
-- Fixed the Windows imported core library configuration and macOS runtime
-  library lookup during wheel repair
-  ([#865](https://github.com/xadupre/onnx-light-cpu/pull/865)).
-- Validated packed `GroupQueryAttention` widths and included unpacking, rotary,
-  KV concatenation, and scalar score buffers in scratch-memory estimates
-  ([#862](https://github.com/xadupre/onnx-light-cpu/pull/862)).
-- Restored shared tuning and preparation hooks for session-local native kernel
-  registration through the runtime lifecycle
-  ([#866](https://github.com/xadupre/onnx-light-cpu/pull/866)).
+- Matched the effective native nanobind ABI used by onnx-light 0.1.30 in release wheels on Linux, Windows, and macOS ([#859](https://github.com/xadupre/onnx-light-cpu/pull/859)).
+- Fixed Windows wheel builds by locating MSVC tools through `vswhere`, and macOS wheel repair by excluding separately installed onnx-light libraries ([#860](https://github.com/xadupre/onnx-light-cpu/pull/860)).
+- Fixed the Windows imported core library configuration and macOS runtime library lookup during wheel repair ([#865](https://github.com/xadupre/onnx-light-cpu/pull/865)).
+- Validated packed `GroupQueryAttention` widths and included unpacking, rotary, KV concatenation, and scalar score buffers in scratch-memory estimates ([#862](https://github.com/xadupre/onnx-light-cpu/pull/862)).
+- Restored shared tuning and preparation hooks for session-local native kernel registration through the runtime lifecycle ([#866](https://github.com/xadupre/onnx-light-cpu/pull/866)).
 
 ## [0.1.19] – 2026-10-05
 
 ### Fixes
 
-- Fixed release-wheel compatibility with onnx-light by building against its
-  published wheel and matching its effective native nanobind ABI
-  ([#854](https://github.com/xadupre/onnx-light-cpu/pull/854)).
+- Fixed release-wheel compatibility with onnx-light by building against its published wheel and matching its effective native nanobind ABI ([#854](https://github.com/xadupre/onnx-light-cpu/pull/854)).
 
 ## [0.1.18] – 2026-10-05
 
 ### New Features
 
-- Added a native INT64 `ReduceSum` kernel with support for input and attribute
-  axes, empty reductions, and exact integer arithmetic
-  ([#846](https://github.com/xadupre/onnx-light-cpu/pull/846)).
+- Added a native INT64 `ReduceSum` kernel with support for input and attribute axes, empty reductions, and exact integer arithmetic ([#846](https://github.com/xadupre/onnx-light-cpu/pull/846)).
 
 ### Improvements
 
 - Updated development and AVX2 parity workflows to use onnx-light 0.1.30.
-- Added 256-bit AVX-VNNI dispatch for packed INT8 and INT4 GEMM on supported
-  processors without requiring AVX-512
-  ([#839](https://github.com/xadupre/onnx-light-cpu/pull/839)).
+- Added 256-bit AVX-VNNI dispatch for packed INT8 and INT4 GEMM on supported processors without requiring AVX-512 ([#839](https://github.com/xadupre/onnx-light-cpu/pull/839)).
 
 ### Documentation & CI
 
-- Pinned release-wheel builds and smoke tests to the declared onnx-light
-  release instead of building against its `main` branch
-  ([#834](https://github.com/xadupre/onnx-light-cpu/pull/834)).
-- Added CI coverage for stable and native Python ABI builds and session-local
-  kernel registration
-  ([#843](https://github.com/xadupre/onnx-light-cpu/pull/843)).
-- Evaluated AVX-512CD conflict detection for ScatterND and retained the
-  existing scalar path after the prototype regressed on measured workloads
-  ([#840](https://github.com/xadupre/onnx-light-cpu/pull/840)).
-- Evaluated AVX-512VL narrow-vector and masked-tail candidates and retained the
-  existing dispatch after finding no consistent kernel-level benefit
-  ([#842](https://github.com/xadupre/onnx-light-cpu/pull/842)).
+- Pinned release-wheel builds and smoke tests to the declared onnx-light release instead of building against its `main` branch ([#834](https://github.com/xadupre/onnx-light-cpu/pull/834)).
+- Added CI coverage for stable and native Python ABI builds and session-local kernel registration ([#843](https://github.com/xadupre/onnx-light-cpu/pull/843)).
+- Evaluated AVX-512CD conflict detection for ScatterND and retained the existing scalar path after the prototype regressed on measured workloads ([#840](https://github.com/xadupre/onnx-light-cpu/pull/840)).
+- Evaluated AVX-512VL narrow-vector and masked-tail candidates and retained the existing dispatch after finding no consistent kernel-level benefit ([#842](https://github.com/xadupre/onnx-light-cpu/pull/842)).
 
 ## [0.1.17] – 2026-10-02
 
 ### Fixes
 
-- Included the compiled `_cpuregister` extension in release wheels so native
-  kernel registration is available after installation.
-- Added a pre-upload wheel smoke test that registers CPU kernels and verifies
-  native `Abs` dispatch on Linux, Windows, and macOS.
+- Included the compiled `_cpuregister` extension in release wheels so native kernel registration is available after installation.
+- Added a pre-upload wheel smoke test that registers CPU kernels and verifies native `Abs` dispatch on Linux, Windows, and macOS.
 
 ### Documentation & CI
 
@@ -142,45 +85,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### New Features
 
 - Added SIMD-accelerated ONNX CPU kernels with runtime dispatch for x86 and ARM.
-- Added optimized `com.microsoft` kernels for `BiasGelu`, `CDist`, and
-  `GroupQueryAttention`.
-- Added an AVX2 accuracy-level-4 `com.microsoft::MatMulNBits` kernel using
-  prepacked INT4 weights and quantized activations.
-- Added `com.microsoft::SkipSimplifiedLayerNormalization` inference support
-  for matching FLOAT/FLOAT16/BFLOAT16 inputs, optional bias, saved statistics,
-  and residual-sum output, symbolic shape inference, native schema lookup,
-  and zero CPU scratch memory.
-- Added global and session-local kernel registration APIs with public kernel and
-  SIMD inspection.
+- Added optimized `com.microsoft` kernels for `BiasGelu`, `CDist`, and `GroupQueryAttention`.
+- Added an AVX2 accuracy-level-4 `com.microsoft::MatMulNBits` kernel using prepacked INT4 weights and quantized activations.
+- Added `com.microsoft::SkipSimplifiedLayerNormalization` inference support for matching FLOAT/FLOAT16/BFLOAT16 inputs, optional bias, saved statistics, and residual-sum output, symbolic shape inference, native schema lookup, and zero CPU scratch memory.
+- Added global and session-local kernel registration APIs with public kernel and SIMD inspection.
 - Added reusable C++ and Python backend correctness and benchmark runners.
 - Added processor-performance profiling and machine-readable reports.
 
 ### Improvements
 
-- Improved unary and binary elementwise execution with vectorized tails,
-  specialized broadcasting, and calibrated parallel thresholds.
-- Improved GEMM and MatMul blocking, packing, scheduling, fused bias, and
-  half-precision and integer execution, including fused FLOAT16 bias conversion.
-- Improved Attention for decode, prefill, realistic FP16, BF16, and FP32 model
-  shapes, AVX2 boolean-mask softmax, and non-aligned short queries.
+- Improved unary and binary elementwise execution with vectorized tails, specialized broadcasting, and calibrated parallel thresholds.
+- Improved GEMM and MatMul blocking, packing, scheduling, fused bias, and half-precision and integer execution, including fused FLOAT16 bias conversion.
+- Improved Attention for decode, prefill, realistic FP16, BF16, and FP32 model shapes, AVX2 boolean-mask softmax, and non-aligned short queries.
 - Added AVX2/F16C FLOAT16 Cast and Tanh paths.
-- Shared SIMD normalization primitives and used the fused FLOAT16 affine path
-  for BatchNormalization inference.
-- Reduced `BiasGelu` and `CDist` latency and added focused ONNX Runtime parity
-  benchmarks.
+- Shared SIMD normalization primitives and used the fused FLOAT16 affine path for BatchNormalization inference.
+- Reduced `BiasGelu` and `CDist` latency and added focused ONNX Runtime parity benchmarks.
 - Optimized TreeEnsemble execution.
 
 ### Fixes
 
-- Fixed build and runtime consistency when linking against an onnx-light source
-  checkout.
+- Fixed build and runtime consistency when linking against an onnx-light source checkout.
 - Fixed release installation and cross-package runtime library lookup.
 - Stabilized backend benchmark reporting and integer division validation.
 
 ### Documentation & CI
 
-- Added generated operator and API catalogues, design documentation, development
-  roadmaps, and benchmark galleries.
+- Added generated operator and API catalogues, design documentation, development roadmaps, and benchmark galleries.
 - Expanded cross-platform, sanitizer, coverage, formatting, and typing checks.
-- Added tag-triggered wheel and standalone C++ release workflows that publish
-  artifacts to the matching GitHub release.
+- Added tag-triggered wheel and standalone C++ release workflows that publish artifacts to the matching GitHub release.
