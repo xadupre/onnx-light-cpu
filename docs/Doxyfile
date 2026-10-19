@@ -14,7 +14,7 @@ GENERATE_XML           = YES
 XML_OUTPUT             = xml
 
 # Discover headers recursively so new documented components need no Doxyfile update.
-INPUT                  = ../onnx_light_cpu ../onnx_light_cpu_compute/include
+INPUT                  = ../onnx_light_cpu ../cpu_compute/include
 FILE_PATTERNS          = *.h
 RECURSIVE              = YES
 

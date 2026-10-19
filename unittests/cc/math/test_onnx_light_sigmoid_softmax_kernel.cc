@@ -2,10 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "cpu_compute/execution.h"
+#include "cpu_compute/math/half_conversion.h"
+#include "cpu_compute/math/math.h"
 #include "onnx_light_cpu/kernels/math/sigmoid_softmax_kernel.h"
-#include "onnx_light_cpu_compute/execution.h"
-#include "onnx_light_cpu_compute/math/half_conversion.h"
-#include "onnx_light_cpu_compute/math/math_kernels.h"
 
 #include <gtest/gtest.h>
 
@@ -39,9 +39,8 @@ rt::Tensor ActivationTensor(rt::DataType type, const rt::Shape &shape,
   auto *bits = reinterpret_cast<std::uint16_t *>(tensor.mutable_bytes());
   for (std::size_t index = 0; index < values.size(); ++index) {
     const float value = static_cast<float>(values[index]);
-    bits[index] = type == rt::DataType::FLOAT16
-                      ? onnx_light_cpu::detail::FloatToFloat16Bits(value)
-                      : onnx_light_cpu::detail::FloatToBFloat16Bits(value);
+    bits[index] = type == rt::DataType::FLOAT16 ? cpu_compute::detail::FloatToFloat16Bits(value)
+                                                : cpu_compute::detail::FloatToBFloat16Bits(value);
   }
   return tensor;
 }
@@ -55,8 +54,8 @@ double ActivationValue(const rt::Tensor &tensor, std::size_t index) {
     return tensor.AsFloat()[index];
   }
   const auto bits = reinterpret_cast<const std::uint16_t *>(tensor.bytes())[index];
-  return type == rt::DataType::FLOAT16 ? onnx_light_cpu::detail::Float16BitsToFloat(bits)
-                                       : onnx_light_cpu::detail::Bfloat16BitsToFloat(bits);
+  return type == rt::DataType::FLOAT16 ? cpu_compute::detail::Float16BitsToFloat(bits)
+                                       : cpu_compute::detail::Bfloat16BitsToFloat(bits);
 }
 
 void ExpectActivationNear(double actual, long double expected, rt::DataType type) {
@@ -71,10 +70,10 @@ void ExpectActivationNear(double actual, long double expected, rt::DataType type
     minimum = std::numeric_limits<float>::denorm_min();
   } else if (type == rt::DataType::FLOAT16) {
     relative = 6e-4;
-    minimum = onnx_light_cpu::detail::Float16BitsToFloat(1);
+    minimum = cpu_compute::detail::Float16BitsToFloat(1);
   } else if (type == rt::DataType::BFLOAT16) {
     relative = 4e-3;
-    minimum = onnx_light_cpu::detail::Bfloat16BitsToFloat(1);
+    minimum = cpu_compute::detail::Bfloat16BitsToFloat(1);
   }
   EXPECT_NEAR(actual, static_cast<double>(expected),
               std::max(std::abs(static_cast<double>(expected)) * relative, minimum));
@@ -159,9 +158,9 @@ struct InlineExecutor {
   bool concurrent = false;
 
   static void Run(void *context, std::int64_t blocks, void *task_context,
-                  onnx_light_cpu::ExecutionBlockFn task) {
+                  cpu_compute::ExecutionBlockFn task) {
     auto &self = *static_cast<InlineExecutor *>(context);
-    self.nested |= onnx_light_cpu::ExecutionInParallelRegion();
+    self.nested |= cpu_compute::ExecutionInParallelRegion();
     ++self.dispatches;
     self.blocks = blocks;
     std::vector<std::thread> workers;
@@ -538,8 +537,8 @@ TEST(OnnxLightSigmoidSoftmaxKernel, SoftmaxEmptyAxesPreserveShapeAndType) {
 
 TEST(OnnxLightSigmoidSoftmaxKernel, UsesRuntimeExecutorForLargeInputs) {
   InlineExecutor executor;
-  onnx_light_cpu::ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run};
-  onnx_light_cpu::ExecutionExecutorScope scope(&view);
+  cpu_compute::ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run};
+  cpu_compute::ExecutionExecutorScope scope(&view);
   const auto small = rt::Tensor::FromFloat("", {1, 17}, Values(17));
   const onnx_light_cpu::SigmoidKernel sigmoid(Context());
   const onnx_light_cpu::SoftmaxKernel softmax(Context());
@@ -573,22 +572,22 @@ TEST(OnnxLightSigmoidSoftmaxKernel, UsesRuntimeExecutorForLargeInputs) {
 
   executor = {};
   {
-    onnx_light_cpu::detail::ExecutionRegionScope region;
+    cpu_compute::detail::ExecutionRegionScope region;
     sigmoid(large);
     softmax(large, -1);
   }
   EXPECT_EQ(executor.dispatches, 0);
 }
 
-#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
+#ifdef CPU_COMPUTE_HAVE_AVX2_FMA
 TEST(OnnxLightSigmoidSoftmaxKernel, SmallSigmoidUsesBoundedTeams) {
-  if (onnx_light_cpu::DetectSimdLevel() < onnx_light_cpu::SimdLevel::kAVX2 ||
-      !onnx_light_cpu::CpuSupportsFma()) {
+  if (cpu_compute::DetectSimdLevel() < cpu_compute::SimdLevel::kAVX2 ||
+      !cpu_compute::CpuSupportsFma()) {
     GTEST_SKIP() << "AVX2/FMA is unavailable";
   }
   InlineExecutor executor;
-  onnx_light_cpu::ExecutionExecutorView view{&executor, 32, &InlineExecutor::Run};
-  onnx_light_cpu::ExecutionExecutorScope scope(&view);
+  cpu_compute::ExecutionExecutorView view{&executor, 32, &InlineExecutor::Run};
+  cpu_compute::ExecutionExecutorScope scope(&view);
   const onnx_light_cpu::SigmoidKernel sigmoid(Context());
   for (std::int64_t count : {32767, 32768, 49151, 49152, 65535, 65536, 98303, 98304, 131072}) {
     executor = {};
@@ -599,7 +598,7 @@ TEST(OnnxLightSigmoidSoftmaxKernel, SmallSigmoidUsesBoundedTeams) {
     } else {
       EXPECT_EQ(executor.dispatches, 1);
       EXPECT_GT(executor.blocks, 1);
-      const bool avx512 = onnx_light_cpu::DetectSimdLevel() >= onnx_light_cpu::SimdLevel::kAVX512;
+      const bool avx512 = cpu_compute::DetectSimdLevel() >= cpu_compute::SimdLevel::kAVX512;
       const std::int64_t maximum_blocks =
           avx512 && count >= 96 * 1024
               ? 8
@@ -611,8 +610,8 @@ TEST(OnnxLightSigmoidSoftmaxKernel, SmallSigmoidUsesBoundedTeams) {
 }
 
 TEST(OnnxLightSigmoidSoftmaxKernel, RegisteredFloat64UsesFusedAvx2Implementation) {
-  if (onnx_light_cpu::DetectSimdLevel() < onnx_light_cpu::SimdLevel::kAVX2 ||
-      !onnx_light_cpu::CpuSupportsFma()) {
+  if (cpu_compute::DetectSimdLevel() < cpu_compute::SimdLevel::kAVX2 ||
+      !cpu_compute::CpuSupportsFma()) {
     GTEST_SKIP() << "AVX2/FMA is unavailable";
   }
   for (std::int64_t columns : {1, 3, 4, 5, 7, 8, 9, 1023, 1024, 1025}) {
@@ -620,19 +619,19 @@ TEST(OnnxLightSigmoidSoftmaxKernel, RegisteredFloat64UsesFusedAvx2Implementation
     const std::vector<double> values(floats.begin(), floats.end());
     const auto input = rt::Tensor::FromDouble("", {3, columns}, values);
     std::vector<double> expected(values.size());
-    onnx_light_cpu::SigmoidFloat64_AVX2_FMA(values.data(), expected.data(), values.size());
+    cpu_compute::SigmoidFloat64_AVX2_FMA(values.data(), expected.data(), values.size());
     const auto sigmoid = onnx_light_cpu::SigmoidKernel(Context())(input);
     EXPECT_TRUE(std::equal(expected.begin(), expected.end(), sigmoid.AsDouble()));
-    onnx_light_cpu::SoftmaxFloat64_AVX2_FMA(values.data(), expected.data(), 3, columns);
+    cpu_compute::SoftmaxFloat64_AVX2_FMA(values.data(), expected.data(), 3, columns);
     const auto softmax = onnx_light_cpu::SoftmaxKernel(Context())(input, -1);
     EXPECT_TRUE(std::equal(expected.begin(), expected.end(), softmax.AsDouble()));
   }
 }
 
-#ifdef ONNX_LIGHT_CPU_HAVE_F16C
+#ifdef CPU_COMPUTE_HAVE_F16C
 TEST(OnnxLightSigmoidSoftmaxKernel, FusedFloat16SigmoidCoversEveryBitPattern) {
-  if (onnx_light_cpu::DetectSimdLevel() < onnx_light_cpu::SimdLevel::kAVX2 ||
-      !onnx_light_cpu::CpuSupportsFma() || !onnx_light_cpu::CpuSupportsF16C()) {
+  if (cpu_compute::DetectSimdLevel() < cpu_compute::SimdLevel::kAVX2 ||
+      !cpu_compute::CpuSupportsFma() || !cpu_compute::CpuSupportsF16C()) {
     GTEST_SKIP() << "AVX2/FMA/F16C is unavailable";
   }
   constexpr std::size_t count = 65536;
@@ -643,12 +642,11 @@ TEST(OnnxLightSigmoidSoftmaxKernel, FusedFloat16SigmoidCoversEveryBitPattern) {
     bits[index] = static_cast<std::uint16_t>(index);
   }
   std::vector<std::uint16_t> expected(count);
-  onnx_light_cpu::SigmoidFloat16_AVX2_FMA(bits, expected.data(), count);
+  cpu_compute::SigmoidFloat16_AVX2_FMA(bits, expected.data(), count);
   onnx_light_cpu::SigmoidKernel{Context()}(input, input);
   for (std::size_t index = 0; index < count; ++index) {
     SCOPED_TRACE(index);
-    const double value =
-        onnx_light_cpu::detail::Float16BitsToFloat(static_cast<std::uint16_t>(index));
+    const double value = cpu_compute::detail::Float16BitsToFloat(static_cast<std::uint16_t>(index));
     const double exponent = std::exp(-std::abs(value));
     ExpectActivationNear(ActivationValue(input, index),
                          value < 0 ? exponent / (1 + exponent) : 1 / (1 + exponent),
@@ -659,13 +657,13 @@ TEST(OnnxLightSigmoidSoftmaxKernel, FusedFloat16SigmoidCoversEveryBitPattern) {
 #endif
 
 TEST(OnnxLightSigmoidSoftmaxKernel, CacheSizedAvx2SoftmaxUsesAtMostTwoWorkers) {
-  if (onnx_light_cpu::DetectSimdLevel() < onnx_light_cpu::SimdLevel::kAVX2 ||
-      !onnx_light_cpu::CpuSupportsFma()) {
+  if (cpu_compute::DetectSimdLevel() < cpu_compute::SimdLevel::kAVX2 ||
+      !cpu_compute::CpuSupportsFma()) {
     GTEST_SKIP() << "AVX2/FMA is unavailable";
   }
   InlineExecutor executor;
-  onnx_light_cpu::ExecutionExecutorView view{&executor, 32, &InlineExecutor::Run};
-  onnx_light_cpu::ExecutionExecutorScope scope(&view);
+  cpu_compute::ExecutionExecutorView view{&executor, 32, &InlineExecutor::Run};
+  cpu_compute::ExecutionExecutorScope scope(&view);
   const onnx_light_cpu::SoftmaxKernel softmax(Context());
   for (std::int64_t rows : {1, 31, 32, 64, 128, 255, 256}) {
     executor = {};
@@ -686,8 +684,8 @@ TEST(OnnxLightSigmoidSoftmaxKernel, CacheSizedAvx2SoftmaxUsesAtMostTwoWorkers) {
 }
 
 TEST(OnnxLightSigmoidSoftmaxKernel, RegisteredFloat32UsesFusedAvx2Implementation) {
-  if (onnx_light_cpu::DetectSimdLevel() < onnx_light_cpu::SimdLevel::kAVX2 ||
-      !onnx_light_cpu::CpuSupportsFma()) {
+  if (cpu_compute::DetectSimdLevel() < cpu_compute::SimdLevel::kAVX2 ||
+      !cpu_compute::CpuSupportsFma()) {
     GTEST_SKIP() << "AVX2/FMA is unavailable";
   }
   const onnx_light_cpu::SigmoidKernel sigmoid(Context());
@@ -698,11 +696,11 @@ TEST(OnnxLightSigmoidSoftmaxKernel, RegisteredFloat32UsesFusedAvx2Implementation
     const auto values = Values(static_cast<std::size_t>(rows * columns));
     const auto input = rt::Tensor::FromFloat("", {rows, columns}, values);
     std::vector<float> expected(values.size());
-    onnx_light_cpu::SigmoidFloat32_AVX2_FMA(values.data(), expected.data(), expected.size());
+    cpu_compute::SigmoidFloat32_AVX2_FMA(values.data(), expected.data(), expected.size());
     const auto sigmoid_output = sigmoid(input);
     EXPECT_TRUE(std::equal(expected.begin(), expected.end(), sigmoid_output.AsFloat()))
         << "Sigmoid columns=" << columns;
-    onnx_light_cpu::SoftmaxFloat32_AVX2_FMA(values.data(), expected.data(), rows, columns);
+    cpu_compute::SoftmaxFloat32_AVX2_FMA(values.data(), expected.data(), rows, columns);
     const auto softmax_output = softmax(input, -1);
     EXPECT_TRUE(std::equal(expected.begin(), expected.end(), softmax_output.AsFloat()))
         << "Softmax columns=" << columns;

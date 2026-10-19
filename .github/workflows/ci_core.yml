@@ -253,7 +253,7 @@ jobs:
       # Regression check for the onnx-light-source integration: imports
       # onnx_light_cpu._cpukernels standalone (this example never imports
       # onnx_light itself), which previously failed with "liblib_onnx_core.so:
-      # cannot open shared object file" when lib_onnx_light_cpu/_cpukernels
+      # cannot open shared object file" when cpu_compute/_cpukernels
       # were missing the RPATH to onnx-light's Python library directory.
       - name: Run processor performance example
         env:
@@ -279,7 +279,7 @@ jobs:
         shell: bash
         run: |
           if gh pr diff "${{ github.event.pull_request.html_url }}" --name-only |
-            grep -Eq '^(onnx_light_cpu/(backend_test/cases|kernels)/|onnx_light_cpu_compute/)'; then
+            grep -Eq '^(onnx_light_cpu/(backend_test/cases|kernels)/|cpu_compute/)'; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
             echo "run=false" >> "$GITHUB_OUTPUT"

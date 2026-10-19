@@ -4,11 +4,11 @@
 
 #include "onnx_light_cpu/kernels/register_kernels.h"
 
+#include "cpu_compute/execution.h"
 #include "onnx_core/runtime/kernels/run_nodes.h"
 #include "onnx_core/runtime/memory/simple_tensor.h"
 #include "onnx_core/runtime/runtime_context.h"
 #include "onnx_light_cpu/kernels/math/reduce_sum_kernel.h"
-#include "onnx_light_cpu_compute/execution.h"
 #include "onnx_proto/onnx_helper.h"
 
 #include <gtest/gtest.h>
@@ -29,7 +29,7 @@ struct InlineExecutor {
   int64_t blocks = 0;
 
   static void Run(void *context, int64_t block_count, void *task_context,
-                  onnx_light_cpu::ExecutionBlockFn task) {
+                  cpu_compute::ExecutionBlockFn task) {
     auto &executor = *static_cast<InlineExecutor *>(context);
     ++executor.calls;
     executor.blocks += block_count;
@@ -233,8 +233,8 @@ TEST(OnnxLightReduceSumKernel, DelegatesOtherTypesAndRejectsInvalidAxes) {
 
 TEST(OnnxLightReduceSumKernel, UsesRuntimeExecutorOnlyForSufficientOutputWork) {
   InlineExecutor executor;
-  const onnx_light_cpu::ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run};
-  const onnx_light_cpu::ExecutionExecutorScope scope(&view);
+  const cpu_compute::ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run};
+  const cpu_compute::ExecutionExecutorScope scope(&view);
   {
     rt_ns::RuntimeContext runtime(rt_ns::KernelContext(rt_ns::DefaultOpset(13)));
     runtime.Set("data", rt_ns::Tensor::FromInt64("data", {2, 2}, {1, 2, 3, 4}));

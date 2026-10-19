@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "onnx_light_cpu_compute/execution.h"
+#include "cpu_compute/execution.h"
 
 #include <gtest/gtest.h>
 
@@ -13,22 +13,23 @@
 
 namespace {
 
-using onnx_light_cpu::CurrentExecutionExecutor;
-using onnx_light_cpu::ExecuteRanges;
-using onnx_light_cpu::ExecutionBlockCount;
-using onnx_light_cpu::ExecutionBlockFn;
-using onnx_light_cpu::ExecutionExecutorScope;
-using onnx_light_cpu::ExecutionExecutorView;
-using onnx_light_cpu::ExecutionInParallelRegion;
-using onnx_light_cpu::ExecutionParallelPlan;
-using onnx_light_cpu::ExecutionThreadCount;
-using onnx_light_cpu::ExecutionWorkCost;
+using cpu_compute::CurrentExecutionExecutor;
+using cpu_compute::ExecuteRanges;
+using cpu_compute::ExecutionBlockCount;
+using cpu_compute::ExecutionBlockFn;
+using cpu_compute::ExecutionExecutorScope;
+using cpu_compute::ExecutionExecutorView;
+using cpu_compute::ExecutionInParallelRegion;
+using cpu_compute::ExecutionParallelPlan;
+using cpu_compute::ExecutionThreadCount;
+using cpu_compute::ExecutionWorkCost;
 
 struct InlineExecutor {
   int64_t dispatches = 0;
   int64_t blocks = 0;
 
-  static void Run(void *context, int64_t num_blocks, void *task_context, ExecutionBlockFn task) {
+  static void Run(void *context, int64_t num_blocks, void *task_context,
+                  cpu_compute::ExecutionBlockFn task) {
     auto &self = *static_cast<InlineExecutor *>(context);
     ++self.dispatches;
     self.blocks = num_blocks;
@@ -39,12 +40,14 @@ struct InlineExecutor {
 };
 
 struct CostExecutor : InlineExecutor {
-  ExecutionWorkCost observed_cost;
+  cpu_compute::ExecutionWorkCost observed_cost;
   int64_t observed_maximum = 0;
   int64_t observed_preferred = 0;
 
-  static ExecutionParallelPlan Plan(void *context, int64_t, const ExecutionWorkCost &cost,
-                                    int64_t maximum_participants, int64_t preferred_participants) {
+  static cpu_compute::ExecutionParallelPlan Plan(void *context, int64_t,
+                                                 const cpu_compute::ExecutionWorkCost &cost,
+                                                 int64_t maximum_participants,
+                                                 int64_t preferred_participants) {
     auto &self = *static_cast<CostExecutor *>(context);
     self.observed_cost = cost;
     self.observed_maximum = maximum_participants;
@@ -54,13 +57,13 @@ struct CostExecutor : InlineExecutor {
 };
 
 TEST(Execution, StandaloneIsSerial) {
-  EXPECT_EQ(CurrentExecutionExecutor(), nullptr);
-  EXPECT_EQ(ExecutionThreadCount(), 1);
-  EXPECT_EQ(ExecutionBlockCount(1000000), 1);
+  EXPECT_EQ(cpu_compute::CurrentExecutionExecutor(), nullptr);
+  EXPECT_EQ(cpu_compute::ExecutionThreadCount(), 1);
+  EXPECT_EQ(cpu_compute::ExecutionBlockCount(1000000), 1);
 
   int calls = 0;
-  ExecuteRanges(1000000, [&](int64_t begin, int64_t end) {
-    EXPECT_TRUE(ExecutionInParallelRegion());
+  cpu_compute::ExecuteRanges(1000000, [&](int64_t begin, int64_t end) {
+    EXPECT_TRUE(cpu_compute::ExecutionInParallelRegion());
     EXPECT_EQ(begin, 0);
     EXPECT_EQ(end, 1000000);
     ++calls;
@@ -70,17 +73,18 @@ TEST(Execution, StandaloneIsSerial) {
 
 TEST(Execution, InjectedExecutorOwnsParallelDispatch) {
   InlineExecutor executor;
-  ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run};
+  cpu_compute::ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run};
   std::vector<std::atomic<int>> hits(200000);
   {
-    ExecutionExecutorScope scope(&view);
-    EXPECT_EQ(ExecutionThreadCount(), 4);
-    ExecuteRanges(static_cast<int64_t>(hits.size()), 1.0, 16, [&hits](int64_t begin, int64_t end) {
-      EXPECT_TRUE(ExecutionInParallelRegion());
-      for (int64_t i = begin; i < end; ++i) {
-        hits[static_cast<std::size_t>(i)].fetch_add(1, std::memory_order_relaxed);
-      }
-    });
+    cpu_compute::ExecutionExecutorScope scope(&view);
+    EXPECT_EQ(cpu_compute::ExecutionThreadCount(), 4);
+    cpu_compute::ExecuteRanges(
+        static_cast<int64_t>(hits.size()), 1.0, 16, [&hits](int64_t begin, int64_t end) {
+          EXPECT_TRUE(cpu_compute::ExecutionInParallelRegion());
+          for (int64_t i = begin; i < end; ++i) {
+            hits[static_cast<std::size_t>(i)].fetch_add(1, std::memory_order_relaxed);
+          }
+        });
   }
 
   EXPECT_EQ(executor.dispatches, 1);
@@ -89,16 +93,16 @@ TEST(Execution, InjectedExecutorOwnsParallelDispatch) {
   for (const auto &hit : hits) {
     EXPECT_EQ(hit.load(std::memory_order_relaxed), 1);
   }
-  EXPECT_EQ(CurrentExecutionExecutor(), nullptr);
+  EXPECT_EQ(cpu_compute::CurrentExecutionExecutor(), nullptr);
 }
 
 TEST(Execution, SmallInjectedWorkRemainsInline) {
   InlineExecutor executor;
-  ExecutionExecutorView view{&executor, 8, &InlineExecutor::Run};
+  cpu_compute::ExecutionExecutorView view{&executor, 8, &InlineExecutor::Run};
   int calls = 0;
   {
-    ExecutionExecutorScope scope(&view);
-    ExecuteRanges(8, [&calls](int64_t begin, int64_t end) {
+    cpu_compute::ExecutionExecutorScope scope(&view);
+    cpu_compute::ExecuteRanges(8, [&calls](int64_t begin, int64_t end) {
       EXPECT_EQ(begin, 0);
       EXPECT_EQ(end, 8);
       ++calls;
@@ -110,71 +114,72 @@ TEST(Execution, SmallInjectedWorkRemainsInline) {
 
 TEST(Execution, NestedScopesRestoreBorrowedViewsAndClampThreads) {
   InlineExecutor executor;
-  ExecutionExecutorView outer{&executor, 4, &InlineExecutor::Run};
-  ExecutionExecutorView inner{&executor, 0, &InlineExecutor::Run};
+  cpu_compute::ExecutionExecutorView outer{&executor, 4, &InlineExecutor::Run};
+  cpu_compute::ExecutionExecutorView inner{&executor, 0, &InlineExecutor::Run};
   {
-    ExecutionExecutorScope outer_scope(&outer);
-    EXPECT_EQ(CurrentExecutionExecutor(), &outer);
+    cpu_compute::ExecutionExecutorScope outer_scope(&outer);
+    EXPECT_EQ(cpu_compute::CurrentExecutionExecutor(), &outer);
     {
-      ExecutionExecutorScope inner_scope(&inner);
-      EXPECT_EQ(CurrentExecutionExecutor(), &inner);
-      EXPECT_EQ(ExecutionThreadCount(), 1);
-      EXPECT_EQ(ExecutionBlockCount(1000000), 1);
+      cpu_compute::ExecutionExecutorScope inner_scope(&inner);
+      EXPECT_EQ(cpu_compute::CurrentExecutionExecutor(), &inner);
+      EXPECT_EQ(cpu_compute::ExecutionThreadCount(), 1);
+      EXPECT_EQ(cpu_compute::ExecutionBlockCount(1000000), 1);
     }
-    EXPECT_EQ(CurrentExecutionExecutor(), &outer);
-    EXPECT_EQ(ExecutionThreadCount(), 4);
+    EXPECT_EQ(cpu_compute::CurrentExecutionExecutor(), &outer);
+    EXPECT_EQ(cpu_compute::ExecutionThreadCount(), 4);
   }
-  EXPECT_EQ(CurrentExecutionExecutor(), nullptr);
+  EXPECT_EQ(cpu_compute::CurrentExecutionExecutor(), nullptr);
 }
 
 TEST(Execution, DispatchFailurePropagatesAndRestoresScope) {
-  ExecutionExecutorView view{nullptr, 4, [](void *, int64_t, void *, ExecutionBlockFn) {
-                               throw std::runtime_error("dispatch failed");
-                             }};
+  cpu_compute::ExecutionExecutorView view{
+      nullptr, 4, [](void *, int64_t, void *, cpu_compute::ExecutionBlockFn) {
+        throw std::runtime_error("dispatch failed");
+      }};
   int calls = 0;
   const auto run = [&]() {
-    ExecutionExecutorScope scope(&view);
-    ExecuteRanges(1000000, [&](int64_t, int64_t) { ++calls; });
+    cpu_compute::ExecutionExecutorScope scope(&view);
+    cpu_compute::ExecuteRanges(1000000, [&](int64_t, int64_t) { ++calls; });
   };
   EXPECT_THROW(run(), std::runtime_error);
   EXPECT_EQ(calls, 0);
-  EXPECT_EQ(CurrentExecutionExecutor(), nullptr);
-  EXPECT_FALSE(ExecutionInParallelRegion());
+  EXPECT_EQ(cpu_compute::CurrentExecutionExecutor(), nullptr);
+  EXPECT_FALSE(cpu_compute::ExecutionInParallelRegion());
 }
 
 TEST(Execution, NestedRangesDoNotDispatchAgain) {
   InlineExecutor executor;
-  ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run};
+  cpu_compute::ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run};
   {
-    ExecutionExecutorScope scope(&view);
-    ExecuteRanges(4, static_cast<double>(onnx_light_cpu::kExecutionGrainSize),
-                  [](int64_t begin, int64_t end) {
-                    EXPECT_EQ(ExecutionThreadCount(), 4);
-                    EXPECT_EQ(ExecutionBlockCount(1000000), 1);
-                    for (int64_t outer = begin; outer < end; ++outer) {
-                      (void)outer;
-                      int calls = 0;
-                      ExecuteRanges(1000000, [&calls](int64_t inner_begin, int64_t inner_end) {
-                        EXPECT_EQ(inner_begin, 0);
-                        EXPECT_EQ(inner_end, 1000000);
-                        ++calls;
-                      });
-                      EXPECT_EQ(calls, 1);
-                    }
-                  });
+    cpu_compute::ExecutionExecutorScope scope(&view);
+    cpu_compute::ExecuteRanges(
+        4, static_cast<double>(cpu_compute::kExecutionGrainSize), [](int64_t begin, int64_t end) {
+          EXPECT_EQ(cpu_compute::ExecutionThreadCount(), 4);
+          EXPECT_EQ(cpu_compute::ExecutionBlockCount(1000000), 1);
+          for (int64_t outer = begin; outer < end; ++outer) {
+            (void)outer;
+            int calls = 0;
+            cpu_compute::ExecuteRanges(1000000, [&calls](int64_t inner_begin, int64_t inner_end) {
+              EXPECT_EQ(inner_begin, 0);
+              EXPECT_EQ(inner_end, 1000000);
+              ++calls;
+            });
+            EXPECT_EQ(calls, 1);
+          }
+        });
   }
   EXPECT_EQ(executor.dispatches, 1);
 }
 
 TEST(Execution, CostedRangesUseExecutorPlan) {
   CostExecutor executor;
-  ExecutionExecutorView view{&executor, 8, &CostExecutor::Run, &CostExecutor::Plan};
+  cpu_compute::ExecutionExecutorView view{&executor, 8, &CostExecutor::Run, &CostExecutor::Plan};
   std::vector<std::atomic<int>> hits(1000);
   {
-    ExecutionExecutorScope scope(&view);
-    onnx_light_cpu::ExecuteCostedRanges(
-        static_cast<int64_t>(hits.size()), ExecutionWorkCost{4.0, 4.0, 3.0},
-        onnx_light_cpu::ExecutionSchedule{1, 1, 5, 3}, 16, [&hits](int64_t begin, int64_t end) {
+    cpu_compute::ExecutionExecutorScope scope(&view);
+    cpu_compute::ExecuteCostedRanges(
+        static_cast<int64_t>(hits.size()), cpu_compute::ExecutionWorkCost{4.0, 4.0, 3.0},
+        cpu_compute::ExecutionSchedule{1, 1, 5, 3}, 16, [&hits](int64_t begin, int64_t end) {
           for (int64_t i = begin; i < end; ++i) {
             hits[static_cast<std::size_t>(i)].fetch_add(1, std::memory_order_relaxed);
           }

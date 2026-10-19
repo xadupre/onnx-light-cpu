@@ -4,10 +4,10 @@
 
 #include "onnx_light_cpu/backend_test/cases/attention/include_attention_cases.h"
 
+#include "cpu_compute/attention/attention_plan.h"
+#include "cpu_compute/math/half_conversion.h"
 #include "onnx_light_cpu/backend_test/cases/math/benchmark_helpers.h"
 #include "onnx_light_cpu/kernels/attention/attention_kernel.h"
-#include "onnx_light_cpu_compute/attention/attention_plan.h"
-#include "onnx_light_cpu_compute/math/half_conversion.h"
 
 #include "onnx_core/backend_test/expect.h"
 #include "onnx_core/runtime/kernels/kernel_context.h"
@@ -475,25 +475,25 @@ void RegisterAttentionQkOutputCase(std::vector<TestCase> &registry, const OpsetI
         }
         Tensor y = kernel(node, q, k, v, mask_ptr);
         // Compute qk_matmul_output via the materialized path directly.
-        onnx_light_cpu::AttentionDescriptor desc;
+        cpu_compute::AttentionDescriptor desc;
         desc.has_qk_matmul_output = true;
         desc.is_causal = (mask == Mask::kCausal);
-        const onnx_light_cpu::AttentionLayout layout =
-            q_shape.size() == 3 ? onnx_light_cpu::AttentionLayout::kRank3
-                                : onnx_light_cpu::AttentionLayout::kRank4;
+        const cpu_compute::AttentionLayout layout = q_shape.size() == 3
+                                                        ? cpu_compute::AttentionLayout::kRank3
+                                                        : cpu_compute::AttentionLayout::kRank4;
         if (q_shape.size() == 3) {
           desc.q_num_heads = q_heads;
           desc.kv_num_heads = kv_heads;
         }
-        onnx_light_cpu::AttentionMaskKind mk = onnx_light_cpu::AttentionMaskKind::kNone;
+        cpu_compute::AttentionMaskKind mk = cpu_compute::AttentionMaskKind::kNone;
         if (mask == Mask::kBoolean)
-          mk = onnx_light_cpu::AttentionMaskKind::kBoolean;
+          mk = cpu_compute::AttentionMaskKind::kBoolean;
         else if (mask == Mask::kAdditive)
-          mk = onnx_light_cpu::AttentionMaskKind::kAdditive;
+          mk = cpu_compute::AttentionMaskKind::kAdditive;
         std::vector<std::int64_t> mask_shp;
         if (has_mask)
           mask_shp = {q_len, kv_len};
-        onnx_light_cpu::AttentionPlan plan(desc, layout, q_shape, k_shape, v_shape, mask_shp, mk);
+        cpu_compute::AttentionPlan plan(desc, layout, q_shape, k_shape, v_shape, mask_shp, mk);
         const std::size_t qk_count_s = static_cast<std::size_t>(batch * q_heads * q_len * kv_len);
         std::vector<float> qk_data(qk_count_s);
         std::vector<float> y_mat(static_cast<std::size_t>(y.element_count()));
@@ -504,23 +504,23 @@ void RegisterAttentionQkOutputCase(std::vector<TestCase> &registry, const OpsetI
         const float *k_data = reinterpret_cast<const float *>(k.bytes());
         const float *v_data = reinterpret_cast<const float *>(v.bytes());
         if (data_type == DataType::FLOAT16) {
-          detail::ConvertFloat16ToFloat32(reinterpret_cast<const std::uint16_t *>(q.bytes()),
-                                          q_float.data(), q_float.size());
-          detail::ConvertFloat16ToFloat32(reinterpret_cast<const std::uint16_t *>(k.bytes()),
-                                          k_float.data(), k_float.size());
-          detail::ConvertFloat16ToFloat32(reinterpret_cast<const std::uint16_t *>(v.bytes()),
-                                          v_float.data(), v_float.size());
+          cpu_compute::detail::ConvertFloat16ToFloat32(
+              reinterpret_cast<const std::uint16_t *>(q.bytes()), q_float.data(), q_float.size());
+          cpu_compute::detail::ConvertFloat16ToFloat32(
+              reinterpret_cast<const std::uint16_t *>(k.bytes()), k_float.data(), k_float.size());
+          cpu_compute::detail::ConvertFloat16ToFloat32(
+              reinterpret_cast<const std::uint16_t *>(v.bytes()), v_float.data(), v_float.size());
           q_data = q_float.data();
           k_data = k_float.data();
           v_data = v_float.data();
         }
-        const void *mask_raw = mask_ptr ? (mk == onnx_light_cpu::AttentionMaskKind::kBoolean
+        const void *mask_raw = mask_ptr ? (mk == cpu_compute::AttentionMaskKind::kBoolean
                                                ? static_cast<const void *>(mask_ptr->AsBool())
                                                : static_cast<const void *>(mask_ptr->bytes()))
                                         : nullptr;
-        onnx_light_cpu::ComputeAttentionFloat32Materialized(plan, q_data, k_data, v_data, mask_raw,
-                                                            y_mat.data(), nullptr, nullptr, nullptr,
-                                                            qk_data.data());
+        cpu_compute::ComputeAttentionFloat32Materialized(plan, q_data, k_data, v_data, mask_raw,
+                                                         y_mat.data(), nullptr, nullptr, nullptr,
+                                                         qk_data.data());
 
         std::vector<std::uint8_t> qk_raw;
         if (data_type == DataType::FLOAT) {
@@ -528,7 +528,7 @@ void RegisterAttentionQkOutputCase(std::vector<TestCase> &registry, const OpsetI
           qk_raw.assign(qk_bytes, qk_bytes + qk_count_s * sizeof(float));
         } else {
           std::vector<std::uint16_t> qk_half(qk_count_s);
-          detail::ConvertFloat32ToFloat16(qk_data.data(), qk_half.data(), qk_count_s);
+          cpu_compute::detail::ConvertFloat32ToFloat16(qk_data.data(), qk_half.data(), qk_count_s);
           const auto *qk_bytes = reinterpret_cast<const std::uint8_t *>(qk_half.data());
           qk_raw.assign(qk_bytes, qk_bytes + qk_count_s * sizeof(std::uint16_t));
         }

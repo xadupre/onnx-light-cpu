@@ -5,14 +5,14 @@
 #include "onnx_light_cpu/kernels/attention/attention_kernel.h"
 #include "onnx_light_cpu/kernels/execution.h"
 
+#include "cpu_compute/attention/attention_plan.h"
+#include "cpu_compute/checked_arithmetic.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
-#include "onnx_light_cpu_compute/attention/attention_plan.h"
-#include "onnx_light_cpu_compute/checked_arithmetic.h"
 
 #include "onnx_core/runtime/kernels/kernel_dispatch_table.h"
 #include "onnx_core/runtime/kernels/node_helpers.h"
 
-#include "onnx_light_cpu_compute/math/half_conversion.h"
+#include "cpu_compute/math/half_conversion.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -40,8 +40,8 @@ std::vector<std::int64_t> ShapeAsInt64(const Shape &shape) {
   return std::vector<std::int64_t>(shape.begin(), shape.end());
 }
 
-AttentionDescriptor BuildDescriptor(const NodeProto &node) {
-  AttentionDescriptor descriptor;
+cpu_compute::AttentionDescriptor BuildDescriptor(const NodeProto &node) {
+  cpu_compute::AttentionDescriptor descriptor;
   // The kernel does not have direct access to the node's opset from here;
   // `nonpad_kv_seqlen` (opset >= 24 only) is only wired when a 7th input is
   // present, so infer the minimum opset consistent with the wiring. Window
@@ -89,34 +89,35 @@ AttentionDescriptor BuildDescriptor(const NodeProto &node) {
   return descriptor;
 }
 
-void ComputeHalfAttentionMaterialized(const AttentionPlan &plan, DataType data_type,
+void ComputeHalfAttentionMaterialized(const cpu_compute::AttentionPlan &plan, DataType data_type,
                                       const std::uint16_t *q, const std::uint16_t *k,
                                       const std::uint16_t *v, const void *mask, std::uint16_t *y,
                                       const std::uint16_t *past_k, const std::uint16_t *past_v,
                                       const std::int64_t *nonpad_kv_seqlen,
                                       std::uint16_t *qk_matmul_output,
-                                      AttentionExecutionInfo *execution_info) {
-  const std::size_t q_count = CheckedProduct(
+                                      cpu_compute::AttentionExecutionInfo *execution_info) {
+  const std::size_t q_count = cpu_compute::CheckedProduct(
       {plan.batch, plan.q_num_heads, plan.q_length, plan.head_dim}, "Attention", "Q element count");
   const std::size_t k_count =
-      CheckedProduct({plan.batch, plan.kv_num_heads, plan.kv_length, plan.head_dim}, "Attention",
-                     "K element count");
+      cpu_compute::CheckedProduct({plan.batch, plan.kv_num_heads, plan.kv_length, plan.head_dim},
+                                  "Attention", "K element count");
   const std::size_t v_count =
-      CheckedProduct({plan.batch, plan.kv_num_heads, plan.kv_length, plan.v_head_dim}, "Attention",
-                     "V element count");
+      cpu_compute::CheckedProduct({plan.batch, plan.kv_num_heads, plan.kv_length, plan.v_head_dim},
+                                  "Attention", "V element count");
   const std::size_t y_count =
-      CheckedProduct({plan.batch, plan.q_num_heads, plan.q_length, plan.v_head_dim}, "Attention",
-                     "Y element count");
+      cpu_compute::CheckedProduct({plan.batch, plan.q_num_heads, plan.q_length, plan.v_head_dim},
+                                  "Attention", "Y element count");
   const std::size_t past_k_count =
-      CheckedProduct({plan.batch, plan.kv_num_heads, plan.past_length, plan.head_dim}, "Attention",
-                     "past K element count");
-  const std::size_t past_v_count =
-      CheckedProduct({plan.batch, plan.kv_num_heads, plan.past_length, plan.v_head_dim},
-                     "Attention", "past V element count");
+      cpu_compute::CheckedProduct({plan.batch, plan.kv_num_heads, plan.past_length, plan.head_dim},
+                                  "Attention", "past K element count");
+  const std::size_t past_v_count = cpu_compute::CheckedProduct(
+      {plan.batch, plan.kv_num_heads, plan.past_length, plan.v_head_dim}, "Attention",
+      "past V element count");
   const std::size_t qk_count =
       qk_matmul_output != nullptr
-          ? CheckedProduct({plan.batch, plan.q_num_heads, plan.q_length, plan.total_kv_length},
-                           "Attention", "QK element count")
+          ? cpu_compute::CheckedProduct(
+                {plan.batch, plan.q_num_heads, plan.q_length, plan.total_kv_length}, "Attention",
+                "QK element count")
           : 0;
   std::vector<float> q_fp32(q_count);
   std::vector<float> k_fp32(k_count);
@@ -129,20 +130,20 @@ void ComputeHalfAttentionMaterialized(const AttentionPlan &plan, DataType data_t
   auto convert_to_float = [data_type](const std::uint16_t *source, float *destination,
                                       std::size_t count) {
     if (data_type == DataType::FLOAT16) {
-      detail::ConvertFloat16ToFloat32(source, destination, count);
+      cpu_compute::detail::ConvertFloat16ToFloat32(source, destination, count);
     } else {
       for (std::size_t index = 0; index < count; ++index) {
-        destination[index] = detail::Bfloat16BitsToFloat(source[index]);
+        destination[index] = cpu_compute::detail::Bfloat16BitsToFloat(source[index]);
       }
     }
   };
   auto convert_from_float = [data_type](const float *source, std::uint16_t *destination,
                                         std::size_t count) {
     if (data_type == DataType::FLOAT16) {
-      detail::ConvertFloat32ToFloat16(source, destination, count);
+      cpu_compute::detail::ConvertFloat32ToFloat16(source, destination, count);
     } else {
       for (std::size_t index = 0; index < count; ++index) {
-        destination[index] = detail::FloatToBFloat16Bits(source[index]);
+        destination[index] = cpu_compute::detail::FloatToBFloat16Bits(source[index]);
       }
     }
   };
@@ -154,10 +155,11 @@ void ComputeHalfAttentionMaterialized(const AttentionPlan &plan, DataType data_t
     convert_to_float(past_k, past_k_fp32.data(), past_k_count);
     convert_to_float(past_v, past_v_fp32.data(), past_v_count);
   }
-  ComputeAttentionFloat32(plan, q_fp32.data(), k_fp32.data(), v_fp32.data(), mask, y_fp32.data(),
-                          past_k_count != 0 ? past_k_fp32.data() : nullptr,
-                          past_v_count != 0 ? past_v_fp32.data() : nullptr, nonpad_kv_seqlen,
-                          qk_count != 0 ? qk_fp32.data() : nullptr, execution_info);
+  cpu_compute::ComputeAttentionFloat32(
+      plan, q_fp32.data(), k_fp32.data(), v_fp32.data(), mask, y_fp32.data(),
+      past_k_count != 0 ? past_k_fp32.data() : nullptr,
+      past_v_count != 0 ? past_v_fp32.data() : nullptr, nonpad_kv_seqlen,
+      qk_count != 0 ? qk_fp32.data() : nullptr, execution_info);
   convert_from_float(y_fp32.data(), y, y_count);
   if (qk_count != 0) {
     convert_from_float(qk_fp32.data(), qk_matmul_output, qk_count);
@@ -166,8 +168,8 @@ void ComputeHalfAttentionMaterialized(const AttentionPlan &plan, DataType data_t
 
 Tensor Compute(const Tensor &q, const Tensor &k, const Tensor &v, const Tensor *mask,
                const Tensor *past_k, const Tensor *past_v, const Tensor *nonpad_kv_seqlen,
-               const AttentionDescriptor &descriptor, RuntimeContext *rt, Tensor *qk_output,
-               Tensor *present_key_output, Tensor *present_value_output,
+               const cpu_compute::AttentionDescriptor &descriptor, RuntimeContext *rt,
+               Tensor *qk_output, Tensor *present_key_output, Tensor *present_value_output,
                const Tensor *head_sink = nullptr) {
   const DataType data_type = static_cast<DataType>(q.data_type);
   if (k.data_type != q.data_type || v.data_type != q.data_type ||
@@ -186,38 +188,41 @@ Tensor Compute(const Tensor &q, const Tensor &k, const Tensor &v, const Tensor *
     throw std::invalid_argument(
         "onnx_light_cpu::AttentionKernel: nonpad_kv_seqlen must have type INT64.");
   }
-  const AttentionLayout layout =
-      q.shape.size() == 3 ? AttentionLayout::kRank3 : AttentionLayout::kRank4;
+  const cpu_compute::AttentionLayout layout = q.shape.size() == 3
+                                                  ? cpu_compute::AttentionLayout::kRank3
+                                                  : cpu_compute::AttentionLayout::kRank4;
 
   // --- Mask handling: convert 16-bit additive masks to FP32 on the fly ---
-  AttentionMaskKind mask_kind = AttentionMaskKind::kNone;
+  cpu_compute::AttentionMaskKind mask_kind = cpu_compute::AttentionMaskKind::kNone;
   std::vector<float> mask_fp32_buffer;
   if (mask != nullptr) {
     if (static_cast<DataType>(mask->data_type) == DataType::BOOL) {
-      mask_kind = AttentionMaskKind::kBoolean;
+      mask_kind = cpu_compute::AttentionMaskKind::kBoolean;
     } else if (static_cast<DataType>(mask->data_type) == DataType::FLOAT) {
-      mask_kind = AttentionMaskKind::kAdditive;
+      mask_kind = cpu_compute::AttentionMaskKind::kAdditive;
     } else if (static_cast<DataType>(mask->data_type) == DataType::FLOAT16) {
-      mask_kind = AttentionMaskKind::kAdditive;
+      mask_kind = cpu_compute::AttentionMaskKind::kAdditive;
       const std::size_t mask_count =
           static_cast<std::size_t>(mask->shape.product(0, mask->shape.size(), "Attention mask"));
       mask_fp32_buffer.resize(mask_count);
-      detail::ConvertFloat16ToFloat32(reinterpret_cast<const std::uint16_t *>(mask->bytes()),
-                                      mask_fp32_buffer.data(), mask_count);
+      cpu_compute::detail::ConvertFloat16ToFloat32(
+          reinterpret_cast<const std::uint16_t *>(mask->bytes()), mask_fp32_buffer.data(),
+          mask_count);
     } else if (static_cast<DataType>(mask->data_type) == DataType::BFLOAT16) {
-      mask_kind = AttentionMaskKind::kAdditive;
+      mask_kind = cpu_compute::AttentionMaskKind::kAdditive;
       const std::size_t mask_count =
           static_cast<std::size_t>(mask->shape.product(0, mask->shape.size(), "Attention mask"));
       mask_fp32_buffer.resize(mask_count);
-      detail::ConvertBFloat16ToFloat32(reinterpret_cast<const std::uint16_t *>(mask->bytes()),
-                                       mask_fp32_buffer.data(), mask_count);
+      cpu_compute::detail::ConvertBFloat16ToFloat32(
+          reinterpret_cast<const std::uint16_t *>(mask->bytes()), mask_fp32_buffer.data(),
+          mask_count);
     } else {
       throw std::invalid_argument("onnx_light_cpu::AttentionKernel: unsupported attn_mask data "
                                   "type; only BOOL, FLOAT, FLOAT16, and BFLOAT16 are supported.");
     }
   }
 
-  AttentionPlan plan(
+  cpu_compute::AttentionPlan plan(
       descriptor, layout, ShapeAsInt64(q.shape), ShapeAsInt64(k.shape), ShapeAsInt64(v.shape),
       mask != nullptr ? ShapeAsInt64(mask->shape) : std::vector<std::int64_t>{}, mask_kind,
       past_k != nullptr ? ShapeAsInt64(past_k->shape) : std::vector<std::int64_t>{},
@@ -235,11 +240,13 @@ Tensor Compute(const Tensor &q, const Tensor &k, const Tensor &v, const Tensor *
       const float *values = reinterpret_cast<const float *>(head_sink->bytes());
       std::copy_n(values, sink_values.size(), sink_values.data());
     } else if (data_type == DataType::FLOAT16) {
-      detail::ConvertFloat16ToFloat32(reinterpret_cast<const std::uint16_t *>(head_sink->bytes()),
-                                      sink_values.data(), sink_values.size());
+      cpu_compute::detail::ConvertFloat16ToFloat32(
+          reinterpret_cast<const std::uint16_t *>(head_sink->bytes()), sink_values.data(),
+          sink_values.size());
     } else {
-      detail::ConvertBFloat16ToFloat32(reinterpret_cast<const std::uint16_t *>(head_sink->bytes()),
-                                       sink_values.data(), sink_values.size());
+      cpu_compute::detail::ConvertBFloat16ToFloat32(
+          reinterpret_cast<const std::uint16_t *>(head_sink->bytes()), sink_values.data(),
+          sink_values.size());
     }
     plan.head_sink = sink_values.data();
   }
@@ -255,7 +262,7 @@ Tensor Compute(const Tensor &q, const Tensor &k, const Tensor &v, const Tensor *
   const std::size_t element_bytes =
       data_type == DataType::FLOAT ? sizeof(float) : sizeof(std::uint16_t);
   const std::size_t bytes =
-      CheckedByteSize(element_count, element_bytes, "Attention", "output byte size");
+      cpu_compute::CheckedByteSize(element_count, element_bytes, "Attention", "output byte size");
   Tensor y = rt != nullptr ? rt->MakeOutputTensor(0, q.data_type, output_shape, bytes)
                            : rt_ns::MakeOutputTensor(q.data_type, output_shape, bytes, nullptr);
   Tensor qk;
@@ -264,7 +271,7 @@ Tensor Compute(const Tensor &q, const Tensor &k, const Tensor &v, const Tensor *
   if (plan.has_qk_matmul_output || plan.softmax_fp64) {
     const std::vector<std::int64_t> plan_qk_shape = plan.qk_matmul_output_shape();
     Shape qk_shape(plan_qk_shape);
-    const std::size_t qk_bytes = CheckedByteSize(
+    const std::size_t qk_bytes = cpu_compute::CheckedByteSize(
         static_cast<std::size_t>(qk_shape.product(0, qk_shape.size(), "Attention QK output")),
         element_bytes, "Attention", "QK byte size");
     qk = rt != nullptr ? rt->MakeOutputTensor(3, q.data_type, qk_shape, qk_bytes)
@@ -283,7 +290,7 @@ Tensor Compute(const Tensor &q, const Tensor &k, const Tensor &v, const Tensor *
   if (mask != nullptr) {
     if (!mask_fp32_buffer.empty()) {
       mask_data = static_cast<const void *>(mask_fp32_buffer.data());
-    } else if (mask_kind == AttentionMaskKind::kBoolean) {
+    } else if (mask_kind == cpu_compute::AttentionMaskKind::kBoolean) {
       mask_data = static_cast<const void *>(mask->AsBool());
     } else {
       mask_data = static_cast<const void *>(mask->bytes());
@@ -293,11 +300,11 @@ Tensor Compute(const Tensor &q, const Tensor &k, const Tensor &v, const Tensor *
       nonpad_kv_seqlen != nullptr
           ? reinterpret_cast<const std::int64_t *>(nonpad_kv_seqlen->bytes())
           : nullptr;
-  AttentionExecutionInfo execution_info;
-  AttentionExecutionInfo *record =
+  cpu_compute::AttentionExecutionInfo execution_info;
+  cpu_compute::AttentionExecutionInfo *record =
       rt != nullptr && rt->kernel_usage_enabled() ? &execution_info : nullptr;
   if (data_type == DataType::FLOAT) {
-    ComputeAttentionFloat32(
+    cpu_compute::ComputeAttentionFloat32(
         plan, reinterpret_cast<const float *>(q.bytes()),
         reinterpret_cast<const float *>(k.bytes()), reinterpret_cast<const float *>(v.bytes()),
         mask_data, reinterpret_cast<float *>(y.mutable_bytes()),
@@ -315,7 +322,7 @@ Tensor Compute(const Tensor &q, const Tensor &k, const Tensor &v, const Tensor *
           past_v != nullptr ? reinterpret_cast<const std::uint16_t *>(past_v->bytes()) : nullptr,
           nonpad, qk_half_data, record);
     } else {
-      ComputeAttentionFloat16Streaming(
+      cpu_compute::ComputeAttentionFloat16Streaming(
           plan, reinterpret_cast<const std::uint16_t *>(q.bytes()),
           reinterpret_cast<const std::uint16_t *>(k.bytes()),
           reinterpret_cast<const std::uint16_t *>(v.bytes()), mask_data,
@@ -335,7 +342,7 @@ Tensor Compute(const Tensor &q, const Tensor &k, const Tensor &v, const Tensor *
           past_v != nullptr ? reinterpret_cast<const std::uint16_t *>(past_v->bytes()) : nullptr,
           nonpad, qk_half_data, record);
     } else {
-      ComputeAttentionBFloat16Streaming(
+      cpu_compute::ComputeAttentionBFloat16Streaming(
           plan, reinterpret_cast<const std::uint16_t *>(q.bytes()),
           reinterpret_cast<const std::uint16_t *>(k.bytes()),
           reinterpret_cast<const std::uint16_t *>(v.bytes()), mask_data,
@@ -347,24 +354,26 @@ Tensor Compute(const Tensor &q, const Tensor &k, const Tensor &v, const Tensor *
   }
   if (record != nullptr) {
     switch (execution_info.path) {
-    case AttentionExecutionPath::kSingleKey:
+    case cpu_compute::AttentionExecutionPath::kSingleKey:
       rt->RecordKernelUsage("Attention.single_key");
       break;
-    case AttentionExecutionPath::kTiled:
+    case cpu_compute::AttentionExecutionPath::kTiled:
       rt->RecordKernelUsage("Attention.tiled");
       break;
-    case AttentionExecutionPath::kStreaming:
+    case cpu_compute::AttentionExecutionPath::kStreaming:
       rt->RecordKernelUsage("Attention.streaming");
       break;
-    case AttentionExecutionPath::kMaterialized:
+    case cpu_compute::AttentionExecutionPath::kMaterialized:
       rt->RecordKernelUsage("Attention.materialized");
       break;
     }
-    const bool materialized_half = data_type != DataType::FLOAT &&
-                                   execution_info.path == AttentionExecutionPath::kMaterialized;
-    const bool element_conversion = data_type == DataType::BFLOAT16 &&
-                                    execution_info.path == AttentionExecutionPath::kStreaming &&
-                                    execution_info.output_tile_elements != 0;
+    const bool materialized_half =
+        data_type != DataType::FLOAT &&
+        execution_info.path == cpu_compute::AttentionExecutionPath::kMaterialized;
+    const bool element_conversion =
+        data_type == DataType::BFLOAT16 &&
+        execution_info.path == cpu_compute::AttentionExecutionPath::kStreaming &&
+        execution_info.output_tile_elements != 0;
     rt->RecordKernelUsage(materialized_half                ? "Attention.conversion.materialized"
                           : element_conversion             ? "Attention.conversion.element"
                           : execution_info.tile_conversion ? "Attention.conversion.tile"
@@ -393,20 +402,20 @@ Tensor Compute(const Tensor &q, const Tensor &k, const Tensor &v, const Tensor *
   if (plan.has_present_output) {
     auto build_present = [&](int output_slot, const Tensor *past_tensor,
                              const Tensor &current_tensor,
-                             const AttentionPlan::TensorStrides &past_strides,
-                             const AttentionPlan::TensorStrides &current_strides, std::size_t dim,
-                             Tensor *out) {
+                             const cpu_compute::AttentionPlan::TensorStrides &past_strides,
+                             const cpu_compute::AttentionPlan::TensorStrides &current_strides,
+                             std::size_t dim, Tensor *out) {
       const std::vector<std::int64_t> present_shape = {
           static_cast<std::int64_t>(plan.batch), static_cast<std::int64_t>(plan.kv_num_heads),
           static_cast<std::int64_t>(plan.total_kv_length), static_cast<std::int64_t>(dim)};
       Shape shape_s(present_shape);
       const std::size_t total_elements =
-          CheckedProduct({plan.batch, plan.kv_num_heads, plan.total_kv_length, dim}, "Attention",
-                         "present element count");
-      const std::size_t total_bytes =
-          CheckedByteSize(total_elements, element_bytes, "Attention", "present byte size");
+          cpu_compute::CheckedProduct({plan.batch, plan.kv_num_heads, plan.total_kv_length, dim},
+                                      "Attention", "present element count");
+      const std::size_t total_bytes = cpu_compute::CheckedByteSize(
+          total_elements, element_bytes, "Attention", "present byte size");
       const std::size_t row_bytes =
-          CheckedByteSize(dim, element_bytes, "Attention", "present row byte size");
+          cpu_compute::CheckedByteSize(dim, element_bytes, "Attention", "present row byte size");
       Tensor present = rt != nullptr
                            ? rt->MakeOutputTensor(output_slot, q.data_type, shape_s, total_bytes)
                            : rt_ns::MakeOutputTensor(q.data_type, shape_s, total_bytes, nullptr);
@@ -465,7 +474,7 @@ Tensor AttentionKernel::operator()(const NodeProto &node, const Tensor &q, const
                                    const Tensor *past_k, const Tensor *past_v,
                                    const Tensor *nonpad_kv_seqlen, const Tensor *head_sink) const {
   const RuntimeExecutionScope execution_scope;
-  const AttentionDescriptor descriptor = BuildDescriptor(node);
+  const cpu_compute::AttentionDescriptor descriptor = BuildDescriptor(node);
   Tensor qk_output, present_key, present_value;
   return Compute(q, k, v, mask, past_k, past_v, nonpad_kv_seqlen, descriptor, rt, &qk_output,
                  &present_key, &present_value, head_sink);
@@ -475,7 +484,7 @@ void AttentionKernel::Run(RuntimeContext &rt) {
   const RuntimeExecutionScope execution_scope;
   rt.RecordKernelUsage(kName);
   const NodeProto &node = *node_;
-  const AttentionDescriptor descriptor = BuildDescriptor(node);
+  const cpu_compute::AttentionDescriptor descriptor = BuildDescriptor(node);
   const Tensor &q = rt_ns::GetInput(node, 0, rt.tensors());
   const Tensor &k = rt_ns::GetInput(node, 1, rt.tensors());
   const Tensor &v = rt_ns::GetInput(node, 2, rt.tensors());

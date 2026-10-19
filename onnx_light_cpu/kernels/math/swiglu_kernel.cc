@@ -5,8 +5,8 @@
 #include "onnx_light_cpu/kernels/math/swiglu_kernel.h"
 #include "onnx_light_cpu/kernels/execution.h"
 
+#include "cpu_compute/math/math.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
-#include "onnx_light_cpu_compute/math/math_kernels.h"
 
 #include "onnx_core/runtime/kernels/kernel_dispatch_table.h"
 #include "onnx_core/runtime/kernels/node_helpers.h"
@@ -64,21 +64,23 @@ void SwiGLUKernel::operator()(const Tensor &gate, const Tensor &value, float alp
   const std::size_t count = static_cast<std::size_t>(gate.element_count());
   switch (static_cast<DataType>(gate.data_type)) {
   case DataType::FLOAT:
-    SwiGLUFloat32(gate.AsFloat(), value.AsFloat(), output.AsFloat(), count, alpha);
+    cpu_compute::SwiGLUFloat32(gate.AsFloat(), value.AsFloat(), output.AsFloat(), count, alpha);
     return;
   case DataType::DOUBLE:
-    SwiGLUFloat64(gate.AsDouble(), value.AsDouble(), output.AsDouble(), count,
-                  static_cast<double>(alpha));
+    cpu_compute::SwiGLUFloat64(gate.AsDouble(), value.AsDouble(), output.AsDouble(), count,
+                               static_cast<double>(alpha));
     return;
   case DataType::FLOAT16:
-    SwiGLUFloat16(reinterpret_cast<const std::uint16_t *>(gate.bytes()),
-                  reinterpret_cast<const std::uint16_t *>(value.bytes()),
-                  reinterpret_cast<std::uint16_t *>(output.mutable_bytes()), count, alpha);
+    cpu_compute::SwiGLUFloat16(reinterpret_cast<const std::uint16_t *>(gate.bytes()),
+                               reinterpret_cast<const std::uint16_t *>(value.bytes()),
+                               reinterpret_cast<std::uint16_t *>(output.mutable_bytes()), count,
+                               alpha);
     return;
   case DataType::BFLOAT16:
-    SwiGLUBFloat16(reinterpret_cast<const std::uint16_t *>(gate.bytes()),
-                   reinterpret_cast<const std::uint16_t *>(value.bytes()),
-                   reinterpret_cast<std::uint16_t *>(output.mutable_bytes()), count, alpha);
+    cpu_compute::SwiGLUBFloat16(reinterpret_cast<const std::uint16_t *>(gate.bytes()),
+                                reinterpret_cast<const std::uint16_t *>(value.bytes()),
+                                reinterpret_cast<std::uint16_t *>(output.mutable_bytes()), count,
+                                alpha);
     return;
   default:
     throw std::invalid_argument(

@@ -2,11 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "cpu_compute/execution.h"
+#include "cpu_compute/math/half_conversion.h"
 #include "onnx_light_cpu/kernels/com_microsoft/naive_skip_simplified_layer_normalization_kernel.h"
 #include "onnx_light_cpu/kernels/com_microsoft/skip_simplified_layer_normalization_kernel.h"
 #include "onnx_light_cpu/kernels/register_kernels.h"
-#include "onnx_light_cpu_compute/execution.h"
-#include "onnx_light_cpu_compute/math/half_conversion.h"
 
 #include "onnx_core/runtime/kernels/cast_helper.h"
 #include "onnx_core/runtime/kernels/kernel_context.h"
@@ -62,10 +62,10 @@ float Value(const Tensor &tensor, std::size_t index) {
     return tensor.AsFloat()[index];
   }
   if (tensor.data_type == DataType::BFLOAT16) {
-    return onnx_light_cpu::detail::Bfloat16BitsToFloat(
+    return cpu_compute::detail::Bfloat16BitsToFloat(
         reinterpret_cast<const std::uint16_t *>(tensor.bytes())[index]);
   }
-  return onnx_light_cpu::detail::Float16BitsToFloat(
+  return cpu_compute::detail::Float16BitsToFloat(
       reinterpret_cast<const std::uint16_t *>(tensor.bytes())[index]);
 }
 
@@ -453,7 +453,7 @@ TYPED_TEST(OnnxLightSkipSimplifiedLayerNormalizationKernel,
 struct InlineExecutor {
   std::int64_t blocks = 0;
   static void Run(void *context, std::int64_t count, void *task_context,
-                  onnx_light_cpu::ExecutionBlockFn task) {
+                  cpu_compute::ExecutionBlockFn task) {
     auto &self = *static_cast<InlineExecutor *>(context);
     self.blocks += count;
     for (std::int64_t block = count; block > 0; --block) {
@@ -473,8 +473,8 @@ TEST(OnnxLightSkipSimplifiedLayerNormalizationExecution, ParallelRowsMatchNaive)
   const auto expected = onnx_light_cpu::NaiveSkipSimplifiedLayerNormalizationKernel(MakeCtx())(
       input, input, gamma, nullptr, 1e-5F, true, true, true);
   InlineExecutor executor;
-  onnx_light_cpu::ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run};
-  onnx_light_cpu::ExecutionExecutorScope scope(&view);
+  cpu_compute::ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run};
+  cpu_compute::ExecutionExecutorScope scope(&view);
   const auto actual = onnx_light_cpu::SkipSimplifiedLayerNormalizationKernel(MakeCtx())(
       input, input, gamma, nullptr, 1e-5F, true, true, true);
   EXPECT_GT(executor.blocks, 1);

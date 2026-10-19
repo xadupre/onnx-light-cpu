@@ -1,0 +1,69 @@
+// Copyright (c) ONNX Project Contributors
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include "cpu_compute/data_type.h"
+
+#include <cstddef>
+#include <cstdint>
+#include <span>
+
+namespace cpu_compute {
+
+struct MatMulNBitsExecutionTuning {
+  std::size_t parallel_threshold_outputs = 256;
+  std::size_t target_block_outputs = 64;
+  std::int64_t max_participants = 32;
+};
+
+inline constexpr MatMulNBitsExecutionTuning kDefaultMatMulNBitsExecutionTuning{};
+
+inline bool MatMulNBitsBlockSizeSupported(std::uint64_t bits, std::uint64_t block_size) {
+  return bits == 3 ? block_size == 32
+                   : (bits == 2 || bits == 4 || bits == 8) && block_size >= 16 &&
+                         block_size <= UINT32_MAX && (block_size & (block_size - 1)) == 0;
+}
+
+// Scratch per active packed-weight panel callback; inputs are borrowed, never retained or copied.
+inline constexpr std::size_t kMatMulNBitsInt4WorkspaceBytes = 36864;
+const char *MatMulNBitsInt4Implementation();
+
+bool MatMulNBitsAccuracy4Float32Available();
+void MatMulNBitsAccuracy4Float32(const float *a, const std::uint8_t *packed_weights,
+                                 const std::int32_t *weight_sums, const float *block_scales,
+                                 const float *bias, float *y, std::size_t rows, std::size_t k,
+                                 std::size_t n, std::int64_t max_participants);
+
+bool MatMulNBitsInt8Float32Available();
+const char *MatMulNBitsInt8Implementation();
+std::size_t MatMulNBitsInt8WorkspaceElements(
+    std::size_t rows, std::size_t k, std::size_t n,
+    const MatMulNBitsExecutionTuning &tuning = kDefaultMatMulNBitsExecutionTuning);
+void PackMatMulNBitsInt8(const std::uint8_t *b, const float *scales, std::uint8_t *weights,
+                         std::int32_t *weight_sums, float *block_scales, std::size_t k,
+                         std::size_t n);
+void MatMulNBitsInt8Float32(
+    const float *a, const std::uint8_t *weights, const std::int32_t *weight_sums,
+    const float *scales, const float *bias, float *y, std::size_t rows, std::size_t k,
+    std::size_t n, const MatMulNBitsExecutionTuning &tuning = kDefaultMatMulNBitsExecutionTuning,
+    std::span<double> workspace = {});
+
+void MatMulNBits(const void *a, const std::uint8_t *b, const void *scales, const void *bias,
+                 void *y, DataType data_type, std::size_t rows, std::size_t k, std::size_t n,
+                 std::size_t bits, std::size_t block_size,
+                 const MatMulNBitsExecutionTuning &tuning = kDefaultMatMulNBitsExecutionTuning,
+                 const void *zero_points = nullptr, bool packed_zero_points = true);
+
+void MatMulNBitsEncodedInt3(
+    const void *a, const std::uint8_t *b, const void *scales, const std::uint8_t *zero_points,
+    const void *bias, void *y, DataType data_type, std::size_t rows, std::size_t k, std::size_t n,
+    const MatMulNBitsExecutionTuning &tuning = kDefaultMatMulNBitsExecutionTuning);
+
+void MatMulNBitsFloat32(
+    const float *a, const std::uint8_t *b, const float *scales, const float *bias, float *y,
+    std::size_t rows, std::size_t k, std::size_t n, std::size_t block_size,
+    const MatMulNBitsExecutionTuning &tuning = kDefaultMatMulNBitsExecutionTuning);
+
+} // namespace cpu_compute

@@ -7,6 +7,7 @@ import sys
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import skipUnless
 from uuid import uuid4
 
 import numpy as np
@@ -361,14 +362,24 @@ def test_pinned_imports_and_native_mismatch(monkeypatch):
             sys.modules.pop("parity_test_pinned", None)
 
 
+@skipUnless(sys.platform.startswith("linux"), "Shared-library snapshots require /proc/self/maps.")
+def test_shared_library_snapshot_includes_real_compute_library():
+    from onnx_light_cpu.onnx_py import _cpukernels
+
+    assert _cpukernels.has_cpu_kernels()
+    libraries = worker.shared_library_snapshot()
+    assert libraries is not None
+    assert any(Path(path).name.startswith("libcpu_compute") for path in libraries), libraries
+
+
 def test_shared_library_mismatch_is_not_hidden_by_unchanged_extensions(monkeypatch):
-    expected = {"/runtime/liblib_onnx_light_cpu.so": "original-kernel"}
+    expected = {"/runtime/libcpu_compute.so": "original-kernel"}
     monkeypatch.setattr(worker, "shared_library_snapshot", lambda: dict(expected))
     worker.verify_shared_libraries(expected)
     monkeypatch.setattr(
         worker,
         "shared_library_snapshot",
-        lambda: {"/runtime/liblib_onnx_light_cpu.so": "rebuilt-kernel"},
+        lambda: {"/runtime/libcpu_compute.so": "rebuilt-kernel"},
     )
     expect_error(lambda: worker.verify_shared_libraries(expected), "shared libraries differ")
     monkeypatch.setattr(worker, "shared_library_snapshot", lambda: None)

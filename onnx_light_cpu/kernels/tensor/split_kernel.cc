@@ -5,8 +5,8 @@
 #include "onnx_light_cpu/kernels/tensor/split_kernel.h"
 #include "onnx_light_cpu/kernels/execution.h"
 
+#include "cpu_compute/tensor/split.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
-#include "onnx_light_cpu_compute/tensor/split_kernel.h"
 
 #include "onnx_core/runtime/kernels/node_helpers.h"
 #include "onnx_core/symbolic/sym_tensor.h"
@@ -183,12 +183,13 @@ std::vector<Tensor> SplitKernel::Compute(const Tensor &data, int64_t axis,
     offset += row_bytes;
   }
   if (rows > 0 && outputs.size() > 1 && offset == input_row_bytes) {
-    SplitCopyOutputs(data.bytes(), output_data, rows, input_row_bytes, output_row_bytes);
+    cpu_compute::SplitCopyOutputs(data.bytes(), output_data, rows, input_row_bytes,
+                                  output_row_bytes);
   } else {
     offset = 0;
     for (std::size_t i = 0; i < sizes.size(); ++i) {
-      SplitCopy(data.bytes(), outputs[i].mutable_bytes(), rows, input_row_bytes,
-                output_row_bytes[i], offset);
+      cpu_compute::SplitCopy(data.bytes(), outputs[i].mutable_bytes(), rows, input_row_bytes,
+                             output_row_bytes[i], offset);
       offset += output_row_bytes[i];
     }
   }

@@ -89,7 +89,18 @@ if(ONNX_LIGHT_CPU_RELEASE_WHEEL)
 endif()
 option(ONNX_LIGHT_CPU_ENABLE_COVERAGE
        "Instrument the C++ targets for code coverage (GCC/Clang only)." OFF)
-include(onnx_light_cpu_compute/cmake/CpuFeatures.cmake)
+if(DEFINED ONNX_LIGHT_CPU_MAX_SIMD_LEVEL)
+  set(CPU_COMPUTE_MAX_SIMD_LEVEL "${ONNX_LIGHT_CPU_MAX_SIMD_LEVEL}"
+      CACHE STRING "Maximum SIMD level forwarded by the runtime project." FORCE)
+endif()
+if(ONNX_LIGHT_CPU_SIMD_FLAGS)
+  message(FATAL_ERROR
+      "ONNX_LIGHT_CPU_SIMD_FLAGS is no longer supported. Use CPU_COMPUTE_MAX_SIMD_LEVEL.")
+endif()
+if(ONNX_LIGHT_CPU_ENABLE_COVERAGE)
+  set(CPU_COMPUTE_ENABLE_COVERAGE ON)
+endif()
+include(cpu_compute/cmake/CpuFeatures.cmake)
 
 # A local onnx-light runtime target is not part of an export set, so
 # lib_onnx_light_cpu_kernels cannot be installed as part of onnx_light_cpuTargets
@@ -107,9 +118,12 @@ if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT AND ONNX_LIGHT_CPU_ONNX_LIGHT_SOURCE_DIR
 endif()
 option(ONNX_HARDENING
     "Enable OpenSSF Compiler Hardening Guide flags for C/C++ targets. \
-See onnx_light_cpu_compute/cmake/Hardening.cmake and \
+See cpu_compute/cmake/Hardening.cmake and \
 https://best.openssf.org/Compiler-Hardening-Guides/Compiler-Options-Hardening-Guide-for-C-and-C++.html"
     OFF)
+if(ONNX_HARDENING)
+  set(CPU_COMPUTE_HARDENING ON)
+endif()
 
 if(ONNX_LIGHT_CPU_ENABLE_COVERAGE AND
    NOT CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
@@ -132,11 +146,11 @@ set(THREADS_PREFER_PTHREAD_FLAG TRUE)
 find_package(Threads REQUIRED)
 
 # Optional OpenSSF compiler hardening flags.
-if(ONNX_HARDENING)
-  list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/onnx_light_cpu_compute/cmake")
+if(CPU_COMPUTE_HARDENING)
+  list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cpu_compute/cmake")
   include(Hardening)
 else()
-  function(onnx_light_apply_hardening target)
+  function(cpu_compute_apply_hardening target)
   endfunction()
 endif()
 
@@ -162,7 +176,7 @@ file(GLOB PY_REGISTER_SOURCES CONFIGURE_DEPENDS
 list(REMOVE_ITEM PY_KERNELS_SOURCES ${PY_REGISTER_SOURCES})
 
 # ---------------------------------------------------------------------------
-# C++ library: lib_onnx_light_cpu
+# C++ library: cpu_compute
 # ---------------------------------------------------------------------------
 if(ONNX_LIGHT_CPU_BUILD_PYTHON AND UNIX AND NOT APPLE)
   set(_cpu_lib_type SHARED)
@@ -170,7 +184,8 @@ else()
   set(_cpu_lib_type STATIC)
 endif()
 
-add_subdirectory(onnx_light_cpu_compute)
+add_subdirectory(cpu_compute)
+add_library(lib_onnx_light_cpu ALIAS cpu_compute)
 
 # ---------------------------------------------------------------------------
 # onnx-light kernel registration library: lib_onnx_light_cpu_kernels
@@ -370,7 +385,7 @@ if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
       PROPERTY POSITION_INDEPENDENT_CODE ON)
   target_compile_features(lib_onnx_light_cpu_kernels PUBLIC cxx_std_20)
   target_link_libraries(lib_onnx_light_cpu_kernels PUBLIC
-      lib_onnx_light_cpu
+      cpu_compute
       onnx_light::lib_onnx_core
       onnx_light::lib_onnx_kernels)
   # Standalone consumers inherit the concrete Cast link dependency. Linux/macOS
@@ -378,16 +393,16 @@ if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
   # must place the onnx-light runtime DLL directory on their loader search path.
   # Availability definitions on the implementation library are private. The
   # registered activation dispatchers also need to see the compiled SIMD paths.
-  if(ONNX_LIGHT_CPU_HAVE_AVX512BF16_FLAG)
+  if(CPU_COMPUTE_HAVE_AVX512BF16_FLAG)
     target_compile_definitions(lib_onnx_light_cpu_kernels PRIVATE
-        ONNX_LIGHT_CPU_HAVE_AVX512BF16=1)
+        CPU_COMPUTE_HAVE_AVX512BF16=1)
   endif()
-  if(ONNX_LIGHT_CPU_HAVE_AVX2_FMA_FLAG)
+  if(CPU_COMPUTE_HAVE_AVX2_FMA_FLAG)
     target_compile_definitions(lib_onnx_light_cpu_kernels PRIVATE
-        ONNX_LIGHT_CPU_HAVE_AVX2_FMA=1)
-    if(ONNX_LIGHT_CPU_HAVE_F16C_FLAG)
+        CPU_COMPUTE_HAVE_AVX2_FMA=1)
+    if(CPU_COMPUTE_HAVE_F16C_FLAG)
       target_compile_definitions(lib_onnx_light_cpu_kernels PRIVATE
-          ONNX_LIGHT_CPU_HAVE_F16C=1)
+          CPU_COMPUTE_HAVE_F16C=1)
     endif()
   endif()
   # Reuse onnx-light's own shape-inference functions (e.g.
@@ -531,7 +546,7 @@ if(ONNX_LIGHT_CPU_BUILD_PYTHON)
   nanobind_add_module(_cpukernels ${_onnx_light_cpu_nanobind_abi} ${PY_KERNELS_SOURCES})
   target_include_directories(_cpukernels PRIVATE
       "${CMAKE_CURRENT_SOURCE_DIR}")
-  target_link_libraries(_cpukernels PRIVATE lib_onnx_light_cpu)
+  target_link_libraries(_cpukernels PRIVATE cpu_compute)
 
   set_target_properties(_cpukernels PROPERTIES
       INSTALL_RPATH "$ORIGIN"
@@ -542,7 +557,7 @@ if(ONNX_LIGHT_CPU_BUILD_PYTHON)
       RUNTIME DESTINATION onnx_light_cpu/onnx_py)
 
   if(_cpu_lib_type STREQUAL "SHARED")
-    install(TARGETS lib_onnx_light_cpu
+    install(TARGETS cpu_compute
         LIBRARY DESTINATION onnx_light_cpu/onnx_py
         RUNTIME DESTINATION onnx_light_cpu/onnx_py)
   endif()
@@ -620,9 +635,9 @@ endif()
 # C++ install
 # ---------------------------------------------------------------------------
 if(ONNX_LIGHT_CPU_INSTALL)
-  install(DIRECTORY onnx_light_cpu_compute/include/
+  install(DIRECTORY cpu_compute/include/
       DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
-  install(TARGETS lib_onnx_light_cpu
+  install(TARGETS cpu_compute
       EXPORT onnx_light_cpuTargets
       ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
       LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
@@ -688,31 +703,31 @@ if(ONNX_LIGHT_CPU_BUILD_BENCHMARKS)
       continue()
     endif()
     add_executable(${_target} "${_source}")
-    target_link_libraries(${_target} PRIVATE lib_onnx_light_cpu)
+    target_link_libraries(${_target} PRIVATE cpu_compute)
     if(_target STREQUAL "batch_normalization_throughput")
       target_link_libraries(${_target} PRIVATE lib_onnx_light_cpu_kernels)
     endif()
     if(_target STREQUAL "integer_gemm_throughput")
-      if(ONNX_LIGHT_CPU_HAVE_AVXVNNI_FLAG)
-        target_compile_definitions(${_target} PRIVATE ONNX_LIGHT_CPU_HAVE_AVXVNNI=1)
+      if(CPU_COMPUTE_HAVE_AVXVNNI_FLAG)
+        target_compile_definitions(${_target} PRIVATE CPU_COMPUTE_HAVE_AVXVNNI=1)
       endif()
-      if(ONNX_LIGHT_CPU_HAVE_AVX2_FMA_FLAG)
-        target_compile_definitions(${_target} PRIVATE ONNX_LIGHT_CPU_HAVE_AVX2_INTEGER=1)
+      if(CPU_COMPUTE_HAVE_AVX2_FMA_FLAG)
+        target_compile_definitions(${_target} PRIVATE CPU_COMPUTE_HAVE_AVX2_INTEGER=1)
       endif()
-      if(ONNX_LIGHT_CPU_HAVE_AVX512VNNI_FLAG)
-        target_compile_definitions(${_target} PRIVATE ONNX_LIGHT_CPU_HAVE_AVX512VNNI=1)
+      if(CPU_COMPUTE_HAVE_AVX512VNNI_FLAG)
+        target_compile_definitions(${_target} PRIVATE CPU_COMPUTE_HAVE_AVX512VNNI=1)
       endif()
     endif()
-    if(_target STREQUAL "abs_throughput" AND ONNX_LIGHT_CPU_HAVE_AVX512F_FLAG)
-      target_compile_definitions(${_target} PRIVATE ONNX_LIGHT_CPU_HAVE_AVX512=1)
+    if(_target STREQUAL "abs_throughput" AND CPU_COMPUTE_HAVE_AVX512F_FLAG)
+      target_compile_definitions(${_target} PRIVATE CPU_COMPUTE_HAVE_AVX512=1)
     endif()
-    if(_target STREQUAL "exp_log_throughput" AND ONNX_LIGHT_CPU_HAVE_AVX2_FMA_FLAG)
-      target_compile_definitions(${_target} PRIVATE ONNX_LIGHT_CPU_HAVE_AVX2_FMA=1)
+    if(_target STREQUAL "exp_log_throughput" AND CPU_COMPUTE_HAVE_AVX2_FMA_FLAG)
+      target_compile_definitions(${_target} PRIVATE CPU_COMPUTE_HAVE_AVX2_FMA=1)
     endif()
-    if(_target STREQUAL "exp_log_throughput" AND ONNX_LIGHT_CPU_HAVE_AVX512F_FLAG)
-      target_compile_definitions(${_target} PRIVATE ONNX_LIGHT_CPU_HAVE_AVX512=1)
+    if(_target STREQUAL "exp_log_throughput" AND CPU_COMPUTE_HAVE_AVX512F_FLAG)
+      target_compile_definitions(${_target} PRIVATE CPU_COMPUTE_HAVE_AVX512=1)
     endif()
-    onnx_light_apply_hardening(${_target})
+    cpu_compute_apply_hardening(${_target})
   endforeach()
 endif()
 
@@ -747,7 +762,7 @@ if(ONNX_LIGHT_CPU_BUILD_TESTS)
     get_filename_component(_name "${_src}" NAME_WE)
     add_executable(${_name} "${_src}")
     target_compile_definitions(${_name} PRIVATE
-        ONNX_LIGHT_CPU_MAX_SIMD_LEVEL=${_onnx_light_cpu_max_simd_level_value})
+        CPU_COMPUTE_MAX_SIMD_LEVEL=${_cpu_compute_max_simd_level_value})
     foreach(_corpus_source IN LISTS CPU_BACKEND_CORPUS_SOURCES)
       get_filename_component(_corpus_name "${_corpus_source}" NAME_WE)
       string(REGEX REPLACE "_corpus$" "" _corpus_subject "${_corpus_name}")
@@ -758,88 +773,88 @@ if(ONNX_LIGHT_CPU_BUILD_TESTS)
     target_link_libraries(${_name} PRIVATE ${_link_lib} GTest::gtest_main)
     target_include_directories(${_name} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
     if(_name STREQUAL "test_cast_kernel")
-      if(ONNX_LIGHT_CPU_HAVE_F16C_FLAG)
-        target_compile_definitions(${_name} PRIVATE ONNX_LIGHT_CPU_HAVE_AVX_F16C=1)
+      if(CPU_COMPUTE_HAVE_F16C_FLAG)
+        target_compile_definitions(${_name} PRIVATE CPU_COMPUTE_HAVE_AVX_F16C=1)
       endif()
-      if(ONNX_LIGHT_CPU_HAVE_AVX2_FLAG)
-        target_compile_definitions(${_name} PRIVATE ONNX_LIGHT_CPU_HAVE_AVX2=1)
+      if(CPU_COMPUTE_HAVE_AVX2_FLAG)
+        target_compile_definitions(${_name} PRIVATE CPU_COMPUTE_HAVE_AVX2=1)
       endif()
-      if(ONNX_LIGHT_CPU_HAVE_AVX2_FLAG AND ONNX_LIGHT_CPU_HAVE_F16C_FLAG)
-        target_compile_definitions(${_name} PRIVATE ONNX_LIGHT_CPU_HAVE_AVX2_F16C=1)
+      if(CPU_COMPUTE_HAVE_AVX2_FLAG AND CPU_COMPUTE_HAVE_F16C_FLAG)
+        target_compile_definitions(${_name} PRIVATE CPU_COMPUTE_HAVE_AVX2_F16C=1)
       endif()
-      if(ONNX_LIGHT_CPU_HAVE_AVX512DQ_FLAG)
-        target_compile_definitions(${_name} PRIVATE ONNX_LIGHT_CPU_HAVE_AVX512DQ=1)
+      if(CPU_COMPUTE_HAVE_AVX512DQ_FLAG)
+        target_compile_definitions(${_name} PRIVATE CPU_COMPUTE_HAVE_AVX512DQ=1)
       endif()
     endif()
     if(_name STREQUAL "test_matmul_nbits")
       foreach(_isa IN ITEMS AVX2 AVXVNNI AVX512VNNI AVX512BW)
-        if(ONNX_LIGHT_CPU_HAVE_${_isa}_FLAG)
-          target_compile_definitions(${_name} PRIVATE ONNX_LIGHT_CPU_HAVE_${_isa}=1)
+        if(CPU_COMPUTE_HAVE_${_isa}_FLAG)
+          target_compile_definitions(${_name} PRIVATE CPU_COMPUTE_HAVE_${_isa}=1)
         endif()
       endforeach()
     endif()
     if(_name STREQUAL "test_integer_gemm_vnni")
-      if(ONNX_LIGHT_CPU_HAVE_AVXVNNI_FLAG)
-        target_compile_definitions(${_name} PRIVATE ONNX_LIGHT_CPU_HAVE_AVXVNNI=1)
+      if(CPU_COMPUTE_HAVE_AVXVNNI_FLAG)
+        target_compile_definitions(${_name} PRIVATE CPU_COMPUTE_HAVE_AVXVNNI=1)
       endif()
       # This differential binary names and calls the optional native integer
       # kernels directly. The library keeps availability definitions private,
       # so mirror only the definitions whose translation units were built.
-      if(ONNX_LIGHT_CPU_HAVE_AVX2_FMA_FLAG)
-        target_compile_definitions(${_name} PRIVATE ONNX_LIGHT_CPU_HAVE_AVX2_INTEGER=1)
+      if(CPU_COMPUTE_HAVE_AVX2_FMA_FLAG)
+        target_compile_definitions(${_name} PRIVATE CPU_COMPUTE_HAVE_AVX2_INTEGER=1)
       endif()
-      if(ONNX_LIGHT_CPU_HAVE_AVX512VNNI_FLAG)
-        target_compile_definitions(${_name} PRIVATE ONNX_LIGHT_CPU_HAVE_AVX512VNNI=1)
+      if(CPU_COMPUTE_HAVE_AVX512VNNI_FLAG)
+        target_compile_definitions(${_name} PRIVATE CPU_COMPUTE_HAVE_AVX512VNNI=1)
       endif()
-      if(ONNX_LIGHT_CPU_HAVE_AVX512BW_FLAG)
-        target_compile_definitions(${_name} PRIVATE ONNX_LIGHT_CPU_HAVE_AVX512BW=1)
+      if(CPU_COMPUTE_HAVE_AVX512BW_FLAG)
+        target_compile_definitions(${_name} PRIVATE CPU_COMPUTE_HAVE_AVX512BW=1)
       endif()
-      if(ONNX_LIGHT_CPU_HAVE_AMX_INT8_FLAG)
-        target_compile_definitions(${_name} PRIVATE ONNX_LIGHT_CPU_HAVE_AMX_INT8=1)
+      if(CPU_COMPUTE_HAVE_AMX_INT8_FLAG)
+        target_compile_definitions(${_name} PRIVATE CPU_COMPUTE_HAVE_AMX_INT8=1)
       endif()
-      if(ONNX_LIGHT_CPU_HAVE_NEON_DOTPROD_INTRINSICS)
-        target_compile_definitions(${_name} PRIVATE ONNX_LIGHT_CPU_HAVE_NEON_DOTPROD=1)
+      if(CPU_COMPUTE_HAVE_NEON_DOTPROD_INTRINSICS)
+        target_compile_definitions(${_name} PRIVATE CPU_COMPUTE_HAVE_NEON_DOTPROD=1)
       endif()
     endif()
-    if(_name STREQUAL "test_gemm_kernel" AND ONNX_LIGHT_CPU_HAVE_AVX2_FMA_FLAG)
+    if(_name STREQUAL "test_gemm_kernel" AND CPU_COMPUTE_HAVE_AVX2_FMA_FLAG)
       # This differential test calls optional AVX2 conversion helpers directly.
       # Mirror the private library definitions only when those helpers were built.
-      target_compile_definitions(${_name} PRIVATE ONNX_LIGHT_CPU_HAVE_AVX2_FMA=1)
-      if(ONNX_LIGHT_CPU_HAVE_F16C_FLAG)
-        target_compile_definitions(${_name} PRIVATE ONNX_LIGHT_CPU_HAVE_F16C=1)
+      target_compile_definitions(${_name} PRIVATE CPU_COMPUTE_HAVE_AVX2_FMA=1)
+      if(CPU_COMPUTE_HAVE_F16C_FLAG)
+        target_compile_definitions(${_name} PRIVATE CPU_COMPUTE_HAVE_F16C=1)
       endif()
     endif()
     if((_name STREQUAL "test_exp_log_kernel" OR
         _name STREQUAL "test_tanh_kernel" OR
         _name STREQUAL "test_onnx_light_sigmoid_softmax_kernel") AND
-       ONNX_LIGHT_CPU_HAVE_AVX2_FMA_FLAG)
-      target_compile_definitions(${_name} PRIVATE ONNX_LIGHT_CPU_HAVE_AVX2_FMA=1)
+       CPU_COMPUTE_HAVE_AVX2_FMA_FLAG)
+      target_compile_definitions(${_name} PRIVATE CPU_COMPUTE_HAVE_AVX2_FMA=1)
       if(_name STREQUAL "test_onnx_light_sigmoid_softmax_kernel" AND
-         ONNX_LIGHT_CPU_HAVE_F16C_FLAG)
-        target_compile_definitions(${_name} PRIVATE ONNX_LIGHT_CPU_HAVE_F16C=1)
+         CPU_COMPUTE_HAVE_F16C_FLAG)
+        target_compile_definitions(${_name} PRIVATE CPU_COMPUTE_HAVE_F16C=1)
       endif()
     endif()
     if((_name STREQUAL "test_exp_log_kernel" OR
         _name STREQUAL "test_tanh_kernel" OR
         _name STREQUAL "test_gemm_kernel") AND
-       ONNX_LIGHT_CPU_HAVE_AVX512F_FLAG)
-      target_compile_definitions(${_name} PRIVATE ONNX_LIGHT_CPU_HAVE_AVX512=1)
+       CPU_COMPUTE_HAVE_AVX512F_FLAG)
+      target_compile_definitions(${_name} PRIVATE CPU_COMPUTE_HAVE_AVX512=1)
     endif()
     if((_name STREQUAL "test_abs_kernel" OR _name STREQUAL "test_abs_avx512_kernel") AND
-       ONNX_LIGHT_CPU_HAVE_AVX512F_FLAG)
-      target_compile_definitions(${_name} PRIVATE ONNX_LIGHT_CPU_HAVE_AVX512=1)
+       CPU_COMPUTE_HAVE_AVX512F_FLAG)
+      target_compile_definitions(${_name} PRIVATE CPU_COMPUTE_HAVE_AVX512=1)
     endif()
-    if(_name STREQUAL "test_abs_kernel" AND ONNX_LIGHT_CPU_HAVE_SSSE3_FLAG)
-      target_compile_definitions(${_name} PRIVATE ONNX_LIGHT_CPU_HAVE_SSSE3=1)
+    if(_name STREQUAL "test_abs_kernel" AND CPU_COMPUTE_HAVE_SSSE3_FLAG)
+      target_compile_definitions(${_name} PRIVATE CPU_COMPUTE_HAVE_SSSE3=1)
     endif()
-    if(_name STREQUAL "test_abs_avx512_kernel" AND ONNX_LIGHT_CPU_HAVE_AVX512BW_FLAG)
-      target_compile_definitions(${_name} PRIVATE ONNX_LIGHT_CPU_HAVE_AVX512BW=1)
+    if(_name STREQUAL "test_abs_avx512_kernel" AND CPU_COMPUTE_HAVE_AVX512BW_FLAG)
+      target_compile_definitions(${_name} PRIVATE CPU_COMPUTE_HAVE_AVX512BW=1)
     endif()
-    if(_name STREQUAL "test_rms_normalization_kernel" AND ONNX_LIGHT_CPU_HAVE_F16C_FLAG)
+    if(_name STREQUAL "test_rms_normalization_kernel" AND CPU_COMPUTE_HAVE_F16C_FLAG)
       # This differential test calls the optional F16C RMSNormalization
       # kernel directly. Mirror the private library definition only when that
       # translation unit was built.
-      target_compile_definitions(${_name} PRIVATE ONNX_LIGHT_CPU_HAVE_RMS_F16C=1)
+      target_compile_definitions(${_name} PRIVATE CPU_COMPUTE_HAVE_RMS_F16C=1)
     endif()
     if("lib_onnx_light_cpu_kernels" IN_LIST _link_lib AND
        ONNX_LIGHT_CPU_ONNX_LIGHT_PY_LIBDIR)
@@ -855,7 +870,7 @@ if(ONNX_LIGHT_CPU_BUILD_TESTS)
     else()
       gtest_discover_tests(${_name})
     endif()
-    onnx_light_apply_hardening(${_name})
+    cpu_compute_apply_hardening(${_name})
   endfunction()
 
   file(GLOB _test_sources CONFIGURE_DEPENDS
@@ -902,7 +917,7 @@ if(ONNX_LIGHT_CPU_BUILD_TESTS)
         endif()
       endif()
     else()
-      onnx_light_cpu_add_test("${_test_src}" lib_onnx_light_cpu)
+      onnx_light_cpu_add_test("${_test_src}" cpu_compute)
     endif()
   endforeach()
 
@@ -945,6 +960,6 @@ if(ONNX_LIGHT_CPU_BUILD_PYTHON)
 endif()
 foreach(_t IN LISTS _onnx_light_cpu_hardening_targets)
   if(TARGET ${_t})
-    onnx_light_apply_hardening(${_t})
+    cpu_compute_apply_hardening(${_t})
   endif()
 endforeach()

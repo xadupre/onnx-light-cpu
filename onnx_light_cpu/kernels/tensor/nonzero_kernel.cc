@@ -5,8 +5,8 @@
 #include "onnx_light_cpu/kernels/tensor/nonzero_kernel.h"
 #include "onnx_light_cpu/kernels/execution.h"
 
+#include "cpu_compute/tensor/nonzero.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
-#include "onnx_light_cpu_compute/tensor/nonzero_kernel.h"
 
 #include "onnx_core/runtime/kernels/node_helpers.h"
 #include "onnx_extensions/kernels/kernels/tensor/include_tensor_kernels.h"
@@ -52,7 +52,7 @@ Tensor NonZeroKernel::operator()(const Tensor &x, rt_ns::RuntimeContext *rt) con
   }
 
   const uint8_t *input = x.bytes();
-  const int64_t count = CountNonZeroBool(input, total);
+  const int64_t count = cpu_compute::CountNonZeroBool(input, total);
 
   const int64_t rank = static_cast<int64_t>(x.shape.size());
   const rt_ns::Shape output_shape{rank, count};
@@ -70,7 +70,7 @@ Tensor NonZeroKernel::operator()(const Tensor &x, rt_ns::RuntimeContext *rt) con
   if (output_bytes == 0) {
     return output;
   }
-  WriteNonZeroBoolIndices(input, total, x.shape.data(), rank, count, output.AsInt64());
+  cpu_compute::WriteNonZeroBoolIndices(input, total, x.shape.data(), rank, count, output.AsInt64());
   return output;
 }
 

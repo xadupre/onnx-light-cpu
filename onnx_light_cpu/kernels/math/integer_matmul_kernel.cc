@@ -5,13 +5,13 @@
 #include "onnx_light_cpu/kernels/math/integer_matmul_kernel.h"
 #include "onnx_light_cpu/kernels/execution.h"
 
+#include "cpu_compute/checked_arithmetic.h"
+#include "cpu_compute/execution.h"
+#include "cpu_compute/math/gemm/vnni/integer_gemm_vnni.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
-#include "onnx_light_cpu_compute/checked_arithmetic.h"
-#include "onnx_light_cpu_compute/execution.h"
-#include "onnx_light_cpu_compute/math/gemm/vnni/integer_gemm_vnni.h"
 
-#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_INTEGER
-#include "onnx_light_cpu_compute/simd_level.h"
+#ifdef CPU_COMPUTE_HAVE_AVX2_INTEGER
+#include "cpu_compute/simd_level.h"
 #endif
 
 #include "onnx_core/runtime/kernels/cast_helper.h"
@@ -107,14 +107,14 @@ struct BatchWorkItem {
 Shape ComputeStrides(const Shape &shape) {
   Shape strides(std::vector<int64_t>(shape.size(), 1));
   for (std::size_t index = shape.size(); index > 1; --index) {
-    strides[index - 2] = CheckedIndexMultiply(strides[index - 1], shape[index - 1],
-                                              "integer MatMul", "input stride");
+    strides[index - 2] = cpu_compute::CheckedIndexMultiply(strides[index - 1], shape[index - 1],
+                                                           "integer MatMul", "input stride");
   }
   return strides;
 }
 
 int64_t ElementCount(const Shape &shape) {
-  return CheckedShapeIndexProduct(shape, "integer MatMul", "shape element count");
+  return cpu_compute::CheckedShapeIndexProduct(shape, "integer MatMul", "shape element count");
 }
 
 MatMulLayout ResolveLayout(const Tensor &a, const Tensor &b) {
@@ -301,9 +301,9 @@ template <typename T> T Requantize(int64_t accumulator, float scale, int32_t zer
 
 void RequantizeInt32Buffer(const int32_t *src, int8_t *dst, int64_t count, float scale,
                            int32_t zero_point) {
-#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_INTEGER
-  if (DetectSimdLevel() >= SimdLevel::kAVX2) {
-    detail::RequantizeInt32ToInt8Avx2(src, dst, count, scale, zero_point);
+#ifdef CPU_COMPUTE_HAVE_AVX2_INTEGER
+  if (cpu_compute::DetectSimdLevel() >= cpu_compute::SimdLevel::kAVX2) {
+    cpu_compute::detail::RequantizeInt32ToInt8Avx2(src, dst, count, scale, zero_point);
     return;
   }
 #endif
@@ -314,9 +314,9 @@ void RequantizeInt32Buffer(const int32_t *src, int8_t *dst, int64_t count, float
 
 void RequantizeInt32Buffer(const int32_t *src, uint8_t *dst, int64_t count, float scale,
                            int32_t zero_point) {
-#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_INTEGER
-  if (DetectSimdLevel() >= SimdLevel::kAVX2) {
-    detail::RequantizeInt32ToUint8Avx2(src, dst, count, scale, zero_point);
+#ifdef CPU_COMPUTE_HAVE_AVX2_INTEGER
+  if (cpu_compute::DetectSimdLevel() >= cpu_compute::SimdLevel::kAVX2) {
+    cpu_compute::detail::RequantizeInt32ToUint8Avx2(src, dst, count, scale, zero_point);
     return;
   }
 #endif
@@ -337,8 +337,8 @@ Tensor MatMulIntegerKernel::operator()(const Tensor &a, const Tensor &b, const T
   const IntegerZeroPoints a_zp = ReadZeroPoints(a_zero_point, a, true, "a_zero_point");
   const IntegerZeroPoints b_zp = ReadZeroPoints(b_zero_point, b, false, "b_zero_point");
   const std::size_t output_bytes =
-      CheckedByteSize(static_cast<std::size_t>(ElementCount(layout.output_shape)), sizeof(int32_t),
-                      "MatMulInteger", "output byte size");
+      cpu_compute::CheckedByteSize(static_cast<std::size_t>(ElementCount(layout.output_shape)),
+                                   sizeof(int32_t), "MatMulInteger", "output byte size");
   Tensor output = rt != nullptr
                       ? rt->MakeOutputTensor(0, static_cast<int32_t>(DataType::INT32),
                                              layout.output_shape, output_bytes)
@@ -358,23 +358,25 @@ Tensor MatMulIntegerKernel::operator()(const Tensor &a, const Tensor &b, const T
     const bool a_signed = a.data_type == static_cast<int32_t>(DataType::INT8);
     const bool b_signed = b.data_type == static_cast<int32_t>(DataType::INT8);
     if (layout.batch_count == 1) {
-      IntegerMatMul2D(a_bytes, a_signed, b_bytes, b_signed, values, layout.m, layout.n, layout.k,
-                      a_zp.data(), static_cast<int64_t>(a_zp.size()), b_zp.data(),
-                      static_cast<int64_t>(b_zp.size()));
+      cpu_compute::IntegerMatMul2D(a_bytes, a_signed, b_bytes, b_signed, values, layout.m, layout.n,
+                                   layout.k, a_zp.data(), static_cast<int64_t>(a_zp.size()),
+                                   b_zp.data(), static_cast<int64_t>(b_zp.size()));
       return output;
     }
     const std::vector<BatchWorkItem> work_items = BuildBatchWorkItems(layout);
     const double cost = static_cast<double>(layout.m) * static_cast<double>(layout.n) *
                         static_cast<double>(std::max<int64_t>(layout.k, 1));
-    ExecuteRanges(static_cast<int64_t>(work_items.size()), cost, [&](int64_t begin, int64_t end) {
-      for (int64_t index = begin; index < end; ++index) {
-        const BatchWorkItem &item = work_items[static_cast<std::size_t>(index)];
-        IntegerMatMul2D(a_bytes + item.a_base, a_signed, b_bytes + item.b_base, b_signed,
-                        values + item.output_base, layout.m, layout.n, layout.k,
-                        a_zp.data(item.a_base), static_cast<int64_t>(a_zp.size()),
-                        b_zp.data(item.b_base), static_cast<int64_t>(b_zp.size()));
-      }
-    });
+    cpu_compute::ExecuteRanges(
+        static_cast<int64_t>(work_items.size()), cost, [&](int64_t begin, int64_t end) {
+          for (int64_t index = begin; index < end; ++index) {
+            const BatchWorkItem &item = work_items[static_cast<std::size_t>(index)];
+            cpu_compute::IntegerMatMul2D(a_bytes + item.a_base, a_signed, b_bytes + item.b_base,
+                                         b_signed, values + item.output_base, layout.m, layout.n,
+                                         layout.k, a_zp.data(item.a_base),
+                                         static_cast<int64_t>(a_zp.size()), b_zp.data(item.b_base),
+                                         static_cast<int64_t>(b_zp.size()));
+          }
+        });
     return output;
   }
 
@@ -458,26 +460,28 @@ Tensor QLinearMatMulKernel::operator()(const Tensor &a, const Tensor &a_scale,
     const std::int32_t a_zp[1] = {az};
     const std::int32_t b_zp[1] = {bz};
     const std::vector<BatchWorkItem> work_items = BuildBatchWorkItems(layout);
-    const int64_t matrix_size =
-        CheckedIndexMultiply(layout.m, layout.n, "QLinearMatMul", "matrix element count");
+    const int64_t matrix_size = cpu_compute::CheckedIndexMultiply(
+        layout.m, layout.n, "QLinearMatMul", "matrix element count");
     const double cost =
         static_cast<double>(matrix_size) * static_cast<double>(std::max<int64_t>(layout.k, 1));
-    ExecuteRanges(static_cast<int64_t>(work_items.size()), cost, [&](int64_t begin, int64_t end) {
-      thread_local std::vector<std::int32_t> accum;
-      accum.resize(static_cast<std::size_t>(matrix_size));
-      for (int64_t index = begin; index < end; ++index) {
-        const BatchWorkItem &item = work_items[static_cast<std::size_t>(index)];
-        IntegerMatMul2D(a_bytes + item.a_base, a_signed, b_bytes + item.b_base, b_signed,
-                        accum.data(), layout.m, layout.n, layout.k, a_zp, 1, b_zp, 1);
-        if (output.data_type == static_cast<int32_t>(DataType::INT8)) {
-          RequantizeInt32Buffer(accum.data(), output.AsInt8() + item.output_base, matrix_size,
-                                combined_scale, yz);
-        } else {
-          RequantizeInt32Buffer(accum.data(), output.AsUint8() + item.output_base, matrix_size,
-                                combined_scale, yz);
-        }
-      }
-    });
+    cpu_compute::ExecuteRanges(
+        static_cast<int64_t>(work_items.size()), cost, [&](int64_t begin, int64_t end) {
+          thread_local std::vector<std::int32_t> accum;
+          accum.resize(static_cast<std::size_t>(matrix_size));
+          for (int64_t index = begin; index < end; ++index) {
+            const BatchWorkItem &item = work_items[static_cast<std::size_t>(index)];
+            cpu_compute::IntegerMatMul2D(a_bytes + item.a_base, a_signed, b_bytes + item.b_base,
+                                         b_signed, accum.data(), layout.m, layout.n, layout.k, a_zp,
+                                         1, b_zp, 1);
+            if (output.data_type == static_cast<int32_t>(DataType::INT8)) {
+              RequantizeInt32Buffer(accum.data(), output.AsInt8() + item.output_base, matrix_size,
+                                    combined_scale, yz);
+            } else {
+              RequantizeInt32Buffer(accum.data(), output.AsUint8() + item.output_base, matrix_size,
+                                    combined_scale, yz);
+            }
+          }
+        });
     return output;
   }
 

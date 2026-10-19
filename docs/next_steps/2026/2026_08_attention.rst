@@ -434,7 +434,7 @@ up to 256 -- rather than ``head_dim``); it showed the same direction of effect
 in isolation, and was folded into the same kernel file alongside the dot
 product change.
 
-Alternating raw samples (AVX2-ceiling Release build, ``ONNX_LIGHT_CPU_HAVE_AVX2_FMA``,
+Alternating raw samples (AVX2-ceiling Release build, ``CPU_COMPUTE_HAVE_AVX2_FMA``,
 single participant, this sandbox's 4-core x86-64 host -- not the dedicated
 machine the final parity gate requires) for
 ``ComputeAttentionFloat32Streaming`` with ``batch=1``, ``heads=32``,

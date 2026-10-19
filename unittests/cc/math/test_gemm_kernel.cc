@@ -2,24 +2,24 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "onnx_light_cpu_compute/execution.h"
-#include "onnx_light_cpu_compute/math/gemm/amx/gemm_amx_tile.h"
-#include "onnx_light_cpu_compute/math/gemm/float8/float8_conversion.h"
-#include "onnx_light_cpu_compute/math/gemm/gemm_bf16_dispatch.h"
-#include "onnx_light_cpu_compute/math/gemm/gemm_common.h"
-#include "onnx_light_cpu_compute/math/gemm/gemm_plan.h"
-#include "onnx_light_cpu_compute/math/gemm/vnni/integer_gemm_vnni.h"
-#include "onnx_light_cpu_compute/math/half_conversion.h"
-#include "onnx_light_cpu_compute/math/math_kernels.h"
-#include "onnx_light_cpu_compute/simd_level.h"
+#include "cpu_compute/execution.h"
+#include "cpu_compute/math/gemm/amx/gemm_amx_tile.h"
+#include "cpu_compute/math/gemm/float8/float8_conversion.h"
+#include "cpu_compute/math/gemm/gemm_bf16_dispatch.h"
+#include "cpu_compute/math/gemm/gemm_common.h"
+#include "cpu_compute/math/gemm/gemm_plan.h"
+#include "cpu_compute/math/gemm/vnni/integer_gemm_vnni.h"
+#include "cpu_compute/math/half_conversion.h"
+#include "cpu_compute/math/math.h"
+#include "cpu_compute/simd_level.h"
 #include "unittests/cc/heap_allocation_tracker.h"
 #include "unittests/cc/scoped_x86_gradual_underflow.h"
 
-#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
-#include "onnx_light_cpu_compute/math/gemm/avx2/gemm_kernel_avx2_fma.h"
+#ifdef CPU_COMPUTE_HAVE_AVX2_FMA
+#include "cpu_compute/math/gemm/avx2/gemm_avx2_fma.h"
 #endif
-#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
-#include "onnx_light_cpu_compute/math/gemm/avx512/gemm_kernel_avx512.h"
+#ifdef CPU_COMPUTE_HAVE_AVX512
+#include "cpu_compute/math/gemm/avx512/gemm_avx512.h"
 #endif
 
 #include <gtest/gtest.h>
@@ -94,8 +94,8 @@ TEST(GemmFloat32, MatmulMatchesReference) {
   const auto expected = ReferenceGemm<float>(false, false, M, N, K, 1.0f, A, B, 0.0f, nullptr);
 
   std::vector<float> Y(M * N, -123.0f);
-  onnx_light_cpu::GemmFloat32(false, false, M, N, K, 1.0f, A.data(), B.data(), 0.0f, nullptr,
-                              Y.data());
+  cpu_compute::GemmFloat32(false, false, M, N, K, 1.0f, A.data(), B.data(), 0.0f, nullptr,
+                           Y.data());
   for (std::size_t i = 0; i < M * N; ++i) {
     EXPECT_NEAR(Y[i], expected[i], 1e-4f) << "i=" << i;
   }
@@ -110,8 +110,8 @@ TEST(GemmFloat32, AlphaBetaAndBias) {
   const auto expected = ReferenceGemm<float>(false, false, M, N, K, alpha, A, B, beta, &C);
 
   std::vector<float> Y(M * N, 0.0f);
-  onnx_light_cpu::GemmFloat32(false, false, M, N, K, alpha, A.data(), B.data(), beta, C.data(),
-                              Y.data());
+  cpu_compute::GemmFloat32(false, false, M, N, K, alpha, A.data(), B.data(), beta, C.data(),
+                           Y.data());
   for (std::size_t i = 0; i < M * N; ++i) {
     EXPECT_NEAR(Y[i], expected[i], 1e-3f) << "i=" << i;
   }
@@ -124,17 +124,17 @@ TEST(GemmFloat32, TypedEpilogueCombinesBroadcastResidualAndRelu) {
   const std::vector<float> bias = {1, 2, 3};
   const std::vector<float> residual = {-1, 2};
   std::vector<float> Y(M * N);
-  onnx_light_cpu::GemmEpilogue<float> epilogue;
+  cpu_compute::GemmEpilogue<float> epilogue;
   epilogue.bias = bias.data();
-  epilogue.bias_layout = onnx_light_cpu::GemmBroadcast::kRow;
+  epilogue.bias_layout = cpu_compute::GemmBroadcast::kRow;
   epilogue.beta = 2.0f;
   epilogue.residual = residual.data();
-  epilogue.residual_layout = onnx_light_cpu::GemmBroadcast::kColumn;
+  epilogue.residual_layout = cpu_compute::GemmBroadcast::kColumn;
   epilogue.residual_scale = 3.0f;
-  epilogue.activation = onnx_light_cpu::GemmActivation::kRelu;
+  epilogue.activation = cpu_compute::GemmActivation::kRelu;
 
-  onnx_light_cpu::GemmFloat32WithEpilogue(false, false, M, N, K, 1.0f, A.data(), B.data(), epilogue,
-                                          Y.data());
+  cpu_compute::GemmFloat32WithEpilogue(false, false, M, N, K, 1.0f, A.data(), B.data(), epilogue,
+                                       Y.data());
 
   const std::vector<float> expected = {0, 0, 0, 21, 24, 27};
   EXPECT_EQ(Y, expected);
@@ -148,19 +148,19 @@ TEST(GemmFloat32, TypedEpilogueCombinesPostOpsAndFloat16Conversion) {
   const std::vector<float> residual = {-1, 2};
   std::vector<float> workspace(M * N);
   std::vector<std::uint16_t> output(M * N);
-  onnx_light_cpu::GemmEpilogue<float> epilogue;
+  cpu_compute::GemmEpilogue<float> epilogue;
   epilogue.bias = bias.data();
-  epilogue.bias_layout = onnx_light_cpu::GemmBroadcast::kRow;
+  epilogue.bias_layout = cpu_compute::GemmBroadcast::kRow;
   epilogue.beta = 2.0f;
   epilogue.residual = residual.data();
-  epilogue.residual_layout = onnx_light_cpu::GemmBroadcast::kColumn;
+  epilogue.residual_layout = cpu_compute::GemmBroadcast::kColumn;
   epilogue.residual_scale = 3.0f;
-  epilogue.activation = onnx_light_cpu::GemmActivation::kRelu;
-  epilogue.output_conversion = onnx_light_cpu::GemmOutputConversion::kFloat16;
+  epilogue.activation = cpu_compute::GemmActivation::kRelu;
+  epilogue.output_conversion = cpu_compute::GemmOutputConversion::kFloat16;
   epilogue.converted_output = output.data();
 
-  onnx_light_cpu::GemmFloat32WithEpilogue(false, false, M, N, K, 1.0f, A.data(), B.data(), epilogue,
-                                          workspace.data());
+  cpu_compute::GemmFloat32WithEpilogue(false, false, M, N, K, 1.0f, A.data(), B.data(), epilogue,
+                                       workspace.data());
 
   const std::vector<std::uint16_t> expected = {0x0000, 0x0000, 0x0000, 0x4d40, 0x4e00, 0x4ec0};
   EXPECT_EQ(output, expected);
@@ -171,13 +171,13 @@ TEST(GemmFloat64, TypedEpilogueSupportsScalarBias) {
   const std::vector<double> B = {1, 0, 0, 1};
   const double bias = 2.5;
   std::vector<double> Y(4);
-  onnx_light_cpu::GemmEpilogue<double> epilogue;
+  cpu_compute::GemmEpilogue<double> epilogue;
   epilogue.bias = &bias;
-  epilogue.bias_layout = onnx_light_cpu::GemmBroadcast::kScalar;
+  epilogue.bias_layout = cpu_compute::GemmBroadcast::kScalar;
   epilogue.beta = 2.0;
 
-  onnx_light_cpu::GemmFloat64WithEpilogue(false, false, 2, 2, 2, 1.0, A.data(), B.data(), epilogue,
-                                          Y.data());
+  cpu_compute::GemmFloat64WithEpilogue(false, false, 2, 2, 2, 1.0, A.data(), B.data(), epilogue,
+                                       Y.data());
 
   const std::vector<double> expected = {6, 7, 8, 9};
   EXPECT_EQ(Y, expected);
@@ -191,8 +191,8 @@ TEST(GemmFloat32, UnitScalesWithBiasAcrossChunks) {
   const auto expected = ReferenceGemm<float>(false, false, M, N, K, 1.0f, A, B, 1.0f, &C);
   std::vector<float> Y(M * N, 0.0f);
 
-  onnx_light_cpu::GemmFloat32(false, false, M, N, K, 1.0f, A.data(), B.data(), 1.0f, C.data(),
-                              Y.data());
+  cpu_compute::GemmFloat32(false, false, M, N, K, 1.0f, A.data(), B.data(), 1.0f, C.data(),
+                           Y.data());
 
   for (std::size_t i = 0; i < M * N; ++i) {
     EXPECT_NEAR(Y[i], expected[i], 1e-2f) << "i=" << i;
@@ -211,8 +211,8 @@ TEST(GemmFloat32, TransposeVariants) {
       const auto expected =
           ReferenceGemm<float>(trans_a, trans_b, M, N, K, 1.0f, A, B, 0.0f, nullptr);
       std::vector<float> Y(M * N, 0.0f);
-      onnx_light_cpu::GemmFloat32(trans_a, trans_b, M, N, K, 1.0f, A.data(), B.data(), 0.0f,
-                                  nullptr, Y.data());
+      cpu_compute::GemmFloat32(trans_a, trans_b, M, N, K, 1.0f, A.data(), B.data(), 0.0f, nullptr,
+                               Y.data());
       for (std::size_t i = 0; i < M * N; ++i) {
         EXPECT_NEAR(Y[i], expected[i], 2e-3f)
             << "trans_a=" << trans_a << " trans_b=" << trans_b << " i=" << i;
@@ -229,8 +229,8 @@ TEST(GemmFloat32, SpecializedRowVariantsMatchReference) {
     const auto expected = ReferenceGemm<float>(false, false, M, N, K, 1.0f, A, B, 0.0f, nullptr);
     std::vector<float> Y(M * N, 0.0f);
 
-    onnx_light_cpu::GemmFloat32(false, false, M, N, K, 1.0f, A.data(), B.data(), 0.0f, nullptr,
-                                Y.data());
+    cpu_compute::GemmFloat32(false, false, M, N, K, 1.0f, A.data(), B.data(), 0.0f, nullptr,
+                             Y.data());
 
     for (std::size_t i = 0; i < M * N; ++i) {
       EXPECT_NEAR(Y[i], expected[i], 2e-3f) << "M=" << M << " i=" << i;
@@ -246,8 +246,8 @@ TEST(GemmFloat32, BetaZeroIgnoresBias) {
   std::vector<float> C(M * N, std::numeric_limits<float>::quiet_NaN());
   const auto expected = ReferenceGemm<float>(false, false, M, N, K, 1.0f, A, B, 0.0f, nullptr);
   std::vector<float> Y(M * N, 0.0f);
-  onnx_light_cpu::GemmFloat32(false, false, M, N, K, 1.0f, A.data(), B.data(), 0.0f, C.data(),
-                              Y.data());
+  cpu_compute::GemmFloat32(false, false, M, N, K, 1.0f, A.data(), B.data(), 0.0f, C.data(),
+                           Y.data());
   for (std::size_t i = 0; i < M * N; ++i) {
     EXPECT_NEAR(Y[i], expected[i], 1e-4f) << "i=" << i;
   }
@@ -259,8 +259,8 @@ TEST(GemmFloat32, LargeMatrixParallel) {
   const auto B = RandomVector(K * N, 12);
   const auto expected = ReferenceGemm<float>(false, false, M, N, K, 1.0f, A, B, 0.0f, nullptr);
   std::vector<float> Y(M * N, 0.0f);
-  onnx_light_cpu::GemmFloat32(false, false, M, N, K, 1.0f, A.data(), B.data(), 0.0f, nullptr,
-                              Y.data());
+  cpu_compute::GemmFloat32(false, false, M, N, K, 1.0f, A.data(), B.data(), 0.0f, nullptr,
+                           Y.data());
   for (std::size_t i = 0; i < M * N; ++i) {
     EXPECT_NEAR(Y[i], expected[i], 1e-2f) << "i=" << i;
   }
@@ -277,8 +277,8 @@ TEST(GemmFloat32, MultiPanelExceedsTiles) {
   const auto C = RandomVector(M * N, 23);
   const auto expected = ReferenceGemm<float>(false, false, M, N, K, 0.75f, A, B, 1.5f, &C);
   std::vector<float> Y(M * N, 0.0f);
-  onnx_light_cpu::GemmFloat32(false, false, M, N, K, 0.75f, A.data(), B.data(), 1.5f, C.data(),
-                              Y.data());
+  cpu_compute::GemmFloat32(false, false, M, N, K, 0.75f, A.data(), B.data(), 1.5f, C.data(),
+                           Y.data());
   for (std::size_t i = 0; i < M * N; ++i) {
     EXPECT_NEAR(Y[i], expected[i], 1e-2f) << "i=" << i;
   }
@@ -291,9 +291,9 @@ TEST(GemmFloat32, PlannedGridCoversRowAndColumnPanels) {
   const auto C = RandomVector(M * N, 33);
   const auto expected = ReferenceGemm<float>(false, true, M, N, K, 0.75f, A, B, 1.25f, &C);
   std::vector<float> Y(M * N);
-  const onnx_light_cpu::GemmBlocking blocking{32, 48, 64, 4, 16};
+  const cpu_compute::GemmBlocking blocking{32, 48, 64, 4, 16};
 
-  onnx_light_cpu::detail::GemmFloat32Planned<onnx_light_cpu::GemmAlgorithm::kGeneral>(
+  cpu_compute::detail::GemmFloat32Planned<cpu_compute::GemmAlgorithm::kGeneral>(
       false, true, M, N, K, 0.75f, A.data(), B.data(), 1.25f, C.data(), Y.data(), &blocking);
 
   for (std::size_t i = 0; i < M * N; ++i) {
@@ -310,17 +310,17 @@ TEST(GemmFloat32, FusedPackingMatchesTransposedBAndBias) {
   const auto C = RandomVector(M * N, 36);
   const auto expected = ReferenceGemm<float>(false, true, M, N, K, 0.75f, A, B, 1.25f, &C);
   std::vector<float> Y(M * N);
-  const onnx_light_cpu::GemmBlocking blocking{6, 1024, 64, 6, 16};
-  onnx_light_cpu::ExecutionExecutorView executor{
+  const cpu_compute::GemmBlocking blocking{6, 1024, 64, 6, 16};
+  cpu_compute::ExecutionExecutorView executor{
       nullptr, 32,
-      [](void *, int64_t num_blocks, void *task_context, onnx_light_cpu::ExecutionBlockFn task) {
+      [](void *, int64_t num_blocks, void *task_context, cpu_compute::ExecutionBlockFn task) {
         for (int64_t block = 0; block < num_blocks; ++block) {
           task(task_context, block);
         }
       }};
-  onnx_light_cpu::ExecutionExecutorScope scope(&executor);
+  cpu_compute::ExecutionExecutorScope scope(&executor);
 
-  onnx_light_cpu::detail::GemmFloat32Planned<onnx_light_cpu::GemmAlgorithm::kGeneral>(
+  cpu_compute::detail::GemmFloat32Planned<cpu_compute::GemmAlgorithm::kGeneral>(
       false, true, M, N, K, 0.75f, A.data(), B.data(), 1.25f, C.data(), Y.data(), &blocking);
 
   for (std::size_t i = 0; i < M * N; ++i) {
@@ -338,9 +338,9 @@ TEST(GemmFloat32, PlannedSixRowRegisterTileMatchesReference) {
   const auto C = RandomVector(M * N, 63);
   const auto expected = ReferenceGemm<float>(false, false, M, N, K, 0.75f, A, B, 1.25f, &C);
   std::vector<float> Y(M * N);
-  const onnx_light_cpu::GemmBlocking blocking{24, 48, 64, 6, 16};
+  const cpu_compute::GemmBlocking blocking{24, 48, 64, 6, 16};
 
-  onnx_light_cpu::detail::GemmFloat32Planned<onnx_light_cpu::GemmAlgorithm::kGeneral>(
+  cpu_compute::detail::GemmFloat32Planned<cpu_compute::GemmAlgorithm::kGeneral>(
       false, false, M, N, K, 0.75f, A.data(), B.data(), 1.25f, C.data(), Y.data(), &blocking);
 
   for (std::size_t i = 0; i < M * N; ++i) {
@@ -355,9 +355,9 @@ TEST(GemmFloat32, PlannedTwentyFourRowRegisterTileMatchesReference) {
   const auto C = RandomVector(M * N, 66);
   const auto expected = ReferenceGemm<float>(false, false, M, N, K, 0.75f, A, B, 1.25f, &C);
   std::vector<float> Y(M * N);
-  const onnx_light_cpu::GemmBlocking blocking{48, 48, 64, 24, 16};
+  const cpu_compute::GemmBlocking blocking{48, 48, 64, 24, 16};
 
-  onnx_light_cpu::detail::GemmFloat32Planned<onnx_light_cpu::GemmAlgorithm::kGeneral>(
+  cpu_compute::detail::GemmFloat32Planned<cpu_compute::GemmAlgorithm::kGeneral>(
       false, false, M, N, K, 0.75f, A.data(), B.data(), 1.25f, C.data(), Y.data(), &blocking);
 
   for (std::size_t i = 0; i < M * N; ++i) {
@@ -376,9 +376,9 @@ TEST(GemmFloat32, PlannedColumnMicroPanelsCoverPartialSlices) {
   const auto C = RandomVector(M * N, 73);
   const auto expected = ReferenceGemm<float>(false, true, M, N, K, 0.75f, A, B, 1.25f, &C);
   std::vector<float> Y(M * N);
-  const onnx_light_cpu::GemmBlocking blocking{24, 96, 32, 6, 16};
+  const cpu_compute::GemmBlocking blocking{24, 96, 32, 6, 16};
 
-  onnx_light_cpu::detail::GemmFloat32Planned<onnx_light_cpu::GemmAlgorithm::kGeneral>(
+  cpu_compute::detail::GemmFloat32Planned<cpu_compute::GemmAlgorithm::kGeneral>(
       false, true, M, N, K, 0.75f, A.data(), B.data(), 1.25f, C.data(), Y.data(), &blocking);
 
   for (std::size_t i = 0; i < M * N; ++i) {
@@ -399,8 +399,8 @@ TEST(GemmFloat32, LargeKSpansMultipleChunks) {
   const float alpha = 1.25f, beta = 0.5f;
   const auto expected = ReferenceGemm<float>(false, false, M, N, K, alpha, A, B, beta, &C);
   std::vector<float> Y(M * N, 0.0f);
-  onnx_light_cpu::GemmFloat32(false, false, M, N, K, alpha, A.data(), B.data(), beta, C.data(),
-                              Y.data());
+  cpu_compute::GemmFloat32(false, false, M, N, K, alpha, A.data(), B.data(), beta, C.data(),
+                           Y.data());
   for (std::size_t i = 0; i < M * N; ++i) {
     EXPECT_NEAR(Y[i], expected[i], 2e-2f) << "i=" << i;
   }
@@ -414,8 +414,8 @@ TEST(GemmFloat32, SplitKMatchesReference) {
   const auto expected = ReferenceGemm<float>(false, false, M, N, K, 0.75f, A, B, 0.5f, &C);
   std::vector<float> Y(M * N, 0.0f);
 
-  onnx_light_cpu::GemmFloat32(false, false, M, N, K, 0.75f, A.data(), B.data(), 0.5f, C.data(),
-                              Y.data());
+  cpu_compute::GemmFloat32(false, false, M, N, K, 0.75f, A.data(), B.data(), 0.5f, C.data(),
+                           Y.data());
 
   for (std::size_t i = 0; i < M * N; ++i) {
     EXPECT_NEAR(Y[i], expected[i], 5e-3f) << "i=" << i;
@@ -429,8 +429,7 @@ TEST(GemmFloat32, SplitKSupportsTransposedInputs) {
   const auto expected = ReferenceGemm<float>(true, true, M, N, K, 1.0f, A, B, 0.0f, nullptr);
   std::vector<float> Y(M * N);
 
-  onnx_light_cpu::GemmFloat32(true, true, M, N, K, 1.0f, A.data(), B.data(), 0.0f, nullptr,
-                              Y.data());
+  cpu_compute::GemmFloat32(true, true, M, N, K, 1.0f, A.data(), B.data(), 0.0f, nullptr, Y.data());
 
   for (std::size_t i = 0; i < M * N; ++i) {
     EXPECT_NEAR(Y[i], expected[i], 1e-2f) << "i=" << i;
@@ -446,8 +445,8 @@ TEST(GemmFloat32, SkinnyMWideNMultipleColumnPanels) {
   const auto B = RandomVector(K * N, 45);
   const auto expected = ReferenceGemm<float>(false, false, M, N, K, 1.0f, A, B, 0.0f, nullptr);
   std::vector<float> Y(M * N, 0.0f);
-  onnx_light_cpu::GemmFloat32(false, false, M, N, K, 1.0f, A.data(), B.data(), 0.0f, nullptr,
-                              Y.data());
+  cpu_compute::GemmFloat32(false, false, M, N, K, 1.0f, A.data(), B.data(), 0.0f, nullptr,
+                           Y.data());
   for (std::size_t i = 0; i < M * N; ++i) {
     EXPECT_NEAR(Y[i], expected[i], 1e-2f) << "i=" << i;
   }
@@ -462,8 +461,8 @@ TEST(GemmFloat32, SkinnyMSingleRowRegisterPanelsMatchReference) {
   const auto C = RandomVector(M * N, 48);
   const auto expected = ReferenceGemm<float>(false, false, M, N, K, 0.75f, A, B, 1.25f, &C);
   std::vector<float> Y(M * N, 0.0f);
-  onnx_light_cpu::GemmFloat32(false, false, M, N, K, 0.75f, A.data(), B.data(), 1.25f, C.data(),
-                              Y.data());
+  cpu_compute::GemmFloat32(false, false, M, N, K, 0.75f, A.data(), B.data(), 1.25f, C.data(),
+                           Y.data());
   for (std::size_t i = 0; i < M * N; ++i) {
     EXPECT_NEAR(Y[i], expected[i], 1e-2f) << "i=" << i;
   }
@@ -482,8 +481,8 @@ TEST(GemmFloat32, SkinnyMSingleRowDepthAndColumnTails) {
           const auto expected =
               ReferenceGemm<float>(trans_a, false, 1, N, K, -0.75f, a, b, 1.25f, &c);
           auto y = c;
-          onnx_light_cpu::GemmFloat32(trans_a, false, 1, N, K, -0.75f, a.data(), b.data(), 1.25f,
-                                      alias_bias ? y.data() : c.data(), y.data());
+          cpu_compute::GemmFloat32(trans_a, false, 1, N, K, -0.75f, a.data(), b.data(), 1.25f,
+                                   alias_bias ? y.data() : c.data(), y.data());
           for (std::size_t n = 0; n < N; ++n) {
             EXPECT_NEAR(y[n], expected[n], 2e-4f) << n;
           }
@@ -500,8 +499,8 @@ TEST(GemmFloat32, SkinnyMSingleRowSpecialValuesAndEmptyDepth) {
   b[64 * N + 1] = -std::numeric_limits<float>::infinity();
   b[128 * N + 2] = std::numeric_limits<float>::quiet_NaN();
   for (const float alpha : {1.0f, 0.0f}) {
-    onnx_light_cpu::GemmFloat32(false, false, 1, N, K, alpha, a.data(), b.data(), 0.0f, nullptr,
-                                y.data());
+    cpu_compute::GemmFloat32(false, false, 1, N, K, alpha, a.data(), b.data(), 0.0f, nullptr,
+                             y.data());
     if (alpha == 0.0f) {
       EXPECT_TRUE(std::isnan(y[0]));
       EXPECT_TRUE(std::isnan(y[1]));
@@ -512,8 +511,7 @@ TEST(GemmFloat32, SkinnyMSingleRowSpecialValuesAndEmptyDepth) {
     EXPECT_TRUE(std::isnan(y[2]));
     EXPECT_EQ(y.back(), alpha * K);
   }
-  onnx_light_cpu::GemmFloat32(false, false, 1, N, 0, 1.0f, nullptr, nullptr, 0.0f, nullptr,
-                              y.data());
+  cpu_compute::GemmFloat32(false, false, 1, N, 0, 1.0f, nullptr, nullptr, 0.0f, nullptr, y.data());
   for (const float value : y) {
     EXPECT_EQ(value, 0.0f);
   }
@@ -532,8 +530,8 @@ TEST(GemmFloat32, SkinnyNColumnVectorLongKTail) {
       const auto C = RandomVector(M * N, 63);
       const auto expected = ReferenceGemm<float>(trans_a, trans_b, M, N, K, 0.75f, A, B, 1.5f, &C);
       std::vector<float> Y(M * N, 0.0f);
-      onnx_light_cpu::GemmFloat32(trans_a, trans_b, M, N, K, 0.75f, A.data(), B.data(), 1.5f,
-                                  C.data(), Y.data());
+      cpu_compute::GemmFloat32(trans_a, trans_b, M, N, K, 0.75f, A.data(), B.data(), 1.5f, C.data(),
+                               Y.data());
       for (std::size_t i = 0; i < M * N; ++i) {
         EXPECT_NEAR(Y[i], expected[i], 1e-2f)
             << "trans_a=" << trans_a << " trans_b=" << trans_b << " i=" << i;
@@ -546,8 +544,7 @@ TEST(GemmFloat32, EmptyKGivesBiasOnly) {
   const std::size_t M = 3, N = 4, K = 0;
   const auto C = RandomVector(M * N, 8);
   std::vector<float> Y(M * N, 7.0f);
-  onnx_light_cpu::GemmFloat32(false, false, M, N, K, 1.0f, nullptr, nullptr, 3.0f, C.data(),
-                              Y.data());
+  cpu_compute::GemmFloat32(false, false, M, N, K, 1.0f, nullptr, nullptr, 3.0f, C.data(), Y.data());
   for (std::size_t i = 0; i < M * N; ++i) {
     EXPECT_NEAR(Y[i], 3.0f * C[i], 1e-5f) << "i=" << i;
   }
@@ -565,8 +562,8 @@ TEST(GemmFloat32, SkinnyNStridedReductionTailsAndFallbacks) {
           const auto expected =
               ReferenceGemm<float>(trans_a, trans_b, M, N, K, 0.75f, A, B, -0.5f, &C);
           auto Y = C;
-          onnx_light_cpu::GemmFloat32(trans_a, trans_b, M, N, K, 0.75f, A.data(), B.data(), -0.5f,
-                                      Y.data(), Y.data());
+          cpu_compute::GemmFloat32(trans_a, trans_b, M, N, K, 0.75f, A.data(), B.data(), -0.5f,
+                                   Y.data(), Y.data());
           for (std::size_t i = 0; i < Y.size(); ++i) {
             EXPECT_NEAR(Y[i], expected[i], 1e-4f)
                 << "N=" << N << " K=" << K << " trans_a=" << trans_a << " trans_b=" << trans_b;
@@ -577,9 +574,9 @@ TEST(GemmFloat32, SkinnyNStridedReductionTailsAndFallbacks) {
   }
 }
 
-#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
+#ifdef CPU_COMPUTE_HAVE_AVX512
 TEST(GemmFloat32, Avx512SkinnyMRegisterPanelsMatchReference) {
-  if (onnx_light_cpu::DetectSimdLevel() < onnx_light_cpu::SimdLevel::kAVX512) {
+  if (cpu_compute::DetectSimdLevel() < cpu_compute::SimdLevel::kAVX512) {
     GTEST_SKIP() << "AVX-512 is required";
   }
   constexpr std::size_t K = 67;
@@ -590,11 +587,11 @@ TEST(GemmFloat32, Avx512SkinnyMRegisterPanelsMatchReference) {
     const auto expected = ReferenceGemm<float>(false, false, 1, N, K, 0.75f, A, B, -0.5f, &C);
     std::vector<float> Y(N);
     if (N == 64) {
-      onnx_light_cpu::GemmSkinnyM1Kernel64_AVX512_F32(K, 0.75f, A.data(), B.data(), N, -0.5f,
-                                                      C.data(), Y.data(), 0);
+      cpu_compute::GemmSkinnyM1Routine64_AVX512_F32(K, 0.75f, A.data(), B.data(), N, -0.5f,
+                                                    C.data(), Y.data(), 0);
     } else {
-      onnx_light_cpu::GemmSkinnyM1Kernel128_AVX512_F32(K, 0.75f, A.data(), B.data(), N, -0.5f,
-                                                       C.data(), Y.data(), 0);
+      cpu_compute::GemmSkinnyM1Routine128_AVX512_F32(K, 0.75f, A.data(), B.data(), N, -0.5f,
+                                                     C.data(), Y.data(), 0);
     }
     for (std::size_t i = 0; i < N; ++i) {
       EXPECT_NEAR(Y[i], expected[i], 1e-4f) << "N=" << N << " i=" << i;
@@ -603,7 +600,7 @@ TEST(GemmFloat32, Avx512SkinnyMRegisterPanelsMatchReference) {
 }
 
 TEST(GemmFloat32, Avx512SkinnyNColumnRangeMatchesReference) {
-  if (onnx_light_cpu::DetectSimdLevel() < onnx_light_cpu::SimdLevel::kAVX512) {
+  if (cpu_compute::DetectSimdLevel() < cpu_compute::SimdLevel::kAVX512) {
     GTEST_SKIP() << "AVX-512 is required";
   }
   constexpr std::size_t M = 5;
@@ -613,8 +610,8 @@ TEST(GemmFloat32, Avx512SkinnyNColumnRangeMatchesReference) {
   const auto C = RandomVector(M, 81);
   const auto expected = ReferenceGemm<float>(false, false, M, 1, K, 0.75f, A, B, -0.5f, &C);
   std::vector<float> Y(M, 123.0f);
-  onnx_light_cpu::GemmSkinnyN1Range_AVX512_F32(K, 0.75f, A.data(), B.data(), -0.5f, C.data(),
-                                               Y.data(), 1, 4);
+  cpu_compute::GemmSkinnyN1Range_AVX512_F32(K, 0.75f, A.data(), B.data(), -0.5f, C.data(), Y.data(),
+                                            1, 4);
   EXPECT_EQ(Y.front(), 123.0f);
   EXPECT_EQ(Y.back(), 123.0f);
   for (std::size_t i = 1; i < 4; ++i) {
@@ -623,10 +620,10 @@ TEST(GemmFloat32, Avx512SkinnyNColumnRangeMatchesReference) {
 }
 #endif
 
-#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
+#ifdef CPU_COMPUTE_HAVE_AVX2_FMA
 TEST(GemmFloat32, Avx2SkinnyNColumnRangeTailsAndBias) {
-  if (onnx_light_cpu::DetectSimdLevel() < onnx_light_cpu::SimdLevel::kAVX2 ||
-      !onnx_light_cpu::CpuSupportsFma()) {
+  if (cpu_compute::DetectSimdLevel() < cpu_compute::SimdLevel::kAVX2 ||
+      !cpu_compute::CpuSupportsFma()) {
     GTEST_SKIP() << "AVX2/FMA is required";
   }
   constexpr std::size_t M = 5;
@@ -636,8 +633,8 @@ TEST(GemmFloat32, Avx2SkinnyNColumnRangeTailsAndBias) {
     const auto C = RandomVector(M, static_cast<std::uint32_t>(K + 200));
     const auto expected = ReferenceGemm<float>(false, false, M, 1, K, 0.75f, A, B, -0.5f, &C);
     std::vector<float> Y(M, 123.0f);
-    onnx_light_cpu::GemmSkinnyN1Range_AVX2_F32(K, 0.75f, A.data(), B.data(), -0.5f, C.data(),
-                                               Y.data(), 1, 4);
+    cpu_compute::GemmSkinnyN1Range_AVX2_F32(K, 0.75f, A.data(), B.data(), -0.5f, C.data(), Y.data(),
+                                            1, 4);
     EXPECT_EQ(Y.front(), 123.0f);
     EXPECT_EQ(Y.back(), 123.0f);
     for (std::size_t i = 1; i < 4; ++i) {
@@ -647,8 +644,8 @@ TEST(GemmFloat32, Avx2SkinnyNColumnRangeTailsAndBias) {
 }
 
 TEST(GemmFloat32, Avx2SkinnyNRangeAndSpecialValues) {
-  if (onnx_light_cpu::DetectSimdLevel() < onnx_light_cpu::SimdLevel::kAVX2 ||
-      !onnx_light_cpu::CpuSupportsFma()) {
+  if (cpu_compute::DetectSimdLevel() < cpu_compute::SimdLevel::kAVX2 ||
+      !cpu_compute::CpuSupportsFma()) {
     GTEST_SKIP() << "AVX2/FMA is required";
   }
   constexpr std::size_t M = 4, K = 49;
@@ -660,8 +657,8 @@ TEST(GemmFloat32, Avx2SkinnyNRangeAndSpecialValues) {
     const auto expected = ReferenceGemm<float>(false, false, M, N, K, 0.5f, A, B, 0.0f, nullptr);
     std::vector<float> Y(M * N, 123.0f);
     const std::vector<float> C(M * N, std::numeric_limits<float>::quiet_NaN());
-    onnx_light_cpu::GemmSkinnyNRange_AVX2(N, K, 0.5f, A.data(), B.data(), 0.0f, C.data(), Y.data(),
-                                          1, 3);
+    cpu_compute::GemmSkinnyNRange_AVX2(N, K, 0.5f, A.data(), B.data(), 0.0f, C.data(), Y.data(), 1,
+                                       3);
     for (std::size_t i = 0; i < Y.size(); ++i) {
       if (i < N || i >= 3 * N) {
         EXPECT_EQ(Y[i], 123.0f);
@@ -677,11 +674,11 @@ TEST(GemmFloat32, Avx2SkinnyNRangeAndSpecialValues) {
 }
 
 TEST(GemmFloat64, Avx2MaskedTailsAllRowsAndAccumulationModes) {
-  if (onnx_light_cpu::DetectSimdLevel() < onnx_light_cpu::SimdLevel::kAVX2 ||
-      !onnx_light_cpu::CpuSupportsFma()) {
+  if (cpu_compute::DetectSimdLevel() < cpu_compute::SimdLevel::kAVX2 ||
+      !cpu_compute::CpuSupportsFma()) {
     GTEST_SKIP() << "AVX2/FMA is required";
   }
-  using onnx_light_cpu::GemmAccumMode;
+  using cpu_compute::GemmAccumMode;
   for (std::size_t M = 1; M <= 6; ++M) {
     for (std::size_t N = 1; N <= 15; ++N) {
       for (std::size_t K : {0, 1, 7, 17}) {
@@ -690,11 +687,11 @@ TEST(GemmFloat64, Avx2MaskedTailsAllRowsAndAccumulationModes) {
         const auto B = RandomVectorD(K * stride, 77);
         const auto C = RandomVectorD(M * stride, 78);
         for (auto mode :
-             {GemmAccumMode::kInitZero, GemmAccumMode::kInitBias, GemmAccumMode::kAccumulate}) {
+             {cpu_compute::GemmAccumMode::kInitZero, cpu_compute::GemmAccumMode::kInitBias,
+              cpu_compute::GemmAccumMode::kAccumulate}) {
           std::vector<double> Y(M * stride, 123.0);
-          onnx_light_cpu::GemmMicroKernel_AVX2FMA_F64(M, N, K, 0.75, -0.5, B.data(), stride,
-                                                      C.data(), stride, Y.data(), stride, 1, mode,
-                                                      A.data());
+          cpu_compute::GemmMicroTile_AVX2FMA_F64(M, N, K, 0.75, -0.5, B.data(), stride, C.data(),
+                                                 stride, Y.data(), stride, 1, mode, A.data());
           for (std::size_t m = 0; m < M; ++m) {
             EXPECT_EQ(Y[m * stride], 123.0);
             EXPECT_EQ(Y[m * stride + N + 1], 123.0);
@@ -704,9 +701,9 @@ TEST(GemmFloat64, Avx2MaskedTailsAllRowsAndAccumulationModes) {
                 expected += A[m * K + k] * B[k * stride + n + 1];
               }
               expected *= 0.75;
-              if (mode == GemmAccumMode::kInitBias) {
+              if (mode == cpu_compute::GemmAccumMode::kInitBias) {
                 expected -= 0.5 * C[m * stride + n + 1];
-              } else if (mode == GemmAccumMode::kAccumulate) {
+              } else if (mode == cpu_compute::GemmAccumMode::kAccumulate) {
                 expected += 123.0;
               }
               EXPECT_NEAR(Y[m * stride + n + 1], expected, 1e-11)
@@ -724,10 +721,10 @@ TEST(GemmFloat32, EmptyMOrNReturnsWithoutWriting) {
   // M == 0 and N == 0 both hit the early return in GemmImpl: the output buffer
   // must be left untouched (here it is empty, so the call must simply not crash).
   std::vector<float> Y;
-  onnx_light_cpu::GemmFloat32(false, false, /*M=*/0, /*N=*/4, /*K=*/3, 1.0f, nullptr, nullptr, 0.0f,
-                              nullptr, Y.data());
-  onnx_light_cpu::GemmFloat32(false, false, /*M=*/4, /*N=*/0, /*K=*/3, 1.0f, nullptr, nullptr, 0.0f,
-                              nullptr, Y.data());
+  cpu_compute::GemmFloat32(false, false, /*M=*/0, /*N=*/4, /*K=*/3, 1.0f, nullptr, nullptr, 0.0f,
+                           nullptr, Y.data());
+  cpu_compute::GemmFloat32(false, false, /*M=*/4, /*N=*/0, /*K=*/3, 1.0f, nullptr, nullptr, 0.0f,
+                           nullptr, Y.data());
   SUCCEED();
 }
 
@@ -739,16 +736,16 @@ TEST(GemmFloat32, SingleRowColumnTail) {
   const auto B = RandomVector(K * N, 32);
   const auto expected = ReferenceGemm<float>(false, false, M, N, K, 1.0f, A, B, 0.0f, nullptr);
   std::vector<float> Y(M * N, 0.0f);
-  onnx_light_cpu::GemmFloat32(false, false, M, N, K, 1.0f, A.data(), B.data(), 0.0f, nullptr,
-                              Y.data());
+  cpu_compute::GemmFloat32(false, false, M, N, K, 1.0f, A.data(), B.data(), 0.0f, nullptr,
+                           Y.data());
   for (std::size_t i = 0; i < M * N; ++i) {
     EXPECT_NEAR(Y[i], expected[i], 1e-4f) << "i=" << i;
   }
 }
 
 TEST(GemmFloat32, Avx2ColumnTailsMatchReference) {
-  if (onnx_light_cpu::DetectSimdLevel() != onnx_light_cpu::SimdLevel::kAVX2 ||
-      !onnx_light_cpu::CpuSupportsFma()) {
+  if (cpu_compute::DetectSimdLevel() != cpu_compute::SimdLevel::kAVX2 ||
+      !cpu_compute::CpuSupportsFma()) {
     GTEST_SKIP() << "masked column tails are specific to AVX2/FMA";
   }
 
@@ -756,7 +753,7 @@ TEST(GemmFloat32, Avx2ColumnTailsMatchReference) {
   constexpr std::size_t K = 600;
   const float alpha = 0.75f;
   const float beta = 1.25f;
-  const onnx_light_cpu::GemmBlocking blocking{6, 16, 256, 6, 16};
+  const cpu_compute::GemmBlocking blocking{6, 16, 256, 6, 16};
 
   for (std::size_t tail = 1; tail <= 7; ++tail) {
     const std::size_t N = 8 + tail;
@@ -766,7 +763,7 @@ TEST(GemmFloat32, Avx2ColumnTailsMatchReference) {
     const auto expected = ReferenceGemm<float>(false, false, M, N, K, alpha, A, B, beta, &C);
     std::vector<float> Y(M * N);
 
-    onnx_light_cpu::detail::GemmFloat32Planned<onnx_light_cpu::GemmAlgorithm::kGeneral>(
+    cpu_compute::detail::GemmFloat32Planned<cpu_compute::GemmAlgorithm::kGeneral>(
         false, false, M, N, K, alpha, A.data(), B.data(), beta, C.data(), Y.data(), &blocking);
 
     for (std::size_t i = 0; i < M * N; ++i) {
@@ -784,7 +781,7 @@ TEST(GemmFloat32, Avx2ColumnTailsMatchReference) {
     const auto column_bias_expected =
         ReferenceGemm<float>(false, false, M, N, column_bias_k, alpha, column_bias_a, column_bias_b,
                              beta, &expanded_bias);
-    onnx_light_cpu::detail::GemmFloat32PlannedColumnBias(
+    cpu_compute::detail::GemmFloat32PlannedColumnBias(
         M, N, column_bias_k, alpha, column_bias_a.data(), column_bias_b.data(), beta,
         column_bias.data(), Y.data(), &blocking);
 
@@ -804,8 +801,8 @@ TEST(GemmFloat64, MatmulMatchesReference) {
   const auto expected = ReferenceGemm<double>(true, false, M, N, K, alpha, A, B, beta, &C);
   std::vector<double> Y(M * N, 0.0);
   // trans_a: A stored as K x M.
-  onnx_light_cpu::GemmFloat64(true, false, M, N, K, alpha, A.data(), B.data(), beta, C.data(),
-                              Y.data());
+  cpu_compute::GemmFloat64(true, false, M, N, K, alpha, A.data(), B.data(), beta, C.data(),
+                           Y.data());
   for (std::size_t i = 0; i < M * N; ++i) {
     EXPECT_NEAR(Y[i], expected[i], 1e-9) << "i=" << i;
   }
@@ -826,8 +823,8 @@ TEST(GemmFloat64, TransposeVariants) {
       const auto expected =
           ReferenceGemm<double>(trans_a, trans_b, M, N, K, 1.0, A, B, 0.0, nullptr);
       std::vector<double> Y(M * N, 0.0);
-      onnx_light_cpu::GemmFloat64(trans_a, trans_b, M, N, K, 1.0, A.data(), B.data(), 0.0, nullptr,
-                                  Y.data());
+      cpu_compute::GemmFloat64(trans_a, trans_b, M, N, K, 1.0, A.data(), B.data(), 0.0, nullptr,
+                               Y.data());
       for (std::size_t i = 0; i < M * N; ++i) {
         EXPECT_NEAR(Y[i], expected[i], 1e-9)
             << "trans_a=" << trans_a << " trans_b=" << trans_b << " i=" << i;
@@ -844,8 +841,8 @@ TEST(GemmFloat64, SpecializedRowVariantsMatchReference) {
     const auto expected = ReferenceGemm<double>(false, false, M, N, K, 1.0, A, B, 0.0, nullptr);
     std::vector<double> Y(M * N, 0.0);
 
-    onnx_light_cpu::GemmFloat64(false, false, M, N, K, 1.0, A.data(), B.data(), 0.0, nullptr,
-                                Y.data());
+    cpu_compute::GemmFloat64(false, false, M, N, K, 1.0, A.data(), B.data(), 0.0, nullptr,
+                             Y.data());
 
     for (std::size_t i = 0; i < M * N; ++i) {
       EXPECT_NEAR(Y[i], expected[i], 1e-9) << "M=" << M << " i=" << i;
@@ -863,8 +860,8 @@ TEST(GemmFloat64, LargeKSpansMultipleChunks) {
   const double alpha = 1.25, beta = 0.5;
   const auto expected = ReferenceGemm<double>(false, false, M, N, K, alpha, A, B, beta, &C);
   std::vector<double> Y(M * N, 0.0);
-  onnx_light_cpu::GemmFloat64(false, false, M, N, K, alpha, A.data(), B.data(), beta, C.data(),
-                              Y.data());
+  cpu_compute::GemmFloat64(false, false, M, N, K, alpha, A.data(), B.data(), beta, C.data(),
+                           Y.data());
   for (std::size_t i = 0; i < M * N; ++i) {
     EXPECT_NEAR(Y[i], expected[i], 1e-9) << "i=" << i;
   }
@@ -880,8 +877,8 @@ TEST(GemmFloat64, LargeKSquareOutputMatchesReference) {
     const auto expected = ReferenceGemm<double>(false, false, M, N, K, 0.75, A, B, 1.25, &C);
     std::vector<double> Y(M * N);
 
-    onnx_light_cpu::GemmFloat64(false, false, M, N, K, 0.75, A.data(), B.data(), 1.25, C.data(),
-                                Y.data());
+    cpu_compute::GemmFloat64(false, false, M, N, K, 0.75, A.data(), B.data(), 1.25, C.data(),
+                             Y.data());
 
     for (std::size_t i = 0; i < M * N; ++i) {
       EXPECT_NEAR(Y[i], expected[i], 1e-9) << "K=" << K << " i=" << i;
@@ -896,9 +893,9 @@ TEST(GemmFloat64, PlannedSixRowRegisterTileMatchesReference) {
   const auto C = RandomVectorD(M * N, 78);
   const auto expected = ReferenceGemm<double>(false, false, M, N, K, 0.75, A, B, 1.25, &C);
   std::vector<double> Y(M * N);
-  const onnx_light_cpu::GemmBlocking blocking{24, 48, 64, 6, 8};
+  const cpu_compute::GemmBlocking blocking{24, 48, 64, 6, 8};
 
-  onnx_light_cpu::detail::GemmFloat64Planned<onnx_light_cpu::GemmAlgorithm::kGeneral>(
+  cpu_compute::detail::GemmFloat64Planned<cpu_compute::GemmAlgorithm::kGeneral>(
       false, false, M, N, K, 0.75, A.data(), B.data(), 1.25, C.data(), Y.data(), &blocking);
 
   for (std::size_t i = 0; i < M * N; ++i) {
@@ -914,8 +911,7 @@ TEST(GemmFloat64, SplitKSupportsTransposedBAndBias) {
   const auto expected = ReferenceGemm<double>(false, true, M, N, K, 0.5, A, B, 2.0, &C);
   std::vector<double> Y(M * N);
 
-  onnx_light_cpu::GemmFloat64(false, true, M, N, K, 0.5, A.data(), B.data(), 2.0, C.data(),
-                              Y.data());
+  cpu_compute::GemmFloat64(false, true, M, N, K, 0.5, A.data(), B.data(), 2.0, C.data(), Y.data());
 
   for (std::size_t i = 0; i < M * N; ++i) {
     EXPECT_NEAR(Y[i], expected[i], 1e-9) << "i=" << i;
@@ -931,8 +927,7 @@ TEST(GemmFloat64, NoBiasColumnTail) {
   const auto B = RandomVectorD(K * N, 61);
   const auto expected = ReferenceGemm<double>(false, false, M, N, K, 1.0, A, B, 0.0, nullptr);
   std::vector<double> Y(M * N, 0.0);
-  onnx_light_cpu::GemmFloat64(false, false, M, N, K, 1.0, A.data(), B.data(), 0.0, nullptr,
-                              Y.data());
+  cpu_compute::GemmFloat64(false, false, M, N, K, 1.0, A.data(), B.data(), 0.0, nullptr, Y.data());
   for (std::size_t i = 0; i < M * N; ++i) {
     EXPECT_NEAR(Y[i], expected[i], 1e-9) << "i=" << i;
   }
@@ -945,8 +940,8 @@ namespace {
 std::vector<std::uint16_t> NarrowHalf(const std::vector<float> &values, bool is_bfloat16) {
   std::vector<std::uint16_t> bits(values.size());
   for (std::size_t i = 0; i < values.size(); ++i) {
-    bits[i] = is_bfloat16 ? onnx_light_cpu::detail::FloatToBFloat16Bits(values[i])
-                          : onnx_light_cpu::detail::FloatToFloat16Bits(values[i]);
+    bits[i] = is_bfloat16 ? cpu_compute::detail::FloatToBFloat16Bits(values[i])
+                          : cpu_compute::detail::FloatToFloat16Bits(values[i]);
   }
   return bits;
 }
@@ -954,8 +949,8 @@ std::vector<std::uint16_t> NarrowHalf(const std::vector<float> &values, bool is_
 std::vector<float> WidenHalf(const std::vector<std::uint16_t> &bits, bool is_bfloat16) {
   std::vector<float> values(bits.size());
   for (std::size_t i = 0; i < bits.size(); ++i) {
-    values[i] = is_bfloat16 ? onnx_light_cpu::detail::Bfloat16BitsToFloat(bits[i])
-                            : onnx_light_cpu::detail::Float16BitsToFloat(bits[i]);
+    values[i] = is_bfloat16 ? cpu_compute::detail::Bfloat16BitsToFloat(bits[i])
+                            : cpu_compute::detail::Float16BitsToFloat(bits[i]);
   }
   return values;
 }
@@ -977,14 +972,14 @@ void CheckGemmHalf(bool is_bfloat16, bool trans_a, bool trans_b, std::size_t M, 
   std::vector<float> bias_round;
   std::vector<std::uint16_t> bias_bits;
   const std::vector<float> *bias_ptr = nullptr;
-  onnx_light_cpu::GemmEpilogue<float> epilogue;
+  cpu_compute::GemmEpilogue<float> epilogue;
   if (with_bias) {
     const auto bias_f = RandomVector(M * N, seed + 2);
     bias_bits = NarrowHalf(bias_f, is_bfloat16);
     bias_round = WidenHalf(bias_bits, is_bfloat16);
     bias_ptr = &bias_round;
     epilogue.bias = bias_round.data();
-    epilogue.bias_layout = onnx_light_cpu::GemmBroadcast::kMatrix;
+    epilogue.bias_layout = cpu_compute::GemmBroadcast::kMatrix;
     epilogue.beta = beta;
   }
 
@@ -993,11 +988,11 @@ void CheckGemmHalf(bool is_bfloat16, bool trans_a, bool trans_b, std::size_t M, 
 
   std::vector<std::uint16_t> out_bits(M * N, 0);
   std::vector<float> workspace(M * N, -1.0f);
-  epilogue.output_conversion = is_bfloat16 ? onnx_light_cpu::GemmOutputConversion::kBFloat16
-                                           : onnx_light_cpu::GemmOutputConversion::kFloat16;
+  epilogue.output_conversion = is_bfloat16 ? cpu_compute::GemmOutputConversion::kBFloat16
+                                           : cpu_compute::GemmOutputConversion::kFloat16;
   epilogue.converted_output = out_bits.data();
-  onnx_light_cpu::GemmHalfWithEpilogue(is_bfloat16, trans_a, trans_b, M, N, K, alpha, a_bits.data(),
-                                       b_bits.data(), epilogue, workspace.data());
+  cpu_compute::GemmHalfWithEpilogue(is_bfloat16, trans_a, trans_b, M, N, K, alpha, a_bits.data(),
+                                    b_bits.data(), epilogue, workspace.data());
 
   const auto out = WidenHalf(out_bits, is_bfloat16);
   // BF16 keeps only 8 mantissa bits, so allow a looser tolerance than FP16.
@@ -1044,10 +1039,10 @@ TEST(GemmHalf, Float16SkinnyMTwoColumnTailUsesPhysicalStride) {
   }
 }
 
-#if defined(ONNX_LIGHT_CPU_HAVE_AVX2_FMA) && defined(ONNX_LIGHT_CPU_HAVE_F16C)
+#if defined(CPU_COMPUTE_HAVE_AVX2_FMA) && defined(CPU_COMPUTE_HAVE_F16C)
 TEST(GemmHalf, Float16SingleRowAvx2RangePreservesBoundsAndSpecialValues) {
-  if (onnx_light_cpu::DetectSimdLevel() < onnx_light_cpu::SimdLevel::kAVX2 ||
-      !onnx_light_cpu::CpuSupportsFma() || !onnx_light_cpu::CpuSupportsF16C()) {
+  if (cpu_compute::DetectSimdLevel() < cpu_compute::SimdLevel::kAVX2 ||
+      !cpu_compute::CpuSupportsFma() || !cpu_compute::CpuSupportsF16C()) {
     GTEST_SKIP() << "CPU does not support AVX2/FMA/F16C";
   }
   constexpr std::size_t N = 73, K = 129;
@@ -1056,7 +1051,7 @@ TEST(GemmHalf, Float16SingleRowAvx2RangePreservesBoundsAndSpecialValues) {
   b[64 * N + 4] = 0xfc00;
   b[128 * N + 69] = 0x7e00;
   std::vector<float> y(N, -7.0f);
-  onnx_light_cpu::GemmSkinnyM1Range_AVX2_F16C(N, K, 0.5f, a.data(), b.data(), y.data(), 3, 70);
+  cpu_compute::GemmSkinnyM1Range_AVX2_F16C(N, K, 0.5f, a.data(), b.data(), y.data(), 3, 70);
   EXPECT_EQ(y[3], std::numeric_limits<float>::infinity());
   EXPECT_EQ(y[4], -std::numeric_limits<float>::infinity());
   EXPECT_TRUE(std::isnan(y[69]));
@@ -1090,9 +1085,9 @@ TEST(GemmHalf, BFloat16VectorizedPackingTails) {
   CheckGemmHalf(true, false, false, 33, 70, 66, true, 251);
 }
 
-#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
+#ifdef CPU_COMPUTE_HAVE_AVX2_FMA
 TEST(GemmHalf, Avx2BlockedTransposePackingHandlesTailsAndNaNs) {
-  if (onnx_light_cpu::DetectSimdLevel() < onnx_light_cpu::SimdLevel::kAVX2) {
+  if (cpu_compute::DetectSimdLevel() < cpu_compute::SimdLevel::kAVX2) {
     GTEST_SKIP() << "AVX2 transpose packing requires AVX2.";
   }
   constexpr std::size_t rows = 17;
@@ -1110,26 +1105,25 @@ TEST(GemmHalf, Avx2BlockedTransposePackingHandlesTailsAndNaNs) {
   }
 
   for (const bool is_bfloat16 : {false, true}) {
-    if (!is_bfloat16 && !onnx_light_cpu::CpuSupportsF16C()) {
+    if (!is_bfloat16 && !cpu_compute::CpuSupportsF16C()) {
       continue;
     }
     const auto bits = NarrowHalf(values, is_bfloat16);
     std::vector<float> packed(rows * columns);
     if (is_bfloat16) {
-      onnx_light_cpu::GemmPackTransposeBFloat16ToFloat32_AVX2(bits.data(), stride, packed.data(),
-                                                              rows, columns);
+      cpu_compute::GemmPackTransposeBFloat16ToFloat32_AVX2(bits.data(), stride, packed.data(), rows,
+                                                           columns);
     } else {
-#ifdef ONNX_LIGHT_CPU_HAVE_F16C
-      onnx_light_cpu::GemmPackTransposeFloat16ToFloat32_F16C(bits.data(), stride, packed.data(),
-                                                             rows, columns);
+#ifdef CPU_COMPUTE_HAVE_F16C
+      cpu_compute::GemmPackTransposeFloat16ToFloat32_F16C(bits.data(), stride, packed.data(), rows,
+                                                          columns);
 #endif
     }
     for (std::size_t row = 0; row < rows; ++row) {
       for (std::size_t column = 0; column < columns; ++column) {
         const std::uint16_t expected_bits = bits[column * stride + row];
-        const float expected = is_bfloat16
-                                   ? onnx_light_cpu::detail::Bfloat16BitsToFloat(expected_bits)
-                                   : onnx_light_cpu::detail::Float16BitsToFloat(expected_bits);
+        const float expected = is_bfloat16 ? cpu_compute::detail::Bfloat16BitsToFloat(expected_bits)
+                                           : cpu_compute::detail::Float16BitsToFloat(expected_bits);
         const float actual = packed[row * columns + column];
         if (std::isnan(expected)) {
           EXPECT_TRUE(std::isnan(actual));
@@ -1207,7 +1201,7 @@ struct ThreadedExecutor {
   std::atomic<std::size_t> maximum_blocks{0};
 
   static void Run(void *context, int64_t num_blocks, void *task_context,
-                  onnx_light_cpu::ExecutionBlockFn task) {
+                  cpu_compute::ExecutionBlockFn task) {
     auto &self = *static_cast<ThreadedExecutor *>(context);
     self.dispatches.fetch_add(1, std::memory_order_relaxed);
     const std::size_t blocks = static_cast<std::size_t>(num_blocks);
@@ -1242,7 +1236,7 @@ struct ProductiveExecutor {
   std::vector<std::size_t> writes_per_block;
 
   static void Run(void *context, int64_t num_blocks, void *task_context,
-                  onnx_light_cpu::ExecutionBlockFn task) {
+                  cpu_compute::ExecutionBlockFn task) {
     auto &self = *static_cast<ProductiveExecutor *>(context);
     for (int64_t block = 0; block < num_blocks; ++block) {
       const std::size_t before = static_cast<std::size_t>(std::count_if(
@@ -1257,7 +1251,7 @@ struct ProductiveExecutor {
 };
 
 TEST(GemmFloat32, MediumSquareBalancesRowsAcrossParticipants) {
-  if (onnx_light_cpu::DetectSimdLevel() < onnx_light_cpu::SimdLevel::kAVX512) {
+  if (cpu_compute::DetectSimdLevel() < cpu_compute::SimdLevel::kAVX512) {
     GTEST_SKIP() << "medium-square direct scheduling is specific to AVX-512";
   }
   constexpr std::size_t M = 256;
@@ -1267,19 +1261,19 @@ TEST(GemmFloat32, MediumSquareBalancesRowsAcrossParticipants) {
   const std::vector<float> B(K * N, 1.0f);
   std::vector<float> Y(M * N);
   ProductiveExecutor executor{Y.data(), Y.size()};
-  onnx_light_cpu::ExecutionExecutorView view{&executor, 4, &ProductiveExecutor::Run};
+  cpu_compute::ExecutionExecutorView view{&executor, 4, &ProductiveExecutor::Run};
 
   {
-    onnx_light_cpu::ExecutionExecutorScope scope(&view);
-    const onnx_light_cpu::GemmPlan<float> plan(
-        onnx_light_cpu::GemmPlanOptions<float>{false, false, M, N, K});
+    cpu_compute::ExecutionExecutorScope scope(&view);
+    const cpu_compute::GemmPlan<float> plan(
+        cpu_compute::GemmPlanOptions<float>{false, false, M, N, K});
     plan.Execute(A.data(), B.data(), nullptr, Y.data());
   }
 
   ASSERT_EQ(executor.writes_per_block.size(), 4u);
   const auto [minimum, maximum] =
       std::minmax_element(executor.writes_per_block.begin(), executor.writes_per_block.end());
-  EXPECT_LE(*maximum - *minimum, 2 * onnx_light_cpu::kGemmAVX512MR * N);
+  EXPECT_LE(*maximum - *minimum, 2 * cpu_compute::kGemmAVX512MR * N);
   for (float value : Y) {
     EXPECT_FLOAT_EQ(value, static_cast<float>(K));
   }
@@ -1290,15 +1284,15 @@ TEST(GemmFloat32, RawLargeKSplitBoundsParticipants) {
   constexpr std::size_t N = 32;
   constexpr std::size_t K = 16384;
   ThreadedExecutor executor;
-  onnx_light_cpu::ExecutionExecutorView view{&executor, 64, &ThreadedExecutor::Run};
+  cpu_compute::ExecutionExecutorView view{&executor, 64, &ThreadedExecutor::Run};
   const std::vector<float> A(M * K, 1.0f);
   const std::vector<float> B(K * N, 1.0f);
   std::vector<float> Y(M * N);
 
   {
-    onnx_light_cpu::ExecutionExecutorScope scope(&view);
-    onnx_light_cpu::GemmFloat32(false, false, M, N, K, 1.0f, A.data(), B.data(), 0.0f, nullptr,
-                                Y.data());
+    cpu_compute::ExecutionExecutorScope scope(&view);
+    cpu_compute::GemmFloat32(false, false, M, N, K, 1.0f, A.data(), B.data(), 0.0f, nullptr,
+                             Y.data());
   }
 
   EXPECT_GT(executor.maximum_blocks.load(std::memory_order_relaxed), 1u);
@@ -1315,20 +1309,20 @@ template <typename T> void CheckSplitKInitializesPartialTails() {
   const auto c_float = RandomVector(M * N, 623);
   const std::vector<T> A(a_float.begin(), a_float.end()), B(b_float.begin(), b_float.end());
   const std::vector<T> C(c_float.begin(), c_float.end());
-  const onnx_light_cpu::GemmBlocking blocking{16, 64, 129, 4, 16};
+  const cpu_compute::GemmBlocking blocking{16, 64, 129, 4, 16};
   ThreadedExecutor executor;
-  onnx_light_cpu::ExecutionExecutorView view{&executor, 4, &ThreadedExecutor::Run};
-  onnx_light_cpu::ExecutionExecutorScope scope(&view);
+  cpu_compute::ExecutionExecutorView view{&executor, 4, &ThreadedExecutor::Run};
+  cpu_compute::ExecutionExecutorScope scope(&view);
   for (bool trans_b : {false, true}) {
     SCOPED_TRACE(trans_b);
     const auto expected = ReferenceGemm<T>(true, trans_b, M, N, K, T(0.75), A, B, T(-0.5), &C);
     std::vector<T> Y(M * N, std::numeric_limits<T>::quiet_NaN());
     if constexpr (std::is_same_v<T, float>) {
-      onnx_light_cpu::detail::GemmFloat32Planned<onnx_light_cpu::GemmAlgorithm::kSplitK>(
+      cpu_compute::detail::GemmFloat32Planned<cpu_compute::GemmAlgorithm::kSplitK>(
           true, trans_b, M, N, K, T(0.75), A.data(), B.data(), T(-0.5), C.data(), Y.data(),
           &blocking);
     } else {
-      onnx_light_cpu::detail::GemmFloat64Planned<onnx_light_cpu::GemmAlgorithm::kSplitK>(
+      cpu_compute::detail::GemmFloat64Planned<cpu_compute::GemmAlgorithm::kSplitK>(
           true, trans_b, M, N, K, T(0.75), A.data(), B.data(), T(-0.5), C.data(), Y.data(),
           &blocking);
     }
@@ -1354,9 +1348,8 @@ TEST(GemmFloat64, SplitKInitializesEveryPartialWithTails) {
 // exercised here; the portable scalar member runs everywhere while the
 // AVX-512FP16 member only runs on capable hardware.
 void CheckGemmFp16NativeDriver(bool trans_a, std::size_t M, std::size_t N, std::size_t K,
-                               float alpha, unsigned seed,
-                               onnx_light_cpu::GemmFp16MicroKernel kernel,
-                               const onnx_light_cpu::GemmBlocking *blocking = nullptr) {
+                               float alpha, unsigned seed, cpu_compute::GemmFp16MicroTile kernel,
+                               const cpu_compute::GemmBlocking *blocking = nullptr) {
   const auto a_f = RandomVector(trans_a ? K * M : M * K, seed);
   const auto b_f = RandomVector(K * N, seed + 1);
   const auto a_bits = NarrowHalf(a_f, false);
@@ -1367,8 +1360,8 @@ void CheckGemmFp16NativeDriver(bool trans_a, std::size_t M, std::size_t N, std::
       ReferenceGemm<float>(trans_a, false, M, N, K, alpha, a_round, b_round, 0.0f, nullptr);
 
   std::vector<float> Y(M * N, -1.0f);
-  onnx_light_cpu::detail::GemmFp16NativeGeneral(trans_a, M, N, K, alpha, a_bits.data(),
-                                                b_bits.data(), Y.data(), kernel, 6, blocking);
+  cpu_compute::detail::GemmFp16NativeGeneral(trans_a, M, N, K, alpha, a_bits.data(), b_bits.data(),
+                                             Y.data(), kernel, 6, blocking);
 
   for (std::size_t i = 0; i < M * N; ++i) {
     const float tol = 1e-3f * std::max(1.0f, std::abs(expected[i]));
@@ -1382,9 +1375,9 @@ TEST(GemmFloat32, LargeBPanelPackingFusesWithCompute) {
   constexpr std::size_t M = 16;
   constexpr std::size_t N = 1024;
   constexpr std::size_t K = 512;
-  const onnx_light_cpu::GemmBlocking blocking{8, 1024, 512, 4, 16};
+  const cpu_compute::GemmBlocking blocking{8, 1024, 512, 4, 16};
   ThreadedExecutor executor;
-  onnx_light_cpu::ExecutionExecutorView view{&executor, 4, &ThreadedExecutor::Run};
+  cpu_compute::ExecutionExecutorView view{&executor, 4, &ThreadedExecutor::Run};
 
   for (bool trans_b : {false, true}) {
     const auto A = RandomVector(M * K, trans_b ? 401 : 400);
@@ -1392,8 +1385,8 @@ TEST(GemmFloat32, LargeBPanelPackingFusesWithCompute) {
     const auto expected = ReferenceGemm<float>(false, trans_b, M, N, K, 1.0f, A, B, 0.0f, nullptr);
     std::vector<float> Y(M * N);
     {
-      onnx_light_cpu::ExecutionExecutorScope scope(&view);
-      onnx_light_cpu::detail::GemmFloat32Planned<onnx_light_cpu::GemmAlgorithm::kGeneral>(
+      cpu_compute::ExecutionExecutorScope scope(&view);
+      cpu_compute::detail::GemmFloat32Planned<cpu_compute::GemmAlgorithm::kGeneral>(
           false, trans_b, M, N, K, 1.0f, A.data(), B.data(), 0.0f, nullptr, Y.data(), &blocking);
     }
     for (std::size_t i = 0; i < Y.size(); ++i) {
@@ -1408,16 +1401,16 @@ TEST(GemmFloat32, SmallBPanelPackingStaysInline) {
   constexpr std::size_t M = 8;
   constexpr std::size_t N = 256;
   constexpr std::size_t K = 256;
-  const onnx_light_cpu::GemmBlocking blocking{8, 256, 256, 4, 16};
+  const cpu_compute::GemmBlocking blocking{8, 256, 256, 4, 16};
   ThreadedExecutor executor;
-  onnx_light_cpu::ExecutionExecutorView view{&executor, 4, &ThreadedExecutor::Run};
+  cpu_compute::ExecutionExecutorView view{&executor, 4, &ThreadedExecutor::Run};
   const auto A = RandomVector(M * K, 404);
   const auto B = RandomVector(K * N, 405);
   const auto expected = ReferenceGemm<float>(false, false, M, N, K, 1.0f, A, B, 0.0f, nullptr);
   std::vector<float> Y(M * N);
   {
-    onnx_light_cpu::ExecutionExecutorScope scope(&view);
-    onnx_light_cpu::detail::GemmFloat32Planned<onnx_light_cpu::GemmAlgorithm::kGeneral>(
+    cpu_compute::ExecutionExecutorScope scope(&view);
+    cpu_compute::detail::GemmFloat32Planned<cpu_compute::GemmAlgorithm::kGeneral>(
         false, false, M, N, K, 1.0f, A.data(), B.data(), 0.0f, nullptr, Y.data(), &blocking);
   }
 
@@ -1431,15 +1424,15 @@ TEST(GemmFloat32, ImbalancedTileCountUsesAllRequestedBlocks) {
   constexpr std::size_t M = 768;
   constexpr std::size_t N = 512;
   constexpr std::size_t K = 255;
-  const onnx_light_cpu::GemmBlocking blocking{256, 128, 255, 4, 16};
+  const cpu_compute::GemmBlocking blocking{256, 128, 255, 4, 16};
   ThreadedExecutor executor;
-  onnx_light_cpu::ExecutionExecutorView view{&executor, 10, &ThreadedExecutor::Run};
+  cpu_compute::ExecutionExecutorView view{&executor, 10, &ThreadedExecutor::Run};
   const std::vector<float> A(M * K, 1.0f);
   const std::vector<float> B(K * N, 1.0f);
   std::vector<float> Y(M * N);
   {
-    onnx_light_cpu::ExecutionExecutorScope scope(&view);
-    onnx_light_cpu::detail::GemmFloat32Planned<onnx_light_cpu::GemmAlgorithm::kGeneral>(
+    cpu_compute::ExecutionExecutorScope scope(&view);
+    cpu_compute::detail::GemmFloat32Planned<cpu_compute::GemmAlgorithm::kGeneral>(
         false, false, M, N, K, 1.0f, A.data(), B.data(), 0.0f, nullptr, Y.data(), &blocking);
   }
 
@@ -1452,50 +1445,46 @@ TEST(GemmFloat32, ImbalancedTileCountUsesAllRequestedBlocks) {
 TEST(GemmFp16Native, ScalarKernelMatchesReference) {
   // Portable scalar member: several row blocks (M > 6), exact-16 and tail N, an
   // empty K, ``trans_a``, and a non-unit alpha.
-  CheckGemmFp16NativeDriver(false, 13, 16, 20, 1.0f, 301,
-                            &onnx_light_cpu::GemmMicroKernel_ScalarFp16);
-  CheckGemmFp16NativeDriver(false, 20, 35, 40, 0.75f, 311,
-                            &onnx_light_cpu::GemmMicroKernel_ScalarFp16);
-  CheckGemmFp16NativeDriver(true, 9, 19, 33, 0.5f, 321,
-                            &onnx_light_cpu::GemmMicroKernel_ScalarFp16);
-  CheckGemmFp16NativeDriver(false, 7, 5, 0, 1.0f, 331, &onnx_light_cpu::GemmMicroKernel_ScalarFp16);
+  CheckGemmFp16NativeDriver(false, 13, 16, 20, 1.0f, 301, &cpu_compute::GemmMicroTile_ScalarFp16);
+  CheckGemmFp16NativeDriver(false, 20, 35, 40, 0.75f, 311, &cpu_compute::GemmMicroTile_ScalarFp16);
+  CheckGemmFp16NativeDriver(true, 9, 19, 33, 0.5f, 321, &cpu_compute::GemmMicroTile_ScalarFp16);
+  CheckGemmFp16NativeDriver(false, 7, 5, 0, 1.0f, 331, &cpu_compute::GemmMicroTile_ScalarFp16);
 }
 
 TEST(GemmFp16Native, CompactBPanelsCrossBlockingBoundaries) {
   // Each dimension spans three blocking chunks and leaves M/N/K tails.
-  const onnx_light_cpu::GemmBlocking blocking{12, 16, 7, 6, 8};
-  CheckGemmFp16NativeDriver(false, 25, 37, 19, 0.75f, 341,
-                            &onnx_light_cpu::GemmMicroKernel_ScalarFp16, &blocking);
-  CheckGemmFp16NativeDriver(true, 25, 37, 20, 0.5f, 351,
-                            &onnx_light_cpu::GemmMicroKernel_ScalarFp16, &blocking);
+  const cpu_compute::GemmBlocking blocking{12, 16, 7, 6, 8};
+  CheckGemmFp16NativeDriver(false, 25, 37, 19, 0.75f, 341, &cpu_compute::GemmMicroTile_ScalarFp16,
+                            &blocking);
+  CheckGemmFp16NativeDriver(true, 25, 37, 20, 0.5f, 351, &cpu_compute::GemmMicroTile_ScalarFp16,
+                            &blocking);
 }
 
 TEST(GemmFp16Native, CompactBPanelWaveIsSharedAcrossParallelRows) {
-  const onnx_light_cpu::GemmBlocking blocking{96, 128, 128, 6, 8};
+  const cpu_compute::GemmBlocking blocking{96, 128, 128, 6, 8};
   ThreadedExecutor executor;
-  onnx_light_cpu::ExecutionExecutorView view{&executor, 4, &ThreadedExecutor::Run};
+  cpu_compute::ExecutionExecutorView view{&executor, 4, &ThreadedExecutor::Run};
   {
-    onnx_light_cpu::ExecutionExecutorScope scope(&view);
+    cpu_compute::ExecutionExecutorScope scope(&view);
     CheckGemmFp16NativeDriver(false, 193, 257, 257, 0.75f, 356,
-                              &onnx_light_cpu::GemmMicroKernel_ScalarFp16, &blocking);
+                              &cpu_compute::GemmMicroTile_ScalarFp16, &blocking);
   }
   EXPECT_GT(executor.dispatches.load(std::memory_order_relaxed), 0u);
   EXPECT_GT(executor.maximum_active.load(std::memory_order_relaxed), 1u);
 }
 
-#if defined(ONNX_LIGHT_CPU_HAVE_AVX2_FMA) && defined(ONNX_LIGHT_CPU_HAVE_F16C)
+#if defined(CPU_COMPUTE_HAVE_AVX2_FMA) && defined(CPU_COMPUTE_HAVE_F16C)
 TEST(GemmFp16Native, Avx2KernelSupportsSixRows) {
-  if (onnx_light_cpu::DetectSimdLevel() < onnx_light_cpu::SimdLevel::kAVX2 ||
-      !onnx_light_cpu::CpuSupportsFma() || !onnx_light_cpu::CpuSupportsF16C()) {
+  if (cpu_compute::DetectSimdLevel() < cpu_compute::SimdLevel::kAVX2 ||
+      !cpu_compute::CpuSupportsFma() || !cpu_compute::CpuSupportsF16C()) {
     GTEST_SKIP() << "CPU does not support AVX2/FMA/F16C";
   }
-  CheckGemmFp16NativeDriver(false, 13, 19, 33, 0.75f, 361,
-                            &onnx_light_cpu::GemmMicroKernel_AVX2F16C);
+  CheckGemmFp16NativeDriver(false, 13, 19, 33, 0.75f, 361, &cpu_compute::GemmMicroTile_AVX2F16C);
 }
 #endif
 
 TEST(GemmFp16Native, Avx512Fp16KernelMatchesReferenceWhenSupported) {
-  if (!onnx_light_cpu::CpuSupportsAvx512Fp16()) {
+  if (!cpu_compute::CpuSupportsAvx512Fp16()) {
     GTEST_SKIP() << "CPU does not support AVX-512FP16";
   }
   // On capable hardware the public FLOAT16 GEMM path dispatches these general
@@ -1528,9 +1517,8 @@ namespace {
 // portable scalar member runs everywhere while the AVX-512BF16 member only runs
 // on capable hardware.
 void CheckGemmBf16NativeDriver(bool trans_a, std::size_t M, std::size_t N, std::size_t K,
-                               float alpha, unsigned seed,
-                               onnx_light_cpu::GemmBf16MicroKernel kernel,
-                               const onnx_light_cpu::GemmBlocking *blocking = nullptr) {
+                               float alpha, unsigned seed, cpu_compute::GemmBf16MicroTile kernel,
+                               const cpu_compute::GemmBlocking *blocking = nullptr) {
   const auto a_f = RandomVector(trans_a ? K * M : M * K, seed);
   const auto b_f = RandomVector(K * N, seed + 1);
   const auto a_bits = NarrowHalf(a_f, true);
@@ -1541,8 +1529,8 @@ void CheckGemmBf16NativeDriver(bool trans_a, std::size_t M, std::size_t N, std::
       ReferenceGemm<float>(trans_a, false, M, N, K, alpha, a_round, b_round, 0.0f, nullptr);
 
   std::vector<float> Y(M * N, -1.0f);
-  onnx_light_cpu::detail::GemmBf16NativeGeneral(trans_a, M, N, K, alpha, a_bits.data(),
-                                                b_bits.data(), Y.data(), kernel, 6, blocking);
+  cpu_compute::detail::GemmBf16NativeGeneral(trans_a, M, N, K, alpha, a_bits.data(), b_bits.data(),
+                                             Y.data(), kernel, 6, blocking);
 
   for (std::size_t i = 0; i < M * N; ++i) {
     const float tol = 8e-3f * std::max(1.0f, std::abs(expected[i]));
@@ -1553,52 +1541,55 @@ void CheckGemmBf16NativeDriver(bool trans_a, std::size_t M, std::size_t N, std::
 } // namespace
 
 TEST(GemmBf16Dispatch, GeneralPrioritizesAmxThenAvx512ThenAvx2) {
-  using onnx_light_cpu::detail::GemmBf16Capabilities;
-  using Kind = onnx_light_cpu::detail::GemmBf16KernelKind;
+  using cpu_compute::detail::GemmBf16Capabilities;
+  using Kind = cpu_compute::detail::GemmBf16Implementation;
   const Kind expected[] = {Kind::kNone,    Kind::kAVX2,    Kind::kAVX512BF16, Kind::kAVX512BF16,
                            Kind::kAMXBF16, Kind::kAMXBF16, Kind::kAMXBF16,    Kind::kAMXBF16};
   for (unsigned mask = 0; mask < 8; ++mask) {
     SCOPED_TRACE(mask);
     const GemmBf16Capabilities capabilities{(mask & 1) != 0, (mask & 2) != 0, (mask & 4) != 0};
-    EXPECT_EQ(onnx_light_cpu::detail::SelectGemmBf16KernelKind(
-                  onnx_light_cpu::GemmAlgorithm::kGeneral, false, capabilities),
+    EXPECT_EQ(cpu_compute::detail::SelectGemmBf16Implementation(
+                  cpu_compute::GemmAlgorithm::kGeneral, false, capabilities),
               expected[mask]);
-    EXPECT_EQ(onnx_light_cpu::detail::SelectGemmBf16KernelKind(
-                  onnx_light_cpu::GemmAlgorithm::kDirect, false, capabilities),
+    EXPECT_EQ(cpu_compute::detail::SelectGemmBf16Implementation(cpu_compute::GemmAlgorithm::kDirect,
+                                                                false, capabilities),
               capabilities.avx2_fma ? Kind::kAVX2 : Kind::kNone);
   }
 }
 
 TEST(GemmBf16Dispatch, PreservesLayoutAndAlgorithmRestrictions) {
-  using onnx_light_cpu::GemmAlgorithm;
-  using onnx_light_cpu::detail::GemmBf16KernelKind;
+  using cpu_compute::GemmAlgorithm;
+  using cpu_compute::detail::GemmBf16Implementation;
   for (const auto algorithm :
-       {GemmAlgorithm::kGeneral, GemmAlgorithm::kDirect, GemmAlgorithm::kSkinnyM,
-        GemmAlgorithm::kSkinnyN, GemmAlgorithm::kSplitK}) {
-    EXPECT_EQ(onnx_light_cpu::detail::SelectGemmBf16KernelKind(algorithm, true, {true, true, true}),
-              GemmBf16KernelKind::kNone);
+       {cpu_compute::GemmAlgorithm::kGeneral, cpu_compute::GemmAlgorithm::kDirect,
+        cpu_compute::GemmAlgorithm::kSkinnyM, cpu_compute::GemmAlgorithm::kSkinnyN,
+        cpu_compute::GemmAlgorithm::kSplitK}) {
+    EXPECT_EQ(
+        cpu_compute::detail::SelectGemmBf16Implementation(algorithm, true, {true, true, true}),
+        GemmBf16Implementation::kNone);
   }
   for (const auto algorithm :
-       {GemmAlgorithm::kSkinnyM, GemmAlgorithm::kSkinnyN, GemmAlgorithm::kSplitK}) {
+       {cpu_compute::GemmAlgorithm::kSkinnyM, cpu_compute::GemmAlgorithm::kSkinnyN,
+        cpu_compute::GemmAlgorithm::kSplitK}) {
     EXPECT_EQ(
-        onnx_light_cpu::detail::SelectGemmBf16KernelKind(algorithm, false, {true, true, true}),
-        GemmBf16KernelKind::kNone);
+        cpu_compute::detail::SelectGemmBf16Implementation(algorithm, false, {true, true, true}),
+        GemmBf16Implementation::kNone);
   }
 }
 
 TEST(GemmBf16Dispatch, GradualUnderflowUsesFloat32Arithmetic) {
-  using onnx_light_cpu::detail::GemmBf16Capabilities;
-  using Kind = onnx_light_cpu::detail::GemmBf16KernelKind;
+  using cpu_compute::detail::GemmBf16Capabilities;
+  using Kind = cpu_compute::detail::GemmBf16Implementation;
   for (unsigned mask = 0; mask < 8; ++mask) {
     SCOPED_TRACE(mask);
     const GemmBf16Capabilities capabilities{(mask & 1) != 0, (mask & 2) != 0, (mask & 4) != 0};
     for (const auto algorithm :
-         {onnx_light_cpu::GemmAlgorithm::kGeneral, onnx_light_cpu::GemmAlgorithm::kDirect}) {
+         {cpu_compute::GemmAlgorithm::kGeneral, cpu_compute::GemmAlgorithm::kDirect}) {
       EXPECT_EQ(
-          onnx_light_cpu::detail::SelectGemmBf16KernelKind(algorithm, false, capabilities, true),
+          cpu_compute::detail::SelectGemmBf16Implementation(algorithm, false, capabilities, true),
           capabilities.avx2_fma ? Kind::kAVX2 : Kind::kNone);
       EXPECT_EQ(
-          onnx_light_cpu::detail::SelectGemmBf16KernelKind(algorithm, true, capabilities, true),
+          cpu_compute::detail::SelectGemmBf16Implementation(algorithm, true, capabilities, true),
           Kind::kNone);
     }
   }
@@ -1607,37 +1598,33 @@ TEST(GemmBf16Dispatch, GradualUnderflowUsesFloat32Arithmetic) {
 TEST(GemmBf16Native, ScalarKernelMatchesReference) {
   // Portable scalar member: several row blocks (M > 6), exact-16 and tail N,
   // even and odd K, an empty K, ``trans_a``, and a non-unit alpha.
-  CheckGemmBf16NativeDriver(false, 13, 16, 20, 1.0f, 501,
-                            &onnx_light_cpu::GemmMicroKernel_ScalarBf16);
-  CheckGemmBf16NativeDriver(false, 20, 35, 41, 0.75f, 511,
-                            &onnx_light_cpu::GemmMicroKernel_ScalarBf16);
-  CheckGemmBf16NativeDriver(true, 9, 19, 33, 0.5f, 521,
-                            &onnx_light_cpu::GemmMicroKernel_ScalarBf16);
-  CheckGemmBf16NativeDriver(false, 7, 5, 0, 1.0f, 531, &onnx_light_cpu::GemmMicroKernel_ScalarBf16);
+  CheckGemmBf16NativeDriver(false, 13, 16, 20, 1.0f, 501, &cpu_compute::GemmMicroTile_ScalarBf16);
+  CheckGemmBf16NativeDriver(false, 20, 35, 41, 0.75f, 511, &cpu_compute::GemmMicroTile_ScalarBf16);
+  CheckGemmBf16NativeDriver(true, 9, 19, 33, 0.5f, 521, &cpu_compute::GemmMicroTile_ScalarBf16);
+  CheckGemmBf16NativeDriver(false, 7, 5, 0, 1.0f, 531, &cpu_compute::GemmMicroTile_ScalarBf16);
 }
 
 TEST(GemmBf16Native, CompactBPanelsCrossBlockingBoundaries) {
   // Each dimension spans three blocking chunks and leaves M/N/K tails.
-  const onnx_light_cpu::GemmBlocking blocking{12, 16, 7, 6, 8};
-  CheckGemmBf16NativeDriver(false, 25, 37, 19, 0.75f, 541,
-                            &onnx_light_cpu::GemmMicroKernel_ScalarBf16, &blocking);
-  CheckGemmBf16NativeDriver(true, 25, 37, 20, 0.5f, 551,
-                            &onnx_light_cpu::GemmMicroKernel_ScalarBf16, &blocking);
+  const cpu_compute::GemmBlocking blocking{12, 16, 7, 6, 8};
+  CheckGemmBf16NativeDriver(false, 25, 37, 19, 0.75f, 541, &cpu_compute::GemmMicroTile_ScalarBf16,
+                            &blocking);
+  CheckGemmBf16NativeDriver(true, 25, 37, 20, 0.5f, 551, &cpu_compute::GemmMicroTile_ScalarBf16,
+                            &blocking);
 }
 
-#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
+#ifdef CPU_COMPUTE_HAVE_AVX2_FMA
 TEST(GemmBf16Native, Avx2KernelSupportsSixRows) {
-  if (onnx_light_cpu::DetectSimdLevel() < onnx_light_cpu::SimdLevel::kAVX2 ||
-      !onnx_light_cpu::CpuSupportsFma()) {
+  if (cpu_compute::DetectSimdLevel() < cpu_compute::SimdLevel::kAVX2 ||
+      !cpu_compute::CpuSupportsFma()) {
     GTEST_SKIP() << "CPU does not support AVX2/FMA";
   }
-  CheckGemmBf16NativeDriver(false, 13, 19, 33, 0.75f, 561,
-                            &onnx_light_cpu::GemmMicroKernel_AVX2BF16);
+  CheckGemmBf16NativeDriver(false, 13, 19, 33, 0.75f, 561, &cpu_compute::GemmMicroTile_AVX2BF16);
 }
 #endif
 
 TEST(GemmBf16Native, Avx512Bf16KernelMatchesReferenceWhenSupported) {
-  if (!onnx_light_cpu::CpuSupportsAvx512Bf16()) {
+  if (!cpu_compute::CpuSupportsAvx512Bf16()) {
     GTEST_SKIP() << "CPU does not support AVX-512BF16";
   }
   // On capable hardware the public BFLOAT16 GEMM path dispatches these general
@@ -1681,7 +1668,7 @@ TEST(GemmHalf, BFloat16SveNativeGeneralColumnTails) {
 }
 
 TEST(GemmBf16Native, AmxBf16KernelMatchesReferenceWhenSupported) {
-  if (!onnx_light_cpu::AmxTileStateAvailable() || !onnx_light_cpu::CpuSupportsAmxBf16()) {
+  if (!cpu_compute::AmxTileStateAvailable() || !cpu_compute::CpuSupportsAmxBf16()) {
     GTEST_SKIP() << "CPU does not support AMX-BF16 tile state";
   }
   // On capable hardware the public BFLOAT16 GEMM path dispatches these general
@@ -1701,14 +1688,14 @@ TEST(GemmHalf, EmptyKGivesBiasOnly) {
 
   std::vector<std::uint16_t> out_bits(M * N, 0);
   std::vector<float> workspace(M * N, -1.0f);
-  onnx_light_cpu::GemmEpilogue<float> epilogue;
+  cpu_compute::GemmEpilogue<float> epilogue;
   epilogue.bias = bias_round.data();
-  epilogue.bias_layout = onnx_light_cpu::GemmBroadcast::kMatrix;
+  epilogue.bias_layout = cpu_compute::GemmBroadcast::kMatrix;
   epilogue.beta = 2.0f;
-  epilogue.output_conversion = onnx_light_cpu::GemmOutputConversion::kFloat16;
+  epilogue.output_conversion = cpu_compute::GemmOutputConversion::kFloat16;
   epilogue.converted_output = out_bits.data();
-  onnx_light_cpu::GemmHalfWithEpilogue(false, false, false, M, N, K, 1.0f, nullptr, nullptr,
-                                       epilogue, workspace.data());
+  cpu_compute::GemmHalfWithEpilogue(false, false, false, M, N, K, 1.0f, nullptr, nullptr, epilogue,
+                                    workspace.data());
 
   const auto out = WidenHalf(out_bits, false);
   for (std::size_t i = 0; i < M * N; ++i) {
@@ -1755,9 +1742,9 @@ TEST(GemmHalf, BFloat16AlgorithmVariantsMatchReference) {
   CheckGemmHalf(true, false, false, 40, 48, 16, true, 431);   // direct small-K
 }
 
-#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
+#ifdef CPU_COMPUTE_HAVE_AVX2_FMA
 TEST(GemmHalf, Avx2OutputNarrowingMatchesScalarConversion) {
-  if (onnx_light_cpu::DetectSimdLevel() < onnx_light_cpu::SimdLevel::kAVX2) {
+  if (cpu_compute::DetectSimdLevel() < cpu_compute::SimdLevel::kAVX2) {
     GTEST_SKIP() << "AVX2 is not available.";
   }
   const std::vector<float> values = {
@@ -1780,26 +1767,26 @@ TEST(GemmHalf, Avx2OutputNarrowingMatchesScalarConversion) {
       65520.0f,
   };
   std::vector<std::uint16_t> actual(values.size());
-  onnx_light_cpu::GemmConvertFloat32ToBFloat16_AVX2(values.data(), actual.data(), values.size());
+  cpu_compute::GemmConvertFloat32ToBFloat16_AVX2(values.data(), actual.data(), values.size());
   for (std::size_t i = 0; i < values.size(); ++i) {
-    EXPECT_EQ(actual[i], onnx_light_cpu::detail::FloatToBFloat16Bits(values[i])) << "i=" << i;
+    EXPECT_EQ(actual[i], cpu_compute::detail::FloatToBFloat16Bits(values[i])) << "i=" << i;
   }
 
-#ifdef ONNX_LIGHT_CPU_HAVE_F16C
-  if (!onnx_light_cpu::CpuSupportsF16C()) {
+#ifdef CPU_COMPUTE_HAVE_F16C
+  if (!cpu_compute::CpuSupportsF16C()) {
     return;
   }
-  onnx_light_cpu::GemmConvertFloat32ToFloat16_F16C(values.data(), actual.data(), values.size());
+  cpu_compute::GemmConvertFloat32ToFloat16_F16C(values.data(), actual.data(), values.size());
   for (std::size_t i = 0; i < values.size(); ++i) {
-    EXPECT_EQ(actual[i], onnx_light_cpu::detail::FloatToFloat16Bits(values[i])) << "i=" << i;
+    EXPECT_EQ(actual[i], cpu_compute::detail::FloatToFloat16Bits(values[i])) << "i=" << i;
   }
 #endif
 }
 
-#ifdef ONNX_LIGHT_CPU_HAVE_F16C
+#ifdef CPU_COMPUTE_HAVE_F16C
 TEST(GemmHalf, Avx2Float16BiasNarrowingCoversBroadcastsAndTails) {
-  if (onnx_light_cpu::DetectSimdLevel() < onnx_light_cpu::SimdLevel::kAVX2 ||
-      !onnx_light_cpu::CpuSupportsFma() || !onnx_light_cpu::CpuSupportsF16C()) {
+  if (cpu_compute::DetectSimdLevel() < cpu_compute::SimdLevel::kAVX2 ||
+      !cpu_compute::CpuSupportsFma() || !cpu_compute::CpuSupportsF16C()) {
     GTEST_SKIP() << "AVX2/FMA/F16C is not available.";
   }
   constexpr std::size_t rows = 3;
@@ -1827,7 +1814,7 @@ TEST(GemmHalf, Avx2Float16BiasNarrowingCoversBroadcastsAndTails) {
            Case{matrix_bias.data(), columns, 1},
        }) {
     std::vector<std::uint16_t> actual(rows * columns);
-    onnx_light_cpu::GemmAddBiasConvertFloat32ToFloat16_F16C(
+    cpu_compute::GemmAddBiasConvertFloat32ToFloat16_F16C(
         values.data(), test_case.bias, actual.data(), rows, columns, beta, test_case.row_stride,
         test_case.column_stride);
     for (std::size_t row = 0; row < rows; ++row) {
@@ -1836,7 +1823,7 @@ TEST(GemmHalf, Avx2Float16BiasNarrowingCoversBroadcastsAndTails) {
         const float bias =
             test_case.bias[row * test_case.row_stride + column * test_case.column_stride];
         EXPECT_EQ(actual[index],
-                  onnx_light_cpu::detail::FloatToFloat16Bits(values[index] + beta * bias))
+                  cpu_compute::detail::FloatToFloat16Bits(values[index] + beta * bias))
             << "row=" << row << " column=" << column;
       }
     }
@@ -1848,9 +1835,9 @@ TEST(GemmHalf, Avx2Float16BiasNarrowingCoversBroadcastsAndTails) {
                                             : (test_case.row_stride == 1 ? rows : std::size_t{1}));
     std::vector<std::uint16_t> half_bias(bias_size);
     for (std::size_t i = 0; i < bias_size; ++i) {
-      half_bias[i] = onnx_light_cpu::detail::FloatToFloat16Bits(test_case.bias[i]);
+      half_bias[i] = cpu_compute::detail::FloatToFloat16Bits(test_case.bias[i]);
     }
-    onnx_light_cpu::GemmAddFloat16BiasConvertFloat32ToFloat16_F16C(
+    cpu_compute::GemmAddFloat16BiasConvertFloat32ToFloat16_F16C(
         values.data(), half_bias.data(), actual.data(), rows, columns, beta, test_case.row_stride,
         test_case.column_stride);
     for (std::size_t row = 0; row < rows; ++row) {
@@ -1858,9 +1845,9 @@ TEST(GemmHalf, Avx2Float16BiasNarrowingCoversBroadcastsAndTails) {
         const std::size_t index = row * columns + column;
         const std::size_t bias_index =
             row * test_case.row_stride + column * test_case.column_stride;
-        const float bias = onnx_light_cpu::detail::Float16BitsToFloat(half_bias[bias_index]);
+        const float bias = cpu_compute::detail::Float16BitsToFloat(half_bias[bias_index]);
         EXPECT_EQ(actual[index],
-                  onnx_light_cpu::detail::FloatToFloat16Bits(values[index] + beta * bias))
+                  cpu_compute::detail::FloatToFloat16Bits(values[index] + beta * bias))
             << "half bias row=" << row << " column=" << column;
       }
     }
@@ -1883,13 +1870,13 @@ void CheckHalfNoExpandedOperand(bool is_bfloat16, std::size_t M, std::size_t N, 
 
   std::vector<float> y_half(M * N, 0.0f);
   std::vector<std::uint16_t> out_bits(M * N, 0);
-  onnx_light_cpu::GemmEpilogue<float> epilogue;
-  epilogue.output_conversion = is_bfloat16 ? onnx_light_cpu::GemmOutputConversion::kBFloat16
-                                           : onnx_light_cpu::GemmOutputConversion::kFloat16;
+  cpu_compute::GemmEpilogue<float> epilogue;
+  epilogue.output_conversion = is_bfloat16 ? cpu_compute::GemmOutputConversion::kBFloat16
+                                           : cpu_compute::GemmOutputConversion::kFloat16;
   epilogue.converted_output = out_bits.data();
   const std::size_t half_peak = PeakAllocationBytes([&] {
-    onnx_light_cpu::GemmHalfWithEpilogue(is_bfloat16, false, false, M, N, K, 1.0f, a_bits.data(),
-                                         b_bits.data(), epilogue, y_half.data());
+    cpu_compute::GemmHalfWithEpilogue(is_bfloat16, false, false, M, N, K, 1.0f, a_bits.data(),
+                                      b_bits.data(), epilogue, y_half.data());
   });
 
   const std::size_t expanded_operand_bytes = std::max(M * K, K * N) * sizeof(float);
@@ -1923,8 +1910,8 @@ TEST(GemmHalf, Bfloat16SubnormalOperandsMatchFloat32) {
       {0x0010, 0x3e80}, {0x2380, 0x2380}, {0x237f, 0x2380}};
   for (bool trans_a : {false, true}) {
     for (bool trans_b : {false, true}) {
-      const onnx_light_cpu::GemmHalfPlan half_plan({true, trans_a, trans_b, m, n, k});
-      const onnx_light_cpu::GemmPlan<float> reference({trans_a, trans_b, m, n, k});
+      const cpu_compute::GemmHalfPlan half_plan({true, trans_a, trans_b, m, n, k});
+      const cpu_compute::GemmPlan<float> reference({trans_a, trans_b, m, n, k});
       for (const auto &[bits, large_bits] : input_pairs) {
         for (bool small_b : {false, true}) {
           SCOPED_TRACE(trans_a);
@@ -1950,8 +1937,8 @@ TEST(GemmHalf, Bfloat16SubnormalOperandsMatchFloat32) {
 TEST(GemmHalf, Bfloat16SubnormalAtOperandTailMatchesFloat32) {
   onnx_light_cpu::test::ScopedX86GradualUnderflow gradual_underflow;
   constexpr std::size_t m = 17, n = 19, k = 129;
-  const onnx_light_cpu::GemmHalfPlan half_plan({true, false, false, m, n, k});
-  const onnx_light_cpu::GemmPlan<float> reference({false, false, m, n, k});
+  const cpu_compute::GemmHalfPlan half_plan({true, false, false, m, n, k});
+  const cpu_compute::GemmPlan<float> reference({false, false, m, n, k});
   for (bool small_b : {false, true}) {
     SCOPED_TRACE(small_b);
     std::vector<std::uint16_t> a(m * k, small_b ? 0x7e80 : 0);
@@ -1970,11 +1957,11 @@ TEST(GemmHalf, Bfloat16SubnormalAtOperandTailMatchesFloat32) {
 
 TEST(GemmHalf, Bfloat16UnderflowCheckPreservesEmptyInputs) {
   for (const auto &[m, n] : {std::pair{0u, 19u}, std::pair{17u, 0u}}) {
-    onnx_light_cpu::detail::GemmHalfPlanned<onnx_light_cpu::GemmAlgorithm::kGeneral>(
+    cpu_compute::detail::GemmHalfPlanned<cpu_compute::GemmAlgorithm::kGeneral>(
         true, false, false, m, n, 129, 1.0f, nullptr, nullptr, nullptr);
   }
   std::vector<float> output(17 * 19, 1.0f);
-  onnx_light_cpu::detail::GemmHalfPlanned<onnx_light_cpu::GemmAlgorithm::kGeneral>(
+  cpu_compute::detail::GemmHalfPlanned<cpu_compute::GemmAlgorithm::kGeneral>(
       true, false, false, 17, 19, 0, 1.0f, nullptr, nullptr, output.data());
   for (const float value : output) {
     EXPECT_EQ(value, 0.0f);
@@ -1985,16 +1972,16 @@ TEST(GemmFloat32, DynamicBUsesBoundedWorkerLocalPacking) {
   constexpr std::size_t M = 128;
   constexpr std::size_t N = 512;
   constexpr std::size_t K = 256;
-  const onnx_light_cpu::GemmBlocking blocking{32, 1024, 256, 4, 16};
+  const cpu_compute::GemmBlocking blocking{32, 1024, 256, 4, 16};
   ThreadedExecutor executor;
-  onnx_light_cpu::ExecutionExecutorView view{&executor, 4, &ThreadedExecutor::Run};
+  cpu_compute::ExecutionExecutorView view{&executor, 4, &ThreadedExecutor::Run};
   const std::vector<float> A(M * K, 1.0f);
   const std::vector<float> B(K * N, 1.0f);
   std::vector<float> Y(M * N);
 
   const std::size_t peak_allocation = PeakAllocationBytes([&] {
-    onnx_light_cpu::ExecutionExecutorScope scope(&view);
-    onnx_light_cpu::detail::GemmFloat32Planned<onnx_light_cpu::GemmAlgorithm::kGeneral>(
+    cpu_compute::ExecutionExecutorScope scope(&view);
+    cpu_compute::detail::GemmFloat32Planned<cpu_compute::GemmAlgorithm::kGeneral>(
         false, false, M, N, K, 1.0f, A.data(), B.data(), 0.0f, nullptr, Y.data(), &blocking);
   });
 
@@ -2008,7 +1995,7 @@ TEST(GemmFloat32, DynamicBUsesBoundedWorkerLocalPacking) {
 TEST(GemmFloat32, SingleMicroPanelDoesNotCopyContiguousOperands) {
   constexpr std::size_t M = 17;
   constexpr std::size_t K = 129;
-  const onnx_light_cpu::GemmBlocking blocking{32, 64, K, 4, 16};
+  const cpu_compute::GemmBlocking blocking{32, 64, K, 4, 16};
   const auto A = RandomVector(M * K, 601);
   for (std::size_t N : {15u, 16u, 17u, 31u, 32u}) {
     SCOPED_TRACE(N);
@@ -2017,7 +2004,7 @@ TEST(GemmFloat32, SingleMicroPanelDoesNotCopyContiguousOperands) {
     const auto expected = ReferenceGemm<float>(false, false, M, N, K, 0.75f, A, B, -0.5f, &C);
     std::vector<float> Y(M * N, std::numeric_limits<float>::quiet_NaN());
     const std::size_t peak = PeakAllocationBytes([&] {
-      onnx_light_cpu::detail::GemmFloat32Planned<onnx_light_cpu::GemmAlgorithm::kGeneral>(
+      cpu_compute::detail::GemmFloat32Planned<cpu_compute::GemmAlgorithm::kGeneral>(
           false, false, M, N, K, 0.75f, A.data(), B.data(), -0.5f, C.data(), Y.data(), &blocking);
     });
     EXPECT_EQ(peak, 0u);
@@ -2031,7 +2018,7 @@ TEST(GemmFloat32, FusedFullDepthPackingDoesNotCopyA) {
   constexpr std::size_t M = 127;
   constexpr std::size_t N = 513;
   constexpr std::size_t K = 256;
-  const onnx_light_cpu::GemmBlocking blocking{128, 1024, K, 4, 16};
+  const cpu_compute::GemmBlocking blocking{128, 1024, K, 4, 16};
   const auto A = RandomVector(M * K, 611);
   const auto C = RandomVector(M * N, 613);
   for (bool trans_b : {false, true}) {
@@ -2040,11 +2027,11 @@ TEST(GemmFloat32, FusedFullDepthPackingDoesNotCopyA) {
     const auto expected = ReferenceGemm<float>(false, trans_b, M, N, K, 0.75f, A, B, -0.5f, &C);
     std::vector<float> Y(M * N, std::numeric_limits<float>::quiet_NaN());
     const std::size_t peak = PeakAllocationBytes([&] {
-      onnx_light_cpu::detail::GemmFloat32Planned<onnx_light_cpu::GemmAlgorithm::kGeneral>(
+      cpu_compute::detail::GemmFloat32Planned<cpu_compute::GemmAlgorithm::kGeneral>(
           false, trans_b, M, N, K, 0.75f, A.data(), B.data(), -0.5f, C.data(), Y.data(), &blocking);
     });
     const std::size_t column_block =
-        onnx_light_cpu::detail::SelectGemmColumnBlock(blocking, sizeof(float));
+        cpu_compute::detail::SelectGemmColumnBlock(blocking, sizeof(float));
     EXPECT_LE(peak, K * column_block * sizeof(float));
     for (std::size_t i = 0; i < Y.size(); ++i) {
       EXPECT_NEAR(Y[i], expected[i], 1e-3f) << "i=" << i;
@@ -2056,16 +2043,16 @@ TEST(GemmFloat32, SmallMicroPanelGridKeepsPackingBounded) {
   constexpr std::size_t M = 300;
   constexpr std::size_t N = 600;
   constexpr std::size_t K = 256;
-  const onnx_light_cpu::GemmBlocking blocking{64, 200, 128, 4, 16};
+  const cpu_compute::GemmBlocking blocking{64, 200, 128, 4, 16};
   ThreadedExecutor executor;
-  onnx_light_cpu::ExecutionExecutorView view{&executor, 4, &ThreadedExecutor::Run};
+  cpu_compute::ExecutionExecutorView view{&executor, 4, &ThreadedExecutor::Run};
   const std::vector<float> A(M * K, 1.0f);
   const std::vector<float> B(K * N, 1.0f);
   std::vector<float> Y(M * N);
 
   const std::size_t peak_allocation = PeakAllocationBytes([&] {
-    onnx_light_cpu::ExecutionExecutorScope scope(&view);
-    onnx_light_cpu::detail::GemmFloat32Planned<onnx_light_cpu::GemmAlgorithm::kGeneral>(
+    cpu_compute::ExecutionExecutorScope scope(&view);
+    cpu_compute::detail::GemmFloat32Planned<cpu_compute::GemmAlgorithm::kGeneral>(
         false, false, M, N, K, 1.0f, A.data(), B.data(), 0.0f, nullptr, Y.data(), &blocking);
   });
 
@@ -2080,16 +2067,16 @@ TEST(GemmFloat32, DynamicBUsesAllParticipantsWithTrailingNcPanel) {
   constexpr std::size_t M = 64;
   constexpr std::size_t N = 600;
   constexpr std::size_t K = 256;
-  const onnx_light_cpu::GemmBlocking blocking{64, 512, 256, 4, 16};
+  const cpu_compute::GemmBlocking blocking{64, 512, 256, 4, 16};
   const std::vector<float> A(M * K, 1.0f);
   const std::vector<float> B(K * N, 1.0f);
   std::vector<float> Y(M * N);
   ProductiveExecutor executor{Y.data(), Y.size()};
-  onnx_light_cpu::ExecutionExecutorView view{&executor, 4, &ProductiveExecutor::Run};
+  cpu_compute::ExecutionExecutorView view{&executor, 4, &ProductiveExecutor::Run};
 
   {
-    onnx_light_cpu::ExecutionExecutorScope scope(&view);
-    onnx_light_cpu::detail::GemmFloat32Planned<onnx_light_cpu::GemmAlgorithm::kGeneral>(
+    cpu_compute::ExecutionExecutorScope scope(&view);
+    cpu_compute::detail::GemmFloat32Planned<cpu_compute::GemmAlgorithm::kGeneral>(
         false, false, M, N, K, 1.0f, A.data(), B.data(), 0.0f, nullptr, Y.data(), &blocking);
   }
 
@@ -2168,7 +2155,7 @@ void CheckIntegerMatMul2D(bool a_signed, bool b_signed, std::size_t m, std::size
   const auto expected = ReferenceMatMulInteger(a, a_signed, b, b_signed, m, n, k, a_zp, b_zp);
 
   std::vector<std::int32_t> actual(m * n, -1);
-  onnx_light_cpu::IntegerMatMul2D(
+  cpu_compute::IntegerMatMul2D(
       a.data(), a_signed, b.data(), b_signed, actual.data(), static_cast<std::int64_t>(m),
       static_cast<std::int64_t>(n), static_cast<std::int64_t>(k), a_zp.data(),
       static_cast<std::int64_t>(a_zp.size()), b_zp.data(), static_cast<std::int64_t>(b_zp.size()));
@@ -2197,11 +2184,13 @@ TEST(IntegerMatMul2D, MatchesScalarReferenceAcrossSignednessAndZeroPoints) {
 
 namespace {
 
-using onnx_light_cpu::GemmFloat8Format;
-using onnx_light_cpu::detail::Float8BitsToFloat;
-using onnx_light_cpu::detail::Float8Format;
+using cpu_compute::GemmFloat8Format;
+using cpu_compute::detail::Float8BitsToFloat;
+using cpu_compute::detail::Float8Format;
 
-Float8Format ToDetailFormat(GemmFloat8Format format) { return static_cast<Float8Format>(format); }
+Float8Format ToDetailFormat(cpu_compute::GemmFloat8Format format) {
+  return static_cast<Float8Format>(format);
+}
 
 float ReferenceFloat8Bits(Float8Format format, std::uint8_t value) {
   const unsigned sign = value >> 7;
@@ -2268,7 +2257,7 @@ float ReferenceFloat8Bits(Float8Format format, std::uint8_t value) {
 // encoding. Non-finite encodings are replaced with zero; their exact decoding
 // and propagation are covered separately.
 std::vector<std::uint8_t> SequentialFiniteFloat8Bytes(std::size_t size, unsigned seed,
-                                                      GemmFloat8Format format) {
+                                                      cpu_compute::GemmFloat8Format format) {
   const Float8Format fmt = ToDetailFormat(format);
   std::vector<std::uint8_t> bytes(size);
   for (std::size_t i = 0; i < size; ++i) {
@@ -2282,7 +2271,7 @@ std::vector<std::uint8_t> SequentialFiniteFloat8Bytes(std::size_t size, unsigned
 }
 
 std::vector<float> DecodeFloat8Vector(const std::vector<std::uint8_t> &bytes,
-                                      GemmFloat8Format format) {
+                                      cpu_compute::GemmFloat8Format format) {
   const Float8Format fmt = ToDetailFormat(format);
   std::vector<float> out(bytes.size());
   for (std::size_t i = 0; i < bytes.size(); ++i) {
@@ -2297,8 +2286,8 @@ std::vector<float> DecodeFloat8Vector(const std::vector<std::uint8_t> &bytes,
 // the vectorized table gather on the contiguous copies and the per-element
 // decode on the transposed gathers), the column and K tails, and the algorithm
 // the driver selects for the shape.
-void CheckGemmFloat8(GemmFloat8Format format, bool trans_a, bool trans_b, std::size_t M,
-                     std::size_t N, std::size_t K, float alpha, unsigned seed) {
+void CheckGemmFloat8(cpu_compute::GemmFloat8Format format, bool trans_a, bool trans_b,
+                     std::size_t M, std::size_t N, std::size_t K, float alpha, unsigned seed) {
   const auto a_bytes = SequentialFiniteFloat8Bytes(trans_a ? K * M : M * K, seed, format);
   const auto b_bytes = SequentialFiniteFloat8Bytes(trans_b ? N * K : K * N, seed + 1, format);
   const auto a_f = DecodeFloat8Vector(a_bytes, format);
@@ -2326,9 +2315,9 @@ void CheckGemmFloat8(GemmFloat8Format format, bool trans_a, bool trans_b, std::s
   }
 
   std::vector<float> workspace(M * N, -1.0f);
-  onnx_light_cpu::GemmEpilogue<float> epilogue;
-  onnx_light_cpu::GemmFloat8WithEpilogue(format, trans_a, trans_b, M, N, K, alpha, a_bytes.data(),
-                                         b_bytes.data(), epilogue, workspace.data());
+  cpu_compute::GemmEpilogue<float> epilogue;
+  cpu_compute::GemmFloat8WithEpilogue(format, trans_a, trans_b, M, N, K, alpha, a_bytes.data(),
+                                      b_bytes.data(), epilogue, workspace.data());
 
   for (std::size_t i = 0; i < M * N; ++i) {
     const double operations = static_cast<double>(K + 2);
@@ -2382,29 +2371,29 @@ TEST(GemmFloat8, DecodeAllBytePatternsMatchesReference) {
 }
 
 TEST(GemmFloat8, NonFiniteInputsPropagate) {
-  onnx_light_cpu::GemmEpilogue<float> epilogue;
+  cpu_compute::GemmEpilogue<float> epilogue;
   float output = 0.0f;
   const std::uint8_t one_e4m3fn = 0x38;
   const std::uint8_t nan_e4m3fn = 0x7f;
-  onnx_light_cpu::GemmFloat8WithEpilogue(GemmFloat8Format::kE4M3FN, false, false, 1, 1, 1, 1.0f,
-                                         &nan_e4m3fn, &one_e4m3fn, epilogue, &output);
+  cpu_compute::GemmFloat8WithEpilogue(cpu_compute::GemmFloat8Format::kE4M3FN, false, false, 1, 1, 1,
+                                      1.0f, &nan_e4m3fn, &one_e4m3fn, epilogue, &output);
   EXPECT_TRUE(std::isnan(output));
 
   const std::uint8_t one_e5m2 = 0x3c;
   const std::uint8_t infinity_e5m2 = 0x7c;
-  onnx_light_cpu::GemmFloat8WithEpilogue(GemmFloat8Format::kE5M2, false, false, 1, 1, 1, 1.0f,
-                                         &infinity_e5m2, &one_e5m2, epilogue, &output);
+  cpu_compute::GemmFloat8WithEpilogue(cpu_compute::GemmFloat8Format::kE5M2, false, false, 1, 1, 1,
+                                      1.0f, &infinity_e5m2, &one_e5m2, epilogue, &output);
   EXPECT_TRUE(std::isinf(output));
   EXPECT_GT(output, 0.0f);
 }
 
 TEST(GemmFloat8, RejectsUnknownFormat) {
-  onnx_light_cpu::GemmEpilogue<float> epilogue;
+  cpu_compute::GemmEpilogue<float> epilogue;
   const std::uint8_t value = 0;
   float output = 0.0f;
-  EXPECT_THROW(onnx_light_cpu::GemmFloat8WithEpilogue(static_cast<GemmFloat8Format>(99), false,
-                                                      false, 1, 1, 1, 1.0f, &value, &value,
-                                                      epilogue, &output),
+  EXPECT_THROW(cpu_compute::GemmFloat8WithEpilogue(static_cast<cpu_compute::GemmFloat8Format>(99),
+                                                   false, false, 1, 1, 1, 1.0f, &value, &value,
+                                                   epilogue, &output),
                std::invalid_argument);
 }
 
@@ -2413,16 +2402,16 @@ TEST(GemmFloat8, RejectsUnknownFormat) {
 // native packing/GEMM paths without allowing one format to cover gaps for the
 // other three.
 TEST(GemmFloat8, Float8CorrectnessGateCorpus) {
-  const std::array<GemmFloat8Format, 4> formats = {
-      GemmFloat8Format::kE4M3FN, GemmFloat8Format::kE4M3FNUZ, GemmFloat8Format::kE5M2,
-      GemmFloat8Format::kE5M2FNUZ};
-  CheckGemmFloat8(GemmFloat8Format::kE4M3FN, false, false, 17, 37, 45, 1.0f, 5001);
-  CheckGemmFloat8(GemmFloat8Format::kE4M3FNUZ, false, false, 19, 33, 40, 0.75f, 5011);
-  CheckGemmFloat8(GemmFloat8Format::kE5M2, false, false, 20, 48, 40, 1.0f, 5021);
-  CheckGemmFloat8(GemmFloat8Format::kE5M2FNUZ, false, false, 33, 70, 66, 0.5f, 5031);
+  const std::array<cpu_compute::GemmFloat8Format, 4> formats = {
+      cpu_compute::GemmFloat8Format::kE4M3FN, cpu_compute::GemmFloat8Format::kE4M3FNUZ,
+      cpu_compute::GemmFloat8Format::kE5M2, cpu_compute::GemmFloat8Format::kE5M2FNUZ};
+  CheckGemmFloat8(cpu_compute::GemmFloat8Format::kE4M3FN, false, false, 17, 37, 45, 1.0f, 5001);
+  CheckGemmFloat8(cpu_compute::GemmFloat8Format::kE4M3FNUZ, false, false, 19, 33, 40, 0.75f, 5011);
+  CheckGemmFloat8(cpu_compute::GemmFloat8Format::kE5M2, false, false, 20, 48, 40, 1.0f, 5021);
+  CheckGemmFloat8(cpu_compute::GemmFloat8Format::kE5M2FNUZ, false, false, 33, 70, 66, 0.5f, 5031);
 
   unsigned seed = 5001;
-  for (GemmFloat8Format format : formats) {
+  for (cpu_compute::GemmFloat8Format format : formats) {
     CheckGemmFloat8(format, false, false, 17, 37, 45, 0.75f, seed++); // general, N/K tails
     for (bool trans_a : {false, true}) {
       for (bool trans_b : {false, true}) {

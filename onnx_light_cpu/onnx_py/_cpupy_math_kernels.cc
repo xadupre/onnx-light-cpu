@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "cpu_compute/simd_level.h"
 #include "onnx_light_cpu/onnx_py/_cpupy_kernels.h"
-#include "onnx_light_cpu_compute/simd_level.h"
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/string.h>
@@ -14,8 +14,7 @@ namespace onnx_light_cpu {
 
 void RegisterMathKernels(nb::module_ &m) {
   m.def(
-      "detect_simd_level",
-      []() -> int { return static_cast<int>(onnx_light_cpu::DetectSimdLevel()); },
+      "detect_simd_level", []() -> int { return static_cast<int>(cpu_compute::DetectSimdLevel()); },
       "Returns the detected SIMD level: 0=None, 1=SSE2, 2=AVX, 3=AVX2, 4=AVX512.");
 
   m.def(

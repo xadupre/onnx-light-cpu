@@ -5,13 +5,13 @@
 #include "onnx_light_cpu/kernels/com_microsoft/qmoe_kernel.h"
 #include "onnx_light_cpu/kernels/execution.h"
 
+#include "cpu_compute/checked_arithmetic.h"
 #include "onnx_core/runtime/kernels/kernel_dispatch_table.h"
 #include "onnx_core/runtime/kernels/node_helpers.h"
 #include "onnx_core/runtime/memory/temporary_buffer.h"
 #include "onnx_core/symbolic/sym_tensor.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
 #include "onnx_light_cpu/schemas/com_microsoft/op_schema.h"
-#include "onnx_light_cpu_compute/checked_arithmetic.h"
 
 #include <algorithm>
 #include <cmath>
@@ -28,14 +28,14 @@ namespace rt_ns = ONNX_LIGHT_NAMESPACE::core::runtime;
 using rt_ns::DataType;
 using rt_ns::Tensor;
 
-MoEDataType FloatType(const Tensor &tensor) {
+cpu_compute::MoEDataType FloatType(const Tensor &tensor) {
   switch (static_cast<DataType>(tensor.data_type)) {
   case DataType::FLOAT:
-    return MoEDataType::kFloat32;
+    return cpu_compute::MoEDataType::kFloat32;
   case DataType::FLOAT16:
-    return MoEDataType::kFloat16;
+    return cpu_compute::MoEDataType::kFloat16;
   case DataType::BFLOAT16:
-    return MoEDataType::kBFloat16;
+    return cpu_compute::MoEDataType::kBFloat16;
   default:
     throw std::invalid_argument("QMoE: floating inputs must be FLOAT, FLOAT16 or BFLOAT16.");
   }
@@ -47,12 +47,13 @@ void RequireShape(const Tensor &tensor, std::initializer_list<std::int64_t> shap
       !std::equal(tensor.shape.begin(), tensor.shape.end(), shape.begin())) {
     throw std::invalid_argument(std::string("QMoE: invalid shape for ") + label + ".");
   }
-  CheckedShapeIndexProduct(tensor.shape, "QMoE", label);
+  cpu_compute::CheckedShapeIndexProduct(tensor.shape, "QMoE", label);
 }
 
-QMoEWeight Weight(const Tensor &tensor, const Tensor &scales, std::size_t experts,
-                  std::size_t inputs, std::size_t outputs, bool output_major,
-                  const QMoEAttributes &attributes, const char *label, bool rowwise = false) {
+cpu_compute::QMoEWeight Weight(const Tensor &tensor, const Tensor &scales, std::size_t experts,
+                               std::size_t inputs, std::size_t outputs, bool output_major,
+                               const cpu_compute::QMoEAttributes &attributes, const char *label,
+                               bool rowwise = false) {
   if (static_cast<DataType>(tensor.data_type) != DataType::UINT8) {
     throw std::invalid_argument("QMoE: expert weights must have type UINT8.");
   }
@@ -85,7 +86,8 @@ QMoEWeight Weight(const Tensor &tensor, const Tensor &scales, std::size_t expert
 }
 
 bool Fits(const Tensor &weights, const Tensor &scales, std::size_t experts, std::size_t inputs,
-          std::size_t outputs, bool output_major, bool rowwise, const QMoEAttributes &attributes) {
+          std::size_t outputs, bool output_major, bool rowwise,
+          const cpu_compute::QMoEAttributes &attributes) {
   const auto rows = output_major ? outputs : inputs;
   const auto columns = output_major ? inputs : outputs;
   const auto factor = 8 / attributes.expert_weight_bits;
@@ -118,9 +120,9 @@ QMoEKernel::QMoEKernel(const ONNX_LIGHT_NAMESPACE::NodeProto &node, const rt_ns:
   if (block != 0 && (block < 16 || (block & (block - 1)) != 0)) {
     throw std::invalid_argument("QMoE: block_size must be zero or a power of two at least 16.");
   }
-  attributes_.k = CheckedDimension(k, "QMoE", "k");
+  attributes_.k = cpu_compute::CheckedDimension(k, "QMoE", "k");
   attributes_.expert_weight_bits = static_cast<std::size_t>(bits);
-  attributes_.block_size = CheckedDimension(block, "QMoE", "block_size");
+  attributes_.block_size = cpu_compute::CheckedDimension(block, "QMoE", "block_size");
   attributes_.activation = rt_ns::GetAttributeStringOrDefault(node, "activation_type", "relu");
   const auto fusion = rt_ns::GetAttributeIntOrDefault(node, "swiglu_fusion", 0);
   if ((attributes_.activation == "swiglu" && fusion != 1) ||
@@ -167,24 +169,25 @@ Tensor QMoEKernel::operator()(const Tensor &input, const Tensor &router, const T
   if (input.shape.size() != 2 && input.shape.size() != 3) {
     throw std::invalid_argument("QMoE: input must have rank 2 or 3.");
   }
-  CheckedShapeIndexProduct(input.shape, "QMoE", "input");
-  CheckedShapeIndexProduct(router.shape, "QMoE", "router");
+  cpu_compute::CheckedShapeIndexProduct(input.shape, "QMoE", "input");
+  cpu_compute::CheckedShapeIndexProduct(router.shape, "QMoE", "router");
   for (const auto *tensor : {&fc1, &scales1, &fc2, &scales2, fc3, scales3}) {
     if (tensor) {
-      CheckedShapeIndexProduct(tensor->shape, "QMoE", "weights and scales");
+      cpu_compute::CheckedShapeIndexProduct(tensor->shape, "QMoE", "weights and scales");
     }
   }
-  const auto hidden = CheckedDimension(input.shape.back(), "QMoE", "hidden");
+  const auto hidden = cpu_compute::CheckedDimension(input.shape.back(), "QMoE", "hidden");
   const auto tokens =
       input.shape.size() == 2
-          ? CheckedDimension(input.shape[0], "QMoE", "tokens")
-          : CheckedDimension(CheckedIndexMultiply(input.shape[0], input.shape[1], "QMoE", "tokens"),
-                             "QMoE", "tokens");
+          ? cpu_compute::CheckedDimension(input.shape[0], "QMoE", "tokens")
+          : cpu_compute::CheckedDimension(
+                cpu_compute::CheckedIndexMultiply(input.shape[0], input.shape[1], "QMoE", "tokens"),
+                "QMoE", "tokens");
   if (hidden == 0 || router.shape.size() != 2 || fc2.shape.size() != 3 ||
       router.shape[0] != static_cast<std::int64_t>(tokens)) {
     throw std::invalid_argument("QMoE: invalid input, router or FC2 shape.");
   }
-  const auto experts = CheckedDimension(router.shape[1], "QMoE", "experts");
+  const auto experts = cpu_compute::CheckedDimension(router.shape[1], "QMoE", "experts");
   const bool fused = attributes_.activation == "swiglu";
   bool output_major = fused;
   bool rowwise = false;
@@ -194,9 +197,10 @@ Tensor QMoEKernel::operator()(const Tensor &input, const Tensor &router, const T
     if (fc1.shape.size() != 3 || (major && fused && fc1.shape[1] % 2 != 0)) {
       return false;
     }
-    const auto candidate = CheckedDimension(major ? fc1.shape[1] / (fused ? 2 : 1) : fc2.shape[1],
-                                            "QMoE", "intermediate");
-    const auto candidate_width = CheckedMultiply(candidate, fused ? 2 : 1, "QMoE", "FC1 width");
+    const auto candidate = cpu_compute::CheckedDimension(
+        major ? fc1.shape[1] / (fused ? 2 : 1) : fc2.shape[1], "QMoE", "intermediate");
+    const auto candidate_width =
+        cpu_compute::CheckedMultiply(candidate, fused ? 2 : 1, "QMoE", "FC1 width");
     if (!Fits(fc1, scales1, experts, hidden, candidate_width, major, row_scales, attributes_) ||
         !Fits(fc2, scales2, experts, candidate, hidden, major, row_scales, attributes_) ||
         (fc3 &&
@@ -226,7 +230,7 @@ Tensor QMoEKernel::operator()(const Tensor &input, const Tensor &router, const T
                    "FC1 weights/scales", rowwise);
   auto w2 = Weight(fc2, scales2, experts, intermediate, hidden, output_major, attributes_,
                    "FC2 weights/scales", rowwise);
-  QMoEWeight w3;
+  cpu_compute::QMoEWeight w3;
   if (fc3) {
     w3 = Weight(*fc3, *scales3, experts, hidden, intermediate, output_major, attributes_,
                 "FC3 weights/scales", rowwise);
@@ -244,10 +248,11 @@ Tensor QMoEKernel::operator()(const Tensor &input, const Tensor &router, const T
                  {static_cast<std::int64_t>(experts), static_cast<std::int64_t>(intermediate)},
                  "FC3 bias");
   }
-  const auto size =
-      ComputeQMoEScratchSize(tokens, hidden, experts, intermediate, attributes_, fc3 != nullptr);
-  const auto bytes = CheckedByteSize(CheckedMultiply(tokens, hidden, "QMoE", "output"),
-                                     input.element_size(), "QMoE", "output bytes");
+  const auto size = cpu_compute::ComputeQMoEScratchSize(tokens, hidden, experts, intermediate,
+                                                        attributes_, fc3 != nullptr);
+  const auto bytes =
+      cpu_compute::CheckedByteSize(cpu_compute::CheckedMultiply(tokens, hidden, "QMoE", "output"),
+                                   input.element_size(), "QMoE", "output bytes");
   auto *allocator = rt ? rt->execution_allocator() : ctx_.allocator;
   Tensor output = rt ? rt->MakeOutputTensor(0, input.data_type, input.shape, bytes)
                      : rt_ns::MakeOutputTensor(input.data_type, input.shape, bytes, allocator);
@@ -258,14 +263,15 @@ Tensor QMoEKernel::operator()(const Tensor &input, const Tensor &router, const T
                                                     "QMoE dequantization");
   rt_ns::detail::TemporaryTypedBuffer<float> workspace(size.moe.value_count, allocator,
                                                        "QMoE execution");
-  rt_ns::detail::TemporaryTypedBuffer<MoERoute> routes(size.moe.route_count, allocator,
-                                                       "QMoE routes");
-  ComputeQMoE(input.bytes(), router.bytes(), w1, bias1 ? bias1->bytes() : nullptr, w2,
-              bias2 ? bias2->bytes() : nullptr, fc3 ? &w3 : nullptr,
-              bias3 ? bias3->bytes() : nullptr, output.mutable_bytes(), tokens, hidden, experts,
-              intermediate, type, attributes_, values.data(), size.value_count,
-              {routes.data(), size.moe.route_count, workspace.data(), size.moe.value_count,
-               size.moe.token_blocks});
+  rt_ns::detail::TemporaryTypedBuffer<cpu_compute::MoERoute> routes(size.moe.route_count, allocator,
+                                                                    "QMoE routes");
+  cpu_compute::ComputeQMoE(input.bytes(), router.bytes(), w1, bias1 ? bias1->bytes() : nullptr, w2,
+                           bias2 ? bias2->bytes() : nullptr, fc3 ? &w3 : nullptr,
+                           bias3 ? bias3->bytes() : nullptr, output.mutable_bytes(), tokens, hidden,
+                           experts, intermediate, type, attributes_, values.data(),
+                           size.value_count,
+                           {routes.data(), size.moe.route_count, workspace.data(),
+                            size.moe.value_count, size.moe.token_blocks});
   return output;
 }
 

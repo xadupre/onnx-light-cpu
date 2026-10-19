@@ -113,9 +113,9 @@ Baseline findings (AVX2 ceiling, single thread, this host)
      - 178.2 GFLOPS
      - 0.55x
 
-The single-core AVX2 microkernel (``GemmMicroKernel_AVX2FMA_F32Impl``/
+The single-core AVX2 microkernel (``GemmMicroTile_AVX2FMA_F32Impl``/
 ``...F64Impl`` in
-``onnx_light_cpu_compute/src/math/gemm/avx2/gemm_kernel_avx2_fma.cc``) already
+``cpu_compute/src/math/gemm/avx2/gemm_avx2_fma.cc``) already
 reaches roughly 78-80% of this host's theoretical AVX2 FMA peak
 (2 FMA ports x 8 lanes x 2 flops/FMA) on square/projection/transpose shapes,
 and the float64 path shows the same efficiency against its own peak. GEMV-like
@@ -128,7 +128,7 @@ width, not an under-tuned AVX2 code path: register blocking
 (``kGemmAVX2MR`` = 6 rows x 16 columns), K-unrolling by 4, prefetching, and
 per-microarchitecture register-row selection (Intel Core vs AMD Zen, see
 ``SelectGemmRegisterRowsForMicroarchitecture`` in
-``onnx_light_cpu_compute/src/math/gemm/gemm_blocking.cc``) were already in place
+``cpu_compute/src/math/gemm/gemm_blocking.cc``) were already in place
 before this pass.
 
 A naive multi-thread scaling probe (thread-per-call executor, 4 physical

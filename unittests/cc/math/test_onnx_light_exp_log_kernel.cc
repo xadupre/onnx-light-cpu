@@ -4,11 +4,11 @@
 
 #include "onnx_light_cpu/kernels/math/exp_log_kernel.h"
 
+#include "cpu_compute/execution.h"
 #include "onnx_core/runtime/kernels/kernel_context.h"
 #include "onnx_core/runtime/memory/simple_tensor.h"
 #include "onnx_core/runtime/tuning/kernel_tuning.h"
 #include "onnx_core/symbolic/sym_tensor.h"
-#include "onnx_light_cpu_compute/execution.h"
 
 #include <gtest/gtest.h>
 
@@ -90,7 +90,7 @@ struct InlineExecutor {
   std::int64_t blocks = 0;
 
   static void Run(void *context, std::int64_t num_blocks, void *task_context,
-                  onnx_light_cpu::ExecutionBlockFn task) {
+                  cpu_compute::ExecutionBlockFn task) {
     auto &self = *static_cast<InlineExecutor *>(context);
     ++self.dispatches;
     self.blocks = num_blocks;
@@ -155,8 +155,8 @@ template <typename Kernel> void CheckTuningSchema(const char *op_type) {
   constexpr std::size_t count = 256;
   const rt_ns::Tensor x = rt_ns::Tensor::FromFloat("x", {count}, std::vector<float>(count, 1.0f));
   InlineExecutor executor;
-  onnx_light_cpu::ExecutionExecutorView view{&executor, 8, &InlineExecutor::Run};
-  onnx_light_cpu::ExecutionExecutorScope scope(&view);
+  cpu_compute::ExecutionExecutorView view{&executor, 8, &InlineExecutor::Run};
+  cpu_compute::ExecutionExecutorScope scope(&view);
   EXPECT_EQ(kernel(x).element_count(), count);
   EXPECT_EQ(executor.dispatches, 1);
   EXPECT_EQ(executor.blocks, 3);

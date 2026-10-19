@@ -127,25 +127,25 @@ feature-masked CPU, rather than merely limiting dispatch on a modern host.
 
 ## C++ usage
 
-The numerical code lives in `onnx_light_cpu_compute/`, next to the ONNX/Python
+The numerical code lives in `cpu_compute/`, next to the ONNX/Python
 adapters in `onnx_light_cpu/`. It is a standalone C++20 library: the directory
 can be copied and built without ONNX, onnx-light, Python, or a private thread
 pool. ISA-specific compilation and runtime dispatch are unchanged.
 
 ```bash
-cmake -S onnx_light_cpu_compute -B build-compute \
+cmake -S cpu_compute -B build-compute \
       -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/path/to/install
 cmake --build build-compute --parallel 6
 cmake --install build-compute
 ```
 
 ```cpp
-#include <onnx_light_cpu_compute/math/math_kernels.h>
+#include <cpu_compute/math/math.h>
 
 int main() {
     float input[] = {-1.0f, 2.0f, -3.0f, 4.0f};
     float output[4];
-    onnx_light_cpu::AbsFloat32(input, output, 4);
+    cpu_compute::AbsFloat32(input, output, 4);
     // output = {1.0f, 2.0f, 3.0f, 4.0f}
 }
 ```
@@ -153,27 +153,34 @@ int main() {
 Link against the installed computation package:
 
 ```cmake
-find_package(onnx_light_cpu_compute CONFIG REQUIRED)
-target_link_libraries(my_app PRIVATE onnx_light_cpu_compute::lib_onnx_light_cpu)
+find_package(cpu_compute CONFIG REQUIRED)
+target_link_libraries(my_app PRIVATE cpu_compute::cpu_compute)
 ```
 
-Alternatively, use `add_subdirectory(path/to/onnx_light_cpu_compute)` and the
+Alternatively, use `add_subdirectory(path/to/cpu_compute)` and the
 same target. `BUILD_SHARED_LIBS=ON` selects a shared standalone library; the
-default is static. Headers are under `include/onnx_light_cpu_compute/`, sources
-under `src/`, and the C++ namespace remains `onnx_light_cpu`.
+default is static. Headers are under `include/cpu_compute/`, sources
+under `src/`, and the C++ namespace is `cpu_compute`. The CMake configuration
+is in `cmake/ComputeLibrary.cmake`; standalone build options use the
+`CPU_COMPUTE_` prefix, including `CPU_COMPUTE_MAX_SIMD_LEVEL`,
+`CPU_COMPUTE_HARDENING`, and `CPU_COMPUTE_BUILD_TESTS`.
 
 Direct numerical calls run serially unless the caller borrows its own synchronous
 executor through `ExecutionExecutorView` and `ExecutionExecutorScope` from
-`<onnx_light_cpu_compute/execution.h>`. ONNX kernel entry points adapt the
+`<cpu_compute/execution.h>`. ONNX kernel entry points adapt the
 session's executor in `onnx_light_cpu/kernels/execution.cc`; the computation
 library has no runtime dependency.
 
-The full runtime project continues to export its existing target:
+The full runtime project also exports the computation target:
 
 ```cmake
 find_package(onnx_light_cpu REQUIRED)
-target_link_libraries(my_app PRIVATE onnx_light_cpu::lib_onnx_light_cpu)
+target_link_libraries(my_app PRIVATE onnx_light_cpu::cpu_compute)
 ```
+
+The previous `onnx_light_cpu::lib_onnx_light_cpu` target remains available as a
+compatibility alias in that package. Runtime adapter classes and registration
+functions keep their `onnx_light_cpu` namespace.
 
 ## Python usage
 

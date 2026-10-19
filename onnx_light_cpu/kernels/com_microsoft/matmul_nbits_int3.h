@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "onnx_light_cpu_compute/checked_arithmetic.h"
+#include "cpu_compute/checked_arithmetic.h"
 
 #include "onnx_proto/onnx.h"
 
@@ -58,8 +58,8 @@ InspectMatMulNBitsInt3(const ONNX_LIGHT_NAMESPACE::EncodedValueProto &encoded,
   const auto k = logical.shape().dim(0).dim_value();
   const auto n = logical.shape().dim(1).dim_value();
   const auto blocks = static_cast<std::size_t>(k / 32 + (k % 32 != 0));
-  const auto count =
-      CheckedMultiply(static_cast<std::size_t>(n), blocks, "MatMulNBits INT3", "block count");
+  const auto count = cpu_compute::CheckedMultiply(static_cast<std::size_t>(n), blocks,
+                                                  "MatMulNBits INT3", "block count");
   const auto matches = [n, blocks](const auto &field, std::string_view name, int data_type,
                                    std::int64_t third = -1) {
     if (field.name() != name || !field.has_type() || !field.type().has_tensor_type()) {
@@ -80,12 +80,13 @@ InspectMatMulNBitsInt3(const ONNX_LIGHT_NAMESPACE::EncodedValueProto &encoded,
       (fields.size() == 4 && !matches(fields[3], "zero_points", TensorProto::UINT8))) {
     throw std::invalid_argument("MatMulNBits INT3: invalid field types or dimensions.");
   }
-  const auto weight_bytes = CheckedMultiply(count, 12, "MatMulNBits INT3", "weight bytes");
-  const auto scale_bytes = CheckedMultiply(count, logical.elem_type() == TensorProto::FLOAT ? 4 : 2,
-                                           "MatMulNBits INT3", "scale bytes");
-  const auto total =
-      CheckedAdd(CheckedAdd(weight_bytes, scale_bytes, "MatMulNBits INT3", "payload bytes"),
-                 fields.size() == 4 ? count : 0, "MatMulNBits INT3", "payload bytes");
+  const auto weight_bytes =
+      cpu_compute::CheckedMultiply(count, 12, "MatMulNBits INT3", "weight bytes");
+  const auto scale_bytes = cpu_compute::CheckedMultiply(
+      count, logical.elem_type() == TensorProto::FLOAT ? 4 : 2, "MatMulNBits INT3", "scale bytes");
+  const auto total = cpu_compute::CheckedAdd(
+      cpu_compute::CheckedAdd(weight_bytes, scale_bytes, "MatMulNBits INT3", "payload bytes"),
+      fields.size() == 4 ? count : 0, "MatMulNBits INT3", "payload bytes");
   if (encoded.has_parameter_ref() || encoded.external_data().size() != 0 ||
       (encoded.has_data_location() && encoded.data_location() != TensorProto::DEFAULT) ||
       encoded.raw_data().size() != total) {

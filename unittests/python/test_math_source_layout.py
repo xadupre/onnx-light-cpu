@@ -4,9 +4,24 @@
 
 """Regression tests for the math implementation's operation/ISA layout."""
 
+import re
 from pathlib import Path
 
-_MATH = Path(__file__).resolve().parents[2] / "onnx_light_cpu_compute" / "src" / "math"
+_COMPUTE = Path(__file__).resolve().parents[2] / "cpu_compute"
+_MATH = _COMPUTE / "src" / "math"
+
+
+def test_compute_names_are_runtime_independent():
+    files = [
+        path for path in _COMPUTE.rglob("*") if path.suffix in {".cc", ".h", ".hpp", ".cmake"}
+    ]
+    misplaced = [
+        str(path.relative_to(_COMPUTE))
+        for path in files
+        if "kernel" in str(path.relative_to(_COMPUTE)).lower()
+        or re.search(r"\bnamespace\s+onnx_light_cpu\b", path.read_text(encoding="utf-8"))
+    ]
+    assert not misplaced, f"Runtime-specific computation names: {sorted(misplaced)}"
 
 
 def test_simd_files_are_in_isa_subfolders():

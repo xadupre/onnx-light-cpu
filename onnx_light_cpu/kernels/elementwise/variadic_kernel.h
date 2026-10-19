@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "onnx_light_cpu_compute/math/binary/variadic_elementwise_plan.h"
+#include "cpu_compute/math/binary/variadic_elementwise_plan.h"
 
 #include "onnx_core/runtime/kernels/kernel_context.h"
 #include "onnx_core/runtime/memory/simple_tensor.h"
@@ -31,7 +31,7 @@ public:
                   ONNX_LIGHT_NAMESPACE::core::runtime::Tensor &output) const;
 
 private:
-  VariadicOperator op_;
+  cpu_compute::VariadicOperator op_;
 };
 
 void RegisterVariadicElementwiseKernels();

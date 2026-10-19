@@ -2,10 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "cpu_compute/execution.h"
+#include "cpu_compute/math/half_conversion.h"
 #include "onnx_light_cpu/kernels/com_microsoft/group_query_attention_kernel.h"
 #include "onnx_light_cpu/kernels/com_microsoft/naive_group_query_attention_kernel.h"
-#include "onnx_light_cpu_compute/execution.h"
-#include "onnx_light_cpu_compute/math/half_conversion.h"
 
 #include "onnx_core/runtime/kernels/kernel_context.h"
 #include "onnx_core/runtime/memory/simple_tensor.h"
@@ -96,8 +96,8 @@ Tensor MakeHalfTensor(DataType dtype, const Shape &shape, const std::vector<floa
   std::vector<std::uint8_t> bytes(values.size() * sizeof(std::uint16_t));
   auto *words = reinterpret_cast<std::uint16_t *>(bytes.data());
   for (std::size_t i = 0; i < values.size(); ++i) {
-    words[i] = dtype == DataType::FLOAT16 ? onnx_light_cpu::detail::FloatToFloat16Bits(values[i])
-                                          : onnx_light_cpu::detail::FloatToBFloat16Bits(values[i]);
+    words[i] = dtype == DataType::FLOAT16 ? cpu_compute::detail::FloatToFloat16Bits(values[i])
+                                          : cpu_compute::detail::FloatToBFloat16Bits(values[i]);
   }
   return Tensor("", static_cast<std::int32_t>(dtype), shape, std::move(bytes));
 }
@@ -109,11 +109,11 @@ std::vector<float> RoundTripThroughHalf(DataType dtype, const std::vector<float>
   std::vector<float> rounded(values.size());
   for (std::size_t i = 0; i < values.size(); ++i) {
     if (dtype == DataType::FLOAT16) {
-      rounded[i] = onnx_light_cpu::detail::Float16BitsToFloat(
-          onnx_light_cpu::detail::FloatToFloat16Bits(values[i]));
+      rounded[i] = cpu_compute::detail::Float16BitsToFloat(
+          cpu_compute::detail::FloatToFloat16Bits(values[i]));
     } else {
-      rounded[i] = onnx_light_cpu::detail::Bfloat16BitsToFloat(
-          onnx_light_cpu::detail::FloatToBFloat16Bits(values[i]));
+      rounded[i] = cpu_compute::detail::Bfloat16BitsToFloat(
+          cpu_compute::detail::FloatToBFloat16Bits(values[i]));
     }
   }
   return rounded;
@@ -150,14 +150,14 @@ void ExpectTensorsNear(const Tensor &actual, const Tensor &expected, float toler
       actual_value = actual.AsFloat()[i];
       expected_value = expected.AsFloat()[i];
     } else if (dtype == DataType::FLOAT16) {
-      actual_value = onnx_light_cpu::detail::Float16BitsToFloat(
+      actual_value = cpu_compute::detail::Float16BitsToFloat(
           reinterpret_cast<const std::uint16_t *>(actual.bytes())[i]);
-      expected_value = onnx_light_cpu::detail::Float16BitsToFloat(
+      expected_value = cpu_compute::detail::Float16BitsToFloat(
           reinterpret_cast<const std::uint16_t *>(expected.bytes())[i]);
     } else {
-      actual_value = onnx_light_cpu::detail::Bfloat16BitsToFloat(
+      actual_value = cpu_compute::detail::Bfloat16BitsToFloat(
           reinterpret_cast<const std::uint16_t *>(actual.bytes())[i]);
-      expected_value = onnx_light_cpu::detail::Bfloat16BitsToFloat(
+      expected_value = cpu_compute::detail::Bfloat16BitsToFloat(
           reinterpret_cast<const std::uint16_t *>(expected.bytes())[i]);
     }
     EXPECT_NEAR(actual_value, expected_value, tolerance) << "element " << i;
@@ -389,7 +389,7 @@ struct InlineExecutor {
   std::int64_t dispatches = 0;
 
   static void Run(void *context, std::int64_t num_blocks, void *task_context,
-                  onnx_light_cpu::ExecutionBlockFn task) {
+                  cpu_compute::ExecutionBlockFn task) {
     auto &self = *static_cast<InlineExecutor *>(context);
     ++self.dispatches;
     for (std::int64_t block = 0; block < num_blocks; ++block) {
@@ -511,8 +511,8 @@ void RunDifferentialCase(const DifferentialCase &c, DataType dtype, float tolera
   Tensor optimized_output;
   InlineExecutor executor;
   if (c.expect_parallel) {
-    onnx_light_cpu::ExecutionExecutorView view{&executor, 8, &InlineExecutor::Run};
-    onnx_light_cpu::ExecutionExecutorScope scope(&view);
+    cpu_compute::ExecutionExecutorView view{&executor, 8, &InlineExecutor::Run};
+    cpu_compute::ExecutionExecutorScope scope(&view);
     optimized_output = optimized_kernel(
         node, query, key, value, seqlens_k, total_sequence_length, past_key_ptr, past_value_ptr,
         cos_cache_ptr, sin_cache_ptr, position_ids_ptr, attention_bias_ptr,

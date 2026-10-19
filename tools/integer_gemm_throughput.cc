@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "onnx_light_cpu_compute/math/gemm/vnni/integer_gemm_vnni.h"
-#include "onnx_light_cpu_compute/simd_level.h"
+#include "cpu_compute/math/gemm/vnni/integer_gemm_vnni.h"
+#include "cpu_compute/simd_level.h"
 
 #include <algorithm>
 #include <array>
@@ -71,24 +71,24 @@ int main(int argc, char **argv) {
     std::fprintf(stderr, "Dimensions must be in [1, 8192].\n");
     return 1;
   }
-  using namespace onnx_light_cpu;
-  detail::IntegerVnniDotFn dot = &detail::IntegerDotU8S8Scalar;
+  using namespace cpu_compute;
+  cpu_compute::detail::IntegerVnniDotFn dot = &cpu_compute::detail::IntegerDotU8S8Scalar;
   const char *isa = "scalar";
-#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_INTEGER
-  if (DetectSimdLevel() >= SimdLevel::kAVX2) {
-    dot = &detail::IntegerDotU8S8Avx2;
+#ifdef CPU_COMPUTE_HAVE_AVX2_INTEGER
+  if (cpu_compute::DetectSimdLevel() >= cpu_compute::SimdLevel::kAVX2) {
+    dot = &cpu_compute::detail::IntegerDotU8S8Avx2;
     isa = "avx2";
   }
 #endif
-#ifdef ONNX_LIGHT_CPU_HAVE_AVXVNNI
-  if (IntegerMatMul2DUsesAvxVnni()) {
-    dot = &detail::IntegerDotU8S8AvxVnni;
+#ifdef CPU_COMPUTE_HAVE_AVXVNNI
+  if (cpu_compute::IntegerMatMul2DUsesAvxVnni()) {
+    dot = &cpu_compute::detail::IntegerDotU8S8AvxVnni;
     isa = "avxvnni";
   }
 #endif
-#ifdef ONNX_LIGHT_CPU_HAVE_AVX512VNNI
-  if (IntegerMatMul2DUsesVnni()) {
-    dot = &detail::IntegerDotU8S8Avx512Vnni;
+#ifdef CPU_COMPUTE_HAVE_AVX512VNNI
+  if (cpu_compute::IntegerMatMul2DUsesVnni()) {
+    dot = &cpu_compute::detail::IntegerDotU8S8Avx512Vnni;
     isa = "avx512vnni";
   }
 #endif
@@ -106,14 +106,16 @@ int main(int argc, char **argv) {
     return 1;
   }
   const auto pack = [&] {
-    detail::PackS8ColRange(b.data(), true, 0, k, n, packed_b.data(), sums.data(), 0, n);
+    cpu_compute::detail::PackS8ColRange(b.data(), true, 0, k, n, packed_b.data(), sums.data(), 0,
+                                        n);
   };
   const auto packed = [&] {
-    detail::IntegerMatMul2DWithDot(dot, a.data(), false, b.data(), true, expected.data(), m, n, k,
-                                   &az, 1, &bz, 1);
+    cpu_compute::detail::IntegerMatMul2DWithDot(dot, a.data(), false, b.data(), true,
+                                                expected.data(), m, n, k, &az, 1, &bz, 1);
   };
   const auto dispatched = [&] {
-    IntegerMatMul2D(a.data(), false, b.data(), true, c.data(), m, n, k, &az, 1, &bz, 1);
+    cpu_compute::IntegerMatMul2D(a.data(), false, b.data(), true, c.data(), m, n, k, &az, 1, &bz,
+                                 1);
   };
   packed();
   dispatched();
@@ -121,17 +123,20 @@ int main(int argc, char **argv) {
     std::fprintf(stderr, "Dispatched output differs from packed output.\n");
     return 1;
   }
-#if defined(ONNX_LIGHT_CPU_HAVE_AVX2_INTEGER) && defined(ONNX_LIGHT_CPU_HAVE_AVXVNNI)
-  if (DetectSimdLevel() >= SimdLevel::kAVX2 && IntegerMatMul2DUsesAvxVnni()) {
-    const detail::IntegerVnniDotFn avx2_dot =
-        k % 32 == 0 ? &detail::IntegerDotU8S8Avx2 : &detail::IntegerDotU8S8Avx2ShortTail;
+#if defined(CPU_COMPUTE_HAVE_AVX2_INTEGER) && defined(CPU_COMPUTE_HAVE_AVXVNNI)
+  if (cpu_compute::DetectSimdLevel() >= cpu_compute::SimdLevel::kAVX2 &&
+      cpu_compute::IntegerMatMul2DUsesAvxVnni()) {
+    const cpu_compute::detail::IntegerVnniDotFn avx2_dot =
+        k % 32 == 0 ? &cpu_compute::detail::IntegerDotU8S8Avx2
+                    : &cpu_compute::detail::IntegerDotU8S8Avx2ShortTail;
     const auto avx2 = [&] {
-      detail::IntegerMatMul2DWithDot(avx2_dot, a.data(), false, b.data(), true, c.data(), m, n, k,
-                                     &az, 1, &bz, 1);
+      cpu_compute::detail::IntegerMatMul2DWithDot(avx2_dot, a.data(), false, b.data(), true,
+                                                  c.data(), m, n, k, &az, 1, &bz, 1);
     };
     const auto avxvnni = [&] {
-      detail::IntegerMatMul2DWithDot(&detail::IntegerDotU8S8AvxVnni, a.data(), false, b.data(),
-                                     true, c.data(), m, n, k, &az, 1, &bz, 1);
+      cpu_compute::detail::IntegerMatMul2DWithDot(&cpu_compute::detail::IntegerDotU8S8AvxVnni,
+                                                  a.data(), false, b.data(), true, c.data(), m, n,
+                                                  k, &az, 1, &bz, 1);
     };
     avx2();
     if (c != expected) {
@@ -162,9 +167,11 @@ int main(int argc, char **argv) {
               static_cast<long long>(m), static_cast<long long>(n), static_cast<long long>(k), az,
               bz, isa);
   std::printf("plan=%s packed_b_bytes=%lld\n",
-              IntegerMatMulPlanName(SelectIntegerMatMulPlan(m, n, k)),
-              static_cast<long long>(
-                  SelectIntegerMatMulPlan(m, n, k) == IntegerMatMulPlan::kPacked ? n * k : 0));
+              cpu_compute::IntegerMatMulPlanName(cpu_compute::SelectIntegerMatMulPlan(m, n, k)),
+              static_cast<long long>(cpu_compute::SelectIntegerMatMulPlan(m, n, k) ==
+                                             cpu_compute::IntegerMatMulPlan::kPacked
+                                         ? n * k
+                                         : 0));
   std::printf("pack_b_seconds=%.9f dot_seconds=%.9f packed_total_seconds=%.9f "
               "dispatched_seconds=%.9f\n",
               pack_seconds, dot_seconds, packed_seconds, dispatched_seconds);

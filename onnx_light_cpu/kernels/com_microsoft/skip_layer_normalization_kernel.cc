@@ -5,12 +5,12 @@
 #include "onnx_light_cpu/kernels/com_microsoft/skip_layer_normalization_kernel.h"
 #include "onnx_light_cpu/kernels/execution.h"
 
+#include "cpu_compute/execution.h"
+#include "cpu_compute/math/normalization.h"
 #include "onnx_light_cpu/kernels/com_microsoft/skip_simplified_layer_normalization_helpers.h"
 #include "onnx_light_cpu/kernels/com_microsoft/skip_simplified_layer_normalization_kernel.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
 #include "onnx_light_cpu/schemas/com_microsoft/op_schema.h"
-#include "onnx_light_cpu_compute/execution.h"
-#include "onnx_light_cpu_compute/math/normalization_kernel.h"
 
 #include "onnx_core/runtime/kernels/node_helpers.h"
 
@@ -63,49 +63,49 @@ Normalize(const runtime::Tensor &input, const runtime::Tensor &skip, const runti
 
   auto *output = normalization::MutableData<Type>(result.output);
   auto *sum = output_sum ? normalization::MutableData<Type>(result.input_skip_bias_sum) : nullptr;
-  ExecuteRanges(static_cast<std::int64_t>(dims.rows), static_cast<double>(dims.width),
-                [&](std::int64_t begin, std::int64_t end) {
-                  for (std::size_t row = static_cast<std::size_t>(begin);
-                       row < static_cast<std::size_t>(end); ++row) {
-                    const std::size_t base = row * dims.width;
-                    const std::size_t skip_base = (row % dims.skip_rows) * dims.width;
-                    float mean = 0.0F;
-                    float m2 = 0.0F;
-                    for (std::size_t i = 0; i < dims.width; ++i) {
-                      float residual = helpers::Load<Type>(input, base + i) +
-                                       helpers::Load<Type>(skip, skip_base + i);
-                      if (bias != nullptr) {
-                        residual += helpers::Load<Type>(*bias, i);
-                      }
-                      if (sum != nullptr) {
-                        Traits::Store(sum, base + i, residual);
-                      }
-                      const float delta = residual - mean;
-                      mean += delta / static_cast<float>(i + 1);
-                      m2 += delta * (residual - mean);
-                    }
-                    const float inverse =
-                        1.0F / std::sqrt(m2 / static_cast<float>(dims.width) + epsilon);
-                    if (output_mean) {
-                      result.mean.AsFloat()[row] = mean;
-                    }
-                    if (output_inv_std_var) {
-                      result.inv_std_var.AsFloat()[row] = inverse;
-                    }
-                    for (std::size_t i = 0; i < dims.width; ++i) {
-                      float residual = helpers::Load<Type>(input, base + i) +
-                                       helpers::Load<Type>(skip, skip_base + i);
-                      if (bias != nullptr) {
-                        residual += helpers::Load<Type>(*bias, i);
-                      }
-                      float value = (residual - mean) * inverse * helpers::Load<Type>(gamma, i);
-                      if (beta != nullptr) {
-                        value += helpers::Load<Type>(*beta, i);
-                      }
-                      Traits::Store(output, base + i, value);
-                    }
-                  }
-                });
+  cpu_compute::ExecuteRanges(
+      static_cast<std::int64_t>(dims.rows), static_cast<double>(dims.width),
+      [&](std::int64_t begin, std::int64_t end) {
+        for (std::size_t row = static_cast<std::size_t>(begin); row < static_cast<std::size_t>(end);
+             ++row) {
+          const std::size_t base = row * dims.width;
+          const std::size_t skip_base = (row % dims.skip_rows) * dims.width;
+          float mean = 0.0F;
+          float m2 = 0.0F;
+          for (std::size_t i = 0; i < dims.width; ++i) {
+            float residual =
+                helpers::Load<Type>(input, base + i) + helpers::Load<Type>(skip, skip_base + i);
+            if (bias != nullptr) {
+              residual += helpers::Load<Type>(*bias, i);
+            }
+            if (sum != nullptr) {
+              Traits::Store(sum, base + i, residual);
+            }
+            const float delta = residual - mean;
+            mean += delta / static_cast<float>(i + 1);
+            m2 += delta * (residual - mean);
+          }
+          const float inverse = 1.0F / std::sqrt(m2 / static_cast<float>(dims.width) + epsilon);
+          if (output_mean) {
+            result.mean.AsFloat()[row] = mean;
+          }
+          if (output_inv_std_var) {
+            result.inv_std_var.AsFloat()[row] = inverse;
+          }
+          for (std::size_t i = 0; i < dims.width; ++i) {
+            float residual =
+                helpers::Load<Type>(input, base + i) + helpers::Load<Type>(skip, skip_base + i);
+            if (bias != nullptr) {
+              residual += helpers::Load<Type>(*bias, i);
+            }
+            float value = (residual - mean) * inverse * helpers::Load<Type>(gamma, i);
+            if (beta != nullptr) {
+              value += helpers::Load<Type>(*beta, i);
+            }
+            Traits::Store(output, base + i, value);
+          }
+        }
+      });
   return result;
 }
 
@@ -141,16 +141,17 @@ NormalizeFloat32(const runtime::Tensor &input, const runtime::Tensor &skip,
   auto *sum = output_sum
                   ? normalization::MutableData<runtime::DataType::FLOAT>(result.input_skip_bias_sum)
                   : nullptr;
-  ExecuteRanges(
+  cpu_compute::ExecuteRanges(
       static_cast<std::int64_t>(dims.rows), static_cast<double>(dims.width),
       [&](std::int64_t begin, std::int64_t end) {
         for (std::size_t row = static_cast<std::size_t>(begin); row < static_cast<std::size_t>(end);
              ++row) {
           const std::size_t base = row * dims.width;
           const std::size_t skip_base = (row % dims.skip_rows) * dims.width;
-          AddNormalizationResidualFloat32(input_data + base, skip_data + skip_base, bias_data,
-                                          output + base, dims.width);
-          const auto moments = ComputeNormalizationMomentsFloat32(output + base, dims.width);
+          cpu_compute::AddNormalizationResidualFloat32(input_data + base, skip_data + skip_base,
+                                                       bias_data, output + base, dims.width);
+          const auto moments =
+              cpu_compute::ComputeNormalizationMomentsFloat32(output + base, dims.width);
           const float inverse = 1.0F / std::sqrt(moments.variance + epsilon);
           if (sum != nullptr) {
             std::memcpy(sum + base, output + base, dims.width * sizeof(float));
@@ -161,8 +162,9 @@ NormalizeFloat32(const runtime::Tensor &input, const runtime::Tensor &skip,
           if (output_inv_std_var) {
             result.inv_std_var.AsFloat()[row] = inverse;
           }
-          ApplyNormalizationAffineFloat32(output + base, gamma_data, beta_data, output + base,
-                                          dims.width, moments.mean, inverse);
+          cpu_compute::ApplyNormalizationAffineFloat32(output + base, gamma_data, beta_data,
+                                                       output + base, dims.width, moments.mean,
+                                                       inverse);
         }
       });
   return result;

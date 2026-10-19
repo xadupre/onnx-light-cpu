@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "onnx_light_cpu_compute/com_microsoft/bias_gelu.h"
+#include "cpu_compute/com_microsoft/bias_gelu.h"
 
 #include "onnx_core/runtime/kernels/kernel_context.h"
 #include "onnx_core/runtime/memory/simple_tensor.h"
@@ -29,8 +29,8 @@ namespace onnx_light_cpu {
 /// ``A``'s last dimension, it broadcasts ``B`` over that last dimension and
 /// applies the exact (erf-based) Gaussian Error Linear Unit
 /// ``Gelu(z) = 0.5 * z * (1 + erf(z / sqrt(2)))`` to ``A + B``. The
-/// computation is delegated to the ``BiasGelu*`` routines declared in
-/// ``onnx_light_cpu_compute/com_microsoft/bias_gelu.h`` and scheduled row-by-row.
+/// computation is delegated to the ``BiasGelu*`` kernels declared in
+/// ``cpu_compute/com_microsoft/bias_gelu.h`` and scheduled row-by-row.
 /// Float32 uses runtime-dispatched AVX2/FMA or AVX-512 kernels when available;
 /// float16 and bfloat16 values are decoded to float32 scalar-by-scalar and
 /// re-encoded without temporary allocations.
@@ -68,7 +68,8 @@ public:
                   ONNX_LIGHT_NAMESPACE::core::runtime::Tensor &output) const;
 
 private:
-  BiasGeluExecutionTuning tuning_ = kDefaultBiasGeluFloat32ExecutionTuning;
+  cpu_compute::BiasGeluExecutionTuning tuning_ =
+      cpu_compute::kDefaultBiasGeluFloat32ExecutionTuning;
   bool tuning_configured_ = false;
 };
 

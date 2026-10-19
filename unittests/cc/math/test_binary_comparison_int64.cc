@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "onnx_light_cpu_compute/math/binary/binary_comparison_kernel.h"
+#include "cpu_compute/math/binary/binary_comparison.h"
 
 #include <gtest/gtest.h>
 
@@ -13,11 +13,12 @@
 
 namespace {
 
-using namespace onnx_light_cpu;
+using namespace cpu_compute;
 
-constexpr std::array kOperators{BinaryOperator::kEqual, BinaryOperator::kGreater,
-                                BinaryOperator::kGreaterOrEqual, BinaryOperator::kLess,
-                                BinaryOperator::kLessOrEqual};
+constexpr std::array kOperators{
+    cpu_compute::BinaryOperator::kEqual, cpu_compute::BinaryOperator::kGreater,
+    cpu_compute::BinaryOperator::kGreaterOrEqual, cpu_compute::BinaryOperator::kLess,
+    cpu_compute::BinaryOperator::kLessOrEqual};
 constexpr std::array<std::uint64_t, 12> kBoundaryBits{0,
                                                       1,
                                                       2,
@@ -31,17 +32,17 @@ constexpr std::array<std::uint64_t, 12> kBoundaryBits{0,
                                                       0x8000000000000001,
                                                       0xffffffffffffffff};
 
-template <typename T> bool Expected(T a, T b, BinaryOperator op) {
+template <typename T> bool Expected(T a, T b, cpu_compute::BinaryOperator op) {
   switch (op) {
-  case BinaryOperator::kEqual:
+  case cpu_compute::BinaryOperator::kEqual:
     return a == b;
-  case BinaryOperator::kGreater:
+  case cpu_compute::BinaryOperator::kGreater:
     return a > b;
-  case BinaryOperator::kGreaterOrEqual:
+  case cpu_compute::BinaryOperator::kGreaterOrEqual:
     return a >= b;
-  case BinaryOperator::kLess:
+  case cpu_compute::BinaryOperator::kLess:
     return a < b;
-  case BinaryOperator::kLessOrEqual:
+  case cpu_compute::BinaryOperator::kLessOrEqual:
     return a <= b;
   default:
     ADD_FAILURE() << "Unexpected comparison";
@@ -50,8 +51,8 @@ template <typename T> bool Expected(T a, T b, BinaryOperator op) {
 }
 
 template <typename T>
-using Kernel = void (*)(const T *, const T *, std::uint8_t *, std::size_t, BinaryOperator, bool,
-                        bool);
+using Kernel = void (*)(const T *, const T *, std::uint8_t *, std::size_t,
+                        cpu_compute::BinaryOperator, bool, bool);
 
 template <typename T> void Check(Kernel<T> kernel) {
   for (std::size_t width : {4, 8}) {
@@ -61,8 +62,8 @@ template <typename T> void Check(Kernel<T> kernel) {
       for (std::size_t lane = 0; lane < width; ++lane) {
         right[lane] = (mask >> lane) & 1U;
       }
-      kernel(left.data(), right.data(), output.data() + 1, width, BinaryOperator::kEqual, false,
-             false);
+      kernel(left.data(), right.data(), output.data() + 1, width,
+             cpu_compute::BinaryOperator::kEqual, false, false);
       EXPECT_EQ(output.front(), 0xa5);
       EXPECT_EQ(output.back(), 0xa5);
       for (std::size_t lane = 0; lane < width; ++lane) {
@@ -138,59 +139,61 @@ TEST(BinaryComparisonInt64, DispatchSigned) { Check<std::int64_t>(BinaryCompareI
 TEST(BinaryComparisonInt64, DispatchUnsigned) { Check<std::uint64_t>(BinaryCompareUInt64); }
 
 TEST(BinaryComparisonInt64, ReportsActualVectorPath) {
-  const char *(*preferred_implementation)() = &BinaryCompareInt64Implementation;
-  EXPECT_STREQ(preferred_implementation(), BinaryCompareInt64Implementation(8));
+  const char *(*preferred_implementation)() = &cpu_compute::BinaryCompareInt64Implementation;
+  EXPECT_STREQ(preferred_implementation(), cpu_compute::BinaryCompareInt64Implementation(8));
   EXPECT_EQ(preferred_implementation(), preferred_implementation());
   for (std::size_t count = 0; count < 4; ++count) {
-    EXPECT_EQ(BinaryComparisonInt64SimdLevel(count), SimdLevel::kNone);
-    EXPECT_STREQ(BinaryCompareInt64Implementation(count), "scalar");
+    EXPECT_EQ(cpu_compute::BinaryComparisonInt64SimdLevel(count), cpu_compute::SimdLevel::kNone);
+    EXPECT_STREQ(cpu_compute::BinaryCompareInt64Implementation(count), "scalar");
   }
-  const auto short_level = BinaryComparisonInt64SimdLevel(4);
-  EXPECT_TRUE(short_level == SimdLevel::kNone || short_level == SimdLevel::kAVX2);
-  EXPECT_EQ(BinaryComparisonInt64SimdLevel(7), short_level);
-  const auto long_level = BinaryComparisonInt64SimdLevel(8);
+  const auto short_level = cpu_compute::BinaryComparisonInt64SimdLevel(4);
+  EXPECT_TRUE(short_level == cpu_compute::SimdLevel::kNone ||
+              short_level == cpu_compute::SimdLevel::kAVX2);
+  EXPECT_EQ(cpu_compute::BinaryComparisonInt64SimdLevel(7), short_level);
+  const auto long_level = cpu_compute::BinaryComparisonInt64SimdLevel(8);
   EXPECT_GE(long_level, short_level);
-  EXPECT_EQ(BinaryComparisonInt64SimdLevel(4099), long_level);
+  EXPECT_EQ(cpu_compute::BinaryComparisonInt64SimdLevel(4099), long_level);
   for (std::size_t count : {4, 8, 4099}) {
-    const auto level = BinaryComparisonInt64SimdLevel(count);
-    EXPECT_LE(level, DetectSimdLevel());
-    EXPECT_TRUE(level == SimdLevel::kNone || level == SimdLevel::kAVX2 ||
-                level == SimdLevel::kAVX512);
-    EXPECT_STREQ(BinaryCompareInt64Implementation(count), level == SimdLevel::kAVX512 ? "avx512"
-                                                          : level == SimdLevel::kAVX2 ? "avx2"
-                                                                                      : "scalar");
+    const auto level = cpu_compute::BinaryComparisonInt64SimdLevel(count);
+    EXPECT_LE(level, cpu_compute::DetectSimdLevel());
+    EXPECT_TRUE(level == cpu_compute::SimdLevel::kNone || level == cpu_compute::SimdLevel::kAVX2 ||
+                level == cpu_compute::SimdLevel::kAVX512);
+    EXPECT_STREQ(cpu_compute::BinaryCompareInt64Implementation(count),
+                 level == cpu_compute::SimdLevel::kAVX512 ? "avx512"
+                 : level == cpu_compute::SimdLevel::kAVX2 ? "avx2"
+                                                          : "scalar");
   }
 }
 
-#ifdef ONNX_LIGHT_CPU_HAVE_AVX2
+#ifdef CPU_COMPUTE_HAVE_AVX2
 TEST(BinaryComparisonInt64, Avx2Signed) {
-  if (DetectSimdLevel() < SimdLevel::kAVX2) {
+  if (cpu_compute::DetectSimdLevel() < cpu_compute::SimdLevel::kAVX2) {
     GTEST_SKIP() << "AVX2 unavailable";
   }
-  Check<std::int64_t>(BinaryCompareInt64_AVX2);
+  Check<std::int64_t>(cpu_compute::BinaryCompareInt64_AVX2);
 }
 
 TEST(BinaryComparisonInt64, Avx2Unsigned) {
-  if (DetectSimdLevel() < SimdLevel::kAVX2) {
+  if (cpu_compute::DetectSimdLevel() < cpu_compute::SimdLevel::kAVX2) {
     GTEST_SKIP() << "AVX2 unavailable";
   }
-  Check<std::uint64_t>(BinaryCompareUInt64_AVX2);
+  Check<std::uint64_t>(cpu_compute::BinaryCompareUInt64_AVX2);
 }
 #endif
 
-#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
+#ifdef CPU_COMPUTE_HAVE_AVX512
 TEST(BinaryComparisonInt64, Avx512Signed) {
-  if (DetectSimdLevel() < SimdLevel::kAVX512) {
+  if (cpu_compute::DetectSimdLevel() < cpu_compute::SimdLevel::kAVX512) {
     GTEST_SKIP() << "AVX-512F unavailable";
   }
-  Check<std::int64_t>(BinaryCompareInt64_AVX512);
+  Check<std::int64_t>(cpu_compute::BinaryCompareInt64_AVX512);
 }
 
 TEST(BinaryComparisonInt64, Avx512Unsigned) {
-  if (DetectSimdLevel() < SimdLevel::kAVX512) {
+  if (cpu_compute::DetectSimdLevel() < cpu_compute::SimdLevel::kAVX512) {
     GTEST_SKIP() << "AVX-512F unavailable";
   }
-  Check<std::uint64_t>(BinaryCompareUInt64_AVX512);
+  Check<std::uint64_t>(cpu_compute::BinaryCompareUInt64_AVX512);
 }
 #endif
 

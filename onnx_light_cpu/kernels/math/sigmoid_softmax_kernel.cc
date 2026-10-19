@@ -5,12 +5,12 @@
 #include "onnx_light_cpu/kernels/math/sigmoid_softmax_kernel.h"
 #include "onnx_light_cpu/kernels/execution.h"
 
+#include "cpu_compute/math/half_conversion.h"
+#include "cpu_compute/math/math.h"
+#include "cpu_compute/math/unary_execution_tuning.h"
+#include "cpu_compute/simd_level.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
 #include "onnx_light_cpu/kernels/tensor_buffer_validation.h"
-#include "onnx_light_cpu_compute/math/half_conversion.h"
-#include "onnx_light_cpu_compute/math/math_kernels.h"
-#include "onnx_light_cpu_compute/math/unary_execution_tuning.h"
-#include "onnx_light_cpu_compute/simd_level.h"
 
 #include "onnx_core/runtime/kernels/kernel_dispatch_table.h"
 #include "onnx_core/runtime/kernels/node_helpers.h"
@@ -55,30 +55,36 @@ Tensor MakeLike(const Tensor &x, std::size_t size_bytes, RuntimeContext *rt) {
                        : rt_ns::MakeOutputTensor(x.data_type, x.shape, size_bytes, nullptr);
 }
 
-inline constexpr UnaryExecutionTuning kActivationExecutionTuning{256 * 1024, 256 * 1024, 32, false};
-inline constexpr UnaryExecutionTuning kSerialExecutionTuning{0, 1, 0, false};
+inline constexpr cpu_compute::UnaryExecutionTuning kActivationExecutionTuning{
+    256 * 1024, 256 * 1024, 32, false};
+inline constexpr cpu_compute::UnaryExecutionTuning kSerialExecutionTuning{0, 1, 0, false};
 
 template <typename T> void SigmoidRange(const T *input, T *output, std::size_t count) {
-#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
+#ifdef CPU_COMPUTE_HAVE_AVX512
   if constexpr (std::is_same_v<T, float>) {
-    static const bool use_avx512 = DetectSimdLevel() >= SimdLevel::kAVX512;
+    static const bool use_avx512 =
+        cpu_compute::DetectSimdLevel() >= cpu_compute::SimdLevel::kAVX512;
     if (use_avx512) {
-      SigmoidFloat32_AVX512(input, output, count);
+      cpu_compute::SigmoidFloat32_AVX512(input, output, count);
       return;
     }
   }
 #endif
-#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
+#ifdef CPU_COMPUTE_HAVE_AVX2_FMA
   if constexpr (std::is_same_v<T, float>) {
-    static const bool use_avx2_fma = DetectSimdLevel() >= SimdLevel::kAVX2 && CpuSupportsFma();
+    static const bool use_avx2_fma =
+        cpu_compute::DetectSimdLevel() >= cpu_compute::SimdLevel::kAVX2 &&
+        cpu_compute::CpuSupportsFma();
     if (use_avx2_fma) {
-      SigmoidFloat32_AVX2_FMA(input, output, count);
+      cpu_compute::SigmoidFloat32_AVX2_FMA(input, output, count);
       return;
     }
   } else if constexpr (std::is_same_v<T, double>) {
-    static const bool use_avx2_fma = DetectSimdLevel() >= SimdLevel::kAVX2 && CpuSupportsFma();
+    static const bool use_avx2_fma =
+        cpu_compute::DetectSimdLevel() >= cpu_compute::SimdLevel::kAVX2 &&
+        cpu_compute::CpuSupportsFma();
     if (use_avx2_fma) {
-      SigmoidFloat64_AVX2_FMA(input, output, count);
+      cpu_compute::SigmoidFloat64_AVX2_FMA(input, output, count);
       return;
     }
   }
@@ -92,7 +98,7 @@ template <typename T> void SigmoidRange(const T *input, T *output, std::size_t c
     output[i] = -std::abs(input[i]);
   }
   if constexpr (std::is_same_v<T, float>) {
-    ExpFloat32WithTuning(output, output, count, kSerialExecutionTuning);
+    cpu_compute::ExpFloat32WithTuning(output, output, count, kSerialExecutionTuning);
   } else {
     for (std::size_t i = 0; i < count; ++i) {
       output[i] = std::exp(output[i]);
@@ -114,11 +120,12 @@ template <typename T> void SigmoidRange(const T *input, T *output, std::size_t c
 }
 
 template <typename T> void Sigmoid(const T *input, T *output, std::size_t count) {
-  UnaryExecutionTuning tuning = kActivationExecutionTuning;
-#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
+  cpu_compute::UnaryExecutionTuning tuning = kActivationExecutionTuning;
+#ifdef CPU_COMPUTE_HAVE_AVX2_FMA
   if constexpr (std::is_same_v<T, float>) {
-    static const bool avx512 = DetectSimdLevel() >= SimdLevel::kAVX512;
-    static const bool avx2 = DetectSimdLevel() >= SimdLevel::kAVX2 && CpuSupportsFma();
+    static const bool avx512 = cpu_compute::DetectSimdLevel() >= cpu_compute::SimdLevel::kAVX512;
+    static const bool avx2 = cpu_compute::DetectSimdLevel() >= cpu_compute::SimdLevel::kAVX2 &&
+                             cpu_compute::CpuSupportsFma();
     if (avx2 && (!avx512 || count < 256 * 1024)) {
       // Small teams amortize dispatch without waking a full pool for a short vector loop.
       tuning = {128 * 1024, 64 * 1024,
@@ -132,88 +139,97 @@ template <typename T> void Sigmoid(const T *input, T *output, std::size_t count)
   constexpr std::size_t tile = 8 * 1024;
   std::atomic<std::size_t> next{0};
   const bool dynamic = std::is_same_v<T, float> && count >= 2 * tile &&
-                       ExecutionThreadCount() > 1 && !ExecutionInParallelRegion();
-  ExecuteUnaryRanges<T>(count, tuning, [=, &next](std::int64_t begin, std::int64_t end) {
-    if (dynamic) {
-      for (std::size_t first = next.fetch_add(tile, std::memory_order_relaxed); first < count;
-           first = next.fetch_add(tile, std::memory_order_relaxed)) {
-        SigmoidRange(input + first, output + first, std::min(tile, count - first));
-      }
-      return;
-    }
-    SigmoidRange(input + begin, output + begin, static_cast<std::size_t>(end - begin));
-  });
+                       cpu_compute::ExecutionThreadCount() > 1 &&
+                       !cpu_compute::ExecutionInParallelRegion();
+  cpu_compute::ExecuteUnaryRanges<T>(
+      count, tuning, [=, &next](std::int64_t begin, std::int64_t end) {
+        if (dynamic) {
+          for (std::size_t first = next.fetch_add(tile, std::memory_order_relaxed); first < count;
+               first = next.fetch_add(tile, std::memory_order_relaxed)) {
+            SigmoidRange(input + first, output + first, std::min(tile, count - first));
+          }
+          return;
+        }
+        SigmoidRange(input + begin, output + begin, static_cast<std::size_t>(end - begin));
+      });
 }
 
 template <bool float16, typename DecodeBlock, typename EncodeBlock>
 void SigmoidHalf(const std::uint16_t *input, std::uint16_t *output, std::size_t count,
                  DecodeBlock decode, EncodeBlock encode) {
-  UnaryExecutionTuning tuning = kActivationExecutionTuning;
-#ifdef ONNX_LIGHT_CPU_HAVE_AVX512BF16
+  cpu_compute::UnaryExecutionTuning tuning = kActivationExecutionTuning;
+#ifdef CPU_COMPUTE_HAVE_AVX512BF16
   if constexpr (!float16) {
     static const bool avx512bf16 =
-        DetectSimdLevel() >= SimdLevel::kAVX512 && CpuSupportsAvx512Bf16();
+        cpu_compute::DetectSimdLevel() >= cpu_compute::SimdLevel::kAVX512 &&
+        cpu_compute::CpuSupportsAvx512Bf16();
     if (avx512bf16) {
       tuning = {128 * 1024, 64 * 1024, count < 512 * 1024 ? 2u : 32u, false};
     }
   }
 #endif
-#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
-  static const SimdLevel simd_level = DetectSimdLevel();
-  static const bool avx2 = CpuSupportsFma() && (simd_level == SimdLevel::kAVX2 ||
-                                                (float16 && simd_level >= SimdLevel::kAVX2));
+#ifdef CPU_COMPUTE_HAVE_AVX2_FMA
+  static const cpu_compute::SimdLevel simd_level = cpu_compute::DetectSimdLevel();
+  static const bool avx2 =
+      cpu_compute::CpuSupportsFma() && (simd_level == cpu_compute::SimdLevel::kAVX2 ||
+                                        (float16 && simd_level >= cpu_compute::SimdLevel::kAVX2));
   if (avx2) {
     tuning = {128 * 1024, 64 * 1024, count < 512 * 1024 ? 2u : 32u, false};
   }
 #endif
-  ExecuteUnaryRanges<std::uint16_t>(count, tuning, [=](std::int64_t begin, std::int64_t end) {
-#ifdef ONNX_LIGHT_CPU_HAVE_AVX512BF16
-    if constexpr (!float16) {
-      static const bool fused = DetectSimdLevel() >= SimdLevel::kAVX512 && CpuSupportsAvx512Bf16();
-      if (fused) {
-        SigmoidBFloat16_AVX512BF16(input + begin, output + begin,
-                                   static_cast<std::size_t>(end - begin));
-        return;
-      }
-    }
+  cpu_compute::ExecuteUnaryRanges<std::uint16_t>(
+      count, tuning, [=](std::int64_t begin, std::int64_t end) {
+#ifdef CPU_COMPUTE_HAVE_AVX512BF16
+        if constexpr (!float16) {
+          static const bool fused =
+              cpu_compute::DetectSimdLevel() >= cpu_compute::SimdLevel::kAVX512 &&
+              cpu_compute::CpuSupportsAvx512Bf16();
+          if (fused) {
+            cpu_compute::SigmoidBFloat16_AVX512BF16(input + begin, output + begin,
+                                                    static_cast<std::size_t>(end - begin));
+            return;
+          }
+        }
 #endif
-#if defined(ONNX_LIGHT_CPU_HAVE_AVX2_FMA) && defined(ONNX_LIGHT_CPU_HAVE_F16C)
-    if constexpr (float16) {
-      static const bool fused =
-          DetectSimdLevel() >= SimdLevel::kAVX2 && CpuSupportsFma() && CpuSupportsF16C();
-      if (fused) {
-        SigmoidFloat16_AVX2_FMA(input + begin, output + begin,
-                                static_cast<std::size_t>(end - begin));
-        return;
-      }
-    }
+#if defined(CPU_COMPUTE_HAVE_AVX2_FMA) && defined(CPU_COMPUTE_HAVE_F16C)
+        if constexpr (float16) {
+          static const bool fused =
+              cpu_compute::DetectSimdLevel() >= cpu_compute::SimdLevel::kAVX2 &&
+              cpu_compute::CpuSupportsFma() && cpu_compute::CpuSupportsF16C();
+          if (fused) {
+            cpu_compute::SigmoidFloat16_AVX2_FMA(input + begin, output + begin,
+                                                 static_cast<std::size_t>(end - begin));
+            return;
+          }
+        }
 #endif
-    constexpr std::size_t block_size = 256;
-    std::array<float, block_size> input_buffer;
-    std::array<float, block_size> output_buffer;
-    for (std::size_t offset = static_cast<std::size_t>(begin);
-         offset < static_cast<std::size_t>(end); offset += block_size) {
-      const std::size_t block = std::min(block_size, static_cast<std::size_t>(end) - offset);
-      decode(input + offset, input_buffer.data(), block);
-      SigmoidRange(input_buffer.data(), output_buffer.data(), block);
-      encode(output_buffer.data(), output + offset, block);
-    }
-  });
+        constexpr std::size_t block_size = 256;
+        std::array<float, block_size> input_buffer;
+        std::array<float, block_size> output_buffer;
+        for (std::size_t offset = static_cast<std::size_t>(begin);
+             offset < static_cast<std::size_t>(end); offset += block_size) {
+          const std::size_t block = std::min(block_size, static_cast<std::size_t>(end) - offset);
+          decode(input + offset, input_buffer.data(), block);
+          SigmoidRange(input_buffer.data(), output_buffer.data(), block);
+          encode(output_buffer.data(), output + offset, block);
+        }
+      });
 }
 
-ExecutionSchedule MakeSoftmaxRowSchedule(std::size_t row_bytes,
-                                         std::size_t threshold_bytes = 128 * 1024,
-                                         std::size_t target_block_bytes = 16 * 1024,
-                                         std::int64_t max_participants = 48) {
+cpu_compute::ExecutionSchedule MakeSoftmaxRowSchedule(std::size_t row_bytes,
+                                                      std::size_t threshold_bytes = 128 * 1024,
+                                                      std::size_t target_block_bytes = 16 * 1024,
+                                                      std::int64_t max_participants = 48) {
   const auto bytes_to_rows = [row_bytes](std::size_t bytes) {
     return static_cast<std::int64_t>(std::max<std::size_t>((bytes + row_bytes - 1) / row_bytes, 1));
   };
-  return ExecutionSchedule{bytes_to_rows(threshold_bytes), bytes_to_rows(target_block_bytes),
-                           max_participants};
+  return cpu_compute::ExecutionSchedule{bytes_to_rows(threshold_bytes),
+                                        bytes_to_rows(target_block_bytes), max_participants};
 }
 
 template <typename Fn> void DispatchSoftmaxRows(std::int64_t rows, std::size_t row_bytes, Fn fn) {
-  ExecuteRanges(rows, MakeSoftmaxRowSchedule(row_bytes), std::int64_t{1}, std::move(fn));
+  cpu_compute::ExecuteRanges(rows, MakeSoftmaxRowSchedule(row_bytes), std::int64_t{1},
+                             std::move(fn));
 }
 
 template <typename T>
@@ -221,33 +237,37 @@ void SoftmaxLastAxis(const T *input, T *output, std::int64_t rows, std::int64_t 
   if (rows == 0 || columns == 0) {
     return;
   }
-#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
+#ifdef CPU_COMPUTE_HAVE_AVX2_FMA
   if constexpr (std::is_same_v<T, float>) {
-    static const bool use_avx2_fma = DetectSimdLevel() >= SimdLevel::kAVX2 && CpuSupportsFma();
+    static const bool use_avx2_fma =
+        cpu_compute::DetectSimdLevel() >= cpu_compute::SimdLevel::kAVX2 &&
+        cpu_compute::CpuSupportsFma();
     if (use_avx2_fma) {
       const std::size_t row_bytes = static_cast<std::size_t>(columns) * sizeof(T);
       constexpr std::size_t parallel_bytes = 1024 * 1024;
       const std::size_t total_bytes = static_cast<std::size_t>(rows) * row_bytes;
-      const ExecutionSchedule schedule =
+      const cpu_compute::ExecutionSchedule schedule =
           total_bytes < parallel_bytes ? MakeSoftmaxRowSchedule(row_bytes, 128 * 1024, 64 * 1024, 2)
                                        : MakeSoftmaxRowSchedule(row_bytes, parallel_bytes);
-      ExecuteRanges(rows, schedule, [=](std::int64_t begin, std::int64_t end) {
+      cpu_compute::ExecuteRanges(rows, schedule, [=](std::int64_t begin, std::int64_t end) {
         const std::size_t offset = static_cast<std::size_t>(begin * columns);
-        SoftmaxFloat32_AVX2_FMA(input + offset, output + offset,
-                                static_cast<std::size_t>(end - begin),
-                                static_cast<std::size_t>(columns));
+        cpu_compute::SoftmaxFloat32_AVX2_FMA(input + offset, output + offset,
+                                             static_cast<std::size_t>(end - begin),
+                                             static_cast<std::size_t>(columns));
       });
       return;
     }
   } else if constexpr (std::is_same_v<T, double>) {
-    static const bool use_avx2_fma = DetectSimdLevel() >= SimdLevel::kAVX2 && CpuSupportsFma();
+    static const bool use_avx2_fma =
+        cpu_compute::DetectSimdLevel() >= cpu_compute::SimdLevel::kAVX2 &&
+        cpu_compute::CpuSupportsFma();
     if (use_avx2_fma) {
       const std::size_t row_bytes = static_cast<std::size_t>(columns) * sizeof(T);
       DispatchSoftmaxRows(rows, row_bytes, [=](std::int64_t begin, std::int64_t end) {
         const std::size_t offset = static_cast<std::size_t>(begin * columns);
-        SoftmaxFloat64_AVX2_FMA(input + offset, output + offset,
-                                static_cast<std::size_t>(end - begin),
-                                static_cast<std::size_t>(columns));
+        cpu_compute::SoftmaxFloat64_AVX2_FMA(input + offset, output + offset,
+                                             static_cast<std::size_t>(end - begin),
+                                             static_cast<std::size_t>(columns));
       });
       return;
     }
@@ -269,7 +289,8 @@ void SoftmaxLastAxis(const T *input, T *output, std::int64_t rows, std::int64_t 
     T *range_output = output + begin * columns;
     const std::size_t range_count = static_cast<std::size_t>((end - begin) * columns);
     if constexpr (std::is_same_v<T, float>) {
-      ExpFloat32WithTuning(range_output, range_output, range_count, kSerialExecutionTuning);
+      cpu_compute::ExpFloat32WithTuning(range_output, range_output, range_count,
+                                        kSerialExecutionTuning);
     } else {
       for (std::size_t i = 0; i < range_count; ++i) {
         range_output[i] = std::exp(range_output[i]);
@@ -296,16 +317,17 @@ void SoftmaxHalfLastAxis(const std::uint16_t *input, std::uint16_t *output, std:
     return;
   }
   const std::size_t row_bytes = static_cast<std::size_t>(columns) * sizeof(std::uint16_t);
-#ifdef ONNX_LIGHT_CPU_HAVE_AVX512BF16
+#ifdef CPU_COMPUTE_HAVE_AVX512BF16
   if constexpr (BFloat16) {
     static const bool use_avx512bf16 =
-        DetectSimdLevel() >= SimdLevel::kAVX512 && CpuSupportsAvx512Bf16();
+        cpu_compute::DetectSimdLevel() >= cpu_compute::SimdLevel::kAVX512 &&
+        cpu_compute::CpuSupportsAvx512Bf16();
     if (use_avx512bf16) {
       DispatchSoftmaxRows(rows, row_bytes, [=](std::int64_t begin, std::int64_t end) {
         const std::size_t offset = static_cast<std::size_t>(begin * columns);
-        SoftmaxBFloat16_AVX512BF16(input + offset, output + offset,
-                                   static_cast<std::size_t>(end - begin),
-                                   static_cast<std::size_t>(columns));
+        cpu_compute::SoftmaxBFloat16_AVX512BF16(input + offset, output + offset,
+                                                static_cast<std::size_t>(end - begin),
+                                                static_cast<std::size_t>(columns));
       });
       return;
     }
@@ -316,10 +338,13 @@ void SoftmaxHalfLastAxis(const std::uint16_t *input, std::uint16_t *output, std:
     for (std::int64_t row = begin; row < end; ++row) {
       const std::size_t offset = static_cast<std::size_t>(row * columns);
       decode(input + offset, buffer.data(), buffer.size());
-#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
-      static const bool use_avx2_fma = DetectSimdLevel() >= SimdLevel::kAVX2 && CpuSupportsFma();
+#ifdef CPU_COMPUTE_HAVE_AVX2_FMA
+      static const bool use_avx2_fma =
+          cpu_compute::DetectSimdLevel() >= cpu_compute::SimdLevel::kAVX2 &&
+          cpu_compute::CpuSupportsFma();
       if (use_avx2_fma) {
-        SoftmaxFloat32_AVX2_FMA(buffer.data(), buffer.data(), 1, static_cast<std::size_t>(columns));
+        cpu_compute::SoftmaxFloat32_AVX2_FMA(buffer.data(), buffer.data(), 1,
+                                             static_cast<std::size_t>(columns));
       } else
 #endif
       {
@@ -412,12 +437,14 @@ void SigmoidKernel::operator()(const Tensor &x, Tensor &output) const {
   case DataType::FLOAT16:
     SigmoidHalf<true>(reinterpret_cast<const std::uint16_t *>(x.bytes()),
                       reinterpret_cast<std::uint16_t *>(output.mutable_bytes()), count,
-                      detail::ConvertFloat16ToFloat32, detail::ConvertFloat32ToFloat16);
+                      cpu_compute::detail::ConvertFloat16ToFloat32,
+                      cpu_compute::detail::ConvertFloat32ToFloat16);
     return;
   case DataType::BFLOAT16:
     SigmoidHalf<false>(reinterpret_cast<const std::uint16_t *>(x.bytes()),
                        reinterpret_cast<std::uint16_t *>(output.mutable_bytes()), count,
-                       detail::ConvertBFloat16ToFloat32, detail::ConvertFloat32ToBFloat16);
+                       cpu_compute::detail::ConvertBFloat16ToFloat32,
+                       cpu_compute::detail::ConvertFloat32ToBFloat16);
     return;
   default:
     throw std::invalid_argument(
@@ -487,24 +514,25 @@ void SoftmaxKernel::operator()(const Tensor &x, std::int64_t axis, Tensor &outpu
     if (inner == 1) {
       SoftmaxHalfLastAxis<false>(reinterpret_cast<const std::uint16_t *>(x.bytes()),
                                  reinterpret_cast<std::uint16_t *>(output.mutable_bytes()), outer,
-                                 axis_dim, detail::ConvertFloat16ToFloat32,
-                                 detail::ConvertFloat32ToFloat16);
+                                 axis_dim, cpu_compute::detail::ConvertFloat16ToFloat32,
+                                 cpu_compute::detail::ConvertFloat32ToFloat16);
     } else {
       SoftmaxHalf(reinterpret_cast<const std::uint16_t *>(x.bytes()),
                   reinterpret_cast<std::uint16_t *>(output.mutable_bytes()), outer, axis_dim, inner,
-                  detail::Float16BitsToFloat, detail::FloatToFloat16Bits);
+                  cpu_compute::detail::Float16BitsToFloat, cpu_compute::detail::FloatToFloat16Bits);
     }
     return;
   case DataType::BFLOAT16:
     if (inner == 1) {
       SoftmaxHalfLastAxis<true>(reinterpret_cast<const std::uint16_t *>(x.bytes()),
                                 reinterpret_cast<std::uint16_t *>(output.mutable_bytes()), outer,
-                                axis_dim, detail::ConvertBFloat16ToFloat32,
-                                detail::ConvertFloat32ToBFloat16);
+                                axis_dim, cpu_compute::detail::ConvertBFloat16ToFloat32,
+                                cpu_compute::detail::ConvertFloat32ToBFloat16);
     } else {
       SoftmaxHalf(reinterpret_cast<const std::uint16_t *>(x.bytes()),
                   reinterpret_cast<std::uint16_t *>(output.mutable_bytes()), outer, axis_dim, inner,
-                  detail::Bfloat16BitsToFloat, detail::FloatToBFloat16Bits);
+                  cpu_compute::detail::Bfloat16BitsToFloat,
+                  cpu_compute::detail::FloatToBFloat16Bits);
     }
     return;
   default:

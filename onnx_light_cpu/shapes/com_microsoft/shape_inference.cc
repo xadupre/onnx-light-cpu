@@ -4,12 +4,12 @@
 
 #include "onnx_light_cpu/shapes/com_microsoft/shape_inference.h"
 
+#include "cpu_compute/checked_arithmetic.h"
+#include "cpu_compute/com_microsoft/matmul_nbits.h"
+#include "cpu_compute/com_microsoft/moe.h"
 #include "onnx_light_cpu/kernels/com_microsoft/matmul_nbits_int3.h"
 #include "onnx_light_cpu/schemas/com_microsoft/op_schema.h"
 #include "onnx_light_cpu/shapes/ai_onnx/shape_inference.h"
-#include "onnx_light_cpu_compute/checked_arithmetic.h"
-#include "onnx_light_cpu_compute/com_microsoft/matmul_nbits.h"
-#include "onnx_light_cpu_compute/com_microsoft/moe.h"
 
 #include "onnx_core/runtime/quantization.h"
 #include "onnx_core/shapes/dispatch_table.h"
@@ -95,7 +95,7 @@ EncodedMatMulNBitsShape InspectEncodedMatMulNBitsShape(const ShapesContext &ctx,
   const std::int64_t k = logical.shape().dim(0).dim_value();
   const std::int64_t n = logical.shape().dim(1).dim_value();
   const std::int64_t block_size = parameters.constant().int64_data(1);
-  if (!MatMulNBitsBlockSizeSupported(format_bits, block_size)) {
+  if (!cpu_compute::MatMulNBitsBlockSizeSupported(format_bits, block_size)) {
     throw std::invalid_argument(
         "ComputeShapeMatMulNBits: encoded block size exceeds supported bounds.");
   }
@@ -501,8 +501,8 @@ void ComputeShapeMoE(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE::NodeProto &
           : sym_ns::SymDim("(" + shape[0].ToString() + ")*(" + shape[1].ToString() + ")");
   if (shape.Rank() == 3 && shape[0].IsInt() && shape[1].IsInt()) {
     ConstrainEqual(ctx,
-                   sym_ns::SymDim(CheckedIndexMultiply(shape[0].AsInt(), shape[1].AsInt(), "MoE",
-                                                       "token count")),
+                   sym_ns::SymDim(cpu_compute::CheckedIndexMultiply(
+                       shape[0].AsInt(), shape[1].AsInt(), "MoE", "token count")),
                    router.Shape()[0], "ComputeShapeMoE: router token count mismatch.");
   } else {
     ConstrainEqual(ctx, rows, router.Shape()[0], "ComputeShapeMoE: router token count mismatch.");
@@ -511,11 +511,11 @@ void ComputeShapeMoE(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE::NodeProto &
   ConstrainEqual(ctx, experts, fc2.Shape()[0], "ComputeShapeMoE: FC2 experts mismatch.");
   ConstrainEqual(ctx, hidden, fc1.Shape()[2], "ComputeShapeMoE: FC1 hidden mismatch.");
   ConstrainEqual(ctx, hidden, fc2.Shape()[1], "ComputeShapeMoE: FC2 hidden mismatch.");
-  const sym_ns::SymDim width =
-      activation != "swiglu" ? intermediate
-      : intermediate.IsInt()
-          ? sym_ns::SymDim(CheckedIndexMultiply(intermediate.AsInt(), 2, "MoE", "FC1 width"))
-          : sym_ns::SymDim("2*(" + intermediate.ToString() + ")");
+  const sym_ns::SymDim width = activation != "swiglu" ? intermediate
+                               : intermediate.IsInt()
+                                   ? sym_ns::SymDim(cpu_compute::CheckedIndexMultiply(
+                                         intermediate.AsInt(), 2, "MoE", "FC1 width"))
+                                   : sym_ns::SymDim("2*(" + intermediate.ToString() + ")");
   ConstrainEqual(ctx, width, fc1.Shape()[1], "ComputeShapeMoE: FC1 width mismatch.");
   for (const auto [index, second] : {std::pair{3, width}, std::pair{5, hidden}}) {
     if (HasInput(node, index)) {
@@ -611,12 +611,12 @@ void ComputeShapeQMoE(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE::NodeProto 
     sym_ns::SymDim width;
   };
   const auto fits = [&](bool major, bool row_scales) -> std::optional<Layout> {
-    const auto candidate_width =
-        major ? ctx.Get(node.input(2)).Shape()[1]
-        : fused && fc2.Shape()[1].IsInt()
-            ? sym_ns::SymDim(CheckedIndexMultiply(fc2.Shape()[1].AsInt(), 2, "QMoE", "width"))
-        : fused ? sym_ns::SymDim("2*(" + fc2.Shape()[1].ToString() + ")")
-                : fc2.Shape()[1];
+    const auto candidate_width = major ? ctx.Get(node.input(2)).Shape()[1]
+                                 : fused && fc2.Shape()[1].IsInt()
+                                     ? sym_ns::SymDim(cpu_compute::CheckedIndexMultiply(
+                                           fc2.Shape()[1].AsInt(), 2, "QMoE", "width"))
+                                 : fused ? sym_ns::SymDim("2*(" + fc2.Shape()[1].ToString() + ")")
+                                         : fc2.Shape()[1];
     if (candidate_width.IsInt() &&
         (candidate_width.AsInt() <= 0 || (fused && candidate_width.AsInt() % 2 != 0))) {
       return std::nullopt;
@@ -672,8 +672,8 @@ void ComputeShapeQMoE(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE::NodeProto 
   const auto rows =
       shape.Rank() == 2 ? shape[0]
       : shape[0].IsInt() && shape[1].IsInt()
-          ? sym_ns::SymDim(
-                CheckedIndexMultiply(shape[0].AsInt(), shape[1].AsInt(), "QMoE", "tokens"))
+          ? sym_ns::SymDim(cpu_compute::CheckedIndexMultiply(shape[0].AsInt(), shape[1].AsInt(),
+                                                             "QMoE", "tokens"))
           : sym_ns::SymDim("(" + shape[0].ToString() + ")*(" + shape[1].ToString() + ")");
   ConstrainEqual(ctx, rows, router.Shape()[0], "ComputeShapeQMoE: router rows mismatch.");
   const auto projection = [&](int weight_index, int scale_index, int bias_index,
@@ -746,7 +746,7 @@ void ComputeShapeMatMulNBits(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE::Nod
   const std::int64_t block_size = GetRequiredIntAttribute(node, "block_size");
   const std::int64_t accuracy_level = GetIntAttribute(node, "accuracy_level", 0);
   const std::int64_t weight_prepacked = GetIntAttribute(node, "weight_prepacked", 0);
-  if (k <= 0 || n <= 0 || !MatMulNBitsBlockSizeSupported(bits, block_size) ||
+  if (k <= 0 || n <= 0 || !cpu_compute::MatMulNBitsBlockSizeSupported(bits, block_size) ||
       (accuracy_level != 0 && accuracy_level != 4) || weight_prepacked != 0) {
     throw std::invalid_argument("ComputeShapeMatMulNBits: unsupported bits, block_size, "
                                 "accuracy_level or weight_prepacked.");
@@ -806,7 +806,8 @@ void ComputeShapeMatMulNBits(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE::Nod
                    "ComputeShapeMatMulNBits: B dimension 2 must equal block_size * bits / 8.");
     if (scales.Shape().Rank() == 1) {
       ConstrainEqual(ctx, scales.Shape()[0],
-                     sym_ns::SymDim(CheckedIndexMultiply(n, blocks, "MatMulNBits", "scale count")),
+                     sym_ns::SymDim(cpu_compute::CheckedIndexMultiply(n, blocks, "MatMulNBits",
+                                                                      "scale count")),
                      "ComputeShapeMatMulNBits: flat scales has the wrong length.");
     } else {
       ConstrainEqual(ctx, scales.Shape()[0], sym_ns::SymDim(n),
@@ -825,10 +826,10 @@ void ComputeShapeMatMulNBits(ShapesContext &ctx, const ONNX_LIGHT_NAMESPACE::Nod
     const auto per_byte = 8 / bits;
     const auto stride = packed ? blocks / per_byte + (blocks % per_byte != 0) : blocks;
     if (zero.Shape().Rank() == 1) {
-      ConstrainEqual(
-          ctx, zero.Shape()[0],
-          sym_ns::SymDim(CheckedIndexMultiply(n, stride, "MatMulNBits", "zero point count")),
-          "ComputeShapeMatMulNBits: invalid flat zero_points length.");
+      ConstrainEqual(ctx, zero.Shape()[0],
+                     sym_ns::SymDim(cpu_compute::CheckedIndexMultiply(n, stride, "MatMulNBits",
+                                                                      "zero point count")),
+                     "ComputeShapeMatMulNBits: invalid flat zero_points length.");
     } else {
       ConstrainEqual(ctx, zero.Shape()[0], sym_ns::SymDim(n),
                      "ComputeShapeMatMulNBits: zero_points dimension 0 must equal N.");
@@ -1032,10 +1033,11 @@ void ComputeShapeMultiHeadAttention(ShapesContext &ctx,
     if (head.IsInt() && value_head.IsInt())
       MergeGqaDim(
           ctx, bd,
-          sym_ns::SymDim(CheckedIndexMultiply(
+          sym_ns::SymDim(cpu_compute::CheckedIndexMultiply(
               heads,
-              CheckedIndexAdd(CheckedIndexMultiply(2, head.AsInt(), "MultiHeadAttention", "bias"),
-                              value_head.AsInt(), "MultiHeadAttention", "bias"),
+              cpu_compute::CheckedIndexAdd(
+                  cpu_compute::CheckedIndexMultiply(2, head.AsInt(), "MultiHeadAttention", "bias"),
+                  value_head.AsInt(), "MultiHeadAttention", "bias"),
               "MultiHeadAttention", "bias")),
           "projection bias");
   }
@@ -1154,10 +1156,11 @@ void ComputeShapeGroupQueryAttention(ShapesContext &ctx,
   const sym_ns::SymDim &q_seq_len = q_shape[1];
   sym_ns::SymDim kv_seq_len = q_seq_len;
   const std::int64_t heads =
-      packed_qkv ? CheckedIndexAdd(num_heads,
-                                   CheckedIndexMultiply(2, kv_num_heads, "GroupQueryAttention",
-                                                        "packed head count"),
-                                   "GroupQueryAttention", "packed head count")
+      packed_qkv ? cpu_compute::CheckedIndexAdd(
+                       num_heads,
+                       cpu_compute::CheckedIndexMultiply(2, kv_num_heads, "GroupQueryAttention",
+                                                         "packed head count"),
+                       "GroupQueryAttention", "packed head count")
                  : num_heads;
   if (packed_qkv && q_shape[2].IsInt() && q_shape[2].AsInt() <= 0) {
     throw std::invalid_argument(
@@ -1422,8 +1425,8 @@ void ComputeShapeCausalConvWithState(ShapesContext &ctx,
     for (std::size_t i = 3; i < in_shape.Rank(); ++i) {
       channels =
           channels.IsInt() && in_shape[i].IsInt()
-              ? sym_ns::SymDim(CheckedIndexMultiply(channels.AsInt(), in_shape[i].AsInt(),
-                                                    "CausalConvWithState", "channels"))
+              ? sym_ns::SymDim(cpu_compute::CheckedIndexMultiply(
+                    channels.AsInt(), in_shape[i].AsInt(), "CausalConvWithState", "channels"))
               : sym_ns::SymDim("(" + channels.ToString() + ")*(" + in_shape[i].ToString() + ")");
     }
   }
@@ -1438,8 +1441,8 @@ void ComputeShapeCausalConvWithState(ShapesContext &ctx,
   const std::int64_t dilation = GetIntAttribute(node, "dilation", 1);
   const auto &kernel = w_shape[2];
   const sym_ns::SymDim pad =
-      kernel.IsInt() ? sym_ns::SymDim(CheckedIndexMultiply(kernel.AsInt() - 1, dilation,
-                                                           "CausalConvWithState", "state length"))
+      kernel.IsInt() ? sym_ns::SymDim(cpu_compute::CheckedIndexMultiply(
+                           kernel.AsInt() - 1, dilation, "CausalConvWithState", "state length"))
                      : sym_ns::SymDim("(" + kernel.ToString() + "-1)*" + std::to_string(dilation));
   SymShape state;
   for (std::size_t i = 0; i < in_shape.Rank(); ++i) {
@@ -1484,14 +1487,14 @@ int64_t ComputePeakMemoryMoE(sym_ns::Device, const std::vector<SymShape> &shapes
       !width.IsInt() || !intermediate.IsInt()) {
     return 0;
   }
-  const std::size_t tokens =
-      CheckedMultiply(CheckedDimension(batch.AsInt(), "MoE", "batch"),
-                      CheckedDimension(sequence.AsInt(), "MoE", "sequence"), "MoE", "token count");
-  const std::size_t bytes =
-      ComputeMoEMaxScratchBytes(tokens, CheckedDimension(hidden.AsInt(), "MoE", "hidden"),
-                                CheckedDimension(experts.AsInt(), "MoE", "experts"),
-                                CheckedDimension(width.AsInt(), "MoE", "fc1 width"),
-                                CheckedDimension(intermediate.AsInt(), "MoE", "intermediate"));
+  const std::size_t tokens = cpu_compute::CheckedMultiply(
+      cpu_compute::CheckedDimension(batch.AsInt(), "MoE", "batch"),
+      cpu_compute::CheckedDimension(sequence.AsInt(), "MoE", "sequence"), "MoE", "token count");
+  const std::size_t bytes = cpu_compute::ComputeMoEMaxScratchBytes(
+      tokens, cpu_compute::CheckedDimension(hidden.AsInt(), "MoE", "hidden"),
+      cpu_compute::CheckedDimension(experts.AsInt(), "MoE", "experts"),
+      cpu_compute::CheckedDimension(width.AsInt(), "MoE", "fc1 width"),
+      cpu_compute::CheckedDimension(intermediate.AsInt(), "MoE", "intermediate"));
   if (bytes > static_cast<std::size_t>(std::numeric_limits<std::int64_t>::max())) {
     throw std::overflow_error("ComputePeakMemoryMoE: scratch-memory size overflow.");
   }
@@ -1508,53 +1511,64 @@ int64_t ComputePeakMemoryQMoE(sym_ns::Device, const std::vector<SymShape> &shape
       if (!shape[index].IsInt()) {
         return 0;
       }
-      CheckedDimension(shape[index].AsInt(), "QMoE", "scratch dimension");
+      cpu_compute::CheckedDimension(shape[index].AsInt(), "QMoE", "scratch dimension");
     }
   }
-  const auto hidden = CheckedDimension(shapes[0][shapes[0].Rank() - 1].AsInt(), "QMoE", "hidden");
-  const auto experts = CheckedDimension(shapes[1][1].AsInt(), "QMoE", "experts");
-  std::size_t tokens = CheckedDimension(shapes[0][0].AsInt(), "QMoE", "tokens");
+  const auto hidden =
+      cpu_compute::CheckedDimension(shapes[0][shapes[0].Rank() - 1].AsInt(), "QMoE", "hidden");
+  const auto experts = cpu_compute::CheckedDimension(shapes[1][1].AsInt(), "QMoE", "experts");
+  std::size_t tokens = cpu_compute::CheckedDimension(shapes[0][0].AsInt(), "QMoE", "tokens");
   if (shapes[0].Rank() == 3) {
-    tokens = CheckedMultiply(tokens, CheckedDimension(shapes[0][1].AsInt(), "QMoE", "sequence"),
-                             "QMoE", "tokens");
+    tokens = cpu_compute::CheckedMultiply(
+        tokens, cpu_compute::CheckedDimension(shapes[0][1].AsInt(), "QMoE", "sequence"), "QMoE",
+        "tokens");
   }
   if (tokens == 0) {
     return 0;
   }
-  std::size_t values = CheckedProduct({tokens, hidden, 2}, "QMoE", "activation scratch");
-  values = CheckedAdd(values, CheckedMultiply(tokens, experts, "QMoE", "router scratch"), "QMoE",
-                      "value scratch");
+  std::size_t values =
+      cpu_compute::CheckedProduct({tokens, hidden, 2}, "QMoE", "activation scratch");
+  values = cpu_compute::CheckedAdd(
+      values, cpu_compute::CheckedMultiply(tokens, experts, "QMoE", "router scratch"), "QMoE",
+      "value scratch");
   std::size_t width = hidden;
   // Shapes do not carry bit width or optional-slot metadata. Bounding every
   // rank-3 tensor as INT4 weights also handles compacted optional input lists.
   for (std::size_t index = 2; index < shapes.size(); ++index) {
     const auto &shape = shapes[index];
     if (shape.Rank() == 3) {
-      const auto rows = CheckedDimension(shape[1].AsInt(), "QMoE", "projection rows");
-      const auto columns = CheckedMultiply(
-          CheckedDimension(shape[2].AsInt(), "QMoE", "packed columns"), 2, "QMoE", "columns");
+      const auto rows = cpu_compute::CheckedDimension(shape[1].AsInt(), "QMoE", "projection rows");
+      const auto columns = cpu_compute::CheckedMultiply(
+          cpu_compute::CheckedDimension(shape[2].AsInt(), "QMoE", "packed columns"), 2, "QMoE",
+          "columns");
       width = std::max(width, std::max(rows, columns));
-      values =
-          CheckedAdd(values,
-                     CheckedProduct({CheckedDimension(shape[0].AsInt(), "QMoE", "weight experts"),
-                                     rows, columns},
-                                    "QMoE", "dequantized projection"),
-                     "QMoE", "value scratch");
+      values = cpu_compute::CheckedAdd(
+          values,
+          cpu_compute::CheckedProduct(
+              {cpu_compute::CheckedDimension(shape[0].AsInt(), "QMoE", "weight experts"), rows,
+               columns},
+              "QMoE", "dequantized projection"),
+          "QMoE", "value scratch");
     }
   }
-  values = CheckedAdd(values, CheckedProduct({experts, width, 3}, "QMoE", "bias scratch"), "QMoE",
-                      "value scratch");
-  const auto workspace =
-      CheckedAdd(CheckedMultiply(width, 3, "QMoE", "workspace"), hidden, "QMoE", "workspace");
-  values = CheckedAdd(values, CheckedMultiply(tokens, workspace, "QMoE", "split expert scratch"),
-                      "QMoE", "value scratch");
-  auto bytes = CheckedByteSize(values, sizeof(float), "QMoE", "value bytes");
-  bytes = CheckedAdd(bytes, ComputeMoEMaxScratchBytes(tokens, hidden, experts, width, width),
-                     "QMoE", "scratch bytes");
+  values = cpu_compute::CheckedAdd(
+      values, cpu_compute::CheckedProduct({experts, width, 3}, "QMoE", "bias scratch"), "QMoE",
+      "value scratch");
+  const auto workspace = cpu_compute::CheckedAdd(
+      cpu_compute::CheckedMultiply(width, 3, "QMoE", "workspace"), hidden, "QMoE", "workspace");
+  values = cpu_compute::CheckedAdd(
+      values, cpu_compute::CheckedMultiply(tokens, workspace, "QMoE", "split expert scratch"),
+      "QMoE", "value scratch");
+  auto bytes = cpu_compute::CheckedByteSize(values, sizeof(float), "QMoE", "value bytes");
+  bytes = cpu_compute::CheckedAdd(
+      bytes, cpu_compute::ComputeMoEMaxScratchBytes(tokens, hidden, experts, width, width), "QMoE",
+      "scratch bytes");
   // Split FC3 execution has one route array per token, unlike bounded fused MoE tiles.
-  bytes =
-      CheckedAdd(bytes, CheckedProduct({tokens, experts, sizeof(MoERoute)}, "QMoE", "split routes"),
-                 "QMoE", "scratch bytes");
+  bytes = cpu_compute::CheckedAdd(
+      bytes,
+      cpu_compute::CheckedProduct({tokens, experts, sizeof(cpu_compute::MoERoute)}, "QMoE",
+                                  "split routes"),
+      "QMoE", "scratch bytes");
   if (bytes > static_cast<std::size_t>(std::numeric_limits<int64_t>::max())) {
     throw std::overflow_error("ComputePeakMemoryQMoE: scratch size overflows int64_t.");
   }
@@ -1599,8 +1613,8 @@ int64_t ComputePeakMemoryGroupQueryAttention(sym_ns::Device,
         throw std::invalid_argument(
             "ComputePeakMemoryGroupQueryAttention: dimensions must be non-negative.");
       }
-      count = CheckedIndexMultiply(count, dim.AsInt(), "ComputePeakMemoryGroupQueryAttention",
-                                   "scratch element count");
+      count = cpu_compute::CheckedIndexMultiply(
+          count, dim.AsInt(), "ComputePeakMemoryGroupQueryAttention", "scratch element count");
     }
     return count;
   };
@@ -1616,9 +1630,9 @@ int64_t ComputePeakMemoryGroupQueryAttention(sym_ns::Device,
       if (past_length == 0 && input_shapes[index][2].IsInt()) {
         past_length = input_shapes[index][2].AsInt();
       }
-      past_elements =
-          CheckedIndexAdd(past_elements, element_count(input_shapes[index], 4),
-                          "ComputePeakMemoryGroupQueryAttention", "past scratch element count");
+      past_elements = cpu_compute::CheckedIndexAdd(
+          past_elements, element_count(input_shapes[index], 4),
+          "ComputePeakMemoryGroupQueryAttention", "past scratch element count");
     }
   }
   if (!known) {
@@ -1631,31 +1645,33 @@ int64_t ComputePeakMemoryGroupQueryAttention(sym_ns::Device,
   // width is a conservative upper bound for both Q+K and K+V.
   const int64_t unpack_elements = packed_qkv ? query_elements : 0;
   const int64_t rotary_elements =
-      packed_qkv
-          ? query_elements
-          : CheckedIndexAdd(query_elements, key_elements, "ComputePeakMemoryGroupQueryAttention",
-                            "rotary scratch element count");
+      packed_qkv ? query_elements
+                 : cpu_compute::CheckedIndexAdd(query_elements, key_elements,
+                                                "ComputePeakMemoryGroupQueryAttention",
+                                                "rotary scratch element count");
   const int64_t current_kv_elements =
-      packed_qkv
-          ? query_elements
-          : CheckedIndexAdd(key_elements, value_elements, "ComputePeakMemoryGroupQueryAttention",
-                            "current KV scratch element count");
-  const int64_t score_elements =
-      CheckedIndexAdd(input_shapes[0][1].AsInt(), past_length,
-                      "ComputePeakMemoryGroupQueryAttention", "score row element count");
-  const int64_t elements = CheckedIndexAdd(
+      packed_qkv ? query_elements
+                 : cpu_compute::CheckedIndexAdd(key_elements, value_elements,
+                                                "ComputePeakMemoryGroupQueryAttention",
+                                                "current KV scratch element count");
+  const int64_t score_elements = cpu_compute::CheckedIndexAdd(
+      input_shapes[0][1].AsInt(), past_length, "ComputePeakMemoryGroupQueryAttention",
+      "score row element count");
+  const int64_t elements = cpu_compute::CheckedIndexAdd(
       unpack_elements,
-      CheckedIndexAdd(rotary_elements,
-                      CheckedIndexAdd(current_kv_elements,
-                                      CheckedIndexAdd(past_elements, score_elements,
-                                                      "ComputePeakMemoryGroupQueryAttention",
-                                                      "attention row scratch element count"),
-                                      "ComputePeakMemoryGroupQueryAttention",
-                                      "full KV scratch element count"),
-                      "ComputePeakMemoryGroupQueryAttention", "attention scratch element count"),
+      cpu_compute::CheckedIndexAdd(
+          rotary_elements,
+          cpu_compute::CheckedIndexAdd(
+              current_kv_elements,
+              cpu_compute::CheckedIndexAdd(past_elements, score_elements,
+                                           "ComputePeakMemoryGroupQueryAttention",
+                                           "attention row scratch element count"),
+              "ComputePeakMemoryGroupQueryAttention", "full KV scratch element count"),
+          "ComputePeakMemoryGroupQueryAttention", "attention scratch element count"),
       "ComputePeakMemoryGroupQueryAttention", "total scratch element count");
-  return CheckedIndexMultiply(elements, kConservativeElementBytes,
-                              "ComputePeakMemoryGroupQueryAttention", "scratch-memory byte size");
+  return cpu_compute::CheckedIndexMultiply(elements, kConservativeElementBytes,
+                                           "ComputePeakMemoryGroupQueryAttention",
+                                           "scratch-memory byte size");
 }
 
 int64_t ComputePeakMemoryMultiHeadAttention(sym_ns::Device, const std::vector<SymShape> &shapes) {
@@ -1672,15 +1688,18 @@ int64_t ComputePeakMemoryMultiHeadAttention(sym_ns::Device, const std::vector<Sy
       return 0;
     p = shapes[6][2].AsInt();
   }
-  const auto total = CheckedIndexAdd(p, l.AsInt(), "MultiHeadAttention", "score width");
-  const auto rows = CheckedIndexMultiply(b.AsInt(), s.AsInt(), "MultiHeadAttention", "rows");
+  const auto total =
+      cpu_compute::CheckedIndexAdd(p, l.AsInt(), "MultiHeadAttention", "score width");
+  const auto rows =
+      cpu_compute::CheckedIndexMultiply(b.AsInt(), s.AsInt(), "MultiHeadAttention", "rows");
   // Every query head may own a score row concurrently. The query's hidden
   // dimension is at least the head count, providing a conservative bound.
   if (!shapes[0][2].IsInt())
     return 0;
-  return CheckedIndexMultiply(
-      CheckedIndexMultiply(rows, shapes[0][2].AsInt(), "MultiHeadAttention", "score rows"),
-      CheckedIndexMultiply(total, int64_t{4}, "MultiHeadAttention", "score bytes"),
+  return cpu_compute::CheckedIndexMultiply(
+      cpu_compute::CheckedIndexMultiply(rows, shapes[0][2].AsInt(), "MultiHeadAttention",
+                                        "score rows"),
+      cpu_compute::CheckedIndexMultiply(total, int64_t{4}, "MultiHeadAttention", "score bytes"),
       "MultiHeadAttention", "score scratch");
 }
 

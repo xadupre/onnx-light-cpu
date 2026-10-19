@@ -26,7 +26,7 @@ jobs:
 
       - name: Copy the independent project outside the runtime checkout
         shell: bash
-        run: cp -R onnx_light_cpu_compute "${RUNNER_TEMP}/compute"
+        run: cp -R cpu_compute "${RUNNER_TEMP}/compute"
 
       - name: Build and install without ONNX or Python
         shell: bash
@@ -34,7 +34,7 @@ jobs:
           cmake -S "${RUNNER_TEMP}/compute" -B "${RUNNER_TEMP}/build-compute" \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX="${RUNNER_TEMP}/install-compute" \
-            -DONNX_LIGHT_CPU_COMPUTE_BUILD_TESTS=ON
+            -DCPU_COMPUTE_BUILD_TESTS=ON
           cmake --build "${RUNNER_TEMP}/build-compute" --config Release --parallel 2
           ctest --test-dir "${RUNNER_TEMP}/build-compute" -C Release --output-on-failure --timeout 60
           cmake --install "${RUNNER_TEMP}/build-compute" --config Release

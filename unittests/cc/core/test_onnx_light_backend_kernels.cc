@@ -25,13 +25,13 @@
 // exercise the accelerated kernels end to end, exactly like a model run through
 // onnx-light itself.
 
+#include "cpu_compute/math/binary/binary_manifest.h"
 #include "onnx_light_cpu/backend_test/backend_correctness_runner.h"
 #include "onnx_light_cpu/backend_test/cases/math/benchmark_helpers.h"
 #include "onnx_light_cpu/backend_test/collect_test_cases.h"
 #include "onnx_light_cpu/kernels/math/abs_kernel.h"
 #include "onnx_light_cpu/kernels/math/gemm_kernel.h"
 #include "onnx_light_cpu/kernels/register_kernels.h"
-#include "onnx_light_cpu_compute/math/binary/binary_manifest.h"
 
 #include "onnx_core/backend_test/test_case.h"
 #include "onnx_core/runtime/kernels/kernel_context.h"
@@ -130,52 +130,52 @@ std::string Lowercase(std::string value) {
   return value;
 }
 
-std::string BinaryTypeSuffix(onnx_light_cpu::DataType type) {
+std::string BinaryTypeSuffix(cpu_compute::DataType type) {
   switch (type) {
-  case onnx_light_cpu::DataType::BOOL:
+  case cpu_compute::DataType::BOOL:
     return "bool";
-  case onnx_light_cpu::DataType::FLOAT:
+  case cpu_compute::DataType::FLOAT:
     return "float32";
-  case onnx_light_cpu::DataType::DOUBLE:
+  case cpu_compute::DataType::DOUBLE:
     return "float64";
-  case onnx_light_cpu::DataType::FLOAT16:
+  case cpu_compute::DataType::FLOAT16:
     return "float16";
-  case onnx_light_cpu::DataType::BFLOAT16:
+  case cpu_compute::DataType::BFLOAT16:
     return "bfloat16";
-  case onnx_light_cpu::DataType::INT8:
+  case cpu_compute::DataType::INT8:
     return "int8";
-  case onnx_light_cpu::DataType::INT16:
+  case cpu_compute::DataType::INT16:
     return "int16";
-  case onnx_light_cpu::DataType::INT32:
+  case cpu_compute::DataType::INT32:
     return "int32";
-  case onnx_light_cpu::DataType::INT64:
+  case cpu_compute::DataType::INT64:
     return "int64";
-  case onnx_light_cpu::DataType::UINT8:
+  case cpu_compute::DataType::UINT8:
     return "uint8";
-  case onnx_light_cpu::DataType::UINT16:
+  case cpu_compute::DataType::UINT16:
     return "uint16";
-  case onnx_light_cpu::DataType::UINT32:
+  case cpu_compute::DataType::UINT32:
     return "uint32";
-  case onnx_light_cpu::DataType::UINT64:
+  case cpu_compute::DataType::UINT64:
     return "uint64";
-  case onnx_light_cpu::DataType::STRING:
+  case cpu_compute::DataType::STRING:
     return "string";
   default:
     throw std::invalid_argument("unsupported binary type");
   }
 }
 
-bool IsBinaryNonCommutative(onnx_light_cpu::BinaryOperator op) {
-  using onnx_light_cpu::BinaryOperator;
+bool IsBinaryNonCommutative(cpu_compute::BinaryOperator op) {
+  using cpu_compute::BinaryOperator;
   switch (op) {
-  case BinaryOperator::kSub:
-  case BinaryOperator::kDiv:
-  case BinaryOperator::kPow:
-  case BinaryOperator::kGreater:
-  case BinaryOperator::kGreaterOrEqual:
-  case BinaryOperator::kLess:
-  case BinaryOperator::kLessOrEqual:
-  case BinaryOperator::kBitShift:
+  case cpu_compute::BinaryOperator::kSub:
+  case cpu_compute::BinaryOperator::kDiv:
+  case cpu_compute::BinaryOperator::kPow:
+  case cpu_compute::BinaryOperator::kGreater:
+  case cpu_compute::BinaryOperator::kGreaterOrEqual:
+  case cpu_compute::BinaryOperator::kLess:
+  case cpu_compute::BinaryOperator::kLessOrEqual:
+  case cpu_compute::BinaryOperator::kBitShift:
     return true;
   default:
     return false;
@@ -729,7 +729,7 @@ TEST(OnnxLightBackendKernels, AttentionPriorityBenchmarksRunThroughRuntime) {
 
 TEST(OnnxLightBackendKernels, BinaryElementwiseRunsThroughRuntime) {
   std::vector<std::string> failures;
-  for (const auto &entry : onnx_light_cpu::GetBinaryManifest()) {
+  for (const auto &entry : cpu_compute::GetBinaryManifest()) {
     const std::vector<std::string> op_failures =
         RunCpuBackendCases(std::string(entry.op_type), core::backend_test::TestMode::TEST);
     failures.insert(failures.end(), op_failures.begin(), op_failures.end());
@@ -738,7 +738,7 @@ TEST(OnnxLightBackendKernels, BinaryElementwiseRunsThroughRuntime) {
 }
 
 TEST(OnnxLightBackendKernels, BinaryElementwiseCorpusCoversTypesShapesAndSwapCases) {
-  for (const auto &entry : onnx_light_cpu::GetBinaryManifest()) {
+  for (const auto &entry : cpu_compute::GetBinaryManifest()) {
     const std::vector<TestCase> cases =
         CollectCpuCases(std::string(entry.op_type), core::backend_test::TestMode::TEST);
     ASSERT_FALSE(cases.empty()) << entry.op_type;
@@ -772,7 +772,7 @@ TEST(OnnxLightBackendKernels, BinaryElementwiseCorpusCoversTypesShapesAndSwapCas
             << entry.op_type << " missing swapped signature " << type_tag;
       }
     }
-    if (entry.op == onnx_light_cpu::BinaryOperator::kBitShift) {
+    if (entry.op == cpu_compute::BinaryOperator::kBitShift) {
       EXPECT_TRUE(std::any_of(cases.begin(), cases.end(), [](const TestCase &test_case) {
         return test_case.name.find("_left") != std::string::npos;
       }));
@@ -1218,7 +1218,7 @@ TEST(OnnxLightBackendKernels, SplitBenchmarksCoverTypesLayoutsAndLazyOutputs) {
 
 TEST(OnnxLightBackendKernels, BinaryBenchmarkCorporaAreUnmaterializedAndRunThroughRuntime) {
   std::vector<std::string> failures;
-  for (const auto &entry : onnx_light_cpu::GetBinaryManifest()) {
+  for (const auto &entry : cpu_compute::GetBinaryManifest()) {
     const std::vector<TestCase> cases =
         CollectCpuCases(std::string(entry.op_type), core::backend_test::TestMode::BENCHMARK);
     ASSERT_FALSE(cases.empty()) << entry.op_type;
@@ -1248,7 +1248,7 @@ TEST(OnnxLightBackendKernels, BinaryBenchmarkCorporaCoverEverySignatureAndPriori
       1048576,
       4194304,
   };
-  for (const auto &entry : onnx_light_cpu::GetBinaryManifest()) {
+  for (const auto &entry : cpu_compute::GetBinaryManifest()) {
     const std::vector<TestCase> cases =
         CollectCpuCases(std::string(entry.op_type), core::backend_test::TestMode::BENCHMARK);
     std::set<std::string> shape_tags;
@@ -1268,7 +1268,7 @@ TEST(OnnxLightBackendKernels, BinaryBenchmarkCorporaCoverEverySignatureAndPriori
     EXPECT_EQ(shape_tags, expected_shape_tags) << entry.op_type;
     EXPECT_EQ(output_sizes, expected_output_sizes) << entry.op_type;
     for (const auto &signature : entry.signatures) {
-      if (signature.left == onnx_light_cpu::DataType::STRING) {
+      if (signature.left == cpu_compute::DataType::STRING) {
         continue;
       }
       const std::string signature_tag = "_" + BinaryTypeSuffix(signature.left) + "x" +
@@ -1288,7 +1288,7 @@ TEST(OnnxLightBackendKernels, BinaryBenchmarkCorporaCoverEverySignatureAndPriori
 
 TEST(OnnxLightBackendKernels, BinaryArithmeticBenchmarksRunThroughRuntime) {
   for (const std::string op_type : {"Div", "Sub", "Mod"}) {
-    const auto &entry = onnx_light_cpu::GetBinaryManifestEntry(op_type);
+    const auto &entry = cpu_compute::GetBinaryManifestEntry(op_type);
     const std::string case_name = "test_cpu_" + Lowercase(op_type) + "_v" +
                                   std::to_string(entry.since_version) +
                                   "_contiguous_float32xfloat32_to_float32" +

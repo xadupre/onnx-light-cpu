@@ -388,7 +388,7 @@ September 7 dashboard follow-up
 
 The registered ``Sigmoid`` and last-axis ``Softmax`` dispatchers could not
 reach their existing fused AVX2/FMA implementations: the implementation
-library's ``ONNX_LIGHT_CPU_HAVE_AVX2_FMA`` definition was private and absent
+library's ``CPU_COMPUTE_HAVE_AVX2_FMA`` definition was private and absent
 from the separate registration library. The registration target now receives
 the availability definition when those kernels are built, without applying
 AVX2 compiler flags to its portable translation units. Runtime dispatch still

@@ -176,8 +176,8 @@ def infer_pr_benchmark_selection(
         if path.startswith(
             (
                 "onnx_light_cpu/backend_test/cases/",
-                "onnx_light_cpu_compute/src/",
-                "onnx_light_cpu_compute/include/",
+                "cpu_compute/src/",
+                "cpu_compute/include/",
                 "onnx_light_cpu/kernels/",
             )
         )

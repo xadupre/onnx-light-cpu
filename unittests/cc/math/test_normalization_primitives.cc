@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "onnx_light_cpu_compute/math/half_conversion.h"
-#include "onnx_light_cpu_compute/math/normalization_kernel.h"
-#include "onnx_light_cpu_compute/simd_level.h"
+#include "cpu_compute/math/half_conversion.h"
+#include "cpu_compute/math/normalization.h"
+#include "cpu_compute/simd_level.h"
 
 #include <gtest/gtest.h>
 
@@ -22,46 +22,49 @@
 
 namespace {
 
-using namespace onnx_light_cpu;
-using detail::Bfloat16BitsToFloat;
-using detail::Float16BitsToFloat;
-using detail::FloatToBFloat16Bits;
-using detail::FloatToFloat16Bits;
+using namespace cpu_compute;
+using cpu_compute::detail::Bfloat16BitsToFloat;
+using cpu_compute::detail::Float16BitsToFloat;
+using cpu_compute::detail::FloatToBFloat16Bits;
+using cpu_compute::detail::FloatToFloat16Bits;
 
 TEST(NormalizationPrimitives, DispatchLabelsMatchRequiredCpuFeatures) {
-  const char *half_path = NormalizationFloat16Path();
+  const char *half_path = cpu_compute::NormalizationFloat16Path();
   if (std::strcmp(half_path, "f16c") == 0) {
-    EXPECT_TRUE(CpuSupportsF16C());
-    EXPECT_GE(DetectSimdLevel(), SimdLevel::kAVX);
+    EXPECT_TRUE(cpu_compute::CpuSupportsF16C());
+    EXPECT_GE(cpu_compute::DetectSimdLevel(), cpu_compute::SimdLevel::kAVX);
   } else {
     EXPECT_STREQ(half_path, "scalar");
   }
-  const char *bfloat16_path = NormalizationBFloat16Path();
+  const char *bfloat16_path = cpu_compute::NormalizationBFloat16Path();
   if (std::strcmp(bfloat16_path, "avx512bf16") == 0) {
-    EXPECT_TRUE(CpuSupportsAvx512Bf16());
-    EXPECT_GE(DetectSimdLevel(), SimdLevel::kAVX512);
+    EXPECT_TRUE(cpu_compute::CpuSupportsAvx512Bf16());
+    EXPECT_GE(cpu_compute::DetectSimdLevel(), cpu_compute::SimdLevel::kAVX512);
   } else {
     EXPECT_STREQ(bfloat16_path, "scalar");
   }
-  const char *double_path = NormalizationFloat64Path();
+  const char *double_path = cpu_compute::NormalizationFloat64Path();
   if (std::strcmp(double_path, "avx") == 0) {
-    EXPECT_GE(DetectSimdLevel(), SimdLevel::kAVX);
+    EXPECT_GE(cpu_compute::DetectSimdLevel(), cpu_compute::SimdLevel::kAVX);
   } else {
     EXPECT_STREQ(double_path, "scalar");
   }
 }
 
 TEST(NormalizationPrimitives, EmptyReductionsRejectAndEmptyAffineDoesNotDereference) {
-  EXPECT_THROW(ComputeNormalizationMeanSquareFloat16(nullptr, 0), std::invalid_argument);
-  EXPECT_THROW(ComputeNormalizationMeanSquareBFloat16(nullptr, 0), std::invalid_argument);
-  EXPECT_THROW(ComputeNormalizationMeanSquareFloat64(nullptr, 0), std::invalid_argument);
-  EXPECT_THROW(ComputeNormalizationMeanSquareFloat64StashFloat32(nullptr, 0),
+  EXPECT_THROW(cpu_compute::ComputeNormalizationMeanSquareFloat16(nullptr, 0),
                std::invalid_argument);
-  ApplyRmsNormalizationFloat32(nullptr, nullptr, nullptr, 0, 1.0F);
-  ApplyNormalizationAffineFloat16(nullptr, nullptr, nullptr, 0, 1.0F);
-  ApplyNormalizationAffineBFloat16(nullptr, nullptr, nullptr, 0, 1.0F);
-  ApplyNormalizationAffineFloat64(nullptr, nullptr, nullptr, 0, 1.0);
-  ApplyNormalizationAffineFloat64StashFloat32(nullptr, nullptr, nullptr, 0, 1.0F);
+  EXPECT_THROW(cpu_compute::ComputeNormalizationMeanSquareBFloat16(nullptr, 0),
+               std::invalid_argument);
+  EXPECT_THROW(cpu_compute::ComputeNormalizationMeanSquareFloat64(nullptr, 0),
+               std::invalid_argument);
+  EXPECT_THROW(cpu_compute::ComputeNormalizationMeanSquareFloat64StashFloat32(nullptr, 0),
+               std::invalid_argument);
+  cpu_compute::ApplyRmsNormalizationFloat32(nullptr, nullptr, nullptr, 0, 1.0F);
+  cpu_compute::ApplyNormalizationAffineFloat16(nullptr, nullptr, nullptr, 0, 1.0F);
+  cpu_compute::ApplyNormalizationAffineBFloat16(nullptr, nullptr, nullptr, 0, 1.0F);
+  cpu_compute::ApplyNormalizationAffineFloat64(nullptr, nullptr, nullptr, 0, 1.0);
+  cpu_compute::ApplyNormalizationAffineFloat64StashFloat32(nullptr, nullptr, nullptr, 0, 1.0F);
 }
 
 TEST(NormalizationPrimitives, BFloat16EveryTailAndUnalignedInPlaceAffine) {
@@ -78,18 +81,18 @@ TEST(NormalizationPrimitives, BFloat16EveryTailAndUnalignedInPlaceAffine) {
     }
     const float expected_mean_square =
         (squares[0] + squares[1] + squares[2] + squares[3]) / static_cast<float>(count);
-    EXPECT_FLOAT_EQ(ComputeNormalizationMeanSquareBFloat16(input.data() + 1, count),
+    EXPECT_FLOAT_EQ(cpu_compute::ComputeNormalizationMeanSquareBFloat16(input.data() + 1, count),
                     expected_mean_square);
-    ApplyNormalizationAffineBFloat16(input.data() + 1, scale.data() + 1, output.data() + 1, count,
-                                     0.731234F);
+    cpu_compute::ApplyNormalizationAffineBFloat16(input.data() + 1, scale.data() + 1,
+                                                  output.data() + 1, count, 0.731234F);
     for (std::size_t i = 0; i < count; ++i) {
       const float value = Bfloat16BitsToFloat(input[i + 1]) * 0.731234F;
       EXPECT_EQ(output[i + 1], FloatToBFloat16Bits(value * Bfloat16BitsToFloat(scale[i + 1])));
     }
     EXPECT_EQ(output.front(), 0x1234);
     EXPECT_EQ(output.back(), 0x1234);
-    ApplyNormalizationAffineBFloat16(input.data() + 1, scale.data() + 1, input.data() + 1, count,
-                                     0.731234F);
+    cpu_compute::ApplyNormalizationAffineBFloat16(input.data() + 1, scale.data() + 1,
+                                                  input.data() + 1, count, 0.731234F);
     for (std::size_t i = 0; i < count; ++i) {
       EXPECT_EQ(input[i + 1], output[i + 1]);
     }
@@ -106,15 +109,15 @@ TEST(NormalizationPrimitives, Float32RmsAffineHandlesEveryTailAndUnalignedInput)
       input[i + 1] = (static_cast<float>(i % 11) - 5.0F) * 0.25F;
       scale[i + 1] = 0.5F + static_cast<float>(i % 5) * 0.25F;
     }
-    ApplyRmsNormalizationFloat32(input.data() + 1, scale.data() + 1, output.data() + 1, count,
-                                 multiplier);
+    cpu_compute::ApplyRmsNormalizationFloat32(input.data() + 1, scale.data() + 1, output.data() + 1,
+                                              count, multiplier);
     for (std::size_t i = 0; i < count; ++i) {
       EXPECT_FLOAT_EQ(output[i + 1], input[i + 1] * multiplier * scale[i + 1]);
     }
     EXPECT_EQ(output.front(), -999.0F);
     EXPECT_EQ(output.back(), -999.0F);
-    ApplyRmsNormalizationFloat32(input.data() + 1, scale.data() + 1, input.data() + 1, count,
-                                 multiplier);
+    cpu_compute::ApplyRmsNormalizationFloat32(input.data() + 1, scale.data() + 1, input.data() + 1,
+                                              count, multiplier);
     for (std::size_t i = 0; i < count; ++i) {
       EXPECT_EQ(input[i + 1], output[i + 1]);
     }
@@ -138,7 +141,8 @@ TEST(NormalizationPrimitives, Float32MomentsUseStableBlockAggregation) {
       squared_deviations += delta * delta;
     }
 
-    const auto moments = ComputeNormalizationMomentsFloat32(input.data(), input.size());
+    const auto moments =
+        cpu_compute::ComputeNormalizationMomentsFloat32(input.data(), input.size());
     EXPECT_FLOAT_EQ(moments.mean, static_cast<float>(mean));
     EXPECT_NEAR(moments.variance,
                 static_cast<float>(squared_deviations / static_cast<double>(count)), 2.0e-6F);
@@ -149,12 +153,12 @@ TEST(NormalizationPrimitives, Float32MomentsUseStableBlockAggregation) {
 TEST(NormalizationPrimitives, Float32ChanMomentsPreserveNonFiniteValues) {
   std::vector<float> input(8192, 1.0F);
   input.back() = std::numeric_limits<float>::infinity();
-  auto moments = ComputeNormalizationMomentsFloat32(input.data(), input.size());
+  auto moments = cpu_compute::ComputeNormalizationMomentsFloat32(input.data(), input.size());
   EXPECT_TRUE(std::isinf(moments.mean) || std::isnan(moments.mean));
   EXPECT_TRUE(std::isnan(moments.variance));
 
   input.back() = std::numeric_limits<float>::quiet_NaN();
-  moments = ComputeNormalizationMomentsFloat32(input.data(), input.size());
+  moments = cpu_compute::ComputeNormalizationMomentsFloat32(input.data(), input.size());
   EXPECT_TRUE(std::isnan(moments.mean));
   EXPECT_TRUE(std::isnan(moments.variance));
 
@@ -162,7 +166,7 @@ TEST(NormalizationPrimitives, Float32ChanMomentsPreserveNonFiniteValues) {
   for (std::size_t index = 0; index < input.size(); ++index) {
     input[index] = index % 8 < 4 ? maximum : -maximum;
   }
-  moments = ComputeNormalizationMomentsFloat32(input.data(), input.size());
+  moments = cpu_compute::ComputeNormalizationMomentsFloat32(input.data(), input.size());
   EXPECT_FALSE(moments.used_stable_algorithm);
 }
 
@@ -170,7 +174,8 @@ TEST(NormalizationPrimitives, BFloat16SubnormalsAndNanCanonicalization) {
   for (std::uint16_t bits : {0x0001, 0x007f, 0x8001, 0x807f, 0x7f95, 0xff95}) {
     for (std::size_t count = 1; count <= 33; ++count) {
       std::vector<std::uint16_t> input(count, bits), scale(count, 0x3f80), output(count);
-      ApplyNormalizationAffineBFloat16(input.data(), scale.data(), output.data(), count, 1.0F);
+      cpu_compute::ApplyNormalizationAffineBFloat16(input.data(), scale.data(), output.data(),
+                                                    count, 1.0F);
       const auto expected = FloatToBFloat16Bits(Bfloat16BitsToFloat(bits));
       for (const auto actual : output) {
         EXPECT_EQ(actual, expected) << "bits=" << bits << " count=" << count;
@@ -191,18 +196,18 @@ TEST(NormalizationPrimitives, HalfEveryTailAndUnalignedInPlaceAffine) {
       scale[i + 1] = FloatToFloat16Bits(0.5F + static_cast<float>(i % 5) * 0.25F);
       squares += value * value;
     }
-    EXPECT_FLOAT_EQ(ComputeNormalizationMeanSquareFloat16(input.data() + 1, count),
+    EXPECT_FLOAT_EQ(cpu_compute::ComputeNormalizationMeanSquareFloat16(input.data() + 1, count),
                     squares / static_cast<float>(count));
-    ApplyNormalizationAffineFloat16(input.data() + 1, scale.data() + 1, output.data() + 1, count,
-                                    0.731234F);
+    cpu_compute::ApplyNormalizationAffineFloat16(input.data() + 1, scale.data() + 1,
+                                                 output.data() + 1, count, 0.731234F);
     for (std::size_t i = 0; i < count; ++i) {
       const float value = Float16BitsToFloat(input[i + 1]) * 0.731234F;
       EXPECT_EQ(output[i + 1], FloatToFloat16Bits(value * Float16BitsToFloat(scale[i + 1])));
     }
     EXPECT_EQ(output.front(), 0x1234);
     EXPECT_EQ(output.back(), 0x1234);
-    ApplyNormalizationAffineFloat16(input.data() + 1, scale.data() + 1, input.data() + 1, count,
-                                    0.731234F);
+    cpu_compute::ApplyNormalizationAffineFloat16(input.data() + 1, scale.data() + 1,
+                                                 input.data() + 1, count, 0.731234F);
     for (std::size_t i = 0; i < count; ++i) {
       EXPECT_EQ(input[i + 1], output[i + 1]);
     }
@@ -218,7 +223,8 @@ TEST(NormalizationPrimitives, HalfRoundsOnlyAfterScale) {
     const auto intermediate_rounded = FloatToFloat16Bits(
         Float16BitsToFloat(FloatToFloat16Bits(normalized)) * Float16BitsToFloat(weight));
     ASSERT_NE(expected, intermediate_rounded);
-    ApplyNormalizationAffineFloat16(input.data(), scale.data(), output.data(), count, 0.731234F);
+    cpu_compute::ApplyNormalizationAffineFloat16(input.data(), scale.data(), output.data(), count,
+                                                 0.731234F);
     for (const auto actual : output) {
       EXPECT_EQ(actual, expected) << count;
     }
@@ -243,18 +249,19 @@ TEST(NormalizationPrimitives, HalfMomentsAndNormalizationFastPathsHandleTails) {
     const float second_moment =
         (square_sums[0] + square_sums[1] + square_sums[2] + square_sums[3]) /
         static_cast<float>(count);
-    const auto moments = ComputeNormalizationMomentsFloat16(input.data(), count);
+    const auto moments = cpu_compute::ComputeNormalizationMomentsFloat16(input.data(), count);
     EXPECT_NEAR(moments.mean, mean, 1.0e-6F);
     EXPECT_NEAR(moments.variance, second_moment - mean * mean, 1.0e-6F);
 
-    ApplyNormalizationScaleBiasFloat16(input.data(), output.data(), count, 0.75F, -0.125F);
+    cpu_compute::ApplyNormalizationScaleBiasFloat16(input.data(), output.data(), count, 0.75F,
+                                                    -0.125F);
     for (std::size_t i = 0; i < count; ++i) {
       const float value = Float16BitsToFloat(input[i]) * 0.75F - 0.125F;
       EXPECT_EQ(output[i], FloatToFloat16Bits(value));
     }
 
-    ApplyLayerNormalizationFloat16(input.data(), scale.data(), bias.data(), output.data(), count,
-                                   mean, 0.75F);
+    cpu_compute::ApplyLayerNormalizationFloat16(input.data(), scale.data(), bias.data(),
+                                                output.data(), count, mean, 0.75F);
     for (std::size_t i = 0; i < count; ++i) {
       const float normalized =
           Float16BitsToFloat(FloatToFloat16Bits((Float16BitsToFloat(input[i]) - mean) * 0.75F));
@@ -263,7 +270,8 @@ TEST(NormalizationPrimitives, HalfMomentsAndNormalizationFastPathsHandleTails) {
       EXPECT_EQ(output[i], FloatToFloat16Bits(scaled + Float16BitsToFloat(bias[i])));
     }
 
-    ApplyGroupNormalizationFloat16(input.data(), output.data(), count, mean, 0.75F, 0.625F, -0.25F);
+    cpu_compute::ApplyGroupNormalizationFloat16(input.data(), output.data(), count, mean, 0.75F,
+                                                0.625F, -0.25F);
     for (std::size_t i = 0; i < count; ++i) {
       const float normalized =
           Float16BitsToFloat(FloatToFloat16Bits((Float16BitsToFloat(input[i]) - mean) * 0.75F));
@@ -275,7 +283,7 @@ TEST(NormalizationPrimitives, HalfMomentsAndNormalizationFastPathsHandleTails) {
     for (std::size_t i = 0; i < lp_input.size(); ++i) {
       lp_input[i] = input[i % count];
     }
-    LpNormalizationFloat16(lp_input.data(), lp_output.data(), 2, count);
+    cpu_compute::LpNormalizationFloat16(lp_input.data(), lp_output.data(), 2, count);
     double square_sum = 0.0;
     for (std::size_t i = 0; i < count; ++i) {
       const double value = Float16BitsToFloat(input[i]);
@@ -304,17 +312,18 @@ TEST(NormalizationPrimitives, HalfBatchedNormalizationMatchesPerSlicePrimitives)
   std::vector<std::uint16_t> expected(kSlices * kWidth, 0x1234);
   std::vector<std::uint16_t> actual = expected;
   for (std::size_t slice = 1; slice < 4; ++slice) {
-    const auto moments = ComputeNormalizationMomentsFloat16(input.data() + slice * kWidth, kWidth);
+    const auto moments =
+        cpu_compute::ComputeNormalizationMomentsFloat16(input.data() + slice * kWidth, kWidth);
     const std::size_t channel = slice % kChannels;
     const float multiplier =
         Float16BitsToFloat(scale[channel]) / std::sqrt(moments.variance + 1.0e-5F);
     const float offset = Float16BitsToFloat(bias[channel]) - moments.mean * multiplier;
-    ApplyNormalizationScaleBiasFloat16(input.data() + slice * kWidth,
-                                       expected.data() + slice * kWidth, kWidth, multiplier,
-                                       offset);
+    cpu_compute::ApplyNormalizationScaleBiasFloat16(input.data() + slice * kWidth,
+                                                    expected.data() + slice * kWidth, kWidth,
+                                                    multiplier, offset);
   }
-  InstanceNormalizationFloat16(input.data(), scale.data(), bias.data(), actual.data(), 1, 4,
-                               kChannels, kWidth, 1.0e-5F);
+  cpu_compute::InstanceNormalizationFloat16(input.data(), scale.data(), bias.data(), actual.data(),
+                                            1, 4, kChannels, kWidth, 1.0e-5F);
   EXPECT_EQ(actual, expected);
 
   std::fill(expected.begin(), expected.end(), 0x1234);
@@ -322,15 +331,18 @@ TEST(NormalizationPrimitives, HalfBatchedNormalizationMatchesPerSlicePrimitives)
   std::vector<float> expected_mean(kSlices, -999.0F), expected_inv(kSlices, -999.0F);
   std::vector<float> actual_mean = expected_mean, actual_inv = expected_inv;
   for (std::size_t row = 1; row < 4; ++row) {
-    const auto moments = ComputeNormalizationMomentsFloat16(input.data() + row * kWidth, kWidth);
+    const auto moments =
+        cpu_compute::ComputeNormalizationMomentsFloat16(input.data() + row * kWidth, kWidth);
     const float inverse = 1.0F / std::sqrt(moments.variance + 1.0e-5F);
     expected_mean[row] = moments.mean;
     expected_inv[row] = inverse;
-    ApplyLayerNormalizationFloat16(input.data() + row * kWidth, scale.data(), bias.data(),
-                                   expected.data() + row * kWidth, kWidth, moments.mean, inverse);
+    cpu_compute::ApplyLayerNormalizationFloat16(input.data() + row * kWidth, scale.data(),
+                                                bias.data(), expected.data() + row * kWidth, kWidth,
+                                                moments.mean, inverse);
   }
-  LayerNormalizationFloat16Rows(input.data(), scale.data(), bias.data(), actual.data(),
-                                actual_mean.data(), actual_inv.data(), 1, 4, kWidth, 1.0e-5F);
+  cpu_compute::LayerNormalizationFloat16Rows(input.data(), scale.data(), bias.data(), actual.data(),
+                                             actual_mean.data(), actual_inv.data(), 1, 4, kWidth,
+                                             1.0e-5F);
   EXPECT_EQ(actual, expected);
   EXPECT_EQ(actual_mean, expected_mean);
   EXPECT_EQ(actual_inv, expected_inv);
@@ -338,12 +350,12 @@ TEST(NormalizationPrimitives, HalfBatchedNormalizationMatchesPerSlicePrimitives)
   std::fill(expected.begin(), expected.end(), 0x1234);
   actual = expected;
   for (std::size_t channel = 0; channel < kChannels; ++channel) {
-    ApplyGroupNormalizationFloat16(
+    cpu_compute::ApplyGroupNormalizationFloat16(
         input.data() + channel * kWidth, expected.data() + channel * kWidth, kWidth, 0.125F, 0.75F,
         Float16BitsToFloat(scale[channel]), Float16BitsToFloat(bias[channel]));
   }
-  ApplyGroupNormalizationFloat16Channels(input.data(), scale.data(), bias.data(), actual.data(),
-                                         kChannels, kWidth, 0.125F, 0.75F);
+  cpu_compute::ApplyGroupNormalizationFloat16Channels(
+      input.data(), scale.data(), bias.data(), actual.data(), kChannels, kWidth, 0.125F, 0.75F);
   EXPECT_EQ(actual, expected);
 }
 
@@ -351,7 +363,8 @@ TEST(NormalizationPrimitives, HalfSubnormalsAndNanCanonicalization) {
   for (std::uint16_t bits : {0x0001, 0x03ff, 0x8001, 0x83ff, 0x7e55, 0xfe55}) {
     for (std::size_t count = 1; count <= 33; ++count) {
       std::vector<std::uint16_t> input(count, bits), scale(count, 0x3c00), output(count);
-      ApplyNormalizationAffineFloat16(input.data(), scale.data(), output.data(), count, 1.0F);
+      cpu_compute::ApplyNormalizationAffineFloat16(input.data(), scale.data(), output.data(), count,
+                                                   1.0F);
       const auto expected = FloatToFloat16Bits(Float16BitsToFloat(bits));
       for (const auto actual : output) {
         EXPECT_EQ(actual, expected) << "bits=" << bits << " count=" << count;
@@ -367,7 +380,8 @@ TEST(NormalizationPrimitives, HalfConversionDoesNotRaiseUnmaskedExceptions) {
     const unsigned int original = _mm_getcsr();
     const unsigned int unmasked = original & ~(_MM_MASK_MASK | _MM_EXCEPT_MASK);
     _mm_setcsr(unmasked);
-    ApplyNormalizationAffineFloat16(input.data(), scale.data(), output.data(), count, 1.0F);
+    cpu_compute::ApplyNormalizationAffineFloat16(input.data(), scale.data(), output.data(), count,
+                                                 1.0F);
     const unsigned int after = _mm_getcsr();
     _mm_setcsr(original);
     EXPECT_EQ(after, unmasked);
@@ -388,30 +402,31 @@ TEST(NormalizationPrimitives, DoubleEveryTailAndUnalignedInPlaceAffine) {
       scale[i + 1] = 0.5 + static_cast<double>(i % 5) * 0.25;
       squares += input[i + 1] * input[i + 1];
     }
-    EXPECT_DOUBLE_EQ(ComputeNormalizationMeanSquareFloat64(input.data() + 1, count),
+    EXPECT_DOUBLE_EQ(cpu_compute::ComputeNormalizationMeanSquareFloat64(input.data() + 1, count),
                      squares / static_cast<double>(count));
-    EXPECT_FLOAT_EQ(ComputeNormalizationMeanSquareFloat64StashFloat32(input.data() + 1, count),
-                    static_cast<float>(squares) / static_cast<float>(count));
-    ApplyNormalizationAffineFloat64(input.data() + 1, scale.data() + 1, output.data() + 1, count,
-                                    0.731234567890123);
+    EXPECT_FLOAT_EQ(
+        cpu_compute::ComputeNormalizationMeanSquareFloat64StashFloat32(input.data() + 1, count),
+        static_cast<float>(squares) / static_cast<float>(count));
+    cpu_compute::ApplyNormalizationAffineFloat64(input.data() + 1, scale.data() + 1,
+                                                 output.data() + 1, count, 0.731234567890123);
     for (std::size_t i = 0; i < count; ++i) {
       EXPECT_DOUBLE_EQ(output[i + 1], input[i + 1] * 0.731234567890123 * scale[i + 1]);
     }
     EXPECT_EQ(output.front(), -999.0);
     EXPECT_EQ(output.back(), -999.0);
-    ApplyNormalizationAffineFloat64(input.data() + 1, scale.data() + 1, input.data() + 1, count,
-                                    0.731234567890123);
+    cpu_compute::ApplyNormalizationAffineFloat64(input.data() + 1, scale.data() + 1,
+                                                 input.data() + 1, count, 0.731234567890123);
     for (std::size_t i = 0; i < count; ++i) {
       EXPECT_EQ(input[i + 1], output[i + 1]);
     }
-    ApplyNormalizationAffineFloat64StashFloat32(input.data() + 1, scale.data() + 1,
-                                                output.data() + 1, count, 0.731234F);
+    cpu_compute::ApplyNormalizationAffineFloat64StashFloat32(input.data() + 1, scale.data() + 1,
+                                                             output.data() + 1, count, 0.731234F);
     for (std::size_t i = 0; i < count; ++i) {
       const float normalized = static_cast<float>(input[i + 1]) * 0.731234F;
       EXPECT_EQ(output[i + 1], static_cast<double>(normalized * static_cast<float>(scale[i + 1])));
     }
-    ApplyNormalizationAffineFloat64StashFloat32(input.data() + 1, scale.data() + 1,
-                                                input.data() + 1, count, 0.731234F);
+    cpu_compute::ApplyNormalizationAffineFloat64StashFloat32(input.data() + 1, scale.data() + 1,
+                                                             input.data() + 1, count, 0.731234F);
     for (std::size_t i = 0; i < count; ++i) {
       EXPECT_EQ(input[i + 1], output[i + 1]);
     }
@@ -422,35 +437,39 @@ TEST(NormalizationPrimitives, FloatStashCastsInputsBeforeSquareAndScaleBeforeMul
   for (std::size_t count = 1; count <= 33; ++count) {
     SCOPED_TRACE(count);
     std::vector<double> input(count, 1.0e30), scale(count, 1.0), output(count);
-    EXPECT_TRUE(std::isfinite(ComputeNormalizationMeanSquareFloat64(input.data(), count)));
-    EXPECT_TRUE(std::isinf(ComputeNormalizationMeanSquareFloat64StashFloat32(input.data(), count)));
+    EXPECT_TRUE(
+        std::isfinite(cpu_compute::ComputeNormalizationMeanSquareFloat64(input.data(), count)));
+    EXPECT_TRUE(std::isinf(
+        cpu_compute::ComputeNormalizationMeanSquareFloat64StashFloat32(input.data(), count)));
     std::fill(input.begin(), input.end(), 1.0e40);
-    ApplyNormalizationAffineFloat64StashFloat32(input.data(), scale.data(), output.data(), count,
-                                                1.0e-20F);
+    cpu_compute::ApplyNormalizationAffineFloat64StashFloat32(input.data(), scale.data(),
+                                                             output.data(), count, 1.0e-20F);
     for (const auto actual : output) {
       EXPECT_TRUE(std::isinf(actual));
     }
     std::fill(input.begin(), input.end(), 1.0);
     std::fill(scale.begin(), scale.end(), 1.0e40);
-    ApplyNormalizationAffineFloat64StashFloat32(input.data(), scale.data(), output.data(), count,
-                                                1.0e-20F);
+    cpu_compute::ApplyNormalizationAffineFloat64StashFloat32(input.data(), scale.data(),
+                                                             output.data(), count, 1.0e-20F);
     for (const auto actual : output) {
       EXPECT_TRUE(std::isinf(actual));
     }
     std::fill(input.begin(), input.end(), 1.0e30);
     std::fill(scale.begin(), scale.end(), 1.0e-30);
-    ApplyNormalizationAffineFloat64StashFloat32(input.data(), scale.data(), output.data(), count,
-                                                1.0e10F);
+    cpu_compute::ApplyNormalizationAffineFloat64StashFloat32(input.data(), scale.data(),
+                                                             output.data(), count, 1.0e10F);
     for (const auto actual : output) {
       EXPECT_TRUE(std::isinf(actual));
     }
-    ApplyNormalizationAffineFloat64(input.data(), scale.data(), output.data(), count, 1.0e10);
+    cpu_compute::ApplyNormalizationAffineFloat64(input.data(), scale.data(), output.data(), count,
+                                                 1.0e10);
     for (const auto actual : output) {
       EXPECT_NEAR(actual, 1.0e10, 1.0e-5);
     }
     std::fill(input.begin(), input.end(), 1.0 + 0x1p-30);
-    EXPECT_EQ(ComputeNormalizationMeanSquareFloat64StashFloat32(input.data(), count), 1.0F);
-    EXPECT_GT(ComputeNormalizationMeanSquareFloat64(input.data(), count), 1.0);
+    EXPECT_EQ(cpu_compute::ComputeNormalizationMeanSquareFloat64StashFloat32(input.data(), count),
+              1.0F);
+    EXPECT_GT(cpu_compute::ComputeNormalizationMeanSquareFloat64(input.data(), count), 1.0);
   }
 }
 
@@ -462,42 +481,46 @@ TEST(NormalizationPrimitives, IeeeValuesAcrossVectorAndScalarTails) {
           std::numeric_limits<double>::quiet_NaN()}) {
       std::vector<double> input(count, 1.0), scale(count, 1.0), output(count);
       input.back() = special;
-      const double squares = ComputeNormalizationMeanSquareFloat64(input.data(), count);
+      const double squares =
+          cpu_compute::ComputeNormalizationMeanSquareFloat64(input.data(), count);
       const float float_squares =
-          ComputeNormalizationMeanSquareFloat64StashFloat32(input.data(), count);
+          cpu_compute::ComputeNormalizationMeanSquareFloat64StashFloat32(input.data(), count);
       EXPECT_EQ(std::isnan(squares), std::isnan(special));
       EXPECT_EQ(std::isnan(float_squares), std::isnan(special));
       EXPECT_EQ(std::isinf(squares), std::isinf(special));
       EXPECT_EQ(std::isinf(float_squares), std::isinf(special));
-      ApplyNormalizationAffineFloat64(input.data(), scale.data(), output.data(), count, 0.0);
+      cpu_compute::ApplyNormalizationAffineFloat64(input.data(), scale.data(), output.data(), count,
+                                                   0.0);
       EXPECT_TRUE(std::isnan(output.back()));
-      ApplyNormalizationAffineFloat64StashFloat32(input.data(), scale.data(), output.data(), count,
-                                                  0.0F);
+      cpu_compute::ApplyNormalizationAffineFloat64StashFloat32(input.data(), scale.data(),
+                                                               output.data(), count, 0.0F);
       EXPECT_TRUE(std::isnan(output.back()));
       std::vector<std::uint16_t> half_input(count, FloatToFloat16Bits(1.0F));
       std::vector<std::uint16_t> half_scale(count, FloatToFloat16Bits(1.0F)), half_output(count);
       half_input.back() = FloatToFloat16Bits(static_cast<float>(special));
-      const float half_squares = ComputeNormalizationMeanSquareFloat16(half_input.data(), count);
+      const float half_squares =
+          cpu_compute::ComputeNormalizationMeanSquareFloat16(half_input.data(), count);
       EXPECT_EQ(std::isnan(half_squares), std::isnan(special));
       EXPECT_EQ(std::isinf(half_squares), std::isinf(special));
-      ApplyNormalizationAffineFloat16(half_input.data(), half_scale.data(), half_output.data(),
-                                      count, 0.0F);
+      cpu_compute::ApplyNormalizationAffineFloat16(half_input.data(), half_scale.data(),
+                                                   half_output.data(), count, 0.0F);
       EXPECT_TRUE(std::isnan(Float16BitsToFloat(half_output.back())));
     }
     std::vector<double> zero(count, -0.0), scale(count, 1.0), output(count);
-    ApplyNormalizationAffineFloat64(zero.data(), scale.data(), output.data(), count, 1.0);
+    cpu_compute::ApplyNormalizationAffineFloat64(zero.data(), scale.data(), output.data(), count,
+                                                 1.0);
     for (const auto actual : output) {
       EXPECT_TRUE(std::signbit(actual));
     }
-    ApplyNormalizationAffineFloat64StashFloat32(zero.data(), scale.data(), output.data(), count,
-                                                1.0F);
+    cpu_compute::ApplyNormalizationAffineFloat64StashFloat32(zero.data(), scale.data(),
+                                                             output.data(), count, 1.0F);
     for (const auto actual : output) {
       EXPECT_TRUE(std::signbit(actual));
     }
     std::vector<std::uint16_t> half_zero(count, 0x8000), half_scale(count, 0x3c00),
         half_output(count);
-    ApplyNormalizationAffineFloat16(half_zero.data(), half_scale.data(), half_output.data(), count,
-                                    1.0F);
+    cpu_compute::ApplyNormalizationAffineFloat16(half_zero.data(), half_scale.data(),
+                                                 half_output.data(), count, 1.0F);
     EXPECT_EQ(half_output, half_zero);
   }
 }

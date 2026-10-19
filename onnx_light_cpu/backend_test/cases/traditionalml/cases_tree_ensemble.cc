@@ -5,7 +5,7 @@
 #include "onnx_light_cpu/backend_test/cases/traditionalml/include_traditionalml_cases.h"
 #include "onnx_light_cpu/backend_test/cases/traditionalml/tree_ensemble_corpus.h"
 
-#include "onnx_light_cpu_compute/traditionalml/tree_ensemble.h"
+#include "cpu_compute/traditionalml/tree_ensemble.h"
 
 #include "onnx_core/backend_test/expect.h"
 #include "onnx_core/runtime/kernels/cast_helper.h"
@@ -91,14 +91,14 @@ void AddTensor(NodeProto &node, const char *name, TensorProto::DataType data_typ
   tensor->set_raw_data(ONNX_LIGHT_NAMESPACE::utils::ByteSpan(raw));
 }
 
-void AddTypedTensor(NodeProto &node, const char *name, onnx_light_cpu::DataType type,
+void AddTypedTensor(NodeProto &node, const char *name, cpu_compute::DataType type,
                     const std::vector<double> &values) {
-  if (type == onnx_light_cpu::DataType::DOUBLE) {
+  if (type == cpu_compute::DataType::DOUBLE) {
     AddTensor(node, name, TensorProto::DOUBLE, values);
     return;
   }
   std::vector<float> floats(values.begin(), values.end());
-  if (type == onnx_light_cpu::DataType::FLOAT) {
+  if (type == cpu_compute::DataType::FLOAT) {
     AddTensor(node, name, TensorProto::FLOAT, floats);
     return;
   }
@@ -110,16 +110,16 @@ void AddTypedTensor(NodeProto &node, const char *name, onnx_light_cpu::DataType 
   AddTensor(node, name, TensorProto::FLOAT16, halves);
 }
 
-void AddModes(NodeProto &node, const std::vector<TreeBranchMode> &modes) {
+void AddModes(NodeProto &node, const std::vector<cpu_compute::TreeBranchMode> &modes) {
   std::vector<std::uint8_t> values;
   values.reserve(modes.size());
-  for (TreeBranchMode mode : modes) {
+  for (cpu_compute::TreeBranchMode mode : modes) {
     values.push_back(static_cast<std::uint8_t>(mode));
   }
   AddTensor(node, "nodes_modes", TensorProto::UINT8, values);
 }
 
-NodeProto MakeTreeEnsembleNode(const TreeEnsembleAttributes &attributes) {
+NodeProto MakeTreeEnsembleNode(const cpu_compute::TreeEnsembleAttributes &attributes) {
   NodeProto node;
   node.set_op_type("TreeEnsemble");
   node.set_domain("ai.onnx.ml");
@@ -155,32 +155,32 @@ std::vector<float> ToFloat(const std::vector<double> &values) {
 }
 
 Tensor MakeTypedTensor(const std::vector<double> &values, const std::vector<std::int64_t> &shape,
-                       onnx_light_cpu::DataType type) {
-  if (type == onnx_light_cpu::DataType::DOUBLE) {
+                       cpu_compute::DataType type) {
+  if (type == cpu_compute::DataType::DOUBLE) {
     return Tensor::FromDouble("", shape, values);
   }
   const std::vector<float> floats = ToFloat(values);
-  if (type == onnx_light_cpu::DataType::FLOAT16) {
+  if (type == cpu_compute::DataType::FLOAT16) {
     return rt_ns::MakeFloat16Tensor("", shape, floats);
   }
   return Tensor::FromFloat("", shape, floats);
 }
 
-const char *DataTypeSuffix(onnx_light_cpu::DataType type) {
-  if (type == onnx_light_cpu::DataType::DOUBLE) {
+const char *DataTypeSuffix(cpu_compute::DataType type) {
+  if (type == cpu_compute::DataType::DOUBLE) {
     return "float64";
   }
-  if (type == onnx_light_cpu::DataType::FLOAT16) {
+  if (type == cpu_compute::DataType::FLOAT16) {
     return "float16";
   }
-  if (type == onnx_light_cpu::DataType::FLOAT) {
+  if (type == cpu_compute::DataType::FLOAT) {
     return "float32";
   }
   throw std::invalid_argument("unsupported TreeEnsemble value type: " +
                               std::to_string(static_cast<int>(type)));
 }
 
-void AddLegacyTree(NodeProto &node, const LegacyTreeAttributes &tree) {
+void AddLegacyTree(NodeProto &node, const cpu_compute::LegacyTreeAttributes &tree) {
   AddInts(node, "nodes_treeids", tree.nodes_treeids);
   AddInts(node, "nodes_nodeids", tree.nodes_nodeids);
   AddInts(node, "nodes_featureids", tree.nodes_featureids);
@@ -193,8 +193,8 @@ void AddLegacyTree(NodeProto &node, const LegacyTreeAttributes &tree) {
   }
 }
 
-LegacyTreeAttributes MakeLegacyStump() {
-  LegacyTreeAttributes tree;
+cpu_compute::LegacyTreeAttributes MakeLegacyStump() {
+  cpu_compute::LegacyTreeAttributes tree;
   tree.n_features = 1;
   tree.nodes_treeids = {0, 0, 0};
   tree.nodes_nodeids = {0, 1, 2};
@@ -206,8 +206,8 @@ LegacyTreeAttributes MakeLegacyStump() {
   return tree;
 }
 
-TreeEnsembleRegressorAttributes MakeRegressor() {
-  TreeEnsembleRegressorAttributes attributes;
+cpu_compute::TreeEnsembleRegressorAttributes MakeRegressor() {
+  cpu_compute::TreeEnsembleRegressorAttributes attributes;
   attributes.tree = MakeLegacyStump();
   attributes.n_targets = 2;
   attributes.target_treeids = {0, 0, 0, 0};
@@ -215,18 +215,18 @@ TreeEnsembleRegressorAttributes MakeRegressor() {
   attributes.target_ids = {0, 1, 0, 1};
   attributes.target_weights = {1.0, -1.0, 2.0, -2.0};
   attributes.base_values = {0.5, 0.5};
-  attributes.post_transform = TreePostTransform::kLogistic;
+  attributes.post_transform = cpu_compute::TreePostTransform::kLogistic;
   return attributes;
 }
 
-TreeEnsembleAttributes MakeBenchmarkForest(std::size_t trees, std::int64_t features) {
+cpu_compute::TreeEnsembleAttributes MakeBenchmarkForest(std::size_t trees, std::int64_t features) {
   constexpr std::size_t kDepth = 4;
   constexpr std::size_t kInternalNodes = (1U << kDepth) - 1;
   constexpr std::size_t kLeaves = 1U << kDepth;
-  TreeEnsembleAttributes attributes;
+  cpu_compute::TreeEnsembleAttributes attributes;
   attributes.n_features = features;
   attributes.n_targets = 1;
-  attributes.value_type = onnx_light_cpu::DataType::FLOAT;
+  attributes.value_type = cpu_compute::DataType::FLOAT;
   for (std::size_t tree = 0; tree < trees; ++tree) {
     const std::size_t node_offset = tree * kInternalNodes;
     const std::size_t leaf_offset = tree * kLeaves;
@@ -235,7 +235,7 @@ TreeEnsembleAttributes MakeBenchmarkForest(std::size_t trees, std::int64_t featu
       attributes.nodes_featureids.push_back(
           static_cast<std::int64_t>((tree + node) % static_cast<std::size_t>(features)));
       attributes.nodes_splits.push_back(static_cast<double>(static_cast<int>(node % 7) - 3) * 0.25);
-      attributes.nodes_modes.push_back(TreeBranchMode::kLeq);
+      attributes.nodes_modes.push_back(cpu_compute::TreeBranchMode::kLeq);
       for (bool true_branch : {true, false}) {
         const std::size_t child = 2 * node + (true_branch ? 1 : 2);
         const bool leaf = child >= kInternalNodes;
@@ -270,7 +270,7 @@ constexpr TreeEnsembleBenchmarkSpec kTreeEnsembleBenchmarkCases[] = {
     {10, 4, 1}, {100, 64, 8}, {1000, 1024, 32}, {10000, 4096, 1}, {10000, 4096, 128},
 };
 
-NodeProto MakeRegressorNode(const TreeEnsembleRegressorAttributes &attributes) {
+NodeProto MakeRegressorNode(const cpu_compute::TreeEnsembleRegressorAttributes &attributes) {
   NodeProto node;
   node.set_op_type("TreeEnsembleRegressor");
   node.set_domain("ai.onnx.ml");
@@ -288,8 +288,8 @@ NodeProto MakeRegressorNode(const TreeEnsembleRegressorAttributes &attributes) {
   return node;
 }
 
-TreeEnsembleClassifierAttributes MakeClassifier(bool string_labels) {
-  TreeEnsembleClassifierAttributes attributes;
+cpu_compute::TreeEnsembleClassifierAttributes MakeClassifier(bool string_labels) {
+  cpu_compute::TreeEnsembleClassifierAttributes attributes;
   attributes.tree = MakeLegacyStump();
   attributes.class_treeids = {0, 0, 0, 0};
   attributes.class_nodeids = {1, 1, 2, 2};
@@ -303,7 +303,7 @@ TreeEnsembleClassifierAttributes MakeClassifier(bool string_labels) {
   return attributes;
 }
 
-NodeProto MakeClassifierNode(const TreeEnsembleClassifierAttributes &attributes) {
+NodeProto MakeClassifierNode(const cpu_compute::TreeEnsembleClassifierAttributes &attributes) {
   NodeProto node;
   node.set_op_type("TreeEnsembleClassifier");
   node.set_domain("ai.onnx.ml");
@@ -334,7 +334,8 @@ void RegisterCpuTreeEnsembleCases(std::vector<TestCase> &registry, TestMode mode
   const OpsetId ml_opset("ai.onnx.ml", kMlOpsetVersion);
   if (mode == TestMode::BENCHMARK) {
     for (const TreeEnsembleBenchmarkSpec &spec : kTreeEnsembleBenchmarkCases) {
-      TreeEnsembleAttributes attributes = MakeBenchmarkForest(spec.trees, spec.features);
+      cpu_compute::TreeEnsembleAttributes attributes =
+          MakeBenchmarkForest(spec.trees, spec.features);
       NodeProto node = MakeTreeEnsembleNode(attributes);
       const std::string name = "test_cpu_treeensemble_t" + std::to_string(spec.trees) + "_f" +
                                std::to_string(spec.features) + "_b" + std::to_string(spec.rows) +
@@ -353,7 +354,7 @@ void RegisterCpuTreeEnsembleCases(std::vector<TestCase> &registry, TestMode mode
                if (!generate_expected_outputs) {
                  return IoData{{std::move(input)}, {}, {}, false};
                }
-               TreeEnsembleOracle oracle(attributes);
+               cpu_compute::TreeEnsembleOracle oracle(attributes);
                std::vector<double> expected = oracle.Evaluate(values, spec.rows);
                Tensor output = Tensor::FromFloat("", {static_cast<std::int64_t>(spec.rows), 1},
                                                  ToFloat(expected));
@@ -392,9 +393,10 @@ void RegisterCpuTreeEnsembleRegressorCases(std::vector<TestCase> &registry, Test
     return;
   }
   const OpsetId ml_opset("ai.onnx.ml", kMlOpsetVersion);
-  const TreeEnsembleRegressorAttributes attributes = MakeRegressor();
+  const cpu_compute::TreeEnsembleRegressorAttributes attributes = MakeRegressor();
   const std::vector<double> input_values = {-1.0, 1.0};
-  const std::vector<float> expected = EvaluateTreeEnsembleRegressor(attributes, input_values, 2);
+  const std::vector<float> expected =
+      cpu_compute::EvaluateTreeEnsembleRegressor(attributes, input_values, 2);
   for (DataType type : {DataType::FLOAT, DataType::DOUBLE, DataType::INT32, DataType::INT64}) {
     NodeProto node = MakeRegressorNode(attributes);
     const std::string suffix = type == DataType::FLOAT    ? "float"
@@ -419,9 +421,9 @@ void RegisterCpuTreeEnsembleClassifierCases(std::vector<TestCase> &registry, Tes
   }
   const OpsetId ml_opset("ai.onnx.ml", kMlOpsetVersion);
   for (bool string_labels : {false, true}) {
-    const TreeEnsembleClassifierAttributes attributes = MakeClassifier(string_labels);
-    const TreeClassifierResult expected =
-        EvaluateTreeEnsembleClassifier(attributes, {-1.0, 1.0}, 2);
+    const cpu_compute::TreeEnsembleClassifierAttributes attributes = MakeClassifier(string_labels);
+    const cpu_compute::TreeClassifierResult expected =
+        cpu_compute::EvaluateTreeEnsembleClassifier(attributes, {-1.0, 1.0}, 2);
     NodeProto node = MakeClassifierNode(attributes);
     const std::string suffix = string_labels ? "strings" : "int64";
     Expect(registry, std::move(node), "test_cpu_treeensembleclassifier_v5_" + suffix,

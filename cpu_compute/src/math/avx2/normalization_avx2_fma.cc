@@ -1,0 +1,189 @@
+// Copyright (c) ONNX Project Contributors
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include "cpu_compute/math/normalization.h"
+
+#include <immintrin.h>
+
+namespace cpu_compute {
+namespace {
+
+float HorizontalSum(__m256 value) {
+  __m128 sum = _mm_add_ps(_mm256_castps256_ps128(value), _mm256_extractf128_ps(value, 1));
+  sum = _mm_add_ps(sum, _mm_movehl_ps(sum, sum));
+  sum = _mm_add_ss(sum, _mm_shuffle_ps(sum, sum, 1));
+  return _mm_cvtss_f32(sum);
+}
+
+} // namespace
+
+float ComputeResidualMeanSquareFloat32_AVX2(const float *input, const float *skip,
+                                            const float *bias, float *residual, std::size_t count) {
+  __m256 sums[4] = {_mm256_setzero_ps(), _mm256_setzero_ps(), _mm256_setzero_ps(),
+                    _mm256_setzero_ps()};
+  std::size_t index = 0;
+  for (; index + 32 <= count; index += 32) {
+    for (std::size_t lane = 0; lane < 4; ++lane) {
+      const std::size_t offset = index + lane * 8;
+      __m256 value = _mm256_add_ps(_mm256_loadu_ps(input + offset), _mm256_loadu_ps(skip + offset));
+      if (bias != nullptr) {
+        value = _mm256_add_ps(value, _mm256_loadu_ps(bias + offset));
+      }
+      _mm256_storeu_ps(residual + offset, value);
+      sums[lane] = _mm256_fmadd_ps(value, value, sums[lane]);
+    }
+  }
+  for (; index + 8 <= count; index += 8) {
+    __m256 value = _mm256_add_ps(_mm256_loadu_ps(input + index), _mm256_loadu_ps(skip + index));
+    if (bias != nullptr) {
+      value = _mm256_add_ps(value, _mm256_loadu_ps(bias + index));
+    }
+    _mm256_storeu_ps(residual + index, value);
+    sums[0] = _mm256_fmadd_ps(value, value, sums[0]);
+  }
+  float sum = HorizontalSum(
+      _mm256_add_ps(_mm256_add_ps(sums[0], sums[1]), _mm256_add_ps(sums[2], sums[3])));
+  for (; index < count; ++index) {
+    float value = input[index] + skip[index];
+    if (bias != nullptr) {
+      value += bias[index];
+    }
+    residual[index] = value;
+    sum += value * value;
+  }
+  return sum / static_cast<float>(count);
+}
+
+void AddNormalizationResidualFloat32_AVX2(const float *input, const float *skip, const float *bias,
+                                          float *residual, std::size_t count) {
+  std::size_t index = 0;
+  for (; index + 8 <= count; index += 8) {
+    __m256 value = _mm256_add_ps(_mm256_loadu_ps(input + index), _mm256_loadu_ps(skip + index));
+    if (bias != nullptr) {
+      value = _mm256_add_ps(value, _mm256_loadu_ps(bias + index));
+    }
+    _mm256_storeu_ps(residual + index, value);
+  }
+  for (; index < count; ++index) {
+    const float value = input[index] + skip[index];
+    residual[index] = bias == nullptr ? value : value + bias[index];
+  }
+}
+
+// Keep the multiply rounded before adding the offset, including for constant inputs.
+#if defined(__GNUC__) && !defined(__clang__)
+__attribute__((optimize("fp-contract=off")))
+#endif
+void ApplyNormalizationScaleBiasFloat32_AVX2(const float *input, float *output, std::size_t count,
+                                             float multiplier, float offset) {
+#ifdef __clang__
+#pragma clang fp contract(off)
+#endif
+  const __m256 scale = _mm256_set1_ps(multiplier);
+  const __m256 bias = _mm256_set1_ps(offset);
+  std::size_t index = 0;
+  for (; index + 8 <= count; index += 8) {
+    const __m256 value = _mm256_loadu_ps(input + index);
+    _mm256_storeu_ps(output + index, _mm256_add_ps(_mm256_mul_ps(value, scale), bias));
+  }
+  for (; index < count; ++index) {
+    output[index] = input[index] * multiplier + offset;
+  }
+}
+
+float ComputeNormalizationMeanSquareFloat32_AVX2(const float *input, std::size_t count) {
+  __m256 sums[4] = {_mm256_setzero_ps(), _mm256_setzero_ps(), _mm256_setzero_ps(),
+                    _mm256_setzero_ps()};
+  std::size_t index = 0;
+  for (; index + 32 <= count; index += 32) {
+    for (std::size_t lane = 0; lane < 4; ++lane) {
+      const __m256 value = _mm256_loadu_ps(input + index + lane * 8);
+      sums[lane] = _mm256_fmadd_ps(value, value, sums[lane]);
+    }
+  }
+  for (; index + 8 <= count; index += 8) {
+    const __m256 value = _mm256_loadu_ps(input + index);
+    sums[0] = _mm256_fmadd_ps(value, value, sums[0]);
+  }
+  float sum = HorizontalSum(
+      _mm256_add_ps(_mm256_add_ps(sums[0], sums[1]), _mm256_add_ps(sums[2], sums[3])));
+  for (; index < count; ++index) {
+    sum += input[index] * input[index];
+  }
+  return sum / static_cast<float>(count);
+}
+
+Float32NormalizationMoments ComputeNormalizationMomentsFloat32_AVX2(const float *input,
+                                                                    std::size_t count) {
+  __m256 sums[4] = {_mm256_setzero_ps(), _mm256_setzero_ps(), _mm256_setzero_ps(),
+                    _mm256_setzero_ps()};
+  __m256 square_sums[4] = {_mm256_setzero_ps(), _mm256_setzero_ps(), _mm256_setzero_ps(),
+                           _mm256_setzero_ps()};
+  std::size_t index = 0;
+  for (; index + 32 <= count; index += 32) {
+    for (std::size_t lane = 0; lane < 4; ++lane) {
+      const __m256 value = _mm256_loadu_ps(input + index + lane * 8);
+      sums[lane] = _mm256_add_ps(sums[lane], value);
+      square_sums[lane] = _mm256_fmadd_ps(value, value, square_sums[lane]);
+    }
+  }
+  for (; index + 8 <= count; index += 8) {
+    const __m256 value = _mm256_loadu_ps(input + index);
+    sums[0] = _mm256_add_ps(sums[0], value);
+    square_sums[0] = _mm256_fmadd_ps(value, value, square_sums[0]);
+  }
+  float sum = HorizontalSum(
+      _mm256_add_ps(_mm256_add_ps(sums[0], sums[1]), _mm256_add_ps(sums[2], sums[3])));
+  float sum_squares = HorizontalSum(_mm256_add_ps(_mm256_add_ps(square_sums[0], square_sums[1]),
+                                                  _mm256_add_ps(square_sums[2], square_sums[3])));
+  for (; index < count; ++index) {
+    const float value = input[index];
+    sum += value;
+    sum_squares += value * value;
+  }
+  const float mean = sum / static_cast<float>(count);
+  return {mean, sum_squares / static_cast<float>(count) - mean * mean};
+}
+
+void ApplyNormalizationAffineFloat32_AVX2(const float *input, const float *scale, const float *bias,
+                                          float *output, std::size_t count, float center,
+                                          float multiplier) {
+  const __m256 center8 = _mm256_set1_ps(center);
+  const __m256 multiplier8 = _mm256_set1_ps(multiplier);
+  std::size_t index = 0;
+  for (; index + 8 <= count; index += 8) {
+    const __m256 value = _mm256_loadu_ps(input + index);
+    const __m256 weight = _mm256_loadu_ps(scale + index);
+    __m256 result =
+        _mm256_mul_ps(_mm256_mul_ps(_mm256_sub_ps(value, center8), multiplier8), weight);
+    if (bias != nullptr) {
+      result = _mm256_add_ps(result, _mm256_loadu_ps(bias + index));
+    }
+    _mm256_storeu_ps(output + index, result);
+  }
+  for (; index < count; ++index) {
+    float value = (input[index] - center) * multiplier * scale[index];
+    if (bias != nullptr) {
+      value += bias[index];
+    }
+    output[index] = value;
+  }
+}
+
+void ApplyRmsNormalizationFloat32_AVX2(const float *input, const float *scale, float *output,
+                                       std::size_t count, float multiplier) {
+  const __m256 multiplier8 = _mm256_set1_ps(multiplier);
+  std::size_t index = 0;
+  for (; index + 8 <= count; index += 8) {
+    const __m256 value = _mm256_loadu_ps(input + index);
+    const __m256 weight = _mm256_loadu_ps(scale + index);
+    const __m256 result = _mm256_mul_ps(_mm256_mul_ps(value, multiplier8), weight);
+    _mm256_storeu_ps(output + index, result);
+  }
+  for (; index < count; ++index) {
+    output[index] = input[index] * multiplier * scale[index];
+  }
+}
+
+} // namespace cpu_compute

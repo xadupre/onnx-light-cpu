@@ -5,8 +5,8 @@
 #include "onnx_light_cpu/kernels/tensor/gather_kernel.h"
 #include "onnx_light_cpu/kernels/execution.h"
 
+#include "cpu_compute/tensor/gather.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
-#include "onnx_light_cpu_compute/tensor/gather_kernel.h"
 
 #include "onnx_core/runtime/kernels/node_helpers.h"
 #include "onnx_core/symbolic/sym_tensor.h"
@@ -127,11 +127,11 @@ void Copy(const Tensor &data, const Tensor &indices, Tensor &output, const Gathe
     Invalid("output must not overlap data or indices.");
   }
   if (indices.data_type == DataType::INT32) {
-    GatherSlices(data.bytes(), indices.As<int32_t>(), output.mutable_bytes(), plan.outer,
-                 plan.axis_size, plan.index_count, plan.slice_bytes);
+    cpu_compute::GatherSlices(data.bytes(), indices.As<int32_t>(), output.mutable_bytes(),
+                              plan.outer, plan.axis_size, plan.index_count, plan.slice_bytes);
   } else {
-    GatherSlices(data.bytes(), indices.As<int64_t>(), output.mutable_bytes(), plan.outer,
-                 plan.axis_size, plan.index_count, plan.slice_bytes);
+    cpu_compute::GatherSlices(data.bytes(), indices.As<int64_t>(), output.mutable_bytes(),
+                              plan.outer, plan.axis_size, plan.index_count, plan.slice_bytes);
   }
 }
 

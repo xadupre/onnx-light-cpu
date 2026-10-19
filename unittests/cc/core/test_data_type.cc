@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "onnx_light_cpu_compute/data_type.h"
+#include "cpu_compute/data_type.h"
 
 #include <gtest/gtest.h>
 
@@ -11,7 +11,7 @@
 
 namespace {
 
-using onnx_light_cpu::DataType;
+using cpu_compute::DataType;
 
 TEST(DataType, UsesOnnxTensorElementTypeValues) {
   EXPECT_TRUE((std::is_same_v<std::underlying_type_t<DataType>, std::int32_t>));

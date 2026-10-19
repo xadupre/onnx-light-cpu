@@ -4,9 +4,9 @@
 
 #include "onnx_light_cpu/kernels/tensor/cast_kernel.h"
 
+#include "cpu_compute/execution.h"
+#include "cpu_compute/tensor/cast.h"
 #include "onnx_extensions/kernels/kernels/tensor/include_tensor_kernels.h"
-#include "onnx_light_cpu_compute/execution.h"
-#include "onnx_light_cpu_compute/tensor/cast_kernel.h"
 
 #include <gtest/gtest.h>
 
@@ -25,7 +25,7 @@ using rt_ns::DataType;
 using rt_ns::Shape;
 using rt_ns::Tensor;
 using BuiltinCast = ONNX_LIGHT_NAMESPACE::onnx_kernels::kernel::Cast;
-using CpuType = onnx_light_cpu::DataType;
+using CpuType = cpu_compute::DataType;
 
 rt_ns::KernelContext MakeCtx() { return rt_ns::KernelContext(rt_ns::OpsetId("", 27)); }
 
@@ -542,7 +542,7 @@ TEST(OnnxLightCastKernel, RecordsNumericConversionPath) {
       Equal(runtime.Get("output"), BuiltinCast(MakeCtx())(input, to));
       EXPECT_EQ(runtime.GetKernelUsage(),
                 (std::vector<std::string>{onnx_light_cpu::CastKernel::kName,
-                                          onnx_light_cpu::CastConversionPath(
+                                          cpu_compute::CastConversionPath(
                                               static_cast<CpuType>(from), static_cast<CpuType>(to),
                                               static_cast<std::size_t>(count))}));
     }
@@ -554,7 +554,7 @@ struct InlineExecutor {
   int64_t blocks = 0;
 
   static void Run(void *context, int64_t count, void *task_context,
-                  onnx_light_cpu::ExecutionBlockFn task) {
+                  cpu_compute::ExecutionBlockFn task) {
     auto &self = *static_cast<InlineExecutor *>(context);
     ++self.dispatches;
     self.blocks = count;
@@ -566,8 +566,8 @@ struct InlineExecutor {
 
 TEST(OnnxLightCastKernel, ExecutorSmallLargeIdentityAndNestedBypass) {
   InlineExecutor executor;
-  onnx_light_cpu::ExecutionExecutorView view{&executor, 8, &InlineExecutor::Run};
-  onnx_light_cpu::ExecutionExecutorScope scope(&view);
+  cpu_compute::ExecutionExecutorView view{&executor, 8, &InlineExecutor::Run};
+  cpu_compute::ExecutionExecutorScope scope(&view);
   Compare(Tensor::From<int64_t>("data", {3}, {1, 5, 7}), DataType::INT32);
   EXPECT_EQ(executor.dispatches, 0);
   const Tensor large = Tensor::From<int64_t>("data", {262145}, std::vector<int64_t>(262145, 17));
@@ -578,13 +578,13 @@ TEST(OnnxLightCastKernel, ExecutorSmallLargeIdentityAndNestedBypass) {
   Compare(large, DataType::INT64);
   EXPECT_EQ(executor.dispatches, 4);
   {
-    onnx_light_cpu::detail::ExecutionRegionScope region;
+    cpu_compute::detail::ExecutionRegionScope region;
     Compare(large, DataType::INT32);
-    EXPECT_EQ(onnx_light_cpu::detail::ExecutionRegionDepth(), 1);
+    EXPECT_EQ(cpu_compute::detail::ExecutionRegionDepth(), 1);
   }
   EXPECT_EQ(executor.dispatches, 4);
   {
-    onnx_light_cpu::ExecutionExecutorScope no_executor(nullptr);
+    cpu_compute::ExecutionExecutorScope no_executor(nullptr);
     Compare(large, DataType::INT32);
   }
   EXPECT_EQ(executor.dispatches, 4);
@@ -611,8 +611,8 @@ TEST(OnnxLightCastKernel, ExecutorParallelComplexConversionAndNestedBypass) {
   const Tensor expected = Tensor::From<double>("expected", {count}, expected_values);
   const onnx_light_cpu::CastKernel kernel(MakeCtx());
   InlineExecutor executor;
-  onnx_light_cpu::ExecutionExecutorView view{&executor, 8, &InlineExecutor::Run};
-  onnx_light_cpu::ExecutionExecutorScope scope(&view);
+  cpu_compute::ExecutionExecutorView view{&executor, 8, &InlineExecutor::Run};
+  cpu_compute::ExecutionExecutorScope scope(&view);
 
   Equal(kernel(input, DataType::DOUBLE), expected);
   EXPECT_EQ(executor.dispatches, 1);
@@ -623,30 +623,32 @@ TEST(OnnxLightCastKernel, ExecutorParallelComplexConversionAndNestedBypass) {
   Equal(output, expected);
   EXPECT_EQ(executor.dispatches, 2);
   {
-    onnx_light_cpu::detail::ExecutionRegionScope region;
+    cpu_compute::detail::ExecutionRegionScope region;
     Equal(kernel(input, DataType::DOUBLE), expected);
-    EXPECT_EQ(onnx_light_cpu::detail::ExecutionRegionDepth(), 1);
+    EXPECT_EQ(cpu_compute::detail::ExecutionRegionDepth(), 1);
   }
   EXPECT_EQ(executor.dispatches, 2);
 }
 
 TEST(OnnxLightCastKernel, StandaloneContractValidation) {
-  using onnx_light_cpu::CastConvert;
+  using cpu_compute::CastConvert;
   std::array<int64_t, 4> data{1, 2, 3, 4};
   std::array<int32_t, 4> output{};
-  EXPECT_NO_THROW(CastConvert(nullptr, CpuType::FLOAT, nullptr, CpuType::INT32, 0));
-  EXPECT_THROW(CastConvert(nullptr, CpuType::FLOAT, output.data(), CpuType::INT32, 1),
+  EXPECT_NO_THROW(cpu_compute::CastConvert(nullptr, CpuType::FLOAT, nullptr, CpuType::INT32, 0));
+  EXPECT_THROW(cpu_compute::CastConvert(nullptr, CpuType::FLOAT, output.data(), CpuType::INT32, 1),
                std::invalid_argument);
-  EXPECT_THROW(CastConvert(data.data(), CpuType::INT64, nullptr, CpuType::INT32, 1),
+  EXPECT_THROW(cpu_compute::CastConvert(data.data(), CpuType::INT64, nullptr, CpuType::INT32, 1),
                std::invalid_argument);
-  EXPECT_THROW(CastConvert(data.data(), CpuType::STRING, output.data(), CpuType::INT32, 0),
+  EXPECT_THROW(
+      cpu_compute::CastConvert(data.data(), CpuType::STRING, output.data(), CpuType::INT32, 0),
+      std::invalid_argument);
+  EXPECT_THROW(
+      cpu_compute::CastConvert(data.data(), CpuType::INT64, data.data(), CpuType::INT64, 4),
+      std::invalid_argument);
+  EXPECT_THROW(cpu_compute::CastConvert(data.data(), CpuType::INT64, output.data(), CpuType::INT32,
+                                        std::numeric_limits<std::size_t>::max()),
                std::invalid_argument);
-  EXPECT_THROW(CastConvert(data.data(), CpuType::INT64, data.data(), CpuType::INT64, 4),
-               std::invalid_argument);
-  EXPECT_THROW(CastConvert(data.data(), CpuType::INT64, output.data(), CpuType::INT32,
-                           std::numeric_limits<std::size_t>::max()),
-               std::invalid_argument);
-  CastConvert(data.data(), CpuType::INT64, output.data(), CpuType::INT32, 4);
+  cpu_compute::CastConvert(data.data(), CpuType::INT64, output.data(), CpuType::INT32, 4);
   EXPECT_EQ(output, (std::array<int32_t, 4>{1, 2, 3, 4}));
 }
 

@@ -2,10 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "onnx_light_cpu_compute/cpu_cache_topology.h"
-#include "onnx_light_cpu_compute/math/math_kernels.h"
-#ifdef ONNX_LIGHT_CPU_HAVE_SSSE3
-#include "onnx_light_cpu_compute/math/ssse3/abs_kernel_ssse3.h"
+#include "cpu_compute/cpu_cache_topology.h"
+#include "cpu_compute/math/math.h"
+#ifdef CPU_COMPUTE_HAVE_SSSE3
+#include "cpu_compute/math/ssse3/abs_ssse3.h"
 #endif
 
 #include <gtest/gtest.h>
@@ -23,16 +23,16 @@ namespace {
 
 std::size_t SelectedAbsFloat32Lanes() {
 #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
-  const auto level = onnx_light_cpu::DetectSimdLevel();
-#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
-  if (level >= onnx_light_cpu::SimdLevel::kAVX512) {
+  const auto level = cpu_compute::DetectSimdLevel();
+#ifdef CPU_COMPUTE_HAVE_AVX512
+  if (level >= cpu_compute::SimdLevel::kAVX512) {
     return 16;
   }
 #endif
-  if (level >= onnx_light_cpu::SimdLevel::kAVX) {
+  if (level >= cpu_compute::SimdLevel::kAVX) {
     return 8;
   }
-  if (level >= onnx_light_cpu::SimdLevel::kSSE2) {
+  if (level >= cpu_compute::SimdLevel::kSSE2) {
     return 4;
   }
 #endif
@@ -48,17 +48,17 @@ double SelectedAbsFloat32ComputeCycles() {
 // ---------------------------------------------------------------------------
 
 TEST(SimdDetection, DetectsAtLeastScalar) {
-  auto level = onnx_light_cpu::DetectSimdLevel();
+  auto level = cpu_compute::DetectSimdLevel();
   EXPECT_GE(static_cast<int>(level), 0);
 }
 
 TEST(SimdDetection, FmaRequiresAvx2OrAvx) {
-  if (onnx_light_cpu::CpuSupportsFma()) {
-    EXPECT_GE(onnx_light_cpu::DetectSimdLevel(), onnx_light_cpu::SimdLevel::kAVX);
+  if (cpu_compute::CpuSupportsFma()) {
+    EXPECT_GE(cpu_compute::DetectSimdLevel(), cpu_compute::SimdLevel::kAVX);
   }
 }
 
-#ifdef ONNX_LIGHT_CPU_HAVE_SSSE3
+#ifdef CPU_COMPUTE_HAVE_SSSE3
 template <typename T>
 void CheckSsse3Abs(void (*compute)(const T *, T *, std::size_t), std::size_t width) {
   for (std::size_t size = 0; size <= 2 * width + 1; ++size) {
@@ -88,11 +88,11 @@ void CheckSsse3Abs(void (*compute)(const T *, T *, std::size_t), std::size_t wid
 }
 
 TEST(AbsSsse3, IntegerAbsoluteValuesAndAllShortTails) {
-  if (!onnx_light_cpu::CpuSupportsSsse3()) {
+  if (!cpu_compute::CpuSupportsSsse3()) {
     GTEST_SKIP() << "SSSE3 unavailable on this CPU";
   }
-  CheckSsse3Abs(onnx_light_cpu::AbsInt8_SSSE3, 16);
-  CheckSsse3Abs(onnx_light_cpu::AbsInt16_SSSE3, 8);
+  CheckSsse3Abs(cpu_compute::AbsInt8_SSSE3, 16);
+  CheckSsse3Abs(cpu_compute::AbsInt16_SSSE3, 8);
 }
 #endif
 
@@ -102,15 +102,15 @@ TEST(AbsSsse3, IntegerAbsoluteValuesAndAllShortTails) {
 
 TEST(AbsFloat32, EmptyInput) {
   float dummy = 1.0f;
-  onnx_light_cpu::AbsFloat32(&dummy, &dummy, 0);
+  cpu_compute::AbsFloat32(&dummy, &dummy, 0);
 }
 
 TEST(AbsFloat32, DefaultsRespectSelectedIsaAndCacheCapacity) {
-  const auto &tuning = onnx_light_cpu::DefaultAbsFloat32ExecutionTuning();
+  const auto &tuning = cpu_compute::DefaultAbsFloat32ExecutionTuning();
   if (SelectedAbsFloat32Lanes() == 8) {
     EXPECT_EQ(tuning.target_block_bytes, 1024 * 1024);
     const std::size_t cache =
-        onnx_light_cpu::CpuCacheSizeBytesOrFallback(onnx_light_cpu::GetCpuCacheTopology(), 3, 0);
+        cpu_compute::CpuCacheSizeBytesOrFallback(cpu_compute::GetCpuCacheTopology(), 3, 0);
     if (cache == 0) {
       EXPECT_EQ(tuning.streaming_store_threshold_bytes, 0);
     } else {
@@ -125,54 +125,54 @@ TEST(AbsFloat32, DefaultsRespectSelectedIsaAndCacheCapacity) {
 
 TEST(AbsFloat32, CostModelUsesDispatchComputeCost) {
   struct PlanningExecutor {
-    onnx_light_cpu::ExecutionWorkCost observed_cost{};
+    cpu_compute::ExecutionWorkCost observed_cost{};
 
-    static onnx_light_cpu::ExecutionParallelPlan Plan(void *context, std::int64_t,
-                                                      const onnx_light_cpu::ExecutionWorkCost &cost,
-                                                      std::int64_t, std::int64_t) {
+    static cpu_compute::ExecutionParallelPlan Plan(void *context, std::int64_t,
+                                                   const cpu_compute::ExecutionWorkCost &cost,
+                                                   std::int64_t, std::int64_t) {
       static_cast<PlanningExecutor *>(context)->observed_cost = cost;
       return {1, 1};
     }
 
-    static void Run(void *, std::int64_t, void *, onnx_light_cpu::ExecutionBlockFn) {}
+    static void Run(void *, std::int64_t, void *, cpu_compute::ExecutionBlockFn) {}
   };
 
   std::vector<float> input(16, -1.0f);
   std::vector<float> output(input.size());
-  auto tuning = onnx_light_cpu::kDefaultAbsFloat32ExecutionTuning;
+  auto tuning = cpu_compute::kDefaultAbsFloat32ExecutionTuning;
   PlanningExecutor executor;
-  onnx_light_cpu::ExecutionExecutorView view{&executor, 4, &PlanningExecutor::Run,
-                                             &PlanningExecutor::Plan};
-  onnx_light_cpu::ExecutionExecutorScope scope(&view);
-  onnx_light_cpu::AbsFloat32WithTuning(input.data(), output.data(), input.size(), tuning);
+  cpu_compute::ExecutionExecutorView view{&executor, 4, &PlanningExecutor::Run,
+                                          &PlanningExecutor::Plan};
+  cpu_compute::ExecutionExecutorScope scope(&view);
+  cpu_compute::AbsFloat32WithTuning(input.data(), output.data(), input.size(), tuning);
   EXPECT_DOUBLE_EQ(executor.observed_cost.compute_cycles, SelectedAbsFloat32ComputeCycles());
 }
 
 TEST(AbsInt32, CostModelUsesMemoryBoundCostAndParticipantCap) {
   struct PlanningExecutor {
-    onnx_light_cpu::ExecutionWorkCost observed_cost{};
+    cpu_compute::ExecutionWorkCost observed_cost{};
     std::int64_t observed_maximum = 0;
 
-    static onnx_light_cpu::ExecutionParallelPlan Plan(void *context, std::int64_t,
-                                                      const onnx_light_cpu::ExecutionWorkCost &cost,
-                                                      std::int64_t maximum_participants,
-                                                      std::int64_t) {
+    static cpu_compute::ExecutionParallelPlan Plan(void *context, std::int64_t,
+                                                   const cpu_compute::ExecutionWorkCost &cost,
+                                                   std::int64_t maximum_participants,
+                                                   std::int64_t) {
       auto &self = *static_cast<PlanningExecutor *>(context);
       self.observed_cost = cost;
       self.observed_maximum = maximum_participants;
       return {1, 1};
     }
 
-    static void Run(void *, std::int64_t, void *, onnx_light_cpu::ExecutionBlockFn) {}
+    static void Run(void *, std::int64_t, void *, cpu_compute::ExecutionBlockFn) {}
   };
 
   std::vector<std::int32_t> input(16, -1);
   std::vector<std::int32_t> output(input.size());
   PlanningExecutor executor;
-  onnx_light_cpu::ExecutionExecutorView view{&executor, 64, &PlanningExecutor::Run,
-                                             &PlanningExecutor::Plan};
-  onnx_light_cpu::ExecutionExecutorScope scope(&view);
-  onnx_light_cpu::AbsInt32(input.data(), output.data(), input.size());
+  cpu_compute::ExecutionExecutorView view{&executor, 64, &PlanningExecutor::Run,
+                                          &PlanningExecutor::Plan};
+  cpu_compute::ExecutionExecutorScope scope(&view);
+  cpu_compute::AbsInt32(input.data(), output.data(), input.size());
   EXPECT_DOUBLE_EQ(executor.observed_cost.bytes_read, sizeof(std::int32_t));
   EXPECT_DOUBLE_EQ(executor.observed_cost.bytes_written, sizeof(std::int32_t));
   EXPECT_DOUBLE_EQ(executor.observed_cost.compute_cycles, 1.0);
@@ -182,14 +182,14 @@ TEST(AbsInt32, CostModelUsesMemoryBoundCostAndParticipantCap) {
 TEST(AbsFloat32, SingleElement) {
   float in = -3.14f;
   float out = 0.0f;
-  onnx_light_cpu::AbsFloat32(&in, &out, 1);
+  cpu_compute::AbsFloat32(&in, &out, 1);
   EXPECT_FLOAT_EQ(out, 3.14f);
 }
 
 TEST(AbsFloat32, PositiveValues) {
   std::vector<float> in = {1.0f, 2.5f, 100.0f};
   std::vector<float> out(3, 0.0f);
-  onnx_light_cpu::AbsFloat32(in.data(), out.data(), in.size());
+  cpu_compute::AbsFloat32(in.data(), out.data(), in.size());
   for (std::size_t i = 0; i < in.size(); ++i) {
     EXPECT_FLOAT_EQ(out[i], in[i]);
   }
@@ -198,7 +198,7 @@ TEST(AbsFloat32, PositiveValues) {
 TEST(AbsFloat32, NegativeValues) {
   std::vector<float> in = {-1.0f, -2.5f, -100.0f};
   std::vector<float> out(3, 0.0f);
-  onnx_light_cpu::AbsFloat32(in.data(), out.data(), in.size());
+  cpu_compute::AbsFloat32(in.data(), out.data(), in.size());
   EXPECT_FLOAT_EQ(out[0], 1.0f);
   EXPECT_FLOAT_EQ(out[1], 2.5f);
   EXPECT_FLOAT_EQ(out[2], 100.0f);
@@ -207,7 +207,7 @@ TEST(AbsFloat32, NegativeValues) {
 TEST(AbsFloat32, MixedValues) {
   std::vector<float> in = {-1.0f, 0.0f, 3.0f, -7.5f, 0.001f};
   std::vector<float> out(in.size(), 0.0f);
-  onnx_light_cpu::AbsFloat32(in.data(), out.data(), in.size());
+  cpu_compute::AbsFloat32(in.data(), out.data(), in.size());
   for (std::size_t i = 0; i < in.size(); ++i) {
     EXPECT_FLOAT_EQ(out[i], std::fabs(in[i]));
   }
@@ -221,7 +221,7 @@ TEST(AbsFloat32, LargeArray) {
       in[i] = static_cast<float>(i) - static_cast<float>(size / 2);
     }
     std::vector<float> out(size, -1.0f);
-    onnx_light_cpu::AbsFloat32(in.data(), out.data(), size);
+    cpu_compute::AbsFloat32(in.data(), out.data(), size);
     for (std::size_t i = 0; i < size; ++i) {
       EXPECT_FLOAT_EQ(out[i], std::fabs(in[i])) << "at index " << i << " size=" << size;
     }
@@ -231,7 +231,7 @@ TEST(AbsFloat32, LargeArray) {
 TEST(AbsFloat32, NegativeZero) {
   float in = -0.0f;
   float out = -1.0f;
-  onnx_light_cpu::AbsFloat32(&in, &out, 1);
+  cpu_compute::AbsFloat32(&in, &out, 1);
   EXPECT_FLOAT_EQ(out, 0.0f);
   // Ensure the sign bit is cleared.
   EXPECT_FALSE(std::signbit(out));
@@ -239,7 +239,7 @@ TEST(AbsFloat32, NegativeZero) {
 
 TEST(AbsFloat32, InPlace) {
   std::vector<float> data = {-1.0f, -2.0f, 3.0f, -4.0f};
-  onnx_light_cpu::AbsFloat32(data.data(), data.data(), data.size());
+  cpu_compute::AbsFloat32(data.data(), data.data(), data.size());
   EXPECT_FLOAT_EQ(data[0], 1.0f);
   EXPECT_FLOAT_EQ(data[1], 2.0f);
   EXPECT_FLOAT_EQ(data[2], 3.0f);
@@ -251,10 +251,10 @@ TEST(AbsFloat32, StreamingStoreTuningHandlesMisalignedOutputAndTail) {
   std::vector<float> input(size);
   std::iota(input.begin(), input.end(), -512.0f);
   std::vector<float> storage(size + 1, -1.0f);
-  auto tuning = onnx_light_cpu::kDefaultAbsFloat32ExecutionTuning;
+  auto tuning = cpu_compute::kDefaultAbsFloat32ExecutionTuning;
   tuning.streaming_store_threshold_bytes = 1;
 
-  onnx_light_cpu::AbsFloat32WithTuning(input.data(), storage.data() + 1, size, tuning);
+  cpu_compute::AbsFloat32WithTuning(input.data(), storage.data() + 1, size, tuning);
 
   for (std::size_t i = 0; i < size; ++i) {
     EXPECT_FLOAT_EQ(storage[i + 1], std::fabs(input[i]));
@@ -268,9 +268,9 @@ struct AbsExecutor {
   std::int64_t blocks = 0;
   bool concurrent = false;
 
-  static onnx_light_cpu::ExecutionParallelPlan Plan(void *context, std::int64_t,
-                                                    const onnx_light_cpu::ExecutionWorkCost &,
-                                                    std::int64_t maximum, std::int64_t) {
+  static cpu_compute::ExecutionParallelPlan Plan(void *context, std::int64_t,
+                                                 const cpu_compute::ExecutionWorkCost &,
+                                                 std::int64_t maximum, std::int64_t) {
     auto &self = *static_cast<AbsExecutor *>(context);
     ++self.plans;
     self.maximum = maximum;
@@ -278,7 +278,7 @@ struct AbsExecutor {
   }
 
   static void Run(void *context, std::int64_t blocks, void *task_context,
-                  onnx_light_cpu::ExecutionBlockFn task) {
+                  cpu_compute::ExecutionBlockFn task) {
     auto &self = *static_cast<AbsExecutor *>(context);
     ++self.dispatches;
     self.blocks = blocks;
@@ -298,18 +298,18 @@ struct AbsExecutor {
 };
 
 TEST(AbsFloat32, StreamingPreservesExecutorParticipantLimits) {
-  auto tuning = onnx_light_cpu::DefaultAbsFloat32ExecutionTuning();
+  auto tuning = cpu_compute::DefaultAbsFloat32ExecutionTuning();
   tuning.streaming_store_threshold_bytes = 1;
   tuning.target_block_bytes = 16 * 1024;
   tuning.max_participants = 4;
   AbsExecutor executor;
-  onnx_light_cpu::ExecutionExecutorView view{&executor, 128, &AbsExecutor::Run, &AbsExecutor::Plan};
-  onnx_light_cpu::ExecutionExecutorScope scope(&view);
+  cpu_compute::ExecutionExecutorView view{&executor, 128, &AbsExecutor::Run, &AbsExecutor::Plan};
+  cpu_compute::ExecutionExecutorScope scope(&view);
   for (std::size_t count : {0, 65535, 65536, 65537}) {
     SCOPED_TRACE(count);
     executor = {};
     std::vector<float> input(count, -3.0f), output(count, -1.0f);
-    onnx_light_cpu::AbsFloat32WithTuning(input.data(), output.data(), count, tuning);
+    cpu_compute::AbsFloat32WithTuning(input.data(), output.data(), count, tuning);
     if (count == 0) {
       EXPECT_EQ(executor.plans, 0);
       EXPECT_EQ(executor.dispatches, 0);
@@ -324,7 +324,7 @@ TEST(AbsFloat32, StreamingPreservesExecutorParticipantLimits) {
   std::vector<float> input(65537, -2.0f), output(input.size());
   tuning.max_participants = 1;
   executor = {};
-  onnx_light_cpu::AbsFloat32WithTuning(input.data(), output.data(), input.size(), tuning);
+  cpu_compute::AbsFloat32WithTuning(input.data(), output.data(), input.size(), tuning);
   EXPECT_EQ(executor.plans, 1);
   EXPECT_EQ(executor.dispatches, 0);
   EXPECT_EQ(output, std::vector<float>(input.size(), 2.0f));
@@ -334,29 +334,29 @@ TEST(AbsFloat32, StreamingBoundsParticipantsByWorkBudget) {
   if (SelectedAbsFloat32Lanes() != 8) {
     GTEST_SKIP() << "AVX/AVX2 streaming scheduling";
   }
-  auto tuning = onnx_light_cpu::DefaultAbsFloat32ExecutionTuning();
+  auto tuning = cpu_compute::DefaultAbsFloat32ExecutionTuning();
   tuning.streaming_store_threshold_bytes = 1;
   AbsExecutor executor;
-  onnx_light_cpu::ExecutionExecutorView view{&executor, 64, &AbsExecutor::Run, &AbsExecutor::Plan};
-  onnx_light_cpu::ExecutionExecutorScope scope(&view);
+  cpu_compute::ExecutionExecutorView view{&executor, 64, &AbsExecutor::Run, &AbsExecutor::Plan};
+  cpu_compute::ExecutionExecutorScope scope(&view);
   const std::size_t count = 4 * tuning.target_block_bytes / sizeof(float) + 17;
   std::vector<float> input(count, -2.0f), output(count);
-  onnx_light_cpu::AbsFloat32WithTuning(input.data(), output.data(), count, tuning);
+  cpu_compute::AbsFloat32WithTuning(input.data(), output.data(), count, tuning);
   EXPECT_EQ(executor.maximum, 4);
   EXPECT_EQ(executor.blocks, 4);
   EXPECT_EQ(output, std::vector<float>(count, 2.0f));
 }
 
 TEST(AbsFloat32, CachedDynamicRangesUseExecutorParticipantLimit) {
-  auto tuning = onnx_light_cpu::DefaultAbsFloat32ExecutionTuning();
+  auto tuning = cpu_compute::DefaultAbsFloat32ExecutionTuning();
   tuning.streaming_store_threshold_bytes = std::numeric_limits<std::size_t>::max();
   tuning.max_participants = 8;
   AbsExecutor executor;
   executor.concurrent = true;
-  onnx_light_cpu::ExecutionExecutorView view{&executor, 8, &AbsExecutor::Run, &AbsExecutor::Plan};
-  onnx_light_cpu::ExecutionExecutorScope scope(&view);
+  cpu_compute::ExecutionExecutorView view{&executor, 8, &AbsExecutor::Run, &AbsExecutor::Plan};
+  cpu_compute::ExecutionExecutorScope scope(&view);
   std::vector<float> input(1048576 + 17, -2.0f), output(input.size());
-  onnx_light_cpu::AbsFloat32WithTuning(input.data(), output.data(), input.size(), tuning);
+  cpu_compute::AbsFloat32WithTuning(input.data(), output.data(), input.size(), tuning);
   EXPECT_EQ(executor.maximum, 8);
   EXPECT_EQ(executor.blocks, 8);
   EXPECT_EQ(output, std::vector<float>(input.size(), 2.0f));
@@ -364,11 +364,11 @@ TEST(AbsFloat32, CachedDynamicRangesUseExecutorParticipantLimit) {
 
 TEST(AbsFloat32, NestedExecutionDoesNotPlanOrDispatch) {
   AbsExecutor executor;
-  onnx_light_cpu::ExecutionExecutorView view{&executor, 8, &AbsExecutor::Run, &AbsExecutor::Plan};
-  onnx_light_cpu::ExecutionExecutorScope scope(&view);
-  onnx_light_cpu::detail::ExecutionRegionScope nested;
+  cpu_compute::ExecutionExecutorView view{&executor, 8, &AbsExecutor::Run, &AbsExecutor::Plan};
+  cpu_compute::ExecutionExecutorScope scope(&view);
+  cpu_compute::detail::ExecutionRegionScope nested;
   std::vector<float> input(1048576 + 17, -2.0f), output(input.size());
-  onnx_light_cpu::AbsFloat32(input.data(), output.data(), input.size());
+  cpu_compute::AbsFloat32(input.data(), output.data(), input.size());
   EXPECT_EQ(executor.plans, 0);
   EXPECT_EQ(executor.dispatches, 0);
   EXPECT_EQ(output, std::vector<float>(input.size(), 2.0f));
@@ -377,11 +377,11 @@ TEST(AbsFloat32, NestedExecutionDoesNotPlanOrDispatch) {
 TEST(AbsFloat32, DefaultStreamingBoundary) {
   AbsExecutor executor;
   executor.concurrent = true;
-  onnx_light_cpu::ExecutionExecutorView view{&executor, 4, &AbsExecutor::Run, &AbsExecutor::Plan};
-  onnx_light_cpu::ExecutionExecutorScope scope(&view);
+  cpu_compute::ExecutionExecutorView view{&executor, 4, &AbsExecutor::Run, &AbsExecutor::Plan};
+  cpu_compute::ExecutionExecutorScope scope(&view);
   for (std::size_t count : {4194303, 4194304, 4194305}) {
     std::vector<float> input(count + 2, -2.0f), output(count + 2, -1.0f);
-    onnx_light_cpu::AbsFloat32(input.data() + 1, output.data() + 1, count);
+    cpu_compute::AbsFloat32(input.data() + 1, output.data() + 1, count);
     EXPECT_EQ(output.front(), -1.0f);
     EXPECT_EQ(output.back(), -1.0f);
     EXPECT_TRUE(std::all_of(output.begin() + 1, output.end() - 1,
@@ -393,14 +393,14 @@ TEST(AbsFloat32, ConcurrentTilesPreserveBitsAndGuardUnalignedTails) {
   constexpr std::uint32_t bits[] = {0x80000000u, 0xbf800000u, 0xff800000u, 0xffc12345u,
                                     0x80000001u, 0x7f800000u, 0x7fc54321u, 0x3f800000u};
   constexpr float sentinel = -123.0f;
-  auto tuning = onnx_light_cpu::DefaultAbsFloat32ExecutionTuning();
+  auto tuning = cpu_compute::DefaultAbsFloat32ExecutionTuning();
   tuning.parallel_threshold_bytes = 1;
   tuning.target_block_bytes = 64 * 1024;
   tuning.max_participants = 4;
   AbsExecutor executor;
   executor.concurrent = true;
-  onnx_light_cpu::ExecutionExecutorView view{&executor, 4, &AbsExecutor::Run, &AbsExecutor::Plan};
-  onnx_light_cpu::ExecutionExecutorScope scope(&view);
+  cpu_compute::ExecutionExecutorView view{&executor, 4, &AbsExecutor::Run, &AbsExecutor::Plan};
+  cpu_compute::ExecutionExecutorScope scope(&view);
   for (bool cost_model : {false, true}) {
     tuning.use_cost_model = cost_model;
     for (std::size_t streaming : {std::size_t{0}, std::size_t{1}}) {
@@ -417,7 +417,7 @@ TEST(AbsFloat32, ConcurrentTilesPreserveBitsAndGuardUnalignedTails) {
         }
         for (bool inplace : {false, true}) {
           float *destination = inplace ? input.data() + offset : output.data() + offset;
-          onnx_light_cpu::AbsFloat32WithTuning(input.data() + offset, destination, count, tuning);
+          cpu_compute::AbsFloat32WithTuning(input.data() + offset, destination, count, tuning);
           for (std::size_t i = 0; i < count; ++i) {
             ASSERT_EQ(std::bit_cast<std::uint32_t>(destination[i]),
                       bits[i % std::size(bits)] & 0x7fffffffu);
@@ -437,7 +437,7 @@ TEST(AbsFloat32, ConcurrentTilesPreserveBitsAndGuardUnalignedTails) {
 TEST(AbsFloat64, MixedValues) {
   std::vector<double> in = {-1.0, 0.0, 3.0, -7.5, 0.001};
   std::vector<double> out(in.size(), 0.0);
-  onnx_light_cpu::AbsFloat64(in.data(), out.data(), in.size());
+  cpu_compute::AbsFloat64(in.data(), out.data(), in.size());
   for (std::size_t i = 0; i < in.size(); ++i) {
     EXPECT_DOUBLE_EQ(out[i], std::fabs(in[i]));
   }
@@ -450,7 +450,7 @@ TEST(AbsFloat64, LargeArray) {
       in[i] = static_cast<double>(i) - static_cast<double>(size / 2);
     }
     std::vector<double> out(size, -1.0);
-    onnx_light_cpu::AbsFloat64(in.data(), out.data(), size);
+    cpu_compute::AbsFloat64(in.data(), out.data(), size);
     for (std::size_t i = 0; i < size; ++i) {
       EXPECT_DOUBLE_EQ(out[i], std::fabs(in[i])) << "at index " << i << " size=" << size;
     }
@@ -466,7 +466,7 @@ TEST(AbsFloat16, ClearsSignBit) {
   // a NaN and a subnormal; abs must equal the input with the sign bit cleared.
   std::vector<std::uint16_t> in = {0x0000, 0x8000, 0x3C00, 0xBC00, 0x7C00, 0xFC00, 0xFE00, 0x8001};
   std::vector<std::uint16_t> out(in.size(), 0xFFFF);
-  onnx_light_cpu::AbsFloat16(in.data(), out.data(), in.size());
+  cpu_compute::AbsFloat16(in.data(), out.data(), in.size());
   for (std::size_t i = 0; i < in.size(); ++i) {
     EXPECT_EQ(out[i], static_cast<std::uint16_t>(in[i] & 0x7FFF)) << "at index " << i;
   }
@@ -480,7 +480,7 @@ TEST(AbsFloat16, LargeArray) {
     }
 
     std::vector<std::uint16_t> out(size, 0);
-    onnx_light_cpu::AbsFloat16(in.data(), out.data(), size);
+    cpu_compute::AbsFloat16(in.data(), out.data(), size);
     for (std::size_t i = 0; i < size; ++i) {
       EXPECT_EQ(out[i], static_cast<std::uint16_t>(in[i] & 0x7FFF))
           << "at index " << i << " size=" << size;
@@ -495,7 +495,7 @@ TEST(AbsFloat16, InPlaceAcrossUnrolledBoundaries) {
       values[i] = static_cast<std::uint16_t>((i * 2654435761u) & 0xFFFFu);
     }
 
-    onnx_light_cpu::AbsFloat16(values.data(), values.data(), values.size());
+    cpu_compute::AbsFloat16(values.data(), values.data(), values.size());
     for (std::size_t i = 0; i < size; ++i) {
       const auto input = static_cast<std::uint16_t>((i * 2654435761u) & 0xFFFFu);
       EXPECT_EQ(values[i], static_cast<std::uint16_t>(input & 0x7FFFu))
@@ -509,7 +509,7 @@ TEST(AbsInt16, MixedValues) {
       std::numeric_limits<std::int16_t>::min(), -123, -1, 0, 1, 123,
       std::numeric_limits<std::int16_t>::max()};
   std::vector<std::int16_t> output(input.size());
-  onnx_light_cpu::AbsInt16(input.data(), output.data(), input.size());
+  cpu_compute::AbsInt16(input.data(), output.data(), input.size());
   EXPECT_EQ(output, (std::vector<std::int16_t>{std::numeric_limits<std::int16_t>::min(), 123, 1, 0,
                                                1, 123, std::numeric_limits<std::int16_t>::max()}));
 }
@@ -522,7 +522,7 @@ TEST(AbsInt8, MixedValues) {
   // Note: |-128| overflows int8 and wraps to -128, matching numpy.abs.
   std::vector<int8_t> in = {-1, 0, 3, -7, 100, -128, 127};
   std::vector<int8_t> out(in.size(), 0);
-  onnx_light_cpu::AbsInt8(in.data(), out.data(), in.size());
+  cpu_compute::AbsInt8(in.data(), out.data(), in.size());
   EXPECT_EQ(out[0], 1);
   EXPECT_EQ(out[1], 0);
   EXPECT_EQ(out[2], 3);
@@ -539,7 +539,7 @@ TEST(AbsInt8, LargeArray) {
       in[i] = static_cast<int8_t>(static_cast<int>(i) - static_cast<int>(size / 2));
     }
     std::vector<int8_t> out(size, 0);
-    onnx_light_cpu::AbsInt8(in.data(), out.data(), size);
+    cpu_compute::AbsInt8(in.data(), out.data(), size);
     for (std::size_t i = 0; i < size; ++i) {
       const int v = static_cast<int>(in[i]);
       EXPECT_EQ(out[i], static_cast<int8_t>(v < 0 ? -v : v))
@@ -555,7 +555,7 @@ TEST(AbsInt8, LargeArray) {
 TEST(AbsInt32, MixedValues) {
   std::vector<int32_t> in = {-1, 0, 3, -7, 100, -2147483647};
   std::vector<int32_t> out(in.size(), 0);
-  onnx_light_cpu::AbsInt32(in.data(), out.data(), in.size());
+  cpu_compute::AbsInt32(in.data(), out.data(), in.size());
   EXPECT_EQ(out[0], 1);
   EXPECT_EQ(out[1], 0);
   EXPECT_EQ(out[2], 3);
@@ -571,7 +571,7 @@ TEST(AbsInt32, LargeArray) {
       in[i] = static_cast<int32_t>(i) - static_cast<int32_t>(size / 2);
     }
     std::vector<int32_t> out(size, -1);
-    onnx_light_cpu::AbsInt32(in.data(), out.data(), size);
+    cpu_compute::AbsInt32(in.data(), out.data(), size);
     for (std::size_t i = 0; i < size; ++i) {
       EXPECT_EQ(out[i], std::abs(in[i])) << "at index " << i << " size=" << size;
     }
@@ -585,7 +585,7 @@ TEST(AbsInt32, LargeArray) {
 TEST(AbsInt64, MixedValues) {
   std::vector<int64_t> in = {-1, 0, 3, -7, 100, -9223372036854775807LL};
   std::vector<int64_t> out(in.size(), 0);
-  onnx_light_cpu::AbsInt64(in.data(), out.data(), in.size());
+  cpu_compute::AbsInt64(in.data(), out.data(), in.size());
   EXPECT_EQ(out[0], 1);
   EXPECT_EQ(out[1], 0);
   EXPECT_EQ(out[2], 3);
@@ -601,7 +601,7 @@ TEST(AbsInt64, LargeArray) {
       in[i] = static_cast<int64_t>(i) - static_cast<int64_t>(size / 2);
     }
     std::vector<int64_t> out(size, -1);
-    onnx_light_cpu::AbsInt64(in.data(), out.data(), size);
+    cpu_compute::AbsInt64(in.data(), out.data(), size);
     for (std::size_t i = 0; i < size; ++i) {
       EXPECT_EQ(out[i], std::abs(in[i])) << "at index " << i << " size=" << size;
     }
@@ -617,7 +617,7 @@ TEST(AbsParallel, LargeArrayMatchesScalar) {
   for (std::size_t i = 0; i < size; ++i) {
     in[i] = static_cast<float>(static_cast<long long>(i) - static_cast<long long>(size / 2)) * 0.5f;
   }
-  onnx_light_cpu::AbsFloat32(in.data(), out.data(), size);
+  cpu_compute::AbsFloat32(in.data(), out.data(), size);
   for (std::size_t i = 0; i < size; ++i) {
     EXPECT_FLOAT_EQ(out[i], std::fabs(in[i])) << "at index " << i;
   }
@@ -627,7 +627,7 @@ TEST(AbsParallel, LargeArrayMatchesScalar) {
   for (std::size_t i = 0; i < size; ++i) {
     in32[i] = static_cast<std::int32_t>(i) - static_cast<std::int32_t>(size / 2);
   }
-  onnx_light_cpu::AbsInt32(in32.data(), out32.data(), size);
+  cpu_compute::AbsInt32(in32.data(), out32.data(), size);
   for (std::size_t i = 0; i < size; ++i) {
     EXPECT_EQ(out32[i], in32[i] < 0 ? -in32[i] : in32[i]) << "at index " << i;
   }

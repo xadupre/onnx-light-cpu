@@ -13,11 +13,11 @@ namespace rt_ns = ONNX_LIGHT_NAMESPACE::core::runtime;
 
 struct CpuExecutorDispatch {
   void *task_context;
-  ExecutionBlockFn task;
+  cpu_compute::ExecutionBlockFn task;
 };
 
 void RunCpuExecutorBlocks(void *context, int64_t num_blocks, void *task_context,
-                          ExecutionBlockFn task) {
+                          cpu_compute::ExecutionBlockFn task) {
   auto *executor = static_cast<rt_ns::CpuExecutor *>(context);
   CpuExecutorDispatch dispatch{task_context, task};
   executor->ParallelFor(
@@ -31,9 +31,10 @@ void RunCpuExecutorBlocks(void *context, int64_t num_blocks, void *task_context,
       static_cast<uint32_t>(num_blocks));
 }
 
-ExecutionParallelPlan PlanCpuExecutor(void *context, int64_t total, const ExecutionWorkCost &cost,
-                                      int64_t maximum_participants,
-                                      int64_t preferred_participants) {
+cpu_compute::ExecutionParallelPlan PlanCpuExecutor(void *context, int64_t total,
+                                                   const cpu_compute::ExecutionWorkCost &cost,
+                                                   int64_t maximum_participants,
+                                                   int64_t preferred_participants) {
   auto *executor = static_cast<rt_ns::CpuExecutor *>(context);
   const rt_ns::CpuParallelPlan plan = executor->PlanParallelFor(
       total, rt_ns::CpuLoopCost{cost.bytes_read, cost.bytes_written, cost.compute_cycles},
@@ -43,20 +44,20 @@ ExecutionParallelPlan PlanCpuExecutor(void *context, int64_t total, const Execut
   return {plan.grain_size, static_cast<int64_t>(plan.participants)};
 }
 
-ExecutionExecutorView RuntimeExecutorView() noexcept {
+cpu_compute::ExecutionExecutorView RuntimeExecutorView() noexcept {
   auto *executor = rt_ns::CurrentCpuExecutor();
-  return executor == nullptr
-             ? ExecutionExecutorView{}
-             : ExecutionExecutorView{executor, static_cast<int64_t>(executor->effective_threads()),
-                                     &RunCpuExecutorBlocks, &PlanCpuExecutor};
+  return executor == nullptr ? cpu_compute::ExecutionExecutorView{}
+                             : cpu_compute::ExecutionExecutorView{
+                                   executor, static_cast<int64_t>(executor->effective_threads()),
+                                   &RunCpuExecutorBlocks, &PlanCpuExecutor};
 }
 
 } // namespace
 
 RuntimeExecutionScope::RuntimeExecutionScope() noexcept
-    : view_(RuntimeExecutorView()),
-      scope_(CurrentExecutionExecutor() != nullptr ? CurrentExecutionExecutor()
-             : view_.context != nullptr            ? &view_
-                                                   : nullptr) {}
+    : view_(RuntimeExecutorView()), scope_(cpu_compute::CurrentExecutionExecutor() != nullptr
+                                               ? cpu_compute::CurrentExecutionExecutor()
+                                           : view_.context != nullptr ? &view_
+                                                                      : nullptr) {}
 
 } // namespace onnx_light_cpu

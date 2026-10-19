@@ -5,8 +5,8 @@
 #include "onnx_light_cpu/kernels/tensor/slice_kernel.h"
 #include "onnx_light_cpu/kernels/execution.h"
 
+#include "cpu_compute/tensor/slice.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
-#include "onnx_light_cpu_compute/tensor/slice_kernel.h"
 
 #include "onnx_core/runtime/kernels/node_helpers.h"
 #include "onnx_core/symbolic/sym_tensor.h"
@@ -29,7 +29,7 @@ using rt_ns::Tensor;
 
 namespace {
 
-static_assert(Shape::kMaxRank <= SliceCopyPlan::kMaxRank);
+static_assert(Shape::kMaxRank <= cpu_compute::SliceCopyPlan::kMaxRank);
 
 [[noreturn]] void Invalid(const char *message) {
   throw std::invalid_argument(std::string("onnx_light_cpu::Slice: ") + message);
@@ -127,7 +127,7 @@ int64_t Normalize(int64_t dim, int64_t &start, int64_t end, int64_t step) {
 
 struct SlicePlan {
   Shape shape;
-  SliceCopyPlan copy;
+  cpu_compute::SliceCopyPlan copy;
   std::size_t bytes = 0;
 };
 
@@ -145,10 +145,10 @@ SlicePlan PrepareSlice(const Tensor &data, const Shape &starts, const Shape &end
   ValidateBuffer(data, Size(Multiply(Count(data.shape), width)));
   SlicePlan plan;
   plan.shape = data.shape;
-  std::array<int64_t, SliceCopyPlan::kMaxRank> first{};
-  std::array<int64_t, SliceCopyPlan::kMaxRank> step{};
+  std::array<int64_t, cpu_compute::SliceCopyPlan::kMaxRank> first{};
+  std::array<int64_t, cpu_compute::SliceCopyPlan::kMaxRank> step{};
   step.fill(1);
-  std::array<bool, SliceCopyPlan::kMaxRank> seen{};
+  std::array<bool, cpu_compute::SliceCopyPlan::kMaxRank> seen{};
   for (std::size_t i = 0; i < starts.size(); ++i) {
     int64_t axis = axes ? (*axes)[i] : static_cast<int64_t>(i);
     const int64_t signed_rank = static_cast<int64_t>(rank);
@@ -225,7 +225,7 @@ void Copy(const Tensor &data, Tensor &output, const SlicePlan &plan) {
   }
   ValidateBuffer(output, plan.bytes);
   RejectOverlap(data, output);
-  SliceCopy(data.bytes(), output.mutable_bytes(), plan.copy);
+  cpu_compute::SliceCopy(data.bytes(), output.mutable_bytes(), plan.copy);
 }
 
 Tensor Allocate(const Tensor &data, const SlicePlan &plan, rt_ns::RuntimeContext *rt,

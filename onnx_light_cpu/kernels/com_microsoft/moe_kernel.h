@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "onnx_light_cpu_compute/com_microsoft/moe.h"
+#include "cpu_compute/com_microsoft/moe.h"
 
 #include "onnx_core/runtime/kernels/kernel_context.h"
 #include "onnx_core/runtime/memory/simple_tensor.h"
@@ -31,7 +31,7 @@ public:
   void Run(ONNX_LIGHT_NAMESPACE::core::runtime::RuntimeContext &rt) override;
 
 private:
-  MoEAttributes attributes_;
+  cpu_compute::MoEAttributes attributes_;
 };
 
 void RegisterMoEKernel();

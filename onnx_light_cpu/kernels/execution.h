@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "onnx_light_cpu_compute/execution.h"
+#include "cpu_compute/execution.h"
 
 namespace onnx_light_cpu {
 
@@ -14,8 +14,8 @@ public:
   RuntimeExecutionScope() noexcept;
 
 private:
-  ExecutionExecutorView view_;
-  ExecutionExecutorScope scope_;
+  cpu_compute::ExecutionExecutorView view_;
+  cpu_compute::ExecutionExecutorScope scope_;
 };
 
 } // namespace onnx_light_cpu

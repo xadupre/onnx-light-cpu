@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "cpu_compute/execution.h"
+#include "cpu_compute/math/half_conversion.h"
 #include "onnx_light_cpu/kernels/com_microsoft/skip_layer_normalization_kernel.h"
-#include "onnx_light_cpu_compute/execution.h"
-#include "onnx_light_cpu_compute/math/half_conversion.h"
 
 #include "onnx_core/runtime/kernels/cast_helper.h"
 #include "onnx_core/runtime/kernels/kernel_context.h"
@@ -30,7 +30,7 @@ struct InlineExecutor {
   std::int64_t blocks = 0;
 
   static void Run(void *context, std::int64_t num_blocks, void *task_context,
-                  onnx_light_cpu::ExecutionBlockFn task) {
+                  cpu_compute::ExecutionBlockFn task) {
     auto &self = *static_cast<InlineExecutor *>(context);
     ++self.dispatches;
     self.blocks = num_blocks;
@@ -57,8 +57,8 @@ float Value(const Tensor &tensor, std::size_t index) {
     return tensor.AsFloat()[index];
   }
   const auto value = reinterpret_cast<const std::uint16_t *>(tensor.bytes())[index];
-  return tensor.data_type == DataType::FLOAT16 ? onnx_light_cpu::detail::Float16BitsToFloat(value)
-                                               : onnx_light_cpu::detail::Bfloat16BitsToFloat(value);
+  return tensor.data_type == DataType::FLOAT16 ? cpu_compute::detail::Float16BitsToFloat(value)
+                                               : cpu_compute::detail::Bfloat16BitsToFloat(value);
 }
 
 TEST(SkipLayerNormalizationKernel, ComputesAffineStatisticsAndResidual) {
@@ -160,8 +160,8 @@ TEST(SkipLayerNormalizationKernel, RejectsInvalidContracts) {
 TEST(SkipLayerNormalizationKernel, UsesRuntimeExecutorForLargeInputsOnly) {
   const onnx_light_cpu::SkipLayerNormalizationKernel kernel(MakeCtx());
   InlineExecutor executor;
-  onnx_light_cpu::ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run};
-  onnx_light_cpu::ExecutionExecutorScope scope(&view);
+  cpu_compute::ExecutionExecutorView view{&executor, 4, &InlineExecutor::Run};
+  cpu_compute::ExecutionExecutorScope scope(&view);
   const auto gamma = Tensor::FromFloat("", {4096}, std::vector<float>(4096, 1));
 
   const auto small = Tensor::FromFloat("", {1, 4096}, std::vector<float>(4096, 1));

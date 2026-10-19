@@ -8,11 +8,11 @@
 #include "onnx_light_cpu/kernels/kernel_registration.h"
 #include "onnx_light_cpu/kernels/math/normalization_helpers.h"
 
+#include "cpu_compute/execution.h"
+#include "cpu_compute/math/normalization.h"
 #include "onnx_core/runtime/kernels/kernel_dispatch_table.h"
 #include "onnx_core/runtime/kernels/node_helpers.h"
 #include "onnx_core/symbolic/sym_tensor.h"
-#include "onnx_light_cpu_compute/execution.h"
-#include "onnx_light_cpu_compute/math/normalization_kernel.h"
 
 #include <algorithm>
 #include <array>
@@ -87,10 +87,10 @@ template <typename Fn> void ExecuteItems(std::size_t count, double work_per_item
     throw std::invalid_argument("normalization work item count exceeds int64_t.");
   }
   constexpr double kParallelWeight = 0.125;
-  ExecuteRanges(static_cast<std::int64_t>(count), work_per_item * kParallelWeight,
-                [&](std::int64_t begin, std::int64_t end) {
-                  fn(static_cast<std::size_t>(begin), static_cast<std::size_t>(end));
-                });
+  cpu_compute::ExecuteRanges(static_cast<std::int64_t>(count), work_per_item * kParallelWeight,
+                             [&](std::int64_t begin, std::int64_t end) {
+                               fn(static_cast<std::size_t>(begin), static_cast<std::size_t>(end));
+                             });
 }
 
 template <typename Acc> Acc ReadParameter(const norm::TensorReader &reader, std::size_t index) {
@@ -106,7 +106,8 @@ norm::Moments<norm::AccumulatorType<Type>> ComputeSliceMoments(const norm::Stora
                                                                std::size_t count) {
   if constexpr (Type == DataType::FLOAT) {
     if (count >= 32) {
-      const Float32NormalizationMoments moments = ComputeNormalizationMomentsFloat32(input, count);
+      const cpu_compute::Float32NormalizationMoments moments =
+          cpu_compute::ComputeNormalizationMomentsFloat32(input, count);
       const float second_moment = moments.variance + moments.mean * moments.mean;
       if (moments.used_stable_algorithm ||
           moments.variance > norm::RawMomentsCancellationFloor(second_moment, count)) {
@@ -118,7 +119,8 @@ norm::Moments<norm::AccumulatorType<Type>> ComputeSliceMoments(const norm::Stora
   }
   if constexpr (Type == DataType::FLOAT16) {
     if (count >= 32) {
-      const Float32NormalizationMoments moments = ComputeNormalizationMomentsFloat16(input, count);
+      const cpu_compute::Float32NormalizationMoments moments =
+          cpu_compute::ComputeNormalizationMomentsFloat16(input, count);
       return {moments.mean, moments.variance};
     }
   }
@@ -215,9 +217,9 @@ ComputeBatchMoments(const norm::StorageType<Type> *input, std::size_t batch, std
 
 // Isolate layout-specific hot loops from changes to the caller's inlining budget.
 #if defined(_MSC_VER)
-#define ONNX_LIGHT_CPU_NOINLINE __declspec(noinline)
+#define CPU_COMPUTE_NOINLINE __declspec(noinline)
 #else
-#define ONNX_LIGHT_CPU_NOINLINE __attribute__((noinline))
+#define CPU_COMPUTE_NOINLINE __attribute__((noinline))
 #endif
 
 template <typename Acc>
@@ -316,11 +318,13 @@ void ComputeBatchScaleBias(const norm::TensorReader &scale_reader,
 }
 
 template <DataType Type>
-ONNX_LIGHT_CPU_NOINLINE void BatchContiguousChannels(
-    const Tensor &x, BatchNormalizationResult &result, const norm::TensorReader &scale_reader,
-    const norm::TensorReader &bias_reader, const norm::TensorReader &mean_reader,
-    const norm::TensorReader &variance_reader, std::size_t batch, std::size_t channels,
-    bool training, float epsilon, float momentum) {
+CPU_COMPUTE_NOINLINE void BatchContiguousChannels(const Tensor &x, BatchNormalizationResult &result,
+                                                  const norm::TensorReader &scale_reader,
+                                                  const norm::TensorReader &bias_reader,
+                                                  const norm::TensorReader &mean_reader,
+                                                  const norm::TensorReader &variance_reader,
+                                                  std::size_t batch, std::size_t channels,
+                                                  bool training, float epsilon, float momentum) {
   using Acc = norm::AccumulatorType<Type>;
   const auto *input = norm::Data<Type>(x);
   auto *output = norm::MutableData<Type>(result.y);
@@ -369,7 +373,7 @@ ONNX_LIGHT_CPU_NOINLINE void BatchContiguousChannels(
 }
 
 template <DataType Type>
-ONNX_LIGHT_CPU_NOINLINE void
+CPU_COMPUTE_NOINLINE void
 BatchInference(const Tensor &x, Tensor &y,
                const std::vector<norm::AccumulatorType<Type>> &multipliers,
                const std::vector<norm::AccumulatorType<Type>> &offsets, std::size_t batch,
@@ -383,8 +387,8 @@ BatchInference(const Tensor &x, Tensor &y,
       const std::size_t base = slice * spatial;
       if constexpr (Type == DataType::FLOAT16) {
         if (spatial >= 32) {
-          ApplyNormalizationScaleBiasFloat16(input + base, output + base, spatial,
-                                             multipliers[channel], offsets[channel]);
+          cpu_compute::ApplyNormalizationScaleBiasFloat16(input + base, output + base, spatial,
+                                                          multipliers[channel], offsets[channel]);
           continue;
         }
       }
@@ -395,7 +399,7 @@ BatchInference(const Tensor &x, Tensor &y,
 }
 
 template <DataType Type>
-ONNX_LIGHT_CPU_NOINLINE void
+CPU_COMPUTE_NOINLINE void
 BatchTraining(const Tensor &x, Tensor &y, const norm::TensorReader &scale_reader,
               const norm::TensorReader &bias_reader, const norm::TensorReader &mean_reader,
               const norm::TensorReader &variance_reader, Tensor *running_mean,
@@ -453,7 +457,7 @@ BatchTraining(const Tensor &x, Tensor &y, const norm::TensorReader &scale_reader
       });
 }
 
-#undef ONNX_LIGHT_CPU_NOINLINE
+#undef CPU_COMPUTE_NOINLINE
 
 template <DataType Type>
 void InstanceNormalize(const Tensor &x, const Tensor &scale, const Tensor &bias, Tensor &y,
@@ -478,8 +482,8 @@ void InstanceNormalize(const Tensor &x, const Tensor &scale, const Tensor &bias,
               const Acc multiplier = Traits::Load(scale_data, channel) /
                                      std::sqrt(moments.variance + static_cast<Acc>(epsilon));
               const Acc offset = Traits::Load(bias_data, channel) - moments.mean * multiplier;
-              ApplyNormalizationScaleBiasFloat32(input + base, output + base, spatial, multiplier,
-                                                 offset);
+              cpu_compute::ApplyNormalizationScaleBiasFloat32(input + base, output + base, spatial,
+                                                              multiplier, offset);
             }
           });
       return;
@@ -488,8 +492,8 @@ void InstanceNormalize(const Tensor &x, const Tensor &scale, const Tensor &bias,
   ExecuteItems(slices, static_cast<double>(spatial) * 6.0, [&](std::size_t begin, std::size_t end) {
     if constexpr (Type == DataType::FLOAT16) {
       if (spatial >= 32) {
-        InstanceNormalizationFloat16(input, scale_data, bias_data, output, begin, end, channels,
-                                     spatial, epsilon);
+        cpu_compute::InstanceNormalizationFloat16(input, scale_data, bias_data, output, begin, end,
+                                                  channels, spatial, epsilon);
         return;
       }
     }
@@ -502,8 +506,8 @@ void InstanceNormalize(const Tensor &x, const Tensor &scale, const Tensor &bias,
       const Acc offset = Traits::Load(bias_data, channel) - moments.mean * multiplier;
       if constexpr (Type == DataType::FLOAT16) {
         if (spatial >= 32) {
-          ApplyNormalizationScaleBiasFloat16(input + base, output + base, spatial, multiplier,
-                                             offset);
+          cpu_compute::ApplyNormalizationScaleBiasFloat16(input + base, output + base, spatial,
+                                                          multiplier, offset);
           continue;
         }
       }
@@ -565,8 +569,8 @@ void GroupNormalizeStashed(const Tensor &x, const Tensor &scale, const Tensor &b
           const norm::Moments<float> moments = [&]() {
             if constexpr (Type == DataType::FLOAT16) {
               if (group_size >= 32) {
-                const Float32NormalizationMoments value =
-                    ComputeNormalizationMomentsFloat16(input + base, group_size);
+                const cpu_compute::Float32NormalizationMoments value =
+                    cpu_compute::ComputeNormalizationMomentsFloat16(input + base, group_size);
                 return norm::Moments<float>{value.mean, value.variance};
               }
             }
@@ -575,7 +579,7 @@ void GroupNormalizeStashed(const Tensor &x, const Tensor &scale, const Tensor &b
           const float inverse_std_dev = 1.0F / std::sqrt(moments.variance + epsilon);
           if constexpr (Type == DataType::FLOAT16) {
             if (spatial >= 32) {
-              ApplyGroupNormalizationFloat16Channels(
+              cpu_compute::ApplyGroupNormalizationFloat16Channels(
                   input + base, scale_data + group * channels_per_group,
                   bias_data + group * channels_per_group, output + base, channels_per_group,
                   spatial, moments.mean, inverse_std_dev);
@@ -589,9 +593,9 @@ void GroupNormalizeStashed(const Tensor &x, const Tensor &scale, const Tensor &b
             const auto bias_value = Traits::Load(bias_data, channel);
             if constexpr (Type == DataType::FLOAT16) {
               if (spatial >= 32) {
-                ApplyGroupNormalizationFloat16(input + channel_base, output + channel_base, spatial,
-                                               moments.mean, inverse_std_dev, scale_value,
-                                               bias_value);
+                cpu_compute::ApplyGroupNormalizationFloat16(
+                    input + channel_base, output + channel_base, spatial, moments.mean,
+                    inverse_std_dev, scale_value, bias_value);
                 continue;
               }
             }
@@ -635,8 +639,9 @@ void LayerNormalize(const Tensor &x, const Tensor &scale, const Tensor *bias, Te
   ExecuteItems(outer, static_cast<double>(inner) * 7.0, [&](std::size_t begin, std::size_t end) {
     if constexpr (Type == DataType::FLOAT16) {
       if (inner >= 32 && scale_by_inner && (bias_data == nullptr || bias_by_inner)) {
-        LayerNormalizationFloat16Rows(input, scale_data, bias_data, output, mean_output, inv_output,
-                                      begin, end, inner, epsilon);
+        cpu_compute::LayerNormalizationFloat16Rows(input, scale_data, bias_data, output,
+                                                   mean_output, inv_output, begin, end, inner,
+                                                   epsilon);
         return;
       }
     }
@@ -657,15 +662,17 @@ void LayerNormalize(const Tensor &x, const Tensor &scale, const Tensor *bias, Te
       }
       if constexpr (Type == DataType::FLOAT) {
         if (scale_by_inner && (bias_data == nullptr || bias_by_inner)) {
-          ApplyNormalizationAffineFloat32(input + base, scale_data, bias_data, output + base, inner,
-                                          moments.mean, inverse_std_dev);
+          cpu_compute::ApplyNormalizationAffineFloat32(input + base, scale_data, bias_data,
+                                                       output + base, inner, moments.mean,
+                                                       inverse_std_dev);
           continue;
         }
       }
       if constexpr (Type == DataType::FLOAT16) {
         if (inner >= 32 && scale_by_inner && (bias_data == nullptr || bias_by_inner)) {
-          ApplyLayerNormalizationFloat16(input + base, scale_data, bias_data, output + base, inner,
-                                         moments.mean, inverse_std_dev);
+          cpu_compute::ApplyLayerNormalizationFloat16(input + base, scale_data, bias_data,
+                                                      output + base, inner, moments.mean,
+                                                      inverse_std_dev);
           continue;
         }
       }
@@ -709,11 +716,11 @@ void LpNormalize(const Tensor &x, Tensor &y, std::size_t outer, std::size_t dime
   const std::size_t vectors = outer * inner;
   if constexpr (Type == DataType::FLOAT16) {
     if (inner == 1 && p == 2 && dimension >= 32) {
-      ExecuteItems(vectors, static_cast<double>(dimension) * 4.0,
-                   [&](std::size_t begin, std::size_t end) {
-                     LpNormalizationFloat16(input + begin * dimension, output + begin * dimension,
-                                            end - begin, dimension);
-                   });
+      ExecuteItems(
+          vectors, static_cast<double>(dimension) * 4.0, [&](std::size_t begin, std::size_t end) {
+            cpu_compute::LpNormalizationFloat16(input + begin * dimension,
+                                                output + begin * dimension, end - begin, dimension);
+          });
       return;
     }
   }

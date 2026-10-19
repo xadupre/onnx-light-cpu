@@ -2,10 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "cpu_compute/math/half_conversion.h"
 #include "onnx_light_cpu/kernels/com_microsoft/multi_head_attention_kernel.h"
 #include "onnx_light_cpu/schemas/com_microsoft/op_schema.h"
 #include "onnx_light_cpu/shapes/com_microsoft/shape_inference.h"
-#include "onnx_light_cpu_compute/math/half_conversion.h"
 
 #include "onnx_core/runtime/kernels/cast_helper.h"
 #include "onnx_core/runtime/runtime_context.h"
@@ -213,9 +213,9 @@ TEST(MultiHeadAttentionKernel, WhisperCrossAttentionAllFloatingTypes) {
     for (std::size_t i = 0; i < 4; ++i) {
       float actual = dtype == rt::DataType::FLOAT ? result.AsFloat()[i]
                      : dtype == rt::DataType::FLOAT16
-                         ? onnx_light_cpu::detail::Float16BitsToFloat(
+                         ? cpu_compute::detail::Float16BitsToFloat(
                                reinterpret_cast<const std::uint16_t *>(result.bytes())[i])
-                         : onnx_light_cpu::detail::Bfloat16BitsToFloat(
+                         : cpu_compute::detail::Bfloat16BitsToFloat(
                                reinterpret_cast<const std::uint16_t *>(result.bytes())[i]);
       EXPECT_NEAR(actual, expected[i], 0.01f);
     }

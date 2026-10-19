@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "onnx_light_cpu_compute/tensor/cast_kernel.h"
+#include "cpu_compute/tensor/cast.h"
 
-#include "onnx_light_cpu_compute/execution.h"
+#include "cpu_compute/execution.h"
 
 #include <gtest/gtest.h>
 
@@ -22,26 +22,28 @@
 
 namespace {
 
-using namespace onnx_light_cpu;
+using namespace cpu_compute;
 
-constexpr std::array kLevels{SimdLevel::kNone, SimdLevel::kSSE2, SimdLevel::kAVX, SimdLevel::kAVX2,
-                             SimdLevel::kAVX512};
+constexpr std::array kLevels{cpu_compute::SimdLevel::kNone, cpu_compute::SimdLevel::kSSE2,
+                             cpu_compute::SimdLevel::kAVX, cpu_compute::SimdLevel::kAVX2,
+                             cpu_compute::SimdLevel::kAVX512};
 
 void Compare(const void *input, DataType from, DataType to, std::size_t count,
              std::size_t source_offset = 0, std::size_t output_offset = 0) {
-  const auto source_bytes = count * CastElementSize(from);
-  const auto output_bytes = count * CastElementSize(to);
+  const auto source_bytes = count * cpu_compute::CastElementSize(from);
+  const auto output_bytes = count * cpu_compute::CastElementSize(to);
   std::vector<std::uint8_t> source(source_offset + source_bytes);
   if (source_bytes != 0) {
     std::memcpy(source.data() + source_offset, input, source_bytes);
   }
   std::vector<std::uint8_t> expected(output_offset + output_bytes + 16, 0xa5);
   const auto *data = source.empty() ? nullptr : source.data() + source_offset;
-  CastConvert(data, from, expected.data() + output_offset, to, count, SimdLevel::kNone);
+  cpu_compute::CastConvert(data, from, expected.data() + output_offset, to, count,
+                           cpu_compute::SimdLevel::kNone);
   for (auto level : kLevels) {
     SCOPED_TRACE(static_cast<int>(level));
     std::vector<std::uint8_t> actual(expected.size(), 0xa5);
-    CastConvert(data, from, actual.data() + output_offset, to, count, level);
+    cpu_compute::CastConvert(data, from, actual.data() + output_offset, to, count, level);
     EXPECT_EQ(actual, expected);
   }
 }
@@ -228,68 +230,83 @@ TEST(CastKernel, FloatIntegerAndBoolTailsSpecialValuesAndUnalignedBuffers) {
 }
 
 TEST(CastKernel, ConversionPathAndForcedFallback) {
-  EXPECT_STREQ(CastConversionPath(DataType::FLOAT, DataType::FLOAT16, 0), "Cast.empty");
-  EXPECT_STREQ(CastConversionPath(DataType::FLOAT, DataType::FLOAT, 32), "Cast.copy");
-  EXPECT_STREQ(CastConversionPath(DataType::DOUBLE, DataType::INT64, 32), "Cast.scalar");
+  EXPECT_STREQ(cpu_compute::CastConversionPath(DataType::FLOAT, DataType::FLOAT16, 0),
+               "Cast.empty");
+  EXPECT_STREQ(cpu_compute::CastConversionPath(DataType::FLOAT, DataType::FLOAT, 32), "Cast.copy");
+  EXPECT_STREQ(cpu_compute::CastConversionPath(DataType::DOUBLE, DataType::INT64, 32),
+               "Cast.scalar");
   for (auto half : {DataType::FLOAT16, DataType::BFLOAT16}) {
-    EXPECT_STREQ(CastConversionPath(DataType::FLOAT, half, 7), "Cast.scalar");
-    for (auto level : {SimdLevel::kNone, SimdLevel::kSSE2}) {
-      EXPECT_STREQ(CastConversionPath(DataType::FLOAT, half, 32, level), "Cast.scalar");
-      EXPECT_STREQ(CastConversionPath(half, DataType::FLOAT, 32, level), "Cast.scalar");
+    EXPECT_STREQ(cpu_compute::CastConversionPath(DataType::FLOAT, half, 7), "Cast.scalar");
+    for (auto level : {cpu_compute::SimdLevel::kNone, cpu_compute::SimdLevel::kSSE2}) {
+      EXPECT_STREQ(cpu_compute::CastConversionPath(DataType::FLOAT, half, 32, level),
+                   "Cast.scalar");
+      EXPECT_STREQ(cpu_compute::CastConversionPath(half, DataType::FLOAT, 32, level),
+                   "Cast.scalar");
     }
   }
-  EXPECT_STREQ(CastConversionPath(DataType::FLOAT, DataType::BFLOAT16, 32, SimdLevel::kAVX),
+  EXPECT_STREQ(cpu_compute::CastConversionPath(DataType::FLOAT, DataType::BFLOAT16, 32,
+                                               cpu_compute::SimdLevel::kAVX),
                "Cast.scalar");
-  EXPECT_STREQ(CastConversionPath(DataType::BFLOAT16, DataType::FLOAT, 32, SimdLevel::kAVX),
+  EXPECT_STREQ(cpu_compute::CastConversionPath(DataType::BFLOAT16, DataType::FLOAT, 32,
+                                               cpu_compute::SimdLevel::kAVX),
                "Cast.scalar");
   for (const auto &[from, to] :
        {std::pair{DataType::FLOAT, DataType::INT32}, std::pair{DataType::FLOAT, DataType::INT64},
         std::pair{DataType::FLOAT, DataType::INT8}, std::pair{DataType::FLOAT, DataType::UINT8},
         std::pair{DataType::FLOAT, DataType::BOOL}, std::pair{DataType::BOOL, DataType::FLOAT}}) {
-    EXPECT_STREQ(CastConversionPath(from, to, 7), "Cast.scalar");
-    EXPECT_STREQ(CastConversionPath(from, to, 32, SimdLevel::kAVX), "Cast.scalar");
+    EXPECT_STREQ(cpu_compute::CastConversionPath(from, to, 7), "Cast.scalar");
+    EXPECT_STREQ(cpu_compute::CastConversionPath(from, to, 32, cpu_compute::SimdLevel::kAVX),
+                 "Cast.scalar");
   }
-#ifdef ONNX_LIGHT_CPU_HAVE_AVX_F16C
-  if (DetectSimdLevel() >= SimdLevel::kAVX && CpuSupportsF16C()) {
-    EXPECT_STREQ(CastConversionPath(DataType::FLOAT, DataType::FLOAT16, 32, SimdLevel::kAVX),
+#ifdef CPU_COMPUTE_HAVE_AVX_F16C
+  if (cpu_compute::DetectSimdLevel() >= cpu_compute::SimdLevel::kAVX &&
+      cpu_compute::CpuSupportsF16C()) {
+    EXPECT_STREQ(cpu_compute::CastConversionPath(DataType::FLOAT, DataType::FLOAT16, 32,
+                                                 cpu_compute::SimdLevel::kAVX),
                  "Cast.float32_to_float16.f16c");
-    EXPECT_STREQ(CastConversionPath(DataType::FLOAT16, DataType::FLOAT, 32, SimdLevel::kAVX),
+    EXPECT_STREQ(cpu_compute::CastConversionPath(DataType::FLOAT16, DataType::FLOAT, 32,
+                                                 cpu_compute::SimdLevel::kAVX),
                  "Cast.float16_to_float32.f16c");
   }
 #endif
-#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_F16C
-  if (DetectSimdLevel() >= SimdLevel::kAVX2 && CpuSupportsF16C()) {
-    EXPECT_STREQ(CastConversionPath(DataType::FLOAT, DataType::FLOAT16, 32, SimdLevel::kAVX2),
+#ifdef CPU_COMPUTE_HAVE_AVX2_F16C
+  if (cpu_compute::DetectSimdLevel() >= cpu_compute::SimdLevel::kAVX2 &&
+      cpu_compute::CpuSupportsF16C()) {
+    EXPECT_STREQ(cpu_compute::CastConversionPath(DataType::FLOAT, DataType::FLOAT16, 32,
+                                                 cpu_compute::SimdLevel::kAVX2),
                  "Cast.float32_to_float16.avx2_f16c");
-    EXPECT_STREQ(CastConversionPath(DataType::FLOAT16, DataType::FLOAT, 32, SimdLevel::kAVX2),
+    EXPECT_STREQ(cpu_compute::CastConversionPath(DataType::FLOAT16, DataType::FLOAT, 32,
+                                                 cpu_compute::SimdLevel::kAVX2),
                  "Cast.float16_to_float32.avx2_f16c");
   }
 #endif
-#ifdef ONNX_LIGHT_CPU_HAVE_AVX2
-  if (DetectSimdLevel() >= SimdLevel::kAVX2) {
-    EXPECT_STREQ(CastConversionPath(DataType::FLOAT, DataType::INT32, 32),
+#ifdef CPU_COMPUTE_HAVE_AVX2
+  if (cpu_compute::DetectSimdLevel() >= cpu_compute::SimdLevel::kAVX2) {
+    EXPECT_STREQ(cpu_compute::CastConversionPath(DataType::FLOAT, DataType::INT32, 32),
                  "Cast.float32_to_int32.avx2");
-    EXPECT_STREQ(CastConversionPath(DataType::FLOAT, DataType::INT64, 32),
+    EXPECT_STREQ(cpu_compute::CastConversionPath(DataType::FLOAT, DataType::INT64, 32),
                  "Cast.float32_to_int64.avx2");
-    EXPECT_STREQ(CastConversionPath(DataType::FLOAT, DataType::INT8, 32),
+    EXPECT_STREQ(cpu_compute::CastConversionPath(DataType::FLOAT, DataType::INT8, 32),
                  "Cast.float32_to_int8.avx2");
-    EXPECT_STREQ(CastConversionPath(DataType::FLOAT, DataType::UINT8, 32),
+    EXPECT_STREQ(cpu_compute::CastConversionPath(DataType::FLOAT, DataType::UINT8, 32),
                  "Cast.float32_to_uint8.avx2");
-    EXPECT_STREQ(CastConversionPath(DataType::FLOAT, DataType::BOOL, 32),
+    EXPECT_STREQ(cpu_compute::CastConversionPath(DataType::FLOAT, DataType::BOOL, 32),
                  "Cast.float32_to_bool.avx2");
-    EXPECT_STREQ(CastConversionPath(DataType::BOOL, DataType::FLOAT, 32),
+    EXPECT_STREQ(cpu_compute::CastConversionPath(DataType::BOOL, DataType::FLOAT, 32),
                  "Cast.bool_to_float32.avx2");
-    EXPECT_STREQ(CastConversionPath(DataType::FLOAT, DataType::BFLOAT16, 32),
+    EXPECT_STREQ(cpu_compute::CastConversionPath(DataType::FLOAT, DataType::BFLOAT16, 32),
                  "Cast.float32_to_bfloat16.avx2");
-    EXPECT_STREQ(CastConversionPath(DataType::BFLOAT16, DataType::FLOAT, 32),
+    EXPECT_STREQ(cpu_compute::CastConversionPath(DataType::BFLOAT16, DataType::FLOAT, 32),
                  "Cast.bfloat16_to_float32.avx2");
   }
 #endif
-#ifdef ONNX_LIGHT_CPU_HAVE_AVX512DQ
-  if (DetectSimdLevel() >= SimdLevel::kAVX512 && CpuSupportsAvx512DQ()) {
-    EXPECT_STREQ(CastConversionPath(DataType::INT64, DataType::FLOAT, 32),
+#ifdef CPU_COMPUTE_HAVE_AVX512DQ
+  if (cpu_compute::DetectSimdLevel() >= cpu_compute::SimdLevel::kAVX512 &&
+      cpu_compute::CpuSupportsAvx512DQ()) {
+    EXPECT_STREQ(cpu_compute::CastConversionPath(DataType::INT64, DataType::FLOAT, 32),
                  "Cast.int64_to_float32.avx512dq");
-    EXPECT_STREQ(CastConversionPath(DataType::INT64, DataType::FLOAT, 32, SimdLevel::kAVX2),
+    EXPECT_STREQ(cpu_compute::CastConversionPath(DataType::INT64, DataType::FLOAT, 32,
+                                                 cpu_compute::SimdLevel::kAVX2),
                  "Cast.scalar");
   }
 #endif
@@ -314,7 +331,8 @@ TEST(CastKernel, ParallelRangesAndNestedBypass) {
   struct Executor {
     int calls = 0;
     int64_t blocks = 0;
-    static void Run(void *context, int64_t count, void *task_context, ExecutionBlockFn task) {
+    static void Run(void *context, int64_t count, void *task_context,
+                    cpu_compute::ExecutionBlockFn task) {
       auto &self = *static_cast<Executor *>(context);
       ++self.calls;
       self.blocks = count;
@@ -323,8 +341,8 @@ TEST(CastKernel, ParallelRangesAndNestedBypass) {
       }
     }
   } executor;
-  ExecutionExecutorView view{&executor, 4, &Executor::Run};
-  ExecutionExecutorScope scope(&view);
+  cpu_compute::ExecutionExecutorView view{&executor, 4, &Executor::Run};
+  cpu_compute::ExecutionExecutorScope scope(&view);
   std::vector<float> values(262145, 1.5f);
   for (auto half : {DataType::FLOAT16, DataType::BFLOAT16}) {
     for (const auto &[from, to] :
@@ -338,7 +356,7 @@ TEST(CastKernel, ParallelRangesAndNestedBypass) {
       EXPECT_LE(executor.blocks, view.effective_threads);
       const int after = executor.calls;
       {
-        detail::ExecutionRegionScope region;
+        cpu_compute::detail::ExecutionRegionScope region;
         Compare(values.data(), from, to, values.size());
       }
       EXPECT_EQ(executor.calls, after);
@@ -351,8 +369,8 @@ TEST(CastKernel, PreservesFloatingPointExceptionsAndFlushModes) {
   const std::array<float, 17> values{65520.0f,   -65520.0f, 0x1p-25f,   -0x1p-25f,
                                      0x1.002p0f, 0x1p-149f, -0x1p-149f, 0x1.8p-24f};
   std::array<std::uint16_t, values.size()> expected{}, actual{};
-  CastConvert(values.data(), DataType::FLOAT, expected.data(), DataType::FLOAT16, values.size(),
-              SimdLevel::kNone);
+  cpu_compute::CastConvert(values.data(), DataType::FLOAT, expected.data(), DataType::FLOAT16,
+                           values.size(), cpu_compute::SimdLevel::kNone);
   const unsigned int original = _mm_getcsr();
   for (unsigned int flush : {0u, 0x8040u}) {
     for (unsigned int masks : {0u, static_cast<unsigned int>(_MM_MASK_MASK)}) {
@@ -360,8 +378,8 @@ TEST(CastKernel, PreservesFloatingPointExceptionsAndFlushModes) {
         const unsigned int requested =
             (original & ~(_MM_MASK_MASK | _MM_EXCEPT_MASK | 0x8040u)) | masks | flags | flush;
         _mm_setcsr(requested);
-        CastConvert(values.data(), DataType::FLOAT, actual.data(), DataType::FLOAT16,
-                    values.size());
+        cpu_compute::CastConvert(values.data(), DataType::FLOAT, actual.data(), DataType::FLOAT16,
+                                 values.size());
         const unsigned int after = _mm_getcsr();
         _mm_setcsr(original);
         EXPECT_EQ(after, requested);

@@ -21,7 +21,7 @@ correctness tests, and reproducible benchmarks in one change.
 
 ## 2. Implement the portable path first
 
-1. Keep architecture-neutral orchestration in `onnx_light_cpu_compute/src/`. Validate
+1. Keep architecture-neutral orchestration in `cpu_compute/src/`. Validate
    inputs once, return cleanly for empty work, use checked size arithmetic, and avoid temporary
    full-tensor materialization.
 2. Make the scalar kernel operate on an explicit contiguous range or independent output unit.
@@ -34,7 +34,7 @@ correctness tests, and reproducible benchmarks in one change.
 
 1. Partition independent output rows, tiles, batches, heads, or contiguous element ranges with
    `ExecuteRanges` or `ExecuteCostedRanges` from
-   `onnx_light_cpu_compute/include/onnx_light_cpu_compute/execution.h`. Never create a
+   `cpu_compute/include/cpu_compute/execution.h`. Never create a
    private thread pool or hard-code a thread count. ONNX adapters install
    `RuntimeExecutionScope` from `onnx_light_cpu/kernels/execution.h`; computation
    sources must not include ONNX or Python headers.
@@ -56,11 +56,11 @@ correctness tests, and reproducible benchmarks in one change.
 1. Keep dispatch and scalar/SSE2 code at the baseline ISA. Put pure AVX implementations under an
    `avx/` directory in `_avx.cc` files and AVX2 implementations under an `avx2/` directory in
    `_avx2.cc` files; CMake assigns their per-source flags. Guard declarations and calls with
-   `ONNX_LIGHT_CPU_HAVE_AVX` or `ONNX_LIGHT_CPU_HAVE_AVX2`, respectively, and check the matching
+   `CPU_COMPUTE_HAVE_AVX` or `CPU_COMPUTE_HAVE_AVX2`, respectively, and check the matching
    runtime SIMD level.
 2. Put AVX2/FMA code under an `avx2/` directory in a file ending in `_avx2_fma.cc`; CMake discovers
    that suffix, compiles it with `-mavx2 -mfma` (or `/arch:AVX2`), and defines
-   `ONNX_LIGHT_CPU_HAVE_AVX2_FMA`. Guard declarations and calls with that definition.
+   `CPU_COMPUTE_HAVE_AVX2_FMA`. Guard declarations and calls with that definition.
 3. Do not infer FMA or F16C from `SimdLevel::kAVX2`. Require `CpuSupportsFma()` or
    `CpuSupportsF16C()` when the selected function executes those instructions.
 4. Use unaligned loads unless alignment is established by the API. Handle every remainder without
@@ -75,7 +75,7 @@ correctness tests, and reproducible benchmarks in one change.
 1. Put AVX-512F implementations under an `avx512/` directory. CMake assigns `-mavx512f` only to
    those files and excludes them when the compiler lacks support. Never place AVX-512 intrinsics
    in the baseline dispatcher translation unit.
-2. Guard declarations and dispatch with `ONNX_LIGHT_CPU_HAVE_AVX512`. Require the matching feature
+2. Guard declarations and dispatch with `CPU_COMPUTE_HAVE_AVX512`. Require the matching feature
    helper for extensions beyond AVX-512F: `CpuSupportsAvx512BW()`, `CpuSupportsAvx512Fp16()`,
    `CpuSupportsAvx512Bf16()`, or `CpuSupportsAvx512Vnni()`.
 3. Prefer AVX-512 mask registers for tails. Construct masks without undefined shifts at zero or at
