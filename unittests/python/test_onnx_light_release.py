@@ -8,6 +8,7 @@ from tools.onnx_light_release import (
     parse_dumpbin_exports,
     wheel_name,
     wheel_url,
+    windows_import_components,
 )
 
 _ROOT = Path(__file__).resolve().parents[2]
@@ -53,6 +54,16 @@ def test_parse_dumpbin_exports():
             2    1 00012000 PlainExport
     """
     assert parse_dumpbin_exports(output) == ["?CreateKernel@@YAPEAXXZ", "PlainExport"]
+
+
+def test_windows_import_components_with_optional_threads(tmp_path):
+    legacy_components = windows_import_components(tmp_path)
+    assert "threads" not in legacy_components
+    threading_dll = tmp_path / "lib_onnx_threads.dll"
+    threading_dll.touch()
+    assert windows_import_components(tmp_path) == [*legacy_components, "threads"]
+    threading_dll.unlink()
+    assert windows_import_components(tmp_path) == legacy_components
 
 
 def test_find_msvc_tool(tmp_path):

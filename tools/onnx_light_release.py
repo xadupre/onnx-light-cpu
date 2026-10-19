@@ -95,6 +95,13 @@ def find_msvc_tool(name, machine, installation=None, environment=None, command_r
     raise FileNotFoundError(f"Could not find {name}.exe for {machine} under {tools_root}.")
 
 
+def windows_import_components(library_dir):
+    components = ["core", "proto", "kernels", "backend_test", "op", "shape"]
+    if (library_dir / "lib_onnx_threads.dll").is_file():
+        components.append("threads")
+    return components
+
+
 def generate_import_libraries(destination):
     from onnx_light import get_cpp_build_info
 
@@ -107,7 +114,7 @@ def generate_import_libraries(destination):
     librarian = find_msvc_tool("lib", machine)
     library_dir = Path(get_cpp_build_info()["library_dir"])
     destination.mkdir(parents=True, exist_ok=True)
-    for component in ("core", "proto", "kernels", "backend_test", "op", "shape"):
+    for component in windows_import_components(library_dir):
         dll = library_dir / f"lib_onnx_{component}.dll"
         output = subprocess.check_output(
             [str(dumpbin), "/nologo", "/exports", str(dll)],
