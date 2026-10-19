@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "onnx_light_cpu/kernels/execution.h"
 #include "onnx_light_cpu/kernels/math/abs_kernel.h"
 #include "onnx_light_cpu/kernels/register_kernels.h"
 
@@ -13,8 +14,8 @@
 #include "onnx_core/runtime/tuning/cpu_executor.h"
 #include "onnx_core/runtime/tuning/kernel_tuning.h"
 #include "onnx_core/symbolic/sym_tensor.h"
-#include "onnx_light_cpu/impl/execution.h"
-#include "onnx_light_cpu/impl/math/math_kernels.h"
+#include "onnx_light_cpu_compute/execution.h"
+#include "onnx_light_cpu_compute/math/math_kernels.h"
 
 #include <gtest/gtest.h>
 
@@ -279,6 +280,42 @@ TEST(OnnxLightAbsKernel, RegisteredKernelUsesSessionExecutorWithoutPrivatePool) 
 
   EXPECT_EQ(runtime.Get("y").element_count(), n);
   EXPECT_GE(executor->counters().dispatches, 1u);
+
+  const auto dispatches = executor->counters().dispatches;
+  onnx_light_cpu::AbsKernel direct_kernel(MakeCtx());
+  {
+    rt_ns::CpuExecutorScope scope(executor.get());
+    const rt_ns::Tensor output = direct_kernel(runtime.Get("x"));
+    EXPECT_EQ(output.AsFloat()[n - 1], 3.0f);
+  }
+  EXPECT_GT(executor->counters().dispatches, dispatches);
+  EXPECT_EQ(onnx_light_cpu::CurrentExecutionExecutor(), nullptr);
+}
+
+TEST(OnnxLightAbsKernel, RuntimeScopePreservesExplicitExecutorAndRestoresPreviousScope) {
+  rt_ns::CpuExecutionPolicy policy;
+  policy.num_threads = 1;
+  policy.affinity_policy = rt_ns::CpuAffinityPolicy::kNone;
+  rt_ns::CpuExecutorRegistry registry(1);
+  std::shared_ptr<rt_ns::CpuExecutor> executor = registry.Acquire(policy);
+  EXPECT_EQ(onnx_light_cpu::CurrentExecutionExecutor(), nullptr);
+  {
+    rt_ns::CpuExecutorScope runtime_scope(executor.get());
+    // Low-level computations do not discover ONNX runtime state themselves.
+    EXPECT_EQ(onnx_light_cpu::CurrentExecutionExecutor(), nullptr);
+    const onnx_light_cpu::RuntimeExecutionScope adapter;
+    ASSERT_NE(onnx_light_cpu::CurrentExecutionExecutor(), nullptr);
+    EXPECT_EQ(onnx_light_cpu::CurrentExecutionExecutor()->context, executor.get());
+    onnx_light_cpu::ExecutionExecutorView explicit_view =
+        *onnx_light_cpu::CurrentExecutionExecutor();
+    {
+      const onnx_light_cpu::ExecutionExecutorScope explicit_scope(&explicit_view);
+      const onnx_light_cpu::RuntimeExecutionScope nested_adapter;
+      EXPECT_EQ(onnx_light_cpu::CurrentExecutionExecutor(), &explicit_view);
+    }
+    EXPECT_NE(onnx_light_cpu::CurrentExecutionExecutor(), &explicit_view);
+  }
+  EXPECT_EQ(onnx_light_cpu::CurrentExecutionExecutor(), nullptr);
 }
 
 } // namespace

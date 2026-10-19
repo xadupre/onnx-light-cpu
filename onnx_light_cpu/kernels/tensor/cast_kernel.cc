@@ -3,10 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "onnx_light_cpu/kernels/tensor/cast_kernel.h"
+#include "onnx_light_cpu/kernels/execution.h"
 
-#include "onnx_light_cpu/impl/execution.h"
-#include "onnx_light_cpu/impl/tensor/cast_kernel.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
+#include "onnx_light_cpu_compute/execution.h"
+#include "onnx_light_cpu_compute/tensor/cast_kernel.h"
 
 #include "onnx_core/runtime/kernels/node_helpers.h"
 #include "onnx_core/symbolic/sym_tensor.h"
@@ -362,11 +363,13 @@ CastKernel::CastKernel(const ONNX_LIGHT_NAMESPACE::NodeProto &node, const rt_ns:
 }
 
 Tensor CastKernel::operator()(const Tensor &data, int32_t to, rt_ns::RuntimeContext *rt) const {
+  const RuntimeExecutionScope execution_scope;
   return (*this)(data, to, true, rt);
 }
 
 Tensor CastKernel::operator()(const Tensor &data, int32_t to, bool saturate,
                               rt_ns::RuntimeContext *rt) const {
+  const RuntimeExecutionScope execution_scope;
   const CastPlan plan = PrepareCast(data, to);
   Tensor output = rt ? rt->MakeOutputTensor(0, to, data.shape, plan.output_bytes)
                      : rt_ns::MakeOutputTensor(to, data.shape, plan.output_bytes, ctx_.allocator);
@@ -387,15 +390,18 @@ Tensor CastKernel::operator()(const Tensor &data, int32_t to, bool saturate,
 }
 
 void CastKernel::operator()(const Tensor &data, int32_t to, Tensor &output) const {
+  const RuntimeExecutionScope execution_scope;
   (*this)(data, to, true, output);
 }
 
 void CastKernel::operator()(const Tensor &data, int32_t to, bool saturate, Tensor &output) const {
+  const RuntimeExecutionScope execution_scope;
   const CastPlan plan = PrepareCast(data, to);
   Convert(ctx_, data, to, saturate, output, plan);
 }
 
 void CastKernel::Run(rt_ns::RuntimeContext &rt) {
+  const RuntimeExecutionScope execution_scope;
   rt.RecordKernelUsage(kName);
   if (node_ == nullptr) {
     Invalid("Run requires a node.");

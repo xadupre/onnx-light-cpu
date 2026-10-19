@@ -3,9 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "onnx_light_cpu/kernels/tensor/scatter_nd_kernel.h"
+#include "onnx_light_cpu/kernels/execution.h"
 
-#include "onnx_light_cpu/impl/execution.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
+#include "onnx_light_cpu_compute/execution.h"
 
 #include "onnx_core/runtime/kernels/node_helpers.h"
 #include "onnx_lib/common/safe_math.h"
@@ -170,6 +171,7 @@ ScatterNDKernel::ScatterNDKernel(const ONNX_LIGHT_NAMESPACE::NodeProto &node,
 
 Tensor ScatterNDKernel::operator()(const Tensor &data, const Tensor &indices, const Tensor &updates,
                                    rt_ns::RuntimeContext *rt) const {
+  const RuntimeExecutionScope execution_scope;
   const ScatterPlan plan = PrepareScatterND(data, indices, updates);
   Tensor output =
       rt ? rt->MakeOutputTensor(0, data.data_type, data.shape, plan.output_bytes)
@@ -180,11 +182,13 @@ Tensor ScatterNDKernel::operator()(const Tensor &data, const Tensor &indices, co
 
 void ScatterNDKernel::operator()(const Tensor &data, const Tensor &indices, const Tensor &updates,
                                  Tensor &output) const {
+  const RuntimeExecutionScope execution_scope;
   const ScatterPlan plan = PrepareScatterND(data, indices, updates);
   Copy(data, indices, updates, output, plan);
 }
 
 void ScatterNDKernel::Run(rt_ns::RuntimeContext &rt) {
+  const RuntimeExecutionScope execution_scope;
   rt.RecordKernelUsage(kName);
   const auto &node = *node_;
   rt_ns::RequireInputCount(node, 3);

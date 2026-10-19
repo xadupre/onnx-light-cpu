@@ -1,6 +1,6 @@
 #include "onnx_light_cpu/kernels/math/matmul_kernel.h"
 
-#include "onnx_light_cpu/impl/math/gemm/gemm_plan.h"
+#include "onnx_light_cpu_compute/math/gemm/gemm_plan.h"
 #include "unittests/cc/heap_allocation_tracker.h"
 #include "unittests/cc/scoped_x86_gradual_underflow.h"
 

@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "onnx_light_cpu/impl/execution.h"
-#include "onnx_light_cpu/impl/simd_level.h"
 #include "onnx_light_cpu/kernels/math/normalization_kernel.h"
+#include "onnx_light_cpu_compute/execution.h"
+#include "onnx_light_cpu_compute/simd_level.h"
 
 #include <algorithm>
 #include <chrono>

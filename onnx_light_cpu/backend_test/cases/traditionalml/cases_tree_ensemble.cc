@@ -5,7 +5,7 @@
 #include "onnx_light_cpu/backend_test/cases/traditionalml/include_traditionalml_cases.h"
 #include "onnx_light_cpu/backend_test/cases/traditionalml/tree_ensemble_corpus.h"
 
-#include "onnx_light_cpu/impl/traditionalml/tree_ensemble.h"
+#include "onnx_light_cpu_compute/traditionalml/tree_ensemble.h"
 
 #include "onnx_core/backend_test/expect.h"
 #include "onnx_core/runtime/kernels/cast_helper.h"

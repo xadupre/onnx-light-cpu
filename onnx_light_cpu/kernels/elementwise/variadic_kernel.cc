@@ -3,9 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "onnx_light_cpu/kernels/elementwise/variadic_kernel.h"
+#include "onnx_light_cpu/kernels/execution.h"
 
-#include "onnx_light_cpu/impl/checked_arithmetic.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
+#include "onnx_light_cpu_compute/checked_arithmetic.h"
 
 #include "onnx_core/runtime/kernels/kernel_dispatch_table.h"
 #include "onnx_core/runtime/kernels/node_helpers.h"
@@ -78,6 +79,7 @@ VariadicElementwiseKernel::VariadicElementwiseKernel(const ONNX_LIGHT_NAMESPACE:
 
 rt_ns::Tensor VariadicElementwiseKernel::operator()(const rt_ns::Tensors &inputs,
                                                     rt_ns::RuntimeContext *rt) const {
+  const RuntimeExecutionScope execution_scope;
   const VariadicElementwisePlan plan = MakePlan(op_, inputs);
   const rt_ns::Shape output_shape(
       std::vector<std::int64_t>(plan.output_shape().begin(), plan.output_shape().end()));
@@ -94,6 +96,7 @@ rt_ns::Tensor VariadicElementwiseKernel::operator()(const rt_ns::Tensors &inputs
 
 void VariadicElementwiseKernel::operator()(const rt_ns::Tensors &inputs,
                                            rt_ns::Tensor &output) const {
+  const RuntimeExecutionScope execution_scope;
   const VariadicElementwisePlan plan = MakePlan(op_, inputs);
   const rt_ns::Shape output_shape(
       std::vector<std::int64_t>(plan.output_shape().begin(), plan.output_shape().end()));
@@ -107,6 +110,7 @@ void VariadicElementwiseKernel::operator()(const rt_ns::Tensors &inputs,
 }
 
 void VariadicElementwiseKernel::Run(rt_ns::RuntimeContext &rt) {
+  const RuntimeExecutionScope execution_scope;
   const auto &node = *node_;
   if (rt.kernel_usage_enabled()) {
     rt.RecordKernelUsage(std::string("onnx_light_cpu::") + ToString(op_));

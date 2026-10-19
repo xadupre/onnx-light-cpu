@@ -5,8 +5,8 @@
 #include "onnx_light_cpu/kernels/tensor/cast_kernel.h"
 
 #include "onnx_extensions/kernels/kernels/tensor/include_tensor_kernels.h"
-#include "onnx_light_cpu/impl/execution.h"
-#include "onnx_light_cpu/impl/tensor/cast_kernel.h"
+#include "onnx_light_cpu_compute/execution.h"
+#include "onnx_light_cpu_compute/tensor/cast_kernel.h"
 
 #include <gtest/gtest.h>
 

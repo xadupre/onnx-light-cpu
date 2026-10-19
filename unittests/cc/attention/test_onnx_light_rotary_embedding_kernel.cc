@@ -8,10 +8,10 @@
 #include "onnx_core/runtime/kernels/node_helpers.h"
 #include "onnx_core/runtime/kernels/run_nodes.h"
 #include "onnx_core/shapes/shapes_context.h"
-#include "onnx_light_cpu/impl/math/half_conversion.h"
 #include "onnx_light_cpu/kernels/register_kernels.h"
 #include "onnx_light_cpu/schemas/com_microsoft/op_schema.h"
 #include "onnx_light_cpu/shapes/ai_onnx/shape_inference.h"
+#include "onnx_light_cpu_compute/math/half_conversion.h"
 #include "onnx_proto/onnx_helper.h"
 
 #include <gtest/gtest.h>

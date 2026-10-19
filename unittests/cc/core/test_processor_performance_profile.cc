@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "onnx_light_cpu/impl/processor_performance_profile.h"
+#include "onnx_light_cpu_compute/processor_performance_profile.h"
 
 #include <gtest/gtest.h>
 

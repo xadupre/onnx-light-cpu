@@ -10,7 +10,6 @@
 #include <nanobind/stl/vector.h>
 
 #include "onnx_light_cpu/gradient/com_microsoft/gradients.h"
-#include "onnx_light_cpu/impl/math/gemm/vnni/integer_gemm_vnni.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
 #include "onnx_light_cpu/kernels/kernel_usage.h"
 #include "onnx_light_cpu/kernels/register_kernels.h"
@@ -19,6 +18,7 @@
 #include "onnx_light_cpu/schemas/com_microsoft/op_schema.h"
 #include "onnx_light_cpu/shapes/ai_onnx/shape_inference.h"
 #include "onnx_light_cpu/shapes/com_microsoft/shape_inference.h"
+#include "onnx_light_cpu_compute/math/gemm/vnni/integer_gemm_vnni.h"
 
 #include "onnx_proto/onnx_helper.h"
 

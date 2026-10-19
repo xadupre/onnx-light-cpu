@@ -10,8 +10,8 @@
 #include "onnx_core/runtime/memory/simple_tensor.h"
 #include "onnx_core/runtime/runtime_context.h"
 #include "onnx_extensions/kernels/kernels/nn/include_nn_kernels.h"
-#include "onnx_light_cpu/impl/execution.h"
-#include "onnx_light_cpu/impl/math/normalization_kernel.h"
+#include "onnx_light_cpu_compute/execution.h"
+#include "onnx_light_cpu_compute/math/normalization_kernel.h"
 
 #include <gtest/gtest.h>
 

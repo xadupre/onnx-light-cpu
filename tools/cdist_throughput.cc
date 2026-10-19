@@ -7,8 +7,8 @@
 // All per-call packing and dispatch costs are included in the median seconds.
 // Use tools/benchmark_cdist_parity.py for end-to-end ONNX Runtime comparisons.
 
-#include "onnx_light_cpu/impl/com_microsoft/cdist.h"
-#include "onnx_light_cpu/impl/simd_level.h"
+#include "onnx_light_cpu_compute/com_microsoft/cdist.h"
+#include "onnx_light_cpu_compute/simd_level.h"
 
 #include <algorithm>
 #include <chrono>

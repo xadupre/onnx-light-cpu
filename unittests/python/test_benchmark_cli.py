@@ -448,10 +448,18 @@ class TestBenchmarkCli(ExtTestCase):
         ]
         tests, dtypes = infer_pr_benchmark_selection(
             [
-                "onnx_light_cpu/impl/math/abs_kernel.cc",
+                "onnx_light_cpu_compute/src/math/abs_kernel.cc",
                 "docs/command_line.rst",
             ],
             "+  const float value = input[i];",
+            kernels,
+        )
+        self.assertEqual(tests, ["^test_cpu_(abs)_"])
+        self.assertEqual(dtypes, ["float32"])
+
+        tests, dtypes = infer_pr_benchmark_selection(
+            ["onnx_light_cpu_compute/include/onnx_light_cpu_compute/math/math_kernels.h"],
+            "+void AbsFloat32(const float *input, float *output, std::size_t count);",
             kernels,
         )
         self.assertEqual(tests, ["^test_cpu_(abs)_"])
@@ -471,7 +479,7 @@ class TestBenchmarkCli(ExtTestCase):
             self._kernel("Pow", ("FLOAT",)),
         ]
         tests, dtypes = infer_pr_benchmark_selection(
-            ["onnx_light_cpu/impl/math/binary/binary_kernel_descriptor.cc"],
+            ["onnx_light_cpu_compute/src/math/binary/binary_kernel_descriptor.cc"],
             "+ void BulkFloatIntegerPowRightScalar();\n+ float value;",
             kernels,
         )
@@ -485,7 +493,7 @@ class TestBenchmarkCli(ExtTestCase):
             self._kernel("TreeEnsemble", ("FLOAT",)),
         ]
         tests, dtypes = infer_pr_benchmark_selection(
-            ["onnx_light_cpu/impl/traditionalml/tree_ensemble.cc"],
+            ["onnx_light_cpu_compute/src/traditionalml/tree_ensemble.cc"],
             "+ partial_stride = SaturatingAdd(rows, lanes);\n+ if (left && right) {}",
             kernels,
         )
@@ -494,7 +502,7 @@ class TestBenchmarkCli(ExtTestCase):
 
     def test_reads_pull_request_benchmark_selection(self):
         completed = [
-            SimpleNamespace(stdout="onnx_light_cpu/impl/math/abs_kernel.cc\n"),
+            SimpleNamespace(stdout="onnx_light_cpu_compute/src/math/abs_kernel.cc\n"),
             SimpleNamespace(stdout="+ DataType::FLOAT\n"),
         ]
         kernels = [self._kernel("Abs", ("FLOAT", "DOUBLE"))]

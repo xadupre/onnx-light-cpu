@@ -3,9 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "onnx_light_cpu/kernels/tensor/concat_kernel.h"
+#include "onnx_light_cpu/kernels/execution.h"
 
-#include "onnx_light_cpu/impl/tensor/concat_kernel.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
+#include "onnx_light_cpu_compute/tensor/concat_kernel.h"
 
 #include "onnx_core/runtime/kernels/node_helpers.h"
 #include "onnx_core/symbolic/sym_tensor.h"
@@ -160,6 +161,7 @@ ConcatKernel::ConcatKernel(const ONNX_LIGHT_NAMESPACE::NodeProto &node,
 
 Tensor ConcatKernel::operator()(std::span<const Tensor> inputs, int64_t axis,
                                 rt_ns::RuntimeContext *rt) const {
+  const RuntimeExecutionScope execution_scope;
   const ConcatPlan plan = PrepareConcat(
       inputs.size(), [&](std::size_t i) -> const Tensor & { return inputs[i]; }, axis);
   Tensor output = Allocate(plan, rt, ctx_.allocator);
@@ -168,12 +170,14 @@ Tensor ConcatKernel::operator()(std::span<const Tensor> inputs, int64_t axis,
 }
 
 void ConcatKernel::operator()(std::span<const Tensor> inputs, int64_t axis, Tensor &output) const {
+  const RuntimeExecutionScope execution_scope;
   const ConcatPlan plan = PrepareConcat(
       inputs.size(), [&](std::size_t i) -> const Tensor & { return inputs[i]; }, axis);
   Copy(plan, output);
 }
 
 void ConcatKernel::Run(rt_ns::RuntimeContext &rt) {
+  const RuntimeExecutionScope execution_scope;
   rt.RecordKernelUsage(kName);
   const auto &node = *node_;
   rt_ns::RequireMinInputCount(node, 1);

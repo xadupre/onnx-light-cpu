@@ -4,13 +4,14 @@
 
 #include "onnx_light_cpu/kernels/com_microsoft/causal_conv_with_state_kernel.h"
 #include "onnx_light_cpu/kernels/com_microsoft/causal_conv_with_state_common.h"
+#include "onnx_light_cpu/kernels/execution.h"
 
-#include "onnx_light_cpu/impl/checked_arithmetic.h"
-#include "onnx_light_cpu/impl/execution.h"
-#include "onnx_light_cpu/impl/math/half_conversion.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
 #include "onnx_light_cpu/kernels/tensor_buffer_validation.h"
 #include "onnx_light_cpu/schemas/com_microsoft/op_schema.h"
+#include "onnx_light_cpu_compute/checked_arithmetic.h"
+#include "onnx_light_cpu_compute/execution.h"
+#include "onnx_light_cpu_compute/math/half_conversion.h"
 
 #include "onnx_core/runtime/kernels/kernel_dispatch_table.h"
 #include "onnx_core/runtime/kernels/node_helpers.h"
@@ -183,6 +184,7 @@ CausalConvWithStateKernel::operator()(const Tensor &input, const Tensor &weight,
                                       const Tensor *past_state, const std::string &activation,
                                       bool channels_last, std::int64_t dilation,
                                       RuntimeContext *rt) const {
+  const RuntimeExecutionScope execution_scope;
   const auto plan = detail::PlanCausalConvWithState(input, weight, bias, past_state, activation,
                                                     channels_last, dilation);
   Tensor output =
@@ -208,6 +210,7 @@ CausalConvWithStateKernel::operator()(const Tensor &input, const Tensor &weight,
 }
 
 void CausalConvWithStateKernel::Run(RuntimeContext &rt) {
+  const RuntimeExecutionScope execution_scope;
   detail::RunCausalConvWithState(*this, *node_, rt);
 }
 

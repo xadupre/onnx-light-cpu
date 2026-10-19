@@ -1,0 +1,258 @@
+// Copyright (c) ONNX Project Contributors
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include "onnx_light_cpu_compute/tensor/split_kernel.h"
+
+#include "onnx_light_cpu_compute/execution.h"
+#include "onnx_light_cpu_compute/simd_level.h"
+
+#include <algorithm>
+#include <atomic>
+#include <cstring>
+#include <limits>
+
+namespace onnx_light_cpu {
+
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
+void SplitCopy4x4_AVX512(const uint8_t *source, void *const *outputs, int64_t begin, int64_t end);
+#endif
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2
+void SplitCopy4x2_AVX2(const uint8_t *source, void *const *outputs, int64_t begin, int64_t end);
+void SplitCopy4x4_AVX2(const uint8_t *source, void *const *outputs, int64_t begin, int64_t end);
+#endif
+
+namespace {
+
+template <std::size_t Width>
+void CopyFixedRows(const uint8_t *source, uint8_t *destination, std::size_t input_row_bytes,
+                   int64_t begin, int64_t end) {
+  // Scheduled byte boundaries are multiples of 64, hence aligned to every supported Width.
+  const std::size_t first_row = static_cast<std::size_t>(begin) / Width;
+  const std::size_t last_row = static_cast<std::size_t>(end) / Width;
+  for (std::size_t row = first_row; row < last_row; ++row) {
+    std::memcpy(destination + row * Width, source + row * input_row_bytes, Width);
+  }
+}
+
+template <std::size_t Width>
+void CopyFourFixedOutputs(const uint8_t *source, void *const *outputs, int64_t begin, int64_t end) {
+  auto *output0 = static_cast<uint8_t *>(outputs[0]);
+  auto *output1 = static_cast<uint8_t *>(outputs[1]);
+  auto *output2 = static_cast<uint8_t *>(outputs[2]);
+  auto *output3 = static_cast<uint8_t *>(outputs[3]);
+  for (int64_t row = begin; row < end; ++row) {
+    std::memcpy(output0 + row * Width, source + row * 4 * Width, Width);
+    std::memcpy(output1 + row * Width, source + row * 4 * Width + Width, Width);
+    std::memcpy(output2 + row * Width, source + row * 4 * Width + 2 * Width, Width);
+    std::memcpy(output3 + row * Width, source + row * 4 * Width + 3 * Width, Width);
+  }
+}
+
+} // namespace
+
+void SplitCopy(const void *data, void *output, int64_t rows, std::size_t input_row_bytes,
+               std::size_t output_row_bytes, std::size_t offset_bytes) {
+  if (rows == 0 || output_row_bytes == 0) {
+    return;
+  }
+  const auto total = static_cast<int64_t>(static_cast<std::size_t>(rows) * output_row_bytes);
+  const auto copy = [&](int64_t begin, int64_t end) {
+    const auto *source = static_cast<const uint8_t *>(data) + offset_bytes;
+    auto *destination = static_cast<uint8_t *>(output);
+    if (input_row_bytes == output_row_bytes || rows == 1) {
+      std::memcpy(destination + begin, source + begin, static_cast<std::size_t>(end - begin));
+      return;
+    }
+    switch (output_row_bytes) {
+    case 1:
+      CopyFixedRows<1>(source, destination, input_row_bytes, begin, end);
+      return;
+    case 2:
+      CopyFixedRows<2>(source, destination, input_row_bytes, begin, end);
+      return;
+    case 4:
+      CopyFixedRows<4>(source, destination, input_row_bytes, begin, end);
+      return;
+    case 8:
+      CopyFixedRows<8>(source, destination, input_row_bytes, begin, end);
+      return;
+    default:
+      break;
+    }
+    std::size_t position = static_cast<std::size_t>(begin);
+    std::size_t row = position / output_row_bytes;
+    std::size_t column = position % output_row_bytes;
+    while (position < static_cast<std::size_t>(end)) {
+      const std::size_t count =
+          std::min(output_row_bytes - column, static_cast<std::size_t>(end) - position);
+      std::memcpy(destination + position, source + row * input_row_bytes + column, count);
+      position += count;
+      ++row;
+      column = 0;
+    }
+  };
+  constexpr int64_t kParallelBytes = 1024 * 1024;
+  constexpr int64_t kBlockBytes = 256 * 1024;
+  const auto *executor = CurrentExecutionExecutor();
+  if (total < kParallelBytes || ExecutionInParallelRegion() || executor == nullptr ||
+      executor->run_blocks == nullptr || ExecutionThreadCount() <= 1 ||
+      total > std::numeric_limits<int64_t>::max() / 2) {
+    copy(0, total);
+    return;
+  }
+  ExecutionSchedule schedule;
+  schedule.min_parallel_size = kParallelBytes;
+  schedule.min_block_size = kBlockBytes;
+  schedule.max_participants = ExecutionThreadCount();
+  ExecuteRanges(total, schedule, int64_t{64}, copy);
+}
+
+void SplitCopyOutputs(const void *data, std::span<void *const> outputs, int64_t rows,
+                      std::size_t input_row_bytes, std::span<const std::size_t> output_row_bytes) {
+  if (rows == 0 || input_row_bytes == 0) {
+    return;
+  }
+  if (rows == 1) {
+    const auto copy = [&](int64_t begin, int64_t end) {
+      std::size_t output = 0;
+      std::size_t output_begin = 0;
+      while (output + 1 < outputs.size() &&
+             output_begin + output_row_bytes[output] <= static_cast<std::size_t>(begin)) {
+        output_begin += output_row_bytes[output++];
+      }
+      std::size_t position = static_cast<std::size_t>(begin);
+      while (position < static_cast<std::size_t>(end)) {
+        const std::size_t offset = position - output_begin;
+        const std::size_t count =
+            std::min(output_row_bytes[output] - offset, static_cast<std::size_t>(end) - position);
+        std::memcpy(static_cast<uint8_t *>(outputs[output]) + offset,
+                    static_cast<const uint8_t *>(data) + position, count);
+        position += count;
+        if (position == output_begin + output_row_bytes[output] && output + 1 < outputs.size()) {
+          output_begin += output_row_bytes[output++];
+        }
+      }
+    };
+    constexpr int64_t kParallelBytes = 512 * 1024;
+    constexpr int64_t kBlockBytes = 256 * 1024;
+    if (input_row_bytes <= static_cast<std::size_t>(std::numeric_limits<int64_t>::max())) {
+      ExecuteRanges(static_cast<int64_t>(input_row_bytes),
+                    ExecutionSchedule{kParallelBytes, kBlockBytes, ExecutionThreadCount()},
+                    int64_t{64}, copy);
+    } else {
+      std::size_t offset = 0;
+      for (std::size_t output = 0; output < outputs.size(); ++output) {
+        std::memcpy(outputs[output], static_cast<const uint8_t *>(data) + offset,
+                    output_row_bytes[output]);
+        offset += output_row_bytes[output];
+      }
+    }
+    return;
+  }
+  enum class SplitIsa { kNone, kAvx2_4x2, kAvx2_4x4, kAvx512_4x4 };
+  SplitIsa split_isa = SplitIsa::kNone;
+  const bool split4x2_layout = input_row_bytes == 8 && outputs.size() == 4 &&
+                               std::all_of(output_row_bytes.begin(), output_row_bytes.end(),
+                                           [](std::size_t width) { return width == 2; });
+  const bool split4x4_layout = input_row_bytes == 16 && outputs.size() == 4 &&
+                               std::all_of(output_row_bytes.begin(), output_row_bytes.end(),
+                                           [](std::size_t width) { return width == 4; });
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
+  static const bool use_avx512 = DetectSimdLevel() >= SimdLevel::kAVX512;
+  if (split4x4_layout && use_avx512) {
+    split_isa = SplitIsa::kAvx512_4x4;
+  }
+#endif
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2
+  static const bool use_avx2 = DetectSimdLevel() >= SimdLevel::kAVX2;
+  if (split4x2_layout && use_avx2) {
+    split_isa = SplitIsa::kAvx2_4x2;
+  } else if (split4x4_layout && use_avx2 && split_isa == SplitIsa::kNone) {
+    split_isa = SplitIsa::kAvx2_4x4;
+  }
+#endif
+  const bool fixed_four_outputs =
+      outputs.size() == 4 && (input_row_bytes == 4 || input_row_bytes == 32) &&
+      std::all_of(output_row_bytes.begin(), output_row_bytes.end(),
+                  [&](std::size_t width) { return width == input_row_bytes / 4; });
+  const auto copy = [&](int64_t begin, int64_t end) {
+    const auto *source = static_cast<const uint8_t *>(data);
+    if (fixed_four_outputs) {
+      if (input_row_bytes == 4) {
+        CopyFourFixedOutputs<1>(source, outputs.data(), begin, end);
+        return;
+      }
+      if (input_row_bytes == 32) {
+        CopyFourFixedOutputs<8>(source, outputs.data(), begin, end);
+        return;
+      }
+    }
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2
+    if (split_isa == SplitIsa::kAvx2_4x2) {
+      SplitCopy4x2_AVX2(source, outputs.data(), begin, end);
+      return;
+    }
+#endif
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX512
+    if (split_isa == SplitIsa::kAvx512_4x4) {
+      SplitCopy4x4_AVX512(source, outputs.data(), begin, end);
+      return;
+    }
+#endif
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2
+    if (split_isa == SplitIsa::kAvx2_4x4) {
+      SplitCopy4x4_AVX2(source, outputs.data(), begin, end);
+      return;
+    }
+#endif
+    for (int64_t row = begin; row < end; ++row) {
+      std::size_t offset = 0;
+      for (std::size_t output = 0; output < outputs.size(); ++output) {
+        const std::size_t width = output_row_bytes[output];
+        if (width != 0) {
+          std::memcpy(static_cast<uint8_t *>(outputs[output]) +
+                          static_cast<std::size_t>(row) * width,
+                      source + static_cast<std::size_t>(row) * input_row_bytes + offset, width);
+        }
+        offset += width;
+      }
+    }
+  };
+  constexpr int64_t kParallelBytes = 1024 * 1024;
+  const int64_t parallel_bytes = split_isa == SplitIsa::kAvx2_4x2 ? 192 * 1024 : kParallelBytes;
+  const int64_t block_bytes = split_isa == SplitIsa::kAvx512_4x4 ? 128 * 1024
+                              : split_isa == SplitIsa::kAvx2_4x2 || split_isa == SplitIsa::kAvx2_4x4
+                                  ? 64 * 1024
+                                  : 256 * 1024;
+  if (input_row_bytes > static_cast<std::size_t>(std::numeric_limits<int64_t>::max())) {
+    copy(0, rows);
+    return;
+  }
+  const int64_t parallel_rows =
+      std::max<int64_t>(1, parallel_bytes / static_cast<int64_t>(input_row_bytes));
+  const int64_t block_rows =
+      std::max<int64_t>(1, block_bytes / static_cast<int64_t>(input_row_bytes));
+  const auto *executor = CurrentExecutionExecutor();
+  if (rows < parallel_rows || ExecutionInParallelRegion() || executor == nullptr ||
+      executor->run_blocks == nullptr || ExecutionThreadCount() <= 1) {
+    copy(0, rows);
+    return;
+  }
+  const ExecutionSchedule schedule{parallel_rows, block_rows, ExecutionThreadCount()};
+  if (input_row_bytes < 8 * 1024) {
+    ExecuteRanges(rows, schedule, copy);
+    return;
+  }
+  const int64_t tile_rows =
+      std::max<int64_t>(1, (64 * 1024) / static_cast<int64_t>(input_row_bytes));
+  std::atomic<int64_t> next_row{0};
+  ExecuteRanges(rows, schedule, [&](int64_t, int64_t) {
+    for (int64_t begin = next_row.fetch_add(tile_rows, std::memory_order_relaxed); begin < rows;
+         begin = next_row.fetch_add(tile_rows, std::memory_order_relaxed)) {
+      copy(begin, std::min(begin + tile_rows, rows));
+    }
+  });
+}
+
+} // namespace onnx_light_cpu

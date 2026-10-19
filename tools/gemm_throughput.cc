@@ -17,11 +17,11 @@
 // dtype selects fp32 or fp64 and reports median seconds as well as throughput.
 // Its persistent executor reports the maximum block count used by each plan.
 
-#include "onnx_light_cpu/impl/math/gemm/gemm_common.h"
-#include "onnx_light_cpu/impl/math/gemm/gemm_plan.h"
-#include "onnx_light_cpu/impl/math/half_conversion.h"
-#include "onnx_light_cpu/impl/math/math_kernels.h"
-#include "onnx_light_cpu/impl/simd_level.h"
+#include "onnx_light_cpu_compute/math/gemm/gemm_common.h"
+#include "onnx_light_cpu_compute/math/gemm/gemm_plan.h"
+#include "onnx_light_cpu_compute/math/half_conversion.h"
+#include "onnx_light_cpu_compute/math/math_kernels.h"
+#include "onnx_light_cpu_compute/simd_level.h"
 
 #include <algorithm>
 #include <atomic>

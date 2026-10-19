@@ -3,15 +3,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "onnx_light_cpu/kernels/attention/attention_kernel.h"
+#include "onnx_light_cpu/kernels/execution.h"
 
-#include "onnx_light_cpu/impl/attention/attention_plan.h"
-#include "onnx_light_cpu/impl/checked_arithmetic.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
+#include "onnx_light_cpu_compute/attention/attention_plan.h"
+#include "onnx_light_cpu_compute/checked_arithmetic.h"
 
 #include "onnx_core/runtime/kernels/kernel_dispatch_table.h"
 #include "onnx_core/runtime/kernels/node_helpers.h"
 
-#include "onnx_light_cpu/impl/math/half_conversion.h"
+#include "onnx_light_cpu_compute/math/half_conversion.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -463,6 +464,7 @@ Tensor AttentionKernel::operator()(const NodeProto &node, const Tensor &q, const
                                    const Tensor &v, const Tensor *mask, RuntimeContext *rt,
                                    const Tensor *past_k, const Tensor *past_v,
                                    const Tensor *nonpad_kv_seqlen, const Tensor *head_sink) const {
+  const RuntimeExecutionScope execution_scope;
   const AttentionDescriptor descriptor = BuildDescriptor(node);
   Tensor qk_output, present_key, present_value;
   return Compute(q, k, v, mask, past_k, past_v, nonpad_kv_seqlen, descriptor, rt, &qk_output,
@@ -470,6 +472,7 @@ Tensor AttentionKernel::operator()(const NodeProto &node, const Tensor &q, const
 }
 
 void AttentionKernel::Run(RuntimeContext &rt) {
+  const RuntimeExecutionScope execution_scope;
   rt.RecordKernelUsage(kName);
   const NodeProto &node = *node_;
   const AttentionDescriptor descriptor = BuildDescriptor(node);

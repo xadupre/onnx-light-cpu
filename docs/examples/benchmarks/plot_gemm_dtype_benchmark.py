@@ -180,7 +180,7 @@ def measure(func, repeat, warmup, max_duration):
 # -----------------------------------------------
 #
 # ``kGemmTileM == 64``, ``kGemmTileN == 256`` and ``kGemmTileK == 256`` (see
-# ``onnx_light_cpu/impl/math/gemm_kernel.cc``); every shape below is picked to
+# ``onnx_light_cpu_compute/src/math/gemm_kernel.cc``); every shape below is picked to
 # sit clearly on one side of those thresholds.
 
 SHAPES = (

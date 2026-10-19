@@ -28,10 +28,10 @@
 #include "onnx_light_cpu/backend_test/backend_correctness_runner.h"
 #include "onnx_light_cpu/backend_test/cases/math/benchmark_helpers.h"
 #include "onnx_light_cpu/backend_test/collect_test_cases.h"
-#include "onnx_light_cpu/impl/math/binary/binary_manifest.h"
 #include "onnx_light_cpu/kernels/math/abs_kernel.h"
 #include "onnx_light_cpu/kernels/math/gemm_kernel.h"
 #include "onnx_light_cpu/kernels/register_kernels.h"
+#include "onnx_light_cpu_compute/math/binary/binary_manifest.h"
 
 #include "onnx_core/backend_test/test_case.h"
 #include "onnx_core/runtime/kernels/kernel_context.h"

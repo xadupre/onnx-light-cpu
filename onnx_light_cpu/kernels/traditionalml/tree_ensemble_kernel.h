@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "onnx_light_cpu/impl/traditionalml/tree_ensemble.h"
+#include "onnx_light_cpu_compute/traditionalml/tree_ensemble.h"
 
 #include "onnx_core/runtime/kernels/kernel_context.h"
 #include "onnx_core/runtime/runtime_context.h"

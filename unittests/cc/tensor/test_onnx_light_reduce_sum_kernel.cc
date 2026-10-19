@@ -7,8 +7,8 @@
 #include "onnx_core/runtime/kernels/run_nodes.h"
 #include "onnx_core/runtime/memory/simple_tensor.h"
 #include "onnx_core/runtime/runtime_context.h"
-#include "onnx_light_cpu/impl/execution.h"
 #include "onnx_light_cpu/kernels/math/reduce_sum_kernel.h"
+#include "onnx_light_cpu_compute/execution.h"
 #include "onnx_proto/onnx_helper.h"
 
 #include <gtest/gtest.h>

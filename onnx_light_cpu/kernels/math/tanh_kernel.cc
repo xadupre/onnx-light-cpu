@@ -3,10 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "onnx_light_cpu/kernels/math/tanh_kernel.h"
+#include "onnx_light_cpu/kernels/execution.h"
 
-#include "onnx_light_cpu/impl/math/math_kernels.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
 #include "onnx_light_cpu/kernels/tensor_buffer_validation.h"
+#include "onnx_light_cpu_compute/math/math_kernels.h"
 
 #include "onnx_core/runtime/kernels/kernel_dispatch_table.h"
 #include "onnx_core/runtime/kernels/node_helpers.h"
@@ -27,6 +28,7 @@ using rt_ns::RuntimeContext;
 using rt_ns::Tensor;
 
 Tensor TanhKernel::operator()(const Tensor &x, RuntimeContext *rt) const {
+  const RuntimeExecutionScope execution_scope;
   const std::size_t size_bytes = tensor_validation::ValidateBufferCapacity(x, kName, "input");
   Tensor output = rt != nullptr
                       ? rt->MakeOutputTensor(0, x.data_type, x.shape, size_bytes)
@@ -36,6 +38,7 @@ Tensor TanhKernel::operator()(const Tensor &x, RuntimeContext *rt) const {
 }
 
 void TanhKernel::operator()(const Tensor &x, Tensor &output) const {
+  const RuntimeExecutionScope execution_scope;
   if (output.data_type != x.data_type || output.shape != x.shape) {
     throw std::invalid_argument(
         "onnx_light_cpu::Tanh: output dtype and shape must match the input.");
@@ -62,6 +65,7 @@ void TanhKernel::operator()(const Tensor &x, Tensor &output) const {
 }
 
 void TanhKernel::Run(RuntimeContext &rt) {
+  const RuntimeExecutionScope execution_scope;
   rt.RecordKernelUsage(kName);
   const NodeProto &node = *node_;
   rt_ns::RequireInputCount(node, 1);

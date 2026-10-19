@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "onnx_light_cpu/impl/math/gemm/vnni/integer_gemm_vnni.h"
-#include "onnx_light_cpu/impl/simd_level.h"
+#include "onnx_light_cpu_compute/math/gemm/vnni/integer_gemm_vnni.h"
+#include "onnx_light_cpu_compute/simd_level.h"
 
 #include <algorithm>
 #include <array>

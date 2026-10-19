@@ -7,7 +7,7 @@
 #include "onnx_core/runtime/kernels/kernel_context.h"
 #include "onnx_core/runtime/memory/simple_tensor.h"
 #include "onnx_core/runtime/runtime_context.h"
-#include "onnx_light_cpu/impl/com_microsoft/qmoe.h"
+#include "onnx_light_cpu_compute/com_microsoft/qmoe.h"
 
 namespace onnx_light_cpu {
 

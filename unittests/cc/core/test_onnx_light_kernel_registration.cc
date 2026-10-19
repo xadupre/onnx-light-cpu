@@ -4,8 +4,8 @@
 
 #include "onnx_light_cpu/kernels/kernel_registration.h"
 
-#include "onnx_light_cpu/impl/math/binary/binary_manifest.h"
 #include "onnx_light_cpu/kernels/register_kernels.h"
+#include "onnx_light_cpu_compute/math/binary/binary_manifest.h"
 
 #include "onnx_core/runtime/kernels/kernel_dispatch_table.h"
 

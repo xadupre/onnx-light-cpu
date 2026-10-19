@@ -3,9 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "onnx_light_cpu/backend_test/cases/traditionalml/tree_ensemble_corpus.h"
-#include "onnx_light_cpu/impl/traditionalml/tree_ensemble.h"
+#include "onnx_light_cpu_compute/traditionalml/tree_ensemble.h"
 
-#include "onnx_light_cpu/impl/execution.h"
+#include "onnx_light_cpu_compute/execution.h"
 
 #include <gtest/gtest.h>
 

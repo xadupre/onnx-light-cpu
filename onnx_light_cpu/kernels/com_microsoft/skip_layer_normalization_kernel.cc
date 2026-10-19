@@ -3,13 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "onnx_light_cpu/kernels/com_microsoft/skip_layer_normalization_kernel.h"
+#include "onnx_light_cpu/kernels/execution.h"
 
-#include "onnx_light_cpu/impl/execution.h"
-#include "onnx_light_cpu/impl/math/normalization_kernel.h"
 #include "onnx_light_cpu/kernels/com_microsoft/skip_simplified_layer_normalization_helpers.h"
 #include "onnx_light_cpu/kernels/com_microsoft/skip_simplified_layer_normalization_kernel.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
 #include "onnx_light_cpu/schemas/com_microsoft/op_schema.h"
+#include "onnx_light_cpu_compute/execution.h"
+#include "onnx_light_cpu_compute/math/normalization_kernel.h"
 
 #include "onnx_core/runtime/kernels/node_helpers.h"
 
@@ -179,6 +180,7 @@ SkipLayerNormalizationResult SkipLayerNormalizationKernel::operator()(
     const runtime::Tensor &input, const runtime::Tensor &skip, const runtime::Tensor &gamma,
     const runtime::Tensor *beta, const runtime::Tensor *bias, float epsilon, bool output_sum,
     bool output_mean, bool output_inv_std_var, runtime::RuntimeContext *rt) const {
+  const RuntimeExecutionScope execution_scope;
   if (input.data_type == runtime::DataType::FLOAT) {
     return NormalizeFloat32(input, skip, gamma, beta, bias, epsilon, output_sum, output_mean,
                             output_inv_std_var, rt);
@@ -192,6 +194,7 @@ SkipLayerNormalizationResult SkipLayerNormalizationKernel::operator()(
 }
 
 void SkipLayerNormalizationKernel::Run(runtime::RuntimeContext &rt) {
+  const RuntimeExecutionScope execution_scope;
   rt.RecordKernelUsage(kName);
   const auto &node = *node_;
   if (node.input_size() < 3 || node.input_size() > 5 || node.input(0).empty() ||

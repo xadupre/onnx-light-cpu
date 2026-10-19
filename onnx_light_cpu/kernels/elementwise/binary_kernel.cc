@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "onnx_light_cpu/kernels/elementwise/binary_kernel.h"
+#include "onnx_light_cpu/kernels/execution.h"
 
 #include "onnx_light_cpu/kernels/kernel_registration.h"
 #include "onnx_light_cpu/kernels/tensor_buffer_validation.h"
@@ -542,6 +543,7 @@ void BinaryElementwiseKernel::Configure(const rt_ns::KernelTuningParameters &par
 rt_ns::Tensor BinaryElementwiseKernel::operator()(const rt_ns::Tensor &left,
                                                   const rt_ns::Tensor &right,
                                                   rt_ns::RuntimeContext *rt) const {
+  const RuntimeExecutionScope execution_scope;
   tensor_validation::ValidateBufferCapacity(left, KernelName(descriptor_.op_type()), "left input");
   tensor_validation::ValidateBufferCapacity(right, KernelName(descriptor_.op_type()),
                                             "right input");
@@ -569,6 +571,7 @@ rt_ns::Tensor BinaryElementwiseKernel::operator()(const rt_ns::Tensor &left,
 
 void BinaryElementwiseKernel::operator()(const rt_ns::Tensor &left, const rt_ns::Tensor &right,
                                          rt_ns::Tensor &output) const {
+  const RuntimeExecutionScope execution_scope;
   const std::string kernel_name = KernelName(descriptor_.op_type());
   tensor_validation::ValidateBufferCapacity(left, kernel_name, "left input");
   tensor_validation::ValidateBufferCapacity(right, kernel_name, "right input");
@@ -596,6 +599,7 @@ void BinaryElementwiseKernel::operator()(const rt_ns::Tensor &left, const rt_ns:
 }
 
 void BinaryElementwiseKernel::Run(rt_ns::RuntimeContext &rt) {
+  const RuntimeExecutionScope execution_scope;
   const auto &node = *node_;
   if (rt.kernel_usage_enabled()) {
     rt.RecordKernelUsage(KernelName(descriptor_.op_type()));

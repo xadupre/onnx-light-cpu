@@ -14,8 +14,8 @@
 #include "onnx_core/runtime/runtime_context.h"
 #include "onnx_core/runtime/tuning/kernel_tuning.h"
 #include "onnx_core/symbolic/sym_tensor.h"
-#include "onnx_light_cpu/impl/execution.h"
-#include "onnx_light_cpu/impl/math/half_conversion.h"
+#include "onnx_light_cpu_compute/execution.h"
+#include "onnx_light_cpu_compute/math/half_conversion.h"
 
 #include <gtest/gtest.h>
 

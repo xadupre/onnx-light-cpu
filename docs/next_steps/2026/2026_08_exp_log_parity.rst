@@ -80,7 +80,7 @@ Confirmed technical gaps
 AVX2 without FMA
 ~~~~~~~~~~~~~~~~
 
-``onnx_light_cpu/impl/math/exp_log_kernel.cc`` is compiled with the baseline
+``onnx_light_cpu_compute/src/math/exp_log_kernel.cc`` is compiled with the baseline
 ``-mavx2`` option. Its AVX2 Horner chains emit separate multiply and add
 instructions. In contrast, ONNX Runtime dispatches float32 ``Exp`` to an MLAS
 FMA3 kernel on capable x86 processors. That kernel combines range reduction

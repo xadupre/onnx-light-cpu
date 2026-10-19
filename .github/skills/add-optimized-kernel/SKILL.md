@@ -21,7 +21,7 @@ correctness tests, and reproducible benchmarks in one change.
 
 ## 2. Implement the portable path first
 
-1. Keep architecture-neutral orchestration in the normal `impl/` translation unit. Validate
+1. Keep architecture-neutral orchestration in `onnx_light_cpu_compute/src/`. Validate
    inputs once, return cleanly for empty work, use checked size arithmetic, and avoid temporary
    full-tensor materialization.
 2. Make the scalar kernel operate on an explicit contiguous range or independent output unit.
@@ -33,8 +33,11 @@ correctness tests, and reproducible benchmarks in one change.
 ## 3. Parallelize through the runtime executor
 
 1. Partition independent output rows, tiles, batches, heads, or contiguous element ranges with
-   `ExecuteRanges` or `ExecuteCostedRanges` from `onnx_light_cpu/impl/execution.h`. Never create a
-   private thread pool or hard-code a thread count.
+   `ExecuteRanges` or `ExecuteCostedRanges` from
+   `onnx_light_cpu_compute/include/onnx_light_cpu_compute/execution.h`. Never create a
+   private thread pool or hard-code a thread count. ONNX adapters install
+   `RuntimeExecutionScope` from `onnx_light_cpu/kernels/execution.h`; computation
+   sources must not include ONNX or Python headers.
 2. Use `ExecutionSchedule` when shape thresholds and participant limits are known. Use
    `ExecutionWorkCost` when bytes read/written and compute cycles can describe the work. Let the
    executor select the final participant count.

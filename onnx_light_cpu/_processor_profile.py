@@ -5,9 +5,10 @@
 """Versioned processor performance profile (Processor Profile PR04).
 
 Exposes :func:`benchmark_processor_performance`, which measures effective
-memory bandwidth/latency (see ``onnx_light_cpu/impl/memory_traffic_profile.h``)
+memory bandwidth/latency (see
+``onnx_light_cpu_compute/memory_traffic_profile.h``)
 and register-resident arithmetic throughput (see
-``onnx_light_cpu/impl/compute_arithmetic_profile.h``) and returns one
+``onnx_light_cpu_compute/compute_arithmetic_profile.h``) and returns one
 immutable, versioned :class:`ProcessorPerformanceProfile`.
 
 This module never runs a benchmark on import: the expensive measurement only

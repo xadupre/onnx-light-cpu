@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "onnx_light_cpu/impl/attention/linear_attention.h"
+#include "onnx_light_cpu_compute/attention/linear_attention.h"
 
 #include "onnx_core/runtime/kernels/kernel_context.h"
 #include "onnx_core/runtime/memory/simple_tensor.h"

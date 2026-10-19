@@ -22,7 +22,10 @@ applicable surface below in one change.
 5. Implement the portable scalar kernel first. Use `ExecuteRanges`, checked size
    arithmetic, repository half conversions, precise errors, and no ISA-specific code
    until scalar parity and benchmarks exist. Put low-level code in
-   `impl/<normalized_domain>/` and runtime kernels in `kernels/<normalized_domain>/`.
+   `onnx_light_cpu_compute/src/<normalized_domain>/`, public headers in
+   `onnx_light_cpu_compute/include/onnx_light_cpu_compute/<normalized_domain>/`,
+   and runtime kernels in `onnx_light_cpu/kernels/<normalized_domain>/`.
+   Install `RuntimeExecutionScope` at runtime kernel entry points.
 6. Add tuning keys, validated defaults, calibration candidates when useful, and an ABI
    bump whenever parameter meaning changes.
 7. Register the kernel with its custom domain, exact opset bounds, device, and complete

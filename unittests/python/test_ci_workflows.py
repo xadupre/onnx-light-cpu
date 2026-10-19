@@ -252,7 +252,7 @@ def test_pr_benchmark_infers_filters_and_updates_comment():
         "  arm_gemm_native:", 1
     )[0]
     assert "runner.os == 'Linux'" in source_job
-    assert "onnx_light_cpu/(backend_test/cases|impl|kernels)/" in source_job
+    assert "onnx_light_cpu/(backend_test/cases|kernels)/|onnx_light_cpu_compute/" in source_job
     assert '--from-pr "${{ github.event.pull_request.html_url }}"' in source_job
     assert "actions/upload-artifact@v7" in source_job
     assert "needs: setup_onnx_light_source" in report_job

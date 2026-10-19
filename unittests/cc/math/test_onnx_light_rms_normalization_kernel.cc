@@ -4,8 +4,8 @@
 
 #include "onnx_light_cpu/kernels/math/rms_normalization_kernel.h"
 
-#include "onnx_light_cpu/impl/math/half_conversion.h"
-#include "onnx_light_cpu/impl/math/rms_normalization.h"
+#include "onnx_light_cpu_compute/math/half_conversion.h"
+#include "onnx_light_cpu_compute/math/rms_normalization.h"
 
 #include "onnx_core/runtime/kernels/cast_helper.h"
 #include "onnx_core/runtime/kernels/kernel_context.h"

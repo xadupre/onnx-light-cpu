@@ -3,10 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "onnx_light_cpu/kernels/com_microsoft/naive_cdist_kernel.h"
+#include "onnx_light_cpu/kernels/execution.h"
 
-#include "onnx_light_cpu/impl/checked_arithmetic.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
 #include "onnx_light_cpu/schemas/com_microsoft/op_schema.h"
+#include "onnx_light_cpu_compute/checked_arithmetic.h"
 
 #include "onnx_core/runtime/kernels/kernel_dispatch_table.h"
 #include "onnx_core/runtime/kernels/node_helpers.h"
@@ -81,6 +82,7 @@ NaiveCDistKernel::NaiveCDistKernel(const NodeProto &node, const rt_ns::KernelCon
 
 Tensor NaiveCDistKernel::operator()(const Tensor &a, const Tensor &b, const std::string &metric,
                                     RuntimeContext *rt) const {
+  const RuntimeExecutionScope execution_scope;
   if (a.shape.size() != 2 || b.shape.size() != 2) {
     throw std::invalid_argument("onnx_light_cpu::NaiveCDist: A and B must be rank-2 tensors.");
   }
@@ -97,6 +99,7 @@ Tensor NaiveCDistKernel::operator()(const Tensor &a, const Tensor &b, const std:
 
 void NaiveCDistKernel::operator()(const Tensor &a, const Tensor &b, const std::string &metric,
                                   Tensor &output) const {
+  const RuntimeExecutionScope execution_scope;
   ValidateTensors(a, b, output);
   const bool euclidean = IsEuclidean(metric);
   const std::size_t m = static_cast<std::size_t>(a.shape[0]);
@@ -115,6 +118,7 @@ void NaiveCDistKernel::operator()(const Tensor &a, const Tensor &b, const std::s
 }
 
 void NaiveCDistKernel::Run(RuntimeContext &rt) {
+  const RuntimeExecutionScope execution_scope;
   rt.RecordKernelUsage(kName);
   const NodeProto &node = *node_;
   rt_ns::RequireInputCount(node, 2);

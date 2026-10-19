@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "onnx_light_cpu/impl/math/binary/binary_broadcast_plan.h"
-#include "onnx_light_cpu/impl/math/binary/binary_integer_arithmetic.h"
+#include "onnx_light_cpu_compute/math/binary/binary_broadcast_plan.h"
+#include "onnx_light_cpu_compute/math/binary/binary_integer_arithmetic.h"
 
 #include <gtest/gtest.h>
 

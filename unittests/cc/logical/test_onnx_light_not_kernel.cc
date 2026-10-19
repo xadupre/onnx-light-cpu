@@ -4,7 +4,7 @@
 
 #include "onnx_light_cpu/kernels/logical/not_kernel.h"
 
-#include "onnx_light_cpu/impl/execution.h"
+#include "onnx_light_cpu_compute/execution.h"
 
 #include "onnx_core/runtime/kernels/kernel_context.h"
 #include "onnx_core/runtime/memory/simple_tensor.h"

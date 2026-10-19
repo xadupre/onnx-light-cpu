@@ -3,9 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "onnx_light_cpu/kernels/tensor/nonzero_kernel.h"
+#include "onnx_light_cpu/kernels/execution.h"
 
-#include "onnx_light_cpu/impl/tensor/nonzero_kernel.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
+#include "onnx_light_cpu_compute/tensor/nonzero_kernel.h"
 
 #include "onnx_core/runtime/kernels/node_helpers.h"
 #include "onnx_extensions/kernels/kernels/tensor/include_tensor_kernels.h"
@@ -39,6 +40,7 @@ NonZeroKernel::NonZeroKernel(const ONNX_LIGHT_NAMESPACE::NodeProto &node,
 }
 
 Tensor NonZeroKernel::operator()(const Tensor &x, rt_ns::RuntimeContext *rt) const {
+  const RuntimeExecutionScope execution_scope;
   if (x.data_type != DataType::BOOL) {
     const ONNX_LIGHT_NAMESPACE::onnx_kernels::kernel::NonZero reference{ctx_};
     return reference(x, rt);
@@ -73,6 +75,7 @@ Tensor NonZeroKernel::operator()(const Tensor &x, rt_ns::RuntimeContext *rt) con
 }
 
 void NonZeroKernel::Run(rt_ns::RuntimeContext &rt) {
+  const RuntimeExecutionScope execution_scope;
   rt.RecordKernelUsage(kName);
   const auto &node = *node_;
   rt_ns::RequireInputCount(node, 1);

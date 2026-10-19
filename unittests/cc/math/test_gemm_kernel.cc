@@ -2,24 +2,24 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "onnx_light_cpu/impl/execution.h"
-#include "onnx_light_cpu/impl/math/gemm/amx/gemm_amx_tile.h"
-#include "onnx_light_cpu/impl/math/gemm/float8/float8_conversion.h"
-#include "onnx_light_cpu/impl/math/gemm/gemm_bf16_dispatch.h"
-#include "onnx_light_cpu/impl/math/gemm/gemm_common.h"
-#include "onnx_light_cpu/impl/math/gemm/gemm_plan.h"
-#include "onnx_light_cpu/impl/math/gemm/vnni/integer_gemm_vnni.h"
-#include "onnx_light_cpu/impl/math/half_conversion.h"
-#include "onnx_light_cpu/impl/math/math_kernels.h"
-#include "onnx_light_cpu/impl/simd_level.h"
+#include "onnx_light_cpu_compute/execution.h"
+#include "onnx_light_cpu_compute/math/gemm/amx/gemm_amx_tile.h"
+#include "onnx_light_cpu_compute/math/gemm/float8/float8_conversion.h"
+#include "onnx_light_cpu_compute/math/gemm/gemm_bf16_dispatch.h"
+#include "onnx_light_cpu_compute/math/gemm/gemm_common.h"
+#include "onnx_light_cpu_compute/math/gemm/gemm_plan.h"
+#include "onnx_light_cpu_compute/math/gemm/vnni/integer_gemm_vnni.h"
+#include "onnx_light_cpu_compute/math/half_conversion.h"
+#include "onnx_light_cpu_compute/math/math_kernels.h"
+#include "onnx_light_cpu_compute/simd_level.h"
 #include "unittests/cc/heap_allocation_tracker.h"
 #include "unittests/cc/scoped_x86_gradual_underflow.h"
 
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
-#include "onnx_light_cpu/impl/math/gemm/avx2/gemm_kernel_avx2_fma.h"
+#include "onnx_light_cpu_compute/math/gemm/avx2/gemm_kernel_avx2_fma.h"
 #endif
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX512
-#include "onnx_light_cpu/impl/math/gemm/avx512/gemm_kernel_avx512.h"
+#include "onnx_light_cpu_compute/math/gemm/avx512/gemm_kernel_avx512.h"
 #endif
 
 #include <gtest/gtest.h>

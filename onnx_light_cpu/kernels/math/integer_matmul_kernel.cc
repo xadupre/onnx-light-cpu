@@ -3,14 +3,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "onnx_light_cpu/kernels/math/integer_matmul_kernel.h"
+#include "onnx_light_cpu/kernels/execution.h"
 
-#include "onnx_light_cpu/impl/checked_arithmetic.h"
-#include "onnx_light_cpu/impl/execution.h"
-#include "onnx_light_cpu/impl/math/gemm/vnni/integer_gemm_vnni.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
+#include "onnx_light_cpu_compute/checked_arithmetic.h"
+#include "onnx_light_cpu_compute/execution.h"
+#include "onnx_light_cpu_compute/math/gemm/vnni/integer_gemm_vnni.h"
 
 #ifdef ONNX_LIGHT_CPU_HAVE_AVX2_INTEGER
-#include "onnx_light_cpu/impl/simd_level.h"
+#include "onnx_light_cpu_compute/simd_level.h"
 #endif
 
 #include "onnx_core/runtime/kernels/cast_helper.h"
@@ -328,6 +329,7 @@ void RequantizeInt32Buffer(const int32_t *src, uint8_t *dst, int64_t count, floa
 
 Tensor MatMulIntegerKernel::operator()(const Tensor &a, const Tensor &b, const Tensor *a_zero_point,
                                        const Tensor *b_zero_point, RuntimeContext *rt) const {
+  const RuntimeExecutionScope execution_scope;
   if (!IsInt8OrUint8(a.data_type) || !IsInt8OrUint8(b.data_type)) {
     throw std::invalid_argument("MatMulInteger inputs must have INT8 or UINT8 dtype.");
   }
@@ -399,6 +401,7 @@ Tensor MatMulIntegerKernel::operator()(const Tensor &a, const Tensor &b, const T
 }
 
 void MatMulIntegerKernel::Run(RuntimeContext &rt) {
+  const RuntimeExecutionScope execution_scope;
   rt.RecordKernelUsage(kName);
   const NodeProto &node = *node_;
   rt_ns::RequireMinInputCount(node, 2);
@@ -418,6 +421,7 @@ Tensor QLinearMatMulKernel::operator()(const Tensor &a, const Tensor &a_scale,
                                        const Tensor &b_scale, const Tensor &b_zero_point,
                                        const Tensor &y_scale, const Tensor &y_zero_point,
                                        RuntimeContext *rt) const {
+  const RuntimeExecutionScope execution_scope;
   if (!IsInt8OrUint8(a.data_type) || !IsInt8OrUint8(b.data_type) ||
       !IsInt8OrUint8(y_zero_point.data_type)) {
     throw std::invalid_argument(
@@ -501,6 +505,7 @@ Tensor QLinearMatMulKernel::operator()(const Tensor &a, const Tensor &a_scale,
 }
 
 void QLinearMatMulKernel::Run(RuntimeContext &rt) {
+  const RuntimeExecutionScope execution_scope;
   rt.RecordKernelUsage(kName);
   const NodeProto &node = *node_;
   rt_ns::RequireInputCount(node, 8);

@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "onnx_light_cpu/impl/tensor/cast_kernel.h"
+#include "onnx_light_cpu_compute/tensor/cast_kernel.h"
 
-#include "onnx_light_cpu/impl/execution.h"
+#include "onnx_light_cpu_compute/execution.h"
 
 #include <gtest/gtest.h>
 

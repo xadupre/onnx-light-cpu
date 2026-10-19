@@ -2,10 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "onnx_light_cpu/impl/cpu_cache_topology.h"
-#include "onnx_light_cpu/impl/math/math_kernels.h"
+#include "onnx_light_cpu_compute/cpu_cache_topology.h"
+#include "onnx_light_cpu_compute/math/math_kernels.h"
 #ifdef ONNX_LIGHT_CPU_HAVE_SSSE3
-#include "onnx_light_cpu/impl/math/ssse3/abs_kernel_ssse3.h"
+#include "onnx_light_cpu_compute/math/ssse3/abs_kernel_ssse3.h"
 #endif
 
 #include <gtest/gtest.h>

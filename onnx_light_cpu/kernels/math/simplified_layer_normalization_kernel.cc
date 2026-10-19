@@ -3,12 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "onnx_light_cpu/kernels/math/simplified_layer_normalization_kernel.h"
+#include "onnx_light_cpu/kernels/execution.h"
 
-#include "onnx_light_cpu/impl/execution.h"
-#include "onnx_light_cpu/impl/math/normalization_kernel.h"
-#include "onnx_light_cpu/impl/math/rms_normalization.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
 #include "onnx_light_cpu/kernels/math/normalization_helpers.h"
+#include "onnx_light_cpu_compute/execution.h"
+#include "onnx_light_cpu_compute/math/normalization_kernel.h"
+#include "onnx_light_cpu_compute/math/rms_normalization.h"
 
 #include "onnx_core/runtime/kernels/node_helpers.h"
 
@@ -164,6 +165,7 @@ void NormalizeRows(const Tensor &x, const Tensor &scale, SimplifiedLayerNormaliz
 SimplifiedLayerNormalizationResult SimplifiedLayerNormalizationKernel::operator()(
     const Tensor &x, const Tensor &scale, std::int64_t axis, float epsilon, std::int64_t stash_type,
     bool output_inv_std_var, RuntimeContext *rt) const {
+  const RuntimeExecutionScope execution_scope;
   ValidateInput(x, "X");
   ValidateInput(scale, "scale");
   if (stash_type != 1 && stash_type != 11) {
@@ -247,6 +249,7 @@ SimplifiedLayerNormalizationResult SimplifiedLayerNormalizationKernel::operator(
 }
 
 void SimplifiedLayerNormalizationKernel::Run(RuntimeContext &rt) {
+  const RuntimeExecutionScope execution_scope;
   rt.RecordKernelUsage(kName);
   const NodeProto &node = *node_;
   rt_ns::RequireInputCount(node, 2);

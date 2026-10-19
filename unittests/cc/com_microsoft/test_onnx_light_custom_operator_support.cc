@@ -3,13 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "onnx_light_cpu/gradient/com_microsoft/gradients.h"
-#include "onnx_light_cpu/impl/com_microsoft/moe.h"
-#include "onnx_light_cpu/impl/math/half_conversion.h"
 #include "onnx_light_cpu/kernels/com_microsoft/moe_kernel.h"
 #include "onnx_light_cpu/kernels/register_kernels.h"
 #include "onnx_light_cpu/patterns/com_microsoft/patterns.h"
 #include "onnx_light_cpu/schemas/com_microsoft/op_schema.h"
 #include "onnx_light_cpu/shapes/com_microsoft/shape_inference.h"
+#include "onnx_light_cpu_compute/com_microsoft/moe.h"
+#include "onnx_light_cpu_compute/math/half_conversion.h"
 
 #include "onnx_core/builder/graph_builder.h"
 #include "onnx_core/builder/graph_graph.h"

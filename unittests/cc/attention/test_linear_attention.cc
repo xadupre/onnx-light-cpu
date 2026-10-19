@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "onnx_light_cpu/impl/attention/linear_attention.h"
+#include "onnx_light_cpu_compute/attention/linear_attention.h"
 
 #include <gtest/gtest.h>
 

@@ -3,8 +3,8 @@ Gemm Kernel Design
 
 This page documents the internal design of the ``Gemm`` (general matrix
 multiplication) CPU kernel implemented in
-``onnx_light_cpu/impl/math/gemm_kernel.cc`` and
-``onnx_light_cpu/impl/math/gemm/avx512/gemm_kernel_avx512.cc``: how it picks a
+``onnx_light_cpu_compute/src/math/gemm_kernel.cc`` and
+``onnx_light_cpu_compute/src/math/gemm/avx512/gemm_kernel_avx512.cc``: how it picks a
 micro-kernel at runtime, and which further optimizations were considered but
 not (yet) implemented, with their expected gain and risk. Delivery order,
 performance gates, and remaining work are tracked in the
@@ -220,7 +220,7 @@ partition work with their existing scheduler without hidden workers.
 Prepared execution interfaces
 -----------------------------
 
-``onnx_light_cpu/impl/math/gemm/gemm_plan.h`` defines reusable typed plans for
+``onnx_light_cpu_compute/include/onnx_light_cpu_compute/math/gemm/gemm_plan.h`` defines reusable typed plans for
 ``float32`` and ``float64``. ``GemmPlan`` records dimensions, transpose and
 scaling attributes, current cache/register blocking, useful parallelism, and
 the typed kernel entry point. It can also own a constant B matrix so its
@@ -288,7 +288,7 @@ Every vectorized micro-kernel (AVX-512/AVX/SSE2) is x86-specific: it is
 written directly against ``<immintrin.h>`` intrinsics and gated behind
 ``#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) ||
 defined(_M_IX86)`` (``ONNX_LIGHT_CPU_X86``). ``DetectSimdLevel()``
-(``onnx_light_cpu/impl/simd_level.cc``) is likewise x86-only: it uses CPUID
+(``onnx_light_cpu_compute/src/simd_level.cc``) is likewise x86-only: it uses CPUID
 and XGETBV. On any x86_64 platform (Intel or AMD, Linux, Windows, or macOS)
 this gate evaluates true and the kernel gets full SIMD acceleration.
 
@@ -520,7 +520,7 @@ gains.
        ``GemmFloat32`` for the reduction, and rounds ``Y`` back down (see
        ``onnx_light_cpu/kernels/math/gemm_kernel.cc``) -- mirroring the
        approach ``Abs``/``Exp``/``Log`` already use for these types (see
-       ``onnx_light_cpu/impl/math/exp_log_kernel.cc``). This is correct and
+       ``onnx_light_cpu_compute/src/math/exp_log_kernel.cc``). This is correct and
        reuses the full float32 SIMD path for the matmul itself, but the
        widen/round-trip is pure per-element overhead with no vectorization of
        its own (see ``plot_gemm_dtype_benchmark.py`` in the benchmark gallery

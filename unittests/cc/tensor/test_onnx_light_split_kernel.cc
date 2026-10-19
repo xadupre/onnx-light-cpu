@@ -4,9 +4,9 @@
 
 #include "onnx_light_cpu/kernels/tensor/split_kernel.h"
 
-#include "onnx_light_cpu/impl/execution.h"
-#include "onnx_light_cpu/impl/simd_level.h"
-#include "onnx_light_cpu/impl/tensor/split_kernel.h"
+#include "onnx_light_cpu_compute/execution.h"
+#include "onnx_light_cpu_compute/simd_level.h"
+#include "onnx_light_cpu_compute/tensor/split_kernel.h"
 
 #include "onnx_extensions/kernels/kernels/tensor/include_tensor_kernels.h"
 

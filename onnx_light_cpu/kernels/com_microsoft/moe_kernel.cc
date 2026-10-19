@@ -3,10 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "onnx_light_cpu/kernels/com_microsoft/moe_kernel.h"
+#include "onnx_light_cpu/kernels/execution.h"
 
-#include "onnx_light_cpu/impl/checked_arithmetic.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
 #include "onnx_light_cpu/schemas/com_microsoft/op_schema.h"
+#include "onnx_light_cpu_compute/checked_arithmetic.h"
 
 #include "onnx_core/runtime/kernels/kernel_dispatch_table.h"
 #include "onnx_core/runtime/kernels/node_helpers.h"
@@ -77,6 +78,7 @@ MoEKernel::MoEKernel(const ONNX_LIGHT_NAMESPACE::NodeProto &node, const rt_ns::K
 Tensor MoEKernel::operator()(const Tensor &input, const Tensor &router, const Tensor &fc1,
                              const Tensor *bias1, const Tensor &fc2, const Tensor *bias2,
                              rt_ns::RuntimeContext *rt) const {
+  const RuntimeExecutionScope execution_scope;
   const auto dtype = static_cast<DataType>(input.data_type);
   if (dtype != DataType::FLOAT && dtype != DataType::FLOAT16 && dtype != DataType::BFLOAT16) {
     throw std::invalid_argument(
@@ -154,6 +156,7 @@ Tensor MoEKernel::operator()(const Tensor &input, const Tensor &router, const Te
 }
 
 void MoEKernel::Run(rt_ns::RuntimeContext &rt) {
+  const RuntimeExecutionScope execution_scope;
   rt.RecordKernelUsage(kName);
   const auto &node = *node_;
   if (node.input_size() < 5 || node.input_size() > 8) {

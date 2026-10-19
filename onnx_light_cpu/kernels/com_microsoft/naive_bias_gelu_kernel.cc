@@ -3,11 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "onnx_light_cpu/kernels/com_microsoft/naive_bias_gelu_kernel.h"
+#include "onnx_light_cpu/kernels/execution.h"
 
-#include "onnx_light_cpu/impl/checked_arithmetic.h"
-#include "onnx_light_cpu/impl/math/half_conversion.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
 #include "onnx_light_cpu/schemas/com_microsoft/op_schema.h"
+#include "onnx_light_cpu_compute/checked_arithmetic.h"
+#include "onnx_light_cpu_compute/math/half_conversion.h"
 
 #include "onnx_core/runtime/kernels/kernel_dispatch_table.h"
 #include "onnx_core/runtime/kernels/node_helpers.h"
@@ -87,6 +88,7 @@ NaiveBiasGeluKernel::NaiveBiasGeluKernel(const NodeProto &node, const rt_ns::Ker
 }
 
 Tensor NaiveBiasGeluKernel::operator()(const Tensor &a, const Tensor &b, RuntimeContext *rt) const {
+  const RuntimeExecutionScope execution_scope;
   const std::size_t bytes = CheckedByteSize(
       static_cast<std::size_t>(a.shape.product(0, a.shape.size(), "NaiveBiasGelu A")),
       a.element_size(), "NaiveBiasGelu", "output byte size");
@@ -97,6 +99,7 @@ Tensor NaiveBiasGeluKernel::operator()(const Tensor &a, const Tensor &b, Runtime
 }
 
 void NaiveBiasGeluKernel::operator()(const Tensor &a, const Tensor &b, Tensor &output) const {
+  const RuntimeExecutionScope execution_scope;
   ValidateTensors(a, b, output);
   const std::size_t count = static_cast<std::size_t>(a.element_count());
   const std::size_t inner = static_cast<std::size_t>(b.shape[0]);
@@ -131,6 +134,7 @@ void NaiveBiasGeluKernel::operator()(const Tensor &a, const Tensor &b, Tensor &o
 }
 
 void NaiveBiasGeluKernel::Run(RuntimeContext &rt) {
+  const RuntimeExecutionScope execution_scope;
   rt.RecordKernelUsage(kName);
   const NodeProto &node = *node_;
   rt_ns::RequireInputCount(node, 2);

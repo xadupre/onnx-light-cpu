@@ -3,12 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "onnx_light_cpu/kernels/attention/rotary_embedding_kernel.h"
+#include "onnx_light_cpu/kernels/execution.h"
 
-#include "onnx_light_cpu/impl/checked_arithmetic.h"
-#include "onnx_light_cpu/impl/execution.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
 #include "onnx_light_cpu/kernels/math/normalization_helpers.h"
 #include "onnx_light_cpu/schemas/com_microsoft/op_schema.h"
+#include "onnx_light_cpu_compute/checked_arithmetic.h"
+#include "onnx_light_cpu_compute/execution.h"
 
 #include "onnx_core/runtime/kernels/node_helpers.h"
 
@@ -103,6 +104,7 @@ Tensor RotaryEmbeddingKernel::operator()(const Tensor &input, const Tensor &cos,
                                          const Tensor *positions, bool interleaved,
                                          std::int64_t rotary_dim, std::int64_t num_heads,
                                          bool microsoft, rt_ns::RuntimeContext *rt) const {
+  const RuntimeExecutionScope execution_scope;
   const auto type = static_cast<DataType>(input.data_type);
   if (type != DataType::FLOAT && type != DataType::FLOAT16 && type != DataType::BFLOAT16) {
     Invalid("input must be FLOAT, FLOAT16, or BFLOAT16.");
@@ -210,6 +212,7 @@ Tensor RotaryEmbeddingKernel::operator()(const Tensor &input, const Tensor &cos,
 }
 
 void RotaryEmbeddingKernel::Run(rt_ns::RuntimeContext &rt) {
+  const RuntimeExecutionScope execution_scope;
   rt.RecordKernelUsage(kName);
   const auto &node = *node_;
   const bool microsoft = node.domain() == kMicrosoftDomain;

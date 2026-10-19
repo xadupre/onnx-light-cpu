@@ -7,8 +7,8 @@
 // preallocated buffers and reports the environment separately from the
 // end-to-end parity runner.
 
-#include "onnx_light_cpu/impl/math/math_kernels.h"
-#include "onnx_light_cpu/impl/simd_level.h"
+#include "onnx_light_cpu_compute/math/math_kernels.h"
+#include "onnx_light_cpu_compute/simd_level.h"
 
 #include <algorithm>
 #include <chrono>

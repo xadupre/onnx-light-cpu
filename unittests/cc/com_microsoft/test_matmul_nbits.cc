@@ -2,11 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "onnx_light_cpu/impl/com_microsoft/matmul_nbits.h"
-#include "onnx_light_cpu/impl/com_microsoft/matmul_nbits_int8_tile.h"
-#include "onnx_light_cpu/impl/execution.h"
-#include "onnx_light_cpu/impl/math/half_conversion.h"
-#include "onnx_light_cpu/impl/simd_level.h"
+#include "onnx_light_cpu_compute/com_microsoft/matmul_nbits.h"
+#include "onnx_light_cpu_compute/com_microsoft/matmul_nbits_int8_tile.h"
+#include "onnx_light_cpu_compute/execution.h"
+#include "onnx_light_cpu_compute/math/half_conversion.h"
+#include "onnx_light_cpu_compute/simd_level.h"
 
 #include <gtest/gtest.h>
 

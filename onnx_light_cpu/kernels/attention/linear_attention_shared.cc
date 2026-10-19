@@ -4,7 +4,7 @@
 
 #include "onnx_light_cpu/kernels/attention/linear_attention_shared.h"
 
-#include "onnx_light_cpu/impl/math/half_conversion.h"
+#include "onnx_light_cpu_compute/math/half_conversion.h"
 
 #include "onnx_core/runtime/kernels/kernel_dispatch_table.h"
 #include "onnx_core/runtime/kernels/node_helpers.h"

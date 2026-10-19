@@ -4,12 +4,12 @@
 
 #include "onnx_light_cpu/shapes/com_microsoft/shape_inference.h"
 
-#include "onnx_light_cpu/impl/checked_arithmetic.h"
-#include "onnx_light_cpu/impl/com_microsoft/matmul_nbits.h"
-#include "onnx_light_cpu/impl/com_microsoft/matmul_nbits_int3.h"
-#include "onnx_light_cpu/impl/com_microsoft/moe.h"
+#include "onnx_light_cpu/kernels/com_microsoft/matmul_nbits_int3.h"
 #include "onnx_light_cpu/schemas/com_microsoft/op_schema.h"
 #include "onnx_light_cpu/shapes/ai_onnx/shape_inference.h"
+#include "onnx_light_cpu_compute/checked_arithmetic.h"
+#include "onnx_light_cpu_compute/com_microsoft/matmul_nbits.h"
+#include "onnx_light_cpu_compute/com_microsoft/moe.h"
 
 #include "onnx_core/runtime/quantization.h"
 #include "onnx_core/shapes/dispatch_table.h"

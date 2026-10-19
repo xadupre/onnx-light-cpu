@@ -3,13 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "onnx_light_cpu/kernels/math/sigmoid_softmax_kernel.h"
+#include "onnx_light_cpu/kernels/execution.h"
 
-#include "onnx_light_cpu/impl/math/half_conversion.h"
-#include "onnx_light_cpu/impl/math/math_kernels.h"
-#include "onnx_light_cpu/impl/math/unary_execution_tuning.h"
-#include "onnx_light_cpu/impl/simd_level.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
 #include "onnx_light_cpu/kernels/tensor_buffer_validation.h"
+#include "onnx_light_cpu_compute/math/half_conversion.h"
+#include "onnx_light_cpu_compute/math/math_kernels.h"
+#include "onnx_light_cpu_compute/math/unary_execution_tuning.h"
+#include "onnx_light_cpu_compute/simd_level.h"
 
 #include "onnx_core/runtime/kernels/kernel_dispatch_table.h"
 #include "onnx_core/runtime/kernels/node_helpers.h"
@@ -387,6 +388,7 @@ std::int64_t ResolveAxis(std::int64_t axis, std::int64_t rank) {
 } // namespace
 
 Tensor SigmoidKernel::operator()(const Tensor &x, RuntimeContext *rt) const {
+  const RuntimeExecutionScope execution_scope;
   const std::size_t size_bytes =
       tensor_validation::ValidateBufferCapacity(x, "onnx_light_cpu::Sigmoid", "input");
   Tensor output = MakeLike(x, size_bytes, rt);
@@ -395,6 +397,7 @@ Tensor SigmoidKernel::operator()(const Tensor &x, RuntimeContext *rt) const {
 }
 
 void SigmoidKernel::operator()(const Tensor &x, Tensor &output) const {
+  const RuntimeExecutionScope execution_scope;
   ValidateOutput(x, output, "onnx_light_cpu::Sigmoid");
   tensor_validation::ValidateBufferCapacity(x, "onnx_light_cpu::Sigmoid", "input");
   tensor_validation::ValidateBufferCapacity(output, "onnx_light_cpu::Sigmoid", "output");
@@ -423,6 +426,7 @@ void SigmoidKernel::operator()(const Tensor &x, Tensor &output) const {
 }
 
 void SigmoidKernel::Run(RuntimeContext &rt) {
+  const RuntimeExecutionScope execution_scope;
   rt.RecordKernelUsage(kName);
   const NodeProto &node = *node_;
   rt_ns::RequireInputCount(node, 1);
@@ -432,6 +436,7 @@ void SigmoidKernel::Run(RuntimeContext &rt) {
 }
 
 Tensor SoftmaxKernel::operator()(const Tensor &x, std::int64_t axis, RuntimeContext *rt) const {
+  const RuntimeExecutionScope execution_scope;
   const std::size_t size_bytes =
       tensor_validation::ValidateBufferCapacity(x, "onnx_light_cpu::Softmax", "input");
   Tensor output = MakeLike(x, size_bytes, rt);
@@ -440,6 +445,7 @@ Tensor SoftmaxKernel::operator()(const Tensor &x, std::int64_t axis, RuntimeCont
 }
 
 void SoftmaxKernel::operator()(const Tensor &x, std::int64_t axis, Tensor &output) const {
+  const RuntimeExecutionScope execution_scope;
   ValidateOutput(x, output, "onnx_light_cpu::Softmax");
   tensor_validation::ValidateBufferCapacity(x, "onnx_light_cpu::Softmax", "input");
   tensor_validation::ValidateBufferCapacity(output, "onnx_light_cpu::Softmax", "output");
@@ -508,6 +514,7 @@ void SoftmaxKernel::operator()(const Tensor &x, std::int64_t axis, Tensor &outpu
 }
 
 void SoftmaxKernel::Run(RuntimeContext &rt) {
+  const RuntimeExecutionScope execution_scope;
   rt.RecordKernelUsage(kName);
   const NodeProto &node = *node_;
   rt_ns::RequireInputCount(node, 1);

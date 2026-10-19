@@ -3,7 +3,7 @@ Binary Kernel Design
 
 Nineteen binary ONNX operators share one descriptor, broadcast-plan, and
 runtime-adapter architecture. The implementation is under
-``onnx_light_cpu/impl/math/binary`` and the registered adapter is
+``onnx_light_cpu_compute/src/math/binary`` and the registered adapter is
 ``onnx_light_cpu/kernels/elementwise/binary_kernel.cc``.
 
 Prepared execution

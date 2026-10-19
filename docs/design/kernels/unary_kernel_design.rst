@@ -4,7 +4,7 @@ Unary Kernel Design
 The unary runtime adapters include ``Abs``, ``Exp``, ``Log``, ``Not``, and ``Tanh``.
 Their node-specific classes live under ``onnx_light_cpu/kernels/math`` and
 ``onnx_light_cpu/kernels/logical``; typed compute functions and tuning helpers
-live under ``onnx_light_cpu/impl``.
+live under ``onnx_light_cpu_compute/src``.
 
 Execution architecture
 ----------------------

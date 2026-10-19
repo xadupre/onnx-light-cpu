@@ -3,12 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "onnx_light_cpu/kernels/com_microsoft/skip_simplified_layer_normalization_kernel.h"
+#include "onnx_light_cpu/kernels/execution.h"
 
-#include "onnx_light_cpu/impl/com_microsoft/skip_simplified_layer_normalization.h"
-#include "onnx_light_cpu/impl/execution.h"
 #include "onnx_light_cpu/kernels/com_microsoft/skip_simplified_layer_normalization_helpers.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
 #include "onnx_light_cpu/schemas/com_microsoft/op_schema.h"
+#include "onnx_light_cpu_compute/com_microsoft/skip_simplified_layer_normalization.h"
+#include "onnx_light_cpu_compute/execution.h"
 
 #include <cmath>
 #include <cstdint>
@@ -87,6 +88,7 @@ SkipSimplifiedLayerNormalizationResult SkipSimplifiedLayerNormalizationKernel::o
     const runtime::Tensor &input, const runtime::Tensor &skip, const runtime::Tensor &gamma,
     const runtime::Tensor *bias, float epsilon, bool output_sum, bool output_mean,
     bool output_inv_std_var, runtime::RuntimeContext *rt) const {
+  const RuntimeExecutionScope execution_scope;
   const auto dims = helpers::Validate(input, skip, gamma, bias, epsilon);
   auto result = helpers::Allocate(input, output_sum, output_mean, output_inv_std_var, rt);
   if (input.data_type == runtime::DataType::FLOAT && FloatAligned(input) && FloatAligned(skip) &&
@@ -129,6 +131,7 @@ SkipSimplifiedLayerNormalizationResult SkipSimplifiedLayerNormalizationKernel::o
 }
 
 void SkipSimplifiedLayerNormalizationKernel::Run(runtime::RuntimeContext &rt) {
+  const RuntimeExecutionScope execution_scope;
   rt.RecordKernelUsage(kName);
   helpers::Run(*this, *node_, rt);
 }

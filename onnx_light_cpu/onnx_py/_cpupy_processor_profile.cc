@@ -13,7 +13,7 @@
 // This module never runs a benchmark unless ``benchmark_processor_performance``
 // is called explicitly.
 
-#include "onnx_light_cpu/impl/processor_performance_profile.h"
+#include "onnx_light_cpu_compute/processor_performance_profile.h"
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>

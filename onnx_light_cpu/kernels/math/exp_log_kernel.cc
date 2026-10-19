@@ -3,10 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "onnx_light_cpu/kernels/math/exp_log_kernel.h"
+#include "onnx_light_cpu/kernels/execution.h"
 
-#include "onnx_light_cpu/impl/checked_arithmetic.h"
-#include "onnx_light_cpu/impl/math/math_kernels.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
+#include "onnx_light_cpu_compute/checked_arithmetic.h"
+#include "onnx_light_cpu_compute/math/math_kernels.h"
 
 #include "onnx_core/runtime/kernels/kernel_dispatch_table.h"
 #include "onnx_core/runtime/kernels/node_helpers.h"
@@ -222,12 +223,14 @@ void ExpKernel::Configure(const rt_ns::KernelTuningParameters &parameters) {
 }
 
 Tensor ExpKernel::operator()(const Tensor &x, RuntimeContext *rt) const {
+  const RuntimeExecutionScope execution_scope;
   Tensor y = MakeLike(x, rt);
   (*this)(x, y);
   return y;
 }
 
 void ExpKernel::operator()(const Tensor &x, Tensor &output) const {
+  const RuntimeExecutionScope execution_scope;
   const UnaryExecutionTuning &tuning =
       tuning_configured_ ? tuning_->value : DefaultTuning("Exp", x.data_type);
   ComputeUnary(x, output, "ExpKernel", &ExpFloat32WithTuning, &ExpFloat64WithTuning,
@@ -235,6 +238,7 @@ void ExpKernel::operator()(const Tensor &x, Tensor &output) const {
 }
 
 void ExpKernel::Run(RuntimeContext &rt) {
+  const RuntimeExecutionScope execution_scope;
   rt.RecordKernelUsage(kName);
   const NodeProto &node = *node_;
   rt_ns::RequireInputCount(node, 1);
@@ -244,6 +248,7 @@ void ExpKernel::Run(RuntimeContext &rt) {
 }
 
 Tensor LogKernel::operator()(const Tensor &x, RuntimeContext *rt) const {
+  const RuntimeExecutionScope execution_scope;
   Tensor y = MakeLike(x, rt);
   (*this)(x, y);
   return y;
@@ -281,6 +286,7 @@ void LogKernel::Configure(const rt_ns::KernelTuningParameters &parameters) {
 }
 
 void LogKernel::operator()(const Tensor &x, Tensor &output) const {
+  const RuntimeExecutionScope execution_scope;
   const UnaryExecutionTuning &tuning =
       tuning_configured_ ? tuning_->value : DefaultTuning("Log", x.data_type);
   ComputeUnary(x, output, "LogKernel", &LogFloat32WithTuning, &LogFloat64WithTuning,
@@ -288,6 +294,7 @@ void LogKernel::operator()(const Tensor &x, Tensor &output) const {
 }
 
 void LogKernel::Run(RuntimeContext &rt) {
+  const RuntimeExecutionScope execution_scope;
   rt.RecordKernelUsage(kName);
   const NodeProto &node = *node_;
   rt_ns::RequireInputCount(node, 1);

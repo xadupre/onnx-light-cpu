@@ -4,7 +4,7 @@
 
 #include "onnx_light_cpu/kernels/tensor/gather_kernel.h"
 
-#include "onnx_light_cpu/impl/execution.h"
+#include "onnx_light_cpu_compute/execution.h"
 
 #include "onnx_extensions/kernels/kernels/tensor/include_tensor_kernels.h"
 

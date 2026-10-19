@@ -684,7 +684,7 @@ require measurements on dedicated hardware.
    * - P1
      - ``GemmPlan``, ``MatMulPlan``, ``StridedBatchedGemm``, and
        ``GroupedGemm`` interfaces in
-       ``onnx_light_cpu/impl/math/gemm/gemm_plan.h``.
+       ``onnx_light_cpu_compute/include/onnx_light_cpu_compute/math/gemm/gemm_plan.h``.
      - Existing Gemm results remain correct with no material performance
        regression.
      - P0.

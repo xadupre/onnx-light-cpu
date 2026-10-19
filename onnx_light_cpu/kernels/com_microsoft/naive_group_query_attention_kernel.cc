@@ -3,11 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "onnx_light_cpu/kernels/com_microsoft/naive_group_query_attention_kernel.h"
+#include "onnx_light_cpu/kernels/execution.h"
 
-#include "onnx_light_cpu/impl/checked_arithmetic.h"
-#include "onnx_light_cpu/impl/math/half_conversion.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
 #include "onnx_light_cpu/schemas/com_microsoft/op_schema.h"
+#include "onnx_light_cpu_compute/checked_arithmetic.h"
+#include "onnx_light_cpu_compute/math/half_conversion.h"
 
 #include "onnx_core/runtime/kernels/kernel_dispatch_table.h"
 #include "onnx_core/runtime/kernels/node_helpers.h"
@@ -901,6 +902,7 @@ NaiveGroupQueryAttentionKernel::NaiveGroupQueryAttentionKernel(const NodeProto &
 }
 
 void NaiveGroupQueryAttentionKernel::Run(RuntimeContext &rt) {
+  const RuntimeExecutionScope execution_scope;
   rt.RecordKernelUsage(kName);
   const NodeProto &node = *node_;
   const auto lookup = [&node, &rt](int index) -> const Tensor & {
@@ -924,6 +926,7 @@ Tensor NaiveGroupQueryAttentionKernel::operator()(
     const Tensor *past_value, const Tensor *cos_cache, const Tensor *sin_cache,
     const Tensor *position_ids, const Tensor *attention_bias, RuntimeContext *rt,
     Tensor *present_key, Tensor *present_value, const Tensor *head_sink) const {
+  const RuntimeExecutionScope execution_scope;
   std::array<const Tensor *, 12> inputs{};
   inputs[0] = &query;
   inputs[1] = &key;

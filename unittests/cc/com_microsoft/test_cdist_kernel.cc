@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "onnx_light_cpu/impl/com_microsoft/cdist.h"
-#include "onnx_light_cpu/impl/execution.h"
+#include "onnx_light_cpu_compute/com_microsoft/cdist.h"
+#include "onnx_light_cpu_compute/execution.h"
 
 #include <gtest/gtest.h>
 

@@ -3,9 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "onnx_light_cpu/kernels/math/reduce_sum_kernel.h"
+#include "onnx_light_cpu/kernels/execution.h"
 
-#include "onnx_light_cpu/impl/execution.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
+#include "onnx_light_cpu_compute/execution.h"
 
 #include "onnx_core/runtime/kernels/node_helpers.h"
 #include "onnx_extensions/kernels/kernels/reduction/include_reduction_kernels.h"
@@ -175,6 +176,7 @@ Tensor ReduceSumKernel::Compute(const Tensor &data, const Tensor *axes, bool kee
 }
 
 void ReduceSumKernel::Run(rt_ns::RuntimeContext &rt) {
+  const RuntimeExecutionScope execution_scope;
   const auto &node = *node_;
   rt_ns::RequireMinInputCount(node, 1);
   if (node.input_size() > 2) {

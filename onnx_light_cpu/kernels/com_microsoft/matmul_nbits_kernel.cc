@@ -3,12 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "onnx_light_cpu/kernels/com_microsoft/matmul_nbits_kernel.h"
+#include "onnx_light_cpu/kernels/execution.h"
 
-#include "onnx_light_cpu/impl/checked_arithmetic.h"
-#include "onnx_light_cpu/impl/com_microsoft/matmul_nbits_int3.h"
-#include "onnx_light_cpu/impl/math/half_conversion.h"
+#include "onnx_light_cpu/kernels/com_microsoft/matmul_nbits_int3.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
 #include "onnx_light_cpu/schemas/com_microsoft/op_schema.h"
+#include "onnx_light_cpu_compute/checked_arithmetic.h"
+#include "onnx_light_cpu_compute/math/half_conversion.h"
 
 #include "onnx_core/runtime/kernels/kernel_dispatch_table.h"
 #include "onnx_core/runtime/kernels/node_helpers.h"
@@ -454,6 +455,7 @@ void MatMulNBitsKernel::Prepare(rt_ns::RuntimeContext &rt,
 Tensor MatMulNBitsKernel::operator()(const Tensor &a, const Tensor &b, const Tensor &scales,
                                      const Tensor *bias, rt_ns::RuntimeContext *rt,
                                      const Tensor *zero_points) const {
+  const RuntimeExecutionScope execution_scope;
   if (attributes_.bits == 3) {
     throw std::invalid_argument("MatMulNBits INT3: B must be an EncodedValueProto.");
   }
@@ -465,6 +467,7 @@ Tensor MatMulNBitsKernel::operator()(const Tensor &a,
                                      const Tensor *bias,
                                      const ONNX_LIGHT_NAMESPACE::StructTypeCatalogue &catalogue,
                                      rt_ns::RuntimeContext *rt) const {
+  const RuntimeExecutionScope execution_scope;
   if (attributes_.bits == 3) {
     return ComputeInt3(a, packed_weights, bias, rt);
   }
@@ -715,6 +718,7 @@ Tensor MatMulNBitsKernel::Compute(const Tensor &a, const Tensor &b, const Tensor
 }
 
 void MatMulNBitsKernel::Run(rt_ns::RuntimeContext &rt) {
+  const RuntimeExecutionScope execution_scope;
   rt.RecordKernelUsage(kName);
   const auto &node = *node_;
   if (node.input_size() < 2 || node.input_size() > 6) {

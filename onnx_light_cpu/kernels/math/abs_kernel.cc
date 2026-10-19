@@ -3,10 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "onnx_light_cpu/kernels/math/abs_kernel.h"
+#include "onnx_light_cpu/kernels/execution.h"
 
-#include "onnx_light_cpu/impl/checked_arithmetic.h"
-#include "onnx_light_cpu/impl/math/math_kernels.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
+#include "onnx_light_cpu_compute/checked_arithmetic.h"
+#include "onnx_light_cpu_compute/math/math_kernels.h"
 
 #include "onnx_core/runtime/kernels/cast_helper.h"
 #include "onnx_core/runtime/kernels/kernel_dispatch_table.h"
@@ -156,6 +157,7 @@ void AbsKernel::Configure(const rt_ns::KernelTuningParameters &parameters) {
 }
 
 rt_ns::Tensor AbsKernel::operator()(const Tensor &x, RuntimeContext *rt) const {
+  const RuntimeExecutionScope execution_scope;
   const std::size_t y_n_bytes =
       CheckedByteSize(static_cast<std::size_t>(x.shape.product(0, x.shape.size(), "Abs input")),
                       x.element_size(), "Abs", "output byte size");
@@ -166,6 +168,7 @@ rt_ns::Tensor AbsKernel::operator()(const Tensor &x, RuntimeContext *rt) const {
 }
 
 void AbsKernel::operator()(const Tensor &x, Tensor &output) const {
+  const RuntimeExecutionScope execution_scope;
   if (output.data_type != x.data_type) {
     throw std::invalid_argument("onnx_light_cpu::AbsKernel: output dtype must match input dtype.");
   }
@@ -218,6 +221,7 @@ void AbsKernel::operator()(const Tensor &x, Tensor &output) const {
 }
 
 void AbsKernel::Run(RuntimeContext &rt) {
+  const RuntimeExecutionScope execution_scope;
   rt.RecordKernelUsage(kName);
   const NodeProto &node = *node_;
   rt_ns::RequireInputCount(node, 1);

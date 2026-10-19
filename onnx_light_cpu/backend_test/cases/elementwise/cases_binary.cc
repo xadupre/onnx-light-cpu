@@ -4,10 +4,10 @@
 
 #include "onnx_light_cpu/backend_test/cases/elementwise/include_elementwise_cases.h"
 
-#include "onnx_light_cpu/impl/math/binary/binary_broadcast_plan.h"
-#include "onnx_light_cpu/impl/math/binary/binary_kernel_descriptor.h"
-#include "onnx_light_cpu/impl/math/binary/binary_manifest.h"
 #include "onnx_light_cpu/kernels/elementwise/binary_kernel.h"
+#include "onnx_light_cpu_compute/math/binary/binary_broadcast_plan.h"
+#include "onnx_light_cpu_compute/math/binary/binary_kernel_descriptor.h"
+#include "onnx_light_cpu_compute/math/binary/binary_manifest.h"
 
 #include "onnx_core/backend_test/expect.h"
 #include "onnx_core/runtime/kernels/cast_helper.h"

@@ -3,9 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "onnx_light_cpu/kernels/tensor/split_kernel.h"
+#include "onnx_light_cpu/kernels/execution.h"
 
-#include "onnx_light_cpu/impl/tensor/split_kernel.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
+#include "onnx_light_cpu_compute/tensor/split_kernel.h"
 
 #include "onnx_core/runtime/kernels/node_helpers.h"
 #include "onnx_core/symbolic/sym_tensor.h"
@@ -135,6 +136,7 @@ SplitKernel::SplitKernel(const ONNX_LIGHT_NAMESPACE::NodeProto &node,
 std::vector<Tensor> SplitKernel::operator()(const Tensor &data, int64_t axis,
                                             std::span<const int64_t> split, int64_t num_outputs,
                                             rt_ns::RuntimeContext *rt) const {
+  const RuntimeExecutionScope execution_scope;
   return Compute(data, axis, split, num_outputs, rt, nullptr);
 }
 
@@ -194,6 +196,7 @@ std::vector<Tensor> SplitKernel::Compute(const Tensor &data, int64_t axis,
 }
 
 void SplitKernel::Run(rt_ns::RuntimeContext &rt) {
+  const RuntimeExecutionScope execution_scope;
   rt.RecordKernelUsage(kName);
   const auto &node = *node_;
   const int64_t version = ctx_.opset.version;

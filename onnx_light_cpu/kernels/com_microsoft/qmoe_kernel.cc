@@ -3,14 +3,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "onnx_light_cpu/kernels/com_microsoft/qmoe_kernel.h"
+#include "onnx_light_cpu/kernels/execution.h"
 
 #include "onnx_core/runtime/kernels/kernel_dispatch_table.h"
 #include "onnx_core/runtime/kernels/node_helpers.h"
 #include "onnx_core/runtime/memory/temporary_buffer.h"
 #include "onnx_core/symbolic/sym_tensor.h"
-#include "onnx_light_cpu/impl/checked_arithmetic.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
 #include "onnx_light_cpu/schemas/com_microsoft/op_schema.h"
+#include "onnx_light_cpu_compute/checked_arithmetic.h"
 
 #include <algorithm>
 #include <cmath>
@@ -153,6 +154,7 @@ Tensor QMoEKernel::operator()(const Tensor &input, const Tensor &router, const T
                               const Tensor &scales2, const Tensor *bias2, const Tensor *fc3,
                               const Tensor *scales3, const Tensor *bias3,
                               rt_ns::RuntimeContext *rt) const {
+  const RuntimeExecutionScope execution_scope;
   const auto type = FloatType(input);
   for (const auto *tensor : {&router, bias1, bias2, bias3}) {
     if (tensor && tensor->data_type != input.data_type) {
@@ -268,6 +270,7 @@ Tensor QMoEKernel::operator()(const Tensor &input, const Tensor &router, const T
 }
 
 void QMoEKernel::Run(rt_ns::RuntimeContext &rt) {
+  const RuntimeExecutionScope execution_scope;
   rt.RecordKernelUsage(kName);
   const auto &node = *node_;
   if (node.input_size() < 7 || node.input_size() > 14) {

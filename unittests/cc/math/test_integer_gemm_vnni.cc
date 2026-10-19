@@ -7,24 +7,24 @@
 // portable scalar path, then directly checks each native implementation
 // available on the running CPU against an independent reference.
 
-#include "onnx_light_cpu/impl/math/gemm/vnni/integer_gemm_vnni.h"
+#include "onnx_light_cpu_compute/math/gemm/vnni/integer_gemm_vnni.h"
 
-#include "onnx_light_cpu/impl/execution.h"
+#include "onnx_light_cpu_compute/execution.h"
 
 #if defined(ONNX_LIGHT_CPU_HAVE_AVX2_INTEGER) || defined(ONNX_LIGHT_CPU_HAVE_AVXVNNI) ||           \
     defined(ONNX_LIGHT_CPU_HAVE_AVX512VNNI)
-#include "onnx_light_cpu/impl/simd_level.h"
+#include "onnx_light_cpu_compute/simd_level.h"
 #endif
 
 #ifdef ONNX_LIGHT_CPU_HAVE_AMX_INT8
-#include "onnx_light_cpu/impl/math/gemm/amx/gemm_amx_int8.h"
-#include "onnx_light_cpu/impl/math/gemm/amx/gemm_amx_tile.h"
-#include "onnx_light_cpu/impl/simd_level.h"
+#include "onnx_light_cpu_compute/math/gemm/amx/gemm_amx_int8.h"
+#include "onnx_light_cpu_compute/math/gemm/amx/gemm_amx_tile.h"
+#include "onnx_light_cpu_compute/simd_level.h"
 #endif
 
 #ifdef ONNX_LIGHT_CPU_HAVE_NEON_DOTPROD
-#include "onnx_light_cpu/impl/arm_simd_level.h"
-#include "onnx_light_cpu/impl/math/gemm/arm/gemm_kernel_arm.h"
+#include "onnx_light_cpu_compute/arm_simd_level.h"
+#include "onnx_light_cpu_compute/math/gemm/arm/gemm_kernel_arm.h"
 #endif
 
 #include <gtest/gtest.h>

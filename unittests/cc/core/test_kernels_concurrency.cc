@@ -8,8 +8,8 @@
 // are checked against the single-threaded reference. This guards against data
 // races when kernels run concurrently.
 
-#include "onnx_light_cpu/impl/logical/logical_kernels.h"
-#include "onnx_light_cpu/impl/math/math_kernels.h"
+#include "onnx_light_cpu_compute/logical/logical_kernels.h"
+#include "onnx_light_cpu_compute/math/math_kernels.h"
 
 #include <gtest/gtest.h>
 

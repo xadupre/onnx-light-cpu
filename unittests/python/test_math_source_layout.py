@@ -6,7 +6,7 @@
 
 from pathlib import Path
 
-_MATH = Path(__file__).resolve().parents[2] / "onnx_light_cpu" / "impl" / "math"
+_MATH = Path(__file__).resolve().parents[2] / "onnx_light_cpu_compute" / "src" / "math"
 
 
 def test_simd_files_are_in_isa_subfolders():

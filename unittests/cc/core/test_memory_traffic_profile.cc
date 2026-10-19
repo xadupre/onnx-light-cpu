@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "onnx_light_cpu/impl/memory_traffic_profile.h"
+#include "onnx_light_cpu_compute/memory_traffic_profile.h"
 
 #include <gtest/gtest.h>
 

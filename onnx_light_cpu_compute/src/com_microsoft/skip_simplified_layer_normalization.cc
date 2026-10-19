@@ -1,0 +1,83 @@
+// Copyright (c) ONNX Project Contributors
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include "onnx_light_cpu_compute/com_microsoft/skip_simplified_layer_normalization.h"
+
+#include "onnx_light_cpu_compute/execution.h"
+#include "onnx_light_cpu_compute/math/normalization_kernel.h"
+#include "onnx_light_cpu_compute/simd_level.h"
+
+#include <cmath>
+#include <cstdint>
+#include <cstring>
+
+namespace onnx_light_cpu {
+
+void SkipSimplifiedLayerNormalizationFloat32(const float *input, const float *skip,
+                                             const float *gamma, const float *bias, float *output,
+                                             float *input_skip_bias_sum, float *mean,
+                                             float *inv_std_var, std::size_t rows,
+                                             std::size_t width, std::size_t skip_rows,
+                                             float epsilon) {
+  ExecuteRanges(
+      static_cast<std::int64_t>(rows), static_cast<double>(width),
+      [&](std::int64_t begin, std::int64_t end) {
+        for (std::size_t row = static_cast<std::size_t>(begin); row < static_cast<std::size_t>(end);
+             ++row) {
+          const float *input_row = input + row * width;
+          const float *skip_row = skip + (row % skip_rows) * width;
+          float *output_row = output + row * width;
+          float mean_square;
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX2_FMA
+          static const bool use_avx2 = DetectSimdLevel() == SimdLevel::kAVX2 && CpuSupportsFma();
+          if (use_avx2) {
+            mean_square =
+                ComputeResidualMeanSquareFloat32_AVX2(input_row, skip_row, bias, output_row, width);
+          } else
+#endif
+          {
+            for (std::size_t i = 0; i < width; ++i) {
+              const float residual = input_row[i] + skip_row[i];
+              output_row[i] = bias == nullptr ? residual : residual + bias[i];
+            }
+            mean_square = ComputeNormalizationMeanSquareFloat32(output_row, width);
+          }
+          if (input_skip_bias_sum != nullptr) {
+            std::memcpy(input_skip_bias_sum + row * width, output_row, width * sizeof(float));
+          }
+          const float inverse = 1.0F / std::sqrt(mean_square + epsilon);
+          if (mean != nullptr) {
+            mean[row] = 0.0F;
+          }
+          if (inv_std_var != nullptr) {
+            inv_std_var[row] = inverse;
+          }
+          ApplyNormalizationAffineFloat32(output_row, gamma, nullptr, output_row, width, 0.0F,
+                                          inverse);
+        }
+      });
+}
+
+bool TrySkipSimplifiedLayerNormalizationFloat16(
+    const std::uint16_t *input, const std::uint16_t *skip, const std::uint16_t *gamma,
+    const std::uint16_t *bias, std::uint16_t *output, std::uint16_t *input_skip_bias_sum,
+    float *mean, float *inv_std_var, std::size_t rows, std::size_t width, std::size_t skip_rows,
+    float epsilon) {
+#ifdef ONNX_LIGHT_CPU_HAVE_AVX_F16C
+  static const bool use_f16c = DetectSimdLevel() >= SimdLevel::kAVX && CpuSupportsF16C();
+  if (use_f16c && width >= 32) {
+    ExecuteRanges(static_cast<std::int64_t>(rows), static_cast<double>(width),
+                  [&](std::int64_t begin, std::int64_t end) {
+                    SkipSimplifiedLayerNormalizationFloat16_F16C(
+                        input, skip, gamma, bias, output, input_skip_bias_sum, mean, inv_std_var,
+                        static_cast<std::size_t>(begin), static_cast<std::size_t>(end), width,
+                        skip_rows, epsilon);
+                  });
+    return true;
+  }
+#endif
+  return false;
+}
+
+} // namespace onnx_light_cpu

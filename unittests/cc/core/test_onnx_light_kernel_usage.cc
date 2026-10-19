@@ -8,7 +8,6 @@
 #include "onnx_core/runtime/memory/simple_tensor.h"
 #include "onnx_core/runtime/runtime_context.h"
 #include "onnx_core/runtime/tuning/kernel_tuning.h"
-#include "onnx_light_cpu/impl/math/binary/binary_manifest.h"
 #include "onnx_light_cpu/kernels/attention/attention_kernel.h"
 #include "onnx_light_cpu/kernels/com_microsoft/bias_gelu_kernel.h"
 #include "onnx_light_cpu/kernels/com_microsoft/cdist_kernel.h"
@@ -29,6 +28,7 @@
 #include "onnx_light_cpu/kernels/math/swiglu_kernel.h"
 #include "onnx_light_cpu/kernels/register_kernels.h"
 #include "onnx_light_cpu/kernels/traditionalml/tree_ensemble_kernel.h"
+#include "onnx_light_cpu_compute/math/binary/binary_manifest.h"
 
 #include <gtest/gtest.h>
 

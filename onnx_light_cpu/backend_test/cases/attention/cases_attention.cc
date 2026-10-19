@@ -5,9 +5,9 @@
 #include "onnx_light_cpu/backend_test/cases/attention/include_attention_cases.h"
 
 #include "onnx_light_cpu/backend_test/cases/math/benchmark_helpers.h"
-#include "onnx_light_cpu/impl/attention/attention_plan.h"
-#include "onnx_light_cpu/impl/math/half_conversion.h"
 #include "onnx_light_cpu/kernels/attention/attention_kernel.h"
+#include "onnx_light_cpu_compute/attention/attention_plan.h"
+#include "onnx_light_cpu_compute/math/half_conversion.h"
 
 #include "onnx_core/backend_test/expect.h"
 #include "onnx_core/runtime/kernels/kernel_context.h"

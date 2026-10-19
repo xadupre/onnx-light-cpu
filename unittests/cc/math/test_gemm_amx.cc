@@ -10,8 +10,8 @@
 // reports "not configured", which is exactly what CI hardware without AMX
 // verifies.
 
-#include "onnx_light_cpu/impl/math/gemm/amx/gemm_amx_tile.h"
-#include "onnx_light_cpu/impl/simd_level.h"
+#include "onnx_light_cpu_compute/math/gemm/amx/gemm_amx_tile.h"
+#include "onnx_light_cpu_compute/simd_level.h"
 
 #include <gtest/gtest.h>
 

@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "onnx_light_cpu/impl/simd_level.h"
 #include "onnx_light_cpu/onnx_py/_cpupy_kernels.h"
+#include "onnx_light_cpu_compute/simd_level.h"
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/string.h>

@@ -127,8 +127,20 @@ feature-masked CPU, rather than merely limiting dispatch on a modern host.
 
 ## C++ usage
 
+The numerical code lives in `onnx_light_cpu_compute/`, next to the ONNX/Python
+adapters in `onnx_light_cpu/`. It is a standalone C++20 library: the directory
+can be copied and built without ONNX, onnx-light, Python, or a private thread
+pool. ISA-specific compilation and runtime dispatch are unchanged.
+
+```bash
+cmake -S onnx_light_cpu_compute -B build-compute \
+      -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/path/to/install
+cmake --build build-compute --parallel 6
+cmake --install build-compute
+```
+
 ```cpp
-#include <onnx_light_cpu/impl/math/math_kernels.h>
+#include <onnx_light_cpu_compute/math/math_kernels.h>
 
 int main() {
     float input[] = {-1.0f, 2.0f, -3.0f, 4.0f};
@@ -138,7 +150,25 @@ int main() {
 }
 ```
 
-Link against `onnx_light_cpu::lib_onnx_light_cpu`:
+Link against the installed computation package:
+
+```cmake
+find_package(onnx_light_cpu_compute CONFIG REQUIRED)
+target_link_libraries(my_app PRIVATE onnx_light_cpu_compute::lib_onnx_light_cpu)
+```
+
+Alternatively, use `add_subdirectory(path/to/onnx_light_cpu_compute)` and the
+same target. `BUILD_SHARED_LIBS=ON` selects a shared standalone library; the
+default is static. Headers are under `include/onnx_light_cpu_compute/`, sources
+under `src/`, and the C++ namespace remains `onnx_light_cpu`.
+
+Direct numerical calls run serially unless the caller borrows its own synchronous
+executor through `ExecutionExecutorView` and `ExecutionExecutorScope` from
+`<onnx_light_cpu_compute/execution.h>`. ONNX kernel entry points adapt the
+session's executor in `onnx_light_cpu/kernels/execution.cc`; the computation
+library has no runtime dependency.
+
+The full runtime project continues to export its existing target:
 
 ```cmake
 find_package(onnx_light_cpu REQUIRED)

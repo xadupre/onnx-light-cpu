@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "onnx_light_cpu/impl/math/binary/binary_comparison_kernel.h"
+#include "onnx_light_cpu_compute/math/binary/binary_comparison_kernel.h"
 
 #include <gtest/gtest.h>
 

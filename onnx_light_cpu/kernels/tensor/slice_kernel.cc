@@ -3,9 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "onnx_light_cpu/kernels/tensor/slice_kernel.h"
+#include "onnx_light_cpu/kernels/execution.h"
 
-#include "onnx_light_cpu/impl/tensor/slice_kernel.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
+#include "onnx_light_cpu_compute/tensor/slice_kernel.h"
 
 #include "onnx_core/runtime/kernels/node_helpers.h"
 #include "onnx_core/symbolic/sym_tensor.h"
@@ -244,6 +245,7 @@ SliceKernel::SliceKernel(const ONNX_LIGHT_NAMESPACE::NodeProto &node,
 Tensor SliceKernel::operator()(const Tensor &data, const Tensor &starts, const Tensor &ends,
                                const Tensor *axes, const Tensor *steps,
                                rt_ns::RuntimeContext *rt) const {
+  const RuntimeExecutionScope execution_scope;
   const SlicePlan plan = PrepareSlice(data, starts, ends, axes, steps);
   Tensor output = Allocate(data, plan, rt, ctx_.allocator);
   Copy(data, output, plan);
@@ -252,6 +254,7 @@ Tensor SliceKernel::operator()(const Tensor &data, const Tensor &starts, const T
 
 void SliceKernel::operator()(const Tensor &data, const Tensor &starts, const Tensor &ends,
                              const Tensor *axes, const Tensor *steps, Tensor &output) const {
+  const RuntimeExecutionScope execution_scope;
   const SlicePlan plan = PrepareSlice(data, starts, ends, axes, steps);
   for (const Tensor *input : {&starts, &ends, axes, steps}) {
     if (input) {
@@ -262,6 +265,7 @@ void SliceKernel::operator()(const Tensor &data, const Tensor &starts, const Ten
 }
 
 void SliceKernel::Run(rt_ns::RuntimeContext &rt) {
+  const RuntimeExecutionScope execution_scope;
   rt.RecordKernelUsage(kName);
   const auto &node = *node_;
   rt_ns::RequireOutputCount(node, 1);

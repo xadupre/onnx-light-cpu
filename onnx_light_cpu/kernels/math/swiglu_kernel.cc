@@ -3,9 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "onnx_light_cpu/kernels/math/swiglu_kernel.h"
+#include "onnx_light_cpu/kernels/execution.h"
 
-#include "onnx_light_cpu/impl/math/math_kernels.h"
 #include "onnx_light_cpu/kernels/kernel_registration.h"
+#include "onnx_light_cpu_compute/math/math_kernels.h"
 
 #include "onnx_core/runtime/kernels/kernel_dispatch_table.h"
 #include "onnx_core/runtime/kernels/node_helpers.h"
@@ -43,6 +44,7 @@ void ValidateTensors(const Tensor &gate, const Tensor &value, const Tensor &outp
 
 Tensor SwiGLUKernel::operator()(const Tensor &gate, const Tensor &value, float alpha,
                                 RuntimeContext *rt) const {
+  const RuntimeExecutionScope execution_scope;
   if (gate.shape != value.shape) {
     throw std::invalid_argument(
         "onnx_light_cpu::SwiGLU: inputs must have identical shapes; broadcasting is unsupported.");
@@ -57,6 +59,7 @@ Tensor SwiGLUKernel::operator()(const Tensor &gate, const Tensor &value, float a
 
 void SwiGLUKernel::operator()(const Tensor &gate, const Tensor &value, float alpha,
                               Tensor &output) const {
+  const RuntimeExecutionScope execution_scope;
   ValidateTensors(gate, value, output);
   const std::size_t count = static_cast<std::size_t>(gate.element_count());
   switch (static_cast<DataType>(gate.data_type)) {
@@ -84,6 +87,7 @@ void SwiGLUKernel::operator()(const Tensor &gate, const Tensor &value, float alp
 }
 
 void SwiGLUKernel::Run(RuntimeContext &rt) {
+  const RuntimeExecutionScope execution_scope;
   rt.RecordKernelUsage(kName);
   const NodeProto &node = *node_;
   rt_ns::RequireInputCount(node, 2);

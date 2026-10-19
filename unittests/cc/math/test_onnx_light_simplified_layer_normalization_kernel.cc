@@ -3,10 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "onnx_light_cpu/backend_test/cases/math/simplified_layer_normalization_reference.h"
-#include "onnx_light_cpu/impl/execution.h"
-#include "onnx_light_cpu/impl/math/normalization_kernel.h"
 #include "onnx_light_cpu/kernels/math/rms_normalization_kernel.h"
 #include "onnx_light_cpu/kernels/math/simplified_layer_normalization_kernel.h"
+#include "onnx_light_cpu_compute/execution.h"
+#include "onnx_light_cpu_compute/math/normalization_kernel.h"
 
 #include <gtest/gtest.h>
 

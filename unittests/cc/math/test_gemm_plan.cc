@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "onnx_light_cpu/impl/execution.h"
-#include "onnx_light_cpu/impl/math/gemm/arm/gemm_kernel_arm.h"
-#include "onnx_light_cpu/impl/math/gemm/gemm_plan.h"
+#include "onnx_light_cpu_compute/execution.h"
+#include "onnx_light_cpu_compute/math/gemm/arm/gemm_kernel_arm.h"
+#include "onnx_light_cpu_compute/math/gemm/gemm_plan.h"
 
 #include <gtest/gtest.h>
 

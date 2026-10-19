@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "onnx_light_cpu/kernels/math/normalization_kernel.h"
+#include "onnx_light_cpu/kernels/execution.h"
 
 #include "onnx_light_cpu/kernels/kernel_registration.h"
 #include "onnx_light_cpu/kernels/math/normalization_helpers.h"
@@ -10,8 +11,8 @@
 #include "onnx_core/runtime/kernels/kernel_dispatch_table.h"
 #include "onnx_core/runtime/kernels/node_helpers.h"
 #include "onnx_core/symbolic/sym_tensor.h"
-#include "onnx_light_cpu/impl/execution.h"
-#include "onnx_light_cpu/impl/math/normalization_kernel.h"
+#include "onnx_light_cpu_compute/execution.h"
+#include "onnx_light_cpu_compute/math/normalization_kernel.h"
 
 #include <algorithm>
 #include <array>
@@ -890,6 +891,7 @@ Tensor BatchNormalizationKernel::operator()(const Tensor &x, const Tensor &scale
                                             const Tensor &bias, const Tensor &mean,
                                             const Tensor &variance, float epsilon,
                                             RuntimeContext *rt) const {
+  const RuntimeExecutionScope execution_scope;
   return Compute(x, scale, bias, mean, variance, false, epsilon, 0.9F, rt).y;
 }
 
@@ -977,6 +979,7 @@ BatchNormalizationKernel::Compute(const Tensor &x, const Tensor &scale, const Te
 }
 
 void BatchNormalizationKernel::Run(RuntimeContext &rt) {
+  const RuntimeExecutionScope execution_scope;
   rt.RecordKernelUsage(kName);
   const NodeProto &node = *node_;
   rt_ns::RequireInputCount(node, 5);
@@ -1018,6 +1021,7 @@ Tensor GroupNormalizationKernel::operator()(const Tensor &x, const Tensor &scale
                                             const Tensor &bias, std::int64_t num_groups,
                                             float epsilon, std::int64_t stash_type,
                                             RuntimeContext *rt) const {
+  const RuntimeExecutionScope execution_scope;
   norm::RequireSupportedFloatType(x, kGroupOp, "X");
   norm::RequireSameType(x, scale, kGroupOp, "X, scale, and bias");
   norm::RequireSameType(x, bias, kGroupOp, "X, scale, and bias");
@@ -1067,6 +1071,7 @@ Tensor GroupNormalizationKernel::operator()(const Tensor &x, const Tensor &scale
 }
 
 void GroupNormalizationKernel::Run(RuntimeContext &rt) {
+  const RuntimeExecutionScope execution_scope;
   rt.RecordKernelUsage(kName);
   const NodeProto &node = *node_;
   rt_ns::RequireInputCount(node, 3);
@@ -1084,6 +1089,7 @@ void GroupNormalizationKernel::Run(RuntimeContext &rt) {
 Tensor InstanceNormalizationKernel::operator()(const Tensor &x, const Tensor &scale,
                                                const Tensor &bias, float epsilon,
                                                RuntimeContext *rt) const {
+  const RuntimeExecutionScope execution_scope;
   norm::RequireSupportedFloatType(x, kInstanceOp, "input");
   norm::RequireSameType(x, scale, kInstanceOp, "input, scale, and B");
   norm::RequireSameType(x, bias, kInstanceOp, "input, scale, and B");
@@ -1110,6 +1116,7 @@ Tensor InstanceNormalizationKernel::operator()(const Tensor &x, const Tensor &sc
 }
 
 void InstanceNormalizationKernel::Run(RuntimeContext &rt) {
+  const RuntimeExecutionScope execution_scope;
   rt.RecordKernelUsage(kName);
   const NodeProto &node = *node_;
   rt_ns::RequireInputCount(node, 3);
@@ -1125,6 +1132,7 @@ void InstanceNormalizationKernel::Run(RuntimeContext &rt) {
 LayerNormalizationResult LayerNormalizationKernel::operator()(
     const Tensor &x, const Tensor &scale, const Tensor *bias, std::int64_t axis, float epsilon,
     std::int64_t stash_type, bool output_mean, bool output_inv_std_dev, RuntimeContext *rt) const {
+  const RuntimeExecutionScope execution_scope;
   norm::RequireSupportedFloatType(x, kLayerOp, "X");
   norm::RequireSameType(x, scale, kLayerOp, "X, Scale, and B");
   if (bias != nullptr) {
@@ -1180,6 +1188,7 @@ LayerNormalizationResult LayerNormalizationKernel::operator()(
 }
 
 void LayerNormalizationKernel::Run(RuntimeContext &rt) {
+  const RuntimeExecutionScope execution_scope;
   rt.RecordKernelUsage(kName);
   const NodeProto &node = *node_;
   if (node.input_size() < 2 || node.input_size() > 3) {
@@ -1209,6 +1218,7 @@ void LayerNormalizationKernel::Run(RuntimeContext &rt) {
 
 Tensor LpNormalizationKernel::operator()(const Tensor &x, std::int64_t axis, std::int64_t p,
                                          RuntimeContext *rt) const {
+  const RuntimeExecutionScope execution_scope;
   norm::RequireSupportedFloatType(x, kLpOp, "input");
   if (x.shape.empty()) {
     throw std::invalid_argument(std::string(kLpOp) + ": input must have rank at least 1.");
@@ -1234,6 +1244,7 @@ Tensor LpNormalizationKernel::operator()(const Tensor &x, std::int64_t axis, std
 }
 
 void LpNormalizationKernel::Run(RuntimeContext &rt) {
+  const RuntimeExecutionScope execution_scope;
   rt.RecordKernelUsage(kName);
   const NodeProto &node = *node_;
   rt_ns::RequireInputCount(node, 1);
@@ -1248,6 +1259,7 @@ void LpNormalizationKernel::Run(RuntimeContext &rt) {
 Tensor MeanVarianceNormalizationKernel::operator()(const Tensor &x,
                                                    const std::vector<std::int64_t> &axes,
                                                    RuntimeContext *rt) const {
+  const RuntimeExecutionScope execution_scope;
   norm::RequireSupportedFloatType(x, kMvnOp, "X");
   if (x.shape.empty()) {
     throw std::invalid_argument(std::string(kMvnOp) + ": X must have rank at least 1.");
@@ -1357,6 +1369,7 @@ Tensor MeanVarianceNormalizationKernel::operator()(const Tensor &x,
 }
 
 void MeanVarianceNormalizationKernel::Run(RuntimeContext &rt) {
+  const RuntimeExecutionScope execution_scope;
   rt.RecordKernelUsage(kName);
   const NodeProto &node = *node_;
   rt_ns::RequireInputCount(node, 1);
