@@ -444,6 +444,55 @@ TEST(MatMulNBitsKernel, PreparesInt8OnlyForImmutableInputsAndAccountsForResidenc
   }
 }
 
+TEST(MatMulNBitsKernel, PreparedReplayRebindsToEachValueStore) {
+  constexpr std::int64_t k = 64;
+  constexpr std::int64_t n = 16;
+  const rt_ns::Tensor a = rt_ns::Tensor::FromFloat("A", {1, k}, std::vector<float>(k, 0.5f));
+  bool checked = false;
+  for (std::int64_t bits : {4, 8}) {
+    if (!(bits == 4 ? ml_cpu_compute::MatMulNBitsAccuracy4Float32Available()
+                    : ml_cpu_compute::MatMulNBitsInt8Float32Available())) {
+      continue;
+    }
+    checked = true;
+    SCOPED_TRACE(bits);
+    const ONNX_LIGHT_NAMESPACE::NodeProto node = MakeNode(k, n, bits);
+    onnx_light_cpu::MatMulNBitsKernel kernel{
+        node, rt_ns::KernelContext{rt_ns::OpsetId("com.microsoft", 1)}};
+    rt_ns::RuntimeContext first{rt_ns::KernelContext{rt_ns::OpsetId("com.microsoft", 1)}};
+    rt_ns::RuntimeContext second{rt_ns::KernelContext{rt_ns::OpsetId("com.microsoft", 1)}};
+    first.value_store().Bind("unrelated");
+    const auto initialize = [&](rt_ns::RuntimeContext &rt, float scale) {
+      rt.Put("B", rt_ns::Tensor::FromUint8(
+                      "B", {n, k / 32, bits == 4 ? 16 : 32},
+                      std::vector<std::uint8_t>(static_cast<std::size_t>(n * k * bits / 8),
+                                                bits == 4 ? 0x99 : 129)));
+      rt.Put("scales", rt_ns::Tensor::FromFloat("scales", {n, k / 32},
+                                                std::vector<float>(n * k / 32, scale)));
+    };
+    initialize(first, 0.25f);
+    initialize(second, 0.5f);
+    const auto replay = [&](rt_ns::RuntimeContext &rt, float expected) {
+      kernel.Prepare(rt, {"B", "scales"});
+      const std::size_t prepared_bytes = rt.value_store().prepared_bytes();
+      EXPECT_GT(prepared_bytes, 0U);
+      const rt_ns::Tensor output = kernel(a, rt.Get("B"), rt.Get("scales"));
+      for (std::size_t i = 0; i < output.element_count(); ++i) {
+        EXPECT_FLOAT_EQ(output.AsFloat()[i], expected);
+      }
+      EXPECT_EQ(rt.value_store().prepared_bytes(), prepared_bytes);
+    };
+    replay(first, 8.0f);
+    replay(second, 16.0f);
+    const std::size_t first_bytes = first.value_store().prepared_bytes();
+    replay(first, 8.0f);
+    EXPECT_EQ(first.value_store().prepared_bytes(), first_bytes);
+  }
+  if (!checked) {
+    GTEST_SKIP() << "Prepared INT4 and INT8 implementations are unavailable.";
+  }
+}
+
 TEST(MatMulNBitsKernel, Int8HalfScalesKeepGenericFallback) {
   const ONNX_LIGHT_NAMESPACE::NodeProto node = MakeNode(32, 8, 8);
   onnx_light_cpu::MatMulNBitsKernel kernel{

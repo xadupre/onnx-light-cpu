@@ -30,6 +30,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace onnx_light_cpu {
@@ -40,6 +41,23 @@ namespace sym_ns = ONNX_LIGHT_NAMESPACE::core::symbolic;
 
 using rt_ns::Tensor;
 using RuntimeDataType = rt_ns::DataType;
+
+template <typename Store, typename Slot> struct LegacyPreparedSlot {
+  const Store *store;
+  Slot slot;
+
+  const rt_ns::RuntimeValue &Get() const { return store->Get(slot); }
+};
+
+template <typename Store, typename Slot>
+auto BindPreparedSlot(const Store &store, const Slot &slot) {
+  if constexpr (requires { store.BindForRead(slot); }) {
+    return store.BindForRead(slot);
+  } else {
+    // onnx-light 0.2.0 predates validated replay bindings.
+    return LegacyPreparedSlot<Store, Slot>{&store, slot};
+  }
+}
 
 constexpr const char *kParallelThresholdOutputs = "parallel.threshold_outputs";
 constexpr const char *kTargetBlockOutputs = "parallel.target_block_outputs";
@@ -241,15 +259,16 @@ struct MatMulNBitsKernel::PreparedInt8Plan {
 };
 
 struct MatMulNBitsKernel::PreparedInt4State {
-  PreparedInt4State(rt_ns::ValueStore &store_, std::uint32_t slot_, std::size_t weight_bytes_,
-                    std::size_t weight_sum_bytes_, std::size_t total_bytes_,
-                    std::int64_t max_participants_)
-      : store(&store_), slot(slot_), weight_bytes(weight_bytes_),
-        weight_sum_bytes(weight_sum_bytes_), total_bytes(total_bytes_),
-        max_participants(max_participants_) {}
+  using Slot = decltype(std::declval<rt_ns::ValueStore &>().Bind(std::string{}));
+  using BoundSlot = decltype(BindPreparedSlot(std::declval<const rt_ns::ValueStore &>(),
+                                              std::declval<const Slot &>()));
 
-  rt_ns::ValueStore *store;
-  std::uint32_t slot;
+  PreparedInt4State(BoundSlot slot_, std::size_t weight_bytes_, std::size_t weight_sum_bytes_,
+                    std::size_t total_bytes_, std::int64_t max_participants_)
+      : slot(std::move(slot_)), weight_bytes(weight_bytes_), weight_sum_bytes(weight_sum_bytes_),
+        total_bytes(total_bytes_), max_participants(max_participants_) {}
+
+  BoundSlot slot;
   std::size_t weight_bytes;
   std::size_t weight_sum_bytes;
   std::size_t total_bytes;
@@ -437,7 +456,7 @@ void MatMulNBitsKernel::Prepare(rt_ns::RuntimeContext &rt,
       << node_->input(2) << ":K=" << attributes_.k << ":N=" << attributes_.n
       << ":dtype=" << scales.data_type << ":digest=" << digest;
   rt_ns::ValueStore &store = rt.value_store();
-  const std::uint32_t slot = store.Bind(key.str());
+  const auto slot = store.Bind(key.str());
   const bool int8 = attributes_.bits == 8;
   const std::size_t weight_bytes = int8 ? PreparedInt8Plan::WeightBytes(attributes_)
                                         : PreparedInt4Plan::WeightBytes(attributes_);
@@ -461,8 +480,9 @@ void MatMulNBitsKernel::Prepare(rt_ns::RuntimeContext &rt,
     store.Publish(slot, rt_ns::RuntimeValue(std::move(packed)));
   }
   auto &prepared = int8 ? prepared_int8_ : prepared_int4_;
-  prepared = std::make_unique<PreparedInt4State>(store, slot, weight_bytes, weight_sum_bytes,
-                                                 total_bytes, tuning_.max_participants);
+  prepared =
+      std::make_unique<PreparedInt4State>(BindPreparedSlot(store, slot), weight_bytes,
+                                          weight_sum_bytes, total_bytes, tuning_.max_participants);
 }
 
 Tensor MatMulNBitsKernel::operator()(const Tensor &a, const Tensor &b, const Tensor &scales,
@@ -621,7 +641,7 @@ Tensor MatMulNBitsKernel::Compute(const Tensor &a, const Tensor &b, const Tensor
                  ? rt->MakeOutputTensor(0, a.data_type, output_shape, output_bytes)
                  : rt_ns::MakeOutputTensor(a.data_type, output_shape, output_bytes, nullptr);
   if (allow_prepacking && prepared_int8_ != nullptr && data_type == RuntimeDataType::FLOAT) {
-    const rt_ns::RuntimeValue &prepared = prepared_int8_->store->Get(prepared_int8_->slot);
+    const rt_ns::RuntimeValue &prepared = prepared_int8_->slot.Get();
     if (prepared.kind != rt_ns::RuntimeValue::Kind::kTensor ||
         prepared.tensor.size_bytes() < prepared_int8_->total_bytes) {
       throw std::runtime_error("onnx_light_cpu::MatMulNBits: prepared INT8 plan is truncated.");
@@ -654,7 +674,7 @@ Tensor MatMulNBitsKernel::Compute(const Tensor &a, const Tensor &b, const Tensor
   std::int64_t prepared_max_participants = tuning_.max_participants;
   std::unique_ptr<const PreparedInt4Plan> invocation_plan;
   if (allow_prepacking && prepared_int4_ != nullptr) {
-    const rt_ns::RuntimeValue &prepared = prepared_int4_->store->Get(prepared_int4_->slot);
+    const rt_ns::RuntimeValue &prepared = prepared_int4_->slot.Get();
     if (prepared.kind != rt_ns::RuntimeValue::Kind::kTensor ||
         prepared.tensor.size_bytes() < prepared_int4_->total_bytes) {
       throw std::runtime_error("onnx_light_cpu::MatMulNBits: prepared INT4 plan is truncated.");
