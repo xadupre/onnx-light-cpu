@@ -37,6 +37,7 @@ print(json.dumps({"info": info, "cmake_args": cmake_args}))
 def _check_runtime(*, symlinks=False, foreign=False, threads=False):
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp).resolve()
+        suffix = {"win32": ".dll", "darwin": ".dylib"}.get(sys.platform, ".so")
         package = root / "onnx_light"
         runtime = package / "onnx_py"
         runtime.mkdir(parents=True)
@@ -52,9 +53,13 @@ def _check_runtime(*, symlinks=False, foreign=False, threads=False):
         artifacts = root / "build" if symlinks or foreign else runtime
         artifacts.mkdir(exist_ok=True)
         extension_name = "_onnxpyprotoop" + importlib.machinery.EXTENSION_SUFFIXES[0]
-        names = [extension_name, "liblib_onnx_core.so", "liblib_onnx_proto.so"]
+        names = [
+            extension_name,
+            f"liblib_onnx_core{suffix}",
+            f"liblib_onnx_proto{suffix}",
+        ]
         if threads:
-            names.append("liblib_onnx_threads.so")
+            names.append(f"liblib_onnx_threads{suffix}")
         for name in names:
             artifact = artifacts / name
             artifact.touch()
@@ -82,10 +87,10 @@ def _check_runtime(*, symlinks=False, foreign=False, threads=False):
             output = json.loads(result.stdout)
             info = output["info"]
             assert info["include_dir"] == str(package)
-            assert info["core_library"] == str(artifacts / "liblib_onnx_core.so")
-            assert info["proto_library"] == str(artifacts / "liblib_onnx_proto.so")
+            assert info["core_library"] == str(artifacts / f"liblib_onnx_core{suffix}")
+            assert info["proto_library"] == str(artifacts / f"liblib_onnx_proto{suffix}")
             if threads:
-                assert info["threads_library"] == str(artifacts / "liblib_onnx_threads.so")
+                assert info["threads_library"] == str(artifacts / f"liblib_onnx_threads{suffix}")
                 assert (
                     f"-DONNX_LIGHT_CPU_ONNX_LIGHT_THREADS_LIBRARY={info['threads_library']}"
                     in output["cmake_args"]

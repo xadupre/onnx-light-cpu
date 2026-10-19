@@ -278,6 +278,10 @@ if(ONNX_LIGHT_CPU_WITH_ONNX_LIGHT)
         INTERFACE_INCLUDE_DIRECTORIES
             "${_onnx_light_include_dirs}"
         INTERFACE_LINK_LIBRARIES onnx_light::lib_onnx_proto)
+    if(TARGET onnx_threads::lib_onnx_threads)
+      target_link_libraries(onnx_light::lib_onnx_core INTERFACE
+          onnx_threads::lib_onnx_threads)
+    endif()
     if(ONNX_LIGHT_CPU_ONNX_LIGHT_IMPLIB)
       if(NOT ONNX_LIGHT_CPU_ONNX_LIGHT_PROTO_IMPLIB)
         message(FATAL_ERROR
