@@ -49,7 +49,8 @@ public:
              const ONNX_LIGHT_NAMESPACE::core::runtime::Tensor &b,
              const ONNX_LIGHT_NAMESPACE::core::runtime::Tensor &scales,
              const ONNX_LIGHT_NAMESPACE::core::runtime::Tensor *bias = nullptr,
-             ONNX_LIGHT_NAMESPACE::core::runtime::RuntimeContext *rt = nullptr) const;
+             ONNX_LIGHT_NAMESPACE::core::runtime::RuntimeContext *rt = nullptr,
+             const ONNX_LIGHT_NAMESPACE::core::runtime::Tensor *zero_points = nullptr) const;
 
   ONNX_LIGHT_NAMESPACE::core::runtime::Tensor
   operator()(const ONNX_LIGHT_NAMESPACE::core::runtime::Tensor &a,
@@ -71,7 +72,8 @@ private:
           const ONNX_LIGHT_NAMESPACE::core::runtime::Tensor &b,
           const ONNX_LIGHT_NAMESPACE::core::runtime::Tensor &scales,
           const ONNX_LIGHT_NAMESPACE::core::runtime::Tensor *bias,
-          ONNX_LIGHT_NAMESPACE::core::runtime::RuntimeContext *rt, bool allow_prepacking) const;
+          ONNX_LIGHT_NAMESPACE::core::runtime::RuntimeContext *rt, bool allow_prepacking,
+          const ONNX_LIGHT_NAMESPACE::core::runtime::Tensor *zero_points = nullptr) const;
   ONNX_LIGHT_NAMESPACE::core::runtime::MatMulNBitsInputs
   ValidateEncodedWeights(const ONNX_LIGHT_NAMESPACE::EncodedValueProto &packed_weights,
                          const ONNX_LIGHT_NAMESPACE::StructTypeCatalogue &catalogue) const;
