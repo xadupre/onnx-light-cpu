@@ -116,6 +116,38 @@ class TestMatMulNBitsBenchmarkContract(ExtTestCase):
 
 
 class TestMatMulNBitsConstantParity(ExtTestCase):
+    def test_supported_quantization_contracts_match_ort(self):
+        import numpy as np
+        import onnxruntime as ort
+        from onnx_light.onnx import numpy_helper
+        from onnx_light.onnx.reference import ReferenceEvaluator
+        from onnx_light_cpu import register_kernel_for_session
+
+        options = ort.SessionOptions()
+        options.intra_op_num_threads = 1
+        options.inter_op_num_threads = 1
+        for name, block_size, zero in (("block_size", 64, None), ("zero_points", 32, 0x77)):
+            with self.subTest(option=name):
+                a, packed, scales = make_inputs(1, 64, 3, "float32", block_size=block_size)
+                model = make_model(1, 64, 3, "float32", packed, scales, block_size=block_size)
+                if zero is not None:
+                    model.graph.node[0].input.append("zero_points")
+                    model.graph.initializer.append(
+                        numpy_helper.from_array(
+                            np.full((3, 1), zero, dtype=np.uint8), name="zero_points"
+                        )
+                    )
+                oracle = ort.InferenceSession(
+                    model.SerializeToString(),
+                    sess_options=options,
+                    providers=["CPUExecutionProvider"],
+                )
+                expected = oracle.run(None, {"A": a})[0]
+                session = ReferenceEvaluator(model)
+                register_kernel_for_session(session, "com.microsoft", "MatMulNBits")
+                actual = session.run(None, {"A": a})[0]
+                self.assertEqualArray(expected, actual, rtol=3e-5, atol=3e-5)
+
     def test_rejects_unsupported_quantization_contracts(self):
         import numpy as np
         from onnx_light.onnx import helper, numpy_helper
@@ -123,39 +155,27 @@ class TestMatMulNBitsConstantParity(ExtTestCase):
         from onnx_light_cpu import register_kernel_for_session
 
         cases = (
-            ("zero_points", "zero_points and g_idx are not supported"),
-            ("g_idx", "zero_points and g_idx are not supported"),
-            ("block_size", "block_size=32"),
+            ("g_idx", "g_idx is not supported"),
+            ("block_size", "power-of-two block_size"),
             ("accuracy_level", "accuracy_level 0 or 4"),
             ("weight_prepacked", "weight_prepacked=0"),
         )
         for option, message in cases:
             with self.subTest(option=option):
-                block_size = 64 if option == "block_size" else 32
-                a, packed, scales = make_inputs(1, 64, 3, "float32", block_size=block_size)
-                model = make_model(1, 64, 3, "float32", packed, scales, block_size=block_size)
+                a, packed, scales = make_inputs(1, 64, 3, "float32")
+                model = make_model(1, 64, 3, "float32", packed, scales)
                 node = model.graph.node[0]
-                if option == "zero_points":
-                    node.input.append("zero_points")
-                    model.graph.initializer.append(
-                        numpy_helper.from_array(
-                            np.full((3, 1), 0x88, dtype=np.uint8), name="zero_points"
-                        )
-                    )
-                elif option == "g_idx":
+                if option == "g_idx":
                     node.input.extend(["", "g_idx"])
                     model.graph.initializer.append(
                         numpy_helper.from_array(np.arange(64, dtype=np.int32) // 32, name="g_idx")
                     )
-                elif option == "accuracy_level":
+                elif option in {"block_size", "accuracy_level"}:
                     for attribute in node.attribute:
-                        if attribute.name == "accuracy_level":
-                            attribute.i = 3
+                        if attribute.name == option:
+                            attribute.i = 24 if option == "block_size" else 3
                 elif option == "weight_prepacked":
                     node.attribute.append(helper.make_attribute("weight_prepacked", 1))
-                else:
-                    self.assertEqual(packed.shape, (3, 1, 32))
-                    self.assertEqual(scales.shape, (3, 1))
                 with self.assertRaisesRegex((ValueError, RuntimeError), message):
                     session = ReferenceEvaluator(model)
                     register_kernel_for_session(session, "com.microsoft", "MatMulNBits")
